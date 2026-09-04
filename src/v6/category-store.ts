@@ -4,6 +4,7 @@
 //   **있으면 붙는 것**이지 축의 부류가 아니다 — 도메인맵은 이제 전 분류축을 그린다.
 //  감사는 org_content_audit(entity='category') — knowledge/domain 과 동일 append-only 패턴.
 import { itemsPool } from "../db/client.js";
+import { HttpError } from "../http-error.js";
 import { q, one } from "../db/client.js";
 import { auditOrgContent, restoreSnapshot, type WriteCtx } from "./content-audit.js";
 import { embeddingInputText } from "./embedding-provider.js";
@@ -290,7 +291,10 @@ async function assertDeprecatable(id: number, key: string): Promise<void> {
       WHERE kc.category_id=$1 AND kc.state<>'rejected' AND k.lifecycle='active'`, [id]);
   const n = row?.n ?? 0;
   if (n > 0) {
-    throw new Error(`'${key}' 에 지식 ${n}건이 남아 있어 비활성으로 바꿀 수 없습니다 — 먼저 다른 축으로 옮기세요`
+    //  ⚠ HttpError(400) 로 던진다 — 평범한 Error 면 rest-util 이 500 «internal_error» 로 뭉개서
+    //   «몇 건이 남았는지» 가 통째로 사라진다(dev 실측 2026-09-04: 실제로 그렇게 나갔다).
+    //   막는 것보다 **무엇을 먼저 옮겨야 하나** 가 이 검사의 값어치다.
+    throw new HttpError(400, `'${key}' 에 지식 ${n}건이 남아 있어 비활성으로 바꿀 수 없습니다 — 먼저 다른 축으로 옮기세요`
       + "(미분류 지식은 소환에 안 잡힙니다).");
   }
 }
@@ -305,7 +309,7 @@ export async function updateCategory(
   //  state 는 두 값만 오간다 — 'merged' 는 병합 경로가 소유하는 상태라 여기서 못 만든다.
   const nextState = patch.state === undefined ? null : String(patch.state);
   if (nextState !== null && nextState !== "active" && nextState !== "deprecated") {
-    throw new Error("state 는 active|deprecated 만 가능합니다(merged 는 병합 경로가 정합니다)");
+    throw new HttpError(400, "state 는 active|deprecated 만 가능합니다(merged 는 병합 경로가 정합니다)");
   }
   if (nextState === "deprecated" && before.state !== "deprecated") await assertDeprecatable(id, before.key);
   // COALESCE($n, col): undefined→null→기존값 보존(부분 수정).
