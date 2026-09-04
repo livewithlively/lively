@@ -69,6 +69,8 @@
 //  ⚠ **한계를 숨기지 않는다.** 압박을 만든 워크스페이스가 회수를 안 켰으면 그 세션은 못 건드린다(동의가 없다).
 //   그러면 켜 둔 워크스페이스만 계속 걷히고 박스는 안 풀린다 — 그래서 결과에 **불참 워크스페이스 수**를 남긴다.
 //   이 숫자가 크면서 압박이 안 풀리면, 고칠 곳은 코드가 아니라 그 워크스페이스의 정책이다.
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { logger } from "../log.js";
 import { listSessionsRaw, listSessionPanePids, reapCentralSession } from "../terminal/terminal-sessions.js";
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
@@ -77,9 +79,12 @@ import { listManagedSessions } from "./managed-sessions.js";
 import { getRuntimeConfig } from "../org/store.js";
 import { effectiveSessionReclaimPolicy, normalizeSessionReclaimPolicy, type SessionReclaimPolicy } from "./session-reclaim-policy.js";
 import { memAvailableMb, memTotalMb, swapUsageMb } from "../ops/host-mem.js";
-import { readProcTable, sessionRssMb, sessionsWithLiveJobs, type ProcEntry } from "./session-rss.js";
+import { readProcTable, parsePsTable, sessionRssMb, sessionsWithLiveJobs, type ProcEntry } from "./session-rss.js";
+import { sessionExecConfigured, sessionSpawnArgv } from "../terminal/session-exec.js";
 import { withTenant, type TenantContext } from "../org/tenant-context.js";
 import { schedulerTargets } from "../scheduler/tenant-fanout.js";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * 왜 안 걷었나 — 이유별 카운트. **두 축이 같은 표를 쓴다**(로그·관측이 갈리면 진단이 두 벌이 된다).
@@ -213,8 +218,63 @@ interface ReapSources {
 async function liveJobSessions(ids: ReadonlySet<string>, table?: Map<number, ProcEntry>): Promise<ReadonlySet<string>> {
   if (!ids.size) return new Set();
   const panes = await listSessionPanePids();
-  return liveJobsFromView(ids, panes, panes.ok ? (table ?? await readProcTable()) : new Map());
+  if (!panes.ok) return new Set(ids);                                   // 못 봤다 ≠ 작업 없다 → 전부 보호
+  return resolveLiveJobs(ids, panes, table ?? await readProcTable(), probeSessionProcTable);
 }
+
+/**
+ * ⑥ 판정의 **두 단계**(주입 가능 — 컨테이너 프로브 없이 단위테스트한다).
+ *  ① 이 프로세스의 표로 판정한다(셀프호스트는 여기서 끝난다).
+ *  ② 그 표로 **판정조차 못 한** 세션만 골라 그 컨테이너 안에서 다시 본다(매니지드).
+ *
+ * ⚠ ② 가 왜 필요한가: 매니지드는 세션마다 컨테이너가 따로라(`lvly-s-<slug>-<sid>`) 게이트웨이의 `/proc` 에
+ *  그 프로세스가 **아예 없다**(실측 2026-09-04: gw-central 이 보는 프로세스 10개 = 전부 자기 것).
+ *  그러면 ① 은 조용히 «작업 없음» 이 되고 ⑥ 이 **매니지드에서만 꺼진 채로** 남는다 — 하필 그쪽 유휴 TTL 이
+ *  120분으로 셀프호스트(1440분)보다 짧아, 같은 사고가 더 쉽게 난다.
+ * ⚠ 프로브 실패·타임아웃은 **그 세션만** 판정 불가로 두고 넘어간다(회수를 막지 않는다 — S5).
+ */
+export async function resolveLiveJobs(
+  ids: ReadonlySet<string>,
+  view: { ok: boolean; panes: Map<string, number[]> },
+  local: Map<number, ProcEntry>,
+  probe: (sid: string) => Promise<Map<number, ProcEntry>>,
+): Promise<ReadonlySet<string>> {
+  const found = liveJobsFromView(ids, view, local);
+  const unresolved = [...ids].filter((sid) => !found.has(sid) && !judgedLocally(sid, view.panes, local));
+  if (!unresolved.length) return found;
+  const extra = await Promise.all(unresolved.map(async (sid) => {
+    const panePids = view.panes.get(sid);
+    if (!panePids?.length) return null;
+    try {
+      const t = await probe(sid);
+      if (!t.size) return null;                                          // 프로브 실패·중계 없음 → 판정 불가
+      return sessionsWithLiveJobs(t, new Map([[sid, panePids]])).has(sid) ? sid : null;
+    } catch (e) {
+      logger.warn({ err: e, id: sid }, "session-reaper: 세션 컨테이너 작업 프로브 실패(그 세션만 판정 불가)");
+      return null;
+    }
+  }));
+  const out = new Set(found);
+  for (const sid of extra) if (sid) out.add(sid);
+  return out;
+}
+
+/** 이 프로세스의 표만으로 그 세션을 **판정할 수 있었나** — pane pid 가 표에 있으면 참(= 컨테이너 프로브 불요). */
+function judgedLocally(sid: string, panes: Map<string, number[]>, table: Map<number, ProcEntry>): boolean {
+  return (panes.get(sid) ?? []).some((pid) => table.has(pid));
+}
+
+/** 그 세션 **컨테이너 안**의 프로세스 표. 중계가 없거나 실패하면 빈 표(판정 불가). */
+async function probeSessionProcTable(sid: string): Promise<Map<number, ProcEntry>> {
+  if (!sessionExecConfigured()) return new Map();          // 셀프호스트 — 중계가 없다(F4)
+  const argv = sessionSpawnArgv(sid, ["ps", "-eo", "pid=,ppid=,pgid=,tpgid=,rss=,comm="]);
+  if (!argv.length) return new Map();
+  const { stdout } = await execFileAsync(argv[0]!, argv.slice(1), { timeout: SESSION_PROBE_TIMEOUT_MS, maxBuffer: 4 << 20 });
+  return parsePsTable(stdout);
+}
+
+/** 컨테이너 프로브 상한. 중계가 uid 프로브 + exec 두 왕복이라 넉넉히 주되, 회수 tick 을 잡아 두지 않는다. */
+const SESSION_PROBE_TIMEOUT_MS = 8_000;
 
 /** ⑥ 의 **판정만** 떼어낸 순수 함수(관측 주입) — "못 봤다"의 처리가 여기 한 줄로 보인다. */
 export function liveJobsFromView(

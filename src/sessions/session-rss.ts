@@ -214,21 +214,44 @@ export function sessionsWithLiveJobs(table: Map<number, ProcEntry>, panePids: Ma
   const out = new Set<string>();
   for (const [sid, roots] of panePids) {
     const spine = new Set<number>();
-    let sawForeground = false;
+    const paneGroups = new Set<number>();
+    // 하네스 그룹을 **확정했나**. 확정 경로는 둘 — ⓐ tty 포그라운드(실커널이 주는 정답) ⓑ 단일 자식 사슬.
+    //  ⓐ 는 pane 자신이 하네스인 배치(tpgid == pane 그룹)도 정확히 «안다»고 말한다 — 그 경우 pane 밑의
+    //  새 그룹은 전부 작업이다. 그래서 확정 여부를 «새 그룹을 찾았나» 가 아니라 **이 플래그**로 판정한다.
+    let harnessKnown = false;
     for (const r of roots) {
       const e = table.get(r);
       if (!e) continue;
-      if (e.pgid && e.pgid > 0) spine.add(e.pgid);
-      if (e.tpgid && e.tpgid > 0) { spine.add(e.tpgid); sawForeground = true; }   // pane tty 의 포그라운드 = 하네스 그룹
+      if (e.pgid && e.pgid > 0) { spine.add(e.pgid); paneGroups.add(e.pgid); }
+      if (e.tpgid && e.tpgid > 0) { spine.add(e.tpgid); harnessKnown = true; }   // pane tty 의 포그라운드(실커널)
     }
-    // ⚠ **포그라운드 그룹을 못 읽으면 판정 자체를 포기한다**(빈 집합 = 종전 동작). 여기가 이 함수에서 가장
-    //  위험한 자리다: tpgid 없이 pane 그룹만으로 spine 을 세우면 **하네스가 제 그룹을 가진 배치에서 하네스
-    //  자신이 «작업»으로 잡혀** 그 세션이 영원히 안 걷힌다(회수가 통째로 멈춘다 = 방어 사망). 반대로 포기하면
-    //  잃는 건 «보호가 안 걸린다»뿐이고 그건 이 변경 이전의 상태다 — 모르는 플랫폼에서는 새 기능이 조용히
-    //  꺼지는 쪽이 옳다. 관측: 그 면에서는 `skipReasons.jobs` 가 늘 0 이다(활성 여부가 로그로 보인다).
-    //  ⓘ tmux pane 은 항상 tty 를 가지므로 리눅스·macOS 실측에서는 늘 참이다. 이 갈래는 procfs 가 tpgid 를
-    //   안 주는 면(예: gVisor 샌드박스 — 2026-09-04 시점 미실측)을 위한 것이다.
-    if (!spine.size || !sawForeground) continue;
+    // ── 하네스 그룹을 찾는다 — **tpgid 가 없어도** ────────────────────────────────────────────
+    //  gVisor 는 procfs 에 tty 를 안 채운다(실측 2026-09-04 매니지드 세션 컨테이너: pane 프로세스도
+    //  `tty_nr=0 tpgid=0`). 그런데 트리 **모양**은 셀프호스트와 같다:
+    //     sh(pane, pgid 28) → claude(하네스, pgid 36) → {MCP…}(pgid 36 상속)
+    //  그래서 «pane 에서 내려오는 **단일 자식 사슬**에서 처음으로 pane 과 다른 그룹을 갖는 프로세스»가
+    //  하네스다. 사슬 중간에 pane 과 같은 그룹인 껍데기(격리 경로의 wrapper 들)가 있어도 지나쳐 내려간다.
+    //  ⚠ **찾자마자 멈춘다.** 더 내려가면 하네스가 «유일 자식으로 띄운 작업»까지 spine 에 넣어 버려
+    //   바로 그 작업을 못 잡는다(E7).
+    for (const r of harnessKnown ? [] : roots) {
+      let cur = r;
+      for (let depth = 0; depth < 8; depth++) {
+        const kids = children.get(cur);
+        if (!kids || kids.length !== 1) break;            // 갈라졌다(또는 끝) — 여기서 더 못 내려간다
+        const k = kids[0]!;
+        const e = table.get(k);
+        if (!e || !e.pgid || e.pgid <= 0) break;
+        spine.add(e.pgid);
+        if (!paneGroups.has(e.pgid)) { harnessKnown = true; break; }   // ★ 하네스를 찾았다
+        cur = k;
+      }
+    }
+    // ⚠ **하네스를 못 찾았으면 판정 자체를 포기한다**(빈 집합 = 종전 동작). 여기가 이 함수에서 가장
+    //  위험한 자리다: 하네스를 spine 에 못 넣은 채 판정하면 **하네스 자신이 «작업»으로 잡혀** 그 세션이
+    //  영원히 안 걷힌다(회수가 통째로 멈춘다 = 방어 사망). 반대로 포기하면 잃는 건 «보호가 안 걸린다»
+    //  뿐이고 그건 이 기능 이전의 상태다 — 모르는 배치에서는 새 기능이 조용히 꺼지는 쪽이 옳다.
+    //  관측: 그런 면에서는 `skipReasons.jobs` 가 늘 0 이다(활성 여부가 로그로 보인다).
+    if (!spine.size || !harnessKnown) continue;
     const seen = new Set<number>();
     const stack = [...roots];
     while (stack.length) {
