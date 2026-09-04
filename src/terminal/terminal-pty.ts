@@ -16,6 +16,7 @@ import os from "node:os";
 import { TMUX_BIN } from "./terminal-sessions.js";
 import { isPsmuxBin } from "./catalog.js";   // #1791 — 정의가 catalog(leaf)로 내려갔다(위 재수출과 짝)
 import { tmuxExecArgv } from "./tmux-exec.js";
+import { tmuxArgvFor } from "../exec-topology.js";   // #3545 — 소유 프로세스가 죽은 뒤엔 argv 를 슬러그로 **다시** 지어야 한다(렉시컬 캡처가 같이 사라졌다)
 
 // attach 가 실제로 쓰는 소켓 표면 — 게이트웨이 로컬은 실 WebSocket, 노드 에이전트(#869)는 게이트웨이행
 //  단일 WSS 위의 '채널 어댑터'가 이 인터페이스를 구현해 같은 attach 로직(tmux -CC · 큐잉 · 정리)을 재사용한다.
@@ -141,6 +142,42 @@ function detachGhostClients(bin: string, prefix: string[], id: string, env: Reco
     //   들여다봐도 어느 쪽인지 물어볼 자리가 없었다. 세션이 이미 없어 실패하는 것도 흔하므로 warn 이다.
     .catch((err) => logger.warn({ id, err: (err as Error)?.message ?? String(err) }, "유령 attach 정리 실패"));
 }
+
+/**
+ * attach·유령정리가 쓰는 env. 게이트웨이가 launchd/nohup 로 떠 LANG 이 없으면 tmux 클라이언트가 utf8=0 으로
+ *  잡혀 한글(멀티바이트) 렌더가 깨진다 — UTF-8 로케일을 강제한다(`tmux -u` 와 이중 보장).
+ */
+function attachEnv(): Record<string, string> {
+  const env = { ...process.env } as Record<string, string>;
+  if (!/utf-?8/i.test(env.LC_ALL || env.LC_CTYPE || env.LANG || "")) {
+    env.LANG = "en_US.UTF-8";
+    env.LC_CTYPE = "en_US.UTF-8";
+  }
+  return env;
+}
+
+/**
+ * 유령 attach 정리 — **소유 프로세스가 죽어 렉시컬 argv 가 남아 있지 않은 자리**용 진입점 (#3545).
+ *
+ * 위 `detachGhostClients` 는 attach 를 띄울 때 붙잡아 둔 argv 를 그대로 쓴다(그게 테넌트 격리 근거 ② 다 —
+ *  `session-host.ts` 머리말). 그런데 attach 워커가 **소켓을 쥔 채 죽으면** 그 클로저도 같이 사라진다.
+ *  그때 끊을 수 있는 것은 살아남은 게이트웨이뿐이고, 게이트웨이에는 argv 가 없다 — 그 세션의 **테넌트
+ *  슬러그**로 다시 지어야 한다. 조립 규칙은 한 곳(`tmuxArgvFor`)이라 두 벌이 되지 않는다.
+ *
+ * ⚠ 중계 배포인데 슬러그가 없으면 `tmuxArgvFor` 는 **던진다**(배선 버그를 로컬 tmux 로 폴백해 숨기지
+ *  않는다는 그쪽 규약). 여기는 비치명 경로라 잡아서 남기고 넘어간다 — 다만 **조용히**는 아니다.
+ */
+export function detachGhostClientsForSession(id: string, slug: string | null): void {
+  let argv: string[];
+  try { argv = tmuxArgvFor(slug, TMUX_BIN); }
+  catch (err) {
+    logger.warn({ id, slug: slug ?? "", err: (err as Error)?.message ?? String(err) }, "유령 attach 정리 불가 — tmux argv 조립 실패");
+    return;
+  }
+  const [bin, ...prefix] = argv.length ? argv : [TMUX_BIN];
+  detachGhostClients(bin!, prefix, id, attachEnv());
+}
+
 // 스폰 실패 폭주 차단(#869) — node-pty spawn 이 반복 실패하면(예: 노드에서 fd 고갈 EMFILE) 매 실패가 pty fd 를 새게 해
 //  가속 붕괴한다(실측: 노드 에이전트 fd 1543개, 10K 실패). 세션별 최근 연속 실패를 세어 임계 초과 시 **스폰 자체를 건너뛰고**
 //  즉시 닫는다 — 할당을 안 하니 누수 원천 차단(정상 스폰 1회로 스트릭 리셋). 브라우저 재연결은 하되 pty 는 안 뜬다.
@@ -382,11 +419,7 @@ export function attachSession(ws: AttachSocket, id: string): void {
     .then(() => {
       // 게이트웨이가 launchd/nohup 로 떠 LANG 이 없으면 tmux 클라이언트가 utf8=0 으로 잡혀 한글(멀티바이트)
       //  렌더가 깨진다. UTF-8 로케일을 강제(env) + `tmux -u`(로케일과 무관하게 UTF-8 출력)로 이중 보장.
-      const env = { ...process.env } as Record<string, string>;
-      if (!/utf-?8/i.test(env.LC_ALL || env.LC_CTYPE || env.LANG || "")) {
-        env.LANG = "en_US.UTF-8";
-        env.LC_CTYPE = "en_US.UTF-8";
-      }
+      const env = attachEnv();
       // control mode: `-CC`(echo off) + `-u`(UTF-8). 폴백: plain attach.
       const args = CONTROL_MODE ? ["-u", "-CC", "attach", "-t", id] : ["-u", "attach", "-t", id];
       // ⚠ 백엔드는 멀티플렉서가 고른다(#1541) — tmux=node-pty(tty 필수) · psmux=파이프(PTY 에선 -CC 가 침묵).
