@@ -214,13 +214,21 @@ export function sessionsWithLiveJobs(table: Map<number, ProcEntry>, panePids: Ma
   const out = new Set<string>();
   for (const [sid, roots] of panePids) {
     const spine = new Set<number>();
+    let sawForeground = false;
     for (const r of roots) {
       const e = table.get(r);
       if (!e) continue;
       if (e.pgid && e.pgid > 0) spine.add(e.pgid);
-      if (e.tpgid && e.tpgid > 0) spine.add(e.tpgid);      // pane tty 의 포그라운드 = 하네스 그룹
+      if (e.tpgid && e.tpgid > 0) { spine.add(e.tpgid); sawForeground = true; }   // pane tty 의 포그라운드 = 하네스 그룹
     }
-    if (!spine.size) continue;                              // 그룹을 못 읽는 플랫폼·죽은 pane — 판정하지 않는다
+    // ⚠ **포그라운드 그룹을 못 읽으면 판정 자체를 포기한다**(빈 집합 = 종전 동작). 여기가 이 함수에서 가장
+    //  위험한 자리다: tpgid 없이 pane 그룹만으로 spine 을 세우면 **하네스가 제 그룹을 가진 배치에서 하네스
+    //  자신이 «작업»으로 잡혀** 그 세션이 영원히 안 걷힌다(회수가 통째로 멈춘다 = 방어 사망). 반대로 포기하면
+    //  잃는 건 «보호가 안 걸린다»뿐이고 그건 이 변경 이전의 상태다 — 모르는 플랫폼에서는 새 기능이 조용히
+    //  꺼지는 쪽이 옳다. 관측: 그 면에서는 `skipReasons.jobs` 가 늘 0 이다(활성 여부가 로그로 보인다).
+    //  ⓘ tmux pane 은 항상 tty 를 가지므로 리눅스·macOS 실측에서는 늘 참이다. 이 갈래는 procfs 가 tpgid 를
+    //   안 주는 면(예: gVisor 샌드박스 — 2026-09-04 시점 미실측)을 위한 것이다.
+    if (!spine.size || !sawForeground) continue;
     const seen = new Set<number>();
     const stack = [...roots];
     while (stack.length) {

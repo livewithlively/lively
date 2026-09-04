@@ -164,6 +164,19 @@ const jobTable = (over: Array<[number, ProcEntry]> = []): Map<number, ProcEntry>
   assert.equal(sessionsWithLiveJobs(t, new Map([["box-c", [10]]])).size, 0,
     "판정 불가에 '보호'를 주면 그 플랫폼에선 회수가 통째로 멈춘다 — 모르면 종전대로 둔다");
 }
+// C4b — 그룹은 읽히는데 **tty 포그라운드(tpgid)를 못 읽는** 표: 역시 판정하지 않는다.
+//  이게 «하네스가 제 그룹을 가진 배치»에서 하네스를 작업으로 오인해 회수를 통째로 멈추는 것을 막는 갈래다
+//  (procfs 가 tpgid 를 안 주는 면 — 예: gVisor 샌드박스, 2026-09-04 미실측).
+{
+  const t = new Map<number, ProcEntry>([
+    [10, { ppid: 1, rssKb: 900, name: "sh", pgid: 10, tpgid: 0 }],             // pane — 포그라운드 미상
+    [11, { ppid: 10, rssKb: 300_000, name: "claude", pgid: 11, tpgid: 0 }],    // 하네스가 제 그룹을 가졌다
+    [12, { ppid: 11, rssKb: 30_000, name: "node", pgid: 11, tpgid: 0 }],
+  ]);
+  assert.equal(sessionsWithLiveJobs(t, new Map([["box-g", [10]]])).size, 0,
+    "포그라운드를 모르면 하네스 그룹을 spine 에 못 넣는다 → 판정 포기(보호도 안 걸리지만, 회수가 멈추지도 않는다)");
+}
+
 // C5 — pane 이 이미 죽어 표에 없다
 {
   assert.equal(sessionsWithLiveJobs(jobTable(), new Map([["box-d", [999]]])).size, 0);
