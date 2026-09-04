@@ -27,7 +27,22 @@ import { logger } from "../log.js";
 
 const ENTRY = fileURLToPath(new URL("./attach-worker-entry.js", import.meta.url));
 const MAX_WORKERS = 64;      // 폭주 방지 상한 — 초과하면 fail-open(게이트웨이 내부 attach). 정상 운영에선 안 닿는다.
-const STOP_GRACE_MS = 2_000; // shutdown 시 SIGTERM 뒤 SIGKILL 까지 유예.
+/**
+ * `index.ts` 의 종료 핸들러가 스스로 거는 **하드 데드라인** — 그 시각이면 정리가 끝났든 말든
+ *  `process.exit` 이다(`setTimeout(() => process.exit(0), 1_500).unref()`). 컨테이너가 주는 유예는
+ *  훨씬 길지만(롤의 `runscDownScript` 는 TERM 뒤 10초) **프로세스가 먼저 나간다.**
+ *  ⚠ 이 값이 바뀌면 아래 `STOP_GRACE_MS` 도 같이 봐야 한다 — 시험이 그 관계를 지킨다.
+ */
+export const PROCESS_EXIT_DEADLINE_MS = 1_500;
+/**
+ * shutdown 시 SIGTERM 뒤 SIGKILL 까지 유예.
+ *
+ * ★ **반드시 위 하드 데드라인보다 작아야 한다** (#3545). 종전 2,000ms 는 그보다 커서, 워커가 하나라도
+ *  제때 안 나가면 그 유예가 끝나기 전에 프로세스가 죽고 **그 뒤 코드(회수·유령 정리)가 통째로 안 돌았다.**
+ *  하필 그 «뒤 코드» 가 재배포·롤에서 유령을 걷는 유일한 자리다(#2625 §4 가 지목한 최대 누수원).
+ *  정상 경로에선 워커가 ~200ms 에 나가므로(엔트리의 `setTimeout(…, 200)`) 800ms 는 4배 여유다.
+ */
+export const STOP_GRACE_MS = 800;
 
 interface HandoffInput {
   req: IncomingMessage;
@@ -250,8 +265,14 @@ export class AttachWorkerHost {
     await new Promise<void>((resolve) => {
       let left = workers.length;
       const done = () => { if (--left <= 0) resolve(); };
-      const t = setTimeout(() => { for (const w of workers) { try { w.child.kill("SIGKILL"); } catch { /* noop */ } } resolve(); }, STOP_GRACE_MS);
-      if (t.unref) t.unref();
+      //  ★ #3545 — 이 타이머는 **unref 하지 않는다.** 종전엔 unref 였는데, 그러면 이벤트 루프에 다른
+      //   핸들이 없는 순간 이 유예가 **아예 안 돌고** 그 뒤(SIGKILL 승격 → reap → 유령 정리)가 통째로
+      //   건너뛰어진다. 이 파일이 방금 고친 것과 **같은 병**이다: «나중에 하겠다» 를 unref 로 적으면
+      //   프로세스가 곧 끝나는 경로에서는 «안 하겠다» 와 같다.
+      //   ⚠ 붙들어도 안전하다 — 이 자리는 이미 종료 중이고, 최대 STOP_GRACE_MS(하드 데드라인 안쪽)이며,
+      //    `index.ts` 가 그 위에 1.5초 강제 exit 을 또 걸어 둔다. (CI 실측: unref 면 워커가 멎었을 때
+      //    이 promise 가 영영 안 풀린다 — node:test 가 «event loop has already resolved» 로 잡았다.)
+      setTimeout(() => { for (const w of workers) { try { w.child.kill("SIGKILL"); } catch { /* noop */ } } resolve(); }, STOP_GRACE_MS);
       for (const w of workers) w.child.once("exit", done);
     });
     for (const w of workers) this.reap(w.pid, "shutdown");
