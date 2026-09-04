@@ -49,12 +49,16 @@ export interface SideSwapHost {
   colMain: HTMLElement;     // 세션(터미널)이 든 열
   sidePane: HTMLElement;    // 곁칸
   sideOn: () => boolean;    // 곁칸이 펴져 있나
+  /** 자리가 바뀔 때마다 — 셸이 **이 세션의 것**으로 적어 둔다(#762). 없으면 아무 데도 안 남는다. */
+  onChange?: (swapped: boolean) => void;
 }
 
 export interface SideSwapHandle {
   maxSideW: () => number;
   onDrag: (px: number) => void;
   onEnd: (px: number) => void;
+  /** 세션에 들어올 때 — 적어 둔 자리가 있으면 **그대로**, 없으면 폭으로 판정한다. 미끄러지지 않는다(첫 그림이다). */
+  restore: (px: number, swapped?: boolean) => void;
   button: () => HTMLElement;
   sync: () => void;
   destroy: () => void;
@@ -117,6 +121,21 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
     if (swapped === v) return;
     swapped = v;
     if (animate) slide([colMain, sidePane], paint); else paint();
+    h.onChange?.(v);
+  }
+
+  // ── 세션에 들어올 때 (#762, 원준 2026-09-04 "나갔다 들어오더라도 위치 기억되게") ────────────
+  //  ⚠ 종전엔 이 부품이 서는 순간(mount) 폭을 재 한 번 판정했는데, 그때는 셸이 **이 세션의 폭을 아직 안 입힌
+  //   뒤**라 늘 기본 340px 로 「안 바꿈」이 됐다. 그 뒤 셸이 폭만 900px 로 바꾸니 «넓은 곁칸이 오른쪽에
+  //   그대로» 서고, 손잡이를 한 번 끌어야 자리가 바뀌었다. 판정은 폭을 입힌 **뒤**에 셸이 부른다.
+  //  ⚠ 폭만으로 되살리면 문턱 사이(46~52%)에 둔 자리가 뒤집힌다(넘어갈 땐 52, 돌아올 땐 46 이라 그 사이는
+  //   «지금 상태 유지»인데, 새로 들어온 판에는 '지금 상태'가 없다). 그래서 셸이 적어 둔 자리를 먼저 믿는다.
+  function restore(px: number, remembered?: boolean): void {
+    hideHint();
+    if (!swapEnabled()) { setSwapped(false, false); return; }
+    if (typeof remembered === 'boolean') { setSwapped(remembered, false); return; }
+    const r = ratio(px);
+    setSwapped(r >= TH.on ? true : r <= TH.off ? false : swapped, false);
   }
 
   // ── 판정 — **놓는 순간에만** ────────────────────────────────────────────────
@@ -243,7 +262,7 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
 
   return {
     maxSideW: maxSideWidth,
-    onDrag, onEnd,
+    onDrag, onEnd, restore,
     button: () => btn,
     sync: () => paint(),
     destroy: () => {
