@@ -27,7 +27,22 @@ import { logger } from "../log.js";
 
 const ENTRY = fileURLToPath(new URL("./attach-worker-entry.js", import.meta.url));
 const MAX_WORKERS = 64;      // 폭주 방지 상한 — 초과하면 fail-open(게이트웨이 내부 attach). 정상 운영에선 안 닿는다.
-const STOP_GRACE_MS = 2_000; // shutdown 시 SIGTERM 뒤 SIGKILL 까지 유예.
+/**
+ * `index.ts` 의 종료 핸들러가 스스로 거는 **하드 데드라인** — 그 시각이면 정리가 끝났든 말든
+ *  `process.exit` 이다(`setTimeout(() => process.exit(0), 1_500).unref()`). 컨테이너가 주는 유예는
+ *  훨씬 길지만(롤의 `runscDownScript` 는 TERM 뒤 10초) **프로세스가 먼저 나간다.**
+ *  ⚠ 이 값이 바뀌면 아래 `STOP_GRACE_MS` 도 같이 봐야 한다 — 시험이 그 관계를 지킨다.
+ */
+export const PROCESS_EXIT_DEADLINE_MS = 1_500;
+/**
+ * shutdown 시 SIGTERM 뒤 SIGKILL 까지 유예.
+ *
+ * ★ **반드시 위 하드 데드라인보다 작아야 한다** (#3545). 종전 2,000ms 는 그보다 커서, 워커가 하나라도
+ *  제때 안 나가면 그 유예가 끝나기 전에 프로세스가 죽고 **그 뒤 코드(회수·유령 정리)가 통째로 안 돌았다.**
+ *  하필 그 «뒤 코드» 가 재배포·롤에서 유령을 걷는 유일한 자리다(#2625 §4 가 지목한 최대 누수원).
+ *  정상 경로에선 워커가 ~200ms 에 나가므로(엔트리의 `setTimeout(…, 200)`) 800ms 는 4배 여유다.
+ */
+export const STOP_GRACE_MS = 800;
 
 interface HandoffInput {
   req: IncomingMessage;
