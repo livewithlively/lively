@@ -473,6 +473,9 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-app-inst-pin.on svg { fill: currentColor; fill-opacity: .18; }
 .v2-app-inst-close:hover { background: var(--bg-punch); color: var(--ink); }
 .v2-app-inst-close svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+/*  휴지통 글리프(#3568 — [AI 세션] 구역의 지난 세션 행)는 × 보다 획이 많다. 11px·2.2 로 그리면 뭉쳐서
+    무슨 그림인지 안 읽힌다 — 트리 행의 휴지통(.v2-ss-trash)과 같은 값으로 조금 키우고 가늘게 한다. */
+.v2-app-inst-close--trash svg { width: 12.5px; height: 12.5px; stroke-width: 1.8; stroke-linejoin: round; }
 .v2-app-inst-project, .v2-app-inst-meta { grid-column: 1 / -1; grid-row: 2; min-width: 0; margin-left: 26px; align-self: center; }
 
 /*  남의 세션 표식(#2026) — 이 목록에 남의 세션이 서는 길은 '내가 열어 둔 창' 하나뿐인데(sideInstances ③),
@@ -1487,7 +1490,9 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 @media (hover: none) {
   .v2-tab .x { visibility: visible; }
   .v2-ss-go { opacity: 1; }
-  .v2-app-inst-close { opacity: 1; }
+  /*  ⚠ 이 목록의 × 는 opacity 가 아니라 **display 로** 숨는다(위 .v2-app-inst-close) — 종전의 `opacity: 1` 은
+      display:none 을 못 이겨 이 줄이 아무 일도 안 했고, **터치 기기에서는 × 에 닿을 길이 아예 없었다**(#3568). */
+  .v2-app-inst-close { display: inline-grid; }
 }
 /* 터치 기기(폭 무관) — 입력칸 글자 16px: iOS 사파리는 16px 미만 입력칸에 포커스가 가면 화면을 확대한다(돌아오지 않는다). */
 @media (pointer: coarse) {
