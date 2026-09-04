@@ -192,15 +192,27 @@ const SESSION_TOKEN_LABEL = "session-hooks:";
 //  훅은 세션 최소권한(admin/runtime 제외)이 맞고, MCP 는 사람이 세션에서 실제로 쓰는 표면이라 그 멤버가
 //  가진 만큼을 그대로 들어야 한다(오늘도 공유 파일 토큰으로 그만큼 쓰고 있다 — 다만 **남의 것**으로).
 const SESSION_MCP_TOKEN_LABEL = "session-mcp:";
-/** 라벨 하나에 걸린 살아있는 자격을 전부 회수 — 재생성 때 옛 것을 즉시 죽인다. */
-async function revokeSessionTokensLabeled(labels: Set<string>, why: string): Promise<void> {
+/** 라벨 하나에 걸린 살아있는 자격을 전부 회수 — 재생성 때 옛 것을 즉시 죽인다. 돌려주는 값 = **실제로 죽인 개수**. */
+async function revokeSessionTokensLabeled(labels: Set<string>, why: string): Promise<number> {
+  let revoked = 0;
   for (const t of await listTokens()) {
-    if (!t.revoked_at && t.label && labels.has(t.label)) await revokeToken(t.token_hash, why, "terminal-sessions");
+    if (!t.revoked_at && t.label && labels.has(t.label)) {
+      if (await revokeToken(t.token_hash, why, "terminal-sessions") === "revoked") revoked++;
+    }
   }
+  return revoked;
 }
-/** 세션이 죽을 때 — 그 세션에 실어 준 자격(훅·MCP)을 **둘 다** 회수한다. */
-export async function revokeSessionHookToken(boxId: string): Promise<void> {
-  await revokeSessionTokensLabeled(new Set([`${SESSION_TOKEN_LABEL}${boxId}`, `${SESSION_MCP_TOKEN_LABEL}${boxId}`]), "killSession");
+/**
+ * 세션이 죽을 때 — 그 세션에 실어 준 자격(훅·MCP)을 **둘 다** 회수한다. 돌려주는 값 = 실제로 죽인 개수(#2646).
+ *
+ * ⚠ 여기서 **0 은 오류가 아니다** — 그 세션에 토큰을 실어 준 적이 없으면(멤버 디렉터리에 없는 소유자 → mint 가
+ *  null, 또는 격리 박스라 주입 자체를 안 한 경우) 회수할 것도 없다. 그래서 0 을 경고로 올리지 않는다.
+ *  종전과 달라진 것은 「몇 개를 죽였나」가 **호출부에서 보인다**는 것뿐이다. 이 자리는 회수 대상을 살아있는
+ *  목록에서 골라 부르므로(위 필터) '0건인데 성공' 이 구조적으로 안 생긴다 — 거짓 성공은 해시를 직접 받는
+ *  창구(org_token_revoke·revokeNodeToken) 쪽 문제였다.
+ */
+export async function revokeSessionHookToken(boxId: string): Promise<number> {
+  return revokeSessionTokensLabeled(new Set([`${SESSION_TOKEN_LABEL}${boxId}`, `${SESSION_MCP_TOKEN_LABEL}${boxId}`]), "killSession");
 }
 export async function mintSessionHookToken(memberId: string, boxId: string): Promise<string | null> {
   const member = await getMember(memberId);

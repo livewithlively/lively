@@ -91,6 +91,15 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/auth/oauth.pg-test.mjs
+      # ④-b 토큰 회수(#2646) — 목으로는 못 보는 것: **회수했다는 말이 아니라 실제로 죽었는가**.
+      #    실측 사고(2026-09-04)가 정확히 여기였다 — 회수가 {ok:true} 를 답했는데 그 토큰으로 API 가 200 이었다.
+      #    그래서 이 계층은 부작용으로 판정한다: 발급 → verifyDbToken 유효 → 회수 → verifyDbToken null.
+      #    UPDATE rowCount 0 을 성공으로 답하지 않는가, 감사는 실제로 지운 경우에만 남는가도 실 DB 라야 본다.
+      - name: 토큰 회수 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/store/token-revoke.pg-test.mjs
       # ⑤ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.

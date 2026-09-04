@@ -72,15 +72,83 @@ export async function listTokens(): Promise<TokenMeta[]> {
   return r.rows as TokenMeta[];
 }
 
+// 회수 결과(#2646) — **셋을 가른다**. 사람이 그 뒤에 할 행동이 각각 다르기 때문이다:
+//   revoked          → 끝. 이번 호출이 죽였다.
+//   already-revoked  → 끝. 다만 내가 지운 게 아니다(멱등 성공).
+//   not-found        → **아직 안 끝났다.** 올바른 핸들을 다시 찾아 다시 회수해야 한다.
+//  뒤의 둘을 한 값으로 뭉개면 마지막 줄이 사라진다 — 그게 정확히 아래 사고의 모양이었다.
+export type RevokeOutcome = "revoked" | "already-revoked" | "not-found";
+
 // client 를 넘기면 그 트랜잭션에서 UPDATE+audit 을 실행한다 — mintToken 과 대칭(#880 의 이유가 그대로 적용된다).
 //  회수와 교체가 갈리면 '구 토큰은 죽었는데 새 토큰은 안 붙은' 상태가 남는다(#2161 rotateNodeToken).
-export async function revokeToken(tokenHash: string, actor?: string, source?: string, client?: pg.PoolClient): Promise<void> {
+//
+// ★ 갱신 건수를 본다(#2646). 종전엔 `Promise<void>` 로 rowCount 를 버렸고, 그래서 **0건 갱신도 성공**이었다.
+//  실측(2026-09-04 셀프호스트): 회수 호출이 {ok:true} 를 돌려줬는데 그 토큰은 살아 있었다(같은 토큰으로 200).
+//  자격증명 회수는 「즉시 무효화한다」는 약속을 믿고 자리를 뜨는 동작이라, 틀렸을 때 알아차릴 계기가 없다.
+//  그리고 감사는 **실제로 지운 경우에만** 남긴다 — 안 지웠는데 'revoke' 로 남으면 나중에 사고를 조사할 때
+//  「그때 분명히 회수했다」는 거짓 근거가 로그 쪽에 서 버린다(delegate-failure-brakes ★② 의 자격증명판).
+export async function revokeToken(tokenHash: string, actor?: string, source?: string, client?: pg.PoolClient): Promise<RevokeOutcome> {
   const exec = client ?? itemsPool;
-  await exec.query(
+  const r = await exec.query(
     `UPDATE auth_token SET revoked_at = now() WHERE token_hash=$1 AND revoked_at IS NULL`,
     [tokenHash],
   );
-  await audit("auth_token", tokenHash, "revoke", null, null, actor, source, client); // 전체 해시 기록(상관추적용 — 해시는 비밀 아님)
+  if ((r.rowCount ?? 0) > 0) {
+    await audit("auth_token", tokenHash, "revoke", null, null, actor, source, client); // 전체 해시 기록(상관추적용 — 해시는 비밀 아님)
+    return "revoked";
+  }
+  // 0건 — '이미 회수됨'인지 '그런 토큰 없음'인지는 여기서만 갈 수 있다(UPDATE 술어가 둘을 같이 떨군다).
+  const e = await exec.query(`SELECT 1 FROM auth_token WHERE token_hash=$1`, [tokenHash]);
+  return (e.rowCount ?? 0) > 0 ? "already-revoked" : "not-found";
+}
+
+// ── 회수 핸들(#2646) ──────────────────────────────────────────────────────────
+// 발급 응답의 `tokenHash` 와 회수 입력의 `tokenHash` 는 **이름이 같으면 값도 호환돼야 한다.** 종전엔
+//  발급이 12자로 잘라 주고 회수가 64자 exact match 라, 발급이 준 값을 그대로 넣는 가장 자연스러운 사용이
+//  정확히 안 되는 조합이었다 — 그리고 위 revokeToken 이 0건을 성공으로 답했으니 그 실패가 성공으로 보였다.
+// 해시는 비밀이 아니다(tokens/node 전반의 관례) — 그래서 발급이 전체 해시를 주고, 회수는 앞자리도 받는다.
+//  다만 **유일할 때만** 회수한다: 앞자리가 둘 이상에 걸리면 아무거나 죽이면 안 된다(엉뚱한 사람의 접속이 끊긴다).
+export const TOKEN_HASH_LEN = 64;
+// 최소 앞자리 길이 — 짧을수록 남의 토큰을 긁을 위험이 커진다. 12 는 종전 발급 응답이 주던 길이이기도 해서,
+//  이미 사람 손에 나간 핸들이 그대로 통한다.
+export const MIN_HANDLE_LEN = 12;
+
+export type TokenHandle =
+  | { kind: "exact"; tokenHash: string }
+  | { kind: "prefix"; prefix: string }
+  | { kind: "invalid"; reason: "empty" | "not-hex" | "too-short" | "too-long" };
+
+/** 핸들의 형식 판정(순수 — 표 고정 테스트 대상). DB 를 안 본다: 여기서 갈리는 건 '무엇으로 찾을까'까지다. */
+export function classifyTokenHandle(raw: string): TokenHandle {
+  const s = (raw ?? "").trim().toLowerCase();
+  if (!s) return { kind: "invalid", reason: "empty" };
+  // hex 만 통과시킨다 — 아래 prefix 조회가 LIKE 라, `%`·`_` 가 섞이면 와일드카드가 된다(무관한 토큰이 걸린다).
+  if (!/^[0-9a-f]+$/.test(s)) return { kind: "invalid", reason: "not-hex" };
+  if (s.length > TOKEN_HASH_LEN) return { kind: "invalid", reason: "too-long" };
+  if (s.length === TOKEN_HASH_LEN) return { kind: "exact", tokenHash: s };
+  if (s.length < MIN_HANDLE_LEN) return { kind: "invalid", reason: "too-short" };
+  return { kind: "prefix", prefix: s };
+}
+
+export type ResolvedHandle =
+  | { ok: true; tokenHash: string }
+  | { ok: false; reason: "empty" | "not-hex" | "too-short" | "too-long" | "not-found" | "ambiguous"; matches?: number };
+
+/** 핸들 → 회수 대상 해시. 앞자리는 **정확히 하나**일 때만 풀린다(둘 이상이면 회수하지 않고 모호를 답한다). */
+export async function resolveTokenHandle(raw: string): Promise<ResolvedHandle> {
+  const h = classifyTokenHandle(raw);
+  if (h.kind === "invalid") return { ok: false, reason: h.reason };
+  // 전체 해시는 DB 를 안 보고 그대로 넘긴다 — '없음' 판정은 revokeToken 이 내린다(왕복 1회 절약, 판정은 한 곳).
+  if (h.kind === "exact") return { ok: true, tokenHash: h.tokenHash };
+  const r = await itemsPool.query(
+    `SELECT count(*)::int AS n, min(token_hash) AS hash FROM auth_token WHERE token_hash LIKE $1 || '%'`,
+    [h.prefix],
+  );
+  const row = r.rows[0] as { n: number; hash: string | null } | undefined;
+  const n = row?.n ?? 0;
+  if (n === 0) return { ok: false, reason: "not-found" };
+  if (n > 1) return { ok: false, reason: "ambiguous", matches: n };
+  return { ok: true, tokenHash: row?.hash as string };
 }
 
 // 유효 권한 계산(순수 함수 — 단위 테스트 대상). 토큰은 '발급된 상한', 멤버는 '라이브 상한' →
