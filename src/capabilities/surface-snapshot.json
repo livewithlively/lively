@@ -733,7 +733,7 @@
   "rest": [
    "POST /api/ui/org/token/revoke"
   ],
-  "input_hash": "bba13b8183929248"
+  "input_hash": "1c424472179379e1"
  },
  {
   "name": "org_oauth_clients",

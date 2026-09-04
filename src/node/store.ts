@@ -4,7 +4,7 @@
 //  org_node.token_hash 직접 매칭 + 토큰 미회수 + 소유 멤버 active 를 모두 요구한다(F7 blast radius).
 import crypto from "node:crypto";
 import { itemsPool, withTx } from "../db/client.js";
-import { mintToken, revokeToken } from "../org/store/tokens.js";
+import { mintToken, revokeToken, type RevokeOutcome } from "../org/store/tokens.js";
 import { getMember } from "../org/store/members.js";   // #2165 — 배럴(org/store.js) 대신 좁은 모듈: 배럴을 타면 커넥터·수집기·토큰소스가 통째로 노드 번들에 실린다
 import { HttpError } from "../http-error.js";
 import type { KeepAwakeStatus } from "./keep-awake.js";
@@ -107,12 +107,15 @@ export async function rotateNodeToken(id: string, actor?: string): Promise<{ nod
  *  토큰만 죽으면 그 기계는 즉시 끊기고(다음 인증이 `revoked`), 다시 로그인해 `lively node` 를 돌리면
  *  같은 id 로 회전 등록돼 이력이 이어진다.
  */
-export async function revokeNodeToken(id: string, actor?: string): Promise<{ revoked: boolean; node: string }> {
+export async function revokeNodeToken(id: string, actor?: string): Promise<{ revoked: boolean; outcome: RevokeOutcome | "no-token"; node: string }> {
   const node = await getNode(id);
   if (!node) throw new HttpError(404, `노드 없음: ${id}`);
-  if (!node.token_hash) return { revoked: false, node: id };
-  await revokeToken(node.token_hash, actor, "node-store");
-  return { revoked: true, node: id };
+  // #2646 — 종전엔 token_hash 가 있기만 하면 무조건 {revoked:true} 였다. 그 토큰이 이미 죽었든 auth_token 에
+  //  아예 없든 같은 답이 나갔다. 두 경우 다 그 기계는 어차피 못 붙지만(authNodeTokenDetailed 가 조인으로 거른다),
+  //  **이번 호출이 무엇을 했는지**는 다르다 — 로그와 응답이 그걸 그대로 말해야 한다.
+  if (!node.token_hash) return { revoked: false, outcome: "no-token", node: id };
+  const outcome = await revokeToken(node.token_hash, actor, "node-store");
+  return { revoked: outcome === "revoked", outcome, node: id };
 }
 
 export async function setNodeEnabled(id: string, enabled: boolean): Promise<void> {

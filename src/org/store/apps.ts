@@ -241,8 +241,14 @@ export async function upsertGrant(
   return rowToGrant(r.rows[0]);
 }
 
-export async function revokeGrant(appId: string, memberId: string): Promise<void> {
-  await itemsPool.query(`UPDATE org_app_grant SET revoked_at=now() WHERE app_id=$1 AND member_id=$2 AND revoked_at IS NULL`, [appId, memberId]);
+/**
+ * 한 멤버의 그 앱 동의 회수. 돌려주는 값 = **실제로 회수한 행이 있었나**(#2646).
+ *  종전엔 `void` 라 호출부가 「살아 있던 동의를 이번에 껐다」와 「애초에 없었다」를 구분할 수 없었고,
+ *  앱 id 를 잘못 넣어도 성공이 나갔다 — 동의 철회는 사람이 «껐다»고 믿고 자리를 뜨는 동작이라 그게 위험하다.
+ */
+export async function revokeGrant(appId: string, memberId: string): Promise<boolean> {
+  const r = await itemsPool.query(`UPDATE org_app_grant SET revoked_at=now() WHERE app_id=$1 AND member_id=$2 AND revoked_at IS NULL`, [appId, memberId]);
+  return (r.rowCount ?? 0) > 0;
 }
 
 /**
