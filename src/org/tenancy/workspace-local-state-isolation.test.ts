@@ -86,7 +86,6 @@ const SCOPED: Array<[string, string]> = [
   ["web/v2/rail.ts", "lively_v2_rail_hidden"],
   ["web/v2/main.ts", "lively_v2_sess_names"],
   ["web/v2/main.ts", "lively_v2_side_dismissed"],
-  ["web/v2/main.ts", "lively_v2_home_route"],
   ["web/v2/last-ask.ts", "lively_v2_last_ask"],
   ["web/v2/notifications.ts", "lively_v2_notified"],
   ["web/v2/panes.ts", "lively_panes_layout_v2"],
