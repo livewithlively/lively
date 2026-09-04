@@ -75,7 +75,11 @@ export function kindOf(p: string): { kind: string; type: string } {
   return { kind: 'file', type: '파일' };
 }
 // 미리보기는 **작은 종이 한 장**(300×246)을 만들어 카드 크기에 맞춰 줄인다 — 글자·표가 뭉개지지 않고 비율이 산다.
-export const PV_W = 300;   // 종이 폭(높이는 CSS 가 카드 비율로 잡는다)
+export const PV_W = 300;   // 글 미리보기의 종이 폭 — 이 폭에서 글자가 읽을 만한 크기로 앉는다
+/** 시안(HTML)의 종이 폭 (#762, 원준 2026-09-04: "엄청 확대된 게 썸네일에 보여서 있으나 마나").
+ *  ⚠ 300px 짜리 창에 데스크톱용 페이지를 넣으면 그 페이지의 **왼쪽 300px 조각**만 보인다 — 축소가
+ *   아니라 확대로 읽힌다. 논리 폭을 데스크톱만큼 주고 카드 크기로 줄여야 **한 장이 통째로** 들어온다. */
+export const PV_PAGE_W = 1180;
 export const PV_MAX = { pdf: 12e6, page: 4e6, text: 512e3, img: 24e6, video: 80e6 } as Record<string, number>;
 
 // ── 보기 설정(맥 파인더 문법) — 브라우저에 기억한다. 칸마다 따로 두지 않는다(한 사람의 한 습관이다). ──
