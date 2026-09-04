@@ -881,6 +881,7 @@ for (const [maxReap, expect] of [[0, ["u-1"]], [2, ["u-1", "u-2"]]] as Array<[nu
     memUsedPct: async () => 95, memTotal: () => 1000, swapUsage: async () => null,
     procTable: async () => new Map(),
     sessionRss: async () => new Map(),                       // 못 잼 — 목표 판정이 구조적으로 불가능하다
+    liveJobs: async () => new Set<string>(),                 // ⑥ stub — 실 tmux 무접촉(러너에 tmux 가 없으면 기본 구현이 전부 보호한다)
   });
   assert.deepEqual(reaped, expect,
     maxReap === 0
@@ -906,6 +907,7 @@ for (const [maxReap, expect] of [[0, ["u-1"]], [2, ["u-1", "u-2"]]] as Array<[nu
     memUsedPct: async () => 95, memTotal: () => 1000, swapUsage: async () => null,   // 95% → 90% 미만까지 = 50MB 초과
     procTable: async () => new Map(),
     sessionRss: async () => new Map([["m-1", 60], ["m-2", 40], ["m-3", 10]]),
+    liveJobs: async () => new Set<string>(),                 // ⑥ stub — 위와 같은 이유
   });
   assert.deepEqual(reaped, ["m-1"], "60MB 로 목표에 닿으면 거기서 멈춘다(상한 1건과 우연히 같아지지 않게 후보 3건으로 잰다)");
   assert.equal(res.skipReasons.target, 2, "남은 둘은 '필요 없어서' 남은 것이다(cap 이 아니다)");
