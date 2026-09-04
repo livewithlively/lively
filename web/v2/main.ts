@@ -1104,16 +1104,22 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       // 기존 공개 route(#/s/:id)는 유지하되 실행 정체성은 세션을 실제로 띄운 AppPackage의 AppInstance로 확보한다.
       // 일반 세션만 ai-session builtin으로 접힌다 — 종전의 '세션 앱'과 일반 앱이 같은 package/instance 모델을 쓴다.
       // 인스턴스 메타 실패가 살아 있는 세션 자체를 가리지 않도록 화면 렌더와는 분리한다.
-      try {
-        //  ⚠ 모를 때 'AI 세션' 같은 자리표시자를 보내지 않는다(#2022) — 서버는 conflict 시 title 을 COALESCE 로
-        //   덮으므로, 목록이 늦은 한 판이 저장된 멀쩡한 이름을 자리표시자로 굳혀 버린다(실측: '/status'·'claude · resume').
-        //   안 보내면 이전 값이 그대로 살고, 되찾기(repairUnknownSessNames)도 그 값을 다시 쓸 수 있다.
-        const title = s ? (sessText(s, projName(data, s.projectId)).main || s.label || undefined) : undefined;
-        const appId = String(s?.raw?.appId || s?.raw?.app_id || 'ai-session');
-        const instance = await ensureSessionAppInstance(appId, s?.id || id, { projectId: s?.projectId ? Number(s.projectId) : null, title });
-        if (seq !== tab.seq) return;
-        setTabAppInstance(tab, instance.id, instance.app_id);
-      } catch (error) { console.warn('[app-instance] AI 세션 인스턴스 확보 실패', error); }
+      //  ★ #3537 — **기다리지 않는다.** 이 왕복은 탭에 붙일 인스턴스 메타를 구하는 것뿐인데, `await` 로 두면
+      //   그동안 터미널 화면이 아예 안 그려진다(세션을 열 때마다 이 왕복만큼 흰 화면이 길어진다). 바로 위
+      //   주석이 이미 «화면 렌더와는 분리한다» 라고 말하고 있었는데 실제로는 렌더 앞을 막고 있었다.
+      //   늦게 도착하면 그때 탭에 얹는다 — `seq` 가 그 사이 다른 화면으로 옮겨 간 판을 버린다(종전과 같은 걸쇠).
+      void (async () => {
+        try {
+          //  ⚠ 모를 때 'AI 세션' 같은 자리표시자를 보내지 않는다(#2022) — 서버는 conflict 시 title 을 COALESCE 로
+          //   덮으므로, 목록이 늦은 한 판이 저장된 멀쩡한 이름을 자리표시자로 굳혀 버린다(실측: '/status'·'claude · resume').
+          //   안 보내면 이전 값이 그대로 살고, 되찾기(repairUnknownSessNames)도 그 값을 다시 쓸 수 있다.
+          const title = s ? (sessText(s, projName(data, s.projectId)).main || s.label || undefined) : undefined;
+          const appId = String(s?.raw?.appId || s?.raw?.app_id || 'ai-session');
+          const instance = await ensureSessionAppInstance(appId, s?.id || id, { projectId: s?.projectId ? Number(s.projectId) : null, title });
+          if (seq !== tab.seq) return;
+          setTabAppInstance(tab, instance.id, instance.app_id);
+        } catch (error) { console.warn('[app-instance] AI 세션 인스턴스 확보 실패', error); }
+      })();
       // 팝아웃 창(?solo=1)은 **세션 하나만 담은 창**이다 — 프로젝트 셸을 두르지 않는다(그게 이 창의 정의).
       if (SOLO) {
         const trail = drawAsideSession(tab, s || null);
