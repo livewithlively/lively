@@ -54,10 +54,20 @@ ok(/await\s+probeSelfNodes\(\)/.test(hydrate),
   "W2 스냅샷 복구 뒤 곧바로 판정을 부른다(다음 보고를 기다리지 않는다)");
 
 // ── 회귀 방지 — 판정 자체의 성질은 그대로여야 한다 ─────────────────────────
-//  ⓐ 겹칠 때만 참(양성 확답) ⓑ 한 번 선 판정은 안 뒤집는다. 이번 수정은 '언제 보나'만 바꿨다.
-ok(/if\s*\(selfNodes\.has\(k\)\)\s*continue/.test(probe),
-  "R1 이미 판정된 노드는 다시 보지 않는다(선 판정 유지)");
+//  ⓐ 겹칠 때만 참(양성 확답) ⓑ 한 번 선 판정은 안 뒤집는다.
+//  ⚠ #2600 T2 로 **결정이 함수로 빠졌다**(`judgeSelfNode`) — 종전엔 이 자리에 `if (selfNodes.has(k)) continue`
+//   가 리터럴로 있었고 이 시험이 그 **문자열**을 봤다. 성질은 그대로이고(그 함수 첫 줄이 `alreadyJudged` 를
+//   본다), 이제 실동작으로도 물린다(`node/session-host-declaration.test.ts` 의 J1).
+//   여기서 남는 몫은 «그 재료가 실제로 전달되나» 하나다 — 순수 함수가 옳아도 호출부가 안 넘기면 그만이라서.
+ok(/alreadyJudged:\s*selfNodes\.has\(k\)/.test(probe),
+  "R1 이미 판정된 노드인지를 판정 함수에 **넘긴다**(선 판정 유지)");
 ok(!/selfNodes\.delete|selfNodes\.clear/.test(probe),
   "R2 판정을 뒤집는 경로가 probe 안에 없다(없음 ≠ 아니다)");
+
+// ── #2600 T2 — 면제가 그 자리에 **서 있나** ────────────────────────────────
+//  판정 함수가 면제를 알아도 호출부가 노드 행을 안 넘기면 «항상 선언 없음» 이 되어 면제가 죽는다.
+//  그건 값으로는 안 잡힌다(순수 함수는 멀쩡하다) — 여기가 그 자리다.
+ok(/declaredSessionHost:\s*st\.sessionHost/.test(probe),
+  "T2-W 판정에 넘기는 선언을 **상태**에서 읽는다(연결이 아니라 — 부팅 직후엔 연결이 없다)");
 
 console.log(`\n${pass} assertions passed`);
