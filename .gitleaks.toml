@@ -7,7 +7,10 @@ title = "Lively"
 [extend]
 useDefault = true
 
-[allowlist]
+# ⚠ 문법 — 예외는 `[[allowlists]]`(복수) 로 적는다. gitleaks 8.30 은 구형 `[allowlist]`(단수) 와
+#  **공존을 거부한다**("[allowlist] is deprecated, it cannot be used alongside [[allowlists]]" — 설정 로드 자체가 실패).
+#  그래서 예외를 하나 더 다는 순간 기존 블록도 함께 새 문법으로 옮겨야 한다(#3537 에서 실제로 겪었다).
+[[allowlists]]
 description = "테스트 픽스처 — 값 자체가 더미임을 드러내는 패턴만 제외(파일 단위 제외 금지)"
 regexes = [
   # 키트 CLI 테스트가 쓰는 가짜 라이블리 토큰. 실제 토큰은 lvk_ 뒤에 test_ 가 붙지 않는다.
@@ -23,3 +26,21 @@ regexes = [
   #  **히스토리 전수**라 옛 커밋이 남아 있는 동안 모든 PR 이 막힌다 → 그 리터럴 하나만 정확히 뺀다(파일 단위 제외 아님).
   '''lively_v2_recent_apps''',
 ]
+
+# ── 벤더링한 서드파티 번들의 압축 코드 (#3537) ────────────────────────────────
+#  머리말의 «파일 단위 제외 금지» 는 **우리 소스**를 향한 규칙이다. 우리가 쓴 파일은 언젠가 진짜 자격증명이
+#  들어올 수 있으니 통째로 빼면 그게 조용히 통과한다. 여기는 성격이 다르다 — `public/vendor/` 는 upstream 이
+#  빌드한 산출물을 그대로 받아 둔 자리이고(지금은 xterm.js 한 벌), 사람이 값을 적는 곳이 아니다.
+#
+#  왜 필요한가: 압축된 JS 는 짧은 고엔트로피 토큰이 빽빽하다. `generic-api-key` 룰이 그중 셋을 시크릿으로
+#   오인해 PR 전체를 막았다(실측 2026-09-04 — xterm.min.js·addon-webgl.min.js·addon-canvas.min.js 의
+#   `t.FourKeyMap=…` 같은 자리). 값을 하나씩 빼는 방법도 있지만 그 문자열은 **버전을 올릴 때마다 바뀐다** —
+#   올릴 때마다 CI 가 막히고 그때마다 예외를 덧붙이게 된다(예외가 늘어나는 쪽이 더 나쁘다).
+#
+#  ⚠ 그래서 **두 축으로 좁힌다**: 규칙은 `generic-api-key` 하나만, 자리는 벤더 디렉터리의 압축 산출물만.
+#   AWS 키·GitHub 토큰·개인키 같은 **형태가 분명한 룰은 이 자리에도 그대로 적용된다** — 누가 이 폴더에
+#   진짜 자격증명을 넣으면 그 룰들이 잡는다(아래 시험으로 확인했다).
+[[allowlists]]
+description = "public/vendor 의 서드파티 압축 번들 — generic-api-key 오탐만 제외(다른 룰은 그대로 적용)"
+targetRules = ["generic-api-key"]
+paths = ['''^public/vendor/.*\.min\.(js|css)$''']

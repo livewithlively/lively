@@ -46,7 +46,7 @@ import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWrit
 import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
-import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
+import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, type TmuxCmd, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
   paneAwaitingInput, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
@@ -734,7 +734,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   }
   // 웹터미널은 xterm.js 로 렌더된다 — pane TERM 을 xterm-256color 로 통일(색 일관성: 격리 세션은 box-spawn 이
   //  강제, 비격리(프로젝트·managed)는 여기 default-terminal 로. 서버 전역이나 '새 pane' 에만 적용=기존 세션 무영향, 멱등).
-  await tmuxQuiet(["set-option", "-g", "default-terminal", "xterm-256color"]);
+  //  #3537 — 이 전역 옵션은 **판을 만들기 전에** 서 있어야 하므로(새 pane 에만 적용된다) 아래 new-session 과
+  //   같은 묶음으로 한 번에 보낸다. 왕복 하나를 아끼는 것이고 실행 순서는 그대로다(tmux 가 순차로 처리한다).
+  const openPane: TmuxCmd[] = [["set-option", "-g", "default-terminal", "xterm-256color"], args];
   // ── 첫 실행 «이 폴더를 신뢰합니까?» 를 미리 지운다(#1631) ──────────────────────────────
   //  그 물음은 stdin 으로 밀어 넣은 **첫 지시를 삼키고** 사람이 Enter 를 칠 때까지 기다리다 CLI 를 끝낸다.
   //  실측 2026-08-31(dev): 온보딩 킥오프 세션이 그렇게 즉사해 대화 id 가 없었고(트랜스크립트 404),
@@ -778,7 +780,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       };
     await ensureFolderTrusted(io, configFile, target, trustOk, harness.key);
   }
-  try { await tmux(args); }
+  try { await tmuxBatch(openPane); }   // #3537 — default-terminal + new-session 을 한 왕복으로
   catch (e) {
     //  #2545 — 새 경로는 행을 먼저 썼다. 판이 안 떴으면 지운다(안 지우면 화면에 유령 «중단됨» 이 뜬다). 컨테이너는 브로커 ①(유휴)이 거둔다.
     if (inside && mirrored) await deleteSessionState(id).catch(() => undefined);
@@ -793,19 +795,34 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  ⚠ 복원(restore)도 이 함수를 타지만 그때는 이 값이 무시된다 — upsert 의 ON CONFLICT 가 label_source 를
   //   손대지 않는다(안 그러면 복원 한 번에 걸쇠가 풀린다. 근거는 session-state.ts 의 그 주석).
   //  (labelSource 선언도 위로 — #2545.)
-  await tmux(["set-option", "-t", id, "@box_owner", ownerId(user)]);
-  await tmux(["set-option", "-t", id, "@box_label", label]);
-  await tmux(["set-option", "-t", id, "@box_harness", harness.key]);
-  //  ★ #2439 — 이 세션이 **어느 모드로 떴나**. 배달·화면이 같은 값을 봐야 판정이 갈리지 않는다
-  //   (갈렸을 때 pane 은 셸인데 대화창은 죽은 세션이 됐다 — 2026-09-01 실측).
-  if (chatRuntime) await tmux(["set-option", "-t", id, "@box_runtime", "chat"]);
-  await tmux(["set-option", "-t", id, "@box_kind", input.kind]);   // #2162 — 종류(@box_* 와 같은 자리·같은 규약)
-  await tmux(["set-option", "-t", id, "@box_dir", target]);
-  await tmux(["set-option", "-t", id, "@box_auto", input.autoApprove ? "1" : "0"]);
-  await tmux(["set-option", "-t", id, "@box_flags", encodeOptJson(appliedFlags)]);
-  await tmux(["set-option", "-t", id, "@box_invites", encodeOptJson(invites)]);
-  // 앱 세션이면 앱 id 를 박아둔다(#1780 D4) — @box_project 등과 같은 자리·같은 규약(desired 미러는 app_id 컬럼). 관측·귀속용.
-  if (input.appId) await tmux(["set-option", "-t", id, "@box_app", String(input.appId)]);
+  // ── 세션 메타(@box_*)를 **한 번에** 박는다 (#3537) ──────────────────────────────
+  //  종전엔 값 하나에 중계 왕복 하나였다 — 매니지드에서 회당 0.45~1.0초라 이 블록만으로 5~10초였다
+  //  (실측 2026-09-04). tmux 는 한 호출에서 `;` 로 여러 명령을 받으므로 **왕복 수를 값 개수에서 떼어낸다**.
+  //  실행 순서·실패 의미는 종전 그대로다(앞이 실패하면 뒤는 안 돈다 · 호출 전체가 비-0). 계약·근거는 tmux-exec.ts 머리말.
+  const meta: TmuxCmd[] = [
+    ["set-option", "-t", id, "@box_owner", ownerId(user)],
+    ["set-option", "-t", id, "@box_label", label],
+    ["set-option", "-t", id, "@box_harness", harness.key],
+    //  ★ #2439 — 이 세션이 **어느 모드로 떴나**. 배달·화면이 같은 값을 봐야 판정이 갈리지 않는다
+    //   (갈렸을 때 pane 은 셸인데 대화창은 죽은 세션이 됐다 — 2026-09-01 실측).
+    ...(chatRuntime ? [["set-option", "-t", id, "@box_runtime", "chat"] as TmuxCmd] : []),
+    ["set-option", "-t", id, "@box_kind", input.kind],   // #2162 — 종류(@box_* 와 같은 자리·같은 규약)
+    ["set-option", "-t", id, "@box_dir", target],
+    ["set-option", "-t", id, "@box_auto", input.autoApprove ? "1" : "0"],
+    ["set-option", "-t", id, "@box_flags", encodeOptJson(appliedFlags)],
+    ["set-option", "-t", id, "@box_invites", encodeOptJson(invites)],
+    // 앱 세션이면 앱 id 를 박아둔다(#1780 D4) — @box_project 등과 같은 자리·같은 규약(desired 미러는 app_id 컬럼). 관측·귀속용.
+    ...(input.appId ? [["set-option", "-t", id, "@box_app", String(input.appId)] as TmuxCmd] : []),
+    // 프로젝트 세션엔 프로젝트 id 를 박아둔다 — listSessions 의 projectId(프론트 세션 귀속·카운트) + 작업 타임라인 귀속용.
+    //  (#452 이후 입장 게이트 canAttach 는 멤버십을 안 봄 — 이 id 는 표시·귀속 목적으로만 남는다.)
+    //  ⚠ 종전엔 @box_managed **뒤**에 박혔다. 둘은 서로를 안 읽는 독립 옵션이고 그 사이에서 값을 읽는 코드도
+    //   없으므로 순서를 앞으로 당겨 한 묶음에 넣는다(왕복 둘을 아낀다).
+    ...(input.projectId ? [
+      ["set-option", "-t", id, "@box_project", String(input.projectId)] as TmuxCmd,
+      ["set-option", "-t", id, "@box_project_src", input.projectSrc === "org" ? "org" : "v6"] as TmuxCmd,
+    ] : []),
+  ];
+  await tmuxBatch(meta);
   // 상시세션 keep-alive 가 만든 세션이면 **그 상시세션 id 를 박는다**(#2170). 정리기가 나중에 이 세션을 걷어도
   //  되는지 판정하는 유일한 근거다 — 없으면 정리기는 작업 폴더 문자열이 겹친다는 이유만으로 남의 세션을 죽인다.
   //  ⚠ 못 박으면 **방금 만든 세션을 되돌린다**(best-effort 로 삼키지 않는다). 표식 없는 상시세션은 다음 tick 이
@@ -819,11 +836,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       throw new HttpError(503, `상시세션 표식을 박지 못해 세션 생성을 취소했습니다: ${(e as Error)?.message ?? e}`);
     }
   }
-  // 프로젝트 세션엔 프로젝트 id 를 박아둔다 — listSessions 의 projectId(프론트 세션 귀속·카운트) + 작업 타임라인 귀속용.
-  //  (#452 이후 입장 게이트 canAttach 는 멤버십을 안 봄 — 이 id 는 표시·귀속 목적으로만 남는다.)
+  //  (@box_project·@box_project_src 는 위 메타 묶음에서 이미 박았다 — #3537)
   if (input.projectId) {
-    await tmux(["set-option", "-t", id, "@box_project", String(input.projectId)]);
-    await tmux(["set-option", "-t", id, "@box_project_src", input.projectSrc === "org" ? "org" : "v6"]);
     // v6 프로젝트 세션은 실행 전에 DB current가 반드시 존재해야 한다. DB가 SoT인데 이 기록을 best-effort로
     // 삼키면 첫 훅이 미연결로 보고 새 프로젝트를 중복 생성한다. 노드는 DB가 없으므로 게이트웨이 릴레이가 기록한다.
     if (input.projectSrc !== "org" && !onNode()) {
@@ -840,12 +854,15 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   }
   // #1291 v2 — 기록 범위(write cap)·read 축소를 세션에 박는다. tmux user-option 이 권위(모드와 같은 자리).
   //  미지정이면 아무것도 안 박는다 → 판정이 실행 폴더에서 파생한다(신규·복원이 같은 규칙을 타게).
-  if (input.writeVis) await tmuxQuiet(["set-option", "-t", id, "@box_write_vis", String(input.writeVis)]);
-  if (input.restrictRead) await tmuxQuiet(["set-option", "-t", id, "@box_restrict", "1"]);
   // 마우스 휠 스크롤 + window-size latest(상세 근거는 tmux-exec.ts ensureSessionOpts 주석 — #252 깨짐 수정).
-  await tmuxQuiet(["set-option", "-t", id, "mouse", "on"]);
-  await tmuxQuiet(["set-window-option", "-t", id, "aggressive-resize", "off"]);
-  await tmuxQuiet(["set-window-option", "-t", id, "window-size", "latest"]);
+  //  #3537 — 위 메타와 같은 이유로 한 묶음. 전부 비치명이라 묶음째 삼킨다(tmuxBatchQuiet 머리말).
+  await tmuxBatchQuiet([
+    ...(input.writeVis ? [["set-option", "-t", id, "@box_write_vis", String(input.writeVis)] as TmuxCmd] : []),
+    ...(input.restrictRead ? [["set-option", "-t", id, "@box_restrict", "1"] as TmuxCmd] : []),
+    ["set-option", "-t", id, "mouse", "on"],
+    ["set-window-option", "-t", id, "aggressive-resize", "off"],
+    ["set-window-option", "-t", id, "window-size", "latest"],
+  ]);
   // 세션 desired-state DB 미러(#1059 E) — 재부팅(tmux 사망)에도 복원 가능한 목록으로 남긴다. tmux @box_* 와 같은 값을 미러.
   //  ⚠ best-effort: DB 가 죽어도 세션 생성은 이미 끝났다(위 tmux new-session) — upsert 실패로 세션을 되돌리지 않는다.
   //  managed(상시) 세션은 skip — keep-alive(ensureAllManagedSessions)가 그 영속을 소유하므로 restorable 로 이중화하면
@@ -916,7 +933,14 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //   이 파일은 노드 에이전트 번들에 실리고 노드엔 DB 가 없다('DB 없음' 계약, scripts/build-node-agent.mjs 화이트리스트).
   //  ⚠ #2439 — **방금 정한 모드를 함께 돌려준다.** 이 객체는 collectSessions 가 아니라 여기서
   //   만들어지므로, 안 실으면 «만들 때는 chat 인데 응답은 terminal» 이 되어 화면이 곧바로 갈린다.
+  //  ⚠ **소속(projectId)·앱(appId)도 함께 돌려준다.** 안 실으면 화면이 이 세션을 «프로젝트 없음»(0)으로 마운트하고,
+  //   20초 뒤 목록이 진짜 소속을 물고 오는 순간 `syncShell` 이 어긋남을 보고 그 탭을 **통째로 다시 그린다**
+  //   (v2/main.ts — `have !== want` → renderRoute). 그 재렌더는 터미널 iframe 을 파괴·재생성하므로 사람 눈에는
+  //   «클로드 코드가 떴다가 하얘졌다가 다시 뜬다» 로 보인다(원준·상민 신고 2026-09-04, 실측으로 확인).
+  //   서버는 이 값을 **이미 알고 있다**(위에서 프로젝트를 선생성하고 @box_project 까지 박았다) — 안 실을 이유가 없었다.
   return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: createdSec, attached: false, invites, flags: appliedFlags,
+    ...(input.projectId ? { projectId: Number(input.projectId) } : {}),
+    ...(input.appId ? { appId: String(input.appId) } : {}),
     ...(chatRuntime ? { runtimeChoice: "chat" as const } : {}) };
 }
 

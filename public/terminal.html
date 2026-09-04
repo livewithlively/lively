@@ -5,7 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>내 AI 세션 · Lively Box</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%231e1e2e'/%3E%3Cpath d='M4 5l3 3-3 3M8 11h4' stroke='%2316C79A' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<!-- xterm 은 **같은 출처**에서 준다(#3537 · public/vendor/xterm/README.md).
+     이 스타일시트는 <head> 의 렌더블로킹 자원이라, CDN 에 두면 세션 화면의 첫 픽셀이 서드파티 왕복에 묶인다 —
+     사람이 «클로드 코드가 언제 뜨나» 를 재는 바로 그 구간이다. 버전은 종전과 같다(5.5.0). -->
+<link rel="stylesheet" href="./vendor/xterm/xterm.min.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Fira+Code:wght@400;600&family=Source+Code+Pro:wght@400;600&family=IBM+Plex+Mono:wght@400;600&family=Roboto+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -264,11 +267,12 @@
 <body>
 <div id="root"></div>
 <input id="upload-input" type="file" hidden multiple>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js" defer></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js" defer></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js" defer></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-canvas@0.7.0/lib/addon-canvas.min.js" defer></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js" defer></script>
+<!-- 같은 출처(#3537) — 버전은 파일이 쥔다(public/vendor/xterm/README.md 의 표). 순서는 종전과 같다: 본체 먼저, 애드온 뒤. -->
+<script src="./vendor/xterm/xterm.min.js" defer></script>
+<script src="./vendor/xterm/addon-fit.min.js" defer></script>
+<script src="./vendor/xterm/addon-webgl.min.js" defer></script>
+<script src="./vendor/xterm/addon-canvas.min.js" defer></script>
+<script src="./vendor/xterm/addon-web-links.min.js" defer></script>
 <script src="./md.js" defer></script>
 <script src="./terminal.js" defer></script>
 </body>

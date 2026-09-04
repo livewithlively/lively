@@ -51,6 +51,62 @@ export async function tmux(args: string[]): Promise<string> {
   return stdout;
 }
 export async function tmuxQuiet(args: string[]): Promise<void> { try { await tmux(args); } catch { /* 비치명 */ } }
+
+// ── 명령 묶어 보내기 (#3537) ────────────────────────────────────────────────
+//  **왜 필요한가** — 매니지드에서 tmux 호출 하나는 로컬 execFile 이 아니다:
+//    `node tmux-relay.cjs <slug>` (새 Node 프로세스) → 허브 → 브로커 → `docker exec … tmux …`
+//   실측(2026-09-04, 매니지드 테넌트): tmux 안 쓰는 API 가 0.02초인데 **tmux 한 번이 0.45~1.0초**(이상치 4.8초)다.
+//   createSession 은 그 왕복을 **15번 순차로** 했다(new-session + @box_* 10여 개 + 창 옵션 셋) — 그것만으로
+//   7~15초다. 사용자가 «시키기를 눌러도 5초 넘게 아무 일도 안 난다» 고 신고한 시간의 정체가 이것이었다.
+//   tmux 는 한 번의 호출에서 `;` 로 여러 명령을 이어 받으므로, 왕복 수를 명령 수에서 **떼어낼 수 있다**.
+//
+//  ⚠ 실측으로 확인한 계약(2026-09-04, tmux 3.x):
+//   · 인자 **안에** `;` 가 있는 것은 구분자가 아니다(`x;y` 는 값 그대로 들어간다) — 판 명령의 셸 스크립트가 안전한 이유.
+//   · 인자가 **정확히** `;` 이면 tmux 가 구분자로 읽어 «empty value» 로 죽는다 → 그런 명령은 배치에 안 싣는다(홀로 보낸다).
+//   · 중간 명령이 실패하면 그 뒤는 **실행되지 않고** 호출 전체가 비-0 이다 — 순차 실행의 의미가 그대로 보존된다.
+//  ⚠ 브로커의 argv 상한(lvly-cloud validateTmuxArgv, 종전 64)보다 **적게** 끊는다. 상한을 올리는 변경과
+//   이 변경의 배포 순서가 어긋나도 조용히 깨지지 않게 하려는 것이다(옛 브로커에서도 그대로 돈다).
+export const TMUX_BATCH_MAX_ARGV = 60;
+
+/** tmux 명령 하나 — argv 조각. */
+export type TmuxCmd = readonly string[];
+
+/** (순수) 이 명령을 배치에 실을 수 있나 — 인자가 정확히 `;` 이면 못 싣는다(위 계약). */
+export function tmuxBatchable(cmd: TmuxCmd): boolean {
+  return cmd.length > 0 && !cmd.some((a) => a === ";");
+}
+
+/**
+ * (순수) 명령들을 `;` 로 이어 붙인 **argv 묶음들**로 나눈다 — 묶음 하나가 중계 왕복 하나다.
+ *  못 싣는 명령(위)은 홀로 떼어 종전과 똑같이 나간다. 명령 하나가 상한을 넘으면 쪼갤 수 없으므로 그대로 둔다.
+ */
+export function chunkTmuxCommands(cmds: readonly TmuxCmd[], maxArgv = TMUX_BATCH_MAX_ARGV): string[][] {
+  const out: string[][] = [];
+  let cur: string[] = [];
+  const flush = (): void => { if (cur.length) { out.push(cur); cur = []; } };
+  for (const cmd of cmds) {
+    if (!cmd.length) continue;
+    if (!tmuxBatchable(cmd)) { flush(); out.push([...cmd]); continue; }
+    if (cur.length && cur.length + 1 + cmd.length > maxArgv) flush();
+    if (cur.length) cur.push(";");
+    cur.push(...cmd);
+  }
+  flush();
+  return out;
+}
+
+/** 묶어 보낸다 — 실패는 던진다(순차 `tmux()` 여러 번과 같은 의미). */
+export async function tmuxBatch(cmds: readonly TmuxCmd[]): Promise<void> {
+  for (const argv of chunkTmuxCommands(cmds)) await tmux(argv);
+}
+/**
+ * 묶어 보내되 실패는 삼킨다(`tmuxQuiet` 여러 번의 자리).
+ *  ⚠ 한 묶음 안에서 앞 명령이 실패하면 **그 묶음의 뒤 명령은 안 돈다**(위 계약) — 종전에는 각자 독립이었다.
+ *   여기 싣는 것은 창 표시 옵션(mouse·window-size 류)뿐이라, 그중 하나가 실패하는 판은 나머지도 의미가 없다.
+ */
+export async function tmuxBatchQuiet(cmds: readonly TmuxCmd[]): Promise<void> {
+  for (const argv of chunkTmuxCommands(cmds)) await tmuxQuiet(argv);
+}
 export async function getOpt(name: string, opt: string): Promise<string> {
   try { return (await tmux(["show-options", "-t", name, "-v", opt])).trim(); } catch { return ""; }
 }
