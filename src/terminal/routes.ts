@@ -20,7 +20,7 @@ import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";        //  하기 위한 파사드(chat-routes 대화창과 같은 관문)
 import { resolveSessionDir } from "../sessions/session-desired.js";
-import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited, markSessionSuperseded, resolveSessionSuccessor } from "../sessions/session-state.js";   // #2231 — 복원된 옛 id 는 지우지 않고 이정표로 남긴다
+import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited, markSessionSuperseded, resolveSessionSuccessor, retiredSessionIds } from "../sessions/session-state.js";   // #2231 — 복원된 옛 id 는 지우지 않고 이정표로 남긴다
 import { convIdFromTranscriptPath, mayForgetOldState, mappingReportStatus } from "../sessions/conv-mapping.js";   // #2122 — 복원이 대화 매핑을 잃지 않게 하는 순수 규칙 · #2151 — 매핑 보고 응답 규약 // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { currentTenant } from "../org/tenant-context.js";
 import { PRIMARY_TENANT_ID, setSessionWorkspace, clearSessionWorkspace, sessionWorkspaceIds, sessionInWorkspace } from "../org/tenancy/registry.js"; // #1750 후속 — 세션→워크스페이스 정본 / #1875 목록 격리
@@ -537,6 +537,19 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  완전 삭제(purged)면 행 자체를 뺀다. 박스 id 와 대화 uuid 어느 이름으로든 표식이 있으면 그 세션의 것이다.
     //  DB 가 죽어도 목록은 나간다(best-effort — 표식 없이).
     let merged = mergeSessionViews(local, remote, localRestorable);
+    // #2231 후속 — **이미 이어진(은퇴한) id 는 목록에 내지 않는다.**
+    //  #2231 은 «가시성은 종전(DELETE)과 같다 — listAllSessionStates 가 superseded_by 로 거른다» 고 적었는데,
+    //  그건 이 목록의 **DB 절반(localRestorable)** 뿐이다. 라이브 관측(collectSessions)과 노드 스냅샷은 tmux·
+    //  에이전트가 말하는 대로 싣는다 — 이어진 뒤에도 옛 tmux 가 남아 있으면 그 id 가 다시 «살아 있는 세션»으로
+    //  사이드바에 오른다. 누르면 개별 조회(GET …/sessions/:id)가 곧바로 movedTo 를 내 화면이 이어진 세션으로
+    //  튕기고, 그 세션이 죽어 있으면 자동 이어받기가 돌아 **무한 이동·리로드**가 된다(2026-09-04 상민님 신고
+    //  box-yoon-03da88c2 → 6ed6dfb9). 실측: 은퇴 100건 중 **7건**이 그 상태로 목록에 올라 있었다.
+    //  ⚠ 목록만 «있다» 하고 나머지 전부가 «없다» 하는 행은 그 자체로 막다른 길이다 — 재는 자를 하나로 맞춘다.
+    //  ⚠ 조회 실패는 거르지 않고 내보낸다(best-effort) — 막다른 행 몇 개보다 목록이 통째로 비는 게 나쁘다.
+    try {
+      const retired = await retiredSessionIds(merged.map((s) => s.id));
+      if (retired.size) merged = merged.filter((s) => !retired.has(s.id));
+    } catch (e) { logger.warn({ err: e }, "세션 목록 은퇴행 필터 실패 — 거르지 않고 나간다(비치명)"); }
     tagChat(merged, false, localIds);
     try {
       const marks = await trashMapFor(idOf(userOf(req)));

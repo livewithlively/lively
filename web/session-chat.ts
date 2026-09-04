@@ -687,6 +687,22 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     return d.allow;
   }
 
+  // ── 이동(moved) 연쇄 상한 (#2231 후속 · 2026-09-04 실측) ──────────────────────────────────
+  //  #2231 은 이동에 자동복원 상한을 **일부러** 안 걸었다("이건 시도가 아니라 이동이다"). 한 홉이면 그 말이 맞다.
+  //  그런데 옮겨 간 자리가 죽어 있으면 거기서 자동 이어받기가 돌고, 그 결과가 또 이동이면 홉이 이어진다 —
+  //  이동↔복원이 번갈아 도는 동안 **어느 상한도 세지 않아** 화면이 영원히 리로드된다(상민님 신고: 사이드바의
+  //  옛 세션을 누르면 「이미 이어져 있어요」가 반복되며 무한 리로드).
+  //  ⚠ 기록은 자동복원과 **따로** 둔다 — 한쪽이 다른 쪽 예산을 먹으면 정상적인 한 번의 이동이 막힌다.
+  const MOVED_HOP_KEY = 'lively_moved_hop';
+  function movedHopAllowed(): boolean {
+    let rec: { n: number; at: number } | null = null;
+    try { rec = JSON.parse(sessionStorage.getItem(MOVED_HOP_KEY) || 'null'); } catch { rec = null; }
+    const d = judgeAutoResume(rec, Date.now());
+    try { sessionStorage.setItem(MOVED_HOP_KEY, JSON.stringify(d.next)); } catch { /* 스토리지가 막힌 브라우저 — 상한만 못 셀 뿐 동작은 같다 */ }
+    if (!d.allow) view.setNote('이어진 세션 사이를 계속 오가고 있어요 — 자동 이동을 멈췄습니다. 목록에서 다시 열어 주세요.');
+    return d.allow;
+  }
+
   /** 지금 이 화면이 보이나 — **자동** 복원의 전제(opts.isVisible 주석). 사람이 버튼을 누른 복원은 이걸 안 본다. */
   const visibleNow = (): boolean => !opts.isVisible || opts.isVisible();
   function termSend(cmd: string): void {
@@ -710,6 +726,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  **자리만 옮긴다**(자동복원 상한도 쓰지 않는다 — 이건 시도가 아니라 이동이다).
       const mv = String(m.movedTo || '');
       if (mv && mv !== target.id) {
+        if (!movedHopAllowed()) return;   // #2231 후속 — 이동이 연쇄가 되면 무한이다(위 movedHopAllowed 머리말)
         toast('이 세션은 이미 이어져 있어요 — 이어진 세션으로 옮겼습니다.');
         if (opts.onResumed) opts.onResumed(mv); else location.hash = '#/s/' + encodeURIComponent(mv);
         return;
