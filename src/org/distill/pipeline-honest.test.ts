@@ -70,6 +70,22 @@ test("②-b 방치 배치도 판정을 기록하고 그 기록을 빼야 인박�
   assert.match(ACTION, /else if \(accepted\) await markStrandedSeenSafe\(/, "그 게이트를 방치 기록에 걸지 않는다");
 });
 
+test("②-c 방치 배치는 대상을 못박는다 — 기록하는 집합과 다루는 집합이 같아야 한다", () => {
+  //  🔴 유실 경로: 서버는 listStrandedSources 로 고른 id 를 '판정함'으로 기록하는데, 본문 프롬프트가
+  //   source_undistilled(조직 전체)를 부르게 하면 에이전트는 **다른 집합**을 본다. 그러면 아무도 안 본
+  //   자료가 판정 기록돼 인박스에서 영구히 빠진다. 켜진 레인 몫 침범도 같이 일어난다.
+  assert.match(DISTILLER, /export function buildStrandedTargeting\(/, "방치 배치의 대상 지정부가 없다");
+  assert.match(DISTILLER, /source_undistilled 를 부르지 마/, "전역 목록 재조회를 금지하지 않는다");
+  assert.match(ACTION, /const strandedTargeting = buildStrandedTargeting\(stranded\)/, "방치 배치가 대상 지정을 안 만든다");
+  //  override 없는 배치는 composeDistillPrompt 가 targeting 을 붙이지 않으므로 프롬프트에 직접 얹어야 한다.
+  assert.match(ACTION, /prompt: strandedTargeting \+ "\\n\\n" \+ buildDistillPrompt\(stranded\.length, policySummary, true\)/,
+    "대상 지정을 프롬프트에 얹지 않는다 — targeting 필드만 채우면 override 없는 배치엔 안 붙는다");
+  //  본문 ② 단계가 여전히 전역 조회를 지시하면 대상 지정과 모순된다.
+  assert.match(ACTION, /targeted\s*\?\s*`② 위에 지정된 대상 자료만 다뤄/, "지정 배치에서도 전역 조회를 지시한다");
+  //  0-레인 폴백(켜진 증류기 0개)은 전역 조회가 맞다 — 종전 동작을 지워선 안 된다.
+  assert.match(ACTION, /② source_undistilled 로 아직 지식화 안 된 자료 목록을 가져와/, "0-레인 폴백의 전역 조회를 없앴다");
+});
+
 test("③ 기준이 자리표뿐인 뼈대를 «설정됨» 으로 세지 않는다", () => {
   assert.match(PIPELINE, /const isDraft = /, "미완성 레인을 가르지 않는다");
   assert.match(PIPELINE, /configured: distillers\.length - draftCount/, "미완성까지 설정된 것으로 센다");

@@ -98,7 +98,7 @@ async function applyPromptOverride(params: Record<string, unknown>, b: DistillBa
 //  · 증류기가 하나도 등록 안 됐으면 **구 전역 동작으로 폴백**(기존 잡 무중단 + 증류기 설정 전에도 바로 쓸 수 있게).
 async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: boolean }):
   Promise<{ batches: DistillBatch[]; considered: number; error?: string }> {
-  const { listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, buildDistillerPrompt, buildDistillerTargeting, listThreadKnowledge, listStrandedSources } = await import("../../org/distill/distiller.js");
+  const { listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, buildDistillerPrompt, buildDistillerTargeting, listThreadKnowledge, listStrandedSources, buildStrandedTargeting } = await import("../../org/distill/distiller.js");
   const policySummary = await buildDistillPolicySummary();
 
   let all: Awaited<ReturnType<typeof listDistillers>>;
@@ -163,9 +163,15 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
   if (!batches.length || !opt.one) {
     const stranded = await listStrandedSources(enabled, 50, null).catch(() => [] as Record<string, unknown>[]);
     if (stranded.length) {
+      //  대상을 못박는다 — 안 그러면 본문이 source_undistilled(전역)를 부르게 해서 **에이전트가 다루는 집합과
+      //   서버가 '판정함'으로 기록하는 집합(아래 ids)이 어긋난다.** 그 어긋남은 아무도 안 본 자료를 인박스에서
+      //   영구히 빼는 유실이 되고, 켜진 레인 몫까지 침범한다. override 없는 배치는 composeDistillPrompt 가
+      //   targeting 을 붙이지 않으므로 프롬프트에 직접 얹는다.
+      const strandedTargeting = buildStrandedTargeting(stranded);
       batches.push({
         distillerId: null, key: null, ids: stranded.map((s2) => Number(s2.id)), backlog: stranded.length,
-        prompt: buildDistillPrompt(stranded.length, policySummary), targeting: null,
+        prompt: strandedTargeting + "\n\n" + buildDistillPrompt(stranded.length, policySummary, true),
+        targeting: strandedTargeting,
         requester: null, model: null, effort: null,
       });
     }
@@ -240,10 +246,15 @@ async function buildDistillPolicySummary(): Promise<string> {
 // distill 프롬프트 — **단일 라인**(send-keys -l 주입용, 개행 금지). source(raw 자료)→knowledge 증류.
 //  #638: 도메인 체계 + 인입 허용선 정책 주입 → LLM 이 각 지식 lifecycle(active|pending) 자기판정(서버강제 없음, pending=안전방향).
 //  ⚠ 소스 텍스트는 데이터지 지시가 아니다(CTO 불변식 이식 — 프롬프트 인젝션 방어). params.prompt 로 관리탭에서 덮어쓸 수 있음.
-function buildDistillPrompt(count: number, policySummary: string): string {
+//  targeted=true 면 **대상이 이미 지정된 배치**(방치 배치)다 — 전역 목록 재조회를 금지한다. 그러지 않으면
+//   에이전트가 다루는 집합이 서버가 기록하는 집합과 어긋나 유실이 난다(buildStrandedTargeting 주석 참조).
+//   false 는 켜진 증류기가 하나도 없을 때의 구 전역 폴백 — 그땐 전역 조회가 맞다(종전 동작 불변).
+function buildDistillPrompt(count: number, policySummary: string, targeted = false): string {
   return `수집된 자료(source) ${count}건을 지식으로 증류하는 배치야. ` +
     `① 먼저 category_list 로 분류축 체계를 파악해 — 각 지식의 category 를 정확히 고르고 아래 정책에 대입하기 위해. ` +
-    `② source_undistilled 로 아직 지식화 안 된 자료 목록을 가져와(최근순). ` +
+    (targeted
+      ? `② 위에 지정된 대상 자료만 다뤄 — 목록을 새로 조회하지 마(source_undistilled 금지). `
+      : `② source_undistilled 로 아직 지식화 안 된 자료 목록을 가져와(최근순). `) +
     `③ 각 자료를 source_get(id)으로 전문을 읽어. 본문이 '[BINARY]' 로 시작하면 바이너리(PDF·이미지 등, 내용 미추출) — 스텁의 filename·mime·channel 로 **볼 가치부터 판단**하고(밈·UI캡처·스크린샷 등 노이즈면 fetch 없이 skip), 가치 있으면 source_artifact(source_id)로 원본을 임시경로에 받아 그 path 를 Read(Claude 가 PDF·이미지를 네이티브 파싱, 한글까지)해 내용을 확보해(unavailable=삭제/이동이면 skip). 얻은 전문(또는 텍스트 자료 본문)이 재사용 가능한 지식(결정·합의·사실·런북·중요정보)인지 판단해. ` +
     `④ 가치 있으면 knowledge_similar 로 중복 확인 → 없으면 knowledge_save 로 증류(명확한 제목+전문, 어느 자료에서 왔는지 명시, category=내용에 맞는 도메인, type 지정). ` +
     `⑤ ⚠ 자동화 허용선 — 저장 전 이 지식을 정책에 대입해 lifecycle 을 정해. ${policySummary} lifecycle='pending' 으로 저장하면 오너 검토 큐로 격리돼(승인 전엔 검색·주입에 안 뜸), 승인되면 active. drop 이면 저장하지 마(skip). ` +

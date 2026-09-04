@@ -965,6 +965,26 @@ export function buildDistillerTargeting(d: DistillerRow, rows: Record<string, un
   ].join("\n");
 }
 
+/** 방치(레인 스코프 밖) 배치의 대상 지정 — `buildDistillerTargeting` 의 레인 없는 짝.
+ *
+ *  ⚠ 이게 없으면 **서버가 기록하는 집합과 에이전트가 다루는 집합이 어긋난다.** 방치 배치의 본문 프롬프트는
+ *   종전에 `source_undistilled`(조직 전체 미증류)를 부르게 했는데, 서버는 `listStrandedSources`(레인
+ *   스코프 밖)로 고른 id 를 '판정함'으로 기록한다. 두 집합이 다르므로 에이전트가 보지도 않은 자료가
+ *   판정 기록돼 인박스에서 영구히 빠진다(유실). 대상을 못박아 두 집합을 일치시킨다.
+ *  ⚠ 레인 몫 침범도 같이 막는다 — 전역 목록에는 켜진 레인이 담당하는 자료가 섞여 있다. */
+export function buildStrandedTargeting(rows: Record<string, unknown>[]): string {
+  const ids = rows.map((r) => Number(r.id)).filter(Number.isFinite);
+  const digest = buildSourceDigest(rows);
+  return [
+    "대상 자료 id(이것만 다뤄, 목록을 새로 조회하지 마 — 서버가 '켜진 어느 레인 스코프에도 안 드는 자료'로 "
+      + `이미 골라 배정한 것이다): ${ids.join(",")}.`,
+    "⚠ source_undistilled 를 부르지 마 — 그건 조직 전체 미증류 목록이라 켜진 레인이 담당하는 자료까지 집어 오고, "
+      + "서버가 '판정함'으로 기록하는 집합과 어긋나 아무도 안 본 자료가 인박스에서 빠진다.",
+    "조회가 필요하면 source_get 은 id=**숫자**를 받는다(source_get({id: 36835}) — name 으로 넘기면 실패한다).",
+    ...(digest ? ["", digest] : []),
+  ].join("\n");
+}
+
 // 사람이 잡에서 프롬프트를 덮어쓸 때의 합성 규칙 — **대상 지정부는 남긴다.**
 //  기준·형식 문구는 사람 것으로 갈아끼우되 "이 id 들만 다뤄 / 전체 목록 재조회 금지"까지 사라지면
 //  커스텀 프롬프트가 곧 스코프 해제가 되어 그 증류기가 다른 증류기 몫까지 집어간다(중복 증류).
