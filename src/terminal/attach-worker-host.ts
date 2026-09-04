@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import type { TenantContext } from "../org/tenant-context.js";
-import { installAttachOwnedPids, installAttachWorkerTally } from "./terminal-pty.js";
+import { installAttachOwnedPids, installAttachWorkerTally, detachGhostClientsForSession } from "./terminal-pty.js";
 import { AttachRouter } from "./attach-router.js";
 import { execTopology } from "../exec-topology.js";   // #2599 T2 — K 는 토폴로지가 이미 해석해 든다
 import { logger } from "../log.js";
@@ -44,14 +44,38 @@ interface Worker {
   reaped: boolean;
 }
 
+/**
+ * 시험 seam — 실제 워커를 포크하지 않고 **배선**을 검증하기 위한 주입점.
+ *  코드베이스의 기존 규약과 같은 모양이다(`SessionHost.attachImpl`·`installAttachOwnedPids`).
+ *  제품 경로는 기본값을 쓰므로 주입이 없으면 종전과 100% 동일하다.
+ */
+export interface AttachWorkerDeps {
+  fork?: typeof fork;
+  /** 유령 attach 정리(#3545) — 기본은 코어의 `detachGhostClientsForSession`. */
+  detachGhosts?: (id: string, slug: string | null) => void;
+}
+
 export class AttachWorkerHost {
   private readonly k: number;
   private readonly router: AttachRouter;
   private readonly workers = new Map<number, Worker>();
+  /**
+   * 세션 id → 그 세션을 넘겨 준 테넌트 슬러그 (#3545).
+   *  워커가 죽은 뒤 유령을 끊으려면 tmux argv 를 다시 지어야 하고, 그 유일한 입력이 슬러그다.
+   *  ⚠ 이건 **정책이 아니라 기억**이다 — 판정(누구에게 보내나)은 여전히 라우터 하나가 소유한다.
+   */
+  private readonly sessionSlug = new Map<string, string | null>();
+  /** 아직 안 내보낸 유령 정리 대상(#3545) — 한 틱 미뤘다가 «그새 다시 붙었나» 를 보고 내보낸다. */
+  private readonly pendingDetach = new Set<string>();
+  private detachTimer: NodeJS.Timeout | null = null;
+  private readonly fork: typeof fork;
+  private readonly detachGhosts: (id: string, slug: string | null) => void;
 
-  constructor(k: number = execTopology().attachWorkerK) {
+  constructor(k: number = execTopology().attachWorkerK, deps: AttachWorkerDeps = {}) {
     this.k = k;
     this.router = new AttachRouter(k);
+    this.fork = deps.fork ?? fork;
+    this.detachGhosts = deps.detachGhosts ?? detachGhostClientsForSession;
     // #687 누수 지표 무회귀 — 게이트웨이의 liveAttachCount()/scanAttachProcs() 가 워커로 옮겨간 attach 도
     //  «우리 것»으로 세도록 provider 를 꽂는다. 비활성(워커 0)일 땐 []·0 이라 오늘과 동일.
     installAttachOwnedPids(() => this.workerPids());
@@ -73,6 +97,9 @@ export class AttachWorkerHost {
     //   attach 가 두 프로세스로 갈리고, `attachRefs` 는 프로세스마다 따로라 양쪽이 «내가 마지막» 으로
     //   오판해 먼저 닫힌 쪽이 `detach-client -s` 로 **살아 있는 다른 화면을 끊는다**(#2148 실측 재현).
     if (this.router.isGatewayOwned(input.id)) return false;
+    //  ★ #3545 — 넘기기 **전에** 기억한다. 핸드오프가 실패해 그 워커를 회수하는 갈래에서도 그 워커가
+    //   이미 들고 있던 다른 세션들을 끊어야 하고, 그때 이 표가 유일한 슬러그 출처다.
+    this.sessionSlug.set(input.id, input.tenant?.slug ?? null);
     const msg = {
       t: "attach" as const, id: input.id, tenant: input.tenant,
       method: input.req.method, url: input.req.url, headers: input.req.headers,
@@ -98,7 +125,7 @@ export class AttachWorkerHost {
    *  `terminal-pty-upgrade` 의 세션 호스트가 `onSessionEmpty` 로 부른다. 워커의 'session-empty' 와
    *  **같은 자리**로 들어온다(장부가 하나라 소유자가 누구든 푸는 문이 하나다).
    */
-  releaseSession(id: string): void { this.router.releaseSession(id); }
+  releaseSession(id: string): void { this.router.releaseSession(id); this.sessionSlug.delete(id); }
 
   /** 이 세션을 받을 워커를 확보한다(sticky 재사용 또는 신규 포크). null = 상한/포크 실패 → fail-open. */
   private acquire(id: string): Worker | null {
@@ -123,14 +150,17 @@ export class AttachWorkerHost {
     try {
       // env 전부 상속 — 매니지드 relay(tmux-relay.cjs)가 LIVELY_TMUX_EXEC·LVLY_HUB_URL/SECRET·LANG 등을 읽는다.
       //  stdio: ipc 채널로 소켓 핸들을 넘긴다(fork 기본 IPC). stdout/stderr 는 게이트웨이 로그로 합류(inherit).
-      const child = fork(ENTRY, [], { env: process.env, stdio: ["ignore", "inherit", "inherit", "ipc"] });
+      const child = this.fork(ENTRY, [], { env: process.env, stdio: ["ignore", "inherit", "inherit", "ipc"] });
       if (!child.pid) { try { child.kill("SIGKILL"); } catch { /* noop */ } return null; }
       const w: Worker = { pid: child.pid, child, live: 0, reaped: false };
       this.workers.set(child.pid, w);
       child.on("message", (m: { t?: string; id?: string; live?: number }) => {
         if (!m) return;
         if (m.t === "stat") w.live = Number(m.live) || 0;
-        else if (m.t === "session-empty" && m.id) this.router.releaseSession(m.id);
+        //  ★ #3545 — **`this.router` 가 아니라 `this.releaseSession`** 이다. 라우터만 풀면 슬러그 기억
+        //   (`sessionSlug`)이 영영 안 지워져 게이트웨이 수명 내내 쌓인다. 바로 위 주석이 말하는
+        //   «푸는 문이 하나» 를 코드로도 하나로 둔다(변이 시험 M3 이 이 우회를 잡았다).
+        else if (m.t === "session-empty" && m.id) this.releaseSession(m.id);
         // ready / idle-exit 는 별도 처리 불요(idle-exit 하면 곧 'exit' 이벤트가 정리한다).
       });
       child.on("exit", (code, sig) => { logger.info({ pid: w.pid, code, sig }, "attach 워커 종료"); this.reap(w.pid, "exit"); });
@@ -155,10 +185,61 @@ export class AttachWorkerHost {
     const w = this.workers.get(pid);
     if (!w || w.reaped) return;
     w.reaped = true;
-    this.router.dropWorker(pid);
+    const orphaned = this.router.dropWorker(pid);
     this.workers.delete(pid);
     try { w.child.kill("SIGKILL"); } catch { /* already gone */ }
-    logger.info({ pid, reason }, "attach 워커 회수");
+    logger.info({ pid, reason, sessions: orphaned.length }, "attach 워커 회수");
+    this.detachOrphanedSessions(orphaned);
+  }
+
+  /**
+   * 워커가 통째로 사라졌다 — 그 워커가 쥐고 있던 세션들의 **남은 attach 클라이언트**를 끊는다 (#3545).
+   *
+   * ★ 왜 이 자리인가: 그 일을 하던 코드(`terminal-pty` 의 `cleanup` → `detachGhostClients`)는 **워커 안**
+   *  이다. 워커가 SIGKILL·크래시로 죽으면 그 자리가 아예 안 돈다. 그리고 원격 tmux(매니지드 중계)에서는
+   *  attach 클라이언트가 워커의 자식이 아니라 **샌드박스 안 프로세스**라 부모가 죽어도 같이 안 죽는다
+   *  (#2625 실측 — gVisor 는 호스트 fd 닫힘을 안 전파한다). 그래서 «아무도 안 보는데 붙어 있는»
+   *  클라이언트가 영구히 남고, 그 세션은 `session_attached>0` 이라 유휴 회수에서도 영영 빠진다(#2148).
+   *  워커가 죽은 뒤 남아 있는 것은 게이트웨이뿐이므로, 끊는 손도 여기여야 한다.
+   *
+   *  ⓘ 로컬 tmux 배포(셀프호스트)에서는 attach 클라이언트가 워커의 **pty 자식**이라 워커와 함께 죽는다
+   *   — 실측(2026-09-04, macOS): 워커 SIGKILL 뒤 `list-clients` 가 1초 안에 0 으로 수렴했다.
+   *   그 배포에서 이 호출은 **끊을 대상이 없는 no-op** 이다(비치명·경고 없음).
+   *
+   * ⚠ `detach-client -s` 는 그 세션의 **모든** 클라이언트를 끊는다. 안전한 근거는 sticky 불변식이다 —
+   *  한 세션의 attach 는 전부 한 소유자에게 모이므로(attach-router 불변식 1·3ᵍ), 그 소유자가 죽었으면
+   *  살아 있는 화면이 없다. 다만 **죽자마자 같은 세션이 다시 붙는 창**은 실재한다 — `handoff` 의 재시도가
+   *  바로 그 경로다(첫 워커 send 실패 → 회수 → 다음 워커로 재배정). 그래서 한 틱 미루고, 그 사이 누가
+   *  그 세션을 다시 가져갔으면 건너뛴다. 재배정은 `acquire` 안에서 **동기로** 끝나므로 이 한 틱이면 족하다.
+   */
+  private detachOrphanedSessions(ids: readonly string[]): void {
+    if (!ids.length) return;
+    for (const id of ids) this.pendingDetach.add(id);
+    if (this.detachTimer) return;
+    //  unref — 이 타이머 하나 때문에 게이트웨이가 안 죽으면 안 된다. 대신 **종료 경로가 직접 흘린다**
+    //   (`shutdown()` 끝). `index.ts` 는 `shutdownAttachWorkers()` 가 끝나자마자 `process.exit` 을 부르므로
+    //   타이머에 맡기면 **재배포·롤에서 한 건도 안 나간다** — #2625 §4 가 지목한 바로 그 누수 창이다.
+    this.detachTimer = setTimeout(() => { this.detachTimer = null; this.flushGhostDetach(); }, 0);
+    this.detachTimer.unref?.();
+  }
+
+  /** 미뤄 둔 유령 정리를 **지금** 내보낸다(멱등). 타이머와 종료 경로가 같은 자리로 들어온다. */
+  private flushGhostDetach(): void {
+    if (this.detachTimer) { clearTimeout(this.detachTimer); this.detachTimer = null; }
+    if (!this.pendingDetach.size) return;
+    const ids = [...this.pendingDetach];
+    this.pendingDetach.clear();
+    for (const id of ids) {
+      // 그새 다른 워커·게이트웨이가 이 세션을 다시 가져갔다 → 살아 있는 화면이다. 유령이 아니다.
+      //  (그 세션의 옛 유령은 새 attach 가 닫힐 때 평소 경로 `cleanup → detachGhostClients` 가 걷는다.)
+      if (this.router.workerForSession(id) !== undefined || this.router.isGatewayOwned(id)) continue;
+      const slug = this.sessionSlug.get(id) ?? null;
+      this.sessionSlug.delete(id);
+      logger.info({ id, tenant: slug ?? "" }, "워커가 먼저 죽었다 — 남은 attach 클라이언트 정리");
+      try { this.detachGhosts(id, slug); } catch (e) {
+        logger.warn({ id, err: (e as Error)?.message }, "유령 attach 정리 호출 실패");
+      }
+    }
   }
 
   /** 게이트웨이 종료 시(재배포 SIGTERM·크래시) — 모든 워커를 회수한다. 워커는 SIGTERM 에 killAttachedPtys 후 나간다. */
@@ -174,11 +255,16 @@ export class AttachWorkerHost {
       for (const w of workers) w.child.once("exit", done);
     });
     for (const w of workers) this.reap(w.pid, "shutdown");
+    //  ★ 여기서 **직접** 흘린다 — 곧 `process.exit` 이라 타이머는 못 돈다(위 detachOrphanedSessions 주석).
+    //   `detach-client` 자식은 execFile 이 동기로 스폰하므로 게이트웨이가 나간 뒤에도 명령은 나간다.
+    this.flushGhostDetach();
   }
 
   /** 진단용. */
-  stats(): { enabled: boolean; k: number; workers: number; sessions: number; tally: number } {
-    return { enabled: this.enabled(), k: this.k, workers: this.workers.size, sessions: this.router.totalSessions(), tally: this.tally() };
+  stats(): { enabled: boolean; k: number; workers: number; sessions: number; tally: number; slugs: number } {
+    //  `slugs` 는 «세션 → 테넌트» 기억(#3545)의 크기다. 정상이면 `sessions` 와 같이 움직인다 —
+    //   이 값만 단조증가하면 어딘가 «푸는 문» 을 우회하는 경로가 생긴 것이다.
+    return { enabled: this.enabled(), k: this.k, workers: this.workers.size, sessions: this.router.totalSessions(), tally: this.tally(), slugs: this.sessionSlug.size };
   }
 }
 
