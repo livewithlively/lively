@@ -12,6 +12,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+// C 묶음은 **지역 시간**(자정·새벽 5시)을 판정한다 — 어느 기계에서 돌려도 같은 답이 나오게
+// 시간대를 서울(UTC+9 · 서머타임 없음)로 못박는다. A·B 는 Date.UTC 절대값이라 영향이 없다.
+process.env.TZ = "Asia/Seoul";
+
 const root = path.resolve(import.meta.dirname, "..");
 const out = mkdtempSync(path.join(tmpdir(), "sess-fold-"));
 execFileSync(
@@ -20,7 +24,7 @@ execFileSync(
    "--module", "esnext", "--target", "es2022", "--skipLibCheck"],
   { stdio: "inherit" },
 );
-const { WARM_MS, isWarmSess, splitFolderRows } = await import(path.join(out, "sess-fold.js"));
+const { WARM_MS, isWarmSess, splitFolderRows, DAY_START_HOUR, workDayStart } = await import(path.join(out, "sess-fold.js"));
 
 let pass = 0, fail = 0;
 const ok  = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -168,6 +172,122 @@ split(splitFolderRows([], [stop("하루-1ms", NOW - (WARM_MS - 1)), stop("하루
   split(r, ["빌드도는중", "투어영상"], ["지난주회의", "이름만남은세션"],
     "B10 SNUCOM Build 폴더 한 판 — 도는 세션과 어제 세션은 서고, 8일 전 세션과 시각 모르는 세션만 접힌다");
 }
+
+// ───────────────────────── C. 홈 목록이 '오늘 일감'을 자르는 시각 — workDayStart(now)
+//
+//  실측(2026-09-05 01:20): '오늘'을 **달력 자정**으로 잘라 새벽에 일하는 사람의 홈 목록이 통째로 비었다
+//  (멈춘 세션 0줄 — 찾던 세션은 전날 08:23 에 멈춘, 최신에서 2번째였다).
+//  그래서 하루는 새벽 5시에 시작한다고 친다: 00:00~04:59 는 아직 '어젯밤'이다.
+//
+//  ⚠ 전제 — 이 묶음은 **지역 시간**을 판정하므로 시간대를 서울(UTC+9 · 서머타임 없음)로 못박고 시작한다
+//    (파일 맨 위 `process.env.TZ`, C1 이 실제로 걸렸는지 검사한다). 아래 시각은 전부 그 지역 시간이며,
+//    기대값은 ms 숫자가 아니라 **사람이 읽는 시각 문자열**로 못박는다(숫자만 보면 틀린 기대값을 못 알아본다).
+
+/** 지역 시간으로 고정 시각 하나(월은 1부터). */
+const at = (y, m, d, h = 0, mi = 0, s = 0, ms = 0) => new Date(y, m - 1, d, h, mi, s, ms).getTime();
+/** ms epoch → 사람이 읽는 지역 시각 문자열. */
+const fmt = (ms) => {
+  const d = new Date(ms), p = (n, w = 2) => String(n).padStart(w, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+         `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+};
+/** "지금이 이 시각이면 오늘 일감은 이 시각부터다" 를 문자열로 못박는다. */
+const startsAt = (nowMs, wantStr, n) => {
+  const got = workDayStart(nowMs);
+  check(Number.isFinite(got) && fmt(got) === wantStr, n,
+    `지금 ${fmt(nowMs)} → 기대 ${wantStr} · 실제 ${Number.isFinite(got) ? fmt(got) : String(got)}`);
+};
+
+check(new Date(2026, 8, 5).getTimezoneOffset() === -540,
+  "C1 이 묶음의 전제 — 시간대가 서울(UTC+9)로 걸려 있다",
+  `오프셋 ${new Date(2026, 8, 5).getTimezoneOffset()}분 (기대 -540) — TZ=${process.env.TZ}`);
+
+check(DAY_START_HOUR === 5,
+  "C2 하루는 그 지역 시간 새벽 5시에 시작한다고 친다(DAY_START_HOUR = 5)",
+  `DAY_START_HOUR = ${DAY_START_HOUR}`);
+
+startsAt(at(2026, 9, 5, 14, 30), "2026-09-05 00:00:00.000",
+  "C3 지금이 낮 14:30 이면 오늘 자정부터다 — 종전과 같다(낮에 목록이 길어지지 않는다)");
+
+startsAt(at(2026, 9, 5, 1, 20), "2026-09-04 05:00:00.000",
+  "C4 지금이 새벽 01:20(실측한 그 시각)이면 어제 05:00 부터다 — 어젯밤에 하던 일이 그대로 남는다");
+
+{ // 실측 재현 — 종전(달력 자정)이면 이 세션이 잘려 나가 목록이 0줄이었다
+  const now = at(2026, 9, 5, 1, 20), cut = workDayStart(now);
+  const sess = at(2026, 9, 4, 8, 23);      // 찾던 세션: 전날 08:23 에 멈췄다
+  const oldCut = at(2026, 9, 5);           // 종전 기준 = 달력 자정
+  check(sess >= cut && sess < oldCut,
+    "C5 실측 재현 — 전날 08:23 에 멈춘 세션이 새벽 01:20 홈 목록에 선다(달력 자정으로 잘랐다면 빠졌다)",
+    `자르는 시각 ${fmt(cut)} · 그 세션 ${fmt(sess)} · 종전 자정 기준 ${fmt(oldCut)}`);
+}
+
+startsAt(at(2026, 9, 5, 5, 0, 0, 0), "2026-09-05 00:00:00.000",
+  "C6 경계 — 05:00 정각은 '05:00 이후' 쪽이다(오늘 자정)");
+
+startsAt(at(2026, 9, 5, 4, 59, 59, 999), "2026-09-04 05:00:00.000",
+  "C7 경계 — 04:59:59.999 는 아직 새벽 쪽이다(어제 05:00)");
+
+startsAt(at(2026, 9, 5, 4, 59, 59, 0), "2026-09-04 05:00:00.000",
+  "C8 경계 — 사양이 적은 04:59:59 도 새벽 쪽이다(어제 05:00)");
+
+startsAt(at(2026, 9, 5, 5, 0, 0, 1), "2026-09-05 00:00:00.000",
+  "C9 경계 — 05:00 을 1ms 넘기면 오늘 자정이다");
+
+startsAt(at(2026, 9, 5, 0, 0, 0, 0), "2026-09-04 05:00:00.000",
+  "C10 자정 정각은 아직 '어젯밤' 이다 — 어제 05:00 부터다");
+
+startsAt(at(2026, 9, 5, 23, 59, 59, 999), "2026-09-05 00:00:00.000",
+  "C11 밤 23:59:59.999 는 여전히 오늘 자정부터다");
+
+{ // 규칙 4 — 하루를 훑어 불변식을 본다(늦지 않다 · 새벽은 더 이르다 · 05시 이후는 정확히 자정)
+  const midnight = at(2026, 9, 5);
+  const late = [];
+  let earlyStrict = 0, dayEqual = 0;
+  for (let i = 0; i < 96; i++) {
+    const h = Math.floor(i / 4), mi = (i % 4) * 15;
+    const now = at(2026, 9, 5, h, mi), got = workDayStart(now);
+    if (got > midnight) late.push(`${fmt(now)}→${fmt(got)}`);
+    if (h < 5) { if (got < midnight) earlyStrict++; }
+    else if (got === midnight) dayEqual++;
+  }
+  check(!late.length && earlyStrict === 20 && dayEqual === 76,
+    "C12 어느 시각에도 오늘 자정보다 늦지 않다 — 15분 간격 96지점(새벽 20지점은 더 이르고, 05시 이후 76지점은 정확히 자정)",
+    `자정보다 늦은 지점 [${late.slice(0, 3).join(" · ")}] · 새벽 엄격히 이른 지점 ${earlyStrict}/20 · 05시 이후 자정과 같은 지점 ${dayEqual}/76`);
+}
+
+{ // 규칙 4 의 그 예 — 아침이 되어도 새벽에 쓴 것이 빠지지 않는다
+  const sess = at(2026, 9, 5, 2, 0);
+  const night = workDayStart(at(2026, 9, 5, 2, 30)), morning = workDayStart(at(2026, 9, 5, 6, 0));
+  check(sess >= night && sess >= morning,
+    "C13 새벽 2시에 쓴 세션이 아침 6시에 목록에서 사라지지 않는다",
+    `그 세션 ${fmt(sess)} · 02:30 의 자름 ${fmt(night)} · 06:00 의 자름 ${fmt(morning)}`);
+}
+
+/** 같은 규칙을 **UTC 로** 계산한 오답 — 규칙 6 이 막으려는 바로 그 계산이다. */
+const utcNaive = (now) => {
+  const d = new Date(now);
+  return d.getUTCHours() >= 5
+    ? Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+    : Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - 1, 5);
+};
+
+{ // 서울 06:00 = 전날 21:00 UTC — UTC 로 자르면 '어제 아침'이 나온다
+  const now = at(2026, 9, 5, 6, 0), got = workDayStart(now), wrong = utcNaive(now);
+  check(fmt(got) === "2026-09-05 00:00:00.000" && got !== wrong,
+    "C14 지역 시간으로 판정한다 — 서울 06:00(= 전날 21:00 UTC)의 답은 오늘 자정이지 UTC 로 자른 값이 아니다",
+    `실제 ${fmt(got)} · UTC 로 자른 오답 ${fmt(wrong)}`);
+}
+
+{ // 서울 02:00 = 전날 17:00 UTC — UTC 시로는 17시라 '05:00 이후'로 오판한다
+  const now = at(2026, 9, 5, 2, 0), got = workDayStart(now), wrong = utcNaive(now);
+  check(fmt(got) === "2026-09-04 05:00:00.000" && got !== wrong,
+    "C15 새벽도 지역 시간으로 판정한다 — 서울 02:00 을 UTC 시(17시)로 보면 '낮'으로 오판한다",
+    `실제 ${fmt(got)} · UTC 로 자른 오답 ${fmt(wrong)}`);
+}
+
+startsAt(at(2026, 9, 1, 3, 0), "2026-08-31 05:00:00.000",
+  "C16 새벽에 달이 바뀌어도 어제 05:00 을 제대로 짚는다(09-01 03:00 → 08-31 05:00)");
+
 
 console.log(`side-folder-fold: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
 if (fail) process.exit(1);
