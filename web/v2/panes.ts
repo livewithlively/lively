@@ -808,23 +808,6 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     // 켜진 탭이 띠 밖으로 밀려 있으면 끌어온다(셸 탭 줄과 같은 문법 — tabs.ts). 'nearest' 라 이미 보이면 안 움직인다.
     const onTab = pane.tabs.querySelector('.pn-tabwrap.on') as HTMLElement | null;
     if (onTab && pane.tabs.scrollWidth > pane.tabs.clientWidth + 1) onTab.scrollIntoView({ inline: 'nearest', block: 'nearest' });
-  }
-
-  /** 탭 **띠만** 다시 그린다 — 부품이 자기 이름을 바꿨을 때(뷰어가 다른 파일을 폈을 때) 쓴다.
-   *  ⚠ paintPane 을 부르면 안 된다: 그러면 부품 몸이 다시 서면서 보던 자리·스크롤이 튄다(#762 덱 사고와 같은 뿌리). */
-  function paintTabs(zone: Zone): void {
-    const pane = panes.get(zone);
-    if (!pane) return;
-    const act = lay.act[zone];
-    for (const [key, wrapEl] of tabNodes(pane)) {
-      const b = wrapEl.querySelector('.pn-tab') as HTMLElement | null;
-      const span = b?.querySelector('span');
-      const nm = tabName(key);
-      if (span && span.textContent !== nm) span.textContent = nm;
-      if (b) { b.setAttribute('aria-label', nm); b.title = `${nm} — ${partDef(tabBase(key) as PartType).hint}`; }
-      wrapEl.classList.toggle('on', key === act);
-    }
-    fit(pane);
 
     // 켜진 부품만 보이게(나머지는 살려 둔 채 숨긴다 — 탭을 오가도 대화·스크롤이 그대로다).
     if (act) ensurePart(pane, act);
@@ -842,6 +825,23 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       const ph = pane.bodyEl.querySelector('.pn-pane-empty') as HTMLElement | null;
       if (ph) ph.hidden = true;
     }
+  }
+
+  /** 탭 **띠만** 다시 그린다 — 부품이 자기 이름을 바꿨을 때(뷰어가 다른 파일을 폈을 때) 쓴다.
+   *  ⚠ paintPane 을 부르면 안 된다: 그러면 부품 몸이 다시 서면서 보던 자리·스크롤이 튄다(#762 덱 사고와 같은 뿌리). */
+  function paintTabs(zone: Zone): void {
+    const pane = panes.get(zone);
+    if (!pane) return;
+    const act = lay.act[zone];
+    for (const [key, wrapEl] of tabNodes(pane)) {
+      const b = wrapEl.querySelector('.pn-tab') as HTMLElement | null;
+      const span = b?.querySelector('span');
+      const nm = tabName(key);
+      if (span && span.textContent !== nm) span.textContent = nm;
+      if (b) { b.setAttribute('aria-label', nm); b.title = `${nm} — ${partDef(tabBase(key) as PartType).hint}`; }
+      wrapEl.classList.toggle('on', key === act);
+    }
+    fit(pane);
   }
 
   function paintAll(): void {
