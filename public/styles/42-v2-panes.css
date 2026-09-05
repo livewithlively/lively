@@ -519,6 +519,20 @@ webview.pn-webframe { display: flex; }
    가로를 넓혀도 그대로였다(원준 2026-09-04 신고). 칸보다 좁으면 가운데에 선다. */
 .pn-ed-img { display: block; margin: 0 auto; max-width: none; background: var(--gray-bg); }
 .pn-ed-pre { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 12px 14px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+/* ── 고치기 (#762, 원준 2026-09-05) — 보는 화면이 그대로 고치는 화면이 된다 ────────────
+   무대를 통째로 쓰는 글칸 하나. 배율 알약은 이때 숨는다(글은 칸 폭에 맞춰 흐르므로 배율이 뜻이 없다).
+   글씨는 보기(.pn-ed-pre)와 **같은 고정폭·같은 줄간** — 고치기 전후로 글의 생김새가 바뀌면 안 된다. */
+.pn-ed-stage.edit { overflow: hidden; display: flex; }
+.pn-ed-ta { flex: 1; min-width: 0; min-height: 0; width: 100%; margin: 0; padding: 12px 14px; border: 0; resize: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6;
+  background: var(--surface); color: var(--ink); overflow: auto; tab-size: 2; }
+.pn-ed-ta:focus { outline: none; }
+/* 저장 = 이 막대에서 유일한 '하는' 단추다 — 나머지(돌아가기)와 무게가 같으면 어느 것이 결론인지 안 보인다. */
+.pn-web-btn.pri { border-color: var(--blue); background: var(--blue); color: #fff; font-weight: 600; }
+.pn-web-btn.pri:hover { border-color: var(--blue); background: var(--blue-deep); color: #fff; }
+/* 저장 안 한 글이 있다 — 점 하나로만 말한다(경고창이 아니라 상태 표시다). */
+.pn-ed-bar .pn-fine.warn { color: var(--danger); font-weight: 600; }
+
 /* 뷰어의 '무엇을 열까' 화면 — 드롭다운을 대신하는 목록(검색 + 종류·크기·시각) */
 .pn-ed-pick2 { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .pn-ed-find { flex: none; margin: 9px 12px 7px; height: 30px; padding: 0 10px; border: 1px solid var(--line-net); border-radius: 9px; font: inherit; font-size: 12.5px; background: var(--bg); color: var(--ink); }
