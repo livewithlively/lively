@@ -50,5 +50,15 @@ ok('⑩ 편 상태를 브라우저에 저장하지 않는다(페이지 수명만
 ok('⑪ 옛 저장 기록은 부팅 때 지운다',
   /removeItem\(PAST_KEY_LEGACY\)/.test(code));
 
+// ── 홈 목록 — 멈춘 세션을 **달력 자정**으로 자르지 않는다 ────────────────────
+//  원준 2026-09-05 01:20 실측: 그 시각 그 사람의 멈춘 세션이 홈 목록에 0줄이었고(달력으로 갓 '오늘'이라
+//  받을 것이 없었다), 찾던 「투어 영상 제작」은 최신에서 **2번째**였다. 자르는 자가 문제였지 목록이 짧아서가 아니다.
+const main = readFileSync(path.join(root, 'web/v2/main.ts'), 'utf8');
+const mcode = main.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+ok('⑫ 홈 목록이 「오늘 일감의 시작」으로 자른다 — 달력 자정(dayGroup)이 아니다',
+  /!liveNow && \(s\.lastSeen \|\| 0\) < workDayStart\(now\)/.test(mcode) && !/dayGroup\(s\.lastSeen \|\| 0, now\) !== '오늘'/.test(mcode));
+ok('⑬ 그 자를 폴더 접기와 **같은 잎 모듈**에서 가져온다(사본을 두지 않는다)',
+  /import \{ workDayStart \} from '\.\.\/lib\/sess-fold\.js'/.test(mcode));
+
 console.log(`\nside-find-sessions: ${pass} passed${fail ? `, ${fail} FAILED` : ''}`);
 process.exit(fail ? 1 : 0);
