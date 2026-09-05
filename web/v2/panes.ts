@@ -672,6 +672,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       //  우클릭 = 이 탭을 어디에 둘까(#762) — 두 파일을 **동시에** 보려면 한 탭을 다른 칸으로 보내야 하는데,
       //   그 길이 끌어 옮기기뿐이라 아무도 몰랐다. 같은 일을 메뉴로도 연다.
       oncontextmenu: (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); tabMenu(e, zone, key); },
+      //  ⚠ 번호는 **단추에** 심는다 — ::after 의 attr() 은 제 요소의 값만 읽는다(겉싸개 것은 못 본다).
+      'data-n': tabNum(key) > 1 ? String(tabNum(key)) : null,
     }, pnIcon(d.icon, 'pn-i sm'), el('span', { text: nm })) as HTMLElement;
     b.addEventListener('dragstart', (e: DragEvent) => {
       e.dataTransfer?.setData('text/x-pn-part', JSON.stringify({ type: key, from: zone }));
@@ -683,7 +685,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       class: 'pn-tab-x', type: 'button', title: `${nm} 칸에서 뺍니다`, 'aria-label': `${nm} 빼기`,
       onclick: (e: MouseEvent) => { e.stopPropagation(); removeTab(zone, key); },
     }, pnIcon('x', 'pn-i xs'));
-    return el('span', { class: 'pn-tabwrap' + (on ? ' on' : ''), 'data-tab': key }, b, x);
+    //  접히면 아이콘만 남는다 — 같은 종류가 둘 이상이면 그때 서로를 구별할 길이 사라진다(#762 실측:
+    //   뷰어 셋이 같은 눈 아이콘 셋이었다). 번호를 아이콘 어깨에 남긴다(CSS ::after, 접혔을 때만 보인다).
+    return el('span', { class: 'pn-tabwrap' + (on ? ' on' : ''), 'data-tab': key, 'data-n': tabNum(key) > 1 ? String(tabNum(key)) : null }, b, x);
   }
 
   /** 지금 띠에 서 있는 탭들 — [열쇠, 겉싸개]. paintTabs 가 이름만 갈아 끼울 때 쓴다. */
