@@ -1020,7 +1020,7 @@ function viewerPart(ctx: PartCtx): Part {
   const show = (node: HTMLElement, mode: 'px' | 'scale', baseW: () => number): void => {
     shown = { node, mode, baseW };
     stage.classList.toggle('frame', node instanceof HTMLIFrameElement);
-    stage.classList.remove('list');
+    stage.classList.remove('list', 'edit');
     stage.replaceChildren(node);
     zoom.el.hidden = false;
     zoom.apply();
@@ -1029,7 +1029,15 @@ function viewerPart(ctx: PartCtx): Part {
   const showPlain = (node: HTMLElement, isList = false): void => {
     shown = null;
     stage.classList.toggle('list', isList);
-    stage.classList.remove('frame');
+    stage.classList.remove('frame', 'edit');
+    stage.replaceChildren(node);
+    zoom.el.hidden = true;
+  };
+  /** 글칸을 세운다 — 무대를 통째로 쓰고 제가 구른다(배율은 뜻이 없다: 글은 칸 폭에 맞춰 흐른다). */
+  const showEdit = (node: HTMLElement): void => {
+    shown = null;
+    stage.classList.remove('list', 'frame');
+    stage.classList.add('edit');
     stage.replaceChildren(node);
     zoom.el.hidden = true;
   };
@@ -1039,6 +1047,17 @@ function viewerPart(ctx: PartCtx): Part {
   //  살아 있는 미리보기(아래) — open() 이 읽으므로 **그보다 앞에** 선언한다(마운트 중 TDZ 사고의 재발 방지).
   let shownStamp = '';          // 지금 그려 둔 파일의 도장(수정 시각:크기) — '' 이면 비교할 것이 없다(목록 화면·아직 여는 중)
   let checking = false;
+  //  ── 고치기 (#762, 원준 2026-09-05: "뷰어 안에서 편집 버튼 누르면 편집도 가능하게") ────────────
+  //   보는 화면이 곧 고치는 화면이다 — 시안 한 줄 고치자고 자료에서 내려받아 다른 앱에서 열고 다시 올릴 일이 아니다.
+  //   글(md·txt·csv·코드)과 시안(html)만 연다. 그림·PDF·영상은 브라우저가 고칠 수 있는 물건이 아니다.
+  //  ⚠ **잘린 글은 절대 저장하지 않는다.** 보기(open)는 400KB 에서 잘라 그리는데 그 버퍼를 저장하면 뒷부분이
+  //   통째로 날아간다 — 그래서 고치기는 원문을 **따로 다시 받고**, 이 상한을 넘으면 아예 열지 않는다.
+  const EDIT_MAX = 1_000_000;
+  const canEdit = (p2: string): boolean => { const k = kindOf(p2).kind; return k === 'text' || k === 'page'; };
+  //  mark = **막대에 지금 그려 둔** 저장 상태. 이 값을 안 두고 «바뀌었나»만 보면, 저장한 뒤 다시 고칠 때
+  //   점이 안 켜진다(그 자리가 이미 '고친 상태'였으므로 전환이 없다 — dev 실화면에서 잡은 것).
+  let ed: { ta: HTMLTextAreaElement; saved: string; stamp: string; mark: boolean } | null = null;
+  const dirty = (): boolean => !!ed && ed.ta.value !== ed.saved;
   //  덮어쓰기 판정에 쓰는 **실제로 있는 것 전부**(list 는 휴지통·잡동사니를 걸러 낸 화면용이라 이름 자리를 놓친다).
   let taken = new Set<string>();
   const urls: string[] = [];
@@ -1101,7 +1120,7 @@ function viewerPart(ctx: PartCtx): Part {
     await loadList();
     // 올린 이유는 **보려고**다 — 방금 올라간 것 중 첫 파일을 그 자리에서 편다(여럿이면 목록 맨 위에 모여 있다).
     const first = r.ok ? items.find((u) => list.some((f) => f.path === u.rel)) : null;
-    if (first) { void open(first.rel); return; }
+    if (first) { void go(first.rel); return; }
     if (!path) paintPicker();
     paintBar();
   }
@@ -1111,15 +1130,116 @@ function viewerPart(ctx: PartCtx): Part {
       bar.replaceChildren(upBtn(true), el('span', { class: 'pn-fine', text: list.length ? list.length + '개 · 최근 먼저' : '' }));
       return;
     }
+    //  고치는 중 — 막대도 그 일만 말한다(다시 불러오기·올리기·내려받기는 지금 할 일이 아니다).
+    //   [저장]은 오른쪽 끝 파란 단추 하나, 왼쪽은 돌아가는 길. 저장 안 한 글이 있으면 이름 옆에 점이 뜬다.
+    if (ed) {
+      ed.mark = dirty();   // 막대가 곧 정본이다 — 아래 입력 감시가 이 값과 견준다
+      bar.replaceChildren(
+        el('button', { class: 'pn-web-btn', type: 'button', text: '← 보기', title: '고치기를 끝내고 보던 화면으로 돌아갑니다',
+          onclick: () => { void endEdit(); } }),
+        el('b', { class: 'pn-ed-name ell', text: base(path), title: path }),
+        el('span', { class: 'pn-fine' + (dirty() ? ' warn' : ''), text: dirty() ? '● 저장 안 함' : '저장됨' }),
+        el('button', { class: 'pn-web-btn pri', type: 'button', text: '저장', title: '자료의 원본에 씁니다 (⌘S)',
+          onclick: () => { void save(); } }));
+      return;
+    }
     bar.replaceChildren(
-      el('button', { class: 'pn-web-btn', type: 'button', text: '← 자료', title: '파일 목록으로 돌아갑니다', onclick: () => void open('') }),
+      el('button', { class: 'pn-web-btn', type: 'button', text: '← 자료', title: '파일 목록으로 돌아갑니다', onclick: () => void go('') }),
       el('b', { class: 'pn-ed-name ell', text: base(path), title: path }),
+      //  고치기(#762, 원준 2026-09-05) — 브라우저가 고칠 수 있는 것(글·시안)에만 선다. 그림·PDF·영상엔 안 뜬다.
+      ...(canEdit(path) ? [el('button', { class: 'pn-web-btn ic', type: 'button', title: '이 파일을 고칩니다 — 저장하면 자료의 원본이 바뀝니다',
+        'aria-label': '고치기', onclick: () => { void beginEdit(); } }, pnIcon('pencil', 'pn-i sm'))] : []),
       //  새로고침(#762, 원준 2026-09-04) — 같은 파일을 **다시 받아** 편다(세션이 방금 고친 시안·PDF 를 그 자리에서 본다).
       //  배율은 그대로다(세션마다 기억하는 값이라 다시 펴도 안 바뀐다). 웹 칸의 ↺ 와 같은 아이콘·같은 자리.
       el('button', { class: 'pn-web-btn ic', type: 'button', title: '이 파일을 다시 불러옵니다', 'aria-label': '다시 불러오기',
         onclick: () => { void loadList().then(() => open(path, true, true)); } }, pnIcon('undo', 'pn-i sm')),
       upBtn(false),
       el('a', { class: 'pn-web-btn', href: fileUrl(path) + '&download=1', download: base(path), title: '내려받기' }, pnIcon('drop', 'pn-i sm')));
+  }
+
+  // ── 고치기 ────────────────────────────────────────────────────────────────────
+  /** 지금 서버에 있는 파일의 도장. 못 물으면 '' — 모를 때는 충돌을 **주장하지 않는다**(억지로 막지 않는다). */
+  const stampNow = async (): Promise<string> => {
+    try {
+      const r = await fetch(fileUrl(path), { method: 'HEAD', headers: authHeaders(), cache: 'no-store' });
+      const m = r.ok ? r.headers.get('x-file-mtime') : null;
+      return m ? m + ':' + (r.headers.get('x-file-size') || '') : '';
+    } catch (_) { return ''; }
+  };
+
+  /** 보던 파일을 글칸으로 바꾼다 — 원문을 **다시 받아서**(잘린 화면 버퍼가 아니라) 채운다. */
+  async function beginEdit(): Promise<void> {
+    if (!path || ed || !canEdit(path)) return;
+    const r = await fetch(fileUrl(path), { headers: authHeaders(), cache: 'no-store' }).catch(() => null);
+    if (!r || !r.ok) { toast('파일을 읽지 못해 고치기를 열 수 없어요.', true); return; }
+    const txt = await r.text();
+    if (txt.length > EDIT_MAX) {
+      toast(`너무 큰 파일이라 여기서는 못 고쳐요(${fmtSize(txt.length)}) — 내려받아 고친 뒤 다시 올려 주세요.`, true);
+      return;
+    }
+    const ta = el('textarea', { class: 'pn-ed-ta', spellcheck: 'false', 'aria-label': base(path) + ' 고치기' }) as HTMLTextAreaElement;
+    ta.value = txt;
+    //  글자를 칠 때마다 막대의 «저장 안 함» 점이 켜지고 꺼진다 — 지금 상태를 사람이 늘 볼 수 있게.
+    //  ⚠ 견주는 상대는 **막대에 그려 둔 값**(ed.mark)이다 — 저장이 그 값을 되돌리므로 저장 뒤 첫 타건에서 다시 켜진다.
+    ta.addEventListener('input', () => { if (ed && dirty() !== ed.mark) paintBar(); });
+    //  ⌘S / Ctrl+S — 글칸 안에서 저장. 브라우저의 '페이지 저장'을 가로챈다(여기선 그게 사람의 뜻이다).
+    ta.addEventListener('keydown', (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) { e.preventDefault(); void save(); }
+    });
+    ed = { ta, saved: txt, mark: false,
+      stamp: (r.headers.get('x-file-mtime') ? r.headers.get('x-file-mtime') + ':' + (r.headers.get('x-file-size') || '') : '') || await stampNow() };
+    shownStamp = '';   // 고치는 동안은 살아 있는 미리보기를 세운다(내가 쓰는 파일을 내가 다시 열 이유가 없다)
+    showEdit(ta);
+    paintBar();
+    ta.focus();
+  }
+
+  /** 자료의 원본에 쓴다. 그 사이 남이(세션이) 같은 파일을 고쳤으면 **먼저 물어본다**. */
+  async function save(): Promise<void> {
+    if (!ed) return;
+    const p2 = path;
+    const text = ed.ta.value;
+    //  자료는 이 프로젝트의 모든 세션이 읽는 공용물이다 — 올리기가 덮어쓰기를 묻는 것과 같은 이유로 여기서도 묻는다.
+    //  (도장을 못 구했으면 묻지 않는다 — 모르는 것을 충돌이라고 우기면 저장이 영영 막힌다.)
+    const cur = await stampNow();
+    if (cur && ed.stamp && cur !== ed.stamp && !(await confirmDialog({
+      title: `「${base(p2)}」가 그 사이 바뀌었어요`,
+      message: '고치는 동안 다른 곳(세션이나 다른 사람)에서 이 파일이 바뀌었습니다. 덮어쓰면 그 수정은 사라집니다.',
+      confirmText: '덮어쓰기', danger: true,
+    }))) return;
+    const r = await fetch(fileUrl(p2), { method: 'PUT', headers: authHeaders(), body: text }).catch(() => null);
+    if (ctx.dead() || !ed || path !== p2) return;
+    if (!r || !r.ok) { toast('저장하지 못했어요' + (r ? ` (${r.status})` : ''), true); return; }
+    const j: any = await r.json().catch(() => null);
+    ed.saved = text;
+    ed.stamp = j && j.mtime ? j.mtime + ':' + (j.size ?? '') : await stampNow();
+    toast('저장했어요');
+    paintBar();
+    void loadList();   // 크기·시각이 바뀌었다 — 목록과 8초 틱의 자가 비교가 새 값을 쓰게
+  }
+
+  /** 고치기를 끝내고 보던 화면으로. 저장 안 한 글이 있으면 **버릴 것인지 먼저 묻는다**. */
+  async function endEdit(): Promise<boolean> {
+    if (!ed) return true;
+    if (dirty() && !(await confirmDialog({
+      title: '고치던 내용을 버릴까요?',
+      message: '저장하지 않은 수정이 있어요. 버리면 되돌릴 수 없습니다.',
+      confirmText: '버리기', danger: true,
+    }))) return false;
+    ed = null;
+    if (path) await open(path, true, true);   // 방금 쓴 것이 그려진다(도장도 여기서 새로 잡힌다)
+    else paintPicker();
+    paintBar();
+    return true;
+  }
+
+  /** 사람이 **다른 것을 열려고 한다** — 고치는 중이면 먼저 물어보고 나서 연다. */
+  async function go(p2: string): Promise<void> {
+    if (ed) {
+      if (!(await endEdit())) return;
+      if (p2 === path) return;   // 같은 파일이면 endEdit 이 이미 그렸다
+    }
+    await open(p2);
   }
 
   /** 자료 목록 — 이 칸이 '무엇을 열까'를 묻는 화면. 검색 한 칸 + 행 목록(종류·크기·시각). */
@@ -1147,7 +1267,7 @@ function viewerPart(ctx: PartCtx): Part {
         const ic = el('span', { class: 'pn-fic pv ' + k.kind, 'data-pv': f.path, 'data-pvk': k.kind, 'data-pvs': String(f.size || 0) },
           pnIcon(k.kind === 'page' ? 'note' : k.kind === 'img' || k.kind === 'video' ? 'img' : 'doc', 'pn-i')) as HTMLElement;
         if (k.kind !== 'file') pv.watch(ic, f.path, k.kind, f.size || 0);
-        return el('button', { class: 'pn-frow2 pv', type: 'button', title: f.path, onclick: () => void open(f.path) },
+        return el('button', { class: 'pn-frow2 pv', type: 'button', title: f.path, onclick: () => void go(f.path) },
           ic,
           el('b', { class: 'pn-fname1', text: base(f.path) }),
           el('span', { class: 'pn-fcol k', text: k.type }),
@@ -1247,7 +1367,7 @@ function viewerPart(ctx: PartCtx): Part {
     const d = (e as CustomEvent).detail as { id: number; path: string } | undefined;
     if (!d || Number(d.id) !== ctx.id || !d.path) return;
     if (!list.some((f) => f.path === d.path)) void loadList();
-    void open(d.path);
+    void go(d.path);
   };
   // ⚠ window 가 아니라 **이 곁칸**에서 듣는다 — 창에 달면 열려 있는 모든 세션 탭의 뷰어가 같이 갈아입는다.
   ctx.paneRoot().addEventListener(VIEWER_EVT, onSend);
@@ -1264,6 +1384,7 @@ function viewerPart(ctx: PartCtx): Part {
     const k = ctx.memKey();
     if (k === lastSid) return;
     lastSid = k;
+    if (ed) return;   // 고치는 중 — 저장 안 한 글을 뺏지 않는다(위 머리말이 약속한 것)
     openRemembered();
   });
 
@@ -1281,6 +1402,7 @@ function viewerPart(ctx: PartCtx): Part {
   //   한 번만 편다: 새 도장을 보면 적어 두고, 다음 박자에도 그대로면 그때 연다(≈3초 정적).
   let pending = '';
   const reopenIfChanged = (stamp: string): void => {
+    if (ed) { pending = ''; return; }   // 고치는 중 — 지금 화면은 내 글칸이다(내가 쓴 것을 내가 다시 열지 않는다)
     if (!path || !shownStamp || !stamp || stamp === shownStamp) { pending = ''; return; }
     if (stamp !== pending) { pending = stamp; return; }   // 아직 쓰는 중일 수 있다 — 한 박자 더 본다
     pending = '';
@@ -1288,7 +1410,7 @@ function viewerPart(ctx: PartCtx): Part {
     void open(path, true, true);
   };
   const checkFresh = async (): Promise<void> => {
-    if (checking || !path || !shownStamp || !visible()) return;
+    if (checking || ed || !path || !shownStamp || !visible()) return;
     checking = true;
     try {
       const r = await fetch(fileUrl(path), { method: 'HEAD', headers: authHeaders(), cache: 'no-store' });
