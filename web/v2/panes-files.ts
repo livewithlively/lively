@@ -10,54 +10,24 @@ import { anchoredPopover, api, apiUrl, el, relTime, toast } from '../core.js';
 import { fmtSize } from '../projects/files.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { upDirSupported, upDropZone, upFromInput, upSend, upToast, type UpItem } from '../projects/files-upload.js';
-import { openInViewerPart, PV_PAGE_W, FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHINE_FILES, NOISE_RE, PV_MAX, PV_W, SORT_LABEL, TRASH_DIR, attachName, authHeaders, ctxMenu, folderIcon, freeName, kindOf, lsGet, lsSet, pnIcon, stamp, type FileItem, type SortKey } from './panes-kit.js';
+import { openInViewerPart, FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHINE_FILES, NOISE_RE, SORT_LABEL, TRASH_DIR, attachName, ctxMenu, folderIcon, freeName, kindOf, lsGet, lsSet, pnIcon, stamp, type FileItem, type SortKey } from './panes-kit.js';
+import { findMatcher } from '../lib/find.js';
+import { createPreviewKit } from './file-preview.js';
 import type { Part, PartCtx } from './panes-parts.js';
-
-// ── PDF 첫 장을 그림으로 (#762) ─────────────────────────────────────────────────
-//  pdf.js 는 **필요할 때만** 받는다(1.7MB) — 자료 격자에 PDF 가 없으면 한 바이트도 안 받는다.
-//  일꾼(worker) 주소까지 같은 벤더 폴더로 못박는다: 기본값은 CDN 을 보는데 이 제품은 제 오리진만 쓴다.
-let pdfLibP: Promise<any> | null = null;
-function pdfLib(): Promise<any> {
-  if (!pdfLibP) {
-    const base = new URL('../vendor/pdfjs/', import.meta.url).href;
-    pdfLibP = import(/* @vite-ignore */ base + 'pdf.min.mjs').then((m: any) => {
-      m.GlobalWorkerOptions.workerSrc = base + 'pdf.worker.min.mjs';
-      return m;
-    }).catch((e) => { pdfLibP = null; throw e; });
-  }
-  return pdfLibP;
-}
-/** 첫 장을 PV_W 폭 캔버스로. 못 그리면 null — 카드는 아이콘 그대로 둔다(빈 흰 칸을 남기지 않는다). */
-async function pdfFirstPage(buf: ArrayBuffer): Promise<HTMLCanvasElement | null> {
-  try {
-    const lib = await pdfLib();
-    const doc = await lib.getDocument({ data: buf, disableAutoFetch: true, disableStream: true, isEvalSupported: false }).promise;
-    try {
-      const page = await doc.getPage(1);
-      const base = page.getViewport({ scale: 1 });
-      const vp = page.getViewport({ scale: PV_W / (base.width || PV_W) });
-      const cv = el('canvas', { class: 'pn-fpdf' }) as HTMLCanvasElement;
-      cv.width = Math.max(1, Math.round(vp.width));
-      cv.height = Math.max(1, Math.round(vp.height));
-      const cx = cv.getContext('2d');
-      if (!cx) return null;
-      await page.render({ canvasContext: cx, viewport: vp }).promise;
-      return cv;
-    } finally { void doc.destroy?.(); }
-  } catch (_) { return null; }   // 암호 걸린 PDF·깨진 파일 — 아이콘으로 두는 것이 정직하다
-}
 
 export function filesPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-files', tabindex: '0' }) as HTMLElement;
   const body = el('div', { class: 'pn-fbody' });          // 격자 또는 목록이 사는 자리(스크롤 주체)
   const crumbs = el('div', { class: 'pn-fcrumbs' });
   const count = el('span', { class: 'pn-fine', text: '' });
-  const blobUrls: string[] = [];
   let sig = '';
 
   // ── 상태 ──
   let cwd = '';                                 // 지금 보는 폴더(프로젝트 루트 기준 상대경로)
   let items: FileItem[] = [];                   // 지금 폴더의 것들(받은 그대로)
+  //  찾기용 **평평한 전체 목록**(매니페스트) — 폴더를 열어 보지 않고도 이름으로 닿을 수 있어야 찾기다.
+  //  ⚠ 목록 화면의 정본은 items 다. 이건 찾는 중에만 쓴다(전체를 늘 그리면 폴더 구조가 뜻을 잃는다).
+  let allFiles: FileItem[] = [];
   //  화면에 실제로 그려진 순서. ⇧클릭 범위·⌘A 는 **눈에 보이는 순서**를 따라야 하므로 items 가 아니라 이걸 본다.
   //  ⚠ 정렬은 render 가 한다(load 가 아니라) — load 에서만 정렬하면 정렬을 바꿔도 다음 폴링(8초)까지 그대로다(실측).
   let ordered: FileItem[] = [];
@@ -69,6 +39,20 @@ export function filesPart(ctx: PartCtx): Part {
   let sortKey = (lsGet(FV_SORT, 'date:desc').split(':')[0] as SortKey) || 'date';
   let sortAsc = lsGet(FV_SORT, 'date:desc').split(':')[1] === 'asc';
   if (!SORT_LABEL[sortKey]) sortKey = 'date';
+
+  // ── 찾기 (#762, 원준 2026-09-04 "자료 위젯에서 검색 기능도 필요할 거 같음") ─────────────────
+  //  잣대는 사이드바·타임라인과 **같은 것**(lib/find.ts) — 띄어쓰기 무시 · 낱말 순서 무관 · 초성.
+  //  ⚠ 찾는 중에는 **지금 폴더 안**이 아니라 이 프로젝트 자료 **전체**를 본다: 파일이 어느 폴더에 있는지
+  //   기억나지 않아 찾는 것이므로, 폴더를 하나씩 열어 보게 하면 찾기가 아니다. 그래서 결과 행에 경로를 함께 보인다.
+  //  ⚠ 한글 조합 중에는 다시 그리지 않는다(사이드바와 같은 규율 #1958) — 매 글자 재렌더가 조합을 끊는다.
+  let query = '';
+  const findIn = el('input', { class: 'pn-ffind', type: 'search', placeholder: '자료 찾기', 'aria-label': '자료에서 찾기' }) as HTMLInputElement;
+  let composing = false;
+  const onFind = (): void => { query = findIn.value; render(); };
+  findIn.addEventListener('compositionstart', () => { composing = true; });
+  findIn.addEventListener('compositionend', () => { composing = false; onFind(); });
+  findIn.addEventListener('input', () => { if (!composing) onFind(); });
+  findIn.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Escape' && !composing) { e.stopPropagation(); findIn.value = ''; onFind(); } });
 
   const rel = (name: string): string => (cwd ? cwd + '/' + name : name);
   const selItems = (): FileItem[] => ordered.filter((f) => sel.has(f.path));
@@ -110,7 +94,7 @@ export function filesPart(ctx: PartCtx): Part {
   const sortBtn = el('button', { class: 'pn-fbtn wide', type: 'button', title: '정렬 순서' }) as HTMLButtonElement;
   const head = el('div', { class: 'pn-fhead' },
     el('div', { class: 'pn-frow1' }, crumbs, count),
-    el('div', { class: 'pn-ftools' }, el('span', { class: 'pn-upgrp' }, upBtn, upDirBtn), mkBtn, el('span', { class: 'pn-fsp' }), viewBtn, sizeIn, sortBtn));
+    el('div', { class: 'pn-ftools' }, el('span', { class: 'pn-upgrp' }, upBtn, upDirBtn), mkBtn, el('span', { class: 'pn-fsp' }), findIn, viewBtn, sizeIn, sortBtn));
   root.append(upIn, upDirIn, noteEl, head, body);
 
   viewBtn.onclick = () => { view = view === 'icon' ? 'list' : 'icon'; lsSet(FV_VIEW, view); paintTools(); render(); };
@@ -276,8 +260,18 @@ export function filesPart(ctx: PartCtx): Part {
       return a.name.localeCompare(b.name, 'ko') * dir;
     });
   }
+  /** 찾기용 전체 목록 — 매니페스트 한 번(평평하고, 화면과 같은 규칙으로 잡동사니를 뺀다). */
+  async function loadAll(): Promise<void> {
+    const m: any = await api(pUrl('/shared/manifest')).catch(() => null);
+    if (ctx.dead() || !m) return;
+    allFiles = (((m.files || []) as any[]))
+      .map((f) => ({ name: String(f.path).split('/').pop() || String(f.path), path: String(f.path), type: 'file' as const, size: Number(f.size || 0), mtime: Number(f.mtime || 0) }))
+      .filter((f) => !f.path.startsWith(TRASH_DIR + '/') && !NOISE_RE.test('/' + f.path) && !MACHINE_FILES.has(f.name));
+  }
+
   async function load(): Promise<void> {
     if (!(ctx.id > 0)) { body.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:18px', text: '이 화면은 프로젝트 폴더가 없어 자료를 둘 수 없어요.' })); return; }
+    void loadAll();                              // 찾기 재료는 곁길로 — 목록 그리기를 기다리게 하지 않는다
     const got = await fetchDir();
     if (ctx.dead() || !root.isConnected) return;
     const s2 = cwd + '|' + got.map((f) => f.path + f.mtime + f.size).join('|');
@@ -442,105 +436,8 @@ export function filesPart(ctx: PartCtx): Part {
     });
   }
 
-  // ── 미리보기 ──────────────────────────────────────────────────────────────
-  //  · **보일 때만** 받는다(IntersectionObserver) — 자료가 수십 개인 칸에서 전부 받으면 화면이 멈춘다.
-  //  · 한 번에 세 개까지만 받는다(fetch 큐) — 좁은 칸에서 브라우저가 연결로 막히지 않게.
-  //  · 큰 파일은 건너뛰고 아이콘으로 둔다(형식별 상한 PV_MAX) — 미리보기 하나 보자고 100MB 를 내려받지 않는다.
-  const seenPv = new WeakSet<HTMLElement>();
-  let inflight = 0;
-  const queue: Array<() => Promise<void>> = [];
-  function pump(): void {
-    while (inflight < 3 && queue.length) {
-      const job = queue.shift()!;
-      inflight++;
-      void job().catch(() => { /* 하나 실패해도 나머지는 계속 */ }).then(() => { inflight--; pump(); });
-    }
-  }
-  const io: IntersectionObserver | null = typeof IntersectionObserver === 'function'
-    ? new IntersectionObserver((ents) => {
-      for (const e of ents) {
-        const n = e.target as HTMLElement;
-        if (!e.isIntersecting || seenPv.has(n)) continue;
-        seenPv.add(n);
-        io?.unobserve(n);
-        queue.push(() => fillPreview(n, n.dataset.pv || '', n.dataset.pvk || '', Number(n.dataset.pvs || 0)));
-        pump();
-      }
-    }, { rootMargin: '250px' })
-    : null;
-
-  /** 카드 폭에 맞춰 종이(300×246)를 줄인다 — 칸 폭이 바뀌면 다시 맞춘다. */
-  function fitPaper(box: HTMLElement, paper: HTMLElement): void {
-    const w = box.clientWidth || 92;
-    const lw = Number(paper.dataset.lw) || PV_W;      // 종이마다 논리 폭이 다르다(글 300 · 시안 1180)
-    paper.style.transform = 'scale(' + (w / lw).toFixed(4) + ')';
-  }
-  const fits: Array<[HTMLElement, HTMLElement]> = [];
-  const ro: ResizeObserver | null = typeof ResizeObserver === 'function'
-    ? new ResizeObserver(() => { for (const [b, pp] of fits) fitPaper(b, pp); })
-    : null;
-  /** 미리보기 한 장을 카드에 앉힌다 — `logicalW` 는 **그 내용이 제대로 펴지는 폭**이고, 카드 폭으로 줄여 그린다. */
-  function paper(box: HTMLElement, inner: HTMLElement, logicalW = PV_W): void {
-    const pp = el('div', { class: 'pn-fpaper' }, inner) as HTMLElement;
-    pp.dataset.lw = String(logicalW);
-    pp.style.width = logicalW + 'px';
-    pp.style.height = Math.round(logicalW * 0.82) + 'px';   // 카드 비율(1 : .82)과 같게 — 아래가 잘리지 않는다
-    box.replaceChildren(pp);
-    fits.push([box, pp]);
-    fitPaper(box, pp);
-    ro?.observe(box);
-  }
-
-  async function fillPreview(box: HTMLElement, path: string, kind: string, size: number): Promise<void> {
-    if (ctx.dead() || !box.isConnected) return;
-    if (size && size > (PV_MAX[kind] || 4e6)) return;              // 너무 큰 것은 아이콘 그대로
-    const url = apiUrl(pUrl('/file?path=' + encodeURIComponent(path)));
-    //  PDF 는 **첫 장을 그림으로 그린다**(#762) — 크롬 내장 뷰어를 프레임에 띄우던 종전 방식은
-    //  플러그인 레이어라 우리 CSS·히트테스트 밖에서 제 도구모음을 띄웠고, 그게 카드 밖으로 넘쳐 격자를
-    //  뒤덮었다(`pointer-events:none`·`overflow:hidden`·`#toolbar=0` 셋 다 안 닿는다). 그림에는 그 문제가 없다.
-    if (kind === 'pdf') {
-      const buf = await fetch(url, { headers: authHeaders() }).then((r2) => (r2.ok ? r2.arrayBuffer() : null)).catch(() => null);
-      if (!buf || ctx.dead() || !box.isConnected) return;
-      const cv = await pdfFirstPage(buf);
-      if (!cv || ctx.dead() || !box.isConnected) return;
-      box.classList.add('has-pv');
-      paper(box, cv, PV_W);
-      return;
-    }
-    if (kind === 'text' || kind === 'page') {
-      // 앞부분만 — Range 를 무시하는 서버여도 글자만 잘라 쓰므로 화면은 같다. 416(범위 거부)이면 통째로 받는다.
-      let r = await fetch(url, { headers: { ...authHeaders(), Range: 'bytes=0-' + (kind === 'page' ? 400_000 : 4095) } });
-      if (r.status === 416) r = await fetch(url, { headers: authHeaders() });
-      if (!r.ok || ctx.dead() || !box.isConnected) return;
-      const raw = await r.text();
-      if (!raw.trim()) return;
-      box.classList.add('has-pv');
-      if (kind === 'text') { paper(box, el('pre', { class: 'pn-fpre', text: raw.slice(0, 1400) })); return; }
-      // ⚠ 시안(HTML)은 **srcdoc + 빈 sandbox** 로 그린다. blob 주소를 sandbox 프레임에 물리면 그 프레임은
-      //  불투명 출처라 blob 을 읽을 권한이 없어 **흰 칸**이 된다(실측 2026-08-20 — 시안 미리보기가 전부 백지였다).
-      //  srcdoc 은 내용을 그 자리에 넘기므로 출처 문제가 없고, 빈 sandbox 가 스크립트·폼·상위 접근을 모두 막는다.
-      const frame = el('iframe', { class: 'pn-fframe', sandbox: '', loading: 'lazy', tabindex: '-1', 'aria-hidden': 'true' }) as HTMLIFrameElement;
-      frame.srcdoc = raw.slice(0, 400_000);
-      paper(box, frame, PV_PAGE_W);
-      return;
-    }
-    const r = await fetch(url, { headers: authHeaders() });
-    if (!r.ok || ctx.dead() || !box.isConnected) return;
-    const bl = await r.blob();
-    const u = URL.createObjectURL(bl);
-    blobUrls.push(u);
-    if (ctx.dead() || !box.isConnected) return;
-    box.classList.add('has-pv');
-    if (kind === 'img') {
-      box.replaceChildren(el('img', { alt: '', src: u }));
-    } else if (kind === 'video') {
-      const v = el('video', { src: u, muted: 'true', playsinline: 'true', preload: 'metadata' }) as HTMLVideoElement;
-      v.muted = true;
-      box.replaceChildren(v);
-      // 첫 프레임을 세운다 — metadata 만으로 검은 칸이 남는 브라우저가 있어 0.1초로 옮겨 한 장을 그린다.
-      v.addEventListener('loadedmetadata', () => { try { v.currentTime = Math.min(0.1, (v.duration || 1) / 10); } catch (_) { /* noop */ } }, { once: true });
-    }
-  }
+  // 미리보기 기계는 **공용 한 벌**(v2/file-preview.ts) — 뷰어 목록도 같은 것을 쓴다(#762).
+  const pv = createPreviewKit({ fileUrl: (p2) => apiUrl(pUrl('/file?path=' + encodeURIComponent(p2))), dead: () => ctx.dead() });
 
   function thumb(f: FileItem, small: boolean): HTMLElement {
     // 목록 보기(20px)에선 서류를 그리지 않는다 — 그 크기에선 뭉개져 얼룩으로만 보인다.
@@ -549,10 +446,7 @@ export function filesPart(ctx: PartCtx): Part {
     const k = kindOf(f.path);
     const box = el('span', { class: 'pn-fic ' + k.kind + (small ? ' sm' : ''), 'data-pv': f.path, 'data-pvk': k.kind, 'data-pvs': String(f.size || 0) },
       pnIcon(k.kind === 'page' ? 'note' : k.kind === 'video' ? 'img' : 'doc', 'pn-i')) as HTMLElement;
-    if (k.kind !== 'file' && !small) {
-      if (io) io.observe(box);
-      else { seenPv.add(box); queue.push(() => fillPreview(box, f.path, k.kind, f.size || 0)); pump(); }
-    }
+    if (k.kind !== 'file' && !small) pv.watch(box, f.path, k.kind, f.size || 0);
     return box;
   }
 
@@ -607,6 +501,8 @@ export function filesPart(ctx: PartCtx): Part {
     return inp;
   }
 
+  /** 찾는 중 행에 붙는 경로 — '어느 폴더에 있나'가 곧 찾기의 답 절반이다. */
+  const dirOf = (p2: string): string => (p2.includes('/') ? p2.slice(0, p2.lastIndexOf('/')) : '');
   function itemNode(f: FileItem): HTMLElement {
     const k = f.type === 'dir' ? { kind: 'dir', type: '폴더' } : kindOf(f.path);
     const meta = f.type === 'dir' ? '폴더' : `${k.type} · ${fmtSize(f.size || 0)}`;
@@ -615,13 +511,13 @@ export function filesPart(ctx: PartCtx): Part {
       ? el('div', { class: 'pn-frow2', 'data-fp': f.path, title: f.name },
         thumb(f, true),
         editing ? nameEditor(f) : el('b', { class: 'pn-fname1', text: f.name }),
-        el('span', { class: 'pn-fcol k', text: f.type === 'dir' ? '폴더' : k.type }),
+        el('span', { class: 'pn-fcol k', text: query.trim() && dirOf(f.path) ? dirOf(f.path) : (f.type === 'dir' ? '폴더' : k.type) }),
         el('span', { class: 'pn-fcol s', text: f.type === 'dir' ? '—' : fmtSize(f.size || 0) }),
         el('span', { class: 'pn-fcol d', text: f.mtime ? relTime(new Date(f.mtime).toISOString()) : '' }))
       : el('div', { class: 'pn-fcard', 'data-fp': f.path, title: `${f.name}\n${meta}` },
         thumb(f, false),
         editing ? nameEditor(f) : el('b', { class: 'pn-fname ell2', text: f.name }),
-        el('span', { class: 'pn-fmeta' }, el('span', { text: f.type === 'dir' ? '폴더' : k.type }),
+        el('span', { class: 'pn-fmeta' }, el('span', { text: query.trim() && dirOf(f.path) ? dirOf(f.path) : (f.type === 'dir' ? '폴더' : k.type) }),
           ...(f.type === 'dir' ? [] : [el('span', { class: 'sep', text: '·' }), el('span', { text: fmtSize(f.size || 0) })])));
     const n = node as HTMLElement;
     if (editing) { n.classList.add('editing'); return n; }   // 이름을 고치는 중엔 고르기·열기·끌기가 다 쉰다
@@ -634,13 +530,18 @@ export function filesPart(ctx: PartCtx): Part {
 
   function render(): void {
     crumbBar();
-    fits.length = 0;
-    ordered = sortItems(items);
+    pv.reset();
+    const q = query.trim();
+    if (q) {
+      //  찾을 땐 이 프로젝트 자료 **전체**에서(폴더는 뺀다 — 찾는 것은 파일이다). 매니페스트가 이미 평평한 목록이다.
+      const m = findMatcher(q);
+      ordered = sortItems(allFiles.filter((f) => f.type !== 'dir' && m(f.name, f.path)));
+    } else ordered = sortItems(items);
     if (!ordered.length) {
       body.replaceChildren(marquee, el('div', { class: 'pn-empty' },
-        pnIcon('drop', 'pn-i big'),
-        el('b', { text: cwd ? '이 폴더는 비어 있어요.' : '아직 자료가 없어요.' }),
-        el('p', { class: 'pn-fine', text: '파일이나 폴더를 이 칸에 끌어다 놓거나, 그림을 복사해 ⌘V 로 붙여넣거나, [＋ 올리기]를 누르세요. 세션이 만든 결과물도 여기 쌓입니다.' })));
+        pnIcon(q ? 'search' : 'drop', 'pn-i big'),
+        el('b', { text: q ? '찾는 자료가 없어요.' : cwd ? '이 폴더는 비어 있어요.' : '아직 자료가 없어요.' }),
+        el('p', { class: 'pn-fine', text: q ? '이름 일부로 다시 찾아보세요 — 초성(ㅍㅌ)이나 띄어쓰기 없이도 찾습니다.' : '파일이나 폴더를 이 칸에 끌어다 놓거나, 그림을 복사해 ⌘V 로 붙여넣거나, [＋ 올리기]를 누르세요. 세션이 만든 결과물도 여기 쌓입니다.' })));
       paintSel();
       return;
     }
@@ -660,10 +561,9 @@ export function filesPart(ctx: PartCtx): Part {
     // ⚠ 이름을 고치는 중이면 틱을 쉰다 — 8초마다 다시 그리면 치던 글자가 사라진다.
     tick: () => { if (!renameAt) void load(); },
     destroy: () => {
-      io?.disconnect(); ro?.disconnect();
+      pv.destroy();
       document.removeEventListener('paste', onPaste, true);
       document.querySelector('.pn-ctx')?.remove();
-      blobUrls.forEach((u) => URL.revokeObjectURL(u));
     },
   };
 }
