@@ -215,7 +215,10 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     // 파일 도장(#762) — 뷰어의 «살아 있는 미리보기»가 HEAD 로 「바뀌었나」만 묻는다. 시각은 ms, 크기까지 둘이라
     //  같은 초 안에 두 번 저장한 것도 가른다(Last-Modified 는 초 단위라 그걸로는 못 가른다 — 표준 클라이언트용으로만 둔다).
     res.setHeader("Last-Modified", st.mtime.toUTCString());
-    res.setHeader("X-File-Mtime", String(Math.round(st.mtimeMs)));
+    //  ⚠ **내림(floor)** — 매니페스트(project-manifest.ts)가 floor 다. 자가 다르면(round vs floor) 같은 파일의
+    //   도장이 두 값으로 갈려 화면이 «바뀌었다»로 오판한다(실측: 아무 일 없이도 8초마다 뷰어가 다시 펴져 PDF 가
+    //   맨 위로 튀었다 — 원준 2026-09-05 신고). 자는 한 자리에서 하나여야 한다.
+    res.setHeader("X-File-Mtime", String(Math.floor(st.mtimeMs)));
     res.setHeader("X-File-Size", String(st.size));
     // 미리보기는 실제 MIME 으로(PDF=application/pdf → iframe 네이티브 뷰어 렌더). 다운로드는 octet-stream +
     //  Content-Disposition: attachment 로 강제 저장(브라우저가 인라인 표시하지 않게).
