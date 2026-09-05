@@ -3,6 +3,7 @@
 //  부품 자신(세션·자료·지식…)은 panes-parts.ts / panes-files.ts 에 산다.
 import { TOKEN_KEY, el, sv } from '../core.js';
 import { EMBEDDED } from './embed.js';
+import { tabNum, type TabKey } from '../lib/tab-key.js';
 
 // ── 아이콘(스트로크 SVG) ──────────────────────────────────────────────────────
 const ICON_PATHS: Record<string, string> = {
@@ -217,20 +218,32 @@ export function folderIcon(cls = 'pn-folder', opts?: { empty?: boolean; plain?: 
 /** 이 곁칸의 뷰어에 대고 쏘는 신호. ⚠ window 금지 — 문서 전체로 뿌리면 열려 있는 **모든 세션 탭**의
  *  뷰어가 같은 파일로 갈아입고 각자 자기 열쇠에 그걸 기억한다(pane-signal-scope-and-embed-isolation-1819). */
 export const VIEWER_EVT = 'pn-viewer-open';
+/** **배달** — 셸이 «어느 뷰어에 펼지» 정한 뒤 그 탭 앞으로 보내는 신호(#762). 요청(VIEWER_EVT)과 이름이
+ *  달라야 한다: 같으면 셸이 자기 신호를 되받아 무한고리가 된다. 뷰어는 이 신호만 듣는다. */
+export const VIEWER_TO_EVT = 'pn-viewer-to';
 /** 어떤 파일을 펴 두었나 — 세션마다 따로(곁칸 부품은 그 세션의 것). */
 export const ED_PATH_KEY = 'pn_ed_path';
+/** 그 부품 인스턴스의 저장 열쇠 — 첫 탭은 세션 열쇠 **그대로**(옛 기억을 그대로 물려받는다),
+ *  둘째부터 `#n` 이 붙는다. 두 뷰어가 각자 다른 파일을 펴 두려면 기억도 탭마다 갈라져야 한다(#762). */
+export const slotStoreKey = (mem: string, slot: TabKey): string => (tabNum(slot) >= 2 ? mem + '#' + tabNum(slot) : mem);
+
+/** 어느 탭에 펴 둘지 셸이 정한 뒤, 그 탭의 열쇠에 적는다 — 새로 만들어진 뷰어는 신호를 이미 놓친 뒤라
+ *  저장된 값에서 읽기 때문이다(웹 칸의 openInWebPart 와 같은 규칙). */
+export function rememberViewerPath(mem: string, slot: TabKey, path: string): void {
+  if (EMBEDDED) return;                 // 끼워 넣은 판 — 바깥 사람이 펴 둔 파일을 덮어쓰지 않는다
+  try {
+    const m = JSON.parse(localStorage.getItem(ED_PATH_KEY) || '{}') || {};
+    m[slotStoreKey(mem, slot)] = String(path || '');
+    localStorage.setItem(ED_PATH_KEY, JSON.stringify(m));
+  } catch (_) { /* 저장이 막혀도 알림으로 지금 떠 있는 칸은 바뀐다 */ }
+}
+
 /** 밖(자료 칸)에서 뷰어에 파일을 펴는 **유일한 통로** — 뷰어 칸이 없으면 셸(panes.ts)이 듣고 곁칸에 만든다.
- *  ⚠ 저장을 **먼저** 한 다음 알린다: 새로 만들어진 뷰어는 이 신호를 이미 놓친 뒤라 저장된 값에서 읽는다
- *   (웹 칸의 openInWebPart 와 같은 규칙 — 둘 중 하나만 하면 '처음 한 번'이 조용히 안 먹는다). */
-export function openInViewerPart(ctx: { id: number; memKey: () => string; paneRoot: () => HTMLElement }, path: string): void {
+ *  ⚠ **어느 뷰어에 펼지는 셸이 정한다**(#762): 뷰어가 여럿 뜰 수 있게 되면서, 부르는 쪽이 고를 수 있는 것은
+ *   «지금 보던 뷰어에» 인가 «새 탭에» 인가 둘뿐이다. 그 판정과 저장(rememberViewerPath)은 셸이 한다 —
+ *   부르는 쪽은 탭이 몇 개인지도, 어느 것이 켜져 있는지도 모른다. */
+export function openInViewerPart(ctx: { id: number; paneRoot: () => HTMLElement }, path: string, opts?: { newTab?: boolean }): void {
   const p = String(path || '');
   if (!p) return;
-  if (!EMBEDDED) {                      // 끼워 넣은 판 — 바깥 사람이 펴 둔 파일을 덮어쓰지 않는다
-    try {
-      const m = JSON.parse(localStorage.getItem(ED_PATH_KEY) || '{}') || {};
-      m[ctx.memKey()] = p;
-      localStorage.setItem(ED_PATH_KEY, JSON.stringify(m));
-    } catch (_) { /* 저장이 막혀도 아래 알림으로 지금 떠 있는 칸은 바뀐다 */ }
-  }
-  ctx.paneRoot().dispatchEvent(new CustomEvent(VIEWER_EVT, { detail: { id: ctx.id, path: p } }));
+  ctx.paneRoot().dispatchEvent(new CustomEvent(VIEWER_EVT, { detail: { id: ctx.id, path: p, newTab: !!opts?.newTab } }));
 }

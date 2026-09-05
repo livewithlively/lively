@@ -18,8 +18,9 @@ import { hasBrowserSurface } from './browser-surface.js';
 import { EMBEDDED } from './embed.js';
 import { normWebUrl } from './web-url.js';
 import { filesPart } from './panes-files.js';
-import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_EVT, authHeaders, kindOf, knTitle, pnIcon, pnNote } from './panes-kit.js';
+import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, authHeaders, kindOf, knTitle, pnIcon, pnNote } from './panes-kit.js';
 import { createPreviewKit } from './file-preview.js';
+import type { TabKey } from '../lib/tab-key.js';
 import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
 import { composerAttach } from './compose-attach.js';
 import { createRunPicker } from './run-picker.js';
@@ -78,6 +79,15 @@ export interface PartCtx {
    *  갈아 끼워지고 저장값에도 두 세션 키가 모두 박혔다). 값은 세션마다 갈라 두었는데 신호를 문서 전체로
    *  뿌리면 그 격리가 그 자리에서 무너진다. */
   paneRoot: () => HTMLElement;
+  // ── 탭 = 부품의 **인스턴스**(#762, 원준 2026-09-05 "뷰어는 여러 탭이 뜨게") ─────────────
+  /** 이 부품이 앉은 탭의 열쇠('editor' · 'editor#2'…). 같은 종류가 여럿 떠도 서로를 가릴 수 있다. */
+  slot: TabKey;
+  /** 그 세션 **그리고 이 탭**에만 딸리는 값의 저장 열쇠 — 첫 인스턴스는 memKey() 와 **같다**(옛 기억 보존).
+   *  두 뷰어가 각자 다른 파일을 펴 두려면 기억도 탭마다 갈라져야 한다. */
+  slotKey: () => string;
+  /** 탭에 걸릴 이름을 부품이 정한다(null = 부품 기본 이름). 뷰어는 파일 이름, 웹 칸은 사이트 이름을 건다 —
+   *  같은 종류가 둘 이상 뜨는 순간 「뷰어」 「뷰어」 로는 어느 것이 무엇인지 알 수 없다. */
+  setTabTitle?: (t: string | null) => void;
 }
 
 export interface Part {
@@ -90,21 +100,26 @@ export interface Part {
   currentSession?: () => string | null;
 }
 
-export interface PartDef { type: PartType; name: string; icon: string; hint: string }
+export interface PartDef {
+  type: PartType; name: string; icon: string; hint: string;
+  /** 이 칸에 **여럿** 띄울 수 있나(#762). 셸은 이 값만 보고 [+] 에 「하나 더」를 낸다 —
+   *  부품 이름이 셸에 박히지 않게(뷰어만 예외로 두지 않으려고 만든 자리다). */
+  multi?: boolean;
+}
 
 /** 칸에 넣을 수 있는 것들 — [+] 고르기 목록의 정본. */
 export const PART_DEFS: PartDef[] = [
   { type: 'sessions', name: '세션', icon: 'chat', hint: '이 프로젝트에서 도는 AI 세션들과 바로 말하는 자리입니다.' },
-  { type: 'files', name: '자료', icon: 'folder', hint: '이 프로젝트의 모든 세션이 참고하는 자료입니다. 끌어다 놓거나 붙여넣으면 올라갑니다.' },
+  { type: 'files', name: '자료', icon: 'folder', multi: true, hint: '이 프로젝트의 모든 세션이 참고하는 자료입니다. 끌어다 놓거나 붙여넣으면 올라갑니다.' },
   { type: 'knowledge', name: '지식', icon: 'doc', hint: '세션들이 쓰고 고치는 글입니다. 워크스페이스 전체가 함께 봐요.' },
   { type: 'tasks', name: '할 일', icon: 'task', hint: '태스크 목록입니다. 눌러서 끝냈다고 표시합니다.' },
   { type: 'timeline', name: '타임라인', icon: 'clock', hint: '이 프로젝트에 남은 활동 기록입니다.' },
   { type: 'liv', name: '리브', icon: 'spark', hint: '이 프로젝트를 아는 리브와 대화합니다.' },
   // 이름을 '보관함'이 아니라 **보관한 세션**으로 둔다(원준 2026-08-20) — 무엇을 보관하는지가 이름에서 바로 읽혀야 한다.
   { type: 'archive', name: '보관한 세션', icon: 'box', hint: '닫아 둔 AI 세션입니다. 대화 그대로 다시 살릴 수 있어요.' },
-  { type: 'web', name: '웹', icon: 'globe', hint: '주소를 넣으면 이 칸에서 그 페이지를 봅니다. 문서·레퍼런스를 옆에 띄워 두세요.' },
+  { type: 'web', name: '웹', icon: 'globe', multi: true, hint: '주소를 넣으면 이 칸에서 그 페이지를 봅니다. 문서·레퍼런스를 옆에 띄워 두세요.' },
   { type: 'preview', name: '미리보기', icon: 'globe', hint: '띄워 둔 화면 목록입니다. 누르면 웹 칸에 그 화면이 실립니다.' },
-  { type: 'editor', name: '뷰어', icon: 'eye', hint: '자료의 파일을 골라 이 칸에서 봅니다 — 문서·그림·PDF·시안·영상.' },
+  { type: 'editor', name: '뷰어', icon: 'eye', multi: true, hint: '자료의 파일을 골라 이 칸에서 봅니다 — 문서·그림·PDF·시안·영상. 여러 개를 띄워 나란히 볼 수 있어요.' },
   { type: 'apps', name: '앱', icon: 'grid', hint: '설치된 앱을 고르면 각 앱이 상단의 자기 탭에서 열립니다.' },
 ];
 
@@ -611,7 +626,7 @@ export function openInWebPart(ctx: PartCtx, url: string): void {
   if (!u) return;
   try {
     const m = JSON.parse(localStorage.getItem(WEB_URL_KEY) || '{}') || {};
-    m[ctx.memKey()] = u;
+    m[ctx.slotKey()] = u;
     if (!EMBEDDED) localStorage.setItem(WEB_URL_KEY, JSON.stringify(m));
   } catch (_) { /* 저장이 막혀도 아래 알림으로 지금 떠 있는 칸은 바뀐다 */ }
   ctx.paneRoot().dispatchEvent(new CustomEvent(WEB_OPEN_EVT, { detail: { url: u } }));
@@ -731,7 +746,7 @@ function webPart(ctx: PartCtx): Part {
   const FIT_BASE = 1280;
   const store = (): Record<string, string> => { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (_) { return {}; } };
   // 주소는 **세션마다** 따로 기억한다 — 옆 세션에서 열어 둔 페이지가 이 세션 칸에 뜨면 그건 남의 화면이다(원준 2026-08-20).
-  const keyOf = (): string => ctx.memKey();
+  const keyOf = (): string => ctx.slotKey();
   // 주소 정규화는 web-url.ts 한 곳에서 — 우리 오리진이면 ?embed=1 을 붙여 싣는다(표를 단 판은 탭·배치·주소를
   //  기억하지도 기억되지도 않는다. 안 붙이면 같은 사이트라 localStorage 를 공유해, 칸 안 라이블리가 바깥이
   //  보던 화면을 그대로 복제한다 — 실측 2026-08-21).
@@ -770,6 +785,8 @@ function webPart(ctx: PartCtx): Part {
   const load = (u: string, record: boolean): void => {
     asleep = '';                                 // 사람이 새 주소로 갔다 — 재우기 전 주소로 되돌릴 이유가 없어졌다
     input.value = u;
+    //  탭 이름 = 지금 보는 사이트(#762) — 웹 칸도 여럿 뜰 수 있으므로 「웹」 「웹」 이 되지 않게.
+    try { ctx.setTabTitle?.(u ? new URL(u).host.replace(/^www\./, '') : null); } catch (_) { ctx.setTabTitle?.(null); }
     frame.setAttribute('src', u);
     if (record) pushTrail(u);
     syncNav();
@@ -992,7 +1009,7 @@ function viewerPart(ctx: PartCtx): Part {
   let shown: Shown | null = null;
   const zoom = makeZoom({
     stage,
-    keyOf: () => ctx.memKey(),
+    keyOf: () => ctx.slotKey(),
     baseW: () => (shown ? shown.baseW() : 0),
     minFit: 0.05,   // 아주 큰 그림도 일단 칸에 담기게 — 자세히 볼 사람은 [+] 로 키운다
     paint: (z) => {
@@ -1068,10 +1085,10 @@ function viewerPart(ctx: PartCtx): Part {
   // 무엇을 열어 두었나도 **세션마다** 따로 — 자료(파일 자체)는 프로젝트 공용이지만, '내가 지금 뭘 펴 놨나'는 내 세션의 것이다.
   const remember = (p2: string): void => {
     if (EMBEDDED) return;   // 끼워 넣은 판 — 바깥 사람이 펴 둔 파일을 덮어쓰지 않는다
-    try { const m = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; m[ctx.memKey()] = p2; localStorage.setItem(KEY, JSON.stringify(m)); } catch (_) { /* noop */ }
+    try { const m = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; m[ctx.slotKey()] = p2; localStorage.setItem(KEY, JSON.stringify(m)); } catch (_) { /* noop */ }
   };
   const remembered = (): string => {
-    try { return (JSON.parse(localStorage.getItem(KEY) || '{}') || {})[ctx.memKey()] || ''; } catch (_) { return ''; }
+    try { return (JSON.parse(localStorage.getItem(KEY) || '{}') || {})[ctx.slotKey()] || ''; } catch (_) { return ''; }
   };
 
   async function loadList(): Promise<void> {
@@ -1126,6 +1143,9 @@ function viewerPart(ctx: PartCtx): Part {
   }
 
   function paintBar(): void {
+    //  탭 이름은 **펴 둔 파일**이다(#762) — 뷰어가 둘 이상 뜨면 「뷰어」 「뷰어」 로는 어느 것이 무엇인지 모른다.
+    //   목록 화면(펴 둔 것 없음)이면 부품 기본 이름으로 돌아간다.
+    ctx.setTabTitle?.(path ? base(path) : null);
     if (!path) {
       bar.replaceChildren(upBtn(true), el('span', { class: 'pn-fine', text: list.length ? list.length + '개 · 최근 먼저' : '' }));
       return;
@@ -1364,13 +1384,16 @@ function viewerPart(ctx: PartCtx): Part {
 
   // 자료 칸에서 [뷰어에서 보기] 로 보낸 파일 — 이 칸이 받아 연다.
   const onSend = (e: Event): void => {
-    const d = (e as CustomEvent).detail as { id: number; path: string } | undefined;
+    const d = (e as CustomEvent).detail as { id: number; path: string; slot?: string } | undefined;
     if (!d || Number(d.id) !== ctx.id || !d.path) return;
+    //  ⚠ 뷰어가 여럿 뜰 수 있다(#762) — **내 앞으로 온 것만** 받는다. 셸이 어느 탭에 펼지 정해 slot 을 적어 보낸다.
+    //   slot 이 없는 옛 신호는 첫 뷰어가 받는다(그 판엔 뷰어가 하나뿐이었다).
+    if (d.slot ? d.slot !== ctx.slot : ctx.slot !== 'editor') return;
     if (!list.some((f) => f.path === d.path)) void loadList();
     void go(d.path);
   };
   // ⚠ window 가 아니라 **이 곁칸**에서 듣는다 — 창에 달면 열려 있는 모든 세션 탭의 뷰어가 같이 갈아입는다.
-  ctx.paneRoot().addEventListener(VIEWER_EVT, onSend);
+  ctx.paneRoot().addEventListener(VIEWER_TO_EVT, onSend);
 
   const openRemembered = (): void => {
     const last = remembered();
@@ -1433,7 +1456,7 @@ function viewerPart(ctx: PartCtx): Part {
         if (f) reopenIfChanged(f.mtime + ':' + f.size);
       });
     },
-    destroy: () => { offSess(); zoom.destroy(); pv.destroy(); window.clearInterval(watch); ctx.paneRoot().removeEventListener(VIEWER_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
+    destroy: () => { offSess(); zoom.destroy(); pv.destroy(); window.clearInterval(watch); ctx.paneRoot().removeEventListener(VIEWER_TO_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
   };
 }
 

@@ -304,12 +304,21 @@ export function filesPart(ctx: PartCtx): Part {
     }
     paintSel();
   }
-  function open(f: FileItem): void {
+  /** 파일을 편다. `newTab` 이면 **새 뷰어 탭**에 — 여러 개를 나란히 보려면 이 길이다(#762, 원준 2026-09-05:
+   *  "자료에 있는 파일 중에서 한 번에 하나만 열 수 있는게 이상해서"). */
+  function open(f: FileItem, newTab = false): void {
     if (f.type === 'dir') { goto(f.path); return; }
     // 파일을 누르면 **곁칸의 뷰어 탭**으로 편다 (#762, 원준 2026-09-04: "따로 뷰어 위젯을 띄우지 않더라도
     //  곁칸에서 탭으로 뜨면 좋겠다"). 종전엔 화면 한가운데 모달이라 ① 그 파일을 보면서 세션을 볼 수 없었고
     //  ② 뷰어 칸을 미리 넣어 둔 사람만 칸에서 볼 수 있었다. 칸이 없으면 셸이 이 신호를 듣고 만든다.
-    openInViewerPart(ctx, f.path);
+    openInViewerPart(ctx, f.path, { newTab });
+  }
+  /** 고른 것 여럿을 편다 — **첫 장은 보던 뷰어에, 나머지는 각자 새 탭에**. 종전엔 전부 같은 칸에 밀어 넣어
+   *  마지막 하나만 남았다(「N개 열기」가 사실상 「마지막 것 열기」였다). 상한 8은 부르는 쪽이 이미 건다. */
+  function openMany(list: FileItem[]): void {
+    const files = list.filter((x) => x.type !== 'dir');
+    if (!files.length) { for (const d of list.slice(0, 1)) open(d); return; }   // 폴더만 골랐으면 첫 폴더로 들어간다
+    files.forEach((f, i) => open(f, i > 0));
   }
   function download(f: FileItem): void {
     window.open(apiUrl(pUrl('/file?path=' + encodeURIComponent(f.path) + '&download=1')), '_blank');
@@ -322,7 +331,8 @@ export function filesPart(ctx: PartCtx): Part {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') { e.preventDefault(); sel.clear(); for (const f of ordered) sel.add(f.path); paintSel(); return; }
     if (e.key === 'Escape' && sel.size) { e.preventDefault(); sel.clear(); paintSel(); return; }
     if ((e.key === 'Backspace' || e.key === 'Delete') && sel.size) { e.preventDefault(); void removeMany(selItems()); return; }
-    if (e.key === 'Enter' && sel.size === 1) { e.preventDefault(); const f = selItems()[0]; if (f) open(f); }
+    //  Enter — 하나면 그대로, 여럿이면 나란히 편다(우클릭 메뉴의 「N개 나란히 열기」와 같은 일).
+    if (e.key === 'Enter' && sel.size) { e.preventDefault(); openMany(selItems().slice(0, 8)); }
   });
 
   // ── 우클릭 메뉴 ─────────────────────────────────────────────────────────
@@ -332,9 +342,11 @@ export function filesPart(ctx: PartCtx): Part {
     const many = selItems();
     const rows: Array<{ label: string; run?: () => void; danger?: boolean; sep?: boolean; off?: boolean }> = [];
     if (f) {
-      rows.push({ label: many.length > 1 ? `${many.length}개 열기` : (f.type === 'dir' ? '폴더 열기' : '열기'), run: () => { for (const x of many.slice(0, 8)) open(x); } });
+      rows.push({ label: many.length > 1 ? `${many.length}개 나란히 열기` : (f.type === 'dir' ? '폴더 열기' : '열기'), run: () => openMany(many.slice(0, 8)) });
       // 왼쪽 클릭과 같은 일 — 뷰어 칸이 없으면 셸이 곁칸에 만든다(종전엔 "먼저 [뷰어]를 넣어 주세요"로 돌려보냈다).
-      if (f.type !== 'dir') rows.push({ label: '뷰어에서 보기', run: () => openInViewerPart(ctx, f.path) });
+      if (f.type !== 'dir') rows.push({ label: '뷰어에서 보기', run: () => open(f) });
+      //  새 탭 — 지금 보던 것을 **두고** 하나 더 편다(#762). ⌘/Ctrl+두 번 누르기와 같은 일.
+      if (f.type !== 'dir') rows.push({ label: '새 뷰어 탭에서 보기', run: () => open(f, true) });
       if (f.type !== 'dir') rows.push({ label: '내려받기', run: () => { for (const x of many) if (x.type !== 'dir') download(x); } });
       rows.push({ label: '이름 바꾸기', off: many.length !== 1, run: () => { renameAt = f.path; render(); } });
       if (cwd) rows.push({ label: '상위 폴더로 옮기기', run: () => void moveMany(many.map((x) => x.path), cwd.includes('/') ? cwd.slice(0, cwd.lastIndexOf('/')) : '') });
@@ -522,7 +534,8 @@ export function filesPart(ctx: PartCtx): Part {
     const n = node as HTMLElement;
     if (editing) { n.classList.add('editing'); return n; }   // 이름을 고치는 중엔 고르기·열기·끌기가 다 쉰다
     n.addEventListener('click', (e: MouseEvent) => { e.stopPropagation(); clickSelect(f, e); });
-    n.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); open(f); });
+    //  ⌘/Ctrl 을 누른 채면 **새 뷰어 탭**으로 — 브라우저에서 링크를 새 탭으로 여는 그 손짓 그대로(#762).
+    n.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); open(f, e.metaKey || e.ctrlKey); });
     n.addEventListener('contextmenu', (e: MouseEvent) => menuFor(f, e));
     wireDrag(n, f);
     return n;

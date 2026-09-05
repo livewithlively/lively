@@ -140,15 +140,40 @@ ok(isEmbedded("?embed=0") === false && isEmbedded("?embed=x") === false && isEmb
     "E23 뷰어를 부르는 통로(openInViewerPart)가 **이 곁칸**에 대고 알린다");
   ok(!/window\.dispatchEvent\(new CustomEvent\(VIEWER_EVT/.test(KIT) && !/window\.dispatchEvent\(new CustomEvent\('pn-viewer-open'/.test(KIT + FILES),
     "E23 ★ window 로 쏘면 모든 세션 탭의 뷰어가 같은 파일을 연다 — 웹 칸과 같은 뿌리");
-  ok(/openInViewerPart\(ctx, f\.path\)/.test(FILES) && !/dispatchEvent\(new CustomEvent\('pn-viewer-open'/.test(FILES),
+  ok(/openInViewerPart\(ctx, f\.path/.test(FILES) && !/dispatchEvent\(new CustomEvent\('pn-viewer-open'/.test(FILES),
     "E24 자료 칸은 그 통로만 쓴다 — 사본을 두면 한쪽만 고쳐져 규율이 갈라진다");
-  ok(/localStorage\.setItem\(ED_PATH_KEY/.test(KIT) && /if \(!EMBEDDED\)/.test(KIT),
+  ok(/localStorage\.setItem\(ED_PATH_KEY/.test(KIT) && /if \(EMBEDDED\) return;/.test(KIT),
     "E24 ★ 펴 둔 파일은 이 세션 열쇠에만 적는다(끼워 넣은 판에서는 아예 안 적는다 — 바깥 사람 것을 덮는다)");
 
   const viewer = VIEWER_PART();
-  ok(/paneRoot\(\)[\s\S]{0,120}addEventListener\(VIEWER_EVT/.test(viewer) && !/window\.addEventListener\(VIEWER_EVT/.test(viewer),
+  ok(/paneRoot\(\)[\s\S]{0,120}addEventListener\(VIEWER_TO_EVT/.test(viewer) && !/window\.addEventListener\(VIEWER_(TO_)?EVT/.test(viewer),
     "E25 뷰어 칸이 이 곁칸에서 듣는다");
-  ok(/paneRoot\(\)\.removeEventListener\(VIEWER_EVT/.test(viewer) && !/window\.removeEventListener\(VIEWER_EVT/.test(viewer),
+
+  // ── 뷰어가 **여럿** 떠도 엉뚱한 칸이 갈아입지 않는다 (#762, 원준 2026-09-05) ──────────────
+  //  탭이 부품의 인스턴스가 되면서 같은 곁칸에 뷰어가 둘 이상 산다. 신호를 그냥 뿌리면 셋이 같이 갈아입는다 —
+  //  그건 '여러 파일 동시에 보기'를 만들면서 그 기능을 스스로 깨는 것이다.
+  ok(/d\.slot \? d\.slot !== ctx\.slot/.test(viewer),
+    "E29 ★ 뷰어는 **자기 앞으로 온 신호만** 받는다(slot 이 제 것이 아니면 무시)");
+  ok(/VIEWER_TO_EVT/.test(PANES) && /VIEWER_EVT/.test(PANES) && !/dispatchEvent\(new CustomEvent\(VIEWER_EVT/.test(PANES),
+    "E29 요청(VIEWER_EVT)과 배달(VIEWER_TO_EVT)이 다른 이름이다 — 같으면 셸이 자기 신호를 되받아 무한고리");
+  ok(/rememberViewerPath\(ctx\.memKey\(\), key, d\.path\)[\s\S]{0,80}if \(!found\) addTab\(zone, key\)/.test(PANES),
+    "E30 ★ 열쇠를 먼저 잡고 **기억을 적은 뒤** 탭을 만든다 — 순서가 뒤면 갓 만든 뷰어가 빈 화면을 한 번 그린다");
+  ok(/slotStoreKey\s*=\s*\(mem: string, slot: TabKey\)[^\n]*tabNum\(slot\) >= 2 \? mem \+ '#' \+ tabNum\(slot\) : mem/.test(KIT),
+    "E30 첫 탭의 저장 열쇠는 **종전 그대로**다 — 바뀌면 사람들이 펴 두었던 파일·주소·배율이 한 번 리셋된다");
+
+  // ── 칸을 그리는 붓 둘이 서로의 일을 뺏지 않는다 (#762 실측 사고) ──────────────────────
+  //  탭 이름만 갈아 끼우는 붓(paintTabs)을 들이면서 **부품을 세우는 블록이 그쪽으로 넘어가**, 곁칸이
+  //  통째로 빈 화면이 됐다(dev 실화면에서 잡았다 — JS 에러 없이 조용히 비어 있어 더 위험했다).
+  //  그 둘의 경계를 여기서 잠근다.
+  const pp = slice(PANES, "function paintPane(zone: Zone): void {", "\n  function paintTabs");
+  const pt = slice(PANES, "function paintTabs(zone: Zone): void {", "\n  function paintAll");
+  ok(/if \(act\) ensurePart\(pane, act\);/.test(pp),
+    "E31 ★ paintPane 이 켜진 탭의 부품을 **세운다** — 이게 빠지면 그 칸이 조용히 빈 화면이 된다");
+  ok(/p\.root\.hidden = t !== act/.test(pp),
+    "E31 켜진 부품만 보이고 나머지는 살아 있다(탭을 오가도 스크롤·대화가 그대로)");
+  ok(!/ensurePart\(/.test(pt),
+    "E31 paintTabs 는 **이름과 켜짐만** 만진다 — 부품을 여기서 세우면 두 붓이 같은 일을 두 번 한다");
+  ok(/paneRoot\(\)\.removeEventListener\(VIEWER_TO_EVT/.test(viewer) && !/window\.removeEventListener\(VIEWER_(TO_)?EVT/.test(viewer),
     "E25 달았던 그 자리에서 끊는다");
 }
 
