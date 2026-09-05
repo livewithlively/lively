@@ -160,6 +160,19 @@ ok(isEmbedded("?embed=0") === false && isEmbedded("?embed=x") === false && isEmb
     "E30 ★ 열쇠를 먼저 잡고 **기억을 적은 뒤** 탭을 만든다 — 순서가 뒤면 갓 만든 뷰어가 빈 화면을 한 번 그린다");
   ok(/slotStoreKey\s*=\s*\(mem: string, slot: TabKey\)[^\n]*tabNum\(slot\) >= 2 \? mem \+ '#' \+ tabNum\(slot\) : mem/.test(KIT),
     "E30 첫 탭의 저장 열쇠는 **종전 그대로**다 — 바뀌면 사람들이 펴 두었던 파일·주소·배율이 한 번 리셋된다");
+
+  // ── 칸을 그리는 붓 둘이 서로의 일을 뺏지 않는다 (#762 실측 사고) ──────────────────────
+  //  탭 이름만 갈아 끼우는 붓(paintTabs)을 들이면서 **부품을 세우는 블록이 그쪽으로 넘어가**, 곁칸이
+  //  통째로 빈 화면이 됐다(dev 실화면에서 잡았다 — JS 에러 없이 조용히 비어 있어 더 위험했다).
+  //  그 둘의 경계를 여기서 잠근다.
+  const pp = slice(PANES, "function paintPane(zone: Zone): void {", "\n  function paintTabs");
+  const pt = slice(PANES, "function paintTabs(zone: Zone): void {", "\n  function paintAll");
+  ok(/if \(act\) ensurePart\(pane, act\);/.test(pp),
+    "E31 ★ paintPane 이 켜진 탭의 부품을 **세운다** — 이게 빠지면 그 칸이 조용히 빈 화면이 된다");
+  ok(/p\.root\.hidden = t !== act/.test(pp),
+    "E31 켜진 부품만 보이고 나머지는 살아 있다(탭을 오가도 스크롤·대화가 그대로)");
+  ok(!/ensurePart\(/.test(pt),
+    "E31 paintTabs 는 **이름과 켜짐만** 만진다 — 부품을 여기서 세우면 두 붓이 같은 일을 두 번 한다");
   ok(/paneRoot\(\)\.removeEventListener\(VIEWER_TO_EVT/.test(viewer) && !/window\.removeEventListener\(VIEWER_(TO_)?EVT/.test(viewer),
     "E25 달았던 그 자리에서 끊는다");
 }
