@@ -28,6 +28,7 @@
 //  ⚠ #2460 — 그중 **사람이 고른 것**(고정·접힘·묶는 축)은 서버가 정본이고 브라우저는 첫 페인트용
 //   캐시다(shell-prefs.ts). 선언 한 줄이 어느 쪽인지 말한다 — shellPrefStore = 계정 · deviceStore = 이 기기.
 import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
+import { findMatcher } from '../lib/find.js';
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsTouch } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버다(선언 한 줄이 그걸 말한다)
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
@@ -868,43 +869,8 @@ function fltCount(): number { return (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) 
 //     한글은 조합 중에도 이 상태를 지난다(ㅍ → 프 → 프ㄹ …) — 그래서 이건 '기능'이기 전에
 //     **치는 도중 화면이 죽지 않게 하는 것**이다.
 //  잣대를 하나로 두는 이유는 이 파일의 다른 규율과 같다: 구역마다 새 방식을 만들지 않는다.
-const CHO = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'];
-/** 한글 음절은 초성 한 자로, 나머지 글자(영문·숫자·호환자모)는 그대로. '프로젝트 762' → 'ㅍㄹㅈㅌ 762' */
-function chosung(s: string): string {
-  let out = '';
-  for (const ch of s) {
-    const c = ch.codePointAt(0) || 0;
-    out += c >= 0xac00 && c <= 0xd7a3 ? CHO[Math.floor((c - 0xac00) / 588)] : ch;
-  }
-  return out;
-}
-//  칸 사이 경계는 남기고(줄바꿈) 칸 **안의** 띄어쓰기만 지운다 — 다 지우면 '…프로젝트' + '세션…' 이
-//  한 낱말로 붙어 엉뚱한 것이 걸린다(제목 끝과 다음 칸 머리를 잇는 질의가 통과한다).
-const deSpace = (s: string): string => s.replace(/[ \t\u00a0]+/g, '');
-/** 질의에 자모가 섞여 있나 — 초성 축은 이때만 본다. 늘 보면 '세션'(→ㅅㅅ)이 온 목록을 통과시킨다. */
-const HAS_JAMO = /[ㄱ-ㅎ]/;
-/**
- * 사이드바 찾기 판정기. 빈 질의는 늘 참(거르지 않는다).
- *  · 공백으로 끊은 **낱말 전부**가 들어 있어야 한다(AND) — 순서는 안 본다.
- *  · 각 낱말은 띄어쓰기를 지운 축에서 찾는다 — 「새세션」 ↔ '새 세션'.
- *  · 자모가 섞인 낱말은 **초성 축**에서도 찾는다 — 「ㅍㄹㅈㅌ」·조합 중인 「프로젝ㅌ」.
- */
-function findMatcher(raw: string): (...parts: Array<string | null | undefined>) => boolean {
-  const q = String(raw || '').trim().toLowerCase();
-  if (!q) return () => true;
-  const toks = q.split(/\s+/).filter(Boolean);
-  return (...parts): boolean => {
-    const hay = parts.filter(Boolean).join('\n').toLowerCase();
-    const flat = deSpace(hay);
-    let cho = '';
-    return toks.every((t) => {
-      if (flat.includes(deSpace(t))) return true;
-      if (!HAS_JAMO.test(t)) return false;
-      if (!cho) cho = deSpace(chosung(hay));
-      return cho.includes(deSpace(chosung(t)));
-    });
-  };
-}
+//  ⭐ 잣대 자체는 **잎 모듈**(lib/find.ts)로 내렸다(#762) — 자료 칸·타임라인도 같은 잣대로 찾는다.
+//   여기 사본을 되만들지 마라: 한쪽만 고치면 같은 질의가 구역마다 다르게 걸린다.
 /** 홈·[AI 세션] 목록의 행 하나 — **화면에 보이는 것**(제목·부제·내 마지막 말·프로젝트 이름)을 그대로 찾는 대상으로 삼는다. */
 function instMatch(raw: string): (i: SideInstance) => boolean {
   const m = findMatcher(raw);

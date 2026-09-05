@@ -17,6 +17,7 @@
 //    2 한 일 — 읽음 · 찾아봄 · 검사(빌드·테스트)
 //    3 뒷일 — 지시·잔 편집·배관(머지·푸시·서버 반영)
 import { el, personFace, sv } from './core.js';
+import { findMatcher } from './lib/find.js';
 
 // ── 산출물(#1819 안 A) ────────────────────────────────────────────────────────
 //  "눌러서 따로 볼 수 있는 것" — 답 아래 **결과 줄**로 선다. 무엇인지만 여기 있고,
@@ -221,6 +222,24 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
     try { localStorage.setItem(COMPACT_KEY, compact ? '1' : '0'); } catch (_) { /* noop */ }
     paint();
   });
+  // ── 찾기 (#762, 원준 2026-09-04 "타임라인 안에서 검색기능도 넣어줘") ────────────────────────
+  //  긴 세션에서 "그때 그거 어디서 시켰지"를 스크롤로 찾게 두지 않는다. 잣대는 사이드바와 **같은 것**을 쓴다
+  //  (lib/find.ts — 띄어쓰기 무시 · 낱말 순서 무관 · 초성). 찾는 대상은 **화면에 보이는 말**: 지시·답·항목 제목,
+  //  그리고 접어 둔 지시 전문(붙여넣은 덩어리 안의 한 줄로도 찾을 수 있어야 그 장을 되찾는다).
+  //  ⚠ 한글 조합 중에는 다시 그리지 않는다 — 매 글자 재렌더는 조합을 끊는다(사이드바와 같은 규율 #1958).
+  let query = '';
+  const findIn = el('input', {
+    class: 'tl-find', type: 'search', placeholder: '이 세션에서 찾기', 'aria-label': '타임라인에서 찾기',
+  }) as HTMLInputElement;
+  let composing = false;
+  findIn.addEventListener('compositionstart', () => { composing = true; });
+  findIn.addEventListener('compositionend', () => { composing = false; query = findIn.value; paint(); });
+  findIn.addEventListener('input', () => { if (composing) return; query = findIn.value; paint(); });
+  findIn.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Escape' && !composing) { e.stopPropagation(); findIn.value = ''; query = ''; paint(); } });
+  /** 이 항목이 질의에 걸리나 — 보이는 말과 접어 둔 전문까지 본다. */
+  const hits = (it: TlItem | null | undefined): boolean => !!it && matcher(it.label, it.detail, it.full, it.verb);
+  let matcher = findMatcher('');
+
   const scrollEl = el('div', { class: 'tl-scroll' }, list, emptyEl, noteEl);
   ordBtn.addEventListener('click', () => {
     newestFirst = !newestFirst;
@@ -231,7 +250,7 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
   });
 
   const root = el('section', { class: 'tl-wrap' },
-    el('div', { class: 'v2-aside-h' }, el('b', { text: '타임라인' }), el('span', { class: 'tl-scope', text: ctx.scope }), ordBtn, cmpBtn, countEl),
+    el('div', { class: 'v2-aside-h' }, el('b', { text: '타임라인' }), el('span', { class: 'tl-scope', text: ctx.scope }), findIn, ordBtn, cmpBtn, countEl),
     factsEl,
     scrollEl);
   host.append(root);
@@ -346,7 +365,8 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
       if (it.verb === '씀' || it.verb === '만듦') cur.verb = it.verb;   // 만든 것이 고친 것을 이긴다
       if (it.children && it.children.length) cur.children = [...(cur.children || []), ...it.children];
     }
-    const all = [...by.values()].sort((a2, b2) => tsNum(a2.ts) - tsNum(b2.ts));
+    const all0 = [...by.values()].sort((a2, b2) => tsNum(a2.ts) - tsNum(b2.ts));
+    const all = query.trim() ? all0.filter(hits) : all0;
     return { keep: all.filter(isOutcome), rest: all.filter((it) => !isOutcome(it)) };
   }
   function paintOutcomes(): void {
@@ -405,7 +425,10 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
       cur.kids.push(it);
     }
     // allSays 면 아직 아무 결과도 없는 지시도 선다(세션 발자취의 줄기는 '내가 뭘 시켰나'다).
-    return out.filter((c) => (c.q ? (ctx.allSays || !!c.a || c.kids.length > 0 || c.outs.length > 0) : (!!c.a || c.kids.length > 0 || c.outs.length > 0)));
+    const shown = out.filter((c) => (c.q ? (ctx.allSays || !!c.a || c.kids.length > 0 || c.outs.length > 0) : (!!c.a || c.kids.length > 0 || c.outs.length > 0)));
+    //  찾는 중이면 **그 장 전체**를 놓고 판정한다 — 지시·답·남은 것 어디에 걸려도 그 장을 되찾을 수 있어야 한다.
+    if (!query.trim()) return shown;
+    return shown.filter((c) => hits(c.q) || hits(c.a) || c.kids.some(hits) || c.outs.some(hits));
   }
 
   /** 질문 한 줄 — 붙여넣은 덩어리는 칩으로 접고, 전문은 눌러서 편다. */
@@ -525,6 +548,8 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
   function paint(): void {
     // 과거순은 새 항목이 **아래**로 붙는다 — 바닥을 보고 있던 사람은 계속 바닥에 있어야 방금 일어난 일이 보인다.
     const stick = !newestFirst && scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 24;
+    matcher = findMatcher(query);          // 잣대는 한 판에 한 번만 만든다(항목마다 만들면 긴 세션에서 느려진다)
+    emptyEl.textContent = query.trim() ? '찾는 것이 없어요 — 다른 말로 찾아보세요.' : (ctx.empty || '아직 기록이 없어요.');
     paintHeadBtns();
     if (ctx.chapters) paintQA();
     else if (ctx.outcomes) paintOutcomes();
@@ -535,7 +560,7 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
     type Row = { head: TlItem; kids: TlItem[] } | { solo: TlItem };
     const rows: Row[] = [];
     let cur: { head: TlItem; kids: TlItem[] } | null = null;
-    for (const it of items) {
+    for (const it of query.trim() ? items.filter(hits) : items) {
       if (isHead(it)) { cur = { head: it, kids: [] }; rows.push(cur); continue; }
       if (cur) cur.kids.push(it); else rows.push({ solo: it });
     }

@@ -19,6 +19,7 @@ import { EMBEDDED } from './embed.js';
 import { normWebUrl } from './web-url.js';
 import { filesPart } from './panes-files.js';
 import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_EVT, authHeaders, kindOf, knTitle, pnIcon, pnNote } from './panes-kit.js';
+import { createPreviewKit } from './file-preview.js';
 import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
 import { composerAttach } from './compose-attach.js';
 import { createRunPicker } from './run-picker.js';
@@ -1042,6 +1043,9 @@ function viewerPart(ctx: PartCtx): Part {
   let taken = new Set<string>();
   const urls: string[] = [];
   const fileUrl = (p2: string): string => apiUrl('/api/ui/v6/projects/' + ctx.id + '/file?path=' + encodeURIComponent(p2));
+  //  목록에도 **미리보기**를 세운다(#762, 원준 2026-09-04 "뷰어도 미리보기 필요함") — 자료 칸과 같은 기계다.
+  //  아이콘만 스무 줄이면 "그 파일이 어느 거였는지" 를 이름으로만 골라야 한다(자료 칸을 격자로 바꾼 것과 같은 이유).
+  const pv = createPreviewKit({ fileUrl, dead: () => ctx.dead() });
   // 무엇을 열어 두었나도 **세션마다** 따로 — 자료(파일 자체)는 프로젝트 공용이지만, '내가 지금 뭘 펴 놨나'는 내 세션의 것이다.
   const remember = (p2: string): void => {
     if (EMBEDDED) return;   // 끼워 넣은 판 — 바깥 사람이 펴 둔 파일을 덮어쓰지 않는다
@@ -1140,8 +1144,11 @@ function viewerPart(ctx: PartCtx): Part {
       }
       rows.replaceChildren(...hit.slice(0, 300).map((f) => {
         const k = kindOf(f.path);
-        return el('button', { class: 'pn-frow2', type: 'button', title: f.path, onclick: () => void open(f.path) },
-          el('span', { class: 'pn-fic sm ' + k.kind }, pnIcon(k.kind === 'img' || k.kind === 'video' ? 'img' : 'doc', 'pn-i')),
+        const ic = el('span', { class: 'pn-fic pv ' + k.kind, 'data-pv': f.path, 'data-pvk': k.kind, 'data-pvs': String(f.size || 0) },
+          pnIcon(k.kind === 'page' ? 'note' : k.kind === 'img' || k.kind === 'video' ? 'img' : 'doc', 'pn-i')) as HTMLElement;
+        if (k.kind !== 'file') pv.watch(ic, f.path, k.kind, f.size || 0);
+        return el('button', { class: 'pn-frow2 pv', type: 'button', title: f.path, onclick: () => void open(f.path) },
+          ic,
           el('b', { class: 'pn-fname1', text: base(f.path) }),
           el('span', { class: 'pn-fcol k', text: k.type }),
           el('span', { class: 'pn-fcol s', text: fmtSize(f.size || 0) }),
@@ -1149,6 +1156,7 @@ function viewerPart(ctx: PartCtx): Part {
       }));
     };
     search.addEventListener('input', () => { q = search.value; draw(); });
+    pv.reset();
     draw();
     showPlain(el('div', { class: 'pn-ed-pick2' }, search, rows), true);
     window.setTimeout(() => { if (q) search.focus(); }, 0);
@@ -1303,7 +1311,7 @@ function viewerPart(ctx: PartCtx): Part {
         if (f) reopenIfChanged(f.mtime + ':' + f.size);
       });
     },
-    destroy: () => { offSess(); zoom.destroy(); window.clearInterval(watch); ctx.paneRoot().removeEventListener(VIEWER_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
+    destroy: () => { offSess(); zoom.destroy(); pv.destroy(); window.clearInterval(watch); ctx.paneRoot().removeEventListener(VIEWER_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
   };
 }
 
