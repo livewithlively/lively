@@ -11,6 +11,7 @@ import { renderOnboarding, onboardingDone, markWelcomeSeen } from './onboarding.
 import { $view, anchoredPopover, api, el, state, toast } from '../core.js';
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsSync } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
+import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘 일감'을 자르는 자(달력 자정이 아니다)
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, nativeAppByRoute, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
@@ -1581,7 +1582,10 @@ function sideInstances(): SideInstance[] {
     //   어디에도 없었다. 사람 눈엔 "오늘 쓴 게 왜 안 보이지"다.
     //  ⚠ 그렇다고 지난 세션을 **전부** 세우지는 않는다(내 세션 320건 중 314건이 그 부류다) — 그건 목록이 아니라
     //   명부고, [AI 세션] 구역이 이미 하는 일이다. 홈은 '오늘 붙들고 있는 것'이라 **오늘 것까지만** 받는다.
-    if (!liveNow && dayGroup(s.lastSeen || 0, now) !== '오늘') continue;
+    //  ⚠ 자르는 자는 **달력 자정이 아니라** '오늘 일감의 시작'이다(lib/sess-fold workDayStart). 자정으로 자르면
+    //   새벽에 일하는 사람의 목록이 통째로 빈다 — 원준 2026-09-05 01:20 실측: 그 시각 그 사람의 멈춘 세션이 홈
+    //   목록에 **0줄**이었고, 찾던 세션은 최신에서 2번째였다("폴더를 펼쳐도 그 안에서 안 보였다"). 낮에는 자정과 같다.
+    if (!liveNow && (s.lastSeen || 0) < workDayStart(now)) continue;
     //  지난 세션엔 상태 점을 주지 않는다 — 점은 '지금 벌어지는 일'을 말하는 자리다(#1954 §4).
     //   구분은 영역이 아니라 행이 진다(past → .v2-app-inst--past, 원준 지시 2026-08-27).
     put('sess:' + s.id, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0,   // lastSeen 은 ms(views.ts)

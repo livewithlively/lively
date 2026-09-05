@@ -36,3 +36,29 @@ export function splitFolderRows<T extends { live?: boolean; alive?: boolean; las
   const cold = past.filter((s) => !isWarmSess(s, now));
   return { now: [...live, ...warm], cold };
 }
+
+// ── 홈 목록이 **아예 받느냐**의 자 — 위 isWarmSess 와 묻는 것이 다르다 ─────────────────
+//  isWarmSess 는 «프로젝트 폴더 **안에서** 접느냐»를 묻는다(목록이 작다 → 하루 창이면 충분).
+//  여기서 묻는 것은 «홈 목록이 그 줄을 **세우느냐**»다. 홈은 '오늘 붙들고 있는 것'이고 명부가 아니라서
+//  (내 세션 320건 중 314건이 지난 세션이다) 하루 창을 그대로 쓰면 목록이 명부가 된다 — 실측으로 헤비 유저
+//  한 사람이 25줄에서 77줄이 됐다. 그래서 이 축은 **날짜**로 자른다.
+//
+//  ⚠ 다만 달력 자정으로 자르면 **새벽에 일하는 사람의 목록이 통째로 빈다**. 원준 2026-09-05 01:20 실측:
+//   그 시각 그 사람의 멈춘 세션이 홈 목록에 **0줄**이었고, 찾던 「투어 영상 제작」은 최신에서 2번째였다.
+//   자정을 막 넘겼다고 해서 어젯밤에 하던 일이 남의 일이 되지는 않는다 — 밤은 아직 안 끝났다.
+
+/** 하루가 시작한다고 치는 시각(그 지역 시간). 새벽 5시 — 이 앞은 아직 '어젯밤'이다. */
+export const DAY_START_HOUR = 5;
+
+/**
+ * '오늘 일감'의 시작 시각 — **자정과 '가장 최근 새벽 5시' 중 이른 쪽**.
+ *  · 낮(05:00 이후)이면 그냥 자정이다 — 종전과 **같다**(낮에 목록이 길어지지 않는다).
+ *  · 새벽(00:00~04:59)이면 어제 05:00 까지 거슬러 받는다 — 그 시간에 일하는 사람의 '오늘'은 아직 어젯밤이다.
+ *  둘 중 **이른 쪽**이라 어느 시각에도 종전보다 좁아지지 않는다(새벽 2시에 쓴 세션이 아침에 사라지지 않는다).
+ */
+export function workDayStart(now: number): number {
+  const d = new Date(now);
+  const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const five = midnight + DAY_START_HOUR * 3600_000;
+  return now < five ? five - 86_400_000 : midnight;
+}
