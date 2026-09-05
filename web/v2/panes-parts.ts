@@ -1157,10 +1157,17 @@ function viewerPart(ctx: PartCtx): Part {
   /** 파일을 편다. `fresh` 면 브라우저 캐시를 건너뛰고 **다시 받는다** — 안 그러면 방금 바뀐 파일도 옛 것이 뜬다.
    *  `quiet` 면 «여는 중…» 을 안 띄운다 — 살아 있는 미리보기가 다시 펼 때 화면이 깜빡이지 않게(옛 그림이 새 그림이 올 때까지 남는다). */
   async function open(p2: string, fresh = false, quiet = false): Promise<void> {
+    //  ⚠ **같은 파일을 다시 그리지 않는다** — 그리면 프레임이 새로 서서 PDF·시안이 맨 위로 튄다.
+    //   이 길로 오는 부름이 여럿이다(세션 알림·탭 전환·8초 틱). 진짜 다시 그릴 때(fresh)만 통과시킨다.
+    if (p2 && p2 === path && shown && !fresh) { paintBar(); return; }
     path = p2;
     remember(p2);
     paintBar();
     if (!p2) { shownStamp = ''; paintPicker(); return; }
+    //  다시 펼 때 보던 자리를 지킨다 — 무대(그림·글)는 우리가 굴리므로 되돌릴 수 있다.
+    //   프레임 안(PDF·시안)의 자리는 우리 것이 아니라 못 지킨다 → 그래서 아래 감시가 «다 쓴 뒤 한 번만» 편다.
+    const keepTop = quiet && stage.scrollTop > 0 ? stage.scrollTop : 0;
+    if (keepTop) window.setTimeout(() => { if (path === p2 && stage.scrollTop === 0) stage.scrollTop = keepTop; }, 60);
     const k = kindOf(p2);
     const fetchOpts: RequestInit = { headers: authHeaders(), cache: fresh ? 'no-store' : 'default' };
     //  도장 = 서버가 준 (수정 시각 ms · 크기). 옛 서버라 헤더가 없으면 매니페스트의 값으로 대신한다.
@@ -1241,9 +1248,16 @@ function viewerPart(ctx: PartCtx): Part {
     const last = remembered();
     void open(last && list.some((f) => f.path === last) ? last : '');
   };
+  //  ⚠ 세션이 안 바뀌었으면 아무것도 하지 않는다 — 알림이 같은 세션으로 다시 와도 파일을 다시 그리면 자리가 튄다.
+  let lastSid = ctx.memKey();
   void loadList().then(() => openRemembered());
   // 세션을 갈아 끼우면 그 세션이 펴 두었던 파일로 — 단 **고치는 중이면 건드리지 않는다**(저장 안 한 글을 뺏지 않는다).
-  const offSess = ctx.onSession(() => openRemembered());
+  const offSess = ctx.onSession(() => {
+    const k = ctx.memKey();
+    if (k === lastSid) return;
+    lastSid = k;
+    openRemembered();
+  });
 
   // ── 살아 있는 미리보기 (#762, 원준 2026-09-04: "우측에서 바로 수정하고 있으면 실시간 반영") ─────────
   //  세션이 시안(HTML)·PDF 를 고치는 동안 사람은 왼쪽 뷰어를 본다. 바뀔 때마다 새로고침을 누르게 하면 그 화면은
@@ -1253,8 +1267,15 @@ function viewerPart(ctx: PartCtx): Part {
   //  ⚠ 안 보이는 칸은 묻지 않는다 — 웹 칸이 «안 보이면 재운다»와 같은 이유(탭을 쌓아 둘수록 폴링이 쌓인다).
   //  옛 서버(도장 헤더 없음)에서는 8초 tick 의 매니페스트 비교가 대신한다 — 느리지만 같은 일을 한다.
   const visible = (): boolean => !!root.isConnected && root.getClientRects().length > 0;
+  //  ★ **다 쓴 뒤에 한 번만 편다**(원준 2026-09-05: "수정이 실시간으로 되더라도 중간에 덱이 계속 맨 위로
+  //   올라가지 않게"). LLM 이 파일을 고치는 동안 도장은 몇 초 사이에 여러 번 바뀐다 — 그때마다 펴면 보던 자리가
+  //   계속 튄다(프레임 안 자리는 우리 것이 아니라 되돌릴 수도 없다). 그래서 **도장이 멎을 때까지 기다렸다가**
+  //   한 번만 편다: 새 도장을 보면 적어 두고, 다음 박자에도 그대로면 그때 연다(≈3초 정적).
+  let pending = '';
   const reopenIfChanged = (stamp: string): void => {
-    if (!path || !shownStamp || !stamp || stamp === shownStamp) return;
+    if (!path || !shownStamp || !stamp || stamp === shownStamp) { pending = ''; return; }
+    if (stamp !== pending) { pending = stamp; return; }   // 아직 쓰는 중일 수 있다 — 한 박자 더 본다
+    pending = '';
     shownStamp = stamp;           // 먼저 적는다 — 다시 펴는 동안 같은 변경으로 또 펴지 않게
     void open(path, true, true);
   };
@@ -1277,6 +1298,7 @@ function viewerPart(ctx: PartCtx): Part {
         if (!path) paintPicker();
         paintBar();
         //  옛 서버 폴백 — 매니페스트의 도장으로도 같은 판정을 한다(새 서버에선 HEAD 가 먼저 잡아 여기선 이미 같다).
+        //  ⚠ 자(floor)가 서버 헤더와 **같아야** 한다 — 다르면 아무 일 없이도 매 틱 «바뀌었다»가 된다(#762 실측).
         const f = path ? list.find((x) => x.path === path) : null;
         if (f) reopenIfChanged(f.mtime + ':' + f.size);
       });
