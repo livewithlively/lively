@@ -1054,7 +1054,9 @@ function viewerPart(ctx: PartCtx): Part {
   //   통째로 날아간다 — 그래서 고치기는 원문을 **따로 다시 받고**, 이 상한을 넘으면 아예 열지 않는다.
   const EDIT_MAX = 1_000_000;
   const canEdit = (p2: string): boolean => { const k = kindOf(p2).kind; return k === 'text' || k === 'page'; };
-  let ed: { ta: HTMLTextAreaElement; saved: string; stamp: string } | null = null;
+  //  mark = **막대에 지금 그려 둔** 저장 상태. 이 값을 안 두고 «바뀌었나»만 보면, 저장한 뒤 다시 고칠 때
+  //   점이 안 켜진다(그 자리가 이미 '고친 상태'였으므로 전환이 없다 — dev 실화면에서 잡은 것).
+  let ed: { ta: HTMLTextAreaElement; saved: string; stamp: string; mark: boolean } | null = null;
   const dirty = (): boolean => !!ed && ed.ta.value !== ed.saved;
   //  덮어쓰기 판정에 쓰는 **실제로 있는 것 전부**(list 는 휴지통·잡동사니를 걸러 낸 화면용이라 이름 자리를 놓친다).
   let taken = new Set<string>();
@@ -1131,6 +1133,7 @@ function viewerPart(ctx: PartCtx): Part {
     //  고치는 중 — 막대도 그 일만 말한다(다시 불러오기·올리기·내려받기는 지금 할 일이 아니다).
     //   [저장]은 오른쪽 끝 파란 단추 하나, 왼쪽은 돌아가는 길. 저장 안 한 글이 있으면 이름 옆에 점이 뜬다.
     if (ed) {
+      ed.mark = dirty();   // 막대가 곧 정본이다 — 아래 입력 감시가 이 값과 견준다
       bar.replaceChildren(
         el('button', { class: 'pn-web-btn', type: 'button', text: '← 보기', title: '고치기를 끝내고 보던 화면으로 돌아갑니다',
           onclick: () => { void endEdit(); } }),
@@ -1177,13 +1180,14 @@ function viewerPart(ctx: PartCtx): Part {
     const ta = el('textarea', { class: 'pn-ed-ta', spellcheck: 'false', 'aria-label': base(path) + ' 고치기' }) as HTMLTextAreaElement;
     ta.value = txt;
     //  글자를 칠 때마다 막대의 «저장 안 함» 점이 켜지고 꺼진다 — 지금 상태를 사람이 늘 볼 수 있게.
-    let was = false;
-    ta.addEventListener('input', () => { const d = dirty(); if (d !== was) { was = d; paintBar(); } });
+    //  ⚠ 견주는 상대는 **막대에 그려 둔 값**(ed.mark)이다 — 저장이 그 값을 되돌리므로 저장 뒤 첫 타건에서 다시 켜진다.
+    ta.addEventListener('input', () => { if (ed && dirty() !== ed.mark) paintBar(); });
     //  ⌘S / Ctrl+S — 글칸 안에서 저장. 브라우저의 '페이지 저장'을 가로챈다(여기선 그게 사람의 뜻이다).
     ta.addEventListener('keydown', (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) { e.preventDefault(); void save(); }
     });
-    ed = { ta, saved: txt, stamp: (r.headers.get('x-file-mtime') ? r.headers.get('x-file-mtime') + ':' + (r.headers.get('x-file-size') || '') : '') || await stampNow() };
+    ed = { ta, saved: txt, mark: false,
+      stamp: (r.headers.get('x-file-mtime') ? r.headers.get('x-file-mtime') + ':' + (r.headers.get('x-file-size') || '') : '') || await stampNow() };
     shownStamp = '';   // 고치는 동안은 살아 있는 미리보기를 세운다(내가 쓰는 파일을 내가 다시 열 이유가 없다)
     showEdit(ta);
     paintBar();
