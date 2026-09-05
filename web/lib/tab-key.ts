@@ -36,7 +36,11 @@ export function isTabKey(k: unknown): boolean {
   const parts = k.split('#');
   if (parts.length === 1) return true;
   if (parts.length !== 2) return false;
-  return /^[2-9][0-9]*$/.test(parts[1]);
+  //  ⚠ **`[2-9][0-9]*` 로 쓰면 안 된다** — 그러면 `#10`~`#19`·`#100`~ 이 통째로 빠진다(사양만 보고 쓴
+  //   블라인드 시험이 잡았다). 같은 모듈의 tabKey/nextTabKey 는 `editor#10` 을 멀쩡히 만들어 내므로,
+  //   그 판정이면 **제가 만든 열쇠를 제가 부정한다** → 저장된 배치를 읽을 때 열 번째 탭부터 조용히 사라진다.
+  //   막으려는 것은 앞자리 0(`#02`)뿐이다.
+  return /^([2-9]|[1-9][0-9]+)$/.test(parts[1]);
 }
 
 /**
