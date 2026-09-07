@@ -467,8 +467,20 @@ export function sessionInWorkspace(
   currentWsId: string,
   managed: boolean = managedMode(),
 ): boolean {
-  const fallback = managed ? currentWsId : PRIMARY_TENANT_ID;
-  return (mappedWsId ?? fallback) === currentWsId;
+  return (mappedWsId ?? defaultWorkspaceId(currentWsId, managed)) === currentWsId;
+}
+
+/**
+ * «소속이 기록되지 않은» 세션을 **어느 워크스페이스의 것으로 볼 것인가** — 배포 모드가 정한다.
+ *
+ * ⚠ 이 값은 **두 곳이 함께 써야 한다.** 라이브 목록은 JS 로 거르고(sessionInWorkspace), 이력 목록은
+ *  SQL 로 거른다(v6/session-log-store.ts listSessionsForOwner 의 `COALESCE(…, $4)`). 둘이 서로 다른
+ *  «부재의 기본값» 을 쓰면 같은 세션이 한 목록엔 있고 다른 목록엔 없다 — 실측 2026-09-07: SQL 쪽만
+ *  상수(SINGLE_TENANT_ID)로 굳어 있어 매니지드에서 `/api/ui/v6/sessions` 가 **항상 0건**이었다.
+ *  그래서 규칙을 함수 하나로 두고 SQL 은 그 반환값을 파라미터로 받는다(#3579 · 원설계는 #2179).
+ */
+export function defaultWorkspaceId(currentWsId: string, managed: boolean = managedMode()): string {
+  return managed ? currentWsId : PRIMARY_TENANT_ID;
 }
 
 export async function sessionWorkspaceIds(sessionIds: string[]): Promise<Map<string, string>> {
