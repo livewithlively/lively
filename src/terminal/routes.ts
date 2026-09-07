@@ -638,7 +638,10 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       //  ⚠ 확답은 **desired-state 가 아는 노드**(st.node_id)에 구한다 — 좌표 없이 온 호출도 여기로 오기 때문이다.
       //  ⚠ 접근통제(deadSessionMeta)를 통과한 뒤에만 묻는다 — 남의 세션 id 로 노드에 왕복을 시키지 않는다.
       const nodeGone = mode === "ask" ? await nodeSessionGone(st.node_id, id) : null;
-      const body = nodeMetaRestorable({ mode, nodeGone })
+      //  #3626 — 갓 만든 세션이면 «못 봤다/아직 없다» 를 죽음으로 접지 않는다(nodeMetaRestorable 머리말).
+      //   나이는 desired-state 의 created(epoch초) — 모르면 null 로 넘겨 종전 판정 그대로 둔다.
+      const ageMs = st.created != null ? Date.now() - Number(st.created) * 1000 : null;
+      const body = nodeMetaRestorable({ mode, nodeGone, ageMs })
         ? dead.body
         : { id: dead.body.id, label: dead.body.label, projectId: dead.body.projectId };
       res.json({ ...body, node: nodeBadge });
