@@ -3,7 +3,7 @@
 //  사양·엣지 표: 스크래치패드 spec.md 표 B(R1~R8).
 import assert from "node:assert/strict";
 import {
-  parseProcStatus, parseProcStat, parsePsTable, sessionRssMb, sessionPidOwners, sessionsWithLiveJobs, readProcTable, type ProcEntry,
+  parseProcStatus, parseProcStat, parsePsTable, sessionRssMb, sessionPidOwners, sessionsWithLiveJobs, sessionJobDetails, readProcTable, type ProcEntry,
 } from "./session-rss.js";
 
 // R1 — 부모·점유가 다 있는 정상 프로세스
@@ -275,3 +275,76 @@ const jobTable = (over: Array<[number, ProcEntry]> = []): Map<number, ProcEntry>
 }
 
 console.log("session-rss: all passed");
+
+// ── G. ⑥ 증거(#2652 후속) — 「무엇을 작업으로 봤나」가 남아야 한다 ──────────────────────────────
+//  실측 2026-09-04: 매니지드에서 후보 453개가 전부 이 신호에 걸려 회수가 2시간 멈췄는데, 로그에 개수뿐이라
+//  사후에 원인을 못 좁혔다(그 뒤 세션 0개가 돼 재현 불가). 그래서 판정과 함께 근거를 남긴다.
+// G1 — 증거는 comm(pgid) 로 남고, 작업이 없는 세션은 키가 아예 없다
+{
+  const t = new Map<number, ProcEntry>([
+    [10, { ppid: 1, rssKb: 900, name: "sh", pgid: 10, tpgid: 11 }],
+    [11, { ppid: 10, rssKb: 300_000, name: "claude", pgid: 11, tpgid: 11 }],
+    [12, { ppid: 11, rssKb: 30_000, name: "node", pgid: 11, tpgid: 11 }],     // MCP — 작업 아님
+    [20, { ppid: 11, rssKb: 1_200, name: "zsh", pgid: 20, tpgid: -1 }],       // 작업
+  ]);
+  // 작업이 **없는** 세션은 자기 트리를 따로 준다(같은 트리를 나눠 쓰면 그 작업이 양쪽에 다 잡힌다).
+  t.set(50, { ppid: 1, rssKb: 900, name: "sh", pgid: 50, tpgid: 51 });
+  t.set(51, { ppid: 50, rssKb: 200_000, name: "claude", pgid: 51, tpgid: 51 });
+  const d = sessionJobDetails(t, new Map([["box-a", [10]], ["box-idle", [50]]]));
+  assert.deepEqual([...d.keys()], ["box-a"], "작업 없는 세션은 증거 맵에 없다");
+  assert.deepEqual(d.get("box-a"), ["zsh(pgid 20)"], "무엇이 왜 잡혔는지가 그대로 남는다");
+}
+// G2 — 증거는 세션당 3건까지만(로그 한 줄을 부풀리지 않는다)
+{
+  const t = new Map<number, ProcEntry>([
+    [10, { ppid: 1, rssKb: 900, name: "sh", pgid: 10, tpgid: 11 }],
+    [11, { ppid: 10, rssKb: 300_000, name: "claude", pgid: 11, tpgid: 11 }],
+  ]);
+  for (let i = 0; i < 6; i++) t.set(30 + i, { ppid: 11, rssKb: 100, name: `job${i}`, pgid: 30 + i, tpgid: -1 });
+  assert.equal(sessionJobDetails(t, new Map([["box-b", [10]]])).get("box-b")?.length, 3);
+}
+// G3 — 종전 API(집합)는 그대로 — 증거 도입이 판정을 바꾸지 않는다
+{
+  const t = new Map<number, ProcEntry>([
+    [10, { ppid: 1, rssKb: 900, name: "sh", pgid: 10, tpgid: 11 }],
+    [11, { ppid: 10, rssKb: 300_000, name: "claude", pgid: 11, tpgid: 11 }],
+    [20, { ppid: 11, rssKb: 1_200, name: "zsh", pgid: 20, tpgid: -1 }],
+  ]);
+  assert.deepEqual([...sessionsWithLiveJobs(t, new Map([["box-c", [10]]]))], ["box-c"]);
+}
+
+// ── I. 하네스가 띄운 «자기 자신»은 작업이 아니다 (#2652 후속 · 실측 2026-09-04) ─────────────────
+//  클로드코드는 `claude bg-pty-host`·`claude bg-spare` 를 각자 프로세스 그룹으로 띄우고, 그건 세션이
+//  끝날 때까지 산다. 그룹만 보면 «작업»과 구별이 안 되는데, 그러면 그 세션은 영구히 보호된다
+//  (매니지드에서 후보 453개가 전부 걸린 창의 정체).
+// I1 — 실측 모양 그대로: 도우미만 있으면 작업 없음
+{
+  const t = new Map<number, ProcEntry>([
+    [10, { ppid: 1, rssKb: 900, name: "sh", pgid: 10, tpgid: 11 }],
+    [11, { ppid: 10, rssKb: 300_000, name: "/Users/me/.local/bin/claude", pgid: 11, tpgid: 11 }],
+    [30, { ppid: 11, rssKb: 8_000, name: "claude bg-pty-host", pgid: 30, tpgid: -1 }],
+    [31, { ppid: 11, rssKb: 7_000, name: "claude bg-spare", pgid: 31, tpgid: -1 }],
+  ]);
+  assert.equal(sessionJobDetails(t, new Map([["box-h", [10]]])).size, 0,
+    "하네스 도우미를 작업으로 세면 그 세션은 영원히 안 걷힌다");
+}
+// I2 — 도우미 **와** 진짜 작업이 함께 있으면 작업만 잡는다
+{
+  const t = new Map<number, ProcEntry>([
+    [10, { ppid: 1, rssKb: 900, name: "sh", pgid: 10, tpgid: 11 }],
+    [11, { ppid: 10, rssKb: 300_000, name: "/Users/me/.local/bin/claude", pgid: 11, tpgid: 11 }],
+    [30, { ppid: 11, rssKb: 8_000, name: "claude bg-pty-host", pgid: 30, tpgid: -1 }],
+    [40, { ppid: 11, rssKb: 1_000, name: "/bin/zsh", pgid: 40, tpgid: -1 }],
+  ]);
+  assert.deepEqual(sessionJobDetails(t, new Map([["box-i", [10]]])).get("box-i"), ["/bin/zsh(pgid 40)"],
+    "도우미는 빼고 진짜 작업만 증거로 남는다");
+}
+// I3 — 하네스가 codex 여도 같은 규칙(이름을 코드에 박지 않는다)
+{
+  const t = new Map<number, ProcEntry>([
+    [10, { ppid: 1, rssKb: 900, name: "sh", pgid: 10, tpgid: 11 }],
+    [11, { ppid: 10, rssKb: 300_000, name: "/opt/codex", pgid: 11, tpgid: 11 }],
+    [30, { ppid: 11, rssKb: 8_000, name: "codex helper", pgid: 30, tpgid: -1 }],
+  ]);
+  assert.equal(sessionJobDetails(t, new Map([["box-j", [10]]])).size, 0);
+}
