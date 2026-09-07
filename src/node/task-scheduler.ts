@@ -286,17 +286,33 @@ export function assignBackoffDelayMs(attempt: number): number {
   return Math.min(max, base * 2 ** Math.max(0, attempt - 1));
 }
 
-/** 태스크 id → {연속 실패 수, 다음 시도 시각}. 큐에서 사라진 태스크는 매 tick 잊는다(무한 증식 방지). */
+/** 태스크 id → {연속 실패 수, 다음 시도 시각}. 오래 안 건드린 항목은 **시간으로** 잊는다(무한 증식 방지). */
 const assignBackoff = new Map<number, { n: number; nextAt: number }>();
+
+/** 백오프 표에서 잊을 때까지의 여유 — 큐 상한을 넘겨 살아 있는 태스크는 없으므로 그 두 배면 확실히 죽은 것이다. */
+const ASSIGN_BACKOFF_FORGET_MS = Math.max(QUEUE_MAX_MS, 60_000) * 2;
+
+/**
+ * 백오프 표에서 **오래 안 건드린 항목**을 잊는다(순수).
+ *
+ * ⚠ «이번 큐에 없으면 지운다» 로 짜면 안 된다 — 이 배정 함수는 **워크스페이스마다** 불리고(#2418)
+ *  그 큐엔 남의 워크스페이스 태스크가 없다. 그렇게 지우면 매 호출이 남의 카운터를 지워
+ *  백오프가 사실상 사라진다(그리고 큐가 빈 워크스페이스 하나가 표 전체를 비운다).
+ *  태스크는 큐 상한(QUEUE_MAX_MS)을 넘겨 큐에 살아 있을 수 없으므로 **시간**이 안전한 기준이다.
+ */
+export function pruneAssignBackoff(
+  m: Map<number, { n: number; nextAt: number }>, now: number, horizonMs: number,
+): void {
+  for (const [k, v] of m) if (now - v.nextAt > horizonMs) m.delete(k);
+}
 
 async function assignQueued(): Promise<void> {
   const queued = await queuedTasks();
-  if (!queued.length) { assignBackoff.clear(); return; }
   const now = Date.now();
+  pruneAssignBackoff(assignBackoff, now, ASSIGN_BACKOFF_FORGET_MS);
+  if (!queued.length) return;
   const counts = await runningCountByNode();
   const extra = new Map<string, number>(); // 이번 tick 내 배정 가산(동일 노드 과배정 방지)
-  const live = new Set(queued.map((t) => t.id));
-  for (const k of [...assignBackoff.keys()]) if (!live.has(k)) assignBackoff.delete(k);
   for (const t of queued) {
     try {
       // 큐 대기 상한(⑤) — 적합 노드를 QUEUE_MAX 안에 못 얻으면 무한 대기 대신 no_capacity 실패.

@@ -7,12 +7,20 @@
 //   2 vCPU 박스의 load average 가 6 을 넘었고, 그 사이 사람이 여는 새 세션은 용량 부족으로 503 이었다.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { assignBackoffDelayMs } from "./task-scheduler.js";
+import { assignBackoffDelayMs, pruneAssignBackoff } from "./task-scheduler.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
 
 const SRC = readFileSync(new URL("../../src/node/task-scheduler.ts", import.meta.url), "utf8");
+//  ⚠ 배정 함수의 **이름**을 앵커로 쓰지 않는다 — stage 는 워크스페이스 순회(#2418) 때문에
+//   `assignQueuedWith(counts, extra)` 이고 main 은 `assignQueued()` 다. 본문의 첫 줄을 앵커로 삼으면
+//   두 모양 모두에서 같은 자리를 잡는다.
+const BODY = (() => {
+  const i = SRC.indexOf("const queued = await queuedTasks();");
+  if (i < 0) throw new Error("배정 함수 본문을 못 찾았다 — 앵커가 바뀌었으면 이 시험부터 고쳐라");
+  return SRC.slice(i, SRC.indexOf("\n}\n", i));
+})();
 
 t("E1..E3 첫 실패부터 배증한다 — 15 → 30 → 60초", () => {
   assert.equal(assignBackoffDelayMs(1), 15_000);
@@ -43,28 +51,42 @@ t("E10 ★ 큐 상한 10분 안의 시도 횟수가 120회에서 한 자리로 �
 //  (assignQueued 는 DB·노드 RPC 를 타서 순수 시험이 안 된다. 그래서 «어느 자리에 걸었나» 를 본다.)
 
 t("E8 ★★ 백오프는 **던진 경우에만** 건다 — 용량 부족은 값싼 판정이라 자리가 나면 즉시 가야 한다", () => {
-  const fn = SRC.slice(SRC.indexOf("async function assignQueued("));
-  const body = fn.slice(0, fn.indexOf("\n}\n"));
-  assert.ok(/catch \(err\)[\s\S]{0,400}assignBackoff\.set\(/.test(body),
+  assert.ok(/catch \(err\)[\s\S]{0,400}assignBackoff\.set\(/.test(BODY),
     "catch 안에서 백오프를 건다");
-  assert.ok(/await assignOne\(t, counts, extra\);[\s\S]{0,200}assignBackoff\.delete\(t\.id\)/.test(body),
+  assert.ok(/await assignOne\(t, counts, extra\);[\s\S]{0,200}assignBackoff\.delete\(t\.id\)/.test(BODY),
     "던지지 않았으면(성공·용량부족 모두) 연속을 끊는다 — 용량 부족에 백오프가 걸리면 자리가 나도 늦게 간다");
 });
 
 t("E7 ★ 큐 대기 상한 판정이 백오프 skip **앞**에 있다 — 백오프 중인 태스크도 제 시각에 끝나야 한다", () => {
-  const fn = SRC.slice(SRC.indexOf("async function assignQueued("));
-  const body = fn.slice(0, fn.indexOf("\n}\n"));
-  const cap = body.indexOf("no_capacity_timeout");
-  const skip = body.indexOf("now < bo.nextAt");
+  const cap = BODY.indexOf("no_capacity_timeout");
+  const skip = BODY.indexOf("now < bo.nextAt");
   assert.ok(cap > 0 && skip > 0, "두 판정이 다 있어야 한다");
   assert.ok(cap < skip, "상한이 백오프 뒤에 있으면 실패 확정이 최대 2분 미뤄진다");
 });
 
-t("E9 큐에서 사라진 태스크의 항목을 잊는다 — 안 지우면 맵이 무한히 자란다", () => {
-  const fn = SRC.slice(SRC.indexOf("async function assignQueued("));
-  const body = fn.slice(0, fn.indexOf("\n}\n"));
-  assert.ok(/live\.has\(k\)\) assignBackoff\.delete\(k\)/.test(body), "큐에 없는 id 를 매 tick 지운다");
-  assert.ok(/if \(!queued\.length\) \{ assignBackoff\.clear\(\); return; \}/.test(body), "큐가 비면 통째로 잊는다");
+t("E9a..E9c 오래 안 건드린 항목만 잊는다 — 경계값 포함", () => {
+  const H = 600_000;
+  const m = new Map<number, { n: number; nextAt: number }>([
+    [1, { n: 1, nextAt: 1_000_000 }],                    // 미래(백오프 중)
+    [2, { n: 3, nextAt: 1_000_000 - H }],                // 경계값 — 정확히 horizon
+    [3, { n: 5, nextAt: 1_000_000 - H - 1 }],            // horizon 초과
+  ]);
+  pruneAssignBackoff(m, 1_000_000, H);
+  assert.equal(m.has(1), true, "E9a 백오프 중인 항목은 남는다");
+  assert.equal(m.has(2), true, "E9b 경계값은 남는다(> 이지 >= 가 아니다)");
+  assert.equal(m.has(3), false, "E9c horizon 을 넘긴 항목만 지운다");
+});
+
+t("E9d ★★ 남의 워크스페이스 항목을 지우지 않는다 — 이 함수는 워크스페이스마다 불린다(#2418)", () => {
+  //  «이번 큐에 없으면 지운다» 로 짜면 매 호출이 남의 카운터를 지워 백오프가 사실상 사라진다.
+  assert.ok(!/live\.has\(/.test(BODY) && !/assignBackoff\.clear\(/.test(BODY),
+    "큐 구성원으로 표를 정리하면 안 된다(워크스페이스 순회에서 남의 것을 지운다)");
+  assert.ok(/pruneAssignBackoff\(assignBackoff, now,/.test(BODY),
+    "정리는 시간 기준 한 곳(pruneAssignBackoff)에서만 한다");
+  //  큐가 비어도 **먼저** 정리하고 나간다 — 안 그러면 조용한 워크스페이스의 표가 영영 안 줄어든다.
+  const prune = BODY.indexOf("pruneAssignBackoff(");
+  const empty = BODY.indexOf("if (!queued.length) return;");
+  assert.ok(prune > 0 && empty > 0 && prune < empty, "빈 큐로 빠져나가기 전에 정리한다");
 });
 
 console.log(`\n${pass} passed`);
