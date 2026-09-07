@@ -1479,6 +1479,13 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       //  createSession 이 claude 하네스에서만 적용(resume 우선 · 없으면 resumePick).
       ...(precise ? { resume: resumeUuid as string } : { resumePick: true }),
     });
+    // ★ 소속(워크스페이스) 기록 — **세션을 만드는 자리마다** 붙는다(#2179 → 되살림 #3579).
+    //  종전엔 생성 6곳 중 이 한 곳(복원 — 박스/로컬)만 빠져 있었다. 그러면 복원으로 되살린 세션이
+    //  gw_session_map 행 없이 태어나고, 목록 필터가 «부재» 로 읽어 **그 세션만 목록에서 사라진다**
+    //  (매니지드에선 #3564 의 배포별 기본값 덕에 가려지지만, 셀프호스트 registry 배포에선 그대로 실종).
+    //  "롤 → 세션 사망 → 복원 → 그런데 못 엶" 의 마지막 고리가 정확히 여기였다.
+    //  실패하면 세션을 죽인다 — 소속 없는 세션을 살려 두면 사용자에겐 «복원했는데 안 보임» 이 된다.
+    await recordSessionTenant(session.id, () => killSession(owner, session.id, {}));
     // #1059 — 매핑 승계: 새 세션 레코드에 옛 claude UUID 를 물려준다. 이 대화를 `--resume <uuid>` 로 이어받았으니 같은
     //  UUID 를 계속 쓰는데, 새 레코드는 훅이 보고할 때까지 비어 있어 **그 사이에 또 복원하면 picker 로 떨어졌다**
     //  (2026-07-28 상민님 신고 — 정밀 복원이 한 번만 되는 증상의 절반. 나머지 절반은 훅 dedup 키에 box-id 부재였다).
