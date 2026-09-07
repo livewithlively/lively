@@ -79,7 +79,7 @@ import { listManagedSessions } from "./managed-sessions.js";
 import { getRuntimeConfig } from "../org/store.js";
 import { effectiveSessionReclaimPolicy, normalizeSessionReclaimPolicy, type SessionReclaimPolicy } from "./session-reclaim-policy.js";
 import { memAvailableMb, memTotalMb, swapUsageMb } from "../ops/host-mem.js";
-import { readProcTable, parsePsTable, sessionRssMb, sessionsWithLiveJobs, type ProcEntry } from "./session-rss.js";
+import { readProcTable, parsePsTable, sessionRssMb, sessionJobDetails, type ProcEntry } from "./session-rss.js";
 import { sessionExecConfigured, sessionSpawnArgv } from "../terminal/session-exec.js";
 import { withTenant, type TenantContext } from "../org/tenant-context.js";
 import { schedulerTargets } from "../scheduler/tenant-fanout.js";
@@ -239,25 +239,40 @@ export async function resolveLiveJobs(
   local: Map<number, ProcEntry>,
   probe: (sid: string) => Promise<Map<number, ProcEntry>>,
 ): Promise<ReadonlySet<string>> {
-  const found = liveJobsFromView(ids, view, local);
-  const unresolved = [...ids].filter((sid) => !found.has(sid) && !judgedLocally(sid, view.panes, local));
-  if (!unresolved.length) return found;
-  const extra = await Promise.all(unresolved.map(async (sid) => {
-    const panePids = view.panes.get(sid);
-    if (!panePids?.length) return null;
-    try {
-      const t = await probe(sid);
-      if (!t.size) return null;                                          // 프로브 실패·중계 없음 → 판정 불가
-      return sessionsWithLiveJobs(t, new Map([[sid, panePids]])).has(sid) ? sid : null;
-    } catch (e) {
-      logger.warn({ err: e, id: sid }, "session-reaper: 세션 컨테이너 작업 프로브 실패(그 세션만 판정 불가)");
-      return null;
-    }
-  }));
-  const out = new Set(found);
-  for (const sid of extra) if (sid) out.add(sid);
-  return out;
+  if (!ids.size) return new Set();
+  if (!view.ok) return new Set(ids);                                        // 못 봤다 ≠ 작업 없다 → 전부 보호
+  const mine = new Map([...view.panes].filter(([sid]) => ids.has(sid)));    // 후보 서브트리만 걷는다
+  const detail = sessionJobDetails(local, mine);
+  const unresolved = [...ids].filter((sid) => !detail.has(sid) && !judgedLocally(sid, view.panes, local));
+  if (unresolved.length) {
+    const extra = await Promise.all(unresolved.map(async (sid) => {
+      const panePids = view.panes.get(sid);
+      if (!panePids?.length) return null;
+      try {
+        const t = await probe(sid);
+        if (!t.size) return null;                                          // 프로브 실패·중계 없음 → 판정 불가
+        return sessionJobDetails(t, new Map([[sid, panePids]])).get(sid) ?? null;
+      } catch (e) {
+        logger.warn({ err: e, id: sid }, "session-reaper: 세션 컨테이너 작업 프로브 실패(그 세션만 판정 불가)");
+        return null;
+      }
+    }));
+    unresolved.forEach((sid, i) => { const d = extra[i]; if (d) detail.set(sid, d); });
+  }
+  // ⚠ **무엇을 작업으로 봤는지 남긴다**(#2652 후속). 2026-09-04 실측: 매니지드에서 후보 453개가 **전부**
+  //  이 신호에 걸려 회수가 2시간 멈춘 창이 있었는데, 로그에 개수뿐이라 사후에 원인을 못 좁혔다.
+  //  개수는 «무슨 일이 있었다»만 말한다 — 판정을 남기려면 근거도 같이 남아야 한다.
+  if (detail.size) {
+    logger.info({
+      count: detail.size,
+      evidence: Object.fromEntries([...detail].slice(0, JOB_EVIDENCE_SESSIONS)),
+    }, "session-reaper: ⑥ 하네스가 띄운 작업이 살아 있어 보호한 세션");
+  }
+  return new Set(detail.keys());
 }
+
+/** 로그 한 줄에 실을 세션 수(각 세션당 증거는 session-rss 가 3건으로 자른다). */
+const JOB_EVIDENCE_SESSIONS = 3;
 
 /** 이 프로세스의 표만으로 그 세션을 **판정할 수 있었나** — pane pid 가 표에 있으면 참(= 컨테이너 프로브 불요). */
 function judgedLocally(sid: string, panes: Map<string, number[]>, table: Map<number, ProcEntry>): boolean {
@@ -285,8 +300,14 @@ export function liveJobsFromView(
   if (!ids.size) return new Set();
   if (!view.ok) return new Set(ids);                                        // 못 봤다 ≠ 작업 없다 → 전부 보호
   const mine = new Map([...view.panes].filter(([sid]) => ids.has(sid)));    // 후보 서브트리만 걷는다
-  return sessionsWithLiveJobs(table, mine);
+  return new Set(sessionJobDetails(table, mine).keys());
 }
+
+/**
+ * ⑥ 의 신호가 «퇴화»했다고 볼 최소 후보 수. 이보다 적으면 전부 걸려도 정상으로 본다.
+ *  (후보 2개가 둘 다 백그라운드 작업 중인 것은 흔하다 — 그걸 고장으로 읽으면 정상 보호가 깨진다.)
+ */
+const JOBS_SIGNAL_DEGENERATE_MIN = 10;
 
 /** ⑥ 적용 — 후보에서 «작업이 도는 세션»을 뺀다. 판정 자체가 실패하면 종전대로 진행한다(방어를 멈추지 않는다). */
 async function dropLiveJobs(
@@ -298,8 +319,22 @@ async function dropLiveJobs(
   try { busy = await probe(new Set(candidates.map((c) => c.id)), table); }
   catch (e) { logger.warn({ err: e }, "session-reaper: 작업 판정 실패 — ⑥ 없이 진행"); return candidates; }
   if (!busy.size) return candidates;
-  reasons.jobs += candidates.filter((c) => busy.has(c.id)).length;
-  return candidates.filter((c) => !busy.has(c.id));
+  const flagged = candidates.filter((c) => busy.has(c.id));
+  // ⚠ **후보가 전부 걸리면 그건 보호가 아니라 신호가 깨진 것이다**(#2652 후속). 100% 를 보호하는 신호는
+  //  정보량이 0이고, 그 상태를 방치하면 회수가 통째로 멈춘다 — baseline 이 자라 결국 earlyoom 이
+  //  **desired-state 보존 없이** 죽인다(#1220 이 고치려던 바로 그 상황). 그래서 그 tick 은 ⑥ 없이 진행하고
+  //  크게 남긴다. 잃는 건 «보호가 안 걸린다»(이 기능 이전 상태)뿐이고, 그게 더 나은 실패 방향이다.
+  //  ⓘ 실측 2026-09-04: 매니지드 게이트웨이에서 `scanned=453 · reaped=0 · jobs=453` 이 2시간 이어졌다.
+  //  ⓘ 하한(JOBS_SIGNAL_DEGENERATE_MIN)이 있는 이유: 후보가 한둘일 땐 «둘 다 작업 중»이 흔히 참이다.
+  //   그걸 «퇴화»로 읽으면 정상 보호를 깨뜨린다. 열 개가 **전부**인 것은 그렇게 흔하지 않다.
+  if (flagged.length === candidates.length && candidates.length >= JOBS_SIGNAL_DEGENERATE_MIN) {
+    logger.warn({ candidates: candidates.length, sample: flagged.slice(0, 5).map((c) => c.id) },
+      "session-reaper: ⑥ 신호 퇴화(후보 전부가 '작업 중') — 이 tick 은 ⑥ 없이 진행한다");
+    return candidates;
+  }
+  reasons.jobs += flagged.length;
+  const skip = new Set(flagged.map((c) => c.id));
+  return candidates.filter((c) => !skip.has(c.id));
 }
 
 const policyOf = (deps?: ReapSources): Promise<SessionReclaimPolicy> => {
