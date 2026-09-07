@@ -44,10 +44,35 @@ export function tmuxExecArgv(): string[] {
   return tmuxArgvFor(tenantSlug(), TMUX_BIN);
 }
 
+/**
+ * 이 호출을 얼마나 기다리나 — **로컬과 중계가 다르다**(#2616 후속, 2026-09-07).
+ *
+ * ── 왜 갈랐나 ───────────────────────────────────────────────────────────────
+ * 로컬 tmux 는 같은 호스트의 유닉스 소켓이라 5초면 넉넉하다(종전 값 — 무회귀).
+ *  중계(매니지드)는 그 5초 안에 **게이트웨이 → 허브 → 노드 브로커 → runsc exec** 네 홉이 들어간다.
+ *  그런데 안쪽 층들의 예산이 바깥보다 **크게** 잡혀 있었다:
+ *
+ *      코어 5s  >  중계 4s  ‹‹  허브 21.5s(파킹 대기 1.5 + 응답 머리 20)  ›  브로커 15s
+ *
+ *  즉 «제일 바깥이 제일 짧다». 그러면 안쪽이 아직 일하는 중에 바깥이 끊고, 사람은 원인이 아니라
+ *  **끊긴 사실**만 본다 — 실측 2026-09-07: 세션 첫 지시가 `브로커 응답 없음: http://…:9093` 으로
+ *  전달 실패했다(허브·브로커는 그 4초 뒤에도 답을 만들고 있었다).
+ *  ⚠ 예산은 **안쪽이 짧고 바깥으로 갈수록 길어야** 한다. 이 상수가 그 사슬의 제일 바깥이다:
+ *   브로커 6s < 허브(요청 예산 안으로 좁힘) < 중계 9s/회·20s 총 < **여기 22s**.
+ *   숫자를 바꿀 땐 넷을 같이 본다(한 층만 줄이면 그 층이 다시 남의 일을 끊는다).
+ */
+export const TMUX_LOCAL_TIMEOUT_MS = 5_000;
+export const TMUX_RELAY_TIMEOUT_MS = 22_000;
+
+/** (순수) 이 호출의 상한 — 중계면 길게, 로컬이면 종전 그대로. 판정이 한 자리에 있어야 시험이 잰다. */
+export function tmuxTimeoutMs(relay: readonly string[]): number {
+  return relay.length ? TMUX_RELAY_TIMEOUT_MS : TMUX_LOCAL_TIMEOUT_MS;
+}
+
 export async function tmux(args: string[]): Promise<string> {
   const relay = tmuxExecArgv();
   const [bin, ...prefix] = relay.length ? relay : [TMUX_BIN];
-  const { stdout } = await execFileAsync(bin!, [...prefix, ...args], { timeout: 5000, env: TMUX_ENV });
+  const { stdout } = await execFileAsync(bin!, [...prefix, ...args], { timeout: tmuxTimeoutMs(relay), env: TMUX_ENV });
   return stdout;
 }
 export async function tmuxQuiet(args: string[]): Promise<void> { try { await tmux(args); } catch { /* 비치명 */ } }
