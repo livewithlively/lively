@@ -269,23 +269,54 @@ export async function tryAssignNow(t: DelegateTask): Promise<AssignResult> {
   catch (err) { return { assigned: false, reason: `배치 오류: ${(err as Error)?.message ?? err}` }; }
 }
 
+/**
+ * 배정이 **예외로** 실패한 태스크의 다음 시도까지 기다릴 시간(순수, 지수 백오프).
+ *
+ * ⚠ 용량 부족(`assigned:false`)에는 안 건다 — 그건 값싼 판정이고 자리가 나면 즉시 가야 한다.
+ *  거는 것은 **던져서** 실패한 경우뿐이다: 그 경로는 세션 생성까지 갔다가 중간에 깨진 것이라
+ *  재시도마다 대가가 있다.
+ *
+ * 실측 2026-09-07(매니지드): tick 5초 × 큐 상한 10분 = 태스크당 **약 120회** 재시도가 그대로 돌았다.
+ *  게이트웨이 로그에 «위탁 배정 실패» 693건(6분에 200건), 그 사이 태스크 하나가 시도마다 새 세션 id 를
+ *  만들어 대장에 유령 행을 쌓았고, 2 vCPU 박스의 load average 가 6 을 넘었다.
+ *  백오프를 걸면 같은 10분에 5~6회로 준다(15·30·60·120·120초).
+ */
+export function assignBackoffDelayMs(attempt: number): number {
+  const base = 15_000, max = 120_000;
+  return Math.min(max, base * 2 ** Math.max(0, attempt - 1));
+}
+
+/** 태스크 id → {연속 실패 수, 다음 시도 시각}. 큐에서 사라진 태스크는 매 tick 잊는다(무한 증식 방지). */
+const assignBackoff = new Map<number, { n: number; nextAt: number }>();
+
 async function assignQueued(): Promise<void> {
   const queued = await queuedTasks();
-  if (!queued.length) return;
+  if (!queued.length) { assignBackoff.clear(); return; }
   const now = Date.now();
   const counts = await runningCountByNode();
   const extra = new Map<string, number>(); // 이번 tick 내 배정 가산(동일 노드 과배정 방지)
+  const live = new Set(queued.map((t) => t.id));
+  for (const k of [...assignBackoff.keys()]) if (!live.has(k)) assignBackoff.delete(k);
   for (const t of queued) {
     try {
       // 큐 대기 상한(⑤) — 적합 노드를 QUEUE_MAX 안에 못 얻으면 무한 대기 대신 no_capacity 실패.
+      //  ★ 백오프보다 **먼저** 본다 — 백오프 중인 태스크도 제 시각에 끝나야 한다(상한이 미뤄지면 안 된다).
       if (QUEUE_MAX_MS > 0 && now - new Date(t.created_at).getTime() > QUEUE_MAX_MS) {
         await markFinished(t.id, false, { reason: "no_capacity_timeout" }, `대기 시간 초과(${Math.round(QUEUE_MAX_MS / 60000)}분) — 적합 노드 없음`);
         logger.info({ task: t.id }, "큐 대기 초과 — no_capacity 실패");
+        assignBackoff.delete(t.id);
         continue;
       }
+      const bo = assignBackoff.get(t.id);
+      if (bo && now < bo.nextAt) continue;              // 아직 백오프 중 — 이 tick 은 건너뛴다
       await assignOne(t, counts, extra); // 실패해도 큐 유지(다음 tick 재시도, 상한까지)
+      assignBackoff.delete(t.id);        // 던지지 않았으면 연속이 끊긴다(용량 부족 포함 — 백오프 대상 아님)
     } catch (err) {
-      logger.warn({ err: (err as Error)?.message, task: t.id }, "위탁 배정 실패 — 다음 tick 재시도");
+      const n = (assignBackoff.get(t.id)?.n ?? 0) + 1;
+      const wait = assignBackoffDelayMs(n);
+      assignBackoff.set(t.id, { n, nextAt: now + wait });
+      logger.warn({ err: (err as Error)?.message, task: t.id, attempt: n, retryInMs: wait },
+        "위탁 배정 실패 — 백오프 뒤 재시도");
     }
   }
 }
