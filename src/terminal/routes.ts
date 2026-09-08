@@ -37,9 +37,9 @@ import { isProjectSessionDir } from "../project/project-fs.js";
 // #2116 — 죽은 세션 메타의 '남에게도 보이나' 판정을 다른 게이트와 **같은 술어**로 맞춘다(cwd 축).
 const sharedByFolder = (dir: string): boolean => isProjectSessionDir(dir);
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
-import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, nodeSessionGone, isSelfNode, liveNodes, nodeOfSession, nodeSessionHarness, sessionHostsInScope, NODE_STATE_STALE_MS } from "../node/registry.js";
+import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, nodeSessionGone, isSelfNode, isSessionHostNode, liveNodes, nodeOfSession, nodeSessionHarness, sessionHostsInScope, NODE_STATE_STALE_MS } from "../node/registry.js";
 import type { NodeSessionInfo } from "../node/registry.js";
-import { relayNodeId, sessionRelayNodeId, gatewayDefersToSessionHost } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #2636 — 화면이 안 준 좌표는 서버가 되찾는다
+import { relayNodeId, sessionRelayNodeId, sameTmuxCoordinate, isBoxSessionRow, gatewayDefersToSessionHost } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #2636 — 화면이 안 준 좌표는 서버가 되찾는다 · #3745 — 박스 세션엔 세션 호스트 좌표도 같은 tmux 다
 import type { NodeOp } from "../node/protocol.js";
 import { normalizeTheme } from "./catalog.js"; // #1683 테마 값 정규화(순수 — catalog 가 소유)
 import { getNode, listNodes } from "../node/store.js";
@@ -1072,11 +1072,19 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //   종전 중앙 경로로 흘러 거기서 다시 읽고 정직하게 실패한다(중앙 세션의 종전 동작 무변경).
     //  #2592 — 셀프 노드 좌표는 어느 출처에서 와도 접힌다: 같은 tmux 라 중앙 경로가 같은 답을 즉답으로 준다.
     const desired = await getSessionState(req.params.id).catch(() => undefined);
+    // ★ #3745 — **박스(중앙) 세션에 붙은 세션 호스트 좌표는 릴레이 지시가 아니다.** 세션 호스트가 상주하자
+    //  매니지드 중앙 세션이 통째로 안 지워졌다(2026-09-08 실측: `?node=` 를 비우든 `sesshost-46e3` 로 주든
+    //  둘 다 404 「그 노드에 이 세션이 없습니다」 — 호스트가 그 테넌트의 세션을 전부 스냅샷에 실어 목록 행에
+    //  좌표가 붙고, 화면은 그 좌표를 그대로 DELETE 에 싣는다). 아래 «행이 있으면 그 행의 노드여야 한다»
+    //  가드는 옳다 — 틀린 것은 **박스 세션에 노드 좌표가 서는 것** 자체다. 그 호스트는 게이트웨이와 같은
+    //  tmux 를 보므로(설계 — declaredSessionHost 머리말) 셀프 노드 좌표와 같은 «한 바퀴»이고, 접으면
+    //  아래 중앙 경로가 종전 그대로 답한다(소유자만 파괴적 삭제 · 세션 자격 회수 · 노드 생사와 무관).
+    const boxRow = isBoxSessionRow(desired);   // 행이 **있고** 노드가 없다 = 이 게이트웨이가 만든 세션
     const nodeId = sessionRelayNodeId({
       query: req.query.node as string | undefined,
       desired: desired?.node_id,
       snapshot: nodeOfSession(req.params.id),
-    }, isSelfNode);
+    }, sameTmuxCoordinate({ boxRow, isSelf: isSelfNode, isSessionHost: isSessionHostNode }));
     if (nodeId) {
       const me = idOf(userOf(req));
       const id = req.params.id;
