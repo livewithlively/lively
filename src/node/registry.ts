@@ -139,6 +139,25 @@ export function liveNodes(): NodePublic[] {
 export function nodeOnline(id: string): boolean { return conns.has(keyOf(id)); }
 
 /**
+ * 이 테넌트의 노드들을 «게이트웨이가 세션 목록의 소유를 놓아도 되나» 의 입력 모양으로 (#2600 T2 d4).
+ *  판정 자체는 순수 술어 `self-node.gatewayDefersToSessionHost` 가 한다 — 여기는 **재료만** 모은다.
+ *
+ * ⚠ 선언은 **상태 스냅샷**에서 읽는다(연결이 아니라). `NodeState.sessionHost` 머리말의 그 이유와 같다 —
+ *  연결에서 읽으면 부팅 직후처럼 연결이 없는 순간에 선언이 안 보인다. 그리고 스냅샷이 아직 없는 노드는
+ *  이 목록에 **안 들어간다** = 그 노드로는 소유를 놓지 않는다(fail-closed).
+ */
+export function sessionHostsInScope(now: number = Date.now()): Array<{ declared: boolean; online: boolean; stateAgeMs: number | null }> {
+  const out: Array<{ declared: boolean; online: boolean; stateAgeMs: number | null }> = [];
+  for (const [id, st] of inScope(states)) {
+    out.push({ declared: declaredSessionHost({ session_host: st.sessionHost }), online: conns.has(keyOf(id)), stateAgeMs: now - st.ts });
+  }
+  return out;
+}
+
+/** 신선 임계 — 목록 소유 판정도 attach 정책과 **같은 자**를 쓴다(둘이 갈리면 «붙을 수는 있는데 목록엔 없다»가 난다). */
+export const NODE_STATE_STALE_MS = STATE_STALE_MS;
+
+/**
  * 지운 노드를 **이 프로세스의 기억에서도** 지운다(#3558). `store.deleteNode`(DB 3표) 직후에 부른다.
  *
  * 종전엔 삭제가 DB 만 지우고 여기 캐시는 그대로 뒀다. 그래서 **지운 노드가 게이트웨이 재시작 전까지 자기

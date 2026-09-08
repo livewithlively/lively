@@ -21,8 +21,8 @@ import { provisionProjectRepos } from "./project-provision.js";
 import { startProjectProvision, projectProvisionStatus } from "./project-provision-jobs.js";
 import { provisionProjectOnNode, provisionStatusOnNode, nodeProjectSessions } from "../node/provision-remote.js";
 import { launchSession, sessionInputFromBody } from "../terminal/session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
-import { isSelfNode } from "../node/registry.js";
-import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다)
+import { isSelfNode, sessionHostsInScope, NODE_STATE_STALE_MS } from "../node/registry.js";
+import { relayNodeId, gatewayDefersToSessionHost } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다)
 import { decorateNodeRows } from "../terminal/node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB)
 import { receiveUpload, uploadError, nfcPath } from "../terminal/upload-file.js";
 import { manifestFiles } from "./project-manifest.js";
@@ -377,7 +377,11 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   app.get(`${prefix}/:id/sessions`, auth, wrap(async (req, res) => {
     const { base } = await projBase(Number(req.params.id), req);
     res.setHeader("Cache-Control", "no-store");
-    const all = await listSessions(userOf(req));
+    //  #2600 T2 d4 — AI 세션 탭(terminal/routes.ts)과 **같은 규칙**: 선언된 세션 호스트가 주인으로 서 있으면
+    //   게이트웨이는 목록을 자기 tmux 로 만들지 않는다. 두 탭이 갈리면 같은 세션이 한쪽에선 호스트가 만든
+    //   카드로, 다른 쪽에선 게이트웨이가 만든 카드로 보인다(#1746 이 적어 둔 «두 목록의 답을 같게» 규율).
+    const sessionHostOwns = gatewayDefersToSessionHost(sessionHostsInScope(), NODE_STATE_STALE_MS);
+    const all = sessionHostOwns ? [] : await listSessions(userOf(req));
     const underBase = (s: { dir?: string }): boolean => !!s.dir && (s.dir === base || s.dir.startsWith(base + path.sep));
     const local = all.filter(underBase);
     // 복원 가능(#1059 E) — 재부팅·회수로 죽었으나 desired-state 가 남은 이 프로젝트 폴더의 세션(라이브 우선, 이중표기 방지).
