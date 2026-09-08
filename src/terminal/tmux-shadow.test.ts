@@ -2,7 +2,7 @@
 import { strict as assert } from "node:assert";
 import test, { afterEach } from "node:test";
 import {
-  shadowExecutable, foldOldError, classifyOutcome, compareExecuted, comparePlanned, shadowGate, shadowTmux,
+  shadowExecutable, foldOldError, classifyOutcome, compareExecuted, comparePlanned, shadowGate, shadowTmux, volatileVerb,
   installShadowReporter, resetShadowStats, shadowStats, formatShadowSummary, SHADOW_MAX_INFLIGHT,
   type ShadowEngine, type ShadowReport, type OldOutcome,
 } from "./tmux-shadow.js";
@@ -55,6 +55,31 @@ test("[F2] 부류 — gone 은 «(session container … is gone)» 확답만(tmu
   assert.equal(classifyOutcome(bad("세션 컨테이너 tmux 조회 실패(목록을 통째로 못 봤다): x"), "old"), "fanoutfail");
   assert.equal(classifyOutcome(bad("세션 컨테이너 tmux 조회 실패(목록을 통째로 못 봤다): x"), "new"), "fanoutfail", "🔴 «통째로 못 봤다)» 가 (못 봤다) 전송으로 잡혔다");
   assert.equal(classifyOutcome(ok("x"), "old"), "ok");
+});
+
+test("[F3] ★ 병합이 전송 실패를 «통째로 못 봤다» 로 싸도 new 쪽은 transport 다(라이브 2026-09-08: 34건이 mismatch 로 셌다) · old 쪽의 같은 포장은 fanoutfail", () => {
+  const wrapped = (inner: string) => bad(`세션 컨테이너 tmux 조회 실패(목록을 통째로 못 봤다): ${inner}`);
+  assert.equal(classifyOutcome(wrapped("broker exec-start 실패: socket hang up"), "new"), "transport", "🔴 exec-start 끊김을 tmux 조회 실패로 읽었다");
+  assert.equal(classifyOutcome(wrapped('broker exec-create 실패: 503: {"message":"node channel busy"}'), "new"), "transport");
+  assert.equal(classifyOutcome(wrapped("broker exec-inspect 실패: x"), "new"), "transport");
+  assert.equal(classifyOutcome(wrapped("loading container: file does not exist"), "new"), "fanoutfail", "runsc 문구를 싼 것은 여전히 조회 실패");
+  assert.equal(classifyOutcome(wrapped("broker exec-start 실패: socket hang up"), "old"), "fanoutfail", "옛 경로엔 broker-client 문구가 없다 — 포장 그대로");
+  assert.deepEqual(compareExecuted(TMUX_NO_SERVER, wrapped("broker exec-start 실패: socket hang up")), { kind: "explained", why: "new-transport" }, "old noserver · new 전송 실패 → class 불일치가 아니라 new-transport");
+  assert.deepEqual(compareExecuted(ok("a\nb\nc\n"), wrapped("broker exec-create 실패: 503: x")), { kind: "explained", why: "new-transport" });
+});
+
+test("[E2] 휘발 동사 — capture-pane·display-message·show-options(-window-options) 만 · 목록·has-session 은 아니다", () => {
+  for (const a of [["capture-pane", "-t", A.sid, "-p"], ["display-message", "-p", "-t", A.sid, "#{pane_title}"], ["show-options", "-t", A.sid, "-v", "@box_state"], ["show-window-options", "-t", A.sid]]) assert.equal(volatileVerb(a), true, a.join(" "));
+  for (const a of [["list-sessions", "-F", "x"], ["has-session", "-t", A.sid], ["list-panes", "-a"], ["set-option", "-t", A.sid, "@x", "1"], []]) assert.equal(volatileVerb(a), false, `🔴 휘발이 아닌데: ${a.join(" ")}`);
+});
+
+test("[C12] 휘발 동사의 stdout 차이는 explained:volatile — code 차이·전송은 그대로 · 목록 동사는 여전히 mismatch:stdout", () => {
+  assert.deepEqual(compareExecuted(ok("idle 1788847645\n"), ok("idle 1788847660\n"), true), { kind: "explained", why: "volatile" });
+  assert.deepEqual(compareExecuted(ok("l1\nl2\n"), ok("l1\nl2\nl3\n"), true), { kind: "explained", why: "volatile" }, "화면 23줄 vs 24줄");
+  assert.deepEqual(compareExecuted(ok("x\n"), ok("x\n"), true), { kind: "match" });
+  assert.equal(compareExecuted(ok("x\n"), GONE_A, true).kind, "mismatch", "🔴 휘발이라고 code 차이까지 삼켰다");
+  assert.equal(compareExecuted(ok("a\nb\n"), ok("a\nc\n"), false).kind, "mismatch", "🔴 목록 동사의 stdout 차이가 휘발로 접혔다");
+  assert.equal(compareExecuted(ok("a\nb\n"), ok("a\nc\n")).kind, "mismatch", "기본값은 휘발 아님");
 });
 
 // ── C 실행 대조 ──────────────────────────────────────────────────────────────────────
@@ -156,6 +181,13 @@ test("[O1] 읽기 동사 — 실행 · 판정 · 통계 · 리포터 한 번", a
   const v = await shadowTmux(["list-sessions", "-F", "x"], SLUG, 1, oldOk(`${A.container}\n${B.container}\n`), () => e);
   assert.deepEqual(v, { kind: "match" }); assert.deepEqual(e.execs, [A.container, B.container], "sid 순");
   assert.equal(reps.length, 1); assert.equal(reps[0]!.executed, true); assert.equal(reps[0]!.verb, "list-sessions"); assert.equal(reps[0]!.stats.compared, 1);
+});
+test("[O1b] 조립 — capture-pane 은 실행하되 stdout 차이를 volatile 로 · list-sessions 는 아니다", async () => {
+  const e1 = engine({ sessions: [A], out: () => ({ code: 0, stdout: "screen v2\n", stderr: "" }) });
+  assert.deepEqual(await shadowTmux(["capture-pane", "-t", A.sid, "-p"], SLUG, 1, oldOk("screen v1\n"), () => e1), { kind: "explained", why: "volatile" });
+  assert.deepEqual(e1.execs, [A.container], "실행은 한다");
+  const e2 = engine({ sessions: [A], out: (c) => ({ code: 0, stdout: `${c}\n`, stderr: "" }) });
+  assert.equal((await shadowTmux(["list-sessions", "-F", "x"], SLUG, 1, oldOk("other\n"), () => e2)).kind, "mismatch", "🔴 목록 동사가 휘발로 접혔다");
 });
 test("[O2] 쓰기 동사 — exec 0 · 계획 대조", async () => {
   const e = engine({ sessions: [A] });

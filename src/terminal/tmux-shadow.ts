@@ -74,21 +74,24 @@ const GONE_RE = /can't find session: \S+ \(session container .* is gone\)/;     
 const NO_SERVER_RE = /^no server running/m;
 const FANOUT_FAIL_RE = /세션 컨테이너 tmux 조회 실패/;                                  // 양쪽 병합이 같은 문구로 낸다(«통째로 못 봤다»)
 const OLD_TRANSPORT_RE = /^lvly tmux-relay: /m;                                       // 중계의 die() — 브로커에 못 닿음·예산 초과·파싱 실패
-const NEW_TRANSPORT_RE = /\(못 봤다\)|^broker exec-(?:create|start|inspect) 실패/m;    // 코어 경로의 fold·broker-client 실패 문구
+const NEW_TRANSPORT_RE = /\(못 봤다\)|broker exec-(?:create|start|inspect) 실패/;      // 코어 경로의 fold·broker-client 실패 문구 — 줄 머리에 안 묶는다(병합 포장 안에도 있다)
 
 /** (순수) 답의 부류. `side` 가 갈리는 이유: 전송 실패 문구가 옛 경로(중계)와 코어 경로(broker-client)에서 다르다. */
 export function classifyOutcome(o: TmuxOutcome & { spawnFailed?: boolean }, side: "old" | "new"): OutcomeClass {
   if (o.code === 0) return "ok";
   if (side === "old" && (o.spawnFailed || OLD_TRANSPORT_RE.test(o.stderr))) return "transport";
-  if (FANOUT_FAIL_RE.test(o.stderr)) return "fanoutfail";
   if (side === "new" && o.stderr === TMUX_UNOBSERVED.stderr) return "unobserved";
+  //  ★ 전송을 fanoutfail 보다 먼저 본다 — 병합이 컨테이너 하나의 전송 실패(`broker exec-start 실패: socket hang up` · exec-create 503)를
+  //   «통째로 못 봤다» 로 싸서 내보내는데, 그건 tmux 조회가 아니라 **전송**이 실패한 것이다(라이브 실측 2026-09-08: 그렇게 싸인 34건이
+  //   mismatch:code/class 로 셌다). 옛 경로의 fanoutfail 은 runsc 문구를 싸므로 전송 문구가 안 들어 있다.
   if (side === "new" && NEW_TRANSPORT_RE.test(o.stderr)) return "transport";
+  if (FANOUT_FAIL_RE.test(o.stderr)) return "fanoutfail";
   if (GONE_RE.test(o.stderr)) return "gone";
   if (NO_SERVER_RE.test(o.stderr)) return "noserver";
   return "other";
 }
 
-export type ExplainedWhy = "order" | "unobserved" | "old-transport" | "new-transport" | "text";
+export type ExplainedWhy = "order" | "unobserved" | "old-transport" | "new-transport" | "text" | "volatile";
 export type MismatchWhy = "stdout" | "code" | "class" | "plan" | "unobserved-vs-ok" | "internal";
 export type ShadowVerdict =
   | { kind: "match" }
@@ -96,15 +99,24 @@ export type ShadowVerdict =
   | { kind: "mismatch"; why: MismatchWhy; detail: string }
   | { kind: "skipped"; why: "inflight" | "sample" };
 
-const head = (s: string, n = 80): string => JSON.stringify(s.trim().split("\n")[0]?.slice(0, n) ?? "");
+const head = (s: string, n = 160): string => JSON.stringify(s.trim().split("\n")[0]?.slice(0, n) ?? "");
 const lines = (s: string): string[] => s.split("\n").filter(Boolean);
 
-/** (순수) 실행한 두 답을 견준다 — 읽기 동사. */
-export function compareExecuted(old: OldOutcome, neu: TmuxOutcome): ShadowVerdict {
+/**
+ * 읽는 시점마다 값이 다른(휘발) 동사 — 화면(capture-pane)·형식 출력(display-message: `#{pane_current_command}`·`#{history_size}`)·상태 옵션
+ *  (show-options: `@box_state` = `idle <시각>`). 옛 경로와 코어 경로가 **다른 시각**에 읽으므로(라이브 실측: 코어 경로가 허브를 지나 12~35초)
+ *  stdout 이 달라도 «다른 답» 이 아니다 — 같은 컨테이너(`-t <sid>` 는 이름으로 결정)를 읽은 것이면 시차다. code 가 다르면 여전히 mismatch.
+ */
+const VOLATILE_VERBS: ReadonlySet<string> = new Set(["capture-pane", "capturep", "display-message", "display", "show-options", "show", "show-window-options", "showw"]);
+export function volatileVerb(args: readonly string[]): boolean { const { verb } = tmuxSessionOf(args); return verb !== null && VOLATILE_VERBS.has(verb); }
+
+/** (순수) 실행한 두 답을 견준다 — 읽기 동사. `volatile` 이면 stdout 차이는 시차로 설명된다(code 차이는 아니다). */
+export function compareExecuted(old: OldOutcome, neu: TmuxOutcome, volatile = false): ShadowVerdict {
   const oc = classifyOutcome(old, "old"), nc = classifyOutcome(neu, "new");
   if (oc === "transport") return { kind: "explained", why: "old-transport" };
   if (oc === "ok" && nc === "ok") {
     if (old.stdout === neu.stdout) return { kind: "match" };
+    if (volatile) return { kind: "explained", why: "volatile" };
     const a = lines(old.stdout), b = lines(neu.stdout);
     if (a.length === b.length && [...a].sort().join("\n") === [...b].sort().join("\n")) return { kind: "explained", why: "order" };
     const first = a.find((l, i) => l !== b[i]) ?? b.find((l, i) => l !== a[i]) ?? "";
@@ -219,6 +231,7 @@ export async function shadowTmux(
   const t0 = Date.now();
   const verb = tmuxSessionOf(args).verb;
   const executed = shadowExecutable(args);
+  const volatile = volatileVerb(args);
   let verdict: ShadowVerdict;
   const gate = shadowGate(sample, inflight);
   if (gate) {
@@ -231,9 +244,9 @@ export async function shadowTmux(
       try { engine = makeEngine(); } catch (e) { engineErr = (e as Error)?.message ?? String(e); }
       const [o, n] = await Promise.all([oldP, engine ? coreSide(engine, slug, args, executed) : Promise.resolve(null)]);
       if (!n) verdict = { kind: "mismatch", why: "internal", detail: `코어 경로 설정 오류: ${engineErr}` };
-      else if ("failed" in n) verdict = executed ? compareExecuted(o, n.failed) : (classifyOutcome(o, "old") === "transport" ? { kind: "explained", why: "old-transport" } : { kind: "explained", why: "new-transport" });
+      else if ("failed" in n) verdict = executed ? compareExecuted(o, n.failed, volatile) : (classifyOutcome(o, "old") === "transport" ? { kind: "explained", why: "old-transport" } : { kind: "explained", why: "new-transport" });
       else if ("plan" in n) verdict = comparePlanned(o, n.plan);
-      else verdict = compareExecuted(o, n.outcome);
+      else verdict = compareExecuted(o, n.outcome, volatile);
     } catch (e) {
       verdict = { kind: "mismatch", why: "internal", detail: `그림자 내부 오류: ${(e as Error)?.message ?? String(e)}` };
     } finally { inflight--; }
