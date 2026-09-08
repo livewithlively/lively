@@ -2,7 +2,8 @@
 //  + '세션 종료 확답' 판정(#835).
 // 실행: npm run build && node dist/terminal/terminal-pty.test.js
 import assert from "node:assert/strict";
-import { inputToSendKeys, inputToSendKeysArgv, isPsmuxBin, createInputPump, resizeToRefresh, captureCmd, stateCmd, mouseResetCmd, STATE_MARKER, handleControlMsg, parseEtimeSec, summarizeAttachProcs, attachClose } from "./terminal-pty.js";
+import path from "node:path";
+import { inputToSendKeys, inputToSendKeysArgv, isPsmuxBin, createInputPump, resizeToRefresh, captureCmd, stateCmd, mouseResetCmd, STATE_MARKER, handleControlMsg, parseEtimeSec, summarizeAttachProcs, attachClose, attachCwd } from "./terminal-pty.js";
 import { isSessionGoneError } from "./terminal-sessions.js";
 import { TMUX_BIN } from "./catalog.js";
 
@@ -519,4 +520,26 @@ t("[attach] 판정 불가는 gone 이 아니다 — 살아있는 세션을 '종�
   // 호출부가 sessionGone 실패를 false 로 접는다. 그 입력에서는 권한만으로 갈린다.
   assert.equal(attachClose(true, false), null);
   assert.deepEqual(attachClose(false, false), { code: 4403, reason: "no-access" });
+});
+
+// ── attach cwd 폴백 (#2600 T2 d4 실측 2026-09-08) ──────────────────────────
+// 매니지드 세션 호스트의 홈(`/var/lib/lvly-sesshost/<slug>`)은 그 uid 소유였는데 **부모가 root 0700** 이라
+//  통과(x)가 안 됐다. node-pty 자식이 exec 직전 chdir 에서 죽으며 pty 로 `chdir(2) failed.: Permission denied`
+//  한 줄만 뱉었고, 사람 화면엔 시도할 때마다 그 줄이 하나씩 쌓였다(세션은 영영 안 붙는다).
+//  attach 의 cwd 는 세션 pane 에 아무 영향이 없으므로, 못 들어가면 죽지 말고 내려가야 한다.
+
+t("[attach cwd] 홈에 들어갈 수 있으면 홈을 쓴다(종전 동작 무회귀)", () => {
+  assert.equal(attachCwd("/home/lvly", () => true), "/home/lvly");
+});
+
+t("[attach cwd] ★ 홈에 못 들어가면 루트로 떨어진다 — attach 가 chdir 하나로 죽지 않는다", () => {
+  const root = attachCwd("/var/lib/lvly-sesshost/lively-46e3", () => false);
+  assert.notEqual(root, "/var/lib/lvly-sesshost/lively-46e3");
+  assert.equal(root, path.parse(process.cwd()).root || path.sep);
+});
+
+t("[attach cwd] 홈이 빈 값이면 들어갈 수 있나 묻지도 않고 루트 — 빈 문자열을 cwd 로 넘기지 않는다", () => {
+  let asked = 0;
+  assert.equal(attachCwd("", () => { asked++; return true; }), path.parse(process.cwd()).root || path.sep);
+  assert.equal(asked, 0);
 });

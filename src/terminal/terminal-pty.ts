@@ -13,6 +13,8 @@ import { spawn as cpSpawn, execFile as cpExecFile } from "node:child_process";  
 import { promisify } from "node:util";
 import { logger } from "../log.js";
 import os from "node:os";
+import path from "node:path";
+import { accessSync, constants as fsConstants } from "node:fs";
 import { TMUX_BIN } from "./terminal-sessions.js";
 import { isPsmuxBin } from "./catalog.js";   // #1791 — 정의가 catalog(leaf)로 내려갔다(위 재수출과 짝)
 import { tmuxExecArgv } from "./tmux-exec.js";
@@ -68,10 +70,47 @@ export interface AttachTerm {
 /** psmux 판정 — 정의는 catalog.ts(leaf)로 내렸다(#1791, tmux-exec 의 sessionGone 도 쓴다). 종전 import 경로를 위해 재수출. */
 export { isPsmuxBin } from "./catalog.js";
 
+/** 이 디렉터리로 **들어갈 수 있나**(chdir 권한 = 디렉터리의 x 비트). 자식이 exec 직전에 할 일을 부모가 미리 묻는다. */
+function dirEnterable(dir: string): boolean {
+  try { accessSync(dir, fsConstants.X_OK); return true; } catch { return false; }
+}
+
+/**
+ * attach pty 의 작업디렉터리 — **홈에 못 들어가면 루트로 떨어진다.**
+ *
+ * attach 는 tmux **클라이언트**일 뿐이라 이 cwd 는 세션 pane 에 아무 영향이 없다(attachSession 머리말).
+ *  그래서 종전엔 «게이트웨이가 늘 접근 가능한 서버 홈» 이라는 전제로 `os.homedir()` 를 그냥 넘겼다.
+ *
+ * ⚠ 그 전제가 **세션 호스트에서 깨졌다**(실측 2026-09-08, 매니지드 lively-46e3 · #2600 T2 (d) d4):
+ *  유닛이 준 홈 `/var/lib/lvly-sesshost/<slug>` 는 그 uid 소유였지만 **부모**가 root 0700 이라 통과(x)가
+ *  안 됐다. 그러면 node-pty 자식이 exec 직전 `chdir` 에서 죽으며 pty 로 **`chdir(2) failed.: Permission denied`
+ *  한 줄만 뱉는다** — 사람 화면엔 시도할 때마다 그 줄이 하나씩 쌓이고 세션은 영영 안 붙는다.
+ *  서버 로그에는 아무것도 안 남는다(자식이 낸 문자열이라 이쪽은 «attach 가 곧 끝났다» 로만 보인다).
+ *
+ * 아무 의미도 없는 값 하나 때문에 attach 가 통째로 죽는 자리다 — **못 들어가면 포기하지 말고 내려간다.**
+ *  같은 기제를 `tmux -c` 에서 한 번 밟았고(#524) 그때는 «주지 않는 것» 으로 고쳤다. 여기는 줘야 하는
+ *  자리라 «들어갈 수 있는 것을 준다» 로 고친다.
+ *
+ * ⚠ 폴백이 **묻히지 않게** 호출부가 한 번 경고한다 — 이번 사고의 절반은 «진단이 아무 데도 안 남은 것» 이었다.
+ */
+export function attachCwd(home: string = os.homedir(), canEnter: (dir: string) => boolean = dirEnterable): string {
+  if (home && canEnter(home)) return home;
+  //  루트는 POSIX 에서 늘 통과 가능하고(윈도우도 드라이브 루트는 열려 있다), 무엇보다 **이 값이 무엇이든
+  //   attach 의 의미는 안 바뀐다.** 진짜 cwd 를 고르는 자리가 아니라 «죽지 않을 값» 을 고르는 자리다.
+  return path.parse(process.cwd()).root || path.sep;
+}
+
+let attachCwdFellBack = false;   // 폴백 경고는 프로세스당 한 번(그 상태는 지속적이라 매 attach 마다 찍으면 로그가 덮인다)
+
 function spawnAttachTerm(bin: string, args: string[], env: Record<string, string>): AttachTerm {
+  const cwd = attachCwd();
+  if (cwd !== os.homedir() && !attachCwdFellBack) {
+    attachCwdFellBack = true;
+    logger.warn({ home: os.homedir(), cwd }, "attach cwd: 홈에 들어갈 수 없어 루트로 떨어진다 — attach 는 계속된다(#524 계열)");
+  }
   if (!isPsmuxBin(bin)) {
     // encoding:null → onData 가 Buffer(raw 바이트). 아래 relay 가 디코드하지 않는 이유는 attachSession 주석 참조.
-    const t = ptySpawn(bin, args, { name: "xterm-256color", cols: 80, rows: 24, cwd: os.homedir(), env, encoding: null });
+    const t = ptySpawn(bin, args, { name: "xterm-256color", cols: 80, rows: 24, cwd, env, encoding: null });
     return {
       onData: (cb) => { t.onData((d) => cb(d as unknown as Buffer)); },
       onExit: (cb) => { t.onExit(() => cb()); },
@@ -80,7 +119,7 @@ function spawnAttachTerm(bin: string, args: string[], env: Record<string, string
       kill: (sig) => t.kill(sig),
     };
   }
-  const c = cpSpawn(bin, args, { cwd: os.homedir(), env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+  const c = cpSpawn(bin, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
   let exited = false;
   const fire = new Set<() => void>();
   const done = (): void => { if (exited) return; exited = true; for (const f of fire) f(); };
