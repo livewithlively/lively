@@ -60,6 +60,66 @@ export function declaredSessionHost(n: { session_host?: boolean } | null | undef
 }
 
 /**
+ * 게이트웨이가 이 테넌트의 세션 목록을 **자기 tmux 로 만들지 말아야 하나** (#2600 T2 d4).
+ *
+ * ── 왜 필요한가 ───────────────────────────────────────────────────────────────
+ * 멤버 PC 노드 세션은 게이트웨이가 tmux 를 한 번도 안 부른다 — op 를 그 노드로 넘긴다(`NODE_OPS`,
+ *  «정책=게이트웨이, 실행=노드»). 매니지드만 예외였던 이유는 **그 세션의 주인 프로세스가 노드에 없어서**다.
+ *  선언된 세션 호스트가 그 자리에 서면 예외가 사라져야 하는데, 오늘 `mergeSessionViews` 는 `local`(게이트웨이
+ *  tmux)이 이기고 `remote`(노드 스냅샷)에서 **좌표만** 물려받는다 — 그래서 호스트가 있어도 카드의 메타는
+ *  계속 게이트웨이가 만들고, attach 만 호스트로 간다(반쪽). 이 술어가 그 반쪽을 닫는다.
+ *
+ * ── 세 조건이 **다** 참일 때만 손을 뗀다 (fail-closed) ─────────────────────────
+ *  · `declared` — 선언된 세션 호스트만. 멤버 PC 노드(선언 없음)는 이 축을 건드리지 않는다.
+ *  · `online`   — 주인이 붙어 있어야 한다. 죽은 주인에게 목록을 맡기면 그 테넌트가 통째로 빈다.
+ *  · 스냅샷이 **신선**해야 한다 — 붙어 있어도 아직 아무것도 못 봤거나(`null`) 낡았으면 그 답을 정본으로
+ *    쓸 수 없다. 「모르면 넘기지 않는다」가 이 자리의 규율이다(#835 와 같은 방향).
+ *
+ * ⚠ 하나라도 모르면 **false** — 게이트웨이가 종전대로 답한다. 이 술어가 참이 되는 배포는 오늘
+ *  «선언된 세션 호스트를 띄운 매니지드 테넌트» 뿐이고, 셀프호스트·멤버 PC 배포는 한 줄도 안 바뀐다.
+ */
+/**
+ * 노드 스냅샷에서 세션을 모은다(순수) — 「모든 주인」을 봐야 하는 자리용 (#2600 T2 d4).
+ *
+ * ── 왜 필요한가 ───────────────────────────────────────────────────────────────
+ * 「답 기다림」 알림 스윕(`sweepAwaitingNotifications`, 30초 주기·테넌트 순회)이 게이트웨이 tmux 를
+ *  `listSessionsRaw()` 로 읽는다. 계수 실측(2026-09-08): 그 스윕이 게이트웨이 tmux 호출의 **64%** 였다
+ *  — 세션이 0개인 빈 시험 테넌트까지 테넌트당 정확히 16/창이었다(사용량과 무관한 고정 주기라는 증거).
+ *  세션의 주인이 노드로 옮겨간 테넌트에서는 그 답을 **노드 스냅샷**에서 읽으면 된다.
+ *
+ * ── 규율 ──────────────────────────────────────────────────────────────────────
+ *  · **온라인이고 신선한** 노드만. 오프라인·미보고(`null`)·낡은 노드의 세션은 넣지 않는다 — 낡은 근거로
+ *    「답을 기다려요」를 울리면 아무도 없는 세션에 알림이 간다.
+ *  · 신선도 경계는 **포함**(`<= staleMs`)이고, `gatewayDefersToSessionHost` 와 **같은 자**를 쓴다.
+ *    둘이 갈리면 「목록은 호스트가 답하는데 알림은 게이트웨이가 본다」는 어긋남이 생긴다.
+ *  · ★ **선언된 세션 호스트만** 넣는다. 이 자리는 «게이트웨이 tmux 가 보던 것» 을 그대로 갈아끼우는
+ *    것이고, 그건 매니지드 세션 컨테이너뿐이었다 — 멤버 PC 노드 세션은 이 스윕에 **원래 없었다**
+ *    (`listSessionsRaw` 는 게이트웨이 자기 tmux 만 읽는다). 선언 없는 노드까지 넣으면 여태 못 보던
+ *    세션 수백 개가 한꺼번에 들어오는데, `pickAwaitingTransitions` 는 **처음 보는 세션이 `awaiting`
+ *    이면 곧바로 알림**을 낸다(`previous.get(id) ?? false`) — 사람에게 알림 폭풍이 간다.
+ *  · 자격 노드가 여럿이면 이어붙인다.
+ *  · **가시성 필터를 걸지 않는다.** 이 자리는 모든 주인의 세션을 보고 각 세션의 주인에게만 알린다.
+ */
+export function nodeSnapshotSessions<T>(
+  nodes: ReadonlyArray<{ declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly T[] }>,
+  staleMs: number,
+): T[] {
+  const out: T[] = [];
+  for (const n of nodes) {
+    if (!n.declared || !n.online || n.stateAgeMs === null || !(n.stateAgeMs <= staleMs)) continue;
+    out.push(...n.sessions);
+  }
+  return out;
+}
+
+export function gatewayDefersToSessionHost(
+  hosts: ReadonlyArray<{ declared: boolean; online: boolean; stateAgeMs: number | null }>,
+  staleMs: number,
+): boolean {
+  return hosts.some((h) => h.declared && h.online && h.stateAgeMs !== null && h.stateAgeMs <= staleMs);
+}
+
+/**
  * 이 노드를 셀프 노드로 **새로 표시할 것인가** — 판정 한 칸의 결정 (#2600 T2).
  *
  * ⚠ 이름이 «이 노드가 셀프 노드인가» 가 **아니다**. 이미 확정된 노드에는 `false` 를 돌려준다(다시 표시할
@@ -136,6 +196,57 @@ export function sessionRelayNodeId(
   return relayNodeId(sources.query, isSelf)
     || relayNodeId(sources.desired, isSelf)
     || relayNodeId(sources.snapshot, isSelf);
+}
+
+/**
+ * 이 좌표가 «같은 tmux 로 한 바퀴 돌아오라» 를 뜻하나 — **박스(중앙) 세션에는 세션 호스트도 그렇다** (#3745).
+ *
+ * `relayNodeId` 는 그 접기를 **셀프 노드** 하나로 했다. 그런데 같은 성질을 가진 노드가 하나 더 있다:
+ *  **선언된 세션 호스트**다(`declaredSessionHost` 머리말 — 그 프로세스는 같은 브로커 소켓으로 게이트웨이와
+ *  **같은 tmux 에 닿는다**. 그게 사고가 아니라 존재 이유라 «선언» 으로 셀프 노드와 갈랐다).
+ *
+ * ── 무엇이 터졌나 (2026-09-08 매니지드 `lively-46e3` 실측) ───────────────────
+ * 세션 호스트 `sesshost-46e3` 가 상주하자 **중앙 세션이 안 지워졌다** — `DELETE …/sessions/<id>` 가
+ *  404 「그 노드에 이 세션이 없습니다」. 호스트가 그 테넌트의 세션을 전부 스냅샷에 싣기 때문에
+ *  ⓐ 목록 행에 `node: sesshost-46e3` 가 붙고(화면은 그 좌표로 `?node=` 를 싣는다 — web/terminal/session-list.ts)
+ *  ⓑ 좌표를 안 실어도 서버가 스냅샷에서 되찾는다(#2636). 그래서 **어느 쪽으로 와도** 노드 분기로 가는데,
+ *  박스 세션의 desired 행은 `node_id` 가 NULL 이라 «행이 있으면 그 행의 노드여야 한다» 가드에 걸린다.
+ *  세션 호스트가 내려간 창(롤 직후)에만 200 이 나던 **조건부 결함**이었다.
+ *
+ * ── 왜 좌표를 접나(호스트로 릴레이하지 않고) ────────────────────────────────
+ * 박스 세션은 **이 게이트웨이가 만든 세션**이다(desired 행이 그 증거 — 노드 세션은 #1791 부터 `node_id` 를
+ *  달고 산다). 그 세션의 tmux 는 게이트웨이가 여태 부리던 바로 그 tmux 이고, 중앙 경로는 그 자리에서
+ *  ① 소유자만 파괴적 삭제(admin 도 못 한다 — 회수만 허용) ② 세션 스코프 자격(훅·MCP 토큰) 회수
+ *  ③ 노드 연결 상태와 무관한 즉답 을 이미 지킨다. 좌표를 세워 호스트로 넘기면 그 셋이 **조용히** 달라진다.
+ *  ⇒ 접는 쪽이 「종전 동작 그대로」다. 실행 축을 호스트로 옮기는 일은 #2600 T2 가 op 별로 따로 진다.
+ *
+ * ⚠ **`boxRow` 는 «행이 있고 그 행에 노드가 없다» 일 때만 참**이다. 행이 아예 없는 세션(#1791 이전에
+ *  만들어진 노드 세션)은 참이 아니다 — 그 세션의 좌표는 스냅샷뿐이라 접으면 #2636 의 누수(노드에 묻지도
+ *  않고 행만 지우고 «종료했어요»)가 그대로 돌아온다.
+ * ⚠ 세션 호스트 접기에 **온라인·신선도를 묻지 않는다.** 이 판정의 근거는 «지금 답할 수 있나» 가 아니라
+ *  «그 좌표가 다른 기계를 가리키나» 이고, 선언된 세션 호스트는 꺼져 있어도 다른 기계가 아니다. 여기에
+ *  생사를 얹으면 호스트가 깜빡이는 동안 중앙 세션이 다시 못 지워진다(그게 이 결함의 모양이었다).
+ */
+/**
+ * 이 desired 행이 **박스(중앙) 세션**인가 — 행이 **있고** 그 행에 노드가 없다 (#3745).
+ *
+ * 두 «아니다» 를 가르는 것이 이 함수의 전부다:
+ *  · 행이 **아예 없다** → 아니다. 그 세션의 좌표는 스냅샷뿐이고(#1791 이전에 만들어진 노드 세션),
+ *    박스로 읽으면 노드에 묻지도 않고 행만 지우는 #2636 의 누수가 그대로 돌아온다.
+ *  · 행에 노드가 **적혀 있다** → 아니다. 진짜 그 컴퓨터의 세션이다.
+ * 빈 문자열·공백뿐인 `node_id` 는 «없음» 으로 읽는다 — 좌표 판정(`relayNodeId`)이 쓰는 것과 같은 자다.
+ */
+export function isBoxSessionRow(row: { node_id?: string | null } | null | undefined): boolean {
+  return !!row && !String(row.node_id ?? "").trim();
+}
+
+export function sameTmuxCoordinate(o: {
+  /** desired 행이 **있고** 그 행에 노드가 없다 = 이 게이트웨이가 만든 박스(중앙) 세션 */
+  boxRow: boolean;
+  isSelf: (id: string) => boolean;
+  isSessionHost: (id: string) => boolean;
+}): (id: string) => boolean {
+  return o.boxRow ? (id: string): boolean => o.isSelf(id) || o.isSessionHost(id) : o.isSelf;
 }
 
 /**

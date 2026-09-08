@@ -28,6 +28,8 @@
 //  ⚠ #2460 — 그중 **사람이 고른 것**(고정·접힘·묶는 축)은 서버가 정본이고 브라우저는 첫 페인트용
 //   캐시다(shell-prefs.ts). 선언 한 줄이 어느 쪽인지 말한다 — shellPrefStore = 계정 · deviceStore = 이 기기.
 import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
+import { findMatcher } from '../lib/find.js';
+import { splitFolderRows } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsTouch } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버다(선언 한 줄이 그걸 말한다)
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
@@ -65,6 +67,11 @@ const PIN_KEY = shellPrefStore('lively_v2_side_pin', 'list');     // 위에 고�
 const APP_PIN_STORE = shellPrefStore('lively_v2_app_pin', 'list');
 const BINS_KEY = 'lively_v2_side_bins';   // '1' = 아카이브·휴지통 두 행을 **발치에 고정**(목록을 내려도 늘 보인다, #1851)
 const MAX_SESS = 12;                      // 한 프로젝트 아래 펼쳐 보이는 세션 상한(넘치면 '외 n개' → 프로젝트 화면)
+// ★ 방금 멈춘 세션은 접지 않는다 (#762, 원준 2026-09-05 신고: "폴더를 펼쳐도 그 안에서 안 보였다").
+//  종전엔 tmux 가 죽는 순간 그 세션이 「지난 세션 n」 한 줄 뒤로 **소리 없이** 내려갔다 — 사람은 어제 하던 일을
+//  오늘 폴더에서 찾다가 없어서 프로젝트 화면까지 들어가 골라야 했다(실측: SNUCOM BUILD 폴더의 지난 세션 20개).
+//  멈춘 지 하루가 안 된 것은 '배경'이 아니라 **아직 오늘의 일감**이다. 도는 세션 바로 아래 그대로 세운다.
+//  그보다 오래된 것만 묶음 뒤로 — 그래야 「지난 세션」이 원래 뜻(배경)대로 남는다.
 
 // ══ #2033 — 홈 목록의 **묶는 축**(세션 ↔ 프로젝트) ═══════════════════════════════
 //  집합은 그대로 두고 묶는 축만 바꾼다. 행 문법(×·압정·상태 점)도, 목록에 무엇이 있는지도 그대로다.
@@ -884,43 +891,8 @@ function fltCount(): number { return (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) 
 //     한글은 조합 중에도 이 상태를 지난다(ㅍ → 프 → 프ㄹ …) — 그래서 이건 '기능'이기 전에
 //     **치는 도중 화면이 죽지 않게 하는 것**이다.
 //  잣대를 하나로 두는 이유는 이 파일의 다른 규율과 같다: 구역마다 새 방식을 만들지 않는다.
-const CHO = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'];
-/** 한글 음절은 초성 한 자로, 나머지 글자(영문·숫자·호환자모)는 그대로. '프로젝트 762' → 'ㅍㄹㅈㅌ 762' */
-function chosung(s: string): string {
-  let out = '';
-  for (const ch of s) {
-    const c = ch.codePointAt(0) || 0;
-    out += c >= 0xac00 && c <= 0xd7a3 ? CHO[Math.floor((c - 0xac00) / 588)] : ch;
-  }
-  return out;
-}
-//  칸 사이 경계는 남기고(줄바꿈) 칸 **안의** 띄어쓰기만 지운다 — 다 지우면 '…프로젝트' + '세션…' 이
-//  한 낱말로 붙어 엉뚱한 것이 걸린다(제목 끝과 다음 칸 머리를 잇는 질의가 통과한다).
-const deSpace = (s: string): string => s.replace(/[ \t\u00a0]+/g, '');
-/** 질의에 자모가 섞여 있나 — 초성 축은 이때만 본다. 늘 보면 '세션'(→ㅅㅅ)이 온 목록을 통과시킨다. */
-const HAS_JAMO = /[ㄱ-ㅎ]/;
-/**
- * 사이드바 찾기 판정기. 빈 질의는 늘 참(거르지 않는다).
- *  · 공백으로 끊은 **낱말 전부**가 들어 있어야 한다(AND) — 순서는 안 본다.
- *  · 각 낱말은 띄어쓰기를 지운 축에서 찾는다 — 「새세션」 ↔ '새 세션'.
- *  · 자모가 섞인 낱말은 **초성 축**에서도 찾는다 — 「ㅍㄹㅈㅌ」·조합 중인 「프로젝ㅌ」.
- */
-function findMatcher(raw: string): (...parts: Array<string | null | undefined>) => boolean {
-  const q = String(raw || '').trim().toLowerCase();
-  if (!q) return () => true;
-  const toks = q.split(/\s+/).filter(Boolean);
-  return (...parts): boolean => {
-    const hay = parts.filter(Boolean).join('\n').toLowerCase();
-    const flat = deSpace(hay);
-    let cho = '';
-    return toks.every((t) => {
-      if (flat.includes(deSpace(t))) return true;
-      if (!HAS_JAMO.test(t)) return false;
-      if (!cho) cho = deSpace(chosung(hay));
-      return cho.includes(deSpace(chosung(t)));
-    });
-  };
-}
+//  ⭐ 잣대 자체는 **잎 모듈**(lib/find.ts)로 내렸다(#762) — 자료 칸·타임라인도 같은 잣대로 찾는다.
+//   여기 사본을 되만들지 마라: 한쪽만 고치면 같은 질의가 구역마다 다르게 걸린다.
 /** 홈·[AI 세션] 목록의 행 하나 — **화면에 보이는 것**(제목·부제·내 마지막 말·프로젝트 이름)을 그대로 찾는 대상으로 삼는다. */
 function instMatch(raw: string): (i: SideInstance) => boolean {
   const m = findMatcher(raw);
@@ -2230,9 +2202,18 @@ function renderTree(rowsIn?: Row[]): void {
   }
   const q = sideFilter.trim().toLowerCase();
   const match = findMatcher(sideFilter);
-  const hit = (r: Row) => (r.proj ? (match(r.proj.name) || String(r.proj.id) === q) : match('프로젝트 없는 세션'));
-  const stateOf = (r: Row) => (stateFilter ? r.live.filter((s) => s.stateKey === stateFilter) : r.live);
-  const pastOf = (r: Row) => (stateFilter ? r.past.filter((s) => s.stateKey === stateFilter) : r.past);
+  // ★ 찾기는 **세션 이름도** 본다 (#762, 원준 2026-09-05). 종전엔 프로젝트 이름만 봐서, 세션 이름을 치면
+  //  0건이었다 — 접힌 「지난 세션」 안의 세션을 이 트리에서 되찾을 길이 아예 없었다(AI 세션 화면까지 가야 했다).
+  //  프로젝트 이름이 걸린 줄은 그 아래를 **그대로** 보여 주고(그 프로젝트를 보러 온 것이다), 세션 이름만 걸린
+  //  줄은 **걸린 세션만** 남긴다(안 그러면 한 세션을 찾았는데 남의 세션 스무 줄이 함께 펼쳐진다).
+  const projHit = (r: Row) => (r.proj ? (match(r.proj.name) || String(r.proj.id) === q) : match('프로젝트 없는 세션'));
+  const sessHit = (r: Row) => !!q && (r.live.some((s) => match(s.label)) || r.past.some((s) => match(s.label)));
+  const hit = (r: Row) => projHit(r) || sessHit(r);
+  const narrow = (r: Row, arr: Sess[]) => (!q || projHit(r) ? arr : arr.filter((s) => match(s.label)));
+  const stateOf = (r: Row) => narrow(r, stateFilter ? r.live.filter((s) => s.stateKey === stateFilter) : r.live);
+  const pastOf = (r: Row) => narrow(r, stateFilter ? r.past.filter((s) => s.stateKey === stateFilter) : r.past);
+  //  세션 이름으로 걸린 줄은 그 세션이 접힌 쪽에 있어도 보이게 편다(못 찾으면 찾기가 아니다).
+  const hitInside = (r: Row) => !projHit(r) && sessHit(r);
   let hiddenDone = 0;
   const shown = rows.filter((r) => {
     if (!hit(r)) return false;
@@ -2241,7 +2222,9 @@ function renderTree(rowsIn?: Row[]): void {
     if ((r.archived || r.trashed) && !r.live.length) return false;   // 휴지통(#1851)도 같은 예외 — 도는 세션이 남아 있으면(남의 것) 보인다
     if (mineOnly && !r.mine) return false;
     if (stateFilter && !stateOf(r).length && !pastOf(r).length) return false;
-    if (r.done && !showDone && !r.live.length && !isPinned(r.key)) { hiddenDone++; return false; }
+    //  ⚠ 찾은 세션이 **완료된 프로젝트 안**에 있으면 숨기지 않는다 — 이름을 치는 사람은 그 세션이 어디
+    //   있는지 몰라서 치는 것이고, 여기서 접으면 «없다»로 읽힌다(접힘·필터와 같은 이유).
+    if (r.done && !showDone && !r.live.length && !isPinned(r.key) && !hitInside(r)) { hiddenDone++; return false; }
     return true;
   }).sort((a, b) => Number(isPinned(b.key)) - Number(isPinned(a.key)) || b.lastWork - a.lastWork || String((b.proj && b.proj.updated_at) || '').localeCompare(String((a.proj && a.proj.updated_at) || '')));
   // ── 진행 중 / 전체 프로젝트 (#1719 사이드바 개편 안2) ─────────────────────────
@@ -2257,7 +2240,7 @@ function renderTree(rowsIn?: Row[]): void {
   if (countEl) countEl.textContent = splitting
     ? `진행 중 · ${activeRows.length}`
     : `프로젝트 · ${shown.filter((r) => r.proj).length}${q || mineOnly || stateFilter ? ` / ${rows.filter((r) => r.proj && !r.archived && (showDone || !r.done || r.live.length)).length}` : ''}`;
-  const kids: HTMLElement[] = activeRows.map((r) => projRow(r, stateOf(r), pastOf(r), activeKey, selectedPk));
+  const kids: HTMLElement[] = activeRows.map((r) => projRow(r, stateOf(r), pastOf(r), activeKey, selectedPk, hitInside(r)));
   const firstLoose = activeRows.findIndex((r) => !isPinned(r.key));
   if (firstLoose > 0 && kids[firstLoose]) kids[firstLoose].classList.add('after-pins');
   if (splitting && !activeRows.length && last.data.loadedAt) {
@@ -2274,7 +2257,7 @@ function renderTree(rowsIn?: Row[]): void {
       onclick: () => { allOpen = !allOpen; renderTree(); } },
       el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' }),
       el('span', { class: 'n', text: '전체 프로젝트' }), el('span', { class: 'v2-cnt', text: String(totalN) })));
-    if (allOpen) kids.push(...restRows.map((r) => projRow(r, stateOf(r), pastOf(r), activeKey, selectedPk)));
+    if (allOpen) kids.push(...restRows.map((r) => projRow(r, stateOf(r), pastOf(r), activeKey, selectedPk, hitInside(r))));
   }
   if (!kids.length) {
     kids.push(!last.data.loadedAt ? el('p', { class: 'v2-tree-note', text: '불러오는 중…' }) : !last.data.projects.length
@@ -2320,7 +2303,8 @@ function binPinBtn(): HTMLElement {
       sv('path', { d: PIN_NEEDLE }), sv('path', { d: PIN_BODY })));
 }
 
-function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selectedPk: string): HTMLElement {
+/** @param hitInside 찾기가 **이 줄 안의 세션**에 걸렸다(프로젝트 이름이 아니라) — 폴더도 묶음도 펴 줘야 보인다. */
+function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selectedPk: string, hitInside = false): HTMLElement {
   const p = r.proj;
   const pk = r.key;
   // 프로젝트 없는 세션도 **작업대(캔버스)** 로 간다(#/p/0) — 옛 AI 세션 앱이 아니라(원준 2026-08-19).
@@ -2332,7 +2316,8 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
   //  ⚠ 상태 필터가 켜져 있으면 편다 — 걸러 놓고 접혀 있으면 "0개"로 보인다(찾으려고 건 필터가 감추는 꼴).
   const isSel = pk === selectedPk;
   const has = sess.length + past.length;
-  const isOpen = has > 0 && (stateFilter ? true : (isSel ? !closedSelected.has(pk) : openSet.has(pk)));
+  //  ⚠ 찾기가 이 줄 **안의** 세션에 걸렸으면 편다 — 상태 필터와 같은 이유다(찾으려고 건 렌즈를 접힘이 가리면 안 된다).
+  const isOpen = has > 0 && (stateFilter || hitInside ? true : (isSel ? !closedSelected.has(pk) : openSet.has(pk)));
   const caret = has
     ? el('button', { class: 'v2-car', type: 'button', 'aria-label': isOpen ? '접기' : '펼치기', 'aria-expanded': String(isOpen), text: '›', onclick: (e: Event) => {
       e.preventDefault(); e.stopPropagation();
@@ -2347,8 +2332,11 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
   //  ⚠ 필터 때문에 저절로 펴지는 길은 **걸러 놓은 그 상태가 지난 세션 안에 실제로 있을 때**로 좁힌다.
   //   종전엔 '필터가 켜져 있고 도는 세션이 없으면' 이었다 — 그래서 '확인 필요'(도는 상태)로 걸러도
   //   멈춘 세션만 있는 프로젝트들의 묶음이 우수수 펼쳐졌다. 걸러 놓은 것이 그 안에 없으면 펼 이유가 없다.
-  const pastHasFiltered = !!stateFilter && past.some((s) => s.stateKey === stateFilter);
-  const pastOpen = past.length > 0 && (pastSet.has(pk) || (pastHasFiltered && !sess.length));
+  //  ★ 멈춘 것을 둘로 가른다 — 방금(24h) 멈춘 것은 도는 세션과 같은 자리에, 오래된 것만 묶음 뒤로(lib/sess-fold).
+  const { now: nowRows, cold } = splitFolderRows(sess, past, Date.now());
+  const pastHasFiltered = !!stateFilter && cold.some((s) => s.stateKey === stateFilter);
+  //  찾는 중이고 걸린 것이 접힌 쪽에 있으면 편다 — 렌즈를 걸어 놓고 묶음이 가리면 못 찾는다(상태 필터와 같은 문법).
+  const pastOpen = cold.length > 0 && (pastSet.has(pk) || hitInside || (pastHasFiltered && !sess.length));
   const tipBits = p
     ? [`#${p.id} · ${p.status_category === 'done' ? '완료' : p.status_category === 'unstarted' ? '시작 전' : '진행 중'}`, r.lastWork ? '마지막 작업 ' + when(r.lastWork) : '세션 없음', r.mine ? '내 프로젝트' : (p.created_by ? `${(people[p.created_by] && people[p.created_by].display_name) || p.created_by} 만듦` : '')]
     : ['프로젝트에 붙지 않은 세션 — 이 세션들의 작업대를 엽니다'];
@@ -2402,14 +2390,14 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
     if (e.detail >= 2 && !e.metaKey && !e.ctrlKey) { e.preventDefault(); e.stopPropagation(); }
   });
   if (p) row.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); beginRenameProject(pk, p); });
-  const head = sess.slice(0, MAX_SESS);
-  const pastHead = past.slice(0, MAX_SESS);
+  const head = nowRows.slice(0, MAX_SESS);
+  const coldHead = cold.slice(0, MAX_SESS);
   const list = has ? el('div', { class: 'v2-ss-list', role: 'group', hidden: !isOpen },
-    ...head.map((s) => sessRow(s, activeKey, sessText(s, p ? p.name : ''))),
-    sess.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${sess.length - MAX_SESS}개` }) : null,
-    past.length ? pastHead2(pk, past.length, pastOpen) : null,
-    ...(pastOpen ? pastHead.map((s) => sessRow(s, activeKey, sessText(s, p ? p.name : ''), true)) : []),
-    pastOpen && past.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${past.length - MAX_SESS}개` }) : null) : null;
+    ...head.map((s) => sessRow(s, activeKey, sessText(s, p ? p.name : ''), !isLive(s))),
+    nowRows.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${nowRows.length - MAX_SESS}개` }) : null,
+    cold.length ? pastHead2(pk, cold.length, pastOpen) : null,
+    ...(pastOpen ? coldHead.map((s) => sessRow(s, activeKey, sessText(s, p ? p.name : ''), true)) : []),
+    pastOpen && cold.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${cold.length - MAX_SESS}개` }) : null) : null;
   return el('div', { class: 'v2-pj' + (isOpen ? ' open' : ''), role: 'treeitem', 'aria-expanded': has ? String(isOpen) : null }, row, list);
 }
 

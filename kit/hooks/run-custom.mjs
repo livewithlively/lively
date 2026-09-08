@@ -351,6 +351,27 @@ function hookOutputOf(raw) {
   return (h && typeof h === "object" && !Array.isArray(h)) ? h : null;
 }
 
+// 컨텍스트 이벤트(SessionStart·UserPromptSubmit·PostToolUse)의 훅 출력에서 하네스 봉투를 벗긴다.
+//  훅은 PreToolUse 와 같은 모양(hookSpecificOutput.additionalContext JSON)으로 컨텍스트를 내는 일이 흔하다.
+//  N개를 그대로 이어붙이면 `{...}\n\n{...}` 가 되어 하네스가 "JSON 처럼 보이는데 파싱 실패" 로 통째 버린다
+//  — 훅은 전부 성공했는데 컨텍스트는 하나도 안 들어가는 무음 실패다. 봉투는 러너가 벗기고 본문만 합친다
+//  (다시 봉투가 필요한 하네스·이벤트는 emitContext 가 하나로 감싼다).
+//  ⚠ 컨텍스트'만' 실은 봉투일 때만 벗긴다 — decision·systemMessage 등 다른 뜻이 함께 실려 있으면 벗기는 순간
+//   그 뜻이 사라진다(훅 1개면 하네스가 봉투를 그대로 소비하던 경로다). 그 경우 raw 로 두고, 다른 출력과
+//   합쳐져 하네스가 못 읽게 될 수 있으니 진단만 남긴다.
+function unwrapContext(raw) {
+  let j; try { j = JSON.parse(raw); } catch { return raw; }
+  const h = hookOutputOf(raw);
+  if (!h || typeof h.additionalContext !== "string") return raw;
+  const extra = Object.keys(j).some((k) => k !== "hookSpecificOutput")
+    || Object.keys(h).some((k) => k !== "hookEventName" && k !== "additionalContext");
+  if (!extra) return h.additionalContext;
+  const carried = Object.keys(j).filter((k) => k !== "hookSpecificOutput")
+    .concat(Object.keys(h).filter((k) => k !== "hookEventName" && k !== "additionalContext"));
+  process.stderr.write(`[lively] hook envelope carries ${carried.join(",")} — kept as-is\n`);
+  return raw;
+}
+
 function mergePreToolUse(outputs, relay) {
   let best = null; const reasons = []; const ctxs = [];
   for (const raw of outputs) {
@@ -430,7 +451,7 @@ async function main() {
   //  PostToolUse 도 주입(#637 Stage2): 코드파일 Read 즉시 leaf 주입(domain-recall-action). emitContext 가 이벤트별 포맷
   //   (PostToolUse 는 hookSpecificOutput.additionalContext JSON — Claude Code 계약, 담당자 검증). 실행결과 없으면 no-op.
   //  나머지 이벤트(Stop·SessionEnd 등)는 여전히 부수효과만(stdout 미전파).
-  if ((EVENT === "SessionStart" || EVENT === "UserPromptSubmit" || EVENT === "PostToolUse") && outputs.length) emitContext(outputs.join("\n\n"));
+  if ((EVENT === "SessionStart" || EVENT === "UserPromptSubmit" || EVENT === "PostToolUse") && outputs.length) emitContext(outputs.map((o) => unwrapContext(o).trim()).filter(Boolean).join("\n\n"));
 }
 
 main().then(() => process.exit(0)).catch(() => process.exit(0));

@@ -100,7 +100,15 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/store/token-revoke.pg-test.mjs
-      # ⑤ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
+      # ⑤ 프로젝트↔카테고리 연결의 정직성 — 반영 못 하면 성공을 가장하지 않고 409/404 로 끊는지.
+      #    이 버그는 반환값이 거짓말한 것이라(스토어는 정직, 핸들러가 그 값을 버림) **핸들러 호출 + DB
+      #    read-back** 이 아니면 못 잡는다.
+      - name: 프로젝트 카테고리 반영 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/project-category-apply.pg-test.mjs
+      # ⑥ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.
       - name: OAuth 전 구간 통합 테스트 (실 게이트웨이)

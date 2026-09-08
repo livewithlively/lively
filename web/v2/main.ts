@@ -11,6 +11,7 @@ import { renderOnboarding, onboardingDone, markWelcomeSeen } from './onboarding.
 import { $view, anchoredPopover, api, el, state, toast } from '../core.js';
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsSync } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
+import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘 일감'을 자르는 자(달력 자정이 아니다)
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, nativeAppByRoute, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
@@ -1104,16 +1105,22 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       // 기존 공개 route(#/s/:id)는 유지하되 실행 정체성은 세션을 실제로 띄운 AppPackage의 AppInstance로 확보한다.
       // 일반 세션만 ai-session builtin으로 접힌다 — 종전의 '세션 앱'과 일반 앱이 같은 package/instance 모델을 쓴다.
       // 인스턴스 메타 실패가 살아 있는 세션 자체를 가리지 않도록 화면 렌더와는 분리한다.
-      try {
-        //  ⚠ 모를 때 'AI 세션' 같은 자리표시자를 보내지 않는다(#2022) — 서버는 conflict 시 title 을 COALESCE 로
-        //   덮으므로, 목록이 늦은 한 판이 저장된 멀쩡한 이름을 자리표시자로 굳혀 버린다(실측: '/status'·'claude · resume').
-        //   안 보내면 이전 값이 그대로 살고, 되찾기(repairUnknownSessNames)도 그 값을 다시 쓸 수 있다.
-        const title = s ? (sessText(s, projName(data, s.projectId)).main || s.label || undefined) : undefined;
-        const appId = String(s?.raw?.appId || s?.raw?.app_id || 'ai-session');
-        const instance = await ensureSessionAppInstance(appId, s?.id || id, { projectId: s?.projectId ? Number(s.projectId) : null, title });
-        if (seq !== tab.seq) return;
-        setTabAppInstance(tab, instance.id, instance.app_id);
-      } catch (error) { console.warn('[app-instance] AI 세션 인스턴스 확보 실패', error); }
+      //  ★ #3537 — **기다리지 않는다.** 이 왕복은 탭에 붙일 인스턴스 메타를 구하는 것뿐인데, `await` 로 두면
+      //   그동안 터미널 화면이 아예 안 그려진다(세션을 열 때마다 이 왕복만큼 흰 화면이 길어진다). 바로 위
+      //   주석이 이미 «화면 렌더와는 분리한다» 라고 말하고 있었는데 실제로는 렌더 앞을 막고 있었다.
+      //   늦게 도착하면 그때 탭에 얹는다 — `seq` 가 그 사이 다른 화면으로 옮겨 간 판을 버린다(종전과 같은 걸쇠).
+      void (async () => {
+        try {
+          //  ⚠ 모를 때 'AI 세션' 같은 자리표시자를 보내지 않는다(#2022) — 서버는 conflict 시 title 을 COALESCE 로
+          //   덮으므로, 목록이 늦은 한 판이 저장된 멀쩡한 이름을 자리표시자로 굳혀 버린다(실측: '/status'·'claude · resume').
+          //   안 보내면 이전 값이 그대로 살고, 되찾기(repairUnknownSessNames)도 그 값을 다시 쓸 수 있다.
+          const title = s ? (sessText(s, projName(data, s.projectId)).main || s.label || undefined) : undefined;
+          const appId = String(s?.raw?.appId || s?.raw?.app_id || 'ai-session');
+          const instance = await ensureSessionAppInstance(appId, s?.id || id, { projectId: s?.projectId ? Number(s.projectId) : null, title });
+          if (seq !== tab.seq) return;
+          setTabAppInstance(tab, instance.id, instance.app_id);
+        } catch (error) { console.warn('[app-instance] AI 세션 인스턴스 확보 실패', error); }
+      })();
       // 팝아웃 창(?solo=1)은 **세션 하나만 담은 창**이다 — 프로젝트 셸을 두르지 않는다(그게 이 창의 정의).
       if (SOLO) {
         const trail = drawAsideSession(tab, s || null);
@@ -1581,7 +1588,10 @@ function sideInstances(): SideInstance[] {
     //   어디에도 없었다. 사람 눈엔 "오늘 쓴 게 왜 안 보이지"다.
     //  ⚠ 그렇다고 지난 세션을 **전부** 세우지는 않는다(내 세션 320건 중 314건이 그 부류다) — 그건 목록이 아니라
     //   명부고, [AI 세션] 구역이 이미 하는 일이다. 홈은 '오늘 붙들고 있는 것'이라 **오늘 것까지만** 받는다.
-    if (!liveNow && dayGroup(s.lastSeen || 0, now) !== '오늘') continue;
+    //  ⚠ 자르는 자는 **달력 자정이 아니라** '오늘 일감의 시작'이다(lib/sess-fold workDayStart). 자정으로 자르면
+    //   새벽에 일하는 사람의 목록이 통째로 빈다 — 원준 2026-09-05 01:20 실측: 그 시각 그 사람의 멈춘 세션이 홈
+    //   목록에 **0줄**이었고, 찾던 세션은 최신에서 2번째였다("폴더를 펼쳐도 그 안에서 안 보였다"). 낮에는 자정과 같다.
+    if (!liveNow && (s.lastSeen || 0) < workDayStart(now)) continue;
     //  지난 세션엔 상태 점을 주지 않는다 — 점은 '지금 벌어지는 일'을 말하는 자리다(#1954 §4).
     //   구분은 영역이 아니라 행이 진다(past → .v2-app-inst--past, 원준 지시 2026-08-27).
     put('sess:' + s.id, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0,   // lastSeen 은 ms(views.ts)

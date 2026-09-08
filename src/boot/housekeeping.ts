@@ -396,6 +396,10 @@ function startBackgroundSweeps(): void {
   //  ⚠ 회수 스윕(5분)에 얹지 않고 따로 둔다 — 알림은 5분 뒤에 오면 알림이 아니다.
   //  전이에만 반응하므로(notify-policy.pickAwaitingTransitions) 자주 돌아도 같은 대기를 다시 울리지 않는다.
   setInterval(() => {
+    //  #2600 T2 d4 — **목록 출처(게이트웨이 tmux vs 노드 스냅샷)를 여기서 고르지 않는다.**
+    //   이 스윕은 두 자리에서 돈다(여기 타이머 + 매니지드의 요청 정비표 `sessions/outbox-request-sweep.ts`).
+    //   호출부에 판정을 심었더니 **한 자리만 고쳐졌고** 나머지가 종전대로 게이트웨이 tmux 를 계속 읽었다.
+    //   판정은 `sweepAwaitingNotifications` 안(`defaultSessionList`)에 한 벌로 있다 — 그 머리말이 근거다.
     void perTenant("awaiting-notify", () => sweepAwaitingNotifications());
   }, 30_000).unref();
   // #1631 — 리브 2턴: 처음 설정 직후 열린 리브 세션에, 첫 수집 배치가 돈 뒤 증류 지시를 넣는다.

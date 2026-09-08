@@ -157,6 +157,12 @@ export type SessionEvent =
   //  이 세션이 무엇을 할 수 있나(슬래시·스킬·모델·MCP).
   | { t: "facts"; facts: SessionFacts }
   | { t: "usage"; usage: UsageInfo }
+  //  대화 파일이 자랐다 (#3699) — **내용이 아니라 사실만** 나른다. 대화의 정본은 파일이고, 화면은 이걸
+  //   받으면 그 자리에서 한 번 읽는다(되묻기 → 통보). 두 곳에서 그리면 같은 말이 두 번 뜬다.
+  | { t: "transcript.grew"; size: number; uuid?: string }
+  //  그 통보가 **지금 실제로 오고 있나**(#3699). 화면은 이 값이 참일 때만 폴을 안전망 주기로 늦춘다 —
+  //   못 미는 배포(노드 세션·못 읽는 하네스·중계 실패)에서 늦추면 대화가 그냥 느려진다.
+  | { t: "transcript.watch"; live: boolean; reason?: string }
   //  ★2 — 못 알아본 것. 버리지 않는다: 새 하네스가 무엇을 주는지 여기로 관측한다.
   | { t: "raw"; source: string; payload: unknown };
 

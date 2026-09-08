@@ -16,7 +16,7 @@ import {
 import { authNodeTokenDetailed, getNode, touchNode, appendNodeLinkEvent, type OrgNode } from "./store.js";
 import { denialMessage, denialKey, shouldLogDenial, type NodeAuthOutcome } from "./auth-denial.js";   // #2161
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
-import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
+import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, nodeSnapshotSessions, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
 import { selfNodePossible } from "../exec-topology.js";   // #2599 T2 — 「이 판정이 성립하는 배포인가」의 선결 조건
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
 import { scopeKey, nodeUpgradeTenant } from "./registry-scope.js";
@@ -137,6 +137,58 @@ export function liveNodes(): NodePublic[] {
 }
 
 export function nodeOnline(id: string): boolean { return conns.has(keyOf(id)); }
+
+/**
+ * 이 테넌트의 노드들을 «게이트웨이가 세션 목록의 소유를 놓아도 되나» 의 입력 모양으로 (#2600 T2 d4).
+ *  판정 자체는 순수 술어 `self-node.gatewayDefersToSessionHost` 가 한다 — 여기는 **재료만** 모은다.
+ *
+ * ⚠ 선언은 **상태 스냅샷**에서 읽는다(연결이 아니라). `NodeState.sessionHost` 머리말의 그 이유와 같다 —
+ *  연결에서 읽으면 부팅 직후처럼 연결이 없는 순간에 선언이 안 보인다. 그리고 스냅샷이 아직 없는 노드는
+ *  이 목록에 **안 들어간다** = 그 노드로는 소유를 놓지 않는다(fail-closed).
+ */
+export function sessionHostsInScope(now: number = Date.now()): Array<{ declared: boolean; online: boolean; stateAgeMs: number | null }> {
+  const out: Array<{ declared: boolean; online: boolean; stateAgeMs: number | null }> = [];
+  for (const [id, st] of inScope(states)) {
+    out.push({ declared: declaredSessionHost({ session_host: st.sessionHost }), online: conns.has(keyOf(id)), stateAgeMs: now - st.ts });
+  }
+  return out;
+}
+
+/**
+ * 이 노드 **하나**가 선언된 세션 호스트인가 — 좌표 접기(`self-node.sameTmuxCoordinate`)가 쓰는 재료 (#3745).
+ *
+ * `sessionHostsInScope` 는 «이 테넌트에 자격 있는 주인이 있나» 를 묻는 자리(목록 소유)라 id 를 안 돌려준다.
+ *  여기는 반대로 «**이 좌표**가 세션 호스트를 가리키나» 다 — 박스 세션에 붙은 그 좌표는 다른 기계가 아니라
+ *  같은 tmux 를 뜻하므로 릴레이 지시로 쓰지 않는다(사연은 그 술어 머리말).
+ *
+ * ⚠ 판정은 `declaredSessionHost` **한 곳**을 부른다(fail-closed — 모르는 노드는 false).
+ * ⚠ 온라인·신선도를 **묻지 않는다.** 이 질문은 «지금 답할 수 있나» 가 아니라 «다른 기계인가» 이고,
+ *  선언된 세션 호스트는 꺼져 있어도 다른 기계가 아니다. 목록 소유(`gatewayDefersToSessionHost`)가
+ *  생사를 함께 보는 것과 갈리는 지점이라 여기 적어 둔다.
+ */
+export function isSessionHostNode(nodeId: string): boolean {
+  const id = String(nodeId ?? "").trim();
+  if (!id) return false;
+  return declaredSessionHost({ session_host: states.get(keyOf(id))?.sessionHost });
+}
+
+/** 신선 임계 — 목록 소유 판정도 attach 정책과 **같은 자**를 쓴다(둘이 갈리면 «붙을 수는 있는데 목록엔 없다»가 난다). */
+export const NODE_STATE_STALE_MS = STATE_STALE_MS;
+
+/**
+ * 이 테넌트의 노드들이 올린 세션 스냅샷 전량 — **가시성 필터 없이** (#2600 T2 d4).
+ *  판정(무엇을 넣나)은 순수 술어 `self-node.nodeSnapshotSessions` 가 하고, 여기는 **재료만** 모은다.
+ *
+ * ⚠ 「모든 주인」을 봐야 하는 자리 전용이다(「답 기다림」 알림 스윕처럼) — 사람에게 보여 줄 목록에는
+ *  쓰지 마라. 그쪽은 `nodeSessionsFor(viewer)` 가 가시성을 판정한다.
+ */
+export function nodeSessionsInScope(now: number = Date.now()): SessionInfo[] {
+  const nodes: Array<{ declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly SessionInfo[] }> = [];
+  for (const [id, st] of inScope(states)) {
+    nodes.push({ declared: declaredSessionHost({ session_host: st.sessionHost }), online: conns.has(keyOf(id)), stateAgeMs: now - st.ts, sessions: st.sessions });
+  }
+  return nodeSnapshotSessions(nodes, STATE_STALE_MS);
+}
 
 /**
  * 지운 노드를 **이 프로세스의 기억에서도** 지운다(#3558). `store.deleteNode`(DB 3표) 직후에 부른다.

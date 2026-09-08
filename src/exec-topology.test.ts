@@ -34,6 +34,7 @@ import {
   parseWorkerK,
   tmuxArgvFor,
   unfreezeExecTopology,
+  parseTmuxRoute,
   type ExecTopology,
 } from "./exec-topology.js";
 
@@ -52,6 +53,7 @@ const TOPO_KEYS = [
   "LIVELY_BOX_SPAWN",
   "LIVELY_BOX_CGSPAWN",
   "LIVELY_ATTACH_WORKER_K",
+  "LIVELY_TMUX_ROUTE", "LVLY_HUB_URL", "LVLY_HUB_SECRET", "LVLY_TMUX_SOCK_TEMPLATE",
 ] as const;
 
 /** 시험용 env 한 벌 — 적지 않은 키는 «미설정»이다. */
@@ -682,6 +684,10 @@ test("★ §7 설정이 아무것도 없는 배포의 값 한 벌 — 종전과 
     },
     nodeToken: "",
     attachWorkerK: 0,
+    //  #2600 T2 (d) d2 — 새 축 둘. 설정 없음 = 꺼짐·길 없음(셀프호스트엔 브로커가 없다).
+    tmuxRoute: "off",
+    tmuxShadowSample: 1,
+    broker: null,
   });
 });
 
@@ -726,4 +732,59 @@ test("★ §7 격리 킬스위치의 의미가 같다 — off 만 끄고 나머�
   for (const v of [undefined, "", "on", "os", "1", "OFF"]) {
     assert.notEqual(computeExecTopology(E({ LIVELY_MEMBER_ISOLATION: v })).isolation, "none");
   }
+});
+
+
+// ── #2600 T2 (d) d2 — tmuxRoute(플래그) · broker(브로커에 닿는 길) ────────────────────────────
+//  spec-d2.md S14·S15·S17 의 토폴로지 몫. 전송 규칙은 `tenant-image/tmux-relay.cjs` 의 transport() 와 같아야 한다(두 벌 방지).
+
+test("§d2-1 tmuxRoute — 정확히 on·1·true(트림)만 켠다 · 그 밖은 전부 꺼짐(기본 off)", () => {
+  for (const v of ["on", "1", "true", "  on  ", "true\n"]) assert.equal(computeExecTopology(E({ ...MANAGED, LIVELY_TMUX_ROUTE: v })).tmuxRoute, "on", JSON.stringify(v));
+  for (const v of [undefined, "", "off", "0", "false", "On", "TRUE", "yes", "enabled", " o n"]) {
+    assert.equal(computeExecTopology(E({ ...MANAGED, LIVELY_TMUX_ROUTE: v })).tmuxRoute, "off", `🔴 ${JSON.stringify(v)} 이 새 경로를 켰다`);
+  }
+  assert.equal(computeExecTopology(E({})).tmuxRoute, "off", "설정 없음 = 꺼짐");
+});
+
+// ── #2600 T2 (d) d3 — shadow(그림자 대조) 값 · 표본 비율 ─────────────────────────────────────
+test("§d3-1 [T1] shadow — `shadow` 는 표본 1 · `shadow:<1..100>` 은 n/100 · 형식 밖(0·101·대소문자·공백)은 off", () => {
+  assert.deepEqual(parseTmuxRoute("shadow"), { mode: "shadow", sample: 1 });
+  assert.deepEqual(parseTmuxRoute(" shadow "), { mode: "shadow", sample: 1 }, "앞뒤 공백만 벗긴다");
+  assert.deepEqual(parseTmuxRoute("shadow:25"), { mode: "shadow", sample: 0.25 });
+  assert.deepEqual(parseTmuxRoute("shadow:1"), { mode: "shadow", sample: 0.01 });
+  assert.deepEqual(parseTmuxRoute("shadow:100"), { mode: "shadow", sample: 1 });
+  for (const v of ["shadow:0", "shadow:101", "shadow:007", "Shadow", "SHADOW", "shadow: 25", "shadow:25%", "shadow:", "shadowy", "shadow:2.5"]) {
+    assert.equal(parseTmuxRoute(v).mode, "off", `🔴 ${JSON.stringify(v)} 이 그림자를 켰다`);
+  }
+  const t = computeExecTopology(E({ ...MANAGED, LIVELY_TMUX_ROUTE: "shadow:40" }));
+  assert.equal(t.tmuxRoute, "shadow"); assert.equal(t.tmuxShadowSample, 0.4);
+});
+
+test("§d3-2 [T2] on·off 에서 표본은 1(뜻 없음) · shadow 가 on 을 켜지 않는다", () => {
+  assert.deepEqual(parseTmuxRoute("on"), { mode: "on", sample: 1 });
+  assert.deepEqual(parseTmuxRoute(undefined), { mode: "off", sample: 1 });
+  assert.equal(computeExecTopology(E({ ...MANAGED, LIVELY_TMUX_ROUTE: "shadow" })).tmuxRoute, "shadow", "🔴 shadow 가 on 으로 읽혔다(코어 경로가 답해 버린다)");
+});
+
+test("§d2-2 broker — 중계 배포에서만 있다: 셀프호스트는 허브 env 가 있어도 null", () => {
+  assert.equal(computeExecTopology(E({})).broker, null);
+  assert.equal(computeExecTopology(E({ LVLY_HUB_URL: "http://h:9093", LVLY_HUB_SECRET: "s" })).broker, null, "중계가 없으면 브로커도 없다");
+  assert.equal(computeExecTopology(E({ LIVELY_TENANCY_MODE: "registry" })).broker, null, "registry 전용 소켓은 브로커가 아니다");
+});
+
+test("§d2-3 broker — 허브 > 소켓 · 반쪽 허브(URL 만)는 소켓으로 · 템플릿 기본값은 tmux-relay.cjs 의 것", () => {
+  assert.deepEqual(computeExecTopology(E({ ...MANAGED, LVLY_HUB_URL: " http://10.0.0.1:9093 ", LVLY_HUB_SECRET: " sec " })).broker,
+    { kind: "hub", url: "http://10.0.0.1:9093", secret: "sec" });
+  assert.deepEqual(computeExecTopology(E({ ...MANAGED, LVLY_HUB_URL: "http://h:9093" })).broker,
+    { kind: "socket", template: "/lvly/tenants/{slug}/sock/session.sock" }, "🔴 비밀 없는 허브 URL 이 허브로 잡혔다(중계는 그 조합에 죽는다)");
+  assert.deepEqual(computeExecTopology(E(MANAGED)).broker, { kind: "socket", template: "/lvly/tenants/{slug}/sock/session.sock" });
+  assert.deepEqual(computeExecTopology(E({ ...MANAGED, LVLY_TMUX_SOCK_TEMPLATE: " /run/lvly-t/{slug}/sock/session.sock " })).broker,
+    { kind: "socket", template: "/run/lvly-t/{slug}/sock/session.sock" });
+  assert.equal(computeExecTopology(E({ ...MANAGED, LVLY_HUB_URL: "http://h:9093", LVLY_HUB_SECRET: "s", LVLY_TMUX_SOCK_TEMPLATE: "/x/{slug}.sock" })).broker?.kind, "hub");
+});
+
+test("§d2-4 새 필드가 종전 필드를 흔들지 않는다 — 같은 env 의 sessionHost·tmux·isolation·storage·attachWorkerK 가 그대로", () => {
+  const a = computeExecTopology(E({ ...MANAGED, LIVELY_ATTACH_WORKER_K: "4" }));
+  const b = computeExecTopology(E({ ...MANAGED, LIVELY_ATTACH_WORKER_K: "4", LIVELY_TMUX_ROUTE: "on", LVLY_HUB_URL: "http://h:9093", LVLY_HUB_SECRET: "s" }));
+  for (const k of ["sessionHost", "tmux", "isolation", "storage", "hooks", "nodeToken", "attachWorkerK"] as const) assert.deepEqual(b[k], a[k], k);
 });

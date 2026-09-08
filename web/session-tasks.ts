@@ -23,7 +23,7 @@
 //  · 모르는 이벤트에 던지지 않는다. 새 표면이 생겨도 화면은 조용히 건너뛴다(session-event.ts ★2).
 //  · **하네스 낱말을 모른다.** `behavior:"allow"` 도 `optionId` 도 서버의 respond 가 만든다(★3).
 import { apiUrl, el, TOKEN_KEY } from './core.js';
-import { splitSse } from './sse-frames.js';
+import { onSessionEvents } from './session-events.js';   // #3699 — /events 연결은 세션당 한 벌
 //  판단(무엇을 접고 무엇을 남기나)은 의존 없는 모듈에 둔다 — 화면 코드는 node 에서 로드조차 안 되므로
 //  그 규칙을 값으로 지킬 수 없다. 그래서 갈라 둔다(sess-face 와 같은 규율).
 import { dockHead, elapsed, visibleTasks, type TaskInfo } from './session-tasks-view.js';
@@ -76,7 +76,6 @@ export function mountSessionTasks(host: HTMLElement, o: SessionTasksOpts): Sessi
   let tasks: TaskInfo[] = [];
   let facts: FactsInfo = {};
   let closed = false;
-  const ctl = new AbortController();
 
   //  ── 자리 순서 = 급한 순서 ───────────────────────────────────────────────────────
   //  승인이 **맨 위**다: 답해야 턴이 진행되는 유일한 것이라, 작업 목록에 밀려 화면 밖으로 나가면 안 된다.
@@ -333,60 +332,15 @@ export function mountSessionTasks(host: HTMLElement, o: SessionTasksOpts): Sessi
   }
 
   //  ── 스트림 ────────────────────────────────────────────────────────────────────
-  //  EventSource 는 헤더를 못 싣는다(토큰이 주소로 샌다) — fetch 스트림으로 읽는다.
-  //  ★ 서버가 25초마다 하트비트를 보내므로, 그보다 넉넉한 동안 **한 바이트도 안 오면 죽은 것**이다.
-  //   말 없는 연결을 살아 있는 것으로 착각하면 재접속 루프가 통째로 멈춘다(2026-08-26 실측 사고).
-  const SILENCE_MS = 40_000;
-
-  async function pump(): Promise<void> {
-    let wait = 1000;
-    while (!closed) {
-      const attempt = new AbortController();
-      const onAbortAll = (): void => attempt.abort();
-      ctl.signal.addEventListener('abort', onAbortAll);
-      let silence: ReturnType<typeof setTimeout> | null = null;
-      const beat = (): void => {
-        if (silence) clearTimeout(silence);
-        silence = setTimeout(() => attempt.abort(), SILENCE_MS);
-      };
-      try {
-        const res = await fetch(apiUrl(`/api/ui/terminal/sessions/${encodeURIComponent(o.sessionId)}/events`), {
-          headers: authHeaders({}), signal: attempt.signal, credentials: 'same-origin',
-        });
-        if (!res.ok || !res.body) throw new Error(`스트림 실패 (${res.status})`);
-        wait = 1000;
-        const reader = res.body.getReader();
-        const dec = new TextDecoder();
-        let acc = '';
-        beat();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          beat();
-          acc += dec.decode(value, { stream: true });
-          const cut = splitSse(acc);
-          acc = cut.rest;
-          for (const d of cut.data) {
-            try { handle(JSON.parse(d)); } catch { /* 깨진 프레임 한 장은 넘긴다 */ }
-          }
-        }
-      } catch { /* 끊겼다 — 아래에서 다시 붙는다 */ }
-      finally {
-        if (silence) clearTimeout(silence);
-        ctl.signal.removeEventListener('abort', onAbortAll);
-      }
-      if (closed) break;
-      await new Promise((r) => setTimeout(r, wait));
-      wait = Math.min(wait * 1.6, 15_000);   // 게이트웨이 재기동 중에 폭주하지 않게
-    }
-  }
-  void pump();
+  //  연결은 **세션당 한 벌**이다(web/session-events.ts) — 같은 세션을 보는 다른 표면(대화창의 대화 파일
+  //   통보, #3699)과 같은 SSE 를 나눠 쓴다. 재접속·침묵 판정·프레임 자르기는 그 층이 쥔다.
+  const offEvents = onSessionEvents(o.sessionId, handle);
 
   return {
     destroy(): void {
       closed = true;
       clearInterval(tick);
-      try { ctl.abort(); } catch { /* noop */ }
+      offEvents();
       if (o.input) {
         o.input.removeEventListener('input', onInput);
         o.input.removeEventListener('keydown', onKey, true);
