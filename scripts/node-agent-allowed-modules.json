@@ -111,6 +111,7 @@
   "dist/terminal/terminal-transcript.js",
   "dist/terminal/tmux-exec.js",
   "dist/terminal/tmux-route.js",
+  "dist/terminal/tmux-shadow.js",
   "dist/terminal/write-cap.js",
   "dist/v6/embedding-provider.js",
   "dist/v6/execution-session-store.js",
