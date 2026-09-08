@@ -47,13 +47,19 @@ export const CENSUS_NONE = "(없음)";
  *  · `node:` 내부 프레임도 건너뛴다 — 우리 코드가 아니다.
  *  · **경로는 안 싣는다**(파일명만). 로그에 절대경로를 실으면 창마다 수 KB 가 늘고, 배포 자리(슬롯 이름)가
  *    로그에 섞여 창끼리 견주기가 어려워진다.
- *  · 두 칸을 잇는 이유: 잎 하나만으로는 `sessions:196` 처럼 **공용 헬퍼**가 나와 정작 «누가 그 헬퍼를
- *    불렀나» 를 못 본다. 그 한 칸이 이 계기의 목적(남은 호출부 지목)의 전부다.
+ *  · 여러 칸을 잇는 이유: 잎 하나만으로는 `sessions:210` 처럼 **공용 헬퍼**가 나와 정작 «누가 그 헬퍼를
+ *    불렀나» 를 못 본다. 그 칸이 이 계기의 목적(남은 호출부 지목)의 전부다.
+ *  · ★ **파일이 같은 프레임은 첫 칸만 남긴다**(2026-09-08 첫 창이 가르쳐 준 것). 그냥 «얕은 것부터 n칸» 으로
+ *    두면 한 파일 안의 내부 호출이 칸을 다 먹는다 — 실제로 첫 창에서 `listSessionsRaw` 경로가
+ *    `sessions:210<sessions:156` 으로 나와 **정작 부른 쪽(알림 스윕이냐 회수기냐 장부냐)이 잘렸다.**
+ *    그건 이 계기가 지금 답해야 하는 바로 그 질문이다. 파일별로 첫 칸만 남기면 같은 길이로
+ *    `sessions:210<awaiting-notifier:26<outbox-request-sweep:63` 처럼 **모듈 사슬**이 보인다.
  *  · 못 뽑으면 `(없음)` — 스택이 없거나(엔진 차이) 전부 배관이면 그렇게 적고, **없는 것을 지어내지 않는다.**
  */
-export function censusSite(stack: string | null | undefined, depth = 2): string {
+export function censusSite(stack: string | null | undefined, depth = 3): string {
   if (!stack) return CENSUS_NONE;
   const out: string[] = [];
+  const seen = new Set<string>();
   for (const raw of stack.split("\n")) {
     const line = raw.trim();
     if (!line.startsWith("at ")) continue;                    // 머리말("Error")·기타 줄
@@ -64,6 +70,8 @@ export function censusSite(stack: string | null | undefined, depth = 2): string 
     if (file.startsWith("node:")) continue;                    // 엔진 내부
     const base = (file.split(/[\\/]/).pop() ?? file).replace(/\.[cm]?[jt]s$/, "");
     if (base.startsWith("tmux")) continue;                     // seam 자신의 배관
+    if (seen.has(base)) continue;                              // ★ 같은 파일의 내부 호출은 칸을 안 먹는다
+    seen.add(base);
     out.push(`${base}:${m[2]}`);
     if (out.length >= depth) break;
   }

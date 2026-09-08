@@ -118,7 +118,7 @@ test("S2 ★ seam 자신의 배관(tmux*)은 건너뛴다 — 첫 «우리 코�
   assert.equal(censusSite(s), "sessions:196");
 });
 
-test("S3 ★ 두 칸을 얕은 것부터 `<` 로 잇는다 — 잎만으로는 «누가 그 헬퍼를 불렀나» 를 못 본다", () => {
+test("S3 ★ 칸을 얕은 것부터 `<` 로 잇는다 — 잎만으로는 «누가 그 헬퍼를 불렀나» 를 못 본다", () => {
   const s = STACK(
     "tmux (/app/dist/terminal/tmux-exec.js:131:20)",
     "collectSessions (/app/dist/terminal/sessions.js:196:9)",
@@ -128,10 +128,23 @@ test("S3 ★ 두 칸을 얕은 것부터 `<` 로 잇는다 — 잎만으로는 �
 });
 
 test("S4 depth 를 넘는 프레임은 안 싣는다", () => {
-  const s = STACK("a (/x/one.js:1:1)", "b (/x/two.js:2:2)", "c (/x/three.js:3:3)");
-  assert.equal(censusSite(s), "one:1<two:2");
+  const s = STACK("a (/x/one.js:1:1)", "b (/x/two.js:2:2)", "c (/x/three.js:3:3)", "d (/x/four.js:4:4)");
+  assert.equal(censusSite(s), "one:1<two:2<three:3", "기본 depth=3");
   assert.equal(censusSite(s, 1), "one:1", "depth=1 이면 한 칸");
-  assert.equal(censusSite(s, 3), "one:1<two:2<three:3", "depth=3 이면 세 칸");
+  assert.equal(censusSite(s, 2), "one:1<two:2", "depth=2 면 두 칸");
+});
+
+test("S4b ★ 같은 파일의 프레임은 첫 칸만 먹는다 — 안 그러면 정작 부른 쪽이 잘린다", () => {
+  //  실측(2026-09-08 첫 창): `listSessionsRaw` 경로가 `sessions:210<sessions:156` 으로 나와
+  //   «알림 스윕이냐 회수기냐 장부냐» 가 통째로 잘렸다. 그게 이 계기가 답해야 하는 질문이었다.
+  const s = STACK(
+    "tmux (/app/dist/terminal/tmux-exec.js:131:20)",
+    "collectSessions (/app/dist/terminal/sessions.js:210:9)",
+    "listSessionsRaw (/app/dist/terminal/sessions.js:156:12)",
+    "sweepAwaitingNotifications (/app/dist/sessions/awaiting-notifier.js:26:20)",
+    "run (/app/dist/sessions/outbox-request-sweep.js:63:5)",
+  );
+  assert.equal(censusSite(s), "sessions:210<awaiting-notifier:26<outbox-request-sweep:63");
 });
 
 test("S5 괄호 없는 프레임 형식도 읽는다", () => {
