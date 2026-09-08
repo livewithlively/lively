@@ -163,14 +163,19 @@ test("★ S1 세션을 **만드는 자리마다** 소속 기록이 붙는다 —
   //   안 붙어도 모른다). 여기서 잠그는 명제는 «생성하는 자리마다 기록이 붙는가» 라는 **대칭**이다.
   //  실측 2026-08-28·2026-09-07: 생성 6곳 중 복원 **박스(로컬)** 분기 한 곳만 기록이 없었다. 그 세션은
   //   gw_session_map 행 없이 태어나 매니지드/registry 배포에서 목록에 영영 안 뜬다(= 복원했는데 못 엶).
-  const lines = readSrc("src/terminal/routes.ts").split("\n");
+  //  #3626 — 생성 라우트(홈·프로젝트)의 자리는 세션 생성 관문(session-launch.ts)으로 옮겨 갔다. 핸드오프·복원은
+  //   routes.ts 에 남아 있다. 두 파일을 함께 본다 — 한 파일만 보면 옮겨 간 자리가 조용히 검사 밖으로 나간다.
   const CREATES = /await (createSession|relayNodeOp<SessionInfo>)\(/;
-  const sites = lines.map((l, i) => (CREATES.test(l) ? i : -1)).filter((i) => i >= 0);
+  const files = ["src/terminal/routes.ts", "src/terminal/session-launch.ts"];
+  const found = files.flatMap((rel) => {
+    const lines = readSrc(rel).split("\n");
+    return lines.map((l, i) => (CREATES.test(l) ? { rel, i, lines } : null)).filter((x): x is { rel: string; i: number; lines: string[] } => x !== null);
+  });
   //  정규식이 낡으면(생성 형태가 바뀌면) 이 테스트는 조용히 아무것도 안 지킨다 — 하한을 같이 박는다.
-  assert.ok(sites.length >= 6, `세션 생성 자리를 ${sites.length}곳만 찾았다 — 생성 형태가 바뀌었으면 위 정규식을 같이 고쳐라`);
-  const missing = sites
-    .filter((i) => !lines.slice(i, i + 40).some((l) => l.includes("recordSessionTenant(")))
-    .map((i) => `${i + 1}행: ${lines[i].trim().slice(0, 90)}`);
+  assert.ok(found.length >= 6, `세션 생성 자리를 ${found.length}곳만 찾았다 — 생성 형태가 바뀌었으면 위 정규식을 같이 고쳐라`);
+  const missing = found
+    .filter(({ i, lines }) => !lines.slice(i, i + 40).some((l) => l.includes("recordSessionTenant(")))
+    .map(({ rel, i, lines }) => `${rel}:${i + 1}행: ${lines[i].trim().slice(0, 90)}`);
   assert.deepEqual(missing, [], `세션을 만들고 소속을 안 새기는 자리가 있다(그 세션은 목록에서 사라진다):\n  ${missing.join("\n  ")}`);
 });
 
