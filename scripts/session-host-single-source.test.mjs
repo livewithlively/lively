@@ -8,7 +8,7 @@
 //
 //  실행: node scripts/session-host-single-source.test.mjs
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -180,4 +180,37 @@ t("[S9] WS 중계 어댑터의 shutdown() 은 종료 경로에서만 불린다",
   }
 });
 
-console.log(`\n${pass} passed — 세션 호스트 단일 출처(#2600 T1)`);
+// ── S10: 「답 기다림」 알림 스윕의 **목록 출처**를 호출부가 정하지 않는다 (#2600 T2 d4) ──
+//  실측 사고(2026-09-08): 이 스윕은 **두 자리에서** 돈다 — 하우스키핑 30초 타이머와 매니지드의 요청
+//   정비표(`sessions/outbox-request-sweep.ts`, 같은 30초 간격). 「세션 호스트가 있으면 노드 스냅샷에서
+//   읽는다」를 **호출부에** 심었더니 한 자리만 고쳐졌고, 나머지가 종전대로 게이트웨이 tmux 를 계속 읽었다.
+//   계수는 줄지 않았는데 커밋 메시지에는 «64% 가 사라진다» 고 적혀 있었다.
+//  ⇒ 규칙: 출처 판정은 `sweepAwaitingNotifications` **안**에 있고, 호출부는 인자를 안 넘긴다.
+//   (시험은 `deps` 로 주입한다 — 그래서 `*.test.ts` 는 대상이 아니다.)
+const NOTIFIER = "src/sessions/awaiting-notifier.ts";
+
+t("[S10] 알림 스윕의 목록 출처 판정이 스윕 안에 있다", () => {
+  const src = code(NOTIFIER);
+  assert.match(src, /gatewayDefersToSessionHost\(/,
+    `${NOTIFIER} 가 출처를 스스로 정하지 않는다 — 그러면 호출부마다 판정이 갈린다`);
+});
+
+t("[S10b] 알림 스윕 호출부는 출처를 안 넘긴다(호출부가 둘 이상이다)", () => {
+  const files = readdirSync(join(ROOT, "src"), { recursive: true, encoding: "utf8" })
+    .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
+    .map((f) => join("src", f))
+    .filter((f) => f !== NOTIFIER);
+  const callers = [];
+  for (const f of files) {
+    const src = code(f);
+    for (const m of src.matchAll(/\bsweepAwaitingNotifications\s*\(([^)]*)/g)) {
+      callers.push(f);
+      assert.equal(m[1].trim(), "",
+        `${f} 가 알림 스윕에 출처를 넘긴다 — 판정이 호출부로 새면 다른 호출부가 조용히 옛 경로로 남는다`);
+    }
+  }
+  assert.ok(callers.length >= 2,
+    `호출부를 ${callers.length}곳밖에 못 찾았다 — 이 시험이 지키려는 «두 자리» 가 사라졌거나 이름이 바뀌었다`);
+});
+
+console.log(`\n${pass} passed — 세션 호스트 단일 출처(#2600 T1·T2 d4)`);
