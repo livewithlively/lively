@@ -130,6 +130,18 @@ test("[R6] 플래그 on — 세션 0 · 관측함 → «no server running»(상�
   } finally { await b2.close(); }
 });
 
+test("[R7] 설정 오류(https 허브)도 execFile 오류 모양(code·stderr)으로 던진다 — 맨 Error 가 아니다 · «못 봤다» 로 읽힌다", async () => {
+  on(); process.env.LVLY_HUB_URL = "https://h:9093"; process.env.LVLY_HUB_SECRET = "s";
+  await assert.rejects(tmux(["list-sessions", "-F", "x"]), (e: unknown) => {
+    const err = e as { code?: number; stderr?: string };
+    assert.equal(err.code, 1, "🔴 code 가 없는 맨 Error 다 — 상위 판정이 전부 거짓으로 떨어진다");
+    assert.match(String(err.stderr), /못 봤다/);
+    assert.equal(isNoTmuxServer(e), false); assert.equal(isSessionGoneError(e, "/opt/homebrew/bin/tmux", true), false);
+    return true;
+  });
+  assert.deepEqual(relayCalls(), [], "설정 오류를 옛 경로로 조용히 폴백하지 않는다(그러면 오설정이 영영 안 보인다)");
+});
+
 test("[S16] 배선 — 새 갈래는 tmux() 맨 앞의 한 줄이고 옛 execFile 줄은 글자 그대로 남아 있다", () => {
   const src = fs.readFileSync(path.join(process.cwd(), "src", "terminal", "tmux-exec.ts"), "utf8");
   const i = src.indexOf("export async function tmux(args: string[]): Promise<string> {");

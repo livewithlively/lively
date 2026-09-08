@@ -758,7 +758,6 @@ test("§d2-3 broker — 허브 > 소켓 · 반쪽 허브(URL 만)는 소켓으�
   assert.deepEqual(computeExecTopology(E(MANAGED)).broker, { kind: "socket", template: "/lvly/tenants/{slug}/sock/session.sock" });
   assert.deepEqual(computeExecTopology(E({ ...MANAGED, LVLY_TMUX_SOCK_TEMPLATE: " /run/lvly-t/{slug}/sock/session.sock " })).broker,
     { kind: "socket", template: "/run/lvly-t/{slug}/sock/session.sock" });
-  //  허브가 있어도 소켓 템플릿을 같이 주면 허브가 이긴다(중앙 배포에선 소켓 마운트가 어차피 없다 — relay 와 같은 규칙).
   assert.equal(computeExecTopology(E({ ...MANAGED, LVLY_HUB_URL: "http://h:9093", LVLY_HUB_SECRET: "s", LVLY_TMUX_SOCK_TEMPLATE: "/x/{slug}.sock" })).broker?.kind, "hub");
 });
 

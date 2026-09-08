@@ -94,6 +94,8 @@ export function sessionContainerName(slug: string, sid: string): string {
 
 /** 이 호출을 어떻게 돌리나 — 계획. */
 export type TmuxPlan =
+  /** ★ 목록을 못 봤고(observed:false) 아는 세션도 0 인데 세션을 지목했다 — «없다» 로 확정하지 않는다(#835). */
+  | { kind: "unobserved" }
   /** 세션 지목이 있고 그 세션 컨테이너가 있다 — 거기 한 번. */
   | { kind: "one"; sid: string; container: string; verb: string | null }
   /** 지목 없는 목록 동사 — 표식 있는 세션 컨테이너 전부(sid 순)에 뿌려 합친다. */
@@ -106,9 +108,12 @@ export type TmuxPlan =
  *  ⚠ 목록(`sessions`)은 **이 노드가 아는 것**이다(d1 은 다른 노드 것을 담지 않는다). 오늘의 `/lvly/tmux` 팬아웃도 로컬만이라
  *   동작이 같다 — 그림자 대조가 성립하는 근거다.
  */
-export function planTmux(slug: string, args: readonly string[], sessions: ReadonlyArray<SessionRow>): TmuxPlan {
+export function planTmux(slug: string, args: readonly string[], sessions: ReadonlyArray<SessionRow>, observed = true): TmuxPlan {
   const { verb, ref } = tmuxSessionOf(args);
   if (ref.kind === "session") {
+    //  단일 지목도 팬아웃과 같은 규율: 목록을 통째로 못 봤고 아는 세션이 하나도 없으면 «그 세션이 없다» 고 답할 근거가 없다.
+    //   (아는 세션이 있으면 그 목록으로 답한다 — 브로커 색인 규율과 같다.) 블라인드 리뷰 지적 ⑥-3.
+    if (!observed && sessions.length === 0) return { kind: "unobserved" };
     const hit = sessions.find((s) => s.sid === ref.sid && s.inside);
     if (hit) return { kind: "one", sid: ref.sid, container: hit.container, verb };
     //  «있었을 자리» — 로그·문구용. sid 는 SAFE 를 지났다.
@@ -153,6 +158,9 @@ export const TMUX_SERVER_ABSENT_RE = /no server running|error connecting to .+\(
 
 /** exec 한 번의 결과를 세션 관점으로 다듬는다(순수) — 컨테이너가 사라져 실패한 것은 gone 으로. 그 밖은 그대로. */
 export function classifyExecOutcome(o: TmuxOutcome, sid: string | null, container: string | null): TmuxOutcome {
+  //  실행기(broker-client)가 «컨테이너 없음/정지»(404/409)에 싣는 gone 표식을 존중한다 — 목록에 있던 세션이 exec 직전 회수되면
+  //   그 답이 «can't find session» 이어야 상위가 «끝났다» 로 읽는다(404 본문 «No such container» 는 tmux 문구가 아니다). 리뷰 지적 ⑥-2.
+  if (o.gone) return sessionGoneResult(sid, container);
   if (o.code !== 0 && RUNSC_EXEC_GONE_RE.test(o.stderr)) return sessionGoneResult(sid, container);
   return o;
 }
@@ -201,5 +209,7 @@ export async function runPlan(
     }
     case "gone":
       return sessionGoneResult(plan.sid, plan.container);
+    case "unobserved":
+      return TMUX_UNOBSERVED;
   }
 }

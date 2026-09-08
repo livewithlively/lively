@@ -15,7 +15,8 @@ const SLUG = "acme-1a2b";
 const row = (sid: string, inside = true): SessionRow => ({ sid, container: sessionContainerName(SLUG, sid), inside });
 const A = row("box-a-11111111"), B = row("box-b-22222222"), C = row("box-c-33333333");
 const ok = (stdout: string): TmuxOutcome => ({ code: 0, stdout, stderr: "" });
-//  gone 은 참일 때만 싣는다 — 실행기가 주는 세 칸엔 그 키가 없고, classifyExecOutcome 이 «그대로» 돌려주는지를 S6b 가 잰다.
+//  gone 은 참일 때만 싣는다 — 실행기(broker-client)는 «컨테이너 없음/정지»(404/409)에만 gone 을 싣고 그 밖엔 그 키가 없다.
+//   classifyExecOutcome 이 표식 없는 실패를 «그대로» 돌려주는지(S6b)·표식 있는 실패를 gone 으로 다듬는지(S6c)를 잰다.
 const bad = (stderr: string, gone = false): TmuxOutcome => ({ code: 1, stdout: "", stderr, ...(gone ? { gone: true } : {}) });
 
 // ── argv 읽기 — 브로커 tmuxSessionOf 와 같은 규칙 ─────────────────────────────
@@ -128,6 +129,21 @@ test("[S6b] classifyExecOutcome — runsc 가 «컨테이너 없음» 으로 실
   const other = classifyExecOutcome(bad("can't find window: 0"), "box-a-11111111", "c");
   assert.equal(other.gone, undefined); assert.equal(other.stderr, "can't find window: 0");
   assert.deepEqual(classifyExecOutcome(ok("x"), null, null), ok("x"));
+});
+
+test("[S6c] classifyExecOutcome — 실행기가 gone 표식을 실어 오면(404/409) 문구가 tmux 것이 아니어도 gone 으로 다듬는다", () => {
+  const g = classifyExecOutcome(bad("404: No such container: lvly-s-x-box-a-11111111", true), "box-a-11111111", "c");
+  assert.equal(g.gone, true); assert.match(g.stderr, /^can't find session: box-a-11111111 /);
+  assert.equal(isSessionGoneError(outcomeToError(g), "/opt/homebrew/bin/tmux", false), true, "🔴 회수 직후의 404 를 «살아 있음» 으로 읽는다");
+});
+
+test("[S14b] ★ 단일 지목 · 목록 못 봄(observed:false) · 아는 세션 0 → «없다» 가 아니라 «못 봤다»(팬아웃과 같은 규율)", async () => {
+  assert.deepEqual(planTmux(SLUG, ["has-session", "-t", A.sid], [], false), { kind: "unobserved" });
+  assert.equal(planTmux(SLUG, ["has-session", "-t", A.sid], [], true).kind, "gone", "관측했는데 없으면 종전대로 gone");
+  assert.equal(planTmux(SLUG, ["has-session", "-t", A.sid], [B], false).kind, "gone", "아는 세션이 있으면 그 목록으로 답한다");
+  const out = await runPlan({ kind: "unobserved" }, SLUG, ["has-session", "-t", A.sid], false, async () => { throw new Error("불리면 안 된다"); });
+  assert.equal(out, TMUX_UNOBSERVED);
+  assert.equal(isSessionGoneError(outcomeToError(out), "/opt/homebrew/bin/tmux", true), false, "🔴 못 본 것을 «끝났다» 로 확정했다");
 });
 
 // ── 실행 조립 — 실행기 호출 로그로 단언(어디로·무엇을 보냈나) ─────────────────────
