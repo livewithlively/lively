@@ -55,6 +55,10 @@ const state = {
   if (sql.startsWith("SELECT list_id FROM project WHERE id=")) {
     return { rows: [{ list_id: state.listId }] };
   }
+  // 없는 카테고리 id 를 404 로 끊는 존재확인(project-store) — 이 테스트의 id 는 존재하는 것으로 둔다.
+  if (sql.startsWith("SELECT 1 AS ok FROM category WHERE id")) {
+    return { rows: [{ ok: 1 }] };
+  }
   if (sql.startsWith("SELECT name, key FROM category WHERE id=")) {
     return { rows: [{ name: "거래처", key: "partners" }] };
   }
