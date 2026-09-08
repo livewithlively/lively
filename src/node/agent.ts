@@ -23,6 +23,7 @@ import { type AttachSocket } from "../terminal/terminal-pty.js";
 import { SessionHost } from "../terminal/session-host.js";
 import { isSessionOp, runSessionOp } from "../terminal/session-ops.js";
 import { sessionPrompts } from "../terminal/terminal-transcript.js";
+import { isConfined, probeLocal } from "../terminal/path-jail.js";   // #3668 T1 — 심링크 해소 뒤 봉쇄(게이트웨이 파일 API 와 같은 사양)
 import {
   nodeWsUrl, PROTO_VER, NODE_OPS, CLOSE_SELF_NODE, encodeChanFrame, decodeChanFrame, parseMsg,
   type GwToNodeMsg, type NodeToGwMsg, type ReqMsg,
@@ -253,6 +254,9 @@ async function nodeSessionAbs(id: string, sub: string, requireSub = false): Prom
   const abs = path.resolve(base, rel);
   if (abs !== base && !abs.startsWith(base + path.sep)) throw new Error("허용 경로를 벗어났습니다");
   if (requireSub && (rel === "" || abs === base)) throw new Error("경로가 필요합니다");
+  //  글자 판정만으로는 심링크를 못 접는다(#3668 T1) — 게이트웨이 파일 API 와 **같은 사양**으로 해소 뒤 다시 본다.
+  //  노드는 멤버 본인 머신이라 해소도 로컬 fs 로 한다(격리 uid 가 없다).
+  if (!(await isConfined(base, abs, probeLocal))) throw new Error("허용 경로를 벗어났습니다");
   return { base, abs };
 }
 
