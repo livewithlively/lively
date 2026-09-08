@@ -2,7 +2,8 @@
 // run-custom 러너 사양테스트 — PreToolUse 도구 게이트의 '결정 전파' 계약을 고정한다.
 //  오프라인·fs-only: 샌드박스 HOME/LIVELY_HOME 의 로컬 캐시(custom-hooks-<Event>.json)에 훅을 심고
 //  러너를 실제 프로세스로 띄운다(토큰 부재 → 게이트웨이 미도달 → 캐시 폴백). 실제 ~/.lively 무접촉.
-//  실행: node kit/hooks/run-custom.test.mjs
+//  실행: node scripts/run-tests.mjs run-custom (직접 실행하려면 LIVELY_HOST_EFFECTS_TEST_MODE=sandbox 필요 —
+//   테스트가 심는 LIVELY_HOST_EFFECTS=deny 가 그 값 없이는 훅 자식 spawn 까지 막는다)
 //
 //  왜 이 테스트가 있나(#892): 러너는 하네스 눈에 **훅 하나**다 — 관리자 훅이 여럿이어도 러너가 대표해 하나의 응답을 낸다.
 //  그 대표 응답이 전달되지 않으면 관리자는 "게이트를 걸었다"고 믿는데 도구는 그냥 통과한다(무음 실패).
@@ -327,6 +328,57 @@ const stampSrc = 'import { writeFileSync } from "node:fs";\n'
       ? ok(`H2 ${ev} 컨텍스트 주입은 그대로다`)
       : bad(`H2 ${ev} 무영향`, dbg(r));
   }
+}
+{
+  // 훅은 컨텍스트도 PreToolUse 와 같은 봉투(hookSpecificOutput.additionalContext)로 내는 일이 흔하다.
+  //  러너가 그걸 생 문자열로 이어붙이면 `{...}\n\n{...}` 가 되어 하네스는 "JSON 처럼 보이는데 파싱 실패" 로
+  //  **출력 전체를 버린다** — 훅 둘 다 성공했는데 컨텍스트는 하나도 안 들어가는 무음 실패다.
+  //  사양은 봉투 여부를 정하지 않으므로 '하네스가 읽을 수 있는 한 덩이' + '두 컨텍스트 생존' 을 보되,
+  //  봉투를 통째로 문자열로 감싸 버리는 오답(이중 래핑 — 컨텍스트가 JSON 텍스트로 주입된다)은 걸러야 하므로
+  //  '주입되는 본문 안에 봉투 흔적이 없다' 까지 함께 단언한다.
+  const envelope = (event, ctx) => `process.stdout.write(${JSON.stringify(JSON.stringify({
+    hookSpecificOutput: { hookEventName: "__EV__", additionalContext: "__CTX__" },
+  }))}.replace("__EV__", ${JSON.stringify(event)}).replace("__CTX__", ${JSON.stringify(ctx)}));\n`;
+  // 하네스가 실제로 컨텍스트로 삼는 본문만 꺼낸다(raw 경로면 stdout 자체, JSON 경로면 additionalContext).
+  const injected = (out) => {
+    if (!out.startsWith("{")) return { ok: true, body: out };
+    try { return { ok: true, body: String(JSON.parse(out)?.hookSpecificOutput?.additionalContext ?? "") }; }
+    catch { return { ok: false, body: "" }; } // 하네스가 파싱조차 못 하는 출력 = 컨텍스트 전멸
+  };
+  for (const [ev, payload] of [
+    ["UserPromptSubmit", { session_id: "s1", prompt: "안녕" }],
+    ["PostToolUse", { session_id: "s1", tool_name: "Write", tool_input: {}, tool_response: {} }],
+  ]) {
+    const r = run(ev, [
+      { id: "env-1", src: envelope(ev, "ENVELOPE-ALPHA") },
+      { id: "env-2", src: envelope(ev, "ENVELOPE-BETA") },
+    ], { payload });
+    const { ok: readable, body } = injected(r.stdout.trim());
+    r.status === 0 && readable && body.includes("ENVELOPE-ALPHA") && body.includes("ENVELOPE-BETA")
+      && !body.includes("hookSpecificOutput")
+      ? ok(`H3 ${ev} 봉투로 낸 컨텍스트가 여럿이어도 한 덩이로 합쳐져 주입된다`)
+      : bad(`H3 ${ev} 봉투 컨텍스트 병합`, dbg(r));
+  }
+}
+{
+  // 봉투에 컨텍스트 말고 **다른 뜻**(decision·systemMessage)이 함께 실려 있으면 벗기면 안 된다 —
+  //  훅이 하나일 때 하네스가 그 봉투를 그대로 소비하던 경로다. 벗기는 순간 게이트가 조용히 사라진다(#892 클래스).
+  const src = `process.stdout.write(${JSON.stringify(JSON.stringify({
+    hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "CTX-WITH-BLOCK" },
+    decision: "block", reason: "BLOCKED-BY-HOOK",
+  }))});\n`;
+  const r = run("UserPromptSubmit", [{ id: "blocking-ctx-hook", src }], { payload: { session_id: "s1", prompt: "안녕" } });
+  r.status === 0 && r.stdout.includes("BLOCKED-BY-HOOK") && r.stdout.includes('"block"')
+    ? ok("H4 컨텍스트 외의 뜻(block)이 실린 봉투는 벗기지 않는다")
+    : bad("H4 봉투 내 결정 보존", dbg(r));
+  // 봉투 **안쪽**에 실린 뜻도 같다 — 컨텍스트와 함께 온 결정을 벗겨 버리면 게이트가 조용히 사라진다.
+  const inner = `process.stdout.write(${JSON.stringify(JSON.stringify({
+    hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "CTX-WITH-DENY", permissionDecision: "deny" },
+  }))});\n`;
+  const r2 = run("UserPromptSubmit", [{ id: "inner-decision-hook", src: inner }], { payload: { session_id: "s1", prompt: "안녕" } });
+  r2.status === 0 && r2.stdout.includes('"deny"')
+    ? ok("H4b 봉투 안쪽에 실린 결정도 벗기지 않는다")
+    : bad("H4b 봉투 내부 결정 보존", dbg(r2));
 }
 
 // ── 엣지 ──

@@ -447,5 +447,27 @@ async function main() {
   }
 }
 
-try { await main(); } catch { /* fail-open */ }
+// ── `--mcp-only` — 되살리는 자리를 세션 **앞으로** (#3591) ─────────────────────
+//  종전엔 MCP 등록 자가치유의 자리가 SessionStart 훅(session-preload → 이 스크립트를 detached)뿐이라
+//  **구조적으로 한 세션 늦었다**. 훅은 정의상 하네스가 설정을 스냅샷한 **뒤**에 도니, 그 시점에
+//  ~/.claude.json 의 mcpServers 가 비어 있으면 그 세션은 끝까지 lively 툴 0개다(로그 문구도 "다음 세션 적용").
+//  실측 2026-09-07(매니지드 lively-46e3): 컨테이너 기동과 **같은 초**에 뜬 세션이 96초 뒤에야 등록을 받아,
+//  사람 눈엔 «키트가 깨졌다» 로 보였다. 그래서 box-spawn 이 하네스를 exec 하기 **직전에** 이 모드로 부른다
+//  (deploy/linux/box-spawn — 스냅샷 직전이자 세션보다 앞).
+//
+//  ⚠ 이 모드는 네트워크·다운로드·설치를 **절대** 타지 않는다. main() 은 fetchRemoteVersion(5s)부터 설치
+//   (분 단위)까지 갈 수 있고, 그게 세션 시작 경로에 얹히면 사람이 그만큼 기다린다. 여기서 하는 일은
+//   «있는 설정 파일을 읽고 빠진 것만 더한다» 뿐이다 — 정상 세션은 무쓰기(reconcile 의 `if (!added) return`).
+//  ⚠ 끄기 스위치를 새로 늘리지 않는다 — LIVELY_OFF·LIVELY_HOOKS_OFF·LIVELY_NO_AUTO_UPDATE 는 이 파일 머리에서
+//   이미 exit 하고, 어드민 토글(hooks.self_update)은 아래 hookDisabled 로 main() 과 같은 판정을 쓴다.
+function mcpOnly() {
+  if (hookDisabled()) return;
+  const token = (process.env.LIVELY_TOKEN || "").trim() || readL("token");
+  const gwRaw = (process.env.LIVELY_GATEWAY_URL || "").trim() || readL("gateway-url");
+  if (!token || !gwRaw) return;                      // 미설치/무토큰 — 되살릴 등록 자체가 없다
+  reconcileClaudeMcp(gwRaw.replace(/\/+$/, "").replace(/\/mcp$/, ""), token);
+}
+
+if (process.argv.includes("--mcp-only")) { try { mcpOnly(); } catch { /* fail-soft — 세션을 막지 않는다 */ } }
+else { try { await main(); } catch { /* fail-open */ } }
 process.exit(0);

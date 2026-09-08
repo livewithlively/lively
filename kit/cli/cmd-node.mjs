@@ -440,6 +440,38 @@ export function nodeTokenReuse(inp, norm) {
   return { reuse: true };
 }
 
+/** 이 기계의 tmux 세션 id — 게이트웨이가 «내 것과 겹치나»를 판정할 재료(겹친 id 는 응답에 안 실린다). */
+function boxSessionIds(tmuxPath) {
+  try {
+    const out = execFileSync(tmuxPath, ["list-sessions", "-F", "#{session_name}"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return out.split(/\r?\n/).map((x) => x.trim()).filter((x) => x.startsWith("box-")).slice(0, 200);
+  } catch { return []; }   // 서버 없음·조회 실패 = 볼 것이 없다(판정 불가 — 양성일 때만 참)
+}
+
+/**
+ * 이 컴퓨터에 노드를 세워도 되나 — **아니면 여기서 멈춘다**(#2592).
+ *
+ * 게이트웨이 박스에 노드 데몬이 서면 그 노드는 게이트웨이와 **같은 tmux** 를 보고 세션을 자기 것으로 보고한다.
+ *  그러면 중앙에서 만든 세션의 접속이 노드 릴레이(3초 스냅샷 + WS 중계)로 새고, 목록엔 거짓 좌표가 붙는다.
+ *  데스크톱 앱 설치의 마지막 단계가 노드 자동 시작이라 이 상황은 «흔한 실수» 가 아니라 **기본 경로**였다.
+ *
+ * 판정은 **게이트웨이에 물어서만** 한다 — 내 tmux 세션 id 를 실어 보내고 그쪽 목록과 겹치는지 답을 받는다(#2108 과
+ *  같은 술어). 주소 모양(루프백 등)으로 대신 재지 않는다: `ssh -L 8080:gw:8080` 으로 터널을 뚫은 멤버 PC 는
+ *  주소가 localhost 인데도 남의 기계다 — 그런 대용물의 오탐 비용은 «그 사람의 노드가 조용히 안 선다» 이고,
+ *  그건 #2108 이 호스트명 비교를 거부한 것과 같은 비대칭이다. 못 물어보면(구 게이트웨이·오프라인) 그냥 진행하고,
+ *  게이트웨이 쪽 집행(등록 409 · hello 4409)이 그 뒤를 받는다.
+ */
+async function assertNotGatewayBox(tmuxPath) {
+  const boxSessions = boxSessionIds(tmuxPath);
+  if (!boxSessions.length) return;   // 볼 것이 없다 = 판정 불가(게이트웨이 쪽 판정이 그 뒤를 받는다)
+  //  게이트웨이가 이 라우트를 모르면(구 게이트웨이) 조용히 넘어간다 — 프리플라이트는 부가 안전장치지 전제가 아니다.
+  const r = await api("/api/ui/nodes/self-check", { method: "POST", body: { boxSessions } }).catch(() => null);
+  if (r?.self !== true) return;
+  die(`${r.note || "이 컴퓨터가 게이트웨이가 도는 바로 그 컴퓨터입니다 — 노드로는 등록하지 않습니다."}`
+    + "\n  (이 컴퓨터의 세션은 웹에서 '중앙 컴퓨터(기본)' 로 그대로 열립니다.)", 2);
+}
+
 async function cmdNode(rest) {
   const sub = rest[0];
   if (sub === "stop") return nodeStop();
@@ -451,6 +483,9 @@ async function cmdNode(rest) {
   // tmux 필수 — 웹터미널·위탁 세션이 tmux 로 실행된다. 등록/설치 전에 확보한다(반쪽 상태 방지):
   //  있으면 그 절대경로, 없으면 패키지 매니저로 자동 설치 → 그래도 없으면 안내 후 종료. 절대경로라 데몬(최소 PATH)도 안전.
   const tmuxPath = await ensureTmux();
+  // #2592 — 등록·번들·기동 **전에** 판정한다. 등록만 막으면 토큰이 이미 있는 재실행(데스크톱 앱의 [노드 시작],
+  //  launchd 재기동)이 그대로 통과해 같은 상황이 다시 만들어진다.
+  await assertNotGatewayBox(tmuxPath);
 
   // 1) 노드 토큰 — 로컬에 있으면 재사용, 없으면 등록(중복이면 회전).
   //  ★ 재사용은 **같은 게이트웨이·같은 노드 id 일 때만** 성립한다(#2161).
@@ -1097,6 +1132,19 @@ export function nodeConnectedFrom(payload, id) {
   return typeof n.online === "boolean" ? n.online : null;
 }
 
+/**
+ * #2592 — 게이트웨이가 **이미 판정한** «이 노드가 게이트웨이 자신인가»(/api/ui/nodes 의 self).
+ *  못 읽으면 null = 모름 — false 로 눕히면 «아니라고 확인했다» 는 거짓말이 되고, 데스크톱이 그 말을 믿고
+ *  이 박스에 노드를 세운다(nodeConnectedFrom 과 같은 3상 규율).
+ */
+export function nodeSelfFrom(payload, id) {
+  const list = Array.isArray(payload) ? payload : Array.isArray(payload?.nodes) ? payload.nodes : null;
+  if (!list || !id) return null;
+  const n = list.find((x) => x && String(x.id) === String(id));
+  if (!n) return null;
+  return typeof n.self === "boolean" ? n.self : null;
+}
+
 export function nodeStatus() {
   const artifact = nodeDaemonArtifact();
   const registered = existsSync(NODE_ENV_FILE);
@@ -1110,6 +1158,9 @@ export function nodeStatus() {
     id: registered ? readEnvFile(NODE_ENV_FILE, "LIVELY_NODE_ID") : null,
     gateway: registered ? readEnvFile(NODE_ENV_FILE, "LIVELY_GATEWAY_URL") : null,
     connected: null,   // 게이트웨이가 보는 연결 여부 — lively.mjs 가 /api/ui/nodes 로 채운다(여긴 로컬 실측만)
+    // #2592 — 이 컴퓨터가 게이트웨이가 도는 그 박스인가(true/false/null=모름). true 면 노드를 세우지 않는다
+    //  (데스크톱 nextAfterSetup 이 이 값으로 설치 마지막 단계를 건너뛴다). 채우는 곳도 lively.mjs.
+    selfBox: null,
   };
   try {
     const probe = nodeProcProbe();

@@ -7,7 +7,7 @@
 //   그 밖의 진입 순서는 여전히 scripts/session-open-restore.test.mjs 가 지킨다.
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable, type DeadSessionMeta, type DeadSessionMetaResult, type DeadSessionStateLike } from "./session-meta.js";
+import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable, NODE_STARTUP_GRACE_MS, type DeadSessionMeta, type DeadSessionMetaResult, type DeadSessionStateLike } from "./session-meta.js";
 
 const st = (over: Partial<DeadSessionStateLike> = {}): DeadSessionStateLike => ({
   owner: "yoon", label: "라벨", harness: "claude", project_id: null, exited_at: null, exit_reason: null, ...over,
@@ -185,4 +185,39 @@ test("★#2231 이어진 세션 — 'moved' 로 새 id 를 알린다(되살릴 �
   assert.equal(deadSessionMeta(ID, st({ owner: "jang", dir: SHARED, superseded_by: NEW }), "yoon", false, shared).kind, "moved");
   // 자기 자신을 가리키는 값은 이정표가 아니다(무한고리) — 종전 판정으로 돌아간다.
   assert.equal(okBody(deadSessionMeta(ID, st({ superseded_by: ID }), "yoon", false, shared)).restorable, true);
+});
+
+// ── #3626 기동 유예 — «못 봤다»·«아직 없다» 를 갓 만든 세션의 죽음으로 읽지 않는다 ──────────────
+//
+// 실측(2026-09-07, 상민님 신고): 홈에서 [시키기] 를 누르면 «멈춰 있는 세션이에요» → «이어받기 세션을
+//  열었어요» → **빈 resume picker**. 추적하니 그 세션은 노드 목록에 **살아서 한 번도 안 나타났고**
+//  (hammurabi 링크는 median 344초마다 끊긴다) 메타는 그걸 곧바로 restorable 로 냈다. 그 한 마디를
+//  화면 부팅 게이트가 믿고 복원으로 갔고, 갓 만든 세션엔 이어받을 대화가 없어 후보 0건 피커가 떴다.
+test("★#3626 갓 만든 세션 — 노드가 gone 이라 해도 복원 신호를 내지 않는다", () => {
+  assert.equal(nodeMetaRestorable({ mode: "ask", nodeGone: true, ageMs: 1_000 }), false,
+    "방금 만든 세션은 «아직 안 떴다»이지 «죽었다»가 아니다 — 여기서 참을 내면 화면이 빈 피커로 간다");
+});
+
+test("★#3626 갓 만든 세션 — 노드 무응답(판정 불가)도 마찬가지다", () => {
+  assert.equal(nodeMetaRestorable({ mode: "ask", nodeGone: null, ageMs: 1_000 }), false);
+});
+
+test("#3626 유예를 넘긴 세션은 종전 판정 그대로 — 정직하게 '중단됨'", () => {
+  assert.equal(nodeMetaRestorable({ mode: "ask", nodeGone: true, ageMs: NODE_STARTUP_GRACE_MS + 1 }), true);
+  assert.equal(nodeMetaRestorable({ mode: "ask", nodeGone: null, ageMs: NODE_STARTUP_GRACE_MS + 1 }), true);
+});
+
+test("#3626 나이를 모르면(ageMs 없음·null) 종전 판정 그대로 — 무회귀", () => {
+  assert.equal(nodeMetaRestorable({ mode: "ask", nodeGone: true }), true);
+  assert.equal(nodeMetaRestorable({ mode: "ask", nodeGone: null, ageMs: null }), true);
+});
+
+test("#3626 살아있음 확답은 유예와 무관하게 복원 신호 없음", () => {
+  assert.equal(nodeMetaRestorable({ mode: "ask", nodeGone: false, ageMs: 1_000 }), false);
+  assert.equal(nodeMetaRestorable({ mode: "ask", nodeGone: false, ageMs: 999_999 }), false);
+});
+
+test("#3626 유예는 'ask' 갈래에만 — dead/alive 는 종전대로 복원 신호를 낸다", () => {
+  assert.equal(nodeMetaRestorable({ mode: "dead", nodeGone: null, ageMs: 1_000 }), true);
+  assert.equal(nodeMetaRestorable({ mode: "alive", nodeGone: null, ageMs: 1_000 }), true);
 });

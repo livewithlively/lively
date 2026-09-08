@@ -23,7 +23,10 @@ const { isEmbedded, EMBEDDED } = await import(join(root, "public/app/v2/embed.js
 const PARTS = read("web/v2/panes-parts.ts");
 const PANES = read("web/v2/panes.ts");
 const TABS = read("web/v2/tabs.ts");
-const FILES = read("web/v2/panes-files.ts");   // 자료 칸 — [뷰어에서 보기] 신호가 여기서 나간다
+const FILES = read("web/v2/panes-files.ts");   // 자료 칸 — 파일을 누르면 여기서 뷰어를 부른다
+//  신호를 **쏘는 자리**는 panes-kit 의 openInViewerPart 하나다(#762) — 자료 칸도 우클릭 메뉴도 그 통로만 쓴다.
+//  잎 모듈에 둔 이유: panes-parts 가 panes-files 를 값으로 가져오므로 그 반대 방향은 순환이 된다.
+const KIT = read("web/v2/panes-kit.ts");
 
 /** 함수 하나만 잘라 본다 — 고정 길이로 자르면 그 함수가 자랐을 때 단언이 구간 밖으로 밀려 거짓 실패한다. */
 function slice(src, from, to) {
@@ -133,17 +136,44 @@ ok(isEmbedded("?embed=0") === false && isEmbedded("?embed=x") === false && isEmb
 //  웹 칸과 판박이 구조였고, 판박이로 새고 있었다: window 로 쏘고 window 에서 들어서 열려 있는 모든 세션 탭의
 //  뷰어가 같은 파일을 함께 열고 각자 자기 열쇠에 그 파일을 기억했다.
 {
-  ok(/ctx\.paneRoot\(\)\.dispatchEvent\(new CustomEvent\('pn-viewer-open'/.test(FILES),
-    "E23 자료 칸의 [뷰어에서 보기] 가 **이 곁칸**에 대고 알린다");
-  ok(!/window\.dispatchEvent\(new CustomEvent\('pn-viewer-open'/.test(FILES),
+  ok(/ctx\.paneRoot\(\)\.dispatchEvent\(new CustomEvent\(VIEWER_EVT/.test(KIT),
+    "E23 뷰어를 부르는 통로(openInViewerPart)가 **이 곁칸**에 대고 알린다");
+  ok(!/window\.dispatchEvent\(new CustomEvent\(VIEWER_EVT/.test(KIT) && !/window\.dispatchEvent\(new CustomEvent\('pn-viewer-open'/.test(KIT + FILES),
     "E23 ★ window 로 쏘면 모든 세션 탭의 뷰어가 같은 파일을 연다 — 웹 칸과 같은 뿌리");
-  ok(/ctx\.paneRoot\(\)\.querySelector\('\.pn-ed'\)/.test(FILES) && !/document\.querySelector\('\.pn-ed'\)/.test(FILES),
-    "E24 뷰어가 있나도 **이 곁칸에서** 본다 — 옆 세션의 뷰어를 보고 '있다'고 판단하면 이 세션엔 안내조차 안 뜬다");
+  ok(/openInViewerPart\(ctx, f\.path/.test(FILES) && !/dispatchEvent\(new CustomEvent\('pn-viewer-open'/.test(FILES),
+    "E24 자료 칸은 그 통로만 쓴다 — 사본을 두면 한쪽만 고쳐져 규율이 갈라진다");
+  ok(/localStorage\.setItem\(ED_PATH_KEY/.test(KIT) && /if \(EMBEDDED\) return;/.test(KIT),
+    "E24 ★ 펴 둔 파일은 이 세션 열쇠에만 적는다(끼워 넣은 판에서는 아예 안 적는다 — 바깥 사람 것을 덮는다)");
 
   const viewer = VIEWER_PART();
-  ok(/paneRoot\(\)[\s\S]{0,120}addEventListener\(VIEWER_EVT/.test(viewer) && !/window\.addEventListener\(VIEWER_EVT/.test(viewer),
+  ok(/paneRoot\(\)[\s\S]{0,120}addEventListener\(VIEWER_TO_EVT/.test(viewer) && !/window\.addEventListener\(VIEWER_(TO_)?EVT/.test(viewer),
     "E25 뷰어 칸이 이 곁칸에서 듣는다");
-  ok(/paneRoot\(\)\.removeEventListener\(VIEWER_EVT/.test(viewer) && !/window\.removeEventListener\(VIEWER_EVT/.test(viewer),
+
+  // ── 뷰어가 **여럿** 떠도 엉뚱한 칸이 갈아입지 않는다 (#762, 원준 2026-09-05) ──────────────
+  //  탭이 부품의 인스턴스가 되면서 같은 곁칸에 뷰어가 둘 이상 산다. 신호를 그냥 뿌리면 셋이 같이 갈아입는다 —
+  //  그건 '여러 파일 동시에 보기'를 만들면서 그 기능을 스스로 깨는 것이다.
+  ok(/d\.slot \? d\.slot !== ctx\.slot/.test(viewer),
+    "E29 ★ 뷰어는 **자기 앞으로 온 신호만** 받는다(slot 이 제 것이 아니면 무시)");
+  ok(/VIEWER_TO_EVT/.test(PANES) && /VIEWER_EVT/.test(PANES) && !/dispatchEvent\(new CustomEvent\(VIEWER_EVT/.test(PANES),
+    "E29 요청(VIEWER_EVT)과 배달(VIEWER_TO_EVT)이 다른 이름이다 — 같으면 셸이 자기 신호를 되받아 무한고리");
+  ok(/rememberViewerPath\(ctx\.memKey\(\), key, d\.path\)[\s\S]{0,80}if \(!found\) addTab\(zone, key\)/.test(PANES),
+    "E30 ★ 열쇠를 먼저 잡고 **기억을 적은 뒤** 탭을 만든다 — 순서가 뒤면 갓 만든 뷰어가 빈 화면을 한 번 그린다");
+  ok(/slotStoreKey\s*=\s*\(mem: string, slot: TabKey\)[^\n]*tabNum\(slot\) >= 2 \? mem \+ '#' \+ tabNum\(slot\) : mem/.test(KIT),
+    "E30 첫 탭의 저장 열쇠는 **종전 그대로**다 — 바뀌면 사람들이 펴 두었던 파일·주소·배율이 한 번 리셋된다");
+
+  // ── 칸을 그리는 붓 둘이 서로의 일을 뺏지 않는다 (#762 실측 사고) ──────────────────────
+  //  탭 이름만 갈아 끼우는 붓(paintTabs)을 들이면서 **부품을 세우는 블록이 그쪽으로 넘어가**, 곁칸이
+  //  통째로 빈 화면이 됐다(dev 실화면에서 잡았다 — JS 에러 없이 조용히 비어 있어 더 위험했다).
+  //  그 둘의 경계를 여기서 잠근다.
+  const pp = slice(PANES, "function paintPane(zone: Zone): void {", "\n  function paintTabs");
+  const pt = slice(PANES, "function paintTabs(zone: Zone): void {", "\n  function paintAll");
+  ok(/if \(act\) ensurePart\(pane, act\);/.test(pp),
+    "E31 ★ paintPane 이 켜진 탭의 부품을 **세운다** — 이게 빠지면 그 칸이 조용히 빈 화면이 된다");
+  ok(/p\.root\.hidden = t !== act/.test(pp),
+    "E31 켜진 부품만 보이고 나머지는 살아 있다(탭을 오가도 스크롤·대화가 그대로)");
+  ok(!/ensurePart\(/.test(pt),
+    "E31 paintTabs 는 **이름과 켜짐만** 만진다 — 부품을 여기서 세우면 두 붓이 같은 일을 두 번 한다");
+  ok(/paneRoot\(\)\.removeEventListener\(VIEWER_TO_EVT/.test(viewer) && !/window\.removeEventListener\(VIEWER_(TO_)?EVT/.test(viewer),
     "E25 달았던 그 자리에서 끊는다");
 }
 
@@ -156,6 +186,22 @@ ok(isEmbedded("?embed=0") === false && isEmbedded("?embed=x") === false && isEmb
   const rule = (CSS.match(/\.pn-webstage > \.pn-webframe \{[^}]*\}/) || [""])[0];
   ok(/width:\s*100%/.test(rule) && /height:\s*100%/.test(rule),
     "E26 무대 안 프레임은 폭·높이를 갖는다 — 없으면 칸이 아무리 커도 페이지가 150px 만 그려진다");
+}
+
+// ══ 마운트 순서 — 마운트 도중 부르는 helper 가 읽는 값은 그보다 **앞**에 서 있어야 한다 (2026-09-03 회귀) ══
+//  #762 에서 `actKey()` 를 `opts.sessionId` → `curSession()` 으로 바꿨다(지금 보는 세션을 아는 건 그것뿐이라
+//  옳은 변경이다). 그런데 `curSession()` 은 `panes` 를 읽고, 그 `panes` 는 파일 한참 아래에서 선언돼 있었다.
+//  마운트는 칸을 만들기 **전에** `applySessionAct()` 를 한 번 부르므로 그 순간 TDZ 로 죽었다 —
+//  «화면을 불러오지 못했습니다 — Cannot access 'panes' before initialization», 세션·프로젝트 화면 전멸
+//  (2026-09-03 dev 실측, 윤상민 신고). tsc 는 이걸 못 잡는다: 직접 참조가 아니라 **함수를 거친** 참조라
+//  TS2448 이 안 뜬다(그 커밋도 typecheck:web·build:web 을 통과하고 배포됐다). 그래서 순서를 여기서 못 박는다.
+{
+  ok(/const actKey = \(\): string => String\(curSession\(\)/.test(PANES),
+    "E27 활성 탭 열쇠는 curSession() 으로 잡는다 — opts.sessionId 는 처음 연 세션에 굳는다(#762)");
+  const decl = PANES.indexOf("const panes = new Map<Zone, Pane>();");
+  const call = PANES.indexOf("\n  applySessionAct();");
+  ok(decl >= 0 && call >= 0 && decl < call,
+    "E28 ★ `panes` 선언이 마운트 중 부르는 applySessionAct() 보다 앞이다 — 뒤면 TDZ 로 화면이 통째로 안 뜬다");
 }
 
 console.log(`\n# ${pass} passed`);

@@ -30,6 +30,13 @@
 //  ④ **desired-state(org_session_state) 레코드가 있는 세션만 회수** — 회수 = 반드시 복원 가능(restorable)해야 한다.
 //     레코드 없는(구버전·managed) 세션은 회수해도 복원 못 하므로 손대지 않는다(회수 ⊆ 복원가능 보장).
 //  ⑤ idle 지속(now - last_busy, 없으면 created)이 TTL 미만이면 제외.
+//  ⑥ **하네스가 띄운 작업이 살아 있으면 제외**(#2652). ③ 의 `working` 은 셋 다 «턴»에 묶여 있어서
+//     (스피너 · 훅 보고 Stop=idle · shellWorking=셸 하네스 전용), **AI 가 백그라운드로 긴 작업을 걸어 두고 턴을
+//     끝낸 세션**은 어느 신호로도 작업 중이 아니었다. 실측 2026-09-04: 50분짜리 감시를 `run_in_background` 로
+//     걸어 둔 세션이 26분째에 압박 회수로 죽었다(회수는 복원 가능하지만 **그 작업은 안 살아난다** — 재개 지점이
+//     대화에만 있고 프로세스엔 없다). 판정은 프로세스 그룹으로 한다(session-rss `sessionsWithLiveJobs`).
+//     ⓘ 이 불변식만 **후보를 고른 뒤** 적용한다 — 프로세스 표를 뜨는 유일한 불변식이라, 평시(후보 0건)엔
+//      비용이 0 이어야 한다. 순수 함수(pickReapCandidates)에 넣지 않는 이유도 같다(그 함수는 tmux·DB 무접촉).
 //
 // ⚠ **범위 = 중앙 세션만.** 노드 세션(#869)은 멤버 자기 PC 의 tmux 라 중앙 박스 메모리 압박(#1059)과 무관하고,
 //  중앙 desired-state 가 없어 복원도 안 된다(node 자체 영속). 멤버 PC 의 idle 세션을 중앙이 죽일 이유가 없다 → 제외.
@@ -62,6 +69,8 @@
 //  ⚠ **한계를 숨기지 않는다.** 압박을 만든 워크스페이스가 회수를 안 켰으면 그 세션은 못 건드린다(동의가 없다).
 //   그러면 켜 둔 워크스페이스만 계속 걷히고 박스는 안 풀린다 — 그래서 결과에 **불참 워크스페이스 수**를 남긴다.
 //   이 숫자가 크면서 압박이 안 풀리면, 고칠 곳은 코드가 아니라 그 워크스페이스의 정책이다.
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { logger } from "../log.js";
 import { listSessionsRaw, listSessionPanePids, reapCentralSession } from "../terminal/terminal-sessions.js";
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
@@ -70,9 +79,12 @@ import { listManagedSessions } from "./managed-sessions.js";
 import { getRuntimeConfig } from "../org/store.js";
 import { effectiveSessionReclaimPolicy, normalizeSessionReclaimPolicy, type SessionReclaimPolicy } from "./session-reclaim-policy.js";
 import { memAvailableMb, memTotalMb, swapUsageMb } from "../ops/host-mem.js";
-import { readProcTable, sessionRssMb, type ProcEntry } from "./session-rss.js";
+import { readProcTable, parsePsTable, sessionRssMb, sessionJobDetails, type ProcEntry } from "./session-rss.js";
+import { sessionExecConfigured, sessionSpawnArgv } from "../terminal/session-exec.js";
 import { withTenant, type TenantContext } from "../org/tenant-context.js";
 import { schedulerTargets } from "../scheduler/tenant-fanout.js";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * 왜 안 걷었나 — 이유별 카운트. **두 축이 같은 표를 쓴다**(로그·관측이 갈리면 진단이 두 벌이 된다).
@@ -81,9 +93,13 @@ import { schedulerTargets } from "../scheduler/tenant-fanout.js";
  *             (target 은 "필요 없어서", cap 은 "필요한데 못 해서"다).
  *  유휴 축에서 둘은 늘 0 이다(압박 전용 개념) — 없애지 않고 0 으로 남기는 이유는 로그 모양을 한 벌로 두기 위해서다.
  */
-export interface ReapSkipReasons { managed: number; noState: number; attached: number; working: number; recent: number; failed: number; target: number; cap: number }
+export interface ReapSkipReasons {
+  managed: number; noState: number; attached: number; working: number; recent: number; failed: number; target: number; cap: number;
+  /** ⑥ 하네스가 띄운 작업(백그라운드 셸·빌드 등)이 살아 있어 남겨둔 수(#2652). 두 축이 같이 쓴다. */
+  jobs: number;
+}
 
-const emptyReasons = (): ReapSkipReasons => ({ managed: 0, noState: 0, attached: 0, working: 0, recent: 0, failed: 0, target: 0, cap: 0 });
+const emptyReasons = (): ReapSkipReasons => ({ managed: 0, noState: 0, attached: 0, working: 0, recent: 0, failed: 0, target: 0, cap: 0, jobs: 0 });
 
 /** 유휴 축의 tick 결과. **CP(reclaimhealth·tenanttick)가 이 모양을 읽는다** — 필드를 지우지 마라. */
 export interface ReapResult {
@@ -185,6 +201,140 @@ interface ReapSources {
   listManaged?: () => Promise<Array<{ session_id: string | null }>>;
   reap?: (id: string) => Promise<void>;
   now?: () => number;
+  /**
+   * ⑥ 이 세션들 중 **하네스가 띄운 작업이 살아 있는** 것(#2652). 두 축이 같은 seam 을 쓴다.
+   *  `table` 은 이미 뜬 프로세스 표(압박 축은 RSS 때문에 어차피 뜬다) — 주면 다시 뜨지 않는다.
+   */
+  liveJobs?: (ids: ReadonlySet<string>, table?: Map<number, ProcEntry>) => Promise<ReadonlySet<string>>;
+}
+
+/**
+ * ⑥ 의 기본 구현 — 프로세스 표 + pane pid 로 «작업이 도는 세션»을 고른다. **후보가 있을 때만** 불린다.
+ *
+ * ⚠ tmux 가 pane 을 못 보여주면(`ok:false`) **후보 전부를 보호**한다. 여기서 "못 봤다"를 "작업 없다"로 읽으면
+ *  하필 tmux 가 느려지는 때(=메모리 압박·스래싱, 즉 이 회수가 도는 바로 그 순간)에 보호가 통째로 사라진다.
+ *  판정 못 함의 대가가 «회수 한 tick 밀림» 대 «작업 중인 세션 사망»이라 방향이 자명하다(#1251 과 같은 교리).
+ */
+async function liveJobSessions(ids: ReadonlySet<string>, table?: Map<number, ProcEntry>): Promise<ReadonlySet<string>> {
+  if (!ids.size) return new Set();
+  const panes = await listSessionPanePids();
+  if (!panes.ok) return new Set(ids);                                   // 못 봤다 ≠ 작업 없다 → 전부 보호
+  return resolveLiveJobs(ids, panes, table ?? await readProcTable(), probeSessionProcTable);
+}
+
+/**
+ * ⑥ 판정의 **두 단계**(주입 가능 — 컨테이너 프로브 없이 단위테스트한다).
+ *  ① 이 프로세스의 표로 판정한다(셀프호스트는 여기서 끝난다).
+ *  ② 그 표로 **판정조차 못 한** 세션만 골라 그 컨테이너 안에서 다시 본다(매니지드).
+ *
+ * ⚠ ② 가 왜 필요한가: 매니지드는 세션마다 컨테이너가 따로라(`lvly-s-<slug>-<sid>`) 게이트웨이의 `/proc` 에
+ *  그 프로세스가 **아예 없다**(실측 2026-09-04: gw-central 이 보는 프로세스 10개 = 전부 자기 것).
+ *  그러면 ① 은 조용히 «작업 없음» 이 되고 ⑥ 이 **매니지드에서만 꺼진 채로** 남는다 — 하필 그쪽 유휴 TTL 이
+ *  120분으로 셀프호스트(1440분)보다 짧아, 같은 사고가 더 쉽게 난다.
+ * ⚠ 프로브 실패·타임아웃은 **그 세션만** 판정 불가로 두고 넘어간다(회수를 막지 않는다 — S5).
+ */
+export async function resolveLiveJobs(
+  ids: ReadonlySet<string>,
+  view: { ok: boolean; panes: Map<string, number[]> },
+  local: Map<number, ProcEntry>,
+  probe: (sid: string) => Promise<Map<number, ProcEntry>>,
+): Promise<ReadonlySet<string>> {
+  if (!ids.size) return new Set();
+  if (!view.ok) return new Set(ids);                                        // 못 봤다 ≠ 작업 없다 → 전부 보호
+  const mine = new Map([...view.panes].filter(([sid]) => ids.has(sid)));    // 후보 서브트리만 걷는다
+  const detail = sessionJobDetails(local, mine);
+  const unresolved = [...ids].filter((sid) => !detail.has(sid) && !judgedLocally(sid, view.panes, local));
+  if (unresolved.length) {
+    const extra = await Promise.all(unresolved.map(async (sid) => {
+      const panePids = view.panes.get(sid);
+      if (!panePids?.length) return null;
+      try {
+        const t = await probe(sid);
+        if (!t.size) return null;                                          // 프로브 실패·중계 없음 → 판정 불가
+        return sessionJobDetails(t, new Map([[sid, panePids]])).get(sid) ?? null;
+      } catch (e) {
+        logger.warn({ err: e, id: sid }, "session-reaper: 세션 컨테이너 작업 프로브 실패(그 세션만 판정 불가)");
+        return null;
+      }
+    }));
+    unresolved.forEach((sid, i) => { const d = extra[i]; if (d) detail.set(sid, d); });
+  }
+  // ⚠ **무엇을 작업으로 봤는지 남긴다**(#2652 후속). 2026-09-04 실측: 매니지드에서 후보 453개가 **전부**
+  //  이 신호에 걸려 회수가 2시간 멈춘 창이 있었는데, 로그에 개수뿐이라 사후에 원인을 못 좁혔다.
+  //  개수는 «무슨 일이 있었다»만 말한다 — 판정을 남기려면 근거도 같이 남아야 한다.
+  if (detail.size) {
+    logger.info({
+      count: detail.size,
+      evidence: Object.fromEntries([...detail].slice(0, JOB_EVIDENCE_SESSIONS)),
+    }, "session-reaper: ⑥ 하네스가 띄운 작업이 살아 있어 보호한 세션");
+  }
+  return new Set(detail.keys());
+}
+
+/** 로그 한 줄에 실을 세션 수(각 세션당 증거는 session-rss 가 3건으로 자른다). */
+const JOB_EVIDENCE_SESSIONS = 3;
+
+/** 이 프로세스의 표만으로 그 세션을 **판정할 수 있었나** — pane pid 가 표에 있으면 참(= 컨테이너 프로브 불요). */
+function judgedLocally(sid: string, panes: Map<string, number[]>, table: Map<number, ProcEntry>): boolean {
+  return (panes.get(sid) ?? []).some((pid) => table.has(pid));
+}
+
+/** 그 세션 **컨테이너 안**의 프로세스 표. 중계가 없거나 실패하면 빈 표(판정 불가). */
+async function probeSessionProcTable(sid: string): Promise<Map<number, ProcEntry>> {
+  if (!sessionExecConfigured()) return new Map();          // 셀프호스트 — 중계가 없다(F4)
+  const argv = sessionSpawnArgv(sid, ["ps", "-eo", "pid=,ppid=,pgid=,tpgid=,rss=,comm="]);
+  if (!argv.length) return new Map();
+  const { stdout } = await execFileAsync(argv[0]!, argv.slice(1), { timeout: SESSION_PROBE_TIMEOUT_MS, maxBuffer: 4 << 20 });
+  return parsePsTable(stdout);
+}
+
+/** 컨테이너 프로브 상한. 중계가 uid 프로브 + exec 두 왕복이라 넉넉히 주되, 회수 tick 을 잡아 두지 않는다. */
+const SESSION_PROBE_TIMEOUT_MS = 8_000;
+
+/** ⑥ 의 **판정만** 떼어낸 순수 함수(관측 주입) — "못 봤다"의 처리가 여기 한 줄로 보인다. */
+export function liveJobsFromView(
+  ids: ReadonlySet<string>,
+  view: { ok: boolean; panes: Map<string, number[]> },
+  table: Map<number, ProcEntry>,
+): ReadonlySet<string> {
+  if (!ids.size) return new Set();
+  if (!view.ok) return new Set(ids);                                        // 못 봤다 ≠ 작업 없다 → 전부 보호
+  const mine = new Map([...view.panes].filter(([sid]) => ids.has(sid)));    // 후보 서브트리만 걷는다
+  return new Set(sessionJobDetails(table, mine).keys());
+}
+
+/**
+ * ⑥ 의 신호가 «퇴화»했다고 볼 최소 후보 수. 이보다 적으면 전부 걸려도 정상으로 본다.
+ *  (후보 2개가 둘 다 백그라운드 작업 중인 것은 흔하다 — 그걸 고장으로 읽으면 정상 보호가 깨진다.)
+ */
+const JOBS_SIGNAL_DEGENERATE_MIN = 10;
+
+/** ⑥ 적용 — 후보에서 «작업이 도는 세션»을 뺀다. 판정 자체가 실패하면 종전대로 진행한다(방어를 멈추지 않는다). */
+async function dropLiveJobs(
+  candidates: ReapCandidate[], reasons: ReapSkipReasons, deps?: ReapSources, table?: Map<number, ProcEntry>,
+): Promise<ReapCandidate[]> {
+  if (candidates.length === 0) return candidates;
+  const probe = deps?.liveJobs ?? liveJobSessions;
+  let busy: ReadonlySet<string>;
+  try { busy = await probe(new Set(candidates.map((c) => c.id)), table); }
+  catch (e) { logger.warn({ err: e }, "session-reaper: 작업 판정 실패 — ⑥ 없이 진행"); return candidates; }
+  if (!busy.size) return candidates;
+  const flagged = candidates.filter((c) => busy.has(c.id));
+  // ⚠ **후보가 전부 걸리면 그건 보호가 아니라 신호가 깨진 것이다**(#2652 후속). 100% 를 보호하는 신호는
+  //  정보량이 0이고, 그 상태를 방치하면 회수가 통째로 멈춘다 — baseline 이 자라 결국 earlyoom 이
+  //  **desired-state 보존 없이** 죽인다(#1220 이 고치려던 바로 그 상황). 그래서 그 tick 은 ⑥ 없이 진행하고
+  //  크게 남긴다. 잃는 건 «보호가 안 걸린다»(이 기능 이전 상태)뿐이고, 그게 더 나은 실패 방향이다.
+  //  ⓘ 실측 2026-09-04: 매니지드 게이트웨이에서 `scanned=453 · reaped=0 · jobs=453` 이 2시간 이어졌다.
+  //  ⓘ 하한(JOBS_SIGNAL_DEGENERATE_MIN)이 있는 이유: 후보가 한둘일 땐 «둘 다 작업 중»이 흔히 참이다.
+  //   그걸 «퇴화»로 읽으면 정상 보호를 깨뜨린다. 열 개가 **전부**인 것은 그렇게 흔하지 않다.
+  if (flagged.length === candidates.length && candidates.length >= JOBS_SIGNAL_DEGENERATE_MIN) {
+    logger.warn({ candidates: candidates.length, sample: flagged.slice(0, 5).map((c) => c.id) },
+      "session-reaper: ⑥ 신호 퇴화(후보 전부가 '작업 중') — 이 tick 은 ⑥ 없이 진행한다");
+    return candidates;
+  }
+  reasons.jobs += flagged.length;
+  const skip = new Set(flagged.map((c) => c.id));
+  return candidates.filter((c) => !skip.has(c.id));
 }
 
 const policyOf = (deps?: ReapSources): Promise<SessionReclaimPolicy> => {
@@ -222,12 +372,15 @@ export async function reapIdleSessions(deps?: ReapSources): Promise<ReapResult> 
   // 이유별 카운트 — **왜 안 죽였나**가 없으면 진단이 불가능하다. 실측(2026-07-28): 고객사 A에서 F 를 켰는데 회수가
   //  0건이었고, 로그가 침묵해서(종전엔 reaped>0 일 때만 로그) 운영자도 우리도 tick 이 돌았는지조차 몰랐다.
   const reasons = emptyReasons();
-  const candidates = pickReapCandidates({
+  const picked = pickReapCandidates({
     live, restorable, managedIds, nowSec,
     cutoffSec: nowSec - ttlMin * 60,
     attachTtlMin: policy.attach_idle_minutes ?? 0,
     reasons,
   });
+  // ⑥ 하네스가 띄운 작업이 도는 세션은 뺀다(#2652). **후보가 나온 뒤에만** 프로세스를 본다 — 평시엔 후보가
+  //  0건이라(실측: dev 박스 며칠간 유휴 회수 0건) 이 경로의 평시 비용도 0 이다. 점유(RSS)는 여전히 안 잰다.
+  const candidates = await dropLiveJobs(picked, reasons, deps);
   // 평시 순서 = **오래 idle 인 것부터**(사용자 피해가 가장 적은 순). 점유는 재지 않는다 — 불필요한 /proc 스캔 금지.
   candidates.sort((a, b) => a.idleSince - b.idleSince);
 
@@ -241,10 +394,12 @@ export async function reapIdleSessions(deps?: ReapSources): Promise<ReapResult> 
       logger.warn({ err: e, id: c.id }, "session-reaper: 회수 실패(계속)");
     }
   }
-  const skipped = reasons.managed + reasons.noState + reasons.attached + reasons.working + reasons.recent + reasons.failed;
+  const skipped = reasons.managed + reasons.noState + reasons.attached + reasons.working + reasons.recent + reasons.failed + reasons.jobs;
   // 정책이 켜져 있으면 **매 tick** 남긴다(회수 0건도) — 5분에 한 줄이고, 이 한 줄이 없으면 "왜 아무것도 안 죽었나"를
   //  박스에서 추측으로 파야 한다. noState 가 크면 백필(session-state-backfill)이 필요하다는 신호다.
-  logger.info({ ttlMin, scanned: live.length, reaped: reaped.length, skipped, skipReasons: reasons },
+  //  ⚠ **무엇을 걷었는지(id)도 남긴다**(#2652) — 종전엔 개수뿐이라, 사라진 세션의 주인이 «왜 회수됐나»를 물으면
+  //   대화기록 파일의 mtime 을 tick 시각과 대조하는 수밖에 없었다(실측 2026-09-04 조사가 정확히 그랬다).
+  logger.info({ ttlMin, scanned: live.length, reaped: reaped.length, reapedIds: reaped.slice(0, 20), skipped, skipReasons: reasons },
     "session-reaper tick(idle 세션 회수 — desired-state 보존 → restorable)");
   return { enabled: true, ttlMin, scanned: live.length, reaped, skipped, skipReasons: reasons };
 }
@@ -336,6 +491,8 @@ interface GlobalCandidate extends ReapCandidate {
   rssMb: number;
   axes: PressureAxes;
   maxReap: number;
+  /** 그 워크스페이스가 이번 tick 에 점유를 **실제로 쟀나**. 못 쟀으면 정지 조건이 안 서므로 상한이 달라진다. */
+  rssMeasured: boolean;
 }
 
 export interface PressureReapDeps extends ReapSources {
@@ -459,7 +616,7 @@ export async function reapPressureSessions(deps?: PressureReapDeps): Promise<Pre
         const [live, states, managed] = await Promise.all([listLive(), listStates(), listManaged()]);
         const restorable = new Set(states.map((s) => s.id));
         const managedIds = new Set(managed.map((m) => m.session_id).filter((x): x is string => !!x));
-        const picked = pickReapCandidates({
+        const pickedRaw = pickReapCandidates({
           live, restorable, managedIds, nowSec,
           //  압박이면 **완화 TTL**로 갈아탄다 — 다만 "방금까지 쓰던 세션"은 그래도 안 건드린다(그 하한선이 이 값이다).
           cutoffSec: nowSec - (policy.pressure_idle_minutes ?? 0) * 60,
@@ -471,19 +628,23 @@ export async function reapPressureSessions(deps?: PressureReapDeps): Promise<Pre
         // 점유(RSS)는 후보가 있을 때만 잰다. proc 표는 **박스 전역**이라 한 번만 읽고 워크스페이스끼리 공유한다;
         //  pane pid 는 그 tmux 서버의 것이라 컨텍스트 안에서 워크스페이스마다 읽는다.
         let rss = new Map<string, number>();
-        if (picked.length > 0) {
+        if (pickedRaw.length > 0) {
           try {
             if (!procTable) procTable = await loadProc();
             rss = await loadRss(procTable);
           } catch (e) { logger.warn({ err: e, workspace: slug }, "session-reaper: 세션 RSS 측정 실패 — 이 워크스페이스는 0 으로 본다"); }
         }
+        // ⑥ 작업이 도는 세션은 압박 중에도 안 걷는다(#2652). 급성 압박이라도 «사람이 시켜 놓은 작업»을 죽여
+        //  얻는 메모리는 그 작업을 처음부터 다시 시키는 비용보다 싸지 않다. 표는 위에서 이미 떴으니 재사용한다.
+        const picked = await dropLiveJobs(pickedRaw, reasons, deps, procTable ?? undefined);
         const priority = policy.pressure_priority ?? 100;
         const maxReap = policy.pressure_max_reap ?? 0;
-        const mine = picked.map((c) => ({ ...c, tenant: t, slug, priority, rssMb: rss.get(c.id) ?? 0, axes, maxReap }));
+        //  '쟀다'의 기준 = 후보 중 **하나라도 양수 RSS 를 얻었나**. 맵이 비어 있지 않아도 값이 전부 0 이면 못 잰 것이다
+        //  (hidepid 로 남의 uid /proc 를 못 읽는 격리 박스가 정확히 이 모양이 된다 — 이 기능이 노리는 바로 그 환경).
+        const rssMeasured = picked.some((c) => (rss.get(c.id) ?? 0) > 0);
+        const mine = picked.map((c) => ({ ...c, tenant: t, slug, priority, rssMb: rss.get(c.id) ?? 0, axes, maxReap, rssMeasured }));
         return {
-          //  '쟀다'의 기준 = 후보 중 **하나라도 양수 RSS 를 얻었나**. 맵이 비어 있지 않아도 값이 전부 0 이면 못 잰 것이다
-          //  (hidepid 로 남의 uid /proc 를 못 읽는 격리 박스가 정확히 이 모양이 된다 — 이 기능이 노리는 바로 그 환경).
-          report: { slug, participated: true, candidates: picked.length, reaped: 0, rssMeasured: mine.some((c) => c.rssMb > 0) },
+          report: { slug, participated: true, candidates: picked.length, reaped: 0, rssMeasured },
           candidates: mine,
         };
       });
@@ -498,7 +659,7 @@ export async function reapPressureSessions(deps?: PressureReapDeps): Promise<Pre
 
   const participating = perWorkspace.filter((w) => w.participated).length;
   if (all.length === 0) {
-    const skipped = reasons.managed + reasons.noState + reasons.attached + reasons.working + reasons.recent;
+    const skipped = reasons.managed + reasons.noState + reasons.attached + reasons.working + reasons.recent + reasons.jobs;
     logger.info({ usedPct, swapPct, workspaces: workspaces.length, participating, scanned, skipped, skipReasons: reasons, perWorkspace },
       "session-reaper tick(압박 회수 — 걷을 후보 없음)");
     //  ⚠ `perWorkspace` 를 반드시 함께 돌려준다 — «왜 한 건도 안 걷었나»의 답이 전부 여기 있다.
@@ -520,7 +681,15 @@ export async function reapPressureSessions(deps?: PressureReapDeps): Promise<Pre
   let freedMb = 0;
   let reachedTarget = false;
   for (const c of all) {
-    if (c.maxReap > 0 && (reapedBySlug.get(c.slug) ?? 0) >= c.maxReap) { reasons.cap++; continue; }
+    // 상한 — 운영자가 정한 `pressure_max_reap` 이 우선이고, **안 정했는데 점유도 못 쟀으면 tick 당 1건**이다(#2652).
+    //  왜 1인가: 못 재면 `freedMb` 가 늘 0 이라 «목표에 닿으면 멈춘다»(reclaimTargetReached)가 **구조적으로 참이 될 수
+    //  없다** → 종전엔 그 워크스페이스의 후보를 **전부** 걷었다(실측 2026-09-03~04 맥미니: 13회 발동 전부
+    //  rssMeasured=false·reachedTarget=false, 30세션). 판정 근거가 없을 때 취할 수 있는 가장 작은 걸음이 1건이고,
+    //  압박이 진짜면 다음 tick(≥60초)에 또 걷는다 — 오판의 대가가 «해소가 1분 늦다»로 유계가 된다.
+    //  ⓘ 맥에서 이 자리에 오는 일 자체가 이제 드물다(readProcTable 이 darwin 을 지원해 대개 잰다) — 남는 건
+    //   hidepid 격리 박스처럼 **정말로 못 재는** 경우다.
+    const cap = c.maxReap > 0 ? c.maxReap : (c.rssMeasured ? 0 : 1);
+    if (cap > 0 && (reapedBySlug.get(c.slug) ?? 0) >= cap) { reasons.cap++; continue; }
     if (reclaimTargetReached({ freedMb, mem: c.axes.mem, swap: c.axes.swap })) { reasons.target++; reachedTarget = true; continue; }
     try {
       await within(c.tenant, () => reap(c.id));                        // tmux 만 죽이고 desired-state 보존 → restorable
@@ -538,12 +707,15 @@ export async function reapPressureSessions(deps?: PressureReapDeps): Promise<Pre
   //  (hidepid 로 남의 uid /proc 를 못 읽는 격리 박스가 정확히 이 모양이 된다 — 이 기능이 노리는 바로 그 환경).
   const rssMeasured = all.some((c) => c.rssMb > 0);
   const skipped = reasons.managed + reasons.noState + reasons.attached + reasons.working + reasons.recent
-    + reasons.failed + reasons.target + reasons.cap;
+    + reasons.failed + reasons.target + reasons.cap + reasons.jobs;
   //  ⚠ 압박 회수는 **사후 추적이 특히 중요하다** — 사용자에겐 "세션이 사라졌다"로 보이므로, 무엇을 왜 걷었는지가
   //   로그에 없으면 #1220 이 고치려던 그 상황(earlyoom 이 죽였는데 아무도 몰라 '회수'로 오인)을 우리가 재현한다.
+  //   ⓘ 그 주석을 적어 놓고 **정작 id 는 안 남기고 있었다**(#2652 실측: 사라진 세션의 주인이 물었을 때, 답을
+  //    맞추려고 대화기록 파일의 mtime 을 tick 시각과 대조해야 했다). `reapedIds` 가 그 자리다.
   logger.info({
     usedPct, swapPct, totalMb, workspaces: workspaces.length, participating,
-    scanned, reaped: reaped.length, skipped, skipReasons: reasons, freedMb, reachedTarget, rssMeasured, perWorkspace,
+    scanned, reaped: reaped.length, reapedIds: reaped.slice(0, 20), skipped, skipReasons: reasons,
+    freedMb, reachedTarget, rssMeasured, perWorkspace,
   }, "session-reaper tick(압박 회수 — 전역 · 순번→RSS 순, desired-state 보존 → restorable)");
 
   return {

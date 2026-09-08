@@ -97,6 +97,15 @@ const THIN_TEXT_MAX = 600;       // 답 한 줄이면 충분하다(화면도 첫
 const THIN_SAY_MAX = 4000;       // 사람 말은 '전문 보기'가 있어 조금 넉넉히
 const THIN_CMD_MAX = 4000;       // Bash 는 명령 안쪽(heredoc·커밋 메시지)을 정규식으로 훑는다
 const clip = (v: string, n: number): string => (v.length > n ? v.slice(0, n) : v);
+/** 사람 말 전용 자르기 — **앞뒤를 함께** 남긴다 (#762, 원준 2026-09-04).
+ *  ⚠ 앞만 남기면(clip) 「회의록 전사본 붙여넣기 + 그 아래 '정리해줘'」에서 **지시가 통째로 잘린다** —
+ *   타임라인엔 전사 앞머리만 제목으로 서고 정작 시킨 말은 사라진다(신고된 그 화면). 사람은 붙여넣은 뒤에
+ *   시키는 일이 많으므로 꼬리가 오히려 본론이다. 가운데만 버리고 그 사실을 한 줄로 남긴다. */
+const clipEnds = (v: string, n: number): string => {
+  if (v.length <= n) return v;
+  const head = Math.floor(n * 0.55), tail = n - head - 40;
+  return v.slice(0, head) + "\n…(가운데 " + (v.length - head - tail) + "자 줄임)…\n" + v.slice(v.length - tail);
+};
 
 function thinInput(input: unknown): Record<string, unknown> {
   if (!input || typeof input !== "object") return {};
@@ -124,11 +133,11 @@ export function thinLine(line: ChatLine): ChatLine | null {
   if (o.type === "user") {
     const c = o.message?.content;
     const blocks: ChatBlock[] = [];
-    if (typeof c === "string") { if (c.trim()) blocks.push({ type: "text", text: clip(c, THIN_SAY_MAX) }); }
+    if (typeof c === "string") { if (c.trim()) blocks.push({ type: "text", text: clipEnds(c, THIN_SAY_MAX) }); }
     else if (Array.isArray(c)) {
       for (const b of c) {
         if (!b || typeof b !== "object") continue;
-        if (b.type === "text" && String(b.text ?? "").trim()) blocks.push({ type: "text", text: clip(String(b.text), THIN_SAY_MAX) });
+        if (b.type === "text" && String(b.text ?? "").trim()) blocks.push({ type: "text", text: clipEnds(String(b.text), THIN_SAY_MAX) });
         // 도구 결과는 **본문을 버리고 성패만** 남긴다 — 화면은 실패 표시에만 쓴다(본문이 이 파일 덩치의 대부분이다).
         else if (b.type === "tool_result") blocks.push({ type: "tool_result", tool_use_id: String(b.tool_use_id ?? ""), content: "", ...(b.is_error ? { is_error: true } : {}) } as ChatBlock);
       }

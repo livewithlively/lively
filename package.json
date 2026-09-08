@@ -10,7 +10,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/build-web.mjs && tsc -p web/standalone/tsconfig.json && node scripts/build-node-agent.mjs && node scripts/build-standalone.mjs",
+    "build": "tsc -p tsconfig.json && node scripts/build-web.mjs && tsc -p web/standalone/tsconfig.json && node scripts/build-node-agent.mjs && node scripts/build-standalone.mjs && node scripts/stamp-assets.mjs",
     "build:web": "node scripts/build-web.mjs",
     "start": "node --env-file-if-exists=.env dist/index.js",
     "dev": "tsx watch src/index.ts",
@@ -21,6 +21,7 @@
     "test:itest": "node scripts/run-tests.mjs --build --itest",
     "test:ci": "node scripts/run-tests.mjs --build -j 4 --budget=45",
     "dm": "node --env-file-if-exists=.env dist/domainmap/cli.js",
+    "gen:sudoers": "node scripts/gen-sudoers-env-keep.mjs --write",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true"
   },
   "dependencies": {
@@ -30,6 +31,7 @@
     "mysql2": "^3.22.6",
     "node-pty": "1.2.0-beta.14",
     "node-sql-parser": "^5.3.0",
+    "pdfjs-dist": "^6.3.289",
     "pg": "^8.13.1",
     "pg-connection-string": "^2.13.0",
     "pino": "^9.5.0",

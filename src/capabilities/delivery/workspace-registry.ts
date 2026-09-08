@@ -14,7 +14,7 @@ import type { Capability } from "../types.js";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import { restRead, restWork, restOnly, actorOf } from "./shared.js";
-import { registryModeActive } from "../../org/tenancy/state.js";
+import { registryModeActive, managedMode } from "../../org/tenancy/state.js";
 import { activateWorkspaceRegistry, lastActivationError } from "../../org/tenancy/activate.js";
 import {
   PRIMARY_SLUG, PRIMARY_TENANT_ID, normalizeWorkspaceSlug, listWorkspacesForMember, getWorkspaceBySlug,
@@ -124,11 +124,8 @@ const requireRegistry = (): void => {
   }
 };
 
-/**
- * 이 게이트웨이가 **매니지드**인가(#2188). CP 서명 헤더 모드 = CP 가 워크스페이스 축의 권위.
- *  registry(셀프호스트 다중)와 **배타**다 — 둘 다 켜지는 배포는 없다(tenant-middleware 머리말).
- */
-const managedMode = (): boolean => !!(process.env.LIVELY_TENANT_HEADER_SECRET || "").trim();
+// 매니지드 판정(managedMode)은 org/tenancy/state.ts 한 곳에 있다 — 상단 import 참조.
+//  ⚠ 여기 지역 사본을 다시 두지 마라: 세션 목록 격리(sessionInWorkspace)와 판정이 갈린다(#3564).
 
 /**
  * CP 의 워크스페이스 한 줄 → 화면이 이미 아는 모양(wsView)으로. **필드 이름을 새로 만들지 않는다** —

@@ -415,7 +415,8 @@ function openKnMetaPicker(anchor: HTMLElement, field: string, k: any, save: (f: 
   } else {
     pop.append(el('div', { class: 'kn-metapop-note', text: '불러오는 중…' }));
     api('/api/ui/categories').then((d) => {
-      const cats = (d && d.categories) || [];
+      //  #1631: 고르는 자리엔 활성 축만 — 비활성은 «새로 넣지 마라» 는 뜻이다(목록 화면엔 남는다).
+      const cats = ((d && d.categories) || []).filter((c: any) => (c.state ?? 'active') === 'active');
       const cur = new Set((Array.isArray(k.categories) ? k.categories : []).filter((c) => c.state !== 'rejected').map((c) => c.key));
       //  #1631: 종전엔 space(사업/제품/시스템) 소제목으로 갈라 담았다. 그 축이 없어져 평면 목록이다.
       const parts: any[] = cats.map((c) => opt(c.name || c.key, c.key, cur.has(c.key)));

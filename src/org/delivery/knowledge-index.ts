@@ -58,13 +58,16 @@ export interface CategoryMapEntry {
 export async function categoryMapForIndex(viewer: Viewer, mineIds?: Set<number>): Promise<CategoryMapEntry[]> {
   try {
     const { itemsPool } = await import("../../db/client.js");
-    // (1) 전 카테고리 — merged 제외. key 부분유니크. cross_cutting 먼저(교차관심사 상위 노출).
+    // (1) 전 카테고리 — merged·deprecated 제외. key 부분유니크. cross_cutting 먼저(교차관심사 상위 노출).
+    //  ⚠ 이 지도는 **분류 후보**다(에이전트가 여기서 골라 지식을 넣는다). 비활성 축은 «새로 넣지 마라» 는
+    //   뜻이므로 여기서 뺀다. 소환(recall-router)에는 남는다 — 비활성은 지식이 0건일 때만 될 수 있어서
+    //   (category-store.assertDeprecatable) 빼도 잃는 것이 없다.
     //  ⚠ 카테고리 자체는 거르지 않는다 — 분류체계는 조직의 뼈대(빈 분류도 보여야 어디에 쓸지 판단한다)라
     //   가시성 주체가 아니다. 잠기는 건 그 안의 **지식**이고, 그래서 아래 카운트만 뷰어 기준으로 센다.
     const catRows = (await itemsPool.query(
       `SELECT c.id, c.key, c.name, c.cross_cutting
          FROM category c
-        WHERE c.state <> 'merged'
+        WHERE c.state = 'active'
         ORDER BY c.cross_cutting DESC, c.key`,
     )).rows;
     // (2) active 지식수/category — knowledge_category(rejected 제외) ⋈ knowledge(active). category_id 로 집계 후 key 로 환원.

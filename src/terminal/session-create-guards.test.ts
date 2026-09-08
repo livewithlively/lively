@@ -1,24 +1,7 @@
-// 세션 생성 가드(#1780 v2 §7-1) — 사양 H1: node + appId 는 400, 그 외는 통과(무회귀).
+// 세션 생성 가드 — 신뢰 대화상자 자동 수락 판정(autoTrustWorkspace). (노드+앱 400 가드는 #3626 에서 사라졌다 — 관문이 하나가 되며 거절 자리도 relay 계약 하나뿐.)
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { assertAppSessionPlacement, autoTrustWorkspace } from "./session-create-guards.js";
-import { HttpError } from "../http-error.js";
-
-test("node + appId → 400 (relay 전에 거절)", () => {
-  assert.throws(
-    () => assertAppSessionPlacement({ appId: "browser" }, "node-1"),
-    (e: unknown) => e instanceof HttpError && e.status === 400 && /노드/.test(e.message),
-  );
-});
-
-test("node + appId 미지정/undefined → 통과(무회귀)", () => {
-  assert.doesNotThrow(() => assertAppSessionPlacement({}, "node-1"));
-  assert.doesNotThrow(() => assertAppSessionPlacement({ appId: undefined }, "node-1"));
-});
-
-test("node 없음 + appId → 통과(중앙 앱 세션, 무회귀)", () => {
-  assert.doesNotThrow(() => assertAppSessionPlacement({ appId: "browser" }, ""));
-});
+import { autoTrustWorkspace } from "./session-create-guards.js";
 
 // ── #1867 회귀: 첫 지시가 신뢰 대화상자에 막히던 자리 ──────────────────────────
 //  실측(2026-08-25, dev 라이브): 프로젝트 세션을 노드에서 열면 cwd 가 라이블리가 방금 만든 `project/<id>` 인데도

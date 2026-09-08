@@ -17,7 +17,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { memberShOut } from "./terminal-member-fs.js";
 import { MEMBER_HOME_BASE } from "./terminal-transcript.js";
-import { aiLoginArgv, EXIT_MARK, type AiLoginHarness } from "./ai-login-flow.js";
+import { aiLoginArgv, isAiLoginHarness, EXIT_MARK, type AiLoginHarness } from "./ai-login-flow.js";
 import { sessionExecConfigured, sessionSpawnArgv } from "./session-exec.js";
 import type { LivelyUser } from "../context.js";
 
@@ -126,7 +126,7 @@ async function sh(osUser: string | null, script: string): Promise<string> {
  */
 async function spawnAt(user: LivelyUser | null, osUser: string | null, h: AiLoginHarness, script: string): Promise<string> {
   if (!user || !sessionExecConfigured()) return sh(osUser, script);
-  const sid = await ensureLoginSession(user, h);
+  const sid = await ensureHarnessSeat(user, h);
   const argv = sessionSpawnArgv(sid, ["sh", "-c", script]);
   if (!argv.length) return sh(osUser, script);   // 중계가 갑자기 빠졌다 — 종전 자리로 접는다
   return new Promise((resolve, reject) => {
@@ -139,17 +139,20 @@ async function spawnAt(user: LivelyUser | null, osUser: string | null, h: AiLogi
   });
 }
 
-/** 이 사람·이 하네스의 로그인 자리(세션 컨테이너). 한 번 만들고 재사용한다. */
+/** 이 사람·이 하네스의 하네스 자리(세션 컨테이너). 한 번 만들고 재사용한다. */
 const loginSessions = new Map<string, string>();
 
 /**
- * 로그인 러너를 띄울 **세션 컨테이너**를 확보한다.
+ * 하네스 바이너리를 돌릴 **세션 컨테이너**를 확보한다.
  *
  *  ⚠ 하네스 TUI 를 띄우지 않는다(`harness: "shell"`) — 우리에게 필요한 건 «바이너리가 있는 자리» 뿐이고,
  *   TUI 를 띄우면 그 pane 이 자격 파일을 같이 노려 서로를 덮는다.
  *  ⚠ `kind: "login"` — 이 종류가 이미 있다(#2162). 사람 세션으로 새면 목록·집계가 오염된다.
+ *  ⚠ #3668 T3 — 로그인 **프로브**(profiles.aiLoginCheck)도 이 자리를 쓴다. 그래서 키가 문자열이다:
+ *   프로브 전용 하네스(antigravity)는 AiLoginHarness 가 아니다. 자리를 공유해야 «띄운 자리»와 «잰 자리»가
+ *   갈리지 않는다 — 갈리면 로그인은 세션 컨테이너에서 되는데 판정은 다른 자리를 봐서 영영 «미로그인» 이 된다.
  */
-async function ensureLoginSession(user: LivelyUser, h: AiLoginHarness): Promise<string> {
+export async function ensureHarnessSeat(user: LivelyUser, h: string): Promise<string> {
   const key = `${ownerKey(user)}:${h}`;
   const had = loginSessions.get(key);
   if (had) return had;
@@ -171,8 +174,9 @@ export async function startAiLogin(osUser: string | null, h: AiLoginHarness, use
   if (!/started|running/.test(out)) throw new Error(`로그인 명령을 띄우지 못했습니다 — ${out.slice(0, 160)}`);
 }
 
-/** 그 사람의 로그인 자리를 치운다(세션 컨테이너까지) — cancel 이 함께 부른다. */
-export async function dropLoginSession(user: LivelyUser | null, h: AiLoginHarness): Promise<void> {
+/** 그 사람의 하네스 자리를 치운다(세션 컨테이너까지) — cancel 과 «판정이 끝났다» 가 함께 부른다.
+ *  ⚠ 키가 문자열인 이유는 ensureHarnessSeat 와 같다(프로브 전용 하네스). */
+export async function dropLoginSession(user: LivelyUser | null, h: string): Promise<void> {
   if (!user) return;
   const key = `${ownerKey(user)}:${h}`;
   const sid = loginSessions.get(key);
@@ -182,6 +186,18 @@ export async function dropLoginSession(user: LivelyUser | null, h: AiLoginHarnes
     const { killSession } = await import("./sessions.js");
     await killSession(user, sid, { admin: true });
   } catch (_) { /* 이미 없거나 못 죽였다 — 자리 표만 지우면 다음에 새로 만든다 */ }
+}
+
+/**
+ * 프로브 때문에 만든 자리를 치운다(#3668 T3).
+ *
+ *  ⚠ **로그인 러너가 쓰는 하네스는 건드리지 않는다** — 그 컨테이너에서 로그인 프로세스가 돌고 있어서,
+ *   치우면 사람이 브라우저에서 승인하는 도중에 러너가 죽는다. 러너가 없는 하네스(프로브 전용, antigravity)만
+ *   대상이다. 안 치우면 온보딩 클릭 한 번마다 세션 컨테이너가 하나씩 남는다 — T3 가 없애려는 바로 그 낭비다.
+ */
+export async function dropProbeSeat(user: LivelyUser | null, key: string): Promise<void> {
+  if (isAiLoginHarness(key)) return;
+  await dropLoginSession(user, key);
 }
 
 /** 지금까지의 출력 원문. 아직 없으면 빈 문자열(=시작 중). */

@@ -12,6 +12,15 @@ import type { WorkerRunSnapshot } from "../apps/worker-host.js";
 export const NODE_WS_PATH = "/node/ws";
 export const PROTO_VER = 1;
 
+/**
+ * 노드 채널 close 코드 — **이 노드가 게이트웨이 자신이 도는 박스다**(#2592). 종결 코드다: 재연결해도 결과가 같다.
+ *
+ * 게이트웨이 쪽 사연은 self-node.ts 머리말. 여기(공유 프로토콜)에 두는 이유는 **끊는 쪽과 끊기는 쪽이 같은 값을
+ *  봐야 하기 때문**이다 — 에이전트는 이 코드를 받으면 백오프 재연결 루프를 돌지 않고 사유를 남기고 끝낸다.
+ *  4426(proto-ver-mismatch)과 같은 부류이고, 4462(node-offline, 일시 상태)와는 반대다.
+ */
+export const CLOSE_SELF_NODE = 4409;
+
 // 게이트웨이 주소 → 노드 채널 WSS. 에이전트가 쓰지만 **여기** 두는 이유: agent.ts 는 임포트 즉시
 //  환경변수를 검사하고 종료하는 실행 스크립트라 테스트가 못 붙는다(그래서 이 규칙이 오래 안 지켜졌다).
 //  ⚠ pathname 을 **덮어쓰면 안 된다**(실측 #1541): 서브패스로 서비스되는 게이트웨이

@@ -140,5 +140,33 @@ echo "RC=$?"`;
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// ── ⑥ node 도구 힙 상한 — **세션 대신 명령이 죽게 한다** (#3546) ────────────
+//  V8 은 힙 천장을 «머신 메모리»에서 파생하는데, 컨테이너에선 그 값이 **세션 캡 전체**다. 그런데 그
+//   캡 안엔 claude·MCP 가 이미 ~1.0GB 상주한다 — 안 묶으면 node 도구 하나가 cgroup OOM 을 불러
+//   **세션 컨테이너를 통째로** 데려간다(2026-09-04 실측: 캡 1536MB 세션의 node 기본
+//   heap_size_limit=792MB, `npx tsc --noEmit` 도중 세션 사망 · 트랜스크립트가 그 호출에서 끊겼다).
+//  메모리 출처는 LVLY_MEMINFO seam 으로 갈아낀다 — 시험이 CI 머신 크기에 좌우되면 안 된다.
+{
+  const mem = (mb) => {
+    const f = path.join(HOME, `meminfo-${mb}`);
+    fs.writeFileSync(f, `MemTotal:       ${mb * 1024} kB\n`);
+    return f;
+  };
+  const heapOf = (mb, extra = {}) =>
+    envAfter({ home: HOME, seed: { LVLY_MEMINFO: mem(mb), ...extra } }).NODE_OPTIONS;
+
+  assert.equal(heapOf(1536), "--max-old-space-size=537", "캡 1536MB → 35% = 537MB");
+  assert.equal(heapOf(2560), "--max-old-space-size=896",
+    "캡 2560MB → 896MB — 실측 콜드 tsc 요구량(560<x≤660)을 넘어야 한다");
+  assert.equal(heapOf(512), "--max-old-space-size=256", "작은 캡에서도 하한 256MB 아래로 안 내린다");
+  //  ★ 무회귀 — 메모리가 넉넉한 표면엔 **아예 안 건다.** 여기가 깨지면 셀프호스트 박스의 빌드가
+  //   있지도 않은 문제 때문에 힙 상한을 얻는다.
+  assert.equal(heapOf(8192), undefined, "> 4GB 표면엔 걸지 않는다(무회귀)");
+  //  기본값은 «미설정일 때만» — 사람이 정한 값을 덮으면 큰 빌드를 하려던 사람을 조용히 막는다.
+  assert.equal(heapOf(1536, { NODE_OPTIONS: "--max-old-space-size=9999" }),
+    "--max-old-space-size=9999", "명시한 NODE_OPTIONS 를 덮으면 안 된다");
+  ok("⑥ node 도구 힙 상한 — 캡 비례 · 하한 256 · >4GB 미적용 · 명시값 우선");
+}
+
 fs.rmSync(HOME, { recursive: true, force: true });
 console.log(`\n${pass} passed`);

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { deliveryTransport, echoNeedle, flatOneLine, needsSubmitRetry, readyVerdictOnError, retryDelayMs, stallAction, unreachableDelayMs,
-  READY_WINDOW_MS, NOT_READY_TTL_MS, UNREACHABLE_TTL_MS, STALE_SENDING } from "./session-outbox.js";
+  READY_WINDOW_MS, NOT_READY_TTL_MS, UNREACHABLE_TTL_MS, STALE_SENDING, stalledSinceNext } from "./session-outbox.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -88,6 +88,15 @@ t("[#2154 ②] 그래도 영원히 들고 있지는 않는다 — 각자의 상�
   assert.equal(stallAction("gone", { ageMs: UNREACHABLE_TTL_MS, restorable: true }).action, "fail");
   // 입력창을 기다리는 일(세션은 살아 있다)보다 못 닿는 일(노드 재기동·사람의 복원)이 더 오래 걸린다.
   assert.ok(NOT_READY_TTL_MS < UNREACHABLE_TTL_MS);
+});
+t("[#3689] «언제부터 못 닿고 있나» — 못 닿는 두 사유는 처음 막힌 시각을 유지하고, 입력창 대기(세션은 살아 있다)는 시계를 세운다", () => {
+  const T1 = "2026-09-08T02:53:00.000Z", T2 = "2026-09-08T03:10:00.000Z";
+  assert.equal(stalledSinceNext(null, "unreachable", T1), T1, "처음 막혔다 — 지금이 시작");
+  assert.equal(stalledSinceNext(T1, "unreachable", T2), T1, "이미 막혀 있었다 — 시작 시각을 유지(updated_at 처럼 갱신하지 않는다)");
+  assert.equal(stalledSinceNext(T1, "session-gone-restorable", T2), T1, "닫힌 채 복원을 기다리는 것도 «못 닿는» 축");
+  assert.equal(stalledSinceNext(null, "session-gone-restorable", T2), T2);
+  assert.equal(stalledSinceNext(T1, "not-ready", T2), null, "입력창이 안 뜰 뿐 세션엔 닿는다 — 못 닿는 시계는 돌지 않는다");
+  assert.equal(stalledSinceNext(undefined, "not-ready", T2), null);
 });
 t("[#2154 ②] 못 닿는 동안의 재시도는 분 단위로 벌어지고 5분에서 멈춘다(로그인 화면 폴링과 다른 시간축)", () => {
   assert.equal(unreachableDelayMs(0), 30_000);

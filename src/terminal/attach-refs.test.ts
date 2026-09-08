@@ -6,7 +6,7 @@
 //  끊으므로 **마지막 WS 가 닫힐 때만** 해야 한다 — 세션 공유(session-share)로 두 사람이 같은 판을 볼 수 있다.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { acquireAttachRef, attachRefCount, releaseAttachRef } from "./terminal-pty.js";
+import { acquireAttachRef, attachRefCount, releaseAttachRef, nothingToDetach } from "./terminal-pty.js";
 
 test("① 참조 1개 → release 는 '마지막'이고 카운터를 비운다", () => {
   const id = "box-t-solo";
@@ -53,4 +53,35 @@ test("⑥ 세션별로 독립이다", () => {
   acquireAttachRef("box-t-a"); acquireAttachRef("box-t-b");
   assert.equal(releaseAttachRef("box-t-a"), true);
   assert.equal(attachRefCount("box-t-b"), 1, "다른 세션의 참조는 그대로");
+});
+
+// ── 「끊을 것이 없었다」와 「못 끊었다」를 가른다 (#3545) ───────────────────────────────
+//  왜 필요한가: 워커가 죽으면 릴레이가 함께 죽어 컨테이너 안 클라이언트가 **이미** 걷힌 뒤다
+//  (프로덕션 실측 2026-09-04). 그래서 게이트웨이가 뒤늦게 쏘는 `detach-client` 는 거의 항상
+//  `no current client` 로 끝난다. 그걸 실패로 남기면 **정상 경로가 매번 빨간 줄을 찍고**, 진짜
+//  실패(중계 404·타임아웃)가 그 잡음에 묻힌다 — #2625 T1 이 warn 을 넣은 취지가 거꾸로 죽는다.
+//  ⚠ 반대 방향이 더 위험하다: 모르는 오류를 «없음» 으로 접으면 못 끊은 걸 아무도 모른다.
+//   그래서 표는 **아는 문구만** 성공으로 접고 나머지는 전부 시끄럽게 둔다.
+test("D1 tmux 가 «클라이언트 없음»으로 끝낸 것은 실패가 아니다 — 실측 문자열 그대로", () => {
+  assert.equal(nothingToDetach(
+    'Command failed: node /opt/lively/libexec/tmux-relay.cjs lively-46e3 detach-client -s box-sangmin-yoon-520fa471\nno current client\n'), true);
+});
+test("D2 세션이 이미 갔다는 답도 실패가 아니다(유령도 함께 갔다)", () => {
+  for (const m of ["can't find session: box-a-1", "cant find session", "session not found", "no such session"]) {
+    assert.equal(nothingToDetach(m), true, m);
+  }
+});
+test("D3 대소문자는 안 가린다", () => {
+  assert.equal(nothingToDetach("NO CURRENT CLIENT"), true);
+});
+test("D4 진짜 못 끊은 것은 전부 시끄럽게 남는다", () => {
+  for (const m of [
+    "Command failed: … 404 Not Found",           // 중계가 세션 컨테이너를 못 찾음
+    "timed out after 5000ms",                     // 중계 타임아웃
+    "EACCES: permission denied",                  // 소켓 권한
+    "connect ECONNREFUSED /run/lvly-t/x/sock",    // 브로커 소켓 없음
+    "",                                           // 사유 없음 — 모르면 시끄럽게
+  ]) {
+    assert.equal(nothingToDetach(m), false, m);
+  }
 });

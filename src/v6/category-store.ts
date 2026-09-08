@@ -4,6 +4,7 @@
 //   **있으면 붙는 것**이지 축의 부류가 아니다 — 도메인맵은 이제 전 분류축을 그린다.
 //  감사는 org_content_audit(entity='category') — knowledge/domain 과 동일 append-only 패턴.
 import { itemsPool } from "../db/client.js";
+import { HttpError } from "../http-error.js";
 import { q, one } from "../db/client.js";
 import { auditOrgContent, restoreSnapshot, type WriteCtx } from "./content-audit.js";
 import { embeddingInputText } from "./embedding-provider.js";
@@ -276,20 +277,49 @@ export async function createCategory(
   return row;
 }
 
+/**
+ * 이 축을 비활성으로 바꿔도 되나(#1631) — **지식이 남아 있으면 안 된다.**
+ *
+ *  왜: 미분류 지식은 recall 라우터의 조인에서 빠져 **아예 소환되지 않는다**(lively-taxonomy 스킬이 이미
+ *   세워 둔 규칙 — "카테고리를 지우기 전에 그 아래 지식을 먼저 옮긴다"). 비활성도 같은 자리다.
+ *   이 검사가 있어야 «비활성 축은 비어 있다» 가 보장되고, 그 덕분에 비활성 축을 분류 후보에서 빼도
+ *   소환에서 잃는 것이 없다(안 그러면 지식이 조용히 사라진다).
+ */
+async function assertDeprecatable(id: number, key: string): Promise<void> {
+  const row: { n: number } | undefined = await one(itemsPool,
+    `SELECT count(*)::int AS n FROM knowledge_category kc JOIN knowledge k ON k.name=kc.name
+      WHERE kc.category_id=$1 AND kc.state<>'rejected' AND k.lifecycle='active'`, [id]);
+  const n = row?.n ?? 0;
+  if (n > 0) {
+    //  ⚠ HttpError(400) 로 던진다 — 평범한 Error 면 rest-util 이 500 «internal_error» 로 뭉개서
+    //   «몇 건이 남았는지» 가 통째로 사라진다(dev 실측 2026-09-04: 실제로 그렇게 나갔다).
+    //   막는 것보다 **무엇을 먼저 옮겨야 하나** 가 이 검사의 값어치다.
+    throw new HttpError(400, `'${key}' 에 지식 ${n}건이 남아 있어 비활성으로 바꿀 수 없습니다 — 먼저 다른 축으로 옮기세요`
+      + "(미분류 지식은 소환에 안 잡힙니다).");
+  }
+}
+
 export async function updateCategory(
   id: number,
-  patch: { name?: string; description?: string; should?: string; cross_cutting?: boolean },
+  patch: { name?: string; description?: string; should?: string; cross_cutting?: boolean; state?: string },
   ctx?: WriteCtx,
 ): Promise<CategoryRow> {
   const before = await getCategory(id);
   if (!before) throw new Error(`카테고리 #${id} 없음`);
+  //  state 는 두 값만 오간다 — 'merged' 는 병합 경로가 소유하는 상태라 여기서 못 만든다.
+  const nextState = patch.state === undefined ? null : String(patch.state);
+  if (nextState !== null && nextState !== "active" && nextState !== "deprecated") {
+    throw new HttpError(400, "state 는 active|deprecated 만 가능합니다(merged 는 병합 경로가 정합니다)");
+  }
+  if (nextState === "deprecated" && before.state !== "deprecated") await assertDeprecatable(id, before.key);
   // COALESCE($n, col): undefined→null→기존값 보존(부분 수정).
   const row: CategoryRow = await one(itemsPool,
     `UPDATE category SET
        name=COALESCE($2,name), description=COALESCE($3,description),
-       should=COALESCE($4,should), cross_cutting=COALESCE($5,cross_cutting), updated_at=now()
+       should=COALESCE($4,should), cross_cutting=COALESCE($5,cross_cutting),
+       state=COALESCE($6,state), updated_at=now()
      WHERE id=$1 RETURNING ${CATEGORY_COLS}`,
-    [id, patch.name ?? null, patch.description ?? null, patch.should ?? null, patch.cross_cutting ?? null]);
+    [id, patch.name ?? null, patch.description ?? null, patch.should ?? null, patch.cross_cutting ?? null, nextState]);
   await auditCategory(before.key, "update", before, row, ctx);
   // #1153 — 정의 벡터 재계산. 임베딩 입력(이름+설명+should)이 **실제로 바뀐** 경우에만 pending 으로 되돌린다
   //  (무변경 저장에 헛임베딩을 태우지 않는다 — knowledge 쓰기 경로와 동일 idiom). 백그라운드 스윕이 채운다.

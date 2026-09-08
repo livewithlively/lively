@@ -1,7 +1,8 @@
 // idle 세션 회수 결정 로직 테스트 (#1059 F) — 정당 세션 오kill 금지 안전 불변식(#687 교훈)이 핵심.
 //  주입 seam(deps)으로 tmux·DB 없이 결정만 검증한다. 엣지 표(스크래치패드 spec.md)의 모든 행 = 시나리오.
 import assert from "node:assert/strict";
-import { reapIdleSessions, reapPressureSessions, resetPressureSweepDebounce } from "./session-reaper.js";
+import { reapIdleSessions, reapPressureSessions, resetPressureSweepDebounce, liveJobsFromView, resolveLiveJobs } from "./session-reaper.js";
+import type { ProcEntry } from "./session-rss.js";
 import { invalidateSessionReclaimPolicyCache, type SessionReclaimPolicy } from "./session-reclaim-policy.js";
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
 import type { TenantContext } from "../org/tenant-context.js";
@@ -29,6 +30,9 @@ async function run(opts: {
   attachIdle?: number;
 }): Promise<{ res: Awaited<ReturnType<typeof reapIdleSessions>>; reaped: string[] }> {
   const { ttl = TTL, live = [], states, managed = [], reapThrows = new Set<string>(), attachIdle } = opts;
+  // ⑥(#2652) 기본 stub — **이 러너는 실제 tmux·/proc 를 만지지 않는다.** 안 주면 기본 구현이 진짜
+  //  `tmux list-panes` 를 부르고, tmux 가 없는 면(CI 리눅스 러너)에선 «못 봤다»로 후보를 전부 보호해
+  //  이 파일의 회수 단언이 통째로 뒤집힌다. ⑥ 자체의 검증은 아래 D1·D2·D7 이 seam 을 직접 주입해 한다.
   invalidateSessionReclaimPolicyCache(); // 시나리오마다 다른 ttl 을 쓰므로 30초 정책 캐시를 비운다(프로덕션은 tick 마다 갱신)
   const reaped: string[] = [];
   const res = await reapIdleSessions({
@@ -40,6 +44,7 @@ async function run(opts: {
     listStates: async () => states ?? live.map((s) => ({ id: s.id })), // 기본: 라이브 전부 desired-state 있음
     listManaged: async () => managed.map((id) => ({ session_id: id })),
     reap: async (id: string) => { if (reapThrows.has(id)) throw new Error("boom"); reaped.push(id); },
+    liveJobs: async () => new Set<string>(),
     now,
   });
   return { res, reaped };
@@ -192,8 +197,9 @@ async function run(opts: {
   const states = live.filter((s) => s.id !== "s-nostate").map((s) => ({ id: s.id }));
   const { res, reaped } = await run({ live, states, managed: ["s-managed"] });
   assert.deepEqual(reaped, ["reap-me"]);
-  assert.deepEqual(res.skipReasons, { managed: 1, noState: 1, attached: 1, working: 1, recent: 1, failed: 0, target: 0, cap: 0 },
-    "skip 사유별 카운트가 정확해야 한다(noState 가 크면 백필 필요 신호). target·cap 은 압박 회수 전용이라 평시엔 0");
+  assert.deepEqual(res.skipReasons, { managed: 1, noState: 1, attached: 1, working: 1, recent: 1, failed: 0, target: 0, cap: 0, jobs: 0 },
+    "skip 사유별 카운트가 정확해야 한다(noState 가 크면 백필 필요 신호). target·cap 은 압박 회수 전용이라 평시엔 0"
+    + " · jobs 는 ⑥ 전용(여기선 프로브 미주입 = 기본 구현이 tmux 를 못 봐 0)");
 }
 
 // ── 접속 없이 도는 세션(크론·빌드) 보호 — 2026-07-28 상민님 지적 ──────────────────────────
@@ -381,6 +387,7 @@ async function runPressure(opts: PressureOpts): Promise<{
     swapUsage: async () => { if (swapThrows) throw new Error("swap 못 읽음"); return swapTotalMb > 0 ? { totalMb: swapTotalMb, freeMb: swapFreeMb } : null; },
     procTable: async () => { procCalls++; if (procThrows) throw new Error("/proc 못 읽음"); return new Map(); },
     sessionRss: async () => new Map(Object.entries(current.rss ?? {})),
+    liveJobs: async () => new Set<string>(),   // ⑥ 기본 stub — 위 `run` 과 같은 이유(실 tmux 무접촉)
   });
   return { res, reaped, liveCalls, procCalls };
 }
@@ -470,16 +477,22 @@ const one = (policy: Partial<SessionReclaimPolicy>, live: SessionInfo[], over: P
   assert.equal(res.skipReasons.target, 2, "몇 개를 남겼는지 보고(진단 가능해야 한다)");
 }
 
-// P8 — 점유를 못 재도(빈 값) 회수는 막히지 않는다. 목표에 못 닿아 후보를 소진할 뿐.
+// P8 — 점유를 못 재도 회수는 막히지 않는다. **다만 한 걸음(1건)씩만 걷는다**(#2652 로 바뀐 정책).
+//  ⓘ 종전 이 자리는 «후보를 소진한다»(a·b 둘 다)였다. 그 동작이 실제로 무엇이었는지가 2026-09-03~04
+//   맥미니에서 드러났다: /proc 가 없어 **늘** 못 재는 박스에서 압박이 걸릴 때마다 후보가 통째로 걷혔다
+//   (13회 발동·30세션, 전부 rssMeasured=false·reachedTarget=false). 못 재면 정지 조건이 «구조적으로»
+//   성립할 수 없으므로, 판정 근거가 없을 때 취할 수 있는 가장 작은 걸음으로 바꾼다 — 압박이 진짜면
+//   다음 tick(≥60초)에 또 걷히고, 오판이면 피해가 1건에 그친다.
 {
   const live = [pSess("a"), pSess("b")];
   const { res, reaped } = await runPressure({
     workspaces: [one({ pressure_used_pct: 90, pressure_idle_minutes: P_IDLE }, live, { rss: {} })],
     usedPct: 95, totalMb: 1000,
   });
-  assert.deepEqual(reaped.sort(), ["a", "b"], "측정 실패가 방어를 멈추면 안 된다");
+  assert.deepEqual(reaped, ["a"], "측정 실패가 방어를 멈추면 안 된다(=0건이 아니다) — 그러나 소진하지도 않는다");
+  assert.equal(res.skipReasons.cap, 1, "남은 후보는 '상한에 걸림'으로 센다 — 다음 tick 에 다시 판단한다");
   assert.equal(res.reachedTarget, false, "되찾은 양을 모르니 목표 도달로 치지 않는다");
-  // 사고 중 운영자가 '측정을 못 해 다 걷었다'와 '안전한 후보가 없었다'를 가를 수 있어야 한다(둘 다 reachedTarget=false).
+  // 사고 중 운영자가 '측정을 못 했다'와 '안전한 후보가 없었다'를 가를 수 있어야 한다(둘 다 reachedTarget=false).
   assert.equal(res.rssMeasured, false, "점유를 못 쟀다는 사실이 결과에 남아야 한다");
 }
 
@@ -698,6 +711,7 @@ const one = (policy: Partial<SessionReclaimPolicy>, live: SessionInfo[], over: P
     swapUsage: async () => null,
     procTable: async () => new Map(),
     sessionRss: async () => new Map([["good-1", 10]]),
+    liveJobs: async () => new Set<string>(),
   });
   assert.deepEqual(reaped, ["good-1"], "실패한 워크스페이스를 건너뛰고 나머지는 계속한다");
   assert.equal(res.perWorkspace.find((w) => w.slug === "bad")?.why, "조회 실패");
@@ -733,16 +747,305 @@ console.log("session-reaper(압박 축): all passed");
     memUsedPct: async () => 95, memTotal: () => 1000, swapUsage: async () => null,
     procTable: async () => new Map(),
     sessionRss: async () => new Map(Object.entries(rssBySlug[cur] ?? {})),
+    liveJobs: async () => new Set<string>(),
   });
   assert.equal(res.rssMeasured, true, "전역 요약은 '한 곳이라도 쟀다'라 참이 된다 — 이것만 보면 아래를 놓친다");
   const byWs = new Map(res.perWorkspace.map((w) => [w.slug, w]));
   assert.equal(byWs.get("measured")?.rssMeasured, true);
   assert.equal(byWs.get("unmeasured")?.rssMeasured, false, "못 잰 워크스페이스가 결과에서 드러나야 한다");
-  //  u-1·u-2 는 0 으로만 세어져 목표가 안 서고 둘 다 걷힌다. 그 뒤 m-1(60MB)로 목표(freed>50)에 닿아 m-2 는 남는다.
-  assert.deepEqual(reaped, ["u-1", "u-2", "m-1"], "못 잰 쪽만 후보를 소진한다 — 그게 이 플래그가 알리는 사실이다");
-  assert.equal(byWs.get("unmeasured")?.reaped, 2);
+  //  못 잰 쪽은 **1건만**(u-1) 걷고 u-2 는 상한에 걸린다(#2652). 그 뒤 m-1(60MB)로 목표(freed>50)에 닿아 m-2 는 남는다.
+  //  ⓘ 종전엔 여기서 u-1·u-2 가 **둘 다** 걷혔다 — «못 잰 쪽만 후보를 소진한다»가 이 테스트가 드러낸 사실이었고,
+  //   이제는 그 소진 자체를 정책으로 막는다. 워크스페이스별 관측(rssMeasured)이 필요하다는 원래 논지는 그대로다.
+  assert.deepEqual(reaped, ["u-1", "m-1"], "못 잰 쪽은 한 걸음만 — 소진하지 않는다");
+  assert.equal(byWs.get("unmeasured")?.reaped, 1);
   assert.equal(byWs.get("measured")?.reaped, 1);
+  assert.equal(res.skipReasons.cap, 1, "u-2 는 '못 잰 곳의 암묵 상한'에 걸려 남았다");
   assert.equal(res.skipReasons.target, 1, "목표에 닿아 남긴 건 m-2 하나뿐이다");
 }
 
 console.log("session-reaper(압박 축 — 워크스페이스별 관측): all passed");
+
+// ── ⑥ 하네스가 띄운 작업 보호(#2652) — 사양·엣지 표: 스크래치패드 spec.md 표 D ────────────────────
+//  «작업 중»의 종전 정의(③)는 셋 다 «턴»에 묶여 있어서, AI 가 백그라운드로 걸어 둔 일은 어느 신호로도
+//  안 잡혔다. 여기서 검증하는 건 **그 일이 도는 세션은 두 축 모두 안 걷는다**는 것.
+
+// D1 — 유휴 축: 후보인데 작업이 돈다 → 안 걷고 사유 `jobs` 로 센다. 프로브엔 **후보만** 넘어간다.
+{
+  invalidateSessionReclaimPolicyCache();
+  const reaped: string[] = [];
+  const probed: string[][] = [];
+  const res = await reapIdleSessions({
+    loadPolicy: async () => ({ idle_ttl_minutes: TTL }),
+    listLive: async () => [
+      sess({ id: "box-bg", lastActive: CUTOFF - 100 }),      // 작업이 도는 세션
+      sess({ id: "box-dead", lastActive: CUTOFF - 100 }),    // 정말 노는 세션
+      sess({ id: "box-fresh", lastActive: NOW_SEC }),        // 후보가 아니다(최근)
+    ],
+    listStates: async () => [{ id: "box-bg" }, { id: "box-dead" }, { id: "box-fresh" }],
+    listManaged: async () => [],
+    reap: async (id) => { reaped.push(id); },
+    liveJobs: async (ids) => { probed.push([...ids].sort()); return new Set(["box-bg"]); },
+    now,
+  });
+  assert.deepEqual(reaped, ["box-dead"], "작업이 도는 세션은 남기고 나머지만 걷는다");
+  assert.equal(res.skipReasons?.jobs, 1, "왜 안 걷었는지가 이유별 카운트에 남아야 한다");
+  assert.deepEqual(probed, [["box-bg", "box-dead"]], "후보만 판정에 넘긴다(최근 세션까지 프로세스를 보지 않는다)");
+}
+
+// D2 — 유휴 축: 후보가 0건이면 작업 판정을 **아예 호출하지 않는다**(평시 비용 0 · S5)
+{
+  invalidateSessionReclaimPolicyCache();
+  let calls = 0;
+  await reapIdleSessions({
+    loadPolicy: async () => ({ idle_ttl_minutes: TTL }),
+    listLive: async () => [sess({ id: "box-fresh", lastActive: NOW_SEC })],
+    listStates: async () => [{ id: "box-fresh" }],
+    listManaged: async () => [],
+    reap: async () => { throw new Error("여기 오면 안 된다"); },
+    liveJobs: async () => { calls++; return new Set(); },
+    now,
+  });
+  assert.equal(calls, 0, "평시(후보 0건)엔 프로세스 표를 뜨지 않는다 — 이 성질이 깨지면 5분마다 전 박스를 스캔한다");
+}
+
+// D7 — 작업 판정이 예외를 던지면 종전대로 진행한다(방어가 방어를 멈추면 안 된다)
+{
+  invalidateSessionReclaimPolicyCache();
+  const reaped: string[] = [];
+  await reapIdleSessions({
+    loadPolicy: async () => ({ idle_ttl_minutes: TTL }),
+    listLive: async () => [sess({ id: "box-old", lastActive: CUTOFF - 100 })],
+    listStates: async () => [{ id: "box-old" }],
+    listManaged: async () => [],
+    reap: async (id) => { reaped.push(id); },
+    liveJobs: async () => { throw new Error("/proc 못 읽음"); },
+    now,
+  });
+  assert.deepEqual(reaped, ["box-old"], "판정 실패로 회수가 멈추면 baseline 관리가 통째로 죽는다");
+}
+
+// D8 — pane 을 못 봤다(tmux 비확답): 후보 **전부** 보호. "못 봤다"를 "작업 없다"로 읽으면 안 된다(S4).
+//  C8 — 후보 밖 세션에서 작업이 돌아도 결과에 안 들어온다(후보만 판정한다).
+{
+  const ids = new Set(["box-a", "box-b"]);
+  const table = new Map<number, ProcEntry>([
+    [10, { ppid: 1, rssKb: 900, name: "sh", pgid: 10, tpgid: 11 }],
+    [11, { ppid: 10, rssKb: 300_000, name: "claude", pgid: 11, tpgid: 11 }],
+    [20, { ppid: 11, rssKb: 100, name: "zsh", pgid: 20, tpgid: -1 }],      // box-c 에서 도는 작업
+  ]);
+  const unseen = liveJobsFromView(ids, { ok: false, panes: new Map() }, table);
+  assert.deepEqual([...unseen].sort(), ["box-a", "box-b"], "못 봤으면 전부 보호한다");
+  const seen = liveJobsFromView(ids, { ok: true, panes: new Map([["box-a", [10]], ["box-c", [10]]]) }, table);
+  assert.deepEqual([...seen], ["box-a"], "후보 밖(box-c)은 결과에 없다");
+  assert.equal(liveJobsFromView(new Set(), { ok: false, panes: new Map() }, table).size, 0, "후보가 없으면 빈 집합");
+}
+
+// D3 — 압박 축: 작업이 도는 세션만 빼고 나머지는 걷는다(급성 압박이어도 ⑥ 는 지킨다)
+{
+  resetPressureSweepDebounce();
+  invalidateSessionReclaimPolicyCache();
+  const reaped: string[] = [];
+  const res = await reapPressureSessions({
+    targets: async () => null,
+    within: async (_t, fn) => { invalidateSessionReclaimPolicyCache(); return fn(); },
+    loadPolicy: async () => ({ pressure_used_pct: 90, pressure_idle_minutes: P_IDLE }),
+    listLive: async () => [pSess("p-bg"), pSess("p-idle")],
+    listStates: async () => [{ id: "p-bg" }, { id: "p-idle" }],
+    listManaged: async () => [],
+    reap: async (id) => { reaped.push(id); },
+    liveJobs: async () => new Set(["p-bg"]),
+    now,
+    memUsedPct: async () => 95, memTotal: () => 100_000, swapUsage: async () => null,
+    procTable: async () => new Map(),
+    sessionRss: async () => new Map([["p-bg", 500], ["p-idle", 10]]),   // 작업 세션이 더 커도 안 걷는다
+  });
+  assert.deepEqual(reaped, ["p-idle"], "RSS 가 커도 작업이 돌면 안 걷는다 — 되찾는 메모리보다 잃는 일이 비싸다");
+  assert.equal(res.skipReasons.jobs, 1);
+}
+
+// D4·D6 — 점유를 **못 잰** 워크스페이스의 상한: 운영자 값이 없으면 tick 당 1건, 있으면 그 값(S6)
+//  경계값: 후보 3건 · 상한 미설정(0) → 1건. 상한 2 → 2건.
+for (const [maxReap, expect] of [[0, ["u-1"]], [2, ["u-1", "u-2"]]] as Array<[number, string[]]>) {
+  resetPressureSweepDebounce();
+  invalidateSessionReclaimPolicyCache();
+  const reaped: string[] = [];
+  const res = await reapPressureSessions({
+    targets: async () => null,
+    within: async (_t, fn) => { invalidateSessionReclaimPolicyCache(); return fn(); },
+    loadPolicy: async () => ({ pressure_used_pct: 90, pressure_idle_minutes: P_IDLE, pressure_max_reap: maxReap }),
+    listLive: async () => [pSess("u-1"), pSess("u-2"), pSess("u-3")],
+    listStates: async () => [{ id: "u-1" }, { id: "u-2" }, { id: "u-3" }],
+    listManaged: async () => [],
+    reap: async (id) => { reaped.push(id); },
+    now,
+    memUsedPct: async () => 95, memTotal: () => 1000, swapUsage: async () => null,
+    procTable: async () => new Map(),
+    sessionRss: async () => new Map(),                       // 못 잼 — 목표 판정이 구조적으로 불가능하다
+    liveJobs: async () => new Set<string>(),                 // ⑥ stub — 실 tmux 무접촉(러너에 tmux 가 없으면 기본 구현이 전부 보호한다)
+  });
+  assert.deepEqual(reaped, expect,
+    maxReap === 0
+      ? "못 잰 워크스페이스는 한 걸음(1건)만 — 종전엔 후보를 전부 걷었다(#2652 실측 사고의 자리)"
+      : "운영자가 정한 상한이 있으면 그 값이 이긴다");
+  assert.equal(res.skipReasons.cap, 3 - expect.length, "남은 후보는 '상한에 걸림'으로 센다(target 과 뜻이 다르다)");
+}
+
+// D5 — 점유를 **잰** 워크스페이스는 종전 그대로: 목표에 닿을 때까지 걷고 거기서 멈춘다(무회귀)
+{
+  resetPressureSweepDebounce();
+  invalidateSessionReclaimPolicyCache();
+  const reaped: string[] = [];
+  const res = await reapPressureSessions({
+    targets: async () => null,
+    within: async (_t, fn) => { invalidateSessionReclaimPolicyCache(); return fn(); },
+    loadPolicy: async () => ({ pressure_used_pct: 90, pressure_idle_minutes: P_IDLE }),
+    listLive: async () => [pSess("m-1"), pSess("m-2"), pSess("m-3")],
+    listStates: async () => [{ id: "m-1" }, { id: "m-2" }, { id: "m-3" }],
+    listManaged: async () => [],
+    reap: async (id) => { reaped.push(id); },
+    now,
+    memUsedPct: async () => 95, memTotal: () => 1000, swapUsage: async () => null,   // 95% → 90% 미만까지 = 50MB 초과
+    procTable: async () => new Map(),
+    sessionRss: async () => new Map([["m-1", 60], ["m-2", 40], ["m-3", 10]]),
+    liveJobs: async () => new Set<string>(),                 // ⑥ stub — 위와 같은 이유
+  });
+  assert.deepEqual(reaped, ["m-1"], "60MB 로 목표에 닿으면 거기서 멈춘다(상한 1건과 우연히 같아지지 않게 후보 3건으로 잰다)");
+  assert.equal(res.skipReasons.target, 2, "남은 둘은 '필요 없어서' 남은 것이다(cap 이 아니다)");
+  assert.equal(res.skipReasons.cap, 0, "잰 워크스페이스엔 암묵 상한이 걸리지 않는다");
+}
+
+console.log("session-reaper(⑥ 백그라운드 작업 보호 · 못 잰 곳 상한): all passed");
+
+// ── F. 컨테이너 프로브 경로(#2652 후속) — 사양·엣지 표: 스크래치패드 spec2.md 표 F ────────────────
+//  매니지드는 세션마다 컨테이너가 달라 게이트웨이의 프로세스 표에 그 pane pid 가 아예 없다.
+//  그러면 ① 로컬 판정이 조용히 «작업 없음» 이 되므로, 판정조차 못 한 세션만 골라 ② 컨테이너 안에서 본다.
+
+/** 매니지드 실측 모양(2026-09-04): sh(pane) → claude(하네스·제 그룹) → node·node(하네스 그룹 상속) */
+const inContainer = (withJob: boolean): Map<number, ProcEntry> => {
+  const t = new Map<number, ProcEntry>([
+    [28, { ppid: 27, rssKb: 2_420, name: "sh", pgid: 28, tpgid: 0 }],
+    [36, { ppid: 28, rssKb: 750_848, name: "claude", pgid: 36, tpgid: 0 }],
+    [188, { ppid: 36, rssKb: 146_564, name: "node", pgid: 36, tpgid: 0 }],
+  ]);
+  if (withJob) t.set(900, { ppid: 36, rssKb: 1_200, name: "zsh", pgid: 900, tpgid: 0 });
+  return t;
+};
+/** 게이트웨이 자신의 표 — 세션 프로세스가 **없다**(pid 28 은 이 표에 없다). */
+const gwOnly = (): Map<number, ProcEntry> => new Map<number, ProcEntry>([
+  [1, { ppid: 0, rssKb: 2_988, name: "tini", pgid: 1, tpgid: 0 }],
+  [9, { ppid: 1, rssKb: 125_688, name: "node", pgid: 9, tpgid: 0 }],
+]);
+const view = (panes: Array<[string, number[]]>) => ({ ok: true, panes: new Map(panes) });
+
+// F2 — 로컬 표에 없으면 컨테이너에서 떠 판정한다(작업 있음/없음 둘 다)
+{
+  const probed: string[] = [];
+  const busy = await resolveLiveJobs(new Set(["box-m"]), view([["box-m", [28]]]), gwOnly(),
+    async (sid) => { probed.push(sid); return inContainer(true); });
+  assert.deepEqual([...busy], ["box-m"], "컨테이너 안에서 백그라운드 작업을 잡는다 — 매니지드에서 ⑥ 이 켜지는 자리");
+  assert.deepEqual(probed, ["box-m"], "판정 못 한 세션만 프로브한다");
+  const idle = await resolveLiveJobs(new Set(["box-m"]), view([["box-m", [28]]]), gwOnly(), async () => inContainer(false));
+  assert.equal(idle.size, 0, "작업이 없으면 보호하지 않는다(과보호 금지)");
+}
+
+// F1 — 로컬 표로 판정된 세션은 프로브하지 않는다(셀프호스트 경로 무회귀)
+{
+  let calls = 0;
+  const local = new Map<number, ProcEntry>([
+    [10, { ppid: 1, rssKb: 900, name: "sh", pgid: 10, tpgid: 11 }],
+    [11, { ppid: 10, rssKb: 300_000, name: "claude", pgid: 11, tpgid: 11 }],
+  ]);
+  const out = await resolveLiveJobs(new Set(["box-n"]), view([["box-n", [10]]]), local,
+    async () => { calls++; return new Map(); });
+  assert.equal(out.size, 0, "로컬 표로 '작업 없음'을 판정했다");
+  assert.equal(calls, 0, "이미 판정된 세션에 컨테이너 프로브를 걸면 셀프호스트에 없던 왕복이 생긴다");
+}
+
+// F3 — 한 세션의 프로브 실패가 다른 세션 판정을 막지 않는다
+{
+  const out = await resolveLiveJobs(new Set(["box-bad", "box-ok"]),
+    view([["box-bad", [28]], ["box-ok", [28]]]), gwOnly(),
+    async (sid) => { if (sid === "box-bad") throw new Error("중계 타임아웃"); return inContainer(true); });
+  assert.deepEqual([...out], ["box-ok"], "실패한 세션만 판정 불가로 두고 나머지는 계속한다");
+}
+
+// F4 — 중계가 없으면(셀프호스트) 빈 표가 오고, 그건 '판정 불가'다(보호하지 않는다)
+{
+  const out = await resolveLiveJobs(new Set(["box-o"]), view([["box-o", [28]]]), gwOnly(), async () => new Map());
+  assert.equal(out.size, 0, "판정 불가에 보호를 주면 그 배포에서 회수가 통째로 멈춘다");
+}
+
+// F5 — 후보가 없으면 아무것도 안 한다
+{
+  let calls = 0;
+  const out = await resolveLiveJobs(new Set(), view([["box-p", [28]]]), gwOnly(), async () => { calls++; return new Map(); });
+  assert.equal(out.size, 0);
+  assert.equal(calls, 0);
+}
+
+console.log("session-reaper(⑥ 컨테이너 프로브 경로 — 매니지드): all passed");
+
+// ── H. ⑥ 퇴화 신호 가드(#2652 후속) ──────────────────────────────────────────────────────────
+//  실측 2026-09-04 매니지드: `scanned=453 · reaped=0 · jobs=453` 이 2시간. 후보 **전부**를 보호하는 신호는
+//  정보량이 0이고, 그 상태를 방치하면 회수가 통째로 멈춰 결국 earlyoom 이 보존 없이 죽인다(#1220).
+//  그래서 «전부 + 후보 10개 이상» 이면 그 tick 은 ⑥ 없이 진행한다.
+
+/** 유휴 후보 n개를 만드는 헬퍼(전부 TTL 초과). */
+const manyIdle = (n: number): SessionInfo[] =>
+  Array.from({ length: n }, (_, i) => sess({ id: `box-many-${i}`, lastActive: CUTOFF - 100 }));
+
+// H1 — 후보 10개가 **전부** 걸리면: ⑥ 를 무시하고 전부 걷는다 · jobs 로 세지 않는다
+{
+  invalidateSessionReclaimPolicyCache();
+  const live = manyIdle(10);
+  const reaped: string[] = [];
+  const res = await reapIdleSessions({
+    loadPolicy: async () => ({ idle_ttl_minutes: TTL }),
+    listLive: async () => live,
+    listStates: async () => live.map((s) => ({ id: s.id })),
+    listManaged: async () => [],
+    reap: async (id: string) => { reaped.push(id); },
+    liveJobs: async (ids) => new Set(ids),          // 전부 '작업 중' — 퇴화한 신호
+    now,
+  });
+  assert.equal(reaped.length, 10, "신호가 퇴화하면 보호를 접는다 — 회수가 통째로 멈추는 게 더 나쁜 실패다");
+  assert.equal(res.skipReasons?.jobs, 0, "무시한 tick 은 jobs 로 세지 않는다(보호한 게 아니다)");
+}
+
+// H2 — 경계값: 후보 9개가 전부 걸리면 **그대로 보호한다**(하한 미만은 정상으로 본다)
+{
+  invalidateSessionReclaimPolicyCache();
+  const live = manyIdle(9);
+  const reaped: string[] = [];
+  const res = await reapIdleSessions({
+    loadPolicy: async () => ({ idle_ttl_minutes: TTL }),
+    listLive: async () => live,
+    listStates: async () => live.map((s) => ({ id: s.id })),
+    listManaged: async () => [],
+    reap: async (id: string) => { reaped.push(id); },
+    liveJobs: async (ids) => new Set(ids),
+    now,
+  });
+  assert.deepEqual(reaped, [], "후보가 적을 땐 '전부 작업 중'이 흔히 참이다 — 그걸 고장으로 읽으면 정상 보호가 깨진다");
+  assert.equal(res.skipReasons?.jobs, 9);
+}
+
+// H3 — 후보 20개 중 19개만 걸리면 퇴화가 아니다: 19개는 보호하고 1개만 걷는다
+{
+  invalidateSessionReclaimPolicyCache();
+  const live = manyIdle(20);
+  const reaped: string[] = [];
+  const res = await reapIdleSessions({
+    loadPolicy: async () => ({ idle_ttl_minutes: TTL }),
+    listLive: async () => live,
+    listStates: async () => live.map((s) => ({ id: s.id })),
+    listManaged: async () => [],
+    reap: async (id: string) => { reaped.push(id); },
+    liveJobs: async (ids) => new Set([...ids].filter((x) => x !== "box-many-0")),
+    now,
+  });
+  assert.deepEqual(reaped, ["box-many-0"], "하나라도 안 걸리면 신호가 살아 있다는 뜻 — 보호를 유지한다");
+  assert.equal(res.skipReasons?.jobs, 19);
+}
+
+console.log("session-reaper(⑥ 퇴화 신호 가드): all passed");

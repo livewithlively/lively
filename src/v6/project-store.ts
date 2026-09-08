@@ -903,30 +903,49 @@ export async function rootProjectIdOfTaskNode(node: { level: string; parent_id: 
 //  카테고리(도메인)는 이제 **소속 리스트가 소유**(#541 후속) — 프로젝트 단위 매핑을 리스트 category_id 로 대체.
 //  아래 project 카테고리 툴들은 하위호환을 위해 **프로젝트가 속한 리스트의 카테고리**를 설정한다(형제 프로젝트 공유).
 //  프로젝트가 리스트에 없으면(미분류) no-op — 먼저 리스트에 넣어야 카테고리를 이을 수 있다.
-//  반환: { applied, listId, changed } — applied=리스트가 있어 반영 가능했는지(호출자 응답 정직성),
-//   changed=실제 값이 바뀌었는지(형제 AGENTS.md 재생성 트리거 판단), listId=영향받은 리스트(형제 열거용).
-export async function setListCategoryForProject(projectId: number, categoryId: number | null, ctx?: WriteCtx): Promise<{ applied: boolean; listId: number | null; changed: boolean }> {
+//  반환: { applied, listId, changed, reason } — applied=리스트가 있어 반영 가능했는지(호출자 응답 정직성),
+//   changed=실제 값이 바뀌었는지(형제 AGENTS.md 재생성 트리거 판단), listId=영향받은 리스트(형제 열거용),
+//   reason=반영 못 한 사유(호출자가 404/409 를 갈라 쓰도록 — 예전엔 둘 다 listId=null 로 뭉개져 구분이 안 됐다).
+//  🔴 applied=false 를 성공으로 포장하지 마라 — 이 계층이 정직해도 핸들러가 이 값을 버리면 그대로
+//   silent false-success 가 된다(실제로 project_link_category_v6 가 무조건 {linked:true} 를 돌려줬다).
+export type CategoryApply = { applied: boolean; listId: number | null; changed: boolean; reason?: "no_project" | "no_list" | "no_category" | null };
+export async function setListCategoryForProject(projectId: number, categoryId: number | null, ctx?: WriteCtx): Promise<CategoryApply> {
   const row: { list_id: number | null; category_id: number | null } | undefined = await one(itemsPool,
     `SELECT p.list_id, pl.category_id FROM project p LEFT JOIN project_list pl ON pl.id=p.list_id WHERE p.id=$1`, [projectId]);
-  const listId = row?.list_id ?? null;
-  if (listId == null) return { applied: false, listId: null, changed: false }; // 미분류 프로젝트 — 소유할 리스트가 없어 no-op
-  const before = row?.category_id ?? null;
+  if (!row) return { applied: false, listId: null, changed: false, reason: "no_project" }; // 없는 id — 404 로 끊어야 할 건이지 no-op 이 아니다
   const next = categoryId != null && Number(categoryId) > 0 ? Number(categoryId) : null;
+  // 없는 카테고리는 여기서 끊는다 — 안 막으면 FK 위반이 HTTP status 없는 DatabaseError 로 새어
+  //  호출자는 500 과 제약조건 이름만 받는다(무엇을 잘못했는지도, 어떻게 고칠지도 모른다).
+  //  리스트 유무보다 **먼저** 본다: 틀린 id 는 리스트 상태와 무관하게 틀린 id 인데, 순서가 뒤면
+  //  #1631 의 자리 만들기(ensureListForCategory)가 없는 축에 대해 null 을 돌려준 뒤 «리스트가 없다»는
+  //  엉뚱한 409 로 나간다.
+  //  ⚠ 병합된 축(state='merged')은 **없는 것과 같이** 본다 — 이 술어가 ensureListForCategory 와 갈리면
+  //   같은 어긋남이 그대로 재현된다: 자리 만들기는 merged 를 못 찾아 null 을 돌려주는데 존재확인만
+  //   통과해서, 리스트 없는 프로젝트가 «리스트에 먼저 넣으세요»(409)를 받는다. 그 안내를 따라도 결과가
+  //   달라지지 않으니 틀린 대처법이다. merged 는 category_list·categoryByKey·도메인맵·임베딩이 전부
+  //   빼는 묘비 상태라(key 유니크 인덱스도 부분 인덱스다) 호출자 눈엔 애초에 존재하지 않는 id 다.
+  if (next != null && !(await one(itemsPool, `SELECT 1 AS ok FROM category WHERE id=$1 AND state<>'merged'`, [next])))
+    return { applied: false, listId: row.list_id ?? null, changed: false, reason: "no_category" };
+  const listId = row.list_id ?? null;
+  if (listId == null) return { applied: false, listId: null, changed: false, reason: "no_list" }; // 미분류 프로젝트 — 소유할 리스트가 없어 no-op
+  const before = row.category_id ?? null;
   if (before === next) return { applied: true, listId, changed: false }; // 무변경 — 허위 audit 방지
   await itemsPool.query(`UPDATE project_list SET category_id=$2, updated_at=now() WHERE id=$1`, [listId, next]);
   await auditOrgContent("project_list", String(listId), "set_category", { category_id: before }, { category_id: next }, ctx);
   return { applied: true, listId, changed: true };
 }
-export async function linkProjectCategory(projectId: number, categoryId: number, ctx?: WriteCtx): Promise<{ applied: boolean; listId: number | null; changed: boolean }> {
+export async function linkProjectCategory(projectId: number, categoryId: number, ctx?: WriteCtx): Promise<CategoryApply> {
   return setListCategoryForProject(projectId, categoryId, ctx);
 }
 
-export async function unlinkProjectCategory(projectId: number, categoryId: number, ctx?: WriteCtx): Promise<{ applied: boolean; listId: number | null; changed: boolean }> {
+export async function unlinkProjectCategory(projectId: number, categoryId: number, ctx?: WriteCtx): Promise<CategoryApply> {
   // 해제 — 현재 리스트 카테고리가 그 값일 때만 NULL 로(다른 값이면 무시, 오삭제·허위 audit 방지).
   const row: { list_id: number | null; category_id: number | null } | undefined = await one(itemsPool,
     `SELECT p.list_id, pl.category_id FROM project p LEFT JOIN project_list pl ON pl.id=p.list_id WHERE p.id=$1`, [projectId]);
-  const listId = row?.list_id ?? null;
-  if (listId == null || row?.category_id == null || Number(row.category_id) !== Number(categoryId)) return { applied: listId != null, listId, changed: false };
+  if (!row) return { applied: false, listId: null, changed: false, reason: "no_project" };
+  const listId = row.list_id ?? null;
+  if (listId == null) return { applied: false, listId: null, changed: false, reason: "no_list" };
+  if (row.category_id == null || Number(row.category_id) !== Number(categoryId)) return { applied: true, listId, changed: false }; // 이미 그 카테고리가 아님 = 원하는 상태
   return setListCategoryForProject(projectId, null, ctx);
 }
 
@@ -973,23 +992,48 @@ export async function setProjectRepos(projectId: number, repos: string[], ctx?: 
 //    ① 리스트가 없어 반영 못 함(실패)   ② 리스트는 있고 카테고리를 해제함(성공)
 //  호출자는 그 둘을 구분할 수 없어 «툴이 고장났나» 로 읽는다 — 실제로 2026-09-01 에 그렇게 오진했고
 //  사용자에게 오보까지 나갔다. 빈 배열로 성공을 가장하지 않는 것은 옳았으나, **말하지 않는 no-op** 이었다.
-export type SetProjectCategoriesResult = {
-  categoryIds: number[];
-  applied: boolean;              // 반영할 자리가 있었나(= 소속 리스트가 있나)
-  listId: number | null;
-  reason: "no_list" | null;      // applied=false 의 사유. 지금은 한 가지뿐이지만 자리를 열어 둔다
-};
-export async function setProjectCategories(projectId: number, categoryIds: number[], ctx?: WriteCtx): Promise<SetProjectCategoriesResult> {
+// 리스트 없는 프로젝트에 카테고리를 정하면 **자리를 만들어 준다**(#1631).
+//
+//  왜: 카테고리는 리스트가 소유하고 프로젝트가 상속한다(#541). 그런데 세션이 자동 생성하는 프로젝트는
+//   리스트 없이 태어나고(first-prompt-project — 그때는 주제를 모르니 옳다), 그 뒤로 리스트를 정해 주는
+//   경로가 없다. 그래서 이 함수가 no-op 이었고 «먼저 리스트에 넣으세요» 안내만 했다 — **막다른 길이었다.**
+//   실측(2026-09-02 dev, 페르소나 2명): 프로젝트 7개 중 카테고리가 붙은 것 0, 리스트 0개.
+//   위키는 개인화된 축으로 갈라지는데 프로젝트 탭만 통째로 미분류였다.
+//
+//  같은 축을 고른 형제는 **같은 리스트를 공유한다**(새로 만들기 전에 먼저 찾는다) — #541 의 의도 그대로다.
+//  ⚠ 해제(빈 배열)는 리스트를 만들지 않는다. 없는 것을 지우려고 자리를 만들 이유가 없다.
+export async function setProjectCategories(projectId: number, categoryIds: number[], ctx?: WriteCtx): Promise<CategoryApply & { categoryIds: number[] }> {
   const clean = [...new Set((categoryIds || []).map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0))];
   const catId = clean.length ? clean[0] : null;
+
+  if (catId != null && (await listIdOfProject(projectId)) == null) {
+    const listId = await ensureListForCategory(catId, ctx);
+    if (listId != null) {
+      await itemsPool.query(`UPDATE project SET list_id=$2, updated_at=now() WHERE id=$1`, [projectId, listId]);
+      await auditProject(String(projectId), "set_list", { list_id: null }, { list_id: listId }, ctx);
+    }
+  }
+
   const res = await setListCategoryForProject(projectId, catId, ctx);
-  // 리스트 없는(미분류) 프로젝트엔 반영 못 함 → 빈 배열로 정직하게 응답(catId 를 되돌려 성공을 가장하지 않음).
-  return {
-    categoryIds: res.applied && catId != null ? [catId] : [],
-    applied: res.applied,
-    listId: res.listId,
-    reason: res.applied ? null : "no_list",
-  };
+  //  여기까지 왔는데도 리스트가 없으면(해제 요청이거나 축이 사라진 경우) 정직하게 빈 배열로 답한다.
+  //  사유는 setListCategoryForProject 가 판정한 것을 그대로 올린다 — 여기서 "no_list" 로 덮으면
+  //  없는 프로젝트·없는 카테고리가 «리스트가 없다»로 뭉개져 핸들러가 404 를 못 만든다.
+  //  성공 경로엔 reason 을 **명시적 null** 로 둔다 — undefined 면 strict 비교로 사유를 읽는 호출자가 갈린다(#2474).
+  return { ...res, reason: res.reason ?? null, categoryIds: res.applied && catId != null ? [catId] : [] };
+}
+
+/** 이 카테고리를 소유한 리스트를 찾고, 없으면 축 이름으로 만든다. 축이 없으면 null(자리를 만들지 않는다). */
+async function ensureListForCategory(categoryId: number, ctx?: WriteCtx): Promise<number | null> {
+  const cat: { name: string | null; key: string } | undefined = await one(itemsPool,
+    `SELECT name, key FROM category WHERE id=$1 AND state<>'merged'`, [categoryId]);
+  if (!cat) return null;
+  const existing: { id: number } | undefined = await one(itemsPool,
+    `SELECT id FROM project_list WHERE category_id=$1 ORDER BY sort, id LIMIT 1`, [categoryId]);
+  if (existing) return Number(existing.id);
+  //  이름이 비어 있으면 key 로 짓는다 — 이름 없는 리스트는 사이드바에서 빈 줄이 된다.
+  const { createProjectList } = await import("./list-store.js");
+  const made = await createProjectList({ name: (cat.name ?? "").trim() || cat.key, category_id: categoryId }, ctx);
+  return Number(made.id);
 }
 
 export async function unlinkProjectKnowledge(projectId: number, name: string, relation: string, ctx?: WriteCtx): Promise<void> {

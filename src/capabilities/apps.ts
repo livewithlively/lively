@@ -113,7 +113,8 @@ const appGrant: Capability = {
 const appRevoke: Capability = {
   name: "me_app_revoke",
   title: "앱 사용 동의 철회",
-  description: "이 앱에 준 내 동의를 철회한다. 이후 이 앱으로는 내 자격의 새 세션이 열리지 않는다.",
+  description: "이 앱에 준 내 동의를 철회한다. 이후 이 앱으로는 내 자격의 새 세션이 열리지 않는다. " +
+    "revoked=true 면 이번 호출이 살아있던 동의를 껐다는 뜻이고, false 면 애초에 없었거나 이미 꺼져 있었다. 그런 앱이 없으면 404.",
   scope: null,
   input: { app_id: z.string() },
   expose: {
@@ -124,9 +125,16 @@ const appRevoke: Capability = {
   handler: async (input: Record<string, unknown>, user) => {
     const id = appId(input.app_id);
     const owner = actorOf(user);
-    await store.revokeGrant(id, owner);
+    // #2646 — 종전엔 앱 id 를 잘못 넣어도 {ok:true} 였다. 동의 철회는 사람이 «껐다»고 믿고 자리를 뜨는
+    //  동작이라, 오타 하나가 살아 있는 동의를 그대로 남긴다.
+    //  ⚠ 회수를 **먼저** 한다 — 앱 존재를 선검사하면 지워진 앱에 남은 동의를 영영 못 끈다(그건 더 나쁘다).
+    const revoked = await store.revokeGrant(id, owner);
     await stopWorkersForMemberApp(owner, id, "grant_revoked");
-    return { ok: true, app_id: id };
+    // 아무것도 안 껐는데 그런 앱도 없다 = 오타다. (앱이 지워졌어도 살아있는 동의가 있었다면 위에서 껐으므로
+    //  여기로 오지 않는다.) revoked=false 인데 앱은 있는 경우는 «이미 꺼져 있었다» — 약속된 결과 상태는
+    //  성립하므로 성공이되 그 사실을 구분해 답한다.
+    if (!revoked && !(await store.getApp(id))) throw new HttpError(404, `그런 앱이 없습니다: ${id}`);
+    return { ok: true, app_id: id, revoked };
   },
 };
 

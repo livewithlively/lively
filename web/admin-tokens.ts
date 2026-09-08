@@ -59,8 +59,13 @@ function tokensPanel(detail, data) {
           if (!confirm(`'${t.label || t.user_id}' 님의 접속을 해제할까요? 이 토큰은 즉시 무효화됩니다(되돌릴 수 없음).`)) return;
           e.target.disabled = true;
           try {
-            await api('/api/ui/org/token/revoke', { method: 'POST', body: JSON.stringify({ tokenHash: t.token_hash }) });
-            await loadAdmin(true); toast('접속 해제됨 — 즉시 무효'); rerenderPanel(detail, 'tokens', state.admin.data);
+            // #2646 — 응답을 읽는다. 서버는 이제 «이번에 껐다»(revoked)와 «이미 꺼져 있었다»를 구분해 답하고,
+            //  그런 토큰이 없으면 404 로 던진다(아래 catch 가 토스트로 띄운다). 종전엔 셋 다 {ok:true} 라
+            //  화면이 언제나 '해제됨'이라고 말했다 — 안 꺼졌는데도.
+            const r = await api('/api/ui/org/token/revoke', { method: 'POST', body: JSON.stringify({ tokenHash: t.token_hash }) });
+            await loadAdmin(true);
+            toast(r && r.revoked === false ? '이미 해제돼 있던 토큰입니다' : '접속 해제됨 — 즉시 무효');
+            rerenderPanel(detail, 'tokens', state.admin.data);
           } catch (err) { toast(err.message, true); e.target.disabled = false; }
         } })
       : el('span', { class: 'pill', text: t.revoked_at ? '해제 ' + String(t.revoked_at).slice(0, 10) : '해제됨' });

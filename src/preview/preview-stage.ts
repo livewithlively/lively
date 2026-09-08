@@ -6,7 +6,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { ensureProvisionBase } from "../project/project-provision.js";
+import { ensureProvisionBase, clearStaleRegistrations } from "../project/project-provision.js";
 // 공유 워크스페이스 루트는 **project-fs 의 것 하나만** 쓴다 — 여기서 따로 계산하면(구 코드가 그랬다)
 //  TERMINAL_ROOT_SHARED 를 다르게 잡은 설치에서 base 클론은 A 에, stage 워크트리는 B 에 생겨 서로 못 찾는다.
 import { PROJECT_SHARED_BASE as SHARED_BASE } from "../project/project-fs.js";
@@ -41,9 +41,10 @@ export async function ensureStageWorktree(id: string, repo: string, baseRef: str
   const ref = (baseRef && baseRef.trim()) ? baseRef.trim() : "origin/main";
   if (!BR_RE.test(ref.replace(/^origin\//, ""))) throw new Error("base_ref 형식 오류: " + ref);
 
-  await git(["worktree", "prune"], repoPath); // 스테일 등록 정리(#932)
   if (!fs.existsSync(wt)) {
     await fs.promises.mkdir(path.dirname(wt), { recursive: true });
+    // 스테일 등록 정리(#932) — **이 경로·이 브랜치의 등록만**(#3678: blanket `worktree prune` 은 이 프로세스가 못 보는 남의 워크트리까지 지운다)
+    await clearStaleRegistrations(repoPath, { paths: [wt], branch: stageBranch });
     let a = await git(["worktree", "add", wt, "-b", stageBranch, ref], repoPath);
     if (!a.ok) a = await git(["worktree", "add", wt, stageBranch], repoPath); // 브랜치 이미 있으면 attach
     if (!a.ok) throw new Error("stage 워크트리 생성 실패: " + a.err);

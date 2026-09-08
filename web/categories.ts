@@ -174,10 +174,21 @@ function emptyTaxonomyCard(canEdit: boolean) {
   return card;
 }
 
+//  치우기·되살리기(#1631) — 서버가 «지식 N건이 남아 있다» 로 거절하면 그 문장을 그대로 띄운다
+//   (여기서 요약하면 사람이 무엇을 옮겨야 하는지 모른다).
+async function setCategoryState(c: any, state: string, reload: () => void) {
+  try {
+    await api('/api/ui/categories/' + c.id, { method: 'POST', body: JSON.stringify({ state }) });
+    toast(state === 'active' ? '되살렸습니다' : '치웠습니다 — 분류 후보에서 빠집니다');
+    reload();
+  } catch (e: any) { toast(e?.message || '실패', true); }
+}
+
 // 한 행 — 이름·키·오너 팀·정의 한 줄 + 표류 배지 + 연결 레포. 액션은 hover 시 진해진다(wikicat-row-acts).
 function categoryRow(c: any, ctx: { canEdit: boolean; teams: any[]; repos: string[]; reload: () => void }) {
   const { canEdit, teams, repos, reload } = ctx;
   const should = (c.should || '').trim();
+  const inactive = (c.state ?? 'active') !== 'active';
 
   // 정의(should) — 편집에 들어가기 전에도 항상 노출. 비었으면 '있고 채울 수 있다'를 알리는 placeholder.
   const shouldLine = should
@@ -244,11 +255,17 @@ function categoryRow(c: any, ctx: { canEdit: boolean; teams: any[]; repos: strin
     el('span', { class: 'wikicat-name', text: c.name || c.key }),
     el('span', { class: 'wikicat-key mono', text: c.key }),
     c.cross_cutting ? el('span', { class: 'dm-tag', text: '횡단' }) : null,
+    //  #1631: 비활성 축은 «치워 둔 것» 이라 분류 후보에서 빠진다 — 목록에는 남되 그 사실이 보여야 한다.
+    inactive ? el('span', { class: 'pill', title: '치워 둔 축입니다 — 새 지식의 분류 후보에서 빠집니다(이미 든 지식은 그대로).', text: '비활성' }) : null,
     mismatchEl, ownerEl, repoEl, shouldLine);
 
   const acts = canEdit ? el('div', { class: 'wikicat-row-acts' },
     el('button', { class: 'btn btn-ghost btn-sm', text: '수정',
       onclick: () => openCategoryForm(c, reload, { repos }) }),
+    //  치우기·되살리기(#1631) — 삭제는 비가역이라 마지막 수단이고, 보통 필요한 건 «분류 후보에서 빼기» 다.
+    el('button', { class: 'btn btn-ghost btn-sm', text: inactive ? '되살리기' : '치우기',
+      title: inactive ? '다시 분류 후보에 넣습니다' : '분류 후보에서 뺍니다 — 지식이 남아 있으면 거절됩니다(먼저 옮기세요)',
+      onclick: () => setCategoryState(c, inactive ? 'active' : 'deprecated', reload) }),
     el('button', { class: 'btn btn-ghost btn-sm btn-text-danger', text: '삭제',
       onclick: () => deleteCategory(c, reload) })) : null;
 

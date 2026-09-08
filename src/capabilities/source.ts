@@ -30,6 +30,7 @@ const sourceListInput = {
   root: z.enum(["personal", "project"]).optional().describe("올린 자리(fields.root) — personal=개인 폴더 · project=프로젝트 폴더 (#2423)"),
   fold: z.boolean().optional().describe("답글 접기(#2423 v3.1) — 부모가 수집돼 있는 답글을 목록에서 접는다(자료의 단위=대화). 접힌 목록 행엔 reply_n(답글 수)·body_len 이 실리고, 민트 점(has_knowledge)·linked 필터·나무 건수는 스레드 단위로 오른다."),
   linked: z.boolean().optional().describe("true=지식이 붙은 자료만 / false=아직 안 붙은 것만"),
+  categoryId: z.number().int().positive().optional().describe("분류축(#1631) — 이 자료로 만든 **지식이** 그 축에 속하나. 자료 자신은 분류를 갖지 않는다(증류되지 않은 자료는 어떤 값으로도 안 잡힌다). category_list 의 id."),
   limit: z.number().int().min(1).max(500).optional().describe("페이지 크기(1~500, 기본 100) — 구 100 하드캡 해제(#709)"),
   offset: z.number().int().min(0).optional().describe("페이지 오프셋(기본 0) — 상한 너머 전량 순회(#709)"),
 };
@@ -38,7 +39,7 @@ const sourceList: Capability = {
   name: "source_list",
   title: "자료 목록",
   description:
-    "자료(raw 입력 — 회의 전사록·이메일·슬랙·외부 미러)를 kind/provenance/q 로 조회. 지식(knowledge)과 별도 테이블이라 recall(knowledge_search)에 안 섞인다. 본문은 미포함(목록은 얕게). limit(≤500, 기본 100)·offset 으로 페이지네이션 — 응답에 total·has_more 포함(#709).",
+    "자료(raw 입력 — 회의 전사록·이메일·슬랙·외부 미러)를 kind/provenance/q/categoryId 로 조회. 각 행의 categories 는 **그 자료로 만든 지식의 분류**다(자료 자신은 분류를 갖지 않는다 — 증류 전 자료는 빈 배열). 지식(knowledge)과 별도 테이블이라 recall(knowledge_search)에 안 섞인다. 본문은 미포함(목록은 얕게). limit(≤500, 기본 100)·offset 으로 페이지네이션 — 응답에 total·has_more 포함(#709).",
   scope: "memory",
   input: sourceListInput,
   expose: {
@@ -57,6 +58,7 @@ const sourceList: Capability = {
           fold: query.fold === undefined ? undefined : String(query.fold) === "true",
           //  linked 는 3상태다(붙은 것만·안 붙은 것만·안 가림) — 문자열 'true'/'false' 만 뜻을 갖고 나머지는 미지정.
           linked: query.linked === undefined ? undefined : String(query.linked) === "true",
+          categoryId: query.category_id ? Number(query.category_id) : undefined,
           limit: query.limit ? Number(query.limit) : undefined,
           offset: query.offset ? Number(query.offset) : undefined,
         };
