@@ -2656,8 +2656,9 @@ async function cmdRepo(rest) {
       const repo = pos[0];
       if (!repo) die("레포 이름이 필요합니다.  예: lively repo worktree <repo> [--branch b] [--ref main] [--path .]");
       const res = await repoWorktree(ctx, { repo, branch: o.branch, ref: o.ref, path: o.path });
-      ok(`워크트리: ${bold(res.worktree)}  ${dim(`(브랜치 ${res.branch})`)}`);
+      ok(`워크트리: ${bold(res.worktree)}  ${dim(`(브랜치 ${res.branch}${res.admin ? ` · admin ${res.admin}` : ""})`)}`);
       say("  " + dim(res.note));
+      if (res.warning) warn(res.warning);   // #3678 — 슬롯 브랜치가 갈아타져 있음(중단은 아님)
       return;
     }
     if (sub === "pin") {

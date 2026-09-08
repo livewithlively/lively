@@ -8,9 +8,9 @@
 //   마커까지 올라가 정하면서 경로는 cwd 에서 뽑아, 같은 project/<id> 를 노리는 워크트리가 여러 자리에 생겼다
 //   → 나중에 온 쪽이 죽었다(서버 provision 이면 502). 아래는 그 불변식들이다.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, rmSync, existsSync, mkdtempSync, utimesSync, realpathSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, renameSync, rmSync, existsSync, mkdtempSync, utimesSync, realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
 
 const HERE = join(fileURLToPath(import.meta.url), "..");
@@ -219,6 +219,172 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
     check("⑧ 배선: 클론이 실제로 시도됐다(관측 장치 생존)",
       calls.some((c) => c.startsWith("git clone")), calls.join(" | ") || "sh 호출 0건");
   }
+
+  // ══ 13) 공유 base 위 admin 격리(#3678) ══════════════════════════════════════════════════════════════════
+  //  사고(2026-09-08): 세션 컨테이너들이 base 하나를 공유하는데 각자 자기 프로젝트 폴더만 본다. 툴의 `git worktree prune` 이
+  //  «안 보이는» 남의 워크트리 admin 을 지웠고, 같은 basename(<repo>)으로 다시 뜬 admin 을 둘이 가리켜 HEAD·index 를 공유했다
+  //  (내 커밋이 남의 브랜치에). 여기선 «컨테이너가 서로의 경로를 못 본다» 를 **폴더 rename 으로 흉내** 낸다(부모까지 사라진다).
+  //  사양(엣지 표 A~K): 남의 등록을 지우지 않는다 · admin id 는 경로에서 정해지는 고유 이름 · 남의 admin 을 잇고 있으면 중단 ·
+  //  비고유 id 는 옮긴다 · 핀도 남의 등록을 안 지운다 · base 에 gc.worktreePruneExpire=never · «경로 없음+부모 있음» 만 스테일 ·
+  //  부모까지 없으면 안 지운다(그 이름을 뺏지도 않는다).
+  const mod = await import(pathToFileURL(join(HERE, "repo-worktree-core.mjs")));
+  const { adminIdFor, provablyGone } = mod;
+  //  normPath 부재(수정 전 코드로 red 를 볼 때)면 realpath 폴백 — 순수 함수 검사는 아래 check 가 부재를 그대로 빨간불로 센다.
+  const normPath = mod.normPath || ((p) => { try { return realpathSync.native(p); } catch { return p; } });
+  const gitfileAdmin = (wt) => { const m = readFileSync(join(wt, ".git"), "utf8").match(/^gitdir:\s*(.+?)\s*$/m); return m ? m[1] : null; };
+  //  ⚠ 윈도우: git 이 만든 `.git` 파일은 hidden 속성이라 writeFileSync 로 덮어쓰면 EPERM(CI 실측) — 지우고 새로 쓴다.
+  const writeGitfile = (wt, txt) => { rmSync(join(wt, ".git"), { force: true }); writeFileSync(join(wt, ".git"), txt); };
+  const adminBack = (admin) => { try { return readFileSync(join(admin, "gitdir"), "utf8").split("\n")[0].trim(); } catch { return ""; } };
+  const lc = (s) => (process.platform === "win32" ? String(s).replace(/\\/g, "/").toLowerCase() : String(s)); // 윈도우: 구분자·대소문자 정규화
+  const same = (a, b) => lc(normPath(a)) === lc(normPath(b));
+  const box = (name, pid) => { const d = join(SB, name, "project", String(pid)); mkdirSync(join(d, ".lively"), { recursive: true }); writeFileSync(join(d, ".lively", "project.json"), JSON.stringify({ project_id: pid })); return d; };
+  const hide = (name) => renameSync(join(SB, name), join(SB, name + ".hidden"));   // = 다른 컨테이너에서 안 보임(부모까지)
+  const show = (name) => renameSync(join(SB, name + ".hidden"), join(SB, name));
+  const BASE = join(SB, "base");
+  const tipOf = (br) => sh("git", ["-C", BASE, "log", "-1", "--format=%s", br], { allowFail: true }).stdout.trim();
+
+  // ── B·K: 새 워크트리의 admin id = <repo>-p<pid>(슬롯) · 순수 경계 ──
+  const contA = box("boxA", 1001);
+  const rA = await repoWorktree(ctx(contA), { repo: "base" });
+  const wtA = join(contA, "base");
+  check("B: 새 워크트리 admin id = <repo>-p<pid>", rA.admin === "base-p1001" && basename(gitfileAdmin(wtA)) === "base-p1001", `${rA.admin} / ${gitfileAdmin(wtA)}`);
+  check("K: adminIdFor — pid 0 도 p0 · 슬롯 밖은 <basename>-8hex", typeof adminIdFor === "function" && adminIdFor("/x/y/repo", 0, "/x/y/repo") === "repo-p0" && /^repo-[0-9a-f]{8}$/.test(adminIdFor("/x/y/repo", 0, "/other")), typeof adminIdFor === "function" ? `${adminIdFor("/x/y/repo", 0, "/x/y/repo")} ${adminIdFor("/x/y/repo", 0, "/other")}` : "adminIdFor 없음");
+  check("K: 같은 경로(표기 달라도) ⇒ 같은 id", typeof adminIdFor === "function" && adminIdFor("/x/y/repo", null, null) === adminIdFor("/x/y/./repo", null, null), "정규화 전후 다름/부재");
+  check("provablyGone: 부모 있음·경로 없음 → true / 부모도 없음 → false / 있음 → false",
+    typeof provablyGone === "function" && provablyGone(join(SB, "nope")) === true && provablyGone(join(SB, "nope", "child")) === false && provablyGone(SB) === false, "경계 오판/부재");
+  const adminA = gitfileAdmin(wtA);
+
+  // ── A·E: A 가 안 보이는 사이 B 가 워크트리를 뜨고, 핀을 뜨고 지운다 → A 의 등록은 그대로 ──
+  const contB = box("boxB", 1002);
+  hide("boxA");
+  const rB = await repoWorktree(ctx(contB), { repo: "base" });
+  await repoPin(ctx(contB), { repo: "base" });
+  repoPinRemove(ctx(contB), { repo: "base" });
+  show("boxA");
+  check("A: B 가 뜬 뒤에도 A 의 admin 이 그대로(등록 미삭제·역참조 일치)", existsSync(adminA) && same(adminBack(adminA), join(wtA, ".git")), `admin=${adminA} back=${adminBack(adminA)}`);
+  check("A: A 의 HEAD 브랜치 불변(project/1001)", branchAt(wtA) === "project/1001", branchAt(wtA));
+  check("B: B 의 admin 도 고유(base-p1002) — A 와 다른 admin", rB.admin === "base-p1002" && gitfileAdmin(join(contB, "base")) !== adminA, `${rB.admin}`);
+  check("E: 핀 생성·제거가 A 의 등록을 안 지웠다", existsSync(adminA), "A admin 사라짐");
+  writeFileSync(join(wtA, "mine.txt"), "mine\n");
+  sh("git", ["add", "mine.txt"], { cwd: wtA }); sh("git", ["commit", "-q", "-m", "A-commit"], { cwd: wtA });
+  check("A: A 의 커밋이 project/1001 에 얹힌다(사고 땐 남의 브랜치였다)", tipOf("project/1001") === "A-commit" && tipOf("project/1002") !== "A-commit", `1001=${tipOf("project/1001")} 1002=${tipOf("project/1002")}`);
+
+  // ── F: base 에 gc.worktreePruneExpire=never ──
+  check("F: base 에 gc.worktreePruneExpire=never", sh("git", ["-C", BASE, "config", "--get", "gc.worktreePruneExpire"], { allowFail: true }).stdout.trim() === "never", "미설정");
+
+  // ── I: 슬롯인데 브랜치가 갈아타져 있으면 warning(중단 아님·admin 그대로) ──
+  sh("git", ["-C", wtA, "checkout", "-q", "-b", "someone-else"]);
+  const rI = await repoWorktree(ctx(contA), { repo: "base" });
+  check("I: 슬롯 브랜치 ≠ project/<pid> → warning + 재사용", rI.branch === "someone-else" && typeof rI.warning === "string" && rI.warning.includes("project/1001"), JSON.stringify(rI));
+  check("I: 재사용은 admin 을 그대로 둔다(멱등)", rI.admin === "base-p1001" && existsSync(adminA), `${rI.admin}`);
+  sh("git", ["-C", wtA, "checkout", "-q", "project/1001"]);
+
+  // ── C: 남의 admin 을 잇고 있는 워크트리(= prune 뒤 같은 이름 재생성 상태) → 중단, 아무것도 안 고침 ──
+  const contC = box("boxC", 1003);
+  await repoWorktree(ctx(contC), { repo: "base" });
+  const wtC = join(contC, "base");
+  const adminB = gitfileAdmin(join(contB, "base"));
+  const gitfileC = readFileSync(join(wtC, ".git"), "utf8");
+  writeGitfile(wtC, `gitdir: ${adminB}\n`);
+  let msgC = ""; try { await repoWorktree(ctx(contC), { repo: "base" }); } catch (e) { msgC = String(e.message); }
+  check("C: 남의 admin 을 잇고 있으면 중단", msgC.length > 0, "throw 하지 않음");
+  check("C: 메시지에 내 경로와 그 admin 의 주인 경로 둘 다", lc(msgC).includes(lc(wtC)) && lc(msgC).includes(lc(normPath(join(contB, "base")))), msgC);
+  check("C: 아무것도 고치지 않았다(내 gitfile·남의 admin 그대로)", readFileSync(join(wtC, ".git"), "utf8") === `gitdir: ${adminB}\n` && existsSync(adminB) && same(adminBack(adminB), join(contB, "base", ".git")), "상태가 바뀜");
+  writeGitfile(wtC, gitfileC);
+
+  // ── C2·J: admin 이 사라졌거나 gitfile 이 파손됐으면 중단 + 파일 보존(새로 만들지 않는다) ──
+  const contD = box("boxD", 1004);
+  await repoWorktree(ctx(contD), { repo: "base" });
+  const wtD = join(contD, "base"); const adminD = gitfileAdmin(wtD);
+  writeFileSync(join(wtD, "wip.txt"), "wip\n");
+  rmSync(adminD, { recursive: true, force: true });                            // = 다른 세션의 prune
+  let msgD = ""; try { await repoWorktree(ctx(contD), { repo: "base" }); } catch (e) { msgD = String(e.message); }
+  check("C2: admin 이 사라진 워크트리 재사용 → 중단(prune 안내)", /prune/.test(msgD), msgD || "throw 하지 않음");
+  check("C2: 파일·gitfile 그대로(지우거나 새로 만들지 않음)", existsSync(join(wtD, "wip.txt")) && readFileSync(join(wtD, ".git"), "utf8").includes(basename(adminD)), "상태가 바뀜");
+  writeGitfile(wtD, "garbage\n");
+  let msgJ = ""; try { await repoWorktree(ctx(contD), { repo: "base" }); } catch (e) { msgJ = String(e.message); }
+  check("J: gitfile 파손(gitdir 줄 없음) → 중단(파손 안내)", /파손/.test(msgJ), msgJ || "throw 하지 않음");
+  check("J: 파손 자리에 새로 만들지 않는다", existsSync(join(wtD, "wip.txt")) && readFileSync(join(wtD, ".git"), "utf8") === "garbage\n", "상태가 바뀜");
+
+  // ── C3: 그 자리에 직접 clone(.git 디렉터리) → 검증 없이 재사용, admin null ──
+  const contE = box("boxE", 1005);
+  sh("git", ["clone", "-q", join(SB, "origin-repo"), join(contE, "base")]);
+  const rE = await repoWorktree(ctx(contE), { repo: "base" });
+  check("C3: .git 디렉터리(직접 clone)는 그대로 재사용, admin null", rE.worktree === join(contE, "base") && rE.admin === null, JSON.stringify(rE));
+
+  // ── D: 서버 provision 처럼 basename id 로 만들어진 슬롯 → 재사용 때 고유 id 로 옮긴다(HEAD·브랜치·미커밋 변경 보존) ──
+  const contF = box("boxF", 1006);
+  sh("git", ["-C", BASE, "worktree", "add", "-q", join(contF, "base"), "-b", "project/1006", "origin/main"]);
+  const wtF = join(contF, "base");
+  const oldAdminF = gitfileAdmin(wtF);
+  check("D: (전제) git 이 지은 id 는 basename 계열", /^base\d*$/.test(basename(oldAdminF)), basename(oldAdminF));
+  writeFileSync(join(wtF, "wip.txt"), "wip\n");
+  const headF = sh("git", ["-C", wtF, "rev-parse", "HEAD"]).stdout.trim();
+  const rF = await repoWorktree(ctx(contF), { repo: "base" });
+  check("D: 재사용 시 admin 을 고유 id 로 옮긴다", rF.admin === "base-p1006" && basename(gitfileAdmin(wtF)) === "base-p1006" && !existsSync(oldAdminF), `${rF.admin} / ${gitfileAdmin(wtF)}`);
+  check("D: 옮긴 뒤 git 정상(HEAD·브랜치·미커밋 파일 그대로)",
+    sh("git", ["-C", wtF, "rev-parse", "HEAD"], { allowFail: true }).stdout.trim() === headF && branchAt(wtF) === "project/1006"
+      && existsSync(join(wtF, "wip.txt")) && sh("git", ["-C", wtF, "status", "--porcelain"], { allowFail: true }).stdout.includes("wip.txt"), "옮긴 뒤 상태 어긋남");
+
+  // ── D2: 옮길 자리가 스테일 등록(경로 없음·부모 있음)이면 치우고 옮긴다 ──
+  const contG = box("boxG", 1007);
+  const staleDst = join(BASE, ".git", "worktrees", "base-p1007");
+  mkdirSync(staleDst, { recursive: true });
+  mkdirSync(join(SB, "gone", "1007"), { recursive: true });                   // 부모는 있고 워크트리는 없음 = 정말 지워진 것
+  writeFileSync(join(staleDst, "gitdir"), join(SB, "gone", "1007", "base", ".git") + "\n");
+  writeFileSync(join(staleDst, "HEAD"), "ref: refs/heads/main\n"); writeFileSync(join(staleDst, "commondir"), "../..\n");
+  sh("git", ["-C", BASE, "worktree", "add", "-q", join(contG, "base"), "-b", "project/1007", "origin/main"]);
+  const rG = await repoWorktree(ctx(contG), { repo: "base" });
+  check("D2: 스테일 자리는 치우고 옮긴다", rG.admin === "base-p1007" && same(adminBack(staleDst), join(contG, "base", ".git")), `${rG.admin} back=${adminBack(staleDst)}`);
+
+  // ── D3: 옮길 자리를 살아 있는 워크트리가 쓰고 있으면 옮기지 않고 중단(남의 것을 덮지 않는다) ──
+  //  같은 pid 를 두 루트가 쓰는 비정상(같은 base 에 project/1008 슬롯이 둘) — id 가 같아진다.
+  const contH1 = box("boxH1", 1008);
+  await repoWorktree(ctx(contH1), { repo: "base" });                          // base-p1008 (살아 있음)
+  const contH2 = box("boxH2", 1008);
+  sh("git", ["-C", BASE, "worktree", "add", "-q", join(contH2, "base"), "-b", "project/1008-dup", "origin/main"]);
+  let msgD3 = ""; try { await repoWorktree(ctx(contH2), { repo: "base" }); } catch (e) { msgD3 = String(e.message); }
+  check("D3: 살아 있는 자리로는 옮기지 않는다(중단)", /살아 있는/.test(msgD3), msgD3 || "throw 하지 않음");
+  check("D3: 원래 주인의 admin 은 그대로", basename(gitfileAdmin(join(contH1, "base"))) === "base-p1008" && same(adminBack(join(BASE, ".git", "worktrees", "base-p1008")), join(contH1, "base", ".git")), "주인 admin 이 바뀜");
+
+  // ── G: 목표 경로의 스테일 등록(디렉터리 삭제·부모 있음) → 치우고 재생성(같은 브랜치 이름 재사용) ──
+  const gPath = join(SB, "scratch", "g1");
+  const rG1 = await repoWorktree(ctx(proj), { repo: "base", path: gPath });
+  rmSync(gPath, { recursive: true, force: true });
+  const rG2 = await repoWorktree(ctx(proj), { repo: "base", path: gPath });
+  check("G: 목표 경로 스테일 등록 → 치우고 재생성 · 브랜치 이름 재사용(-n 으로 안 밀림)", existsSync(join(gPath, ".git")) && rG2.branch === rG1.branch, `${rG1.branch} → ${rG2.branch}`);
+
+  // ── H: 목표 브랜치를 쥔 등록의 경로가 없고 **부모도 없으면**(안 보이는 컨테이너일 수 있음) 지우지 않는다 → 실패 + 점유자 안내 ──
+  const contI = box("boxI", 1009);
+  await repoWorktree(ctx(contI), { repo: "base" });                           // project/1009
+  const adminI = gitfileAdmin(join(contI, "base"));
+  hide("boxI");
+  let msgH = ""; try { await repoWorktree(ctx(proj), { repo: "base", path: join(SB, "scratch", "h"), branch: "project/1009" }); } catch (e) { msgH = String(e.message); }
+  show("boxI");
+  check("H: 부모까지 없는 점유 등록은 안 지운다 → 실패 + 빠져나갈 방법", msgH.length > 0 && /branch 인자/.test(msgH), msgH || "성공해버림(남의 등록을 지웠다)");
+  check("H: 그 등록·admin·브랜치가 그대로", existsSync(adminI) && branchAt(join(contI, "base")) === "project/1009", "지워짐");
+
+  // ── H2: 기본 이름(wt/<repo>)을 안 보이는 등록이 쥐고 있으면 그 이름을 뺏지 않고 다음 이름으로 ──
+  const outA = join(SB, "boxJ", "one"); mkdirSync(outA, { recursive: true });
+  const rJ1 = await repoWorktree(ctx(outA), { repo: "base" });
+  hide("boxJ");
+  const outB = join(SB, "elsewhere3"); mkdirSync(outB, { recursive: true });
+  const rJ2 = await repoWorktree(ctx(outB), { repo: "base" });
+  show("boxJ");
+  check("H2: 안 보이는 등록의 브랜치를 뺏지 않는다(다른 이름)", rJ2.branch !== rJ1.branch && /^wt\/base/.test(rJ2.branch), `${rJ1.branch} vs ${rJ2.branch}`);
+  check("H2: 그 등록은 살아 있다", branchAt(join(outA, "base")) === rJ1.branch, branchAt(join(outA, "base")));
+
+  // ── L: locked 등록(사람이 `worktree lock` 으로 지킨 것 — 이동식 디스크 등)은 경로가 없어도 지우지 않고, 그 이름도 뺏지 않는다 ──
+  //  git 도 locked 는 remove 에 -f 를 두 번 요구한다. 지우지 않으면서 이름만 «비었다» 고 세면 add -b 가 git 의 브랜치 충돌로 죽는다.
+  const lockedPath = join(SB, "scratch", "locked-one");
+  const rL = await repoWorktree(ctx(proj), { repo: "base", path: lockedPath });
+  sh("git", ["-C", BASE, "worktree", "lock", lockedPath]);
+  rmSync(lockedPath, { recursive: true, force: true });                              // 경로 없음·부모 있음 = locked 만 아니면 스테일
+  let msgL = ""; try { await repoWorktree(ctx(proj), { repo: "base", path: join(SB, "scratch", "locked-two"), branch: rL.branch }); } catch (e) { msgL = String(e.message); }
+  const listL = lc(sh("git", ["-C", BASE, "worktree", "list", "--porcelain"], { allowFail: true }).stdout);
+  check("L: locked 등록은 스테일이어도 안 지운다 → 그 브랜치를 달라면 실패(등록 보존)", msgL.length > 0 && listL.includes(lc(normPath(lockedPath))), msgL ? "등록이 사라짐" : "성공해버림(locked 등록을 지웠다)");
+  const rL3 = await repoWorktree(ctx(proj), { repo: "base", path: join(SB, "scratch", "locked-three") });
+  check("L: 기본 이름 고를 때 locked 등록의 브랜치는 점유로 센다(다른 이름)", rL3.branch !== rL.branch && /^wt\/base/.test(rL3.branch), `${rL.branch} vs ${rL3.branch}`);
 
   rmSync(SB, { recursive: true, force: true });
   console.error(`\n${pass} passed, ${fail} failed`);
