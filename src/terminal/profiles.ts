@@ -13,7 +13,9 @@ import { mintToken, listTokens, revokeToken } from "../org/store/tokens.js";   /
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { DANGEROUS_SCOPES, isScope } from "../auth/scopes.js";
 import { resolveMemberOsUser, osUsername, isolationInfraReady, osUserExists, memberSlug } from "./terminal-isolation.js";
-import { memberSh, memberShOut } from "./terminal-member-fs.js";
+import { memberSh, memberShOut, execAt, type ExecAt, type MemberExecAt } from "./terminal-member-fs.js";
+import { sessionExecConfigured } from "./session-exec.js";   // #3668 T3 — 하네스 바이너리를 돌릴 자리가 세션 컨테이너인가
+import { gatewayCapability } from "../sessions/gateway-capabilities.js";   // #2165 — 세션 생성은 게이트웨이 능력이다(노드 번들에 로그인 러너를 안 싣는다)
 import { memberExecConfigured } from "./terminal-isolation.js";   // #2148 — 중계 배포에는 멤버 OS 계정이 없다(아래 memberOsStatus)
 import { roots, HARNESSES } from "./catalog.js";
 import { getOpt } from "./tmux-exec.js";
@@ -359,8 +361,27 @@ export interface AiLoginCheck {
   steps: string[];
 }
 
-// `sh -c` 한 줄을 이 사람의 실행 자리에서 돌린다. 격리면 box_ 로 drop-priv(중계 배포면 그 노드), 아니면 게이트웨이 로컬.
-//  ⚠ 격리에서 HOME 을 **명시**한다: 중계 exec 환경엔 그 유저의 passwd 항목이 없어 $HOME 이 다르고(memberLoggedInHarnesses
+/**
+ * 하네스 바이너리(`command -v <bin>` · 로그인 프로브)를 돌릴 자리 — 매니지드면 **그 사람의 세션 컨테이너**다.
+ *
+ *  ⚠ #3668 T3 — 종전엔 파일 op 자리(`memberSh(osUser, …)` = 테넌트 파일 op 컨테이너)로 나갔다. 그 자리는 T3 에서
+ *   gVisor 를 걷고 게이트웨이 박스의 상주 헬퍼로 내려간다 — 거기서 하네스 바이너리가 돌면 «우리가 안 쓴 코드»가
+ *   샌드박스 없이 CP 박스에서 도는 것이 되고, 커널 LPE 한 발의 폭발반경이 CP 전체가 된다. T2 가 세운 판별 기준
+ *   («누가 코드를 정하나») 으로 이건 명백히 프로그램 실행이라 세션 컨테이너로 보낸다 — ai-login-run.spawnAt 이
+ *   로그인 러너에 대해 이미 하는 일이고, 자리(ensureHarnessSeat)도 그것과 공유한다.
+ *  반환 null = 세션 경계 중계가 없는 배포(셀프호스트) — 거기선 한 박스에 다 있어 호출부가 종전 자리를 쓴다.
+ *  ⚠ 던지면 «자리를 못 얻었다» 다. 호출부는 그걸 **모름**으로 옮겨야 한다 — 게이트웨이 자리로 접으면 아래
+ *   aiLoginCheck ① 머리말의 거짓 «미설치» 가 그대로 돌아온다.
+ */
+async function harnessSeat(user: LivelyUser, key: string, osUser: string): Promise<MemberExecAt | null> {
+  if (!sessionExecConfigured()) return null;
+  const seat = gatewayCapability("harnessSeat");
+  if (!seat) return null;   // 노드 에이전트 — 세션을 만들 수 없다(DB 없음이 계약). 종전 자리를 쓴다
+  return { osUser, sessionId: await seat.ensure(user, key) };
+}
+
+// `sh -c` 한 줄을 주어진 자리에서 돌린다. 자리가 있으면 그 경계(세션 컨테이너 또는 멤버 uid), 없으면 게이트웨이 로컬.
+//  ⚠ 경계로 나갈 때 HOME 을 **명시**한다: 중계 exec 환경엔 그 유저의 passwd 항목이 없어 $HOME 이 다르고(memberLoggedInHarnesses
 //   머리말과 같은 함정), agy 는 자격을 HOME 기준으로 찾으므로 그 한 글자에 판정이 통째로 뒤집힌다.
 //  반환: true=exit 0 · false=exit≠0 · null=상한 초과/실행 자체 실패(=모름).
 //  ⚠ **stdin 을 반드시 닫는다**(`< /dev/null`). execFile 은 자식에게 stdin 파이프를 주고 **EOF 를 안 보내는데**,
@@ -368,14 +389,15 @@ export interface AiLoginCheck {
 //   `< /dev/null` 이면 3.1초에 exit 0 이었다. 이 함정은 특히 고약하다: 셸에서 손으로 치면 TTY 라 잘 되고
 //   **서버에서만** 조용히 '모름' 이 된다 → 제미나이 사용자 전원이 «확인하지 못했어요» 를 본다(고친 것을
 //   다시 반쯤 고장 낸 셈이 된다). 로그인 프로브는 사람 입력을 받을 일이 없으므로 닫는 것이 늘 옳다.
-async function runAtMemberSeat(osUser: string | null, line: string): Promise<boolean | null> {
+async function runAtSeat(at: ExecAt | null, line: string): Promise<boolean | null> {
   const cmd = `${line} < /dev/null`;
   let t: ReturnType<typeof setTimeout> | undefined;
   const timer = new Promise<null>((r) => { t = setTimeout(() => r(null), PROBE_TIMEOUT_MS); });
   const run = (async (): Promise<boolean | null> => {
     try {
-      if (osUser) {
-        await memberSh(osUser, `HOME="${MEMBER_HOME_BASE}/${osUser}" ${cmd}`);
+      if (at) {
+        const osUser = execAt(at).osUser;
+        await memberSh(at, `HOME="${MEMBER_HOME_BASE}/${osUser}" ${cmd}`);
         return true;
       }
       if (process.platform === "win32") return null;   // 게이트웨이가 윈도우면 `sh -c` 가 없다 — 지어내지 않고 '모름'
@@ -399,21 +421,26 @@ export async function aiLoginCheck(user: LivelyUser, key: string): Promise<AiLog
     harness: h.key, label: h.label, bin: h.bin,
     installed: null, loggedIn: null, how: "none", steps: h.loginSteps ?? [],
   };
+  // 하네스 바이너리를 돌릴 자리(#3668 T3) — 매니지드면 세션 컨테이너, 셀프호스트면 null(호출부가 종전 자리를 쓴다).
+  //  자리를 못 얻으면 **모름**으로 끝낸다(installed=null) — 게이트웨이 자리로 접으면 아래 ① 의 거짓 «미설치» 다.
+  let seat: MemberExecAt | null = null;
+  if (osUser) {
+    try { seat = await harnessSeat(user, h.key, osUser); } catch { return out; }
+  }
 
-  // ① 설치 — **게이트웨이 자신의 파일시스템**에서 본다(osUser 를 넘기지 않는다). bin 은 우리 상수표에서만
-  //  오므로 셸 문자열에 사용자 입력이 없다.
-  //  ⚠ 여기서 **멤버 자리(memberSh)를 보면 틀린다**(2026-08-27 라이브 실측). 중계는 늘 테넌트의 **tmux 컨테이너**로
-  //   exec 하는데(member-exec-relay.cjs — `/containers/lvly-s-<slug>-tmux/exec`), 하네스가 실제로 도는 곳은
-  //   **멤버 세션 컨테이너**(`lvly-s-<slug>-box-<member>-<id>`)다. 둘은 이미지가 다를 수 있다 — tmux 는 한 번
-  //   만들어지면 정지될 때까지 그대로인 반면(sessionbroker ensureTmuxContainer: 실행 중이면 스테일해도 유지),
-  //   세션 컨테이너는 **세션마다** 현재 이미지로 새로 뜬다.
-  //   실측: 같은 테넌트에서 tmux=c36(agy 없음) / 방금 뜬 세션 컨테이너=c48(agy 있음) → 화면이 «이 자리엔
-  //   Gemini 가 없어요» 라고 거짓말했다. 실제로는 새 세션에 있었다.
-  //  게이트웨이 자신은 롤마다 재생성돼 **현재 테넌트 이미지와 같은 태그**로 뜨고(roll-tenant-image 가 gw.image 와
-  //  tenant.image 를 같은 축으로 맞춘다), 새 세션도 그 이미지로 뜬다 — 그래서 «새 세션이 무엇을 갖게 되나» 의
-  //  정직한 대리값이다. 자격(loggedIn)은 반대로 **멤버 자리**가 맞다: 홈이 볼륨이라 tmux 에서 봐도 같은 파일이다.
-  out.installed = await runAtMemberSeat(null, `command -v "${h.bin}" >/dev/null 2>&1`);
-  if (out.installed !== true) return out;   // 없는 CLI 에 로그인을 물어봐야 답은 늘 '미로그인' 이다 — 묻지 않는다
+  // ① 설치 — **새 세션이 실제로 뜰 자리**에서 본다. 매니지드면 그 사람의 세션 컨테이너(seat), 셀프호스트면
+  //  게이트웨이 자신(seat=null — 한 박스라 같은 자리다). bin 은 우리 상수표에서만 오므로 셸 문자열에 사용자 입력이 없다.
+  //  ⚠ 여기서 **파일 op 자리(memberSh(osUser,…))를 보면 틀린다**(2026-08-27 라이브 실측). 그 중계는 테넌트의 파일 op
+  //   컨테이너로 exec 하는데, 하네스가 실제로 도는 곳은 **멤버 세션 컨테이너**다. 그 둘은 이미지가 다를 수 있다.
+  //  ⚠ **게이트웨이 자신을 보는 것도 매니지드에선 틀린다**(#3668 T3, 실측 2026-09-08). 종전 판이 그렇게 했고 근거는
+  //   «게이트웨이는 롤마다 테넌트 이미지와 같은 태그로 뜬다» 였는데, 그 전제는 #2454(이미지 역할 분할)가 없앴고
+  //   #3630 2단계(게이트웨이를 gVisor 밖 호스트 프로세스로)가 확정적으로 깼다 — 지금 게이트웨이의 PATH 는 **gw 이미지**
+  //   rootfs 이고 거기엔 agy·claude·codex·grok 이 **하나도 없다**(lvly-box 실측: `/usr/local/bin` = corepack·node·npm·npx·yarn).
+  //   그대로 두면 매니지드 온보딩이 **모두에게** «이 자리엔 <AI> 가 없어요» 라고 말한다. 대리값을 고치는 대신 **실물**
+  //   (그 사람의 세션 컨테이너)을 본다 — 대리값이 다시 어긋날 축이 없어진다.
+  //  자격(loggedIn)도 같은 자리가 맞다: 홈은 볼륨이라 어느 컨테이너에서 봐도 같은 파일이다.
+  out.installed = await runAtSeat(seat, `command -v "${h.bin}" >/dev/null 2>&1`);
+  if (out.installed !== true) { await releaseSeat(user, h.key); return out; }   // 없는 CLI 에 로그인을 물어봐야 답은 늘 '미로그인' 이다 — 묻지 않는다
 
   // ② 로그인 — 자격 파일이 있는 하네스는 **aiAccountStatus 를 그대로 쓴다**(맥 키체인·멀티프로필·격리 분기가
   //  전부 그 안에 있고, 여기서 다시 짜면 그중 하나를 빠뜨려도 아무 오류가 안 난다).
@@ -426,15 +453,23 @@ export async function aiLoginCheck(user: LivelyUser, key: string): Promise<AiLog
   const probe = HARNESS_PROBE[h.key];
   if (!probe) return out;   // 잴 방법이 없으면 정직하게 침묵한다(how="none") — 화면이 지어내지 않는다
   out.how = "probe";
-  // ⚠ 프로브는 **멤버 자리에서** 돌아야 한다 — 그 사람의 자격(HOME)을 봐야 하기 때문이다. 그런데 그 자리(tmux
-  //  컨테이너)에 바이너리가 없을 수 있다(위 ① 머리말의 이미지 어긋남). 그러면 프로브의 실패는 «미로그인» 이
-  //  아니라 «잴 수 없음» 이다 — 그걸 false 로 접으면 로그인한 사람에게 «아직 로그인이 안 보여요» 라고 한다.
-  if (await runAtMemberSeat(osUser, `command -v "${h.bin}" >/dev/null 2>&1`) !== true) {
+  // ⚠ 프로브는 **그 사람의 자리에서** 돌아야 한다 — 그 사람의 자격(HOME)을 봐야 하기 때문이다. 그런데 그 자리에
+  //  바이너리가 없을 수 있다(위 ① 머리말의 이미지 어긋남). 그러면 프로브의 실패는 «미로그인» 이 아니라
+  //  «잴 수 없음» 이다 — 그걸 false 로 접으면 로그인한 사람에게 «아직 로그인이 안 보여요» 라고 한다.
+  const probeAt: ExecAt | null = seat ?? osUser;   // 매니지드=세션 컨테이너(#3668 T3) · 셀프호스트 격리=멤버 자리(종전)
+  if (await runAtSeat(probeAt, `command -v "${h.bin}" >/dev/null 2>&1`) !== true) {
     out.loggedIn = null;   // 모름 — 화면은 절차를 보여 주고 «확인하지 못했어요» 를 덧붙인다
     return out;
   }
-  out.loggedIn = await runAtMemberSeat(osUser, `${h.bin} ${probe.join(" ")} >/dev/null 2>&1`);
+  out.loggedIn = await runAtSeat(probeAt, `${h.bin} ${probe.join(" ")} >/dev/null 2>&1`);
+  if (out.loggedIn === true) await releaseSeat(user, h.key);   // 이어졌다 — 더 물어볼 게 없으니 자리를 놓는다
   return out;
+}
+
+/** 판정이 끝났으면 하네스 자리를 놓는다(#3668 T3). 로그인 러너가 쓰는 하네스면 no-op — dropProbeSeat 머리말. */
+async function releaseSeat(user: LivelyUser, key: string): Promise<void> {
+  try { await gatewayCapability("harnessSeat")?.drop(user, key); }
+  catch { /* 못 치웠다 — 판정 결과를 뒤집을 일이 아니다(회수기가 거둔다) */ }
 }
 
 // box_ 홈의 파일 삭제(로그아웃) — 같은 drop-priv 경계. rm -f 라 없는 파일에도 성공(멱등).

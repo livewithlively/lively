@@ -21,6 +21,7 @@
 
 import type { GitCredentialSecret } from "../org/credentials/git-credential-store.js";   // 타입 전용 — 런타임 간선 아님
 import type { ExecAt } from "../terminal/terminal-member-fs.js";                        // 타입 전용 — 런타임 간선 아님
+import type { LivelyUser } from "../context.js";                                        // 타입 전용 — 런타임 간선 아님
 // ⚠ 위 「런타임 import 금지」의 유일한 예외(#2599 T2). exec-topology 는 **import 가 0 인 순수 잎**이고
 //  이 번들에 이미 실려 있다(terminal-isolation·sessions·session-state 가 쓴다) — 즉 이 간선은 번들에
 //  아무것도 더 끌어오지 않는다. 그 불변식(잎의 순수함)은 exec-topology-single-source 시험 S3 가 지킨다.
@@ -43,10 +44,21 @@ export interface GatewayCapabilities {
   materializeAppAssets?: (sessionHome: string, appId: string, writer: unknown) => Promise<void>;
   /** 노드에 실어 보낼 자격 리스(조직 폴백 없음). DB 를 탄다 → 게이트웨이 전용. */
   leaseGitSecretForNode?: (requesterId: string, host: string, nodeKind: "worker" | "member") => Promise<GitCredentialSecret | null>;
+  /**
+   * 하네스 바이너리를 돌릴 **세션 자리**(그 사람의 세션 컨테이너)를 확보·회수한다 (#3668 T3).
+   *  세션 생성을 탄다(DB·키트 시딩·자격 물질화) → 게이트웨이 전용. 노드 에이전트에는 등록이 없어 undefined 이고,
+   *  호출부(profiles.aiLoginCheck)는 '자리 없음' 분기로 종전 자리를 쓴다 — 노드는 원래 그 분기를 탔다.
+   *  ⚠ 이 이음매가 없으면 profiles → ai-login-run → sessions 정적/동적 간선이 **노드 번들에 로그인 러너를 싣는다**
+   *   (esbuild 는 outfile 하나면 `await import()` 도 인라인한다 — 이 파일 머리말).
+   */
+  harnessSeat?: {
+    ensure: (user: LivelyUser, key: string) => Promise<string>;
+    drop: (user: LivelyUser | null, key: string) => Promise<void>;
+  };
 }
 
 /** 선언된 능력 이름 — 배선 가드가 이 목록으로 index.ts 를 검사한다(추가하면 가드가 자동으로 요구한다). */
-export const GATEWAY_CAPABILITY_NAMES = ["materializeMemberGit", "resolveGitSecret", "leaseGitSecretForNode", "kitSeedDeps", "mintAppToken", "materializeAppAssets"] as const;
+export const GATEWAY_CAPABILITY_NAMES = ["materializeMemberGit", "resolveGitSecret", "leaseGitSecretForNode", "kitSeedDeps", "mintAppToken", "materializeAppAssets", "harnessSeat"] as const;
 
 const caps: GatewayCapabilities = {};
 
