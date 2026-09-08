@@ -135,6 +135,27 @@ export async function setNodeShared(id: string, shared: boolean): Promise<void> 
   await itemsPool.query(`UPDATE org_node SET shared=$2, updated_at=now() WHERE id=$1`, [id, shared]);
 }
 
+/**
+ * 세션 호스트 등록의 **주인과 선언을 맞춘다** (#2600 T2 d5). 호출부는 게이트웨이의 자기 프로비저닝
+ *  한 곳뿐이다(node/session-host-provision.ts) — 사람이 부르는 REST 표면은 없다.
+ *
+ * 왜 setNodeEnabled 처럼 컬럼 하나짜리로 안 두나: 이 둘은 **같이** 참이어야 뜻이 있다. 주인만
+ *  옮기면 #2592 셀프 노드 방어에 걸리고(session_host=false), 선언만 켜면 사람 계정이 비활성될 때
+ *  세션이 끊긴다(owner-inactive). 한 UPDATE 로 묶어 «반쪽 상태»를 만들지 않는다.
+ *
+ * ⚠ 토큰은 안 건드린다 — 회전은 rotateNodeToken 이 하고, **주인을 옮긴 뒤에** 불러야 새 토큰이
+ *  새 주인 명의로 발행된다(그 함수는 그 시점의 owner_member 로 mint 한다).
+ */
+export async function setNodeOwnerAndSessionHost(id: string, owner: string): Promise<OrgNode> {
+  if (!(await getMember(owner))) throw new HttpError(400, `존재하지 않는 구성원입니다: ${owner}`);
+  const r = await itemsPool.query(
+    `UPDATE org_node SET owner_member=$2, session_host=TRUE, updated_at=now() WHERE id=$1 RETURNING *`,
+    [id, owner],
+  );
+  if (r.rowCount !== 1) throw new HttpError(404, `노드 없음: ${id}`);
+  return r.rows[0] as OrgNode;
+}
+
 export async function deleteNode(id: string, actor?: string): Promise<{ deleted: boolean }> {
   const node = await getNode(id);
   if (!node) return { deleted: false };
