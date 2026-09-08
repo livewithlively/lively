@@ -514,11 +514,13 @@ export function captureAllowed(st) {
 }
 // 크기 넛지 실행 — 앱이 리사이즈를 두 번 받아 화면 전체를 다시 그린다.
 function doNudge() {
+  //  ⚠ 상한(nudgeTries)을 **세기 전에** 접는다 — 못 재는 프레임(안 보임)에서는 넛지 자체가 무의미하고,
+  //   보내면 80x24 로 남의 창을 줄인다(canReportSize 주석). 여기서 한 번 세어 버리면 안 보이는 동안의
+  //   호출이 상한을 다 먹어, 그 탭이 **보이게 된 뒤** 정작 필요한 넛지가 안 나간다(상한은 연결 단위로만 준다).
+  if (!canReportSize()) return;
   if (++nudgeTries > MAX_NUDGES) return;
   // ⚠ 넛지 직전에 fit 을 확정한다 — 폰트 정착 전 크기로 넛지하면 앱이 **다른 크기로** 전체를 그려
   //  클라 화면과 어긋난다(실측: 상단 일부가 화면 위로 벗어남). 넛지는 '지금 확정된 크기'를 기준으로만 의미가 있다.
-  //  못 재는 프레임(안 보임)이면 넛지 자체가 무의미하고, 보내면 80x24 로 남의 창을 줄인다 — canReportSize 주석.
-  if (!canReportSize()) return;
   try { if (fit) fit.fit(); } catch (_) { /* noop */ }
   const msgs = nudgeSizes(term && term.cols, term && term.rows);
   if (!msgs || !ws || ws.readyState !== 1) return;
