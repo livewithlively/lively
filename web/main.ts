@@ -383,7 +383,10 @@ async function boot() {
   route();
   // 방금 새 화면에서 내려왔다면(#1898) 「내 정보」를 다시 연다 — 사람이 누른 자리가 그 창이었고,
   //  그 안에 **새 화면으로 되돌아가는 버튼**이 있다. 도장은 1회용이라 다음 새로고침엔 안 뜬다.
-  if (takeShellSwitch()) openMyProfileModal();
+  //  ⚠ 끼워 넣은 판(새 셸이 클래식 페이지를 앱으로 실은 프레임)에서는 **읽지도 않는다** — sessionStorage 는
+  //   같은 탭의 프레임끼리 공유되므로, 그 프레임이 도장을 대신 소비하면 창이 프레임 안에 뜨고 바깥 사람은
+  //   아무것도 못 본다. shellBackRow 를 그 프레임에 안 그리는 것과 같은 이유다(me-profile.ts).
+  if (!embedded && takeShellSwitch()) openMyProfileModal();
 }
 
 // 로그아웃 — core.logout 한 문으로(#2536). 종전엔 여기 별도 경로(세션 회수 → 게이트)가 있어, 매니지드에서 CP 세션을 남기는
