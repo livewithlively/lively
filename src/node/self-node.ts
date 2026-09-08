@@ -60,6 +60,32 @@ export function declaredSessionHost(n: { session_host?: boolean } | null | undef
 }
 
 /**
+ * 게이트웨이가 이 테넌트의 세션 목록을 **자기 tmux 로 만들지 말아야 하나** (#2600 T2 d4).
+ *
+ * ── 왜 필요한가 ───────────────────────────────────────────────────────────────
+ * 멤버 PC 노드 세션은 게이트웨이가 tmux 를 한 번도 안 부른다 — op 를 그 노드로 넘긴다(`NODE_OPS`,
+ *  «정책=게이트웨이, 실행=노드»). 매니지드만 예외였던 이유는 **그 세션의 주인 프로세스가 노드에 없어서**다.
+ *  선언된 세션 호스트가 그 자리에 서면 예외가 사라져야 하는데, 오늘 `mergeSessionViews` 는 `local`(게이트웨이
+ *  tmux)이 이기고 `remote`(노드 스냅샷)에서 **좌표만** 물려받는다 — 그래서 호스트가 있어도 카드의 메타는
+ *  계속 게이트웨이가 만들고, attach 만 호스트로 간다(반쪽). 이 술어가 그 반쪽을 닫는다.
+ *
+ * ── 세 조건이 **다** 참일 때만 손을 뗀다 (fail-closed) ─────────────────────────
+ *  · `declared` — 선언된 세션 호스트만. 멤버 PC 노드(선언 없음)는 이 축을 건드리지 않는다.
+ *  · `online`   — 주인이 붙어 있어야 한다. 죽은 주인에게 목록을 맡기면 그 테넌트가 통째로 빈다.
+ *  · 스냅샷이 **신선**해야 한다 — 붙어 있어도 아직 아무것도 못 봤거나(`null`) 낡았으면 그 답을 정본으로
+ *    쓸 수 없다. 「모르면 넘기지 않는다」가 이 자리의 규율이다(#835 와 같은 방향).
+ *
+ * ⚠ 하나라도 모르면 **false** — 게이트웨이가 종전대로 답한다. 이 술어가 참이 되는 배포는 오늘
+ *  «선언된 세션 호스트를 띄운 매니지드 테넌트» 뿐이고, 셀프호스트·멤버 PC 배포는 한 줄도 안 바뀐다.
+ */
+export function gatewayDefersToSessionHost(
+  hosts: ReadonlyArray<{ declared: boolean; online: boolean; stateAgeMs: number | null }>,
+  staleMs: number,
+): boolean {
+  return hosts.some((h) => h.declared && h.online && h.stateAgeMs !== null && h.stateAgeMs <= staleMs);
+}
+
+/**
  * 이 노드를 셀프 노드로 **새로 표시할 것인가** — 판정 한 칸의 결정 (#2600 T2).
  *
  * ⚠ 이름이 «이 노드가 셀프 노드인가» 가 **아니다**. 이미 확정된 노드에는 `false` 를 돌려준다(다시 표시할

@@ -37,9 +37,9 @@ import { isProjectSessionDir } from "../project/project-fs.js";
 // #2116 — 죽은 세션 메타의 '남에게도 보이나' 판정을 다른 게이트와 **같은 술어**로 맞춘다(cwd 축).
 const sharedByFolder = (dir: string): boolean => isProjectSessionDir(dir);
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
-import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, nodeSessionGone, isSelfNode, liveNodes, nodeOfSession, nodeSessionHarness } from "../node/registry.js";
+import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, nodeSessionGone, isSelfNode, liveNodes, nodeOfSession, nodeSessionHarness, sessionHostsInScope, NODE_STATE_STALE_MS } from "../node/registry.js";
 import type { NodeSessionInfo } from "../node/registry.js";
-import { relayNodeId, sessionRelayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #2636 — 화면이 안 준 좌표는 서버가 되찾는다
+import { relayNodeId, sessionRelayNodeId, gatewayDefersToSessionHost } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #2636 — 화면이 안 준 좌표는 서버가 되찾는다
 import type { NodeOp } from "../node/protocol.js";
 import { normalizeTheme } from "./catalog.js"; // #1683 테마 값 정규화(순수 — catalog 가 소유)
 import { getNode, listNodes } from "../node/store.js";
@@ -396,7 +396,18 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const ipRaw = String(req.query.includeProjects ?? "").trim().toLowerCase();
     const includeProjects = ipRaw === "1" || ipRaw === "true";
     const ownedProjectsOnly = ipRaw === "owned" || ipRaw === "mine";
-    const all = await listSessions(userOf(req));
+    // #2600 T2 d4 — **주인이 있으면 게이트웨이는 목록을 자기 tmux 로 만들지 않는다.**
+    //  멤버 PC 노드 세션은 여태 그랬다: 게이트웨이는 tmux 를 한 번도 안 부르고 op 를 그 노드로 넘긴다
+    //  (`NODE_OPS` — «정책=게이트웨이, 실행=노드»). 매니지드만 예외였던 이유는 그 세션의 **주인 프로세스가
+    //  노드에 없어서**였고, 그래서 게이트웨이가 기본값으로 주인 노릇을 하며 중계 너머 컨테이너까지 뻗었다.
+    //  선언된 세션 호스트가 그 자리에 서면 예외가 사라져야 하는데, 그냥 두면 아래 `mergeSessionViews` 에서
+    //  **local 이 이겨** 카드 메타를 계속 게이트웨이가 만든다(좌표만 물려받아 attach 만 호스트로 가는 반쪽).
+    //  ⚠ 판정은 fail-closed 다 — 선언·온라인·신선한 스냅샷 셋이 다 참일 때만 놓는다. 잘못 놓으면 그 테넌트
+    //   목록이 통째로 비므로, 모르면 종전대로 게이트웨이가 답한다(술어 머리말·session-host-ownership 시험).
+    //  ⚠ 이 술어가 참이 되는 배포는 «선언된 세션 호스트를 띄운 테넌트» 뿐이다 — 셀프호스트·멤버 PC 배포는
+    //   선언이 없어 한 줄도 안 바뀐다.
+    const sessionHostOwns = gatewayDefersToSessionHost(sessionHostsInScope(), NODE_STATE_STALE_MS);
+    const all = sessionHostOwns ? [] : await listSessions(userOf(req));
     // 분산 노드(#869) — 원격 노드 세션 병합(node 필드로 구분). 가시성은 개인 세션 규칙(소유자+초대)로 게이트웨이가 판정.
     const remote = nodeSessionsFor(idOf(userOf(req)));
     // 복원 가능(#1059 E) — DB desired-state 에만 있고 지금 tmux 에 없는 세션(재부팅 사망·reaper 회수). 라이브 우선(이중표기 방지).
