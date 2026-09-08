@@ -32,9 +32,16 @@
  * 세션이 0 인 노드를 후보에서 빼는 근거는 sharesGatewayTmux 와 같다 — 볼 것이 없으면 판정이 아니라 보류다.
  */
 export function hasSelfProbeCandidate(
-  candidates: Iterable<{ key: string; sessionCount: number }>, judged: ReadonlySet<string>,
+  candidates: Iterable<{ key: string; sessionCount: number; declared?: boolean }>, judged: ReadonlySet<string>,
 ): boolean {
-  for (const c of candidates) if (!judged.has(c.key) && c.sessionCount > 0) return true;
+  //  ★ **선언된 세션 호스트는 후보가 아니다** (#2600 T2 d4, 2026-09-08 계수 실측).
+  //   면제는 원래 `probeSelfNodes` 의 **루프 안**(shouldMarkSelfNode)에 있었다. 그러면 그 노드는 판정을
+  //   받지 않으므로 `judged` 에 영원히 안 들어가고 → **영원히 후보로 남아** 매 `SELF_PROBE_MS` 마다
+  //   게이트웨이가 `list-sessions` 를 한 번 치고서야 «면제» 한다. 계수가 그 낭비를 이름으로 짚었다:
+  //   카나리아 테넌트에서 `sessions:210<registry:240` = **2~5회/분**(그 테넌트 tmux 호출의 수 %).
+  //  ⇒ 면제는 **tmux 를 묻기 전에** 성립해야 한다. 판정 규칙(sharesGatewayTmux)은 손대지 않는다 —
+  //   «의도한 공유»와 «사고인 공유»를 가르는 일은 여전히 **선언**이 하고, 선언은 admin 만 할 수 있다.
+  for (const c of candidates) if (!c.declared && !judged.has(c.key) && c.sessionCount > 0) return true;
   return false;
 }
 
