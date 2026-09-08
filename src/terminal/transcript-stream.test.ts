@@ -63,6 +63,38 @@ test("E1·E2·E16 — 떴다(ready) → 기준선 → 자란 크기 순으로 �
   } finally { child.kill("SIGKILL"); }
 });
 
+// ── E22 — ★ 준비 신호는 «파일을 본다» 를 재야 한다 ─────────────────────────────
+//  2026-09-08 프로덕션 실측: 첫 판은 스크립트 시작 직후 무조건 `ready` 를 보냈다. 그래서 컨테이너가
+//  그 경로를 **못 보는데도** 게이트웨이가 `live:true` 로 읽었고, 화면은 폴을 30초 안전망으로 늦췄다 —
+//  통보는 안 오는데 되묻지도 않는, 이 프로젝트가 «최악의 회귀» 라고 이름 붙인 바로 그 상태.
+//  상민님 신고: «즉각 안 흐르고 30초에 한 번 갱신되는 느낌».
+test("E22 — 파일이 없으면 ready 라고 하지 않는다(그리고 miss 로 그 사실을 올린다)", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "lvly-3699-"));
+  const missing = path.join(dir, "does-not-exist.jsonl");     // 폴더는 있고 **파일만 없다**
+  const { child, msgs } = runWatcher(missing);
+  try {
+    assert.ok(await until(() => msgs.some((m) => m.miss === 1), 5_000),
+      "E22 — 파일이 없는데 miss 를 안 올린다: 게이트웨이가 «못 민다» 를 영영 모른다");
+    await new Promise((r) => setTimeout(r, 500));
+    assert.ok(!msgs.some((m) => m.ready === 1),
+      "E22 — 파일이 없는데 ready 라고 한다: 화면이 폴을 30초로 늦춰 대화가 그만큼 밀린다(실측 회귀)");
+    //  ★ 그리고 파일이 생기면 스스로 회복해야 한다 — 첫 대화 전에 감시를 걸어도 되는 근거다.
+    appendFileSync(missing, "hello\n");
+    assert.ok(await until(() => msgs.some((m) => m.ready === 1), 6_000),
+      "E22 — 파일이 생겼는데 ready 로 회복하지 않는다");
+    assert.ok(await until(() => msgs.some((m) => m.size === 6), 6_000), "회복 뒤 크기를 안 알린다");
+  } finally { child.kill("SIGKILL"); }
+});
+
+test("E22 — 서버는 miss 를 받으면 «못 민다» 로 내린다(되띄우지 않는다)", () => {
+  const w = read("src/terminal/transcript-watch.ts");
+  assert.match(w, /if \(msg\.miss\) \{ setLive\(id, w, false, "file-unseen"\); continue; \}/,
+    "E22 — miss 를 받고도 live 를 안 내린다");
+  //  프로세스는 살아 있으니 재기동하면 안 된다(감시자가 스스로 회복한다).
+  const at = w.indexOf("if (msg.miss)");
+  assert.ok(!/scheduleRetry/.test(w.slice(at, at + 200)), "E22 — miss 에 재기동을 건다(감시자는 살아 있다)");
+});
+
 test("E3 — 파일이 안 자라면 같은 크기를 되풀이하지 않는다", async () => {
   const file = tmpFile();
   writeFileSync(file, "hello\n");                                  // 6바이트
