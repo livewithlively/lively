@@ -97,7 +97,9 @@ export function attachCwd(home: string = os.homedir(), canEnter: (dir: string) =
   if (home && canEnter(home)) return home;
   //  루트는 POSIX 에서 늘 통과 가능하고(윈도우도 드라이브 루트는 열려 있다), 무엇보다 **이 값이 무엇이든
   //   attach 의 의미는 안 바뀐다.** 진짜 cwd 를 고르는 자리가 아니라 «죽지 않을 값» 을 고르는 자리다.
-  return path.parse(process.cwd()).root || path.sep;
+  //  ⚠ 루트를 **홈에서 파생**한다 — `process.cwd()` 는 런타임 쓰기 경로 가드레일이 막는다(ops/state-dir).
+  //   그 규칙이 아니어도 홈 쪽이 맞다: 그 홈이 앉은 볼륨의 루트라야 «같은 자리의 한 칸 위» 다.
+  return path.parse(home || "").root || path.sep;
 }
 
 let attachCwdFellBack = false;   // 폴백 경고는 프로세스당 한 번(그 상태는 지속적이라 매 attach 마다 찍으면 로그가 덮인다)
