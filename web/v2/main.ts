@@ -9,6 +9,7 @@
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
 import { renderOnboarding, onboardingDone, markWelcomeSeen } from './onboarding.js'; // #/welcome 처음 설정(#1813·#2171)
 import { $view, anchoredPopover, api, el, state, takeShellSwitch, toast } from '../core.js';
+import { EMBEDDED } from './embed.js';   // #1898 — 끼워 넣은 판은 셸 전환 도장을 소비하지 않는다
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsSync } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘 일감'을 자르는 자(달력 자정이 아니다)
@@ -536,7 +537,10 @@ export async function bootV2(): Promise<void> {
 
   // 방금 클래식에서 올라왔다면(#1898) 같은 성격의 창을 [화면] 자리에 다시 연다 — 왕복이 대칭이어야
   //  사람이 '내가 방금 누른 그 자리로 돌아왔다'고 읽는다. 도장은 1회용(lib/state takeShellSwitch).
-  if (takeShellSwitch()) openMeModal({ tab: 'look' });
+  //  ⚠ 끼워 넣은 판에서는 **읽지도 않는다**. sessionStorage 는 같은 탭의 프레임끼리 공유되므로, 곁칸에
+  //   실린 우리 주소(web-url.ts 가 embed=1 을 붙인다)가 먼저 부팅하면 그 도장을 대신 소비해 창이
+  //   **프레임 안에** 뜬다 — 바깥 사람은 아무것도 못 보고 도장만 사라진다.
+  if (!EMBEDDED && takeShellSwitch()) openMeModal({ tab: 'look' });
 }
 
 /**
