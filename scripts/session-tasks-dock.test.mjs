@@ -64,7 +64,14 @@ const task = (o) => ({ id: "t", kind: "shell", title: "작업", status: "running
   const dock = read("web/session-tasks.ts");
   ok(/tasks\.snapshot/.test(dock) && !/task\.updated/.test(dock),
     "⑱ 화면은 **스냅샷만** 본다 — 접기를 다시 하지 않는다(두 벌이면 갈린다)");
-  ok(/SILENCE_MS/.test(dock), "⑲ 말 없는 연결을 살아 있다고 착각하지 않는다(하트비트 침묵 감시)");
+  //  ⑲ 연결 살림은 #3699 에서 **세션당 한 벌**(web/session-events.ts)로 옮겼다 — 대화 파일 통보가 같은
+  //   통로를 쓰는데 표면마다 각자 열면 같은 세션에 소켓이 둘이 된다. 불변식은 그대로고 소유자만 바뀌었다.
+  ok(/onSessionEvents\(o\.sessionId, handle\)/.test(dock),
+    "⑲ 도크가 공용 연결(session-events)을 쓴다 — 표면마다 SSE 를 따로 열지 않는다");
+  const bus = read("web/session-events.ts");
+  ok(/SILENCE_MS/.test(bus), "⑳ 말 없는 연결을 살아 있다고 착각하지 않는다(하트비트 침묵 감시)");
+  ok(/if \(cur\.subs\.size\) return;/.test(bus),
+    "㉑ 마지막 구독이 떠나면 연결을 닫는다 — 서버에선 이 연결이 대화 파일 감시의 참조다(#3699)");
 }
 
 console.log(`\n${pass}건 통과`);

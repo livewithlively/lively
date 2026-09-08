@@ -707,8 +707,14 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  붙자마자 **걸려 있는 물음**을 다시 준다 — 새로고침에 승인 카드가 사라지면 그 턴은 TTL 까지 선다.
     for (const a of pendingAsks(req.params.id)) send({ t: "permission.asked", ask: a.ask });
     const off = onSessionEvent(req.params.id, send);
+    //  ★ #3699 — 이 구독이 대화 파일 감시의 **참조 하나**를 쥔다(세션당 1개를 탭들이 공유한다).
+    //   여기서 잡는 이유: 감시는 «보는 사람이 있을 때만» 돌아야 하고, 그 사실을 아는 곳이 이 통로다.
+    //   구독 시점의 상태를 곧바로 알려 준다 — 화면은 이 값을 보고 폴 주기를 정한다(못 밀면 안 늦춘다).
+    const { acquireTranscriptWatch, transcriptWatchLive } = await import("./transcript-watch.js");
+    const release = acquireTranscriptWatch(req.params.id);
+    send({ t: "transcript.watch", live: transcriptWatchLive(req.params.id) });
     const beat = setInterval(() => { try { res.write(": beat\n\n"); } catch { /* */ } }, 25_000);
-    req.on("close", () => { off(); clearInterval(beat); });
+    req.on("close", () => { off(); release(); clearInterval(beat); });
   }));
 
   // 세션 상태 통로의 승인 답하기(#2439) — 화면이 카드에서 고른 값을 돌려준다.

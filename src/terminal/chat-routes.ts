@@ -36,9 +36,7 @@
 import type express from "express";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
-import { canAttach, sessionDir, sessionGone } from "./terminal-sessions.js";
-import { getOpt } from "./tmux-exec.js";
-import { resolveSessionDir } from "../sessions/session-desired.js";
+import { canAttach, sessionGone } from "./terminal-sessions.js";
 import { getSessionState, sessionConvsFor, dirSharedWithOtherSession, convsTakenByOtherSession } from "../sessions/session-state.js";
 import { isChatKey, sendKeyToSession, type ChatKey } from "./send-keys.js";
 import { nodeOfSession, nodeCanAttach, nodeSupports, nodeRpc } from "../node/registry.js";
@@ -46,14 +44,12 @@ import { markSessionSeen } from "./phase.js";
 import { markViewing, viewersOf } from "./session-presence.js";   // #2116 — "지금 보고 있는 사람"(구글 문서식 얼굴 줄)
 import { listMembers } from "../org/store.js";
 import { transcriptRange } from "../sessions/transcript-range.js";
-import { sessionOsUser } from "./profiles.js";
 import { harnessIo, isChatAction, type ChatAction } from "./harness-io/adapter.js";
-import { locateTranscript } from "./harness-io/locate.js";
 import { readAlignedWindow, type AlignedWindow } from "./harness-io/window.js";
-import { transcriptFsFor } from "./harness-io/transcript-fs.js";
 import { parseWindow } from "./harness-io/parse-cache.js";
 import { toNdjson, THIN_MAX_BYTES, THIN_CHAIN_MAX_BYTES } from "./harness-io/chat-line.js";
 import { resolveConvChain, readThinChain, convUuidsInDir } from "./harness-io/conv-chain.js";
+import { harnessOf, resolveTranscript } from "./transcript-locate.js";   // #3699 — «어느 파일인가» 는 한 벌
 
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
@@ -100,12 +96,6 @@ async function viewerFaces(sessionId: string): Promise<Array<{ id: string; name:
   return ids.map((id) => ({ id, name: names.get(id) || id }));
 }
 
-// 이 세션의 하네스 — desired-state 미러(있으면) → 라이브 tmux 옵션(@box_harness) 폴백. 둘 다 없으면 ''(모름 → 못 읽는 하네스로 다룬다, claude 로 추측하지 않는다).
-async function harnessOf(id: string, stHarness: string | null | undefined): Promise<string> {
-  if (stHarness) return stHarness;
-  return (await getOpt(id, "@box_harness").catch(() => "")) || "";
-}
-
 // 구 화면(Enter|Escape 키 이름)도 받는다 — 하위호환. 뜻은 claude 대화상자 기준(Enter=승인, Esc=중단)이었으므로 그대로 옮긴다.
 function actionOf(body: Record<string, unknown>): ChatAction | null {
   if (isChatAction(body.action)) return body.action;
@@ -118,31 +108,24 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     const id = String(req.params.id ?? "");
     if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
     await gateRead(id, req);
-    const st = await getSessionState(id);
-    const mapped = st?.claude_session_id || "";
     res.setHeader("Cache-Control", "no-store");
     // ?uuid= — 이 박스의 **다른 대화 파일**(맥락 압축 전 파일 — 아래 X-Prev-Session 으로 알려준 것). 같은 실행 폴더·같은 소유자 뿌리
     //  안에서만 찾으므로 남의 대화를 가리킬 수 없다(박스 인가는 위 gateRead 가 이미 했다).
     const want = String(req.query.uuid ?? "").trim();
     if (want && !/^[A-Za-z0-9._-]{1,128}$/.test(want)) throw new HttpError(400, "uuid 형식 오류");
-    const uuid = want || mapped;
+    //  ★ 어느 파일인가의 계산은 **transcript-locate 한 벌**이다(#3699) — 대화 파일 감시자가 같은 답을
+    //   써야 «화면이 읽는 파일» 과 «감시자가 지켜보는 파일» 이 안 갈린다. 말(상태·문장)은 여기서 한다.
+    const t = await resolveTranscript(id, want);
     //  매핑이 없으면 **404 가 정답이다 — cwd 규약 폴더를 훑어 최신 파일을 집지 않는다**(#1719 회귀, 3b36df18 되돌림).
     //  대화 파일엔 어느 박스의 것인지가 안 적혀 있고(claude jsonl 은 자기 conv uuid 만 안다), 폴더는 cwd 로만 갈려
     //  프로젝트 폴더 하나를 세션 여럿이 공유한다 — mtime 최신은 '내 대화'가 아니라 '지금 제일 시끄러운 세션'이다.
     //  실측(2026-08-18 dev): 그렇게 집었더니 남의 세션 대화가 폴링마다 갈아끼워져 한 화면에 쏟아지고(화면은 uuid 변화를
     //  압축 경계로 읽어 매번 파일 전체를 되읽는다) transcript 요청이 분당 200건을 넘었다. 박스↔대화 결합을 아는 곳은
     //  세션 **안에서** 도는 훅뿐이다(work-flag → POST …/claude-uuid, 실패해도 60초 뒤 다음 툴 사용에 재시도).
-    if (!uuid) throw new HttpError(404, "이 세션의 대화 id 를 아직 모릅니다(첫 대화가 오가면 생깁니다).");
-    const harness = await harnessOf(id, st?.harness);
-    const io = harnessIo(harness);
-    if (!io || !io.parse) throw new HttpError(409, `${io?.label || harness || "이 하네스"} 의 대화는 아직 여기서 읽을 수 없습니다 — 터미널로 보세요.`);
-    // 실행 폴더 — desired-state 미러가 있으면 그것, 없으면 tmux 옵션(라이브).
-    const cwd = st?.dir || await resolveSessionDir(id, () => sessionDir(id)).catch(() => "");
-    // 파일 접근 파사드 — 소유자 osUser(격리·중계 판정은 sessionOsUser 가) → 로컬 fs 또는 멤버 실행환경 중계(transcript-fs 머리말).
-    const tfs = transcriptFsFor(await sessionOsUser(id).catch(() => null));
-    //  훅이 보고한 파일 경로는 **지금 매핑된 대화**의 것이다 — 다른 uuid(?uuid=, 압축 전 파일)를 찾을 땐 규약으로만(그 경로를 주면 엉뚱한 현재 파일을 읽는다).
-    const found = await locateTranscript(io, { cwd, convId: uuid, owner: st?.owner || "", reportedPath: uuid === mapped ? st?.transcript_path : null }, tfs.stat);
-    if (!found) throw new HttpError(404, "대화 기록 파일을 찾지 못했습니다(아직 한 줄도 안 쌓였거나 이 박스가 읽을 수 없는 곳에 있습니다).");
+    if (!t.ok && t.why === "no-uuid") throw new HttpError(404, "이 세션의 대화 id 를 아직 모릅니다(첫 대화가 오가면 생깁니다).");
+    if (!t.ok && t.why === "unreadable") throw new HttpError(409, `${t.label} 의 대화는 아직 여기서 읽을 수 없습니다 — 터미널로 보세요.`);
+    if (!t.ok) throw new HttpError(404, "대화 기록 파일을 찾지 못했습니다(아직 한 줄도 안 쌓였거나 이 박스가 읽을 수 없는 곳에 있습니다).");
+    const { uuid, io, cwd, tfs, found } = t;
     const q = req.query as Record<string, unknown>;
     // fmt=thin(#1819) — 타임라인은 창이 아니라 **세션 전체**를 본다. 덩치를 버린 같은 모양이라 20MB 가 455KB 가 된다.
     const thin = String(q.fmt ?? "") === "thin";
