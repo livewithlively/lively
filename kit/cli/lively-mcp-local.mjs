@@ -65,10 +65,29 @@ const normGw = (u) => String(u || "").trim().replace(/\/+$/, "").replace(/\/mcp$
 //  tmux 서버는 처음 뜬 시점 환경을 global 로 굳혀 물려주고 killEmptyTmuxServer 는 세션이 살아 있으면
 //  서버를 보존하므로, 세션이 끊이지 않는 박스에서 그 env 는 **영영 갱신되지 않는다** — 이 표면이 정확히
 //  env-우선의 피해자였다(2026-09-03: 이 MCP 의 repo_list·repo_worktree 가 세션 내내 401).
-//  ⚠ token() 은 반대로 env 우선인 채 둔다 — 그건 캐시가 아니라 **세션별 신원 주입**이다(#2234, sessions.ts 가
-//   pane 마다 다른 토큰을 심는다). 주소는 박스당 하나라 그 사정이 없다. 두 값의 규약이 다른 이유가 이것이다.
 const gateway = () => normGw(readLively("gateway-url") || process.env.LIVELY_GATEWAY_URL);
-const token = () => (process.env.LIVELY_TOKEN || readLively("token")).trim();
+// ★ 토큰도 **주소와 같은 축**이다 — 형제 프록시 lively-mcp-gateway.mjs 의 token() 과 글자 그대로 같은 3단
+//  규약을 쓴다(근거 전문은 거기 머리말). 한 쌍은 한 출처에서 읽는다:
+//   · LIVELY_MCP_TOKEN — 게이트웨이가 이 pane 을 띄우며 **그 세션 주인 앞으로 발급해 심은** 세션 스코프
+//     정본이다(#2234, profiles.ts mintSessionMcpToken). 셸이 만든 값이 아니라 늙지 않고, 세션이 죽으면
+//     회수된다 → 있으면 이긴다. 홈이 공유인 박스(맥 단일유저·중앙박스)에서 이게 없으면 다른 멤버의
+//     세션이 MCP 로 하는 일이 전부 «키트를 깐 사람» 신원으로 나간다.
+//   · ~/.lively/token — 파일이 SoT(#916). 앱·CLI 어느 쪽으로 로그인하든 여기에 쓰므로, 살아 있는 세션도
+//     재로그인을 즉시 따라온다.
+//   · LIVELY_TOKEN — 설치기가 codex 때문에 셸 rc 에 심는 `export LIVELY_TOKEN="$(cat ~/.lively/token)"` 의
+//     결과이거나 tmux 전역 env 의 스냅샷이라 **늙는다**. 파일이 없을 때만(프로비저닝·컨테이너) 쓴다.
+//  ⚠ #3728(실측 2026-09-08) — 종전엔 여기만 `env.LIVELY_TOKEN || 파일` 이라 **주소는 파일 · 토큰은 env** 로
+//   출처가 갈렸다. 앱에서 매니지드로 재로그인하면 파일만 바뀌고 tmux 전역 env 는 그대로라(로그인이 안 고친다)
+//   «새 주소 + 옛 토큰» 조합이 되어 이 MCP 만 세션 내내 401 이었다(repo_list·repo_worktree 전멸, 메인
+//   `lively mcp` 는 위 3단 규약이라 멀쩡). 옛 주석은 그 env-우선을 «#2234 세션별 신원 주입» 이라 적었는데
+//   오독이다 — #2234 가 pane 에 심는 건 LIVELY_MCP_TOKEN 이고, pane 의 LIVELY_TOKEN 은 **훅 토큰**이다
+//   (#1719 후속, mintSessionHookToken: 세션 최소권한이라 admin·runtime 이 빠져 있다). MCP 가 그걸 집으면
+//   신원도 권한도 틀린다 — sessions.ts 의 두 `-e` 주입이 서로 다른 변수인 이유가 정확히 이것이다.
+const token = () => (
+  (process.env.LIVELY_MCP_TOKEN || "").trim()
+  || readLively("token")
+  || (process.env.LIVELY_TOKEN || "").trim()
+).trim();
 
 // stdout 은 JSON-RPC 전용이다 — 실수로 새어나간 console.log 가 프로토콜을 깨지 않게 stderr 로 묶는다.
 console.log = (...a) => process.stderr.write(a.map(String).join(" ") + "\n");
