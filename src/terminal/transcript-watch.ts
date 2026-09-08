@@ -54,19 +54,31 @@ export const LOOK_MS = 2_000;
  *     같은 «1초에 몇 번» 이라도 비용이 두 자릿수 배 다르다 — 그래서 촘촘해도 된다.
  *  · stdout 이 끊기면(게이트웨이가 죽었거나 중계가 끊겼다) **스스로 끝난다** — 30초 박동이 EPIPE 를
  *    만들어 준다. 이게 없으면 컨테이너 안에 유령이 남는다(#2625 «exec 이 자기 클라이언트의 죽음을 못 본다»).
+ *
+ *  ★★ `ready` 는 **«파일을 본다»** 는 뜻이다 — «프로세스가 떴다» 가 아니다(2026-09-08 프로덕션 실측으로 고침).
+ *   첫 판은 스크립트 시작 직후 무조건 `ready` 를 보냈다. 그러면 컨테이너가 그 경로를 **못 보는데도**
+ *   게이트웨이는 `live:true` 로 읽고, 화면은 폴을 30초 안전망으로 늦춘다 — 통보는 안 오는데 되묻지도 않는,
+ *   §2 가 «이 변경이 만들 수 있는 최악의 회귀» 라고 이름 붙인 바로 그 상태다. 상민님이 «30초에 한 번
+ *   갱신되는 느낌» 이라고 신고해 드러났다. 그래서 **첫 stat 이 성공해야** `ready` 고, 파일이 안 보이면
+ *   `{miss:1}` 로 그 사실을 올린다(둘 다 전이에서만 — 게이트웨이의 setLive 와 같은 결).
+ *  ⇒ 일반형: **준비 신호는 «내가 하려던 일을 할 수 있다» 를 재야 한다.** «시작했다» 를 재면 그 신호는
+ *   실패를 성공으로 보고하고, 그걸 믿는 쪽이 더 나쁜 선택(늦추기)을 한다.
  */
 export const WATCH_JS =
-  "const fs=require('fs'),p=require('path');const f=process.argv[1],d=p.dirname(f);let last=-1,t=null;" +
+  "const fs=require('fs'),p=require('path');const f=process.argv[1],d=p.dirname(f);let last=-1,t=null,ok=false,gone=false;" +
   "const w=(o)=>{try{process.stdout.write(JSON.stringify(o)+'\\n')}catch{}};" +
-  "const look=()=>{fs.stat(f,(e,s)=>{if(e||!s.isFile())return;if(s.size!==last){last=s.size;w({size:s.size})}})};" +
+  "const look=()=>{fs.stat(f,(e,s)=>{" +
+  "if(e||!s.isFile()){if(!gone){gone=true;ok=false;w({miss:1})}return}" +
+  "gone=false;if(!ok){ok=true;w({ready:1})}" +
+  "if(s.size!==last){last=s.size;w({size:s.size})}})};" +
   "const bump=()=>{if(t)return;t=setTimeout(()=>{t=null;look()},150)};" +
   "process.stdout.on('error',()=>process.exit(0));" +
-  "w({ready:1});look();" +
+  "look();" +
   "try{fs.watch(d,bump)}catch{}" +
   `setInterval(look,${LOOK_MS});setInterval(()=>w({beat:1}),30000);`;
 
 /** 감시자가 한 줄로 보내는 말 — `ready`(떴다) · `size`(여기까지 자랐다) · `beat`(살아 있다). */
-export interface WatchMsg { ready?: number; size?: number; beat?: number }
+export interface WatchMsg { ready?: number; miss?: number; size?: number; beat?: number }
 
 /** 줄바꿈 없는 쓰레기가 무한히 쌓이지 않게 하는 상한 — 정상 줄은 이보다 한참 짧다. */
 export const MAX_ACC_BYTES = 4096;
@@ -237,6 +249,10 @@ async function start(id: string, w: Watch): Promise<void> {
       acc = cut.rest;
       for (const msg of cut.msgs) {
         if (msg.ready) { setLive(id, w, true); continue; }
+        //  ★ 감시자가 «그 자리에 파일이 안 보인다» 고 말했다 — 프로세스는 살아 있으니 되띄우지 않고,
+        //   **밀 수 없다는 사실만** 내린다. 화면은 그 즉시 종전 주기로 돌아간다(늦춘 채 안 남는다).
+        //   파일이 나타나면 감시자가 스스로 `ready` 를 다시 올린다(주기 관측이 계속 돈다).
+        if (msg.miss) { setLive(id, w, false, "file-unseen"); continue; }
         if (typeof msg.size === "number") grew(id, w, msg.size);
       }
     });
