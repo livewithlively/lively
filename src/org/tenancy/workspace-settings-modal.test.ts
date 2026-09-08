@@ -46,7 +46,10 @@ test("E2 모달에 네 섹션이 있다", () => {
     assert.ok(MODALC.includes(t), `섹션이 없다: ${t}`);
   }
   assert.match(MODALC, /peopleSection\(w\.slug\)/, "구성원 덩어리(초대 폼 포함)를 심지 않는다 — '초대도 거기서' 가 빠진다");
-  assert.match(MODALC, /#\/system\//, "기능 설정(관리탭)으로 가는 문이 없다");
+  //  #1898 — 섹션을 **찍지 않는다**('#/system' 뒤에 슬래시 없음). 찍어 둔 섹션은 매니지드에서 숨을 수 있어
+  //   (admin-shell PERSONAL_HIDDEN) 어디로 떨어질지 모르는 링크가 된다 — 섹션 없는 '#/system' 은
+  //   renderAdmin 이 그 사람에게 보이는 첫 섹션으로 연다. 그러니 검사는 '문이 있나'까지다.
+  assert.match(MODALC, /#\/system/, "기능 설정(관리탭)으로 가는 문이 없다");
 });
 
 test("★★ E3/E4/E5 저장된 얼굴 — 파생보다 먼저, hex 만, 밝으면 어두운 잉크", () => {
