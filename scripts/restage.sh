@@ -144,8 +144,10 @@ if [[ -n "$DIRECT" ]]; then
       | git patch-id --stable > "$KNOWN" || true
   fi
   for c in $DIRECT; do git show "$c" 2>/dev/null; done | git patch-id --stable > "$MINE" || true
-  # ③(아래)이 쓸 기준 트리. `merge-tree --write-tree` 는 git 2.38+ 이라, 없으면 빈 값으로 두고 건너뛴다
-  #  — 그 경우 판정은 종전(patch-id 만)으로 되돌아간다. 없는 기능 때문에 스크립트가 죽지는 않는다.
+  # ③(아래)이 쓸 기준 트리. 이 조합(`merge-tree --write-tree --merge-base`)을 지원하지 않는 git 이 있어
+  #  — 실측 2026-09-08: 배포판 git 2.39.x 에서 거부됐다. 그래서 **버전으로 가정하지 않고 아래처럼 한 번
+  #  돌려 보고** 판정한다 — 안 되면 빈 값으로 두고 건너뛴다. 그 경우 판정은 종전(patch-id 만)으로
+  #  되돌아간다. 없는 기능 때문에 스크립트가 죽지는 않는다.
   BASE_TREE=""
   if git merge-tree --write-tree --merge-base "${REMOTE}/${BASE}" "${REMOTE}/${BASE}" "${REMOTE}/${BASE}" >/dev/null 2>&1; then
     BASE_TREE="$(git rev-parse "${REMOTE}/${BASE}^{tree}")"
