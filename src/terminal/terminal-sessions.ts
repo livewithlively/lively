@@ -18,7 +18,7 @@ export {
   type Root, type FlagDef, type Harness, type SessionInfo, type CreateInput, type PreparedAppSession,
 } from "./catalog.js";
 export {
-  listSessionPanePids, isSessionGoneError, sessionGone, tidyHistory,
+  listSessionPanePids, isSessionGoneError, sessionGone, sessionGoneVerdict, tidyHistory,
   sessionDir, getSessionLabel, getSessionProject, ensureSessionOpts,
 } from "./tmux-exec.js";
 export {

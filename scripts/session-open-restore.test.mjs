@@ -22,10 +22,12 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   const i = src.indexOf('app.get("/api/ui/terminal/sessions/:id"');
   assert.ok(i > 0, "단일 세션 메타 라우트를 찾지 못했습니다");
   const blk = src.slice(i, src.indexOf("app.get(", i + 10));
-  const gone = blk.indexOf("await sessionGone(");
+  //  #3752 ④ — 판정자가 `sessionGone` → `sessionGoneVerdict` 로 넓어졌다(«모름» 을 «살아 있음» 으로 접지
+  //   않으려고). 이 가드가 지키는 것은 **판정을 하느냐와 그 순서**이지 함수 이름이 아니므로 둘 다 받는다.
+  const gone = blk.search(/await sessionGone(Verdict)?\(/);
   const attach = blk.indexOf("await canAttach(");
   const dead = blk.indexOf("deadSessionMeta(");
-  ok(gone > 0, "①-a 라우트가 sessionGone 으로 '지금 살아 있나'를 확인한다");
+  ok(gone > 0, "①-a 라우트가 sessionGone(Verdict) 으로 '지금 살아 있나'를 확인한다");
   ok(dead > 0, "①-b 라우트가 deadSessionMeta 로 복원 신호를 만든다");
   ok(attach > 0 && gone < attach,
     "①-c sessionGone 게이트가 canAttach 보다 앞에 있다 — 뒤로 가면 죽은 세션이 통과해 restorable 신호가 통째로 빠진다(2026-08-14 회귀)");

@@ -441,10 +441,31 @@ export function isNoTmuxServer(e: unknown): boolean {
  *   닫지 않기 위해서다. 이 변경은 «목록이 보일 때만» 판정을 바꾼다(무회귀).
  */
 export async function sessionGone(id: string): Promise<boolean> {
+  return (await sessionGoneVerdict(id)) === true;
+}
+
+/**
+ * 같은 판정에 **«모른다»** 를 살려서 돌려준다 (#3752 ④) — `true` 끝남 · `false` 살아있음 · `null` **판정 불가**.
+ *
+ * ── 왜 (실측 2026-09-08, #3688) ──────────────────────────────────────────────
+ * `sessionGone` 은 «모른다» 를 `false`(살아있음)로 접는다. 그 접기는 **자동 경로에선 옳다** — 모름을 죽음으로
+ *  읽으면 살아 있는 세션이 복원으로 끌려가고, 갓 만든 세션은 후보 0건 피커로 떨어진다(#2108·#3626).
+ *  그런데 그 접기가 **사람에게 보이는 자리**까지 덮으면 다른 고장이 된다: 매니지드에서 샌드박스가 wedged 되어
+ *  브로커가 503 `LVLY_STATE_UNKNOWN` 을 주면, 게이트웨이는 그 세션을 «살아 있다» 고 답한다 — 사람은 화면이
+ *  «응답이 없다» 로만 보이는데 복원 게이트는 영영 안 열린다(실측: 메타 6.9초 뒤 restorable 없음 ·
+ *  `POST …/restore` 는 `already:true`). 그 샌드박스는 사람이 개입하기 전엔 스스로 돌아오지 않는다.
+ *
+ * ★ 그래서 판정을 바꾸지 않고 **사실을 하나 더 낸다.** 「없다는 확답」과 「모른다」는 다른 사실이고, 후자는
+ *  화면이 «상태를 확인할 수 없어요» 라고 말할 수 있어야 하는 자리다. `sessionGone` 의 계약은 그대로다(무회귀) —
+ *  이 함수를 **일부러 부르는 자리만** 그 차이를 본다. [[reboot-stale-session-route-restore-3675]] §3 과 같은 자리.
+ */
+export async function sessionGoneVerdict(id: string): Promise<boolean | null> {
   if (!ID_RE.test(id)) return false; // 형식 자체가 틀림 = '종료'가 아니라 잘못된 요청
   try { await tmux(["has-session", "-t", id]); return false; } // 살아있음
   catch (err) {
-    if (!isSessionGoneError(err)) return false;
+    //  ⚠ 여기가 «모른다» 다 — 중계 불통·타임아웃·브로커 503(LVLY_STATE_UNKNOWN). 종전엔 이 갈래가 곧바로
+    //   false(살아있음)였다. 그 접기를 **부르는 쪽이 고르게** 남겨 둔다.
+    if (!isSessionGoneError(err)) return null;
     if (!isPsmuxSilentExit(err)) return true;   // tmux 는 문구로 확답한다 — 되물을 것이 없다
     try { return !sessionInList(await tmux(["list-sessions", "-F", "#{session_name}"]), id); }
     catch { return true; }                      // 목록도 못 봤다 → 종전 판정 유지(#1791 무회귀)
