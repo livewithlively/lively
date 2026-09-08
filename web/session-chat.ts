@@ -968,6 +968,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     queued: '전달 대기 중 — AI 입력창이 뜨면 들어갑니다',
     sending: '전달하는 중…',
   };
+  /** #3689 — 이만큼 **연속으로** 못 닿고 있으면 «복원이 필요할 수 있어요 — 이어서 열기» 를 낸다. 노드 재기동·허브 재접속 창(초~1분)은 지나고,
+   *  사람이 «응답이 없다» 로 겪기 시작하는 자리. 서버 큐는 그대로 24시간(UNREACHABLE_TTL) 들고 있는다 — 여기서 주는 건 선택지다. */
+  const UNREACHABLE_SUGGEST_MS = 3 * 60_000;
   function paintQState(pd: Pending, row: { status: string; last_error: string | null; created_at: string } | null): void {
     if (!row) { pd.state.textContent = ''; return; }              // 큐에서 사라짐(delivered/sent) — 에코가 곧 마감한다
     if (row.status === 'failed') {
@@ -995,6 +998,18 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     // 대기 중인데 **입력창이 문제가 아닌** 두 경우(#2154 ②) — 사실대로 말한다. 종전 문구('입력창이 뜨면 들어갑니다')는
     //  닿지도 못하는 상태에서 사람을 엉뚱한 곳(터미널 로그인)으로 보낸다.
     if (row.status === 'queued' && row.last_error === 'unreachable') {
+      //  #3689 — 오래 못 닿고 있다: 서버는 이 세션이 desired-state 에 있고 tmux 확답을 못 받는 상태임을 안다(stalled_since).
+      //   «닿는 대로 들어갑니다» 를 24시간 들고 있지 않고, 사람에게 «이어서 열기» 를 준다. 확답 규율(#835)은 그대로 —
+      //   서버가 «아직 살아 있다(모름)» 고 답하면(already) 그 말을 그대로 전한다(복원됐다고 꾸미지 않는다).
+      const since = Date.parse((row as any).stalled_since || row.created_at);
+      const stalledMs = Number.isFinite(since) ? Date.now() - since : 0;
+      if (stalledMs >= UNREACHABLE_SUGGEST_MS) {
+        const mins = Math.max(1, Math.floor(stalledMs / 60_000));
+        const btn = el('button', { class: 'btn-text dt-qact', type: 'button', text: '이어서 열기', onclick: () => { void restoreUnreachable(btn); } }) as HTMLButtonElement;
+        pd.state.replaceChildren(
+          el('span', { text: `전달 대기 중 — 세션이 있는 컴퓨터에 ${mins}분째 못 닿고 있어요. 이 세션은 복원이 필요할 수 있어요. ` }), btn);
+        return;
+      }
       pd.state.textContent = '전달 대기 중 — 세션이 있는 컴퓨터에 지금 못 닿아요. 닿는 대로 들어갑니다';
       return;
     }
@@ -1024,6 +1039,27 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     autoTermOpened = true;
     setMode('term');
     view.setNote('세션이 입력을 못 받고 있어 터미널을 열었어요 — 로그인 등 필요한 단계를 여기서 끝내면 대기 중인 지시가 이어서 들어갑니다.');
+  }
+  /** #3689 — 오래 못 닿는 세션을 사람이 되살린다. 복원은 새 id 로 새 노드에 앉히고 대기 중인 지시(큐)를 승계한다(routes.ts). */
+  async function restoreUnreachable(btn: HTMLButtonElement): Promise<void> {
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = '여는 중…';
+    try {
+      const r: any = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/restore`, { method: 'POST', body: '{}' });
+      if (r?.session) rememberCreated(r.session);
+      const next = String(r?.session?.id || r?.movedTo || '');
+      if (next && next !== target.id) {
+        toast('이어받기 세션을 열었어요 — 대기 중이던 지시는 그 세션으로 넘어갑니다.');
+        if (opts.onResumed) opts.onResumed(next); else location.hash = '#/s/' + encodeURIComponent(next);
+        return;
+      }
+      //  already — 서버가 이 세션을 «아직 살아 있다(못 닿을 뿐)» 로 본다. 못 닿는 것과 끝난 것은 다르다 — 사실대로 말한다.
+      toast(r?.already ? '서버가 이 세션을 아직 살아 있다고 봐요(못 닿는 것과 끝난 것은 달라요). 잠시 뒤 다시 눌러 주세요.' : '지금은 복원할 수 있는 상태가 아니에요.');
+    } catch (e: any) {
+      toast(e?.message || '이어서 열지 못했어요.');
+    } finally {
+      btn.disabled = false; btn.textContent = orig;
+    }
   }
   async function outboxAct(pd: Pending, act: 'retry' | 'discard'): Promise<void> {
     if (!pd.obId) return;
