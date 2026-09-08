@@ -19,6 +19,8 @@ const srcOf = (rel: string): string =>
   readFileSync(new URL(rel, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 const PROFILES = srcOf("./profiles.ts");
 const ROUTES = srcOf("./routes.ts");
+const RUN = srcOf("./ai-login-run.ts");   // #3668 T3 — 하네스 자리(세션 컨테이너)를 러너와 프로브가 공유한다
+const INDEX = srcOf("../index.ts");      // #3668 T3 — 그 자리를 잇는 배선(게이트웨이 능력 등록)
 //  #1631 — «폴링은 싸게, 결정 지점은 정확하게» 를 지키려면 그 두 자리가 있는 파일도 봐야 한다.
 const WELCOME = readFileSync(
   new URL("../capabilities/delivery/welcome.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
@@ -90,7 +92,7 @@ t("⑥ 프로브는 **뜨거운 경로에 없다** — /welcome 폴링이 매번
   assert.notEqual(from, -1, "폴링이 부르는 함수가 사라졌다");
   const nextExport = PROFILES.indexOf("\nexport ", from + 10);
   const body = PROFILES.slice(from, nextExport === -1 ? undefined : nextExport);
-  assert.doesNotMatch(body, /HARNESS_PROBE|aiLoginCheck|runAtMemberSeat/,
+  assert.doesNotMatch(body, /HARNESS_PROBE|aiLoginCheck|runAtSeat/,
     "폴링이 읽는 판정에 프로브가 섞였다 — 온보딩 조회마다 네트워크 왕복이 붙는다");
   //  그리고 **폴링 자리 자신**도 싼 쪽을 불러야 한다 — 함수가 싸도 호출자가 비싼 형제를 부르면 같은 사고다.
   //  ⚠ **주석은 빼고** 본다 — 이 자리엔 «왜 싼 쪽을 쓰는가» 를 설명하려고 비싼 쪽 이름이 글로 등장한다.
@@ -114,15 +116,59 @@ t("⑥b 결정 지점(리브 킥오프)은 **정확한** 사실을 쓴다 — �
   assert.match(kick, /aiHarnesses: usable/, "1턴 프롬프트가 게이트와 다른 사실을 본다");
 });
 
-t("⑦b ★설치는 **게이트웨이 자신**에서 잰다 — 멤버 자리(tmux 컨테이너)는 이미지가 다를 수 있다", () => {
-  // 2026-08-27 라이브 실측: 중계는 늘 tmux 컨테이너로 exec 하는데(member-exec-relay `/containers/…-tmux/exec`)
-  //  하네스가 도는 곳은 멤버 세션 컨테이너다. 같은 테넌트에서 tmux=c36(agy 없음) / 세션=c48(agy 있음) →
-  //  화면이 «이 자리엔 Gemini 가 없어요» 라고 거짓말했다. 새 세션엔 실제로 있었다.
+t("⑦b ★설치는 **새 세션이 뜰 자리**에서 잰다 — 게이트웨이 자신은 매니지드에서 하네스를 하나도 안 갖는다 (#3668 T3)", () => {
+  // 두 자리 다 틀렸던 적이 있다:
+  //  · 파일 op 자리(옛 tmux 컨테이너) — 2026-08-27 라이브 실측: tmux=c36(agy 없음)/세션=c48(agy 있음) →
+  //    화면이 «이 자리엔 Gemini 가 없어요» 라고 거짓말했다. 새 세션엔 실제로 있었다.
+  //  · 게이트웨이 자신 — 그 뒤 이 자리로 옮겼고 근거는 «게이트웨이는 롤마다 테넌트 이미지와 같은 태그로 뜬다» 였다.
+  //    #2454(이미지 역할 분할)가 그 전제를 없앴고 #3630 2단계(게이트웨이를 gVisor 밖 호스트 프로세스로)가 확정적으로
+  //    깼다 — 실측 2026-09-08(lvly-box): gw 이미지 rootfs `/usr/local/bin` = corepack·node·npm·npx·yarn 뿐이고
+  //    agy·claude·codex·grok 은 하나도 없다. 그대로 두면 매니지드 온보딩이 **전원에게** 거짓 «미설치» 를 말한다.
+  //  ⇒ 대리값을 또 고르는 대신 **실물**(그 사람의 세션 컨테이너)을 본다.
   const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"));
-  assert.match(fn, /out\.installed = await runAtMemberSeat\(null,/,
-    "설치를 멤버 자리에서 재고 있다 — tmux 컨테이너가 스테일하면 거짓 '미설치' 가 된다");
-  // 반대로 자격은 멤버 자리가 맞다(홈이 볼륨) — 그쪽까지 게이트웨이로 옮기면 남의 자격을 보게 된다.
+  assert.match(fn, /out\.installed = await runAtSeat\(seat,/,
+    "설치를 세션 자리(seat)에서 재지 않는다 — 게이트웨이 이미지엔 하네스가 없어 매니지드 전원이 거짓 '미설치' 가 된다");
+  // 반대로 자격은 그 사람 자리가 맞다(홈이 볼륨) — 게이트웨이로 옮기면 남의 자격을 보게 된다.
   assert.match(fn, /aiAccountStatus\(user, osSt\)/, "자격 판정이 멤버 축(aiAccountStatus)을 안 쓴다");
+});
+
+t("★T3 하네스 바이너리는 **파일 op 자리에서 안 돈다** — 그 자리는 gVisor 를 걷고 CP 박스 상주 헬퍼로 내려간다 (#3668)", () => {
+  //  T2 가 세운 판별 기준(«누가 코드를 정하나»)으로 `agy models` 는 명백히 프로그램 실행이다. 파일 op 자리에 남겨 두면
+  //  T3 가 그 자리의 샌드박스를 걷는 순간, 우리가 안 쓴 코드가 CP 박스에서 맨몸으로 돈다.
+  const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"), PROFILES.indexOf("async function releaseSeat"));
+  assert.doesNotMatch(fn, /runAtSeat\(osUser,/,
+    "프로브가 파일 op 자리(멤버 경계)를 못 박고 있다");
+  assert.match(fn, /const probeAt: ExecAt \| null = seat \?\? osUser;/,
+    "프로브 자리가 «세션 자리 우선, 없으면 종전» 이 아니다");
+  //  자리는 로그인 러너와 **같아야** 한다 — 갈리면 로그인은 세션 컨테이너에서 됐는데 판정은 다른 자리를 봐서 영영 «미로그인».
+  assert.match(RUN, /export async function ensureHarnessSeat/, "러너의 자리가 공유 가능하게 열려 있지 않다");
+  assert.match(RUN, /const sid = await ensureHarnessSeat\(user, h\);/, "러너가 그 공유 자리를 안 쓴다");
+  //  ⚠ 배선은 **게이트웨이 능력**을 지난다(#2165) — profiles 가 ai-login-run 을 직접 물면 노드 에이전트 번들에
+  //   로그인 러너·세션 생성이 통째로 실린다(esbuild 는 outfile 하나면 `await import()` 도 인라인한다).
+  assert.match(PROFILES, /gatewayCapability\("harnessSeat"\)/, "판정이 러너 자리를 능력 이음매로 안 받는다");
+  assert.doesNotMatch(PROFILES, /import\("\.\/ai-login-run\.js"\)/,
+    "profiles 가 로그인 러너를 직접 문다 — 노드 에이전트 번들에 세션 생성이 실린다(#2165)");
+  assert.match(INDEX, /harnessSeat: \{ ensure: ensureHarnessSeat, drop: dropProbeSeat \}/,
+    "게이트웨이가 그 능력을 등록하지 않는다 — 판정이 조용히 '자리 없음' 으로 접혀 매니지드 전원이 거짓 '미설치' 가 된다");
+});
+
+t("★T3 매니지드에서 자리를 못 얻으면 **모름**이다 — 게이트웨이 자리로 접으면 거짓 '미설치' 가 된다 (#3668)", () => {
+  const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"));
+  assert.match(fn, /try \{ seat = await harnessSeat\(user, h\.key, osUser\); \} catch \{ return out; \}/,
+    "자리 확보 실패를 모름(installed=null)으로 접지 않는다");
+  const seatFn = PROFILES.slice(PROFILES.indexOf("async function harnessSeat"), PROFILES.indexOf("// `sh -c` 한 줄을"));
+  assert.match(seatFn, /if \(!sessionExecConfigured\(\)\) return null;/,
+    "셀프호스트(세션 경계 중계 없음)에서 종전 자리로 안 떨어진다 — 거기엔 세션 컨테이너가 없다");
+});
+
+t("★T3 프로브 자리는 판정이 끝나면 놓는다 — 단, 로그인 러너가 도는 자리는 건드리지 않는다 (#3668)", () => {
+  assert.match(PROFILES, /if \(out\.loggedIn === true\) await releaseSeat\(user, h\.key\);/,
+    "이어진 뒤에도 자리를 쥐고 있다 — 온보딩 클릭마다 세션 컨테이너가 하나씩 남는다");
+  assert.match(PROFILES, /\{ await releaseSeat\(user, h\.key\); return out; \}/,
+    "미설치·모름으로 끝날 때 자리를 안 놓는다");
+  const drop = RUN.slice(RUN.indexOf("export async function dropProbeSeat"));
+  assert.match(drop.slice(0, 220), /if \(isAiLoginHarness\(key\)\) return;/,
+    "로그인 러너가 쓰는 하네스의 자리까지 치운다 — 사람이 브라우저에서 승인하는 도중에 러너가 죽는다");
 });
 
 t("★ 매니지드 중계 배포(LIVELY_MEMBER_EXEC)에서도 자격 판정은 멤버 홈이다 — 게이트웨이 자기 홈을 보면 늘 «미로그인» (#2232)", () => {
@@ -136,31 +182,31 @@ t("⑦c 프로브를 못 돌리는 자리면 '미로그인' 이 아니라 '모�
   // 프로브는 그 사람 자격(HOME)을 봐야 해서 멤버 자리에서 돌아야 하는데, 그 자리에 바이너리가 없을 수 있다.
   //  그 실패를 false 로 접으면 **로그인한 사람에게** «아직 로그인이 안 보여요» 라고 한다.
   const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"));
-  assert.match(fn, /if \(await runAtMemberSeat\(osUser, `command -v[\s\S]{0,120}out\.loggedIn = null;/,
+  assert.match(fn, /if \(await runAtSeat\(probeAt, `command -v[\s\S]{0,120}out\.loggedIn = null;/,
     "프로브 자리에 바이너리가 없을 때를 모름(null)으로 접지 않는다");
 });
 
 t("⑦ 설치가 아니면 로그인을 묻지 않는다 — 없는 CLI 의 답은 늘 '미로그인' 이라 사람을 오도한다", () => {
   const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"));
-  assert.match(fn, /out\.installed = await runAtMemberSeat[\s\S]{0,200}if \(out\.installed !== true\) return out;/,
+  assert.match(fn, /out\.installed = await runAtSeat[\s\S]{0,200}if \(out\.installed !== true\) \{ await releaseSeat/,
     "설치 확인 뒤 곧바로 빠져나가지 않는다 — 미설치를 미로그인으로 옮겨 적게 된다");
 });
 
-t("⑧ 격리에서 프로브는 HOME 을 **명시**한다 — 중계 exec 에는 그 유저의 passwd 항목이 없다", () => {
-  assert.match(PROFILES, /memberSh\(osUser, `HOME="\$\{MEMBER_HOME_BASE\}\/\$\{osUser\}" \$\{cmd\}`\)/,
+t("⑧ 경계로 나갈 때 프로브는 HOME 을 **명시**한다 — 중계 exec 에는 그 유저의 passwd 항목이 없다", () => {
+  assert.match(PROFILES, /memberSh\(at, `HOME="\$\{MEMBER_HOME_BASE\}\/\$\{osUser\}" \$\{cmd\}`\)/,
     "HOME 을 안 넘긴다 — agy 는 자격을 HOME 기준으로 찾으므로 판정이 통째로 뒤집힌다");
 });
 
 t("⑨ 프로브는 stdin 을 닫는다 — 안 닫으면 agy 가 영원히 멈춰 제미나이 전원이 '모름' 이 된다", () => {
   // 실측(2026-08-26, 프리뷰 라이브): execFile 이 준 stdin 파이프는 EOF 가 안 와서 `agy models` 가 25초 상한까지
   //  매달렸다(→ null). `< /dev/null` 이면 3.1초 exit 0. 셸에서 손으로 치면 TTY 라 멀쩡해서 **서버에서만** 고장난다.
-  const fn = PROFILES.slice(PROFILES.indexOf("async function runAtMemberSeat"), PROFILES.indexOf("export async function aiLoginCheck"));
+  const fn = PROFILES.slice(PROFILES.indexOf("async function runAtSeat"), PROFILES.indexOf("export async function aiLoginCheck"));
   assert.match(fn, /const cmd = `\$\{line\} < \/dev\/null`;/, "stdin 을 닫지 않는다");
   assert.doesNotMatch(fn, /execFileAsync\("sh", \["-c", line\]/, "닫지 않은 원본 line 을 그대로 돌리고 있다");
 });
 
 t("⑨b 모름(null)을 미로그인으로 접지 않는다", () => {
-  const fn = PROFILES.slice(PROFILES.indexOf("async function runAtMemberSeat"), PROFILES.indexOf("export async function aiLoginCheck"));
+  const fn = PROFILES.slice(PROFILES.indexOf("async function runAtSeat"), PROFILES.indexOf("export async function aiLoginCheck"));
   assert.match(fn, /return null;\s*\/\/ 게이트웨이가 윈도우면/, "확인 불가를 false 로 접고 있다");
   assert.match(fn, /Promise\.race\(\[run, timer\]\)/, "상한이 없다 — 프로브가 매달리면 요청이 함께 매달린다");
 });
@@ -209,9 +255,10 @@ t("⑫ 화면이 CLI 이름을 박아 두지 않는다 — 하네스 표가 바�
   assert.match(ONBOARDING, /c\.bin/, "실행 파일 이름을 서버 답에서 읽지 않는다");
 });
 
-t("★ 프로브형(antigravity)도 중계 배포에선 멤버 자리에서 돈다 — 게이트웨이 자리에서 돌면 늘 «미로그인» (#2232)", () => {
+t("★ 프로브형(antigravity)도 중계 배포에선 **그 사람 자리**에서 돈다 — 게이트웨이 자리에서 돌면 늘 «미로그인» (#2232)", () => {
   const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"), PROFILES.indexOf("async function memberFileExists"));
   assert.match(fn, /const osUser = \(osSt\.ready && osSt\.provisioned\) \|\| memberExecConfigured\(\) \? osSt\.osUser : null/, "중계 배포에서 프로브 자리가 게이트웨이다");
+  //  #3668 T3 — 그 «자리» 는 이제 세션 컨테이너다(위 ★T3). osUser 는 그 자리의 uid·HOME 을 정하는 재료로 남는다.
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

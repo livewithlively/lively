@@ -101,8 +101,10 @@ console.log(`[boot] ${installTenantBinding()}`);
   const { SEED_HARNESSES } = await import("./terminal/member-kit-seed.js");
   const { mintAppToken } = await import("./apps/principal.js");
   const { materializeAppAssets } = await import("./apps/session-assets-gateway.js");
+  const { ensureHarnessSeat, dropProbeSeat } = await import("./terminal/ai-login-run.js");   // #3668 T3
   registerGatewayCapabilities({ materializeMemberGit, resolveGitSecret, leaseGitSecretForNode,
     mintAppToken, materializeAppAssets: materializeAppAssets as never,
+    harnessSeat: { ensure: ensureHarnessSeat, drop: dropProbeSeat },
     kitSeedDeps: { getMember, buildBundle: async () => (await buildInstallBundle(SEED_HARNESSES)).buffer } });
 }
 
