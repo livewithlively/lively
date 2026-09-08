@@ -8,6 +8,7 @@ import type { Readable, Writable } from "node:stream";
 import { memberExecConfigured, wrapAsMember } from "./terminal-isolation.js";
 import { tenantSlug } from "./catalog.js";
 import { execTopology } from "../exec-topology.js";   // #2599 T2 — 중계 설정의 단일 출처
+import { PROBE_JS, type PathProbe } from "./path-jail.js";   // #3668 T1 — 경로 해소 한 줄(판정은 path-jail.confined)
 
 // node one-liner(멤버 PATH 의 node 로 실행). argv[1]=대상 절대경로. 셸 미경유(argv) — 인젝션 없음.
 // 심링크(#1744): dirent 의 isDirectory() 는 링크에 대해 **항상 false** 라, 폴더를 가리키는 링크가 '파일'로 나왔다
@@ -145,6 +146,23 @@ export function memberStat(osUser: string, absPath: string): Promise<{ size: num
     c.on("close", (code) => {
       if (code !== 0) return reject(new Error(err.get() || `member stat exit ${code}`));
       try { resolve(JSON.parse(out || "null")); } catch (e) { reject(e as Error); }
+    });
+  });
+}
+
+// 멤버 uid 로 **경로를 해소**한다(#3668 T1) — 봉쇄 판정의 재료. 게이트웨이가 realpath 를 부르면 안 되는 이유는
+//  path-jail.ts 머리말 참조(격리 홈은 못 읽고, 매니지드 게이트웨이엔 그 경로가 아예 없다).
+//  ⚠ 이 한 줄(PROBE_JS)과 로컬 probeLocal 은 **같은 사양**이다 — 한쪽만 고치면 격리 조직에서만 옛 동작이 남는다.
+export function memberPathProbe(osUser: string, base: string, target: string): Promise<PathProbe> {
+  return new Promise((resolve, reject) => {
+    const c = memberSpawn(osUser, ["node", "-e", PROBE_JS, base, target], ["ignore", "pipe", "pipe"]);
+    const err = collectErr(c);
+    let out = "";
+    c.stdout?.on("data", (d) => (out += d));
+    c.on("error", reject);
+    c.on("close", (code) => {
+      if (code !== 0) return reject(new Error(err.get() || `member realpath exit ${code}`));
+      try { resolve(JSON.parse(out || "null") as PathProbe); } catch (e) { reject(e as Error); }
     });
   });
 }
