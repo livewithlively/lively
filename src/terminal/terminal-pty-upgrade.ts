@@ -13,11 +13,15 @@ import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer } from "ws";
 import { logger } from "../log.js";
 import { resolveTenantFromHeaders, withTenant, type TenantContext } from "../org/tenant-context.js";
+import { registryModeActive } from "../org/tenancy/state.js";   // #2599 T3 — 테넌시 축 술어의 정본(인라인 재구현 금지)
 import { attachWorkerHost } from "./attach-worker-host.js";
 import { canAttach, sessionGone, ensureSessionOpts } from "./terminal-sessions.js";
-import { nodeCanAttach, nodeRelayAttach } from "../node/registry.js";
-import { attachSession, reapOrphanAttachClients, attachClose,
+import { nodeCanAttach, nodeRelayAttach, isSelfNode } from "../node/registry.js";
+import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다
+import { reapOrphanAttachClients, attachClose,
   type AttachSocket, type TicketLookup } from "./terminal-pty.js";
+import { clientFingerprint } from "./attach-client-id.js";   // #3521 — 「누가 붙나」 귀속 축
+import { SessionHost } from "./session-host.js";
 
 const HEARTBEAT_MS = 30_000;              // 이 주기로 ping — 직전 주기에 pong 이 없던 소켓은 죽은 것으로 보고 terminate.
 type LiveWS = WebSocket & { isAlive?: boolean };
@@ -41,10 +45,18 @@ export function startHeartbeat(): void {   // #2165 — 업그레이드 핸들�
 //  이 서버는 업그레이드 핸들러만 쓴다(noServer — 소켓을 직접 넘겨받는다).
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 
-//  브라우저 WebSocket 을 attach 본체(양쪽 공용)에 넘기는 얇은 어댑터.
-function attach(ws: WebSocket, id: string): void {
-  attachSession(ws as unknown as AttachSocket, id);
-}
+// 게이트웨이 인프로세스 attach 의 세션 호스트 (#2600 T1).
+//
+//  ★ 왜 이 자리도 세션 호스트를 쓰나: 폴백으로 여기 붙은 세션의 «마지막 소켓» 을 **라우터에 알려 줘야**
+//   하기 때문이다. 그게 없으면 그 세션이 비어도 게이트웨이 소유가 안 풀려 영영 워커로 못 간다.
+//   그리고 이제 attach 를 소유하는 **세 자리가 모두 같은 모듈**을 쓴다(워커 fd · 노드 WS 중계 · 여기).
+//
+//  ⚠ `onIdle` 을 주지 않는다 — 게이트웨이는 상주 프로세스다. 세션 호스트는 콜백이 없으면 유휴 종료를
+//   아예 안 건다(그 규약이 여기서 게이트웨이를 지킨다). `shutdown()` 도 안 건다: 게이트웨이의 PTY 회수는
+//   index.ts 의 시그널 핸들러가 이미 `killAttachedPtys` 로 맡고 있어, 여기서 또 부르면 두 벌이 된다.
+const gatewayHost = new SessionHost({
+  onSessionEmpty: (id) => attachWorkerHost.releaseSession(id),
+});
 
 export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): void {
   startHeartbeat();                     // 죽은 attach 소켓 주기 회수(#687)
@@ -64,7 +76,7 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
     //  이게 없으면 secondary 세션 attach 가 primary 컨텍스트로 돌아 기본 tmux 소켓을 뒤지고 4410(가짜
     //  '세션 없음')이 된다 — 세션은 lvly-<slug> 소켓에 살아 있는데.
     const registrySessionCtx = async (): Promise<{ id: string; slug: string } | null> => {
-      if (tr.ok || (process.env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() !== "registry") return null;
+      if (tr.ok || !registryModeActive()) return null;
       const sid = url.searchParams.get("session") || "";
       if (!sid) return null;
       const { workspaceForSession } = await import("../org/tenancy/registry.js");
@@ -80,7 +92,11 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
       const id = url.searchParams.get("session") || "";
       // 노드 세션(#869) — ?node=<id> 면 그 노드의 아웃바운드 채널로 릴레이한다. 정책(가시성)은 여기(게이트웨이)서
       //  판정하고 노드는 기계적으로 attach 만 실행(F7). 거부 사유는 로컬과 같은 코드 체계(4410/4403)+4462(노드 오프라인).
-      const nodeId = url.searchParams.get("node") || "";
+      //  ⚠ #2592 — 셀프 노드 좌표(`?node=<게이트웨이 자신>`)는 여기서 **버린다**. 남겨 두면 같은 tmux 를 노드 WS 로
+      //   한 바퀴 돌아 attach 하게 되는데(노드 데몬이 `tmux -CC attach` 로 서빙), 그 한 바퀴가 부팅 직후 4462 거부와
+      //   3초 스냅샷 지연을 만든다. 좌표를 접으면 아래 중앙 경로로 그대로 흘러 같은 세션에 즉답으로 붙는다.
+      //   (구 화면·열려 있던 탭이 옛 좌표를 들고 다시 붙어도 이 자리에서 정정된다.)
+      const nodeId = relayNodeId(url.searchParams.get("node"), isSelfNode);
       if (nodeId) {
         const verdict = await nodeCanAttach(nodeId, id, tk.userId);
         wss.handleUpgrade(req, socket, head, (ws) => {
@@ -93,7 +109,14 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
         });
         return;
       }
-      const ok = await canAttach(id, tk.userId).catch(() => false);
+      // ★ 두 판정을 **나란히** 묻는다(2026-09-08 실측·#3656). 매니지드에서 canAttach 는 DB 지만 sessionGone 은
+      //  중계(허브 → 노드 브로커 → runsc exec) 한 왕복이고, 그 왕복은 4% 확률로 3~20초를 먹는다(허브 파킹 소켓
+      //  무응답). 종전엔 이 둘이 직렬이라 그 확률에 두 번 노출됐다. 둘은 서로의 답을 안 본다(attachClose 가 둘을
+      //  같이 받는다) — 직렬일 이유가 없었다.
+      const [ok, gone] = await Promise.all([
+        canAttach(id, tk.userId).catch(() => false),
+        sessionGone(id).catch(() => false),
+      ]);
       // ⚠ 권한이 있어도 **세션이 살아 있는지 따로 봐야 한다**(2026-08-26 실측 신고).
       //  canAttach → ownerMeta 는 **DB desired-state 우선**이라(sessions.ts) tmux 에서 이미 죽은 세션도
       //  권한을 통과시킨다. 그래서 종전엔 `!ok` 일 때만 생사를 확인했고, 죽은 세션에 붙으러 온 클라는
@@ -102,7 +125,6 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
       //  4410 을 주면 클라가 그 자리에서 복원으로 넘어간다(onSessionGone) — 그게 의도한 경험이다.
       //  비용은 attach 당 has-session 1회다. 살아 있는 세션엔 즉답이고, 죽은 세션엔 재연결 폭풍을 멈추므로
       //  오히려 왕복이 준다. 판정 불가(#835)는 여전히 false — 모르면 살아있다고 보고 종전 경로로 간다.
-      const gone = await sessionGone(id).catch(() => false);
       const close = attachClose(ok, gone);
       if (close) {
         // 거부를 조용히 끊으면(socket.destroy) 클라가 영원히 재연결한다 → WS 핸드셰이크만 완료한 뒤 '이유가 담긴 코드'로
@@ -110,24 +132,40 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
         //   4410 session-gone — tmux 가 '그런 세션 없다'고 확답 → 세션이 진짜 끝남 → 클라는 재연결을 멈추고 '종료됨'을 명시.
         //   4403 no-access    — 권한 없음, 또는 판정 불가(tmux 과부하·타임아웃 = #687 의 '가짜 4403') → 클라는 몇 번 더 재시도.
         //  판정 불가를 gone 으로 넘기지 않는 게 핵심 — 살아있는 세션을 '종료됨'으로 오인하는 건 재연결 반복보다 나쁘다.
-        logger.info({ id, userId: tk.userId, ok, gone }, gone ? "ws attach 거부(세션이 종료됨)" : "ws attach 거부(접근권 없음 또는 세션-프로젝트 불일치)");
+        logger.info({ id, userId: tk.userId, ok, gone, tenant: (tr.ok ? tr.tenant.slug : regCtx?.slug) ?? "", ...clientFingerprint(req) }, gone ? "ws attach 거부(세션이 종료됨)" : "ws attach 거부(접근권 없음 또는 세션-프로젝트 불일치)");
         wss.handleUpgrade(req, socket, head, (ws) => {
           try { ws.close(close.code, close.reason); } catch { /* noop */ }
         });
         return;
       }
-      await ensureSessionOpts(id).catch(() => { /* 비치명 */ });
+      // ★ 옵션 보장은 **기다리지 않는다**(2026-09-08, #3656). 이 셋(mouse·aggressive-resize·window-size)은 생성 때
+      //  이미 박힌 값이고 여기는 옛 세션 마이그레이션·누락 방어일 뿐인데, 매니지드에선 set-option 하나가 중계
+      //  왕복 하나라 attach 앞에 **직렬로 셋**이 섰다(실측: 세션은 4초 만에 떴는데 화면은 36초 뒤에 붙었다 —
+      //  attach 앞 왕복 6~8회가 그 자리다). tmux 는 명령을 직렬화하므로 attach 뒤에 도착해도 같은 효과다(비치명).
+      void ensureSessionOpts(id).catch(() => { /* 비치명 */ });
       // ── C안(#2228): 인증·canAttach 가 끝난 여기서 소켓 fd 를 attach 워커로 넘긴다. 넘어가면 바이트가
       //  게이트웨이 이벤트루프를 아예 안 지난다. 워커가 판정(테넌시)을 다시 하지 않도록 여기서 정한 테넌트
       //  컨텍스트를 실어 보낸다(워커의 tmuxExecArgv 가 그 컨텍스트로 로컬 tmux/registry/-L/매니지드 중계를 고른다).
       //  ★ fail-open: handoff 가 false(비활성·상한·포크/핸드오프 실패)면 아래 게이트웨이 내부 attach 로 폴백 —
       //   최악의 경우라도 «오늘 동작»이지 attach 가 깨지지 않는다(매니지드 공유 게이트웨이 blast radius 대응).
       const tenantForWorker: TenantContext | null = tr.ok ? tr.tenant : (regCtx ?? null);
+      // ★ 허가된 attach 를 **남긴다** (#2625 T0). 종전엔 거부만 로그가 있고 성공은 한 줄도 없었다 —
+      //  그래서 «아무도 안 쓰는 세션에 3분마다 클라이언트가 하나씩 붙는다» 를 관측하고도 **누가 붙는지
+      //  물어볼 자리가 없었다**(20분을 봐도 로그가 0줄이다). 빈도는 탭 열기·재연결 단위라 낮다.
+      //  ua 는 자동 재연결(브라우저)과 다른 것을 가르는 최소 축이다 — 토큰은 싣지 않는다.
+      //
+      //  ★ #3521 — `ua` 하나로는 «브라우저가 아니다» 까지밖에 못 간다(실측: 한 세션에 14회, 6~8초 간격,
+      //   `ua` 전부 빈 문자열). 체인이 UA 를 지우지 않는 것도 확인했으므로 그 판정 자체는 옳지만,
+      //   **무엇인지**는 코어·클라우드 어느 레포에도 그런 클라이언트가 없어 코드로 답이 안 나온다.
+      //   그래서 지문(원격 주소·XFF·Origin·헤더 이름 순서·쿠키 이름)을 함께 남긴다 — 값은 싣지 않는다.
+      const via = attachWorkerHost.enabled() ? "worker" : "gateway";
+      logger.info({ id, userId: tk.userId, via, tenant: tenantForWorker?.slug ?? "", ...clientFingerprint(req) }, "ws attach 허가");
       if (attachWorkerHost.enabled()) {
         const handed = await attachWorkerHost.handoff({ req, socket, head, id, tenant: tenantForWorker });
         if (handed) return; // 워커가 소켓을 소유 — 게이트웨이는 이 연결에서 손을 뗀다
       }
-      wss.handleUpgrade(req, socket, head, (ws) => inTenant(() => attach(ws, id)));
+      wss.handleUpgrade(req, socket, head, (ws) =>
+        gatewayHost.attach(ws as unknown as AttachSocket, id, inTenant));
       })());
     })();
   });

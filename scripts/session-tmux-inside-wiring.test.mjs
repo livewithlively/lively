@@ -24,16 +24,34 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   const branch = blk.indexOf("if (inside) {");
   ok(branch > sw, "①-b 새 경로 분기(if (inside))가 있다");
   const elseWrap = blk.indexOf("wrapAsMember(", branch);
-  ok(elseWrap > branch, "①-c 옛 경로(wrapAsMember)는 그 분기의 else 로 남는다 — 순수 추가");
+  ok(elseWrap > branch, "①-c 셀프호스트 경로(wrapAsMember)는 그 분기의 else 로 남는다 — 매니지드의 옛 경로가 아니라 ensure 훅 없는 배포의 것(#2547)");
   // ── 순서: DB 행 → 컨테이너 → 판 명령(box-spawn) → new-session ──
   const up = blk.indexOf("upsertSessionState(", branch);
   const ens = blk.indexOf("ensureSessionContainerViaRelay(", branch);
   const pane = blk.indexOf("sessionPaneArgv(", branch);
-  const ns = blk.indexOf("await tmux(args)", branch);
+  //  ⚠ 앵커는 **패턴**이다 — 이 호출의 «이름»은 이미 한 번 바뀌었다(#3537 이 왕복을 줄이며
+  //   `tmux(args)` → `tmuxBatch(openPane)`). 이 시험이 지키려는 것은 이름이 아니라 **순서**이므로,
+  //   판을 여는 dispatch 를 이름에 안 묶고 잡는다(그러지 않으면 호출을 고칠 때마다 -1 로 조용히 통과·실패한다).
+  const nsHit = /await tmux\w*\(\s*(?:args|openPane)\s*\)/.exec(blk.slice(branch));
+  const ns = nsHit ? branch + nsHit.index : -1;
+  ok(ns > 0, "②-d0 판을 여는 tmux dispatch 를 찾았다 — 못 찾으면 아래 순서 단언이 무의미하다");
   ok(up > branch && up < elseWrap, "②-a 새 경로는 DB desired 행을 **먼저** 쓴다(장부가 처음부터 wanted 로 본다)");
   ok(ens > up && ens < elseWrap, "②-b 그 다음 브로커에 컨테이너를 확보한다(ensure 훅)");
   ok(pane > ens && pane < elseWrap, "②-c 판 명령은 box-spawn(sessionPaneArgv) — sudo·session-spawn 없음");
   ok(ns > pane, "②-d tmux new-session 은 컨테이너가 있은 뒤에야 나간다(닭과 달걀 해소)");
+  //  ⚠⚠ #3739 — 판 **앞**에 서는 전역 옵션(`set-option -g default-terminal`)은 **비치명**이어야 한다.
+  //   매니지드에선 세션마다 tmux 서버가 자기 컨테이너 안에 따로 있어 «서버 전역» 이 갈 곳이 없고, 브로커가
+  //   설계대로 absent 로 답한다(`can't find session: ? (session container (없음) is gone)`).
+  //   그 실패를 던지면 **새 세션이 한 건도 안 열린다** — #3537 이 이 호출을 `tmuxQuiet` 에서 `tmuxBatch`
+  //   (던진다)로 옮겨 실제로 그랬다(2026-09-08 매니지드 롤 뒤 전량 실패, `POST …/terminal/sessions` 로 재현).
+  //   ⚠ 앵커는 두 모양을 **둘 다** 잡는다(홀로 선 argv · 목록에 묶인 argv) — 안 그러면 묶어 놓는 회귀가
+  //    ②-e0 «argv 를 못 찾았다» 로 어긋나 «비치명인가» 라는 진짜 단언이 안 서 본 채 빨간불이 된다.
+  const termDecl = /const (\w+)(?::[^=]+)?=\s*\[\s*\[?\s*"set-option",\s*"-g",\s*"default-terminal"/.exec(blk);
+  ok(termDecl, "②-e0 pane TERM 전역 옵션 argv 를 찾았다 — 못 찾으면 아래 단언이 무의미하다");
+  const termVar = termDecl ? termDecl[1] : "\u0000";
+  const quietHit = new RegExp(`await tmux(?:Quiet|BatchQuiet)\\(\\s*${termVar}\\s*\\)`).exec(blk);
+  ok(quietHit, "②-e 전역 옵션은 **삼키는** 호출로 나간다(매니지드 브로커의 설계된 거절이 세션 생성을 죽이지 않게)");
+  ok(quietHit && quietHit.index < ns, "②-f 그 전역 옵션은 판 명령보다 **먼저** 나간다(새 pane 에만 적용된다)");
   // ── 실패 시 되돌린다 — 행만 남으면 화면에 유령 «중단됨» 이 뜬다 ──
   const rb = blk.slice(ens, ns);
   ok(/deleteSessionState\(id\)/.test(rb), "③-a ensure 실패 시 방금 쓴 desired 행을 지운다");

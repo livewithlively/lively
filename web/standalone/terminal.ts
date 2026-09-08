@@ -2651,6 +2651,20 @@ let sessionEnded = false; // 4410 수신 = 세션 종료 확정 → 재연결 �
 //  40회면 백오프 포함 약 3분이다. 그 뒤엔 멈추고 '다시 시도'를 사람 손에 넘긴다.
 const MAX_RECONNECT_ATTEMPTS = 40;
 let gaveUp = false;
+// ── 「연결이 섰다」 의 증거는 소켓이 열린 것이 아니라 **그 상태로 버틴 것**이다 (#3546) ──────────
+//  종전엔 onopen 에서 attempts·gaveUp·reconnectDelay 를 전부 되돌렸다. 그런데 **세션 컨테이너가
+//   사라진 판에서는 게이트웨이까지는 정상적으로 붙는다** — 붙고 나서 릴레이가 409
+//   (`Container … is not running`)를 내며 죽는다. 그래서 「붙었다 → 예산 초기화 → 죽는다 → 재연결」이
+//   영원히 돌았고, 화면은 그 409 문구로 도배돼 **죽기 직전 로그까지 스크롤백에서 밀려났다**
+//   (2026-09-04 실측: 16분간 멈추지 않았다. 간격 0.4초의 정체는 아래 onExit 의 `reconnectDelay = 400`).
+//  이제 예산은 **버틴 연결만** 되돌린다. 원인이 무엇이든 flap 은 예산을 쓰고, 다 쓰면 사람에게 넘어간다 —
+//   즉 이 결함의 «원인» 이 아니라 «부류» 를 막는다.
+let connProven = false, stableTimer = null;
+const CONN_STABLE_MS = 10_000;
+function markConnProven() {
+  connProven = true;
+  attempts = 0; gaveUp = false; reconnectDelay = 1500;
+}
 function scheduleReconnect(label) {
   clearTimeout(reconnectTimer);
   if (sessionEnded || gaveUp) return;
@@ -2920,11 +2934,18 @@ async function connectNow() {
     // tmux control 스트림의 %exit — 이 attach 클라가 끝났다는 뜻일 뿐, '세션이 죽었다'는 뜻은 아니다
     //  (게이트웨이 재배포로 attach PTY 가 kill 돼도 %exit 이다). 그래서 여기서 종료를 단정하지 않고, 곧바로
     //  재연결해 서버에게 물어본다(살아있으면 그대로 붙고, 진짜 없으면 4410 이 와서 종료 배너). 짧은 지연으로 빠르게 판정.
-    onExit: () => { reconnectDelay = 400; try { sock.close(); } catch (_) { /* noop */ } },
+    //  ⚠ 400ms 빠른 재판정은 **버틴 연결에만** 준다(#3546). 안 그러면 붙자마자 죽는 판에서
+    //   이 값이 매번 400 으로 되돌아가 0.4초 간격 무한 루프가 된다(그게 실제로 났다).
+    onExit: () => { if (connProven) reconnectDelay = 400; try { sock.close(); } catch (_) { /* noop */ } },
   });
   sock.onopen = () => {
     dlog('ws', 'open');
-    connecting = false; wasConnected = true; reconnectDelay = 1500; denyRetries = 0; attempts = 0; gaveUp = false; // 붙었으면 입장 허용 확정 → 거부·포기 카운트 리셋
+    //  denyRetries 만 여기서 되돌린다 — 4403(입장 거부)은 open 전에 갈리므로 «열렸다» 가 곧 반증이다.
+    //  나머지(attempts·gaveUp·reconnectDelay)는 아래 stableTimer 가 «버텼다» 를 확인한 뒤에 되돌린다.
+    connecting = false; wasConnected = true; denyRetries = 0;
+    connProven = false;
+    clearTimeout(stableTimer);
+    stableTimer = setTimeout(markConnProven, CONN_STABLE_MS);
     syncedThisConn = false; // 이 연결에서 재접속 상태동기(t:'st')를 아직 안 보냄
     nudgeTries = 0; needBackfill = !didBackfill; wantRedrawCap = false; // 넛지 상한·백필/재캡처 대기는 '연결 단위'
     lastKnownState = null;  // 백엔드·팬 상태는 이 연결에서 다시 관측한다(옛 연결 사본으로 캡처를 판정하지 않는다)
@@ -2954,6 +2975,7 @@ async function connectNow() {
   sock.onclose = (e) => {
     if (ws !== sock) return; // 교체된 옛 소켓의 close 는 무시
     dlog('ws', 'close ' + ((e && e.code) || ''));
+    clearTimeout(stableTimer);   // 이 연결은 «버팀» 을 증명하지 못했다
     connecting = false;
     if (e && e.code === 4410) { onSessionGone(); return; } // 세션 종료 확정(#835) — 복원 가능하면 되살리고(#1059 E), 아니면 종료 배너
     if (e && e.code === 4403) { // 서버가 입장 거부. 단, 일시장애(재배포 직후 tmux 과부하)로 인한 '가짜 4403'일 수 있어(#687)

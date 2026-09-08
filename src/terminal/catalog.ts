@@ -55,6 +55,21 @@ export function installTenantSlugResolver(fn: TenantSlugResolver): void {
 /** 슬러그는 경로에 들어간다 — 형식을 통과 못 하면 **테넌트 경로를 쓰지 않는다**(폴백이 아니라 무시). */
 const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
+/** 사람에게 보여 줄 형식 설명 — 배선을 고치는 쪽이 규칙을 추측하지 않게(정규식과 한 자리). */
+export const TENANT_SLUG_SHAPE = "소문자·숫자로 시작, 소문자·숫자·하이픈 1~63자";
+
+/**
+ * 이 값이 테넌트 슬러그로 **쓰일 수 있나** (#2600 T2).
+ *
+ * `tenantSlug()` 는 형식을 통과 못 한 값을 «없음»(null)으로 **접는다** — 요청 경로에서는 그게 맞다
+ *  (단일 테넌트로 떨어지는 안전한 기본값). 그런데 **부팅에서 배선을 검사하는 쪽**은 «접혔다»와
+ *  «애초에 없었다»를 구별해야 한다: 접히면 그 프로세스는 슬러그를 실어 줬는데도 테넌트를 모르는
+ *  상태로 살아 있고, 그 사실은 첫 attach 에서야 드러난다. 그래서 같은 자로 재는 술어를 따로 낸다.
+ */
+export function tenantSlugIsWellFormed(s: string): boolean {
+  return SAFE_SLUG.test(s);
+}
+
 /**
  * 지금 이 요청의 테넌트 슬러그(형식 검증 통과분만). 없으면 null = 단일 테넌트.
  *  ⚠ 이 값은 경로·컨테이너 이름에 들어가므로 **여기서 한 번만** 검증한다 — 호출부마다 다시 재면 갈린다.
@@ -73,6 +88,11 @@ function tenantRootBase(): string | null {
   // 셀프호스트 registry(#1750 S3) — 템플릿 미설정이면 홈 아래 기본 자리로 워크스페이스별 파일루트를 가른다.
   //  primary 는 slug 가 없어 여기 안 걸린다(= 종전 경로 그대로, 기존 파일 무회귀). DB 만 갈라지고 파일이
   //  섞이면 파일 탐색기에서 곧바로 남의 파일이 보인다 — 그래서 기본값이 있어야 한다(옵트인이 아니라).
+  //  ⚠ #2599 T3 — 이 술어의 **정본은 `org/tenancy/state.registryModeActive()`** 이고, 다른 인라인
+  //   재구현 3곳은 그 호출로 접었다. 여기만 남긴 이유는 «못 접어서» 가 아니라 **번들 경계** 다:
+  //   catalog 는 노드 에이전트 번들에 실리는데(scripts/node-agent-allowed-modules.json) 정본이 사는
+  //   org/tenancy/state 는 안 실린다 — import 하면 ops/state-dir 까지 딸려 들어간다(#2165: 간선 하나가
+  //   11개를 끌었다). 접는 값보다 경계를 지키는 값이 커서 남긴다. 철자를 고칠 일이 생기면 **정본과 함께** 고쳐라.
   const tpl = process.env.LIVELY_TENANT_ROOT_TEMPLATE
     || ((process.env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() === "registry"
       ? path.join(os.homedir(), "lively", "workspaces", "{slug}") : "");
@@ -578,6 +598,25 @@ const WIN_UTF8_B64 = Buffer.from(WIN_UTF8_PS, "utf16le").toString("base64");
  *
  * `powershell`(5.1)을 명시한다 — psmux 의 Windows 기본 셸과 같고 어느 Windows 에나 있다(pwsh 는 없을 수 있다).
  */
+/**
+ * 윈도우 노드(psmux)가 **못 나르는** pane 명령 토큰 — 있으면 그 토큰, 없으면 null (순수).
+ *
+ *  규칙의 출처는 아래 winShellArgv 머리말(«토큰에 `"` `'` 탭 공백이 하나도 없어야 한다»)이고, 이 함수는 그 규칙을
+ *  **실행 직전에 재는 자**다. 실측(#3626, hammurabi psmux 2026-09-08 — execFile 로 토큰 배열을 그대로 넘겨 자식이
+ *  받은 argv 를 파일로 적게 했다):
+ *     `--x` `a b`                     → 자식 argv `--x` `a` `b`   (공백에서 다시 쪼개진다)
+ *     `--settings` `{"theme":"dark"}` → 자식이 **아예 안 뜬다**  (따옴표 든 토큰 — 세션이 그 자리에서 죽는다)
+ *  그래서 이런 토큰이 섞이면 조용히 죽는 pane 을 만들지 말고 생성 자체를 **읽을 수 있는 오류**로 멈춘다
+ *  (sessions.ts createSession). 값을 고쳐 주지는 않는다 — 어떤 값이 오는지는 호출자마다 뜻이 달라 여기서
+ *  짐작해 바꾸면 «다른 값으로 조용히 성공» 이 되고, 그건 죽는 것보다 찾기 어렵다.
+ */
+export function psmuxUnsafeToken(argv: readonly string[]): string | null {
+  for (const tok of argv) {
+    if (/["'\s]/.test(String(tok))) return String(tok);
+  }
+  return null;
+}
+
 export function winShellArgv(): string[] {
   return ["powershell", "-NoLogo", "-NoExit", "-EncodedCommand", WIN_UTF8_B64];
 }
@@ -781,7 +820,16 @@ function managedStatusLineSpec(): { type: string; command: string } {
  *  같은 `--settings` 플래그를 두 번 줬을 때 머지되는지 뒤가 이기는지가 미검증이라 합쳐서 준다(안전).
  *  claude 외 하네스는 statusLine 주입 경로가 없어 종전 테마 argv 그대로(무회귀).
  */
-export function harnessSettingsArgv(harnessKey: string, opts: { theme?: unknown; managed?: boolean }): string[] {
+export function harnessSettingsArgv(harnessKey: string, opts: { theme?: unknown; managed?: boolean; platform?: string }): string[] {
+  //  🔴 #3626 (2026-09-08, hammurabi 실측) — **윈도우 노드(psmux)에는 `--settings` 를 아예 얹지 않는다.**
+  //   값이 JSON 이라 따옴표가 들어가는데, psmux 는 pane 명령 토큰을 공백으로 다시 쪼개고 따옴표가 든 토큰은
+  //   자식을 **띄우지조차 못한다**(psmuxUnsafeToken 머리말의 실측). 그 결과가 «홈에서 [시키기] → 세션 즉사
+  //   (4410 session-gone)» 였다 — 홈 경로만 화면 테마 헤더를 theme 으로 옮겨 이 인자가 붙었고, 프로젝트를 골라
+  //   연 세션은 theme 이 없어 멀쩡했다. claude 는 `--settings` 에 파일 경로도 받지만 그 경로에 공백이 들 수 있어
+  //   (`C:\Users\홍 길동\…`) 같은 함정이다. 테마는 «실행 시점에만 얹는 방법이 있는 하네스에만» 주는 값이고
+  //   (HARNESS_THEME 머리말), 이 표면엔 그 방법이 없으니 **손대지 않는다** — 하네스는 사람의 설정대로 뜬다.
+  //   statusLine(managed) 도 POSIX sh 명령이라 이 표면에선 애초에 못 돈다.
+  if (opts.platform === "win32") return [];
   if (String(harnessKey || "") !== "claude") return harnessThemeArgv(harnessKey, opts.theme);
   const s: Record<string, unknown> = {};
   const t = normalizeTheme(opts.theme);
@@ -839,7 +887,10 @@ export function harnessLiveThemeSteps(harnessKey: string, theme: unknown): LiveT
 }
 
 /** 하네스 테마를 env 로 주는 경우의 tmux `-e` 인자. 지원 안 하면 빈 배열. */
-export function harnessThemeEnvArgs(harnessKey: string, theme: unknown): string[] {
+export function harnessThemeEnvArgs(harnessKey: string, theme: unknown, platform?: string): string[] {
+  //  #3626 — 윈도우 노드(psmux)는 옵션 값의 따옴표를 벗긴다(tmux-exec.ts encodeOptJson 실측). JSON 인 이 값은
+  //   거기서 반드시 깨지므로 얹지 않는다(harnessSettingsArgv 와 같은 이유·같은 가드).
+  if (platform === "win32") return [];
   const t = normalizeTheme(theme);
   const h = HARNESS_THEME[String(harnessKey || "")];
   if (!t || !h?.env) return [];

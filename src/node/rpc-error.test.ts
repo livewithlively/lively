@@ -22,7 +22,7 @@ const dispatchMap = (online: boolean): NodeRpcErrorMap => ({
   failed: (m) => `노드 '${NODE}' provision 시작 실패: ${m}`,
 });
 
-// ── 사이트 ③ provision-remote.ts createProjectSessionOnNode — 추가조건 O + timeout + unsupported(고정 문구). ──
+// ── 사이트 ③ (옛 provision-remote.ts createProjectSessionOnNode — #3626 에서 relayNodeOp 로 접혔다. 맵의 «추가조건 O + timeout + unsupported(고정 문구)» 조합 자체는 계약으로 남긴다.) ──
 const createMap = (online: boolean): NodeRpcErrorMap => ({
   offline: `노드 '${NODE}' 연결이 끊겨 세션을 열지 못했습니다.`,
   offlineWhen: () => !online,
@@ -71,7 +71,7 @@ test("provision dispatch — 노드가 오프라인이면 msg 와 무관하게 4
   }
 });
 
-test("createProjectSessionOnNode 매핑 — 4분기 + 고정 unsupported 문구(op 미삽입)", () => {
+test("사이트 ③ 모양의 매핑 — 4분기 + 고정 unsupported 문구(op 미삽입)", () => {
   assert.deepEqual(hit("node-offline", createMap(true)),
     { status: 409, message: `노드 '${NODE}' 연결이 끊겨 세션을 열지 못했습니다.` });
   assert.deepEqual(hit("node-rpc-timeout", createMap(true)),

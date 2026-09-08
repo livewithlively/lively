@@ -281,6 +281,10 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //   트랜스크립트에 친 글자 그대로가 아니라 `<command-name>` 형태로 적혀 그 바늘로는 영영 못 찾는다.
   //   같은 큐를 타는 이유는 순서다: 모델 바꾸기가 그 다음 프롬프트보다 먼저 들어가야 하고, 배달자는 세션당 직렬이다.
   await pool.query(`ALTER TABLE org_session_outbox ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'prompt';`);
+  //  #3689 — **언제부터** 못 닿고 있나(unreachable·session-gone-restorable 로 큐가 들고 있기 시작한 시각). updated_at 은 마지막
+  //   시도 시각이라 «언제부터» 가 아니다. 화면이 «N분째 못 닿고 있어요 — 복원이 필요할 수 있어요» 를 말하는 근거(session-chat.ts).
+  //   닿아서 배달되거나(delivered) 사람이 다시 보내면(retry) 비운다.
+  await pool.query(`ALTER TABLE org_session_outbox ADD COLUMN IF NOT EXISTS stalled_since TIMESTAMPTZ;`);
   // 끝난 행(delivered·sent)은 하루 지나면 청소 대상 — resumeOutbox 가 부팅 때 지운다(무한 적재 방지).
 
   // ── org_preview_env — 프리뷰 환경(작업자별 격리 미리보기)의 desired state (#1036). 관리탭 CRUD. ──
@@ -405,6 +409,14 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
     -- #1849 — 이 PC 가 자지 않게 붙잡고 있나(에이전트 hello 보고: {active, method, gaps, reason}).
     --  NULL = **모름**(구 번들은 안 보낸다)이지 '안 걸림'이 아니다 — 그 구분을 화면이 해야 사용자를 오도하지 않는다.
     ALTER TABLE org_node ADD COLUMN IF NOT EXISTS keep_awake JSONB;
+    -- #2600 T2 — 이 노드는 **그 워크스페이스의 세션 호스트로 선언**됐나.
+    --  왜 별도 축인가: kind 는 «자격·용량» 축이지 다른 뜻을 겸하면 안 된다 — 종전에 kind='worker' 가
+    --  «전체 개방» 을 겸했다가 위탁이 그 경계를 우회했고, 그래서 shared 를 따로 뺐다(#1540). 같은 실수를
+    --  반복하지 않는다.
+    --  무엇을 뜻하나: 이 노드는 게이트웨이와 **같은 tmux 를 보는 것이 정상**이다(그게 존재 이유다).
+    --  그래서 #2592 의 겹침 판정(셀프 노드)에서 **면제**된다 — 사고로 생긴 셀프 노드와 갈리는 유일한 근거가
+    --  이 선언이다. 그러므로 **관리자만** 켠다(routes 의 admin 게이트). 기본은 false = 종전 그대로.
+    ALTER TABLE org_node ADD COLUMN IF NOT EXISTS session_host BOOLEAN NOT NULL DEFAULT false;
 
     -- shared 이관(#1540) — **컬럼을 방금 만든 경우에만** 백필한다.
     --  ⚠ 조건 없이 UPDATE 로 두면, 관리자가 공유를 끈 worker 노드가 게이트웨이 재시작마다 다시 공유로

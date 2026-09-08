@@ -48,3 +48,15 @@ export async function writeTenancyRuntime(rt: TenancyRuntime): Promise<void> {
 export function registryModeActive(env: NodeJS.ProcessEnv = process.env): boolean {
   return (env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() === "registry";
 }
+
+/**
+ * 이 게이트웨이가 **매니지드**로 떠 있는가 — 워크스페이스 축을 CP 가 테넌트로 갖는 배포다(#1437).
+ *
+ * 판정은 «테넌트 헤더 비밀이 있나» 다: 매니지드에서만 라우터가 서명된 테넌트 헤더를 붙인다.
+ *  ⚠ 이 술어는 **한 곳에만 둔다.** 종전엔 workspace-registry.ts 안의 지역 const 였는데,
+ *   같은 판정을 두 벌로 두면 한쪽만 고쳐져 갈린다 — 이 파일이 고치는 #3564 가 정확히 그 종류였다
+ *   (한 술어의 두 갈래를 따로 고쳐 반쪽만 나았다).
+ */
+export function managedMode(env: NodeJS.ProcessEnv = process.env): boolean {
+  return !!(env.LIVELY_TENANT_HEADER_SECRET || "").trim();
+}

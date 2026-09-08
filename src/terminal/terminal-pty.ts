@@ -13,9 +13,12 @@ import { spawn as cpSpawn, execFile as cpExecFile } from "node:child_process";  
 import { promisify } from "node:util";
 import { logger } from "../log.js";
 import os from "node:os";
+import path from "node:path";
+import { accessSync, constants as fsConstants } from "node:fs";
 import { TMUX_BIN } from "./terminal-sessions.js";
 import { isPsmuxBin } from "./catalog.js";   // #1791 — 정의가 catalog(leaf)로 내려갔다(위 재수출과 짝)
 import { tmuxExecArgv } from "./tmux-exec.js";
+import { tmuxArgvFor } from "../exec-topology.js";   // #3545 — 소유 프로세스가 죽은 뒤엔 argv 를 슬러그로 **다시** 지어야 한다(렉시컬 캡처가 같이 사라졌다)
 
 // attach 가 실제로 쓰는 소켓 표면 — 게이트웨이 로컬은 실 WebSocket, 노드 에이전트(#869)는 게이트웨이행
 //  단일 WSS 위의 '채널 어댑터'가 이 인터페이스를 구현해 같은 attach 로직(tmux -CC · 큐잉 · 정리)을 재사용한다.
@@ -67,10 +70,49 @@ export interface AttachTerm {
 /** psmux 판정 — 정의는 catalog.ts(leaf)로 내렸다(#1791, tmux-exec 의 sessionGone 도 쓴다). 종전 import 경로를 위해 재수출. */
 export { isPsmuxBin } from "./catalog.js";
 
+/** 이 디렉터리로 **들어갈 수 있나**(chdir 권한 = 디렉터리의 x 비트). 자식이 exec 직전에 할 일을 부모가 미리 묻는다. */
+function dirEnterable(dir: string): boolean {
+  try { accessSync(dir, fsConstants.X_OK); return true; } catch { return false; }
+}
+
+/**
+ * attach pty 의 작업디렉터리 — **홈에 못 들어가면 루트로 떨어진다.**
+ *
+ * attach 는 tmux **클라이언트**일 뿐이라 이 cwd 는 세션 pane 에 아무 영향이 없다(attachSession 머리말).
+ *  그래서 종전엔 «게이트웨이가 늘 접근 가능한 서버 홈» 이라는 전제로 `os.homedir()` 를 그냥 넘겼다.
+ *
+ * ⚠ 그 전제가 **세션 호스트에서 깨졌다**(실측 2026-09-08, 매니지드 lively-46e3 · #2600 T2 (d) d4):
+ *  유닛이 준 홈 `/var/lib/lvly-sesshost/<slug>` 는 그 uid 소유였지만 **부모**가 root 0700 이라 통과(x)가
+ *  안 됐다. 그러면 node-pty 자식이 exec 직전 `chdir` 에서 죽으며 pty 로 **`chdir(2) failed.: Permission denied`
+ *  한 줄만 뱉는다** — 사람 화면엔 시도할 때마다 그 줄이 하나씩 쌓이고 세션은 영영 안 붙는다.
+ *  서버 로그에는 아무것도 안 남는다(자식이 낸 문자열이라 이쪽은 «attach 가 곧 끝났다» 로만 보인다).
+ *
+ * 아무 의미도 없는 값 하나 때문에 attach 가 통째로 죽는 자리다 — **못 들어가면 포기하지 말고 내려간다.**
+ *  같은 기제를 `tmux -c` 에서 한 번 밟았고(#524) 그때는 «주지 않는 것» 으로 고쳤다. 여기는 줘야 하는
+ *  자리라 «들어갈 수 있는 것을 준다» 로 고친다.
+ *
+ * ⚠ 폴백이 **묻히지 않게** 호출부가 한 번 경고한다 — 이번 사고의 절반은 «진단이 아무 데도 안 남은 것» 이었다.
+ */
+export function attachCwd(home: string = os.homedir(), canEnter: (dir: string) => boolean = dirEnterable): string {
+  if (home && canEnter(home)) return home;
+  //  루트는 POSIX 에서 늘 통과 가능하고(윈도우도 드라이브 루트는 열려 있다), 무엇보다 **이 값이 무엇이든
+  //   attach 의 의미는 안 바뀐다.** 진짜 cwd 를 고르는 자리가 아니라 «죽지 않을 값» 을 고르는 자리다.
+  //  ⚠ 루트를 **홈에서 파생**한다 — `process.cwd()` 는 런타임 쓰기 경로 가드레일이 막는다(ops/state-dir).
+  //   그 규칙이 아니어도 홈 쪽이 맞다: 그 홈이 앉은 볼륨의 루트라야 «같은 자리의 한 칸 위» 다.
+  return path.parse(home || "").root || path.sep;
+}
+
+let attachCwdFellBack = false;   // 폴백 경고는 프로세스당 한 번(그 상태는 지속적이라 매 attach 마다 찍으면 로그가 덮인다)
+
 function spawnAttachTerm(bin: string, args: string[], env: Record<string, string>): AttachTerm {
+  const cwd = attachCwd();
+  if (cwd !== os.homedir() && !attachCwdFellBack) {
+    attachCwdFellBack = true;
+    logger.warn({ home: os.homedir(), cwd }, "attach cwd: 홈에 들어갈 수 없어 루트로 떨어진다 — attach 는 계속된다(#524 계열)");
+  }
   if (!isPsmuxBin(bin)) {
     // encoding:null → onData 가 Buffer(raw 바이트). 아래 relay 가 디코드하지 않는 이유는 attachSession 주석 참조.
-    const t = ptySpawn(bin, args, { name: "xterm-256color", cols: 80, rows: 24, cwd: os.homedir(), env, encoding: null });
+    const t = ptySpawn(bin, args, { name: "xterm-256color", cols: 80, rows: 24, cwd, env, encoding: null });
     return {
       onData: (cb) => { t.onData((d) => cb(d as unknown as Buffer)); },
       onExit: (cb) => { t.onExit(() => cb()); },
@@ -79,7 +121,7 @@ function spawnAttachTerm(bin: string, args: string[], env: Record<string, string
       kill: (sig) => t.kill(sig),
     };
   }
-  const c = cpSpawn(bin, args, { cwd: os.homedir(), env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+  const c = cpSpawn(bin, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
   let exited = false;
   const fire = new Set<() => void>();
   const done = (): void => { if (exited) return; exited = true; for (const f of fire) f(); };
@@ -136,8 +178,69 @@ export function attachRefCount(id: string): number { return attachRefs.get(id) ?
  */
 function detachGhostClients(bin: string, prefix: string[], id: string, env: Record<string, string>): void {
   void execFileP(bin, [...prefix, "detach-client", "-s", id], { timeout: 5000, env, windowsHide: true })
-    .catch(() => { /* 세션이 이미 없거나 tmux 무응답 — 비치명 */ });
+    //  #2625 T1 — **실패를 삼키지 않고 남긴다**(동작은 그대로 비치명). 종전엔 «안 불렸다» 와
+    //   «불렸는데 중계가 404·타임아웃으로 죽었다» 가 둘 다 완전히 조용해, 유령이 쌓이는 20분을
+    //   들여다봐도 어느 쪽인지 물어볼 자리가 없었다.
+    //  #3545 — 다만 «끊을 것이 없었다» 는 **실패가 아니다**(아래 nothingToDetach). 그걸 warn 으로
+    //   남기면 정상 경로가 매번 빨간 줄을 찍어, 진짜 실패가 그 잡음에 묻힌다(프로덕션 실측:
+    //   워커가 죽으면 릴레이가 함께 죽어 이미 걷힌 뒤라, 이 자리는 거의 항상 «없음» 으로 온다).
+    .catch((err) => {
+      const msg = (err as Error)?.message ?? String(err);
+      if (nothingToDetach(msg)) { logger.info({ id }, "유령 attach 정리 — 끊을 클라이언트가 없었다"); return; }
+      logger.warn({ id, err: msg }, "유령 attach 정리 실패");
+    });
 }
+
+/**
+ * `detach-client` 가 «할 일이 없었다» 로 끝났나 (순수 — 표를 시험이 지킨다) (#3545).
+ *
+ * tmux 는 이 둘을 **비-0 종료코드**로 알린다. 그런데 둘 다 우리가 원하던 상태(그 세션에 붙어 있는
+ *  클라이언트가 없다)라 **성공과 구별할 이유가 없다**:
+ *   · `no current client`  — 그 세션에 클라이언트가 하나도 없다
+ *   · `can't find session` / `session not found` — 세션 자체가 이미 갔다(유령도 함께 갔다)
+ *
+ * ⚠ 그 밖은 전부 warn 으로 남긴다 — 중계 404·타임아웃·권한처럼 **정말 못 끊은** 경우가 여기 온다.
+ *  「모르면 시끄럽게」가 이 자리의 규율이다(#2625 T1 이 조용함 때문에 1년 가까이 못 본 자리다).
+ */
+export function nothingToDetach(errMessage: string): boolean {
+  return /no current client|can'?t find session|session not found|no such session/i.test(errMessage);
+}
+
+/**
+ * attach·유령정리가 쓰는 env. 게이트웨이가 launchd/nohup 로 떠 LANG 이 없으면 tmux 클라이언트가 utf8=0 으로
+ *  잡혀 한글(멀티바이트) 렌더가 깨진다 — UTF-8 로케일을 강제한다(`tmux -u` 와 이중 보장).
+ */
+function attachEnv(): Record<string, string> {
+  const env = { ...process.env } as Record<string, string>;
+  if (!/utf-?8/i.test(env.LC_ALL || env.LC_CTYPE || env.LANG || "")) {
+    env.LANG = "en_US.UTF-8";
+    env.LC_CTYPE = "en_US.UTF-8";
+  }
+  return env;
+}
+
+/**
+ * 유령 attach 정리 — **소유 프로세스가 죽어 렉시컬 argv 가 남아 있지 않은 자리**용 진입점 (#3545).
+ *
+ * 위 `detachGhostClients` 는 attach 를 띄울 때 붙잡아 둔 argv 를 그대로 쓴다(그게 테넌트 격리 근거 ② 다 —
+ *  `session-host.ts` 머리말). 그런데 attach 워커가 **소켓을 쥔 채 죽으면** 그 클로저도 같이 사라진다.
+ *  그때 끊을 수 있는 것은 살아남은 게이트웨이뿐이고, 게이트웨이에는 argv 가 없다 — 그 세션의 **테넌트
+ *  슬러그**로 다시 지어야 한다. 조립 규칙은 한 곳(`tmuxArgvFor`)이라 두 벌이 되지 않는다.
+ *
+ * ⚠ 중계 배포인데 슬러그가 없으면 `tmuxArgvFor` 는 **던진다**(배선 버그를 로컬 tmux 로 폴백해 숨기지
+ *  않는다는 그쪽 규약). 여기는 비치명 경로라 잡아서 남기고 넘어간다 — 다만 **조용히**는 아니다.
+ */
+export function detachGhostClientsForSession(id: string, slug: string | null): void {
+  let argv: string[];
+  try { argv = tmuxArgvFor(slug, TMUX_BIN); }
+  catch (err) {
+    logger.warn({ id, slug: slug ?? "", err: (err as Error)?.message ?? String(err) }, "유령 attach 정리 불가 — tmux argv 조립 실패");
+    return;
+  }
+  const [bin, ...prefix] = argv.length ? argv : [TMUX_BIN];
+  detachGhostClients(bin!, prefix, id, attachEnv());
+}
+
 // 스폰 실패 폭주 차단(#869) — node-pty spawn 이 반복 실패하면(예: 노드에서 fd 고갈 EMFILE) 매 실패가 pty fd 를 새게 해
 //  가속 붕괴한다(실측: 노드 에이전트 fd 1543개, 10K 실패). 세션별 최근 연속 실패를 세어 임계 초과 시 **스폰 자체를 건너뛰고**
 //  즉시 닫는다 — 할당을 안 하니 누수 원천 차단(정상 스폰 1회로 스트릭 리셋). 브라우저 재연결은 하되 pty 는 안 뜬다.
@@ -379,11 +482,7 @@ export function attachSession(ws: AttachSocket, id: string): void {
     .then(() => {
       // 게이트웨이가 launchd/nohup 로 떠 LANG 이 없으면 tmux 클라이언트가 utf8=0 으로 잡혀 한글(멀티바이트)
       //  렌더가 깨진다. UTF-8 로케일을 강제(env) + `tmux -u`(로케일과 무관하게 UTF-8 출력)로 이중 보장.
-      const env = { ...process.env } as Record<string, string>;
-      if (!/utf-?8/i.test(env.LC_ALL || env.LC_CTYPE || env.LANG || "")) {
-        env.LANG = "en_US.UTF-8";
-        env.LC_CTYPE = "en_US.UTF-8";
-      }
+      const env = attachEnv();
       // control mode: `-CC`(echo off) + `-u`(UTF-8). 폴백: plain attach.
       const args = CONTROL_MODE ? ["-u", "-CC", "attach", "-t", id] : ["-u", "attach", "-t", id];
       // ⚠ 백엔드는 멀티플렉서가 고른다(#1541) — tmux=node-pty(tty 필수) · psmux=파이프(PTY 에선 -CC 가 침묵).
@@ -438,7 +537,11 @@ export function attachSession(ws: AttachSocket, id: string): void {
         if (released) return;
         released = true;
         // #2148 — 이 세션의 마지막 WS 였다면 컨테이너 안에 남은 유령 클라이언트를 끊는다(위 머리말).
-        if (releaseAttachRef(id)) detachGhostClients(abin!, aprefix, id, env);
+        //  #2625 T1 — **불렸는지 아닌지가 로그에 남는다.** 종전엔 «안 불린 것»과 «불렸는데 실패한 것»을
+        //   구별할 수단이 없었다(둘 다 조용하다). 남은 참조수를 함께 남겨 장부가 새는 것도 여기서 보인다.
+        const last = releaseAttachRef(id);
+        logger.info({ id, last, refs: attachRefCount(id) }, "ws attach 종료");
+        if (last) detachGhostClients(abin!, aprefix, id, env);
       };
       ws.on("close", cleanup);
       ws.on("error", cleanup);

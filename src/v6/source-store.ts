@@ -52,8 +52,20 @@ const S_SEL = S_COLS.split(",").map((c) => "s." + c.trim()).join(", ");
 // 목록/그래프용 얕은 컬럼(본문 제외 — 자료는 28k+ 전사록이라 목록에 전문 싣지 않는다). parent_external_id=스레드/계층 관계(#735).
 //  has_knowledge(#2423): 이 자료로 지식이 만들어졌나 — 목록의 민트 점 하나가 읽는 값. 건수가 아니라 유무다
 //  (목록에서 필요한 건 «됐나/안 됐나» 뿐이고, 몇 건인지는 상세가 말한다).
+//  categories(#1631): 이 자료의 분류 — **그 자료로 만든 지식의 분류**다. 결정(원준 2026-09-03):
+//   *"자료가지고 지식 증류한게 들어가는 카테고리인걸로 하자. 증류도 안된 쓸모없는 자료까지 카테고리에
+//   매핑할 필요가 없어."* 그래서 source 에 컬럼을 두지 않고 **파생으로만** 낸다 — 지식이 안 된 자료는 빈 배열.
+//   한 자료가 여러 지식이 되고 축이 갈리면 중복 없이 여럿이 실린다.
+export const SOURCE_CATEGORIES_SQL = `COALESCE((
+     SELECT jsonb_agg(DISTINCT jsonb_build_object('key', c.key, 'name', c.name))
+       FROM knowledge_source ks
+       JOIN knowledge_category kc ON kc.name = ks.name AND kc.state <> 'rejected'
+       JOIN category c ON c.id = kc.category_id AND c.state <> 'merged'
+      WHERE ks.source_id = s.id), '[]'::jsonb)`;
+
 export const S_LIST_SEL = `s.id, s.name, s.kind, s.title, s.provenance, s.external_system, s.external_url, s.occurred_at, s.updated_at, s.fields, s.parent_external_id, s.visibility,
-   EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id) AS has_knowledge`;
+   EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id) AS has_knowledge,
+   ${SOURCE_CATEGORIES_SQL} AS categories`;
 
 export interface SourceRow {
   id: number; name: string | null; kind: string; title: string | null; body_md: string;
@@ -68,6 +80,8 @@ export interface SourceFilter {
   kind?: string; provenance?: string; q?: string; limit?: number; offset?: number;
   /** 출처 축(#2423 자료 앱) — 자료 목록을 «어디서 왔나» 로 좁힌다. */
   system?: string;      // external_system('slack'·'github'·'local'…). 'authored'=사람이 직접 적어 둔 것(external_system IS NULL)
+  /** 분류축(#1631) — 이 자료로 만든 지식이 그 축에 속하나. 지식이 안 된 자료는 어떤 값으로도 안 잡힌다. */
+  categoryId?: number;
   container?: string;   // 채널·폴더·저장소(fields->>'container_name') — 표현식 인덱스가 이미 있다
   author?: string;      // 작성자·올린 사람(fields->>'author_name')
   root?: string;        // 올린 자리(fields->>'root') — 'personal' 개인 폴더 · 'project' 프로젝트 폴더 (#2423)
@@ -103,6 +117,12 @@ function sourceListFilter(f: SourceFilter): { where: string; params: unknown[] }
   if (f.root) { params.push(f.root); wh.push(`s.fields->>'root'=$${params.length}`); }
   if (f.author) { params.push(f.author); wh.push(`s.fields->>'author_name'=$${params.length}`); }
   if (f.fold) wh.push(FOLD_REPLY);
+  //  카테고리 축(#1631) — 자료를 «그 자료로 만든 지식의 분류» 로 좁힌다. 지식이 안 된 자료는 자연히 빠진다.
+  if (f.categoryId != null) {
+    params.push(f.categoryId);
+    wh.push(`EXISTS (SELECT 1 FROM knowledge_source ks JOIN knowledge_category kc ON kc.name = ks.name
+              AND kc.state <> 'rejected' WHERE ks.source_id = s.id AND kc.category_id = $${params.length})`);
+  }
   if (f.linked !== undefined) {
     const kn = f.fold ? `(${THREAD_KN})` : `EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id=s.id)`;
     wh.push(`${f.linked ? "" : "NOT "}${kn}`);
@@ -191,7 +211,9 @@ export async function listUndistilledSources(limit = 50, viewer?: Viewer): Promi
 export async function getSource(id: number, viewer?: Viewer): Promise<(SourceRow & { knowledge: unknown[] }) | undefined> {
   const selfParams: unknown[] = [id];
   const selfVis = await sourceVisWhere(viewer, selfParams);
-  const s = await one(itemsPool, `SELECT ${S_SEL} FROM source s WHERE s.id=$1 AND ${selfVis}`, selfParams) as SourceRow | undefined;
+  const s = await one(itemsPool,
+    `SELECT ${S_SEL}, ${SOURCE_CATEGORIES_SQL} AS categories FROM source s WHERE s.id=$1 AND ${selfVis}`,
+    selfParams) as SourceRow | undefined;
   if (!s) return undefined;
   const kParams: unknown[] = [id];
   const kVis = await knowledgeVisWhere(viewer, kParams);

@@ -1814,6 +1814,19 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.equal(nextAfterSetup({}), "node-start");
     assert.equal(nextAfterSetup(null), "node-start");
   });
+  t("N4 ★ 이 컴퓨터가 게이트웨이 박스면 노드를 세우지 않는다 (#2592) — 확답일 때만", () => {
+    // 그 박스에 노드를 세우면 그 노드는 게이트웨이와 같은 tmux 를 보고 중앙 세션을 자기 것으로 보고한다
+    //  (접속이 노드 릴레이로 새고 목록에 거짓 좌표가 붙는다 — dev 실측 2026-09-03).
+    assert.equal(nextAfterSetup({ nodeSelfBox: true, nodeRunning: false }), null, "게이트웨이 박스에 노드를 세우려 한다");
+    assert.equal(nextAfterSetup({ nodeSelfBox: true }), null);
+    // 🔴 반대 방향이 더 비싸다 — «모름» 을 건너뛰기로 읽으면 **멀쩡한 멤버 PC 가 설치를 마쳐도 노드가 안 선다.**
+    //  그래서 확답(=== true)일 때만 건너뛴다. null·undefined·false 는 전부 종전대로 시작 쪽이다.
+    assert.equal(nextAfterSetup({ nodeSelfBox: null, nodeRunning: false }), "node-start", "모름을 건너뛰기로 읽었다");
+    assert.equal(nextAfterSetup({ nodeSelfBox: undefined, nodeRunning: false }), "node-start");
+    assert.equal(nextAfterSetup({ nodeSelfBox: false, nodeRunning: false }), "node-start");
+    // 경계 — 문자열 "true" 같은 느슨한 값에 넘어가면 안 된다(status --json 이 3상을 그대로 나른다는 계약).
+    assert.equal(nextAfterSetup({ nodeSelfBox: "true", nodeRunning: false }), "node-start", "불리언이 아닌 값을 확답으로 읽었다");
+  });
   t("N3 ★ 배포 모양으로 분기하지 않는다(#2044 결정) — 매니지드든 셀프호스트든 설치의 끝은 노드다", () => {
     // 상태에 어떤 배포 힌트가 실려 와도 판정이 흔들리면 안 된다. 매니지드에서 노드가 조용히 실패하던 원인은
     //  코어(노드 WS 가 테넌트 컨텍스트 밖)였고, 여기에 조건을 붙여 증상을 가리는 쪽으로 가면 안 된다.

@@ -18,7 +18,7 @@ import { getMemberSecret, memberOwner } from "../org/credentials/member-secret-s
 import { getRuntimeConfig } from "../org/store.js";
 import { getMember } from "../org/store/members.js";
 import { resolveRepoInject } from "../project/project-provision.js";
-import { nodeOnline, nodeRpc, schedulableRemotes, onTaskDone } from "./registry.js";
+import { nodeOnline, nodeRpc, nodeSessionGone, schedulableRemotes, onTaskDone } from "./registry.js";
 import { getNode, listNodes } from "./store.js";
 import { remoteDelegateAllowed } from "./node-access.js";
 import {
@@ -29,7 +29,7 @@ import { spawnTaskSession, checkTask, killTaskSession, sampleResources, detectDo
 import { nodeHarnesses } from "./protocol.js";
 import { detectAuthFailure, cronJobIdFromMarker } from "./task-failure.js";
 import { handleAuthFailure } from "./auth-failure-response.js";
-import { reapFailedTaskSessions, type FailedTaskRow } from "./failed-session-reaper.js";
+import { reapFailedTaskSessions, decideReap, type FailedTaskRow, type ReapAttempt } from "./failed-session-reaper.js";
 
 export const CENTRAL_NODE_ID = "central";
 const TICK_MS = 5_000;
@@ -96,7 +96,7 @@ async function progressBytes(t: DelegateTask): Promise<number> {
 //   DelegateTask 전체가 아니라 그 세 칸만 요구한다(회수기는 DB 에서 그 칸만 읽어온다).
 type SessionCoords = Pick<DelegateTask, "node_id" | "session_id" | "requester">;
 /**
- * 반환값 = **그 세션이 지금 확실히 없어졌나**(회수기가 '걷었다'고 기록해도 되는가).
+ * 반환값 `gone` = **그 세션이 지금 확실히 없어졌나**(회수기가 '걷었다'고 기록해도 되는가).
  *
  * ⚠ 이 구분이 없으면 회수기가 거짓 성공을 기록한다(#1675 리뷰에서 잡힌 결함): 종전 구현은 오프라인 노드에서
  *  **아무 일도 안 하고 정상 반환**했고, 호출부는 그걸 성공으로 보고 `session_reaped` 를 찍었다. 그러면 그 세션은
@@ -104,19 +104,49 @@ type SessionCoords = Pick<DelegateTask, "node_id" | "session_id" | "requester">;
  *
  *  · 중앙(로컬 tmux): kill 이 실패해도 **true**. 로컬에서 실패하는 사유는 사실상 '이미 없음'이고,
  *    그걸 미완으로 두면 존재하지도 않는 세션에 영원히 재시도한다.
- *  · 원격: 노드에 **닿았을 때만** true. 오프라인·RPC 실패는 false → 다음 tick 에 다시 시도한다.
+ *  · 원격: 노드에 **닿았을 때만** true. 오프라인·RPC 실패는 false → 호출부가 다시 판단한다.
+ *
+ * ⚠ `why`(실패 사유)를 **버리지 마라**(#2622). 종전엔 `catch { return false; }` 로 노드가 준 원문을 삼키고
+ *  호출부가 「노드에 닿지 못함」이라는 합성 문구만 남겼다 — 그래서 이틀치 로그를 다 읽어도 진짜 이유
+ *  (403 「본인 세션이 아닙니다」 = 그 세션은 이미 없다)를 알 수 없었다. 진단은 원문에서 나온다.
  */
-async function killTaskAnywhere(t: SessionCoords): Promise<boolean> {
-  if (!t.session_id) return true;                       // 걷을 세션이 애초에 없다 = 완료
+async function killTaskAnywhere(t: SessionCoords): Promise<{ gone: boolean; reached: boolean; why?: string }> {
+  if (!t.session_id) return { gone: true, reached: true };   // 걷을 세션이 애초에 없다 = 완료
   if (t.node_id === CENTRAL_NODE_ID) {
     await killTaskSession(t.session_id).catch(() => { /* 이미 없음 */ });
-    return true;
+    return { gone: true, reached: true };
   }
-  if (!t.node_id || !nodeOnline(t.node_id)) return false;   // 노드에 못 닿았다 — 아직 안 걷혔다
+  if (!t.node_id) return { gone: false, reached: false, why: "노드 좌표 없음" };
+  if (!nodeOnline(t.node_id)) return { gone: false, reached: false, why: "node-offline" };   // 못 닿았다 — 아직 안 걷혔다
   try {
     await nodeRpc(t.node_id, "kill", { user: { userId: t.requester }, id: t.session_id });
-    return true;
-  } catch { return false; }
+    return { gone: true, reached: true };
+  } catch (e) {
+    const why = (e as Error)?.message ?? String(e);
+    // ⚠ **답이 없는 것과 답이 거절인 것은 다르다**(회수기의 포기 판정이 이 축을 쓴다).
+    //  오프라인·타임아웃은 «못 닿았다» — 잠든 노트북·먹통 노드를 포기하면 그 세션은 영구 누수다.
+    //  그 외(노드가 준 오류·미지원 op)는 노드가 답을 한 것이고, 스스로 회복될 길이 없으니 끝을 낼 수 있다.
+    return { gone: false, reached: why !== "node-offline" && why !== "node-rpc-timeout", why };
+  }
+}
+
+/**
+ * 회수기용 kill 한 번(#2622 ⓐ) — **멱등 회수**.
+ *
+ * kill 이 실패해도 그것만으로 「아직 살아 있다」가 아니다. 실측된 이 사고의 실제 모양은 정반대였다:
+ *  세션이 **이미 없어서** 노드의 소유 확인(assertManage → ownerMeta)이 403 을 냈고, 회수기는 그걸
+ *  「닿지 못함」으로 읽어 이틀을 재시도했다. 그래서 실패하면 **그 세션이 없는지 노드에 확답을 구한다.**
+ *
+ * ⚠ `nodeSessionGone` 은 #835 의 「확답 only」 계약이다 — `true`(없다) · `false`(살아있다) · `null`(판정 불가).
+ *  `true` 일 때만 회수 성공으로 접는다. `null` 을 성공으로 접으면 그게 바로 #1675 리뷰의 거짓 성공이다.
+ */
+async function reapKill(t: FailedTaskRow): Promise<ReapAttempt> {
+  const r = await killTaskAnywhere(t);
+  // 확답을 구하는 건 **kill 이 실패했을 때뿐**이다 — 성공했으면 RPC 를 한 번 더 쏠 이유가 없다.
+  const gone = r.gone || !t.node_id || t.node_id === CENTRAL_NODE_ID || !t.session_id
+    ? null
+    : await nodeSessionGone(t.node_id, t.session_id).catch(() => null);
+  return decideReap(r.gone, gone, r.why, r.reached);
 }
 
 // 실패 세션 회수 tick(#1675 ①) — 보존 상한(개수·TTL) 밖의 실패 세션을 걷는다.
@@ -125,10 +155,7 @@ async function reapFailedSessions(): Promise<void> {
   try {
     const p = await effectiveDelegatePolicy(loadDelegatePolicy);
     await reapFailedTaskSessions(
-      async (t: FailedTaskRow) => {
-        // 못 걷었으면 **던진다** — 회수기는 그때만 '다음 tick 재시도'로 남긴다(마킹하지 않는다).
-        if (!(await killTaskAnywhere(t))) throw new Error(`세션 회수 미완(노드 ${t.node_id ?? "?"} 에 닿지 못함)`);
-      },
+      reapKill,
       { keep: p.keep_failed_sessions, ttlMin: p.failed_session_ttl_min },
     );
   } catch (err) {
@@ -305,25 +332,72 @@ export async function tryAssignNow(t: DelegateTask): Promise<AssignResult> {
 }
 
 /**
+ * 배정이 **예외로** 실패한 태스크의 다음 시도까지 기다릴 시간(순수, 지수 백오프).
+ *
+ * ⚠ 용량 부족(`assigned:false`)에는 안 건다 — 그건 값싼 판정이고 자리가 나면 즉시 가야 한다.
+ *  거는 것은 **던져서** 실패한 경우뿐이다: 그 경로는 세션 생성까지 갔다가 중간에 깨진 것이라
+ *  재시도마다 대가가 있다.
+ *
+ * 실측 2026-09-07(매니지드): tick 5초 × 큐 상한 10분 = 태스크당 **약 120회** 재시도가 그대로 돌았다.
+ *  게이트웨이 로그에 «위탁 배정 실패» 693건(6분에 200건), 그 사이 태스크 하나가 시도마다 새 세션 id 를
+ *  만들어 대장에 유령 행을 쌓았고, 2 vCPU 박스의 load average 가 6 을 넘었다.
+ *  백오프를 걸면 같은 10분에 5~6회로 준다(15·30·60·120·120초).
+ */
+export function assignBackoffDelayMs(attempt: number): number {
+  const base = 15_000, max = 120_000;
+  return Math.min(max, base * 2 ** Math.max(0, attempt - 1));
+}
+
+/** 태스크 id → {연속 실패 수, 다음 시도 시각}. 오래 안 건드린 항목은 **시간으로** 잊는다(무한 증식 방지). */
+const assignBackoff = new Map<number, { n: number; nextAt: number }>();
+
+/** 백오프 표에서 잊을 때까지의 여유 — 큐 상한을 넘겨 살아 있는 태스크는 없으므로 그 두 배면 확실히 죽은 것이다. */
+const ASSIGN_BACKOFF_FORGET_MS = Math.max(QUEUE_MAX_MS, 60_000) * 2;
+
+/**
+ * 백오프 표에서 **오래 안 건드린 항목**을 잊는다(순수).
+ *
+ * ⚠ «이번 큐에 없으면 지운다» 로 짜면 안 된다 — 이 배정 함수는 **워크스페이스마다** 불리고(#2418)
+ *  그 큐엔 남의 워크스페이스 태스크가 없다. 그렇게 지우면 매 호출이 남의 카운터를 지워
+ *  백오프가 사실상 사라진다(그리고 큐가 빈 워크스페이스 하나가 표 전체를 비운다).
+ *  태스크는 큐 상한(QUEUE_MAX_MS)을 넘겨 큐에 살아 있을 수 없으므로 **시간**이 안전한 기준이다.
+ */
+export function pruneAssignBackoff(
+  m: Map<number, { n: number; nextAt: number }>, now: number, horizonMs: number,
+): void {
+  for (const [k, v] of m) if (now - v.nextAt > horizonMs) m.delete(k);
+}
+
+/**
  * 큐 배정. `counts`(노드별 실행 중 수)·`extra`(이번 tick 배정 가산)를 **밖에서 받는다** — 워크스페이스를
  *  순회할 때 이 둘은 **전역**이어야 하기 때문이다(#2418). 테넌트마다 새로 세면 각 워크스페이스가
  *  "노드가 비어 있다"고 판단해 같은 노드에 몰아넣는다.
  */
 async function assignQueuedWith(counts: Map<string, number>, extra: Map<string, number>): Promise<void> {
   const queued = await queuedTasks();
-  if (!queued.length) return;
   const now = Date.now();
+  pruneAssignBackoff(assignBackoff, now, ASSIGN_BACKOFF_FORGET_MS);
+  if (!queued.length) return;
   for (const t of queued) {
     try {
       // 큐 대기 상한(⑤) — 적합 노드를 QUEUE_MAX 안에 못 얻으면 무한 대기 대신 no_capacity 실패.
+      //  ★ 백오프보다 **먼저** 본다 — 백오프 중인 태스크도 제 시각에 끝나야 한다(상한이 미뤄지면 안 된다).
       if (QUEUE_MAX_MS > 0 && now - new Date(t.created_at).getTime() > QUEUE_MAX_MS) {
         await markFinished(t.id, false, { reason: "no_capacity_timeout" }, `대기 시간 초과(${Math.round(QUEUE_MAX_MS / 60000)}분) — 적합 노드 없음`);
         logger.info({ task: t.id }, "큐 대기 초과 — no_capacity 실패");
+        assignBackoff.delete(t.id);
         continue;
       }
+      const bo = assignBackoff.get(t.id);
+      if (bo && now < bo.nextAt) continue;              // 아직 백오프 중 — 이 tick 은 건너뛴다
       await assignOne(t, counts, extra); // 실패해도 큐 유지(다음 tick 재시도, 상한까지)
+      assignBackoff.delete(t.id);        // 던지지 않았으면 연속이 끊긴다(용량 부족 포함 — 백오프 대상 아님)
     } catch (err) {
-      logger.warn({ err: (err as Error)?.message, task: t.id }, "위탁 배정 실패 — 다음 tick 재시도");
+      const n = (assignBackoff.get(t.id)?.n ?? 0) + 1;
+      const wait = assignBackoffDelayMs(n);
+      assignBackoff.set(t.id, { n, nextAt: now + wait });
+      logger.warn({ err: (err as Error)?.message, task: t.id, attempt: n, retryInMs: wait },
+        "위탁 배정 실패 — 백오프 뒤 재시도");
     }
   }
 }

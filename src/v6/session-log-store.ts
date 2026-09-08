@@ -13,7 +13,7 @@
 //   CAS 가 서로를 못 본다(설계 §5 ①). node_id='' = 게이트웨이 로컬(박스).
 import { itemsPool, withTx } from "../db/client.js";
 import { sessionNameFromPrompt } from "../terminal/session-name.js";
-import { SINGLE_TENANT_ID } from "../db/tenant-column.js";   // #1875 — 세션 목록 워크스페이스 필터의 primary 귀속값
+import { defaultWorkspaceId } from "../org/tenancy/registry.js";   // #1875·#3579 — 세션 목록 워크스페이스 필터의 «부재» 귀속값(배포 모드가 정한다)
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 
 // 무손실 압축 저장(#905 C1 슬②) — 청크 data 를 zstd 로 압축해 저장 공간을 줄인다. **무손실**이라 회수 시 원본 그대로
@@ -280,7 +280,14 @@ export async function listSessionsForOwnerPage(owner: string, limit = 200, works
 
 /**
  * 내 세션 목록. `workspaceId` 를 주면 **그 워크스페이스에 속한 세션만**(#1875 격리): gw_session_map 부재/보관됨 =
- *  primary(SINGLE_TENANT_ID). 안 주면 종전대로 owner 전체(내부 소비자·대시보드 등 — 워크스페이스 관심 없는 경로).
+ *  `defaultWorkspaceId(workspaceId)`. 안 주면 종전대로 owner 전체(내부 소비자·대시보드 등 — 워크스페이스 관심 없는 경로).
+ *  ⚠ **두 자리 모두 라이브 목록과 같은 규칙이어야 한다**(#3579 — 2026-09-07 실측으로 둘 다 깨져 있었다):
+ *   ① `LEFT JOIN gw_workspace` — 매니지드는 이 표가 **0행**이다(워크스페이스 축을 CP 가 테넌트로 갖는다).
+ *     INNER 면 서브쿼리가 **항상 NULL** 이라 매핑이 멀쩡히 있어도 전부 «부재» 로 떨어진다. 조인의 목적은
+ *     «보관된 워크스페이스 제외» 이지 «레코드 없는 배포 전멸» 이 아니다(registry.ts sessionWorkspaceIds 와 같은 말).
+ *   ② «부재» 의 귀속은 상수가 아니라 `defaultWorkspaceId` — 상수(primary=all-zero)로 굳으면 현재 ws 가
+ *     테넌트 uuid 인 매니지드에서 **절대** 안 맞아 이 목록이 항상 0건이 된다(`/api/ui/v6/sessions` 실측).
+ *   ①②가 겹쳐 있어서 #3564 의 gw_session_map 백필 869건으로도 안 풀렸다 — 매핑이 있어도 INNER 에서 탈락했다.
  *  ⚠ 필터를 SQL 에 두는 이유: LIMIT 뒤에 JS 로 거르면 want 를 채우고도 잘려 나가 truncated 판정이 거짓이 된다.
  *  owner(org_member)는 워크스페이스를 넘나드는 전역 신원이라(IDENTITY_GLOBAL_TABLES) owner 만으로는 개인
  *  워크스페이스에 박스 전체 세션 제목이 샌다 — 실측(#1875, 2026-08-27 장원준 신고: 개인 ws 사이드바에 팀 세션 제목).
@@ -290,11 +297,11 @@ export async function listSessionsForOwner(owner: string, limit = 200, workspace
   const params: unknown[] = [owner, clampSessionListLimit(limit)];
   let wsClause = "";
   if (workspaceId) {
-    params.push(workspaceId, SINGLE_TENANT_ID);   // $3 = 현재 워크스페이스, $4 = primary(맵 부재 시 귀속)
+    params.push(workspaceId, defaultWorkspaceId(workspaceId));   // $3 = 현재 워크스페이스, $4 = 맵 부재 시 귀속(배포 모드가 정한다)
     wsClause = `AND COALESCE(
         (SELECT m.workspace_id::text FROM gw_session_map m
-           JOIN gw_workspace w ON w.id = m.workspace_id AND w.state = 'active'
-          WHERE m.session_id = s.session_id),
+           LEFT JOIN gw_workspace w ON w.id = m.workspace_id
+          WHERE m.session_id = s.session_id AND (w.id IS NULL OR w.state = 'active')),
         $4) = $3`;
   }
   const r = await itemsPool.query(

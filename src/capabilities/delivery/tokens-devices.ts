@@ -6,6 +6,7 @@ import { HttpError } from "../rest-util.js";
 import { SCOPES_ALLOWED, DANGEROUS_SCOPES, type Scope } from "../scopes.js";
 import type { LivelyUser } from "../../context.js";
 import { getMember, mintToken, listTokens, revokeToken, mintSessionCode } from "../../org/store.js";
+import { resolveTokenHandle, MIN_HANDLE_LEN, TOKEN_HASH_LEN } from "../../org/store/tokens.js";
 import { hasCredential, verifyOwnPassword } from "../../auth/local-accounts.js";
 import { lookupDeviceAuth, approveDeviceAuth, denyDeviceAuth, checkDeviceRate } from "../../org/auth/device-auth.js";
 import {
@@ -43,7 +44,10 @@ export const tokenMintCapabilities: Capability[] = [
         label: input.label === undefined ? null : str(input.label, "label", 200).trim(),
         memberId,
       }, actorOf(user), "web");
-      return { token, tokenHash: tokenHash.slice(0, 12), userId, scopes }; // 평문 token 은 이 응답에서만
+      // tokenHash 는 **자르지 않는다**(#2646) — 이 값이 org_token_revoke 의 회수 핸들이고, 이름이 같으면
+      //  값도 호환돼야 한다. 종전엔 12자로 잘라 줬는데 회수는 64자 exact match 라, 발급이 준 값을 그대로
+      //  넣는 가장 자연스러운 사용이 **정확히 안 되는 조합**이었다. 해시는 비밀이 아니다(org_tokens 도 전량 노출).
+      return { token, tokenHash, userId, scopes }; // 평문 token 은 이 응답에서만
     }, {
       userId: z.string().optional().describe("토큰 주인 멤버 id(생략 시 memberId)"),
       memberId: z.string().optional().describe("연결할 멤버 id — 유효권한=intersection(토큰scope, 멤버 LIVE scope)"),
@@ -219,14 +223,33 @@ export const oauthClientCapabilities: Capability[] = [
 
 export const tokenRevokeCapabilities: Capability[] = [
   restOnly("org_token_revoke", "접속 토큰 해제",
-    "토큰을 즉시 무효화한다(게이트웨이 재시작 불요).",
+    "토큰을 즉시 무효화한다(게이트웨이 재시작 불요). 핸들은 org_token_mint 가 돌려준 tokenHash 또는 org_tokens 의 " +
+    "token_hash 를 그대로 넣는다 — 앞자리(12자 이상)도 **그것이 가리키는 토큰이 하나뿐일 때** 받는다. " +
+    "**없는 토큰이면 404 다**(성공이라 답하지 않는다). 이미 회수돼 있었으면 성공이되 revoked=false 로 구분해 답한다.",
     [{ method: "POST", paths: ["/api/ui/org/token/revoke"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
-      // 전체 해시를 받는다(목록은 prefix 만 노출하므로 회수는 발급 시 받은 전체 해시 또는 별도 조회 필요).
-      const hash = str(input.tokenHash, "tokenHash", 64).trim();
-      await revokeToken(hash, actorOf(user), "web");
-      return { ok: true };
+      // #2646 — 종전엔 64자 exact match 하나뿐이었고, 안 맞아도 {ok:true} 였다. 그래서 발급이 준 12자 핸들로
+      //  회수하면 **성공을 답하면서 토큰은 살아 있었다**(실측 2026-09-04). 이제 핸들을 먼저 풀고,
+      //  실제로 무엇이 일어났는지를 그대로 돌려준다.
+      // 길이 상한은 넉넉히 두고 판정은 classifyTokenHandle 한 곳에서 한다 — str 의 상한을 64 로 조이면
+      //  사람이 화면에서 복사해 붙인 **공백 낀 64자**가 정규화되기도 전에 400 으로 튕긴다.
+      const handle = str(input.tokenHash, "tokenHash", 200);
+      const resolved = await resolveTokenHandle(handle);
+      if (!resolved.ok) {
+        if (resolved.reason === "ambiguous") {
+          throw new HttpError(409, `앞자리 '${handle.trim()}' 에 토큰 ${resolved.matches}개가 걸립니다 — 더 긴 핸들(또는 전체 해시)로 지정하세요`);
+        }
+        if (resolved.reason === "not-found") throw new HttpError(404, `그런 토큰이 없습니다: ${handle.trim()}`);
+        if (resolved.reason === "too-short") throw new HttpError(400, `tokenHash 가 너무 짧습니다 — ${MIN_HANDLE_LEN}자 이상(또는 전체 ${TOKEN_HASH_LEN}자 해시)이어야 합니다`);
+        if (resolved.reason === "too-long") throw new HttpError(400, `tokenHash 가 너무 깁니다 — 최대 ${TOKEN_HASH_LEN}자(sha256 hex)입니다`);
+        if (resolved.reason === "empty") throw new HttpError(400, "tokenHash 가 필요합니다");
+        throw new HttpError(400, "tokenHash 는 16진수 문자열(sha256 hex)이어야 합니다 — 평문 토큰(lvk_…)이 아닙니다");
+      }
+      const outcome = await revokeToken(resolved.tokenHash, actorOf(user), "web");
+      // resolve 와 revoke 사이에 그 행이 사라졌다(경합). 아무것도 안 죽였으니 성공이라 말하지 않는다.
+      if (outcome === "not-found") throw new HttpError(404, `그런 토큰이 없습니다: ${handle.trim()}`);
+      return { ok: true, tokenHash: resolved.tokenHash, revoked: outcome === "revoked", alreadyRevoked: outcome === "already-revoked" };
     }, {
-      tokenHash: z.string().describe("회수할 토큰의 **전체 해시** — 목록(org_overview)은 prefix 만 노출하므로 발급 시 받은 전체 해시가 필요하다"),
+      tokenHash: z.string().describe("회수할 토큰의 해시 — org_token_mint 응답의 tokenHash 또는 org_tokens 의 token_hash. 앞자리 12자 이상이면 유일할 때만 풀린다(평문 토큰 lvk_… 이 아니다)"),
     }),
 ];

@@ -200,6 +200,54 @@ export interface CodeDriftCandidate {
   repos: string[]; unit_count: number; should_updated: string | null; code_updated: string | null;
 }
 
+/**
+ * 코드 괴리 후보 — **지식 쪽**(#3579).
+ *
+ * ⚠ 왜 따로 필요한가: 위 `findCodeDriftCandidates` 는 **도메인 정의(category.should)** 만 후보로 낸다.
+ *  그런데 이 판정기의 종류 이름은 «지식 ↔ 코드 비교» 이고, 관리기 설정도 지식 필터(match_types)로 쓰이고
+ *  있었다 — 즉 **설정이 약속하는 것과 구현이 보는 것이 갈라져 있었다.** 그래서 «지식이 «이 함수가 X 를
+ *  막는다» 고 적었는데 그 심볼이 코드에 없다» 는 자리를 **아무도 안 보고 있었다.**
+ *
+ *  실측(#3579, 2026-09-07): 2026-08-28 지식이 `defaultWorkspaceId()` 로 고쳤다고 적어 뒀는데 그 심볼은
+ *  전 브랜치 어디에도 커밋된 적이 없었다. 지식만 «고쳤다» 고 말하고 코드엔 없는 상태가 열흘 갔고,
+ *  그 사이 같은 버그를 #3564 가 처음부터 다시 진단했다. 이 후보 경로가 있었으면 기계가 먼저 물었을 것이다.
+ *
+ *  후보 조건: 활성 지식 + 관리기 스코프(scopeConds) + **레포가 연결된 도메인에 속할 것**.
+ *  레포를 요구하는 이유는 category 쪽과 같다 — 읽을 코드가 어디 있는지 모르면 AI 가 추측한다(#1419 T8).
+ */
+export interface CodeDriftKnowledgeCandidate {
+  name: string; title: string | null; type: string | null;
+  repos: string[]; category_keys: string[]; updated_at: string | null;
+}
+
+export async function findCodeDriftKnowledgeCandidates(m: ManagerRow, limit: number): Promise<CodeDriftKnowledgeCandidate[]> {
+  const params: unknown[] = [];
+  const conds = scopeConds(m, params, "k");
+  params.push(limit);
+  const limP = `$${params.length}`;
+  try {
+    const rows = await q(itemsPool, `
+      SELECT k.name, k.title, k.type, k.updated_at,
+             ARRAY_AGG(DISTINCT c.key)   AS category_keys,
+             ARRAY_AGG(DISTINCT cr.repo) AS repos
+        FROM knowledge k
+        JOIN knowledge_category kc ON kc.name = k.name AND kc.state <> 'rejected'
+        JOIN category c            ON c.id = kc.category_id
+        JOIN category_repo cr      ON cr.category_id = c.id
+       WHERE ${conds.join(" AND ")}
+       GROUP BY k.name, k.title, k.type, k.updated_at
+       ORDER BY k.updated_at DESC
+       LIMIT ${limP}`, params);
+    return rows.map((r) => ({
+      name: String(r.name), title: (r.title ?? null) as string | null, type: (r.type ?? null) as string | null,
+      repos: (r.repos as string[]) ?? [], category_keys: (r.category_keys as string[]) ?? [],
+      updated_at: r.updated_at ? String(r.updated_at) : null,
+    }));
+  } catch {
+    return [];   // category_repo 부재(레포를 안 쓰는 배포) — 볼 것이 없다
+  }
+}
+
 export async function findCodeDriftCandidates(m: ManagerRow, limit: number): Promise<CodeDriftCandidate[]> {
   const params: unknown[] = [];
   const conds: string[] = ["COALESCE(c.should,'') <> ''"];

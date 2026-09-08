@@ -39,7 +39,7 @@ import {
   listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, claimProjectName, setProjectArchived, setProjectTrashed, getBoardFields,
   upsertProjectFolderBinding, findProjectsByOriginKey,
   createTask, updateTaskStatus, updateTask, deleteTaskNode, reorderTasks, reorderProjects, rootProjectIdOfTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
-  linkProjectCategory, unlinkProjectCategory, setProjectCategories,
+  linkProjectCategory, unlinkProjectCategory, setProjectCategories, type CategoryApply,
   linkProjectKnowledge, unlinkProjectKnowledge, setProjectRepos,
   recommendKnowledgeForProject, projectsForKnowledge,
   linkProjectEdge, unlinkProjectEdge, getProjectListRow,
@@ -116,6 +116,29 @@ async function assertProjectVisible(rowId: number, ctx?: CapabilityCtx, label = 
   const viewer = ctx?.viewer ?? null;
   if (viewer === null) return;
   if (!(await canSeeProjectRow(Number(rowId), viewer))) throw new HttpError(404, `${label} #${rowId} 없음`);
+}
+
+// 카테고리 반영 실패를 에러로 끊는다 — 예전엔 스토어가 applied=false 로 정직하게 알려도 핸들러가 그걸
+//  버리고 {linked:true} 를 돌려줬다. 에이전트는 성공으로 믿고 넘어가고 카테고리는 안 붙는 silent
+//  false-success 였다(#3720 실측: linked:true → project_get 은 categories:[]). 반환값이 거짓말하면
+//  read-back 하지 않는 한 아무도 모른다.
+//  allowNoList = **해제** 요청(unlink · 빈 categoryIds). 리스트가 없으면 붙은 카테고리도 없으니
+//   원하는 상태가 이미 참이다 — 정리 코드에 잡음을 만들지 않게 통과시킨다. 없는 id 는 어느 쪽이든 404.
+function assertCategoryApplied(projectId: number, categoryId: number | null, r: CategoryApply, opts?: { allowNoList?: boolean }): void {
+  if (r.applied) return;
+  // switch + never — reason 이 늘면 컴파일이 막는다. 사슬형 if 였다면 새 사유가 마지막 409(리스트 없음)로
+  //  흘러 엉뚱한 메시지를 받는다. 실패 메시지가 틀리는 건 이 파일이 없애려는 결함과 같은 부류다.
+  switch (r.reason) {
+    case "no_project": throw new HttpError(404, `프로젝트 #${projectId} 없음`);
+    case "no_category": throw new HttpError(404, `카테고리 #${categoryId} 없음 — category_list 의 id 를 참조하세요.`);
+    case "no_list":
+    case null:
+    case undefined: {
+      if (opts?.allowNoList) return;
+      throw new HttpError(409, `프로젝트 #${projectId} 는 리스트에 속해 있지 않아 카테고리를 이을 수 없습니다 — 카테고리는 리스트가 소유하고 소속 프로젝트가 상속합니다. project_list_index_v6 로 리스트를 고르고 project_set_list_v6 로 먼저 넣으세요.`);
+    }
+    default: { const _exhaustive: never = r.reason; throw new HttpError(500, `카테고리 반영 실패(${String(_exhaustive)})`); }
+  }
 }
 
 // 핸들러가 읽는 이름(REST 는 query 'category'→categoryId 매핑).
@@ -771,7 +794,7 @@ type ProjectSetCategoriesV6Input = z.infer<z.ZodObject<typeof projectSetCategori
 const projectSetCategoriesV6: Capability = {
   name: "project_set_categories_v6",
   title: "프로젝트 카테고리 설정(v6)",
-  description: "프로젝트가 **속한 리스트의 카테고리(분류축)**를 설정한다 — 카테고리는 리스트가 소유하고 소속 프로젝트가 상속(단일). categoryIds 는 하위호환 배열이나 첫 항목만 반영, 빈 배열=해제. 형제 프로젝트가 카테고리를 공유하게 된다. 미분류(리스트 없는) 프로젝트엔 no-op — 먼저 리스트에 넣어야 함. category_list 의 id 참조.",
+  description: "프로젝트가 **속한 리스트의 카테고리(분류축)**를 설정한다 — 카테고리는 리스트가 소유하고 소속 프로젝트가 상속(단일). categoryIds 는 하위호환 배열이나 첫 항목만 반영, 빈 배열=해제. 형제 프로젝트가 카테고리를 공유하게 된다. 리스트 없는 프로젝트엔 그 축의 리스트를 찾아 넣어 준다(#1631) — 축이 없으면 404, 넣을 자리를 못 만들면 409. category_list 의 id 참조.",
   scope: "memory",
   input: projectSetCategoriesV6Input,
   expose: {
@@ -786,14 +809,10 @@ const projectSetCategoriesV6: Capability = {
   handler: async (input: ProjectSetCategoriesV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
     await assertProjectVisible(input.id, ctx, "프로젝트");
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    const r = await setProjectCategories(input.id, input.categoryIds, writeCtx);
+    const res = await setProjectCategories(input.id, input.categoryIds, writeCtx);
+    assertCategoryApplied(input.id, input.categoryIds[0] ?? null, res, { allowNoList: !input.categoryIds.length });
     await regenAgentsForList(await listIdOfProject(input.id)); // 형제 전부 상속 반영(F4)
-    // 반영이 안 됐으면 **그 이유와 다음 행동**을 함께 돌려준다(#2474) — 종전엔 빈 배열만 나가서
-    //  호출자가 "툴이 고장났다"로 읽었다(실측: 2026-09-01, AI 가 사용자에게 오보까지 했다).
-    return r.applied ? r : {
-      ...r,
-      note: "이 프로젝트는 리스트에 속해 있지 않아 카테고리를 정할 자리가 없습니다 — project_set_list_v6 로 먼저 리스트에 넣으세요(카테고리는 리스트가 소유하고 소속 프로젝트가 상속합니다).",
-    };
+    return { categoryIds: res.categoryIds };
   },
 };
 
@@ -946,7 +965,7 @@ type ProjectLinkCategoryV6Input = z.infer<z.ZodObject<typeof projectLinkCategory
 const projectLinkCategoryV6: Capability = {
   name: "project_link_category_v6",
   title: "프로젝트↔카테고리(v6)",
-  description: "프로젝트를 카테고리에 연결(또는 unlink=true 로 해제). 웹 전용.",
+  description: "프로젝트를 카테고리에 연결(또는 unlink=true 로 해제). 웹 전용. 카테고리는 **소속 리스트가 소유**하므로 리스트 없는 프로젝트면 409 — project_set_list_v6 로 먼저 리스트에 넣어야 함.",
   scope: "memory",
   input: projectLinkCategoryV6Input,
   expose: {
@@ -960,9 +979,16 @@ const projectLinkCategoryV6: Capability = {
       } }],
   },
   handler: async (input: ProjectLinkCategoryV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    await assertProjectVisible(input.id, ctx, "프로젝트");
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    if (input.unlink) { const r = await unlinkProjectCategory(input.id, input.categoryId, writeCtx); await regenAgentsForList(r.listId); return { unlinked: true }; }
+    if (input.unlink) {
+      const r = await unlinkProjectCategory(input.id, input.categoryId, writeCtx);
+      assertCategoryApplied(input.id, input.categoryId, r, { allowNoList: true });
+      await regenAgentsForList(r.listId);
+      return { unlinked: true };
+    }
     const r = await linkProjectCategory(input.id, input.categoryId, writeCtx);
+    assertCategoryApplied(input.id, input.categoryId, r);
     await regenAgentsForList(r.listId); // 형제 전부 상속 반영(F4)
     return { linked: true };
   },

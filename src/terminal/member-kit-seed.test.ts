@@ -24,6 +24,14 @@ const calls = (): Array<{ osUser: string; argv: string[] }> =>
   fs.existsSync(relayLog) ? fs.readFileSync(relayLog, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
 const resetLog = (): void => { fs.rmSync(relayLog, { force: true }); };
 
+// #3668 T2 — 세션 경계 가짜 중계(계약이 같다: `<중계> <sessionId> -- <argv…>`). 로그만 따로 받는다.
+const sessionLog = path.join(tmp, "session-relay.log");
+const sessionRelay = path.join(tmp, "fake-session-relay.mjs");
+fs.writeFileSync(sessionRelay, fs.readFileSync(relay, "utf8").replace(JSON.stringify(relayLog), JSON.stringify(sessionLog)));
+const sessionCalls = (): Array<{ osUser: string; argv: string[] }> =>
+  fs.existsSync(sessionLog) ? fs.readFileSync(sessionLog, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+const resetSessionLog = (): void => { fs.rmSync(sessionLog, { force: true }); };
+
 process.env.LIVELY_MEMBER_EXEC = `${process.execPath} ${relay}`;
 const { installTenantSlugResolver } = await import("./catalog.js");
 installTenantSlugResolver(() => "acme");
@@ -168,6 +176,47 @@ await t("[K8] claude 첫 실행 안내를 미리 넘긴다 — 로그인은 끝�
   // ③ 폴더 신뢰는 **손대지 않는다** — 사람이 할 보안 판단이다.
   assert.equal(b.projects, undefined);
   assert.ok(!/hasTrustDialogAccepted/.test(snippet as string), "폴더 신뢰를 대신 눌렀다");
+});
+
+// ── #3668 T2 — 자리가 둘이다: 설치 스크립트만 세션 컨테이너, 나머지는 파일 op(멤버 경계) ──
+await t("[K9] ★★ 세션 자리를 주면 **설치 스크립트만** 세션 컨테이너에서 돈다 — 토큰·번들·마커는 파일 op 자리", async () => {
+  resetLog(); resetSessionLog();
+  process.env.LIVELY_SESSION_EXEC = `${process.execPath} ${sessionRelay}`;
+  const sid = "box-u-k9-4b6ca04d";
+  const { deps, minted } = okDeps();
+  await ensureMemberKitSeeded(user("u-k9") as never, { osUser: "box_u-k9", sessionId: sid }, deps);
+
+  const inSession = sessionCalls();
+  assert.equal(inSession.length, 1, "★ 배선 — 세션 중계가 정확히 한 번(설치) 불려야 한다");
+  assert.equal(inSession[0]!.osUser, sid, "세션 중계 계약의 두 번째 자리는 **세션 id** 다");
+  const script = inSession[0]!.argv.join(" ");
+  assert.ok(script.includes("user-install.mjs") && script.includes("register-clients.sh"),
+    "세션 컨테이너로 가야 하는 것은 «조직 번들이 정하는 코드» 다");
+
+  const onMember = calls();
+  assert.ok(onMember.length >= 3, "★ 배선 — 파일 op 는 멤버 중계로 가야 한다(마커 stat·토큰·gateway-url·번들)");
+  for (const c of onMember) {
+    assert.equal(c.osUser, "box_u-k9", "파일 op 의 두 번째 자리는 osUser 다");
+    assert.ok(!c.argv.join(" ").includes("user-install.mjs"), "설치가 파일 op 자리로 새면 T3 에서 gVisor 밖에서 돈다");
+  }
+  for (const c of [...onMember, ...inSession]) assert.ok(!c.argv.join(" ").includes("SECRET"), "토큰이 argv 에 노출되면 안 된다");
+  assert.ok(minted.length === 1);
+
+  // 산출물의 자리·내용은 한 글자도 안 바뀐다(세션 컨테이너에도 같은 홈이 마운트돼 있다는 전제).
+  const home = path.join(process.env.LIVELY_MEMBER_HOME_BASE!, "box_u-k9");
+  assert.ok(fs.existsSync(path.join(home, ".lively", ".kit-seeded")), "마커");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, ".claude", "settings.json"), "utf8")).hooks, "sentinel");
+  delete process.env.LIVELY_SESSION_EXEC;
+});
+
+await t("[K10] 문자열 osUser(세션 없음) — 세션 중계가 켜져 있어도 전부 멤버 경계다(무회귀)", async () => {
+  resetLog(); resetSessionLog();
+  process.env.LIVELY_SESSION_EXEC = `${process.execPath} ${sessionRelay}`;
+  const { deps } = okDeps();
+  await ensureMemberKitSeeded(user("u-k10") as never, "box_u-k10", deps);
+  assert.equal(sessionCalls().length, 0, "세션 자리를 안 줬는데 세션 컨테이너로 가면 세션 없는 시딩이 죽는다");
+  assert.ok(calls().some((c) => c.argv.join(" ").includes("user-install.mjs")), "설치는 멤버 경계에서 돌았어야 한다");
+  delete process.env.LIVELY_SESSION_EXEC;
 });
 
 installTenantSlugResolver(() => null);

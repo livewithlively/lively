@@ -60,8 +60,34 @@ const LIVELY = join(HOME, ".lively");
 const readLively = (n) => { try { return readFileSync(join(LIVELY, n), "utf8").trim(); } catch { return ""; } };
 // gateway-url / token 규약은 lively.mjs 와 동일(/mcp 없이 저장, Bearer 헤더).
 const normGw = (u) => String(u || "").trim().replace(/\/+$/, "").replace(/\/mcp$/, "").replace(/\/+$/, "");
-const gateway = () => normGw(process.env.LIVELY_GATEWAY_URL || readLively("gateway-url"));
-const token = () => (process.env.LIVELY_TOKEN || readLively("token")).trim();
+// 주소는 **파일이 SoT**(#2617) — lively.mjs 의 gateway() 와 같은 판정이고 근거도 거기 적어 뒀다. 요지:
+//  env 는 '파일의 캐시'라 둘이 갈리는 유일한 경우가 곧 버그다. 이 파일은 **세션 pane 안에서** 도는데,
+//  tmux 서버는 처음 뜬 시점 환경을 global 로 굳혀 물려주고 killEmptyTmuxServer 는 세션이 살아 있으면
+//  서버를 보존하므로, 세션이 끊이지 않는 박스에서 그 env 는 **영영 갱신되지 않는다** — 이 표면이 정확히
+//  env-우선의 피해자였다(2026-09-03: 이 MCP 의 repo_list·repo_worktree 가 세션 내내 401).
+const gateway = () => normGw(readLively("gateway-url") || process.env.LIVELY_GATEWAY_URL);
+// ★ 토큰도 **주소와 같은 축**이다 — 형제 프록시 lively-mcp-gateway.mjs 의 token() 과 글자 그대로 같은 3단
+//  규약을 쓴다(근거 전문은 거기 머리말). 한 쌍은 한 출처에서 읽는다:
+//   · LIVELY_MCP_TOKEN — 게이트웨이가 이 pane 을 띄우며 **그 세션 주인 앞으로 발급해 심은** 세션 스코프
+//     정본이다(#2234, profiles.ts mintSessionMcpToken). 셸이 만든 값이 아니라 늙지 않고, 세션이 죽으면
+//     회수된다 → 있으면 이긴다. 홈이 공유인 박스(맥 단일유저·중앙박스)에서 이게 없으면 다른 멤버의
+//     세션이 MCP 로 하는 일이 전부 «키트를 깐 사람» 신원으로 나간다.
+//   · ~/.lively/token — 파일이 SoT(#916). 앱·CLI 어느 쪽으로 로그인하든 여기에 쓰므로, 살아 있는 세션도
+//     재로그인을 즉시 따라온다.
+//   · LIVELY_TOKEN — 설치기가 codex 때문에 셸 rc 에 심는 `export LIVELY_TOKEN="$(cat ~/.lively/token)"` 의
+//     결과이거나 tmux 전역 env 의 스냅샷이라 **늙는다**. 파일이 없을 때만(프로비저닝·컨테이너) 쓴다.
+//  ⚠ #3728(실측 2026-09-08) — 종전엔 여기만 `env.LIVELY_TOKEN || 파일` 이라 **주소는 파일 · 토큰은 env** 로
+//   출처가 갈렸다. 앱에서 매니지드로 재로그인하면 파일만 바뀌고 tmux 전역 env 는 그대로라(로그인이 안 고친다)
+//   «새 주소 + 옛 토큰» 조합이 되어 이 MCP 만 세션 내내 401 이었다(repo_list·repo_worktree 전멸, 메인
+//   `lively mcp` 는 위 3단 규약이라 멀쩡). 옛 주석은 그 env-우선을 «#2234 세션별 신원 주입» 이라 적었는데
+//   오독이다 — #2234 가 pane 에 심는 건 LIVELY_MCP_TOKEN 이고, pane 의 LIVELY_TOKEN 은 **훅 토큰**이다
+//   (#1719 후속, mintSessionHookToken: 세션 최소권한이라 admin·runtime 이 빠져 있다). MCP 가 그걸 집으면
+//   신원도 권한도 틀린다 — sessions.ts 의 두 `-e` 주입이 서로 다른 변수인 이유가 정확히 이것이다.
+const token = () => (
+  (process.env.LIVELY_MCP_TOKEN || "").trim()
+  || readLively("token")
+  || (process.env.LIVELY_TOKEN || "").trim()
+).trim();
 
 // stdout 은 JSON-RPC 전용이다 — 실수로 새어나간 console.log 가 프로토콜을 깨지 않게 stderr 로 묶는다.
 console.log = (...a) => process.stderr.write(a.map(String).join(" ") + "\n");
@@ -79,6 +105,15 @@ function makeCtx(callCwd) {
       const headers = { authorization: `Bearer ${tok}` };
       if (body !== undefined) headers["content-type"] = "application/json";
       const res = await fetch(gw + path, { method, signal: ctl.signal, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+      // 401/403 은 **무엇을 하라는지**까지 말한다(#2617). 종전 문구는 "게이트웨이 401 (/api/ui/repos)" 뿐이라,
+      //  이걸 받은 에이전트가 처방을 몰라 로컬 툴을 통째로 포기하고 손으로 우회했다(실측 2026-09-03 — 그 바람에
+      //  워크트리가 서버 대장에 안 잡혀 workspace_reclaim 이 회수 대상을 통째로 못 봤다). 어느 주소로 물었는지도
+      //  함께 말한다: 주소가 예상과 다르면 그 자체가 답이고(파일이 비어 env 로 폴백한 경우), 맞으면 토큰 문제로
+      //  좁혀진다. 진단은 `lively doctor` 한 곳으로 모은다 — 한 조직이 두 곳에서 다르게 진단하면 안 된다.
+      if (!res.ok && (res.status === 401 || res.status === 403)) {
+        throw new Error(`게이트웨이 ${res.status} (${path}) — ${gw} 에 접속 열쇠가 통하지 않습니다`
+          + "(만료·해제됨? 또는 이 주소가 그 열쇠를 발급한 곳이 아님). `lively doctor` 로 진단하고, 열쇠 문제면 `lively login` 으로 다시 등록하세요.");
+      }
       if (!res.ok) throw new Error(`게이트웨이 ${res.status} (${path})`);
       return await res.json();
     } finally { clearTimeout(timer); }
@@ -155,7 +190,9 @@ registerTool({
   description: "등록된 레포의 최신 코드를 이 머신에 확보(로컬에 없으면 clone·있으면 fetch)한 뒤, 격리 브랜치로 git worktree 를 만든다. "
     + "반환된 worktree 경로에서 코드 작업(편집·커밋·빌드)을 하라 — base(pristine 공유 원본)에서 직접 작업하지 말 것. "
     + "프로젝트 세션이면 기본 경로는 <프로젝트 폴더>/<repo>(cwd 가 그 하위 어디든 같은 자리 — 서버 provision 과 동일 슬롯이라 서로 멱등)이고 "
-    + "브랜치는 project/<id>. 이미 떠 있으면 그대로 재사용한다. 몇 초 내 동기 완결. 코드 작업이 필요할 때 먼저 이걸 호출해 작업면을 준비하라 "
+    + "브랜치는 project/<id>. 이미 떠 있으면 그대로 재사용한다 — 단 재사용 전에 그 워크트리의 git 등록(admin)이 자기 것인지 확인하고, "
+    + "다른 워크트리의 등록을 잇고 있으면(같은 base 를 쓰는 다른 프로젝트와 admin 이 섞인 사고 상태) 아무것도 고치지 않고 중단·경고한다(#3678). "
+    + "반환 admin 은 그 워크트리의 등록 id(프로젝트별 고유), warning 은 슬롯 브랜치가 갈아타져 있을 때. 몇 초 내 동기 완결. 코드 작업이 필요할 때 먼저 이걸 호출해 작업면을 준비하라 "
     + "— 세션이 코드 없는 폴더에서 떴어도 그게 정상이다(워크트리는 세션 생성이 아니라 이 툴이 만든다). "
     + "⚠ path 로 스크래치패드 같은 임시경로를 지정하지 마라(기본값을 그대로 써라): 워크트리는 임시파일이 아니라 **작업면(영속 자산)**이다. "
     + "'임시파일은 스크래치패드' 규칙은 여기 적용 안 된다 — 스크래치패드는 하네스가 청소하는 휘발성이라 커밋 전 작업이 사라지고, "

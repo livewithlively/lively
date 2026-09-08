@@ -69,6 +69,13 @@
 .pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab-x { display: none; }
 /* 접혔으면 이름을 읽을 곳이 필요하다 — 넘치지 않아도 [모두 보기]를 남긴다(거기서 빼기도 한다). */
 .pn-tabbar.compact .pn-tab-more { display: inline-flex; }
+/* 같은 종류가 둘 이상일 때의 번호 (#762) — 이름이 접혀 아이콘만 남는 순간, 그 셋을 가릴 것이 이것뿐이다.
+   펼쳐져 있을 땐 이름이 이미 말하므로 안 그린다(같은 사실을 두 번 말하지 않는다). */
+.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab[data-n] { position: relative; }
+.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab[data-n]::after {
+  content: attr(data-n); position: absolute; right: 2px; top: 1px;
+  font-size: 9px; font-weight: 700; line-height: 1; color: var(--muted); font-variant-numeric: tabular-nums;
+}
 
 /* 세션 탭 — 부품 탭과 한 줄에 서지만 결이 다르다: **상태점 + 이름**, 닫기(×)는 없다(세션은 '열어 둔 문서'가
    아니라 프로젝트에 속한 실체다). 이름이 길어도 탭 줄이 무너지지 않게 폭을 묶는다. */
@@ -98,8 +105,11 @@
 .pn-state.done { color: var(--mint-deep); font-weight: 700; }
 .pn-state.todo { color: var(--muted); }
 .pn-title { margin: 0; min-width: 0; font-size: 25px; font-weight: 800; letter-spacing: -.022em; line-height: 1.22; }
-/* 한 줄 문패에서는 제목이 더 이상 왼쪽 끝이 아니다(눈썹이 앞에 선다) — 끝을 맞추던 음수 여백을 거둔다. */
-.pn-door-l .pn-title-btn { margin-left: 0; }
+/* 제목이 다시 왼쪽 끝이다(원준 2026-09-03, 순서 = 이름 › 번호 › 상태) — 링크 판의 좌측 패딩 8px 만큼
+   당겨 **글자**가 문패 왼쪽에 딱 맞게 선다(패딩까지 맞추면 글자가 8px 안쪽으로 들어가 보인다). */
+.pn-door-l .pn-title-btn { margin-left: -8px; }
+/* 이름이 길면 이름이 줄고, 꼬리표(#번호 · 상태)는 끝까지 남는다 — 좌표를 잃으면 어느 프로젝트인지 못 읽는다. */
+.pn-door-l .pn-title { flex: 0 1 auto; }
 /* 제목 = **프로젝트 전체 화면으로 가는 링크**(원준 2026-08-26). 종전엔 눌러서 이름을 고치는 자리였다 —
    이름 편집은 사이드바 줄 더블클릭으로 갔고, 여기는 링크의 문법을 그대로 쓴다(커서 pointer, 밑줄 대신 은은한 판). */
 .pn-title-btn { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 2px 8px;
@@ -113,6 +123,20 @@
 .pn-title-btn:hover .pn-title-ic { stroke: var(--blue); }
 .pn-title-btn:hover .pn-title-t { color: var(--blue); }
 .pn-title-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+/* 이름 고치기 = **연필**(원준 2026-09-03). 제목 클릭은 이동으로 남기고 편집은 이 단추가 쥔다 —
+   생김새·손짓 모두 세션 이름의 연필과 같다(36-chat.css .sc-title-penbtn). 손을 올렸을 때만 나타난다. */
+.pn-title-penbtn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; margin-left: 2px;
+  vertical-align: middle; border: 0; background: none; padding: 0; border-radius: 6px; cursor: pointer;
+  opacity: 0; transition: opacity .12s ease; flex: none; }
+.pn-title:hover .pn-title-penbtn, .pn-title-penbtn:focus-visible { opacity: 1; }
+.pn-title-penbtn:hover { background: var(--bg-tint); }
+.pn-title-penbtn:hover .pn-title-pen { stroke: var(--blue); }
+.pn-title-pen { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round; }
+.pn-title-in { font: inherit; width: min(46ch, 46vw); margin-left: -8px; padding: 2px 8px;
+  border: 1px solid var(--blue); border-radius: 9px; background: var(--bg); color: var(--ink); }
+.pn-title-in:focus { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue-fill) 18%, transparent); }
+.pn-title-in:disabled { opacity: .6; }
 .pn-door-r { display: flex; align-items: center; gap: 8px; flex: none; }
 /* 얼굴 줄(#2116) — **[공유] 바로 왼쪽에 상주**한다(구글 문서와 같은 자리). 겹쳐 세워 자리를 아끼되
    첫 얼굴은 왼쪽으로 새지 않게 여백을 되돌린다. 최대 3명, 넘으면 마지막 칸이 `+N` 이 된다(panes.ts FACE_MAX). */
@@ -421,7 +445,11 @@
    작은 종이 한 장(폭 300px)을 만들어 카드 폭에 맞춰 줄인다(JS 가 scale 을 준다). 글자·표·시안이
    뭉개지지 않고 비율 그대로 작아진다 — 브라우저가 11px 글자를 그린 뒤 축소하는 것이라 선이 살아 있다. */
 .pn-fic.has-pv { background: var(--surface); position: relative; }
+/* 미리보기 한 장 — 논리 크기는 JS 가 내용에 맞춰 준다(글 300 · 시안 1180). 여기서는 자리와 규율만. */
 .pn-fpaper { position: absolute; inset: 0; width: 300px; height: 246px; transform-origin: top left; overflow: hidden; background: var(--surface); pointer-events: none; }
+.pn-fpaper > .pn-fframe { width: 100%; height: 100%; }
+/* PDF 첫 장 그림(#762) — 종이 폭에 맞춰 눕고, 종이보다 길면 아래가 잘린다(카드 = 첫 장의 윗부분). */
+.pn-fpaper > .pn-fpdf { display: block; width: 100%; height: auto; }
 .pn-fframe { width: 300px; height: 246px; border: 0; background: var(--surface); }
 .pn-fpre { margin: 0; padding: 10px 11px; width: 300px; height: 246px; overflow: hidden; white-space: pre-wrap; word-break: break-all;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9.5px; line-height: 1.5; color: var(--ink-sub); }
@@ -457,16 +485,61 @@
    (원준 2026-08-23 신고 "로드가 계속 이 정도까지만 돼": 아티팩트 머리글 44px + 본문 106px = 정확히 150px). */
 .pn-webstage > .pn-webframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform-origin: top left; }
 .pn-webframe { flex: 1; min-height: 0; min-width: 0; width: 100%; border: 0; background: var(--surface); }
-/* 배율 칩 — 숫자가 들어가므로 정사각(ic)이 아니라 조금 넓다. 누르면 맞춤↔100% 를 오간다. */
-.pn-web-btn.zl { min-width: 44px; padding: 0 6px; font-variant-numeric: tabular-nums; }
+/* ── 배율 알약 — 웹 칸·뷰어가 **같은 자리에 같은 모양**으로 (#762, 원준 2026-09-04) ─────────
+   종전엔 주소줄에 28px 짜리 [−][배율][+] 셋이 [뒤로][앞으로][다시]와 똑같은 생김새로 끼어 있어
+   '배율'로 읽히지 않았고("확대 축소하는 버튼이랑 위치랑 안 느껴져"), 뷰어에는 아예 없었다.
+   무대 오른쪽 아래는 지도·PDF 뷰어가 쓰는 자리라 찾지 않아도 눈에 걸린다. 셋을 테두리 하나로 묶어
+   옆 단추들과 다른 **한 덩어리**로 만든다. */
+.pn-zoom { position: absolute; right: 12px; bottom: 12px; z-index: 3; display: inline-flex; align-items: center;
+  padding: 3px; border: 1px solid var(--line-net); border-radius: 999px; background: var(--surface);
+  box-shadow: 0 8px 30px rgba(var(--shadow-ink), .12); }
+/* ⚠ .pn-zoom 의 display 가 UA 의 [hidden] 규칙을 이기므로 숨김을 여기서 다시 적는다. */
+.pn-zoom[hidden] { display: none; }
+.pn-zoom-b { width: 27px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 999px;
+  background: none; font: inherit; font-size: 15px; font-weight: 700; line-height: 1; color: var(--ink-sub); cursor: pointer; }
+.pn-zoom-b:hover { background: var(--bg-punch); color: var(--blue); }
+.pn-zoom-b:disabled { color: var(--muted-3); background: none; cursor: default; }
+.pn-zoom-lbl { min-width: 62px; height: 26px; padding: 0 4px; border: 0; border-radius: 999px; background: none;
+  font: inherit; font-size: 11.5px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; cursor: pointer; }
+.pn-zoom-lbl:hover { background: var(--bg-punch); }
+/* 맞춤일 때만 파랗다 — '지금 칸을 따라가는 중'이라는 뜻이고, 사람이 배율을 정하면 잉크로 돌아온다. */
+.pn-zoom.is-fit .pn-zoom-lbl { color: var(--blue); }
 /* 데스크톱 앱(#1829)에서는 이 칸이 <webview> 다 — 교체 요소라 내재 크기로 버티므로 flex 자식임을 명시한다. */
 webview.pn-webframe { display: flex; }
 .pn-web-note { flex: none; padding: 6px 10px 8px; border-top: 1px solid var(--line); }
-.pn-ed-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+/* ⚠ position: relative — 배율 알약이 이 칸의 오른쪽 아래에 선다(무대 안에 두면 내용과 함께 굴러간다). */
+.pn-ed-body { flex: 1; min-height: 0; display: flex; overflow: hidden; position: relative; }
+/* ── 뷰어 무대 — 펴 놓은 것이 서는 자리 (#762) ─────────────────────────────────
+   배율은 **이 폭**을 자로 쓴다. 그림·글은 넘치면 여기서 구르고, 프레임(PDF·시안)은 논리 폭을 키워
+   줄여 그리므로 구를 것이 없다(.frame). 목록 화면은 제가 세로로 흐르는 판이라 그릇이 된다(.list). */
+.pn-ed-stage { flex: 1; min-width: 0; min-height: 0; overflow: auto; background: var(--surface); }
+.pn-ed-stage > * { transform-origin: top left; }
+.pn-ed-stage.list { overflow: hidden; display: flex; flex-direction: column; }
+/* 프레임은 웹 칸의 무대와 같은 규칙 — 자리를 절대좌표로 잡아야 '대체 요소' 기본 300×150 으로 앉지 않는다. */
+.pn-ed-stage.frame { overflow: hidden; position: relative; }
+.pn-ed-stage.frame > * { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+/* 글은 무대가 대신 구른다 — 제가 또 구르면 스크롤이 두 겹이 된다. */
+.pn-ed-stage > .pn-ed-pre, .pn-ed-stage > .pn-md { flex: none; overflow: visible; }
 .pn-ed-name { flex: 1; min-width: 0; font-size: 12.5px; }
 .pn-ed-pv { width: 100%; height: 100%; border: 0; background: var(--surface); }
-.pn-ed-img { width: 100%; height: 100%; object-fit: contain; background: var(--gray-bg); }
+/* 그림·영상 — 크기는 **가로만** 정한다(세로는 따라온다). 종전 object-fit: contain 은 칸의 세로에 걸려
+   가로를 넓혀도 그대로였다(원준 2026-09-04 신고). 칸보다 좁으면 가운데에 선다. */
+.pn-ed-img { display: block; margin: 0 auto; max-width: none; background: var(--gray-bg); }
 .pn-ed-pre { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 12px 14px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+/* ── 고치기 (#762, 원준 2026-09-05) — 보는 화면이 그대로 고치는 화면이 된다 ────────────
+   무대를 통째로 쓰는 글칸 하나. 배율 알약은 이때 숨는다(글은 칸 폭에 맞춰 흐르므로 배율이 뜻이 없다).
+   글씨는 보기(.pn-ed-pre)와 **같은 고정폭·같은 줄간** — 고치기 전후로 글의 생김새가 바뀌면 안 된다. */
+.pn-ed-stage.edit { overflow: hidden; display: flex; }
+.pn-ed-ta { flex: 1; min-width: 0; min-height: 0; width: 100%; margin: 0; padding: 12px 14px; border: 0; resize: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6;
+  background: var(--surface); color: var(--ink); overflow: auto; tab-size: 2; }
+.pn-ed-ta:focus { outline: none; }
+/* 저장 = 이 막대에서 유일한 '하는' 단추다 — 나머지(돌아가기)와 무게가 같으면 어느 것이 결론인지 안 보인다. */
+.pn-web-btn.pri { border-color: var(--blue); background: var(--blue); color: #fff; font-weight: 600; }
+.pn-web-btn.pri:hover { border-color: var(--blue); background: var(--blue-deep); color: #fff; }
+/* 저장 안 한 글이 있다 — 점 하나로만 말한다(경고창이 아니라 상태 표시다). */
+.pn-ed-bar .pn-fine.warn { color: var(--danger); font-weight: 600; }
+
 /* 뷰어의 '무엇을 열까' 화면 — 드롭다운을 대신하는 목록(검색 + 종류·크기·시각) */
 .pn-ed-pick2 { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .pn-ed-find { flex: none; margin: 9px 12px 7px; height: 30px; padding: 0 10px; border: 1px solid var(--line-net); border-radius: 9px; font: inherit; font-size: 12.5px; background: var(--bg); color: var(--ink); }
@@ -562,3 +635,23 @@ webview.pn-webframe { display: flex; }
   border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 12.5px; color: inherit; text-align: left; }
 .pn-share-row:hover { background: var(--bg-tint); }
 .pn-share-act { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* ── 타임라인 찾기 칸 (#762) ─────────────────────────────────────────────────
+   머리 바의 [최신순][자세히] 과 같은 급이라 높이·반경을 맞춘다(28 · 8). 좁은 칸에서는 이 칸이 먼저 줄고
+   단추는 안 줄어든다 — 단추는 글자 폭이 정해져 있지만 찾기 칸은 줄어도 쓸 수 있다. */
+.tl-find { flex: 1 1 90px; min-width: 60px; height: 26px; padding: 0 9px; border: 1px solid var(--line-net); border-radius: 8px;
+  background: var(--bg); font: inherit; font-size: 12px; color: var(--ink); }
+.tl-find::placeholder { color: var(--muted-2); }
+.tl-find:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+
+/* ── 자료 칸 찾기 (#762) — 툴바의 다른 단추와 같은 높이(28)·반경(8). 좁아지면 이 칸이 먼저 줄어든다. */
+.pn-ffind { flex: 1 1 96px; min-width: 64px; height: 28px; padding: 0 9px; border: 1px solid var(--line-net); border-radius: 8px;
+  background: var(--bg); font: inherit; font-size: 12.5px; color: var(--ink); }
+.pn-ffind::placeholder { color: var(--muted-2); }
+.pn-ffind:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+
+/* ── 뷰어 목록의 미리보기 (#762) ────────────────────────────────────────────
+   자료 칸과 같은 기계를 쓰되 **행**이라 작다(44×36). 아이콘만 있을 땐 종전 자리 그대로. */
+.pn-fic.pv { width: 44px; height: 36px; flex: none; aspect-ratio: auto; border-radius: 6px; overflow: hidden; position: relative; }
+.pn-fic.pv .pn-i { width: 15px; height: 15px; }
+.pn-frow2.pv { align-items: center; gap: 10px; }

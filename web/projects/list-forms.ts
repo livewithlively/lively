@@ -30,7 +30,8 @@ function pjvListCategoryField(currentId) {
   let count = 0; // 고를 수 있는 카테고리 수 — 0이면 관리탭에서 먼저 만들어야 한다(안내 문구가 달라진다)
   (async () => {
     let cats: any[] = [];
-    try { cats = await api('/api/ui/categories').then((d) => (d && d.categories) || []); } catch (_) { /* 실패 시 loaded=false 유지 → 저장이 현재값 보존 */ return; }
+    //  #1631: 리스트에 걸 축도 활성만.
+    try { cats = await api('/api/ui/categories').then((d) => ((d && d.categories) || []).filter((c: any) => (c.state ?? 'active') === 'active')); } catch (_) { /* 실패 시 loaded=false 유지 → 저장이 현재값 보존 */ return; }
     selectEl.replaceChildren(el('option', { value: '', text: cats.length ? '카테고리를 선택하세요' : '고를 수 있는 카테고리가 없어요' }));
     //  #1631: 종전엔 space(사업/제품/시스템) optgroup 으로 묶었다. 그 축이 없어져 평면 목록이다.
     for (const c of cats) {

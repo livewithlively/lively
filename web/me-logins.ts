@@ -62,6 +62,9 @@ interface SvcView {
   soonConnected: Set<string>;  // 그중 **이미 연결해 둔** 것의 key — 준비 중이라고 해서 쓰던 연결을 없는 척하지 않는다
   all: any[];             // 위 셋 전부 — 상세 화면(#/connect/<key>)이 키로 되찾을 때 쓴다
   /** #1675 ③ 헤드리스 자격의 마지막 실패(있으면). `{ at, label, task_id }`. */
+  //  헤드리스 자격이 마지막으로 **실패**한 기록(서버 me/credentials). 이 파일은 더는 그리지 않는다 —
+  //   그리는 자리는 [내 AI 계정](me-ai.ts headlessAuthWarn)이다. 필드는 남긴다: 이 뷰가 서버 응답을
+  //   그대로 담는 자리이고, 지우면 partition 을 쓰는 다음 화면이 그 신호가 있는 줄도 모르게 된다.
   authFailure?: { at: string | null; label: string; task_id: number } | null;
 }
 
@@ -200,24 +203,13 @@ function connectedRow(svc: any, v: SvcView, reload: () => void) {
   if (viaToken && cred?.last_used_at) metaBits.push('마지막 사용 ' + relTime(cred.last_used_at));
   else if (viaToken && cred?.updated_at) metaBits.push('연결 ' + relTime(cred.updated_at));
 
-  // #1675 ③ — **이 토큰이 지금 살아 있나.** '마지막 사용'만으로는 성공했는지 실패했는지 알 수 없어서,
-  //  토큰이 폐기돼도 이 화면은 멀쩡해 보였다(전면장애 때 사람이 그 사실을 알 길이 알림 하나뿐이었다).
-  //  실패가 **마지막 등록보다 나중**일 때만 경고한다 — 다시 등록했으면 지난 실패는 이미 해결된 것이다.
-  let authWarn: any = null;
-  if (svc.key === 'claude-headless' && viaToken && v.authFailure) {
-    const failAt = v.authFailure.at ? new Date(v.authFailure.at).getTime() : 0;
-    const setAt = cred?.updated_at ? new Date(cred.updated_at).getTime() : 0;
-    if (failAt > setAt) {
-      authWarn = el('div', { class: 'svc-conn-blurb' },
-        el('span', { class: 'pill pill-warn', text: '인증 실패' }),
-        el('span', { text: ' ' + relTime(v.authFailure.at) + ' · ' + v.authFailure.label
-          + ' — 내 계정으로 실행된 작업이 인증에 실패했습니다. 여기 등록한 토큰이 원인이라면'
-          + ' `claude setup-token` 으로 다시 발급해 [토큰 교체]를 누르세요.'
-          + ' 내 PC(노드)에서 실행된 작업이었다면 그 PC 의 Claude 로그인을 다시 하셔야 합니다 —'
-          + ' 그 경우 이 안내는 30일 뒤 저절로 사라집니다.'
-          + ' 이 실패로 멈춘 예약 작업이 있다면 관리 ▸ 자동화에서 다시 켜세요.' }));
-    }
-  }
+  // ⓘ #1675 의 «헤드리스 인증 실패» 배지가 여기 있었다 — **2026-09-03 에 [내 AI 계정]으로 옮겼다**
+  //  (me-ai.ts headlessAuthWarn). 옮긴 게 아니라 **되살린 것**이다: 배지는 이 함수가 그리는 «연결된
+  //  서비스» 행에 붙어 있었는데, #2243 이 claude-headless 를 LOGIN_SERVICES.hidden 으로 내렸고 아래
+  //  partition 이 hidden 을 네 버킷 전부에서 건너뛴다 → 행이 안 만들어지니 **배지도 아무 데도 안 떴다**
+  //  (주소로 여는 v2/connect.ts 상세에도 없었다). 죽은 코드를 남겨 두면 다음 사람이 «있다» 고 읽는다.
+  //  ⚠ 그래서 이 파일에 그 배지를 되돌리지 마라 — 앱 목록에서 내린 앱은 여기서 그릴 자리가 없다.
+  //   신호(me/credentials 의 headless_auth_failure)는 그대로 한 곳이고, 그리는 자리만 저쪽이다.
 
   box.append(
     el('div', { class: 'svc-conn-row' },
@@ -227,8 +219,7 @@ function connectedRow(svc: any, v: SvcView, reload: () => void) {
           el('span', { text: svc.label }),
           el('span', { class: 'svc-state', text: '연결됨' }),
           metaBits.length ? el('span', { class: 'svc-meta', text: metaBits.join(' · ') }) : null),
-        el('div', { class: 'svc-conn-blurb' }, ...uiText(svc.blurb)),
-        authWarn),
+        el('div', { class: 'svc-conn-blurb' }, ...uiText(svc.blurb))),
       el('div', { class: 'svc-conn-acts' }, ...acts)),
     expand);
   return box;

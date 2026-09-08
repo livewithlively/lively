@@ -3,10 +3,15 @@
 //  sudo → box-spawn 로 **멤버 uid** 에서 실행한다(wrapAsMember). 구조적 op(ls/stat)는 node one-liner 로
 //  JSON emit(ls 출력 파싱 대신 안전), 스트리밍(read/write)은 cat / sh-redirect. 생성 파일 소유자=멤버(정합).
 //  ⚠ 경로 봉쇄(세션 dir 내부)는 호출부(terminal-files resolveInSession)가 이미 건다 — 여기선 uid 만 내린다.
+//  ⚠ #3668 T2 — op 가 도는 «자리» 는 둘이다: 파일 op 는 종전 멤버 경계, **프로그램을 실행하는 op**(설치 번들·git)는
+//   그 세션의 컨테이너. 고르는 규칙과 그 이유는 아래 `ExecAt` 머리말에 있다.
 import { spawn, type ChildProcess } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 import { memberExecConfigured, wrapAsMember } from "./terminal-isolation.js";
 import { tenantSlug } from "./catalog.js";
+import { execTopology } from "../exec-topology.js";   // #2599 T2 — 중계 설정의 단일 출처
+import { PROBE_JS, type PathProbe } from "./path-jail.js";   // #3668 T1 — 경로 해소 한 줄(판정은 path-jail.confined)
+import { sessionSpawnArgv } from "./session-exec.js";   // #3668 T2 — 프로그램 실행 op 의 두 번째 자리(세션 컨테이너)
 
 // node one-liner(멤버 PATH 의 node 로 실행). argv[1]=대상 절대경로. 셸 미경유(argv) — 인젝션 없음.
 // 심링크(#1744): dirent 의 isDirectory() 는 링크에 대해 **항상 false** 라, 폴더를 가리키는 링크가 '파일'로 나왔다
@@ -40,7 +45,7 @@ const STAT_JS =
  *  컨테이너의 (존재하지 않거나 남의) 경로를 만진다 — tmuxExecArgv 의 판단과 같은 교리다.
  */
 export function memberExecArgv(): string[] {
-  const raw = (process.env.LIVELY_MEMBER_EXEC || "").trim();
+  const raw = execTopology().hooks.memberExec;
   if (!raw) return [];
   if (!raw.includes("{slug}")) return raw.split(/\s+/);
   const slug = tenantSlug();
@@ -62,8 +67,45 @@ export function memberSpawnArgv(osUser: string, argv: string[]): string[] {
   return relay.length ? [...relay, osUser, "--", ...argv] : wrapAsMember(osUser, argv);
 }
 
-function memberSpawn(osUser: string, argv: string[], stdio: Array<"ignore" | "pipe">): ChildProcess {
-  const full = memberSpawnArgv(osUser, argv);
+/**
+ * 실행 자리(#3668 T2) — «누구 uid 로» 는 그대로 그 멤버이고, «어느 감옥 안에서» 가 갈린다.
+ *  · 문자열(osUser)             = 종전 그대로 **멤버 경계**(중계 배포면 테넌트 파일 op 컨테이너, 셀프호스트면 sudo→box-spawn).
+ *  · `{ osUser, sessionId }`    = 그 **세션 컨테이너 안**. 세션 경계 중계가 없는 배포에선 멤버 경계로 떨어진다(무회귀).
+ *
+ * 왜 가르나 — 폭발반경이 다르다. 파일 op(ls·stat·read·write·mkdir)는 게이트웨이가 쓴 명령이라 파일 «내용» 이
+ *  실행되지 않는다. 그런데 설치 번들과 gitconfig 는 **우리가 안 쓴 코드가 무엇을 실행할지 정한다**
+ *  (`user-install.mjs` · git 의 alias/pager/credential.helper). 파일 op 자리는 #3668 T3 에서 gVisor 컨테이너를
+ *  걷고 게이트웨이 박스의 상주 헬퍼로 내려갈 자리라, 그 전에 «실행되는 코드» 를 세션 컨테이너(gVisor 유지)로
+ *  옮겨 둔다 — T3 가 감옥을 바꿀 수 있는 근거가 이 갈래다.
+ *
+ * ⚠ **세션 경계로 보내는 op 에는 stdin 이 없어야 한다.** 세션 경계 중계는 우리 stdin 의 EOF 를 컨테이너로
+ *  전파하지 않는다(session-exec-relay.cjs 의 `pipe(socket, { end:false })` — 장수 대화 다리를 위한 의도된 선택).
+ *  `cat > file` 류를 그리로 보내면 EOF 를 기다리며 매달린다. 시크릿을 stdin 으로 넘기는 쓰기는 애초에 파일 op 라
+ *  멤버 경계에 남는다 — memberSh 가 그 조합을 **던져서** 막는다.
+ */
+export interface MemberExecAt { osUser: string; sessionId?: string | null }
+export type ExecAt = string | MemberExecAt;
+
+/** (순수) 실행 자리 정규화 — 문자열은 «세션 없음»(멤버 경계)이다. */
+export const execAt = (at: ExecAt): MemberExecAt => (typeof at === "string" ? { osUser: at } : at);
+
+/**
+ * (순수 — 테스트 seam) 그 자리에서 argv 를 돌릴 **전체 명령**.
+ *  경계 계산은 두 벌이 아니다 — 세션은 `sessionSpawnArgv`, 멤버는 `memberSpawnArgv` 각각 하나뿐이고
+ *  여기서는 **둘 중 어느 쪽인지만** 고른다.
+ */
+export function execAtArgv(at: ExecAt, argv: string[]): string[] {
+  const { osUser, sessionId } = execAt(at);
+  if (sessionId) {
+    const inSession = sessionSpawnArgv(sessionId, argv);
+    if (inSession.length) return inSession;   // 매니지드 — 그 세션의 컨테이너 안
+    // 세션 경계 중계가 없는 배포(셀프호스트)다 → 아래 멤버 경계가 곧 종전 동작이다.
+  }
+  return memberSpawnArgv(osUser, argv);
+}
+
+function memberSpawn(at: ExecAt, argv: string[], stdio: Array<"ignore" | "pipe">): ChildProcess {
+  const full = execAtArgv(at, argv);
   return spawn(full[0], full.slice(1), { stdio });
 }
 // 자식 stderr 를 문자열로 수집(진단). 스트림 null 이면 no-op.
@@ -148,6 +190,23 @@ export function memberStat(osUser: string, absPath: string): Promise<{ size: num
   });
 }
 
+// 멤버 uid 로 **경로를 해소**한다(#3668 T1) — 봉쇄 판정의 재료. 게이트웨이가 realpath 를 부르면 안 되는 이유는
+//  path-jail.ts 머리말 참조(격리 홈은 못 읽고, 매니지드 게이트웨이엔 그 경로가 아예 없다).
+//  ⚠ 이 한 줄(PROBE_JS)과 로컬 probeLocal 은 **같은 사양**이다 — 한쪽만 고치면 격리 조직에서만 옛 동작이 남는다.
+export function memberPathProbe(osUser: string, base: string, target: string): Promise<PathProbe> {
+  return new Promise((resolve, reject) => {
+    const c = memberSpawn(osUser, ["node", "-e", PROBE_JS, base, target], ["ignore", "pipe", "pipe"]);
+    const err = collectErr(c);
+    let out = "";
+    c.stdout?.on("data", (d) => (out += d));
+    c.on("error", reject);
+    c.on("close", (code) => {
+      if (code !== 0) return reject(new Error(err.get() || `member realpath exit ${code}`));
+      try { resolve(JSON.parse(out || "null") as PathProbe); } catch (e) { reject(e as Error); }
+    });
+  });
+}
+
 export function memberMkdir(osUser: string, absPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const c = memberSpawn(osUser, ["mkdir", "-p", "--", absPath], ["ignore", "ignore", "pipe"]);
@@ -210,9 +269,15 @@ export function memberReadRange(osUser: string, absPath: string, start: number, 
 
 // 멤버 uid 로 `sh -c <script>` 실행(선택 stdin) — 스크립트는 **우리 코드의 고정 리터럴**만(사용자입력 X → 인젝션 없음).
 //  시크릿(git 개인키·토큰 등)은 argv 아닌 **stdin** 으로만 전달한다(ps/argv 노출 회피). git 자격 materialize(#540)에 쓰인다.
-export function memberSh(osUser: string, script: string, stdin?: string): Promise<void> {
+//  #3668 T2 — 첫 인자가 실행 자리(ExecAt)다. `{ osUser, sessionId }` 를 주면 **그 세션 컨테이너 안**에서 돈다
+//   (설치 번들·git 처럼 «우리가 안 쓴 코드»가 실행되는 op 전용 — ExecAt 머리말).
+export function memberSh(at: ExecAt, script: string, stdin?: string): Promise<void> {
+  // ★ fail-closed — 세션 경계는 stdin EOF 를 전파하지 않는다(ExecAt 머리말). 조용히 매달리는 대신 여기서 죽는다.
+  if (stdin != null && execAt(at).sessionId) {
+    return Promise.reject(new Error("세션 경계 op 에는 stdin 을 쓸 수 없습니다 — 중계가 EOF 를 전파하지 않아 매달립니다(파일 쓰기는 멤버 경계에 남긴다)"));
+  }
   return new Promise((resolve, reject) => {
-    const c = memberSpawn(osUser, ["sh", "-c", script], [stdin != null ? "pipe" : "ignore", "ignore", "pipe"]);
+    const c = memberSpawn(at, ["sh", "-c", script], [stdin != null ? "pipe" : "ignore", "ignore", "pipe"]);
     const err = collectErr(c);
     c.on("error", reject);
     if (stdin != null) {

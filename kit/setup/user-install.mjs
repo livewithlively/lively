@@ -370,6 +370,10 @@ function installCli() {
   //  ⚠ 이게 빠지면 lively-mcp-local.mjs 의 static import 가 부팅 즉시 죽어 `lively mcp-local` 이 통째로 못 뜬다(#905 회귀).
   const projInitCore = cloneAbs(join("cli", "project-init-core.mjs"));
   if (existsSync(projInitCore)) { copyFileSync(projInitCore, join(lib, "project-init-core.mjs")); chmodSync(join(lib, "project-init-core.mjs"), 0o755); }
+  // 워크스페이스 회수 코어(#2621) — lively.mjs(`lively reclaim`)가 dynamic import 한다. 옆(lib/)에 둔다(구버전 번들엔 없으면 스킵).
+  //  ⚠ 빠지면 `lively reclaim` 만 ERR_MODULE_NOT_FOUND 로 못 뜬다(dynamic import 라 다른 명령은 정상).
+  const reclaimCore = cloneAbs(join("cli", "workspace-reclaim-core.mjs"));
+  if (existsSync(reclaimCore)) { copyFileSync(reclaimCore, join(lib, "workspace-reclaim-core.mjs")); chmodSync(join(lib, "workspace-reclaim-core.mjs"), 0o755); }
   // 서브커맨드 모듈(#1313 R52) — lively.mjs 가 `node`·`delegate`·`resume/backfill/share` 에서 dynamic import 한다.
   //  ⚠ 이게 빠지면 그 서브커맨드만 ERR_MODULE_NOT_FOUND 로 못 뜬다(다른 명령은 정상 — 부트스트랩 경로가
   //   lively.mjs 단독이라 설치 이전 표면은 애초에 이 파일들을 안 쓴다). 구버전 번들엔 없으면 조용히 스킵.

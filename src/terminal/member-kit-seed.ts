@@ -5,12 +5,12 @@
 //  `.lively/`(token·gateway-url·hooks·lib·context) + `~/.claude/settings.json`(훅) + lively MCP(멤버 토큰).
 //  중계 배포에서는 그 경로가 **영영 안 불린다** — resolveMemberOsUser 가 즉시 osUser 를 돌려주므로
 //  ensureMemberOsUser 의 lazy provision 분기(provisionMemberOs)에 들어가지 않고, 멤버 홈은 세션 스폰이
-//  빈 채로 만든다(container-spawn 의 mkdir). 결과: 훅이 없어 work-flag 가 대화 uuid 를 보고하지 못하고
+//  빈 채로 만든다(당시 매니지드 spawn 훅 container-spawn 의 mkdir — #2547 에서 삭제, 지금은 브로커의 세션 컨테이너 확보가 그 자리). 결과: 훅이 없어 work-flag 가 대화 uuid 를 보고하지 못하고
 //  대화창이 404 로 남는다(설계문서 §21-3 실측 — 파일 중계(§21-2)가 있어도 매핑이 없으면 못 읽는다).
 //
 //  ── 어떻게 ──
 //  provision-member.sh 의 멤버 부분과 같은 산출물을 **memberSpawn seam 위에서** 만든다 — 실행은 그 테넌트의
-//  tmux 컨테이너(테넌트 이미지 = node·claude CLI·tar 있음, /home 마운트) 안, 멤버 uid 로:
+//  파일 op 컨테이너(테넌트 이미지 = node·claude CLI·tar 있음, /home 마운트) 안, 멤버 uid 로:
 //   ① 멤버 토큰 민팅(mintCentralBoxToken — 로컬 프로비저닝과 같은 발급·회수 규율) → `.lively/token`(600, stdin 전달)
 //   ② `.lively/gateway-url` = http://localhost:8080 — 훅이 실제로 도는 곳은 **세션 컨테이너**이고 거기선
 //      loopback 포워더(session-loopback.cjs)가 그 주소를 게이트웨이로 나른다(E2E 의 'localhost 도달' 단언 그 자리).
@@ -18,6 +18,17 @@
 //      닿는 네트워크 경로가 보장되지 않는다) → user-install.mjs --harness claude + register-clients.sh
 //      (둘 다 로컬 파일 쓰기 — 네트워크 불요. STORE_URL 도 ②와 같은 이유로 localhost).
 //   ④ 마커 `.lively/.kit-seeded` — 다음 세션부터는 stat 1회로 끝(멱등).
+//
+//  ── 자리가 둘이다 (#3668 T2) ──
+//  ③ 의 **설치 스크립트만** 그 세션의 컨테이너 안에서 돈다(`sessionId` 를 받았을 때). 나머지 ①②④ 는 파일 op 라
+//  종전 멤버 경계 그대로다. 갈라야 하는 이유: 설치기는 **조직이 만든 번들이 정하는 코드**를 실행한다
+//  (`node user-install.mjs` · `bash register-clients.sh`). 파일 op 자리는 #3668 T3 에서 gVisor 를 걷고 게이트웨이
+//  박스의 상주 헬퍼로 내려갈 자리라, 거기서 남의 코드가 돌면 커널 LPE 한 발의 폭발반경이 CP 전체다.
+//  · 세션 컨테이너에도 그 멤버 홈이 같은 경로(`/home/box_<slug>`)로 마운트돼 있고 계정도 있다(브로커 buildRunArgs)
+//    — 산출물의 자리·소유자는 한 글자도 안 바뀐다.
+//  · 시크릿(토큰)·번들 바이트는 **stdin** 으로 흐르므로 세션 경계로 못 보낸다(중계가 EOF 를 안 전파한다 —
+//    terminal-member-fs 의 ExecAt 머리말). 그건 애초에 파일 op 라 멤버 경계가 맞는 자리다.
+//  · 세션 경계 중계가 없는 배포(셀프호스트)면 `sessionId` 를 줘도 멤버 경계로 떨어진다 = 종전 동작.
 //
 //  ── 경계 ──
 //  · best-effort: 실패해도 세션 생성을 막지 않는다(git materialize 와 같은 규율) — 키트 없는 세션은 종전과
@@ -28,7 +39,7 @@
 import { Readable } from "node:stream";
 import path from "node:path";
 import { memberExecConfigured } from "./terminal-isolation.js";
-import { memberSh, memberStat, memberWriteFrom } from "./terminal-member-fs.js";
+import { memberSh, memberStat, memberWriteFrom, execAt, type ExecAt } from "./terminal-member-fs.js";
 import { mintCentralBoxToken, userSlug, ownerId } from "./profiles.js";
 import { gatewayCapability } from "../sessions/gateway-capabilities.js";   // #2165 — DB·번들 생성은 게이트웨이 능력이다
 import { MEMBER_HOME_BASE } from "./terminal-transcript.js";
@@ -110,7 +121,8 @@ export function installScript(home: string): string {
  * 중계 배포에서 이 멤버의 홈 키트를 보장한다(멱등·best-effort). 로컬 격리/비격리 배포는 no-op —
  *  거긴 provision-member.sh 경로가 담당한다(이중 시딩 금지).
  */
-export async function ensureMemberKitSeeded(user: LivelyUser, osUser: string, injected?: KitSeedDeps): Promise<void> {
+export async function ensureMemberKitSeeded(user: LivelyUser, at: ExecAt, injected?: KitSeedDeps): Promise<void> {
+  const { osUser } = execAt(at);
   if (!memberExecConfigured() || !osUser) return;
   const deps = injected ?? registryDeps();
   if (!deps) return;   // 노드 — 게이트웨이 능력이 없다(여기까진 애초에 안 온다)
@@ -134,7 +146,8 @@ export async function ensureMemberKitSeeded(user: LivelyUser, osUser: string, in
       // ③ 번들을 바이트로 밀어 넣고 멤버 uid 로 설치.
       const buffer = await deps.buildBundle();
       await memberWriteFrom(osUser, `${home}/${BUNDLE_TMP}`, Readable.from(buffer), BUNDLE_MAX_BYTES);
-      await memberSh(osUser, installScript(home));
+      //  ★ 여기만 세션 컨테이너다 — 이 한 줄이 조직 번들의 코드를 실행한다(위 «자리가 둘이다»).
+      await memberSh(at, installScript(home));
       seeded.add(osUser);
       logger.info({ osUser }, "멤버 홈 키트 시딩 완료(settings.json 훅 + lively MCP=멤버 토큰)");
     })();
