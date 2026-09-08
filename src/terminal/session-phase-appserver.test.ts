@@ -112,5 +112,7 @@ t("★ B2 화면은 모를 때 터미널로 추정하지 않는다 — codex 는
 
 t("B3 추정이 틀린 배포(tmux)에서는 행이 오는 즉시 터미널로 되돌린다 — 한 방향만 마감하면 반쪽이다", () => {
   const src = readSrc("web/session-chat.ts");
-  assert.match(src, /chatMode \|\| ''\) === 'tmux' && opts\.terminalSrc && isBox\) setMode\('term'\)/);
+  //  ⚠ 2026-09-08 — 조건이 `opts.terminalSrc && isBox`(마운트 시점 값 둘)에서 `hasTerm()`(지금의 행)으로 바뀌었다.
+  //   그 둘이 얼어 있으면 이 줄도 함께 막혀, 목록 한 틱의 «중단됨» blip 에 붙은 탭이 영영 대화창에 갇혔다.
+  assert.match(src, /chatMode \|\| ''\) === 'tmux' && hasTerm\(\)\) setMode\('term'\)/);
 });
