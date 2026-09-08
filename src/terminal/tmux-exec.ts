@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import os from "node:os";
 import { TMUX_BIN, tenantSlug, isPsmuxBin } from "./catalog.js";
 import { execTopology, tmuxArgvFor, tmuxServerIsDedicated } from "../exec-topology.js";   // #2599 T2 — 「어디서 도나」는 토폴로지 한 곳에만 묻는다
-import { planTmux, runPlan, outcomeToError } from "./tmux-route.js";                        // #2600 T2 (d) d2 — 코어 직접 경로의 «무엇을 어디로»
+import { planTmux, runPlan, outcomeToError, tmuxSessionOf } from "./tmux-route.js";                        // #2600 T2 (d) d2 — 코어 직접 경로의 «무엇을 어디로»
 import { makeBrokerClient, type BrokerTransport } from "./broker-client.js";                // #2600 T2 (d) d2 — 그 전송(소켓·허브)
 import { shadowTmux } from "./tmux-shadow.js";                                               // #2600 T2 (d) d3 — 옛 경로가 답하고 코어 경로는 견주기만
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
@@ -146,14 +146,50 @@ export async function tmuxQuiet(args: string[]): Promise<void> { try { await tmu
 //   · 중간 명령이 실패하면 그 뒤는 **실행되지 않고** 호출 전체가 비-0 이다 — 순차 실행의 의미가 그대로 보존된다.
 //  ⚠ 브로커의 argv 상한(lvly-cloud validateTmuxArgv, 종전 64)보다 **적게** 끊는다. 상한을 올리는 변경과
 //   이 변경의 배포 순서가 어긋나도 조용히 깨지지 않게 하려는 것이다(옛 브로커에서도 그대로 돈다).
+//  ⚠⚠ **묶는 것은 전송의 최적화처럼 보이지만 라우팅의 입력을 바꾼다** (#3668 리뷰, 2026-09-08).
+//   이 argv 를 읽는 사람이 매니지드에 둘 더 있다 — 중계(`tmux-relay.cjs sessionOf`)가 `x-lvly-session`
+//   헤더를 만들어 허브가 **세션 라우트**로 노드를 고르게 하고(#3681 ③), 브로커
+//   (`sessionbroker.tmuxSessionOf` → `routeKeyOf`)가 두 번째 홉 전달을 정한다(#3563).
+//   둘 다 **한 명령** 문법이라 «첫 비옵션이 동사 → `-s`/`-t` 를 찾되 비옵션 인자를 만나면 멈춘다» 로 읽는다.
+//   그래서 세션을 안 지목하는 명령(`set-option -g …`)을 앞에 묶으면 파서가 거기서 멈춰 뒤의
+//   `new-session -s <id>` 를 **아예 못 본다** → 지목이 null → 그 명령이 세션이 앉은 노드가 아니라
+//   테넌트 핀 노드로 간다(크로스노드 배치 세션은 생성이 깨진다).
+//   실측(실제 중계 파서를 그대로 실행): 묶으면 `null`, 안 묶으면 `<id>`.
+//  ⇒ **세션을 지목하지 않는 명령은 배치에 안 싣는다**(아래 `tmuxBatchable`). 지목이 있는 것끼리만 묶으므로
+//   묶음의 첫 명령이 늘 라우팅 키를 쥔다. 전역 옵션 하나가 홀로 나가는 대가(왕복 +1)로 라우팅이 산다.
+//
+//  ⏳ **이 층은 수명이 있다** (#3668 리뷰, 2026-09-08). 왕복이 비싼 이유는 게이트웨이가 **남의 박스**의
+//   tmux 를 부르기 때문이고, #2600 T2 (d)(#3696)의 도착점이 «매니지드 세션의 주인을 노드 박스의 세션
+//   호스트로 옮기고 게이트웨이의 매니지드 tmux 호출을 0 으로» 다. 다만 그 태스크는 **생성(create)을 스코프
+//   밖에 뒀다**(«create 에는 아직 주인이 없다 — 배치는 용량 판단이라 CP 몫») — 여기서 묶는 15 왕복이 바로
+//   그 create 라, 그때까지는 이 층이 값을 한다. create 에도 주인이 생기면 왕복이 로컬 `runsc exec`(15~70ms)로
+//   떨어져 이 층은 «7~15초를 없애는 본체» 에서 «0.5초짜리 잔여 최적화» 가 된다 — 그 시점의 죽은 코드
+//   정리(#2608)가 이 블록을 후보로 세어야 한다.
 export const TMUX_BATCH_MAX_ARGV = 60;
 
 /** tmux 명령 하나 — argv 조각. */
 export type TmuxCmd = readonly string[];
 
-/** (순수) 이 명령을 배치에 실을 수 있나 — 인자가 정확히 `;` 이면 못 싣는다(위 계약). */
+/**
+ * (순수) 이 명령이 지목하는 세션 — 없거나 이름 형식 밖이면 null.
+ *
+ * ⚠ **문법을 여기서 다시 쓰지 않는다.** 정본은 `tmux-route.tmuxSessionOf` 이고, 그건 브로커
+ *  (`sessionbroker.tmuxSessionOf`)·중계(`tmux-relay.cjs sessionOf`)와 «같은 답» 을 내기로 못박힌 자리다.
+ *  배치 판정이 그들과 갈리면 그 갈림이 곧 라우팅 오류이므로, 같은 함수를 쓴다(사본을 넷째로 만들지 않는다).
+ */
+export function tmuxBatchRefOf(cmd: TmuxCmd): string | null {
+  const { ref } = tmuxSessionOf(cmd);
+  return ref.kind === "session" ? ref.sid : null;
+}
+
+/**
+ * (순수) 이 명령을 배치에 실을 수 있나.
+ *  · 인자가 정확히 `;` 이면 못 싣는다(위 tmux 계약 — 구분자로 읽혀 죽는다).
+ *  · **세션을 지목하지 않으면 못 싣는다**(위 ⚠⚠ — 묶으면 뒤 명령의 라우팅 키가 가려진다).
+ * 못 싣는 명령은 버리는 게 아니라 **홀로** 나간다(종전과 완전히 같은 동작).
+ */
 export function tmuxBatchable(cmd: TmuxCmd): boolean {
-  return cmd.length > 0 && !cmd.some((a) => a === ";");
+  return cmd.length > 0 && !cmd.some((a) => a === ";") && tmuxBatchRefOf(cmd) !== null;
 }
 
 /**
@@ -163,12 +199,18 @@ export function tmuxBatchable(cmd: TmuxCmd): boolean {
 export function chunkTmuxCommands(cmds: readonly TmuxCmd[], maxArgv = TMUX_BATCH_MAX_ARGV): string[][] {
   const out: string[][] = [];
   let cur: string[] = [];
-  const flush = (): void => { if (cur.length) { out.push(cur); cur = []; } };
+  let curRef: string | null = null;                                  // 이 묶음이 지목하는 세션 — 라우팅 키
+  const flush = (): void => { if (cur.length) { out.push(cur); cur = []; } curRef = null; };
   for (const cmd of cmds) {
     if (!cmd.length) continue;
     if (!tmuxBatchable(cmd)) { flush(); out.push([...cmd]); continue; }
+    const ref = tmuxBatchRefOf(cmd);
+    //  ★ 한 묶음 = 한 세션. 묶음은 **첫 명령의 지목**으로 라우팅되므로(중계·브로커·`planTmux` 셋 다),
+    //   다른 세션의 명령을 같이 실으면 그 명령이 남의 세션 컨테이너에서 돈다.
+    if (cur.length && ref !== curRef) flush();
     if (cur.length && cur.length + 1 + cmd.length > maxArgv) flush();
     if (cur.length) cur.push(";");
+    else curRef = ref;
     cur.push(...cmd);
   }
   flush();
