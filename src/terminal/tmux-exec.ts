@@ -10,6 +10,7 @@ import { TMUX_BIN, tenantSlug, isPsmuxBin } from "./catalog.js";
 import { execTopology, tmuxArgvFor, tmuxServerIsDedicated } from "../exec-topology.js";   // #2599 T2 — 「어디서 도나」는 토폴로지 한 곳에만 묻는다
 import { planTmux, runPlan, outcomeToError } from "./tmux-route.js";                        // #2600 T2 (d) d2 — 코어 직접 경로의 «무엇을 어디로»
 import { makeBrokerClient, type BrokerTransport } from "./broker-client.js";                // #2600 T2 (d) d2 — 그 전송(소켓·허브)
+import { shadowTmux } from "./tmux-shadow.js";                                               // #2600 T2 (d) d3 — 옛 경로가 답하고 코어 경로는 견주기만
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 
 const execFileAsync = promisify(execFile);
@@ -77,13 +78,13 @@ export function tmuxTimeoutMs(relay: readonly string[]): number {
  *  못 채우므로 여기서도 새 경로가 아니다 — 두 경로의 «성립 조건»이 같아야 그림자 대조가 같은 호출을 견준다.
  *  ⚠ `{slug}` 치환은 `String.replace(문자열)` = **첫 번째 하나만** — `tmux-relay.cjs`·`tmuxArgvFor` 와 같은 의미를 지킨다.
  */
-export function tmuxRouteTransport(slug: string | null = tenantSlug()): { transport: BrokerTransport; slug: string } | null {
+export function tmuxRouteTransport(slug: string | null = tenantSlug()): { transport: BrokerTransport; slug: string; mode: "on" | "shadow"; sample: number } | null {
   const topo = execTopology();
-  if (!topo.tmuxRoute || !topo.broker || !slug) return null;
+  if (topo.tmuxRoute === "off" || !topo.broker || !slug) return null;
   const transport: BrokerTransport = topo.broker.kind === "hub"
     ? { kind: "hub", url: topo.broker.url, secret: topo.broker.secret, slug }
     : { kind: "socket", socketPath: topo.broker.template.replace("{slug}", slug) };
-  return { transport, slug };
+  return { transport, slug, mode: topo.tmuxRoute, sample: topo.tmuxShadowSample };
 }
 
 /**
@@ -112,13 +113,22 @@ export async function tmuxViaRoute(args: string[], via: { transport: BrokerTrans
 }
 
 export async function tmux(args: string[]): Promise<string> {
-  //  #2600 T2 (d) d2 — 플래그가 켜져 있고 길이 있을 때만 코어 직접 경로. 아니면 아래 종전 경로가 **한 바이트도** 안 바뀐다.
+  //  #2600 T2 (d) d2 — 플래그가 `on` 이고 길이 있을 때만 코어 직접 경로. 아니면 아래 종전 경로가 **한 바이트도** 안 바뀐다.
   const via = tmuxRouteTransport();
-  if (via) return tmuxViaRoute(args, via);
+  if (via?.mode === "on") return tmuxViaRoute(args, via);
   const relay = tmuxExecArgv();
   const [bin, ...prefix] = relay.length ? relay : [TMUX_BIN];
-  const { stdout } = await execFileAsync(bin!, [...prefix, ...args], { timeout: tmuxTimeoutMs(relay), env: TMUX_ENV });
+  const old = execFileAsync(bin!, [...prefix, ...args], { timeout: tmuxTimeoutMs(relay), env: TMUX_ENV });
+  //  d3 — `shadow` 면 같은 약속을 곁에서 지켜보며 코어 경로와 견준다. 떼어 놓는다(void): 이 호출의 답·지연·예외는 옛 경로 그대로다.
+  //   그림자는 절대 거절하지 않는다(tmux-shadow 규율). 엔진(broker-client)은 호출 시점에 만든다 — 만들다 던지면 그쪽이 드러낸다.
+  if (via?.mode === "shadow") void shadowTmux(args, via.slug, via.sample, old, () => shadowEngineFor(via));
+  const { stdout } = await old;
   return stdout;
+}
+/** 그림자의 코어 경로 엔진 — `on` 경로(`tmuxViaRoute`)와 같은 클라이언트·같은 상한. */
+function shadowEngineFor(via: { transport: BrokerTransport }) {
+  const client = makeBrokerClient(via.transport, { timeoutMs: TMUX_RELAY_TIMEOUT_MS });
+  return { list: () => client.listSessions(), exec: (c: string, argv: string[]) => client.execCapture(c, argv) };
 }
 export async function tmuxQuiet(args: string[]): Promise<void> { try { await tmux(args); } catch { /* 비치명 */ } }
 export async function getOpt(name: string, opt: string): Promise<string> {
