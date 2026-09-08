@@ -31,7 +31,7 @@ import { tmuxInSessionContainer, sessionEnsureArgv, sessionPaneArgv, ensureSessi
 import { onNode } from "../exec-topology.js";   // #2599 T2 — 「노드 프로세스인가」의 단일 출처
 import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState, type SessionState, type SessionStateInput } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
-import { memberMkdir, memberWriteFile, memberShOut } from "./terminal-member-fs.js";
+import { memberMkdir, memberWriteFile, memberShOut, execAt, type ExecAt } from "./terminal-member-fs.js";
 import os from "node:os";
 import path from "node:path";
 import { MEMBER_HOME_BASE } from "./terminal-transcript.js";
@@ -398,6 +398,38 @@ async function desiredFallbackSessions(me: string | null, cause: unknown): Promi
 //  "폴더가 git 저장소가 아니라서"로 **오진**했다(진짜 이유는 격리). 코드 작업면은 lively_local_repo_worktree
 //  셀프서비스가 환경·격리 무관하게 만든다 — 세션 생성은 워크트리를 만들지 않는다.
 
+/**
+ * 세션이 앉을 **멤버 홈**을 준비한다 — 키트(훅·토큰·MCP 배선, #1437 §21-3)와 git 자격(#540·#522).
+ *  셋 다 best-effort 다: 실패해도 세션은 뜬다(키트 없는 세션은 훅·대화창 매핑이 비고, git 은 자격 없이 돈다).
+ *
+ * ★ #3668 T2 — **왜 세션 컨테이너를 확보한 뒤인가.** 이 셋이 실제로 하는 일은 «우리가 안 쓴 코드를 실행하는 것»
+ *  이다: 설치 번들이 `node user-install.mjs`·`bash register-clients.sh` 를, git 이 그 멤버의 `~/.gitconfig`
+ *  (alias·core.pager·credential.helper)를 정한다. 그런 op 는 gVisor 세션 컨테이너 안에서 돌아야 하는데
+ *  그 컨테이너는 **세션 id 로만 지목**되므로, 종전 순서(시딩 → ensure → new-session)로는 보낼 자리가 없었다.
+ *  뒤집어서 **ensure → 준비 → new-session** 이다. 파일 op 자리(멤버 경계)는 #3668 T3 에서 gVisor 밖 상주
+ *  헬퍼로 내려가므로, 그 전에 실행되는 코드를 옮겨 두는 것이 T3 의 전제다.
+ *  부수로 시딩과 세션이 **같은 노드**에 앉는다(#3668 §3-3 — 종전엔 시딩이 테넌트 핀 노드, 세션은 배치 노드였다).
+ *
+ * ⚠ 넘기는 자리(at)는 «세션 컨테이너 안 tmux» 인 배포에서만 세션 id 를 싣는다. 셀프호스트 격리는 문자열
+ *  osUser 그대로 = 종전과 한 글자도 다르지 않다.
+ */
+async function prepareMemberHome(user: LivelyUser, at: ExecAt): Promise<void> {
+  const { osUser } = execAt(at);
+  // 키트(#1437 §21-3) — 로컬 격리의 provision-member 가 심는 훅·토큰·MCP 배선을 첫 세션에서 심는다
+  //  (멱등·마커 1-stat 빠른 경로·중계 미설정이면 no-op). 키트가 없으면 work-flag 훅이 없어 대화창 매핑(claude-uuid)이 영영 안 생긴다.
+  await ensureMemberKitSeeded(user, at).catch((e) =>
+    logger.warn({ err: e, osUser }, "멤버 홈 키트 시딩 실패(비치명) — 세션은 뜨나 훅·대화창 매핑이 비어 있을 수 있다"));
+  // 공유 레포 dubious-ownership 방지(#522) — 자격 유무와 무관하게 항상(게이트웨이-소유 클론을 멤버 git 이 거부 않게).
+  await ensureGitSafeDirectory(at).catch((e) => console.warn("[terminal] safe.directory 설정 실패 — 세션은 계속:", (e as Error)?.message ?? e));
+  // git 자격 materialize(#540, Slice 2) — 그 멤버의 등록 git 자격을 홈(~/.ssh·~/.lively)에 뿌린다. DB 미등록이면 no-op.
+  //  #2165 — 노드엔 DB 가 없어 이 호출은 원래도 실패하고 catch 로 넘어갔다(= 노드에선 죽은 코드). 능력이 없으면 그냥 건너뛴다.
+  const mid = ownerId(user);
+  const materializeMemberGit = gatewayCapability("materializeMemberGit");
+  if (mid && materializeMemberGit) {
+    await materializeMemberGit(at, mid).catch((e) => console.warn(`[terminal] git 자격 materialize 실패(${mid}) — 세션은 계속:`, (e as Error)?.message ?? e));
+  }
+}
+
 export async function createSession(user: LivelyUser, input: CreateInput): Promise<SessionInfo> {
   // 디스크 가드(#813 T5) — **맨 앞**에서 막는다. 세션은 워크트리 체크아웃 + 의존성 설치로 디스크를 크게 먹는데,
   //  꽉 차면 Postgres 가 죽어 전 기능이 500 이 되고 공간을 비워도 수동 재시작이 필요하다(2026-07-13 실증).
@@ -418,13 +450,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  폴더를 그룹접근가능으로 만들며 해소. 미프로비저닝 멤버는 여기서 '첫 세션 lazy provision'(ensureMemberOsUser) →
   //  자동 격리(수동 버튼 불요). 인프라미설치/off/비멤버 = null 반환 = 비격리 폴백(무회귀).
   const osUser = await ensureMemberOsUser(user);
-  // 중계 배포 멤버 홈 키트(#1437 §21-3) — 로컬 격리의 provision-member 가 심는 훅·토큰·MCP 배선을 첫 세션에서
-  //  memberSpawn seam 으로 심는다(멱등·마커 1-stat 빠른 경로·중계 미설정이면 no-op). best-effort — 실패해도 세션은
-  //  뜬다(git materialize 규율). 키트가 없으면 work-flag 훅이 없어 대화창 매핑(claude-uuid)이 영영 안 생긴다.
-  if (osUser) {
-    await ensureMemberKitSeeded(user, osUser).catch((e) =>
-      logger.warn({ err: e, osUser }, "멤버 홈 키트 시딩 실패(비치명) — 세션은 뜨나 훅·대화창 매핑이 비어 있을 수 있다"));
-  }
+  //  ⚠ #3668 T2 — 멤버 홈 준비(키트 시딩·git 자격)는 **여기가 아니다.** 세션 컨테이너를 확보한 뒤에 돈다
+  //   (prepareMemberHome 머리말 — 생성 순서 뒤집기). 종전엔 이 자리였다.
   const id = `${sessionPrefix(user)}${crypto.randomBytes(4).toString("hex")}`;
   // cwd는 사용자가 고른 workspace 좌표 그대로다. 미지정이면 personal workspace 루트이며,
   // 세션 id 폴더나 프로젝트 표현 파일을 만들지 않는다.
@@ -434,18 +461,6 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   // 작업 디렉터리 확보. 격리면 멤버 uid 로 만든다 — 게이트웨이(비-멤버)는 멤버 700 홈 안에 mkdir 못 함(개인 폴더 세션 버그).
   if (osUser) await memberMkdir(osUser, target);
   else await fsp.mkdir(target, { recursive: true, mode: 0o700 });
-
-  // git 자격 materialize(#540, Slice 2) — 격리 세션이면 그 멤버의 등록 git 자격을 홈(~/.ssh·~/.lively)에 뿌려
-  //  세션 안 shell/Claude 의 git 이 멤버 자격으로 되게 한다. best-effort·비파괴(실패해도 세션 생성 안 막음). DB 미등록이면 no-op.
-  if (osUser) {
-    // 공유 레포 dubious-ownership 방지(#522) — 자격 유무와 무관하게 항상(게이트웨이-소유 클론을 멤버 git 이 거부 않게). best-effort.
-    await ensureGitSafeDirectory(osUser).catch((e) => console.warn("[terminal] safe.directory 설정 실패 — 세션은 계속:", (e as Error)?.message ?? e));
-    const mid = ownerId(user);
-    //  #2165 — 노드엔 DB 가 없어 이 호출은 원래도 실패하고 아래 catch 로 넘어갔다(= 노드에선 죽은 코드).
-    //   그런데 정적 import 라 자격 금고·GitHub App 코드가 노드 번들에 실렸다. 이제 능력이 없으면 그냥 건너뛴다.
-    const materializeMemberGit = gatewayCapability("materializeMemberGit");
-    if (mid && materializeMemberGit) await materializeMemberGit(osUser, mid).catch((e) => console.warn(`[terminal] git 자격 materialize 실패(${mid}) — 세션은 계속:`, (e as Error)?.message ?? e));
-  }
 
   // ── 앱 세션(#1780 D3·D4) — appId가 있으면 grant 검사 → 앱 토큰 발급 → cwd와 분리된 private app home에 자산 물질화. ──
   //  일반 세션(appId 미설정)은 이 블록을 통째로 건너뛴다 → 종전 경로 무변경(핫패스 무회귀).
@@ -679,7 +694,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       console.warn(`[terminal] 세션 메모리 정책 조회 생략(비치명): ${err instanceof Error ? err.message : String(err)}`);
     }
     if (inside) {
-      // ── #2545 (3단계) 새 경로 — 생성 순서 역전: ① DB desired 행 → ② 브로커에 세션 컨테이너 → ③ 그 안에서 tmux ──
+      // ── #2545 (3단계) 새 경로 — 생성 순서 역전: ① DB desired 행 → ② 브로커에 세션 컨테이너 → ③ 멤버 홈 준비 → ④ 그 안에서 tmux ──
       //  종전엔 판(pane)이 먼저 뜨고 그 안의 spawn 훅이 컨테이너를 요청했다(닭과 달걀 — PTY 두 겹·dtach·exec 한 홉의 뿌리).
       //  ① 행을 먼저 쓴다 — 브로커 장부(#2544)가 이 세션을 처음부터 «원한다» 로 보게(회수 ② 가 새 컨테이너를 고아로 오판하지 않게).
       //   best-effort 는 종전과 같다(DB 가 죽어도 세션은 뜬다). 상시세션(managed)은 종전대로 행이 없다(#1059 E).
@@ -700,7 +715,13 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
         if (mirrored) await deleteSessionState(id).catch(() => undefined);
         throw new HttpError(503, `세션 컨테이너를 확보하지 못해 세션 생성을 취소했습니다: ${(e as Error)?.message ?? e}`);
       }
-      //  ③ 판 명령 — 컨테이너 안 tmux 가 멤버 uid 로 돌므로 sudo 도 spawn 훅도 없다. box-spawn 이 env 계약·cwd·exec 만 한다.
+    }
+    //  ③ 멤버 홈 준비 — **컨테이너가 선 뒤**다(#3668 T2, prepareMemberHome 머리말). 새 경로면 그 세션의 컨테이너 안에서,
+    //   옛 경로(셀프호스트 격리)면 종전 멤버 경계에서 돈다. 어느 쪽이든 판 명령(아래 ④)보다 앞이라 하네스가 보는 홈은 그대로다.
+    await prepareMemberHome(user, inside ? { osUser, sessionId: id } : osUser);
+    //  ④ 판 명령
+    if (inside) {
+      // 컨테이너 안 tmux 가 멤버 uid 로 돌므로 sudo 도 spawn 훅도 없다. box-spawn 이 env 계약·cwd·exec 만 한다.
       args.push(...sessionPaneArgv(target, launch));
     } else {
       // ★ session: true — 여기가 **유일한 세션 spawn** 이다. 파일 브리지 호출들과 구별되어야
