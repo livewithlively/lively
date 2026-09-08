@@ -319,7 +319,7 @@ export function restMounts(): { cap: Capability; mount: RestMount }[] {
 }
 
 /** mount.parse 를 감싸 산출을 cap.input(zod) 의 enum 선언으로 검증한다. 원 mount 는 불변(테스트·R4 관측이 원본을 본다). */
-export function guardEnumParity(cap: Capability, mount: RestMount): RestMount {
+function guardEnumParity(cap: Capability, mount: RestMount): RestMount {
   return {
     ...mount,
     parse: (req) => {

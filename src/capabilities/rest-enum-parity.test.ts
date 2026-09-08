@@ -250,8 +250,9 @@ await t("R6 배열 enum 은 원소 단위로 판정한다(정상 원소들은 �
 
 // ── R5 전 표면 전수 스캔 ─────────────────────────────────────────────────────
 // WHY: 이 규칙은 한 필드의 처방이 아니라 전 표면 규칙이다. 특정 capability 만 고친 구현은 여기서 걸린다.
-//  판정 결과는 세 갈래다 — 400 거부(규칙이 작동) / 마운트 자체 필터가 값을 떨궈 하류에 안 실림(무해,
-//  이 변경 이전부터 있던 개별 처방) / **그대로 실려 나감(유출 — 정체불명 500 의 원인)**.
+//  판정 결과는 세 갈래로 적었지만 가드가 restMounts() 안에 있는 한 dropped 는 구조상 0 이다(나쁜 값이
+//  parse 산출에 닿기 전에 throw). dropped 분기를 남겨 두는 건 가드가 빠졌을 때 '유출'과 '마운트 자체
+//  필터가 떨굼'을 구분해 보여 주기 위해서다 — 그 둘은 해악이 다르다(전자는 500, 후자는 무언의 무시).
 type Verdict = { rejected400: string[]; dropped: string[]; leaked: string[]; skipped: string[] };
 
 function scanAll(): Verdict {
@@ -291,9 +292,37 @@ await t("R5 그 차단의 주된 형태가 400 거부다 — 한 필드 예외 �
     `${SCAN.dropped.length}건, 판정불가 ${SCAN.skipped.length}건) — 전 표면 규칙이 아니라 국소 처방으로 보인다`);
 });
 
+// ── 실클라이언트 계약 — 가드가 **지금 웹이 실제로 보내는 쿼리**를 깨지 않는가 ─────────────
+// WHY: 위 스캔은 '거부돼야 할 값'만 넣어 본다. 그래서 "기존 호출부가 보내는 값이 여전히 통과하는가"는
+//  한 번도 관측되지 않는데, 실제로 그 방향에서 회귀가 났다 — knowledge_list.lifecycle 은 스키마엔
+//  단일 enum 으로 적혀 있지만 REST 는 'active,pending' 쉼표 다중값을 지원한다(#783, knowledge-store 의
+//  `lifecycle = ANY(...)`). WIKI 사이드바(web/wiki-data.ts)·흐름 지도(web/context-map.ts)가 그 형태로 부른다.
+const WEB_QUERIES: Array<[string, Record<string, unknown>]> = [
+  ["wiki-data 카테고리 행", { lifecycle: "active,pending", light: "1", limit: "500" }],
+  ["wiki-data 미분류 배지", { category: "none", lifecycle: "active,pending", light: "1", limit: "1" }],
+  ["context-map 미니어처", { lifecycle: "active,pending", light: "1", limit: "2000" }],
+  ["검토 큐", { lifecycle: "pending", orderBy: "updated_at", limit: "50" }],
+];
+await t("실클라이언트: 웹이 보내는 knowledge_list 쿼리가 그대로 통과한다(다중값 포함)", () => {
+  const m = MOUNTS.find((x) => x.cap.name === "knowledge_list");
+  assert.ok(m, "knowledge_list 마운트 없음 — 테스트 전제 붕괴");
+  for (const [label, query] of WEB_QUERIES) {
+    const err = caught(() => m!.mount.parse({
+      method: "GET", path: "/api/ui/knowledge", originalUrl: "/api/ui/knowledge",
+      ip: "127.0.0.1", headers: {}, params: {}, query, body: {},
+    } as never));
+    assert.equal(err, null, `${label} 쿼리가 거부됐다: ${(err as Error)?.message}`);
+  }
+});
+
 await t("R5 스캔이 실제로 표본을 훑었다 — 0건 훑고 통과하는 자기기만 방지", () => {
   const judged = SCAN.rejected400.length + SCAN.dropped.length;
   assert.ok(judged >= 60, `판정 표본 ${judged}건뿐(판정불가 ${SCAN.skipped.length}건) — 스캔이 고장났다`);
+  // 판정불가(skip)는 fail-open 이라 늘어나도 위 단언들이 조용히 버틴다 — 현재값(2건: project_list_v6 의
+  //  archived·trashed, parse 가 정상값을 undefined 로 접어 기준선을 못 세운다)을 못으로 박아 커버리지
+  //  누수를 눈에 보이게 한다.
+  assert.ok(SCAN.skipped.length <= 2,
+    `판정불가가 ${SCAN.skipped.length}건으로 늘었다 — 커버리지가 조용히 새고 있다:\n  ${SCAN.skipped.join("\n  ")}`);
 });
 
 await t("R5 전수 스캔 대상이 실제로 여러 capability 에 걸쳐 있다", () => {
