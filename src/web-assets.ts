@@ -49,6 +49,15 @@ export function listLocalAssets(publicDir: string): string[] {
     for (const f of readdirSync(path.join(publicDir, "styles"), { recursive: true }) as string[])
       if (/\.css$/.test(String(f))) out.push(`styles/${norm(String(f))}`);
   } catch { /* noop */ }
+  //  #3537 — 벤더링한 서드파티 자산(public/vendor/**, 지금은 xterm.js 한 벌)도 이 목록에 든다.
+  //   `?v=` 스탬프 자체는 정규식이 `./vendor/…` 를 알아서 잡으므로 **빼도 당장은 돌아간다.** 문제는
+  //   빌드버전의 입력에서 빠진다는 것이다: xterm 만 올린 배포에서 버전이 안 올라가고, 그 파일들은 이미
+  //   immutable(1년) 로 굳어 있어 **브라우저가 옛 판을 계속 쓴다**. app/ 을 재귀로 훑게 만든 #1313 R28
+  //   과 똑같은 함정이라 같은 처방을 둔다 — 자산이 사는 자리는 전부 버전 입력에 들어와야 한다.
+  try {
+    for (const f of readdirSync(path.join(publicDir, "vendor"), { recursive: true }) as string[])
+      if (/\.(?:js|mjs|css)$/.test(String(f))) out.push(`vendor/${norm(String(f))}`);
+  } catch { /* noop */ }
   return out.sort();
 }
 

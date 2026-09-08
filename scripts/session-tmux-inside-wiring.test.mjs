@@ -29,7 +29,12 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   const up = blk.indexOf("upsertSessionState(", branch);
   const ens = blk.indexOf("ensureSessionContainerViaRelay(", branch);
   const pane = blk.indexOf("sessionPaneArgv(", branch);
-  const ns = blk.indexOf("await tmux(args)", branch);
+  //  ⚠ 앵커는 **패턴**이다 — 이 호출의 «이름»은 이미 한 번 바뀌었다(#3537 이 왕복을 줄이며
+  //   `tmux(args)` → `tmuxBatch(openPane)`). 이 시험이 지키려는 것은 이름이 아니라 **순서**이므로,
+  //   판을 여는 dispatch 를 이름에 안 묶고 잡는다(그러지 않으면 호출을 고칠 때마다 -1 로 조용히 통과·실패한다).
+  const nsHit = /await tmux\w*\(\s*(?:args|openPane)\s*\)/.exec(blk.slice(branch));
+  const ns = nsHit ? branch + nsHit.index : -1;
+  ok(ns > 0, "②-d0 판을 여는 tmux dispatch 를 찾았다 — 못 찾으면 아래 순서 단언이 무의미하다");
   ok(up > branch && up < elseWrap, "②-a 새 경로는 DB desired 행을 **먼저** 쓴다(장부가 처음부터 wanted 로 본다)");
   ok(ens > up && ens < elseWrap, "②-b 그 다음 브로커에 컨테이너를 확보한다(ensure 훅)");
   ok(pane > ens && pane < elseWrap, "②-c 판 명령은 box-spawn(sessionPaneArgv) — sudo·session-spawn 없음");
