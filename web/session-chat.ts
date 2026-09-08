@@ -883,6 +883,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     text: string; t: ChatTurn; obId?: number; state: HTMLElement;
     /** #3689 — «이어서 열기» 줄은 한 번만 그린다(3초 폴링마다 새 버튼을 끼우면 누른 버튼의 진행 상태가 덮인다). */
     restoreMsg?: HTMLElement; restoreBtn?: HTMLButtonElement; restoring?: boolean;
+    /** #3752 ④ — 서버가 «상태를 확인하지 못했다»(409)고 답한 뒤, 사람이 한 번 더 눌러 강제 복원을 고른 상태. */
+    forceRestore?: boolean;
   }
   const pending: Pending[] = [];
   let outboxTimer: number | null = null;
@@ -1080,9 +1082,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (!btn || pd.restoring) return;                 // 진행 중이면 두 번 나가지 않는다(버튼 재생성과 무관한 두 번째 가드)
     pd.restoring = true;
     const orig = btn.textContent;
+    //  #3752 ④ — 다음 문구. 강제로 고른 상태면 그 자리를 유지한다(finally 가 여기로 되돌린다).
+    let restoreTo = orig;
     btn.disabled = true; btn.textContent = '여는 중…';
     try {
-      const r: any = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/restore`, { method: 'POST', body: '{}' });
+      //  #3752 ④ — 기본은 종전 그대로 확답만 믿는다. force 는 **사람이 한 번 더 누른 뒤**에만 붙는다(아래 409 갈래).
+      const q = pd.forceRestore ? '?force=1' : '';
+      const r: any = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/restore${q}`, { method: 'POST', body: '{}' });
       if (r?.session) rememberCreated(r.session);
       const next = String(r?.session?.id || r?.movedTo || '');
       if (next && next !== target.id) {
@@ -1093,10 +1099,22 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  already — 서버가 이 세션을 «아직 살아 있다(못 닿을 뿐)» 로 본다. 못 닿는 것과 끝난 것은 다르다 — 사실대로 말한다.
       toast(r?.already ? '서버가 이 세션을 아직 살아 있다고 봐요(못 닿는 것과 끝난 것은 달라요). 잠시 뒤 다시 눌러 주세요.' : '지금은 복원할 수 있는 상태가 아니에요.');
     } catch (e: any) {
-      toast(e?.message || '이어서 열지 못했어요.');
+      //  #3752 ④ — 409 = «그 컨테이너의 상태를 확인하지 못했다». 종전 서버는 이 경우를 «살아 있다»(already)로 접었고,
+      //   그래서 이 버튼이 «잠시 뒤 다시 눌러 주세요» 만 반복했다 — 샌드박스가 무응답이면 사람이 개입하기 전엔
+      //   스스로 돌아오지 않으므로 그 «잠시 뒤» 는 영영 오지 않는다(실측 #3688).
+      //   이제 서버가 사실대로 409 를 주니, **사람에게 고르게 한다**: 한 번 더 누르면 강제로 되살린다.
+      //   ⚠ 두 번 누르게 하는 것이 곧 확인이다 — 옛 세션이 실은 살아 있을 수도 있음을 알고 새로 여는 선택이라
+      //    자동으로 대신 골라 주지 않는다.
+      if (e?.status === 409 && !pd.forceRestore) {
+        pd.forceRestore = true;
+        restoreTo = '강제로 되살리기';
+        toast('이 세션이 있는 컨테이너의 상태를 확인할 수 없어요. 한 번 더 누르면 대화를 이어받아 새로 되살립니다.');
+      } else {
+        toast(e?.message || '이어서 열지 못했어요.');
+      }
     } finally {
       pd.restoring = false;
-      btn.disabled = false; btn.textContent = orig;
+      btn.disabled = false; btn.textContent = restoreTo;
     }
   }
   async function outboxAct(pd: Pending, act: 'retry' | 'discard'): Promise<void> {

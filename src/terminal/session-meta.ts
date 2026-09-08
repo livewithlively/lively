@@ -39,6 +39,27 @@ export interface DeadSessionMeta {
   harness: string;
 }
 
+/**
+ * **상태를 확인할 수 없는** 세션의 메타 본문 (#3752 ④) — «죽었다» 도 «살아 있다» 도 아니다.
+ *
+ * ★ `restorable` 을 **일부러 싣지 않는다**. 그건 "되살릴 수 있어요" 라는 약속인데(위 kind:"moved" 머리말과 같은
+ *  규율), 여기선 아직 확답이 없다. 대신 «못 봤다» 를 그대로 말하고 화면이 **사람에게 고르게** 한다 — 그 선택은
+ *  `POST …/restore?force=1` 로 온다(routes.ts 복원 갈래).
+ *
+ * 실측(#3688): 매니지드 세션 컨테이너가 wedged 되자 브로커가 503 `LVLY_STATE_UNKNOWN` 을 줬고, 게이트웨이는
+ *  그걸 «살아 있음» 으로 접어 `{id,label,projectId}` 만 냈다. 사람은 «응답이 없다» 로만 겪고 복원은 막혔다.
+ */
+export interface UnknownStateSessionMeta {
+  id: string;
+  label: string;
+  projectId: number;
+  /** 이 세션이 있는 곳의 상태를 못 봤다 — 화면은 «상태를 확인할 수 없어요» + [강제로 되살리기] 를 그린다. */
+  stateUnknown: true;
+  /** 강제 복원을 할 수 있는 사람인가 — `DeadSessionMeta.canRestore` 와 같은 축(소유자·admin). */
+  canRestore: boolean;
+  harness: string;
+}
+
 export type DeadSessionMetaResult =
   | { kind: "ok"; body: DeadSessionMeta }
   /** desired-state 가 없다 = 되살릴 근거가 없는 '진짜 끝난 세션'. 호출자는 종전 흐름을 계속한다. */
@@ -167,4 +188,15 @@ export function nodeMetaRestorable(args: {
   //  정면으로 어긋난다. 창 안에서는 기다린다(화면은 그냥 붙는다). 창을 넘기면 종전 판정 그대로다.
   if (args.ageMs != null && args.ageMs < NODE_STARTUP_GRACE_MS) return false;
   return true;   // 여기 오면 nodeGone 은 true(죽음 확답) 또는 null(판정 불가) — 둘 다 종전대로 복원 신호를 낸다
+}
+
+/**
+ * 상태 불명 본문을 만든다 (#3752 ④, 순수) — 죽은 세션 메타에서 **약속(restorable)만 뺀 것**.
+ *  두 본문이 손으로 갈라지지 않게 여기서 파생시킨다(라벨·권한 축이 어긋나면 화면이 서로 다른 말을 한다).
+ */
+export function unknownStateMeta(dead: DeadSessionMeta): UnknownStateSessionMeta {
+  return {
+    id: dead.id, label: dead.label, projectId: dead.projectId,
+    stateUnknown: true, canRestore: dead.canRestore, harness: dead.harness,
+  };
 }

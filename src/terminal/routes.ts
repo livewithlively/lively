@@ -15,7 +15,7 @@ import { cancelAiLogin, dropLoginSession, pasteAiLogin, readAiLogin, startAiLogi
 import { logger } from "../log.js";
 import { closeSessionAppInstances } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
-import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
+import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";        //  하기 위한 파사드(chat-routes 대화창과 같은 관문)
 import { resolveSessionDir } from "../sessions/session-desired.js";
@@ -57,7 +57,7 @@ import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor, setLastPromp
 import { cleanLastPrompt } from "./last-prompt.js";
 import { harnessIo } from "./harness-io/adapter.js";
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
-import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable } from "./session-meta.js";  // #1820 죽은 세션 '복원 가능' 단일 판정 + #2111 생사 갈래 + #2108 확답 게이트
+import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable, unknownStateMeta } from "./session-meta.js";  // #1820 죽은 세션 '복원 가능' 단일 판정 + #2111 생사 갈래 + #2108 확답 게이트
 import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js";   // #1851 — 세션 휴지통
 import { trashMapFor } from "../sessions/session-trash.js";                        // #1851 — 목록 행에 휴지통 표식
 import { sessionHandoffInput } from "./session-handoff.js";
@@ -589,7 +589,19 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  내 세션 219건 중 198건이 이 상태 — 세션을 여는 일의 대부분이 막다른 길이었다).
     //  ⚠ sessionGone 은 tmux 가 "그런 세션 없다"고 **확답**할 때만 true 다(소켓 불통·타임아웃은 false) — 모르면
     //   종전 경로로 흘러 살아 있는 세션을 죽었다고 오판하지 않는다(#835 '확답 only').
-    if (await sessionGone(id)) {
+    //  #3752 ④ — 판정을 **셋**으로 받는다. 종전 `sessionGone` 은 «모른다» 를 «살아 있다» 로 접었고, 매니지드에서
+    //   샌드박스가 wedged 되면(브로커 503 LVLY_STATE_UNKNOWN) 그 접기 때문에 사람이 «응답이 없다» 로만 겪었다
+    //   (#3688 실측). 자동 경로의 접기는 그대로 두고, 이 자리에서만 «못 봤다» 를 사람에게 말한다.
+    const goneVerdict = await sessionGoneVerdict(id);
+    if (goneVerdict === null) {
+      const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
+      //  ⚠ restorable 을 내지 않는다 — 확답이 없으니 «되살릴 수 있어요» 를 약속하지 않는다(unknownStateMeta 머리말).
+      //   화면은 stateUnknown 을 보고 «상태를 확인할 수 없어요» + [강제로 되살리기](force=1)를 그린다.
+      if (dead.kind === "ok") { res.json(unknownStateMeta(dead.body)); return; }
+      if (dead.kind === "moved") { res.json({ id, movedTo: (await resolveSessionSuccessor(id).catch(() => null)) ?? dead.to }); return; }
+      if (dead.kind === "forbidden") throw new HttpError(404, SESSION_NOT_FOUND);
+      //  kind:"none" — desired-state 가 없어 되살릴 근거 자체가 없다. 종전 흐름(아래)으로 흘려보낸다.
+    } else if (goneVerdict === true) {
       const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
       if (dead.kind === "ok") { res.json(dead.body); return; }
       // #2231 — 이 id 는 이미 새 세션으로 이어졌다. '중단된 세션'이라고 말하면 화면이 복원을 약속했다가 404 를 받는다.
@@ -1277,7 +1289,20 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       return;
     }
     // 라이브 경합 방어 — 그새 다시 떠 있으면 복원 대신 그대로 안내(라이브가 SoT).
-    if (!(await sessionGone(id))) { res.json({ ok: true, already: true, id }); return; }
+    //  #3752 ④ — «모른다» 를 «살아 있다» 로 접지 않는다. 종전엔 브로커가 503 `LVLY_STATE_UNKNOWN` 을 주면
+    //   `sessionGone` 이 false 를 내고 이 줄이 `already:true` 로 끝냈다 — 화면은 «이미 살아 있다» 는 답을 받고
+    //   아무것도 하지 않는데 세션은 영영 안 붙는다(실측 #3688: restore 6.2초 → already:true).
+    //   그 샌드박스는 사람이 개입하기 전엔 스스로 돌아오지 않으므로, **막다른 길이 되지 않게** 두 갈래로 답한다:
+    //   기본은 읽을 수 있는 이유와 함께 멈추고(409, 노드 갈래와 같은 규율), 사람이 화면에서 골랐으면(force) 되살린다.
+    //  ⚠ force 는 «옛 것이 살아 있을 수도 있음을 알고 새로 만든다» 는 선언이다 — 그래서 **기본값이 아니다.**
+    //   옛 컨테이너는 노드 회수기(브로커 고아 스윕)가 걷는다. 자동 경로는 종전 그대로 확답만 믿는다(#835).
+    const force = req.query.force === "1" || req.query.force === "true";
+    const goneVerdict = await sessionGoneVerdict(id);
+    if (goneVerdict === false) { res.json({ ok: true, already: true, id }); return; }
+    if (goneVerdict === null && !force) {
+      throw new HttpError(409, "이 세션이 있는 컨테이너의 상태를 확인하지 못했습니다 — 잠시 후 다시 시도하거나, "
+        + "그대로 새 세션으로 되살리려면 화면의 [강제로 되살리기] 를 눌러 주세요(대화는 이어집니다).");
+    }
     const owner = { userId: st.owner } as LivelyUser;
     // 이어받을 대화 UUID — **훅이 보고한 매핑만** 쓴다(그 대화 파일이 그 소유자 홈에 실제로 있을 때만).
     //  없으면 인자 없는 --resume = 후보 picker 로, **사용자가 눈으로 고른다.**
