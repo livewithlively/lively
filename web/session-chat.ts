@@ -28,6 +28,7 @@ import { CONTINUED_RE, INJECTED_RE, INTERRUPT_RE, trailMsg, trailSay, type Trail
 import { sessionHandoffContext } from './session-handoff-context.js';
 import { mountCodexLive, type CodexLive } from './session-codex-live.js';   // #2055 codex 실시간 층(승인·타이핑)
 import { mountSessionTasks, type SessionTasksHandle } from './session-tasks.js';   // #2439 ③ 작업 표면(백그라운드 셸·서브에이전트)
+import { onSessionEvents } from './session-events.js';   // #3699 대화 파일 통보(되묻기 → 밀어주기)
 import { effortChoices, effortKo, findHarness, flagChoices, prettyModel, providerLabel, runCatalog, type RunHarness } from './v2/run-picker.js';
 import { rememberCreated } from './v2/created-cache.js';
 import { rememberFirstPrompt } from './v2/quick-session.js';   // #2439 — 되살린 세션의 첫 지시 낙관 렌더   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
@@ -72,6 +73,7 @@ export interface SessionChatHandle {
 const WINDOW = 1_500_000;          // 첫 로드·[이전 불러오기] 한 번에 읽는 바이트(긴 세션은 30MB — 꼬리부터)
 const POLL_RUN_MS = 700;           // 도는 중(블록 단위로 즉시 쌓인다 — 이 값이 체감 지연)
 const POLL_IDLE_MS = 3000;         // 살아 있고 안 도는 중(다음 지시를 터미널에서 칠 수도 있다)
+const POLL_SAFETY_MS = 30_000;     // #3699 서버가 밀어 주는 동안의 **안전망** 주기(통보를 놓쳐도 여기서 따라잡는다)
 const POLL_LOG_MS = 8000;          // 중앙 기록(턴 단위 — 자주 봐도 안 늘어난다)
 const POLL_LOG_LIVE_MS = 3000;     // 중앙 기록인데 살아서 도는 노드 세션(#1744) — 턴 끝나 올라오는 순간을 놓치지 않게 조금 촘촘히
 // 사람 말 걸러내기 규칙(INJECTED/INTERRUPT/CONTINUED)의 정본은 session-trail.ts 다 — 타임라인 되감기와 같은 자를 써야 한다.
@@ -886,8 +888,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let outboxTimer: number | null = null;
   let firstPrompt: string | null = opts.firstPrompt ? String(opts.firstPrompt) : null;   // 홈 입력창의 첫 지시(한 번만 그린다)
   let pollTimer: number | null = null;
+  let poking = false;                         // 깨워 둔 폴이 아직 안 돌았나(pokePoll — 밀어내기 방지)
   let destroyed = false;
   let lastLineAt = 0;
+  //  ★ #3699 — 서버가 «대화 파일이 자랐다» 를 밀어 주고 있나. 참일 때만 폴을 안전망 주기로 늦춘다.
+  //   ⚠ 낙관적으로 켜지 않는다(기본 거짓): 못 미는 배포(노드 세션·못 읽는 하네스·중계 실패)에서 늦추면
+  //    통보는 안 오는데 되묻지도 않아 대화가 그냥 30초씩 밀린다 — 자원을 아끼려다 화면을 망가뜨리는 교환이다.
+  let watchLive = false;
 
   // 낙관 말풍선(원본) ↔ 트랜스크립트 에코(주입본) 매칭 — **정확일치만 믿지 않는다.** 주입은 개행을 공백으로 평탄화하고,
   //  아주 긴 텍스트는 TUI 를 지나며 일부가 뒤섞이기도 한다(실측 2026-08-18: 3천자 프롬프트 꼬리 토막이 자리 이동 →
@@ -1359,6 +1366,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   function schedule(): void {
     if (destroyed || !src) return;
     if (pollTimer) clearTimeout(pollTimer);
+    poking = false;                           // 타이머를 걷었으면 «깨워 둠» 도 함께 푼다(아래 조기반환 포함)
     //  ⚠ **죽은 세션에는 촘촘한 주기를 쓰지 않는다**(#1631, 2026-08-31 실측). `running` 은 대화 파일이 자라는 것으로
     //   마감되는데, 대화가 **한 번도 없었던** 세션은 그 마감 경로(아래 `running && cur && !dead()`)에 애초에 못 들어간다
     //   — `cur` 이 없기 때문이다. 그래서 즉사한 세션의 화면이 404 를 초당 1.4회로 **영원히** 되물었다
@@ -1369,6 +1377,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   2vCPU 노드를 포화시켰다 — 사람은 그 순간 터미널로 같은 스트림을 보고 있었다. 가려진 동안은 유휴 주기로 두고,
     //   다시 대화창을 열면 setMode 가 pokePoll 로 그 자리에서 따라잡는다(읽던 화면을 뺏지 않는다).
     if (mode === 'term' && src.kind === 'box') ms = Math.max(ms, POLL_IDLE_MS);
+    //  ★ #3699 — 서버가 밀어 주고 있으면 되묻기는 **안전망**으로 물러난다(자원 절감은 여기서 나온다).
+    //   통보가 오면 그 자리에서 pokePoll 이 읽으므로 체감은 오히려 빨라진다. 안 늦추고 통보만 더하면
+    //   왕복이 늘 뿐이고, 통보 없이 늦추기만 하면 대화가 느려진다 — 둘은 같이 가야 뜻이 있다.
+    if (watchLive && src.kind === 'box') ms = Math.max(ms, POLL_SAFETY_MS);
     //  죽은 세션에는 **애초에 물을 것이 없다.** 중앙 기록은 더 안 늘고(옛 조건), 박스 파일은 대화가
     //   한 번도 없었으면(loadedTo === 0) 그 파일이 **생길 일 자체가 없다** — 세션이 죽었으니까.
     //   그런데도 3초마다 물어서 404 를 영원히 하나씩 뱉었다(#1631, 2026-08-31 실측: 즉사한 리브 세션 화면).
@@ -1379,11 +1391,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (dead() && !running && (src.kind === 'log' || loadedTo === 0)) return;
     pollTimer = window.setTimeout(() => { void poll(); }, ms);
   }
-  /** 지금 읽어 오라 — 실시간 층(#2055)이 '완성본이 파일에 떨어졌다'고 알려 줄 때. 몰아치면 한 번으로 합친다. */
+  /** 지금 읽어 오라 — 실시간 층(#2055)·대화 파일 통보(#3699)가 '파일이 자랐다'고 알려 줄 때. 몰아치면 한 번으로 합친다. */
   function pokePoll(): void {
     if (destroyed || !src) return;
+    //  ★ 이미 깨워 뒀으면 **다시 미루지 않는다**(#3699). 종전엔 부를 때마다 타이머를 새로 걸었는데,
+    //   통보가 120ms 보다 촘촘히 오면 읽는 시각이 매번 뒤로 밀려 **영영 안 읽는다**. 합치는 것과
+    //   미루는 것은 다르다 — 여기서 필요한 것은 «120ms 안에 한 번» 이지 «마지막 통보로부터 120ms» 가 아니다.
+    if (poking) return;
+    poking = true;
     if (pollTimer) clearTimeout(pollTimer);
-    pollTimer = window.setTimeout(() => { void poll(); }, 120);
+    pollTimer = window.setTimeout(() => { poking = false; void poll(); }, 120);
   }
   let fails = 0;
   async function poll(): Promise<void> {
@@ -1782,6 +1799,27 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   ensureLive();
   ensureTasksDock();
 
+  //  ── 대화 파일 통보(#3699) ──────────────────────────────────────────────────────
+  //  되묻기(폴링)를 밀어주기로 바꾸는 자리. 서버의 감시자가 «오프셋 N 까지 자랐다» 를 보내면 그 자리에서
+  //   한 번 읽는다 — 내용은 안 실려 온다(대화의 정본은 파일이다. 두 곳에서 그리면 같은 말이 두 번 뜬다).
+  //  ⚠ **하네스·모드를 안 가리고 연다.** 폴링이 노드를 갉는 주범이 바로 터미널 모드로 열어 둔 박스
+  //   세션이고(#3656 이 그 절반만 덜어냈다), 그 세션엔 작업 도크(runtimeMode==='chat')가 안 붙는다.
+  //   연결은 세션당 한 벌이라(session-events.ts) 도크와 함께 열려도 소켓은 하나다.
+  const offEvents = onSessionEvents(target.id, (ev) => {
+    const e = ev as { t?: string; size?: number; live?: boolean };
+    if (e?.t === 'transcript.grew') { pokePoll(); return; }
+    if (e?.t === 'transcript.watch') {
+      const next = e.live === true;
+      if (next === watchLive) return;
+      watchLive = next;
+      //  주기가 바뀌었으니 지금 걸린 타이머를 다시 건다. 켜질 땐 한 번 따라잡고(놓친 델타가 있을 수 있다),
+      //   꺼질 땐 촘촘한 주기로 곧바로 되돌아간다 — 통보가 끊긴 채 30초를 기다리면 안 된다.
+      if (pollTimer) clearTimeout(pollTimer);
+      poking = false;
+      if (next) pokePoll(); else schedule();
+    }
+  });
+
   // 기본 화면(#2055) — **codex app-server 세션은 대화가 기본**이다. 그 세션의 pane 은 셸이라(대화는 대화창이
   //  전담한다) 터미널로 열면 사람이 **말 걸 곳이 없는 화면**을 먼저 본다 — 실제로 그렇게 헤맸다.
   //  나머지는 종전 그대로 터미널이 기본이다(2026-08-18 지시: 대화창이 미완성인 동안은 터미널이 정답).
@@ -1830,6 +1868,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         else if (src && src.kind === 'log' && isBox() && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; if (pollTimer) clearTimeout(pollTimer); schedule(); }
       }
     },
-    destroy() { destroyed = true; if (pollTimer) clearTimeout(pollTimer); stopWatchOutbox(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
+    destroy() { destroyed = true; if (pollTimer) clearTimeout(pollTimer); stopWatchOutbox(); offEvents(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }
