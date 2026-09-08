@@ -124,8 +124,9 @@ test("N18 awaiting 이 풀리는 것은 알림이 아니다", () => {
 
 test("N19 풀렸다가 다시 서면 그건 새 전이다 — 두 번 알린다", () => {
   let state = new Map<string, boolean>();
+  //  첫 걸음이 «첫 관측» 이라 나이를 명시한다(#3741) — 이 시험이 보는 것은 전이 규칙이지 첫 관측 유예가 아니다.
   const step = (awaiting: boolean) => {
-    const r = pickAwaitingTransitions(state, [{ id: "s1", awaiting }]);
+    const r = pickAwaitingTransitions(state, [{ id: "s1", awaiting, lastActive: 1_000 }], 1_000);
     state = r.next;
     return r.notify;
   };
@@ -143,9 +144,73 @@ test("N20 ★관측에서 사라진 세션은 알림도 아니고 상태도 지�
   assert.deepEqual(again.notify, [], "잠깐 안 보였다고 같은 대기를 다시 알리면 안 된다");
 });
 
-test("N21 처음 보는 세션이 이미 awaiting 이면 알린다 — 사용자가 놓친 알림이다", () => {
-  const r = T([], [["새세션", true]]);
+test("N21 처음 보는 세션이 **최근에 움직였고** awaiting 이면 알린다 — 사용자가 놓친 알림이다", () => {
+  //  #3741 로 조건이 하나 붙었다. 종전엔 나이를 안 봤는데, 그러면 노드 세션 442개가 한꺼번에
+  //   들어오는 순간 그게 전부 «놓친 알림» 이 된다(P3). 의도(재기동 중 놓친 알림 복구)는 그대로다.
+  const r = pickAwaitingTransitions(new Map(), [{ id: "새세션", awaiting: true, lastActive: 990 }], 1_000);
   assert.deepEqual(r.notify, ["새세션"]);
+});
+
+// ── D-2. 첫 관측 유예 (#3741) — 엣지 표 `spec-3741.md` P1~P12 ──
+//
+//  왜 이 시험들이 있나: 이 스윕이 노드 스냅샷까지 보게 되면 여태 한 번도 안 들어오던 멤버 PC 세션이
+//   한꺼번에 들어온다(실측 `lively-46e3`: 456 중 **442**). 그것들은 며칠씩 대기 상태로 앉아 있어서,
+//   유예가 없으면 **배포 직후 첫 스윕에 수백 건이** 사람에게 간다. 그 폭풍을 막는 것이 이 규칙이고,
+//   동시에 «게이트웨이가 죽어 있던 동안 놓친 알림» 은 계속 살려야 한다 — 두 요구가 이 표에서 갈린다.
+const NOW = 1_000_000;
+const P = (prev: Array<[string, boolean]>, obs: { id: string; awaiting: boolean; lastActive?: number }) =>
+  pickAwaitingTransitions(new Map(prev), [obs], NOW, 1_800).notify;
+
+test("P1 ★ 전이는 나이와 무관하게 알린다 — 지금 막 대기가 됐다", () => {
+  //  이 행이 없으면 «오래 돌던 세션이 방금 질문을 던진» 정상 경우가 조용해진다. 유예는 첫 관측 전용이다.
+  assert.deepEqual(P([["s1", false]], { id: "s1", awaiting: true, lastActive: NOW - 999_999 }), ["s1"]);
+});
+
+test("P2 첫 관측 + 최근이면 알린다", () => {
+  assert.deepEqual(P([], { id: "s1", awaiting: true, lastActive: NOW - 60 }), ["s1"]);
+});
+
+test("P3 ★★ 첫 관측 + 오래됐으면 안 알린다 — 노드 세션 442개가 여기 걸린다", () => {
+  assert.deepEqual(P([], { id: "s1", awaiting: true, lastActive: NOW - 1_801 }), []);
+});
+
+test("P4 ★ 첫 관측 + 나이를 모르면(undefined) 안 알린다", () => {
+  //  새로 도입한 재료(lastActive)의 **부재** 행. 노드 스냅샷 세션은 이 값이 비어 올 수 있다.
+  assert.deepEqual(P([], { id: "s1", awaiting: true }), []);
+});
+
+test("P5 ★ 첫 관측 + lastActive=0 이면 안 알린다 — 0 은 «한 번도 안 움직였다»", () => {
+  assert.deepEqual(P([], { id: "s1", awaiting: true, lastActive: 0 }), []);
+});
+
+test("P6 첫 관측인데 awaiting 이 아니면 알림이 아니다", () => {
+  assert.deepEqual(P([], { id: "s1", awaiting: false, lastActive: NOW }), []);
+});
+
+test("P9 ★ 창 경계는 포함이다", () => {
+  assert.deepEqual(P([], { id: "s1", awaiting: true, lastActive: NOW - 1_800 }), ["s1"], "경계 안");
+  assert.deepEqual(P([], { id: "s1", awaiting: true, lastActive: NOW - 1_801 }), [], "경계 밖");
+});
+
+test("P10 ★ 미래 시각(시계 어긋남)은 «최근» 으로 본다 — 음수 나이로 정상 세션을 죽이지 않는다", () => {
+  assert.deepEqual(P([], { id: "s1", awaiting: true, lastActive: NOW + 5_000 }), ["s1"]);
+});
+
+test("P12 ★ 유예로 안 알린 세션도 기억엔 남는다 — 다음 스윕이 이걸 새 전이로 읽으면 안 된다", () => {
+  const first = pickAwaitingTransitions(new Map(), [{ id: "s1", awaiting: true, lastActive: 1 }], NOW, 1_800);
+  assert.deepEqual(first.notify, [], "이번엔 조용하다");
+  assert.equal(first.next.get("s1"), true, "그래도 awaiting 이었다는 기억은 남는다");
+  const second = pickAwaitingTransitions(first.next, [{ id: "s1", awaiting: true, lastActive: 1 }], NOW, 1_800);
+  assert.deepEqual(second.notify, [], "다음 스윕에서도 조용해야 한다(폭풍이 한 틱 늦게 오면 안 고친 것이다)");
+});
+
+test("P-mass ★ 대량 유입 시나리오 — 오래된 대기 442개가 들어와도 알림 0, 최근 것만 나간다", () => {
+  //  이 프로젝트가 실제로 겪을 배포 첫 스윕을 그대로 흉내 낸다.
+  const flood = Array.from({ length: 442 }, (_, i) => ({ id: `node-${i}`, awaiting: true, lastActive: NOW - 86_400 }));
+  const fresh = { id: "방금-대기", awaiting: true, lastActive: NOW - 30 };
+  const r = pickAwaitingTransitions(new Map(), [...flood, fresh], NOW, 1_800);
+  assert.deepEqual(r.notify, ["방금-대기"]);
+  assert.equal(r.next.size, 443, "알리지 않은 442개도 전부 기억엔 들어간다");
 });
 
 // ── 파생 규칙(#1891, dev 실측으로 발견) ────────────────────────────────────

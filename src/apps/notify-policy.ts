@@ -104,28 +104,75 @@ export function shouldSuppressDuplicate(
 }
 
 /**
+ * 처음 보는 대기 세션을 «놓친 알림» 으로 볼 수 있는 최대 나이(초) — 마지막 작업 시각 기준 (#3741).
+ *
+ * 왜 30분인가: 이 유예가 **살리려는** 것은 «게이트웨이가 내려간 동안 새로 생긴 대기» 하나뿐이고,
+ *  그 창은 롤·재시작 길이(분 단위)다. 30분이면 그걸 넉넉히 덮는다. 반대로 **막으려는** 것은 며칠씩
+ *  대기 상태로 앉아 있던 노드 세션 수백 건이라, 두 모집단이 시간축에서 멀찍이 갈린다 — 임계값이
+ *  민감하지 않다는 뜻이다(1분을 30분으로 바꿔도 결론이 안 바뀐다).
+ */
+export const AWAITING_FIRST_SIGHT_MAX_AGE_SEC = 30 * 60;
+
+/**
  * ai-session 자동 알림(#1891) — "유저의 액션을 필요로 하는 상태"로 **전이**한 세션만 고른다.
  *
  * @param previous 직전 관측(세션 id → awaiting 이었나)
  * @param observed 이번 관측 — **이번에 보인 세션만** 담는다
  * @returns notify: 알림 보낼 세션 id · next: 다음 비교에 쓸 상태
  *
- * ⚠ 규칙 둘:
+ * ⚠ 규칙 셋:
  *  · **전이에만 반응한다.** awaiting 이 유지되는 동안 매 폴링마다 쏘면 1분에 세 번 울린다.
  *  · **관측에서 사라진 세션의 상태는 지우지 않는다.** 잠깐 목록에 안 잡힌 것과 "사용자가 답을 했다"를
  *    구분할 수 없다. 지워 버리면 다시 나타날 때 false→true 로 읽혀 **알림이 중복**된다.
- *    (첫 관측에서 이미 awaiting 인 세션은 전이로 본다 — 그게 사용자가 놓친 알림이다.)
+ *  · **첫 관측이 곧 전이는 아니다** (#3741) — 아래 머리말.
+ *
+ * ── 첫 관측 유예 (#3741, 2026-09-09) ─────────────────────────────────────────
+ * 종전엔 «처음 보는 세션이 awaiting 이면 곧바로 알린다» 였다(`previous.get(id) ?? false`). 그건
+ *  **게이트웨이가 죽어 있던 동안 놓친 알림**을 살리려는 의도였고, 보는 세션이 게이트웨이 자기 tmux
+ *  뿐일 때는 옳았다 — 재기동 창은 분 단위라 «처음 봤다» 가 곧 «그 사이에 생겼다» 였다.
+ *
+ * 그 전제가 #3741 에서 깨진다. 스윕이 **노드 스냅샷까지** 보게 되면 여태 한 번도 이 스윕에
+ *  들어온 적 없는 멤버 PC 세션이 한꺼번에 들어온다(실측 2026-09-08 `lively-46e3`: 456 중 **442**).
+ *  그것들은 며칠씩 대기 상태로 앉아 있으므로, 유예가 없으면 **배포 직후 첫 스윕에 수백 건이**
+ *  사람에게 간다. «놓친 알림 복구» 가 «알림 폭풍» 이 되는 지점이다.
+ *
+ * 그래서 첫 관측은 **마지막 작업 시각**으로 가른다 — 최근에 움직였으면 놓친 알림이고, 오래 멈춰
+ *  있었으면 그냥 원래 그 상태였던 것이다. 나이를 모르면(값이 없거나 0) **안 알린다**: 이 유예가
+ *  막으려는 것이 폭풍이므로 모르는 쪽은 조용한 편으로 붙인다.
+ * ⚠ **전이(false→true)는 이 유예와 무관하다** — 나이가 아무리 오래돼도 알린다. 지금 막 대기가 된
+ *  것이고, 그건 이 알림의 존재 이유 그 자체다.
  */
 export function pickAwaitingTransitions(
   previous: ReadonlyMap<string, boolean>,
-  observed: ReadonlyArray<{ id: string; awaiting: boolean }>,
+  observed: ReadonlyArray<{ id: string; awaiting: boolean; lastActive?: number }>,
+  nowSec: number = Math.floor(Date.now() / 1000),
+  firstSightMaxAgeSec: number = AWAITING_FIRST_SIGHT_MAX_AGE_SEC,
 ): { notify: string[]; next: Map<string, boolean> } {
   const next = new Map(previous);
   const notify: string[] = [];
   for (const s of observed) {
+    const seen = previous.has(s.id);
     const was = previous.get(s.id) ?? false;
-    if (s.awaiting && !was) notify.push(s.id);
+    //  전이는 무조건. 첫 관측은 «최근에 움직였나» 를 통과해야 한다(머리말).
+    if (s.awaiting && !was && (seen || freshEnoughForFirstSight(s.lastActive, nowSec, firstSightMaxAgeSec))) {
+      notify.push(s.id);
+    }
     next.set(s.id, s.awaiting);
   }
   return { notify, next };
+}
+
+/**
+ * 처음 보는 대기 세션을 «놓친 알림» 으로 볼 만큼 최근인가 (순수).
+ *
+ *  · 값이 없거나 0 이면 **아니다** — 0 은 «한 번도 안 움직였다»(tmux `@box_last_busy` 미설정)이지
+ *    «방금» 이 아니다. 노드 스냅샷 세션에 이 값이 비어 오는 경우가 여기로 온다.
+ *  · 경계는 **포함**이다(신선도 판정의 다른 자리와 같은 관례).
+ *  · 미래 시각(시계 어긋남)은 «최근» 으로 본다 — 음수 나이를 «오래됨» 으로 읽으면 정상 세션이 조용해진다.
+ */
+export function freshEnoughForFirstSight(
+  lastActiveSec: number | undefined | null, nowSec: number, maxAgeSec: number,
+): boolean {
+  if (!lastActiveSec) return false;
+  return nowSec - lastActiveSec <= maxAgeSec;
 }

@@ -6,12 +6,20 @@ import { resetAwaitingState, sweepAwaitingNotifications } from "./awaiting-notif
 
 type Sent = { appId: unknown; memberId: string; title: string; href?: unknown; dedupe_key?: unknown };
 
-/** listSessionsRaw 스텁 — 필요한 필드만 채운다(스윕이 보는 것은 id·owner·label·awaiting 뿐). */
-const sessions = (rows: Array<{ id: string; owner?: string; awaiting?: boolean; label?: string }>) =>
+/**
+ * listSessionsRaw 스텁 — 필요한 필드만 채운다(스윕이 보는 것은 id·owner·label·awaiting·lastActive).
+ *
+ * ⚠ `lastActive` 기본값이 **지금**인 이유 (#3741): 첫 관측 유예가 생겨서, 이 값이 없으면 처음 보는
+ *  대기 세션은 알림이 안 간다(notify-policy P4). 아래 시험들이 보는 것은 **배선**(누구에게·무엇을·
+ *  다시 안 울리나)이지 그 유예가 아니므로, 유예를 통과한 상태를 기본으로 둔다. 유예 자체는
+ *  notify-policy.test 의 P 행들과 이 파일 맨 아래 「폭풍」 시험이 지킨다.
+ */
+const NOW_SEC = Math.floor(Date.now() / 1000);
+const sessions = (rows: Array<{ id: string; owner?: string; awaiting?: boolean; label?: string; lastActive?: number }>) =>
   (async () => rows.map((r) => ({
     id: r.id, label: r.label ?? r.id, harness: "claude", dir: "", owner: r.owner ?? "yoon", owned: true,
     created: 0, attached: false, invites: [], flags: {}, projectId: 0, agentState: "idle",
-    working: false, awaiting: !!r.awaiting,
+    working: false, awaiting: !!r.awaiting, lastActive: r.lastActive ?? NOW_SEC,
   }))) as never;
 
 function recorder() {
@@ -139,4 +147,38 @@ test("awaiting 은 '지금 대기 중인 수'다 — 알림 0건이어도 대기
   });
   assert.equal(둘째판.notified, 0, "같은 대기로 다시 울리지 않는다");
   assert.equal(둘째판.awaiting, 1, "그래도 대기가 하나 있다는 사실은 남는다");
+});
+
+// ── 알림 폭풍 (#3741) — 스윕 층에서 한 번 더 못박는다 ──
+//
+//  왜 notify-policy 시험만으로 부족한가: 폭풍은 «순수 판정» 이 아니라 «스윕이 실제로 몇 통 보내나» 로
+//   드러난다. 판정이 옳아도 스윕이 lastActive 를 안 넘기면(그 한 줄을 빠뜨리면) 폭풍이 그대로 난다 —
+//   실제로 이 배선이 빠진 채 한 번 초록이었다. 그 구멍을 여기서 막는다.
+test("★ 오래 대기하던 세션이 한꺼번에 들어와도 알림이 쏟아지지 않는다 — 최근 것만 나간다", async () => {
+  resetAwaitingState();
+  const { sent, notify } = recorder();
+  const flood = Array.from({ length: 200 }, (_, i) => ({
+    id: `node-${i}`, owner: "yoon", awaiting: true, lastActive: NOW_SEC - 86_400,   // 하루 전
+  }));
+  const r = await sweepAwaitingNotifications({
+    list: sessions([...flood, { id: "방금", owner: "yoon", awaiting: true, lastActive: NOW_SEC - 10 }]),
+    notify,
+  });
+  assert.equal(r.observed, 201, "201개를 다 보긴 한다(안 보는 것이 아니라 안 울리는 것이다)");
+  assert.equal(r.awaiting, 201, "전부 대기 상태로 세어진다");
+  assert.equal(sent.length, 1, "발송은 한 통");
+  assert.equal(sent[0].title.includes("방금"), true, "최근에 움직인 그 세션만");
+});
+
+test("★ 그 다음 스윕에서도 조용하다 — 폭풍이 한 틱 늦게 오면 안 고친 것이다", async () => {
+  resetAwaitingState();
+  const rows = Array.from({ length: 50 }, (_, i) => ({
+    id: `node-${i}`, owner: "yoon", awaiting: true, lastActive: NOW_SEC - 86_400,
+  }));
+  const first = recorder();
+  await sweepAwaitingNotifications({ list: sessions(rows), notify: first.notify });
+  assert.equal(first.sent.length, 0);
+  const second = recorder();
+  await sweepAwaitingNotifications({ list: sessions(rows), notify: second.notify });
+  assert.equal(second.sent.length, 0, "두 번째 스윕도 조용해야 한다");
 });
