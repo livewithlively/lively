@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import { installTenantSlugResolver } from "./catalog.js";
 import path from "node:path";
-import { tmux, tmuxExecArgv, LIST_FMT, tmuxServerAbsenceIsFinal, tmuxViaRelay, isSessionGoneError } from "./tmux-exec.js";
+import { tmux, tmuxExecArgv, tmuxTimeoutMs, TMUX_LOCAL_TIMEOUT_MS, TMUX_RELAY_TIMEOUT_MS, LIST_FMT, tmuxServerAbsenceIsFinal, tmuxViaRelay, isSessionGoneError } from "./tmux-exec.js";
 
 afterEach(() => { delete process.env.LIVELY_TMUX_EXEC; });
 
@@ -272,4 +272,32 @@ test("★ T3 primary 는 안 바뀐다 — 공용 기본 소켓엔 그 논리가
     assert.equal(isSessionGoneError({ code: 1, stderr: "no server running on /private/tmp/tmux-501/default" }), false);
     assert.equal(isSessionGoneError({ code: 1, stderr: "can't find session: box-a-0011ffee" }), true, "세션 부재 확답은 표면과 무관하다");
   });
+});
+
+// ── 예산(2026-09-07) — 중계 경로는 로컬보다 길어야 한다 ────────────────────────────
+//  로컬 tmux 는 같은 호스트의 유닉스 소켓이라 5초면 넉넉하다. 중계는 그 안에 게이트웨이 → 허브 →
+//   노드 브로커 → runsc exec 네 홉이 들어간다. 그런데 그 안쪽 층들의 상한이 **바깥보다 컸다**
+//   (허브 21.5s · 브로커 15s vs 여기 5s). 그러면 안쪽이 아직 답을 만드는 중에 여기서 끊고,
+//   사람은 원인이 아니라 끊긴 사실만 본다 — 실측 2026-09-07: 세션 첫 지시가
+//   `브로커 응답 없음: http://…:9093` 으로 전달 실패했다(중계·허브·브로커는 그 뒤에도 일하고 있었다).
+test("★ 예산 — 중계 경로는 로컬보다 길다(안쪽 층들이 여기보다 짧아야 한다)", () => {
+  assert.equal(tmuxTimeoutMs([]), TMUX_LOCAL_TIMEOUT_MS, "미설정(로컬)은 종전 5초 그대로 — 셀프호스트 무회귀");
+  assert.equal(tmuxTimeoutMs(["node", "/opt/lively/libexec/tmux-relay.cjs", "acme"]), TMUX_RELAY_TIMEOUT_MS);
+  // ★★ 이 줄이 이 수정이다. 중계 사슬의 상한(중계 20s 총)보다 **여기가 더 길어야** 자식이 자기
+  //  재시도를 끝낼 수 있다 — 짧으면 코어가 중계를 죽여 그 회복 경로가 한 번도 안 돈다.
+  assert.ok(TMUX_RELAY_TIMEOUT_MS > 20_000,
+    `🔴 중계의 총 예산(20s)보다 짧으면 코어가 중계의 재시도를 끊는다: ${TMUX_RELAY_TIMEOUT_MS}`);
+  assert.ok(TMUX_RELAY_TIMEOUT_MS > TMUX_LOCAL_TIMEOUT_MS);
+});
+
+test("★ 예산 — 중계가 5초를 넘겨 답해도 코어가 안 끊는다(실제 자식으로)", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tmux-budget-"));
+  try {
+    const slow = path.join(dir, "slow-tmux");
+    //  6초 뒤에 답하는 «중계» — 종전 5초 상한에서는 여기서 죽었다.
+    fs.writeFileSync(slow, "#!/bin/sh\nsleep 6\necho slow-ok\n", { mode: 0o755 });
+    process.env.LIVELY_TMUX_EXEC = slow;
+    const out = await tmux(["list-sessions"]);
+    assert.equal(out.trim(), "slow-ok", "🔴 5초에 끊겼다 — 중계의 재시도 사다리가 통째로 무의미해진다");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

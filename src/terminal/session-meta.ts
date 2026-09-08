@@ -140,7 +140,31 @@ export function nodeSessionMetaMode(
  *   세션이 영영 복원 불가가 된다(#1791 보존). 복원 라우트가 다시 gone 을 물어 409 로 정직하게 멈추므로,
  *   조용한 빈 피커 대신 읽을 수 있는 이유가 남는다 |
  */
-export function nodeMetaRestorable(args: { mode: NodeSessionMetaMode; nodeGone: boolean | null }): boolean {
+/**
+ * 노드 세션이 **아직 뜨는 중**일 수 있는 창 (#3626). 이 안에서는 «못 봤다»·«아직 없다» 를 죽음으로 읽지 않는다.
+ *
+ * 왜 20초인가: 노드의 세션 기동은 폴더 생성 → mux 세션 → 하네스 부팅이고, 그 사이 노드 링크가 한 번
+ *  끊기면(hammurabi 실측 2026-09-07: 연결이 median 344초마다 끊긴다) 게이트웨이는 아무것도 못 본다.
+ *  하네스 부팅만 수 초이고 첫 지시 주입기도 90초를 기다린다 — 20초는 그 사이에서 «기동 중»과
+ *  «진짜 죽었다»를 가르는 자리다. 넘기면 종전대로 정직하게 «중단됨» 이라고 말한다.
+ */
+export const NODE_STARTUP_GRACE_MS = 20_000;
+
+export function nodeMetaRestorable(args: {
+  mode: NodeSessionMetaMode;
+  nodeGone: boolean | null;
+  /** 이 세션이 만들어진 지 얼마나 됐나(ms). 모르면 null — 그 경우 종전 판정 그대로다(무회귀). */
+  ageMs?: number | null;
+}): boolean {
   if (args.mode !== "ask") return true;
-  return args.nodeGone !== false;
+  if (args.nodeGone === false) return false;                  // 살아있음 확답 — 복원 신호를 내지 않는다
+  // 🔴 #3626 — **갓 만든 세션에는 «확답 없음»도 «아직 없음»도 죽음이 아니다.**
+  //  이 자리가 화면 부팅 게이트(maybeRestoreOnOpen)의 유일한 입력이라, 여기서 한 번 잘못 내면 화면은
+  //  WS 도 붙이기 전에 복원으로 간다. 그런데 갓 만든 세션엔 이어받을 대화가 없어 그 복원은 인자 없는
+  //  `claude --resume` = **후보 0건 피커**로 끝난다(상민님 신고 2026-09-07, 같은 지문 6건).
+  //  게이트웨이가 방금 만들었고 **노드가 생성을 확인해 준** 세션이다 — 그 세션을 몇 초 만에 «중단됨»
+  //  이라고 부르는 것은 관측의 한계를 사실로 승격하는 것이고, 그건 이 코드베이스의 «확답 only»(#835)에
+  //  정면으로 어긋난다. 창 안에서는 기다린다(화면은 그냥 붙는다). 창을 넘기면 종전 판정 그대로다.
+  if (args.ageMs != null && args.ageMs < NODE_STARTUP_GRACE_MS) return false;
+  return true;   // 여기 오면 nodeGone 은 true(죽음 확답) 또는 null(판정 불가) — 둘 다 종전대로 복원 신호를 낸다
 }

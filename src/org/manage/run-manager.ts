@@ -10,6 +10,7 @@ import {
 } from "../store/managers.js";
 import {
   detectMismatch, detectOutdated, findContradictionCandidates, findCodeDriftCandidates,
+  findCodeDriftKnowledgeCandidates, type CodeDriftCandidate, type CodeDriftKnowledgeCandidate,
 } from "./detectors.js";
 import { isApplicableAction } from "./action-whitelist.js";
 import { logger } from "../../log.js";
@@ -69,39 +70,49 @@ export async function runManager(
       return { ...base, candidates: cands.length, enqueued: true };
     }
 
-    const all = await findCodeDriftCandidates(m, m.batch_size);
-    // 레포가 안 붙은 도메인은 뺀다(#1419 T8) — 코드를 읽어야 판정할 수 있는데 어느 레포인지 모르면
+    // ⚠ **후보는 둘이다**(#3579). 종전엔 도메인 정의(category.should)만 봤는데, 이 종류의 이름은
+    //  «지식 ↔ 코드 비교» 이고 관리기 설정도 지식 필터(match_types)로 쓰이고 있었다 — 설정이 약속하는 것과
+    //  구현이 보는 것이 갈라져 있었다. 그래서 «지식이 «이 함수가 X 를 막는다» 고 적었는데 그 심볼이 코드에
+    //  없다» 는 자리를 아무도 안 봤다(실측: 08-28 지식이 적은 defaultWorkspaceId 가 열흘간 코드에 없었다).
+    const allCats = await findCodeDriftCandidates(m, m.batch_size);
+    const allDocs = await findCodeDriftKnowledgeCandidates(m, m.batch_size);
+    // 레포가 안 붙은 것은 뺀다(#1419 T8) — 코드를 읽어야 판정할 수 있는데 어느 레포인지 모르면
     //  AI 가 '코드를 못 찾겠다'만 보고하거나, 더 나쁘게는 **읽지도 않고 추측한다**. 비교할 is 가 없는 것과 같다.
-    const cands = all.filter((c) => c.repos.length > 0);
-    if (!cands.length) {
-      const why = all.length
-        ? `정의는 있으나 레포가 연결된 도메인이 없음(${all.length}개 후보 중 0개) — [맥락 관리 ▸ 분류 ▸ 분류축]에서 레포를 지정하세요`
-        : "정의(should)와 코드가 함께 있는 도메인 없음";
+    const cands = allCats.filter((c) => c.repos.length > 0);
+    const docs = allDocs.filter((d) => d.repos.length > 0);
+    if (!cands.length && !docs.length) {
+      const why = allCats.length
+        ? `정의는 있으나 레포가 연결된 도메인이 없음(${allCats.length}개 후보 중 0개) — [맥락 관리 ▸ 분류 ▸ 분류축]에서 레포를 지정하세요`
+        : "정의(should)·지식과 코드가 함께 있는 도메인 없음";
       await recordManagerRun(m.id, "ok", { candidates: 0, note: why });
       return { ...base, candidates: 0, skipped: why };
     }
 
     // 레포 단위로 갈라 접수한다(#1419 T8) — 헤드리스 태스크는 **작업 cwd 가 레포 하나**다.
-    //  여러 레포의 도메인을 한 배치에 섞으면 그중 하나만 워크트리가 준비되고 나머지는 코드를 못 읽는다.
-    const byRepo = new Map<string, typeof cands>();
-    for (const c of cands) {
-      const repo = c.repos[0]; // 도메인에 레포가 여럿이면 첫 번째(정렬 고정) — 나머지는 다음 주기에 다루기보다
-      //  지금은 대표 레포로 본다(도메인이 레포 경계를 넘는 경우는 드물고, 넘으면 도메인 정의를 쪼개는 게 맞다).
-      const list = byRepo.get(repo) ?? [];
-      list.push(c);
-      byRepo.set(repo, list);
-    }
+    //  여러 레포의 대상을 한 배치에 섞으면 그중 하나만 워크트리가 준비되고 나머지는 코드를 못 읽는다.
+    type Group = { cats: CodeDriftCandidate[]; docs: CodeDriftKnowledgeCandidate[] };
+    const byRepo = new Map<string, Group>();
+    const slot = (repo: string): Group => {
+      const g = byRepo.get(repo) ?? { cats: [], docs: [] };
+      byRepo.set(repo, g);
+      return g;
+    };
+    // 도메인에 레포가 여럿이면 첫 번째(정렬 고정) — 대표 레포로 본다(도메인이 레포 경계를 넘는 경우는
+    //  드물고, 넘으면 도메인 정의를 쪼개는 게 맞다).
+    for (const c of cands) slot(c.repos[0]).cats.push(c);
+    for (const d of docs) slot(d.repos[0]).docs.push(d);
 
     const out: unknown[] = [];
     for (const [repo, group] of byRepo) {
-      const r = await enqueue(buildCodeDriftPrompt(m, group), {
+      const n = group.cats.length + group.docs.length;
+      const r = await enqueue(buildCodeDriftPrompt(m, group.cats, group.docs), {
         model: m.model, effort: m.effort, requester: m.requester, repo,
-        extra: { manager: m.key, repo, candidates: group.length },
+        extra: { manager: m.key, repo, candidates: n, categories: group.cats.length, knowledge: group.docs.length },
       });
-      out.push({ repo, candidates: group.length, ...(r.summary as object) });
+      out.push({ repo, candidates: n, categories: group.cats.length, knowledge: group.docs.length, ...(r.summary as object) });
     }
     await recordManagerRun(m.id, "ok", { repos: out });
-    return { ...base, candidates: cands.length, enqueued: true };
+    return { ...base, candidates: cands.length + docs.length, enqueued: true };
   } catch (e) {
     const msg = (e as Error)?.message ?? String(e);
     await recordManagerRun(m.id, "error", { error: msg });
@@ -166,22 +177,41 @@ function buildContradictionPrompt(m: ManagerRow, cands: Array<{ a: string; a_tit
 }
 
 /** 지식↔코드 괴리 프롬프트 — 정의(should)와 실제 코드를 대조하게 한다. */
-function buildCodeDriftPrompt(m: ManagerRow, cands: Array<{ key: string; name: string | null; should: string; repos: string[]; unit_count: number }>): string {
+function buildCodeDriftPrompt(
+  m: ManagerRow,
+  cands: Array<{ key: string; name: string | null; should: string; repos: string[]; unit_count: number }>,
+  docs: Array<{ name: string; title: string | null; repos: string[] }> = [],
+): string {
   const list = cands.map((c, i) =>
     `${i + 1}) ${c.key}${c.name ? ` (${c.name})` : ""} — 매핑 코드 ${c.unit_count}건`).join(" / ");
+  const docList = docs.map((d, i) => `${i + 1}) ${d.name}${d.title ? ` — ${d.title.slice(0, 60)}` : ""}`).join(" / ");
   const crit = m.criteria_md?.trim() ? `이 조직의 판단 기준: ${m.criteria_md.trim().replace(/\s+/g, " ")}. ` : "";
   // 레포는 그룹 단위로 하나다(호출자가 갈라 넘긴다) — 작업 cwd 가 곧 그 레포의 워크트리라고 알려 준다.
-  const repo = cands[0]?.repos[0] ?? "";
-  return `도메인 **정의(should) ↔ 실제 코드(is)** 괴리 점검 배치야(관리기 '${m.label || m.key}'). ` +
-    `대상 도메인: ${list}. ` +
-    `⚠ **지금 작업 폴더가 레포 '${repo}' 의 워크트리다** — 클론하지 말고 여기서 바로 Read/Grep 해. ` +
+  const repo = cands[0]?.repos[0] ?? docs[0]?.repos[0] ?? "";
+  const catPart = cands.length ? `**A. 도메인 정의(should) ↔ 코드**. 대상: ${list}. ` +
     `① 각 도메인을 category_get 으로 열어 정의·범위·규칙(should)을 정확히 읽어. ` +
-    `② 그 도메인에 매핑된 코드를 실제로 확인해 — 작업 폴더에서 Read/Grep 으로 구현을 보고, 필요하면 map_code_unit 매핑도 참고해. ${crit}` +
+    `② 매핑된 코드를 실제로 확인해 — 작업 폴더에서 Read/Grep, 필요하면 map_code_unit 매핑도 참고. ` +
     `③ **괴리의 정의**: 정의가 하겠다고 적어 둔 것을 코드가 안 하거나, 코드가 하는 일이 정의에 없거나, 정의의 규칙을 코드가 어기는 것. ` +
     `구현 세부(변수명·파일 배치)는 괴리가 아니다. 정의가 낡아 보이면 그것도 괴리다(코드가 맞고 정의가 틀린 경우). ` +
-    `④ 괴리만 org_manager_finding_report 로 보고: manager_key='${m.key}', target_kind='category', target_ref=(도메인 key), ` +
-    `severity, summary=무엇이 어긋나는지 한 줄, evidence=**정의의 어느 문장 ↔ 코드의 어느 파일:라인**을 짝지어 인용(필수). ` +
-    `⑤ 괴리가 없으면 보고하지 말고 그 사실을 요약해. 확신이 없으면 보고하지 마 — 거짓 경보가 큐를 죽인다.`;
+    `보고 시 target_kind='category', target_ref=(도메인 key). ` : "";
+  // ⚠ 지식 축(#3579) — 이 관리기의 이름이 «지식 ↔ 코드» 인데 종전엔 도메인만 봤다. 실측 사고: 지식이
+  //  «defaultWorkspaceId() 로 고쳤다» 고 적어 뒀는데 그 심볼이 어느 커밋에도 없었고 열흘간 아무도 몰랐다.
+  const docPart = docs.length ? `**B. 지식 ↔ 코드**. 대상: ${docList}. ` +
+    `① 각 지식을 knowledge_get 으로 열어 **코드의 동작·가드·불변식을 서술하는 문장**을 찾아. ` +
+    `② 그 서술이 지금 코드에서 성립하는지 작업 폴더에서 Read/Grep 으로 확인해. ` +
+    `특히 지식이 **이름을 대며** «이 함수·가드·설정 키가 X 를 한다» 고 적었으면 그 심볼이 실제로 있는지 본다 ` +
+    `— 없으면 «고쳤다고 적혔는데 코드에 없는» 자리다(이 관리기가 존재하는 이유). ` +
+    `③ ⚠ **과거를 서술하는 문장은 괴리가 아니다** — 이 레포는 «종전엔 이랬다 → 그래서 이렇게 바꿨다» 를 ` +
+    `본문에 남기는 관례가 있다. 옛 동작의 인용·실측 로그·시점이 박힌 수치는 현재 주장이 아니다. ` +
+    `«지금 이렇다» 고 말하는 문장만 본다. ` +
+    `보고 시 target_kind='knowledge', target_ref=(지식 name). ` : "";
+  return `**문서(정의·지식) ↔ 실제 코드(is)** 괴리 점검 배치야(관리기 '${m.label || m.key}'). ` +
+    `⚠ **지금 작업 폴더가 레포 '${repo}' 의 워크트리다** — 클론하지 말고 여기서 바로 Read/Grep 해. ` +
+    catPart + docPart + crit +
+    `괴리만 org_manager_finding_report 로 보고해: manager_key='${m.key}', 위에 적은 target_kind·target_ref, ` +
+    `severity, summary=무엇이 어긋나는지 한 줄, evidence=**문서의 어느 문장 ↔ 코드의 어느 파일:라인**을 짝지어 인용(필수 — ` +
+    `심볼이 아예 없으면 «grep 결과 0건» 을 그 자리에 적어). ` +
+    `괴리가 없으면 보고하지 말고 그 사실을 요약해. 확신이 없으면 보고하지 마 — 거짓 경보가 큐를 죽인다.`;
 }
 
 /** 크론·수동 실행 공용 진입 — key 또는 id 로 하나 실행. */

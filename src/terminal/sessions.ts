@@ -44,7 +44,7 @@ import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWrit
 //  #2165 — DB 를 타는 둘(mintAppToken·materializeAppAssets)은 게이트웨이 능력이다. 노드는 게이트웨이가
 //   미리 발급·추출해 실어 보낸 것(input.appSession)을 쓰므로 이 경로에 오지 않는다.
 import { gatewayUrl } from "../gateway-url.js";
-import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
+import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, psmuxUnsafeToken, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
 import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
 import {
@@ -535,7 +535,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //  지원 안 하는 하네스면 빈 배열이라 종전 그대로다.
     //  ⚠ managed 는 #2170 이후 boolean 이 아니라 **상시세션 id** 다(누구의 것인가를 말해야 해서). statusLine
     //   주입 여부는 "상시세션인가"만 필요하므로 여기서 truthy 로 좁힌다 — id 자체는 표식(stampManagedMarker)이 쓴다.
-    cmd.push(...harnessSettingsArgv(harness.key, { theme: input.theme, managed: !!input.managed }));
+    //  #3626 — 윈도우 노드(psmux)에는 얹지 않는다(값이 JSON = 따옴표 → pane 이 뜨지도 못한다). 판정은 catalog 가 한다.
+    cmd.push(...harnessSettingsArgv(harness.key, { theme: input.theme, managed: !!input.managed, platform: process.platform }));
   }
   // pane 이 실제로 실행할 argv(#1516). 세 갈래:
   //  · 로그인 세션(loginFor) — 하네스 TUI 대신 그 하네스의 **로그인 명령**을 셸에서 돌린다(만료 자격으로는
@@ -558,6 +559,13 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       : chatRuntime
         ? chatRuntimePaneArgv({ label: harness.label, bin: harness.bin || harness.key })
         : harnessLaunchArgv(harness.key, cmd);
+  //  🔴 #3626 — 윈도우 노드(psmux)가 못 나르는 토큰(따옴표·공백)이 섞였으면 **여기서 멈춘다**. 그대로 보내면 pane 이
+  //   뜨지도 못한 채 세션이 사라지고, 화면엔 «세션이 끝났거나 삭제되어…» 만 남아 원인을 아무도 못 읽는다(상민님 신고
+  //   2026-09-08). 값은 고치지 않는다(psmuxUnsafeToken 머리말) — 어느 인자가 문제인지 말하고 생성을 거절한다.
+  if (process.platform === "win32") {
+    const bad = psmuxUnsafeToken(launch);
+    if (bad) throw new HttpError(400, `이 컴퓨터(Windows 노드)에서는 따옴표나 공백이 든 실행 인자를 넘길 수 없어 세션을 만들지 않았습니다: ${bad}`);
+  }
 
   const invites = await validInvites(input.invites, ownerId(user));
   // 이름(#1808) — ① 사람이 준 이름 ② 없으면 **첫 지시**로 짓는다 ③ 그것도 없으면 id(= '아직 이름 없음' 표식. 근거는 아래 tmux(args) 뒤 주석).
@@ -613,7 +621,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  ⚠ pane env 는 exec 시점 고정 → **새 세션부터** 적용(LANG #633·TZ #778·SESSION_ID #852 와 같은 성질).
   //   즉 이미 떠 있는 세션의 하네스는 테마를 바꿔도 그대로다 — 그 세션을 다시 만들어야 바뀐다.
   args.push(...themeEnvArgs(input.theme));
-  args.push(...harnessThemeEnvArgs(harness.key, input.theme));   // 하네스가 env 로 테마를 받는 경우(#1683 후속)
+  args.push(...harnessThemeEnvArgs(harness.key, input.theme, process.platform));   // 하네스가 env 로 테마를 받는 경우(#1683 후속) · win32 는 안 얹는다(#3626)
   // 테넌트 소속(#1437 v1 5단계) — 게이트웨이 하나가 여러 워크스페이스를 서비스할 때, **세션 spawn 훅이
   //  어느 테넌트의 브로커 소켓에 붙어야 하는지**를 알려준다. 훅은 게이트웨이 프로세스의 env 를 물려받는데
   //  공유 게이트웨이에서는 그 env 가 전역이라 테넌트를 구분할 수 없다 — 세션스코프 -e 가 유일한 통로다.

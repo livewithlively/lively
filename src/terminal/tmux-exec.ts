@@ -8,6 +8,9 @@ import { promisify } from "node:util";
 import os from "node:os";
 import { TMUX_BIN, tenantSlug, isPsmuxBin } from "./catalog.js";
 import { execTopology, tmuxArgvFor, tmuxServerIsDedicated } from "../exec-topology.js";   // #2599 T2 — 「어디서 도나」는 토폴로지 한 곳에만 묻는다
+import { planTmux, runPlan, outcomeToError } from "./tmux-route.js";                        // #2600 T2 (d) d2 — 코어 직접 경로의 «무엇을 어디로»
+import { makeBrokerClient, type BrokerTransport } from "./broker-client.js";                // #2600 T2 (d) d2 — 그 전송(소켓·허브)
+import { shadowTmux } from "./tmux-shadow.js";                                               // #2600 T2 (d) d3 — 옛 경로가 답하고 코어 경로는 견주기만
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 
 const execFileAsync = promisify(execFile);
@@ -44,11 +47,88 @@ export function tmuxExecArgv(): string[] {
   return tmuxArgvFor(tenantSlug(), TMUX_BIN);
 }
 
+/**
+ * 이 호출을 얼마나 기다리나 — **로컬과 중계가 다르다**(#2616 후속, 2026-09-07).
+ *
+ * ── 왜 갈랐나 ───────────────────────────────────────────────────────────────
+ * 로컬 tmux 는 같은 호스트의 유닉스 소켓이라 5초면 넉넉하다(종전 값 — 무회귀).
+ *  중계(매니지드)는 그 5초 안에 **게이트웨이 → 허브 → 노드 브로커 → runsc exec** 네 홉이 들어간다.
+ *  그런데 안쪽 층들의 예산이 바깥보다 **크게** 잡혀 있었다:
+ *
+ *      코어 5s  >  중계 4s  ‹‹  허브 21.5s(파킹 대기 1.5 + 응답 머리 20)  ›  브로커 15s
+ *
+ *  즉 «제일 바깥이 제일 짧다». 그러면 안쪽이 아직 일하는 중에 바깥이 끊고, 사람은 원인이 아니라
+ *  **끊긴 사실**만 본다 — 실측 2026-09-07: 세션 첫 지시가 `브로커 응답 없음: http://…:9093` 으로
+ *  전달 실패했다(허브·브로커는 그 4초 뒤에도 답을 만들고 있었다).
+ *  ⚠ 예산은 **안쪽이 짧고 바깥으로 갈수록 길어야** 한다. 이 상수가 그 사슬의 제일 바깥이다:
+ *   브로커 6s < 허브(요청 예산 안으로 좁힘) < 중계 9s/회·20s 총 < **여기 22s**.
+ *   숫자를 바꿀 땐 넷을 같이 본다(한 층만 줄이면 그 층이 다시 남의 일을 끊는다).
+ */
+export const TMUX_LOCAL_TIMEOUT_MS = 5_000;
+export const TMUX_RELAY_TIMEOUT_MS = 22_000;
+
+/** (순수) 이 호출의 상한 — 중계면 길게, 로컬이면 종전 그대로. 판정이 한 자리에 있어야 시험이 잰다. */
+export function tmuxTimeoutMs(relay: readonly string[]): number {
+  return relay.length ? TMUX_RELAY_TIMEOUT_MS : TMUX_LOCAL_TIMEOUT_MS;
+}
+
+/**
+ * 코어 직접 경로(#2600 T2 (d) d2)가 **이 호출**에 성립하나 — 셋이 다 참일 때만: 플래그(`tmuxRoute`)·브로커에 닿는 길(`broker`)·
+ *  요청 슬러그. 하나라도 없으면 null = 종전 경로(중계). 슬러그 없는 호출(registry 의 primary 무컨텍스트)은 중계도 `{slug}` 를
+ *  못 채우므로 여기서도 새 경로가 아니다 — 두 경로의 «성립 조건»이 같아야 그림자 대조가 같은 호출을 견준다.
+ *  ⚠ `{slug}` 치환은 `String.replace(문자열)` = **첫 번째 하나만** — `tmux-relay.cjs`·`tmuxArgvFor` 와 같은 의미를 지킨다.
+ */
+export function tmuxRouteTransport(slug: string | null = tenantSlug()): { transport: BrokerTransport; slug: string; mode: "on" | "shadow"; sample: number } | null {
+  const topo = execTopology();
+  if (topo.tmuxRoute === "off" || !topo.broker || !slug) return null;
+  const transport: BrokerTransport = topo.broker.kind === "hub"
+    ? { kind: "hub", url: topo.broker.url, secret: topo.broker.secret, slug }
+    : { kind: "socket", socketPath: topo.broker.template.replace("{slug}", slug) };
+  return { transport, slug, mode: topo.tmuxRoute, sample: topo.tmuxShadowSample };
+}
+
+/**
+ * 코어 직접 경로 — 브로커 `/lvly/tmux` 가 하던 «세션 의미» 를 코어가 한다: 목록(`GET /lvly/sessions`) → 계획(`planTmux`) →
+ *  실행(범용 exec API) → 병합. 성공은 stdout, 실패는 execFile 오류와 **같은 필드**(`code`·`stdout`·`stderr`)로 던진다 —
+ *  상위(`isSessionGoneError`·`isNoTmuxServer`·strict 호출)가 종전과 똑같이 갈린다.
+ *  목록 조회 자체가 실패하면 «못 봤다» 다 — «서버 없음»·«세션 없음» 문구로 위장하지 않는다(#2616).
+ */
+export async function tmuxViaRoute(args: string[], via: { transport: BrokerTransport; slug: string }): Promise<string> {
+  //  ⚠ 설정 오류(https 허브·형식 밖 슬러그)도 execFile 오류 모양으로 던진다 — 맨 Error 가 나가면 상위 판정이 전부 거짓으로
+  //   떨어져 «못 봤다» 조차 못 된다(블라인드 리뷰 ⑥-4). 여기서 접으면 strict 호출은 던지고 목록은 desired 폴백으로 간다.
+  const fold = (why: string, e: unknown): never => {
+    throw outcomeToError({ code: 1, stdout: "", stderr: `${why}(못 봤다): ${(e as Error)?.message ?? String(e)}` });
+  };
+  let client: ReturnType<typeof makeBrokerClient>;
+  try { client = makeBrokerClient(via.transport, { timeoutMs: TMUX_RELAY_TIMEOUT_MS }); } catch (e) { return fold("코어 직접 경로 설정 오류", e); }
+  let listed: Awaited<ReturnType<typeof client.listSessions>>;
+  try { listed = await client.listSessions(); } catch (e) { return fold("브로커 세션 목록 조회 실패", e); }
+  let out;
+  try {
+    const plan = planTmux(via.slug, args, listed.sessions, listed.observed);
+    out = await runPlan(plan, via.slug, args, listed.observed, (c, argv) => client.execCapture(c, argv));
+  } catch (e) { return fold("코어 직접 경로 실행 오류", e); }
+  if (out.code !== 0) throw outcomeToError(out);
+  return out.stdout;
+}
+
 export async function tmux(args: string[]): Promise<string> {
+  //  #2600 T2 (d) d2 — 플래그가 `on` 이고 길이 있을 때만 코어 직접 경로. 아니면 아래 종전 경로가 **한 바이트도** 안 바뀐다.
+  const via = tmuxRouteTransport();
+  if (via?.mode === "on") return tmuxViaRoute(args, via);
   const relay = tmuxExecArgv();
   const [bin, ...prefix] = relay.length ? relay : [TMUX_BIN];
-  const { stdout } = await execFileAsync(bin!, [...prefix, ...args], { timeout: 5000, env: TMUX_ENV });
+  const old = execFileAsync(bin!, [...prefix, ...args], { timeout: tmuxTimeoutMs(relay), env: TMUX_ENV });
+  //  d3 — `shadow` 면 같은 약속을 곁에서 지켜보며 코어 경로와 견준다. 떼어 놓는다(void): 이 호출의 답·지연·예외는 옛 경로 그대로다.
+  //   그림자는 절대 거절하지 않는다(tmux-shadow 규율). 엔진(broker-client)은 호출 시점에 만든다 — 만들다 던지면 그쪽이 드러낸다.
+  if (via?.mode === "shadow") void shadowTmux(args, via.slug, via.sample, old, () => shadowEngineFor(via));
+  const { stdout } = await old;
   return stdout;
+}
+/** 그림자의 코어 경로 엔진 — `on` 경로(`tmuxViaRoute`)와 같은 클라이언트·같은 상한. */
+function shadowEngineFor(via: { transport: BrokerTransport }) {
+  const client = makeBrokerClient(via.transport, { timeoutMs: TMUX_RELAY_TIMEOUT_MS });
+  return { list: () => client.listSessions(), exec: (c: string, argv: string[]) => client.execCapture(c, argv) };
 }
 export async function tmuxQuiet(args: string[]): Promise<void> { try { await tmux(args); } catch { /* 비치명 */ } }
 export async function getOpt(name: string, opt: string): Promise<string> {
@@ -207,9 +287,31 @@ export function isSessionGoneError(err: unknown, bin: string = TMUX_BIN, serverA
   // psmux(윈도우 노드, #1791 실측): `has-session -t <없는 id>` 가 **stderr 한 글자 없이 exit 1** 로 끝난다(tmux 의 "can't find
   //  session" 문구가 없다). 그래서 종전엔 윈도우 노드의 죽은 세션이 영영 '판정 불가'였다 — nodeCanAttach 가 4410 대신 4403 을
   //  내고, #1791 복원·삭제의 gone 확답도 못 받았다(복원이 already 로 끝남, 실측). psmux 는 서버가 세션당 프로세스라
-  //  '서버 접속불가'라는 별개 상태가 없다 — exit 1 + 빈 stderr = 그 세션 없음. 실행 파일 부재(ENOENT)는 code 가 문자열이라 안 걸린다.
-  if (isPsmuxBin(bin) && e.code === 1 && String(e.stderr ?? "").trim() === "") return true;
+  //  '서버 접속불가'라는 별개 상태가 없다 — exit 1 + 빈 stderr 는 '그 세션 없음'의 유력한 모양이다.
+  //  ⚠ 다만 그 모양은 **다른 실패와도 겹친다**(isPsmuxSilentExit 머리말) — 그래서 확답이 필요한 자리
+  //   (sessionGone)는 이 술어를 그대로 믿지 않고 `list-sessions` 로 한 번 더 확인한다(#3569).
+  if (isPsmuxSilentExit(err, bin)) return true;
   return false;
+}
+
+/**
+ * psmux 의 **'조용한 실패'** — exit 1 인데 stderr 가 한 글자도 없다.
+ *
+ * ⚠ 이 모양은 «그 세션 없음» **만**을 뜻하지 않는다. psmux 는 tmux 의 "can't find session" 같은 문구를
+ *  주지 않으므로, 이 한 가지 모양 안에 «없는 세션 조회»와 «다른 이유로 실패»가 **함께** 들어 있다.
+ *  그래서 이 술어는 «없다는 확답»이 아니라 «구분이 안 되는 실패»의 이름이다 — 확답이 필요한 자리
+ *  (sessionGone)는 목록으로 한 번 더 확인한다. (실행 파일 부재(ENOENT)는 code 가 문자열이라 안 걸린다.)
+ */
+export function isPsmuxSilentExit(err: unknown, bin: string = TMUX_BIN): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { killed?: boolean; signal?: string | null; stderr?: unknown; code?: unknown };
+  if (e.killed || e.signal) return false;                     // 타임아웃·시그널 종료 → 판정 불가
+  return isPsmuxBin(bin) && e.code === 1 && String(e.stderr ?? "").trim() === "";
+}
+
+/** `list-sessions -F "#{session_name}"` 출력에 이 세션이 있나(순수 — 한 줄에 이름 하나). */
+export function sessionInList(raw: string, id: string): boolean {
+  return String(raw ?? "").split("\n").some((line) => line.trim() === id);
 }
 /**
  * tmux 실패가 **'서버가 없다'(정상 — 세션 0개)** 인가, **'못 봤다'(장애)** 인가.
@@ -222,10 +324,33 @@ export function isNoTmuxServer(e: unknown): boolean {
   const stderr = String((e as { stderr?: unknown })?.stderr ?? "");
   return /no server running|error connecting/i.test(stderr);
 }
+/**
+ * 이 세션이 **정말 끝났나** — `true` 일 때만 '죽었다'로 다뤄도 된다(#835 '확답 only').
+ *
+ * 🔴 psmux(윈도우 노드)만 한 겹 더 확인한다 (#3569, 2026-09-07 실측).
+ *  `isPsmuxSilentExit` 머리말대로 psmux 의 exit 1 + 빈 stderr 에는 «그 세션 없음»과 «다른 이유로 실패»가
+ *  **같은 모양으로** 들어 있다. 그런데 #1791 은 그 모양을 곧바로 «없다는 확답»으로 승격했고, 그래서 **갓 만들어
+ *  아직 등록 전인 세션**까지 죽었다고 답했다. 그 오답의 대가가 크다 — 화면의 부팅 게이트(maybeRestoreOnOpen)가
+ *  그 한 마디를 믿고 살아 있는 세션을 복원으로 몰고, 갓 만든 세션엔 이어받을 대화가 없어 인자 없는
+ *  `claude --resume` = **후보 0건 피커**가 뜬다(상민님 신고 2026-09-07: 홈에서 [시키기] 를 누르면
+ *  «이어받기 세션을 열었어요» 와 함께 빈 피커로 떨어진다. 실측 로그: 생성 t+99ms 메타가 restorable:true,
+ *  t+1303ms 에 movedTo 로 뒤집힘).
+ *
+ *  고침은 판정을 옮기는 것이 아니라 **확답을 만드는 것**이다: psmux 는 `list-sessions` 를 멀쩡히 답한다
+ *  (실측 hammurabi 2026-09-07 — `psmux list-sessions -F "#{session_name}"` → exit 0 + 세션명 한 줄씩,
+ *   `psmux has-session -t <없는 id>` → exit 1 + 빈 stderr). 목록을 볼 수 있으면 그게 확답이다.
+ *  ⚠ 목록조차 못 보면 **종전 판정을 유지한다**(gone) — #1791 이 연 길(윈도우의 죽은 세션도 복원·삭제된다)을
+ *   닫지 않기 위해서다. 이 변경은 «목록이 보일 때만» 판정을 바꾼다(무회귀).
+ */
 export async function sessionGone(id: string): Promise<boolean> {
   if (!ID_RE.test(id)) return false; // 형식 자체가 틀림 = '종료'가 아니라 잘못된 요청
   try { await tmux(["has-session", "-t", id]); return false; } // 살아있음
-  catch (err) { return isSessionGoneError(err); }
+  catch (err) {
+    if (!isSessionGoneError(err)) return false;
+    if (!isPsmuxSilentExit(err)) return true;   // tmux 는 문구로 확답한다 — 되물을 것이 없다
+    try { return !sessionInList(await tmux(["list-sessions", "-F", "#{session_name}"]), id); }
+    catch { return true; }                      // 목록도 못 봤다 → 종전 판정 유지(#1791 무회귀)
+  }
 }
 
 // 리사이즈로 tmux 히스토리에 쌓인 프롬프트 중복(shrink→grow 시 overflow가 history 로 밀림)을 정리.

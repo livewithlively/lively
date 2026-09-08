@@ -83,10 +83,82 @@ function git(args: string[], cwd?: string, extraEnv?: Record<string, string>, ti
 }
 async function isRepo(p: string): Promise<boolean> { return !!p && fs.existsSync(p) && (await git(["rev-parse", "--git-dir"], p)).ok; }
 
-// 스테일 워크트리 등록 정리 — 워크트리 디렉터리가 사라져도 git 은 등록을 남기고, 그 등록은 **prunable 이어도
-//  브랜치를 계속 점유**한다(-b 도 attach 도 실패). 청소되는 임시경로에 뜬 워크트리가 지워지면 그 브랜치가
-//  사람이 손으로 prune 할 때까지 영구히 막히므로, add 전에 항상 턴다(#932). 살아있는 등록엔 무해. best-effort.
-async function pruneWorktrees(repoPath: string): Promise<void> { await git(["worktree", "prune"], repoPath); }
+// 워크트리 등록 목록(porcelain, base 자신 제외) — 디렉터리가 사라진 등록도 경로 그대로 나온다. locked = 사람이 지킨 것(불가침).
+interface WorktreeReg { path: string; branch: string | null; locked: boolean }
+async function listWorktreeRegs(repoPath: string): Promise<WorktreeReg[]> {
+  const r = await git(["worktree", "list", "--porcelain"], repoPath);
+  if (!r.ok) return [];
+  const list: WorktreeReg[] = [];
+  let cur: WorktreeReg | null = null;
+  for (const raw of r.out.split("\n")) {
+    const line = raw.trim();
+    if (line.startsWith("worktree ")) { cur = { path: line.slice("worktree ".length), branch: null, locked: false }; list.push(cur); }
+    else if (cur && line.startsWith("branch refs/heads/")) cur.branch = line.slice("branch refs/heads/".length);
+    else if (cur && line.startsWith("locked")) cur.locked = true;
+  }
+  return list.filter((w) => normPath(w.path) !== normPath(repoPath));
+}
+// 경로 정규화(비교용) — 있으면 realpath, 없으면 **가장 가까운 있는 조상**을 realpath 하고 나머지를 붙인다.
+//  git 은 등록 경로를 realpath 로 저장하므로 아직 없는 목표 경로도 같은 표기로 견줘야 «내 목표 경로의 등록」을 알아본다.
+function normPath(p: string): string {
+  let cur = path.resolve(p);
+  const tail: string[] = [];
+  for (let i = 0; i < 64; i++) {
+    let real: string | null = null;
+    try { real = fs.realpathSync.native(cur); } catch { /* 없음 → 한 단계 위로 */ }
+    if (real !== null) { tail.reverse(); return path.join(real, ...tail); }
+    const up = path.dirname(cur);
+    if (up === cur) break;
+    tail.push(path.basename(cur));
+    cur = up;
+  }
+  return path.resolve(p);
+}
+// «지워졌다» 와 «안 보인다» 를 가르는 유일한 근거 — 경로는 없는데 **부모 디렉터리는 있다**(#3678). 부모까지 없으면
+//  이 프로세스가 못 보는 자리(다른 컨테이너의 살아 있는 워크트리·세션 /tmp 의 핀)일 수 있어 손대지 않는다.
+const provablyGone = (p: string): boolean => !fs.existsSync(p) && fs.existsSync(path.dirname(p));
+
+// 표적 스테일 등록 정리(#932 → #3678) — 워크트리 디렉터리가 사라져도 git 은 등록을 남기고, 그 등록은 **prunable 이어도
+//  브랜치를 계속 점유**한다(-b 도 attach 도 실패). 그래서 add 전에 «목표 경로의 등록 · 목표 브랜치를 쥔 등록」 중
+//  provablyGone 인 것만 `worktree remove --force` 로 걷는다. 그 밖의 등록은 절대 건드리지 않는다. best-effort.
+//  ⚠ 종전의 blanket `git worktree prune` 은 쓰지 않는다: prune 은 이 프로세스에서 안 보이는 경로를 전부 «없다» 로
+//   판정해 admin 을 지운다. 세션 컨테이너끼리 base 를 공유하는 매니지드에서 다른 프로젝트 세션의 admin 이 하루 5회
+//   지워졌고, 같은 basename 으로 다시 뜬 admin 을 두 워크트리가 가리켜 HEAD·index 를 공유했다(커밋이 남의 브랜치에,
+//   2026-09-08). kit/cli/repo-worktree-core.mjs 의 clearStaleRegistrations 와 같은 규칙 — 한쪽만 고치면 다른 쪽 prune 이
+//   여전히 지운다.
+export async function clearStaleRegistrations(repoPath: string, opts: { paths?: string[]; branch?: string | null }): Promise<string[]> {
+  const removed: string[] = [];
+  for (const w of await listWorktreeRegs(repoPath)) {
+    const target = (opts.paths ?? []).some((p) => !!p && normPath(p) === normPath(w.path)) || (!!opts.branch && w.branch === opts.branch);
+    if (!target || w.locked || !provablyGone(w.path)) continue;
+    const r = await git(["worktree", "remove", "--force", w.path], repoPath);
+    if (r.ok) removed.push(w.path);
+  }
+  return removed;
+}
+
+// 재사용 전 **소유 검증**(#3678) — kit/cli/repo-worktree-core.mjs verifyOwnAdmin 과 같은 규칙. gitfile(`.git` 파일)이 가리키는
+//  admin 이 있고 그 admin 의 gitdir 가 이 워크트리 자신을 가리켜야 세션을 그 위에 앉힌다. 아니면(남의 admin 을 잇고 있음 ·
+//  admin 소실 · 파손) 409 — 조용히 앉히면 그 세션의 커밋이 남의 프로젝트 브랜치에 얹힌다. `.git` 이 디렉터리(직접 clone)면 검증 없음.
+//  아무것도 고치지 않는다(그 자리엔 사람의 파일이 있다). fail-open 호출자에선 failed 항목으로 남아 프리로드가 세션에 알린다.
+function verifyWorktreeOwnership(wtPath: string): void {
+  const gitfile = path.join(wtPath, ".git");
+  let st: fs.Stats;
+  try { st = fs.statSync(gitfile); } catch { return; }
+  if (!st.isFile()) return;
+  const m = fs.readFileSync(gitfile, "utf8").match(/^gitdir:\s*(.+?)\s*$/m);
+  const admin = m ? (path.isAbsolute(m[1]) ? m[1] : path.resolve(wtPath, m[1])) : "";
+  const help = "이 워크트리에서 git 을 쓰지 말고 다른 경로에 새 워크트리를 떠 내 변경만 옮기세요(지식 shared-worktree-hijacked-by-other-session).";
+  if (!admin) throw new HttpError(409, `워크트리 '${wtPath}' 의 .git 파일이 파손됐습니다(gitdir 줄 없음). ${help}`);
+  if (!fs.existsSync(admin)) throw new HttpError(409, `워크트리 '${wtPath}' 의 git 등록(admin '${admin}')이 사라졌습니다 — 다른 세션의 worktree prune 에 지워졌을 수 있습니다. ${help}`);
+  let back = "";
+  try { back = fs.readFileSync(path.join(admin, "gitdir"), "utf8").split("\n")[0].trim(); } catch { /* 없음 */ }
+  const backAbs = back ? (path.isAbsolute(back) ? back : path.resolve(admin, back)) : "";
+  if (!backAbs || normPath(backAbs) !== normPath(gitfile)) {
+    throw new HttpError(409, `워크트리 '${wtPath}' 가 다른 워크트리의 git 등록을 잇고 있습니다 — admin '${admin}' 은 '${backAbs ? path.dirname(backAbs) : "(불명)"}' 의 것입니다`
+      + `(같은 base 에서 같은 basename 으로 다시 뜬 admin 을 둘이 가리키는 상태). 여기서 커밋하면 그쪽 브랜치에 얹힙니다. ${help}`);
+  }
+}
 
 // 브랜치를 쥐고 있는 워크트리 경로(없으면 null) — git 은 한 브랜치를 두 워크트리에 못 건다.
 async function worktreeHolding(repoPath: string, branch: string): Promise<string | null> {
@@ -305,6 +377,10 @@ async function ensureBaseClone(
       await git(["config", "core.sharedRepository", "group"], repoPath).catch(() => { /* best-effort */ });
       await refreshRepo(repoPath, auth.env);
     }
+    // gc 의 자동 워크트리 prune 을 끈다(#3678) — `git gc --auto`(commit·fetch 뒤 저절로)는 gc.worktreePruneExpire(기본 3개월)
+    //  보다 오래 index 를 안 건드린 «경로 없는» 등록을 지우는데, 공유 base 에서 «경로 없음» 은 «이 프로세스가 못 보는 살아
+    //  있는 워크트리» 일 수 있다. 워크트리들은 base 의 config 를 공유하므로 어느 쪽에서 gc 가 돌아도 같이 막힌다. 멱등.
+    await git(["config", "gc.worktreePruneExpire", "never"], repoPath).catch(() => { /* best-effort */ });
     return { repoPath, cloned };
   } finally {
     await auth.cleanup();
@@ -370,7 +446,7 @@ export async function provisionTaskRepo(
   if (!BRANCH_RE.test(branch)) throw new HttpError(400, `브랜치명 형식 오류: ${branch}`);
   if (!fs.existsSync(wtPath)) {
     await fsp.mkdir(wtParent, { recursive: true });
-    await pruneWorktrees(repoPath); // #932 — 이전 위탁 워크트리가 지워졌어도 등록이 delegate/task-<id> 를 쥐고 있음
+    await clearStaleRegistrations(repoPath, { paths: [wtPath], branch }); // #932 — 이전 위탁 워크트리가 지워졌어도 등록이 delegate/task-<id> 를 쥐고 있음(그 등록만, #3678)
     const from = ref && BRANCH_RE.test(ref) ? [`origin/${ref}`] : []; // ref 지정 시 그 upstream 기준(없으면 base HEAD)
     let w = await git(["worktree", "add", wtPath, "-b", branch, ...from], repoPath);
     if (!w.ok) w = await git(["worktree", "add", wtPath, branch], repoPath); // 재큐로 이미 브랜치 있으면 attach 폴백
@@ -379,6 +455,8 @@ export async function provisionTaskRepo(
       throw delegateRepoError(new HttpError(502, `위탁 워크트리 생성 실패(${repo}): ${w.err}`
         + (at ? ` — 브랜치 '${branch}' 는 이미 '${at}' 워크트리가 쥐고 있습니다(git 은 한 브랜치를 두 워크트리에 못 겁니다).` : "")), repo);
     }
+  } else {
+    verifyWorktreeOwnership(wtPath); // #3678 — 남의 admin 을 잇고 있는 자리에 위탁을 앉히지 않는다
   }
   return wtPath;
 }
@@ -483,7 +561,7 @@ export async function provisionProjectRepos(
         const wtPath = confineToWorkspace(path.join(projDir, name), "워크트리");
         if (!fs.existsSync(wtPath)) {
           await fsp.mkdir(projDir, { recursive: true });
-          await pruneWorktrees(repoPath); // #932 — 사라진 워크트리의 등록이 이 브랜치를 계속 쥐고 있지 않게
+          await clearStaleRegistrations(repoPath, { paths: [wtPath], branch }); // #932 — 사라진 워크트리의 등록이 이 브랜치를 계속 쥐고 있지 않게(그 등록만, #3678)
           // -b 로 새 브랜치 시도 → 같은 브랜치가 이미 다른 worktree 면 실패 → 기존 브랜치 attach 폴백(work.mjs 동형).
           let w = await git(["worktree", "add", wtPath, "-b", branch], repoPath);
           if (!w.ok) w = await git(["worktree", "add", wtPath, branch], repoPath);
@@ -496,6 +574,8 @@ export async function provisionProjectRepos(
               + (at ? ` — 브랜치 '${branch}' 는 이미 '${at}' 워크트리가 쥐고 있습니다(git 은 한 브랜치를 두 워크트리에 못 겁니다).`
                 + ` 그 워크트리를 정리하거나, 이 레포의 branch 를 다른 이름으로 지정하세요.` : ""));
           }
+        } else {
+          verifyWorktreeOwnership(wtPath); // #3678 — 있는 워크트리를 재사용하기 전에 admin 이 자기 것인지(남의 것을 잇고 있으면 409)
         }
         cwd = wtPath;
       }

@@ -4,7 +4,7 @@
 //   ┌ 사이트 ───────────────────────┬ offline 판정 ────────────────────┬ timeout ─┬ unsupported ┐
 //   │ relayNodeOp                   │ msg === "node-offline" 만        │ 504 있음 │ 409 있음(op) │
 //   │ provisionProjectOnNode.dispatch│ msg 동등성 **또는** !nodeOnline  │ **없음** │ **없음**     │
-//   │ createProjectSessionOnNode    │ msg 동등성 **또는** !nodeOnline  │ 504 있음 │ 409 있음(고정)│
+//   │ createProjectSessionOnNode    │ msg 동등성 **또는** !nodeOnline  │ 504 있음 │ 409 있음(고정)│ ← #3626 에서 relayNodeOp 로 접힘
 //   └───────────────────────────────┴──────────────────────────────────┴──────────┴─────────────┘
 //
 //  ⚠ 단일 매핑으로 뭉개면 동작이 바뀐다: dispatch 는 timeout 분기가 없어 **오늘 node-rpc-timeout 이 502 로 나간다.**

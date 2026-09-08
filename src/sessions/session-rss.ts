@@ -206,12 +206,24 @@ export function sessionRssMb(table: Map<number, ProcEntry>, panePids: Map<string
  *  그 세션이 띄워 둔 프로세스다(운영자는 `pressure_max_reap`·정책으로 폭발반경만 조절한다).
  */
 export function sessionsWithLiveJobs(table: Map<number, ProcEntry>, panePids: Map<string, number[]>): Set<string> {
+  return new Set(sessionJobDetails(table, panePids).keys());
+}
+
+/**
+ * ⑥ 의 **증거까지** 돌려주는 판정 — `sid → ["zsh(pgid 900)", …]`(세션당 최대 3건). 없는 세션은 키가 없다.
+ *
+ * ⚠ 증거를 남기는 이유(2026-09-04 실측): 매니지드 게이트웨이에서 **후보 453개가 전부** 이 신호에 걸려
+ *  회수가 2시간 동안 통째로 멈춘 창이 있었는데, 로그에 개수만 있고 «무엇을 작업으로 봤나»가 없어
+ *  사후에 원인을 못 좁혔다(그 뒤 세션이 0개가 돼 재현도 불가). 개수는 «무슨 일이 있었다»만 말하고
+ *  «무엇이었나»는 말하지 않는다 — 판정을 남기려면 그 근거도 같이 남아야 한다.
+ */
+export function sessionJobDetails(table: Map<number, ProcEntry>, panePids: Map<string, number[]>): Map<string, string[]> {
   const children = new Map<number, number[]>();
   for (const [pid, e] of table) {
     const arr = children.get(e.ppid);
     if (arr) arr.push(pid); else children.set(e.ppid, [pid]);
   }
-  const out = new Set<string>();
+  const out = new Map<string, string[]>();
   for (const [sid, roots] of panePids) {
     const spine = new Set<number>();
     const paneGroups = new Set<number>();
@@ -252,20 +264,52 @@ export function sessionsWithLiveJobs(table: Map<number, ProcEntry>, panePids: Ma
     //  뿐이고 그건 이 기능 이전의 상태다 — 모르는 배치에서는 새 기능이 조용히 꺼지는 쪽이 옳다.
     //  관측: 그런 면에서는 `skipReasons.jobs` 가 늘 0 이다(활성 여부가 로그로 보인다).
     if (!spine.size || !harnessKnown) continue;
+    // 서브트리를 한 번 걷어 모은다(판정은 그 다음 — 하네스 자신의 이름을 먼저 알아야 한다).
     const seen = new Set<number>();
     const stack = [...roots];
+    const sub: Array<[number, ProcEntry]> = [];
     while (stack.length) {
       const pid = stack.pop()!;
       if (seen.has(pid)) continue;
       seen.add(pid);
       const e = table.get(pid);
       if (!e) continue;
-      if (e.pgid && e.pgid > 0 && !spine.has(e.pgid)) { out.add(sid); break; }   // spine 밖 그룹 = 하네스가 띄운 작업
+      sub.push([pid, e]);
       const kids = children.get(pid);
       if (kids) for (const k of kids) if (!seen.has(k)) stack.push(k);
     }
+    // ⚠ **하네스가 «자기 자신»을 도우미로 띄우는 것은 작업이 아니다**(#2652 후속, 실측 2026-09-04).
+    //  클로드코드는 `claude bg-pty-host`·`claude bg-spare` 같은 상주 도우미를 **각자 프로세스 그룹으로**
+    //  띄운다. 그룹만 보면 그건 «작업»과 구별되지 않는데, 한 번 생기면 세션이 끝날 때까지 살아 있어서
+    //  **그 세션이 영구히 보호된다**(= 그 세션은 영영 안 걷힌다). 매니지드에서 후보 453개가 전부 걸린
+    //  창의 정체가 이것으로 설명된다.
+    //  가르는 법: 하네스 그룹의 **리더 프로세스와 실행파일이 같으면** 그건 하네스가 띄운 자기 자신이다.
+    //  이름 목록을 코드에 박지 않는다 — 하네스가 무엇이든(claude·codex·…) 같은 규칙이 선다.
+    //  ⓘ 실패 방향: 사용자가 진짜로 `claude …` 를 백그라운드로 돌리면 그건 «작업 아님»으로 새어 보호가
+    //   안 걸린다. 그건 이 기능 이전 상태라 안전한 쪽이다(반대 방향은 회수 사망이다).
+    const harnessExes = new Set<string>();
+    for (const [pid, e] of sub) {
+      if (e.pgid && pid === e.pgid && spine.has(e.pgid) && !paneGroups.has(e.pgid)) harnessExes.add(exeOf(e.name));
+    }
+    const found: string[] = [];
+    for (const [, e] of sub) {
+      if (found.length >= JOB_EVIDENCE_MAX) break;
+      if (!e.pgid || e.pgid <= 0 || spine.has(e.pgid)) continue;
+      if (harnessExes.has(exeOf(e.name))) continue;              // 하네스가 띄운 자기 자신(도우미) — 작업 아님
+      found.push(`${(e.name || "?").slice(0, 24)}(pgid ${e.pgid})`);
+    }
+    if (found.length) out.set(sid, found);
   }
   return out;
+}
+
+/** 세션당 남길 증거 수. 로그 한 줄을 부풀리지 않으면서 «무엇이었나»를 말하기에 충분한 양. */
+const JOB_EVIDENCE_MAX = 3;
+
+/** comm/argv → 실행파일 basename. `"/usr/bin/claude bg-pty-host"` → `"claude"` (첫 토큰의 마지막 경로 조각). */
+function exeOf(name: string): string {
+  const head = (name || "").trim().split(/\s+/)[0] ?? "";
+  return head.slice(head.lastIndexOf("/") + 1);
 }
 
 /**

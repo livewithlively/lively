@@ -14,18 +14,18 @@ import { wrap, HttpError } from "../http/rest-util.js";
 import { projectAbsPath, grantSharedGroupWrite } from "./project-fs.js";
 import { canSeeProjectRow, effectiveViewer } from "../v6/visibility.js";
 import { viewerOf } from "../capabilities/principal.js";
-import { listSessions, listRestorableSessions, createSession, validateInvites, type CreateInput, normalizeCap } from "../terminal/terminal-sessions.js";
+import { listSessions, listRestorableSessions, validateInvites, type CreateInput } from "../terminal/terminal-sessions.js";
 import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
 import { ensureAgentsMd, readProjectAgentsMd } from "../v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
 import { startProjectProvision, projectProvisionStatus } from "./project-provision-jobs.js";
-import { provisionProjectOnNode, provisionStatusOnNode, createProjectSessionOnNode, nodeProjectSessions, bindNodeSessionProjectOrKill, injectDeferredFirstPrompt } from "../node/provision-remote.js";
+import { provisionProjectOnNode, provisionStatusOnNode, nodeProjectSessions } from "../node/provision-remote.js";
+import { launchSession, sessionInputFromBody } from "../terminal/session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
 import { isSelfNode } from "../node/registry.js";
 import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다)
-import { mirrorNodeSession, decorateNodeRows } from "../terminal/node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB)
+import { decorateNodeRows } from "../terminal/node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB)
 import { receiveUpload, uploadError, nfcPath } from "../terminal/upload-file.js";
 import { manifestFiles } from "./project-manifest.js";
-import { assertAppSessionPlacement, autoTrustWorkspace } from "../terminal/session-create-guards.js";
 import { ingestLocalUpload, supersedeLocalPath } from "../ingest/local-file.js";   // #1881 올린 파일 = 자료 1건
 
 const MAX_UPLOAD = 1024 * 1024 * 1024; // 1GB (#1870 — terminal-files 와 동일해야 한다. receiveUpload 스트리밍이라 RAM 무관)
@@ -403,22 +403,16 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const want = String(b.subpath ?? "").trim().replace(/^[/\\]+|[/\\]+$/g, "");
     if (want && (want === project.folder || want.startsWith(project.folder + "/"))) subpath = want;
     else if (want) throw new HttpError(400, "세션 작업 경로가 프로젝트 폴더 밖입니다");
+    // #3626 — 공통 필드(하네스·플래그·테마·runtime·kind·첫 지시…)는 관문(session-launch.ts sessionInputFromBody)이
+    //  홈 입구와 **같은 표로** 읽는다. 종전엔 여기서 따로 읽어 theme·runtime 이 빠졌고, 그 차이가 «홈에서만 죽는» 사고의
+    //  모양이었다(그 파일 머리말). 여기 남는 것은 프로젝트 입구만의 것 — 봉쇄된 cwd·프로젝트 id·read 축소.
     // rootKey="shared" 는 노드·게이트웨이 모두 PROJECT_SHARED_BASE 로 해소된다 — 그래서 로컬·노드 분기가 같은 입력을 쓴다.
     const input: CreateInput = {
-      kind: "human",   // #2162 — 프로젝트 화면에서 사람이 여는 작업 세션
-      label: String(b.label ?? ""), rootKey: "shared", subpath,
-      harness: String(b.harness ?? "shell"),
-      flags: (b.flags && typeof b.flags === "object") ? b.flags as Record<string, unknown> : {},
-      autoApprove: !!b.autoApprove,
-      readOnly: !!b.readOnly, // #1007 — 이 프로젝트 세션만 읽기전용(컨텍스트 스토어 쓰기 소거).
-      incognito: !!b.incognito, // #1007+ — 이 프로젝트 세션만 인코그니토(lively 전체 차단 + 훅 off).
-      // #1291 v2 — 기록 범위·read 축소. 미지정이면 프로젝트 폴더에서 파생한다(= 프로젝트 공개범위).
-      writeVis: normalizeCap(b.writeVis as string) ?? undefined,
-      restrictRead: !!b.restrictRead,
+      ...sessionInputFromBody(req.headers as Record<string, unknown>, b),
+      rootKey: "shared", subpath,
+      restrictRead: !!b.restrictRead,   // #1291 v2 — read 축소. writeVis 미지정이면 프로젝트 폴더에서 파생한다(= 프로젝트 공개범위).
       // 세션에 프로젝트 id 를 박아 입장 게이트가 폴더가 아닌 멤버십(id)으로 판정하게 한다(폴더 드리프트 면역).
       projectId: project.id, projectSrc: prefix.includes("/v6/") ? "v6" : "org",
-      initialPrompt: typeof b.initialPrompt === "string" && b.initialPrompt.trim() ? b.initialPrompt.slice(0, 20_000) : undefined,
-      appId: String(b.appId ?? "").trim() || undefined,
     };
     res.setHeader("Cache-Control", "no-store");
     // 노드 프로젝트 세션(#905 C4) — body.node 면 그 원격 노드에서 연다(provision 과 같은 게이트). 중앙 프로젝트 세션은
@@ -426,32 +420,8 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     //  → 게이트웨이가 현재 프로젝트 멤버(생성자∪팀원)를 검증해 invites 스냅샷으로 넘겨 다른 멤버의 공동입장을 성립시킨다.
     //  (멤버십 변경은 세션 재생성 전까지 미반영 — 중앙 세션은 동적. 알려진 한계.)
     const nodeId = String(b.node ?? "").trim();
-    if (nodeId) {
-      assertAppSessionPlacement(input, nodeId);
-      const requester = idOf(userOf(req));
-      const memberIds = await deps.listProjectMembers(project.id);
-      const invites = await validateInvites(memberIds, requester); // 실제 org 멤버만·요청자(owner) 제외·중복 제거
-      const { session, deferredPrompt } = await createProjectSessionOnNode(nodeId, requester, input, invites);
-      // 노드는 DB 무접속이므로 게이트웨이가 실행 세션 current 를 확정한다(실패 시 세션 롤백 — 공용 헬퍼).
-      if (input.projectSrc !== "org") {
-        await bindNodeSessionProjectOrKill({
-          nodeId, sessionId: session.id, requester, harness: session.harness || input.harness, projectId: project.id,
-        });
-      }
-      // #1791 — desired-state 정본(node_id) — 죽어도 '복원 가능(그 노드)'로 남는 근거. 노드엔 DB 가 없어 게이트웨이가 쓴다.
-      await mirrorNodeSession({ ...session, invites }, nodeId, input, requester);
-      // 새 노드는 create 시 첫 지시를 보류했다. execution_session current와 desired-state가 모두 생긴 뒤에만 주입을 시작한다.
-      if (deferredPrompt) {
-        await injectDeferredFirstPrompt({
-          nodeId, sessionId: session.id, harness: session.harness || input.harness, text: deferredPrompt,
-          trustOk: autoTrustWorkspace({ projectId: project.id, subpath: input.subpath }),   // 프로젝트 canonical 폴더 = 우리가 만든 자리
-        });
-      }
-      res.json({ session: { ...session, node: { id: nodeId, online: true } } });
-      return;
-    }
-    const session = await createSession(userOf(req), input);
-    res.json({ session });
+    const invites = nodeId ? await validateInvites(await deps.listProjectMembers(project.id), idOf(userOf(req))) : [];   // 실제 org 멤버만·요청자(owner) 제외·중복 제거
+    res.json({ session: await launchSession(userOf(req), input, { nodeId, invites }) });
   }));
 
   // ── ②-b 레포 provision — 입력 경로 확보(없으면 레지스트리 clone_url 로 clone) + 옵션 worktree(project/<id>/<repo>).

@@ -103,6 +103,25 @@ export async function sendKeyToSession(id: string, key: ChatKey): Promise<void> 
   await tmux(sendKeyPlan(id, key, TMUX_BIN));
 }
 
+// ── 목록에서 **아래로 한 칸** (#3626) ────────────────────────────────────────────────────────
+//  CHAT_KEYS 를 안 늘린다: 저건 «화면이 사람 대신 누를 수 있는 행동»의 전부라는 계약이라(위 주석),
+//  임의 키 릴레이로 넓히면 그 계약이 무너진다. 이건 릴레이가 아니라 **우리가 우리 대화상자를 넘길 때**만
+//  쓰는 내부 이동이라 별도 함수로 둔다.
+//  ⚠ psmux 는 키 이름을 모른다 — 방향키는 터미널이 보내는 것과 같은 이스케이프(ESC [ B)를 코드포인트로 넣는다.
+//   토큰 폭 규약(2자리 이상)은 inputToSendKeysArgv 가 지킨다.
+const ARROW_DOWN = "\x1b[B";
+export function sendDownPlan(id: string, bin: string): string[][] {
+  if (isPsmuxBin(bin)) return inputToSendKeysArgv(id, ARROW_DOWN);
+  return [["send-keys", "-t", id, "Down"]];
+}
+
+/** 목록 선택을 아래로 n 칸 옮긴다(0 이면 아무것도 안 보낸다). */
+export async function sendDownToSession(id: string, times = 1): Promise<void> {
+  if (times <= 0) return;
+  await tmux(["has-session", "-t", id]);
+  for (let i = 0; i < times; i++) for (const argv of sendDownPlan(id, TMUX_BIN)) await tmux(argv);
+}
+
 // ── 실행 중 세션의 테마 전환 (#1683 후속2) ─────────────────────────────────
 //  하네스의 자체 테마 명령을 그 pane 에 넣는다. 시퀀스는 catalog 의 HARNESS_LIVE_THEME 이 소유하고
 //  (하네스 TUI 메뉴에 기대는 값이라 한 곳에 모아 둔다) 여기는 그걸 **순서대로 흘리는 일**만 한다.

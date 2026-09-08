@@ -9,11 +9,11 @@
 //   ⚠ 그래도 호출자(라우트)는 이 함수를 **await 로 오래 붙들면 안 된다** — 202+백그라운드나 별도 상태 폴링으로
 //    감싸는 건 호출자 몫(현재 라우트는 clone 이 대개 초 단위인 사내 레포 전제로 직접 await, 상한은 아래 CAP).
 import { getNode, type OrgNode } from "./store.js";
-import { nodeOpenTo, nodeHostProfile } from "./node-access.js";
-import { nodeOnline, nodeRpc, nodeSupports, nodeSessionsFor, type NodeSessionInfo, nodeAgentStale, isSelfNode } from "./registry.js";
+import { nodeOpenTo } from "./node-access.js";
+import { nodeOnline, nodeRpc, nodeSupports, nodeSessionsFor, type NodeSessionInfo, isSelfNode } from "./registry.js";
 import type { NodeOp } from "./protocol.js";
 import { resolveRepoInject, type RepoSpec, type ProvisionedRepo, type ProvisionResult } from "../project/project-provision.js";
-import type { CreateInput, SessionInfo } from "../terminal/terminal-sessions.js"; // type-only — 런타임 순환 없음(erased)
+import type { CreateInput } from "../terminal/terminal-sessions.js"; // type-only — 런타임 순환 없음(erased)
 import { HttpError } from "../http-error.js";
 import { translateNodeRpcError } from "./rpc-error.js";
 import { logger } from "../log.js";
@@ -187,41 +187,9 @@ export async function provisionStatusOnNode(nodeId: string, projectId: number): 
   return { ...st, provisioned: norm.provisioned, failed: norm.failed };
 }
 
-// 노드에서 프로젝트 세션을 연다(#905 C4) — provision 과 **같은 게이트**(assertNodeUsable) 뒤 create op 을 릴레이한다.
-//  create 는 v1 기본 능력이라 requireProvision=false(단 UI 는 provision 미지원 노드를 애초에 안 보여준다). 세션 입력의
-//  rootKey/subpath 의미는 게이트웨이 로컬과 동일 — ROOTS["shared"].base 가 노드·게이트웨이 모두 PROJECT_SHARED_BASE
-//  라 같은 프로젝트 폴더로 해소된다. invites 는 게이트웨이가 프로젝트 멤버로 검증한 스냅샷을 넘긴다(노드는 프로젝트
-//  무지 — DB 없음 → createSession 내부 검증이 빈 배열이 되므로, 노드 create 핸들러가 이 별도 invites 를 적용한다).
-export async function createProjectSessionOnNode(
-  nodeId: string, requesterId: string, input: CreateInput, invites: string[],
-): Promise<{ session: SessionInfo; deferredPrompt: string | null }> {
-  await assertNodeUsable(liveNodeDeps, nodeId, requesterId);
-  try {
-    // #1541 hostProfile — member 노드 && 생성자=주인이면 그 PC 의 네이티브 하네스 설정을 그대로 쓴다(CreateInput 주석).
-    //  판정을 못 하면(조회 실패) false — 프로필 주입(안전측) 유지.
-    const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, requesterId)).catch(() => false);
-    const plan = nodeProjectCreatePlan(input, nodeSupports(nodeId, "injectFirstPrompt"));
-    const session = await nodeRpc<SessionInfo>(nodeId, "create", {
-      user: { userId: requesterId }, input: { ...plan.createInput, invites: [], hostProfile }, invites,
-    });
-    return { session, deferredPrompt: plan.deferredPrompt };
-  } catch (e) {
-    // 네트워크·미지원을 사람 말로(래핑 없으면 bare 500 로 샌다) — relayNodeOp 와 같은 **분기 구성**(문구는 이 사이트 것).
-    //  (#1313 R46) relayNodeOp 와 달리 offline 에 `|| !nodeOnline(nodeId)` 추가조건이 있고, unsupported 문구는 op 을
-    //  끼우지 않는 고정 문구다 — 그 차이를 map 으로 표현한다.
-    const msg = e instanceof Error ? e.message : String(e);
-    // 낡은 번들 힌트(#1541) — relayNodeOp 와 같은 축(그쪽 주석 참조): caps 로 못 잡는 '규약만 낡은' 실패에 다음 행동을 붙인다.
-    const stale = await nodeAgentStale(nodeId).catch(() => false);
-    const staleHint = stale ? " (이 노드의 프로그램이 오래된 버전입니다 — 그 PC 에서 노드를 다시 시작하면 최신으로 갱신되고, 그 뒤로는 자동으로 유지됩니다.)" : "";
-    throw translateNodeRpcError(msg, {
-      offline: `노드 '${nodeId}' 연결이 끊겨 세션을 열지 못했습니다.`,
-      offlineWhen: () => !nodeOnline(nodeId),
-      timeout: `노드 '${nodeId}' 응답 시간 초과 — 세션 생성을 확인하지 못했습니다.`,
-      unsupported: () => `노드 '${nodeId}' 의 에이전트가 낡아 세션 생성을 지원하지 않습니다 — 그 PC/서버에서 노드를 다시 설치·업데이트하세요.`,
-      failed: (m) => `노드 '${nodeId}' 세션 생성 실패: ${m}${staleHint}`,
-    });
-  }
-}
+//  (#3626, 2026-09-08) 여기 있던 createProjectSessionOnNode 는 사라졌다 — 프로젝트 라우트도 홈 라우트와 같은 관문
+//   (terminal/session-launch.ts launchSession)을 지난다. 두 입구가 create 를 각자 릴레이하면서 게이트·오류 문구·사후
+//   등록(앱 인스턴스·워크스페이스 맵)이 갈라졌던 것이 그 파일 머리말의 사고다.
 
 // 이 프로젝트에 속한, 이 사용자에게 보이는 노드 세션들(#905 C4) — 프로젝트 세션 목록 병합용. 노드에서 연 프로젝트
 //  세션도 프로젝트 탭 목록에 보이게 한다. 가시성(owner∪invites 스냅샷)은 nodeSessionsFor 가 판정하므로, 여기선

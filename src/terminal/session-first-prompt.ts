@@ -15,7 +15,7 @@
 import { SHELL_CMDS } from "./phase.js";
 import { harnessIo } from "./harness-io/adapter.js";
 import { tmux } from "./tmux-exec.js";
-import { sendKeysToSession, sendKeyToSession } from "./send-keys.js";
+import { sendKeysToSession, sendKeyToSession, sendDownToSession } from "./send-keys.js";
 
 export type FirstPromptStep = "wait" | "accept-trust" | "send" | "give-up";
 
@@ -23,7 +23,9 @@ export type FirstPromptStep = "wait" | "accept-trust" | "send" | "give-up";
 const TAIL_LINES = 14;
 // Claude Code 입력창이 떠 있다는 표식(phase.ts INPUT_BOX 와 같은 문구 — 두 군데가 같은 화면을 본다).
 const INPUT_BOX = /\b(auto|manual|plan|accept edits|bypass permissions) mode on\b|\? for shortcuts|shift\+tab to cycle/i;
-// 새 폴더 신뢰 대화상자 — 하네스마다, 그리고 **버전마다** 문구가 다르다(기본 선택은 전부 'Yes'):
+// 새 폴더 신뢰 대화상자 — 하네스마다, 그리고 **버전마다** 문구가 다르다.
+//  ⚠ 기본 선택도 버전마다 다르다 — 2.1.263 은 **«No, exit» 이 기본**이다(#3626 실측). 그래서 '기본을 Enter 로'
+//   가 아니라 **화면에서 Yes 를 찾아 그리로 옮긴 뒤** 누른다(trustAcceptDowns).
 //  · Claude Code(구): "Do you trust the files in this folder?"
 //  · Claude Code 2.1.245(현행, 실측 2026-08-25): "Quick safety check: Is this a project you created or one you trust?"
 //    + 선택지 "❯ 1. Yes, I trust this folder"
@@ -36,6 +38,43 @@ const INPUT_BOX = /\b(auto|manual|plan|accept edits|bypass permissions) mode on\
 const TRUST_DIALOG = /trust the (files|contents) (in|of) this (folder|directory|project)|is this a project you (created|trust)|(^|\n)[ \t]*[❯>]?[ \t]*\d*\.?[ \t]*Yes,[^\n]*\btrust\b/i;
 // 하네스가 아직 뜨는 중인데 화면에 아무 표식이 없을 때, 비-Claude 하네스에 쓰는 보수적 대기(입력창 문구를 모르는 하네스).
 const OTHER_HARNESS_SETTLE_MS = 6000;
+
+// 신뢰 대화상자의 **선택지 줄** — `❯ No, exit` · `  Yes, I trust this folder` · 구판 `❯ 1. Yes, …` 를 함께 잡는다.
+//  줄머리 앵커 + Yes/No 로 시작하는 것만 = 본문이 trust 를 언급하는 것만으로는 안 걸린다(TRUST_DIALOG 와 같은 교리).
+const TRUST_OPTION = /^[ \t]*([❯>])?[ \t]*(?:\d+[.)])?[ \t]*(Yes|No)\b(.*)$/i;
+
+/**
+ * 신뢰 대화상자에서 **«Yes» 까지 몇 칸 내려가야 하나** (순수) — 못 읽으면 `null`.
+ *
+ * 🔴 왜 세느냐 (#3626, 2026-09-07 실측): 종전엔 그냥 **Enter 한 방**이었고, 그 근거는 이 파일에 적혀 있던
+ *  «기본 선택은 전부 Yes» 였다. 그 전제가 **현행 Claude Code 에서 뒤집혔다** — 2.1.263 의 화면은
+ *
+ *      ❯ No, exit
+ *        Yes, I trust this folder
+ *
+ *  라 기본 선택이 **«No, exit»** 다(hammurabi 실측 캡처). 그래서 그 Enter 가 하네스를 **종료**시켰다.
+ *  윈도우 노드엔 하네스 런처 폴백이 없어(catalog.harnessLaunchArgv) pane 이 통째로 사라지고, 화면의 부팅
+ *  게이트가 그 죽음을 보고 복원으로 가 **인자 없는 `claude --resume`(후보 0건 피커)** 가 떴다
+ *  (상민님 신고: 홈에서 [시키기] → «멈춰 있는 세션이에요» → «이어받기 세션을 열었어요» → 빈 피커).
+ *
+ * ⚠ **못 읽으면 아무것도 누르지 않는다**(null). 맹목적 Enter 는 이 사고의 원인이고, 잘못 누르는 것은
+ *  안 누르는 것보다 나쁘다 — 안 누르면 대화상자가 남아 사람이 답할 수 있지만(대화창의 '확인 대기' 배너),
+ *  잘못 누르면 세션이 죽는다. 문안·순서가 또 바뀌어도 이 함수는 **조용히 위험해지지 않는다**.
+ * ⚠ 위로는 안 간다 — 랩어라운드를 보장하는 TUI 규약이 없다. 커서가 Yes 보다 아래면 null 이다.
+ */
+export function trustAcceptDowns(tail: string[]): number | null {
+  const opts: Array<{ cursor: boolean; yes: boolean; text: string }> = [];
+  for (const line of tail) {
+    const m = TRUST_OPTION.exec(line);
+    if (!m) continue;
+    opts.push({ cursor: !!m[1], yes: /^yes$/i.test(m[2]), text: line.trim() });
+  }
+  if (opts.length < 2) return null;                       // 선택지를 못 읽었다
+  const cursor = opts.findIndex((o) => o.cursor);
+  const yes = opts.findIndex((o) => o.yes);
+  if (cursor < 0 || yes < 0) return null;                 // 커서·Yes 중 하나를 못 찾았다
+  return yes >= cursor ? yes - cursor : null;             // 위로 올라가야 하면 모른다고 답한다
+}
 
 export function tailOf(pane: string, n = TAIL_LINES): string[] {
   return pane.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim() !== "").slice(-n);
@@ -96,7 +135,15 @@ export async function injectFirstPrompt(id: string, harness: string, text: strin
     const step = firstPromptStep({ ...seen, harness, elapsedMs: Date.now() - t0, maxMs, trustOk });
     if (step === "give-up") { console.warn(`[terminal] 첫 지시를 넣지 못했다(${id}) — ${Math.round(maxMs / 1000)}초 안에 입력창이 안 떴다(로그인·오류 화면일 수 있다).`); return false; }
     if (step === "accept-trust" && !acceptedTrust) {
-      // 기본 선택(Yes, proceed)을 Enter 로. 한 번만 — 같은 대화상자가 계속 보이면(안 닫힘) 텍스트를 넣지 않고 기다린다.
+      //  ★ #3626 — **화면을 읽고** «Yes» 로 옮긴 뒤 Enter. 기본 선택이 Yes 라는 전제는 틀렸다(trustAcceptDowns 머리말).
+      //   못 읽으면(null) **아무것도 안 누르고** 기다린다 — 잘못 누르면 하네스가 종료되고 그 세션이 통째로 사라진다.
+      const downs = trustAcceptDowns(tailOf(seen.pane));
+      if (downs === null) {
+        console.warn(`[terminal] 신뢰 대화상자의 선택지를 못 읽었다(${id}) — 대신 누르지 않는다(사람이 답할 수 있게 남긴다).`);
+        await sleep(pollMs);
+        continue;
+      }
+      await sendDownToSession(id, downs).catch(() => { /* 다음 폴에서 다시 본다 */ });
       await sendKeyToSession(id, "Enter").catch(() => { /* 다음 폴에서 다시 본다 */ });
       acceptedTrust = true;
       await sleep(pollMs);

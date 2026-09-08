@@ -56,6 +56,8 @@ export interface OutboxRow {
   id: number; session_id: string; seq: number; text: string; status: OutboxStatus; kind: OutboxKind;
   attempts: number; trust_ok: boolean; last_error: string | null;
   created_at: string; updated_at: string; delivered_at: string | null;
+  /** #3689 — 못 닿기 시작한 시각(ISO). 닿고 있거나(not-ready 는 세션이 살아 있다) 한 번도 안 막혔으면 null. */
+  stalled_since: string | null;
 }
 
 // ── 정책(순수 — 테스트가 표로 못박는다) ──────────────────────────────────────────
@@ -121,6 +123,19 @@ export function deliveryTransport(harness: string, env: NodeJS.ProcessEnv = proc
 
 /** 못 닿는 동안의 재시도 간격 — 입력창 대기(초 단위)와 달리 **분 단위** 사건이다(노드 재기동·사람의 복원). */
 export function unreachableDelayMs(attempts: number): number { return Math.min(30_000 * (attempts + 1), 5 * 60_000); }
+
+/**
+ * 다시 큐에 넣을 때의 `stalled_since`(순수, #3689) — «언제부터 못 닿고 있나».
+ *  · unreachable · session-gone-restorable(세션에 닿지 못해 들고 있는 두 경우) → 처음 막힌 시각을 **유지**, 없으면 지금.
+ *  · not-ready(세션은 살아 있고 입력창만 안 뜬다) → null. 닿는 상태다 — 못 닿는 시계를 돌리지 않는다.
+ *  왜 따로 있나: `updated_at` 은 재시도마다 갱신돼 «마지막 시도» 지 «언제부터» 가 아니다. 화면(session-chat.ts)이 이 값으로
+ *   «N분째 못 닿고 있어요 — 이 세션은 복원이 필요할 수 있어요 [이어서 열기]» 를 낸다. 종전엔 그 상태를 UNREACHABLE_TTL(24시간)
+ *   내내 «닿는 대로 들어갑니다» 로만 들고 있었다(#3675 §5 — 사람은 «응답이 없다» 로 겪는다).
+ */
+export function stalledSinceNext(prev: string | null | undefined, reason: string, nowIso: string): string | null {
+  if (reason !== "unreachable" && reason !== "session-gone-restorable") return null;
+  return prev || nowIso;
+}
 
 /**
  * tmux 호출이 던졌다 — 이 세션은 **죽은 것인가, 못 닿는 것인가**(#2154 ②).
@@ -198,7 +213,7 @@ export async function waitOutboxSettled(ids: number[], maxMs: number): Promise<{
 
 export async function retryOutbox(sessionId: string, id: number): Promise<boolean> {
   const r = await itemsPool.query(
-    `UPDATE org_session_outbox SET status='queued', attempts=0, last_error=NULL, created_at=now(), updated_at=now()
+    `UPDATE org_session_outbox SET status='queued', attempts=0, last_error=NULL, created_at=now(), updated_at=now(), stalled_since=NULL
      WHERE session_id=$1 AND id=$2 AND (status='failed' OR (status='sent' AND last_error='echo-unconfirmed'))`,
     [sessionId, id]);
   if ((r.rowCount ?? 0) > 0) { kickOutbox(sessionId); return true; }
@@ -248,6 +263,7 @@ function rowToOutbox(r: Record<string, any>): OutboxRow {
     last_error: (r.last_error as string | null) ?? null,
     created_at: new Date(r.created_at).toISOString(), updated_at: new Date(r.updated_at).toISOString(),
     delivered_at: r.delivered_at ? new Date(r.delivered_at).toISOString() : null,
+    stalled_since: r.stalled_since ? new Date(r.stalled_since).toISOString() : null,   // #3689
   };
 }
 
@@ -301,7 +317,9 @@ async function deliverLoop(sessionId: string): Promise<void> {
         await mark(row.id, "failed", reason);   // 입력창이 끝내 안 떴다·끝내 못 닿았다 — 화면이 사유와 함께 보여준다
         return false;                           // 다음 행은 다음 준비 판정에서 다시 본다(같은 벽이면 곧 같은 결말)
       }
-      await itemsPool.query(`UPDATE org_session_outbox SET status='queued', attempts=attempts+1, last_error=$2, updated_at=now() WHERE id=$1`, [row.id, reason]);
+      await itemsPool.query(
+        `UPDATE org_session_outbox SET status='queued', attempts=attempts+1, last_error=$2, updated_at=now(), stalled_since=$3 WHERE id=$1`,
+        [row.id, reason, stalledSinceNext(row.stalled_since, reason, new Date().toISOString())]);   // #3689 — «언제부터» 를 남긴다
       const delay = verdict === "not-ready" ? retryDelayMs(row.attempts + 1) : unreachableDelayMs(row.attempts);
       retryTimers.set(sessionId, setTimeout(() => { retryTimers.delete(sessionId); kickOutbox(sessionId); }, delay));
       return true;                              // 루프를 내려놓는다 — 타이머가 다시 kick
@@ -558,7 +576,7 @@ export const STALE_SENDING = "2 minutes";
  */
 export async function recoverStaleSending(sessionId: string): Promise<number> {
   const r = await itemsPool.query(
-    `UPDATE org_session_outbox SET status='queued', attempts=attempts+1, updated_at=now()
+    `UPDATE org_session_outbox SET status='queued', attempts=attempts+1, updated_at=now(), stalled_since=NULL
       WHERE session_id=$1 AND status='sending' AND updated_at < now() - interval '${STALE_SENDING}'`,
     [sessionId]);
   const n = r.rowCount ?? 0;
@@ -575,7 +593,7 @@ export async function resumeOutbox(): Promise<void> {
   await itemsPool.query(`DELETE FROM org_session_outbox WHERE status IN ('delivered','sent') AND updated_at < now() - interval '1 day'`);
   // ⚠ 'sending' 을 무조건 되돌리면 **지금 배달 중인** 행을 건드린다(5분 sweep 에서도 불린다) — 준비 판정+에코까지 한 행이
   //  2분을 넘지 않으므로(READY_WINDOW 20s + ECHO 15s + 여유), 2분 넘게 sending 인 것만 '죽은 배달자의 잔재'로 본다.
-  await itemsPool.query(`UPDATE org_session_outbox SET status='queued', attempts=attempts+1, updated_at=now()
+  await itemsPool.query(`UPDATE org_session_outbox SET status='queued', attempts=attempts+1, updated_at=now(), stalled_since=NULL
     WHERE status='sending' AND updated_at < now() - interval '${STALE_SENDING}'`);
   const r = await itemsPool.query(`SELECT DISTINCT session_id FROM org_session_outbox WHERE status='queued'`);
   for (const row of r.rows) kickOutbox(String(row.session_id));

@@ -659,7 +659,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     fixBtn.hidden = m !== 'term'; setBtn.hidden = m !== 'term';        // 터미널 조작은 터미널을 보고 있을 때만 겉에 둔다
     termStatusEl.hidden = m !== 'term' || !termStatusEl.textContent;   // 연결 상태도 마찬가지(#1744)
     paintRunHead();                                                   // 모델·추론강도도 마찬가지 — 터미널을 볼 때만 머리줄에 선다
-    if (m === 'chat') { view.scrollToBottom(); view.input.focus(); }
+    if (m === 'chat') { view.scrollToBottom(); view.input.focus(); pokePoll(); }   // 가려진 동안 느슨했던 폴을 그 자리에서 따라잡는다
   }
 
   // ── 터미널 프레임과의 다리(#1744) ────────────────────────────────────────────────────────
@@ -860,7 +860,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let carry = '';                             // 잘린 마지막 줄(다음 폴에서 이어 붙인다)
   // 낙관적으로 그린 내 말들 — 서버 아웃박스(#1753)와 짝. 파일에 그 글이 나타나면(에코) 그 턴을 재사용하고 목록에서 뺀다.
   //  obId 로 서버 큐 행과 연결 — 새로고침해도 큐(GET outbox)에서 되살아나 "다 날아감"이 없다. state = 말풍선 밑 상태 줄.
-  interface Pending { text: string; t: ChatTurn; obId?: number; state: HTMLElement }
+  interface Pending {
+    text: string; t: ChatTurn; obId?: number; state: HTMLElement;
+    /** #3689 — «이어서 열기» 줄은 한 번만 그린다(3초 폴링마다 새 버튼을 끼우면 누른 버튼의 진행 상태가 덮인다). */
+    restoreMsg?: HTMLElement; restoreBtn?: HTMLButtonElement; restoring?: boolean;
+  }
   const pending: Pending[] = [];
   let outboxTimer: number | null = null;
   let firstPrompt: string | null = opts.firstPrompt ? String(opts.firstPrompt) : null;   // 홈 입력창의 첫 지시(한 번만 그린다)
@@ -968,7 +972,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     queued: '전달 대기 중 — AI 입력창이 뜨면 들어갑니다',
     sending: '전달하는 중…',
   };
-  function paintQState(pd: Pending, row: { status: string; last_error: string | null; created_at: string } | null): void {
+  /** #3689 — 이만큼 **연속으로** 못 닿고 있으면 «복원이 필요할 수 있어요 — 이어서 열기» 를 낸다. 노드 재기동·허브 재접속 창(초~1분)은 지나고,
+   *  사람이 «응답이 없다» 로 겪기 시작하는 자리. 서버 큐는 그대로 24시간(UNREACHABLE_TTL) 들고 있는다 — 여기서 주는 건 선택지다. */
+  const UNREACHABLE_SUGGEST_MS = 3 * 60_000;
+  function paintQState(pd: Pending, row: { status: string; last_error: string | null; created_at: string; stalled_since?: string | null } | null): void {
     if (!row) { pd.state.textContent = ''; return; }              // 큐에서 사라짐(delivered/sent) — 에코가 곧 마감한다
     if (row.status === 'failed') {
       const why = row.last_error === 'not-ready' ? '입력창이 끝내 안 떴어요(로그인·오류 화면)'
@@ -995,6 +1002,24 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     // 대기 중인데 **입력창이 문제가 아닌** 두 경우(#2154 ②) — 사실대로 말한다. 종전 문구('입력창이 뜨면 들어갑니다')는
     //  닿지도 못하는 상태에서 사람을 엉뚱한 곳(터미널 로그인)으로 보낸다.
     if (row.status === 'queued' && row.last_error === 'unreachable') {
+      //  #3689 — 오래 못 닿고 있다: 서버는 이 세션이 desired-state 에 있고 tmux 확답을 못 받는 상태임을 안다(stalled_since).
+      //   «닿는 대로 들어갑니다» 를 24시간 들고 있지 않고, 사람에게 «이어서 열기» 를 준다. 확답 규율(#835)은 그대로 —
+      //   서버가 «아직 살아 있다(모름)» 고 답하면(already) 그 말을 그대로 전한다(복원됐다고 꾸미지 않는다).
+      const since = Date.parse(row.stalled_since || row.created_at);
+      const stalledMs = Number.isFinite(since) ? Date.now() - since : 0;
+      if (stalledMs >= UNREACHABLE_SUGGEST_MS) {
+        const mins = Math.max(1, Math.floor(stalledMs / 60_000));
+        const msg = `전달 대기 중 — 세션이 있는 컴퓨터에 ${mins}분째 못 닿고 있어요. 이 세션은 복원이 필요할 수 있어요. `;
+        //  ★ 버튼은 **한 번만** 만든다 — 이 함수는 3초 폴링마다 불린다. 매번 새 버튼을 끼우면 사람이 누른 버튼(여는 중…·disabled)이
+        //   다음 폴링에 멀쩡한 새 버튼으로 덮여 두 번 눌리고 /restore 가 두 번 나간다(diff-reviewer 지적). 글자(분)만 갱신한다.
+        //   다른 상태로 넘어가 이 줄이 지워지면(isConnected=false) 다음에 다시 만든다.
+        if (pd.restoreMsg && pd.restoreBtn && pd.restoreBtn.isConnected) { pd.restoreMsg.textContent = msg; return; }
+        const msgEl = el('span', { text: msg });
+        const btn = el('button', { class: 'btn-text dt-qact', type: 'button', text: '이어서 열기', onclick: () => { void restoreUnreachable(pd); } }) as HTMLButtonElement;
+        pd.restoreMsg = msgEl; pd.restoreBtn = btn;
+        pd.state.replaceChildren(msgEl, btn);
+        return;
+      }
       pd.state.textContent = '전달 대기 중 — 세션이 있는 컴퓨터에 지금 못 닿아요. 닿는 대로 들어갑니다';
       return;
     }
@@ -1024,6 +1049,31 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     autoTermOpened = true;
     setMode('term');
     view.setNote('세션이 입력을 못 받고 있어 터미널을 열었어요 — 로그인 등 필요한 단계를 여기서 끝내면 대기 중인 지시가 이어서 들어갑니다.');
+  }
+  /** #3689 — 오래 못 닿는 세션을 사람이 되살린다. 복원은 새 id 로 새 노드에 앉히고 대기 중인 지시(큐)를 승계한다(routes.ts). */
+  async function restoreUnreachable(pd: Pending): Promise<void> {
+    const btn = pd.restoreBtn;
+    if (!btn || pd.restoring) return;                 // 진행 중이면 두 번 나가지 않는다(버튼 재생성과 무관한 두 번째 가드)
+    pd.restoring = true;
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = '여는 중…';
+    try {
+      const r: any = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/restore`, { method: 'POST', body: '{}' });
+      if (r?.session) rememberCreated(r.session);
+      const next = String(r?.session?.id || r?.movedTo || '');
+      if (next && next !== target.id) {
+        toast('이어받기 세션을 열었어요 — 대기 중이던 지시는 그 세션으로 넘어갑니다.');
+        if (opts.onResumed) opts.onResumed(next); else location.hash = '#/s/' + encodeURIComponent(next);
+        return;
+      }
+      //  already — 서버가 이 세션을 «아직 살아 있다(못 닿을 뿐)» 로 본다. 못 닿는 것과 끝난 것은 다르다 — 사실대로 말한다.
+      toast(r?.already ? '서버가 이 세션을 아직 살아 있다고 봐요(못 닿는 것과 끝난 것은 달라요). 잠시 뒤 다시 눌러 주세요.' : '지금은 복원할 수 있는 상태가 아니에요.');
+    } catch (e: any) {
+      toast(e?.message || '이어서 열지 못했어요.');
+    } finally {
+      pd.restoring = false;
+      btn.disabled = false; btn.textContent = orig;
+    }
   }
   async function outboxAct(pd: Pending, act: 'retry' | 'discard'): Promise<void> {
     if (!pd.obId) return;
@@ -1296,7 +1346,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   마감되는데, 대화가 **한 번도 없었던** 세션은 그 마감 경로(아래 `running && cur && !dead()`)에 애초에 못 들어간다
     //   — `cur` 이 없기 때문이다. 그래서 즉사한 세션의 화면이 404 를 초당 1.4회로 **영원히** 되물었다
     //   (8초에 11회·콘솔 에러 200+ 누적). 살아 있지 않으면 촘촘할 이유가 없다.
-    const ms = src.kind === 'log' ? (running && !dead() ? POLL_LOG_LIVE_MS : POLL_LOG_MS) : (running && !dead()) ? POLL_RUN_MS : POLL_IDLE_MS;
+    let ms = src.kind === 'log' ? (running && !dead() ? POLL_LOG_LIVE_MS : POLL_LOG_MS) : (running && !dead()) ? POLL_RUN_MS : POLL_IDLE_MS;
+    //  ★ 대화창이 **가려져 있으면**(터미널을 보는 중) 촘촘히 읽지 않는다(2026-09-08 실측, #3656). 박스 세션의 폴 한 번은
+    //   매니지드에서 멤버 실행환경 exec(stat·구간읽기) 이고, 도는 중 0.7초 주기는 노드에 초당 ~4회 runsc exec 를 걸어
+    //   2vCPU 노드를 포화시켰다 — 사람은 그 순간 터미널로 같은 스트림을 보고 있었다. 가려진 동안은 유휴 주기로 두고,
+    //   다시 대화창을 열면 setMode 가 pokePoll 로 그 자리에서 따라잡는다(읽던 화면을 뺏지 않는다).
+    if (mode === 'term' && src.kind === 'box') ms = Math.max(ms, POLL_IDLE_MS);
     //  죽은 세션에는 **애초에 물을 것이 없다.** 중앙 기록은 더 안 늘고(옛 조건), 박스 파일은 대화가
     //   한 번도 없었으면(loadedTo === 0) 그 파일이 **생길 일 자체가 없다** — 세션이 죽었으니까.
     //   그런데도 3초마다 물어서 404 를 영원히 하나씩 뱉었다(#1631, 2026-08-31 실측: 즉사한 리브 세션 화면).

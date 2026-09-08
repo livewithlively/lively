@@ -598,6 +598,25 @@ const WIN_UTF8_B64 = Buffer.from(WIN_UTF8_PS, "utf16le").toString("base64");
  *
  * `powershell`(5.1)을 명시한다 — psmux 의 Windows 기본 셸과 같고 어느 Windows 에나 있다(pwsh 는 없을 수 있다).
  */
+/**
+ * 윈도우 노드(psmux)가 **못 나르는** pane 명령 토큰 — 있으면 그 토큰, 없으면 null (순수).
+ *
+ *  규칙의 출처는 아래 winShellArgv 머리말(«토큰에 `"` `'` 탭 공백이 하나도 없어야 한다»)이고, 이 함수는 그 규칙을
+ *  **실행 직전에 재는 자**다. 실측(#3626, hammurabi psmux 2026-09-08 — execFile 로 토큰 배열을 그대로 넘겨 자식이
+ *  받은 argv 를 파일로 적게 했다):
+ *     `--x` `a b`                     → 자식 argv `--x` `a` `b`   (공백에서 다시 쪼개진다)
+ *     `--settings` `{"theme":"dark"}` → 자식이 **아예 안 뜬다**  (따옴표 든 토큰 — 세션이 그 자리에서 죽는다)
+ *  그래서 이런 토큰이 섞이면 조용히 죽는 pane 을 만들지 말고 생성 자체를 **읽을 수 있는 오류**로 멈춘다
+ *  (sessions.ts createSession). 값을 고쳐 주지는 않는다 — 어떤 값이 오는지는 호출자마다 뜻이 달라 여기서
+ *  짐작해 바꾸면 «다른 값으로 조용히 성공» 이 되고, 그건 죽는 것보다 찾기 어렵다.
+ */
+export function psmuxUnsafeToken(argv: readonly string[]): string | null {
+  for (const tok of argv) {
+    if (/["'\s]/.test(String(tok))) return String(tok);
+  }
+  return null;
+}
+
 export function winShellArgv(): string[] {
   return ["powershell", "-NoLogo", "-NoExit", "-EncodedCommand", WIN_UTF8_B64];
 }
@@ -801,7 +820,16 @@ function managedStatusLineSpec(): { type: string; command: string } {
  *  같은 `--settings` 플래그를 두 번 줬을 때 머지되는지 뒤가 이기는지가 미검증이라 합쳐서 준다(안전).
  *  claude 외 하네스는 statusLine 주입 경로가 없어 종전 테마 argv 그대로(무회귀).
  */
-export function harnessSettingsArgv(harnessKey: string, opts: { theme?: unknown; managed?: boolean }): string[] {
+export function harnessSettingsArgv(harnessKey: string, opts: { theme?: unknown; managed?: boolean; platform?: string }): string[] {
+  //  🔴 #3626 (2026-09-08, hammurabi 실측) — **윈도우 노드(psmux)에는 `--settings` 를 아예 얹지 않는다.**
+  //   값이 JSON 이라 따옴표가 들어가는데, psmux 는 pane 명령 토큰을 공백으로 다시 쪼개고 따옴표가 든 토큰은
+  //   자식을 **띄우지조차 못한다**(psmuxUnsafeToken 머리말의 실측). 그 결과가 «홈에서 [시키기] → 세션 즉사
+  //   (4410 session-gone)» 였다 — 홈 경로만 화면 테마 헤더를 theme 으로 옮겨 이 인자가 붙었고, 프로젝트를 골라
+  //   연 세션은 theme 이 없어 멀쩡했다. claude 는 `--settings` 에 파일 경로도 받지만 그 경로에 공백이 들 수 있어
+  //   (`C:\Users\홍 길동\…`) 같은 함정이다. 테마는 «실행 시점에만 얹는 방법이 있는 하네스에만» 주는 값이고
+  //   (HARNESS_THEME 머리말), 이 표면엔 그 방법이 없으니 **손대지 않는다** — 하네스는 사람의 설정대로 뜬다.
+  //   statusLine(managed) 도 POSIX sh 명령이라 이 표면에선 애초에 못 돈다.
+  if (opts.platform === "win32") return [];
   if (String(harnessKey || "") !== "claude") return harnessThemeArgv(harnessKey, opts.theme);
   const s: Record<string, unknown> = {};
   const t = normalizeTheme(opts.theme);
@@ -859,7 +887,10 @@ export function harnessLiveThemeSteps(harnessKey: string, theme: unknown): LiveT
 }
 
 /** 하네스 테마를 env 로 주는 경우의 tmux `-e` 인자. 지원 안 하면 빈 배열. */
-export function harnessThemeEnvArgs(harnessKey: string, theme: unknown): string[] {
+export function harnessThemeEnvArgs(harnessKey: string, theme: unknown, platform?: string): string[] {
+  //  #3626 — 윈도우 노드(psmux)는 옵션 값의 따옴표를 벗긴다(tmux-exec.ts encodeOptJson 실측). JSON 인 이 값은
+  //   거기서 반드시 깨지므로 얹지 않는다(harnessSettingsArgv 와 같은 이유·같은 가드).
+  if (platform === "win32") return [];
   const t = normalizeTheme(theme);
   const h = HARNESS_THEME[String(harnessKey || "")];
   if (!t || !h?.env) return [];

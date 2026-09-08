@@ -984,3 +984,68 @@ const view = (panes: Array<[string, number[]]>) => ({ ok: true, panes: new Map(p
 }
 
 console.log("session-reaper(⑥ 컨테이너 프로브 경로 — 매니지드): all passed");
+
+// ── H. ⑥ 퇴화 신호 가드(#2652 후속) ──────────────────────────────────────────────────────────
+//  실측 2026-09-04 매니지드: `scanned=453 · reaped=0 · jobs=453` 이 2시간. 후보 **전부**를 보호하는 신호는
+//  정보량이 0이고, 그 상태를 방치하면 회수가 통째로 멈춰 결국 earlyoom 이 보존 없이 죽인다(#1220).
+//  그래서 «전부 + 후보 10개 이상» 이면 그 tick 은 ⑥ 없이 진행한다.
+
+/** 유휴 후보 n개를 만드는 헬퍼(전부 TTL 초과). */
+const manyIdle = (n: number): SessionInfo[] =>
+  Array.from({ length: n }, (_, i) => sess({ id: `box-many-${i}`, lastActive: CUTOFF - 100 }));
+
+// H1 — 후보 10개가 **전부** 걸리면: ⑥ 를 무시하고 전부 걷는다 · jobs 로 세지 않는다
+{
+  invalidateSessionReclaimPolicyCache();
+  const live = manyIdle(10);
+  const reaped: string[] = [];
+  const res = await reapIdleSessions({
+    loadPolicy: async () => ({ idle_ttl_minutes: TTL }),
+    listLive: async () => live,
+    listStates: async () => live.map((s) => ({ id: s.id })),
+    listManaged: async () => [],
+    reap: async (id: string) => { reaped.push(id); },
+    liveJobs: async (ids) => new Set(ids),          // 전부 '작업 중' — 퇴화한 신호
+    now,
+  });
+  assert.equal(reaped.length, 10, "신호가 퇴화하면 보호를 접는다 — 회수가 통째로 멈추는 게 더 나쁜 실패다");
+  assert.equal(res.skipReasons?.jobs, 0, "무시한 tick 은 jobs 로 세지 않는다(보호한 게 아니다)");
+}
+
+// H2 — 경계값: 후보 9개가 전부 걸리면 **그대로 보호한다**(하한 미만은 정상으로 본다)
+{
+  invalidateSessionReclaimPolicyCache();
+  const live = manyIdle(9);
+  const reaped: string[] = [];
+  const res = await reapIdleSessions({
+    loadPolicy: async () => ({ idle_ttl_minutes: TTL }),
+    listLive: async () => live,
+    listStates: async () => live.map((s) => ({ id: s.id })),
+    listManaged: async () => [],
+    reap: async (id: string) => { reaped.push(id); },
+    liveJobs: async (ids) => new Set(ids),
+    now,
+  });
+  assert.deepEqual(reaped, [], "후보가 적을 땐 '전부 작업 중'이 흔히 참이다 — 그걸 고장으로 읽으면 정상 보호가 깨진다");
+  assert.equal(res.skipReasons?.jobs, 9);
+}
+
+// H3 — 후보 20개 중 19개만 걸리면 퇴화가 아니다: 19개는 보호하고 1개만 걷는다
+{
+  invalidateSessionReclaimPolicyCache();
+  const live = manyIdle(20);
+  const reaped: string[] = [];
+  const res = await reapIdleSessions({
+    loadPolicy: async () => ({ idle_ttl_minutes: TTL }),
+    listLive: async () => live,
+    listStates: async () => live.map((s) => ({ id: s.id })),
+    listManaged: async () => [],
+    reap: async (id: string) => { reaped.push(id); },
+    liveJobs: async (ids) => new Set([...ids].filter((x) => x !== "box-many-0")),
+    now,
+  });
+  assert.deepEqual(reaped, ["box-many-0"], "하나라도 안 걸리면 신호가 살아 있다는 뜻 — 보호를 유지한다");
+  assert.equal(res.skipReasons?.jobs, 19);
+}
+
+console.log("session-reaper(⑥ 퇴화 신호 가드): all passed");

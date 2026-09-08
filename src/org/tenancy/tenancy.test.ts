@@ -228,10 +228,14 @@ test("L7/L8 — 형식 위반은 신호가 아니고, 해석기 오류는 500(�
 // ── M. 배선 구조 잠금(소스) — 세션 정본의 기록·정리·업그레이드·클라 신호 ──────
 
 test("★★ M3/M4 — 세션 생성이 맵을 기록(실패=생성 실패)하고, 삭제가 정리한다(회수 제외)", () => {
+  //  #3626 — 생성(홈·프로젝트)은 세션 생성 관문(session-launch.ts)이 맡고, recordSessionTenant 의 정의도 거기 산다.
+  //   routes.ts 엔 핸드오프·복원 갈래와 삭제 정리가 남아 있다. 두 파일을 함께 본다.
+  const launch = readFileSync("src/terminal/session-launch.ts", "utf8");
   const rt = readFileSync("src/terminal/routes.ts", "utf8");
-  assert.match(rt, /recordSessionTenant\(session\.id/, "생성 두 갈래(로컬·노드) 모두 기록해야 한다");
-  assert.ok(rt.split("recordSessionTenant(session.id").length - 1 >= 2, "노드 릴레이 갈래가 빠지면 노드 세션이 오귀속된다");
-  assert.match(rt, /생성 실패로 승격|생성을 실패시킨다/, "M3: 기록 실패를 삼키면 그 세션의 모든 무헤더 요청이 primary 로 간다");
+  assert.match(launch, /recordSessionTenant\(session\.id/, "생성 두 갈래(로컬·노드) 모두 기록해야 한다");
+  assert.ok(launch.split("recordSessionTenant(session.id").length - 1 >= 2, "노드 릴레이 갈래가 빠지면 노드 세션이 오귀속된다");
+  assert.match(launch, /생성 실패로 승격|생성을 실패시킨다/, "M3: 기록 실패를 삼키면 그 세션의 모든 무헤더 요청이 primary 로 간다");
+  assert.match(rt, /recordSessionTenant\(session\.id/, "핸드오프·복원 갈래도 기록해야 한다(관문 밖에서 세션을 여는 자리)");
   assert.match(rt, /clearSessionWorkspace/, "M4: 삭제 정리");
   assert.match(rt, /if \(!reclaim\) forgetTenantMap/, "M4: 회수(복원 가능)는 소속을 남긴다");
 });

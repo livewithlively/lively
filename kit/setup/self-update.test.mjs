@@ -591,6 +591,48 @@ try {
         ? ok("⑯ grok 단독 머신도 grok 으로 배선 갱신된다 (#2255)")
         : bad("⑯ grok 감지", `~/.grok/config.toml 이 갱신되지 않았다 — 목록이 비어 설치기가 기본값(claude)으로 돌았다는 뜻. conf=${JSON.stringify(conf.slice(0, 120))}`);
     }
+
+    // ⑰ #3591 — `--mcp-only`: 되살리는 자리를 **세션보다 앞으로**. box-spawn 이 하네스를 exec 하기 직전에
+    //  이 모드로 부른다. 종전엔 자가치유가 SessionStart 훅뿐이라 **구조적으로 한 세션 늦었다** — 훅은 하네스가
+    //  설정을 스냅샷한 뒤에 도니, 그 시점에 등록이 비어 있으면 그 세션은 끝까지 툴 0개다
+    //  (실측 2026-09-07 매니지드 lively-46e3: 컨테이너 기동과 같은 초에 뜬 세션이 96초 뒤에야 등록을 받았다).
+    //  ★ 이 모드의 계약은 «네트워크·설치를 절대 안 탄다» 다. 세션 시작 경로에 fetch(5s)나 설치(분 단위)가
+    //   얹히면 사람이 그만큼 기다린다 — installHits 로 그걸 강제한다(로그·안내 파일로는 안 잡힌다).
+    {
+      const home = freshHome("v-aaa");                 // 버전을 보지 않는 경로 — 최신이든 아니든 같아야 한다
+      const cj = join(home, ".claude.json");
+      writeFileSync(cj, JSON.stringify({ mcpServers: {}, projects: { "/p": { allowedTools: [] } } }, null, 2) + "\n");
+      const before = serving.installHits;
+      const t0 = Date.now();
+      await runUpdater(home, {}, ["--mcp-only"]);
+      const ms = Date.now() - t0;
+      const conf = JSON.parse(readFileSync(cj, "utf8"));
+      const names = Object.keys(conf.mcpServers || {});
+      const revived = names.includes("lively") && names.includes("lively-local");
+      const noNet = serving.installHits === before && !readIf(lv(home, "update-notice")) && !readIf(lv(home, "update-state.json"));
+      const kept = !!(conf.projects && conf.projects["/p"]);          // 클로드 코드 자기 상태는 불변
+      (revived && noNet && kept)
+        ? ok(`⑰ --mcp-only — 등록 되살림 + 다운로드 0회(세션 시작 경로 비침습, ${ms}ms) + 클코 상태 보존`)
+        : bad("⑰ --mcp-only", `revived=${revived} noNet=${noNet} kept=${kept} servers=${names.join(",")}`);
+
+      // ⑰b 정상 세션(이미 등록됨)은 **무쓰기**여야 한다 — 매 세션 도는 경로라 여기가 비용의 전부다.
+      const snap = readFileSync(cj, "utf8");
+      await runUpdater(home, {}, ["--mcp-only"]);
+      (readFileSync(cj, "utf8") === snap) ? ok("⑰b --mcp-only 멱등 — 이미 있으면 파일 미변경") : bad("⑰b 멱등", "파일이 변경됨");
+
+      // ⑰c 파손된 설정은 손대지 않는다 — reconcile 의 기존 계약(덮어써 날리지 않는다)을 그대로 물려받는다.
+      const brokenConf = '{"mcpServers": {"lively"\n';
+      writeFileSync(cj, brokenConf);
+      await runUpdater(home, {}, ["--mcp-only"]);
+      (readFileSync(cj, "utf8") === brokenConf) ? ok("⑰c 파손 설정 무접촉") : bad("⑰c 파손", "파손 파일이 변경됐다 — 멤버 설정을 날릴 수 있다");
+
+      // ⑰d 어드민 토글(hooks.self_update=false)은 이 모드도 끈다 — «끄기 스위치를 새로 늘리지 않는다» 는 계약.
+      writeFileSync(lv(home, "hooks-config.json"), JSON.stringify({ hooks: { self_update: false } }) + "\n");
+      writeFileSync(cj, JSON.stringify({ mcpServers: {} }) + "\n");
+      await runUpdater(home, {}, ["--mcp-only"]);
+      (Object.keys(JSON.parse(readFileSync(cj, "utf8")).mcpServers || {}).length === 0)
+        ? ok("⑰d 어드민 토글 OFF → --mcp-only 도 무동작") : bad("⑰d 토글 OFF", "토글이 꺼졌는데 등록이 써졌다");
+    }
   }
 } finally {
   server.close();
