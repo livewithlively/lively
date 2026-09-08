@@ -66,7 +66,7 @@ export async function distillersPanel(detail, data) {
   catch (e) { detail.replaceChildren(head(), el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '로드 실패: ' + e.message }))); return; }
 
   const distillers = res.distillers || [];
-  const coverage = res.coverage || { total_undistilled: 0, uncovered: 0, distillers: [], uncovered_channels: [] };
+  const coverage = res.coverage || { total_undistilled: 0, uncovered: 0, uncovered_reviewed: 0, distillers: [], uncovered_channels: [] };
   const stat = (id) => coverage.distillers.find((x) => x.id === id) || {};
   const rerender = () => { void distillersPanel(detail, data); };
 
@@ -102,7 +102,10 @@ function coverageCard(cov, distillers) {
   card.append(el('div', { class: 'mini-meta' },
     el('span', { class: 'pill', text: '미증류 자료 ' + (cov.total_undistilled || 0).toLocaleString() + '건' }),
     el('span', { class: 'pill' + (on ? ' pill-ok' : ''), text: '켜진 증류기 ' + on + '/' + distillers.length }),
-    el('span', { class: 'pill' + (cov.uncovered ? '' : ' pill-ok'), text: '사각지대 ' + (cov.uncovered || 0).toLocaleString() + '건' })));
+    el('span', { class: 'pill' + (cov.uncovered ? '' : ' pill-ok'), text: '사각지대 ' + (cov.uncovered || 0).toLocaleString() + '건' }),
+    // 사각지대는 판정 기록을 뺀 **남은 몫**이라, 0 이어도 «담당이 붙어서» 인지 «폴백이 다 보고 버려서» 인지
+    //  이 값 없이는 구분되지 않는다(증류기 행의 '판정 N' 과 같은 자리). 0 이면 굳이 자리를 차지하지 않는다.
+    cov.uncovered_reviewed ? el('span', { class: 'pill', text: '방치 판정 ' + cov.uncovered_reviewed.toLocaleString() + '건' }) : null));
 
   if (cov.uncovered > 0 && on > 0) {
     card.append(el('p', { class: 'admin-hint', style: 'margin-top:8px' },

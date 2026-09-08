@@ -97,6 +97,9 @@ export async function markFinished(id: number, ok: boolean, result: Record<strin
   if (!ok) {
     try { await itemsPool.query(`DELETE FROM org_distiller_seen WHERE task_id=$1`, [id]); }
     catch { /* 테이블 없음 등 — 무해 */ }
+    //  방치 배치의 기록도 같은 이유로 되돌린다 — 레인이 없어 별 테이블에 남기므로 위 DELETE 가 못 지운다.
+    try { await itemsPool.query(`DELETE FROM org_stranded_seen WHERE task_id=$1`, [id]); }
+    catch { /* 테이블 없음 등 — 무해 */ }
   }
 }
 /**
