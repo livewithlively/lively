@@ -5,9 +5,28 @@
 import { PassThrough } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
 import { join } from "node:path";
+import { mkdtempSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { createServer } from "node:http";
+
+// ── 토큰/주소 우선순위 검증용 거치대(#3728) ──
+//  모듈이 LIVELY 경로를 **import 시점에** 굳히므로 반드시 동적 import 앞에 세워 둔다.
+const TMP_HOME = mkdtempSync(join(tmpdir(), "mcplocal-"));
+const TMP_LIVELY = join(TMP_HOME, ".lively");
+mkdirSync(TMP_LIVELY, { recursive: true });
+const setGw = (u) => writeFileSync(join(TMP_LIVELY, "gateway-url"), u + "\n");
+const setTok = (t) => writeFileSync(join(TMP_LIVELY, "token"), t + "\n");
+const rmTok = () => { try { unlinkSync(join(TMP_LIVELY, "token")); } catch { /* */ } };
+process.env.LIVELY_HOME = TMP_HOME;
+//  ⚠ 이 테스트는 env 를 읽는다 — 자기가 읽는 변수를 **전부** 스크럽해야 한다(#2251 선례).
+//   라이블리 세션 **안에서** 돌리면 게이트웨이가 pane 에 심은 진짜 LIVELY_MCP_TOKEN 이
+//   상속돼 우선순위 케이스가 조용히 진짜 토큰을 집는다(CI 는 깨끗한 env 라 안 잡힌다).
+delete process.env.LIVELY_GATEWAY_URL;
+delete process.env.LIVELY_TOKEN;
+delete process.env.LIVELY_MCP_TOKEN;
 
 const HERE = join(fileURLToPath(import.meta.url), "..");
-const { serveMcpLocal, TOOLS, registerTool, handleCall, toolSpec } = await import(pathToFileURL(join(HERE, "lively-mcp-local.mjs")));
+const { serveMcpLocal, TOOLS, registerTool, makeCtx, handleCall, toolSpec } = await import(pathToFileURL(join(HERE, "lively-mcp-local.mjs")));
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.error(`ok  ${n}`); };
@@ -149,6 +168,49 @@ const rpc1 = (s, method, params) => s.rpc(method, params, ++_id);
   // 14) toolSpec 은 handler 를 노출하지 않는다(직렬화 누수 방지)
   const spec = toolSpec({ name: "x", description: "d", inputSchema: { type: "object" }, handler: () => {} });
   check("toolSpec: handler 미노출", spec.handler === undefined && spec.name === "x", JSON.stringify(Object.keys(spec)));
+
+  // 15) ★회귀(#3728)★ — 주소와 토큰은 **한 출처**에서 읽는다.
+  //  증상이었던 것: 재로그인이 파일만 바꾸고 tmux 전역 env 는 그대로라, 주소는 파일(새) ·
+  //  토큰은 env(옛) 를 집어 «새 주소 + 옛 토큰» 으로 401. 형제 프록시(lively-mcp-gateway)의
+  //  E11·E24·E25·E12 와 같은 짝을 여기서도 재다.
+  //  관측점은 실제 상류 요청의 Authorization 헤더 — token() 을 테스트용으로 노출하지 않는다.
+  {
+    const seen = [];
+    const srv = createServer((req, res) => {
+      seen.push({ url: req.url, auth: req.headers.authorization });
+      res.writeHead(200, { "content-type": "application/json" }); res.end("{}");
+    });
+    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+    const url = `http://127.0.0.1:${srv.address().port}`;
+    const callApi = async () => { seen.length = 0; await makeCtx(process.cwd()).api("/api/ui/repos"); return seen[0]; };
+
+    setGw(url);   // 주소는 항상 파일이 SoT — 아래 네 케이스가 전부 이 거치대로 온다는 것 자체가 짝 검증이다.
+
+    // T1 — #3728 본체: 파일 토큰이 스테일 env 를 이긴다.
+    setTok("tok-file"); process.env.LIVELY_TOKEN = "tok-env-stale";
+    let g = await callApi();
+    check("T1 #3728 — 파일 토큰이 스테일 LIVELY_TOKEN 을 이긴다(주소·토큰 한 출처)",
+      g?.auth === "Bearer tok-file", `auth=${g?.auth} url=${g?.url}`);
+
+    // T2 — #2234: 세션 MCP 토큰은 파일도 이긴다(홈이 공유인 박스의 귀속).
+    process.env.LIVELY_MCP_TOKEN = "tok-session-owner";
+    g = await callApi();
+    check("T2 #2234 — 세션 MCP 토큰이 파일·스테일 env 를 모두 이긴다",
+      g?.auth === "Bearer tok-session-owner", `auth=${g?.auth}`);
+
+    // T3 — 세션 토큰이 없으면 종전대로 파일(구 게이트웨이·격리 박스·개인 노트북 무회귀).
+    delete process.env.LIVELY_MCP_TOKEN;
+    g = await callApi();
+    check("T3 세션 토큰 부재 → 종전대로 파일 토큰", g?.auth === "Bearer tok-file", `auth=${g?.auth}`);
+
+    // T4 — 토큰 파일이 없으면 env 로 떨어진다(프로비저닝·컨테이너 경로 보존).
+    rmTok();
+    g = await callApi();
+    check("T4 토큰 파일 부재 → env 토큰으로 폴백", g?.auth === "Bearer tok-env-stale", `auth=${g?.auth}`);
+
+    delete process.env.LIVELY_TOKEN;
+    await new Promise((r) => srv.close(r));
+  }
 
   S.close();
   await S.done;

@@ -1497,6 +1497,63 @@ const loginEscapeToken = ({ flagToken = "", envToken = "", fileToken = "", isInt
   return "";
 };
 
+// ── 로그인 뒤 tmux 서버 전역 env 교정(#3728) ────────────────────────────────────
+//  왜 필요한가(실측 2026-09-08): 로그인은 파일(~/.lively/token·gateway-url)만 바꾸는데, 라이블리 세션은
+//   tmux pane 이고 **tmux 서버는 처음 뜬 시점의 환경을 global 로 굳혀 새 pane 에 물려준다**. 세션이 끊이지
+//   않는 PC 에선 그 global 이 영영 안 늙는다 → 재로그인해도 새 창까지 옛 값을 물려받는다. `lively doctor`
+//   가 이 어긋남을 이미 재고 `tmux set-environment -g …` 를 처방하고 있었는데, **사람이 손으로 치게** 두는
+//   대신 로그인이 직접 고친다(진단이 아는 것을 고치는 데 쓴다).
+//  ⚠ 한계는 그대로다 — global 은 **새 pane** 에만 물려진다. 이미 떠 있는 pane 과 그 안의 MCP·codex 는
+//   자기가 물려받은 env 를 계속 쓴다(그래서 아래 '이 셸은 못 고친다' 경고는 남는다).
+//
+//  ★ 안전선 셋 — 이 함수는 **이미 있는 값을 고치기만** 한다.
+//   ① 매니지드 박스 pane(LIVELY_SESSION_ID=box-*)에선 **아무것도 안 한다**. 그 tmux 서버는 멤버들이
+//      공유하고, 신원은 sessions.ts 가 pane 마다 세션스코프 `-e` 로 심는 게 정본이다(global 은 세션 간
+//      누수라고 거기 명시돼 있다) — 여기서 global 에 쓰면 로그인한 사람 토큰이 남의 새 pane 에 샌다.
+//   ② tmux 서버가 안 떠 있으면 건드리지 않는다(없는 서버를 새로 띄우지 않는다).
+//   ③ **전역에 그 변수가 이미 있을 때만** 덮는다. 없던 변수를 새로 심지 않는다 — 설치기가 심어 둔 값을
+//      최신으로 되돌리는 '수리'이지, 노출면을 넓히는 게 아니다.
+//  판정은 순수 함수로 떼어 둔다 — 위 안전선 셋이 이 함수의 전부라서, 부수효과 없이 표로 검증할 수 있어야 한다.
+//   showOutput = `tmux show-environment -g` 의 stdout(서버가 없으면 호출자가 아예 안 부른다).
+//   돌려주는 값 = 실제로 칠 [이름, 값] 목록(빈 배열이면 아무것도 안 친다).
+export function planTmuxGlobalEnvFix({ showOutput = "", gw, tok, sessionId = "", normalizeGw = (u) => u } = {}) {
+  if (!gw || !tok) return [];
+  if (/^box-/.test(String(sessionId || ""))) return [];                    // 안전선 ①
+  const seen = new Map();
+  for (const line of String(showOutput).split("\n")) {
+    const i = line.indexOf("=");
+    // `-r NAME`(제거 표시) 줄은 '='가 없어 자연히 걸러진다 — 그런 변수는 전역에 없는 것이니 심지 않는 게 맞다.
+    if (i > 0) seen.set(line.slice(0, i), line.slice(i + 1));
+  }
+  const out = [];
+  for (const [name, want] of [["LIVELY_GATEWAY_URL", normalizeGw(gw)], ["LIVELY_TOKEN", tok]]) {
+    if (!seen.has(name)) continue;                                         // 안전선 ③ — 없던 변수는 안 심는다
+    if (seen.get(name) === want) continue;                                 // 이미 맞으면 안 친다(멱등)
+    out.push([name, want]);
+  }
+  return out;
+}
+
+function syncTmuxGlobalEnv(gw, tok) {
+  if (WIN) return;
+  try {
+    if (!has("tmux")) return;
+    const cur = run("tmux", ["show-environment", "-g"], { quiet: true, allowFail: true });
+    if (cur.code !== 0) return;                                            // 안전선 ② (서버 없음 — 새로 띄우지 않는다)
+    const plan = planTmuxGlobalEnvFix({
+      showOutput: cur.out, gw, tok,
+      sessionId: process.env.LIVELY_SESSION_ID, normalizeGw: normGw,
+    });
+    const fixed = [];
+    for (const [name, want] of plan) {
+      const r = run("tmux", ["set-environment", "-g", name, want], { quiet: true, allowFail: true });
+      if (r.code === 0) fixed.push(name);
+    }
+    // 값은 안 찍는다 — 토큰이 섞여 있다. 무엇을 고쳤는지와 '새 pane 부터'라는 한계만 말한다.
+    if (fixed.length) info(`tmux 전역 env 를 새 로그인으로 맞췄습니다(${fixed.join(" · ")}) — 지금부터 여는 창에 적용됩니다.`);
+  } catch { /* 로그인은 이것 때문에 실패하지 않는다 */ }
+}
+
 // 로그인 성공 뒤 마무리 — 신원의 **사본**을 새 토큰에 맞춘다(login 이 install 을 대신하진 않는다).
 //  ⚠ 여기서 `process.env.LIVELY_TOKEN` 을 덮지 **않는다**: 그러면 뒤이어 도는 registerClaudeMcp 의
 //   org 서버 루프가 `process.env[s.auth_env]` 로 그 값을 집어, 관리자가 지정한 임의 URL 의 Authorization
@@ -1507,6 +1564,8 @@ async function afterLogin(gw, tok) {
   // .claude.json 의 lively 항목은 **토큰의 사본**이고 방금 로그인이 그걸 무효화했다 → 여기서 다시 굽는다.
   //  없으면: 사용자가 로그인만 하고 멈췄을 때(bootstrap.sh·웹 안내가 그렇게 시킨다) MCP 는 옛 신원으로 남는다.
   registerClaudeMcp(); // claude 미설치 판정·안내 포함. (#247 — 구명 registerLivelyMcp 잔재 호출이 여기서 크래시했다)
+  // tmux 서버 전역 env 는 **고칠 수 있다** — 아래 '이 셸은 못 고친다'의 유일한 예외라 먼저 친다(#3728).
+  syncTmuxGlobalEnv(gw, tok);
   // codex 는 토큰을 config.toml 에 안 굽고 LIVELY_TOKEN 을 읽으므로(bearer_token_env_var) 재등록할 게 없다.
   //  대신 **이 셸의 env 는 우리가 못 고친다**(자식이 부모 셸을 못 바꾼다) → 조용히 두지 말고 사실대로 알린다.
   if (ENV_TOKEN_AT_START && ENV_TOKEN_AT_START !== tok) {
