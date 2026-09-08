@@ -5,7 +5,7 @@
 //  PROF_* · profChips · parseMyProfile 은 내 프로필 창의 [AI 개인 규칙] 탭(v2/me-modal.ts)이 함께 쓴다 —
 //   같은 저장 경로(POST /api/ui/me/profile)를 부분 갱신으로 나눠 쓰기 때문에 직렬화 규약이 한 곳이어야 한다.
 //   (관리탭 [내 AI 설정]의 규칙 폼은 그 창으로 옮겨 가며 걷었다 — #1843·#1898.)
-import { api, apiUrl, el, errorNote, logout, personName, profileAvatar, setPersonAvatar, state, toast, uiText, usernameAnchor } from './core.js';
+import { api, apiUrl, el, errorNote, logout, markShellSwitch, personName, profileAvatar, setPersonAvatar, setUiModeOverride, state, toast, uiText, uiMode, usernameAnchor } from './core.js';
 import { THEME_ORDER, applyToOpenTabs, harnessThemeSync, setApplyToOpenTabs, setHarnessThemeSync, setThemePref, themePref, type ThemePref } from './theme.js'; // #1683 화면 테마 · AI 세션 동기화
 import { field, skeleton } from './ui-primitives.js';
 
@@ -280,6 +280,7 @@ export async function openMyProfileModal(): Promise<void> {
       el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }),
       el('span', { class: 'admin-hint', style: 'margin:0' }, ...uiText('현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.')))) : null,
     logins && logins.oidcAvailable ? field('회사 계정 로그인', companyLoginRow(logins)) : null,
+    uiMode() === 'classic' ? field('지금 보는 화면', shellBackRow()) : null,
     field('화면 테마', themePrefRow()),
     el('div', { class: 'admin-actions' }, saveBtn, status));
 }
@@ -333,6 +334,28 @@ export {
   profChips,
 };
 
+// ── 클래식에서 새 화면으로 돌아오는 행(#1898) ─────────────────────────────────
+//  이 버튼이 **클래식 셸에서 새 화면으로 돌아오는 눈에 보이는 유일한 입구**다. 브라우저 오버라이드를
+//  지우는 다른 자리(관리탭 [화면])는 매니지드에서 감춰지고, `?ui=v2` 는 그 한 번 로드에만 듣고
+//  오버라이드를 지우지 않는다 — 즉 여기가 없으면 클래식을 한 번 고른 사람은 되돌아올 길이 없다.
+//  ⚠ 클래식일 때만 그린다. 새 셸이 클래식 페이지를 앱(iframe)으로 실을 때는 `?embed=1&shell=classic` 이라
+//   uiMode() 가 여전히 'v2' 다(v2/apps.ts) — 그 프레임 안에 이 버튼이 뜨면 안 된다(셸을 바꿀 자리가 아니다).
+//  ⚠ 이동은 **창 맨 바깥**으로. 프레임 안에서 reload 하면 프레임만 바뀌어 빈 화면이 된다
+//   (admin-shell 의 me-logins 리다이렉트와 같은 사정).
+function shellBackRow(): any {
+  const btn = el('button', { type: 'button', class: 'btn btn-sm btn-primary', text: '새 화면으로 바꾸기',
+    onclick: () => {
+      markShellSwitch();          // 새 셸이 뜨면 같은 성격의 창(내 프로필·환경설정)을 다시 연다
+      setUiModeOverride('v2');
+      let w: Window = window;
+      try { w = window.top || window; } catch (_) { w = window; }   // 크로스오리진 top → 이 창으로 폴백
+      try { w.location.replace(w.location.pathname + '#/'); w.location.reload(); }
+      catch (_) { location.replace(location.pathname + '#/'); location.reload(); }
+    } });
+  return el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' }, btn,
+    el('p', { class: 'admin-hint', style: 'margin:0' },
+      ...uiText('지금은 **클래식**으로 보고 있어요. 새 화면은 사이드바·리브 대화·앱이 있는 기본 화면이고, 이 브라우저에만 적용됩니다.')));
+}
 
 // ── 화면 테마(#1683) — 클래식·v2 어디서 열어도 같은 자리에서 고른다. ─────────────
 //  상단바 버튼(클래식)·사이드바 세그먼트(v2)는 빠른 전환이고, 여기는 **'AI 세션도 이 테마로'를 끄고 켜는 곳**이다.

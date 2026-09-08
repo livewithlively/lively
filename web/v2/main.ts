@@ -8,7 +8,8 @@
 //  탭에 있으면 그 탭으로 간다(한 세션 = 한 탭). Alt+클릭 = 새 탭에서 열기.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
 import { renderOnboarding, onboardingDone, markWelcomeSeen } from './onboarding.js'; // #/welcome 처음 설정(#1813·#2171)
-import { $view, anchoredPopover, api, el, state, toast } from '../core.js';
+import { $view, anchoredPopover, api, el, state, takeShellSwitch, toast } from '../core.js';
+import { EMBEDDED } from './embed.js';   // #1898 — 끼워 넣은 판은 셸 전환 도장을 소비하지 않는다
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsSync } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘 일감'을 자르는 자(달력 자정이 아니다)
@@ -37,6 +38,7 @@ import { drawRail, mountRail, railIsHidden, railSection, reloadRailPrefs, resetR
 import { lastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'   // #2016 — 좌측 끝 레일(구역 + 워크스페이스 + 최근 앱), 보임/숨김
 import { ASIDE_MSG, setAsideGuestOpener, type AsideGuest } from './aside-slot.js';
 import { takeCreated } from './created-cache.js';
+import { openMeModal } from './me-modal.js';   // #1898 — 클래식에서 올라온 부팅이 [화면] 자리를 되연다
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
 import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { mountAppUiFrame } from './app-ui.js';
@@ -532,6 +534,13 @@ export async function bootV2(): Promise<void> {
   //  그래서 **같은 스트림에 셸도 붙는다**: 시점을 새로 정의하지 않고 이미 있는 시점에 얹는다.
   //  ⚠ 여기서 배너를 만들지는 않는다 — 그건 앱 한 곳의 일이다(v2/live-sync.ts 머리말 §①).
   startLiveSync(() => refreshSideSoon());
+
+  // 방금 클래식에서 올라왔다면(#1898) 같은 성격의 창을 [화면] 자리에 다시 연다 — 왕복이 대칭이어야
+  //  사람이 '내가 방금 누른 그 자리로 돌아왔다'고 읽는다. 도장은 1회용(lib/state takeShellSwitch).
+  //  ⚠ 끼워 넣은 판에서는 **읽지도 않는다**. sessionStorage 는 같은 탭의 프레임끼리 공유되므로, 곁칸에
+  //   실린 우리 주소(web-url.ts 가 embed=1 을 붙인다)가 먼저 부팅하면 그 도장을 대신 소비해 창이
+  //   **프레임 안에** 뜬다 — 바깥 사람은 아무것도 못 보고 도장만 사라진다.
+  if (!EMBEDDED && takeShellSwitch()) openMeModal({ tab: 'look' });
 }
 
 /**
