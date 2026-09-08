@@ -1,4 +1,4 @@
-// v2/me-auto.ts — 내 프로필 창 [자동 주입문] 탭 (#1898, 원준 2026-08-25).
+// v2/me-auto.ts — 내 프로필 창 [AI 주입 문구] 탭 (#1898, 원준 2026-08-25).
 //
 //  무엇인가: [맥락 관리 ▸ AI에 전달 ▸ 세션 주입] 화면이 하는 일을, 개발자 어휘를 걷고 **세 순간**으로
 //   다시 놓은 것이다 — 대화를 시작할 때 · 일하는 동안 · 대화를 끝낼 때. 위에 큰 칸 세 개를 두고 하나를
@@ -54,7 +54,7 @@ export interface AutoPaneDeps {
 
 export function autoPane(deps: AutoPaneDeps): { node: HTMLElement; init: () => void } {
   const host = el('div');
-  const node = deps.pane('AI 자동 주입문',
+  const node = deps.pane('AI 주입 문구',
     '내가 쓰지 않아도 매 대화에 자동으로 들어가는 내용입니다. 대화를 시작할 때, 일하는 동안, 대화를 끝낼 때로 나뉩니다.',
     host);
   node.classList.add('v2me-pane-wide');

@@ -187,7 +187,7 @@ export const livCapabilities: Capability[] = [
   //  대기 중인 요청(secret_ask)·대화 세션(chat)은 리브 화면 소관이라 여기서 내보내지 않는다.
   restRead("me_liv_profile_get", "리브가 나에 대해 아는 것",
     "리브가 온보딩 대화에서 알게 된 내 업무 방식(asis/tobe)과 내가 고른 답들을 돌려준다 — **본인 것만**. " +
-    "[내 프로필 · 환경설정] 창의 [AI 개인 규칙]이 이 값으로 '온보딩에서 알려주신 것' 칸을 채운다.",
+    "[내 프로필 · 환경설정] 창의 [AI 개인화]가 이 값으로 '온보딩에서 알려주신 것' 칸을 채운다.",
     [{ method: "GET", paths: ["/api/ui/me/liv-profile"], parse: () => ({}) }],
     async (_input: unknown, user: LivelyUser) => {
       const userId = user?.userId;
