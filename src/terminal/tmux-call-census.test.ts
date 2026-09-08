@@ -118,7 +118,7 @@ test("S2 ★ seam 자신의 배관(tmux*)은 건너뛴다 — 첫 «우리 코�
   assert.equal(censusSite(s), "sessions:196");
 });
 
-test("S3 ★ 두 칸을 얕은 것부터 `<` 로 잇는다 — 잎만으로는 «누가 그 헬퍼를 불렀나» 를 못 본다", () => {
+test("S3 ★ 칸을 얕은 것부터 `<` 로 잇는다 — 잎만으로는 «누가 그 헬퍼를 불렀나» 를 못 본다", () => {
   const s = STACK(
     "tmux (/app/dist/terminal/tmux-exec.js:131:20)",
     "collectSessions (/app/dist/terminal/sessions.js:196:9)",
@@ -128,10 +128,23 @@ test("S3 ★ 두 칸을 얕은 것부터 `<` 로 잇는다 — 잎만으로는 �
 });
 
 test("S4 depth 를 넘는 프레임은 안 싣는다", () => {
-  const s = STACK("a (/x/one.js:1:1)", "b (/x/two.js:2:2)", "c (/x/three.js:3:3)");
-  assert.equal(censusSite(s), "one:1<two:2");
+  const s = STACK("a (/x/one.js:1:1)", "b (/x/two.js:2:2)", "c (/x/three.js:3:3)", "d (/x/four.js:4:4)");
+  assert.equal(censusSite(s), "one:1<two:2<three:3", "기본 depth=3");
   assert.equal(censusSite(s, 1), "one:1", "depth=1 이면 한 칸");
-  assert.equal(censusSite(s, 3), "one:1<two:2<three:3", "depth=3 이면 세 칸");
+  assert.equal(censusSite(s, 2), "one:1<two:2", "depth=2 면 두 칸");
+});
+
+test("S4b ★ 같은 파일의 프레임은 첫 칸만 먹는다 — 안 그러면 정작 부른 쪽이 잘린다", () => {
+  //  실측(2026-09-08 첫 창): `listSessionsRaw` 경로가 `sessions:210<sessions:156` 으로 나와
+  //   «알림 스윕이냐 회수기냐 장부냐» 가 통째로 잘렸다. 그게 이 계기가 답해야 하는 질문이었다.
+  const s = STACK(
+    "tmux (/app/dist/terminal/tmux-exec.js:131:20)",
+    "collectSessions (/app/dist/terminal/sessions.js:210:9)",
+    "listSessionsRaw (/app/dist/terminal/sessions.js:156:12)",
+    "sweepAwaitingNotifications (/app/dist/sessions/awaiting-notifier.js:26:20)",
+    "run (/app/dist/sessions/outbox-request-sweep.js:63:5)",
+  );
+  assert.equal(censusSite(s), "sessions:210<awaiting-notifier:26<outbox-request-sweep:63");
 });
 
 test("S5 괄호 없는 프레임 형식도 읽는다", () => {
@@ -148,13 +161,19 @@ test("S7 위치 없는 프레임은 건너뛴다", () => {
   assert.equal(censusSite(s), "x:7");
 });
 
-test("S8 ★ 전부 배관이면 `(없음)` — 없는 것을 지어내지 않는다", () => {
+test("S8 ★ 전부 배관이면 **가장 깊은 배관 줄**이 답이다 — 그 줄이 곧 호출부다", () => {
+  //  실측(첫 창): `set-window-option (없음)` 4건의 정체는 `ensureSessionOpts`(tmux-exec 안에서 나가는 호출)였다.
+  //   바깥 프레임이 비동기 경계에서 끊겨 남지 않는다. `(없음)` 으로 두면 «계기가 못 본 자리» 로 오독된다.
   const s = STACK(
-    "tmux (/app/dist/terminal/tmux-exec.js:131:20)",
-    "shadowTmux (/app/dist/terminal/tmux-shadow.js:88:3)",
+    "tmuxQuiet (/app/dist/terminal/tmux-exec.js:529:9)",
+    "ensureSessionOpts (/app/dist/terminal/tmux-exec.js:531:3)",
     "record (/app/dist/terminal/tmux-call-census.js:70:5)",
   );
-  assert.equal(censusSite(s), CENSUS_NONE);
+  assert.equal(censusSite(s), "tmux-exec:529");
+});
+
+test("S8b 쓸 수 있는 프레임이 하나도 없으면 그때가 `(없음)` 이다", () => {
+  assert.equal(censusSite(STACK("native", "<anonymous>")), CENSUS_NONE);
 });
 
 test("S9 ★ 경로·확장자는 벗고 파일명만 — 절대경로를 실으면 창마다 수 KB 가 는다", () => {
