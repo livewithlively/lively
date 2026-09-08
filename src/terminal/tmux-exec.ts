@@ -8,6 +8,8 @@ import { promisify } from "node:util";
 import os from "node:os";
 import { TMUX_BIN, tenantSlug, isPsmuxBin } from "./catalog.js";
 import { execTopology, tmuxArgvFor, tmuxServerIsDedicated } from "../exec-topology.js";   // #2599 T2 — 「어디서 도나」는 토폴로지 한 곳에만 묻는다
+import { planTmux, runPlan, outcomeToError } from "./tmux-route.js";                        // #2600 T2 (d) d2 — 코어 직접 경로의 «무엇을 어디로»
+import { makeBrokerClient, type BrokerTransport } from "./broker-client.js";                // #2600 T2 (d) d2 — 그 전송(소켓·허브)
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 
 const execFileAsync = promisify(execFile);
@@ -69,7 +71,50 @@ export function tmuxTimeoutMs(relay: readonly string[]): number {
   return relay.length ? TMUX_RELAY_TIMEOUT_MS : TMUX_LOCAL_TIMEOUT_MS;
 }
 
+/**
+ * 코어 직접 경로(#2600 T2 (d) d2)가 **이 호출**에 성립하나 — 셋이 다 참일 때만: 플래그(`tmuxRoute`)·브로커에 닿는 길(`broker`)·
+ *  요청 슬러그. 하나라도 없으면 null = 종전 경로(중계). 슬러그 없는 호출(registry 의 primary 무컨텍스트)은 중계도 `{slug}` 를
+ *  못 채우므로 여기서도 새 경로가 아니다 — 두 경로의 «성립 조건»이 같아야 그림자 대조가 같은 호출을 견준다.
+ *  ⚠ `{slug}` 치환은 `String.replace(문자열)` = **첫 번째 하나만** — `tmux-relay.cjs`·`tmuxArgvFor` 와 같은 의미를 지킨다.
+ */
+export function tmuxRouteTransport(slug: string | null = tenantSlug()): { transport: BrokerTransport; slug: string } | null {
+  const topo = execTopology();
+  if (!topo.tmuxRoute || !topo.broker || !slug) return null;
+  const transport: BrokerTransport = topo.broker.kind === "hub"
+    ? { kind: "hub", url: topo.broker.url, secret: topo.broker.secret, slug }
+    : { kind: "socket", socketPath: topo.broker.template.replace("{slug}", slug) };
+  return { transport, slug };
+}
+
+/**
+ * 코어 직접 경로 — 브로커 `/lvly/tmux` 가 하던 «세션 의미» 를 코어가 한다: 목록(`GET /lvly/sessions`) → 계획(`planTmux`) →
+ *  실행(범용 exec API) → 병합. 성공은 stdout, 실패는 execFile 오류와 **같은 필드**(`code`·`stdout`·`stderr`)로 던진다 —
+ *  상위(`isSessionGoneError`·`isNoTmuxServer`·strict 호출)가 종전과 똑같이 갈린다.
+ *  목록 조회 자체가 실패하면 «못 봤다» 다 — «서버 없음»·«세션 없음» 문구로 위장하지 않는다(#2616).
+ */
+export async function tmuxViaRoute(args: string[], via: { transport: BrokerTransport; slug: string }): Promise<string> {
+  //  ⚠ 설정 오류(https 허브·형식 밖 슬러그)도 execFile 오류 모양으로 던진다 — 맨 Error 가 나가면 상위 판정이 전부 거짓으로
+  //   떨어져 «못 봤다» 조차 못 된다(블라인드 리뷰 ⑥-4). 여기서 접으면 strict 호출은 던지고 목록은 desired 폴백으로 간다.
+  const fold = (why: string, e: unknown): never => {
+    throw outcomeToError({ code: 1, stdout: "", stderr: `${why}(못 봤다): ${(e as Error)?.message ?? String(e)}` });
+  };
+  let client: ReturnType<typeof makeBrokerClient>;
+  try { client = makeBrokerClient(via.transport, { timeoutMs: TMUX_RELAY_TIMEOUT_MS }); } catch (e) { return fold("코어 직접 경로 설정 오류", e); }
+  let listed: Awaited<ReturnType<typeof client.listSessions>>;
+  try { listed = await client.listSessions(); } catch (e) { return fold("브로커 세션 목록 조회 실패", e); }
+  let out;
+  try {
+    const plan = planTmux(via.slug, args, listed.sessions, listed.observed);
+    out = await runPlan(plan, via.slug, args, listed.observed, (c, argv) => client.execCapture(c, argv));
+  } catch (e) { return fold("코어 직접 경로 실행 오류", e); }
+  if (out.code !== 0) throw outcomeToError(out);
+  return out.stdout;
+}
+
 export async function tmux(args: string[]): Promise<string> {
+  //  #2600 T2 (d) d2 — 플래그가 켜져 있고 길이 있을 때만 코어 직접 경로. 아니면 아래 종전 경로가 **한 바이트도** 안 바뀐다.
+  const via = tmuxRouteTransport();
+  if (via) return tmuxViaRoute(args, via);
   const relay = tmuxExecArgv();
   const [bin, ...prefix] = relay.length ? relay : [TMUX_BIN];
   const { stdout } = await execFileAsync(bin!, [...prefix, ...args], { timeout: tmuxTimeoutMs(relay), env: TMUX_ENV });
