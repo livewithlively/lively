@@ -39,6 +39,22 @@
 //  (#2165 의 교훈 — 간선 하나가 11개를 끌었다). 그 불변식은 node-agent-bundle-boundary 시험이 지킨다.
 
 /** 세션 프로세스가 **이 프로세스 호스트 기준으로** 어디서 도나. */
+/** `LIVELY_TMUX_ROUTE` 의 세 값(#2600 T2 (d)) — off(중계 그대로) · shadow(옛 경로가 답하고 코어 경로는 대조만) · on(코어 경로가 답한다). */
+export type TmuxRouteMode = "off" | "shadow" | "on";
+
+/**
+ * `LIVELY_TMUX_ROUTE` 파서(순수). 정확히 `on`·`1`·`true` → on · `shadow` → shadow(표본 1) · `shadow:<1..100>` → shadow(표본 n/100) ·
+ *  그 밖(대소문자·`shadow:0`·`shadow:101`·`shadow: 25`)은 off. 앞뒤 공백만 벗긴다 — 켜는 스위치는 관대하면 위험하다.
+ */
+export function parseTmuxRoute(raw: string | undefined): { mode: TmuxRouteMode; sample: number } {
+  const v = (raw || "").trim();
+  if (["on", "1", "true"].includes(v)) return { mode: "on", sample: 1 };
+  if (v === "shadow") return { mode: "shadow", sample: 1 };
+  const m = /^shadow:([1-9][0-9]?|100)$/.exec(v);
+  if (m) return { mode: "shadow", sample: Number(m[1]) / 100 };
+  return { mode: "off", sample: 1 };
+}
+
 export type SessionHost =
   /** 같은 호스트(셀프호스트 primary·registry secondary·리눅스 격리) */
   | "local"
@@ -93,11 +109,16 @@ export interface ExecTopology {
   /** attach 워커 풀 K(0 = 비활성 = 게이트웨이 안에서 attach). */
   attachWorkerK: number;
   /**
-   * 코어가 tmux 의미(어느 세션 컨테이너로·팬아웃·병합)를 **직접** 실행하나(`LIVELY_TMUX_ROUTE`, #2600 T2 (d) d2).
-   *  꺼짐(기본) = 중계(`tmux-relay.cjs` → 브로커 `/lvly/tmux`) 그대로 — 한 바이트도 안 바뀐다. 켜는 것은 d3(그림자 대조)의 일이다.
-   *  ⚠ 정확히 `on`·`1`·`true`(앞뒤 공백만 벗긴다) 만 켠다 — 새 경로를 **켜는** 스위치는 관대하면 위험하다(`" On"` 이 켜지면 안 된다).
+   * 코어가 tmux 의미(어느 세션 컨테이너로·팬아웃·병합)를 **직접** 실행하나(`LIVELY_TMUX_ROUTE`, #2600 T2 (d) d2·d3).
+   *  · `off`(기본) = 중계(`tmux-relay.cjs` → 브로커 `/lvly/tmux`) 그대로 — 한 바이트도 안 바뀐다.
+   *  · `shadow`(d3) = **옛 경로가 답하고**, 코어 경로는 떼어 놓고 계산해 둘을 견줘 다르면 로그만 남긴다(행동 무변경 · 정확성 게이트).
+   *  · `on` = 코어 경로가 답한다.
+   *  ⚠ 값은 정확히 `on`·`1`·`true` / `shadow`·`shadow:<1..100>`(앞뒤 공백만 벗긴다) — 새 경로를 **켜는** 스위치는 관대하면
+   *   위험하다(`" On"` 이 켜지면 안 된다). 형식 밖은 전부 `off`.
    */
-  tmuxRoute: boolean;
+  tmuxRoute: TmuxRouteMode;
+  /** 그림자 대조 표본 비율(0 초과 1 이하) — `shadow:25` = 0.25. shadow 가 아니면 1(뜻 없음). 요청마다 두 번 부르는 비용을 줄이는 노브(설계 §8). */
+  tmuxShadowSample: number;
   /**
    * 브로커에 닿는 길 — 중계 배포(`tmux.kind === "exec"`)에서만 있다. 허브(`LVLY_HUB_URL`+`LVLY_HUB_SECRET` — 중앙 게이트웨이,
    *  실측 2026-09-07: gw-central 은 이것뿐이고 소켓이 안 보인다)가 있으면 허브, 아니면 테넌트 유닉스 소켓 템플릿
@@ -189,7 +210,7 @@ export function computeExecTopology(env: NodeJS.ProcessEnv = process.env): ExecT
   // ── tmuxRoute · broker (#2600 T2 (d) d2) ──
   //  플래그는 **정확히** on·1·true(트림)만. 전송은 중계 배포에서만 있고 허브 > 소켓 — `tmux-relay.cjs` 의 transport() 와 같다.
   //  소켓 템플릿 기본값도 그 파일의 것(`/lvly/tenants/{slug}/sock/session.sock`)이다 — 여기서 다른 값을 지어내면 두 벌이 된다.
-  const tmuxRoute = ["on", "1", "true"].includes((env.LIVELY_TMUX_ROUTE || "").trim());
+  const { mode: tmuxRoute, sample: tmuxShadowSample } = parseTmuxRoute(env.LIVELY_TMUX_ROUTE);
   const hubUrl = (env.LVLY_HUB_URL || "").trim();
   const hubSecret = (env.LVLY_HUB_SECRET || "").trim();
   const sockTemplate = (env.LVLY_TMUX_SOCK_TEMPLATE || "").trim() || "/lvly/tenants/{slug}/sock/session.sock";
@@ -197,7 +218,7 @@ export function computeExecTopology(env: NodeJS.ProcessEnv = process.env): ExecT
     : hubUrl && hubSecret ? { kind: "hub", url: hubUrl, secret: hubSecret }
       : { kind: "socket", template: sockTemplate };
 
-  return { sessionHost, tmux, isolation, storage, hooks, nodeToken, attachWorkerK, tmuxRoute, broker };
+  return { sessionHost, tmux, isolation, storage, hooks, nodeToken, attachWorkerK, tmuxRoute, tmuxShadowSample, broker };
 }
 
 let frozen: ExecTopology | null = null;
