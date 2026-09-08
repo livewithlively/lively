@@ -793,6 +793,10 @@ export async function countDistillerSeen(distillerId: number): Promise<number> {
 export interface DistillerCoverage {
   total_undistilled: number;
   uncovered: number;
+  /** 폴백이 '보고 버린' 방치 자료 수 — 레인의 `reviewed` 와 같은 자리. `uncovered` 가 판정 기록을 빼고
+   *  세게 된 이상(아래 주석) 이 값이 없으면 «사각지대 0» 이 «전부 담당됨» 인지 «폴백이 다 보고 버렸음»
+   *  인지 구분되지 않는다 — 레인 쪽에서 이미 가르고 있는 것과 같은 구분이다(잔량 vs 판정). */
+  uncovered_reviewed: number;
   distillers: Array<{ id: number; key: string; label: string | null; enabled: boolean; priority: number; backlog: number; reviewed: number }>;
   uncovered_channels: Array<{ channel: string | null; n: number }>;
 }
@@ -834,9 +838,19 @@ export async function distillerCoverage(): Promise<DistillerCoverage> {
       WHERE ${strandedWhere2}
       GROUP BY 1 ORDER BY 2 DESC LIMIT 20`, p2.values);
 
+  //  «사각지대 0» 의 뜻을 가른다 — 판정 기록을 빼고 세므로, 폴백이 보고 버린 자료도 0 에 기여한다.
+  //   레인 쪽은 backlog(잔량)와 reviewed(판정)를 이미 갈라 놓았다("왜 줄었지?"를 답할 수 있게).
+  //   방치 축만 그 짝이 없으면 «담당이 붙어서 0» 과 «폴백이 다 훑어서 0» 이 같은 숫자로 보인다.
+  //  ⚠ 방어(catch)를 걸지 않는다 — 여기서 접어도 소용이 없다. 바로 위 두 질의가 쓰는 strandedWhereSql
+  //   자체가 이 표를 배제절로 참조하므로, 표가 없는 배포에선 이 집계에 닿기 전에 이미 죽는다. 이 줄만
+  //   감싸면 «표가 없어도 패널이 산다» 는 없는 보장을 있는 것처럼 보이게 할 뿐이다(표는 부팅의
+  //   initIngestPolicyAndDistillers 가 만든다). 레인 짝인 countDistillerSeen 도 같은 이유로 맨몸이다.
+  const reviewedRows = await q(itemsPool, `SELECT count(*)::int AS n FROM org_stranded_seen`);
+
   return {
     total_undistilled: total,
     uncovered: Number(uncoveredRows[0]?.n ?? 0),
+    uncovered_reviewed: Number(reviewedRows[0]?.n ?? 0),
     distillers,
     uncovered_channels: chRows.map((r) => ({ channel: (r.channel as string | null) ?? null, n: Number(r.n) })),
   };
