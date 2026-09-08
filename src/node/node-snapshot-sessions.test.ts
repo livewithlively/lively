@@ -14,12 +14,21 @@ import { nodeSnapshotSessions } from "./self-node.js";
 /** registry 의 `STATE_STALE_MS` 와 같은 값 — 목록 소유 판정과 **같은 자**를 쓴다는 것이 사양이다. */
 const STALE = 12_000;
 
-type Node = { online: boolean; stateAgeMs: number | null; sessions: readonly string[] };
+type Node = { declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly string[] };
 /** 기본은 «자격 있는 노드» — 각 행은 **한 칸만** 뒤집어 그 칸이 무는지 본다. */
-const node = (o: Partial<Node> = {}): Node => ({ online: true, stateAgeMs: 1_000, sessions: ["a"], ...o });
+const node = (o: Partial<Node> = {}): Node =>
+  ({ declared: true, online: true, stateAgeMs: 1_000, sessions: ["a"], ...o });
 
 test("N1 온라인 + 신선하면 그 세션들을 모은다", () => {
   assert.deepEqual(nodeSnapshotSessions([node({ sessions: ["a", "b"] })], STALE), ["a", "b"]);
+});
+
+test("N11 ★★ 선언 없는 노드(멤버 PC)의 세션은 넣지 않는다 — 알림 폭풍 방지", () => {
+  //  이 스윕은 원래 `listSessionsRaw`(게이트웨이 자기 tmux)만 봤다 = 매니지드 세션 컨테이너뿐.
+  //   멤버 PC 노드 세션은 **여기 없던 것**이다. 넣으면 여태 못 보던 세션 수백 개가 한꺼번에 들어오는데,
+  //   `pickAwaitingTransitions` 는 처음 보는 세션이 awaiting 이면 곧바로 알림을 낸다
+  //   (`previous.get(id) ?? false`) — 사람에게 알림이 한 번에 쏟아진다.
+  assert.deepEqual(nodeSnapshotSessions([node({ declared: false, sessions: ["member-pc"] })], STALE), []);
 });
 
 test("N2 ★ 오프라인 노드의 세션은 넣지 않는다", () => {
@@ -60,6 +69,7 @@ test("N8 자격은 있지만 세션이 0개면 아무것도 안 보탠다", () =
 
 test("N9 ★ 자격/무자격이 섞이면 무자격 노드의 세션이 새지 않는다", () => {
   const nodes = [
+    node({ declared: false, sessions: ["undeclared"] }),
     node({ online: false, sessions: ["off"] }),
     node({ stateAgeMs: null, sessions: ["none"] }),
     node({ stateAgeMs: STALE + 1, sessions: ["old"] }),

@@ -92,16 +92,21 @@ export function declaredSessionHost(n: { session_host?: boolean } | null | undef
  *    「답을 기다려요」를 울리면 아무도 없는 세션에 알림이 간다.
  *  · 신선도 경계는 **포함**(`<= staleMs`)이고, `gatewayDefersToSessionHost` 와 **같은 자**를 쓴다.
  *    둘이 갈리면 「목록은 호스트가 답하는데 알림은 게이트웨이가 본다」는 어긋남이 생긴다.
- *  · 여러 노드면 이어붙인다 — 한 테넌트에 세션 호스트와 멤버 PC 노드가 함께 있을 수 있다.
+ *  · ★ **선언된 세션 호스트만** 넣는다. 이 자리는 «게이트웨이 tmux 가 보던 것» 을 그대로 갈아끼우는
+ *    것이고, 그건 매니지드 세션 컨테이너뿐이었다 — 멤버 PC 노드 세션은 이 스윕에 **원래 없었다**
+ *    (`listSessionsRaw` 는 게이트웨이 자기 tmux 만 읽는다). 선언 없는 노드까지 넣으면 여태 못 보던
+ *    세션 수백 개가 한꺼번에 들어오는데, `pickAwaitingTransitions` 는 **처음 보는 세션이 `awaiting`
+ *    이면 곧바로 알림**을 낸다(`previous.get(id) ?? false`) — 사람에게 알림 폭풍이 간다.
+ *  · 자격 노드가 여럿이면 이어붙인다.
  *  · **가시성 필터를 걸지 않는다.** 이 자리는 모든 주인의 세션을 보고 각 세션의 주인에게만 알린다.
  */
 export function nodeSnapshotSessions<T>(
-  nodes: ReadonlyArray<{ online: boolean; stateAgeMs: number | null; sessions: readonly T[] }>,
+  nodes: ReadonlyArray<{ declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly T[] }>,
   staleMs: number,
 ): T[] {
   const out: T[] = [];
   for (const n of nodes) {
-    if (!n.online || n.stateAgeMs === null || !(n.stateAgeMs <= staleMs)) continue;
+    if (!n.declared || !n.online || n.stateAgeMs === null || !(n.stateAgeMs <= staleMs)) continue;
     out.push(...n.sessions);
   }
   return out;

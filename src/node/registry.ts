@@ -165,9 +165,9 @@ export const NODE_STATE_STALE_MS = STATE_STALE_MS;
  *  쓰지 마라. 그쪽은 `nodeSessionsFor(viewer)` 가 가시성을 판정한다.
  */
 export function nodeSessionsInScope(now: number = Date.now()): SessionInfo[] {
-  const nodes: Array<{ online: boolean; stateAgeMs: number | null; sessions: readonly SessionInfo[] }> = [];
+  const nodes: Array<{ declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly SessionInfo[] }> = [];
   for (const [id, st] of inScope(states)) {
-    nodes.push({ online: conns.has(keyOf(id)), stateAgeMs: now - st.ts, sessions: st.sessions });
+    nodes.push({ declared: declaredSessionHost({ session_host: st.sessionHost }), online: conns.has(keyOf(id)), stateAgeMs: now - st.ts, sessions: st.sessions });
   }
   return nodeSnapshotSessions(nodes, STATE_STALE_MS);
 }
