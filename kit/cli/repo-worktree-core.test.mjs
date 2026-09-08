@@ -232,6 +232,8 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   //  normPath 부재(수정 전 코드로 red 를 볼 때)면 realpath 폴백 — 순수 함수 검사는 아래 check 가 부재를 그대로 빨간불로 센다.
   const normPath = mod.normPath || ((p) => { try { return realpathSync.native(p); } catch { return p; } });
   const gitfileAdmin = (wt) => { const m = readFileSync(join(wt, ".git"), "utf8").match(/^gitdir:\s*(.+?)\s*$/m); return m ? m[1] : null; };
+  //  ⚠ 윈도우: git 이 만든 `.git` 파일은 hidden 속성이라 writeFileSync 로 덮어쓰면 EPERM(CI 실측) — 지우고 새로 쓴다.
+  const writeGitfile = (wt, txt) => { rmSync(join(wt, ".git"), { force: true }); writeFileSync(join(wt, ".git"), txt); };
   const adminBack = (admin) => { try { return readFileSync(join(admin, "gitdir"), "utf8").split("\n")[0].trim(); } catch { return ""; } };
   const lc = (s) => (process.platform === "win32" ? String(s).replace(/\\/g, "/").toLowerCase() : String(s)); // 윈도우: 구분자·대소문자 정규화
   const same = (a, b) => lc(normPath(a)) === lc(normPath(b));
@@ -283,12 +285,12 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   const wtC = join(contC, "base");
   const adminB = gitfileAdmin(join(contB, "base"));
   const gitfileC = readFileSync(join(wtC, ".git"), "utf8");
-  writeFileSync(join(wtC, ".git"), `gitdir: ${adminB}\n`);
+  writeGitfile(wtC, `gitdir: ${adminB}\n`);
   let msgC = ""; try { await repoWorktree(ctx(contC), { repo: "base" }); } catch (e) { msgC = String(e.message); }
   check("C: 남의 admin 을 잇고 있으면 중단", msgC.length > 0, "throw 하지 않음");
   check("C: 메시지에 내 경로와 그 admin 의 주인 경로 둘 다", lc(msgC).includes(lc(wtC)) && lc(msgC).includes(lc(normPath(join(contB, "base")))), msgC);
   check("C: 아무것도 고치지 않았다(내 gitfile·남의 admin 그대로)", readFileSync(join(wtC, ".git"), "utf8") === `gitdir: ${adminB}\n` && existsSync(adminB) && same(adminBack(adminB), join(contB, "base", ".git")), "상태가 바뀜");
-  writeFileSync(join(wtC, ".git"), gitfileC);
+  writeGitfile(wtC, gitfileC);
 
   // ── C2·J: admin 이 사라졌거나 gitfile 이 파손됐으면 중단 + 파일 보존(새로 만들지 않는다) ──
   const contD = box("boxD", 1004);
@@ -299,7 +301,7 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   let msgD = ""; try { await repoWorktree(ctx(contD), { repo: "base" }); } catch (e) { msgD = String(e.message); }
   check("C2: admin 이 사라진 워크트리 재사용 → 중단(prune 안내)", /prune/.test(msgD), msgD || "throw 하지 않음");
   check("C2: 파일·gitfile 그대로(지우거나 새로 만들지 않음)", existsSync(join(wtD, "wip.txt")) && readFileSync(join(wtD, ".git"), "utf8").includes(basename(adminD)), "상태가 바뀜");
-  writeFileSync(join(wtD, ".git"), "garbage\n");
+  writeGitfile(wtD, "garbage\n");
   let msgJ = ""; try { await repoWorktree(ctx(contD), { repo: "base" }); } catch (e) { msgJ = String(e.message); }
   check("J: gitfile 파손(gitdir 줄 없음) → 중단(파손 안내)", /파손/.test(msgJ), msgJ || "throw 하지 않음");
   check("J: 파손 자리에 새로 만들지 않는다", existsSync(join(wtD, "wip.txt")) && readFileSync(join(wtD, ".git"), "utf8") === "garbage\n", "상태가 바뀜");

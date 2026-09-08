@@ -15,7 +15,7 @@
 //   ② admin id 를 basename 에 맡기지 않는다(프로젝트별 고유 id 로 relink) ③ 있는 워크트리를 재사용하기 전에 admin 이
 //   자기 것인지 확인한다(아니면 중단·경고). 서버 provision·work.mjs·preview-stage 도 ①을 같이 지킨다.
 // ═══════════════════════════════════════════════════════════════════════════
-import { readFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, realpathSync, renameSync, writeFileSync, unlinkSync } from "node:fs";
 import { join, dirname, basename, isAbsolute, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -90,19 +90,18 @@ export function normPath(p) {                       // export=테스트용·순�
 }
 const samePath = (a, b) => normPath(a) === normPath(b);
 
-// 이 base 의 워크트리 등록 목록(base 자신 제외) → [{ path, head, branch|null, prunable, locked }].
-//  `git worktree list --porcelain` 은 디렉터리가 사라진 등록도 경로 그대로 보여준다(prunable 표시와 함께).
+// 이 base 의 워크트리 등록 목록(base 자신 제외) → [{ path, branch|null, locked }].
+//  `git worktree list --porcelain` 은 디렉터리가 사라진 등록도 경로 그대로 보여준다. locked = 사람이 `worktree lock` 으로
+//  지킨 것(이동식 디스크 등) — 표적 정리에서도 건드리지 않는다(git 도 -f 두 번을 요구한다).
 function listWorktrees(ctx, base) {
   const out = ctx.sh("git", ["-C", base, "worktree", "list", "--porcelain"], { allowFail: true }).stdout || "";
   const list = [];
   let cur = null;
   for (const raw of out.split("\n")) {
     const line = raw.trim();
-    if (line.startsWith("worktree ")) { cur = { path: line.slice("worktree ".length), head: null, branch: null, prunable: false, locked: false }; list.push(cur); }
+    if (line.startsWith("worktree ")) { cur = { path: line.slice("worktree ".length), branch: null, locked: false }; list.push(cur); }
     else if (!cur) continue;
-    else if (line.startsWith("HEAD ")) cur.head = line.slice("HEAD ".length);
     else if (line.startsWith("branch refs/heads/")) cur.branch = line.slice("branch refs/heads/".length);
-    else if (line.startsWith("prunable")) cur.prunable = true;
     else if (line.startsWith("locked")) cur.locked = true;
   }
   return list.filter((w) => !samePath(w.path, base));
@@ -120,11 +119,12 @@ export const provablyGone = (p) => !existsSync(p) && existsSync(dirname(p));   /
 //   실측, 2026-09-08), 그 뒤 같은 basename 으로 다시 뜬 admin 을 두 워크트리가 같이 가리켜 HEAD·index 를 공유했다 — 내
 //   커밋이 남의 브랜치에 얹히고, index 재구성 뒤 커밋이 main 의 남의 수정을 조용히 되돌렸다. #932 가 prune 으로 풀려던
 //   것(사라진 워크트리의 등록이 브랜치를 영구 점유)은 아래 표적 정리가 그대로 푼다 — 그 등록만 `worktree remove --force`.
+//  `worktree remove --force` 가 없는 경로의 등록을 걷는 건 git ≥ 2.17(2018) — 고객 박스 최저 2.34 에서 성립.
 function clearStaleRegistrations(ctx, base, { paths = [], branch = null } = {}, regs = listWorktrees(ctx, base)) {
   const removed = [];
   for (const w of regs) {
     const target = paths.some((p) => p && samePath(p, w.path)) || (branch !== null && w.branch === branch);
-    if (!target || !provablyGone(w.path)) continue;
+    if (!target || w.locked || !provablyGone(w.path)) continue;
     const r = ctx.sh("git", ["-C", base, "worktree", "remove", "--force", w.path], { allowFail: true });
     if (r.code === 0) removed.push(w.path);
   }
@@ -321,11 +321,24 @@ function relinkAdmin(wt, admin, newId) {
   if (existsSync(dst)) {
     const back = adminBackref(dst);
     if (back && !provablyGone(dirname(back))) throw new Error(`admin id '${newId}' 자리를 살아 있는 워크트리('${dirname(back)}')가 쓰고 있어 옮기지 않습니다.`);
+    // 여기 오는 건 둘뿐 — 그 등록의 워크트리가 정말 지워졌거나(provablyGone), gitdir 파일이 없어 git 도 «gitdir file does not
+    //  exist» 로 prune 대상으로 보는 껍데기다. 둘 다 git prune 이 지울 것을 이 자리에서만 지운다.
     rmSync(dst, { recursive: true, force: true });
   }
+  //  ⚠ 원자적이지 않다(rename → gitfile 쓰기 두 걸음). 그 사이 이 워크트리에서 도는 git(IDE 워처 등)은 한 번 실패한다 —
+  //   툴은 세션 시작 자리에서 불리고 방금 만든/재사용하는 워크트리라 실용상 창이 없다. 실패하면 되돌려 중간 상태를 안 남긴다.
+  const gitfile = gitfileOf(wt);
+  const prev = readFileSync(gitfile, "utf8");
   renameSync(admin, dst);
-  try { writeFileSync(gitfileOf(wt), `gitdir: ${process.platform === "win32" ? dst.replace(/\\/g, "/") : dst}\n`); }
-  catch (e) { try { renameSync(dst, admin); } catch { /* 되돌리기도 실패 — 원인 e 를 그대로 */ } throw e; }
+  try {
+    // ⚠ 윈도우: git 이 만든 `.git` 파일은 hidden 속성이라 'w' 로 열면 EPERM — 지우고 새로 쓴다(속성은 git 에 불필요, CI 실측).
+    try { unlinkSync(gitfile); } catch { /* 없으면 그대로 */ }
+    writeFileSync(gitfile, `gitdir: ${process.platform === "win32" ? dst.replace(/\\/g, "/") : dst}\n`);
+  } catch (e) {
+    try { writeFileSync(gitfile, prev); } catch { /* 되돌리기도 실패 — 원인 e 를 그대로 */ }
+    try { renameSync(dst, admin); } catch { /* 위와 같음 */ }
+    throw e;
+  }
   return dst;
 }
 
@@ -378,6 +391,8 @@ export async function repoWorktree(ctx, args) {
     const adminNow = admin ? relinkAdmin(wt, admin, adminId) : null; // 서버 provision 등이 basename id 로 만든 것도 고유 id 로
     const b = ctx.sh("git", ["-C", wt, "rev-parse", "--abbrev-ref", "HEAD"], { allowFail: true }).stdout.trim();
     const out = { repo, worktree: wt, branch: b || null, base, admin: adminNow ? basename(adminNow) : null, note: "이미 워크트리가 있어 그대로 사용합니다." };
+    // 경고는 슬롯에서만 — 슬롯은 «어느 브랜치여야 하는지»(project/<pid>)가 정해져 있어 어긋남을 판정할 수 있다. 슬롯 밖은
+    //  기대 브랜치가 없다(호출자가 branch 를 줬을 수도, wt/<repo>-n 일 수도) → 반환 branch 를 호출자가 본다.
     if (isSlot && b && b !== `project/${pid}`) {
       out.warning = `canonical 슬롯인데 브랜치가 project/${pid} 가 아니라 '${b}' 입니다 — 다른 세션이 이 자리에서 브랜치를 갈아탔을 수`
         + ` 있습니다(git status 에 내가 안 만진 파일이 보이면 그 신호). 커밋 전에 확인하세요.`;
@@ -498,6 +513,8 @@ export function repoPinRemove(ctx, args) {
   } else {
     const refBranch = args.ref && BRANCH_RE.test(String(args.ref).trim()) ? String(args.ref).trim() : remoteDefaultBranch(ctx, base);
     const sha = ctx.sh("git", ["-C", base, "rev-parse", "--short", `origin/${refBranch}`], { allowFail: true }).stdout.trim();
+    // ref 를 못 풀면 지울 핀을 특정할 수 없다 — 종전엔 여기서 blanket prune 을 돌렸지만(«스테일 등록만 정리»), 그게 남의
+    //  워크트리를 지우던 바로 그 경로라 이제 아무것도 안 한다(#3678). 표적 없이 지울 것은 없다.
     if (!sha) return { removed: null, note: `핀을 특정할 수 없습니다(origin/${refBranch} 해석 실패) — 아무것도 지우지 않았습니다.` };
     pin = pinPathOf(ctx, repo, null, sha);
   }
