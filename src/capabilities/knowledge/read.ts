@@ -19,9 +19,8 @@ import { assertKnowledgeVisible } from "./shared.js";
 // MCP 필드명 = 핸들러가 읽는 이름(REST 는 query 'category'→categoryId, 'category=none'→uncategorized 로 매핑).
 //  injection/provenance/lifecycle/orderBy/is_wiki 도 선택.
 const knowledgeListInput = {
-  space: z.string().optional(),
   categoryId: z.number().int().positive().optional(),
-  uncategorized: z.boolean().optional().describe("true 면 미분류(rejected 아닌 카테고리 매핑이 0건)인 지식만 — space/categoryId 와 배타(#1091). 본문 포함 목록이라 인박스 포인터만 필요하면 knowledge_unmapped."),
+  uncategorized: z.boolean().optional().describe("true 면 미분류(rejected 아닌 카테고리 매핑이 0건)인 지식만 — categoryId 와 배타(#1091). 본문 포함 목록이라 인박스 포인터만 필요하면 knowledge_unmapped."),
   light: z.boolean().optional().describe("true 면 본문(body_md)을 뺀 경량 행 — 제목·메타만 필요한 목록/트리용(#1091). 본문이 필요하면 knowledge_get."),
   injection: z.enum(["always", "recalled"]).optional(),
   provenance: z.enum(["authored", "observed"]).optional(),
@@ -37,7 +36,7 @@ type KnowledgeListInput = z.infer<z.ZodObject<typeof knowledgeListInput>>;
 export const knowledgeList: Capability = {
   name: "knowledge_list",
   title: "지식 목록",
-  description: "지식을 space/카테고리/injection/provenance/q(grep 패턴 — knowledge_grep 과 동일 매칭)로 조회(맥락의 기록). is_wiki=true 면 WIKI 인덱스 핀(매 대화 첫머리에 깔리는 인덱스)만. uncategorized=true 면 미분류(어느 카테고리에도 안 뜨는 지식)만. limit(≤500, 기본 200)·offset 으로 페이지네이션 — 응답에 total·has_more 포함(#709).",
+  description: "지식을 카테고리/injection/provenance/q(grep 패턴 — knowledge_grep 과 동일 매칭)로 조회(맥락의 기록). is_wiki=true 면 WIKI 인덱스 핀(매 대화 첫머리에 깔리는 인덱스)만. uncategorized=true 면 미분류(어느 카테고리에도 안 뜨는 지식)만. limit(≤500, 기본 200)·offset 으로 페이지네이션 — 응답에 total·has_more 포함(#709).",
   scope: "memory",
   input: knowledgeListInput,
   expose: {
@@ -49,7 +48,6 @@ export const knowledgeList: Capability = {
         //  카테고리 축의 센티널 값으로 받는다(catVal·URL ?category=none·이 쿼리가 전부 같은 문자열).
         const cat = query.category != null ? String(query.category) : "";
         return {
-          space: query.space ? String(query.space) : undefined,
           categoryId: cat && cat !== "none" ? Number(cat) : undefined,
           uncategorized: cat === "none" ? true : undefined,
           injection: query.injection ? String(query.injection) : undefined,

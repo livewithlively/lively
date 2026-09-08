@@ -12,7 +12,7 @@ export async function init(): Promise<string> {
   CREATE TABLE IF NOT EXISTS scan_run(
     id SERIAL PRIMARY KEY, repo_id INT, runbook TEXT, harness TEXT,
     actor_type TEXT, actor_id TEXT, started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ, summary JSONB);
-  -- v6 드랍(2026-06-24): domain 테이블 폐기 → category(space='product', v6/schema.ts). 스캔 write·읽기·CRUD 전부 category 로 cutover.
+  -- v6 드랍(2026-06-24): domain 테이블 폐기 → category(v6/schema.ts). 스캔 write·읽기·CRUD 전부 category 로 cutover.
   CREATE TABLE IF NOT EXISTS code_unit(
     id SERIAL PRIMARY KEY, repo_id INT, kind TEXT, path TEXT, label TEXT,
     created_at TIMESTAMPTZ, UNIQUE(repo_id, path));
@@ -49,7 +49,7 @@ export async function init(): Promise<string> {
   `);
   // (P8: project/project_touch + provenance_kind/uq/state_chk DDL 제거 — initiative 드롭·task→W 만 유지.)
   // v6 드랍(2026-06-24): domain 의 state/space CHECK·유니크인덱스·business 시드 DDL 전부 폐기(테이블 자체 드랍).
-  //  business 통제어휘(gtm·가격·펀딩 등)는 category(space='business')로 이행 완료 — v6/schema.ts·v6-migrate 가 소유.
+  //  통제어휘(gtm·가격·펀딩 등)는 category 로 이행 완료 — v6/schema.ts·v6-migrate 가 소유(#1631: space 축 자체가 폐기).
   // ── P-V3-4a: repo CRUD lifecycle ──
   // repo.state: repo_deprecate 가 쓰는 lifecycle 축. NULL=active(pre-migration 행). repo 는 cross-DB
   //  cascade 가 없는 도메인맵 자기완결 엔티티라 컬럼 추가만으로 충분(deprecate=숨김 신호, 삭제 아님).

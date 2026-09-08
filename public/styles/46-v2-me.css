@@ -51,20 +51,31 @@
 .v2me-inline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .v2me .v2-theme { max-width: 300px; }
 
-/* ── 온보딩에서 알려주신 것(#1843) — 리브가 알게 된 것을 되읽는 칸. ──
-   내가 적는 칸들과 **면이 갈려야 한다**: 이건 내가 쓴 것이 아니라 대화에서 모인 것이고,
-   아직 세션에 실리지도 않는다. 그래서 틴트 면 + 점선 없는 실선 테두리로 한 덩어리로 묶는다. */
-.v2me-ob { margin: 0 0 20px; padding: 14px 16px; border: 1px solid var(--line-note); border-radius: 12px; background: var(--bg-note); }
-.v2me-ob-h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.v2me-ob-t { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 800; color: var(--ink-note); }
-.v2me-ob-d { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-sub); line-height: 1.55; }
-.v2me-ob-l { margin: 12px 0 0; display: flex; flex-direction: column; gap: 9px; }
+/* ── 창 안에서 나란히 서는 덩어리(#1631) ────────────────────────────────────────
+   [AI 개인 규칙]의 「온보딩에서 알려주신 것」과 「내가 적는 것」은 **같은 위계의 형제**다.
+   종전엔 앞이 제목·배지·설명을 갖춘 틴트 카드였고 뒤는 11px 회색 라벨 한 줄이라, 뒤가 앞의
+   각주처럼 읽혔다. 머리 규격(제목 13.5/800 · 설명 12.5)을 하나로 두어 형제로 읽히게 하고,
+   둘의 차이(모여 온 것 vs 내가 쓰는 것)는 **본문 면**에서만 말한다. 바깥 테두리는 두지 않는다 —
+   창 안에 카드를 또 두면 중첩이 되고, 폼이 카드 속에 갇혀 더 답답해진다. */
+.v2me-sec + .v2me-sec { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--line-row); }
+.v2me-sec-h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.v2me-sec-t { flex: 1; min-width: 0; margin: 0; font-size: 13.5px; font-weight: 800; color: var(--ink); }
+.v2me-sec-d { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-sub); line-height: 1.55; }
+.v2me-sec-b { margin-top: 12px; }
+/* 폼 덩어리의 첫 필드는 위 설명과 이미 간격이 있다 — 기본 .field 여백을 겹쳐 받지 않게 한다. */
+.v2me-sec-b > .field:first-child, .v2me-sec-b > .v2me-f2:first-child .field { margin-top: 0; }
+
+/* 온보딩에서 알려주신 것(#1843) — 리브가 모아 온 것을 되읽는 판. 내가 못 고치는 면이라 틴트로 가른다. */
+.v2me-ob-l { margin: 0; padding: 13px 15px; border: 1px solid var(--line-note); border-radius: 12px; background: var(--bg-note);
+  display: flex; flex-direction: column; gap: 9px; }
 .v2me-ob-r { display: flex; gap: 10px; align-items: baseline; }
 .v2me-ob-r dt { flex: none; width: 132px; font-size: 12.5px; font-weight: 700; color: var(--muted-head); }
 .v2me-ob-r dd { flex: 1; min-width: 0; margin: 0; font-size: 13px; color: var(--ink); line-height: 1.5; overflow-wrap: anywhere; }
-.v2me-ob .btn { flex: none; }
-/* 「내가 적는 것」 — 위 칸(모여 온 것)과 아래 폼(내가 쓰는 것)의 경계를 한 줄로 말한다. */
-.v2me-k { margin: 0 0 2px; font-size: 11px; font-weight: 800; letter-spacing: .06em; color: var(--muted); }
+
+/* 짧은 값 두 개를 한 줄에(역할·호칭). 좁아지면 접힌다 — 기능을 숨기지 않는다. */
+.v2me-f2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+/* (걷어냄) `.v2me-k` — 「내가 적는 것」의 11px 회색 라벨. 그 자리는 .v2me-sec 머리가 받았고,
+   남은 사용처였던 [외부 서비스] ▸ «코드 저장소» 는 그 탭째로 사라졌다(#1898). 쓰는 곳이 0이라 지운다. */
 
 /* 더 자세한 설정 — 여기서 다 하지 않고 어디로 가면 되는지만 말하는 줄. */
 .v2me-more-k { margin: 22px 0 8px; font-size: 11px; font-weight: 800; letter-spacing: .06em; color: var(--muted); }
@@ -108,6 +119,8 @@
   .v2me-cont { padding: 16px 16px 24px; }
   .v2me-ob-r { flex-direction: column; gap: 2px; }
   .v2me-ob-r dt { width: auto; }
+  /* 짧은 값 두 칸은 여기서 접는다 — 좁은 화면에서 나란히 두면 이름도 값도 다 잘린다. */
+  .v2me-f2 { grid-template-columns: 1fr; gap: 0; }
 }
 
 /* ══════════ [자동으로 하는 일] 탭 (#1898) ══════════

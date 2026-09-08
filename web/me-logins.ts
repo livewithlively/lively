@@ -27,7 +27,11 @@ import { svcTile } from './svc-icons.js';
 //  short — 목록 카드에 싣는 «무엇을 해 주는지» 한 줄(#2243). blurb 는 상세용이라 길고, 대괄호 버튼 표기까지 들어 있어 카드엔 못 싣는다.
 //  soon — 카탈로그가 «아직 준비 중»이라고 말하는 앱(이유 한 줄). 켤 길이 있어도 목록은 준비 중으로 내민다. 지금은 비어 있고,
 //   환경이 아직 못 연 OAuth 앱(종전 blockedOAuth)이 사용자 눈엔 같은 «준비 중»이라 목록(#/connect)이 둘을 한 묶음으로 보여 준다.
-const LOGIN_SERVICES: Array<{ key: string; label: string; icon: string; oauth?: string; token?: string; appConnect?: string; blurb: string; short?: string; soon?: string }> = [
+//  hidden — 카탈로그에서 **내려 둔** 앱(이유 한 줄). 목록·요약칩·내 설정 패널 어디에도 안 세운다(#2243, 원준 2026-08-31
+//   "프로메테우스랑 클로드 헤드리스 실행 빼줘"). soon 과 다른 점: soon 은 «준비 중»으로 **보이고**, hidden 은 **안 보인다**.
+//   ⚠ 행을 지우지 않고 표식만 두는 이유 — 자격 종류(CRED_KINDS)·로고·상세 화면은 그대로라, 이미 토큰을 등록해 둔 사람은
+//    주소(#/connect/<key>)로 들어가 교체·해제할 수 있다(헤드리스 크론이 그 토큰으로 돈다 — 관리 창구를 없애면 안 된다).
+const LOGIN_SERVICES: Array<{ key: string; label: string; icon: string; oauth?: string; token?: string; appConnect?: string; blurb: string; short?: string; soon?: string; hidden?: string }> = [
   { key: 'notion', label: 'Notion', icon: '📔', short: '문서를 읽고 작성합니다.', oauth: 'notion', blurb: 'AI가 내 Notion 계정에 로그인해서 직접 문서를 읽고 작성할 수 있습니다.' },
   { key: 'linear', label: 'Linear', icon: '📐', short: '이슈를 보고 만듭니다.', oauth: 'linear', blurb: 'AI가 내 Linear 계정에 로그인해서 직접 이슈를 보고 만들 수 있습니다.' },
   { key: 'slack', label: 'Slack', icon: '💬', short: '메시지를 검색하고 보냅니다.', oauth: 'slack', token: 'slack_user_token', blurb: 'AI가 내 Slack 계정에 로그인해서 직접 메시지를 검색하고 보낼 수 있습니다.' },
@@ -43,8 +47,8 @@ const LOGIN_SERVICES: Array<{ key: string; label: string; icon: string; oauth?: 
   { key: 'gitlab', label: 'GitLab', icon: '🦊', short: '이슈·MR·파이프라인·위키를 다룹니다.', oauth: 'gitlab', token: 'gitlab_pat', blurb: 'AI가 내 GitLab 계정으로 이슈·MR·파이프라인·위키를 다룹니다. [연결]은 AI 도구용 권한만 받습니다 — 저장소를 작업용으로 붙이는 것은 GitLab 정책상 별도 설정이 필요합니다.' },
   { key: 'clickup', label: 'ClickUp', icon: '🗂️', short: '작업을 확인합니다.', token: 'clickup_token', blurb: 'AI가 내 ClickUp 계정에 로그인해서 직접 작업을 확인할 수 있습니다.' },
   { key: 'figma', label: 'Figma', icon: '🎨', short: '디자인 파일과 코멘트를 읽습니다.', token: 'figma_token', blurb: 'AI가 내 Figma 계정으로 디자인 파일과 코멘트를 직접 읽을 수 있습니다 — 디자인 결정·피드백은 대개 코멘트에 쌓입니다.' },
-  { key: 'prometheus', label: 'Prometheus', icon: '📊', short: '지표를 조회합니다.', token: 'prometheus_bearer', blurb: 'AI가 내 Prometheus 계정에 로그인해서 직접 지표를 조회할 수 있습니다.' },
-  { key: 'claude-headless', label: 'Claude (헤드리스 실행)', icon: '🤖', short: '헤드리스 분류·크론이 내 Claude 계정으로 실행됩니다.', token: 'claude_setup_token', blurb: '헤드리스 분류·에이전트 크론(claude -p)이 내 Claude 계정으로 인증·실행됩니다 — 터미널에서 `claude setup-token` 으로 발급한 토큰을 등록하세요(구독 크레딧 과금).' },
+  { key: 'prometheus', label: 'Prometheus', icon: '📊', short: '지표를 조회합니다.', token: 'prometheus_bearer', hidden: '일반 사용자에게 내밀 앱이 아니다 — 목록에서 내려 둠(#2243)', blurb: 'AI가 내 Prometheus 계정에 로그인해서 직접 지표를 조회할 수 있습니다.' },
+  { key: 'claude-headless', label: 'Claude (헤드리스 실행)', icon: '🤖', short: '헤드리스 분류·크론이 내 Claude 계정으로 실행됩니다.', token: 'claude_setup_token', hidden: '운영자용 자격이라 외부 앱 목록에 내밀지 않는다(#2243)', blurb: '헤드리스 분류·에이전트 크론(claude -p)이 내 Claude 계정으로 인증·실행됩니다 — 터미널에서 `claude setup-token` 으로 발급한 토큰을 등록하세요(구독 크레딧 과금).' },
 ];
 
 // ── 화면 상태 — 한 번 불러서 두 구역(연결됨/연결 가능)이 같은 사실을 본다 ──
@@ -58,6 +62,9 @@ interface SvcView {
   soonConnected: Set<string>;  // 그중 **이미 연결해 둔** 것의 key — 준비 중이라고 해서 쓰던 연결을 없는 척하지 않는다
   all: any[];             // 위 셋 전부 — 상세 화면(#/connect/<key>)이 키로 되찾을 때 쓴다
   /** #1675 ③ 헤드리스 자격의 마지막 실패(있으면). `{ at, label, task_id }`. */
+  //  헤드리스 자격이 마지막으로 **실패**한 기록(서버 me/credentials). 이 파일은 더는 그리지 않는다 —
+  //   그리는 자리는 [내 AI 계정](me-ai.ts headlessAuthWarn)이다. 필드는 남긴다: 이 뷰가 서버 응답을
+  //   그대로 담는 자리이고, 지우면 partition 을 쓰는 다음 화면이 그 신호가 있는 줄도 모르게 된다.
   authFailure?: { at: string | null; label: string; task_id: number } | null;
 }
 
@@ -85,6 +92,7 @@ function partition(oauth: any, creds: any): SvcView {
   const selfServe = (s: any) => !!((s.oauth && oauthMap.has(s.oauth)) || s.token || s.appConnect);
   const connected: any[] = [], available: any[] = [], blockedOAuth: any[] = [], soon: any[] = [];
   for (const s of LOGIN_SERVICES) {
+    if (s.hidden) continue;   // 내려 둔 앱 — 연결돼 있어도 세지 않는다(요약칩 «연결됨»에도 안 들어간다). 상세는 주소로만.
     //  #2243 — 준비 중은 **연결 여부보다 앞선다**. 목록의 뜻이 «라이블리가 이걸 내밀고 있나» 이기 때문이다.
     //   종전엔 connected 가 먼저라, 이미 연결해 둔 사람에겐 준비 중 표시가 영영 안 보였다(구글 실측 2026-08-31).
     //   ⚠ 그렇다고 «연결 안 됨»이 되는 건 아니다 — 카드가 연결 사실을 그대로 말하고(아래 soonConnected),
@@ -195,24 +203,13 @@ function connectedRow(svc: any, v: SvcView, reload: () => void) {
   if (viaToken && cred?.last_used_at) metaBits.push('마지막 사용 ' + relTime(cred.last_used_at));
   else if (viaToken && cred?.updated_at) metaBits.push('연결 ' + relTime(cred.updated_at));
 
-  // #1675 ③ — **이 토큰이 지금 살아 있나.** '마지막 사용'만으로는 성공했는지 실패했는지 알 수 없어서,
-  //  토큰이 폐기돼도 이 화면은 멀쩡해 보였다(전면장애 때 사람이 그 사실을 알 길이 알림 하나뿐이었다).
-  //  실패가 **마지막 등록보다 나중**일 때만 경고한다 — 다시 등록했으면 지난 실패는 이미 해결된 것이다.
-  let authWarn: any = null;
-  if (svc.key === 'claude-headless' && viaToken && v.authFailure) {
-    const failAt = v.authFailure.at ? new Date(v.authFailure.at).getTime() : 0;
-    const setAt = cred?.updated_at ? new Date(cred.updated_at).getTime() : 0;
-    if (failAt > setAt) {
-      authWarn = el('div', { class: 'svc-conn-blurb' },
-        el('span', { class: 'pill pill-warn', text: '인증 실패' }),
-        el('span', { text: ' ' + relTime(v.authFailure.at) + ' · ' + v.authFailure.label
-          + ' — 내 계정으로 실행된 작업이 인증에 실패했습니다. 여기 등록한 토큰이 원인이라면'
-          + ' `claude setup-token` 으로 다시 발급해 [토큰 교체]를 누르세요.'
-          + ' 내 PC(노드)에서 실행된 작업이었다면 그 PC 의 Claude 로그인을 다시 하셔야 합니다 —'
-          + ' 그 경우 이 안내는 30일 뒤 저절로 사라집니다.'
-          + ' 이 실패로 멈춘 예약 작업이 있다면 관리 ▸ 자동화에서 다시 켜세요.' }));
-    }
-  }
+  // ⓘ #1675 의 «헤드리스 인증 실패» 배지가 여기 있었다 — **2026-09-03 에 [내 AI 계정]으로 옮겼다**
+  //  (me-ai.ts headlessAuthWarn). 옮긴 게 아니라 **되살린 것**이다: 배지는 이 함수가 그리는 «연결된
+  //  서비스» 행에 붙어 있었는데, #2243 이 claude-headless 를 LOGIN_SERVICES.hidden 으로 내렸고 아래
+  //  partition 이 hidden 을 네 버킷 전부에서 건너뛴다 → 행이 안 만들어지니 **배지도 아무 데도 안 떴다**
+  //  (주소로 여는 v2/connect.ts 상세에도 없었다). 죽은 코드를 남겨 두면 다음 사람이 «있다» 고 읽는다.
+  //  ⚠ 그래서 이 파일에 그 배지를 되돌리지 마라 — 앱 목록에서 내린 앱은 여기서 그릴 자리가 없다.
+  //   신호(me/credentials 의 headless_auth_failure)는 그대로 한 곳이고, 그리는 자리만 저쪽이다.
 
   box.append(
     el('div', { class: 'svc-conn-row' },
@@ -222,8 +219,7 @@ function connectedRow(svc: any, v: SvcView, reload: () => void) {
           el('span', { text: svc.label }),
           el('span', { class: 'svc-state', text: '연결됨' }),
           metaBits.length ? el('span', { class: 'svc-meta', text: metaBits.join(' · ') }) : null),
-        el('div', { class: 'svc-conn-blurb' }, ...uiText(svc.blurb)),
-        authWarn),
+        el('div', { class: 'svc-conn-blurb' }, ...uiText(svc.blurb))),
       el('div', { class: 'svc-conn-acts' }, ...acts)),
     expand);
   return box;
@@ -427,7 +423,7 @@ export {
   channelRuleExplainer,
   myLoginsSection,
   partition,          // #1719 새 셸 [외부 앱 연결](v2/connect.ts)이 **같은 판정**을 쓴다 — 표도 술어도 두 벌이 되면 어긋난다
-  renderServices,     // #1898 내 프로필 창 [외부 서비스] 탭(v2/me-modal.ts)이 **이 본체를 그대로** 쓴다
+  renderServices,     // 클래식 셸 [외부 서비스 관리]의 본체. 새 셸은 #/connect 가 그 자리다(2026-09-03 내 프로필 창 탭 제거)
   slackChannelPolicyCard,
 };
 export type { SvcView };

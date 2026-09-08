@@ -18,13 +18,14 @@
 //   `codex app-server --listen ws://` 에는 인증 옵션이 없어(0.149.1 실측), 열면 같은 테넌트의 다른
 //   멤버가 남의 codex 를 조종할 수 있다.
 import { tenantSlug } from "./catalog.js";
+import { execTopology } from "../exec-topology.js";   // #2599 T2
 
 /**
  * (순수) 이 배포가 세션 경계 중계를 쓰나. 값이 없으면 셀프호스트 — 호출자가 로컬에서 직접 띄운다.
- *  ⚠ **호출 시점에 읽는다**(memberExecArgv 와 같은 이유 — 모듈 로드 시점 고정은 부팅 순서·테스트에서 깨진다).
+ *  #2599 T2 — 값의 출처는 실행 토폴로지 하나다(env 를 직접 읽지 않는다).
  */
 export function sessionExecConfigured(): boolean {
-  return !!(process.env.LIVELY_SESSION_EXEC || "").trim();
+  return !!execTopology().hooks.sessionExec;
 }
 
 /**
@@ -32,7 +33,7 @@ export function sessionExecConfigured(): boolean {
  *  ⚠ 슬러그가 없으면 **던진다**. 기본값으로 접으면 남의 테넌트 컨테이너에 exec 하게 된다(fail-closed).
  */
 export function sessionExecArgv(): string[] {
-  const raw = (process.env.LIVELY_SESSION_EXEC || "").trim();
+  const raw = execTopology().hooks.sessionExec;
   if (!raw) return [];
   if (!raw.includes("{slug}")) return raw.split(/\s+/);
   const slug = tenantSlug();

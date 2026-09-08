@@ -13,7 +13,7 @@ export type ManagerKind = "mismatch" | "outdated" | "contradiction" | "code_drif
 export interface ManagerRow {
   id: number; key: string; label: string | null; kind: ManagerKind;
   enabled: boolean; priority: number;
-  match_spaces: string[] | null; match_categories: string[] | null; match_types: string[] | null;
+  match_categories: string[] | null; match_types: string[] | null;
   match_provenance: string | null; exclude_names: string[] | null; lookback_days: number | null;
   threshold: number | null; stale_days: number | null;
   action_level: string; criteria_md: string | null;
@@ -24,7 +24,7 @@ export interface ManagerRow {
 }
 
 const COLS = `id, key, label, kind, enabled, priority,
-  match_spaces, match_categories, match_types, match_provenance, exclude_names, lookback_days,
+  match_categories, match_types, match_provenance, exclude_names, lookback_days,
   threshold, stale_days, action_level, criteria_md,
   batch_size, model, effort, requester, last_run_at, last_status, last_summary, note`;
 
@@ -169,7 +169,7 @@ export async function resolveFinding(
 export interface ManagerUpsertInput {
   id?: number; key?: string; label?: string | null; kind?: ManagerKind;
   enabled?: boolean; priority?: number;
-  match_spaces?: unknown; match_categories?: unknown; match_types?: unknown;
+  match_categories?: unknown; match_types?: unknown;
   match_provenance?: string | null; exclude_names?: unknown; lookback_days?: number | null;
   threshold?: number | null; stale_days?: number | null;
   action_level?: string; criteria_md?: string | null;
@@ -204,7 +204,6 @@ export async function upsertManager(input: ManagerUpsertInput, actor?: string, s
     kind,
     pick(input.enabled, cur?.enabled ?? false),
     Number(pick(input.priority, cur?.priority ?? 0)) || 0,
-    input.match_spaces === undefined ? (cur?.match_spaces ?? null) : toList(input.match_spaces),
     input.match_categories === undefined ? (cur?.match_categories ?? null) : toList(input.match_categories),
     input.match_types === undefined ? (cur?.match_types ?? null) : toList(input.match_types),
     input.match_provenance === undefined ? (cur?.match_provenance ?? null) : (input.match_provenance || null),
@@ -226,26 +225,26 @@ export async function upsertManager(input: ManagerUpsertInput, actor?: string, s
   if (cur) {
     await itemsPool.query(
       `UPDATE org_manager SET key=$1, label=$2, kind=$3, enabled=$4, priority=$5,
-              match_spaces=$6, match_categories=$7, match_types=$8, match_provenance=$9, exclude_names=$10,
-              lookback_days=$11, threshold=$12, stale_days=$13, action_level=$14, criteria_md=$15,
-              batch_size=$16, model=$17, effort=$18, requester=$19, note=$20,
-              version=version+1, updated_at=now(), updated_by=$21
-         WHERE id=$22`, [...vals, cur.id]);
+              match_categories=$6, match_types=$7, match_provenance=$8, exclude_names=$9,
+              lookback_days=$10, threshold=$11, stale_days=$12, action_level=$13, criteria_md=$14,
+              batch_size=$15, model=$16, effort=$17, requester=$18, note=$19,
+              version=version+1, updated_at=now(), updated_by=$20
+         WHERE id=$21`, [...vals, cur.id]);
     id = cur.id;
   } else {
     const ins = await itemsPool.query(
       `INSERT INTO org_manager(key, label, kind, enabled, priority,
-         match_spaces, match_categories, match_types, match_provenance, exclude_names,
+         match_categories, match_types, match_provenance, exclude_names,
          lookback_days, threshold, stale_days, action_level, criteria_md,
          batch_size, model, effort, requester, note, created_by, updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$21)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20)
        RETURNING id`, vals);
     id = Number((ins.rows[0] as { id: string | number }).id);
   }
 
   await audit("org_manager", String(id), cur ? "update" : "insert",
     cur ? { key: cur.key, kind: cur.kind, enabled: cur.enabled, action_level: cur.action_level } : null,
-    { key, kind, enabled: vals[3], action_level: vals[13] }, actor, source);
+    { key, kind, enabled: vals[3], action_level: vals[12] }, actor, source);
   return (await getManager(id))!;
 }
 

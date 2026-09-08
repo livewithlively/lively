@@ -2,14 +2,9 @@
 //  소비자: admin.ts(관리 탭 카테고리 설정). WIKI 표면과 무관한 공용 폼이라 별도 모듈로 분리.
 import { el, api, toast } from './core.js';
 import { overlayBox } from './learn.js';
-import { SPACE_LABEL } from './wiki-data.js';
 
-// space 하위 탭 정의(사업·제품·시스템) — 카테고리 관리 화면 공용 상수.
-const SPACE_SUBS = [
-  { key: 'business', label: '사업', href: '#/categories/business' },
-  { key: 'product', label: '제품', href: '#/categories/product' },
-  { key: 'system', label: '시스템', href: '#/categories/system' },
-];
+// ⚠ #1631: 분류축 위의 고정 서랍장(사업·제품·시스템)을 걷어냈다 — SPACE_SUBS 하위 탭도 함께 사라졌다.
+//  분류축은 쓰는 사람의 일에서 나온다(학생·양조장 대표에게 「제품/시스템」은 고를 이유가 없는 칸이었다).
 
 // 이름 → 슬러그 키(소문자 a-z0-9-). 한글 등 비-ASCII 는 제거되므로, 결과가 비면 사용자가 키를 직접 입력해야 한다.
 function slugifyKey(name) {
@@ -27,7 +22,7 @@ function saveRepos(categoryId, repos) {
   });
 }
 
-function openCategoryForm(space, existing, reload, opts) {
+function openCategoryForm(existing, reload, opts) {
   const editing = !!existing;
   const repoOptions = (opts && opts.repos) || [];
   const linkedRepos = new Set((editing && Array.isArray(existing.repos)) ? existing.repos : []);
@@ -63,10 +58,12 @@ function openCategoryForm(space, existing, reload, opts) {
         '이 분류가 사는 코드 레포입니다. 코드 스캔이 추정하는 것과 별개로, 여기서 직접 정합니다.'));
   }
 
-  const back = overlayBox(editing ? '분류 수정' : ('새 분류 · ' + (SPACE_LABEL[space] || space)),
+  const back = overlayBox(editing ? '분류 수정' : '새 분류',
     el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn),
     el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '키' }), keyIn),
-    el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '정의·범위·규칙 (should)' }), shouldIn),
+    el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '정의 — 무엇을 담고 무엇을 담지 않나 (필수)' }), shouldIn,
+      el('p', { class: 'admin-hint', style: 'margin:6px 0 0' },
+        '이 분류로 무엇이 들어오고 무엇은 옆 분류로 가는지 적어 주세요. 이 글이 없으면 분류가 이름의 어감으로만 판정합니다. 400~600자 권장.')),
     el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '설명 (선택)' }), descIn),
     repoField,
     el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
@@ -87,8 +84,15 @@ function openCategoryForm(space, existing, reload, opts) {
       } else {
         const key = (keyIn.value.trim() || slugifyKey(name));
         if (!key) { saveBtn.disabled = false; keyIn.focus(); toast('키를 입력하세요(이름에 영문이 없으면 자동 생성이 안 됩니다)', true); return; }
+        //  정의는 **만들 때 필수**다(#1631) — 서버도 40자 하한으로 막지만, 여기서 먼저 막아야
+        //   사람이 «왜 실패했는지» 를 그 칸 옆에서 안다(서버 오류 토스트는 어느 칸인지 안 알려 준다).
+        if (shouldIn.value.trim().length < 40) {
+          saveBtn.disabled = false; shouldIn.focus();
+          toast('정의를 40자 이상 적어 주세요 — 무엇을 담고 무엇을 담지 않는지가 있어야 분류가 됩니다', true);
+          return;
+        }
         const r = await api('/api/ui/categories', { method: 'POST', body: JSON.stringify({
-          space, key, name, should: shouldIn.value.trim() || undefined, description: descIn.value.trim() || undefined,
+          key, name, should: shouldIn.value.trim(), description: descIn.value.trim() || undefined,
         }) });
         // 레포는 생성 응답의 id 로 이어 저장. id 를 못 받으면(응답 형태 변화) 분류 생성 자체는 성공했으므로
         //  실패로 되돌리지 않고 레포만 건너뛴다 — 사용자는 [수정]에서 다시 지정할 수 있다.
@@ -104,4 +108,4 @@ function openCategoryForm(space, existing, reload, opts) {
   nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) go(); });   // IME 가드(#505)
 }
 
-export { SPACE_SUBS, openCategoryForm, slugifyKey };
+export { openCategoryForm, slugifyKey };

@@ -48,9 +48,9 @@ async function api(path: string): Promise<any> {
 }
 const clamp = (v: number, lo: number, hi: number) => v < lo ? lo : v > hi ? hi : v;
 
-// ── 팔레트 — 카테고리 key → 색. space(제품/사업/시스템)로 색 계열을 나눠 공간이 의미를 갖게. ──
-const SPACE_ORDER = ['product', 'business', 'system'];
-const SPACE_LABEL: any = { product: '제품', business: '사업', system: '시스템' };
+// ── 팔레트 — 카테고리 key → 색. ──
+//  ⚠ #1631: 종전엔 space(제품/사업/시스템)로 색 계열과 배치 순서를 갈랐다. 그 축을 걷어냈으므로
+//   배치·범례 순서는 **크기(노드 수) 순**이다 — 큰 영역이 먼저 자리를 잡는 게 지도로도 읽기 쉽다.
 const CAT_COLOR: any = {
   'canonical-context-store': '#16C79A',   // 컨텍스트 저장소 — 브랜드 에메랄드(이 제품의 본거지)
   'workflow-standardization': '#3B82F6',  // AI 워크플로우 표준화 — 블루
@@ -108,7 +108,7 @@ async function main() {
 function build(nodes: any[], edges: any[]) {
   NODES = nodes.map((n) => ({
     name: n.name, title: n.title || n.name, cat: n.category || NO_CAT,
-    catName: n.category_name || n.category || '미분류', space: n.space || 'system',
+    catName: n.category_name || n.category || '미분류',
     deg: 0, x: 0, y: 0, vx: 0, vy: 0, r: 5, color: catColor(n.category),
   }));
   for (const n of NODES) byName.set(n.name, n);
@@ -125,14 +125,13 @@ function build(nodes: any[], edges: any[]) {
   }
   for (const n of NODES) n.r = nodeR(n.deg);
 
-  // 카테고리 묶기 + space 순 정렬(공간 배치·범례 순서).
+  // 카테고리 묶기 + 크기 순 정렬(공간 배치·범례 순서).
   const cmap = new Map<string, any>();
   for (const n of NODES) {
-    if (!cmap.has(n.cat)) cmap.set(n.cat, { key: n.cat, name: n.catName, space: n.space, color: n.color, nodes: [] });
+    if (!cmap.has(n.cat)) cmap.set(n.cat, { key: n.cat, name: n.catName, color: n.color, nodes: [] });
     cmap.get(n.cat)!.nodes.push(n);
   }
-  CATS = [...cmap.values()].sort((a, b) =>
-    (SPACE_ORDER.indexOf(a.space) - SPACE_ORDER.indexOf(b.space)) || (b.nodes.length - a.nodes.length));
+  CATS = [...cmap.values()].sort((a, b) => (b.nodes.length - a.nodes.length) || String(a.key).localeCompare(String(b.key)));
 
   layoutAnchors();
   initPositions();
@@ -143,7 +142,7 @@ function build(nodes: any[], edges: any[]) {
   else { updateGeometry(); fitInitial(); paint(); alpha = 1; ensureRunning(); }
 }
 
-// 영역 앵커를 큰 링에 배치 — 인접 반경 합에 비례한 간격(겹침 방지), space 순.
+// 영역 앵커를 큰 링에 배치 — 인접 반경 합에 비례한 간격(겹침 방지), 크기 순.
 function layoutAnchors() {
   const n = CATS.length;
   if (n === 1) { CATS[0].ax = 0; CATS[0].ay = 0; return; }
@@ -386,15 +385,12 @@ function topBar() {
     el('button', { class: 'atlas-btn', type: 'button', title: '이 창 닫기', onclick: () => window.close() }, el('span', { class: 'ic', text: '✕' }), '닫기'));
 }
 
-// ── 범례(좌하단, space 그룹) — 클릭=영역 단독 강조 토글. ──
+// ── 범례(좌하단) — 클릭=영역 단독 강조 토글. ──
 function legend() {
-  const box = el('div', { class: 'atlas-legend' }, el('h2', { text: '도메인' }));
-  const bySpace = new Map<string, any[]>();
-  for (const c of CATS) { if (!bySpace.has(c.space)) bySpace.set(c.space, []); bySpace.get(c.space)!.push(c); }
-  for (const sp of SPACE_ORDER) {
-    const list = bySpace.get(sp); if (!list) continue;
-    const grp = el('div', { class: 'leg-space' }, el('div', { class: 'leg-space-h', text: SPACE_LABEL[sp] || sp }));
-    for (const c of list) {
+  const box = el('div', { class: 'atlas-legend' }, el('h2', { text: '분류축' }));
+  {
+    const grp = el('div', { class: 'leg-space' });
+    for (const c of CATS) {
       const rowBtn = el('button', { class: 'leg-row', type: 'button', 'data-cat': c.key },
         el('span', { class: 'leg-swatch', style: `background:${c.color};color:${c.color}` }),
         el('span', { class: 'leg-name', text: c.name }),

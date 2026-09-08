@@ -52,8 +52,7 @@ async function renderHomeSurface(box: HTMLElement, ctx: any) {
     openWikiPeek(e.name, { onRefresh: refresh, originEl: rowEl });
   };
 
-  const bySpace = ctx.bySpace ? ctx.bySpace() : { business: [], product: [], system: [] };
-  const allCats = ['business', 'product', 'system'].flatMap((sk) => (bySpace[sk] || []));
+  const allCats: any[] = (ctx.cats ? ctx.cats() : []) || [];
   const myIds = new Set(((state.me && (state.me as any).team_category_ids) || []).map((x: any) => String(x)));
 
   // ── 히어로 — "뭐부터 건드려야 할지"의 답: 검색이라는 큰 문 하나 + 새 페이지. 아래 mono 현황 한 줄. ──
@@ -102,7 +101,7 @@ async function renderHomeSurface(box: HTMLElement, ctx: any) {
     const cnt = Number(c.knowledge_count);
     const otherTeam = c.owner_team_name && !myIds.has(String(c.id)) ? c.owner_team_name : '';
     const card = el('div', { class: 'wk-ccard' + (compact ? ' compact' : ''), role: 'link', tabindex: '0', title: c.name || c.key },
-      wkAurora(String(c.key || c.id), c.space, { cls: 'wk-ccard-cover', watermark: seedIcon || (Array.from(String(c.name || c.key || '?').trim())[0] || '').toUpperCase() }),
+      wkAurora(String(c.key || c.id), { cls: 'wk-ccard-cover', watermark: seedIcon || (Array.from(String(c.name || c.key || '?').trim())[0] || '').toUpperCase() }),
       el('div', { class: 'wk-ccard-body' },
         icEl,
         el('div', { class: 'wk-ccard-main' },

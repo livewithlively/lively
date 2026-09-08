@@ -201,7 +201,6 @@ export async function initClassifierRegistry(pool: Pool): Promise<void> {
       --  target: unmapped=미분류만(기본) · low_confidence=제안 신뢰도 낮은 것 재분류 · both
       target TEXT NOT NULL DEFAULT 'unmapped',
       confidence_below REAL,
-      match_spaces      TEXT[],
       match_types       TEXT[],
       match_provenance  TEXT,
       match_systems     TEXT[],
@@ -234,6 +233,8 @@ export async function initClassifierRegistry(pool: Pool): Promise<void> {
     })}
     CREATE UNIQUE INDEX IF NOT EXISTS org_classifier_key_uq ON org_classifier(key);
     CREATE INDEX IF NOT EXISTS org_classifier_enabled_idx ON org_classifier(enabled, priority DESC, id);
+    -- #1631: 분류축의 space 를 걷어냈으므로 '그 space 로 좁히기'도 걷는다. 좁히려면 candidate_categories 를 쓴다.
+    ALTER TABLE org_classifier DROP COLUMN IF EXISTS match_spaces;
   `);
 
   // ── org_classifier_seen — 분류기가 **이미 판정한** 지식(#1419 T4). org_distiller_seen 과 같은 이유로 존재한다. ──
@@ -282,7 +283,6 @@ export async function initManagerRegistry(pool: Pool): Promise<void> {
       enabled  BOOLEAN NOT NULL DEFAULT false,
       priority INT NOT NULL DEFAULT 0,
       -- ① 스코프: 무엇을 검사하나
-      match_spaces     TEXT[],
       match_categories TEXT[],
       match_types      TEXT[],
       match_provenance TEXT,
@@ -314,6 +314,8 @@ export async function initManagerRegistry(pool: Pool): Promise<void> {
     })}
     CREATE UNIQUE INDEX IF NOT EXISTS org_manager_key_uq ON org_manager(key);
     CREATE INDEX IF NOT EXISTS org_manager_enabled_idx ON org_manager(enabled, priority DESC, id);
+    -- #1631: 위와 같은 이유. 좁히려면 match_categories 를 쓴다(이미 있다).
+    ALTER TABLE org_manager DROP COLUMN IF EXISTS match_spaces;
   `);
 
   // ── org_manager_finding — 관리기가 낸 **발견**. 사람이 처리하는 일감 큐. ──
@@ -475,6 +477,23 @@ export async function initIngestPolicyAndDistillers(pool: Pool): Promise<void> {
       PRIMARY KEY(distiller_id, source_id));
     CREATE INDEX IF NOT EXISTS org_distiller_seen_task_idx ON org_distiller_seen(task_id) WHERE task_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS org_distiller_seen_src_idx ON org_distiller_seen(source_id);
+  `);
+
+  // ── org_stranded_seen — 어느 레인 스코프에도 안 드는(방치) 자료의 판정 기록. ──
+  //  왜 별 테이블인가: org_distiller_seen 은 (distiller_id, source_id) 가 PK 이고 distiller_id 가
+  //  org_distiller 를 FK 로 참조한다. 방치 배치는 레인이 없어(distillerId=null) 그 테이블에 못 쓴다 —
+  //  그래서 판정 기록이 아예 없었고, LLM 이 skip 한 자료가 **매 tick 같은 50건으로 다시 올라왔다.**
+  //  레인 인박스는 org_distiller_seen 이 이 병을 막는데(실측 64% 재독), 방치 배치만 무방비였다.
+  //  실측(2026-09-04): 방치 배치가 증류 실행시간의 77% 를 쓰고 그중 41% 가 산출 0건 —
+  //  구성비 대부분이 '봤는데 안 만든' 자료의 재독이었고, 잔량(backlog)이 50 에서 줄지 않았다.
+  //  ⚠ seen_at 을 source.updated_at 과 비교하는 수렴 규약은 org_distiller_seen 과 동일하다(내용이
+  //   바뀌면 다시 올라오고, 재판정 배치가 seen_at 을 now() 로 갱신해 다음 배치엔 다시 빠진다).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_stranded_seen(
+      source_id INT PRIMARY KEY,
+      task_id BIGINT,
+      seen_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS org_stranded_seen_task_idx ON org_stranded_seen(task_id) WHERE task_id IS NOT NULL;
   `);
 
   // ── 사전 필터(#1289 후속) — LLM 에 먹이기 **전에** 서버가 스레드를 걸러낸다. ──

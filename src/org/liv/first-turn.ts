@@ -19,7 +19,7 @@ export interface FirstTurnInput {
   firstOrder: string | null;                        // 첫 지시로 고른 문장
   decisions: Array<{ what: string; why?: string }>; // 온보딩이 남긴 결정(반복 주기·공유 범위 등)
   uploads: { total: number; kinds: Array<{ name: string; n: number }>; names: string[]; forms: Array<{ skel: string; names: string[] }> };
-  categories: Array<{ name: string; space: string }>;
+  categories: Array<{ name: string }>;
   collectors: Array<{ label: string; preset_key: string; enabled: boolean; sync_interval_sec: number }>;
   aiHarnesses: string[];                            // 로그인 확인된 하네스
   harness: string;                                  // 이 세션이 도는 하네스

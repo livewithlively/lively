@@ -160,6 +160,24 @@ function git(args, cwd) {
   return { ok: r.status === 0, out: (r.stdout || "").trim(), err: (r.stderr || "").trim() };
 }
 function isRepo(p) { return !!p && git(["rev-parse", "--git-dir"], p).ok; }
+// 표적 스테일 등록 정리(#3678) — 목표 경로의 등록 · 목표 브랜치를 쥔 등록 중 «경로 없음 + 부모 있음»(정말 지워진 것)만
+//  `worktree remove --force`. kit/cli/repo-worktree-core.mjs clearStaleRegistrations 와 같은 규칙(이 파일은 단독 배포라 인라인).
+function clearStaleRegistrations(rpath, wtPath, br) {
+  const l = git(["worktree", "list", "--porcelain"], rpath);
+  if (!l.ok) return;
+  const regs = []; let cur = null;
+  for (const raw of l.out.split("\n")) {
+    const line = raw.trim();
+    if (line.startsWith("worktree ")) { cur = { path: line.slice("worktree ".length), branch: null }; regs.push(cur); }
+    else if (cur && line.startsWith("branch refs/heads/")) cur.branch = line.slice("branch refs/heads/".length);
+  }
+  const gone = (p) => !fs.existsSync(p) && fs.existsSync(path.dirname(p));
+  const real = (p) => { try { return path.join(fs.realpathSync.native(path.dirname(p)), path.basename(p)); } catch { return path.resolve(p); } };
+  for (const w of regs) {
+    if (!(real(w.path) === real(wtPath) || (br && w.branch === br)) || !gone(w.path)) continue;
+    git(["worktree", "remove", "--force", w.path], rpath);
+  }
+}
 // 재사용 레포를 현재 브랜치 upstream 으로 fast-forward(best-effort·비파괴): dirty·무upstream·갈라짐·오프라인이면 skip.
 //  무인이라 자동 머지·리베이스·충돌 금지 → ff-only 만. @{u} → 기본 클론(main)·직접입력 피처브랜치 모두 브랜치 존중.
 function refreshRepo(p) {
@@ -233,13 +251,17 @@ for (const spec of repoSpecs) {
   } else {
     refreshRepo(rpath);  // 재사용 클론은 새 워크트리 자르기 전 upstream 으로 최신화(best-effort)
   }
+  // gc 의 자동 워크트리 prune 을 끈다(#3678) — 공유 base 에서 «경로 없는» 등록은 이 프로세스가 못 보는 살아 있는 워크트리일 수 있다. 멱등·best-effort.
+  git(["config", "gc.worktreePruneExpire", "never"], rpath);
   if (spec.worktree) {
     const wtPath = expect;
     if (!fs.existsSync(wtPath)) {
       log(`worktree 생성: ${wtPath} (브랜치 ${br})`);
-      // 사라진 워크트리의 등록이 이 브랜치를 계속 쥐고 있지 않게 먼저 턴다(#932) — prunable 등록도 점유로 세서
-      //  -b 도 attach 도 막는다. 살아있는 등록엔 무해.
-      git(["worktree", "prune"], rpath);
+      // 사라진 워크트리의 등록이 이 브랜치를 계속 쥐고 있지 않게 **그 등록만** 먼저 턴다(#932 → #3678) — prunable 등록도
+      //  점유로 세서 -b 도 attach 도 막는다. ⚠ `git worktree prune` 은 쓰지 않는다: 이 프로세스에서 안 보이는 경로(다른
+      //  컨테이너에서 살아 있는 워크트리)까지 «없다» 로 지워, 공유 base 에서 남의 admin 이 날아가고 같은 basename 으로
+      //  재생성된 admin 을 둘이 가리키는 사고가 났다(2026-09-08). «경로 없음 + 부모 있음» 만 정말 지워진 것으로 본다.
+      clearStaleRegistrations(rpath, wtPath, br);
       // 같은 브랜치가 이미 다른 worktree 에 있으면 -b 가 실패 → 기존 브랜치 attach 폴백.
       let w = git(["worktree", "add", wtPath, "-b", br], rpath);
       if (!w.ok) w = git(["worktree", "add", wtPath, br], rpath);

@@ -35,9 +35,48 @@ lvly_session_env "$_u" "$_home" --inherit-path --read-token-file
 # 작업 디렉터리 — 세션 spawn 은 '--cwd <dir>' 로 넘어온다(#524: 게이트웨이가 tmux -c 로 멤버 700 홈에
 #  chdir 못 해 'chdir(2) failed: Permission denied' 반복 → 여기서 **멤버 uid** 로 cd). 파일 브리지 호출
 #  (--cwd 없음)은 홈에서 실행(절대경로 op 라 cwd 무관). 접근 불가하면 홈 → / 폴백.
-_cwd="$HOME"
-if [ "${1:-}" = "--cwd" ]; then _cwd="${2:-$HOME}"; shift 2; fi
+_cwd="$HOME"; _session=0
+if [ "${1:-}" = "--cwd" ]; then _cwd="${2:-$HOME}"; shift 2; _session=1; fi
+if [ "$#" -eq 0 ]; then _session=1; fi   # 무인자 = 아래에서 로그인 셸을 띄우는 사람 세션
 cd "$_cwd" 2>/dev/null || cd "$HOME" 2>/dev/null || cd / || true
+
+# ── MCP 등록 자가치유를 세션보다 **앞으로** (#3591) ───────────────────────────
+#  왜 여기인가: 되살리는 자리가 SessionStart 훅(session-preload → self-update.mjs)뿐이라 **구조적으로 한
+#   세션 늦다**. 훅은 정의상 하네스가 설정을 스냅샷한 뒤에 도니, 그 시점에 ~/.claude.json 의 mcpServers 가
+#   비어 있으면 그 세션은 끝까지 lively 툴 0개다. 세션보다 먼저 도는 등록 경로는 provision-member.sh 의
+#   register-clients.sh 하나인데 그건 **멤버 최초 프로비저닝** 때만 돈다 — 컨테이너 재생성 때는 안 돈다.
+#   그래서 홈의 설정이 어떤 이유로든 비면(하네스·사고·사람) 그 컨테이너의 **첫 세션은 반드시** 툴 0개다.
+#   여기가 그 사이를 메우는 유일한 자리다: 하네스 exec 직전 = 설정 스냅샷 직전.
+#   실측 2026-09-07(매니지드 lively-46e3): 컨테이너 기동과 같은 초에 뜬 세션이 96초 뒤에야 등록을 받았다.
+#
+#  ★ 순서가 곧 비용이다 — **셸 판정 먼저, node 는 되살릴 때만.** 되살릴 게 있는 세션은 실측상 홈당 6일에
+#   한 번꼴인데(T0 #3595), node 를 무조건 띄우면 그 드문 1회를 위해 **매 세션** node 진입값을 낸다.
+#   매니지드 gVisor 실측(동일 조건 40회 루프 × 3세트 최소값, 기준선 대비 순증):
+#     · 아래 셸 판정 없이 node 무조건  → **+83ms**
+#     · 아래 셸 판정 있음(정상 세션)   → **+14ms**  ← 지금 이 코드
+#   (grep 이 3ms 가 아니라 14ms 인 건 홈이 9p 마운트라서다 — 53KB 읽기가 tmpfs 보다 비싸다.)
+#   ⚠ 이 판정식은 self-update 의 reconcile 이 보는 것과 **같은 기준**이다 — 최상위 mcpServers 의 `lively`
+#    키 하나(session-preload.mjs 의 claudeMcpMissing() 판정식과 동형). 그쪽이 바뀌면 여기도 바꾼다.
+#   ⚠ 애매하면 **되살리는 쪽**으로 기운다: 못 읽거나 형식이 달라 못 찾으면 node 를 띄운다(83ms 를 헛써도
+#    무해). 반대로 있는데 없다고 못 읽는 오탐이 나도 무회귀다 — 종전 SessionStart 훅이 다음 세션에 여전히
+#    잡는다. 이 자리는 그 자가치유를 **한 세션 앞당기는 것**이지 대체하는 게 아니다.
+#
+#  ⚠ **세션 표면에만** 태운다(--cwd 또는 무인자). 파일 브리지·브로커 호출(`box-spawn node …`)은 건드리지 않는다.
+#  ⚠ 키트(멤버 홈, 게이트웨이 배포)와 이 래퍼(/opt, 이미지 배포)는 **주기가 다르다**. 그래서 `--mcp-only`
+#   를 아는 키트일 때만 부른다 — 모르는 구 키트에 그 인자를 주면 그게 main() 으로 떨어져 다운로드·설치를
+#   **세션 시작 경로에서 동기로** 돌린다(분 단위 블로킹). 이 버전 가드는 위 셸 판정 뒤에 있어도 반드시 남는다.
+#  fail-soft — 실패·타임아웃은 삼킨다(종전 동작 그대로: 훅이 다음 세션에 되살린다).
+if [ "$_session" = 1 ] && [ -f "$HOME/.claude.json" ] \
+   && ! grep -q '"lively"[[:space:]]*:' "$HOME/.claude.json" 2>/dev/null; then
+  _su="$HOME/.lively/hooks/self-update.mjs"
+  if [ -f "$_su" ] && command -v node >/dev/null 2>&1 && grep -q -- '--mcp-only' "$_su" 2>/dev/null; then
+    if command -v timeout >/dev/null 2>&1; then
+      timeout 10 node "$_su" --mcp-only >/dev/null 2>&1 || true
+    else
+      node "$_su" --mcp-only >/dev/null 2>&1 || true
+    fi
+  fi
+fi
 
 # 하네스가 오면 그걸, 없으면(셸 세션) 인터랙티브 로그인 셸을 exec.
 if [ "$#" -gt 0 ]; then

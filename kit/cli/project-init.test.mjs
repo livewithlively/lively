@@ -55,6 +55,14 @@ const server = http.createServer((req, res) => {
   });
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
+// ⚠ **실 HOME 을 보지 않게** LIVELY_HOME 도 샌드박스로 돌린다(#2617). 이 파일은 인프로세스 테스트라
+//  lively-mcp-local.mjs 가 이 프로세스의 env·홈을 그대로 읽는데, 그 모듈의 gateway() 는 **파일 우선**이다
+//  (#916 이 token() 에 세운 '파일이 SoT' 판정을 주소에도 적용 — env 는 셸·tmux 가 굳혀 물려주는 캐시라
+//   둘이 갈리면 파일이 맞다). 그래서 LIVELY_HOME 을 안 바꾸면 실 `~/.lively/gateway-url` 이 아래 픽스처
+//  주소를 이겨 **테스트가 실 게이트웨이로 나간다** — 실측 2026-09-03: HostEffects 가
+//  `https://<실 게이트웨이>/api/ui/v6/projects/find-by-origin` 을 차단해서야 드러났다(가드가 없었다면 조용히 나갔다).
+//  ⚠ 아래 import 보다 **먼저** 세워야 한다 — 그 모듈은 LIVELY_HOME 을 로드 시점에 굳힌다.
+process.env.LIVELY_HOME = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-init-home-"));
 process.env.LIVELY_GATEWAY_URL = `http://127.0.0.1:${server.address().port}`;
 process.env.LIVELY_TOKEN = "test-token";
 

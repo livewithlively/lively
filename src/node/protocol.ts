@@ -12,6 +12,15 @@ import type { WorkerRunSnapshot } from "../apps/worker-host.js";
 export const NODE_WS_PATH = "/node/ws";
 export const PROTO_VER = 1;
 
+/**
+ * 노드 채널 close 코드 — **이 노드가 게이트웨이 자신이 도는 박스다**(#2592). 종결 코드다: 재연결해도 결과가 같다.
+ *
+ * 게이트웨이 쪽 사연은 self-node.ts 머리말. 여기(공유 프로토콜)에 두는 이유는 **끊는 쪽과 끊기는 쪽이 같은 값을
+ *  봐야 하기 때문**이다 — 에이전트는 이 코드를 받으면 백오프 재연결 루프를 돌지 않고 사유를 남기고 끝낸다.
+ *  4426(proto-ver-mismatch)과 같은 부류이고, 4462(node-offline, 일시 상태)와는 반대다.
+ */
+export const CLOSE_SELF_NODE = 4409;
+
 // 게이트웨이 주소 → 노드 채널 WSS. 에이전트가 쓰지만 **여기** 두는 이유: agent.ts 는 임포트 즉시
 //  환경변수를 검사하고 종료하는 실행 스크립트라 테스트가 못 붙는다(그래서 이 규칙이 오래 안 지켜졌다).
 //  ⚠ pathname 을 **덮어쓰면 안 된다**(실측 #1541): 서브패스로 서비스되는 게이트웨이
@@ -188,4 +197,21 @@ export function parseMsg<T>(raw: unknown): T | null {
 //  게이트웨이 로컬 dir 판정이라 원격 경로에 적용하지 않는다(멤버 PC 프라이버시 기본, D2).
 export function nodeSessionVisible(s: Pick<SessionInfo, "owner" | "invites">, viewer: string): boolean {
   return s.owner === viewer || (s.invites || []).includes(viewer);
+}
+
+// 스냅샷 세션 → 목록 행 투영(#2533). 오프라인 노드의 세션은 마지막 스냅샷으로 계속 보여주되(#1834),
+//  **라이브 신호는 전부 접는다** — agentState·attached 만이 아니라 working·awaiting 도.
+//  working/awaiting 은 화면에서 접속 기반 판정을 이기는 신호인데(#1819·#1221, web/session-status.ts), 그 특권은
+//  노드가 붙어 3초 push 로 신선할 때의 것이다. 끊긴 노드의 값은 얼어붙은 과거라, awaiting=true 를 그대로 실으면
+//  **아무도 답할 수 없는 세션이 '확인 필요'로 «지금 볼 것» 에 영구 고정**된다(#2533 실측: 절전 노드의 세션이
+//  이틀 전 값으로 그랬다 — 누르면 4462 재연결만 반복). 노드가 다시 붙으면 다음 push 가 실제 값을 되살린다.
+export function projectNodeSession(s: SessionInfo, online: boolean, viewer: string): SessionInfo {
+  return {
+    ...s,
+    owned: s.owner === viewer,
+    agentState: online ? s.agentState : "offline",
+    attached: online ? s.attached : false,
+    working: online ? s.working : false,
+    awaiting: online ? s.awaiting : false,
+  };
 }

@@ -5,17 +5,21 @@
 //  ⚠ 두 패널은 셸의 재렌더 레지스트리를 쓰지 않고 **자기 지역 rerender 클로저**로 자기를 다시 그린다
 //   (feed-targets 는 전용 GET /api/ui/feed-targets 로 자체 조회 — /api/ui/org 페이로드를 오염시키지 않는다).
 import { api, busy, cardHead, el, toast, uiText } from './core.js';
-import { sectionHead } from './admin-widgets.js';
+import { embeddedHost, sectionHead } from './admin-widgets.js';
 
 // #976 위키 아웃바운드(피드) 패널 — 정본 지식 → 노션 등 '지식 피드' DB 카드 투영. 커넥터(인바운드)의 역방향.
 //  피드 목적지(feed_target) 목록 + 카테고리 N:M 매핑(발행 게이트) + all_categories + 새 피드 부트스트랩/등록.
 //  전용 GET /api/ui/feed-targets 로 자체 조회(연결 패널처럼) — /api/ui/org 페이로드 오염 안 시킴.
 async function feedTargetsEditor(detail, data) {
   const meaning = data.meaning && data.meaning['feed-targets'];
-  busy(detail, sectionHead('위키 아웃바운드(피드)', '우리 위키의 지식을 외부 도구로 내보냅니다. 어떤 카테고리를 어디로 보낼지 정합니다.', meaning), el('div', { class: 'card' }, el('p', { class: 'admin-hint' }, ...uiText('피드 목적지 불러오는 중…'))));
+  //  #2556 — 노션 앱 상세(새 셸 [외부 앱 연결] ▸ 노션 ▸ 내보내기)가 이 패널을 자기 칸 안에 편다. 그 칸은 이미
+  //   제목을 갖고 있으므로 머리만 접는다(화면은 둘, **로직·저장경로는 하나**). 표식은 호스트에 붙인다 —
+  //   인자로 받으면 이 패널이 저장 뒤 자기를 다시 그릴 때(rerender·rerenderPanel) 그 값이 떨어져 머리가 되살아난다.
+  const head = () => (embeddedHost(detail) ? [] : [sectionHead('위키 아웃바운드(피드)', '우리 위키의 지식을 외부 도구로 내보냅니다. 어떤 카테고리를 어디로 보낼지 정합니다.', meaning)]);
+  busy(detail, ...head(), el('div', { class: 'card' }, el('p', { class: 'admin-hint' }, ...uiText('피드 목적지 불러오는 중…'))));
   let res;
   try { res = await api('/api/ui/feed-targets'); }
-  catch (e) { detail.replaceChildren(sectionHead('위키 아웃바운드(피드)', '우리 위키의 지식을 외부 도구로 내보냅니다. 어떤 카테고리를 어디로 보낼지 정합니다.', meaning), el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '로드 실패: ' + e.message }))); return; }
+  catch (e) { detail.replaceChildren(...head(), el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '로드 실패: ' + e.message }))); return; }
   const targets = res.targets || [];
   const categories = res.categories || [];
   const rerender = () => { void feedTargetsEditor(detail, data); };
@@ -30,15 +34,17 @@ async function feedTargetsEditor(detail, data) {
     catch (e) { toast(e.message, true); }
     drainAll.disabled = false;
   });
+  //  #2556 — 이 칸이 노션 앱 상세에도 뜨면서 관리자 말(투영·정본·authored·인바운드)이 그대로 사용자 앞에 왔다.
+  //   사실은 그대로 두고 말만 바꾼다: 무엇이 어디로 가는지 · 되돌아오지는 않는지 · 사람 페이지는 안전한지.
   body.append(el('p', { class: 'admin-hint' },
-    el('span', { text: '우리 정본 지식(authored)을 노션 등 외부 ‘지식 피드’ DB에 카드로 투영합니다. 읽기전용·단방향 — 전체 내용은 Lively가 정본. 사람 페이지는 건드리지 않고 전용 피드 DB에만 카드를 올립니다. ' }),
-    el('span', { text: '상시 갱신은 스케줄러 잡 ' }), el('b', { text: 'push-wiki-notion' }), el('span', { text: '(관리탭 ▸ 자동화)에서 켭니다.  ' }), drainAll));
+    el('span', { text: '우리가 쓴 지식을 노션에 만든 전용 피드 DB로 보내 카드로 쌓습니다. 보내기만 하고 되받지는 않으며, 원본은 라이블리에 남습니다. 사람이 쓰는 노션 페이지는 건드리지 않고 이 피드 DB에만 올립니다. ' }),
+    el('span', { text: '바뀔 때마다 저절로 보내려면 자동화의 ' }), el('b', { text: 'push-wiki-notion' }), el('span', { text: ' 잡을 켜세요.  ' }), drainAll));
 
   if (!targets.length) body.append(el('p', { class: 'admin-hint' }, ...uiText('아직 등록된 피드가 없습니다. 아래에서 새 피드를 만드세요.')));
   for (const t of targets) body.append(feedTargetCard(t, categories, rerender));
   body.append(newFeedForm(rerender));
 
-  detail.replaceChildren(sectionHead('위키 아웃바운드(피드)', '우리 위키의 지식을 외부 도구로 내보냅니다. 어떤 카테고리를 어디로 보낼지 정합니다.', meaning), body);
+  detail.replaceChildren(...head(), body);
 }
 
 // 피드 목적지 카드 1개 — 상태·카드수·노션 링크 + all_categories 토글 + 카테고리 매핑 + 삭제.
@@ -127,7 +133,9 @@ function newFeedForm(rerender) {
 async function projectOutboundEditor(detail, data) {
   const meaning = data.meaning && data.meaning['project-outbound'];
   const canEdit = !!data.canEdit;
-  busy(detail, sectionHead('프로젝트 아웃바운드', '우리 프로젝트와 과업의 변경을 외부 협업 도구로 내보냅니다.', meaning), el('div', { class: 'card' }, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…'))));
+  //  #2556 — 클릭업 앱 상세 ▸ 내보내기 칸에서도 편다. feedTargetsEditor 와 같은 규약(머리만 접는다).
+  const head = () => (embeddedHost(detail) ? [] : [sectionHead('프로젝트 아웃바운드', '우리 프로젝트와 과업의 변경을 외부 협업 도구로 내보냅니다.', meaning)]);
+  busy(detail, ...head(), el('div', { class: 'card' }, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…'))));
   let jobs: any[] = [];
   try { const cron = await api('/api/ui/cron'); jobs = (cron && cron.jobs) || []; } catch (e) { /* 크론 로드 실패 — 빈 목록으로 진행 */ }
   const pushClickup = jobs.find((j) => j.id === 'push-clickup');
@@ -136,7 +144,8 @@ async function projectOutboundEditor(detail, data) {
   const rerender = () => { void projectOutboundEditor(detail, data); };
 
   const body = el('div', {});
-  body.append(el('p', { class: 'admin-hint' }, ...uiText('우리 프로젝트·과업 편집(라이블리 웹/MCP)을 외부 PM 도구에 미러로 반영합니다(아웃바운드 push). 커넥터(인바운드 싱크)의 역방향 — 우리 DB가 master, 외부는 미러. 소스별로 켜고 끕니다.')));
+  //  #2556 — 클릭업 앱 상세에도 뜨는 칸이라 관리자 말(미러·아웃바운드 push·master)을 걷었다. 사실은 그대로다.
+  body.append(el('p', { class: 'admin-hint' }, ...uiText('라이블리에서 프로젝트와 과업을 고치면 그 변경을 외부 협업 도구에도 그대로 옮깁니다. 원본은 라이블리에 있고 외부에는 사본이 생깁니다. 도구마다 따로 켜고 끕니다.')));
 
   const table = el('table', { class: 'fields-table' });
   table.append(el('tr', {}, el('th', { text: '소스' }), el('th', { text: '상태' }), el('th', { text: '설정' })));
@@ -146,7 +155,7 @@ async function projectOutboundEditor(detail, data) {
   const toggle = el('button', { class: 'btn btn-ghost btn-sm', text: enabled ? '끄기' : '켜기' });
   if (!canEdit) toggle.disabled = true;
   toggle.addEventListener('click', async () => {
-    if (!enabled && !container) { toast('먼저 컨테이너 리스트를 설정하세요 (외부 자료 수집 ▸ ClickUp)', true); return; }
+    if (!enabled && !container) { toast('먼저 수집 설정에서 ClickUp 컨테이너 리스트를 고르세요.', true); return; }
     toggle.disabled = true;
     try {
       await api('/api/ui/cron', { method: 'POST', body: JSON.stringify({ id: 'push-clickup', action: 'connector_push', interval_sec: (pushClickup && pushClickup.interval_sec) || 120, params: { system: 'clickup' }, enabled: !enabled }) });
@@ -158,19 +167,26 @@ async function projectOutboundEditor(detail, data) {
     el('td', {}, el('span', { class: 'pill' + (enabled ? ' pill-ok' : ''), text: enabled ? '켜짐 · 2분마다' : '꺼짐' }), ' ', toggle),
     el('td', {},
       container ? el('span', { class: 'mini-meta', text: '컨테이너 리스트: ' + container }) : el('span', { class: 'pill', text: '⚠ 컨테이너 미설정' }),
-      el('span', { text: '  ' }), el('a', { href: '#/system/connectors', text: '커넥터 설정 →' }))));
+      //  종전 링크는 #/system/connectors 였다 — 그 화면은 #1419 에서 없어졌고 옛 URL 이 리다이렉트로 여기 오고 있었다.
+      //   앱 상세에서도 뜨는 칸이라 한 번 더 튕기지 않게 도착지를 바로 가리킨다.
+      el('span', { text: '  ' }), el('a', { href: '#/context/sources/collectors', text: '수집 설정 열기 →' }))));
 
-  // GitHub Issues · Jira — 아웃바운드 어댑터 미구현.
-  for (const s of ['GitHub Issues', 'Jira']) {
-    table.append(el('tr', {},
-      el('td', {}, el('span', { class: 'mini-title', text: s })),
-      el('td', {}, el('span', { class: 'pill', text: '미구현' })),
-      el('td', {}, el('span', { class: 'mini-meta' }, ...uiText('아웃바운드 어댑터 예정 (#975) — SPI write method + 소스별 매핑')))));
+  // GitHub Issues · Jira — 아웃바운드 어댑터 미구현. **관리 화면에서만** 알린다: 여기는 '어느 도구로 내보낼 수
+  //  있나'를 한눈에 보는 자리라 아직 없는 것도 알 값어치가 있지만, 클릭업 앱 상세(#2556)에서는 남의 앱 이야기다.
+  if (!embeddedHost(detail)) {
+    for (const s of ['GitHub Issues', 'Jira']) {
+      table.append(el('tr', {},
+        el('td', {}, el('span', { class: 'mini-title', text: s })),
+        el('td', {}, el('span', { class: 'pill', text: '아직 없음' })),
+        el('td', {}, el('span', { class: 'mini-meta' }, ...uiText('내보내기를 아직 만들지 않았습니다(#975).')))));
+    }
   }
   body.append(table);
-  body.append(el('p', { class: 'admin-hint', style: 'margin-top:10px' }, ...uiText('※ 인바운드 싱크(외부→우리)와 토큰·컨테이너 설정은 [외부 자료 수집] 탭에 있습니다. 여기는 아웃바운드(우리→외부) on/off 전용입니다.')));
+  body.append(el('p', { class: 'admin-hint', style: 'margin-top:10px' }, ...uiText(embeddedHost(detail)
+    ? '반대 방향(ClickUp의 것을 우리 자료함으로 가져오기)은 위 [가져올 자료 정하기]에 있습니다. 여기서는 내보내기를 켜고 끄기만 합니다.'
+    : '반대 방향(외부의 것을 우리 자료함으로 가져오기)과 토큰·리스트 설정은 [맥락 관리 ▸ 수집]에 있습니다. 여기서는 내보내기를 켜고 끄기만 합니다.')));
 
-  detail.replaceChildren(sectionHead('프로젝트 아웃바운드', '우리 프로젝트와 과업의 변경을 외부 협업 도구로 내보냅니다.', meaning), el('div', { class: 'card' }, cardHead('내보내는 항목'), body));
+  detail.replaceChildren(...head(), el('div', { class: 'card' }, cardHead('내보내는 항목'), body));
 }
 
 export {

@@ -224,10 +224,10 @@ export async function knowledgeGraphData(limit = 500, viewer?: Viewer): Promise<
   const vis = await knowledgeVisWhere(viewer, params);
   const nodes = await q(itemsPool,
     `SELECT k.name, k.title, k.type, k.injection, k.provenance,
-            cat.key AS category, cat.name AS category_name, cat.space AS space
+            cat.key AS category, cat.name AS category_name
      FROM knowledge k
      LEFT JOIN LATERAL (
-       SELECT c.key, c.name, c.space FROM knowledge_category kc JOIN category c ON c.id=kc.category_id
+       SELECT c.key, c.name FROM knowledge_category kc JOIN category c ON c.id=kc.category_id
        WHERE kc.name=k.name AND kc.state<>'rejected' ORDER BY kc.created_at LIMIT 1
      ) cat ON true
      WHERE k.lifecycle='active' AND ${vis} ORDER BY k.updated_at DESC LIMIT $1`, params);

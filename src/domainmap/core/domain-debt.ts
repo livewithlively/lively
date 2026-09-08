@@ -11,14 +11,14 @@
 //
 // 비파괴·멱등: upsertDebtRow((category_id,title) 키 upsert; 사람이 닫은 resolved/dismissed/ack 은 재개 안 함).
 // kind='domain_debt'. 도메인 매핑은 한 줄도 안 건드린다(읽기 + debt_finding 쓰기뿐).
-// V6: 도메인=space='product' category(repo-free). 카운트는 category_id 로 매핑→code_unit(전 레포 union)을 본다.
+// V6: 분류축 category(repo-free). 카운트는 category_id 로 매핑→code_unit(전 레포 union)을 본다.
 //  부채는 debt_finding.category_id 로 착지(구조부채 structural_drift 는 repo_id 키 — 별 경로).
 import { q, one, type Db } from "../db.js";
 import { httpErr, type Actor } from "./types.js";
 import { upsertDebtRow } from "./debts.js";
 
 // 도메인별 구조 카운트(PURE 분류 입력). 읽기 SQL 은 evaluate* 가 소유, 분류는 classifyDomainDebt 가.
-//  V6: 도메인 = space='product' category. category_id 를 분류 출력까지 운반해 debt_finding.category_id 로 쓴다.
+//  V6: 분류축 category. category_id 를 분류 출력까지 운반해 debt_finding.category_id 로 쓴다.
 export interface DomainStructureCount {
   category_id: number;    // V6: 부채 귀속 대상(debt_finding.category_id) — 멀티레포라 repo_id 가 아니다.
   key: string;
@@ -76,7 +76,7 @@ export function classifyDomainDebt(rows: DomainStructureCount[]): DomainDebtFind
   return out;
 }
 
-// 도메인별 active/removed 매핑 코드 카운트 읽기. V6: 도메인=space='product' category(repo-free 멀티레포),
+// 분류축별 active/removed 매핑 코드 카운트 읽기. V6: category(repo-free 멀티레포),
 //  매핑은 category_id 로 코드에 닿는다 — 카운트는 그 category 에 매핑된 모든 레포의 code_unit 을 합산한다
 //  (category 의 'is'는 전 레포 union 이 진실 — 부채는 카테고리 속성이지 per-repo 가 아니다). rejected 매핑 제외
 //  (술어는 v6 listProductDomains 의 units 카운트와 동일 정신 — COALESCE state, status<>'rejected').
@@ -97,7 +97,7 @@ async function readDomainStructureCounts(db: Db): Promise<DomainStructureCount[]
            AND m.category_id=c.id AND m.status<>'rejected'
          WHERE a.commit_sha IS NOT NULL) active_commits
     FROM category c
-    WHERE c.space='product' AND c.state<>'merged'
+    WHERE c.state<>'merged'
     ORDER BY c.key`);
 }
 

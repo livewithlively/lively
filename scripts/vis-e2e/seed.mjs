@@ -70,10 +70,10 @@ try {
   await pool.query(`DELETE FROM knowledge WHERE name LIKE 'v4-%'`);
 
   // #1291 v4 — 증류 상속 테스트에 필요한 분류축(지식 저장은 category 필수).
-  //  유니크는 (space,key) 부분 인덱스라 ON CONFLICT 대상이 못 된다 → 있으면 재사용, 없으면 생성.
-  const cat = (await one(`SELECT id, key FROM category WHERE space='product' AND key='vis-e2e' AND state <> 'merged'`))
-    || await one(`INSERT INTO category(key, name, space, state)
-                  VALUES('vis-e2e','가시성 e2e','product','active') RETURNING id, key`);
+  //  유니크는 key 부분 인덱스라 ON CONFLICT 대상이 못 된다 → 있으면 재사용, 없으면 생성.
+  const cat = (await one(`SELECT id, key FROM category WHERE key='vis-e2e' AND state <> 'merged'`))
+    || await one(`INSERT INTO category(key, name, state)
+                  VALUES('vis-e2e','가시성 e2e','active') RETURNING id, key`);
 
   // #1291 v4 — 커넥터 수집물 흉내. mirrorSourceV6 가 넣는 모양 그대로(external_system + fields.container_*)라
   //  백필·정책 매칭이 실제 데이터에서 도는지 볼 수 있다.

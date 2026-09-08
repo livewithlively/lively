@@ -62,6 +62,23 @@ function sectionTitle(titleText, m) {
     isText ? el('p', { class: 'admin-hint' }, ...uiText(m)) : null);
 }
 
+/**
+ * 이 패널이 **관리 화면 밖의 칸 안에** 펴져 있나(#2556). 새 셸 [외부 앱 연결]이 관리 패널 몇 개를 자기
+ *  화면의 한 칸으로 흡수했는데(노션 ▸ 내보내기 · 클릭업 ▸ 내보내기 · 코드 저장소 · 데이터베이스), 그 칸은
+ *  이미 제목을 갖고 있어 패널의 sectionHead 가 두 번째 제목이 된다. 그래서 그 자리에서만 머리를 접는다.
+ * ⚠ 표식을 **호스트에** 붙이는 이유: 이 패널들은 저장·삭제 뒤 같은 host 로 자기를 다시 그리는데(지역 rerender
+ *  클로저 · 레지스트리 rerenderPanel 둘 다), 인자로 받으면 그 재렌더에서 값이 떨어져 머리가 되살아난다.
+ *  host 에 붙여 두면 누가 다시 그리든 따라온다 — 흡수한 쪽은 host 하나만 표시하면 된다(markEmbedded).
+ */
+function embeddedHost(host): boolean {
+  return !!(host && host.dataset && host.dataset.embedded === '1');
+}
+/** 흡수한 화면이 자기 칸(host)에 붙이는 표식 — 그 안에서 도는 패널은 머리를 접는다. */
+function markEmbedded<T>(host: T): T {
+  try { (host as any).dataset.embedded = '1'; } catch (_) { /* dataset 없는 노드 — 표식 없이 평소대로 그린다 */ }
+  return host;
+}
+
 // 섹션 머리 — 제목 + 한 줄 설명 + '이게 뭐예요?'. 병합 섹션이 "여기 뭐가 들었나"를 먼저 말해준다.
 function sectionHead(title, hint, m?) {
   // admin-sechead: 제목 블록 아래 일관 여백. 페이지 설명(hint)은 종전대로 제목 아래 한 줄로 보인다.
@@ -332,8 +349,10 @@ function mcpFieldsEl(schema) {
 
 export {
   allowlistCard,
+  embeddedHost,
   fmtBytes,
   fmtElapsed,
+  markEmbedded,
   mcpFieldsEl,
   psBlock,
   psInputStyle,

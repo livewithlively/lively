@@ -42,7 +42,7 @@ function render({ kinds, sources }) {
   L.push("  - **K**(지식 노트) = 거의 모든 저작 지식(배경·사실·도메인 지식·메모·링크를 다 흡수). 가장 큰 기본값.");
   L.push("  - **H**(하우투/런북) = 재현 가능한 단계별 절차.");
   L.push("  - **W**(작업/태스크) = 상태·담당을 가진 일.");
-  L.push("- **주제(area) = 종류가 아니라 별도 축**: `(space, key)` 2단. `space=product`(코드앵커 도메인) · `space=business`(비즈니스 기능: gtm·가격·펀딩·시장경쟁·브랜드·조직). 한 단위가 area 에 안 묶이거나(전사) 여럿에 묶일 수 있다.");
+  L.push("- **주제(area) = 종류가 아니라 별도 축**: 분류축(category) `key` 하나. 위에 얹힌 고정 서랍장은 없다(#1631 — 축은 조직이 자기 일에서 뽑아낸다). 한 단위가 area 에 안 묶이거나(전사) 여럿에 묶일 수 있다.");
   L.push("- **출처(provenance) = 종류가 아니라 기계적 사실**(컬럼명은 `confidence` 유지): `observed`(외부 시스템 살아있는 미러) · `human`(사람 저작/승인) · `ai`(AI 생성) · `rule`(시스템 결정론 파생). 출처는 가치·주입을 결정하지 않는다.");
   L.push("- **S(구조)·G(용어집/그래프) 는 ku 종류가 아니다** — 모양이 글이 아니라 노드+엣지라 domainmap 파생 그래프(**federated 뷰**)로 다룬다. 도메인 부채도 ku 아님(domainmap `debt_finding`).");
   L.push("- ⚠ 아래 표의 **D·F·A·M·S·G·L·Z 는 통합 예정 legacy 종류**다(P1 무중단 유지 — 라이브 유닛이 아직 그 종류라 정상 렌더). **신규 분류에선 쓰지 말고** D/F/A/M/L/Z→K, S/G→domainmap federate 로 보낸다(데이터 흡수는 P2).");
@@ -93,7 +93,7 @@ function render({ kinds, sources }) {
   L.push("- **종류(kind)는 R·K·H·W 4종 중에서만 고른다.** 기본값은 K — 강제 규범(R)·절차(H)·작업(W)이 아니면 거의 다 K.");
   L.push("  - 강제 규범(반드시/금지)·페르소나 → **R**. 재현 가능한 단계별 절차 → **H**. 상태·담당을 가진 일 → **W**.");
   L.push("  - 배경·사실·도메인 지식·메모·링크는 모두 → **K**(주제는 area, 출처는 provenance 로 따로 단다).");
-  L.push("- **주제(area)는 종류와 별개 축**: 특정 도메인에 속하면 area(domain_key, space=product) 를 단다. 비즈니스 기능이면 space=business 의 key(gtm 등). 전사면 null.");
+  L.push("- **주제(area)는 종류와 별개 축**: 어느 분류축에 속하면 그 축의 key 를 단다. 전사면 null.");
   L.push("- **출처(provenance, 컬럼 confidence)는 기계가 채널로 박는 사실**이라 LLM 이 *판단*하지 않는다: 외부 미러=observed, 사람=human, AI=ai, 결정론 파생=rule.");
   L.push("- **D·F·A·M·S·G·L·Z 는 통합 예정 legacy** — 신규로 부여하지 말 것. D/F/A/M/L/Z 는 K 로, S/G 는 domainmap 파생(federated)으로 본다. 도메인 부채는 ku 가 아니라 domainmap `debt_finding`.");
   L.push("- 한 단위가 둘 이상 종류에 걸치면 주분류(kind) 하나 + 다중분류(kinds[])로 보조 종류를 단다.");

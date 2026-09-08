@@ -62,7 +62,7 @@ export interface KnowledgeRow {
 //  스윕이 채운다. 옛 동기 embedKnowledgeBestEffort(인라인 provider.embed HTTP)는 제거(저장 지연의 원인이었음).
 
 export interface KnowledgeFilter {
-  space?: string; categoryId?: number; uncategorized?: boolean; injection?: string; provenance?: string;
+  categoryId?: number; uncategorized?: boolean; injection?: string; provenance?: string;
   lifecycle?: string; q?: string; limit?: number; offset?: number; orderBy?: string; is_wiki?: boolean; type?: string;
   light?: boolean;   // #1091 본문(body_md) 제외 — 트리·검색·카드 보강처럼 발췌를 안 그리는 소비자용
 }
@@ -73,16 +73,13 @@ export interface KnowledgeFilter {
 export function knowledgeListFilter(f: KnowledgeFilter): { join: string; where: string; params: unknown[] } {
   const params: unknown[] = [];
   let join = "";
-  // 미분류(#1091) — 어느 카테고리에도 안 뜨는 지식. categoryId/space 와 배타(그건 '어느 카테고리냐'를 묻는 축이다).
+  // 미분류(#1091) — 어느 카테고리에도 안 뜨는 지식. categoryId 와 배타(그건 '어느 카테고리냐'를 묻는 축이다).
   const uncategorized = !!f.uncategorized && f.categoryId == null;
-  // 카테고리/스페이스 필터 = knowledge_category 조인(rejected 매핑 제외).
+  // 카테고리 필터 = knowledge_category 조인(rejected 매핑 제외).
+  //  (#1631 space 폐기 — 종전엔 '분류축의 공간'으로도 좁힐 수 있었다. 그런 공간이 없어졌으니 축은 카테고리 하나다.)
   if (f.categoryId != null) {
     params.push(f.categoryId);
     join = `JOIN knowledge_category kc ON kc.name=k.name AND kc.category_id=$${params.length} AND kc.state<>'rejected'`;
-  } else if (f.space && !uncategorized) {
-    params.push(f.space);
-    join = `JOIN knowledge_category kc ON kc.name=k.name AND kc.state<>'rejected'
-            JOIN category c ON c.id=kc.category_id AND c.space=$${params.length}`;
   }
   const wh: string[] = [];
   // 기준은 소비쿼리와 같은 state<>'rejected' — knowledge_unmapped('빈 자리인가' = NOT EXISTS any)와 다르다.
@@ -193,7 +190,7 @@ export async function getKnowledge(name: string, viewer?: Viewer): Promise<(Know
   const k = await one(itemsPool, `SELECT ${K_SEL}, k.fields, k.props_ui FROM knowledge k WHERE k.name=$1`, [name]);
   if (!k) return undefined;
   const categories = await q(itemsPool,
-    `SELECT kc.category_id, kc.state, c.space, c.key, c.name
+    `SELECT kc.category_id, kc.state, c.key, c.name
      FROM knowledge_category kc JOIN category c ON c.id=kc.category_id WHERE kc.name=$1`, [name]);
   const links = await listKnowledgeLinks(name, viewer);      // #290 지식↔지식(outgoing + 백링크). viewer: 안 보이는 이웃은 뺀다(#1291)
   const sources = await q(itemsPool,                          // #290 인용한 자료(derived_from/cites)
@@ -683,7 +680,7 @@ export async function listUnmappedKnowledge(limit = 50, viewer?: Viewer): Promis
 
 export interface ProposedClassification {
   name: string; title: string | null; type: string | null; provenance: string; updated_at: string;
-  category_id: number; category_key: string; category_name: string | null; space: string;
+  category_id: number; category_key: string; category_name: string | null;
   confidence: number | null; evidence: string | null; created_at: string;
 }
 // ── proposed 분류 검토 인박스(#1102) — 분류기(proposeKnowledgeCategory)가 mapped_by='llm'·state='proposed' 로 건 제안 목록. ──
@@ -696,7 +693,7 @@ export async function listProposedClassifications(limit = 200, viewer?: Viewer):
   const rows = await q(itemsPool, `
     SELECT k.name, k.title, k.type, k.provenance, k.updated_at,
            kc.category_id, kc.confidence, kc.evidence, kc.created_at,
-           c.key AS category_key, c.name AS category_name, c.space
+           c.key AS category_key, c.name AS category_name
     FROM knowledge_category kc
     JOIN knowledge k ON k.name = kc.name AND k.lifecycle='active'
     JOIN category   c ON c.id  = kc.category_id
@@ -707,7 +704,7 @@ export async function listProposedClassifications(limit = 200, viewer?: Viewer):
     name: r.name as string, title: (r.title ?? null) as string | null, type: (r.type ?? null) as string | null,
     provenance: r.provenance as string, updated_at: String(r.updated_at),
     category_id: Number(r.category_id), category_key: r.category_key as string,
-    category_name: (r.category_name ?? null) as string | null, space: r.space as string,
+    category_name: (r.category_name ?? null) as string | null,
     confidence: r.confidence != null ? Number(r.confidence) : null,
     evidence: (r.evidence ?? null) as string | null, created_at: String(r.created_at),
   }));

@@ -2,6 +2,8 @@
 //  여기 사는 것: 아이콘 · 인증 헤더 · 파일 종류 판정(미리보기 방식) · 이름 겹침 회피 · 그 자리 우클릭 메뉴.
 //  부품 자신(세션·자료·지식…)은 panes-parts.ts / panes-files.ts 에 산다.
 import { TOKEN_KEY, el, sv } from '../core.js';
+import { EMBEDDED } from './embed.js';
+import { tabNum, type TabKey } from '../lib/tab-key.js';
 
 // ── 아이콘(스트로크 SVG) ──────────────────────────────────────────────────────
 const ICON_PATHS: Record<string, string> = {
@@ -74,7 +76,11 @@ export function kindOf(p: string): { kind: string; type: string } {
   return { kind: 'file', type: '파일' };
 }
 // 미리보기는 **작은 종이 한 장**(300×246)을 만들어 카드 크기에 맞춰 줄인다 — 글자·표가 뭉개지지 않고 비율이 산다.
-export const PV_W = 300;   // 종이 폭(높이는 CSS 가 카드 비율로 잡는다)
+export const PV_W = 300;   // 글 미리보기의 종이 폭 — 이 폭에서 글자가 읽을 만한 크기로 앉는다
+/** 시안(HTML)의 종이 폭 (#762, 원준 2026-09-04: "엄청 확대된 게 썸네일에 보여서 있으나 마나").
+ *  ⚠ 300px 짜리 창에 데스크톱용 페이지를 넣으면 그 페이지의 **왼쪽 300px 조각**만 보인다 — 축소가
+ *   아니라 확대로 읽힌다. 논리 폭을 데스크톱만큼 주고 카드 크기로 줄여야 **한 장이 통째로** 들어온다. */
+export const PV_PAGE_W = 1180;
 export const PV_MAX = { pdf: 12e6, page: 4e6, text: 512e3, img: 24e6, video: 80e6 } as Record<string, number>;
 
 // ── 보기 설정(맥 파인더 문법) — 브라우저에 기억한다. 칸마다 따로 두지 않는다(한 사람의 한 습관이다). ──
@@ -206,4 +212,38 @@ export function folderIcon(cls = 'pn-folder', opts?: { empty?: boolean; plain?: 
     <path d="M2 17.6A3.6 3.6 0 0 1 5.6 14h36.8a3.6 3.6 0 0 1 3.6 3.6v15.8a3.6 3.6 0 0 1-3.6 3.6H5.6A3.6 3.6 0 0 1 2 33.4z" fill="url(#${front})"/>
     <path d="M5.9 14.75h36.2" stroke="#FFFFFF" stroke-opacity=".5" stroke-width="1.1" stroke-linecap="round" fill="none"/>`;
   return svg;
+}
+
+// ══ 뷰어 칸에 파일 펴기 — 자료 칸과 뷰어를 잇는 한 통로 (#762) ═══════════════════
+/** 이 곁칸의 뷰어에 대고 쏘는 신호. ⚠ window 금지 — 문서 전체로 뿌리면 열려 있는 **모든 세션 탭**의
+ *  뷰어가 같은 파일로 갈아입고 각자 자기 열쇠에 그걸 기억한다(pane-signal-scope-and-embed-isolation-1819). */
+export const VIEWER_EVT = 'pn-viewer-open';
+/** **배달** — 셸이 «어느 뷰어에 펼지» 정한 뒤 그 탭 앞으로 보내는 신호(#762). 요청(VIEWER_EVT)과 이름이
+ *  달라야 한다: 같으면 셸이 자기 신호를 되받아 무한고리가 된다. 뷰어는 이 신호만 듣는다. */
+export const VIEWER_TO_EVT = 'pn-viewer-to';
+/** 어떤 파일을 펴 두었나 — 세션마다 따로(곁칸 부품은 그 세션의 것). */
+export const ED_PATH_KEY = 'pn_ed_path';
+/** 그 부품 인스턴스의 저장 열쇠 — 첫 탭은 세션 열쇠 **그대로**(옛 기억을 그대로 물려받는다),
+ *  둘째부터 `#n` 이 붙는다. 두 뷰어가 각자 다른 파일을 펴 두려면 기억도 탭마다 갈라져야 한다(#762). */
+export const slotStoreKey = (mem: string, slot: TabKey): string => (tabNum(slot) >= 2 ? mem + '#' + tabNum(slot) : mem);
+
+/** 어느 탭에 펴 둘지 셸이 정한 뒤, 그 탭의 열쇠에 적는다 — 새로 만들어진 뷰어는 신호를 이미 놓친 뒤라
+ *  저장된 값에서 읽기 때문이다(웹 칸의 openInWebPart 와 같은 규칙). */
+export function rememberViewerPath(mem: string, slot: TabKey, path: string): void {
+  if (EMBEDDED) return;                 // 끼워 넣은 판 — 바깥 사람이 펴 둔 파일을 덮어쓰지 않는다
+  try {
+    const m = JSON.parse(localStorage.getItem(ED_PATH_KEY) || '{}') || {};
+    m[slotStoreKey(mem, slot)] = String(path || '');
+    localStorage.setItem(ED_PATH_KEY, JSON.stringify(m));
+  } catch (_) { /* 저장이 막혀도 알림으로 지금 떠 있는 칸은 바뀐다 */ }
+}
+
+/** 밖(자료 칸)에서 뷰어에 파일을 펴는 **유일한 통로** — 뷰어 칸이 없으면 셸(panes.ts)이 듣고 곁칸에 만든다.
+ *  ⚠ **어느 뷰어에 펼지는 셸이 정한다**(#762): 뷰어가 여럿 뜰 수 있게 되면서, 부르는 쪽이 고를 수 있는 것은
+ *   «지금 보던 뷰어에» 인가 «새 탭에» 인가 둘뿐이다. 그 판정과 저장(rememberViewerPath)은 셸이 한다 —
+ *   부르는 쪽은 탭이 몇 개인지도, 어느 것이 켜져 있는지도 모른다. */
+export function openInViewerPart(ctx: { id: number; paneRoot: () => HTMLElement }, path: string, opts?: { newTab?: boolean }): void {
+  const p = String(path || '');
+  if (!p) return;
+  ctx.paneRoot().dispatchEvent(new CustomEvent(VIEWER_EVT, { detail: { id: ctx.id, path: p, newTab: !!opts?.newTab } }));
 }

@@ -167,19 +167,43 @@ export const NO_ANSWER_RE = /^\s*(?:no response requested\.?|\(no content\)|\[no
 const PASTE_LINES = 8;
 const PASTE_CHARS = 400;
 const HUMAN_LINE = 120;
+/** 이 줄이 «사람이 친 지시»처럼 읽히나 — 한국어 종결·물음·명령으로 끝나면 그렇다.
+ *  로그·전사본의 한 줄은 이렇게 끝나지 않는다(타임스탬프·화자표·문장 조각). */
+const INSTRUCTIVE = /(?:요|다|자|줘|해|봐|야|까|음|함|셔|워|죠)[.!?…]?$|[?!]$/;
+const HUMAN_BLOCK = 400;
+/** 붙여넣은 덩어리 속에서 **사람이 친 말**을 고른다 (#762, 원준 2026-09-04).
+ *  ⚠ 종전엔 «짧으면 첫 줄»이었다. 그런데 사람은 **붙여넣고 그 아래에 시킨다** — 회의록 전사본을 붙이면
+ *   전사 첫 줄(짧다)이 제목이 되고 정작 시킨 말이 묻혔다(신고된 그 화면).
+ *  ★ 신호는 **빈 줄**이다: 사람은 붙여넣은 덩어리와 자기 말을 빈 줄로 가른다. 그래서 문단으로 끊어
+ *   양 끝 문단 중 «짧고 지시처럼 끝나는» 것을 고른다(둘 다면 꼬리 — 붙여넣기 뒤가 본론이다).
+ *   빈 줄이 없으면 가장자리 **한 줄**만 본다(두 줄을 물면 전사 꼬리가 딸려 온다 — 실측). */
+function humanSide(text: string, lines: string[]): { pick: string; pasted: number } {
+  const paras = text.split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean);
+  const lineCount = (t: string): number => t.split('\n').filter((x) => x.trim()).length;
+  const fits = (t: string): boolean => !!t && t.length <= HUMAN_BLOCK;
+  if (paras.length > 1) {
+    const head = paras[0], tail = paras[paras.length - 1];
+    const hOk = fits(head), tOk = fits(tail);
+    const tGood = tOk && INSTRUCTIVE.test(tail.split('\n').pop()!.trim());
+    const pickTail = tGood || (tOk && !hOk);
+    if (pickTail) return { pick: tail, pasted: lines.length - lineCount(tail) };
+    if (hOk) return { pick: head, pasted: lines.length - lineCount(head) };
+  }
+  const first = lines[0] || '', last = lines[lines.length - 1] || '';
+  const useTail = last.length <= HUMAN_LINE && INSTRUCTIVE.test(last);
+  const pick = useTail ? last : (first.length <= HUMAN_LINE ? first : last);
+  return { pick, pasted: Math.max(0, lines.length - 1) };
+}
 export function sayParts(raw: string): { label: string; pasteLines?: number; full?: string } {
   const text = String(raw || '');
   const lines = text.split('\n').map((x) => x.trim()).filter((x) => x.length > 0);
   const heavy = lines.length > PASTE_LINES || text.length > PASTE_CHARS;
-  const head = lines[0] || '';
-  const tail = lines[lines.length - 1] || '';
-  const pick = !heavy ? text : (head.length <= HUMAN_LINE ? head : tail.length <= HUMAN_LINE ? tail : head);
-  const label = cut(firstLine(pick), 110);
-  const rest = lines.length - 1;
+  const h = heavy ? humanSide(text, lines) : { pick: text, pasted: 0 };
+  const label = cut(firstLine(h.pick) || h.pick, 110);
   return {
     label: label || '(빈 지시)',
-    pasteLines: heavy && rest > 0 ? rest : undefined,
-    full: text.trim().length > label.length ? text.slice(0, 4000) : undefined,
+    pasteLines: heavy && h.pasted > 0 ? h.pasted : undefined,
+    full: text.trim().length > label.length ? text.slice(0, 8000) : undefined,
   };
 }
 

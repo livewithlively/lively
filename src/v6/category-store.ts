@@ -1,7 +1,10 @@
-// v6 category 데이터 접근 — 구 domain 일반화(space 3값: 사업/제품/시스템, repo 분리).
-//  도메인 = space='product' 부분집합(is/debt/엣지 보유). itemsPool 직접 + q/one 헬퍼(domainmap/db) 재사용.
+// v6 category 데이터 접근 — 구 domain 일반화(repo 분리). itemsPool 직접 + q/one 헬퍼(domainmap/db) 재사용.
+//  ⚠ 2026-09-02(#1631) space 폐기 — 분류축 위의 고정 서랍장(business/product/system)을 걷었다. key 가 단독 유일하다.
+//   코드 앵커(mapping/debt/엣지)를 가진 축을 종전엔 '도메인'이라 부르며 space='product' 로 갈랐는데, 앵커는
+//   **있으면 붙는 것**이지 축의 부류가 아니다 — 도메인맵은 이제 전 분류축을 그린다.
 //  감사는 org_content_audit(entity='category') — knowledge/domain 과 동일 append-only 패턴.
 import { itemsPool } from "../db/client.js";
+import { HttpError } from "../http-error.js";
 import { q, one } from "../db/client.js";
 import { auditOrgContent, restoreSnapshot, type WriteCtx } from "./content-audit.js";
 import { embeddingInputText } from "./embedding-provider.js";
@@ -12,10 +15,10 @@ import type { Viewer } from "./visibility.js";
 // entry_name·view_mode(#592) 포함 — 지식탭 카테고리 뷰(list|table|entry)가 목록/상세에서 바로 읽는다.
 //  구 delete 스냅샷(두 컬럼 부재)의 복원은 restoreSnapshot 이 부재 키를 생략해 DB DEFAULT 로 수렴(v6/content-audit.ts).
 const CATEGORY_COLS =
-  `id, space, key, name, description, should, cross_cutting, origin, status, state, entry_name, view_mode, created_at, updated_at`;
+  `id, key, name, description, should, cross_cutting, origin, status, state, entry_name, view_mode, created_at, updated_at`;
 
 export interface CategoryRow {
-  id: number; space: string; key: string; name: string | null;
+  id: number; key: string; name: string | null;
   description: string | null; should: string | null; cross_cutting: boolean;
   origin: string | null; status: string; state: string;
   entry_name: string | null; view_mode: string;
@@ -109,17 +112,13 @@ const auditCategory = (entityKey: string, op: string, before: unknown, after: un
 
 //  카테고리 행 자체는 거르지 않는다(분류체계는 조직의 뼈대 — 가시성 주체가 아니다). 잠기는 건 그 안의 지식이고,
 //  그래서 위 집계만 뷰어 기준으로 센다(materialize.categoryMapForIndex 와 같은 판단).
-export async function listCategories(space?: string, viewer?: Viewer): Promise<CategoryRow[]> {
-  const params: unknown[] = space ? [space] : [];
+//  정렬: 교차관심사 먼저(여러 축에 걸친 것이 위) → 이름. 종전의 space 우선 정렬은 축과 함께 사라졌다.
+export async function listCategories(viewer?: Viewer): Promise<CategoryRow[]> {
+  const params: unknown[] = [];
   const sel = categorySel(await knowledgeVisWhere(viewer, params));
-  if (space) {
-    return q(itemsPool,
-      `SELECT ${sel} FROM category c ${CATEGORY_OWNER_JOIN}
-       WHERE c.space=$1 AND c.state<>'merged' ORDER BY c.name NULLS LAST, c.key`, params);
-  }
   return q(itemsPool,
     `SELECT ${sel} FROM category c ${CATEGORY_OWNER_JOIN}
-     WHERE c.state<>'merged' ORDER BY c.space, c.name NULLS LAST, c.key`, params);
+     WHERE c.state<>'merged' ORDER BY c.cross_cutting DESC, c.name NULLS LAST, c.key`, params);
 }
 
 export async function getCategory(id: number): Promise<CategoryRow | undefined> {
@@ -142,7 +141,7 @@ export async function setCategoryRepos(categoryId: number, repos: string[], ctx?
   for (let i = 0; i < clean.length; i++) {
     await itemsPool.query(`INSERT INTO category_repo(category_id, repo, sort) VALUES($1,$2,$3)`, [categoryId, clean[i], i]);
   }
-  await auditCategory(cat ? `${cat.space}/${cat.key}` : String(categoryId),
+  await auditCategory(cat ? cat.key : String(categoryId),
     "set_repos", { repos: before }, { repos: clean }, ctx);
   return clean;
 }
@@ -258,41 +257,70 @@ export async function getCategoryIsSummary(categoryId: number): Promise<{ units:
   return { units: row?.units ?? 0, last_scan_at: row?.last_scan_at ?? null };
 }
 
-export async function getCategoryByKey(space: string, key: string): Promise<CategoryRow | undefined> {
+export async function getCategoryByKey(key: string): Promise<CategoryRow | undefined> {
   return one(itemsPool,
-    `SELECT ${CATEGORY_COLS} FROM category WHERE space=$1 AND key=$2 AND state<>'merged'`, [space, key]);
+    `SELECT ${CATEGORY_COLS} FROM category WHERE key=$1 AND state<>'merged'`, [key]);
 }
 
 export async function createCategory(
-  input: { space: string; key: string; name?: string; description?: string; should?: string; cross_cutting?: boolean },
+  input: { key: string; name?: string; description?: string; should?: string; cross_cutting?: boolean },
   ctx?: WriteCtx,
 ): Promise<CategoryRow> {
   const origin = ctx?.source === "mcp" ? "agent" : "human";
   const row: CategoryRow = await one(itemsPool,
-    `INSERT INTO category(space, key, name, description, should, cross_cutting, origin, status, state, created_at, updated_at)
-     VALUES($1,$2,$3,$4,$5,COALESCE($6,false),$7,'confirmed','active',now(),now())
+    `INSERT INTO category(key, name, description, should, cross_cutting, origin, status, state, created_at, updated_at)
+     VALUES($1,$2,$3,$4,COALESCE($5,false),$6,'confirmed','active',now(),now())
      RETURNING ${CATEGORY_COLS}`,
-    [input.space, input.key, input.name ?? null, input.description ?? null,
+    [input.key, input.name ?? null, input.description ?? null,
      input.should ?? null, input.cross_cutting ?? null, origin]);
-  await auditCategory(`${input.space}/${input.key}`, "insert", null, row, ctx);
+  await auditCategory(input.key, "insert", null, row, ctx);
   return row;
+}
+
+/**
+ * 이 축을 비활성으로 바꿔도 되나(#1631) — **지식이 남아 있으면 안 된다.**
+ *
+ *  왜: 미분류 지식은 recall 라우터의 조인에서 빠져 **아예 소환되지 않는다**(lively-taxonomy 스킬이 이미
+ *   세워 둔 규칙 — "카테고리를 지우기 전에 그 아래 지식을 먼저 옮긴다"). 비활성도 같은 자리다.
+ *   이 검사가 있어야 «비활성 축은 비어 있다» 가 보장되고, 그 덕분에 비활성 축을 분류 후보에서 빼도
+ *   소환에서 잃는 것이 없다(안 그러면 지식이 조용히 사라진다).
+ */
+async function assertDeprecatable(id: number, key: string): Promise<void> {
+  const row: { n: number } | undefined = await one(itemsPool,
+    `SELECT count(*)::int AS n FROM knowledge_category kc JOIN knowledge k ON k.name=kc.name
+      WHERE kc.category_id=$1 AND kc.state<>'rejected' AND k.lifecycle='active'`, [id]);
+  const n = row?.n ?? 0;
+  if (n > 0) {
+    //  ⚠ HttpError(400) 로 던진다 — 평범한 Error 면 rest-util 이 500 «internal_error» 로 뭉개서
+    //   «몇 건이 남았는지» 가 통째로 사라진다(dev 실측 2026-09-04: 실제로 그렇게 나갔다).
+    //   막는 것보다 **무엇을 먼저 옮겨야 하나** 가 이 검사의 값어치다.
+    throw new HttpError(400, `'${key}' 에 지식 ${n}건이 남아 있어 비활성으로 바꿀 수 없습니다 — 먼저 다른 축으로 옮기세요`
+      + "(미분류 지식은 소환에 안 잡힙니다).");
+  }
 }
 
 export async function updateCategory(
   id: number,
-  patch: { name?: string; description?: string; should?: string; cross_cutting?: boolean },
+  patch: { name?: string; description?: string; should?: string; cross_cutting?: boolean; state?: string },
   ctx?: WriteCtx,
 ): Promise<CategoryRow> {
   const before = await getCategory(id);
   if (!before) throw new Error(`카테고리 #${id} 없음`);
+  //  state 는 두 값만 오간다 — 'merged' 는 병합 경로가 소유하는 상태라 여기서 못 만든다.
+  const nextState = patch.state === undefined ? null : String(patch.state);
+  if (nextState !== null && nextState !== "active" && nextState !== "deprecated") {
+    throw new HttpError(400, "state 는 active|deprecated 만 가능합니다(merged 는 병합 경로가 정합니다)");
+  }
+  if (nextState === "deprecated" && before.state !== "deprecated") await assertDeprecatable(id, before.key);
   // COALESCE($n, col): undefined→null→기존값 보존(부분 수정).
   const row: CategoryRow = await one(itemsPool,
     `UPDATE category SET
        name=COALESCE($2,name), description=COALESCE($3,description),
-       should=COALESCE($4,should), cross_cutting=COALESCE($5,cross_cutting), updated_at=now()
+       should=COALESCE($4,should), cross_cutting=COALESCE($5,cross_cutting),
+       state=COALESCE($6,state), updated_at=now()
      WHERE id=$1 RETURNING ${CATEGORY_COLS}`,
-    [id, patch.name ?? null, patch.description ?? null, patch.should ?? null, patch.cross_cutting ?? null]);
-  await auditCategory(`${before.space}/${before.key}`, "update", before, row, ctx);
+    [id, patch.name ?? null, patch.description ?? null, patch.should ?? null, patch.cross_cutting ?? null, nextState]);
+  await auditCategory(before.key, "update", before, row, ctx);
   // #1153 — 정의 벡터 재계산. 임베딩 입력(이름+설명+should)이 **실제로 바뀐** 경우에만 pending 으로 되돌린다
   //  (무변경 저장에 헛임베딩을 태우지 않는다 — knowledge 쓰기 경로와 동일 idiom). 백그라운드 스윕이 채운다.
   const embedText = (c: CategoryRow) =>
@@ -323,7 +351,7 @@ export async function setCategoryView(
   if (!sets.length) return before;
   const row: CategoryRow = await one(itemsPool,
     `UPDATE category SET ${sets.join(", ")}, updated_at=now() WHERE id=$1 RETURNING ${CATEGORY_COLS}`, params);
-  await auditCategory(`${before.space}/${before.key}`, "set_view", before, row, ctx);
+  await auditCategory(before.key, "set_view", before, row, ctx);
   return row;
 }
 
@@ -331,16 +359,16 @@ export async function deleteCategory(id: number, ctx?: WriteCtx): Promise<{ dele
   const before = await getCategory(id);
   if (!before) throw new Error(`카테고리 #${id} 없음`);
   await itemsPool.query(`DELETE FROM category WHERE id=$1`, [id]); // FK CASCADE: 매핑·엣지·정션 동반 삭제
-  await auditCategory(`${before.space}/${before.key}`, "delete", before, null, ctx);
+  await auditCategory(before.key, "delete", before, null, ctx);
   return { deleted: true, id };
 }
 
 // 복원 — 마지막 delete 의 before 스냅샷을 원래 id 로 재적재한다. 매핑·엣지·정션은 삭제 시 cascade 됐으므로
-//  복원되지 않는다(카테고리 본체만). 이미 존재하면 거부. (space/key 유니크 충돌 시 DB 가 throw.)
+//  복원되지 않는다(카테고리 본체만). 이미 존재하면 거부. (key 유니크 충돌 시 DB 가 throw.)
 //  사람전용 게이트는 capability 계층(content_restore)에서 선행.
 export async function restoreCategory(before: Record<string, unknown>, ctx?: WriteCtx): Promise<CategoryRow> {
   const after = await restoreSnapshot<CategoryRow>("category", CATEGORY_COLS, "id", before);
-  await auditCategory(`${after.space}/${after.key}`, "restore", null, after, ctx);
+  await auditCategory(after.key, "restore", null, after, ctx);
   return after;
 }
 
