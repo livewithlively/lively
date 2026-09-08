@@ -11,7 +11,7 @@ import { execTopology, tmuxArgvFor, tmuxServerIsDedicated } from "../exec-topolo
 import { planTmux, runPlan, outcomeToError, tmuxSessionOf } from "./tmux-route.js";                        // #2600 T2 (d) d2 — 코어 직접 경로의 «무엇을 어디로»
 import { makeBrokerClient, type BrokerTransport } from "./broker-client.js";                // #2600 T2 (d) d2 — 그 전송(소켓·허브)
 import { shadowTmux } from "./tmux-shadow.js";
-import { makeTmuxCallCensus } from "./tmux-call-census.js";   // #2600 T2 d4 — 「이 프로세스가 아직 tmux 를 부르나」의 계기(전수·route 무관)
+import { makeTmuxCallCensus, censusSite } from "./tmux-call-census.js";   // #2600 T2 d4 — 「이 프로세스가 아직 tmux 를 부르나」의 계기(전수·route 무관)
 import { logger } from "../log.js";                                               // #2600 T2 (d) d3 — 옛 경로가 답하고 코어 경로는 견주기만
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 
@@ -123,7 +123,8 @@ export async function tmuxViaRoute(args: string[], via: { transport: BrokerTrans
  *  2026-09-08 에 실제로 그렇게 세고 «list-sessions 0건» 이라 결론했는데 같은 창의 요약은 compared 100 이었다.
  *  계기는 **이 seam** 에 있어야 한다: 모든 `tmux()` 가 여기를 지나고(`tmuxBatch`·`getOpt` 도 결국 여기다),
  *  route 모드(off/shadow/on)와 무관하며, 세션 호스트(route=on 이라 그림자가 아예 없다)에서도 같은 자로 잰다.
- * ⚠ 로그에 싣는 것은 **슬러그와 동사뿐**이다 — argv 에는 세션 라벨·send-keys 본문이 있고 그건 로그에 갈 것이 아니다(d2 §6-4).
+ * ⚠ 로그에 싣는 것은 **슬러그·동사·호출부(`파일:줄`)뿐**이다 — argv 에는 세션 라벨·send-keys 본문이 있고
+ *  그건 로그에 갈 것이 아니다(d2 §6-4). 호출부도 **파일명만** 싣는다(절대경로 금지 — 창이 수 KB 씩 는다).
  * ⚠ 0 으로 두면 보고가 꺼진다(계수 자체는 계속 — 부담이 되는 배포의 탈출구).
  */
 export const TMUX_CENSUS_EVERY = 200;
@@ -133,7 +134,10 @@ export async function tmux(args: string[]): Promise<string> {
   //  #2600 T2 d4 — 계수는 **경로를 고르기 전에** 한다. 어느 경로로 가든 «불렀다» 는 사실은 같고,
   //   그래야 「남은 표면」이 route 를 켜고 끄는 것과 무관하게 같은 자로 세어진다. 비치명이라 삼킨다.
   try {
-    const rows = tmuxCensus.record(tenantSlug(), tmuxSessionOf(args).verb);
+    //  호출부는 **스택에서** 뽑는다 — 두 칸(슬러그·동사)만으로는 남은 표면을 못 짚는다(`censusSite` 머리말).
+    //   `new Error()` 는 여기서만 만든다: tmux 호출은 분당 수십 건이라 스택 한 장의 비용이 무의미하고,
+    //   호출부마다 이름을 심는 방식은 «심는 것을 잊은 자리»가 조용히 «(없음)» 이 되어 계기가 거짓말을 한다.
+    const rows = tmuxCensus.record(tenantSlug(), tmuxSessionOf(args).verb, censusSite(new Error().stack));
     if (rows) logger.info({ tmuxCensus: { window: TMUX_CENSUS_EVERY, rows } }, "tmux 호출 계수(창)");
   } catch { /* 계수 때문에 tmux 가 실패하면 안 된다 */ }
   //  #2600 T2 (d) d2 — 플래그가 `on` 이고 길이 있을 때만 코어 직접 경로. 아니면 아래 종전 경로가 **한 바이트도** 안 바뀐다.
