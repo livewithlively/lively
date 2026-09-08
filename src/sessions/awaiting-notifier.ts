@@ -49,11 +49,10 @@ export function resetAwaitingState(): void { lastSeen = new Map(); }
  */
 async function defaultSessionList(): Promise<typeof listSessionsRaw> {
   try {
-    const [{ sessionHostsInScope, nodeSessionsInScope, NODE_STATE_STALE_MS }, { gatewayDefersToSessionHost }] =
-      await Promise.all([import("../node/registry.js"), import("../node/self-node.js")]);
+    const { nodeSessionsInScope, gatewayDefersHere } = await import("../node/registry.js");
     //  주인이 노드로 옮겨간 테넌트에서만 게이트웨이 tmux 를 안 읽는다(d4 판정 — 목록 소유와 같은 술어).
     //   그 외에는 종전대로 읽고, **어느 쪽이든 노드 스냅샷을 보탠다**(#3741 — 위 머리말).
-    const hostOwns = gatewayDefersToSessionHost(sessionHostsInScope(), NODE_STATE_STALE_MS);
+    const hostOwns = gatewayDefersHere();   // #2600 T2 d6 — 스코프+판정+계수 한 자리(registry)
     return async () => {
       const local = hostOwns ? [] : await listSessionsRaw();
       //  같은 id 가 양쪽에 있으면 **라이브 관측(local)이 이긴다** — 목록 화면과 같은 병합·같은 우선순위를

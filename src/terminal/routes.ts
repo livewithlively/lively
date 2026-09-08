@@ -37,9 +37,9 @@ import { isProjectSessionDir } from "../project/project-fs.js";
 // #2116 — 죽은 세션 메타의 '남에게도 보이나' 판정을 다른 게이트와 **같은 술어**로 맞춘다(cwd 축).
 const sharedByFolder = (dir: string): boolean => isProjectSessionDir(dir);
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
-import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, nodeSessionGone, isSelfNode, isSessionHostNode, liveNodes, nodeOfSession, nodeSessionHarness, sessionHostsInScope, NODE_STATE_STALE_MS } from "../node/registry.js";
+import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, nodeSessionGone, isSelfNode, isSessionHostNode, liveNodes, nodeOfSession, nodeSessionHarness, gatewayDefersHere } from "../node/registry.js";
 import type { NodeSessionInfo } from "../node/registry.js";
-import { relayNodeId, sessionRelayNodeId, sameTmuxCoordinate, isBoxSessionRow, gatewayDefersToSessionHost } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #2636 — 화면이 안 준 좌표는 서버가 되찾는다 · #3745 — 박스 세션엔 세션 호스트 좌표도 같은 tmux 다
+import { relayNodeId, sessionRelayNodeId, sameTmuxCoordinate, isBoxSessionRow } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #2636 — 화면이 안 준 좌표는 서버가 되찾는다 · #3745 — 박스 세션엔 세션 호스트 좌표도 같은 tmux 다
 import type { NodeOp } from "../node/protocol.js";
 import { normalizeTheme } from "./catalog.js"; // #1683 테마 값 정규화(순수 — catalog 가 소유)
 import { getNode, listNodes } from "../node/store.js";
@@ -406,7 +406,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //   목록이 통째로 비므로, 모르면 종전대로 게이트웨이가 답한다(술어 머리말·session-host-ownership 시험).
     //  ⚠ 이 술어가 참이 되는 배포는 «선언된 세션 호스트를 띄운 테넌트» 뿐이다 — 셀프호스트·멤버 PC 배포는
     //   선언이 없어 한 줄도 안 바뀐다.
-    const sessionHostOwns = gatewayDefersToSessionHost(sessionHostsInScope(), NODE_STATE_STALE_MS);
+    const sessionHostOwns = gatewayDefersHere();   // #2600 T2 d6 — 스코프+판정+계수 한 자리(registry)
     const all = sessionHostOwns ? [] : await listSessions(userOf(req));
     // 분산 노드(#869) — 원격 노드 세션 병합(node 필드로 구분). 가시성은 개인 세션 규칙(소유자+초대)로 게이트웨이가 판정.
     const remote = nodeSessionsFor(idOf(userOf(req)));
