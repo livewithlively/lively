@@ -89,12 +89,16 @@ const readSrc = (rel: string): string =>
   readFileSync(new URL("../../" + rel, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 
 t("★ B1 생성 응답도 목록과 **같은 곳**에서 대화 필드를 만든다 — 갈리면 방금 만든 세션만 잘못 열린다", () => {
+  //  #3626 — 헬퍼와 생성 응답은 세션 생성 관문(session-launch.ts)에 산다(홈·프로젝트 두 입구가 같은 것을 쓴다).
+  //   목록(routes.ts)은 그 헬퍼를 import 해 쓴다 — 갈리는 자리가 없어야 한다는 명제는 그대로다.
+  const launch = readSrc("src/terminal/session-launch.ts");
   const src = readSrc("src/terminal/routes.ts");
-  assert.match(src, /const chatFieldsOf =/, "공용 헬퍼가 있다");
-  assert.match(src, /res\.json\(\{ session: withChatFields\(session\) \}\)/, "로컬 생성 응답이 대화 필드를 싣는다");
+  assert.match(launch, /export const chatFieldsOf =/, "공용 헬퍼가 있다");
+  assert.match(launch, /return withChatFields\(session\);/, "로컬 생성 응답이 대화 필드를 싣는다");
   //  ⚠ 노드 갈래는 **onNode=true 를 함께 넘긴다**(#2439) — 그 세션은 다른 기계에 살아
   //   대화 런타임이 거기서 돌지 않는다. 안 넘기면 화면이 «대화창» 이라 하고 배달은 릴레이로 간다.
-  assert.match(src, /withChatFields\(session, true\), node:/, "노드 생성 응답도 싣되 노드임을 알린다");
+  assert.match(launch, /withChatFields\(session, true\), node:/, "노드 생성 응답도 싣되 노드임을 알린다");
+  assert.match(src, /chatFieldsOf\(s\.harness, onNode/, "목록도 같은 헬퍼로 만든다");
   assert.ok(!/s\.chatMode = codexChatMode/.test(src), "목록이 헬퍼를 안 쓰고 따로 만들지 않는다");
 });
 
