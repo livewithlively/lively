@@ -659,7 +659,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     fixBtn.hidden = m !== 'term'; setBtn.hidden = m !== 'term';        // 터미널 조작은 터미널을 보고 있을 때만 겉에 둔다
     termStatusEl.hidden = m !== 'term' || !termStatusEl.textContent;   // 연결 상태도 마찬가지(#1744)
     paintRunHead();                                                   // 모델·추론강도도 마찬가지 — 터미널을 볼 때만 머리줄에 선다
-    if (m === 'chat') { view.scrollToBottom(); view.input.focus(); }
+    if (m === 'chat') { view.scrollToBottom(); view.input.focus(); pokePoll(); }   // 가려진 동안 느슨했던 폴을 그 자리에서 따라잡는다
   }
 
   // ── 터미널 프레임과의 다리(#1744) ────────────────────────────────────────────────────────
@@ -1296,7 +1296,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   마감되는데, 대화가 **한 번도 없었던** 세션은 그 마감 경로(아래 `running && cur && !dead()`)에 애초에 못 들어간다
     //   — `cur` 이 없기 때문이다. 그래서 즉사한 세션의 화면이 404 를 초당 1.4회로 **영원히** 되물었다
     //   (8초에 11회·콘솔 에러 200+ 누적). 살아 있지 않으면 촘촘할 이유가 없다.
-    const ms = src.kind === 'log' ? (running && !dead() ? POLL_LOG_LIVE_MS : POLL_LOG_MS) : (running && !dead()) ? POLL_RUN_MS : POLL_IDLE_MS;
+    let ms = src.kind === 'log' ? (running && !dead() ? POLL_LOG_LIVE_MS : POLL_LOG_MS) : (running && !dead()) ? POLL_RUN_MS : POLL_IDLE_MS;
+    //  ★ 대화창이 **가려져 있으면**(터미널을 보는 중) 촘촘히 읽지 않는다(2026-09-08 실측, #3656). 박스 세션의 폴 한 번은
+    //   매니지드에서 멤버 실행환경 exec(stat·구간읽기) 이고, 도는 중 0.7초 주기는 노드에 초당 ~4회 runsc exec 를 걸어
+    //   2vCPU 노드를 포화시켰다 — 사람은 그 순간 터미널로 같은 스트림을 보고 있었다. 가려진 동안은 유휴 주기로 두고,
+    //   다시 대화창을 열면 setMode 가 pokePoll 로 그 자리에서 따라잡는다(읽던 화면을 뺏지 않는다).
+    if (mode === 'term' && src.kind === 'box') ms = Math.max(ms, POLL_IDLE_MS);
     //  죽은 세션에는 **애초에 물을 것이 없다.** 중앙 기록은 더 안 늘고(옛 조건), 박스 파일은 대화가
     //   한 번도 없었으면(loadedTo === 0) 그 파일이 **생길 일 자체가 없다** — 세션이 죽었으니까.
     //   그런데도 3초마다 물어서 404 를 영원히 하나씩 뱉었다(#1631, 2026-08-31 실측: 즉사한 리브 세션 화면).
