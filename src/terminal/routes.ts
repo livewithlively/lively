@@ -601,9 +601,13 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       throw new HttpError(404, SESSION_NOT_FOUND);
     }
     // 라벨 + 프로젝트 id 를 함께 반환 — 프로젝트 세션이면 프론트가 상단 '프로젝트 페이지 열기' 버튼을 켠다(개인 세션은 0 → 숨김).
+    //  ★ desired-state(DB) 가 있으면 **그 값**이다(2026-09-08, #3656). 이 메타는 터미널 화면의 부팅 게이트라 세션을 열 때마다
+    //   불리는데, 매니지드에선 tmux show-options 하나가 중계 왕복 하나(허브 → 노드 브로커 → runsc exec, 4% 확률로 3~20초)다.
+    //   라벨·프로젝트는 생성·이름변경·프로젝트 연결이 전부 DB 에도 적으므로(upsertSessionState·editSession·session-project)
+    //   같은 답을 왕복 없이 낸다. 행이 없거나 값이 비었을 때만 종전대로 tmux 에 묻는다(무회귀).
     const [label, projectId] = await Promise.all([
-      getSessionLabel(req.params.id),
-      getSessionProject(req.params.id),
+      st?.label ? Promise.resolve(st.label) : getSessionLabel(req.params.id),
+      st?.project_id != null ? Promise.resolve(Number(st.project_id) || 0) : getSessionProject(req.params.id),
     ]);
     res.json({ id: req.params.id, label, projectId });
   }));
