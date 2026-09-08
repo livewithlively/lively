@@ -108,7 +108,14 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
         });
         return;
       }
-      const ok = await canAttach(id, tk.userId).catch(() => false);
+      // ★ 두 판정을 **나란히** 묻는다(2026-09-08 실측·#3656). 매니지드에서 canAttach 는 DB 지만 sessionGone 은
+      //  중계(허브 → 노드 브로커 → runsc exec) 한 왕복이고, 그 왕복은 4% 확률로 3~20초를 먹는다(허브 파킹 소켓
+      //  무응답). 종전엔 이 둘이 직렬이라 그 확률에 두 번 노출됐다. 둘은 서로의 답을 안 본다(attachClose 가 둘을
+      //  같이 받는다) — 직렬일 이유가 없었다.
+      const [ok, gone] = await Promise.all([
+        canAttach(id, tk.userId).catch(() => false),
+        sessionGone(id).catch(() => false),
+      ]);
       // ⚠ 권한이 있어도 **세션이 살아 있는지 따로 봐야 한다**(2026-08-26 실측 신고).
       //  canAttach → ownerMeta 는 **DB desired-state 우선**이라(sessions.ts) tmux 에서 이미 죽은 세션도
       //  권한을 통과시킨다. 그래서 종전엔 `!ok` 일 때만 생사를 확인했고, 죽은 세션에 붙으러 온 클라는
@@ -117,7 +124,6 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
       //  4410 을 주면 클라가 그 자리에서 복원으로 넘어간다(onSessionGone) — 그게 의도한 경험이다.
       //  비용은 attach 당 has-session 1회다. 살아 있는 세션엔 즉답이고, 죽은 세션엔 재연결 폭풍을 멈추므로
       //  오히려 왕복이 준다. 판정 불가(#835)는 여전히 false — 모르면 살아있다고 보고 종전 경로로 간다.
-      const gone = await sessionGone(id).catch(() => false);
       const close = attachClose(ok, gone);
       if (close) {
         // 거부를 조용히 끊으면(socket.destroy) 클라가 영원히 재연결한다 → WS 핸드셰이크만 완료한 뒤 '이유가 담긴 코드'로
@@ -131,7 +137,11 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
         });
         return;
       }
-      await ensureSessionOpts(id).catch(() => { /* 비치명 */ });
+      // ★ 옵션 보장은 **기다리지 않는다**(2026-09-08, #3656). 이 셋(mouse·aggressive-resize·window-size)은 생성 때
+      //  이미 박힌 값이고 여기는 옛 세션 마이그레이션·누락 방어일 뿐인데, 매니지드에선 set-option 하나가 중계
+      //  왕복 하나라 attach 앞에 **직렬로 셋**이 섰다(실측: 세션은 4초 만에 떴는데 화면은 36초 뒤에 붙었다 —
+      //  attach 앞 왕복 6~8회가 그 자리다). tmux 는 명령을 직렬화하므로 attach 뒤에 도착해도 같은 효과다(비치명).
+      void ensureSessionOpts(id).catch(() => { /* 비치명 */ });
       // ── C안(#2228): 인증·canAttach 가 끝난 여기서 소켓 fd 를 attach 워커로 넘긴다. 넘어가면 바이트가
       //  게이트웨이 이벤트루프를 아예 안 지난다. 워커가 판정(테넌시)을 다시 하지 않도록 여기서 정한 테넌트
       //  컨텍스트를 실어 보낸다(워커의 tmuxExecArgv 가 그 컨텍스트로 로컬 tmux/registry/-L/매니지드 중계를 고른다).
