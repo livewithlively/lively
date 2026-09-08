@@ -10,10 +10,15 @@
 //
 //  규율: base working tree 는 안 건드리고 origin/<ref> 최신에서 워크트리를 분기한다(base RO). 서버측
 //   provisionProjectRepos·로컬 work.mjs 의 clone/worktree 와 동형이되 프로젝트에 매이지 않는다.
+//  ⚠ 공유 base 위에서 지켜야 할 셋(#3678, 2026-09-08 사고 — 다른 프로젝트 세션의 admin 이 하루 5회 지워지고 커밋이 남의
+//   브랜치에 얹힘): ① `git worktree prune` 을 부르지 않는다(안 보이는 경로 = 남의 컨테이너일 수 있다 → 표적 정리만)
+//   ② admin id 를 basename 에 맡기지 않는다(프로젝트별 고유 id 로 relink) ③ 있는 워크트리를 재사용하기 전에 admin 이
+//   자기 것인지 확인한다(아니면 중단·경고). 서버 provision·work.mjs·preview-stage 도 ①을 같이 지킨다.
 // ═══════════════════════════════════════════════════════════════════════════
-import { readFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync } from "node:fs";
-import { join, dirname, isAbsolute, resolve } from "node:path";
+import { readFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { join, dirname, basename, isAbsolute, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 
 const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
@@ -66,23 +71,70 @@ export function markerSyncMode(meta) {
 
 const isGitRepo = (ctx, p) => existsSync(p) && ctx.sh("git", ["-C", p, "rev-parse", "--git-dir"], { allowFail: true }).code === 0;
 
-// 스테일 워크트리 등록 정리 — 워크트리 디렉터리가 사라져도 git 은 등록을 남기고, 그 등록은 **prunable 이어도
-//  브랜치를 계속 점유**한다(-b 도 attach 도 실패). 청소되는 임시경로(스크래치패드 등)에 뜬 워크트리가 지워지면
-//  그 브랜치가 사람이 손으로 prune 할 때까지 영구히 막히므로, **실제 add 직전에** 턴다(#932). 살아있는 등록엔 무해.
-//  '직전에만' 인 이유: base 하나에 워크트리가 100개를 넘기도 해서 매 호출(멱등 no-op 포함) 스캔은 낭비고,
-//   동시에 도는 다른 세션의 worktree add 와 겹칠 창만 넓힌다 — 서버 provisionProjectRepos 도 같은 게이팅이다.
-const pruneWorktrees = (ctx, base) => { ctx.sh("git", ["-C", base, "worktree", "prune"], { allowFail: true }); };
+// 경로 정규화(비교용) — 있으면 realpath(macOS /var→/private/var · 윈도우 8.3/대소문자), 없으면 **가장 가까운 있는 조상**을
+//  realpath 하고 나머지를 붙인다. git 은 등록 경로를 realpath 로 저장하므로, 아직 없는 목표 경로도 같은 표기로 견줘야
+//  «내 목표 경로의 등록」을 알아본다(안 그러면 macOS 에서 /var 와 /private/var 가 남남이 돼 스테일 등록을 못 찾는다).
+export function normPath(p) {                       // export=테스트용·순수
+  let cur = resolve(p);
+  const tail = [];
+  for (let i = 0; i < 64; i++) {
+    let real = null;
+    try { real = realpathSync.native(cur); } catch { /* 없음 → 한 단계 위로 */ }
+    if (real !== null) { tail.reverse(); return join(real, ...tail); }
+    const up = dirname(cur);
+    if (up === cur) break;
+    tail.push(basename(cur));
+    cur = up;
+  }
+  return resolve(p);
+}
+const samePath = (a, b) => normPath(a) === normPath(b);
 
-// 이 base 의 워크트리들이 **점유 중인** 브랜치 → 그 워크트리 경로. git 은 한 브랜치를 두 워크트리에 못 건다.
-function checkedOutBranches(ctx, base) {
+// 이 base 의 워크트리 등록 목록(base 자신 제외) → [{ path, head, branch|null, prunable, locked }].
+//  `git worktree list --porcelain` 은 디렉터리가 사라진 등록도 경로 그대로 보여준다(prunable 표시와 함께).
+function listWorktrees(ctx, base) {
   const out = ctx.sh("git", ["-C", base, "worktree", "list", "--porcelain"], { allowFail: true }).stdout || "";
-  const map = new Map();
-  let at = null;
+  const list = [];
+  let cur = null;
   for (const raw of out.split("\n")) {
     const line = raw.trim();
-    if (line.startsWith("worktree ")) at = line.slice("worktree ".length);
-    else if (line.startsWith("branch refs/heads/")) map.set(line.slice("branch refs/heads/".length), at);
+    if (line.startsWith("worktree ")) { cur = { path: line.slice("worktree ".length), head: null, branch: null, prunable: false, locked: false }; list.push(cur); }
+    else if (!cur) continue;
+    else if (line.startsWith("HEAD ")) cur.head = line.slice("HEAD ".length);
+    else if (line.startsWith("branch refs/heads/")) cur.branch = line.slice("branch refs/heads/".length);
+    else if (line.startsWith("prunable")) cur.prunable = true;
+    else if (line.startsWith("locked")) cur.locked = true;
   }
+  return list.filter((w) => !samePath(w.path, base));
+}
+
+// «지워졌다» 와 «안 보인다» 를 가르는 유일한 근거 — 경로는 없는데 **부모 디렉터리는 있다**(#3678).
+//  세션 컨테이너는 남의 프로젝트 폴더를 통째로 못 보므로, 부모까지 없으면 «다른 컨테이너에서 살아 있는 워크트리» 일 수
+//  있어 손대지 않는다. 부모가 보이는데 그 안에 없으면 정말 지워진 것이다(스크래치패드 청소·rm -rf).
+export const provablyGone = (p) => !existsSync(p) && existsSync(dirname(p));   // export=테스트용·순수
+
+// 표적 정리 — blanket `git worktree prune` 의 대체(#3678). 지우는 건 «목표 경로들의 등록 ∪ 목표 브랜치를 쥔 등록» 중
+//  provablyGone 인 것뿐이다. 그 밖의 등록(남의 컨테이너 것일 수 있는 «안 보이는» 등록 포함)은 절대 건드리지 않는다.
+//  ⚠ 왜 prune 을 버렸나: `git worktree prune` 은 이 프로세스에서 안 보이는 경로를 전부 «없다» 로 판정해 admin 을 지운다.
+//   세션 컨테이너는 자기 프로젝트만 마운트하므로 **다른 프로젝트 세션이 뜬 워크트리의 admin 이 통째로 날아갔고**(하루 5회
+//   실측, 2026-09-08), 그 뒤 같은 basename 으로 다시 뜬 admin 을 두 워크트리가 같이 가리켜 HEAD·index 를 공유했다 — 내
+//   커밋이 남의 브랜치에 얹히고, index 재구성 뒤 커밋이 main 의 남의 수정을 조용히 되돌렸다. #932 가 prune 으로 풀려던
+//   것(사라진 워크트리의 등록이 브랜치를 영구 점유)은 아래 표적 정리가 그대로 푼다 — 그 등록만 `worktree remove --force`.
+function clearStaleRegistrations(ctx, base, { paths = [], branch = null } = {}, regs = listWorktrees(ctx, base)) {
+  const removed = [];
+  for (const w of regs) {
+    const target = paths.some((p) => p && samePath(p, w.path)) || (branch !== null && w.branch === branch);
+    if (!target || !provablyGone(w.path)) continue;
+    const r = ctx.sh("git", ["-C", base, "worktree", "remove", "--force", w.path], { allowFail: true });
+    if (r.code === 0) removed.push(w.path);
+  }
+  return removed;
+}
+
+// 등록들이 **점유 중인** 브랜치 → 그 워크트리 경로. git 은 한 브랜치를 두 워크트리에 못 건다.
+function checkedOutBranches(regs) {
+  const map = new Map();
+  for (const w of regs) if (w.branch) map.set(w.branch, w.path);
   return map;
 }
 
@@ -129,7 +181,7 @@ export function authNote(stderr, url) {   // export=테스트용·순수
 //  **어떻게 빠져나오는지**(그 워크트리에서 작업 / branch 인자)는 말해주지 않아 사람이 매번 다시 알아내야 한다(#932).
 //  게다가 3단 폴백의 마지막 실패가 -b 라 fatal 이 'already exists' 로 끝나 점유 사실 자체가 안 보인다.
 function branchHeldNote(ctx, base, branch) {
-  const at = checkedOutBranches(ctx, base).get(branch);
+  const at = checkedOutBranches(listWorktrees(ctx, base)).get(branch);
   return at
     ? ` — 브랜치 '${branch}' 는 이미 '${at}' 워크트리가 쥐고 있습니다(git 은 한 브랜치를 두 워크트리에 못 겁니다).`
       + ` 거기서 작업하거나, branch 인자로 다른 이름을 주세요.`
@@ -188,6 +240,12 @@ async function ensureBase(ctx, repo, base) {
   } else {
     ctx.sh("git", ["-C", base, "fetch", "origin"], { allowFail: true }); // best-effort(오프라인 무시)
   }
+  // gc 의 자동 워크트리 prune 을 끈다(#3678) — `git gc --auto`(commit·fetch 뒤 저절로 돈다)는 gc.worktreePruneExpire(기본 3개월)
+  //  보다 오래 index 를 안 건드린 «경로 없는» 등록을 지운다. 컨테이너에서 «경로 없음» 은 «다른 프로젝트의 살아 있는
+  //  워크트리」일 수 있으므로 base 에서 영구히 끈다(T0 실측: index 4개월 묵은 A 를 B 의 gc 가 지우던 것이 never 로 멈춤).
+  //  base 에 만지는 건 이 config 키 하나뿐(워킹트리·ref 무변경 = RO 규율 유지). 워크트리들은 base 의 config 를 공유하므로
+  //  어느 워크트리에서 gc 가 돌아도 같이 막힌다. 멱등·best-effort.
+  ctx.sh("git", ["-C", base, "config", "gc.worktreePruneExpire", "never"], { allowFail: true });
 }
 
 // 핀 경로 — 지정 없으면 tmpdir 밑 **repo + SHA** 로 content-addressed(#932). 작업 워크트리와 섞이지 않게 별도 루트.
@@ -197,6 +255,79 @@ async function ensureBase(ctx, repo, base) {
 //   재도입). SHA 를 경로에 박으면 같은 SHA 는 공유(dedup)·다른 SHA 는 공존, force-remove 자체가 필요 없어진다.
 //   지정 경로(p)는 호출자가 자리를 명시한 것이라 그대로 둔다(그 자리의 스톰프는 호출자 책임).
 const pinPathOf = (ctx, repo, p, sha) => (p ? (isAbsolute(p) ? p : join(ctx.cwd, p)) : join(tmpdir(), "lively-pin", repo, sha));
+
+// ── admin id(#3678) ──────────────────────────────────────────────────────────
+// git 은 admin 디렉터리(`<base>/.git/worktrees/<id>`) 이름을 **워크트리 경로의 basename** 으로 짓는다(이미 있으면 숫자만 붙인다).
+//  canonical 슬롯은 모든 프로젝트가 `<프로젝트 폴더>/<repo>` 라 basename 이 전부 `<repo>` — 한쪽 admin 이 지워졌다(prune)
+//  다른 쪽이 다시 뜨면 **같은 이름**이 재생성돼, 지워진 쪽의 gitfile 이 그 새 admin 을 가리킨다 = 두 워크트리가 HEAD·index
+//  하나를 공유한다(2026-09-08 사고: 내 커밋이 project/3646 에 얹힘). 그래서 만든 직후 id 를 **경로에서 유일하게 정해지는
+//  이름**으로 옮긴다: 슬롯이면 `<repo>-p<pid>`, 밖이면 `<basename>-<8hex(경로)>`. 같은 경로 ⇒ 같은 id(서버 provision 과
+//  재사용이 멱등). 관측용이기도 하다 — `ls .git/worktrees` 만으로 누구 것인지 보인다. 지워지더라도 남이 같은 이름을 다시
+//  만들 일이 없으니 «조용한 공유» 가 «시끄러운 실패(not a git repository)» 로 바뀐다 — 그게 의도다.
+export function adminIdFor(wt, pid, canonical) {   // export=테스트용·순수
+  const name = basename(wt);
+  if (pid !== null && pid !== undefined && canonical && wt === canonical) return `${name}-p${pid}`;
+  return `${name}-${createHash("sha1").update(resolve(wt)).digest("hex").slice(0, 8)}`;
+}
+const gitfileOf = (wt) => join(wt, ".git");
+const readGitdirLine = (file, baseDir) => {         // "gitdir: <경로>" 한 줄 → 절대경로 | "" (파손) | null (파일 없음)
+  let txt; try { txt = readFileSync(file, "utf8"); } catch { return null; }
+  const m = txt.match(/^gitdir:\s*(.+?)\s*$/m);
+  if (!m) return "";
+  return isAbsolute(m[1]) ? m[1] : resolve(baseDir, m[1]);   // worktree.useRelativePaths(git≥2.48)면 상대경로
+};
+// 워크트리의 gitfile(`.git` **파일**) 이 가리키는 admin 경로 — `.git` 이 디렉터리(그 자리에 직접 clone)면 null.
+function adminOf(wt) {
+  const f = gitfileOf(wt);
+  let st; try { st = statSync(f); } catch { return null; }
+  if (!st.isFile()) return null;
+  return readGitdirLine(f, wt);
+}
+// admin → 그 admin 이 «자기 워크트리» 라고 적어 둔 gitfile 경로(`<admin>/gitdir` — 접두 없이 `<wt>/.git` 경로 한 줄). 없으면 "".
+const adminBackref = (admin) => {
+  let txt; try { txt = readFileSync(join(admin, "gitdir"), "utf8"); } catch { return ""; }
+  const line = (txt.split("\n")[0] || "").trim();
+  if (!line) return "";
+  return isAbsolute(line) ? line : resolve(admin, line);   // worktree.useRelativePaths(git≥2.48)면 상대경로
+};
+
+// 재사용 전 **소유 검증**(#3678 T2): gitfile 이 가리키는 admin 이 있고, 그 admin 의 gitdir 가 **이 워크트리 자신**을 가리켜야
+//  한다. 아니면 남의 admin 을 잇고 있는 사고 상태다 — 조용히 재사용하면 여기서 한 커밋이 남의 브랜치에 얹힌다. 무엇도 고치지
+//  않고 멈춘다(그 자리의 파일·미커밋 변경은 그대로다). 반환 { admin } (직접 clone 이면 admin:null 로 통과).
+function verifyOwnAdmin(wt) {
+  const admin = adminOf(wt);
+  if (admin === null) return { admin: null };
+  const help = "이 워크트리에서 git 을 쓰지 마세요(reset·stash 가 남의 작업에 닿습니다). 파일은 그대로 있으니 다른 경로에"
+    + " 새 워크트리를 뜬 뒤(path 인자) 내 변경만 옮기세요 — 절차: 지식 'shared-worktree-hijacked-by-other-session'.";
+  if (!admin) throw new Error(`워크트리 '${wt}' 의 .git 파일이 파손됐습니다(gitdir 줄 없음). ${help}`);
+  if (!existsSync(admin)) {
+    throw new Error(`워크트리 '${wt}' 의 git 등록(admin '${admin}')이 사라졌습니다 — 다른 세션의 worktree prune 에 지워졌을 수 있습니다. ${help}`);
+  }
+  const back = adminBackref(admin);
+  if (!back || !samePath(back, gitfileOf(wt))) {
+    throw new Error(`워크트리 '${wt}' 가 **다른 워크트리의** git 등록을 잇고 있습니다 — admin '${admin}' 은 '${back ? dirname(back) : "(불명)"}' 의 것입니다`
+      + `(같은 base 에서 같은 basename 으로 다시 뜬 admin 을 둘이 가리키는 상태). 여기서 커밋하면 그쪽 브랜치에 얹힙니다. ${help}`);
+  }
+  return { admin };
+}
+
+// admin 을 고유 id 로 옮긴다(#3678): `<base>/.git/worktrees/<old>` → `<…>/<newId>` 로 rename 하고 gitfile 을 다시 쓴다.
+//  `git worktree move/repair` 가 하는 것과 같은 두 파일 조작이다(admin 의 gitdir 파일은 워크트리 경로를 담으므로 그대로 유효).
+//  이미 그 id 면 no-op. 목적지가 있으면 — 스테일(경로 없음·부모 있음 = provablyGone)이면 치우고, 살아 있는 워크트리 것이면
+//  남의 것이라 옮기지 않고 throw. gitfile 쓰기가 실패하면 rename 을 되돌린다(중간 상태를 남기지 않는다).
+function relinkAdmin(wt, admin, newId) {
+  if (basename(admin) === newId) return admin;
+  const dst = join(dirname(admin), newId);
+  if (existsSync(dst)) {
+    const back = adminBackref(dst);
+    if (back && !provablyGone(dirname(back))) throw new Error(`admin id '${newId}' 자리를 살아 있는 워크트리('${dirname(back)}')가 쓰고 있어 옮기지 않습니다.`);
+    rmSync(dst, { recursive: true, force: true });
+  }
+  renameSync(admin, dst);
+  try { writeFileSync(gitfileOf(wt), `gitdir: ${process.platform === "win32" ? dst.replace(/\\/g, "/") : dst}\n`); }
+  catch (e) { try { renameSync(dst, admin); } catch { /* 되돌리기도 실패 — 원인 e 를 그대로 */ } throw e; }
+  return dst;
+}
 
 // 이 머신에서 뜰 수 있는 등록 레포 + 로컬 base 상태(clone 여부·브랜치·origin 대비 최신).
 export async function repoList(ctx) {
@@ -233,36 +364,56 @@ export async function repoWorktree(ctx, args) {
   const marker = findProjectMarkerUp(ctx.cwd);
   const wt = resolveWtPath(ctx.cwd, repo, args.path && String(args.path).trim(), marker);
 
-  // 이미 워크트리면 그대로(멱등) — 재실행 안전. **브랜치를 고르기 전에** 나간다: 있는 워크트리를 돌려주는 데
-  //  새 이름은 필요 없고, 이름 고르기가 실패해도(전부 점유) 여기까지 못 오면 안 되기 때문(#932).
-  if (isGitRepo(ctx, wt)) {
+  const pid = marker?.meta.project_id ?? null;
+  const canonical = canonicalOf(marker, repo);
+  const isSlot = pid !== null && canonical !== null && wt === canonical;
+  const adminId = adminIdFor(wt, pid, canonical);
+
+  // 이미 워크트리면 재사용(멱등) — 단 **내 것인지 먼저 확인한다**(#3678 T2). **브랜치를 고르기 전에** 나간다: 있는
+  //  워크트리를 돌려주는 데 새 이름은 필요 없고, 이름 고르기가 실패해도(전부 점유) 여기까지 못 오면 안 되기 때문(#932).
+  //  판정은 `.git` 의 존재다(git 이 열 수 있는지가 아니라) — gitfile 이 파손·미아가 된 워크트리도 «새로 만들 자리» 가 아니라
+  //  «검증해서 알려 줄 자리» 다(그 자리엔 사람의 파일이 있다).
+  if (existsSync(gitfileOf(wt)) || isGitRepo(ctx, wt)) {
+    const { admin } = verifyOwnAdmin(wt);                       // 남의 admin 을 잇고 있으면 여기서 멈춘다(조용히 재사용 금지)
+    const adminNow = admin ? relinkAdmin(wt, admin, adminId) : null; // 서버 provision 등이 basename id 로 만든 것도 고유 id 로
     const b = ctx.sh("git", ["-C", wt, "rev-parse", "--abbrev-ref", "HEAD"], { allowFail: true }).stdout.trim();
-    return { repo, worktree: wt, branch: b || null, base, note: "이미 워크트리가 있어 그대로 사용합니다." };
+    const out = { repo, worktree: wt, branch: b || null, base, admin: adminNow ? basename(adminNow) : null, note: "이미 워크트리가 있어 그대로 사용합니다." };
+    if (isSlot && b && b !== `project/${pid}`) {
+      out.warning = `canonical 슬롯인데 브랜치가 project/${pid} 가 아니라 '${b}' 입니다 — 다른 세션이 이 자리에서 브랜치를 갈아탔을 수`
+        + ` 있습니다(git status 에 내가 안 만진 파일이 보이면 그 신호). 커밋 전에 확인하세요.`;
+    }
+    return out;
   }
 
-  // ③ 진짜로 만들 때만 스테일 등록을 턴다 — 서버 provisionProjectRepos 와 같은 게이팅(멱등 no-op 엔 안 돈다).
-  //  **브랜치를 고르기 전에** 돌아야 한다: 사라진 워크트리의 등록도 점유로 세므로, 안 털면 아래 freeBranch 가
-  //  이미 죽은 wt/<repo> 를 점유중으로 보고 -2 로 건너뛰어 이름을 영영 잃는다.
-  pruneWorktrees(ctx, base);
+  // ③ 진짜로 만들 때만, **표적** 스테일 등록을 턴다(#932 → #3678) — blanket prune 은 다른 컨테이너의 살아 있는 워크트리를
+  //  지운다. 부모 디렉터리를 먼저 만든다: «경로 없음 + 부모 있음» 이 곧 «정말 지워졌다» 의 근거라서.
+  //  **브랜치를 고르기 전에** 스테일을 가려야 한다: 사라진 워크트리의 등록도 점유로 세면 freeBranch 가 이미 죽은
+  //  wt/<repo> 를 점유중으로 보고 -2 로 건너뛰어 이름을 영영 잃는다. 반대로 **부모까지 안 보이는** 등록은 살아 있을 수
+  //  있으므로 점유로 센다(그 이름을 뺏지 않는다).
+  mkdirSync(dirname(wt), { recursive: true });
+  const regs = listWorktrees(ctx, base);
+  const live = regs.filter((w) => !provablyGone(w.path));
 
   // ④ 브랜치 기본값 — **canonical 슬롯일 때만** project/<id>: 서버 provisionProjectRepos 와 같은 자리·같은 이름이라
   //  서로 멱등이다(먼저 뜬 쪽을 뒤에 온 쪽이 그대로 재사용). 슬롯 밖(path 를 따로 준 경우)에까지 project/<id> 를
   //  걸면 그 프로젝트의 provision 이 502 로 죽는다 — **싱글턴 이름은 싱글턴 자리에만**(#932). 밖이면 이 워크트리
   //  전용 wt/<repo>[-n](점유되지 않은 첫 이름 — 슬롯 밖 워크트리끼리도 안 겹치게).
-  const pid = marker?.meta.project_id ?? null;
-  const canonical = canonicalOf(marker, repo);
   const branch = (args.branch && String(args.branch).trim())
-    || (pid && canonical && wt === canonical ? `project/${pid}` : freeBranch(checkedOutBranches(ctx, base), `wt/${repo}`));
+    || (isSlot ? `project/${pid}` : freeBranch(checkedOutBranches(live), `wt/${repo}`));
   if (!BRANCH_RE.test(branch)) throw new Error(`브랜치명 형식 오류: ${branch}`);
+  clearStaleRegistrations(ctx, base, { paths: [wt], branch }, regs);
 
   // ⑤ worktree add — 새 브랜치(origin/<ref> 최신 기준) 시도 → 같은 브랜치가 이미 있으면 attach 폴백(provision 동형).
-  mkdirSync(dirname(wt), { recursive: true });
   let r = ctx.sh("git", ["-C", base, "worktree", "add", wt, "-b", branch, `origin/${refBranch}`], { allowFail: true });
   if (r.code !== 0) r = ctx.sh("git", ["-C", base, "worktree", "add", wt, branch], { allowFail: true });          // 기존 브랜치 attach
   if (r.code !== 0) r = ctx.sh("git", ["-C", base, "worktree", "add", wt, "-b", branch], { allowFail: true });     // origin/<ref> 없을 때 base HEAD
   if (r.code !== 0) throw new Error(`워크트리 생성 실패(${repo}): ${gitFail(r.stderr)}${branchHeldNote(ctx, base, branch)}`);
 
-  return { repo, worktree: wt, branch, base, ref: refBranch,
+  // ⑥ admin 을 고유 id 로(#3678) — git 이 지은 basename id(`<repo>`·`<repo>N`)는 프로젝트가 달라도 겹친다.
+  const admin = adminOf(wt);
+  const adminNow = admin ? relinkAdmin(wt, admin, adminId) : null;
+
+  return { repo, worktree: wt, branch, base, ref: refBranch, admin: adminNow ? basename(adminNow) : null,
     note: `이 경로에서 작업하세요: ${wt} · base(${base})는 pristine 공유 원본이라 직접 작업 금지(커밋·빌드는 워크트리에서).` };
 }
 
@@ -286,7 +437,8 @@ function sweepStalePins(ctx, base, repo, keepSha) {
       try { rmSync(dir, { recursive: true, force: true }); } catch { /* 등록 없는 고아까지 */ }
       swept++;
     }
-    if (swept) ctx.sh("git", ["-C", base, "worktree", "prune"], { allowFail: true });
+    // ⚠ 여기서 `git worktree prune` 을 돌리지 않는다(#3678) — 이 프로세스에서 안 보이는 남의 워크트리까지 지운다.
+    //  remove --force 가 등록을 함께 걷었고, 혹 남은 등록은 같은 SHA 를 다시 핀할 때 표적 정리가 치운다(그 경로만).
   } catch { /* root 없음 등 — 무해 */ }
   return swept;
 }
@@ -323,7 +475,7 @@ export async function repoPin(ctx, args) {
     ctx.sh("git", ["-C", base, "worktree", "remove", "--force", pin], { allowFail: true });
   }
   mkdirSync(dirname(pin), { recursive: true });
-  pruneWorktrees(ctx, base); // #932 — 핀 디렉터리가 외부에서 지워졌으면 등록만 남아 이 경로의 add 를 막는다
+  clearStaleRegistrations(ctx, base, { paths: [pin] }); // #932 — 핀 디렉터리가 외부에서 지워졌으면 등록만 남아 이 경로의 add 를 막는다(그 등록만, #3678)
   const r = ctx.sh("git", ["-C", base, "worktree", "add", "--detach", pin, target], { allowFail: true });
   if (r.code !== 0) throw new Error(`핀 생성 실패(${repo}@${target}): ${gitFail(r.stderr)}`);
   const committed = ctx.sh("git", ["-C", pin, "log", "-1", "--format=%ci"], { allowFail: true }).stdout.trim() || null;
@@ -346,11 +498,11 @@ export function repoPinRemove(ctx, args) {
   } else {
     const refBranch = args.ref && BRANCH_RE.test(String(args.ref).trim()) ? String(args.ref).trim() : remoteDefaultBranch(ctx, base);
     const sha = ctx.sh("git", ["-C", base, "rev-parse", "--short", `origin/${refBranch}`], { allowFail: true }).stdout.trim();
-    if (!sha) { pruneWorktrees(ctx, base); return { removed: null, note: `핀을 특정할 수 없습니다(origin/${refBranch} 해석 실패) — 스테일 등록만 정리했습니다.` }; }
+    if (!sha) return { removed: null, note: `핀을 특정할 수 없습니다(origin/${refBranch} 해석 실패) — 아무것도 지우지 않았습니다.` };
     pin = pinPathOf(ctx, repo, null, sha);
   }
   const r = ctx.sh("git", ["-C", base, "worktree", "remove", "--force", pin], { allowFail: true });
-  pruneWorktrees(ctx, base); // 남은 등록 정리
+  clearStaleRegistrations(ctx, base, { paths: [pin] }); // 디렉터리는 이미 없고 등록만 남은 경우 — 그 등록만(#3678: blanket prune 금지)
   if (r.code !== 0) return { removed: null, note: `핀이 이미 없거나 제거 실패(무해): ${gitFail(r.stderr)}` };
   return { removed: pin };
 }
