@@ -89,6 +89,7 @@
   "dist/terminal/harness-io/window.js",
   "dist/terminal/harness-login-probe.js",
   "dist/terminal/harness-trust.js",
+  "dist/terminal/path-jail.js",
   "dist/terminal/phase.js",
   "dist/terminal/profiles.js",
   "dist/terminal/send-keys.js",
