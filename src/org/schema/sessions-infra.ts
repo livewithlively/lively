@@ -281,6 +281,10 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //   트랜스크립트에 친 글자 그대로가 아니라 `<command-name>` 형태로 적혀 그 바늘로는 영영 못 찾는다.
   //   같은 큐를 타는 이유는 순서다: 모델 바꾸기가 그 다음 프롬프트보다 먼저 들어가야 하고, 배달자는 세션당 직렬이다.
   await pool.query(`ALTER TABLE org_session_outbox ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'prompt';`);
+  //  #3689 — **언제부터** 못 닿고 있나(unreachable·session-gone-restorable 로 큐가 들고 있기 시작한 시각). updated_at 은 마지막
+  //   시도 시각이라 «언제부터» 가 아니다. 화면이 «N분째 못 닿고 있어요 — 복원이 필요할 수 있어요» 를 말하는 근거(session-chat.ts).
+  //   닿아서 배달되거나(delivered) 사람이 다시 보내면(retry) 비운다.
+  await pool.query(`ALTER TABLE org_session_outbox ADD COLUMN IF NOT EXISTS stalled_since TIMESTAMPTZ;`);
   // 끝난 행(delivered·sent)은 하루 지나면 청소 대상 — resumeOutbox 가 부팅 때 지운다(무한 적재 방지).
 
   // ── org_preview_env — 프리뷰 환경(작업자별 격리 미리보기)의 desired state (#1036). 관리탭 CRUD. ──
