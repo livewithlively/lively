@@ -26,8 +26,7 @@ import { runAutoBackfillSweep } from "../v6/embedding-backfill.js";
 import { registerTerminal } from "../terminal/routes.js";
 import { liveAttachCount, scanAttachProcs } from "../terminal/terminal-pty.js";
 import { selfPtmxFdCount } from "../terminal/host-pty.js";
-import { setupNodeUpgrade, hydrateNodeStates, sessionHostsInScope, nodeSessionsInScope, NODE_STATE_STALE_MS } from "../node/registry.js";
-import { gatewayDefersToSessionHost } from "../node/self-node.js";   // #2600 T2 d4 — 목록 소유와 같은 술어
+import { setupNodeUpgrade, hydrateNodeStates } from "../node/registry.js";
 import { setupPreviewWsUpgrade } from "../preview/ws-proxy.js";
 import { startTaskScheduler } from "../node/task-scheduler.js";
 import { backfillMarkerSync, backfillSharedGroupWrite } from "../project/project-fs.js";
@@ -397,17 +396,11 @@ function startBackgroundSweeps(): void {
   //  ⚠ 회수 스윕(5분)에 얹지 않고 따로 둔다 — 알림은 5분 뒤에 오면 알림이 아니다.
   //  전이에만 반응하므로(notify-policy.pickAwaitingTransitions) 자주 돌아도 같은 대기를 다시 울리지 않는다.
   setInterval(() => {
-    //  #2600 T2 d4 — **주인이 노드로 옮겨간 테넌트는 그 노드 스냅샷에서 읽는다.**
-    //   계수 실측(2026-09-08): 이 30초 스윕이 게이트웨이 tmux 호출의 **64%** 였다 — 세션이 0개인 빈 시험
-    //   테넌트까지 테넌트당 정확히 16/창이었다(사용량과 무관한 고정 주기라는 증거). 이 자리가 「게이트웨이
-    //   tmux 호출 0」의 최대 덩어리이고, 필요한 칸(`id`·`owner`·`awaiting`·`label`)은 스냅샷에 다 있다.
-    //  ⚠ 판정은 목록 소유와 **같은 술어·같은 신선도 자**를 쓴다 — 둘이 갈리면 「목록은 호스트가 답하는데
-    //   알림은 게이트웨이가 본다」는 어긋남이 생긴다. 선언된 세션 호스트가 없으면 종전 그대로다(무회귀).
-    void perTenant("awaiting-notify", () => sweepAwaitingNotifications(
-      gatewayDefersToSessionHost(sessionHostsInScope(), NODE_STATE_STALE_MS)
-        ? { list: async () => nodeSessionsInScope() }
-        : undefined,
-    ));
+    //  #2600 T2 d4 — **목록 출처(게이트웨이 tmux vs 노드 스냅샷)를 여기서 고르지 않는다.**
+    //   이 스윕은 두 자리에서 돈다(여기 타이머 + 매니지드의 요청 정비표 `sessions/outbox-request-sweep.ts`).
+    //   호출부에 판정을 심었더니 **한 자리만 고쳐졌고** 나머지가 종전대로 게이트웨이 tmux 를 계속 읽었다.
+    //   판정은 `sweepAwaitingNotifications` 안(`defaultSessionList`)에 한 벌로 있다 — 그 머리말이 근거다.
+    void perTenant("awaiting-notify", () => sweepAwaitingNotifications());
   }, 30_000).unref();
   // #1631 — 리브 2턴: 처음 설정 직후 열린 리브 세션에, 첫 수집 배치가 돈 뒤 증류 지시를 넣는다.
   //  판정은 순수 함수(decideSecondTurn)·멱등(distill_at) — 1분 주기로 돌아도 같은 세션에 두 번 넣지 않는다.
