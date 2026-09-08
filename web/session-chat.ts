@@ -109,7 +109,18 @@ const srcPath = (s: Source, q: Record<string, string | number>): string => {
 export interface SessionChatOpts {
   /** [⋯ ▸ 이 세션 보관] — 세션 탭 줄을 없애면서(원준 2026-08-20) 보관의 입구가 여기로 옮겨 왔다. 실행은 main.ts 가 쥔다. */
   onArchive?: () => void;
-  terminalSrc?: string | null;
+  /**
+   * 이 세션에 붙일 터미널 주소 — **값이 아니라 물음**이다(호출자가 `지금의 행`으로 답한다).
+   *
+   * ⚠ 왜 함수인가 (2026-09-08 상민님 신고 · 재현 완료). 종전엔 마운트 시점에 한 번 계산한 **문자열**이었고
+   *  `isBox` 도 `first.live` 로 얼어 있었다. 그런데 터미널로 가는 문이 전부 이 둘 뒤에 있다(모드 전환·iframe
+   *  생성·[⋯ ▸ 보기]·«터미널에서 답하기»·update 의 되돌리기). 그래서 **마운트되는 그 한 틱**에 행이 잠깐
+   *  «중단됨»으로 보이면(매니지드의 허브 stall·node 플랩·목록 8초 지연에서 실제로 일어난다) 그 탭은
+   *  행이 건강해진 뒤에도 **영구히 대화창에 갇혔다** — 터미널도 없고, 수기로 돌아갈 메뉴조차 없었다
+   *  (`update()` 는 target 만 갱신하고, panes-parts 의 mountStage 는 `mounted.ok` 라 다시 안 붙인다).
+   *  판정 규칙 자체는 여전히 **한 곳**(v2/views.ts)에 있다 — 여기는 그걸 «지금» 다시 물을 뿐이다.
+   */
+  terminalSrc?: ((s: SessionChatTarget) => string | null) | null;
   openHref?: string | null;
   firstPrompt?: string | null;
   trail?: TrailWidget | null;
@@ -137,7 +148,12 @@ export interface SessionChatOpts {
 }
 export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, opts: SessionChatOpts): SessionChatHandle {
   let target = first;
-  const isBox = first.live;                     // 라이브 행(박스) — 죽었어도(restorable) 박스다
+  // ── 터미널이 지금 이 세션에 붙나 — **매 물음마다 지금의 행으로** 답한다(opts.terminalSrc 머리말) ──
+  //  ⚠ 얼리지 마라. 여기 세 술어가 터미널로 가는 모든 문의 자물쇠라, 한 번 잘못 잠기면 그 탭은 대화창에
+  //   갇힌 채 스스로 못 빠져나온다(2026-09-08 재현: blip 한 틱 → 40초 정상 폴링에도 복구 안 됨).
+  const isBox = (): boolean => target.live;     // 라이브 행(박스) — 죽었어도(restorable) 박스다
+  const termUrl = (): string | null => (opts.terminalSrc ? opts.terminalSrc(target) : null);
+  const hasTerm = (): boolean => !!termUrl() && isBox();
   const dead = (): boolean => !target.live || !target.alive || !!target.raw?.restorable;
   const canType = (): boolean => !dead();
   /**
@@ -146,7 +162,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    *  이게 참이면 입력창을 **살려 둔다**: 사람이 «멈춤» 을 읽고 그 자리에서 이어 말할 수 있어야, 읽는 화면과
    *  일하는 화면이 갈리지 않는다.
    */
-  const canRevive = (): boolean => dead() && isBox && !!target.raw?.restorable && !!target.owned && !target.raw?.trashedAt;
+  const canRevive = (): boolean => dead() && isBox() && !!target.raw?.restorable && !!target.owned && !target.raw?.trashedAt;
   const caps = (): { read: boolean; answer: boolean } => (target.raw?.chat && typeof target.raw.chat === 'object') ? { read: target.raw.chat.read !== false, answer: target.raw.chat.answer !== false } : { read: true, answer: true };   // 서버 harness-io 능력(행의 chat) — 없으면(구 서버) 둘 다 있는 것으로
   const canKeys = (): boolean => canType() && !target.node && caps().answer;
 
@@ -288,7 +304,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const headR = el('div', { class: 'sc-head-r' },
     termStatusEl,
     opts.onToggleFiles ? filesBtn : null,
-    opts.terminalSrc && isBox ? [fixBtn, setBtn] : null,
+    [fixBtn, setBtn],   // 보이기는 setMode 가 정한다 — 늦게 붙는 터미널에도 자리가 남게 항상 DOM 에 둔다
     moreBtn);
   const head = el('div', { class: 'sc-head' },
     el('div', { class: 'sc-head-l' },
@@ -591,7 +607,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         el('span', { class: 'v2-dot wait', 'aria-hidden': 'true' }),
         el('div', { class: 'sc-wait-t' }, el('b', { text: '확인이 필요해요' }), el('span', { text: ' — 세션이 승인이나 선택을 기다리고 있어요. 무엇을 묻는지는 터미널에 떠 있습니다.' })),
         el('div', { class: 'sc-wait-acts' },
-          opts.terminalSrc && isBox ? el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '터미널에서 답하기', onclick: () => setMode('term') }) : null,
+          hasTerm() ? el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '터미널에서 답하기', onclick: () => setMode('term') }) : null,
           canKeys() ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '기본 선택으로 답하기', onclick: () => sendKey('approve') }) : null,
           canKeys() ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '거부', onclick: () => sendKey('deny') }) : null));
     }
@@ -638,7 +654,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let mode: 'term' | 'chat' = 'chat';
   let modeChosen = false;              // 사람이 [보기] 메뉴에서 직접 골랐나 — 그 뒤엔 화면이 스스로 안 바꾼다
   function setMode(m: 'term' | 'chat'): void {
-    if (m === 'term' && (!opts.terminalSrc || !isBox)) m = 'chat';
+    if (m === 'term' && !hasTerm()) m = 'chat';
     //  ★ #2439 — **터미널을 여는 것도 «쓰겠다»** 다. 보기만 할 때는 안 되살리지만(위 autoResume 주석),
     //   터미널 탭은 그 자체가 «이 세션에서 무언가 하겠다» 라 그 자리에서 되살린다.
     //   ⚠ 되살리지 않으면 빈 터미널(붙을 tmux 가 없는 iframe)이 뜬다 — 그게 진짜 막다른 길이다.
@@ -648,8 +664,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       void resumeSession(null, { canRestore: true });
     }
     mode = m;
-    if (m === 'term' && !termFrame && opts.terminalSrc) {
-      termFrame = el('iframe', { class: 'sc-term-frame', src: opts.terminalSrc, title: '터미널', allow: 'clipboard-read; clipboard-write' }) as HTMLIFrameElement;
+    const src0 = termUrl();
+    if (m === 'term' && !termFrame && src0) {
+      termFrame = el('iframe', { class: 'sc-term-frame', src: src0, title: '터미널', allow: 'clipboard-read; clipboard-write' }) as HTMLIFrameElement;
       termHost.append(termFrame);
     }
     wrap.classList.toggle('sc-mode-term', m === 'term');
@@ -711,7 +728,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   }
   /** 터미널이 있어야 하는 동작 — 닫혀 있으면 먼저 연다(막다른 버튼 금지). 아직 안 뜬 프레임이면 뜰 때까지 담아 둔다. */
   function termAct(cmd: string): void {
-    if (!opts.terminalSrc || !isBox) { toast('이 세션에는 터미널이 없어요.'); return; }
+    if (!hasTerm()) { toast('이 세션에는 터미널이 없어요.'); return; }
     if (mode !== 'term') setMode('term');
     if (termReady) termSend(cmd); else termQueue.push(cmd);
   }
@@ -769,7 +786,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       el('button', { class: 'sc-more-row', type: 'button', onclick: () => { close(); onClick(); } },
         el('span', { class: 'n', text: label }), el('span', { class: 'm', text: desc }));
     rows.push(el('div', { class: 'sc-more-sec', text: '보기' }));
-    if (opts.terminalSrc && isBox) {
+    if (hasTerm()) {
       // 상민님 지시(2026-08-18): 대화 인터페이스가 아직 미완성이라 **터미널이 기본**, 대화는 '베타'를 달고 뒤에 둔다.
       //  ⚠ codex app-server 세션(#2055)만 예외다 — 거기서는 대화창이 **유일한 말 거는 자리**이고(pane 은 셸),
       //   터미널은 셸을 쓰러 가는 곳이다. 같은 항목에 다른 뜻을 담으면서 같은 문구를 쓰면 사람이 헤맨다.
@@ -789,7 +806,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       view.setFontStep(fontStep);
       toast(`글자 크기: ${CHAT_FONT_LABELS[fontStep]}`);
     }));
-    if (opts.terminalSrc && isBox) {
+    if (hasTerm()) {
       rows.push(el('div', { class: 'sc-more-sec', text: '터미널' }));
       rows.push(row('사용법 안내', '터미널·단축키 간단 사용법', () => termAct('help')));
     }
@@ -807,7 +824,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  왜 이 항목이 필요한가: codex 는 **스레드당 writer 를 하나만** 허용한다(실측). 대화창이 그 대화를 쥔 동안
     //  터미널에서 `codex resume <id>` 를 치면 `active writer` 로 거부된다. 놓아 주는 유일한 방법이 서버 프로세스를
     //  내리는 것이라, 그 동작을 사람이 부를 수 있게 여기에 둔다. 놓으면 그 자리에서 이어갈 명령을 알려 준다.
-    if (isBox && target.owned && target.live && String(target.raw?.harness || '') === 'codex') {
+    if (isBox() && target.owned && target.live && String(target.raw?.harness || '') === 'codex') {
       rows.push(row('대화를 터미널로 넘기기', '대화창이 쥔 Codex 대화를 놓아, 터미널에서 이어가게 합니다', async () => {
         try {
           const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(target.id) + '/codex-chat/release', { method: 'POST' });
@@ -1033,7 +1050,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (stuck) {
       pd.state.replaceChildren(
         el('span', { text: '전달 대기 중 — 입력창이 아직 안 떠요. 로그인이 필요한 상태일 수 있어요. ' }),
-        ...(opts.terminalSrc && isBox ? [el('button', { class: 'btn-text dt-qact', type: 'button', text: '터미널 열기', onclick: () => setMode('term') })] : []));
+        ...(hasTerm() ? [el('button', { class: 'btn-text dt-qact', type: 'button', text: '터미널 열기', onclick: () => setMode('term') })] : []));
       maybeAutoOpenTerminal();
       return;
     }
@@ -1043,7 +1060,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  빈 채팅만 두면 사람이 볼 수 있는 게 없다(실측 신고). 대화가 이미 있으면 자동으로 열지 않는다(읽던 화면을 뺏지 않는다).
   let autoTermOpened = false;
   function maybeAutoOpenTerminal(): void {
-    if (autoTermOpened || destroyed || !opts.terminalSrc || !isBox) return;
+    if (autoTermOpened || destroyed || !hasTerm()) return;
     if (mode === 'term') { autoTermOpened = true; return; }        // 이미 터미널이 떠 있다 — 로그인 화면이 보인다
     if (curUuid || recs.some((r) => r.evs.length)) return;        // 대화가 보이고 있다 — 알림 줄이면 충분
     autoTermOpened = true;
@@ -1088,7 +1105,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   }
   /** 서버 큐와 화면을 맞춘다 — 몰랐던 행(다른 탭·홈 첫 지시)은 턴으로 올리고, 아는 행은 상태 줄만 갱신. */
   async function syncOutbox(): Promise<void> {
-    if (destroyed || !isBox || target.node) return;
+    if (destroyed || !isBox() || target.node) return;
     let items: any[] = [];
     try { items = ((await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/outbox`)) as any).items || []; }
     catch { return; }
@@ -1130,7 +1147,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     view.setNote('');
     view.list.querySelector('.sc-empty')?.remove();     // 다시 여는 경우(대화 uuid 를 뒤늦게 앎, #1744) — 지난 '아직 없음' 안내는 물러난다
     const tries: Source[] = [];
-    if (isBox) {
+    if (isBox()) {
       // ⚠ 노드가 붙어 있어도 **박스 경로를 먼저 물어본다**(#2055 실측 2026-08-26). 종전엔 '노드 세션은 늘 409'
       //  라는 전제로 건너뛰었는데, **게이트웨이 박스가 노드로도 등록된 배포**에서는 이 박스의 로컬 세션까지
       //  node 가 붙는다 — 그때 박스 경로를 안 물으면 대화가 로컬 파일에 멀쩡히 있는데도 화면이 중앙 기록(아직
@@ -1201,7 +1218,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //   세션에만 버튼을 뒀는데, 정작 그 안내가 필요한 것은 **죽은 세션**이다(래퍼가 사유를 pane 에 적어 두고
       //   세션은 살려 둔다 — catalog.ts). 말만 하고 길이 없으면 막다른 길이다.
       view.list.append(el('div', { class: 'livc-open sc-empty' }, el('p', { text: msg }),
-        opts.terminalSrc && isBox && !chatFirst() ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: canType() ? '터미널로 보기' : '터미널에서 이유 보기', onclick: () => setMode('term') }) : null));
+        hasTerm() && !chatFirst() ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: canType() ? '터미널로 보기' : '터미널에서 이유 보기', onclick: () => setMode('term') }) : null));
       paintState();
       // 라이브면 기록이 생기는 순간을 잡는다 — 박스는 파일, 노드는 중앙 기록(uuid 를 알 때만). 못 읽는 하네스면 기다려도 안 온다(폴링 X).
       if (canType() && !unreadable) { src = watch(); if (src) schedule(); }
@@ -1544,7 +1561,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  자기 공유 루트 아래에서 못 찾아 "원본 실행 경로를 찾지 못해…" 라며 **빈 새 세션**을 만들었다
       //  (2026-08-26 상민님 신고 · session-log-routes.ts 폴백). 목록이 조용해도 프레임이 말했으면 그 말을 믿는다.
       //  /restore 는 이미 살아 있으면 already:true 로 되돌려주므로(routes.ts), 잘못 들어가도 새 세션을 만들지 않는다.
-      if (isBox && (target.raw?.restorable || hint?.canRestore)) {
+      if (isBox() && (target.raw?.restorable || hint?.canRestore)) {
         const r: any = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/restore`, { method: 'POST', body: '{}' });
         if (r?.session) rememberCreated(r.session);
         // #2231 — `movedTo` = "그 id 는 이미 이어졌고, 대화는 이 새 세션에서 돌고 있다". 종전엔 이 경우 서버가
@@ -1553,8 +1570,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         moved = String(r?.movedTo || '');
         nextId = String(r?.session?.id || moved || (r?.already ? target.id : ''));
       } else {
-        const sid = !isBox ? target.id : String(target.logId || target.raw?.claudeSessionId || '');
-        const node = !isBox ? String(target.node ?? '') : String(target.logNode ?? '');
+        const sid = !isBox() ? target.id : String(target.logId || target.raw?.claudeSessionId || '');
+        const node = !isBox() ? String(target.node ?? '') : String(target.logNode ?? '');
         if (!sid) throw new Error('이어받을 대화 id 를 모릅니다.');
         const r: any = await api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/resume?node=${encodeURIComponent(node)}`, { method: 'POST', body: '{}' });
         if (r?.session) rememberCreated(r.session);
@@ -1801,13 +1818,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       // 반대 방향도 마감한다 — 위 추정(모르면 codex=대화)이 틀린 배포(tmux 로 끈 곳)에서는 행이 오는 즉시 터미널로.
       //  ⚠ 단 **대화 런타임 세션은 예외**다. chatMode 는 'tmux' 여도 대화는 stream-json 이 쥔다 —
       //   여기서 되돌리면 위 줄과 서로 밀치며 화면이 깜빡인다.
-      if (!modeChosen && mode === 'chat' && !chatHome() && String(target.raw?.chatMode || '') === 'tmux' && opts.terminalSrc && isBox) setMode('term');
+      //  ⚠ 이 줄은 «틀린 추정을 마감한다» 말고 **한 틱 blip 에서 스스로 빠져나오는 유일한 출구**이기도 하다
+      //   (2026-09-08): 마운트 순간 행이 잠깐 «중단됨»이면 위 setMode 가 조용히 대화로 내렸는데, hasTerm() 이
+      //   얼어 있던 종전엔 여기도 함께 막혀 그 탭이 영영 갇혔다. 이제 행이 건강해지는 다음 폴링에 돌아온다.
+      if (!modeChosen && mode === 'chat' && !chatHome() && String(target.raw?.chatMode || '') === 'tmux' && hasTerm()) setMode('term');
       // 노드 세션(#1744) — 열 때는 대화 uuid 를 몰랐는데 목록 갱신이 가져왔다(행 claudeSessionId·logId): 이제 중앙 기록을 연다.
       //  같은 세션인데 uuid 가 바뀌었으면(/clear·압축) 새 기록으로 갈아탄다.
       const ls = logSrc();
       if (!destroyed && ls) {
         if (!src && !!t.node && canType()) { void open(); }
-        else if (src && src.kind === 'log' && isBox && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; if (pollTimer) clearTimeout(pollTimer); schedule(); }
+        else if (src && src.kind === 'log' && isBox() && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; if (pollTimer) clearTimeout(pollTimer); schedule(); }
       }
     },
     destroy() { destroyed = true; if (pollTimer) clearTimeout(pollTimer); stopWatchOutbox(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },

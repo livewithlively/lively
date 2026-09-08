@@ -6,7 +6,7 @@ import { el, personName, relTime, state, sv, toast } from '../core.js';
 import { composerAttach } from './compose-attach.js';
 import { isCreatingQuickSession, openQuickSession, takeFirstPrompt } from './quick-session.js';
 import { createRunPicker } from './run-picker.js';
-import { mountSessionChat, type SessionChatHandle } from '../session-chat.js';
+import { mountSessionChat, type SessionChatHandle, type SessionChatTarget } from '../session-chat.js';
 import type { TrailWidget } from '../session-trail.js';
 import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen } from '../session-status.js';
 import { appGlassIcon, appHref, openLaunchpad, recentApps, soloSessionUrl, terminalUrl } from './apps.js';
@@ -350,7 +350,12 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
   //   를 해 버렸다: 셸 주소(#/s/<옛 id>)·탭 제목·사이드바는 옛 세션 그대로인데 프레임만 새 세션인 어긋난 화면이
   //   되고, 그 뒤 [이어서 대화하기] 를 누르면 옛 desired-state 가 이미 지워져 404 가 났다. 멈춘 세션의 정답은
   //   **읽기전용 기록 + [이어서 대화하기] 한 번**(session-chat.ts paintDeadFooter)이다.
-  const termSrc = s.live && s.alive ? terminalUrl(s.id, s.label, s.node, { embed: true }) : null;
+  //  ⚠ **한 번 계산해 넘기지 마라**(2026-09-08 상민님 신고 · 재현 완료). 이 판정은 세션 화면이 사는 내내
+  //   다시 물어야 하는 것이다: 매니지드에서는 목록 한 틱이 허브 stall·node 플랩으로 살아 있는 세션을 잠깐
+  //   «중단됨»으로 실어 온다. 그 틱에 화면이 붙으면 종전엔 terminalSrc 가 null 로 **얼어붙어** 터미널도,
+  //   [⋯ ▸ 보기]의 수기 전환도 영영 사라졌다(행이 건강해져도 mountStage 는 다시 안 붙는다). 함수로 넘기면
+  //   그 다음 갱신에서 저절로 돌아온다. 판정 규칙은 여전히 여기 한 줄뿐이다.
+  const termSrc = (t: SessionChatTarget): string | null => (t.live && t.alive ? terminalUrl(t.id, t.label, t.node, { embed: true }) : null);
   return mountSessionChat(host, { ...s, projectName: projName(data, s.projectId) }, {
     terminalSrc: termSrc,
     // 나가는 문: 본 화면이면 이 세션만 담은 **팝아웃 창**(같은 컴포넌트, 사이드바만 없다), 팝아웃 창이면 반대로 전체 화면.

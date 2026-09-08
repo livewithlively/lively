@@ -116,8 +116,38 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
     ok(iMoved > 0 && iRestore > 0 && iMoved < iRestore,
       "③-i 이미 이어진 세션이면 되살리기 전에 그리로 옮긴다(movedTo 가 canRestore 보다 먼저)");
   }
-  ok(/if\s*\(isBox\s*&&\s*\(target\.raw\?\.restorable\s*\|\|\s*hint\?\.canRestore\)\)/.test(chat),
+  //  ⚠ isBox 는 **함수**다(2026-09-08) — 종전엔 마운트 시점 `first.live` 로 얼어 있었는데, 그 한 틱에 행이
+  //   잠깐 «중단됨»으로 보이면 그 탭이 영영 대화창에 갇혔다(터미널도 수기 전환 메뉴도 사라진다). 지금의 행으로 답한다.
+  ok(/if\s*\(isBox\(\)\s*&&\s*\(target\.raw\?\.restorable\s*\|\|\s*hint\?\.canRestore\)\)/.test(chat),
     "③-h 복원 분기가 목록의 restorable **또는** 프레임이 말한 canRestore 를 본다(둘 중 하나면 /restore)");
+}
+
+// ── ③-T 터미널로 가는 문은 **얼면 안 된다** (2026-09-08 상민님 신고 · 재현 완료) ─────────────
+//  증상: 살아서 도는 세션인데 웹으로 열면 대화창만 뜨고, 터미널도 없고, [⋯ ▸ 보기]에 수기 전환 줄조차 없다.
+//  뿌리: `terminalSrc`(v2/views.ts) 와 `isBox`(session-chat.ts) 가 **마운트 시점 값**이었다. 매니지드에서는
+//   세션 목록 한 틱이 허브 stall 로 19초씩 늦으며 살아 있는 세션을 잠깐 «중단됨» 으로 실어 온다(실측
+//   2026-09-08 07:59:50 — 한 응답에서 restorable 112→105, 같은 세션이 3초 뒤 되돌아옴). 그 틱에 화면이
+//   붙으면 두 값이 «터미널 없음» 으로 굳고, 터미널로 가는 문이 **전부** 그 뒤에 있어(모드 전환·iframe·
+//   [⋯ ▸ 보기]·«터미널에서 답하기»·update 의 되돌리기) 그 탭은 스스로 못 빠져나왔다. panes-parts 의
+//   mountStage 는 `mounted.ok` 라 다시 붙이지도 않는다 → 새로고침 전까지 영구.
+//  → 규칙: 둘 다 **지금의 행**에 묻는다. 판정 규칙 자체는 여전히 views.ts 한 줄이다(두 벌 금지).
+{
+  const views = read("web/v2/views.ts");
+  ok(/const termSrc = \(t: SessionChatTarget\): string \| null =>/.test(views) && /terminalSrc: termSrc,/.test(views),
+    "③-T1 views 가 터미널 주소를 **함수**로 넘긴다(마운트 시점 문자열로 얼리지 않는다)");
+  const chat = read("web/session-chat.ts");
+  ok(/const isBox = \(\): boolean => target\.live/.test(chat),
+    "③-T2 isBox 는 first(마운트 시점)가 아니라 target(지금의 행)을 본다");
+  ok(/const termUrl = \(\): string \| null => \(opts\.terminalSrc \? opts\.terminalSrc\(target\) : null\)/.test(chat)
+    && /const hasTerm = \(\): boolean => !!termUrl\(\) && isBox\(\)/.test(chat),
+    "③-T3 터미널 가용 판정은 hasTerm() 한 술어로 모인다");
+  // 문(門)들이 그 술어를 지나는가 — 하나라도 옛 값을 직접 보면 그 문만 얼어붙는다.
+  ok(!/opts\.terminalSrc\s*&&/.test(chat) && !/!opts\.terminalSrc/.test(chat),
+    "③-T4 opts.terminalSrc 를 **직접 조건으로 쓰지 않는다** — 전부 hasTerm() 을 지난다");
+  ok(/if \(m === 'term' && !hasTerm\(\)\) m = 'chat'/.test(chat),
+    "③-T5 setMode 의 강등이 지금의 가용성으로 판정한다");
+  ok(/!modeChosen && mode === 'chat' && !chatHome\(\) && String\(target\.raw\?\.chatMode \|\| ''\) === 'tmux' && hasTerm\(\)/.test(chat),
+    "③-T6 ★ blip 에서 스스로 빠져나오는 출구 — 행이 건강해지면 다음 갱신에 터미널로 돌아온다");
 }
 
 // ── ④ 세션 주소를 만드는 곳은 하나다 ────────────────────────────────────────────────
