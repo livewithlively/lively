@@ -127,6 +127,8 @@ interface Watch {
 }
 
 const watches = new Map<string, Watch>();
+/** 지금 «밀 수 있는» 세션 수 — 전이 로그에 함께 실어, 한 줄만 봐도 이 기능이 살아 있는지 알 수 있게 한다. */
+let liveCount = 0;
 
 /** 이 세션의 감시가 **지금 실제로 돌고 있나**. 화면이 폴 주기를 늦춰도 되는지의 유일한 근거다. */
 export function transcriptWatchLive(sessionId: string): boolean {
@@ -136,8 +138,15 @@ export function transcriptWatchLive(sessionId: string): boolean {
 function setLive(id: string, w: Watch, live: boolean, reason?: string): void {
   if (w.live === live) return;
   w.live = live;
+  if (live) liveCount++; else liveCount = Math.max(0, liveCount - 1);
   //  ⚠ **참을 못 알리면 느려질 뿐이지만, 거짓을 못 알리면 대화가 30초씩 밀린다.** 두 방향 다 보낸다.
   emitSessionEvent(id, { t: "transcript.watch", live, ...(reason ? { reason } : {}) });
+  //  ★ **전이는 info 로 남긴다** — 이게 없으면 이 기능은 프로덕션에서 **보이지 않는다**(2026-09-08 실측).
+  //   실패 경로가 debug 였는데 게이트웨이 최소 레벨이 info 라, 감시자가 통째로 안 떠도 로그에 한 줄도 안 남았다.
+  //   그런데 증상도 없다 — 폴링이 안전망이라 대화는 멀쩡히 돌기 때문이다. 즉 «죽어 있어도 아무도 모른다» 였고,
+  //   그건 [[green-deploy-dead-product-2258]] 이 모은 «판정이 보는 것이 진실이 아니다» 계열 그대로다.
+  //  ⚠ 전이에서만 찍는다(이 함수는 값이 바뀔 때만 여기까지 온다) — 매 통보마다 찍으면 그게 새 소음이 된다.
+  logger.info({ sessionId: id, live, reason: reason ?? null, liveCount }, "대화 파일 감시 상태가 바뀌었다");
 }
 
 function clearTimers(w: Watch): void {
@@ -305,6 +314,8 @@ export function acquireTranscriptWatch(sessionId: string): () => void {
       cur.linger = null;
       if (cur.refs > 0) return;                      // 유예 중에 누가 다시 붙었다
       cur.stopped = true;
+      //  ⚠ 접기 전에 live 를 내린다 — 안 그러면 `liveCount` 가 영영 안 줄어 «살아 있는 감시 수» 가 거짓말이 된다.
+      setLive(sessionId, cur, false, "released");
       teardown(cur);
       watches.delete(sessionId);
     }, LINGER_MS);
@@ -323,6 +334,7 @@ export function resetTranscriptWatch(sessionId: string): void {
   if (!w) return;
   w.stopped = true;
   if (w.linger) clearTimeout(w.linger);
+  setLive(sessionId, w, false, "reset");   // 계수를 되돌린다(위 release 와 같은 이유)
   teardown(w);
   watches.delete(sessionId);
 }
