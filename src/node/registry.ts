@@ -154,6 +154,24 @@ export function sessionHostsInScope(now: number = Date.now()): Array<{ declared:
   return out;
 }
 
+/**
+ * 이 노드 **하나**가 선언된 세션 호스트인가 — 좌표 접기(`self-node.sameTmuxCoordinate`)가 쓰는 재료 (#3745).
+ *
+ * `sessionHostsInScope` 는 «이 테넌트에 자격 있는 주인이 있나» 를 묻는 자리(목록 소유)라 id 를 안 돌려준다.
+ *  여기는 반대로 «**이 좌표**가 세션 호스트를 가리키나» 다 — 박스 세션에 붙은 그 좌표는 다른 기계가 아니라
+ *  같은 tmux 를 뜻하므로 릴레이 지시로 쓰지 않는다(사연은 그 술어 머리말).
+ *
+ * ⚠ 판정은 `declaredSessionHost` **한 곳**을 부른다(fail-closed — 모르는 노드는 false).
+ * ⚠ 온라인·신선도를 **묻지 않는다.** 이 질문은 «지금 답할 수 있나» 가 아니라 «다른 기계인가» 이고,
+ *  선언된 세션 호스트는 꺼져 있어도 다른 기계가 아니다. 목록 소유(`gatewayDefersToSessionHost`)가
+ *  생사를 함께 보는 것과 갈리는 지점이라 여기 적어 둔다.
+ */
+export function isSessionHostNode(nodeId: string): boolean {
+  const id = String(nodeId ?? "").trim();
+  if (!id) return false;
+  return declaredSessionHost({ session_host: states.get(keyOf(id))?.sessionHost });
+}
+
 /** 신선 임계 — 목록 소유 판정도 attach 정책과 **같은 자**를 쓴다(둘이 갈리면 «붙을 수는 있는데 목록엔 없다»가 난다). */
 export const NODE_STATE_STALE_MS = STATE_STALE_MS;
 

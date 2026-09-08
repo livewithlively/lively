@@ -28,6 +28,7 @@
 //   B2 좌표 판정이 `sessionGone` 호출보다 **앞선다** — 로컬 tmux 를 먼저 묻는 구조로 못 돌아간다
 //   B3 좌표를 `req.query.node` **단독**으로 정하지 않는다(종전 화석)
 //   B4 대시보드 위젯 두 곳이 `?node=` 를 싣는다 — 좌표를 아는 쪽이 말해 준다(서버 되찾기와 이중 방어)
+//   B5 박스 세션에 붙은 «선언된 세션 호스트» 좌표를 접는다 — 그 좌표가 서면 중앙 세션이 404 로 안 지워진다(#3745)
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { existsSync, readFileSync } from "node:fs";
@@ -78,6 +79,18 @@ test("★★ B3 좌표를 `?node=` 단독으로 정하지 않는다(종전 화�
   const body = deleteRouteBody();
   assert.doesNotMatch(body, /const nodeId = relayNodeId\(req\.query\.node/,
     "★화면이 준 좌표만 보는 종전 구조가 되살아났다 — #2636 의 누수가 그대로 돌아온다");
+});
+
+test("★★ B5 박스 세션에 붙은 «세션 호스트» 좌표를 접는다 — 중앙 세션이 안 지워지던 자리(#3745)", () => {
+  const body = deleteRouteBody();
+  assert.match(body, /sameTmuxCoordinate\(/,
+    "★세션 호스트 좌표 접기가 없다 — 호스트가 상주하는 동안 중앙 세션 삭제가 다시 404 「그 노드에 이 세션이 없습니다」가 된다");
+  assert.match(body, /isSessionHost:\s*isSessionHostNode/,
+    "★선언 판정을 레지스트리에 묻지 않는다 — 아무 노드나 «세션 호스트» 로 접으면 스푸핑 가드가 무력해진다");
+  // 박스 세션의 정의는 «행이 **있고** 노드가 없다» 다. `!!desired &&` 를 떨어뜨리면 행이 아예 없는 옛 노드
+  //  세션까지 박스로 읽혀, 노드에 묻지도 않고 행만 지우는 #2636 의 누수가 그대로 돌아온다.
+  assert.match(body, /const boxRow = isBoxSessionRow\(desired\)/,
+    "★박스 세션 판정을 인라인으로 다시 썼다 — «행이 있고 노드가 없다» 가 두 벌로 갈리면 한쪽이 뒤처진다(#2636 누수 복귀)");
 });
 
 test("★★ B4 대시보드 '내 AI 세션' 위젯이 좌표를 싣는다 — 그 목록엔 노드 세션이 병합돼 온다", () => {
