@@ -257,8 +257,11 @@ const SELF_PROBE_MS = 30_000;
 let selfProbeAt = 0;
 let selfProbing: Promise<void> | null = null;
 /** 지금 states 에 있는 것들을 판정 후보 형태로 — 순수 판정(hasSelfProbeCandidate)이 쓸 최소 형태만 넘긴다. */
-function* selfProbeCandidates(): Generator<{ key: string; sessionCount: number }> {
-  for (const [k, st] of states) yield { key: k, sessionCount: st.sessions.length };
+function* selfProbeCandidates(): Generator<{ key: string; sessionCount: number; declared: boolean }> {
+  //  `declared` 를 함께 넘긴다 — 선언된 세션 호스트는 후보가 아니다(면제가 tmux 를 묻기 **전에** 성립해야 한다).
+  for (const [k, st] of states) {
+    yield { key: k, sessionCount: st.sessions.length, declared: declaredSessionHost({ session_host: st.sessionHost }) };
+  }
 }
 /**
  * 판정을 한 판 돌린다. **반환 프로미스는 «지금 낼 수 있는 판정이 다 났다»는 뜻**이다(#2592) —
