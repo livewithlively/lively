@@ -32,8 +32,6 @@ const TOPOLOGY_ENV = [
   "LIVELY_TMUX_EXEC", "LIVELY_SESSION_EXEC", "LIVELY_SESSION_ENSURE", "LIVELY_SESSION_SPAWN",
   "LIVELY_MEMBER_EXEC", "LIVELY_MEMBER_ISOLATION", "LIVELY_BOX_SPAWN", "LIVELY_BOX_CGSPAWN",
   "LIVELY_NODE_TOKEN", "LIVELY_ATTACH_WORKER_K",
-  //  #2600 T2 (d) d2 — 코어가 브로커에 직접 닿는 길·그 스위치. 중계(`*-relay.cjs`)가 읽던 값을 코어로 가져오면서 여기 단일출처로 묶는다.
-  "LIVELY_TMUX_ROUTE", "LVLY_HUB_URL", "LVLY_HUB_SECRET", "LVLY_TMUX_SOCK_TEMPLATE",
 ];
 
 // 테넌시/DB·경로 축이 계속 소유하는 자리(토폴로지가 아니다). 이 목록 밖에서 읽으면 실패한다.
