@@ -271,6 +271,13 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
     if (!agentBundleExists()) throw new HttpError(503, "노드 에이전트 번들이 아직 빌드되지 않았습니다(npm run build).");
     res.setHeader("Content-Type", "application/gzip");
     res.setHeader("X-Agent-Ver", servedAgentVersion() ?? "");   // 노드가 받은 바이트를 대조할 기준
+    //  ★ HEAD 는 **지문만** 묻는 것이다 (#3720). 매니지드 세션 호스트는 자가 갱신이 구조적으로
+    //   막혀 있어(코드 디렉터리가 root 소유 — #3711 판단) 노드의 root updater 가 대신 갱신하는데,
+    //   그 updater 가 «갈아야 하나» 를 5분마다 이 헤더로 묻는다.
+    //  ⚠ Express 는 HEAD 를 **GET 핸들러로** 처리하고 본문만 버린다(router/route.js). 그래서 여기서
+    //   끊지 않으면 tar 가 매 틱 **26MB(node-pty prebuild)** 를 압축해 아무도 안 읽는 파이프에 버린다.
+    //   노드가 늘면 그게 그대로 게이트웨이 CPU 가 된다. 답은 같고 비용만 사라진다.
+    if (req.method === "HEAD") { res.end(); return; }
     const tar = spawn("tar", ["-czf", "-",
       "-C", path.dirname(AGENT_BUNDLE), path.basename(AGENT_BUNDLE),
       "-C", AGENT_BUNDLE_ROOT, "node_modules/node-pty",
