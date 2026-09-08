@@ -139,6 +139,25 @@ export function liveNodes(): NodePublic[] {
 export function nodeOnline(id: string): boolean { return conns.has(keyOf(id)); }
 
 /**
+/**
+ * 이 노드 **하나**가 선언된 세션 호스트인가 — 좌표 접기(`self-node.sameTmuxCoordinate`)가 쓰는 재료 (#3745).
+ *
+ * `sessionHostsInScope` 는 «이 테넌트에 자격 있는 주인이 있나» 를 묻는 자리(목록 소유)라 id 를 안 돌려준다.
+ *  여기는 반대로 «**이 좌표**가 세션 호스트를 가리키나» 다 — 박스 세션에 붙은 그 좌표는 다른 기계가 아니라
+ *  같은 tmux 를 뜻하므로 릴레이 지시로 쓰지 않는다(사연은 그 술어 머리말).
+ *
+ * ⚠ 판정은 `declaredSessionHost` **한 곳**을 부른다(fail-closed — 모르는 노드는 false).
+ * ⚠ 온라인·신선도를 **묻지 않는다.** 이 질문은 «지금 답할 수 있나» 가 아니라 «다른 기계인가» 이고,
+ *  선언된 세션 호스트는 꺼져 있어도 다른 기계가 아니다. 목록 소유(`gatewayDefersToSessionHost`)가
+ *  생사를 함께 보는 것과 갈리는 지점이라 여기 적어 둔다.
+ */
+export function isSessionHostNode(nodeId: string): boolean {
+  const id = String(nodeId ?? "").trim();
+  if (!id) return false;
+  return declaredSessionHost({ session_host: states.get(keyOf(id))?.sessionHost });
+}
+
+/**
  * 지운 노드를 **이 프로세스의 기억에서도** 지운다(#3558). `store.deleteNode`(DB 3표) 직후에 부른다.
  *
  * 종전엔 삭제가 DB 만 지우고 여기 캐시는 그대로 뒀다. 그래서 **지운 노드가 게이트웨이 재시작 전까지 자기
