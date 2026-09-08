@@ -248,6 +248,32 @@ await t("R6 배열 enum 은 원소 단위로 판정한다(정상 원소들은 �
   assert.ok(judged > 0, "배열 enum 표본을 하나도 판정하지 못했다 — 스캔이 고장났다");
 });
 
+// ── 폐기된 입력 — 서버가 값을 고정한 필드는 '조용히 무시'가 아니라 거절이어야 한다 ────────────
+// WHY(실측 2026-09-08): `POST /api/ui/knowledge` 에 `injection:"always"` 를 보내면 **200 으로 성공**하고
+//  그 값만 사라졌다. 지식의 injection 은 서버 고정값(recalled)인데 선언에도 없고 parse 도 안 실어
+//  입력이 통째로 증발한 것이다. 이건 같은 엔드포인트의 type=incident(500)보다 나쁘다 — 500 은 시끄럽게
+//  실패하지만 이쪽은 **잘못된 지정이 성공으로 기록되고** 호출자는 자기 지정이 먹혔다고 믿는다.
+//  고정값을 '유일 허용값' enum 으로 선언에 남기면 MCP(SDK)·REST(파리티 가드)가 같은 판정을 낸다.
+await t("폐기된 입력: knowledge_save.injection 에 서버 고정값 밖 값을 보내면 400(조용히 무시 아님)", () => {
+  for (const bad of ["always", "bogus"]) {
+    const err = caught(() => parseWith(KNOWLEDGE_SAVE!.mount, { ...KS_BODY, type: "decision", injection: bad }));
+    assert.ok(err instanceof HttpError && err.status === 400,
+      `injection:"${bad}" 가 조용히 통과했다(반환: ${JSON.stringify(err)}) — 잘못된 지정이 성공으로 기록된다`);
+    assert.match((err as HttpError).message, /recalled/);
+  }
+});
+
+await t("폐기된 입력: 고정값 자체(recalled)와 미전송은 그대로 통과한다", () => {
+  assert.equal(caught(() => parseWith(KNOWLEDGE_SAVE!.mount, { ...KS_BODY, type: "decision", injection: "recalled" })), null);
+  assert.equal(caught(() => parseWith(KNOWLEDGE_SAVE!.mount, { ...KS_BODY, type: "decision" })), null);
+});
+
+await t("폐기된 입력: 그 판정이 MCP 표면에도 걸린다 — 선언에 있어야 SDK 가 거른다", () => {
+  const spec = enumOf(registry.get("knowledge_save")!.input.injection);
+  assert.ok(spec, "injection 이 스키마에 enum 으로 선언돼 있지 않다 — MCP 는 미선언 키를 조용히 strip 한다(같은 무음 실패)");
+  assert.deepEqual([...spec!.values], ["recalled"]);
+});
+
 // ── R5 전 표면 전수 스캔 ─────────────────────────────────────────────────────
 // WHY: 이 규칙은 한 필드의 처방이 아니라 전 표면 규칙이다. 특정 capability 만 고친 구현은 여기서 걸린다.
 //  판정 결과는 세 갈래로 적었지만 가드가 restMounts() 안에 있는 한 dropped 는 구조상 0 이다(나쁜 값이
@@ -318,10 +344,11 @@ await t("실클라이언트: 웹이 보내는 knowledge_list 쿼리가 그대로
 await t("R5 스캔이 실제로 표본을 훑었다 — 0건 훑고 통과하는 자기기만 방지", () => {
   const judged = SCAN.rejected400.length + SCAN.dropped.length;
   assert.ok(judged >= 60, `판정 표본 ${judged}건뿐(판정불가 ${SCAN.skipped.length}건) — 스캔이 고장났다`);
-  // 판정불가(skip)는 fail-open 이라 늘어나도 위 단언들이 조용히 버틴다 — 현재값(2건: project_list_v6 의
-  //  archived·trashed, parse 가 정상값을 undefined 로 접어 기준선을 못 세운다)을 못으로 박아 커버리지
-  //  누수를 눈에 보이게 한다.
-  assert.ok(SCAN.skipped.length <= 2,
+  // 판정불가(skip)는 fail-open 이라 늘어나도 위 단언들이 조용히 버틴다 — 현재값(3건: project_list_v6 의
+  //  archived·trashed 는 parse 가 정상값을 undefined 로 접어 기준선을 못 세우고, knowledge_save.injection 은
+  //  parse 가 그 키를 아예 안 싣는다 — 아래 '폐기된 입력' 블록이 그 필드를 따로 잠근다)을 못으로 박아
+  //  커버리지 누수를 눈에 보이게 한다.
+  assert.ok(SCAN.skipped.length <= 3,
     `판정불가가 ${SCAN.skipped.length}건으로 늘었다 — 커버리지가 조용히 새고 있다:\n  ${SCAN.skipped.join("\n  ")}`);
 });
 
