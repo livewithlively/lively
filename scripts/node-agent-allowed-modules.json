@@ -110,6 +110,7 @@
   "dist/terminal/terminal-pty.js",
   "dist/terminal/terminal-sessions.js",
   "dist/terminal/terminal-transcript.js",
+  "dist/terminal/tmux-call-census.js",
   "dist/terminal/tmux-exec.js",
   "dist/terminal/tmux-route.js",
   "dist/terminal/tmux-shadow.js",
