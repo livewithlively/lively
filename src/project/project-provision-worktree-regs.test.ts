@@ -9,6 +9,7 @@
 //
 // 사양 엣지:
 //   S1 다른 프로젝트의 워크트리가 안 보이는 사이 provision 해도 그 등록·HEAD 브랜치가 그대로다
+//   S4 있는 워크트리가 다른 워크트리의 admin 을 잇고 있으면(사고 상태) 재사용하지 않고 거절한다 — 아무것도 고치지 않는다
 //   S2 목표 경로의 스테일 등록(디렉터리 삭제·부모 있음)은 치우고 다시 만든다(#932 유지 — 브랜치 영구잠금 없음)
 //   S3 base 에 gc.worktreePruneExpire=never
 import assert from "node:assert/strict";
@@ -63,6 +64,22 @@ try {
     assert.equal(git(["rev-parse", "--abbrev-ref", "HEAD"], wtA), "project/2600", "A 의 HEAD 브랜치가 바뀌었다(admin 공유 = 사고)");
     assert.notEqual(gitfileAdmin(wtOf(3646)), adminA, "B 가 A 와 같은 admin 을 가리킨다(사고 상태)");
     ok("S1 안 보이는 남의 워크트리 등록을 provision 이 지우지 않는다");
+  }
+
+  // ── S4 — 재사용 전 소유 검증: B 의 gitfile 이 A 의 admin 을 가리키는 사고 상태 → 거절, 아무것도 안 고침 ──
+  {
+    const wtA = wtOf(2600), wtB = wtOf(3646);
+    const adminA = gitfileAdmin(wtA);
+    const gitfileB = path.join(wtB, ".git");
+    const before = fs.readFileSync(gitfileB, "utf8");
+    fs.rmSync(gitfileB, { force: true });                                   // ⚠ 윈도우: git 이 만든 .git 은 hidden 이라 덮어쓰기 EPERM — 지우고 쓴다
+    fs.writeFileSync(gitfileB, `gitdir: ${adminA}\n`);
+    await assert.rejects(() => provision(3646), /다른 워크트리의 git 등록/, "남의 admin 을 잇고 있는 워크트리를 조용히 재사용했다(사고 상태에 세션을 앉힘)");
+    assert.equal(fs.readFileSync(gitfileB, "utf8"), `gitdir: ${adminA}\n`, "거절하면서 gitfile 을 고쳤다 — 아무것도 고치지 않아야 한다");
+    assert.ok(fs.existsSync(adminA) && norm(adminBack(adminA)) === norm(path.join(wtA, ".git")), "거절하면서 A 의 admin 을 건드렸다");
+    fs.rmSync(gitfileB, { force: true });
+    fs.writeFileSync(gitfileB, before);
+    ok("S4 남의 admin 을 잇고 있는 워크트리는 재사용하지 않는다(거절·무변경)");
   }
 
   // ── S2 — 목표 경로의 스테일 등록(디렉터리 삭제·부모 있음)은 치우고 다시 만든다 ──

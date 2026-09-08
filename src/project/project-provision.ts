@@ -83,16 +83,18 @@ function git(args: string[], cwd?: string, extraEnv?: Record<string, string>, ti
 }
 async function isRepo(p: string): Promise<boolean> { return !!p && fs.existsSync(p) && (await git(["rev-parse", "--git-dir"], p)).ok; }
 
-// 워크트리 등록 목록(porcelain, base 자신 제외) — 디렉터리가 사라진 등록도 경로 그대로 나온다.
-async function listWorktreeRegs(repoPath: string): Promise<Array<{ path: string; branch: string | null }>> {
+// 워크트리 등록 목록(porcelain, base 자신 제외) — 디렉터리가 사라진 등록도 경로 그대로 나온다. locked = 사람이 지킨 것(불가침).
+interface WorktreeReg { path: string; branch: string | null; locked: boolean }
+async function listWorktreeRegs(repoPath: string): Promise<WorktreeReg[]> {
   const r = await git(["worktree", "list", "--porcelain"], repoPath);
   if (!r.ok) return [];
-  const list: Array<{ path: string; branch: string | null }> = [];
-  let cur: { path: string; branch: string | null } | null = null;
+  const list: WorktreeReg[] = [];
+  let cur: WorktreeReg | null = null;
   for (const raw of r.out.split("\n")) {
     const line = raw.trim();
-    if (line.startsWith("worktree ")) { cur = { path: line.slice("worktree ".length), branch: null }; list.push(cur); }
+    if (line.startsWith("worktree ")) { cur = { path: line.slice("worktree ".length), branch: null, locked: false }; list.push(cur); }
     else if (cur && line.startsWith("branch refs/heads/")) cur.branch = line.slice("branch refs/heads/".length);
+    else if (cur && line.startsWith("locked")) cur.locked = true;
   }
   return list.filter((w) => normPath(w.path) !== normPath(repoPath));
 }
@@ -128,11 +130,34 @@ export async function clearStaleRegistrations(repoPath: string, opts: { paths?: 
   const removed: string[] = [];
   for (const w of await listWorktreeRegs(repoPath)) {
     const target = (opts.paths ?? []).some((p) => !!p && normPath(p) === normPath(w.path)) || (!!opts.branch && w.branch === opts.branch);
-    if (!target || !provablyGone(w.path)) continue;
+    if (!target || w.locked || !provablyGone(w.path)) continue;
     const r = await git(["worktree", "remove", "--force", w.path], repoPath);
     if (r.ok) removed.push(w.path);
   }
   return removed;
+}
+
+// 재사용 전 **소유 검증**(#3678) — kit/cli/repo-worktree-core.mjs verifyOwnAdmin 과 같은 규칙. gitfile(`.git` 파일)이 가리키는
+//  admin 이 있고 그 admin 의 gitdir 가 이 워크트리 자신을 가리켜야 세션을 그 위에 앉힌다. 아니면(남의 admin 을 잇고 있음 ·
+//  admin 소실 · 파손) 409 — 조용히 앉히면 그 세션의 커밋이 남의 프로젝트 브랜치에 얹힌다. `.git` 이 디렉터리(직접 clone)면 검증 없음.
+//  아무것도 고치지 않는다(그 자리엔 사람의 파일이 있다). fail-open 호출자에선 failed 항목으로 남아 프리로드가 세션에 알린다.
+function verifyWorktreeOwnership(wtPath: string): void {
+  const gitfile = path.join(wtPath, ".git");
+  let st: fs.Stats;
+  try { st = fs.statSync(gitfile); } catch { return; }
+  if (!st.isFile()) return;
+  const m = fs.readFileSync(gitfile, "utf8").match(/^gitdir:\s*(.+?)\s*$/m);
+  const admin = m ? (path.isAbsolute(m[1]) ? m[1] : path.resolve(wtPath, m[1])) : "";
+  const help = "이 워크트리에서 git 을 쓰지 말고 다른 경로에 새 워크트리를 떠 내 변경만 옮기세요(지식 shared-worktree-hijacked-by-other-session).";
+  if (!admin) throw new HttpError(409, `워크트리 '${wtPath}' 의 .git 파일이 파손됐습니다(gitdir 줄 없음). ${help}`);
+  if (!fs.existsSync(admin)) throw new HttpError(409, `워크트리 '${wtPath}' 의 git 등록(admin '${admin}')이 사라졌습니다 — 다른 세션의 worktree prune 에 지워졌을 수 있습니다. ${help}`);
+  let back = "";
+  try { back = fs.readFileSync(path.join(admin, "gitdir"), "utf8").split("\n")[0].trim(); } catch { /* 없음 */ }
+  const backAbs = back ? (path.isAbsolute(back) ? back : path.resolve(admin, back)) : "";
+  if (!backAbs || normPath(backAbs) !== normPath(gitfile)) {
+    throw new HttpError(409, `워크트리 '${wtPath}' 가 다른 워크트리의 git 등록을 잇고 있습니다 — admin '${admin}' 은 '${backAbs ? path.dirname(backAbs) : "(불명)"}' 의 것입니다`
+      + `(같은 base 에서 같은 basename 으로 다시 뜬 admin 을 둘이 가리키는 상태). 여기서 커밋하면 그쪽 브랜치에 얹힙니다. ${help}`);
+  }
 }
 
 // 브랜치를 쥐고 있는 워크트리 경로(없으면 null) — git 은 한 브랜치를 두 워크트리에 못 건다.
@@ -430,6 +455,8 @@ export async function provisionTaskRepo(
       throw delegateRepoError(new HttpError(502, `위탁 워크트리 생성 실패(${repo}): ${w.err}`
         + (at ? ` — 브랜치 '${branch}' 는 이미 '${at}' 워크트리가 쥐고 있습니다(git 은 한 브랜치를 두 워크트리에 못 겁니다).` : "")), repo);
     }
+  } else {
+    verifyWorktreeOwnership(wtPath); // #3678 — 남의 admin 을 잇고 있는 자리에 위탁을 앉히지 않는다
   }
   return wtPath;
 }
@@ -547,6 +574,8 @@ export async function provisionProjectRepos(
               + (at ? ` — 브랜치 '${branch}' 는 이미 '${at}' 워크트리가 쥐고 있습니다(git 은 한 브랜치를 두 워크트리에 못 겁니다).`
                 + ` 그 워크트리를 정리하거나, 이 레포의 branch 를 다른 이름으로 지정하세요.` : ""));
           }
+        } else {
+          verifyWorktreeOwnership(wtPath); // #3678 — 있는 워크트리를 재사용하기 전에 admin 이 자기 것인지(남의 것을 잇고 있으면 409)
         }
         cwd = wtPath;
       }
