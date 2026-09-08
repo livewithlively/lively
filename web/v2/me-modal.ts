@@ -22,12 +22,12 @@
 //   닫히며 그 화면이 가운데 액자로 뜬다. [계정 · 보안]에 있던 [내 스킬 · 훅] 링크도 그 목차로 옮겼다(문은 하나).
 //
 //  ⚠ 저장 규약: 서버(POST /api/ui/me/profile)는 **미전송 필드를 보존**하는 patch 다. 그래서 [프로필]은
-//   body_md 를 안 보내고 [AI 개인화]은 이름·아바타를 안 보낸다 — 한 창에 둘이 같이 있어도 서로를 지우지 않는다.
+//   body_md 를 안 보내고 [AI 개인화]는 이름·아바타를 안 보낸다 — 한 창에 둘이 같이 있어도 서로를 지우지 않는다.
 //  ⚠ 칸에 적던 것이 탭을 옮기면 사라지면 안 된다 → 화면을 **한 번 만들어 두고 보이기만 토글**한다(다시 짓지 않는다).
 //  ⚠ 단 서버를 더 부르는 화면([AI 계정 연결]·[AI 주입 문구]·[고급 설정])은 **처음 펼 때** 그린다 — 열 때마다
 //   ai-accounts·sessions 까지 부르면 안 볼 수도 있는 화면 때문에 창이 늦게 뜨고, 그러면 '잠깐 들르는 창'이
 //   아니게 된다.
-import { api, el, errorNote, logout, personName, profileAvatar, setUiModeOverride, state, sv, toast, uiText } from '../core.js';
+import { api, el, errorNote, logout, markShellSwitch, personName, profileAvatar, setUiModeOverride, state, sv, toast, uiText } from '../core.js';
 import { field, skeleton } from '../ui-primitives.js';
 import {
   PROF_DEV, PROF_LANG, PROF_TONE, applyMyProfileSaved, avatarEditor, changePasswordModal, companyLoginRow, parseMyProfile, profChips,
@@ -161,7 +161,7 @@ export function openMeModal(opts: MeModalOpts = {}): void {
   // 초점을 창 안으로 — 첫 항목(프로필)에 둔다. 키보드만 쓰는 사람이 Tab 한 번에 목록을 훑을 수 있는 자리다.
   navBtns.get(cur)?.focus();
 
-  // ── 데이터 한 번 — [프로필]과 [AI 개인화]이 같은 레코드를 나눠 쓴다(GET /api/ui/me/profile). ──
+  // ── 데이터 한 번 — [프로필]과 [AI 개인화]가 같은 레코드를 나눠 쓴다(GET /api/ui/me/profile). ──
   void (async () => {
     let data: any;
     try { data = await api('/api/ui/me/profile'); }
@@ -169,7 +169,7 @@ export function openMeModal(opts: MeModalOpts = {}): void {
     // 로그인 수단(#1520)은 있으면 [계정]에 얹고, 없으면(OIDC 미설정 배포) 그 칸만 안 그린다 — 나머지는 그대로 쓴다.
     let logins: any = null;
     try { logins = await api('/api/ui/me/logins'); } catch (_) { /* 부가 정보 — 조용히 넘어간다 */ }
-    // 리브가 온보딩에서 알게 된 것(#1843). 실패해도 [AI 개인화]은 종전대로 열린다 — 그 칸만 안 그린다.
+    // 리브가 온보딩에서 알게 된 것(#1843). 실패해도 [AI 개인화]는 종전대로 열린다 — 그 칸만 안 그린다.
     let liv: any = null;
     try { liv = await api('/api/ui/me/liv-profile'); } catch (_) { /* 옛 서버·조회 실패 — 칸을 접는다 */ }
 
@@ -200,7 +200,7 @@ function saveRow(btn: HTMLElement, status: HTMLElement): HTMLElement {
 /**
  * 한 화면 안에서 **나란히 서는 덩어리** 하나 — [제목 · (상태) · 한 줄 설명 · 내용].
  *
- * 왜 부품으로 뽑았나(#1631, 원준님 2026-09-03): [AI 개인 규칙]의 두 덩어리(「온보딩에서 알려주신 것」과
+ * 왜 부품으로 뽑았나(#1631, 원준님 2026-09-03): [AI 개인화]의 두 덩어리(「온보딩에서 알려주신 것」과
  *  「내가 적는 것」)는 **같은 위계**인데 얼굴이 달랐다 — 앞은 제목·배지·설명을 갖춘 틴트 카드였고, 뒤는
  *  11px 회색 라벨 한 줄이 폼 위에 떠 있는 것이 전부였다. 그래서 뒤가 앞의 각주처럼 읽혔다.
  *  형제는 **머리가 같아야** 형제로 읽힌다. 다른 것은 내용의 성격뿐이라, 그 차이는 본문 면에서만 말한다
@@ -246,7 +246,7 @@ function profilePane(data: any, onSaved: () => void): HTMLElement {
   const btn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
   btn.addEventListener('click', async () => {
     (btn as any).disabled = true;
-    // body_md 는 안 보낸다 — 서버가 보존하므로 [AI 개인화]이 지워지지 않는다.
+    // body_md 는 안 보낸다 — 서버가 보존하므로 [AI 개인화]가 지워지지 않는다.
     const payload = { display_name: (nameIn as any).value.trim(), nickname: (nickIn as any).value.trim(),
       use_nickname: useNick.checked, ...ava.payload() };
     try {
@@ -411,6 +411,10 @@ function lookPane(close: () => void): HTMLElement {
   const classicBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '클래식 화면으로 바꾸기',
     onclick: () => {
       close();
+      //  #1898 — 셸을 바꾸면 페이지가 통째로 다시 뜨고 이 창은 사라진다. 도장을 찍어 **클래식 쪽 부팅이
+      //   같은 성격의 창('내 정보')을 다시 열게** 한다: 되돌아오는 버튼이 그 자리에 그대로 있어야 한다.
+      //   안 그러면 화면 골격까지 바뀐 채 남겨져, 되돌릴 길을 설정에서 찾아 들어가야 한다.
+      markShellSwitch();
       setUiModeOverride('classic');
       location.replace(location.pathname + '#/dashboard');
       location.reload();
@@ -450,7 +454,7 @@ function lookPane(close: () => void): HTMLElement {
         el('span', { style: 'font-size:13.5px' }, ...uiText('현재 열린 탭도 모두 함께 바꿉니다.'))),
       el('p', { class: 'prof-hint' }, ...uiText('첫째 칸을 끄면 AI 하네스가 저마다 저장해 둔 테마를 그대로 씁니다. 둘째 칸을 켜면 지금 열려 있는 세션 탭의 하네스까지 그 자리에서 바꿉니다 — 하네스마다 지원 여부가 달라, 바꾼 개수와 못 바꾼 이유를 알려드려요.')))),
     field('화면 모드', el('div', { class: 'v2me-inline' }, classicBtn,
-      el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('지금은 새 화면입니다. 옛 화면으로 바꿔도 이 브라우저에서만 적용되고, 설정 ▸ 화면 에서 언제든 돌아옵니다.')))));
+      el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('지금은 새 화면입니다. 옛 화면으로 바꿔도 이 브라우저에서만 적용되고, 바꾼 직후 뜨는 「내 정보」 창에서 바로 돌아올 수 있어요.')))));
 }
 
 // ── ⑥ 계정 · 보안 — 어떻게 들어오는가. 프로필(누구로 보이는가)과 축이 달라 따로 둔다. ──
@@ -492,7 +496,7 @@ function accountPane(data: any, logins: any): HTMLElement {
 //  ⚠ **기기가 아니라 사람 단위**다(서버 저장). 기기별로 두면 사무실 맥에서 끈 것이 노트북에선 그대로 떠
 //   "껐는데 뜬다"가 된다. 그래서 끄고 켜는 자리도 여기 하나뿐이고, 앱은 이 값을 읽기만 한다.
 //  ⚠ 스위치는 **누르는 순간 저장한다**(저장 버튼 없음). 스위치를 내린 것 자체가 결정이라, 한 번 더 누르게
-//   하면 "껐는데 안 꺼졌다"가 난다. 텍스트를 고치는 [프로필]·[AI 개인화]이 저장 버튼을 쓰는 것과 다른
+//   하면 "껐는데 안 꺼졌다"가 난다. 텍스트를 고치는 [프로필]·[AI 개인화]가 저장 버튼을 쓰는 것과 다른
 //   이유이고, 그 구분은 일반적인 관례와 같다.
 const NOTIFY_ROWS: Array<{ key: string; label: string; desc: string }> = [
   { key: 'session_waiting', label: 'AI 가 확인을 기다릴 때',

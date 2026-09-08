@@ -32,8 +32,50 @@ const DENY: PermissionAnswer = { allow: false, scope: "once" };
 const DEFAULT_TTL_MS = 10 * 60 * 1000;
 
 let server: Server | null = null;
-let token = "";
 let port = 0;
+//  문을 못 열었다 — 매 턴 다시 시도해 같은 경고를 쏟지 않게 한 번만 기억한다(아래 s.on("error") 주석).
+let listenFailed = false;
+
+// ── 토큰은 **세션마다 다르다** ────────────────────────────────────────────────
+//  왜: 이 문이 열어 주는 것은 «그 세션의 사람에게 묻기» 하나여야 한다. 토큰이 프로세스당 한 개면 그 하나가
+//   **모든 세션의 열쇠**가 된다 — 박스의 멤버는 자기 agy 자식 env 에서 그 값을 읽을 수 있으므로(자기 uid 의
+//   프로세스다), 본문에 **남의 session id** 를 실어 그 사람 화면에 승인 카드를 띄우고 답까지 받아 갈 수 있다.
+//   루프백 바인딩은 이걸 못 막는다(같은 박스 안이다). 승인 피싱이 되는 자리라 토큰을 세션에 묶는다.
+//  ⚠ 그래서 **본문이 말하는 session 은 믿지 않는다** — 토큰이 세션을 말한다(bindAskBodyToToken).
+const tokenOfSession = new Map<string, string>();
+const sessionOfToken = new Map<string, string>();
+
+/**
+ * 이 세션의 토큰(없으면 발급) — askBridgeEnv 가 env 에 싣는 바로 그 값이다.
+ *  세션당 한 번만 만든다: 턴마다 새 자식이 뜨는데(perTurnTransport) 값이 바뀌면 앞 턴의 훅이 403 을 받는다.
+ *  ⚠ 장부는 **문이 열렸는지와 무관하게** 선다 — 그래야 이 계약을 루프백을 못 여는 곳(격리 러너)에서도 잰다.
+ */
+export function askTokenForSession(sessionId: string): string {
+  const sid = String(sessionId || "").trim();
+  const had = tokenOfSession.get(sid);
+  if (had) return had;
+  const t = randomBytes(24).toString("hex");
+  tokenOfSession.set(sid, t);
+  sessionOfToken.set(t, sid);
+  return t;
+}
+
+/** 이 토큰이 자격을 갖는 세션 — 모르는 토큰이면 null(문이 안 열린다). */
+export function askSessionForToken(token: string): string | null {
+  return sessionOfToken.get(String(token || "")) ?? null;
+}
+
+/**
+ * 훅이 보낸 본문을 **토큰이 말하는 세션에 묶는다.** 모르는 토큰이면 null(호출부가 403).
+ *  ★ 본문의 `session` 은 덮어쓴다 — 훅이 자기 세션을 실어 보내지만 그 값을 근거로 삼지 않는다.
+ *   근거는 토큰뿐이라, 남의 session id 를 적어도 자기 세션에만 물음이 간다.
+ */
+export function bindAskBodyToToken(token: string, body: unknown): Record<string, unknown> | null {
+  const claimed = askSessionForToken(token);
+  if (!claimed) return null;
+  const b = (body && typeof body === "object" && !Array.isArray(body)) ? body as Record<string, unknown> : {};
+  return { ...b, session: claimed };
+}
 
 /** 이 문의 뒤에서 실제로 묻는 함수 — 테스트가 갈아 끼운다(HTTP 는 얇은 껍데기라는 뜻). */
 type AskFn = (sessionId: string, id: string, payload: PermissionAsk, ttlMs: number) => Promise<PermissionAnswer>;
@@ -82,10 +124,9 @@ export async function handleAskRequest(
   }
 }
 
-/** 문을 연다(멱등). 이미 열려 있으면 그대로 쓴다 — 프로세스당 하나면 충분하다. */
+/** 문을 연다(멱등). 이미 열려 있으면 그대로 쓴다 — 프로세스당 하나면 충분하다(토큰은 세션마다 따로다). */
 function ensureServer(): void {
-  if (server) return;
-  token = randomBytes(24).toString("hex");
+  if (server || listenFailed) return;
   const s = createServer((req, res) => {
     void (async () => {
       const reply = (status: number, obj: unknown): void => {
@@ -96,16 +137,28 @@ function ensureServer(): void {
       try {
         if (req.method !== "POST" || (req.url || "").split("?")[0] !== "/ask") return reply(404, { ok: false });
         //  ⚠ 토큰은 **헤더**로 받는다 — URL 에 실으면 로그·ps 에 남는다.
-        if (String(req.headers["x-lively-ask"] || "") !== token) return reply(403, { ok: false, ...DENY });
         let parsed: unknown = null;
         try { parsed = JSON.parse((await readBody(req)) || "{}"); } catch { parsed = null; }
-        const out = await handleAskRequest(parsed);
+        //  ★ 토큰이 세션을 말한다 — 본문의 session 은 여기서 덮인다(위 bindAskBodyToToken 머리말).
+        const bound = bindAskBodyToToken(String(req.headers["x-lively-ask"] || ""), parsed);
+        if (!bound) return reply(403, { ok: false, ...DENY });
+        const out = await handleAskRequest(bound);
         reply(out.status, out.body);
       } catch {
         //  어떤 실패에서도 훅에 **유효한 답 한 번**을 준다(훅이 무효 출력을 내면 그 세션 전 툴이 fail-closed deny 된다).
         try { reply(200, { ok: false, ...DENY }); } catch { /* 연결이 이미 끊겼다 */ }
       }
     })();
+  });
+  //  ⚠ listen 실패는 **'error' 이벤트**로 온다 — 핸들러가 없으면 unhandled 'error' 가 되어 **게이트웨이
+  //   프로세스가 통째로 죽는다**(try/catch 로는 안 잡힌다). 루프백을 못 여는 환경이 실재한다(격리 netns·
+  //   제한된 러너에서 EADDRNOTAVAIL 실측). 문을 못 열면 **종전 동작으로 접는다**: port 가 0 이라
+  //   askBridgeEnv 가 빈 env 를 주고, 자식은 묻지 않고 중립 ask 로 간다 — 나빠지지 않는다.
+  s.on("error", (err) => {
+    listenFailed = true;
+    if (server === s) { server = null; port = 0; }
+    try { s.close(); } catch { /* 이미 닫혔다 */ }
+    logger.warn({ err: (err as Error)?.message }, "훅 물음 문을 열지 못했다 — 이 프로세스는 되묻기 없이 간다(종전 동작)");
   });
   //  ★ 루프백 전용. 0 = 아무 빈 포트(고정 포트를 잡으면 한 기계에서 두 게이트웨이가 못 뜬다).
   s.listen(0, "127.0.0.1", () => {
@@ -131,15 +184,18 @@ function ensureServer(): void {
 export function askBridgeEnv(sessionId: string): Record<string, string> {
   ensureServer();
   if (!port) return {};   // 아직 안 붙었다 — 이번 턴은 종전 동작(다음 턴부터 붙는다)
+  const sid = String(sessionId || "").trim();
+  if (!sid) return {};    // 세션을 모르면 묶을 자리가 없다 — 토큰을 주지 않는다(종전 동작으로 접힌다)
   return {
     LIVELY_ASK_URL: `http://127.0.0.1:${port}/ask`,
-    LIVELY_ASK_TOKEN: token,
-    LIVELY_ASK_SESSION: sessionId,
+    LIVELY_ASK_TOKEN: askTokenForSession(sid),
+    LIVELY_ASK_SESSION: sid,
   };
 }
 
-/** 테스트용 — 문을 닫고 상태를 비운다. */
+/** 테스트용 — 문을 닫고 상태를 비운다(발급한 토큰도 함께 버린다). */
 export function closeAskBridge(): void {
   try { server?.close(); } catch { /* 이미 닫혔다 */ }
-  server = null; port = 0; token = "";
+  server = null; port = 0; listenFailed = false;
+  tokenOfSession.clear(); sessionOfToken.clear();
 }
