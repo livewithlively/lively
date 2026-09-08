@@ -860,7 +860,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let carry = '';                             // 잘린 마지막 줄(다음 폴에서 이어 붙인다)
   // 낙관적으로 그린 내 말들 — 서버 아웃박스(#1753)와 짝. 파일에 그 글이 나타나면(에코) 그 턴을 재사용하고 목록에서 뺀다.
   //  obId 로 서버 큐 행과 연결 — 새로고침해도 큐(GET outbox)에서 되살아나 "다 날아감"이 없다. state = 말풍선 밑 상태 줄.
-  interface Pending { text: string; t: ChatTurn; obId?: number; state: HTMLElement }
+  interface Pending {
+    text: string; t: ChatTurn; obId?: number; state: HTMLElement;
+    /** #3689 — «이어서 열기» 줄은 한 번만 그린다(3초 폴링마다 새 버튼을 끼우면 누른 버튼의 진행 상태가 덮인다). */
+    restoreMsg?: HTMLElement; restoreBtn?: HTMLButtonElement; restoring?: boolean;
+  }
   const pending: Pending[] = [];
   let outboxTimer: number | null = null;
   let firstPrompt: string | null = opts.firstPrompt ? String(opts.firstPrompt) : null;   // 홈 입력창의 첫 지시(한 번만 그린다)
@@ -971,7 +975,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   /** #3689 — 이만큼 **연속으로** 못 닿고 있으면 «복원이 필요할 수 있어요 — 이어서 열기» 를 낸다. 노드 재기동·허브 재접속 창(초~1분)은 지나고,
    *  사람이 «응답이 없다» 로 겪기 시작하는 자리. 서버 큐는 그대로 24시간(UNREACHABLE_TTL) 들고 있는다 — 여기서 주는 건 선택지다. */
   const UNREACHABLE_SUGGEST_MS = 3 * 60_000;
-  function paintQState(pd: Pending, row: { status: string; last_error: string | null; created_at: string } | null): void {
+  function paintQState(pd: Pending, row: { status: string; last_error: string | null; created_at: string; stalled_since?: string | null } | null): void {
     if (!row) { pd.state.textContent = ''; return; }              // 큐에서 사라짐(delivered/sent) — 에코가 곧 마감한다
     if (row.status === 'failed') {
       const why = row.last_error === 'not-ready' ? '입력창이 끝내 안 떴어요(로그인·오류 화면)'
@@ -1001,13 +1005,19 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  #3689 — 오래 못 닿고 있다: 서버는 이 세션이 desired-state 에 있고 tmux 확답을 못 받는 상태임을 안다(stalled_since).
       //   «닿는 대로 들어갑니다» 를 24시간 들고 있지 않고, 사람에게 «이어서 열기» 를 준다. 확답 규율(#835)은 그대로 —
       //   서버가 «아직 살아 있다(모름)» 고 답하면(already) 그 말을 그대로 전한다(복원됐다고 꾸미지 않는다).
-      const since = Date.parse((row as any).stalled_since || row.created_at);
+      const since = Date.parse(row.stalled_since || row.created_at);
       const stalledMs = Number.isFinite(since) ? Date.now() - since : 0;
       if (stalledMs >= UNREACHABLE_SUGGEST_MS) {
         const mins = Math.max(1, Math.floor(stalledMs / 60_000));
-        const btn = el('button', { class: 'btn-text dt-qact', type: 'button', text: '이어서 열기', onclick: () => { void restoreUnreachable(btn); } }) as HTMLButtonElement;
-        pd.state.replaceChildren(
-          el('span', { text: `전달 대기 중 — 세션이 있는 컴퓨터에 ${mins}분째 못 닿고 있어요. 이 세션은 복원이 필요할 수 있어요. ` }), btn);
+        const msg = `전달 대기 중 — 세션이 있는 컴퓨터에 ${mins}분째 못 닿고 있어요. 이 세션은 복원이 필요할 수 있어요. `;
+        //  ★ 버튼은 **한 번만** 만든다 — 이 함수는 3초 폴링마다 불린다. 매번 새 버튼을 끼우면 사람이 누른 버튼(여는 중…·disabled)이
+        //   다음 폴링에 멀쩡한 새 버튼으로 덮여 두 번 눌리고 /restore 가 두 번 나간다(diff-reviewer 지적). 글자(분)만 갱신한다.
+        //   다른 상태로 넘어가 이 줄이 지워지면(isConnected=false) 다음에 다시 만든다.
+        if (pd.restoreMsg && pd.restoreBtn && pd.restoreBtn.isConnected) { pd.restoreMsg.textContent = msg; return; }
+        const msgEl = el('span', { text: msg });
+        const btn = el('button', { class: 'btn-text dt-qact', type: 'button', text: '이어서 열기', onclick: () => { void restoreUnreachable(pd); } }) as HTMLButtonElement;
+        pd.restoreMsg = msgEl; pd.restoreBtn = btn;
+        pd.state.replaceChildren(msgEl, btn);
         return;
       }
       pd.state.textContent = '전달 대기 중 — 세션이 있는 컴퓨터에 지금 못 닿아요. 닿는 대로 들어갑니다';
@@ -1041,7 +1051,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     view.setNote('세션이 입력을 못 받고 있어 터미널을 열었어요 — 로그인 등 필요한 단계를 여기서 끝내면 대기 중인 지시가 이어서 들어갑니다.');
   }
   /** #3689 — 오래 못 닿는 세션을 사람이 되살린다. 복원은 새 id 로 새 노드에 앉히고 대기 중인 지시(큐)를 승계한다(routes.ts). */
-  async function restoreUnreachable(btn: HTMLButtonElement): Promise<void> {
+  async function restoreUnreachable(pd: Pending): Promise<void> {
+    const btn = pd.restoreBtn;
+    if (!btn || pd.restoring) return;                 // 진행 중이면 두 번 나가지 않는다(버튼 재생성과 무관한 두 번째 가드)
+    pd.restoring = true;
     const orig = btn.textContent;
     btn.disabled = true; btn.textContent = '여는 중…';
     try {
@@ -1058,6 +1071,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     } catch (e: any) {
       toast(e?.message || '이어서 열지 못했어요.');
     } finally {
+      pd.restoring = false;
       btn.disabled = false; btn.textContent = orig;
     }
   }

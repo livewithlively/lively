@@ -213,7 +213,7 @@ export async function waitOutboxSettled(ids: number[], maxMs: number): Promise<{
 
 export async function retryOutbox(sessionId: string, id: number): Promise<boolean> {
   const r = await itemsPool.query(
-    `UPDATE org_session_outbox SET status='queued', attempts=0, last_error=NULL, created_at=now(), updated_at=now()
+    `UPDATE org_session_outbox SET status='queued', attempts=0, last_error=NULL, created_at=now(), updated_at=now(), stalled_since=NULL
      WHERE session_id=$1 AND id=$2 AND (status='failed' OR (status='sent' AND last_error='echo-unconfirmed'))`,
     [sessionId, id]);
   if ((r.rowCount ?? 0) > 0) { kickOutbox(sessionId); return true; }
