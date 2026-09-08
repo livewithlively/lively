@@ -46,7 +46,7 @@ const knowledgeSaveInput = {
   //  먹혔다고 믿는다. 그래서 '유일 허용값' enum 으로 선언에 남긴다: MCP 는 SDK 가, REST 는 enum 파리티
   //  가드가 같은 판정을 내리고(둘 다 400), 이유는 아래 안내문 하나에서 나온다.
   injection: z.enum(["recalled"]).optional()
-    .describe("지식은 항상 recalled 고정이라 지정할 수 없다(#335). '항상 주입'은 관리 ▸ 세션 주입 섹션 문서(org_update_section)로, WIKI 인덱스 핀은 knowledge_set_wiki 로 지정한다."),
+    .describe("지식은 항상 recalled 고정이라 저작자가 지정할 수 없다(#335) — 보내지 않는 것이 정상이고, 보낸다면 recalled 만 허용된다. '세션마다 항상 주입'은 관리 ▸ 세션 주입 섹션 문서(org_update_section)로, WIKI 인덱스 핀은 knowledge_set_wiki 로 지정한다."),
   lifecycle: z.enum(["active", "pending"]).optional()
     .describe("#638 자동 인입(distill 등)이 검토대기로 저장할 때 pending — 기본 목록·검색·주입에서 격리(승인=set_lifecycle active). 미지정=active(사람 저작 기본). superseded/archived 는 set_lifecycle 로만."),
   supersedes: z.string().optional()

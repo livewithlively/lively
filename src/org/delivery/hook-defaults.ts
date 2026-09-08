@@ -15,8 +15,9 @@ export const DEFAULT_WRITEBACK_NOTICE =
   "이번에 주입된 기획·대화 맥락으로 바뀌었으면 category_update(should=…)로 갱신(도메인間 새 의도 의존이 생겼으면 " +
   "category_edge_set). 바뀐 게 없으면 activity_log 의 should_review/is_review='checked_no_change' 로 '점검함·변화없음'을 " +
   "명시 기록(안 한 것과 구분). " +
-  "③ 지속될 지식·결정·설계·런북은 knowledge_save 로 전문 기록 — injection(always=세션마다 항상 주입되는 규칙·페르소나 / " +
-  "recalled=검색으로 소환) + provenance(authored=직접 저작 / observed=외부 관찰), 카테고리 연결은 knowledge_link_category, " +
+  "③ 지속될 지식·결정·설계·런북은 knowledge_save 로 전문 기록 — provenance(authored=직접 저작 / observed=외부 관찰)를 " +
+  "정하고(주입 방식은 서버가 정한다: 지식은 항상 recalled=검색 소환이고, 세션마다 항상 깔리는 규칙·페르소나는 " +
+  "지식이 아니라 관리 ▸ 세션 주입 섹션 문서다 — org_update_section), 카테고리 연결은 knowledge_link_category, " +
   "대체된 옛 지식은 knowledge_set_lifecycle(superseded). 작업과는 activity_log 의 ku_refs(produced/references/decided)로 연결. " +
   "외부(노션·슬랙 등)에서 끌어온 자료 — 프록시(ext__*)나 외부 MCP 로 읽은 건 세션이 끝나면 그대로 증발한다(게이트웨이는 " +
   "무엇을 읽었는지 안 남긴다). 커넥터 미러가 이미 갖고 있으면(knowledge_search 로 먼저 확인) 중복 저장하지 말고, " +

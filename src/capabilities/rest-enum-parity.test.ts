@@ -279,17 +279,17 @@ await t("폐기된 입력: 그 판정이 MCP 표면에도 걸린다 — 선언�
 //  판정 결과는 세 갈래로 적었지만 가드가 restMounts() 안에 있는 한 dropped 는 구조상 0 이다(나쁜 값이
 //  parse 산출에 닿기 전에 throw). dropped 분기를 남겨 두는 건 가드가 빠졌을 때 '유출'과 '마운트 자체
 //  필터가 떨굼'을 구분해 보여 주기 위해서다 — 그 둘은 해악이 다르다(전자는 500, 후자는 무언의 무시).
-type Verdict = { rejected400: string[]; dropped: string[]; leaked: string[]; skipped: string[] };
+type Verdict = { rejected400: string[]; dropped: string[]; leaked: string[]; skipped: string[]; skippedIds: string[] };
 
 function scanAll(): Verdict {
-  const v: Verdict = { rejected400: [], dropped: [], leaked: [], skipped: [] };
+  const v: Verdict = { rejected400: [], dropped: [], leaked: [], skipped: [], skippedIds: [] };
   for (const { cap, mount } of MOUNTS) {
     for (const [k, zt] of Object.entries(cap.input)) {
       const info = enumOf(zt);
       if (!info) continue;
       const where = `${cap.name}.${k} [${mount.method} ${mount.paths[0]}] 허용값=${info.values.join("|")}`;
       const base = findBaseline(cap, mount, k);
-      if (!base) { v.skipped.push(where); continue; }   // 다른 이유로 throw = 판정 불가 → 버린다
+      if (!base) { v.skipped.push(where); v.skippedIds.push(`${cap.name}.${k}`); continue; }   // 다른 이유로 throw = 판정 불가 → 버린다
       const poison = info.isArray ? [POISON] : POISON;
       let out: Record<string, unknown> | null = null;
       try { out = parseWith(mount, { ...base.values, [k]: poison }, base.str); }
@@ -348,8 +348,13 @@ await t("R5 스캔이 실제로 표본을 훑었다 — 0건 훑고 통과하는
   //  archived·trashed 는 parse 가 정상값을 undefined 로 접어 기준선을 못 세우고, knowledge_save.injection 은
   //  parse 가 그 키를 아예 안 싣는다 — 아래 '폐기된 입력' 블록이 그 필드를 따로 잠근다)을 못으로 박아
   //  커버리지 누수를 눈에 보이게 한다.
-  assert.ok(SCAN.skipped.length <= 3,
-    `판정불가가 ${SCAN.skipped.length}건으로 늘었다 — 커버리지가 조용히 새고 있다:\n  ${SCAN.skipped.join("\n  ")}`);
+  // 개수가 아니라 **식별자 집합**으로 못박는다 — 개수만 보면 한 필드가 빠지고 다른 필드가 들어오는
+  //  교체형 드리프트가 숨는다(주석만 거짓이 된다).
+  const EXPECTED_SKIPS = new Set([
+    "knowledge_save.injection", "project_list_v6.archived", "project_list_v6.trashed",
+  ]);
+  assert.deepEqual(new Set(SCAN.skippedIds), EXPECTED_SKIPS,
+    `판정불가 집합이 바뀌었다 — 커버리지가 조용히 새거나 옮겨갔다:\n  ${SCAN.skipped.join("\n  ")}`);
 });
 
 await t("R5 전수 스캔 대상이 실제로 여러 capability 에 걸쳐 있다", () => {
