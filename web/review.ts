@@ -11,7 +11,6 @@
 //   · 되돌릴 수 있다 — 신규 반려=휴지통(복원 가능) · 수정 반려=수정 전으로 되돌리기.
 import { api, busy, cardHead, el, errorNote, relTime, renderMarkdown, toast } from './core.js';
 import { overlayBox, skeleton } from './learn.js';
-import { SPACE_SUBS } from './category-form.js';
 
 // 관리탭 스위치가 관리하는 규칙의 표식 — 사람이 손으로 만든 세부 규칙과 구분(서버 org_ingest_policy.preset).
 const GATE_PRESET = 'agent-knowledge';
@@ -364,16 +363,14 @@ export async function openIngestPolicyForm(pol: any, reload: () => void): Promis
 
   let cats: any[] = [];
   try {
-    const lists = await Promise.all(SPACE_SUBS.map((s: any) =>
-      api('/api/ui/categories?' + new URLSearchParams({ space: s.key })).then((d: any) => (d && d.categories) || []).catch(() => [])));
-    cats = lists.flat();
+    cats = await api('/api/ui/categories').then((d: any) => (d && d.categories) || []);
   } catch { cats = []; }
 
   const actSel = sel(CREATE_ACTS, (pol && pol.action) || 'confirm');
   const updSel = sel(UPDATE_ACTS, (pol && pol.action_update) || 'auto');
   const whoSel = sel([['', '전체 (누가 쓰든)'], ['ai', '에이전트 (MCP — AI가 쓴 것)'], ['human', '사람 (웹에서 직접 쓴 것)']], (pol && pol.match_actor_kind) || '');
   const agentSel = sel([['', '전체 (모든 하네스)'], ...HARNESSES.map((h) => [h, h] as [string, string])], (pol && pol.match_agent) || '');
-  const catSel = sel([['', '전체 (모든 도메인)'], ...cats.map((c: any) => [c.key, (c.name || c.key) + ' (' + c.key + ')'] as [string, string])], (pol && pol.match_category) || '');
+  const catSel = sel([['', '전체 (모든 분류축)'], ...cats.map((c: any) => [c.key, (c.name || c.key) + ' (' + c.key + ')'] as [string, string])], (pol && pol.match_category) || '');
   const typeSel = sel([['', '전체 (모든 종류)'], ...PAGE_TYPES.map((t) => [t, (TYPE_LABEL[t] || t) + ' (' + t + ')'] as [string, string])], (pol && pol.match_type) || '');
   const provSel = sel([['', '전체'], ['authored', '저작 (에이전트·사람이 쓴 것)'], ['observed', '외부 자료 미러 (외부 원본 복제)']], (pol && pol.match_provenance) || '');
   const sysSel = sel([['', '전체 (모든 시스템)'], ...['slack', 'notion', 'clickup', 'gmail', 'gdrive', 'discord'].map((s) => [s, s] as [string, string])], (pol && pol.match_system) || '');

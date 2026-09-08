@@ -34,6 +34,6 @@ export {
   invalidateWriteCap, normalizeCap, sessionWriteCap, deriveWriteCap, canSeeSession, type WriteCap,
 } from "./write-cap.js";
 export {
-  sessionPrefix, listSessions, listRestorableSessions, listSessionsRaw, killEmptyTmuxServer,
+  sessionPrefix, listSessions, listRestorableSessions, listLiveSessionIds, listSessionsRaw, killEmptyTmuxServer,
   createSession, canAttach, reapCentralSession, killSession, editSession, applyValidatedInvites, validateInvites,
 } from "./sessions.js";

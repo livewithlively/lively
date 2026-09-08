@@ -119,6 +119,24 @@ function pruneEmptyDirs(dir) {
   }
 }
 
+// ── 벤더 자산 — pdf.js (#762) ────────────────────────────────────────────────
+//  자료 격자의 PDF 썸네일을 **첫 장 그림**으로 그린다. 크롬 내장 PDF 뷰어(프레임)는 플러그인 레이어라
+//  우리 CSS·히트테스트 밖에서 제 도구모음을 띄워 격자를 뒤덮었다 — 그림으로 그리면 그 문제가 원천 소멸한다.
+//  node_modules 에서 **빌드 때 복사**한다(정본은 package.json 의 핀 하나뿐 — 레포에 사본을 두지 않는다).
+{
+  const src = path.join(root, "node_modules/pdfjs-dist/build");
+  const dst = path.join(OUT, "vendor/pdfjs");
+  const files = ["pdf.min.mjs", "pdf.worker.min.mjs"];
+  if (files.every((f) => existsSync(path.join(src, f)))) {
+    mkdirSync(dst, { recursive: true });
+    for (const f of files) cpSync(path.join(src, f), path.join(dst, f));
+    console.log("[build:web] vendor/pdfjs 복사 완료 (" + files.join(", ") + ")");
+  } else {
+    //  ⚠ 조용히 넘어가지 않는다 — 없으면 PDF 썸네일만 안 뜨는데, 그건 «되던 게 안 된다»라 찾기 어렵다.
+    console.error("[build:web] ⚠ pdfjs-dist 가 없다 — PDF 썸네일이 아이콘으로만 뜬다. `npm ci` 를 먼저 돌려라.");
+  }
+}
+
 // 스왑: 준비(NEXT 채우기) → 교체(rename 2회) → 뒷정리. 교체 구간만 짧게 가져간다.
 rmSync(NEXT, { recursive: true, force: true });
 rmSync(OLD, { recursive: true, force: true });

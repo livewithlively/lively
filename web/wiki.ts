@@ -17,7 +17,7 @@ import { renderCategorySurface } from './wiki-category.js';
 import { reviewQueuePanel } from './review.js';   // #837 검토 큐 — 관리탭에서 이관(지식의 대기열이니 집은 WIKI)
 import { renderClassificationReview } from './classifications.js';   // #1102 분류 검토 대기 — 분류기 제안 확정/재분류/반려
 
-// ── 라우터 진입 — sub ∈ { ''|new|pinned|sources|review|기타(구 space URL — 무시) } ──
+// ── 라우터 진입 — sub ∈ { ''|new|pinned|sources|review|기타(구 URL — 무시) } ──
 async function renderWiki(view, sub, params) {
   if (sub === 'new') return renderWikiDraft(view, params);
   if (sub === 'pinned') { location.replace('#/knowledge?indexed=1'); return; }   // 구 링크 보존
@@ -81,15 +81,15 @@ async function renderWikiSpace(view, params) {
 
   const main = el('section', { class: 'wk-main' });
   // 카테고리 목록은 화면이 직접 읽는다(사이드바가 없어졌다) — 세션 캐시 1콜, 카테고리 서고·행 칩이 같은 벌을 본다.
-  let bySpace: any = { business: [], product: [], system: [] };
+  let cats: any[] = [];
   const ctx = {
     f,
     syncHash,
     repaint,
     selectCategory,
-    onCatChanged: () => { void knLoadCats(true).then((b) => { bySpace = b; }); },
-    bySpace: () => bySpace,
-    findCat: (v: string) => knFindCatIn(bySpace, v),
+    onCatChanged: () => { void knLoadCats(true).then((b) => { cats = b; }); },
+    cats: () => cats,
+    findCat: (v: string) => knFindCatIn(cats, v),
   };
 
   function selectCategory(v: string) {
@@ -110,7 +110,7 @@ async function renderWikiSpace(view, params) {
     //  미분류(#1091)는 대문·폴더가 있을 수 없는 '남은 것' 묶음이라 카테고리 페이지가 아니라 평면 목록으로 간다.
     if (f.q || f.all || f.indexed || f.category === KN_UNCAT || (f.type && !f.category)) return renderFilterList(box, ctx);
     if (f.category) {
-      const cat = knFindCatIn(bySpace, f.category);
+      const cat = knFindCatIn(cats, f.category);
       if (cat) return renderCategorySurface(box, cat, ctx);
       // 카테고리를 못 찾음(삭제/딥링크 오류) — 첫 화면으로 조용히 폴백.
       f.category = ''; f.folder = '';
@@ -120,7 +120,7 @@ async function renderWikiSpace(view, params) {
   }
 
   const shell = el('div', { class: 'kn-shell kn-shell-flat' }, main);
-  bySpace = await knLoadCats();   // 카테고리 해석(findCat)·행 칩에 필요
+  cats = await knLoadCats();   // 카테고리 해석(findCat)·행 칩에 필요
   // 로딩 중 사용자가 다른 탭으로 떠났으면 여기서 멈춘다 — 늦은 mount 가 남의 화면을 덮고
   //  replaceState 로 주소까지 되돌리는 경합 방지(라우터가 dataset.route 를 즉시 세팅).
   if (document.body.dataset.route !== 'knowledge') return;

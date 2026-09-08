@@ -14,16 +14,18 @@ import { wrap, HttpError } from "../http/rest-util.js";
 import { projectAbsPath, grantSharedGroupWrite } from "./project-fs.js";
 import { canSeeProjectRow, effectiveViewer } from "../v6/visibility.js";
 import { viewerOf } from "../capabilities/principal.js";
-import { listSessions, listRestorableSessions, createSession, validateInvites, type CreateInput, normalizeCap } from "../terminal/terminal-sessions.js";
+import { listSessions, listRestorableSessions, validateInvites, type CreateInput } from "../terminal/terminal-sessions.js";
 import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
 import { ensureAgentsMd, readProjectAgentsMd } from "../v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
 import { startProjectProvision, projectProvisionStatus } from "./project-provision-jobs.js";
-import { provisionProjectOnNode, provisionStatusOnNode, createProjectSessionOnNode, nodeProjectSessions, bindNodeSessionProjectOrKill, injectDeferredFirstPrompt } from "../node/provision-remote.js";
-import { mirrorNodeSession, decorateNodeRows } from "../terminal/node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB)
+import { provisionProjectOnNode, provisionStatusOnNode, nodeProjectSessions } from "../node/provision-remote.js";
+import { launchSession, sessionInputFromBody } from "../terminal/session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
+import { isSelfNode, sessionHostsInScope, NODE_STATE_STALE_MS } from "../node/registry.js";
+import { relayNodeId, gatewayDefersToSessionHost } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다)
+import { decorateNodeRows } from "../terminal/node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB)
 import { receiveUpload, uploadError, nfcPath } from "../terminal/upload-file.js";
 import { manifestFiles } from "./project-manifest.js";
-import { assertAppSessionPlacement, autoTrustWorkspace } from "../terminal/session-create-guards.js";
 import { ingestLocalUpload, supersedeLocalPath } from "../ingest/local-file.js";   // #1881 올린 파일 = 자료 1건
 
 const MAX_UPLOAD = 1024 * 1024 * 1024; // 1GB (#1870 — terminal-files 와 동일해야 한다. receiveUpload 스트리밍이라 RAM 무관)
@@ -210,6 +212,14 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const download = req.query.download === "1";
     if (!download && st.size > MAX_PREVIEW) throw new HttpError(413, "미리보기엔 너무 큽니다 — 다운로드하세요");
     res.setHeader("Cache-Control", "no-store");
+    // 파일 도장(#762) — 뷰어의 «살아 있는 미리보기»가 HEAD 로 「바뀌었나」만 묻는다. 시각은 ms, 크기까지 둘이라
+    //  같은 초 안에 두 번 저장한 것도 가른다(Last-Modified 는 초 단위라 그걸로는 못 가른다 — 표준 클라이언트용으로만 둔다).
+    res.setHeader("Last-Modified", st.mtime.toUTCString());
+    //  ⚠ **내림(floor)** — 매니페스트(project-manifest.ts)가 floor 다. 자가 다르면(round vs floor) 같은 파일의
+    //   도장이 두 값으로 갈려 화면이 «바뀌었다»로 오판한다(실측: 아무 일 없이도 8초마다 뷰어가 다시 펴져 PDF 가
+    //   맨 위로 튀었다 — 원준 2026-09-05 신고). 자는 한 자리에서 하나여야 한다.
+    res.setHeader("X-File-Mtime", String(Math.floor(st.mtimeMs)));
+    res.setHeader("X-File-Size", String(st.size));
     // 미리보기는 실제 MIME 으로(PDF=application/pdf → iframe 네이티브 뷰어 렌더). 다운로드는 octet-stream +
     //  Content-Disposition: attachment 로 강제 저장(브라우저가 인라인 표시하지 않게).
     if (download) {
@@ -218,6 +228,8 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     } else {
       res.setHeader("Content-Type", contentTypeFor(abs));
     }
+    // HEAD 는 머리만 — 익스프레스는 HEAD 를 GET 핸들러로 보내는데, 여기서 안 끊으면 1.5초마다 PDF 를 통째로 읽는다.
+    if (req.method === "HEAD") { res.end(); return; }
     fs.createReadStream(abs).pipe(res);
   }));
 
@@ -365,7 +377,11 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   app.get(`${prefix}/:id/sessions`, auth, wrap(async (req, res) => {
     const { base } = await projBase(Number(req.params.id), req);
     res.setHeader("Cache-Control", "no-store");
-    const all = await listSessions(userOf(req));
+    //  #2600 T2 d4 — AI 세션 탭(terminal/routes.ts)과 **같은 규칙**: 선언된 세션 호스트가 주인으로 서 있으면
+    //   게이트웨이는 목록을 자기 tmux 로 만들지 않는다. 두 탭이 갈리면 같은 세션이 한쪽에선 호스트가 만든
+    //   카드로, 다른 쪽에선 게이트웨이가 만든 카드로 보인다(#1746 이 적어 둔 «두 목록의 답을 같게» 규율).
+    const sessionHostOwns = gatewayDefersToSessionHost(sessionHostsInScope(), NODE_STATE_STALE_MS);
+    const all = sessionHostOwns ? [] : await listSessions(userOf(req));
     const underBase = (s: { dir?: string }): boolean => !!s.dir && (s.dir === base || s.dir.startsWith(base + path.sep));
     const local = all.filter(underBase);
     // 복원 가능(#1059 E) — 재부팅·회수로 죽었으나 desired-state 가 남은 이 프로젝트 폴더의 세션(라이브 우선, 이중표기 방지).
@@ -391,22 +407,16 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const want = String(b.subpath ?? "").trim().replace(/^[/\\]+|[/\\]+$/g, "");
     if (want && (want === project.folder || want.startsWith(project.folder + "/"))) subpath = want;
     else if (want) throw new HttpError(400, "세션 작업 경로가 프로젝트 폴더 밖입니다");
+    // #3626 — 공통 필드(하네스·플래그·테마·runtime·kind·첫 지시…)는 관문(session-launch.ts sessionInputFromBody)이
+    //  홈 입구와 **같은 표로** 읽는다. 종전엔 여기서 따로 읽어 theme·runtime 이 빠졌고, 그 차이가 «홈에서만 죽는» 사고의
+    //  모양이었다(그 파일 머리말). 여기 남는 것은 프로젝트 입구만의 것 — 봉쇄된 cwd·프로젝트 id·read 축소.
     // rootKey="shared" 는 노드·게이트웨이 모두 PROJECT_SHARED_BASE 로 해소된다 — 그래서 로컬·노드 분기가 같은 입력을 쓴다.
     const input: CreateInput = {
-      kind: "human",   // #2162 — 프로젝트 화면에서 사람이 여는 작업 세션
-      label: String(b.label ?? ""), rootKey: "shared", subpath,
-      harness: String(b.harness ?? "shell"),
-      flags: (b.flags && typeof b.flags === "object") ? b.flags as Record<string, unknown> : {},
-      autoApprove: !!b.autoApprove,
-      readOnly: !!b.readOnly, // #1007 — 이 프로젝트 세션만 읽기전용(컨텍스트 스토어 쓰기 소거).
-      incognito: !!b.incognito, // #1007+ — 이 프로젝트 세션만 인코그니토(lively 전체 차단 + 훅 off).
-      // #1291 v2 — 기록 범위·read 축소. 미지정이면 프로젝트 폴더에서 파생한다(= 프로젝트 공개범위).
-      writeVis: normalizeCap(b.writeVis as string) ?? undefined,
-      restrictRead: !!b.restrictRead,
+      ...sessionInputFromBody(req.headers as Record<string, unknown>, b),
+      rootKey: "shared", subpath,
+      restrictRead: !!b.restrictRead,   // #1291 v2 — read 축소. writeVis 미지정이면 프로젝트 폴더에서 파생한다(= 프로젝트 공개범위).
       // 세션에 프로젝트 id 를 박아 입장 게이트가 폴더가 아닌 멤버십(id)으로 판정하게 한다(폴더 드리프트 면역).
       projectId: project.id, projectSrc: prefix.includes("/v6/") ? "v6" : "org",
-      initialPrompt: typeof b.initialPrompt === "string" && b.initialPrompt.trim() ? b.initialPrompt.slice(0, 20_000) : undefined,
-      appId: String(b.appId ?? "").trim() || undefined,
     };
     res.setHeader("Cache-Control", "no-store");
     // 노드 프로젝트 세션(#905 C4) — body.node 면 그 원격 노드에서 연다(provision 과 같은 게이트). 중앙 프로젝트 세션은
@@ -414,32 +424,8 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     //  → 게이트웨이가 현재 프로젝트 멤버(생성자∪팀원)를 검증해 invites 스냅샷으로 넘겨 다른 멤버의 공동입장을 성립시킨다.
     //  (멤버십 변경은 세션 재생성 전까지 미반영 — 중앙 세션은 동적. 알려진 한계.)
     const nodeId = String(b.node ?? "").trim();
-    if (nodeId) {
-      assertAppSessionPlacement(input, nodeId);
-      const requester = idOf(userOf(req));
-      const memberIds = await deps.listProjectMembers(project.id);
-      const invites = await validateInvites(memberIds, requester); // 실제 org 멤버만·요청자(owner) 제외·중복 제거
-      const { session, deferredPrompt } = await createProjectSessionOnNode(nodeId, requester, input, invites);
-      // 노드는 DB 무접속이므로 게이트웨이가 실행 세션 current 를 확정한다(실패 시 세션 롤백 — 공용 헬퍼).
-      if (input.projectSrc !== "org") {
-        await bindNodeSessionProjectOrKill({
-          nodeId, sessionId: session.id, requester, harness: session.harness || input.harness, projectId: project.id,
-        });
-      }
-      // #1791 — desired-state 정본(node_id) — 죽어도 '복원 가능(그 노드)'로 남는 근거. 노드엔 DB 가 없어 게이트웨이가 쓴다.
-      await mirrorNodeSession({ ...session, invites }, nodeId, input, requester);
-      // 새 노드는 create 시 첫 지시를 보류했다. execution_session current와 desired-state가 모두 생긴 뒤에만 주입을 시작한다.
-      if (deferredPrompt) {
-        await injectDeferredFirstPrompt({
-          nodeId, sessionId: session.id, harness: session.harness || input.harness, text: deferredPrompt,
-          trustOk: autoTrustWorkspace({ projectId: project.id, subpath: input.subpath }),   // 프로젝트 canonical 폴더 = 우리가 만든 자리
-        });
-      }
-      res.json({ session: { ...session, node: { id: nodeId, online: true } } });
-      return;
-    }
-    const session = await createSession(userOf(req), input);
-    res.json({ session });
+    const invites = nodeId ? await validateInvites(await deps.listProjectMembers(project.id), idOf(userOf(req))) : [];   // 실제 org 멤버만·요청자(owner) 제외·중복 제거
+    res.json({ session: await launchSession(userOf(req), input, { nodeId, invites }) });
   }));
 
   // ── ②-b 레포 provision — 입력 경로 확보(없으면 레지스트리 clone_url 로 clone) + 옵션 worktree(project/<id>/<repo>).
@@ -479,7 +465,8 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   //  known:false = 실행 주체가 재시작돼 작업 기억을 잃음 → 화면이 '다시 준비' 를 권한다(여기서 몰래 재시작하지 않는다).
   app.get(`${prefix}/:id/provision/status`, auth, wrap(async (req, res) => {
     const { project } = await projBase(Number(req.params.id), req);
-    const nodeId = String(req.query.node ?? "").trim();
+    //  #2592 — 셀프 노드 좌표는 접는다(relayNodeId): 그 provision 은 이 박스에서 돈 것이라 중앙 상태가 정본이다.
+    const nodeId = relayNodeId(req.query.node as string | undefined, isSelfNode);
     const st = nodeId ? await provisionStatusOnNode(nodeId, project.id) : projectProvisionStatus(project.id);
     res.setHeader("Cache-Control", "no-store");
     res.json(st);

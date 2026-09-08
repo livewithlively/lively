@@ -169,7 +169,7 @@ interface DomainRow { id: number; key: string; name: string | null; should: stri
 //  (json_agg FILTER 회피: 단순 SELECT 2개가 검증·이식 쉽고 도메인 수십개까지 상수 비용.)
 async function loadDomains(): Promise<DomainRow[]> {
   const cats = await q(itemsPool,
-    `SELECT id, key, name, should FROM category WHERE space='product' AND state<>'merged'`);
+    `SELECT id, key, name, should FROM category WHERE state<>'merged'`);
   if (!cats.length) return [];
   const units = await q(itemsPool, `
     SELECT m.category_id, cu.path

@@ -73,7 +73,7 @@ export function onboardingItems(f: OnboardingFacts): OnboardingItem[] {
   //  지식이 계속 미분류로 남는다. 그래서 '정의까지 채워졌나'를 묻는다.
   const categoriesDone = f.categories > 0 && f.categoriesNoDefinition === 0;
   const categoriesHow = f.categories === 0
-    ? "사업·제품·시스템 아래 우리 분류축을 만듭니다. 처음이면 AI 에게 시키세요 — 분류축이 없으면 지식이 전부 미분류가 되고, 미분류는 검색으로 소환되지 않습니다."
+    ? "우리 일에서 나오는 분류축을 만듭니다. 처음이면 AI 에게 시키세요 — 분류축이 없으면 지식이 전부 미분류가 되고, 미분류는 검색으로 소환되지 않습니다."
     : f.categoriesNoDefinition > 0
       ? `정의가 빈 분류축이 ${f.categoriesNoDefinition}개 있습니다 — 정의가 없으면 분류 기준도 없습니다.`
       : "분류축과 정의가 채워져 있습니다.";

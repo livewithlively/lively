@@ -455,7 +455,7 @@ export const welcomeCapabilities: Capability[] = [
 
       // ── 자료함 갈래 ── 사람이 승인한 것만 만든다. 이미 있으면 건너뛴다(다시 눌러도 안전).
       const wanted = Array.isArray(input.drawers) ? input.drawers.slice(0, MAX_DRAWERS) : [];
-      const existing = new Set((await listCategories(undefined, null).catch(() => [] as Array<{ key?: string }>)).map((c) => String(c.key ?? "")));
+      const existing = new Set((await listCategories(null).catch(() => [] as Array<{ key?: string }>)).map((c) => String(c.key ?? "")));
       const created: string[] = [];
       const skipped: string[] = [];
       for (const d of wanted) {
@@ -465,8 +465,12 @@ export const welcomeCapabilities: Capability[] = [
         if (existing.has(key)) { skipped.push(name); continue; }
         try {
           await createCategory({
-            space: "business", key, name,
-            should: s((d as Record<string, unknown>)?.why, 400) ?? `처음 설정에서 만든 갈래입니다. ${name} 에 해당하는 자료가 여기로 모입니다.`,
+            key, name,
+            //  정의는 필수다(category_create 가 40자 하한으로 막는다). 사람이 «왜 이 갈래인지»를 적었으면
+            //   그것을 쓰고, 안 적었으면 최소한 «무엇이 들어오는 자리인지» 를 문장으로 남긴다 — 빈 정의로 만들면
+            //   나중에 분류가 이름의 어감으로만 판정한다(#1631 실측: 정의 0자 워크스페이스가 실제로 나왔다).
+            should: s((d as Record<string, unknown>)?.why, 400)
+              ?? `처음 설정에서 만든 갈래입니다. ${name}에 해당하는 자료가 여기로 모이고, 다른 갈래에 더 맞는 자료는 그쪽으로 보냅니다. 쓰면서 범위가 또렷해지면 이 정의를 고쳐 주세요.`,
           } as never, { actor: userId, source: "welcome" } as never);
           created.push(name); existing.add(key);
         } catch { skipped.push(name); }   // 권한이 없거나 경합 — 온보딩을 멈추지 않는다
@@ -589,7 +593,7 @@ export async function welcomeSnapshot(userId: string) {
     getLivProfile(userId),
     listSources({ limit: SAMPLE_CAP, offset: 0 }, null).catch(() => [] as Array<Record<string, unknown>>),
     countSources({}, null).catch(() => 0),
-    listCategories(undefined, null).catch(() => [] as Array<Record<string, unknown>>),
+    listCategories(null).catch(() => [] as Array<Record<string, unknown>>),
     memberLoggedInHarnessesAny(userId).catch(() => [] as string[]),
   ]);
   // 헤드리스 규약을 아는 하네스로만 센다 — 로그인했어도 헤드리스로 못 돌리면 분석이 안 된다.
@@ -621,8 +625,8 @@ export async function welcomeSnapshot(userId: string) {
       // '주기적으로 만드는 문서' 를 말할 근거 — 실제 파일 이름에서 본 것만 담는다.
       forms: repeatedForms(rows.map((r) => String(r.title ?? "")).filter(Boolean)).slice(0, 5),
     },
-    categories: (cats as Array<{ key?: string; name?: string; space?: string }>)
-      .map((c) => ({ key: String(c.key ?? ""), name: String(c.name ?? ""), space: String(c.space ?? "") })),
+    categories: (cats as Array<{ key?: string; name?: string }>)
+      .map((c) => ({ key: String(c.key ?? ""), name: String(c.name ?? "") })),
   };
 }
 export type WelcomeSnapshot = Awaited<ReturnType<typeof welcomeSnapshot>>;
@@ -667,7 +671,7 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
       firstOrder: o.firstOrder,
       decisions: o.decisions,
       uploads: snap.uploads,
-      categories: snap.categories.map((c) => ({ name: c.name, space: c.space })),
+      categories: snap.categories.map((c) => ({ name: c.name })),
       collectors: collectors.map((c) => ({ label: c.label, preset_key: c.preset_key, enabled: c.enabled, sync_interval_sec: c.sync_interval_sec })),
       aiHarnesses: usable,
       harness: usable[0] ?? "claude",

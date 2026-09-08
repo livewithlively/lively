@@ -78,9 +78,9 @@ function teamView(root, team, data, detail) {
     roRow('리드', team.lead_member_id ? memberName(team.lead_member_id) : ''),
     field('팀원', el('div', { class: 'admin-ro admin-ro-pre', text:
       (team.members && team.members.length) ? team.members.map((m) => (m.display_name || m.member_id) + ' (' + (TEAM_ROLE_LABEL[m.role] || m.role) + ')').join('\n') : '—' })),
-    field('소유 카테고리', el('div', { class: 'admin-ro admin-ro-pre', text: owned.length ? owned.map((c) => (c.name || c.key) + ' [' + c.space + ']').join('\n') : '— ([카테고리(분류 체계)]에서 배정)' })),
+    field('소유 카테고리', el('div', { class: 'admin-ro admin-ro-pre', text: owned.length ? owned.map((c) => (c.name || c.key)).join('\n') : '— ([카테고리(분류 체계)]에서 배정)' })),
   ];
-  if (stake.length) kids.push(field('이해관계 카테고리', el('div', { class: 'admin-ro admin-ro-pre', text: stake.map((c) => (c.name || c.key) + ' [' + c.space + ']').join('\n') })));
+  if (stake.length) kids.push(field('이해관계 카테고리', el('div', { class: 'admin-ro admin-ro-pre', text: stake.map((c) => (c.name || c.key)).join('\n') })));
   if (team.body_md && team.body_md.trim()) kids.push(field('팀 charter (AI 세션 주입)', el('div', { class: 'admin-ro admin-ro-pre', text: team.body_md.trim() })));
   if (canEdit) kids.push(el('div', { class: 'admin-actions' },
     el('button', { class: 'btn btn-primary', text: '수정', onclick: () => { state.admin.teamEditing = true; teamsPanel(detail, data); } })));

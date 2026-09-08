@@ -59,14 +59,14 @@ function wkHash(s: string): number {
   return Math.abs(h);
 }
 
-// ── 오로라 커버 — 공간(space) 색 계열의 결정적 제너레이티브 커버(#764v2 시그니처). ──
-//  사진 업로드 없이 모든 카테고리/카드가 고유한 시각 정체성을 갖는다: 시드(key) 해시 → 공간별 3레시피 중
-//  하나 + 오버사이즈 워터마크(아이콘/첫 글자, 잉크 6~8% — 타이포그래피 장식, 이미지 아님).
-//  사업=앰버, 제품=블루·민트, 시스템=바이올렛 — 사이드바 space 아바타와 같은 의미색(구조=정보).
-function wkAurora(seed: string, space: string, opts: any = {}) {
-  const sp = (space === 'business' || space === 'system') ? space : 'product';
-  const n = (wkHash(seed) % 3) + 1;
-  const cover = el('div', { class: 'wk-aurora wk-aur-' + sp + '-' + n + (opts.cls ? ' ' + opts.cls : ''), 'aria-hidden': 'true' });
+// ── 오로라 커버 — 시드에서 결정되는 제너레이티브 커버(#764v2 시그니처). ──
+//  사진 업로드 없이 모든 카테고리/카드가 고유한 시각 정체성을 갖는다: 시드(key) 해시 → 9레시피 중 하나
+//  + 오버사이즈 워터마크(아이콘/첫 글자, 잉크 6~8% — 타이포그래피 장식, 이미지 아님).
+//  ⚠ #1631 이전엔 색 계열이 space(사업=앰버·제품=블루·시스템=바이올렛)를 뜻했다. 그 축을 걷어냈으므로
+//   9레시피는 **의미 없는 팔레트**다 — 같은 축은 늘 같은 색이지만(시드 결정적) 색이 부류를 말하진 않는다.
+function wkAurora(seed: string, opts: any = {}) {
+  const n = (wkHash(seed) % 9) + 1;
+  const cover = el('div', { class: 'wk-aurora wk-aur-' + n + (opts.cls ? ' ' + opts.cls : ''), 'aria-hidden': 'true' });
   if (opts.watermark) cover.append(el('span', { class: 'wk-aurora-wm', text: String(opts.watermark) }));
   return cover;
 }

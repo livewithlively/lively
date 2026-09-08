@@ -6,7 +6,7 @@ import { el, personName, relTime, state, sv, toast } from '../core.js';
 import { composerAttach } from './compose-attach.js';
 import { isCreatingQuickSession, openQuickSession, takeFirstPrompt } from './quick-session.js';
 import { createRunPicker } from './run-picker.js';
-import { mountSessionChat, type SessionChatHandle } from '../session-chat.js';
+import { mountSessionChat, type SessionChatHandle, type SessionChatTarget } from '../session-chat.js';
 import type { TrailWidget } from '../session-trail.js';
 import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen } from '../session-status.js';
 import { appGlassIcon, appHref, openLaunchpad, recentApps, soloSessionUrl, terminalUrl } from './apps.js';
@@ -23,7 +23,7 @@ export interface Proj {
   // #1851 휴지통 — 통째로 버린 시각. 있으면 어디에도 안 보이고 「휴지통」 화면(#/trash)의 '프로젝트' 묶음에만(그 아래 내 세션과 함께).
   trashed_at?: string | null;
 }
-export interface ProjList { id: number; name: string; folder_id?: number | null; category?: { space?: string | null; name?: string | null } | null; }
+export interface ProjList { id: number; name: string; folder_id?: number | null; category?: { name?: string | null } | null; }
 export interface ProjFolder { id: number; name: string; parent_id?: number | null; settings?: Record<string, unknown> | null; external_id?: string | null; }
 export interface Sess {
   id: string; label: string; projectId: number | null; node: string | null;
@@ -33,6 +33,9 @@ export interface Sess {
   // 접힌 기록의 **대화 제목**(= 그 세션에 처음 시킨 말). 멈춘 세션은 pane 제목(raw.title)이 비어 있어 이름 자리가
   //  프로젝트명 되풀이로 떨어지는데(dev 실측: 한 프로젝트의 지난 세션 7건 중 5건이 같은 이름), 이 값이 그 자리를 받는다.
   logTitle?: string | null;
+  /** 이 줄로 접힌 **옛 박스 id** 들 (#762) — 되살리기가 새 박스를 만들면 그 대화의 옛 주소·핀이 여기 남는다.
+   *  찾기(findSess·renderSession)가 이 값도 받아, 옛 주소를 든 탭이 죽은 자리로 떨어지지 않는다. */
+  altIds?: string[];
   // #1851 휴지통 — 휴지통에 있는 시각(ISO). 있으면 사이드바 '지난 세션'에서 빠지고 「휴지통」 화면(#/trash)에만 보인다.
   trashedAt?: string | null;
   // #1851 — 프로젝트를 통째로 버릴 때 함께 들어간 세션이면 그 프로젝트 id. 없으면 '지난 세션'에서 따로 버린 것 — 휴지통 화면이 둘을 가른다.
@@ -339,7 +342,7 @@ export interface SessionViewOpts {
 }
 export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts: SessionViewOpts = {}): SessionChatHandle | null {
   // 기록(uuid) 링크로 들어왔는데 그 대화를 도는 박스가 있으면 그 박스가 정본이다(mergeSessions 가 기록을 박스에 접었다) — 옛 링크가 산다.
-  const s = data.sessions.find((x) => x.id === id) || data.sessions.find((x) => x.logId === id);
+  const s = findSessIn(data.sessions, id);
   if (!s) { host.replaceChildren(el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '세션을 찾을 수 없어요. 목록을 새로고침해 주세요.' }))); return null; }
   // 프레임에 실을 터미널은 embed=1 — 그 안의 상단바·파일 탐색기는 이 화면의 상단바·우패널로 이미 합쳐졌다(#1744).
   //  ⚠ **살아 있는 박스에만** 물린다. 종전엔 `s.live`(= terminal/sessions 행이면 참, 중단된 박스도 참)만 봐서
@@ -347,7 +350,12 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
   //   를 해 버렸다: 셸 주소(#/s/<옛 id>)·탭 제목·사이드바는 옛 세션 그대로인데 프레임만 새 세션인 어긋난 화면이
   //   되고, 그 뒤 [이어서 대화하기] 를 누르면 옛 desired-state 가 이미 지워져 404 가 났다. 멈춘 세션의 정답은
   //   **읽기전용 기록 + [이어서 대화하기] 한 번**(session-chat.ts paintDeadFooter)이다.
-  const termSrc = s.live && s.alive ? terminalUrl(s.id, s.label, s.node, { embed: true }) : null;
+  //  ⚠ **한 번 계산해 넘기지 마라**(2026-09-08 상민님 신고 · 재현 완료). 이 판정은 세션 화면이 사는 내내
+  //   다시 물어야 하는 것이다: 매니지드에서는 목록 한 틱이 허브 stall·node 플랩으로 살아 있는 세션을 잠깐
+  //   «중단됨»으로 실어 온다. 그 틱에 화면이 붙으면 종전엔 terminalSrc 가 null 로 **얼어붙어** 터미널도,
+  //   [⋯ ▸ 보기]의 수기 전환도 영영 사라졌다(행이 건강해져도 mountStage 는 다시 안 붙는다). 함수로 넘기면
+  //   그 다음 갱신에서 저절로 돌아온다. 판정 규칙은 여전히 여기 한 줄뿐이다.
+  const termSrc = (t: SessionChatTarget): string | null => (t.live && t.alive ? terminalUrl(t.id, t.label, t.node, { embed: true }) : null);
   return mountSessionChat(host, { ...s, projectName: projName(data, s.projectId) }, {
     terminalSrc: termSrc,
     // 나가는 문: 본 화면이면 이 세션만 담은 **팝아웃 창**(같은 컴포넌트, 사이드바만 없다), 팝아웃 창이면 반대로 전체 화면.
@@ -415,7 +423,35 @@ export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
       trashedWith: r.trashed_with != null ? Number(r.trashed_with) : null,
     });
   }
+  // ★ 같은 대화를 **두 박스가** 갖고 있으면 한 줄로 접는다 (#762, 원준 2026-09-04 신고).
+  //  되살리기는 **새 박스 id** 를 만들고 옛 박스는 offline 으로 남는다. 둘 다 세우면 목록에 «같은 이름 두 줄»이
+  //  서고, 죽은 쪽을 누르면 세션 칸이 그 세션을 못 찾아 **다른 세션으로 조용히 갈아탄다** — 사람 눈엔
+  //  "안 누른 동명의 다른 세션이 열린다"(dev 실측: 두 줄 모두 box-yoon-459c2898 로 착지했다).
+  //  살아 있는 쪽(같으면 최근 쪽)만 남기고, 접힌 id 는 altIds 로 남겨 옛 주소·핀이 그 줄을 계속 가리키게 한다.
+  const byConv = new Map<string, Sess>();
+  for (const s of [...out.values()]) {
+    const conv = String((s.raw && s.raw.claudeSessionId) || '');
+    if (!conv) continue;
+    const prev = byConv.get(conv);
+    if (!prev) { byConv.set(conv, s); continue; }
+    //  이긴 쪽 = 살아 있는 것 우선, 그다음 최근에 쓴 것. 진 쪽은 목록에서 빠지고 id 만 이긴 줄에 남는다.
+    const win = (s.alive !== prev.alive) ? (s.alive ? s : prev) : (s.lastSeen >= prev.lastSeen ? s : prev);
+    const lose = win === s ? prev : s;
+    win.altIds = [...(win.altIds || []), ...(lose.altIds || []), lose.id];
+    if (!win.projectId && lose.projectId) win.projectId = lose.projectId;
+    if (!win.trashedAt && lose.trashedAt) { win.trashedAt = lose.trashedAt; win.trashedWith = lose.trashedWith ?? null; }
+    out.delete(lose.id);
+    byConv.set(conv, win);
+  }
   return [...out.values()];
+}
+
+/** 세션 찾기의 **단일 규칙** — 박스 id · 중앙 기록 id(uuid) · 접힌 옛 박스 id 셋 다 받는다.
+ *  ⚠ 사본을 두지 마라: 한쪽만 altIds 를 모르면 옛 주소가 «못 찾음»으로 떨어지거나 남의 세션으로 간다. */
+export function findSessIn(sessions: Sess[], id: string): Sess | undefined {
+  return sessions.find((x) => x.id === id)
+    || sessions.find((x) => x.logId === id)
+    || sessions.find((x) => (x.altIds || []).includes(id));
 }
 
 export function toastOnce(msg: string): void { toast(msg); }

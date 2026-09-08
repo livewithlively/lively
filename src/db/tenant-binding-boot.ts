@@ -21,6 +21,7 @@ import { installTenantResolver } from "./client.js";
 import { SINGLE_TENANT_ID } from "./tenant-column.js";
 import { currentTenant } from "../org/tenant-context.js";
 import { installTenantSlugResolver } from "../terminal/catalog.js";
+import { registryModeActive } from "../org/tenancy/state.js";   // #2599 T3 — 테넌시 축 술어의 정본(인라인 재구현 금지)
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -37,7 +38,7 @@ export function resolveBindingMode(env: NodeJS.ProcessEnv = process.env): { mode
   //  규약을 여기 적용하면 부팅 하우스키핑·크론·커넥터 싱크 등 컨텍스트 밖 경로 전부가 죽는다 — 셀프호스트에서
   //  그 경로들은 전부 primary 의 일이 맞다(종전 단일 워크스페이스와 동일 동작 = 하위호환의 핵심).
   //  폴백이 "조용히 남의 데이터"가 아닌 이유: primary 는 남이 아니라 **종전의 그 워크스페이스 자신**이다.
-  if ((env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() === "registry") return { mode: "registry" };
+  if (registryModeActive(env)) return { mode: "registry" };
   const fixed = (env.LIVELY_TENANT_ID || "").trim();
   if (!fixed) return { mode: "request" };
   if (!UUID_RE.test(fixed)) {

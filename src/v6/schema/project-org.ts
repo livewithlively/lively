@@ -373,7 +373,7 @@ export async function initV6ProjectOrg(pool: Pool): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS project_view_external_uidx ON project_view(external_system, external_instance, external_id) WHERE external_id IS NOT NULL;
   `);
 
-  // ── 7) project_category — 프로젝트↔카테고리 정션(프로젝트 탭 사업/제품/시스템 탐색). #290 project_category_single_uq 로 프로젝트당 단일-home(0/1). ──
+  // ── 7) project_category — 프로젝트↔카테고리 정션(프로젝트 탭 분류축 탐색). #290 project_category_single_uq 로 프로젝트당 단일-home(0/1). ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS project_category(
       project_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,

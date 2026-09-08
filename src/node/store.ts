@@ -4,7 +4,7 @@
 //  org_node.token_hash 직접 매칭 + 토큰 미회수 + 소유 멤버 active 를 모두 요구한다(F7 blast radius).
 import crypto from "node:crypto";
 import { itemsPool, withTx } from "../db/client.js";
-import { mintToken, revokeToken } from "../org/store/tokens.js";
+import { mintToken, revokeToken, type RevokeOutcome } from "../org/store/tokens.js";
 import { getMember } from "../org/store/members.js";   // #2165 — 배럴(org/store.js) 대신 좁은 모듈: 배럴을 타면 커넥터·수집기·토큰소스가 통째로 노드 번들에 실린다
 import { HttpError } from "../http-error.js";
 import type { KeepAwakeStatus } from "./keep-awake.js";
@@ -20,6 +20,10 @@ export interface OrgNode {
   // shared(#1540) = 관리자가 '공유 노드'로 지정했나 = 전체 구성원 개방. 판정은 node-access.ts 단일 술어.
   //  kind 와 직교다 — kind 는 git 자격 정책(resolveRepoInject)·슬롯 용량에만 쓴다.
   token_hash: string | null; enabled: boolean; shared: boolean;
+  // session_host(#2600 T2) = «이 노드가 그 워크스페이스의 세션 호스트로 **선언**됐나».
+  //  shared·kind 와 직교다. 이 값이 참인 노드는 게이트웨이와 같은 tmux 를 보는 것이 **정상**이라
+  //  #2592 의 셀프 노드 판정에서 면제된다 — 그래서 관리자만 켠다(node/routes.ts 의 게이트).
+  session_host: boolean;
   platform: string | null; agent_ver: string | null; agent_caps: string[] | null; agent_harnesses: string[] | null; host: string | null;
   // #1849 — 노드가 hello 로 보고한 잠자기 억제 상태. NULL = **모름**(구 번들)이지 '안 걸림'이 아니다.
   keep_awake: KeepAwakeStatus | null;
@@ -48,7 +52,7 @@ export async function getNode(id: string): Promise<OrgNode | undefined> {
 //   `auth_token` 에 **어디에도 매칭되지 않는 고아 토큰**만 남았다. 그 토큰을 받아 든 노드는 authNodeToken 의
 //   조인이 영원히 비어 **502 무한 재시도**를 돈다(실측: 재기동마다 새 토큰이 쌓이고 org_node 는 0건).
 //   같은 함정을 #880 device flow 가 먼저 겪고 mintToken 에 client 오버로드를 만들어 뒀다 — 여기서 그걸 쓴다.
-export async function createNode(input: { id: string; name?: string; kind?: string; owner: string; shared?: boolean }, actor?: string): Promise<{ node: OrgNode; token: string }> {
+export async function createNode(input: { id: string; name?: string; kind?: string; owner: string; shared?: boolean; sessionHost?: boolean }, actor?: string): Promise<{ node: OrgNode; token: string }> {
   const id = normalizeNodeId(input.id);
   const kind = input.kind === "worker" ? "worker" : "member";
   if (!(await getMember(input.owner))) throw new HttpError(400, `존재하지 않는 구성원입니다: ${input.owner}`);
@@ -60,10 +64,11 @@ export async function createNode(input: { id: string; name?: string; kind?: stri
         actor ?? input.owner, "node-store", client,
       );
       const r = await client.query(
-        `INSERT INTO org_node(id, name, kind, owner_member, token_hash, created_by, shared)
-           VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-        // shared 는 **명시할 때만** 켜진다(#1540) — 기본은 등록한 사람 것. 호출부(REST)가 admin 게이트를 건다.
-        [id, input.name || id, kind, input.owner, tokenHash, actor ?? null, !!input.shared],
+        `INSERT INTO org_node(id, name, kind, owner_member, token_hash, created_by, shared, session_host)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        // shared·session_host 는 **명시할 때만** 켜진다(#1540 · #2600 T2) — 기본은 등록한 사람 것이고
+        //  세션 호스트도 아니다. 호출부(REST)가 둘 다 admin 게이트를 건다.
+        [id, input.name || id, kind, input.owner, tokenHash, actor ?? null, !!input.shared, !!input.sessionHost],
       );
       return { node: r.rows[0] as OrgNode, token };
     });
@@ -107,12 +112,15 @@ export async function rotateNodeToken(id: string, actor?: string): Promise<{ nod
  *  토큰만 죽으면 그 기계는 즉시 끊기고(다음 인증이 `revoked`), 다시 로그인해 `lively node` 를 돌리면
  *  같은 id 로 회전 등록돼 이력이 이어진다.
  */
-export async function revokeNodeToken(id: string, actor?: string): Promise<{ revoked: boolean; node: string }> {
+export async function revokeNodeToken(id: string, actor?: string): Promise<{ revoked: boolean; outcome: RevokeOutcome | "no-token"; node: string }> {
   const node = await getNode(id);
   if (!node) throw new HttpError(404, `노드 없음: ${id}`);
-  if (!node.token_hash) return { revoked: false, node: id };
-  await revokeToken(node.token_hash, actor, "node-store");
-  return { revoked: true, node: id };
+  // #2646 — 종전엔 token_hash 가 있기만 하면 무조건 {revoked:true} 였다. 그 토큰이 이미 죽었든 auth_token 에
+  //  아예 없든 같은 답이 나갔다. 두 경우 다 그 기계는 어차피 못 붙지만(authNodeTokenDetailed 가 조인으로 거른다),
+  //  **이번 호출이 무엇을 했는지**는 다르다 — 로그와 응답이 그걸 그대로 말해야 한다.
+  if (!node.token_hash) return { revoked: false, outcome: "no-token", node: id };
+  const outcome = await revokeToken(node.token_hash, actor, "node-store");
+  return { revoked: outcome === "revoked", outcome, node: id };
 }
 
 export async function setNodeEnabled(id: string, enabled: boolean): Promise<void> {

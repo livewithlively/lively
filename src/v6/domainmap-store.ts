@@ -1,8 +1,11 @@
-// v6 도메인맵 read — 구 domain/mapping/debt_finding(레포 스코프) 대신 category(space='product') 소스.
+// v6 도메인맵 read — 구 domain/mapping/debt_finding(레포 스코프) 대신 category 소스.
+//  ⚠ 2026-09-02(#1631): **전 분류축의 지도**다. 종전엔 space='product' 부분집합만 그렸는데, 그 축을 걷어냈다 —
+//   지도가 코드 있는 축만 그리면 나머지 지식은 지도 밖에 있게 된다. 코드 앵커(units/entities/debts)는
+//   **있으면 붙는 값**이고, 0 인 축도 그대로 나온다(0 은 '코드가 없다'는 사실이지 '지도에 없다'가 아니다).
 //  (구 domainmap/core/queries.ts 는 #1313 R5 에서 해체 — sanitizeCloneUrl 은 core/url-util.ts, computeFreshness 는 이 파일로.)
 //  이 파일은 **신규 v6 reader** — 같은 응답 shape(domains/debts/should_changes/is_commit_changes)를 category 에서 조립한다.
 //  프론트(public/app.js domainmapBody)가 읽는 도메인별 필드 이름을 그대로 방출한다:
-//    key,name,description,should,state,cross_cutting,origin,status,space,units,entities,debts,proposed
+//    key,name,description,should,state,cross_cutting,origin,status,units,entities,debts,proposed
 //  category 는 멀티레포(repo_id 없음)라 repos(도달 레포 distinct 수)를 추가 신호로 더한다(프론트는 무시 — 가산·하위호환).
 //  DB 는 물리 통합(domainmap 도 itemsPool 공유)이라 category(items)와 code_unit/debt_finding/activity(domainmap)를 한 풀에서 조인한다.
 import { itemsPool } from "../db/client.js";
@@ -17,13 +20,13 @@ import { listCategoryEdges, type CategoryEdgeRow } from "./category-store.js";
 export interface V6DomainItem {
   id: number; key: string; name: string | null; description: string | null;
   should: string | null; state: string | null; cross_cutting: boolean;
-  origin: string | null; status: string; space: string;
+  origin: string | null; status: string;
   units: number; entities: number; debts: number; proposed: number;
   repos: number; // v6 가산: 매핑으로 도달하는 distinct code_unit.repo_id 수(멀티레포 신호). 프론트 무시.
   layout_x: number | null; layout_y: number | null; // 저장된 노드 좌표(조직 공유). null=자동 배치.
 }
 
-// 도메인 목록 — category WHERE space='product' AND state<>'merged'.
+// 목록 — category WHERE state<>'merged'(전 분류축).
 //  units = mapping(category_id, target_kind='code_unit', status<>'rejected') 중 code_unit active 만(soft-removed 제외 — 레거시 동일).
 //  entities = mapping(category_id, target_kind='data_entity', status<>'rejected').
 //  proposed = mapping(category_id, status='proposed') — 레거시 listDomainsApi 와 동형.
@@ -35,7 +38,6 @@ export async function listProductDomains(): Promise<V6DomainItem[]> {
     SELECT
       c.id, c.key, c.name, c.description, c.should, c.state, c.cross_cutting,
       c.origin, c.status, c.layout_x, c.layout_y,
-      COALESCE(c.space,'product') AS space,
       (SELECT COUNT(*)::int FROM mapping m
          JOIN code_unit cu ON cu.id=m.target_id
         WHERE m.category_id=c.id AND m.target_kind='code_unit'
@@ -50,25 +52,25 @@ export async function listProductDomains(): Promise<V6DomainItem[]> {
          JOIN code_unit cu ON cu.id=m.target_id
         WHERE m.category_id=c.id AND m.target_kind='code_unit' AND m.status<>'rejected') AS repos
     FROM category c
-    WHERE c.space='product' AND c.state<>'merged'
+    WHERE c.state<>'merged'
     ORDER BY c.cross_cutting, c.key`);
   return rows.map((d) => ({
     id: d.id, key: d.key, name: d.name ?? null, description: d.description ?? null,
     should: d.should ?? null, state: d.state ?? null, cross_cutting: !!d.cross_cutting,
-    origin: d.origin ?? null, status: d.status, space: d.space ?? "product",
+    origin: d.origin ?? null, status: d.status,
     units: d.units, entities: d.entities, debts: d.debts, proposed: d.proposed, repos: d.repos,
     layout_x: d.layout_x ?? null, layout_y: d.layout_y ?? null,
   }));
 }
 
-// ── 노드 위치 저장(조직 공유 레이아웃) — category.layout_x/y 에 persist. product 만. ──
+// ── 노드 위치 저장(조직 공유 레이아웃) — category.layout_x/y 에 persist. ──
 export async function saveDomainLayout(positions: { id: number; x: number; y: number }[]): Promise<{ saved: number }> {
   if (!Array.isArray(positions)) return { saved: 0 };
   let saved = 0;
   for (const p of positions) {
     if (!p || typeof p.id !== "number" || typeof p.x !== "number" || typeof p.y !== "number") continue;
     const r = await itemsPool.query(
-      `UPDATE category SET layout_x=$1, layout_y=$2, updated_at=now() WHERE id=$3 AND space='product' AND state<>'merged'`,
+      `UPDATE category SET layout_x=$1, layout_y=$2, updated_at=now() WHERE id=$3 AND state<>'merged'`,
       [p.x, p.y, p.id]);
     saved += r.rowCount || 0;
   }
@@ -94,7 +96,7 @@ export async function listProductDebts(): Promise<V6DebtItem[]> {
 //  프론트 shouldChangeRow 가 읽는 키: domain_key,domain_id,domain_name,at,should_before,should_after,
 //    activity_id,activity_type,activity_title,author_person,author_agent,actor_id.
 //  audit 에는 activity 귀속이 없으므로 activity_* 는 null(프론트가 '작업 귀속 없음' 표시). actor=author_person 위치로.
-//  entity_key='product/<key>' → domain_key 파생. category 매핑 좌표(현 key/name)도 LEFT JOIN.
+//  entity_key 는 지금 key 다. 옛 행은 '<space>/<key>'(#1631 폐기 전)라 접두어를 벗겨 맞춘다.
 export async function listShouldChanges(limit = 100): Promise<any[]> {
   const lim = Math.min(Math.max(Number(limit) || 100, 1), 500);
   return q(itemsPool, `
@@ -106,12 +108,10 @@ export async function listShouldChanges(limit = 100): Promise<any[]> {
            NULL::int AS activity_id, NULL::text AS activity_type, NULL::text AS activity_title
     FROM org_content_audit a
     LEFT JOIN category c
-      ON c.space='product'
-     AND c.key = regexp_replace(a.entity_key, '^product/', '')
+      ON c.key = regexp_replace(a.entity_key, '^(business|product|system)/', '')
     WHERE a.entity='category'
       AND a.op IN ('update','insert')
       AND (a.before->>'should') IS DISTINCT FROM (a.after->>'should')
-      AND a.entity_key LIKE 'product/%'
     ORDER BY a.id DESC LIMIT $1`, [lim]);
 }
 
@@ -151,7 +151,7 @@ export async function productDomainmapView(limit = 100): Promise<{
 //  context_overview(MCP) 가 이걸 서빙 — repo 파람은 accept-and-ignore(category=repo-free). scan_runs/repos 는 다중레포 신호.
 export async function productOverview(): Promise<any> {
   const totals = (await q(itemsPool, `SELECT
-    (SELECT COUNT(*)::int FROM category WHERE space='product' AND state<>'merged') domains,
+    (SELECT COUNT(*)::int FROM category WHERE state<>'merged') domains,
     (SELECT COUNT(*)::int FROM code_unit WHERE COALESCE(state,'active')='active') code_units,
     (SELECT COUNT(*)::int FROM data_entity) data_entities,
     (SELECT COUNT(*)::int FROM mapping WHERE category_id IS NOT NULL AND status<>'rejected') mappings,
@@ -161,14 +161,14 @@ export async function productOverview(): Promise<any> {
     `SELECT s.id, r.name AS repo, s.runbook, s.harness, s.actor_type, s.actor_id, s.started_at, s.finished_at, s.summary
        FROM scan_run s LEFT JOIN repo r ON r.id=s.repo_id ORDER BY s.id DESC LIMIT 20`);
   const repos = await q(itemsPool, "SELECT name FROM repo ORDER BY name");
-  return { space: "product", totals, scan_runs, repos: repos.map((r: any) => r.name) };
+  return { totals, scan_runs, repos: repos.map((r: any) => r.name) };
 }
 
-// ── repo-free 도메인 상세(구 domainDetail(repo,id) 대체) — category(space='product') 1건 + 매핑 코드/엔티티(전 레포) + 부채. ──
+// ── repo-free 상세(구 domainDetail(repo,id) 대체) — category 1건 + 매핑 코드/엔티티(전 레포) + 부채. ──
 //  code_unit 은 멀티레포라 repo 명을 같이 방출(repo-free 뷰에서 어느 레포 코드인지 식별). 매핑 status 무관(removed 포함 — 레거시 동일, 부채 가시화).
 export async function productDomainDetail(id: number): Promise<any> {
-  const cat = (await q(itemsPool, "SELECT * FROM category WHERE id=$1 AND space='product'", [id]))[0];
-  if (!cat) throw httpErr(404, "no such product category: " + id);
+  const cat = (await q(itemsPool, "SELECT * FROM category WHERE id=$1", [id]))[0];
+  if (!cat) throw httpErr(404, "no such category: " + id);
   const code_units = await q(itemsPool, `
     SELECT cu.id, cu.kind, cu.path, cu.label, COALESCE(cu.state,'active') state, rp.name AS repo,
            m.id mid, m.status mstatus, m.origin morigin, m.confidence mconf
@@ -184,7 +184,7 @@ export async function productDomainDetail(id: number): Promise<any> {
   return {
     domain: {
       id: cat.id, key: cat.key, name: cat.name, description: cat.description, should: cat.should ?? null,
-      state: cat.state, cross_cutting: cat.cross_cutting, origin: cat.origin, status: cat.status, space: cat.space ?? "product",
+      state: cat.state, cross_cutting: cat.cross_cutting, origin: cat.origin, status: cat.status,
     },
     code_units: code_units.map((x: any) => ({
       id: x.id, kind: x.kind, path: x.path, label: x.label ?? x.path, state: x.state ?? "active", repo: x.repo ?? null,

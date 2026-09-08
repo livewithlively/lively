@@ -400,7 +400,7 @@ const winSpawnArgs = (cmd, args) => [winArg(cmd), args.map(winArg)];
 // dropEnv: 상속 env 에서 **키를 지운다**(빈 문자열로 덮지 않는다). 빈 문자열은 '설정됨' 으로 읽히는 도구가 많아
 //  (실측 #1541: electron-builder 가 빈 CSC_LINK 를 인증서 경로로 보고 죽었다) 지우는 것과 결과가 다르다.
 //  여기 쓰임: claude 를 **기본 위치**($HOME/.claude.json)로 돌리려면 CLAUDE_CONFIG_DIR 가 없어야 한다.
-function run(cmd, args, { allowFail = false, quiet = false, env, dropEnv, timeout } = {}) {
+function run(cmd, args, { allowFail = false, quiet = false, env, dropEnv, timeout, cwd } = {}) {
   const merged = { ...process.env, ...(env || {}) };
   for (const k of dropEnv || []) delete merged[k];
   const [c, a] = WIN ? winSpawnArgs(cmd, args) : [cmd, args];
@@ -409,6 +409,7 @@ function run(cmd, args, { allowFail = false, quiet = false, env, dropEnv, timeou
     env: merged,
     encoding: "utf8",
     shell: WIN,
+    ...(cwd ? { cwd } : {}),   // 워크트리별로 git 을 돌려야 하는 호출자용(회수 — #2621). 안 주면 종전대로 프로세스 cwd.
     ...(timeout ? { timeout, killSignal: "SIGKILL" } : {}),
   });
   if (r.error && !allowFail) throw r.error;
@@ -543,7 +544,17 @@ function writeLively(name, val, mode = 0o600) {
 }
 // gateway-url 은 항상 **/mcp 없이** 저장한다(user-install.mjs 와 같은 계약).
 const normGw = (u) => String(u || "").trim().replace(/\/+$/, "").replace(/\/mcp$/, "").replace(/\/+$/, "");
-const gateway = () => normGw(process.env.LIVELY_GATEWAY_URL || readLively("gateway-url"));
+// 주소도 **파일이 SoT** 다(#2617) — #916 이 아래 token() 에 적용한 판정의 **나머지 절반**이다.
+//  env 는 override 가 아니라 '파일의 캐시'다(셸 rc·tmux 서버가 시작 시점 값을 굳혀 물려준다). 그래서
+//  env-우선과 파일-우선이 갈리는 경우가 **정확히 버그 케이스 하나**뿐이다:
+//   · 새 셸 — 같다(차이 없음)  · **주소를 바꾼 뒤 — env 가 옛것**(파일-우선만이 맞다)  · 파일 없음(CI·프로비저닝) — 어차피 env 로 폴백.
+//  실측 2026-09-03: 8/26 에 뜬 tmux 서버가 9/1 의 주소 변경(dev→olddev)을 못 따라가 그 박스의 세션이 전부
+//   옛 게이트웨이로 나가 401 을 받았다. **토큰은 멀쩡했는데** doctor 는 '토큰 만료'로 오진해 재로그인을 시켰고
+//   (그래도 안 낫는다 — 주소가 틀린 것이다), lively-local MCP 는 repo_* 를 통째로 잃어 워크트리가 서버 대장에
+//   안 잡혔다 → workspace_reclaim 이 회수 대상을 못 봤다.
+//  ⚠ 파일-우선이면 tmux 서버를 죽이거나 세션을 다시 만들지 않아도 낫는다 — 앱·CLI 어느 쪽으로 로그인하든
+//   그 쪽이 파일에 쓰고, 살아 있는 세션의 CLI·MCP 가 그 값을 즉시 읽는다(앱↔CLI 상태가 갈리지 않는다).
+const gateway = () => normGw(readLively("gateway-url") || process.env.LIVELY_GATEWAY_URL);
 // ⚠ **파일이 정본이고 LIVELY_TOKEN env 는 그 캐시다**(#916 — 순서를 뒤집지 말 것).
 //  설치기가 codex 때문에(config.toml 은 토큰 리터럴을 거부하고 bearer_token_env_var 만 받는다) 셸 rc 에
 //  `export LIVELY_TOKEN="$(cat ~/.lively/token)"` 를 심는다 → env 는 '셸 시작 시각의 파일 스냅샷'이지
@@ -1486,6 +1497,63 @@ const loginEscapeToken = ({ flagToken = "", envToken = "", fileToken = "", isInt
   return "";
 };
 
+// ── 로그인 뒤 tmux 서버 전역 env 교정(#3728) ────────────────────────────────────
+//  왜 필요한가(실측 2026-09-08): 로그인은 파일(~/.lively/token·gateway-url)만 바꾸는데, 라이블리 세션은
+//   tmux pane 이고 **tmux 서버는 처음 뜬 시점의 환경을 global 로 굳혀 새 pane 에 물려준다**. 세션이 끊이지
+//   않는 PC 에선 그 global 이 영영 안 늙는다 → 재로그인해도 새 창까지 옛 값을 물려받는다. `lively doctor`
+//   가 이 어긋남을 이미 재고 `tmux set-environment -g …` 를 처방하고 있었는데, **사람이 손으로 치게** 두는
+//   대신 로그인이 직접 고친다(진단이 아는 것을 고치는 데 쓴다).
+//  ⚠ 한계는 그대로다 — global 은 **새 pane** 에만 물려진다. 이미 떠 있는 pane 과 그 안의 MCP·codex 는
+//   자기가 물려받은 env 를 계속 쓴다(그래서 아래 '이 셸은 못 고친다' 경고는 남는다).
+//
+//  ★ 안전선 셋 — 이 함수는 **이미 있는 값을 고치기만** 한다.
+//   ① 매니지드 박스 pane(LIVELY_SESSION_ID=box-*)에선 **아무것도 안 한다**. 그 tmux 서버는 멤버들이
+//      공유하고, 신원은 sessions.ts 가 pane 마다 세션스코프 `-e` 로 심는 게 정본이다(global 은 세션 간
+//      누수라고 거기 명시돼 있다) — 여기서 global 에 쓰면 로그인한 사람 토큰이 남의 새 pane 에 샌다.
+//   ② tmux 서버가 안 떠 있으면 건드리지 않는다(없는 서버를 새로 띄우지 않는다).
+//   ③ **전역에 그 변수가 이미 있을 때만** 덮는다. 없던 변수를 새로 심지 않는다 — 설치기가 심어 둔 값을
+//      최신으로 되돌리는 '수리'이지, 노출면을 넓히는 게 아니다.
+//  판정은 순수 함수로 떼어 둔다 — 위 안전선 셋이 이 함수의 전부라서, 부수효과 없이 표로 검증할 수 있어야 한다.
+//   showOutput = `tmux show-environment -g` 의 stdout(서버가 없으면 호출자가 아예 안 부른다).
+//   돌려주는 값 = 실제로 칠 [이름, 값] 목록(빈 배열이면 아무것도 안 친다).
+export function planTmuxGlobalEnvFix({ showOutput = "", gw, tok, sessionId = "", normalizeGw = (u) => u } = {}) {
+  if (!gw || !tok) return [];
+  if (/^box-/.test(String(sessionId || ""))) return [];                    // 안전선 ①
+  const seen = new Map();
+  for (const line of String(showOutput).split("\n")) {
+    const i = line.indexOf("=");
+    // `-r NAME`(제거 표시) 줄은 '='가 없어 자연히 걸러진다 — 그런 변수는 전역에 없는 것이니 심지 않는 게 맞다.
+    if (i > 0) seen.set(line.slice(0, i), line.slice(i + 1));
+  }
+  const out = [];
+  for (const [name, want] of [["LIVELY_GATEWAY_URL", normalizeGw(gw)], ["LIVELY_TOKEN", tok]]) {
+    if (!seen.has(name)) continue;                                         // 안전선 ③ — 없던 변수는 안 심는다
+    if (seen.get(name) === want) continue;                                 // 이미 맞으면 안 친다(멱등)
+    out.push([name, want]);
+  }
+  return out;
+}
+
+function syncTmuxGlobalEnv(gw, tok) {
+  if (WIN) return;
+  try {
+    if (!has("tmux")) return;
+    const cur = run("tmux", ["show-environment", "-g"], { quiet: true, allowFail: true });
+    if (cur.code !== 0) return;                                            // 안전선 ② (서버 없음 — 새로 띄우지 않는다)
+    const plan = planTmuxGlobalEnvFix({
+      showOutput: cur.out, gw, tok,
+      sessionId: process.env.LIVELY_SESSION_ID, normalizeGw: normGw,
+    });
+    const fixed = [];
+    for (const [name, want] of plan) {
+      const r = run("tmux", ["set-environment", "-g", name, want], { quiet: true, allowFail: true });
+      if (r.code === 0) fixed.push(name);
+    }
+    // 값은 안 찍는다 — 토큰이 섞여 있다. 무엇을 고쳤는지와 '새 pane 부터'라는 한계만 말한다.
+    if (fixed.length) info(`tmux 전역 env 를 새 로그인으로 맞췄습니다(${fixed.join(" · ")}) — 지금부터 여는 창에 적용됩니다.`);
+  } catch { /* 로그인은 이것 때문에 실패하지 않는다 */ }
+}
+
 // 로그인 성공 뒤 마무리 — 신원의 **사본**을 새 토큰에 맞춘다(login 이 install 을 대신하진 않는다).
 //  ⚠ 여기서 `process.env.LIVELY_TOKEN` 을 덮지 **않는다**: 그러면 뒤이어 도는 registerClaudeMcp 의
 //   org 서버 루프가 `process.env[s.auth_env]` 로 그 값을 집어, 관리자가 지정한 임의 URL 의 Authorization
@@ -1496,6 +1564,8 @@ async function afterLogin(gw, tok) {
   // .claude.json 의 lively 항목은 **토큰의 사본**이고 방금 로그인이 그걸 무효화했다 → 여기서 다시 굽는다.
   //  없으면: 사용자가 로그인만 하고 멈췄을 때(bootstrap.sh·웹 안내가 그렇게 시킨다) MCP 는 옛 신원으로 남는다.
   registerClaudeMcp(); // claude 미설치 판정·안내 포함. (#247 — 구명 registerLivelyMcp 잔재 호출이 여기서 크래시했다)
+  // tmux 서버 전역 env 는 **고칠 수 있다** — 아래 '이 셸은 못 고친다'의 유일한 예외라 먼저 친다(#3728).
+  syncTmuxGlobalEnv(gw, tok);
   // codex 는 토큰을 config.toml 에 안 굽고 LIVELY_TOKEN 을 읽으므로(bearer_token_env_var) 재등록할 게 없다.
   //  대신 **이 셸의 env 는 우리가 못 고친다**(자식이 부모 셸을 못 바꾼다) → 조용히 두지 말고 사실대로 알린다.
   if (ENV_TOKEN_AT_START && ENV_TOKEN_AT_START !== tok) {
@@ -1717,7 +1787,7 @@ async function gatherStatus() {
     node: null,
   };
   try {
-    const { nodeCommands: _n, nodeStatus, nodeConnectedFrom, nodeSleepInfoFrom } = await import(new URL("./cmd-node.mjs", import.meta.url));
+    const { nodeCommands: _n, nodeStatus, nodeConnectedFrom, nodeSleepInfoFrom, nodeSelfFrom } = await import(new URL("./cmd-node.mjs", import.meta.url));
     if (typeof nodeStatus === "function") st.node = nodeStatus();
     // '붙어 있는가' 축(#1541) — 프로세스가 돌아도 게이트웨이엔 오프라인일 수 있다(절전 뒤 좀비, 실측 3시간·나흘).
     //  게이트웨이에 못 물으면 null(모름) — false 로 눕히면 정상 노드를 '끊김' 이라 거짓말한다.
@@ -1725,6 +1795,8 @@ async function gatherStatus() {
       try {
         const payload = await api("/api/ui/nodes", { timeoutMs: 5000 });
         st.node.connected = nodeConnectedFrom(payload, st.node.id);
+        // #2592 — 게이트웨이가 판정한 self 를 그대로 나른다. 못 읽으면 null(모름) — 데스크톱은 확답일 때만 건너뛴다.
+        if (typeof nodeSelfFrom === "function") st.node.selfBox = nodeSelfFrom(payload, st.node.id);
         // #1849 — "붙어 있나" 옆의 **왜 안 붙어 있나**. 서버가 만든 문구를 그대로 나른다(문구 출처 단일화).
         if (typeof nodeSleepInfoFrom === "function") st.node.sleep = nodeSleepInfoFrom(payload, st.node.id);
       } catch { st.node.connected = null; }
@@ -2124,6 +2196,19 @@ async function cmdDoctor(opts) {
   const tokFile = readLively("token");
   chk("토큰", !!token(), tokFile ? "~/.lively/token" : (token() ? "LIVELY_TOKEN 환경변수 (파일 없음)" : "없음"), "lively login");
   chk("토큰 유효", st.account.authenticated, st.account.authenticated ? (st.account.name || st.account.id || "인증됨") : "미인증", "lively login");
+  // #2617 — 아래 #916 신원 검사의 **주소 축**. gateway() 는 이제 파일 우선이라 CLI·lively-local MCP 는
+  //  파일을 쓴다(그래서 이건 ✗ 여도 위 두 줄은 정상이다) — 그럼에도 알리는 이유는, 이 셸에 남은 옛 env 를
+  //  **직접 읽는 것**(스크립트·LIVELY_GATEWAY_URL 을 그대로 쓰는 도구)이 있으면 그쪽만 옛 게이트웨이로 가기 때문이다.
+  //  ⚠ 처방이 `source ~/.zshrc` 만이 아닌 이유: 라이블리 세션은 tmux pane 이고, tmux 서버는 **처음 뜬 시점의
+  //   환경**을 global 로 굳혀 물려준다 — 같은 서버에서 새 창을 열어도 옛 값 그대로다(2026-09-03 실측:
+  //   8/26 에 뜬 서버가 9/1 의 주소 변경을 못 따라가 40일 가까이 옛 주소를 물려줬다).
+  //  ⚠ 주소는 시크릿이 아니라 **값을 보여준다**(토큰 검사와 다른 점) — 어느 쪽이 옛것인지 사람이 봐야 고친다.
+  const gwFile = readLively("gateway-url"), gwEnv = (process.env.LIVELY_GATEWAY_URL || "").trim();
+  if (gwEnv && gwFile && normGw(gwEnv) !== normGw(gwFile)) {
+    chk("게이트웨이 일치(이 셸 env ↔ 파일)", false,
+      `이 셸 env: ${normGw(gwEnv)} · 파일: ${normGw(gwFile)} — CLI·MCP 는 파일을 쓰지만 env 를 직접 읽는 도구는 앞의 주소로 갑니다`,
+      `tmux set-environment -g LIVELY_GATEWAY_URL ${normGw(gwFile)}  후 새 세션 (또는 ${RELOAD_SHELL_HINT})`);
+  }
   // #916 — 이 셸의 env 가 파일과 다르면 **codex 와 이미 떠 있는 세션은 옛 신원으로** 게이트웨이에 붙는다.
   //  CLI 는 파일을 정본으로 쓰므로 위 두 줄은 멀쩡해 보이는데, 그 상태가 정확히 #916 이었다.
   //  진단이 이걸 안 보여줘서 그때는 /api/ui/me 를 손으로 찔러보고서야 잡혔다 → 도구화한다. ⚠ 값은 안 찍는다(사실만).
@@ -2504,6 +2589,94 @@ async function cmdInit(rest) {
 
 // `lively repo` — 워크트리 셀프서비스 CLI(사람·스크립트용). MCP 툴 lively_local_repo_* 과 **같은 코어**를 쓴다
 //  (repo-worktree-core.mjs — 드리프트 0). ctx 계약: sh → {stdout,stderr,code}(run 의 out/err 매핑) · api → JSON · cwd.
+// reclaim — 이 PC 의 프로젝트 폴더에서 **재생성 가능한 것만** 회수한다(#2621).
+//  왜 CLI 에 있나: 서버의 `workspace_reclaim` 은 `reposIn(dir)` 로 **게이트웨이 호스트의 파일시스템만**
+//  스캔한다. 개인 PC 노드의 `~/workspace/project/<id>/` 는 원리적으로 그 범위 밖이라, 회수가 «레포가
+//  없습니다» 라고 답하고 사람이 손으로 찾아 지워야 했다(실측: 이 맥북 workspace/project 5.1GB).
+//  삭제 규칙(무엇을 지우고 무엇을 지키나)은 `workspace-reclaim-core.mjs` **한 벌** — 서버와 같은 코드다.
+async function cmdReclaim(rest) {
+  const core = await import(new URL("./workspace-reclaim-core.mjs", import.meta.url));
+  const ops = core.createReclaim({
+    // 코어는 외부 프로세스를 직접 쥐지 않는다(kit R5) — 여기서 이 CLI 의 실행기를 준다.
+    //  계약은 promisify(execFile) 과 같다: 성공하면 {stdout}, 실패하면 throw.
+    exec: async (file, args, opts = {}) => {
+      const r = run(file, args, { quiet: true, allowFail: true, cwd: opts.cwd, env: opts.env });
+      if (r.code !== 0) throw new Error(String(r.err || "").trim().split("\n")[0] || `${file} 실패(exit ${r.code})`);
+      return { stdout: r.out };
+    },
+  });
+
+  const o = {}; const pos = [];
+  for (const t of rest) {
+    if (t === "--apply") o.apply = true;
+    else if (t === "--remove-worktree") o.removeWorktree = true;
+    else if (t === "--json") o.json = true;
+    else if (t === "-h" || t === "--help") {
+      say("사용법: lively reclaim [<경로>] [--apply] [--remove-worktree] [--json]\n"
+        + dim("  경로 생략 시 현재 디렉터리. 기본은 dry-run(아무것도 지우지 않고 계획만 보여준다).\n")
+        + dim("  --apply 로 실제 삭제. 지우는 것은 'gitignored 인 동시에 알려진 파생물 이름'뿐이고,\n")
+        + dim("  시크릿(.env)·로컬 데이터(data/)·미분류 항목은 절대 건드리지 않는다."));
+      return;
+    }
+    else pos.push(t);
+  }
+  const target = resolve(pos[0] || process.cwd());
+
+  // 이 워크트리에서 **작업 중인 세션**이 있으면 회수를 통째로 막는다(빌드 중인 node_modules 를 지우면 그 세션이 깨진다).
+  //  서버는 세션 레지스트리를 보지만 이 PC 엔 그게 없다 — tmux pane 들의 현재 경로 + 지금 이 셸의 cwd 를 쓴다.
+  //  tmux 가 없거나 실패하면 빈 목록이 되는데, 그래도 코어의 나머지 안전선(gitignored∩allow-list·보호목록)은 그대로다.
+  const paneDirs = (() => {
+    const r = run("tmux", ["list-panes", "-a", "-F", "#{pane_current_path}"], { quiet: true, allowFail: true });
+    return r.code === 0 ? String(r.out).split("\n").map((x) => x.trim()).filter(Boolean) : [];
+  })();
+  const activeSessionDirs = [...new Set([...paneDirs, process.cwd()])];
+
+  // 대상이 레포 자신이면 그것만, 프로젝트 폴더면 그 안의 레포 전부(한 프로젝트에 여러 레포가 붙는다).
+  const self = existsSync(join(target, ".git")) ? [target] : [];
+  const worktrees = self.length ? self : await core.reposIn(target);
+  if (!worktrees.length) {
+    say(dim(`정리할 것이 없습니다 — ${target} 안에 git 레포(워크트리)가 없습니다.`));
+    return;
+  }
+
+  const mb = (n) => (n / 1e6).toFixed(n >= 1e8 ? 0 : 1) + "MB";
+  const out = [];
+  let total = 0;
+  let heldBack = 0;   // 작업 중인 세션 때문에 손대지 않는 몫 — 총계에 섞으면 «회수 가능» 이 거짓말이 된다.
+  for (const wt of worktrees) {
+    const plan = await ops.planReclaim(wt, { activeSessionDirs });
+    const applied = o.apply
+      ? await ops.applyReclaim(plan, { removeWorktree: !!o.removeWorktree, repoRoot: await ops.baseRepoOf(wt) })
+      : null;
+    // 활성 세션이면 applyReclaim 이 아무것도 안 한다 → dry-run 총계도 같은 판정을 따라야 한다(안 그러면
+    //  «726MB 회수 가능» 이라고 해놓고 --apply 가 0바이트를 지우는 어긋남이 난다).
+    if (plan.active_session) heldBack += plan.reclaimableBytes;
+    else total += applied ? applied.freedBytes : plan.reclaimableBytes;
+    out.push({ worktree: wt, plan, applied });
+  }
+
+  if (o.json) { say(JSON.stringify({ dry_run: !o.apply, target, results: out }, null, 2)); return; }
+
+  say(bold(`${o.apply ? "회수" : "회수 계획(dry-run)"} — ${target}`) + dim(`  · 워크트리 ${worktrees.length}개`));
+  for (const { worktree, plan, applied } of out) {
+    const derived = plan.entries.filter((e) => e.kind === "derived");
+    const unclassified = plan.entries.filter((e) => e.kind === "unclassified" && e.bytes > 0);
+    say("\n" + bold(worktree.replace(target + "/", "")) + (plan.active_session ? red("  · 작업 중인 세션이 있어 건너뜁니다") : ""));
+    if (!derived.length) say(dim("  회수할 파생물 없음"));
+    for (const e of derived) say(`  ${applied ? green("지움") : dim("지울 것")}  ${e.rel}  ${dim(mb(e.bytes))}`);
+    if (unclassified.length) {
+      say(dim(`  미분류(안 지움) ${unclassified.length}건 — 가장 큰 것: ${unclassified[0].rel} ${mb(unclassified[0].bytes)}`));
+    }
+    if (o.removeWorktree) {
+      const reason = applied ? applied.worktreeSkippedReason : plan.worktree_check.reason;
+      say(applied?.worktreeRemoved ? green("  워크트리 제거됨") : dim(`  워크트리 유지 — ${reason || "확인 필요"}`));
+    }
+  }
+  say("\n" + bold(o.apply ? `되찾은 공간 ${mb(total)}` : `회수 가능 ${mb(total)}`)
+    + (heldBack ? yellow(`  · 작업 중이라 손대지 않음 ${mb(heldBack)}`) : "")
+    + (o.apply ? "" : dim("  · 실제로 지우려면 --apply")));
+}
+
 async function cmdRepo(rest) {
   const { repoList, repoWorktree, repoWorktreeRemove, repoPin, repoPinRemove } = await import(new URL("./repo-worktree-core.mjs", import.meta.url));
   const ctx = {
@@ -2542,8 +2715,9 @@ async function cmdRepo(rest) {
       const repo = pos[0];
       if (!repo) die("레포 이름이 필요합니다.  예: lively repo worktree <repo> [--branch b] [--ref main] [--path .]");
       const res = await repoWorktree(ctx, { repo, branch: o.branch, ref: o.ref, path: o.path });
-      ok(`워크트리: ${bold(res.worktree)}  ${dim(`(브랜치 ${res.branch})`)}`);
+      ok(`워크트리: ${bold(res.worktree)}  ${dim(`(브랜치 ${res.branch}${res.admin ? ` · admin ${res.admin}` : ""})`)}`);
       say("  " + dim(res.note));
+      if (res.warning) warn(res.warning);   // #3678 — 슬롯 브랜치가 갈아타져 있음(중단은 아님)
       return;
     }
     if (sub === "pin") {
@@ -2658,6 +2832,7 @@ ${bold("작업")}
   repo list              이 머신에서 뜰 수 있는 레포 + 로컬 상태
   repo pin <레포>        코드 근거 분석용 읽기전용 핀(SHA 고정) ${dim("--ref main  --path .  ·  pin remove <레포>")}
   repo worktree <레포>   워크트리 생성(코드 작업면) — 프로젝트면 그 폴더의 <레포> 자리 ${dim("--branch b  --ref main  --path .  ·  worktree remove <레포> [--force]")}
+  reclaim [<경로>]       재생성 가능한 파생물 회수(node_modules·dist…) — ${dim("기본 dry-run  ·  --apply 로 실제 삭제  ·  --remove-worktree")}
 
 ${bold("옵션")}
   --gateway <url>        게이트웨이 주소 지정 (login 과 함께)
@@ -2804,6 +2979,8 @@ async function dispatch(cmd, o, argv) {
     case "mcp": return cmdMcpGateway();
     // repo — 워크트리 셀프서비스(list/worktree). MCP 툴과 같은 코어. 나머지 인자 원형 보존.
     case "repo": return cmdRepo(argv.slice(argv.indexOf("repo") + 1));
+    // reclaim — 이 PC 의 프로젝트 폴더에서 파생물 회수(#2621). 서버 workspace_reclaim 과 **같은 코어**.
+    case "reclaim": return cmdReclaim(argv.slice(argv.indexOf("reclaim") + 1));
     // resume — 다른 환경에서 내 세션 이어받기(#905 C1). 중앙 트랜스크립트를 이 PC 로 내려 claude --resume.
     case "resume": return cmdResume(argv.slice(argv.indexOf("resume") + 1));
     // backfill — 이 머신의 기존 claude 트랜스크립트를 중앙에 소급 업로드(#905 C1). 웹뷰에 과거 세션도 보이게.

@@ -206,7 +206,8 @@ export async function sessionFootprint(nodeId: string, sessionId: string, owner?
       }));
   }
 
-  // 카테고리 — 창 안에 주인이 만든 분류(첫 감사 행 기준. entity_key 는 `space/key`(category-store) — 옛 행은 id 일 수 있어 둘 다 본다).
+  // 카테고리 — 창 안에 주인이 만든 분류(첫 감사 행 기준). entity_key 는 key(category-store) —
+  //  옛 행은 id 이거나 `<옛 space>/key` 일 수 있어(#1631 space 폐기) 셋 다 본다.
   //  **purge 대상이 아닌 지식이 하나라도 물려 있으면 뺀다.**
   let categories: FootprintCategory[] = [];
   if (who) {
@@ -216,7 +217,8 @@ export async function sessionFootprint(nodeId: string, sessionId: string, owner?
          FROM category c
         WHERE c.created_at >= $1 AND c.created_at <= $2
           AND (SELECT a1.actor FROM org_content_audit a1
-                WHERE a1.entity='category' AND (a1.entity_key = c.space || '/' || c.key OR a1.entity_key = c.id::text)
+                WHERE a1.entity='category' AND (a1.entity_key = c.key OR a1.entity_key = c.id::text
+                       OR a1.entity_key ~ ('^[a-z]+/' || c.key || '$'))
                 ORDER BY a1.at ASC, a1.id ASC LIMIT 1) = $3
           AND NOT EXISTS (SELECT 1 FROM knowledge_category kc
                            WHERE kc.category_id = c.id AND NOT (kc.name = ANY($4)))
@@ -351,7 +353,7 @@ export async function purgeFootprint(
     // ③-d 카테고리 완전 삭제(#1850 P4) — 지우기 직전에 **빈 분류인지 다시 확인**한다(발자국 조회와 지금 사이에
     //   누가 지식을 물렸을 수 있다). 물려 있으면 그 카테고리는 건너뛴다 — 분류는 조직의 뼈대다.
     if (cIds.length) {
-      const keysRow = await client.query(`SELECT space || '/' || key AS k FROM category WHERE id = ANY($1)`, [cIds]);
+      const keysRow = await client.query(`SELECT key AS k FROM category WHERE id = ANY($1)`, [cIds]);
       const r = await client.query(
         `DELETE FROM category c WHERE c.id = ANY($1)
            AND NOT EXISTS (SELECT 1 FROM knowledge_category kc WHERE kc.category_id = c.id)`, [cIds]);

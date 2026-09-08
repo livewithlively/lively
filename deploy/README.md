@@ -113,8 +113,8 @@ PUBLIC_URL=http://<host>:8080 BOOTSTRAP_ADMIN_EMAIL=you@org.com ORG_DOMAIN=org.c
 | 2 .env | 없으면 시크릿(`openssl rand`) 자동 생성 — **있으면 보존** |
 | 3 store | `docker compose up -d --wait items-db` (pgvector, 127.0.0.1 바인딩) |
 | 4 빌드 | `npm ci && npm run build` |
-| 5 서비스+TLS | systemd(Linux) / launchd(Mac) 등록·기동 + `/healthz` 확인 (스키마 자가 마이그레이션) + `LIVELY_DOMAIN` 있으면 Caddy 자동 HTTPS |
-| 6 부트스트랩 | 첫 관리자(웹 세션 로그인 계정) 시드 — `deploy/bootstrap-admin.mjs` (⚠ 서비스 기동 뒤에) |
+| 5 서비스+TLS | systemd(Linux) / launchd(Mac) 등록·기동 + `/healthz`(listen) + **`/readyz` `schema=ready` 대기**(스키마 자가 마이그레이션·첫 부팅 자가 재기동까지) + `LIVELY_DOMAIN` 있으면 Caddy 자동 HTTPS |
+| 6 부트스트랩 | 첫 관리자(웹 세션 로그인 계정) · 익명 baseline · 기본 커넥터 시드 — `deploy/bootstrap-*.mjs` (⚠ 준비 대기 뒤에 · 스키마 미준비면 ≤60s 자체 재시도). **하나라도 실패하면 요약에 ✗ 로 나오고 install.sh 가 비-0 으로 끝난다** — 게이트웨이는 떠 있으니 ✗ 항목의 명령만 재실행하면 된다 |
 | 7 중앙박스 키트 | 호스트 claude 에 lively 설치(MCP+훅+컨텍스트) — `deploy/install-kit.sh`. **웹터미널 세션이 맥락 CRUD 가능해짐.** |
 
 환경변수: `LIVELY_DOMAIN`(설정 시 자동 HTTPS — 아래 [TLS](#tls-자동-https--caddy)) · `PUBLIC_URL` · `BOOTSTRAP_ADMIN_EMAIL`
@@ -261,7 +261,8 @@ append 경로가 끊긴다. compose 프로젝트명을 바꾸면 named volume �
 ```bash
 systemctl status lively-gateway                      # active (running)
 systemctl list-unit-files | grep context-ontology    # 아무것도 안 나와야 정상
-curl -fsS localhost:8080/healthz                     # {"ok":true}
+curl -fsS localhost:8080/healthz                     # {"ok":true}  — liveness(listen). 스키마 완료 신호가 아니다
+curl -s localhost:8080/readyz | grep -o '"schema":"[a-z]*"'   # "schema":"ready" — 마이그레이션·시딩 완료(pending/restarting 이면 503)
 journalctl -u lively-gateway -n 50 --no-pager
 ```
 

@@ -89,7 +89,7 @@ export async function runBootstrapInject(params: Record<string, unknown>): Promi
 function buildBootstrapPrompt(repo: string, clonePath: string, factsPath: string, files: number, hints: number): string {
   return `레포 '${repo}'의 도메인맵 is 최초 부트스트랩 작업이야. 먼저 knowledge_get 으로 'runbook-bootstrap-domains'(프로세스)와 'domainmap-is-bootstrap-runbook'(도구 델타)를 읽고 그대로 따라. ` +
     `① 결정론 사실은 이미 뽑아 뒀어: ${factsPath} (files ${files}개·module_hints ${hints}개·stack 포함). 통째 읽지 말고 grep/슬라이스로 참고(사실 바닥, 파일 환각 금지). ` +
-    `② category_list(space=product)로 도메인 후보 + 각 should(코드 SoT 앵커)를 1회 확보. ` +
+    `② category_list 로 분류축 후보 + 각 should(코드 SoT 앵커)를 1회 확보(코드가 안 붙는 축은 매핑 후보에서 빼면 된다). ` +
     `③ 유닛 경계는 판단이야(결정론 아님): module_hints 를 출발점으로, 한 모듈이 두 도메인에 걸치면 하위 디렉터리로 쪼개. code_unit.path 는 디렉터리 경로(파일 개별 유닛 지양). ` +
     `④ 각 유닛→domain_key 매핑 + 신뢰도(should 앵커 + 모듈명/패키지/대표 서비스 신호). 확신 낮으면 매핑을 빼서 unmapped 로 남겨(억지 매핑 금지). ` +
     `⑤ payload({repo:{name:'${repo}',root_path:'${clonePath}'}, run:{runbook:'bootstrap-domains'}, code_units, mappings, imports?})를 조립해 domainmap_ingest 를 '한 번' 호출(대량이면 서브트리별로 나눠 여러 콜; 건별 map_code_unit 반복 금지). ` +
@@ -100,7 +100,7 @@ function buildBootstrapPrompt(repo: string, clonePath: string, factsPath: string
 //  params.prompt 로 관리탭에서 덮어쓸 수 있음(웹 편집). count·repo 만 보간.
 function buildMapPrompt(repo: string, count: number): string {
   return `미매핑 코드유닛(${count}건)을 제품 도메인에 분류하는 배치 작업이야. ` +
-    `① category_list(space=product)+각 category_get으로 도메인 should(정의·범위)를 읽어 분류 기준으로 삼아. ` +
+    `① category_list+각 category_get으로 축의 should(정의·범위)를 읽어 분류 기준으로 삼아(코드가 안 붙는 축은 후보에서 빼). ` +
     `② list_unmapped(repo=${repo})로 인박스 가져와. ` +
     `③ 각 유닛 path·label 보고 필요하면 Read/Grep으로 헤더·내용·import 확인해 어떤 비즈니스 능력인지 파악. ` +
     `④ DDD(도메인=비즈니스 능력 경계, 기술레이어 아님)로 map_code_unit 호출: target=경로, category=도메인 key, origin=llm, ` +

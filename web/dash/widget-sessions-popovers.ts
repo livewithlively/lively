@@ -222,7 +222,9 @@ function openSessMenu(anchor, s, onChange) {
       : await confirmSessionEnd({ title: name + ' 세션을 종료할까요?', sessions: [s] });
     if (!ok) return;
     try {
-      await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' });
+      // #2636 — 노드 세션은 좌표(?node=)를 실어 그 노드로 릴레이한다(widget-sessions.ts sessKillSelected 와 같은 규약).
+      //  안 실으면 게이트웨이가 자기 tmux 로 생사를 판정해 «종료했다»면서 그 컴퓨터의 세션을 살려 둔다.
+      await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node?.id ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' });
       toast(s.restorable ? '복원 목록에서 지웠어요' : await endedToast(1, [s]));
       onChange && onChange();
     } catch (e: any) { toast((s.restorable ? '지우기' : '종료') + ' 실패 — ' + (e && e.message || e), true); }

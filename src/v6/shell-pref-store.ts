@@ -37,7 +37,6 @@ export const SHELL_PREF_STORES: Readonly<Record<string, ShellPrefKind>> = {
   lively_v2_opened: "list",           // 펼쳐 둔 프로젝트
   lively_v2_side_selclosed: "list",   // 선택된 프로젝트인데도 일부러 접어 둔 것
   lively_v2_proj_fold_closed: "list", // 접어 둔 폴더
-  lively_v2_wiki_closed: "list",      // 접어 둔 위키 스페이스
   lively_v2_rail_main: "list",        // 레일 메인 줄 순서(사람이 끌어 정한 자리)
   lively_v2_recent_apps: "list",      // 최근에 연 앱
 };

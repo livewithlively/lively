@@ -10,7 +10,7 @@ const base = (over: Partial<FirstTurnInput> = {}): FirstTurnInput => ({
   firstOrder: "지난 시안 리뷰에서 나온 피드백만 모아 정리해 줘",
   decisions: [{ what: "매주 반복하는 문서가 있다" }, { what: "자료를 보는 범위: 우리 팀이 같이 본다" }],
   uploads: { total: 3, kinds: [{ name: "슬랙", n: 2 }, { name: "회의록", n: 1 }], names: ["a", "b", "c"], forms: [] },
-  categories: [{ name: "산출물", space: "business" }, { name: "기록", space: "business" }, { name: "운영", space: "business" }],
+  categories: [{ name: "산출물" }, { name: "기록" }, { name: "운영" }],
   collectors: [{ label: "슬랙 #design", preset_key: "slack", enabled: true, sync_interval_sec: 900 }],
   aiHarnesses: ["claude"],
   harness: "claude",

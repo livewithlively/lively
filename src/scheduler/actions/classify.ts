@@ -100,7 +100,7 @@ function buildClassifierPrompt(c: ClassifierRow, inbox: Array<{ name: string; ti
   const names = inbox.map((x) => x.name).join(", ");
   const cand = c.candidate_categories?.length
     ? `후보 카테고리는 **다음으로 제한**한다: ${c.candidate_categories.join(", ")}. 이 축들 중 맞는 게 정말 없으면 건너뛰어(억지로 넣지 마). `
-    : `후보는 전체 카테고리 체계(사업·제품·시스템 3 space)다. `;
+    : `후보는 이 워크스페이스의 카테고리 전체다. `;
   const crit = c.criteria_md?.trim()
     ? `이 분류기의 판단 기준: ${c.criteria_md.trim().replace(/\s+/g, " ")}. `
     : "";
@@ -116,11 +116,11 @@ function buildClassifierPrompt(c: ClassifierRow, inbox: Array<{ name: string; ti
 }
 
 // 분류 프롬프트 — **단일 라인**(send-keys -l 주입용, 개행 금지). map_unmapped(buildMapPrompt)의 지식판.
-//  코드유닛과 차이: ① 카테고리는 3 space 전체(사업·제품·시스템 — 지식은 제품 도메인에 국한 안 됨) ② 대상=지식 본문(knowledge_get) ③ writer=knowledge_propose_category.
+//  코드유닛과 차이: ① 후보는 카테고리 전체(지식은 코드 있는 축에 국한 안 됨) ② 대상=지식 본문(knowledge_get) ③ writer=knowledge_propose_category.
 //  params.prompt 로 관리탭에서 덮어쓸 수 있음.
 function buildClassifyKnowledgePrompt(count: number): string {
   return `미분류 지식(${count}건)을 카테고리로 분류하는 배치 작업이야. ` +
-    `① category_list 로 전체 카테고리 체계(사업·제품·시스템 3 space)를 파악하고, 후보 카테고리는 **이번 배치에서 지금** category_get 으로 정의·범위(should)를 다시 읽어 분류 기준으로 삼아 — 이전 판단·캐시·기억을 믿지 마(should 는 갱신됐을 수 있고 분류는 매번 '최신 정의' 대비여야 한다). ` +
+    `① category_list 로 카테고리 체계 전체를 파악하고, 후보 카테고리는 **이번 배치에서 지금** category_get 으로 정의·범위(should)를 다시 읽어 분류 기준으로 삼아 — 이전 판단·캐시·기억을 믿지 마(should 는 갱신됐을 수 있고 분류는 매번 '최신 정의' 대비여야 한다). ` +
     `② knowledge_unmapped 로 카테고리 0건 지식 인박스를 가져와(노션 미러 등 인입분이 대부분). ` +
     `③ 각 지식을 knowledge_get(name) 으로 제목·본문을 읽어 어떤 주제·능력에 속하는지 파악(부분읽기로 앞부분만 봐도 됨). ` +
     `④ knowledge_propose_category 호출: name, categoryId(고른 카테고리 id), evidence=근거(**방금 읽은 현재 should 의 어느 문장**↔지식 내용의 어느 신호를 인용, 필수 — 옛 이해가 아니라 지금 읽은 정의를 근거로), ` +

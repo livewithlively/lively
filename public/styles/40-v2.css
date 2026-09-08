@@ -711,7 +711,9 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .cn-row:hover .cn-row-go { color: var(--blue); }
 .cn-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2); }
 .cn-dot.on { background: var(--mint-deep); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--mint-deep) 22%, transparent); }
-.cn-extra { margin-top: 4px; padding-top: 18px; border-top: 1px solid var(--line-net); }
+/*  #2243 — 구분선이 마지막 카드에 4px 로 붙어 있었다(위 4 · 아래 18 — 원준 실측 2026-09-02 "여백 좀 어색하지 않아?").
+    그룹 사이 리듬이 20px 이니 선 위·아래를 그 값으로 맞춘다 — 선이 카드에 닿지 않고, 이 구역(개발자용)은 그룹 간보다 한 단계 굵은 경계로 읽힌다. */
+.cn-extra { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line-net); }
 /* ── #2243 안 2 «진열대» — 목록은 카드. 회색 로고 = 준비 중뿐, 켤 수 있는 앱은 제 색 + [연결] 버튼 ──
    한글 소제목은 .v2-k(영문 대문자+자간) 대신 굵은 잉크 + 개수 + 힌트(#2202 C1 — 한글엔 uppercase 가 안 먹고 자모만 벌어진다). */
 .cn-gh { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }

@@ -12,12 +12,21 @@
 //   E3 [개인A, 개인A]   → 보임   (자기 것)
 //   E4 [개인A, 개인B]   → 숨김   ★개인↔개인 누수
 //   E5 [개인A, primary] → 숨김   ★대칭(개인 세션이 박스로 누수)
+//   ── 매니지드(#3564) — 기본값이 다르다 ──
+//   M1 [부재, 테넌트]   → 보임   ★이 사고(매니지드에선 현재 ws=테넌트 uuid 라 primary 로 접으면 전량 사라진다)
+//   M2 [개인A, 테넌트]  → 숨김   (격리는 매니지드에서도 그대로)
+//   M3 셀프호스트 규칙 무회귀 — 부재 = primary
+//   M4 «부재의 기본값» 자체를 한 헬퍼로(defaultWorkspaceId) — SQL·JS 두 필터가 이 값을 공유한다
+//   ── 구조(#3579) — 2026-08-28 에 한 번 고쳤다가 커밋되지 못한 채 사라진 자리 ──
+//   S1 세션을 **만드는 자리마다** 소속 기록이 붙는가(호출 수가 아니라 대칭)
+//   E11 이력 목록 SQL 도 gw_workspace 가 비어도 매핑을 살린다(LEFT JOIN — E9 의 SQL 쌍둥이)
+//   E12 이력 목록 SQL 의 «부재» 귀속이 JS 필터와 **같은 헬퍼**를 쓴다(상수로 굳으면 둘이 갈린다)
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { sessionInWorkspace, PRIMARY_TENANT_ID } from "./registry.js";
+import { sessionInWorkspace, defaultWorkspaceId, PRIMARY_TENANT_ID } from "./registry.js";
 
 const PRIMARY = PRIMARY_TENANT_ID;                   // 박스/primary — gw_session_map 에 행이 없으면 여기로 귀속
 const WS_A = "11111111-1111-1111-1111-111111111111"; // 개인 워크스페이스 A(예: 하루)
@@ -46,6 +55,29 @@ test("★ E5 개인 워크스페이스 세션은 primary(박스)에도 새지 �
   assert.equal(sessionInWorkspace(WS_A, PRIMARY), false);
 });
 
+// ── 매니지드(#3564) — «매핑 부재» 의 기본값이 배포마다 다르다 ───────────────────────────
+//  실측 2026-09-04(lively-46e3): 세션 901건 중 869건이 gw_session_map 부재였고, 목록 API 가 매핑된 8건만
+//  돌려줬다. 사용자에겐 «세션이 다 사라짐» 이다. 매니지드에선 현재 ws 가 테넌트 uuid 라 PRIMARY_TENANT_ID
+//  로 접으면 **절대** 같아질 수 없다 — 부재는 primary 가 아니라 «이 워크스페이스» 로 읽어야 한다.
+const TENANT = "a4b68262-535b-4be0-a1dc-50ec71576441";   // 실측 테넌트 uuid 모양
+
+test("★ M1 매니지드에서 매핑 없는 세션은 **지금 워크스페이스**의 것이다 — 이 사고의 핵심", () => {
+  assert.equal(sessionInWorkspace(undefined, TENANT, true), true);
+  assert.equal(sessionInWorkspace(null, TENANT, true), true);
+  //  기본값을 primary 로 접으면 테넌트 uuid 와 같아질 수 없어 전량 사라진다(회귀 시 여기가 red).
+  assert.equal(sessionInWorkspace(undefined, TENANT, false), false, "셀프호스트 규칙을 매니지드에 적용하면 이렇게 사라진다");
+});
+
+test("★ M2 매니지드라도 **다른 워크스페이스에 묶인** 세션은 여전히 안 보인다(격리는 그대로)", () => {
+  assert.equal(sessionInWorkspace(WS_A, TENANT, true), false);
+  assert.equal(sessionInWorkspace(TENANT, TENANT, true), true);
+});
+
+test("M3 셀프호스트(비매니지드) 규칙은 종전 그대로 — 부재 = primary", () => {
+  assert.equal(sessionInWorkspace(undefined, PRIMARY, false), true);
+  assert.equal(sessionInWorkspace(undefined, WS_A, false), false);   // E2 의 누수 방어가 살아 있다
+});
+
 // ── 구조·배선: 두 목록 경로가 실제로 워크스페이스로 거른다(누가 필터를 떼면 red) ──────────
 
 function repoRoot(): string {
@@ -63,7 +95,8 @@ test("★ E6 이력 목록(/api/ui/v6/sessions)의 SQL 이 gw_session_map 으로
   // listSessionsForOwner 가 gw_session_map 을 술어로 쓰고, 맵 부재를 primary 로 귀속(COALESCE … SINGLE_TENANT_ID)한다.
   assert.match(src, /gw_session_map[\s\S]{0,240}COALESCE|COALESCE[\s\S]{0,240}gw_session_map/,
     "listSessionsForOwner 에 gw_session_map 워크스페이스 필터가 없다 — owner 로만 걸러 개인 ws 에 박스 세션이 샌다");
-  assert.match(src, /SINGLE_TENANT_ID/, "맵 부재 시 primary 귀속(SINGLE_TENANT_ID)이 없다");
+  //  ⚠ 귀속값은 **상수가 아니라 헬퍼**여야 한다(E12) — 매니지드에선 primary 로 접으면 전량 사라진다.
+  assert.match(src, /defaultWorkspaceId\(/, "맵 부재 시 귀속을 배포 모드 헬퍼(defaultWorkspaceId)로 정하지 않는다");
 });
 
 test("★ E7 라이브 목록(/api/ui/terminal/sessions)이 sessionInWorkspace 로 거른다", () => {
@@ -105,4 +138,68 @@ test("E10 워크스페이스 레코드를 돌려주는 쪽은 INNER 가 맞다 �
   const sql = fn.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
   assert.match(sql, /JOIN gw_workspace/, "레코드가 필요한 자리라 행이 없으면 줄 것이 없다");
   assert.ok(!/LEFT JOIN gw_workspace/.test(sql), "이쪽까지 LEFT 로 바꾸면 null 필드의 가짜 워크스페이스가 나간다");
+});
+
+// ── #3579 — 2026-08-28 에 완결됐다가 **커밋되지 못한 채** 사라진 세 조각 ─────────────────────
+//  그날의 고침(지식 managed-session-list-missing-workspace-map-2179)은 회귀 테스트까지 green 이었는데
+//  git 에는 한 줄도 안 남았다(전 브랜치 `git log -S defaultWorkspaceId` = 0건). 그래서 «부재의 기본값» 은
+//  #3564 가 모르고 다시 고쳤고(sessionInWorkspace), 아래 셋은 **오늘까지 깨진 채**였다.
+//  잴 자가 함께 사라지면 아무도 모른다 — 그래서 이 셋을 구조 단언으로 박는다.
+
+test("M4 «부재의 기본값» 은 배포 모드가 정한다 — SQL·JS 가 이 한 헬퍼를 공유한다", () => {
+  //  이 값이 두 벌로 갈리면 라이브 목록과 이력 목록이 서로 다른 세션 집합을 보여 준다(실측: 이력만 0건).
+  assert.equal(defaultWorkspaceId(TENANT, true), TENANT, "매니지드에선 «모름» 이 곧 이 워크스페이스다");
+  assert.equal(defaultWorkspaceId(WS_A, false), PRIMARY, "셀프호스트에선 «모름» 이 primary(박스)다");
+  assert.equal(defaultWorkspaceId(PRIMARY, false), PRIMARY);
+  //  sessionInWorkspace 가 정말 이 헬퍼와 같은 답을 내는가(둘이 갈리면 여기서 red).
+  for (const [cur, managed] of [[TENANT, true], [WS_A, false], [PRIMARY, false]] as [string, boolean][]) {
+    assert.equal(sessionInWorkspace(undefined, cur, managed), defaultWorkspaceId(cur, managed) === cur,
+      `sessionInWorkspace 와 defaultWorkspaceId 가 갈렸다 (cur=${cur}, managed=${managed})`);
+  }
+});
+
+test("★ S1 세션을 **만드는 자리마다** 소속 기록이 붙는다 — 한 곳만 빠져도 그 세션은 영구 실종된다", () => {
+  //  ⚠ 호출 **수**를 세지 않는다. 수는 생성 자리가 늘면 조용히 맞아 버린다(6↔6 이면 통과하는데 새 7번째가
+  //   안 붙어도 모른다). 여기서 잠그는 명제는 «생성하는 자리마다 기록이 붙는가» 라는 **대칭**이다.
+  //  실측 2026-08-28·2026-09-07: 생성 6곳 중 복원 **박스(로컬)** 분기 한 곳만 기록이 없었다. 그 세션은
+  //   gw_session_map 행 없이 태어나 매니지드/registry 배포에서 목록에 영영 안 뜬다(= 복원했는데 못 엶).
+  //  #3626 — 생성 라우트(홈·프로젝트)의 자리는 세션 생성 관문(session-launch.ts)으로 옮겨 갔다. 핸드오프·복원은
+  //   routes.ts 에 남아 있다. 두 파일을 함께 본다 — 한 파일만 보면 옮겨 간 자리가 조용히 검사 밖으로 나간다.
+  const CREATES = /await (createSession|relayNodeOp<SessionInfo>)\(/;
+  const files = ["src/terminal/routes.ts", "src/terminal/session-launch.ts"];
+  const found = files.flatMap((rel) => {
+    const lines = readSrc(rel).split("\n");
+    return lines.map((l, i) => (CREATES.test(l) ? { rel, i, lines } : null)).filter((x): x is { rel: string; i: number; lines: string[] } => x !== null);
+  });
+  //  정규식이 낡으면(생성 형태가 바뀌면) 이 테스트는 조용히 아무것도 안 지킨다 — 하한을 같이 박는다.
+  assert.ok(found.length >= 6, `세션 생성 자리를 ${found.length}곳만 찾았다 — 생성 형태가 바뀌었으면 위 정규식을 같이 고쳐라`);
+  const missing = found
+    .filter(({ i, lines }) => !lines.slice(i, i + 40).some((l) => l.includes("recordSessionTenant(")))
+    .map(({ rel, i, lines }) => `${rel}:${i + 1}행: ${lines[i].trim().slice(0, 90)}`);
+  assert.deepEqual(missing, [], `세션을 만들고 소속을 안 새기는 자리가 있다(그 세션은 목록에서 사라진다):\n  ${missing.join("\n  ")}`);
+});
+
+test("★ E11 이력 목록 SQL 도 gw_workspace 가 비어도 매핑을 살린다 — E9 의 SQL 쌍둥이", () => {
+  //  E9 가 sessionWorkspaceIds 를 LEFT 로 고칠 때 **이 SQL 은 INNER 로 남았다.** 같은 결함의 두 자리를
+  //   따로 고치면 반쪽만 낫는다 — 매니지드는 gw_workspace 0행이라 서브쿼리가 항상 NULL 이 되고,
+  //   /api/ui/v6/sessions 가 **항상 0건**이었다(#3564 의 백필 869건으로도 안 풀린다: INNER 에서 탈락한다).
+  const src = readSrc("src/v6/session-log-store.ts");
+  const fn = src.slice(src.indexOf("export async function listSessionsForOwner("));
+  const sql = fn.split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("--")).join("\n");
+  assert.match(sql, /LEFT JOIN gw_workspace/,
+    "INNER JOIN 이면 gw_workspace 가 빈 배포(매니지드)에서 이력 목록이 통째로 0건이 된다");
+  assert.match(sql, /w\.id IS NULL OR w\.state = 'active'/,
+    "행이 없으면 '모름'이라 매핑을 그대로 쓰고, 있는데 보관됐을 때만 뺀다(sessionWorkspaceIds 와 같은 규칙)");
+});
+
+test("★ E12 이력 목록 SQL 의 «부재» 귀속은 상수가 아니라 공유 헬퍼다", () => {
+  //  상수(SINGLE_TENANT_ID)로 굳히면 매니지드에서 현재 ws(테넌트 uuid)와 절대 안 맞아 전량 탈락한다.
+  //  JS 필터(sessionInWorkspace)와 **같은 명제**를 써야 두 목록이 갈리지 않는다.
+  const src = readSrc("src/v6/session-log-store.ts");
+  const fn = src.slice(src.indexOf("export async function listSessionsForOwner("));
+  const body = fn.slice(0, fn.indexOf("\n}"));
+  assert.match(body, /defaultWorkspaceId\(workspaceId\)/,
+    "맵 부재 시 귀속값을 defaultWorkspaceId(workspaceId) 로 정하지 않는다 — 배포 모드를 못 본다");
+  assert.ok(!/SINGLE_TENANT_ID/.test(body),
+    "귀속값이 아직 상수(SINGLE_TENANT_ID)로 박혀 있다 — 매니지드에서 이력 목록이 0건이 된다");
 });

@@ -16,7 +16,7 @@ interface AppState {
 }
 const state: AppState = {
   me: null,
-  knowledge: { space: 'business', category: '', injection: '', provenance: '', q: '' }, // 지식 탭(#/knowledge) 필터 상태(2분할 뷰)
+  knowledge: { category: '', injection: '', provenance: '', q: '' }, // 지식 탭(#/knowledge) 필터 상태
   reviewOrderBy: 'updated_at', // 검토 피드 정렬(기본 최신순)
   admin: { data: null, sel: null, tab: {}, memberSel: null, memberEditing: false, memberSearch: '', memorySel: null, repoSel: null, navCollapsed: false }, // 관리 페이지 상태 (tab = 섹션별 서브탭 선택, #837)
   start: { mode: 'web', os: 'mac', token: null }, // '시작하기 > 설치' 온보딩 상태(쓰는곳 web|local + 선택 OS + 자가발급 토큰 1회 캐시)

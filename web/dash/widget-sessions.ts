@@ -111,7 +111,14 @@ async function sessKillSelected(ctx: SessCtx) {
   const lines = dead ? [dead + '개는 이미 꺼진 세션이라 목록에서만 지워집니다.'] : [];
   if (!await confirmSessionEnd({ title: ids.length + '개 세션을 종료할까요?', lines, sessions: items })) return;
   let failed = 0;
-  for (const id of ids) { try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(id), { method: 'DELETE' }); } catch { failed++; } }
+  // #2636 — **노드 세션은 좌표(?node=)를 실어 보낸다.** 이 목록엔 노드 세션이 병합돼 오는데(터미널 세션 API),
+  //  종전엔 id 만 보내 게이트웨이가 자기 tmux 로 생사를 판정했다 — 그 세션을 본 적 없는 tmux 라 언제나 「없다」가
+  //  나와, 노드에 묻지도 않고 행만 지우고 «종료했어요» 로 끝났다(세션은 그 컴퓨터에 그대로 남는다).
+  //  서버도 좌표를 되찾도록 고쳤지만(sessionRelayNodeId), 아는 쪽이 말해 주는 것이 먼저다 — 다른 화면과 같은 규약.
+  for (const id of ids) {
+    const nd = ctx.sessions.find((s) => s.id === id)?.node?.id;
+    try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(id) + (nd ? '?node=' + encodeURIComponent(nd) : ''), { method: 'DELETE' }); } catch { failed++; }
+  }
   const done = ids.length - failed;
   toast(failed ? (done + '개 종료 · ' + failed + '건 실패') : await endedToast(done, items), !!failed);
   ctx.selected.clear(); await ctx.reloadSessions();

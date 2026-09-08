@@ -18,7 +18,9 @@ import { hasBrowserSurface } from './browser-surface.js';
 import { EMBEDDED } from './embed.js';
 import { normWebUrl } from './web-url.js';
 import { filesPart } from './panes-files.js';
-import { NOISE_RE, TRASH_DIR, authHeaders, kindOf, knTitle, pnIcon, pnNote } from './panes-kit.js';
+import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, authHeaders, kindOf, knTitle, pnIcon, pnNote } from './panes-kit.js';
+import { createPreviewKit } from './file-preview.js';
+import type { TabKey } from '../lib/tab-key.js';
 import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
 import { composerAttach } from './compose-attach.js';
 import { createRunPicker } from './run-picker.js';
@@ -77,6 +79,15 @@ export interface PartCtx {
    *  갈아 끼워지고 저장값에도 두 세션 키가 모두 박혔다). 값은 세션마다 갈라 두었는데 신호를 문서 전체로
    *  뿌리면 그 격리가 그 자리에서 무너진다. */
   paneRoot: () => HTMLElement;
+  // ── 탭 = 부품의 **인스턴스**(#762, 원준 2026-09-05 "뷰어는 여러 탭이 뜨게") ─────────────
+  /** 이 부품이 앉은 탭의 열쇠('editor' · 'editor#2'…). 같은 종류가 여럿 떠도 서로를 가릴 수 있다. */
+  slot: TabKey;
+  /** 그 세션 **그리고 이 탭**에만 딸리는 값의 저장 열쇠 — 첫 인스턴스는 memKey() 와 **같다**(옛 기억 보존).
+   *  두 뷰어가 각자 다른 파일을 펴 두려면 기억도 탭마다 갈라져야 한다. */
+  slotKey: () => string;
+  /** 탭에 걸릴 이름을 부품이 정한다(null = 부품 기본 이름). 뷰어는 파일 이름, 웹 칸은 사이트 이름을 건다 —
+   *  같은 종류가 둘 이상 뜨는 순간 「뷰어」 「뷰어」 로는 어느 것이 무엇인지 알 수 없다. */
+  setTabTitle?: (t: string | null) => void;
 }
 
 export interface Part {
@@ -89,21 +100,26 @@ export interface Part {
   currentSession?: () => string | null;
 }
 
-export interface PartDef { type: PartType; name: string; icon: string; hint: string }
+export interface PartDef {
+  type: PartType; name: string; icon: string; hint: string;
+  /** 이 칸에 **여럿** 띄울 수 있나(#762). 셸은 이 값만 보고 [+] 에 「하나 더」를 낸다 —
+   *  부품 이름이 셸에 박히지 않게(뷰어만 예외로 두지 않으려고 만든 자리다). */
+  multi?: boolean;
+}
 
 /** 칸에 넣을 수 있는 것들 — [+] 고르기 목록의 정본. */
 export const PART_DEFS: PartDef[] = [
   { type: 'sessions', name: '세션', icon: 'chat', hint: '이 프로젝트에서 도는 AI 세션들과 바로 말하는 자리입니다.' },
-  { type: 'files', name: '자료', icon: 'folder', hint: '이 프로젝트의 모든 세션이 참고하는 자료입니다. 끌어다 놓거나 붙여넣으면 올라갑니다.' },
+  { type: 'files', name: '자료', icon: 'folder', multi: true, hint: '이 프로젝트의 모든 세션이 참고하는 자료입니다. 끌어다 놓거나 붙여넣으면 올라갑니다.' },
   { type: 'knowledge', name: '지식', icon: 'doc', hint: '세션들이 쓰고 고치는 글입니다. 워크스페이스 전체가 함께 봐요.' },
   { type: 'tasks', name: '할 일', icon: 'task', hint: '태스크 목록입니다. 눌러서 끝냈다고 표시합니다.' },
   { type: 'timeline', name: '타임라인', icon: 'clock', hint: '이 프로젝트에 남은 활동 기록입니다.' },
   { type: 'liv', name: '리브', icon: 'spark', hint: '이 프로젝트를 아는 리브와 대화합니다.' },
   // 이름을 '보관함'이 아니라 **보관한 세션**으로 둔다(원준 2026-08-20) — 무엇을 보관하는지가 이름에서 바로 읽혀야 한다.
   { type: 'archive', name: '보관한 세션', icon: 'box', hint: '닫아 둔 AI 세션입니다. 대화 그대로 다시 살릴 수 있어요.' },
-  { type: 'web', name: '웹', icon: 'globe', hint: '주소를 넣으면 이 칸에서 그 페이지를 봅니다. 문서·레퍼런스를 옆에 띄워 두세요.' },
+  { type: 'web', name: '웹', icon: 'globe', multi: true, hint: '주소를 넣으면 이 칸에서 그 페이지를 봅니다. 문서·레퍼런스를 옆에 띄워 두세요.' },
   { type: 'preview', name: '미리보기', icon: 'globe', hint: '띄워 둔 화면 목록입니다. 누르면 웹 칸에 그 화면이 실립니다.' },
-  { type: 'editor', name: '뷰어', icon: 'eye', hint: '자료의 파일을 골라 이 칸에서 봅니다 — 문서·그림·PDF·시안·영상.' },
+  { type: 'editor', name: '뷰어', icon: 'eye', multi: true, hint: '자료의 파일을 골라 이 칸에서 봅니다 — 문서·그림·PDF·시안·영상. 여러 개를 띄워 나란히 볼 수 있어요.' },
   { type: 'apps', name: '앱', icon: 'grid', hint: '설치된 앱을 고르면 각 앱이 상단의 자기 탭에서 열립니다.' },
 ];
 
@@ -610,10 +626,112 @@ export function openInWebPart(ctx: PartCtx, url: string): void {
   if (!u) return;
   try {
     const m = JSON.parse(localStorage.getItem(WEB_URL_KEY) || '{}') || {};
-    m[ctx.memKey()] = u;
+    m[ctx.slotKey()] = u;
     if (!EMBEDDED) localStorage.setItem(WEB_URL_KEY, JSON.stringify(m));
   } catch (_) { /* 저장이 막혀도 아래 알림으로 지금 떠 있는 칸은 바뀐다 */ }
   ctx.paneRoot().dispatchEvent(new CustomEvent(WEB_OPEN_EVT, { detail: { url: u } }));
+}
+
+// ══ 배율 — 웹 칸과 뷰어가 **같은 부품**을 쓴다 (#762, 원준 2026-09-04) ═══════════
+//  두 가지를 한꺼번에 고친다.
+//  ① **맞춤이 칸 폭을 따라가야 한다** — "곁칸 가로 사이즈를 조절하면 그 폭에 맞게 비율이 확대·축소돼야
+//   하는데 배율이 그대로다". 맞춤은 고정된 숫자가 아니라 **칸과 내용물의 관계**라, 칸 폭이 바뀌면 다시 잰다.
+//  ② **단추가 보여야 한다** — "확대 축소하는 버튼이랑 위치랑 안 느껴져". 종전엔 주소줄에 28px 짜리
+//   [−][배율][+] 셋이 뒤로·앞으로·다시와 **똑같은 모양으로** 끼어 있어 배율인지 읽히지 않았고, 뷰어에는
+//   아예 없었다. 무대 오른쪽 아래에 떠 있는 알약 하나로 모은다 — 지도·PDF 뷰어가 쓰는 그 자리라
+//   찾지 않아도 눈에 걸리고, 두 칸이 **같은 자리·같은 모양**이라 한 번 배우면 둘 다 안다.
+const ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+type ZoomOpts = {
+  /** 배율을 재는 자 — 지금 칸의 안쪽 폭. */
+  stage: HTMLElement;
+  /** 담긴 것의 **제 크기**(가로 px). 0 이면 맞춤을 셀 수 없다(=100%, 글처럼 스스로 흐르는 것). */
+  baseW: () => number;
+  /** 잰 배율을 실제로 입힌다. */
+  paint: (z: number) => void;
+  /** 배율은 **세션마다** 따로 기억한다 — 곁칸 부품은 그 세션의 것이다(#1819). */
+  keyOf: () => string;
+  /** 맞춤의 **하한**. 웹 칸은 0.25 아래로 내려가면 글자를 못 읽어 거기서 멈추지만(대신 가로로 구른다),
+   *  그림·PDF 는 '칸에 담기는 것'이 목적이라 하한이 곧 넘침이 된다 — 뷰어는 훨씬 낮게 준다. */
+  minFit?: number;
+};
+type Zoom = { el: HTMLElement; apply: () => void; isFit: () => boolean; destroy: () => void };
+function makeZoom(o: ZoomOpts): Zoom {
+  const zooms = new Map<string, number | null>();      // null = 맞춤(칸 폭에 맞춰 자동)
+  const less = el('button', { class: 'pn-zoom-b', type: 'button', 'aria-label': '축소', title: '축소합니다 (⌘−)', text: '−' }) as HTMLButtonElement;
+  const more = el('button', { class: 'pn-zoom-b', type: 'button', 'aria-label': '확대', title: '확대합니다 (⌘+)', text: '+' }) as HTMLButtonElement;
+  const lbl = el('button', { class: 'pn-zoom-lbl', type: 'button' }) as HTMLButtonElement;
+  const box = el('div', { class: 'pn-zoom', role: 'group', 'aria-label': '배율' }, less, lbl, more);
+  /** 맞춤 배율 — 칸 폭 ÷ 제 크기. 1 을 넘겨 키우지는 않는다(원래보다 크게 만들면 되레 답답하다). */
+  const fitZ = (): number => {
+    const b = o.baseW();
+    const w = o.stage.clientWidth;
+    if (!(b > 0) || !(w > 0)) return 1;
+    return Math.max(o.minFit ?? ZOOM_STEPS[0], Math.min(1, Math.round((w / b) * 1000) / 1000));
+  };
+  const eff = (): number => { const z = zooms.get(o.keyOf()); return z != null ? z : fitZ(); };
+  const isFit = (): boolean => zooms.get(o.keyOf()) == null;
+  const apply = (): void => {
+    const fit = isFit();
+    const z = eff();
+    box.classList.toggle('is-fit', fit);
+    lbl.textContent = (fit ? '맞춤 ' : '') + Math.round(z * 100) + '%';
+    lbl.title = fit
+      ? '칸 폭에 맞춰 자동으로 맞춥니다 — 누르면 100% 로 고정합니다.'
+      : '누르면 다시 칸 폭에 맞춥니다 (⌘0).';
+    less.disabled = z <= ZOOM_STEPS[0] + 0.001;
+    more.disabled = z >= ZOOM_STEPS[ZOOM_STEPS.length - 1] - 0.001;
+    o.paint(z);
+  };
+  const set = (z: number | null): void => { zooms.set(o.keyOf(), z); apply(); };
+  const step = (d: -1 | 1): void => {
+    const cur = eff();
+    const i = ZOOM_STEPS.findIndex((v) => (d > 0 ? v > cur + 0.001 : v >= cur - 0.001));
+    set(d > 0
+      ? (i < 0 ? ZOOM_STEPS[ZOOM_STEPS.length - 1] : ZOOM_STEPS[i])
+      : (i <= 0 ? ZOOM_STEPS[0] : ZOOM_STEPS[i - 1]));
+  };
+  less.onclick = () => step(-1);
+  more.onclick = () => step(1);
+  //  가운데를 누르면 맞춤 ↔ 100% 를 오간다(브라우저에서 배율 숫자를 눌러 되돌리는 관용 그대로).
+  lbl.onclick = () => set(isFit() ? 1 : null);
+  // ★ 칸 폭이 바뀌면(경계 끌기·곁칸 여닫기·창 크기) 맞춤을 **다시 잰다**.
+  //  ⚠ 배율을 입히면 무대 안 크기가 따라 바뀌어 관찰자가 곧바로 다시 불릴 수 있다(세로 막대가 생겼다 사라지는
+  //   경우) — 폭이 **실제로 달라졌을 때만** 다시 재서 되먹임을 끊는다.
+  let lastW = -1;
+  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => {
+    const w = o.stage.clientWidth;
+    if (w === lastW) return;
+    lastW = w;
+    if (isFit()) apply();
+  }) : null;
+  ro?.observe(o.stage);
+  // 단축키 — 마지막으로 만진 칸이 여기일 때만(웹 칸의 ⌘R 과 같은 규칙).
+  //  ⚠ **⌘+ 는 자판에 따라 ⇧ 를 함께 누른다(⌘⇧=).** ⇧ 를 먼저 걸러 내면 확대가 영영 안 먹는다.
+  let mine = false;
+  const paneOf = (): HTMLElement => (o.stage.closest('.pn-pane') as HTMLElement | null) || o.stage;
+  const mark = (e: Event): void => { const t = e.target; mine = t instanceof Node && paneOf().contains(t); };
+  const onKey = (e: KeyboardEvent): void => {
+    if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+    if (!mine || box.hidden || !box.offsetParent) return;          // 다른 칸을 보고 있거나 이 칸이 접혀 있으면 내 차례가 아니다
+    const k = String(e.key);
+    if (k === '+' || k === '=' || e.code === 'Equal') { e.preventDefault(); step(1); return; }
+    if (k === '-' || k === '_' || e.code === 'Minus') { e.preventDefault(); step(-1); return; }
+    if (k === '0' || e.code === 'Digit0') { e.preventDefault(); set(null); }
+  };
+  document.addEventListener('pointerdown', mark, true);
+  document.addEventListener('focusin', mark, true);
+  window.addEventListener('keydown', onKey, true);
+  return {
+    el: box,
+    apply,
+    isFit,
+    destroy: () => {
+      ro?.disconnect();
+      document.removeEventListener('pointerdown', mark, true);
+      document.removeEventListener('focusin', mark, true);
+      window.removeEventListener('keydown', onKey, true);
+    },
+  };
 }
 
 function webPart(ctx: PartCtx): Part {
@@ -623,15 +741,12 @@ function webPart(ctx: PartCtx): Part {
   //  ⚠ 아래쪽에 선언하면 adopt() 가 초기화 전에 읽어 TDZ 로 죽는다.
   let hiddenSince = 0;
   let asleep = '';                               // 재우기 전에 보던 주소('' = 깨어 있음)
-  // 배율 — 세션마다 따로(곁칸 부품은 그 세션의 것). null = **폭 맞춤**(칸 폭에 맞춰 자동).
-  const zooms = new Map<string, number | null>();
-  const ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
   //  폭 맞춤의 기준 폭 — 데스크톱 배치가 통째로 들어오는 폭이다. 이보다 좁은 칸에서는 그만큼 줄여서
   //  **가로가 잘리지 않게** 보여 준다(원준 2026-08-21: "곁칸 가로 폭을 인식해서 가로화면이 잘리지 않게").
   const FIT_BASE = 1280;
   const store = (): Record<string, string> => { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (_) { return {}; } };
   // 주소는 **세션마다** 따로 기억한다 — 옆 세션에서 열어 둔 페이지가 이 세션 칸에 뜨면 그건 남의 화면이다(원준 2026-08-20).
-  const keyOf = (): string => ctx.memKey();
+  const keyOf = (): string => ctx.slotKey();
   // 주소 정규화는 web-url.ts 한 곳에서 — 우리 오리진이면 ?embed=1 을 붙여 싣는다(표를 단 판은 탭·배치·주소를
   //  기억하지도 기억되지도 않는다. 안 붙이면 같은 사이트라 localStorage 를 공유해, 칸 안 라이블리가 바깥이
   //  보던 화면을 그대로 복제한다 — 실측 2026-08-21).
@@ -670,6 +785,8 @@ function webPart(ctx: PartCtx): Part {
   const load = (u: string, record: boolean): void => {
     asleep = '';                                 // 사람이 새 주소로 갔다 — 재우기 전 주소로 되돌릴 이유가 없어졌다
     input.value = u;
+    //  탭 이름 = 지금 보는 사이트(#762) — 웹 칸도 여럿 뜰 수 있으므로 「웹」 「웹」 이 되지 않게.
+    try { ctx.setTabTitle?.(u ? new URL(u).host.replace(/^www\./, '') : null); } catch (_) { ctx.setTabTitle?.(null); }
     frame.setAttribute('src', u);
     if (record) pushTrail(u);
     syncNav();
@@ -725,14 +842,10 @@ function webPart(ctx: PartCtx): Part {
   const fwdBtn = el('button', { class: 'pn-web-btn ic', type: 'button', 'aria-label': '앞으로',
     title: live ? '뒤로 오기 전 화면으로 갑니다.' : '뒤로 오기 전에 보던 주소로 다시 갑니다.',
     onclick: () => step(1) }, pnIcon('chev', 'pn-i sm')) as HTMLButtonElement;
-  // 배율 조절 — [－][지금 배율][＋]. 가운데를 누르면 **폭 맞춤 ↔ 100%** 를 오간다(브라우저에서 배율을 눌러 되돌리는 관용).
   //  ⚠ [열기] 단추는 뺐다(원준 2026-08-21 재배치) — 주소칸에서 Enter 가 같은 일을 하고, 좁은 곁칸에서 그 자리는
   //   주소가 보이는 폭이 더 값지다. 밖으로 내보내는 [↗]는 그대로 둔다(그건 Enter 로 못 하는 일이다).
-  const zoomOut = el('button', { class: 'pn-web-btn ic', type: 'button', title: '축소합니다.', 'aria-label': '축소', onclick: () => stepZoom(-1) }) as HTMLButtonElement;
-  zoomOut.textContent = '−';
-  const zoomIn = el('button', { class: 'pn-web-btn ic', type: 'button', title: '확대합니다.', 'aria-label': '확대', onclick: () => stepZoom(1) }) as HTMLButtonElement;
-  zoomIn.textContent = '+';
-  const zoomLbl = el('button', { class: 'pn-web-btn zl', type: 'button', onclick: () => { setZoom(zooms.get(keyOf()) == null ? 1 : null); } }) as HTMLButtonElement;
+  //  배율 단추도 주소줄에서 뺐다(#762) — 무대 오른쪽 아래 알약으로 간다. 여기 있던 28px 짜리 셋은 옆
+  //   [뒤로][앞으로][다시]와 생김새가 같아 배율로 읽히지 않았고, 좁은 칸에서 주소칸을 먹기까지 했다.
   const stage = el('div', { class: 'pn-webstage' }, frame);
   root.append(
     el('div', { class: 'pn-web-bar' },
@@ -740,46 +853,27 @@ function webPart(ctx: PartCtx): Part {
         backBtn, fwdBtn,
         el('button', { class: 'pn-web-btn ic', type: 'button', title: '이 칸만 다시 불러옵니다 — ⌘R(윈도는 Ctrl+R)도 같습니다.', 'aria-label': '다시 불러오기', onclick: () => reload() }, pnIcon('undo', 'pn-i sm'))),
       input,
-      el('span', { class: 'pn-web-navs' }, zoomOut, zoomLbl, zoomIn),
       openTab),
     stage,
     live ? null : el('p', { class: 'pn-web-note pn-fine', text: '빈 화면인가요? 그 사이트가 창 안에 뜨는 걸 막은 거예요 — 오른쪽 ↗ 로 새 탭에서 여세요. 데스크톱 앱에서는 이 칸 안에 그대로 뜹니다.' }));
-  /** 지금 실제로 걸리는 배율 — 폭 맞춤이면 칸 폭에서 계산한다(1 을 넘겨 키우지는 않는다). */
-  function effZoom(): number {
-    const z = zooms.get(keyOf());
-    if (z != null) return z;
-    const w = stage.clientWidth || root.clientWidth || FIT_BASE;
-    return Math.max(0.25, Math.min(1, Math.round((w / FIT_BASE) * 100) / 100));
-  }
   /** 배율을 화면에 입힌다. 앱은 <webview> 의 진짜 배율, 웹은 프레임을 넓게 잡고 줄여 그린다.
    *  ⚠ 웹(iframe)에서 폭을 그대로 두고 축소만 하면 오른쪽에 빈 자리가 생긴다 — **논리 폭을 1/배율 로 키워야**
    *   사이트가 그만큼 넓은 화면인 줄 알고 데스크톱 배치를 펴고, 그게 칸 안에 통째로 들어온다. */
-  function applyZoom(): void {
-    const z = effZoom();
-    const fit = zooms.get(keyOf()) == null;
-    zoomLbl.textContent = fit ? '맞춤' : Math.round(z * 100) + '%';
-    zoomLbl.title = fit
-      ? '칸 폭에 맞춰 자동으로 줄입니다 — 누르면 100% 로 돌아갑니다.'
-      : Math.round(z * 100) + '% 로 보고 있습니다 — 누르면 칸 폭에 맞춥니다.';
-    zoomOut.disabled = z <= ZOOM_STEPS[0] + 0.001;
-    zoomIn.disabled = z >= ZOOM_STEPS[ZOOM_STEPS.length - 1] - 0.001;
-    if (live) {
-      try { (frame as any).setZoomFactor?.(z); } catch (_) { /* 아직 안 붙었다 — dom-ready 에서 다시 건다 */ }
-      frame.removeAttribute('style');
-      return;
-    }
-    const pct = (100 / z).toFixed(4) + '%';
-    frame.setAttribute('style', `width:${pct};height:${pct};transform:scale(${z});`);
-  }
-  function setZoom(z: number | null): void { zooms.set(keyOf(), z); applyZoom(); }
-  function stepZoom(d: -1 | 1): void {
-    const cur = effZoom();
-    const i = ZOOM_STEPS.findIndex((v) => (d > 0 ? v > cur + 0.001 : v >= cur - 0.001));
-    const next = d > 0
-      ? (i < 0 ? ZOOM_STEPS[ZOOM_STEPS.length - 1] : ZOOM_STEPS[i])
-      : (i <= 0 ? ZOOM_STEPS[0] : ZOOM_STEPS[i - 1]);
-    setZoom(next);
-  }
+  const zoom = makeZoom({
+    stage,
+    keyOf,
+    baseW: () => FIT_BASE,
+    paint: (z) => {
+      if (live) {
+        try { (frame as any).setZoomFactor?.(z); } catch (_) { /* 아직 안 붙었다 — dom-ready 에서 다시 건다 */ }
+        frame.removeAttribute('style');
+        return;
+      }
+      const pct = (100 / z).toFixed(4) + '%';
+      frame.setAttribute('style', `width:${pct};height:${pct};transform:scale(${z});`);
+    },
+  });
+  stage.append(zoom.el);
 
   /** 단추가 갈 수 있는지 — 갈 데가 없으면 끈다(눌러도 아무 일 없는 단추를 켜 두지 않는다). */
   function syncNav(): void {
@@ -813,12 +907,9 @@ function webPart(ctx: PartCtx): Part {
     syncNav();
   }
   adopt();
-  applyZoom();
-  // 칸 폭이 바뀌면(경계 끌기·곁칸 여닫기·창 크기) 폭 맞춤을 다시 잰다 — '맞춤'은 고정값이 아니라 관계다.
-  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => { if (zooms.get(keyOf()) == null) applyZoom(); }) : null;
-  ro?.observe(stage);
-  if (live) frame.addEventListener('dom-ready', () => applyZoom());
-  const offSess = ctx.onSession(() => { adopt(); applyZoom(); });
+  zoom.apply();
+  if (live) frame.addEventListener('dom-ready', () => zoom.apply());
+  const offSess = ctx.onSession(() => { adopt(); zoom.apply(); });
 
   // ── 안 보이면 재운다 (원준 2026-08-21 신고: "웹에 뭘 띄워 놓으면 그 다음부터 랙이 걸린다") ─────────
   //  프레임 안 페이지는 **칸을 안 보고 있어도 계속 돈다** — 타이머·폴링·애니메이션·영상이 그대로 살아서
@@ -877,7 +968,7 @@ function webPart(ctx: PartCtx): Part {
     tick: () => { if (visible()) { hiddenSince = 0; wake(); } },
     destroy: () => {
       offSess();
-      ro?.disconnect();
+      zoom.destroy();
       window.clearInterval(watch);
       evtHost.removeEventListener(WEB_OPEN_EVT, onOpen);
       document.removeEventListener('pointerdown', mark, true);
@@ -899,28 +990,105 @@ function webPart(ctx: PartCtx): Part {
 //  다시 돌아와야 했다. 올린 파일은 **자료와 같은 곳**(프로젝트 공유 폴더)에 그대로 저장된다 — 뷰어만의 사본이나
 //  보관함 같은 건 만들지 않는다. 그래서 올리는 즉시 자료 칸에도 뜨고, 이 프로젝트의 세션들도 곧바로 참고한다.
 //  올린 뒤엔 그 파일을 이 칸이 바로 펴 준다(올린 이유는 보려는 것이다).
-const VIEWER_EVT = 'pn-viewer-open';   // 자료 칸의 우클릭 ▸ [뷰어에서 보기] 가 **그 곁칸에 대고** 쏘는 신호(window 금지)
 type FlatFile = { path: string; size: number; mtime: number };   // 뷰어는 폴더를 다루지 않는다 — 평평한 매니페스트 한 줄
 function viewerPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-ed' });
-  const KEY = 'pn_ed_path';
+  const KEY = ED_PATH_KEY;
   const bar = el('div', { class: 'pn-ed-bar' });
   const body = el('div', { class: 'pn-ed-body' });
+  //  무대 — 펴 놓은 것이 서는 자리(넘치면 여기서 구른다). 배율 알약은 무대 **밖**(body)에 붙인다:
+  //  안에 두면 내용과 함께 굴러가 자리를 지키지 못한다.
+  const stage = el('div', { class: 'pn-ed-stage' });
+  body.append(stage);
   root.append(bar, body);
+  //  ★ 배율 (#762, 원준 2026-09-04) — 펴 놓은 것마다 '제 크기'가 다르다: 그림·영상은 제 픽셀, PDF 는
+  //   종이 한 장, 시안은 데스크톱 폭. 그 크기와 칸 폭의 비가 맞춤이고, **칸 폭이 바뀌면 다시 잰다**.
+  const PDF_BASE = 820;     // A4·레터 한 장의 가로(96dpi) — 이 폭이면 종이가 통째로 들어온다
+  const PAGE_BASE = 1280;   // 시안(HTML)은 데스크톱 배치가 펴지는 폭 — 웹 칸과 같은 기준
+  type Shown = { node: HTMLElement; mode: 'px' | 'scale'; baseW: () => number };
+  let shown: Shown | null = null;
+  const zoom = makeZoom({
+    stage,
+    keyOf: () => ctx.slotKey(),
+    baseW: () => (shown ? shown.baseW() : 0),
+    minFit: 0.05,   // 아주 큰 그림도 일단 칸에 담기게 — 자세히 볼 사람은 [+] 로 키운다
+    paint: (z) => {
+      const s2 = shown;
+      if (!s2) return;
+      if (s2.mode === 'px') {
+        //  그림·영상 — **가로를 정하면 세로는 따라온다**. 종전(object-fit: contain)은 칸의 **세로**에 걸려
+        //  가로를 넓혀도 크기가 그대로였다(원준 신고). 폭으로 재면 칸 폭에 정확히 비례한다.
+        //  ⚠ 올림이 아니라 **내림** — 맞춤에서 1px 이라도 넘치면 가로 막대가 생겨 '맞춤인데 넘친다'가 된다.
+        const b = s2.baseW();
+        s2.node.style.width = b > 0 ? Math.max(1, Math.floor(b * z)) + 'px' : '100%';
+        s2.node.style.height = 'auto';
+        return;
+      }
+      //  프레임·글 — 논리 폭을 1/배율 로 키우고 그만큼 줄여 그린다(웹 칸과 같은 방법). PDF 는 제 뷰어가
+      //  그 논리 폭에 종이를 맞추므로, 줄인 결과가 곧 '칸 폭에 맞춘 종이'다.
+      const pct = (100 / z).toFixed(4) + '%';
+      s2.node.style.width = pct;
+      if (s2.node instanceof HTMLIFrameElement) s2.node.style.height = pct;
+      s2.node.style.transform = z === 1 ? '' : 'scale(' + z + ')';
+    },
+  });
+  body.append(zoom.el);
+  /** 무대에 **배율이 걸리는 것**을 세운다 — 무엇을 세웠는지(제 크기·재는 법)를 배율이 알아야 한다. */
+  const show = (node: HTMLElement, mode: 'px' | 'scale', baseW: () => number): void => {
+    shown = { node, mode, baseW };
+    stage.classList.toggle('frame', node instanceof HTMLIFrameElement);
+    stage.classList.remove('list', 'edit');
+    stage.replaceChildren(node);
+    zoom.el.hidden = false;
+    zoom.apply();
+  };
+  /** 배율이 뜻 없는 것(목록·안내·오류)을 세운다 — 알약은 숨긴다(눌러도 아무 일 없는 단추를 켜 두지 않는다). */
+  const showPlain = (node: HTMLElement, isList = false): void => {
+    shown = null;
+    stage.classList.toggle('list', isList);
+    stage.classList.remove('frame', 'edit');
+    stage.replaceChildren(node);
+    zoom.el.hidden = true;
+  };
+  /** 글칸을 세운다 — 무대를 통째로 쓰고 제가 구른다(배율은 뜻이 없다: 글은 칸 폭에 맞춰 흐른다). */
+  const showEdit = (node: HTMLElement): void => {
+    shown = null;
+    stage.classList.remove('list', 'frame');
+    stage.classList.add('edit');
+    stage.replaceChildren(node);
+    zoom.el.hidden = true;
+  };
   let list: FlatFile[] = [];
   let path = '';
   let q = '';
+  //  살아 있는 미리보기(아래) — open() 이 읽으므로 **그보다 앞에** 선언한다(마운트 중 TDZ 사고의 재발 방지).
+  let shownStamp = '';          // 지금 그려 둔 파일의 도장(수정 시각:크기) — '' 이면 비교할 것이 없다(목록 화면·아직 여는 중)
+  let checking = false;
+  //  ── 고치기 (#762, 원준 2026-09-05: "뷰어 안에서 편집 버튼 누르면 편집도 가능하게") ────────────
+  //   보는 화면이 곧 고치는 화면이다 — 시안 한 줄 고치자고 자료에서 내려받아 다른 앱에서 열고 다시 올릴 일이 아니다.
+  //   글(md·txt·csv·코드)과 시안(html)만 연다. 그림·PDF·영상은 브라우저가 고칠 수 있는 물건이 아니다.
+  //  ⚠ **잘린 글은 절대 저장하지 않는다.** 보기(open)는 400KB 에서 잘라 그리는데 그 버퍼를 저장하면 뒷부분이
+  //   통째로 날아간다 — 그래서 고치기는 원문을 **따로 다시 받고**, 이 상한을 넘으면 아예 열지 않는다.
+  const EDIT_MAX = 1_000_000;
+  const canEdit = (p2: string): boolean => { const k = kindOf(p2).kind; return k === 'text' || k === 'page'; };
+  //  mark = **막대에 지금 그려 둔** 저장 상태. 이 값을 안 두고 «바뀌었나»만 보면, 저장한 뒤 다시 고칠 때
+  //   점이 안 켜진다(그 자리가 이미 '고친 상태'였으므로 전환이 없다 — dev 실화면에서 잡은 것).
+  let ed: { ta: HTMLTextAreaElement; saved: string; stamp: string; mark: boolean } | null = null;
+  const dirty = (): boolean => !!ed && ed.ta.value !== ed.saved;
   //  덮어쓰기 판정에 쓰는 **실제로 있는 것 전부**(list 는 휴지통·잡동사니를 걸러 낸 화면용이라 이름 자리를 놓친다).
   let taken = new Set<string>();
   const urls: string[] = [];
   const fileUrl = (p2: string): string => apiUrl('/api/ui/v6/projects/' + ctx.id + '/file?path=' + encodeURIComponent(p2));
+  //  목록에도 **미리보기**를 세운다(#762, 원준 2026-09-04 "뷰어도 미리보기 필요함") — 자료 칸과 같은 기계다.
+  //  아이콘만 스무 줄이면 "그 파일이 어느 거였는지" 를 이름으로만 골라야 한다(자료 칸을 격자로 바꾼 것과 같은 이유).
+  const pv = createPreviewKit({ fileUrl, dead: () => ctx.dead() });
   // 무엇을 열어 두었나도 **세션마다** 따로 — 자료(파일 자체)는 프로젝트 공용이지만, '내가 지금 뭘 펴 놨나'는 내 세션의 것이다.
   const remember = (p2: string): void => {
     if (EMBEDDED) return;   // 끼워 넣은 판 — 바깥 사람이 펴 둔 파일을 덮어쓰지 않는다
-    try { const m = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; m[ctx.memKey()] = p2; localStorage.setItem(KEY, JSON.stringify(m)); } catch (_) { /* noop */ }
+    try { const m = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; m[ctx.slotKey()] = p2; localStorage.setItem(KEY, JSON.stringify(m)); } catch (_) { /* noop */ }
   };
   const remembered = (): string => {
-    try { return (JSON.parse(localStorage.getItem(KEY) || '{}') || {})[ctx.memKey()] || ''; } catch (_) { return ''; }
+    try { return (JSON.parse(localStorage.getItem(KEY) || '{}') || {})[ctx.slotKey()] || ''; } catch (_) { return ''; }
   };
 
   async function loadList(): Promise<void> {
@@ -969,21 +1137,129 @@ function viewerPart(ctx: PartCtx): Part {
     await loadList();
     // 올린 이유는 **보려고**다 — 방금 올라간 것 중 첫 파일을 그 자리에서 편다(여럿이면 목록 맨 위에 모여 있다).
     const first = r.ok ? items.find((u) => list.some((f) => f.path === u.rel)) : null;
-    if (first) { void open(first.rel); return; }
+    if (first) { void go(first.rel); return; }
     if (!path) paintPicker();
     paintBar();
   }
 
   function paintBar(): void {
+    //  탭 이름은 **펴 둔 파일**이다(#762) — 뷰어가 둘 이상 뜨면 「뷰어」 「뷰어」 로는 어느 것이 무엇인지 모른다.
+    //   목록 화면(펴 둔 것 없음)이면 부품 기본 이름으로 돌아간다.
+    ctx.setTabTitle?.(path ? base(path) : null);
     if (!path) {
       bar.replaceChildren(upBtn(true), el('span', { class: 'pn-fine', text: list.length ? list.length + '개 · 최근 먼저' : '' }));
       return;
     }
+    //  고치는 중 — 막대도 그 일만 말한다(다시 불러오기·올리기·내려받기는 지금 할 일이 아니다).
+    //   [저장]은 오른쪽 끝 파란 단추 하나, 왼쪽은 돌아가는 길. 저장 안 한 글이 있으면 이름 옆에 점이 뜬다.
+    if (ed) {
+      ed.mark = dirty();   // 막대가 곧 정본이다 — 아래 입력 감시가 이 값과 견준다
+      bar.replaceChildren(
+        el('button', { class: 'pn-web-btn', type: 'button', text: '← 보기', title: '고치기를 끝내고 보던 화면으로 돌아갑니다',
+          onclick: () => { void endEdit(); } }),
+        el('b', { class: 'pn-ed-name ell', text: base(path), title: path }),
+        el('span', { class: 'pn-fine' + (dirty() ? ' warn' : ''), text: dirty() ? '● 저장 안 함' : '저장됨' }),
+        el('button', { class: 'pn-web-btn pri', type: 'button', text: '저장', title: '자료의 원본에 씁니다 (⌘S)',
+          onclick: () => { void save(); } }));
+      return;
+    }
     bar.replaceChildren(
-      el('button', { class: 'pn-web-btn', type: 'button', text: '← 자료', title: '파일 목록으로 돌아갑니다', onclick: () => void open('') }),
+      el('button', { class: 'pn-web-btn', type: 'button', text: '← 자료', title: '파일 목록으로 돌아갑니다', onclick: () => void go('') }),
       el('b', { class: 'pn-ed-name ell', text: base(path), title: path }),
+      //  고치기(#762, 원준 2026-09-05) — 브라우저가 고칠 수 있는 것(글·시안)에만 선다. 그림·PDF·영상엔 안 뜬다.
+      ...(canEdit(path) ? [el('button', { class: 'pn-web-btn ic', type: 'button', title: '이 파일을 고칩니다 — 저장하면 자료의 원본이 바뀝니다',
+        'aria-label': '고치기', onclick: () => { void beginEdit(); } }, pnIcon('pencil', 'pn-i sm'))] : []),
+      //  새로고침(#762, 원준 2026-09-04) — 같은 파일을 **다시 받아** 편다(세션이 방금 고친 시안·PDF 를 그 자리에서 본다).
+      //  배율은 그대로다(세션마다 기억하는 값이라 다시 펴도 안 바뀐다). 웹 칸의 ↺ 와 같은 아이콘·같은 자리.
+      el('button', { class: 'pn-web-btn ic', type: 'button', title: '이 파일을 다시 불러옵니다', 'aria-label': '다시 불러오기',
+        onclick: () => { void loadList().then(() => open(path, true, true)); } }, pnIcon('undo', 'pn-i sm')),
       upBtn(false),
       el('a', { class: 'pn-web-btn', href: fileUrl(path) + '&download=1', download: base(path), title: '내려받기' }, pnIcon('drop', 'pn-i sm')));
+  }
+
+  // ── 고치기 ────────────────────────────────────────────────────────────────────
+  /** 지금 서버에 있는 파일의 도장. 못 물으면 '' — 모를 때는 충돌을 **주장하지 않는다**(억지로 막지 않는다). */
+  const stampNow = async (): Promise<string> => {
+    try {
+      const r = await fetch(fileUrl(path), { method: 'HEAD', headers: authHeaders(), cache: 'no-store' });
+      const m = r.ok ? r.headers.get('x-file-mtime') : null;
+      return m ? m + ':' + (r.headers.get('x-file-size') || '') : '';
+    } catch (_) { return ''; }
+  };
+
+  /** 보던 파일을 글칸으로 바꾼다 — 원문을 **다시 받아서**(잘린 화면 버퍼가 아니라) 채운다. */
+  async function beginEdit(): Promise<void> {
+    if (!path || ed || !canEdit(path)) return;
+    const r = await fetch(fileUrl(path), { headers: authHeaders(), cache: 'no-store' }).catch(() => null);
+    if (!r || !r.ok) { toast('파일을 읽지 못해 고치기를 열 수 없어요.', true); return; }
+    const txt = await r.text();
+    if (txt.length > EDIT_MAX) {
+      toast(`너무 큰 파일이라 여기서는 못 고쳐요(${fmtSize(txt.length)}) — 내려받아 고친 뒤 다시 올려 주세요.`, true);
+      return;
+    }
+    const ta = el('textarea', { class: 'pn-ed-ta', spellcheck: 'false', 'aria-label': base(path) + ' 고치기' }) as HTMLTextAreaElement;
+    ta.value = txt;
+    //  글자를 칠 때마다 막대의 «저장 안 함» 점이 켜지고 꺼진다 — 지금 상태를 사람이 늘 볼 수 있게.
+    //  ⚠ 견주는 상대는 **막대에 그려 둔 값**(ed.mark)이다 — 저장이 그 값을 되돌리므로 저장 뒤 첫 타건에서 다시 켜진다.
+    ta.addEventListener('input', () => { if (ed && dirty() !== ed.mark) paintBar(); });
+    //  ⌘S / Ctrl+S — 글칸 안에서 저장. 브라우저의 '페이지 저장'을 가로챈다(여기선 그게 사람의 뜻이다).
+    ta.addEventListener('keydown', (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) { e.preventDefault(); void save(); }
+    });
+    ed = { ta, saved: txt, mark: false,
+      stamp: (r.headers.get('x-file-mtime') ? r.headers.get('x-file-mtime') + ':' + (r.headers.get('x-file-size') || '') : '') || await stampNow() };
+    shownStamp = '';   // 고치는 동안은 살아 있는 미리보기를 세운다(내가 쓰는 파일을 내가 다시 열 이유가 없다)
+    showEdit(ta);
+    paintBar();
+    ta.focus();
+  }
+
+  /** 자료의 원본에 쓴다. 그 사이 남이(세션이) 같은 파일을 고쳤으면 **먼저 물어본다**. */
+  async function save(): Promise<void> {
+    if (!ed) return;
+    const p2 = path;
+    const text = ed.ta.value;
+    //  자료는 이 프로젝트의 모든 세션이 읽는 공용물이다 — 올리기가 덮어쓰기를 묻는 것과 같은 이유로 여기서도 묻는다.
+    //  (도장을 못 구했으면 묻지 않는다 — 모르는 것을 충돌이라고 우기면 저장이 영영 막힌다.)
+    const cur = await stampNow();
+    if (cur && ed.stamp && cur !== ed.stamp && !(await confirmDialog({
+      title: `「${base(p2)}」가 그 사이 바뀌었어요`,
+      message: '고치는 동안 다른 곳(세션이나 다른 사람)에서 이 파일이 바뀌었습니다. 덮어쓰면 그 수정은 사라집니다.',
+      confirmText: '덮어쓰기', danger: true,
+    }))) return;
+    const r = await fetch(fileUrl(p2), { method: 'PUT', headers: authHeaders(), body: text }).catch(() => null);
+    if (ctx.dead() || !ed || path !== p2) return;
+    if (!r || !r.ok) { toast('저장하지 못했어요' + (r ? ` (${r.status})` : ''), true); return; }
+    const j: any = await r.json().catch(() => null);
+    ed.saved = text;
+    ed.stamp = j && j.mtime ? j.mtime + ':' + (j.size ?? '') : await stampNow();
+    toast('저장했어요');
+    paintBar();
+    void loadList();   // 크기·시각이 바뀌었다 — 목록과 8초 틱의 자가 비교가 새 값을 쓰게
+  }
+
+  /** 고치기를 끝내고 보던 화면으로. 저장 안 한 글이 있으면 **버릴 것인지 먼저 묻는다**. */
+  async function endEdit(): Promise<boolean> {
+    if (!ed) return true;
+    if (dirty() && !(await confirmDialog({
+      title: '고치던 내용을 버릴까요?',
+      message: '저장하지 않은 수정이 있어요. 버리면 되돌릴 수 없습니다.',
+      confirmText: '버리기', danger: true,
+    }))) return false;
+    ed = null;
+    if (path) await open(path, true, true);   // 방금 쓴 것이 그려진다(도장도 여기서 새로 잡힌다)
+    else paintPicker();
+    paintBar();
+    return true;
+  }
+
+  /** 사람이 **다른 것을 열려고 한다** — 고치는 중이면 먼저 물어보고 나서 연다. */
+  async function go(p2: string): Promise<void> {
+    if (ed) {
+      if (!(await endEdit())) return;
+      if (p2 === path) return;   // 같은 파일이면 endEdit 이 이미 그렸다
+    }
+    await open(p2);
   }
 
   /** 자료 목록 — 이 칸이 '무엇을 열까'를 묻는 화면. 검색 한 칸 + 행 목록(종류·크기·시각). */
@@ -1008,8 +1284,11 @@ function viewerPart(ctx: PartCtx): Part {
       }
       rows.replaceChildren(...hit.slice(0, 300).map((f) => {
         const k = kindOf(f.path);
-        return el('button', { class: 'pn-frow2', type: 'button', title: f.path, onclick: () => void open(f.path) },
-          el('span', { class: 'pn-fic sm ' + k.kind }, pnIcon(k.kind === 'img' || k.kind === 'video' ? 'img' : 'doc', 'pn-i')),
+        const ic = el('span', { class: 'pn-fic pv ' + k.kind, 'data-pv': f.path, 'data-pvk': k.kind, 'data-pvs': String(f.size || 0) },
+          pnIcon(k.kind === 'page' ? 'note' : k.kind === 'img' || k.kind === 'video' ? 'img' : 'doc', 'pn-i')) as HTMLElement;
+        if (k.kind !== 'file') pv.watch(ic, f.path, k.kind, f.size || 0);
+        return el('button', { class: 'pn-frow2 pv', type: 'button', title: f.path, onclick: () => void go(f.path) },
+          ic,
           el('b', { class: 'pn-fname1', text: base(f.path) }),
           el('span', { class: 'pn-fcol k', text: k.type }),
           el('span', { class: 'pn-fcol s', text: fmtSize(f.size || 0) }),
@@ -1017,58 +1296,86 @@ function viewerPart(ctx: PartCtx): Part {
       }));
     };
     search.addEventListener('input', () => { q = search.value; draw(); });
+    pv.reset();
     draw();
-    body.replaceChildren(el('div', { class: 'pn-ed-pick2' }, search, rows));
+    showPlain(el('div', { class: 'pn-ed-pick2' }, search, rows), true);
     window.setTimeout(() => { if (q) search.focus(); }, 0);
   }
 
-  async function open(p2: string): Promise<void> {
+  /** 파일을 편다. `fresh` 면 브라우저 캐시를 건너뛰고 **다시 받는다** — 안 그러면 방금 바뀐 파일도 옛 것이 뜬다.
+   *  `quiet` 면 «여는 중…» 을 안 띄운다 — 살아 있는 미리보기가 다시 펼 때 화면이 깜빡이지 않게(옛 그림이 새 그림이 올 때까지 남는다). */
+  async function open(p2: string, fresh = false, quiet = false): Promise<void> {
+    //  ⚠ **같은 파일을 다시 그리지 않는다** — 그리면 프레임이 새로 서서 PDF·시안이 맨 위로 튄다.
+    //   이 길로 오는 부름이 여럿이다(세션 알림·탭 전환·8초 틱). 진짜 다시 그릴 때(fresh)만 통과시킨다.
+    if (p2 && p2 === path && shown && !fresh) { paintBar(); return; }
     path = p2;
     remember(p2);
     paintBar();
-    if (!p2) { paintPicker(); return; }
+    if (!p2) { shownStamp = ''; paintPicker(); return; }
+    //  다시 펼 때 보던 자리를 지킨다 — 무대(그림·글)는 우리가 굴리므로 되돌릴 수 있다.
+    //   프레임 안(PDF·시안)의 자리는 우리 것이 아니라 못 지킨다 → 그래서 아래 감시가 «다 쓴 뒤 한 번만» 편다.
+    const keepTop = quiet && stage.scrollTop > 0 ? stage.scrollTop : 0;
+    if (keepTop) window.setTimeout(() => { if (path === p2 && stage.scrollTop === 0) stage.scrollTop = keepTop; }, 60);
     const k = kindOf(p2);
-    body.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:14px', text: '여는 중…' }));
+    const fetchOpts: RequestInit = { headers: authHeaders(), cache: fresh ? 'no-store' : 'default' };
+    //  도장 = 서버가 준 (수정 시각 ms · 크기). 옛 서버라 헤더가 없으면 매니페스트의 값으로 대신한다.
+    const stampFrom = (r: Response): string => {
+      const m = r.headers.get('x-file-mtime');
+      if (m) return m + ':' + (r.headers.get('x-file-size') || '');
+      const f = list.find((x) => x.path === p2);
+      return f ? f.mtime + ':' + f.size : '';
+    };
+    if (!quiet) showPlain(el('p', { class: 'pn-fine', style: 'padding:14px', text: '여는 중…' }));
     if (k.kind === 'text' || k.kind === 'page') {
-      const r = await fetch(fileUrl(p2), { headers: authHeaders() }).catch(() => null);
-      if (!r || !r.ok) { body.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:14px', text: '파일을 읽지 못했어요.' })); return; }
+      const r = await fetch(fileUrl(p2), fetchOpts).catch(() => null);
+      if (!r || !r.ok) { showPlain(el('p', { class: 'pn-fine', style: 'padding:14px', text: '파일을 읽지 못했어요.' })); return; }
       const txt = await r.text();
       if (path !== p2) return;                       // 그 사이 다른 걸 골랐다
+      shownStamp = stampFrom(r);
       if (k.kind === 'page') {
         // 시안(HTML)은 격리 프레임(srcdoc)으로 — 스크립트·폼·상위 접근이 모두 막힌 채 그림만 보인다.
         const f = el('iframe', { class: 'pn-ed-pv full', sandbox: '', tabindex: '-1' }) as HTMLIFrameElement;
         f.srcdoc = txt.slice(0, 400_000);
-        body.replaceChildren(f);
+        show(f, 'scale', () => PAGE_BASE);
       } else if (/\.(md|markdown)$/i.test(p2)) {
-        body.replaceChildren(el('div', { class: 'pn-md' }, renderMarkdown(txt.slice(0, 200_000))));
+        //  글은 제 폭이 없다(칸에 맞춰 스스로 흐른다) — 맞춤 = 100%. 단추를 누르면 글자가 커진다.
+        show(el('div', { class: 'pn-md' }, renderMarkdown(txt.slice(0, 200_000))), 'scale', () => 0);
       } else {
-        body.replaceChildren(el('pre', { class: 'pn-ed-pre', text: txt.slice(0, 400_000) }));
+        show(el('pre', { class: 'pn-ed-pre', text: txt.slice(0, 400_000) }), 'scale', () => 0);
       }
       return;
     }
     if (k.kind === 'img' || k.kind === 'pdf' || k.kind === 'video') {
-      const r = await fetch(fileUrl(p2), { headers: authHeaders() }).catch(() => null);
-      if (!r || !r.ok) { body.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:14px', text: '파일을 읽지 못했어요.' })); return; }
+      const r = await fetch(fileUrl(p2), fetchOpts).catch(() => null);
+      if (!r || !r.ok) { showPlain(el('p', { class: 'pn-fine', style: 'padding:14px', text: '파일을 읽지 못했어요.' })); return; }
       const bl = await r.blob();
       if (path !== p2) return;
+      shownStamp = stampFrom(r);
       const u = URL.createObjectURL(k.kind === 'pdf' ? new Blob([bl], { type: 'application/pdf' }) : bl);
       urls.push(u);
-      body.replaceChildren(k.kind === 'img'
-        ? el('img', { class: 'pn-ed-img', src: u, alt: base(p2) })
-        : k.kind === 'video'
-          ? el('video', { class: 'pn-ed-img', src: u, controls: 'true' })
-          : el('iframe', { class: 'pn-ed-pv full', src: u + '#toolbar=1&view=FitH' }));
+      if (k.kind === 'img') {
+        const im = el('img', { class: 'pn-ed-img', src: u, alt: base(p2) }) as HTMLImageElement;
+        show(im, 'px', () => im.naturalWidth || 0);
+        //  제 크기는 다 받아야 안다 — 그림이 들어온 뒤 한 번 더 잰다(그 전엔 0 이라 맞춤이 100% 로 보인다).
+        im.addEventListener('load', () => { if (shown && shown.node === im) zoom.apply(); });
+      } else if (k.kind === 'video') {
+        const vd = el('video', { class: 'pn-ed-img', src: u, controls: 'true' }) as HTMLVideoElement;
+        show(vd, 'px', () => vd.videoWidth || 0);
+        vd.addEventListener('loadedmetadata', () => { if (shown && shown.node === vd) zoom.apply(); });
+      } else {
+        show(el('iframe', { class: 'pn-ed-pv full', src: u + '#toolbar=1&view=FitH' }), 'scale', () => PDF_BASE);
+      }
       return;
     }
     // 브라우저가 그릴 방법이 없는 형식 — 할 수 있는 것(내려받기)만 정직하게 말한다.
-    body.replaceChildren(el('div', { class: 'pn-empty' },
+    showPlain(el('div', { class: 'pn-empty' },
       pnIcon('doc', 'pn-i big'),
       el('b', { text: '이 형식은 브라우저에서 볼 수 없어요.' }),
       el('p', { class: 'pn-fine', text: '파워포인트·워드·엑셀·한글은 브라우저가 그릴 방법이 없습니다. 위 [내려받기]로 원래 앱에서 여세요.' })));
   }
 
   if (!(ctx.id > 0)) {
-    body.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:14px', text: '이 화면은 프로젝트 폴더가 없어 자료를 열 수 없어요.' }));
+    showPlain(el('p', { class: 'pn-fine', style: 'padding:14px', text: '이 화면은 프로젝트 폴더가 없어 자료를 열 수 없어요.' }));
     return { root };
   }
   // 컴퓨터에서 끌어다 놓기 — 목록을 보든 파일을 펴 놓았든 이 칸 어디서나 받는다.
@@ -1077,25 +1384,79 @@ function viewerPart(ctx: PartCtx): Part {
 
   // 자료 칸에서 [뷰어에서 보기] 로 보낸 파일 — 이 칸이 받아 연다.
   const onSend = (e: Event): void => {
-    const d = (e as CustomEvent).detail as { id: number; path: string } | undefined;
+    const d = (e as CustomEvent).detail as { id: number; path: string; slot?: string } | undefined;
     if (!d || Number(d.id) !== ctx.id || !d.path) return;
+    //  ⚠ 뷰어가 여럿 뜰 수 있다(#762) — **내 앞으로 온 것만** 받는다. 셸이 어느 탭에 펼지 정해 slot 을 적어 보낸다.
+    //   slot 이 없는 옛 신호는 첫 뷰어가 받는다(그 판엔 뷰어가 하나뿐이었다).
+    if (d.slot ? d.slot !== ctx.slot : ctx.slot !== 'editor') return;
     if (!list.some((f) => f.path === d.path)) void loadList();
-    void open(d.path);
+    void go(d.path);
   };
   // ⚠ window 가 아니라 **이 곁칸**에서 듣는다 — 창에 달면 열려 있는 모든 세션 탭의 뷰어가 같이 갈아입는다.
-  ctx.paneRoot().addEventListener(VIEWER_EVT, onSend);
+  ctx.paneRoot().addEventListener(VIEWER_TO_EVT, onSend);
 
   const openRemembered = (): void => {
     const last = remembered();
     void open(last && list.some((f) => f.path === last) ? last : '');
   };
+  //  ⚠ 세션이 안 바뀌었으면 아무것도 하지 않는다 — 알림이 같은 세션으로 다시 와도 파일을 다시 그리면 자리가 튄다.
+  let lastSid = ctx.memKey();
   void loadList().then(() => openRemembered());
   // 세션을 갈아 끼우면 그 세션이 펴 두었던 파일로 — 단 **고치는 중이면 건드리지 않는다**(저장 안 한 글을 뺏지 않는다).
-  const offSess = ctx.onSession(() => openRemembered());
+  const offSess = ctx.onSession(() => {
+    const k = ctx.memKey();
+    if (k === lastSid) return;
+    lastSid = k;
+    if (ed) return;   // 고치는 중 — 저장 안 한 글을 뺏지 않는다(위 머리말이 약속한 것)
+    openRemembered();
+  });
+
+  // ── 살아 있는 미리보기 (#762, 원준 2026-09-04: "우측에서 바로 수정하고 있으면 실시간 반영") ─────────
+  //  세션이 시안(HTML)·PDF 를 고치는 동안 사람은 왼쪽 뷰어를 본다. 바뀔 때마다 새로고침을 누르게 하면 그 화면은
+  //  «보는 화면»이 아니라 «확인하러 가는 화면»이 된다. 그래서 파일이 열려 있고 이 칸이 **보이는 동안만** 1.5초마다
+  //  HEAD 로 도장(수정 시각·크기)을 묻고, 달라지면 조용히 다시 편다(옛 그림이 새 그림이 올 때까지 남는다).
+  //  ⚠ 몸통을 받지 않는다 — 서버가 HEAD 를 머리만으로 끝낸다(project-routes). 1.5초마다 PDF 를 통째로 받으면 안 된다.
+  //  ⚠ 안 보이는 칸은 묻지 않는다 — 웹 칸이 «안 보이면 재운다»와 같은 이유(탭을 쌓아 둘수록 폴링이 쌓인다).
+  //  옛 서버(도장 헤더 없음)에서는 8초 tick 의 매니페스트 비교가 대신한다 — 느리지만 같은 일을 한다.
+  const visible = (): boolean => !!root.isConnected && root.getClientRects().length > 0;
+  //  ★ **다 쓴 뒤에 한 번만 편다**(원준 2026-09-05: "수정이 실시간으로 되더라도 중간에 덱이 계속 맨 위로
+  //   올라가지 않게"). LLM 이 파일을 고치는 동안 도장은 몇 초 사이에 여러 번 바뀐다 — 그때마다 펴면 보던 자리가
+  //   계속 튄다(프레임 안 자리는 우리 것이 아니라 되돌릴 수도 없다). 그래서 **도장이 멎을 때까지 기다렸다가**
+  //   한 번만 편다: 새 도장을 보면 적어 두고, 다음 박자에도 그대로면 그때 연다(≈3초 정적).
+  let pending = '';
+  const reopenIfChanged = (stamp: string): void => {
+    if (ed) { pending = ''; return; }   // 고치는 중 — 지금 화면은 내 글칸이다(내가 쓴 것을 내가 다시 열지 않는다)
+    if (!path || !shownStamp || !stamp || stamp === shownStamp) { pending = ''; return; }
+    if (stamp !== pending) { pending = stamp; return; }   // 아직 쓰는 중일 수 있다 — 한 박자 더 본다
+    pending = '';
+    shownStamp = stamp;           // 먼저 적는다 — 다시 펴는 동안 같은 변경으로 또 펴지 않게
+    void open(path, true, true);
+  };
+  const checkFresh = async (): Promise<void> => {
+    if (checking || ed || !path || !shownStamp || !visible()) return;
+    checking = true;
+    try {
+      const r = await fetch(fileUrl(path), { method: 'HEAD', headers: authHeaders(), cache: 'no-store' });
+      const m = r.ok ? r.headers.get('x-file-mtime') : null;
+      if (m) reopenIfChanged(m + ':' + (r.headers.get('x-file-size') || ''));
+    } catch (_) { /* 잠깐 못 물은 것 — 다음 박자에 다시 */ }
+    finally { checking = false; }
+  };
+  const watch = window.setInterval(() => { void checkFresh(); }, 1500);
+
   return {
     root,
-    tick: () => { void loadList().then(() => { if (!path) paintPicker(); paintBar(); }); },
-    destroy: () => { offSess(); ctx.paneRoot().removeEventListener(VIEWER_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
+    tick: () => {
+      void loadList().then(() => {
+        if (!path) paintPicker();
+        paintBar();
+        //  옛 서버 폴백 — 매니페스트의 도장으로도 같은 판정을 한다(새 서버에선 HEAD 가 먼저 잡아 여기선 이미 같다).
+        //  ⚠ 자(floor)가 서버 헤더와 **같아야** 한다 — 다르면 아무 일 없이도 매 틱 «바뀌었다»가 된다(#762 실측).
+        const f = path ? list.find((x) => x.path === path) : null;
+        if (f) reopenIfChanged(f.mtime + ':' + f.size);
+      });
+    },
+    destroy: () => { offSess(); zoom.destroy(); pv.destroy(); window.clearInterval(watch); ctx.paneRoot().removeEventListener(VIEWER_TO_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
   };
 }
 

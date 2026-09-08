@@ -1,6 +1,8 @@
 // 중앙 박스 — 세션 작업 디렉터리(@box_dir) 파일 API. 익스플로러/업로드/다운로드/미리보기용.
 // 게이트: canAttach(소유자 OR 초대된 멤버) — 터미널을 열 수 있으면 셸로 어차피 그 폴더를 만질 수 있으므로 동일 권한.
-// 봉쇄: 모든 경로를 @box_dir 내부로 realpath 검증(.. 탈출 차단).
+// 봉쇄: 모든 경로를 @box_dir 내부로 봉쇄한다 — ① 글자 판정(.. 탈출 차단) ② **심링크를 해소한 뒤** 접두 재판정(#3668 T1,
+//  path-jail.ts). ②가 없으면 세션이 자기 폴더에 심어 둔 링크(`ln -s <바깥> x`)로 `?path=x/...` 가 그냥 통과한다
+//  — read 는 cat, ls 는 statSync 라 **둘 다 링크를 따라간다**(따라가는 것 자체는 #1744 의 설계 의도다).
 //
 // 공유 루트 브라우저(#1291 v2 · 트랙 C): 위 세션 스코프 API 와 달리 `/browse*` 는 **세션과 무관한 공유 워크스페이스**를
 //  통째로 연다 — 지금까지 게이트가 auth 뿐이라 대시보드에서 클릭 두 번이면 조직 전체의 파일을 목록·다운로드·삭제할 수
@@ -17,10 +19,12 @@ import { wrap, HttpError } from "../http/rest-util.js";
 import { viewerOf } from "../capabilities/principal.js";
 import { canAttach, sessionDir, resolveRootPath, rootRelOf, sessionOsUser, userOsUser } from "./terminal-sessions.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
-import { memberLs, memberStat, memberMkdir, memberMv, memberRm, memberReadTo, type LsEntry } from "./terminal-member-fs.js";
+import { memberLs, memberStat, memberMkdir, memberMv, memberRm, memberReadTo, memberPathProbe, type LsEntry } from "./terminal-member-fs.js";
+import { isConfined, probeLocal } from "./path-jail.js";   // #3668 T1 — 심링크를 해소한 뒤 접두를 본다
 import { receiveUpload, uploadError, nfcPath } from "./upload-file.js";
 import { ingestLocalUpload, supersedeLocalPath, localRootForBrowse } from "../ingest/local-file.js";   // #1881 올린 파일 = 자료 1건
-import { nodeCanAttach, nodeRpc } from "../node/registry.js";
+import { nodeCanAttach, nodeRpc, isSelfNode } from "../node/registry.js";
+import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다)
 import { folderVariants } from "../project/project-fs.js";
 import {
   sharedFolderGate, renameSharedFolderAclPrefix, restrictedProjectFolders, projectFolderOf,
@@ -60,11 +64,19 @@ export async function readDirItems(abs: string): Promise<FsListItem[]> {
   return items;
 }
 
+// 심링크 봉쇄(#3668 T1) — 해소는 **op 가 실제로 도는 자리**에서 한다(격리면 멤버 uid, 아니면 게이트웨이 로컬 fs).
+//  게이트웨이가 직접 realpath 를 부르면 격리 홈(700)은 못 읽고 매니지드에선 그 경로가 시야에 아예 없다(path-jail.ts 머리말).
+//  거부 문구·코드는 글자 판정과 같다 — 사람에게는 같은 사건이고, 어느 관문에 걸렸는지는 알려 줄 값이 아니다.
+async function assertJailed(base: string, abs: string, osUser: string | null): Promise<void> {
+  const ok = await isConfined(base, abs, osUser ? (b, t) => memberPathProbe(osUser, b, t) : probeLocal);
+  if (!ok) throw new HttpError(400, "허용 경로를 벗어났습니다");
+}
+
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 
 // @box_dir 기준 안전 경로 해소(+ 접근권한 확인). rel 의 .. 탈출은 거부.
-async function resolveInSession(req: express.Request, requireFile: boolean, canonical = false): Promise<{ base: string; abs: string }> {
+async function resolveInSession(req: express.Request, requireFile: boolean, canonical = false): Promise<{ base: string; abs: string; osUser: string | null }> {
   const id = req.params.id;
   if (!(await canAttach(id, idOf(userOf(req))))) throw new HttpError(403, "세션 접근 권한이 없습니다");
   // desired(DB) 우선 · tmux 폴백 — 이 값이 **파일 샌드박스의 base** 다. tmux 가 안 잡히면 홈으로 넓어지므로
@@ -75,13 +87,17 @@ async function resolveInSession(req: express.Request, requireFile: boolean, cano
   const abs = path.resolve(base, rel);
   if (abs !== base && !abs.startsWith(base + path.sep)) throw new HttpError(400, "허용 경로를 벗어났습니다");
   if (requireFile && (rel === "" || abs === base)) throw new HttpError(400, "파일 경로가 필요합니다");
-  return { base, abs };
+  // 파일 op 를 내릴 uid 를 여기서 한 번 구해 **봉쇄 판정과 op 가 같은 자리를 보게** 한다(라우트가 다시 묻지 않는다).
+  const osUser = await sessionOsUser(req.params.id);
+  await assertJailed(base, abs, osUser);
+  return { base, abs, osUser };
 }
 
 // 노드 세션 파일 릴레이(#875) — ?node= 면 게이트웨이가 nodeCanAttach 로 인가(정책=게이트웨이, 실행=노드 F7)하고 nodeId 반환.
 //  중앙 세션이면 null(로컬 fs 경로). 거부 코드: 4410 gone→404 · 4462 offline→503 · 그 외 no-access→403.
 async function nodeFor(req: express.Request): Promise<string | null> {
-  const nodeId = String(req.query.node ?? "").trim();
+  //  #2592 — 셀프 노드 좌표는 접는다(relayNodeId): 그 파일은 이 박스의 fs 에 그대로 있어 로컬 경로가 정답이다.
+  const nodeId = relayNodeId(req.query.node as string | undefined, isSelfNode);
   if (!nodeId) return null;
   const v = await nodeCanAttach(nodeId, req.params.id, idOf(userOf(req)));
   if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
@@ -111,31 +127,31 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
   };
 
   // 루트 브라우즈용 경로 해소(+접근 osUser). requireSub=true 면 루트 자체(base)는 거부(대상 경로 필요).
-  //  경로 봉쇄(루트 내부, .. 탈출 거부)는 resolveRootPath 가 이미 건다. 공개범위 게이트는 여기서 함께 건다(#1291) —
-  //  rename·삭제·다운로드·업로드가 전부 이 함수를 지나므로, 새 라우트가 늘어도 게이트가 빠지지 않는다.
+  //  경로 봉쇄는 두 겹이다 — 글자 판정(루트 내부, .. 탈출 거부)은 resolveRootPath 가, **심링크 해소 뒤 재판정**은
+  //  여기 assertJailed 가 건다(#3668 T1). 공개범위 게이트도 여기서 함께 건다(#1291) —
+  //  목록·rename·삭제·다운로드·업로드가 전부 이 함수를 지나므로, 새 라우트가 늘어도 셋 중 무엇도 빠지지 않는다.
   //  canonical=true 는 **생성 경로 전용** — 저장 이름을 NFC 정본으로 통일한다(#1278b).
   //  읽기·삭제에 켜면 예전에 NFD 로 저장된 파일에 접근할 수 없게 되므로 절대 켜지 않는다.
-  async function resolveBrowse(req: express.Request, requireSub: boolean, canonical = false): Promise<{ base: string; abs: string; osUser: string | null }> {
+  async function resolveBrowse(req: express.Request, requireSub: boolean, canonical = false): Promise<{ base: string; abs: string; osUser: string | null; gate: SharedFolderGate | null }> {
     const u = userOf(req);
     const raw = String(req.query.path ?? "");
     const { base, abs } = await resolveRootPath(u, String(req.query.root ?? ""), canonical ? nfcPath(raw) : raw);
     if (requireSub && abs === base) throw new HttpError(400, "대상 경로가 필요합니다");
-    assertBrowseVisible(await browseGate(req), base, abs);
+    //  게이트는 **한 번만** 만들어 돌려준다 — 목록처럼 항목마다 물어야 하는 자리가 이 값을 그대로 재사용한다.
+    const gate = await browseGate(req);
+    assertBrowseVisible(gate, base, abs);
     const osUser = await userOsUser(u);
-    return { base, abs, osUser };
+    await assertJailed(base, abs, osUser);   // #3668 T1 — 링크를 해소한 뒤 다시 본다
+    return { base, abs, osUser, gate };
   }
 
   // 생성폼 폴더 탐색 + 공유 폴더 브라우저(세션 무관) — 허용 루트 내부 목록. 격리 멤버면 그 uid 로(개인 루트=멤버 홈 700).
   //  dirs = 폴더명(하위호환: 생성폼 폴더 피커·대시보드 박스). items = 폴더+파일(type·size, 대시보드 폴더 브라우저 #672).
   app.get("/api/ui/terminal/browse", auth, wrap(async (req, res) => {
-    const u = userOf(req);
-    const { base, abs } = await resolveRootPath(u, String(req.query.root ?? ""), String(req.query.path ?? ""));
-    // 공개범위(#1291) — ①이 폴더 자체가 안 보이면 404(존재 은닉) ②목록은 안 보이는 하위 항목을 빼고 준다.
-    //  게이트를 여기서 한 번만 만들어 항목마다 재사용한다(수백 항목 × DB 왕복 방지).
-    const gate = await browseGate(req);
-    assertBrowseVisible(gate, base, abs);
+    // 공개범위(#1291)·경로 봉쇄는 resolveBrowse 가 한 자리에서 건다 — ①이 폴더 자체가 안 보이면 404(존재 은닉)
+    //  ②목록은 안 보이는 하위 항목을 빼고 준다. 게이트는 한 번만 만들어 항목마다 재사용한다(수백 항목 × DB 왕복 방지).
+    const { base, abs, osUser, gate } = await resolveBrowse(req, false);
     const restrictedProjects = gate ? await restrictedProjectFolders() : new Set<string>();
-    const osUser = await userOsUser(u);
     const items: Array<FsListItem & { locked?: boolean }> = [];
     if (osUser) {
       await memberMkdir(osUser, base).catch(() => { /* 루트 없으면 생성 */ });
@@ -170,12 +186,9 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
   }));
   // 생성폼·브라우저에서 새 폴더 만들기(세션 무관). 격리 멤버면 그 uid 로(생성 폴더 소유자=멤버).
   app.post("/api/ui/terminal/browse/mkdir", auth, wrap(async (req, res) => {
-    const u = userOf(req);
-    const { base, abs } = await resolveRootPath(u, String(req.query.root ?? ""), nfcPath(req.query.path));   // 폴더 이름도 NFC 정본(#1278b)
     // 안 보이는 폴더 안에는 못 만든다(#1291) — 여기를 열어두면 mkdir 의 성공/실패가 그대로 존재 오라클이 되고,
-    //  잠긴 폴더 안에 파일을 밀어 넣는 우회 경로가 열린다. 거부는 목록과 같은 404.
-    assertBrowseVisible(await browseGate(req), base, abs);
-    const osUser = await userOsUser(u);
+    //  잠긴 폴더 안에 파일을 밀어 넣는 우회 경로가 열린다. 거부는 목록과 같은 404. 폴더 이름도 NFC 정본(#1278b).
+    const { abs, osUser } = await resolveBrowse(req, false, true);
     if (osUser) await memberMkdir(osUser, abs);
     else await fsp.mkdir(abs, { recursive: true, mode: 0o700 });
     res.json({ ok: true });
@@ -275,8 +288,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
       const d = await nodeRpc(nodeId, "fsLs", { id: req.params.id, sub: String(req.query.path ?? ""), user: { userId: idOf(userOf(req)) } });
       res.setHeader("Cache-Control", "no-store"); res.json(d); return;
     }
-    const { base, abs } = await resolveInSession(req, false);
-    const osUser = await sessionOsUser(req.params.id);
+    const { base, abs, osUser } = await resolveInSession(req, false);
     const items: FsListItem[] = [];
     if (osUser) {
       let entries;
@@ -317,8 +329,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
       }
       res.end(); return;
     }
-    const { abs } = await resolveInSession(req, true);
-    const osUser = await sessionOsUser(req.params.id);
+    const { abs, osUser } = await resolveInSession(req, true);
     const download = req.query.download === "1";
     const setDl = (): void => {
       res.setHeader("Cache-Control", "no-store");
@@ -345,8 +356,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
   app.post("/api/ui/terminal/sessions/:id/mkdir", auth, wrap(async (req, res) => {
     const nodeId = await nodeFor(req);
     if (nodeId) { await nodeRpc(nodeId, "fsMkdir", { id: req.params.id, sub: String(req.query.path ?? ""), user: { userId: idOf(userOf(req)) } }); res.json({ ok: true }); return; }
-    const { abs } = await resolveInSession(req, true, true);   // 생성 → NFC 정본(#1278b)
-    const osUser = await sessionOsUser(req.params.id);
+    const { abs, osUser } = await resolveInSession(req, true, true);   // 생성 → NFC 정본(#1278b)
     if (osUser) await memberMkdir(osUser, abs);
     else await fsp.mkdir(abs, { recursive: true });
     res.json({ ok: true });
@@ -374,8 +384,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
       } while (offset < bodyBuf.length);
       res.json({ ok: true, path: rel }); return;
     }
-    const { abs } = await resolveInSession(req, true, true);   // 생성 → NFC 정본(#1278b)
-    const osUser = await sessionOsUser(req.params.id);
+    const { abs, osUser } = await resolveInSession(req, true, true);   // 생성 → NFC 정본(#1278b)
     try { await receiveUpload(req, abs, MAX_UPLOAD, osUser); }
     catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
     res.json({ ok: true, path: abs }); // abs = 세션 작업폴더 기준 절대경로(드롭 업로드가 입력창에 꽂아 cwd 무관하게 찾게)

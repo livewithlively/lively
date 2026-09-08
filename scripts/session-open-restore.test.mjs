@@ -116,8 +116,38 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
     ok(iMoved > 0 && iRestore > 0 && iMoved < iRestore,
       "③-i 이미 이어진 세션이면 되살리기 전에 그리로 옮긴다(movedTo 가 canRestore 보다 먼저)");
   }
-  ok(/if\s*\(isBox\s*&&\s*\(target\.raw\?\.restorable\s*\|\|\s*hint\?\.canRestore\)\)/.test(chat),
+  //  ⚠ isBox 는 **함수**다(2026-09-08) — 종전엔 마운트 시점 `first.live` 로 얼어 있었는데, 그 한 틱에 행이
+  //   잠깐 «중단됨»으로 보이면 그 탭이 영영 대화창에 갇혔다(터미널도 수기 전환 메뉴도 사라진다). 지금의 행으로 답한다.
+  ok(/if\s*\(isBox\(\)\s*&&\s*\(target\.raw\?\.restorable\s*\|\|\s*hint\?\.canRestore\)\)/.test(chat),
     "③-h 복원 분기가 목록의 restorable **또는** 프레임이 말한 canRestore 를 본다(둘 중 하나면 /restore)");
+}
+
+// ── ③-T 터미널로 가는 문은 **얼면 안 된다** (2026-09-08 상민님 신고 · 재현 완료) ─────────────
+//  증상: 살아서 도는 세션인데 웹으로 열면 대화창만 뜨고, 터미널도 없고, [⋯ ▸ 보기]에 수기 전환 줄조차 없다.
+//  뿌리: `terminalSrc`(v2/views.ts) 와 `isBox`(session-chat.ts) 가 **마운트 시점 값**이었다. 매니지드에서는
+//   세션 목록 한 틱이 허브 stall 로 19초씩 늦으며 살아 있는 세션을 잠깐 «중단됨» 으로 실어 온다(실측
+//   2026-09-08 07:59:50 — 한 응답에서 restorable 112→105, 같은 세션이 3초 뒤 되돌아옴). 그 틱에 화면이
+//   붙으면 두 값이 «터미널 없음» 으로 굳고, 터미널로 가는 문이 **전부** 그 뒤에 있어(모드 전환·iframe·
+//   [⋯ ▸ 보기]·«터미널에서 답하기»·update 의 되돌리기) 그 탭은 스스로 못 빠져나왔다. panes-parts 의
+//   mountStage 는 `mounted.ok` 라 다시 붙이지도 않는다 → 새로고침 전까지 영구.
+//  → 규칙: 둘 다 **지금의 행**에 묻는다. 판정 규칙 자체는 여전히 views.ts 한 줄이다(두 벌 금지).
+{
+  const views = read("web/v2/views.ts");
+  ok(/const termSrc = \(t: SessionChatTarget\): string \| null =>/.test(views) && /terminalSrc: termSrc,/.test(views),
+    "③-T1 views 가 터미널 주소를 **함수**로 넘긴다(마운트 시점 문자열로 얼리지 않는다)");
+  const chat = read("web/session-chat.ts");
+  ok(/const isBox = \(\): boolean => target\.live/.test(chat),
+    "③-T2 isBox 는 first(마운트 시점)가 아니라 target(지금의 행)을 본다");
+  ok(/const termUrl = \(\): string \| null => \(opts\.terminalSrc \? opts\.terminalSrc\(target\) : null\)/.test(chat)
+    && /const hasTerm = \(\): boolean => !!termUrl\(\) && isBox\(\)/.test(chat),
+    "③-T3 터미널 가용 판정은 hasTerm() 한 술어로 모인다");
+  // 문(門)들이 그 술어를 지나는가 — 하나라도 옛 값을 직접 보면 그 문만 얼어붙는다.
+  ok(!/opts\.terminalSrc\s*&&/.test(chat) && !/!opts\.terminalSrc/.test(chat),
+    "③-T4 opts.terminalSrc 를 **직접 조건으로 쓰지 않는다** — 전부 hasTerm() 을 지난다");
+  ok(/if \(m === 'term' && !hasTerm\(\)\) m = 'chat'/.test(chat),
+    "③-T5 setMode 의 강등이 지금의 가용성으로 판정한다");
+  ok(/!modeChosen && mode === 'chat' && !chatHome\(\) && String\(target\.raw\?\.chatMode \|\| ''\) === 'tmux' && hasTerm\(\)/.test(chat),
+    "③-T6 ★ blip 에서 스스로 빠져나오는 출구 — 행이 건강해지면 다음 갱신에 터미널로 돌아온다");
 }
 
 // ── ④ 세션 주소를 만드는 곳은 하나다 ────────────────────────────────────────────────
@@ -151,6 +181,34 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   const blk = chat.slice(i, i + 2200);   // #2231 로 이 함수에 이정표(movedTo) 처리가 들어와 길어졌다 — 창을 넓힌다
   ok((blk.match(/rememberCreated\(/g) || []).length >= 2,
     "⑤복원·이어받기 둘 다 생성 응답을 created-cache 에 남긴다(새 id 로 옮긴 직후의 '세션을 찾을 수 없어요' 방지)");
+}
+
+// ── ⑥ 목록이 «이미 이어진(은퇴한) id» 를 내보내지 않는다 (#2231 후속 · 2026-09-04 신고) ────────
+//  ①과 같은 종류의 실패다: 판정은 멀쩡한데 **한쪽 경로가 그 판정을 안 부른다.** 목록의 DB 절반
+//  (listAllSessionStates)은 superseded_by 로 거르는데, 라이브 관측(tmux)·노드 스냅샷은 안 거른다 —
+//  이어진 뒤에도 옛 tmux 가 남아 있으면 그 id 가 «살아 있는 세션»으로 사이드바에 다시 오르고,
+//  누르면 개별 조회가 movedTo 를 내 화면이 이어진 세션으로 튕긴다(그 세션이 죽어 있으면 무한 리로드).
+//  실측: 은퇴 100건 중 7건이 목록에 올라 있었다.
+{
+  const src = read("src/terminal/routes.ts");
+  const i = src.indexOf('app.get("/api/ui/terminal/sessions"');
+  assert.ok(i > 0, "세션 목록 라우트를 찾지 못했습니다");
+  const blk = src.slice(i, src.indexOf("res.json({ sessions: merged })", i));
+  const merge = blk.indexOf("mergeSessionViews(");
+  const retired = blk.indexOf("retiredSessionIds(");
+  ok(retired > 0, "⑥-a 목록이 retiredSessionIds 로 은퇴행을 묻는다");
+  ok(merge > 0 && merge < retired,
+    "⑥-b 은퇴행 필터가 병합 **뒤**다 — 라이브·노드·복원가능 세 출처를 한꺼번에 걸러야 한 곳이라도 새지 않는다");
+}
+
+// ── ⑦ 이동(moved)도 연쇄에 상한이 있다 — 이동↔복원이 번갈아 돌면 어느 상한도 안 세던 자리 ────────
+{
+  const chat = read("web/session-chat.ts");
+  ok(/function movedHopAllowed\(/.test(chat), "⑦-a 이동 연쇄 상한 판정이 있다");
+  const i = chat.indexOf("lively-term-gone");
+  const blk = chat.slice(i, i + 1200);
+  ok(blk.indexOf("movedHopAllowed()") > 0 && blk.indexOf("movedHopAllowed()") < blk.indexOf("이어진 세션으로 옮겼습니다"),
+    "⑦-b 프레임발 자동 이동이 옮기기 **전에** 상한을 묻는다");
 }
 
 console.log(`\n${pass}건 통과`);

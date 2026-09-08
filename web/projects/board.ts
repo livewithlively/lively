@@ -49,8 +49,7 @@ import { openProjectV2Form } from './project-form.js';
 //  지식 탭과 대칭인 하위 탭: [대시보드 · 작업 현황 · 사업 · 제품 · 시스템].
 //   · 대시보드 = 프로젝트 보드(level='project' 카드, 진행중/완료)
 //   · 작업 현황 = 기존 #/dash(사람×AI 작업현황)를 하위 탭으로 흡수(dashboard.ts 의 activityTimelineRow 재사용)
-//   · 사업·제품·시스템 = 카테고리(space)로 프로젝트를 훑는 2분할(지식 탭의 renderKnowledgeSpace 패턴 재사용)
-//  데이터: GET /api/ui/v6/projects(보드·space목록)·/:id(상세) + POST .../status,/tasks,/members,/category,/knowledge,
+//  데이터: GET /api/ui/v6/projects(보드 목록)·/:id(상세) + POST .../status,/tasks,/members,/category,/knowledge,
 //   POST /api/ui/v6/tasks/:id/status, GET /api/ui/categories(사이드바). (백엔드 projects-v6 — 이미 구현됨.)
 // ════════════════════════════════════════════
 
@@ -729,7 +728,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       const noDrag = !!(opts && opts.noDrag); // 즐겨찾기 구역 사본 등 — 드래그 소스/재정렬 비활성(드롭 타깃은 유지)
       // 카테고리(도메인) 배지(#541 후속) — 이 리스트가 어느 카테고리에 배정됐는지, 안 됐으면 '미분류' 를 명시.
       const cat = list.category;
-      const catBadge = el('span', { class: 'pjv-side-cat' + (cat ? ' pjv-side-cat-' + cat.space : ' none'),
+      const catBadge = el('span', { class: 'pjv-side-cat' + (cat ? '' : ' none'),
         title: cat ? ('카테고리: ' + (cat.name || cat.key)) : '카테고리 미분류 — 리스트 설정에서 지정',
         text: cat ? (cat.name || cat.key) : '미분류' });
       const it = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sub ? ' sub' : '') + (active ? ' active' : '') + (favListIds.has(list.id) ? ' is-fav' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(active), ...(noDrag ? {} : { draggable: 'true' }) },

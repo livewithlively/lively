@@ -15,7 +15,7 @@ const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`o
 const mk = (over: Partial<ClassifierRow> = {}): ClassifierRow => ({
   id: 1, key: "c1", label: null, enabled: true, priority: 0,
   target: "unmapped", confidence_below: null,
-  match_spaces: null, match_types: null, match_provenance: null,
+  match_types: null, match_provenance: null,
   match_systems: null, exclude_names: null,
   min_chars: 0, lookback_days: null,
   criteria_md: null, candidate_categories: null, confirm_threshold: 0.8,

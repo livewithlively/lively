@@ -11,9 +11,9 @@
 //  - code_unit/data_entity insert-only + change_log 무기록(비대칭 보존 — ingest 경로 한정)
 //  - 모든 쓰기는 단일 트랜잭션(withTx): 중도 실패 = 전체 롤백, 부분 상태 없음
 //  - tally 키 문자열('domain:insert','mapping:skip-nodomain' 등 콜론 합성)은 한 글자도 불변
-//    (V6: domain=space='product' category 로 이전됐어도 tally 라벨은 'domain:*' 그대로 — 외부 계약 보존).
-// V6: 스캔 쓰기 타깃이 레거시 domain→category(space='product'), mapping.domain_id→category_id 로 이동했다.
-//  도메인은 멀티레포(repo_id 없음 — (space,key)로 유니크): 둘째 레포가 같은 key 를 ingest 하면 SAME category 공유.
+//    (V6: domain=category 로 이전됐어도 tally 라벨은 'domain:*' 그대로 — 외부 계약 보존).
+// V6: 스캔 쓰기 타깃이 레거시 domain→category, mapping.domain_id→category_id 로 이동했다.
+//  분류축은 멀티레포(repo_id 없음 — key 로 유니크): 둘째 레포가 같은 key 를 ingest 하면 SAME category 공유.
 //  code_unit/data_entity 는 여전히 repo_id 보유(멀티레포 = 여기 산다). is-엣지(category_edge axis='is')는 신설.
 // upsert* 는 비공개 — ingest 만이 reconcile 진입점이다.
 import { one, withTx, type Db } from "../db.js";
@@ -24,20 +24,20 @@ import { upsertDebtRow } from "./debts.js";
 
 const now = () => new Date().toISOString();
 
-// V6: 도메인 = space='product' 카테고리. 키는 (space='product', key) — repo_id 없음(도메인=멀티레포).
+// V6: 코드스캔이 닿는 분류축. 키는 key — repo_id 없음(축은 멀티레포).
 //  같은 key 의 두 번째 레포 ingest 는 SAME category 행을 찾는다(멀티레포 공유 — per-repo 도메인 없음).
 //  반환은 action 문자열 + 해소된 category id(매핑이 category_id 로 쓰려면 필요) — { action, id }.
 //  change_log 는 통합 후 entity_type='category' 로 기록(repo_id 는 provenance 로 유지 — category 자체는 repo-free).
 async function upsertCategory(
   db: Db, repo_id: number, run_id: number, actor: Actor, d: any,
 ): Promise<{ action: string; id: number }> {
-  const ex = await one(db, "SELECT * FROM category WHERE space='product' AND key=$1 AND state<>'merged'", [d.key]);
+  const ex = await one(db, "SELECT * FROM category WHERE key=$1 AND state<>'merged'", [d.key]);
   if (!ex) {
     // 신뢰우선: 자동 정의는 proposed 림보 없이 곧바로 confirmed 로 착지. origin=actor.type 가
     // '누가 만들었나'(agent/human)를 보존 — 사람 큐레이션 식별은 status 가 아니라 origin='human'.
-    // 코드스캔(reconcile) 파생 도메인은 항상 space='product'(코드앵커 보유). business 는 vocab-only(create 경로).
-    const r = await one(db, `INSERT INTO category(space,key,name,description,state,cross_cutting,origin,status,created_at,updated_at)
-      VALUES('product',$1,$2,$3,$4,$5,$6,'confirmed',$7,$7) RETURNING id`,
+    //  (#1631 space 폐기 — 코드스캔이 만든 축이라고 별도 부류로 가르지 않는다. 코드 앵커는 mapping 이 말한다.)
+    const r = await one(db, `INSERT INTO category(key,name,description,state,cross_cutting,origin,status,created_at,updated_at)
+      VALUES($1,$2,$3,$4,$5,$6,'confirmed',$7,$7) RETURNING id`,
       [d.key, d.name, d.description ?? "", d.state ?? "active", !!d.cross_cutting, actor.type, now()]);
     await logChange(db, {
       repoId: repo_id, entityType: "category", entityId: r.id, op: "insert", actor, runId: run_id,
@@ -202,7 +202,7 @@ export async function ingest(payload: unknown): Promise<IngestResult> {
     const tally: Record<string, number> = {};
     const bump = (k: string) => tally[k] = (tally[k] ?? 0) + 1;
 
-    // 도메인 → category(space='product', key). 해소된 category id 를 key 로 기억(매핑·is-엣지가 재사용).
+    // 도메인 → category(key). 해소된 category id 를 key 로 기억(매핑·is-엣지가 재사용).
     //  멀티레포: 두 번째 레포가 같은 key 를 ingest 하면 upsertCategory 가 SAME 행을 찾아 같은 id 를 돌려준다.
     const catId: Record<string, number> = {};
     for (const d of p.domains ?? []) {
@@ -214,11 +214,11 @@ export async function ingest(payload: unknown): Promise<IngestResult> {
     for (const u of p.code_units ?? []) { cuId[u.path] = await upsertCodeUnit(client, repo_id, u); bump("code_unit"); }
     for (const e of p.data_entities ?? []) { deId["model|" + e.name + "|" + (e.source ?? "")] = await upsertDataEntity(client, repo_id, e); bump("data_entity"); }
     for (const m of p.mappings ?? []) {
-      // domain_key → category(space='product', key). 이번 run 에서 upsert 한 catId 우선, 없으면 DB 조회
+      // domain_key → category(key). 이번 run 에서 upsert 한 catId 우선, 없으면 DB 조회
       //  (페이로드가 매핑만 보내고 도메인 선언을 생략한 경우 — 기존 category 재사용 멀티레포 공유).
       let cid = catId[m.domain_key];
       if (cid == null) {
-        const cat = await one(client, "SELECT id FROM category WHERE space='product' AND key=$1 AND state<>'merged'", [m.domain_key]);
+        const cat = await one(client, "SELECT id FROM category WHERE key=$1 AND state<>'merged'", [m.domain_key]);
         if (!cat) { bump("mapping:skip-nodomain"); continue; }
         cid = cat.id;
         catId[m.domain_key] = cid;

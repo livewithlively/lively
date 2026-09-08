@@ -459,12 +459,44 @@ async function refreshRuntimeConfig() {
 // 이 트리거가 session-preload 안에 있는 이유: **전원에게 이미 배선된 훅이 이것뿐**이다. 새 훅을 추가하면
 //  그걸 배선하려고 또 수동 업데이트가 필요해진다(닭-달걀). 여기 두면 앞으로의 모든 키트 변경 — 새 훅,
 //  새 이벤트 배선, 설치기 수정 — 이 손 안 대고 흐른다.
+// ── MCP 등록이 비었나 — 버전이 같아도 봐야 하는 단 하나 (#1079 후속) ─────────
+//  self-update 안에는 «최신이어도 MCP 등록 정합은 맞춘다» 는 분기가 이미 있다(reconcileClaudeMcp).
+//  그런데 아래 게이트가 **버전이 다를 때만** self-update 를 띄우므로, 버전이 그대로인 한 그 분기는
+//  **도달할 수 없는 죽은 코드**다. 그 사이에 등록이 사라지면 스스로 못 돌아온다.
+//
+//  실측 2026-09-04(매니지드 lively-46e3): 전송 계층 결함으로 `~/.claude.json` 이 깨졌고, 클로드 코드가
+//   그 파일을 손상으로 판정해 설정을 **초기화**하면서 `mcpServers` 가 통째로 날아갔다. 키트 버전은 최신
+//   그대로라 self-update 가 안 떴고, 세션을 다시 열어도 lively 툴이 0개인 채였다 — 사람이 손으로 돌려야
+//   복구됐다. 등록을 지우는 주체는 우리가 아니어도(하네스·사고·사람) 되살리는 자리는 여기뿐이다.
+//
+//  비용 — 정상 세션에선 작은 JSON 읽기 한 번이다(네트워크·토큰 무관). 있으면 즉시 false.
+//  ⚠ 경로 계산은 self-update 의 claudeUserConfigPaths() 와 **같은 규칙**이다(CLAUDE_CONFIG_DIR 우선,
+//   존재하는 것을 전부 본다 — 훅과 클코가 서로 다른 파일을 볼 수 있다, #1079). 그쪽이 바뀌면 여기도 바꾼다.
+//  파손된 설정은 **판단 보류**다 — self-update 도 파손 파일은 안 건드린다(덮어써 날리지 않기 위해).
+export function claudeMcpMissing() {
+  try {
+    const cands = [];
+    if (process.env.CLAUDE_CONFIG_DIR) cands.push(join(process.env.CLAUDE_CONFIG_DIR, ".claude.json"));
+    cands.push(join(homedir(), ".claude.json"));
+    for (const p of new Set(cands)) {
+      if (!existsSync(p)) continue;                 // 설정이 없다 = 클로드를 안 쓰거나 설치 전 — 여기 몫이 아니다
+      let conf;
+      try { conf = JSON.parse(readFileSync(p, "utf8")); } catch { continue; }   // 파손 → 판단 보류
+      if (!conf || typeof conf !== "object") continue;
+      if (!(conf.mcpServers && conf.mcpServers.lively)) return true;            // 하나라도 비면 되살려야 한다
+    }
+    return false;
+  } catch { return false; }                          // fail-soft — 판단 못 하면 종전대로 무동작
+}
+
 function maybeSelfUpdate(remoteVersion) {
   try {
     if (!remoteVersion || typeof remoteVersion !== "string") return; // 게이트웨이가 버전을 안 줌 → 무동작
     if (process.env.LIVELY_NO_AUTO_UPDATE === "1") return;
     if (hookDisabled("self_update")) return;                          // 어드민 토글
-    if (readLocal("kit-version") === remoteVersion) return;           // 최신 — 대부분의 세션이 여기서 끝
+    //  최신이면 대부분의 세션이 여기서 끝난다 — 단 **MCP 등록이 비어 있으면** 예외다(claudeMcpMissing 머리말:
+    //   그 상태는 스스로 못 돌아온다. self-update 가 additive reconcile 로 되살린다).
+    if (readLocal("kit-version") === remoteVersion && !claudeMcpMissing()) return;
     const runner = join(homedir(), ".lively", "hooks", "self-update.mjs");
     if (!existsSync(runner)) return;                                  // 구형 kit — 수동 업데이트가 경로
     const argv = [runner, "--to", remoteVersion];

@@ -45,12 +45,34 @@ t("[W3] 🔴 게이트웨이(src/index.ts)가 registerGatewayCapabilities 를 �
     "게이트웨이가 능력을 등록하지 않는다 — git 자격이 조용히 죽는다(사설 레포 clone·세션 자격 주입).");
 });
 
+//  등록 호출의 **인자 객체 전체**를 괄호를 세어 자른다.
+//   ⚠ 종전엔 `indexOf("}")` 로 첫 닫는 괄호까지만 봤다. 중첩 능력(`kitSeedDeps: { … }`)이 **마지막**일 때만
+//    우연히 맞았고, 중첩이 둘이 되는 순간(#3668 T3 의 harnessSeat) 뒤 항목이 통째로 안 보여 «등록이 빠졌다» 는
+//    거짓 빨간불이 났다. 가드가 인자 순서에 걸리면 사람이 가드를 피해 코드를 배치하게 된다 — 그건 가드가 아니다.
+function registerArg(src) {
+  const at = src.indexOf("registerGatewayCapabilities(");
+  assert.notEqual(at, -1, "등록 호출을 못 찾았다");
+  const open = src.indexOf("{", at);
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0) return src.slice(open, i + 1);
+  }
+  assert.fail("등록 호출의 인자 객체가 닫히지 않는다");
+}
+
 t("[W4] 🔴 선언된 능력이 **하나도 빠짐없이** 등록된다", () => {
-  const call = INDEX.slice(INDEX.indexOf("registerGatewayCapabilities("));
-  const arg = call.slice(0, call.indexOf("}") + 1);
+  const arg = registerArg(INDEX);
   const missing = declared.filter((n) => !arg.includes(n));
   assert.deepEqual(missing, [],
     `등록이 빠진 능력: ${missing.join(", ")} — 선언만 하고 안 꽂으면 그 기능은 게이트웨이에서도 없는 것이다.`);
+});
+
+t("[W4b] 가드가 **인자 순서에 안 걸린다** — 중첩 능력이 뒤에 오는 항목을 가리면 안 된다", () => {
+  //  회귀락: 종전 판(첫 `}` 까지 자르기)이면 아래 합성 입력에서 `zeta` 를 못 본다.
+  const synth = 'registerGatewayCapabilities({ alpha, beta: { x, y }, zeta });';
+  assert.ok(registerArg(synth).includes("zeta"),
+    "중첩 능력 뒤의 등록을 가드가 못 본다 — 사람이 가드를 피해 인자 순서를 정하게 된다");
 });
 
 t("[W5] 노드 에이전트 진입점은 이 구현들을 직접 import 하지 않는다(그러면 번들에 되돌아온다)", () => {

@@ -7,6 +7,12 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import os from "node:os";
 import { TMUX_BIN, tenantSlug, isPsmuxBin } from "./catalog.js";
+import { execTopology, tmuxArgvFor, tmuxServerIsDedicated } from "../exec-topology.js";   // #2599 T2 — 「어디서 도나」는 토폴로지 한 곳에만 묻는다
+import { planTmux, runPlan, outcomeToError, tmuxSessionOf } from "./tmux-route.js";                        // #2600 T2 (d) d2 — 코어 직접 경로의 «무엇을 어디로»
+import { makeBrokerClient, type BrokerTransport } from "./broker-client.js";                // #2600 T2 (d) d2 — 그 전송(소켓·허브)
+import { shadowTmux } from "./tmux-shadow.js";
+import { makeTmuxCallCensus, censusSite } from "./tmux-call-census.js";   // #2600 T2 d4 — 「이 프로세스가 아직 tmux 를 부르나」의 계기(전수·route 무관)
+import { logger } from "../log.js";                                               // #2600 T2 (d) d3 — 옛 경로가 답하고 코어 경로는 견주기만
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 
 const execFileAsync = promisify(execFile);
@@ -35,43 +41,221 @@ const TMUX_ENV: NodeJS.ProcessEnv = (() => {
  * 계약: 지정한 프로그램에 **tmux argv 를 그대로 이어 붙여** 실행한다. stdout 이 tmux 의 stdout 이고,
  *  0 이 아닌 종료코드는 예외다(로컬 실행과 같은 규약 — 상위의 try/catch 가 그대로 동작해야 한다).
  *
- * ⚠ **호출 시점에 읽는다.** 모듈 로드 시점에 굳히면 부팅 순서·테스트에서 값이 안 먹는다
- *  (세션 spawn 훅에서 같은 함정을 밟았다).
+ * #2599 T2 — 「tmux 가 어디 있나」(부팅 상수)와 「지금 요청이 어느 워크스페이스인가」(요청 컨텍스트)의
+ *  **결합은 토폴로지 모듈이 소유한다.** 여기 남은 것은 그 두 입력을 건네는 일뿐이다.
  * ⚠ attach(`tmux -CC`)는 이 경로가 아니다 — 그건 PTY 라 terminal-pty 가 따로 다룬다.
  */
 export function tmuxExecArgv(): string[] {
-  const raw = (process.env.LIVELY_TMUX_EXEC || "").trim();
-  if (!raw) {
-    // ── 셀프호스트 registry(#1750 S3) — 같은 호스트에서 워크스페이스마다 tmux 서버를 가른다. ──
-    //  secondary 컨텍스트면 `-L lvly-<slug>` 전용 소켓: 세션 목록·옵션·attach 가 전부 그 서버 안이라
-    //  **다른 워크스페이스의 세션이 목록에 뜨는 일 자체가 없다**(이름 규약이 아니라 서버 격리).
-    //  primary(무컨텍스트)는 기본 소켓 = 종전 그대로(기존 세션 무회귀). 매니지드는 raw(중계)가 있어 여기 안 온다.
-    if ((process.env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() === "registry") {
-      const slug = tenantSlug();
-      if (slug && slug !== "primary") return [TMUX_BIN, "-L", `lvly-${slug}`];
-    }
-    return [];
-  }
-  if (!raw.includes("{slug}")) return raw.split(/\s+/);
-  // ── 테넌트별 중계(#1437 v1 5단계) ──
-  //  게이트웨이 하나가 여러 워크스페이스를 서비스하면 **tmux 서버도 워크스페이스마다 다르다.**
-  //  중계 명령에 `{slug}` 를 넣어 그 테넌트의 tmux 컨테이너를 가리키게 한다.
-  //   예: `docker exec -u 200001 lvly-s-{slug}-tmux tmux`
-  const slug = tenantSlug();
-  // ★★ **로컬 tmux 로 폴백하지 않는다.** 폴백하면 게이트웨이 호스트에서 tmux 가 돌아
-  //  ⓐ 그 세션이 엉뚱한 자리에 생기고 ⓑ 모든 테넌트가 **같은 tmux 서버**를 공유하게 된다
-  //  (= 남의 세션이 목록에 보인다). 컨텍스트를 잃은 건 배선 버그이고, 배선 버그는 오류로 드러나야 한다.
-  if (!slug) throw new Error("tmux 중계에 테넌트 컨텍스트가 필요합니다 — 컨텍스트 밖에서 호출됐습니다");
-  return raw.replace("{slug}", slug).split(/\s+/);
+  return tmuxArgvFor(tenantSlug(), TMUX_BIN);
 }
 
+/**
+ * 이 호출을 얼마나 기다리나 — **로컬과 중계가 다르다**(#2616 후속, 2026-09-07).
+ *
+ * ── 왜 갈랐나 ───────────────────────────────────────────────────────────────
+ * 로컬 tmux 는 같은 호스트의 유닉스 소켓이라 5초면 넉넉하다(종전 값 — 무회귀).
+ *  중계(매니지드)는 그 5초 안에 **게이트웨이 → 허브 → 노드 브로커 → runsc exec** 네 홉이 들어간다.
+ *  그런데 안쪽 층들의 예산이 바깥보다 **크게** 잡혀 있었다:
+ *
+ *      코어 5s  >  중계 4s  ‹‹  허브 21.5s(파킹 대기 1.5 + 응답 머리 20)  ›  브로커 15s
+ *
+ *  즉 «제일 바깥이 제일 짧다». 그러면 안쪽이 아직 일하는 중에 바깥이 끊고, 사람은 원인이 아니라
+ *  **끊긴 사실**만 본다 — 실측 2026-09-07: 세션 첫 지시가 `브로커 응답 없음: http://…:9093` 으로
+ *  전달 실패했다(허브·브로커는 그 4초 뒤에도 답을 만들고 있었다).
+ *  ⚠ 예산은 **안쪽이 짧고 바깥으로 갈수록 길어야** 한다. 이 상수가 그 사슬의 제일 바깥이다:
+ *   브로커 6s < 허브(요청 예산 안으로 좁힘) < 중계 9s/회·20s 총 < **여기 22s**.
+ *   숫자를 바꿀 땐 넷을 같이 본다(한 층만 줄이면 그 층이 다시 남의 일을 끊는다).
+ */
+export const TMUX_LOCAL_TIMEOUT_MS = 5_000;
+export const TMUX_RELAY_TIMEOUT_MS = 22_000;
+
+/** (순수) 이 호출의 상한 — 중계면 길게, 로컬이면 종전 그대로. 판정이 한 자리에 있어야 시험이 잰다. */
+export function tmuxTimeoutMs(relay: readonly string[]): number {
+  return relay.length ? TMUX_RELAY_TIMEOUT_MS : TMUX_LOCAL_TIMEOUT_MS;
+}
+
+/**
+ * 코어 직접 경로(#2600 T2 (d) d2)가 **이 호출**에 성립하나 — 셋이 다 참일 때만: 플래그(`tmuxRoute`)·브로커에 닿는 길(`broker`)·
+ *  요청 슬러그. 하나라도 없으면 null = 종전 경로(중계). 슬러그 없는 호출(registry 의 primary 무컨텍스트)은 중계도 `{slug}` 를
+ *  못 채우므로 여기서도 새 경로가 아니다 — 두 경로의 «성립 조건»이 같아야 그림자 대조가 같은 호출을 견준다.
+ *  ⚠ `{slug}` 치환은 `String.replace(문자열)` = **첫 번째 하나만** — `tmux-relay.cjs`·`tmuxArgvFor` 와 같은 의미를 지킨다.
+ */
+export function tmuxRouteTransport(slug: string | null = tenantSlug()): { transport: BrokerTransport; slug: string; mode: "on" | "shadow"; sample: number } | null {
+  const topo = execTopology();
+  if (topo.tmuxRoute === "off" || !topo.broker || !slug) return null;
+  const transport: BrokerTransport = topo.broker.kind === "hub"
+    ? { kind: "hub", url: topo.broker.url, secret: topo.broker.secret, slug }
+    : { kind: "socket", socketPath: topo.broker.template.replace("{slug}", slug) };
+  return { transport, slug, mode: topo.tmuxRoute, sample: topo.tmuxShadowSample };
+}
+
+/**
+ * 코어 직접 경로 — 브로커 `/lvly/tmux` 가 하던 «세션 의미» 를 코어가 한다: 목록(`GET /lvly/sessions`) → 계획(`planTmux`) →
+ *  실행(범용 exec API) → 병합. 성공은 stdout, 실패는 execFile 오류와 **같은 필드**(`code`·`stdout`·`stderr`)로 던진다 —
+ *  상위(`isSessionGoneError`·`isNoTmuxServer`·strict 호출)가 종전과 똑같이 갈린다.
+ *  목록 조회 자체가 실패하면 «못 봤다» 다 — «서버 없음»·«세션 없음» 문구로 위장하지 않는다(#2616).
+ */
+export async function tmuxViaRoute(args: string[], via: { transport: BrokerTransport; slug: string }): Promise<string> {
+  //  ⚠ 설정 오류(https 허브·형식 밖 슬러그)도 execFile 오류 모양으로 던진다 — 맨 Error 가 나가면 상위 판정이 전부 거짓으로
+  //   떨어져 «못 봤다» 조차 못 된다(블라인드 리뷰 ⑥-4). 여기서 접으면 strict 호출은 던지고 목록은 desired 폴백으로 간다.
+  const fold = (why: string, e: unknown): never => {
+    throw outcomeToError({ code: 1, stdout: "", stderr: `${why}(못 봤다): ${(e as Error)?.message ?? String(e)}` });
+  };
+  let client: ReturnType<typeof makeBrokerClient>;
+  try { client = makeBrokerClient(via.transport, { timeoutMs: TMUX_RELAY_TIMEOUT_MS }); } catch (e) { return fold("코어 직접 경로 설정 오류", e); }
+  let listed: Awaited<ReturnType<typeof client.listSessions>>;
+  try { listed = await client.listSessions(); } catch (e) { return fold("브로커 세션 목록 조회 실패", e); }
+  let out;
+  try {
+    const plan = planTmux(via.slug, args, listed.sessions, listed.observed);
+    out = await runPlan(plan, via.slug, args, listed.observed, (c, argv) => client.execCapture(c, argv));
+  } catch (e) { return fold("코어 직접 경로 실행 오류", e); }
+  if (out.code !== 0) throw outcomeToError(out);
+  return out.stdout;
+}
+
+/**
+ * tmux 호출 계수 창 크기 (#2600 T2 d4). 이 값마다 «어느 테넌트에 어떤 동사를 몇 번» 표를 로그로 낸다.
+ *
+ * ── 왜 seam 인가 ──────────────────────────────────────────────────────────────
+ * 이 프로젝트의 완료 조건 하나가 «게이트웨이가 그 테넌트에 tmux 를 부른 횟수 0» 이다. 그걸 그림자 대조로
+ *  세면 **틀린다** — 그림자는 표본(기본 25%)·동시상한에 묶이고, 동사는 **불일치와 첫 건에만** 싣는다.
+ *  2026-09-08 에 실제로 그렇게 세고 «list-sessions 0건» 이라 결론했는데 같은 창의 요약은 compared 100 이었다.
+ *  계기는 **이 seam** 에 있어야 한다: 모든 `tmux()` 가 여기를 지나고(`tmuxBatch`·`getOpt` 도 결국 여기다),
+ *  route 모드(off/shadow/on)와 무관하며, 세션 호스트(route=on 이라 그림자가 아예 없다)에서도 같은 자로 잰다.
+ * ⚠ 로그에 싣는 것은 **슬러그·동사·호출부(`파일:줄`)뿐**이다 — argv 에는 세션 라벨·send-keys 본문이 있고
+ *  그건 로그에 갈 것이 아니다(d2 §6-4). 호출부도 **파일명만** 싣는다(절대경로 금지 — 창이 수 KB 씩 는다).
+ * ⚠ 0 으로 두면 보고가 꺼진다(계수 자체는 계속 — 부담이 되는 배포의 탈출구).
+ */
+export const TMUX_CENSUS_EVERY = 200;
+const tmuxCensus = makeTmuxCallCensus(TMUX_CENSUS_EVERY);
+
 export async function tmux(args: string[]): Promise<string> {
+  //  #2600 T2 d4 — 계수는 **경로를 고르기 전에** 한다. 어느 경로로 가든 «불렀다» 는 사실은 같고,
+  //   그래야 「남은 표면」이 route 를 켜고 끄는 것과 무관하게 같은 자로 세어진다. 비치명이라 삼킨다.
+  try {
+    //  호출부는 **스택에서** 뽑는다 — 두 칸(슬러그·동사)만으로는 남은 표면을 못 짚는다(`censusSite` 머리말).
+    //   `new Error()` 는 여기서만 만든다: tmux 호출은 분당 수십 건이라 스택 한 장의 비용이 무의미하고,
+    //   호출부마다 이름을 심는 방식은 «심는 것을 잊은 자리»가 조용히 «(없음)» 이 되어 계기가 거짓말을 한다.
+    const rows = tmuxCensus.record(tenantSlug(), tmuxSessionOf(args).verb, censusSite(new Error().stack));
+    if (rows) logger.info({ tmuxCensus: { window: TMUX_CENSUS_EVERY, rows } }, "tmux 호출 계수(창)");
+  } catch { /* 계수 때문에 tmux 가 실패하면 안 된다 */ }
+  //  #2600 T2 (d) d2 — 플래그가 `on` 이고 길이 있을 때만 코어 직접 경로. 아니면 아래 종전 경로가 **한 바이트도** 안 바뀐다.
+  const via = tmuxRouteTransport();
+  if (via?.mode === "on") return tmuxViaRoute(args, via);
   const relay = tmuxExecArgv();
   const [bin, ...prefix] = relay.length ? relay : [TMUX_BIN];
-  const { stdout } = await execFileAsync(bin!, [...prefix, ...args], { timeout: 5000, env: TMUX_ENV });
+  const old = execFileAsync(bin!, [...prefix, ...args], { timeout: tmuxTimeoutMs(relay), env: TMUX_ENV });
+  //  d3 — `shadow` 면 같은 약속을 곁에서 지켜보며 코어 경로와 견준다. 떼어 놓는다(void): 이 호출의 답·지연·예외는 옛 경로 그대로다.
+  //   그림자는 절대 거절하지 않는다(tmux-shadow 규율). 엔진(broker-client)은 호출 시점에 만든다 — 만들다 던지면 그쪽이 드러낸다.
+  if (via?.mode === "shadow") void shadowTmux(args, via.slug, via.sample, old, () => shadowEngineFor(via));
+  const { stdout } = await old;
   return stdout;
 }
+/** 그림자의 코어 경로 엔진 — `on` 경로(`tmuxViaRoute`)와 같은 클라이언트·같은 상한. */
+function shadowEngineFor(via: { transport: BrokerTransport }) {
+  const client = makeBrokerClient(via.transport, { timeoutMs: TMUX_RELAY_TIMEOUT_MS });
+  return { list: () => client.listSessions(), exec: (c: string, argv: string[]) => client.execCapture(c, argv) };
+}
 export async function tmuxQuiet(args: string[]): Promise<void> { try { await tmux(args); } catch { /* 비치명 */ } }
+
+// ── 명령 묶어 보내기 (#3537) ────────────────────────────────────────────────
+//  **왜 필요한가** — 매니지드에서 tmux 호출 하나는 로컬 execFile 이 아니다:
+//    `node tmux-relay.cjs <slug>` (새 Node 프로세스) → 허브 → 브로커 → `docker exec … tmux …`
+//   실측(2026-09-04, 매니지드 테넌트): tmux 안 쓰는 API 가 0.02초인데 **tmux 한 번이 0.45~1.0초**(이상치 4.8초)다.
+//   createSession 은 그 왕복을 **15번 순차로** 했다(new-session + @box_* 10여 개 + 창 옵션 셋) — 그것만으로
+//   7~15초다. 사용자가 «시키기를 눌러도 5초 넘게 아무 일도 안 난다» 고 신고한 시간의 정체가 이것이었다.
+//   tmux 는 한 번의 호출에서 `;` 로 여러 명령을 이어 받으므로, 왕복 수를 명령 수에서 **떼어낼 수 있다**.
+//
+//  ⚠ 실측으로 확인한 계약(2026-09-04, tmux 3.x):
+//   · 인자 **안에** `;` 가 있는 것은 구분자가 아니다(`x;y` 는 값 그대로 들어간다) — 판 명령의 셸 스크립트가 안전한 이유.
+//   · 인자가 **정확히** `;` 이면 tmux 가 구분자로 읽어 «empty value» 로 죽는다 → 그런 명령은 배치에 안 싣는다(홀로 보낸다).
+//   · 중간 명령이 실패하면 그 뒤는 **실행되지 않고** 호출 전체가 비-0 이다 — 순차 실행의 의미가 그대로 보존된다.
+//  ⚠ 브로커의 argv 상한(lvly-cloud validateTmuxArgv, 종전 64)보다 **적게** 끊는다. 상한을 올리는 변경과
+//   이 변경의 배포 순서가 어긋나도 조용히 깨지지 않게 하려는 것이다(옛 브로커에서도 그대로 돈다).
+//  ⚠⚠ **묶는 것은 전송의 최적화처럼 보이지만 라우팅의 입력을 바꾼다** (#3668 리뷰, 2026-09-08).
+//   이 argv 를 읽는 사람이 매니지드에 둘 더 있다 — 중계(`tmux-relay.cjs sessionOf`)가 `x-lvly-session`
+//   헤더를 만들어 허브가 **세션 라우트**로 노드를 고르게 하고(#3681 ③), 브로커
+//   (`sessionbroker.tmuxSessionOf` → `routeKeyOf`)가 두 번째 홉 전달을 정한다(#3563).
+//   둘 다 **한 명령** 문법이라 «첫 비옵션이 동사 → `-s`/`-t` 를 찾되 비옵션 인자를 만나면 멈춘다» 로 읽는다.
+//   그래서 세션을 안 지목하는 명령(`set-option -g …`)을 앞에 묶으면 파서가 거기서 멈춰 뒤의
+//   `new-session -s <id>` 를 **아예 못 본다** → 지목이 null → 그 명령이 세션이 앉은 노드가 아니라
+//   테넌트 핀 노드로 간다(크로스노드 배치 세션은 생성이 깨진다).
+//   실측(실제 중계 파서를 그대로 실행): 묶으면 `null`, 안 묶으면 `<id>`.
+//  ⇒ **세션을 지목하지 않는 명령은 배치에 안 싣는다**(아래 `tmuxBatchable`). 지목이 있는 것끼리만 묶으므로
+//   묶음의 첫 명령이 늘 라우팅 키를 쥔다. 전역 옵션 하나가 홀로 나가는 대가(왕복 +1)로 라우팅이 산다.
+//
+//  ⏳ **이 층은 수명이 있다** (#3668 리뷰, 2026-09-08). 왕복이 비싼 이유는 게이트웨이가 **남의 박스**의
+//   tmux 를 부르기 때문이고, #2600 T2 (d)(#3696)의 도착점이 «매니지드 세션의 주인을 노드 박스의 세션
+//   호스트로 옮기고 게이트웨이의 매니지드 tmux 호출을 0 으로» 다. 다만 그 태스크는 **생성(create)을 스코프
+//   밖에 뒀다**(«create 에는 아직 주인이 없다 — 배치는 용량 판단이라 CP 몫») — 여기서 묶는 15 왕복이 바로
+//   그 create 라, 그때까지는 이 층이 값을 한다. create 에도 주인이 생기면 왕복이 로컬 `runsc exec`(15~70ms)로
+//   떨어져 이 층은 «7~15초를 없애는 본체» 에서 «0.5초짜리 잔여 최적화» 가 된다 — 그 시점의 죽은 코드
+//   정리(#2608)가 이 블록을 후보로 세어야 한다.
+export const TMUX_BATCH_MAX_ARGV = 60;
+
+/** tmux 명령 하나 — argv 조각. */
+export type TmuxCmd = readonly string[];
+
+/**
+ * (순수) 이 명령이 지목하는 세션 — 없거나 이름 형식 밖이면 null.
+ *
+ * ⚠ **문법을 여기서 다시 쓰지 않는다.** 정본은 `tmux-route.tmuxSessionOf` 이고, 그건 브로커
+ *  (`sessionbroker.tmuxSessionOf`)·중계(`tmux-relay.cjs sessionOf`)와 «같은 답» 을 내기로 못박힌 자리다.
+ *  배치 판정이 그들과 갈리면 그 갈림이 곧 라우팅 오류이므로, 같은 함수를 쓴다(사본을 넷째로 만들지 않는다).
+ */
+export function tmuxBatchRefOf(cmd: TmuxCmd): string | null {
+  const { ref } = tmuxSessionOf(cmd);
+  return ref.kind === "session" ? ref.sid : null;
+}
+
+/**
+ * (순수) 이 명령을 배치에 실을 수 있나.
+ *  · 인자가 정확히 `;` 이면 못 싣는다(위 tmux 계약 — 구분자로 읽혀 죽는다).
+ *  · **세션을 지목하지 않으면 못 싣는다**(위 ⚠⚠ — 묶으면 뒤 명령의 라우팅 키가 가려진다).
+ * 못 싣는 명령은 버리는 게 아니라 **홀로** 나간다(종전과 완전히 같은 동작).
+ */
+export function tmuxBatchable(cmd: TmuxCmd): boolean {
+  return cmd.length > 0 && !cmd.some((a) => a === ";") && tmuxBatchRefOf(cmd) !== null;
+}
+
+/**
+ * (순수) 명령들을 `;` 로 이어 붙인 **argv 묶음들**로 나눈다 — 묶음 하나가 중계 왕복 하나다.
+ *  못 싣는 명령(위)은 홀로 떼어 종전과 똑같이 나간다. 명령 하나가 상한을 넘으면 쪼갤 수 없으므로 그대로 둔다.
+ */
+export function chunkTmuxCommands(cmds: readonly TmuxCmd[], maxArgv = TMUX_BATCH_MAX_ARGV): string[][] {
+  const out: string[][] = [];
+  let cur: string[] = [];
+  let curRef: string | null = null;                                  // 이 묶음이 지목하는 세션 — 라우팅 키
+  const flush = (): void => { if (cur.length) { out.push(cur); cur = []; } curRef = null; };
+  for (const cmd of cmds) {
+    if (!cmd.length) continue;
+    if (!tmuxBatchable(cmd)) { flush(); out.push([...cmd]); continue; }
+    const ref = tmuxBatchRefOf(cmd);
+    //  ★ 한 묶음 = 한 세션. 묶음은 **첫 명령의 지목**으로 라우팅되므로(중계·브로커·`planTmux` 셋 다),
+    //   다른 세션의 명령을 같이 실으면 그 명령이 남의 세션 컨테이너에서 돈다.
+    if (cur.length && ref !== curRef) flush();
+    if (cur.length && cur.length + 1 + cmd.length > maxArgv) flush();
+    if (cur.length) cur.push(";");
+    else curRef = ref;
+    cur.push(...cmd);
+  }
+  flush();
+  return out;
+}
+
+/** 묶어 보낸다 — 실패는 던진다(순차 `tmux()` 여러 번과 같은 의미). */
+export async function tmuxBatch(cmds: readonly TmuxCmd[]): Promise<void> {
+  for (const argv of chunkTmuxCommands(cmds)) await tmux(argv);
+}
+/**
+ * 묶어 보내되 실패는 삼킨다(`tmuxQuiet` 여러 번의 자리).
+ *  ⚠ 한 묶음 안에서 앞 명령이 실패하면 **그 묶음의 뒤 명령은 안 돈다**(위 계약) — 종전에는 각자 독립이었다.
+ *   여기 싣는 것은 창 표시 옵션(mouse·window-size 류)뿐이라, 그중 하나가 실패하는 판은 나머지도 의미가 없다.
+ */
+export async function tmuxBatchQuiet(cmds: readonly TmuxCmd[]): Promise<void> {
+  for (const argv of chunkTmuxCommands(cmds)) await tmuxQuiet(argv);
+}
 export async function getOpt(name: string, opt: string): Promise<string> {
   try { return (await tmux(["show-options", "-t", name, "-v", opt])).trim(); } catch { return ""; }
 }
@@ -165,18 +349,52 @@ export async function listSessionPanePids(): Promise<{ ok: boolean; panes: Map<s
 //  웹터미널이 '세션 종료됨'을 띄우려면 ⓑ여야 한다 — ⓒ를 종료로 오인하면 살아있는 세션을 죽었다고 알리게 되는데,
 //  그게 #687 이 막으려던 바로 그 오인이다(그래서 그때 프론트를 '계속 재연결'로 바꿨고, 이번엔 그 반대급부인
 //  '진짜 닫혔는데 영원히 재접속중'을 고친다). 따라서 tmux 가 **응답해서 "그런 세션 없음"이라고 말할 때만** true.
-// 관리형 중계 배포인가(#1437) — tmux 가 **테넌트별 컨테이너** 안에 사는 배포. 이 판정이 gone 확답의 범위를 바꾼다:
-//  중계에선 tmux 서버 부재("no server running")가 '일시장애'가 아니라 그 테넌트 세션의 **영구 소실**이다(아래 머리말).
-//  · LIVELY_TMUX_EXEC = 중계 클라이언트(tmux-relay.cjs). registry 모드(`-L lvly-<slug>` 로컬 소켓)는 이 env 가 없어
-//    여기 안 걸린다 — 로컬 단일호스트의 보수적 판정(서버 부재=판정 불가)을 그대로 유지한다(무회귀).
-export function tmuxRelayManaged(): boolean {
-  return !!(process.env.LIVELY_TMUX_EXEC || "").trim();
+// ── 종전 `tmuxRelayManaged()` 를 두 술어로 가른다 (#2599 T3 · 조사 함정 4) ─────────────────────────
+// 그 이름 하나가 **서로 다른 두 질문**에 답하고 있었다. 답이 갈리는 표면(registry secondary)이 있어서,
+//  한쪽을 고치면 다른 쪽이 함께 바뀌는 구조였다 — 그게 함정 4 가 T2 까지 안 고쳐진 이유다.
+//   Q1 «tmux 서버가 없다 = 그 세션들이 영구 소실됐다는 확답인가»  → 아래 tmuxServerAbsenceIsFinal
+//   Q2 «tmux 호출이 중계를 지나나(= 실패가 전송 장애일 수 있나)»   → 아래 tmuxViaRelay
+
+/**
+ * tmux 서버 부재("no server running")를 **세션 영구 소실의 확답**으로 승격해도 되는 자리인가(#1437).
+ *
+ * 참인 조건은 «**이 호출이** 간 tmux 서버가 그 워크스페이스 전용인가» 다 — 전용 서버가 없으면 그 서버에만
+ *  살던 인메모리 세션은 실제로 증발한 것이고, 스스로 돌아오지 않는다(복원만이 길이다).
+ *  · `exec`(매니지드 중계) — 테넌트별 tmux 컨테이너. #1437 이 고친 원래 자리.
+ *  · 이름 있는 소켓 + 슬러그 있음(registry **secondary**, `-L lvly-<slug>`) — 워크스페이스 전용 소켓이라
+ *    같은 논리가 성립한다. T2 까지는 여기가 «판정 불가» 로 접혀 셀프호스트 secondary 가 #1437 이전 증상
+ *    (복원이 영영 안 열리고 클라가 무한 재연결)을 그대로 갖고 있었다 — 조사 함정 4 가 지목한 구멍이다.
+ *  · 기본 소켓(공용)은 **종전 그대로 거짓** — #835 의 보수적 규약(모르면 종료라 말하지 않는다)을 지킨다.
+ *
+ * ⚠ **부팅 상수가 아니라 요청 축이다.** registry 모드로 뜬 게이트웨이도 primary 워크스페이스를
+ *  무컨텍스트로 함께 서비스하고, 그 호출은 `tmuxArgvFor` 가 **공용 기본 소켓**으로 보낸다. 그래서 슬러그를
+ *  받아야 하고, 판정은 argv 를 만드는 쪽과 **같은 함수**(`tmuxServerIsDedicated`)를 봐야 어긋나지 않는다.
+ *  (첫 구현은 `tmux.socket !== null` 만 봤다가 리뷰에서 잡혔다 — T3 이 `attachTransport` 를 지운 이유와 같은 함정.)
+ *
+ * ⚠ 소켓 **파일이 사라진** 경우("error connecting … No such file or directory")도 확답으로 둔다.
+ *  서버 프로세스가 살아 있더라도 경로가 unlink 되면 **어떤 클라이언트도 다시 붙을 수 없다**(tmux 에 다른
+ *  통로가 없다). 즉 그 세션들은 실제로 회수 불가이고, 사람에게 옳은 안내는 «복원» 이다.
+ */
+export function tmuxServerAbsenceIsFinal(slug: string | null = tenantSlug()): boolean {
+  return tmuxServerIsDedicated(slug);
+}
+
+/**
+ * tmux 호출이 **중계를 지나나**(매니지드) — 목록 실패를 «못 봤다» 로 볼 수 있는 자리인가(#2544).
+ *
+ * ⚠ 위 술어와 **일부러 다르다.** 중계는 브로커 재접속·허브 503·타임아웃 같은 «전송이 못 닿았다» 가 있어
+ *  목록 실패가 «세션 0개» 를 뜻하지 않는다. 로컬 소켓(primary·registry secondary)은 전송 층이 없어서
+ *  그 폴백이 성립하지 않는다 — `session-unobserved` 머리말이 «registry 는 이 조각에 들어오지 않는다» 를
+ *  #2544 의 완료 조건으로 적어 두었다. 그래서 gone 확답을 secondary 로 넓히면서도 이쪽은 안 넓힌다.
+ */
+export function tmuxViaRelay(): boolean {
+  return execTopology().tmux.kind === "exec";
 }
 // 중계에서 'tmux 서버 자체가 없다'의 확답 문구 — 소켓이 스테일(서버 죽음)이면 "no server running on <path>",
 //  소켓 파일이 없으면(재생성된 빈 컨테이너) "error connecting to <path> (No such file or directory)".
 //  ⚠ 컨테이너 보장/생성 실패("tmux 컨테이너 …")는 여기 안 걸린다 = 판정 불가로 남는다(도커·노드 일시장애 → 재연결 유지).
 const RELAY_SERVER_GONE_RE = /\bno server running\b|error connecting to .+\((?:No such file or directory|Connection refused)\)/i;
-export function isSessionGoneError(err: unknown, bin: string = TMUX_BIN, relayManaged: boolean = tmuxRelayManaged()): boolean {
+export function isSessionGoneError(err: unknown, bin: string = TMUX_BIN, serverAbsenceIsFinal: boolean = tmuxServerAbsenceIsFinal()): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as { killed?: boolean; signal?: string | null; stderr?: unknown; code?: unknown };
   if (e.killed || e.signal) return false; // 타임아웃(SIGTERM 으로 kill)·시그널 종료 → 판정 불가
@@ -190,18 +408,74 @@ export function isSessionGoneError(err: unknown, bin: string = TMUX_BIN, relayMa
   //  (상민님 실측 2026-08-26, lively-46e3/box-sangmin-yoon: has-session → "no server running", 복원 두 번 뜨고 실패).
   //  #835 오검출 위험 없음: **살아 있는 세션은 서버가 살아 있다는 뜻**이라 이 문구가 나올 수 없다(그땐 has-session 성공
   //  또는 "can't find session"). 컨테이너 정지→재기동 창의 서버 부재도 그 테넌트 세션이 실제로 증발한 상태라 gone 이 맞다.
-  if (relayManaged && RELAY_SERVER_GONE_RE.test(String(e.stderr ?? ""))) return true;
+  if (serverAbsenceIsFinal && RELAY_SERVER_GONE_RE.test(String(e.stderr ?? ""))) return true;
   // psmux(윈도우 노드, #1791 실측): `has-session -t <없는 id>` 가 **stderr 한 글자 없이 exit 1** 로 끝난다(tmux 의 "can't find
   //  session" 문구가 없다). 그래서 종전엔 윈도우 노드의 죽은 세션이 영영 '판정 불가'였다 — nodeCanAttach 가 4410 대신 4403 을
   //  내고, #1791 복원·삭제의 gone 확답도 못 받았다(복원이 already 로 끝남, 실측). psmux 는 서버가 세션당 프로세스라
-  //  '서버 접속불가'라는 별개 상태가 없다 — exit 1 + 빈 stderr = 그 세션 없음. 실행 파일 부재(ENOENT)는 code 가 문자열이라 안 걸린다.
-  if (isPsmuxBin(bin) && e.code === 1 && String(e.stderr ?? "").trim() === "") return true;
+  //  '서버 접속불가'라는 별개 상태가 없다 — exit 1 + 빈 stderr 는 '그 세션 없음'의 유력한 모양이다.
+  //  ⚠ 다만 그 모양은 **다른 실패와도 겹친다**(isPsmuxSilentExit 머리말) — 그래서 확답이 필요한 자리
+  //   (sessionGone)는 이 술어를 그대로 믿지 않고 `list-sessions` 로 한 번 더 확인한다(#3569).
+  if (isPsmuxSilentExit(err, bin)) return true;
   return false;
 }
+
+/**
+ * psmux 의 **'조용한 실패'** — exit 1 인데 stderr 가 한 글자도 없다.
+ *
+ * ⚠ 이 모양은 «그 세션 없음» **만**을 뜻하지 않는다. psmux 는 tmux 의 "can't find session" 같은 문구를
+ *  주지 않으므로, 이 한 가지 모양 안에 «없는 세션 조회»와 «다른 이유로 실패»가 **함께** 들어 있다.
+ *  그래서 이 술어는 «없다는 확답»이 아니라 «구분이 안 되는 실패»의 이름이다 — 확답이 필요한 자리
+ *  (sessionGone)는 목록으로 한 번 더 확인한다. (실행 파일 부재(ENOENT)는 code 가 문자열이라 안 걸린다.)
+ */
+export function isPsmuxSilentExit(err: unknown, bin: string = TMUX_BIN): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { killed?: boolean; signal?: string | null; stderr?: unknown; code?: unknown };
+  if (e.killed || e.signal) return false;                     // 타임아웃·시그널 종료 → 판정 불가
+  return isPsmuxBin(bin) && e.code === 1 && String(e.stderr ?? "").trim() === "";
+}
+
+/** `list-sessions -F "#{session_name}"` 출력에 이 세션이 있나(순수 — 한 줄에 이름 하나). */
+export function sessionInList(raw: string, id: string): boolean {
+  return String(raw ?? "").split("\n").some((line) => line.trim() === id);
+}
+/**
+ * tmux 실패가 **'서버가 없다'(정상 — 세션 0개)** 인가, **'못 봤다'(장애)** 인가.
+ *  이 구분이 곧 "없다"와 "모른다"의 구분이다. 섞으면 모르는 상태를 '없음'으로 단정해 파괴적 결정을 내린다
+ *  (#1675 ⑥ 실측: 상시세션 ensure 가 조회 실패를 '세션 없음'으로 읽고 2분마다 새 세션을 만들어 30개까지 쌓였다).
+ *  #2544 — sessions.ts 에서 여기(최하층)로 내렸다: 목록 폴백(session-unobserved)도 같은 자로 재야 하고, 그 모듈이
+ *  sessions.ts 를 import 하면 순환이 된다. sessions.ts 는 그대로 재수출한다(호출부 무변경).
+ */
+export function isNoTmuxServer(e: unknown): boolean {
+  const stderr = String((e as { stderr?: unknown })?.stderr ?? "");
+  return /no server running|error connecting/i.test(stderr);
+}
+/**
+ * 이 세션이 **정말 끝났나** — `true` 일 때만 '죽었다'로 다뤄도 된다(#835 '확답 only').
+ *
+ * 🔴 psmux(윈도우 노드)만 한 겹 더 확인한다 (#3569, 2026-09-07 실측).
+ *  `isPsmuxSilentExit` 머리말대로 psmux 의 exit 1 + 빈 stderr 에는 «그 세션 없음»과 «다른 이유로 실패»가
+ *  **같은 모양으로** 들어 있다. 그런데 #1791 은 그 모양을 곧바로 «없다는 확답»으로 승격했고, 그래서 **갓 만들어
+ *  아직 등록 전인 세션**까지 죽었다고 답했다. 그 오답의 대가가 크다 — 화면의 부팅 게이트(maybeRestoreOnOpen)가
+ *  그 한 마디를 믿고 살아 있는 세션을 복원으로 몰고, 갓 만든 세션엔 이어받을 대화가 없어 인자 없는
+ *  `claude --resume` = **후보 0건 피커**가 뜬다(상민님 신고 2026-09-07: 홈에서 [시키기] 를 누르면
+ *  «이어받기 세션을 열었어요» 와 함께 빈 피커로 떨어진다. 실측 로그: 생성 t+99ms 메타가 restorable:true,
+ *  t+1303ms 에 movedTo 로 뒤집힘).
+ *
+ *  고침은 판정을 옮기는 것이 아니라 **확답을 만드는 것**이다: psmux 는 `list-sessions` 를 멀쩡히 답한다
+ *  (실측 hammurabi 2026-09-07 — `psmux list-sessions -F "#{session_name}"` → exit 0 + 세션명 한 줄씩,
+ *   `psmux has-session -t <없는 id>` → exit 1 + 빈 stderr). 목록을 볼 수 있으면 그게 확답이다.
+ *  ⚠ 목록조차 못 보면 **종전 판정을 유지한다**(gone) — #1791 이 연 길(윈도우의 죽은 세션도 복원·삭제된다)을
+ *   닫지 않기 위해서다. 이 변경은 «목록이 보일 때만» 판정을 바꾼다(무회귀).
+ */
 export async function sessionGone(id: string): Promise<boolean> {
   if (!ID_RE.test(id)) return false; // 형식 자체가 틀림 = '종료'가 아니라 잘못된 요청
   try { await tmux(["has-session", "-t", id]); return false; } // 살아있음
-  catch (err) { return isSessionGoneError(err); }
+  catch (err) {
+    if (!isSessionGoneError(err)) return false;
+    if (!isPsmuxSilentExit(err)) return true;   // tmux 는 문구로 확답한다 — 되물을 것이 없다
+    try { return !sessionInList(await tmux(["list-sessions", "-F", "#{session_name}"]), id); }
+    catch { return true; }                      // 목록도 못 봤다 → 종전 판정 유지(#1791 무회귀)
+  }
 }
 
 // 리사이즈로 tmux 히스토리에 쌓인 프롬프트 중복(shrink→grow 시 overflow가 history 로 밀림)을 정리.

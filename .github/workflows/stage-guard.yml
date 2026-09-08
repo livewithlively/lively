@@ -93,13 +93,27 @@ jobs:
           echo "낡음 ${BEHIND} · 검증중 ${AHEAD} · 공통조상 ${BASE_DATE}"
 
           if [ "$BEHIND" -ge "$DRIFT_FAIL" ]; then
-            echo "::error::stage 가 main 보다 ${BEHIND}커밋 뒤처졌습니다(임계 ${DRIFT_FAIL}). 재조립하세요 — scripts/restage.sh"
+            echo "::error::stage 가 main 보다 ${BEHIND}커밋 뒤처졌습니다(임계 ${DRIFT_FAIL}). 따라붙이세요 — git merge origin/main (재조립 scripts/restage.sh 는 그 다음)"
             {
               echo ""
-              echo "> ⛔ **재조립이 필요합니다.** 이 정도로 벌어지면 stage 에서만 깨지는 테스트가 생깁니다 —"
-              echo "> 구현과 그 짝인 테스트가 서로 다른 브랜치에 앉기 때문입니다(#2457 에서 실제로 났습니다)."
-              echo "> \`scripts/restage.sh\` — 얹혀 있던 브랜치를 다시 머지하고 백업 태그를 남깁니다."
-              echo "> 잃을 것이 걱정되면 위 스냅샷 브랜치가 지금 stage 를 통째로 담고 있습니다."
+              echo "> ⛔ **stage 를 main 에 따라붙여야 합니다.** 이 정도로 벌어지면 stage 에서만 깨지는 테스트가"
+              echo "> 생기고(구현과 그 짝인 테스트가 서로 다른 브랜치에 앉는다 — #2457), 그 위에 얹으려는 모든"
+              echo "> 세션이 충돌을 하나씩 뚫어야 해 **dev 반영이 통째로 막힙니다**(#2615 실측: 충돌 18파일)."
+              echo ""
+              echo "> **① 먼저 3-way 머지 — 이것이 기본 경로입니다(아무것도 버리지 않습니다).**"
+              echo "> \`\`\`"
+              echo "> git checkout -B stage-catchup origin/stage && git config merge.conflictStyle diff3"
+              echo "> git merge origin/main      # 충돌은 런북대로: 기계 분류 3단계 뒤 손판정"
+              echo "> npm run typecheck && npm run build && node scripts/run-tests.mjs -j 4"
+              echo "> git push origin HEAD:stage"
+              echo "> \`\`\`"
+              echo "> 판정법은 지식 \`stage-main-merge-conflict-triage-method\` — ⚠ 충돌 목록만 보면 안 됩니다"
+              echo "> (자동머지가 조용히 만든 중복 정의는 tsc 만 잡습니다)."
+              echo ""
+              echo "> **② 재조립(\`scripts/restage.sh\`)은 그 다음입니다.** stage 를 **버리고** main 위에 다시"
+              echo "> 쌓는 것이라 force-push 이고, stage 직접 커밋 중 정본이 없는 것은 사라집니다(고아 검사가"
+              echo "> 막아 세웁니다). 머지로 풀리지 않을 만큼 구조가 갈렸을 때만 쓰세요."
+              echo "> 어느 쪽이든 위 스냅샷 브랜치가 지금 stage 를 통째로 담고 있습니다."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi

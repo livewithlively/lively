@@ -1,8 +1,9 @@
 // 실행 세션 ↔ 프로젝트 현재 소속의 DB 정본.
 // cwd·project.json·tmux는 실행 표면/캐시일 뿐이며, 외부 Codex thread와 관리형 box 세션을 같은 id 계약으로 다룬다.
 import { itemsPool } from "../db/client.js";
+// 노드 에이전트에는 DB 가 없다 — 그 판별은 실행 토폴로지가 단독으로 답한다(#2599 T2).
+import { onNode } from "../exec-topology.js";
 
-const ON_NODE = !!process.env.LIVELY_NODE_TOKEN;
 
 export interface ExecutionSessionProject {
   id: string;
@@ -38,7 +39,7 @@ export function executionBindingTransition(
 
 /** 소유자가 같은 실행 세션만 등록/갱신한다. false는 이미 다른 소유자가 선점한 id다. */
 export async function claimExecutionSession(id: string, owner: string, harness?: string | null, nodeId?: string | null): Promise<boolean> {
-  if (ON_NODE || !id || !owner) return false;
+  if (onNode() || !id || !owner) return false;
   const r = await itemsPool.query(
     `INSERT INTO execution_session(id, owner, harness, managed_node_id)
        VALUES($1,$2,COALESCE(NULLIF($3,''),'unknown'),$4)
@@ -54,7 +55,7 @@ export async function claimExecutionSession(id: string, owner: string, harness?:
 
 /** 현재 상태 조회. owner가 다르면 존재 여부도 노출하지 않는다. */
 export async function executionSessionProject(id: string, owner: string): Promise<ExecutionSessionProject | null> {
-  if (ON_NODE || !id || !owner) return null;
+  if (onNode() || !id || !owner) return null;
   const r = await itemsPool.query(
     `SELECT id, owner, harness, desired_project_id, desired_revision, applied_revision, binding_epoch
        FROM execution_session WHERE id=$1 AND owner=$2`, [id, owner]);
@@ -65,7 +66,7 @@ export async function executionSessionProject(id: string, owner: string): Promis
 export async function setExecutionSessionProject(input: {
   id: string; owner: string; harness?: string | null; nodeId?: string | null; projectId: number | null;
 }): Promise<ExecutionSessionProject | null> {
-  if (ON_NODE || !input.id || !input.owner) return null;
+  if (onNode() || !input.id || !input.owner) return null;
   const client = await itemsPool.connect();
   try {
     await client.query("BEGIN");
@@ -120,7 +121,7 @@ export async function setExecutionSessionProject(input: {
 export async function adoptLegacyExecutionSession(input: {
   id: string; owner: string; harness?: string | null; nodeId?: string | null; projectId: number;
 }): Promise<ExecutionSessionProject | null> {
-  if (ON_NODE || !input.id || !input.owner || !(Number(input.projectId) > 0)) return null;
+  if (onNode() || !input.id || !input.owner || !(Number(input.projectId) > 0)) return null;
   await itemsPool.query(
     `INSERT INTO execution_session(id, owner, harness, managed_node_id, desired_project_id, desired_revision, applied_revision, binding_epoch)
        VALUES($1,$2,COALESCE(NULLIF($3,''),'unknown'),$4,$5,1,0,1)
@@ -131,7 +132,7 @@ export async function adoptLegacyExecutionSession(input: {
 
 /** 프로젝트 문맥을 실행 세션에 전달한 revision을 단조 증가로 확인한다. */
 export async function markExecutionSessionApplied(id: string, owner: string, revision: number): Promise<void> {
-  if (ON_NODE || !id || !owner || !Number.isSafeInteger(revision) || revision < 0) return;
+  if (onNode() || !id || !owner || !Number.isSafeInteger(revision) || revision < 0) return;
   await itemsPool.query(
     `UPDATE execution_session SET applied_revision=GREATEST(applied_revision,$3), last_seen=now(), updated_at=now()
       WHERE id=$1 AND owner=$2 AND desired_revision >= $3`, [id, owner, revision]);

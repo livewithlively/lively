@@ -23,7 +23,7 @@ export interface TeamMemberRow {
 
 export interface TeamCategoryRow {
   category_id: number; relation: string;
-  space?: string; key?: string; name?: string | null; // category 조인(표시용)
+  key?: string; name?: string | null; // category 조인(표시용)
 }
 
 export interface TeamDetail extends TeamRow {
@@ -55,9 +55,9 @@ export async function getTeam(id: number): Promise<TeamDetail | undefined> {
     FROM team_member tm LEFT JOIN org_member m ON m.id=tm.member_id
     WHERE tm.team_id=$1 ORDER BY tm.sort, m.display_name NULLS LAST, tm.member_id`, [id]);
   const categories: TeamCategoryRow[] = await q(itemsPool, `
-    SELECT tc.category_id, tc.relation, c.space, c.key, c.name
+    SELECT tc.category_id, tc.relation, c.key, c.name
     FROM team_category tc JOIN category c ON c.id=tc.category_id
-    WHERE tc.team_id=$1 ORDER BY (tc.relation='owner') DESC, c.space, c.name NULLS LAST, c.key`, [id]);
+    WHERE tc.team_id=$1 ORDER BY (tc.relation='owner') DESC, c.name NULLS LAST, c.key`, [id]);
   return { ...team, members, categories };
 }
 
@@ -197,18 +197,18 @@ export async function memberTeams(memberId: string): Promise<TeamRow[]> {
 
 // 멤버의 '우리 팀' 카테고리 — 소속 팀들이 소유(owner)하거나 이해관계(stakeholder)인 카테고리(이름·공간 동봉).
 //  표면화(사이드바 '우리 팀' 우선) + 주입(카테고리 블록 재정렬·팀 프리앰블)이 공유하는 단일 진실원천. owner 먼저 정렬.
-export interface MemberCategory { category_id: number; space: string; key: string; name: string | null; owner: boolean }
+export interface MemberCategory { category_id: number; key: string; name: string | null; owner: boolean }
 export async function memberCategories(memberId: string): Promise<MemberCategory[]> {
   if (!memberId) return [];
   return q(itemsPool, `
-    SELECT tc.category_id, c.space, c.key, c.name, bool_or(tc.relation='owner') AS owner
+    SELECT tc.category_id, c.key, c.name, bool_or(tc.relation='owner') AS owner
     FROM team_member tm
     JOIN team t ON t.id=tm.team_id AND t.state='active'
     JOIN team_category tc ON tc.team_id=tm.team_id
     JOIN category c ON c.id=tc.category_id AND c.state<>'merged'
     WHERE tm.member_id=$1
-    GROUP BY tc.category_id, c.space, c.key, c.name
-    ORDER BY owner DESC, c.space, c.name NULLS LAST, c.key`, [memberId]);
+    GROUP BY tc.category_id, c.key, c.name
+    ORDER BY owner DESC, c.name NULLS LAST, c.key`, [memberId]);
 }
 
 // id 집합 형태(표면화/주입의 Set 멤버십 판정용) — memberCategories 파생(단일 쿼리 소스).

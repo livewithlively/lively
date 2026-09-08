@@ -49,7 +49,7 @@ try {
     CREATE TABLE IF NOT EXISTS org_member(id TEXT PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'human');
     -- listFindings 가 대상 제목을 보여주려 knowledge 를 LEFT JOIN 하고, M15 가 분류 이동을 검증한다.
     --  실제 스키마(v6)는 훨씬 크지만 이 테스트가 만지는 컬럼만 세운다.
-    CREATE TABLE IF NOT EXISTS category(id SERIAL PRIMARY KEY, key TEXT UNIQUE, space TEXT, name TEXT);
+    CREATE TABLE IF NOT EXISTS category(id SERIAL PRIMARY KEY, key TEXT UNIQUE, name TEXT);
     CREATE TABLE IF NOT EXISTS knowledge(name TEXT PRIMARY KEY, title TEXT);
     CREATE TABLE IF NOT EXISTS knowledge_category(
       name TEXT NOT NULL, category_id INT NOT NULL, mapped_by TEXT NOT NULL DEFAULT 'rule',
@@ -152,7 +152,7 @@ try {
   ok("현황 집계 — 관리기 수·열린 발견 수");
 
   // ── M15 move_category 자동 조치: 기존 연결을 지우지 않고 rejected 로 내린다 ──
-  await itemsPool.query(`INSERT INTO category(key, space, name) VALUES('cat-old','product','옛'),('cat-new','product','새')`);
+  await itemsPool.query(`INSERT INTO category(key, name) VALUES('cat-old','옛'),('cat-new','새')`);
   await itemsPool.query(`INSERT INTO knowledge(name) VALUES('k-이동')`);
   const oldId = (await itemsPool.query(`SELECT id FROM category WHERE key='cat-old'`)).rows[0].id;
   const newId = (await itemsPool.query(`SELECT id FROM category WHERE key='cat-new'`)).rows[0].id;
