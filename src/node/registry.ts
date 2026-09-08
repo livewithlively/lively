@@ -16,7 +16,7 @@ import {
 import { authNodeTokenDetailed, getNode, touchNode, appendNodeLinkEvent, type OrgNode } from "./store.js";
 import { denialMessage, denialKey, shouldLogDenial, type NodeAuthOutcome } from "./auth-denial.js";   // #2161
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
-import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
+import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, nodeSnapshotSessions, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
 import { selfNodePossible } from "../exec-topology.js";   // #2599 T2 — 「이 판정이 성립하는 배포인가」의 선결 조건
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
 import { scopeKey, nodeUpgradeTenant } from "./registry-scope.js";
@@ -156,6 +156,21 @@ export function sessionHostsInScope(now: number = Date.now()): Array<{ declared:
 
 /** 신선 임계 — 목록 소유 판정도 attach 정책과 **같은 자**를 쓴다(둘이 갈리면 «붙을 수는 있는데 목록엔 없다»가 난다). */
 export const NODE_STATE_STALE_MS = STATE_STALE_MS;
+
+/**
+ * 이 테넌트의 노드들이 올린 세션 스냅샷 전량 — **가시성 필터 없이** (#2600 T2 d4).
+ *  판정(무엇을 넣나)은 순수 술어 `self-node.nodeSnapshotSessions` 가 하고, 여기는 **재료만** 모은다.
+ *
+ * ⚠ 「모든 주인」을 봐야 하는 자리 전용이다(「답 기다림」 알림 스윕처럼) — 사람에게 보여 줄 목록에는
+ *  쓰지 마라. 그쪽은 `nodeSessionsFor(viewer)` 가 가시성을 판정한다.
+ */
+export function nodeSessionsInScope(now: number = Date.now()): SessionInfo[] {
+  const nodes: Array<{ online: boolean; stateAgeMs: number | null; sessions: readonly SessionInfo[] }> = [];
+  for (const [id, st] of inScope(states)) {
+    nodes.push({ online: conns.has(keyOf(id)), stateAgeMs: now - st.ts, sessions: st.sessions });
+  }
+  return nodeSnapshotSessions(nodes, STATE_STALE_MS);
+}
 
 /**
  * 지운 노드를 **이 프로세스의 기억에서도** 지운다(#3558). `store.deleteNode`(DB 3표) 직후에 부른다.

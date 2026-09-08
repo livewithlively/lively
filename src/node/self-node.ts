@@ -78,6 +78,35 @@ export function declaredSessionHost(n: { session_host?: boolean } | null | undef
  * ⚠ 하나라도 모르면 **false** — 게이트웨이가 종전대로 답한다. 이 술어가 참이 되는 배포는 오늘
  *  «선언된 세션 호스트를 띄운 매니지드 테넌트» 뿐이고, 셀프호스트·멤버 PC 배포는 한 줄도 안 바뀐다.
  */
+/**
+ * 노드 스냅샷에서 세션을 모은다(순수) — 「모든 주인」을 봐야 하는 자리용 (#2600 T2 d4).
+ *
+ * ── 왜 필요한가 ───────────────────────────────────────────────────────────────
+ * 「답 기다림」 알림 스윕(`sweepAwaitingNotifications`, 30초 주기·테넌트 순회)이 게이트웨이 tmux 를
+ *  `listSessionsRaw()` 로 읽는다. 계수 실측(2026-09-08): 그 스윕이 게이트웨이 tmux 호출의 **64%** 였다
+ *  — 세션이 0개인 빈 시험 테넌트까지 테넌트당 정확히 16/창이었다(사용량과 무관한 고정 주기라는 증거).
+ *  세션의 주인이 노드로 옮겨간 테넌트에서는 그 답을 **노드 스냅샷**에서 읽으면 된다.
+ *
+ * ── 규율 ──────────────────────────────────────────────────────────────────────
+ *  · **온라인이고 신선한** 노드만. 오프라인·미보고(`null`)·낡은 노드의 세션은 넣지 않는다 — 낡은 근거로
+ *    「답을 기다려요」를 울리면 아무도 없는 세션에 알림이 간다.
+ *  · 신선도 경계는 **포함**(`<= staleMs`)이고, `gatewayDefersToSessionHost` 와 **같은 자**를 쓴다.
+ *    둘이 갈리면 「목록은 호스트가 답하는데 알림은 게이트웨이가 본다」는 어긋남이 생긴다.
+ *  · 여러 노드면 이어붙인다 — 한 테넌트에 세션 호스트와 멤버 PC 노드가 함께 있을 수 있다.
+ *  · **가시성 필터를 걸지 않는다.** 이 자리는 모든 주인의 세션을 보고 각 세션의 주인에게만 알린다.
+ */
+export function nodeSnapshotSessions<T>(
+  nodes: ReadonlyArray<{ online: boolean; stateAgeMs: number | null; sessions: readonly T[] }>,
+  staleMs: number,
+): T[] {
+  const out: T[] = [];
+  for (const n of nodes) {
+    if (!n.online || n.stateAgeMs === null || !(n.stateAgeMs <= staleMs)) continue;
+    out.push(...n.sessions);
+  }
+  return out;
+}
+
 export function gatewayDefersToSessionHost(
   hosts: ReadonlyArray<{ declared: boolean; online: boolean; stateAgeMs: number | null }>,
   staleMs: number,
