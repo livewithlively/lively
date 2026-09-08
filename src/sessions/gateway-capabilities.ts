@@ -20,14 +20,16 @@
 //  아니다(그 불변식은 scripts/node-agent-bundle-boundary.test.mjs 가 못박는다).
 
 import type { GitCredentialSecret } from "../org/credentials/git-credential-store.js";   // 타입 전용 — 런타임 간선 아님
+import type { ExecAt } from "../terminal/terminal-member-fs.js";                        // 타입 전용 — 런타임 간선 아님
 // ⚠ 위 「런타임 import 금지」의 유일한 예외(#2599 T2). exec-topology 는 **import 가 0 인 순수 잎**이고
 //  이 번들에 이미 실려 있다(terminal-isolation·sessions·session-state 가 쓴다) — 즉 이 간선은 번들에
 //  아무것도 더 끌어오지 않는다. 그 불변식(잎의 순수함)은 exec-topology-single-source 시험 S3 가 지킨다.
 import { onNode } from "../exec-topology.js";
 
 export interface GatewayCapabilities {
-  /** 멤버의 등록 git 자격을 그 홈에 반영한다(세션 시작 경로). DB 를 탄다 → 게이트웨이 전용. */
-  materializeMemberGit?: (osUser: string, memberId: string) => Promise<void>;
+  /** 멤버의 등록 git 자격을 그 홈에 반영한다(세션 시작 경로). DB 를 탄다 → 게이트웨이 전용.
+   *  #3668 T2 — 첫 인자는 실행 자리다(`{osUser, sessionId}` 면 `git config` 가 그 세션 컨테이너에서 돈다). */
+  materializeMemberGit?: (at: ExecAt, memberId: string) => Promise<void>;
   /** 이 멤버/호스트의 git 자격을 해소한다(레지스트리·금고·GitHub App 폴백). DB 를 탄다 → 게이트웨이 전용. */
   resolveGitSecret?: (memberId: string | null, host: string, opts?: { repoFullName?: string | null }) => Promise<GitCredentialSecret | null>;
   /** 멤버 키트 시딩이 쓰는 바깥 데이터(멤버 조회 · 설치 번들 생성). DB·번들 생성을 탄다 → 게이트웨이 전용. */

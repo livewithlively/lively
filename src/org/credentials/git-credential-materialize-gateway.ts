@@ -9,7 +9,7 @@
 // 세션 시작 경로는 이제 이걸 직접 부르지 않고 `sessions/gateway-capabilities.ts` 를 통해 부른다
 //  (게이트웨이가 부팅 때 등록 · 노드엔 등록이 없어 그냥 건너뛴다).
 import { listGitCredentialsPublic, getGitSecret, memberOwner } from "./git-credential-store.js";
-import { memberSh } from "../../terminal/terminal-member-fs.js";
+import { memberSh, execAt, type ExecAt } from "../../terminal/terminal-member-fs.js";
 import { safeHost, buildSshConfigBlock, buildGitCredLines } from "./git-credential-materialize.js";
 
 // 멤버의 등록 자격(SSH/HTTPS)을 홈에 반영. 등록 자격이 없으면 기본 no-op(쓰기 안 함).
@@ -19,7 +19,12 @@ import { safeHost, buildSshConfigBlock, buildGitCredLines } from "./git-credenti
 //   이 자격 모델의 핵심 명분이라 그 구멍은 그냥 둘 수 없다.
 //  세션 시작(createSession) 경로는 기본값 그대로 no-op 을 유지한다 — 자격을 한 번도 등록 안 한 멤버의 홈은
 //   건드리지 않는다는 보수성(#524 격리 정신)이 거기선 여전히 옳고, 매 세션 불필요한 memberSh 왕복도 없다.
-export async function materializeMemberGit(osUser: string, memberId: string, opts: { evenIfEmpty?: boolean } = {}): Promise<void> {
+//  ★ #3668 T2 — 자리가 둘이다. ①②③④ 의 «파일 쓰기» 는 종전 멤버 경계(시크릿이 stdin 으로 흐르므로 거기여야 한다),
+//   ④ 의 **`git config --global`** 만 그 세션의 컨테이너다(호출부가 sessionId 를 줄 때). git 을 부르는 순간 그 멤버의
+//   `~/.gitconfig`(alias·core.pager)가 실행할 코드를 정하고, 파일 op 자리는 T3 에서 gVisor 밖으로 내려간다.
+//   세션이 없는 호출(자격 등록·삭제 회수 경로)은 문자열 osUser 를 그대로 줘 종전과 같이 돈다.
+export async function materializeMemberGit(at: ExecAt, memberId: string, opts: { evenIfEmpty?: boolean } = {}): Promise<void> {
+  const { osUser } = execAt(at);
   const owner = memberOwner(memberId);
   const pubs = await listGitCredentialsPublic(owner);
   if (!pubs.length && !opts.evenIfEmpty) return; // 등록 자격 없음 → 손대지 않음(과쓰기 방지)
@@ -54,14 +59,17 @@ export async function materializeMemberGit(osUser: string, memberId: string, opt
 
   // ④ HTTPS 자격 — ~/.lively/git-credentials(600) + credential.helper=store(그 파일). 시크릿은 stdin.
   //  자격이 없어도 파일을 비워 재생성(스테일 토큰 제거). helper 설정은 무해(빈 파일이면 매칭 없음).
+  //  ⚠ #3668 T2 — 종전엔 «파일 쓰기 + git config» 가 한 `sh -c` 였다. 자리가 갈렸으므로 둘로 나눈다:
+  //   쓰기는 시크릿이 stdin 이라 멤버 경계에, git 호출은 세션 컨테이너에. **쓰기가 먼저**여야 한다 —
+  //   helper 가 가리키는 파일이 없는 창을 만들지 않는다.
   {
     const lines = buildGitCredLines(https.map((s) => ({ host: s.host, https_username: s.https_username, https_token: s.https_token! })));
     await memberSh(
       osUser,
       'umask 077; mkdir -p "$HOME/.lively"; chmod 700 "$HOME/.lively"; ' +
-      'cat > "$HOME/.lively/git-credentials"; chmod 600 "$HOME/.lively/git-credentials"; ' +
-      'git config --global credential.helper "store --file=$HOME/.lively/git-credentials"',
+      'cat > "$HOME/.lively/git-credentials"; chmod 600 "$HOME/.lively/git-credentials"',
       lines,
     );
+    await memberSh(at, 'git config --global credential.helper "store --file=$HOME/.lively/git-credentials"');
   }
 }
