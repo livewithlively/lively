@@ -172,10 +172,21 @@ function clearStaleRegistrations(rpath, wtPath, br) {
     else if (cur && line.startsWith("branch refs/heads/")) cur.branch = line.slice("branch refs/heads/".length);
   }
   const gone = (p) => !fs.existsSync(p) && fs.existsSync(path.dirname(p));
-  const real = (p) => { try { return path.join(fs.realpathSync.native(path.dirname(p)), path.basename(p)); } catch { return path.resolve(p); } };
+  // 경로 정규화(비교용) — 있으면 realpath, 없으면 가장 가까운 있는 조상을 realpath 하고 나머지를 붙인다(코어 normPath 동형 —
+  //  git 은 등록 경로를 realpath 로 저장하므로 macOS /var↔/private/var 표기가 갈리면 내 목표 경로의 등록을 못 알아본다).
+  const real = (p) => {
+    let cur = path.resolve(p); const tail = [];
+    for (let i = 0; i < 64; i++) {
+      let r = null; try { r = fs.realpathSync.native(cur); } catch { /* 없음 → 위로 */ }
+      if (r !== null) { tail.reverse(); return path.join(r, ...tail); }
+      const up = path.dirname(cur); if (up === cur) break;
+      tail.push(path.basename(cur)); cur = up;
+    }
+    return path.resolve(p);
+  };
   for (const w of regs) {
     if (!(real(w.path) === real(wtPath) || (br && w.branch === br)) || !gone(w.path)) continue;
-    git(["worktree", "remove", "--force", w.path], rpath);
+    git(["worktree", "remove", "--force", w.path], rpath);   // locked 등록은 git 이 스스로 거부한다(-f 두 번 필요) — 그대로 둔다
   }
 }
 // 재사용 레포를 현재 브랜치 upstream 으로 fast-forward(best-effort·비파괴): dirty·무upstream·갈라짐·오프라인이면 skip.
