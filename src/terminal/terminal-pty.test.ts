@@ -533,13 +533,15 @@ t("[attach cwd] 홈에 들어갈 수 있으면 홈을 쓴다(종전 동작 무�
 });
 
 t("[attach cwd] ★ 홈에 못 들어가면 루트로 떨어진다 — attach 가 chdir 하나로 죽지 않는다", () => {
-  const root = attachCwd("/var/lib/lvly-sesshost/lively-46e3", () => false);
-  assert.notEqual(root, "/var/lib/lvly-sesshost/lively-46e3");
-  assert.equal(root, path.parse(process.cwd()).root || path.sep);
+  const home = "/var/lib/lvly-sesshost/lively-46e3";
+  const root = attachCwd(home, () => false);
+  assert.notEqual(root, home);
+  //  루트는 **그 홈이 앉은 볼륨의** 루트다(process.cwd() 를 안 본다 — ops/state-dir 가드레일).
+  assert.equal(root, path.parse(home).root);
 });
 
 t("[attach cwd] 홈이 빈 값이면 들어갈 수 있나 묻지도 않고 루트 — 빈 문자열을 cwd 로 넘기지 않는다", () => {
   let asked = 0;
-  assert.equal(attachCwd("", () => { asked++; return true; }), path.parse(process.cwd()).root || path.sep);
+  assert.equal(attachCwd("", () => { asked++; return true; }), path.sep);
   assert.equal(asked, 0);
 });
