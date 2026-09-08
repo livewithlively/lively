@@ -217,6 +217,38 @@ test("E16 — 첫 관측치는 기준선일 뿐이다(붙자마자 전체를 되
     "E16 — 붙은 순간의 크기를 «자랐다» 로 흘린다");
 });
 
+// ── E21 — 이 기능은 프로덕션에서 **보여야** 한다 ────────────────────────────────
+//  2026-09-08 실측: 실패 경로가 `logger.debug` 인데 게이트웨이 최소 레벨이 info 라, 감시자가 통째로
+//  안 떠도 로그에 한 줄도 안 남았다. 그런데 증상도 없다 — 폴링이 안전망이라 대화는 멀쩡히 돈다.
+//  즉 «죽어 있어도 아무도 모른다» 였고, 그 상태로는 이 프로젝트가 값을 했는지조차 못 잰다.
+test("E21 — 감시 상태 **전이**를 info 로 남긴다(전이에서만 · 살아 있는 수와 함께)", () => {
+  const w = read("src/terminal/transcript-watch.ts");
+  const at = w.indexOf("function setLive(");
+  assert.ok(at > 0, "setLive 를 못 찾았다");
+  const body = w.slice(at, w.indexOf("\n}", at));
+  assert.match(body, /logger\.info\(/,
+    "E21 — 전이가 info 로 안 남는다: 감시가 통째로 죽어도 로그에 흔적이 없다(증상도 없어 영영 모른다)");
+  //  ⚠ 함수 어딘가에 `liveCount` 가 있는 것으로는 부족하다 — **로그 호출 안에** 실려야 한 줄로 읽힌다
+  //   (첫 판이 그렇게 무뎌서 «페이로드에서 빼기» 변이를 못 잡았다).
+  const call = /logger\.info\(\{([^}]*)\}/.exec(body);
+  assert.ok(call, "info 로그의 페이로드를 못 찾았다");
+  assert.match(call![1], /liveCount/,
+    "살아 있는 감시 수가 **로그 페이로드에** 없다 — 한 줄로 «이 기능이 사나» 를 못 본다");
+  assert.match(call![1], /sessionId/, "어느 세션인지 안 싣는다");
+  assert.match(call![1], /reason/, "왜 그리 됐는지 안 싣는다 — 거짓 전이의 사유가 진단의 전부다");
+  //  ⚠ **전이에서만** 찍어야 한다 — 통보마다 찍으면 그게 새 소음이 되고, 소음은 곧 아무도 안 보는 로그다.
+  assert.match(body, /if \(w\.live === live\) return;/, "같은 값에도 찍는다 — 전이 가드가 사라졌다");
+  const grewFn = w.slice(w.indexOf("function grew("), w.indexOf("function scheduleRetry("));
+  assert.doesNotMatch(grewFn, /logger\.(info|warn)\(/, "E21 — 통보마다 로그를 찍는다(전이만 찍어야 한다)");
+});
+
+test("E21 — 접을 때 살아 있는 수가 새지 않는다(계수가 거짓말하면 그 지표는 없느니만 못하다)", () => {
+  const w = read("src/terminal/transcript-watch.ts");
+  //  teardown 은 setLive 를 안 거친다 — 접는 두 경로가 각자 내려 줘야 계수가 맞는다.
+  assert.match(w, /setLive\(sessionId, cur, false, "released"\);/, "유예 만료로 접을 때 live 를 안 내린다");
+  assert.match(w, /setLive\(sessionId, w, false, "reset"\);/, "reset 으로 접을 때 live 를 안 내린다");
+});
+
 // ── E12·E13 — 연결·감시자는 세션당 하나, 아무도 안 보면 접는다 ────────────────────
 test("E13 — /events 연결은 세션당 한 벌이다(표면마다 각자 열지 않는다)", () => {
   const tasks = read("web/session-tasks.ts");
