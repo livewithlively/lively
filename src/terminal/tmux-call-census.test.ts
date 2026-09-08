@@ -161,13 +161,19 @@ test("S7 위치 없는 프레임은 건너뛴다", () => {
   assert.equal(censusSite(s), "x:7");
 });
 
-test("S8 ★ 전부 배관이면 `(없음)` — 없는 것을 지어내지 않는다", () => {
+test("S8 ★ 전부 배관이면 **가장 깊은 배관 줄**이 답이다 — 그 줄이 곧 호출부다", () => {
+  //  실측(첫 창): `set-window-option (없음)` 4건의 정체는 `ensureSessionOpts`(tmux-exec 안에서 나가는 호출)였다.
+  //   바깥 프레임이 비동기 경계에서 끊겨 남지 않는다. `(없음)` 으로 두면 «계기가 못 본 자리» 로 오독된다.
   const s = STACK(
-    "tmux (/app/dist/terminal/tmux-exec.js:131:20)",
-    "shadowTmux (/app/dist/terminal/tmux-shadow.js:88:3)",
+    "tmuxQuiet (/app/dist/terminal/tmux-exec.js:529:9)",
+    "ensureSessionOpts (/app/dist/terminal/tmux-exec.js:531:3)",
     "record (/app/dist/terminal/tmux-call-census.js:70:5)",
   );
-  assert.equal(censusSite(s), CENSUS_NONE);
+  assert.equal(censusSite(s), "tmux-exec:529");
+});
+
+test("S8b 쓸 수 있는 프레임이 하나도 없으면 그때가 `(없음)` 이다", () => {
+  assert.equal(censusSite(STACK("native", "<anonymous>")), CENSUS_NONE);
 });
 
 test("S9 ★ 경로·확장자는 벗고 파일명만 — 절대경로를 실으면 창마다 수 KB 가 는다", () => {

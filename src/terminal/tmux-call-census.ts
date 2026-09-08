@@ -54,12 +54,17 @@ export const CENSUS_NONE = "(없음)";
  *    `sessions:210<sessions:156` 으로 나와 **정작 부른 쪽(알림 스윕이냐 회수기냐 장부냐)이 잘렸다.**
  *    그건 이 계기가 지금 답해야 하는 바로 그 질문이다. 파일별로 첫 칸만 남기면 같은 길이로
  *    `sessions:210<awaiting-notifier:26<outbox-request-sweep:63` 처럼 **모듈 사슬**이 보인다.
- *  · 못 뽑으면 `(없음)` — 스택이 없거나(엔진 차이) 전부 배관이면 그렇게 적고, **없는 것을 지어내지 않는다.**
+ *  · ★ **전부 배관이면 가장 깊은 배관 프레임을 적는다**(`tmux-exec:529`). 그런 호출이 실제로 있다 —
+ *    `ensureSessionOpts` 처럼 배관 파일 안에서 나가는 tmux 호출은 바깥 프레임이 비동기 경계에서 끊겨
+ *    남지 않는다. 첫 창에서 `set-window-option (없음)` 4건이 그것이었다. `(없음)` 으로 두면 «계기가 못
+ *    본 자리» 처럼 보이는데, 실제로는 **그 배관 줄이 곧 호출부**다. 지어내는 것이 아니라 있는 것을 적는다.
+ *  · 그래도 못 뽑으면 `(없음)` — 스택 자체가 없거나(엔진 차이) 쓸 수 있는 프레임이 하나도 없을 때뿐이다.
  */
 export function censusSite(stack: string | null | undefined, depth = 3): string {
   if (!stack) return CENSUS_NONE;
   const out: string[] = [];
   const seen = new Set<string>();
+  let plumbing: string | null = null;          // 전부 배관일 때 쓸 «가장 깊은 배관 줄»
   for (const raw of stack.split("\n")) {
     const line = raw.trim();
     if (!line.startsWith("at ")) continue;                    // 머리말("Error")·기타 줄
@@ -69,13 +74,16 @@ export function censusSite(stack: string | null | undefined, depth = 3): string 
     const file = m[1]!;
     if (file.startsWith("node:")) continue;                    // 엔진 내부
     const base = (file.split(/[\\/]/).pop() ?? file).replace(/\.[cm]?[jt]s$/, "");
-    if (base.startsWith("tmux")) continue;                     // seam 자신의 배관
+    if (base.startsWith("tmux")) {                             // seam 자신의 배관
+      plumbing ??= `${base}:${m[2]}`;                          //  전부 배관이면 이게 답이다(아래 폴백)
+      continue;
+    }
     if (seen.has(base)) continue;                              // ★ 같은 파일의 내부 호출은 칸을 안 먹는다
     seen.add(base);
     out.push(`${base}:${m[2]}`);
     if (out.length >= depth) break;
   }
-  return out.length ? out.join("<") : CENSUS_NONE;
+  return out.length ? out.join("<") : (plumbing ?? CENSUS_NONE);
 }
 
 export interface TmuxCallCensus {
