@@ -138,3 +138,87 @@ export function clampPage(
 }
 
 // v6 은퇴(2026-06-24): qtype·MappingBody·parseMappingBody(구 item→domain 매핑 body 검증) 제거 — 매핑 서브시스템 폐기.
+
+// ── 어댑터 파리티(#1403 계열) — REST parse 산출의 enum 검증을 **선언(zod input)에서 파생**한다. ──
+//  왜 필요한가: MCP 는 SDK 가 z.object(cap.input) 로 호출 전에 검증하는데(허용값 밖이면 InvalidParams),
+//   REST 는 zod 를 안 타고 mount.parse 가 유일한 검증이라(types.ts) 각 parse 가 enum 화이트리스트를
+//   **손으로 베껴** 왔다. 베끼기를 빠뜨린 필드는 조용히 통과해 DB enum/check 제약까지 새고, wrap() 의
+//   메시지 매핑에도 안 걸려 500 "internal_error" 로 나간다 — 같은 입력을 MCP 로 보내면 안내가 나오는데
+//   REST 만 정체불명 500 이다(실측: POST /api/ui/knowledge type='incident'). 손베끼기 누락은 한 필드가
+//   아니라 클래스였다(레지스트리 전수 관측 ~100 필드).
+//  그래서 문구·허용값을 REST 쪽에 다시 적지 않고 zod 선언에서 읽는다 — 스키마가 단일 진실원천이라
+//   enum 옵션을 늘려도 REST 가 자동으로 따라온다.
+//  ⚠ 빈 문자열은 '미전송'으로 보고 건너뛴다: REST parse 관례상 생략을 ""(또는 undefined)로 싣는 필드가
+//   있어(me_liv_home.choice·task_checklist_v6.action·org_collect_scope_options.system) 여기서 막으면
+//   '필드를 안 보낸 요청'이 400 이 된다. 필수 여부는 종전대로 각 parse·핸들러가 판정한다.
+type ZodDefLike = { typeName?: string; innerType?: unknown; schema?: unknown; values?: unknown; type?: unknown };
+const defOf = (zt: unknown): ZodDefLike | undefined => (zt as { _def?: ZodDefLike } | null | undefined)?._def;
+
+/** optional/nullable/default/effects 래핑을 벗겨 enum 선언(허용값 + 안내문)을 꺼낸다. 배열 enum 도 원소 기준. */
+function enumSpecOf(zt: unknown): { values: string[]; description?: string; array: boolean } | null {
+  let cur = zt;
+  let description = (zt as { description?: string } | undefined)?.description;
+  let array = false;
+  for (let i = 0; i < 10; i++) {
+    const def = defOf(cur);
+    if (!def) return null;
+    description ??= (cur as { description?: string }).description;
+    if (def.typeName === "ZodEnum") {
+      const values = (def.values ?? []) as string[];
+      return values.length ? { values, description, array } : null;
+    }
+    if (def.typeName === "ZodArray") { array = true; cur = def.type; continue; }
+    if (["ZodOptional", "ZodNullable", "ZodDefault", "ZodEffects"].includes(def.typeName ?? "")) {
+      cur = def.innerType ?? def.schema;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+/** 요청 원본(body·query)에서 enum 선언 필드의 값을 뽑는다 — parse **전** 판정용.
+ *  왜 parse 산출만으로 부족한가: 여러 parse 가 허용값 화이트리스트에 안 맞으면 `undefined` 로 **조용히
+ *  떨어뜨린다**(`b.state === "archived" || b.state === "active" ? b.state : undefined` 꼴 11곳). 그러면
+ *  산출엔 흔적이 없어 DB 까지 새지는 않지만, 호출자의 의도가 말없이 무시된다(오타 하나면 필터·상태 지정이
+ *  통째로 사라진다) — MCP 로 같은 값을 보내면 에러가 나는데 REST 만 무응답으로 삼키는 같은 비대칭이다.
+ *  키 이름이 같아도 capability 별로만 대조하므로 다른 표면의 동명 파라미터(예: terminal/browse 의
+ *  root=shared)와는 섞이지 않는다. */
+function rawEnumValues(shape: Record<string, unknown>, req: express.Request): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const query = (req.query ?? {}) as Record<string, unknown>;
+  for (const key of Object.keys(shape)) {
+    const v = body[key] !== undefined ? body[key] : query[key];
+    if (v !== undefined) out[key] = v;
+  }
+  return out;
+}
+
+/** REST 어댑터의 enum 검증 — 요청 원본과 parse 산출 **양쪽**을 capability 의 zod input 선언에 비춘다. */
+export function assertRequestEnumParity(
+  shape: Record<string, unknown>, req: express.Request, parsed: Record<string, unknown>,
+): void {
+  assertEnumParity(shape, rawEnumValues(shape, req));
+  assertEnumParity(shape, parsed);
+}
+
+/** 주어진 값 묶음을 capability 의 zod input shape 에 비춰 enum 값만 검증한다(위반 시 400).
+ *  검증 범위를 enum 으로 좁힌 이유: 문자열 길이·수치 범위 등은 각 parse 가 자기 문구로 이미 판정하고
+ *  있어 통째 z.object 검증을 얹으면 그 문구·상태코드가 통째로 바뀐다(byte-compat 파기). enum 은
+ *  '허용값 목록'이라 판정이 기계적이고 문구를 선언에서 그대로 만들 수 있다. */
+export function assertEnumParity(shape: Record<string, unknown>, input: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(input)) {
+    if (value === undefined || value === null || value === "") continue;
+    const spec = enumSpecOf(shape[key]);
+    if (!spec) continue;
+    const seen = spec.array && Array.isArray(value) ? value : [value];
+    for (const v of seen) {
+      if (v === undefined || v === null || v === "") continue;
+      if (typeof v === "string" && spec.values.includes(v)) continue;
+      throw new HttpError(400,
+        `${key} 은(는) ${spec.values.join("|")} 중 하나여야 합니다`
+        + (spec.description ? ` — ${spec.description}` : ""));
+    }
+  }
+}
