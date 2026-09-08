@@ -919,7 +919,12 @@ export async function setListCategoryForProject(projectId: number, categoryId: n
   //  리스트 유무보다 **먼저** 본다: 틀린 id 는 리스트 상태와 무관하게 틀린 id 인데, 순서가 뒤면
   //  #1631 의 자리 만들기(ensureListForCategory)가 없는 축에 대해 null 을 돌려준 뒤 «리스트가 없다»는
   //  엉뚱한 409 로 나간다.
-  if (next != null && !(await one(itemsPool, `SELECT 1 AS ok FROM category WHERE id=$1`, [next])))
+  //  ⚠ 병합된 축(state='merged')은 **없는 것과 같이** 본다 — 이 술어가 ensureListForCategory 와 갈리면
+  //   같은 어긋남이 그대로 재현된다: 자리 만들기는 merged 를 못 찾아 null 을 돌려주는데 존재확인만
+  //   통과해서, 리스트 없는 프로젝트가 «리스트에 먼저 넣으세요»(409)를 받는다. 그 안내를 따라도 결과가
+  //   달라지지 않으니 틀린 대처법이다. merged 는 category_list·categoryByKey·도메인맵·임베딩이 전부
+  //   빼는 묘비 상태라(key 유니크 인덱스도 부분 인덱스다) 호출자 눈엔 애초에 존재하지 않는 id 다.
+  if (next != null && !(await one(itemsPool, `SELECT 1 AS ok FROM category WHERE id=$1 AND state<>'merged'`, [next])))
     return { applied: false, listId: row.list_id ?? null, changed: false, reason: "no_category" };
   const listId = row.list_id ?? null;
   if (listId == null) return { applied: false, listId: null, changed: false, reason: "no_list" }; // 미분류 프로젝트 — 소유할 리스트가 없어 no-op

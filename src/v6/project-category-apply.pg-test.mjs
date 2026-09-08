@@ -38,7 +38,7 @@ const categoryOf = async (projectId) => {
 async function cleanup() {
   await itemsPool.query(`DELETE FROM project WHERE created_by=$1`, [MID]);
   await itemsPool.query(`DELETE FROM project_list WHERE created_by=$1`, [MID]);
-  await itemsPool.query(`DELETE FROM category WHERE key IN ($1, $2)`, [TAG, TAG + "_g"]);
+  await itemsPool.query(`DELETE FROM category WHERE key IN ($1, $2, $3)`, [TAG, TAG + "_g", TAG + "_m"]);
 }
 
 const status = (e) => e?.status ?? e?.statusCode ?? null;
@@ -142,6 +142,30 @@ try {
     chk("⑥ 없는 카테고리 link → 404 + 어느 id 가 틀렸는지 에코(FK 위반 500 누출 아님)", r.threw && r.okStatus && r.okMsg,
       r.threw ? `status=${r.status} msg=${r.msg}` : "🔴 안 던졌다");
     chk("⑥ read-back — 리스트가 오염되지 않음", (await categoryOf(pid)) === null, `category=${await categoryOf(pid)}`);
+  }
+
+  // ⑦ 병합된 축(state='merged') — **없는 id 와 같이** 404 여야 한다.
+  //    존재확인이 merged 를 통과시키면 ensureListForCategory(merged 를 못 찾아 null)와 술어가 갈려서,
+  //    리스트 없는 프로젝트가 «리스트에 먼저 넣으세요»(409)를 받는다. 그 안내를 따라도 결과가 달라지지
+  //    않으니 틀린 대처법이고, 그게 ②-b 가 없애려던 «엉뚱한 409» 와 정확히 같은 결함이다.
+  //    merged 는 category_list 가 빼는 묘비라 호출자 눈엔 애초에 없는 id 다.
+  {
+    const pid = await mkProject(null);
+    const mergedCat = (await itemsPool.query(
+      `INSERT INTO category(key, name, origin, state) VALUES($1,'병합된축','agent','merged') RETURNING id`, [TAG + "_m"])).rows[0].id;
+    const r = await throwsWith(() => call("project_set_categories_v6", { id: pid, categoryIds: [mergedCat] }), 404, /카테고리/);
+    chk("⑦ 병합된 카테고리 set_categories → 404(리스트 없다는 409 아님)", r.threw && r.okStatus && r.okMsg,
+      r.threw ? `status=${r.status} msg=${r.msg}` : "🔴 안 던졌다");
+    chk("⑦ read-back — 자리도 만들지 않았다", (await categoryOf(pid)) === null, `category=${await categoryOf(pid)}`);
+
+    // 리스트가 있어도 마찬가지 — 묘비를 리스트에 써 넣으면 화면 어디에도 안 뜨는 값이 박힌다.
+    const listId = (await itemsPool.query(
+      `INSERT INTO project_list(name, created_by) VALUES('정직성테스트리스트3',$1) RETURNING id`, [MID])).rows[0].id;
+    const pid2 = await mkProject(listId);
+    const r2 = await throwsWith(() => call("project_link_category_v6", { id: pid2, categoryId: mergedCat }), 404, /카테고리/);
+    chk("⑦ 리스트 있는 프로젝트에 병합된 카테고리 link → 404", r2.threw && r2.okStatus && r2.okMsg,
+      r2.threw ? `status=${r2.status} msg=${r2.msg}` : "🔴 안 던졌다");
+    chk("⑦ read-back — 리스트에 묘비가 안 박혔다", (await categoryOf(pid2)) === null, `category=${await categoryOf(pid2)}`);
   }
 } finally {
   await cleanup().catch(() => {});
