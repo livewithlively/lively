@@ -7,7 +7,7 @@
 //    알아서 가른다 — 여기서 send-keys 를 직접 치지 않는다.
 //  · 하네스는 **그 사람이 로그인한 것**(resolveHeadlessHarness — claude 하드코딩 금지, #1884). 비용 주체 = 사용자.
 //  · 세션 종류는 human — 사람이 열어 보고 이어서 말을 걸 수 있는 자기 세션이다(kind=task/managed 는 기계 세션).
-//  · 워크스페이스 바인딩은 라우트 층과 같은 함수(recordSessionTenant) — registry 모드에서 이 세션이 어느 워크스페이스
+//  · 워크스페이스 바인딩은 세션 생성 관문(session-launch.ts)과 같은 함수(recordSessionTenant) — registry 모드에서 이 세션이 어느 워크스페이스
 //    소속인지는 여기서 정해진다. 이걸 빼면 세션이 primary 로 취급된다.
 //
 //  ── 실패 규율 ──
@@ -26,7 +26,7 @@ export async function livKickoff(user: LivelyUser, o: { prompt: string; harness?
   // 동적 import — terminal/sessions 는 무거운 모듈(tmux·pty)이고 org/* 에서 정적으로 걸면 순환(check-imports) 위험.
   const { resolveHeadlessHarness } = await import("../../node/headless-harness.js");
   const { createSession } = await import("../../terminal/sessions.js");
-  const { registerSessionInstance, recordSessionTenant } = await import("../../terminal/routes.js");
+  const { registerSessionInstance, recordSessionTenant } = await import("../../terminal/session-launch.js");   // #3626 — 세션 생성 관문 모듈로 이사
 
   const harness = await resolveHeadlessHarness(userId, o.harness ?? null);
   const session = await createSession(user, {
