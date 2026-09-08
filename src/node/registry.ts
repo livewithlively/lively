@@ -16,7 +16,8 @@ import {
 import { authNodeTokenDetailed, getNode, touchNode, appendNodeLinkEvent, type OrgNode } from "./store.js";
 import { denialMessage, denialKey, shouldLogDenial, type NodeAuthOutcome } from "./auth-denial.js";   // #2161
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
-import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, nodeSnapshotSessions, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
+import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, nodeSnapshotSessions, sessionHostVerdict, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
+import { makeTmuxCallCensus, censusSite } from "../terminal/tmux-call-census.js";   // #2600 T2 d6 — 판정 계수(같은 세 칸: 슬러그·축·호출부)
 import { selfNodePossible } from "../exec-topology.js";   // #2599 T2 — 「이 판정이 성립하는 배포인가」의 선결 조건
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
 import { scopeKey, nodeUpgradeTenant } from "./registry-scope.js";
@@ -174,6 +175,37 @@ export function isSessionHostNode(nodeId: string): boolean {
 
 /** 신선 임계 — 목록 소유 판정도 attach 정책과 **같은 자**를 쓴다(둘이 갈리면 «붙을 수는 있는데 목록엔 없다»가 난다). */
 export const NODE_STATE_STALE_MS = STATE_STALE_MS;
+
+/**
+ * 판정 계수 창 — 이 값마다 «어느 테넌트에서, 어떤 사유로, 어느 호출부가» 물었는지 표로 낸다 (#2600 T2 d6).
+ *  ⚠ 이 계수기는 tmux 호출용으로 만들었지만 세는 모양이 `(슬러그, 축, 호출부)` 라 그대로 쓴다 —
+ *   여기서 «축» 은 동사가 아니라 **판정 사유**(`sessionHostVerdict.why`)다.
+ */
+const DEFERS_CENSUS_EVERY = 200;
+const defersCensus = makeTmuxCallCensus(DEFERS_CENSUS_EVERY);
+
+/**
+ * **이 자리에서 게이트웨이가 세션 목록 소유를 놓나** — 스코프 수집 + 판정을 한 번에 (#2600 T2 d6).
+ *
+ * ── 왜 함수로 모았나 ─────────────────────────────────────────────────────────
+ * `gatewayDefersToSessionHost(sessionHostsInScope(), NODE_STATE_STALE_MS)` 라는 **똑같은 한 줄이 세 곳**에
+ *  있었다(목록 라우트·프로젝트 라우트·알림 스윕). 세 벌이면 하나만 고쳐지고 나머지가 남는다 — 이 프로젝트가
+ *  이미 그 사고를 한 번 겪었다(#789 가 알림 스윕의 한 사본만 고쳤다).
+ *
+ * ── 그리고 계기가 필요하다 ──────────────────────────────────────────────────
+ * 실측(2026-09-08): 같은 술어가 **알림 스윕에서는 참**(그 자리 tmux 호출 0)인데 **목록 라우트에서는 거짓**이라
+ *  `list-sessions` 를 5~8/분 쳤다. 불리언만으로는 이유를 못 묻는다. 여기서 사유(`why`)와 **호출부**(스택)를
+ *  함께 세면 그 어긋남이 로그에 그대로 나온다 — 「호출부 칸」이 tmux 계수에서 한 일과 같은 방식이다.
+ *  계수가 실패해도 판정은 그대로 간다(비치명).
+ */
+export function gatewayDefersHere(now: number = Date.now()): boolean {
+  const v = sessionHostVerdict(sessionHostsInScope(now), STATE_STALE_MS);
+  try {
+    const rows = defersCensus.record(currentTenant()?.slug, v.why, censusSite(new Error().stack));
+    if (rows) logger.info({ defersCensus: { window: DEFERS_CENSUS_EVERY, rows } }, "세션 호스트 소유 판정 계수(창)");
+  } catch { /* 계수 때문에 판정이 흔들리면 안 된다 */ }
+  return v.owns;
+}
 
 /**
  * 이 테넌트의 노드들이 올린 세션 스냅샷 전량 — **가시성 필터 없이** (#2600 T2 d4).

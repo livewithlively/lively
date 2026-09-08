@@ -12,7 +12,7 @@
 //  엣지 표는 스크래치패드 `spec.md` 의 10행 — 행마다 시나리오 하나.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { gatewayDefersToSessionHost } from "./self-node.js";
+import { gatewayDefersToSessionHost, sessionHostVerdict } from "./self-node.js";
 
 /** registry 의 `STATE_STALE_MS`(상태 push 3초 기준 신선 임계)와 같은 값을 시험에서도 **명시**한다. */
 const STALE = 12_000;
@@ -69,4 +69,60 @@ test("G9 ★ 신선도 경계는 **포함**이다 — 정확히 staleMs 면 아�
 
 test("G10 방금 받은 스냅샷(나이 0)도 신선하다", () => {
   assert.equal(gatewayDefersToSessionHost([host({ stateAgeMs: 0 })], STALE), true);
+});
+
+// ── 사유(`why`) — 같은 답에 «왜» 를 붙인다 (#2600 T2 d6) ─────────────────────
+//  왜 생겼나: 계수 실측(2026-09-08)에서 **같은 술어가 두 자리에서 다르게 답했다** — 카나리아 테넌트에서
+//   알림 스윕은 참(그 자리 tmux 호출 0)인데 목록 라우트는 거짓이라 `list-sessions` 를 5~8/분 쳤다.
+//   불리언 하나로는 그 어긋남의 이유를 물을 수가 없다(선언? 오프라인? 낡음? 스코프에 노드가 없음?).
+//  엣지 표는 스크래치패드 `spec-verdict.md` 의 10행.
+const why = (hosts: Host[]) => sessionHostVerdict(hosts, STALE).why;
+
+test("V1 선언 + 온라인 + 신선 → ok", () => {
+  assert.deepEqual(sessionHostVerdict([host()], STALE), { owns: true, why: "ok" });
+});
+
+test("V2 ★ 스코프에 노드가 하나도 없으면 `no-hosts` — «없다» 와 «자격이 없다» 는 다른 사유다", () => {
+  assert.deepEqual(sessionHostVerdict([], STALE), { owns: false, why: "no-hosts" });
+});
+
+test("V3 노드는 있는데 전부 선언 없음 → undeclared", () => {
+  assert.equal(why([host({ declared: false }), host({ declared: false })]), "undeclared");
+});
+
+test("V4 선언은 있는데 전부 오프라인 → offline", () => {
+  assert.equal(why([host({ online: false })]), "offline");
+});
+
+test("V5 선언·온라인인데 스냅샷이 없음(null) → stale", () => {
+  assert.equal(why([host({ stateAgeMs: null })]), "stale");
+});
+
+test("V6 선언·온라인인데 스냅샷이 낡음 → stale", () => {
+  assert.equal(why([host({ stateAgeMs: STALE + 1 })]), "stale");
+});
+
+test("V7 경계 — 정확히 staleMs 면 아직 신선하다(ok)", () => {
+  assert.deepEqual(sessionHostVerdict([host({ stateAgeMs: STALE })], STALE), { owns: true, why: "ok" });
+});
+
+test("V8 ★ 섞이면 **선언한 쪽이 사유를 정한다** — 미선언 온라인 + 선언 오프라인 → offline", () => {
+  //  미선언 노드가 온라인이라고 «offline 아님» 으로 읽으면, 정작 주인이 끊긴 사실이 사유에서 사라진다.
+  assert.equal(why([host({ declared: false, online: true }), host({ declared: true, online: false })]), "offline");
+});
+
+test("V9 자격 있는 하나가 있으면 나머지가 낡아도 ok", () => {
+  assert.equal(why([host({ stateAgeMs: STALE + 5_000 }), host()]), "ok");
+});
+
+test("V10 ★ 답은 언제나 종전 술어와 같다 — 사유를 붙이면서 판정이 바뀌면 안 된다", () => {
+  const rows: Host[][] = [
+    [], [host()], [host({ declared: false })], [host({ online: false })],
+    [host({ stateAgeMs: null })], [host({ stateAgeMs: STALE + 1 })], [host({ stateAgeMs: STALE })],
+    [host({ declared: false, online: true }), host({ declared: true, online: false })],
+    [host({ stateAgeMs: STALE + 5_000 }), host()],
+  ];
+  for (const r of rows) {
+    assert.equal(sessionHostVerdict(r, STALE).owns, gatewayDefersToSessionHost(r, STALE), JSON.stringify(r));
+  }
 });

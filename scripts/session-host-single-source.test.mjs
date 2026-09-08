@@ -191,8 +191,31 @@ const NOTIFIER = "src/sessions/awaiting-notifier.ts";
 
 t("[S10] 알림 스윕의 목록 출처 판정이 스윕 안에 있다", () => {
   const src = code(NOTIFIER);
-  assert.match(src, /gatewayDefersToSessionHost\(/,
+  assert.match(src, /gatewayDefersHere\(/,
     `${NOTIFIER} 가 출처를 스스로 정하지 않는다 — 그러면 호출부마다 판정이 갈린다`);
+});
+
+// ── S10c: «놓나» 판정의 **조립**도 한 곳이다 (#2600 T2 d6) ──────────────────
+//  `gatewayDefersToSessionHost(sessionHostsInScope(), NODE_STATE_STALE_MS)` 라는 똑같은 한 줄이 세 곳에
+//   있었다(목록 라우트·프로젝트 라우트·알림 스윕). 술어가 순수해도 **재료를 모으는 줄이 세 벌이면** 신선도
+//   자를 하나만 바꿔도 셋이 갈린다. 그래서 조립은 `registry.gatewayDefersHere()` 한 곳이고, 거기서만
+//   순수 술어를 부른다(그 자리가 판정 계수도 함께 낸다 — 어긋남을 로그로 볼 수 있어야 한다).
+t("[S10c] 판정 조립(술어 + 스코프 수집)은 registry 한 곳뿐이다", () => {
+  const files = readdirSync(join(ROOT, "src"), { recursive: true, encoding: "utf8" })
+    .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
+    .map((f) => join("src", f));
+  //  술어 이름이 둘이다(`gatewayDefersToSessionHost` = 불리언 · `sessionHostVerdict` = 사유 포함) —
+  //   둘 중 어느 것에 `sessionHostsInScope()` 를 물리든 그게 «조립» 이다.
+  //  ⚠ 여기서 `code()` 를 쓰면 **안 된다**(실측 2026-09-08): 그 헬퍼는 블록주석을 먼저 지우는데
+  //   `terminal/routes.ts` 안의 문자열에 `/*` 가 있어 그 뒤 코드가 통째로 먹혔고, 이 시험이 **변이를
+  //   통과시켰다**(장식이 될 뻔했다 — 일부러 되돌려 보고 잡았다). 그래서 **줄 단위**로 본다:
+  //   주석으로 시작하는 줄만 빼면 이 패턴에는 충분하다(한 줄짜리 표현식이다).
+  const assemble = /\b(gatewayDefersToSessionHost|sessionHostVerdict)\s*\(\s*sessionHostsInScope\s*\(/;
+  const assemblesIn = (rel) => read(rel).split("\n")
+    .some((l) => !/^\s*(\/\/|\*|\/\*)/.test(l) && assemble.test(l));
+  const assemblers = files.filter(assemblesIn);
+  assert.deepEqual(assemblers, ["src/node/registry.ts"],
+    `조립이 여러 곳이다: ${assemblers.join(", ") || "(한 곳도 없다 — 이름이 바뀌었나)"}`);
 });
 
 t("[S10b] 알림 스윕 호출부는 출처를 안 넘긴다(호출부가 둘 이상이다)", () => {
@@ -213,4 +236,4 @@ t("[S10b] 알림 스윕 호출부는 출처를 안 넘긴다(호출부가 둘 �
     `호출부를 ${callers.length}곳밖에 못 찾았다 — 이 시험이 지키려는 «두 자리» 가 사라졌거나 이름이 바뀌었다`);
 });
 
-console.log(`\n${pass} passed — 세션 호스트 단일 출처(#2600 T1·T2 d4)`);
+console.log(`\n${pass} passed — 세션 호스트 단일 출처(#2600 T1·T2 d4·d6)`);

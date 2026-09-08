@@ -134,7 +134,38 @@ export function gatewayDefersToSessionHost(
   hosts: ReadonlyArray<{ declared: boolean; online: boolean; stateAgeMs: number | null }>,
   staleMs: number,
 ): boolean {
-  return hosts.some((h) => h.declared && h.online && h.stateAgeMs !== null && h.stateAgeMs <= staleMs);
+  return sessionHostVerdict(hosts, staleMs).owns;
+}
+
+/** 판정이 «왜» 그렇게 났나 — 계수·진단용 사유. `ok` 만 참이고 나머지는 전부 거짓의 이유다. */
+export type SessionHostWhy = "no-hosts" | "undeclared" | "offline" | "stale" | "ok";
+
+/**
+ * 위 술어에 **사유를 붙인 판**(순수) — 답은 `owns` 로 같고, `why` 가 «어느 조건에서 멈췄나» 를 말한다 (#2600 T2 d6).
+ *
+ * ── 왜 필요한가 (2026-09-08 실측) ────────────────────────────────────────────
+ * 같은 술어가 **두 자리에서 다르게 답하는 것**이 계수에 잡혔다: 카나리아 테넌트에서 알림 스윕은 참(그 자리
+ *  tmux 호출 0)인데 목록 라우트는 거짓이라 계속 `list-sessions` 를 쳤다(5~8/분). 불리언 하나로는 그
+ *  어긋남의 이유를 물을 수가 없다 — 선언이 없는 건지, 오프라인인지, 스냅샷이 낡은 건지, 애초에 그 스코프에
+ *  노드가 없는 건지가 전부 같은 `false` 로 보인다.
+ *
+ * ── 사유 순서(먼저 걸리는 것이 답) ──────────────────────────────────────────
+ *  `no-hosts`(스코프에 노드 0) → `undeclared`(선언한 노드 없음) → `offline`(선언은 있는데 다 끊김)
+ *  → `stale`(선언·온라인인데 스냅샷이 낡음/없음) → `ok`.
+ * 이 순서는 **좁혀 가는 순서**다: 앞엣것이 참이면 뒤엣것은 물어볼 것도 없다.
+ */
+export function sessionHostVerdict(
+  hosts: ReadonlyArray<{ declared: boolean; online: boolean; stateAgeMs: number | null }>,
+  staleMs: number,
+): { owns: boolean; why: SessionHostWhy } {
+  if (hosts.some((h) => h.declared && h.online && h.stateAgeMs !== null && h.stateAgeMs <= staleMs)) {
+    return { owns: true, why: "ok" };
+  }
+  if (!hosts.length) return { owns: false, why: "no-hosts" };
+  const declared = hosts.filter((h) => h.declared);
+  if (!declared.length) return { owns: false, why: "undeclared" };
+  if (!declared.some((h) => h.online)) return { owns: false, why: "offline" };
+  return { owns: false, why: "stale" };
 }
 
 /**
