@@ -742,8 +742,11 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   }
   // 웹터미널은 xterm.js 로 렌더된다 — pane TERM 을 xterm-256color 로 통일(색 일관성: 격리 세션은 box-spawn 이
   //  강제, 비격리(프로젝트·managed)는 여기 default-terminal 로. 서버 전역이나 '새 pane' 에만 적용=기존 세션 무영향, 멱등).
-  //  #3537 — 이 전역 옵션은 **판을 만들기 전에** 서 있어야 하므로(새 pane 에만 적용된다) 아래 new-session 과
-  //   같은 묶음으로 한 번에 보낸다. 왕복 하나를 아끼는 것이고 실행 순서는 그대로다(tmux 가 순차로 처리한다).
+  //  #3537 — 이 전역 옵션은 **판을 만들기 전에** 서 있어야 한다(새 pane 에만 적용된다). 그래서 new-session 앞에 둔다.
+  //  ⚠ #3668 — 이 둘은 **한 왕복으로 안 묶인다.** 전역 옵션은 세션을 지목하지 않아서, 묶으면 중계·브로커의
+  //   argv 파서가 뒤의 `new-session -s <id>` 를 못 보고 그 명령이 배치 노드 대신 테넌트 핀 노드로 간다
+  //   (근거·실측은 tmux-exec.ts `tmuxSessionRefOf` 머리말). `chunkTmuxCommands` 가 알아서 둘로 나누므로
+  //   여기서는 **순서만** 선언하면 된다 — 목록으로 두는 이유가 그것이다(순서 보존 + 나누기는 그쪽 책임).
   const openPane: TmuxCmd[] = [["set-option", "-g", "default-terminal", "xterm-256color"], args];
   // ── 첫 실행 «이 폴더를 신뢰합니까?» 를 미리 지운다(#1631) ──────────────────────────────
   //  그 물음은 stdin 으로 밀어 넣은 **첫 지시를 삼키고** 사람이 Enter 를 칠 때까지 기다리다 CLI 를 끝낸다.
@@ -788,7 +791,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       };
     await ensureFolderTrusted(io, configFile, target, trustOk, harness.key);
   }
-  try { await tmuxBatch(openPane); }   // #3537 — default-terminal + new-session 을 한 왕복으로
+  try { await tmuxBatch(openPane); }   // #3537 — 전역 옵션 먼저, 그다음 new-session(두 왕복 — 위 ⚠ #3668)
   catch (e) {
     //  #2545 — 새 경로는 행을 먼저 썼다. 판이 안 떴으면 지운다(안 지우면 화면에 유령 «중단됨» 이 뜬다). 컨테이너는 브로커 ①(유휴)이 거둔다.
     if (inside && mirrored) await deleteSessionState(id).catch(() => undefined);

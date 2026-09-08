@@ -8,7 +8,7 @@
 //   인자 **안**의 `;` 는 값이고, 인자가 **정확히** `;` 이면 구분자다. 그래서 후자는 못 묶는다.
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { TMUX_BATCH_MAX_ARGV, chunkTmuxCommands, tmuxBatchable, type TmuxCmd } from "./tmux-exec.js";
+import { TMUX_BATCH_MAX_ARGV, chunkTmuxCommands, tmuxBatchable, tmuxBatchRefOf, type TmuxCmd } from "./tmux-exec.js";
 
 /** 5-인자짜리 set-option 한 벌 — 실제로 이 함수가 나르는 모양(@box_* 메타)이다. */
 const opt = (n: number): TmuxCmd => ["set-option", "-t", "box-x-1", `@box_m${n}`, String(n)];
@@ -88,5 +88,87 @@ test("E11 평탄화 정합 — 어떤 상한에서도 명령 순서·값이 보�
   const want = cmds.flatMap((c) => [...c]);
   for (const max of [3, 6, 11, 17, 23, 60, 1000]) {
     assert.deepEqual(flatten(chunkTmuxCommands(cmds, max)), want, `상한 ${max} 에서 어긋났다`);
+  }
+});
+
+// ── E12·E13 라우팅 키 보존 (#3668 리뷰에서 발견 · 2026-09-08) ────────────────────────────
+//  ⚠ 묶는 것은 전송의 최적화처럼 보이지만 **라우팅의 입력**을 바꾼다. 매니지드에서 이 argv 를 읽는 사람이
+//   둘 더 있다 — 중계(`tmux-relay.cjs sessionOf`)가 `x-lvly-session` 헤더를 만들고, 브로커
+//   (`sessionbroker.tmuxSessionOf`)가 세션 축 전달을 정한다. 둘 다 **한 명령** 문법이다:
+//   첫 비옵션이 동사 → 동사에 따라 `-s`/`-t` 를 찾되 **비옵션 인자를 만나면 멈춘다**.
+//  그래서 `set-option -g default-terminal xterm-256color` 처럼 **세션을 안 지목하는 명령**을 앞에 묶으면
+//   파서가 세 번째 인자에서 멈춰 뒤의 `new-session -s <id>` 를 **아예 못 본다** → 지목이 null 이 되고
+//   그 명령이 배치 노드가 아니라 테넌트 핀 노드로 간다(크로스노드 세션은 생성이 깨진다).
+//  실측(2026-09-08, 실제 중계 파서를 그대로 실행): 묶으면 `null`, 안 묶으면 `<id>`.
+//  ⇒ **규칙: 세션을 지목하지 않는 명령은 배치에 안 싣는다**(`;` 인자와 같은 취급 — 홀로 보낸다).
+
+/** 세션 생성이 실제로 내는 모양 — 전역 옵션이 판보다 **먼저** 서야 한다(새 pane 에만 적용되므로). */
+const GLOBAL_OPT: TmuxCmd = ["set-option", "-g", "default-terminal", "xterm-256color"];
+const NEW_SESSION: TmuxCmd = ["new-session", "-d", "-s", "box-x-1", "-c", "/work"];
+
+test("E12 세션을 안 지목하는 명령(-g 전역)은 세션 명령과 안 묶인다 — 라우팅 키가 살아야 한다", () => {
+  const out = chunkTmuxCommands([GLOBAL_OPT, NEW_SESSION]);
+  assert.equal(out.length, 2, "묶으면 중계·브로커가 new-session 의 -s 를 못 본다");
+  assert.deepEqual(out[0], [...GLOBAL_OPT], "전역 옵션이 먼저, 홀로");
+  assert.deepEqual(out[1], [...NEW_SESSION], "세션 명령은 자기 argv 의 첫 명령이어야 한다");
+});
+
+test("E13 세션을 지목하는 명령끼리는 그대로 묶인다 — 이 규칙이 배치를 무력화하지 않는다", () => {
+  const out = chunkTmuxCommands([opt(0), opt(1), opt(2)]);
+  assert.equal(out.length, 1, "@box_* 메타는 전부 -t <id> 라 한 왕복 그대로");
+  assert.equal(out[0]![0], "set-option");
+  assert.equal(out[0]![1], "-t", "묶음의 첫 명령이 세션을 지목한다");
+});
+
+test("E14 지목 없는 명령이 중간에 끼면 앞뒤가 따로 묶인다 — 뒤 묶음도 첫 명령이 세션을 지목한다", () => {
+  const out = chunkTmuxCommands([opt(0), GLOBAL_OPT, opt(1), opt(2)]);
+  assert.equal(out.length, 3);
+  assert.deepEqual(out[1], [...GLOBAL_OPT]);
+  assert.deepEqual(flatten([out[2]!]), [...opt(1), ...opt(2)]);
+});
+
+// ── E15 지목 읽기 — 중계·브로커 문법의 거울 (#3668) ───────────────────────────────────────
+//  이 표가 갈리면 배치 판정이 갈리고, 그러면 라우팅이 갈린다. 그래서 행마다 못박는다.
+//  ⚠ `set-option -s <opt> <val>` 은 **서버 옵션**이라 `-s` 가 있어도 세션이 아니다 —
+//   «`-s`/`-t` 가 들어 있나» 같은 순진한 검사로는 이 행을 틀린다.
+test("E15 세션 지목 읽기 — 동사에 따라 -s/-t, 서버 옵션의 -s 는 세션이 아니다", () => {
+  const rows: Array<[TmuxCmd, string | null]> = [
+    [["new-session", "-d", "-s", "box-x-1", "-c", "/work"], "box-x-1"],
+    [["detach-client", "-s", "box-x-1"], "box-x-1"],
+    [["set-option", "-t", "box-x-1", "@box_owner", "u1"], "box-x-1"],
+    [["set-window-option", "-t", "box-x-1", "window-size", "latest"], "box-x-1"],
+    [["set-option", "-g", "default-terminal", "xterm-256color"], null],
+    [["set-option", "-s", "exit-empty", "off"], null],
+    [["list-sessions", "-F", "#{session_name}"], null],
+    //  ⚠ 지목은 있는데 **이름 형식 밖**이면 소비자들이 그 키를 거절한다 — 묶어 봐야 그 묶음이 통째로
+    //   핀 노드로 떨어지므로, «지목 있음» 으로 세면 안 된다(정본 tmuxSessionOf 의 unparsed).
+    [["set-option", "-t", "not a sid", "@box_x", "1"], null],
+    [["-L", "sock", "set-option", "-t", "box-x-1", "mouse", "on"], "box-x-1"],
+    [["attach", "-t", "box-x-1"], "box-x-1"],
+    //  ⚠ **값이 옵션처럼 생긴 경우** — 라벨·플래그는 사람이 정하므로 `-t…` 로 시작할 수 있다.
+    //   옵션 구간이 끝나면 멈추지 않으면 그 값의 뒷토막(`ricky`)을 세션으로 읽는다(라우팅 키 오염).
+    [["set-option", "-t", "box-x-1", "@box_label", "-tricky"], "box-x-1"],
+    [[], null],
+  ];
+  for (const [cmd, want] of rows) {
+    assert.equal(tmuxBatchRefOf(cmd), want, `${JSON.stringify(cmd)} → ${want}`);
+    if (cmd.length) assert.equal(tmuxBatchable(cmd), want !== null, "배치 가능 여부는 지목 유무를 따른다");
+  }
+});
+
+// ── E16 한 묶음 = 한 세션 (#3668) ────────────────────────────────────────────────────────
+//  묶음의 argv 는 **첫 명령의 지목**으로 라우팅된다(중계·브로커·코어 `planTmux` 셋 다). 그래서 다른 세션의
+//  명령이 같은 묶음에 실리면 그 명령이 **남의 세션 컨테이너에서** 돈다. 오늘 호출부는 전부 한 세션이지만,
+//  그건 우연이지 규칙이 아니다 — 규칙으로 못박는다.
+test("E16 지목이 다른 명령은 같은 묶음에 안 실린다 — 남의 컨테이너에서 돌지 않게", () => {
+  const a: TmuxCmd = ["set-option", "-t", "box-x-1", "@box_owner", "u1"];
+  const b: TmuxCmd = ["set-option", "-t", "box-y-2", "@box_owner", "u2"];
+  const out = chunkTmuxCommands([a, a, b, b]);
+  assert.equal(out.length, 2, "세션이 갈리는 자리에서 묶음도 갈려야 한다");
+  assert.deepEqual(flatten([out[0]!]), [...a, ...a]);
+  assert.deepEqual(flatten([out[1]!]), [...b, ...b]);
+  for (const chunk of out) {
+    const first = chunk.slice(0, chunk.indexOf(";") === -1 ? chunk.length : chunk.indexOf(";"));
+    assert.ok(tmuxBatchRefOf(first), "묶음의 첫 명령이 라우팅 키를 쥔다");
   }
 });
