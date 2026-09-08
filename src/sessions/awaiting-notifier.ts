@@ -8,6 +8,7 @@
 import { logger } from "../log.js";
 import { listSessionsRaw } from "../terminal/terminal-sessions.js";
 import { pickAwaitingTransitions } from "../apps/notify-policy.js";
+import { mergeSessionViews } from "./session-merge.js";                    // #3741 — 목록 화면과 같은 병합·같은 우선순위
 import { notifyMember } from "../apps/notify.js";
 
 /** 세션 id → 직전 관측의 awaiting. 프로세스 메모리에만 산다 — 재시작하면 첫 관측이 전이로 잡힌다(놓친 알림을 살리는 쪽). */
@@ -20,7 +21,17 @@ const AI_SESSION_APP = "ai-session";
 export function resetAwaitingState(): void { lastSeen = new Map(); }
 
 /**
- * 이 스윕의 **목록 출처**를 정한다 — 주인이 노드로 옮겨간 테넌트는 그 노드 스냅샷에서 읽는다 (#2600 T2 d4).
+ * 이 스윕의 **목록 출처**를 정한다 — 게이트웨이 tmux 와 노드 스냅샷의 **합집합** (#2600 T2 d4 · #3741).
+ *
+ * ── 왜 합집합인가 (#3741, 2026-09-09) ────────────────────────────────────────
+ * 이 스윕은 오래 **한 출처만** 봤다: `listSessionsRaw()` = `collectSessions(null)` = 게이트웨이 자기
+ *  tmux. 그래서 **멤버 PC 노드 세션은 이 알림의 대상이 된 적이 없다.** 실측(2026-09-08, `lively-46e3`):
+ *  세션 456개 중 **442개가 노드 세션**(haruui-macbookair 207 · laibeulliui-macmini 176 · hammurabi 59)
+ *  인데, 그것들이 「하네스가 답을 기다림」이 돼도 알림이 안 갔다. #1891 의 취지(«유저의 액션을 필요로
+ *  하는 상태가 되면 알림»)는 세션이 **어디서 도는지와 무관**한데 구현만 한쪽에 묶여 있었다.
+ *  d4 가 이 자리를 노드 스냅샷으로 바꿀 때도 «선언된 세션 호스트» 로 좁혀서 그 구멍은 그대로 뒀다.
+ * ⚠ 이걸 여는 대가로 **알림 폭풍**이 따라온다(여태 못 보던 세션 442개가 한꺼번에 들어온다). 그 방어는
+ *  여기가 아니라 `pickAwaitingTransitions` 의 **첫 관측 유예**에 있다 — 그쪽 머리말이 근거다.
  *
  * ── 왜 호출부가 아니라 여기인가 (2026-09-08 실측) ────────────────────────────
  * 이 스윕은 **두 자리에서** 돌아간다 — 하우스키핑 30초 타이머(`boot/housekeeping.ts`)와 요청 정비표
@@ -40,8 +51,15 @@ async function defaultSessionList(): Promise<typeof listSessionsRaw> {
   try {
     const [{ sessionHostsInScope, nodeSessionsInScope, NODE_STATE_STALE_MS }, { gatewayDefersToSessionHost }] =
       await Promise.all([import("../node/registry.js"), import("../node/self-node.js")]);
-    if (!gatewayDefersToSessionHost(sessionHostsInScope(), NODE_STATE_STALE_MS)) return listSessionsRaw;
-    return async () => nodeSessionsInScope();
+    //  주인이 노드로 옮겨간 테넌트에서만 게이트웨이 tmux 를 안 읽는다(d4 판정 — 목록 소유와 같은 술어).
+    //   그 외에는 종전대로 읽고, **어느 쪽이든 노드 스냅샷을 보탠다**(#3741 — 위 머리말).
+    const hostOwns = gatewayDefersToSessionHost(sessionHostsInScope(), NODE_STATE_STALE_MS);
+    return async () => {
+      const local = hostOwns ? [] : await listSessionsRaw();
+      //  같은 id 가 양쪽에 있으면 **라이브 관측(local)이 이긴다** — 목록 화면과 같은 병합·같은 우선순위를
+      //   쓴다(`session-merge` 머리말). 여기서 따로 접으면 그게 곧 두 번째 사본이다.
+      return mergeSessionViews(local, nodeSessionsInScope());
+    };
   } catch (err) {
     //  판정을 못 세우면 **종전 경로**다(fail-closed 는 여기선 «게이트웨이가 계속 본다» 쪽이다 — 알림이
     //   빠지는 것보다 낫다). 조용히 삼키지 않고 남긴다: 이 자리가 죽으면 계수가 안 줄어드는 것으로만 보인다.
@@ -61,7 +79,9 @@ export async function sweepAwaitingNotifications(deps?: {
   const all = await list();
   const observed = all
     .filter((s) => s.owner)                     // 주인을 모르면 보낼 곳이 없다
-    .map((s) => ({ id: s.id, awaiting: !!s.awaiting }));
+    //  `lastActive` 를 함께 넘긴다 — **처음 보는** 대기 세션이 «놓친 알림» 인지 «원래 그 상태였던 것» 인지를
+    //   가르는 유일한 재료다(#3741 · `pickAwaitingTransitions` 머리말). 전이 판정에는 안 쓰인다.
+    .map((s) => ({ id: s.id, awaiting: !!s.awaiting, lastActive: s.lastActive }));
 
   const { notify: ids, next } = pickAwaitingTransitions(lastSeen, observed);
   lastSeen = next;

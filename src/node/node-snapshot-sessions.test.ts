@@ -23,12 +23,27 @@ test("N1 온라인 + 신선하면 그 세션들을 모은다", () => {
   assert.deepEqual(nodeSnapshotSessions([node({ sessions: ["a", "b"] })], STALE), ["a", "b"]);
 });
 
-test("N11 ★★ 선언 없는 노드(멤버 PC)의 세션은 넣지 않는다 — 알림 폭풍 방지", () => {
-  //  이 스윕은 원래 `listSessionsRaw`(게이트웨이 자기 tmux)만 봤다 = 매니지드 세션 컨테이너뿐.
-  //   멤버 PC 노드 세션은 **여기 없던 것**이다. 넣으면 여태 못 보던 세션 수백 개가 한꺼번에 들어오는데,
-  //   `pickAwaitingTransitions` 는 처음 보는 세션이 awaiting 이면 곧바로 알림을 낸다
-  //   (`previous.get(id) ?? false`) — 사람에게 알림이 한 번에 쏟아진다.
-  assert.deepEqual(nodeSnapshotSessions([node({ declared: false, sessions: ["member-pc"] })], STALE), []);
+test("N11 ★★ 기본은 선언 없는 노드(멤버 PC)의 세션도 **넣는다** (#3741)", () => {
+  //  ── 이 행은 2026-09-09 에 뜻이 뒤집혔다. 그 사연이 이 프로젝트의 핵심이라 남긴다. ──
+  //  처음(#2600 T2 d4)엔 «넣지 않는다» 였다. 이유는 알림 폭풍이었다 — 이 스윕은 원래
+  //   `listSessionsRaw`(게이트웨이 자기 tmux)만 봤고 멤버 PC 노드 세션은 **여기 없던 것**이라,
+  //   넣으면 여태 못 보던 세션 수백 개가 한꺼번에 들어오는데 `pickAwaitingTransitions` 가
+  //   처음 보는 세션이 awaiting 이면 곧바로 알림을 냈다(`previous.get(id) ?? false`).
+  //  #3741 이 그 폭풍을 **원인 쪽에서** 막았다(첫 관측 유예 — notify-policy 의 P3·P-mass 행).
+  //   그래서 이제 넣는 것이 맞다: 그 442개 세션이 이 알림을 한 번도 받은 적이 없었다.
+  assert.deepEqual(nodeSnapshotSessions([node({ declared: false, sessions: ["member-pc"] })], STALE), ["member-pc"]);
+});
+
+test("N11b ★ declaredOnly=true 면 여전히 선언된 노드만 — 목록 소유 판정과 같은 뜻으로 쓰는 자리용", () => {
+  const nodes = [node({ declared: false, sessions: ["member-pc"] }), node({ declared: true, sessions: ["host"] })];
+  assert.deepEqual(nodeSnapshotSessions(nodes, STALE, true), ["host"]);
+});
+
+test("N11c ★ 선언 여부는 온라인·신선도를 **면제하지 않는다** — declaredOnly 든 아니든", () => {
+  //  손잡이가 생기면서 «선언되면 통과» 로 읽힐 여지가 생겼다. 그 오독을 막는 행이다.
+  const dead = [node({ declared: true, online: false, sessions: ["x"] })];
+  assert.deepEqual(nodeSnapshotSessions(dead, STALE), []);
+  assert.deepEqual(nodeSnapshotSessions(dead, STALE, true), []);
 });
 
 test("N2 ★ 오프라인 노드의 세션은 넣지 않는다", () => {
@@ -67,9 +82,8 @@ test("N8 자격은 있지만 세션이 0개면 아무것도 안 보탠다", () =
   assert.deepEqual(nodeSnapshotSessions([node({ sessions: [] }), node({ sessions: ["z"] })], STALE), ["z"]);
 });
 
-test("N9 ★ 자격/무자격이 섞이면 무자격 노드의 세션이 새지 않는다", () => {
+test("N9 ★ 자격/무자격이 섞이면 무자격 노드의 세션이 새지 않는다 (선언은 이제 자격 축이 아니다 — N11)", () => {
   const nodes = [
-    node({ declared: false, sessions: ["undeclared"] }),
     node({ online: false, sessions: ["off"] }),
     node({ stateAgeMs: null, sessions: ["none"] }),
     node({ stateAgeMs: STALE + 1, sessions: ["old"] }),
