@@ -3,10 +3,14 @@
 //  홈·프로젝트의 [시키기]로 여는 **모든** 새 세션에 적용되는 값 넷을 한 창에서 고친다 — 실행 컴퓨터 · 라이블리 모드 ·
 //  실행 승인 · 기록 범위. 자주 안 바꾸는 값이라 줄에서 빼고(줄엔 AI·모델·추론강도만 남는다), «이번 세션만 다르게»는
 //  두지 않는다 — 머릿속 모델을 «⚙ 는 설정, 줄은 지금 값» 하나로 유지하기 위해서다. 하나만 다르게 열려면 클래식 「새 AI 세션」 폼.
-//  창은 confirmDialog(ui-primitives)의 extra 자리에 폼을 얹는다 — 확인 창과 같은 겉모습·같은 키 규약(Esc 취소).
+//
+//  ── 2판(원준 2026-09-09 «모달 안 디자인이 엉망») ──
+//  · 항목마다 제목 옆 (?) — 누르면 그 자리에 설명이 펼쳐진다. 비개발자가 읽는 말로, 비유 없이 무엇이 어떻게 되는지만 적는다.
+//  · 선택지가 두셋인 축(모드·승인)은 드롭다운 대신 **나란한 단추**(무엇을 고를 수 있는지가 안 눌러도 보인다).
+//  · 실행 컴퓨터는 고른 설정이 **지금 어디로 풀리는지** 한 줄로 보여 준다(「규칙대로」가 무엇을 뜻하는지 그 자리에서 답한다).
+//  · confirmDialog 를 쓰지 않고 같은 겉모습(ov-back/ov-box)으로 직접 만든다 — 폭·머리·발 구성이 확인 창과 다르다.
 import { el, visAxisOn } from '../core.js';
-import { confirmDialog } from '../ui-primitives.js';
-import { MODE_OPTS, NODE_CENTRAL, WRITE_VIS_OPTS, saveSessionDefaults, sessionDefaults, type RunNode, type SessionDefaults } from './run-prefs.js';
+import { MODE_OPTS, NODE_CENTRAL, WRITE_VIS_OPTS, defaultNodeId, saveSessionDefaults, sessionDefaults, type LivelyMode, type RunNode, type SessionDefaults } from './run-prefs.js';
 
 /** 툴팁·요약용 한 줄 — «내 맥북 · 일반 · 확인 후 실행 · 기록 자동». */
 export function defaultsSummary(d: SessionDefaults, nodes: RunNode[]): string {
@@ -19,53 +23,147 @@ export function defaultsSummary(d: SessionDefaults, nodes: RunNode[]): string {
   return parts.join(' · ');
 }
 
+// (?) 설명 — 쉬운 말, 비유 없이. 각 문단은 «무엇을 정하나 → 선택지마다 무슨 일이 생기나 → 언제 무엇을 고르나» 순서.
+const HELP = {
+  node: [
+    'AI 세션이 실제로 돌아갈 컴퓨터를 정해요.',
+    '「중앙 컴퓨터」는 라이블리가 운영하는 서버예요. 그 밖의 항목은 라이블리 노드 프로그램을 켜 둔 내 컴퓨터나 팀이 공유한 컴퓨터예요.',
+    '「규칙대로」로 두면 켜져 있는 내 컴퓨터를 먼저 쓰고, 없으면 중앙 컴퓨터에서 열어요. 내 컴퓨터에서 열면 그 컴퓨터에 있는 파일과 프로그램을 그대로 쓸 수 있어요.',
+  ],
+  mode: [
+    '이 세션의 AI 가 라이블리에 쌓인 회사 맥락(지식·프로젝트·자료)을 얼마나 쓸지 정해요.',
+    '「일반」은 회사 맥락을 읽고, 일하면서 알게 된 것을 기록으로도 남겨요. 「읽기전용」은 읽기만 하고 아무 기록도 남기지 않아요 — 밖에 남기면 안 되는 기밀 작업에 맞아요. 「인코그니토」는 라이블리를 아예 쓰지 않아요 — 회사 맥락 없이 AI 만 쓰는 상태예요.',
+  ],
+  approve: [
+    'AI 가 파일을 고치거나 명령을 실행하기 전에 나에게 물어볼지 정해요.',
+    '「확인 후 실행」은 위험할 수 있는 일마다 먼저 물어보고 내가 허락해야 진행해요. 「자동 승인」은 묻지 않고 바로 실행해요.',
+    '자동 승인은 빠르지만 실수도 그대로 실행돼요. 여러 사람이 함께 쓰는 폴더에서는 「확인 후 실행」이 안전해요.',
+  ],
+  vis: [
+    '이 세션의 AI 가 내 확인 없이 남기는 기록(지식·메모)을 누가 볼 수 있게 할지 정해요.',
+    '「자동」은 세션이 열린 폴더를 따라요 — 프로젝트 폴더면 그 프로젝트 팀만, 그 밖이면 회사 전체예요. 「전체 공개」는 회사 누구나, 「프로젝트」는 그 프로젝트 팀만, 「나만」은 나만 볼 수 있어요.',
+    '읽기전용·인코그니토에서는 기록을 남기지 않으니 이 항목은 고를 수 없어요.',
+  ],
+};
+
+interface SegOpt { v: string; t: string; d?: string }
+/** 나란한 단추 — role=radiogroup. 두셋 중 하나를 고르는 축에 쓴다(안 눌러도 선택지가 다 보인다). */
+function segmented(label: string, opts: SegOpt[], value: string, onChange: (v: string) => void): { el: HTMLElement; set(v: string): void; disable(on: boolean): void } {
+  let cur = value;
+  const btns: HTMLButtonElement[] = [];
+  const root = el('div', { class: 'v2-seg', role: 'radiogroup', 'aria-label': label });
+  const paint = (): void => { for (const b of btns) { const on = b.dataset.v === cur; b.setAttribute('aria-checked', on ? 'true' : 'false'); b.tabIndex = on ? 0 : -1; } };
+  for (const o of opts) {
+    const b = el('button', { class: 'v2-seg-b', type: 'button', role: 'radio', 'data-v': o.v },
+      el('span', { class: 't', text: o.t }), o.d ? el('span', { class: 'd', text: o.d }) : null) as HTMLButtonElement;
+    b.addEventListener('click', () => { if (b.disabled) return; cur = o.v; paint(); onChange(cur); });
+    b.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+      e.preventDefault();
+      const i = btns.indexOf(b); const j = (i + (e.key === 'ArrowRight' ? 1 : -1) + btns.length) % btns.length;
+      btns[j].click(); btns[j].focus();
+    });
+    btns.push(b); root.append(b);
+  }
+  paint();
+  return { el: root, set(v) { cur = v; paint(); }, disable(on) { for (const b of btns) b.disabled = on; } };
+}
+
+/** 항목 하나 — 제목 + (?) + (펼쳐지는 설명) + 컨트롤 + 아래 힌트. */
+function field(title: string, help: string[], control: HTMLElement, hint?: HTMLElement | null): HTMLElement {
+  const tip = el('div', { class: 'v2-def-tip', hidden: true, role: 'note' }, ...help.map((p) => el('p', { text: p })));
+  const q = el('button', { class: 'v2-def-q', type: 'button', 'aria-expanded': 'false', 'aria-label': title + ' 설명', title: '이게 뭔가요?', text: '?' }) as HTMLButtonElement;
+  q.addEventListener('click', () => { const open = tip.hidden; tip.hidden = !open; q.setAttribute('aria-expanded', open ? 'true' : 'false'); });
+  return el('div', { class: 'v2-def-f' },
+    el('div', { class: 'v2-def-t' }, el('span', { class: 'k', text: title }), q),
+    tip, control, hint || null);
+}
+
 /**
- * 창을 열고, 저장했으면 true. nodes = 지금 카탈로그의 노드(없으면 실행 컴퓨터 줄을 안 그린다 — 중앙만 있는 사람에게 군더더기).
- *  hasAutoApprove = 지금 고른 AI 에 자동 승인 플래그가 있나(없으면 그 줄을 잠그고 이유를 적는다 — 효과 없는 컨트롤을 남기지 않는다).
+ * 창을 열고, 저장했으면 true. nodes = 지금 카탈로그의 노드(없으면 실행 컴퓨터 항목을 안 그린다 — 중앙만 있는 사람에게 군더더기).
+ *  hasAutoApprove = 지금 고른 AI 에 자동 승인 플래그가 있나(없으면 그 항목을 잠그고 이유를 적는다 — 효과 없는 컨트롤을 남기지 않는다).
  */
-export async function openSessionDefaults(opts: { nodes: RunNode[]; hasAutoApprove: boolean }): Promise<boolean> {
-  const d = sessionDefaults();
-  const sel = (title: string): HTMLSelectElement => el('select', { class: 'term-input v2-def-sel', 'aria-label': title }) as HTMLSelectElement;
-  const row = (k: string, ctl: HTMLElement, note?: string): HTMLElement =>
-    el('div', { class: 'v2-def-row' }, el('span', { class: 'k', text: k }), el('div', { class: 'v' }, ctl, note ? el('div', { class: 'v2-fine', text: note }) : null));
+export function openSessionDefaults(opts: { nodes: RunNode[]; hasAutoApprove: boolean }): Promise<boolean> {
+  return new Promise((resolve) => {
+    const d = sessionDefaults();
+    const nodes = opts.nodes;
+    let done = false;
+    const finish = (v: boolean): void => { if (done) return; done = true; back.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
 
-  const nodeSel = sel('실행 컴퓨터');
-  nodeSel.replaceChildren(
-    el('option', { value: '' }, '규칙대로 — 켜진 내 컴퓨터, 없으면 중앙'),
-    el('option', { value: NODE_CENTRAL }, '항상 중앙 컴퓨터'),
-    ...opts.nodes.map((n) => el('option', { value: n.id }, '🖥 ' + (n.name || n.id) + (n.shared ? ' (공유)' : '') + (n.online ? '' : ' — 지금 꺼짐'))));
-  nodeSel.value = [ '', NODE_CENTRAL, ...opts.nodes.map((n) => n.id) ].includes(d.nodeDefault) ? d.nodeDefault : '';
+    // ── 실행 컴퓨터 ──
+    const nodeSel = el('select', { class: 'term-input v2-def-sel', 'aria-label': '실행 컴퓨터' }) as HTMLSelectElement;
+    nodeSel.replaceChildren(
+      el('option', { value: '' }, '규칙대로 — 켜져 있는 내 컴퓨터, 없으면 중앙'),
+      el('option', { value: NODE_CENTRAL }, '항상 중앙 컴퓨터'),
+      ...nodes.map((n) => el('option', { value: n.id }, '🖥 ' + (n.name || n.id) + (n.shared ? ' (공유)' : '') + (n.online ? '' : ' — 지금 꺼짐'))));
+    nodeSel.value = ['', NODE_CENTRAL, ...nodes.map((n) => n.id)].includes(d.nodeDefault) ? d.nodeDefault : '';
+    const nodeHint = el('div', { class: 'v2-def-hint' });
+    const nameOf = (id: string): string => '🖥 ' + ((nodes.find((n) => n.id === id) || {}).name || id);
+    const paintNodeHint = (): void => {
+      const v = nodeSel.value;
+      if (v === NODE_CENTRAL) { nodeHint.textContent = '지금 이 설정이면: 중앙 컴퓨터에서 열려요.'; return; }
+      if (v) {
+        const n = nodes.find((x) => x.id === v);
+        nodeHint.textContent = n && n.online ? `지금 이 설정이면: ${nameOf(v)} 에서 열려요.`
+          : `${nameOf(v)} 이(가) 지금 꺼져 있어요 — 켜질 때까지는 규칙대로(${defaultNodeId(nodes) ? nameOf(defaultNodeId(nodes)) : '중앙 컴퓨터'}) 열려요.`;
+        return;
+      }
+      const r = defaultNodeId(nodes);
+      nodeHint.textContent = '지금 이 설정이면: ' + (r ? `${nameOf(r)} 에서 열려요(켜져 있는 내 컴퓨터).` : '중앙 컴퓨터에서 열려요(켜진 내 컴퓨터가 없어요).');
+    };
+    nodeSel.addEventListener('change', paintNodeHint); paintNodeHint();
 
-  const modeSel = sel('라이블리 모드');
-  modeSel.replaceChildren(...MODE_OPTS.map((m) => el('option', { value: m.key }, m.lbl + ' — ' + m.sub)));
-  modeSel.value = d.mode;
+    // ── 라이블리 모드 ──
+    let mode: LivelyMode = d.mode;
+    const modeSeg = segmented('라이블리 모드', MODE_OPTS.map((m) => ({ v: m.key, t: m.lbl, d: m.sub })), mode, (v) => { mode = v as LivelyMode; syncVis(); });
 
-  const okSel = sel('실행 승인');
-  okSel.replaceChildren(el('option', { value: '' }, '확인 후 실행 — 위험한 명령은 물어본다'), el('option', { value: 'auto' }, '자동 승인 — 묻지 않고 바로 실행'));
-  okSel.value = d.autoApprove ? 'auto' : '';
-  okSel.disabled = !opts.hasAutoApprove;
+    // ── 실행 승인 ──
+    let auto = d.autoApprove;
+    const okSeg = segmented('실행 승인', [
+      { v: '', t: '확인 후 실행', d: '위험한 일은 물어봐요' },
+      { v: 'auto', t: '자동 승인', d: '묻지 않고 바로 실행' },
+    ], auto ? 'auto' : '', (v) => { auto = v === 'auto'; });
+    okSeg.disable(!opts.hasAutoApprove);
+    const okHint = el('div', { class: 'v2-def-hint', text: opts.hasAutoApprove
+      ? '자동 승인은 빠르지만 실수도 그대로 실행돼요. 여러 사람이 함께 쓰는 폴더에서는 「확인 후 실행」을 권해요.'
+      : '지금 고른 AI 에는 자동 승인 기능이 없어 고를 수 없어요.' });
 
-  const visSel = sel('기록 범위');
-  visSel.replaceChildren(...WRITE_VIS_OPTS.map((o) => el('option', { value: o.v }, o.t + ' — ' + o.d)));
-  visSel.value = d.writeVis;
-  const visNote = el('div', { class: 'v2-fine', hidden: true, text: '읽기전용·인코그니토에서는 기록하지 않아 고를 수 없어요.' });
-  const syncVis = (): void => { const locked = modeSel.value !== 'normal'; visSel.disabled = locked; visNote.hidden = !locked; };
-  modeSel.addEventListener('change', syncVis); syncVis();
+    // ── 기록 범위 ──
+    const visSel = el('select', { class: 'term-input v2-def-sel', 'aria-label': '기록 범위' }) as HTMLSelectElement;
+    visSel.replaceChildren(...WRITE_VIS_OPTS.map((o) => el('option', { value: o.v }, o.t + ' — ' + o.d)));
+    visSel.value = d.writeVis;
+    const visHint = el('div', { class: 'v2-def-hint' });
+    const syncVis = (): void => {
+      const locked = mode !== 'normal';
+      visSel.disabled = locked;
+      visHint.textContent = locked ? '읽기전용·인코그니토에서는 기록을 남기지 않아 고를 수 없어요.' : '내 확인 없이 남기는 기록에만 적용돼요. 내가 직접 올리는 자료는 그때그때 따로 정해요.';
+    };
+    syncVis();
 
-  const form = el('div', { class: 'v2-def' },
-    el('p', { class: 'v2-def-lead', text: '홈과 프로젝트의 [시키기]로 여는 모든 새 세션에 적용돼요. 하나만 다르게 열려면 「새 AI 세션」 폼을 쓰세요.' }),
-    opts.nodes.length ? row('실행 컴퓨터', nodeSel) : null,
-    row('라이블리 모드', modeSel),
-    row('실행 승인', okSel, opts.hasAutoApprove ? '자동 승인은 빠르지만 공유 폴더에선 끄기를 권해요.' : '지금 고른 AI 에는 자동 승인 플래그가 없어요.'),
-    visAxisOn('session_cap') ? row('기록 범위', el('div', {}, visSel, visNote)) : null);
+    const cancel = el('button', { class: 'btn btn-ghost', type: 'button', text: '취소', onclick: () => finish(false) }) as HTMLButtonElement;
+    const save = el('button', { class: 'btn btn-primary', type: 'button', text: '저장', onclick: () => {
+      saveSessionDefaults({ nodeDefault: nodeSel.value, mode, autoApprove: opts.hasAutoApprove ? auto : d.autoApprove, writeVis: visSel.value });
+      finish(true);
+    } }) as HTMLButtonElement;
+    const close = el('button', { class: 'v2-def-x', type: 'button', 'aria-label': '닫기', text: '✕', onclick: () => finish(false) });
 
-  const ok = await confirmDialog({ title: '새 세션 기본값', extra: form, confirmText: '저장', cancelText: '취소' });
-  if (!ok) return false;
-  saveSessionDefaults({
-    nodeDefault: nodeSel.value,
-    mode: (MODE_OPTS.some((m) => m.key === modeSel.value) ? modeSel.value : 'normal') as SessionDefaults['mode'],
-    autoApprove: opts.hasAutoApprove ? okSel.value === 'auto' : d.autoApprove,
-    writeVis: visSel.value,
+    const box = el('div', { class: 'ov-box v2-def-box', role: 'dialog', 'aria-modal': 'true', 'aria-label': '새 세션 기본값' },
+      el('div', { class: 'ov-head' }, el('h3', { text: '새 세션 기본값' }), close),
+      el('p', { class: 'v2-def-lead', text: '홈과 프로젝트의 [시키기]로 여는 모든 새 세션에 적용돼요. 하나만 다르게 열려면 「새 AI 세션」 폼을 쓰세요.' }),
+      nodes.length ? field('실행 컴퓨터', HELP.node, nodeSel, nodeHint) : null,
+      field('라이블리 모드', HELP.mode, modeSeg.el),
+      field('실행 승인', HELP.approve, okSeg.el, okHint),
+      visAxisOn('session_cap') ? field('기록 범위', HELP.vis, visSel, visHint) : null,
+      el('div', { class: 'v2-def-acts' }, cancel, save));
+    const back = el('div', { class: 'ov-back ov-confirm-back' }, box);
+    back.addEventListener('click', (e) => { if (e.target === back) finish(false); });
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key === 'Escape') finish(false);
+      // 엔터는 '포커스된 저장 단추'만 누른다 — 기본 포커스는 취소라 무심코 엔터를 쳐도 값이 바뀌지 않는다(confirmDialog 와 같은 규약).
+      if (ev.key === 'Enter' && document.activeElement === save) save.click();
+    };
+    document.addEventListener('keydown', onKey);
+    document.body.append(back);
+    cancel.focus();
   });
-  return true;
 }
