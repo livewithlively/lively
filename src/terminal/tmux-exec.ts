@@ -244,6 +244,29 @@ export function chunkTmuxCommands(cmds: readonly TmuxCmd[], maxArgv = TMUX_BATCH
   return out;
 }
 
+/**
+ * 읽기 여럿을 **한 왕복**으로 — 묶어 보내고 합쳐진 stdout 을 그대로 돌려준다 (#2600 T2 d6).
+ *
+ * ── 왜 (2026-09-09 계수 실측) ────────────────────────────────────────────────
+ * 아웃박스의 준비 판정(`waitReady`)이 500ms 마다 `capture-pane` 과 `display-message` 를 **각각** 부른다 =
+ *  대기 중인 세션 하나당 초당 4 왕복. 그게 매니지드 게이트웨이 tmux 호출의 **41%**(115/분 중 57+57)였다.
+ *  두 읽기는 같은 세션을 같은 순간에 보는 것이라 한 번에 물어도 되고, 그러면 **왕복이 절반**이 된다.
+ *
+ * ⓘ 덤으로 **한 시점의 값**이 된다 — 종전엔 두 왕복 사이에 pane 이 바뀔 수 있어서 «화면은 t0, 명령은 t0+Δ»
+ *  로 어긋난 짝이 `firstPromptStep` 에 들어갈 수 있었다.
+ *
+ * ⚠ 한 묶음이 안 되면(세션 지목이 다르거나 못 싣는 명령) **던진다.** 조용히 두 번 나가면 이 함수를 쓰는
+ *  이유가 사라지고, 호출부는 «한 왕복» 을 믿은 채로 남는다 — 왕복 수가 이 함수의 계약이다.
+ * ⚠ 출력은 명령 **순서대로** 이어 붙는다. 어느 줄이 누구 것인지는 호출부가 안다(그 지식을 여기 두지 않는다).
+ */
+export async function tmuxReadOneRoundTrip(cmds: readonly TmuxCmd[]): Promise<string> {
+  const chunks = chunkTmuxCommands(cmds);
+  if (chunks.length !== 1) {
+    throw new Error(`tmux 읽기를 한 왕복으로 못 묶는다(묶음 ${chunks.length}개) — 세션 지목이 갈렸거나 못 싣는 명령이다`);
+  }
+  return tmux(chunks[0]!);
+}
+
 /** 묶어 보낸다 — 실패는 던진다(순차 `tmux()` 여러 번과 같은 의미). */
 export async function tmuxBatch(cmds: readonly TmuxCmd[]): Promise<void> {
   for (const argv of chunkTmuxCommands(cmds)) await tmux(argv);
