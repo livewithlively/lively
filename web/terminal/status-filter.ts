@@ -92,12 +92,12 @@ const TSESS_SCOPE_OPTS: Array<{ key: string; label: string; hint: string; match:
 // 한 세션의 소속 버킷. 두 칸이 전체를 덮으므로 '못 찾음'은 없다(프로젝트 id 유무가 전부).
 const tsessScopeOf = (s) => (Number(s.projectId) || 0) ? 'proj' : 'nonproj';
 // 섹션 — 소유 축(#1229). 거르지 않고 **나눈다**: 두 섹션이 늘 같이 보이되 각각 접을 수 있다.
-//  ⚠ '남이 만든'은 두 종류가 섞인다 — 내가 초대받은 개인 세션(배지 `초대받음`)과, 초대와 무관하게 전원 공개인
-//   프로젝트 세션(배지 `공동`, #452·#1062 §2). 그래서 섹션 이름을 '초대된 세션'이라 하면 다수가 오탈이다.
-//   구분은 카드 배지가 이미 한다(tsessCard) — 섹션은 '내가 만든 것이냐'만 가른다(종료·복원 권한선과 일치).
+//  ⚠ '남이 만든'은 전부 **내가 초대받은** 세션이다(#1876 D1 — 2026-08-28 프로젝트 세션 전원공개(#452) 폐기).
+//   그래도 섹션 이름을 '초대된 세션'이라 하지 않는 이유는 소유 축이 곧 권한선이기 때문이다 — 섹션은
+//   '내가 만든 것이냐'만 가른다(종료·복원 권한선과 일치). 개인/프로젝트 구분은 카드 배지가 한다(tsessCard).
 const TSESS_SECTIONS: Array<{ key: string; label: string; hint: string; match: (s) => boolean }> = [
   { key: 'mine',   label: '내가 만든 세션', hint: '내가 만든 세션 — 종료·이어서 열기 같은 관리는 여기서만 됩니다(서버도 소유자만 허용)', match: (s) => !!s.owned },
-  { key: 'others', label: '남이 만든 세션', hint: '내가 초대받은 개인 세션 + 전원 공개인 프로젝트 세션(#452). 열어서 볼 수는 있지만 종료는 못 합니다', match: (s) => !s.owned },
+  { key: 'others', label: '남이 만든 세션', hint: '남이 만들어 나를 초대한 세션. 열어서 볼 수는 있지만 종료는 못 합니다', match: (s) => !s.owned },
 ];
 // 접어 둔 섹션(브라우저 영속). 값 = 접힌 섹션 key 배열.
 const TSESS_SECT_KEY = 'lively_term_sections_v1';
