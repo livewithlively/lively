@@ -170,6 +170,37 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
   logger.info("terminal session manager mounted (/api/ui/terminal/*, ws /terminal/ws, files, nodes)");
 }
 
+/**
+ * 새 세션의 **실행 노드 후보**(#869·#1540·#1744) — 전체 config 와 `?only=nodes` 재조회가 **이 한 함수**를 쓴다.
+ *  두 자리에 같은 목록을 각자 지으면 «목록과 판정이 갈리는» 사고가 난다(#2110 계열) — 그래서 빌더는 하나다.
+ *
+ *  #2108 — 게이트웨이 자신이 노드로도 등록돼 있으면 여기서 뺀다. 같은 박스라 '중앙 컴퓨터(기본)'가
+ *   이미 그 자리를 대표하고, 노드로 고르면 3초 스냅샷을 거치느라 새 세션이 복원으로 새 버린다.
+ *  harnesses(#1713) — **그 PC 에서 실제로 띄울 수 있는 것**만 폼에 보여주기 위해 함께 준다. 노드가 hello 로
+ *   보고한 값이고, 구 번들이라 미보고면 기준선(claude·codex·shell)이 온다. 이게 없으면 사용자는 [생성하기]를
+ *   누른 뒤에야 안다 — 옛 번들은 502, 바이너리 부재는 세션 즉사.
+ *  mine·connectedAt(#2172) — 새 세션의 **기본 실행 노드**를 화면이 규칙으로 정하기 위한 값.
+ *   mine 없이 shared 만 보면 '내 노드인데 관리자가 공유로 지정한 것'을 남의 PC 로 오판한다(둘은 직교다).
+ *  sessions(#3833) — 그 노드에서 **지금 돌고 있는 세션 수**. 동률(둘 다 내 켜진 컴퓨터)일 때 화면이 «내가
+ *   실제로 쓰는 컴퓨터» 를 고르는 축이다. 종전 동률 깨기는 connectedAt 하나였는데, 게이트웨이가 재시작하면
+ *   전 노드가 **동시에** 재접속해(실측 2026-09-09: 두 노드 134ms 차) 사실상 핸드셰이크 경주가 기본을 정했다.
+ *   registry 가 이미 들고 있는 값이라 조회 비용이 늘지 않는다.
+ */
+async function runNodesFor(me: string): Promise<Array<{
+  id: string; name: string; kind: string; shared: boolean; mine: boolean;
+  online: boolean; connectedAt: number | null; sessions: number; harnesses: string[];
+}>> {
+  const live = new Map(liveNodes().map((n) => [n.id, n]));
+  return (await listNodes().catch(() => []))
+    .filter((n) => n.enabled && nodeOpenTo(n, me) && !isSelfNode(n.id))
+    .map((n) => ({
+      id: n.id, name: n.name, kind: n.kind, shared: n.shared, mine: n.owner_member === me,
+      online: live.get(n.id)?.online ?? false, connectedAt: live.get(n.id)?.connectedAt ?? null,
+      sessions: live.get(n.id)?.sessions ?? 0,
+      harnesses: nodeHarnesses(n.agent_harnesses),
+    }));
+}
+
 // ── ① 티켓 발급 + 생성폼 설정 + AI 계정(#1085) + 프로필/OS 프로비저닝(#442·#524) ──
 //  WS 자체(upgrade 핸들러)는 라우트가 아니라 setupPtyUpgrade(registerTerminal 말미)가 붙인다 — 여기는 그 티켓 발급만.
 function registerTicketProfileRoutes(app: express.Express, auth: express.RequestHandler): void {
@@ -185,6 +216,14 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
 
   // 생성폼 설정 — 허용 루트 + 하네스/플래그 카탈로그 + 초대 후보(구성원 디렉터리).
   app.get("/api/ui/terminal/config", auth, wrap(async (req, res) => {
+    // only=nodes(#3833) — **노드 축만** 다시 읽는 가벼운 경로. 화면이 들고 있는 online 은 «지금» 을 묻는 값이라
+    //  세션 내내 굳으면 거짓말이 된다(켜져 있는 PC 를 «지금 꺼짐» 으로 그리고 [시키기]가 딴 컴퓨터로 폴백했다).
+    //  전체 config 를 다시 부르면 구성원 목록·프로필·OS 프로비저닝 조회까지 따라와 비싸므로 이 축만 준다.
+    if (String(req.query.only ?? "") === "nodes") {
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ nodes: await runNodesFor(idOf(userOf(req))) });
+      return;
+    }
     // 초대 후보 = 활성 구성원(시스템 계정 제외). 세션 owner id = org_member.id 라 그대로 매칭됨.
     const members = (await listMembers().catch(() => []))
       .filter((m) => m.state !== "inactive" && m.kind !== "system")
@@ -216,25 +255,7 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
       //  아래 requireCreatableNode 와 **같은 술어**를 쓴다 — 목록과 게이트가 갈리면 고른 뒤 403 이 난다.
       //  admin 예외는 두지 않는다(남의 개인 PC 가 관리자에게 선택지로 보이면 그게 이 정책의 구멍이다).
       //  online 이어야 실제 생성 가능(폼이 비활성 표시).
-      nodes: await (async () => {
-        const me = idOf(userOf(req));
-        const live = new Map(liveNodes().map((n) => [n.id, n]));
-        return (await listNodes().catch(() => []))
-          // #2108 — 게이트웨이 자신이 노드로도 등록돼 있으면 여기서 뺀다. 같은 박스라 '중앙 컴퓨터(기본)'가
-          //  이미 그 자리를 대표하고, 노드로 고르면 3초 스냅샷을 거치느라 새 세션이 복원으로 새 버린다(#2108).
-          .filter((n) => n.enabled && nodeOpenTo(n, me) && !isSelfNode(n.id))
-          // harnesses(#1713) — **그 PC 에서 실제로 띄울 수 있는 것**만 폼에 보여주기 위해 함께 준다.
-          //  노드가 hello 로 보고한 값이고, 구 번들이라 미보고면 기준선(claude·codex·shell)이 온다.
-          //  이게 없으면 사용자는 [생성하기]를 누른 뒤에야 안다 — 옛 번들은 502, 바이너리 부재는 세션 즉사.
-          // mine·connectedAt(#2172) — 새 세션의 **기본 실행 노드**를 화면이 규칙으로 정하기 위한 두 값.
-          //  규칙은 '내 켜져 있는 컴퓨터 > 공유 컴퓨터 > 중앙'이고, 동률이면 **가장 최근에 붙은 것**이다(web/v2/run-picker.ts).
-          //  mine 없이 shared 만 보면 '내 노드인데 관리자가 공유로 지정한 것'을 남의 PC 로 오판한다(둘은 직교다).
-          .map((n) => ({
-            id: n.id, name: n.name, kind: n.kind, shared: n.shared, mine: n.owner_member === me,
-            online: live.get(n.id)?.online ?? false, connectedAt: live.get(n.id)?.connectedAt ?? null,
-            harnesses: nodeHarnesses(n.agent_harnesses),
-          }));
-      })(),
+      nodes: await runNodesFor(idOf(userOf(req))),
     });
   }));
 
