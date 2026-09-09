@@ -2988,9 +2988,13 @@ async function connectNow() {
   });
   sock.onopen = () => {
     dlog('ws', 'open');
-    //  denyRetries 만 여기서 되돌린다 — 4403(입장 거부)은 open 전에 갈리므로 «열렸다» 가 곧 반증이다.
+    //  ⚠ denyRetries 를 여기서 되돌리지 않는다 — 종전 주석은 «4403 은 open 전에 갈린다» 를 전제했는데
+    //   서버는 조용히 끊지 않으려고 `handleUpgrade` 로 핸드셰이크를 **완료한 뒤** `close(4403)` 한다(#835).
+    //   그래서 거부에서도 onopen 이 먼저 뜨고, 여기서 되돌리면 상한이 영영 차지 않아 6초 간격 무한 재시도가
+    //   된다(실측 2026-09-09: 「연결 확인 중… (14회째)」 — ws open → 16ms 뒤 close 4403 의 반복).
+    //   «열렸다» 는 입장 허가의 반증이 못 된다. 실제 반증은 **서버가 보낸 바이트**다 → onmessage 에서 되돌린다.
     //  나머지(attempts·gaveUp·reconnectDelay)는 아래 stableTimer 가 «버텼다» 를 확인한 뒤에 되돌린다.
-    connecting = false; wasConnected = true; denyRetries = 0;
+    connecting = false; wasConnected = true;
     connProven = false;
     clearTimeout(stableTimer);
     stableTimer = setTimeout(markConnProven, CONN_STABLE_MS);
@@ -3008,6 +3012,7 @@ async function connectNow() {
   sock.onmessage = (e) => {
     const bytes = (e.data instanceof ArrayBuffer) ? new Uint8Array(e.data) : (typeof e.data === 'string' ? new TextEncoder().encode(e.data) : null);
     if (!bytes) return;
+    denyRetries = 0;   // 서버가 실제로 바이트를 보냈다 = 입장 허가 확정(onopen 은 4403 거부에서도 뜬다 — 위 머리말)
     ctrl.feed(bytes);
     if (AUTOSEND && !autosendDone) autosendLastOut = Date.now();
     if (ctrl.isControl()) {
@@ -3028,7 +3033,7 @@ async function connectNow() {
     if (e && e.code === 4410) { onSessionGone(); return; } // 세션 종료 확정(#835) — 복원 가능하면 되살리고(#1059 E), 아니면 종료 배너
     if (e && e.code === 4403) { // 서버가 입장 거부. 단, 일시장애(재배포 직후 tmux 과부하)로 인한 '가짜 4403'일 수 있어(#687)
       //  바로 게이트를 띄우지 않고 MAX_DENY_RETRIES 만큼 재시도 — 일시장애면 곧 복구돼 붙고, 진짜 거부면 계속 4403 이라
-      //  아래 게이트로 간다(무한 재연결은 여전히 막힘). 성공 시 onopen 에서 denyRetries 리셋.
+      //  아래 게이트로 간다(무한 재연결은 여전히 막힘). 리셋은 onopen 이 아니라 **첫 수신 바이트**에서 한다(위 머리말).
       if (++denyRetries <= MAX_DENY_RETRIES) { scheduleReconnect('연결 확인 중…'); return; }
       clearTimeout(reconnectTimer);
       gate('이 세션에 입장할 수 없습니다.\n\n프로젝트 팀원만 입장할 수 있어요. 또는 이 세션이 더 이상 프로젝트에 연결되어 있지 않을 수 있습니다(폴더 이동·프로젝트 삭제 등). 프로젝트 페이지에서 세션을 다시 확인해 주세요.');

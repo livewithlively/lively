@@ -244,4 +244,21 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
     "⑧-d 재연결 전에 종료 확정 플래그를 되돌린다 — 안 되돌리면 connectNow 가 즉시 반환해 화면이 영원히 '이어서 여는 중…' 이다");
 }
 
+// ── ⑨ 4403(입장 거부) 재시도 상한이 실제로 찬다 — «열렸다» 는 허가의 반증이 아니다 ────────────
+//  실측 2026-09-09: 남의 세션을 열면 「연결 확인 중… (14회째)」 로 6초 간격 무한 재시도가 돌았다.
+//  서버는 조용히 끊지 않으려 handleUpgrade 로 핸드셰이크를 완료한 뒤 close(4403) 하므로(#835) 거부에서도
+//  onopen 이 뜨는데, onopen 이 denyRetries 를 0 으로 되돌리고 있어 MAX_DENY_RETRIES 가 영영 안 찼다.
+{
+  const term = read("web/standalone/terminal.ts");
+  const openAt = term.indexOf("sock.onopen = () => {");
+  ok(openAt > 0, "⑨-0 onopen 핸들러를 찾았다");
+  const openBody = term.slice(openAt, term.indexOf("\n  };", openAt));
+  ok(!/^\s*[^/\n]*denyRetries\s*=\s*0/m.test(openBody),
+    "⑨-a onopen 이 denyRetries 를 되돌리지 않는다 — 4403 은 open 뒤에 오므로 여기서 되돌리면 상한이 영영 안 찬다");
+  const msgAt = term.indexOf("sock.onmessage = (e) => {");
+  const msgBody = term.slice(msgAt, term.indexOf("\n  };", msgAt));
+  ok(/denyRetries = 0/.test(msgBody),
+    "⑨-b 대신 첫 수신 바이트에서 되돌린다 — 서버가 보낸 바이트만이 입장 허가의 증거다");
+}
+
 console.log(`\n${pass}건 통과`);
