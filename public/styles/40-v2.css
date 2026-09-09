@@ -677,7 +677,12 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
   border: 1px solid var(--line-net); border-radius: 13px; background: var(--bg); }
 .v2-dest:focus-within { border-color: color-mix(in srgb, var(--blue) 55%, var(--line-net)); }
 .v2-dest-lbl { flex: none; font-size: 11.5px; font-weight: 600; color: var(--muted-2); letter-spacing: .02em; }
-.v2-dest-in { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: inherit; font-size: 13.5px; color: var(--ink); }
+/* ⚠ `input.` 을 반드시 붙인다 — 03-components.css 의 `input[type="text"]`(0,1,1)이 클래스 하나(0,1,0)를
+   이겨서, 안 붙이면 이 칸이 **자기 테두리·흰 배경·padding 을 도로 갖고** 바깥 상자 안에 상자가 하나 더
+   그려진다(원준님 2026-09-09: "텍스트박스가 2개 겹쳐보이는 것 같아서 매우 이상함").
+   같은 이유로 이 파일의 다른 입력칸도 전부 `input.` 을 붙여 두었다(.v2-pjpick-in·.v2-find-in·.v2-ws-in). */
+.v2-dest-in { flex: 1; min-width: 0; font: inherit; font-size: 13.5px; color: var(--ink); }
+input.v2-dest-in { height: auto; border: 0; outline: 0; background: transparent; padding: 0; border-radius: 0; font-weight: 400; }
 .v2-dest-in::placeholder { color: var(--muted-2); }
 .v2-dest-slot { display: contents; }
 /* 고른 뒤 — 칩이 입력칸 자리를 받는다(둘은 배타다: 무엇이 정해졌는지 한 번에 하나만 말한다). */
