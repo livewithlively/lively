@@ -46,6 +46,14 @@ export interface BrokerClient {
 
 /** 허브 인증 헤더 이름 — lvly-cloud brokernet.CH_AUTH_HEADER 와 같다. */
 export const HUB_AUTH_HEADER = "x-lvly-channel-auth";
+
+/**
+ * 목록 범위 헤더(#3797 T7) — lvly-cloud `sessionroute.LIST_SCOPE_HEADER` / `LIST_SCOPE_NODE` 와 **같은
+ *  이름·같은 값**이어야 한다. 브로커는 `isNodeScoped(h)` 로 정확히 이 문자열만 본다: 한 글자만 달라도
+ *  판정이 거짓이 되어 **조용히 클러스터 전역으로 되돌아간다**(오류가 아니라 «전부 답함» 으로 보인다).
+ */
+export const LIST_SCOPE_HEADER = "x-lvly-list-scope";
+export const LIST_SCOPE_NODE = "node";
 /** 허브 클라이언트 토큰(순수) — lvly-cloud brokernet.hubClientToken 과 같은 구성. slug 에 묶여 탈취해도 그 테넌트뿐이다. */
 export function hubClientToken(secret: string, slug: string): string {
   return createHmac("sha256", secret).update(`hub:${slug}`).digest("hex");
@@ -105,14 +113,23 @@ interface Reply { status: number; body: string }
 
 const fail = (stderr: string): TmuxOutcome => ({ code: 1, stdout: "", stderr });
 
-export function makeBrokerClient(t: BrokerTransport, opts?: { timeoutMs?: number }): BrokerClient {
+export function makeBrokerClient(
+  t: BrokerTransport,
+  /**
+   * `listScope: "node"` 면 목록 요청에만 범위 헤더를 싣는다 — 세션 호스트가 «자기 노드 것만» 보고하는
+   *  근거다. 기본(미지정)은 종전 그대로(전역) — 중앙 게이트웨이가 한 바이트도 안 바뀐다.
+   * ⚠ **exec 3단에는 안 싣는다.** 브로커의 exec 라우팅은 세션 축(라우트 파일)이라 범위와 무관하고,
+   *  거기 실으면 «그 세션이 다른 노드에 있을 때» 를 우리가 모르게 막는다.
+   */
+  opts?: { timeoutMs?: number; listScope?: "node" | "cluster" },
+): BrokerClient {
   const timeoutMs = opts?.timeoutMs ?? 15_000;
   const wire = wireOf(t);
 
   /** 요청-응답 한 번. 비-2xx 도 resolve(호출자가 상태로 갈린다) · 전송 오류·타임아웃은 reject. */
-  const call = (method: "GET" | "POST", path: string, body?: unknown): Promise<Reply> => new Promise((resolve, reject) => {
+  const call = (method: "GET" | "POST", path: string, body?: unknown, extra?: Record<string, string>): Promise<Reply> => new Promise((resolve, reject) => {
     const data = body === undefined ? null : JSON.stringify(body);
-    const headers: Record<string, string> = { ...wire.headers };
+    const headers: Record<string, string> = { ...wire.headers, ...extra };
     if (data !== null) { headers["content-type"] = "application/json"; headers["content-length"] = String(Buffer.byteLength(data)); }
     //  agent:false — 연결을 재사용하지 않는다. 유닉스 소켓·허브 모두 요청 하나가 연결 하나다(keep-alive 소켓이 남아 서버 종료를 붙드는 일이 없다).
     const rq = http.request({ ...wire.base, agent: false, method, path: `${wire.prefix}${path}`, headers, timeout: timeoutMs }, (rs) => {
@@ -165,7 +182,8 @@ export function makeBrokerClient(t: BrokerTransport, opts?: { timeoutMs?: number
 
   return {
     async listSessions() {
-      const r = await call("GET", "/lvly/sessions");
+      const r = await call("GET", "/lvly/sessions", undefined,
+        opts?.listScope === "node" ? { [LIST_SCOPE_HEADER]: LIST_SCOPE_NODE } : undefined);
       if (r.status < 200 || r.status >= 300) throw new Error(`broker sessions ${r.status}: ${r.body.slice(0, 200)}`);
       let j: unknown;
       try { j = JSON.parse(r.body); } catch (e) { throw new Error(`broker sessions 본문이 JSON 이 아니다: ${(e as Error).message}`); }
