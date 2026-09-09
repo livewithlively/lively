@@ -4,6 +4,7 @@
 //  클래식 모듈을 **복제하지 않는다** — 대화·세션 목록·프로젝트 상세는 이미 있는 것을 가져다 붙인다.
 import { el, personName, relTime, state, sv, toast } from '../core.js';
 import { composerAttach } from './compose-attach.js';
+import { composerMention } from './compose-mention.js';
 import { isCreatingQuickSession, openQuickSession, takeFirstPrompt } from './quick-session.js';
 import { createRunPicker } from './run-picker.js';
 import { mountSessionChat, type SessionChatHandle, type SessionChatTarget } from '../session-chat.js';
@@ -166,92 +167,112 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
 
   // ⚠ 종전 placeholder 는 «프로젝트 없이 열리고, 소속은 나중에 세션에서 정해요» 였는데 **사실과 반대**였다
   //  (8/25 이후 서버가 늘 프로젝트를 만든다). 이제 어디에 열리는지는 **위 칸이 말하므로** 여기선 말하지 않는다.
-  const ta = el('textarea', { class: 'v2-launch-in', rows: '2', placeholder: '무엇이든 시키세요', 'aria-label': '무엇이든 시키기' }) as HTMLTextAreaElement;
+  const ta = el('textarea', { class: 'v2-launch-in', rows: '2', placeholder: '무엇이든 시키세요\n@이름 을 적으면 그 사람을 이 세션에 초대해요', 'aria-label': '무엇이든 시키기' }) as HTMLTextAreaElement;
   ta.value = draft?.text || '';   // 쓰다 만 지시를 되받는다(#2037)
 
-  // ── 여는 곳(#3778) — 질문 창 **위** 얇은 칸 하나 ───────────────────────────────
+  // ── 여는 곳(#3778) — 질문 창 **위** 두 칸: 왼쪽 「프로젝트」, 오른쪽 「선행」 ───────────────
   //  ★ 고르기와 이름짓기를 **한 컨트롤**이 받는다. 둘을 다른 자리에 두면(드롭다운 + 별도 이름칸) 반드시
   //   «어느 쪽이 이기나»가 생기고, 사람은 보내기 전에 무엇이 정해졌는지 확신할 수 없다.
   //  ★ 상태는 늘 보인다 — 고르면 칩으로 굳고, ✕ 로 비우면 «비워 둠(=종전 동작)»으로 돌아온다.
+  //  ★ 오른쪽 「선행」(원준 2026-09-09) — 새로 만들 프로젝트가 뒤따르는 앞 일. 왼쪽이 **기존 프로젝트**면 잠근다
+  //   (선행은 그 프로젝트의 속성이라 상세에서 바꾼다). 비워 둔 채(자동 생성)로도 고를 수 있다 — 서버가 만든 프로젝트 id 를
+  //   응답에 실어 주므로 그 뒤 엣지 한 번이면 된다(quick-session.ts).
   //  ⚠ 이 선택은 **이 판(render)과 같은 수명**이다(첨부 칩과 같다 — 홈은 20초 틱에 다시 그리지 않는다).
   //   초안 글자처럼 탭에 얹지 않은 이유: 잃어버려도 **칩이 사라진 게 눈에 보인다**. 조용히 틀린 곳으로 가는
   //   경우가 없으므로, 그걸 막자고 초안 저장 규약(tabs.ts)까지 바꾸지 않는다.
   type Dest = { kind: 'none' } | { kind: 'proj'; id: number; name: string } | { kind: 'new'; name: string };
-  let dest: Dest = { kind: 'none' };
   const destRows = dests || [];
-  const destIn = el('input', { class: 'v2-dest-in', type: 'text', autocomplete: 'off', 'aria-label': '여는 곳 — 프로젝트를 고르거나 새 이름을 적으세요',
-    placeholder: '이어서 할 프로젝트를 고르거나 새 이름을 적으세요 — 비워두면 입력한 내용을 바탕으로 자동으로 프로젝트가 생성돼요' }) as HTMLInputElement;
-  const destSlot = el('span', { class: 'v2-dest-slot' });
-  const destHd = el('div', { class: 'v2-dest-hd' });
-  const destList = el('div', { class: 'v2-dest-list', role: 'listbox' });
-  const destPop = el('div', { class: 'v2-dest-pop', hidden: true }, destHd, destList);
-  const destWrap = el('div', { class: 'v2-dest-wrap' },
-    el('div', { class: 'v2-dest' }, el('span', { class: 'v2-dest-lbl', text: '프로젝트' }), destIn, destSlot),
-    destPop);
-
-  const closeDest = (): void => { destPop.hidden = true; };
-  function setDest(next: Dest): void {
-    dest = next;
-    closeDest();
-    if (next.kind === 'none') {
-      destSlot.replaceChildren();
-      destIn.hidden = false;
-      destIn.value = '';
-      return;
+  interface DestBox { wrap: HTMLElement; get(): Dest; lock(hint: string | null): void }
+  /** 칸 하나 — label 이 머리, allowNew 면 «이 이름으로 새로 만들기» 줄이 붙는다. onPick 은 값이 바뀔 때. */
+  function destBox(o: { label: string; placeholder: string; allowNew: boolean; onPick?: () => void }): DestBox {
+    let dest: Dest = { kind: 'none' };
+    const input = el('input', { class: 'v2-dest-in', type: 'text', autocomplete: 'off', 'aria-label': o.label + ' — ' + o.placeholder, placeholder: o.placeholder }) as HTMLInputElement;
+    const slot = el('span', { class: 'v2-dest-slot' });
+    const hd = el('div', { class: 'v2-dest-hd' });
+    const list = el('div', { class: 'v2-dest-list', role: 'listbox' });
+    const pop = el('div', { class: 'v2-dest-pop', hidden: true }, hd, list);
+    const box = el('div', { class: 'v2-dest' }, el('span', { class: 'v2-dest-lbl', text: o.label }), input, slot);
+    const wrap = el('div', { class: 'v2-dest-wrap' }, box, pop);
+    const close = (): void => { pop.hidden = true; };
+    function set(next: Dest): void {
+      dest = next;
+      close();
+      if (next.kind === 'none') {
+        slot.replaceChildren();
+        input.hidden = false;
+        input.value = '';
+      } else {
+        const isNew = next.kind === 'new';
+        slot.replaceChildren(el('span', { class: 'v2-dest-chip' + (isNew ? ' new' : ''),
+          title: isNew ? `새 프로젝트를 «${next.name}» 이름으로 만듭니다` : (o.allowNew ? `${next.name} · #${next.id} 안에 세션을 엽니다` : `새 프로젝트가 ${next.name} · #${next.id} 을(를) 뒤따릅니다`) },
+          el('span', { class: 't', text: isNew ? '＋ 새 프로젝트 · ' + next.name : next.name }),
+          el('button', { class: 'x', type: 'button', 'aria-label': o.label + ' 지우기', title: o.label + ' 지우기', text: '✕',
+            onclick: () => { set({ kind: 'none' }); input.focus(); } })));
+        input.hidden = true;
+      }
+      o.onPick?.();
     }
-    const isNew = next.kind === 'new';
-    destSlot.replaceChildren(el('span', { class: 'v2-dest-chip' + (isNew ? ' new' : ''),
-      title: isNew ? `새 프로젝트를 «${next.name}» 이름으로 만듭니다` : `${next.name} · #${next.id} 안에 세션을 엽니다` },
-      el('span', { class: 't', text: isNew ? '＋ 새 프로젝트 · ' + next.name : next.name }),
-      el('button', { class: 'x', type: 'button', 'aria-label': '여는 곳 지우기', title: '여는 곳 지우기', text: '✕',
-        onclick: () => { setDest({ kind: 'none' }); destIn.focus(); } })));
-    destIn.hidden = true;
-  }
-  function paintDest(): void {
-    const q = destIn.value.trim();
-    const ql = q.toLowerCase();
-    // 빈 칸이면 **최근 5개**를 먼저 보여 준다 — 흔한 경우(어제 하던 일 이어서)의 타이핑을 0 으로 만든다.
-    const hits = (ql ? destRows.filter((r) => r.proj.name.toLowerCase().includes(ql) || String(r.proj.id) === ql) : destRows).slice(0, ql ? 6 : 5);
-    destHd.textContent = ql ? '검색 결과' : '최근 프로젝트';
-    const kids: (HTMLElement | null)[] = hits.map((r) => el('button', { class: 'v2-dest-row', type: 'button', role: 'option',
-      title: r.proj.name + ' · #' + r.proj.id, onclick: () => setDest({ kind: 'proj', id: r.proj.id, name: r.proj.name }) },
-      el('span', { class: 'n', text: r.proj.name }),
-      // 끝난 일에 후속 세션을 여는 경우가 실제로 있다 — 숨기지 않고 **끝났다고 말해 준 뒤** 고르게 한다.
-      r.done ? el('span', { class: 'b', text: '완료' }) : null,
-      el('span', { class: 'm mono', text: '#' + r.proj.id })));
-    if (ql && !hits.length) kids.push(el('p', { class: 'v2-fine v2-dest-none', text: '그 이름의 프로젝트가 없어요 — 아래 줄로 새로 만들 수 있어요.' }));
-    // ⚠ 이 줄은 **항상** 남는다. 친 글자가 기존 이름과 비슷할 때 «고른 건가 만든 건가»가 애매해지는데,
-    //  그 애매함은 사람이 한 번의 클릭으로 끝낼 수 있어야 한다.
-    kids.push(el('button', { class: 'v2-dest-row mk', type: 'button', role: 'option',
-      onclick: () => setDest(q ? { kind: 'new', name: q } : { kind: 'none' }) },
-      el('span', { class: 'n', text: q ? `「${q}」 이름으로 새 프로젝트 만들기` : '＋ 이름 없이 새 프로젝트로 열기' })));
-    destList.replaceChildren(...kids.filter(Boolean) as HTMLElement[]);
-    destPop.hidden = false;
-  }
-  destIn.addEventListener('focus', paintDest);
-  destIn.addEventListener('input', paintDest);
-  destIn.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key === 'Escape') { closeDest(); return; }
-    //  ⚠ 이 칸의 Enter 는 **친 글자로 첫 줄을 고르는 것**이지 지시를 보내는 게 아니다 — 여기서 보내면
-    //   방금 친 이름이 어디로 갔는지 모른 채 세션이 열린다. 보내기는 아래 질문 칸의 Enter 다.
-    //  ⚠ **빈 칸의 Enter 는 아무것도 고르지 않는다.** 그때 목록에 서 있는 건 «최근»일 뿐 사람이 겨눈 것이 아니라,
-    //   집어 버리면 탭으로 들어와 Enter 를 친 사람이 자기도 모르게 남의 프로젝트에 세션을 연다.
-    if (e.key === 'Enter' && !e.isComposing) {
-      e.preventDefault();
-      if (!destIn.value.trim()) { closeDest(); return; }
-      const first = destList.querySelector('.v2-dest-row') as HTMLButtonElement | null;
-      if (first) first.click();
+    function paint(): void {
+      const q = input.value.trim();
+      const ql = q.toLowerCase();
+      // 빈 칸이면 **최근 5개**를 먼저 보여 준다 — 흔한 경우(어제 하던 일 이어서)의 타이핑을 0 으로 만든다.
+      const hits = (ql ? destRows.filter((r) => r.proj.name.toLowerCase().includes(ql) || String(r.proj.id) === ql) : destRows).slice(0, ql ? 6 : 5);
+      hd.textContent = ql ? '검색 결과' : '최근 프로젝트';
+      const kids: (HTMLElement | null)[] = hits.map((r) => el('button', { class: 'v2-dest-row', type: 'button', role: 'option',
+        title: r.proj.name + ' · #' + r.proj.id, onclick: () => set({ kind: 'proj', id: r.proj.id, name: r.proj.name }) },
+        el('span', { class: 'n', text: r.proj.name }),
+        // 끝난 일에 후속 세션을 여는 경우가 실제로 있다 — 숨기지 않고 **끝났다고 말해 준 뒤** 고르게 한다.
+        r.done ? el('span', { class: 'b', text: '완료' }) : null,
+        el('span', { class: 'm mono', text: '#' + r.proj.id })));
+      if (ql && !hits.length) kids.push(el('p', { class: 'v2-fine v2-dest-none', text: o.allowNew ? '그 이름의 프로젝트가 없어요 — 아래 줄로 새로 만들 수 있어요.' : '그 이름의 프로젝트가 없어요.' }));
+      // ⚠ 이 줄은 **항상** 남는다. 친 글자가 기존 이름과 비슷할 때 «고른 건가 만든 건가»가 애매해지는데,
+      //  그 애매함은 사람이 한 번의 클릭으로 끝낼 수 있어야 한다.
+      if (o.allowNew) kids.push(el('button', { class: 'v2-dest-row mk', type: 'button', role: 'option',
+        onclick: () => set(q ? { kind: 'new', name: q } : { kind: 'none' }) },
+        el('span', { class: 'n', text: q ? `「${q}」 이름으로 새 프로젝트 만들기` : '＋ 이름 없이 새 프로젝트로 열기' })));
+      list.replaceChildren(...kids.filter(Boolean) as HTMLElement[]);
+      pop.hidden = false;
     }
-  });
-  //  ⚠ 목록을 **마우스로 고를 때 포커스를 뺏기지 않게** 한다. 사파리는 버튼을 눌러도 포커스를 안 옮기므로,
-  //   아래 focusout 이 relatedTarget=null 을 보고 목록을 먼저 닫아 버린다 — 그러면 클릭이 허공을 친다.
-  destPop.addEventListener('mousedown', (e: MouseEvent) => e.preventDefault());
-  //  바깥을 누르면 닫는다 — document 리스너를 매 판마다 걸면 새는 자리라, **이 묶음 안의 포커스 이동**만 본다.
-  destWrap.addEventListener('focusout', (e: FocusEvent) => {
-    const to = e.relatedTarget as Node | null;
-    if (to && destWrap.contains(to)) return;
-    closeDest();
-  });
+    input.addEventListener('focus', paint);
+    input.addEventListener('input', paint);
+    input.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { close(); return; }
+      //  ⚠ 이 칸의 Enter 는 **친 글자로 첫 줄을 고르는 것**이지 지시를 보내는 게 아니다 — 여기서 보내면
+      //   방금 친 이름이 어디로 갔는지 모른 채 세션이 열린다. 보내기는 아래 질문 칸의 Enter 다.
+      //  ⚠ **빈 칸의 Enter 는 아무것도 고르지 않는다.** 그때 목록에 서 있는 건 «최근»일 뿐 사람이 겨눈 것이 아니라,
+      //   집어 버리면 탭으로 들어와 Enter 를 친 사람이 자기도 모르게 남의 프로젝트에 세션을 연다.
+      if (e.key === 'Enter' && !e.isComposing) {
+        e.preventDefault();
+        if (!input.value.trim()) { close(); return; }
+        const first = list.querySelector('.v2-dest-row') as HTMLButtonElement | null;
+        if (first) first.click();
+      }
+    });
+    //  ⚠ 목록을 **마우스로 고를 때 포커스를 뺏기지 않게** 한다. 사파리는 버튼을 눌러도 포커스를 안 옮기므로,
+    //   아래 focusout 이 relatedTarget=null 을 보고 목록을 먼저 닫아 버린다 — 그러면 클릭이 허공을 친다.
+    pop.addEventListener('mousedown', (e: MouseEvent) => e.preventDefault());
+    //  바깥을 누르면 닫는다 — document 리스너를 매 판마다 걸면 새는 자리라, **이 묶음 안의 포커스 이동**만 본다.
+    wrap.addEventListener('focusout', (e: FocusEvent) => {
+      const to = e.relatedTarget as Node | null;
+      if (to && wrap.contains(to)) return;
+      close();
+    });
+    return {
+      wrap, get: () => dest,
+      lock(hint) {
+        const off = hint != null;
+        if (off && dest.kind !== 'none') set({ kind: 'none' });
+        box.classList.toggle('off', off);
+        input.disabled = off;
+        input.placeholder = off ? hint : o.placeholder;
+      },
+    };
+  }
+  const destPre = destBox({ label: '선행', placeholder: '없음 · 앞선 일이 있으면 고르세요', allowNew: false });
+  const destMain = destBox({ label: '프로젝트', placeholder: '이어서 할 프로젝트를 고르거나 새 이름을 적으세요', allowNew: true,
+    onPick: () => destPre.lock(destMain.get().kind === 'proj' ? '프로젝트 상세에서 바꿔요' : null) });
+  const destWrap = el('div', { class: 'v2-dest-grid' }, destMain.wrap, destPre.wrap);
+  const dest = (): Dest => destMain.get();
   const send = el('button', { class: 'btn btn-primary v2-launch-send', type: 'button', title: 'Enter 로도 보낼 수 있어요' }, el('span', { text: '시키기' })) as HTMLButtonElement;
   // [시키기] 왼쪽 세 칸 — 제공자(어느 회사 모델)·모델·추론강도(#1758). 기본은 내가 지난번에 고른 값이고,
   //  여기서 바꾸면 그게 다음 기본이 된다(v2/run-picker.ts — '새 AI 세션' 폼과 같은 기억을 쓴다).
@@ -261,16 +282,19 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
   //  않으므로(main.ts — inbox 만 덧칠) 칩·입력 글자와 같은 수명으로 산다.
   //  #3778 — 프로젝트를 골랐으면 첨부도 **그 프로젝트 자료함**으로 간다(개인 uploads/ 가 아니라).
   //   함수를 받는 인자라 고르는 즉시 따라온다 — 이 칸을 다시 그리지 않아도 된다.
-  const att = composerAttach({ projectId: () => (dest.kind === 'proj' ? dest.id : 0) });
+  const att = composerAttach({ projectId: () => { const d = dest(); return d.kind === 'proj' ? d.id : 0; } });
+  // 초대(#3778) — @이름 으로 고른 사람. 칩은 첨부 칩과 같은 줄에 서고, 목록은 카드 안에 떠서 뜬다(v2/compose-mention.ts).
+  const mention = composerMention();
   // 아랫줄은 두 덩어리다(원준 2026-08-25) — 왼쪽 = **무엇으로 열까**(셀렉트 넷, 한 줄 고정), 오른쪽 = **행동**([＋]·[시키기]).
   //  종전엔 [＋]가 줄의 맨 왼쪽 끝, [시키기]가 맨 오른쪽 끝에 떨어져 있었고 그 사이 셀렉트가 두 줄로 접히면
   //  [＋]만 아랫줄에 홀로 남아 어느 쪽에도 속하지 않는 단추로 보였다. 파일도 보내기도 '지금 이 지시에 하는 일'이라
   //  한 덩어리로 묶는다.
-  const card = el('div', { class: 'v2-launch' }, ta, att.chips,
+  const card = el('div', { class: 'v2-launch' }, ta, att.chips, mention.chips, mention.menu,
     el('div', { class: 'v2-launch-row' },
       el('div', { class: 'v2-launch-ctl' }, runPicker.el),
-      el('div', { class: 'v2-launch-act' }, att.btn, send)), att.fileIn);
+      el('div', { class: 'v2-launch-act' }, runPicker.gear, att.btn, send)), att.fileIn);
   att.wirePaste(ta);
+  mention.wire(ta);
   att.wireDrop(card, card);
 
   const grow = (): void => { ta.style.height = 'auto'; ta.style.height = Math.min(220, ta.scrollHeight) + 'px'; };
@@ -284,10 +308,13 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
     // ⚠ 초안은 **보내기 전에** 비운다. 이 글은 이제 세션의 것이고, 홈 탭이 그대로 그 세션 화면이 되어야 하기
     //  때문이다 — 초안이 남아 있으면 라우터가 '쓰던 홈'으로 보고 세션을 새 탭에 연다(main.ts onHash).
     draft?.onChange('');
-    const ok = await openQuickSession(text + att.tail(), {
+    const d = dest(); const pre = destPre.get();
+    const ok = await openQuickSession(text + mention.tail() + att.tail(), {
       run: runPicker.value(),
-      projectId: dest.kind === 'proj' ? dest.id : null,
-      projectName: dest.kind === 'new' ? dest.name : '',
+      projectId: d.kind === 'proj' ? d.id : null,
+      projectName: d.kind === 'new' ? d.name : '',
+      invites: mention.invites(),
+      predecessorId: pre.kind === 'proj' ? pre.id : null,
     });
     if (!ok) { draft?.onChange(ta.value); send.disabled = false; ta.disabled = false; runPicker.disable(false); send.replaceChildren(el('span', { text: '시키기' })); ta.focus(); }
   };

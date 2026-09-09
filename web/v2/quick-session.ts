@@ -1,8 +1,9 @@
 // v2/quick-session.ts — 홈 입력창에서 세션을 연다.
 // 프로젝트가 정해졌으면 생성 요청 자체가 그 프로젝트의 canonical workspace에서 시작하고, 아니면 개인 workspace 루트에서 시작한다.
 //   · initialPrompt — 서버가 하네스 입력창이 뜬 뒤 넣는다(session-first-prompt.ts). 화면은 낙관적으로 그 턴을 먼저 그린다.
-//  자동 승인은 클래식 '새 AI 세션' 폼이 기억해 둔 마지막 값을 그대로 쓴다(같은 localStorage 키 — v2/run-picker.ts
-//  runPrefs). 제공자(하네스)·모델·추론강도는 홈 입력창의 세 칸이 정해 넘긴다(#1758) — 안 넘기면 그 기억이 기본이다.
+//  제공자(하네스)·모델·추론강도는 홈 입력창의 세 칸이 정해 넘긴다(#1758) — 안 넘기면 그 기억이 기본이다.
+//  자동 승인·라이블리 모드·기록 범위·실행 컴퓨터는 [⚙] 「새 세션 기본값」(#3778 안 C, v2/run-prefs.ts)이 정한 값이
+//  run 에 실려 온다. 종전엔 자동 승인만 클래식 폼의 마지막 값이 **말없이** 따라왔다 — 이제 [⚙]가 그 값을 보여 준다.
 import { api, toast } from '../core.js';
 import { runPrefs, type RunPick } from './run-picker.js';
 import { rememberCreated } from './created-cache.js';
@@ -40,7 +41,14 @@ export function isCreatingQuickSession(): boolean { return creating; }
  *   "엔터 친 다음에 클로드 미러링이 새로고침 안 하면 안 나온다"). 그래서 생성은 여기 한 곳만 남긴다.
  *  @returns 만든 세션 id, 실패면 null(이유는 toast 로 이미 말했다).
  */
-export async function spawnSession(text: string, opts?: { projectId?: number | null; projectName?: string; run?: RunPick | null }): Promise<{ id: string; session: any } | null> {
+export interface SpawnOpts {
+  projectId?: number | null; projectName?: string; run?: RunPick | null;
+  /** 초대(#3778 @이름) — 구성원 id. 서버가 디렉터리로 다시 검증한다. */
+  invites?: string[];
+  /** 선행 프로젝트(#3778) — 미소속으로 열어 서버가 프로젝트를 만들 때, 그 프로젝트가 뒤따를 앞 일. 프로젝트를 골랐으면 무시. */
+  predecessorId?: number | null;
+}
+export async function spawnSession(text: string, opts?: SpawnOpts): Promise<{ id: string; session: any } | null> {
   const t = String(text || '').trim();
   if (!t || creating) return null;
   creating = true;
@@ -59,8 +67,14 @@ export async function spawnSession(text: string, opts?: { projectId?: number | n
     const out: any = await api(endpoint, {
       method: 'POST',
       body: JSON.stringify({
-        harness, flags,
-        autoApprove: !!p.autoApprove, initialPrompt: t,
+        harness, flags, initialPrompt: t,
+        // [⚙] 기본값 넷(#3778) — run 이 없으면(구 호출자) 종전대로 기억된 자동 승인만.
+        autoApprove: run ? run.autoApprove : !!p.autoApprove,
+        ...(run && run.mode === 'readonly' ? { readOnly: true } : {}),
+        ...(run && run.mode === 'incognito' ? { incognito: true } : {}),
+        ...(run && run.writeVis ? { writeVis: run.writeVis } : {}),
+        // 초대(#3778 @이름) — 홈·프로젝트 입구 둘 다 같은 필드(프로젝트 입구는 PR #823 이 싣는다).
+        ...(opts && opts.invites && opts.invites.length ? { invites: opts.invites } : {}),
         // 프로젝트를 고른 경우는 엔드포인트가 이미 말했다(위) — 새 **이름**만 홈 입구에서 바디로 간다(#3778).
         //  서버(first-prompt-project)가 그 이름으로 프로젝트를 만들고 그 폴더를 cwd 로 준다. 비우면 종전 그대로.
         ...(pid > 0 ? {} : { rootKey: 'personal', ...(newName ? { projectName: newName } : {}) }),
@@ -71,6 +85,7 @@ export async function spawnSession(text: string, opts?: { projectId?: number | n
     if (!id) throw new Error('세션 id 를 받지 못했습니다');
     rememberCreated(out.session);   // 노드 세션은 목록 반영이 한 박자 늦다 — 라우트가 이 전문으로 먼저 그린다(created-cache 머리말)
     firstPrompts.set(id, t);
+    await linkPredecessor(out.session, pid, opts && opts.predecessorId);
     return { id, session: out.session };
   } catch (e: any) {
     toast('세션을 열지 못했습니다 — ' + (e && e.message ? e.message : e), true);
@@ -83,7 +98,20 @@ export async function spawnSession(text: string, opts?: { projectId?: number | n
  *  opts.projectId — 홈 런처가 고른 행선지. 프로젝트 세션 API 한 번으로 cwd와 DB 소속을 함께 확정한다.
  *  opts.run — 입력창 옆 세 칸(제공자·모델·추론강도)이 고른 값(#1758). 없으면 저장된 직전 설정 그대로 연다.
  */
-export async function openQuickSession(text: string, opts?: { projectId?: number | null; projectName?: string; run?: RunPick | null }): Promise<boolean> {
+/**
+ * 선행 프로젝트(#3778) — 홈 입구에서 고른 «앞선 일». 서버가 이 세션을 위해 만든 프로젝트(응답 session.projectId)가 그 일을
+ *  뒤따르게 엣지 하나(from=새 프로젝트 → to=선행, relation follow_up — 프로젝트 상세의 «선행 추가»와 같은 호출).
+ *  프로젝트를 이미 골랐으면(pickedPid) 선행은 그 프로젝트의 속성이라 여기서 걸지 않는다. 실패해도 세션은 이미 열렸으니 말만 한다.
+ */
+async function linkPredecessor(session: any, pickedPid: number, pre?: number | null): Promise<void> {
+  const to = Number(pre) || 0;
+  const made = Number(session && session.projectId) || 0;
+  if (!to || pickedPid > 0 || !made || made === to) return;
+  try { await api(`/api/ui/v6/projects/${made}/link`, { method: 'POST', body: JSON.stringify({ to, relation: 'follow_up' }) }); }
+  catch (e: any) { toast('선행 프로젝트는 못 걸었어요 — 프로젝트 상세에서 다시 걸 수 있어요. ' + (e && e.message ? e.message : ''), true); }
+}
+
+export async function openQuickSession(text: string, opts?: SpawnOpts): Promise<boolean> {
   const made = await spawnSession(text, opts);
   if (!made) return false;
   location.hash = '#/s/' + encodeURIComponent(made.id);
