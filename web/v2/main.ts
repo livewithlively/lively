@@ -1360,6 +1360,41 @@ function draftLine(draft?: string): string {
   return '쓰다 만 지시 · ' + (one.length > 40 ? one.slice(0, 40) + '…' : one);
 }
 
+/**
+ * 이 주소가 **두고 온 것 없이** 서 있는 «앱 첫 화면» 인가 (#3778 C안, 원준 2026-09-09).
+ *
+ * 좌측 목록이 서는 기준은 종전엔 «열려 있나» 였다. 그런데 이 목록은 탭 줄을 겸하므로(TABS_OFF, 위 머리말)
+ *  열어 본 화면이 전부 줄을 얻었고, 실측(2026-09-09 원준님 홈)에서 「프로젝트 없음」 카드 **6줄 중 5줄**이
+ *  세션이 아니라 앱 첫 화면이었다 — 새 작업 · 프로젝트 · AI 세션 · 확인할 것 · 자료. 그리고 그 다섯은
+ *  **전부 레일(rail.ts SECTIONS)·런치패드에 같은 문이 이미 있다.** 사람은 그걸 프로젝트로 읽었다
+ *  ("홈에는 이런 프로젝트가 있는데 이게 뭔가 이상한데").
+ *
+ * 그래서 기준을 **«두고 온 게 있나»** 로 바꾼다. 상태를 안 든 앱 첫 화면은 세우지 않는다 —
+ *  돌아갈 상태가 없으므로 «돌아간다» 가 성립하지 않고, 레일 한 번이면 같은 자리라 **잃는 것이 없다**.
+ *  (열어 둔 것을 무턱대고 걷으면 안 되는 이유는 #2061 이 이미 겪었다 — 그건 **상태를 든** 세션 얘기다.)
+ *
+ * ⚠ 판정에 `routeKey` 를 쓰지 않는다 — 그건 `#/sources` 와 `#/sources/<id>` 를 한 키로 접으므로(tabs.ts)
+ *  «목록» 과 «자료 하나를 열어 둠» 을 구분하지 못한다. 여기서는 **탭이 든 실제 주소**를 본다.
+ * ⚠ 모르는 주소는 «없는 것» 이 아니라 «모르는 것» 이다 — 세운다(false).
+ */
+function isBlankScreen(route: string, draft?: string): boolean {
+  const { segs } = parseRoute(route);
+  const p = segs[0] || '';
+  //  새 작업(홈) — 아무것도 안 쓴 빈 창은 남길 것이 없다. 사이드바 머리줄 [＋ 새 작업]이 늘 그 자리를 연다.
+  if (!p || p === 'dashboard') return !draftLine(draft);
+  //  프로젝트 주소 = «새 세션 자리»다(titleFor 머리말) — 세션이 되기 전의 빈 슬롯이라 남길 것이 없다.
+  //   종전엔 프로젝트에 한 번 들어갈 때마다 그 카드 안에 「새 세션」 줄이 하나 생겨 **진짜 세션과 같은 위계**로
+  //   섰다(원준 2026-09-09 지적). 쓰다 만 지시가 있으면 그건 두고 온 것이므로 남는다.
+  if (p === 'p') return !draftLine(draft);
+  //  세션·앱 인스턴스는 언제나 무언가를 들고 있다(대화·스크롤·돌던 작업).
+  if (p === 's' || p === 'i') return false;
+  //  `#/app/<key>` = 그 앱의 첫 화면. 뒤 세그먼트가 붙으면(문서·항목) 그건 «어디까지 봤나» 라 남는다.
+  if (p === 'app') return segs.length <= 2;
+  //  정본 주소를 가진 빌트인과 클래식 딥링크도 같은 자로 — 뿌리면 첫 화면, 깊으면 두고 온 자리.
+  if (p === 'inbox' || p === 'sources' || CLASSIC_PAGES[p]) return segs.length <= 1;
+  return false;
+}
+
 /** route 하나가 좌측에서 갖는 얼굴 — 이름·아이콘·부제·소속 프로젝트. `draft` 는 그 창에 쓰다 만 지시(#2037). */
 function sideRowFace(route: string, draft?: string): Omit<SideInstance, 'id' | 'active'> {
   const { segs } = parseRoute(route);
@@ -1585,6 +1620,11 @@ function sideInstances(): SideInstance[] {
     if (!prev) dismissBasis.set(key, basis);   // 아래 return 보다 먼저 — 치워진 행도 × 가 다시 읽을 수 있어야 한다
     //  치운 행은 **그 상태 그대로인 동안** 숨는다. 창이 열려 있으면(force) 늘 보인다 — 보고 있는 화면이 목록에 없으면 그게 고장이다.
     if (!force && !prev && dismissed[key] !== undefined && dismissed[key] === basis) return;
+    //  ★ 목록에 서는 기준은 «열려 있나» 가 아니라 **«두고 온 게 있나»** 다(#3778 C안, isBlankScreen 머리말).
+    //   ⚠ 여기서는 `force`(창이 열려 있다)를 보지 않는다 — 그게 바로 갈아 끼우는 그 기준이다.
+    //   예외 둘만 남긴다: **보고 있는 화면**(목록에 없으면 그게 고장이다 — ③ force 가 원래 지키려던 한 줄)과
+    //   **사람이 고정한 것**(사람의 결정은 자동 규칙을 언제나 이긴다, appPinnedKeys).
+    if (!prev && key !== activeKey && !isAppPinned(key) && isBlankScreen(route, draft)) return;
     sideRowRoute.set(key, route);
     let sk = stateKey;
     //  ★ **보고 있는 세션은 '안 본 완료'가 아니다** — 초록점은 누르는 즉시 꺼진다(#1954 3차).
