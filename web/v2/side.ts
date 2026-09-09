@@ -565,9 +565,11 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
       instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })),
     //  얼굴은 **둘째 줄 왼쪽 여백**에 선다 — 첫 줄 아이콘 바로 아래 빈자리라 새로 폭을 먹지 않고,
     //   첫 줄 오른쪽에 겹쳐 뜨는 압정·닫기와도 부딪히지 않는다.
-    //  ⚠ 한 줄 모드(#2033)에는 얼굴을 안 세운다 — 이 부품은 `grid-row: 2` 에 사는데 그 줄이 없어서,
-    //   그리면 빈 둘째 줄이 되살아나 행 높이가 두 축에서 어긋난다. 주인 이름은 위 툴팁이 말한다.
+    //  ⚠ 한 줄 모드(#2033)에는 **다른 부품**을 쓴다 — 위 얼굴은 `grid-row: 2` 에 사는데 그 줄이 없어서,
+    //   그대로 그리면 빈 둘째 줄이 되살아나 행 높이가 두 축에서 어긋난다. 그래서 한 줄 모드는 첫 줄 오른쪽
+    //   **제 칸**(grid-column 3)에 세운다 — 상태 점 왼쪽, 압정·× 와 안 겹치는 자리다(#3778).
     inst.owner && !one ? personFace(inst.owner.id, 'v2-app-inst-face', ownerNm) : null,
+    inst.owner && one ? personFace(inst.owner.id, 'v2-app-inst-face1', ownerNm) : null,
     //  상태 = **점 하나**. 글자는 줄을 먹어 제목이 잘렸다(#1954 2차) — 색으로 가르고 이름은 툴팁·읽어주기에 남긴다.
     //  작업 중(파랑·깜빡임) · 확인 필요(노랑) · 작업 완료(초록). 확인한 완료는 점이 없다.
     inst.status
@@ -611,6 +613,23 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
 // ══ 프로젝트 축 — 묶기·펼침 (#2033) ══════════════════════════════════════════
 /** 한 프로젝트 묶음. rows 는 이미 정렬돼 들어온다(아래 projGroups 머리말). */
 interface ProjGrp { key: string; id: number; name: string; bucket: string; rows: SideInstance[]; open: boolean; active: boolean; pinned: boolean; counts: Record<string, number> }
+
+/**
+ * 접힌 카드 머리줄에 세울 얼굴 — 그 안 세션들의 주인을 **합집합**으로 (#3778, 원준 2026-09-09).
+ *
+ * ★ 이 합집합은 **카드가 접혀 있을 때만** 쓴다. 펴져 있으면 각 줄이 제 얼굴을 들고 있으므로
+ *  머리줄의 요약은 중복이고, 그보다 나쁘게 **거짓말이 된다** — 한 프로젝트 안에서도 세션마다 공유
+ *  범위가 다르기 때문이다(원준: "특정 세션만 공유할 수도 있잖아"). 펴 놓고 보면 머리줄에 있는 얼굴이
+ *  어느 줄에도 없는 상태가 그대로 노출된다. **요약은 안을 못 볼 때만 값이 있다.**
+ */
+function grpFaces(rows: SideInstance[]): Array<{ id: string; name: string }> {
+  const seen = new Map<string, { id: string; name: string }>();
+  for (const r of rows) {
+    if (!r.owner || seen.has(r.owner.id)) continue;
+    seen.set(r.owner.id, { id: r.owner.id, name: (people[r.owner.id] && people[r.owner.id].display_name) || r.owner.name || r.owner.id });
+  }
+  return [...seen.values()];
+}
 
 //  펼칠 상태 = **확인 필요 · 작업 완료(미확인)** 둘뿐(상민님 2026-08-26).
 //   작업 중은 「지금 볼 것」에 **서기는 하되 펴지 않는다** — 돌고 있는 건 나를 기다리는 게 아니라 알리기만 하면 되고,
@@ -698,6 +717,9 @@ function projGrpHead(g: ProjGrp): HTMLElement {
       el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }),
       glyph(g.open ? 'folder-open' : 'folder', 'v2-pg-ic'),
       el('span', { class: 'n', text: g.name }),
+      //  ★접힌 카드에만 얼굴 합집합(#3778) — 펴면 줄이 제 얼굴을 들고 있으므로 여기선 걷는다(grpFaces 머리말).
+      //   최대 셋까지 겹쳐 쌓고 그 위는 +N — 넷째부터는 얼굴보다 숫자가 빠르다.
+      g.open ? null : grpFacesEl(g),
       grpSums(g.counts),
       //  세션이 하나뿐인 묶음은 개수를 안 쓴다 — 접힌 줄 하나가 곧 그 하나다(위 grpSums 주석과 같은 사유).
       g.rows.length > 1 ? el('span', { class: 'v2-cnt', text: String(g.rows.length) }) : null),
@@ -720,6 +742,17 @@ function projGrpHead(g: ProjGrp): HTMLElement {
     beginRenameProjGrp(g);
   });
   return head;
+}
+
+/** 접힌 카드 머리줄의 얼굴 묶음 — 셋까지 겹쳐 쌓고 그 위는 `+N`. 아무도 없으면 **아무것도 그리지 않는다**
+ *  (혼자 하는 프로젝트에는 한 픽셀도 안 생긴다 — 그래야 얼굴이 보이는 것 자체가 정보가 된다). */
+function grpFacesEl(g: ProjGrp): HTMLElement | null {
+  const fs = grpFaces(g.rows);
+  if (!fs.length) return null;
+  const shown = fs.slice(0, 3);
+  return el('span', { class: 'v2-pg-faces', title: `같이 보는 사람 — ${fs.map((f) => f.name).join(' · ')}` },
+    ...shown.map((f) => personFace(f.id, 'v2-pg-face', f.name)),
+    fs.length > shown.length ? el('span', { class: 'v2-pg-facen', text: '+' + (fs.length - shown.length) }) : null) as HTMLElement;
 }
 
 /** 홈 목록 프로젝트 카드의 [→] — 그 프로젝트 상세 화면을 연다. 자리는 압정 ＋ 와 같은 절대위치(위 projGrpHead 머리말). */
@@ -2589,7 +2622,13 @@ function renamingAlive(): boolean {
 function inlineRename(nameEl: HTMLElement, cfg: { value: string; label: string; save: (next: string) => Promise<void> }): void {
   if (renamingAlive()) return;
   const shown = nameEl.textContent || '';
-  const input = el('input', { class: 'v2-ss-edit', type: 'text', value: cfg.value || shown, 'aria-label': cfg.label }) as HTMLInputElement;
+  //  ⚠ **브라우저·확장의 자동완성을 끈다**(원준 2026-09-09: "수정할 때 오른쪽에 이런 사람 모양이 나오는데 이건 도대체 왜").
+  //   `aria-label` 이 「프로젝트 이름」·「세션 이름」 이라 브라우저가 **연락처 칸**으로 넘겨짚고 인물 아이콘 + ⌄ 를
+  //   칸 안에 그려 넣는다. 비밀번호 관리자 확장도 같은 자리에 제 아이콘을 얹는다. 여긴 이름을 **고치는** 자리이지
+  //   사람을 **고르는** 자리가 아니므로 넷 다 끈다 — `data-*` 는 1Password·LastPass·Bitwarden 이 각자 읽는 표식이다.
+  const input = el('input', { class: 'v2-ss-edit', type: 'text', value: cfg.value || shown, 'aria-label': cfg.label,
+    autocomplete: 'off', autocorrect: 'off', autocapitalize: 'off', spellcheck: 'false',
+    'data-1p-ignore': 'true', 'data-lpignore': 'true', 'data-bwignore': 'true' }) as HTMLInputElement;
   nameEl.replaceChildren(input);
   renamingEl = input;
   input.focus(); input.select();
