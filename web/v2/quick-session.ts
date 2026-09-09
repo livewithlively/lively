@@ -53,13 +53,17 @@ export async function spawnSession(text: string, opts?: { projectId?: number | n
     //  (server createSession 이 노드에선 injectFirstPrompt 로, DB 아웃박스 대신). 노드가 없거나 안 고른 경우 run.node 는 ''.
     const node = run ? run.node : '';
     const pid = opts && opts.projectId ? Number(opts.projectId) : 0;
+    // 새 프로젝트 이름은 **미소속으로 열 때만** 뜻이 있다 — 프로젝트를 이미 골랐으면 이름을 지을 자리가 아니다.
+    const newName = pid > 0 ? '' : String((opts && opts.projectName) || '').trim();
     const endpoint = pid > 0 ? `/api/ui/v6/projects/${pid}/sessions` : '/api/ui/terminal/sessions';
     const out: any = await api(endpoint, {
       method: 'POST',
       body: JSON.stringify({
         harness, flags,
         autoApprove: !!p.autoApprove, initialPrompt: t,
-        ...(pid > 0 ? {} : { rootKey: 'personal' }),
+        // 프로젝트를 고른 경우는 엔드포인트가 이미 말했다(위) — 새 **이름**만 홈 입구에서 바디로 간다(#3778).
+        //  서버(first-prompt-project)가 그 이름으로 프로젝트를 만들고 그 폴더를 cwd 로 준다. 비우면 종전 그대로.
+        ...(pid > 0 ? {} : { rootKey: 'personal', ...(newName ? { projectName: newName } : {}) }),
         ...(node ? { node } : {}),
       }),
     });

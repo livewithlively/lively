@@ -105,10 +105,18 @@ export function sessDisplayName(s: Sess, projectName: string): string {
   return label || work || '이름 없는 세션';
 }
 
-// ── 홈 = 런처 (#1719 재설계 · #1798 행선지 제거) — 입력창이 주인공이다 ──────────
-//  · 입력은 **항상 프로젝트 없는 세션**으로 열린다(세션 전용 폴더). 종전의 행선지 자동매칭·프로젝트 드롭다운은
-//    #1798 에서 제거 — 이름 토큰 매칭의 오연결이 잦았고(무관한 프로젝트에 세션이 붙는 실측), 소속은 세션이
-//    맥락을 갖춘 뒤에 정하는 게 맞다(미연결 첫 쓰기 훅이 새 프로젝트 생성을 기본으로 유도 · 상단바 수동 연결 #1749).
+// ── 홈 = 런처 (#1719 재설계 · #1798 행선지 제거 · #3778 행선지 복귀) — 입력창이 주인공이다 ──────────
+//  · 어디에 열지는 **사람이 정한다**(#3778, 원준 2026-09-09). 입력창 위 얇은 칸 하나가 «고르기»와 «이름 짓기»를
+//    함께 받고, **비워 두면 종전 그대로**(서버가 첫 지시로 껍데기 프로젝트를 만든다).
+//    ★ #1798 에서 뺐던 것과 무엇이 다른가: 그때 뺀 것은 **자동매칭**이었다(이름 토큰이 비슷하면 그 프로젝트에
+//     제멋대로 붙어 오연결이 잦았다). 여기서 되돌린 것은 자동이 아니라 **사람이 고르는 자리**다 — 화면이 추측하지
+//     않으므로 그 실패 양식이 재현되지 않는다.
+//    ★ 왜 이 자리여야 하나: cwd 는 세션이 뜬 뒤 못 옮긴다(실행 중 프로세스는 inode 참조). 그래서 나중에
+//     [⋯ ▸ 프로젝트]로 소속만 바꿔도 그 세션의 파일·워크트리는 개인 폴더에 남는다 — 정하는 순간은 Enter **전**이다.
+//    ★ 안 고치면 무슨 일이 나나(실측 2026-09-09): 미소속 세션이면 서버가 늘 새 프로젝트를 만드는데
+//     (first-prompt-project.ts, 8/25 결정) 화면엔 그걸 바꿀 자리가 없어 «새 질문 = 새 프로젝트»가 사실상 강제였다.
+//     같은 요청 하나가 프로젝트 넷을 낳았고(#2532·#3511·#3777·#3778), 프로젝트마다 폴더를 갈라 자료를 모아 둔
+//     설계가 그만큼 무력해졌다.
 //  · Enter → 세션 생성 → 세션 대화 화면. 리브 대화는 홈에 두지 않는다(#/liv 가 그 자리).
 //  · '지금 도는 세션'은 **답 기다리는 것 먼저**, 세션 이름과 프로젝트가 같으면 한 번만 쓴다(같은 말 두 줄 금지).
 
@@ -140,7 +148,12 @@ function welcomeResumeRow(): HTMLElement | null {
  * *"가운데 박스에 타이핑 쳐놨다가 프로젝트나 이런 다른 창 가서 뭐 좀 하다오면 타이핑해놓은 글자 전부 사라진다."*
  * 그래서 값을 탭(그리고 그 저장본)에 맡기고 여기서 되받는다 — 화면이 다시 그려져도, 새로고침해도 남는다.
  */
-export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: string; onChange(v: string): void }): void {
+/** 새 작업 창의 «여는 곳» 후보 한 줄(#3778) — 정렬은 사이드바와 **같은 순서**여야 하므로 main.ts 가 projectOrder 로 만들어 넘긴다.
+ *  ⚠ views.ts 가 side.ts 를 직접 import 하면 순환이 된다(side.ts 는 이 파일의 값들을 쓴다) — 그 고리는 마운트 시점
+ *   TDZ 로 화면을 통째로 죽인 전례가 있다([[mount-time-tdz-panes-declaration-order-762]]). 그래서 **넘겨받는다**. */
+export interface HomeDest { proj: Proj; done: boolean }
+
+export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: string; onChange(v: string): void }, dests?: HomeDest[]): void {
   const me = state.me || {};
   const name = personName(me);   // 이름 판정은 한 곳(#1813)
   const live = data.sessions.filter((s) => s.live && s.alive);
@@ -151,8 +164,94 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
   const h = new Date().getHours(); const tod = h < 12 ? '좋은 아침이에요' : h < 18 ? '좋은 오후예요' : '좋은 저녁이에요';
   const d = new Date(); const KO_DAY = ['일', '월', '화', '수', '목', '금', '토'];
 
-  const ta = el('textarea', { class: 'v2-launch-in', rows: '2', placeholder: '무엇이든 시키세요 — 프로젝트 없이 열리고, 소속은 나중에 세션에서 정해요', 'aria-label': '무엇이든 시키기' }) as HTMLTextAreaElement;
+  // ⚠ 종전 placeholder 는 «프로젝트 없이 열리고, 소속은 나중에 세션에서 정해요» 였는데 **사실과 반대**였다
+  //  (8/25 이후 서버가 늘 프로젝트를 만든다). 이제 어디에 열리는지는 **위 칸이 말하므로** 여기선 말하지 않는다.
+  const ta = el('textarea', { class: 'v2-launch-in', rows: '2', placeholder: '무엇이든 시키세요', 'aria-label': '무엇이든 시키기' }) as HTMLTextAreaElement;
   ta.value = draft?.text || '';   // 쓰다 만 지시를 되받는다(#2037)
+
+  // ── 여는 곳(#3778) — 질문 창 **위** 얇은 칸 하나 ───────────────────────────────
+  //  ★ 고르기와 이름짓기를 **한 컨트롤**이 받는다. 둘을 다른 자리에 두면(드롭다운 + 별도 이름칸) 반드시
+  //   «어느 쪽이 이기나»가 생기고, 사람은 보내기 전에 무엇이 정해졌는지 확신할 수 없다.
+  //  ★ 상태는 늘 보인다 — 고르면 칩으로 굳고, ✕ 로 비우면 «비워 둠(=종전 동작)»으로 돌아온다.
+  //  ⚠ 이 선택은 **이 판(render)과 같은 수명**이다(첨부 칩과 같다 — 홈은 20초 틱에 다시 그리지 않는다).
+  //   초안 글자처럼 탭에 얹지 않은 이유: 잃어버려도 **칩이 사라진 게 눈에 보인다**. 조용히 틀린 곳으로 가는
+  //   경우가 없으므로, 그걸 막자고 초안 저장 규약(tabs.ts)까지 바꾸지 않는다.
+  type Dest = { kind: 'none' } | { kind: 'proj'; id: number; name: string } | { kind: 'new'; name: string };
+  let dest: Dest = { kind: 'none' };
+  const destRows = dests || [];
+  const destIn = el('input', { class: 'v2-dest-in', type: 'text', autocomplete: 'off', 'aria-label': '여는 곳 — 프로젝트를 고르거나 새 이름을 적으세요',
+    placeholder: '이어서 할 프로젝트를 고르거나 새 이름을 적으세요 — 비워 두면 새로 만들어요' }) as HTMLInputElement;
+  const destSlot = el('span', { class: 'v2-dest-slot' });
+  const destHd = el('div', { class: 'v2-dest-hd' });
+  const destList = el('div', { class: 'v2-dest-list', role: 'listbox' });
+  const destPop = el('div', { class: 'v2-dest-pop', hidden: true }, destHd, destList);
+  const destWrap = el('div', { class: 'v2-dest-wrap' },
+    el('div', { class: 'v2-dest' }, el('span', { class: 'v2-dest-lbl', text: '프로젝트' }), destIn, destSlot),
+    destPop);
+
+  const closeDest = (): void => { destPop.hidden = true; };
+  function setDest(next: Dest): void {
+    dest = next;
+    closeDest();
+    if (next.kind === 'none') {
+      destSlot.replaceChildren();
+      destIn.hidden = false;
+      destIn.value = '';
+      return;
+    }
+    const isNew = next.kind === 'new';
+    destSlot.replaceChildren(el('span', { class: 'v2-dest-chip' + (isNew ? ' new' : ''),
+      title: isNew ? `새 프로젝트를 «${next.name}» 이름으로 만듭니다` : `${next.name} · #${next.id} 안에 세션을 엽니다` },
+      el('span', { class: 't', text: isNew ? '＋ 새 프로젝트 · ' + next.name : next.name }),
+      el('button', { class: 'x', type: 'button', 'aria-label': '여는 곳 지우기', title: '여는 곳 지우기', text: '✕',
+        onclick: () => { setDest({ kind: 'none' }); destIn.focus(); } })));
+    destIn.hidden = true;
+  }
+  function paintDest(): void {
+    const q = destIn.value.trim();
+    const ql = q.toLowerCase();
+    // 빈 칸이면 **최근 5개**를 먼저 보여 준다 — 흔한 경우(어제 하던 일 이어서)의 타이핑을 0 으로 만든다.
+    const hits = (ql ? destRows.filter((r) => r.proj.name.toLowerCase().includes(ql) || String(r.proj.id) === ql) : destRows).slice(0, ql ? 6 : 5);
+    destHd.textContent = ql ? '검색 결과' : '최근 프로젝트';
+    const kids: (HTMLElement | null)[] = hits.map((r) => el('button', { class: 'v2-dest-row', type: 'button', role: 'option',
+      title: r.proj.name + ' · #' + r.proj.id, onclick: () => setDest({ kind: 'proj', id: r.proj.id, name: r.proj.name }) },
+      el('span', { class: 'n', text: r.proj.name }),
+      // 끝난 일에 후속 세션을 여는 경우가 실제로 있다 — 숨기지 않고 **끝났다고 말해 준 뒤** 고르게 한다.
+      r.done ? el('span', { class: 'b', text: '완료' }) : null,
+      el('span', { class: 'm mono', text: '#' + r.proj.id })));
+    if (ql && !hits.length) kids.push(el('p', { class: 'v2-fine v2-dest-none', text: '그 이름의 프로젝트가 없어요 — 아래 줄로 새로 만들 수 있어요.' }));
+    // ⚠ 이 줄은 **항상** 남는다. 친 글자가 기존 이름과 비슷할 때 «고른 건가 만든 건가»가 애매해지는데,
+    //  그 애매함은 사람이 한 번의 클릭으로 끝낼 수 있어야 한다.
+    kids.push(el('button', { class: 'v2-dest-row mk', type: 'button', role: 'option',
+      onclick: () => setDest(q ? { kind: 'new', name: q } : { kind: 'none' }) },
+      el('span', { class: 'n', text: q ? `「${q}」 이름으로 새 프로젝트 만들기` : '＋ 이름 없이 새 프로젝트로 열기' })));
+    destList.replaceChildren(...kids.filter(Boolean) as HTMLElement[]);
+    destPop.hidden = false;
+  }
+  destIn.addEventListener('focus', paintDest);
+  destIn.addEventListener('input', paintDest);
+  destIn.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Escape') { closeDest(); return; }
+    //  ⚠ 이 칸의 Enter 는 **친 글자로 첫 줄을 고르는 것**이지 지시를 보내는 게 아니다 — 여기서 보내면
+    //   방금 친 이름이 어디로 갔는지 모른 채 세션이 열린다. 보내기는 아래 질문 칸의 Enter 다.
+    //  ⚠ **빈 칸의 Enter 는 아무것도 고르지 않는다.** 그때 목록에 서 있는 건 «최근»일 뿐 사람이 겨눈 것이 아니라,
+    //   집어 버리면 탭으로 들어와 Enter 를 친 사람이 자기도 모르게 남의 프로젝트에 세션을 연다.
+    if (e.key === 'Enter' && !e.isComposing) {
+      e.preventDefault();
+      if (!destIn.value.trim()) { closeDest(); return; }
+      const first = destList.querySelector('.v2-dest-row') as HTMLButtonElement | null;
+      if (first) first.click();
+    }
+  });
+  //  ⚠ 목록을 **마우스로 고를 때 포커스를 뺏기지 않게** 한다. 사파리는 버튼을 눌러도 포커스를 안 옮기므로,
+  //   아래 focusout 이 relatedTarget=null 을 보고 목록을 먼저 닫아 버린다 — 그러면 클릭이 허공을 친다.
+  destPop.addEventListener('mousedown', (e: MouseEvent) => e.preventDefault());
+  //  바깥을 누르면 닫는다 — document 리스너를 매 판마다 걸면 새는 자리라, **이 묶음 안의 포커스 이동**만 본다.
+  destWrap.addEventListener('focusout', (e: FocusEvent) => {
+    const to = e.relatedTarget as Node | null;
+    if (to && destWrap.contains(to)) return;
+    closeDest();
+  });
   const send = el('button', { class: 'btn btn-primary v2-launch-send', type: 'button', title: 'Enter 로도 보낼 수 있어요' }, el('span', { text: '시키기' })) as HTMLButtonElement;
   // [시키기] 왼쪽 세 칸 — 제공자(어느 회사 모델)·모델·추론강도(#1758). 기본은 내가 지난번에 고른 값이고,
   //  여기서 바꾸면 그게 다음 기본이 된다(v2/run-picker.ts — '새 AI 세션' 폼과 같은 기억을 쓴다).
@@ -160,7 +259,9 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
   // 첨부(#1870) — 프로젝트 칸의 새 세션 자리와 **같은 모듈**(v2/compose-attach.ts). 홈은 프로젝트가 없으므로
   //  내 개인 폴더 uploads/ 로 올라가고, 절대경로가 첫 지시 꼬리에 실린다. 홈 화면은 20초 틱에 다시 그리지
   //  않으므로(main.ts — inbox 만 덧칠) 칩·입력 글자와 같은 수명으로 산다.
-  const att = composerAttach({ projectId: () => 0 });
+  //  #3778 — 프로젝트를 골랐으면 첨부도 **그 프로젝트 자료함**으로 간다(개인 uploads/ 가 아니라).
+  //   함수를 받는 인자라 고르는 즉시 따라온다 — 이 칸을 다시 그리지 않아도 된다.
+  const att = composerAttach({ projectId: () => (dest.kind === 'proj' ? dest.id : 0) });
   // 아랫줄은 두 덩어리다(원준 2026-08-25) — 왼쪽 = **무엇으로 열까**(셀렉트 넷, 한 줄 고정), 오른쪽 = **행동**([＋]·[시키기]).
   //  종전엔 [＋]가 줄의 맨 왼쪽 끝, [시키기]가 맨 오른쪽 끝에 떨어져 있었고 그 사이 셀렉트가 두 줄로 접히면
   //  [＋]만 아랫줄에 홀로 남아 어느 쪽에도 속하지 않는 단추로 보였다. 파일도 보내기도 '지금 이 지시에 하는 일'이라
@@ -183,7 +284,11 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
     // ⚠ 초안은 **보내기 전에** 비운다. 이 글은 이제 세션의 것이고, 홈 탭이 그대로 그 세션 화면이 되어야 하기
     //  때문이다 — 초안이 남아 있으면 라우터가 '쓰던 홈'으로 보고 세션을 새 탭에 연다(main.ts onHash).
     draft?.onChange('');
-    const ok = await openQuickSession(text + att.tail(), { run: runPicker.value() });
+    const ok = await openQuickSession(text + att.tail(), {
+      run: runPicker.value(),
+      projectId: dest.kind === 'proj' ? dest.id : null,
+      projectName: dest.kind === 'new' ? dest.name : '',
+    });
     if (!ok) { draft?.onChange(ta.value); send.disabled = false; ta.disabled = false; runPicker.disable(false); send.replaceChildren(el('span', { text: '시키기' })); ta.focus(); }
   };
   send.onclick = () => { void submit(); };
@@ -202,6 +307,9 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
         waiting ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'st wait' }, dot('waiting'), `답 기다림 ${waiting}`)] : null),
       el('h1', { class: 'v2-h1', text: `${tod}${name ? ', ' + name + '님' : ''}.` }),
       el('p', { class: 'v2-home-sub', text: '무엇을 할까요?' }),
+      //  «어디에 열까»는 «무엇을 시킬까» 보다 **먼저** 정해지는 질문이라 위에 선다. 다만 얇고 조용하게 —
+      //   주인공은 아래 질문 칸이고, 이 칸은 비워 둔 채 지나가도 되는 자리다.
+      destWrap,
       card,
       // 처음 설정을 **보여는 줬는데 안 끝낸** 사람에게만(#2171 — me.welcome_pending, 판정은 서버).
       //  ★ 자동 진입을 평생 한 번으로 줄인 것의 짝이다. 끌고 가지 않는 대신 버리지도 않는다 —
