@@ -95,7 +95,13 @@ ok(/if \(e\.shiftKey \|\| IS_MOBILE\) return;/.test(T), "E10b ⇧우클릭·모�
 ok(/if \(sel\) \{ copyText\(sel, false, true\); return; \}\s*if \(appSel\) \{ clearAppSelect\(\); armClipboardPromise\(\); sendInput\('\\x03'\); armBridgeMissHint\(\); \}/.test(T), "E10c 복사 = Cmd+C 와 같은 길(앱 선택 없으면 ^C 안 보냄) — 판정은 메뉴를 띄운 순간의 것");
 // 우클릭의 누름·뗌을 xterm 에 안 넘긴다 — 넘기면 앱 선택(appDragSelect)이 «제자리 클릭» 으로 풀리고 셸 화면은 rightClickSelectsWord 로 선택이 갈린다(원준님 실측).
 ok(/const eat = \(e: MouseEvent\): void => \{ if \(e\.button === 2 && !e\.shiftKey && !IS_MOBILE\) \{ e\.stopPropagation\(\); e\.preventDefault\(\); \} \};\s*host\.addEventListener\('mousedown', eat, true\);\s*host\.addEventListener\('mouseup', eat, true\);/.test(T), "E10f 우클릭 누름·뗌은 capture 에서 삼킨다(xterm·앱에 안 간다)");
-ok(/const appSel = mouseOn && appDragSelect;/.test(T) && !/if \(appDragSelect\) \{ clearAppSelect\(\); armClipboardPromise\(\); sendInput\('\\x03'\); armBridgeMissHint\(\); \}\s*\} \},/.test(T), "E10g [복사] 는 띄운 순간의 appSel 을 쓴다(누를 때 다시 읽지 않는다)");
+ok(/const appSelSeen = mouseOn && appDragSelect;/.test(T) && !/if \(appDragSelect\) \{ clearAppSelect\(\); armClipboardPromise\(\); sendInput\('\\x03'\); armBridgeMissHint\(\); \}\s*\} \},/.test(T), "E10g [복사] 는 띄운 순간의 appSel 을 쓴다(누를 때 다시 읽지 않는다)");
+// 여러 줄 드래그 뒤 단어 위에서 우클릭 → [복사 3자](원준님 실측, #3778): xterm 이 element 의 contextmenu 에서 rightClickSelectsWord 로
+//  커서 밑 단어를 선택했고, 우리 bubble 리스너는 그 뒤에 돌아 그 단어를 읽었다. 옵션을 끄고, contextmenu 를 capture 에서 받고,
+//  웹 선택·앱 선택이 둘 다 있으면 더 최근 것을 고른다.
+ok(/rightClickSelectsWord: false,/.test(T) && !/rightClickSelectsWord: true/.test(T), "E10h xterm 우클릭 단어 선택 끔(메뉴가 우클릭의 주인)");
+ok(/\], '터미널'\);\s*\}, true\);/.test(T), "E10i contextmenu 는 capture 에서 받는다(xterm 의 rightClickHandler 보다 먼저)");
+ok(/const appSel = appSelSeen && \(!xsel \|\| appSelectAt >= xtermSelAt\);\s*const sel = appSel \? '' : xsel;/.test(T) && /term\.onSelectionChange\(\(\) => \{ xtermSelAt = Date\.now\(\); \}\)/.test(T), "E10j 웹 선택·앱 선택이 둘 다면 더 최근 것을 복사한다");
 ok(/off: !canCopy/.test(T), "E10d 선택이 없으면 복사 행이 꺼진다");
 ok(read("public/terminal.html").includes(".tctx {") && read("scripts/build-standalone.mjs").includes('"ctx-lite.ts"'), "E10e 터미널 메뉴 CSS + 번들 스탬프 입력");
 console.log(`\n${pass} passed`);
