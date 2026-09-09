@@ -114,13 +114,19 @@ export function collectCtx(target: HTMLElement, ev: CtxEvent): { rows: CtxRow[];
     n = n.parentElement;
   }
   void itemEl;
+  // 겹은 **같은 이름이 이미 있으면** 뺀다 — 세션 행은 링크이기도 해서 「새 탭에서 열기」가 두 번 서고, 홈 앱 타일의
+  //  「모든 앱」·알림 행의 「모두 읽음으로」는 표면에도 있다(프리뷰 실측 2026-09-09). 앞 겹(가까운 것)이 이긴다.
   const rows: CtxRow[] = [];
-  if (item) rows.push(...item.rows);
-  if (surface) { if (rows.length) rows.push({ sep: true, label: '' }); rows.push(...surface.rows); }
-  // 공통 행은 **같은 이름이 이미 있으면** 뺀다 — 세션 행은 링크이기도 해서 「새 탭에서 열기」가 두 번 서게 된다.
-  const seen = new Set(rows.filter((r) => !r.sep).map((r) => r.label));
-  const common = commons.flatMap((f) => { try { return f(ev) || []; } catch (_) { return []; } }).filter((r) => r.sep || !seen.has(r.label));
-  if (common.some((r) => !r.sep)) { if (rows.length) rows.push({ sep: true, label: '' }); rows.push(...common); }
+  const seen = new Set<string>();
+  const put = (add: CtxRow[]): void => {
+    const fresh = add.filter((r) => r.sep || !seen.has(r.label));
+    if (!fresh.some((r) => !r.sep)) return;
+    if (rows.length) rows.push({ sep: true, label: '' });
+    for (const r of fresh) { rows.push(r); if (!r.sep) seen.add(r.label); }
+  };
+  if (item) put(item.rows);
+  if (surface) put(surface.rows);
+  put(commons.flatMap((f) => { try { return f(ev) || []; } catch (_) { return []; } }));
   if (!rows.length) return null;
   return { rows, title: item?.title ?? surface?.title, sub: item?.sub ?? surface?.sub };
 }
