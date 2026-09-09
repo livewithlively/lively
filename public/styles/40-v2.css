@@ -510,6 +510,34 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { .v2-app-inst-st[data-st="busy"] { animation: none; } }
 /*  호버로 닫기 × 가 뜨면 점은 자리를 내준다 — 그 순간 사람이 보는 건 '닫을까'지 상태가 아니다. */
 .v2-app-inst:hover .v2-app-inst-st, .v2-app-inst.on .v2-app-inst-st { visibility: hidden; }
+
+/* ★한 줄 모드(프로젝트 카드 안)의 주인 얼굴 (#3778) — 둘째 줄이 없으므로 첫 줄 오른쪽에 **제 칸**을 준다.
+   ⚠ 절대위치로 겹쳐 띄우지 않는다: 그러면 제목 꼬리를 덮는다(#2061 이 고정 압정에서 이미 밟은 자리).
+   그래서 한 줄 행에만 넷째 칸을 열고 [제목 | 고정압정 | 얼굴 | 상태점] 으로 세운다 — 폭을 실제로 먹으므로
+   제목이 그만큼 먼저 줄고, 행끼리 세로로도 맞는다.
+   ⚠ 손을 얹으면 상태 점과 **함께 물러난다.** 압정·× 가 오른쪽 46px 을 절대위치로 덮으러 오는데, 얼굴을
+   남기려면 제목 위로 밀어 넣는 수밖에 없어 위의 그 함정으로 되돌아간다. 「한 자리에 한 번에 하나」가
+   이 목록의 문법이고(상태 점·개수가 이미 그렇게 물러난다), 주인 이름은 그때 행 툴팁이 말한다. */
+.v2-app-inst--1 { grid-template-columns: minmax(0, 1fr) auto auto auto; }
+.v2-app-inst--1 .v2-app-inst-st { grid-column: 4; }
+.v2-app-inst-face1 { grid-column: 3; grid-row: 1; align-self: center; justify-self: end; margin-left: 6px;
+  width: 17px; height: 17px; flex: none; border-radius: 50%; font-size: 8.5px; font-weight: 700;
+  display: inline-grid; place-items: center; color: var(--on-fill); overflow: hidden; }
+.v2-app-inst-face1 img { width: 100%; height: 100%; object-fit: cover; }
+.v2-app-inst:hover .v2-app-inst-face1, .v2-app-inst.on .v2-app-inst-face1 { visibility: hidden; }
+
+/* ★접힌 프로젝트 카드 머리줄의 얼굴 합집합 (#3778) — 펴면 각 줄이 제 얼굴을 들므로 여기선 안 그린다(side.ts grpFaces).
+   상태 점·개수와 같은 자리 규약을 그대로 쓴다: 손을 얹으면 [→]·압정·＋ 에 그 자리를 내준다. */
+.v2-pg-faces { display: flex; align-items: center; flex: none; margin-left: 4px; }
+.v2-pg-face { width: 16px; height: 16px; flex: none; border-radius: 50%; font-size: 8px; font-weight: 700;
+  display: inline-grid; place-items: center; color: var(--on-fill); overflow: hidden; }
+.v2-pg-face img { width: 100%; height: 100%; object-fit: cover; }
+/*  겹쳐 쌓되 **바탕색 테두리**로 서로를 가른다 — 안 그러면 비슷한 색 둘이 한 덩어리로 보인다.
+    접힌 카드는 제 배경이 없으므로(.v2-pg.open 에만 background 가 있다) 사이드바 바탕(--canvas)을 쓴다. */
+.v2-pg-face + .v2-pg-face { margin-left: -5px; box-shadow: 0 0 0 1.5px var(--canvas); }
+.v2-pg-facen { font-size: 10px; font-weight: 600; color: var(--muted); margin-left: 3px; flex: none;
+  font-variant-numeric: tabular-nums; }
+.v2-pg-row:hover .v2-pg-faces { visibility: hidden; }
 .v2-app-inst-project { display: flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none; color: var(--muted); font: inherit;
   font-size: 11.5px; line-height: 1.35; text-align: left; cursor: pointer; }
 .v2-app-inst-project:hover { color: var(--blue); }
