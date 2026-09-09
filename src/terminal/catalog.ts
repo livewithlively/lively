@@ -181,7 +181,10 @@ export const HARNESSES: Harness[] = [
       //   'sonnet') or a model's full name (e.g. 'claude-fable-5')." 목록에 없어도 터미널에서 `/model fable`
       //   로는 바뀌었기 때문에(이 박스 최근 대화 claude-fable-5 5,059줄) 폼만 모르고 있던 상태였다.
       { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "fable", "opus", "sonnet", "haiku"], default: "fable" },
-      { name: "--effort", label: "추론강도(effort)", desc: "무거운 작업(부트스트랩·분류 등)은 xhigh 권장", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max"] },
+      // default(#3778) — 화면이 «AI 기본값» 이라는 알 수 없는 말 대신 **이 값을 골라 둔다**. CLI 자체의 기본은
+      //  «auto»(모델에 맞춰 자동)라 사람이 읽을 숫자가 없다(실측 claude 2.1.266: "auto: Use the default effort
+      //  level for your model"). 그래서 라이블리가 새 세션의 기본을 하나 정해 **화면에 보이는 그대로** 넘긴다.
+      { name: "--effort", label: "추론강도(effort)", desc: "무거운 작업(부트스트랩·분류 등)은 xhigh 권장", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max"], default: "high" },
     ],
     failHint: ["로그인이 필요하다고 나오면  claude auth login  을 입력하세요."],
     // 실측(claude 2.1.246 `claude auth --help`): login·logout·status 가 **셸 서브커맨드로** 있다. 종전 안내(TUI 안 `/login`)는
@@ -197,13 +200,15 @@ export const HARNESSES: Harness[] = [
     autoApproveFlag: "--yolo",
     // 2026-08-24 Codex CLI 0.149.1 기준 현행 카탈로그. gpt-5.5를 기본 표기로 남기면
     // 새 세션 화면에서 5.6 계열을 애초에 고를 수 없어, 실제 설치본보다 UI가 뒤처진다.
-    // default 는 **표기용**이다(#1145) — 빈 값 옵션을 '(자동 · gpt-5.6-sol)' 로 보여줄 뿐, 이 값을 argv 로 넘기지는 않는다.
-    //  넘기는 순간 그 모델에 고정돼, codex 가 기본을 올려도 여기 적힌 낡은 문자열에 사용자가 묶인다.
+    // default 의 뜻(#3778 개정) — 새 세션 화면이 **이 값을 골라 둔다**(그리고 그대로 넘긴다). 종전엔 표기용이라
+    //  화면이 «AI 기본값» 이라고만 적었는데, 그러면 무엇으로 열리는지 사람이 알 수가 없었다(원준 2026-09-09).
+    //  ⚠ 낡은 문자열에 사용자가 묶이는 것은 여전히 막는다 — 화면은 이 값을 **기억에 저장하지 않는다**(사람이
+    //   직접 고른 값만 저장). 그래서 codex 가 기본을 올려 이 줄을 고치면, 손대지 않은 사람은 그대로 따라온다.
     flags: [
       { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"], default: "gpt-5.6-sol" },
       // Codex CLI는 현재 launch-time reasoning effort를 config로 받는다. 일반 --effort 플래그가 아니라
       // session 생성기에서 별도 argv로 정규화한다. UI 계약은 다른 하네스와 동일하게 유지한다.
-      { name: "--effort", label: "추론강도(effort)", desc: "", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max", "ultra"] },
+      { name: "--effort", label: "추론강도(effort)", desc: "", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max", "ultra"], default: "medium" },
     ],
     effortsByModel: {
       "gpt-5.6-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],
@@ -243,7 +248,7 @@ export const HARNESSES: Harness[] = [
     // codex 와 같은 이유로 빈 값(=하네스 기본)을 기본으로 두어 특정 문자열에 사용자를 묶지 않는다.
     flags: [
       { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low", "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low", "gemini-3.5-flash-high", "gemini-3.5-flash-medium", "gemini-3.5-flash-low", "gemini-3.1-pro-high", "gemini-3.1-pro-low", "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"] },
-      { name: "--effort", label: "추론강도(effort)", desc: "", type: "select", choices: ["", "low", "medium", "high"] },   // claude 와 달리 3단계(실측)
+      { name: "--effort", label: "추론강도(effort)", desc: "", type: "select", choices: ["", "low", "medium", "high"], default: "medium" },   // claude 와 달리 3단계(실측)
     ],
     failHint: ["로그인이 필요하다고 나오면 화면에 뜨는 주소를 브라우저에서 열고, 함께 표시되는 코드를 입력하세요."],
     // ⚠ agy 에는 로그인 서브커맨드가 **없다**(실측 agy 1.1.13·1.1.x --help — install·update·plugin·models·agent·changelog뿐).
