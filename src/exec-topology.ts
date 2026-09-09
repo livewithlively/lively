@@ -41,6 +41,8 @@
 /** 세션 프로세스가 **이 프로세스 호스트 기준으로** 어디서 도나. */
 /** `LIVELY_TMUX_ROUTE` 의 세 값(#2600 T2 (d)) — off(중계 그대로) · shadow(옛 경로가 답하고 코어 경로는 대조만) · on(코어 경로가 답한다). */
 export type TmuxRouteMode = "off" | "shadow" | "on";
+/** 브로커 세션 목록의 범위(#3797 T7) — 세션 호스트만 `node`. `ExecTopology.tmuxListScope` 머리말 참조. */
+export type TmuxListScope = "node" | "cluster";
 
 /**
  * `LIVELY_TMUX_ROUTE` 파서(순수). 정확히 `on`·`1`·`true` → on · `shadow` → shadow(표본 1) · `shadow:<1..100>` → shadow(표본 n/100) ·
@@ -117,6 +119,16 @@ export interface ExecTopology {
    *   위험하다(`" On"` 이 켜지면 안 된다). 형식 밖은 전부 `off`.
    */
   tmuxRoute: TmuxRouteMode;
+  /**
+   * 브로커 세션 목록의 **범위** — `node` 면 «이 노드 것만», `cluster`(기본)면 종전대로 클러스터 전역.
+   *
+   * ★ 세션 호스트만 `node` 다(#3797 T7). 세션 호스트는 (노드, 테넌트) 별로 하나이고 **자기 노드의
+   *  주인**이므로, 남의 노드 세션까지 자기 스냅샷에 실으면 그 세션의 좌표가 «컨테이너가 있는 노드» 가
+   *  아니라 «먼저 이긴 스냅샷» 이 된다(호스트가 둘이면 attach 가 엉뚱한 호스트로 간다).
+   * ⚠ 중앙 게이트웨이는 **cluster** 여야 한다 — 거기서 좁히면 다른 노드 세션이 목록에서 사라진다.
+   *  그래서 기본이 cluster 이고, 값을 넣는 것은 브로커가 쓰는 세션 호스트 env 파일 하나뿐이다.
+   */
+  tmuxListScope: TmuxListScope;
   /** 그림자 대조 표본 비율(0 초과 1 이하) — `shadow:25` = 0.25. shadow 가 아니면 1(뜻 없음). 요청마다 두 번 부르는 비용을 줄이는 노브(설계 §8). */
   tmuxShadowSample: number;
   /**
@@ -211,6 +223,9 @@ export function computeExecTopology(env: NodeJS.ProcessEnv = process.env): ExecT
   //  플래그는 **정확히** on·1·true(트림)만. 전송은 중계 배포에서만 있고 허브 > 소켓 — `tmux-relay.cjs` 의 transport() 와 같다.
   //  소켓 템플릿 기본값도 그 파일의 것(`/lvly/tenants/{slug}/sock/session.sock`)이다 — 여기서 다른 값을 지어내면 두 벌이 된다.
   const { mode: tmuxRoute, sample: tmuxShadowSample } = parseTmuxRoute(env.LIVELY_TMUX_ROUTE);
+  //  ⚠ **정확히** `node` 만 좁힌다 — 오타·빈 값은 종전(cluster)이다. 반대로 관대하게 읽으면
+  //   게이트웨이가 조용히 노드 범위로 좁아져 다른 노드 세션이 목록에서 사라진다.
+  const tmuxListScope: TmuxListScope = (env.LIVELY_TMUX_LIST_SCOPE || "").trim().toLowerCase() === "node" ? "node" : "cluster";
   const hubUrl = (env.LVLY_HUB_URL || "").trim();
   const hubSecret = (env.LVLY_HUB_SECRET || "").trim();
   const sockTemplate = (env.LVLY_TMUX_SOCK_TEMPLATE || "").trim() || "/lvly/tenants/{slug}/sock/session.sock";
@@ -218,7 +233,7 @@ export function computeExecTopology(env: NodeJS.ProcessEnv = process.env): ExecT
     : hubUrl && hubSecret ? { kind: "hub", url: hubUrl, secret: hubSecret }
       : { kind: "socket", template: sockTemplate };
 
-  return { sessionHost, tmux, isolation, storage, hooks, nodeToken, attachWorkerK, tmuxRoute, tmuxShadowSample, broker };
+  return { sessionHost, tmux, isolation, storage, hooks, nodeToken, attachWorkerK, tmuxRoute, tmuxShadowSample, tmuxListScope, broker };
 }
 
 let frozen: ExecTopology | null = null;

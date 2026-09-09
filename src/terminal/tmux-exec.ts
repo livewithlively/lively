@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import os from "node:os";
 import { TMUX_BIN, tenantSlug, isPsmuxBin } from "./catalog.js";
-import { execTopology, tmuxArgvFor, tmuxServerIsDedicated } from "../exec-topology.js";   // #2599 T2 — 「어디서 도나」는 토폴로지 한 곳에만 묻는다
+import { execTopology, tmuxArgvFor, tmuxServerIsDedicated, type TmuxListScope } from "../exec-topology.js";   // #2599 T2 — 「어디서 도나」는 토폴로지 한 곳에만 묻는다
 import { planTmux, runPlan, outcomeToError, tmuxSessionOf } from "./tmux-route.js";                        // #2600 T2 (d) d2 — 코어 직접 경로의 «무엇을 어디로»
 import { makeBrokerClient, type BrokerTransport } from "./broker-client.js";                // #2600 T2 (d) d2 — 그 전송(소켓·허브)
 import { shadowTmux } from "./tmux-shadow.js";
@@ -80,13 +80,14 @@ export function tmuxTimeoutMs(relay: readonly string[]): number {
  *  못 채우므로 여기서도 새 경로가 아니다 — 두 경로의 «성립 조건»이 같아야 그림자 대조가 같은 호출을 견준다.
  *  ⚠ `{slug}` 치환은 `String.replace(문자열)` = **첫 번째 하나만** — `tmux-relay.cjs`·`tmuxArgvFor` 와 같은 의미를 지킨다.
  */
-export function tmuxRouteTransport(slug: string | null = tenantSlug()): { transport: BrokerTransport; slug: string; mode: "on" | "shadow"; sample: number } | null {
+export function tmuxRouteTransport(slug: string | null = tenantSlug()): { transport: BrokerTransport; slug: string; mode: "on" | "shadow"; sample: number; listScope: TmuxListScope } | null {
   const topo = execTopology();
   if (topo.tmuxRoute === "off" || !topo.broker || !slug) return null;
   const transport: BrokerTransport = topo.broker.kind === "hub"
     ? { kind: "hub", url: topo.broker.url, secret: topo.broker.secret, slug }
     : { kind: "socket", socketPath: topo.broker.template.replace("{slug}", slug) };
-  return { transport, slug, mode: topo.tmuxRoute, sample: topo.tmuxShadowSample };
+  //  ★ 범위도 토폴로지에서 온다(#3797 T7) — 세션 호스트만 `node`. 여기서 지어내지 않는다.
+  return { transport, slug, mode: topo.tmuxRoute, sample: topo.tmuxShadowSample, listScope: topo.tmuxListScope };
 }
 
 /**
@@ -95,14 +96,14 @@ export function tmuxRouteTransport(slug: string | null = tenantSlug()): { transp
  *  상위(`isSessionGoneError`·`isNoTmuxServer`·strict 호출)가 종전과 똑같이 갈린다.
  *  목록 조회 자체가 실패하면 «못 봤다» 다 — «서버 없음»·«세션 없음» 문구로 위장하지 않는다(#2616).
  */
-export async function tmuxViaRoute(args: string[], via: { transport: BrokerTransport; slug: string }): Promise<string> {
+export async function tmuxViaRoute(args: string[], via: { transport: BrokerTransport; slug: string; listScope?: TmuxListScope }): Promise<string> {
   //  ⚠ 설정 오류(https 허브·형식 밖 슬러그)도 execFile 오류 모양으로 던진다 — 맨 Error 가 나가면 상위 판정이 전부 거짓으로
   //   떨어져 «못 봤다» 조차 못 된다(블라인드 리뷰 ⑥-4). 여기서 접으면 strict 호출은 던지고 목록은 desired 폴백으로 간다.
   const fold = (why: string, e: unknown): never => {
     throw outcomeToError({ code: 1, stdout: "", stderr: `${why}(못 봤다): ${(e as Error)?.message ?? String(e)}` });
   };
   let client: ReturnType<typeof makeBrokerClient>;
-  try { client = makeBrokerClient(via.transport, { timeoutMs: TMUX_RELAY_TIMEOUT_MS }); } catch (e) { return fold("코어 직접 경로 설정 오류", e); }
+  try { client = makeBrokerClient(via.transport, { timeoutMs: TMUX_RELAY_TIMEOUT_MS, listScope: via.listScope }); } catch (e) { return fold("코어 직접 경로 설정 오류", e); }
   let listed: Awaited<ReturnType<typeof client.listSessions>>;
   try { listed = await client.listSessions(); } catch (e) { return fold("브로커 세션 목록 조회 실패", e); }
   let out;
@@ -153,8 +154,8 @@ export async function tmux(args: string[]): Promise<string> {
   return stdout;
 }
 /** 그림자의 코어 경로 엔진 — `on` 경로(`tmuxViaRoute`)와 같은 클라이언트·같은 상한. */
-function shadowEngineFor(via: { transport: BrokerTransport }) {
-  const client = makeBrokerClient(via.transport, { timeoutMs: TMUX_RELAY_TIMEOUT_MS });
+function shadowEngineFor(via: { transport: BrokerTransport; listScope?: TmuxListScope }) {
+  const client = makeBrokerClient(via.transport, { timeoutMs: TMUX_RELAY_TIMEOUT_MS, listScope: via.listScope });
   return { list: () => client.listSessions(), exec: (c: string, argv: string[]) => client.execCapture(c, argv) };
 }
 export async function tmuxQuiet(args: string[]): Promise<void> { try { await tmux(args); } catch { /* 비치명 */ } }

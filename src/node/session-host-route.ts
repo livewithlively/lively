@@ -54,17 +54,35 @@ export function wantsIssue(body: unknown): boolean {
   return !!body && typeof body === "object" && (body as { issue?: unknown }).issue === true;
 }
 
+/**
+ * 본문의 `node`(부르는 브로커가 도는 노드 이름)를 읽는다(순수). 없으면 **빈 문자열** (#3797 T7).
+ *
+ * ★ 이 값이 곧 축이다 — 세션 호스트는 (노드, 테넌트) 별로 하나이므로, 노드를 모르면 어느 행인지도
+ *  모른다. **없으면 지어내지 않고 400** 이다(라우트): 관대하게 «테넌트 하나» 짜리 행으로 떨어지면
+ *  그게 정확히 옛 축이고, 그 행을 두 노드가 다시 두고 싸운다.
+ * ⚠ 그래서 **옛 브로커(#3797 이전)의 요청은 400 이 된다.** 오늘 그 경로로 서 있는 세션 호스트는
+ *  0 이라(`LVLY_SESSHOST_TENANTS` 빈 값 — 실측 2026-09-09) 사람이 겪는 차이는 없다. 배포 순서는
+ *  코어 먼저·브로커 나중이고, 그 사이 브로커는 «자격 조회 실패» 로 로그만 남기고 다음 스캔에 다시 본다.
+ */
+export function requestedNode(body: unknown): string {
+  if (!body || typeof body !== "object") return "";
+  const v = (body as { node?: unknown }).node;
+  return typeof v === "string" ? v.trim() : "";
+}
+
 export function registerSessionHostRoute(app: express.Express): void {
   // ⚠ 사용자 auth 없음 — 머리말. 기계(브로커)가 테넌트 비밀 + 서명으로 연다.
   app.post("/api/ui/node/session-host/ensure", wrap(async (req, res) => {
     const a = sessionHostAccess(req.headers as Record<string, string | string[] | undefined>);
     if (a.status !== 200) throw new HttpError(a.status, a.status === 404 ? "not found" : "세션 호스트 인증 실패");
-    if (!sessionHostNodeId(a.slug)) throw new HttpError(400, "이 슬러그로는 세션 호스트 노드 id 를 만들 수 없습니다");
+    const node = requestedNode(req.body);
+    if (!node) throw new HttpError(400, "node(부르는 노드 이름)가 필요합니다 — 세션 호스트는 (노드, 테넌트) 별로 하나입니다");
+    if (!sessionHostNodeId(a.slug, node)) throw new HttpError(400, "이 (슬러그, 노드) 로는 세션 호스트 노드 id 를 만들 수 없습니다");
 
     const issue = wantsIssue(req.body);
-    const r = await ensureSessionHostNode(a.slug, issue);
+    const r = await ensureSessionHostNode(a.slug, node, issue);
     //  ★ 토큰은 **여기 안 찍는다.** 남기는 것은 «발급했나» 하나뿐 — 그것만 있어도 회전 폭주를 읽는다.
-    logger.info({ slug: a.slug, node: r.nodeId, action: r.action, issued: !!r.token, enabled: r.enabled },
+    logger.info({ slug: a.slug, on: node, node: r.nodeId, action: r.action, issued: !!r.token, enabled: r.enabled },
       "세션 호스트 자격 보장");
     res.setHeader("Cache-Control", "no-store");
     res.json({

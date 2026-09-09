@@ -1,5 +1,8 @@
 // 매니지드 세션 호스트의 **자격을 게이트웨이가 스스로 만든다** (#2600 T2 (d) d5)
 //
+// ★★ 축 정정 (#3797 T7, 2026-09-09): 세션 호스트는 **(노드, 테넌트)** 별로 하나다 — 테넌트당 하나가
+//  아니다. 그 근거와 사연은 `sessionHostNodeId` 머리말에 있다.
+//
 // ── 왜 이 모듈이 있나 ───────────────────────────────────────────────────────
 // d4 는 카나리아 테넌트 한 곳에 세션 호스트를 **수기 5단계**로 세웠다(노드 등록 → 토큰 발급 →
 //  번들 → env → 유닛). 노드는 ASG 가 소유하고(빈 노드는 종료·준비 실패는 교체·테넌트는 통합으로
@@ -32,23 +35,41 @@ import { logger } from "../log.js";
 export const SESSION_HOST_MEMBER_ID = "session-host";
 export const SESSION_HOST_MEMBER_NAME = "세션 호스트";
 
-/** 노드 id 접두 — `sesshost-<slug>`. 이 규칙이 «그 테넌트의 세션 호스트가 어느 행인가»의 유일한 답이다. */
+/** 노드 id 접두 — `sesshost-<slug>-<node>`. (노드, 테넌트) 한 쌍이 곧 한 행이다(#3797 T7). */
 export const SESSION_HOST_NODE_PREFIX = "sesshost-";
-/** store.normalizeNodeId 의 상한(2~41자)과 같은 값 — 여기서 먼저 걸러 400 대신 «못 한다»를 말한다. */
-const NODE_ID_MAX = 41;
+/** store.normalizeNodeId 의 상한(2~64자)과 같은 값 — 여기서 먼저 걸러 400 대신 «못 한다»를 말한다. */
+const NODE_ID_MAX = 64;
+/** 슬러그·노드 이름에 공통으로 쓰는 모양 — 소문자 슬러그(정규화 없이 그대로 id 에 들어간다). */
+const NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
 /**
- * 이 테넌트의 세션 호스트 노드 id(순수). 만들 수 없으면 **null** — 지어내지 않는다.
+ * 이 **(노드, 테넌트)** 의 세션 호스트 노드 id(순수). 만들 수 없으면 **null** — 지어내지 않는다.
  *
- * ★ 잘라서 만들지 않는다: 자른 이름은 다른 테넌트와 충돌할 수 있고, 그러면 두 테넌트가 같은 노드
- *  행(=같은 토큰)을 쓰게 된다. 격리가 조용히 사라지는 부류라 «못 한다»가 맞는 답이다.
- *  (실제로는 노드 박스의 OS 계정 이름이 `lvlyt-<slug>` 를 32자로 자르므로 slug 는 26자 이하다 —
- *   그 아래에서 이 함수가 null 을 줄 일은 없다. 그래도 가정에 기대지 않고 여기서 막는다.)
+ * ── ★★ 왜 노드 성분이 들어가나 (#3797 T7 — 축 정정) ─────────────────────────
+ * d5 의 유도는 `sesshost-<slug>` 였다. 그건 «세션 호스트는 테넌트당 하나» 를 전제하는데, 그 전제가
+ *  2026-09-09 아침 사고의 뿌리였다([[sesshost-node-scalein-orphan-3776]] §5):
+ *   · 호스트가 **한 노드에만** 서니 그 노드는 오토스케일 계수에 «세션 0» 으로 보여 우선 회수됐고,
+ *     회수되는 순간 그 테넌트의 주인이 통째로 사라졌다(세션은 멀쩡한데 들어가는 문만 부서졌다).
+ *   · 그리고 조정기(브로커 sesshost.ts)는 **그 테넌트를 서빙하는 노드마다** 돈다 — 유도에 노드
+ *     성분이 없으면 두 노드가 **같은 등록 행 하나**를 두고 토큰을 서로 회전시켜 죽인다.
+ * 축을 (노드, 테넌트)로 옮기면 «세션 0 인 노드엔 호스트가 없다» 가 되어 그 사고가 **원리적으로**
+ *  불가능해지고, 회수 계수에 세션 호스트를 반영하는 우회(26.9MiB 릴레이 하나 때문에 노드를 못 줄이는
+ *  거래)도 필요 없어진다.
+ *
+ * ★ 슬러그를 빼지 않는다: 이 id 는 그 테넌트의 `org_node` 행 이름이고, 운영이 CP 로그·노드 목록에서
+ *  «어느 테넌트의 어느 노드» 를 이름만으로 읽어야 한다. 노드 성분만으로도 행은 유일하지만 이름이
+ *  그 사실을 말해 주지는 않는다.
+ * ★ **잘라서 만들지 않는다**: 자른 이름은 다른 노드·다른 테넌트와 겹칠 수 있고, 그러면 두 브로커가
+ *  같은 노드 행(=같은 토큰)을 쓰게 된다. 격리가 조용히 사라지는 부류라 «못 한다»가 맞는 답이다.
+ *  (실측 좌표는 슬러그 11자 + 노드 19자 = 40자로 상한 안에 넉넉히 든다.)
  */
-export function sessionHostNodeId(slug: string): string | null {
+export function sessionHostNodeId(slug: string, node: string): string | null {
   const s = (slug || "").trim();
-  if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(s)) return null;
-  const id = `${SESSION_HOST_NODE_PREFIX}${s}`;
+  const n = (node || "").trim();
+  //  ⚠ 노드 성분이 **없으면 null** 이다. 여기서 관대하게 `sesshost-<slug>` 로 떨어지면 그게 곧 옛 축이고,
+  //   옛 브로커(노드를 안 보내는)가 그 행을 만들어 두 노드가 다시 한 행을 두고 싸운다.
+  if (!NAME_RE.test(s) || !NAME_RE.test(n)) return null;
+  const id = `${SESSION_HOST_NODE_PREFIX}${s}-${n}`;
   return id.length <= NODE_ID_MAX ? id : null;
 }
 
@@ -56,32 +77,29 @@ export function sessionHostNodeId(slug: string): string | null {
 export interface SessionHostCandidate {
   id: string;
   session_host: boolean;
-  created_at: string;
 }
 
 /**
- * 이 테넌트의 세션 호스트 등록을 **찾는다**(순수). 없으면 null → 호출부가 정규 id 로 만든다.
+ * **어느 노드의 것도 아닌** 세션 호스트 등록들(순수) — 선언은 켜져 있는데 `sesshost-<slug>-…` 모양이
+ *  아닌 행. 옛 축의 잔재(`sesshost-<slug>` — 노드 성분 없음)나 사람이 손으로 만든 이름이 여기 걸린다.
  *
- * ── 왜 이름으로 안 찾고 «선언» 으로 찾나 ────────────────────────────────────
- * d4 가 수기로 세운 카나리아 노드 이름은 `sesshost-46e3` 인데, 슬러그에서 유도하면
- *  `sesshost-lively-46e3` 이다 — 이름으로만 찾으면 **같은 테넌트에 세션 호스트가 둘**이 된다.
- *  둘이 동시에 온라인이면 두 스냅샷이 같은 세션을 주장하고, 그때 목록·attach 라우팅이 갈린다
- *  (대표 워크스페이스에서 그 일이 나면 그게 곧 장애다).
- * 「이 테넌트의 세션 호스트는 하나」는 **선언 컬럼**(`session_host`, admin 만 켠다)이 이미 표현하고
- *  있으므로, 그 선언을 찾아 **물려받는다**(주인만 시스템 구성원으로 옮긴다). 그러면 수기 설치가
- *  자동 경로로 **넘어가지 대체되지 않는다** — 고아가 안 생긴다.
+ * ── 왜 «찾아서 물려받기» 를 버렸나 (d5 §② 규율의 재작성) ────────────────────
+ * d5 는 «이름이 아니라 **선언**으로 찾아 물려받는다» 였다. 그 규칙은 «이 테넌트의 세션 호스트는
+ *  하나» 를 전제한다 — (노드, 테넌트) 축에서는 같은 동작이 정확히 **남의 노드의 주인을 빼앗는** 일이
+ *  된다(주인을 옮기고 토큰을 회전시키므로, 그 순간 저쪽 노드의 호스트가 인증을 잃는다).
+ *  그래서 물려받지 않고 **내 정규 id 하나만** 본다.
  *
- * ⚠ 둘 이상이면 «아무거나» 고르지 않는다: 정규 id 가 있으면 그것, 없으면 **가장 먼저 만들어진 것**.
- *  결정론이 필요한 이유는 노드마다·틱마다 다른 답을 고르면 토큰이 서로를 회전시켜 죽이기 때문이다.
+ * ⚠ **형제는 «남의 것» 이 아니다.** 같은 테넌트의 다른 노드가 세운 `sesshost-<slug>-<다른노드>` 는
+ *  새 축의 **정상**이다. 그걸 여기서 걸면 노드가 N 대일 때 매 조정(5분)마다 N-1 건의 경고가
+ *  전 노드에서 돈다 — 반복되는 줄은 아무도 안 본다(이 모듈의 `once` 규율과 같은 이유).
+ *
+ * 걸리는 것은 **어느 노드도 조정하지 않을 행**이다. 그런 행은 영영 오프라인이고, 목록 소유 판정
+ *  (`self-node.sessionHostVerdict` — T7 에서 «선언한 호스트가 전부 자격일 때만» 으로 바뀌었다)이
+ *  그 행 때문에 하루(SESSION_HOST_DEAD_MS) 동안 거짓이 된다. 이름이 로그에 남아야 사람이 지운다.
  */
-export function pickSessionHostNode<T extends SessionHostCandidate>(nodes: readonly T[], slug: string): T | null {
-  const declared = nodes.filter((n) => n.session_host);
-  if (!declared.length) return null;
-  if (declared.length === 1) return declared[0]!;
-  const canonical = sessionHostNodeId(slug);
-  const exact = canonical ? declared.find((n) => n.id === canonical) : undefined;
-  if (exact) return exact;
-  return [...declared].sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : (a.id < b.id ? -1 : 1)))[0]!;
+export function legacySessionHostNodes<T extends SessionHostCandidate>(nodes: readonly T[], slug: string): string[] {
+  const mine = `${SESSION_HOST_NODE_PREFIX}${slug}-`;
+  return nodes.filter((n) => n.session_host && !n.id.startsWith(mine)).map((n) => n.id);
 }
 
 /** 노드 등록 행에 대해 지금 할 일(순수 — 유닛테스트 대상). */
@@ -157,33 +175,38 @@ export async function ensureSessionHostMember(): Promise<{ created: boolean; act
  * ⚠ REST 등록 라우트(`POST /api/ui/nodes`)를 쓰지 않는다 — 거긴 `sessionHost` 에 admin 게이트가
  *  걸려 있고(#2592 셀프 노드 방어를 아무나 못 끄게), 이 경로엔 사람이 없다. 내부 함수로 부른다.
  */
-export async function ensureSessionHostNode(slug: string, issue: boolean): Promise<SessionHostEnsureResult> {
-  const nodeId = sessionHostNodeId(slug);
-  if (!nodeId) throw new Error(`세션 호스트 노드 id 를 만들 수 없는 슬러그입니다: ${JSON.stringify(slug)}`);
+export async function ensureSessionHostNode(slug: string, node: string, issue: boolean): Promise<SessionHostEnsureResult> {
+  const nodeId = sessionHostNodeId(slug, node);
+  if (!nodeId) throw new Error(`세션 호스트 노드 id 를 만들 수 없습니다: slug=${JSON.stringify(slug)} node=${JSON.stringify(node)}`);
   await ensureSessionHostMember();
 
-  //  ① 선언된 세션 호스트를 찾는다(이름이 아니라 선언 — pickSessionHostNode 머리말).
-  //  ② 없으면 **정규 id 가 이미 다른 용도로 쓰이고 있나**를 본다. 안 보면 createNode 가 409 로
-  //   죽는데, 그 409 는 브로커에게 «영영 못 선다» 로 보인다(사람이 그 이름을 쓴 죄로 그 테넌트에
-  //   세션 호스트가 안 생긴다). 있으면 선언을 켜고 물려받는 편이 맞다.
+  //  ★ 찾는 것은 **내 정규 id 하나**다(#3797 T7). d5 는 «선언으로 찾아 물려받았지만», (노드, 테넌트)
+  //   축에서 그건 남의 노드의 주인을 빼앗는 동작이다(foreignSessionHostNodes 머리말).
   const nodes = await listNodes();
-  const existing = pickSessionHostNode(nodes, slug) ?? nodes.find((n) => n.id === nodeId) ?? null;
+  const existing = nodes.find((n) => n.id === nodeId) ?? null;
   const action = decideSessionHostNode({ existing, issue });
 
+  //  옛 축의 잔재는 **말만 한다.** 어느 노드도 그 행을 조정하지 않으므로 영영 오프라인이고,
+  //   그 행이 있는 동안 목록 소유 판정이 거짓이다(«선언한 호스트가 전부 자격일 때만»).
+  //   ⚠ 형제(`sesshost-<slug>-<다른노드>`)는 여기 안 걸린다 — 새 축의 정상이다.
+  const legacy = legacySessionHostNodes(nodes, slug);
+  if (legacy.length) {
+    logger.warn({ slug, node, mine: nodeId, legacy },
+      "이 테넌트에 (노드, 테넌트) 축이 아닌 세션 호스트 등록이 남아 있다 — 물려받지 않는다(지워야 목록 소유가 넘어간다)");
+  }
+
   if (action === "create") {
-    const { node, token } = await createNode(
+    const { node: row, token } = await createNode(
       { id: nodeId, name: nodeId, kind: "worker", owner: SESSION_HOST_MEMBER_ID, sessionHost: true },
       SESSION_HOST_MEMBER_ID,
     );
-    logger.info({ node: node.id, slug }, "세션 호스트 노드 등록(자기 프로비저닝)");
-    return view(node, action, token);
+    logger.info({ node: row.id, slug }, "세션 호스트 노드 등록(자기 프로비저닝)");
+    return view(row, action, token);
   }
 
   const cur = existing as OrgNode;
   if (action === "keep") return view(cur, action, null);
 
-  //  ⚠ **물려받은 행의 id 로 부른다**(정규 id 가 아니다). d4 의 수기 노드는 `sesshost-46e3` 인데
-  //   정규 id 는 `sesshost-lively-46e3` 이라, 여기서 정규 id 를 쓰면 «노드 없음» 으로 죽는다.
   //  ★ 순서가 있다: **먼저 주인을 고치고** 회전한다. rotateNodeToken 은 그 시점의
   //   `node.owner_member` 명의로 발행하므로, 반대로 하면 새 토큰이 옛 주인(사람) 명의로 남는다.
   if (action === "fix-and-rotate") {
@@ -191,9 +214,9 @@ export async function ensureSessionHostNode(slug: string, issue: boolean): Promi
     logger.info({ node: cur.id, from: cur.owner_member, to: SESSION_HOST_MEMBER_ID },
       "세션 호스트 노드의 주인을 시스템 구성원으로 옮겼다(사람 계정 비활성이 세션을 끊지 않게)");
   }
-  const { node, token } = await rotateNodeToken(cur.id, SESSION_HOST_MEMBER_ID);
-  logger.info({ node: node.id, slug }, "세션 호스트 노드 토큰 재발급(브로커가 자격을 잃었다고 알려 왔다)");
-  return view(node, action, token);
+  const { node: row, token } = await rotateNodeToken(cur.id, SESSION_HOST_MEMBER_ID);
+  logger.info({ node: row.id, slug }, "세션 호스트 노드 토큰 재발급(브로커가 자격을 잃었다고 알려 왔다)");
+  return view(row, action, token);
 }
 
 function view(node: OrgNode, action: SessionHostNodeAction, token: string | null): SessionHostEnsureResult {
