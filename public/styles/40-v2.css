@@ -1811,6 +1811,15 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-pg-row .v2-newb { position: absolute; right: 5px; top: 50%; margin: -9px 0 0; opacity: 1; display: none; }
 .v2-pg-row:hover .v2-newb, .v2-pg-row .v2-newb:focus-visible { display: inline-grid; }
 .v2-pg-row:hover .v2-sums, .v2-pg-row:hover .v2-cnt { visibility: hidden; }
+/* ★고정 압정(#3778) — ＋ 와 같은 절대위치 문법(위 주석의 그 이유: 자리를 먹으면 점·개수가 오른쪽 끝에 못 붙는다).
+   ⚠ 압정은 **고정된 동안 손을 떼도 남는다** — 그게 '고정됨'을 말하는 유일한 표식이라 hover 에 숨기면 안 된다.
+   그래서 자리가 둘이다: 혼자 서 있을 땐 오른쪽 끝(＋ 가 없으니 그 자리가 비어 있다), 손을 얹어 ＋ 가 들어오면
+   그 왼쪽으로 물러난다(행의 압정이 × 왼쪽에 서는 것과 같은 관계). 혼자 설 때의 자리만 여백으로 비워 둔다
+   (.pinned) — 안 비우면 상태 점·개수가 압정 밑으로 들어간다. 손을 얹은 동안은 그 둘이 이미 물러나 있다. */
+.v2-pg-row .v2-pinb { position: absolute; right: 5px; top: 50%; margin: -9px 0 0; opacity: 1; display: none; }
+.v2-pg-row .v2-pinb.on { display: inline-grid; }
+.v2-pg-row:hover .v2-pinb, .v2-pg-row .v2-pinb:focus-visible { display: inline-grid; right: 27px; }
+.v2-pg-row.pinned { padding-right: 23px; }
 /* 접힌 묶음 안에 **지금 보고 있는 행**이 있다 — 왼쪽 마디로 남긴다.
    그게 없으면 "지금 보는 화면이 목록에서 사라졌다"는 고장이 된다. */
 .v2-pg-row.act::before { content: ''; position: absolute; left: -1px; top: 6px; bottom: 6px; width: 3px;

@@ -418,6 +418,10 @@ function togglePin(key: string): void {
   if (pinnedSet.has(key)) pinnedSet.delete(key); else pinnedSet.add(key);
   saveSet(PIN_KEY, pinnedSet);
   renderTree();
+  //  ★ 같은 압정을 **목록의 프로젝트 카드**도 쓴다(#3778) — 트리에서 꽂든 카드에서 꽂든 한 프로젝트에 압정은 하나다.
+  //   그러니 한쪽에서 누르면 다른 쪽도 같은 판에서 움직여야 한다(안 그리면 목록은 다음 폴링까지 옛 자리에 선다).
+  //   묶지 않은 축(세션 목록)은 이 핀과 무관하므로 붓을 대지 않는다.
+  if (groupProj) repaintList();
 }
 
 let treeEl: HTMLElement | null = null;
@@ -605,12 +609,15 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
 
 // ══ 프로젝트 축 — 묶기·펼침 (#2033) ══════════════════════════════════════════
 /** 한 프로젝트 묶음. rows 는 이미 정렬돼 들어온다(아래 projGroups 머리말). */
-interface ProjGrp { key: string; id: number; name: string; bucket: string; rows: SideInstance[]; open: boolean; active: boolean; counts: Record<string, number> }
+interface ProjGrp { key: string; id: number; name: string; bucket: string; rows: SideInstance[]; open: boolean; active: boolean; pinned: boolean; counts: Record<string, number> }
 
 //  펼칠 상태 = **확인 필요 · 작업 완료(미확인)** 둘뿐(상민님 2026-08-26).
 //   작업 중은 「지금 볼 것」에 **서기는 하되 펴지 않는다** — 돌고 있는 건 나를 기다리는 게 아니라 알리기만 하면 되고,
 //   그건 머리글의 파란 점이 이미 한다. 묶음에 들어가고 말고(=순서)는 시간축이 정하고, 펴고 접고만 여기서 가른다.
 const OPENS: Record<string, true> = { waiting: true, done: true };
+//  「고정」 머리글의 글자 — 행이 하나도 없이 **카드만** 고정됐을 때 쓰는 이름(#3778).
+//   행이 있으면 그 행이 들고 온 묶음 이름을 그대로 쓴다(main.ts 의 PINNED_GROUP 이 곧 이 글자다).
+const PINNED_BUCKET = '고정';
 
 /**
  * 행 목록을 프로젝트 묶음으로 접는다(#2033).
@@ -632,7 +639,8 @@ function projGroups(rest: SideInstance[], searching: boolean): ProjGrp[] {
     if (!g) {
       //  묶음 이름 = **첫 행의 묶음**. 목록이 이미 정렬돼 있으므로 첫 행이 곧 그 프로젝트의 가장 급한 행이다.
       g = { key, id, name: id ? (r.project as { name: string }).name : '프로젝트 없음',
-        bucket: r.group || '', rows: [], open: false, active: false, counts: {} };
+        //  압정은 트리와 **같은 통**(PIN_KEY · 'p:<id>')을 본다 — 한 프로젝트에 압정 하나(#3778).
+        bucket: r.group || '', rows: [], open: false, active: false, pinned: !!id && isPinned(key), counts: {} };
       byKey.set(key, g); groups.push(g);
     }
     g.rows.push(r);
@@ -678,7 +686,9 @@ function grpSums(counts: Record<string, number>): HTMLElement | null {
  *   상태 점·개수가 오른쪽 끝에 못 붙는다(#1954 ⓑ 가 앱 행에서 이미 밟은 함정, 상민님 2026-08-26 재지적).
  */
 function projGrpHead(g: ProjGrp): HTMLElement {
-  return el('div', { class: 'v2-pg-row' + (g.active && !g.open ? ' act' : '') },
+  //  ⚠ `pinned` 는 **자리를 비워 두는 표식**이다 — 고정된 카드의 압정은 손을 떼도 서 있어야 하는데(그게 '고정됨'의
+  //   유일한 표식이다) 압정도 ＋ 와 같은 절대위치라, 자리를 안 비우면 상태 점·개수 위에 겹쳐 앉는다(CSS .v2-pg-row.pinned).
+  return el('div', { class: 'v2-pg-row' + (g.active && !g.open ? ' act' : '') + (g.pinned ? ' pinned' : '') },
     el('button', { class: 'v2-pg-t', type: 'button', 'aria-expanded': String(g.open),
       title: g.name + (g.id ? `\n#${g.id} · 세션 ${g.rows.length}` : '\n프로젝트에 붙지 않은 세션과 화면'),
       onclick: () => toggleGrp(g.key, g.open) },
@@ -688,6 +698,8 @@ function projGrpHead(g: ProjGrp): HTMLElement {
       grpSums(g.counts),
       //  세션이 하나뿐인 묶음은 개수를 안 쓴다 — 접힌 줄 하나가 곧 그 하나다(위 grpSums 주석과 같은 사유).
       g.rows.length > 1 ? el('span', { class: 'v2-cnt', text: String(g.rows.length) }) : null),
+    //  ★고정(#3778) — 카드째 맨 위로. 「프로젝트 없음」 묶음은 고정할 프로젝트가 없으므로 압정도 없다(트리와 같은 규율).
+    g.id ? pinBtn(g.key, '위에 고정 — 이 프로젝트와 그 안의 세션을 통째로 맨 위로 올려 둡니다') : null,
     g.id ? newSessBtn(g.id) : null) as HTMLElement;
 }
 
@@ -705,26 +717,42 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
   const kids: HTMLElement[] = [];
   //  「고정」은 두 축 공통으로 맨 위다(#1954) — 압정한 행이 프로젝트 묶음 안에 갇히면 그 약속이 깨진다.
   //   여기 선 행은 소속을 말해 줄 머리글이 없으므로 **두 줄 그대로**(프로젝트 칩을 남긴다).
-  const pinned = shown.filter((r) => r.pinned);
+  const pinnedRows = shown.filter((r) => r.pinned);
   const rest = shown.filter((r) => !r.pinned);
+  const groups = projGroups(rest, !!q);
+  //  ★ 프로젝트 축에서는 **카드째** 고정한다(#3778, 원준 2026-09-09). 이 축의 단위는 세션이 아니라 프로젝트라,
+  //   압정도 그 단위여야 한다 — 카드가 올라오면 그 안의 세션은 **자동으로 따라 올라온다**(집합을 안 건드리고 자리만 옮긴다).
+  //   ⚠ 카드를 여기서 다시 정렬하지 않는다 — 「고정」 층으로 통째로 옮길 뿐, 그 층 안의 순서도 아래 순서도
+  //    시간축이 준 그대로다(projGroups 머리말의 그 규율).
+  const pinnedGrps = groups.filter((g) => g.pinned);
   let lastBucket = '';
-  if (pinned.length) {
-    kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: pinned[0].group || '고정' }) as HTMLElement);
-    lastBucket = pinned[0].group || '고정';
-    for (const r of pinned) kids.push(appRowEl(r, o));
+  if (pinnedRows.length || pinnedGrps.length) {
+    const label = (pinnedRows[0] && pinnedRows[0].group) || PINNED_BUCKET;
+    kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: label }) as HTMLElement);
+    lastBucket = label;
+    //  행이 먼저, 카드가 다음 — 낱개로 꽂은 것이 통째로 꽂은 것보다 좁고 급한 지목이다.
+    for (const r of pinnedRows) kids.push(appRowEl(r, o));
+    for (const g of pinnedGrps) kids.push(projGrpCard(g, o));
   }
-  for (const g of projGroups(rest, !!q)) {
+  for (const g of groups) {
+    if (g.pinned) continue;                         // 이미 위 「고정」 층에 섰다
     if (g.bucket && g.bucket !== lastBucket) {
       kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g.bucket }) as HTMLElement);
       lastBucket = g.bucket;
     }
-    //  ★펼친 묶음 = 흰 카드 그릇 — 세션이 프로젝트의 **안**에 산다는 걸 면(面)이 말한다.
-    //   들여쓰기+세로선만으로는 "목록 둘이 이웃한 그림"으로 읽혔다(상민님 2026-08-18, 트리 .v2-pj.open 과 같은 처방).
-    kids.push(el('div', { class: 'v2-pg' + (g.open ? ' open' : ''), 'data-anch': g.key },
-      projGrpHead(g),
-      g.open ? el('div', { class: 'v2-pg-list' }, ...g.rows.map((r) => appRowEl(r, { ...o, one: true }))) : null) as HTMLElement);
+    kids.push(projGrpCard(g, o));
   }
   return kids;
+}
+
+/** 프로젝트 카드 한 장 — 머리글 + (펼쳤으면) 그 안의 세션들.
+ *  ★펼친 묶음 = 흰 카드 그릇 — 세션이 프로젝트의 **안**에 산다는 걸 면(面)이 말한다.
+ *   들여쓰기+세로선만으로는 "목록 둘이 이웃한 그림"으로 읽혔다(상민님 2026-08-18, 트리 .v2-pj.open 과 같은 처방). */
+function projGrpCard(g: ProjGrp, o: RowOpts): HTMLElement {
+  //  ⚠ 카드 자체엔 고정 표식을 안 칠한다 — 「고정」 머리글과 파랗게 채워진 압정이 이미 말한다(트리의 .v2-pinb.on 과 같은 규율).
+  return el('div', { class: 'v2-pg' + (g.open ? ' open' : ''), 'data-anch': g.key },
+    projGrpHead(g),
+    g.open ? el('div', { class: 'v2-pg-list' }, ...g.rows.map((r) => appRowEl(r, { ...o, one: true }))) : null) as HTMLElement;
 }
 
 /** 목록 안에 들어갈 것 전부 — 묶음 머리글 + 행, 하나도 없으면 빈 화면 한 장. */
@@ -2463,10 +2491,10 @@ function toggleAppPin(key: string): void {
   redraw();
 }
 
-function pinBtn(pk: string): HTMLElement {
+function pinBtn(pk: string, offTip = '위에 고정 — 맨 위로 올려 둡니다'): HTMLElement {
   const on = isPinned(pk);
   return el('button', { class: 'v2-pinb' + (on ? ' on' : ''), type: 'button', 'aria-pressed': String(on),
-    'aria-label': on ? '고정 해제' : '위에 고정', title: on ? '고정 해제' : '위에 고정 — 맨 위로 올려 둡니다',
+    'aria-label': on ? '고정 해제' : '위에 고정', title: on ? '고정 해제' : offTip,
     onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); togglePin(pk); } },
     sv('svg', { viewBox: '0 0 24 24', class: 'v2-pinb-ic', 'aria-hidden': 'true' },
       sv('path', { d: PIN_NEEDLE }), sv('path', { d: PIN_BODY })));
