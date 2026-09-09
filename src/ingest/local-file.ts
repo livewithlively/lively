@@ -2,8 +2,8 @@
 //  왜: 종전엔 폴더에 올린 파일을 그 세션이 절대경로로 한 번 읽고 끝이었다 — 자료 테이블에 없으니 근거(derived_from)로
 //   남지 않고 증류 대상도 아니었다. 다른 수집기(슬랙·드라이브)와 **같은 길**(source → 증류기 → 지식)로 태운다.
 //  적재는 mirrorSourceV6 재사용(새 insert 경로 없음): 좌표 upsert · redact · 공개범위 스탬프 · audit 노이즈 게이트가 그대로 적용된다.
-//  본문: 텍스트는 즉시, OOXML(+hwpx)은 zero-dep 추출, PDF·이미지는 [BINARY] 스텁(증류 세션이 source_artifact 로 받아 Read),
-//   hwp·구버전 오피스는 "읽을 수 없음" 스텁, 실행파일·아카이브·미디어는 자료를 만들지 않는다(파일은 폴더에 남는다).
+//  본문: 텍스트는 즉시, OOXML(+hwpx)·한글 hwp 는 zero-dep 추출, PDF·이미지는 [BINARY] 스텁(증류 세션이 source_artifact 로 받아 Read),
+//   구버전 오피스(.doc/.xls/.ppt)는 "읽을 수 없음" 스텁, 실행파일·아카이브·미디어는 자료를 만들지 않는다(파일은 폴더에 남는다).
 //  ⚠ 경로 가드: 점파일·node_modules·provision 워크트리(.git 보유 조상) 하위는 자료 아님 — 코드는 git 소유(#714·#828).
 //  ⚠ 실패해도 업로드는 성공이다 — 호출부는 catch 해 로그만 남긴다(자료 등록은 best-effort).
 import fs from "node:fs";
@@ -20,6 +20,7 @@ import { getProjectRow } from "../v6/project-store.js";
 import { projectAbsPath } from "../project/project-fs.js";
 import { isGitRepoRoot } from "../project/project-manifest.js";
 import { extractOoxml, ooxmlKindFromName, printableRatio } from "../connectors/ooxml.js";
+import { extractHwp } from "../connectors/hwp.js";   // #3778 — 한글 .hwp 본문(OLE2 + BodyText 레코드)
 import { memberReadRange, memberReadTo, memberStat } from "../terminal/terminal-member-fs.js";
 import { resolveRootPath, userSlug } from "../terminal/profiles.js";
 import { resolveMemberOsUser } from "../terminal/terminal-isolation.js";
@@ -113,6 +114,18 @@ async function buildBody(u: LocalUploadInput, rel: string, name: string, size: n
     if (size > MAX_OOXML_BYTES) return { body: stub(stubNoteExtractFailed(`${Math.round(size / 1e6)}MB — 30MB 초과`)), extracted: false, kind: c.kind, reason: "too-large" };
     try {
       const text = extractOoxml(ok, await readHead(u.abs, u.osUser, size, size));
+      if (!text || printableRatio(text) < 0.6) return { body: stub(stubNoteExtractFailed("빈 결과 또는 깨진 추출")), extracted: false, kind: c.kind, reason: "empty" };
+      return { body: text.slice(0, MAX_BODY_CHARS), extracted: true, kind: c.kind };
+    } catch (e) {
+      return { body: stub(stubNoteExtractFailed((e as Error)?.message ?? String(e))), extracted: false, kind: c.kind, reason: "extract-error" };
+    }
+  }
+  //  한글 .hwp (#3778) — 종전엔 「읽을 수 없음」 스텁이었다. 실은 읽을 수 있었고, 그래서 한국 고객의 자료가
+  //   통째로 검색·증류 밖에 있었다. OOXML 과 같은 관문(크기 상한 → 추출 → printableRatio 가드 → 스텁 폴백)을 탄다.
+  if (c.kind === "hwp") {
+    if (size > MAX_OOXML_BYTES) return { body: stub(stubNoteExtractFailed(`${Math.round(size / 1e6)}MB — 30MB 초과`)), extracted: false, kind: c.kind, reason: "too-large" };
+    try {
+      const text = extractHwp(await readHead(u.abs, u.osUser, size, size));
       if (!text || printableRatio(text) < 0.6) return { body: stub(stubNoteExtractFailed("빈 결과 또는 깨진 추출")), extracted: false, kind: c.kind, reason: "empty" };
       return { body: text.slice(0, MAX_BODY_CHARS), extracted: true, kind: c.kind };
     } catch (e) {
