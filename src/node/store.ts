@@ -160,6 +160,23 @@ export async function setNodeOwnerAndSessionHost(id: string, owner: string): Pro
   return r.rows[0] as OrgNode;
 }
 
+/**
+ * 이 노드의 **세션 호스트 선언만** 내린다 — 행·토큰은 그대로 둔다. (#2600 T2 d5-b)
+ *
+ * ⚠ 지우지 않는 이유: 같은 (노드, 테넌트)가 다시 켜지면 `ensureSessionHostNode` 가 그 행을 그대로
+ *  쓴다(id·토큰 연속성). 선언만 내리면 목록 소유 판정(`sessionHostVerdict`)의 `declared` 에서 빠지고,
+ *  다시 켤 때 `session_host=TRUE` 로 되돌아온다.
+ *
+ * @returns 실제로 내렸나(이미 false 이거나 행이 없으면 false — 멱등)
+ */
+export async function undeclareNodeSessionHost(id: string): Promise<boolean> {
+  const r = await itemsPool.query(
+    `UPDATE org_node SET session_host=FALSE, updated_at=now() WHERE id=$1 AND session_host=TRUE`,
+    [id],
+  );
+  return r.rowCount === 1;
+}
+
 export async function deleteNode(id: string, actor?: string): Promise<{ deleted: boolean }> {
   const node = await getNode(id);
   if (!node) return { deleted: false };
