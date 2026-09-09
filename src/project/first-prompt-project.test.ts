@@ -2,7 +2,7 @@
 //  사양 엣지: ①어떤 지시가 프로젝트가 되나(길이·접두·여러 줄·상한) ②어떤 요청에서 선생성하나(이미 소속·폴더 선택·앱·로그인·읽기전용·인코그니토).
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AUTO_CREATED_MARK, UNNAMED_PROJECT, firstPromptProjectPlan, shellProjectFromPrompt, shouldRenameShellProject } from "./first-prompt-project.js";
+import { AUTO_CREATED_MARK, UNNAMED_PROJECT, firstPromptProjectPlan, humanShellProject, shellProjectFromPrompt, shouldRenameShellProject } from "./first-prompt-project.js";
 
 // 28자를 넘지 않는 지시 — 이름이 그대로 이름이 되는(자르지 않는) 경로를 재려면 상한 안쪽이어야 한다(#2031).
 const PROMPT = "홈 세션 cwd 를 프로젝트 폴더로";
@@ -114,4 +114,65 @@ test("expectName 없이 부르면 기계로 자른 첫 지시 제목도 승계 �
   assert.equal(shouldRenameShellProject(sliced, "훅 동작 확인"), true);
   const placeholder = { name: UNNAMED_PROJECT, description: AUTO_CREATED_MARK };
   assert.equal(shouldRenameShellProject(placeholder, "훅 동작 확인"), true, "임시값도 같은 자리");
+});
+
+
+// ── 새 작업 창의 프로젝트 칸(#3778) ─────────────────────────────────────────
+//  사양: ①이름을 적었으면 그 이름으로 만든다(기계 이름이 이기지 않는다) ②그 프로젝트는 **껍데기가 아니다**
+//   (AUTO_CREATED_MARK 없음 · name_source human) ③비워 두면 **종전 그대로** ④안 만드는 자리는 여전히 안 만든다.
+const HUMAN = { kind: "human", initialPrompt: "이 대회 참가해보려고 해. 먼저 파악부터 해봐" } as const;
+
+test("이름을 적었으면 그 이름으로 — 기계가 자른 첫 지시가 이기지 않는다", () => {
+  const out = firstPromptProjectPlan({ ...HUMAN, projectName: "모두의 창업 2차 지원" });
+  assert.equal(out?.name, "모두의 창업 2차 지원");
+  assert.equal(out?.nameSource, "human", "이 표시가 곧 걸쇠다 — session·agent 승계가 못 덮는다");
+  assert.ok(String(out?.description).includes("이 대회 참가해보려고 해"), "첫 지시 원문은 그대로 본문에 남는다");
+});
+
+// ★ 이 한 줄이 «사람이 지은 이름이 안 덮인다»의 실체다. 표식이 남아 있으면 shouldRenameShellProject 가 통과하고
+//  세션 첫 턴의 AI 이름이 사람 이름을 밀어낸다 — 정련 훅(project-bind-nudge)의 «정련하세요» 안내도 잘못 나간다.
+test("사람이 지은 프로젝트에는 자동생성 표식이 없다 → 승계·정련이 건드리지 않는다", () => {
+  const out = firstPromptProjectPlan({ ...HUMAN, projectName: "모두의 창업 2차 지원" });
+  assert.ok(!String(out?.description).includes(AUTO_CREATED_MARK), "표식이 있으면 사람 이름이 덮인다");
+  assert.equal(shouldRenameShellProject(out, "AI 가 지은 이름"), false, "덮으려는 시도가 여기서 막힌다");
+  // 대조 — 이름을 안 적은 종전 경로는 표식이 있고, 그래서 **덮을 수 있다**(같은 호출이 true).
+  const auto = firstPromptProjectPlan(HUMAN);
+  assert.ok(String(auto?.description).includes(AUTO_CREATED_MARK));
+  assert.equal(auto?.nameSource, "rule");
+  assert.equal(shouldRenameShellProject(auto, "AI 가 지은 이름"), true, "껍데기는 덮인다 — 두 경로가 실제로 갈린다");
+});
+
+test("비워 두면 지금 그대로 — 빈 문자열·공백·미전송이 전부 종전 경로", () => {
+  for (const blank of ["", "   ", "\n", undefined]) {
+    const out = firstPromptProjectPlan({ ...HUMAN, projectName: blank as string });
+    assert.equal(out?.nameSource, "rule", `빈 이름: ${JSON.stringify(blank)}`);
+    // 28자 상한 안이라 안 잘린다 — 끝의 마침표만 떨어진 «첫 지시 그대로»가 기계 이름이다.
+    assert.equal(out?.name, "이 대회 참가해보려고 해. 먼저 파악부터 해봐", "기계가 지은 첫 지시 이름");
+  }
+});
+
+test("첫 지시가 없어도 이름만 적었으면 만든다 — 「새 작업」 껍데기가 아니라 그 이름으로", () => {
+  const out = firstPromptProjectPlan({ kind: "human", projectName: "투자자 미팅 준비" });
+  assert.equal(out?.name, "투자자 미팅 준비");
+  assert.equal(out?.nameSource, "human");
+  assert.notEqual(out?.name, UNNAMED_PROJECT);
+  assert.ok(!String(out?.description).includes("첫 지시(원문)"), "첫 지시가 없으면 그 절은 아예 없다");
+});
+
+// 이름을 적었다고 **안 만드는 자리가 만들게 되면 안 된다** — 이름 칸은 홈 입구의 것이고, 배제 규칙은 그대로다.
+test("이름을 적어도 안 만드는 자리는 여전히 안 만든다", () => {
+  const named = { projectName: "무슨 이름이든" };
+  assert.equal(firstPromptProjectPlan({ ...HUMAN, ...named, projectId: 3778 }), null, "이미 프로젝트가 정해짐");
+  assert.equal(firstPromptProjectPlan({ ...HUMAN, ...named, subpath: "project/2611" }), null, "사람이 폴더를 골랐다");
+  assert.equal(firstPromptProjectPlan({ ...HUMAN, ...named, rootKey: "shared" }), null, "개인 루트가 아니다");
+  assert.equal(firstPromptProjectPlan({ ...HUMAN, ...named, readOnly: true }), null, "읽기전용");
+  assert.equal(firstPromptProjectPlan({ ...HUMAN, ...named, incognito: true }), null, "인코그니토");
+  assert.equal(firstPromptProjectPlan({ ...HUMAN, ...named, kind: "task" }), null, "사람의 작업 세션이 아니다");
+});
+
+test("humanShellProject — 이름이 비면 null(호출자가 종전 경로로 떨어진다)", () => {
+  assert.equal(humanShellProject("", "지시"), null);
+  assert.equal(humanShellProject("   ", "지시"), null);
+  assert.equal(humanShellProject(null, "지시"), null);
+  assert.equal(humanShellProject(undefined, undefined), null);
 });

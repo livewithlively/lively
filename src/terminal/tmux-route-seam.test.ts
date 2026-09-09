@@ -24,7 +24,7 @@ const RELAY = path.join(TMP, "relay.sh");
 const RELAY_OUT = path.join(TMP, "relay.out");
 const RELAY_ERR = path.join(TMP, "relay.err");
 fs.writeFileSync(RELAY, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${RELAY_LOG}"\nif [ -f "${RELAY_ERR}" ]; then cat "${RELAY_ERR}" >&2; exit 1; fi\nif [ -f "${RELAY_OUT}" ]; then cat "${RELAY_OUT}"; else echo relayed; fi\n`, { mode: 0o755 });
-const KEYS = ["LIVELY_TMUX_EXEC", "LIVELY_TMUX_ROUTE", "LVLY_TMUX_SOCK_TEMPLATE", "LVLY_HUB_URL", "LVLY_HUB_SECRET"] as const;
+const KEYS = ["LIVELY_TMUX_EXEC", "LIVELY_TMUX_ROUTE", "LVLY_TMUX_SOCK_TEMPLATE", "LVLY_HUB_URL", "LVLY_HUB_SECRET", "LIVELY_TMUX_LIST_SCOPE"] as const;
 afterEach(() => {
   for (const k of KEYS) delete process.env[k]; installTenantSlugResolver(() => null); installShadowReporter(null); resetShadowStats();
   for (const f of [RELAY_LOG, RELAY_OUT, RELAY_ERR]) { try { fs.unlinkSync(f); } catch { /* 없음 */ } }
@@ -90,11 +90,23 @@ test("[S14] 플래그 on 인데 길이 없다(중계 없음 = 셀프호스트) /
 
 test("[S17] 전송 매핑 — 소켓은 {slug} 첫 하나만 치환 · 허브는 url·secret·slug 를 실어 보낸다", () => {
   process.env.LIVELY_TMUX_ROUTE = "on"; process.env.LIVELY_TMUX_EXEC = `${RELAY} {slug}`; process.env.LVLY_TMUX_SOCK_TEMPLATE = "/x/{slug}/{slug}.sock";
-  assert.deepEqual(tmuxRouteTransport(SLUG), { transport: { kind: "socket", socketPath: "/x/acme/{slug}.sock" }, slug: SLUG, mode: "on", sample: 1 }, "String.replace(문자열) = 첫 하나만 — relay·tmuxArgvFor 와 같은 의미");
+  //  #3797 T7 — `listScope` 가 한 칸 늘었다. 기본은 `cluster`(종전 동작): 이 표가 곧 «게이트웨이는 안 바뀐다» 의 증거다.
+  assert.deepEqual(tmuxRouteTransport(SLUG), { transport: { kind: "socket", socketPath: "/x/acme/{slug}.sock" }, slug: SLUG, mode: "on", sample: 1, listScope: "cluster" }, "String.replace(문자열) = 첫 하나만 — relay·tmuxArgvFor 와 같은 의미");
   process.env.LVLY_HUB_URL = "http://10.0.0.1:9093"; process.env.LVLY_HUB_SECRET = "sec";
-  assert.deepEqual(tmuxRouteTransport(SLUG), { transport: { kind: "hub", url: "http://10.0.0.1:9093", secret: "sec", slug: SLUG }, slug: SLUG, mode: "on", sample: 1 });
+  assert.deepEqual(tmuxRouteTransport(SLUG), { transport: { kind: "hub", url: "http://10.0.0.1:9093", secret: "sec", slug: SLUG }, slug: SLUG, mode: "on", sample: 1, listScope: "cluster" });
   process.env.LIVELY_TMUX_ROUTE = "shadow:25";
   assert.deepEqual(tmuxRouteTransport(SLUG)?.mode, "shadow"); assert.equal(tmuxRouteTransport(SLUG)?.sample, 0.25);
+});
+
+test("[S17b] ★★ 세션 호스트 env(#3797 T7) — 범위가 전송에 그대로 실린다", () => {
+  //  이 자리가 끊기면 브로커 env 에 `LIVELY_TMUX_LIST_SCOPE=node` 를 적어도 아무 일도 안 일어난다
+  //  (요청에 헤더가 안 붙고, 호스트는 조용히 클러스터 전역 목록을 자기 것이라 주장한다).
+  process.env.LIVELY_TMUX_ROUTE = "on"; process.env.LIVELY_TMUX_EXEC = `${RELAY} {slug}`;
+  process.env.LVLY_TMUX_SOCK_TEMPLATE = "/x/{slug}/sock";
+  process.env.LIVELY_TMUX_LIST_SCOPE = "node";
+  assert.equal(tmuxRouteTransport(SLUG)?.listScope, "node");
+  delete process.env.LIVELY_TMUX_LIST_SCOPE;
+  assert.equal(tmuxRouteTransport(SLUG)?.listScope, "cluster", "안 적으면 종전 그대로");
 });
 
 test("[R2] ★ 플래그 on — 목록 → 팬아웃(세션마다 exec) → 병합(sid 순) · 중계는 안 불린다", async () => {

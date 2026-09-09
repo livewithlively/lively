@@ -86,9 +86,12 @@ export function mountCtxShell(h: CtxShellHooks): void {
     const inst = sideInstanceById(id);
     if (!inst) return null;
     const route = inst.route || '';
+    //  세션 행의 id 는 'sess:<박스 id>' (main.ts sideRowKey) — route 는 홈 목록만 채우므로(#2033) id 로 먼저 판정한다.
+    //  프리뷰 실측(2026-09-09): route 만 보면 [AI 세션] 구역 행이 세션 메뉴 없이 「열기·고정·닫기」만 떴다.
     const m = /^#\/s\/([^?]+)/.exec(route);
-    if (m) {
-      const sid = decodeURIComponent(m[1]);
+    const sidFromId = id.startsWith('sess:') ? id.slice(5) : '';
+    if (m || sidFromId) {
+      const sid = m ? decodeURIComponent(m[1]) : sidFromId;
       const sm = sessionMenu(findSess(sid), sid, hit);
       return { ...sm, rows: [...sm.rows, { sep: true, label: '' }, instRows(inst.id, inst)] .flat() };
     }

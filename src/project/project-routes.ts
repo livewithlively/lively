@@ -55,9 +55,6 @@ interface ProjectDeps {
   prefix: string;
   getProject: (id: number) => Promise<{ id: number; name: string; folder: string | null } | undefined | null>;
   isProjectMember: (id: number, memberId: string) => Promise<boolean>;
-  // 프로젝트 접근 가능자 전원(id) — 노드 프로젝트 세션의 공동입장 스냅샷(#905 C4)에 쓴다(노드 세션은 owner∪invites 로
-  //  가시성 판정 → 게이트웨이가 멤버를 초대목록으로 넘겨야 다른 멤버도 입장).
-  listProjectMembers: (id: number) => Promise<string[]>;
   listProjectActivities: (id: number, authorPerson?: string, limit?: number, offset?: number) => Promise<unknown[]>;
   // folder 가 비었을 때 물리 폴더를 생성하고 DB 에 반영 후 상대경로 반환(v6 보강용). 없으면 폴더 없음 400.
   ensureFolder?: (project: { id: number; name: string }) => Promise<string>;
@@ -417,14 +414,19 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
       restrictRead: !!b.restrictRead,   // #1291 v2 — read 축소. writeVis 미지정이면 프로젝트 폴더에서 파생한다(= 프로젝트 공개범위).
       // 세션에 프로젝트 id 를 박아 입장 게이트가 폴더가 아닌 멤버십(id)으로 판정하게 한다(폴더 드리프트 면역).
       projectId: project.id, projectSrc: prefix.includes("/v6/") ? "v6" : "org",
+      // 초대(2026-09-09) — 홈 입구(terminal/routes.ts)와 **같은 자리에서 같은 값을** 싣는다. 중앙 세션은
+      //  createSession 이 이 값을 스스로 검증한다(validInvites). 종전엔 아예 안 실어서, 프로젝트에서 연 세션은
+      //  화면에서 누굴 고르든 **만든 사람만** 보는 세션이 됐다(#1876 D1 이후 invites 가 유일한 열쇠인데도).
+      invites: b.invites,
     };
     res.setHeader("Cache-Control", "no-store");
-    // 노드 프로젝트 세션(#905 C4) — body.node 면 그 원격 노드에서 연다(provision 과 같은 게이트). 중앙 프로젝트 세션은
-    //  초대 목록 없이 멤버십으로 게이트하지만, 노드는 프로젝트 무지(DB 없음)라 owner∪invites 로만 가시성을 판정한다
-    //  → 게이트웨이가 현재 프로젝트 멤버(생성자∪팀원)를 검증해 invites 스냅샷으로 넘겨 다른 멤버의 공동입장을 성립시킨다.
-    //  (멤버십 변경은 세션 재생성 전까지 미반영 — 중앙 세션은 동적. 알려진 한계.)
+    // 노드 프로젝트 세션(#905 C4) — body.node 면 그 원격 노드에서 연다(provision 과 같은 게이트). 노드는 프로젝트
+    //  무지(DB 없음)라 owner∪invites 로만 가시성을 판정하므로, 게이트웨이가 검증한 invites 스냅샷을 실어 보낸다.
+    //  ⚠ 그 스냅샷은 **사람이 고른 초대**다(2026-09-09). 종전엔 현재 프로젝트 멤버 전원이었다 — #452(프로젝트 세션
+    //   전원 공개) 시절의 잔재로, 그 정책은 #1876 D1 에서 폐기됐는데 이 경로만 안 따라왔다. 그 결과 같은 모달에서
+    //   실행 위치만 바꾸면 «중앙=나만 / 노드=팀 전원» 으로 갈렸다. 이제 두 경로가 같은 값을 쓴다.
     const nodeId = String(b.node ?? "").trim();
-    const invites = nodeId ? await validateInvites(await deps.listProjectMembers(project.id), idOf(userOf(req))) : [];   // 실제 org 멤버만·요청자(owner) 제외·중복 제거
+    const invites = nodeId ? await validateInvites(b.invites, idOf(userOf(req))) : [];   // 실제 org 멤버만·요청자(owner) 제외·중복 제거
     res.json({ session: await launchSession(userOf(req), input, { nodeId, invites }) });
   }));
 
@@ -493,7 +495,6 @@ export function registerProjectV6Routes(
   deps: {
     getProject: ProjectDeps["getProject"];
     isProjectMember: ProjectDeps["isProjectMember"];
-    listProjectMembers: ProjectDeps["listProjectMembers"];
     listProjectActivities: ProjectDeps["listProjectActivities"];
     ensureFolder: NonNullable<ProjectDeps["ensureFolder"]>;
   },

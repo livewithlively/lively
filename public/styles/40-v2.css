@@ -302,8 +302,36 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-ss-x:hover { color: var(--danger); background: var(--bg-tint-2); }
 .v2-ss-x-ic { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 /* 이름 인라인 편집 — 행의 글자 자리를 그대로 쓴다(칸이 튀어나오면 목록이 흔들린다). */
-.v2-ss-edit { width: 100%; min-width: 0; margin: -2px 0; padding: 1px 5px; border: 1px solid var(--blue); border-radius: 5px; background: var(--bg); font: inherit; font-size: 13px; font-weight: 500; color: var(--ink); }
-.v2-ss-edit:focus { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 22%, transparent); }
+/* 이름 인라인 편집칸 — **줄 높이를 한 픽셀도 바꾸지 않는다**(원준 2026-09-09: "높이가 기본보다 더 커져서
+   연속성 있게 수정하는 게 아니라 화면 뚝딱하면서 티나게 움직여"). 그래서 셋을 지킨다:
+   ① `font: inherit` 만 쓰고 크기·굵기를 **덮어쓰지 않는다** — 종전엔 13px/500 으로 못 박아, 13.5px/700 인
+      홈 목록 카드 머리줄에서는 제자리 글자와 다른 활자가 됐다(트리 세션 줄에만 맞는 값이었다).
+   ② 테두리를 **inset box-shadow 로** 그린다 — `border` 는 상자를 2px 키워 줄을 밀지만 그림자는 레이아웃에 없다.
+   ③ 세로 안여백·마진 0 + `display:block` — inline-block 이면 베이스라인 아래 여백이 붙어 또 커진다.
+   결과: 편집칸의 상자 높이 = 그 자리 글자의 줄 높이. 열고 닫을 때 아무것도 안 움직인다.
+
+   ⚠⚠ **`input.` 접두는 장식이 아니다.** `03-components.css:108` 의 `input[type="text"], …` 가 특이도 (0,1,1) 로
+   클래스 하나짜리 `.v2-ss-edit`(0,1,0)를 **이긴다** — 그래서 접두 없이 쓰면 위 셋이 전부 실려는 있는데
+   **져서 안 먹는다.** 실측(매니지드 48dde3f7, 헤드리스): 규칙은 배포됐는데 computed 는 그 기본값 그대로
+   `font 14px/500 · border 1px · padding 7px` 이었고 줄이 31.25 → 48.00px(**+16.75**)로 뛰었다.
+   ★ 이 함정은 [[sidebar-find-matcher-css-specificity-762]] 에 처방까지 적혀 있었는데 그대로 다시 밟았다.
+   그 지식의 규칙: «입력칸 클래스 규칙이 안 먹으면 요소 기본 규칙과의 특이도 싸움부터 의심하고 `input.` 접두를
+   붙여라 — **«일부 속성만 먹는» 증상이 그 신호다**». 여기서도 정확히 그랬다: `:focus`(0,2,0)의 box-shadow 는
+   먹어서 파란 테두리는 보이는데, 기본 규칙의 font·border·padding 만 죽어 있었다. */
+.v2-ss-edit { display: block; width: 100%; min-width: 0; box-sizing: border-box; margin: 0; padding: 0 5px;
+  border: 0; border-radius: 5px; background: var(--bg); font: inherit; color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--blue); }
+/*  ⚠ 위 규칙 중 **요소 기본 규칙이 덮어쓰는 넷만** 여기서 되찾는다(특이도 (0,1,1) 동점 + 뒤에 오므로 이긴다).
+    나머지(display·margin·box-sizing·width·box-shadow)는 그 기본 규칙에 없어 위에서 그대로 먹는다 —
+    「일부 속성만 먹는」 증상의 정확한 뒷면이다.
+    ⚠ 클래스 단독 규칙을 위에 **남겨 둔 것도 의도**다: `check-css-drops` 는 셀렉터를 줄 단위 문자열로 대조해서,
+    `.v2-ss-edit` 줄이 사라지면 «HEAD 에 있던 규칙이 유실됐다» 고 경고한다. 이름이 바뀐 것뿐인데 상시 경고가
+    남으면 **다음 사람이 진짜 유실을 놓친다.** */
+input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px; }
+/* ⚠ 초점 그림자는 **테두리 그림자와 한 선언에 같이** 적는다 — box-shadow 는 통째로 덮어써서,
+   따로 쓰면 초점이 오는 순간(=늘 그렇다, 편집칸은 열리자마자 focus 다) 위의 테두리가 사라진다. */
+.v2-ss-edit:focus { outline: none;
+  box-shadow: inset 0 0 0 1px var(--blue), 0 0 0 2px color-mix(in srgb, var(--blue) 22%, transparent); }
 /* 보관 안내의 '다시 안내하지 않기' */
 .v2-arch-ack { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-sub); cursor: pointer; }
 .v2-arch-ack input { width: 15px; height: 15px; accent-color: var(--blue); cursor: pointer; }
@@ -341,9 +369,10 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-tree-more:hover { color: var(--ink); background: var(--bg); }
 /* 고정 단추 — 자리는 늘 차지한다(hover 때 나타나며 행을 밀면 목록이 흔들린다). 고정된 것만 늘 보인다. */
 /* ＋ 새 세션(프로젝트 줄) — 핀과 같은 규칙: 자리는 늘 차지하고 손을 얹었을 때만 보인다(원준 2026-08-20). */
-.v2-newb { width: 18px; height: 18px; margin-left: 2px; padding: 0; flex: none; border: 0; border-radius: 5px; background: none; color: var(--muted-2); cursor: pointer; display: inline-grid; place-items: center; opacity: 0; }
+/* → 프로젝트 페이지(홈 목록 카드 머리줄, #3778) — ＋ 와 같은 부품·같은 규칙이라 겉모습을 나눠 쓴다. */
+.v2-newb, .v2-openb { width: 18px; height: 18px; margin-left: 2px; padding: 0; flex: none; border: 0; border-radius: 5px; background: none; color: var(--muted-2); cursor: pointer; display: inline-grid; place-items: center; opacity: 0; }
 .v2-pj-row:hover .v2-newb, .v2-newb:focus-visible { opacity: 1; }
-.v2-newb:hover { color: var(--blue); background: var(--bg-tint-2); }
+.v2-newb:hover, .v2-openb:hover { color: var(--blue); background: var(--bg-tint-2); }
 .v2-newb-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 
 .v2-pinb { width: 18px; height: 18px; margin-left: 4px; padding: 0; flex: none; border: 0; border-radius: 5px; background: none; color: var(--muted-2); cursor: pointer; display: inline-grid; place-items: center; opacity: 0; }
@@ -497,6 +526,34 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { .v2-app-inst-st[data-st="busy"] { animation: none; } }
 /*  호버로 닫기 × 가 뜨면 점은 자리를 내준다 — 그 순간 사람이 보는 건 '닫을까'지 상태가 아니다. */
 .v2-app-inst:hover .v2-app-inst-st, .v2-app-inst.on .v2-app-inst-st { visibility: hidden; }
+
+/* ★한 줄 모드(프로젝트 카드 안)의 주인 얼굴 (#3778) — 둘째 줄이 없으므로 첫 줄 오른쪽에 **제 칸**을 준다.
+   ⚠ 절대위치로 겹쳐 띄우지 않는다: 그러면 제목 꼬리를 덮는다(#2061 이 고정 압정에서 이미 밟은 자리).
+   그래서 한 줄 행에만 넷째 칸을 열고 [제목 | 고정압정 | 얼굴 | 상태점] 으로 세운다 — 폭을 실제로 먹으므로
+   제목이 그만큼 먼저 줄고, 행끼리 세로로도 맞는다.
+   ⚠ 손을 얹으면 상태 점과 **함께 물러난다.** 압정·× 가 오른쪽 46px 을 절대위치로 덮으러 오는데, 얼굴을
+   남기려면 제목 위로 밀어 넣는 수밖에 없어 위의 그 함정으로 되돌아간다. 「한 자리에 한 번에 하나」가
+   이 목록의 문법이고(상태 점·개수가 이미 그렇게 물러난다), 주인 이름은 그때 행 툴팁이 말한다. */
+.v2-app-inst--1 { grid-template-columns: minmax(0, 1fr) auto auto auto; }
+.v2-app-inst--1 .v2-app-inst-st { grid-column: 4; }
+.v2-app-inst-face1 { grid-column: 3; grid-row: 1; align-self: center; justify-self: end; margin-left: 6px;
+  width: 17px; height: 17px; flex: none; border-radius: 50%; font-size: 8.5px; font-weight: 700;
+  display: inline-grid; place-items: center; color: var(--on-fill); overflow: hidden; }
+.v2-app-inst-face1 img { width: 100%; height: 100%; object-fit: cover; }
+.v2-app-inst:hover .v2-app-inst-face1, .v2-app-inst.on .v2-app-inst-face1 { visibility: hidden; }
+
+/* ★접힌 프로젝트 카드 머리줄의 얼굴 합집합 (#3778) — 펴면 각 줄이 제 얼굴을 들므로 여기선 안 그린다(side.ts grpFaces).
+   상태 점·개수와 같은 자리 규약을 그대로 쓴다: 손을 얹으면 [→]·압정·＋ 에 그 자리를 내준다. */
+.v2-pg-faces { display: flex; align-items: center; flex: none; margin-left: 4px; }
+.v2-pg-face { width: 16px; height: 16px; flex: none; border-radius: 50%; font-size: 8px; font-weight: 700;
+  display: inline-grid; place-items: center; color: var(--on-fill); overflow: hidden; }
+.v2-pg-face img { width: 100%; height: 100%; object-fit: cover; }
+/*  겹쳐 쌓되 **바탕색 테두리**로 서로를 가른다 — 안 그러면 비슷한 색 둘이 한 덩어리로 보인다.
+    접힌 카드는 제 배경이 없으므로(.v2-pg.open 에만 background 가 있다) 사이드바 바탕(--canvas)을 쓴다. */
+.v2-pg-face + .v2-pg-face { margin-left: -5px; box-shadow: 0 0 0 1.5px var(--canvas); }
+.v2-pg-facen { font-size: 10px; font-weight: 600; color: var(--muted); margin-left: 3px; flex: none;
+  font-variant-numeric: tabular-nums; }
+.v2-pg-row:hover .v2-pg-faces { visibility: hidden; }
 .v2-app-inst-project { display: flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none; color: var(--muted); font: inherit;
   font-size: 11.5px; line-height: 1.35; text-align: left; cursor: pointer; }
 .v2-app-inst-project:hover { color: var(--blue); }
@@ -667,6 +724,51 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-launch-send { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 16px; border-radius: 11px; font-weight: 650; }
 .v2-launch-send kbd { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; opacity: .7; font-weight: 400; }
 .v2-launch-hint { display: none; }   /* Enter 안내 줄 폐지 — placeholder 와 관례가 이미 말한다(#1756) */
+
+/* 여는 곳(#3778) — 질문 칸 위 얇은 칸 하나. **주인공은 아래 질문 칸**이라 이 줄은 낮고 조용하게 둔다:
+   테두리는 있되 그림자는 없고(카드가 아니다), 글자는 한 급 작고, 폭은 카드와 같은 폭으로 선다. */
+.v2-dest-wrap { position: relative; margin-top: 26px; }
+.v2-dest-wrap + .v2-launch { margin-top: 8px; }   /* 두 상자는 한 묶음으로 읽혀야 한다 — 카드의 26px 는 여기서 걷는다 */
+.v2-dest { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 14px;
+  border: 1px solid var(--line-net); border-radius: 13px; background: var(--bg); }
+.v2-dest:focus-within { border-color: color-mix(in srgb, var(--blue) 55%, var(--line-net)); }
+.v2-dest-lbl { flex: none; font-size: 11.5px; font-weight: 600; color: var(--muted-2); letter-spacing: .02em; }
+/* ⚠ `input.` 을 반드시 붙인다 — 03-components.css 의 `input[type="text"]`(0,1,1)이 클래스 하나(0,1,0)를
+   이겨서, 안 붙이면 이 칸이 **자기 테두리·흰 배경·padding 을 도로 갖고** 바깥 상자 안에 상자가 하나 더
+   그려진다(원준님 2026-09-09: "텍스트박스가 2개 겹쳐보이는 것 같아서 매우 이상함").
+   같은 이유로 이 파일의 다른 입력칸도 전부 `input.` 을 붙여 두었다(.v2-pjpick-in·.v2-find-in·.v2-ws-in). */
+.v2-dest-in { flex: 1; min-width: 0; font: inherit; font-size: 13.5px; color: var(--ink); }
+input.v2-dest-in { height: auto; border: 0; outline: 0; background: transparent; padding: 0; border-radius: 0; font-weight: 400; }
+.v2-dest-in::placeholder { color: var(--muted-2); }
+.v2-dest-slot { display: contents; }
+/* 고른 뒤 — 칩이 입력칸 자리를 받는다(둘은 배타다: 무엇이 정해졌는지 한 번에 하나만 말한다). */
+.v2-dest-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 25px; padding: 0 3px 0 10px;
+  border-radius: 99px; background: var(--bg-tint-2); color: var(--blue); font-size: 12.5px; font-weight: 600; }
+.v2-dest-chip.new { background: transparent; border: 1px dashed var(--line-net-2); color: var(--mint-deep); }
+.v2-dest-chip .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-dest-chip .x { flex: none; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 12px; line-height: 1; padding: 4px 6px; opacity: .65; }
+.v2-dest-chip .x:hover { opacity: 1; }
+.v2-dest-chip .x:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; border-radius: 99px; }
+/* 목록은 **떠서** 뜬다 — 흐름에 끼우면 열 때마다 아래 질문 칸이 밀려 내려가 사람이 치던 자리를 잃는다. */
+.v2-dest-pop { position: absolute; z-index: 30; top: calc(100% + 5px); left: 0; right: 0; overflow: hidden;
+  border: 1px solid var(--line-net); border-radius: 12px; background: var(--surface);
+  box-shadow: 0 1px 2px rgba(var(--shadow-ink), .04), 0 16px 40px -20px rgba(var(--shadow-ink), .3); }
+.v2-dest-hd { padding: 9px 13px 5px; font-size: 10.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted-3); }
+.v2-dest-list { max-height: 268px; overflow: auto; display: flex; flex-direction: column; padding-bottom: 4px; }
+.v2-dest-row { display: flex; align-items: center; gap: 9px; width: 100%; border: 0; background: transparent; cursor: pointer;
+  padding: 8px 13px; font: inherit; font-size: 13px; color: var(--ink); text-align: left; }
+.v2-dest-row:hover { background: var(--bg-tint); }
+.v2-dest-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.v2-dest-row .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-dest-row .m { flex: none; font-size: 11px; color: var(--muted-3); }
+.v2-dest-row .b { flex: none; font-size: 10.5px; padding: 1px 6px; border-radius: 99px; background: var(--bg-tint-2); color: var(--muted); }
+/* 「이 이름으로 새로 만들기」는 목록의 **항상 마지막 줄** — 고르기와 만들기의 경계를 선으로 말한다. */
+.v2-dest-row.mk { border-top: 1px solid var(--line-row); margin-top: 4px; color: var(--mint-deep); font-weight: 600; }
+.v2-dest-none { margin: 2px 13px 6px; }
+@media (max-width: 900px) {
+  .v2-dest-wrap { margin-top: 18px; }
+  .v2-dest { min-height: 44px; border-radius: 12px; }
+}
 /* 프로젝트 연결 드롭다운(#1749) — 여는 자리는 [⋯ ▸ 이 세션] 이다(머리줄 칩은 2026-08-20 폐지).
    드롭다운 본체(.v2-pjpick)는 그대로 anchoredPopover .dash-pop 위에 얹힌다. */
 .v2-pjpick { width: 320px; max-width: calc(100vw - 24px); display: flex; flex-direction: column; gap: 8px; padding: 8px; }   /* 배경·그림자는 .dash-pop-panel(20-dashboard.css) */
@@ -1820,6 +1922,11 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-pg-row .v2-pinb.on { display: inline-grid; }
 .v2-pg-row:hover .v2-pinb, .v2-pg-row .v2-pinb:focus-visible { display: inline-grid; right: 27px; }
 .v2-pg-row.pinned { padding-right: 23px; }
+/* ★→ 프로젝트 페이지(#3778, 원준 2026-09-09) — 압정 ＋ 와 같은 절대위치 문법, 그 왼쪽 세 번째 자리.
+   손을 얹었을 때만 나타난다: 늘 보이면 «이름을 누르면 저기로 간다»고 읽혀, 접기/펴기라는 이 줄의 본래
+   뜻과 싸운다. 이 셋이 서는 동안 상태 점·개수는 이미 물러나 있으므로(위 :hover .v2-sums) 겹치지 않는다. */
+.v2-pg-row .v2-openb { position: absolute; right: 49px; top: 50%; margin: -9px 0 0; opacity: 1; display: none; }
+.v2-pg-row:hover .v2-openb, .v2-pg-row .v2-openb:focus-visible { display: inline-grid; }
 /* 접힌 묶음 안에 **지금 보고 있는 행**이 있다 — 왼쪽 마디로 남긴다.
    그게 없으면 "지금 보는 화면이 목록에서 사라졌다"는 고장이 된다. */
 .v2-pg-row.act::before { content: ''; position: absolute; left: -1px; top: 6px; bottom: 6px; width: 3px;
@@ -2038,3 +2145,50 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .cn-set-why .v2-ic { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--muted-2); }
 .cn-setlist .cn-set:first-child { border-top: 0; }
 .cn-set-why + .cn-set { border-top: 1px solid var(--line-row); }
+
+/* ── 컴포저 2판(#3778, 2026-09-09) — 여는 곳 두 칸 · 줄 세 칸(폭 = 고른 값) · [⚙] 기본값 · @이름 초대 ──
+   줄 규칙(.v2-run gap / .v2-run-sel max-width)은 위 원래 정의를 여기서 덮는다 — 같은 특이도, 뒤가 이긴다. */
+.v2-dest-grid { display: grid; grid-template-columns: 3fr 2fr; gap: 8px; margin-top: 26px; }
+.v2-dest-grid + .v2-launch { margin-top: 8px; }   /* 두 상자는 한 묶음 — 카드의 26px 는 여기서 걷는다(.v2-dest-wrap 과 같은 규칙) */
+.v2-dest-grid > .v2-dest-wrap { margin-top: 0; min-width: 0; }
+.v2-dest.off { background: var(--bg-tint); border-style: dashed; }
+.v2-dest.off input.v2-dest-in { cursor: default; }
+.v2-run { gap: 0; position: relative; }
+.v2-run-sel { max-width: 240px; }
+.v2-run-sep { flex: none; width: 1px; height: 14px; margin: 0 4px; background: var(--line-net-2); }
+.v2-run-sep[hidden] { display: none; }
+/* 폭 측정용 — 셀렉트와 같은 글꼴·크기여야 잰 값이 맞는다(run-picker.ts fit). */
+.v2-run-measure { position: absolute; left: 0; top: 0; visibility: hidden; white-space: nowrap; pointer-events: none; font: inherit; font-size: 12px; }
+.v2-launch-gear { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px;
+  border: 1px solid var(--line-net); border-radius: 11px; background: transparent; color: var(--muted); cursor: pointer; }
+.v2-launch-gear svg { width: 16px; height: 16px; }
+.v2-launch-gear:hover { color: var(--ink); background: var(--bg-tint); }
+.v2-launch-gear:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.v2-launch-gear:disabled { opacity: .55; cursor: default; }
+/* @이름 목록 — 입력칸 바로 아래에 떠서 뜬다(top 은 run-picker 가 아니라 compose-mention 이 입력칸 좌표로 준다). */
+.v2-mention { position: absolute; left: 12px; right: 12px; z-index: 31; overflow: hidden; border: 1px solid var(--line-net); border-radius: 12px; background: var(--surface);
+  box-shadow: 0 1px 2px rgba(var(--shadow-ink), .04), 0 16px 40px -20px rgba(var(--shadow-ink), .3); }
+.v2-mention[hidden] { display: none; }
+.v2-mention-hd { padding: 8px 13px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted-3); }
+.v2-mention-row { display: flex; align-items: center; gap: 9px; padding: 7px 13px 7px 11px; font-size: 13px; cursor: pointer; }
+.v2-mention-row:hover { background: var(--bg-tint); }
+.v2-mention-row.is-sel { background: var(--blue); color: #fff; }
+.v2-mention-row .n { flex: none; font-weight: 500; }
+.v2-mention-row .k { font-size: 10px; padding: 1px 6px; border-radius: 99px; background: var(--bg-tint-2); color: var(--muted); }
+.v2-mention-row.is-sel .k { background: rgba(255, 255, 255, .22); color: #fff; }
+.v2-mention-row .id { margin-left: auto; font-size: 11px; opacity: .6; }
+.v2-ppl-ava { width: 18px; height: 18px; border-radius: 50%; font-size: 9.5px; flex: none; }
+.pn-att-c.ppl { padding-left: 3px; background: var(--bg-tint-2); border-color: var(--bg-tint-2); color: var(--blue); }
+/* [⚙] 새 세션 기본값 창(session-defaults.ts) — confirmDialog 의 extra 자리 */
+.v2-def { display: flex; flex-direction: column; gap: 8px; text-align: left; }
+.v2-def-lead { margin: 0 0 4px; font-size: 12.5px; color: var(--muted); }
+.v2-def-row { display: grid; grid-template-columns: 96px 1fr; align-items: start; gap: 8px; font-size: 12.5px; }
+.v2-def-row .k { color: var(--muted); padding-top: 7px; }
+.v2-def-row .v { min-width: 0; }
+.v2-def-sel { width: 100%; }
+.v2-def .v2-fine { margin-top: 3px; }
+@media (max-width: 640px) {
+  .v2-dest-grid { grid-template-columns: 1fr; margin-top: 18px; }
+  .v2-launch-gear { width: 38px; height: 38px; }
+  .v2-mention { left: 6px; right: 6px; }
+}

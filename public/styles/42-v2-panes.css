@@ -461,7 +461,14 @@
 .pn-fpre { margin: 0; padding: 10px 11px; width: 300px; height: 246px; overflow: hidden; white-space: pre-wrap; word-break: break-all;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9.5px; line-height: 1.5; color: var(--ink-sub); }
 .pn-fic video { width: 100%; height: 100%; object-fit: cover; background: #000; }
+/* 사무문서 썸네일(#3778) — 표는 종이 위에 작은 격자로, 글은 위 .pn-fpre 를 그대로 쓴다. */
+.pn-fsheet { width: 300px; border-collapse: collapse; table-layout: fixed; font-size: 8.5px; line-height: 1.45; color: var(--ink-sub); }
+.pn-fsheet th, .pn-fsheet td { border: 1px solid var(--line); padding: 2px 4px; text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pn-fsheet th { background: var(--bg-tint); font-weight: 700; }
+.pn-fic.office > img { width: 100%; height: 100%; object-fit: cover; object-position: top center; }
 .pn-fic.text, .pn-fic.pdf, .pn-fic.page, .pn-fic.video { position: relative; }
+.pn-fic.office { position: relative; }
 
 /* ── 웹 · 파일 편집(원준 2026-08-20) ─────────────────────────────────────────── */
 .pn-web, .pn-ed { display: flex; flex-direction: column; min-height: 0; }
@@ -537,6 +544,16 @@ webview.pn-webframe { display: flex; }
    무대를 통째로 쓰는 글칸 하나. 배율 알약은 이때 숨는다(글은 칸 폭에 맞춰 흐르므로 배율이 뜻이 없다).
    글씨는 보기(.pn-ed-pre)와 **같은 고정폭·같은 줄간** — 고치기 전후로 글의 생김새가 바뀌면 안 된다. */
 .pn-ed-stage.edit { overflow: hidden; display: flex; }
+/* ── 뷰어가 공용 렌더러에 맡긴 형식(사무문서·한글·압축·소리·모르는 바이트) (#3778) ────────────────
+   무대가 스스로 구르므로 여기서는 여백과 표 폭만 정한다. 실제 그림은 fp-* (32-file-share.css)가 그린다. */
+.pn-fp { padding: 14px 16px; box-sizing: border-box; }
+.pn-fp-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.pn-fp .fp-table { font-size: 11.5px; }
+.pn-fp .fp-table th, .pn-fp .fp-table td { max-width: 200px; padding: 4px 7px; }
+.pn-fp .fp-code { max-height: none; font-size: 11.5px; }
+.pn-fp .fp-doc { font-size: 13px; }
+.pn-fp .fp-msg { padding: 24px 12px; }
+.pn-fp .fp-audio { width: 100%; }
 .pn-ed-ta { flex: 1; min-width: 0; min-height: 0; width: 100%; margin: 0; padding: 12px 14px; border: 0; resize: none;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6;
   background: var(--surface); color: var(--ink); overflow: auto; tab-size: 2; }

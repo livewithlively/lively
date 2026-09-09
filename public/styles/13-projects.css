@@ -185,6 +185,9 @@
 .proj-mp-hint { font-size: 12.5px; color: var(--muted-2); padding: 2px 0; }
 .proj-mp-ava-sm { width: 20px; height: 20px; font-size: 10px; }
 .proj-mp-chip-name { font-size: 13px; color: var(--ink); }
+/* 후보 무리 머리글 — 프로젝트 세션의 초대칸이 그 프로젝트 팀원을 위로 올릴 때만 나온다(양쪽 다 있을 때). */
+.proj-mp-group { padding: 7px 10px 3px; font-size: 11.5px; font-weight: 600; letter-spacing: .03em; color: var(--muted-head); }
+.proj-mp-group + .proj-mp-row { border-top: none; }
 /* '실행 설정' 접이식 프리셋(#673) — 하네스·모델·effort 를 요약 한 줄로 접어 세로 절약(이전 설정 기억). */
 .term-preset-toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 9px 12px; margin: 14px 0 0; background: var(--bg-tint); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; font: inherit; color: var(--ink); text-align: left; }
 .term-preset-toggle:hover { background: var(--bg-tint-2); }

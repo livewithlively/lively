@@ -685,6 +685,8 @@ test("★ §7 설정이 아무것도 없는 배포의 값 한 벌 — 종전과 
     nodeToken: "",
     attachWorkerK: 0,
     //  #2600 T2 (d) d2 — 새 축 둘. 설정 없음 = 꺼짐·길 없음(셀프호스트엔 브로커가 없다).
+    //  #3797 T7 — 목록 범위. 기본은 `cluster`(종전 동작) — 세션 호스트 env 만 `node` 로 좁힌다.
+    tmuxListScope: "cluster",
     tmuxRoute: "off",
     tmuxShadowSample: 1,
     broker: null,
@@ -764,6 +766,17 @@ test("§d3-2 [T2] on·off 에서 표본은 1(뜻 없음) · shadow 가 on 을 �
   assert.deepEqual(parseTmuxRoute("on"), { mode: "on", sample: 1 });
   assert.deepEqual(parseTmuxRoute(undefined), { mode: "off", sample: 1 });
   assert.equal(computeExecTopology(E({ ...MANAGED, LIVELY_TMUX_ROUTE: "shadow" })).tmuxRoute, "shadow", "🔴 shadow 가 on 으로 읽혔다(코어 경로가 답해 버린다)");
+});
+
+test("★ §T7-1 tmuxListScope — **정확히** `node` 만 좁힌다 · 그 밖은 전부 cluster(게이트웨이 무회귀)", () => {
+  //  관대하게 읽으면 게이트웨이가 조용히 노드 범위로 좁아져 다른 노드 세션이 목록에서 사라진다.
+  const scope = (v: string | undefined): string => computeExecTopology(E({ LIVELY_TMUX_LIST_SCOPE: v })).tmuxListScope;
+  assert.equal(scope("node"), "node");
+  assert.equal(scope(" NODE "), "node", "트림·대소문자는 관대하게(값 자체는 우리가 쓴다)");
+  assert.equal(scope(undefined), "cluster");
+  assert.equal(scope(""), "cluster");
+  assert.equal(scope("cluster"), "cluster");
+  assert.equal(scope("nodes"), "cluster", "비슷한 값은 «좁힘» 이 아니다");
 });
 
 test("§d2-2 broker — 중계 배포에서만 있다: 셀프호스트는 허브 env 가 있어도 null", () => {

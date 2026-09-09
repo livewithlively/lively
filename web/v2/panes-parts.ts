@@ -23,6 +23,7 @@ import { createPreviewKit } from './file-preview.js';
 import type { TabKey } from '../lib/tab-key.js';
 import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
 import { composerAttach } from './compose-attach.js';
+import { composerMention } from './compose-mention.js';
 import { createRunPicker } from './run-picker.js';
 import { spawnSession } from './quick-session.js';
 import { rememberCreated } from './created-cache.js';   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
@@ -211,7 +212,7 @@ function sessionsPart(ctx: PartCtx): Part {
   };
   const ta = el('textarea', {
     class: 'v2-launch-in', rows: '2', 'aria-label': '새 세션에 시킬 일',
-    placeholder: ctx.id > 0 ? '무엇이든 시키세요 — 이 프로젝트에 붙은 새 세션이 열려요.' : '무엇이든 시키세요 — 새 세션이 열려요.',
+    placeholder: (ctx.id > 0 ? '무엇이든 시키세요 — 이 프로젝트에 붙은 새 세션이 열려요.' : '무엇이든 시키세요 — 새 세션이 열려요.') + '\n@이름 을 적으면 그 사람을 이 세션에 초대해요',
   }) as HTMLTextAreaElement;
   const send = el('button', { class: 'btn btn-primary v2-launch-send', type: 'button', title: 'Enter 로도 보낼 수 있어요', onclick: () => void spawn() },
     el('span', { text: '시키기' })) as HTMLButtonElement;
@@ -232,6 +233,9 @@ function sessionsPart(ctx: PartCtx): Part {
   //  공유 폴더로, 없으면(loose 셸) 내 개인 폴더로 올라가고, 절대경로가 첫 지시 꼬리에 실린다.
   const att = composerAttach({ projectId: () => ctx.id, onChanged: () => ctx.onChanged?.(), dead: () => ctx.dead() });
   att.wirePaste(ta);   // ⚠ 여기 한 번만 — newPane 은 다시 그려질 수 있어 거기서 걸면 붙여넣기가 두 벌씩 올라간다
+  // 초대(#3778 @이름) — 홈과 같은 부품(v2/compose-mention.ts). 같은 이유로 입력칸엔 여기 한 번만 건다.
+  const mention = composerMention();
+  mention.wire(ta);
 
   function newPane(): HTMLElement {
     if (!runPicker) runPicker = createRunPicker();
@@ -239,11 +243,11 @@ function sessionsPart(ctx: PartCtx): Part {
       el('div', { class: 'pn-launch' },
         el('h1', { class: 'v2-h1', text: '무엇을 할까요?' }),
         el('p', { class: 'v2-home-sub', text: ctx.id > 0 ? '새 세션이 열려요.' : '프로젝트 없이 새 세션이 열려요.' }),
-        el('div', { class: 'v2-launch' }, ta, att.chips,
-          // 줄 구성은 홈(views.ts)과 같다 — 왼쪽 '무엇으로 열까', 오른쪽 '행동([＋]·[시키기])'.
+        el('div', { class: 'v2-launch' }, ta, att.chips, mention.chips, mention.menu,
+          // 줄 구성은 홈(views.ts)과 같다 — 왼쪽 '무엇으로 열까'(AI·모델·추론), 오른쪽 '행동([⚙]·[＋]·[시키기])'.
           el('div', { class: 'v2-launch-row' },
             el('div', { class: 'v2-launch-ctl' }, runPicker.el),
-            el('div', { class: 'v2-launch-act' }, att.btn, send)), att.fileIn)));
+            el('div', { class: 'v2-launch-act' }, runPicker.gear, att.btn, send)), att.fileIn)));
     att.wireDrop(pane, pane);
     return pane;
   }
@@ -308,8 +312,8 @@ function sessionsPart(ctx: PartCtx): Part {
     // 생성은 **한 곳**에서만 한다(v2/quick-session.ts spawnSession) — 생성 전문 캐시·첫 지시 낙관 렌더·프로젝트
     //  붙이기가 거기 묶여 있다. 여기서 fetch 를 다시 짜면 그 중 하나가 빠진다(실제로 캐시가 빠져 있었다).
     // 첨부는 지시의 꼬리에 절대경로로 적는다 — 세션이 열리자마자 그 파일을 읽을 수 있게(이름은 사람이 알아보는 단서).
-    const prompt = text + att.tail();
-    const made = await spawnSession(prompt, { projectId: ctx.id > 0 ? ctx.id : null, projectName: projectName(), run: runPicker?.value() || null });
+    const prompt = text + mention.tail() + att.tail();
+    const made = await spawnSession(prompt, { projectId: ctx.id > 0 ? ctx.id : null, projectName: projectName(), run: runPicker?.value() || null, invites: mention.invites() });
     sending = false; idle();
     if (!made) { ta.focus(); return; }
     seedSessName(made.id, text);
@@ -317,6 +321,7 @@ function sessionsPart(ctx: PartCtx): Part {
     ctx.onSessionCreated?.(made.session);
     ta.value = ''; ta.style.height = 'auto';
     att.clear();
+    mention.clear();
     ctx.onChanged?.();
     select(made.id);
   }
@@ -1423,11 +1428,25 @@ function viewerPart(ctx: PartCtx): Part {
       }
       return;
     }
-    // 브라우저가 그릴 방법이 없는 형식 — 할 수 있는 것(내려받기)만 정직하게 말한다.
-    showPlain(el('div', { class: 'pn-empty' },
-      pnIcon('doc', 'pn-i big'),
-      el('b', { text: '이 형식은 브라우저에서 볼 수 없어요.' }),
-      el('p', { class: 'pn-fine', text: '파워포인트·워드·엑셀·한글은 브라우저가 그릴 방법이 없습니다. 위 [내려받기]로 원래 앱에서 여세요.' })));
+    //  나머지 전부(사무문서·한글·압축·소리·모르는 바이트)는 **공용 렌더러**에 맡긴다 (#3778).
+    //   종전엔 여기가 "파워포인트·워드·엑셀·한글은 브라우저가 그릴 방법이 없습니다" 한 줄이었는데, 그건
+    //   사실이 아니라 **우리가 안 그렸던 것**이다(zip 을 풀면 워드도 엑셀도 그려지고, 한글은 파일 안에
+    //   제 미리보기를 넣어 둔다). 같은 파일이 화면마다 다르게 열리지 않도록 판정·렌더는 lib/file-preview
+    //   한 자리가 쥔다(#1436) — 이 칸도 그 자리에 붙는다.
+    const { buildFilePreview } = await import('../lib/file-preview.js');
+    const out = await buildFilePreview({
+      name: base(p2),
+      size: list.find((f) => f.path === p2)?.size,
+      fetchView: () => fetch(fileUrl(p2), fetchOpts),
+      fetchDownload: () => fetch(fileUrl(p2) + '&download=1', fetchOpts),
+      cls: { img: 'pn-ed-img', pdf: 'pn-ed-pv' },   // 크기 규칙만 이 칸 것으로 덮는다(fp-* 가 기본)
+      mkBtn: (label, onClick) => el('button', { class: 'pn-web-btn', type: 'button', text: label, onclick: onClick }),
+    }).catch(() => null);
+    if (path !== p2) return;                       // 그 사이 다른 걸 골랐다
+    if (!out) { showPlain(el('p', { class: 'pn-fine', style: 'padding:14px', text: '파일을 읽지 못했어요.' })); return; }
+    //  도장은 잡지 않는다 — 응답을 렌더러가 쥐고 있어 헤더를 볼 수 없다. 자가 비교는 다음 열기부터 선다.
+    shownStamp = '';
+    showPlain(el('div', { class: 'pn-fp' }, ...(out.tools.length ? [el('div', { class: 'pn-fp-tools' }, ...out.tools)] : []), out.body));
   }
 
   if (!(ctx.id > 0)) {

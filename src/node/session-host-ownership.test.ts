@@ -12,7 +12,7 @@
 //  엣지 표는 스크래치패드 `spec.md` 의 10행 — 행마다 시나리오 하나.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { gatewayDefersToSessionHost, sessionHostVerdict } from "./self-node.js";
+import { SESSION_HOST_DEAD_MS, gatewayDefersToSessionHost, sessionHostVerdict } from "./self-node.js";
 
 /** registry 의 `STATE_STALE_MS`(상태 push 3초 기준 신선 임계)와 같은 값을 시험에서도 **명시**한다. */
 const STALE = 12_000;
@@ -51,6 +51,8 @@ test("G6 ★ 노드가 하나도 없으면 종전 그대로", () => {
 });
 
 // ── 여럿이 붙어 있을 때 ──────────────────────────────────────────────────────
+// ⚠ #3797 T7 — 아래 둘은 **선언한 호스트가 하나뿐**인 표라 축이 바뀌어도 답이 같다.
+//  «선언한 호스트가 여럿» 인 표는 V9·V9b·V9c 에 있다(거기서 규칙이 some → every 로 뒤집혔다).
 test("G7 ★ 멤버 PC 노드들 사이에 자격 있는 세션 호스트가 하나 있으면 성립한다", () => {
   assert.equal(gatewayDefersToSessionHost(
     [host({ declared: false }), host({ declared: false, stateAgeMs: 500 }), host()], STALE), true);
@@ -111,8 +113,48 @@ test("V8 ★ 섞이면 **선언한 쪽이 사유를 정한다** — 미선언 �
   assert.equal(why([host({ declared: false, online: true }), host({ declared: true, online: false })]), "offline");
 });
 
-test("V9 자격 있는 하나가 있으면 나머지가 낡아도 ok", () => {
-  assert.equal(why([host({ stateAgeMs: STALE + 5_000 }), host()]), "ok");
+test("★★ V9 (#3797 T7 로 뒤집혔다) 선언된 호스트가 **하나라도** 낡았으면 놓지 않는다 — 부분 관측", () => {
+  //  ── 왜 뒤집혔나 ────────────────────────────────────────────────────────────
+  //  d4~d6 에서 세션 호스트 하나는 **클러스터 전역** 목록을 주장했다(브로커 `/lvly/sessions` 가 다른 산
+  //   노드로 팬아웃한다). 그래서 «자격 있는 하나» 면 그 하나가 전부를 답했고 `some` 이 맞았다.
+  //  T7 이 각 호스트를 **자기 노드로** 좁힌다. 그 순간 스냅샷은 **부분 관측**이 되고, 하나가 낡으면
+  //   그 노드의 세션이 목록에서 통째로 빠진다 — 그런데 게이트웨이는 «누가 답했으니 됐다» 로 손을 뗀 뒤다.
+  //  ⇒ 모든 선언 호스트가 자격일 때만 놓는다. 아니면 종전대로 게이트웨이가 답한다(fail-closed).
+  assert.equal(why([host({ stateAgeMs: STALE + 5_000 }), host()]), "stale",
+    "🔴 낡은 호스트가 있는데 소유를 놓았다 — 그 노드 세션이 목록에서 사라진다");
+});
+
+test("★★ V9b 선언된 호스트가 **하나라도** 오프라인이면 놓지 않는다", () => {
+  assert.equal(why([host({ online: false }), host()]), "offline");
+});
+
+test("★ V9c 선언된 호스트가 **전부** 자격이면 놓는다 — (노드, 테넌트) 축의 정상 상태", () => {
+  //  노드 둘이 그 테넌트를 서빙하면 호스트도 둘이다. 둘 다 신선하면 두 스냅샷의 **합집합**이 곧 전체다
+  //   (`registry.nodeSessionsFor` 가 노드마다 이어붙인다 · `session-merge` 가 중복 id 를 접는다).
+  assert.deepEqual(sessionHostVerdict([host(), host({ stateAgeMs: 200 })], STALE), { owns: true, why: "ok" });
+});
+
+test("★ V9d 미선언 노드는 자격을 묻지 않는다 — 멤버 PC 가 오프라인이어도 소유는 넘어간다", () => {
+  //  `every` 가 «스코프의 모든 노드» 로 새면 멤버 PC 노드 하나가 꺼진 순간 소유가 영영 안 넘어간다.
+  assert.equal(why([host({ declared: false, online: false, stateAgeMs: null }), host()]), "ok");
+});
+
+// ── ★★ 죽은 호스트 지평선(#3797 T7) ────────────────────────────────────────
+test("★★ V11 회수된 노드의 행(하루 넘게 소식 없음)은 판정에서 **빠진다** — 소유를 영영 붙들지 않게", () => {
+  //  T7 의 `every` 만 두면 ASG 가 갈아치운 노드의 `sesshost-*` 행 하나가 그 테넌트의 소유를 영구히 막는다.
+  //  노드 행은 시간이 갈수록 쌓이므로(실측: nodes 3행 중 2행이 48시간 안에 생겼다) 그건 악화하는 부류다.
+  const dead = host({ online: false, stateAgeMs: SESSION_HOST_DEAD_MS + 1 });
+  assert.deepEqual(sessionHostVerdict([dead, host()], STALE), { owns: true, why: "ok" });
+});
+
+test("★ V12 경계는 **포함**이다 — 정확히 deadMs 면 아직 «죽지 않았다»(그래서 막는다)", () => {
+  const edge = host({ online: false, stateAgeMs: SESSION_HOST_DEAD_MS });
+  assert.equal(sessionHostVerdict([edge, host()], STALE).why, "offline");
+});
+
+test("★★ V13 **전부** 죽었으면 소유를 놓지 않는다(undeclared) — 살아 있는 주인이 0인데 손을 떼면 목록이 빈다", () => {
+  const dead = host({ online: false, stateAgeMs: SESSION_HOST_DEAD_MS + 1 });
+  assert.deepEqual(sessionHostVerdict([dead, dead], STALE), { owns: false, why: "undeclared" });
 });
 
 test("V10 ★ 답은 언제나 종전 술어와 같다 — 사유를 붙이면서 판정이 바뀌면 안 된다", () => {
@@ -121,6 +163,9 @@ test("V10 ★ 답은 언제나 종전 술어와 같다 — 사유를 붙이면�
     [host({ stateAgeMs: null })], [host({ stateAgeMs: STALE + 1 })], [host({ stateAgeMs: STALE })],
     [host({ declared: false, online: true }), host({ declared: true, online: false })],
     [host({ stateAgeMs: STALE + 5_000 }), host()],
+    [host(), host({ stateAgeMs: 200 })],
+    [host({ online: false }), host()],
+    [host({ declared: false, online: false, stateAgeMs: null }), host()],
   ];
   for (const r of rows) {
     assert.equal(sessionHostVerdict(r, STALE).owns, gatewayDefersToSessionHost(r, STALE), JSON.stringify(r));
