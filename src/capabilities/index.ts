@@ -6,6 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveUser, requireScope } from "../context.js";
 import { viewerOf } from "./principal.js";
+import { assertRequestEnumParity } from "../http/rest-util.js";
 import { requireAppTool, requireAppToolMcp, appMcpHidden } from "../apps/principal.js";
 import { agentFromExtra, sessionFromExtra, readOnlyFromExtra } from "../org/auth/agent-identity.js";
 import { contextCapabilities, repoBranchCapabilities } from "./context.js";
@@ -304,11 +305,27 @@ export function buildToolCandidates(): ToolCandidate[] {
 }
 
 // REST 어댑터 입력 — web.ts 가 순회하며 동일 경로(+alias)에 마운트한다.
+//  parse 산출은 여기서 한 번 더 zod input 의 enum 선언에 비춰 검증한다(assertEnumParity) — MCP 는 SDK 가
+//  z.object(cap.input) 로 이미 거르는 판정이라, 이 자리가 REST 쪽 짝이다. 마운트 전 공용 지점에 두는 게
+//  핵심이다: 각 parse 의 손베낀 화이트리스트에 맡기면 새 enum 필드가 그 목록에서 빠지는 걸 아무도 못 막는다
+//  (실측 갭 ~100 필드 — knowledge_save.type 은 DB 제약까지 새어 500 이 나갔다).
 export function restMounts(): { cap: Capability; mount: RestMount }[] {
   const out: { cap: Capability; mount: RestMount }[] = [];
   for (const cap of registry.values()) {
     if (!cap.expose.rest) continue;
-    for (const mount of cap.expose.rest) out.push({ cap, mount });
+    for (const mount of cap.expose.rest) out.push({ cap, mount: guardEnumParity(cap, mount) });
   }
   return out;
+}
+
+/** mount.parse 를 감싸 산출을 cap.input(zod) 의 enum 선언으로 검증한다. 원 mount 는 불변(테스트·R4 관측이 원본을 본다). */
+function guardEnumParity(cap: Capability, mount: RestMount): RestMount {
+  return {
+    ...mount,
+    parse: (req) => {
+      const input = mount.parse(req);
+      assertRequestEnumParity(cap.input ?? {}, req, input);
+      return input;
+    },
+  };
 }

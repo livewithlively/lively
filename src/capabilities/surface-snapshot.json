@@ -2506,7 +2506,7 @@
   "rest": [
    "POST /api/ui/knowledge"
   ],
-  "input_hash": "0e11f6d12b703437"
+  "input_hash": "bde5f7ca2b43ccf6"
  },
  {
   "name": "knowledge_set_lifecycle",

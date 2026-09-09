@@ -40,6 +40,13 @@ const knowledgeSaveInput = {
   body_md: z.string().max(BODY_MD_MAX).optional()
     .describe("본문 전문(mode 미지정·replace 필수). **mode='append' 면 전문이 아니라 기존 본문 끝에 덧붙일 '조각'** · **mode='edit' 면 보내지 않는다**(edits 로 지정)."),
   provenance: z.enum(["authored", "observed"]).optional(),
+  // #335 지식의 injection 은 서버 고정값(recalled)이다 — 저작자가 못 정한다. 그런데 종전엔 **선언에도 없고
+  //  parse 도 안 실어** 그 입력이 조용히 사라졌다: `injection:"always"` 를 보낸 저장이 200 으로 성공하고
+  //  값만 없어진다(실측 2026-09-08). 500 보다 나쁘다 — 잘못된 입력이 성공으로 기록되고 호출자는 자기 지정이
+  //  먹혔다고 믿는다. 그래서 '유일 허용값' enum 으로 선언에 남긴다: MCP 는 SDK 가, REST 는 enum 파리티
+  //  가드가 같은 판정을 내리고(둘 다 400), 이유는 아래 안내문 하나에서 나온다.
+  injection: z.enum(["recalled"]).optional()
+    .describe("지식은 항상 recalled 고정이라 저작자가 지정할 수 없다(#335) — 보내지 않는 것이 정상이고, 보낸다면 recalled 만 허용된다. '세션마다 항상 주입'은 관리 ▸ 세션 주입 섹션 문서(org_update_section)로, WIKI 인덱스 핀은 knowledge_set_wiki 로 지정한다."),
   lifecycle: z.enum(["active", "pending"]).optional()
     .describe("#638 자동 인입(distill 등)이 검토대기로 저장할 때 pending — 기본 목록·검색·주입에서 격리(승인=set_lifecycle active). 미지정=active(사람 저작 기본). superseded/archived 는 set_lifecycle 로만."),
   supersedes: z.string().optional()
