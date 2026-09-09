@@ -12,14 +12,16 @@
 //  가고, 줄에는 세션마다 실제로 바꾸는 셋 — AI · 모델 · 추론강도 — 만 남는다. 값은 run-prefs.ts 가 한 곳에서 읽는다.
 //
 //  ── 칸 폭 = 고른 값(#3778) ──
-//  <select> 의 폭은 브라우저가 **가장 긴 선택지**로 정한다. 그래서 «Opus 4.5» 를 골라도 칸은 «모델 · AI 기본값» 만큼이고,
+//  <select> 의 폭은 브라우저가 **가장 긴 선택지**로 정한다. 그래서 «Opus 4.5» 를 골라도 칸은 가장 긴 선택지만큼이고,
 //  글자와 ▾ 사이 빈칸이 칸마다 달라 줄이 들쭉날쭉했다(원준 2026-09-09 실측 — 여백 CSS 로는 안 고쳐진다). 그래서 고른
 //  option 의 글자를 같은 글꼴의 숨은 span 으로 재서 폭을 직접 준다(fit). 칸 사이는 gap 이 아니라 가는 세로선이 경계를 말한다.
 //  세 칸의 문구는 모두 «축 · 값» 이다(제공자 칸은 «회사 · 도구» 가 곧 그 형식이다).
 //
 //  ── 기본값 = 직전 세팅 ──
 //  제공자·모델·추론강도의 기본은 **내가 지난번에 고른 값**이다 — 클래식 '새 AI 세션' 폼과 같은 localStorage 키
-//  (run-prefs.ts). 빈 값은 **'AI 기본값'** — 그 플래그를 아예 안 넘겨 그 AI 가 자기 설정으로 뜬다는 뜻이다.
+//  (run-prefs.ts). 고른 적이 없으면 **서버 카탈로그가 선언한 기본값**을 골라 둔다(#3778) — 화면에 보이는 값이 곧 그
+//  세션이 열리는 값이다. 종전엔 빈 값이 골라져 «AI 기본값» 이라고만 적혔는데, 그 실제 값은 격리 계정 홈에 있어 화면이
+//  읽을 수 없다 — «알 수 없음» 을 «기본값» 이라 적고 있었다(원준 2026-09-09 «기본값이 뭔지 사용자가 알 수가 없잖아»).
 //
 //  ── 소비자 ──
 //  홈 입력창(v2/views.ts) · 프로젝트 새 세션 자리(v2/panes-parts.ts) · 프로젝트 '클로드로 실행' 기본값(projects/selection.ts) ·
@@ -120,12 +122,18 @@ export function runMembers(): Promise<MentionMember[]> { return loadConfig().the
 export const findHarness = (hs: RunHarness[], key: string): RunHarness | null => hs.find((h) => h.key === key) || null;
 export const flagChoices = (h: RunHarness | null, name: string): string[] =>
   ((h && h.flags) || []).find((f) => f.name === name)?.choices?.filter(Boolean) ?? [];
+/** 그 축의 **기본값**(서버 카탈로그가 선언한 것) — 화면은 이 값을 골라 두고 그대로 넘긴다(#3778). 없으면 ''. */
+export const flagDefault = (h: RunHarness | null, name: string): string => {
+  const f = ((h && h.flags) || []).find((x) => x.name === name);
+  const d = String((f && f.default) || '');
+  return d && (f?.choices || []).includes(d) ? d : '';
+};
 export const effortChoices = (h: RunHarness | null, model: string): string[] => {
   const scoped = h?.effortsByModel?.[model];
   return Array.isArray(scoped) ? scoped : flagChoices(h, '--effort');
 };
 
-/** 지금 고른 값 + 기본값 창의 넷 — 생성 바디로 간다. flags 는 **빈 값을 뺀다**(안 넘기는 게 'AI 기본값'). node='' = 중앙 컴퓨터. */
+/** 지금 고른 값 + 기본값 창의 넷 — 생성 바디로 간다. flags 는 **빈 값을 뺀다**(빈 값 = 그 축을 안 넘긴다). node='' = 중앙 컴퓨터. */
 export interface RunPick {
   harness: string; flags: Record<string, string>; node: string;
   mode: 'normal' | 'readonly' | 'incognito'; autoApprove: boolean; writeVis: string;
@@ -217,7 +225,9 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
     const choices = name === '--effort' ? effortChoices(cur(), modelSel.value) : flagChoices(cur(), name);
     box.hidden = !choices.length;
     if (!choices.length) return;
-    const want = box.value || String(savedFlags[name] || '');
+    // 고른 적이 없으면 **카탈로그가 선언한 기본값**을 골라 둔다(#3778) — 보이는 값이 곧 열리는 값이다.
+    //  ⚠ 이 값은 기억에 저장하지 않는다(changed() 는 사람이 만진 축만 저장) — 카탈로그가 기본을 올리면 따라온다.
+    const want = box.value || String(savedFlags[name] || '') || flagDefault(cur(), name);
     box.replaceChildren(el('option', { value: '' }, emptyText), ...choices.map((c) => el('option', { value: c }, label(c))));
     box.value = choices.includes(want) ? want : '';
   }
@@ -242,9 +252,9 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
     provSel.replaceChildren(...list.map((h) => el('option', { value: h.key }, providerLabel(h) + ' · ' + h.label)));
     provSel.value = harnessKey;
     // 문구는 셋 다 «축 · 값». 모델은 다듬어 적는다(prettyModel) — 'claude-opus-4-5-20251101' 은 칸을 통째로 먹고도 안 보인다.
-    //  안 넘기는 값(빈 값)은 **AI 기본값** — 세션 머리줄과 같은 말이다.
-    paintFlag(modelSel, '--model', '모델 · AI 기본값', (v) => '모델 · ' + prettyModel(v));
-    paintFlag(effortSel, '--effort', '추론 · AI 기본값', (v) => '추론 · ' + effortKo(v));
+    //  빈 값('AI 설정 그대로')은 이제 **사람이 일부러 고르는 선택지**다 — 그 축을 안 넘겨 그 AI 계정의 저장된 설정을 따른다.
+    paintFlag(modelSel, '--model', '모델 · AI 설정 그대로', (v) => '모델 · ' + prettyModel(v));
+    paintFlag(effortSel, '--effort', '추론 · AI 설정 그대로', (v) => '추론 · ' + effortKo(v));
     fit();
   }
   const changed = (): void => {
@@ -254,7 +264,7 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
     opts?.onChange?.(pick());
   };
   provSel.addEventListener('change', () => { harnessKey = provSel.value; modelSel.value = ''; effortSel.value = ''; paint(); changed(); });
-  modelSel.addEventListener('change', () => { paintFlag(effortSel, '--effort', '추론 · AI 기본값', (v) => '추론 · ' + effortKo(v)); changed(); });
+  modelSel.addEventListener('change', () => { paintFlag(effortSel, '--effort', '추론 · AI 설정 그대로', (v) => '추론 · ' + effortKo(v)); changed(); });
   effortSel.addEventListener('change', changed);
 
   const pick = (): RunPick => {
