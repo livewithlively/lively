@@ -439,7 +439,14 @@ function connect(): void {
     if (ws.readyState !== WebSocket.OPEN) return;
     try {
       // 리소스 상시 노출(§10) + 세션 스냅샷. res 는 매 push 변하므로 dedup 은 세션 부분만 본다.
-      const [sessions, res] = await Promise.all([listSessionsRaw(), sampleResources(sharedRoot().base)]);
+      //  ★ **strict** 다 (#2600 T2 d6). 이 목록은 게이트웨이가 «그 테넌트를 이 호스트에게 맡겨도 되나» 를
+      //   판정하는 입력이다(`gatewayDefersToSessionHost`: 선언·온라인·**신선한 스냅샷**). strict 가 아니면
+      //   `collectSessions` 가 «못 봤다»(중계 끊김·소켓 부재·타임아웃)를 **빈 배열로 접어** 올리고, 게이트웨이는
+      //   그 빈 스냅샷을 «신선하다» 고 읽어 목록 소유를 넘긴다 — 그 순간 그 테넌트 목록이 통째로 빈다.
+      //   서버 부재(«확답으로 없음»)는 strict 여도 빈 배열이라, 세션이 정말 0개인 노드는 종전 그대로다.
+      //  ⇒ 못 봤으면 **아무것도 올리지 않는다.** 스냅샷이 낡으면 게이트웨이가 스스로 소유를 되찾는다(fail-closed).
+      //   이 레포가 반복해 못박은 «못 봤다 ≠ 없다» 교리(#835·#1251·#2154·#2544)의 이 자리 판이다.
+      const [sessions, res] = await Promise.all([listSessionsRaw({ strict: true }), sampleResources(sharedRoot().base)]);
       const sesKey = JSON.stringify(sessions);
       const skip = !force && sesKey === lastPushed && trackedTasks.size === 0;
       lastPushed = sesKey;
@@ -453,6 +460,9 @@ function connect(): void {
       }
     } catch (err) {
       // 다음 주기에 재시도 — 조용히 삼키면 배치 불가 원인을 못 찾는다(e2e 교훈: freemem 과소보고 진단 지연).
+      //  ★ 이 catch 가 곧 **fail-closed** 다 (#2600 T2 d6): 세션 목록을 «못 봤다» 면 여기로 떨어져
+      //   **아무것도 올리지 않는다** → 게이트웨이의 스냅샷이 낡는다 → 소유 판정이 거짓이 된다 → 게이트웨이가
+      //   목록을 다시 쥔다. 빈 배열을 올리는 것이 아니라 **안 올리는 것**이 이 자리의 안전한 쪽이다.
       logger.warn({ err: (err as Error)?.message }, "상태 push 실패(비치명)");
     }
   };
