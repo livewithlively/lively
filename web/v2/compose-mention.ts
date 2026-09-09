@@ -1,7 +1,9 @@
 // v2/compose-mention.ts — 새 세션 컴포저의 **@이름 초대**(#3778, 원준 2026-09-09) 화면 부품. 글자 규칙은 mention-text.ts.
 //
 //  홈(v2/views.ts)과 프로젝트 칸(v2/panes-parts.ts)이 첨부(compose-attach.ts)와 똑같이 **한 모듈**을 나눠 쓴다.
-//  · 입력칸에 `@` 를 치면 구성원 목록이 입력칸 바로 아래에 뜬다(슬랙과 같은 감) — ↑↓ 로 고르고 Enter/Tab 으로 정한다.
+//  · 입력칸에 `@` 를 치면 구성원 목록이 **그 @ 글자 바로 아래**에 작게 뜬다(슬랙과 같은 감) — ↑↓ 로 고르고 Enter/Tab 으로 정한다.
+//    2판(원준 2026-09-09 «드롭다운이 너무 크고 위치가 어색»): 카드 폭을 다 먹던 상자 → 폭 280 의 작은 목록, 머리글 없음,
+//    자리는 입력칸 아래가 아니라 치고 있는 @ 의 좌표(숨은 거울 div 로 잰다 — textarea 는 글자 좌표를 안 준다).
 //  · 고르면 치던 `@윤` 은 글에서 사라지고, 그 사람은 **아래 칩 줄에만** 선다(원준: 본문에 @이름 을 남기지 마라).
 //  · 보낼 때 invites() 를 생성 바디에, tail() 을 지시 꼬리에 싣는다. clear() 는 보낸 뒤.
 //  구성원 목록은 /terminal/config 의 members(run-picker.ts 가 이미 받아 둔 응답)라 요청이 늘지 않는다.
@@ -12,7 +14,7 @@ import { mentionMatches, mentionQuery, mentionTail, removeMentionQuery, type Men
 export interface ComposerMention {
   /** 사람 칩 줄 — 첨부 칩 줄 옆(아래)에 둔다. 비면 숨김. */
   chips: HTMLElement;
-  /** 후보 목록 — 카드(.v2-launch, position:relative) 안에 붙인다. 입력칸 바로 아래에 떠서 뜬다. */
+  /** 후보 목록 — 카드(.v2-launch, position:relative) 안에 붙인다. 치고 있는 @ 글자 바로 아래에 작게 뜬다. */
   menu: HTMLElement;
   /** 입력칸에 건다 — **입력칸당 한 번만**. */
   wire(ta: HTMLTextAreaElement): void;
@@ -22,6 +24,29 @@ export interface ComposerMention {
   tail(): string;
   /** 보낸 뒤 비운다. */
   clear(): void;
+}
+
+/**
+ * 입력칸 안 어느 글자 위치(index)의 좌표 — 카드(offsetParent) 기준 px. textarea 는 글자 좌표를 안 주므로 같은 글꼴·폭의
+ * 숨은 거울 div 에 그 앞 글을 넣고 표식 span 의 자리를 읽는다. 줄바꿈·자동 줄바꿈이 같아야 하므로 폭·패딩·글꼴을 그대로 베낀다.
+ */
+function charPos(ta: HTMLTextAreaElement, index: number): { left: number; top: number; line: number } {
+  const cs = getComputedStyle(ta);
+  const m = document.createElement('div');
+  for (const k of ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight', 'letterSpacing', 'textIndent', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'borderTopWidth', 'borderLeftWidth', 'boxSizing', 'tabSize'] as const) {
+    (m.style as any)[k] = (cs as any)[k];
+  }
+  m.style.position = 'absolute'; m.style.visibility = 'hidden'; m.style.pointerEvents = 'none';
+  m.style.left = ta.offsetLeft + 'px'; m.style.top = ta.offsetTop + 'px';
+  m.style.width = ta.clientWidth + 'px'; m.style.whiteSpace = 'pre-wrap'; m.style.overflowWrap = 'break-word'; m.style.wordBreak = cs.wordBreak;
+  m.textContent = ta.value.slice(0, index);
+  const mark = document.createElement('span'); mark.textContent = '\u200b';
+  m.append(mark);
+  (ta.offsetParent || ta.parentElement || document.body).append(m);
+  const line = mark.offsetHeight || parseFloat(cs.lineHeight) || 20;
+  const out = { left: ta.offsetLeft + mark.offsetLeft - ta.scrollLeft, top: ta.offsetTop + mark.offsetTop - ta.scrollTop, line };
+  m.remove();
+  return out;
 }
 
 export function composerMention(): ComposerMention {
@@ -48,14 +73,19 @@ export function composerMention(): ComposerMention {
     if (!ta) return;
     const q = mentionQuery(ta.value, ta.selectionStart ?? ta.value.length);
     if (q === null || !members.length) { closeMenu(); return; }
-    picks = mentionMatches(members, q, { meId: meId(), exclude: new Set(chosen.map((m) => m.id)) });
+    picks = mentionMatches(members, q, { meId: meId(), exclude: new Set(chosen.map((m) => m.id)), limit: 6 });
     if (!picks.length) { closeMenu(); return; }
     sel = Math.min(sel, picks.length - 1);
-    // 입력칸 바로 아래 — 카드가 offsetParent(position:relative)라 입력칸 좌표를 그대로 쓴다.
-    menu.style.top = (ta.offsetTop + ta.offsetHeight + 2) + 'px';
+    // 치고 있는 @ 글자 바로 아래, 왼쪽을 그 글자에 맞춘다(카드가 offsetParent). 오른쪽으로 넘치면 카드 안으로 당긴다.
+    const caret = ta.selectionStart ?? ta.value.length;
+    const at = ta.value.lastIndexOf('@', caret - 1);
+    const pos = charPos(ta, Math.max(0, at));
+    const host = (ta.offsetParent as HTMLElement | null);
+    const room = host ? host.clientWidth : ta.clientWidth;
+    menu.style.top = (pos.top + pos.line + 4) + 'px';
+    menu.style.left = Math.max(8, Math.min(pos.left, room - 288)) + 'px';
     menu.hidden = false;
     menu.replaceChildren(
-      el('div', { class: 'v2-mention-hd', text: q ? '초대할 사람' : '@ 뒤에 이름을 치면 좁혀져요' }),
       ...picks.map((m, i) => el('div', {
         class: 'v2-mention-row' + (i === sel ? ' is-sel' : ''), role: 'option',
         //  ⚠ mousedown 으로 받는다 — click 은 blur 뒤에 와서 입력칸이 이미 포커스를 잃는다.

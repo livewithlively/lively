@@ -2183,18 +2183,18 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-launch-gear:hover { color: var(--ink); background: var(--bg-tint); }
 .v2-launch-gear:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
 .v2-launch-gear:disabled { opacity: .55; cursor: default; }
-/* @이름 목록 — 입력칸 바로 아래에 떠서 뜬다(top 은 run-picker 가 아니라 compose-mention 이 입력칸 좌표로 준다). */
-.v2-mention { position: absolute; left: 12px; right: 12px; z-index: 31; overflow: hidden; border: 1px solid var(--line-net); border-radius: 12px; background: var(--surface);
-  box-shadow: 0 1px 2px rgba(var(--shadow-ink), .04), 0 16px 40px -20px rgba(var(--shadow-ink), .3); }
+/* @이름 목록(2판) — 치고 있는 @ 글자 바로 아래, 폭 280 의 작은 목록(top/left 는 compose-mention 이 글자 좌표로 준다). 머리글 없음. */
+.v2-mention { position: absolute; width: 280px; max-width: calc(100% - 16px); z-index: 31; overflow: hidden; padding: 4px; border: 1px solid var(--line-net); border-radius: 10px; background: var(--surface);
+  box-shadow: 0 1px 2px rgba(var(--shadow-ink), .05), 0 10px 28px -12px rgba(var(--shadow-ink), .28); }
 .v2-mention[hidden] { display: none; }
-.v2-mention-hd { padding: 8px 13px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted-3); }
-.v2-mention-row { display: flex; align-items: center; gap: 9px; padding: 7px 13px 7px 11px; font-size: 13px; cursor: pointer; }
+.v2-mention-row { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 3px 8px; border-radius: 7px; font-size: 13px; line-height: 1.3; cursor: pointer; }
 .v2-mention-row:hover { background: var(--bg-tint); }
 .v2-mention-row.is-sel { background: var(--blue); color: #fff; }
-.v2-mention-row .n { flex: none; font-weight: 500; }
+.v2-mention-row .n { flex: none; font-weight: 600; }
 .v2-mention-row .k { font-size: 10px; padding: 1px 6px; border-radius: 99px; background: var(--bg-tint-2); color: var(--muted); }
 .v2-mention-row.is-sel .k { background: rgba(255, 255, 255, .22); color: #fff; }
-.v2-mention-row .id { margin-left: auto; font-size: 11px; opacity: .6; }
+.v2-mention-row .id { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; opacity: .6; }
+.v2-mention-row .v2-ppl-ava { width: 20px; height: 20px; font-size: 10px; }
 .v2-ppl-ava { width: 18px; height: 18px; border-radius: 50%; font-size: 9.5px; flex: none; }
 .pn-att-c.ppl { padding-left: 3px; background: var(--bg-tint-2); border-color: var(--bg-tint-2); color: var(--blue); }
 /* [⚙] 새 세션 기본값 창(session-defaults.ts) — ov-back/ov-box 위에 직접 짠 창(2판, 원준 2026-09-09).
@@ -2231,6 +2231,6 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 @media (max-width: 640px) {
   .v2-dest-grid { grid-template-columns: 1fr; margin-top: 18px; }
   .v2-launch-gear { width: 38px; height: 38px; }
-  .v2-mention { left: 6px; right: 6px; }
+  .v2-mention { left: 6px !important; width: calc(100% - 12px); max-width: none; }
   .v2-seg { grid-auto-flow: row; grid-auto-columns: auto; }
 }
