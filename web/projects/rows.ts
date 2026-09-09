@@ -434,7 +434,7 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
   pjvRegisterProjList(p.id, p.list_id);   // #731 이 프로젝트의 태스크 행이 소속 리스트 커스텀 상태를 쓰게 등록.
   const isDone = p.status === 'done';
   const selectable = !!select && canDelete(p);
-  const wrap = el('div', { class: 'pjv-trow-wrap pjv-proj-wrap', 'data-proj-id': p.id, 'data-proj-name': p.name || '' });
+  const wrap = el('div', { class: 'pjv-trow-wrap pjv-proj-wrap', 'data-proj-id': p.id, 'data-proj-name': p.name || '', 'data-ctx': 'pboard' });   // data-ctx: #3784 우클릭 메뉴 표
 
   // 폴더로 드래그(#454) — 선택(일괄) 모드가 아닐 때만. 체크박스·캐럿·버튼·제목링크 등 상호작용 요소에서 시작한
   //  드래그는 취소(칠하기-선택·클릭 유지). 폴더(사이드바 항목·인라인 그룹 헤더)가 드롭 타깃(pjvFolderDrag).
@@ -564,7 +564,7 @@ function pjvProjTaskRow(projectId, t, members, reload, depth, boardFields) {
   boardFields = boardFields || [];
   const subs = t.subtasks || [];
   const isDone = t.status === 'done';
-  const wrap = el('div', { class: 'pjv-trow-wrap', 'data-task-id': t.id, 'data-task-name': t.name || t.title || '', 'data-task-level': t.level || 'task' });
+  const wrap = el('div', { class: 'pjv-trow-wrap', 'data-task-id': t.id, 'data-task-name': t.name || t.title || '', 'data-task-level': t.level || 'task', 'data-ctx': 'ptask' });   // data-ctx: #3784 우클릭 메뉴 표
 
   let open = false;
   const caret = subs.length

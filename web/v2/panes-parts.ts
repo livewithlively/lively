@@ -18,7 +18,7 @@ import { hasBrowserSurface } from './browser-surface.js';
 import { EMBEDDED } from './embed.js';
 import { normWebUrl } from './web-url.js';
 import { filesPart } from './panes-files.js';
-import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, authHeaders, kindOf, knTitle, pnIcon, pnNote } from './panes-kit.js';
+import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, authHeaders, kindOf, knTitle, openInViewerPart, pnIcon, pnNote } from './panes-kit.js';
 import { createPreviewKit } from './file-preview.js';
 import type { TabKey } from '../lib/tab-key.js';
 import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
@@ -30,6 +30,8 @@ import { sessText } from './side.js';
 import { listSessionApps, openAppSession } from './app-session.js';
 import { openInstalledApp } from './app-instance.js';
 import { type Sess, type V2Data } from './views.js';
+import { bindCtx, requestOpenRoute } from './ctx-registry.js';   // #3784 곁칸 부품 우클릭 메뉴
+import { copyText } from './ctx-menu.js';
 
 // 아이콘은 곁칸 곳곳(panes.ts · proj-settings.ts)이 여기서 받아 왔다 — 잎으로 옮긴 뒤에도 그 자리를 유지한다.
 export { pnIcon } from './panes-kit.js';
@@ -390,6 +392,20 @@ function knowledgePart(ctx: PartCtx): Part {
       }, pnIcon('doc', 'pn-i sm'),
         el('span', { class: 'n ell1', text: knTitle(k.title, k.name) }),
         el('span', { class: 'pn-knrel' + (k.rel === '산출' ? ' prod' : ''), text: k.rel }));
+      // #3784 우클릭 — 요약(그 자리) · 위키에서 열기 · 새 탭 · 제목/이름/링크 복사
+      const href = '#/k/' + encodeURIComponent(k.name);
+      bindCtx(row, () => ({
+        title: knTitle(k.title, k.name), sub: `${k.rel} 지식` + (k.type ? ' · ' + k.type : ''),
+        rows: [
+          { label: '요약 보기', icon: 'eye', hint: '이 자리에서', run: () => void openKnModal(k) },
+          { label: '위키에서 열기', icon: 'wiki', run: () => requestOpenRoute(href) },
+          { label: '새 탭에서 열기', icon: 'columns', run: () => requestOpenRoute(href, true) },
+          { sep: true, label: '' },
+          { label: '제목 복사', icon: 'copy', run: () => void copyText(k.title || k.name).then((ok) => { if (ok) toast('복사했어요'); }) },
+          { label: '지식 이름 복사', icon: 'copy', hint: k.name.length > 18 ? k.name.slice(0, 18) + '…' : k.name, run: () => void copyText(k.name).then((ok) => { if (ok) toast('복사했어요'); }) },
+          { label: '링크 복사', icon: 'link', run: () => void copyText(new URL(href, location.href).toString()).then((ok) => { if (ok) toast('링크를 복사했어요'); }) },
+        ],
+      }));
       return row;
     }));
   }
@@ -462,7 +478,7 @@ function tasksPart(ctx: PartCtx): Part {
       el('div', { class: 'pn-head' }, el('span', { class: 'pn-fine', text: `${done}/${tasks.length} 끝냈어요` })),
       el('div', { class: 'pn-tlist' }, ...tasks.map((t) => {
         const isDone = t.status_category === 'done';
-        return el('div', { class: 'pn-trow' + (isDone ? ' done' : '') },
+        const trow = el('div', { class: 'pn-trow' + (isDone ? ' done' : '') },
           el('button', {
             class: 'pn-tcheck' + (isDone ? ' on' : ''), type: 'button',
             'aria-pressed': String(isDone), title: isDone ? '아직 안 끝난 것으로 되돌립니다' : '끝냈다고 표시합니다',
@@ -473,6 +489,17 @@ function tasksPart(ctx: PartCtx): Part {
             },
           }),
           el('span', { class: 'n ell2', title: t.name, text: t.name || '이름 없는 할 일' }));
+        // #3784 우클릭 — 끝냄 토글 · 보드에서 보기 · 이름 복사
+        bindCtx(trow, () => ({
+          title: String(t.name || '할 일'), sub: isDone ? '끝냄' : '진행 중',
+          rows: [
+            { label: isDone ? '아직 안 끝난 것으로' : '끝냈다고 표시', icon: 'check', checked: isDone || undefined, run: () => (trow.querySelector('.pn-tcheck') as HTMLButtonElement | null)?.click() },
+            { label: '보드에서 보기', icon: 'proj', off: !(ctx.id > 0), run: () => requestOpenRoute('#/projects2/p/' + ctx.id) },
+            { sep: true, label: '' },
+            { label: '이름 복사', icon: 'copy', run: () => void copyText(String(t.name || '')).then((ok) => { if (ok) toast('복사했어요'); }) },
+          ],
+        }));
+        return trow;
       })));
   }
   paint();
@@ -584,7 +611,7 @@ function archivePart(ctx: PartCtx): Part {
       const t = sessText(s, '').main || s.id;
       const busy = workingId === s.id;
       const keep = canRestore(s);
-      return el('div', { class: 'pn-arow' + (busy ? ' busy' : '') },
+      return el('div', { class: 'pn-arow' + (busy ? ' busy' : ''), 'data-ctx': 'session', 'data-sid': s.id },
         el('span', { class: 'v2-dot ' + (keep ? 'idle' : ''), 'aria-hidden': 'true' }),
         el('a', { class: 'n ell', href: '#/s/' + encodeURIComponent(s.id), title: t + ' — 대화를 봅니다' , text: t }),
         el('span', { class: 'pn-fine w', text: keep ? '보관됨' : '끝난 세션' }),
@@ -842,6 +869,22 @@ function webPart(ctx: PartCtx): Part {
   const fwdBtn = el('button', { class: 'pn-web-btn ic', type: 'button', 'aria-label': '앞으로',
     title: live ? '뒤로 오기 전 화면으로 갑니다.' : '뒤로 오기 전에 보던 주소로 다시 갑니다.',
     onclick: () => step(1) }, pnIcon('chev', 'pn-i sm')) as HTMLButtonElement;
+  // #3784 우클릭(칸 어디서나 — 프레임 안은 남의 문서라 안 온다) — 뒤로·앞으로·새로고침·주소 복사·새 창
+  bindCtx(root, () => {
+    const u = frame.getAttribute('src') || input.value || '';
+    return {
+      title: u ? (u.length > 40 ? u.slice(0, 40) + '…' : u) : '웹 칸', sub: '웹',
+      rows: [
+        { label: '뒤로', icon: 'chevL', off: backBtn.disabled, run: () => backBtn.click() },
+        { label: '앞으로', icon: 'chevR', off: fwdBtn.disabled, run: () => fwdBtn.click() },
+        { label: '다시 불러오기', icon: 'refresh', hint: '⌘R', off: !u, run: () => reload() },
+        { sep: true, label: '' },
+        { label: '새 창에서 열기', icon: 'open', off: !u, run: () => window.open(u, '_blank', 'noopener') },
+        { label: '주소 복사', icon: 'copy', off: !u, run: () => void copyText(u).then((ok) => { if (ok) toast('주소를 복사했어요'); }) },
+        { label: '주소 입력', icon: 'pen', run: () => { input.focus(); input.select(); } },
+      ],
+    };
+  });
   //  ⚠ [열기] 단추는 뺐다(원준 2026-08-21 재배치) — 주소칸에서 Enter 가 같은 일을 하고, 좁은 곁칸에서 그 자리는
   //   주소가 보이는 폭이 더 값지다. 밖으로 내보내는 [↗]는 그대로 둔다(그건 Enter 로 못 하는 일이다).
   //  배율 단추도 주소줄에서 뺐다(#762) — 무대 오른쪽 아래 알약으로 간다. 여기 있던 28px 짜리 셋은 옆
@@ -1060,6 +1103,19 @@ function viewerPart(ctx: PartCtx): Part {
   };
   let list: FlatFile[] = [];
   let path = '';
+  // #3784 우클릭 — 새 뷰어 탭 · 경로/이름 복사(펴 놓은 것이 있을 때)
+  bindCtx(root, () => {
+    const name = path ? path.split('/').pop() || path : '';
+    return {
+      title: name || '뷰어', sub: path ? path : '펴 놓은 파일 없음',
+      rows: [
+        { label: '새 뷰어 탭에서 보기', icon: 'columns', off: !path, run: () => openInViewerPart(ctx, path, { newTab: true }) },
+        { sep: true, label: '' },
+        { label: '경로 복사', icon: 'copy', off: !path, run: () => void copyText(path).then((ok) => { if (ok) toast('경로를 복사했어요'); }) },
+        { label: '파일 이름 복사', icon: 'copy', off: !path, run: () => void copyText(name).then((ok) => { if (ok) toast('복사했어요'); }) },
+      ],
+    };
+  });
   let q = '';
   //  살아 있는 미리보기(아래) — open() 이 읽으므로 **그보다 앞에** 선언한다(마운트 중 TDZ 사고의 재발 방지).
   let shownStamp = '';          // 지금 그려 둔 파일의 도장(수정 시각:크기) — '' 이면 비교할 것이 없다(목록 화면·아직 여는 중)
@@ -1480,12 +1536,22 @@ function appsPart(ctx: PartCtx): Part {
     root.replaceChildren(el('div', { class: 'pn-apps-grid' }, ...apps.map((a) => {
       const hasUi = a.pages.length > 0 || a.system?.renderer === 'browser';
       const projectId = a.instances.project === 'global' ? null : ctx.id;
-      return el('button', { class: 'pn-app', type: 'button',
+      const tile = el('button', { class: 'pn-app', type: 'button',
         title: hasUi ? '상단 탭에서 앱 화면을 엽니다' : '상단 탭에서 이 앱 전용 AI 세션을 엽니다',
         onclick: () => { if (hasUi) void openInstalledApp(a, projectId); else void openAppSession(a.id, { title: a.title, projectId }); } },
         el('span', { class: 'pn-app-ic' }, pnIcon(hasUi ? 'grid' : 'chat', 'pn-i')),
         el('b', { text: a.title }),
         el('span', { class: 'pn-fine', text: hasUi ? '앱 탭' : '앱 세션 탭' }));
+      // #3784 우클릭 — 열기(앱 화면 / 앱 세션) · 이름 복사
+      bindCtx(tile, () => ({
+        title: a.title, sub: hasUi ? '앱 화면' : 'AI 세션 앱',
+        rows: [
+          hasUi ? { label: '앱 화면 열기', icon: 'open', run: () => void openInstalledApp(a, projectId) } : { label: '앱 세션 열기', icon: 'chat', run: () => void openAppSession(a.id, { title: a.title, projectId }) },
+          { sep: true, label: '' },
+          { label: '앱 이름 복사', icon: 'copy', run: () => void copyText(a.title).then((ok) => { if (ok) toast('복사했어요'); }) },
+        ],
+      }));
+      return tile;
     })));
   };
 
@@ -1531,6 +1597,16 @@ function previewPart(ctx: PartCtx): Part {
           el('span', { class: 'pn-prev-t', text: name }),
           el('span', { class: 'pn-prev-m', text: meta })),
         pnIcon('ext', 'pn-i sm pn-prev-go')) as HTMLElement;
+      // #3784 우클릭 — 웹 칸 · 새 창 · 주소 복사
+      bindCtx(row, () => ({
+        title: name, sub: meta || undefined,
+        rows: [
+          { label: '웹 칸에서 열기', icon: 'web', off: !p.url, run: () => row.click() },
+          { label: '새 창에서 열기', icon: 'open', off: !p.url, run: () => window.open(String(p.url), '_blank', 'noopener') },
+          { sep: true, label: '' },
+          { label: '주소 복사', icon: 'copy', off: !p.url, run: () => void copyText(String(p.url)).then((ok) => { if (ok) toast('주소를 복사했어요'); }) },
+        ],
+      }));
       return row;
     }));
   };

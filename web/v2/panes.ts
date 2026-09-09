@@ -30,6 +30,8 @@ import { makeSplitter } from './split.js';
 import { mountSideSwap, type SideSwapHandle } from './side-swap.js';   // 곁칸이 절반을 넘으면 자리를 바꾼다(#1819)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
 import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, rememberViewerPath, slotStoreKey } from './panes-kit.js';
+import { bindCtxSurface } from './ctx-registry.js';   // #3784 곁칸 빈 자리 우클릭
+import { type CtxRow } from './ctx-menu.js';
 //  ★ 탭 = 부품의 **인스턴스**(#762) — 배치가 드는 것은 '종류'가 아니라 '탭 열쇠'다(lib/tab-key 머리말).
 import { isTabKey, nextTabKey, tabBase, tabNum, type TabKey } from '../lib/tab-key.js';
 import { hasBrowserSurface } from './browser-surface.js';
@@ -390,6 +392,27 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const body = el('div', { class: 'pn-body' });
   const wrap = el('div', { class: 'pn-wrap' }, door, body) as HTMLElement;
   host.replaceChildren(wrap);
+  // #3784 — 문패 우클릭 = 이 프로젝트의 메뉴(사이드바 행과 같은 것). 프로젝트 없는 세션 화면(loose)엔 안 단다.
+  if (!loose) { door.dataset.ctx = 'project'; door.dataset.pid = String(id); }
+  // #3784 — 곁칸 빈 자리 우클릭 = 이 화면의 배치 조작(＋ 칸에 넣기 · 새 세션 · 배치 되돌리기 · 프로젝트 설정).
+  //  탭마다 곁칸이 한 벌씩 살므로(#1819) 표면도 **이 wrap 에 묶는다**(전역 이름이 아니라 닫힌 값).
+  bindCtxSurface(wrap, (hit, ev) => {
+    const z = (ev.target.closest('.pn-pane') as HTMLElement | null)?.dataset.zone;
+    const zone: Zone = z === 'bottom' ? 'bottom' : 'side';   // 가운데 칸(세션)에서 부르면 곁칸에 넣는다
+    const adds: CtxRow[] = PART_DEFS.filter((d) => d.type !== 'sessions').map((d) => ({
+      label: d.name, icon: d.type === 'files' ? 'folder' : d.type === 'knowledge' ? 'doc' : d.type === 'web' ? 'web' : d.type === 'apps' ? 'apps' : d.type === 'liv' ? 'liv' : d.type === 'timeline' ? 'clock' : d.type === 'archive' ? 'archive' : d.type === 'editor' ? 'eye' : d.type === 'preview' ? 'window' : 'layers',
+      hint: d.hint, run: () => { openZone(zone); addPart(zone, d.type); },
+    }));
+    void hit;
+    const rows: CtxRow[] = [
+      { label: '칸에 넣기', icon: 'plus', sub: adds },
+      { label: '새 세션', icon: 'chat', run: () => newSession() },
+      { sep: true, label: '' },
+      { label: '기본 배치로 되돌리기', icon: 'columns', run: () => resetLayout() },
+    ];
+    if (!loose) rows.push({ label: '프로젝트 설정…', icon: 'gear', run: () => openSettings() });
+    return rows;
+  });
 
   // 칸 하나 = 탭 줄 + 본문. 부품은 탭을 옮겨도 **살아 있는 채로** 따라간다(대화·스크롤 보존).
   //

@@ -194,7 +194,7 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
   });
 
   host.replaceChildren(
-    el('section', { class: 'v2-home v2-home-launch' },
+    el('section', { class: 'v2-home v2-home-launch', 'data-ctx-surface': 'home' },
       el('div', { class: 'v2-home-eyebrow' },
         el('span', { text: `${d.getMonth() + 1}월 ${d.getDate()}일 ${KO_DAY[d.getDay()]}요일` }),
         // 세션이 하나도 안 돌면 그 말 자체를 안 한다 — '도는 세션 없음'은 정보가 아니라 빈자리 채우기다.
@@ -216,7 +216,7 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
             el('span', { text: '모든 앱' }),
             sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M9 6l6 6-6 6' })))),
         el('div', { class: 'v2-home-apps-row', role: 'list' },
-          ...recentApps(6).map((a) => el('a', { class: 'v2-home-app', role: 'listitem', href: appHref(a), title: a.desc },
+          ...recentApps(6).map((a) => el('a', { class: 'v2-home-app', role: 'listitem', href: appHref(a), title: a.desc, 'data-ctx': 'app', 'data-app': a.key },
             el('span', { class: 'v2-home-app-ico' }, appGlassIcon(a.icon)),
             el('span', { class: 'v2-home-app-t', text: a.title })))))));
   // ★ 홈에서 세션 목록을 걷었다(원준 2026-08-20 "이 부분 내용 빼고, 텍스트 치는 칸을 자연스러운 위치로").
@@ -260,14 +260,14 @@ export function renderInbox(host: HTMLElement, data: V2Data): void {
   const rowOf = (s: Sess): HTMLElement => {
     const pn = projName(data, s.projectId);
     const title = sessDisplayName(s, pn);
-    return el('a', { class: 'v2-now-row' + (s.stateKey === 'waiting' ? ' wait' : ''), href: '#/s/' + encodeURIComponent(s.id) },
+    return el('a', { class: 'v2-now-row' + (s.stateKey === 'waiting' ? ' wait' : ''), href: '#/s/' + encodeURIComponent(s.id), 'data-ctx': 'session', 'data-sid': s.id },
       dot(s.stateKey),
       el('span', { class: 'tw' }, el('span', { class: 't', text: title }), s.projectId && title !== pn ? el('span', { class: 'p', text: pn }) : null),
       el('span', { class: 'st', text: when(s.lastSeen) }),
       el('span', { class: 'go btn btn-sm', text: s.stateKey === 'waiting' ? '답하기' : '보기' }));
   };
   const notiHost = el('section', { class: 'v2-noti-sec' });
-  const shell = el('div', { class: 'v2-center v2-inbox' },
+  const shell = el('div', { class: 'v2-center v2-inbox', 'data-ctx-surface': 'inbox' },
     el('h1', { class: 'v2-title', text: '확인할 것' }),
     el('p', { class: 'v2-desc', text: '받은 알림과, 지금 내 답을 기다리는 세션이에요.' }),
     notiHost,
