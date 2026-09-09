@@ -80,7 +80,8 @@ ok(HTML.includes('styles/49-v2-ctx.css'), "E7a 49-v2-ctx.css 링크");
 ok(/\.pn-ctx-svg \{[^}]*fill: none;[^}]*stroke: currentColor/.test(read("public/styles/49-v2-ctx.css")), "E7b body 밑 아이콘 획 규칙");
 
 // E8. 공통 행의 중복 제거 — 세션 행은 링크이기도 해서 「새 탭에서 열기」가 두 번 서지 않게 이름으로 거른다.
-ok(/const seen = new Set\(rows\.filter\(\(r\) => !r\.sep\)\.map\(\(r\) => r\.label\)\)/.test(R), "E8 공통 행 이름 중복 제거");
+ok(/const seen = new Set<string>\(\);/.test(R) && /const fresh = add\.filter\(\(r\) => r\.sep \|\| !seen\.has\(r\.label\)\)/.test(R) && /if \(item\) put\(item\.rows\);\s*if \(surface\) put\(surface\.rows\);/.test(R), "E8 세 겹(항목·표면·공통) 이름 중복 제거 — 앞 겹이 이긴다");
+ok(/const sidFromId = id\.startsWith\('sess:'\) \? id\.slice\(5\) : '';/.test(src["web/v2/ctx-shell.ts"]), "E8b 열린 앱 행 — 'sess:' id 로 세션 메뉴를 붙인다(route 는 홈 목록만 채운다)");
 
 // E9. 엔진 — 구분선 정리(앞·뒤·연속) 규칙이 tidyRows 에 있다.
 const M = src["web/v2/ctx-menu.ts"];
