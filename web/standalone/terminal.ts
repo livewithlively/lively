@@ -8,6 +8,7 @@
 'use strict';
 
 import { el, renderMarkdown } from './md.js';
+import { liteMenu } from './ctx-lite.js';   // #3784 터미널 우클릭 메뉴(의존 0 — 이 번들은 셸 밖에서 뜬다)
 
 // xterm.js 는 CDN 클래식 스크립트로 먼저 로드된다(terminal.html) — 번들 대상이 아니라 전역으로 온다.
 declare const Terminal: any;
@@ -2492,6 +2493,7 @@ export async function boot() {
     term.loadAddon(new WebLinksAddon.WebLinksAddon((e: MouseEvent, uri: string) => { e.preventDefault(); openLinkFromTerminal(uri); }));
   }
   term.open(host);
+  wireTermCtxMenu(host);   // #3784 — 우클릭 메뉴(복사·붙여넣기·전체 선택·주소 열기·화면 지우기·글자 크기·설정)
   // 휠 폴백 래치 끊기(#1943 후속 — wheelResyncAction 머리말). 관측만 하고 이벤트는 건드리지 않는다(passive).
   //  xterm 의 휠 처리보다 먼저 보도록 capture 로 단다 — 판정은 이 시점의 버퍼·모드로 한다.
   let lastWheelProbeAt = 0;
@@ -2697,6 +2699,46 @@ let sessionEnded = false; // 4410 수신 = 세션 종료 확정 → 재연결 �
 //  40회면 백오프 포함 약 3분이다. 그 뒤엔 멈추고 '다시 시도'를 사람 손에 넘긴다.
 const MAX_RECONNECT_ATTEMPTS = 40;
 let gaveUp = false;
+// ── 우클릭 메뉴(#3784) — 셸(web/v2/ctx-*)의 메뉴가 iframe 안까지는 못 오므로 이 문서에서 같은 문법으로 세운다 ──
+//  복사는 Cmd+C 와 **같은 길**을 탄다(xterm 선택 → copyText / 마우스모드 앱(Claude) 드래그 선택 → ^C 브리지 1회 —
+//  #972·#1117 의 규칙 그대로. 선택이 관측 안 됐으면 ^C 를 보내지 않는다(취소·종료 사고)). ⇧우클릭은 브라우저 메뉴.
+function wireTermCtxMenu(host: HTMLElement): void {
+  host.addEventListener('contextmenu', (e: MouseEvent) => {
+    if (e.shiftKey || IS_MOBILE) return;
+    let mouseOn = false;
+    try { mouseOn = !!(term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'); } catch (_) { /* noop */ }
+    const sel = term.hasSelection() ? String(term.getSelection() || '') : '';
+    const canCopy = !!sel || (mouseOn && appDragSelect);
+    const url = /^https?:\/\/\S+$/.test(sel.trim()) ? sel.trim() : '';
+    const secure = !!(navigator.clipboard && navigator.clipboard.readText && window.isSecureContext);
+    const fs = Number(term.options.fontSize) || 14;
+    const setFont = (n: number): void => {
+      const v = Math.max(9, Math.min(30, n));
+      const p = prefs(); p.fontSize = v; savePrefs(p);
+      term.options.fontSize = v; try { fit.fit(); } catch (_) { /* noop */ }
+      toast('글자 크기 ' + v);
+    };
+    e.preventDefault(); e.stopPropagation();
+    liteMenu(e.clientX, e.clientY, [
+      { label: '복사', hint: '⌘C', off: !canCopy, run: () => {
+        if (sel) { copyText(sel, false, true); return; }
+        if (appDragSelect) { clearAppSelect(); armClipboardPromise(); sendInput('\x03'); armBridgeMissHint(); }
+      } },
+      { label: '붙여넣기', hint: '⌘V', off: !secure, run: () => {
+        navigator.clipboard.readText().then((t) => { if (t) pasteText(t); }).catch(() => toast('붙여넣기를 못 읽었어요 — ⌘V 로 붙여넣어 주세요.', true));
+      } },
+      { label: '전체 선택', hint: '⌘A', run: () => { try { term.selectAll(); } catch (_) { /* noop */ } } },
+      ...(url ? [{ label: '선택한 주소 열기', run: () => openLinkFromTerminal(url) }] : []),
+      { sep: true, label: '' },
+      { label: '화면 지우기', hint: '스크롤백만', run: () => { try { term.clear(); } catch (_) { /* noop */ } } },
+      { label: '글자 크게', hint: String(fs) + '→' + Math.min(30, fs + 1), off: fs >= 30, run: () => setFont(fs + 1) },
+      { label: '글자 작게', hint: String(fs) + '→' + Math.max(9, fs - 1), off: fs <= 9, run: () => setFont(fs - 1) },
+      { sep: true, label: '' },
+      { label: '터미널 설정…', run: () => openSettings() },
+    ], '터미널');
+  });
+}
+
 function scheduleReconnect(label) {
   clearTimeout(reconnectTimer);
   if (sessionEnded || gaveUp) return;
