@@ -59,6 +59,11 @@ function readState(f: Record<string, any>): { text: string; why: string; tone: '
   const k = String(f.local_kind || '');
   if (k === 'vision') return { text: '그림', why: '글자가 없는 그림입니다. AI 가 필요할 때 원본을 열어 읽습니다.', tone: 'later' };
   if (k === 'unreadable') return { text: '못 읽음', why: '이 형식은 글자를 뽑지 못했습니다. PDF 로 저장해 다시 올리면 읽습니다.', tone: 'no' };
+  //  추출을 **시도했다가 실패한** 것은 «아직» 이 아니다 — 기다려도 안 된다. 사유(local_reason)가 있으면 그렇게 말한다.
+  //   (#3778: hwp 를 읽기 시작하면서 이 갈래가 생겼는데, docx 추출 실패도 종전부터 «아직» 이라 잘못 말하고 있었다.)
+  if (f.extracted === false && f.local_reason) {
+    return { text: '못 읽음', why: '본문을 뽑다가 실패했습니다(' + String(f.local_reason) + '). PDF 로 저장해 다시 올리면 읽습니다.', tone: 'no' };
+  }
   if (f.extracted === false) return { text: '아직', why: '아직 글자를 뽑지 않았습니다.', tone: 'later' };
   return { text: '읽음', why: '글자를 뽑아 두었습니다 — 검색과 지식 만들기에 쓰입니다.', tone: '' };
 }

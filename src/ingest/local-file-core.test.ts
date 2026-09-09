@@ -22,13 +22,17 @@ t("좌표: root/rel 왕복 — personal·project·shared, 역슬래시·선행 �
   assert.equal(parseLocalExternalId("nope"), null);
 });
 
-t("분류: 텍스트·OOXML(+hwpx)·vision·unreadable·skip·sniff", () => {
+t("분류: 텍스트·OOXML(+hwpx)·hwp·vision·unreadable·skip·sniff", () => {
   assert.equal(classifyLocalPath("회의록/0812.md").kind, "text");
   assert.equal(classifyLocalPath("보고서.docx").kind, "ooxml");
   assert.equal(classifyLocalPath("계약.hwpx").kind, "ooxml");
   assert.equal(classifyLocalPath("스캔.PDF").kind, "vision");
   assert.equal(classifyLocalPath("사진.jpeg").kind, "vision");
-  assert.equal(classifyLocalPath("계약.hwp").kind, "unreadable");
+  //  #3778 — .hwp 는 «읽을 수 없음» 이 아니다. OLE2 를 열고 BodyText 레코드를 풀면 본문이 나온다(connectors/hwp.ts).
+  assert.equal(classifyLocalPath("계약.hwp").kind, "hwp");
+  assert.equal(classifyLocalPath("계약.HWP").kind, "hwp");
+  //  구버전 바이너리 오피스는 그대로 «읽을 수 없음» — 이쪽은 실제로 뽑을 방법이 없다.
+  assert.equal(classifyLocalPath("보고.doc").kind, "unreadable");
   assert.equal(classifyLocalPath("옛문서.doc").kind, "unreadable");
   assert.equal(classifyLocalPath("app.dmg").kind, "skip");
   assert.equal(classifyLocalPath("음성.m4a").kind, "skip");
