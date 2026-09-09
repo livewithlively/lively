@@ -52,6 +52,60 @@ async function pdfFirstPage(buf: ArrayBuffer): Promise<HTMLCanvasElement | null>
   } catch (_) { return null; }   // 암호 걸린 PDF·깨진 파일 — 아이콘으로 두는 것이 정직하다
 }
 
+// ── 사무문서 썸네일 (#3778) ───────────────────────────────────────────────────
+//  «앞부분만» 이 목적이라 판독기가 돌려준 블록 중 앞쪽 몇 줄·몇 행만 종이에 앉힌다.
+//  판독기(lib/office·lib/zip·lib/cfb)는 **사무문서가 실제로 보일 때** 처음 받는다 — 격자에 없으면 0바이트.
+const officeLibs = () => Promise.all([import('../lib/zip.js'), import('../lib/office.js'), import('../lib/cfb.js')]);
+
+async function officeThumb(buf: ArrayBuffer, path: string): Promise<HTMLElement | null> {
+  const ext = (path.slice(path.lastIndexOf('.') + 1) || '').toLowerCase();
+  try {
+    const [zipMod, officeMod, cfbMod] = await officeLibs();
+    //  .hwp — 한컴이 파일 안에 넣어 둔 첫 쪽 그림이 있으면 그게 가장 좋은 썸네일이다.
+    if (cfbMod.looksCfb(buf)) {
+      const cfb = cfbMod.openCfb(buf);
+      const pv = cfb ? cfbMod.hwpPreview(cfb) : null;
+      if (pv?.image) {
+        const im = el('img', { alt: '', loading: 'lazy' }) as HTMLImageElement;
+        im.src = URL.createObjectURL(new Blob([pv.image as BlobPart]));
+        return im;
+      }
+      return pv?.text ? el('pre', { class: 'pn-fpre', text: pv.text.slice(0, 1400) }) as HTMLElement : null;
+    }
+    if (!zipMod.looksZip(buf)) return null;
+    const zip = zipMod.openZip(buf);
+    if (!zip) return null;
+    //  애플 iWork 는 자기가 만든 미리보기 그림을 넣어 둔다.
+    const ql = zip.entries.find((e) => /^preview(-web)?\.(jpe?g|png)$/i.test(e.name));
+    if (ql && !officeMod.officeKindOf(ext)) {
+      const b = await zip.bytes(ql.name);
+      if (b) { const im = el('img', { alt: '', loading: 'lazy' }) as HTMLImageElement; im.src = URL.createObjectURL(new Blob([b as BlobPart])); return im; }
+    }
+    const doc = await officeMod.readOffice(zip, ext);
+    if (!doc) return null;
+    if (officeMod.isSheetDoc(doc)) {
+      const s = doc.sheets[0];
+      if (!s || !s.rows.length) return null;
+      const t = el('table', { class: 'pn-fsheet' });
+      s.rows.slice(0, 16).forEach((r, i) => {
+        const tr = el('tr');
+        for (const c of r.slice(0, 8)) tr.append(el(i === 0 ? 'th' : 'td', { text: c.slice(0, 24) }));
+        t.append(tr);
+      });
+      return t as HTMLElement;
+    }
+    const lines: string[] = [];
+    for (const b of doc.blocks) {
+      if (lines.length > 26) break;
+      if (b.k === 'h' || b.k === 'p') lines.push(b.runs.map((r) => r.text).join('').replace(/\s+/g, ' ').trim());
+      else if (b.k === 'sep') lines.push('— ' + b.title);
+      else if (b.k === 'table') for (const row of b.rows.slice(0, 4)) lines.push(row.map((c) => c.map((r) => r.text).join('')).join('  |  '));
+    }
+    const text = lines.filter(Boolean).join('\n').slice(0, 1400);
+    return text ? el('pre', { class: 'pn-fpre', text }) as HTMLElement : null;
+  } catch (_) { return null; }   // 암호 걸린 문서·깨진 파일 — 아이콘으로 두는 것이 정직하다
+}
+
 /** 미리보기 기계 한 벌. `fileUrl` 은 그 화면이 쓰는 파일 주소(프로젝트마다 다르다), `dead` 는 그 화면이 떠났나. */
 export function createPreviewKit(o: { fileUrl: (path: string) => string; dead: () => boolean }): PreviewKit {
   const blobUrls: string[] = [];
@@ -119,6 +173,18 @@ export function createPreviewKit(o: { fileUrl: (path: string) => string; dead: (
       paper(box, cv, PV_W);
       return;
     }
+    //  사무문서(#3778) — zip 을 풀어 **앞부분을 진짜로 그린다**. 종전엔 아이콘이라 «어느 신청서였더라»를
+    //   이름으로만 골라야 했다. 판독기는 여기서만 받는다(pdf.js 와 같은 규율).
+    if (kind === 'office') {
+      const buf = await fetch(url, { headers: authHeaders() }).then((r2) => (r2.ok ? r2.arrayBuffer() : null)).catch(() => null);
+      if (!buf || o.dead() || !box.isConnected) return;
+      const node = await officeThumb(buf, path);
+      if (!node || o.dead() || !box.isConnected) return;
+      box.classList.add('has-pv');
+      if (node instanceof HTMLImageElement) { box.replaceChildren(node); return; }   // .hwp 첫 쪽 그림은 그림 그대로
+      paper(box, node, PV_W);
+      return;
+    }
     if (kind === 'text' || kind === 'page') {
       // 앞부분만 — Range 를 무시하는 서버여도 글자만 잘라 쓰므로 화면은 같다. 416(범위 거부)이면 통째로 받는다.
       let r = await fetch(url, { headers: { ...authHeaders(), Range: 'bytes=0-' + (kind === 'page' ? 400_000 : 4095) } });
@@ -136,6 +202,9 @@ export function createPreviewKit(o: { fileUrl: (path: string) => string; dead: (
       paper(box, frame, PV_PAGE_W);
       return;
     }
+    //  여기 아래는 그림·영상뿐이다 — 그릴 방법이 없는 종류를 굳이 **받아 놓고 버리지** 않는다
+    //   (종전엔 kind='file' 도 통째로 내려받고 아무것도 안 그렸다).
+    if (kind !== 'img' && kind !== 'video') return;
     const r = await fetch(url, { headers: authHeaders() });
     if (!r.ok || o.dead() || !box.isConnected) return;
     const bl = await r.blob();
