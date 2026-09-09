@@ -246,3 +246,29 @@
   .v2-omni { padding: clamp(14px, 6vh, 64px) 10px 16px; }
   .v2-omni-card { max-height: min(86vh, 100%); }
 }
+
+/* ── ①-c #3830 맥락 관리에서는 이 줄이 **창을 가로지른다**(슬랙) ────────────────────
+   ①-b 는 브라우저에서 이 줄을 왼쪽 두 열 위로 줄였다 — 그 근거는 "오른쪽은 아무것도 안 얻으면서 42px 을 잃는다"
+   였고, 사이드바가 있는 화면에서는 맞다. 사이드바를 접는 화면(app-ctx)에서는 그 셈이 뒤집힌다: 줄이 두 열 위에만
+   남으면 레일 폭 76px 짜리 토막이 되어 [‹][›][검색] 이 들어갈 자리가 없다.
+   그래서 이 화면에서만 ①-b 를 되돌린다 — 줄은 전폭, 톤은 단색, 묶음은 가운데(빈 칸 .v2-nav-sp 복원).
+   ⚠ ①-b 의 규칙을 **지우지 않는다**(check-css-drops: 셀렉터 삭제 금지). 같은 자리에 클래스 하나를 더해 이긴다. */
+@media (min-width: 901px) {
+  #v2-root.has-topbar.topbar-web.app-ctx > .v2-topbar {
+    grid-column: 1 / -1; grid-row: 1;
+    border-right: 0; border-bottom: 1px solid var(--line);
+    background: var(--gray-bg-2);
+  }
+  /*  줄이 윗줄을 통째로 먹으므로 아래 열들은 **둘째 행**으로 내려온다(안 내리면 본문이 42px 줄에 얹힌다). */
+  #v2-root.has-topbar.topbar-web.app-ctx > .v2-rail,
+  #v2-root.has-topbar.topbar-web.app-ctx > .v2-side,
+  #v2-root.has-topbar.topbar-web.app-ctx > .v2-side + .v2-split-x,
+  #v2-root.has-topbar.topbar-web.app-ctx > .v2-main,
+  #v2-root.has-topbar.topbar-web.app-ctx > .v2-main + .v2-split-x,
+  #v2-root.has-topbar.topbar-web.app-ctx > .v2-aside { grid-row: 2; }
+  /*  [‹][›][검색] 은 다시 줄 **가운데**로 — 사이드바 열이 없으니 그 열에 맞출 것도 없다(#2016 8차의 그 배치). */
+  #v2-root.has-topbar.topbar-web.app-ctx > .v2-topbar > .v2-side-nav { flex: 1 1 auto; margin-left: 0; padding: 0 8px; }
+  #v2-root.has-topbar.topbar-web.app-ctx > .v2-topbar > .v2-side-nav > .v2-nav-sp { display: block; }
+  #v2-root.has-topbar.topbar-web.app-ctx > .v2-topbar > .v2-side-nav .v2-nav-core { flex: 0 1 auto; }
+  /*  ☰ 는 레일 칸 가운데 그대로. 레일을 걷으면(폭 0) 6px 로 받친다 — ①-b 와 같은 셈. */
+}

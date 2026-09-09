@@ -215,7 +215,10 @@ export async function renderContext(view: HTMLElement, sub?: string | null, sub2
   const item = (asked && canSee(asked) ? asked : null) ?? visible[0] ?? stage.items[0];
 
   const host = el('div', {}, skeleton('불러오는 중'));
-  const body = el('div', { class: 'ctx-body' }, host);
+  //  정의 한 줄(#3830) — 머리에서 내려왔다. 현황은 지도가 자기 캡션을 갖고 있어 중복이라 뺀다.
+  const body = el('div', { class: 'ctx-body' },
+    stage.key === 'home' ? null : el('p', { class: 'ctx-hint', text: stage.hint }),
+    host);
   view.replaceChildren(el('div', { class: 'pjv-board-wrap ctx-board-wrap' },
     el('div', { class: 'card pjv-listboard ctx-board' }, buildHeader(stage), body)));
   void paintStageHealth(view);
@@ -235,11 +238,12 @@ export async function renderContext(view: HTMLElement, sub?: string | null, sub2
  *  #1841 의 셋째 층(화면 알약)은 폐지 — 한 탭 = 한 화면, 화면 안은 스크롤 섹션이다.
  */
 function buildHeader(selStage: CtxStage): HTMLElement {
-  const crumbBar = el('div', { class: 'pjv-crumbbar' },
-    el('nav', { class: 'pjv-crumbs', 'aria-label': '현재 위치' },
-      el('span', { class: 'pjv-crumb is-leaf ctx-crumb-leaf' }, ctxAppIcon(), el('span', { class: 'pjv-crumb-label', text: '맥락 관리' })),
-      el('span', { class: 'ctx-crumb-sub', text: selStage.hint })));
+  //  #3830 — 머리 3층(앱 이름+정의 / 탭 / 지도 캡션)을 **한 줄**로 접었다. 원준 2026-09-09: *"이게 너무 위에
+  //   있어서 좀 갑갑해보이니까 위치 너가 적당히 잘 조절해봐."* 실측으로 지도가 y=156 에서야 시작하고 있었다.
+  //   앱 이름은 탭 줄 왼쪽 문패로 들어가고(세로 구분선 하나), 탭이 그 오른쪽에 잇는다. 정의 한 줄(hint)은
+  //   화면 안 캡션으로 내려간다 — 현황은 지도 캡션이 그 일을 이미 하고, 나머지 탭은 아래 renderContext 가 붙인다.
   const tabs = el('div', { class: 'pjv-vtabs ctx-vtabs', role: 'tablist', 'aria-label': '맥락 관리' });
+  tabs.append(el('span', { class: 'ctx-hd-app' }, ctxAppIcon(), el('span', { text: '맥락 관리' })));
   for (const s of STAGES) {
     if (s.tray) continue;   // 확인할 것 — 아래 트레이가 대신 선다
     const on = s.key === selStage.key;
@@ -264,7 +268,7 @@ function buildHeader(selStage: CtxStage): HTMLElement {
   },
     el('span', { class: 'ctx-vtab-label', text: '확인할 것' }),
     el('b', { class: 'ctx-tray-n num', hidden: true })));
-  return el('div', { class: 'pjv-board-header ctx-board-header' }, crumbBar, tabs);
+  return el('div', { class: 'pjv-board-header ctx-board-header' }, tabs);
 }
 
 /** 건강 점을 붙일 수 있는 탭 — 파이프라인 4단계에 대응하는 탭만(현황·AI 전달은 판정이 없다). */
