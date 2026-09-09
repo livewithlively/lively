@@ -17,7 +17,7 @@ import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, nativeAppByRoute, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
 import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, movePinnedSession, projLandingRoute, projectOrder, reloadSidePrefs, sessText, type SideInstance } from './side.js';
-import { dotCls, findSessIn, isMineSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
+import { dotCls, findSessIn, isMineSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type HomeDest, type Sess, type V2Data } from './views.js';
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
 import { renderArchive, renderTrash } from './bins.js';   // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
@@ -39,7 +39,9 @@ import { lastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 �
 import { ASIDE_MSG, setAsideGuestOpener, type AsideGuest } from './aside-slot.js';
 import { takeCreated } from './created-cache.js';
 import { openMeModal } from './me-modal.js';   // #1898 — 클래식에서 올라온 부팅이 [화면] 자리를 되연다
-import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
+import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';
+import { mountCtxMenus } from './ctx-registry.js';   // #3784 우클릭 메뉴 배선(표 data-ctx 를 읽는다)
+import { mountCtxShell } from './ctx-shell.js';     // #3784 셸이 아는 것(세션·프로젝트·앱·알림)의 메뉴   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
 import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { mountAppUiFrame } from './app-ui.js';
 import { cachedAppInstance, closeAppInstance, createAppInstance, ensureSessionAppInstance, ensureSingletonAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
@@ -423,6 +425,13 @@ export async function bootV2(): Promise<void> {
       applyProjectName(Number(m.id), m.name);
       return;
     }
+    // #3784 — 액자(클래식 화면) 안 우클릭 메뉴의 「새 탭에서 열기」. 프레임은 셸 탭을 못 만드니 한 줄 올려 보낸다.
+    //  같은 오리진 + 문자열 해시만. 어느 탭이 보냈든 결과는 같다(새 탭 하나).
+    if (m && m.type === 'lively:open-route' && typeof m.href === 'string' && m.href.startsWith('#/')) {
+      const hit = tabsApi.find(m.href);
+      if (hit) tabsApi.activate(hit); else tabsApi.add(m.href);
+      return;
+    }
     if (!m || (m.type !== ASIDE_MSG.ping && m.type !== ASIDE_MSG.open)) return;
     const tab = tabsApi.tabs.find((t) => {
       const f = t.center.querySelector('iframe') as HTMLIFrameElement | null;
@@ -498,6 +507,23 @@ export async function bootV2(): Promise<void> {
   window.addEventListener('hashchange', () => { histStamp(); void onHash(); });
   histStamp();     // 첫 화면도 히스토리의 한 칸이다 — 안 찍어 두면 되돌아왔을 때 '새로 감'으로 오인한다
   bindAltOpen();
+  // #3784 — 우클릭 메뉴. 뿌리 하나가 듣고 표(data-ctx / data-ctx-surface)를 위로 찾는다. 셸 자체가 맨 바깥 표면.
+  root.dataset.ctxSurface = 'shell';
+  mountCtxMenus(root, { longPress: true, menuKey: true });
+  mountCtxShell({
+    data: () => data,
+    openRoute: (href, newTab) => {
+      if (!tabsApi) { location.hash = href; return; }
+      if (newTab) { const hit = tabsApi.find(href); if (hit) tabsApi.activate(hit); else tabsApi.add(href); return; }
+      location.hash = href;
+    },
+    newTask: (seed) => { const t = tabsApi?.add('#/'); if (t && seed) { t.draft = seed; tabsApi?.save(); void renderRoute(t); } },
+    refresh: () => v2Refresh(),
+    pickProject: (anchor, sid) => { const t = tabsApi?.current(); if (t) openProjectPicker(anchor, sid, t); },
+    closeInstance: (id) => { void closeSideRow(id); },
+    activateInstance: (id, route) => openSideRow(id, route),
+    currentRoute: () => tabsApi?.current()?.route || location.hash,
+  });
   // 통합검색(⌘K) — 셸이 쥔 목록(세션·프로젝트)은 즉시, 나머지 자원은 REST 팬아웃. 이동은 탭 규칙을 아는 셸이 한다.
   setOmniHooks({
     data: () => data,
@@ -1009,6 +1035,14 @@ function homeDraft(tab: ShellTab): { text: string; onChange(v: string): void } {
   };
 }
 
+/** 홈의 «여는 곳» 후보(#3778) — 사이드바 트리와 **같은 순서**(projectOrder)를 그대로 쓴다.
+ *  ⚠ views.ts 가 side.ts 를 직접 부르면 순환 import 가 된다(side.ts 는 views.ts 의 값을 쓴다) — 그래서 셸이
+ *   이어 준다. 목록은 이미 메모리에 있다(loadData 가 실은 data.projects) — 이 칸 때문에 서버를 더 부르지 않는다.
+ *   상한 40: 최근 순이라 그 뒤는 «검색»으로 찾는 구간이고, 홈이 프로젝트 수백 건을 들고 있을 이유가 없다. */
+function homeDests(): HomeDest[] {
+  return projectOrder(data).slice(0, 40).map((r) => ({ proj: r.proj, done: r.done }));
+}
+
 async function renderRoute(tab: ShellTab): Promise<void> {
   const seq = ++tab.seq;
   if ((tab as any).ob) { (tab as any).ob.destroy(); (tab as any).ob = null; }   // 처음 설정 화면을 떠나면 읽기 타이머·사이드바 숨김을 푼다
@@ -1024,7 +1058,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
   markActive(activeNavKey(page, page === 's' ? decodeURIComponent(segs[1] || '') : segs[1]));
   try {
     if (page === '' || page === 'dashboard') {
-      renderHome(tab.center, data, homeDraft(tab));
+      renderHome(tab.center, data, homeDraft(tab), homeDests());
       tab.aside.replaceChildren();
     } else if (page === 'inbox') {
       markActive('inbox');
@@ -1258,7 +1292,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       if (!reused) tab.center.replaceChildren(appFrame(raw, a ? a.title : page));
       markActive('app:' + (a ? a.key : ''));
     } else {
-      renderHome(tab.center, data, homeDraft(tab));
+      renderHome(tab.center, data, homeDraft(tab), homeDests());
       tab.aside.replaceChildren();
     }
   } catch (e: any) {
@@ -1332,6 +1366,41 @@ function draftLine(draft?: string): string {
   const one = String(draft || '').replace(/\s+/g, ' ').trim();
   if (!one) return '';
   return '쓰다 만 지시 · ' + (one.length > 40 ? one.slice(0, 40) + '…' : one);
+}
+
+/**
+ * 이 주소가 **두고 온 것 없이** 서 있는 «앱 첫 화면» 인가 (#3778 C안, 원준 2026-09-09).
+ *
+ * 좌측 목록이 서는 기준은 종전엔 «열려 있나» 였다. 그런데 이 목록은 탭 줄을 겸하므로(TABS_OFF, 위 머리말)
+ *  열어 본 화면이 전부 줄을 얻었고, 실측(2026-09-09 원준님 홈)에서 「프로젝트 없음」 카드 **6줄 중 5줄**이
+ *  세션이 아니라 앱 첫 화면이었다 — 새 작업 · 프로젝트 · AI 세션 · 확인할 것 · 자료. 그리고 그 다섯은
+ *  **전부 레일(rail.ts SECTIONS)·런치패드에 같은 문이 이미 있다.** 사람은 그걸 프로젝트로 읽었다
+ *  ("홈에는 이런 프로젝트가 있는데 이게 뭔가 이상한데").
+ *
+ * 그래서 기준을 **«두고 온 게 있나»** 로 바꾼다. 상태를 안 든 앱 첫 화면은 세우지 않는다 —
+ *  돌아갈 상태가 없으므로 «돌아간다» 가 성립하지 않고, 레일 한 번이면 같은 자리라 **잃는 것이 없다**.
+ *  (열어 둔 것을 무턱대고 걷으면 안 되는 이유는 #2061 이 이미 겪었다 — 그건 **상태를 든** 세션 얘기다.)
+ *
+ * ⚠ 판정에 `routeKey` 를 쓰지 않는다 — 그건 `#/sources` 와 `#/sources/<id>` 를 한 키로 접으므로(tabs.ts)
+ *  «목록» 과 «자료 하나를 열어 둠» 을 구분하지 못한다. 여기서는 **탭이 든 실제 주소**를 본다.
+ * ⚠ 모르는 주소는 «없는 것» 이 아니라 «모르는 것» 이다 — 세운다(false).
+ */
+function isBlankScreen(route: string, draft?: string): boolean {
+  const { segs } = parseRoute(route);
+  const p = segs[0] || '';
+  //  새 작업(홈) — 아무것도 안 쓴 빈 창은 남길 것이 없다. 사이드바 머리줄 [＋ 새 작업]이 늘 그 자리를 연다.
+  if (!p || p === 'dashboard') return !draftLine(draft);
+  //  프로젝트 주소 = «새 세션 자리»다(titleFor 머리말) — 세션이 되기 전의 빈 슬롯이라 남길 것이 없다.
+  //   종전엔 프로젝트에 한 번 들어갈 때마다 그 카드 안에 「새 세션」 줄이 하나 생겨 **진짜 세션과 같은 위계**로
+  //   섰다(원준 2026-09-09 지적). 쓰다 만 지시가 있으면 그건 두고 온 것이므로 남는다.
+  if (p === 'p') return !draftLine(draft);
+  //  세션·앱 인스턴스는 언제나 무언가를 들고 있다(대화·스크롤·돌던 작업).
+  if (p === 's' || p === 'i') return false;
+  //  `#/app/<key>` = 그 앱의 첫 화면. 뒤 세그먼트가 붙으면(문서·항목) 그건 «어디까지 봤나» 라 남는다.
+  if (p === 'app') return segs.length <= 2;
+  //  정본 주소를 가진 빌트인과 클래식 딥링크도 같은 자로 — 뿌리면 첫 화면, 깊으면 두고 온 자리.
+  if (p === 'inbox' || p === 'sources' || CLASSIC_PAGES[p]) return segs.length <= 1;
+  return false;
 }
 
 /** route 하나가 좌측에서 갖는 얼굴 — 이름·아이콘·부제·소속 프로젝트. `draft` 는 그 창에 쓰다 만 지시(#2037). */
@@ -1559,6 +1628,11 @@ function sideInstances(): SideInstance[] {
     if (!prev) dismissBasis.set(key, basis);   // 아래 return 보다 먼저 — 치워진 행도 × 가 다시 읽을 수 있어야 한다
     //  치운 행은 **그 상태 그대로인 동안** 숨는다. 창이 열려 있으면(force) 늘 보인다 — 보고 있는 화면이 목록에 없으면 그게 고장이다.
     if (!force && !prev && dismissed[key] !== undefined && dismissed[key] === basis) return;
+    //  ★ 목록에 서는 기준은 «열려 있나» 가 아니라 **«두고 온 게 있나»** 다(#3778 C안, isBlankScreen 머리말).
+    //   ⚠ 여기서는 `force`(창이 열려 있다)를 보지 않는다 — 그게 바로 갈아 끼우는 그 기준이다.
+    //   예외 둘만 남긴다: **보고 있는 화면**(목록에 없으면 그게 고장이다 — ③ force 가 원래 지키려던 한 줄)과
+    //   **사람이 고정한 것**(사람의 결정은 자동 규칙을 언제나 이긴다, appPinnedKeys).
+    if (!prev && key !== activeKey && !isAppPinned(key) && isBlankScreen(route, draft)) return;
     sideRowRoute.set(key, route);
     let sk = stateKey;
     //  ★ **보고 있는 세션은 '안 본 완료'가 아니다** — 초록점은 누르는 즉시 꺼진다(#1954 3차).

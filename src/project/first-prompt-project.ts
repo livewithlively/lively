@@ -22,7 +22,7 @@ import { ensureAgentsMd } from "../v6/agents-md.js";
 import { claimProjectName } from "../v6/project-store.js";
 import { executionSessionProject } from "../v6/execution-session-store.js";
 // 임시 이름을 짓는 규칙(#2031) — 훅 project-auto-bind 와 같은 계약이라 한 곳(v6/project-name.ts)에 둔다.
-import { shellNameFromPrompt } from "../v6/project-name.js";
+import { projectNameFromHuman, shellNameFromPrompt } from "../v6/project-name.js";
 
 /** 자동 생성 표식 — 정련 훅(project-bind-nudge)이 "아직 임시 껍데기"를 판별하는 유일한 근거(훅과 같은 문자열). */
 export const AUTO_CREATED_MARK = "<!-- lively:auto-created-from-first-prompt -->";
@@ -41,7 +41,16 @@ export interface FirstPromptPlanInput {
   rootKey?: string;
   subpath?: string;
   initialPrompt?: string;
+  /** #3778 새 작업 창의 프로젝트 칸 — 사람이 **직접 지은** 새 프로젝트 이름(빈 값이면 종전대로 기계가 짓는다). */
+  projectName?: string;
 }
+
+/**
+ * 만들 프로젝트의 이름·본문과 **그 이름을 누가 지었나**(#3778).
+ *  nameSource 는 장식이 아니라 걸쇠다 — 'human' 이면 세션 첫 턴의 AI 이름 승계(renameShellProjectForSession)와
+ *  정련 훅이 그 이름을 못 덮는다(claimProjectName 의 순위 규칙 rule<session<agent<human).
+ */
+export interface ShellProjectSpec { name: string; description: string; nameSource: "rule" | "human" }
 
 /** 첫 지시가 없는 세션의 임시 이름 — 정련(project-bind-nudge)이 첫 쓰기에서 바꾼다. */
 export const UNNAMED_PROJECT = "새 작업";
@@ -61,7 +70,7 @@ export const UNNAMED_PROJECT = "새 작업";
  *   · 앱 세션 — 소속이 인스턴스 축에 따로 있다(#1780). 로그인 세션 — 자격 인증 절차지 작업이 아니다.
  *   · 읽기전용·인코그니토 — 조직에 아무것도 안 남기는 세션이다(훅과 같은 규칙).
  */
-export function firstPromptProjectPlan(input: FirstPromptPlanInput): { name: string; description: string } | null {
+export function firstPromptProjectPlan(input: FirstPromptPlanInput): ShellProjectSpec | null {
   if (Number(input.projectId ?? 0) > 0) return null;
   // #2162 — **사람의 작업 세션만** 프로젝트를 갖는다. 위탁·상시·앱·로그인은 전부 여기서 걸린다.
   //  종전엔 `appId || loginFor` 둘만 봐서 위탁 워커가 통과했다(그건 이 문을 안 지나 별개로 샜다) —
@@ -71,13 +80,43 @@ export function firstPromptProjectPlan(input: FirstPromptPlanInput): { name: str
   if (String(input.subpath ?? "").trim()) return null;
   const root = String(input.rootKey ?? "").trim();
   if (root && root !== "personal") return null;
+  // #3778 — 사람이 새 작업 창에서 이름을 지었으면 **그 이름이 이긴다**(껍데기를 만들지 않는다).
+  //  비워 두면 여기 안 들어오고 아래 종전 경로 그대로다 — «비워 두면 지금 그대로» 가 이 한 줄로 지켜진다.
+  const named = humanShellProject(input.projectName, input.initialPrompt);
+  if (named) return named;
   // 첫 지시가 제목 재료가 못 되면(없거나 슬래시/뱅/주입물) 임시 이름으로 만든다 — **만들기는 한다**.
   return shellProjectFromPrompt(input.initialPrompt) ?? unnamedShellProject();
 }
 
+/**
+ * 순수 — 사람이 새 작업 창에서 **직접 지은** 이름으로 여는 프로젝트. 이름이 비었으면 null(호출자가 종전 경로로).
+ *
+ *  ⚠ 본문에 `AUTO_CREATED_MARK` 를 **넣지 않는다**. 그 표식은 "아직 임시 껍데기라 이름을 덮어도 된다"는 뜻이고,
+ *   여기 이름은 사람이 지은 것이라 덮이면 안 된다. 표식이 없으면 정련 훅(project-bind-nudge)의 «정련하세요»
+ *   안내도 안 나가고, shouldRenameShellProject 도 곧바로 false 가 된다 — 걸쇠가 두 겹으로 지켜진다.
+ */
+export function humanShellProject(
+  nameRaw: string | null | undefined, promptRaw: string | null | undefined,
+): ShellProjectSpec | null {
+  const name = projectNameFromHuman(nameRaw);
+  if (!name) return null;
+  const prompt = String(promptRaw ?? "").trim();
+  const description = [
+    "> 새 작업 창에서 **사람이 이름을 지어** 만든 프로젝트입니다 — 이 세션의 작업 폴더가 이 프로젝트 폴더입니다.",
+    ...(prompt ? [
+      "",
+      "## 첫 지시(원문)",
+      "",
+      prompt.length > MAX_BODY ? prompt.slice(0, MAX_BODY) + "\n\n…(이하 생략)" : prompt,
+    ] : []),
+  ].join("\n");
+  return { name, description, nameSource: "human" };
+}
+
 /** 순수 — 첫 지시 없이 연 세션의 껍데기(이름은 임시, 본문이 그 사정을 말한다). */
-export function unnamedShellProject(): { name: string; description: string } {
+export function unnamedShellProject(): ShellProjectSpec {
   return {
+    nameSource: "rule",
     name: UNNAMED_PROJECT,
     description: [
       "> ⚙ 세션을 열 때 **자동 생성**된 프로젝트입니다 — 첫 지시가 없어 이름이 임시값입니다.",
@@ -100,7 +139,7 @@ export function unnamedShellProject(): { name: string; description: string } {
  *   프로젝트가 생기면 안 된다), 여기는 **새 세션의 첫 지시**라는 것이 이미 확정된 자리다. 그래서 게이트가 다르다.
  *   짧은 제목은 정련(project-bind-nudge)이 고친다 — 되돌리기 싼 쪽이다.
  */
-export function shellProjectFromPrompt(promptRaw: string | null | undefined): { name: string; description: string } | null {
+export function shellProjectFromPrompt(promptRaw: string | null | undefined): ShellProjectSpec | null {
   const prompt = String(promptRaw ?? "").trim();
   if (!prompt) return null;
   if (prompt.startsWith("/") || prompt.startsWith("!") || prompt.startsWith("<")) return null;
@@ -116,7 +155,7 @@ export function shellProjectFromPrompt(promptRaw: string | null | undefined): { 
     "",
     AUTO_CREATED_MARK,
   ].join("\n");
-  return { name, description };
+  return { name, description, nameSource: "rule" };
 }
 
 /**
@@ -124,15 +163,16 @@ export function shellProjectFromPrompt(promptRaw: string | null | undefined): { 
  *  실패는 null — 세션 생성 자체를 막지 않는다(종전대로 개인 루트에서 열리고, 훅이 다음 턴에 붙인다).
  */
 export async function createShellProject(
-  spec: { name: string; description: string }, actor: string,
+  spec: ShellProjectSpec, actor: string,
 ): Promise<{ id: number; folder: string } | null> {
   try {
     // ⚠ dedupe:false — 이름이 임시값("새 작업")이라 서로 같아서, 켜 두면 30초 안에 연 두 세션이 **한 프로젝트를 공유**한다
     //  (2026-08-25 dev 실측: 빈 세션과 슬래시 세션이 project/2009 를 함께 받았다). 세션마다 자기 작업면이어야 한다.
-    //  name_source='rule'(#2031) — 이름이 **기계값**이라는 표시다. 이 표시가 있는 프로젝트만 그 세션이 첫 턴에
-    //  project_rename_v6 로 한 번 다듬을 수 있다(사람이 지은 이름은 그 걸쇠에 막힌다).
+    //  name_source(#2031) — 이름을 **누가 지었나**의 표시다. 'rule'(기계값)인 프로젝트만 그 세션이 첫 턴에
+    //  project_rename_v6 로 한 번 다듬을 수 있다. #3778 부터 사람이 새 작업 창에서 이름을 지으면 'human' 이
+    //  와서 그 걸쇠에 막힌다 — 그래서 여기서 못 박지 않고 **spec 이 들고 온 값을 그대로 쓴다**.
     const project = await createProject(
-      { name: spec.name, description: spec.description, dedupe: false, name_source: "rule" }, { actor, source: "web" });
+      { name: spec.name, description: spec.description, dedupe: false, name_source: spec.nameSource }, { actor, source: "web" });
     // 폴더·AGENTS.md 확보 + project.folder 확정(resolveProjectBase) — 이게 있어야 cwd 로 쓸 수 있다.
     await ensureAgentsMd(project.id);
     const folder = (await getProjectRow(project.id))?.folder ?? "";

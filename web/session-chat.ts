@@ -308,7 +308,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     opts.onToggleFiles ? filesBtn : null,
     [fixBtn, setBtn],   // 보이기는 setMode 가 정한다 — 늦게 붙는 터미널에도 자리가 남게 항상 DOM 에 둔다
     moreBtn);
-  const head = el('div', { class: 'sc-head' },
+  //  #3784 — 머리줄 우클릭 = 이 세션의 메뉴(사이드바 행과 같은 것). 표만 단다 — 셸 배선이 읽는다.
+  const head = el('div', { class: 'sc-head', 'data-ctx': 'session', 'data-sid': first.id },
     el('div', { class: 'sc-head-l' },
       dot, titleHost, chatBadge,
       el('span', { class: 'sc-meta' }, runEl)),
@@ -1852,6 +1853,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     update(t) {
       const wasDead = dead();
       target = t;
+      head.dataset.sid = t.id;   // #3784 우클릭 메뉴가 읽는 세션 id — 겉(머리줄)이 다른 세션으로 바뀌면 같이 바뀐다
       if (!hcat && t.raw?.harness) { void runCatalog().then((hs) => { hcat = findHarness(hs, String(t.raw.harness)); paintRun(); }); }
       paintRun();                                 // 세션이 끝나면 드롭다운은 물러나고 사실 표시(칩)만 남는다
       if (t.label && !/^box-|^[0-9a-f-]{20,}$/i.test(t.label)) titleText = t.label;

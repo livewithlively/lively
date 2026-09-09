@@ -15,6 +15,8 @@
 //  화면이 자기 판정을 가지면 리브와 다른 답을 하고, 그게 #1618 이 잡아낸 실패다. 여기는 그리기만 한다.
 import { api, el, state } from './core.js';
 import { mountLivChat, livChatAsk, livChatFill } from './liv-chat.js';
+import { bindCtx, bindCtxSurface } from './v2/ctx-registry.js';   // #3784 리브 화면 우클릭
+import { copyText } from './v2/ctx-menu.js';
 
 export type LivMode = 'login' | 'liv' | 'dashboard';
 export interface LivFinding {
@@ -98,8 +100,14 @@ export async function renderLiv(view: HTMLElement | null, opts: RenderLivOpts = 
   // 한 열이다. 왼쪽 레일(할 일 목록)을 걷었다 — 목록이 있으면 그게 곧 대시보드가 되고,
   //  이 화면이 하기로 한 일(제안 하나를 읽고 결정하기)에서 눈이 흩어진다.
   //  rail 을 주는 셸(v2 우패널)에서는 편지를 그쪽에 두지 않는다 — 편지는 언제나 본문의 주인공이다.
-  view.append(el('div', { class: 'liv-wrap' }, head,
-    el('div', { class: 'liv-body liv-body-solo' }, letter, chatWrap)));
+  const wrapEl = el('div', { class: 'liv-wrap' }, head,
+    el('div', { class: 'liv-body liv-body-solo' }, letter, chatWrap));
+  view.append(wrapEl);
+  // #3784 빈 자리 우클릭 — 다시 확인 · 리브에게 말하기
+  bindCtxSurface(wrapEl, () => [
+    { label: '다시 확인하기', icon: 'refresh', run: () => refreshLiv() },
+    { label: '리브에게 말하기', icon: 'ask', run: () => { (wrapEl.querySelector('.livc-input') as HTMLTextAreaElement | null)?.focus(); } },
+  ]);
 
   // 카드와 세션은 **독립적으로** 로드한다. 세션이 못 떠도 무엇이 문제인지는 보여야 하고,
   //  카드 조회가 느려도 대화는 먼저 시작될 수 있다(위젯 독립 실패 원칙과 같은 결).
@@ -218,12 +226,26 @@ function livPara(f: LivFinding, i: number, total: number, host: HTMLElement): HT
       if (!host.querySelector('.liv-para')) refreshLiv();
     },
   }));
-  return el('div', { class: 'liv-para liv-para-' + f.severity },
+  const para = el('div', { class: 'liv-para liv-para-' + f.severity },
     total > 1 ? el('span', { class: 'liv-para-no', text: ORDINAL[i] ?? String(i + 1) }) : null,
     el('div', { class: 'liv-para-b' },
       el('p', { class: 'liv-para-t', text: f.title }),
       f.detail ? el('p', { class: 'liv-para-d', text: f.detail }) : null,
       acts));
+  // #3784 우클릭 — 문단의 단추 셋과 같은 일 + 복사 · 리브에게 이 건 묻기
+  bindCtx(para, () => ({
+    title: f.title, sub: f.severity ? '리브의 제안 · ' + f.severity : '리브의 제안',
+    rows: [
+      ...(f.prompt ? [{ label: '제가 해 드릴게요', icon: 'bolt', run: () => { (acts.querySelector('.btn-primary') as HTMLButtonElement | null)?.click(); } }] : []),
+      ...(f.href ? [{ label: f.prompt ? '직접 볼게요' : '보러 가기', icon: 'open', run: () => { location.hash = f.href!; } }] : []),
+      { label: '리브에게 이 건 묻기', icon: 'ask', run: () => livChatFill(`「${f.title}」 — 이건 어떻게 하면 좋을까요?`) },
+      { sep: true, label: '' },
+      { label: '내용 복사', icon: 'copy', run: () => void copyText([f.title, f.detail || ''].filter(Boolean).join('\n')).then((ok) => { if (ok) livToast('복사했어요'); }) },
+      { sep: true, label: '' },
+      { label: '나중에', icon: 'clock', run: () => { (acts.querySelector('.btn-ghost') as HTMLButtonElement | null)?.click(); } },
+    ],
+  }));
+  return para;
 }
 
 /**

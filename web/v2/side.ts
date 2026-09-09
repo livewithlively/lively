@@ -41,6 +41,7 @@ import { migratePinKeys } from './pin-migrate.js';   // #2402 — 복원으로 i
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
 import { confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 휴지통·아카이브
 import { ctxMenu } from './panes-kit.js';
+import { type CtxRow } from './ctx-menu.js';   // #3784 우클릭 메뉴 행 타입(엔진은 셸 배선이 띄운다)
 import { refreshStatusCount, switcherTop } from './switcher.js';   // #1875 — refreshStatusCount: 문패 배지는 인원 수에서 나온다
 import { openSectionMenu, railIsHidden, sectionDef, stackTile, type RailSection } from './rail.js';   // #2016 — 무엇을 그릴지는 레일이 고른 구역이 정한다
 import { ICONS, icon } from './icons.js';   // #2016 — 선 아이콘 한 벌
@@ -418,6 +419,10 @@ function togglePin(key: string): void {
   if (pinnedSet.has(key)) pinnedSet.delete(key); else pinnedSet.add(key);
   saveSet(PIN_KEY, pinnedSet);
   renderTree();
+  //  ★ 같은 압정을 **목록의 프로젝트 카드**도 쓴다(#3778) — 트리에서 꽂든 카드에서 꽂든 한 프로젝트에 압정은 하나다.
+  //   그러니 한쪽에서 누르면 다른 쪽도 같은 판에서 움직여야 한다(안 그리면 목록은 다음 폴링까지 옛 자리에 선다).
+  //   묶지 않은 축(세션 목록)은 이 핀과 무관하므로 붓을 대지 않는다.
+  if (groupProj) repaintList();
 }
 
 let treeEl: HTMLElement | null = null;
@@ -554,15 +559,17 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
   return el('div',
     //  ⚠ `--plain` = **행 조작이 없는 목록**(압정·× 안 그림). 그 CSS 가 '상태 점은 호버에도 안 숨는다'를
     //   이미 갖고 있다 — 홈에서 점이 숨는 건 그 자리를 × 가 받기 때문이고, 받을 것이 없으면 숨을 이유도 없다.
-    { class: 'v2-app-inst' + (one ? ' v2-app-inst--1' : '') + (!canPin && !canClose ? ' v2-app-inst--plain' : '') + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : '') + (inst.past ? ' v2-app-inst--past' : '') + (inst.owner ? ' other' : ''), role: 'listitem', 'data-instance': inst.id, 'data-anch': inst.id },
+    { class: 'v2-app-inst' + (one ? ' v2-app-inst--1' : '') + (!canPin && !canClose ? ' v2-app-inst--plain' : '') + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : '') + (inst.past ? ' v2-app-inst--past' : '') + (inst.owner ? ' other' : ''), role: 'listitem', 'data-instance': inst.id, 'data-anch': inst.id, 'data-ctx': 'inst' },
     el('button', { class: 'v2-app-inst-open', type: 'button', title: tip, 'aria-current': inst.active ? 'page' : null,
       onclick: () => hooks.onActivateInstance?.(inst.id, inst.route) },
       instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })),
     //  얼굴은 **둘째 줄 왼쪽 여백**에 선다 — 첫 줄 아이콘 바로 아래 빈자리라 새로 폭을 먹지 않고,
     //   첫 줄 오른쪽에 겹쳐 뜨는 압정·닫기와도 부딪히지 않는다.
-    //  ⚠ 한 줄 모드(#2033)에는 얼굴을 안 세운다 — 이 부품은 `grid-row: 2` 에 사는데 그 줄이 없어서,
-    //   그리면 빈 둘째 줄이 되살아나 행 높이가 두 축에서 어긋난다. 주인 이름은 위 툴팁이 말한다.
+    //  ⚠ 한 줄 모드(#2033)에는 **다른 부품**을 쓴다 — 위 얼굴은 `grid-row: 2` 에 사는데 그 줄이 없어서,
+    //   그대로 그리면 빈 둘째 줄이 되살아나 행 높이가 두 축에서 어긋난다. 그래서 한 줄 모드는 첫 줄 오른쪽
+    //   **제 칸**(grid-column 3)에 세운다 — 상태 점 왼쪽, 압정·× 와 안 겹치는 자리다(#3778).
     inst.owner && !one ? personFace(inst.owner.id, 'v2-app-inst-face', ownerNm) : null,
+    inst.owner && one ? personFace(inst.owner.id, 'v2-app-inst-face1', ownerNm) : null,
     //  상태 = **점 하나**. 글자는 줄을 먹어 제목이 잘렸다(#1954 2차) — 색으로 가르고 이름은 툴팁·읽어주기에 남긴다.
     //  작업 중(파랑·깜빡임) · 확인 필요(노랑) · 작업 완료(초록). 확인한 완료는 점이 없다.
     inst.status
@@ -605,12 +612,32 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
 
 // ══ 프로젝트 축 — 묶기·펼침 (#2033) ══════════════════════════════════════════
 /** 한 프로젝트 묶음. rows 는 이미 정렬돼 들어온다(아래 projGroups 머리말). */
-interface ProjGrp { key: string; id: number; name: string; bucket: string; rows: SideInstance[]; open: boolean; active: boolean; counts: Record<string, number> }
+interface ProjGrp { key: string; id: number; name: string; bucket: string; rows: SideInstance[]; open: boolean; active: boolean; pinned: boolean; counts: Record<string, number> }
+
+/**
+ * 접힌 카드 머리줄에 세울 얼굴 — 그 안 세션들의 주인을 **합집합**으로 (#3778, 원준 2026-09-09).
+ *
+ * ★ 이 합집합은 **카드가 접혀 있을 때만** 쓴다. 펴져 있으면 각 줄이 제 얼굴을 들고 있으므로
+ *  머리줄의 요약은 중복이고, 그보다 나쁘게 **거짓말이 된다** — 한 프로젝트 안에서도 세션마다 공유
+ *  범위가 다르기 때문이다(원준: "특정 세션만 공유할 수도 있잖아"). 펴 놓고 보면 머리줄에 있는 얼굴이
+ *  어느 줄에도 없는 상태가 그대로 노출된다. **요약은 안을 못 볼 때만 값이 있다.**
+ */
+function grpFaces(rows: SideInstance[]): Array<{ id: string; name: string }> {
+  const seen = new Map<string, { id: string; name: string }>();
+  for (const r of rows) {
+    if (!r.owner || seen.has(r.owner.id)) continue;
+    seen.set(r.owner.id, { id: r.owner.id, name: (people[r.owner.id] && people[r.owner.id].display_name) || r.owner.name || r.owner.id });
+  }
+  return [...seen.values()];
+}
 
 //  펼칠 상태 = **확인 필요 · 작업 완료(미확인)** 둘뿐(상민님 2026-08-26).
 //   작업 중은 「지금 볼 것」에 **서기는 하되 펴지 않는다** — 돌고 있는 건 나를 기다리는 게 아니라 알리기만 하면 되고,
 //   그건 머리글의 파란 점이 이미 한다. 묶음에 들어가고 말고(=순서)는 시간축이 정하고, 펴고 접고만 여기서 가른다.
 const OPENS: Record<string, true> = { waiting: true, done: true };
+//  「고정」 머리글의 글자 — 행이 하나도 없이 **카드만** 고정됐을 때 쓰는 이름(#3778).
+//   행이 있으면 그 행이 들고 온 묶음 이름을 그대로 쓴다(main.ts 의 PINNED_GROUP 이 곧 이 글자다).
+const PINNED_BUCKET = '고정';
 
 /**
  * 행 목록을 프로젝트 묶음으로 접는다(#2033).
@@ -632,7 +659,8 @@ function projGroups(rest: SideInstance[], searching: boolean): ProjGrp[] {
     if (!g) {
       //  묶음 이름 = **첫 행의 묶음**. 목록이 이미 정렬돼 있으므로 첫 행이 곧 그 프로젝트의 가장 급한 행이다.
       g = { key, id, name: id ? (r.project as { name: string }).name : '프로젝트 없음',
-        bucket: r.group || '', rows: [], open: false, active: false, counts: {} };
+        //  압정은 트리와 **같은 통**(PIN_KEY · 'p:<id>')을 본다 — 한 프로젝트에 압정 하나(#3778).
+        bucket: r.group || '', rows: [], open: false, active: false, pinned: !!id && isPinned(key), counts: {} };
       byKey.set(key, g); groups.push(g);
     }
     g.rows.push(r);
@@ -678,17 +706,70 @@ function grpSums(counts: Record<string, number>): HTMLElement | null {
  *   상태 점·개수가 오른쪽 끝에 못 붙는다(#1954 ⓑ 가 앱 행에서 이미 밟은 함정, 상민님 2026-08-26 재지적).
  */
 function projGrpHead(g: ProjGrp): HTMLElement {
-  return el('div', { class: 'v2-pg-row' + (g.active && !g.open ? ' act' : '') },
+  //  ⚠ `pinned` 는 **자리를 비워 두는 표식**이다 — 고정된 카드의 압정은 손을 떼도 서 있어야 하는데(그게 '고정됨'의
+  //   유일한 표식이다) 압정도 ＋ 와 같은 절대위치라, 자리를 안 비우면 상태 점·개수 위에 겹쳐 앉는다(CSS .v2-pg-row.pinned).
+  const head = el('div', { class: 'v2-pg-row' + (g.active && !g.open ? ' act' : '') + (g.pinned ? ' pinned' : '') },
     el('button', { class: 'v2-pg-t', type: 'button', 'aria-expanded': String(g.open),
       title: g.name + (g.id ? `\n#${g.id} · 세션 ${g.rows.length}` : '\n프로젝트에 붙지 않은 세션과 화면'),
-      onclick: () => toggleGrp(g.key, g.open) },
+      //  ⚠ **두 번째 클릭은 삼킨다** — 더블클릭은 «이름 고치기»(아래 dblclick)라, 접기가 두 번 일어나면 사람이 고른
+      //   접힘 상태가 편집 도중에 뒤집힌다. 첫 클릭의 접기는 그대로 둔다(단일 클릭 문법은 안 건드린다 — #2579 와 같은 처방).
+      onclick: (e: MouseEvent) => { if (e.detail >= 2) return; toggleGrp(g.key, g.open); } },
       el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }),
       glyph(g.open ? 'folder-open' : 'folder', 'v2-pg-ic'),
       el('span', { class: 'n', text: g.name }),
+      //  ★접힌 카드에만 얼굴 합집합(#3778) — 펴면 줄이 제 얼굴을 들고 있으므로 여기선 걷는다(grpFaces 머리말).
+      //   최대 셋까지 겹쳐 쌓고 그 위는 +N — 넷째부터는 얼굴보다 숫자가 빠르다.
+      g.open ? null : grpFacesEl(g),
       grpSums(g.counts),
       //  세션이 하나뿐인 묶음은 개수를 안 쓴다 — 접힌 줄 하나가 곧 그 하나다(위 grpSums 주석과 같은 사유).
       g.rows.length > 1 ? el('span', { class: 'v2-cnt', text: String(g.rows.length) }) : null),
-    g.id ? newSessBtn(g.id) : null) as HTMLElement;
+    //  ★고정(#3778) — 카드째 맨 위로. 「프로젝트 없음」 묶음은 고정할 프로젝트가 없으므로 압정도 없다(트리와 같은 규율).
+    g.id ? pinBtn(g.key, '위에 고정 — 이 프로젝트와 그 안의 세션을 통째로 맨 위로 올려 둡니다') : null,
+    g.id ? newSessBtn(g.id) : null,
+    //  ★프로젝트 상세로 가는 문(#3778, 원준 2026-09-09) — 종전엔 머리줄에 **이름이 눈앞에 있는데 거기로 가는 길이
+    //   없었다**(눌러도 접기/펴기뿐). 그렇다고 이름 클릭을 항해로 바꾸지는 않는다: 이 줄은 습관적으로 누르는 자리라
+    //   한 번 누를 때마다 가운데가 통째로 바뀌면 «접으려고 눌렀는데 화면이 바뀌었다» 가 되고, 접힘은 사람이 정해
+    //   기억까지 하는 상태다(toggleGrp). 그래서 압정 ＋ 와 같은 규약으로 **손 얹었을 때만 나타나는 단추**를 하나 낸다.
+    g.id ? openProjBtn(g.id, g.name) : null) as HTMLElement;
+  //  더블클릭 = 이름 고치기. 트리(projRow)가 이미 쓰는 손짓 · 같은 편집기를 홈 목록에도 준다 — 종전엔 **트리에만**
+  //   있어서 같은 프로젝트인데 어디서 보느냐에 따라 고칠 수 있기도 없기도 했다(원준 2026-09-09).
+  if (g.id) head.addEventListener('dblclick', (e: MouseEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    //  첫 클릭이 뒤집어 놓은 접힘을 **되돌린 뒤** 편집칸을 연다 — 이름을 고치려던 몸짓이 접힘까지 바꾸면 안 된다.
+    //   toggleGrp 이 repaintList 로 이 줄을 다시 그리므로, 잡아 둔 노드가 아니라 앵커로 다시 찾는다
+    //   (트리의 beginRenameProject 가 같은 사유로 같은 일을 한다).
+    toggleGrp(g.key, !g.open);
+    beginRenameProjGrp(g);
+  });
+  return head;
+}
+
+/** 접힌 카드 머리줄의 얼굴 묶음 — 셋까지 겹쳐 쌓고 그 위는 `+N`. 아무도 없으면 **아무것도 그리지 않는다**
+ *  (혼자 하는 프로젝트에는 한 픽셀도 안 생긴다 — 그래야 얼굴이 보이는 것 자체가 정보가 된다). */
+function grpFacesEl(g: ProjGrp): HTMLElement | null {
+  const fs = grpFaces(g.rows);
+  if (!fs.length) return null;
+  const shown = fs.slice(0, 3);
+  return el('span', { class: 'v2-pg-faces', title: `같이 보는 사람 — ${fs.map((f) => f.name).join(' · ')}` },
+    ...shown.map((f) => personFace(f.id, 'v2-pg-face', f.name)),
+    fs.length > shown.length ? el('span', { class: 'v2-pg-facen', text: '+' + (fs.length - shown.length) }) : null) as HTMLElement;
+}
+
+/** 홈 목록 프로젝트 카드의 [→] — 그 프로젝트 상세 화면을 연다. 자리는 압정 ＋ 와 같은 절대위치(위 projGrpHead 머리말). */
+function openProjBtn(projectId: number, name: string): HTMLElement {
+  return el('button', {
+    class: 'v2-openb', type: 'button', 'aria-label': `[${name}] 프로젝트 페이지 열기`,
+    title: '프로젝트 페이지 — 보드 · 자료 · 타임라인을 엽니다',
+    onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); hooks.onOpenProject?.(projectId); } },
+    sv('svg', { viewBox: '0 0 24 24', class: 'v2-newb-ic', 'aria-hidden': 'true' },
+      sv('path', { d: 'M5 12h13' }), sv('path', { d: 'M13 6l6 6-6 6' })));
+}
+
+/** 홈 목록 프로젝트 카드 머리줄의 이름을 그 자리에서 고친다 — 트리의 beginRenameProject 와 같은 편집기. */
+function beginRenameProjGrp(g: ProjGrp): void {
+  const nameEl = document.querySelector<HTMLElement>('.v2-pg[data-anch="' + g.key + '"] .v2-pg-t .n');
+  if (!nameEl) return;
+  inlineRename(nameEl, { value: g.name, label: '프로젝트 이름', save: async (next) => { await hooks.onRenameProject?.(g.id, next); } });
 }
 
 /** 사람이 묶음을 접거나 폈다. 사람의 결정은 브라우저에 남고, 그 뒤로 자동 판정이 이 묶음을 안 뒤집는다. */
@@ -705,26 +786,42 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
   const kids: HTMLElement[] = [];
   //  「고정」은 두 축 공통으로 맨 위다(#1954) — 압정한 행이 프로젝트 묶음 안에 갇히면 그 약속이 깨진다.
   //   여기 선 행은 소속을 말해 줄 머리글이 없으므로 **두 줄 그대로**(프로젝트 칩을 남긴다).
-  const pinned = shown.filter((r) => r.pinned);
+  const pinnedRows = shown.filter((r) => r.pinned);
   const rest = shown.filter((r) => !r.pinned);
+  const groups = projGroups(rest, !!q);
+  //  ★ 프로젝트 축에서는 **카드째** 고정한다(#3778, 원준 2026-09-09). 이 축의 단위는 세션이 아니라 프로젝트라,
+  //   압정도 그 단위여야 한다 — 카드가 올라오면 그 안의 세션은 **자동으로 따라 올라온다**(집합을 안 건드리고 자리만 옮긴다).
+  //   ⚠ 카드를 여기서 다시 정렬하지 않는다 — 「고정」 층으로 통째로 옮길 뿐, 그 층 안의 순서도 아래 순서도
+  //    시간축이 준 그대로다(projGroups 머리말의 그 규율).
+  const pinnedGrps = groups.filter((g) => g.pinned);
   let lastBucket = '';
-  if (pinned.length) {
-    kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: pinned[0].group || '고정' }) as HTMLElement);
-    lastBucket = pinned[0].group || '고정';
-    for (const r of pinned) kids.push(appRowEl(r, o));
+  if (pinnedRows.length || pinnedGrps.length) {
+    const label = (pinnedRows[0] && pinnedRows[0].group) || PINNED_BUCKET;
+    kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: label }) as HTMLElement);
+    lastBucket = label;
+    //  행이 먼저, 카드가 다음 — 낱개로 꽂은 것이 통째로 꽂은 것보다 좁고 급한 지목이다.
+    for (const r of pinnedRows) kids.push(appRowEl(r, o));
+    for (const g of pinnedGrps) kids.push(projGrpCard(g, o));
   }
-  for (const g of projGroups(rest, !!q)) {
+  for (const g of groups) {
+    if (g.pinned) continue;                         // 이미 위 「고정」 층에 섰다
     if (g.bucket && g.bucket !== lastBucket) {
       kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g.bucket }) as HTMLElement);
       lastBucket = g.bucket;
     }
-    //  ★펼친 묶음 = 흰 카드 그릇 — 세션이 프로젝트의 **안**에 산다는 걸 면(面)이 말한다.
-    //   들여쓰기+세로선만으로는 "목록 둘이 이웃한 그림"으로 읽혔다(상민님 2026-08-18, 트리 .v2-pj.open 과 같은 처방).
-    kids.push(el('div', { class: 'v2-pg' + (g.open ? ' open' : ''), 'data-anch': g.key },
-      projGrpHead(g),
-      g.open ? el('div', { class: 'v2-pg-list' }, ...g.rows.map((r) => appRowEl(r, { ...o, one: true }))) : null) as HTMLElement);
+    kids.push(projGrpCard(g, o));
   }
   return kids;
+}
+
+/** 프로젝트 카드 한 장 — 머리글 + (펼쳤으면) 그 안의 세션들.
+ *  ★펼친 묶음 = 흰 카드 그릇 — 세션이 프로젝트의 **안**에 산다는 걸 면(面)이 말한다.
+ *   들여쓰기+세로선만으로는 "목록 둘이 이웃한 그림"으로 읽혔다(상민님 2026-08-18, 트리 .v2-pj.open 과 같은 처방). */
+function projGrpCard(g: ProjGrp, o: RowOpts): HTMLElement {
+  //  ⚠ 카드 자체엔 고정 표식을 안 칠한다 — 「고정」 머리글과 파랗게 채워진 압정이 이미 말한다(트리의 .v2-pinb.on 과 같은 규율).
+  return el('div', { class: 'v2-pg' + (g.open ? ' open' : ''), 'data-anch': g.key },
+    projGrpHead(g),
+    g.open ? el('div', { class: 'v2-pg-list' }, ...g.rows.map((r) => appRowEl(r, { ...o, one: true }))) : null) as HTMLElement;
 }
 
 /** 목록 안에 들어갈 것 전부 — 묶음 머리글 + 행, 하나도 없으면 빈 화면 한 장. */
@@ -1421,7 +1518,7 @@ function renderProjTree(): void {
   const listRow = (l: TreeList, depth: number): HTMLElement => {
     const on = sel === 'L' + l.id;
     const emoji = l.settings && l.settings.icon ? String(l.settings.icon) : '';
-    return el('a', { class: 'v2-wcat v2-ptl' + (on ? ' on' : ''), href: '#/projects2/l/' + l.id, style: 'padding-left:' + (12 + depth * 14) + 'px',
+    return el('a', { class: 'v2-wcat v2-ptl' + (on ? ' on' : ''), href: '#/projects2/l/' + l.id, 'data-ctx': 'plist', 'data-lid': String(l.id), 'data-name': l.name, style: 'padding-left:' + (12 + depth * 14) + 'px',
       title: l.name + (l.visibility === 'members' ? ' — 멤버만 보는 리스트' : ''), ...(on ? { 'aria-current': 'true' } : {}) },
       emoji ? el('span', { class: 'v2-ptl-emoji', 'aria-hidden': 'true', text: emoji }) : icon('list', 'v2-ptl-ic'),
       el('span', { class: 'n', text: l.name }),
@@ -1443,7 +1540,7 @@ function renderProjTree(): void {
             if (open) foldClosed.add(String(f.id)); else foldClosed.delete(String(f.id));
             saveSet(FOLD_CLOSED_STORE, foldClosed); redraw();
           } }),
-        el('a', { class: 'v2-ptf-a', href: '#/projects2/f/' + f.id, title: (isSpace ? '스페이스 ' : '폴더 ') + f.name + ' — 누르면 그 안의 리스트를 한 화면에 봅니다', ...(on ? { 'aria-current': 'true' } : {}) },
+        el('a', { class: 'v2-ptf-a', href: '#/projects2/f/' + f.id, 'data-ctx': 'pfolder', 'data-fid': String(f.id), 'data-name': f.name, title: (isSpace ? '스페이스 ' : '폴더 ') + f.name + ' — 누르면 그 안의 리스트를 한 화면에 봅니다', ...(on ? { 'aria-current': 'true' } : {}) },
           glyph(open ? 'folder-open' : 'folder', 'v2-ptf-ic'),
           el('span', { class: 'n', text: f.name }),
           el('span', { class: 'v2-cnt', text: String(countUnder(f)) }))));
@@ -1589,6 +1686,7 @@ function renderWiki(): void {
     const on = activeCat === c.id;
     const mine = own.has(c.id);
     return el('a', { class: 'v2-kcat' + (on ? ' on' : ''), href: '#/knowledge?category=' + encodeURIComponent(String(c.id)),
+      'data-ctx': 'wikicat', 'data-cat': String(c.id), 'data-name': c.name,
       title: c.name + (c.description ? ' — ' + c.description : ''), ...(on ? { 'aria-current': 'true' } : {}) },
       el('span', { class: 'v2-kcat-t' },
         el('span', { class: 'n', text: c.name }),
@@ -2366,21 +2464,9 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
       paintTidyBar();                              // 트리는 그대로 두고 이 줄과 막대만 고친다
     });
   }
-  // 우클릭 = 이 프로젝트의 조작 메뉴(#1851) — 아카이브로 보내기/해제·고정·새 세션. 행에 단추를 더 얹지 않는다(이미 둘이다).
-  if (p) row.addEventListener('contextmenu', (e: MouseEvent) => {
-    e.preventDefault(); e.stopPropagation();
-    ctxMenu(e.clientX, e.clientY, [
-      { label: '새 세션', run: () => hooks.onNewSession?.(p.id) },
-      { label: isPinned(pk) ? '고정 해제' : '위에 고정', run: () => togglePin(pk) },
-      { sep: true, label: '' },
-      r.archived
-        ? { label: '보관 해제 — 원래 자리로', run: () => void setArchived(p, false, 0) }
-        : { label: '아카이브로 보내기', run: () => void setArchived(p, true, r.live.filter(isMine).length) },
-      // 삭제 = 휴지통으로(#1851 원준 2026-08-24). 폴더 우클릭 메뉴의 맨 아래·위험색 — 파일 탐색기·노션과 같은 자리.
-      { sep: true, label: '' },
-      { label: '휴지통으로 보내기', danger: true, run: () => void trashProject(p, r) },
-    ]);
-  });
+  // 우클릭 = 이 프로젝트의 조작 메뉴(#1851) — 행에 단추를 더 얹지 않는다(이미 둘이다).
+  //  #3784 — 행 목록은 projectCtxRows() 한 벌(문패·홈·다른 화면의 프로젝트 자리도 같은 메뉴). 셸 배선이 표(data-ctx)로 찾는다.
+  if (p) { row.dataset.ctx = 'project'; row.dataset.pid = String(p.id); }
   // 세션 줄과 같은 손짓 — 더블클릭하면 그 자리에서 이름을 고친다(문패 연필과 같은 편집).
   //  ⚠ #2579 — 이 줄은 `<a href>` 다. 더블클릭의 **두 번째 click 까지 그대로 두면 항해가 일어나고**,
   //   그 항해가 부른 loadData 응답이 사이드바를 다시 그려 방금 연 입력칸을 지운다. 그래서 두 번째 클릭
@@ -2463,10 +2549,10 @@ function toggleAppPin(key: string): void {
   redraw();
 }
 
-function pinBtn(pk: string): HTMLElement {
+function pinBtn(pk: string, offTip = '위에 고정 — 맨 위로 올려 둡니다'): HTMLElement {
   const on = isPinned(pk);
   return el('button', { class: 'v2-pinb' + (on ? ' on' : ''), type: 'button', 'aria-pressed': String(on),
-    'aria-label': on ? '고정 해제' : '위에 고정', title: on ? '고정 해제' : '위에 고정 — 맨 위로 올려 둡니다',
+    'aria-label': on ? '고정 해제' : '위에 고정', title: on ? '고정 해제' : offTip,
     onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); togglePin(pk); } },
     sv('svg', { viewBox: '0 0 24 24', class: 'v2-pinb-ic', 'aria-hidden': 'true' },
       sv('path', { d: PIN_NEEDLE }), sv('path', { d: PIN_BODY })));
@@ -2498,7 +2584,8 @@ function sessRow(s: Sess, activeKey: string, text: { main: string; sub: string }
   const tip = [s.label, sub || (raw.title && String(raw.title) !== s.label ? String(raw.title) : ''), `${st ? st.label : s.stateLabel}${s.lastSeen ? ' · ' + when(s.lastSeen) : ''}`, s.owned ? '내 세션' : `${owner}의 세션`, raw.harness ? String(raw.harness) : '', s.node ? '노드 ' + s.node : ''].filter(Boolean).join('\n');
   // 이름 자리 — 더블클릭하면 그 자리에서 고친다(원준 2026-08-20). 고친 이름은 서버로 가고 탭·대화창까지 따라온다.
   const nameEl = el('span', { class: 't', text: main });
-  const row = el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other') + (pastRow ? ' past' : ''), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, title: tip + (pastRow ? '\n열면 그때 대화를 읽고 [이어서 대화하기]로 계속할 수 있어요' : '\n세션 대화를 엽니다\n이름을 더블클릭하면 그 자리에서 고칠 수 있어요'), role: 'treeitem' },
+  //  #3784 — 우클릭 메뉴는 표(data-ctx)로 붙는다(셸 배선 ctx-registry 가 위로 올라가며 찾는다). 행마다 리스너를 달지 않는다.
+  const row = el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other') + (pastRow ? ' past' : ''), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, 'data-ctx': 'session', 'data-sid': s.id, title: tip + (pastRow ? '\n열면 그때 대화를 읽고 [이어서 대화하기]로 계속할 수 있어요' : '\n세션 대화를 엽니다\n이름을 더블클릭하면 그 자리에서 고칠 수 있어요'), role: 'treeitem' },
     el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }),
     el('span', { class: 'v2-ss-main' }, nameEl),
     isMine(s) ? null : personFace(String(raw.owner || ''), 'v2-ss-face', owner),
@@ -2535,7 +2622,13 @@ function renamingAlive(): boolean {
 function inlineRename(nameEl: HTMLElement, cfg: { value: string; label: string; save: (next: string) => Promise<void> }): void {
   if (renamingAlive()) return;
   const shown = nameEl.textContent || '';
-  const input = el('input', { class: 'v2-ss-edit', type: 'text', value: cfg.value || shown, 'aria-label': cfg.label }) as HTMLInputElement;
+  //  ⚠ **브라우저·확장의 자동완성을 끈다**(원준 2026-09-09: "수정할 때 오른쪽에 이런 사람 모양이 나오는데 이건 도대체 왜").
+  //   `aria-label` 이 「프로젝트 이름」·「세션 이름」 이라 브라우저가 **연락처 칸**으로 넘겨짚고 인물 아이콘 + ⌄ 를
+  //   칸 안에 그려 넣는다. 비밀번호 관리자 확장도 같은 자리에 제 아이콘을 얹는다. 여긴 이름을 **고치는** 자리이지
+  //   사람을 **고르는** 자리가 아니므로 넷 다 끈다 — `data-*` 는 1Password·LastPass·Bitwarden 이 각자 읽는 표식이다.
+  const input = el('input', { class: 'v2-ss-edit', type: 'text', value: cfg.value || shown, 'aria-label': cfg.label,
+    autocomplete: 'off', autocorrect: 'off', autocapitalize: 'off', spellcheck: 'false',
+    'data-1p-ignore': 'true', 'data-lpignore': 'true', 'data-bwignore': 'true' }) as HTMLInputElement;
   nameEl.replaceChildren(input);
   renamingEl = input;
   input.focus(); input.select();
@@ -2635,6 +2728,60 @@ async function doTrash(s: Sess): Promise<void> {
     hooks.onArchived?.();
   } catch (e: any) { toast((e && e.message) || '휴지통으로 보내지 못했습니다', true); }
 }
+
+// ── 우클릭 메뉴 행(#3784) — 사이드바 밖(홈·확인할 것·문패·곁칸 세션 목록)에서도 **같은 메뉴**가 뜨도록 한 벌로 export ──
+//  여기 두는 이유: 보관·휴지통·고정·이름 편집의 실체(doArchive·doTrash·togglePin·inlineRename·hooks)가 이 파일에 산다.
+//  항해(열기·새 탭)는 셸(ctx-shell.ts)이 앞에 붙인다 — 이 함수는 **그 세션·프로젝트에 대한 조작**만 만든다.
+/** 세션 하나의 조작 행. nameEl 이 있으면(사이드바 행) 그 자리에서 이름을 고치고, 없으면 작은 입력창으로 묻는다. */
+export function sessionCtxRows(s: Sess, o: { nameEl?: HTMLElement | null; projectName?: string } = {}): CtxRow[] {
+  const rows: CtxRow[] = [];
+  const mine = isMine(s);
+  const live = isLive(s);
+  const pk = 's:' + s.id;
+  const name = sessText(s, o.projectName || '').main || s.label || s.id;
+  if (mine) rows.push({ label: '이름 바꾸기', icon: 'pen', hint: '더블클릭', run: () => {
+    if (o.nameEl && o.nameEl.isConnected) { beginRename(o.nameEl, s); return; }
+    const next = window.prompt('세션 이름', s.label || '');
+    if (next != null && next.trim() && next.trim() !== s.label) void hooks.onRenameSession?.(s.id, next.trim());
+  } });
+  rows.push({ label: isPinned(pk) ? '고정 해제' : '위에 고정', icon: 'pin', checked: isPinned(pk) || undefined, run: () => togglePin(pk) });
+  if (s.projectId && Number(s.projectId) > 0) rows.push({ label: '같은 프로젝트에 새 세션', icon: 'plus', run: () => hooks.onNewSession?.(Number(s.projectId)) });
+  if (mine && live) rows.push({ sep: true, label: '' }, { label: '지난 세션으로 보내기', icon: 'archive', hint: '보관', run: () => void doArchive(s) });
+  if (mine && !live && !isTrashedSess(s)) rows.push({ sep: true, label: '' }, { label: '휴지통으로 보내기', icon: 'trash', danger: true, run: () => void doTrash(s) });
+  void name;
+  return rows;
+}
+/** 프로젝트 하나의 조작 행 — 사이드바 행의 우클릭 메뉴가 종전에 인라인으로 만들던 그 목록. */
+export function projectCtxRows(p: Proj): CtxRow[] {
+  const pk = 'p:' + p.id;
+  const all = last ? last.data.sessions.filter((x) => Number(x.projectId) === p.id && !isTrashedSess(x)) : [];
+  const liveMine = all.filter((x) => isLive(x) && isMine(x)).length;
+  const archived = isArchivedProj(p);
+  return [
+    { label: '새 세션', icon: 'plus', run: () => hooks.onNewSession?.(p.id) },
+    { label: '이름 바꾸기', icon: 'pen', hint: '더블클릭', run: () => {
+      const nameEl = document.querySelector<HTMLElement>('.v2-pj-row[data-nav="' + pk + '"] .n');
+      if (nameEl) { beginRenameProject(pk, p); return; }
+      const next = window.prompt('프로젝트 이름', p.name || '');
+      if (next != null && next.trim() && next.trim() !== p.name) void hooks.onRenameProject?.(p.id, next.trim());
+    } },
+    { label: isPinned(pk) ? '고정 해제' : '위에 고정', icon: 'pin', checked: isPinned(pk) || undefined, run: () => togglePin(pk) },
+    { sep: true, label: '' },
+    archived
+      ? { label: '보관 해제 — 원래 자리로', icon: 'archive', run: () => void setArchived(p, false, 0) }
+      : { label: '아카이브로 보내기', icon: 'archive', run: () => void setArchived(p, true, liveMine) },
+    // 삭제 = 휴지통으로(#1851 원준 2026-08-24). 메뉴의 맨 아래·위험색 — 파일 탐색기·노션과 같은 자리.
+    { sep: true, label: '' },
+    { label: '휴지통으로 보내기', icon: 'trash', danger: true, run: () => void trashProject(p) },
+  ];
+}
+/** 사이드바 목록의 행 하나(앱 인스턴스)를 id 로 — 우클릭 메뉴가 그 행의 뜻(닫기·고정)을 그대로 쓰기 위해. */
+export function sideInstanceById(id: string): SideInstance | null {
+  const list = hooks.instances?.() || [];
+  return list.find((i) => i.id === id) || null;
+}
+export function toggleInstancePin(id: string): void { toggleAppPin(id); }
+export function isInstancePinned(id: string): boolean { return appPinned.has(id); }
 
 // ── 프로젝트 휴지통(#1851, 원준 2026-08-24) — 폴더를 버리듯: 프로젝트 + 그 아래 내 세션(도는 것은 멈춰서)이 **한 묶음**으로 휴지통에.
 //  서버(project_trash_v6)가 세션을 멈추고 묶음 표식을 달고 프로젝트를 표시한다. 남의 도는 세션이 있으면 서버가 409 로 막는다 —

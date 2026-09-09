@@ -181,6 +181,30 @@ export function agentIsLatest(nodeVer: string | null | undefined, servedVer: str
   return nodeVer === servedVer;
 }
 
+/**
+ * 자가 갱신이 **이 배포에서 구조적으로 막혔나** — 그 실패 코드로 가른다 (#3720, 순수).
+ *
+ * ── 왜 가르나 (실측 2026-09-08~09) ──────────────────────────────────────────
+ * 매니지드 세션 호스트는 테넌트 uid 로 돌고 코드 디렉터리(`/opt/lvly-sesshost/<slug>`)는 **root 소유**다.
+ *  그건 사고가 아니라 **의도**다 — 테넌트 uid 가 자기 실행 코드를 바꿀 수 있으면 격리가 뜻을 잃는다
+ *  (#3711 의 판단, #3696 이 소유를 root 로 되돌리며 재확인). 그래서 자가 갱신의 시도 플래그 쓰기가
+ *  EACCES 로 죽는데, **플래그가 안 써지니 쿨다운이 영영 안 걸린다** — 재접속마다 다시 시도하고
+ *  다시 죽는다. 그 로그가 **24시간에 25건**이었다. 고쳐지지도 멈추지도 않는 상태다.
+ *
+ * ★ 가르는 기준은 «심각한가» 가 아니라 **«다시 하면 달라지나»** 다:
+ *   · 권한·읽기전용(EACCES·EPERM·EROFS) → 다음 연결에도 **같은 답**이다. 그때 「다음 연결에 다시
+ *     시도」라고 적는 것은 거짓말이므로, 접고 한 번만 말한다. 갱신은 설치자(root)가 한다
+ *     (lvly-cloud `deploy/lvly-sesshost-update.timer`).
+ *   · 그 밖(ENOSPC 등) → 다음에 풀릴 수 있다. **접지 않는다** — 접으면 고칠 수 있는 노드가
+ *     영영 옛 코드로 남고, 그건 이 축이 없애려는 바로 그 상태의 다른 얼굴이다.
+ *
+ * ⚠ 접는 것은 «시도» 이지 «보고» 가 아니다 — 낡았다는 사실은 `agentVer` 로 계속 게이트웨이에
+ *  올라가고(`agentIsLatest` 가 그걸 읽는다), 그 값이 롤의 되읽기가 보는 값이다.
+ */
+export function selfUpdateBlockedForever(code: string | null | undefined): boolean {
+  return code === "EACCES" || code === "EPERM" || code === "EROFS";
+}
+
 export type NodeToGwMsg = HelloMsg | StateMsg | ResMsg | OpenedMsg | OpenFailMsg | CloseChanMsg | TaskDoneMsg | WorkerStateMsg | ChatEventMsg;
 export type GwToNodeMsg = ReqMsg | OpenMsg | CtlMsg | CloseChanMsg | HelloOkMsg;
 

@@ -745,7 +745,8 @@ document.addEventListener('keydown', (e: any) => {
 // ════════════════════════════════════════════
 async function renderWikiDocPage(view, name) {
   // #1841 — 좌측 위키 사이드바 폐지(셸 사이드바와 이중이었다). 문서 위 빵부스러기(WIKI › 카테고리 › 문서)가 내비를 전담한다.
-  const canvas = el('article', { class: 'wk-doc' });
+  //  #3784 — 본문 우클릭 = 이 문서의 메뉴(링크·제목·원문 복사 · 변경 이력). 표만 단다(web/classic-ctx.ts).
+  const canvas = el('article', { class: 'wk-doc', 'data-ctx': 'wikipage', 'data-name': name });
   view.replaceChildren(el('div', { class: 'kn-shell kn-shell-flat' }, canvas));
   buildWikiDoc(canvas, name, { mode: 'page' });
 }
