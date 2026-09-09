@@ -1255,6 +1255,11 @@ function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
     project: p ? { id: p.id, name: p.name } : null,
     group,
     status: st ? { key: st, label: stLabel(st) } : null,
+    //  ★ 끝난 세션이라는 사실을 **행에 실어 보낸다**(#3778). 이 함수는 그걸 이미 알고 있었는데(pastRow)
+    //   × 의 뜻과 상태 점을 끄는 데만 쓰고 넘기지 않아서, 홈에는 있는 두 가지가 이 구역엔 없었다:
+    //   흐린 톤(.v2-app-inst--past)과 카드 안 「지난 세션 n」 접힘. 같은 목록이 어디서 보느냐에 따라
+    //   다른 말을 하면 사람은 그걸 «없어졌다» 로 겪는다(이름 수정이 트리에만 있던 것과 같은 종류).
+    past: pastRow,
     //  남의 세션이면 주인 얼굴 — 홈이 이미 하는 일이다(#2026). 이 구역은 남의 세션이 **더 많이** 서는 곳이라
     //   여기 없던 게 더 이상했다.
     owner: isMine(s) ? null : { id: ownerId, name: ownerName(s) },
