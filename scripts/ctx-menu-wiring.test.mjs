@@ -88,4 +88,11 @@ const M = src["web/v2/ctx-menu.ts"];
 ok(/export function tidyRows/.test(M) && /while \(out\.length && out\[out\.length - 1\]\.sep\) out\.pop\(\);/.test(M), "E9 tidyRows 구분선 정리");
 ok(/case 'ArrowDown'/.test(M) && /case 'ArrowRight'/.test(M) && /case 'Escape'|e\.key === 'Escape'/.test(M), "E9 키보드(↑↓ → Esc)");
 
+// E10. 터미널(별 문서) — 셸 배선이 못 오는 iframe 안에 같은 문법의 메뉴. 복사는 Cmd+C 와 같은 길(선택→copyText / 앱 드래그 선택→^C 브리지 1회).
+const T = read("web/standalone/terminal.ts");
+ok(/wireTermCtxMenu\(host\);/.test(T) && /function wireTermCtxMenu\(host: HTMLElement\)/.test(T), "E10a 터미널 우클릭 배선");
+ok(/if \(e\.shiftKey \|\| IS_MOBILE\) return;/.test(T), "E10b ⇧우클릭·모바일은 브라우저 메뉴");
+ok(/if \(sel\) \{ copyText\(sel, false, true\); return; \}\s*if \(appDragSelect\) \{ clearAppSelect\(\); armClipboardPromise\(\); sendInput\('\\x03'\); armBridgeMissHint\(\); \}/.test(T), "E10c 복사 = Cmd+C 와 같은 길(앱 선택 없으면 ^C 안 보냄)");
+ok(/off: !canCopy/.test(T), "E10d 선택이 없으면 복사 행이 꺼진다");
+ok(read("public/terminal.html").includes(".tctx {") && read("scripts/build-standalone.mjs").includes('"ctx-lite.ts"'), "E10e 터미널 메뉴 CSS + 번들 스탬프 입력");
 console.log(`\n${pass} passed`);
