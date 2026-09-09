@@ -471,6 +471,41 @@ t("B21 브리지 후 OSC52 없음 → 실패 안내 1회", async () => {
   await sleep(2700);
   assert.ok(String(h.diag()).includes("bridge-miss"));
 });
+// B22~B24 — 거짓 실패 안내(#3778): 실제로는 복사됐는데 "복사되지 않았어요"가 뜨던 두 경로.
+//  Claude Code 2.1.x 는 드래그를 놓는 순간 자동복사(copyOnSelect 기본 켜짐)해 OSC52 를 **⌘C 전에** 보내고,
+//  그 뒤의 ^C 는 복사 없이 선택만 해제한다 → 브리지 뒤엔 신호가 안 오는 게 정상.
+t("B22 드래그 직후 자동복사 신호(OSC52) → ⌘C 브리지 → 뒤에 신호 없어도 실패 안내 없음", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard(); h.mod.setupOscClipboard(); h.term.modes.mouseTrackingMode = "any";
+  drag(h);
+  h.term._osc[52]("c;" + Buffer.from("HELLO").toString("base64")); // 앱의 선택 즉시 자동복사
+  h.term._keyHandler(h.kev({ key: "c", metaKey: true }));
+  assert.equal(cnt03(h), 1); // 브리지 자체는 그대로(앱이 ^C 를 '선택 해제'로 소비)
+  await sleep(2700);
+  const d = String(h.diag());
+  assert.ok(!/bridge-miss(?!-skip)/.test(d), d);
+  assert.ok(d.includes("bridge-miss-skip"));
+});
+t("B23 경계: 자동복사 신호가 **이전 선택** 것이면 이번 브리지의 실패 안내는 뜬다", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard(); h.mod.setupOscClipboard(); h.term.modes.mouseTrackingMode = "any";
+  h.term._osc[52]("c;" + Buffer.from("OLD").toString("base64")); // 옛 복사 신호
+  await sleep(5);
+  clickAt(h, 5, 5); clickAt(h, 5, 5);                              // 새 선택 — 이 뒤엔 신호 없음
+  h.term._keyHandler(h.kev({ key: "c", metaKey: true }));
+  await sleep(2700);
+  assert.ok(/bridge-miss(?!-skip)/.test(String(h.diag())));
+});
+t("B24 신호가 2.5초를 넘겨 늦게 오면 → 이미 뜬 실패 안내를 거둔다(retract)", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard(); h.mod.setupOscClipboard(); h.term.modes.mouseTrackingMode = "any";
+  clickAt(h, 5, 5); clickAt(h, 5, 5);
+  h.term._keyHandler(h.kev({ key: "c", metaKey: true }));
+  await sleep(2700);
+  assert.ok(/bridge-miss(?!-skip)/.test(String(h.diag())));
+  h.term._osc[52]("c;" + Buffer.from("LATE").toString("base64"));
+  assert.ok(String(h.diag()).includes("bridge-miss-retract"));
+});
 t("B8 마우스모드 아님 + Cmd+C → 전송 0건(브라우저 기본 복사 위임)", async () => {
   const h = await makeCtx();
   h.mod.setupClipboard();
