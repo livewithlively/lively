@@ -401,12 +401,21 @@ export async function listAllSessionStates(): Promise<SessionState[]> {
 // #2544 — 세션 장부용 최소 열(브로커가 «원한다/은퇴했다» 를 가르는 데 필요한 것만). **superseded 행도 준다** —
 //  listAllSessionStates 는 이어진 행을 빼는데(되살릴 목록이므로), 장부의 소비자는 그 행을 «은퇴했다» 로 읽어야 한다
 //  (빼면 «행 없음» 이 되어 오늘의 합의 경로로 떨어질 뿐이지만, 은퇴를 은퇴라 말할 수 있어야 좀비 사본을 회수한다).
-export interface SessionLedgerRow { id: string; superseded_by: string | null; node_id: string | null }
+//  ★ `exited_at` 도 준다 (#3822). 이 행은 **사람이 /exit(·logout)로 끝낸 세션**이고, 그 표시는 하네스의 SessionEnd 훅이
+//   `prompt_input_exit`·`logout` 두 사유에만 찍는다(work-flag.mjs — `clear` 는 안 찍는다). 즉 «이 세션은 끝났다» 의 확정
+//   사실이다. 종전엔 이 열이 장부에 없어서 브로커가 그런 행을 **`wanted`(원한다)** 로 읽었고, 그러면 회수 ②가 영구 보류한다
+//   (orphanPlan: wanted → keep). 그 컨테이너를 걷을 수 있는 것은 회수 ①(exec 유휴 10분)뿐인데 그 하나가 막히면
+//   **아무도 안 걷는다** — 실측 2026-09-09 /ops/resources: `/exit` 한 세션 5개가 41분~4시간째 러닝(각 45~61MB)이었고
+//   세션 예약(1,024MB)을 그대로 물어 노드 축소를 막고 있었다.
+//  ⚠ 복원 좌표는 그대로다 — 이 열은 **행을 지우지 않는다.** 컨테이너만 걷고 desired-state 는 남아 '종료됨(대화 이어보기)'
+//   그대로다(회수의 뜻은 파괴가 아니라 «메모리만 되찾기» — session-reaper.ts 머리말).
+export interface SessionLedgerRow { id: string; superseded_by: string | null; node_id: string | null; exited_at: string | null }
 export async function listSessionLedgerRows(): Promise<SessionLedgerRow[]> {
   if (onNode()) return [];
-  const r = await itemsPool.query("SELECT id, superseded_by, node_id FROM org_session_state");
+  const r = await itemsPool.query("SELECT id, superseded_by, node_id, exited_at FROM org_session_state");
   return r.rows.map((x: Record<string, unknown>) => ({
     id: String(x.id), superseded_by: (x.superseded_by as string | null) ?? null, node_id: (x.node_id as string | null) ?? null,
+    exited_at: x.exited_at ? new Date(x.exited_at as string).toISOString() : null,
   }));
 }
 

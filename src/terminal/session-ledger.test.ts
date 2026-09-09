@@ -8,9 +8,11 @@ import { buildSessionLedger, ledgerAccess, ledgerAuthToken, LEDGER_AUTH_HEADER }
 import { listLiveSessionIds } from "./sessions.js";
 
 const rows = [
-  { id: "box-a-1111", superseded_by: null, node_id: null },
-  { id: "box-b-2222", superseded_by: "box-b-3333", node_id: null },
-  { id: "box-n-4444", superseded_by: null, node_id: "node-1" },
+  { id: "box-a-1111", superseded_by: null, node_id: null, exited_at: null },
+  { id: "box-b-2222", superseded_by: "box-b-3333", node_id: null, exited_at: null },
+  { id: "box-n-4444", superseded_by: null, node_id: "node-1", exited_at: null },
+  //  #3822 — 사람이 /exit 로 끝낸 세션. 장부는 이 사실을 **그대로 실어 나른다**(판정은 소비자 몫).
+  { id: "box-x-6666", superseded_by: null, node_id: null, exited_at: "2026-09-09T00:00:00.000Z" },
 ];
 
 test("buildSessionLedger — desired 전 행(superseded 포함) + 상시세션 + 관측", async () => {
@@ -22,6 +24,8 @@ test("buildSessionLedger — desired 전 행(superseded 포함) + 상시세션 +
   assert.equal(b.authoritative, true);
   assert.equal(b.observed, true);
   assert.deepEqual(b.desired, rows, "superseded 행도 그대로 준다(은퇴 판정은 소비자 몫)");
+  assert.equal(b.desired.find((r) => r.id === "box-x-6666")?.exited_at, "2026-09-09T00:00:00.000Z",
+    "#3822 — 사용자 종료 표시가 장부에 실려야 브로커가 그 컨테이너를 걷는다");
   assert.deepEqual(b.managed, ["box-m-5555"], "session_id 없는 상시세션은 뺀다");
   assert.deepEqual(b.live, ["box-a-1111", "box-m-5555"]);
 });
