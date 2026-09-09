@@ -488,6 +488,18 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
   border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; }
 .v2-app-inst-close { right: 5px; }
 .v2-app-inst-pin { right: 29px; }
+/*  ⚠ 압정·× 는 절대위치라 **제목 위에 그대로 앉는다** — 오른쪽 5~51px 이 그 자리인데 제목 칸(1fr)은
+    거기까지 뻗는다. 그래서 손을 얹으면 압정이 제목 꼬리를 덮었다(원준 2026-09-09 신고).
+    ⇒ **덮지 말고 줄인다.** 그 둘이 나타나는 동안만 제목 칸에 오른쪽 여백을 주어 말줄임이 먼저 오게 한다.
+    덮인 글자는 읽히지도 않고 «고장» 으로 보이지만, 줄어든 글자는 «여기까지» 라고 말한다 —
+    #2061 이 **고정된** 압정에서 이미 같은 판단을 했다(그때는 늘 보이므로 아예 칸을 차지하게 했다).
+    ⚠ 행 높이는 안 변한다 — 가로 말줄임만 움직이므로 목록이 위아래로 흔들리지 않는다.
+    ⚠ 압정이 고정 상태(.on)면 그건 이미 그리드 칸을 차지하므로(아래) 여기서 또 빼지 않는다 — × 몫만. */
+.v2-app-inst:hover .v2-app-inst-open { padding-right: 46px; }
+/*  ⚠ 형제 결합자(`~`)로는 못 쓴다 — 압정은 DOM 에서 제목 **뒤**에 온다(제목 · 얼굴 · 점 · 압정 · ×).
+    앞 형제를 가리키는 결합자는 없으므로 부모에 `:has()` 로 조건을 건다. */
+.v2-app-inst:hover:has(.v2-app-inst-pin.on) .v2-app-inst-open,
+.v2-app-inst.on:not(:hover) .v2-app-inst-open { padding-right: 24px; }
 .v2-app-inst:hover .v2-app-inst-close, .v2-app-inst.on .v2-app-inst-close, .v2-app-inst-close:focus-visible,
 .v2-app-inst:hover .v2-app-inst-pin, .v2-app-inst-pin:focus-visible, .v2-app-inst-pin.on { display: inline-grid; }
 /*  고정된 행의 압정은 **늘 보이므로 겹쳐 뜨면 안 된다** — 절대위치로 두면 제목 꼬리를 27px 덮어 썼다
@@ -1884,6 +1896,12 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 /* ★펼친 묶음 = 흰 카드 그릇 — 세션이 프로젝트의 **안**에 산다는 걸 면(面)이 말한다.
    들여쓰기+세로선만으로는 "목록 둘이 이웃한 그림"으로 읽혔다(상민님 2026-08-18 — 트리 .v2-pj.open 과 같은 처방).
    접힌 묶음은 카드 없이 조용히 — 카드는 '열려 있음'의 표식이기도 하다. */
+/*  ★카드의 **바깥 여백**(원준 2026-09-09: "하얀 박스의 좌여백 우여백이 어색"). 목록 칸은 좌우 2px 밖에 없어
+    (.v2-app-list padding: 1px 2px 12px) 테두리 있는 카드가 사이드바 벽에 거의 붙어 있었다. 안쪽은 5px 인데
+    (.v2-pg-list) 바깥이 2px 이라 **안이 밖보다 넓은** 상자가 됐다 — 그게 «어색함» 의 실체다.
+    ⇒ 바깥을 6px 로 만들어 안(5px)과 맞춘다. 목록 칸 전체를 건드리면 카드 아닌 행까지 다 밀리므로
+    **카드에만** 준다. ⚠ `margin` 단축을 쓰지 마라 — 아래 세로 마진 규칙 둘이 함께 지워진다. */
+.v2-pg { margin-inline: 4px; }
 .v2-pg + .v2-pg { margin-top: 2px; }
 .v2-pg.open + .v2-pg, .v2-pg + .v2-pg.open { margin-top: 8px; }
 .v2-pg.open { background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; }
