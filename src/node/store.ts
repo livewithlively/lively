@@ -30,10 +30,14 @@ export interface OrgNode {
   last_seen: string | null; created_by: string | null; created_at: string; updated_at: string;
 }
 
-const ID_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
+//  ⚠ 상한은 **64자**다(#3797 T7 — 종전 41). 세션 호스트 id 가 `sesshost-<slug>-<node>` 로 노드 성분을
+//   갖게 되면서 실측 좌표(슬러그 26 + 노드 19)가 41 을 넘는다. 자르면 두 노드가 같은 행(=같은 토큰)을
+//   쓰게 되므로 자를 수 없고, 이 레포의 다른 id 규칙(capabilities/*.ts)이 이미 64자라 그 자로 맞춘다.
+//   ★ 상한을 **올리는** 변경이라 기존 id 는 한 건도 무효가 되지 않는다(컬럼은 TEXT).
+const ID_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 export function normalizeNodeId(raw: string): string {
   const id = (raw || "").toLowerCase().trim().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
-  if (!ID_RE.test(id)) throw new HttpError(400, "노드 id 형식이 잘못되었습니다(소문자·숫자·하이픈 2~41자)");
+  if (!ID_RE.test(id)) throw new HttpError(400, "노드 id 형식이 잘못되었습니다(소문자·숫자·하이픈 2~64자)");
   return id;
 }
 

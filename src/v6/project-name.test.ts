@@ -7,7 +7,7 @@
 //  실행: node dist/v6/project-name.test.js
 import assert from "node:assert/strict";
 import {
-  canRenameProject, normalizeProjectNameSource, projectNameFromAgent, shellNameFromPrompt,
+  canRenameProject, normalizeProjectNameSource, projectNameFromAgent, projectNameFromHuman, shellNameFromPrompt,
 } from "./project-name.js";
 
 let pass = 0;
@@ -131,6 +131,38 @@ const ok = (name: string) => { pass++; console.log(`ok  ${name}`); };
   // 배선 확인 — 훅을 실제로 불렀고 빈 값만 비교한 게 아니다.
   assert.ok(titleFrom(SAMPLES[0]).length > 0, "훅 titleFrom 이 아무것도 안 돌려준다(비교가 공허하다)");
   ok(`훅 project-auto-bind.titleFrom == 서버 shellNameFromPrompt — 표본 ${SAMPLES.length}건`);
+}
+
+// ── 표 E: 사람이 새 작업 창에서 친 이름 [사양 S5] (#3778) ──────────────────
+//  이 표가 틀렸을 때 나는 일:
+//   🔴 상한을 에이전트와 같이 30자로 두면 사람이 지은 이름이 말없이 잘린다(«모듈 창업 2차 지원서 답안» 같은 실명이 실제로 그 길이다).
+//   🔴 다듬기를 에이전트 규칙으로 하면 사람이 넣은 따옴표·괄호가 사라진다 — 그건 다듬기가 아니라 뜻 바꾸기다.
+//   🔴 빈 값이 ""가 아니면 «비워 두면 지금 그대로»가 깨진다(호출자가 그 값을 이름으로 믿는다).
+{
+  const T: Array<[string, string | null | undefined, string]> = [
+    ["앞뒤 공백은 턴다", "  투자자 미팅 준비  ", "투자자 미팅 준비"],
+    ["가운데 연속 공백은 하나로", "투자자    미팅   준비", "투자자 미팅 준비"],
+    ["여러 줄이면 첫 비어있지 않은 줄", "\n\n  첫 줄이 이름이다 \n둘째 줄", "첫 줄이 이름이다"],
+    ["빈 값 → ''(호출자가 «비워 둠»으로 다룬다)", "", ""],
+    ["공백뿐 → ''", "   \n  ", ""],
+    ["null → ''", null, ""],
+    ["undefined → ''", undefined, ""],
+    ["★경계 — 60자는 자르지 않는다(… 없음)", "가".repeat(60), "가".repeat(60)],
+    ["★경계 — 61자는 59자+… (총 60자)", "가".repeat(61), "가".repeat(59) + "…"],
+  ];
+  for (const [why, input, want] of T) {
+    assert.equal(projectNameFromHuman(input as string), want, `projectNameFromHuman — ${why}`);
+  }
+  ok(`사람 이름 표 ${T.length}행 — 다듬되 뜻은 안 바꾼다(경계 60/61자)`);
+
+  // 배선 확인 — 자르는 경로와 안 자르는 경로가 둘 다 살고, **에이전트 규칙과 실제로 갈린다**.
+  assert.equal(projectNameFromHuman("가".repeat(80)).length, 60, "자른 뒤 길이는 정확히 60(… 포함)");
+  assert.ok(!projectNameFromHuman("짧은 이름").endsWith("…"), "짧은 이름엔 … 가 붙지 않는다");
+  assert.equal(projectNameFromHuman('"결제 백오프"'), '"결제 백오프"', "사람이 넣은 따옴표는 이름의 일부다");
+  assert.equal(projectNameFromAgent('"결제 백오프"'), "결제 백오프", "대조 — 모델이 감싼 것은 벗긴다");
+  assert.notEqual(projectNameFromHuman("가".repeat(45)), projectNameFromAgent("가".repeat(45)),
+    "45자에서 두 규칙이 갈린다(사람은 그대로, 에이전트는 30자로 자름) — 상한이 같아지면 이 줄이 잡는다");
+  ok("배선 확인 — 사람/에이전트 규칙이 상한·다듬기 둘 다에서 갈린다");
 }
 
 console.log(`\n${pass} passed`);

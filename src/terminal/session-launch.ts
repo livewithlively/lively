@@ -80,6 +80,9 @@ export function sessionInputFromBody(headers: Record<string, unknown>, b: Record
     runtime: b.runtime === "chat" ? "chat" : b.runtime === "terminal" ? "terminal" : undefined,
     theme: themeOf({ headers }, b),
     initialPrompt: typeof b.initialPrompt === "string" && b.initialPrompt.trim() ? b.initialPrompt.slice(0, 20_000) : undefined,
+    // #3778 — 새 작업 창에서 사람이 지은 새 프로젝트 이름. 다듬기는 projectNameFromHuman 이 하므로
+    //  여기서는 폭주만 막는다(200자 넘게 오면 그건 이름이 아니다).
+    projectName: typeof b.projectName === "string" && b.projectName.trim() ? b.projectName.trim().slice(0, 200) : undefined,
     appId: String(b.appId ?? "").trim() || undefined,
   };
 }

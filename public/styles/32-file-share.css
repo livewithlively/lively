@@ -127,6 +127,24 @@ body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 au
 .fp-table .fp-cn { color: var(--muted-2); text-align: right; background: var(--bg-tint); font-variant-numeric: tabular-nums; }
 .fp-tablemore { margin-top: 8px; font-size: 12px; color: var(--muted-2); }
 
+/* ── 사무문서(docx·pptx·hwpx·odt·epub) 렌더 (#3778) ────────────────────────────
+   워드의 조판을 재현하지 않는다 — «무슨 문서인지 읽힌다»가 기준이다. 그래서 폭을 글줄 길이로 묶고
+   제목·표·그림만 문서답게 세운다. 표는 위 .fp-table 을 그대로 쓴다(같은 표가 두 벌 자라지 않게). */
+.fp-doc { width: 100%; box-sizing: border-box; max-width: 900px; margin: 0 auto; text-align: left;
+  font-size: 14px; line-height: 1.75; color: var(--text); }
+.fp-doc h1, .fp-doc h2, .fp-doc h3, .fp-doc h4, .fp-doc h5, .fp-doc h6 { margin: 18px 0 8px; line-height: 1.35; }
+.fp-doc h1 { font-size: 20px; } .fp-doc h2 { font-size: 17px; } .fp-doc h3 { font-size: 15.5px; }
+.fp-doc h4, .fp-doc h5, .fp-doc h6 { font-size: 14.5px; }
+.fp-doc p { margin: 0 0 8px; white-space: pre-wrap; word-break: break-word; }
+.fp-doc a { color: var(--accent, #2563eb); text-decoration: underline; }
+.fp-doc .fp-docli { margin: 0 0 4px 20px; list-style: disc; display: list-item; white-space: pre-wrap; }
+.fp-doc .fp-tablewrap { margin: 10px 0 14px; }
+.fp-docimg { display: block; max-width: 100%; margin: 12px auto; border-radius: 6px; border: 1px solid var(--line); }
+/* 구분 머리 — 슬라이드 번호·압축 개수·«문서 앞부분» 같은 한 줄 표지. 내용이 아니라 안내다. */
+.fp-docsep { margin: 16px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--line);
+  font-size: 12px; font-weight: 700; color: var(--muted-2); letter-spacing: .02em; }
+.fp-doc .fp-docsep:first-child { margin-top: 0; }
+
 /* 액션 열이 4개(공유 추가)로 늘어난 폴더 브라우저 목록 뷰 — 파일(4)·폴더(4) 열 폭을 다시 맞춘다.
    (20-dashboard.css 의 78px 는 버튼 3개 기준이었다 — 늘린 채 두면 날짜 열이 어긋난다.) */
 .dash-fb-row .dash-fb-actions { width: 104px; }

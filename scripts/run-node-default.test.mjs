@@ -24,6 +24,9 @@ globalThis.location = { href: "http://localhost/", hash: "", search: "", pathnam
 globalThis.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 globalThis.document = { createElement: () => ({ style: {}, setAttribute() {}, appendChild() {}, addEventListener() {} }), addEventListener() {}, documentElement: {}, body: {} };
 const { defaultNodeId, nodeCanRunAi } = await import(join(root, "public/app/v2/run-picker.js"));
+// #3778 — 규칙의 집은 run-prefs.ts 로 옮겨졌다(run-picker 는 재수출). [⚙] 기본값 창의 «실행 컴퓨터» 설정을 실제 노드로
+//  푸는 resolveNodeDefault 도 거기 산다 — 설정이 비었으면(규칙대로) 이 규칙과 **같은 답**이어야 한다.
+const { resolveNodeDefault, NODE_CENTRAL } = await import(join(root, "public/app/v2/run-prefs.js"));
 
 const n = (id, o) => ({ id, name: id, ...o });
 
@@ -103,13 +106,34 @@ eq(nodeCanRunAi(n('x', {})), true, "G4 미보고(구 번들)는 제한 없음으
 eq(nodeCanRunAi(n('x', { harnesses: [] })), true, "G5 빈 배열도 미보고와 같게 본다");
 eq(nodeCanRunAi(n('x', { harnesses: ['shell', 'shell'] })), false, "G6 셸만 여러 개여도 AI 는 없다");
 
+// ── D. [⚙] 기본값 창의 «실행 컴퓨터» 설정 → 실제 노드(#3778 안 C) — 규칙을 덮되, 비었거나 못 쓰면 규칙으로 ──
+{
+  const mineOn = n('m1', { mine: true, online: true, connectedAt: 10 });
+  const sharedOn = n('s1', { shared: true, online: true, connectedAt: 20 });
+  const mineOff = n('m0', { mine: true, online: false });
+  const nodes = [sharedOn, mineOn, mineOff];
+  eq(resolveNodeDefault(nodes, ''), defaultNodeId(nodes), "D1 설정이 비었으면(규칙대로) 규칙과 같은 답");
+  eq(resolveNodeDefault(nodes, NODE_CENTRAL), '', "D2 «항상 중앙» 은 노드가 켜져 있어도 중앙");
+  eq(resolveNodeDefault(nodes, 's1'), 's1', "D3 특정 노드를 골랐고 켜져 있으면 그 노드");
+  eq(resolveNodeDefault(nodes, 'm0'), defaultNodeId(nodes), "D4 고른 노드가 꺼져 있으면 규칙으로");
+  eq(resolveNodeDefault(nodes, 'ghost'), defaultNodeId(nodes), "D5 사라진 노드를 가리키면 규칙으로");
+  eq(resolveNodeDefault([], 'm1'), '', "D6 노드가 하나도 없으면 중앙");
+}
+
 // ── E. 화면이 그 규칙을 실제로 쓰나 — 기억(prefs.node)을 기본으로 되살리지 않는다 ──
+//  #3778 뒤 구조: 규칙(defaultNodeId·isAiHarness·nodeCanRunAi)은 run-prefs.ts, 화면(run-picker.ts)은 그걸 부른다.
 const PICKER = read("web/v2/run-picker.ts");
-const codeOnly = PICKER.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-ok(/nodeKey\s*=\s*defaultNodeId\(nodes\)/.test(codeOnly), "E1 초기 노드 값이 규칙에서 온다");
-ok(/if\s*\(!nodePicked\s*\|\|/.test(codeOnly), "E2 사람이 고르기 전에는 다시 그릴 때마다 규칙이 정한다");
-ok(!/prefs\.node/.test(codeOnly), "E3 실행 노드는 기억(prefs.node)을 기본으로 읽지 않는다 — 이 지시의 핵심");
-ok(/node:\s*nodeKey/.test(codeOnly), "E4 고른 값을 기억에 되쓰는 것은 그대로(클래식 폼이 아직 그 기억을 쓴다)");
+const PREFS = read("web/v2/run-prefs.ts");
+const strip = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+const codeOnly = strip(PICKER);
+const prefsOnly = strip(PREFS);
+ok(/const nodeKey = \(\): string => resolveNodeDefault\(nodes, sessionDefaults\(\)\.nodeDefault\)/.test(codeOnly),
+  "E1 노드 값은 매번 «기본값 설정 → 규칙» 으로 다시 정한다(캐시된 직전 값을 되살리지 않는다)");
+ok(/return defaultNodeId\(nodes\);/.test(prefsOnly) && /if \(pref === NODE_CENTRAL\) return '';/.test(prefsOnly),
+  "E2 설정이 비었거나 못 쓰면 규칙(defaultNodeId)으로 떨어진다");
+ok(!/prefs\.node\b/.test(codeOnly) && !/\bp\.node\b/.test(prefsOnly) && !/prefs\.node\b/.test(prefsOnly),
+  "E3 실행 노드는 기억(prefs.node)을 기본으로 읽지 않는다 — 이 지시의 핵심(nodeDefault 는 사람이 창에서 고른 설정이지 직전 값이 아니다)");
+ok(/node:\s*nodeKey\(\)/.test(codeOnly), "E4 생성 바디의 node 는 그 값이다");
 
 // ── W. 배선 — 빈 목록 문구가 둘로 갈리나, 셸 판정이 한 곳인가 ────────────────
 //  값(규칙)이 맞아도 화면이 여전히 '지난번 설정 그대로'만 말하면, 왜 못 고르는지는 화면에서 답을 못 얻는다.
@@ -119,9 +143,9 @@ ok(/harnesses\.length \? 'AI 를 못 찾았어요' : '지난번 설정 그대로
 //  단정하면 사람이 설치를 다시 하러 간다. 단정하는 문구가 다시 들어오면 여기서 잡는다.
 ok(!/AI 가 없어요/.test(codeOnly), "W1b 없다고 단정하는 문구를 쓰지 않는다");
 ok(/provSel\.title = harnesses\.length/.test(codeOnly), "W1c 왜 못 찾았는지 확인할 거리를 title 로 남긴다");
-ok(/const isAiHarness = \(key: string\): boolean => key !== 'shell'/.test(codeOnly),
-  "W2a 셸 제외 판정이 이름 붙은 한 곳에 있다");
-ok(/filter\(\(h\) => isAiHarness\(h\.key\)/.test(codeOnly) && /harnesses\.some\(isAiHarness\)/.test(codeOnly),
+ok(/export const isAiHarness = \(key: string\): boolean => key !== 'shell'/.test(prefsOnly) && !/const isAiHarness\b/.test(codeOnly),
+  "W2a 셸 제외 판정이 이름 붙은 한 곳(run-prefs)에 있다 — 화면에 사본이 없다");
+ok(/filter\(\(h\) => isAiHarness\(h\.key\)/.test(codeOnly) && /harnesses\.some\(isAiHarness\)/.test(prefsOnly),
   "W2b 목록 거르기(paint)와 노드 판정(nodeCanRunAi)이 같은 규칙을 쓴다");
 
 // ── F. 서버가 규칙의 근거를 실어 보내나 ─────────────────────────────────────

@@ -138,6 +138,46 @@ test("[T1] 소켓 전송 — listSessions 가 observed·sessions 를 그대로 �
   } finally { await f.close(); }
 });
 
+// ── T1b 목록 범위(#3797 T7) ───────────────────────────────────────────────────
+//  세션 호스트는 **자기 노드 것만** 보고해야 한다. 브로커의 `GET /lvly/sessions` 는 기본이 클러스터
+//   전역이고(다른 산 노드로 팬아웃 — #3689), 범위 헤더 `x-lvly-list-scope: node` 가 그걸 «이 노드 것만»
+//   으로 좁힌다(lvly-cloud sessionroute.LIST_SCOPE_HEADER / isNodeScoped 와 같은 이름·같은 값).
+//  ⚠ 값이 조금이라도 다르면 브로커의 `isNodeScoped` 가 거짓이 되어 **조용히 전역으로 되돌아간다** —
+//   그래서 여기서 헤더의 이름과 값을 문자열로 못박는다.
+test("[T1b] ★★ listScope:'node' 면 목록 요청에 `x-lvly-list-scope: node` 를 싣는다", async () => {
+  const f = await startFake();
+  try {
+    f.sessions = { observed: true, node: "n1", sessions: [] };
+    const c = makeBrokerClient(sockT(f), { listScope: "node" });
+    await c.listSessions();
+    assert.equal(f.log[0]!.headers["x-lvly-list-scope"], "node",
+      "🔴 범위 헤더가 없다/틀리다 — 세션 호스트가 클러스터 전역 목록을 자기 것이라 주장한다");
+  } finally { await f.close(); }
+});
+
+test("[T1c] ★ 기본(미지정)은 종전 그대로 — 범위 헤더를 안 싣는다(게이트웨이 무회귀)", async () => {
+  const f = await startFake();
+  try {
+    f.sessions = { observed: true, node: "n1", sessions: [] };
+    await makeBrokerClient(sockT(f)).listSessions();
+    assert.equal(f.log[0]!.headers["x-lvly-list-scope"], undefined,
+      "🔴 게이트웨이 요청까지 노드 범위로 좁혔다 — 다른 노드 세션이 목록에서 사라진다");
+  } finally { await f.close(); }
+});
+
+test("[T1d] ★ 범위 헤더는 **목록에만** — exec 요청에는 안 붙는다(브로커 라우팅은 세션 축이다)", async () => {
+  //  거기 실으면 «그 세션이 다른 노드에 있을 때» 를 우리가 모르게 막는다. 404(컨테이너 없음)로 한 왕복만
+  //   태워 재빨리 잰다 — 이 시험이 보는 것은 답이 아니라 **헤더**다.
+  const f = await startFake();
+  try {
+    f.onCreate = (res) => { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ message: "No such container" })); };
+    const c = makeBrokerClient(sockT(f), { listScope: "node" });
+    const out = await c.execCapture("lvly-s-acme-box-a-11111111", ["tmux", "-V"]);
+    assert.equal(out.gone, true, "404 는 gone 규약이다(전제가 성립하는지부터 본다)");
+    assert.deepEqual(f.log.map((l) => l.headers["x-lvly-list-scope"]), [undefined], "🔴 exec 요청에 목록 범위 헤더가 실렸다");
+  } finally { await f.close(); }
+});
+
 test("[T2] 허브 전송 — 경로 `/t/<slug>/lvly/sessions` · x-lvly-channel-auth = HMAC-SHA256(secret, 'hub:'+slug) hex", async () => {
   //  허브는 TCP 다 — 가짜 서버를 루프백 포트에 하나 더 세운다(같은 핸들러 모양이면 충분하니 최소 구현).
   const seen: Seen[] = [];

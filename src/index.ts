@@ -24,7 +24,7 @@ import { registerProjectV6Routes } from "./project/project-routes.js";
 import { registerSessionLogRoutes } from "./sessions/session-log-routes.js";
 import { ee } from "./enterprise/registry.js"; // #1601 감사 CSV 내보내기는 Enterprise — 미탑재면 그 라우트가 없다
 import { registerPreviewRoutes } from "./preview/routes.js";
-import { getProject as v6GetProject, listProjectMemberIds as v6ListProjectMemberIds, setProjectFolder as v6SetProjectFolder } from "./v6/project-store.js";
+import { getProject as v6GetProject, setProjectFolder as v6SetProjectFolder } from "./v6/project-store.js";
 import { isProjectMember as v6IsProjectMember } from "./v6/project-session-store.js";   // #1313 R21 — 멤버십 게이트는 세션 바인딩 모듈
 import { listProjectActivities } from "./v6/project-activity-store.js";
 import { createProjectFolder } from "./project/project-fs.js";
@@ -250,7 +250,6 @@ registerProjectV6Routes(app, verifier, {
     return p ? { id: p.id, name: p.name, folder: p.folder } : undefined;
   },
   isProjectMember: (id, m) => v6IsProjectMember(id, m),
-  listProjectMembers: (id) => v6ListProjectMemberIds(id),
   listProjectActivities: (id, a, l, o) => listProjectActivities(id, a, l, o),
   ensureFolder: async (project) => {
     const folder = await createProjectFolder(project.id);

@@ -446,3 +446,28 @@ assert.equal(nodeSessionVisible({ owner: "yoon", invites: [] }, "jang"), false);
 }
 
 console.log("node/protocol.test OK");
+
+// ── 자가 갱신을 접는 판정 (#3720) ────────────────────────────────────────────
+//
+//  실측 2026-09-08~09: 매니지드 세션 호스트에서 「자가 갱신 실패 — 다음 연결에 다시 시도」가
+//   **24시간에 25건** 쌓였다. 코드 디렉터리가 root 소유라(의도) 시도 플래그를 못 쓰고, 플래그가
+//   없으니 쿨다운도 안 걸려 재접속마다 반복된 것이다. 고쳐지지도 멈추지도 않는 상태였다.
+import { selfUpdateBlockedForever } from "./protocol.js";
+
+{
+  // 권한·읽기전용은 **다음에도 같은 답**이다 — 그때 「다음 연결에 다시 시도」는 거짓말이므로 접는다.
+  assert.equal(selfUpdateBlockedForever("EACCES"), true, "세션 호스트가 실제로 낸 코드다");
+  assert.equal(selfUpdateBlockedForever("EPERM"), true);
+  assert.equal(selfUpdateBlockedForever("EROFS"), true);
+
+  // ★ 일시적일 수 있는 실패는 **접지 않는다** — 가르는 기준은 «심각한가» 가 아니라 «다시 하면 달라지나» 다.
+  //  접으면 고칠 수 있는 노드가 영영 옛 코드로 남고, 그건 이 축이 없애려는 상태의 다른 얼굴이다.
+  assert.equal(selfUpdateBlockedForever("ENOSPC"), false, "🔴 디스크가 차서 접으면 비운 뒤에도 안 고쳐진다");
+  assert.equal(selfUpdateBlockedForever("EBUSY"), false);
+  assert.equal(selfUpdateBlockedForever("EIO"), false);
+
+  // 모름은 «막혔다» 가 아니다.
+  assert.equal(selfUpdateBlockedForever(undefined), false);
+  assert.equal(selfUpdateBlockedForever(null), false);
+  assert.equal(selfUpdateBlockedForever(""), false);
+}

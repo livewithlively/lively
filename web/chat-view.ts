@@ -22,6 +22,8 @@ import { el, renderMarkdown, toast } from './core.js';
 import { toolGroupSummary } from './chat-tool-group.js';
 import { scanDiff, type DiffScan } from './chat-diff.js';
 import { CHAT_FONT_KEY, fontScale, parseFontStep } from './chat-font.js';
+import { bindCtx } from './v2/ctx-registry.js';   // #3784 대화 덩이 우클릭(답·질문·코드)
+import { copyText } from './v2/ctx-menu.js';
 
 /** 도구 이름 → 사람 말. label 은 필수, detail 은 한 줄 요약(경로·명령 — Claude Code 의 `Read(src/x.ts)` 자리). */
 export interface ToolLabel { label: string; detail?: string }
@@ -158,7 +160,30 @@ function said(text: string): HTMLElement {
   // 답 한 덩이를 그대로 가져가는 자리 — 코드블록 복사와 같은 문법(손을 올려야 드러난다). 붙여넣을 것은 화면의
   //  마크다운이 아니라 **원문**이라, 그린 결과가 아니라 받은 글자를 그대로 준다.
   box.append(copyBtn(text, 'livc-said-copy', '답 복사'));
+  // #3784 우클릭 — 답 복사 · 인용해서 묻기(입력칸에 > 로 담는다) · 코드 블록 위면 코드 복사
+  bindCtx(box, (hit, ev) => {
+    const pre = ev.target.closest('pre');
+    const code = pre ? String(pre.textContent || '') : '';
+    return {
+      title: 'AI 의 답', sub: text.length > 60 ? text.slice(0, 60).replace(/\s+/g, ' ') + '…' : text,
+      rows: [
+        ...(code ? [{ label: '코드 복사', icon: 'code', run: () => void copyText(code).then((ok) => { if (ok) toast('코드를 복사했어요'); }) }] : []),
+        { label: '답 복사', icon: 'copy', hint: '원문(마크다운)', run: () => void copyText(text).then((ok) => { if (ok) toast('복사했어요'); }) },
+        { label: '인용해서 묻기', icon: 'quote', run: () => quoteInto(hit.el, ev.selection || text) },
+      ],
+    };
+  });
   return box;
+}
+/** 대화창 입력칸에 인용(> …)을 담는다 — 보내지는 않는다. 같은 대화창(livc-wrap)의 입력칸을 찾는다. */
+function quoteInto(from: HTMLElement, text: string): void {
+  const ta = from.closest('.livc-wrap')?.querySelector('.livc-input') as HTMLTextAreaElement | null;
+  if (!ta) { void copyText(text).then((ok) => { if (ok) toast('입력칸이 없어 복사만 했어요'); }); return; }
+  const q = text.trim().split('\n').slice(0, 12).map((l) => '> ' + l).join('\n') + '\n\n';
+  ta.value = (ta.value ? ta.value.replace(/\s+$/, '') + '\n\n' : '') + q;
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
 }
 /** 복사 버튼 하나 — 누르면 잠깐 '복사됨'으로 바뀐다(눌렸는지 알 수 없는 버튼을 만들지 않는다). */
 function copyBtn(text: string, cls: string, aria: string): HTMLElement {
@@ -328,6 +353,21 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
       }
     }
     const root0 = el('section', { class: 'livc-turn' + (ask ? '' : ' livc-turn-cont') }, ask, work);
+    // #3784 우클릭 — 내 말: 복사 · 다시 묻기(입력칸에 담기) · 인용
+    if (ask && userText) {
+      const ut = userText;
+      bindCtx(ask, (hit, ev) => ({
+        title: '내 말', sub: ut.length > 60 ? ut.slice(0, 60).replace(/\s+/g, ' ') + '…' : ut,
+        rows: [
+          { label: '복사', icon: 'copy', run: () => void copyText(ut).then((ok) => { if (ok) toast('복사했어요'); }) },
+          { label: '입력칸에 다시 담기', icon: 'pen', hint: '고쳐서 다시 묻기', run: () => {
+            const ta = hit.el.closest('.livc-wrap')?.querySelector('.livc-input') as HTMLTextAreaElement | null;
+            if (!ta) return; ta.value = ut; ta.focus(); ta.dispatchEvent(new Event('input', { bubbles: true }));
+          } },
+          { label: '인용해서 묻기', icon: 'quote', run: () => quoteInto(hit.el, ev.selection || ut) },
+        ],
+      }));
+    }
     // 경과 시간의 기준 — 사람 말의 시각이 있으면 그것(화면을 나중에 열어도 '이 턴이 얼마나 됐나'가 맞다), 없으면 지금.
     const t0 = o?.ts ? Date.parse(o.ts) : NaN;
     const t: ChatTurn = { root: root0, work, ask, text: userText ?? '', ts: o?.ts, r: { cards: new Map(), blocks: new Map(), msgId: null, streamed: new Set() }, live: null, startedAt: Number.isFinite(t0) ? t0 : Date.now() };

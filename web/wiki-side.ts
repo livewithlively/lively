@@ -111,7 +111,7 @@ function knNavDocNode(r, depth, onOpen, childN?: Map<string, number>) {
     // #783 pending(검토 대기) — 트리엔 보이지만 검색·주입엔 없는 상태라, 배지 없이 두면 '승인된 지식'으로 오인된다.
     const pending = r.lifecycle === 'pending';
     const row = el('a', { class: 'tree-item kn-nav-doc' + (r.lifecycle === 'archived' ? ' kn-tree-archived' : '') + (pending ? ' kn-tree-pending' : ''),
-      href: '#/k/' + encodeURIComponent(r.name), style: 'padding-left:' + pad + 'px',
+      href: '#/k/' + encodeURIComponent(r.name), style: 'padding-left:' + pad + 'px', 'data-ctx': 'wikidoc', 'data-name': r.name, 'data-title': r.title || r.name,
       title: (r.title || r.name) + (pending ? ' — 검토 대기(승인 전, 검색·주입 제외)' : '') },
       el('span', { class: 'tree-glyph kn-nav-glyph', 'aria-hidden': 'true', text: knPageIcon(r) }),
       el('span', { class: 'tree-label', text: r.title || r.name }),

@@ -8,6 +8,7 @@
 'use strict';
 
 import { el, renderMarkdown } from './md.js';
+import { liteMenu } from './ctx-lite.js';   // #3784 터미널 우클릭 메뉴(의존 0 — 이 번들은 셸 밖에서 뜬다)
 
 // xterm.js 는 CDN 클래식 스크립트로 먼저 로드된다(terminal.html) — 번들 대상이 아니라 전역으로 온다.
 declare const Terminal: any;
@@ -255,6 +256,7 @@ const sUrl = (suffix) => '/api/ui/terminal/sessions/' + encodeURIComponent(SESSI
 function toast(msg, isErr?) {
   const t = el('div', { text: msg, style: 'position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:' + (isErr ? '#c0392b' : '#333') + ';color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;z-index:100;box-shadow:0 4px 16px rgba(0,0,0,.3)' });
   document.body.append(t); setTimeout(() => t.remove(), 2800);
+  return t;
 }
 
 // ── 상태 ──
@@ -316,6 +318,8 @@ const IS_MOBILE = (() => {
 })();
 let imeComposing = false;  // setupTextareaHygiene 이 관리 — IME 조합 중엔 textarea 를 절대 건드리지 않는다(#633 교훈)
 let appDragSelect = false; // 앱(마우스모드) 화면에서 '드래그 선택'이 관측된 상태 — Cmd+C→^C 브리지 발동 조건(#1117 버그C)
+let appSelectAt = 0;       // 그 선택 제스처가 관측된 시각 — 앱의 '선택 즉시 자동복사'(OSC52)가 이 뒤에 왔는지 판별(#3778)
+let lastOsc52At = 0;       // 앱 복사 신호(OSC52)를 마지막으로 받은 시각
 
 // ── tmux control-mode 파서 ──
 // 서버가 `tmux -CC` 로 붙으면 스트림은 화면 그림이 아니라 텍스트 프로토콜이다:
@@ -915,18 +919,28 @@ function copyHintToast() {
 // 브리지는 됐는데 앱이 복사 신호(OSC52)를 안 보낸 경우의 안내(#1646). 종전엔 아무 반응이 없어서
 //  "⌘C 를 눌렀는데 아무 일도 안 일어난다"가 됐다 — 사용자는 실패했다는 사실조차 알 수 없었다.
 //  사파리 사전 커밋(armClipboardPromise)의 2초 창보다 뒤에 뜬다. OSC52 가 오면 조용히 취소된다(성공은 무음).
-let bridgeMissTimer = null;
+//  [#3778] 두 가지 거짓 실패를 막는다 — 실제로는 복사됐는데 "복사되지 않았어요"가 뜨던 것.
+//   ① Claude Code(2.1.x)는 **드래그를 놓는 순간 자동복사**(copyOnSelect 기본 켜짐)해 OSC52 를 그때 보내고, 그 뒤의
+//      Ctrl+C 는 복사 없이 **선택만 해제**한다(바이너리 실측: `if(copyOnSelect) clearSelection() else copySelection()`).
+//      그래서 브리지 ^C 뒤엔 신호가 안 오는 게 정상이다 → 이 선택 제스처(appSelectAt) **이후에 이미 신호가 왔으면** 성공.
+//   ② 신호가 2.5초를 넘겨 늦게 오면(앱 바쁨·회선) 안내가 먼저 뜬다 → 도착 즉시 떠 있는 안내를 거둔다(retract).
+let bridgeMissTimer = null, bridgeMissToast = null;
 function armBridgeMissHint() {
   clearTimeout(bridgeMissTimer);
+  const selAt = appSelectAt;
   bridgeMissTimer = setTimeout(() => {
     bridgeMissTimer = null;
+    if (lastOsc52At >= selAt) { dlog('bridge-miss-skip', 'osc52-on-select'); return; } // ① 선택 직후 자동복사가 이미 왔다
     dlog('bridge-miss');
-    toast('복사되지 않았어요 — 화면에서 Shift+드래그로 선택한 뒤 ⌘C 하시면 확실히 복사됩니다', true);
+    bridgeMissToast = toast('복사 신호를 못 받았어요 — 붙여넣기가 안 되면 화면에서 Shift+드래그로 선택한 뒤 ⌘C 하세요', true);
   }, 2500);
 }
 function cancelBridgeMissHint() {
-  if (!bridgeMissTimer) return;
-  clearTimeout(bridgeMissTimer); bridgeMissTimer = null;
+  if (bridgeMissTimer) { clearTimeout(bridgeMissTimer); bridgeMissTimer = null; }
+  if (bridgeMissToast) { // ② 늦게라도 신호가 왔다 — 이미 띄운 실패 안내는 거짓이니 거둔다
+    try { bridgeMissToast.remove(); } catch (_) { /* noop */ }
+    bridgeMissToast = null; dlog('bridge-miss-retract');
+  }
 }
 // 앱(마우스모드) 화면의 '선택 제스처' 관측(#1117 버그C) — xterm 이 앱으로 보내는 SGR 마우스 리포트(onData 로
 //  나가는 \e[<b;x;y M/m)를 읽어 앱 화면에 선택이 생겼는지 본다. 선택을 만드는 제스처는 둘이다:
@@ -965,7 +979,7 @@ function trackAppMouse(d) {
         clickAt = now; clickPos = pos;
         appDragSelect = clickRun >= 2;
       }
-      if (appDragSelect) dlog('app-drag-select', 'run=' + clickRun);
+      if (appDragSelect) { appSelectAt = now; dlog('app-drag-select', 'run=' + clickRun); }
       dragPress = null; dragMoved = false;
     }
   }
@@ -1102,7 +1116,8 @@ export function setupOscClipboard() {
           try { text = decodeURIComponent(escape(atob(b64))); } catch (_) { try { text = atob(b64); } catch (__) { text = ''; } }
           if (text) {
             dlog('osc52', 'len=' + text.length);
-            cancelBridgeMissHint(); // 앱 복사 신호 도착 — 브리지는 성공했다(안내 취소, 성공은 무음)
+            lastOsc52At = Date.now();
+            cancelBridgeMissHint(); // 앱 복사 신호 도착 — 브리지는 성공했다(안내 취소·이미 뜬 안내는 철회, 성공은 무음)
             // 사파리에서 Ctrl/Cmd+C 제스처가 promise 를 미리 커밋해 뒀으면(armClipboardPromise) 그걸 resolve —
             //  제스처 밖 writeText 거부를 우회해 앱 복사가 실제로 클립보드에 닿는다. 그 외(크롬 등)는 직접 쓴다.
             if (osc52Resolve) { const r = osc52Resolve; osc52Resolve = null; clearTimeout(osc52Timer); r(text); }
@@ -2478,6 +2493,7 @@ export async function boot() {
     term.loadAddon(new WebLinksAddon.WebLinksAddon((e: MouseEvent, uri: string) => { e.preventDefault(); openLinkFromTerminal(uri); }));
   }
   term.open(host);
+  wireTermCtxMenu(host);   // #3784 — 우클릭 메뉴(복사·붙여넣기·전체 선택·주소 열기·화면 지우기·글자 크기·설정)
   // 휠 폴백 래치 끊기(#1943 후속 — wheelResyncAction 머리말). 관측만 하고 이벤트는 건드리지 않는다(passive).
   //  xterm 의 휠 처리보다 먼저 보도록 capture 로 단다 — 판정은 이 시점의 버퍼·모드로 한다.
   let lastWheelProbeAt = 0;
@@ -2697,6 +2713,46 @@ function markConnProven() {
   connProven = true;
   attempts = 0; gaveUp = false; reconnectDelay = 1500;
 }
+// ── 우클릭 메뉴(#3784) — 셸(web/v2/ctx-*)의 메뉴가 iframe 안까지는 못 오므로 이 문서에서 같은 문법으로 세운다 ──
+//  복사는 Cmd+C 와 **같은 길**을 탄다(xterm 선택 → copyText / 마우스모드 앱(Claude) 드래그 선택 → ^C 브리지 1회 —
+//  #972·#1117 의 규칙 그대로. 선택이 관측 안 됐으면 ^C 를 보내지 않는다(취소·종료 사고)). ⇧우클릭은 브라우저 메뉴.
+function wireTermCtxMenu(host: HTMLElement): void {
+  host.addEventListener('contextmenu', (e: MouseEvent) => {
+    if (e.shiftKey || IS_MOBILE) return;
+    let mouseOn = false;
+    try { mouseOn = !!(term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'); } catch (_) { /* noop */ }
+    const sel = term.hasSelection() ? String(term.getSelection() || '') : '';
+    const canCopy = !!sel || (mouseOn && appDragSelect);
+    const url = /^https?:\/\/\S+$/.test(sel.trim()) ? sel.trim() : '';
+    const secure = !!(navigator.clipboard && navigator.clipboard.readText && window.isSecureContext);
+    const fs = Number(term.options.fontSize) || 14;
+    const setFont = (n: number): void => {
+      const v = Math.max(9, Math.min(30, n));
+      const p = prefs(); p.fontSize = v; savePrefs(p);
+      term.options.fontSize = v; try { fit.fit(); } catch (_) { /* noop */ }
+      toast('글자 크기 ' + v);
+    };
+    e.preventDefault(); e.stopPropagation();
+    liteMenu(e.clientX, e.clientY, [
+      { label: '복사', hint: '⌘C', off: !canCopy, run: () => {
+        if (sel) { copyText(sel, false, true); return; }
+        if (appDragSelect) { clearAppSelect(); armClipboardPromise(); sendInput('\x03'); armBridgeMissHint(); }
+      } },
+      { label: '붙여넣기', hint: '⌘V', off: !secure, run: () => {
+        navigator.clipboard.readText().then((t) => { if (t) pasteText(t); }).catch(() => toast('붙여넣기를 못 읽었어요 — ⌘V 로 붙여넣어 주세요.', true));
+      } },
+      { label: '전체 선택', hint: '⌘A', run: () => { try { term.selectAll(); } catch (_) { /* noop */ } } },
+      ...(url ? [{ label: '선택한 주소 열기', run: () => openLinkFromTerminal(url) }] : []),
+      { sep: true, label: '' },
+      { label: '화면 지우기', hint: '스크롤백만', run: () => { try { term.clear(); } catch (_) { /* noop */ } } },
+      { label: '글자 크게', hint: String(fs) + '→' + Math.min(30, fs + 1), off: fs >= 30, run: () => setFont(fs + 1) },
+      { label: '글자 작게', hint: String(fs) + '→' + Math.max(9, fs - 1), off: fs <= 9, run: () => setFont(fs - 1) },
+      { sep: true, label: '' },
+      { label: '터미널 설정…', run: () => openSettings() },
+    ], '터미널');
+  });
+}
+
 function scheduleReconnect(label) {
   clearTimeout(reconnectTimer);
   if (sessionEnded || gaveUp) return;

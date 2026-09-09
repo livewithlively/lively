@@ -114,7 +114,8 @@ export function notificationRow(n: AppNotification): HTMLElement {
     el('span', { class: 'st', text: relTime(n.created_at) }),
   ];
   const cls = 'v2-now-row v2-noti-row' + (n.read_at ? '' : ' unread');
+  //  #3784 — 우클릭 메뉴 표(읽음 표시·열기). id 는 읽음 처리의 열쇠.
   return n.href
-    ? el('a', { class: cls, href: n.href }, ...inner)
-    : el('div', { class: cls }, ...inner);
+    ? el('a', { class: cls, href: n.href, 'data-ctx': 'noti', 'data-nid': n.id }, ...inner)
+    : el('div', { class: cls, 'data-ctx': 'noti', 'data-nid': n.id }, ...inner);
 }

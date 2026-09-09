@@ -1,6 +1,7 @@
 // v2/panes-kit.ts — 곁칸 부품들이 함께 쓰는 **잎 도구**(#1819 분할). 의존은 core 한 방향뿐이라 순환이 없다.
 //  여기 사는 것: 아이콘 · 인증 헤더 · 파일 종류 판정(미리보기 방식) · 이름 겹침 회피 · 그 자리 우클릭 메뉴.
 //  부품 자신(세션·자료·지식…)은 panes-parts.ts / panes-files.ts 에 산다.
+import { showCtxMenu, type CtxOpts, type CtxRow } from './ctx-menu.js';   // #3784 우클릭 메뉴 엔진
 import { TOKEN_KEY, el, sv } from '../core.js';
 import { EMBEDDED } from './embed.js';
 import { tabNum, type TabKey } from '../lib/tab-key.js';
@@ -57,21 +58,28 @@ export type FileItem = { name: string; path: string; type: 'dir' | 'file'; size:
 export const MACHINE_FILES = new Set(['CLAUDE.md', 'AGENTS.md', '.DS_Store', 'package-lock.json', 'yarn.lock']);
 export const NOISE_RE = /\/(__pycache__|node_modules|dist|build|\.next|coverage|venv)\//;
 export const TRASH_DIR = '휴지통';
-const isImg = (n: string): boolean => /\.(png|jpe?g|gif|webp|svg)$/i.test(n);
+const isImg = (n: string): boolean => /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(n);
 // 아이콘이 아니라 **내용이 보이게**(원준 2026-08-20) — kind 가 미리보기 방식을 정한다.
-//  img=그대로 · pdf/page=축소해 실제로 렌더 · text=앞부분을 글자로 · video=첫 프레임 · file=아이콘(렌더할 방법이 없는 것들).
+//  img=그대로 · pdf/page=축소해 실제로 렌더 · text=앞부분을 글자로 · video=첫 프레임 ·
+//  office=문서를 풀어 앞부분을 글자·표로(#3778) · audio=소리(썸네일 없음) · file=아이콘.
+//  ⚠ 여기서 'file' 은 **썸네일이 없다**는 뜻이지 «미리보기가 없다»가 아니다 — 뷰어(panes-parts)는
+//   file 도 공용 렌더러(lib/file-preview)로 보내 압축 목록·16진까지 그린다. 두 뜻을 섞지 말 것.
 const TEXTY = /\.(md|markdown|txt|log|csv|tsv|json|jsonl|ya?ml|toml|ini|conf|env|sql|sh|bash|zsh|ps1|py|rb|go|rs|java|kt|swift|c|h|cpp|cc|hpp|cs|php|pl|lua|r|ts|tsx|js|jsx|mjs|cjs|css|scss|less|xml|svg|gitignore|dockerfile|makefile)$/i;
 export function kindOf(p: string): { kind: string; type: string } {
   if (isImg(p)) return { kind: 'img', type: '그림' };
   if (/\.pdf$/i.test(p)) return { kind: 'pdf', type: 'PDF' };
   if (/\.html?$/i.test(p)) return { kind: 'page', type: '시안' };
-  if (/\.(mp4|webm|mov|m4v)$/i.test(p)) return { kind: 'video', type: '영상' };
+  if (/\.(mp4|webm|mov|m4v|ogv|mkv)$/i.test(p)) return { kind: 'video', type: '영상' };
+  if (/\.(mp3|wav|m4a|aac|flac|ogg|oga|opus)$/i.test(p)) return { kind: 'audio', type: '소리' };
   if (/\.(md|markdown|txt)$/i.test(p)) return { kind: 'text', type: '문서' };
   if (/\.(csv|tsv)$/i.test(p)) return { kind: 'text', type: '표' };
-  if (/\.xlsx?$/i.test(p)) return { kind: 'file', type: '표' };
-  if (/\.(pptx?|key)$/i.test(p)) return { kind: 'file', type: '장표' };
-  if (/\.docx?$|\.hwpx?$/i.test(p)) return { kind: 'file', type: '문서' };
-  if (/\.(zip|tar|gz|7z|rar)$/i.test(p)) return { kind: 'file', type: '묶음' };
+  if (/\.(xlsx|xlsm|ods|numbers)$/i.test(p)) return { kind: 'office', type: '표' };
+  if (/\.(pptx|pptm|key|odp)$/i.test(p)) return { kind: 'office', type: '장표' };
+  if (/\.(docx|docm|hwpx?|odt|pages|epub)$/i.test(p)) return { kind: 'office', type: '문서' };
+  if (/\.xls$/i.test(p)) return { kind: 'file', type: '표' };
+  if (/\.ppt$/i.test(p)) return { kind: 'file', type: '장표' };
+  if (/\.(doc|rtf)$/i.test(p)) return { kind: 'file', type: '문서' };
+  if (/\.(zip|tar|gz|tgz|7z|rar|jar|war|apk)$/i.test(p)) return { kind: 'file', type: '묶음' };
   if (TEXTY.test(p)) return { kind: 'text', type: '코드' };
   return { kind: 'file', type: '파일' };
 }
@@ -81,7 +89,7 @@ export const PV_W = 300;   // 글 미리보기의 종이 폭 — 이 폭에서 �
  *  ⚠ 300px 짜리 창에 데스크톱용 페이지를 넣으면 그 페이지의 **왼쪽 300px 조각**만 보인다 — 축소가
  *   아니라 확대로 읽힌다. 논리 폭을 데스크톱만큼 주고 카드 크기로 줄여야 **한 장이 통째로** 들어온다. */
 export const PV_PAGE_W = 1180;
-export const PV_MAX = { pdf: 12e6, page: 4e6, text: 512e3, img: 24e6, video: 80e6 } as Record<string, number>;
+export const PV_MAX = { pdf: 12e6, page: 4e6, text: 512e3, img: 24e6, video: 80e6, office: 12e6 } as Record<string, number>;
 
 // ── 보기 설정(맥 파인더 문법) — 브라우저에 기억한다. 칸마다 따로 두지 않는다(한 사람의 한 습관이다). ──
 export const FV_VIEW = 'lively_pn_files_view';    // 'icon' | 'list'
@@ -108,29 +116,12 @@ export const stamp = (): string => {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 };
 
-/** 그 자리에 뜨는 작은 메뉴(우클릭). 밖을 누르거나 Esc 면 닫힌다. */
-export function ctxMenu(x: number, y: number, rows: Array<{ label: string; run?: () => void; danger?: boolean; sep?: boolean; off?: boolean }>): void {
-  document.querySelector('.pn-ctx')?.remove();
-  const menu = el('div', { class: 'pn-ctx', role: 'menu' }) as HTMLElement;
-  const close = (): void => { menu.remove(); document.removeEventListener('pointerdown', away, true); document.removeEventListener('keydown', esc, true); };
-  const away = (e: Event): void => { if (!menu.contains(e.target as Node)) close(); };
-  const esc = (e: KeyboardEvent): void => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
-  for (const r of rows) {
-    if (r.sep) { menu.append(el('div', { class: 'pn-ctx-sep' })); continue; }
-    const b = el('button', { class: 'pn-ctx-i' + (r.danger ? ' danger' : ''), type: 'button', text: r.label }) as HTMLButtonElement;
-    if (r.off) b.disabled = true;
-    else b.onclick = () => { close(); r.run?.(); };
-    menu.append(b);
-  }
-  document.body.append(menu);
-  // 화면 밖으로 나가지 않게 — 오른쪽·아래 끝에서 뒤집는다(좁은 곁칸에서 우클릭하면 늘 걸린다).
-  const r = menu.getBoundingClientRect();
-  menu.style.left = Math.max(6, Math.min(x, window.innerWidth - r.width - 6)) + 'px';
-  menu.style.top = Math.max(6, Math.min(y, window.innerHeight - r.height - 6)) + 'px';
-  document.addEventListener('pointerdown', away, true);
-  document.addEventListener('keydown', esc, true);
+/** 그 자리에 뜨는 작은 메뉴(우클릭). 밖을 누르거나 Esc 면 닫힌다.
+ *  #3784 — 엔진은 ctx-menu.ts 로 옮겼다(키보드·하위 메뉴·머리글). 이 서명은 종전 호출자(자료 칸·레일 독·곁칸 탭·
+ *  사이드바 프로젝트 행)를 위해 그대로 둔다 — 같은 행 타입(CtxRow)이라 아이콘·힌트도 그냥 실어 보내면 된다. */
+export function ctxMenu(x: number, y: number, rows: CtxRow[], opts?: CtxOpts): void {
+  showCtxMenu(x, y, rows, opts);
 }
-
 
 /** 붙여넣은 파일에 사람이 알아볼 이름을 준다 — 브라우저가 주는 'image.png' 는 누구의 것인지 말해 주지 않는다.
  *  ⚠ 확장자는 **이름을 갈아끼울 때만** MIME 에서 만든다. 원래 이름의 확장자 유무로 판단하면 'image.png' 처럼

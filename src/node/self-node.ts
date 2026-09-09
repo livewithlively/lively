@@ -133,9 +133,24 @@ export function nodeSnapshotSessions<T>(
 export function gatewayDefersToSessionHost(
   hosts: ReadonlyArray<{ declared: boolean; online: boolean; stateAgeMs: number | null }>,
   staleMs: number,
+  deadMs = SESSION_HOST_DEAD_MS,
 ): boolean {
-  return sessionHostVerdict(hosts, staleMs).owns;
+  return sessionHostVerdict(hosts, staleMs, deadMs).owns;
 }
+
+/**
+ * 이만큼 소식이 없는 선언 호스트는 **없는 것으로 본다**(#3797 T7).
+ *
+ * ── 왜 필요한가 ───────────────────────────────────────────────────────────────
+ * T7 이 판정을 «선언한 호스트가 **전부** 자격일 때만» 으로 바꿨다. 그 규칙만 두면 회수된 노드의
+ *  `sesshost-*` 행 하나가 남는 순간 그 테넌트의 소유가 **영영** 안 넘어간다 — 노드는 ASG 가 갈아치우므로
+ *  그 행은 시간이 갈수록 쌓인다(실측 2026-09-08: `nodes` 3행 중 2행이 48시간 안에 생겼다).
+ *  «시간이 갈수록 악화하는» 부류라 지평선을 둔다: 하루 넘게 박동이 없는 노드에 기다릴 커버리지는 없다.
+ * ★ 값은 브로커의 주인 없는 라우트 정리(`sessionroute.ROUTE_ORPHAN_MS` = 24h)와 **같은 판단·같은 자**다.
+ * ⚠ 이건 «지운다» 가 아니라 «판정에서 뺀다» 이다. 죽은 노드 좌표의 실제 정리는 별건이다
+ *  ([[sesshost-node-scalein-orphan-3776]] §6 후속 ②).
+ */
+export const SESSION_HOST_DEAD_MS = 24 * 60 * 60 * 1000;
 
 /** 판정이 «왜» 그렇게 났나 — 계수·진단용 사유. `ok` 만 참이고 나머지는 전부 거짓의 이유다. */
 export type SessionHostWhy = "no-hosts" | "undeclared" | "offline" | "stale" | "ok";
@@ -150,22 +165,38 @@ export type SessionHostWhy = "no-hosts" | "undeclared" | "offline" | "stale" | "
  *  노드가 없는 건지가 전부 같은 `false` 로 보인다.
  *
  * ── 사유 순서(먼저 걸리는 것이 답) ──────────────────────────────────────────
- *  `no-hosts`(스코프에 노드 0) → `undeclared`(선언한 노드 없음) → `offline`(선언은 있는데 다 끊김)
+ *  `no-hosts`(스코프에 노드 0) → `undeclared`(선언한 노드 없음) → `offline`(선언한 호스트 중 끊긴 것이 있음)
  *  → `stale`(선언·온라인인데 스냅샷이 낡음/없음) → `ok`.
  * 이 순서는 **좁혀 가는 순서**다: 앞엣것이 참이면 뒤엣것은 물어볼 것도 없다.
+ *
+ * ── ★★ some → every 로 뒤집혔다 (#3797 T7, 2026-09-09) ─────────────────────
+ * 종전 규칙은 «자격 있는 호스트가 **하나라도** 있으면 놓는다» 였고, 그건 옳았다 — 그때 세션 호스트
+ *  하나는 **클러스터 전역** 목록을 주장했기 때문이다(브로커 `GET /lvly/sessions` 가 다른 산 노드로
+ *  팬아웃한다 — #3689). 하나가 답하면 그 하나가 전부를 답했다.
+ * T7 이 축을 (노드, 테넌트)로 옮기면서 각 호스트를 **자기 노드로** 좁혔다(`LIVELY_TMUX_LIST_SCOPE=node`).
+ *  그 순간 스냅샷은 **부분 관측**이 된다 — 하나가 낡거나 끊기면 그 노드의 세션이 목록에서 통째로
+ *  빠지는데, 게이트웨이는 이미 «누가 답했으니 됐다» 로 손을 뗀 뒤다. 그래서 **선언한 호스트가 전부
+ *  자격일 때만** 놓는다. 아니면 종전대로 게이트웨이가 답한다(fail-closed — 이 자리의 일관된 규율).
+ * ⚠ 대가: 회수된 노드의 `sesshost-*` 행이나 옛 축의 잔재가 남아 있으면 그 행이 영영 오프라인이라
+ *  소유가 안 넘어간다(= 종전 동작으로 되돌아갈 뿐, 목록이 비지는 않는다). 그 행의 이름은
+ *  `session-host-provision.foreignSessionHostNodes` 가 로그에 남기고, 사유는 이 계수(`why=offline`)에 뜬다.
+ *  죽은 노드 좌표의 자가 정리는 별건이다([[sesshost-node-scalein-orphan-3776]] §6 후속 ②).
  */
 export function sessionHostVerdict(
   hosts: ReadonlyArray<{ declared: boolean; online: boolean; stateAgeMs: number | null }>,
   staleMs: number,
+  deadMs: number = SESSION_HOST_DEAD_MS,
 ): { owns: boolean; why: SessionHostWhy } {
-  if (hosts.some((h) => h.declared && h.online && h.stateAgeMs !== null && h.stateAgeMs <= staleMs)) {
-    return { owns: true, why: "ok" };
-  }
   if (!hosts.length) return { owns: false, why: "no-hosts" };
-  const declared = hosts.filter((h) => h.declared);
+  //  ⚠ **선언한 노드만** 자격을 묻는다. 미선언 노드(멤버 PC)까지 보면 그 PC 하나가 꺼진 순간
+  //   소유가 영영 안 넘어간다 — 이 판정의 대상이 아니다.
+  //  ⚠ 그리고 **죽은 호스트는 뺀다**(SESSION_HOST_DEAD_MS 머리말) — 회수된 노드의 행 하나가
+  //   그 테넌트의 소유를 영영 붙들지 않게. 「낡음」과 「죽음」은 다른 사실이다.
+  const declared = hosts.filter((h) => h.declared && !(h.stateAgeMs !== null && h.stateAgeMs > deadMs));
   if (!declared.length) return { owns: false, why: "undeclared" };
-  if (!declared.some((h) => h.online)) return { owns: false, why: "offline" };
-  return { owns: false, why: "stale" };
+  if (!declared.every((h) => h.online)) return { owns: false, why: "offline" };
+  if (!declared.every((h) => h.stateAgeMs !== null && h.stateAgeMs <= staleMs)) return { owns: false, why: "stale" };
+  return { owns: true, why: "ok" };
 }
 
 /**

@@ -29,6 +29,7 @@ import { installGlobalUndo } from './undo.js';
 import { setUnauthorizedHandler } from './lib/net.js';
 import { takeShellSwitch, uiMode } from './lib/state.js';
 import { mountDesktopUpdate } from './desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 클래식 셸 상단 띠(#1838)
+import { mountClassicCtx } from './classic-ctx.js';   // #3784 클래식 화면 우클릭 메뉴
 import { bootV2 } from './v2/main.js'; // #1719 새 1탭 셸 — boot() 가 ui_mode 로 고른다. 정적 import(스탬프 경로 단일화), 부르기 전엔 아무 일도 안 함.
 import { applyTheme, nextTheme, setThemePref, themeIconSvg, themePref, themeTitle, watchTheme } from './theme.js'; // #1683 다크모드 — 3단 테마
 
@@ -316,6 +317,8 @@ async function boot() {
     await bootV2();
     return;
   }
+  // #3784 — 클래식 판(액자 안 위키·프로젝트 보드 포함)에도 같은 우클릭 메뉴. 셸 배선은 이 문서에 안 닿는다.
+  mountClassicCtx();
   // 우측 상단 = '내 프로필' 버튼(아바타 + 표시이름). 표시이름 우선(없으면 이메일/아이디). 클릭→'내 정보' 팝업(#762).
   const userBtn = document.getElementById('user-email');
   if (userBtn) {
