@@ -2089,6 +2089,16 @@
   "input_hash": "e29202b6f5da6c16"
  },
  {
+  "name": "workspace_invite_resend",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/workspaces/invite/resend"
+  ],
+  "input_hash": "de62dc5ea121ae2f"
+ },
+ {
   "name": "workspace_invite_resolve",
   "scope": "memory",
   "mcp": true,
@@ -2096,7 +2106,7 @@
   "rest": [
    "POST /api/ui/me/workspaces/invite/resolve"
   ],
-  "input_hash": "ccd385ac11288e7c"
+  "input_hash": "68cbf1b63acd92e5"
  },
  {
   "name": "activity_log",
