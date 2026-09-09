@@ -180,7 +180,7 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
   let dest: Dest = { kind: 'none' };
   const destRows = dests || [];
   const destIn = el('input', { class: 'v2-dest-in', type: 'text', autocomplete: 'off', 'aria-label': '여는 곳 — 프로젝트를 고르거나 새 이름을 적으세요',
-    placeholder: '이어서 할 프로젝트를 고르거나 새 이름을 적으세요 — 비워 두면 새로 만들어요' }) as HTMLInputElement;
+    placeholder: '이어서 할 프로젝트를 고르거나 새 이름을 적으세요 — 비워두면 입력한 내용을 바탕으로 자동으로 프로젝트가 생성돼요' }) as HTMLInputElement;
   const destSlot = el('span', { class: 'v2-dest-slot' });
   const destHd = el('div', { class: 'v2-dest-hd' });
   const destList = el('div', { class: 'v2-dest-list', role: 'listbox' });
