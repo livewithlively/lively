@@ -104,6 +104,14 @@ if ! git -C "$CLONE" diff --quiet "$local_sha" HEAD -- web/ public/styles/ 2>/de
   ( cd "$CLONE" && rm -f .tsbuildinfo-web && npm run build:web >/dev/null 2>&1 ) \
     || { say "⚠ build:web 실패 — 옛 산출물이 그대로 서빙된다(사람이 봐야 한다)"; exit 1; }
 fi
+# 단독 페이지 번들(public/terminal.js·md.js·page-scrollbar.js)은 build:web 이 안 만든다 — 별 파이프라인(#1313 R51,
+#  scripts/build-standalone.mjs)이다. 종전엔 여기서 안 돌려 **web/standalone/ 변경이 dev 에 영영 안 나갔다**
+#  (#3784 실측 2026-09-09: 터미널 우클릭 메뉴를 stage 에 올렸는데 olddev 의 terminal.js 는 옛 판 그대로).
+if ! git -C "$CLONE" diff --quiet "$local_sha" HEAD -- web/standalone/ scripts/build-standalone.mjs 2>/dev/null; then
+  say "단독 페이지(web/standalone) 변경 있음 — build-standalone"
+  ( cd "$CLONE" && node scripts/build-standalone.mjs >/dev/null 2>&1 ) \
+    || { say "⚠ build-standalone 실패 — terminal.js 등 옛 산출물이 그대로 서빙된다(사람이 봐야 한다)"; exit 1; }
+fi
 
 # src/** 가 바뀌었으면 게이트웨이가 새 코드를 들어야 한다. 빌드 실패면 restart-gateway.sh 가 스스로 멈춘다.
 #
