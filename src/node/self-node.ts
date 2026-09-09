@@ -122,12 +122,42 @@ export function nodeSnapshotSessions<T>(
   declaredOnly = false,
 ): T[] {
   const out: T[] = [];
-  for (const n of nodes) {
-    if (declaredOnly && !n.declared) continue;
-    if (!n.online || n.stateAgeMs === null || !(n.stateAgeMs <= staleMs)) continue;
-    out.push(...n.sessions);
-  }
+  //  조건을 여기 다시 쓰지 않는다 — 판정은 `nodeSnapshotVerdict` 한 벌이다(그 머리말).
+  for (const n of nodes) if (nodeSnapshotVerdict(n, staleMs, declaredOnly).take) out.push(...n.sessions);
   return out;
+}
+
+/** 노드 하나가 스냅샷에서 빠진 **사유** — 좁혀 가는 순서로 하나만 답한다. */
+export type NodeSnapshotWhy = "ok" | "undeclared" | "offline" | "no-state" | "stale";
+
+/**
+ * 이 노드의 세션을 스냅샷에 실을 것인가, 안 실으면 **왜인가** (순수) — #3741 후속 계기.
+ *
+ * ── 왜 사유가 필요한가 (2026-09-09 실측) ─────────────────────────────────────
+ * #3741 배포 뒤 카나리아 테넌트에서 **설명 안 되는 격차**가 남았다: 노드 스냅샷 합계는 29개인데
+ *  알림 스윕의 `observed` 는 최대 12였다. 가설을 둘 세웠는데 하나(12초 신선도 게이트)는 재보니
+ *  **틀렸고**(노드는 3초마다 민다 — `agent.ts:151`; 내가 잰 15~25초는 DB 쓰기 스로틀이었다),
+ *  나머지 하나는 밖에서 확인할 수단이 없었다. **불리언은 «왜 빠졌나» 를 말하지 않는다.**
+ *  이 프로젝트는 같은 자리에서 두 번 그랬다 — d4 의 tmux 계수도, d6 의 소유 판정 계수도
+ *  추론이 틀린 뒤에 계기가 풀었다. 그래서 여기서도 추론 대신 **사유를 답하게** 한다.
+ *
+ * ── 순서가 곧 사양이다 ────────────────────────────────────────────────────────
+ *  · `declaredOnly` 가 켜졌으면 **선언이 첫 관문**이다(그 손잡이를 쓰는 자리는 «선언이 곧 근거» 인 곳).
+ *  · ★ `no-state` 는 반드시 `stale` **앞**이다 — JS 에서 `null <= staleMs` 는 **참**이라, 뒤에 두면
+ *    «스냅샷 없음» 이 «가장 신선함» 으로 통과한다(같은 함정을 시험 N3 가 지키고 있다).
+ *  · 신선도 경계는 **포함**(`<= staleMs`) — `gatewayDefersToSessionHost` 와 같은 자다.
+ *  · ⚠ 선언은 **면제가 아니다.** 선언된 세션 호스트라도 오프라인·낡음이면 빠진다.
+ */
+export function nodeSnapshotVerdict(
+  n: { declared: boolean; online: boolean; stateAgeMs: number | null },
+  staleMs: number,
+  declaredOnly = false,
+): { take: boolean; why: NodeSnapshotWhy } {
+  if (declaredOnly && !n.declared) return { take: false, why: "undeclared" };
+  if (!n.online) return { take: false, why: "offline" };
+  if (n.stateAgeMs === null) return { take: false, why: "no-state" };
+  if (!(n.stateAgeMs <= staleMs)) return { take: false, why: "stale" };
+  return { take: true, why: "ok" };
 }
 
 export function gatewayDefersToSessionHost(

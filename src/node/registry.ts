@@ -16,7 +16,7 @@ import {
 import { authNodeTokenDetailed, getNode, touchNode, appendNodeLinkEvent, type OrgNode } from "./store.js";
 import { denialMessage, denialKey, shouldLogDenial, type NodeAuthOutcome } from "./auth-denial.js";   // #2161
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
-import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, nodeSnapshotSessions, sessionHostVerdict, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
+import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, nodeSnapshotSessions, nodeSnapshotVerdict, sessionHostVerdict, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
 import { makeTmuxCallCensus, censusSite } from "../terminal/tmux-call-census.js";   // #2600 T2 d6 — 판정 계수(같은 세 칸: 슬러그·축·호출부)
 import { selfNodePossible } from "../exec-topology.js";   // #2599 T2 — 「이 판정이 성립하는 배포인가」의 선결 조건
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
@@ -219,7 +219,41 @@ export function nodeSessionsInScope(now: number = Date.now()): SessionInfo[] {
   for (const [id, st] of inScope(states)) {
     nodes.push({ declared: declaredSessionHost({ session_host: st.sessionHost }), online: conns.has(keyOf(id)), stateAgeMs: now - st.ts, sessions: st.sessions });
   }
+  //  ★ 사유별 **세션 수**를 센다(아래 머리말) — 비치명이라 실패해도 목록은 그대로 나간다.
+  try { recordSnapshotCensus(nodes, STATE_STALE_MS); } catch { /* 계수 때문에 목록이 흔들리면 안 된다 */ }
   return nodeSnapshotSessions(nodes, STATE_STALE_MS);
+}
+
+/**
+ * 스냅샷에서 **빠진 세션이 어느 사유로 빠졌나** 를 창 단위로 남긴다 (#3741 후속).
+ *
+ * ── 왜 (2026-09-09) ──────────────────────────────────────────────────────────
+ * #3741 배포 뒤 카나리아에서 노드 스냅샷 합계 **29** 인데 스윕의 `observed` 는 최대 **12** 였다.
+ *  «어디로 갔나» 를 밖에서 알 길이 없었다 — `nodeSnapshotSessions` 는 불리언으로 거르고 조용히
+ *  버린다. 그래서 판정이 사유를 답하게 하고(`nodeSnapshotVerdict`), 여기서 그 사유별로 **세션 수**를
+ *  누적한다. 노드 수가 아니라 **세션 수**인 이유가 질문 그 자체다: «29 중 17이 어디로 갔나».
+ *
+ * ⚠ 계수기는 tmux 계수·소유 판정 계수와 **같은 것**을 쓴다(세 칸: 슬러그·축·호출부). 축은 여기서
+ *  «판정 사유» 이고, 세션 하나가 한 건이다. 창이 닫힐 때만 로그하고 그때 비운다 — 누적을 내면
+ *  «지금도 빠지고 있나» 를 못 읽는다(그 사연은 `tmux-call-census` 머리말).
+ */
+const SNAPSHOT_CENSUS_EVERY = 500;
+const snapshotCensus = makeTmuxCallCensus(SNAPSHOT_CENSUS_EVERY);
+function recordSnapshotCensus(
+  nodes: ReadonlyArray<{ declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly unknown[] }>,
+  staleMs: number,
+): void {
+  const slug = currentTenant()?.slug;
+  const site = censusSite(new Error().stack);
+  let rows: ReturnType<typeof snapshotCensus.record> = null;
+  for (const n of nodes) {
+    const why = nodeSnapshotVerdict(n, staleMs).why;
+    //  세션이 0개인 노드도 **한 건은** 센다 — 그래야 «그 노드가 있었는데 세션이 없었다» 가 보인다.
+    //   (없는 것을 지어내지 않되, 노드의 존재 자체는 사실이다.)
+    const times = n.sessions.length || 1;
+    for (let i = 0; i < times; i++) rows = snapshotCensus.record(slug, why, site) ?? rows;
+  }
+  if (rows) logger.info({ snapshotCensus: { window: SNAPSHOT_CENSUS_EVERY, rows } }, "노드 스냅샷 채택 사유 계수(창)");
 }
 
 /**
