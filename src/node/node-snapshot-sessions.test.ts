@@ -91,3 +91,75 @@ test("N9 ★ 자격/무자격이 섞이면 무자격 노드의 세션이 새지 
   ];
   assert.deepEqual(nodeSnapshotSessions(nodes, STALE), ["ok"]);
 });
+
+// ── 채택 사유 (#3741 후속) — 엣지 표 `spec-3741b.md` W1~W12 ──
+//
+//  왜 이 시험들이 있나: 배포 뒤 «노드 스냅샷 29개인데 스윕은 12개만 본다» 는 격차가 남았는데,
+//   불리언으로 거르는 함수는 **왜 빠졌는지를 말하지 않는다.** 사유를 답하게 만든 것이 이 판정이고,
+//   그 사유가 «좁혀 가는 순서» 로 하나만 나오는 것이 사양이다(둘을 동시에 답하면 계수가 못 읽는다).
+import { nodeSnapshotVerdict } from "./self-node.js";
+
+type Cand = { declared: boolean; online: boolean; stateAgeMs: number | null };
+const cand = (o: Partial<Cand> = {}): Cand => ({ declared: true, online: true, stateAgeMs: 1_000, ...o });
+const V = (o: Partial<Cand>, declaredOnly = false) => nodeSnapshotVerdict(cand(o), STALE, declaredOnly);
+
+test("W1 정상이면 ok · 채택", () => {
+  assert.deepEqual(V({}), { take: true, why: "ok" });
+});
+
+test("W2 ★ 선언 없는 노드도 기본은 채택된다 — #3741 이 연 문", () => {
+  assert.deepEqual(V({ declared: false }), { take: true, why: "ok" });
+});
+
+test("W3 declaredOnly 를 켜면 선언 없는 노드는 undeclared 로 빠진다", () => {
+  assert.deepEqual(V({ declared: false }, true), { take: false, why: "undeclared" });
+});
+
+test("W4 오프라인은 offline", () => {
+  assert.deepEqual(V({ online: false }), { take: false, why: "offline" });
+});
+
+test("W5 ★ 스냅샷을 못 받았으면 no-state — stale 보다 **앞**이어야 한다", () => {
+  //  JS 에서 `null <= staleMs` 는 참이다. 순서가 뒤집히면 «없음» 이 «가장 신선함» 으로 통과한다.
+  assert.deepEqual(V({ stateAgeMs: null }), { take: false, why: "no-state" });
+});
+
+test("W6 낡은 스냅샷은 stale", () => {
+  assert.deepEqual(V({ stateAgeMs: STALE + 1 }), { take: false, why: "stale" });
+});
+
+test("W7 ★ 신선도 경계는 포함이다", () => {
+  assert.deepEqual(V({ stateAgeMs: STALE }), { take: true, why: "ok" });
+  assert.deepEqual(V({ stateAgeMs: STALE + 1 }), { take: false, why: "stale" }, "경계 밖");
+});
+
+test("W8 방금 받은 스냅샷(0)도 신선하다", () => {
+  assert.deepEqual(V({ stateAgeMs: 0 }), { take: true, why: "ok" });
+});
+
+test("W9 ★ 사유는 하나다 — 오프라인이면서 낡았으면 offline 이 먼저", () => {
+  //  둘을 동시에 답하면 계수가 «어느 축이 문제인가» 를 못 읽는다. 좁혀 가는 순서가 그걸 정한다.
+  assert.deepEqual(V({ online: false, stateAgeMs: STALE + 1 }), { take: false, why: "offline" });
+});
+
+test("W10 ★ 선언은 면제가 아니다 — 선언된 호스트라도 오프라인이면 빠진다", () => {
+  assert.deepEqual(V({ declared: true, online: false }, true), { take: false, why: "offline" });
+});
+
+test("W11 ★ declaredOnly 가 켜지면 선언이 첫 관문이다", () => {
+  assert.deepEqual(V({ declared: false, online: false, stateAgeMs: null }, true), { take: false, why: "undeclared" });
+});
+
+test("W12 ★★ 리팩터가 답을 바꾸지 않았다 — 섞인 판에서 종전과 같은 세션만 나온다", () => {
+  //  판정을 밖으로 뺐으니 «답은 글자 그대로 같다» 를 못박는다(d6 의 V10 과 같은 자리).
+  const nodes = [
+    node({ declared: false, sessions: ["member-pc"] }),
+    node({ online: false, sessions: ["off"] }),
+    node({ stateAgeMs: null, sessions: ["none"] }),
+    node({ stateAgeMs: STALE + 1, sessions: ["old"] }),
+    node({ stateAgeMs: STALE, sessions: ["edge"] }),
+    node({ sessions: ["ok"] }),
+  ];
+  assert.deepEqual(nodeSnapshotSessions(nodes, STALE), ["member-pc", "edge", "ok"]);
+  assert.deepEqual(nodeSnapshotSessions(nodes, STALE, true), ["edge", "ok"], "손잡이도 그대로");
+});
