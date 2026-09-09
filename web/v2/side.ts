@@ -2589,7 +2589,13 @@ function renamingAlive(): boolean {
 function inlineRename(nameEl: HTMLElement, cfg: { value: string; label: string; save: (next: string) => Promise<void> }): void {
   if (renamingAlive()) return;
   const shown = nameEl.textContent || '';
-  const input = el('input', { class: 'v2-ss-edit', type: 'text', value: cfg.value || shown, 'aria-label': cfg.label }) as HTMLInputElement;
+  //  ⚠ **브라우저·확장의 자동완성을 끈다**(원준 2026-09-09: "수정할 때 오른쪽에 이런 사람 모양이 나오는데 이건 도대체 왜").
+  //   `aria-label` 이 「프로젝트 이름」·「세션 이름」 이라 브라우저가 **연락처 칸**으로 넘겨짚고 인물 아이콘 + ⌄ 를
+  //   칸 안에 그려 넣는다. 비밀번호 관리자 확장도 같은 자리에 제 아이콘을 얹는다. 여긴 이름을 **고치는** 자리이지
+  //   사람을 **고르는** 자리가 아니므로 넷 다 끈다 — `data-*` 는 1Password·LastPass·Bitwarden 이 각자 읽는 표식이다.
+  const input = el('input', { class: 'v2-ss-edit', type: 'text', value: cfg.value || shown, 'aria-label': cfg.label,
+    autocomplete: 'off', autocorrect: 'off', autocapitalize: 'off', spellcheck: 'false',
+    'data-1p-ignore': 'true', 'data-lpignore': 'true', 'data-bwignore': 'true' }) as HTMLInputElement;
   nameEl.replaceChildren(input);
   renamingEl = input;
   input.focus(); input.select();
