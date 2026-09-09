@@ -41,6 +41,7 @@ import { migratePinKeys } from './pin-migrate.js';   // #2402 — 복원으로 i
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
 import { confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 휴지통·아카이브
 import { ctxMenu } from './panes-kit.js';
+import { type CtxRow } from './ctx-menu.js';   // #3784 우클릭 메뉴 행 타입(엔진은 셸 배선이 띄운다)
 import { refreshStatusCount, switcherTop } from './switcher.js';   // #1875 — refreshStatusCount: 문패 배지는 인원 수에서 나온다
 import { openSectionMenu, railIsHidden, sectionDef, stackTile, type RailSection } from './rail.js';   // #2016 — 무엇을 그릴지는 레일이 고른 구역이 정한다
 import { ICONS, icon } from './icons.js';   // #2016 — 선 아이콘 한 벌
@@ -554,7 +555,7 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
   return el('div',
     //  ⚠ `--plain` = **행 조작이 없는 목록**(압정·× 안 그림). 그 CSS 가 '상태 점은 호버에도 안 숨는다'를
     //   이미 갖고 있다 — 홈에서 점이 숨는 건 그 자리를 × 가 받기 때문이고, 받을 것이 없으면 숨을 이유도 없다.
-    { class: 'v2-app-inst' + (one ? ' v2-app-inst--1' : '') + (!canPin && !canClose ? ' v2-app-inst--plain' : '') + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : '') + (inst.past ? ' v2-app-inst--past' : '') + (inst.owner ? ' other' : ''), role: 'listitem', 'data-instance': inst.id, 'data-anch': inst.id },
+    { class: 'v2-app-inst' + (one ? ' v2-app-inst--1' : '') + (!canPin && !canClose ? ' v2-app-inst--plain' : '') + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : '') + (inst.past ? ' v2-app-inst--past' : '') + (inst.owner ? ' other' : ''), role: 'listitem', 'data-instance': inst.id, 'data-anch': inst.id, 'data-ctx': 'inst' },
     el('button', { class: 'v2-app-inst-open', type: 'button', title: tip, 'aria-current': inst.active ? 'page' : null,
       onclick: () => hooks.onActivateInstance?.(inst.id, inst.route) },
       instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })),
@@ -1421,7 +1422,7 @@ function renderProjTree(): void {
   const listRow = (l: TreeList, depth: number): HTMLElement => {
     const on = sel === 'L' + l.id;
     const emoji = l.settings && l.settings.icon ? String(l.settings.icon) : '';
-    return el('a', { class: 'v2-wcat v2-ptl' + (on ? ' on' : ''), href: '#/projects2/l/' + l.id, style: 'padding-left:' + (12 + depth * 14) + 'px',
+    return el('a', { class: 'v2-wcat v2-ptl' + (on ? ' on' : ''), href: '#/projects2/l/' + l.id, 'data-ctx': 'plist', 'data-lid': String(l.id), 'data-name': l.name, style: 'padding-left:' + (12 + depth * 14) + 'px',
       title: l.name + (l.visibility === 'members' ? ' — 멤버만 보는 리스트' : ''), ...(on ? { 'aria-current': 'true' } : {}) },
       emoji ? el('span', { class: 'v2-ptl-emoji', 'aria-hidden': 'true', text: emoji }) : icon('list', 'v2-ptl-ic'),
       el('span', { class: 'n', text: l.name }),
@@ -1443,7 +1444,7 @@ function renderProjTree(): void {
             if (open) foldClosed.add(String(f.id)); else foldClosed.delete(String(f.id));
             saveSet(FOLD_CLOSED_STORE, foldClosed); redraw();
           } }),
-        el('a', { class: 'v2-ptf-a', href: '#/projects2/f/' + f.id, title: (isSpace ? '스페이스 ' : '폴더 ') + f.name + ' — 누르면 그 안의 리스트를 한 화면에 봅니다', ...(on ? { 'aria-current': 'true' } : {}) },
+        el('a', { class: 'v2-ptf-a', href: '#/projects2/f/' + f.id, 'data-ctx': 'pfolder', 'data-fid': String(f.id), 'data-name': f.name, title: (isSpace ? '스페이스 ' : '폴더 ') + f.name + ' — 누르면 그 안의 리스트를 한 화면에 봅니다', ...(on ? { 'aria-current': 'true' } : {}) },
           glyph(open ? 'folder-open' : 'folder', 'v2-ptf-ic'),
           el('span', { class: 'n', text: f.name }),
           el('span', { class: 'v2-cnt', text: String(countUnder(f)) }))));
@@ -1589,6 +1590,7 @@ function renderWiki(): void {
     const on = activeCat === c.id;
     const mine = own.has(c.id);
     return el('a', { class: 'v2-kcat' + (on ? ' on' : ''), href: '#/knowledge?category=' + encodeURIComponent(String(c.id)),
+      'data-ctx': 'wikicat', 'data-cat': String(c.id), 'data-name': c.name,
       title: c.name + (c.description ? ' — ' + c.description : ''), ...(on ? { 'aria-current': 'true' } : {}) },
       el('span', { class: 'v2-kcat-t' },
         el('span', { class: 'n', text: c.name }),
@@ -2366,21 +2368,9 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
       paintTidyBar();                              // 트리는 그대로 두고 이 줄과 막대만 고친다
     });
   }
-  // 우클릭 = 이 프로젝트의 조작 메뉴(#1851) — 아카이브로 보내기/해제·고정·새 세션. 행에 단추를 더 얹지 않는다(이미 둘이다).
-  if (p) row.addEventListener('contextmenu', (e: MouseEvent) => {
-    e.preventDefault(); e.stopPropagation();
-    ctxMenu(e.clientX, e.clientY, [
-      { label: '새 세션', run: () => hooks.onNewSession?.(p.id) },
-      { label: isPinned(pk) ? '고정 해제' : '위에 고정', run: () => togglePin(pk) },
-      { sep: true, label: '' },
-      r.archived
-        ? { label: '보관 해제 — 원래 자리로', run: () => void setArchived(p, false, 0) }
-        : { label: '아카이브로 보내기', run: () => void setArchived(p, true, r.live.filter(isMine).length) },
-      // 삭제 = 휴지통으로(#1851 원준 2026-08-24). 폴더 우클릭 메뉴의 맨 아래·위험색 — 파일 탐색기·노션과 같은 자리.
-      { sep: true, label: '' },
-      { label: '휴지통으로 보내기', danger: true, run: () => void trashProject(p, r) },
-    ]);
-  });
+  // 우클릭 = 이 프로젝트의 조작 메뉴(#1851) — 행에 단추를 더 얹지 않는다(이미 둘이다).
+  //  #3784 — 행 목록은 projectCtxRows() 한 벌(문패·홈·다른 화면의 프로젝트 자리도 같은 메뉴). 셸 배선이 표(data-ctx)로 찾는다.
+  if (p) { row.dataset.ctx = 'project'; row.dataset.pid = String(p.id); }
   // 세션 줄과 같은 손짓 — 더블클릭하면 그 자리에서 이름을 고친다(문패 연필과 같은 편집).
   //  ⚠ #2579 — 이 줄은 `<a href>` 다. 더블클릭의 **두 번째 click 까지 그대로 두면 항해가 일어나고**,
   //   그 항해가 부른 loadData 응답이 사이드바를 다시 그려 방금 연 입력칸을 지운다. 그래서 두 번째 클릭
@@ -2498,7 +2488,8 @@ function sessRow(s: Sess, activeKey: string, text: { main: string; sub: string }
   const tip = [s.label, sub || (raw.title && String(raw.title) !== s.label ? String(raw.title) : ''), `${st ? st.label : s.stateLabel}${s.lastSeen ? ' · ' + when(s.lastSeen) : ''}`, s.owned ? '내 세션' : `${owner}의 세션`, raw.harness ? String(raw.harness) : '', s.node ? '노드 ' + s.node : ''].filter(Boolean).join('\n');
   // 이름 자리 — 더블클릭하면 그 자리에서 고친다(원준 2026-08-20). 고친 이름은 서버로 가고 탭·대화창까지 따라온다.
   const nameEl = el('span', { class: 't', text: main });
-  const row = el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other') + (pastRow ? ' past' : ''), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, title: tip + (pastRow ? '\n열면 그때 대화를 읽고 [이어서 대화하기]로 계속할 수 있어요' : '\n세션 대화를 엽니다\n이름을 더블클릭하면 그 자리에서 고칠 수 있어요'), role: 'treeitem' },
+  //  #3784 — 우클릭 메뉴는 표(data-ctx)로 붙는다(셸 배선 ctx-registry 가 위로 올라가며 찾는다). 행마다 리스너를 달지 않는다.
+  const row = el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other') + (pastRow ? ' past' : ''), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, 'data-ctx': 'session', 'data-sid': s.id, title: tip + (pastRow ? '\n열면 그때 대화를 읽고 [이어서 대화하기]로 계속할 수 있어요' : '\n세션 대화를 엽니다\n이름을 더블클릭하면 그 자리에서 고칠 수 있어요'), role: 'treeitem' },
     el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }),
     el('span', { class: 'v2-ss-main' }, nameEl),
     isMine(s) ? null : personFace(String(raw.owner || ''), 'v2-ss-face', owner),
@@ -2635,6 +2626,60 @@ async function doTrash(s: Sess): Promise<void> {
     hooks.onArchived?.();
   } catch (e: any) { toast((e && e.message) || '휴지통으로 보내지 못했습니다', true); }
 }
+
+// ── 우클릭 메뉴 행(#3784) — 사이드바 밖(홈·확인할 것·문패·곁칸 세션 목록)에서도 **같은 메뉴**가 뜨도록 한 벌로 export ──
+//  여기 두는 이유: 보관·휴지통·고정·이름 편집의 실체(doArchive·doTrash·togglePin·inlineRename·hooks)가 이 파일에 산다.
+//  항해(열기·새 탭)는 셸(ctx-shell.ts)이 앞에 붙인다 — 이 함수는 **그 세션·프로젝트에 대한 조작**만 만든다.
+/** 세션 하나의 조작 행. nameEl 이 있으면(사이드바 행) 그 자리에서 이름을 고치고, 없으면 작은 입력창으로 묻는다. */
+export function sessionCtxRows(s: Sess, o: { nameEl?: HTMLElement | null; projectName?: string } = {}): CtxRow[] {
+  const rows: CtxRow[] = [];
+  const mine = isMine(s);
+  const live = isLive(s);
+  const pk = 's:' + s.id;
+  const name = sessText(s, o.projectName || '').main || s.label || s.id;
+  if (mine) rows.push({ label: '이름 바꾸기', icon: 'pen', hint: '더블클릭', run: () => {
+    if (o.nameEl && o.nameEl.isConnected) { beginRename(o.nameEl, s); return; }
+    const next = window.prompt('세션 이름', s.label || '');
+    if (next != null && next.trim() && next.trim() !== s.label) void hooks.onRenameSession?.(s.id, next.trim());
+  } });
+  rows.push({ label: isPinned(pk) ? '고정 해제' : '위에 고정', icon: 'pin', checked: isPinned(pk) || undefined, run: () => togglePin(pk) });
+  if (s.projectId && Number(s.projectId) > 0) rows.push({ label: '같은 프로젝트에 새 세션', icon: 'plus', run: () => hooks.onNewSession?.(Number(s.projectId)) });
+  if (mine && live) rows.push({ sep: true, label: '' }, { label: '지난 세션으로 보내기', icon: 'archive', hint: '보관', run: () => void doArchive(s) });
+  if (mine && !live && !isTrashedSess(s)) rows.push({ sep: true, label: '' }, { label: '휴지통으로 보내기', icon: 'trash', danger: true, run: () => void doTrash(s) });
+  void name;
+  return rows;
+}
+/** 프로젝트 하나의 조작 행 — 사이드바 행의 우클릭 메뉴가 종전에 인라인으로 만들던 그 목록. */
+export function projectCtxRows(p: Proj): CtxRow[] {
+  const pk = 'p:' + p.id;
+  const all = last ? last.data.sessions.filter((x) => Number(x.projectId) === p.id && !isTrashedSess(x)) : [];
+  const liveMine = all.filter((x) => isLive(x) && isMine(x)).length;
+  const archived = isArchivedProj(p);
+  return [
+    { label: '새 세션', icon: 'plus', run: () => hooks.onNewSession?.(p.id) },
+    { label: '이름 바꾸기', icon: 'pen', hint: '더블클릭', run: () => {
+      const nameEl = document.querySelector<HTMLElement>('.v2-pj-row[data-nav="' + pk + '"] .n');
+      if (nameEl) { beginRenameProject(pk, p); return; }
+      const next = window.prompt('프로젝트 이름', p.name || '');
+      if (next != null && next.trim() && next.trim() !== p.name) void hooks.onRenameProject?.(p.id, next.trim());
+    } },
+    { label: isPinned(pk) ? '고정 해제' : '위에 고정', icon: 'pin', checked: isPinned(pk) || undefined, run: () => togglePin(pk) },
+    { sep: true, label: '' },
+    archived
+      ? { label: '보관 해제 — 원래 자리로', icon: 'archive', run: () => void setArchived(p, false, 0) }
+      : { label: '아카이브로 보내기', icon: 'archive', run: () => void setArchived(p, true, liveMine) },
+    // 삭제 = 휴지통으로(#1851 원준 2026-08-24). 메뉴의 맨 아래·위험색 — 파일 탐색기·노션과 같은 자리.
+    { sep: true, label: '' },
+    { label: '휴지통으로 보내기', icon: 'trash', danger: true, run: () => void trashProject(p) },
+  ];
+}
+/** 사이드바 목록의 행 하나(앱 인스턴스)를 id 로 — 우클릭 메뉴가 그 행의 뜻(닫기·고정)을 그대로 쓰기 위해. */
+export function sideInstanceById(id: string): SideInstance | null {
+  const list = hooks.instances?.() || [];
+  return list.find((i) => i.id === id) || null;
+}
+export function toggleInstancePin(id: string): void { toggleAppPin(id); }
+export function isInstancePinned(id: string): boolean { return appPinned.has(id); }
 
 // ── 프로젝트 휴지통(#1851, 원준 2026-08-24) — 폴더를 버리듯: 프로젝트 + 그 아래 내 세션(도는 것은 멈춰서)이 **한 묶음**으로 휴지통에.
 //  서버(project_trash_v6)가 세션을 멈추고 묶음 표식을 달고 프로젝트를 표시한다. 남의 도는 세션이 있으면 서버가 409 로 막는다 —

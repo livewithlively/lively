@@ -104,7 +104,8 @@ export function wkTableRow(e: any, opts: WkRowOpts) {
     });
     check.parentElement.addEventListener('click', (ev) => ev.stopPropagation());
   }
-  return el('div', { class: 'pjv-trow-wrap wk-trow-wrap', 'data-name': e.name }, row);
+  // #3784 우클릭 메뉴 표 — 클래식 배선(web/classic-ctx.ts)이 읽는다. 폴더 행은 열기만.
+  return el('div', { class: 'pjv-trow-wrap wk-trow-wrap', 'data-name': e.name, 'data-ctx': isFolder ? 'wikifolder' : 'wikidoc', 'data-title': e.title || e.name }, row);
 }
 
 // 그룹 하나(프로젝트 표의 .pjv-tgroup) — 머리(캐럿·라벨·건수) + 컬럼 헤더 + 행들. 라벨이 없으면 머리 없이 표만.

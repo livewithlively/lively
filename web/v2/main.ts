@@ -39,7 +39,9 @@ import { lastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 �
 import { ASIDE_MSG, setAsideGuestOpener, type AsideGuest } from './aside-slot.js';
 import { takeCreated } from './created-cache.js';
 import { openMeModal } from './me-modal.js';   // #1898 — 클래식에서 올라온 부팅이 [화면] 자리를 되연다
-import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
+import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';
+import { mountCtxMenus } from './ctx-registry.js';   // #3784 우클릭 메뉴 배선(표 data-ctx 를 읽는다)
+import { mountCtxShell } from './ctx-shell.js';     // #3784 셸이 아는 것(세션·프로젝트·앱·알림)의 메뉴   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
 import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { mountAppUiFrame } from './app-ui.js';
 import { cachedAppInstance, closeAppInstance, createAppInstance, ensureSessionAppInstance, ensureSingletonAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
@@ -423,6 +425,13 @@ export async function bootV2(): Promise<void> {
       applyProjectName(Number(m.id), m.name);
       return;
     }
+    // #3784 — 액자(클래식 화면) 안 우클릭 메뉴의 「새 탭에서 열기」. 프레임은 셸 탭을 못 만드니 한 줄 올려 보낸다.
+    //  같은 오리진 + 문자열 해시만. 어느 탭이 보냈든 결과는 같다(새 탭 하나).
+    if (m && m.type === 'lively:open-route' && typeof m.href === 'string' && m.href.startsWith('#/')) {
+      const hit = tabsApi.find(m.href);
+      if (hit) tabsApi.activate(hit); else tabsApi.add(m.href);
+      return;
+    }
     if (!m || (m.type !== ASIDE_MSG.ping && m.type !== ASIDE_MSG.open)) return;
     const tab = tabsApi.tabs.find((t) => {
       const f = t.center.querySelector('iframe') as HTMLIFrameElement | null;
@@ -498,6 +507,23 @@ export async function bootV2(): Promise<void> {
   window.addEventListener('hashchange', () => { histStamp(); void onHash(); });
   histStamp();     // 첫 화면도 히스토리의 한 칸이다 — 안 찍어 두면 되돌아왔을 때 '새로 감'으로 오인한다
   bindAltOpen();
+  // #3784 — 우클릭 메뉴. 뿌리 하나가 듣고 표(data-ctx / data-ctx-surface)를 위로 찾는다. 셸 자체가 맨 바깥 표면.
+  root.dataset.ctxSurface = 'shell';
+  mountCtxMenus(root, { longPress: true, menuKey: true });
+  mountCtxShell({
+    data: () => data,
+    openRoute: (href, newTab) => {
+      if (!tabsApi) { location.hash = href; return; }
+      if (newTab) { const hit = tabsApi.find(href); if (hit) tabsApi.activate(hit); else tabsApi.add(href); return; }
+      location.hash = href;
+    },
+    newTask: (seed) => { const t = tabsApi?.add('#/'); if (t && seed) { t.draft = seed; tabsApi?.save(); void renderRoute(t); } },
+    refresh: () => v2Refresh(),
+    pickProject: (anchor, sid) => { const t = tabsApi?.current(); if (t) openProjectPicker(anchor, sid, t); },
+    closeInstance: (id) => { void closeSideRow(id); },
+    activateInstance: (id, route) => openSideRow(id, route),
+    currentRoute: () => tabsApi?.current()?.route || location.hash,
+  });
   // 통합검색(⌘K) — 셸이 쥔 목록(세션·프로젝트)은 즉시, 나머지 자원은 REST 팬아웃. 이동은 탭 규칙을 아는 셸이 한다.
   setOmniHooks({
     data: () => data,
