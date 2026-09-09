@@ -54,7 +54,13 @@ details.livc-divider > summary::before, details.livc-divider > summary::after { 
 .sc-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
 /* 첫 줄은 우패널 머리(.v2-aside-h)의 38px 리듬을 유지하고, 실행 설정은 겹치지 않게 둘째 줄로 접힌다. */
 .sc-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; min-height: 38px; padding: 9px 16px 8px; border-bottom: 1px solid var(--line); flex: none; }
-.sc-head-l { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+/*  ⚠ `flex: 1` 은 `flex: 1 1 0%` 다 — basis 가 0 이라 이 묶음은 **남는 자리만** 받는다. 오른쪽 실행 칩
+    묶음(.sc-run-top)은 basis auto 라 제 콘텐츠 폭을 먼저 가져가므로, 좁아지면 **제목이 먼저 굶는다**
+    (실측 2026-09-09: 620px 에서 제목이 「홈 …」 두 글자로 남고 칩 셋은 원래 폭 그대로였다).
+    세션을 실제로 가르는 축은 제목이고 하네스·모델은 잘 안 바뀌는 축이라(위 머리말), 순서가 뒤집혀 있었다.
+    basis 를 auto 로 돌려 제목도 제 폭을 주장하게 한다 — 자리가 모자라면 .sc-head 의 flex-wrap 이
+    칩 묶음을 둘째 줄로 내린다(칩은 <select> 라 줄이면 말줄임 없이 썰린다 — 줄일 대상이 아니다). */
+.sc-head-l { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; }
 .sc-title { font-size: 13.5px; font-weight: 800; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
 /* 제목 = 세션 이름을 고치는 자리(#1719). 평소엔 제목과 똑같이 보이고, 손을 올렸을 때만 '고칠 수 있다'고 말한다
    — 머리줄에 연필 아이콘 하나를 더 놓으면 그 줄의 조작부가 다섯 개가 된다(제목이 조작부에 밀린다). */
@@ -63,7 +69,11 @@ details.livc-divider > summary::before, details.livc-divider > summary::after { 
    그런데 이 줄에서 사람이 가장 자주 읽는 건 제목이고, 알약은 줄어도 무엇인지가 안 사라진다(노드 이름만 …로 준다).
    그래서 제목에 **바닥**을 준다: 이만큼은 어떤 폭에서도 안 줄고, 그 아래로는 알약이 먼저 준다.
    ⚠ 위 ⚠ 규칙(.sc-meta min-width:0 + .sc-run overflow:hidden)은 그대로여야 압력이 알약으로 흘러간다. */
-.sc-titlebox { display: inline-flex; align-items: center; min-width: min(28ch, 100%); flex: 1 1 auto; }
+/*  ⚠ 종전 `min(28ch, 100%)` 의 `100%` 는 **부모(.sc-head-l) 폭** 기준이라, 부모가 눌릴수록 바닥도 같이
+    내려갔다 — 제목을 지키라고 넣은 값이 **필요한 순간에 정확히 증발**했다. 바닥은 부모와 무관해야 한다.
+    (좁은 화면에서 넘칠 걱정은 아래 ≤760px 블록이 min-width 를 0 으로 되돌려 받는다 — 거기선 제목이
+     이미 제 줄을 통째로 쓴다.) */
+.sc-titlebox { display: inline-flex; align-items: center; min-width: 28ch; flex: 1 1 auto; }
 button.sc-title { display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 13.5px; font-weight: 800;
   max-width: 72ch; margin-left: -6px; padding: 2px 6px; border: 0; border-radius: 6px; background: none; color: var(--ink); text-align: left; cursor: text; }
 button.sc-title .sc-title-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -253,7 +263,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   .sc-head { flex-wrap: wrap; gap: 4px 8px; padding: 8px 12px 6px; min-height: 0; }
   .sc-head-l { flex: 1 1 100%; flex-wrap: wrap; row-gap: 3px; }
   .sc-title { font-size: 15px; flex: 1 1 auto; max-width: 100%; }
-  .sc-titlebox { flex: 1 1 auto; max-width: 100%; }
+  .sc-titlebox { flex: 1 1 auto; max-width: 100%; min-width: 0; }   /* 제목이 제 줄을 통째로 쓰므로 28ch 바닥이 필요 없다(폰에서 넘치기만 한다) */
   button.sc-title { font-size: 15px; max-width: 100%; }
   .sc-title-in { font-size: 16px; width: 100%; }
   .sc-meta { flex: 1 1 100%; overflow: hidden; }
