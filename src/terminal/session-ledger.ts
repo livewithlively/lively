@@ -8,7 +8,9 @@
 //  있다 — 브로커가 그것을 볼 통로만 없었다. CP 는 이미 REST 로 세션 신호를 받는다(idle) — 회수만 tmux 를 봤다.
 //
 // ── 무엇을 주나 ─────────────────────────────────────────────────────────────
-//  desired  = org_session_state 전 행(id · superseded_by · node_id) + 상시세션 id(DB 행이 없는 것이 설계다 — #1059 E)
+//  desired  = org_session_state 전 행(id · superseded_by · node_id · exited_at) + 상시세션 id(DB 행이 없는 것이 설계다 — #1059 E)
+//             ★ exited_at = 사람이 /exit·logout 으로 끝낸 세션(#3822). 소비자는 이것을 «끝났다» 로 읽어 컨테이너를 걷되
+//               행은 남긴다(복원 좌표 보존) — 판정은 여기가 아니라 브로커(sessionledger.ts)가 한다.
 //  observed = 지금 tmux 에 있는 box-* 세션 id. **못 봤으면 null** — «없다» 와 «모른다» 를 섞지 않는다(#835).
 //  판정(원한다/은퇴했다/모른다)은 소비자(브로커 sessionledger.ts)가 한다 — 여기는 사실만 준다.
 //
