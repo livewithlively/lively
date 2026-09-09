@@ -308,10 +308,26 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
       홈 목록 카드 머리줄에서는 제자리 글자와 다른 활자가 됐다(트리 세션 줄에만 맞는 값이었다).
    ② 테두리를 **inset box-shadow 로** 그린다 — `border` 는 상자를 2px 키워 줄을 밀지만 그림자는 레이아웃에 없다.
    ③ 세로 안여백·마진 0 + `display:block` — inline-block 이면 베이스라인 아래 여백이 붙어 또 커진다.
-   결과: 편집칸의 상자 높이 = 그 자리 글자의 줄 높이. 열고 닫을 때 아무것도 안 움직인다. */
+   결과: 편집칸의 상자 높이 = 그 자리 글자의 줄 높이. 열고 닫을 때 아무것도 안 움직인다.
+
+   ⚠⚠ **`input.` 접두는 장식이 아니다.** `03-components.css:108` 의 `input[type="text"], …` 가 특이도 (0,1,1) 로
+   클래스 하나짜리 `.v2-ss-edit`(0,1,0)를 **이긴다** — 그래서 접두 없이 쓰면 위 셋이 전부 실려는 있는데
+   **져서 안 먹는다.** 실측(매니지드 48dde3f7, 헤드리스): 규칙은 배포됐는데 computed 는 그 기본값 그대로
+   `font 14px/500 · border 1px · padding 7px` 이었고 줄이 31.25 → 48.00px(**+16.75**)로 뛰었다.
+   ★ 이 함정은 [[sidebar-find-matcher-css-specificity-762]] 에 처방까지 적혀 있었는데 그대로 다시 밟았다.
+   그 지식의 규칙: «입력칸 클래스 규칙이 안 먹으면 요소 기본 규칙과의 특이도 싸움부터 의심하고 `input.` 접두를
+   붙여라 — **«일부 속성만 먹는» 증상이 그 신호다**». 여기서도 정확히 그랬다: `:focus`(0,2,0)의 box-shadow 는
+   먹어서 파란 테두리는 보이는데, 기본 규칙의 font·border·padding 만 죽어 있었다. */
 .v2-ss-edit { display: block; width: 100%; min-width: 0; box-sizing: border-box; margin: 0; padding: 0 5px;
   border: 0; border-radius: 5px; background: var(--bg); font: inherit; color: var(--ink);
   box-shadow: inset 0 0 0 1px var(--blue); }
+/*  ⚠ 위 규칙 중 **요소 기본 규칙이 덮어쓰는 넷만** 여기서 되찾는다(특이도 (0,1,1) 동점 + 뒤에 오므로 이긴다).
+    나머지(display·margin·box-sizing·width·box-shadow)는 그 기본 규칙에 없어 위에서 그대로 먹는다 —
+    「일부 속성만 먹는」 증상의 정확한 뒷면이다.
+    ⚠ 클래스 단독 규칙을 위에 **남겨 둔 것도 의도**다: `check-css-drops` 는 셀렉터를 줄 단위 문자열로 대조해서,
+    `.v2-ss-edit` 줄이 사라지면 «HEAD 에 있던 규칙이 유실됐다» 고 경고한다. 이름이 바뀐 것뿐인데 상시 경고가
+    남으면 **다음 사람이 진짜 유실을 놓친다.** */
+input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px; }
 /* ⚠ 초점 그림자는 **테두리 그림자와 한 선언에 같이** 적는다 — box-shadow 는 통째로 덮어써서,
    따로 쓰면 초점이 오는 순간(=늘 그렇다, 편집칸은 열리자마자 focus 다) 위의 테두리가 사라진다. */
 .v2-ss-edit:focus { outline: none;
