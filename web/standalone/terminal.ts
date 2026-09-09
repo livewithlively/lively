@@ -2960,8 +2960,13 @@ async function restoreThisSession() {
   // #2231 — 이 id 는 이미 이어졌다(다른 탭·다른 칸이 먼저 눌렀다). **새 세션으로 옮긴다** — 여기서 그냥
   //  새로고침하면 같은 옛 id 를 다시 열어 영원히 제자리다(아래 already 분기가 그 함정이었다).
   if (r && r.movedTo) { goToMoved(r.movedTo); return; }
-  // 라이브 경합: 그새 세션이 다시 떠 있으면 새로 만들지 않고 이 주소로 그대로 재연결한다.
-  if (r && r.already) { location.reload(); return; }
+  // 라이브 경합: 그새 세션이 다시 떠 있다 — 새로 만들지 않고 **그 자리에서** 다시 붙는다.
+  //  ⚠ 종전엔 location.reload() 였다. 그 새로고침은 같은 부팅 게이트(#1820)로 되돌아가는데, 메타가 그 세션을
+  //   다시 '복원 가능'이라 답하면 restore → already → reload 가 영원히 돈다(실측 2026-09-09: admin 계정으로
+  //   남의 살아있는 세션 링크를 열면 화면이 '연결 준비 중…' 과 새로고침만 반복했다. 그 메타 오답은 서버에서
+  //   함께 고쳤다 — routes.ts 의 canAttach 갈래). 살아 있다면 할 일은 붙는 것뿐이고, 못 붙으면 WS 가
+  //   4403/4410 으로 정확한 사유를 준다 — 어느 쪽이든 문서를 다시 받을 이유가 없다.
+  if (r && r.already) { resumeAlive(); return; }
   const ns = r && r.session;
   if (ns && ns.id) {
     // restored=1 — 이 표식이 있는 페이지는 다시 자동 복원하지 않는다(루프 차단, 위 goneMode).
@@ -2972,6 +2977,17 @@ async function restoreThisSession() {
   }
   sessionEnded = true;
   showEndedBar({ title: '열지 못했습니다.', body: '서버가 새 세션을 돌려주지 않았어요 — 세션 목록에서 다시 시도해 주세요.' });
+}
+/** 서버가 «이미 살아 있다»(already) 고 답했을 때 — 복원 화면을 걷고 그 자리에서 재연결한다. */
+function resumeAlive() {
+  sessionEnded = false;                                   // startRestore 가 세워 둔 종료 확정을 되돌린다(안 되돌리면 connectNow 가 즉시 반환)
+  restoreTried = true;                                    // 이 화면의 복원 시도는 소진 — 다시 복원으로 새지 않는다
+  try { term.options.disableStdin = false; } catch (_) { /* noop */ }
+  try { const b = document.querySelector('.ended-bar'); if (b) b.remove(); } catch (_) { /* noop */ }
+  try { document.title = document.title.replace(/^\(종료됨\) /, ''); } catch (_) { /* noop */ }   // endSession 이 붙인 접두사 — 되살아났으니 걷는다
+  try { statusEl.textContent = '연결 중…'; statusEl.className = 'status'; } catch (_) { /* noop */ }
+  reconnectDelay = 400;
+  connectNow();
 }
 async function connectNow() {
   if (sessionEnded) return; // 종료 확정 세션 — 어떤 트리거(탭 복귀·포커스)로도 다시 붙지 않는다
@@ -3039,9 +3055,13 @@ async function connectNow() {
   });
   sock.onopen = () => {
     dlog('ws', 'open');
-    //  denyRetries 만 여기서 되돌린다 — 4403(입장 거부)은 open 전에 갈리므로 «열렸다» 가 곧 반증이다.
+    //  ⚠ denyRetries 를 여기서 되돌리지 않는다 — 종전 주석은 «4403 은 open 전에 갈린다» 를 전제했는데
+    //   서버는 조용히 끊지 않으려고 `handleUpgrade` 로 핸드셰이크를 **완료한 뒤** `close(4403)` 한다(#835).
+    //   그래서 거부에서도 onopen 이 먼저 뜨고, 여기서 되돌리면 상한이 영영 차지 않아 6초 간격 무한 재시도가
+    //   된다(실측 2026-09-09: 「연결 확인 중… (14회째)」 — ws open → 16ms 뒤 close 4403 의 반복).
+    //   «열렸다» 는 입장 허가의 반증이 못 된다. 실제 반증은 **서버가 보낸 바이트**다 → onmessage 에서 되돌린다.
     //  나머지(attempts·gaveUp·reconnectDelay)는 아래 stableTimer 가 «버텼다» 를 확인한 뒤에 되돌린다.
-    connecting = false; wasConnected = true; denyRetries = 0;
+    connecting = false; wasConnected = true;
     connProven = false;
     clearTimeout(stableTimer);
     stableTimer = setTimeout(markConnProven, CONN_STABLE_MS);
@@ -3059,6 +3079,7 @@ async function connectNow() {
   sock.onmessage = (e) => {
     const bytes = (e.data instanceof ArrayBuffer) ? new Uint8Array(e.data) : (typeof e.data === 'string' ? new TextEncoder().encode(e.data) : null);
     if (!bytes) return;
+    denyRetries = 0;   // 서버가 실제로 바이트를 보냈다 = 입장 허가 확정(onopen 은 4403 거부에서도 뜬다 — 위 머리말)
     ctrl.feed(bytes);
     if (AUTOSEND && !autosendDone) autosendLastOut = Date.now();
     if (ctrl.isControl()) {
@@ -3079,7 +3100,7 @@ async function connectNow() {
     if (e && e.code === 4410) { onSessionGone(); return; } // 세션 종료 확정(#835) — 복원 가능하면 되살리고(#1059 E), 아니면 종료 배너
     if (e && e.code === 4403) { // 서버가 입장 거부. 단, 일시장애(재배포 직후 tmux 과부하)로 인한 '가짜 4403'일 수 있어(#687)
       //  바로 게이트를 띄우지 않고 MAX_DENY_RETRIES 만큼 재시도 — 일시장애면 곧 복구돼 붙고, 진짜 거부면 계속 4403 이라
-      //  아래 게이트로 간다(무한 재연결은 여전히 막힘). 성공 시 onopen 에서 denyRetries 리셋.
+      //  아래 게이트로 간다(무한 재연결은 여전히 막힘). 리셋은 onopen 이 아니라 **첫 수신 바이트**에서 한다(위 머리말).
       if (++denyRetries <= MAX_DENY_RETRIES) { scheduleReconnect('연결 확인 중…'); return; }
       clearTimeout(reconnectTimer);
       gate('이 세션에 입장할 수 없습니다.\n\n프로젝트 팀원만 입장할 수 있어요. 또는 이 세션이 더 이상 프로젝트에 연결되어 있지 않을 수 있습니다(폴더 이동·프로젝트 삭제 등). 프로젝트 페이지에서 세션을 다시 확인해 주세요.');
