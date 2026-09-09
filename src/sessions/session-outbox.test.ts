@@ -1,7 +1,7 @@
 // 순수 단위 체크(node:assert) — 아웃박스(#1753)의 정책·에코 바늘. 배달자(파일·tmux·DB)는 여기서 안 띄운다.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { deliveryTransport, splitReadyProbe, echoNeedle, flatOneLine, needsSubmitRetry, readyVerdictOnError, retryDelayMs, stallAction, unreachableDelayMs,
+import { deliveryTransport, echoNeedle, flatOneLine, needsSubmitRetry, readyVerdictOnError, retryDelayMs, stallAction, unreachableDelayMs,
   READY_WINDOW_MS, NOT_READY_TTL_MS, UNREACHABLE_TTL_MS, STALE_SENDING, stalledSinceNext } from "./session-outbox.js";
 
 let pass = 0;
@@ -160,28 +160,4 @@ t("[#2244] 배달자는 돌기 전에 자기 잔재를 회수하고, 대화창 �
   // 화면이 이 엔드포인트를 3초마다 친다 — 조건 없이 깨우면 아무것도 안 걸린 세션에서도 매번 배달 루프가 뜬다.
   assert.match(body, /if \(rows\.some\([\s\S]*?\) kickOutbox\(sessionId\)/,
     "깨우기는 **덜 끝난 행이 보일 때만** — 무조건 kick 은 3초 폴링에 얹혀 헛돈다");
-});
-
-// ── 준비 탐침 출력 가르기 (#2600 T2 d6) ─────────────────────────────────────
-//  두 읽기를 한 왕복으로 묶으면 stdout 이 이어 붙는다: **첫 줄 = pane_current_command · 나머지 = pane**.
-//  왜 묶었나: 종전엔 500ms 마다 tmux 를 **두 번** 불러 대기 세션당 초당 4 왕복이었고, 계수에서 매니지드
-//  게이트웨이 tmux 호출의 **41%**(115/분)를 차지했다. 엣지 표는 스크래치패드 `spec-probe.md` 의 P1~P6.
-t("[P1] 첫 줄이 명령, 나머지가 pane", () => {
-  assert.deepEqual(splitReadyProbe("node\n$ hello\n"), { paneCmd: "node", pane: "$ hello\n" });
-});
-t("[P2] 줄바꿈이 없으면 pane 이 비었다는 뜻", () => {
-  assert.deepEqual(splitReadyProbe("node"), { paneCmd: "node", pane: "" });
-});
-t("[P3] 첫 줄이 비어도 명령 자리는 그 줄이다", () => {
-  assert.deepEqual(splitReadyProbe("\npane"), { paneCmd: "", pane: "pane" });
-});
-t("[P4] ★ pane 의 줄바꿈은 **원문 그대로** 보존한다 — 첫 줄만 뗀다", () => {
-  //  화면 판정(firstPromptStep)이 줄 구조를 본다. 여기서 접으면 그 판정이 달라진다.
-  assert.deepEqual(splitReadyProbe("claude\na\n\nb\n"), { paneCmd: "claude", pane: "a\n\nb\n" });
-});
-t("[P5] 명령만 trim 한다(pane 은 손대지 않는다)", () => {
-  assert.deepEqual(splitReadyProbe("  node \n  pane  "), { paneCmd: "node", pane: "  pane  " });
-});
-t("[P6] 빈 출력", () => {
-  assert.deepEqual(splitReadyProbe(""), { paneCmd: "", pane: "" });
 });

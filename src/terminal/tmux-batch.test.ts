@@ -8,7 +8,7 @@
 //   인자 **안**의 `;` 는 값이고, 인자가 **정확히** `;` 이면 구분자다. 그래서 후자는 못 묶는다.
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { TMUX_BATCH_MAX_ARGV, chunkTmuxCommands, tmuxBatchable, tmuxBatchRefOf, tmuxReadOneRoundTrip, type TmuxCmd } from "./tmux-exec.js";
+import { TMUX_BATCH_MAX_ARGV, chunkTmuxCommands, tmuxBatchable, tmuxBatchRefOf, type TmuxCmd } from "./tmux-exec.js";
 
 /** 5-인자짜리 set-option 한 벌 — 실제로 이 함수가 나르는 모양(@box_* 메타)이다. */
 const opt = (n: number): TmuxCmd => ["set-option", "-t", "box-x-1", `@box_m${n}`, String(n)];
@@ -171,40 +171,4 @@ test("E16 지목이 다른 명령은 같은 묶음에 안 실린다 — 남의 �
     const first = chunk.slice(0, chunk.indexOf(";") === -1 ? chunk.length : chunk.indexOf(";"));
     assert.ok(tmuxBatchRefOf(first), "묶음의 첫 명령이 라우팅 키를 쥔다");
   }
-});
-
-// ── 읽기 한 왕복(#2600 T2 d6) ───────────────────────────────────────────────
-//  왜: 아웃박스 준비 판정이 `capture-pane` 과 `display-message` 를 각각 불러 대기 세션당 초당 4 왕복이었고,
-//   계수에서 게이트웨이 tmux 호출의 41% 였다. 두 읽기는 같은 세션을 같은 순간에 보는 것이라 한 묶음이면 된다.
-//  ★ 이 시험이 지키는 것은 **왕복 수**다 — 묶이지 않으면 조용히 두 번 나가고, 그러면 이 변경의 이유가 사라진다.
-const READY_PROBE: TmuxCmd[] = [
-  ["display-message", "-p", "-t", "box-a-1", "#{pane_current_command}"],
-  ["capture-pane", "-t", "box-a-1", "-p"],
-];
-
-test("R1 ★ 준비 탐침 두 읽기는 한 묶음이 된다(= 한 왕복)", () => {
-  assert.equal(chunkTmuxCommands(READY_PROBE).length, 1);
-});
-
-test("R2 ★ 세션 지목이 갈리면 한 왕복이 아니다 — 그때는 던져야 한다", () => {
-  //  묶음이 둘이 되는 입력. `tmuxReadOneRoundTrip` 은 이걸 조용히 두 번 보내지 않는다(계약).
-  const mixed: TmuxCmd[] = [
-    ["display-message", "-p", "-t", "box-a-1", "#{pane_current_command}"],
-    ["capture-pane", "-t", "box-b-2", "-p"],
-  ];
-  assert.equal(chunkTmuxCommands(mixed).length, 2);
-});
-
-test("R3 못 싣는 명령이 섞이면 묶음이 갈린다", () => {
-  const bad: TmuxCmd[] = [READY_PROBE[0]!, [";"], READY_PROBE[1]!];
-  assert.ok(chunkTmuxCommands(bad).length > 1);
-});
-
-test("R4 ★ 한 왕복이 안 되는 입력이면 **던진다** — 조용히 두 번 나가면 이 함수를 쓸 이유가 없다", async () => {
-  //  던지는 판정은 tmux 를 부르기 **전**이라, 이 시험은 실제 tmux 를 건드리지 않는다.
-  const mixed: TmuxCmd[] = [
-    ["display-message", "-p", "-t", "box-a-1", "#{pane_current_command}"],
-    ["capture-pane", "-t", "box-b-2", "-p"],
-  ];
-  await assert.rejects(() => tmuxReadOneRoundTrip(mixed), /한 왕복/);
 });

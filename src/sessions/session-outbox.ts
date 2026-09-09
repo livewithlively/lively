@@ -38,7 +38,7 @@
 //  파일 찾기) · terminal/routes.ts(웹 보내기 → enqueue · 복원의 큐 승계) · web/session-chat.ts(대기·실패 상태 렌더).
 import path from "node:path";
 import { itemsPool } from "../db/client.js";
-import { tmuxReadOneRoundTrip, isSessionGoneError } from "../terminal/tmux-exec.js";
+import { tmux, isSessionGoneError } from "../terminal/tmux-exec.js";
 import { sendKeysToSession, sendKeyToSession, SendKeysNotStarted } from "../terminal/send-keys.js";
 import { firstPromptStep } from "../terminal/session-first-prompt.js";
 import { codexChatMode } from "../terminal/codex-chat-mode.js";
@@ -444,30 +444,16 @@ async function mark(id: number, status: OutboxStatus, err?: string): Promise<voi
  *  ⚠ tmux 가 던졌다고 'gone' 이 아니다(#2154 ② · #835 와 같은 교리): 확답("그런 세션 없음"·중계 tmux 서버 증발)만
  *   gone 이고, 나머지(노드 채널 503·중계 타임아웃·도커 일시장애)는 **모름**이다. 종전엔 둘이 한 값이라, 순간 장애
  *   하나가 그 세션의 대기 지시를 전부 버리게 했다. */
-/**
- * 준비 탐침의 합친 출력을 가른다(순수) — **첫 줄이 `pane_current_command`, 나머지가 pane** (#2600 T2 d6).
- *  `display-message -p` 는 정확히 한 줄을 내므로 첫 줄만 떼면 나머지는 `capture-pane -p` 의 출력 그대로다.
- *  ⚠ 줄바꿈이 없으면 pane 이 비었다는 뜻이다(빈 화면) — 그 경우도 명령은 읽어야 한다.
- */
-export function splitReadyProbe(out: string): { paneCmd: string; pane: string } {
-  const i = out.indexOf("\n");
-  return i < 0 ? { paneCmd: out.trim(), pane: "" } : { paneCmd: out.slice(0, i).trim(), pane: out.slice(i + 1) };
-}
-
 async function waitReady(sessionId: string, harness: string, trustOk: boolean): Promise<ReadyVerdict> {
   const t0 = Date.now();
   let acceptedTrust = false;
   for (;;) {
     let pane = ""; let paneCmd = "";
     try {
-      //  ★ **한 왕복**으로 묻는다 (#2600 T2 d6). 종전엔 두 번 나갔고, 대기 세션 하나당 초당 4 왕복이라
-      //   계수에서 게이트웨이 tmux 호출의 41% 를 차지했다(115/분). 덤으로 pane 과 명령이 **같은 시점**의
-      //   짝이 된다 — 종전엔 두 왕복 사이에 화면이 바뀌면 어긋난 짝이 판정에 들어갔다.
-      //  ⚠ `display-message` 를 **먼저** 싣는다: 그 출력이 정확히 한 줄이라 첫 줄로 갈라낼 수 있다.
-      ({ pane, paneCmd } = splitReadyProbe(await tmuxReadOneRoundTrip([
-        ["display-message", "-p", "-t", sessionId, "#{pane_current_command}"],
-        ["capture-pane", "-t", sessionId, "-p"],
-      ])));
+      [pane, paneCmd] = await Promise.all([
+        tmux(["capture-pane", "-t", sessionId, "-p"]),
+        tmux(["display-message", "-p", "-t", sessionId, "#{pane_current_command}"]).then((s) => s.trim()),
+      ]);
     } catch (e) { return readyVerdictOnError(e); }
     const step = firstPromptStep({ pane, paneCmd, harness, elapsedMs: Date.now() - t0, maxMs: READY_WINDOW_MS, trustOk });
     if (step === "send") return "ready";

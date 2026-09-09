@@ -1,6 +1,7 @@
 // v2/panes-kit.ts — 곁칸 부품들이 함께 쓰는 **잎 도구**(#1819 분할). 의존은 core 한 방향뿐이라 순환이 없다.
 //  여기 사는 것: 아이콘 · 인증 헤더 · 파일 종류 판정(미리보기 방식) · 이름 겹침 회피 · 그 자리 우클릭 메뉴.
 //  부품 자신(세션·자료·지식…)은 panes-parts.ts / panes-files.ts 에 산다.
+import { showCtxMenu, type CtxOpts, type CtxRow } from './ctx-menu.js';   // #3784 우클릭 메뉴 엔진
 import { TOKEN_KEY, el, sv } from '../core.js';
 import { EMBEDDED } from './embed.js';
 import { tabNum, type TabKey } from '../lib/tab-key.js';
@@ -108,29 +109,12 @@ export const stamp = (): string => {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 };
 
-/** 그 자리에 뜨는 작은 메뉴(우클릭). 밖을 누르거나 Esc 면 닫힌다. */
-export function ctxMenu(x: number, y: number, rows: Array<{ label: string; run?: () => void; danger?: boolean; sep?: boolean; off?: boolean }>): void {
-  document.querySelector('.pn-ctx')?.remove();
-  const menu = el('div', { class: 'pn-ctx', role: 'menu' }) as HTMLElement;
-  const close = (): void => { menu.remove(); document.removeEventListener('pointerdown', away, true); document.removeEventListener('keydown', esc, true); };
-  const away = (e: Event): void => { if (!menu.contains(e.target as Node)) close(); };
-  const esc = (e: KeyboardEvent): void => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
-  for (const r of rows) {
-    if (r.sep) { menu.append(el('div', { class: 'pn-ctx-sep' })); continue; }
-    const b = el('button', { class: 'pn-ctx-i' + (r.danger ? ' danger' : ''), type: 'button', text: r.label }) as HTMLButtonElement;
-    if (r.off) b.disabled = true;
-    else b.onclick = () => { close(); r.run?.(); };
-    menu.append(b);
-  }
-  document.body.append(menu);
-  // 화면 밖으로 나가지 않게 — 오른쪽·아래 끝에서 뒤집는다(좁은 곁칸에서 우클릭하면 늘 걸린다).
-  const r = menu.getBoundingClientRect();
-  menu.style.left = Math.max(6, Math.min(x, window.innerWidth - r.width - 6)) + 'px';
-  menu.style.top = Math.max(6, Math.min(y, window.innerHeight - r.height - 6)) + 'px';
-  document.addEventListener('pointerdown', away, true);
-  document.addEventListener('keydown', esc, true);
+/** 그 자리에 뜨는 작은 메뉴(우클릭). 밖을 누르거나 Esc 면 닫힌다.
+ *  #3784 — 엔진은 ctx-menu.ts 로 옮겼다(키보드·하위 메뉴·머리글). 이 서명은 종전 호출자(자료 칸·레일 독·곁칸 탭·
+ *  사이드바 프로젝트 행)를 위해 그대로 둔다 — 같은 행 타입(CtxRow)이라 아이콘·힌트도 그냥 실어 보내면 된다. */
+export function ctxMenu(x: number, y: number, rows: CtxRow[], opts?: CtxOpts): void {
+  showCtxMenu(x, y, rows, opts);
 }
-
 
 /** 붙여넣은 파일에 사람이 알아볼 이름을 준다 — 브라우저가 주는 'image.png' 는 누구의 것인지 말해 주지 않는다.
  *  ⚠ 확장자는 **이름을 갈아끼울 때만** MIME 에서 만든다. 원래 이름의 확장자 유무로 판단하면 'image.png' 처럼
