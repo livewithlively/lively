@@ -23,6 +23,7 @@ import { createPreviewKit } from './file-preview.js';
 import type { TabKey } from '../lib/tab-key.js';
 import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
 import { composerAttach } from './compose-attach.js';
+import { composerMention } from './compose-mention.js';
 import { createRunPicker } from './run-picker.js';
 import { spawnSession } from './quick-session.js';
 import { rememberCreated } from './created-cache.js';   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
@@ -211,7 +212,7 @@ function sessionsPart(ctx: PartCtx): Part {
   };
   const ta = el('textarea', {
     class: 'v2-launch-in', rows: '2', 'aria-label': '새 세션에 시킬 일',
-    placeholder: ctx.id > 0 ? '무엇이든 시키세요 — 이 프로젝트에 붙은 새 세션이 열려요.' : '무엇이든 시키세요 — 새 세션이 열려요.',
+    placeholder: (ctx.id > 0 ? '무엇이든 시키세요 — 이 프로젝트에 붙은 새 세션이 열려요.' : '무엇이든 시키세요 — 새 세션이 열려요.') + '\n@이름 을 적으면 그 사람을 이 세션에 초대해요',
   }) as HTMLTextAreaElement;
   const send = el('button', { class: 'btn btn-primary v2-launch-send', type: 'button', title: 'Enter 로도 보낼 수 있어요', onclick: () => void spawn() },
     el('span', { text: '시키기' })) as HTMLButtonElement;
@@ -232,6 +233,9 @@ function sessionsPart(ctx: PartCtx): Part {
   //  공유 폴더로, 없으면(loose 셸) 내 개인 폴더로 올라가고, 절대경로가 첫 지시 꼬리에 실린다.
   const att = composerAttach({ projectId: () => ctx.id, onChanged: () => ctx.onChanged?.(), dead: () => ctx.dead() });
   att.wirePaste(ta);   // ⚠ 여기 한 번만 — newPane 은 다시 그려질 수 있어 거기서 걸면 붙여넣기가 두 벌씩 올라간다
+  // 초대(#3778 @이름) — 홈과 같은 부품(v2/compose-mention.ts). 같은 이유로 입력칸엔 여기 한 번만 건다.
+  const mention = composerMention();
+  mention.wire(ta);
 
   function newPane(): HTMLElement {
     if (!runPicker) runPicker = createRunPicker();
@@ -239,11 +243,11 @@ function sessionsPart(ctx: PartCtx): Part {
       el('div', { class: 'pn-launch' },
         el('h1', { class: 'v2-h1', text: '무엇을 할까요?' }),
         el('p', { class: 'v2-home-sub', text: ctx.id > 0 ? '새 세션이 열려요.' : '프로젝트 없이 새 세션이 열려요.' }),
-        el('div', { class: 'v2-launch' }, ta, att.chips,
-          // 줄 구성은 홈(views.ts)과 같다 — 왼쪽 '무엇으로 열까', 오른쪽 '행동([＋]·[시키기])'.
+        el('div', { class: 'v2-launch' }, ta, att.chips, mention.chips, mention.menu,
+          // 줄 구성은 홈(views.ts)과 같다 — 왼쪽 '무엇으로 열까'(AI·모델·추론), 오른쪽 '행동([⚙]·[＋]·[시키기])'.
           el('div', { class: 'v2-launch-row' },
             el('div', { class: 'v2-launch-ctl' }, runPicker.el),
-            el('div', { class: 'v2-launch-act' }, att.btn, send)), att.fileIn)));
+            el('div', { class: 'v2-launch-act' }, runPicker.gear, att.btn, send)), att.fileIn)));
     att.wireDrop(pane, pane);
     return pane;
   }
@@ -308,8 +312,8 @@ function sessionsPart(ctx: PartCtx): Part {
     // 생성은 **한 곳**에서만 한다(v2/quick-session.ts spawnSession) — 생성 전문 캐시·첫 지시 낙관 렌더·프로젝트
     //  붙이기가 거기 묶여 있다. 여기서 fetch 를 다시 짜면 그 중 하나가 빠진다(실제로 캐시가 빠져 있었다).
     // 첨부는 지시의 꼬리에 절대경로로 적는다 — 세션이 열리자마자 그 파일을 읽을 수 있게(이름은 사람이 알아보는 단서).
-    const prompt = text + att.tail();
-    const made = await spawnSession(prompt, { projectId: ctx.id > 0 ? ctx.id : null, projectName: projectName(), run: runPicker?.value() || null });
+    const prompt = text + mention.tail() + att.tail();
+    const made = await spawnSession(prompt, { projectId: ctx.id > 0 ? ctx.id : null, projectName: projectName(), run: runPicker?.value() || null, invites: mention.invites() });
     sending = false; idle();
     if (!made) { ta.focus(); return; }
     seedSessName(made.id, text);
@@ -317,6 +321,7 @@ function sessionsPart(ctx: PartCtx): Part {
     ctx.onSessionCreated?.(made.session);
     ta.value = ''; ta.style.height = 'auto';
     att.clear();
+    mention.clear();
     ctx.onChanged?.();
     select(made.id);
   }

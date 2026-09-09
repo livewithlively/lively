@@ -2158,3 +2158,50 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .cn-set-why .v2-ic { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--muted-2); }
 .cn-setlist .cn-set:first-child { border-top: 0; }
 .cn-set-why + .cn-set { border-top: 1px solid var(--line-row); }
+
+/* ── 컴포저 2판(#3778, 2026-09-09) — 여는 곳 두 칸 · 줄 세 칸(폭 = 고른 값) · [⚙] 기본값 · @이름 초대 ──
+   줄 규칙(.v2-run gap / .v2-run-sel max-width)은 위 원래 정의를 여기서 덮는다 — 같은 특이도, 뒤가 이긴다. */
+.v2-dest-grid { display: grid; grid-template-columns: 3fr 2fr; gap: 8px; margin-top: 26px; }
+.v2-dest-grid + .v2-launch { margin-top: 8px; }   /* 두 상자는 한 묶음 — 카드의 26px 는 여기서 걷는다(.v2-dest-wrap 과 같은 규칙) */
+.v2-dest-grid > .v2-dest-wrap { margin-top: 0; min-width: 0; }
+.v2-dest.off { background: var(--bg-tint); border-style: dashed; }
+.v2-dest.off input.v2-dest-in { cursor: default; }
+.v2-run { gap: 0; position: relative; }
+.v2-run-sel { max-width: 240px; }
+.v2-run-sep { flex: none; width: 1px; height: 14px; margin: 0 4px; background: var(--line-net-2); }
+.v2-run-sep[hidden] { display: none; }
+/* 폭 측정용 — 셀렉트와 같은 글꼴·크기여야 잰 값이 맞는다(run-picker.ts fit). */
+.v2-run-measure { position: absolute; left: 0; top: 0; visibility: hidden; white-space: nowrap; pointer-events: none; font: inherit; font-size: 12px; }
+.v2-launch-gear { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px;
+  border: 1px solid var(--line-net); border-radius: 11px; background: transparent; color: var(--muted); cursor: pointer; }
+.v2-launch-gear svg { width: 16px; height: 16px; }
+.v2-launch-gear:hover { color: var(--ink); background: var(--bg-tint); }
+.v2-launch-gear:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.v2-launch-gear:disabled { opacity: .55; cursor: default; }
+/* @이름 목록 — 입력칸 바로 아래에 떠서 뜬다(top 은 run-picker 가 아니라 compose-mention 이 입력칸 좌표로 준다). */
+.v2-mention { position: absolute; left: 12px; right: 12px; z-index: 31; overflow: hidden; border: 1px solid var(--line-net); border-radius: 12px; background: var(--surface);
+  box-shadow: 0 1px 2px rgba(var(--shadow-ink), .04), 0 16px 40px -20px rgba(var(--shadow-ink), .3); }
+.v2-mention[hidden] { display: none; }
+.v2-mention-hd { padding: 8px 13px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted-3); }
+.v2-mention-row { display: flex; align-items: center; gap: 9px; padding: 7px 13px 7px 11px; font-size: 13px; cursor: pointer; }
+.v2-mention-row:hover { background: var(--bg-tint); }
+.v2-mention-row.is-sel { background: var(--blue); color: #fff; }
+.v2-mention-row .n { flex: none; font-weight: 500; }
+.v2-mention-row .k { font-size: 10px; padding: 1px 6px; border-radius: 99px; background: var(--bg-tint-2); color: var(--muted); }
+.v2-mention-row.is-sel .k { background: rgba(255, 255, 255, .22); color: #fff; }
+.v2-mention-row .id { margin-left: auto; font-size: 11px; opacity: .6; }
+.v2-ppl-ava { width: 18px; height: 18px; border-radius: 50%; font-size: 9.5px; flex: none; }
+.pn-att-c.ppl { padding-left: 3px; background: var(--bg-tint-2); border-color: var(--bg-tint-2); color: var(--blue); }
+/* [⚙] 새 세션 기본값 창(session-defaults.ts) — confirmDialog 의 extra 자리 */
+.v2-def { display: flex; flex-direction: column; gap: 8px; text-align: left; }
+.v2-def-lead { margin: 0 0 4px; font-size: 12.5px; color: var(--muted); }
+.v2-def-row { display: grid; grid-template-columns: 96px 1fr; align-items: start; gap: 8px; font-size: 12.5px; }
+.v2-def-row .k { color: var(--muted); padding-top: 7px; }
+.v2-def-row .v { min-width: 0; }
+.v2-def-sel { width: 100%; }
+.v2-def .v2-fine { margin-top: 3px; }
+@media (max-width: 640px) {
+  .v2-dest-grid { grid-template-columns: 1fr; margin-top: 18px; }
+  .v2-launch-gear { width: 38px; height: 38px; }
+  .v2-mention { left: 6px; right: 6px; }
+}
