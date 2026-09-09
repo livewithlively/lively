@@ -62,3 +62,45 @@ export function workDayStart(now: number): number {
   const five = midnight + DAY_START_HOUR * 3600_000;
   return now < five ? five - 86_400_000 : midnight;
 }
+
+// ── 홈 목록 **프로젝트 카드 안**의 자 — 위 두 자와 또 묻는 것이 다르다 ─────────────────
+//  isWarmSess 는 «폴더 안에서 접느냐»(하루 창) · workDayStart 는 «홈이 그 줄을 받느냐»(오늘 창)를 묻는다.
+//  여기서 묻는 것은 «홈 카드를 폈을 때 그 줄이 곧바로 보이느냐»다 — 받은 줄은 이미 **전부 오늘 것**이므로
+//  시각이 아니라 **끝났나(past)** 하나로 가른다(원준 2026-09-09 안 C: "지난 세션이 되어도 구분이 안 된다").
+
+/** 카드 안 한 줄이 이 판정에 내놓는 것. 홈이 행을 세울 때 붙이는 표식 둘이다(web/v2/main.ts). */
+export interface CardRow {
+  /** 끝난 세션인가(도는 박스가 없다). */
+  past?: boolean;
+  /** 지금 보고 있는 화면인가. */
+  active?: boolean;
+}
+
+/**
+ * 카드 안 줄을 둘로 가른다.
+ *  - `now`    = 카드를 펴면 **그대로 보이는** 줄
+ *  - `folded` = 「지난 세션 n」 한 줄 뒤로 접히는 줄
+ *  - `open`   = 그 접힘이 지금 열려 있나
+ *
+ * ★ **접히지 않을 앞면이 없으면 접지 않는다**(원준 2026-09-09: "지난 세션밖에 없어지면 어케돼?").
+ *  접힘은 «배경이 본문을 덮지 않게» 하는 장치다. 본문이 없으면 덮을 것이 없고, 그때 접으면 카드에
+ *  뚜껑만 남아 **오늘 한 일이 두 번 클릭 뒤로 숨는다** — 「폴더를 펼쳐도 그 세션이 안 보였다」(#762·#1808)로
+ *  이미 한 번 고친 그 증상이다. 그래서 그 카드에서는 줄이 들어온 순서 그대로 선다(행의 흐린 톤이 대신 말한다).
+ *
+ * 들어온 순서를 지킨다 — 각 자리 안의 앞뒤도, 접지 않을 때의 전체 순서도 부르는 쪽이 준 그대로다.
+ */
+export function foldCardRows<T extends CardRow>(
+  rows: T[],
+  o: { searching?: boolean; opened?: boolean } = {},
+): { now: T[]; folded: T[]; open: boolean } {
+  const now: T[] = [], folded: T[] = [];
+  for (const r of rows) (r.past ? folded : now).push(r);
+  //  접을 것이 없거나(끝난 줄 0) 접히지 않을 앞면이 없으면(도는 줄 0) 접힘 자체를 만들지 않는다.
+  if (!folded.length || !now.length) return { now: rows, folded: [], open: false };
+  return {
+    now, folded,
+    //  ⚠ **보고 있는 세션은 접히더라도 보여야 한다** — 보고 있는 화면이 목록에 없으면 그게 고장이다
+    //   (main.ts ③ force 가 지키는 그 한 줄). 검색도 같다: 찾으려고 건 렌즈를 접힘이 가리면 안 된다(#1719).
+    open: !!o.searching || !!o.opened || folded.some((r) => r.active),
+  };
+}
