@@ -222,7 +222,10 @@ export async function readPptx(zip: ZipFile): Promise<OfficeDoc | null> {
       if (tk.t === 'text') { if (inText) buf += tk.text; continue; }
       const ln = localName(tk.name);
       if (tk.t === 'open') {
-        if (ln === 'rPr') bold = onOff(tk.attrs.b) && tk.attrs.b !== undefined;
+        //  ⚠ 굵게는 **조각마다 초기화**한다 — rPr 이 없는 다음 조각까지 굵게 남으면 장표 전체가 굵어진다
+        //   (실측: 첫 줄에만 b="1" 인 장표에서 아래 문단이 전부 굵게 나왔다).
+        if (ln === 'r') bold = false;
+        else if (ln === 'rPr') bold = tk.attrs.b !== undefined && onOff(tk.attrs.b);
         else if (ln === 't') { inText = true; buf = ''; }
         else if (ln === 'br') runs.push({ text: '\n' });
         else if (ln === 'blip') { const t = srel[tk.attrs['r:embed'] || '']; if (t && !/^https?:/i.test(t)) blocks.push({ k: 'img', part: t }); }
