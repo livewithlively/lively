@@ -438,6 +438,10 @@ export interface CreateInput {
   // #1719 홈 입력창 — 첫 지시. 세션을 띄운 뒤 하네스 입력창이 뜨는 걸 **보고 나서** 주입한다(session-first-prompt.ts).
   //  생성 응답은 기다리지 않는다(주입은 백그라운드) — 화면은 세션 대화창으로 가서 대화 파일에 나타나는 걸 따라간다.
   initialPrompt?: string;
+  // #3778 새 작업 창의 프로젝트 칸 — 사람이 **직접 지은** 새 프로젝트 이름. projectId 와 배타다:
+  //  기존 프로젝트를 고르면 화면이 프로젝트 세션 라우트로 가므로 이 필드는 그때 오지 않는다.
+  //  값이 있으면 first-prompt-project 가 껍데기 대신 **사람 이름 프로젝트**(name_source: human)를 만든다.
+  projectName?: string;
   // #1780 D4 — 이 세션을 **앱으로** 띄운다. 설정 시 createSession 이 grant 검사 → 앱 토큰 발급 →
   //  cwd와 분리된 private app runtime home에 토큰·앱 하네스 자산을 물질화하고
   //  pane env LIVELY_HOME=<private session_home>·LIVELY_APP_ID=<id> 를 주입한다. session_home은 cwd와 분리된다.
