@@ -766,7 +766,8 @@ input.v2-dest-in { height: auto; border: 0; outline: 0; background: transparent;
   border: 1px solid var(--line-net); border-radius: 12px; background: var(--surface);
   box-shadow: 0 1px 2px rgba(var(--shadow-ink), .04), 0 16px 40px -20px rgba(var(--shadow-ink), .3); }
 .v2-dest-hd { padding: 9px 13px 5px; font-size: 10.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted-3); }
-.v2-dest-list { max-height: 268px; overflow: auto; display: flex; flex-direction: column; padding-bottom: 4px; }
+/* 목록은 스크롤된다 — 손가락(트랙패드)·휠 둘 다. overscroll-behavior 로 끝에 닿아도 뒤 화면이 따라 움직이지 않는다. */
+.v2-dest-list { max-height: 268px; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; display: flex; flex-direction: column; padding-bottom: 4px; }
 .v2-dest-row { display: flex; align-items: center; gap: 9px; width: 100%; border: 0; background: transparent; cursor: pointer;
   padding: 8px 13px; font: inherit; font-size: 13px; color: var(--ink); text-align: left; }
 .v2-dest-row:hover { background: var(--bg-tint); }
