@@ -1044,11 +1044,19 @@ function homeDraft(tab: ShellTab): { text: string; onChange(v: string): void } {
 /** 홈의 «여는 곳» 후보(#3778) — 사이드바 트리와 **같은 순서**(projectOrder)를 그대로 쓴다.
  *  ⚠ views.ts 가 side.ts 를 직접 부르면 순환 import 가 된다(side.ts 는 views.ts 의 값을 쓴다) — 그래서 셸이
  *   이어 준다. 목록은 이미 메모리에 있다(loadData 가 실은 data.projects) — 이 칸 때문에 서버를 더 부르지 않는다.
- *   상한 40: 최근 순이라 그 뒤는 «검색»으로 찾는 구간이고, 홈이 프로젝트 수백 건을 들고 있을 이유가 없다. */
+ *   ⚠⚠ **여기서 자르지 않는다.** 상한을 두면 «최근 몇 개를 보여줄까»(표시)와 «무엇을 찾을 수 있나»(검색)가
+ *   한 숫자에 묶여, 상한 밖의 프로젝트는 **이름을 정확히 쳐도 없는 것이 된다.**
+ *
+ *   그리고 그 잘림은 무작위가 아니다 — `projectOrder` 는 **done 을 맨 뒤로** 정렬하므로(side.ts), 잘리는 것은
+ *   언제나 **끝난 프로젝트부터**다. 그런데 이름으로 찾는 상황이 바로 그때다(«전에 하던 그거»).
+ *   실측(원준님 계정 2026-09-09): 프로젝트 286 = 진행중 175 + done 111. 상한 40 이면 done 이 **전부** 잘리고
+ *   (그래서 「자잘한 UI 수정」이 done 이 되는 순간 이 칸에서 사라졌다), 200 이어도 86개가 잘린다.
+ *   상한을 올리는 건 처방이 아니다 — 잘림과 검색을 **떼어 놓는 것**이 처방이다.
+ *
+ *   비용은 없다: `data.projects` 는 이미 전량이 메모리에 있고(loadData 가 limit 없이 받는다) 여기서 만드는 건
+ *   {proj, done} 두 필드짜리 얇은 사영이다. 화면에 실제로 그려지는 줄은 언제나 6개 이하다(views.ts destBox). */
 function homeDests(): HomeDest[] {
-  //  ⚠ 40개로 자르면 **번호로 찾기가 그 안에서만** 된다(원준 2026-09-09 «번호로도 검색»). 목록은 화면이 스크롤·
-  //   자르기로 다루므로 여기서는 넉넉히 넘긴다 — 행 하나는 {id, name} 두 필드라 200개도 가볍다.
-  return projectOrder(data).slice(0, 200).map((r) => ({ proj: r.proj, done: r.done }));
+  return projectOrder(data).map((r) => ({ proj: r.proj, done: r.done }));
 }
 
 async function renderRoute(tab: ShellTab): Promise<void> {
