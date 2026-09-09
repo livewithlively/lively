@@ -689,10 +689,12 @@ function grpSums(counts: Record<string, number>): HTMLElement | null {
 function projGrpHead(g: ProjGrp): HTMLElement {
   //  ⚠ `pinned` 는 **자리를 비워 두는 표식**이다 — 고정된 카드의 압정은 손을 떼도 서 있어야 하는데(그게 '고정됨'의
   //   유일한 표식이다) 압정도 ＋ 와 같은 절대위치라, 자리를 안 비우면 상태 점·개수 위에 겹쳐 앉는다(CSS .v2-pg-row.pinned).
-  return el('div', { class: 'v2-pg-row' + (g.active && !g.open ? ' act' : '') + (g.pinned ? ' pinned' : '') },
+  const head = el('div', { class: 'v2-pg-row' + (g.active && !g.open ? ' act' : '') + (g.pinned ? ' pinned' : '') },
     el('button', { class: 'v2-pg-t', type: 'button', 'aria-expanded': String(g.open),
       title: g.name + (g.id ? `\n#${g.id} · 세션 ${g.rows.length}` : '\n프로젝트에 붙지 않은 세션과 화면'),
-      onclick: () => toggleGrp(g.key, g.open) },
+      //  ⚠ **두 번째 클릭은 삼킨다** — 더블클릭은 «이름 고치기»(아래 dblclick)라, 접기가 두 번 일어나면 사람이 고른
+      //   접힘 상태가 편집 도중에 뒤집힌다. 첫 클릭의 접기는 그대로 둔다(단일 클릭 문법은 안 건드린다 — #2579 와 같은 처방).
+      onclick: (e: MouseEvent) => { if (e.detail >= 2) return; toggleGrp(g.key, g.open); } },
       el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }),
       glyph(g.open ? 'folder-open' : 'folder', 'v2-pg-ic'),
       el('span', { class: 'n', text: g.name }),
@@ -701,7 +703,40 @@ function projGrpHead(g: ProjGrp): HTMLElement {
       g.rows.length > 1 ? el('span', { class: 'v2-cnt', text: String(g.rows.length) }) : null),
     //  ★고정(#3778) — 카드째 맨 위로. 「프로젝트 없음」 묶음은 고정할 프로젝트가 없으므로 압정도 없다(트리와 같은 규율).
     g.id ? pinBtn(g.key, '위에 고정 — 이 프로젝트와 그 안의 세션을 통째로 맨 위로 올려 둡니다') : null,
-    g.id ? newSessBtn(g.id) : null) as HTMLElement;
+    g.id ? newSessBtn(g.id) : null,
+    //  ★프로젝트 상세로 가는 문(#3778, 원준 2026-09-09) — 종전엔 머리줄에 **이름이 눈앞에 있는데 거기로 가는 길이
+    //   없었다**(눌러도 접기/펴기뿐). 그렇다고 이름 클릭을 항해로 바꾸지는 않는다: 이 줄은 습관적으로 누르는 자리라
+    //   한 번 누를 때마다 가운데가 통째로 바뀌면 «접으려고 눌렀는데 화면이 바뀌었다» 가 되고, 접힘은 사람이 정해
+    //   기억까지 하는 상태다(toggleGrp). 그래서 압정 ＋ 와 같은 규약으로 **손 얹었을 때만 나타나는 단추**를 하나 낸다.
+    g.id ? openProjBtn(g.id, g.name) : null) as HTMLElement;
+  //  더블클릭 = 이름 고치기. 트리(projRow)가 이미 쓰는 손짓 · 같은 편집기를 홈 목록에도 준다 — 종전엔 **트리에만**
+  //   있어서 같은 프로젝트인데 어디서 보느냐에 따라 고칠 수 있기도 없기도 했다(원준 2026-09-09).
+  if (g.id) head.addEventListener('dblclick', (e: MouseEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    //  첫 클릭이 뒤집어 놓은 접힘을 **되돌린 뒤** 편집칸을 연다 — 이름을 고치려던 몸짓이 접힘까지 바꾸면 안 된다.
+    //   toggleGrp 이 repaintList 로 이 줄을 다시 그리므로, 잡아 둔 노드가 아니라 앵커로 다시 찾는다
+    //   (트리의 beginRenameProject 가 같은 사유로 같은 일을 한다).
+    toggleGrp(g.key, !g.open);
+    beginRenameProjGrp(g);
+  });
+  return head;
+}
+
+/** 홈 목록 프로젝트 카드의 [→] — 그 프로젝트 상세 화면을 연다. 자리는 압정 ＋ 와 같은 절대위치(위 projGrpHead 머리말). */
+function openProjBtn(projectId: number, name: string): HTMLElement {
+  return el('button', {
+    class: 'v2-openb', type: 'button', 'aria-label': `[${name}] 프로젝트 페이지 열기`,
+    title: '프로젝트 페이지 — 보드 · 자료 · 타임라인을 엽니다',
+    onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); hooks.onOpenProject?.(projectId); } },
+    sv('svg', { viewBox: '0 0 24 24', class: 'v2-newb-ic', 'aria-hidden': 'true' },
+      sv('path', { d: 'M5 12h13' }), sv('path', { d: 'M13 6l6 6-6 6' })));
+}
+
+/** 홈 목록 프로젝트 카드 머리줄의 이름을 그 자리에서 고친다 — 트리의 beginRenameProject 와 같은 편집기. */
+function beginRenameProjGrp(g: ProjGrp): void {
+  const nameEl = document.querySelector<HTMLElement>('.v2-pg[data-anch="' + g.key + '"] .v2-pg-t .n');
+  if (!nameEl) return;
+  inlineRename(nameEl, { value: g.name, label: '프로젝트 이름', save: async (next) => { await hooks.onRenameProject?.(g.id, next); } });
 }
 
 /** 사람이 묶음을 접거나 폈다. 사람의 결정은 브라우저에 남고, 그 뒤로 자동 판정이 이 묶음을 안 뒤집는다. */

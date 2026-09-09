@@ -341,9 +341,10 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-tree-more:hover { color: var(--ink); background: var(--bg); }
 /* 고정 단추 — 자리는 늘 차지한다(hover 때 나타나며 행을 밀면 목록이 흔들린다). 고정된 것만 늘 보인다. */
 /* ＋ 새 세션(프로젝트 줄) — 핀과 같은 규칙: 자리는 늘 차지하고 손을 얹었을 때만 보인다(원준 2026-08-20). */
-.v2-newb { width: 18px; height: 18px; margin-left: 2px; padding: 0; flex: none; border: 0; border-radius: 5px; background: none; color: var(--muted-2); cursor: pointer; display: inline-grid; place-items: center; opacity: 0; }
+/* → 프로젝트 페이지(홈 목록 카드 머리줄, #3778) — ＋ 와 같은 부품·같은 규칙이라 겉모습을 나눠 쓴다. */
+.v2-newb, .v2-openb { width: 18px; height: 18px; margin-left: 2px; padding: 0; flex: none; border: 0; border-radius: 5px; background: none; color: var(--muted-2); cursor: pointer; display: inline-grid; place-items: center; opacity: 0; }
 .v2-pj-row:hover .v2-newb, .v2-newb:focus-visible { opacity: 1; }
-.v2-newb:hover { color: var(--blue); background: var(--bg-tint-2); }
+.v2-newb:hover, .v2-openb:hover { color: var(--blue); background: var(--bg-tint-2); }
 .v2-newb-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 
 .v2-pinb { width: 18px; height: 18px; margin-left: 4px; padding: 0; flex: none; border: 0; border-radius: 5px; background: none; color: var(--muted-2); cursor: pointer; display: inline-grid; place-items: center; opacity: 0; }
@@ -1820,6 +1821,11 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-pg-row .v2-pinb.on { display: inline-grid; }
 .v2-pg-row:hover .v2-pinb, .v2-pg-row .v2-pinb:focus-visible { display: inline-grid; right: 27px; }
 .v2-pg-row.pinned { padding-right: 23px; }
+/* ★→ 프로젝트 페이지(#3778, 원준 2026-09-09) — 압정 ＋ 와 같은 절대위치 문법, 그 왼쪽 세 번째 자리.
+   손을 얹었을 때만 나타난다: 늘 보이면 «이름을 누르면 저기로 간다»고 읽혀, 접기/펴기라는 이 줄의 본래
+   뜻과 싸운다. 이 셋이 서는 동안 상태 점·개수는 이미 물러나 있으므로(위 :hover .v2-sums) 겹치지 않는다. */
+.v2-pg-row .v2-openb { position: absolute; right: 49px; top: 50%; margin: -9px 0 0; opacity: 1; display: none; }
+.v2-pg-row:hover .v2-openb, .v2-pg-row .v2-openb:focus-visible { display: inline-grid; }
 /* 접힌 묶음 안에 **지금 보고 있는 행**이 있다 — 왼쪽 마디로 남긴다.
    그게 없으면 "지금 보는 화면이 목록에서 사라졌다"는 고장이 된다. */
 .v2-pg-row.act::before { content: ''; position: absolute; left: -1px; top: 6px; bottom: 6px; width: 3px;
