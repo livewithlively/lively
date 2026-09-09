@@ -80,7 +80,8 @@ export interface SessionHostCandidate {
 }
 
 /**
- * **내 것이 아닌** 세션 호스트 등록들(순수) — 선언은 켜져 있는데 이 노드의 정규 id 가 아닌 행.
+ * **어느 노드의 것도 아닌** 세션 호스트 등록들(순수) — 선언은 켜져 있는데 `sesshost-<slug>-…` 모양이
+ *  아닌 행. 옛 축의 잔재(`sesshost-<slug>` — 노드 성분 없음)나 사람이 손으로 만든 이름이 여기 걸린다.
  *
  * ── 왜 «찾아서 물려받기» 를 버렸나 (d5 §② 규율의 재작성) ────────────────────
  * d5 는 «이름이 아니라 **선언**으로 찾아 물려받는다» 였다. 그 규칙은 «이 테넌트의 세션 호스트는
@@ -88,13 +89,17 @@ export interface SessionHostCandidate {
  *  된다(주인을 옮기고 토큰을 회전시키므로, 그 순간 저쪽 노드의 호스트가 인증을 잃는다).
  *  그래서 물려받지 않고 **내 정규 id 하나만** 본다.
  *
- * 대신 남의 것을 **말한다**: 옛 축의 잔재(`sesshost-<slug>` — 노드 성분 없음)나 회수된 노드의 행이
- *  남아 있으면 그건 영영 오프라인이고, 목록 소유 판정(`self-node.sessionHostVerdict` — T7 에서
- *  «선언한 호스트가 전부 자격일 때만» 으로 바뀌었다)이 그 행 때문에 계속 거짓이 된다.
- *  사람이 지워야 풀리는 상태라, 이름이 로그에 남아야 한다.
+ * ⚠ **형제는 «남의 것» 이 아니다.** 같은 테넌트의 다른 노드가 세운 `sesshost-<slug>-<다른노드>` 는
+ *  새 축의 **정상**이다. 그걸 여기서 걸면 노드가 N 대일 때 매 조정(5분)마다 N-1 건의 경고가
+ *  전 노드에서 돈다 — 반복되는 줄은 아무도 안 본다(이 모듈의 `once` 규율과 같은 이유).
+ *
+ * 걸리는 것은 **어느 노드도 조정하지 않을 행**이다. 그런 행은 영영 오프라인이고, 목록 소유 판정
+ *  (`self-node.sessionHostVerdict` — T7 에서 «선언한 호스트가 전부 자격일 때만» 으로 바뀌었다)이
+ *  그 행 때문에 하루(SESSION_HOST_DEAD_MS) 동안 거짓이 된다. 이름이 로그에 남아야 사람이 지운다.
  */
-export function foreignSessionHostNodes<T extends SessionHostCandidate>(nodes: readonly T[], mine: string): string[] {
-  return nodes.filter((n) => n.session_host && n.id !== mine).map((n) => n.id);
+export function legacySessionHostNodes<T extends SessionHostCandidate>(nodes: readonly T[], slug: string): string[] {
+  const mine = `${SESSION_HOST_NODE_PREFIX}${slug}-`;
+  return nodes.filter((n) => n.session_host && !n.id.startsWith(mine)).map((n) => n.id);
 }
 
 /** 노드 등록 행에 대해 지금 할 일(순수 — 유닛테스트 대상). */
@@ -181,12 +186,13 @@ export async function ensureSessionHostNode(slug: string, node: string, issue: b
   const existing = nodes.find((n) => n.id === nodeId) ?? null;
   const action = decideSessionHostNode({ existing, issue });
 
-  //  남의 것(옛 축의 잔재·회수된 노드의 행)은 **말만 한다.** 그 행이 남아 있으면 목록 소유 판정이
-  //   계속 거짓이라(«선언한 호스트가 전부 자격일 때만» — self-node.sessionHostVerdict) 사람이 지워야 풀린다.
-  const foreign = foreignSessionHostNodes(nodes, nodeId);
-  if (foreign.length) {
-    logger.warn({ slug, node, mine: nodeId, foreign },
-      "이 테넌트에 다른 세션 호스트 등록이 남아 있다 — 물려받지 않는다(회수된 노드·옛 축의 잔재라면 지워야 목록 소유가 넘어간다)");
+  //  옛 축의 잔재는 **말만 한다.** 어느 노드도 그 행을 조정하지 않으므로 영영 오프라인이고,
+  //   그 행이 있는 동안 목록 소유 판정이 거짓이다(«선언한 호스트가 전부 자격일 때만»).
+  //   ⚠ 형제(`sesshost-<slug>-<다른노드>`)는 여기 안 걸린다 — 새 축의 정상이다.
+  const legacy = legacySessionHostNodes(nodes, slug);
+  if (legacy.length) {
+    logger.warn({ slug, node, mine: nodeId, legacy },
+      "이 테넌트에 (노드, 테넌트) 축이 아닌 세션 호스트 등록이 남아 있다 — 물려받지 않는다(지워야 목록 소유가 넘어간다)");
   }
 
   if (action === "create") {

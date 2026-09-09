@@ -12,7 +12,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
-  SESSION_HOST_MEMBER_ID, decideSessionHostNode, foreignSessionHostNodes, sessionHostNodeId,
+  SESSION_HOST_MEMBER_ID, decideSessionHostNode, legacySessionHostNodes, sessionHostNodeId,
 } from "./session-host-provision.js";
 
 const ours = { owner_member: SESSION_HOST_MEMBER_ID, session_host: true };
@@ -88,29 +88,40 @@ test("N6 — 실측 좌표(슬러그 11 + 노드 19)는 상한 안에 넉넉히 
 
 // ── ★★ D — **남의 노드 등록을 물려받지 않는다** (d5 §② 규율의 재작성) ───────
 //  d5 는 «이름이 아니라 선언으로 찾아 물려받는다» 였다. 그 규칙은 «테넌트당 하나» 를 전제한다 —
-//  (노드, 테넌트) 축에서는 그게 정확히 **남의 노드 주인을 빼앗는** 동작이 된다.
+//  (노드, 테넌트) 축에서는 같은 동작이 정확히 **남의 노드 주인을 빼앗는** 일이 된다.
 const n = (id: string, session_host: boolean): { id: string; session_host: boolean } => ({ id, session_host });
 
-test("★★ D1 — 다른 노드의 선언된 세션 호스트는 «남의 것»으로 보고한다(물려받지 않는다)", () => {
-  const mine = `sesshost-${SLUG}-${NODE}`;
-  const others = foreignSessionHostNodes(
-    [n(mine, true), n(`sesshost-${SLUG}-i-0a7632ed53ebc4c1d`, true), n("haruui-macbookair", false)],
-    mine,
+test("★★ D1 — 옛 축의 잔재(`sesshost-<slug>` · 노드 성분 없음)를 **이름으로 짚는다**", () => {
+  //  어느 노드도 그 행을 조정하지 않는다 → 영영 오프라인 → 그 동안 목록 소유가 안 넘어간다.
+  //  물려받으면(d5 의 동작) 그 순간 두 노드가 같은 행을 두고 다시 싸운다. 남겨 두고 이름만 남긴다.
+  const got = legacySessionHostNodes(
+    [n(`sesshost-${SLUG}`, true), n(`sesshost-${SLUG}-${NODE}`, true), n("haruui-macbookair", false)],
+    SLUG,
   );
-  assert.deepEqual(others, [`sesshost-${SLUG}-i-0a7632ed53ebc4c1d`], "🔴 남의 노드 등록을 내 것으로 봤다");
+  assert.deepEqual(got, [`sesshost-${SLUG}`], "🔴 잔재를 못 짚었거나 형제를 잔재로 봤다");
 });
 
-test("★ D2 — 옛 축의 잔재(`sesshost-<slug>` · 노드 성분 없음)도 «남의 것»이다", () => {
-  //  물려받으면 그 순간 두 노드가 같은 행을 두고 다시 싸운다. 남겨 두고 **이름을 로그에 남긴다**.
-  const mine = `sesshost-${SLUG}-${NODE}`;
-  assert.deepEqual(foreignSessionHostNodes([n(`sesshost-${SLUG}`, true), n(mine, true)], mine), [`sesshost-${SLUG}`]);
+test("★★ D2 — **형제는 잔재가 아니다** — 같은 테넌트의 다른 노드 호스트는 새 축의 정상이다", () => {
+  //  이걸 걸면 노드 N 대에서 매 조정(5분)마다 N-1 건의 경고가 전 노드에서 돈다 — 아무도 안 보는 줄이 된다.
+  const got = legacySessionHostNodes(
+    [n(`sesshost-${SLUG}-${NODE}`, true), n(`sesshost-${SLUG}-i-0a7632ed53ebc4c1d`, true)],
+    SLUG,
+  );
+  assert.deepEqual(got, [], "🔴 형제 노드의 세션 호스트를 «남의 것»으로 봤다(정상 상태에서 경고가 쏟아진다)");
 });
 
-test("D3 — 내 것뿐이면 빈 목록(정상 상태에서 로그가 안 시끄럽다)", () => {
-  const mine = `sesshost-${SLUG}-${NODE}`;
-  assert.deepEqual(foreignSessionHostNodes([n(mine, true), n("haruui-macbookair", false)], mine), []);
+test("★ D3 — 다른 테넌트 이름을 단 행도 잔재다(사람이 손으로 만든 이름)", () => {
+  assert.deepEqual(legacySessionHostNodes([n("sesshost-46e3", true)], SLUG), ["sesshost-46e3"]);
 });
 
 test("D4 — 선언 안 된 노드는 애초에 후보가 아니다", () => {
-  assert.deepEqual(foreignSessionHostNodes([n("haruui-macbookair", false), n("hammurabi", false)], "sesshost-x"), []);
+  assert.deepEqual(legacySessionHostNodes([n("haruui-macbookair", false), n("hammurabi", false)], SLUG), []);
+});
+
+test("★ D5 (한계를 명시) — 접두가 겹치는 다른 테넌트의 이름은 **형제로 보인다**", () => {
+  //  슬러그 `lively` 로 볼 때 `sesshost-lively-46e3-i-0abc` 는 `sesshost-lively-` 로 시작하므로 형제로 읽힌다.
+  //  ★ 그래도 안전한 이유: `listNodes()` 가 주는 행은 **그 테넌트 것뿐**이다(PK 가 `(tenant_id, id)` — db/tenant-column.ts).
+  //   남의 테넌트 행이 이 목록에 섞일 길이 없으므로 이 겹침은 실제로 발생하지 않는다. 여기 적어 두는 것은,
+  //   나중에 이 함수를 **테넌트 경계 밖** 목록에 쓰면 그 순간 이 가정이 깨지기 때문이다.
+  assert.deepEqual(legacySessionHostNodes([n("sesshost-lively-46e3-i-0abc", true)], "lively"), []);
 });
