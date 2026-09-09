@@ -142,11 +142,13 @@ function fieldInfo(label, tip, control) {
 //
 // opts.project = { id, name, base } — 프로젝트에서 열었으면 그 맥락(#1145). 주면 폼이 이렇게 바뀐다:
 //   · 폴더를 묻지 않는다 — 그 프로젝트 폴더에서 열린다(고를 여지가 없으므로 카드로 사실만 보여준다).
-//   · 초대를 묻지 않는다 — **만들 때는 언제나 나만 보는 세션**이고(#1876 D1), 함께 볼 사람은 만든 뒤
-//     세션 문패의 [공유](web/v2/share-session.ts)로 고른다. 초대 자리를 두 군데 두면 어느 쪽이 정본인지
-//     흐려진다. ⚠ 2026-08-28 이전 주석은 "프로젝트 세션의 가시성은 리스트 공개범위가 정하고 invites 는
-//     보지도 않는다"였는데, 그건 프로젝트 세션이 전원 공개이던 시절의 사실이고 지금은 거짓이다 —
-//     이제 invites 가 그 세션을 여는 **유일한 열쇠**다(canSeeSession·canAttach·checkViewGate 셋 다).
+//   · 초대는 **자유 세션과 똑같이 묻는다**(2026-09-09). 기본값은 여전히 비공개고(#1876 D1), 바뀐 건
+//     정책이 아니라 **입구**다 — 이제 invites 가 그 세션을 여는 유일한 열쇠인데(canSeeSession·canAttach·
+//     checkViewGate 셋 다), 정작 그 열쇠를 만드는 자리에서 피커를 잠가 두고 "따로 초대하지 않아도 됩니다"
+//     라고 적어 두었다. 그 문구는 프로젝트 세션이 전원 공개이던 시절(#452, 2026-08-14)의 사실이고
+//     2026-08-28 부터 거짓이다. 여기서 고르는 사람은 문패 [공유](web/v2/share-session.ts)가 쓰는 것과
+//     **같은 invites 필드**라 정본이 갈리지 않는다 — 생성 때 고르고, 그 뒤 바꾸는 건 문패가 맡는다.
+//     프로젝트 팀원은 후보 위로 올리기만 하고 **고르지는 않는다**(비우면 나만 보는 세션 — 기본값 불변).
 //   · 생성은 POST <base><id>/sessions 로 간다(자유 세션은 /api/ui/terminal/sessions).
 // 이 모달 하나가 '웹/내 PC'와 '프로젝트/자유'를 모두 받는다 — 종전엔 경로마다 다른 모달이 떴다(#1145 안 1).
 function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any; name?: string; base?: string } }) {
@@ -216,7 +218,19 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
     renderFlags();
   };
   nodeSel.addEventListener('change', () => { paintPicker(); paintHarnesses(); });
-  const inviteBox = buildInvitePicker(cfg, new Set()); // 기본 비공개(아무도 선택 안 됨)
+  // 기본 비공개(아무도 선택 안 됨). 프로젝트 세션이면 그 팀원을 후보 **위로만** 올린다 — 고르지는 않는다.
+  const projMembers = new Set<string>();
+  const inviteBox = buildInvitePicker(cfg, new Set(), { priority: projMembers });
+  // 팀원 명부는 비동기로 온다(프로젝트 상세를 안 거치고 대시보드·목록에서도 이 모달이 열리므로 여기서 직접 묻는다).
+  //  실패해도 조용히 넘어간다 — 순서 힌트일 뿐이라 없으면 조직 명부 그대로다(초대 자체는 그대로 된다).
+  if (project) {
+    void (async () => {
+      try {
+        const p: any = await api((project.base || '/api/ui/v6/projects/') + project.id);
+        for (const m of (p && p.members) || []) { const mid = String(m.member_id || m.id || ''); if (mid) projMembers.add(mid); }
+      } catch (_) { /* 순서 힌트 없이 진행 */ }
+    })();
+  }
   // 한 줄 배치(#1145)는 인라인으로도 못 박는다 — styles 는 브라우저가 오래 캐시해 클래스 규칙만으로는
   //  '새 JS + 옛 CSS' 조합에서 레이아웃이 무너진다(실측). 클래스(.term-preset-row)는 그대로 두되 값은 여기서 확정.
   //  ⚠ flex-direction 을 **반드시 명시**한다 — public/index.html 의 인라인 <style> 에 `.term-flags { flex-direction: column }`
@@ -525,15 +539,14 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
       project
         // 프로젝트 맥락 — 고를 게 없으니 '무엇이 정해졌는지'를 보여준다.
         ? el('div', { 'data-tour': 'folder' }, fieldInfo('어디서 실행할까요',
-          '이 세션은 **이 프로젝트의 폴더**에서 열립니다 — 폴더를 따로 고르지 않습니다.\n\n· 프로젝트 본문·연결된 지식·프로젝트 규칙이 세션에 자동으로 들어갑니다.\n· 이 프로젝트를 볼 수 있는 사람은 모두 이 세션을 보고 이어받을 수 있습니다.',
+          '이 세션은 **이 프로젝트의 폴더**에서 열립니다 — 폴더를 따로 고르지 않습니다.\n\n· 프로젝트 본문·연결된 지식·프로젝트 규칙이 세션에 자동으로 들어갑니다.\n· 세션 자체는 **초대한 사람만** 봅니다 — 프로젝트를 볼 수 있다고 이 세션이 보이지는 않습니다.',
           projCard()))
         // #853 작업 위치(공유/개인 토글) + 그 안의 폴더를 한 블록으로 — '이 폴더에서 AI를 실행한다'는 직관.
         : el('div', { 'data-tour': 'folder' }, fieldInfo('어디서 실행할까요',
           'AI 는 폴더 하나를 정해 그 안에서 일합니다.\n\n· 여기서 고른 폴더가 이 세션의 **작업 공간**이 됩니다.\n· 그 안의 파일과 하위 폴더는 AI 가 **자유롭게 열어 볼 수 있습니다**.\n· 「공유 워크스페이스」는 팀과 함께 쓰는 폴더이고, 「개인 폴더」는 나만 쓰는 폴더입니다.',
           el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))),
-      project
-        ? el('div', { 'data-tour': 'invite' }, field('초대', projInvite()))
-        : el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)),
+      // 초대는 프로젝트/자유가 **같은 칸**이다 — 어느 쪽이든 여기서 고른 사람만 그 세션을 본다(#1876 D1).
+      el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)),
       advToggle, advBody,
       // '이 설정을 기억하기'는 고급 설정 밖 맨 아래 — 고급을 펼치지 않아도 켤 수 있어야 한다.
       el('div', { class: 'term-checks' }, rememberWrap));
@@ -552,15 +565,7 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
     el('ul', { class: 'term-proj-why' },
       el('li', { text: '이 프로젝트 폴더에서 열립니다 — 폴더를 고르지 않아도 됩니다.' }),
       el('li', { text: '프로젝트 본문·연결된 지식·규칙이 세션에 자동으로 들어갑니다.' }),
-      el('li', { text: '이 프로젝트를 볼 수 있는 사람은 모두 이 세션을 보고 이어받을 수 있습니다.' })));
-
-  // 프로젝트 세션의 '초대' — 칸은 남기되 사실을 적고 잠근다. 넣어도 가시성이 안 바뀌기 때문이다(위 주석 참조).
-  const projInvite = () => el('div', {},
-    el('div', { class: 'term-lock-note' },
-      el('span', { text: '🗂' }),
-      el('span', {}, el('b', { text: '이 프로젝트를 볼 수 있는 사람은 모두' }),
-        document.createTextNode(' 이 세션을 봅니다 — 따로 초대하지 않아도 됩니다.'))),
-    el('div', { class: 'term-invite-off' }, inviteBox.box));
+      el('li', { text: '세션 자체는 초대한 사람만 봅니다 — 아래 「초대」에서 함께 볼 사람을 고릅니다.' })));
 
   // 폼 순서(#1145 안 C+1) — 어떻게(웹/내 PC) → 무엇(이름) → 어디(폴더) → 누구(초대) → 그 밖(고급 설정) → 기억 → 만들기.
   //  온보딩 투어(#517) 앵커: label → folder → invite → preset(=고급 설정, 열리면 node·options 도 그 안에) → create.
@@ -580,9 +585,10 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
         const mode = modeVal; // #1007+ 라이블리 모드 → readOnly/incognito 불리언(서버 CreateInput)
         // 잠긴 상태(읽기전용·인코그니토)면 기록 범위는 보내지 않는다 — 화면에서 못 고르는 값을 몰래 실어 보내지 않는다(#1145).
         const writeVisOut = writeVisLocked() ? '' : writeVisVal;
-        // 프로젝트 세션은 폴더·초대를 안 받는다(그 프로젝트 폴더에서 열리고, 가시성은 리스트 공개범위가 정한다).
+        // 프로젝트 세션은 폴더를 안 받는다(그 프로젝트 폴더에서 열린다). 초대는 **자유 세션과 같이** 보낸다 —
+        //  종전엔 안 실었고 서버도 중앙 경로에선 빈 배열로 덮어써서, 화면에서 무엇을 고르든 나만 보는 세션이 됐다.
         const payload: any = project
-          ? { label: labelI.value, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: mode === 'readonly', incognito: mode === 'incognito', writeVis: writeVisOut || undefined, node: nodeId || undefined }
+          ? { label: labelI.value, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: mode === 'readonly', incognito: mode === 'incognito', writeVis: writeVisOut || undefined, invites: inviteBox.selected(), node: nodeId || undefined }
           : { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: mode === 'readonly', incognito: mode === 'incognito', writeVis: writeVisOut || undefined, invites: inviteBox.selected(), node: nodeId || undefined };
         try {
           // 프로젝트 세션은 그 프로젝트 엔드포인트로 만든다 — 서버가 폴더·가시성·맥락 주입을 그쪽에서 붙인다.
@@ -733,11 +739,16 @@ function openTermEdit(s, cfg, view) {
 // 초대 멤버 피커(#673) — 긴 행 목록 대신 '검색해 추가 → 칩' 타입어헤드. 세로로 여러 이름을 항상 보여줄 이유가 없어,
 //  기본은 칩(선택된 사람)만 보이고, 검색창을 누르면 드롭다운(absolute 오버레이라 폼 높이를 안 늘림)이 후보를 보여준다.
 //  나(state.me) 제외한 구성원이 후보. current(Set)=초기 선택, selected()=고른 id 배열. 생성·수정 폼이 공유한다.
-function buildInvitePicker(cfg, current) {
+// opts.priority — 후보 목록에서 **위로 올릴 사람들**(프로젝트 세션이면 그 프로젝트 팀원). 고르지는 않는다:
+//  기본값은 여전히 비공개이고(#1876 D1), 이건 «부를 사람은 대개 이 사람들» 이라는 순서 힌트일 뿐이다.
+//  set 은 나중에 채워질 수 있다(프로젝트 팀원은 비동기로 온다) — 그래서 값을 복사하지 않고 참조를 들고 있다가
+//  paint 시점에 읽는다. opts.repaint 로 그때 다시 그리게 한다.
+function buildInvitePicker(cfg, current, opts?: { priority?: Set<string>; priorityLabel?: string }) {
   const meId = (state.me && state.me.userId) || '';
   const others = (cfg.members || []).filter((m) => m.id !== meId);
   const selected = new Set([...current].filter((id) => others.some((m) => m.id === id))); // 유령 id 방지
   const label = (m) => (m.name || m.id) + (m.kind === 'agent' ? ' (AI)' : '');
+  const prio = () => (opts && opts.priority) || new Set<string>();
   const chips = el('div', { class: 'proj-mp-chips' });
   const searchIn = el('input', { type: 'text', class: 'proj-mp-search', placeholder: '이름으로 검색해 추가…' });
   const menu = el('div', { class: 'proj-mp-menu', hidden: '' });
@@ -764,14 +775,27 @@ function buildInvitePicker(cfg, current) {
   function closeMenu() { menu.hidden = true; menu.replaceChildren(); }
   function openMenu() {
     const q = searchIn.value.trim().toLowerCase();
-    const cand = others.filter((m) => !selected.has(m.id) && (!q || (m.name || m.id).toLowerCase().includes(q))).slice(0, 8);
-    if (!cand.length) { menu.replaceChildren(el('div', { class: 'proj-mp-empty', text: others.length ? '일치하는 사람이 없어요.' : '초대할 구성원이 없어요.' })); menu.hidden = false; return; }
-    menu.replaceChildren(...cand.map((m) => el('div', { class: 'proj-mp-row', role: 'button',
+    const hit = others.filter((m) => !selected.has(m.id) && (!q || (m.name || m.id).toLowerCase().includes(q)));
+    if (!hit.length) { menu.replaceChildren(el('div', { class: 'proj-mp-empty', text: others.length ? '일치하는 사람이 없어요.' : '초대할 구성원이 없어요.' })); menu.hidden = false; return; }
+    // 우선 후보(프로젝트 팀원)를 위로. 8명 상한은 **두 무리를 합쳐서** 센다 — 팀원이 많다고 메뉴가 길어지지 않는다.
+    const p = prio();
+    const top = hit.filter((m) => p.has(m.id));
+    const rest = hit.filter((m) => !p.has(m.id));
+    const row = (m) => el('div', { class: 'proj-mp-row', role: 'button',
       // mousedown+preventDefault: 클릭 전 blur 로 메뉴가 닫혀 클릭이 씹히는 걸 막는다.
       onmousedown: (e) => { e.preventDefault(); selected.add(m.id); searchIn.value = ''; paintChips(); openMenu(); searchIn.focus(); } },
       personFace(m.id, 'proj-mp-ava', m.name),
       el('span', { class: 'proj-mp-name', text: label(m) }),
-      el('span', { class: 'proj-mp-add', text: '＋ 추가' }))));
+      el('span', { class: 'proj-mp-add', text: '＋ 추가' }));
+    const head = (t) => el('div', { class: 'proj-mp-group', text: t });
+    // 무리 머리글은 **양쪽 다 있을 때만** 단다 — 한 무리뿐이면 라벨이 정보를 더하지 않고 줄만 먹는다.
+    const both = top.length && rest.length;
+    menu.replaceChildren(...[
+      ...(both ? [head((opts && opts.priorityLabel) || '이 프로젝트 팀원')] : []),
+      ...top.slice(0, 8).map(row),
+      ...(both ? [head('조직 구성원')] : []),
+      ...rest.slice(0, Math.max(0, 8 - top.length)).map(row),
+    ]);
     menu.hidden = false;
   }
   searchIn.addEventListener('focus', openMenu);
