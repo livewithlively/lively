@@ -116,6 +116,20 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-act { font-size: 12.5px; padding: 4px 8px; border-radius: 6px; color: var(--ink-sub); }
 .sc-act:hover { background: var(--bg-tint); color: var(--ink); }
 .sc-act-on { background: var(--bg-punch); color: var(--ink); }
+/* 함께 보는 사람(#3778) — 얼굴 스택이 곧 [공유] 다. 문패(v2 셸)에 있던 .pn-faces 가 이 자리로 내려왔다.
+   단추이므로 hover 에 반응해야 «누를 수 있다»가 읽힌다 — 얼굴만 있으면 장식으로 본다. */
+.sc-faces { display: inline-flex; align-items: center; padding: 3px 5px 3px 4px; margin-right: 2px;
+  border: 0; border-radius: 999px; background: none; cursor: pointer; }
+.sc-faces:hover { background: var(--bg-tint); }
+.sc-faces:hover .sc-face-add { border-color: var(--blue); color: var(--blue); }
+.sc-face { width: 21px; height: 21px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; color: var(--on-fill); border: 2px solid var(--bg); margin-left: -6px; flex: none; }
+.sc-face:first-child { margin-left: 0; }
+.sc-face-more { background: var(--gray-bg); color: var(--ink-sub); font-size: 9.5px; }
+/* [＋] — «부를 수 있다»를 말하는 칩. 점선이라 사람 얼굴과 섞이지 않는다. */
+.sc-face-add { background: var(--bg-tint-2); color: var(--muted-head); border: 1px dashed var(--line-net);
+  font-size: 12px; font-weight: 600; line-height: 1; }
+@media (max-width: 720px) { .sc-faces { padding-left: 2px; padding-right: 2px; } }
 /* 터미널 연결 상태(#1744) — 상단바를 합치며 터미널 툴바에 있던 한 줄이 여기로 왔다. 터미널이 열려 있을 때만 뜬다. */
 .sc-termstat { font-size: 11.5px; color: var(--muted); white-space: nowrap; margin-right: 2px; }
 .sc-termstat[hidden] { display: none; }

@@ -18,7 +18,7 @@
 //
 //  ── 안 하는 것 ──
 //   대화 uuid 를 추측하지 않는다(서버 원칙) — 매핑이 없으면 '기록 아직 없음'으로 말하고 터미널을 권한다.
-import { api, apiUrl, TOKEN_KEY, anchoredPopover, el, sv, toast } from './core.js';
+import { api, apiUrl, TOKEN_KEY, anchoredPopover, el, personFace, sv, toast } from './core.js';
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
 import { CHAT_FONT_KEY, CHAT_FONT_LABELS, nextFontStep, parseFontStep } from './chat-font.js';
 import { toolLabel } from './session-tool-labels.js';
@@ -32,6 +32,12 @@ import { onSessionEvents } from './session-events.js';   // #3699 대화 파일 
 import { effortChoices, effortKo, findHarness, flagChoices, prettyModel, providerLabel, runCatalog, type RunHarness } from './v2/run-picker.js';
 import { rememberCreated } from './v2/created-cache.js';
 import { rememberFirstPrompt } from './v2/quick-session.js';   // #2439 — 되살린 세션의 첫 지시 낙관 렌더   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
+// #3778 — 「지금 보고 있는 사람」·[공유] 는 **세션의 머리줄**에 산다. 종전엔 셸 문패(v2/panes.ts)에 있었는데,
+//  그 줄의 왼쪽은 프로젝트 이름이라 한 줄이 두 주체를 번갈아 말했다 — 「공유」가 프로젝트 공유로 읽혔다.
+//  세션은 이미 자기 머리줄을 갖고 있다(여기) — 이름·하네스·⋯ 가 다 여기 있으니 공유도 여기가 집이다.
+import { onViewers, viewersOf } from './v2/presence.js';
+import { openSharePopover, shareSessOf } from './v2/share-session.js';
+
 
 // ── 자동복원 연쇄 상한 판정 (#1820 후속) — 순수 함수(스토리지·DOM 의존 없음) ────────────────────
 // 자동복원은 성공하면 새 세션으로 주소를 옮기고, 그때 화면이 새로 떠 화면 단위 가드가 리셋된다. 되살린
@@ -303,8 +309,38 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  한 번 더 적으면 같은 말이 세 자리를 차지하고, 길면(실측: 40자 넘는 프로젝트명) 조작부까지 밀어냈다.
   //  붙이기·바꾸기·떼기(#1749)는 사라지지 않고 [⋯ ▸ 이 세션] 으로 내려간다 — 세션 이름 바꾸기와 같은 자리다.
   paintTitle();
+  // ── 함께 보는 사람(#2116 → #3778) ─────────────────────────────────────────────
+  //  얼굴 스택이 **곧 공유 입구**다 — 따로 [공유] 글자 버튼을 두지 않는다(구글 문서·피그마의 그 관습).
+  //  ⚠ 혼자여도 숨기지 않는다(원준 2026-08-26, 문패에 있던 시절의 결정을 그대로 잇는다): 얼굴 줄이 **늘 그
+  //   자리에 있다**는 사실 자체가 «여기 사람이 보인다»를 말한다 — 있다 없다 하면 아무도 그 자리를 안 쳐다본다.
+  //  마지막 칩 [＋] 가 «부를 수 있다»를 말한다 — 얼굴만 있으면 눌러 볼 생각을 안 한다.
+  const FACE_MAX = 3;   // 넘으면 접는다 — 네 번째부터는 이름이 아니라 '몇 명 더'가 알고 싶은 것이다
+  const facesEl = el('button', { class: 'sc-faces', type: 'button', hidden: true }) as HTMLButtonElement;
+  function paintFaces(): void {
+    const sh = shareSessOf(target);
+    // 공유할 대상이 없으면(기록만 남은 행 등) 자리를 비운다 — 눌러서 "무엇을?"이 되지 않게.
+    if (!sh) { facesEl.hidden = true; return; }
+    const vs = viewersOf(target.id);
+    const shown = vs.slice(0, FACE_MAX);
+    const rest = vs.length - shown.length;
+    facesEl.title = sh.owned
+      ? (vs.length ? '지금 보고 있는 사람 — ' + vs.map((v) => v.name).join(', ') + '\n눌러서 함께 볼 사람을 고릅니다' : '눌러서 함께 볼 사람을 고릅니다')
+      : '이 세션을 누가 볼 수 있는지 봅니다';
+    facesEl.setAttribute('aria-label', sh.owned ? '함께 볼 사람 고르기' : '볼 수 있는 사람 보기');
+    facesEl.replaceChildren(
+      ...shown.map((v) => personFace(v.id, 'sc-face', v.name)),
+      rest > 0 ? el('span', { class: 'sc-face sc-face-more', text: '+' + rest }) : null,
+      el('span', { class: 'sc-face sc-face-add', text: '＋' }));
+    facesEl.hidden = false;
+  }
+  facesEl.onclick = () => { const sh = shareSessOf(target); if (sh) openSharePopover(facesEl, sh); };
+  paintFaces();
+  //  얼굴 줄이 바뀌면 **이 세션 것일 때만** 다시 그린다(presence 가 '바뀐 것'만 알려준다).
+  const offViewers = onViewers((sid) => { if (sid === target.id) paintFaces(); });
+
   const headR = el('div', { class: 'sc-head-r' },
     termStatusEl,
+    facesEl,
     opts.onToggleFiles ? filesBtn : null,
     [fixBtn, setBtn],   // 보이기는 setMode 가 정한다 — 늦게 붙는 터미널에도 자리가 남게 항상 DOM 에 둔다
     moreBtn);
@@ -1859,6 +1895,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (t.label && !/^box-|^[0-9a-f-]{20,}$/i.test(t.label)) titleText = t.label;
       paintTitle();                               // pane 이름은 턴마다 바뀌고, 살아있음·소유가 바뀌면 '고칠 수 있는 이름'인지도 바뀐다
       paintState();
+      paintFaces();                               // 소유·초대·세션 id 가 바뀌면 얼굴 줄과 그 뒤의 공유 대상도 함께 바뀐다
       if (!wasDead && dead()) { running = false; if (cur) view.settle(cur.t); }
       //  ↔ 반대 방향(#1631) — 죽은 줄 알았는데 살아 있었다(#2108: 3초 스냅샷 지연을 죽음으로 읽는다).
       //   schedule() 이 죽은 세션에서 멈추므로 **여기서** 다시 켜 준다. 이 한 줄이 없으면 그 화면은 영영
@@ -1888,6 +1925,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         else if (src && src.kind === 'log' && isBox() && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; if (pollTimer) clearTimeout(pollTimer); schedule(); }
       }
     },
-    destroy() { destroyed = true; if (pollTimer) clearTimeout(pollTimer); stopWatchOutbox(); offEvents(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
+    destroy() { destroyed = true; if (pollTimer) clearTimeout(pollTimer); stopWatchOutbox(); offEvents(); offViewers(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }

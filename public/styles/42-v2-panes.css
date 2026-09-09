@@ -596,7 +596,7 @@ webview.pn-webframe { display: flex; }
 
 /* ══ 문패 버튼 — 크기·글자는 그대로 두고 '무게'만 준다 (#1819 원준) ═══════════ */
 /*  ghost 둘이 나란히 있으면 어느 것이 주된 동작인지 색이 말해 주지 않는다. 주된 동작만 칠한다. */
-.pn-door-sep { width: 1px; height: 20px; margin: 0 2px; background: var(--line); }
+/* (문패 구분선은 #3778 로 죽었다 — 얼굴·공유가 세션 머리줄로 내려가면서 가를 것이 없어졌다.) */
 .pn-door-btn { gap: 6px; }
 .pn-door-btn svg { width: 15px; height: 15px; }
 .pn-door-r .btn-primary.pn-door-btn { box-shadow: 0 1px 2px rgba(45,107,240,.30), 0 2px 8px rgba(45,107,240,.16); }
