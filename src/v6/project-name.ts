@@ -68,6 +68,21 @@ export function projectNameFromAgent(raw: string | null | undefined): string {
   return bare.length > AGENT_MAX ? bare.slice(0, AGENT_MAX).trimEnd() : bare;
 }
 
+// ── 사람이 직접 지은 이름(새 작업 창의 프로젝트 칸 #3778) ────────────────────
+//  에이전트가 준 이름과 달리 **이건 사람이 친 글자 그대로**다 — 다듬되 뜻을 바꾸지 않는다.
+//  60자인 이유: 에이전트 30자는 «모델이 지으면 짧게» 라는 규율이고, 사람은 그 규율을 안 받는다.
+//   실측(2026-09-09, 자동생성 제외)에서 사람이 지은 이름은 50자대까지 실존한다. 다만 무한은 안 된다 —
+//   보드 카드·사이드바가 잘라 버리는 자리라, 넘치면 «잘렸다»를 말해 주고 자른다(조용히 자르지 않는다).
+const HUMAN_MAX = 60;
+
+/** 사람이 새 작업 창에서 친 프로젝트 이름 → 쓸 수 있는 이름. 빈 값이면 ""(호출자가 «비워 둠»으로 다룬다). */
+export function projectNameFromHuman(raw: string | null | undefined): string {
+  const first = String(raw ?? "").split(/\r?\n/).map((l) => l.trim()).find((l) => l) || "";
+  const one = first.replace(/\s+/g, " ").trim();
+  if (!one) return "";
+  return one.length > HUMAN_MAX ? one.slice(0, HUMAN_MAX - 1).trimEnd() + "…" : one;
+}
+
 // ── 기계가 짓는 임시 이름(첫 지시에서) ──────────────────────────────────────
 //  에이전트가 이름을 지어 주기 전까지, 그리고 훅이 꺼진 하네스에서는 **영영** 이것이 그 프로젝트의 이름이다.
 //  그래서 짧게 자른다: 28자는 세션 이름 규칙(session-name.ts)과 같은 값이고, 근거도 같다 —

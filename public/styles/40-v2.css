@@ -668,6 +668,46 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-launch-send { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 16px; border-radius: 11px; font-weight: 650; }
 .v2-launch-send kbd { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; opacity: .7; font-weight: 400; }
 .v2-launch-hint { display: none; }   /* Enter 안내 줄 폐지 — placeholder 와 관례가 이미 말한다(#1756) */
+
+/* 여는 곳(#3778) — 질문 칸 위 얇은 칸 하나. **주인공은 아래 질문 칸**이라 이 줄은 낮고 조용하게 둔다:
+   테두리는 있되 그림자는 없고(카드가 아니다), 글자는 한 급 작고, 폭은 카드와 같은 폭으로 선다. */
+.v2-dest-wrap { position: relative; margin-top: 26px; }
+.v2-dest-wrap + .v2-launch { margin-top: 8px; }   /* 두 상자는 한 묶음으로 읽혀야 한다 — 카드의 26px 는 여기서 걷는다 */
+.v2-dest { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 14px;
+  border: 1px solid var(--line-net); border-radius: 13px; background: var(--bg); }
+.v2-dest:focus-within { border-color: color-mix(in srgb, var(--blue) 55%, var(--line-net)); }
+.v2-dest-lbl { flex: none; font-size: 11.5px; font-weight: 600; color: var(--muted-2); letter-spacing: .02em; }
+.v2-dest-in { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: inherit; font-size: 13.5px; color: var(--ink); }
+.v2-dest-in::placeholder { color: var(--muted-2); }
+.v2-dest-slot { display: contents; }
+/* 고른 뒤 — 칩이 입력칸 자리를 받는다(둘은 배타다: 무엇이 정해졌는지 한 번에 하나만 말한다). */
+.v2-dest-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 25px; padding: 0 3px 0 10px;
+  border-radius: 99px; background: var(--bg-tint-2); color: var(--blue); font-size: 12.5px; font-weight: 600; }
+.v2-dest-chip.new { background: transparent; border: 1px dashed var(--line-net-2); color: var(--mint-deep); }
+.v2-dest-chip .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-dest-chip .x { flex: none; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 12px; line-height: 1; padding: 4px 6px; opacity: .65; }
+.v2-dest-chip .x:hover { opacity: 1; }
+.v2-dest-chip .x:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; border-radius: 99px; }
+/* 목록은 **떠서** 뜬다 — 흐름에 끼우면 열 때마다 아래 질문 칸이 밀려 내려가 사람이 치던 자리를 잃는다. */
+.v2-dest-pop { position: absolute; z-index: 30; top: calc(100% + 5px); left: 0; right: 0; overflow: hidden;
+  border: 1px solid var(--line-net); border-radius: 12px; background: var(--surface);
+  box-shadow: 0 1px 2px rgba(var(--shadow-ink), .04), 0 16px 40px -20px rgba(var(--shadow-ink), .3); }
+.v2-dest-hd { padding: 9px 13px 5px; font-size: 10.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted-3); }
+.v2-dest-list { max-height: 268px; overflow: auto; display: flex; flex-direction: column; padding-bottom: 4px; }
+.v2-dest-row { display: flex; align-items: center; gap: 9px; width: 100%; border: 0; background: transparent; cursor: pointer;
+  padding: 8px 13px; font: inherit; font-size: 13px; color: var(--ink); text-align: left; }
+.v2-dest-row:hover { background: var(--bg-tint); }
+.v2-dest-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.v2-dest-row .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-dest-row .m { flex: none; font-size: 11px; color: var(--muted-3); }
+.v2-dest-row .b { flex: none; font-size: 10.5px; padding: 1px 6px; border-radius: 99px; background: var(--bg-tint-2); color: var(--muted); }
+/* 「이 이름으로 새로 만들기」는 목록의 **항상 마지막 줄** — 고르기와 만들기의 경계를 선으로 말한다. */
+.v2-dest-row.mk { border-top: 1px solid var(--line-row); margin-top: 4px; color: var(--mint-deep); font-weight: 600; }
+.v2-dest-none { margin: 2px 13px 6px; }
+@media (max-width: 900px) {
+  .v2-dest-wrap { margin-top: 18px; }
+  .v2-dest { min-height: 44px; border-radius: 12px; }
+}
 /* 프로젝트 연결 드롭다운(#1749) — 여는 자리는 [⋯ ▸ 이 세션] 이다(머리줄 칩은 2026-08-20 폐지).
    드롭다운 본체(.v2-pjpick)는 그대로 anchoredPopover .dash-pop 위에 얹힌다. */
 .v2-pjpick { width: 320px; max-width: calc(100vw - 24px); display: flex; flex-direction: column; gap: 8px; padding: 8px; }   /* 배경·그림자는 .dash-pop-panel(20-dashboard.css) */
