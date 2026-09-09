@@ -2703,12 +2703,23 @@ let gaveUp = false;
 //  복사는 Cmd+C 와 **같은 길**을 탄다(xterm 선택 → copyText / 마우스모드 앱(Claude) 드래그 선택 → ^C 브리지 1회 —
 //  #972·#1117 의 규칙 그대로. 선택이 관측 안 됐으면 ^C 를 보내지 않는다(취소·종료 사고)). ⇧우클릭은 브라우저 메뉴.
 function wireTermCtxMenu(host: HTMLElement): void {
+  // ★ 우클릭의 누름·뗌을 xterm(→앱)에 넘기지 않는다(원준님 실측 2026-09-09 «복사 눌러도 안 된다»).
+  //  넘기면 둘 다 선택을 잃는다: ① 마우스모드 앱(Claude) 화면 — xterm 이 오른쪽 단추도 SGR 로 보고하고, trackAppMouse 는
+  //   그 뗌을 «제자리 클릭 1회» 로 판정해 appDragSelect 를 풀어 버린다(메뉴가 뜰 땐 켜져 있던 [복사]가 누르는 순간 빈손).
+  //   앱도 그 클릭으로 제 선택을 지운다. ② 셸 화면 — xterm 의 rightClickSelectsWord(맥 기본)가 커서 밑 단어로 선택을
+  //   갈아 끼운다. 우클릭은 이 메뉴의 것이다 — capture 에서 삼켜 xterm 의 mousedown 리스너가 못 보게 한다
+  //   (mousedown 의 preventDefault 는 contextmenu 발생을 막지 않는다). ⇧우클릭·모바일은 종전대로 흘린다.
+  const eat = (e: MouseEvent): void => { if (e.button === 2 && !e.shiftKey && !IS_MOBILE) { e.stopPropagation(); e.preventDefault(); } };
+  host.addEventListener('mousedown', eat, true);
+  host.addEventListener('mouseup', eat, true);
   host.addEventListener('contextmenu', (e: MouseEvent) => {
     if (e.shiftKey || IS_MOBILE) return;
     let mouseOn = false;
     try { mouseOn = !!(term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'); } catch (_) { /* noop */ }
     const sel = term.hasSelection() ? String(term.getSelection() || '') : '';
-    const canCopy = !!sel || (mouseOn && appDragSelect);
+    // 메뉴를 띄우는 **이 순간**의 판정을 붙잡아 둔다 — [복사]를 누르는 시점에 다시 읽으면 그 사이 무엇이 풀렸을 수 있다.
+    const appSel = mouseOn && appDragSelect;
+    const canCopy = !!sel || appSel;
     const url = /^https?:\/\/\S+$/.test(sel.trim()) ? sel.trim() : '';
     const secure = !!(navigator.clipboard && navigator.clipboard.readText && window.isSecureContext);
     const fs = Number(term.options.fontSize) || 14;
@@ -2720,9 +2731,9 @@ function wireTermCtxMenu(host: HTMLElement): void {
     };
     e.preventDefault(); e.stopPropagation();
     liteMenu(e.clientX, e.clientY, [
-      { label: '복사', hint: '⌘C', off: !canCopy, run: () => {
+      { label: '복사', hint: sel ? String(sel.length) + '자' : (appSel ? 'Claude 선택' : '선택한 글이 없어요'), off: !canCopy, run: () => {
         if (sel) { copyText(sel, false, true); return; }
-        if (appDragSelect) { clearAppSelect(); armClipboardPromise(); sendInput('\x03'); armBridgeMissHint(); }
+        if (appSel) { clearAppSelect(); armClipboardPromise(); sendInput('\x03'); armBridgeMissHint(); }
       } },
       { label: '붙여넣기', hint: '⌘V', off: !secure, run: () => {
         navigator.clipboard.readText().then((t) => { if (t) pasteText(t); }).catch(() => toast('붙여넣기를 못 읽었어요 — ⌘V 로 붙여넣어 주세요.', true));
