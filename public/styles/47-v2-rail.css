@@ -478,3 +478,17 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-kmore { align-self: flex-start; margin: 2px 0 0 8px; border: 0; background: none; padding: 3px 0; font: inherit; font-size: 11.5px; font-weight: 700; color: var(--blue); cursor: pointer; }
 .v2-kmore:hover { text-decoration: underline; }
 .v2-kmore:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
+/* ── #3830 맥락 관리 — 이 앱에 있는 동안만 사이드바 열을 접는다 ──────────────────
+   원준 2026-09-09: *"맥락관리 앱으로 들어간 다음에도 사이드바가 보이는데 굳이 필요가 없을 것 같아 …
+    대신 뒤로가기 앞으로가기 검색 창은 전체 가로 다 차지하게 맨 상단에(슬랙처럼)."*
+   레일은 남긴다 — 구역 전환은 레일 몫이고, 이 앱은 사이드바를 **소유**하는 게 아니라(자료 앱 #2423) **비운다**.
+   ⚠ 숨김은 **열 폭 0** 이다(위 rail-hidden 과 같은 규율). display:none 으로 빼면 그리드 열이 한 칸씩 밀려
+    본문이 6px 손잡이 열에 앉는다 — 이 파일이 이미 한 번 겪은 자리다.
+   ⚠ 좁은 폭(≤900)은 셸이 그리드가 아니라 flex 한 줄이고 사이드바가 서랍이라 이 규칙이 통째로 어긋난다
+    → `min-width: 901px` 로 잠근다(그 폭에선 종전 서랍 규칙이 그대로 이긴다). */
+@media (min-width: 901px) {
+  #v2-root.rail-mode.app-ctx { grid-template-columns: var(--v2-rail-w) 0 0 minmax(0, 1fr) 6px var(--v2-aside-w); }
+  #v2-root.rail-mode.app-ctx.no-aside { grid-template-columns: var(--v2-rail-w) 0 0 minmax(0, 1fr) 0 0; }
+  #v2-root.app-ctx > .v2-side,
+  #v2-root.app-ctx > .v2-side + .v2-split-x { overflow: hidden; visibility: hidden; border-right: 0; }
+}

@@ -271,3 +271,11 @@
   :root:not([data-theme="light"]) .svc-tile[data-svc="github"] svg path,
   :root:not([data-theme="light"]) .svc-tile[data-svc="linear"] svg path { fill: var(--ink); }
 }
+/*  #3830 — 같은 되칠하기가 흐름 지도의 출처 마크에도 필요하다(자료 역의 「깃허브」 줄). 타일이 아니라
+    작은 사각이라 셀렉터가 다르고, 안 주면 다크에서 **검은 사각**으로 남는다(실측 2026-09-09). */
+:root[data-theme="dark"] .cxm-src-mk[data-svc="github"] svg path,
+:root[data-theme="dark"] .cxm-src-mk[data-svc="linear"] svg path { fill: var(--ink); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .cxm-src-mk[data-svc="github"] svg path,
+  :root:not([data-theme="light"]) .cxm-src-mk[data-svc="linear"] svg path { fill: var(--ink); }
+}
