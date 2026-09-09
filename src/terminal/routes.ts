@@ -617,12 +617,17 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       if (moved && movedSt && (movedSt.owner === uid || isAdmin)) { res.json({ id, movedTo: moved }); return; }
     }
     if (!(await canAttach(id, uid))) {
-      // #1059 E — tmux 에 없어도(재부팅·회수·정상종료) desired-state 가 남아 있으면 '복원 가능'으로 알린다.
-      //  위 게이트가 tmux 확답을 못 받았을 때의 폴백이다(공유 게이트웨이가 그 세션의 tmux 서버 문맥 밖에 있는 경우 등).
-      //  노출 범위는 복원 권한과 같게: 소유자·admin 만 desired-state 를 보고 되살릴 수 있고(canRestore),
-      //  프로젝트 세션은 #452 로 전원 공개라 라벨까지는 보이되 복원은 소유자 몫으로 둔다.
-      const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
-      if (dead.kind === "ok") { res.json(dead.body); return; }
+      // 여기 온 이유는 «죽음» 이 아니라 **«입장 권한 없음»** 이다 — 죽음 판정은 위 3값 게이트(#3752 ④)가
+      //  이미 끝냈고(복원 신호·이정표·403 을 거기서 다 낸다), #1876 S1 로 attach 의 프로젝트 예외가 없어져
+      //  초대받지 않은 사람은 **살아 있는 세션에서도** 이 자리로 떨어진다. 그러니 복원 신호를 만들지 않는다.
+      //  종전엔 여기에 deadSessionMeta 폴백(#1059 E)이 남아 있었는데, 그 함수는 admin 을 소유자와 같은 축으로
+      //  보아 kind:"ok"(restorable·canRestore) 를 내준다 → **살아 있는 남의 세션이 «중단됨, 복원 가능»** 으로
+      //  나갔다. 부팅 게이트(#1820)는 그 메타만 보고 WS 도 붙이지 않은 채 복원으로 가고, 복원 라우트는 같은
+      //  tmux 를 보고 already:true 를 내고, 화면은 그걸 받아 새로고침한다 → **무한 새로고침**(실측 2026-09-09).
+      //  ⚠ 그 폴백은 이 자리에서 이미 도달 불가였다 — 위 게이트가 ok·moved·forbidden 을 전부 소진하므로 여기
+      //   오는 것은 kind:"none"(desired-state 없음) 뿐이고, deadSessionMeta 는 순수 함수라 같은 입력에 같은 답을
+      //   낸다. 유일하게 살아 있던 경로가 goneVerdict === false, 곧 위 사고의 그 경로다.
+      //  404(존재를 확인해 주지 않음)는 다른 canAttach 실패 자리들과 같은 규약이다.
       throw new HttpError(404, SESSION_NOT_FOUND);
     }
     // 라벨 + 프로젝트 id 를 함께 반환 — 프로젝트 세션이면 프론트가 상단 '프로젝트 페이지 열기' 버튼을 켠다(개인 세션은 0 → 숨김).

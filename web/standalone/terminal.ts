@@ -2893,8 +2893,13 @@ async function restoreThisSession() {
   // #2231 — 이 id 는 이미 이어졌다(다른 탭·다른 칸이 먼저 눌렀다). **새 세션으로 옮긴다** — 여기서 그냥
   //  새로고침하면 같은 옛 id 를 다시 열어 영원히 제자리다(아래 already 분기가 그 함정이었다).
   if (r && r.movedTo) { goToMoved(r.movedTo); return; }
-  // 라이브 경합: 그새 세션이 다시 떠 있으면 새로 만들지 않고 이 주소로 그대로 재연결한다.
-  if (r && r.already) { location.reload(); return; }
+  // 라이브 경합: 그새 세션이 다시 떠 있다 — 새로 만들지 않고 **그 자리에서** 다시 붙는다.
+  //  ⚠ 종전엔 location.reload() 였다. 그 새로고침은 같은 부팅 게이트(#1820)로 되돌아가는데, 메타가 그 세션을
+  //   다시 '복원 가능'이라 답하면 restore → already → reload 가 영원히 돈다(실측 2026-09-09: admin 계정으로
+  //   남의 살아있는 세션 링크를 열면 화면이 '연결 준비 중…' 과 새로고침만 반복했다. 그 메타 오답은 서버에서
+  //   함께 고쳤다 — routes.ts 의 canAttach 갈래). 살아 있다면 할 일은 붙는 것뿐이고, 못 붙으면 WS 가
+  //   4403/4410 으로 정확한 사유를 준다 — 어느 쪽이든 문서를 다시 받을 이유가 없다.
+  if (r && r.already) { resumeAlive(); return; }
   const ns = r && r.session;
   if (ns && ns.id) {
     // restored=1 — 이 표식이 있는 페이지는 다시 자동 복원하지 않는다(루프 차단, 위 goneMode).
@@ -2905,6 +2910,17 @@ async function restoreThisSession() {
   }
   sessionEnded = true;
   showEndedBar({ title: '열지 못했습니다.', body: '서버가 새 세션을 돌려주지 않았어요 — 세션 목록에서 다시 시도해 주세요.' });
+}
+/** 서버가 «이미 살아 있다»(already) 고 답했을 때 — 복원 화면을 걷고 그 자리에서 재연결한다. */
+function resumeAlive() {
+  sessionEnded = false;                                   // startRestore 가 세워 둔 종료 확정을 되돌린다(안 되돌리면 connectNow 가 즉시 반환)
+  restoreTried = true;                                    // 이 화면의 복원 시도는 소진 — 다시 복원으로 새지 않는다
+  try { term.options.disableStdin = false; } catch (_) { /* noop */ }
+  try { const b = document.querySelector('.ended-bar'); if (b) b.remove(); } catch (_) { /* noop */ }
+  try { document.title = document.title.replace(/^\(종료됨\) /, ''); } catch (_) { /* noop */ }   // endSession 이 붙인 접두사 — 되살아났으니 걷는다
+  try { statusEl.textContent = '연결 중…'; statusEl.className = 'status'; } catch (_) { /* noop */ }
+  reconnectDelay = 400;
+  connectNow();
 }
 async function connectNow() {
   if (sessionEnded) return; // 종료 확정 세션 — 어떤 트리거(탭 복귀·포커스)로도 다시 붙지 않는다

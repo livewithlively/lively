@@ -213,4 +213,35 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
     "⑦-b 프레임발 자동 이동이 옮기기 **전에** 상한을 묻는다");
 }
 
+// ── ⑧ 살아 있는 세션을 «복원 가능» 으로 답하지 않는다 — 그리고 already 는 새로고침이 아니다 ────────
+//  실측 2026-09-09: admin 계정으로 **남의 살아있는 세션** 링크를 열면 화면이 '연결 준비 중…' 과 새로고침만
+//  반복했다. 원인은 판정이 두 자리에서 갈린 것 — 메타 라우트는 canAttach 실패(권한 없음)를 deadSessionMeta 로
+//  흘려 restorable 을 냈고(admin 은 소유자와 같은 축이라 kind:"ok"), 복원 라우트는 같은 tmux 를 보고
+//  already:true 를 냈으며, 화면은 그 답에 location.reload() 로 응답했다. 셋이 맞물려 무한 루프가 됐다.
+//  두 자리를 함께 잠근다: ⓐ 살아 있다는 확답이면 복원 신호를 만들지 않는다 ⓑ already 는 문서를 다시 받지 않는다.
+{
+  const src = read("src/terminal/routes.ts");
+  const i = src.indexOf('app.get("/api/ui/terminal/sessions/:id"');
+  const blk = src.slice(i, src.indexOf("app.get(", i + 10));
+  const attach = blk.indexOf("await canAttach(");
+  ok(i > 0 && attach > 0, "⑧-a0 메타 라우트와 그 안의 canAttach 게이트를 찾았다 — 못 찾으면 아래 가드가 공허하게 통과한다");
+  const after = blk.slice(attach);
+  ok(after.indexOf("deadSessionMeta(") === -1,
+    "⑧-a canAttach 실패 갈래는 복원 신호를 만들지 않는다 — 그 자리에 온 이유는 죽음이 아니라 권한이다. 살아 있는 세션에 복원을 약속하면 부팅 게이트가 복원으로 가고 already 가 돌아온다(무한 새로고침)");
+
+  const term = read("web/standalone/terminal.ts");
+  const rs = term.slice(term.indexOf("async function restoreThisSession()"));
+  const alreadyAt = rs.indexOf("r.already");
+  ok(alreadyAt > 0, "⑧-b0 restoreThisSession 의 already 분기를 찾았다");
+  const already = rs.slice(alreadyAt, rs.indexOf("\n", alreadyAt));   // 그 한 줄만 — 거리 창은 다음 분기까지 새어 오판한다
+  ok(!/location\.reload\(/.test(already),
+    "⑧-b already 응답에 새로고침으로 답하지 않는다 — 같은 부팅 게이트로 돌아가 제자리를 돈다");
+  const alive = term.slice(term.indexOf("function resumeAlive()"));
+  const aliveBody = alive.slice(0, alive.indexOf("\n}"));   // 함수 본문만 — 거리 상한(길이에 취약)이 아니라 블록으로 자른다
+  ok(/resumeAlive\(\)/.test(already) && /connectNow\(\)/.test(aliveBody),
+    "⑧-c already 는 그 자리에서 재연결한다(살아 있다면 할 일은 붙는 것뿐 — 못 붙으면 WS 가 4403/4410 로 사유를 준다)");
+  ok(/sessionEnded = false/.test(aliveBody),
+    "⑧-d 재연결 전에 종료 확정 플래그를 되돌린다 — 안 되돌리면 connectNow 가 즉시 반환해 화면이 영원히 '이어서 여는 중…' 이다");
+}
+
 console.log(`\n${pass}건 통과`);
