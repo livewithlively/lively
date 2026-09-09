@@ -16,6 +16,7 @@ import {
 import { authNodeTokenDetailed, getNode, touchNode, appendNodeLinkEvent, type OrgNode } from "./store.js";
 import { denialMessage, denialKey, shouldLogDenial, type NodeAuthOutcome } from "./auth-denial.js";   // #2161
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
+import { beatRefreshes } from "./state-freshness.js";   // #2600 T2 d6 — 박동은 스냅샷이 있을 때만 나이를 되돌린다
 import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, nodeSnapshotSessions, nodeSnapshotVerdict, sessionHostVerdict, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
 import { makeTmuxCallCensus, censusSite } from "../terminal/tmux-call-census.js";   // #2600 T2 d6 — 판정 계수(같은 세 칸: 슬러그·축·호출부)
 import { selfNodePossible } from "../exec-topology.js";   // #2599 T2 — 「이 판정이 성립하는 배포인가」의 선결 조건
@@ -596,6 +597,20 @@ export function nodeRelayAttach(nodeId: string, sessionId: string, browser: WebS
 
 // ⚠ 노드 id 가 아니라 **연결**을 받는다(#2044) — 스코프(테넌트)를 연결이 들고 있고, 상태 push 는 요청 밖(WS
 //  이벤트)이라 currentTenant() 로는 알 수 없다. 두 호출부 모두 연결이 있는 자리다.
+/**
+ * 박동 적용 — 이 노드의 스냅샷 나이만 되돌린다 (#2600 T2 d6).
+ *
+ * ⚠ **스냅샷이 없으면 아무것도 하지 않는다**(`state-freshness.beatRefreshes`). 박동은 «지난번에 보낸 그 목록이
+ *  지금도 그대로» 라는 뜻이라, 보낸 적이 없으면 가리킬 목록이 없다. 그때 새 항목을 만들면 «본 적 없는 노드»가
+ *  세션 0개짜리 신선한 스냅샷을 가진 것이 되고, 목록 소유 판정이 그 빈 스냅샷으로 소유를 넘긴다.
+ */
+function applyBeat(c: NodeConn): void {
+  const k = keyOf(c.node.id, c.tenant);
+  const prev = states.get(k);
+  if (!beatRefreshes(prev)) return;
+  states.set(k, { ...prev!, ts: Date.now() });
+}
+
 function applyState(c: NodeConn, sessions: SessionInfo[], res?: NodeResources | null): NodeState {
   const nodeId = c.node.id;
   const k = keyOf(nodeId, c.tenant);
@@ -705,6 +720,13 @@ function onNodeControlMsg(c: NodeConn, m: NodeToGwMsg): void {
     applyState(c, Array.isArray(m.sessions) ? m.sessions : [], m.res ?? null);
     const now = Date.now();
     if (now - c.lastTouch > TOUCH_MIN_MS) { c.lastTouch = now; void touchNode(c.node.id).catch(() => { /* 비치명 */ }); }
+    return;
+  }
+  //  박동 — «봤는데 지난번 그대로다» (#2600 T2 d6). 스냅샷의 **나이만** 되돌린다(내용은 그대로다).
+  //   정본(org_node_state)에는 쓰지 않는다: 정본의 쓸모는 재부팅 복구인데, 게이트웨이가 다시 뜨면 노드가
+  //   곧바로 재접속해 force push 를 하므로 그 자리를 박동으로 메울 이유가 없다.
+  if (m.t === "beat") {
+    applyBeat(c);
     return;
   }
   if (m.t === "hello") {

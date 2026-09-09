@@ -81,6 +81,16 @@ export interface HelloMsg {
   keepAwake?: KeepAwakeStatus;
 }
 export interface StateMsg { t: "state"; sessions: SessionInfo[]; res?: NodeResources }
+/**
+ * 내용 없는 박동 — «봤는데 지난번 그대로다» (#2600 T2 d6).
+ *
+ * 스냅샷을 다시 실어 보낼 이유는 없지만, **관측했다는 사실**은 게이트웨이가 알아야 한다. 목록 소유 판정이
+ *  스냅샷의 나이를 보기 때문이다(`self-node.sessionHostVerdict` · `registry.STATE_STALE_MS` 12초).
+ *  판정 규율과 실측은 `state-freshness.ts` 머리말 — 그 침묵 때문에 한가한 테넌트에서 소유가 영영 안 넘어갔다.
+ *
+ * ⚠ **못 봤을 때는 보내지 않는다.** 박동은 관측의 결과이지 «살아 있다» 의 표시가 아니다(그건 WS ping 의 몫).
+ */
+export interface BeatMsg { t: "beat" }
 export interface ResMsg { t: "res"; id: number; ok: boolean; data?: unknown; error?: string }
 export interface OpenedMsg { t: "opened"; chan: number }
 export interface OpenFailMsg { t: "openfail"; chan: number; code: number; reason: string }
@@ -205,7 +215,7 @@ export function selfUpdateBlockedForever(code: string | null | undefined): boole
   return code === "EACCES" || code === "EPERM" || code === "EROFS";
 }
 
-export type NodeToGwMsg = HelloMsg | StateMsg | ResMsg | OpenedMsg | OpenFailMsg | CloseChanMsg | TaskDoneMsg | WorkerStateMsg | ChatEventMsg;
+export type NodeToGwMsg = HelloMsg | StateMsg | BeatMsg | ResMsg | OpenedMsg | OpenFailMsg | CloseChanMsg | TaskDoneMsg | WorkerStateMsg | ChatEventMsg;
 export type GwToNodeMsg = ReqMsg | OpenMsg | CtlMsg | CloseChanMsg | HelloOkMsg;
 
 export function parseMsg<T>(raw: unknown): T | null {

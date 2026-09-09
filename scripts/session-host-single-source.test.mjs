@@ -45,6 +45,7 @@ const HOST = "src/terminal/session-host.ts";
 const OPS = "src/terminal/session-ops.ts";
 const FD_ADAPTER = "src/terminal/attach-worker-entry.ts";   // 같은 호스트 — fd 이관
 const WS_ADAPTER = "src/node/agent.ts";                     // 다른 호스트 — WS 중계
+const REGISTRY = "src/node/registry.ts";                    // 게이트웨이 — 노드 연결·스냅샷 캐시
 const GW_INPROC = "src/terminal/terminal-pty-upgrade.ts";   // 게이트웨이 인프로세스(워커 실패 시 폴백)
 //  ⚠ 이 파일은 «구현이 한 곳인가» 만 본다. «그 구현이 노드에 실제로 실려 나가는가» 는 다른 가드의 몫이다
 //   (`scripts/node-agent-allowed-modules.json` + `scripts/node-agent-bundle-boundary.test.mjs`, 그리고
@@ -252,6 +253,35 @@ t("[S11] 노드 에이전트의 상태 push 는 strict 로 센다(«못 봤다»
   assert.match(line, /strict:\s*true/,
     `${WS_ADAPTER} 의 상태 push 가 strict 가 아니다 — «못 봤다» 가 빈 스냅샷으로 올라가면 `
     + "게이트웨이가 그 테넌트 목록 소유를 빈 호스트에게 넘긴다");
+});
+
+// ── S12: 관측에 성공한 주기는 **침묵하지 않는다** (#2600 T2 d6) ──────────────
+//  왜: 게이트웨이의 목록 소유 판정은 스냅샷의 **나이**를 본다(`STATE_STALE_MS` 12초). 종전 에이전트는 세션
+//   목록이 지난번과 같으면 아무것도 보내지 않아, 한가한 테넌트에서는 그 나이가 늘 12초를 넘겼다 —
+//   카나리아 실측(2026-09-09): 게이트웨이가 살아 있고 호스트도 붙어 있는데 정본이 133초째 멈춰 있었고
+//   판정 인구조사는 `stale` 5 · `ok` 0 이었다. 그래서 «봤는데 그대로다» 는 박동으로 보낸다.
+//  ⇒ 이 가드가 지키는 것은 «보낼 내용이 없으면 안 보낸다» 로 되돌아가지 않는 것이다.
+//  ⚠ 줄 단위로 본다(S11 과 같은 이유 — `code()` 는 문자열 속 `/*` 에 걸린다).
+t("[S12] 상태 push 는 변화가 없어도 박동을 보낸다(관측한 주기에 침묵하지 않는다)", () => {
+  const lines = read(WS_ADAPTER).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+  assert.ok(lines.some((l) => /statePushKind\s*\(/.test(l)),
+    `${WS_ADAPTER} 가 statePushKind 를 안 쓴다 — 무엇을 보낼지 판정이 인라인으로 돌아왔나`);
+  assert.ok(lines.some((l) => /t:\s*"beat"/.test(l)),
+    `${WS_ADAPTER} 가 박동을 안 보낸다 — 한가한 테넌트에서 스냅샷이 12초 만에 낡아 목록 소유가 영영 안 넘어간다`);
+  assert.ok(!lines.some((l) => /if\s*\(!skip\)/.test(l)),
+    `${WS_ADAPTER} 에 «보낼 게 없으면 안 보낸다» 조건이 되살아났다 — 그게 정확히 이 결함이다`);
+});
+
+// ── S13: 박동은 **스냅샷이 있을 때만** 나이를 되돌린다 (#2600 T2 d6) ─────────
+//  왜: 박동은 «지난번에 보낸 그 목록이 지금도 그대로» 라는 뜻이다. 보낸 적이 없는 노드에 항목을 새로 만들면
+//   «본 적 없는 노드»가 세션 0개짜리 신선한 스냅샷을 갖게 되고, 판정이 그 빈 스냅샷으로 소유를 넘긴다 —
+//   S11 이 막는 사고와 같은 모양이라 여기서도 같은 술어(`beatRefreshes`)로 fail-closed 를 박아 둔다.
+t("[S13] 게이트웨이는 박동을 받아 나이만 되돌리고, 스냅샷이 없으면 무시한다", () => {
+  const lines = read(REGISTRY).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+  assert.ok(lines.some((l) => /m\.t === "beat"/.test(l)),
+    `${REGISTRY} 가 박동을 처리하지 않는다 — 에이전트가 보내도 나이가 안 되돌아온다`);
+  assert.ok(lines.some((l) => /beatRefreshes\s*\(/.test(l)),
+    `${REGISTRY} 의 박동 처리가 fail-closed 술어(beatRefreshes)를 안 부른다 — 빈 스냅샷이 신선해질 수 있다`);
 });
 
 console.log(`\n${pass} passed — 세션 호스트 단일 출처(#2600 T1·T2 d4·d6)`);

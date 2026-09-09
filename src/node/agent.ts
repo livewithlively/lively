@@ -29,6 +29,7 @@ import {
   selfUpdateBlockedForever,
   type GwToNodeMsg, type NodeToGwMsg, type ReqMsg,
 } from "./protocol.js";
+import { statePushKind } from "./state-freshness.js";   // #2600 T2 d6 — «봤는데 그대로» 는 침묵이 아니라 박동
 // 위탁 태스크(P2) — 러너/리소스 샘플러는 중앙(게이트웨이 내장 노드)과 공유(node/tasks.ts).
 import { sampleResources, detectDocker, detectHarnesses, spawnTaskSession, checkTask, tailTask, type TaskWatch, type RunTaskInput } from "./tasks.js";
 import { provisionProjectRepos, markProvisionPending, type RepoSpec as ProvisionRepoSpec } from "../project/project-provision.js";
@@ -448,9 +449,15 @@ function connect(): void {
       //   이 레포가 반복해 못박은 «못 봤다 ≠ 없다» 교리(#835·#1251·#2154·#2544)의 이 자리 판이다.
       const [sessions, res] = await Promise.all([listSessionsRaw({ strict: true }), sampleResources(sharedRoot().base)]);
       const sesKey = JSON.stringify(sessions);
-      const skip = !force && sesKey === lastPushed && trackedTasks.size === 0;
+      //  ★ 침묵하지 않는다 (#2600 T2 d6). 종전엔 «지난번과 같으면» 아무것도 안 보냈는데, 게이트웨이의 목록
+      //   소유 판정은 **스냅샷의 나이**를 보므로(12초) 한가한 테넌트에서는 소유가 영영 안 넘어갔다. 실을 내용이
+      //   없을 뿐 관측은 했으니 박동을 보낸다 — 근거·실측은 `state-freshness.ts` 머리말.
+      //   못 봤을 때는 여기 오지 않는다(아래 catch 가 삼킨다) = fail-closed 는 그대로다.
+      const kind = statePushKind({ force, changed: sesKey !== lastPushed, tracked: trackedTasks.size });
       lastPushed = sesKey;
-      if (!skip) ws.send(JSON.stringify({ t: "state", sessions, res } satisfies NodeToGwMsg));
+      ws.send(JSON.stringify(kind === "state"
+        ? ({ t: "state", sessions, res } satisfies NodeToGwMsg)
+        : ({ t: "beat" } satisfies NodeToGwMsg)));
       // 위탁 태스크 완료 감지(P2) — exit 파일 등장 시 1회 보고 후 감시 해제(세션 정리는 게이트웨이 지시).
       for (const w of [...trackedTasks.values()]) {
         const out = await checkTask(w).catch(() => null);

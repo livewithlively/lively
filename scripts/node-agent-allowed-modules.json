@@ -21,6 +21,7 @@
   "dist/node/link-liveness.js",
   "dist/node/protocol.js",
   "dist/node/reconnect-delay.js",
+  "dist/node/state-freshness.js",
   "dist/node/tasks.js",
   "dist/ops/build-cache.js",
   "dist/ops/disk-guard.js",
