@@ -48,7 +48,7 @@ export function parseLocalExternalId(id: string): { root: LocalRoot; rel: string
 }
 
 // ── 분류 — 확장자·경로로 "어떻게 본문을 얻나"를 정한다(업로드엔 신뢰할 MIME 이 없다: 라우트가 octet-stream 으로 받는다). ──
-export type LocalIngestKind = "text" | "sniff" | "ooxml" | "vision" | "unreadable" | "skip";
+export type LocalIngestKind = "text" | "sniff" | "ooxml" | "hwp" | "vision" | "unreadable" | "skip";
 export interface LocalClassification { kind: LocalIngestKind; ext: string; reason?: string }
 
 const TEXT_EXT = new Set([
@@ -60,8 +60,10 @@ const TEXT_EXT = new Set([
 // Claude Read 가 네이티브로 읽는 것(PDF·이미지) — [BINARY] 스텁 → 증류 세션이 source_artifact 로 on-demand.
 const VISION_EXT = new Set(["pdf", "png", "jpg", "jpeg", "gif", "webp"]);
 // 읽을 방법이 없는 문서 형식 — 스텁은 남기되 "fetch 해도 소용없다"를 적는다(증류 요약에 안내가 찍히게).
+//  ⚠ .hwp 는 2026-09-09 에 여기서 빠졌다(#3778) — OLE2 컨테이너를 열고 BodyText 레코드를 풀면 본문이 나온다
+//   (connectors/hwp.ts). 「읽을 방법이 없다」가 사실이 아니었던 것이지 형식이 바뀐 게 아니다.
 const UNREADABLE_EXT: Record<string, string> = {
-  hwp: "한글 hwp(5.0 바이너리)", doc: "구버전 워드 .doc", ppt: "구버전 파워포인트 .ppt", xls: "구버전 엑셀 .xls",
+  doc: "구버전 워드 .doc", ppt: "구버전 파워포인트 .ppt", xls: "구버전 엑셀 .xls",
   pages: "애플 Pages", numbers: "애플 Numbers", key: "애플 Keynote", odt: "OpenDocument 문서", odp: "OpenDocument 발표",
   ods: "OpenDocument 시트", epub: "epub",
 };
@@ -89,6 +91,7 @@ export function classifyLocalPath(rel: string): LocalClassification {
   if (name.startsWith("~$")) return { kind: "skip", ext, reason: "office-lock" };                 // 워드가 여는 동안 만드는 잠금 파일
   if (SKIP_EXT.has(ext)) return { kind: "skip", ext, reason: `ext:${ext}` };
   if (ooxmlKindFromName(name)) return { kind: "ooxml", ext };
+  if (ext === "hwp") return { kind: "hwp", ext };          // OLE2 — connectors/hwp.ts 가 본문을 뽑는다(#3778)
   if (TEXT_EXT.has(ext)) return { kind: "text", ext };
   if (VISION_EXT.has(ext)) return { kind: "vision", ext };
   if (ext in UNREADABLE_EXT) return { kind: "unreadable", ext, reason: UNREADABLE_EXT[ext] };
