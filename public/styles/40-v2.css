@@ -478,8 +478,20 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 /* 지난 세션(#2208) — 오늘 쓰고 이미 끝난 행. **영역을 나누지 않고** 행이 스스로 말한다(원준 지시 2026-08-27):
    묶음은 「오늘」 그대로 두고 아이콘·제목만 한 단계 낮춘 톤으로. ⚠ opacity 로 흐리지 않는다 — 그건 '꺼짐'이라
    눌러도 안 열릴 것처럼 보이고, 지난 세션은 **이어서 할 수 있는 것**이다. 호버·선택 때는 제 색을 되찾는다. */
+/* ⚠ 이 네 줄은 **한 번 죽어 있었다**(#3778 실측 2026-09-09, 태어난 #2208 그날부터):
+   ① 제목 색이 `--ink-sub` 였는데 **행 자체가 이미 `--ink-sub`** 다(.v2-app-inst) — 같은 색을 같은 색으로 덮었다.
+   ② 굵기 600 은 아래 `.v2-app-inst--1 .v2-app-inst-title { font-weight: 500 }` 과 **특이도가 같고(0,2,0) 그쪽이
+      뒤에 있어** 카드 안에서 통째로 졌다. 그래서 남은 차이가 아이콘 회색 한 단계뿐이었고(#576889 → #5D7197),
+      원준님 눈엔 «지난 세션이 되어도 구분이 안 되는» 화면이 됐다.
+   ⇒ 색은 한 단계 더 흐린 `--muted` 로, 굵기는 **양쪽 모드에 각각** 준다. 특이도는 클래스 둘을 겹쳐 올린다
+      (.v2-app-inst.v2-app-inst--past = (0,3,0)) — 순서에 기대면 다음에 규칙이 하나 끼는 순간 또 조용히 죽는다. */
 .v2-app-inst--past .v2-app-inst-ic { stroke: var(--muted-2); }
-.v2-app-inst--past .v2-app-inst-title { font-weight: 600; color: var(--ink-sub); }
+.v2-app-inst--past .v2-app-inst-title { font-weight: 600; color: var(--muted); }
+/*  ⚠ 카드 안(한 줄 모드)의 굵기는 **여기서 한 번 더** 말해야 한다 — 아래 `.v2-app-inst--1 .v2-app-inst-title`
+    가 특이도 (0,2,0) 으로 같고 파일에서 뒤에 있어, 위 600 이 카드 안에서만 통째로 졌다(그게 이 버그였다).
+    순서로 이기지 않고 **클래스를 겹쳐 (0,3,0)** 으로 올린다 — 순서에 기대면 규칙이 하나 끼는 날 또 조용히 죽는다.
+    값은 트리의 지난 세션 줄과 같은 450(.v2-ss-row.past .t) — 두 목록이 같은 사실을 같은 무게로 말한다. */
+.v2-app-inst--1.v2-app-inst--past .v2-app-inst-title { font-weight: 450; }
 .v2-app-inst--past:hover .v2-app-inst-title, .v2-app-inst--past.on .v2-app-inst-title { color: var(--ink); }
 .v2-app-inst--past:hover .v2-app-inst-ic, .v2-app-inst--past.on .v2-app-inst-ic { stroke: var(--muted); }
 /*  압정·닫기 — 첫 줄 오른쪽에 겹쳐 뜬다. 안 보일 땐 display:none 이라 **자리도 안 먹는다**(#1954 3차).
@@ -1954,6 +1966,19 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-app-inst--1 { grid-template-rows: minmax(28px, auto); padding: 3px 8px 3px 7px; }
 .v2-app-inst--1 .v2-app-inst-title { font-size: 13px; font-weight: 500; }
 .v2-app-inst--1 .v2-app-inst-close, .v2-app-inst--1 .v2-app-inst-pin { top: 4px; }
+/* 카드 안 「지난 세션 n」(#3778 안 C) — 트리의 .v2-ss-past 와 같은 결(12px/600/muted)이되, 기둥은 **이 카드의**
+   행에 맞춘다: 캐럿을 행 아이콘과 같은 17px 칸에 두고 같은 gap 을 줘 글자가 세션 이름과 한 줄로 선다.
+   ⚠ 카드가 통째로 지난 것일 때는 이 줄이 **아예 안 그려진다**(lib/sess-fold foldCardRows) — 덮을 본문이
+    없는데 접으면 뚜껑만 남고 오늘 한 일이 두 번 클릭 뒤로 숨는다(#762·#1808 이 고친 그 증상). */
+.v2-pg-past { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 26px; margin-top: 2px; padding: 3px 8px 3px 8px;
+  border: 0; background: none; font: inherit; font-size: 12px; font-weight: 600; line-height: 1.4; color: var(--muted); cursor: pointer; border-radius: 9px; text-align: left; }
+.v2-pg-past:hover { background: var(--bg-tint); color: var(--ink); }
+/*  ⚠ 캐럿의 **상자는 건드리지 않는다** — `.v2-car` 는 좁은 화면(≤900px)에서 손가락 크기(30px)로 커지는데,
+    여기서 폭을 못 박으면 그 배려가 이 줄에서만 죽는다. 대신 위 gap·padding 이 캐럿 오른쪽에서 글자를
+    세션 이름과 같은 기둥에 세운다(desktop 실측: 접힘 라벨 43px = 세션 제목 43px). */
+.v2-pg-past.open .v2-car { transform: rotate(90deg); }
+.v2-pg-past .n { flex: none; }
+.v2-pg-past .v2-cnt { flex: none; margin-left: -4px; }
 /* 카드 안에서는 hover·선택 배경이 카드와 같은 --bg 라 안 읽힌다 — 트리 세션 행과 같은 틴트로 바꾼다. */
 .v2-pg.open .v2-app-inst:hover { background: var(--bg-tint); }
 .v2-pg.open .v2-app-inst.on { background: var(--bg-tint); box-shadow: none; }
