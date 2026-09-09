@@ -2197,16 +2197,40 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-mention-row .id { margin-left: auto; font-size: 11px; opacity: .6; }
 .v2-ppl-ava { width: 18px; height: 18px; border-radius: 50%; font-size: 9.5px; flex: none; }
 .pn-att-c.ppl { padding-left: 3px; background: var(--bg-tint-2); border-color: var(--bg-tint-2); color: var(--blue); }
-/* [⚙] 새 세션 기본값 창(session-defaults.ts) — confirmDialog 의 extra 자리 */
-.v2-def { display: flex; flex-direction: column; gap: 8px; text-align: left; }
-.v2-def-lead { margin: 0 0 4px; font-size: 12.5px; color: var(--muted); }
-.v2-def-row { display: grid; grid-template-columns: 96px 1fr; align-items: start; gap: 8px; font-size: 12.5px; }
-.v2-def-row .k { color: var(--muted); padding-top: 7px; }
-.v2-def-row .v { min-width: 0; }
-.v2-def-sel { width: 100%; }
-.v2-def .v2-fine { margin-top: 3px; }
+/* [⚙] 새 세션 기본값 창(session-defaults.ts) — ov-back/ov-box 위에 직접 짠 창(2판, 원준 2026-09-09).
+   항목 = 제목 + (?) + 펼쳐지는 설명 + 컨트롤 + 힌트. 두셋 중 하나 고르는 축은 나란한 단추(.v2-seg). */
+.ov-box.v2-def-box { max-width: 520px; padding: 22px 24px 18px; text-align: left; }
+.v2-def-box .ov-head { margin-bottom: 6px; }
+.v2-def-x { width: 28px; height: 28px; border: 0; border-radius: 8px; background: transparent; color: var(--muted-2); font-size: 14px; cursor: pointer; }
+.v2-def-x:hover { color: var(--ink); background: var(--bg-tint); }
+.v2-def-lead { margin: 0 0 6px; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.v2-def-f { padding: 14px 0 2px; }
+.v2-def-f + .v2-def-f { border-top: 1px solid var(--line-row); }
+.v2-def-t { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; font-size: 13.5px; font-weight: 650; color: var(--ink); }
+.v2-def-q { flex: none; width: 18px; height: 18px; padding: 0; border: 1px solid var(--line-net-2); border-radius: 50%; background: transparent;
+  color: var(--muted); font: inherit; font-size: 11px; font-weight: 700; line-height: 1; cursor: pointer; display: inline-grid; place-items: center; }
+.v2-def-q:hover, .v2-def-q[aria-expanded="true"] { color: var(--blue); border-color: var(--blue); background: var(--bg-tint-2); }
+.v2-def-q:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-def-tip { margin: 0 0 10px; padding: 10px 13px; border-radius: 10px; background: var(--bg-tint); font-size: 12.5px; line-height: 1.65; color: var(--ink); }
+.v2-def-tip[hidden] { display: none; }
+.v2-def-tip p { margin: 0; }
+.v2-def-tip p + p { margin-top: 6px; }
+.v2-def-hint { margin-top: 7px; font-size: 12px; line-height: 1.5; color: var(--muted-2); }
+.v2-def-sel { width: 100%; height: 36px; font-size: 13px; }
+.v2-seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }
+.v2-seg-b { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; padding: 8px 11px; border: 1px solid var(--line-net); border-radius: 10px;
+  background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.v2-seg-b .t { font-size: 13px; font-weight: 600; }
+.v2-seg-b .d { font-size: 11.5px; line-height: 1.35; color: var(--muted-2); }
+.v2-seg-b:hover:not(:disabled) { background: var(--bg-tint); }
+.v2-seg-b[aria-checked="true"] { border-color: var(--blue); background: var(--bg-tint-2); color: var(--blue); }
+.v2-seg-b[aria-checked="true"] .d { color: var(--blue); opacity: .75; }
+.v2-seg-b:disabled { opacity: .5; cursor: default; }
+.v2-seg-b:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.v2-def-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line-row); }
 @media (max-width: 640px) {
   .v2-dest-grid { grid-template-columns: 1fr; margin-top: 18px; }
   .v2-launch-gear { width: 38px; height: 38px; }
   .v2-mention { left: 6px; right: 6px; }
+  .v2-seg { grid-auto-flow: row; grid-auto-columns: auto; }
 }
