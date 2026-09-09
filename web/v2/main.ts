@@ -942,6 +942,11 @@ function applyTabChrome(tab: ShellTab): void {
   //  손님(미리보기)이 실려 있으면 곁칸이 없던 화면에도 곁칸을 연다 — 닫으면 다시 사라진다.
   const guest = !!(tab.aside as AsideHost).__guest;
   root!.classList.toggle('no-aside', tab.noAside && !guest);
+  //  ★ 맥락 관리(#3830, 원준 2026-09-09 "사이드바가 굳이 필요 없다 · 검색창은 전체 가로 다 차지하게 슬랙처럼") —
+  //   이 앱에 있는 동안만 사이드바 열을 0 으로 접고, 맨 윗줄을 창 전폭으로 편다. 레일은 남는다(구역 전환은 레일 몫).
+  //   ⚠ 접기는 **열 폭 0** 이다(47-v2-rail.css:326 rail-hidden 과 같은 규율) — display:none 으로 빼면 그리드 열이
+  //    한 칸씩 밀려 본문이 0px 열에 앉는다. 판정은 화면 키 하나(app:context)로, 여기 한 자리에서만 한다.
+  root!.classList.toggle('app-ctx', CTX_FULL_WIDTH.has(activeKeyOf(tab.route)));
   if (mobile) mobile.setAside(!tab.noAside || guest);   // 모바일 상단 바의 [타임라인] — 우패널이 없는 화면(앱 프레임)에선 버튼도 없다
   // 리브 페이지를 떠나면 그 폴링이 멈추게(liv.ts 는 body.dataset.route==='liv' 동안만 폴링).
   document.body.dataset.route = routeKey(tab.route) === 'raw:liv' || parseRoute(tab.route).segs[0] === 'liv' ? 'liv' : 'v2';
@@ -1312,9 +1317,16 @@ function markActive(key: string): void {
 function activeKey(): string {
   // 부작용 없는 조회 — 부팅 중(활성 탭 확정 전)의 drawSide 가 탭을 만들어 버리면 딥링크가 죽는다(실측).
   const t = tabsApi ? tabsApi.current() : null;
-  const cur = parseRoute(t ? t.route : location.hash);
+  return activeKeyOf(t ? t.route : location.hash);
+}
+/** 주소 하나가 갖는 활성 키 — activeKey() 는 '지금 탭'의 것을 묻고, 이 함수는 **아무 주소나** 묻는다.
+ *  탭 크롬(applyTabChrome)은 그 탭의 주소로 물어야 한다: 부팅 중엔 tabsApi.current() 가 아직 그 탭이 아니다. */
+function activeKeyOf(route: string): string {
+  const cur = parseRoute(route);
   return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : cur.segs[0] === 'sources' ? 'sources' : cur.segs[0] === 'connect' ? 'connect' : cur.segs[0] === 'archive' ? 'archive' : cur.segs[0] === 'trash' ? 'trash' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
 }
+/** 사이드바를 접고 맨 윗줄을 창 전폭으로 펴는 화면(#3830). 늘리려면 그 화면이 **사이드바에서 아무것도 안 읽는지** 먼저 본다. */
+const CTX_FULL_WIDTH = new Set(['app:context']);
 // ── 좌측 사이드바는 **늘 있다**(원준 2026-08-20) ──────────────────────────────────
 //  이력: 3차(2026-08-19)에 좌측 열을 걷고 떠다니는 알약으로 여닫게 했는데, 그 알약이 ⓐ 자리를 가리고
 //  ⓑ 새로고침·상태에 따라 목록이 사라져 "왜 없어졌나"를 매번 되찾아야 했다(원준 신고). 목록은 셸의 뼈대다 —
