@@ -319,6 +319,7 @@ const IS_MOBILE = (() => {
 let imeComposing = false;  // setupTextareaHygiene 이 관리 — IME 조합 중엔 textarea 를 절대 건드리지 않는다(#633 교훈)
 let appDragSelect = false; // 앱(마우스모드) 화면에서 '드래그 선택'이 관측된 상태 — Cmd+C→^C 브리지 발동 조건(#1117 버그C)
 let appSelectAt = 0;       // 그 선택 제스처가 관측된 시각 — 앱의 '선택 즉시 자동복사'(OSC52)가 이 뒤에 왔는지 판별(#3778)
+let xtermSelAt = 0;        // xterm(웹) 선택이 마지막으로 바뀐 시각 — 우클릭 [복사]가 웹 선택과 앱 선택 중 더 최근 것을 고른다
 let lastOsc52At = 0;       // 앱 복사 신호(OSC52)를 마지막으로 받은 시각
 
 // ── tmux control-mode 파서 ──
@@ -2482,7 +2483,9 @@ export async function boot() {
     //  이 핸들러까지 안 오는 경우가 있는데, 그 축은 아래 캡처 경로(urlAtColumn)가 표시 텍스트로 커버한다.
     linkHandler: { activate: (_e: MouseEvent, uri: string) => openLinkFromTerminal(uri) },
     // tmux mouse on 이라도 선택할 수 있게: macOS 는 Option+드래그(iTerm 습관), 공통으로 Shift+드래그.
-    macOptionClickForcesSelection: true, rightClickSelectsWord: true,
+    //  rightClickSelectsWord 는 끈다(#3778 원준님 실측): 우클릭은 우리 메뉴의 것인데 xterm 이 contextmenu 에서 커서 밑
+    //  단어로 선택을 갈아 끼워, 여러 줄 드래그 뒤 단어 위에서 우클릭하면 [복사 3자]처럼 그 단어만 잡혔다.
+    macOptionClickForcesSelection: true, rightClickSelectsWord: false,
   });
   fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
@@ -2712,13 +2715,21 @@ function wireTermCtxMenu(host: HTMLElement): void {
   const eat = (e: MouseEvent): void => { if (e.button === 2 && !e.shiftKey && !IS_MOBILE) { e.stopPropagation(); e.preventDefault(); } };
   host.addEventListener('mousedown', eat, true);
   host.addEventListener('mouseup', eat, true);
+  try { term.onSelectionChange(() => { xtermSelAt = Date.now(); }); } catch (_) { /* noop */ }
+  // contextmenu 도 **capture** 에서 받는다(#3778 원준님 실측 «여러 줄 드래그 뒤 단어 위에서 우클릭 → 복사 3자»): xterm 은
+  //  자기 element 의 contextmenu 에서 rightClickHandler 로 커서 밑 단어를 선택하는데, 우리 리스너가 bubble 이면 그게
+  //  먼저 돌아 sel 이 그 단어로 갈려 있었다. 옵션(rightClickSelectsWord=false)과 capture 둘 다로 막는다.
   host.addEventListener('contextmenu', (e: MouseEvent) => {
     if (e.shiftKey || IS_MOBILE) return;
     let mouseOn = false;
     try { mouseOn = !!(term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'); } catch (_) { /* noop */ }
-    const sel = term.hasSelection() ? String(term.getSelection() || '') : '';
+    const xsel = term.hasSelection() ? String(term.getSelection() || '') : '';
     // 메뉴를 띄우는 **이 순간**의 판정을 붙잡아 둔다 — [복사]를 누르는 시점에 다시 읽으면 그 사이 무엇이 풀렸을 수 있다.
-    const appSel = mouseOn && appDragSelect;
+    //  웹(xterm) 선택과 앱(Claude) 드래그 선택이 둘 다 있으면 **더 최근 것**이 사용자의 뜻이다 — 마우스모드 앱 화면에서
+    //  방금 드래그했는데 옛 웹 선택이 남아 있으면 그 옛것이 복사되던 것.
+    const appSelSeen = mouseOn && appDragSelect;
+    const appSel = appSelSeen && (!xsel || appSelectAt >= xtermSelAt);
+    const sel = appSel ? '' : xsel;
     const canCopy = !!sel || appSel;
     const url = /^https?:\/\/\S+$/.test(sel.trim()) ? sel.trim() : '';
     const secure = !!(navigator.clipboard && navigator.clipboard.readText && window.isSecureContext);
@@ -2730,6 +2741,7 @@ function wireTermCtxMenu(host: HTMLElement): void {
       toast('글자 크기 ' + v);
     };
     e.preventDefault(); e.stopPropagation();
+    dlog('ctx-copy', sel ? 'xterm len=' + sel.length : (appSel ? 'app' : 'none'));
     liteMenu(e.clientX, e.clientY, [
       { label: '복사', hint: sel ? String(sel.length) + '자' : (appSel ? 'Claude 선택' : '선택한 글이 없어요'), off: !canCopy, run: () => {
         if (sel) { copyText(sel, false, true); return; }
@@ -2747,7 +2759,7 @@ function wireTermCtxMenu(host: HTMLElement): void {
       { sep: true, label: '' },
       { label: '터미널 설정…', run: () => openSettings() },
     ], '터미널');
-  });
+  }, true);
 }
 
 function scheduleReconnect(label) {
