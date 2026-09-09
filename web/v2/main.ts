@@ -16,6 +16,7 @@ import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, nativeAppByRoute, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
+import { projMatches } from '../lib/proj-match.js';
 import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, movePinnedSession, projLandingRoute, projectOrder, reloadSidePrefs, sessText, type SideInstance } from './side.js';
 import { dotCls, findSessIn, isMineSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type HomeDest, type Sess, type V2Data } from './views.js';
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
@@ -1040,7 +1041,9 @@ function homeDraft(tab: ShellTab): { text: string; onChange(v: string): void } {
  *   이어 준다. 목록은 이미 메모리에 있다(loadData 가 실은 data.projects) — 이 칸 때문에 서버를 더 부르지 않는다.
  *   상한 40: 최근 순이라 그 뒤는 «검색»으로 찾는 구간이고, 홈이 프로젝트 수백 건을 들고 있을 이유가 없다. */
 function homeDests(): HomeDest[] {
-  return projectOrder(data).slice(0, 40).map((r) => ({ proj: r.proj, done: r.done }));
+  //  ⚠ 40개로 자르면 **번호로 찾기가 그 안에서만** 된다(원준 2026-09-09 «번호로도 검색»). 목록은 화면이 스크롤·
+  //   자르기로 다루므로 여기서는 넉넉히 넘긴다 — 행 하나는 {id, name} 두 필드라 200개도 가볍다.
+  return projectOrder(data).slice(0, 200).map((r) => ({ proj: r.proj, done: r.done }));
 }
 
 async function renderRoute(tab: ShellTab): Promise<void> {
@@ -2191,8 +2194,8 @@ function openProjectPicker(anchor: HTMLElement, sessionId: string, tab: ShellTab
   }
 
   const renderList = (): void => {
-    const q = input.value.trim().toLowerCase();
-    const hits = rows.filter((r) => !q || r.proj.name.toLowerCase().includes(q) || String(r.proj.id) === q);
+    // 찾기 규칙은 홈 컴포저의 「프로젝트」 칸과 **같은 한 곳**(lib/proj-match.ts) — 번호·#번호·이름·번호 앞자리.
+    const hits = projMatches(rows, input.value.trim());
     const kids: HTMLElement[] = [];
     if (s.projectId) kids.push(el('button', { class: 'v2-pjpick-row v2-pjpick-none', type: 'button', role: 'option', onclick: () => void pick(null) },
       el('span', { class: 'n', text: '프로젝트에서 떼기' }), el('span', { class: 'm', text: '프로젝트 없음으로' })));
