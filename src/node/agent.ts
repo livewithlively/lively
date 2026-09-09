@@ -26,6 +26,7 @@ import { sessionPrompts } from "../terminal/terminal-transcript.js";
 import { isConfined, probeLocal } from "../terminal/path-jail.js";   // #3668 T1 — 심링크 해소 뒤 봉쇄(게이트웨이 파일 API 와 같은 사양)
 import {
   nodeWsUrl, PROTO_VER, NODE_OPS, CLOSE_SELF_NODE, encodeChanFrame, decodeChanFrame, parseMsg,
+  selfUpdateBlockedForever,
   type GwToNodeMsg, type NodeToGwMsg, type ReqMsg,
 } from "./protocol.js";
 // 위탁 태스크(P2) — 러너/리소스 샘플러는 중앙(게이트웨이 내장 노드)과 공유(node/tasks.ts).
@@ -86,10 +87,27 @@ const AGENT_VER: string | null = (() => {
 //  ① 지문이 같거나 모르면 아무것도 안 한다  ② 받은 바이트를 **해시로 검증**하고 다르면 교체하지 않는다
 //  ③ 시도 쿨다운 10분(플래그 mtime) — 서버가 계속 다른 지문을 줘도 재시작이 분당 반복되지 않는다
 //  ④ 교체는 임시파일 → rename(원자적). node_modules/node-pty 는 **건드리지 않는다**(네이티브 로드 중 교체 위험).
+//  ⑤ **코드 디렉터리에 못 쓰는 배포에서는 아예 하지 않는다** (#3720) — 아래 selfUpdateDisabled.
 const SELF_UPDATE_COOLDOWN_MS = 10 * 60 * 1000;
 let selfUpdating = false;
+/**
+ * 이 배포에서 **자가 갱신을 접었나** (#3720).
+ *
+ * ── 왜 이 스위치가 필요한가 (실측 2026-09-08~09) ──────────────────────────────
+ * 매니지드 세션 호스트는 테넌트 uid 로 돌고 코드 디렉터리(`/opt/lvly-sesshost/<slug>`)는 **root 소유**다.
+ *  그건 사고가 아니라 **의도**다 — 테넌트 uid 가 자기 실행 코드를 바꿀 수 있으면 격리가 뜻을 잃는다
+ *  (#3711 의 판단, #3696 이 소유를 root 로 되돌리며 재확인). 그래서 아래 `tryFlag` 쓰기가 EACCES 로
+ *  죽는데, **플래그가 안 써지므로 쿨다운(③)이 영영 안 걸린다** — 재접속마다 다시 시도하고 다시 죽는다.
+ *  실측: 그 로그가 24시간에 **25건**. 고쳐지지도 않고 멈추지도 않는, 이 레포가 제일 싫어하는 모양이다.
+ *
+ * ★ 답은 «권한을 준다» 가 아니라 «**갱신 주체를 옮긴다**» 이다. 이 배포에서 갱신은 설치자(root)가
+ *  하고(`deploy/lvly-sesshost-update.timer`), 이 프로세스는 **한 번 말하고 그만둔다.**
+ *  ⚠ 그렇다고 **감춰지지는 않는다** — 낡았다는 사실은 `agentVer` 로 계속 게이트웨이에 보고되고,
+ *   그게 롤의 되읽기가 보는 값이다. 여기서 접는 것은 «시도» 이지 «보고» 가 아니다.
+ */
+let selfUpdateDisabled = false;
 async function maybeSelfUpdate(latest: string | null | undefined): Promise<void> {
-  if (selfUpdating || !latest || !AGENT_VER || latest === AGENT_VER) return;
+  if (selfUpdating || selfUpdateDisabled || !latest || !AGENT_VER || latest === AGENT_VER) return;
   const self = process.argv[1];
   if (!self) return;
   const tryFlag = `${self}.update-try`;
@@ -99,7 +117,21 @@ async function maybeSelfUpdate(latest: string | null | undefined): Promise<void>
   } catch { /* 첫 시도 */ }
   selfUpdating = true;
   try {
-    fs.writeFileSync(tryFlag, "");
+    try {
+      fs.writeFileSync(tryFlag, "");
+    } catch (e) {
+      //  쓸 수 없는 것이 **권한·파일시스템** 때문이면 다음 연결에도 똑같이 실패한다. 「다시 시도」는
+      //   거짓말이므로 하지 않는다 — 접고, 그 사실을 **한 번** 남긴다.
+      //  ⚠ 다른 오류(ENOSPC 등)는 일시적일 수 있으니 접지 않고 종전대로 아래 catch 로 흘린다.
+      const code = (e as NodeJS.ErrnoException)?.code;
+      if (selfUpdateBlockedForever(code)) {
+        selfUpdateDisabled = true;
+        logger.warn({ have: AGENT_VER, want: latest, dir: path.dirname(self), code },
+          "자가 갱신을 접는다 — 코드 디렉터리에 쓸 수 없다(설치자가 갱신하는 배포다). 다시 시도하지 않는다");
+        return;
+      }
+      throw e;
+    }
     logger.info({ have: AGENT_VER, want: latest }, "노드 프로그램이 낡았다 — 새 번들을 받는다");
     const res = await fetch(`${GW_URL.replace(/\/$/, "")}/node/agent-bundle`, { headers: { Authorization: `Bearer ${TOKEN}` } });
     if (!res.ok) { logger.warn({ status: res.status }, "번들 다운로드 실패 — 다음 연결에 다시 시도"); return; }
