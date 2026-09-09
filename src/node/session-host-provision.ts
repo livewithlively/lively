@@ -28,7 +28,7 @@
 //
 // ⚠ 평문 토큰은 **발급 응답 1회성**이다. 로그·태스크·지식 어디에도 남기지 않는다.
 import { getMember, upsertMember } from "../org/store/members.js";   // #2165 — 배럴 대신 좁은 모듈(노드 번들 경계)
-import { createNode, listNodes, rotateNodeToken, setNodeOwnerAndSessionHost, type OrgNode } from "./store.js";
+import { createNode, listNodes, rotateNodeToken, setNodeOwnerAndSessionHost, undeclareNodeSessionHost, type OrgNode } from "./store.js";
 import { logger } from "../log.js";
 
 /** 세션 호스트 자격의 주인 — 테넌트마다 하나. 사람 계정에 묶지 않는다(머리말 ★). */
@@ -217,6 +217,37 @@ export async function ensureSessionHostNode(slug: string, node: string, issue: b
   const { node: row, token } = await rotateNodeToken(cur.id, SESSION_HOST_MEMBER_ID);
   logger.info({ node: row.id, slug }, "세션 호스트 노드 토큰 재발급(브로커가 자격을 잃었다고 알려 왔다)");
   return view(row, action, token);
+}
+
+/**
+ * 이 (노드, 테넌트)의 세션 호스트 선언을 **내린다** — 브로커가 «내렸다» 고 알려 올 때. (#2600 T2 d5-b)
+ *
+ * ── 왜 필요한가 (2026-09-09 실측) ───────────────────────────────────────────
+ * 목록 소유 판정은 «선언한 호스트가 **전부** 자격일 때만» 이다(#3797 T7 의 `every`). 그 규칙은 옳다 —
+ *  호스트가 자기 노드로 좁혀 보고하므로 하나가 빠지면 그 노드의 세션이 목록에서 통째로 사라진다.
+ *
+ * 그런데 **내려간 호스트의 행이 선언된 채 남으면** 그 규칙이 스스로를 막는다. 브로커가 호스트를 내리는
+ *  것은 흔한 정상 동작이다(허용목록 변경 · 테넌트 정지 · 핀 이전 · 그 노드에 세션이 없어짐). 그때마다
+ *  «영영 오프라인인 선언 행» 이 하나씩 쌓이고, 유일한 탈출구가 `SESSION_HOST_DEAD_MS`(24시간)인데
+ *  함대는 하루에 노드가 여러 번 갈린다.
+ *
+ * 실측 — 카나리아 테넌트 하나에 죽은 선언 행이 셋이었고, 그중 둘은 **조정기가 우아하게 내린 것**이다
+ *  (브로커 저널의 «세션 호스트를 내렸다» 시각과 `last_seen` 이 초 단위로 일치):
+ *      sesshost-…-i-0eb127b7f7bfe3d80   내림 10:08:31 ←→ last_seen 10:08:31
+ *      sesshost-…-i-01ec264e472d73701   내림 10:13:28 ←→ last_seen 10:13:28
+ *  그 시각 판정은 `offline` 이었다(계수 `defersCensus`). ⇒ **내릴 때 알리기만 하면 그 경우가 전부 덮인다.**
+ *
+ * ⚠ 노드 급사(ASG 종료)는 여기로 안 온다 — 알릴 주체가 사라지기 때문이다. 그건 그대로
+ *  `SESSION_HOST_DEAD_MS` 가 받는다. 그 보수성은 옳다: 재부팅이면 그 노드의 세션이 아직 살아 있고,
+ *  성급히 선언을 내리면 게이트웨이가 소유를 넘겨 **그 세션들이 목록에서 사라진다.**
+ * ⚠ 행을 **지우지 않는다** — 다시 켜면 같은 행을 그대로 쓴다(id·토큰 연속성).
+ */
+export async function releaseSessionHostNode(slug: string, node: string): Promise<{ nodeId: string; released: boolean }> {
+  const nodeId = sessionHostNodeId(slug, node);
+  if (!nodeId) throw new Error(`세션 호스트 노드 id 를 만들 수 없습니다: slug=${JSON.stringify(slug)} node=${JSON.stringify(node)}`);
+  const released = await undeclareNodeSessionHost(nodeId);
+  if (released) logger.info({ node: nodeId, slug }, "세션 호스트 선언을 내렸다(브로커가 내렸다고 알려 왔다)");
+  return { nodeId, released };
 }
 
 function view(node: OrgNode, action: SessionHostNodeAction, token: string | null): SessionHostEnsureResult {

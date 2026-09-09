@@ -18,7 +18,8 @@ import type express from "express";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { resolveTenantFromHeaders } from "../org/tenant-context.js";
 import { servedAgentVersion } from "./agent-bundle.js";
-import { ensureSessionHostNode, sessionHostNodeId } from "./session-host-provision.js";
+import { ensureSessionHostNode, releaseSessionHostNode, sessionHostNodeId } from "./session-host-provision.js";
+import { undeclareSessionHostState } from "./registry.js";
 import { logger } from "../log.js";
 
 export const SESSION_HOST_AUTH_HEADER = "x-lvly-sesshost-auth";
@@ -55,6 +56,15 @@ export function wantsIssue(body: unknown): boolean {
 }
 
 /**
+ * 본문의 `release` 를 읽는다(순수) — **정확히 true 일 때만** 해제다.
+ *
+ * ★ `issue` 와 같은 규율이다: 관대하게 읽어 주면 «켜려던 요청이 끄는 요청으로» 새는 쪽이 더 위험하다.
+ */
+export function wantsRelease(body: unknown): boolean {
+  return !!body && typeof body === "object" && (body as { release?: unknown }).release === true;
+}
+
+/**
  * 본문의 `node`(부르는 브로커가 도는 노드 이름)를 읽는다(순수). 없으면 **빈 문자열** (#3797 T7).
  *
  * ★ 이 값이 곧 축이다 — 세션 호스트는 (노드, 테넌트) 별로 하나이므로, 노드를 모르면 어느 행인지도
@@ -78,6 +88,19 @@ export function registerSessionHostRoute(app: express.Express): void {
     const node = requestedNode(req.body);
     if (!node) throw new HttpError(400, "node(부르는 노드 이름)가 필요합니다 — 세션 호스트는 (노드, 테넌트) 별로 하나입니다");
     if (!sessionHostNodeId(a.slug, node)) throw new HttpError(400, "이 (슬러그, 노드) 로는 세션 호스트 노드 id 를 만들 수 없습니다");
+
+    //  ★ 해제가 **먼저**다 — «내렸다» 는 요청에 자격을 발급하면 방금 내린 것을 도로 세운다.
+    if (wantsRelease(req.body)) {
+      const rel = await releaseSessionHostNode(a.slug, node);
+      //  DB 와 **메모리 둘 다** 내린다(`undeclareSessionHostState` 머리말) — 한쪽만 내리면
+      //   게이트웨이가 재시작할 때까지 그 행이 계속 «선언» 으로 남아 목록 소유 판정을 막는다.
+      const inMem = undeclareSessionHostState(rel.nodeId);
+      logger.info({ slug: a.slug, on: node, node: rel.nodeId, released: rel.released, inMem },
+        "세션 호스트 선언 해제");
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ nodeId: rel.nodeId, released: rel.released });
+      return;
+    }
 
     const issue = wantsIssue(req.body);
     const r = await ensureSessionHostNode(a.slug, node, issue);
