@@ -90,6 +90,18 @@ function orphanBlocked(clone) {
   return /재조립하면 사라집니다/.test(r);
 }
 
+/** restage.sh §2 ③(내용 대조)이 쓰는 `git merge-tree --write-tree --merge-base` 가 이 git 에서 되나.
+ *  버전 숫자로 가르지 않는다 — 스크립트가 실제로 쓰는 것과 같은 형태를 한 번 돌려 보고 판정한다.
+ *  (실측 2026-09-08: 어떤 배포판 git 2.39.x 는 이 조합을 거부한다. 그래서 "2.38+ 면 된다" 는
+ *   버전 추정이 틀린다 — 기능 유무는 probe 로만 안다.) */
+function mergeTreeWriteTreeSupported(cwd) {
+  try {
+    execFileSync('git', ['merge-tree', '--write-tree', '--merge-base', 'HEAD', 'HEAD', 'HEAD'],
+      { cwd, env: { ...process.env, ...ENV }, stdio: 'ignore' });
+    return true;
+  } catch { return false; }
+}
+
 const cases = [
   // 사본이 있는 자리                        고아로 막아야 하나
   { where: '(아무 데도 없음)', ref: null, base: null, blocked: true },
@@ -106,6 +118,15 @@ const cases = [
 test('고아 판정 — 같은 변경이 main 에 다른 베이스로 이미 있으면 통과한다(체리픽 쌍둥이)', () => {
   const { root, clone } = makeWorld();
   try {
+    // 이 케이스만은 §2 ③(내용 대조)에 달려 있다 — patch-id 는 «같은 변경, 다른 베이스» 를 남남으로
+    //  보므로, ③ 이 없는 git 에서는 스크립트가 **의도적으로** 종전 판정(patch-id 만)으로 degrade 한다.
+    //  degrade 를 실패로 부르면 테스트가 스크립트의 명시된 계약과 싸우는 꼴이라, 여기서만 건너뛴다
+    //  (실측 2026-09-08: 이 조합을 거부하는 git 을 쓰는 컨테이너 CI 러너에서 이 subtest 만 실패).
+    if (!mergeTreeWriteTreeSupported(clone)) {
+      console.error('skip — 이 git 은 `git merge-tree --write-tree --merge-base` 를 지원하지 않는다: '
+        + 'restage.sh §2 ③(내용 대조)이 꺼지고 판정이 patch-id 로 degrade 하므로 이 케이스는 성립하지 않는다.');
+      return;
+    }
     const sha = directCommitOnStage(clone, 'twin');
     advanceMain(clone);                     // main 이 이웃 줄을 고쳐 문맥이 달라진다
     copyTo(clone, sha, 'main', 'origin/main');
