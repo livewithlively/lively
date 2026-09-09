@@ -13,6 +13,8 @@ import { PROJECT_SHARED_BASE as SHARED_BASE } from "../project/project-fs.js";
 
 const GIT_TIMEOUT_MS = 180_000;
 const BR_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/; // git 브랜치명(선두 특수문자 금지)
+// stage 합성 머지 커밋의 작성자 — stage 는 파생물이라 사람 이름을 붙일 자리가 아니다(누가 만들었냐는 member_branches 가 말한다).
+const MERGE_IDENTITY = ["-c", "user.name=Lively Preview", "-c", "user.email=preview@lively.invalid"];
 
 function git(args: string[], cwd?: string, timeoutMs = GIT_TIMEOUT_MS): Promise<{ ok: boolean; out: string; err: string }> {
   return new Promise((resolve) => {
@@ -28,7 +30,23 @@ function git(args: string[], cwd?: string, timeoutMs = GIT_TIMEOUT_MS): Promise<
   });
 }
 
-export interface StageResult { worktree_path: string; merge_status: Record<string, string>; conflicts: string[]; head: string | null; }
+export interface StageResult { worktree_path: string; merge_status: Record<string, string>; conflicts: string[]; failures: Record<string, string>; head: string | null; }
+
+/**
+ * 머지가 실패했을 때 **왜** 실패했나 — 사람이 할 일이 정반대라 뭉뚱그리면 안 된다(#3778, 2026-09-09).
+ *
+ * 종전엔 `git merge` 의 비-0 종료를 전부 «conflict» 로 적었다. 그래서 신원 부재·인덱스 잠금·fetch 실패까지
+ *  화면엔 «서로 충돌» 로 나왔고, 사람은 있지도 않은 코드 충돌을 찾으러 갔다(실측 2026-09-09: 세션 둘이
+ *  같은 함정에 걸렸고 한 세션은 «원인 미상» 으로 남겼다 — 로컬 merge-tree 는 무충돌인데 프리뷰만 충돌).
+ *
+ * 판정 근거는 **인덱스에 남은 unmerged 항목**이다(`git ls-files -u`). 진짜 충돌이면 거기 스테이지가 남고,
+ *  그 밖의 실패(커밋을 못 만듦·잠금·네트워크)는 인덱스가 깨끗하다. stderr 문자열 매칭은 로케일을 타서 안 쓴다.
+ */
+export function mergeVerdict(unmergedOut: string, stderr: string): { status: "conflict" | "failed"; detail: string } {
+  if (unmergedOut.trim()) return { status: "conflict", detail: "" };
+  const line = String(stderr || "").split("\n").map((l) => l.trim()).filter(Boolean).pop() || "알 수 없는 오류";
+  return { status: "failed", detail: line.slice(0, 300) };
+}
 
 // stage/<id> 워크트리에 base_ref 위로 branches 를 순차 merge. 반환: 워크트리 경로 + 브랜치별 상태 + 충돌 목록.
 //  매 호출 base 로 reset 후 재-merge(결정성) — auto 트리거(작업 브랜치 갱신 반영)와 manual 모두 같은 경로.
@@ -56,6 +74,7 @@ export async function ensureStageWorktree(id: string, repo: string, baseRef: str
 
   const merge_status: Record<string, string> = {};
   const conflicts: string[] = [];
+  const failures: Record<string, string> = {};
   for (const raw of branches) {
     const br = String(raw ?? "").trim();
     if (!br || !BR_RE.test(br)) { merge_status[String(raw)] = "invalid"; continue; }
@@ -64,12 +83,21 @@ export async function ensureStageWorktree(id: string, repo: string, baseRef: str
       target = (await git(["rev-parse", "--verify", "--quiet", br], wt)).ok ? br : "";
     }
     if (!target) { merge_status[br] = "missing"; continue; }
-    const m = await git(["merge", "--no-edit", target], wt);
-    if (m.ok) { merge_status[br] = "merged"; }
-    else { await git(["merge", "--abort"], wt); merge_status[br] = "conflict"; conflicts.push(br); }
+    // ⚠ 신원을 **명시한다**. 브랜치가 base 보다 뒤처져 있으면 이 머지는 fast-forward 가 아니라 진짜 머지라
+    //  **커밋을 만들어야 하는데**, 게이트웨이 컨테이너엔 git 전역 설정이 없어 거기서 죽었다. 그 죽음이 화면엔
+    //  «충돌» 로 나왔다(#3778 실측 — 리베이스해 FF 로 만들자 곧바로 merged). 이 세 인자가 그 실패를 없앤다.
+    const m = await git([...MERGE_IDENTITY, "merge", "--no-edit", target], wt);
+    if (m.ok) { merge_status[br] = "merged"; continue; }
+    // 인덱스의 unmerged 항목이 «진짜 충돌인가» 의 정본 — abort 하면 지워지므로 **abort 전에** 읽는다.
+    const unmerged = await git(["ls-files", "-u"], wt);
+    const v = mergeVerdict(unmerged.out, m.err || m.out);
+    await git(["merge", "--abort"], wt);
+    merge_status[br] = v.status;
+    if (v.status === "conflict") conflicts.push(br);
+    else failures[br] = v.detail;
   }
   const head = (await git(["rev-parse", "--short", "HEAD"], wt)).out.trim() || null;
-  return { worktree_path: wt, merge_status, conflicts, head };
+  return { worktree_path: wt, merge_status, conflicts, failures, head };
 }
 
 export interface RepoBranch { name: string; updated_at: string | null; author: string | null; subject: string | null; }
