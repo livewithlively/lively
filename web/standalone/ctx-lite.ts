@@ -1,6 +1,7 @@
 // standalone/ctx-lite.ts — 터미널 페이지(별 문서)용 우클릭 메뉴(#3784). 셸의 엔진(web/v2/ctx-menu.ts)과 같은 문법·같은
 //  겉모습이지만 **의존이 0** 이다 — 이 번들은 셸 밖(terminal.html)에서 <script> 로 뜨므로 core.js 를 끌어올 수 없다.
 //  키보드(↑↓ Enter Esc)·밖 클릭·창 blur(부모 셸을 누르면 이 문서엔 이벤트가 안 온다)·화면 밖 뒤집기.
+//  ⚠ dev 반영: 이 폴더의 변경은 build:web 이 아니라 build-standalone 이 만든다 — serve-sync 가 그걸 따로 돌린다(#3784).
 export interface LiteRow { label: string; run?: () => void; hint?: string; danger?: boolean; sep?: boolean; off?: boolean }
 
 let openEl: HTMLElement | null = null;
