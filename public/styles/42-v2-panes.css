@@ -115,7 +115,14 @@
 .pn-title-btn { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 2px 8px;
   border: 0; border-radius: 9px; background: none; font: inherit; color: inherit; text-align: left;
   text-decoration: none; cursor: pointer; }
-.pn-title-btn .pn-title-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* ⚠ `overflow: hidden` 은 **패딩 상자**에서 자른다 — 25px·800 굵기에 letter-spacing -.022em 까지 겹치면
+   마지막 글자의 잉크가 제 advance 폭을 넘어서(한글 받침 ㅇ·ㄱ·ㅅ 에서 특히) 그 경계에 그대로 썰린다.
+   실측(원준님 2026-09-09): 「자잘한 UI 수정」의 '정' · 「프로젝트 자동 이름짓기」의 '기' · 「Lively Gateway 정합성」의 '성'
+   — 이름 끝이 한글인 프로젝트는 사실상 전부 걸린다(말줄임이 필요없는 짧은 이름에서도 난다).
+   그래서 **자르는 자리를 잉크 밖으로** 패딩만큼 밀고, 같은 크기의 음수 마진으로 배치는 종전 그대로 둔다
+   (알약 폭·아이콘 간격이 안 변한다). 말줄임은 그대로 산다 — 패딩 상자가 넓어질 뿐 내용 폭은 그대로다. */
+.pn-title-btn .pn-title-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  padding: .08em .12em; margin: -.08em -.12em; }
 /* 프로젝트 아이콘 — 이 굵은 글자가 세션 이름이 아니라 **프로젝트 이름**임을 말한다. 글자보다 조용하게. */
 .pn-title-ic { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.7;
   stroke-linecap: round; stroke-linejoin: round; }
