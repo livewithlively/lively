@@ -310,7 +310,8 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
     draft?.onChange('');
     const d = dest(); const pre = destPre.get();
     const ok = await openQuickSession(text + mention.tail() + att.tail(), {
-      run: runPicker.value(),
+      // resolve() — value() 가 아니다(#3833): 어느 컴퓨터가 켜져 있나는 «지금» 을 물어야 한다.
+      run: await runPicker.resolve(),
       projectId: d.kind === 'proj' ? d.id : null,
       projectName: d.kind === 'new' ? d.name : '',
       invites: mention.invites(),
