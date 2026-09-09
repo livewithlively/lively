@@ -1423,11 +1423,25 @@ function viewerPart(ctx: PartCtx): Part {
       }
       return;
     }
-    // 브라우저가 그릴 방법이 없는 형식 — 할 수 있는 것(내려받기)만 정직하게 말한다.
-    showPlain(el('div', { class: 'pn-empty' },
-      pnIcon('doc', 'pn-i big'),
-      el('b', { text: '이 형식은 브라우저에서 볼 수 없어요.' }),
-      el('p', { class: 'pn-fine', text: '파워포인트·워드·엑셀·한글은 브라우저가 그릴 방법이 없습니다. 위 [내려받기]로 원래 앱에서 여세요.' })));
+    //  나머지 전부(사무문서·한글·압축·소리·모르는 바이트)는 **공용 렌더러**에 맡긴다 (#3778).
+    //   종전엔 여기가 "파워포인트·워드·엑셀·한글은 브라우저가 그릴 방법이 없습니다" 한 줄이었는데, 그건
+    //   사실이 아니라 **우리가 안 그렸던 것**이다(zip 을 풀면 워드도 엑셀도 그려지고, 한글은 파일 안에
+    //   제 미리보기를 넣어 둔다). 같은 파일이 화면마다 다르게 열리지 않도록 판정·렌더는 lib/file-preview
+    //   한 자리가 쥔다(#1436) — 이 칸도 그 자리에 붙는다.
+    const { buildFilePreview } = await import('../lib/file-preview.js');
+    const out = await buildFilePreview({
+      name: base(p2),
+      size: list.find((f) => f.path === p2)?.size,
+      fetchView: () => fetch(fileUrl(p2), fetchOpts),
+      fetchDownload: () => fetch(fileUrl(p2) + '&download=1', fetchOpts),
+      cls: { img: 'pn-ed-img', pdf: 'pn-ed-pv' },   // 크기 규칙만 이 칸 것으로 덮는다(fp-* 가 기본)
+      mkBtn: (label, onClick) => el('button', { class: 'pn-web-btn', type: 'button', text: label, onclick: onClick }),
+    }).catch(() => null);
+    if (path !== p2) return;                       // 그 사이 다른 걸 골랐다
+    if (!out) { showPlain(el('p', { class: 'pn-fine', style: 'padding:14px', text: '파일을 읽지 못했어요.' })); return; }
+    //  도장은 잡지 않는다 — 응답을 렌더러가 쥐고 있어 헤더를 볼 수 없다. 자가 비교는 다음 열기부터 선다.
+    shownStamp = '';
+    showPlain(el('div', { class: 'pn-fp' }, ...(out.tools.length ? [el('div', { class: 'pn-fp-tools' }, ...out.tools)] : []), out.body));
   }
 
   if (!(ctx.id > 0)) {
