@@ -71,7 +71,9 @@ function fail(msg: string): never { throw new HttpError(400, msg); }
  * CP 호출. 계정 id 는 **여기서** 실린다(호출부가 넣지 않는다 — 넣을 수 있으면 언젠가 남의 것이 실린다).
  * ⚠ CP 가 안 잡히면 502 로 끊는다. "빈 목록"으로 떨어뜨리면 사람은 **워크스페이스가 사라졌다**고 읽는다.
  */
-export async function callCp<T>(t: CpTarget, path: string, body: Record<string, unknown> = {}): Promise<T> {
+export async function callCp<T>(
+  t: CpTarget, path: string, body: Record<string, unknown> = {}, opts: { timeoutMs?: number } = {},
+): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`${t.base}${path}`, {
@@ -82,7 +84,9 @@ export async function callCp<T>(t: CpTarget, path: string, body: Record<string, 
         "x-lively-tenant": t.slug,
       },
       body: JSON.stringify({ ...body, account_id: t.accountId }),
-      signal: AbortSignal.timeout(20_000),
+      //  기본 20초. 메일까지 보내는 창구(초대·다시 보내기)는 CP 안의 SES 호출(최대 20초)이 얹히므로 더 길게 준다(#3834) —
+      //   여기서 먼저 끊으면 초대는 발급됐는데 화면은 502 가 되어 사람이 링크를 잃는다.
+      signal: AbortSignal.timeout(opts.timeoutMs ?? 20_000),
     });
   } catch {
     throw new HttpError(502, "계정 서버에 연결하지 못했습니다 — 잠시 뒤 다시 시도해 주세요.");
