@@ -668,3 +668,131 @@ a.ctx-preview-t:hover { color: var(--blue); }
 .ctx-hint { margin: 0 0 14px; font-size: 13px; color: var(--muted); word-break: keep-all; }
 @media (max-width: 720px) { .ctx-hd-app { font-size: 14px; padding-right: 10px; } }
 .cxm-src-gl { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ══ 수집기 화면(#3830 비개발자 개편) — 접두 cxc- ══════════════════════════════════════
+ *  목록은 **한 상자 안의 행**(DS §6.6 리스트 상자: radius 16 · 행 사이 --line-row · hover 틴트). 종전엔 수집기마다
+ *  카드 한 장이 따로 떠 있어 "카드 하나하나가 수집기라는 느낌이 안 든다"(원준 2026-09-10)는 지적을 받았다.
+ *  행 문법: [서비스 로고 36] [이름 + 상태점] / [「Notion 수집기」 · 리브가 만듦 · 주기 · 마지막 수집] … [스위치][지금 수집][설정]
+ *  편집은 행 아래로 펼쳐진다(모달 아님 — 다른 수집기 상태를 보면서 만진다). 색은 상태점·경고·리브 표식 셋뿐. */
+.cxc { max-width: 1160px; }
+.cxc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin: 0 0 14px; }
+.cxc-head-main { min-width: 0; }
+.cxc-title { display: flex; align-items: baseline; gap: 7px; margin: 0 0 4px; font-size: 16px; font-weight: 800; color: var(--ink); letter-spacing: -0.2px; }
+.cxc-title-n { font-size: 13px; font-weight: 700; color: var(--muted-head); font-variant-numeric: tabular-nums; }
+.cxc-lead { margin: 0; font-size: 13px; color: var(--ink-sub); line-height: 1.55; word-break: keep-all; }
+.cxc-head-acts { flex: none; display: flex; align-items: center; gap: 8px; padding-top: 2px; }
+.cxc-ro { display: inline-flex; align-items: center; height: 24px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--bg-tint-2); color: var(--muted-head); font-size: 11px; font-weight: 700; }
+
+/* 목록 상자 */
+.cxc-list { border: 1px solid var(--line); border-radius: 16px; background: var(--bg); overflow: hidden; }
+.cxc-list + .cxc-list { margin-top: 14px; }
+.cxc-row { display: flex; align-items: flex-start; gap: 14px; padding: 14px 18px; border-top: 1px solid var(--line-row); flex-wrap: wrap; }
+.cxc-row:first-child { border-top: 0; }
+.cxc-row:hover { background: var(--bg-tint); }
+.cxc-row.is-editing { background: var(--bg-tint); }
+.cxc-row-local { background: var(--bg-tint); }
+.cxc-row-local:hover { background: var(--bg-tint); }
+.cxc-tile.svc-tile { width: 36px; height: 36px; border-radius: 10px; margin-top: 1px; }
+.cxc-tile.svc-tile svg { width: 20px; height: 20px; }
+.cxc-tile-local { background: var(--bg-punch); color: var(--blue); }
+.cxc-main { flex: 1 1 0; min-width: 160px; display: flex; flex-direction: column; gap: 4px; }   /* 좁아도 로고 옆에 붙어 있고, 액션 줄만 아래로 내려간다 */
+.cxc-t { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 22px; }
+.cxc-name { font-size: 14.5px; font-weight: 700; color: var(--ink); letter-spacing: -0.1px; }
+.cxc-row.is-off .cxc-name { color: var(--ink-sub); }
+/* 상태 — 점 + 말(색만으로 말하지 않는다). 켜짐은 민트, 꺼짐은 빈 점. */
+.cxc-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--muted-head); }
+.cxc-state-dot { width: 7px; height: 7px; border-radius: 50%; background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2); flex: none; }
+.cxc-state.is-on { color: var(--mint-deep); }
+.cxc-state.is-on .cxc-state-dot { background: var(--mint); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--mint) 22%, transparent); }
+.cxc-m { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted-head); line-height: 1.5; }
+.cxc-kind { font-weight: 600; color: var(--ink-sub); }
+.cxc-sep { color: var(--muted-3); }
+.cxc-who { color: var(--muted); }
+/* 리브가 만든 수집기 — 틴트 + 진한 잉크(채운 컬러 필 금지, DS §6.3). 리브의 민트 한 방울. */
+.cxc-liv { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px 0 6px; border-radius: 999px;
+  background: var(--bg-success); border: 1px solid var(--ok-line-2); color: var(--ok-ink); font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+.cxc-liv .cxc-ic { width: 12px; height: 12px; color: var(--mint-deep); }
+.cxc-ic { width: 14px; height: 14px; flex: none; }
+/* 문제 줄 — 문제일 때만 선다. 경고 사중주(bg/line/ink). */
+.cxc-issue { display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; padding: 4px 10px; border-radius: 8px;
+  background: var(--warn-bg); border: 1px solid var(--warn-line); color: var(--warn-ink); font-size: 12.5px; font-weight: 600; align-self: flex-start; }
+.cxc-issue .cxc-ic { color: var(--warn-deep); }
+.cxc-issue .btn-text { padding: 0; font-size: 12.5px; }
+.cxc-acts { flex: none; display: flex; align-items: center; gap: 8px; margin-left: auto; padding-top: 2px; }
+/* 스위치 — DS §6.4 규격(40×23). [외부 앱 연결]의 .cn-sw 와 같은 모양, 이 화면 파일에 국소로 둔다. */
+.cxc-sw { appearance: none; -webkit-appearance: none; width: 40px; height: 23px; margin: 0 4px 0 0; border: 0; border-radius: 999px;
+  background: var(--muted-3-line); position: relative; cursor: pointer; flex: none; transition: background-color 150ms ease; }
+.cxc-sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 19px; height: 19px; border-radius: 50%; background: var(--on-fill); transition: left 150ms ease; }
+.cxc-sw:checked { background: var(--blue-fill); }
+.cxc-sw:checked::after { left: 19px; }
+.cxc-sw:disabled { opacity: .55; cursor: not-allowed; }
+.cxc-sw:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+/* 빈 상태 — 사실 + 다음 행동. */
+.cxc-empty { padding: 36px 20px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.cxc-empty-t { margin: 0; font-size: 15px; font-weight: 700; color: var(--ink); }
+.cxc-empty-d { margin: 0 0 8px; font-size: 13.5px; color: var(--ink-sub); max-width: 52ch; word-break: keep-all; }
+
+/* ── 편집기 — 행 아래로 펼쳐진다. 기본 설정(보이는 것) / 고급 설정(접힘). ── */
+.cxc-editor { flex: 1 1 100%; margin: 6px 0 2px; padding: 18px 20px 16px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); }
+.cxc-ed-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.cxc-ed-t { font-size: 15px; font-weight: 800; color: var(--ink); }
+/* 리브 안내 — 정보 배너 사중주. */
+.cxc-note { display: flex; gap: 10px; align-items: flex-start; margin: 0 0 16px; padding: 12px 14px; border-radius: 12px;
+  background: var(--bg-note); border: 1px solid var(--line-note); color: var(--ink-note); font-size: 13px; line-height: 1.55; }
+.cxc-note > .cxc-ic { width: 16px; height: 16px; margin-top: 2px; color: var(--mint-deep); }
+.cxc-note p { margin: 0 0 8px; word-break: keep-all; }
+.cxc-guide { margin: 0 0 16px; padding: 12px 14px; border-radius: 12px; background: var(--bg-note); border: 1px solid var(--line-note); }
+.cxc-guide > summary { font-size: 13.5px; font-weight: 700; color: var(--ink-note); cursor: pointer; }
+.cxc-guide-p { margin: 10px 0 0; font-size: 13px; color: var(--ink-note); line-height: 1.6; word-break: keep-all; }
+.cxc-guide-steps { margin: 10px 0 8px; padding-left: 20px; font-size: 13px; color: var(--ink-sub); line-height: 1.7; }
+.cxc-guide p:last-child { margin: 0; }
+.cxc-sec { display: grid; gap: 14px; }
+.cxc-sub { margin: 0; font-size: 12px; font-weight: 800; letter-spacing: 0; color: var(--muted-head); }
+.cxc-field { display: grid; gap: 6px; }
+.cxc-label { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.cxc-hint { margin: 0; font-size: 12.5px; color: var(--ink-sub); line-height: 1.5; word-break: keep-all; }
+.cxc-in { width: 100%; box-sizing: border-box; padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg);
+  color: var(--ink); font: inherit; font-size: 14px; font-weight: 500; }
+.cxc-in::placeholder { color: var(--muted-2); }
+.cxc-in:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-color: var(--blue); }
+.cxc-in:disabled { background: var(--bg-tint); color: var(--ink-sub); }
+.cxc-pick-row { display: flex; gap: 8px; align-items: center; }
+.cxc-pick-row .cxc-in { flex: 1; min-width: 0; }
+.cxc-check { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; color: var(--ink-sub); }
+/* 고급 설정 — 접힘. 열면 틴트 상자 안에 칸이 선다(기본과 재질이 다르다 = 여긴 리브 몫이라는 신호). */
+.cxc-adv { margin-top: 18px; border-top: 1px solid var(--line-row); padding-top: 12px; }
+.cxc-adv > summary { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; cursor: pointer; list-style: none; }
+.cxc-adv > summary::-webkit-details-marker { display: none; }
+.cxc-adv > summary::before { content: "▸"; font-size: 11px; color: var(--muted-2); }
+.cxc-adv[open] > summary::before { content: "▾"; }
+.cxc-adv-t { font-size: 13.5px; font-weight: 700; color: var(--ink-sub); }
+.cxc-adv-d { font-size: 12.5px; color: var(--muted); }
+.cxc-adv-body { display: grid; gap: 14px; margin-top: 12px; padding: 14px 16px; border-radius: 12px; background: var(--bg-tint); border: 1px solid var(--line-row); }
+.cxc-ed-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+.cxc-ed-foot-l { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* ── 만들기: 앱 고르기 — 로고 타일 + 이름 + 한 줄. ── */
+.cxc-chooser { padding: 16px 18px 14px; margin-bottom: 14px; }
+.cxc-chooser-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+.cxc-chooser-t { display: block; font-size: 15px; font-weight: 800; color: var(--ink); margin-bottom: 4px; }
+.cxc-chooser .cxc-sub { margin: 14px 0 8px; }
+.cxc-preset-grid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+.cxc-preset { display: flex; align-items: center; gap: 11px; text-align: left; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--bg); cursor: pointer; font: inherit; color: inherit;
+  transition: border-color 120ms ease, background 120ms ease; }
+.cxc-preset:hover { border-color: var(--blue); background: var(--bg-tint); }
+.cxc-preset:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.cxc-preset-x { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cxc-preset-t { font-size: 14px; font-weight: 700; color: var(--ink); }
+.cxc-preset-d { font-size: 12px; color: var(--muted-head); line-height: 1.45; }
+.cxc-foot { margin: 14px 0 0; font-size: 12.5px; color: var(--muted); }
+.cxc-foot a { color: var(--blue); font-weight: 600; }
+
+@media (max-width: 720px) {
+  .cxc-head { flex-direction: column; }
+  .cxc-row { padding: 12px 14px; }
+  .cxc-acts { margin-left: 0; width: 100%; }
+  .cxc-editor { padding: 14px; }
+}
