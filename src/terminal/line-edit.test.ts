@@ -92,17 +92,39 @@ t("C5 선택 + ⌘C → 선택을 복사", () => {
 t("C6 ★선택 + Ctrl+C → 뺏지 않는다(터미널의 «중단»)", () => {
   assert.deepEqual(decideKey(k("c", { ctrlKey: true }), SEL), { k: "clear" });
 });
-t("C7 선택 + Enter·Esc·맨 화살표 → 선택만 거두고 흘린다", () => {
-  for (const key of ["Enter", "Escape", "ArrowLeft", "ArrowUp", "Tab"]) {
+t("C7 캐럿이 선택 밖으로 가거나 줄이 끝나는 키만 거둔다", () => {
+  for (const key of ["Enter", "Escape", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown", "Tab"]) {
     assert.deepEqual(decideKey(k(key), SEL), { k: "clear" }, key);
   }
+});
+t("C7b ★수정자 키를 누르는 것만으로는 선택이 사라지지 않는다 — 선택을 만드는 동작 자체가 선택을 죽이던 버그", () => {
+  for (const key of ["Shift", "Meta", "Control", "Alt", "CapsLock", "AltGraph", "Dead"]) {
+    assert.deepEqual(decideKey(k(key, { shiftKey: key === "Shift" }), SEL), { k: "pass" }, key);
+  }
+  // ⌘C 하려고 ⌘ 를 먼저 누르는 흐름: ⌘ keydown 에서 선택이 살아 있어야 그 다음 ⌘C 가 «선택 복사» 가 된다
+  assert.deepEqual(decideKey(k("Meta", { metaKey: true }), SEL), { k: "pass" });
+  assert.deepEqual(decideKey(k("c", { metaKey: true }), SEL), { k: "copy" });
+});
+t("C7c 기능키·미디어키처럼 모르는 키는 선택을 건드리지 않는다(모르면 그대로 둔다)", () => {
+  for (const key of ["F5", "F12", "AudioVolumeUp", "Insert", "ContextMenu"]) {
+    assert.deepEqual(decideKey(k(key), SEL), { k: "pass" }, key);
+  }
+});
+t("C7d Shift+화살표 위/아래는 앱이 무시하므로 선택도 그대로 둔다", () => {
+  assert.deepEqual(decideKey(k("ArrowUp", { shiftKey: true }), SEL), { k: "pass" });
+  assert.deepEqual(decideKey(k("ArrowDown", { shiftKey: true }), SEL), { k: "pass" });
+});
+t("C7e Ctrl/⌘ + 글자는 줄을 건드리는 명령이라 선택을 거둔다(^C 중단 · ⌘V 붙여넣기)", () => {
+  assert.deepEqual(decideKey(k("c", { ctrlKey: true }), SEL), { k: "clear" });
+  assert.deepEqual(decideKey(k("u", { ctrlKey: true }), SEL), { k: "clear" });
+  assert.deepEqual(decideKey(k("v", { metaKey: true }), SEL), { k: "clear" });
 });
 t("C8 선택이 없으면 ⌫ 는 손대지 않는다", () => {
   assert.deepEqual(decideKey(k("Backspace"), MAC), { k: "pass" });
   assert.deepEqual(decideKey(k("a"), MAC), { k: "pass" });
 });
-t("C9 키 이름이 비어 있어도 «글자» 로 오인하지 않는다", () => {
-  assert.deepEqual(decideKey(k(""), SEL), { k: "clear" });
+t("C9 키 이름이 비어 있어도 «글자» 로 오인하지 않고, 선택도 건드리지 않는다", () => {
+  assert.deepEqual(decideKey(k(""), SEL), { k: "pass" });   // 모르는 것은 그대로 둔다
   assert.deepEqual(decideKey(k(""), MAC), { k: "pass" });
 });
 
