@@ -17,7 +17,7 @@ const src = (p) => join(root, "web", "standalone", p);
 const out = (p) => join(root, "public", p);
 
 // 빌드 스탬프 = 단독 페이지 소스 전체의 콘텐츠 해시(앞 8자). 내용이 같으면 값도 같다(재빌드로 무의미하게 안 바뀜).
-const STAMP_INPUTS = ["terminal.ts", "terminal.entry.ts", "ctx-lite.ts", "md.ts", "md.entry.ts", "page-scrollbar.ts"];
+const STAMP_INPUTS = ["terminal.ts", "terminal.entry.ts", "ctx-lite.ts", "line-edit.ts", "md.ts", "md.entry.ts", "page-scrollbar.ts"];
 const stamp = (() => {
   const h = createHash("sha256");
   for (const f of STAMP_INPUTS) h.update(f).update("\0").update(readFileSync(src(f)));
