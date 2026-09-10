@@ -14,6 +14,8 @@
 //  · 허브 — 중앙 게이트웨이는 노드와 호스트가 다르다. 허브의 클라이언트 포트로 보내면 허브가 slug→노드를 해석해 역방향
 //    연결로 내려보낸다. 경로 접두 `/t/<slug>` 와 slug 귀속 토큰(HMAC-SHA256(secret, "hub:"+slug) hex — lvly-cloud
 //    brokernet.hubClientToken 과 같은 구성)이 그 계약이다.
+//    세션 컨테이너 exec 3단엔 `x-lvly-session` 도 싣는다(#3708) — 허브가 slug 보다 먼저 그 세션의 라우트로 노드를 고른다.
+//    안 실으면 첫 홉이 테넌트 핀 노드로 가서 그 브로커가 세션 노드로 한 번 더 전달한다(2홉).
 //
 // ── 규율 ───────────────────────────────────────────────────────────────────────
 //  ⚠ 환경변수를 읽지 않는다 — 전송 설정은 **인자로만** 받는다(코어 규율: 토폴로지 env 는 exec-topology 하나만 읽는다.
@@ -31,7 +33,7 @@ import type { SessionRow, TmuxOutcome } from "./tmux-route.js";
 export type BrokerTransport =
   /** 유닉스 소켓 — 헤더·접두 없음(신원 = 어느 소켓). */
   | { kind: "socket"; socketPath: string }
-  /** 허브 — 헤더 `x-lvly-channel-auth` = HMAC-SHA256(secret, "hub:"+slug) hex · 경로 접두 `/t/<slug>`. */
+  /** 허브 — 헤더 `x-lvly-channel-auth` = HMAC-SHA256(secret, "hub:"+slug) hex · 경로 접두 `/t/<slug>` · 세션 컨테이너 exec 엔 `x-lvly-session`. */
   | { kind: "hub"; url: string; secret: string; slug: string };
 
 export interface BrokerClient {
@@ -54,6 +56,28 @@ export const HUB_AUTH_HEADER = "x-lvly-channel-auth";
  */
 export const LIST_SCOPE_HEADER = "x-lvly-list-scope";
 export const LIST_SCOPE_NODE = "node";
+
+/**
+ * 세션 지목 헤더(#3708) — lvly-cloud `brokernet.CH_SESSION_HEADER` 와 **같은 이름**이어야 한다. 허브는 이걸 보면
+ *  테넌트 배치보다 **먼저** 그 세션의 라우트로 첫 홉을 고른다(#3681 ③). 이름이 한 글자만 달라도 오류가 아니라
+ *  **조용히 테넌트 배치로 떨어지고**, 핀 노드의 브로커가 세션 노드로 한 번 더 전달한다(2홉).
+ */
+export const SESSION_HEADER = "x-lvly-session";
+/** 허브가 받는 세션 id 규격 — lvly-cloud `hubsessionroute.SAFE_SESSION` 과 같은 자. */
+const HUB_SAFE_SESSION = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+/**
+ * 컨테이너 이름 → 허브에 밝힐 세션 id(순수). 밝히면 안 되는 이름이면 null 이다.
+ *  · 접두 `lvly-s-<slug>-` 가 맞아야 한다 — 브로커 `sessionIdFromContainer` 와 같은 규칙.
+ *  · `fs` 는 세션이 아니라 파일 op 컨테이너다(브로커의 분류: «`-fs` 는 파일 op, 그 밖의 `lvly-s-` 접두는 세션»).
+ *  · 허브 규격 밖이면 안 싣는다 — 실어 봐야 허브가 «형식 밖» 을 찍고 배치로 떨어질 뿐이다.
+ */
+export function sessionOfContainer(slug: string, container: string): string | null {
+  const prefix = `lvly-s-${slug}-`;
+  if (!container.startsWith(prefix)) return null;
+  const sid = container.slice(prefix.length);
+  return sid !== "fs" && HUB_SAFE_SESSION.test(sid) ? sid : null;
+}
 /** 허브 클라이언트 토큰(순수) — lvly-cloud brokernet.hubClientToken 과 같은 구성. slug 에 묶여 탈취해도 그 테넌트뿐이다. */
 export function hubClientToken(secret: string, slug: string): string {
   return createHmac("sha256", secret).update(`hub:${slug}`).digest("hex");
@@ -126,6 +150,18 @@ export function makeBrokerClient(
   const timeoutMs = opts?.timeoutMs ?? 15_000;
   const wire = wireOf(t);
 
+  /**
+   * 세션 컨테이너 exec 3단에 싣는 세션 지목(#3708) — **허브 전송에서만**, 그리고 **세 요청 전부에** 싣는다.
+   *  `/exec/<id>/start`·`/json` 은 URL 에 세션이 없어 이 헤더가 허브의 유일한 단서다 — 하나라도 빠지면 그 요청만
+   *  테넌트 핀 노드로 가서 그 브로커가 한 번 더 전달한다(참고 구현: lvly-cloud `session-exec-relay.cjs` 의 AUTH).
+   *  소켓은 싣지 않는다 — 이 헤더를 읽는 것은 허브뿐이고 브로커는 안 읽는다.
+   */
+  const sessionHeadersFor = (container: string): Record<string, string> | undefined => {
+    if (t.kind !== "hub") return undefined;
+    const sid = sessionOfContainer(t.slug, container);
+    return sid === null ? undefined : { [SESSION_HEADER]: sid };
+  };
+
   /** 요청-응답 한 번. 비-2xx 도 resolve(호출자가 상태로 갈린다) · 전송 오류·타임아웃은 reject. */
   const call = (method: "GET" | "POST", path: string, body?: unknown, extra?: Record<string, string>): Promise<Reply> => new Promise((resolve, reject) => {
     const data = body === undefined ? null : JSON.stringify(body);
@@ -144,12 +180,12 @@ export function makeBrokerClient(
   });
 
   /** exec-start — 101 업그레이드 뒤 raw 스트림을 끝까지 읽는다. 업그레이드가 아니면·끊기면·유휴 타임아웃이면 reject. */
-  const startAndCapture = (execId: string): Promise<{ stdout: string; stderr: string }> => new Promise((resolve, reject) => {
+  const startAndCapture = (execId: string, extra?: Record<string, string>): Promise<{ stdout: string; stderr: string }> => new Promise((resolve, reject) => {
     const data = JSON.stringify({ Detach: false, Tty: false });
     const rq = http.request({
       ...wire.base, agent: false, method: "POST", path: `${wire.prefix}/exec/${execId}/start`,
       headers: {
-        ...wire.headers, "content-type": "application/json", "content-length": String(Buffer.byteLength(data)),
+        ...wire.headers, ...extra, "content-type": "application/json", "content-length": String(Buffer.byteLength(data)),
         connection: "Upgrade", upgrade: "tcp",
       },
       timeout: timeoutMs,
@@ -198,11 +234,12 @@ export function makeBrokerClient(
     },
 
     async execCapture(container, argv) {
+      const via = sessionHeadersFor(container);   // #3708 — 세 요청이 같은 값을 싣는다(허브 · 세션 컨테이너일 때만)
       // ① exec-create
       let created: Reply;
       try {
         created = await call("POST", `/containers/${encodeURIComponent(container)}/exec`,
-          { AttachStdout: true, AttachStderr: true, Tty: false, Cmd: argv });
+          { AttachStdout: true, AttachStderr: true, Tty: false, Cmd: argv }, via);
       } catch (e) {
         return fail(`broker exec-create 실패: ${(e as Error).message}`);
       }
@@ -215,12 +252,12 @@ export function makeBrokerClient(
 
       // ② exec-start (101 → raw 스트림)
       let captured: { stdout: string; stderr: string };
-      try { captured = await startAndCapture(execId); }
+      try { captured = await startAndCapture(execId, via); }
       catch (e) { return fail(`broker exec-start 실패: ${(e as Error).message}`); }
 
       // ③ exec-inspect → 종료코드
       try {
-        const r = await call("GET", `/exec/${execId}/json`);
+        const r = await call("GET", `/exec/${execId}/json`, undefined, via);
         if (r.status < 200 || r.status >= 300) return { code: 1, stdout: captured.stdout, stderr: `${captured.stderr}${captured.stderr && !captured.stderr.endsWith("\n") ? "\n" : ""}broker exec-inspect 실패: ${r.status}: ${r.body.slice(0, 200)}` };
         const j = JSON.parse(r.body) as { Running?: unknown; ExitCode?: unknown };
         const code = typeof j.ExitCode === "number" ? j.ExitCode : 1;
