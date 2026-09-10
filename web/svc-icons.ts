@@ -46,4 +46,8 @@ function svcTile(key: string, label: string, on: boolean) {
   }, svcLogo(key) || fallbackMark(label));
 }
 
-export { SVC_BRAND, svcTile };
+/** 수집기 preset 키 → 로고 표(svc-logos)의 키. 표에 없는 키는 그대로 두면 svcTile 이 첫 글자 타일로 떨어진다. */
+const PRESET_SVC: Record<string, string> = { gdrive: 'google-drive', google_drive: 'google-drive', gmail: 'google-gmail', gcal: 'google-calendar', google_calendar: 'google-calendar' };
+function presetSvcKey(presetKey: string): string { const k = String(presetKey || '').toLowerCase(); return PRESET_SVC[k] || k; }
+
+export { SVC_BRAND, presetSvcKey, svcTile };

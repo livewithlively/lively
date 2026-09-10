@@ -77,7 +77,7 @@ const STAGES: CtxStage[] = [
   },
   {
     key: 'sources', label: '수집기', adminEdit: true,
-    hint: '외부 서비스에서 자료를 가져오는 연결 — 무엇을, 얼마나 자주',
+    hint: '외부 앱의 내용을 자료함으로 가져오는 기계 — 무엇을, 얼마나 자주 가져올지 정합니다',
     items: [
       { key: 'collectors', label: '수집기', draw: (b) => sourcesScreen(b) },
       { key: 'presets', label: '새 소스 만들기', draw: (b) => presetsScreen(b) },
@@ -116,15 +116,10 @@ async function stack(b: HTMLElement, parts: Array<(h: HTMLElement) => Promise<vo
   }
 }
 
-/** 수집기 — 연결 목록 + 「새 소스 만들기」 입구(상시 화면이 아니라 하위 갈래로, #762). */
+/** 수집기 — 목록 하나. 「새 소스 만들기」(직접 정의하는 방식)는 만들기 흐름 안의 링크로만 들어간다(#3830 — 비개발자
+ *  화면에서 개발자용 입구를 상시 카드로 세우지 않는다). */
 async function sourcesScreen(b: HTMLElement): Promise<void> {
-  await stack(b, [
-    (h) => renderCollectors(h),
-    (h) => { h.replaceChildren(el('div', { class: 'card ctx-crosslink' },
-      el('b', { text: '직접 정의하는 소스 (HTTP · RSS)' }),
-      el('p', { class: 'admin-hint', text: '정해진 연동이 없는 곳도 주소만 있으면 소스로 만들 수 있습니다.' }),
-      el('a', { class: 'btn btn-ghost btn-sm', href: '#/context/sources/presets', text: '새 소스 만들기 →' }))); },
-  ]);
+  await stack(b, [(h) => renderCollectors(h)]);
 }
 
 /** 새 소스 만들기(수집 방식 프리셋) — 수집기 화면의 하위 갈래. 돌아갈 길을 화면이 준다. */

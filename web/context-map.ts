@@ -21,15 +21,13 @@ import { api, el, fmtNum, relTime } from './core.js';
 import { skeleton } from './ui-primitives.js';
 import { stageHealthLevels } from './context-pipeline.js';
 import { renderFindings } from './context-manage.js';
-import { svcTile } from './svc-icons.js';
+import { presetSvcKey, svcTile } from './svc-icons.js';
 import { svcLogo } from './svc-logos.js';
 import { appGlassIcon } from './v2/glass-icon.js';   // 리프 모듈(#3830) — 셸 레지스트리를 물지 않는다
 import { icon as lineIcon } from './v2/icons.js';
 
 const fmt = (n: any) => (Number.isFinite(Number(n)) ? fmtNum(Number(n)) : '—');
 
-/** 수집기 preset 키 → 로고 표(svc-logos)의 키. 표에 없는 키는 그대로 두면 svcTile 이 첫 글자 타일로 떨어진다. */
-const PRESET_SVC: Record<string, string> = { gdrive: 'google-drive', google_drive: 'google-drive', gmail: 'google-gmail', gcal: 'google-calendar', google_calendar: 'google-calendar' };
 /** 서비스 키 → 사람 말. 로고가 그림을 맡으므로 이름은 발치·툴팁에만 쓴다. */
 const SVC_LABEL: Record<string, string> = {
   slack: '슬랙', notion: '노션', github: '깃허브', gitlab: '깃랩', 'google-drive': '드라이브', 'google-gmail': 'Gmail', 'google-calendar': '캘린더',
@@ -44,7 +42,7 @@ function sourceFace(system: string, container: string | null): { label: string; 
   const s = String(system || '').toLowerCase();
   if (s === 'authored') return { label: container === 'transcript' ? '회의 전사록' : '직접 적은 것', svc: null, glyph: 'doc' };
   if (s === 'local' || s === 'local_file' || s === 'file') return { label: '올린 파일', svc: null, glyph: 'src' };
-  const svc = PRESET_SVC[s] || s;
+  const svc = presetSvcKey(s);
   const short = container ? String(container).split('/').pop() || '' : '';
   const name = svcLabel(svc, s.replace(/[_-]/g, ' '));
   const chatty = ['discord', 'slack', 'teams', 'telegram'].includes(s);
@@ -83,7 +81,7 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
   for (const c of collectors) {
     const raw = String(c.preset_key || c.key || '').toLowerCase();
     if (!raw) continue;
-    const svc = PRESET_SVC[raw] || raw;
+    const svc = presetSvcKey(raw);
     const cur = bySvc.get(svc) || { n: 0, label: svcLabel(svc, String(c.preset_label || raw)) };
     cur.n += 1; bySvc.set(svc, cur);
   }
