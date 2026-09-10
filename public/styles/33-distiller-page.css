@@ -118,3 +118,68 @@ textarea.dst-in { resize: vertical; max-width: 860px; }
   .dst-head-acts { width: 100%; }
   .dst-row2 { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ══ 4차(#3830) — 좌측 목차를 걷고 번호 섹션 세 개 + 오른쪽 미리보기. 고급 설정은 맨 아래 접힘. ═══════════ */
+.dst-grid-2 { grid-template-columns: minmax(0, 1fr) var(--dst-reflect-w); }
+.dsl-sec { margin: 0 0 14px; padding: 22px 24px 22px; }
+.dsl-sec:last-child { margin-bottom: 0; }
+.dsl-sec-h { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
+.dsl-eyebrow { font-size: 11.5px; font-weight: 800; color: var(--blue); letter-spacing: .3px; }
+.dsl-sec-t { margin: 0; font-size: 17px; font-weight: 800; letter-spacing: -.2px; color: var(--ink); }
+.dsl-sec-d { margin: 2px 0 0; font-size: 13px; line-height: 1.55; color: var(--ink-sub); word-break: keep-all; }
+.dsl-sec .dst-field:last-child { margin-bottom: 0; }
+.dsl-sec-name { padding: 18px 24px; }
+.dsl-name-row { display: flex; align-items: flex-end; gap: 22px; flex-wrap: wrap; }
+.dsl-name-row .dst-field { flex: 1 1 320px; margin: 0; }
+.dsl-on { display: inline-flex; align-items: center; gap: 12px; flex: none; padding: 6px 0; cursor: pointer; }
+.dsl-on > span { display: flex; flex-direction: column; gap: 1px; }
+.dsl-on b { font-size: 13.5px; color: var(--ink); }
+.dsl-on-d { font-size: 12px; color: var(--muted); }
+/* 자료 종류 — 얼굴 있는 선택 칩. 고른 것은 파란 테두리 + 선택 틴트(채움 금지). */
+.dst-kinds { gap: 8px; }
+.dsl-kind { position: relative; display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px 0 5px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--bg); cursor: pointer; font-size: 13px; font-weight: 600; color: var(--ink-sub);
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease; }
+.dsl-kind input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.dsl-kind:hover { border-color: var(--line-net-2); }
+.dsl-kind:has(input:checked) { border-color: var(--blue); background: var(--bg-sel); color: var(--ink); }
+.dsl-kind:has(input:focus-visible) { outline: 2px solid var(--blue); outline-offset: 2px; }
+.dsl-kind .svc-tile.dsl-kind-f { width: 22px; height: 22px; border-radius: 7px; }
+.dsl-kind .svc-tile.dsl-kind-f svg { width: 13px; height: 13px; }
+.dsl-kind .cxc-tile-ic { width: 13px; height: 13px; }
+/* 고급 설정 — 접힘 카드. */
+.dsl-adv { margin-top: 4px; padding: 14px 24px; border: 1px solid var(--line); border-radius: 16px; background: var(--bg-tint); }
+.dsl-adv > summary { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; cursor: pointer; list-style: none; }
+.dsl-adv > summary::-webkit-details-marker { display: none; }
+.dsl-adv > summary::before { content: "▸"; font-size: 11px; color: var(--muted-2); }
+.dsl-adv[open] > summary::before { content: "▾"; }
+.dsl-adv-t { font-size: 14px; font-weight: 800; color: var(--ink-sub); }
+.dsl-adv-d { font-size: 12.5px; color: var(--muted); }
+.dsl-adv-body { margin-top: 12px; display: grid; gap: 6px; }
+.dsl-adv-body .dst-fold { margin: 0; padding: 10px 14px; border: 1px solid var(--line-row); border-radius: 12px; background: var(--bg); }
+.dsl-adv-body .dst-fold > .btn-text { font-size: 13.5px; font-weight: 700; color: var(--ink); padding: 0; }
+.dsl-adv-body .dst-fold-body { margin-top: 12px; padding-left: 0; border-left: 0; }
+.dsl-adv-body .dst-fold .dst-fold { padding: 0; border: 0; background: transparent; }
+.dsl-adv-body .dst-fold .dst-fold > .btn-text { font-size: 13px; color: var(--ink-sub); }
+/* 미리보기 — 숫자가 주인공. 지시문은 접어 둔다(6천 자가 화면을 점령하지 않게). */
+.dsl-preview { gap: 6px; }
+.dsl-preview .dsl-eyebrow { margin: 0 0 2px; }
+.dsl-preview .dst-reflect-num { font-size: 24px; letter-spacing: -.4px; }
+.dsl-sample { display: flex; align-items: baseline; gap: 7px; min-width: 0; padding: 4px 0; border-top: 1px solid var(--line-row); font-size: 12.5px; }
+.dsl-sample:first-child { border-top: 0; }
+.dsl-sample .dsl-chip { flex: none; max-width: 40%; }
+.dsl-sample-t { flex: 1; min-width: 0; color: var(--ink-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsl-prompt { margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+.dsl-prompt > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; list-style: none; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); }
+.dsl-prompt > summary::-webkit-details-marker { display: none; }
+.dsl-prompt[open] > summary { color: var(--ink); }
+.dsl-prompt .dst-reflect-prompt { margin-top: 8px; max-height: 360px; }
+@media (max-width: 1180px) {
+  .dst-grid-2 { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 820px) {
+  .dsl-sec { padding: 16px; }
+}
+.dsl-sec-tt { display: flex; align-items: center; gap: 10px; }
+.dsl-num { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; flex: none;
+  background: var(--bg-punch); color: var(--blue); font-size: 12.5px; font-weight: 800; font-variant-numeric: tabular-nums; }

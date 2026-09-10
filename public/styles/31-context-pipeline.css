@@ -822,3 +822,57 @@ a.cxc-name:hover { color: var(--blue); }
 /* 증류기 설정 — 판마다 첫 줄 설명(사람 말) · 반사판 소제목 */
 .dst-intro { margin: 0 0 16px; padding: 10px 14px; border-radius: 10px; background: var(--bg-tint); color: var(--ink-sub); font-size: 13px; line-height: 1.6; word-break: keep-all; }
 .dst-reflect-sub { margin: 14px 0 6px; font-size: 12px; font-weight: 800; color: var(--muted-head); }
+
+/* ══ 증류기 목록 4차(#3830) — 흐름 카드: [읽는 곳] ══▶ [남길 기준] ══▶ [지식이 가는 곳] ═══════════════
+ *  표지 지도의 문법(흰 역 · 선로 · 켜진 구간만 흐름)을 증류기 한 장 안에 그대로 옮겼다. 증류기가 무엇을 하는 기계인지
+ *  글이 아니라 그림이 먼저 말한다. 색은 상태점·리브 표식·흐르는 선로 셋뿐. */
+.dsl-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 2px 0 18px; }
+.dsl-stat { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-tint); }
+.dsl-stat-n { font-size: 22px; font-weight: 800; letter-spacing: -.4px; color: var(--ink); line-height: 1.15; }
+.dsl-stat-l { font-size: 12px; font-weight: 600; color: var(--muted-head); }
+.dsl-stat.is-ok .dsl-stat-n { color: var(--mint-deep); }
+.dsl-stat.is-warn { background: var(--warn-bg); border-color: var(--warn-line); }
+.dsl-stat.is-warn .dsl-stat-n { color: var(--warn-ink); }
+.dsl-cards { display: grid; gap: 12px; }
+.dsl-card { padding: 16px 18px 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--bg); transition: border-color 120ms ease; }
+.dsl-card:hover { border-color: var(--line-net-2); }
+.dsl-card.is-off { background: var(--bg-tint); }
+.dsl-head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.dsl-head .cxc-main { flex: 1 1 260px; }
+.dsl-faces { display: inline-flex; align-items: center; flex: none; margin-top: 1px; }
+.dsl-faces .svc-tile { width: 34px; height: 34px; border-radius: 10px; box-shadow: 0 0 0 2px var(--bg); }
+.dsl-faces .svc-tile svg { width: 19px; height: 19px; }
+.dsl-faces .svc-tile + .svc-tile, .dsl-faces .svc-tile + .dsl-faces-n { margin-left: -9px; }
+.dsl-faces-n { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 10px; background: var(--bg-tint-2); box-shadow: 0 0 0 2px var(--bg); font-size: 11px; font-weight: 800; color: var(--muted-head); }
+.dsl-card.is-off .dsl-faces .svc-tile, .dsl-card.is-off .dsl-faces-n, .cxc-row.is-off .dsl-faces .svc-tile { box-shadow: 0 0 0 2px var(--bg-tint); }
+.cxc-tile-ic { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+/* 흐름 — 역 셋 + 선로 둘. */
+.dsl-flow { display: grid; grid-template-columns: minmax(0, 1.15fr) 34px minmax(0, 1.35fr) 34px minmax(0, 0.9fr); align-items: stretch; margin-top: 14px; }
+.dsl-st { display: flex; flex-direction: column; min-height: 108px; padding: 10px 12px 9px; border: 1px solid var(--line-net); border-radius: 12px; background: var(--surface); min-width: 0; }
+.dsl-card.is-off .dsl-st { background: var(--bg); }
+.dsl-st-k { font-size: 11px; font-weight: 800; color: var(--muted-head); margin-bottom: 7px; }
+.dsl-st-b { flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.5; color: var(--ink); }
+.dsl-st-f { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line-row); font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.dsl-st-f b { color: var(--ink); font-weight: 800; }
+.dsl-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.dsl-chip { display: inline-flex; align-items: center; max-width: 100%; padding: 2px 8px; border-radius: 999px; background: var(--bg-tint-2); color: var(--ink-sub); font-size: 11.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dsl-chip.is-all { background: var(--bg-punch); color: var(--ink-note); }
+.dsl-chip.is-ex { background: transparent; border: 1px dashed var(--line-net-2); color: var(--muted); }
+.dsl-chip.is-more { background: transparent; color: var(--muted); }
+.dsl-crit { margin: 0; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; word-break: keep-all; }
+.dsl-crit.is-default, .dsl-dest.is-default { color: var(--muted); }
+.dsl-dest { margin: 0; font-size: 13.5px; font-weight: 700; color: var(--ink); word-break: keep-all; }
+.dsl-wire { position: relative; min-width: 0; }
+.dsl-wire::before { content: ''; position: absolute; left: 2px; right: 6px; top: calc(50% - 1px); height: 3px; border-radius: 2px;
+  background: repeating-linear-gradient(90deg, var(--line-net-2) 0 8px, transparent 8px 14px); }
+.dsl-wire.is-flow::before { background: var(--line-net-2); }
+.dsl-wire.is-flow::after { content: ''; position: absolute; left: 2px; right: 6px; top: calc(50% - 1px); height: 3px; border-radius: 2px;
+  background: repeating-linear-gradient(90deg, var(--mint) 0 10px, transparent 10px 22px); opacity: .75; animation: cxm-flow 1.8s linear infinite; }
+.dsl-arr { position: absolute; right: -1px; top: calc(50% - 7px); width: 14px; height: 14px; fill: none; stroke: var(--line-net-2); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.dsl-wire.is-flow .dsl-arr { stroke: var(--mint-deep); }
+@media (prefers-reduced-motion: reduce) { .dsl-wire.is-flow::after { animation: none; } }
+@media (max-width: 820px) {
+  .dsl-stats { grid-template-columns: 1fr; }
+  .dsl-flow { grid-template-columns: 1fr; gap: 8px; }
+  .dsl-wire { display: none; }
+}
