@@ -1934,6 +1934,14 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   font-size: 13.5px; font-weight: 700; line-height: 1.5; }
 .v2-pg-ic { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
 .v2-pg-row:hover .v2-pg-ic { stroke: var(--blue); }
+/* 도는 세션이 하나도 없는 카드(#3778 2판) — **이름 자체가** «오늘은 여기 끝났다» 고 말한다.
+   오른쪽 끝 고리 하나로는 안 됐다: 손을 얹으면 .v2-sums 가 숨고(그 자리를 압정·＋·[→] 가 받는다)
+   목록을 훑는다는 건 곧 손을 얹는다는 것이라, 정작 보려는 순간에 신호가 없었다.
+   ⚠ 굵기는 안 건드린다 — 머리글 700 은 카드와 그 안 행의 위계를 만드는 값이라 그걸 흔들면 층이 무너진다.
+   ⚠ opacity 로 흐리지 않는다 — 그건 '꺼짐'이라 눌러도 안 열릴 것처럼 보인다(.v2-app-inst--past 와 같은 사유).
+   호버·선택 때는 제 색을 되찾는다 — 손을 얹으면 «살아 있고 누를 수 있다» 가 먼저다. */
+.v2-pg-row.past .v2-pg-t .n { color: var(--muted); }
+.v2-pg-row.past:hover .v2-pg-t .n, .v2-pg-row.past.act .v2-pg-t .n { color: var(--ink); }
 .v2-pg.open > .v2-pg-row .v2-car { transform: rotate(90deg); }
 .v2-pg-row .v2-sums { min-width: 0; margin-left: 4px; }
 .v2-pg-row .v2-cnt { flex: none; margin-left: 2px; }

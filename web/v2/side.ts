@@ -720,7 +720,15 @@ function grpSums(g: ProjGrp): HTMLElement | null {
 function projGrpHead(g: ProjGrp): HTMLElement {
   //  ⚠ `pinned` 는 **자리를 비워 두는 표식**이다 — 고정된 카드의 압정은 손을 떼도 서 있어야 하는데(그게 '고정됨'의
   //   유일한 표식이다) 압정도 ＋ 와 같은 절대위치라, 자리를 안 비우면 상태 점·개수 위에 겹쳐 앉는다(CSS .v2-pg-row.pinned).
-  const head = el('div', { class: 'v2-pg-row' + (g.active && !g.open ? ' act' : '') + (g.pinned ? ' pinned' : '') },
+  //  ★ 도는 세션이 하나도 없는 카드는 **카드 이름이 스스로** 그렇게 말한다(#3778 2판, 원준 2026-09-10).
+  //   1판은 오른쪽 끝 속 빈 고리 하나에만 맡겼는데 그게 안 읽혔다 — 실측 셋: ⓐ 고리는 채움이 없어(6px, 테두리만
+  //   #5D7197) 사이드바 바탕에 묻힌다(같은 6px 라도 «작업 중»은 채워져 있어 보인다) ⓑ **손을 얹는 순간 사라진다**
+  //   (.v2-pg-row:hover .v2-sums { visibility: hidden } — 그 자리를 압정·＋·[→] 가 받는다). 목록을 훑는다는 건
+  //   곧 손을 얹는다는 것이라, 정작 보려는 순간에 없다 ⓒ 카드 이름 색이 도는 카드와 **완전히 같았다**.
+  //   ⇒ 신호를 **호버가 뺏어가지 않는 자리**로 옮긴다. 행이 이미 쓰는 언어(흐린 톤)를 카드에도 쓰는 것이라
+  //    새 문법이 아니다. 고리는 그대로 두되(호버 전 두 번째 단서) 혼자 짊어지지는 않는다.
+  const allPast = !g.live && g.past > 0;
+  const head = el('div', { class: 'v2-pg-row' + (g.active && !g.open ? ' act' : '') + (g.pinned ? ' pinned' : '') + (allPast ? ' past' : '') },
     el('button', { class: 'v2-pg-t', type: 'button', 'aria-expanded': String(g.open),
       title: g.name + (g.id ? `\n#${g.id} · 세션 ${g.rows.length}` : '\n프로젝트에 붙지 않은 세션과 화면'),
       //  ⚠ **두 번째 클릭은 삼킨다** — 더블클릭은 «이름 고치기»(아래 dblclick)라, 접기가 두 번 일어나면 사람이 고른
