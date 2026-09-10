@@ -1445,7 +1445,12 @@ function doUndo(): void {
   // 앱이 되돌리기를 스스로 가진 판이면 앱의 것을 부르고 합성은 보내지 않는다(#3864 — 둘 다 보내면 두 번 되돌아간다).
   //  판은 가장 최근에 받은 pane 상태의 포그라운드 명령으로 판정한다(nativeUndoOk). 모르면 아래 합성.
   const cmd = lastKnownState ? lastKnownState.cmd : '';
-  if (nativeUndoOk(cmd)) { sendInput(SEQ.undo); dlog('undo', 'app cmd=' + cmd); return; }
+  if (nativeUndoOk(cmd)) {
+    // 합성 기록은 버린다 — 앱이 이미 지운 글자까지 세고 있어서, 재연결 등으로 판 확인이 잠깐 끊긴 사이 다음 되돌리기가
+    //  합성으로 떨어지면 그만큼 «앞에 있던 글자»(초안)를 더 지운다. 이후 친 것은 다시 센다.
+    undoStack.reset();
+    sendInput(SEQ.undo); dlog('undo', 'app cmd=' + cmd); return;
+  }
   const e = undoStack.pop();
   if (!e) { toast('되돌릴 것이 없어요'); return; }
   undoBusy = true;

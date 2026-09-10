@@ -890,7 +890,7 @@ t("L15 ⌘Z 도 같은 규칙 — 앱 되돌리기가 있으면 그것", async (
   h.mod.setupClipboard();
   h.mod.applyPaneState(stWithCmd("2.1.267"));
   h.mod.handleTermData("ab");
-  h.term._keyHandler(h.kev({ key: "z", metaKey: true, keyCode: 90 }));
+  assert.equal(h.term._keyHandler(h.kev({ key: "z", metaKey: true, keyCode: 90 })), false);
   assert.deepEqual(h.inputs(), ["ab", "\x1f"]);
 });
 t("L16 옛 판(2.1.236)·매니지드(docker)는 합성 그대로 — 윈도우 Ctrl+Z", async () => {
@@ -899,7 +899,7 @@ t("L16 옛 판(2.1.236)·매니지드(docker)는 합성 그대로 — 윈도우 
     h.mod.setupClipboard();
     h.mod.applyPaneState(stWithCmd(cmd));
     h.mod.handleTermData("ab");
-    h.term._keyHandler(h.kev({ key: "z", ctrlKey: true, keyCode: 90 }));
+    assert.equal(h.term._keyHandler(h.kev({ key: "z", ctrlKey: true, keyCode: 90 })), false, cmd);
     assert.deepEqual(h.inputs(), ["ab", "\x7f\x7f"], cmd);
   }
 });
@@ -909,8 +909,18 @@ t("L17 앱 되돌리기 판에선 보낸 직후(합성 스택이 빈 때)에도 
   h.mod.applyPaneState(stWithCmd("2.1.267"));
   h.mod.handleTermData("abc");
   h.mod.handleTermData("\r");
-  h.term._keyHandler(h.kev({ key: "z", ctrlKey: true, keyCode: 90 }));
+  assert.equal(h.term._keyHandler(h.kev({ key: "z", ctrlKey: true, keyCode: 90 })), false);
   assert.deepEqual(h.inputs(), ["abc", "\r", "\x1f"]);
+});
+t("L18 ★앱 되돌리기 뒤 판 확인이 끊겨(재연결 등) 합성으로 떨어져도, 앱이 이미 지운 글자를 다시 세어 앞 초안을 지우지 않는다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  h.mod.applyPaneState(stWithCmd("2.1.267"));
+  h.mod.handleTermData("ab");
+  assert.equal(h.term._keyHandler(h.kev({ key: "z", ctrlKey: true, keyCode: 90 })), false); // 앱이 "ab" 를 지운다
+  h.mod.applyPaneState(stWithCmd(""));                                                       // 판 확인이 끊겼다
+  assert.equal(h.term._keyHandler(h.kev({ key: "z", ctrlKey: true, keyCode: 90 })), false);
+  assert.deepEqual(h.inputs(), ["ab", "\x1f"], "합성 백스페이스가 나가면 «ab» 앞에 있던 글자를 지운다");
 });
 
 async function main(): Promise<void> {
