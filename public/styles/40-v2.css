@@ -2226,34 +2226,48 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-mention-row .v2-ppl-ava { width: 20px; height: 20px; font-size: 10px; }
 .v2-ppl-ava { width: 18px; height: 18px; border-radius: 50%; font-size: 9.5px; flex: none; }
 .pn-att-c.ppl { padding-left: 3px; background: var(--bg-tint-2); border-color: var(--bg-tint-2); color: var(--blue); }
-/* [⚙] 새 세션 기본값 창(session-defaults.ts) — ov-back/ov-box 위에 직접 짠 창(2판, 원준 2026-09-09).
-   항목 = 제목 + (?) + 펼쳐지는 설명 + 컨트롤 + 힌트. 두셋 중 하나 고르는 축은 나란한 단추(.v2-seg). */
-.ov-box.v2-def-box { max-width: 520px; padding: 22px 24px 18px; text-align: left; }
-.v2-def-box .ov-head { margin-bottom: 6px; }
-.v2-def-x { width: 28px; height: 28px; border: 0; border-radius: 8px; background: transparent; color: var(--muted-2); font-size: 14px; cursor: pointer; }
+/* [⚙] 새 세션 기본값 창(session-defaults.ts) — 2판(원준 2026-09-10 «가독성 영 엉망»).
+   고친 것 넷: ① 글자를 키우고 줄간격을 넓혔다(12.5→13.5px, 1.65) ② 고르는 줄을 가로 3칸에서 **세로 목록**으로
+   (한 칸 158px 에 부제가 접히던 것이 원인) ③ 항목 사이를 선 하나가 아니라 **여백 + 선**으로 갈랐다
+   ④ 제목·값·부연의 세 층을 크기와 색으로 분명히 나눴다(제목 14/650 · 값 13.5/600 · 부연 12.5 muted). */
+.ov-box.v2-def-box { max-width: 560px; padding: 24px 26px 20px; text-align: left; }
+.v2-def-box .ov-head { margin-bottom: 4px; }
+.v2-def-box .ov-head h3 { font-size: 18px; }
+.v2-def-x { width: 30px; height: 30px; border: 0; border-radius: 9px; background: transparent; color: var(--muted-2); font-size: 15px; cursor: pointer; }
 .v2-def-x:hover { color: var(--ink); background: var(--bg-tint); }
-.v2-def-lead { margin: 0 0 6px; font-size: 13px; line-height: 1.6; color: var(--muted); }
-.v2-def-f { padding: 14px 0 2px; }
+.v2-def-x:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.v2-def-lead { margin: 0 0 4px; font-size: 13.5px; line-height: 1.65; color: var(--muted); }
+
+/* 항목 — 제목 줄 · (?) 설명 · 컨트롤 · 부연. 위아래 여백이 선보다 먼저 항목을 가른다. */
+.v2-def-f { padding: 18px 0 4px; }
 .v2-def-f + .v2-def-f { border-top: 1px solid var(--line-row); }
-.v2-def-t { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; font-size: 13.5px; font-weight: 650; color: var(--ink); }
-.v2-def-q { flex: none; width: 18px; height: 18px; padding: 0; border: 1px solid var(--line-net-2); border-radius: 50%; background: transparent;
-  color: var(--muted); font: inherit; font-size: 11px; font-weight: 700; line-height: 1; cursor: pointer; display: inline-grid; place-items: center; }
+.v2-def-t { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 14px; font-weight: 650; line-height: 1.4; color: var(--ink); }
+.v2-def-q { flex: none; width: 19px; height: 19px; padding: 0; border: 1px solid var(--line-net-2); border-radius: 50%; background: transparent;
+  color: var(--muted); font: inherit; font-size: 11.5px; font-weight: 700; line-height: 1; cursor: pointer; display: inline-grid; place-items: center; }
 .v2-def-q:hover, .v2-def-q[aria-expanded="true"] { color: var(--blue); border-color: var(--blue); background: var(--bg-tint-2); }
 .v2-def-q:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-.v2-def-tip { margin: 0 0 10px; padding: 10px 13px; border-radius: 10px; background: var(--bg-tint); font-size: 12.5px; line-height: 1.65; color: var(--ink); }
+/* 설명 — 왼쪽 기둥으로 «이건 설명» 임을 표시한다(배경만으로는 컨트롤과 구분이 약했다). */
+.v2-def-tip { margin: 0 0 12px; padding: 11px 14px; border-left: 3px solid var(--line-net-2); border-radius: 0 10px 10px 0;
+  background: var(--bg-tint); font-size: 13px; line-height: 1.7; color: var(--ink); }
 .v2-def-tip[hidden] { display: none; }
 .v2-def-tip p { margin: 0; }
-.v2-def-tip p + p { margin-top: 6px; }
-.v2-def-hint { margin-top: 7px; font-size: 12px; line-height: 1.5; color: var(--muted-2); }
-.v2-def-sel { width: 100%; height: 36px; font-size: 13px; }
-.v2-seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }
-.v2-seg-b { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; padding: 8px 11px; border: 1px solid var(--line-net); border-radius: 10px;
+.v2-def-tip p + p { margin-top: 8px; }
+.v2-def-hint { margin-top: 9px; font-size: 12.5px; line-height: 1.6; color: var(--muted-2); }
+.v2-def-sel { width: 100%; height: 38px; font-size: 13.5px; }
+
+/* 고르는 줄 — 세로 목록. 줄마다 점 + 이름 + 부제 한 줄. */
+.v2-seg { display: flex; flex-direction: column; gap: 6px; }
+.v2-seg-b { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 11px 13px; border: 1px solid var(--line-net); border-radius: 11px;
   background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
-.v2-seg-b .t { font-size: 13px; font-weight: 600; }
-.v2-seg-b .d { font-size: 11.5px; line-height: 1.35; color: var(--muted-2); }
-.v2-seg-b:hover:not(:disabled) { background: var(--bg-tint); }
-.v2-seg-b[aria-checked="true"] { border-color: var(--blue); background: var(--bg-tint-2); color: var(--blue); }
-.v2-seg-b[aria-checked="true"] .d { color: var(--blue); opacity: .75; }
+.v2-seg-b .dot { flex: none; width: 15px; height: 15px; margin-top: 1px; border: 1.5px solid var(--line-net-2); border-radius: 50%; background: transparent; }
+.v2-seg-b .tx { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 9px; min-width: 0; }
+.v2-seg-b .t { font-size: 13.5px; font-weight: 600; line-height: 1.45; }
+.v2-seg-b .d { font-size: 12.5px; line-height: 1.45; color: var(--muted-2); }
+.v2-seg-b:hover:not(:disabled) { border-color: var(--line-net-2); background: var(--bg-tint); }
+.v2-seg-b[aria-checked="true"] { border-color: var(--blue); background: var(--bg-tint-2); }
+.v2-seg-b[aria-checked="true"] .t { color: var(--blue); }
+.v2-seg-b[aria-checked="true"] .d { color: var(--blue); opacity: .8; }
+.v2-seg-b[aria-checked="true"] .dot { border-color: var(--blue); border-width: 4.5px; }
 .v2-seg-b:disabled { opacity: .5; cursor: default; }
 .v2-seg-b:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
 .v2-def-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line-row); }
@@ -2261,5 +2275,5 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   .v2-dest-grid { grid-template-columns: 1fr; margin-top: 18px; }
   .v2-launch-gear { width: 38px; height: 38px; }
   .v2-mention { left: 6px !important; width: calc(100% - 12px); max-width: none; }
-  .v2-seg { grid-auto-flow: row; grid-auto-columns: auto; }
+  .ov-box.v2-def-box { padding: 18px 16px 14px; }
 }
