@@ -23,6 +23,11 @@
 import { api, cardHead, el, relTime, state, toast } from './core.js';
 
 /** 한 단계의 실행 잡 명세. actions 는 '이 단계의 잡으로 인정할 action' 목록(앞이 현행 권장 경로). */
+function statusWord(st: unknown): string {
+  const s = String(st || '');
+  return s === 'ok' ? '성공' : s === 'running' ? '진행 중' : s === 'canceled' ? '중지됨' : s ? '실패' : '';
+}
+
 export interface StageJobSpec {
   /** 카드 문구에 그대로 박히는 단계 이름 — '증류'·'분류'·'관리'·'수집'. */
   stage: string;
@@ -142,7 +147,8 @@ export async function stageJobCard(spec: StageJobSpec, rerender: () => void): Pr
     el('span', { class: 'pill' + (job.enabled ? ' pill-ok' : ''), text: job.enabled ? '켜짐' : '꺼짐' }),
     el('span', { class: 'pill', text: job.id }),
     el('span', { class: 'pill', text: intervalText(Number(job.interval_sec || 0)) }),
-    el('span', { text: job.last_run_at ? `  마지막 실행 ${relTime(job.last_run_at)} · ${job.last_status || ''}` : '  아직 실행 전' }));
+    //  상태는 사람 말로(#3830) — 'ok' 가 화면에 그대로 나갔다.
+    el('span', { text: job.last_run_at ? `  마지막 실행 ${relTime(job.last_run_at)} · ${statusWord(job.last_status)}` : '  아직 실행 전' }));
   card.append(meta);
 
   // 읽기 전용 단계(수집) — 상태만 말하고, 조작은 잡의 주인(수집기)에게 맡긴다.
