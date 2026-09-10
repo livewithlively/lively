@@ -261,9 +261,16 @@ export async function preparePreviewEnv(id: string): Promise<void> {
       const r = await ensureStageWorktree(p.id, p.repo, p.base_ref || "origin/main", p.member_branches || []);
       workdir = r.worktree_path;
       await itemsPool.query("UPDATE org_preview_env SET merge_status=$2::jsonb WHERE id=$1", [p.id, JSON.stringify(r.merge_status)]);
-      if (r.conflicts.length) {
+      // 실패는 **사유별로 다른 말**을 한다(#3778) — 사람이 할 일이 정반대다. 충돌이면 코드를 봐야 하고,
+      //  그 밖의 실패면 그 브랜치를 base 에 리베이스하거나 서버 사정을 봐야 한다. 종전엔 둘 다 «서로 충돌» 이라
+      //  적어, 있지도 않은 코드 충돌을 찾으러 가게 만들었다.
+      const failed = Object.keys(r.failures || {});
+      const parts: string[] = [];
+      if (r.conflicts.length) parts.push(`서로 충돌해 빠졌습니다: ${r.conflicts.join(", ")}`);
+      if (failed.length) parts.push(`합치지 못했습니다: ${failed.map((b) => `${b} — ${r.failures[b]}`).join(" · ")}`);
+      if (parts.length) {
         await itemsPool.query("UPDATE org_preview_env SET last_error=$2 WHERE id=$1",
-          [p.id, `일부 작업은 서로 충돌해 이번 화면에서 빠졌습니다: ${r.conflicts.join(", ")}`]);
+          [p.id, `일부 작업이 이번 화면에서 빠졌습니다. ${parts.join(" / ")}`]);
       }
     } else if (p.worktree_path && hasDir(p.worktree_path)) {
       workdir = p.worktree_path;
