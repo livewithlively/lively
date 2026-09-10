@@ -271,8 +271,8 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
       },
     };
   }
-  const destPre = destBox({ label: '선행', placeholder: '없음 · 앞선 일이 있으면 고르세요', allowNew: false });
-  const destMain = destBox({ label: '프로젝트', placeholder: '이어서 할 프로젝트를 고르거나(이름·번호) 새 이름을 적으세요', allowNew: true,
+  const destPre = destBox({ label: '선행', placeholder: '참고할 선행 프로젝트가 있다면 고르세요', allowNew: false });
+  const destMain = destBox({ label: '프로젝트', placeholder: '프로젝트를 고르거나 새 프로젝트 이름을 적으세요', allowNew: true,
     onPick: () => destPre.lock(destMain.get().kind === 'proj' ? '프로젝트 상세에서 바꿔요' : null) });
   const destWrap = el('div', { class: 'v2-dest-grid' }, destMain.wrap, destPre.wrap);
   const dest = (): Dest => destMain.get();
