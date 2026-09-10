@@ -49,7 +49,7 @@ interface Harness {
   kev: (over: Record<string, unknown>) => any;
 }
 
-async function makeCtx(opts: { safari?: boolean; execOk?: boolean; writeTextOk?: boolean; readText?: string } = {}): Promise<Harness> {
+async function makeCtx(opts: { safari?: boolean; execOk?: boolean; writeTextOk?: boolean; readText?: string; mac?: boolean; prefs?: Record<string, unknown> } = {}): Promise<Harness> {
   const sent: string[] = [];
   const execData: string[] = [];
   const writeTexts: string[] = [];
@@ -105,6 +105,7 @@ async function makeCtx(opts: { safari?: boolean; execOk?: boolean; writeTextOk?:
   };
   let writeTextCalls = 0;
   const nav: any = {
+    platform: opts.mac ? "MacIntel" : "Win32",   // #3778 ⌘ 계열 판정(IS_MAC)의 근거
     vendor: opts.safari ? "Apple Computer, Inc." : "Google Inc.",
     userAgent: opts.safari ? "Mozilla/5.0 (Macintosh) AppleWebKit/605 Version/17.4 Safari/605.1" : "Mozilla/5.0 Chrome/126",
     userActivation: { isActive: false },
@@ -122,7 +123,7 @@ async function makeCtx(opts: { safari?: boolean; execOk?: boolean; writeTextOk?:
   def("window", g); def("self", g);
   def("document", doc); def("navigator", nav);
   def("location", { search: "?session=t-1117", pathname: "/ui/terminal.html", protocol: "https:", host: "test" });
-  def("localStorage", { getItem: () => null, setItem() { /* noop */ }, removeItem() { /* noop */ } });
+  def("localStorage", { getItem: () => (opts.prefs ? JSON.stringify(opts.prefs) : null), setItem() { /* noop */ }, removeItem() { /* noop */ } });
   def("isSecureContext", true);
   def("ClipboardItem", ClipboardItemStub);
   def("WebSocket", class { /* not used */ });
@@ -729,6 +730,140 @@ t("COAL3 마우스 없이 키만이면 종전대로 즉시(버퍼 우회)", asyn
   const h = await makeCtx();
   h.mod.handleTermData("x");
   assert.deepEqual(h.inputs(), ["x"]);
+});
+
+// ── L. 입력줄 선택·되돌리기(#3778) — 화면 좌표 → **실제로 나가는 바이트** 까지 끝까지 잰다 ──
+//  판정 규칙(어떤 키가 어떤 뜻인가)은 line-edit.test.ts 가 변이로 지킨다. 여기서 지키는 것은 그 다음 —
+//  «선택한 만큼» 이 정확히 몇 번의 백스페이스인가. 여기가 틀리면 사람 글자를 더 지운다.
+const WIDE = (ch: string): boolean => /[가-힣ㄱ-ㅎㅏ-ㅣ一-鿿ぁ-ヿ]/u.test(ch) || (ch.codePointAt(0) as number) > 0x1f000;
+// xterm 버퍼 흉내 — 한 줄을 «칸» 으로 펼친다(한글·이모지는 두 칸, 뒤칸은 width 0). 실물과 같은 모양이라야
+//  «칸 수로 세면 두 배가 된다» 는 함정을 이 테스트가 실제로 밟는다.
+const setScreen = (h: Harness, row: string, cursorChars: number): void => {
+  const cells: Array<{ chars: string; width: number }> = [];
+  for (const ch of row) { const w = WIDE(ch) ? 2 : 1; cells.push({ chars: ch, width: w }); if (w === 2) cells.push({ chars: "", width: 0 }); }
+  const line = {
+    translateToString: () => row,
+    getCell: (x: number) => (cells[x] ? { getChars: () => cells[x].chars, getWidth: () => cells[x].width } : null),
+  };
+  let cx = 0, seen = 0;
+  for (const c of cells) { if (seen >= cursorChars) break; cx++; if (c.width !== 0) seen++; }
+  h.term.buffer.active = { type: "normal", length: 1, baseY: 0, cursorX: cx, cursorY: 0, getLine: (y: number) => (y === 0 ? line : null) };
+};
+const moveCursorChars = (h: Harness, row: string, n: number): void => setScreen(h, row, n);
+
+t("L1 ⌘← → 줄 처음(Ctrl+A) 바이트가 나간다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  h.term._keyHandler(h.kev({ key: "ArrowLeft", metaKey: true }));
+  assert.deepEqual(h.inputs(), ["\x01"]);
+});
+t("L2 ⌘⌫ → 앞 전부 지우기(Ctrl+U) · 되돌리기는 앱 kill 을 되붙인다(Ctrl+Y)", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  h.term._keyHandler(h.kev({ key: "Backspace", metaKey: true }));
+  h.term._keyHandler(h.kev({ key: "z", metaKey: true }));
+  assert.deepEqual(h.inputs(), ["\x15", "\x19"]);
+});
+t("L3 Shift+← → 앵커를 세우고 평범한 ← 를 보낸다(앱은 선택을 모른다)", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  setScreen(h, "hello", 5);
+  h.term._keyHandler(h.kev({ key: "ArrowLeft", shiftKey: true }));
+  assert.deepEqual(h.inputs(), ["\x1b[D"]);
+});
+t("L4 ★한글을 왼쪽으로 선택해 지우면 «칸» 이 아니라 «글자» 수만큼 — 칸으로 세면 두 배를 지운다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  const row = "안녕하세요";            // 다섯 글자 = 열 칸
+  setScreen(h, row, 5);                 // 커서는 맨 끝(= 앵커)
+  h.term._keyHandler(h.kev({ key: "ArrowLeft", shiftKey: true }));
+  moveCursorChars(h, row, 4);           // 앱이 한 글자 왼쪽으로
+  h.term._keyHandler(h.kev({ key: "ArrowLeft", shiftKey: true }));
+  moveCursorChars(h, row, 3);           // 두 글자(세·요)가 선택됐다
+  h.term._keyHandler(h.kev({ key: "Backspace" }));
+  const sent = h.inputs();
+  assert.deepEqual(sent.slice(0, 2), ["\x1b[D", "\x1b[D"], "확장은 평범한 이동");
+  // 커서가 선택의 «왼끝» 이므로 앞으로 지운다. 두 번이어야 한다 — 네 칸이라고 네 번 보내면 앞 글자까지 먹는다.
+  assert.equal(sent[2], "\x1b[3~\x1b[3~", "두 글자 = 두 번(네 번이 아니다)");
+});
+t("L4b ★한글을 오른쪽으로 선택해 지우면 백스페이스 — 역시 칸이 아니라 글자 수", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  const row = "안녕하세요";
+  setScreen(h, row, 0);                 // 커서는 맨 앞(= 앵커)
+  h.term._keyHandler(h.kev({ key: "ArrowRight", shiftKey: true }));
+  moveCursorChars(h, row, 2);           // 두 글자(안·녕)가 선택됐다 — 네 칸이다
+  h.term._keyHandler(h.kev({ key: "Backspace" }));
+  assert.equal(h.inputs().pop(), "\x7f\x7f", "커서가 오른끝이므로 백스페이스 두 번");
+});
+t("L5 커서가 선택 «앞» 이면 앞으로 지우기를 보낸다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  setScreen(h, "abcdef", 2);
+  h.term._keyHandler(h.kev({ key: "ArrowLeft", shiftKey: true }));
+  moveCursorChars(h, "abcdef", 0);
+  h.term._keyHandler(h.kev({ key: "Delete" }));
+  assert.equal(h.inputs().pop(), "\x1b[3~\x1b[3~", "앵커까지 두 글자를 앞으로 지운다");
+});
+t("L6 선택 뒤 글자를 치면 지우고 그 키는 흘린다(우리가 글자를 대신 만들지 않는다)", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  setScreen(h, "abcd", 4);
+  h.term._keyHandler(h.kev({ key: "ArrowLeft", shiftKey: true }));
+  moveCursorChars(h, "abcd", 2);
+  const passed = h.term._keyHandler(h.kev({ key: "x" }));
+  assert.equal(passed, true, "키는 xterm 으로 흘러야 한다");
+  assert.equal(h.inputs().pop(), "\x1b[3~\x1b[3~", "선택을 먼저 지운다(커서가 왼끝이라 앞으로)");
+});
+t("L7 ★조합 중에는 지우지 않는다 — 음절이 깨진다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  setScreen(h, "abcd", 4);
+  h.term._keyHandler(h.kev({ key: "ArrowLeft", shiftKey: true }));
+  moveCursorChars(h, "abcd", 2);
+  h.term._keyHandler(h.kev({ key: "Process", keyCode: 229, isComposing: true }));
+  assert.deepEqual(h.inputs(), ["\x1b[D"], "확장 바이트 말고는 아무것도 안 나간다");
+});
+t("L8 ★선택을 시작한 줄이 바뀌었으면 지우지 않고 취소한다(좌표를 믿을 수 없다)", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  setScreen(h, "abcd", 4);
+  h.term._keyHandler(h.kev({ key: "ArrowLeft", shiftKey: true }));
+  setScreen(h, "ZZZZ", 2);
+  h.term._keyHandler(h.kev({ key: "Backspace" }));
+  assert.deepEqual(h.inputs(), ["\x1b[D"], "백스페이스를 보내지 않는다");
+});
+t("L9 되돌리기 — 지운 선택이 글자 그대로 다시 들어간다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  setScreen(h, "안녕하세요", 5);
+  h.term._keyHandler(h.kev({ key: "ArrowLeft", shiftKey: true }));
+  moveCursorChars(h, "안녕하세요", 3);
+  h.term._keyHandler(h.kev({ key: "Backspace" }));
+  h.term._keyHandler(h.kev({ key: "z", metaKey: true }));
+  assert.equal(h.inputs().pop(), "세요", "지운 두 글자가 그대로 돌아온다");
+});
+t("L10 ★보내고 나면(Enter) 되돌릴 것이 없다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  h.mod.handleTermData("abc");
+  h.mod.handleTermData("\r");
+  h.term._keyHandler(h.kev({ key: "z", metaKey: true }));
+  assert.deepEqual(h.inputs(), ["abc", "\r"], "되돌리기 바이트가 안 나간다");
+});
+t("L11 친 만큼 되돌린다(한글은 글자 수로)", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  h.mod.handleTermData("안녕");
+  h.term._keyHandler(h.kev({ key: "z", metaKey: true }));
+  assert.equal(h.inputs().pop(), "\x7f\x7f");
+});
+t("L12 설정을 끄면 Shift+← 를 가로채지 않는다(vim 처럼 제 기능이 있는 앱)", async () => {
+  const h = await makeCtx({ mac: true, prefs: { lineSelect: false } });
+  h.mod.setupClipboard();
+  setScreen(h, "hello", 5);
+  assert.equal(h.term._keyHandler(h.kev({ key: "ArrowLeft", shiftKey: true })), true);
+  assert.deepEqual(h.inputs(), []);
 });
 
 async function main(): Promise<void> {

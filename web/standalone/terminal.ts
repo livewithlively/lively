@@ -9,6 +9,7 @@
 
 import { el, renderMarkdown } from './md.js';
 import { liteMenu } from './ctx-lite.js';   // #3784 터미널 우클릭 메뉴(의존 0 — 이 번들은 셸 밖에서 뜬다)
+import { decideKey, UndoStack, countTyped, SEQ } from './line-edit.js'; // #3778 입력줄 선택·되돌리기(순수 판정)
 
 // xterm.js 는 CDN 클래식 스크립트로 먼저 로드된다(terminal.html) — 번들 대상이 아니라 전역으로 온다.
 declare const Terminal: any;
@@ -307,6 +308,8 @@ function diagText() {
 window.livelyTermDiag = () => diagText();
 // 사파리 판별 — 클립보드 정책이 크롬과 다르다(제스처 밖·비동기 쓰기 거부 → 복사 경로가 갈린다, #1117 버그C).
 const IS_SAFARI = /Apple/i.test(navigator.vendor || '') && !/CriOS|FxiOS|Chrome|Chromium|Edg/i.test(navigator.userAgent || '');
+// ⌘ 계열 키를 쓸 자리인가 — 맥에서만 ⌘←/→/⌫/⌦·⌘Z 가 «관례» 다(#3778).
+const IS_MAC = /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || '');
 // 모바일(터치 주입력) 판정(#1719 모바일 터미널) — 거친 포인터(손가락) 또는 모바일 UA. iPadOS 는 UA 가 Mac 이라 pointer 로 잡는다.
 //  ?mobile=1|0 으로 강제(검증·데스크톱 터치스크린 예외).
 const IS_MOBILE = (() => {
@@ -1082,6 +1085,12 @@ export function handleTermData(d) {
   if (imeSwallow !== null && d === imeSwallow) { imeSwallow = null; dlog('ime', 'swallow ' + diagPreview(d, 8)); return; }
   // 실제 전송 바이트 트레이스(IME 트레이스와 짝) — 마우스 리포트는 제외(링버퍼 오염 방지).
   if (!(d.charCodeAt(0) === 0x1b && d.charCodeAt(1) === 0x5b && d.charCodeAt(2) === 0x3c)) dlog('out', diagPreview(d, 16));
+  // 되돌리기용 타이핑 세기(#3778) — 실제로 PTY 로 나가는 바이트가 정본이라 IME·붙여넣기까지 저절로 맞는다.
+  //  Enter(\r)는 «보냈다» = 입력칸이 비었다는 뜻이라 스택을 통째로 비운다(안 비우면 새 프롬프트에 옛 글이 들어간다).
+  if (!undoBusy) {
+    if (d === '\r') undoStack.reset();
+    else { const n = countTyped(d); if (n === null) undoStack.breakRun(); else undoStack.type(n); }
+  }
   trackAppMouse(d);       // 앱 드래그 선택 관측(#1117 버그C — Cmd+C 브리지 발동 조건, 일반 타이핑 시 해제)
   spamGuard(d);           // 동일 청크 반복 전송 감지 → textarea 자가치유 + 진단(#1117 버그A 안전망)
   cancelPromptSeek(true); // 질문 위치 자동 탐색 중 사용자가 입력하면 즉시 중단(#967 — 사용자 조작 우선)
@@ -1326,6 +1335,147 @@ async function dropFileToAgent(file) {
   toast('첨부: ' + name + ' — 경로가 입력창에 들어갔어요(설명 적고 Enter)');
   if (explorerLoaded) loadDir(curDir);
 }
+// ── 입력줄 선택·되돌리기 (#3778) ──────────────────────────────────────────────────
+//  앱에 없는 두 기능을 «앱이 이미 아는 조작»만으로 합성한다. 판정 규칙은 line-edit.ts(순수), 여기서는
+//  좌표를 읽고 화면을 칠하고 바이트를 보낸다.
+//
+//  ★ 선택의 정본은 우리가 들고 있는 두 좌표뿐이다 — **앵커(사람이 Shift 를 처음 누른 자리)와 지금 커서**.
+//   커서는 앱이 그린 결과(xterm 버퍼)라 추측이 아니고, 앵커는 우리가 세웠다. 그 사이 글자 수를 화면에서 세어
+//   그만큼 백스페이스를 보내면 «선택을 지웠다»가 된다. 앱은 선택을 몰라도 결과가 정확히 같다.
+//
+//  ⚠ 한 줄 안에서만 선택한다. 줄이 접혀 다음 행으로 넘어가면 그 사이에 입력칸 테두리(│)가 끼어 «글자 수»를
+//   화면에서 정확히 셀 수 없다 — 잘못 세면 사람 글자를 더 지운다. 그래서 행이 바뀌면 선택을 거둔다(안전 우선).
+let selAnchor: { x: number; y: number; row: string } | null = null;
+let selEl: any = null;
+const undoStack = new UndoStack();
+let undoBusy = false; // 되돌리기가 스스로 만든 입력을 다시 기록하지 않게
+
+function bufRowText(y: number): string {
+  try { const ln = term.buffer.active.getLine(y); return ln ? ln.translateToString(true) : ''; } catch (_) { return ''; }
+}
+/** 지금 선택 범위. 앵커가 없거나·행이 바뀌었거나·비었으면 null(= 선택 없음). */
+function selRange(): { y: number; x0: number; x1: number; curAtEnd: boolean } | null {
+  if (!selAnchor) return null;
+  let b: any;
+  try { b = term.buffer.active; } catch (_) { return null; }
+  const cy = b.baseY + b.cursorY, cx = b.cursorX;
+  if (cy !== selAnchor.y) return null;
+  const x0 = Math.min(selAnchor.x, cx), x1 = Math.max(selAnchor.x, cx);
+  if (x0 >= x1) return null;
+  return { y: cy, x0, x1, curAtEnd: cx >= selAnchor.x };
+}
+/** 선택 구간의 글자(셀이 아니라 **글자** — 한글·이모지는 두 칸을 먹으므로 칸 수로 세면 두 배가 된다). */
+function selText(r: { y: number; x0: number; x1: number }): { text: string; chars: number } {
+  let text = '', chars = 0;
+  try {
+    const ln = term.buffer.active.getLine(r.y);
+    if (!ln) return { text, chars };
+    const cell = ln.getCell ? ln.getCell(0) : null;
+    for (let x = r.x0; x < r.x1; x++) {
+      const c = ln.getCell(x, cell || undefined);
+      if (!c) continue;
+      if (c.getWidth() === 0) continue; // 넓은 글자의 뒤칸 — 글자가 아니다
+      text += c.getChars() || ' ';
+      chars++;
+    }
+  } catch (_) { /* noop */ }
+  return { text, chars };
+}
+function clearSel(): void {
+  selAnchor = null;
+  if (selEl) { try { selEl.remove(); } catch (_) { /* noop */ } selEl = null; }
+}
+/** 선택을 화면에 칠한다. 앱이 다시 그릴 때마다(onRender) 좌표로 새로 계산하므로 어긋나지 않는다. */
+function drawSel(): void {
+  const r = selRange();
+  let scr: any = null;
+  try { scr = (term.element && term.element.querySelector('.xterm-screen')) || null; } catch (_) { /* noop */ }
+  if (!r || !scr) { if (selEl) { try { selEl.remove(); } catch (_) { /* noop */ } selEl = null; } return; }
+  let rowInView = -1;
+  try { rowInView = r.y - term.buffer.active.baseY; } catch (_) { /* noop */ }
+  if (rowInView < 0 || rowInView >= term.rows) { if (selEl) { try { selEl.remove(); } catch (_) { /* noop */ } selEl = null; } return; }
+  const rect = scr.getBoundingClientRect();
+  const cw = rect.width / term.cols, ch = rect.height / term.rows;
+  if (!selEl) { selEl = el('div', { class: 'term-sel' }); scr.appendChild(selEl); }
+  selEl.style.left = (r.x0 * cw) + 'px';
+  selEl.style.top = (rowInView * ch) + 'px';
+  selEl.style.width = ((r.x1 - r.x0) * cw) + 'px';
+  selEl.style.height = ch + 'px';
+}
+/**
+ * 선택을 지운다. 커서가 오른끝이면 백스페이스, 왼끝이면 앞으로 지우기 — 둘 다 앱이 이미 아는 조작이다.
+ * 지운 글자는 되돌리기 스택에 넣는다(우리가 지웠으니 무엇을 지웠는지 정확히 안다).
+ */
+function deleteSel(): boolean {
+  const r = selRange();
+  if (!r) { clearSel(); return false; }
+  // 안전장치 — 선택을 시작한 뒤 그 줄의 내용이 바뀌었다면(앱이 다시 그렸거나 화면이 밀렸다) 좌표를 믿을 수 없다.
+  if (selAnchor && bufRowText(r.y) !== selAnchor.row) { dlog('sel-stale'); clearSel(); toast('화면이 바뀌어 선택을 취소했어요', true); return false; }
+  const { text, chars } = selText(r);
+  if (!chars) { clearSel(); return false; }
+  sendInput((r.curAtEnd ? SEQ.back : SEQ.del).repeat(chars));
+  undoStack.push({ k: 'text', text });
+  dlog('sel-del', 'chars=' + chars);
+  clearSel();
+  return true;
+}
+function copySel(): boolean {
+  const r = selRange();
+  if (!r) return false;
+  const { text } = selText(r);
+  if (!text) return false;
+  copyText(text, false, true);
+  return true;
+}
+/** 선택 확장 — 앵커가 없으면 지금 자리에 세우고, 평범한 이동 바이트를 보낸다(칠하기는 onRender 가 한다). */
+function extendSel(seq: string): void {
+  if (!selAnchor) {
+    try {
+      const b = term.buffer.active;
+      const y = b.baseY + b.cursorY;
+      selAnchor = { x: b.cursorX, y, row: bufRowText(y) };
+    } catch (_) { return; }
+  }
+  sendInput(seq);
+}
+function doUndo(): void {
+  const e = undoStack.pop();
+  if (!e) { toast('되돌릴 것이 없어요'); return; }
+  undoBusy = true;
+  try {
+    if (e.k === 'yank') sendInput(SEQ.yank);                 // 앱의 kill-ring 에서 되붙인다
+    else if (e.k === 'text') pasteText(e.text);              // 우리가 지운 선택을 그 자리에 다시 넣는다
+    else if (e.k === 'typed') sendInput(SEQ.back.repeat(e.n)); // 방금 친 만큼 지운다
+  } finally { setTimeout(() => { undoBusy = false; }, 0); }
+  dlog('undo', e.k + (e.k === 'typed' ? ' n=' + e.n : ''));
+}
+/** 이 키를 line-edit 규칙으로 처리했으면 true(= keydown 을 여기서 끝낸다). */
+function handleLineEditKey(e: any): boolean {
+  const p = prefs();
+  const act = decideKey(e, { mac: IS_MAC, hasSel: !!selRange(), select: p.lineSelect !== false });
+  if (act.k === 'pass') return false;
+  if (act.k === 'clear') { clearSel(); return false; }
+  if (act.k === 'delThenPass') {
+    // 선택을 먼저 지우고 그 키는 **그대로 흘린다**. 같은 소켓으로 순서대로 나가므로 «지우기 → 새 글자» 순서가 지켜진다.
+    //  ⚠ 여기서는 preventDefault 를 하지 않는다 — 이 경로엔 IME 조합 시작(keyCode 229)이 섞여 있고, 그걸 막으면
+    //   한글이 아예 안 써진다(#1300 계열). 아래 «삼키는» 갈래에서만 막는다.
+    deleteSel();
+    return false;
+  }
+  e.preventDefault(); // #633 계열: return false 는 xterm 자체 처리만 막고 브라우저 기본동작은 안 막는다
+  if (act.k === 'undo') { doUndo(); return true; }
+  if (act.k === 'copy') { copySel(); return true; }
+  if (act.k === 'del') { deleteSel(); return true; }
+  if (act.k === 'send') {
+    clearSel();
+    if (act.kill) undoStack.push({ k: 'yank' }); // 앱이 kill-ring 에 담았다 — 되돌리기는 Ctrl+Y 한 방
+    sendInput(act.seq);
+    return true;
+  }
+  if (act.k === 'extend') { extendSel(act.seq); return true; }
+  return false;
+}
+
 export function setupClipboard() {
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown') return true;
@@ -1362,6 +1512,9 @@ export function setupClipboard() {
       Promise.resolve().then(() => { shiftEnterPending = false; }); // 이 keydown 의 동기 onData 처리 직후 해제(다른 Enter 로 안 새게)
       return true; // xterm 통과 → (조합이면 음절 확정 후) '\r' 발생 → onData 가 '\x1b\r' 로 승격
     }
+    // 입력줄 선택·되돌리기(#3778) — Shift+이동키·⌘ 계열 넷·⌘Z. 아래 Alt 블록보다 **먼저** 본다:
+    //  Alt+Shift+←/→(단어 단위 선택)를 아래 블록이 «그냥 단어이동» 으로 먼저 먹어 버리면 선택이 안 선다.
+    if (handleLineEditKey(e)) return false;
     // Option/Alt + ←/→ = 단어 단위 이동. xterm 기본(macOptionIsMeta 미설정)으론 Option+방향키가 단어이동이 안 되므로
     //  Meta-b/Meta-f(\eb/\ef — bash readline·zsh 기본 바인딩)를 직접 셸로 흘려 비개발자도 단어 점프가 되게 한다.
     if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
@@ -2065,9 +2218,10 @@ function openSettings() {
   const speedI = el('input', { type: 'number', min: '1', max: '12', step: '1', value: String(p.scrollSpeed || 3) });
   const gainI = el('input', { type: 'number', min: '0.5', max: '6', step: '0.5', value: String(p.padGain || 3) });
   const dockI = el('input', { type: 'checkbox', checked: p.mobileDock !== false ? '' : null, style: 'width:auto' });
+  const selI = el('input', { type: 'checkbox', checked: p.lineSelect !== false ? '' : null, style: 'width:auto' });
   let curFamily = p.fontFamily;
   const apply = () => {
-    const np = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value, scrollSpeed: Math.max(1, Math.min(12, Number(speedI.value) || 1)), padGain: Math.max(0.5, Math.min(6, Number(gainI.value) || 3)), mobileDock: !!dockI.checked };
+    const np = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value, scrollSpeed: Math.max(1, Math.min(12, Number(speedI.value) || 1)), padGain: Math.max(0.5, Math.min(6, Number(gainI.value) || 3)), mobileDock: !!dockI.checked, lineSelect: !!selI.checked };
     term.options.fontFamily = np.fontFamily; term.options.fontSize = np.fontSize; term.options.cursorStyle = np.cursorStyle;
     term.options.theme = resolveTheme(np.theme);
     scrollSpeed = np.scrollSpeed; padGain = np.padGain;
@@ -2080,6 +2234,7 @@ function openSettings() {
   speedI.addEventListener('input', apply);
   gainI.addEventListener('input', apply);
   dockI.addEventListener('change', () => { apply(); applyMobileDock(); });
+  selI.addEventListener('change', () => { apply(); clearSel(); });
   const back = el('div', { class: 'pop-back', onclick: (e) => { if (e.target === back) back.remove(); } },
     el('div', { class: 'pop' }, el('h3', { text: '환경 설정' }),
       el('div', { class: 'field' }, el('label', { text: '폰트' }), fontSel),
@@ -2089,6 +2244,7 @@ function openSettings() {
       el('div', { class: 'field' }, el('label', { text: '마우스 휠 속도 (1~12)' }), speedI),
       el('div', { class: 'field' }, el('label', { text: '트랙패드 속도 (1 = 손가락 이동만큼)' }), gainI),
       IS_MOBILE ? el('div', { class: 'field field-row' }, dockI, el('label', { text: '모바일 입력 바 — 아래 입력칸에서 쓰고 보내기(끄면 터미널에 직접 타이핑, 한글이 깨질 수 있어요)' })) : null,
+      el('div', { class: 'field field-row' }, selI, el('label', { text: 'Shift+화살표로 글자 선택 — 선택한 만큼 지우거나 바로 갈아치웁니다(vim 처럼 Shift+화살표를 자기 기능으로 쓰는 프로그램에서는 끄세요)' })),
       el('button', { class: 'tbtn pop-close', text: '닫기', onclick: () => back.remove() })));
   document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { back.remove(); document.removeEventListener('keydown', esc); } });
   document.body.append(back);
@@ -2497,6 +2653,10 @@ export async function boot() {
   }
   term.open(host);
   wireTermCtxMenu(host);   // #3784 — 우클릭 메뉴(복사·붙여넣기·전체 선택·주소 열기·화면 지우기·글자 크기·설정)
+  // 입력줄 선택 표시(#3778) — 앱이 다시 그릴 때마다 좌표로 새로 계산한다(우리가 위치를 «기억» 하지 않으므로 어긋나지 않는다).
+  try { term.onRender(drawSel); } catch (_) { /* noop */ }
+  try { term.onScroll(drawSel); } catch (_) { /* noop */ }
+  try { host.addEventListener('mousedown', () => clearSel(), true); } catch (_) { /* noop */ }
   // 휠 폴백 래치 끊기(#1943 후속 — wheelResyncAction 머리말). 관측만 하고 이벤트는 건드리지 않는다(passive).
   //  xterm 의 휠 처리보다 먼저 보도록 capture 로 단다 — 판정은 이 시점의 버퍼·모드로 한다.
   let lastWheelProbeAt = 0;
