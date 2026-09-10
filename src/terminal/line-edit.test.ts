@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const MOD_URL = pathToFileURL(process.env.LINEEDIT_MOD || path.resolve(here, "..", "standalone", "line-edit.js")).href;
 const mod: any = await import(MOD_URL);
-const { decideKey, UndoStack, countTyped, SEQ } = mod;
+const { decideKey, UndoStack, countTyped, SEQ, nativeUndoOk } = mod;
 
 interface Ctx { mac: boolean; hasSel: boolean; select: boolean }
 const MAC: Ctx = { mac: true, hasSel: false, select: true };
@@ -128,11 +128,27 @@ t("C9 키 이름이 비어 있어도 «글자» 로 오인하지 않고, 선택�
   assert.deepEqual(decideKey(k(""), MAC), { k: "pass" });
 });
 
-// ── D. 되돌리기 키 (변이: ctrl 제외 제거 → D2 red) ──
+// ── D. 되돌리기 키 (#3864 사양 K1~K12 — 수정 전 판정으로 D2·D2b·D2c red, 변이로 D5·D6 red 확인) ──
 t("D1 맥은 ⌘Z", () => { assert.deepEqual(decideKey(k("z", { metaKey: true }), MAC), { k: "undo" }); });
-t("D2 ★Ctrl+Z 는 절대 뺏지 않는다 — 터미널에서 그건 «중단»(SIGTSTP)", () => {
-  assert.deepEqual(decideKey(k("z", { ctrlKey: true }), MAC), { k: "pass" });
-  assert.deepEqual(decideKey(k("z", { ctrlKey: true }), { ...MAC, mac: false }), { k: "pass" });
+t("D2 ★Ctrl+Z 는 되돌리기다 — PTY 로 흘리면 하네스가 정지(SIGTSTP)되는데 웹 터미널 pane 엔 fg 칠 셸이 없다(#3864)", () => {
+  assert.deepEqual(decideKey(k("z", { ctrlKey: true }), MAC), { k: "undo" });
+  assert.deepEqual(decideKey(k("z", { ctrlKey: true }), { ...MAC, mac: false }), { k: "undo" });
+  assert.deepEqual(decideKey(k("Z", { ctrlKey: true }), MAC), { k: "undo" }, "CapsLock 이 켜져 있어도");
+});
+t("D2b ★키 이름이 z 가 아니어도 keyCode 90 이면 Ctrl+Z 다 — xterm 은 key 가 아니라 keyCode 로 0x1a 를 만든다", () => {
+  assert.deepEqual(decideKey(k("ㅋ", { ctrlKey: true, keyCode: 90 }), MAC), { k: "undo" });
+  assert.deepEqual(decideKey(k("ㅋ", { ctrlKey: true, keyCode: 90 }), SEL), { k: "undo" }, "선택이 서 있어도 되돌리기가 먼저");
+});
+t("D2c ★입력줄 선택을 꺼도 Ctrl+Z 는 되돌리기 — 그 설정이 정지 위험을 되살리면 안 된다", () => {
+  assert.deepEqual(decideKey(k("z", { ctrlKey: true, keyCode: 90 }), { ...MAC, select: false }), { k: "undo" });
+});
+t("D5 Ctrl+Shift+Z 는 되돌리기가 아니다 — 흘린다(다시하기는 없다)", () => {
+  assert.deepEqual(decideKey(k("Z", { ctrlKey: true, shiftKey: true, keyCode: 90 }), MAC), { k: "pass" });
+  assert.deepEqual(decideKey(k("Z", { ctrlKey: true, shiftKey: true, keyCode: 90 }), { ...MAC, mac: false }), { k: "pass" });
+});
+t("D6 경계: 수정자 없는 z 와 맥 ⌥Z(Ω) 는 keyCode 90 이어도 되돌리기가 아니다", () => {
+  assert.deepEqual(decideKey(k("z", { keyCode: 90 }), MAC), { k: "pass" });
+  assert.deepEqual(decideKey(k("Ω", { altKey: true, keyCode: 90 }), MAC), { k: "pass" });
 });
 t("D3 맥이 아니면 Alt+Z", () => {
   assert.deepEqual(decideKey(k("z", { altKey: true }), { ...MAC, mac: false }), { k: "undo" });
@@ -219,6 +235,28 @@ t("F6 빈 문자열은 0", () => { assert.equal(countTyped(""), 0); });
 t("F7 경계: 스페이스(0x20)는 글자 · 0x1f 는 제어", () => {
   assert.equal(countTyped(" "), 1);
   assert.equal(countTyped("\x1f"), null);
+});
+
+// ── N. 앱 자체 되돌리기를 부를 판인가 (#3864 사양 V1~V7 — 변이로 N1·N3 red 확인) ──
+//  근거: 2.1.266 번들엔 입력칸 되돌리기가 없었고(#3778 바이너리 실측), 2.1.267 은 Ctrl+_(0x1f)로 한 덩이씩 되돌리고
+//  지운 글자도 되살린다(#3864 격리 인스턴스 실측). 매니지드는 stable 채널(2026-09-10 기준 2.1.236)을 깐다.
+t("N1 ★경계 최소치 2.1.267 은 앱 되돌리기", () => { assert.equal(nativeUndoOk("2.1.267"), true); });
+t("N2 ★경계 바로 아래 2.1.266 은 합성", () => { assert.equal(nativeUndoOk("2.1.266"), false); });
+t("N3 자리 올림도 앱 — 문자열 비교면 2.1.1000 을 옛 판으로 잘못 본다", () => {
+  for (const v of ["2.1.300", "2.1.1000", "2.2.0", "3.0.0"]) assert.equal(nativeUndoOk(v), true, v);
+});
+t("N4 매니지드 stable(2.1.236)·더 옛 판은 합성", () => {
+  for (const v of ["2.1.236", "2.0.999", "1.9.999"]) assert.equal(nativeUndoOk(v), false, v);
+});
+t("N5 버전이 아닌 이름은 합성 — 매니지드(docker)·셸·이름(claude)·npm 설치(node)·빈 값", () => {
+  for (const v of ["docker", "zsh", "claude", "node", ""]) assert.equal(nativeUndoOk(v), false, v);
+});
+t("N6 ★pane 상태가 아예 없으면(undefined·null) 합성", () => {
+  assert.equal(nativeUndoOk(undefined), false);
+  assert.equal(nativeUndoOk(null), false);
+});
+t("N7 형식이 어긋나면(2.1 · v2.1.267) 합성", () => {
+  for (const v of ["2.1", "v2.1.267"]) assert.equal(nativeUndoOk(v), false, v);
 });
 
 let pass = 0; const fails: string[] = [];

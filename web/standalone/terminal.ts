@@ -9,7 +9,7 @@
 
 import { el, renderMarkdown } from './md.js';
 import { liteMenu } from './ctx-lite.js';   // #3784 터미널 우클릭 메뉴(의존 0 — 이 번들은 셸 밖에서 뜬다)
-import { decideKey, UndoStack, countTyped, SEQ } from './line-edit.js'; // #3778 입력줄 선택·되돌리기(순수 판정)
+import { decideKey, UndoStack, countTyped, SEQ, nativeUndoOk } from './line-edit.js'; // #3778 입력줄 선택·되돌리기(순수 판정) · #3864 앱 되돌리기 판 판정
 
 // xterm.js 는 CDN 클래식 스크립트로 먼저 로드된다(terminal.html) — 번들 대상이 아니라 전역으로 온다.
 declare const Terminal: any;
@@ -1442,6 +1442,10 @@ function extendSel(seq: string): void {
   sendInput(seq);
 }
 function doUndo(): void {
+  // 앱이 되돌리기를 스스로 가진 판이면 앱의 것을 부르고 합성은 보내지 않는다(#3864 — 둘 다 보내면 두 번 되돌아간다).
+  //  판은 가장 최근에 받은 pane 상태의 포그라운드 명령으로 판정한다(nativeUndoOk). 모르면 아래 합성.
+  const cmd = lastKnownState ? lastKnownState.cmd : '';
+  if (nativeUndoOk(cmd)) { sendInput(SEQ.undo); dlog('undo', 'app cmd=' + cmd); return; }
   const e = undoStack.pop();
   if (!e) { toast('되돌릴 것이 없어요'); return; }
   undoBusy = true;
@@ -1515,7 +1519,7 @@ export function setupClipboard() {
       Promise.resolve().then(() => { shiftEnterPending = false; }); // 이 keydown 의 동기 onData 처리 직후 해제(다른 Enter 로 안 새게)
       return true; // xterm 통과 → (조합이면 음절 확정 후) '\r' 발생 → onData 가 '\x1b\r' 로 승격
     }
-    // 입력줄 선택·되돌리기(#3778) — Shift+이동키·⌘ 계열 넷·⌘Z. 아래 Alt 블록보다 **먼저** 본다:
+    // 입력줄 선택·되돌리기(#3778) — Shift+이동키·⌘ 계열 넷·Ctrl+Z/⌘Z(#3864: Ctrl+Z 는 PTY 로 흘리지 않는다). 아래 Alt 블록보다 **먼저** 본다:
     //  Alt+Shift+←/→(단어 단위 선택)를 아래 블록이 «그냥 단어이동» 으로 먼저 먹어 버리면 선택이 안 선다.
     if (handleLineEditKey(e)) return false;
     // Option/Alt + ←/→ = 단어 단위 이동. xterm 기본(macOptionIsMeta 미설정)으론 Option+방향키가 단어이동이 안 되므로

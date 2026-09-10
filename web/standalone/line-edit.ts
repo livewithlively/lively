@@ -1,7 +1,8 @@
 // 터미널 입력줄의 «선택»과 «되돌리기» (#3778) — 앱에 없는 두 기능을 웹터미널이 대신 만든다.
 //
 // 왜 여기서 만드나: Claude Code 입력칸에는 **선택이라는 개념이 아예 없다**(2.1.266 바이너리 실측 — 방향키 처리가
-//  shift 를 보지 않는다. vim 모드의 비주얼 선택만 예외). 되돌리기도 vim 의 `u` 뿐이다. 앱은 우리 것이 아니라
+//  shift 를 보지 않는다. vim 모드의 비주얼 선택만 예외). 되돌리기도 vim 의 `u` 뿐이었다(2.1.267 부터는 앱이 Ctrl+_
+//  되돌리기를 갖는다 — 그 판에선 앱 것을 부른다, 아래 nativeUndoOk). 앱은 우리 것이 아니라
 //  고칠 수 없으므로, 터미널이 **앱이 이미 지원하는 조작(커서 이동·백스페이스·kill·yank)만 써서** 두 기능을 합성한다.
 //  즉 여기서 만드는 건 «새 프로토콜» 이 아니라 «키를 앱의 기존 조작으로 번역하는 규칙» 이다.
 //
@@ -40,6 +41,7 @@ export const SEQ = {
   killHead: '\x15', killTail: '\x0b', // Ctrl+U / Ctrl+K — 커서 앞·뒤 지우기(둘 다 kill-ring 에 들어간다)
   wordLeft: '\x1bb', wordRight: '\x1bf',
   yank: '\x19',                      // Ctrl+Y — 마지막 kill 을 되붙인다(= 우리 되돌리기의 한 갈래)
+  undo: '\x1f',                      // Ctrl+_ — readline·zsh 의 undo. Claude Code 는 2.1.267 부터(nativeUndoOk)
   back: '\x7f', del: '\x1b[3~',
 };
 
@@ -63,9 +65,14 @@ export function decideKey(e: KeyLike, c: LineEditCtx): Act {
   const lower = key.toLowerCase();
 
   // ── 되돌리기 ──────────────────────────────────────────────────────────────────
-  //  맥은 ⌘Z. 그 밖에서는 Alt+Z 다 — **Ctrl+Z 는 터미널에서 «중단»(SIGTSTP)이라 뺏지 않는다**(뺏으면 돌던 명령을
-  //  멈출 길이 사라진다). Alt+Z 는 readline 기본 바인딩이 없어 잃는 것이 없다(Alt+K 를 통합검색에 쓴 것과 같은 근거).
-  if (!shift && !ctrl && lower === 'z' && ((c.mac && meta && !alt) || (!c.mac && alt && !meta))) return { k: 'undo' };
+  //  Ctrl+Z 는 모든 플랫폼에서 되돌리기다(#3864). 종전엔 «터미널에서 Ctrl+Z 는 중단(SIGTSTP)이라 뺏지 않는다» 였는데,
+  //  웹 터미널 pane 은 대화형 셸이 아니라 런처(lively-launch)라 하네스가 정지되면 `fg` 칠 곳이 없다 — 사람 손으로는
+  //  못 되살린다(#3861 실사고: Claude Code 2.1.267 부터 Ctrl+Z = 정지). 돌던 명령을 멈추는 일은 Ctrl+C 가 그대로 한다.
+  //  xterm 은 key 가 아니라 keyCode 로 0x1a 를 만들므로(한글 자판에선 key 가 'ㅋ') keyCode 90 도 같은 키로 본다.
+  //  맥은 ⌘Z 도, 그 밖에서는 Alt+Z 도 되돌리기다(Alt+Z 는 readline 기본 바인딩이 없어 잃는 것이 없다).
+  //  ⚠ 입력줄 선택 설정(c.select)과 무관하다 — 그 설정을 끈다고 정지 위험이 되살아나면 안 된다.
+  const isZ = lower === 'z' || e.keyCode === 90;
+  if (isZ && !shift && ((ctrl && !alt && !meta) || (!ctrl && c.mac && meta && !alt) || (!ctrl && !c.mac && alt && !meta))) return { k: 'undo' };
 
   // ── ⌘ 계열 넷 ─────────────────────────────────────────────────────────────────
   //  앱(Claude Code)은 ⌘←/→/⌫/⌦ 를 다 구현해 뒀는데 **xterm 이 ⌘ 를 PTY 로 안 보내** 앱까지 닿지 않는다.
@@ -151,6 +158,23 @@ export class UndoStack {
   get depth(): number { return this.items.length + (this.typed > 0 ? 1 : 0); }
 
   private trim(): void { while (this.items.length > MAX_UNDO) this.items.shift(); }
+}
+
+// ── 앱 자체 되돌리기 (#3864) ────────────────────────────────────────────────────
+//  Claude Code 는 2.1.267 부터 입력칸 되돌리기를 스스로 갖는다 — Ctrl+_(SEQ.undo)로 한 덩이씩 되돌리고 지운 글자도
+//  되살린다(격리 인스턴스 실측). 2.1.266 번들엔 없었다(#3778 바이너리 실측). 앱은 입력칸의 진짜 이력(백스페이스로 지운
+//  글자·붙여넣기·↑ 이력 호출)을 알지만 위 합성 스택은 우리가 본 세 갈래뿐이라, 앱 것이 있으면 그것을 부른다.
+//  판은 pane 포그라운드 명령으로만 안다 — 네이티브 설치는 실행 파일 이름이 버전 문자열(`2.1.267`)이라 tmux 가 그걸 준다.
+//  확인이 안 되면(상태 미수신·매니지드 `docker`·npm 설치 `node`·셸) false → 어느 판에서도 도는 합성으로.
+const NATIVE_UNDO_MIN = [2, 1, 267];
+export function nativeUndoOk(cmd: string | null | undefined): boolean {
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(cmd || ''));
+  if (!m) return false;
+  for (let i = 0; i < 3; i++) {
+    const d = Number(m[i + 1]) - NATIVE_UNDO_MIN[i];
+    if (d !== 0) return d > 0;
+  }
+  return true;
 }
 
 /**
