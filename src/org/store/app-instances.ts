@@ -296,22 +296,33 @@ export async function reopenSessionInstances(owner: string, sessionIds: string[]
   return r.rowCount ?? 0;
 }
 
-/** 내가 치운 세션 id 만 — 좌측 목록이 폴링마다 쓰는 가벼운 판(장식·조인 없음). */
+/**
+ * 내가 치운 세션 id 만 — 좌측 목록이 폴링마다 쓰는 가벼운 판(장식·조인 없음).
+ *  ⚠ 같은 세션을 **다른 app_id 로 연 active 행**이 있으면 뺀다(코디네이터 검토 보강 ①). 치움 행은 app_id 가
+ *   'ai-session' 으로 만들어지므로(dismissSessionInstances) 그 세션을 뒤에 앱 세션으로 열면 active·closed(user)가
+ *   공존한다 — 그대로 두면 목록엔 서는데(목록에 둠이 이긴다) 「치운 세션」에도 떠 같은 사실을 반대로 말한다.
+ */
 export async function listDismissedSessionRefs(owner: string): Promise<string[]> {
   if (!owner) return [];
   const r = await itemsPool.query(
-    `SELECT DISTINCT subject_ref FROM org_app_instance
-      WHERE owner_member=$1 AND subject_kind='session' AND status='closed' AND closed_reason='user'`, [owner]);
+    `SELECT DISTINCT d.subject_ref FROM org_app_instance d
+      WHERE d.owner_member=$1 AND d.subject_kind='session' AND d.status='closed' AND d.closed_reason='user'
+        AND NOT EXISTS (SELECT 1 FROM org_app_instance a
+                         WHERE a.owner_member=d.owner_member AND a.subject_kind='session'
+                           AND a.subject_ref=d.subject_ref AND a.status='active')`, [owner]);
   return r.rows.map((x) => String(x.subject_ref));
 }
 
-/** 「치운 세션」 화면용 전체 행 — 치운 순서(최근 먼저). */
+/** 「치운 세션」 화면용 전체 행 — 치운 순서(최근 먼저). 다른 app_id 로 active 가 공존하는 세션은 뺀다(위와 같은 자). */
 export async function listDismissedSessionInstances(owner: string, limit = 2000): Promise<AppInstanceRow[]> {
   if (!owner) return [];
   const r = await itemsPool.query(
-    `SELECT * FROM org_app_instance
-      WHERE owner_member=$1 AND subject_kind='session' AND status='closed' AND closed_reason='user'
-      ORDER BY closed_at DESC NULLS LAST LIMIT $2`, [owner, limit]);
+    `SELECT d.* FROM org_app_instance d
+      WHERE d.owner_member=$1 AND d.subject_kind='session' AND d.status='closed' AND d.closed_reason='user'
+        AND NOT EXISTS (SELECT 1 FROM org_app_instance a
+                         WHERE a.owner_member=d.owner_member AND a.subject_kind='session'
+                           AND a.subject_ref=d.subject_ref AND a.status='active')
+      ORDER BY d.closed_at DESC NULLS LAST LIMIT $2`, [owner, limit]);
   return r.rows.map(row);
 }
 

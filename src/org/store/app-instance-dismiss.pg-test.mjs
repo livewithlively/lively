@@ -122,6 +122,18 @@ try {
       JSON.stringify({ nOpen, a5, a2, b2 }));
   }
 
+  // ── D10 같은 세션이 다른 app_id 로 active 면 「치운 세션」에서 빠진다(코디네이터 검토 보강 ①) ──
+  {
+    await inst.dismissSessionInstances(A, [S(10)]);                                       // ai-session 으로 closed·user
+    await inst.createAppInstance({ appId: "__pgtest-other-app__", owner: A, projectId: null, subjectKind: "session", subjectRef: S(10) });
+    const rows = await rowsOf(A, S(10));
+    const refs = new Set(await inst.listDismissedSessionRefs(A));
+    const full = (await inst.listDismissedSessionInstances(A)).map((r) => r.subject_ref);
+    chk("D10 같은 세션을 다른 app_id 로 열어 active 가 공존하면 「치운 세션」 두 목록 모두에서 빠진다(목록엔 서는데 치운 목록에도 뜨는 모순 방지)",
+      rows.length === 2 && rows.some((r) => r.status === "active") && rows.some((r) => r.closed_reason === "user") && !refs.has(S(10)) && !full.includes(S(10)),
+      JSON.stringify({ rows, inRefs: refs.has(S(10)), inFull: full.includes(S(10)) }));
+  }
+
   // ── R — 되살리기가 치움을 풀지 않는다(restore 꼬리: 새 id 등록 → 승계 → 옛 id 닫기) ──
   {
     const oldId = S("r-old"), newId = S("r-new");
