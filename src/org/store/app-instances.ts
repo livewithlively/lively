@@ -6,6 +6,14 @@ import { itemsPool } from "../../db/client.js";
 type Q = pg.Pool | pg.PoolClient;
 
 export type AppInstanceStatus = "active" | "closed";
+/**
+ * 닫힘 사유(#3855·#3857) — 사이드바 «보임 축» 은 **사람이 치운 것(user)** 만 본다.
+ *  나머지는 전부 시스템 뒷정리라 «치운 세션» 에 뜨면 안 된다(되살리기가 옛 id 를 닫은 것이 거기 뜨면
+ *  사람은 자기가 치운 적 없는 세션을 «치웠다» 고 보게 된다). NULL = 이 칸 이전에 닫힌 행(사유 미상).
+ *  ⚠ 기본값을 두지 않는다 — 닫는 자리마다 사유를 **고르게** 한다(빠뜨린 자리를 타입이 잡는다).
+ */
+export const CLOSE_REASONS = ["user", "restore", "kill", "purge", "janitor", "system"] as const;
+export type AppInstanceCloseReason = typeof CLOSE_REASONS[number];
 export interface AppInstanceRow {
   id: string;
   app_id: string;
@@ -22,6 +30,7 @@ export interface AppInstanceRow {
   created_at: string;
   updated_at: string;
   closed_at: string | null;
+  closed_reason: AppInstanceCloseReason | null;
 }
 
 function row(r: Record<string, unknown>): AppInstanceRow {
@@ -38,6 +47,7 @@ function row(r: Record<string, unknown>): AppInstanceRow {
     status: r.status as AppInstanceStatus,
     created_at: new Date(String(r.created_at)).toISOString(), updated_at: new Date(String(r.updated_at)).toISOString(),
     closed_at: r.closed_at == null ? null : new Date(String(r.closed_at)).toISOString(),
+    closed_reason: r.closed_reason == null ? null : String(r.closed_reason) as AppInstanceCloseReason,
   };
 }
 
@@ -121,7 +131,7 @@ async function createAppInstanceTx(client: pg.PoolClient, input: CreateAppInstan
   }
   if (!subject) throw new Error("앱 인스턴스를 만들지 못했습니다");
   const found = await client.query(
-    `UPDATE org_app_instance SET status='active', closed_at=NULL, updated_at=now(),
+    `UPDATE org_app_instance SET status='active', closed_at=NULL, closed_reason=NULL, updated_at=now(),
         project_id=$5, page_key=COALESCE($6,page_key), title=COALESCE($7,title), state=$8::jsonb,
         execution_host_kind=CASE WHEN $11 THEN execution_host_kind ELSE $9 END,
         execution_host_id=CASE WHEN $11 THEN execution_host_id ELSE $10 END
@@ -195,9 +205,9 @@ export async function syncSessionAppInstanceProject(sessionId: string, projectId
   }
 }
 
-export async function closeAppInstance(id: string, owner: string): Promise<boolean> {
+export async function closeAppInstance(id: string, owner: string, reason: AppInstanceCloseReason): Promise<boolean> {
   const r = await itemsPool.query(
-    `UPDATE org_app_instance SET status='closed',closed_at=now(),updated_at=now() WHERE id=$1 AND owner_member=$2 AND status<>'closed'`, [id, owner]);
+    `UPDATE org_app_instance SET status='closed',closed_at=now(),updated_at=now(),closed_reason=$3 WHERE id=$1 AND owner_member=$2 AND status<>'closed'`, [id, owner, reason]);
   return (r.rowCount ?? 0) > 0;
 }
 
@@ -207,11 +217,102 @@ export async function closeAppInstance(id: string, owner: string): Promise<boole
  *  이미 끝난 세션이었다). 소유자를 묻지 않는다 — 세션의 죽음은 소유자와 무관한 사실이다.
  *  이미 닫힌 것은 건너뛴다(멱등). 닫은 개수를 돌려준다.
  */
-export async function closeSessionAppInstances(sessionId: string): Promise<number> {
+export async function closeSessionAppInstances(sessionId: string, reason: Exclude<AppInstanceCloseReason, "user">): Promise<number> {
   const r = await itemsPool.query(
-    `UPDATE org_app_instance SET status='closed',closed_at=now(),updated_at=now()
-      WHERE subject_kind='session' AND subject_ref=$1 AND status<>'closed'`, [sessionId]);
+    `UPDATE org_app_instance SET status='closed',closed_at=now(),updated_at=now(),closed_reason=$2
+      WHERE subject_kind='session' AND subject_ref=$1 AND status<>'closed'`, [sessionId, reason]);
   return r.rowCount ?? 0;
+}
+
+// ── 세션의 «보임 축»(#3855·#3857) — 사람이 목록에서 치우고 되돌리는 자리 ─────────────────────
+//  정본은 이 표다: 내 세션 인스턴스가 active = «목록에 둠», closed·사유 user = «치움».
+//  ⚠ 세션·박스는 여기서 절대 안 건드린다 — 보임 축은 실행 축(회수·종료)과 독립이다(상민님 결정 2026-09-10).
+
+const uniqRefs = (ids: string[]): string[] => [...new Set((ids || []).map((x) => String(x ?? "").trim()).filter(Boolean))];
+
+/**
+ * 이 세션들을 **내 목록에서 치운다**. 행이 있으면(active·시스템이 닫은 것 모두) 사유 user 로 닫고,
+ *  한 번도 연 적 없어 행이 없으면 closed·user 행을 새로 만든다 — 그래야 «CLI 로 떠서 도는 세션» 도 치운 채로 남는다.
+ *  멱등: 이미 user 로 닫힌 행은 건드리지 않는다(closed_at 이 치운 순간 그대로 남는다). 바꾸거나 만든 행 수를 돌려준다.
+ */
+export async function dismissSessionInstances(owner: string, sessionIds: string[], appId = "ai-session"): Promise<number> {
+  const refs = uniqRefs(sessionIds);
+  if (!owner || !refs.length) return 0;
+  const client = await itemsPool.connect();
+  try {
+    await client.query("BEGIN");
+    const upd = await client.query(
+      `UPDATE org_app_instance SET status='closed', closed_reason='user', closed_at=now(), updated_at=now()
+        WHERE owner_member=$1 AND subject_kind='session' AND subject_ref=ANY($2::text[])
+          AND (status<>'closed' OR closed_reason IS DISTINCT FROM 'user')`, [owner, refs]);
+    const ins = await client.query(
+      `INSERT INTO org_app_instance(id,app_id,owner_member,project_id,subject_kind,subject_ref,state,status,closed_at,closed_reason)
+       SELECT t.id, $3, $1, NULL, 'session', t.ref, '{}'::jsonb, 'closed', now(), 'user'
+         FROM unnest($2::text[], $4::text[]) AS t(ref, id)
+        WHERE NOT EXISTS (SELECT 1 FROM org_app_instance x
+                           WHERE x.owner_member=$1 AND x.subject_kind='session' AND x.subject_ref=t.ref)
+       ON CONFLICT DO NOTHING`, [owner, refs, appId, refs.map(() => crypto.randomUUID())]);
+    await client.query("COMMIT");
+    return (upd.rowCount ?? 0) + (ins.rowCount ?? 0);
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => { /* connection may already be unusable */ });
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * 되살리기(restore)가 **치움을 풀지 않게** 승계한다(#3857 — 보임 축은 사람만 바꾼다).
+ *  되살리기는 새 박스 id 로 인스턴스를 active 로 세우고(registerSessionInstance) 옛 id 를 닫는다. 옛 id 를 누군가
+ *  «치움(user)» 으로 닫아 뒀다면 그 사람에게 새 id 도 치운 채여야 한다 — 아니면 대시보드·클래식의 **일괄 복원**이
+ *  치운 세션을 목록에 되올린다. 사람이 그 세션을 **직접 열면** 화면의 멱등 생성 경로가 active 로 되살리므로 따로 풀 필요가 없다.
+ *  옛 id 의 user 행은 사유를 restore 로 바꾼다 — 치운 사실은 새 id 로 옮겨 갔고, 두 줄로 남으면 「치운 세션」에 같은 세션이 겹친다.
+ *  승계한 사람 수를 돌려준다.
+ */
+export async function carrySessionDismissals(oldSessionId: string, newSessionId: string): Promise<number> {
+  const from = String(oldSessionId || "").trim(), to = String(newSessionId || "").trim();
+  if (!from || !to || from === to) return 0;
+  const owners = (await itemsPool.query(
+    `SELECT DISTINCT owner_member FROM org_app_instance
+      WHERE subject_kind='session' AND subject_ref=$1 AND status='closed' AND closed_reason='user'`, [from])).rows.map((r) => String(r.owner_member));
+  for (const owner of owners) await dismissSessionInstances(owner, [to]);
+  if (owners.length) {
+    await itemsPool.query(
+      `UPDATE org_app_instance SET closed_reason='restore', updated_at=now()
+        WHERE subject_kind='session' AND subject_ref=$1 AND status='closed' AND closed_reason='user'`, [from]);
+  }
+  return owners.length;
+}
+
+/** 치운 세션을 **목록으로 되돌린다** — 사람이 치운 것(user)만. 시스템이 닫은 행(restore·purge…)은 되살리지 않는다. */
+export async function reopenSessionInstances(owner: string, sessionIds: string[]): Promise<number> {
+  const refs = uniqRefs(sessionIds);
+  if (!owner || !refs.length) return 0;
+  const r = await itemsPool.query(
+    `UPDATE org_app_instance SET status='active', closed_at=NULL, closed_reason=NULL, updated_at=now()
+      WHERE owner_member=$1 AND subject_kind='session' AND subject_ref=ANY($2::text[])
+        AND status='closed' AND closed_reason='user'`, [owner, refs]);
+  return r.rowCount ?? 0;
+}
+
+/** 내가 치운 세션 id 만 — 좌측 목록이 폴링마다 쓰는 가벼운 판(장식·조인 없음). */
+export async function listDismissedSessionRefs(owner: string): Promise<string[]> {
+  if (!owner) return [];
+  const r = await itemsPool.query(
+    `SELECT DISTINCT subject_ref FROM org_app_instance
+      WHERE owner_member=$1 AND subject_kind='session' AND status='closed' AND closed_reason='user'`, [owner]);
+  return r.rows.map((x) => String(x.subject_ref));
+}
+
+/** 「치운 세션」 화면용 전체 행 — 치운 순서(최근 먼저). */
+export async function listDismissedSessionInstances(owner: string, limit = 2000): Promise<AppInstanceRow[]> {
+  if (!owner) return [];
+  const r = await itemsPool.query(
+    `SELECT * FROM org_app_instance
+      WHERE owner_member=$1 AND subject_kind='session' AND status='closed' AND closed_reason='user'
+      ORDER BY closed_at DESC NULLS LAST LIMIT $2`, [owner, limit]);
+  return r.rows.map(row);
 }
 
 export async function pruneAppInstances(appId: string): Promise<number> {

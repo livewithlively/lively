@@ -43,6 +43,9 @@ export interface AppInstanceRecord {
   execution_host_kind: 'central' | 'remote' | null;
   execution_host_id: string | null;
   status: 'active' | 'closed';
+  closed_at?: string | null;
+  //  #3857 — 왜 닫혔나. 'user' = 사람이 목록에서 치웠다 · 나머지는 시스템 뒷정리(restore·kill·purge·janitor·system).
+  closed_reason?: string | null;
   worker: AppWorkerRun | null;
   created_at?: string | null;
   updated_at?: string | null;   // 좌측 목록의 정렬 키(#1883) — 창이 없어도 최근 활동 순으로 선다.
@@ -66,10 +69,47 @@ function remember(instance: AppInstanceRecord): AppInstanceRecord { cache.set(in
  *  좌측 목록은 이 서버 사실을 읽는다(브라우저 탭 목록이 아니다, #1883).
  */
 export async function listAppInstances(): Promise<AppInstanceRecord[]> {
-  const out: any = await api('/api/ui/app-instances');
+  //  #3855·#3857 — 보임 축의 나머지 반쪽(내가 치운 세션 id)을 **같은 왕복**에 받는다. 두 판을 따로 받으면
+  //   한쪽만 도착한 틱에 «목록에 둠» 과 «치움» 이 서로 다른 시점의 사실로 섞인다.
+  const out: any = await api('/api/ui/app-instances?dismissed=1');
   const rows: AppInstanceRecord[] = Array.isArray(out?.instances) ? out.instances : [];
   for (const r of rows) if (r && r.id) remember(r);
+  //  ⚠ 성공한 판에서만 갈아 끼운다 — 실패(throw)면 직전 값이 그대로 남는다. 빈 집합으로 덮으면 치운 세션이
+  //   한 틱에 전부 되살아난다(#869 의 «못 본 판» 과 같은 모양).
+  if (Array.isArray(out?.dismissed_sessions)) dismissedRefs = out.dismissed_sessions.map((x: unknown) => String(x));
   return rows;
+}
+
+let dismissedRefs: string[] = [];
+/** 마지막으로 **성공한** 목록 판이 알려 준, 내가 치운 세션 id(#3857). */
+export function dismissedSessionRefs(): string[] { return dismissedRefs; }
+
+/** 세션을 내 목록에서 치운다(#3857) — 세션은 그대로 돈다. 서버 정본(org_app_instance 사유 user)에 적는다. */
+export async function dismissSessions(sessionIds: string[]): Promise<number> {
+  const out: any = await api('/api/ui/app-instances/sessions/dismiss', { method: 'POST', body: JSON.stringify({ session_ids: sessionIds }) });
+  return Number(out?.dismissed) || 0;
+}
+
+/** 치운 세션을 목록으로 되돌린다(#3857). 사람이 치운 것만 되돌아온다. */
+export async function restoreDismissedSessions(sessionIds: string[]): Promise<number> {
+  const out: any = await api('/api/ui/app-instances/sessions/restore', { method: 'POST', body: JSON.stringify({ session_ids: sessionIds }) });
+  return Number(out?.restored) || 0;
+}
+
+export interface DismissedSession {
+  id: string;
+  session_id: string;
+  app_id: string;
+  title: string | null;
+  closed_at: string | null;
+  subject_label?: string | null;
+  subject_project_id?: number | null;
+  subject_state?: 'known' | 'gone';
+}
+/** 「치운 세션」 화면의 재료 — 치운 순서(최근 먼저), 지금의 이름·소속과 함께. */
+export async function listDismissedSessions(): Promise<DismissedSession[]> {
+  const out: any = await api('/api/ui/app-instances/sessions/dismissed');
+  return Array.isArray(out?.sessions) ? out.sessions : [];
 }
 
 export async function getAppInstance(id: string): Promise<AppInstanceRecord> {

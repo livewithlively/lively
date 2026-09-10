@@ -13,7 +13,7 @@ import { wrap, HttpError } from "../http/rest-util.js";
 import { aiLoginStep, isAiLoginHarness, parseAiLogin, type AiLoginHarness } from "./ai-login-flow.js";   // #2055 터미널 없는 AI 로그인
 import { cancelAiLogin, dropLoginSession, pasteAiLogin, readAiLogin, startAiLogin } from "./ai-login-run.js";
 import { logger } from "../log.js";
-import { closeSessionAppInstances } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
+import { carrySessionDismissals, closeSessionAppInstances } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
 import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
@@ -1170,7 +1170,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       }
       await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "노드 세션 desired-state 삭제 실패(비치명)"));
       //  이 경로는 노드에 kill 을 **릴레이**하므로 게이트웨이 killSession 을 안 거친다 — 인스턴스는 여기서 닫는다(#1954 후속).
-      await closeSessionAppInstances(id).catch((e) => logger.warn({ err: e, id }, "앱 인스턴스 닫기 실패(비치명)"));
+      await closeSessionAppInstances(id, "kill").catch((e) => logger.warn({ err: e, id }, "앱 인스턴스 닫기 실패(비치명)"));
       forgetTenantMap();
       res.json({ ok: true, forgot: !killed });
       return;
@@ -1187,7 +1187,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       if (st) {
         if (st.owner !== idOf(u) && !u.scopes?.includes("admin")) throw new HttpError(403, "본인 세션이 아닙니다");
         await deleteSessionState(req.params.id);
-        await closeSessionAppInstances(req.params.id).catch((e) => logger.warn({ err: e, id: req.params.id }, "앱 인스턴스 닫기 실패(비치명)"));
+        await closeSessionAppInstances(req.params.id, "kill").catch((e) => logger.warn({ err: e, id: req.params.id }, "앱 인스턴스 닫기 실패(비치명)"));
         forgetTenantMap();
         res.json({ ok: true, forgot: true });
         return;
@@ -1412,7 +1412,11 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     } catch (e) { logger.warn({ err: e, id, newId: session.id }, "restore: 미배달 지시 승계 실패(비치명 — 옛 행은 남는다)"); }
     //  복원도 세션 생성이다 — 새 id 로 인스턴스를 세운다(옛 세션의 인스턴스는 아래 옛 행 정리와 함께 닫힌다).
     await registerSessionInstance(session.id, st.owner, { appId: st.app_id, projectId: projRef.projectId ?? null, title: st.label || session.label });
-    await closeSessionAppInstances(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 앱 인스턴스 닫기 실패(비치명)"));
+    //  #3857 — 되살리기가 **치움을 풀지 않게**: 옛 id 를 치워 뒀던 사람에겐 새 id 도 치운 채로 승계한다(보임 축은 사람만 바꾼다).
+    //   사람이 직접 열어 되살린 경우는 화면이 여는 경로(멱등 생성)가 곧바로 active 로 되돌리므로 여기서 가를 필요가 없다.
+    //   ⚠ 옛 id 를 닫기(아래) **전에** 한다 — 닫기는 이미 닫힌 행을 안 건드리지만, 순서가 뒤집히면 판정 재료가 흐려진다.
+    await carrySessionDismissals(id, session.id).catch((e) => logger.warn({ err: e, id, newId: session.id }, "restore: 치움 승계 실패(비치명 — 목록에 다시 보일 수 있다)"));
+    await closeSessionAppInstances(id, "restore").catch((e) => logger.warn({ err: e, id }, "restore: 옛 앱 인스턴스 닫기 실패(비치명)"));
     //  ⚠ #2122 — 옛 행은 **승계가 확인됐을 때만** 지운다(위). 남겨두면 복원 목록에 옛 카드가 한 장 남지만(눈에
     //   보이고 사용자가 지울 수 있다) 대화를 잃지는 않는다 — 다음 복원이 그 행에서 매핑을 다시 이관한다(자가치유).
     //  #2231 — 지우지 않고 **이어진 곳을 적는다**(옛 id 를 든 화면·링크가 새 세션으로 이어지도록). 목록에서 빠지는 건 같다.

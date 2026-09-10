@@ -1302,17 +1302,19 @@ function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
     //   여기 없던 게 더 이상했다.
     owner: isMine(s) ? null : { id: ownerId, name: ownerName(s) },
     at: s.lastSeen || 0,
-    //  × 의 뜻 — 이 목록에서는 '치우기'가 아니라 **프로젝트 트리 행과 같은 것**이다(#3568):
-    //   도는 세션은 보관(지난 세션으로), 지난 세션은 휴지통. 같은 사슬을 두 목록이 같은 붓으로 말한다.
+    //  × 의 뜻 — **어느 목록에서든 «치움»** 이다(#3857, 상민님 2026-09-10). 종전엔 이 구역의 × 가 «보관(지난 세션으로)»
+    //   = 실제로 박스를 내리는 회수였고, 홈의 × 는 목록에서 치우기라 **같은 글리프가 파괴력이 다른 두 뜻**이었다.
+    //   실행 축(회수)은 정책만 한다 — 사람이 누르는 단추는 보임 축(치움·휴지통)뿐이다(⏹ 불요).
+    //   지난 세션의 그 자리는 여전히 휴지통이다.
     //  ⚠ 남의 세션엔 안 그린다(null) — 서버도 소유자만 허용하므로, 그리면 눌러 보고 실패하는 단추가 된다.
     close: !isMine(s) ? null
       : pastRow
         ? { kind: 'trash' as const, label: `「${t.main}」 휴지통으로`,
             title: '휴지통으로 보내기 — 목록에서 빠지고, 휴지통에서 되돌리거나 완전히 지울 수 있어요',
             run: () => { void doTrash(s); } }
-        : { kind: 'x' as const, label: `「${t.main}」 보관(지난 세션으로)`,
-            title: '지난 세션으로 보내기 — 지금 실행만 멈추고, 나중에 열어서 이어서 할 수 있어요',
-            run: () => { void doArchive(s); } },
+        : { kind: 'x' as const, label: `「${t.main}」 목록에서 치우기`,
+            title: DISMISS_TIP,
+            run: () => { hooks.onCloseInstance?.('sess:' + s.id); } },
   };
 }
 
@@ -2677,7 +2679,7 @@ function sessRow(s: Sess, activeKey: string, text: { main: string; sub: string }
     // 보관(×) — **도는 세션에만**(지난 세션은 이미 거기 있다), **내 세션에만**(서버도 소유자만 허용).
     //  자리는 늘 차지한다(hover 때만 보인다) — 나타나며 행을 밀면 목록이 흔들린다(압정과 같은 규약).
     //  지난 세션의 그 자리엔 **휴지통**(#1851) — 도는 세션 → × → 지난 세션 → 휴지통 → (휴지통 안에서) 완전 삭제의 사슬.
-    !pastRow && isMine(s) ? archiveBtn(s) : pastRow && isMine(s) ? trashBtn(s) : null);
+    !pastRow && isMine(s) ? dismissBtn(s) : pastRow && isMine(s) ? trashBtn(s) : null);
   if (isMine(s)) row.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); beginRename(nameEl, s); });
   return row;
 }
@@ -2738,50 +2740,20 @@ function beginRenameProject(pk: string, p: Proj): void {
   inlineRename(nameEl, { value: String(p.name || ''), label: '프로젝트 이름', save: async (next) => { await hooks.onRenameProject?.(Number(p.id), next); } });
 }
 
-// ── 보관(×) — 세션을 '지난 세션'으로 보낸다 ──────────────────────────────────
-//  DELETE …?reclaim=1 = tmux 만 내리고 복원 좌표(desired-state)는 남긴다 → 그 프로젝트의 '지난 세션'에 쌓이고
-//  열면 [이어서 대화하기] 로 그대로 살아난다. **완전 삭제가 아니다** — 그래서 문구도 '보관'이라고 말한다.
-const ARCHIVE_ACK_KEY = 'lively_v2_archive_ack';   // '1' = 안내를 다시 띄우지 않음(사용자가 체크)
-function archiveBtn(s: Sess): HTMLElement {
+// ── 치움(×) — 세션을 **내 목록에서** 치운다(#3857) ──────────────────────────────
+//  종전 이 자리는 «보관(지난 세션으로)» = DELETE …?reclaim=1 로 박스를 실제로 내렸다. 실행 축은 이제 정책만 다룬다
+//  (회수 idle 정책 · /exit) — 사람이 누르는 × 는 보임 축이고, 세션은 그대로 돈다. 치운 세션은 아카이브 ▸ 치운 세션에서
+//  되돌리거나, 다시 열면 목록에 돌아온다. 실체는 셸(main.ts closeSideRow → dismissSessionRow)이 한다.
+const DISMISS_TIP = '목록에서 치우기 — 세션은 그대로 돌고, 아카이브 ▸ 치운 세션에서 되돌릴 수 있어요';
+function dismissBtn(s: Sess): HTMLElement {
   const btn = el('button', {
-    class: 'v2-ss-x', type: 'button', 'aria-label': s.label + ' 보관(지난 세션으로)',
-    title: '지난 세션으로 보내기 — 지금 실행만 멈추고, 나중에 열어서 이어서 할 수 있어요',
+    class: 'v2-ss-x', type: 'button', 'aria-label': s.label + ' 목록에서 치우기', title: DISMISS_TIP,
   }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-ss-x-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' })));
   btn.addEventListener('click', (e: MouseEvent) => {
     e.preventDefault(); e.stopPropagation();
-    void doArchive(s);
+    hooks.onCloseInstance?.('sess:' + s.id);
   });
   return btn;
-}
-async function doArchive(s: Sess): Promise<void> {
-  let ack = false;
-  try { ack = localStorage.getItem(ARCHIVE_ACK_KEY) === '1'; } catch (_) { /* noop */ }
-  if (!ack) {
-    // '다시 보지 않기' 는 **확인을 누른 경우에만** 저장한다 — 취소하고 닫았는데 다음부터 말없이 보관되면 사고다.
-    const again = el('input', { type: 'checkbox', id: 'v2-arch-ack' }) as HTMLInputElement;
-    const extra = el('label', { class: 'v2-arch-ack', for: 'v2-arch-ack' }, again, el('span', { text: '다시 안내하지 않기' }));
-    const ok = await confirmDialog({
-      title: '지난 세션으로 보낼까요?',
-      message: '지금 돌고 있는 것만 멈춥니다. 대화는 그대로 보관돼요.',
-      lines: [
-        '이 세션은 프로젝트 아래 [지난 세션] 묶음으로 들어갑니다.',
-        '나중에 열어서 [이어서 대화하기] 를 누르면 그때 대화 그대로 다시 시작합니다.',
-      ],
-      note: '지우는 것이 아닙니다 — 되돌릴 수 있어요.',
-      confirmText: '지난 세션으로', extra,
-    });
-    if (!ok) return;
-    if (again.checked) { try { localStorage.setItem(ARCHIVE_ACK_KEY, '1'); } catch (_) { /* noop */ } }
-  }
-  try {
-    const q = '?reclaim=1' + (s.node ? '&node=' + encodeURIComponent(s.node) : '');
-    await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + q, { method: 'DELETE' });
-    toast('지난 세션으로 보냈어요 — 열면 이어서 할 수 있습니다');
-    //  id 를 넘긴다 — 받는 쪽이 **서버 되읽기를 기다리지 않고** 이 세션을 곧바로 지난 세션으로 옮긴다.
-    //  종전엔 되읽기만 했는데, tmux 종료가 목록 API 에 반영되기까지 시차가 있어 몇 초 동안 그대로 살아 있는
-    //  것처럼 보였다(원준 2026-08-21 "새로고침해야 이동한다").
-    hooks.onArchived?.(s.id);
-  } catch (e: any) { toast((e && e.message) || '보관하지 못했습니다', true); }
 }
 
 
@@ -2808,7 +2780,7 @@ async function doTrash(s: Sess): Promise<void> {
 }
 
 // ── 우클릭 메뉴 행(#3784) — 사이드바 밖(홈·확인할 것·문패·곁칸 세션 목록)에서도 **같은 메뉴**가 뜨도록 한 벌로 export ──
-//  여기 두는 이유: 보관·휴지통·고정·이름 편집의 실체(doArchive·doTrash·togglePin·inlineRename·hooks)가 이 파일에 산다.
+//  여기 두는 이유: 치움·휴지통·고정·이름 편집의 실체(hooks.onCloseInstance·doTrash·togglePin·inlineRename)가 이 파일에 산다.
 //  항해(열기·새 탭)는 셸(ctx-shell.ts)이 앞에 붙인다 — 이 함수는 **그 세션·프로젝트에 대한 조작**만 만든다.
 /** 세션 하나의 조작 행. nameEl 이 있으면(사이드바 행) 그 자리에서 이름을 고치고, 없으면 작은 입력창으로 묻는다. */
 export function sessionCtxRows(s: Sess, o: { nameEl?: HTMLElement | null; projectName?: string } = {}): CtxRow[] {
@@ -2824,8 +2796,9 @@ export function sessionCtxRows(s: Sess, o: { nameEl?: HTMLElement | null; projec
   } });
   rows.push({ label: isPinned(pk) ? '고정 해제' : '위에 고정', icon: 'pin', checked: isPinned(pk) || undefined, run: () => togglePin(pk) });
   if (s.projectId && Number(s.projectId) > 0) rows.push({ label: '같은 프로젝트에 새 세션', icon: 'plus', run: () => hooks.onNewSession?.(Number(s.projectId)) });
-  if (mine && live) rows.push({ sep: true, label: '' }, { label: '지난 세션으로 보내기', icon: 'archive', hint: '보관', run: () => void doArchive(s) });
-  if (mine && !live && !isTrashedSess(s)) rows.push({ sep: true, label: '' }, { label: '휴지통으로 보내기', icon: 'trash', danger: true, run: () => void doTrash(s) });
+  //  #3857 — 사람이 고르는 동사는 보임 축뿐이다: 치움(어느 세션이든) · 휴지통(지난 세션). «지난 세션으로 보내기»(회수)는 걷었다.
+  if (mine) rows.push({ sep: true, label: '' }, { label: '목록에서 치우기', icon: 'x', run: () => hooks.onCloseInstance?.('sess:' + s.id) });
+  if (mine && !live && !isTrashedSess(s)) rows.push({ label: '휴지통으로 보내기', icon: 'trash', danger: true, run: () => void doTrash(s) });
   void name;
   return rows;
 }
