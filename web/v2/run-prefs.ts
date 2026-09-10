@@ -18,6 +18,8 @@ export interface RunNode {
   // #2172 — 기본 노드 규칙이 쓰는 두 값. mine=내 소유인가(shared 와 직교: 내 노드를 관리자가 공유로 지정할 수 있다),
   //  connectedAt=지금 연결이 붙은 시각(ms, 오프라인이면 null). 구 게이트웨이는 둘 다 안 준다 → 아래에서 폴백한다.
   mine?: boolean; connectedAt?: number | null;
+  // #3833 — 그 노드에서 **지금 돌고 있는 세션 수**. 내 컴퓨터끼리 동률일 때 «내가 실제로 쓰는 곳» 을 고르는 축.
+  sessions?: number;
 }
 
 /** 내 소유인가 — 구 게이트웨이(mine 미보고)면 '공유가 아니면 내 것'으로 본다(서버가 내 소유 ∪ 공유만 주므로 정확한 폴백). */
@@ -37,27 +39,50 @@ export const nodeCanRunAi = (n: RunNode): boolean =>
 
 /**
  * 새 세션의 **기본 실행 노드**(#2172) — 켜져 있는 내 컴퓨터 > 켜져 있는 공유 컴퓨터 > 중앙('').
- *  같은 등급이면 **가장 최근에 붙은 것**. connectedAt 을 안 주는 구 게이트웨이에서는 서버가 준 목록 순서를 따른다.
  *  후보에서 빠지는 것 둘 — ⓐ 꺼진 노드(서버 409) ⓑ AI 를 하나도 못 띄우는 노드(nodeCanRunAi). 사람이 직접 고르는 건 그대로 된다.
+ *
+ *  ── 동률 깨기(#3833, 2026-09-09) ──
+ *  내 컴퓨터가 둘 이상 켜져 있으면 **지금 세션이 많이 돌고 있는 쪽**이 이긴다. 종전 기준은 connectedAt(가장 최근에
+ *  붙은 것) 하나였는데, 그것은 «내가 어디서 일하나» 를 재는 값이 아니었다 — 게이트웨이가 재시작하면 전 노드가
+ *  **동시에** 재접속하므로(실측 2026-09-09: 두 노드의 connectedAt 이 134ms 차) 사실상 핸드셰이크 경주 결과가
+ *  기본 컴퓨터를 정했다. 그래서 세션 23개가 도는 맥북을 두고 세션 0개인 PC 가 기본으로 뽑혔다(윤상민 신고).
+ *  connectedAt 은 마지막 동률 깨기로 남는다(둘 다 세션 0인 경우).
+ *  ⚠ 세션 수 축은 **내 컴퓨터끼리만** 쓴다 — 공유 컴퓨터는 남의 세션도 세므로 그 수가 «내가 쓰는 곳» 을 뜻하지 않는다.
  */
 export function defaultNodeId(nodes: RunNode[]): string {
   const live = nodes.filter((n) => n.online && nodeCanRunAi(n));
   if (!live.length) return '';
+  const rank = (n: RunNode): number => (nodeIsMine(n) ? 1 : 0);
   const best = live.slice().sort((a, b) =>
-    (nodeIsMine(b) ? 1 : 0) - (nodeIsMine(a) ? 1 : 0) || (b.connectedAt || 0) - (a.connectedAt || 0))[0];
+    rank(b) - rank(a)
+    || (rank(a) === 1 ? (b.sessions || 0) - (a.sessions || 0) : 0)
+    || (b.connectedAt || 0) - (a.connectedAt || 0))[0];
   return best ? best.id : '';
 }
 
 /** 기본값 창의 «실행 컴퓨터» 값 — '' = 규칙대로 · 'central' = 항상 중앙 · 그 밖 = 노드 id. */
 export const NODE_CENTRAL = 'central';
-/** 기본값 설정을 실제 노드 id 로 — 고른 노드가 꺼졌거나 사라졌으면 규칙(#2172)으로 돌아간다. '' = 중앙. */
-export function resolveNodeDefault(nodes: RunNode[], pref: string): string {
-  if (pref === NODE_CENTRAL) return '';
+/** 왜 고른 컴퓨터가 아닌 데서 열리는가 — 화면이 그 사실을 **말할 수 있게** 사유를 함께 낸다(#3833). */
+export interface NodeFallback { id: string; name: string; why: 'offline' | 'gone' | 'no-ai' }
+export interface NodeChoice { id: string; fellBack: NodeFallback | null }
+/**
+ * 기본값 설정을 실제 노드 id 로 — 고른 노드가 꺼졌거나 사라졌으면 규칙(#2172)으로 돌아간다. '' = 중앙.
+ *  폴백은 **조용히 하지 않는다**: 사람이 «이 컴퓨터에서» 라고 골라 둔 것을 화면이 말없이 바꾸면, 딴 PC 에서 열린
+ *  세션을 보고서야 알게 된다(윤상민 2026-09-09 — 그마저도 «왜?» 가 화면 어디에도 없었다).
+ */
+export function resolveNodeChoice(nodes: RunNode[], pref: string): NodeChoice {
+  if (pref === NODE_CENTRAL) return { id: '', fellBack: null };
   if (pref) {
     const n = nodes.find((x) => x.id === pref);
-    if (n && n.online && nodeCanRunAi(n)) return n.id;
+    if (n && n.online && nodeCanRunAi(n)) return { id: n.id, fellBack: null };
+    const why: NodeFallback['why'] = !n ? 'gone' : !n.online ? 'offline' : 'no-ai';
+    return { id: defaultNodeId(nodes), fellBack: { id: pref, name: (n && n.name) || pref, why } };
   }
-  return defaultNodeId(nodes);
+  return { id: defaultNodeId(nodes), fellBack: null };
+}
+/** 위의 id 만 — 사유가 필요 없는 자리(칸 그리기·하네스 거르기)가 쓴다. */
+export function resolveNodeDefault(nodes: RunNode[], pref: string): string {
+  return resolveNodeChoice(nodes, pref).id;
 }
 
 const PREFS_KEY = 'lively_term_create_prefs';
@@ -86,11 +111,18 @@ export const MODE_OPTS: { key: LivelyMode; lbl: string; sub: string }[] = [
   { key: 'readonly', lbl: '읽기전용', sub: '읽되 기록하지 않음 · 기밀 작업' },
   { key: 'incognito', lbl: '인코그니토', sub: '라이블리를 전혀 안 씀 · 클린룸' },
 ];
+// 기록 범위 선택지(#3778 재검증, 2026-09-10) — **실제 강제 지점 한 곳**(capabilities/activity.ts)에 맞춘 문구다.
+//  거기서 하는 일은 «이 세션이 작업 기록을 어느 프로젝트에 붙일 수 있나» 하나뿐이다. 값이 open 이 아니면,
+//  회사 전체가 볼 수 있는 프로젝트에 기록하려 할 때 400 으로 막는다(좁히는 것이 아니라 막는다).
+//  ⚠ 그래서 audience 와 private 는 **지금 동작이 같다**(둘 다 «open 이 아님»으로만 쓰인다). 종전 문구는
+//   «그 팀만 봄 / 나만 봄» 이라 보는 사람이 달라지는 것처럼 읽혔는데, 그런 구분은 이 축에 없다.
+//   값을 지우면 그 설정을 가진 사람의 세션이 조용히 바뀌므로 선택지는 넷 다 남기고 **문구로 사실을 말한다**.
+//  ⚠ 지식 저장(knowledge_save)은 이 값을 보지 않는다 — 이 축이 닿는 곳은 작업 기록뿐이다.
 export const WRITE_VIS_OPTS: { v: string; t: string; d: string }[] = [
-  { v: '', t: '자동', d: '실행 폴더를 따름' },
-  { v: 'open', t: '전체 공개', d: '누구나 봄' },
-  { v: 'audience', t: '프로젝트', d: '그 팀만 봄' },
-  { v: 'private', t: '나만', d: '나만 봄' },
+  { v: '', t: '자동', d: '세션이 열린 폴더를 따름' },
+  { v: 'open', t: '제한 없음', d: '어느 프로젝트에나 기록' },
+  { v: 'audience', t: '공개 프로젝트 제외', d: '전체 공개 프로젝트에는 기록 안 함' },
+  { v: 'private', t: '공개 프로젝트 제외 (같음)', d: '위와 동작이 같음' },
 ];
 export interface SessionDefaults { nodeDefault: string; mode: LivelyMode; autoApprove: boolean; writeVis: string }
 /** 새 세션 기본값 — 기억이 없거나 모르는 값이면 안전한 쪽(규칙대로 · 일반 · 확인 후 실행 · 자동). */

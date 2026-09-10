@@ -56,6 +56,30 @@ function el(tag: string, attrs?: any, ...children: any[]): any {
   return n;
 }
 
+/**
+ * host 의 자식을 통째로 갈아 끼운다 — **el() 의 자식 규칙 그대로**(중첩 배열 평탄화 · null/undefined 스킵 ·
+ *  노드 아닌 값은 텍스트로).
+ *
+ * ⚠ **DOM 의 `replaceChildren` 을 직접 부르지 마라.** 그건 Node 가 아닌 인자를 **문자열로 바꿔 넣는다** —
+ *  이 레포가 el() 에서 온 화면 어디서나 쓰는 `조건 ? el(...) : null` 관용이 거기서는 화면에 글자 «null» 로
+ *  찍힌다. 실측(원준님 2026-09-10 신고): 세션 머리줄 얼굴 스택이 「[장] null [＋]」 로 나왔다 — 보는 사람이
+ *  셋 이하라 «몇 명 더» 칩이 null 이 된 자리였다. 게다가 그 텍스트 노드는 .sc-face 의 겹침 마진(-6px)을
+ *  안 받아 뒤따르는 [＋] 가 그 위로 올라타 **겹쳐 보이기까지** 했다.
+ *
+ * 같은 함정이 같은 날 전 web/ 에서 5자리 발견됐다(얼굴 스택 · 내 프로필 4자리 · 증류기 · 자료 공개범위 ·
+ *  분류 대기). 증상이 «조건이 맞을 때만» 나와서 눈으로 안 잡히는 것이 이 결함의 성질이다 — 그래서 자리를
+ *  고치는 데 그치지 않고 **입구를 하나로** 만든다. el() 을 쓰던 손이 그대로 와도 안전한 자리가 여기다.
+ */
+function replaceKids(host: any, ...children: any[]): any {
+  const out: any[] = [];
+  for (const c of children.flat(Infinity)) {
+    if (c == null) continue;
+    out.push((c as any).nodeType ? c : document.createTextNode(String(c)));
+  }
+  host.replaceChildren(...out);
+  return host;
+}
+
 function sv(name: string, attrs?: any, ...children: any[]): any {
   const n: any = document.createElementNS(SVG_NS, name);
   if (attrs) for (const [k, v] of Object.entries<any>(attrs)) { if (v != null) n.setAttribute(k, v); }
@@ -84,5 +108,6 @@ export {
   el,
   interleave,
   reducedMotion,
+  replaceKids,
   sv,
 };

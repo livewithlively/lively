@@ -134,6 +134,12 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2mem-more:hover { background: var(--bg-punch); color: var(--ink); }
 .v2mem-more-ic { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; }
 .v2mem-cancel { flex: none; font-size: 12px; color: var(--coral-text); }
+/* #3834 초대 메일 — 수락 대기 줄의 [다시 보내기] · 카드 발치의 단추 묶음(링크 복사 · 다시 보내기) */
+.v2mem-resend { flex: none; font-size: 12px; color: var(--ink-sub); }
+.v2mem-resend:disabled, .v2mem-cancel:disabled { opacity: .5; cursor: default; }
+.v2mem-cred-acts { display: flex; flex: none; gap: 6px; }
+.v2-ws-resend { font-size: 12px; padding: 2px 4px; color: var(--ink-sub); }
+.v2-ws-resend:disabled { opacity: .5; cursor: default; }
 .v2mem-x:focus-visible, .v2mem-more:focus-visible, .v2mem-chip-x:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
 @media (max-width: 520px) {
   .v2mem-back { padding: 0; align-items: stretch; }

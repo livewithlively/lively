@@ -183,8 +183,20 @@ test("★★ E13 이름·아바타(workspace_update)도 매니지드에서 CP �
     "★face 가 wsView·cpWsView 중 한쪽에만 있다 — 셀프호스트와 매니지드 화면이 갈린다");
 });
 
-test("E11 초대는 '보냈다'고 말하지 않는다 — 링크를 준다(계정 서버가 메일을 안 보낸다)", () => {
+test("E11 초대는 **메일이 실제로 나갔을 때만** '보냈어요' — 아니면 링크를 준다(#3834, 계정 서버가 메일을 보낸다)", () => {
+  //  종전(#2188)엔 «CP 는 메일을 안 보내니 링크를 준다» 였다. #3834 에서 CP 가 보내게 됐지만 규율은 같다 —
+  //   화면의 «보냈어요» 는 발송 결과(delivery)에서만 나오고, 못 나갔으면 링크로 물러선다.
   const people = read("web/v2/ws-people.ts");
-  assert.match(people, /invite\?\.url/, "초대 응답의 링크를 읽지 않는다 — 사람에게 줄 것이 없다");
-  assert.match(people, /초대 링크를 만들었어요/, "링크를 준 경우의 문구가 없다");
+  assert.match(people, /delivery === 'email'/, "발송 결과(delivery)로 문구를 가르지 않는다");
+  assert.match(people, /초대 메일을 보냈어요/, "메일을 보낸 경우의 문구가 없다");
+  assert.match(people, /inviteUrl/, "링크 폴백이 없다 — 메일이 못 나가면 사람에게 줄 것이 없다");
+  assert.match(people, /invite\/resend/, "[다시 보내기] 가 없다 — 메일이 안 닿았을 때 사람이 할 수 있는 것이 없다");
+  // 코어 서버는 CP 의 mail 이 sent 일 때만 email 로 접는다 — 옛 CP(메일 안 보내던 판)가 답해도 «보냈어요» 가 거짓이 되지 않게.
+  assert.match(REG, /const sent = r\.mail === "sent";[\s\S]{0,400}delivery: sent \? \("email" as const\) : \("link" as const\)/,
+    "코어가 CP 의 발송 결과를 보지 않고 email 로 접는다");
+  // 매니지드 취소는 CP 로 — requireRegistry 보다 앞에서 갈라져야 한다(E5 와 같은 규율).
+  const body = capBody("workspace_invite_resolve");
+  const m = body.indexOf("managedMode()"), r = body.indexOf("requireRegistry()");
+  assert.ok(m > 0 && m < r, "workspace_invite_resolve 의 매니지드 분기가 requireRegistry 보다 뒤다 — 구성원 창의 [취소] 가 400 이다");
+  assert.match(body, /workspace-invite-revoke/, "매니지드 취소가 CP 창구를 부르지 않는다");
 });

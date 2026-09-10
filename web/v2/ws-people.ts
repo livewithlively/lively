@@ -17,8 +17,11 @@ export interface PeopleData {
   member_count: number;
   kind_effective: 'personal' | 'team';
   can_invite: boolean;
+  /** #3834 — 초대가 어떻게 닿나. email=계정 서버가 메일로 보낸다(매니지드) · inapp=상대가 로그인하면 화면에 뜬다(셀프호스트). */
+  invite_delivery?: 'email' | 'inapp';
   members: Array<{ member_id: string; role: string; email: string | null; display_name: string | null; is_creator: boolean }>;
-  pending: Array<{ id: string; email: string; role: string; invited_by: string; created_at: string }>;
+  /** 매니지드에선 id 가 곧 이메일이다(코드 원문은 어디에도 없다) — 취소·다시 보내기가 그 값으로 지목한다. */
+  pending: Array<{ id: string; email: string; role: string; invited_by: string | null; created_at: string; expires_at?: string }>;
   candidates: Array<{ id: string; email: string; display_name: string | null }>;
 }
 
@@ -30,12 +33,12 @@ const who = (m: PeopleData['members'][number]): string => personName(m as never)
  *  두 번째 이후(이미 팀)에는 묻지 않는다 — 매번 물으면 확인이 아니라 잡음이 된다.
  */
 function confirmBecomesTeam(wsName: string, email: string): boolean {
+  //  문구는 원준(2026-09-09, #3834)이 정한 것 — 구성원 모달(inviteBlock)의 확인창과 같은 글이어야 한다.
   return confirm(
-    `'${wsName}' 은 지금 혼자 쓰는 개인 워크스페이스예요.\n\n` +
-    `${email} 님이 수락하면:\n` +
-    `· 이 워크스페이스는 팀이 됩니다.\n` +
-    `· 여기 있는 자료·프로젝트를 그분도 보게 됩니다.\n` +
-    `· 보내는 것만으로는 아직 아무것도 바뀌지 않아요 — 수락해야 들어옵니다.\n\n` +
+    `'${wsName}' 에 다른 사람을 초대하면 팀 워크스페이스가 됩니다.\n\n` +
+    `${email} 님이 초대를 수락하면 이 워크스페이스는 팀 워크스페이스가 되고, ` +
+    `여기 있는 자료·프로젝트를 초대받은 사람이 볼 수 있습니다.\n` +
+    `한 번 공유하면 그분이 본 것은 되돌릴 수 없어요.\n\n` +
     `초대를 보낼까요?`);
 }
 
@@ -72,12 +75,22 @@ async function refresh(wrap: HTMLElement, slug: string, onChanged?: () => void):
       el('span', { class: 'v2-ws-person-tt' },
         el('b', { text: p.email }),
         el('span', { text: '수락 대기' })),
+      //  #3834 [다시 보내기] — 매니지드(메일)에서만. 새 링크를 만들어 다시 메일한다.
+      d.invite_delivery === 'email' ? el('button', {
+        class: 'btn-text v2-ws-resend', type: 'button', title: '새 초대 링크를 만들어 다시 메일해요', text: '다시 보내기',
+        onclick: async (e: Event) => {
+          const b = e.currentTarget as HTMLButtonElement; b.disabled = true;
+          try { const i = await resendInvite(slug, p.email); toast(resendToast(i), i.delivery !== 'email'); again(); }
+          catch (err: any) { toast('다시 보내지 못했어요 — ' + (err?.message || err), true); b.disabled = false; }
+        },
+      }) : null,
       el('button', {
         class: 'v2-ws-del', type: 'button', title: '초대 취소', text: '✕',
         onclick: async () => {
           if (!confirm(`${p.email} 님에게 보낸 초대를 취소할까요?`)) return;
+          //  매니지드는 초대를 (워크스페이스, 이메일) 로 지목한다 — id 가 곧 이메일이고 slug 가 함께 가야 한다(#3834).
           try {
-            await api('/api/ui/me/workspaces/invite/resolve', { method: 'POST', body: JSON.stringify({ invite_id: p.id, decision: 'revoke' }) });
+            await api('/api/ui/me/workspaces/invite/resolve', { method: 'POST', body: JSON.stringify({ invite_id: p.id, decision: 'revoke', slug }) });
             toast('초대를 취소했어요.'); again();
           } catch (e: any) { toast('취소하지 못했어요 — ' + (e?.message || e), true); }
         },
@@ -131,11 +144,14 @@ function inviteForm(d: PeopleData, slug: string, again: () => void): HTMLElement
     try {
       const r: any = await api('/api/ui/me/workspaces/invite', { method: 'POST', body: JSON.stringify({ slug, email }) });
       input.value = '';
-      //  #2188 매니지드 — 계정 서버는 메일을 보내지 않는다. 링크가 오면 그것이 초대이므로 **링크를 준다**
-      //   ("보냈어요" 라고 말하면 거짓이고, 사람은 아무도 안 오는 이유를 영영 모른다).
-      if (r?.invite?.url) {
+      //  #3834 매니지드 — 계정 서버가 초대 링크를 **메일로 보낸다**. «보냈어요» 는 실제 발송 결과(delivery)에서만 나오고,
+      //   못 나갔으면 종전(#2188)대로 링크를 준다("보냈어요" 라고 말하면 거짓이고, 사람은 아무도 안 오는 이유를 영영 모른다).
+      if (r?.invite?.delivery === 'email') {
+        note.textContent = `${email} 님에게 초대 메일을 보냈어요. 메일의 링크를 열고 수락하면 구성원이 됩니다.`;
+        toast(`${email} 님에게 초대 메일을 보냈어요.`);
+      } else if (r?.invite?.url) {
         note.replaceChildren(
-          el('span', { text: `${email} 님의 초대 링크예요 — 전해 주세요: ` }),
+          el('span', { text: `${email} 님의 초대 링크예요 — 메일을 보내지 못해 직접 전해 주세요: ` }),
           el('a', { href: String(r.invite.url), target: '_blank', rel: 'noopener', text: String(r.invite.url) }));
         toast('초대 링크를 만들었어요 — 아래 링크를 전해 주세요.');
       } else {
@@ -153,9 +169,9 @@ function inviteForm(d: PeopleData, slug: string, again: () => void): HTMLElement
   return el('div', { class: 'v2-ws-invite' },
     list, input,
     el('div', { class: 'v2-ws-formrow' }, go, note),
-    el('p', { class: 'v2-ws-hint', text: d.kind_effective === 'personal'
+    el('p', { class: 'v2-ws-hint', text: (d.invite_delivery === 'email' ? '초대 링크를 이메일로 보내요. ' : '') + (d.kind_effective === 'personal'
       ? '수락하면 이 워크스페이스는 팀이 됩니다. 보내는 것만으로는 아직 아무것도 바뀌지 않아요.'
-      : '보낸 뒤에도 상대가 수락해야 구성원이 됩니다.' }));
+      : '보낸 뒤에도 상대가 수락해야 구성원이 됩니다.') }));
 }
 
 // ── 나에게 온 초대 ──────────────────────────────────────────────────────────
@@ -235,15 +251,26 @@ interface Person {
 }
 interface View {
   wsName: string; kind: 'personal' | 'team'; count: number; canManage: boolean;
+  /** #3834 — 초대가 닿는 길. email=계정 서버가 메일(매니지드) · inapp=로그인하면 화면에(셀프호스트). */
+  delivery: 'email' | 'inapp';
   people: Person[]; pending: PeopleData['pending']; candidates: PeopleData['candidates'];
 }
 /**
- * 방금 만든 계정의 임시 비밀번호, 또는 방금 만든 **초대 링크** — 창을 닫으면 사라진다(서버가 다시 주지 않는다).
+ * 방금 만든 계정의 임시 비밀번호, 방금 보낸 **초대 메일**, 또는 방금 만든 **초대 링크** — 창을 닫으면 사라진다.
  *
- * #2188 — 매니지드에서 초대는 **링크**다. 계정 서버(app.lvly.io)가 메일을 보내지 않으므로, 화면이
- *  "보냈어요" 라고 말하면 그건 거짓이고 사람은 아무도 안 오는 이유를 영영 모른다. 그래서 **줄 것을 준다.**
+ * #2188 → #3834 — 매니지드에서 초대는 이제 계정 서버(app.lvly.io)가 **메일로 보낸다**. 다만 규율은 그대로다:
+ *  "보냈어요" 는 실제 발송 결과(delivery === 'email')에서만 나오고, 못 나갔으면(미구성·실패·옛 계정 서버)
+ *  링크를 그대로 준다 — 보내지도 않고 보냈다고 하면 사람은 아무도 안 오는 이유를 영영 모른다.
  */
-interface Issued { title: string; email: string; password?: string; inviteUrl?: string; note?: string }
+interface Issued {
+  title: string; email: string; password?: string; inviteUrl?: string; note?: string;
+  /** email=계정 서버가 메일로 보냈다(«보냈어요» 의 유일한 근거) · link=못 보냈다, 링크를 직접 전한다. */
+  delivery?: 'email' | 'link';
+  expiresAt?: string | null;
+  resent?: boolean;
+  /** 다시 보내기 — 새 링크를 만들어 다시 메일한다. 카드가 그 결과로 제자리에서 바뀐다. */
+  resend?: () => Promise<Issued>;
+}
 
 const ROLE_LABEL: Record<Role, string> = { creator: '만든 사람', owner: '공동 관리자', admin: '관리자', member: '구성원' };
 
@@ -260,6 +287,39 @@ function ago(iso: string): string {
   if (m < 60) return `${m}분 전`;
   const h = Math.round(m / 60); if (h < 24) return `${h}시간 전`;
   const d = Math.round(h / 24); return d < 30 ? `${d}일 전` : `${Math.round(d / 30)}달 전`;
+}
+
+/** 만료 시각 → «9월 23일까지». 시간까지는 안 말한다(14일짜리 링크에 분 단위는 잡음이다). */
+function untilLabel(iso: string): string {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? '' : `${d.getMonth() + 1}월 ${d.getDate()}일까지`;
+}
+
+/** 서버 응답(초대·다시 보내기가 같은 모양) → 카드 재료. «보냈어요» 는 **delivery === 'email' 일 때만** (#3834). */
+function issuedFromInvite(inv: any, email: string, slug: string, resent: boolean): Issued {
+  const sent = inv?.delivery === 'email';
+  const mail = String(inv?.mail || '');
+  const why = mail === 'failed' ? '메일을 보내지 못했어요 — ' : mail === 'skipped' ? '이 서버는 메일을 보내지 않아요 — ' : '';
+  return {
+    title: sent ? `${email} 님에게 초대 메일을 ${resent ? '다시 ' : ''}보냈어요` : `${email} 님의 초대 링크를 만들었어요`,
+    email, inviteUrl: inv?.url ? String(inv.url) : undefined, delivery: sent ? 'email' : 'link',
+    expiresAt: inv?.expires_at ? String(inv.expires_at) : null, resent,
+    note: sent
+      ? (inv?.becomes_team ? '메일의 링크를 열고 수락하면 이 워크스페이스가 팀이 됩니다.' : '메일의 링크를 열고 수락해야 구성원이 됩니다.')
+      : why + (inv?.becomes_team ? '이 링크를 직접 전해 주세요. 수락하면 이 워크스페이스가 팀이 됩니다.' : '이 링크를 직접 전해 주세요. 열어서 수락해야 구성원이 됩니다.'),
+    // 다시 보내기는 메일이 나가는(또는 나갈 뻔한) 배포에서만 — 미구성·옛 계정 서버에선 눌러 봐야 같은 결과다.
+    resend: (mail === 'sent' || mail === 'failed') ? () => resendInvite(slug, email) : undefined,
+  };
+}
+
+/** 초대 다시 보내기 — 새 링크를 만들어 다시 메일한다(옛 링크는 그 자리에서 무효). 수락 대기 중이어야 한다. */
+async function resendInvite(slug: string, email: string): Promise<Issued> {
+  const r: any = await api('/api/ui/me/workspaces/invite/resend', { method: 'POST', body: JSON.stringify({ slug, email }) });
+  return issuedFromInvite(r?.invite, email, slug, true);
+}
+
+function resendToast(i: Issued): string {
+  return i.delivery === 'email' ? `${i.email} 님에게 초대 메일을 다시 보냈어요.` : '메일을 보내지 못했어요 — 새 초대 링크를 직접 전해 주세요.';
 }
 
 /** 구성원 모달을 연다. slug = 대상 워크스페이스, wsName = 표시 이름. */
@@ -295,15 +355,20 @@ export function openMemberModal(slug: string, wsName: string, opts: MemberModalO
     const meId = String((state.me as any)?.userId || '');
     const kids: (HTMLElement | null)[] = [];
 
-    for (const i of issued) kids.push(issuedCard(i));
-    if (v.canManage) kids.push(inviteBlock(v, slug, primary, (i) => { issued.unshift(i); }, again));
+    //  같은 사람의 초대 카드는 하나만 — 다시 보내면 그 카드가 바뀐다(위에 하나 더 쌓이지 않는다). 비밀번호 카드는 별개.
+    const push = (i: Issued): void => {
+      const k = issued.findIndex((x) => x.email === i.email && !x.password && !i.password);
+      if (k >= 0) issued[k] = i; else issued.unshift(i);
+    };
+    for (const i of issued) kids.push(issuedCard(i, (n) => { const k = issued.indexOf(i); if (k >= 0) issued[k] = n; void paint(); }));
+    if (v.canManage) kids.push(inviteBlock(v, slug, primary, push, again));
 
     kids.push(el('div', { class: 'v2mem-sec' }, el('b', { text: '구성원' }), el('span', { text: String(v.count) })));
-    for (const p of v.people) kids.push(personRow(v, p, slug, primary, meId, (i) => { issued.unshift(i); }, again));
+    for (const p of v.people) kids.push(personRow(v, p, slug, primary, meId, push, again));
 
     if (v.pending.length) {
       kids.push(el('div', { class: 'v2mem-sec' }, el('b', { text: '수락 대기' }), el('span', { text: String(v.pending.length) })));
-      for (const p of v.pending) kids.push(pendingRow(v, p, again));
+      for (const p of v.pending) kids.push(pendingRow(v, p, slug, push, again));
     }
     if (!v.canManage) kids.push(el('p', { class: 'v2mem-note', text: primary
       ? '사람을 부르고 권한을 바꾸는 건 관리자가 합니다.'
@@ -319,6 +384,7 @@ async function loadWsView(slug: string, wsName: string): Promise<View> {
   const d = await api('/api/ui/me/workspaces/people?slug=' + encodeURIComponent(slug)) as PeopleData;
   return {
     wsName: d.workspace?.name || wsName, kind: d.kind_effective, count: d.member_count, canManage: d.can_invite,
+    delivery: d.invite_delivery === 'email' ? 'email' : 'inapp',
     people: d.members.map((m: any) => ({
       id: m.member_id, name: who(m), email: m.email, role: m.is_creator ? 'creator' : m.role === 'owner' ? 'owner' : 'member',
       avatar: m.avatar, avatar_char: m.avatar_char, avatar_color: m.avatar_color })),
@@ -338,7 +404,7 @@ async function loadBoxView(wsName: string): Promise<View> {
       role: scopes.includes('admin') ? 'admin' : 'member', scopes,
       avatar: f.avatar ?? m.avatar, avatar_char: f.avatar_char ?? m.avatar_char, avatar_color: f.avatar_color ?? m.avatar_color };
   });
-  return { wsName, kind: 'team', count: people.length, canManage: !!(org && org.canEdit), people, pending: [], candidates: [] };
+  return { wsName, kind: 'team', count: people.length, canManage: !!(org && org.canEdit), delivery: 'inapp', people, pending: [], candidates: [] };
 }
 
 // ── 부르기 — 이메일 칩 입력 + 권한 + [초대하기]. ─────────────────────────────────────────────
@@ -398,6 +464,7 @@ function inviteBlock(v: View, slug: string, primary: boolean, onIssued: (i: Issu
 
   const send = async (): Promise<void> => {
     let linkIssued = false;   // #2188 — 링크를 준 경우엔 "보냈어요" 라고 말하지 않는다(우리가 안 보냈다)
+    let mailed = 0;           // #3834 — 계정 서버가 실제로 메일을 보낸 수(delivery === 'email')
     const emails = chips.values();
     if (!emails.length) { note.textContent = '이메일을 넣어 주세요.'; chips.focus(); return; }
     const bad = emails.filter((e) => !EMAIL_RE.test(e));
@@ -406,14 +473,14 @@ function inviteBlock(v: View, slug: string, primary: boolean, onIssued: (i: Issu
     if (mine && emails.includes(mine)) { note.textContent = '내 주소는 넣을 수 없어요.'; return; }
     // ★ 개인 → 팀은 되돌릴 수 없다(내보내도 그분이 본 것은 되돌아오지 않는다) — 첫 초대 한 번만 강하게 확인한다.
     if (!primary && v.kind === 'personal') {
+      //  문구는 원준(2026-09-09, #3834)이 정한 것 — «사람을 들이면 팀이 됩니다» 가 아니라 «다른 사람을 초대하면 팀 워크스페이스가 됩니다».
       const ok = await confirmDialog({
-        title: `'${v.wsName}' 에 사람을 들이면 팀이 됩니다`,
+        title: `'${v.wsName}' 에 다른 사람을 초대하면 팀 워크스페이스가 됩니다`,
         lines: [
-          `${emails.join(', ')} 님을 초대합니다.`,
-          '수락하면 이 워크스페이스는 팀이 되고, 여기 있는 자료·프로젝트를 그분이 보게 됩니다.',
+          `${emails.join(', ')} 님이 초대를 수락하면 이 워크스페이스는 팀 워크스페이스가 되고, 여기 있는 자료·프로젝트를 초대받은 사람이 볼 수 있습니다.`,
           '한 번 공유하면 그분이 본 것은 되돌릴 수 없어요.',
         ],
-        confirmText: '초대 보내기', cancelText: '그만두기', danger: true });
+        confirmText: v.delivery === 'email' ? '초대 메일 보내기' : '초대 보내기', cancelText: '그만두기', danger: true });
       if (!ok) return;
     }
     go.disabled = true; note.textContent = primary ? '계정을 만드는 중…' : '보내는 중…';
@@ -426,13 +493,12 @@ function inviteBlock(v: View, slug: string, primary: boolean, onIssued: (i: Issu
           if (r?.initialPassword) onIssued({ title: `${email} 계정을 만들었어요`, email, password: String(r.initialPassword) });
         } else {
           const r: any = await api('/api/ui/me/workspaces/invite', { method: 'POST', body: JSON.stringify({ slug, email, role: roleSel?.value || 'member' }) });
-          //  #2188 매니지드 — 계정 서버는 메일을 보내지 않고 **링크**를 준다. 받으면 그대로 보여 준다.
+          //  #3834 매니지드 — 계정 서버가 초대 링크를 **메일로 보낸다**. 카드의 «보냈어요» 는 발송 결과(delivery)에서만
+          //   나오고, 못 나갔으면(미구성·실패·옛 계정 서버) 종전(#2188)대로 링크를 그대로 보여 준다.
           if (r?.invite?.url) {
-            linkIssued = true;
-            onIssued({ title: `${email} 님을 초대했어요`, email, inviteUrl: String(r.invite.url),
-              note: r.invite.becomes_team
-                ? '이 링크를 그분에게 전해 주세요. 수락하면 이 워크스페이스가 팀이 됩니다.'
-                : '이 링크를 그분에게 전해 주세요. 열어서 수락해야 구성원이 됩니다.' });
+            const i = issuedFromInvite(r.invite, email, slug, false);
+            if (i.delivery === 'email') mailed++; else linkIssued = true;
+            onIssued(i);
           }
         }
         okd.push(email);
@@ -442,7 +508,8 @@ function inviteBlock(v: View, slug: string, primary: boolean, onIssued: (i: Issu
     if (okd.length) {
       chips.clear();
       toast(primary ? `${okd.length}명의 계정을 만들었어요 — 임시 비밀번호를 전해 주세요.`
-        : linkIssued ? `초대 링크를 만들었어요 — 아래 링크를 전해 주세요.`
+        : linkIssued ? (mailed ? `초대 메일 ${mailed}통을 보냈어요. 못 보낸 분의 링크는 위에 있어요 — 직접 전해 주세요.` : `메일을 보내지 못했어요 — 위 초대 링크를 직접 전해 주세요.`)
+        : mailed ? `${mailed}명에게 초대 메일을 보냈어요 — 메일의 링크로 수락하면 구성원이 됩니다.`
         : `${okd.length}명에게 초대를 보냈어요 — 수락하면 구성원이 됩니다.`);
     }
     note.textContent = failed.length ? '못 했어요: ' + failed.join(' · ') : '';
@@ -455,24 +522,46 @@ function inviteBlock(v: View, slug: string, primary: boolean, onIssued: (i: Issu
     chips.el,
     el('p', { class: 'v2mem-help', text: primary
       ? '계정이 만들어지고 임시 비밀번호가 이 창에 나와요 — 그분에게 직접 전해 주세요.'
-      : '초대받은 분이 로그인하면 초대가 보여요. 수락해야 구성원이 됩니다.' }),
+      : v.delivery === 'email'
+        ? '초대 링크를 이메일로 보내요. 메일의 링크를 열고 수락해야 구성원이 됩니다.'
+        : '초대받은 분이 로그인하면 초대가 보여요. 수락해야 구성원이 됩니다.' }),
     el('div', { class: 'v2mem-invrow' }, roleSel, note, go));
 }
 
 /** 방금 만든 계정 — 임시 비밀번호는 지금만 보인다. 세 줄을 한 번에 복사해 그분에게 전한다. */
-function issuedCard(i: Issued): HTMLElement {
+function issuedCard(i: Issued, onReplace?: (next: Issued) => void): HTMLElement {
   const row = (k: string, val: string, mono = false): HTMLElement =>
     el('div', { class: 'v2mem-cred-row' }, el('span', { class: 'v2mem-cred-k', text: k }), el('span', { class: 'v2mem-cred-v' + (mono ? ' mono' : ''), text: val }));
   const head = el('div', { class: 'v2mem-cred-h' }, svg(['M5 12.5l4.2 4.2L19 7'], 'v2mem-cred-ic'), el('b', { text: i.title }));
+  //  [다시 보내기] — 새 링크를 만들어 다시 메일한다. 결과로 이 카드가 제자리에서 바뀐다(위에 하나 더 쌓지 않는다).
+  const resendBtn = (i.resend && onReplace) ? el('button', {
+    class: 'btn btn-ghost btn-sm', type: 'button', text: '다시 보내기', title: '새 초대 링크를 만들어 다시 메일해요',
+    onclick: async (e: Event) => {
+      const b = e.currentTarget as HTMLButtonElement; b.disabled = true; b.textContent = '보내는 중…';
+      try { const n = await i.resend!(); toast(resendToast(n), n.delivery !== 'email'); onReplace(n); }
+      catch (err: any) { toast('다시 보내지 못했어요 — ' + (err?.message || err), true); b.disabled = false; b.textContent = '다시 보내기'; }
+    } }) : null;
 
-  //  #2188 초대 링크 — 이 링크가 곧 초대다. 상대에게 **전달해야** 한다(우리가 메일을 보내지 않는다).
+  //  #3834 초대 메일 — 계정 서버가 보냈다(delivery === 'email' 일 때만 이 카드). 링크는 만일을 위해 복사만 열어 둔다.
+  if (i.delivery === 'email') {
+    return el('section', { class: 'v2mem-cred', role: 'status' }, head,
+      row('받는 사람', i.email),
+      i.expiresAt ? row('링크 유효 기간', untilLabel(i.expiresAt)) : null,
+      el('div', { class: 'v2mem-cred-f' },
+        el('span', { class: 'v2mem-help', text: [i.note, i.resent ? '이전에 보낸 링크는 더 이상 열리지 않아요.' : '', '메일이 안 보이면 스팸함을 확인해 달라고 알려 주세요.'].filter(Boolean).join(' ') }),
+        el('div', { class: 'v2mem-cred-acts' },
+          i.inviteUrl ? copyButton(() => i.inviteUrl!, '링크 복사') : null,
+          resendBtn)));
+  }
+
+  //  #2188 초대 링크 — 메일이 못 나간 경우(미구성·실패·옛 계정 서버). 이 링크가 곧 초대다. 상대에게 **전달해야** 한다.
   if (i.inviteUrl) {
     const text = `${i.email} 님을 라이블리 워크스페이스에 초대했습니다.\n${i.inviteUrl}`;
     return el('section', { class: 'v2mem-cred', role: 'status' }, head,
-      row('초대한 사람', i.email), row('초대 링크', i.inviteUrl, true),
+      row('받는 사람', i.email), row('초대 링크', i.inviteUrl, true),
       el('div', { class: 'v2mem-cred-f' },
         el('span', { class: 'v2mem-help', text: i.note || '이 링크를 그분에게 전해 주세요. 열어서 수락해야 구성원이 됩니다. 창을 닫으면 링크를 다시 볼 수 없어요.' }),
-        copyButton(() => text, '초대 링크 복사')));
+        el('div', { class: 'v2mem-cred-acts' }, copyButton(() => text, '초대 링크 복사'), resendBtn)));
   }
 
   const loginUrl = location.origin;
@@ -536,14 +625,25 @@ function personRow(v: View, p: Person, slug: string, primary: boolean, meId: str
     more);
 }
 
-function pendingRow(v: View, p: PeopleData['pending'][number], again: () => void): HTMLElement {
+function pendingRow(v: View, p: PeopleData['pending'][number], slug: string, onIssued: (i: Issued) => void, again: () => void): HTMLElement {
+  const mailed = v.delivery === 'email';
+  const sub = [`${ago(p.created_at)} ${mailed ? '메일로 보냄' : '보냄'}`, p.role === 'owner' ? '공동 관리자로' : '구성원으로',
+    mailed && p.expires_at ? `링크 ${untilLabel(p.expires_at)}` : ''].filter(Boolean).join(' · ');
+  //  #3834 [다시 보내기] — 매니지드(메일)에서만. 새 링크를 만들어 다시 메일하고, 결과 카드를 위에 올린다.
+  const resend = (v.canManage && mailed) ? el('button', { class: 'btn-text v2mem-resend', type: 'button', text: '다시 보내기', title: '새 초대 링크를 만들어 다시 메일해요', onclick: async (e: Event) => {
+    const b = e.currentTarget as HTMLButtonElement; b.disabled = true;
+    try { const i = await resendInvite(slug, p.email); toast(resendToast(i), i.delivery !== 'email'); onIssued(i); again(); }
+    catch (err: any) { toast('다시 보내지 못했어요 — ' + (err?.message || err), true); b.disabled = false; }
+  } }) : null;
   return el('div', { class: 'v2mem-row pending' },
     el('span', { class: 'v2mem-face waiting', 'aria-hidden': 'true', text: '…' }),
-    el('div', { class: 'v2mem-tt' }, el('b', { text: p.email }), el('span', { text: `${ago(p.created_at)} 보냄 · ${p.role === 'owner' ? '공동 관리자로' : '구성원으로'}` })),
+    el('div', { class: 'v2mem-tt' }, el('b', { text: p.email }), el('span', { text: sub })),
     el('span', { class: 'v2mem-role', text: '수락 대기' }),
+    resend,
     v.canManage ? el('button', { class: 'btn-text v2mem-cancel', type: 'button', text: '취소', title: '초대 취소', onclick: async () => {
       if (!await confirmDialog({ title: '초대를 취소할까요?', message: `${p.email} 님에게 보낸 초대를 거둡니다.`, confirmText: '취소하기', cancelText: '그만두기' })) return;
-      try { await api('/api/ui/me/workspaces/invite/resolve', { method: 'POST', body: JSON.stringify({ invite_id: p.id, decision: 'revoke' }) }); toast('초대를 취소했어요.'); again(); }
+      //  매니지드는 초대를 (워크스페이스, 이메일) 로 지목한다 — id 가 곧 이메일이고 slug 가 함께 가야 한다(#3834).
+      try { await api('/api/ui/me/workspaces/invite/resolve', { method: 'POST', body: JSON.stringify({ invite_id: p.id, decision: 'revoke', slug }) }); toast('초대를 취소했어요.'); again(); }
       catch (e: any) { toast('취소하지 못했어요 — ' + (e?.message || e), true); }
     } }) : null);
 }

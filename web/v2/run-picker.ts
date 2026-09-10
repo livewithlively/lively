@@ -12,20 +12,22 @@
 //  가고, 줄에는 세션마다 실제로 바꾸는 셋 — AI · 모델 · 추론강도 — 만 남는다. 값은 run-prefs.ts 가 한 곳에서 읽는다.
 //
 //  ── 칸 폭 = 고른 값(#3778) ──
-//  <select> 의 폭은 브라우저가 **가장 긴 선택지**로 정한다. 그래서 «Opus 4.5» 를 골라도 칸은 «모델 · AI 기본값» 만큼이고,
+//  <select> 의 폭은 브라우저가 **가장 긴 선택지**로 정한다. 그래서 «Opus 4.5» 를 골라도 칸은 가장 긴 선택지만큼이고,
 //  글자와 ▾ 사이 빈칸이 칸마다 달라 줄이 들쭉날쭉했다(원준 2026-09-09 실측 — 여백 CSS 로는 안 고쳐진다). 그래서 고른
 //  option 의 글자를 같은 글꼴의 숨은 span 으로 재서 폭을 직접 준다(fit). 칸 사이는 gap 이 아니라 가는 세로선이 경계를 말한다.
 //  세 칸의 문구는 모두 «축 · 값» 이다(제공자 칸은 «회사 · 도구» 가 곧 그 형식이다).
 //
 //  ── 기본값 = 직전 세팅 ──
 //  제공자·모델·추론강도의 기본은 **내가 지난번에 고른 값**이다 — 클래식 '새 AI 세션' 폼과 같은 localStorage 키
-//  (run-prefs.ts). 빈 값은 **'AI 기본값'** — 그 플래그를 아예 안 넘겨 그 AI 가 자기 설정으로 뜬다는 뜻이다.
+//  (run-prefs.ts). 고른 적이 없으면 **서버 카탈로그가 선언한 기본값**을 골라 둔다(#3778) — 화면에 보이는 값이 곧 그
+//  세션이 열리는 값이다. 종전엔 빈 값이 골라져 «AI 기본값» 이라고만 적혔는데, 그 실제 값은 격리 계정 홈에 있어 화면이
+//  읽을 수 없다 — «알 수 없음» 을 «기본값» 이라 적고 있었다(원준 2026-09-09 «기본값이 뭔지 사용자가 알 수가 없잖아»).
 //
 //  ── 소비자 ──
 //  홈 입력창(v2/views.ts) · 프로젝트 새 세션 자리(v2/panes-parts.ts) · 프로젝트 '클로드로 실행' 기본값(projects/selection.ts) ·
 //  세션 대화창(session-chat.ts — 헬퍼만).
-import { api, el } from '../core.js';
-import { isAiHarness, resolveNodeDefault, runPrefs, saveRunPrefs, sessionDefaults, type RunNode } from './run-prefs.js';
+import { api, el, toast } from '../core.js';
+import { isAiHarness, resolveNodeChoice, resolveNodeDefault, runPrefs, saveRunPrefs, sessionDefaults, type RunNode } from './run-prefs.js';
 import { defaultsSummary, openSessionDefaults } from './session-defaults.js';
 import type { MentionMember } from './mention-text.js';
 // 잎 모듈로 옮긴 것들의 재수출 — 종전 import 경로(run-picker)를 그대로 쓰는 소비자를 깨지 않는다.
@@ -75,12 +77,41 @@ function loadConfig(): Promise<RunConfig> {
           nodes: Array.isArray(cfg && cfg.nodes) ? cfg.nodes : [],
           members: Array.isArray(cfg && cfg.members) ? cfg.members : [],
         };
+        nodesAt = Date.now();
         return cached;
       })
       .catch(() => ({ harnesses: [] as RunHarness[], nodes: [] as RunNode[], members: [] as MentionMember[] }))   // 못 받으면 빈 목록 — 부르는 쪽이 칸을 안 그리고 지난번 설정 그대로 연다
       .finally(() => { inflight = null; });
   }
   return inflight;
+}
+
+// ── 노드 축은 «지금» 이다 (#3833) ────────────────────────────────────────────────
+//  하네스·구성원은 세션 내내 안 변하지만 online 은 초 단위로 변한다. 종전엔 셋이 한 캐시에 묶여 **무효화 경로가
+//  아예 없었고**, 그래서 탭을 연 순간의 스냅샷이 탭 수명 내내 남았다 — 게이트웨이가 재시작한 몇 초 사이에 그 값을
+//  받은 사람은 켜져 있는 자기 맥북을 «지금 꺼짐» 으로 계속 보고, [시키기]는 딴 컴퓨터로 폴백했다(윤상민 2026-09-09).
+//  세션 스트림은 다른 경로라 멀쩡히 붙어 있어서 «세션은 되는데 홈만 꺼졌다고 한다» 가 됐다.
+//  그래서 이 축만 다시 읽는 문을 둔다 — [⚙] 를 열 때와 [시키기] 직전, 즉 그 값이 실제로 쓰이는 두 자리에서 부른다.
+let nodesAt = 0;
+let nodesInflight: Promise<RunNode[]> | null = null;
+/** 노드 축만 재조회. maxAgeMs 안에 이미 읽었으면 그대로 쓴다(연타·두 자리 연속 호출이 요청을 겹치지 않게). */
+export async function refreshNodes(maxAgeMs = 0): Promise<RunNode[]> {
+  if (!cached) return (await loadConfig()).nodes;   // 첫 로드가 곧 최신이다
+  if (maxAgeMs > 0 && nodesAt && Date.now() - nodesAt < maxAgeMs) return cached.nodes;
+  if (!nodesInflight) {
+    nodesInflight = api('/api/ui/terminal/config?only=nodes')
+      .then((out: any) => {
+        const ns = Array.isArray(out && out.nodes) ? out.nodes as RunNode[] : null;
+        if (!ns || !cached) return cached ? cached.nodes : [];
+        nodesAt = Date.now();
+        cached.nodes = ns;
+        return ns;
+      })
+      // 못 받으면 **지금 아는 대로** 간다 — 여기서 빈 목록을 내면 «노드가 하나도 없다» 로 읽혀 중앙으로 폴백한다.
+      .catch(() => (cached ? cached.nodes : []))
+      .finally(() => { nodesInflight = null; });
+  }
+  return nodesInflight;
 }
 export function runCatalog(): Promise<RunHarness[]> { return loadConfig().then((c) => c.harnesses); }
 /** 실행 노드 목록(#1744) — 내가 세션을 만들 수 있는 노드(서버가 소유·공유로 이미 필터). 온라인만 실제 생성 가능(폼이 게이트). */
@@ -91,12 +122,18 @@ export function runMembers(): Promise<MentionMember[]> { return loadConfig().the
 export const findHarness = (hs: RunHarness[], key: string): RunHarness | null => hs.find((h) => h.key === key) || null;
 export const flagChoices = (h: RunHarness | null, name: string): string[] =>
   ((h && h.flags) || []).find((f) => f.name === name)?.choices?.filter(Boolean) ?? [];
+/** 그 축의 **기본값**(서버 카탈로그가 선언한 것) — 화면은 이 값을 골라 두고 그대로 넘긴다(#3778). 없으면 ''. */
+export const flagDefault = (h: RunHarness | null, name: string): string => {
+  const f = ((h && h.flags) || []).find((x) => x.name === name);
+  const d = String((f && f.default) || '');
+  return d && (f?.choices || []).includes(d) ? d : '';
+};
 export const effortChoices = (h: RunHarness | null, model: string): string[] => {
   const scoped = h?.effortsByModel?.[model];
   return Array.isArray(scoped) ? scoped : flagChoices(h, '--effort');
 };
 
-/** 지금 고른 값 + 기본값 창의 넷 — 생성 바디로 간다. flags 는 **빈 값을 뺀다**(안 넘기는 게 'AI 기본값'). node='' = 중앙 컴퓨터. */
+/** 지금 고른 값 + 기본값 창의 넷 — 생성 바디로 간다. flags 는 **빈 값을 뺀다**(빈 값 = 그 축을 안 넘긴다). node='' = 중앙 컴퓨터. */
 export interface RunPick {
   harness: string; flags: Record<string, string>; node: string;
   mode: 'normal' | 'readonly' | 'incognito'; autoApprove: boolean; writeVis: string;
@@ -107,6 +144,12 @@ export interface RunPicker {
   /** [⚙] 새 세션 기본값 단추 — 줄 오른쪽 행동 묶음(.v2-launch-act)에서 [＋] 왼쪽에 선다. */
   gear: HTMLElement;
   value(): RunPick;
+  /**
+   * [시키기] 직전의 값(#3833) — **노드 축을 다시 읽고** 정한다. value() 와 달리 비동기인 이유는 그것이 이 축의
+   *  성질이기 때문이다: 어느 컴퓨터가 켜져 있나는 «지금» 을 물어야 하고, 그 답이 틀리면 세션이 딴 데서 열린다.
+   *  고른 컴퓨터가 아닌 데로 가게 되면 그 사실을 한 줄로 말한다(조용히 바꾸지 않는다).
+   */
+  resolve(): Promise<RunPick>;
   /** 입력 잠금(보내는 중). */
   disable(on: boolean): void;
 }
@@ -142,7 +185,10 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
   const gear = el('button', { class: 'v2-launch-gear', type: 'button', 'aria-label': '새 세션 기본값' }) as HTMLButtonElement;
   gear.innerHTML = GEAR_SVG;
   gear.addEventListener('click', () => {
-    void openSessionDefaults({ nodes, hasAutoApprove: !!cur()?.hasAutoApprove }).then((saved) => { if (saved) { paint(); opts?.onChange?.(pick()); } });
+    // 목록의 «지금 꺼짐» 은 **지금** 사실이어야 한다 — 창을 열기 전에 노드 축만 다시 읽는다(#3833).
+    void refreshNodes(3000)
+      .then((ns) => { nodes = ns; paintGear(); return openSessionDefaults({ nodes, hasAutoApprove: !!cur()?.hasAutoApprove }); })
+      .then((saved) => { if (saved) { paint(); opts?.onChange?.(pick()); } });
   });
   const paintGear = (): void => { gear.title = '새 세션 기본값 — ' + defaultsSummary(sessionDefaults(), nodes); };
 
@@ -179,7 +225,9 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
     const choices = name === '--effort' ? effortChoices(cur(), modelSel.value) : flagChoices(cur(), name);
     box.hidden = !choices.length;
     if (!choices.length) return;
-    const want = box.value || String(savedFlags[name] || '');
+    // 고른 적이 없으면 **카탈로그가 선언한 기본값**을 골라 둔다(#3778) — 보이는 값이 곧 열리는 값이다.
+    //  ⚠ 이 값은 기억에 저장하지 않는다(changed() 는 사람이 만진 축만 저장) — 카탈로그가 기본을 올리면 따라온다.
+    const want = box.value || String(savedFlags[name] || '') || flagDefault(cur(), name);
     box.replaceChildren(el('option', { value: '' }, emptyText), ...choices.map((c) => el('option', { value: c }, label(c))));
     box.value = choices.includes(want) ? want : '';
   }
@@ -204,9 +252,9 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
     provSel.replaceChildren(...list.map((h) => el('option', { value: h.key }, providerLabel(h) + ' · ' + h.label)));
     provSel.value = harnessKey;
     // 문구는 셋 다 «축 · 값». 모델은 다듬어 적는다(prettyModel) — 'claude-opus-4-5-20251101' 은 칸을 통째로 먹고도 안 보인다.
-    //  안 넘기는 값(빈 값)은 **AI 기본값** — 세션 머리줄과 같은 말이다.
-    paintFlag(modelSel, '--model', '모델 · AI 기본값', (v) => '모델 · ' + prettyModel(v));
-    paintFlag(effortSel, '--effort', '추론 · AI 기본값', (v) => '추론 · ' + effortKo(v));
+    //  빈 값('AI 설정 그대로')은 이제 **사람이 일부러 고르는 선택지**다 — 그 축을 안 넘겨 그 AI 계정의 저장된 설정을 따른다.
+    paintFlag(modelSel, '--model', '모델 · AI 설정 그대로', (v) => '모델 · ' + prettyModel(v));
+    paintFlag(effortSel, '--effort', '추론 · AI 설정 그대로', (v) => '추론 · ' + effortKo(v));
     fit();
   }
   const changed = (): void => {
@@ -216,7 +264,7 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
     opts?.onChange?.(pick());
   };
   provSel.addEventListener('change', () => { harnessKey = provSel.value; modelSel.value = ''; effortSel.value = ''; paint(); changed(); });
-  modelSel.addEventListener('change', () => { paintFlag(effortSel, '--effort', '추론 · AI 기본값', (v) => '추론 · ' + effortKo(v)); changed(); });
+  modelSel.addEventListener('change', () => { paintFlag(effortSel, '--effort', '추론 · AI 설정 그대로', (v) => '추론 · ' + effortKo(v)); changed(); });
   effortSel.addEventListener('change', changed);
 
   const pick = (): RunPick => {
@@ -232,11 +280,28 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
     };
   };
 
+  /** 폴백 사유 → 사람 말. 사유를 안 적으면 «왜 딴 데서 열렸지» 가 화면 어디에도 답을 못 얻는다. */
+  const FELL_BACK: Record<'offline' | 'gone' | 'no-ai', string> = {
+    offline: '가 지금 꺼져 있어',
+    gone: '를 지금 목록에서 못 찾아',
+    'no-ai': '에서 띄울 수 있는 AI 를 못 찾아',
+  };
+  const resolve = async (): Promise<RunPick> => {
+    nodes = await refreshNodes(3000);
+    paintGear();
+    const ch = resolveNodeChoice(nodes, sessionDefaults().nodeDefault);
+    if (ch.fellBack) {
+      const to = ch.id ? (nodes.find((n) => n.id === ch.id)?.name || ch.id) : '중앙 컴퓨터';
+      toast(`«${ch.fellBack.name}»${FELL_BACK[ch.fellBack.why]} «${to}» 에서 엽니다.`);
+    }
+    return { ...pick(), node: ch.id };
+  };
+
   void loadConfig().then((c) => { harnesses = c.harnesses; nodes = c.nodes; paint(); });
 
   return {
     el: root, gear,
-    value: pick,
+    value: pick, resolve,
     disable(on: boolean) { provSel.disabled = on || !harnesses.length; modelSel.disabled = on; effortSel.disabled = on; gear.disabled = on; },
   };
 }

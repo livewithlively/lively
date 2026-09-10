@@ -596,7 +596,7 @@ webview.pn-webframe { display: flex; }
 
 /* ══ 문패 버튼 — 크기·글자는 그대로 두고 '무게'만 준다 (#1819 원준) ═══════════ */
 /*  ghost 둘이 나란히 있으면 어느 것이 주된 동작인지 색이 말해 주지 않는다. 주된 동작만 칠한다. */
-.pn-door-sep { width: 1px; height: 20px; margin: 0 2px; background: var(--line); }
+/* (문패 구분선은 #3778 로 죽었다 — 얼굴·공유가 세션 머리줄로 내려가면서 가를 것이 없어졌다.) */
 .pn-door-btn { gap: 6px; }
 .pn-door-btn svg { width: 15px; height: 15px; }
 .pn-door-r .btn-primary.pn-door-btn { box-shadow: 0 1px 2px rgba(45,107,240,.30), 0 2px 8px rgba(45,107,240,.16); }
@@ -658,6 +658,10 @@ webview.pn-webframe { display: flex; }
 .pn-share-row { display: flex; align-items: center; gap: 7px; width: 100%; padding: 5px 6px; border: none; background: none;
   border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 12.5px; color: inherit; text-align: left; }
 .pn-share-row:hover { background: var(--bg-tint); }
+/* Enter 가 고를 한 줄(#3778, 2026-09-10) — 무엇이 담길지 **누르기 전에** 보이게. 키 표식(↵)이 그 약속을 말한다. */
+.pn-share-row.on { background: var(--bg-tint-2); box-shadow: inset 0 0 0 1px var(--line-note); }
+.pn-share-kbd { margin-left: auto; flex: none; font-size: 10.5px; font-weight: 700; color: var(--blue);
+  background: var(--bg); border: 1px solid var(--line-net); border-radius: 4px; padding: 0 5px; line-height: 16px; }
 .pn-share-act { display: flex; justify-content: flex-end; gap: 6px; }
 
 /* ── 타임라인 찾기 칸 (#762) ─────────────────────────────────────────────────

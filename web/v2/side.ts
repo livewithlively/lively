@@ -29,7 +29,7 @@
 //   캐시다(shell-prefs.ts). 선언 한 줄이 어느 쪽인지 말한다 — shellPrefStore = 계정 · deviceStore = 이 기기.
 import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { findMatcher } from '../lib/find.js';
-import { splitFolderRows } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것
+import { splitFolderRows, foldCardRows } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsTouch } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버다(선언 한 줄이 그걸 말한다)
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
@@ -612,7 +612,9 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
 
 // ══ 프로젝트 축 — 묶기·펼침 (#2033) ══════════════════════════════════════════
 /** 한 프로젝트 묶음. rows 는 이미 정렬돼 들어온다(아래 projGroups 머리말). */
-interface ProjGrp { key: string; id: number; name: string; bucket: string; rows: SideInstance[]; open: boolean; active: boolean; pinned: boolean; counts: Record<string, number> }
+interface ProjGrp { key: string; id: number; name: string; bucket: string; rows: SideInstance[]; open: boolean; active: boolean; pinned: boolean; counts: Record<string, number>;
+  /** 아직 안 끝난 줄 수 · 끝난 줄 수(#3778). 머리글이 «이 카드는 통째로 지난 것»을 말할 수 있어야 한다. */
+  live: number; past: number }
 
 /**
  * 접힌 카드 머리줄에 세울 얼굴 — 그 안 세션들의 주인을 **합집합**으로 (#3778, 원준 2026-09-09).
@@ -660,11 +662,12 @@ function projGroups(rest: SideInstance[], searching: boolean): ProjGrp[] {
       //  묶음 이름 = **첫 행의 묶음**. 목록이 이미 정렬돼 있으므로 첫 행이 곧 그 프로젝트의 가장 급한 행이다.
       g = { key, id, name: id ? (r.project as { name: string }).name : '프로젝트 없음',
         //  압정은 트리와 **같은 통**(PIN_KEY · 'p:<id>')을 본다 — 한 프로젝트에 압정 하나(#3778).
-        bucket: r.group || '', rows: [], open: false, active: false, pinned: !!id && isPinned(key), counts: {} };
+        bucket: r.group || '', rows: [], open: false, active: false, pinned: !!id && isPinned(key), counts: {}, live: 0, past: 0 };
       byKey.set(key, g); groups.push(g);
     }
     g.rows.push(r);
     if (r.active) g.active = true;
+    if (r.past) g.past++; else g.live++;
     if (r.status) g.counts[r.status.key] = (g.counts[r.status.key] || 0) + 1;
   }
 
@@ -691,12 +694,21 @@ function projGroups(rest: SideInstance[], searching: boolean): ProjGrp[] {
 /** 머리글 오른쪽의 상태 요약 — 트리의 v2-sums 와 같은 문법(점 + 개수), 볼 일 있는 것만.
  *  ⚠ **개수가 1이면 점만** 그린다. 실측(dev, 살아 있는 세션은 프로젝트마다 대개 하나)에서 머리글이
  *   「● 1  1」 처럼 1을 두 번 쓰고 있었다 — 같은 사실을 두 번 말하면 둘 다 안 읽힌다. */
-function grpSums(counts: Record<string, number>): HTMLElement | null {
+function grpSums(g: ProjGrp): HTMLElement | null {
+  const counts = g.counts;
   const part = (k: string, cls: string) => (counts[k] ? el('span', { class: 'v2-sum ' + cls, title: `${SESS_STATES[k] ? SESS_STATES[k].label : k} ${counts[k]}` },
     el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }), counts[k] > 1 ? String(counts[k]) : null) : null);
   const w = part('waiting', 'wait'), d = part('done', 'done'), b = part('busy', 'busy');
-  if (!w && !d && !b) return null;
-  return el('span', { class: 'v2-sums' }, w, d, b);
+  //  ★ 도는 게 하나도 없는 카드는 **속 빈 고리 하나**로 그 사실을 말한다(#3778) — 트리의 sumEl 이 같은 경우
+  //   「지난 세션 n」을 그 자리에 세우는 그 규칙이다(#1808). 종전엔 이 머리글이 확인 필요·완료·작업 중만 세어서,
+  //   **오늘 한 일이 전부 끝난 카드는 접혀 있는 동안 아무 말도 안 했다**(원준 2026-09-09: "구분이 안 된다").
+  //  ⚠ 개수는 안 쓴다 — 그 숫자는 바로 옆 `v2-cnt`(줄 수)와 **같은 값**이라 두 번 말하는 꼴이 된다
+  //   (위 part 의 "1이면 점만"과 같은 사유). 몇 개인지는 툴팁이 말한다.
+  const p = (!g.live && g.past)
+    ? el('span', { class: 'v2-sum past', title: `지난 세션 ${g.past}` }, el('span', { class: 'v2-dot past', 'aria-hidden': 'true' }))
+    : null;
+  if (!w && !d && !b && !p) return null;
+  return el('span', { class: 'v2-sums' }, w, d, b, p);
 }
 
 /**
@@ -708,7 +720,15 @@ function grpSums(counts: Record<string, number>): HTMLElement | null {
 function projGrpHead(g: ProjGrp): HTMLElement {
   //  ⚠ `pinned` 는 **자리를 비워 두는 표식**이다 — 고정된 카드의 압정은 손을 떼도 서 있어야 하는데(그게 '고정됨'의
   //   유일한 표식이다) 압정도 ＋ 와 같은 절대위치라, 자리를 안 비우면 상태 점·개수 위에 겹쳐 앉는다(CSS .v2-pg-row.pinned).
-  const head = el('div', { class: 'v2-pg-row' + (g.active && !g.open ? ' act' : '') + (g.pinned ? ' pinned' : '') },
+  //  ★ 도는 세션이 하나도 없는 카드는 **카드 이름이 스스로** 그렇게 말한다(#3778 2판, 원준 2026-09-10).
+  //   1판은 오른쪽 끝 속 빈 고리 하나에만 맡겼는데 그게 안 읽혔다 — 실측 셋: ⓐ 고리는 채움이 없어(6px, 테두리만
+  //   #5D7197) 사이드바 바탕에 묻힌다(같은 6px 라도 «작업 중»은 채워져 있어 보인다) ⓑ **손을 얹는 순간 사라진다**
+  //   (.v2-pg-row:hover .v2-sums { visibility: hidden } — 그 자리를 압정·＋·[→] 가 받는다). 목록을 훑는다는 건
+  //   곧 손을 얹는다는 것이라, 정작 보려는 순간에 없다 ⓒ 카드 이름 색이 도는 카드와 **완전히 같았다**.
+  //   ⇒ 신호를 **호버가 뺏어가지 않는 자리**로 옮긴다. 행이 이미 쓰는 언어(흐린 톤)를 카드에도 쓰는 것이라
+  //    새 문법이 아니다. 고리는 그대로 두되(호버 전 두 번째 단서) 혼자 짊어지지는 않는다.
+  const allPast = !g.live && g.past > 0;
+  const head = el('div', { class: 'v2-pg-row' + (g.active && !g.open ? ' act' : '') + (g.pinned ? ' pinned' : '') + (allPast ? ' past' : '') },
     el('button', { class: 'v2-pg-t', type: 'button', 'aria-expanded': String(g.open),
       title: g.name + (g.id ? `\n#${g.id} · 세션 ${g.rows.length}` : '\n프로젝트에 붙지 않은 세션과 화면'),
       //  ⚠ **두 번째 클릭은 삼킨다** — 더블클릭은 «이름 고치기»(아래 dblclick)라, 접기가 두 번 일어나면 사람이 고른
@@ -720,7 +740,7 @@ function projGrpHead(g: ProjGrp): HTMLElement {
       //  ★접힌 카드에만 얼굴 합집합(#3778) — 펴면 줄이 제 얼굴을 들고 있으므로 여기선 걷는다(grpFaces 머리말).
       //   최대 셋까지 겹쳐 쌓고 그 위는 +N — 넷째부터는 얼굴보다 숫자가 빠르다.
       g.open ? null : grpFacesEl(g),
-      grpSums(g.counts),
+      grpSums(g),
       //  세션이 하나뿐인 묶음은 개수를 안 쓴다 — 접힌 줄 하나가 곧 그 하나다(위 grpSums 주석과 같은 사유).
       g.rows.length > 1 ? el('span', { class: 'v2-cnt', text: String(g.rows.length) }) : null),
     //  ★고정(#3778) — 카드째 맨 위로. 「프로젝트 없음」 묶음은 고정할 프로젝트가 없으므로 압정도 없다(트리와 같은 규율).
@@ -801,7 +821,7 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
     lastBucket = label;
     //  행이 먼저, 카드가 다음 — 낱개로 꽂은 것이 통째로 꽂은 것보다 좁고 급한 지목이다.
     for (const r of pinnedRows) kids.push(appRowEl(r, o));
-    for (const g of pinnedGrps) kids.push(projGrpCard(g, o));
+    for (const g of pinnedGrps) kids.push(projGrpCard(g, o, !!q));
   }
   for (const g of groups) {
     if (g.pinned) continue;                         // 이미 위 「고정」 층에 섰다
@@ -809,7 +829,7 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
       kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g.bucket }) as HTMLElement);
       lastBucket = g.bucket;
     }
-    kids.push(projGrpCard(g, o));
+    kids.push(projGrpCard(g, o, !!q));
   }
   return kids;
 }
@@ -817,11 +837,34 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
 /** 프로젝트 카드 한 장 — 머리글 + (펼쳤으면) 그 안의 세션들.
  *  ★펼친 묶음 = 흰 카드 그릇 — 세션이 프로젝트의 **안**에 산다는 걸 면(面)이 말한다.
  *   들여쓰기+세로선만으로는 "목록 둘이 이웃한 그림"으로 읽혔다(상민님 2026-08-18, 트리 .v2-pj.open 과 같은 처방). */
-function projGrpCard(g: ProjGrp, o: RowOpts): HTMLElement {
+function projGrpCard(g: ProjGrp, o: RowOpts, searching = false): HTMLElement {
   //  ⚠ 카드 자체엔 고정 표식을 안 칠한다 — 「고정」 머리글과 파랗게 채워진 압정이 이미 말한다(트리의 .v2-pinb.on 과 같은 규율).
+  //  ★ 카드 안에서 끝난 세션은 「지난 세션 n」 뒤로 접는다(#3778 안 C, 원준 2026-09-09) — 트리가 이미 쓰는 그 접힘이다.
+  //   무엇이 접히고 무엇이 그대로 서는지의 잣대는 lib/sess-fold 에 있다(**끝난 것밖에 없으면 접지 않는다** 포함).
+  const fold = foldCardRows(g.rows, { searching, opened: pastSet.has(g.key) });
+  const row = (r: SideInstance) => appRowEl(r, { ...o, one: true });
   return el('div', { class: 'v2-pg' + (g.open ? ' open' : ''), 'data-anch': g.key },
     projGrpHead(g),
-    g.open ? el('div', { class: 'v2-pg-list' }, ...g.rows.map((r) => appRowEl(r, { ...o, one: true }))) : null) as HTMLElement;
+    g.open ? el('div', { class: 'v2-pg-list' },
+      ...fold.now.map(row),
+      fold.folded.length ? cardPastHead(g.key, fold.folded.length, fold.open) : null,
+      ...(fold.open ? fold.folded.map(row) : [])) : null) as HTMLElement;
+}
+
+/** 카드 안 「지난 세션 n」 — 오늘 끝낸 세션을 한 줄로 접어 둔다. 트리의 pastHead2 와 **같은 통**(pastSet)을 본다.
+ *  ⚠ 그래서 펼침은 **이 페이지 동안만** 산다(원준 2026-08-24: "난 연 적이 없는데 지멋대로 펼쳐져 있어").
+ *   지난 세션은 배경이지 본문이 아니라, 기본은 늘 접힘이어야 한다 — 브라우저에 남기면 한 번 편 사람은 그 뒤로 영원히 펴진 채 연다. */
+function cardPastHead(pk: string, n: number, open: boolean): HTMLElement {
+  return el('button', {
+    class: 'v2-pg-past' + (open ? ' open' : ''), type: 'button', 'aria-expanded': String(open),
+    title: open ? '지난 세션 접기' : `오늘 끝낸 세션 ${n}개 — 열면 그때 대화를 이어서 계속할 수 있어요`,
+    onclick: (e: Event) => {
+      e.preventDefault(); e.stopPropagation();
+      if (pastSet.has(pk)) pastSet.delete(pk); else pastSet.add(pk);
+      repaintList();   // 저장하지 않는다 — 위 머리말
+    } },
+    el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' }),
+    el('span', { class: 'n', text: '지난 세션' }), el('span', { class: 'v2-cnt', text: String(n) })) as HTMLElement;
 }
 
 /** 목록 안에 들어갈 것 전부 — 묶음 머리글 + 행, 하나도 없으면 빈 화면 한 장. */
@@ -1220,6 +1263,11 @@ function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
     project: p ? { id: p.id, name: p.name } : null,
     group,
     status: st ? { key: st, label: stLabel(st) } : null,
+    //  ★ 끝난 세션이라는 사실을 **행에 실어 보낸다**(#3778). 이 함수는 그걸 이미 알고 있었는데(pastRow)
+    //   × 의 뜻과 상태 점을 끄는 데만 쓰고 넘기지 않아서, 홈에는 있는 두 가지가 이 구역엔 없었다:
+    //   흐린 톤(.v2-app-inst--past)과 카드 안 「지난 세션 n」 접힘. 같은 목록이 어디서 보느냐에 따라
+    //   다른 말을 하면 사람은 그걸 «없어졌다» 로 겪는다(이름 수정이 트리에만 있던 것과 같은 종류).
+    past: pastRow,
     //  남의 세션이면 주인 얼굴 — 홈이 이미 하는 일이다(#2026). 이 구역은 남의 세션이 **더 많이** 서는 곳이라
     //   여기 없던 게 더 이상했다.
     owner: isMine(s) ? null : { id: ownerId, name: ownerName(s) },

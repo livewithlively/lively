@@ -45,6 +45,33 @@ const requireMember = (user: LivelyUser): string => {
   return id;
 };
 
+/** CP 초대 창구(workspace-invite · workspace-invite-resend)의 응답 모양(#3834). */
+interface CpInviteOut {
+  ok: boolean; email?: string; existing_account: boolean; invite_url: string; becomes_team: boolean;
+  /** 실제 발송 결과 — 옛 CP(메일을 안 보내던 판)는 이 필드가 없다. */
+  mail?: "sent" | "skipped" | "failed"; delivery?: "email" | "link"; expires_at?: string | null; superseded?: number;
+}
+
+/**
+ * CP 초대 응답을 화면 모양으로 — 한 곳에서만 접는다(첫 초대·다시 보내기가 같은 모양).
+ *  ★ delivery 는 **CP 의 mail 이 "sent" 일 때만** "email" 이다. CP 가 delivery 를 뭐라고 하든 mail 을 다시 본다 —
+ *   배포 시차로 옛 CP 가 답하면(mail 없음) "link" 로 떨어져 «보냈어요» 가 거짓이 되지 않는다(#2188 의 규율:
+ *   보내지도 않고 보냈다고 하면 사람은 아무도 안 오는 이유를 영영 모른다).
+ */
+function cpInviteView(r: CpInviteOut, emailInput: unknown) {
+  const sent = r.mail === "sent";
+  return {
+    email: r.email || String(emailInput ?? "").trim().toLowerCase(),
+    url: r.invite_url,
+    existing_account: r.existing_account,
+    becomes_team: r.becomes_team,
+    delivery: sent ? ("email" as const) : ("link" as const),
+    mail: r.mail ?? ("unsupported" as const),
+    expires_at: r.expires_at ?? null,
+    superseded: r.superseded ?? 0,
+  };
+}
+
 // #1875 — 화면이 쓰는 것은 `kind_effective`(인원 수 파생)다. `kind` 컬럼도 계속 실어 보내되 그건
 //  "만들 때의 의도"이지 지금의 사실이 아니다 — 사람이 들고 나면 조용히 거짓이 된다.
 //  primary 는 명부를 쓰지 않으므로(박스 로그인 = 접근) 언제나 팀으로 본다.
@@ -452,7 +479,7 @@ export const workspaceRegistryCapabilities: Capability[] = [
           workspace: { id: string; name: string; kind: "personal" | "team" };
           my_role: string;
           members: Array<{ email: string; name: string | null; role: string; is_me: boolean }>;
-          pending: Array<{ email: string | null; expires_at: string }>;
+          pending: Array<{ email: string | null; expires_at: string; created_at?: string | null }>;
         }>(t!, "/api/tenant/workspace-people", { workspace_id: input.workspace_id ?? input.slug });
         const isOwner = r.my_role === "owner";
         return {
@@ -462,13 +489,17 @@ export const workspaceRegistryCapabilities: Capability[] = [
           member_count: r.members.length,
           kind_effective: r.workspace.kind,
           can_invite: isOwner,
+          //  #3834 — 매니지드 초대는 **메일**로 간다(CP 가 보낸다). 화면이 [다시 보내기] 를 그릴 근거.
+          invite_delivery: "email" as const,
           //  ⚠ 매니지드의 사람 축은 **이메일**이다(CP 계정). member_id 자리에 이메일이 들어가는 이유다.
           //   #1875 D5″ — is_me 를 그대로 흘린다: 화면이 «넘길 사람» 후보에서 나를 뺄 때, 셀프호스트의
           //   member_id 비교는 여기서 통하지 않는다(내 core member_id ≠ 내 이메일).
           members: r.members.map((m) => ({ member_id: m.email, role: m.role, email: m.email,
             display_name: m.name, is_creator: m.role === "owner", is_me: m.is_me })),
+          //  ⚠ 보류 초대의 id 는 **이메일**이다(코드 원문은 CP 에도 없다). 취소·다시 보내기가 그 값으로 지목한다.
+          //   created_at 은 옛 CP 가 안 주면 expires_at 으로 눕는다(종전 동작 — «보낸 때» 자리가 비는 것보다 낫다).
           pending: isOwner ? r.pending.map((pi) => ({ id: pi.email ?? "", email: pi.email, role: "member",
-            invited_by: null, created_at: pi.expires_at })) : [],
+            invited_by: null, created_at: pi.created_at ?? pi.expires_at, expires_at: pi.expires_at })) : [],
           // 매니지드는 '이 박스의 사람' 이라는 후보 개념이 없다 — 초대는 **이메일로** 부른다.
           candidates: [],
         };
@@ -493,6 +524,8 @@ export const workspaceRegistryCapabilities: Capability[] = [
         member_count: n,
         kind_effective: kindEffective(n),
         can_invite: isOwner,
+        //  셀프호스트 박스는 메일을 보내지 않는다 — 초대는 상대가 로그인하면 화면에 뜬다(inboxSection).
+        invite_delivery: "inapp" as const,
         members: members.map((m) => ({
           member_id: m.member_id, role: m.role,
           email: byId.get(m.member_id)?.email ?? null,
@@ -520,13 +553,11 @@ export const workspaceRegistryCapabilities: Capability[] = [
       const id = requireMember(user);
       if (managedMode()) {
         // #2188 — 초대도 여기서. owner 게이트·인원 캡·중복은 CP 의 inviteMember 가 그대로 판정한다.
-        //  ⚠ CP 는 **메일을 보내지 않는다** — 초대 링크를 돌려주고 사람이 전달한다. 화면도 그대로 말해야 한다.
+        //  #3834 — CP 가 초대 링크를 **메일로 보낸다**. 응답의 delivery 는 실제 발송 결과에서만 온다(cpInviteView).
         const t = await resolveCpTarget(user);
-        const r = await callCp<{ ok: boolean; existing_account: boolean; invite_url: string; becomes_team: boolean }>(
-          t!, "/api/tenant/workspace-invite",
-          { workspace_id: input.workspace_id ?? input.slug, email: input.email });
-        return { invite: { email: String(input.email ?? "").trim().toLowerCase(), url: r.invite_url,
-          existing_account: r.existing_account, becomes_team: r.becomes_team, delivery: "link" as const } };
+        const r = await callCp<CpInviteOut>(t!, "/api/tenant/workspace-invite",
+          { workspace_id: input.workspace_id ?? input.slug, email: input.email }, { timeoutMs: 45_000 });
+        return { invite: cpInviteView(r, input.email) };
       }
       requireRegistry();
       const ws = await findWs(input.slug);
@@ -572,6 +603,25 @@ export const workspaceRegistryCapabilities: Capability[] = [
       role: z.enum(["owner", "member"]).optional().describe("기본 member. owner 면 공동 owner"),
     }),
 
+  restWork("workspace_invite_resend", "초대 다시 보내기(이메일)",
+    "수락 대기 중인 초대를 그 이메일로 **다시** 보낸다(owner 전용, #3834). 계정 서버가 새 초대 링크를 만들어 메일로 보내고 " +
+    "이전 링크는 거둔다(코드 원문은 어디에도 없어 같은 링크를 다시 보낼 수 없다). 대기 중인 초대가 없으면 404. " +
+    "매니지드 전용 — 셀프호스트 박스는 메일을 보내지 않으므로 이 창구가 없다(초대는 상대가 로그인하면 화면에 뜬다).",
+    [{ method: "POST", paths: ["/api/ui/me/workspaces/invite/resend"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      requireMember(user);
+      if (!managedMode())
+        throw new HttpError(400, "이 박스는 초대 메일을 보내지 않습니다 — 초대받은 분이 로그인하면 화면에 초대가 뜹니다.");
+      const t = await resolveCpTarget(user);
+      const r = await callCp<CpInviteOut>(t!, "/api/tenant/workspace-invite-resend",
+        { workspace_id: input.workspace_id ?? input.slug, email: input.email }, { timeoutMs: 45_000 });
+      return { invite: cpInviteView(r, input.email), resent: true };
+    }, {
+      slug: z.string().optional().describe("워크스페이스 slug(화면이 들고 다니는 키)"),
+      workspace_id: z.string().optional().describe("워크스페이스 id(매니지드 — 계정 서버의 키). slug 대신 쓸 수 있다"),
+      email: z.string().describe("다시 보낼 사람의 이메일(수락 대기 중이어야 한다)"),
+    }),
+
   restWork("workspace_invite_resolve", "초대 수락 · 거절 · 취소",
     "보류 중인 초대를 처리한다. decision=accept|decline 은 **받는 사람**이(초대의 이메일과 로그인한 사람의 이메일이 " +
     "같아야 한다), revoke 는 **보낸 쪽 owner** 가 한다. accept 면 그 자리에서 명부에 들어가고, 그게 두 번째 사람이면 " +
@@ -579,12 +629,22 @@ export const workspaceRegistryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/me/workspaces/invite/resolve"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = requireMember(user);
-      requireRegistry();
       const inviteId = String(input.invite_id ?? "").trim();
       if (!inviteId) throw new HttpError(400, "invite_id 가 필요합니다");
       const decision = String(input.decision ?? "") as InviteDecision;
       if (!["accept", "decline", "revoke"].includes(decision))
         throw new HttpError(400, "decision 은 accept | decline | revoke 입니다");
+      if (managedMode()) {
+        // #3834 — 매니지드의 보류 초대는 CP 의 것이라 이 등록부엔 없다(종전엔 아래 requireRegistry 400 으로 죽어
+        //  구성원 창의 [취소] 가 안 먹었다). 취소만 CP 로 넘긴다 — 수락·거절은 초대 메일의 링크에서 한다.
+        //  화면이 invite_id 자리에 **이메일**을 싣는다(매니지드 명부가 id=email 로 내려 준다).
+        if (decision !== "revoke") throw new HttpError(400, "매니지드에서는 초대 메일의 링크에서 수락·거절합니다");
+        const t = await resolveCpTarget(user);
+        const r = await callCp<{ ok: boolean; email: string; revoked: number }>(t!, "/api/tenant/workspace-invite-revoke",
+          { workspace_id: input.workspace_id ?? input.slug, email: inviteId });
+        return { invite: { id: inviteId, state: "revoked" as const }, workspace: String(input.workspace_id ?? input.slug ?? ""), revoked: r.revoked };
+      }
+      requireRegistry();
 
       const inv = await getInvite(inviteId);
       if (!inv) throw new HttpError(404, "그런 초대가 없습니다");
@@ -626,7 +686,10 @@ export const workspaceRegistryCapabilities: Capability[] = [
         header: { "x-lively-workspace": ws.slug },
       };
     }, {
-      invite_id: z.string().describe("초대 id"),
+      invite_id: z.string().describe("초대 id(매니지드에서는 초대받은 이메일)"),
       decision: z.enum(["accept", "decline", "revoke"]).describe("accept·decline=받는 사람 / revoke=보낸 owner"),
+      // #3834 매니지드 취소 — CP 는 초대를 (워크스페이스, 이메일) 로 지목하므로 워크스페이스도 함께 받는다.
+      slug: z.string().optional().describe("워크스페이스 slug(매니지드 취소에 필요)"),
+      workspace_id: z.string().optional().describe("워크스페이스 id(매니지드 — 계정 서버의 키). slug 대신 쓸 수 있다"),
     }),
 ];

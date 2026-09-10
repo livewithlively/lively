@@ -157,6 +157,27 @@ export function sessionHostsInScope(now: number = Date.now()): Array<{ declared:
 }
 
 /**
+ * 이 노드의 세션 호스트 **선언을 메모리에서 내린다** — 브로커가 «내렸다» 고 알려 올 때. (#2600 T2 d5-b)
+ *
+ * ★ DB(`org_node.session_host`)만 내리면 부족하다. 목록 소유 판정이 읽는 것은 **상태 스냅샷**이고
+ *  (`sessionHostsInScope` → `st.sessionHost`), 그 값은 이 프로세스 메모리에 산다. 거기를 안 내리면
+ *  게이트웨이가 재시작할 때까지 그 행이 계속 «선언» 으로 남아 `every()` 를 깨뜨린다 — 고치려던 그
+ *  증상이 그대로다.
+ *
+ * ⚠ 스냅샷 자체는 **지우지 않는다.** 세션 목록은 다른 자리(`nodeSnapshotSessions`)도 쓰고, 그 노드가
+ *  아직 무언가를 들고 있을 수 있다. 여기서 내리는 것은 «주인 노릇» 한 가지뿐이다.
+ *
+ * @returns 실제로 내렸나(이미 선언이 아니거나 스냅샷이 없으면 false — 멱등)
+ */
+export function undeclareSessionHostState(nodeId: string, t?: TenantContext | null): boolean {
+  const k = keyOf(nodeId, t);
+  const st = states.get(k);
+  if (!st || !st.sessionHost) return false;
+  states.set(k, { ...st, sessionHost: false });
+  return true;
+}
+
+/**
  * 이 노드 **하나**가 선언된 세션 호스트인가 — 좌표 접기(`self-node.sameTmuxCoordinate`)가 쓰는 재료 (#3745).
  *
  * `sessionHostsInScope` 는 «이 테넌트에 자격 있는 주인이 있나» 를 묻는 자리(목록 소유)라 id 를 안 돌려준다.

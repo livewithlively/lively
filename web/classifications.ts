@@ -10,7 +10,7 @@
 //   확정   = { category_id: 제안값,  state: 'confirmed' }
 //   재분류 = { category_id: 다른값,  state: 'confirmed' }
 //   반려   = { category_id: 제안값,  unlink: true }        (연결을 지워 미분류 인박스로 되돌림)
-import { api, busy, cardHead, el, errorNote, relTime, toast } from './core.js';
+import { api, busy, cardHead, el, errorNote, relTime, replaceKids, toast } from './core.js';
 import { skeleton } from './learn.js';
 import { KN_TYPE_LABEL } from './wiki-data.js';
 import { rqEnsureStyles } from './review.js';   // .rq-*(행·칩·일괄바·빈상태) 재사용 — 검토 큐와 한 몸으로 보이게
@@ -138,7 +138,7 @@ async function classificationPanel(detail: HTMLElement): Promise<void> {
     chips.replaceChildren(...chipEls());
     rebuildCatSel();
     const low = items.filter(isLow).length;
-    countEl.replaceChildren(
+    replaceKids(countEl,
       el('span', {}, '총 ', el('b', { text: String(items.length) }), '건 대기'),
       low ? el('span', { text: ` · 신뢰도 낮음(<50%) ${low}건` }) : null,
       el('span', { text: ' · 신뢰도 낮은순' }));

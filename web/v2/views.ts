@@ -4,6 +4,7 @@
 //  클래식 모듈을 **복제하지 않는다** — 대화·세션 목록·프로젝트 상세는 이미 있는 것을 가져다 붙인다.
 import { el, personName, relTime, state, sv, toast } from '../core.js';
 import { composerAttach } from './compose-attach.js';
+import { projMatches } from '../lib/proj-match.js';
 import { composerMention } from './compose-mention.js';
 import { isCreatingQuickSession, openQuickSession, takeFirstPrompt } from './quick-session.js';
 import { createRunPicker } from './run-picker.js';
@@ -215,8 +216,10 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
     function paint(): void {
       const q = input.value.trim();
       const ql = q.toLowerCase();
-      // 빈 칸이면 **최근 5개**를 먼저 보여 준다 — 흔한 경우(어제 하던 일 이어서)의 타이핑을 0 으로 만든다.
-      const hits = (ql ? destRows.filter((r) => r.proj.name.toLowerCase().includes(ql) || String(r.proj.id) === ql) : destRows).slice(0, ql ? 6 : 5);
+      // 빈 칸이면 최근 것부터 **넉넉히** 싣는다 — 목록은 max-height 로 스크롤된다(종전엔 5개만 실어 스크롤할 것이
+      //  없었다: 「최근 프로젝트」라 적어 놓고 다섯 번째 아래는 갈 길이 없었다, 원준 2026-09-09).
+      //  찾기 규칙(번호·#번호·이름·번호 앞자리)은 lib/proj-match.ts 한 곳 — 세션의 프로젝트 바꾸기와 같은 규칙이다.
+      const hits = projMatches(destRows, q, 40);
       hd.textContent = ql ? '검색 결과' : '최근 프로젝트';
       const kids: (HTMLElement | null)[] = hits.map((r) => el('button', { class: 'v2-dest-row', type: 'button', role: 'option',
         title: r.proj.name + ' · #' + r.proj.id, onclick: () => set({ kind: 'proj', id: r.proj.id, name: r.proj.name }) },
@@ -224,7 +227,7 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
         // 끝난 일에 후속 세션을 여는 경우가 실제로 있다 — 숨기지 않고 **끝났다고 말해 준 뒤** 고르게 한다.
         r.done ? el('span', { class: 'b', text: '완료' }) : null,
         el('span', { class: 'm mono', text: '#' + r.proj.id })));
-      if (ql && !hits.length) kids.push(el('p', { class: 'v2-fine v2-dest-none', text: o.allowNew ? '그 이름의 프로젝트가 없어요 — 아래 줄로 새로 만들 수 있어요.' : '그 이름의 프로젝트가 없어요.' }));
+      if (ql && !hits.length) kids.push(el('p', { class: 'v2-fine v2-dest-none', text: o.allowNew ? '그 이름·번호의 프로젝트가 없어요 — 아래 줄로 새로 만들 수 있어요.' : '그 이름·번호의 프로젝트가 없어요.' }));
       // ⚠ 이 줄은 **항상** 남는다. 친 글자가 기존 이름과 비슷할 때 «고른 건가 만든 건가»가 애매해지는데,
       //  그 애매함은 사람이 한 번의 클릭으로 끝낼 수 있어야 한다.
       if (o.allowNew) kids.push(el('button', { class: 'v2-dest-row mk', type: 'button', role: 'option',
@@ -269,7 +272,7 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
     };
   }
   const destPre = destBox({ label: '선행', placeholder: '없음 · 앞선 일이 있으면 고르세요', allowNew: false });
-  const destMain = destBox({ label: '프로젝트', placeholder: '이어서 할 프로젝트를 고르거나 새 이름을 적으세요', allowNew: true,
+  const destMain = destBox({ label: '프로젝트', placeholder: '이어서 할 프로젝트를 고르거나(이름·번호) 새 이름을 적으세요', allowNew: true,
     onPick: () => destPre.lock(destMain.get().kind === 'proj' ? '프로젝트 상세에서 바꿔요' : null) });
   const destWrap = el('div', { class: 'v2-dest-grid' }, destMain.wrap, destPre.wrap);
   const dest = (): Dest => destMain.get();
@@ -310,7 +313,8 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
     draft?.onChange('');
     const d = dest(); const pre = destPre.get();
     const ok = await openQuickSession(text + mention.tail() + att.tail(), {
-      run: runPicker.value(),
+      // resolve() — value() 가 아니다(#3833): 어느 컴퓨터가 켜져 있나는 «지금» 을 물어야 한다.
+      run: await runPicker.resolve(),
       projectId: d.kind === 'proj' ? d.id : null,
       projectName: d.kind === 'new' ? d.name : '',
       invites: mention.invites(),

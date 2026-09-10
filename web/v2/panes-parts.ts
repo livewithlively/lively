@@ -313,7 +313,9 @@ function sessionsPart(ctx: PartCtx): Part {
     //  붙이기가 거기 묶여 있다. 여기서 fetch 를 다시 짜면 그 중 하나가 빠진다(실제로 캐시가 빠져 있었다).
     // 첨부는 지시의 꼬리에 절대경로로 적는다 — 세션이 열리자마자 그 파일을 읽을 수 있게(이름은 사람이 알아보는 단서).
     const prompt = text + mention.tail() + att.tail();
-    const made = await spawnSession(prompt, { projectId: ctx.id > 0 ? ctx.id : null, projectName: projectName(), run: runPicker?.value() || null, invites: mention.invites() });
+    // resolve() — value() 가 아니다(#3833): 노드 축을 다시 읽고 정한다(홈과 같은 규칙).
+    const run = runPicker ? await runPicker.resolve() : null;
+    const made = await spawnSession(prompt, { projectId: ctx.id > 0 ? ctx.id : null, projectName: projectName(), run, invites: mention.invites() });
     sending = false; idle();
     if (!made) { ta.focus(); return; }
     seedSessName(made.id, text);

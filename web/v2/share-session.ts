@@ -106,18 +106,32 @@ export function openSharePopover(anchor: HTMLElement, s: ShareSess, onSaved?: (i
           })
         : [el('span', { class: 'pn-share-fine', text: '아직 아무도 없어요 — 나만 보는 비공개 세션이에요.' })]));
     };
+    // 지금 목록 맨 위에 있는 사람 — Enter 가 고르는 대상이다(아래 keydown). drawList 가 매번 갱신한다.
+    let top: MemberRow | null = null;
+    const pick = (m: MemberRow): void => { chosen.add(m.id); q.value = ''; drawChips(); drawList(); q.focus(); };
     const drawList = (): void => {
       const kw = q.value.trim().toLowerCase();
       // 나·소유자는 후보가 아니다(이미 볼 수 있다 — 서버 validInvites 도 소유자를 걸러낸다).
       const cand = members.filter((m) => m.id !== s.owner && !chosen.has(m.id)
         && (!kw || nameOf(m).toLowerCase().includes(kw) || m.id.toLowerCase().includes(kw)));
-      list.replaceChildren(...(cand.length
-        ? cand.slice(0, 8).map((m) => el('button', { class: 'pn-share-row', type: 'button',
-            onclick: () => { chosen.add(m.id); q.value = ''; drawChips(); drawList(); } },
-            personFace(m.id, 'pn-share-face', nameOf(m)), el('span', { text: nameOf(m) })))
+      const shown = cand.slice(0, 8);
+      top = shown[0] || null;
+      list.replaceChildren(...(shown.length
+        // 맨 위 한 줄만 표식을 단다 — Enter 가 무엇을 고를지 **눌러 보기 전에** 보이게(안 그러면 도박이 된다).
+        ? shown.map((m, i) => el('button', { class: 'pn-share-row' + (i === 0 ? ' on' : ''), type: 'button',
+            onclick: () => pick(m) },
+            personFace(m.id, 'pn-share-face', nameOf(m)), el('span', { text: nameOf(m) }),
+            i === 0 ? el('span', { class: 'pn-share-kbd', text: '↵' }) : null))
         : [el('p', { class: 'pn-share-fine', text: kw ? '그런 사람이 없어요.' : '부를 사람이 더 없어요.' })]));
     };
     q.addEventListener('input', drawList);
+    // Enter = 맨 위 사람 담기(원준 2026-09-10). 한글 조합 중의 Enter 는 **확정**이지 선택이 아니다 — isComposing 으로 가른다.
+    //  (그 가드가 없으면 «장원」 까지 친 상태의 Enter 가 조합을 끝내면서 동시에 엉뚱한 사람을 담는다.)
+    q.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' || e.isComposing) return;
+      e.preventDefault();
+      if (top) pick(top);
+    });
 
     save.onclick = async (): Promise<void> => {
       save.disabled = true;
@@ -141,6 +155,9 @@ export function openSharePopover(anchor: HTMLElement, s: ShareSess, onSaved?: (i
         el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '취소', onclick: () => close() }), save),
     ].filter(Boolean) as HTMLElement[]);
     drawChips(); drawList();
+    // 이 창을 여는 목적이 «사람을 고르는 것» 하나뿐이라, 열자마자 손을 검색칸에 둔다(원준 2026-09-10).
+    //  DOM 에 붙은 다음 틱에 건다 — replaceChildren 직후엔 아직 문서에 없어 focus 가 먹지 않는다.
+    setTimeout(() => { if (q.isConnected) q.focus(); }, 0);
   }
 
   void (async () => {
