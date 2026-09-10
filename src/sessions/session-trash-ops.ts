@@ -122,7 +122,7 @@ export async function applySessionTrashOp(u: LivelyUser, me: string, op: TrashOp
         }
         // #2022 — 세션이 영영 사라졌으면 그 세션을 subject 로 쥔 앱 인스턴스도 닫는다. 안 닫으면 좌측 '열린 앱'
         //  목록에 되살릴 수도 없는 행이 `세션 <id꼬리>` · '프로젝트 없음' 으로 영영 남는다.
-        for (const sid of r.ids) await closeSessionAppInstances(sid).catch((e) => logger.warn({ err: e, id: sid }, "완전 삭제 — 앱 인스턴스 닫기 실패(비치명)"));
+        for (const sid of r.ids) await closeSessionAppInstances(sid, "purge").catch((e) => logger.warn({ err: e, id: sid }, "완전 삭제 — 앱 인스턴스 닫기 실패(비치명)"));
         await purgeSessions(me, r.ids);
       }
       done.push(id);

@@ -7,7 +7,9 @@
 //  세션이 몇백 줄로 쌓이는 자리가 정확히 이 명부라, 여기서 못 접으면 사람은 접을 길이 없다.
 //
 // 이 파일이 지키는 것 넷 — 다시 «목록의 성질»만 보고 × 를 통째로 끄는 일이 없도록:
-//  ① [AI 세션] 목록이 × 를 켠다            ② 행이 자기 뜻(보관·휴지통)을 들고 온다
+//  ⚠ #3857(상민님 2026-09-10) — 여기 × 의 뜻이 «보관(회수)» 에서 **«치움»** 으로 바뀌었다. 회수는 정책만 하고
+//   사람이 누르는 × 는 어느 목록에서든 치움(세션은 그대로 돈다)이다. 치운 세션은 아카이브 ▸ 치운 세션에 있다.
+//  ① [AI 세션] 목록이 × 를 켠다            ② 행이 자기 뜻(치움·휴지통)을 들고 온다
 //  ③ 남의 세션엔 안 그린다(서버가 소유자만 허용) ④ 터치 기기에서 × 에 닿을 길이 있다(display, opacity 아님)
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -29,11 +31,12 @@ ok(/close:\s*true/.test(rowOpts[1]),
 ok(/pin:\s*false/.test(rowOpts[1]),
   "① 압정은 그대로 끈다 — 순서의 정본은 상태(bySeen)라 고정이 그 순서를 흔든다(#2033)");
 
-// ── ② 행이 × 의 뜻을 들고 온다 — 도는 세션은 보관, 지난 세션은 휴지통 ──────────
+// ── ② 행이 × 의 뜻을 들고 온다 — 도는 세션은 치움(#3857), 지난 세션은 휴지통 ──────────
 const inst = SIDE.slice(SIDE.indexOf("function sessAsInst"), SIDE.indexOf("function renderSessions"));
 ok(/close:\s*!isMine\(s\)\s*\?\s*null/.test(inst),
   "③ ★남의 세션엔 × 를 안 그린다(null) — 서버도 소유자만 허용한다");
-ok(/doArchive\(s\)/.test(inst), "② 도는 세션의 × 는 보관(지난 세션으로) — doArchive");
+ok(/hooks\.onCloseInstance\?\.\('sess:' \+ s\.id\)/.test(inst) && !/doArchive|reclaim/.test(inst),
+  "② 도는 세션의 × 는 치움(#3857) — 셸의 치움으로 가고 박스를 내리지 않는다(회수는 정책만)");
 ok(/doTrash\(s\)/.test(inst), "② 지난 세션의 × 는 휴지통 — doTrash");
 
 // ── ②' 공용 붓이 그 뜻을 실제로 쓴다(안 쓰면 위 셋이 장식이 된다) ───────────────

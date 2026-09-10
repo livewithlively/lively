@@ -48,7 +48,8 @@ import { mountCtxShell } from './ctx-shell.js';     // #3784 셸이 아는 것(�
 import { instBrowserHost, rowStands, type InstFacts } from '../lib/row-stands.js';
 import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { mountAppUiFrame } from './app-ui.js';
-import { cachedAppInstance, closeAppInstance, createAppInstance, ensureSessionAppInstance, ensureSingletonAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
+import { cachedAppInstance, closeAppInstance, createAppInstance, dismissedSessionRefs, dismissSessions, ensureSessionAppInstance, ensureSingletonAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
+import { keptSessionRefs, planDismissMigration, sessRowVerdict, verdictStands, withoutSessionKeys } from './sess-visibility.js';   // #3855·#3857 — 세션 행이 서는 규칙(순수)
 import { mountAppRuntimeView } from './app-runtime.js';
 import { activeNavKey } from './shell-surfaces.js';   // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
 import { startNotificationBanners } from './notifications.js';   // #1891 — 배너는 화면과 무관하게 뜬다
@@ -455,7 +456,7 @@ export async function bootV2(): Promise<void> {
   //  ★ #2460 — 사람이 고른 것(고정·치움·묶는 축·접힘·레일 순서·최근 앱)의 정본은 서버다.
   //   캐시로 먼저 그리고(위 drawSide), 정본이 오면 그 값으로 갈아끼운다. 막지 않는다 — 서버가 느리거나
   //   실패해도 화면은 이 브라우저가 기억하던 대로 이미 서 있다(대시보드 #1129 와 같은 방식).
-  void shellPrefsSync().then((changed) => {
+  const prefsSynced = shellPrefsSync().then((changed) => {
     if (!changed) return;
     readDismissed();
     reloadSidePrefs();
@@ -464,6 +465,7 @@ export async function bootV2(): Promise<void> {
     tabsApi?.paint();
   });
   await loadData();
+  void prefsSynced.then(() => migrateSessionDismissals());   // #3857 — 옛 치움 맵(세션 행)을 서버 정본으로 한 번 옮긴다
   await repairUnknownSessNames();   // 이미 이름을 잃은 탭이 있을 때만 — 서버 기록에서 되찾아 온다(위 주석)
   await repairPinnedSuccessors();   // 이미 끊긴 핀이 있을 때만 — 서버가 아는 이어진 세션으로 따라간다(#2402)
 
@@ -642,6 +644,9 @@ const binHooks = { onChanged: () => { void loadData({ projects: true }).then(() 
 // ── 데이터 ──
 // 마지막으로 **성공한** 세션 응답(라이브·기록) — 실패한 판이 화면을 비우지 않게 이 값을 다시 쓴다(loadData 주석).
 let appInstances: AppInstanceRecord[] = [];   // #1883 — 서버가 아는 내 활성 인스턴스(창 유무와 무관)
+//  #3855·#3857 — **내가 목록에서 치운 세션 id**(서버 정본: org_app_instance closed·사유 user). 인스턴스 목록과 한 왕복에 온다.
+//   실패한 판은 직전 값을 그대로 쓴다 — 빈 집합으로 덮으면 치운 세션이 한 틱에 전부 되살아난다(#869 와 같은 모양).
+let dismissedSess = new Set<string>();
 //  ★ 그 축의 정본을 **한 번이라도 성공해 받았나**(#2460). 아래 ③(열린 창)이 «서버가 모르는 창»을 거를 때
 //   이 값을 먼저 본다 — 아직 못 받은 판에서 거르면 콜드 스타트에 멀쩡한 행이 잠깐 사라진다.
 //   실패한 판은 세지 않는다(loadData 는 실패를 직전 목록으로 덮으므로 '받았다'가 아니다).
@@ -691,6 +696,7 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
   void instsP.then((rows) => {
     if (!Array.isArray(rows)) return;
     appInstances = rows;
+    dismissedSess = new Set(dismissedSessionRefs());
     if (data.sessions.length) return;   // 이미 목록이 있는 판이면 아래 정상 경로가 그린다
     drawSide();
     tabsApi?.paint();
@@ -722,7 +728,7 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
       created_by: p.created_by != null ? String(p.created_by) : null, member_ids: Array.isArray(p.members) ? p.members.map((m: any) => String(m && m.member_id != null ? m.member_id : m)) : [] }));
     projLoadedAt = Date.now();
   }
-  if (Array.isArray(insts0)) { appInstances = insts0; instTruthSeen = true; }
+  if (Array.isArray(insts0)) { appInstances = insts0; dismissedSess = new Set(dismissedSessionRefs()); instTruthSeen = true; }
   let lists = data.lists || [];
   let folders = data.folders || [];
   if (Array.isArray(lists0)) lists = lists0 as any[];
@@ -1530,10 +1536,34 @@ function readDismissed(): void {
   try { const v = JSON.parse(localStorage.getItem(DISMISS_STORE) || '{}'); dismissed = v && typeof v === 'object' ? v : {}; }
   catch { dismissed = {}; }
 }
+//  #3857 — 옛 맵의 세션 키를 서버 정본으로 **한 번** 옮겼나(이 페이지에서). 옮긴 뒤의 저장은 세션 키를 싣지 않는다 —
+//   옮기기 전에 떠 있던 다른 탭·기기가 옛 키를 되올려도 여기서 걸러진다. 옮기기 **전**엔 걸러내지 않는다(그러면 옮길 것을 잃는다).
+let sessDismissMigrated = false;
 function saveDismissed(): void {
+  if (sessDismissMigrated) dismissed = withoutSessionKeys(dismissed);
   try { localStorage.setItem(DISMISS_STORE, JSON.stringify(dismissed)); } catch { /* 못 남겨도 이번 화면은 된다 */ }
   shellPrefsPush();   // #2460 — 치운 결정은 계정의 것이다(다른 기기에서도 치워져 있다)
 }
+/**
+ * 옛 치움 맵의 세션 행을 서버 정본으로 옮긴다(#3857) — 멱등(sess-visibility.ts planDismissMigration).
+ *  ⚠ 세션 목록을 **한 번이라도 받은 뒤**에만 돈다 — 목록 없이 돌면 모든 id 가 «지금 없는 세션» 으로 풀려 통째로 버려진다.
+ *  실패하면 맵을 그대로 두고 다음 부팅에 다시 한다.
+ */
+async function migrateSessionDismissals(): Promise<void> {
+  if (sessDismissMigrated || !sessTruthSeen) return;
+  readDismissed();   // 부팅 동기가 캐시를 서버 정본으로 덮은 뒤의 값
+  const plan = planDismissMigration(dismissed, (id) => { const s = findSess(id); return s ? s.id : null; });
+  if (!plan.sessionIds.length && !plan.dropped.length) { sessDismissMigrated = true; return; }
+  try {
+    for (let i = 0; i < plan.sessionIds.length; i += 500) await dismissSessions(plan.sessionIds.slice(i, i + 500));
+  } catch (e) { console.warn('[side] 치움 기록 옮기기 실패 — 다음 부팅에 다시 시도합니다', e); return; }
+  dismissed = plan.nextMap;
+  sessDismissMigrated = true;
+  saveDismissed();
+  for (const id of plan.sessionIds) dismissedSess.add(id);
+  drawSide();
+}
+
 /**
  * 치움 판정의 기준값 — **적을 때와 잴 때가 반드시 같은 자여야 한다**(#2110).
  *  세션의 stateKey 는 아홉 가지(session-status.ts SESS_STATES)인데 이 목록이 상태로 치는 건 점이 켜지는 셋뿐이다
@@ -1660,7 +1690,9 @@ function sideInstances(): SideInstance[] {
     const basis = prev ? (dismissBasis.get(key) || '') : dismissKey(stateKey);
     if (!prev) dismissBasis.set(key, basis);   // 아래 return 보다 먼저 — 치워진 행도 × 가 다시 읽을 수 있어야 한다
     //  치운 행은 **그 상태 그대로인 동안** 숨는다. 창이 열려 있으면(force) 늘 보인다 — 보고 있는 화면이 목록에 없으면 그게 고장이다.
-    if (!force && !prev && dismissed[key] !== undefined && dismissed[key] === basis) return;
+    //  #3857 — **세션 행은 이 맵을 안 본다.** 세션의 치움은 서버 정본(org_app_instance 사유 user)이 ① 에서 이미 가렸고,
+    //   «치울 때 상태 그대로인 동안만 숨긴다» 는 이 맵의 뜻이 바로 «상태가 바뀌면 치운 세션이 저절로 되살아난다» 였다.
+    if (!force && !prev && !key.startsWith('sess:') && dismissed[key] !== undefined && dismissed[key] === basis) return;
     //  ★ 목록에 서는 기준은 «열려 있나» 가 아니라 **«두고 온 게 있나»** 다(rowStands 머리말).
     //   ⚠ `force`(창이 열려 있다)를 보지 않는다 — 그게 바로 갈아 끼우는 그 기준이다.
     //   ⚠⚠ **보고 있는 화면(activeKey)도 예외가 아니다**(원준 2026-09-10 3차). 종전엔 예외로 뒀는데,
@@ -1704,7 +1736,12 @@ function sideInstances(): SideInstance[] {
       group, rank, at: pinnedAt(key, group, rawAt) });
   };
 
-  for (const s of data.sessions) {                                   // ① 내 세션 — 도는 것 + **오늘 쓴 지난 세션**
+  //  #3855 — 세션 행의 보임 축 재료를 한 번 모은다(행마다 훑지 않게). 인스턴스 정본을 아직 한 번도 못 받았으면
+  //   «목록에 둠» 도 «치움» 도 모른다 — 그 판엔 둘 다 비워 종전 규칙만 쓴다(모르는 것을 지어내지 않는다).
+  const kept = instTruthSeen ? keptSessionRefs(appInstances) : new Set<string>();
+  const gone = instTruthSeen ? dismissedSess : new Set<string>();
+  const dayStart = workDayStart(now);
+  for (const s of data.sessions) {                                   // ① 내 세션 — 목록에 둔 것 + 도는 것 + 오늘 쓴 것
     if (!s.owned || isTrashedSess(s)) continue;
     const liveNow = s.live && s.alive;
     //  ★ 종전엔 도는 것만 세웠다. 그래서 오늘 쓰고 끝낸 세션이 목록에서 통째로 빠졌다 —
@@ -1715,7 +1752,10 @@ function sideInstances(): SideInstance[] {
     //  ⚠ 자르는 자는 **달력 자정이 아니라** '오늘 일감의 시작'이다(lib/sess-fold workDayStart). 자정으로 자르면
     //   새벽에 일하는 사람의 목록이 통째로 빈다 — 원준 2026-09-05 01:20 실측: 그 시각 그 사람의 멈춘 세션이 홈
     //   목록에 **0줄**이었고, 찾던 세션은 최신에서 2번째였다("폴더를 펼쳐도 그 안에서 안 보였다"). 낮에는 자정과 같다.
-    if (!liveNow && (s.lastSeen || 0) < workDayStart(now)) continue;
+    //  ★ #3855 — 위 규칙(도는 것 + 오늘 것)은 이제 **화면에서 한 번도 안 연 세션에만** 쓴다. 먼저 «내가 치웠나» 를 본다
+    //   (sess-visibility.ts 머리말): 목록에 둔 세션은 회수로 멈췄어도·어제 것이어도 서고, 치운 세션은 상태가 바뀌어도
+    //   안 선다. 종전엔 사람이 안 닫은 사실(org_app_instance active)이 서버에 있는데도 여기서 날짜로 잘려 아침마다 사라졌다.
+    if (!verdictStands(sessRowVerdict({ ids: [s.id, s.logId || '', ...(s.altIds || [])], live: liveNow, lastSeen: s.lastSeen || 0, dayStart, kept, dismissed: gone }))) continue;
     //  지난 세션엔 상태 점을 주지 않는다 — 점은 '지금 벌어지는 일'을 말하는 자리다(#1954 §4).
     //   구분은 영역이 아니라 행이 진다(past → .v2-app-inst--past, 원준 지시 2026-08-27).
     put('sess:' + s.id, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0,   // lastSeen 은 ms(views.ts)
@@ -1729,6 +1769,8 @@ function sideInstances(): SideInstance[] {
     if (!key.startsWith('sess:') || rows.has(key)) continue;
     const s = findSess(key.slice(5));
     if (!s || isTrashedSess(s)) continue;
+    //  #3857 — 압정이 남아 있어도 **치운 세션은 안 세운다**(다른 기기에서 치웠을 수 있다). 치움이 더 나중의 결정이다.
+    if (sessRowVerdict({ ids: [s.id, s.logId || '', ...(s.altIds || [])], live: false, lastSeen: 0, dayStart: 0, kept, dismissed: gone }) === 'dismissed') continue;
     put(key, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0, s.stateKey);
   }
   for (const inst of appInstances) {                                 // ② 세션 아닌 활성 인스턴스
@@ -1791,6 +1833,9 @@ function sideInstances(): SideInstance[] {
  *  ⚠ 세션·worker 는 죽이지 않는다(#1780 v2.2 §2.3) — 돌던 일은 그대로 돌고, 상태가 바뀌면 목록에 다시 올라온다.
  */
 async function closeSideRow(key: string): Promise<void> {
+  //  #3857 — 세션 행의 × 는 **치움**이다: 서버 정본(org_app_instance 사유 user)에 적고, 세션·박스는 건드리지 않는다.
+  //   아래 맵(dismissed)에 적지 않는다 — 그 맵의 «상태가 바뀌면 되살아난다» 가 치운 세션이 저절로 돌아오던 뿌리였다.
+  if (key.startsWith('sess:')) { await dismissSessionRow(key); return; }
   const instanceId = sideRowInstance.get(key);
   //  적는 값은 **판정과 같은 자**여야 한다(dismissKey 주석 · #2110). 종전엔 표시용으로 걸러진 status.key 를 적어
   //   점 없는 상태의 행이 영영 안 치워졌고, 보고 있던 '작업 완료' 행도 그랬다(활성 행은 점을 미리 끄므로 '' 로 적혔다).
@@ -1805,6 +1850,33 @@ async function closeSideRow(key: string): Promise<void> {
     catch (_) { toast('앱을 닫지 못했습니다'); }
   }
   drawSide();
+  refreshSideNow();
+}
+
+/**
+ * 세션 행 치우기(#3857) — 낙관 반영 → 서버 정본 → 되읽기.
+ *  치우는 대상은 **그 세션의 지금 id** 와, 그 세션을 active 로 쥔 내 인스턴스들의 id 다(되살리기 전 옛 박스 id 로
+ *  남은 active 인스턴스가 있으면 그것도 닫아야 «목록에 둠» 이 남지 않는다). 지금 id 에 행이 없으면 서버가 closed·user 로 만든다.
+ *  실패하면 되돌리고 말한다 — 치운 줄 알았는데 다음 틱에 되돌아오는 × 가 되지 않게.
+ */
+async function dismissSessionRow(key: string): Promise<void> {
+  const id = key.slice(5);
+  const s = findSess(id);
+  const sid = s ? s.id : id;
+  const names = new Set([sid, ...(s ? [s.logId || '', ...(s.altIds || [])] : [])].filter(Boolean));
+  const held = appInstances.filter((x) => x.subject_kind === 'session' && !!x.subject_ref && names.has(x.subject_ref));
+  const ids = [...new Set([sid, ...held.map((x) => String(x.subject_ref))])];
+  for (const x of ids) dismissedSess.add(x);
+  appInstances = appInstances.filter((x) => !held.includes(x));
+  if (tabsApi) for (const t of [...tabsApi.tabs]) if (sideRowKey(t.route) === key) tabsApi.close(t);
+  drawSide();
+  try { await dismissSessions(ids); }
+  catch (e: any) {
+    for (const x of ids) dismissedSess.delete(x);
+    appInstances = [...appInstances, ...held];
+    toast('목록에서 치우지 못했어요 — ' + ((e && e.message) || '다시 시도해 주세요'), true);
+    drawSide();
+  }
   refreshSideNow();
 }
 

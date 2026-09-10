@@ -162,6 +162,15 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   `);
   await pool.query(`ALTER TABLE org_app_instance ADD COLUMN IF NOT EXISTS execution_host_kind TEXT;`);
   await pool.query(`ALTER TABLE org_app_instance ADD COLUMN IF NOT EXISTS execution_host_id TEXT;`);
+  //  #3855·#3857 — **왜 닫혔나**. 세션 인스턴스의 closed 에 두 뜻이 섞여 있었다: 사람이 목록에서 치운 것(user)과
+  //   시스템 뒷정리(되살리기로 옛 id 를 닫음·완전 삭제·유령 청소·강제 종료·열기 실패). 사이드바의 «보임 축» 정본이
+  //   이 행이 되면서 둘을 가르지 않으면 «치운 세션» 에 사람이 안 치운 것이 뜬다. NULL = 사유 미상(이 칸 이전에 닫힌 행).
+  await pool.query(`ALTER TABLE org_app_instance ADD COLUMN IF NOT EXISTS closed_reason TEXT;`);
+  await pool.query(`ALTER TABLE org_app_instance DROP CONSTRAINT IF EXISTS org_app_instance_closed_reason_check;`);
+  await pool.query(`ALTER TABLE org_app_instance ADD CONSTRAINT org_app_instance_closed_reason_check
+    CHECK (closed_reason IS NULL OR closed_reason IN ('user','restore','kill','purge','janitor','system'));`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_instance_dismissed_idx ON org_app_instance(owner_member, closed_at DESC)
+    WHERE subject_kind='session' AND status='closed' AND closed_reason='user';`);
   await pool.query(`ALTER TABLE org_app_instance DROP CONSTRAINT IF EXISTS org_app_instance_execution_host_kind_check;`);
   await pool.query(`ALTER TABLE org_app_instance ADD CONSTRAINT org_app_instance_execution_host_kind_check
     CHECK (execution_host_kind IS NULL OR execution_host_kind IN ('central','remote'));`);

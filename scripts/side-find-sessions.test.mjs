@@ -55,8 +55,11 @@ ok('⑪ 옛 저장 기록은 부팅 때 지운다',
 //  받을 것이 없었다), 찾던 「투어 영상 제작」은 최신에서 **2번째**였다. 자르는 자가 문제였지 목록이 짧아서가 아니다.
 const main = readFileSync(path.join(root, 'web/v2/main.ts'), 'utf8');
 const mcode = main.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+//  #3855 — 자르는 줄이 보임 축 판정(web/v2/sess-visibility.ts)으로 옮겨 갔다: 이제 날짜 컷은 «화면에서 한 번도 안 연 세션»
+//   에만 걸리고, 그 자는 여전히 workDayStart 다. 비교(>=)와 경계는 scripts/sess-visibility.test.mjs S8·S9 가 값으로 잠근다.
 ok('⑫ 홈 목록이 「오늘 일감의 시작」으로 자른다 — 달력 자정(dayGroup)이 아니다',
-  /!liveNow && \(s\.lastSeen \|\| 0\) < workDayStart\(now\)/.test(mcode) && !/dayGroup\(s\.lastSeen \|\| 0, now\) !== '오늘'/.test(mcode));
+  /const dayStart = workDayStart\(now\);/.test(mcode) && /lastSeen: s\.lastSeen \|\| 0, dayStart,/.test(mcode)
+    && !/dayGroup\(s\.lastSeen \|\| 0, now\) !== '오늘'/.test(mcode));
 ok('⑬ 그 자를 폴더 접기와 **같은 잎 모듈**에서 가져온다(사본을 두지 않는다)',
   /import \{ workDayStart \} from '\.\.\/lib\/sess-fold\.js'/.test(mcode));
 

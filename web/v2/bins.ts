@@ -12,7 +12,8 @@
 import { api, el, relTime, sv, toast } from '../core.js';
 import { confirmSessionPurge, confirmSessionPurgeLocal, confirmSessionPurgeMany, fetchFootprint, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, splitFootprint, trashConfirmSkipped, eulReul, type Footprint } from '../session-actions.js';
 import { sessText } from './side.js';
-import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isTrashedProj, isTrashedSess, projName, type Proj, type Sess, type V2Data } from './views.js';
+import { dotCls, findSessIn, isArchivedProj, isLiveSess, isLooseTrashedSess, isTrashedProj, isTrashedSess, projName, type Proj, type Sess, type V2Data } from './views.js';
+import { listDismissedSessions, restoreDismissedSessions, type DismissedSession } from './app-instance.js';   // #3857 「치운 세션」
 
 export interface BinHooks { onChanged?: () => void }
 
@@ -453,6 +454,84 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
   if (scrollTop) host.scrollTop = scrollTop;
 }
 
+// ══════════════════════════════ 아카이브 ▸ 치운 세션 (#3857) ══════════════════════════════
+//  세션의 «보임 축» 에서 사람이 × 로 치운 것(org_app_instance closed·사유 user)을 보고 되돌리는 자리.
+//  종전엔 × 로 치운 세션을 **어디서도 볼 수 없었다**(브라우저 맵 한 칸에만 있었다) — 치운 걸 되찾을 길이 없으니
+//  사람은 × 를 겁내거나, 치웠다가 사라진 세션을 «버그로 사라졌다» 로 겪었다.
+//  ⚠ 시스템이 닫은 것(되살리기·완전 삭제·유령 청소)은 여기 **안 뜬다** — 서버가 사유 user 만 준다.
+//  ⚠ 한 세션이 여러 이름(박스 id · 대화 uuid · 옛 박스 id)으로 치워졌을 수 있다 — 지금 세션으로 풀어 한 줄로 접는다.
+//  재료는 전용 창구 하나(목록 폴링과 따로) — 이 화면이 20초마다 다시 그려져도 15초 안엔 다시 부르지 않는다.
+let dismissedCache: DismissedSession[] = [];
+let dismissedAt = 0;
+let dismissedLoading = false;
+function dismissedSection(data: V2Data, hooks: BinHooks): HTMLElement {
+  const sec = el('section', { class: 'v2-bin-sec v2-bin-dismissed' });
+  const paint = (): void => {
+    const seen = new Set<string>();
+    const rows: Array<{ ref: DismissedSession; s: Sess | undefined; key: string }> = [];
+    for (const d of dismissedCache) {
+      const s = findSessIn(data.sessions, String(d.session_id || ''));
+      if (!s && d.subject_state === 'gone') continue;      // 되살릴 수도 열 수도 없는 세션 — 되돌려도 설 자리가 없다
+      if (s && isTrashedSess(s)) continue;                 // 휴지통에 있으면 휴지통 화면의 것이다
+      const key = s ? s.id : String(d.session_id);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({ ref: d, s, key });
+    }
+    const head = el('div', { class: 'v2-bin-tools' },
+      el('h2', { class: 'v2-bin-h2', text: '치운 세션' }),
+      el('span', { class: 'v2-bin-count', text: rows.length ? String(rows.length) : '' }));
+    if (!rows.length) {
+      sec.replaceChildren(head, el('p', { class: 'v2-bin-empty', text: dismissedLoading && !dismissedAt ? '불러오는 중…' : '목록에서 치운 세션이 없어요. 세션 행의 × 로 치우면 여기 모이고, 세션은 그대로 돌아요.' }));
+      return;
+    }
+    const restoreOne = (r: { ref: DismissedSession; s: Sess | undefined }, name: string) => guard(async () => {
+      const ids = [String(r.ref.session_id), ...(r.s ? [r.s.id] : [])];
+      try { await restoreDismissedSessions([...new Set(ids)]); }
+      catch (e: any) { toast('되돌리지 못했어요 — ' + (e?.message || e), true); return; }
+      toast(`「${name}」${eulReul(name)} 목록으로 되돌렸어요.`);
+      dismissedAt = 0; hooks.onChanged?.();
+    });
+    const trashOne = (r: { ref: DismissedSession; s: Sess | undefined }, name: string) => guard(async () => {
+      try {
+        const out = await sessionTrashOp('trash', r.s ? sessionNames(r.s) : [String(r.ref.session_id)]);
+        if (!out.done.length) { toast('휴지통으로 보내지 못했어요 — ' + (out.skipped[0]?.why || '처리된 세션이 없어요'), true); return; }
+      } catch (e: any) { toast('휴지통으로 보내지 못했어요 — ' + (e?.message || e), true); return; }
+      toast(`「${name}」${eulReul(name)} 휴지통으로 보냈어요 — 휴지통에서 되돌릴 수 있어요.`);
+      dismissedAt = 0; hooks.onChanged?.();
+    });
+    const body = el('tbody', {});
+    for (const r of rows) {
+      const pid = r.s ? r.s.projectId : (r.ref.subject_project_id ?? null);
+      const name = (r.s ? (sessText(r.s, projName(data, pid)).main || r.s.label) : '') || r.ref.subject_label || r.ref.title || String(r.ref.session_id);
+      body.append(el('tr', {},
+        el('td', { class: 'c-name' }, sessIcon(),
+          el('a', { class: 't', href: '#/s/' + encodeURIComponent(r.key), text: name, title: '세션을 엽니다 — 열면 목록에도 돌아와요', onclick: () => { dismissedAt = 0; } })),
+        el('td', { class: 'c-in' }, el('span', { text: pid ? projName(data, pid) : '프로젝트 없음' })),
+        el('td', { class: 'c-when' }, whenCell(r.ref.closed_at)),
+        el('td', { class: 'c-acts' }, el('span', { class: 'acts' },
+          el('button', { class: 'btn-text', type: 'button', text: '되돌리기', title: '홈 목록으로 되돌립니다', onclick: () => void restoreOne(r, name) }),
+          r.s && !isLiveSess(r.s)
+            ? el('button', { class: 'btn-text danger', type: 'button', text: '휴지통으로', title: '휴지통으로 보냅니다 — 되돌릴 수 있어요', onclick: () => void trashOne(r, name) })
+            : null))));
+    }
+    sec.replaceChildren(head,
+      el('div', { class: 'v2-bin-tblwrap' },
+        el('table', { class: 'v2-bin-tbl arch' },
+          el('thead', {}, el('tr', {}, el('th', { text: '이름' }), el('th', { text: '프로젝트' }), el('th', { text: '치운 때' }), el('th', {}))),
+          body)));
+  };
+  paint();
+  if (!dismissedLoading && Date.now() - dismissedAt > 15_000) {
+    dismissedLoading = true;
+    void listDismissedSessions()
+      .then((rows) => { dismissedCache = rows; dismissedAt = Date.now(); })
+      .catch(() => { /* 못 받았으면 직전 판을 그대로 둔다 */ })
+      .finally(() => { dismissedLoading = false; if (sec.isConnected) paint(); });
+  }
+  return sec;
+}
+
 // ══════════════════════════════════ 아카이브 ═════════════════════════════════
 //  같은 표 문법 — 동사만 다르다(보관 해제 · 휴지통으로). 세션은 그대로 열 수 있으니 여기엔 파괴 동사가 없다.
 export function renderArchive(host: HTMLElement, data: V2Data, hooks: BinHooks = {}, aside?: HTMLElement | null): void {
@@ -622,13 +701,14 @@ export function renderArchive(host: HTMLElement, data: V2Data, hooks: BinHooks =
     el('div', { class: 'v2-bin-top' },
       el('div', {},
         el('h1', { class: 'v2-title', text: '아카이브' }),
-        el('p', { class: 'v2-desc', text: '끝났거나 한동안 안 볼 프로젝트예요. 안의 세션은 그대로 열 수 있고, [보관 해제]를 누르면 원래 자리로 돌아갑니다.' }))),
+        el('p', { class: 'v2-desc', text: '끝났거나 한동안 안 볼 프로젝트, 그리고 목록에서 치운 세션이에요. 안의 세션은 그대로 열 수 있고, [보관 해제]·[되돌리기]를 누르면 원래 자리로 돌아갑니다.' }))),
     empty
       ? el('div', { class: 'v2-inbox-empty' }, el('p', { class: 'h', text: '보관한 프로젝트가 없어요.' }),
           el('p', { class: 'sub', text: '사이드바 프로젝트 행을 오른쪽 클릭 ▸ [아카이브로 보내기]로 치워 두면 사이드바가 가벼워져요.' }))
       : el('section', { class: 'v2-bin-sec' },
           el('div', { class: 'v2-bin-tools' }, chipsEl, el('span', { class: 'sp' }), search, sortBtn),
-          barEl, tblWrap)));
+          barEl, tblWrap),
+    dismissedSection(data, hooks)));
   if (!empty) paint();
   else if (aside) aside.replaceChildren();
   if (hadFocus && !empty) { search.focus(); const n = search.value.length; try { search.setSelectionRange(n, n); } catch { /* noop */ } }
