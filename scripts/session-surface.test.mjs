@@ -134,9 +134,11 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
   //   claude 는 첫 뜻으로 거짓이라, 둘째 뜻까지 거짓이 되어 터미널이 기본이 됐다.
   ok(/const chatHome = \(\): boolean => chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode/.test(chat),
     "㉚ ★ «대화창이 본자리인가» 가 «codex 인가» 와 갈려 있다");
-  ok(/setMode\(chatHome\(\) \? 'chat' : 'term'\)/.test(chat),
+  //  ⚠ 항이 **더 붙는 것**은 막지 않는다 — #3847 이 «서버가 관측 못 한 세션(observed:false)은 대화로 연다» 를
+  //   더했다. 여기서 재는 것은 «첫 화면의 축이 chatHome() 인가» 다(chatFirst() 로 정하면 claude 가 터미널로 열린다).
+  ok(/setMode\(chatHome\(\)[^;\n]{0,60}\? 'chat' : 'term'\)/.test(chat),
     "㉛ ★ 첫 화면을 그 축으로 정한다 — chatFirst() 로 정하면 claude 가 터미널로 열린다");
-  ok(/!modeChosen && mode === 'chat' && !chatHome\(\)/.test(chat),
+  ok(/!modeChosen && [^;\n]{0,24}mode === 'chat' && !chatHome\(\)/.test(chat),
     "㉜ tmux 라고 되돌리는 분기가 대화 런타임 세션을 되돌리지 않는다(두 줄이 서로 밀치면 화면이 깜빡인다)");
 
   //  ★ 2026-09-01 신고: "클로드 왜 중간 대답은 표시 안되냐? 최종대답밖에 표시못함?"

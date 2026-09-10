@@ -2806,7 +2806,11 @@ function handOffToShell(meta) {
     window.parent.postMessage({ type: 'lively-term-gone', id: SESSION_ID, restorable: true, canRestore: !!(meta && meta.canRestore) }, location.origin);
   } catch (_) { /* 부모가 없거나 닫혔다 */ }
   sessionEnded = true;
-  showEndedBar({ info: true, icon: '↻', title: '멈춰 있는 세션이에요.', body: '이어서 열고 있습니다 — 잠시만요.', restoreBtn: true, restoreLabel: '여기서 이어서 열기' });
+  //  ⚠ #3847 — «이어서 열고 있습니다» 라고 단정하지 않는다. 셸은 **일부러 기다리기도** 한다(#2439 «보기만
+  //   해서는 안 되살린다» · 자동복원 연쇄 상한). 그때 이 배너만 남으면 사람은 오지 않을 «잠시만요» 를 계속 본다.
+  //   지금 셸은 이 신호를 받으면 액자를 걷고 대화 화면으로 내려앉으므로(session-chat dropTermFrame) 이 배너는
+  //   그 사이 잠깐이거나, 신호를 못 받는 옛 셸에서만 남는다 — 그 경우에도 읽고 누를 수 있는 정확한 말이어야 한다.
+  showEndedBar({ info: true, icon: '↻', title: '멈춰 있는 세션이에요.', body: '대화는 그대로 남아 있어요 — 아래에서 이어서 열 수 있습니다.', restoreBtn: true, restoreLabel: '여기서 이어서 열기' });
   return true;
 }
 /**
@@ -2828,7 +2832,7 @@ function goToMoved(movedTo) {
   }
   //  ⚠ 노드 좌표(&node=)를 그대로 이고 간다 — 복원은 **같은 노드**에 릴레이되므로 이어진 세션도 그 노드에 있다.
   //   빠뜨리면 새 주소가 게이트웨이 박스를 뒤지다 4410(그런 세션 없음) → 종료 배너로 끝난다(#1791 과 같은 함정).
-  location.replace(apiUrl('/ui/terminal.html?session=') + encodeURIComponent(to) + '&restored=1' + nodeQ('&'));
+  location.replace(apiUrl('/ui/terminal.html?session=') + encodeURIComponent(to) + '&restored=1' + (EMBED ? '&embed=1' : '') + nodeQ('&'));   // #3847 — 액자면 액자인 채로 옮긴다(크롬 이중 표시 방지)
 }
 
 /** 이 화면에서 복원을 실행한다 — 진행 배너를 띄우고 재연결 스케줄러를 세운 뒤 POST /restore. */
@@ -3145,8 +3149,12 @@ async function restoreThisSession() {
   const ns = r && r.session;
   if (ns && ns.id) {
     // restored=1 — 이 표식이 있는 페이지는 다시 자동 복원하지 않는다(루프 차단, 위 goneMode).
+    //  ⚠ #3847 — **`embed=1` 을 이고 간다.** 이 페이지는 세션 화면 안 액자로도 실리는데(#1744), 빠뜨리면
+    //   복원된 세션이 액자 안에서 **레거시 터미널 크롬(상단바·푸터)째로** 열려 상단바가 위아래로 둘이 된다
+    //   (실측 2026-09-10 상민님 신고). 액자 안에서 크롬을 빼는 스위치가 이 파라미터 하나다.
     location.replace(apiUrl('/ui/terminal.html?session=') + encodeURIComponent(ns.id)
       + '&label=' + encodeURIComponent(ns.label || SESSION_LABEL || '') + '&restored=1'
+      + (EMBED ? '&embed=1' : '')
       + (ns.node && ns.node.id ? '&node=' + encodeURIComponent(ns.node.id) : ''));   // #1791 — 노드에서 복원된 새 세션은 그 노드로 붙는다
     return;
   }
