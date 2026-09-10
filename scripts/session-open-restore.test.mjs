@@ -107,7 +107,8 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   //  (실측: 프로젝트 하나에 「새 세션(원본 기반)」 4개). 신호를 만들어 놓고 안 넘기면 조용히 무효가 되는 자리다.
   //  ⚠ 창을 900자로 잡는다 — 같은 핸들러 안에 #2231(이미 이어진 세션이면 그리로 옮긴다)이 **먼저** 서 있다.
   //   그 분기가 앞서는 건 의도다(되살리면 같은 대화가 둘이 된다). 창이 좁으면 배선이 멀쩡한데 테스트만 빨개진다.
-  ok(/lively-term-gone[\s\S]{0,900}resumeSession\(\s*null\s*,\s*\{[^}]*canRestore:\s*true/.test(chat),
+  //   #3847 이 그 사이에 한 분기(액자 걷기)를 더하며 900자를 넘겼다 — 재는 것은 «같은 핸들러 안인가» 다.
+  ok(/lively-term-gone[\s\S]{0,1400}resumeSession\(\s*null\s*,\s*\{[^}]*canRestore:\s*true/.test(chat),
     "③-g 프레임이 말한 canRestore 를 resumeSession 에 넘긴다");
   // ★ #2231 — 그 핸들러에서 **이정표(movedTo)가 canRestore 보다 앞**이어야 한다. 순서가 뒤집히면 이미 이어진
   //  세션을 한 번 더 되살려 같은 대화가 둘로 갈라진다(그리고 옛 화면은 계속 막다른 길에 남는다).
@@ -122,6 +123,34 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   //   잠깐 «중단됨»으로 보이면 그 탭이 영영 대화창에 갇혔다(터미널도 수기 전환 메뉴도 사라진다). 지금의 행으로 답한다.
   ok(/if\s*\(isBox\(\)\s*&&\s*\(target\.raw\?\.restorable\s*\|\|\s*hint\?\.canRestore\)\)/.test(chat),
     "③-h 복원 분기가 목록의 restorable **또는** 프레임이 말한 canRestore 를 본다(둘 중 하나면 /restore)");
+  // ── #3847 — **프레임이 «박스 없음» 을 알리면 액자를 걷고 대화로 내려앉는다** ──────────────────
+  //  왜(실측 2026-09-10 상민님 신고): 목록의 라이브 판정은 tmux 관측이라 흔들린다(중계가 못 보면 DB desired 행이
+  //   observed:false 라이브 행으로 나가고 — #2544 — 회수 직후엔 한동안 라이브로 남는다. 같은 목록이 3분 사이
+  //   라이브 168/중단 10 → 라이브 24/중단 154 로 뒤집혔다). 그 틱에 열면 화면은 터미널을 얹고, 프레임은 단건
+  //   메타(has-session 확답)로 «중단됨» 을 받아 배너를 띄운다 — 사람이 보는 것은 그 배너 한 줄뿐이었다
+  //   (대화도, 말 걸 입력창도, 이 화면의 안내 setNote 도 액자에 가린다).
+  //  ⚠ 그러면서 **얼지는 않아야 한다**(2026-09-08 교훈) — 아래 세 줄이 그 균형을 지킨다.
+  ok(/function dropTermFrame\(/.test(chat) && /dropTermFrame\(!!m\.canRestore\)/.test(chat),
+    "③-l ★ 프레임이 '박스 없음'을 알리면 액자를 걷는다(대화·입력창이 배너에 가리지 않게)");
+  ok(/goneByFrame = true;[\s\S]{0,500}setMode\('chat'\)/.test(chat),
+    "③-m 액자를 걷은 뒤 대화 화면으로 내려앉는다");
+  ok(/const dead = \(\): boolean => goneByFrame \|\|/.test(chat),
+    "③-n 프레임이 말한 '박스 없음'이 목록의 라이브 판정을 이긴다 — 그래야 입력창이 '보내면 이어서 열립니다'로 동작한다");
+  ok(/if \(goneByFrame && t\.live && t\.alive && !t\.raw\?\.restorable\) goneByFrame = false;/.test(chat),
+    "③-o ★ 얼리지 않는다 — 행이 다시 '살아 있다'고 오면 걸쇠가 풀린다(2026-09-08 의 영구 갇힘 재발 금지)");
+  ok(/if \(m === 'term'\) goneByFrame = false;/.test(chat),
+    "③-p 사람이 터미널을 고르면 그 자리에서 걸쇠가 풀린다(수기 전환의 문은 늘 열려 있다)");
+  ok(/termGoneN < 2 && mode === 'chat'/.test(chat),
+    "③-q 자동 되돌리기는 한 번만 다시 시도한다 — blip 출구는 남기고 터미널↔대화 왕복은 막는다");
+  ok(/setMode\(chatHome\(\) \|\| target\.raw\?\.observed === false \? 'chat' : 'term'\)/.test(chat),
+    "③-r 서버가 '관측 못 함'(#2544 observed:false)이라 한 세션은 터미널이 아니라 대화로 연다");
+  // 액자 안에서 복원하면 **액자인 채로** 옮겨야 한다 — embed 를 빠뜨리면 레거시 터미널 크롬이 액자 안에 또 뜬다.
+  {
+    const term = read("web/standalone/terminal.ts");
+    const rs = term.slice(term.indexOf("async function restoreThisSession()"));
+    ok(/location\.replace\([\s\S]{0,400}EMBED \? '&embed=1' : ''/.test(rs),
+      "③-s 복원으로 옮겨 갈 때 embed=1 을 이고 간다(액자 안 레거시 상단바 이중 표시 방지)");
+  }
 }
 
 // ── ③-T 터미널로 가는 문은 **얼면 안 된다** (2026-09-08 상민님 신고 · 재현 완료) ─────────────
@@ -148,7 +177,10 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
     "③-T4 opts.terminalSrc 를 **직접 조건으로 쓰지 않는다** — 전부 hasTerm() 을 지난다");
   ok(/if \(m === 'term' && !hasTerm\(\)\) m = 'chat'/.test(chat),
     "③-T5 setMode 의 강등이 지금의 가용성으로 판정한다");
-  ok(/!modeChosen && mode === 'chat' && !chatHome\(\) && String\(target\.raw\?\.chatMode \|\| ''\) === 'tmux' && hasTerm\(\)/.test(chat),
+  //  ⚠ 조건이 **더 붙는 것**은 막지 않는다 — #3847 이 «프레임이 박스 없음을 두 번 말한 뒤엔 자동으로 되돌리지
+  //   않는다»(termGoneN)를 더했다. 그건 출구를 닫는 것이 아니라 **왕복을 멈추는 것**이고(첫 회복은 여전히 시도한다),
+  //   수기 전환은 그대로다. 여기서 재는 것은 «그 출구가 hasTerm() 을 지나 살아 있는가» 다.
+  ok(/!modeChosen && [^;\n]{0,24}mode === 'chat' && !chatHome\(\) && String\(target\.raw\?\.chatMode \|\| ''\) === 'tmux' && hasTerm\(\)/.test(chat),
     "③-T6 ★ blip 에서 스스로 빠져나오는 출구 — 행이 건강해지면 다음 갱신에 터미널로 돌아온다");
 }
 
