@@ -115,9 +115,22 @@ test("W1 두 화면이 같은 규칙을 쓴다 — 옛 완전일치가 남아 �
     assert.doesNotMatch(c, /String\(r\.proj\.id\) === q/, rel + ": 옛 번호 완전일치가 남아 있다");
   }
 });
-test("W2 홈이 넘기는 후보가 40개로 잘려 있지 않다", () => {
+//  ⚠ 이 테스트는 «상한을 200 이상으로 두라» 였다. 그건 처방이 아니라 **증상 완화**였고 실제로 샜다 —
+//   후보 순서(projectOrder)가 done 을 맨 뒤로 밀므로 **잘리는 것은 언제나 끝난 프로젝트부터**이고,
+//   이름으로 찾는 상황이 바로 그때다. 실측(원준님 2026-09-09): 프로젝트 286 = 진행중 175 + done 111 →
+//   상한 40 이면 done 이 전부 잘려 「자잘한 UI 수정」이 done 이 되는 순간 이 칸에서 사라졌고, 200 이어도 86개가 잘린다.
+//  ⇒ 사양을 바꾼다: **표시 상한과 검색 대상을 한 숫자에 묶지 않는다.** 자르기는 화면이 한다(projMatches 의 limit).
+test("W2 후보를 만드는 쪽이 목록을 미리 자르지 않는다 — 자르면 그 밖은 이름을 정확히 쳐도 없는 것이 된다", () => {
   const c = code(readWeb("v2/main.ts"));
-  const m = /projectOrder\(data\)\.slice\(0,\s*(\d+)\)/.exec(c);
-  assert.ok(m, "homeDests 의 slice 를 못 찾았다");
-  assert.ok(Number(m![1]) >= 200, "후보가 " + m![1] + "개로 잘려 번호 찾기가 그 안에서만 된다");
+  assert.doesNotMatch(c, /projectOrder\(data\)\s*\.slice\(/,
+    "homeDests 가 후보를 미리 자른다 — 상한 밖(정렬상 done 부터)은 검색으로도 못 찾는다");
+});
+
+//  E2·E3 — 찾을 것이 **맨 끝**에 있어도 찾힌다. projMatches 안에 상한이 생기면(또는 조기 return 이 생기면) 빨간불.
+test("W3 목록 꼬리의 항목도 이름·번호로 찾힌다", async () => {
+  const m = await load();
+  const noise = Array.from({ length: 250 }, (_, i) => ({ proj: { id: 9000 + i, name: "노이즈 " + i } }));
+  const rows = [...noise, { proj: { id: 3778, name: "자잘한 UI 수정" } }];
+  assert.deepEqual(m.projMatches(rows, "자잘한").map((x: { proj: { id: number } }) => x.proj.id), [3778]);
+  assert.deepEqual(m.projMatches(rows, "3778").map((x: { proj: { id: number } }) => x.proj.id), [3778]);
 });

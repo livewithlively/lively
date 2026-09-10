@@ -43,6 +43,7 @@ import { openMeModal } from './me-modal.js';   // #1898 — 클래식에서 올�
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';
 import { mountCtxMenus } from './ctx-registry.js';   // #3784 우클릭 메뉴 배선(표 data-ctx 를 읽는다)
 import { mountCtxShell } from './ctx-shell.js';     // #3784 셸이 아는 것(세션·프로젝트·앱·알림)의 메뉴   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
+import { instBrowserHost, rowStands, type InstFacts } from '../lib/row-stands.js';
 import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { mountAppUiFrame } from './app-ui.js';
 import { cachedAppInstance, closeAppInstance, createAppInstance, ensureSessionAppInstance, ensureSingletonAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
@@ -931,7 +932,12 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   }
   if (p === 'i') {
     const instance = cachedAppInstance(decodeURIComponent(segs[1] || ''));
-    return { title: instance?.title || instance?.app?.title || '앱', noAside: true };
+    //  ★ 인스턴스 이름은 **앱 이름이 아니라 그 인스턴스가 든 것**이다(#3778 3차, 원준 2026-09-10).
+    //   종전엔 `instance.title`(= 앱 제목)을 그대로 써서, 브라우저를 셋 열면 목록에 「웹 브라우저」가
+    //   **셋 다 같은 글자로** 섰다 — 서로 구분이 안 되니 셋 다 잡동사니로 읽힌다.
+    //   주소는 실제로 갱신되므로(300ms 디바운스 updateAppInstance) 호스트 이름이 그 줄의 정체다.
+    const host = instBrowserHost(instFacts(decodeURIComponent(segs[1] || "")));
+    return { title: host || instance?.title || instance?.app?.title || '앱', noAside: true };
   }
   //  프로젝트 화면은 **어느 프로젝트인가**가 곧 이름이다(#1883) — 여러 개 열면 전부 '프로젝트'라 서로 구분되지 않는다.
   const openedProject = projectPath(projectIdForRoute(route));
@@ -1044,11 +1050,19 @@ function homeDraft(tab: ShellTab): { text: string; onChange(v: string): void } {
 /** 홈의 «여는 곳» 후보(#3778) — 사이드바 트리와 **같은 순서**(projectOrder)를 그대로 쓴다.
  *  ⚠ views.ts 가 side.ts 를 직접 부르면 순환 import 가 된다(side.ts 는 views.ts 의 값을 쓴다) — 그래서 셸이
  *   이어 준다. 목록은 이미 메모리에 있다(loadData 가 실은 data.projects) — 이 칸 때문에 서버를 더 부르지 않는다.
- *   상한 40: 최근 순이라 그 뒤는 «검색»으로 찾는 구간이고, 홈이 프로젝트 수백 건을 들고 있을 이유가 없다. */
+ *   ⚠⚠ **여기서 자르지 않는다.** 상한을 두면 «최근 몇 개를 보여줄까»(표시)와 «무엇을 찾을 수 있나»(검색)가
+ *   한 숫자에 묶여, 상한 밖의 프로젝트는 **이름을 정확히 쳐도 없는 것이 된다.**
+ *
+ *   그리고 그 잘림은 무작위가 아니다 — `projectOrder` 는 **done 을 맨 뒤로** 정렬하므로(side.ts), 잘리는 것은
+ *   언제나 **끝난 프로젝트부터**다. 그런데 이름으로 찾는 상황이 바로 그때다(«전에 하던 그거»).
+ *   실측(원준님 계정 2026-09-09): 프로젝트 286 = 진행중 175 + done 111. 상한 40 이면 done 이 **전부** 잘리고
+ *   (그래서 「자잘한 UI 수정」이 done 이 되는 순간 이 칸에서 사라졌다), 200 이어도 86개가 잘린다.
+ *   상한을 올리는 건 처방이 아니다 — 잘림과 검색을 **떼어 놓는 것**이 처방이다.
+ *
+ *   비용은 없다: `data.projects` 는 이미 전량이 메모리에 있고(loadData 가 limit 없이 받는다) 여기서 만드는 건
+ *   {proj, done} 두 필드짜리 얇은 사영이다. 화면에 실제로 그려지는 줄은 언제나 6개 이하다(views.ts destBox). */
 function homeDests(): HomeDest[] {
-  //  ⚠ 40개로 자르면 **번호로 찾기가 그 안에서만** 된다(원준 2026-09-09 «번호로도 검색»). 목록은 화면이 스크롤·
-  //   자르기로 다루므로 여기서는 넉넉히 넘긴다 — 행 하나는 {id, name} 두 필드라 200개도 가볍다.
-  return projectOrder(data).slice(0, 200).map((r) => ({ proj: r.proj, done: r.done }));
+  return projectOrder(data).map((r) => ({ proj: r.proj, done: r.done }));
 }
 
 async function renderRoute(tab: ShellTab): Promise<void> {
@@ -1383,39 +1397,26 @@ function draftLine(draft?: string): string {
   return '쓰다 만 지시 · ' + (one.length > 40 ? one.slice(0, 40) + '…' : one);
 }
 
-/**
- * 이 주소가 **두고 온 것 없이** 서 있는 «앱 첫 화면» 인가 (#3778 C안, 원준 2026-09-09).
- *
- * 좌측 목록이 서는 기준은 종전엔 «열려 있나» 였다. 그런데 이 목록은 탭 줄을 겸하므로(TABS_OFF, 위 머리말)
- *  열어 본 화면이 전부 줄을 얻었고, 실측(2026-09-09 원준님 홈)에서 「프로젝트 없음」 카드 **6줄 중 5줄**이
- *  세션이 아니라 앱 첫 화면이었다 — 새 작업 · 프로젝트 · AI 세션 · 확인할 것 · 자료. 그리고 그 다섯은
- *  **전부 레일(rail.ts SECTIONS)·런치패드에 같은 문이 이미 있다.** 사람은 그걸 프로젝트로 읽었다
- *  ("홈에는 이런 프로젝트가 있는데 이게 뭔가 이상한데").
- *
- * 그래서 기준을 **«두고 온 게 있나»** 로 바꾼다. 상태를 안 든 앱 첫 화면은 세우지 않는다 —
- *  돌아갈 상태가 없으므로 «돌아간다» 가 성립하지 않고, 레일 한 번이면 같은 자리라 **잃는 것이 없다**.
- *  (열어 둔 것을 무턱대고 걷으면 안 되는 이유는 #2061 이 이미 겪었다 — 그건 **상태를 든** 세션 얘기다.)
- *
- * ⚠ 판정에 `routeKey` 를 쓰지 않는다 — 그건 `#/sources` 와 `#/sources/<id>` 를 한 키로 접으므로(tabs.ts)
- *  «목록» 과 «자료 하나를 열어 둠» 을 구분하지 못한다. 여기서는 **탭이 든 실제 주소**를 본다.
- * ⚠ 모르는 주소는 «없는 것» 이 아니라 «모르는 것» 이다 — 세운다(false).
- */
-function isBlankScreen(route: string, draft?: string): boolean {
-  const { segs } = parseRoute(route);
-  const p = segs[0] || '';
-  //  새 작업(홈) — 아무것도 안 쓴 빈 창은 남길 것이 없다. 사이드바 머리줄 [＋ 새 작업]이 늘 그 자리를 연다.
-  if (!p || p === 'dashboard') return !draftLine(draft);
-  //  프로젝트 주소 = «새 세션 자리»다(titleFor 머리말) — 세션이 되기 전의 빈 슬롯이라 남길 것이 없다.
-  //   종전엔 프로젝트에 한 번 들어갈 때마다 그 카드 안에 「새 세션」 줄이 하나 생겨 **진짜 세션과 같은 위계**로
-  //   섰다(원준 2026-09-09 지적). 쓰다 만 지시가 있으면 그건 두고 온 것이므로 남는다.
-  if (p === 'p') return !draftLine(draft);
-  //  세션·앱 인스턴스는 언제나 무언가를 들고 있다(대화·스크롤·돌던 작업).
-  if (p === 's' || p === 'i') return false;
-  //  `#/app/<key>` = 그 앱의 첫 화면. 뒤 세그먼트가 붙으면(문서·항목) 그건 «어디까지 봤나» 라 남는다.
-  if (p === 'app') return segs.length <= 2;
-  //  정본 주소를 가진 빌트인과 클래식 딥링크도 같은 자로 — 뿌리면 첫 화면, 깊으면 두고 온 자리.
-  if (p === 'inbox' || p === 'sources' || CLASSIC_PAGES[p]) return segs.length <= 1;
-  return false;
+/** 좌측 목록에 **설 자격**을 정하는 규칙은 `web/lib/row-stands.ts` 한 자리에 있다 — 이 판정이 main.ts 안의
+ *  조건문으로 살면서 같은 자리를 세 번 새게 했기 때문이다(그 머리말 참조). 여기서는 셸이 아는 것만 이어 준다:
+ *  쓰다 만 지시가 있나 · 클래식 딥링크인가 · 그 인스턴스의 사실(렌더러·첫 주소·state). */
+function standsHere(route: string, draft?: string): boolean {
+  return rowStands(route, {
+    hasDraft: !!draftLine(draft),
+    isClassicPage: (p) => !!CLASSIC_PAGES[p],
+    inst: (id) => instFacts(id),
+  });
+}
+
+/** 인스턴스 레코드 → 판정에 필요한 사실 셋. 아직 못 읽었으면 null(= 안 세운다). */
+function instFacts(id: string): InstFacts | null {
+  const inst = id ? cachedAppInstance(id) : null;
+  if (!inst) return null;
+  return {
+    renderer: inst.app?.system?.renderer ?? null,
+    home: inst.app?.system?.home ?? null,
+    state: (inst.state || null) as Record<string, unknown> | null,
+  };
 }
 
 /** route 하나가 좌측에서 갖는 얼굴 — 이름·아이콘·부제·소속 프로젝트. `draft` 는 그 창에 쓰다 만 지시(#2037). */
@@ -1643,11 +1644,14 @@ function sideInstances(): SideInstance[] {
     if (!prev) dismissBasis.set(key, basis);   // 아래 return 보다 먼저 — 치워진 행도 × 가 다시 읽을 수 있어야 한다
     //  치운 행은 **그 상태 그대로인 동안** 숨는다. 창이 열려 있으면(force) 늘 보인다 — 보고 있는 화면이 목록에 없으면 그게 고장이다.
     if (!force && !prev && dismissed[key] !== undefined && dismissed[key] === basis) return;
-    //  ★ 목록에 서는 기준은 «열려 있나» 가 아니라 **«두고 온 게 있나»** 다(#3778 C안, isBlankScreen 머리말).
-    //   ⚠ 여기서는 `force`(창이 열려 있다)를 보지 않는다 — 그게 바로 갈아 끼우는 그 기준이다.
-    //   예외 둘만 남긴다: **보고 있는 화면**(목록에 없으면 그게 고장이다 — ③ force 가 원래 지키려던 한 줄)과
-    //   **사람이 고정한 것**(사람의 결정은 자동 규칙을 언제나 이긴다, appPinnedKeys).
-    if (!prev && key !== activeKey && !isAppPinned(key) && isBlankScreen(route, draft)) return;
+    //  ★ 목록에 서는 기준은 «열려 있나» 가 아니라 **«두고 온 게 있나»** 다(rowStands 머리말).
+    //   ⚠ `force`(창이 열려 있다)를 보지 않는다 — 그게 바로 갈아 끼우는 그 기준이다.
+    //   ⚠⚠ **보고 있는 화면(activeKey)도 예외가 아니다**(원준 2026-09-10 3차). 종전엔 예외로 뒀는데,
+    //    그래서 레일 [홈]을 누를 때마다 빈 「새 작업」이 목록에 되살아났다 — 지금 눈앞에 있는 빈 화면을
+    //    «돌아갈 곳»으로 적어 두는 건 뜻이 없다. 그 예외의 원래 사유(#2460 «보고 있는 화면이 목록에 없으면
+    //    고장이다»)는 **세션** 얘기였고, 세션은 rowStands 가 무조건 세우므로 그 보장은 그대로다.
+    //   남는 예외는 하나 — **사람이 고정한 것**(사람의 결정은 자동 규칙을 언제나 이긴다, appPinnedKeys).
+    if (!prev && !isAppPinned(key) && !standsHere(route, draft)) return;
     sideRowRoute.set(key, route);
     let sk = stateKey;
     //  ★ **보고 있는 세션은 '안 본 완료'가 아니다** — 초록점은 누르는 즉시 꺼진다(#1954 3차).
