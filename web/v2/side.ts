@@ -37,6 +37,7 @@ import { lastAsk, watchLastAsk } from './last-ask.js';   // #2016 6차 — 세�
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { sourcesFindInput, sourcesFindShown, sourcesSideBody, sourcesSideCount, sourcesUploadPick, toggleSourcesFind } from './sources.js';   // #2423 자료 앱 사이드바 내용
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
+import { orderCards, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from './hold-rules.js';   // #3856 — 카드 자리 자물쇠(순수)
 import { migratePinKeys } from './pin-migrate.js';   // #2402 — 복원으로 id 가 바뀔 때 핀을 옮기는 규칙(순수·값검증)
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
 import { confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 휴지통·아카이브
@@ -86,6 +87,9 @@ let grpClosed = new Set<string>();
 let grpOpened = new Set<string>();
 //  자동 판정이 이미 펴 둔 카드 — **페이지 수명만**(사람의 결정은 위 두 벌이 브라우저·서버에 남긴다).
 const grpAuto = new Set<string>();
+//  카드 자리 자물쇠(#3856) — 카드 키('p:<id>') → 그 카드가 선 묶음·순위·들어온 시각. **페이지 수명만**
+//   (main.ts 의 행 holds·orderPin 과 같다 — 새로 열면 사실대로 다시 잡는다).
+const cardHolds = new Map<string, CardHold>();
 
 //  ⚠ 순서는 여기서 따로 기억하지 않는다 — 묶음의 자리는 시간축이 준 정렬 그대로다(#2033).
 //  ★ 그런데 **펼침은 «지금 사실의 함수» 를 그만뒀다**(#2534, 원준 2026-09-01 "열렸던 게 닫히고 갑자기
@@ -353,6 +357,8 @@ export interface SideInstance {
   owner?: { id: string; name: string } | null;
   /** 정렬 시각(ms) — main.ts 가 **얼려 둔** 값(#1954 orderPin). 프로젝트 축이 그룹 순서를 이걸로 잰다(#2033). */
   at?: number;
+  /** 묶음 안 순위 — main.ts 가 자물쇠까지 반영한 값(#3856). 점이 꺼진 채 붙들린 행도 순위를 들고 있어, 카드 자리가 이걸로 잰다. */
+  rank?: number;
   /** 지난 세션인가 — 오늘 쓰고 이미 끝난 것(#2208). 홈은 이런 행도 세우되(그러지 않으면 오늘 한 일이 목록에서
    *  통째로 빠진다 — 실측 2026-08-27: 오늘 활동한 세션 16건 중 5건만 섰다) **영역은 나누지 않는다**(원준 지시).
    *  대신 행이 스스로 '지난 것'이라 말한다 — 아이콘·제목을 한 단계 낮춘 톤으로(.v2-app-inst--past). */
@@ -614,7 +620,9 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
 /** 한 프로젝트 묶음. rows 는 이미 정렬돼 들어온다(아래 projGroups 머리말). */
 interface ProjGrp { key: string; id: number; name: string; bucket: string; rows: SideInstance[]; open: boolean; active: boolean; pinned: boolean; counts: Record<string, number>;
   /** 아직 안 끝난 줄 수 · 끝난 줄 수(#3778). 머리글이 «이 카드는 통째로 지난 것»을 말할 수 있어야 한다. */
-  live: number; past: number }
+  live: number; past: number;
+  /** 카드 자리(#3856) — 묶음 안 순위 · 그 묶음에 들어온 순간의 시각(hold-rules stepCardHold). */
+  rank: number; at: number }
 
 /**
  * 접힌 카드 머리줄에 세울 얼굴 — 그 안 세션들의 주인을 **합집합**으로 (#3778, 원준 2026-09-09).
@@ -648,8 +656,12 @@ const PINNED_BUCKET = '고정';
  *  붙이고 그 순서(상태 순위 → 최신순)로 정렬해서 넘긴다. 여기서는 **먼저 나온 순서대로 프로젝트를 묶기만** 한다.
  *  그러면 프로젝트 축의 순서는 **정의상** 세션 축과 같아진다 — 한 프로젝트는 그 안에서 가장 급한 행이 서 있던 자리에 서고,
  *  묶음 이름도 그 행의 묶음이다(그 행이 목록에서 제일 먼저 나오므로).
- *  ⚠ 여기서 순서를 다시 매기지 마라. 종전 판은 '층 + 승급 순서'를 따로 지어냈다가 두 축의 순서가 갈렸다
+ *  ⚠ 여기서 순서를 **지어내지** 마라. 종전 판은 '층 + 승급 순서'를 따로 지어냈다가 두 축의 순서가 갈렸다
  *   (상민님: "정렬순서도 시간순정렬일때랑 너무 다른데" · "지금 볼 것 로직은 똑같이 가져가면 되잖아").
+ *  ★ 대신 **붙든다**(#3856). 카드 자리를 매 판 «첫 행» 에서 다시 뽑으면, 첫 행 하나가 해제되거나 빠지는 순간
+ *   딸린 세션 전부를 데리고 카드가 이사한다(원준 2026-09-02 «중간중간 튄다»). 그래서 카드 키에도 행과 같은
+ *   한 방향 자물쇠를 준다(hold-rules stepCardHold). 줄 세우기(orderCards)의 키가 세션 축과 같은 층 → 순위 → 시각이라,
+ *   자물쇠가 아무것도 안 붙든 판에서는 **정의상** 세션 축의 첫 행 순서와 같다 — 위 규율은 그대로 지켜진다.
  */
 function projGroups(rest: SideInstance[], searching: boolean): ProjGrp[] {
   const groups: ProjGrp[] = [];
@@ -662,13 +674,31 @@ function projGroups(rest: SideInstance[], searching: boolean): ProjGrp[] {
       //  묶음 이름 = **첫 행의 묶음**. 목록이 이미 정렬돼 있으므로 첫 행이 곧 그 프로젝트의 가장 급한 행이다.
       g = { key, id, name: id ? (r.project as { name: string }).name : '프로젝트 없음',
         //  압정은 트리와 **같은 통**(PIN_KEY · 'p:<id>')을 본다 — 한 프로젝트에 압정 하나(#3778).
-        bucket: r.group || '', rows: [], open: false, active: false, pinned: !!id && isPinned(key), counts: {}, live: 0, past: 0 };
+        bucket: r.group || '', rows: [], open: false, active: false, pinned: !!id && isPinned(key), counts: {}, live: 0, past: 0,
+        rank: r.rank ?? QUIET_RANK, at: r.at || 0 };
       byKey.set(key, g); groups.push(g);
     }
     g.rows.push(r);
     if (r.active) g.active = true;
     if (r.past) g.past++; else g.live++;
     if (r.status) g.counts[r.status.key] = (g.counts[r.status.key] || 0) + 1;
+  }
+
+  //  ★ 카드 자리(#3856) — 위 머리말. **홈 구역에서만, 찾는 중이 아닐 때만** 기억을 건드린다:
+  //   [AI 세션]·[확인할 것]의 행 묶음은 행 자물쇠를 안 거친 전수·대기 목록이고(sessAsInst), 찾는 중의 목록은
+  //   걸러진 것이라 여기서 정리하면 **안 보이는 카드의 자리가 지워진다**. 그 판들은 종전대로 첫 행 순서다.
+  let ordered = groups;
+  if (!searching && (hooks.section?.() || 'home') === 'home') {
+    for (const g of groups) {
+      const step = stepCardHold(cardHolds.get(g.key), { bucket: g.bucket, rank: g.rank, at: g.at, viewing: g.active, pinned: g.pinned });
+      if (step.hold) cardHolds.set(g.key, step.hold); else cardHolds.delete(g.key);
+      g.bucket = step.bucket; g.rank = step.rank; g.at = step.at;
+    }
+    pruneHolds(cardHolds, byKey);
+    //  날짜 묶음끼리의 순서는 세션 축에 **처음 나온 순서** 그대로(묶음 이름을 새로 줄 세우지 않는다).
+    const seq: string[] = [];
+    for (const r of rest) if (r.group && !seq.includes(r.group)) seq.push(r.group);
+    ordered = orderCards(groups, seq);
   }
 
   //  이 판에 없는 카드의 자동 걸쇠는 버린다 — 목록에서 빠진 프로젝트가 돌아오면 그때 다시 판정한다.
@@ -688,7 +718,7 @@ function projGroups(rest: SideInstance[], searching: boolean): ProjGrp[] {
     else if (g.rows.some((r) => !!r.status && !!OPENS[r.status.key])) { grpAuto.add(g.key); g.open = true; }
     else g.open = false;
   }
-  return groups;
+  return ordered;
 }
 
 /** 머리글 오른쪽의 상태 요약 — 트리의 v2-sums 와 같은 문법(점 + 개수), 볼 일 있는 것만.
