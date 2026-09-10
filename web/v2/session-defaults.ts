@@ -56,7 +56,13 @@ const HELP = {
 };
 
 interface SegOpt { v: string; t: string; d?: string }
-/** 나란한 단추 — role=radiogroup. 두셋 중 하나를 고르는 축에 쓴다(안 눌러도 선택지가 다 보인다). */
+/**
+ * 고르는 줄 — role=radiogroup. 둘·셋 중 하나를 고르는 축에 쓴다(안 눌러도 선택지가 다 보인다).
+ *  2판(원준 2026-09-10 «가독성 영 엉망») — 가로 나란히에서 **세로 목록**으로. 창 안쪽이 490px 인데 셋을 나란히
+ *  두면 한 칸이 158px 라 «라이블리를 읽고 씀» 같은 짧은 부제도 두 줄로 접혔다. 세로로 두면 한 줄에 다 들어가고,
+ *  줄마다 점(●)이 있어 «지금 무엇이 골라져 있나» 가 색이 아니라 모양으로도 읽힌다.
+ *  ↑↓ 로도 옮긴다(←→ 는 가로 시절 습관이라 함께 받는다).
+ */
 function segmented(label: string, opts: SegOpt[], value: string, onChange: (v: string) => void): { el: HTMLElement; set(v: string): void; disable(on: boolean): void } {
   let cur = value;
   const btns: HTMLButtonElement[] = [];
@@ -64,12 +70,17 @@ function segmented(label: string, opts: SegOpt[], value: string, onChange: (v: s
   const paint = (): void => { for (const b of btns) { const on = b.dataset.v === cur; b.setAttribute('aria-checked', on ? 'true' : 'false'); b.tabIndex = on ? 0 : -1; } };
   for (const o of opts) {
     const b = el('button', { class: 'v2-seg-b', type: 'button', role: 'radio', 'data-v': o.v },
-      el('span', { class: 't', text: o.t }), o.d ? el('span', { class: 'd', text: o.d }) : null) as HTMLButtonElement;
+      el('span', { class: 'dot', 'aria-hidden': 'true' }),
+      el('span', { class: 'tx' },
+        el('span', { class: 't', text: o.t }),
+        o.d ? el('span', { class: 'd', text: o.d }) : null)) as HTMLButtonElement;
     b.addEventListener('click', () => { if (b.disabled) return; cur = o.v; paint(); onChange(cur); });
     b.addEventListener('keydown', (e: KeyboardEvent) => {
-      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+      const fwd = e.key === 'ArrowDown' || e.key === 'ArrowRight';
+      const back = e.key === 'ArrowUp' || e.key === 'ArrowLeft';
+      if (!fwd && !back) return;
       e.preventDefault();
-      const i = btns.indexOf(b); const j = (i + (e.key === 'ArrowRight' ? 1 : -1) + btns.length) % btns.length;
+      const i = btns.indexOf(b); const j = (i + (fwd ? 1 : -1) + btns.length) % btns.length;
       btns[j].click(); btns[j].focus();
     });
     btns.push(b); root.append(b);

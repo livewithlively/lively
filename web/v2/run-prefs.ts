@@ -108,8 +108,8 @@ export function saveRunPrefs(patch: RunPrefs): void {
 export type LivelyMode = 'normal' | 'readonly' | 'incognito';
 export const MODE_OPTS: { key: LivelyMode; lbl: string; sub: string }[] = [
   { key: 'normal', lbl: '일반', sub: '라이블리를 읽고 씀' },
-  { key: 'readonly', lbl: '읽기전용', sub: '읽되 기록하지 않음 · 기밀 작업' },
-  { key: 'incognito', lbl: '인코그니토', sub: '라이블리를 전혀 안 씀 · 클린룸' },
+  { key: 'readonly', lbl: '읽기전용', sub: '읽되 기록하지 않음' },
+  { key: 'incognito', lbl: '인코그니토', sub: '라이블리를 전혀 안 씀' },
 ];
 // 기록 범위 선택지(#3778 재검증, 2026-09-10) — **실제 강제 지점 한 곳**(capabilities/activity.ts)에 맞춘 문구다.
 //  거기서 하는 일은 «이 세션이 작업 기록을 어느 프로젝트에 붙일 수 있나» 하나뿐이다. 값이 open 이 아니면,
