@@ -178,6 +178,8 @@ const listInput = {
   app_id: z.string().optional(),
   project_id: z.number().int().positive().nullable().optional(),
   include_closed: z.boolean().optional(),
+  //  #3855·#3857 — 좌측 목록의 보임 축은 «목록에 둠(active)» 과 «치움(closed·user)» 두 가지다. 한 왕복에 함께 싣는다.
+  dismissed: z.boolean().optional(),
 };
 const appInstanceList: Capability = {
   name: "app_instance_list",
@@ -191,6 +193,7 @@ const appInstanceList: Capability = {
       app_id: q.app_id ? String(q.app_id) : undefined,
       project_id: projectFilter(q.project_id),
       include_closed: q.include_closed === "true",
+      dismissed: q.dismissed === "1" || q.dismissed === "true",
     };
   } }] },
   handler: async (input: z.infer<z.ZodObject<typeof listInput>>, user: LivelyUser, ctx?: CapabilityCtx) => {
@@ -207,7 +210,9 @@ const appInstanceList: Capability = {
       if (!face) continue;
       visible.push({ ...face, ...(subjects.get(row.id) ?? {}) });
     }
-    return { instances: visible };
+    //  치운 세션은 **id 만** 싣는다 — 폴링마다 오는 판이라 장식·조인을 얹지 않는다(「치운 세션」 화면은 전용 창구가 싣는다).
+    if (!input.dismissed) return { instances: visible };
+    return { instances: visible, dismissed_sessions: await instances.listDismissedSessionRefs(actorOf(user)) };
   },
 };
 
@@ -277,7 +282,7 @@ const appInstanceOpen: Capability = {
     });
     try { await startWorkerForInstance(app, manifest, result.instance); }
     catch (error) {
-      await instances.closeAppInstance(result.instance.id, actorOf(user)).catch(() => { /* 실패 인스턴스 고아 방지 best-effort */ });
+      await instances.closeAppInstance(result.instance.id, actorOf(user), "system").catch(() => { /* 실패 인스턴스 고아 방지 best-effort */ });
       throw new HttpError(503, `worker 시작 실패: ${error instanceof Error ? error.message : String(error)}`);
     }
     return { instance: await decorate(result.instance), created: result.created };
@@ -368,11 +373,71 @@ const appInstanceClose: Capability = {
     if (!before) throw new HttpError(404, "앱 인스턴스가 없습니다");
     try { await stopWorkerForInstance(id, "instance_closed"); }
     catch (error) { throw new HttpError(503, `worker 종료 실패: ${error instanceof Error ? error.message : String(error)}`); }
-    if (!(await instances.closeAppInstance(id, actorOf(user)))) throw new HttpError(404, "앱 인스턴스가 없습니다");
+    if (!(await instances.closeAppInstance(id, actorOf(user), "user"))) throw new HttpError(404, "앱 인스턴스가 없습니다");
     return { ok: true, instance_id: id };
+  },
+};
+
+// ── #3855·#3857 세션의 «보임 축» — 사람이 목록에서 치우고, 보고, 되돌리는 창구 ─────────────────────
+//  정본은 org_app_instance 다: 내 세션 인스턴스 active = «목록에 둠», closed·사유 user = «치움».
+//  ⚠ 세션·박스를 절대 안 건드린다. 실행 축(회수·종료)은 정책이 하고, 보임 축은 사람만 바꾼다(상민님 결정 2026-09-10).
+//  ⚠ 남의 세션 id 를 넣어도 바뀌는 것은 **내 행**뿐이다(owner=나) — 그래서 세션 가시성 조회를 여기서 다시 하지 않는다.
+//   이름·소속을 싣는 자리(sessionSubjects)가 이미 세션 목록과 같은 노출 범위를 지킨다.
+const SESSION_IDS_MAX = 1000;
+function sessionIdList(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new HttpError(400, "session_ids 는 배열이어야 합니다");
+  const ids = [...new Set(value.map((v) => String(v ?? "").trim()).filter(Boolean))];
+  if (!ids.length) throw new HttpError(400, "session_ids 가 비었습니다");
+  if (ids.length > SESSION_IDS_MAX) throw new HttpError(400, `session_ids 는 ${SESSION_IDS_MAX}개 이하여야 합니다`);
+  for (const id of ids) if (!SUBJECT_RE.test(id)) throw new HttpError(400, "session_ids 형식 오류");
+  return ids;
+}
+const sessionIdsInput = { session_ids: z.array(z.string()).min(1).max(SESSION_IDS_MAX) };
+
+const appInstanceSessionDismiss: Capability = {
+  name: "app_instance_session_dismiss",
+  title: "세션을 내 목록에서 치우기",
+  description: "내 좌측 목록에서 세션을 치운다(세션은 그대로 돈다). 상태가 바뀌어도 저절로 돌아오지 않고, 되돌리기나 다시 열기로만 돌아온다.",
+  scope: null,
+  input: sessionIdsInput,
+  expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/app-instances/sessions/dismiss"], parse: (req) => ({ session_ids: (req.body as Record<string, unknown>)?.session_ids }) }] },
+  handler: async (input: z.infer<z.ZodObject<typeof sessionIdsInput>>, user: LivelyUser) => {
+    const n = await instances.dismissSessionInstances(actorOf(user), sessionIdList(input.session_ids));
+    return { ok: true, dismissed: n };
+  },
+};
+
+const appInstanceSessionRestore: Capability = {
+  name: "app_instance_session_restore",
+  title: "치운 세션을 내 목록으로 되돌리기",
+  description: "내가 치운 세션을 좌측 목록으로 되돌린다. 시스템이 닫은 인스턴스(되살리기·완전 삭제 등)는 되살리지 않는다.",
+  scope: null,
+  input: sessionIdsInput,
+  expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/app-instances/sessions/restore"], parse: (req) => ({ session_ids: (req.body as Record<string, unknown>)?.session_ids }) }] },
+  handler: async (input: z.infer<z.ZodObject<typeof sessionIdsInput>>, user: LivelyUser) => {
+    const n = await instances.reopenSessionInstances(actorOf(user), sessionIdList(input.session_ids));
+    return { ok: true, restored: n };
+  },
+};
+
+const appInstanceSessionDismissedList: Capability = {
+  name: "app_instance_session_dismissed_list",
+  title: "내가 치운 세션 목록",
+  description: "내가 좌측 목록에서 치운 세션(사유 user)을 치운 순서로 돌려준다. 지금의 이름·소속·되살릴 수 있는지(subject_state)를 함께 싣는다.",
+  scope: null,
+  input: {},
+  expose: { mcp: false, rest: [{ method: "GET", paths: ["/api/ui/app-instances/sessions/dismissed"], parse: () => ({}) }] },
+  handler: async (_input: Record<string, never>, user: LivelyUser) => {
+    const rows = await instances.listDismissedSessionInstances(actorOf(user));
+    const subjects = await sessionSubjects(rows, user);
+    return { sessions: rows.map((r) => ({
+      id: r.id, session_id: r.subject_ref, app_id: r.app_id, title: r.title, closed_at: r.closed_at,
+      ...(subjects.get(r.id) ?? {}),
+    })) };
   },
 };
 
 export const appInstanceCapabilities: Capability[] = [
   appInstanceList, appInstanceOpen, appInstanceGet, appInstanceUpdate, appInstanceSetProject, appInstanceClose,
+  appInstanceSessionDismiss, appInstanceSessionRestore, appInstanceSessionDismissedList,
 ];

@@ -45,7 +45,7 @@ export async function sweepGhostSessionInstances(): Promise<number> {
     if (restorable.has(sid)) continue;
     if (nodeOfSession(sid)) continue;                       // 노드 스냅샷에 살아 있다
     if (!(await sessionGone(sid).catch(() => false))) continue;   // tmux 확답 없으면 손대지 않는다
-    closed += await closeSessionAppInstances(sid).catch((err) => {
+    closed += await closeSessionAppInstances(sid, "janitor").catch((err) => {
       logger.warn({ err, sid }, "유령 인스턴스 닫기 실패(비치명)");
       return 0;
     });

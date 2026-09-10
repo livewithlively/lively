@@ -100,6 +100,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/store/token-revoke.pg-test.mjs
+      # ④-c 세션 «보임 축»(#3855·#3857) — 목으로는 못 보는 것: **치움이 실제로 남는가 · 되살리기가 풀지 않는가**.
+      #    치움의 정본은 org_app_instance 두 칸(status·closed_reason)이고 판정이 전부 SQL 조건이라, 조건 하나를
+      #    지워도 목 풀은 초록이다. 사유로 사람/시스템을 가르는지 · 멱등 · 남의 행 불가 · restore 승계를 read-back 으로 본다.
+      - name: 세션 보임 축(치움) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/store/app-instance-dismiss.pg-test.mjs
       # ⑤ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.
