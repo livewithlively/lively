@@ -111,11 +111,18 @@ export const MODE_OPTS: { key: LivelyMode; lbl: string; sub: string }[] = [
   { key: 'readonly', lbl: '읽기전용', sub: '읽되 기록하지 않음 · 기밀 작업' },
   { key: 'incognito', lbl: '인코그니토', sub: '라이블리를 전혀 안 씀 · 클린룸' },
 ];
+// 기록 범위 선택지(#3778 재검증, 2026-09-10) — **실제 강제 지점 한 곳**(capabilities/activity.ts)에 맞춘 문구다.
+//  거기서 하는 일은 «이 세션이 작업 기록을 어느 프로젝트에 붙일 수 있나» 하나뿐이다. 값이 open 이 아니면,
+//  회사 전체가 볼 수 있는 프로젝트에 기록하려 할 때 400 으로 막는다(좁히는 것이 아니라 막는다).
+//  ⚠ 그래서 audience 와 private 는 **지금 동작이 같다**(둘 다 «open 이 아님»으로만 쓰인다). 종전 문구는
+//   «그 팀만 봄 / 나만 봄» 이라 보는 사람이 달라지는 것처럼 읽혔는데, 그런 구분은 이 축에 없다.
+//   값을 지우면 그 설정을 가진 사람의 세션이 조용히 바뀌므로 선택지는 넷 다 남기고 **문구로 사실을 말한다**.
+//  ⚠ 지식 저장(knowledge_save)은 이 값을 보지 않는다 — 이 축이 닿는 곳은 작업 기록뿐이다.
 export const WRITE_VIS_OPTS: { v: string; t: string; d: string }[] = [
-  { v: '', t: '자동', d: '실행 폴더를 따름' },
-  { v: 'open', t: '전체 공개', d: '누구나 봄' },
-  { v: 'audience', t: '프로젝트', d: '그 팀만 봄' },
-  { v: 'private', t: '나만', d: '나만 봄' },
+  { v: '', t: '자동', d: '세션이 열린 폴더를 따름' },
+  { v: 'open', t: '제한 없음', d: '어느 프로젝트에나 기록' },
+  { v: 'audience', t: '공개 프로젝트 제외', d: '전체 공개 프로젝트에는 기록 안 함' },
+  { v: 'private', t: '공개 프로젝트 제외 (같음)', d: '위와 동작이 같음' },
 ];
 export interface SessionDefaults { nodeDefault: string; mode: LivelyMode; autoApprove: boolean; writeVis: string }
 /** 새 세션 기본값 — 기억이 없거나 모르는 값이면 안전한 쪽(규칙대로 · 일반 · 확인 후 실행 · 자동). */
