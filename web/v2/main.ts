@@ -35,7 +35,7 @@ import { createTabs, routeKey, type ShellTab, type TabsApi } from './tabs.js';
 import { WS_SWITCH_KEY } from './switcher.js';   // #2171 — 워크스페이스 전환 부팅에는 자동 진입하지 않는다
 import { confirmSessionArchive } from '../session-actions.js';
 import { mountMobileChrome, type MobileChrome, MOBILE_MQ } from './mobile.js';
-import { drawRail, mountRail, railIsHidden, railSection, reloadRailPrefs, resetRailSection, toggleRail, type RailSection } from './rail.js';
+import { drawRail, mountRail, railIsHidden, railSection, reloadRailPrefs, resetRailSection, setRailSection, toggleRail, type RailSection } from './rail.js';
 import { lastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'   // #2016 — 좌측 끝 레일(구역 + 워크스페이스 + 최근 앱), 보임/숨김
 import { ASIDE_MSG, setAsideGuestOpener, type AsideGuest } from './aside-slot.js';
 import { takeCreated } from './created-cache.js';
@@ -432,6 +432,12 @@ export async function bootV2(): Promise<void> {
     if (m && m.type === 'lively:open-route' && typeof m.href === 'string' && m.href.startsWith('#/')) {
       const hit = tabsApi.find(m.href);
       if (hit) tabsApi.activate(hit); else tabsApi.add(m.href);
+      return;
+    }
+    // #3830 — 액자(맥락 관리 표지) 안 장소 카드의 「지식」「AI 세션」은 **레일 구역**이다. 구역은 주소가 아니라 사람이
+    //  고르는 것(#2061)이라 setRailSection 으로 고른 뒤 그 구역이 두고 간 자리로 간다 — 레일을 직접 누른 것과 같다.
+    if (m && m.type === 'lively:open-section' && (m.section === 'wiki' || m.section === 'sess')) {
+      setRailSection(m.section as RailSection, { navigate: true });
       return;
     }
     if (!m || (m.type !== ASIDE_MSG.ping && m.type !== ASIDE_MSG.open)) return;
