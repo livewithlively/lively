@@ -103,9 +103,11 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   // 2026-08-26 — 프레임이 "되살릴 수 있다"고 말했으면 **그 말을 이어받기 분기까지 들고 간다**. 목록 행의
   //  restorable 만 보면, 목록이 좌표를 접느라 그 값을 못 받은 세션이 대화록 기반 이어받기로 흘러 빈 새 세션이 된다
   //  (실측: 프로젝트 하나에 「새 세션(원본 기반)」 4개). 신호를 만들어 놓고 안 넘기면 조용히 무효가 되는 자리다.
-  //  ⚠ 창을 900자로 잡는다 — 같은 핸들러 안에 #2231(이미 이어진 세션이면 그리로 옮긴다)이 **먼저** 서 있다.
-  //   그 분기가 앞서는 건 의도다(되살리면 같은 대화가 둘이 된다). 창이 좁으면 배선이 멀쩡한데 테스트만 빨개진다.
-  ok(/lively-term-gone[\s\S]{0,900}resumeSession\(\s*null\s*,\s*\{[^}]*canRestore:\s*true/.test(chat),
+  //  ⚠ 창을 넉넉히 잡는다 — 같은 핸들러 안에 #2231(이미 이어진 세션이면 그리로 옮긴다)이 **먼저** 서 있고,
+  //   #3847(프레임을 내리고 대화로 내려앉는다)이 그 다음에 선다. 그 순서가 앞서는 건 의도다(되살리면 같은
+  //   대화가 둘이 되고, 배너만 남으면 사람이 갇힌다). 창이 좁으면 배선이 멀쩡한데 테스트만 빨개진다 —
+  //   실제로 #3847 이 그 자리에 한 분기를 더하자 900자 창을 22자 넘겼다. 재는 것은 «같은 핸들러 안인가» 다.
+  ok(/lively-term-gone[\s\S]{0,1400}resumeSession\(\s*null\s*,\s*\{[^}]*canRestore:\s*true/.test(chat),
     "③-g 프레임이 말한 canRestore 를 resumeSession 에 넘긴다");
   // ★ #2231 — 그 핸들러에서 **이정표(movedTo)가 canRestore 보다 앞**이어야 한다. 순서가 뒤집히면 이미 이어진
   //  세션을 한 번 더 되살려 같은 대화가 둘로 갈라진다(그리고 옛 화면은 계속 막다른 길에 남는다).
@@ -118,6 +120,30 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   }
   ok(/if\s*\(isBox\s*&&\s*\(target\.raw\?\.restorable\s*\|\|\s*hint\?\.canRestore\)\)/.test(chat),
     "③-h 복원 분기가 목록의 restorable **또는** 프레임이 말한 canRestore 를 본다(둘 중 하나면 /restore)");
+  // ── #3847 — **프레임이 «박스 없음» 을 알리면 액자를 걷고 대화로 내려앉는다** ──────────────────
+  //  왜 필요한가(실측 2026-09-10 상민님 신고): 목록의 라이브 판정은 흔들린다(중계가 못 보면 DB desired 행이
+  //   관측 없는 라이브 행으로 나가고 — #2544 — 회수 직후엔 한동안 라이브로 남는다. 같은 목록이 3분 사이
+  //   라이브 168/중단 10 → 라이브 24/중단 154 로 뒤집혔다). 그동안 세션을 열면 이 화면은 «살아 있다» 고 믿어
+  //   터미널을 얹고, 프레임은 단건 메타(tmux 확답)로 «중단됨» 을 받아 배너를 띄운다. 그러면 사람이 보는 것은
+  //   배너 한 줄뿐 — 대화도, 말 걸 입력창도, 이 화면의 안내(setNote)도 액자에 가린다.
+  //  두 답이 갈릴 때 **프레임 쪽이 맞다**(has-session 확답 · 4410). 그래서 그 신호로 액자를 걷는다.
+  ok(/function dropTermFrame\(/.test(chat) && /dropTermFrame\(!!m\.canRestore\)/.test(chat),
+    "③-l ★ 프레임이 '박스 없음'을 알리면 액자를 걷는다(대화·입력창이 배너에 가리지 않게)");
+  ok(/goneByFrame = true;[\s\S]{0,400}setMode\('chat'\)/.test(chat),
+    "③-m 액자를 걷은 뒤 대화 화면으로 내려앉는다");
+  ok(/if \(m === 'term' && \(!opts\.terminalSrc \|\| !isBox \|\| goneByFrame\)\) m = 'chat';/.test(chat),
+    "③-n 그 뒤엔 목록이 다시 '살아 있다'고 흔들려도 터미널로 되돌아가지 않는다(걸쇠)");
+  ok(/const dead = \(\): boolean => goneByFrame \|\|/.test(chat),
+    "③-o 프레임이 말한 '박스 없음'이 목록의 라이브 판정을 이긴다 — 그래야 입력창이 '보내면 이어서 열립니다'로 동작한다");
+  ok(/setMode\(chatHome\(\) \|\| target\.raw\?\.observed === false \? 'chat' : 'term'\)/.test(chat),
+    "③-p 서버가 '관측 못 함'(#2544 observed:false)이라 한 세션은 터미널이 아니라 대화로 연다");
+  // 액자 안에서 복원하면 **액자인 채로** 옮겨야 한다 — embed 를 빠뜨리면 레거시 터미널 크롬이 액자 안에 또 뜬다.
+  {
+    const term = read("web/standalone/terminal.ts");
+    const rs = term.slice(term.indexOf("async function restoreThisSession()"));
+    ok(/location\.replace\([\s\S]{0,400}EMBED \? '&embed=1' : ''/.test(rs),
+      "③-q 복원으로 옮겨 갈 때 embed=1 을 이고 간다(액자 안 레거시 상단바 이중 표시 방지)");
+  }
 }
 
 // ── ④ 세션 주소를 만드는 곳은 하나다 ────────────────────────────────────────────────

@@ -138,7 +138,16 @@ export interface SessionChatOpts {
 export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, opts: SessionChatOpts): SessionChatHandle {
   let target = first;
   const isBox = first.live;                     // 라이브 행(박스) — 죽었어도(restorable) 박스다
-  const dead = (): boolean => !target.live || !target.alive || !!target.raw?.restorable;
+  // ── ★ #3847 — **프레임이 서버에게 직접 들은 «박스 없음»은 목록보다 정확하다.** ────────────────
+  //  목록(GET /terminal/sessions)의 라이브 판정은 tmux 관측이라 **흔들린다**: 매니지드 중계가 못 보면
+  //  DB desired 행이 관측 없는 라이브 행으로 나가고(#2544), 회수 직후엔 몇 분 동안 라이브로 남기도 한다
+  //  (실측 2026-09-10: 같은 목록이 3분 사이 라이브 168/중단 10 → 라이브 24/중단 154 로 뒤집혔다).
+  //  그동안 열면 이 화면은 «살아 있다» 고 믿어 터미널 프레임을 얹고, 프레임은 **단건 메타(tmux 확답)** 로
+  //  «중단됨» 을 받아 배너만 띄운다 — 대화도 입력창도 없는 화면이 그렇게 만들어졌다(상민님 신고).
+  //  그 두 답이 갈릴 때 **프레임 쪽이 맞다**(has-session 확답 · 4410). 그래서 여기에 걸쇠를 둔다.
+  let goneByFrame = false;                      // 프레임이 «이 박스 없다» 고 알렸다(lively-term-gone)
+  let goneCanRestore = false;                   //  그때 함께 온 «되살릴 수 있다»(서버 메타 canRestore)
+  const dead = (): boolean => goneByFrame || !target.live || !target.alive || !!target.raw?.restorable;
   const canType = (): boolean => !dead();
   /**
    * 이 멈춘 세션을 **말을 거는 것만으로** 되살릴 수 있나 (#2439 ②③).
@@ -146,7 +155,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    *  이게 참이면 입력창을 **살려 둔다**: 사람이 «멈춤» 을 읽고 그 자리에서 이어 말할 수 있어야, 읽는 화면과
    *  일하는 화면이 갈리지 않는다.
    */
-  const canRevive = (): boolean => dead() && isBox && !!target.raw?.restorable && !!target.owned && !target.raw?.trashedAt;
+  //  ⚠ #3847 — 되살릴 수 있다는 근거도 **프레임이 들은 값**을 함께 본다. 목록이 아직 «살아 있다» 고 우기는
+  //   동안에는 그 행에 restorable 이 없어(라이브 행이니까) 여기가 거짓이 되고, 그러면 멈춘 세션인데
+  //   입력창이 막힌 화면이 된다 — 되살릴 수 있는 세션에는 언제나 말을 걸 수 있어야 한다.
+  const canRevive = (): boolean => dead() && isBox && (!!target.raw?.restorable || goneCanRestore) && !!target.owned && !target.raw?.trashedAt;
   const caps = (): { read: boolean; answer: boolean } => (target.raw?.chat && typeof target.raw.chat === 'object') ? { read: target.raw.chat.read !== false, answer: target.raw.chat.answer !== false } : { read: true, answer: true };   // 서버 harness-io 능력(행의 chat) — 없으면(구 서버) 둘 다 있는 것으로
   const canKeys = (): boolean => canType() && !target.node && caps().answer;
 
@@ -638,7 +650,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let mode: 'term' | 'chat' = 'chat';
   let modeChosen = false;              // 사람이 [보기] 메뉴에서 직접 골랐나 — 그 뒤엔 화면이 스스로 안 바꾼다
   function setMode(m: 'term' | 'chat'): void {
-    if (m === 'term' && (!opts.terminalSrc || !isBox)) m = 'chat';
+    //  ⚠ #3847 — 프레임이 «박스 없음» 을 알린 뒤에는 터미널로 돌아가지 않는다(goneByFrame 걸쇠). 붙을 tmux 가
+    //   없으니 열어 봐야 같은 배너만 다시 뜨고, 그 화면엔 대화도 입력창도 없다. 되살아나면 새 세션 id 로
+    //   화면이 새로 뜨므로 이 걸쇠는 그 자리에서 함께 사라진다.
+    if (m === 'term' && (!opts.terminalSrc || !isBox || goneByFrame)) m = 'chat';
     //  ★ #2439 — **터미널을 여는 것도 «쓰겠다»** 다. 보기만 할 때는 안 되살리지만(위 autoResume 주석),
     //   터미널 탭은 그 자체가 «이 세션에서 무언가 하겠다» 라 그 자리에서 되살린다.
     //   ⚠ 되살리지 않으면 빈 터미널(붙을 tmux 가 없는 iframe)이 뜬다 — 그게 진짜 막다른 길이다.
@@ -660,6 +675,25 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     termStatusEl.hidden = m !== 'term' || !termStatusEl.textContent;   // 연결 상태도 마찬가지(#1744)
     paintRunHead();                                                   // 모델·추론강도도 마찬가지 — 터미널을 볼 때만 머리줄에 선다
     if (m === 'chat') { view.scrollToBottom(); view.input.focus(); }
+  }
+
+  /**
+   * 터미널 프레임을 내리고 **대화 화면으로 내려앉는다** (#3847) — 프레임이 «이 박스 없다» 고 알렸을 때.
+   *
+   *  왜 지우나(숨기지 않고): 그 프레임은 이미 자기 배너를 띄운 죽은 화면이고, 남겨 두면 [보기 ▸ 터미널] 로
+   *   돌아갈 때 같은 배너가 다시 뜬다. 되살아나면 새 세션 id 로 이 화면이 새로 뜨므로 잃는 것이 없다.
+   *  ⚠ 목록이 아직 «살아 있다» 고 말하는 동안에도 이 화면은 **멈춘 세션**으로 그린다(dead 걸쇠) —
+   *   그래야 입력창이 '보내면 이어서 열립니다' 로 정확히 동작한다(reviveWithPrompt).
+   */
+  function dropTermFrame(canRestore: boolean): void {
+    goneCanRestore = goneCanRestore || canRestore;
+    if (goneByFrame) return;                     // 이미 내렸다(4410 과 부팅 게이트가 둘 다 알릴 수 있다)
+    goneByFrame = true;
+    if (termFrame) { termFrame.remove(); termFrame = null; }
+    termReady = false; termQueue = [];
+    termStatusEl.textContent = ''; termStatusEl.hidden = true;
+    setMode('chat');
+    paintState();                                // 상태점·끝난 세션 안내를 지금 사실로 다시 그린다
   }
 
   // ── 터미널 프레임과의 다리(#1744) ────────────────────────────────────────────────────────
@@ -695,6 +729,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   }
   /** 터미널이 있어야 하는 동작 — 닫혀 있으면 먼저 연다(막다른 버튼 금지). 아직 안 뜬 프레임이면 뜰 때까지 담아 둔다. */
   function termAct(cmd: string): void {
+    if (goneByFrame) { toast('세션이 멈춰 있어요 — 아래에 말을 걸면 이어서 열립니다.'); return; }   // #3847 — 붙을 tmux 가 없다
     if (!opts.terminalSrc || !isBox) { toast('이 세션에는 터미널이 없어요.'); return; }
     if (mode !== 'term') setMode('term');
     if (termReady) termSend(cmd); else termQueue.push(cmd);
@@ -714,6 +749,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         if (opts.onResumed) opts.onResumed(mv); else location.hash = '#/s/' + encodeURIComponent(mv);
         return;
       }
+      //  ★ #3847 — **프레임을 내리고 대화로 내려앉는다**(자세한 이유는 dropTermFrame). 자동복원을 걸든 안 걸든
+      //   **먼저** 내린다 — 복원이 막히는 경우(상한 · 이미 restorable 을 알아 «보기만 해서는 안 되살린다» 로
+      //   기다리는 경우)가 정확히 사람이 배너 한 줄에 갇히던 자리다.
+      dropTermFrame(!!m.canRestore);
       //  ⚠ 여기도 «보기만 해서는 안 되살린다»(위 주석) — 되살릴 수 있으면 말을 걸 때까지 기다린다.
       if (m.canRestore && !canRevive() && !resumeAuto && visibleNow() && autoResumeAllowed()) { resumeAuto = true; view.setNote('세션을 이어서 여는 중…'); void resumeSession(null, { canRestore: true }); }
       return;
@@ -1001,7 +1040,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  빈 채팅만 두면 사람이 볼 수 있는 게 없다(실측 신고). 대화가 이미 있으면 자동으로 열지 않는다(읽던 화면을 뺏지 않는다).
   let autoTermOpened = false;
   function maybeAutoOpenTerminal(): void {
-    if (autoTermOpened || destroyed || !opts.terminalSrc || !isBox) return;
+    if (autoTermOpened || destroyed || !opts.terminalSrc || !isBox || goneByFrame) return;   // #3847 — 내려앉은 화면은 다시 안 연다
     if (mode === 'term') { autoTermOpened = true; return; }        // 이미 터미널이 떠 있다 — 로그인 화면이 보인다
     if (curUuid || recs.some((r) => r.evs.length)) return;        // 대화가 보이고 있다 — 알림 줄이면 충분
     autoTermOpened = true;
@@ -1697,7 +1736,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  전담한다) 터미널로 열면 사람이 **말 걸 곳이 없는 화면**을 먼저 본다 — 실제로 그렇게 헤맸다.
   //  나머지는 종전 그대로 터미널이 기본이다(2026-08-18 지시: 대화창이 미완성인 동안은 터미널이 정답).
   //  판정 근거는 세션 행의 chatMode — 서버가 '이 세션의 대화는 app-server 가 돈다'고 알려 주는 값이다.
-  setMode(chatHome() ? 'chat' : 'term');
+  //  ★ #3847 — **«모르는» 세션은 터미널로 열지 않는다.** 매니지드 중계가 tmux 를 못 보면 서버는 DB desired 행을
+  //   observed:false 로 내보낸다(#2544 — «죽었다» 가 아니라 «모른다»). 그 행은 restorable 을 안 실으므로 이 화면은
+  //   종전에 «살아 있다» 로 읽어 터미널을 얹었고, 프레임은 곧 «중단됨» 배너를 띄웠다 — 사람이 본 것은 그 배너뿐이었다.
+  //   모를 때는 대화로 연다: 기록이 보이고, 말을 걸면 그때 되살아난다(살아 있었다면 그대로 배달된다).
+  //   ⚠ 터미널로 가는 길은 그대로 남는다([⋯ ▸ 터미널로 보기]) — 첫 화면만 바꾼다.
+  setMode(chatHome() || target.raw?.observed === false ? 'chat' : 'term');
 
   void open();
 
@@ -1729,7 +1773,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       // 반대 방향도 마감한다 — 위 추정(모르면 codex=대화)이 틀린 배포(tmux 로 끈 곳)에서는 행이 오는 즉시 터미널로.
       //  ⚠ 단 **대화 런타임 세션은 예외**다. chatMode 는 'tmux' 여도 대화는 stream-json 이 쥔다 —
       //   여기서 되돌리면 위 줄과 서로 밀치며 화면이 깜빡인다.
-      if (!modeChosen && mode === 'chat' && !chatHome() && String(target.raw?.chatMode || '') === 'tmux' && opts.terminalSrc && isBox) setMode('term');
+      //  ⚠ #3847 — 프레임이 «박스 없음» 을 알린 뒤엔 목록이 다시 «살아 있다» 고 흔들려도 되돌리지 않는다.
+    if (!modeChosen && !goneByFrame && mode === 'chat' && !chatHome() && String(target.raw?.chatMode || '') === 'tmux' && opts.terminalSrc && isBox) setMode('term');
       // 노드 세션(#1744) — 열 때는 대화 uuid 를 몰랐는데 목록 갱신이 가져왔다(행 claudeSessionId·logId): 이제 중앙 기록을 연다.
       //  같은 세션인데 uuid 가 바뀌었으면(/clear·압축) 새 기록으로 갈아탄다.
       const ls = logSrc();
