@@ -122,7 +122,10 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
    ①만 있으면 부모를 넘어 다시 겹치고, ②만 있으면 껍데기인 채로 줄만 바뀐다 — 둘이 한 짝이다. */
 .sc-run { min-width: 9ch; }
 /*  자리가 모자라면 알약이 제목 아래로 내려간다 — 넓은 화면에선 한 줄 그대로라 보이는 변화가 없다. */
-.sc-head-l { flex-wrap: wrap; row-gap: 2px; }
+/* ⭐ 2026-09-10 — 여기도 **한 줄**이다. 종전엔 이 줄이 «제목 바닥(28ch)마저 안 들어가면 줄을 바꾼다» 였는데,
+   그러면 .sc-head 를 nowrap 으로 막아도 **안쪽에서** 노드 알약이 둘째 줄로 떨어진다(곁칸을 켜면 재현).
+   대신 제목 바닥을 칸 폭에 따라 **낮춘다**(아래 @container) — 짜부라뜨리되 줄은 안 바꾼다. */
+.sc-head-l { flex-wrap: nowrap; }
 /* 이 줄에 남은 값은 전부 짧고 폭이 고정이다(상태 · 하네스 · 모델 · 추론강도) — 좁아질 때 줄어드는 쪽은
    제목(.sc-titlebox) 하나다. 길어서 오른쪽 조작부를 타고 넘던 프로젝트 이름은 이 줄에서 내려갔다
    (2026-08-20 — 1440px 에서 '최대'가 '연결됨' 위에 겹쳐 찍혔다. 지금은 [⋯ ▸ 이 세션]). */
@@ -135,8 +138,15 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-head-r { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; min-width: 0; }
 /* 좁아지면 [⋯] 안에도 있는 두 단추를 접는다 — 기능은 그대로 있고 줄만 지킨다. 460 은 실측값:
    그 아래에서는 [연결됨]·얼굴·[⋯] 만으로도 제목이 두 글자로 굶는다. */
-@container schead (max-width: 860px) { .sc-head .sc-act-dup { display: none; } }
-@container schead (max-width: 460px) { .sc-head .sc-termstat { display: none; } }
+/* 칸이 좁아질 때 **무엇부터 포기하나** — 위에서부터 차례로. 전부 [⋯] 안에 사본이 있거나(두 단추),
+   다른 데서 이미 말하는 것(연결 상태는 제목 앞 점, 노드는 [⋯ ▸ 이 세션])이라 줄만 잃고 기능은 안 잃는다. */
+@container schead (max-width: 1040px) { .sc-head .sc-act-dup { display: none; } }          /* 화면 복구·환경 설정 → [⋯] */
+@container schead (max-width: 900px)  { .sc-head .sc-termstat { display: none; } }         /* 연결됨 → 제목 앞 상태점 */
+@container schead (max-width: 900px)  { .sc-head .sc-titlebox { min-width: 14ch; } }       /* 제목 바닥을 낮춘다 */
+@container schead (max-width: 780px)  { .sc-head .sc-titlebox { min-width: 0; }
+  .sc-run-top .dt-chip-sel { max-width: 108px; } .sc-run-top .sc-run-harness { max-width: 132px; } }
+@container schead (max-width: 660px)  { .sc-head .sc-meta { display: none; } }              /* 노드 알약 → [⋯ ▸ 이 세션] */
+@container schead (max-width: 560px)  { .sc-run-top .dt-chip-sel { max-width: 84px; } .sc-run-top .sc-run-harness { max-width: 96px; } }
 .sc-act { font-size: 12.5px; padding: 4px 8px; border-radius: 6px; color: var(--ink-sub); }
 .sc-act:hover { background: var(--bg-tint); color: var(--ink); }
 .sc-act-on { background: var(--bg-punch); color: var(--ink); }
@@ -276,7 +286,9 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
     ⚠ 여기 `flex: 1 1 100%` 가 남아 있어서, 아무리 넓어도 이 묶음이 한 줄을 통째로 차지했다
     (실측 #2061: 뷰포트 2400px 에서도 머리가 3줄 — 제목 / 실행 설정 / 조작). 아래 좁은 화면
     규칙에서 따로 100% 를 주므로 여기서는 **들어가면 한 줄, 안 들어가면 그때 접히게** 둔다. */
-.sc-run-top { flex: 0 1 auto; gap: 6px; min-width: 0; flex-wrap: nowrap; overflow: hidden; }
+/* ⚠ overflow:hidden 을 **주지 않는다**(2026-09-10). 묶음을 자르면 마지막 선택기가 글자 중간에서 썰린다
+   («추론강도 · » 까지만 보이던 것). 대신 아래 @container 가 선택기마다 최대폭을 줄여, 각자 제 안에서 줄인다. */
+.sc-run-top { flex: 0 1 auto; gap: 6px; min-width: 0; flex-wrap: nowrap; }
 .sc-run-top .dt-chip-sel { max-width: 145px; }
 .sc-run-top .sc-run-harness { max-width: 180px; }
 .livc-desktop .livc-note:not(:empty) { padding: 2px 30px 0; }

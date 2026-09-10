@@ -850,6 +850,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     }));
     if (hasTerm()) {
       rows.push(el('div', { class: 'sc-more-sec', text: '터미널' }));
+      // ⚠ 화면 복구·환경 설정은 **겉에도 있고 여기도 있다**(2026-09-10). 겉의 두 단추는 칸이 좁아지면 접히는데
+      //  (머리줄 한 줄 규약), 종전엔 여기에 사본이 없어 **접히는 순간 그 기능이 아예 사라졌다** — 곁칸을 켜면
+      //  터미널 화면을 복구할 길이 없어지는 상태였다. 접히는 것은 '자리'지 '기능'이 아니어야 한다.
+      rows.push(row('화면 복구', '화면이 깨지거나 어긋났을 때 재연결로 복구합니다', () => termAct('reconnect')));
+      rows.push(row('환경 설정', '터미널 글꼴·크기·테마·커서·스크롤 속도', () => termAct('settings')));
       rows.push(row('사용법 안내', '터미널·단축키 간단 사용법', () => termAct('help')));
     }
     rows.push(el('div', { class: 'sc-more-sec', text: '이 세션' }));
