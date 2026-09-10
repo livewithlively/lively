@@ -21,6 +21,7 @@ import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLi
 import { dotCls, findSessIn, isMineSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type HomeDest, type Sess, type V2Data } from './views.js';
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
+import { keepObserved, type ObsMemory } from './obs-carry.js';   // #2544 후속 — 중계가 «못 본» 판을 직전 관측으로 잇는다(순수)
 import { renderArchive, renderTrash } from './bins.js';   // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
 import { renderSourcesApp, renderSourceDetail } from './sources.js';   // #2423 자료 앱 — 열람실(사이드바 갈래는 side.ts)
 import { renderConnect, renderConnectApp, renderConnectData } from './connect.js';
@@ -672,6 +673,9 @@ function noteTruncated(truncated: boolean): void {
 // 마지막으로 **성공한** 세션 응답(라이브·기록) — 실패한 판이 화면을 비우지 않게 이 값을 다시 쓴다(loadData 주석).
 let lastLive: any[] = [];
 let lastLogs: any[] = [];
+//  세션 id → 마지막으로 **관측된** 그 행(#2544 후속). 중계가 못 본 판(observed:false)이 오면 이 값으로 잇는다 —
+//  «못 봤다» 가 화면에서 «작업 완료» 로 둔갑하던 자리다(obs-carry.ts 머리말). 오래 못 보면 그 기억은 스스로 버려진다.
+const obsMemory = new Map<string, ObsMemory>();
 async function loadData(opts?: { projects?: boolean }): Promise<void> {
   const wantProj = opts && opts.projects != null ? opts.projects : (Date.now() - projLoadedAt > PROJ_TTL_MS);
   const wantDeepLogs = Date.now() - logsDeepAt > LOGS_DEEP_TTL_MS;   // #2022 후속 — 오래된 지난 세션이 사라지지 않게 이따금 전량
@@ -726,7 +730,10 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
   //  몇 초간 실패하는데, 그때 빈 목록으로 덮으면 살아 있는 세션이 화면에서 통째로 사라졌다가 돌아온다 —
   //  그 한 판에 세션 화면이 다른 세션으로 갈아타는 사고가 났다(v2/panes-parts.ts sessionsPart.paint 주석).
   //  빈 배열(요청 성공)은 그대로 반영한다 — 실패와 '진짜 0건'은 다르다.
-  if (Array.isArray(live)) { lastLive = live as any[]; sessTruthSeen = true; }
+  //  ⚠ **«못 본 판» 은 성공한 판이 아니다**(#2544 후속). 서버는 중계가 끊긴 틱에도 200 으로 DB 행을 채워 주는데,
+  //   그 행의 관측값은 지어낸 것이라 그대로 쓰면 목록이 한 틱에 통째로 뒤집힌다. 지어낸 필드만 직전 관측으로
+  //   되돌린다 — 위 '실패한 축은 직전 응답을 그대로 쓴다'와 같은 뜻이고, 축이 아니라 **행마다**라는 것만 다르다.
+  if (Array.isArray(live)) { lastLive = keepObserved(live as any[], obsMemory); sessTruthSeen = true; }
   if (Array.isArray(logs)) {
     //  깊은 판은 캐시를 통째로 갈고, 얕은 판은 그 위에 얹는다(위 mergeLogRows 주석).
     if (wantDeepLogs) { lastLogs = logs as any[]; logsDeepAt = Date.now(); }

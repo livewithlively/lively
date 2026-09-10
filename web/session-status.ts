@@ -13,6 +13,12 @@ export interface SessLike {
   // #1221 — **접속과 무관한** 실행 신호(하네스 훅 보고 ∪ 관측). agentState 는 탭이 없으면 offline 으로 덮이지만
   //  이 둘은 안 덮인다. 아래 sessStateKey 가 이 사실을 접속 기반 판정보다 먼저 본다(#1819 신고).
   working?: boolean; awaiting?: boolean;
+  /**
+   * **이 행이 관측된 값인가**(서버 `SessionInfo.observed`, #2544). false = 게이트웨이가 tmux 를 «못 본» 틱에
+   *  DB desired 행으로 지어 낸 행이다 — 관측 필드(attached·agentState·열람 시각)는 **채워져 있어도 사실이 아니다**.
+   *  관측된 행에는 이 필드가 없다(undefined = 종전 그대로).
+   */
+  observed?: boolean;
 }
 
 // 표시 문구 · CSS 클래스 · 정렬 우선순위(작을수록 먼저) · 필터 설명.
@@ -52,7 +58,17 @@ export const SESS_STATE_KEYS = ['waiting', 'done', 'busy', 'idle', 'offline', 's
 export function lastViewedAt(s: SessLike): number {
   return Math.max(Number(s?.lastAttached) || 0, Number(s?.lastViewed) || 0);
 }
+/**
+ * ⚠ **관측 못 한 행은 절대 '작업 완료'가 아니다**(#2544 후속, 상민님 신고 2026-09-10).
+ *
+ * 중계가 끊긴 틱의 폴백 행(`observed:false`)은 열람 시각(`lastAttached`·`lastViewed`)을 **아예 안 싣는다**
+ *  — 그건 tmux 만 아는 값이라 DB 에 없기 때문이다. 그런데 이 판정은 «마지막 작업 > 마지막 열람» 이고
+ *  없는 열람은 0 이라, 그 한 틱에 **최근 24시간 안에 작업한 세션이 전부 초록 '작업 완료'로** 승격됐다
+ *  (같은 행이 `restorable` 도 안 실어 살아 있는 것으로 그려져 날짜 컷까지 우회했다 — 내가 `/exit` 로
+ *  죽인 세션까지 «작업 완료» 로 목록에 되살아났다). «모른다» 를 «끝났다» 로 말한 자리다.
+ */
 export function isUnreadDone(s: SessLike, nowMs: number = Date.now()): boolean {
+  if (s?.observed === false) return false;
   const last = Number(s?.lastActive) || 0;
   if (!last || s?.restorable) return false;
   if (last <= lastViewedAt(s)) return false;
