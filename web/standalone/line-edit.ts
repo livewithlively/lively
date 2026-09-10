@@ -45,6 +45,15 @@ export const SEQ = {
 
 const isPrintable = (k: string): boolean => Array.from(k).length === 1;
 
+// **선택을 거둘 키만 열거한다.** 여기 없는 키는 선택을 건드리지 않는다 — «모르면 그대로 둔다» 가 기본값이다.
+//  ★ 이 방향이 규칙이다. 종전엔 반대로 «처리 안 한 키는 전부 해제» 였는데, 그러면 **Shift 를 누르는 것 자체가**
+//   선택을 지웠다(Shift 도 keydown 이다). ⌘C 하려고 ⌘ 를 누르는 순간도 마찬가지 — 선택을 만들고 쓰는 동작이
+//   곧 선택을 죽였다(#3778 원준님 실측: «드래그는 되는데 그 상태가 지속이 안 된다»). 수정자·기능키·미디어키·
+//   새로 생길 키는 전부 여기 없으므로 이제 선택을 건드리지 않는다.
+//  거두는 것은 캐럿이 선택 밖으로 옮겨 갔거나(맨 화살표·Home/End·PageUp/Down) 줄이 끝난(Enter) 경우뿐.
+const CLEARING_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+  'Home', 'End', 'PageUp', 'PageDown', 'Enter', 'Escape', 'Tab']);
+
 /**
  * 키 하나를 보고 무엇을 할지 정한다. 순서가 규칙이다 — 되돌리기 → ⌘ 계열 → 선택 확장 → 선택이 선 상태의 처리.
  */
@@ -92,7 +101,13 @@ export function decideKey(e: KeyLike, c: LineEditCtx): Act {
     if (e.isComposing) return { k: 'clear' };
     if (!ctrl && (key === 'Backspace' || key === 'Delete')) return { k: 'del' };
     if (!ctrl && !meta && !alt && (e.keyCode === 229 || isPrintable(key))) return { k: 'delThenPass' };
-    return { k: 'clear' }; // 그 밖(이동·Enter·Esc·Ctrl+C…)은 선택만 거두고 종전대로 흘린다
+    // 캐럿이 선택 밖으로 갔거나 줄이 끝난 키만 해제. 그 밖(기능키·미디어키·모르는 키)은 그대로 둔다.
+    if (CLEARING_KEYS.has(key) && !shift) return { k: 'clear' };
+    if (key === 'Escape' || key === 'Enter') return { k: 'clear' }; // Shift 여부와 무관하게 끝난다
+    // Ctrl/⌘ + 글자 = 줄을 바꾸거나 끊는 명령(^C 중단 · ^U/^K 지우기 · ⌘V 붙여넣기…). 우리가 처리한 것(⌘C 복사)은
+    //  위에서 이미 돌아갔으므로, 여기 오는 것은 «앱이 줄을 건드릴 키» 다 → 선택을 거둔다(남기면 낡은 좌표가 된다).
+    if ((ctrl || meta) && isPrintable(key)) return { k: 'clear' };
+    return { k: 'pass' };
   }
   return { k: 'pass' };
 }

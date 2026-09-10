@@ -1381,7 +1381,9 @@ function selText(r: { y: number; x0: number; x1: number }): { text: string; char
   } catch (_) { /* noop */ }
   return { text, chars };
 }
-function clearSel(): void {
+// why 는 진단에만 쓴다 — «선택이 왜 사라졌나» 는 눈으로 못 보는 축이라, 사라진 이유를 남겨야 신고를 받고 바로 짚는다.
+function clearSel(why?: string): void {
+  if (selAnchor && why) dlog('sel-off', why);
   selAnchor = null;
   if (selEl) { try { selEl.remove(); } catch (_) { /* noop */ } selEl = null; }
 }
@@ -1408,15 +1410,15 @@ function drawSel(): void {
  */
 function deleteSel(): boolean {
   const r = selRange();
-  if (!r) { clearSel(); return false; }
+  if (!r) { clearSel('empty'); return false; }
   // 안전장치 — 선택을 시작한 뒤 그 줄의 내용이 바뀌었다면(앱이 다시 그렸거나 화면이 밀렸다) 좌표를 믿을 수 없다.
-  if (selAnchor && bufRowText(r.y) !== selAnchor.row) { dlog('sel-stale'); clearSel(); toast('화면이 바뀌어 선택을 취소했어요', true); return false; }
+  if (selAnchor && bufRowText(r.y) !== selAnchor.row) { clearSel('stale-row'); toast('화면이 바뀌어 선택을 취소했어요', true); return false; }
   const { text, chars } = selText(r);
-  if (!chars) { clearSel(); return false; }
+  if (!chars) { clearSel('no-chars'); return false; }
   sendInput((r.curAtEnd ? SEQ.back : SEQ.del).repeat(chars));
   undoStack.push({ k: 'text', text });
   dlog('sel-del', 'chars=' + chars);
-  clearSel();
+  clearSel('deleted');
   return true;
 }
 function copySel(): boolean {
@@ -1434,6 +1436,7 @@ function extendSel(seq: string): void {
       const b = term.buffer.active;
       const y = b.baseY + b.cursorY;
       selAnchor = { x: b.cursorX, y, row: bufRowText(y) };
+      dlog('sel-on', 'x=' + selAnchor.x + ' y=' + y);
     } catch (_) { return; }
   }
   sendInput(seq);
@@ -1454,7 +1457,7 @@ function handleLineEditKey(e: any): boolean {
   const p = prefs();
   const act = decideKey(e, { mac: IS_MAC, hasSel: !!selRange(), select: p.lineSelect !== false });
   if (act.k === 'pass') return false;
-  if (act.k === 'clear') { clearSel(); return false; }
+  if (act.k === 'clear') { clearSel('key:' + (e.key || '?')); return false; }
   if (act.k === 'delThenPass') {
     // 선택을 먼저 지우고 그 키는 **그대로 흘린다**. 같은 소켓으로 순서대로 나가므로 «지우기 → 새 글자» 순서가 지켜진다.
     //  ⚠ 여기서는 preventDefault 를 하지 않는다 — 이 경로엔 IME 조합 시작(keyCode 229)이 섞여 있고, 그걸 막으면
@@ -1467,7 +1470,7 @@ function handleLineEditKey(e: any): boolean {
   if (act.k === 'copy') { copySel(); return true; }
   if (act.k === 'del') { deleteSel(); return true; }
   if (act.k === 'send') {
-    clearSel();
+    clearSel('send');
     if (act.kill) undoStack.push({ k: 'yank' }); // 앱이 kill-ring 에 담았다 — 되돌리기는 Ctrl+Y 한 방
     sendInput(act.seq);
     return true;
@@ -2234,7 +2237,7 @@ function openSettings() {
   speedI.addEventListener('input', apply);
   gainI.addEventListener('input', apply);
   dockI.addEventListener('change', () => { apply(); applyMobileDock(); });
-  selI.addEventListener('change', () => { apply(); clearSel(); });
+  selI.addEventListener('change', () => { apply(); clearSel('setting'); });
   const back = el('div', { class: 'pop-back', onclick: (e) => { if (e.target === back) back.remove(); } },
     el('div', { class: 'pop' }, el('h3', { text: '환경 설정' }),
       el('div', { class: 'field' }, el('label', { text: '폰트' }), fontSel),
@@ -2656,7 +2659,7 @@ export async function boot() {
   // 입력줄 선택 표시(#3778) — 앱이 다시 그릴 때마다 좌표로 새로 계산한다(우리가 위치를 «기억» 하지 않으므로 어긋나지 않는다).
   try { term.onRender(drawSel); } catch (_) { /* noop */ }
   try { term.onScroll(drawSel); } catch (_) { /* noop */ }
-  try { host.addEventListener('mousedown', () => clearSel(), true); } catch (_) { /* noop */ }
+  try { host.addEventListener('mousedown', () => clearSel('mouse'), true); } catch (_) { /* noop */ }
   // 휠 폴백 래치 끊기(#1943 후속 — wheelResyncAction 머리말). 관측만 하고 이벤트는 건드리지 않는다(passive).
   //  xterm 의 휠 처리보다 먼저 보도록 capture 로 단다 — 판정은 이 시점의 버퍼·모드로 한다.
   let lastWheelProbeAt = 0;
