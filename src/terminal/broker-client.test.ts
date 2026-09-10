@@ -16,6 +16,16 @@
 //  | T8  | start 가 업그레이드 대신 200                        | code 1 로 접힘 · 매달리지 않음                          |
 //  | T9  | timeoutMs 200 · 서버 무응답(create / 업그레이드 뒤 침묵) | 그 안에 code 1 로 끝남                             |
 //  | T10 | 배선 — 소스에 process.env · LIVELY_/LVLY_ 문자열 없음 | (정규식)                                              |
+//  | T11a | ★★ 허브 · 세션 컨테이너 · exec-create             | `x-lvly-session: <sid>`                                |
+//  | T11b | ★★ 허브 · 세션 컨테이너 · exec-start(URL 에 세션 없음) | 같은 값                                            |
+//  | T11c | ★★ 허브 · 세션 컨테이너 · exec-inspect(URL 에 세션 없음) | 같은 값                                          |
+//  | T11d | 허브 · 파일 op 컨테이너 `lvly-s-<slug>-fs`         | 세 요청 모두 없음                                      |
+//  | T11e | 허브 · 접두 불일치(다른 slug · `lvly-s-` 없음)      | 세 요청 모두 없음                                      |
+//  | T11f | 허브 · sid 형식 밖(`.box-a` · `box.a` · 65자)      | 세 요청 모두 없음                                      |
+//  | T11g | 허브 · 경계 — sid 정확히 64자                      | 세 요청 모두 실린다                                    |
+//  | T11h | 허브 · sid 빈 값(이름이 접두 그대로)               | 세 요청 모두 없음(빈 값 헤더도 아니다)                 |
+//  | T11i | 소켓 · 세션 컨테이너                               | 세 요청 모두 없음(이 헤더를 읽는 것은 허브뿐)          |
+//  | T11j | 허브 · listSessions(listScope node)               | 세션 헤더 없음                                         |
 import assert from "node:assert/strict";
 import test from "node:test";
 import http from "node:http";
@@ -37,6 +47,8 @@ const UPGRADE_101 = "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.dock
 interface Seen { method: string; url: string; headers: http.IncomingHttpHeaders; body: string }
 interface Fake {
   socketPath: string;
+  /** `startFake({ tcp: true })` 면 루프백 포트(허브 전송 시험용) — 유닉스 소켓이면 0. */
+  port: number;
   log: Seen[];
   /** 업그레이드 소켓에 무엇을 쓰나 — 기본은 stdout/stderr 프레임 하나씩 쓰고 닫는다. (`upgrade` 이벤트의 소켓 타입은 Duplex 다.) */
   onUpgrade: (sock: import("node:stream").Duplex) => void;
@@ -56,14 +68,14 @@ const readBody = (req: http.IncomingMessage): Promise<string> => new Promise((re
   const c: Buffer[] = []; req.on("data", (d: Buffer) => c.push(d)); req.on("end", () => resolve(Buffer.concat(c).toString("utf8")));
 });
 
-async function startFake(): Promise<Fake> {
+async function startFake(opts: { tcp?: boolean } = {}): Promise<Fake> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "brkc-"));
   const socketPath = path.join(dir, "b.sock");
   const json = (res: http.ServerResponse, status: number, body: unknown): void => {
     res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body));
   };
   const fake: Fake = {
-    socketPath, log: [], hang: false, onStartHttp: null,
+    socketPath, port: 0, log: [], hang: false, onStartHttp: null,
     onUpgrade: (sock) => { sock.write(frame(1, "out\n")); sock.write(frame(2, "err\n")); sock.end(); },
     onCreate: (res) => json(res, 201, { Id: "exec-1" }),
     inspect: { Running: false, ExitCode: 0 },
@@ -90,9 +102,16 @@ async function startFake(): Promise<Fake> {
   server.on("connection", (s) => { sockets.add(s); s.on("close", () => sockets.delete(s)); });
   server.on("upgrade", async (req, sock, head) => {
     //  본문(Content-Length)은 head 로 같이 올 수 있다 — 브로커처럼 길이만큼 걷어낸 뒤 프레임을 쓴다(여기선 기록만).
+    //  ⚠ head 밖의 본문이 **어디로 오는지는 node 판마다 다르다** — 22 는 소켓으로, 26 은 req 로 준다(#3542).
+    //   소켓만 기다리면 26 에서 101 을 영영 못 쓰고 클라이언트가 타임아웃으로 끝난다(맥 로컬에서 T3~T9' 가 15초씩 죽던 원인). 둘 다 받는다.
     const want = Number(req.headers["content-length"] ?? 0);
-    let got = head;
-    while (got.length < want) { const d = await new Promise<Buffer | null>((r) => sock.once("data", r)); if (!d) break; got = Buffer.concat([got, d]); }
+    const got = await new Promise<Buffer>((resolve) => {
+      let buf = head;
+      if (buf.length >= want) { resolve(buf); return; }
+      const done = (): void => { sock.off("data", take); req.off("data", take); sock.off("close", done); resolve(buf); };
+      const take = (d: Buffer): void => { buf = Buffer.concat([buf, d]); if (buf.length >= want) done(); };
+      sock.on("data", take); req.on("data", take); sock.once("close", done);
+    });
     fake.log.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers, body: got.subarray(0, want).toString("utf8") });
     if (fake.hang) return;
     sock.on("error", () => undefined);
@@ -105,7 +124,13 @@ async function startFake(): Promise<Fake> {
     sock.write(UPGRADE_101);
     fake.onUpgrade(sock);
   });
-  await new Promise<void>((r) => server.listen(socketPath, r));
+  //  허브 전송은 TCP 다 — 같은 핸들러를 루프백 포트에 세운다(`/t/<slug>` 접두는 핸들러 정규식이 끝만 봐서 그대로 통한다).
+  if (opts.tcp) {
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    fake.port = (server.address() as { port: number }).port;
+  } else {
+    await new Promise<void>((r) => server.listen(socketPath, r));
+  }
   fake.close = () => new Promise<void>((r) => { for (const s of sockets) s.destroy(); server.close(() => { fs.rmSync(dir, { recursive: true, force: true }); r(); }); });
   return fake;
 }
@@ -375,4 +400,116 @@ test("[T10] 배선 — 구현 소스에 process.env 가 없고 LIVELY_/LVLY_ 문
   const imports = [...src.matchAll(/^import\s+(type\s+)?.*?from\s+"([^"]+)"/gm)].map((m) => ({ typeOnly: !!m[1], from: m[2]! }));
   assert.deepEqual(imports.filter((i) => !i.typeOnly).map((i) => i.from).sort(), ["node:crypto", "node:http"], "🔴 런타임 의존이 node 내장 밖으로 나갔다");
   if (isTs) assert.deepEqual(imports.filter((i) => i.typeOnly).map((i) => i.from), ["./tmux-route.js"]);
+});
+
+// ── T11 세션 지목(#3708) ──────────────────────────────────────────────────────
+//  허브는 `x-lvly-session` 을 보면 테넌트 배치보다 먼저 그 세션의 라우트로 첫 홉을 고른다(lvly-cloud channelhub).
+//   exec 3단 중 start·inspect 는 URL 에 세션이 없어 **헤더가 유일한 단서**다 — 하나라도 빠지면 그 요청만 핀 노드로 가서
+//   그 브로커가 한 번 더 전달한다. 그래서 세 요청을 **각각** 잰다.
+//  ⚠ 헤더 이름은 **문자열로** 못박는다(T1b 와 같은 이유 — 한 글자만 달라도 허브가 조용히 배치로 떨어진다).
+
+const SLUG = "acme-1a2b";
+const SID = "box-a-1111aaaa";
+const hubT = (f: Fake, slug = SLUG): BrokerTransport => ({ kind: "hub", url: `http://127.0.0.1:${f.port}`, secret: "s3cr3t", slug });
+type SessionHeaders = { create: string | undefined; start: string | undefined; inspect: string | undefined };
+const NONE: SessionHeaders = { create: undefined, start: undefined, inspect: undefined };
+
+/** execCapture 를 한 번 태우고, 세 요청이 **실제로 왔는지**(배선)부터 본 뒤 요청별 `x-lvly-session` 을 돌려준다. */
+async function sessionHeadersSent(f: Fake, t: BrokerTransport, container: string): Promise<SessionHeaders> {
+  f.log.length = 0;
+  const out = await makeBrokerClient(t).execCapture(container, ["tmux", "-V"]);
+  assert.equal(out.code, 0, `전제: exec 가 끝까지 돌아야 세 요청을 잰다 — ${out.stderr}`);
+  const prefix = t.kind === "hub" ? `/t/${t.slug}` : "";
+  assert.deepEqual(urls(f), [
+    `POST ${prefix}/containers/${encodeURIComponent(container)}/exec`,
+    `POST ${prefix}/exec/exec-1/start`,
+    `GET ${prefix}/exec/exec-1/json`,
+  ], "배선: 세 요청이 전부 가짜 브로커에 닿아야 헤더를 잴 수 있다");
+  const at = (i: number): string | undefined => f.log[i]!.headers["x-lvly-session"] as string | undefined;
+  return { create: at(0), start: at(1), inspect: at(2) };
+}
+
+test("[T11a] ★★ 허브 · 세션 컨테이너 — exec-create 가 `x-lvly-session: <sid>` 를 싣는다", async () => {
+  const f = await startFake({ tcp: true });
+  try {
+    const got = await sessionHeadersSent(f, hubT(f), `lvly-s-${SLUG}-${SID}`);
+    assert.equal(got.create, SID, "🔴 exec-create 가 세션을 안 밝혔다 — 허브가 테넌트 핀 노드로 보내고 그 브로커가 한 번 더 전달한다");
+  } finally { await f.close(); }
+});
+
+test("[T11b] ★★ 허브 · 세션 컨테이너 — exec-start 도 싣는다(URL 에 세션이 없어 헤더가 유일한 단서다)", async () => {
+  const f = await startFake({ tcp: true });
+  try {
+    const got = await sessionHeadersSent(f, hubT(f), `lvly-s-${SLUG}-${SID}`);
+    assert.equal(got.start, SID, "🔴 exec-start 가 세션을 안 밝혔다 — create 만 고치면 절반만 고친 것이다");
+  } finally { await f.close(); }
+});
+
+test("[T11c] ★★ 허브 · 세션 컨테이너 — exec-inspect 도 싣는다(URL 에 세션이 없어 헤더가 유일한 단서다)", async () => {
+  const f = await startFake({ tcp: true });
+  try {
+    const got = await sessionHeadersSent(f, hubT(f), `lvly-s-${SLUG}-${SID}`);
+    assert.equal(got.inspect, SID, "🔴 exec-inspect 가 세션을 안 밝혔다 — `/exec/<id>/json` 이 핀 노드로 가서 전달된다");
+  } finally { await f.close(); }
+});
+
+test("[T11d] 파일 op 컨테이너(`lvly-s-<slug>-fs`)는 세션이 아니다 — 세 요청 모두 안 싣는다", async () => {
+  const f = await startFake({ tcp: true });
+  try {
+    assert.deepEqual(await sessionHeadersSent(f, hubT(f), `lvly-s-${SLUG}-fs`), NONE,
+      "🔴 파일 op 컨테이너를 «세션 fs» 로 밝혔다 — 허브가 없는 라우트를 찾다 배치로 떨어지며 «라우트 없음» 계기를 더럽힌다");
+  } finally { await f.close(); }
+});
+
+test("[T11e] 접두가 `lvly-s-<이 전송의 slug>-` 가 아니면 안 싣는다 — 다른 slug · `lvly-s-` 가 아예 없는 이름", async () => {
+  const f = await startFake({ tcp: true });
+  try {
+    for (const name of [`lvly-s-other-9f9f-${SID}`, "lvly-gw-central"]) {
+      assert.deepEqual(await sessionHeadersSent(f, hubT(f), name), NONE, `🔴 접두가 다른 이름 ${name} 에서 세션을 뽑았다`);
+    }
+  } finally { await f.close(); }
+});
+
+test("[T11f] sid 가 허브 규격 밖이면(`.box-a` · `box.a` · 65자) 안 싣는다 — 실어 봐야 허브가 «형식 밖» 으로 떨어뜨린다", async () => {
+  const f = await startFake({ tcp: true });
+  try {
+    for (const sid of [".box-a", "box.a", "b" + "x".repeat(64)]) {
+      assert.deepEqual(await sessionHeadersSent(f, hubT(f), `lvly-s-${SLUG}-${sid}`), NONE, `🔴 형식 밖 sid ${JSON.stringify(sid)} (${sid.length}자) 를 실었다`);
+    }
+  } finally { await f.close(); }
+});
+
+test("[T11g] 경계 — sid 가 정확히 64자면 싣는다(허브 규격의 최대치)", async () => {
+  const f = await startFake({ tcp: true });
+  try {
+    const sid = "b" + "x".repeat(63);
+    assert.equal(sid.length, 64);
+    assert.deepEqual(await sessionHeadersSent(f, hubT(f), `lvly-s-${SLUG}-${sid}`), { create: sid, start: sid, inspect: sid },
+      "🔴 64자 sid 를 형식 밖으로 떨어뜨렸다 — 허브는 받는 길이다(오프바이원)");
+  } finally { await f.close(); }
+});
+
+test("[T11h] sid 가 빈 값이면(이름이 접두 그대로) 안 싣는다 — 빈 값 헤더도 아니다", async () => {
+  const f = await startFake({ tcp: true });
+  try {
+    assert.deepEqual(await sessionHeadersSent(f, hubT(f), `lvly-s-${SLUG}-`), NONE, "🔴 빈 세션 id 를 헤더로 실었다");
+    assert.ok(f.log.every((l) => !("x-lvly-session" in l.headers)), "🔴 헤더 키가 빈 값으로 실렸다");
+  } finally { await f.close(); }
+});
+
+test("[T11i] 소켓 전송은 세션 컨테이너여도 안 싣는다 — 이 헤더를 읽는 것은 허브뿐이다(종전 그대로)", async () => {
+  const f = await startFake();
+  try {
+    assert.deepEqual(await sessionHeadersSent(f, sockT(f), `lvly-s-${SLUG}-${SID}`), NONE, "🔴 소켓 전송에 세션 헤더가 실렸다");
+  } finally { await f.close(); }
+});
+
+test("[T11j] 목록 요청(`GET /lvly/sessions`)엔 세션 헤더를 안 싣는다", async () => {
+  const f = await startFake({ tcp: true });
+  try {
+    await makeBrokerClient(hubT(f), { listScope: "node" }).listSessions();
+    assert.deepEqual(urls(f), [`GET /t/${SLUG}/lvly/sessions`], "배선: 목록 요청이 닿았다");
+    assert.equal(f.log[0]!.headers["x-lvly-list-scope"], "node", "배선: 이 요청의 헤더를 실제로 보고 있다");
+    assert.equal(f.log[0]!.headers["x-lvly-session"], undefined, "🔴 목록 요청에 세션 헤더가 실렸다");
+  } finally { await f.close(); }
 });
