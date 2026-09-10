@@ -63,16 +63,18 @@ export const LIST_SCOPE_NODE = "node";
  *  **조용히 테넌트 배치로 떨어지고**, 핀 노드의 브로커가 세션 노드로 한 번 더 전달한다(2홉).
  */
 export const SESSION_HEADER = "x-lvly-session";
-/** 허브가 받는 세션 id 규격 — lvly-cloud `hubsessionroute.SAFE_SESSION` 과 같은 자. */
+/** 허브가 받는 세션 id 규격 — lvly-cloud `hubsessionroute.SAFE_SESSION`(= `sessionroute.SAFE_SESSION`)과 같은 자. */
 const HUB_SAFE_SESSION = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 /**
- * 컨테이너 이름 → 허브에 밝힐 세션 id(순수). 밝히면 안 되는 이름이면 null 이다.
- *  · 접두 `lvly-s-<slug>-` 가 맞아야 한다 — 브로커 `sessionIdFromContainer` 와 같은 규칙.
- *  · `fs` 는 세션이 아니라 파일 op 컨테이너다(브로커의 분류: «`-fs` 는 파일 op, 그 밖의 `lvly-s-` 접두는 세션»).
+ * 컨테이너 이름 → 허브에 밝힐 세션 id(순수). 세션 컨테이너가 아니거나 밝히면 안 되는 이름이면 null 이다.
+ *  ★ lvly-cloud `sessionroute.parseSessionFromContainer(name, slug)` 와 **같은 규칙·같은 인자 순서**다 —
+ *   두 레포가 같은 이름에서 같은 세션을 읽어야 한다.
+ *  · 접두 `lvly-s-<slug>-` 로 자른다 — slug 에도 `-` 가 있어 slug 를 파싱하지 않고 접두를 대조한다.
+ *  · `fs` 는 세션이 아니라 파일 op 컨테이너다. 빈 id 도 세션이 아니다.
  *  · 허브 규격 밖이면 안 싣는다 — 실어 봐야 허브가 «형식 밖» 을 찍고 배치로 떨어질 뿐이다.
  */
-export function sessionOfContainer(slug: string, container: string): string | null {
+export function sessionOfContainer(container: string, slug: string): string | null {
   const prefix = `lvly-s-${slug}-`;
   if (!container.startsWith(prefix)) return null;
   const sid = container.slice(prefix.length);
@@ -158,7 +160,7 @@ export function makeBrokerClient(
    */
   const sessionHeadersFor = (container: string): Record<string, string> | undefined => {
     if (t.kind !== "hub") return undefined;
-    const sid = sessionOfContainer(t.slug, container);
+    const sid = sessionOfContainer(container, t.slug);
     return sid === null ? undefined : { [SESSION_HEADER]: sid };
   };
 

@@ -20,7 +20,7 @@
 //  | T11b | ★★ 허브 · 세션 컨테이너 · exec-start(URL 에 세션 없음) | 같은 값                                            |
 //  | T11c | ★★ 허브 · 세션 컨테이너 · exec-inspect(URL 에 세션 없음) | 같은 값                                          |
 //  | T11d | 허브 · 파일 op 컨테이너 `lvly-s-<slug>-fs`         | 세 요청 모두 없음                                      |
-//  | T11e | 허브 · 다른 접두(`lvly-s-<다른 slug>-…`)           | 세 요청 모두 없음                                      |
+//  | T11e | 허브 · 접두 불일치(다른 slug · `lvly-s-` 없음)      | 세 요청 모두 없음                                      |
 //  | T11f | 허브 · sid 형식 밖(`.box-a` · `box.a` · 65자)      | 세 요청 모두 없음                                      |
 //  | T11g | 허브 · 경계 — sid 정확히 64자                      | 세 요청 모두 실린다                                    |
 //  | T11h | 허브 · sid 빈 값(이름이 접두 그대로)               | 세 요청 모두 없음(빈 값 헤더도 아니다)                 |
@@ -461,10 +461,12 @@ test("[T11d] 파일 op 컨테이너(`lvly-s-<slug>-fs`)는 세션이 아니다 �
   } finally { await f.close(); }
 });
 
-test("[T11e] 접두가 이 전송의 slug 가 아니면(`lvly-s-<다른 slug>-…`) 안 싣는다", async () => {
+test("[T11e] 접두가 `lvly-s-<이 전송의 slug>-` 가 아니면 안 싣는다 — 다른 slug · `lvly-s-` 가 아예 없는 이름", async () => {
   const f = await startFake({ tcp: true });
   try {
-    assert.deepEqual(await sessionHeadersSent(f, hubT(f), `lvly-s-other-9f9f-${SID}`), NONE, "🔴 다른 접두의 이름에서 세션을 뽑았다");
+    for (const name of [`lvly-s-other-9f9f-${SID}`, "lvly-gw-central"]) {
+      assert.deepEqual(await sessionHeadersSent(f, hubT(f), name), NONE, `🔴 접두가 다른 이름 ${name} 에서 세션을 뽑았다`);
+    }
   } finally { await f.close(); }
 });
 
