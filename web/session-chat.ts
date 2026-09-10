@@ -289,8 +289,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   // 겉에 둘 것 = **터미널을 보다가 손이 자주 가는 것**(화면 복구·환경 설정). 보기 전환·목차처럼 가끔 쓰는 것은 [⋯] 안으로
   //  내린다(상민님 2026-08-19). 종전엔 반대였다 — 화면이 깨졌을 때 복구가 메뉴 두 단계 뒤에 있었다.
   const chatBadge = el('span', { class: 'sc-beta', text: '베타', hidden: true, title: '대화 인터페이스는 베타예요 — 표시가 어긋나면 터미널로 보세요' });
-  const fixBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구합니다', onclick: () => termAct('reconnect') }) as HTMLButtonElement;
-  const setBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '환경 설정', title: '터미널 글꼴·크기·테마·커서·스크롤 속도', onclick: () => termAct('settings') }) as HTMLButtonElement;
+  const fixBtn = el('button', { class: 'btn-text sc-act sc-act-dup', type: 'button', text: '화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구합니다', onclick: () => termAct('reconnect') }) as HTMLButtonElement;
+  const setBtn = el('button', { class: 'btn-text sc-act sc-act-dup', type: 'button', text: '환경 설정', title: '터미널 글꼴·크기·테마·커서·스크롤 속도', onclick: () => termAct('settings') }) as HTMLButtonElement;
   // 상단바 통합(#1744) — 터미널 페이지가 갖고 있던 것들이 이 줄로 온다: [파일](우패널 탐색기) · 연결 상태 · [⋯](터미널 조작).
   const filesBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '파일', title: '이 세션의 작업 폴더를 오른쪽 패널에서 봅니다(업로드·다운로드)', onclick: () => {
     const on = opts.onToggleFiles ? opts.onToggleFiles() : false;
@@ -327,10 +327,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       ? (vs.length ? '지금 보고 있는 사람 — ' + vs.map((v) => v.name).join(', ') + '\n눌러서 함께 볼 사람을 고릅니다' : '눌러서 함께 볼 사람을 고릅니다')
       : '이 세션을 누가 볼 수 있는지 봅니다';
     facesEl.setAttribute('aria-label', sh.owned ? '함께 볼 사람 고르기' : '볼 수 있는 사람 보기');
-    facesEl.replaceChildren(
+    //  ⚠ replaceChildren 은 el() 과 달리 **null 을 걸러 주지 않는다** — 문자열 "null" 이 텍스트 노드로 박힌다
+    //   (실측 2026-09-10: 보는 사람이 하나뿐이라 rest 가 0 이던 화면에 얼굴 옆에 «null» 이 찍혔다).
+    facesEl.replaceChildren(...[
       ...shown.map((v) => personFace(v.id, 'sc-face', v.name)),
       rest > 0 ? el('span', { class: 'sc-face sc-face-more', text: '+' + rest }) : null,
-      el('span', { class: 'sc-face sc-face-add', text: '＋' }));
+      el('span', { class: 'sc-face sc-face-add', text: '＋' }),
+    ].filter(Boolean) as HTMLElement[]);
     facesEl.hidden = false;
   }
   facesEl.onclick = () => { const sh = shareSessOf(target); if (sh) openSharePopover(facesEl, sh); };
