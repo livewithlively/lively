@@ -78,7 +78,7 @@ export async function distillersPanel(detail, data) {
   body.append(el('div', { class: 'cxc-head' },
     el('div', { class: 'cxc-head-main' },
       el('h3', { class: 'cxc-title' }, el('span', { text: '증류기' }), el('span', { class: 'cxc-title-n num', text: String(distillers.length) })),
-      el('p', { class: 'cxc-lead', text: '자료 하나는 위에서부터 첫 번째로 맡겠다는 증류기가 읽어 지식으로 만듭니다. 어느 증류기도 맡지 않은 자료는 맨 아래 안전망이 받습니다.' })),
+      el('p', { class: 'cxc-lead', text: '증류기는 쌓인 자료를 읽고, 남길 가치가 있는 것만 골라 지식으로 씁니다. 자료 하나는 증류기 하나만 읽습니다 — 아래 목록의 위에서부터 조건에 맞는 첫 증류기가 읽고, 어느 것에도 맞지 않는 자료는 맨 아래 「안전망」이 읽습니다.' })),
     el('div', { class: 'cxc-head-acts' }, el('a', { class: 'btn btn-primary', href: pageHref(NEW_KEY), text: '+ 증류기 만들기' }))));
 
   // ── 현황 한 줄 + 사각지대(문제일 때만) ──
@@ -87,7 +87,7 @@ export async function distillersPanel(detail, data) {
   if (!distillers.length) {
     body.append(el('div', { class: 'cxc-list' }, el('div', { class: 'cxc-empty' },
       el('p', { class: 'cxc-empty-t', text: '아직 증류기가 없습니다' }),
-      el('p', { class: 'cxc-empty-d', text: '증류기가 하나도 없으면 모든 자료를 한 가지 공통 기준으로 읽습니다. 팀·채널마다 기준을 다르게 하려면 하나 만드세요.' }))));
+      el('p', { class: 'cxc-empty-d', text: '증류기가 하나도 없으면 모든 자료를 한 가지 공통 기준으로 읽습니다. 팀이나 채널마다 남길 기준을 다르게 하려면 하나 만드세요.' }))));
   } else {
     body.append(el('p', { class: 'cxc-sub cxc-group-t' }, el('span', { text: '돌고 있는 증류기' }), el('span', { class: 'cxc-title-n num', text: String(on.length) })));
     const onList = el('div', { class: 'cxc-list' });
@@ -99,7 +99,7 @@ export async function distillersPanel(detail, data) {
       //  꺼 둔 것은 접어 둔다 — 화면을 점령하지 않되, 한 번 누르면 전부 보인다(숨기지 않는다).
       const fold = el('details', { class: 'cxc-fold' },
         el('summary', {}, el('span', { class: 'cxc-sub' }, el('span', { text: '꺼 둔 증류기' }), el('span', { class: 'cxc-title-n num', text: String(off.length) })),
-          el('span', { class: 'cxc-fold-d', text: '리브가 서랍마다 미리 준비해 둔 것이 대부분입니다 — 그 자료가 들어오기 시작하면 켜세요.' })));
+          el('span', { class: 'cxc-fold-d', text: '리브가 카테고리마다 미리 준비해 둔 것이 대부분입니다 — 그런 자료가 들어오기 시작하면 켜세요.' })));
       const offList = el('div', { class: 'cxc-list' });
       for (const d of off) offList.append(distillerRow(d, stat(d.id), rerender));
       fold.append(offList);
@@ -140,7 +140,7 @@ function coverageLine(cov, onN: number, total: number) {
   if (cov.uncovered > 0 && onN > 0) {
     const issue = el('div', { class: 'cxc-issue cxc-issue-block' },
       el('b', { text: '어느 증류기도 맡지 않는 자료가 ' + cov.uncovered.toLocaleString() + '건 있습니다' }),
-      el('span', { text: ' — 이대로 두면 지식이 되지 않습니다. 이 채널을 기존 증류기 범위에 넣거나, 안전망 증류기를 켜세요.' }));
+      el('span', { text: ' — 이대로 두면 지식이 되지 않습니다. 이 채널을 어느 증류기의 「읽을 채널」에 넣거나, 안전망 증류기를 켜세요.' }));
     if ((cov.uncovered_channels || []).length) {
       const grid = el('div', { class: 'cxc-chips' });
       for (const c of cov.uncovered_channels) grid.append(el('span', { class: 'pill', text: (c.channel || '(채널 없음)') + ' · ' + c.n.toLocaleString() }));
@@ -169,7 +169,7 @@ function distillerRow(d, st, rerender) {
     el('span', { class: 'cxc-kind', text: kindText(d) + ' 증류기' }),
     liv ? el('span', { class: 'cxc-liv', title: '리브가 미리 준비해 둔 증류기입니다' }, livIcon(), el('span', { text: '리브가 만듦' })) : el('span', { class: 'cxc-who', text: '직접 만듦' }),
     el('span', { class: 'cxc-sep', 'aria-hidden': 'true', text: '·' }),
-    el('span', { text: d.enabled ? `아직 읽지 않은 자료 ${backlog.toLocaleString()}건` : `켜면 맡을 자료 ${backlog.toLocaleString()}건` }),
+    el('span', { text: d.enabled ? `아직 읽지 않은 자료 ${backlog.toLocaleString()}건` : `켜면 읽을 자료 ${backlog.toLocaleString()}건` }),
     el('span', { class: 'cxc-sep', 'aria-hidden': 'true', text: '·' }),
     el('span', { text: d.last_run_at ? `마지막 실행 ${relTime(d.last_run_at)}` + (d.last_status && d.last_status !== 'ok' ? ' · 실패' : '') : '아직 실행한 적 없음' }));
   //  범위 한 줄 — 서버 문장(scope_text)에서 사람이 읽을 조각만: 「종류 …」는 위 줄이 이미 말했고, 「제외작성자 …」는 메일 주소 나열이라 뺀다.
@@ -317,15 +317,15 @@ function editorPage(d, isNew: boolean): HTMLElement {
   for (const k of KINDS) {
     const cb = el('input', { type: 'checkbox', value: k }) as HTMLInputElement;
     cb.checked = curKinds.has(k); kindBoxes[k] = cb;
-    kindsWrap.append(el('label', { class: 'pill' }, cb, el('span', { text: ' ' + k })));
+    kindsWrap.append(el('label', { class: 'pill' }, cb, el('span', { text: ' ' + (KIND_LABEL[k] || k) })));
   }
-  const incCh = el('textarea', { class: 'dst-in', style: 'min-height:88px', placeholder: '한 줄에 채널 하나. 비우면 채널 무관(전체)' }) as HTMLTextAreaElement;
+  const incCh = el('textarea', { class: 'dst-in', style: 'min-height:88px', placeholder: '한 줄에 채널 하나 — 비우면 모든 채널을 읽습니다' }) as HTMLTextAreaElement;
   incCh.value = listText(v('include_channels', null));
-  const excCh = el('textarea', { class: 'dst-in', style: 'min-height:60px', placeholder: '제외할 채널(한 줄에 하나)' }) as HTMLTextAreaElement;
+  const excCh = el('textarea', { class: 'dst-in', style: 'min-height:60px', placeholder: '한 줄에 채널 하나 — 비우면 없음' }) as HTMLTextAreaElement;
   excCh.value = listText(v('exclude_channels', null));
   const botChk = el('input', { type: 'checkbox', ...(v('exclude_bots', true) ? { checked: true } : {}) });
   const minIn = el('input', { type: 'number', class: 'dst-in dst-in-sm', value: String(v('min_chars', 0)), min: '0' });
-  const lookIn = el('input', { type: 'number', class: 'dst-in dst-in-sm', value: d && d.lookback_days ? String(d.lookback_days) : '', placeholder: '비우면 전체 기간' });
+  const lookIn = el('input', { type: 'number', class: 'dst-in dst-in-sm', value: d && d.lookback_days ? String(d.lookback_days) : '', placeholder: '비우면 과거 전체' });
 
   const chPick = el('div', { class: 'dst-chpick' }, el('span', { class: 'admin-hint', text: '채널 목록 불러오는 중…' }));
   void (async () => {
@@ -335,8 +335,8 @@ function editorPage(d, isNew: boolean): HTMLElement {
       chPick.replaceChildren();
       if (!chans.length) { chPick.append(el('span', { class: 'admin-hint', text: '수집된 채널이 아직 없습니다.' })); return; }
       for (const c of chans) {
-        const b = el('button', { type: 'button', class: 'pill', title: '클릭하면 대상 채널에 추가',
-          text: c.channel + ' · 미증류 ' + Number(c.undistilled).toLocaleString() });
+        const b = el('button', { type: 'button', class: 'pill', title: '누르면 「읽을 채널」에 넣습니다',
+          text: c.channel + ' · 안 읽은 ' + Number(c.undistilled).toLocaleString() });
         b.addEventListener('click', () => {
           const cur = incCh.value.split('\n').map((s) => s.trim()).filter(Boolean);
           if (!cur.includes(c.channel)) { cur.push(c.channel); incCh.value = cur.join('\n'); }
@@ -358,42 +358,43 @@ function editorPage(d, isNew: boolean): HTMLElement {
   const rDec = rIn('min_decisive', '비우면 조건 없음'), rAut = rIn('min_authors', '비우면 조건 없음');
   const rMsg = rIn('min_msgs', '비우면 조건 없음'), rChr = rIn('min_chars', '비우면 조건 없음');
   const rKw = el('textarea', { class: 'dst-in', style: 'min-height:110px',
-    placeholder: '한 줄에 하나. 이 채널에서 실제로 쓰는 말을 많이 넣을수록 좋습니다(도메인 용어가 특히 잘 듣습니다).' }) as HTMLTextAreaElement;
+    placeholder: '한 줄에 하나. 예) 할인일시납, 플랫폼이용료, 출시일 — 우리 팀에서 실제로 쓰는 말일수록 잘 듣습니다' }) as HTMLTextAreaElement;
   rKw.value = Array.isArray(rules.keywords) ? rules.keywords.join('\n') : '';
   const rMatch = el('select', { class: 'dst-in dst-in-sm' }) as HTMLSelectElement;
-  rMatch.append(el('option', { value: 'any', text: '하나만 만족해도 통과 (OR · 권장)' }));
-  rMatch.append(el('option', { value: 'all', text: '모든 조건을 만족해야 통과 (AND · 유실 큼)' }));
+  rMatch.append(el('option', { value: 'any', text: '조건 중 하나만 맞아도 보냅니다 (권장)' }));
+  rMatch.append(el('option', { value: 'all', text: '조건이 전부 맞아야 보냅니다 (놓치는 것이 많아집니다)' }));
   rMatch.value = rules.match === 'all' ? 'all' : 'any';
 
   // ③ 기준·형식
   const critIn = el('textarea', { class: 'dst-in', style: 'min-height:150px',
-    placeholder: '예) 제품 사양 결정·장애 원인과 조치·운영 규칙 합의만 지식화한다. 일정 조율·단순 질의응답은 제외.' }) as HTMLTextAreaElement;
+    placeholder: '예) 제품 사양 결정, 장애 원인과 조치, 운영 규칙 합의는 남긴다. 일정 조율과 단순 질문·답은 남기지 않는다.' }) as HTMLTextAreaElement;
   critIn.value = v('criteria_md');
   const fmtIn = el('textarea', { class: 'dst-in', style: 'min-height:150px',
-    placeholder: '예) 제목은 “[여신] <결정 한 줄>”. 본문은 배경 / 결정 / 근거 / 영향 순서의 섹션으로.' }) as HTMLTextAreaElement;
+    placeholder: '예) 제목은 "[제품] 결정 한 줄". 본문은 배경 → 결정 → 근거 → 영향 순서로.' }) as HTMLTextAreaElement;
   fmtIn.value = v('format_md');
-  const catIn = el('input', { type: 'text', class: 'dst-in dst-in-sm', value: v('target_category'), placeholder: '비우면 AI가 내용에 맞는 분류를 고름' });
+  const catIn = el('input', { type: 'text', class: 'dst-in dst-in-sm', value: v('target_category'), placeholder: '비우면 AI가 내용에 맞는 카테고리를 고릅니다' });
+  const TYPE_LABEL: Record<string, string> = { '': 'AI가 고름', decision: '결정', concept: '개념', 'how-to': '방법·절차', reference: '참조', research: '조사', entity: '사람·회사·물건' };
   const typeSel = el('select', { class: 'dst-in dst-in-sm' }) as HTMLSelectElement;
-  for (const t of PAGE_TYPES) typeSel.append(el('option', { value: t, text: t || '(자동)' }));
+  for (const t of PAGE_TYPES) typeSel.append(el('option', { value: t, text: TYPE_LABEL[t] ?? t }));
   if (v('default_type')) typeSel.value = v('default_type');
-  const prefixIn = el('input', { type: 'text', class: 'dst-in dst-in-sm', value: v('name_prefix'), placeholder: '예: hf-yeosin-' });
+  const prefixIn = el('input', { type: 'text', class: 'dst-in dst-in-sm', value: v('name_prefix'), placeholder: '예: product-' });
   const threadChk = el('input', { type: 'checkbox', ...(v('thread_aware', true) ? { checked: true } : {}) });
 
   // ④ 실행
   const batchIn = el('input', { type: 'number', class: 'dst-in dst-in-sm', value: String(v('batch_size', 3)), min: '1', max: '200' });
   const batchMsgIn = el('input', { type: 'number', class: 'dst-in dst-in-sm', value: String(v('batch_max_msgs', 20)), min: '1', max: '2000' });
   const modeSel = el('select', { class: 'dst-in dst-in-sm' }) as HTMLSelectElement;
-  modeSel.append(el('option', { value: 'headless', text: '헤드리스 — 매 배치 새 세션(권장)' }));
-  modeSel.append(el('option', { value: 'session', text: '상시 세션에 주입' }));
+  modeSel.append(el('option', { value: 'headless', text: '매번 새 AI 세션에서 (권장)' }));
+  modeSel.append(el('option', { value: 'session', text: '늘 켜 둔 AI 세션에 보내서' }));
   if (v('mode')) modeSel.value = v('mode');
-  const sessIn = el('input', { type: 'text', class: 'dst-in dst-in-sm', value: v('session_ref'), placeholder: '실행 방식이 상시 세션일 때만' });
+  const sessIn = el('input', { type: 'text', class: 'dst-in dst-in-sm', value: v('session_ref'), placeholder: '「늘 켜 둔 AI 세션」일 때만' });
   const modelSel = el('select', { class: 'dst-in dst-in-sm' }) as HTMLSelectElement;
-  for (const m of ['', 'fable', 'opus', 'sonnet', 'haiku']) modelSel.append(el('option', { value: m, text: m || '(계정 기본)' }));
+  for (const m of ['', 'fable', 'opus', 'sonnet', 'haiku']) modelSel.append(el('option', { value: m, text: m || '계정 기본값' }));
   if (v('model')) modelSel.value = v('model');
   const effortSel = el('select', { class: 'dst-in dst-in-sm' }) as HTMLSelectElement;
-  for (const m of ['', 'low', 'medium', 'high', 'xhigh', 'max']) effortSel.append(el('option', { value: m, text: m || '(기본)' }));
+  for (const m of ['', 'low', 'medium', 'high', 'xhigh', 'max']) effortSel.append(el('option', { value: m, text: m || '기본값' }));
   if (v('effort')) effortSel.value = v('effort');
-  const reqIn = el('input', { type: 'text', class: 'dst-in dst-in-sm', value: v('requester'), placeholder: '비우면 잡 생성자 — 이 사람의 AI 계정으로 실행·과금' });
+  const reqIn = el('input', { type: 'text', class: 'dst-in dst-in-sm', value: v('requester'), placeholder: '구성원 id — 비우면 자동 실행을 만든 사람' });
 
   const collect = () => {
     const kw = rKw.value.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -501,28 +502,28 @@ function editorPage(d, isNew: boolean): HTMLElement {
   const rLoss = el('p', { style: 'margin:6px 0 0;font-size:12px' });
   const rSample = el('div', { class: 'dst-reflect-sample' });
   const rPrompt = el('pre', { class: 'dst-reflect-prompt' });
-  const rState = el('p', { class: 'admin-hint', style: 'margin:0', text: '설정을 바꾸면 여기가 갱신됩니다.' });
+  const rState = el('p', { class: 'admin-hint', style: 'margin:0', text: '설정을 바꾸면 저장하지 않아도 여기가 바로 바뀝니다.' });
 
   function paint(r) {
     rState.textContent = '';
-    rBacklog.textContent = '집힐 자료 ' + Number(r.backlog || 0).toLocaleString() + '건';
+    rBacklog.textContent = '읽을 자료 ' + Number(r.backlog || 0).toLocaleString() + '건';
     const fi = r.filter_impact;
     if (!fi) { rFilter.textContent = ''; rLoss.replaceChildren(); }
     else if (!fi.filtered) {
-      rFilter.textContent = '사전 필터 꺼짐 — 이 범위의 자료를 전부 AI에게 보냅니다.';
+      rFilter.textContent = '거르지 않고 전부 AI에게 보냅니다.';
       rLoss.replaceChildren();
     } else {
-      rFilter.textContent = '필터 통과 ' + Number(fi.pass_msgs).toLocaleString() + '건'
+      rFilter.textContent = '거른 뒤 AI에게 보내는 것 ' + Number(fi.pass_msgs).toLocaleString() + '건'
         + (fi.pass_pct != null ? ' (' + fi.pass_pct + '%)' : '') + ' · 범위 전체 ' + Number(fi.msgs).toLocaleString() + '건';
       // ⚠ 유실률이 이 화면의 핵심 숫자다 — 절감은 눈에 띄지만 유실은 안 보여주면 아무도 모른 채 지식을 버린다.
       if (fi.loss_pct == null) {
-        rLoss.replaceChildren(el('span', { class: 'admin-hint', text: '이 범위엔 아직 지식이 된 스레드가 없어 유실률을 잴 수 없습니다.' }));
+        rLoss.replaceChildren(el('span', { class: 'admin-hint', text: '이 범위에서 지식이 된 대화가 아직 없어, 놓치는 비율을 잴 수 없습니다.' }));
       } else {
         const bad = fi.loss_pct > 5;
         replaceKids(rLoss,el('b', { style: 'color:var(' + (bad ? '--coral-text' : '--mint-deep') + ')',
-          text: (bad ? '⚠ ' : '✓ ') + '이미 지식이 된 스레드의 ' + fi.loss_pct + '% 가 이 필터에 걸러집니다' }),
+          text: (bad ? '⚠ ' : '✓ ') + '놓치는 비율 ' + fi.loss_pct + '% — 이미 지식이 된 대화 중 이만큼이 지금 조건에 걸러집니다' }),
           el('span', { class: 'admin-hint', text: ' (' + (fi.known_threads - fi.kept_known) + '/' + fi.known_threads + '건)' }),
-          bad ? el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: '그만큼 앞으로 지식을 놓칩니다. AI에게 "이 증류기 사전 필터를 튜닝해줘"라고 하면 유실을 억제한 값을 실측으로 찾아줍니다.' }) : null);
+          bad ? el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: '그만큼 앞으로 지식을 놓칩니다. AI에게 "이 증류기 사전 필터를 튜닝해줘"라고 하면 실제 데이터로 알맞은 값을 찾아 넣어 줍니다.' }) : null);
       }
     }
     rSample.replaceChildren();
@@ -532,7 +533,7 @@ function editorPage(d, isNew: boolean): HTMLElement {
         el('span', { text: ' ' + String(s.title || '(제목 없음)').slice(0, 70) })));
     }
     if (!(r.sample || []).length) {
-      rSample.append(el('p', { class: 'admin-hint', text: '지금 집히는 자료가 0건입니다 — 채널명 오타, 사전 필터가 과함, 또는 우선순위가 높은 증류기가 먼저 가져가는지 확인하세요.' }));
+      rSample.append(el('p', { class: 'admin-hint', text: '지금 조건으로 읽을 자료가 0건입니다 — 채널 이름이 맞는지, 거르기 조건이 너무 센지, 우선순위가 높은 다른 증류기가 먼저 읽는지 확인하세요.' }));
     }
     rPrompt.textContent = r.prompt || '';
     if (r.sections) {
@@ -572,11 +573,12 @@ function editorPage(d, isNew: boolean): HTMLElement {
     try { await navigator.clipboard.writeText(rPrompt.textContent || ''); toast('지시문 전문을 복사했습니다'); }
     catch { toast('복사하지 못했습니다 — 직접 선택해 복사하세요', true); }
   });
-  const reflect = el('aside', { class: 'card dst-reflect', 'aria-label': '지금 이 설정이 집는 것' },
-    el('div', { class: 'mini-meta' }, el('span', { class: 'pill', text: '지금 이 설정이' })),
-    rBacklog, rFilter, rLoss, rState, rSample,
+  const reflect = el('aside', { class: 'card dst-reflect', 'aria-label': '지금 설정으로 읽을 자료' },
+    el('div', { class: 'mini-meta' }, el('span', { class: 'pill', text: '지금 설정이면' })),
+    rBacklog, rFilter, rLoss, rState,
+    el('p', { class: 'dst-reflect-sub', text: '읽게 될 자료 예시' }), rSample,
     el('div', { class: 'dst-reflect-prompt-head' },
-      el('span', { class: 'field-label', text: 'AI 에게 나갈 지시문 전문' }), copyBtn),
+      el('span', { class: 'field-label', text: 'AI에게 실제로 보내는 지시문' }), copyBtn),
     rPrompt);
 
   // ── 단계 네비(좌측) — 가로 탭이던 것을 세로로. 지금 어느 단계인지가 늘 보인다 ──────
@@ -585,12 +587,12 @@ function editorPage(d, isNew: boolean): HTMLElement {
   //  #3830(2026-09-10 원준): "일반 사용자 대상 — 너무 어려운 건 고급 설정으로, 현실적으로 직접 정할 것만 보통 설정에".
   //   보통 설정 한 판 = 이름 · 사용 · 어떤 자료(종류·채널·봇) · 무엇을 남길지(기준·형식). 나머지 다섯 판은 「고급 설정」 묶음.
   const STEPS: Array<{ key: string; label: string; hint: string; adv?: boolean }> = [
-    { key: 'basic', label: '보통 설정', hint: '이름 · 어떤 자료를 맡을지 · 무엇을 지식으로 남길지 — 보통은 이 판이면 됩니다.' },
-    { key: 'scope', label: '범위 세부', hint: '길이·기간·우선순위·식별자 — 리브가 알맞게 정해 두었습니다. 겹치는 증류기가 있을 때 만집니다.', adv: true },
-    { key: 'filter', label: '사전 필터', hint: 'AI에게 보내기 전에 서버가 걸러낼 기준입니다. 값은 감이 아니라 실측으로 정합니다.', adv: true },
-    { key: 'what', label: '문서 규칙', hint: '스레드 묶기 · 분류 고정 · 문서 유형 · 이름 접두어.', adv: true },
-    { key: 'run', label: '실행 방식', hint: '배치 크기·의뢰자·모델을 정합니다.', adv: true },
-    { key: 'prompt', label: '지시문', hint: 'AI에게 나갈 문장을 조각별로 손봅니다.', adv: true },
+    { key: 'basic', label: '보통 설정', hint: '이름 · 어떤 자료를 읽을지 · 무엇을 지식으로 남길지 — 보통은 이것만 정하면 됩니다.' },
+    { key: 'scope', label: '읽는 범위 세부', hint: '읽을 자료를 더 좁히거나, 증류기끼리 겹칠 때 누가 먼저 읽을지 정합니다.', adv: true },
+    { key: 'filter', label: '보내기 전 거르기', hint: 'AI에게 보내기 전에 서버가 먼저 걸러냅니다 — 비용을 줄이는 대신 놓치는 것이 생길 수 있는 자리입니다.', adv: true },
+    { key: 'what', label: '지식 문서 규칙', hint: '만들어지는 지식의 묶음·카테고리·유형·이름을 정합니다.', adv: true },
+    { key: 'run', label: 'AI 실행 방식', hint: '한 번에 얼마나 읽을지, 누구 계정으로, 어떤 모델로 돌릴지 정합니다.', adv: true },
+    { key: 'prompt', label: 'AI 지시문', hint: 'AI에게 실제로 보내는 문장을 조각별로 손봅니다. 비워 두면 기본 문장이 나갑니다.', adv: true },
   ];
   const panes: Record<string, HTMLElement> = {};
   const side = el('nav', { class: 'docs-side dst-side', 'aria-label': '설정 단계' });
@@ -620,65 +622,66 @@ function editorPage(d, isNew: boolean): HTMLElement {
   }
 
   //  보통 설정 — 사람이 현실적으로 직접 정하는 것만: 이름 · 사용 · 어떤 자료 · 무엇을 남길지.
+  const intro = (t: string) => el('p', { class: 'dst-intro', text: t });
+  //  보통 설정 — 사람이 현실적으로 직접 정하는 것만: 이름 · 켜 두기 · 어떤 자료 · 무엇을 남길지. 문구는 전부 사람 말(#3830).
   panes.basic = el('div', {},
-    F('이름', '목록에 보일 이름입니다.', labelIn),
-    el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 이 증류기 사용' })),
-    el('p', { class: 'dst-sub-t', text: '어떤 자료를 맡을까요' }),
-    F('자료 종류', '비우면 전체. 슬랙만 다루는 증류기면 slack 만 고르세요.', kindsWrap),
-    F('대상 채널', '한 줄에 하나. 비우면 채널을 가리지 않습니다. 아래 목록에서 눌러 담으면 오타가 없습니다.', el('div', {}, incCh, chPick)),
-    F('제외 채널', '알림봇·모니터링 채널처럼 지식으로 남길 게 없는 곳을 빼세요.', excCh),
-    el('label', { class: 'inline' }, botChk, el('span', { text: ' 봇이 쓴 메시지는 제외' })),
+    F('이름', '목록에 보일 이름입니다. 예: 제품팀 슬랙 대화', labelIn),
+    el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 이 증류기 켜 두기 — 켜 두면 새 자료가 쌓일 때마다 자동으로 읽습니다' })),
+    el('p', { class: 'dst-sub-t', text: '어떤 자료를 읽을까요' }),
+    intro('여기서 고른 자료만 이 증류기가 읽습니다. 아무것도 고르지 않으면 전부 읽습니다.'),
+    F('자료 종류', '여러 개 골라도 됩니다. 슬랙 대화만 읽는 증류기면 「슬랙」만 고르세요.', kindsWrap),
+    F('읽을 채널', '아래 목록에서 누르면 들어갑니다(오타가 없습니다). 「안 읽은 n건」은 그 채널에 아직 지식이 되지 않은 자료 수입니다.', el('div', {}, incCh, chPick)),
+    F('읽지 않을 채널', '알림 봇·모니터링처럼 지식이 될 게 없는 채널을 적으세요.', excCh),
+    el('label', { class: 'inline' }, botChk, el('span', { text: ' 봇이 쓴 메시지는 읽지 않기' })),
     el('p', { class: 'dst-sub-t', text: '무엇을 지식으로 남길까요' }),
-    F('지식화 기준', '이 팀에서 무엇이 남길 가치가 있는지 그대로 쓰세요. 이 문장이 AI의 판단 기준이 됩니다.', critIn),
-    F('결과 문서 형식', '제목 규칙·섹션 구성 등을 자유롭게 쓰세요.', fmtIn));
+    intro('AI가 자료를 읽고 「남길까, 말까」를 판단하는 기준입니다. 우리 팀 말로 적으면 됩니다. 비워 두면 기본 기준이 적용됩니다 — 결정·합의·사실·절차는 남기고, 잡담·인사·한 번뿐인 이야기는 건너뜁니다.'),
+    F('남길 기준', '무엇이 남길 가치가 있고 무엇이 아닌지 그대로 적으세요. 이 문장이 AI의 판단 기준이 됩니다.', critIn),
+    F('지식 문서 모양', '제목을 어떻게 짓고 본문을 어떤 순서로 쓸지. 비워 두면 기본 모양(분명한 제목 + 나중에 동료가 그것만 읽고 일할 수 있는 본문)으로 씁니다.', fmtIn));
 
   panes.scope = el('div', {},
-    F('식별자(key)', isNew ? '소문자 슬러그(a-z0-9._-). 이 값이 이 설정 화면의 주소가 됩니다 — 비우면 자동으로 만듭니다.' : '만든 뒤에는 바꾸지 않습니다.', keyIn),
-    fold('세부 조건(길이·기간)',
-      row2(
-        F('본문 최소 길이', '이 길이보다 짧은 자료는 건너뜁니다. 0이면 제한 없음.', minIn),
-        F('기간', '최근 며칠치만 다룰지. 비우면 과거 전체를 백필합니다.', lookIn))),
-    fold('우선순위 — 다른 증류기와 겹칠 때',
-      F('우선순위', '높을수록 먼저 가져갑니다. 한 자료는 우선순위가 높은 증류기 하나만 처리합니다. 낮은 값 + 넓은 범위 = 나머지를 받는 기본 라인(catch-all).', prioIn)));
+    intro('보통은 손댈 일이 없습니다. 읽을 자료를 더 좁히고 싶거나, 여러 증류기가 같은 자료를 읽을 수 있을 때 순서를 정할 때 씁니다.'),
+    row2(
+      F('본문 최소 글자 수', '이보다 짧은 자료는 읽지 않습니다. 0이면 제한 없음.', minIn),
+      F('기간(일)', '최근 며칠치만 읽습니다. 비우면 과거 전체를 읽습니다.', lookIn)),
+    F('우선순위', '여러 증류기가 같은 자료를 읽을 수 있을 때 숫자가 큰 증류기가 읽습니다. 자료 하나는 증류기 하나만 읽습니다. 숫자를 낮게 두고 범위를 넓히면 나머지 전부를 받는 「안전망」이 됩니다.', prioIn),
+    F('식별자', isNew ? '이 설정 화면의 주소에 쓰이는 영문 이름(a-z0-9._-). 비우면 자동으로 만듭니다.' : '주소에 쓰이는 영문 이름입니다. 만든 뒤에는 바꾸지 않습니다.', keyIn));
 
   panes.filter = el('div', {},
-    el('p', { class: 'admin-hint', style: 'margin:0 0 10px' },
-      el('span', { text: 'AI에게 보내기 ' }), el('b', { text: '전에' }),
-      el('span', { text: ' 서버가 스레드를 걸러냅니다. 비워두면 필터가 꺼집니다(전부 보냄). 오른쪽에서 ' }),
-      el('b', { text: '유실률' }), el('span', { text: '을 보며 정하세요 — 그게 앞으로 놓칠 지식의 비율입니다.' })),
+    intro('AI가 읽는 데는 비용이 듭니다. 그래서 AI에게 보내기 전에 서버가 먼저 걸러낼 수 있습니다 — 다만 거를수록 값진 것도 함께 놓칠 수 있습니다. 전부 비워 두면 거르지 않고 다 보냅니다. 오른쪽 「놓치는 비율」을 보면서 정하세요.'),
     el('p', { class: 'dst-callout' },
       el('b', { text: '값을 감으로 정하지 마세요. ' }),
-      el('span', { text: 'AI에게 "이 증류기 사전 필터를 튜닝해줘"라고 하면 실측으로 정합니다 — 이 채널에서 판별력 높은 단어가 무엇인지, 조합별 절감 대비 유실이 얼마인지 계산해 최적값을 넣어줍니다.' })),
-    row2(
-      F('결정성 키워드 최소 등장', '아래 [결정성 키워드 목록]의 말이 스레드에 몇 번 나와야 하는지.', rDec),
-      F('스레드 최소 길이(자)', '짧은 잡담을 거르는 데 가장 안전한 축입니다.', rChr)),
-    F('결정성 키워드 목록', '이 채널에서 실제로 쓰는 말. 실측상 "결정·장애" 같은 일반어보다 "할인일시납·플랫폼이용료" 같은 도메인 용어가 훨씬 잘 듣습니다. 많이 넣으세요.', rKw),
-    fold('참여자·메시지 수 조건 (신중히)',
-      el('p', { class: 'admin-hint', text: '⚠ 이 두 축이 유실을 많이 냅니다 — 한 사람이 길게 쓴 분석 보고, 짧지만 결론이 담긴 스레드가 잘립니다.' }),
-      row2(F('최소 참여자 수', '', rAut), F('최소 메시지 수', '', rMsg))),
-    F('조건 결합', 'OR 권장. AND 는 모든 축을 만족해야 해서 값진 스레드를 많이 버립니다(실측 21% 유실).', rMatch));
+      el('span', { text: 'AI에게 "이 증류기 사전 필터를 튜닝해줘"라고 하면 우리 채널의 실제 자료로 계산해 알맞은 값을 넣어 줍니다(AI 호출 없이 계산만 하므로 비용이 없습니다).' })),
+    F('대화 최소 글자 수', '이보다 짧은 대화는 보내지 않습니다. 짧은 잡담을 거르는 가장 안전한 조건입니다.', rChr),
+    F('꼭 들어 있어야 하는 말', '이 말이 들어 있는 대화만 보냅니다. 「결정」「장애」 같은 일반적인 말보다 우리 팀에서만 쓰는 말이 훨씬 잘 듣습니다.', rKw),
+    F('그 말이 최소 몇 번', '위 목록의 말이 한 대화에 몇 번 이상 나와야 보낼지.', rDec),
+    fold('참여자 수·메시지 수 조건 — 조심해서',
+      el('p', { class: 'admin-hint', text: '⚠ 이 두 조건은 놓치는 것이 많습니다 — 한 사람이 길게 쓴 분석 보고서, 짧지만 결론이 담긴 대화가 걸러집니다. 실제로 네 조건을 전부 걸었을 때 이미 지식이 된 대화의 21%가 걸러진 적이 있습니다.' }),
+      row2(F('최소 참여자 수', '이 인원 이상이 참여한 대화만', rAut), F('최소 메시지 수', '이 개수 이상 메시지가 있는 대화만', rMsg))),
+    F('조건을 어떻게 묶을까요', '「하나만 맞아도」를 권합니다. 「전부 맞아야」는 값진 대화를 많이 버립니다.', rMatch));
 
   panes.what = el('div', {},
-    el('label', { class: 'inline' }, threadChk, el('span', { text: ' 스레드를 묶어 하나의 지식으로 (권장)' })),
-    F('분류 고정', '항상 한 분류에 넣으려면 분류 key 를 쓰세요. 비우면 AI가 내용에 맞게 고릅니다.', catIn),
+    intro('만들어지는 지식 문서의 묶음과 이름, 들어갈 자리를 정합니다. 보통은 그대로 두어도 됩니다.'),
+    el('label', { class: 'inline' }, threadChk, el('span', { text: ' 대화 묶음(글과 답글)을 하나의 지식으로 — 대화에는 켜 두고, 문서·메일이면 끄세요' })),
+    F('카테고리 고정', '만들어진 지식을 항상 이 카테고리에 넣습니다. 비우면 AI가 내용에 맞게 고릅니다.', catIn),
     row2(
-      F('문서 유형 기본값', '', typeSel),
-      F('지식 이름 접두어', '산출 지식의 이름을 이 문자열로 시작하게 합니다.', prefixIn)));
+      F('문서 유형', '지식이 어떤 종류의 문서인지. 비우면 AI가 고릅니다.', typeSel),
+      F('지식 이름 앞말', '만들어진 지식의 이름을 이 말로 시작하게 합니다.', prefixIn)));
 
   panes.run = el('div', {},
+    intro('AI를 어떻게 돌릴지 정합니다. 리브가 알맞게 정해 두었습니다 — 보통은 손댈 일이 없습니다.'),
     row2(
-      F('한 번에 처리할 스레드 수', '배치는 스레드 단위로 자릅니다 — 스레드를 쪼개면 대화가 끊겨 증류가 안 됩니다. 2~3 권장.', batchIn),
-      F('한 배치 메시지 상한', '스레드를 최근순으로 담다가 이 수를 넘으면 멈춥니다. ⚠ 첫 스레드는 예외 — 상한보다 커도 통째로 담습니다(대화를 자르지 않으려고). 20~40 권장.', batchMsgIn)),
-    F('의뢰자', '이 사람의 AI 계정으로 실행되고 과금됩니다.', reqIn),
+      F('한 번에 읽을 대화 수', 'AI가 한 번에 읽는 대화 묶음 수입니다(자료 건수가 아닙니다). 2~3을 권합니다.', batchIn),
+      F('한 번에 담을 메시지 상한', '대화를 담다가 이 수를 넘으면 멈춥니다. 첫 대화는 예외로 통째로 담습니다. 20~40을 권합니다.', batchMsgIn)),
+    F('실행 계정', '이 사람의 AI 계정으로 돌고, 비용도 그 계정에 붙습니다.', reqIn),
     fold('실행 방식·모델',
       row2(
-        F('실행 방식', '헤드리스는 매 배치 새 세션이라 이전 판단에 끌려가지 않습니다(권장).', modeSel),
-        F('상시 세션 id', '실행 방식이 상시 세션일 때만 필요합니다.', sessIn)),
+        F('실행 방식', '매번 새 세션에서 돌리면 이전 판단에 끌려가지 않습니다(권장).', modeSel),
+        F('늘 켜 둔 세션 id', '「늘 켜 둔 AI 세션에 보내서」일 때만 필요합니다.', sessIn)),
       row2(
-        F('모델', '판단이 무거운 기준이면 sonnet 이상을 권합니다.', modelSel),
-        F('추론 강도', '', effortSel))));
+        F('모델', '남길 기준이 까다로우면 더 좋은 모델을 권합니다. 정확해지는 만큼 비쌉니다.', modelSel),
+        F('추론 강도', '높일수록 정확하고 비쌉니다.', effortSel))));
 
-  panes.prompt = el('div', {}, sectionsHost);
+  panes.prompt = el('div', {}, intro('AI에게 실제로 보내는 문장을 조각별로 손봅니다. 비워 두면 기본 문장이 나가고, 제품이 좋아지면 자동으로 따라옵니다.'), sectionsHost);
 
   // ── 저장 안 된 변경 추적 ────────────────────────────────────────────────────
   //  페이지가 되면서 새로고침·뒤로가기로 폼을 잃을 수 있게 됐다. 지금 상태가 저장본과 다른지를 늘 보인다.
@@ -742,7 +745,7 @@ function editorPage(d, isNew: boolean): HTMLElement {
   const head = el('div', { class: 'dst-head' },
     el('div', { class: 'dst-head-main' }, titleEl,
       el('p', { class: 'dst-sub', text: isNew
-        ? '무엇을 어떤 기준으로 어떤 형식의 지식으로 만들지 정합니다. 오른쪽에서 지금 설정이 무엇을 집는지 바로 확인할 수 있습니다.'
+        ? '어떤 자료를 읽고, 무엇을 지식으로 남길지 정합니다. 오른쪽에서 지금 설정으로 몇 건이 읽히는지 바로 보입니다.'
         : (d.last_run_at ? '마지막 실행 ' + relTime(d.last_run_at) + ' · ' + (d.last_status === 'ok' ? '성공' : d.last_status ? '실패' : '') : '아직 실행한 적 없음') })),
     headActs);
 
