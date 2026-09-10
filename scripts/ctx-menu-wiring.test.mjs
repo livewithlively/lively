@@ -106,7 +106,7 @@ ok(/off: !canCopy/.test(T), "E10d 선택이 없으면 복사 행이 꺼진다");
 ok(read("public/terminal.html").includes(".tctx {") && read("scripts/build-standalone.mjs").includes('"ctx-lite.ts"'), "E10e 터미널 메뉴 CSS + 번들 스탬프 입력");
 // E11. 입력줄 선택·되돌리기(#3778) — 판정은 line-edit.ts 가, «실제로 배선됐는가» 는 여기서 본다.
 //  (판정 규칙 40행은 src/terminal/line-edit.test.ts 가 변이로 red 를 입증해 검증한다.)
-ok(/import \{ decideKey, UndoStack, countTyped, SEQ \} from '\.\/line-edit\.js'/.test(T), "E11a line-edit 판정을 실제로 들여온다");
+ok(/import \{ decideKey, UndoStack, countTyped, SEQ, nativeUndoOk \} from '\.\/line-edit\.js'/.test(T), "E11a line-edit 판정을 실제로 들여온다(#3864 앱 되돌리기 판 판정 포함)");
 // 순서가 규칙이다 — Alt+화살표 블록이 먼저 먹으면 ⌥Shift+←/→(단어 선택)가 «그냥 단어이동» 이 되어 선택이 안 선다.
 ok(T.indexOf("if (handleLineEditKey(e)) return false;") > 0
   && T.indexOf("if (handleLineEditKey(e)) return false;") < T.indexOf("const wordSeq = e.key === 'ArrowLeft'"), "E11b 선택 판정이 Alt+화살표 블록보다 먼저 온다");

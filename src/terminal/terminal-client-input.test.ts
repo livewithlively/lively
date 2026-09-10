@@ -866,6 +866,63 @@ t("L12 설정을 끄면 Shift+← 를 가로채지 않는다(vim 처럼 제 기�
   assert.deepEqual(h.inputs(), []);
 });
 
+// ── #3864 Ctrl+Z — 하네스로 0x1a 를 보내지 않는다 · 앱에 되돌리기가 있는 판이면 그것을 부른다 (사양 I1~I5) ──
+//  웹 터미널 pane 은 대화형 셸이 아니라 런처라, 하네스가 정지되면 사람 손으로 되살릴 길이 없다(#3861 실사고).
+const stWithCmd = (cmd: string): Record<string, unknown> => ({ alt: true, any: false, btn: false, std: false, sgr: false, cx: 0, cy: 0, mux: "tmux", cmd });
+t("L13 ★Ctrl+Z 는 PTY 로 0x1a 를 보내지 않는다 — pane 상태를 모르면 합성 되돌리기(친 만큼 백스페이스)", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  h.mod.handleTermData("ab");
+  const passed = h.term._keyHandler(h.kev({ key: "z", ctrlKey: true, keyCode: 90 }));
+  assert.equal(passed, false, "xterm 으로 흘리면 xterm 이 0x1a 를 만든다");
+  assert.deepEqual(h.inputs(), ["ab", "\x7f\x7f"]);
+});
+t("L14 ★앱에 되돌리기가 있는 판(2.1.267)이면 앱의 것(Ctrl+_ = 0x1f) 하나만 — 합성 백스페이스를 같이 보내지 않는다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  h.mod.applyPaneState(stWithCmd("2.1.267"));
+  h.mod.handleTermData("ab");
+  assert.equal(h.term._keyHandler(h.kev({ key: "z", ctrlKey: true, keyCode: 90 })), false);
+  assert.deepEqual(h.inputs(), ["ab", "\x1f"]);
+});
+t("L15 ⌘Z 도 같은 규칙 — 앱 되돌리기가 있으면 그것", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  h.mod.applyPaneState(stWithCmd("2.1.267"));
+  h.mod.handleTermData("ab");
+  assert.equal(h.term._keyHandler(h.kev({ key: "z", metaKey: true, keyCode: 90 })), false);
+  assert.deepEqual(h.inputs(), ["ab", "\x1f"]);
+});
+t("L16 옛 판(2.1.236)·매니지드(docker)는 합성 그대로 — 윈도우 Ctrl+Z", async () => {
+  for (const cmd of ["2.1.236", "docker"]) {
+    const h = await makeCtx({ mac: false });
+    h.mod.setupClipboard();
+    h.mod.applyPaneState(stWithCmd(cmd));
+    h.mod.handleTermData("ab");
+    assert.equal(h.term._keyHandler(h.kev({ key: "z", ctrlKey: true, keyCode: 90 })), false, cmd);
+    assert.deepEqual(h.inputs(), ["ab", "\x7f\x7f"], cmd);
+  }
+});
+t("L17 앱 되돌리기 판에선 보낸 직후(합성 스택이 빈 때)에도 0x1f 를 보낸다 — 무엇을 되돌릴지는 앱이 안다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  h.mod.applyPaneState(stWithCmd("2.1.267"));
+  h.mod.handleTermData("abc");
+  h.mod.handleTermData("\r");
+  assert.equal(h.term._keyHandler(h.kev({ key: "z", ctrlKey: true, keyCode: 90 })), false);
+  assert.deepEqual(h.inputs(), ["abc", "\r", "\x1f"]);
+});
+t("L18 ★앱 되돌리기 뒤 판 확인이 끊겨(재연결 등) 합성으로 떨어져도, 앱이 이미 지운 글자를 다시 세어 앞 초안을 지우지 않는다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  h.mod.applyPaneState(stWithCmd("2.1.267"));
+  h.mod.handleTermData("ab");
+  assert.equal(h.term._keyHandler(h.kev({ key: "z", ctrlKey: true, keyCode: 90 })), false); // 앱이 "ab" 를 지운다
+  h.mod.applyPaneState(stWithCmd(""));                                                       // 판 확인이 끊겼다
+  assert.equal(h.term._keyHandler(h.kev({ key: "z", ctrlKey: true, keyCode: 90 })), false);
+  assert.deepEqual(h.inputs(), ["ab", "\x1f"], "합성 백스페이스가 나가면 «ab» 앞에 있던 글자를 지운다");
+});
+
 async function main(): Promise<void> {
   let pass = 0; const fails: Array<[string, unknown]> = [];
   for (const [name, fn] of tests) {
