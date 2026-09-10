@@ -161,6 +161,22 @@ ok(V({ lastSeen: DAY - 1 }) === "cut",
   const prune = side.indexOf("pruneHolds(holds, rows);");
   ok(cut > 0 && prune > cut,
     "W11′ 배선 — 치운 세션을 거르는 줄이 자물쇠 정리(pruneHolds(holds, rows)) 앞에 있다(행에 안 들어가야 풀린다)");
+
+  //  W12 — «치운 세션을 사람이 직접 열면 목록에 둠(active)» 은 **화면이 여는 경로가 서버 멱등 생성을 부른다**는 전제다
+  //   (코디네이터 검토 보강 ②). 이게 비면 «열어서 쓰다가 탭을 닫으면 다시 사라지는» 회귀가 된다 — 탭이 열려 있는 동안엔
+  //   ③(열린 창) 줄기가 행을 세워 줘서 **눈에 안 띄다가** 탭을 닫는 순간 드러난다. 세 입구가 모두 같은 자리를 지나야 한다.
+  const route = MAIN.slice(MAIN.indexOf("} else if (page === 's' && segs[1]) {"), MAIN.indexOf("if (SOLO) {", MAIN.indexOf("} else if (page === 's' && segs[1]) {")));
+  const ensureAt = route.indexOf("const instance = await ensureSessionAppInstance(appId, s?.id || id,");
+  const guardZone = ensureAt > 0 ? route.slice(Math.max(0, ensureAt - 900), ensureAt) : "";
+  ok(ensureAt > 0 && !/if \([^)]*(restorable|\.live|alive|observed)/.test(code(guardZone)),
+    "W12 세션 화면 진입(#/s/…)은 조건 없이 서버 멱등 생성을 부른다 — 치운 세션도 열면 목록에 둠이 된다");
+  const resumed = MAIN.slice(MAIN.indexOf("function resumedInTab(tab: ShellTab, sid: string)"), MAIN.indexOf("async function mountProjectShell("));
+  ok(/tab\.route = href;/.test(resumed) && /void renderRoute\(tab\);/.test(resumed) && /onResumed: \(nid\) => resumedInTab\(tab, nid\)/.test(MAIN),
+    "W12′ [이어서 대화하기]·자동 되살리기는 새 id 로 **라우트를 다시 돌린다**(resumedInTab → renderRoute) — 같은 생성 경로를 새 id 로 지난다");
+  const PANES = read("web/v2/panes-parts.ts");
+  const paneRestore = PANES.slice(PANES.indexOf("async function restore(s: Sess)"), PANES.indexOf("async function purge(s: Sess"));
+  ok(/location\.hash = '#\/s\/' \+ encodeURIComponent\(String\(ns\.id\)\)/.test(paneRestore),
+    "W12″ 프로젝트 셸 [되살리기]도 새 id 주소로 옮겨 가 같은 라우트(생성 경로)를 지난다");
 }
 
 console.log(`\n${pass} passed`);
