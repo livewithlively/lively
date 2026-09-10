@@ -18,7 +18,7 @@
 //
 //  ── 안 하는 것 ──
 //   대화 uuid 를 추측하지 않는다(서버 원칙) — 매핑이 없으면 '기록 아직 없음'으로 말하고 터미널을 권한다.
-import { api, apiUrl, TOKEN_KEY, anchoredPopover, el, personFace, sv, toast } from './core.js';
+import { anchoredPopover, api, apiUrl, el, personFace, replaceKids, sv, toast, TOKEN_KEY } from './core.js';
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
 import { CHAT_FONT_KEY, CHAT_FONT_LABELS, nextFontStep, parseFontStep } from './chat-font.js';
 import { toolLabel } from './session-tool-labels.js';
@@ -327,13 +327,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       ? (vs.length ? '지금 보고 있는 사람 — ' + vs.map((v) => v.name).join(', ') + '\n눌러서 함께 볼 사람을 고릅니다' : '눌러서 함께 볼 사람을 고릅니다')
       : '이 세션을 누가 볼 수 있는지 봅니다';
     facesEl.setAttribute('aria-label', sh.owned ? '함께 볼 사람 고르기' : '볼 수 있는 사람 보기');
-    //  ⚠ replaceChildren 은 el() 과 달리 **null 을 걸러 주지 않는다** — 문자열 "null" 이 텍스트 노드로 박힌다
-    //   (실측 2026-09-10: 보는 사람이 하나뿐이라 rest 가 0 이던 화면에 얼굴 옆에 «null» 이 찍혔다).
-    facesEl.replaceChildren(...[
+    //  ⚠ 여기서 DOM 의 replaceChildren 을 직접 부르지 않는다 — el() 과 달리 null 을 안 걸러 문자열 "null" 이
+    //   텍스트 노드로 박힌다(실측 2026-09-10: 보는 사람이 하나뿐이라 rest 가 0 이던 화면에 «null» 이 찍혔다).
+    //   replaceKids 가 el() 과 **같은 자식 규칙**으로 그 자리를 받는다(lib/dom.ts).
+    replaceKids(facesEl,
       ...shown.map((v) => personFace(v.id, 'sc-face', v.name)),
       rest > 0 ? el('span', { class: 'sc-face sc-face-more', text: '+' + rest }) : null,
-      el('span', { class: 'sc-face sc-face-add', text: '＋' }),
-    ].filter(Boolean) as HTMLElement[]);
+      el('span', { class: 'sc-face sc-face-add', text: '＋' }));
     facesEl.hidden = false;
   }
   facesEl.onclick = () => { const sh = shareSessOf(target); if (sh) openSharePopover(facesEl, sh); };

@@ -9,7 +9,7 @@
 //     (슬랙 신원 매핑이 없어 자동 연결이 불가능하다 — 실측 0/66명). 안 그러면 "채널 멤버면 보이겠지"로 오해한다.
 //   ② **규칙은 앞으로 수집되는 것에 적용된다.** 이미 쌓인 자료는 소급 적용(백필)을 눌러야 한다. 이걸 안 보이게
 //     하면 "정책을 켰는데 옛 자료가 그대로 보인다"가 된다.
-import { api, busy, el, errorNote, toast } from './core.js';
+import { api, busy, el, errorNote, replaceKids, toast } from './core.js';
 import { overlayBox, skeleton } from './learn.js';
 // ⚠ 배럴(./projects.js)에서 가져오면 프로젝트 모듈 그래프 전체를 끌고 와 admin ↔ projects ↔ terminal
 //  **import 순환**이 생긴다(CI check-imports 가 419건을 잡았다). 프리미티브가 실제로 사는 모듈에서 직접 가져온다.
@@ -200,7 +200,7 @@ function openBackfill(reload) {
   (async () => {
     try {
       const d = await api('/api/ui/source-vis-policy/backfill', { method: 'POST', body: JSON.stringify({}) });
-      out.replaceChildren(
+      replaceKids(out,
         el('div', { class: 'svp-warn' },
           el('b', { text: `${d.locked}건이 새로 잠깁니다` }),
           el('span', { text: `검사 ${d.scanned}건 · 이미 잠김 ${d.already_locked}건 · 규칙 없음 ${d.no_rule}건` })),

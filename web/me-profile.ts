@@ -5,7 +5,7 @@
 //  PROF_* · profChips · parseMyProfile 은 내 프로필 창의 [AI 개인화] 탭(v2/me-modal.ts)이 함께 쓴다 —
 //   같은 저장 경로(POST /api/ui/me/profile)를 부분 갱신으로 나눠 쓰기 때문에 직렬화 규약이 한 곳이어야 한다.
 //   (관리탭 [내 AI 설정]의 규칙 폼은 그 창으로 옮겨 가며 걷었다 — #1843·#1898.)
-import { api, apiUrl, el, errorNote, logout, markShellSwitch, personName, profileAvatar, setPersonAvatar, setUiModeOverride, state, toast, uiText, uiMode, usernameAnchor } from './core.js';
+import { api, apiUrl, el, errorNote, logout, markShellSwitch, personName, profileAvatar, replaceKids, setPersonAvatar, setUiModeOverride, state, toast, uiMode, uiText, usernameAnchor } from './core.js';
 import { THEME_ORDER, applyToOpenTabs, harnessThemeSync, setApplyToOpenTabs, setHarnessThemeSync, setThemePref, themePref, type ThemePref } from './theme.js'; // #1683 화면 테마 · AI 세션 동기화
 import { field, skeleton } from './ui-primitives.js';
 
@@ -270,7 +270,7 @@ export async function openMyProfileModal(): Promise<void> {
     saveBtn.disabled = false;
   });
 
-  bodyWrap.replaceChildren(
+  replaceKids(bodyWrap,
     el('p', { class: 'admin-hint', style: 'margin:0 0 14px' }, ...uiText('이름·사진은 프로젝트·작업 기록·팀 화면 어디에서나 나를 가리키는 얼굴이에요.')),
     field('프로필 사진', ava.node),
     field('이름', nameIn),
