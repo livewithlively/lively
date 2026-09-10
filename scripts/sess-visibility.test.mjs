@@ -145,6 +145,22 @@ ok(V({ lastSeen: DAY - 1 }) === "cut",
     "W9 치운 세션 id 는 성공한 판에서만 갈아 끼운다 — 실패 판에 빈 집합으로 덮으면 한 틱에 전부 되살아난다");
   ok(/dismissedSection\(data, hooks\)/.test(BINS),
     "W10 아카이브 화면에 「치운 세션」이 선다 — 치운 것을 보고 되돌릴 자리");
+
+  //  W11 — 치움과 #3856 자물쇠(hold-rules.ts)의 맞물림. 「지금 볼 것」에 붙들린 세션을 치우면 그 행은 목록을 떠나고,
+  //   목록 이탈은 곧 해제다(pruneHolds). 치운 행이 자물쇠를 들고 남으면 되돌렸을 때 옛 자리로 튀어 오른다.
+  const { pruneHolds } = await import(join(root, "public/app/v2/hold-rules.js"));
+  const holds = new Map([["sess:box-a", { group: "지금 볼 것", rank: 1 }], ["sess:box-b", { group: "지금 볼 것", rank: 2 }]]);
+  const kept = new Set(["box-b"]), gone = new Set(["box-a"]);
+  const present = new Set(["box-a", "box-b"]
+    .filter((id) => verdictStands(sessRowVerdict({ ids: [id], live: true, lastSeen: DAY + H, dayStart: DAY, kept, dismissed: gone })))
+    .map((id) => "sess:" + id));
+  pruneHolds(holds, present);
+  ok(!holds.has("sess:box-a") && holds.has("sess:box-b"),
+    "W11 붙들려 있던 세션을 치우면 목록 이탈로 자물쇠가 풀린다 · 목록에 둔 세션의 자물쇠는 그대로");
+  const cut = side.indexOf("if (!verdictStands(sessRowVerdict(");
+  const prune = side.indexOf("pruneHolds(holds, rows);");
+  ok(cut > 0 && prune > cut,
+    "W11′ 배선 — 치운 세션을 거르는 줄이 자물쇠 정리(pruneHolds(holds, rows)) 앞에 있다(행에 안 들어가야 풀린다)");
 }
 
 console.log(`\n${pass} passed`);
