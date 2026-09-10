@@ -531,7 +531,12 @@ export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
       id: String(r.id), label: String(r.label || r.title || r.id), projectId: r.projectId ? Number(r.projectId) : null,
       // 노드 세션의 node 는 {id,name,online} 객체다 — id 만 든다(터미널 URL·중앙 기록 좌표에 문자열로 쓴다).
       node: r.node && typeof r.node === 'object' ? (String(r.node.id || '') || null) : (r.node ? String(r.node) : null),
-      live: true, alive: !sessIsDead(r, now), owned: !!r.owned, stateKey: k, stateLabel: sessLabel(r, now),
+      //  ⚠ **관측 못 한 행은 «살아 있다» 고도 말하지 않는다**(#2544 후속). 폴백 행은 `restorable` 을 안 실어
+      //   `sessIsDead` 가 거짓이 되는데, 그 한 틱에 DB 의 세션 **전량**이 «도는 세션» 으로 서서 사이드바의
+      //   날짜 컷(오늘 것만)을 통째로 우회했다. «모른다» 는 위(초록점)로도 아래(중단됨)로도 기울지 않는다 —
+      //   점 없는 조용한 행으로 두고, 관측이 돌아오면 그때 제자리를 찾는다.
+      //   (직전 관측이 있으면 여기 오기 전에 main.ts keepObserved 가 그 값으로 이어 준다 — 그때는 이 갈래에 안 온다.)
+      live: true, alive: r.observed === false ? false : !sessIsDead(r, now), owned: !!r.owned, stateKey: k, stateLabel: sessLabel(r, now),
       lastSeen: Number(r.lastActive || r.created || 0) * (String(r.lastActive || r.created || 0).length > 11 ? 1 : 1000) || 0, raw: r,
       trashedAt: r.trashedAt ? String(r.trashedAt) : null,   // #1851 — 서버가 내 휴지통 표식을 행에 얹는다
       trashedWith: r.trashedWith != null ? Number(r.trashedWith) : null,
