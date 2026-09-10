@@ -20,7 +20,7 @@
 //   · **사각지대를 맨 위에** — "증류기를 켰는데 왜 안 줄지?"의 답이 목록보다 먼저 보인다.
 //   · **채널은 고르는 것** — 실재하는 채널 목록(건수·잔량 포함)에서 눌러 담는다(오타 원천 차단).
 //   · **반사판은 늘 곁에** — 설정을 만지는 내내 "지금 이게 무엇을 집는가"가 오른쪽에 붙어 있다.
-import { api, busy, cardHead, el, keepSideScroll, relTime, toast } from './core.js';
+import { api, busy, el, keepSideScroll, relTime, sv, toast } from './core.js';
 import { confirmDialog, skeleton } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
 
@@ -55,95 +55,151 @@ window.addEventListener('hashchange', () => {
 //  목록 — #/context/knowledge
 // ══════════════════════════════════════════════════════════════════════════
 export async function distillersPanel(detail, data) {
-  const head = () => el('div', { class: 'admin-sechead' },
-    el('div', { class: 'section-title' }, el('h2', { text: '자료 증류기' })),
-    el('p', { class: 'admin-hint', text: '수집된 원본 자료를 무슨 기준으로 어떤 형식의 지식으로 만들지 정합니다. 팀·채널마다 다르게 여러 개 만들 수 있습니다.' }));
-
-  busy(detail, head(), el('div', { class: 'card' }, skeleton('증류기 불러오는 중')));
+  //  #3830(2026-09-10 원준): "같은 방식으로 증류기도 통일감 · 너무 많으니까 적당한 방식으로 묶기 · 일반 사용자 대상".
+  //   수집기 화면(context-collectors.ts)과 같은 리스트 문법(cxc-)으로 그리고, **돌고 있는 것 / 꺼 둔 것** 두 묶음으로 가른다.
+  //   꺼 둔 것은 접어 둔다(실측 매니지드 26개 중 21개가 꺼 둔 것 — 리브가 서랍마다 준비해 둔 레인). 돌고 있는 것은
+  //   우선순위 순 — 그 순서가 곧 "누가 먼저 가져가나" 다.
+  busy(detail, el('div', { class: 'card' }, skeleton('증류기 불러오는 중')));
 
   let res;
   try { res = await api('/api/ui/org/distillers'); }
-  catch (e) { detail.replaceChildren(head(), el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '로드 실패: ' + e.message }))); return; }
+  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '불러오지 못했습니다 — ' + e.message }))); return; }
 
   const distillers = res.distillers || [];
-  const coverage = res.coverage || { total_undistilled: 0, uncovered: 0, distillers: [], uncovered_channels: [] };
+  const coverage = res.coverage || { total_undistilled: 0, uncovered: 0, uncovered_reviewed: 0, distillers: [], uncovered_channels: [] };
   const stat = (id) => coverage.distillers.find((x) => x.id === id) || {};
   const rerender = () => { void distillersPanel(detail, data); };
 
-  const body = el('div', {});
+  const body = el('div', { class: 'cxc' });
+  const on = distillers.filter((d) => d.enabled).sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0));
+  const off = distillers.filter((d) => !d.enabled);
 
-  body.append(el('p', { class: 'admin-hint' },
-    el('span', { text: '증류기는 수집된 원본 자료(슬랙·메일 등)를 읽어 지식으로 만드는 생산 라인입니다. 한 자료는 ' }),
-    el('b', { text: '우선순위가 가장 높은 증류기 하나' }),
-    el('span', { text: '에만 배정됩니다(중복 증류 없음). 우선순위를 낮게 준 넓은 증류기는 자연히 나머지를 받는 기본 라인이 됩니다.' })));
+  // ── 머리 — 「증류기 n」 + 한 줄 + 만들기 ──
+  body.append(el('div', { class: 'cxc-head' },
+    el('div', { class: 'cxc-head-main' },
+      el('h3', { class: 'cxc-title' }, el('span', { text: '증류기' }), el('span', { class: 'cxc-title-n num', text: String(distillers.length) })),
+      el('p', { class: 'cxc-lead', text: '자료 하나는 위에서부터 첫 번째로 맡겠다는 증류기가 읽어 지식으로 만듭니다. 어느 증류기도 맡지 않은 자료는 맨 아래 안전망이 받습니다.' })),
+    el('div', { class: 'cxc-head-acts' }, el('a', { class: 'btn btn-primary', href: pageHref(NEW_KEY), text: '+ 증류기 만들기' }))));
 
-  body.append(coverageCard(coverage, distillers));
+  // ── 현황 한 줄 + 사각지대(문제일 때만) ──
+  body.append(coverageLine(coverage, on.length, distillers.length));
 
   if (!distillers.length) {
-    body.append(el('p', { class: 'admin-hint' },
-      el('span', { text: '아직 증류기가 없습니다. 증류기가 하나도 없으면 증류 잡은 ' }),
-      el('b', { text: '전 자료 공통 기본 증류' }), el('span', { text: '로 동작합니다(채널·기준 구분 없음).' })));
-  }
+    body.append(el('div', { class: 'cxc-list' }, el('div', { class: 'cxc-empty' },
+      el('p', { class: 'cxc-empty-t', text: '아직 증류기가 없습니다' }),
+      el('p', { class: 'cxc-empty-d', text: '증류기가 하나도 없으면 모든 자료를 한 가지 공통 기준으로 읽습니다. 팀·채널마다 기준을 다르게 하려면 하나 만드세요.' }))));
+  } else {
+    body.append(el('p', { class: 'cxc-sub cxc-group-t' }, el('span', { text: '돌고 있는 증류기' }), el('span', { class: 'cxc-title-n num', text: String(on.length) })));
+    const onList = el('div', { class: 'cxc-list' });
+    if (!on.length) onList.append(el('div', { class: 'cxc-empty' }, el('p', { class: 'cxc-empty-d', text: '켜진 증류기가 없습니다 — 아래에서 하나를 켜세요.' })));
+    for (const d of on) onList.append(distillerRow(d, stat(d.id), rerender));
+    body.append(onList);
 
-  for (const d of distillers) body.append(summaryCard(d, stat(d.id), rerender));
-
-  // 만들기도 '들어가는 것' — 목록에서 폼이 펼쳐지지 않고 설정 페이지로 이동한다.
-  body.append(el('div', { style: 'margin-top:14px' },
-    el('a', { class: 'btn', href: pageHref(NEW_KEY), text: '+ 증류기 만들기' })));
-
-  body.append(await runJobCard(rerender));
-  detail.replaceChildren(head(), body);
-}
-
-// ── 현황(사각지대 먼저) ────────────────────────────────────────────────────
-function coverageCard(cov, distillers) {
-  const card = el('div', { class: 'card', style: 'margin-top:12px' }, cardHead('증류 현황'));
-  const on = distillers.filter((d) => d.enabled).length;
-  card.append(el('div', { class: 'mini-meta' },
-    el('span', { class: 'pill', text: '미증류 자료 ' + (cov.total_undistilled || 0).toLocaleString() + '건' }),
-    el('span', { class: 'pill' + (on ? ' pill-ok' : ''), text: '켜진 증류기 ' + on + '/' + distillers.length }),
-    el('span', { class: 'pill' + (cov.uncovered ? '' : ' pill-ok'), text: '사각지대 ' + (cov.uncovered || 0).toLocaleString() + '건' })));
-
-  if (cov.uncovered > 0 && on > 0) {
-    card.append(el('p', { class: 'admin-hint', style: 'margin-top:8px' },
-      el('b', { text: '⚠ 사각지대 ' + cov.uncovered.toLocaleString() + '건' }),
-      el('span', { text: ' — 켜진 증류기 어디에도 안 걸리는 자료입니다. 이대로 두면 영영 증류되지 않습니다. 아래 채널을 기존 증류기 범위에 넣거나, 우선순위를 낮춘 넓은 증류기를 하나 만들어 나머지를 받게 하세요.' })));
-    if ((cov.uncovered_channels || []).length) {
-      const grid = el('div', { style: 'display:flex;flex-wrap:wrap;gap:6px;margin-top:8px' });
-      for (const c of cov.uncovered_channels) grid.append(el('span', { class: 'pill', text: (c.channel || '(채널 없음)') + ' · ' + c.n.toLocaleString() }));
-      card.append(grid);
+    if (off.length) {
+      //  꺼 둔 것은 접어 둔다 — 화면을 점령하지 않되, 한 번 누르면 전부 보인다(숨기지 않는다).
+      const fold = el('details', { class: 'cxc-fold' },
+        el('summary', {}, el('span', { class: 'cxc-sub' }, el('span', { text: '꺼 둔 증류기' }), el('span', { class: 'cxc-title-n num', text: String(off.length) })),
+          el('span', { class: 'cxc-fold-d', text: '리브가 서랍마다 미리 준비해 둔 것이 대부분입니다 — 그 자료가 들어오기 시작하면 켜세요.' })));
+      const offList = el('div', { class: 'cxc-list' });
+      for (const d of off) offList.append(distillerRow(d, stat(d.id), rerender));
+      fold.append(offList);
+      body.append(fold);
     }
   }
-  return card;
+
+  body.append(await runJobCard(rerender));
+  detail.replaceChildren(body);
 }
 
-// ── 목록의 한 줄 ───────────────────────────────────────────────────────────
-function summaryCard(d, st, rerender) {
-  const card = el('div', { class: 'card', style: 'margin-top:12px' });
-  // 제목이 곧 입구 — 들어가는 길이 '설정 열기' 버튼 하나뿐이면 찾아야 한다.
-  card.append(el('div', { class: 'mini-title' },
-    el('a', { href: pageHref(d.key), text: d.label || d.key }),
-    el('span', { class: 'pill' + (d.enabled ? ' pill-ok' : ''), text: d.enabled ? '켜짐' : '꺼짐' }),
-    el('span', { class: 'pill', text: '우선순위 ' + d.priority }),
-    el('span', { class: 'pill', text: '남은 자료 ' + Number(st.backlog || 0).toLocaleString() + '건' }),
-    st.reviewed ? el('span', { class: 'pill', text: '판정 ' + Number(st.reviewed).toLocaleString() }) : null,
-    d.prefilter_level ? el('span', { class: 'pill', text: '사전필터 ' + d.prefilter_level }) : null));
-  card.append(el('div', { class: 'mini-meta' }, el('span', { text: d.scope_text || '범위 전체' })));
-  card.append(el('div', { class: 'mini-meta' }, el('span', {
-    text: d.last_run_at ? ('마지막 실행 ' + relTime(d.last_run_at) + ' · ' + (d.last_status || '')) : '아직 실행된 적 없음' })));
+/** 리브가 만든 증류기인가 — 온보딩이 서랍마다 세운 레인(`liv-` 접두)과 제품이 준비해 두는 프리셋 셋. */
+const PRESET_DISTILLERS = new Set(['local-files', 'figma-comments', 'issue-threads']);
+function isLivMadeDistiller(d): boolean {
+  return String(d.key || '').startsWith('liv-') || PRESET_DISTILLERS.has(String(d.key || ''));
+}
 
-  const chk = el('input', { type: 'checkbox' });
-  (chk as HTMLInputElement).checked = !!d.enabled;
-  chk.addEventListener('change', async () => {
-    try { await api('/api/ui/org/distillers', { method: 'POST', body: JSON.stringify({ ...settable(d), enabled: (chk as HTMLInputElement).checked }) }); toast('저장됨'); rerender(); }
-    catch (e) { toast(e.message, true); (chk as HTMLInputElement).checked = !(chk as HTMLInputElement).checked; }
+/** 자료 종류 → 사람 말. 종류 배열(match_kinds)에서 대표 하나를 고른다. */
+const KIND_LABEL: Record<string, string> = {
+  slack: '슬랙', discord: '디스코드', email: '메일', transcript: '회의 전사록', minutes: '회의록', notion_doc: '노션 문서',
+  clickup_doc: '클릭업 문서', drive_file: '드라이브 파일', local_file: '올린 파일', figma_comment: '피그마 코멘트',
+  github_issue: '깃허브 이슈', gitlab_issue: '깃랩 이슈', linear_issue: '리니어 이슈', other: '그 밖',
+};
+function kindText(d): string {
+  const ks: string[] = Array.isArray(d.match_kinds) ? d.match_kinds.filter(Boolean) : [];
+  if (!ks.length) return '모든 자료';
+  const names = ks.map((k) => KIND_LABEL[k] || k);
+  return names.length <= 2 ? names.join('·') : names.slice(0, 2).join('·') + ' 외 ' + (names.length - 2);
+}
+
+// ── 현황 한 줄 — 안 읽은 자료 · 켜진 증류기. 사각지대는 **문제일 때만** 경고 줄로. ──
+function coverageLine(cov, onN: number, total: number) {
+  const box = el('div', { class: 'cxc-stat' });
+  box.append(el('span', { class: 'cxc-m' },
+    el('span', { text: '아직 읽지 않은 자료 ' }), el('b', { class: 'num', text: (cov.total_undistilled || 0).toLocaleString() + '건' }),
+    el('span', { class: 'cxc-sep', 'aria-hidden': 'true', text: '·' }),
+    el('span', { text: '켜진 증류기 ' }), el('b', { class: 'num', text: onN + '/' + total })));
+  if (cov.uncovered > 0 && onN > 0) {
+    const issue = el('div', { class: 'cxc-issue cxc-issue-block' },
+      el('b', { text: '어느 증류기도 맡지 않는 자료가 ' + cov.uncovered.toLocaleString() + '건 있습니다' }),
+      el('span', { text: ' — 이대로 두면 지식이 되지 않습니다. 이 채널을 기존 증류기 범위에 넣거나, 안전망 증류기를 켜세요.' }));
+    if ((cov.uncovered_channels || []).length) {
+      const grid = el('div', { class: 'cxc-chips' });
+      for (const c of cov.uncovered_channels) grid.append(el('span', { class: 'pill', text: (c.channel || '(채널 없음)') + ' · ' + c.n.toLocaleString() }));
+      issue.append(grid);
+    }
+    box.append(issue);
+  }
+  return box;
+}
+
+// ── 목록의 한 행 — 수집기 행과 같은 해부: [타일] [이름 + 상태] / [「슬랙 증류기」 · 리브가 만듦 · 남은 자료 · 마지막 실행] … [스위치][설정] ──
+function distillerRow(d, st, rerender) {
+  const row = el('div', { class: 'cxc-row' + (d.enabled ? '' : ' is-off') });
+  const liv = isLivMadeDistiller(d);
+  const catchAll = Number(d.priority) <= -100 || /catch-all$/.test(String(d.key || ''));
+  const tile = el('span', { class: 'svc-tile cxc-tile cxc-tile-machine', 'aria-hidden': 'true' }, funnelIcon());
+
+  const title = el('div', { class: 'cxc-t' },
+    el('a', { class: 'cxc-name', href: pageHref(d.key), text: d.label || d.key }),
+    el('span', { class: 'cxc-state' + (d.enabled ? ' is-on' : '') },
+      el('span', { class: 'cxc-state-dot', 'aria-hidden': 'true' }), el('span', { text: d.enabled ? '켜짐' : '꺼짐' })),
+    catchAll ? el('span', { class: 'cxc-tag', text: '나머지 전부' }) : null);
+
+  const backlog = Number(st.backlog || 0);
+  const meta = el('div', { class: 'cxc-m' },
+    el('span', { class: 'cxc-kind', text: kindText(d) + ' 증류기' }),
+    liv ? el('span', { class: 'cxc-liv', title: '리브가 미리 준비해 둔 증류기입니다' }, livIcon(), el('span', { text: '리브가 만듦' })) : el('span', { class: 'cxc-who', text: '직접 만듦' }),
+    el('span', { class: 'cxc-sep', 'aria-hidden': 'true', text: '·' }),
+    el('span', { text: d.enabled ? `아직 읽지 않은 자료 ${backlog.toLocaleString()}건` : `켜면 맡을 자료 ${backlog.toLocaleString()}건` }),
+    el('span', { class: 'cxc-sep', 'aria-hidden': 'true', text: '·' }),
+    el('span', { text: d.last_run_at ? `마지막 실행 ${relTime(d.last_run_at)}` + (d.last_status && d.last_status !== 'ok' ? ' · 실패' : '') : '아직 실행한 적 없음' }));
+  //  범위 한 줄 — 서버 문장(scope_text)에서 사람이 읽을 조각만: 「종류 …」는 위 줄이 이미 말했고, 「제외작성자 …」는 메일 주소 나열이라 뺀다.
+  const scopeBits = String(d.scope_text || '').split(', ').filter((b) => b && !/^(종류|제외작성자|작성자) /.test(b));
+  const scope = el('div', { class: 'cxc-m cxc-scope', title: d.scope_text || '', text: scopeBits.length ? scopeBits.join(' · ') : '모든 채널' });
+
+  row.append(tile, el('div', { class: 'cxc-main' }, title, meta, scope));
+
+  const acts = el('div', { class: 'cxc-acts' });
+  const sw = el('input', { type: 'checkbox', class: 'cxc-sw', role: 'switch', 'aria-label': `${d.label || d.key} 켜기` }) as HTMLInputElement;
+  sw.checked = !!d.enabled;
+  sw.addEventListener('change', async () => {
+    const next = sw.checked; sw.disabled = true;
+    try { await api('/api/ui/org/distillers', { method: 'POST', body: JSON.stringify({ ...settable(d), enabled: next }) }); toast(next ? '켰습니다' : '껐습니다'); rerender(); }
+    catch (e) { toast(e.message, true); sw.checked = !next; sw.disabled = false; }
   });
-  const edit = el('a', { class: 'btn btn-ghost btn-sm', href: pageHref(d.key), text: '설정 열기' });
-  const del = el('button', { class: 'btn-text', type: 'button', text: '삭제' });
-  del.addEventListener('click', () => { void removeDistiller(d, rerender); });
-  card.append(el('div', { style: 'display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap' },
-    el('label', { class: 'inline' }, chk, el('span', { text: ' 켜기' })), edit, del));
-  return card;
+  acts.append(sw, el('a', { class: 'btn btn-ghost btn-sm', href: pageHref(d.key), text: '설정' }));
+  row.append(acts);
+  return row;
+}
+
+function funnelIcon(): SVGElement {
+  const n = sv('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('path', { d: 'M4 5h16l-6.2 7.2V18l-3.6 2v-7.8z' }));
+  return n;
+}
+function livIcon(): SVGElement {
+  const n = sv('svg', { class: 'cxc-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('circle', { cx: 12, cy: 12, r: 9 }), sv('circle', { cx: 12, cy: 12, r: 2.5 }));
+  return n;
 }
 
 /** 삭제 — 목록과 설정 페이지가 같은 문구·같은 확인을 쓴다. after 는 삭제에 성공한 뒤 할 일. */
@@ -526,24 +582,29 @@ function editorPage(d, isNew: boolean): HTMLElement {
   // ── 단계 네비(좌측) — 가로 탭이던 것을 세로로. 지금 어느 단계인지가 늘 보인다 ──────
   //  ⚠ 항목은 **버튼**이다(링크 아님): 링크면 라우터가 돌아 폼이 통째로 재렌더되고 입력 중인 값이 날아간다.
   //   사이드바 시각 언어는 사용 가이드·관리탭의 .docs-side 를 그대로 쓴다(#827 과 같은 결).
-  const STEPS = [
-    { key: 'basic', label: '기본', hint: '이름과 식별자, 사용 여부를 정합니다.' },
-    { key: 'scope', label: '① 범위', hint: '어떤 자료를 이 증류기가 맡을지 정합니다.' },
-    { key: 'filter', label: '② 사전 필터', hint: 'AI에게 보내기 전에 서버가 걸러낼 기준입니다.' },
-    { key: 'what', label: '③ 기준·형식', hint: '무엇을 지식으로 만들고, 어떤 문서로 쓸지 정합니다.' },
-    { key: 'run', label: '④ 실행', hint: '배치 크기·의뢰자·모델을 정합니다.' },
-    { key: 'prompt', label: '⑤ 지시문', hint: 'AI에게 나갈 문장을 조각별로 손봅니다.' },
+  //  #3830(2026-09-10 원준): "일반 사용자 대상 — 너무 어려운 건 고급 설정으로, 현실적으로 직접 정할 것만 보통 설정에".
+  //   보통 설정 한 판 = 이름 · 사용 · 어떤 자료(종류·채널·봇) · 무엇을 남길지(기준·형식). 나머지 다섯 판은 「고급 설정」 묶음.
+  const STEPS: Array<{ key: string; label: string; hint: string; adv?: boolean }> = [
+    { key: 'basic', label: '보통 설정', hint: '이름 · 어떤 자료를 맡을지 · 무엇을 지식으로 남길지 — 보통은 이 판이면 됩니다.' },
+    { key: 'scope', label: '범위 세부', hint: '길이·기간·우선순위·식별자 — 리브가 알맞게 정해 두었습니다. 겹치는 증류기가 있을 때 만집니다.', adv: true },
+    { key: 'filter', label: '사전 필터', hint: 'AI에게 보내기 전에 서버가 걸러낼 기준입니다. 값은 감이 아니라 실측으로 정합니다.', adv: true },
+    { key: 'what', label: '문서 규칙', hint: '스레드 묶기 · 분류 고정 · 문서 유형 · 이름 접두어.', adv: true },
+    { key: 'run', label: '실행 방식', hint: '배치 크기·의뢰자·모델을 정합니다.', adv: true },
+    { key: 'prompt', label: '지시문', hint: 'AI에게 나갈 문장을 조각별로 손봅니다.', adv: true },
   ];
   const panes: Record<string, HTMLElement> = {};
   const side = el('nav', { class: 'docs-side dst-side', 'aria-label': '설정 단계' });
   keepSideScroll(side, 'distiller'); // 단계를 고르면 화면을 다시 그려 사이드바가 새 노드가 된다(#1635)
   const sideGroup = el('div', { class: 'docs-side-group' }, el('div', { class: 'docs-side-title', text: '설정' }));
+  const advGroup = el('div', { class: 'docs-side-group dst-side-adv' },
+    el('div', { class: 'docs-side-title', text: '고급 설정' }),
+    el('p', { class: 'dst-side-adv-d', text: '리브가 알맞게 정해 두었습니다 — 보통은 바꿀 일이 없습니다.' }));
   for (const s of STEPS) {
     const b = el('button', { type: 'button', class: 'docs-item', 'data-step': s.key, text: s.label });
     b.addEventListener('click', () => showStep(s.key));
-    sideGroup.append(b);
+    (s.adv ? advGroup : sideGroup).append(b);
   }
-  side.append(sideGroup);
+  side.append(sideGroup, advGroup);
 
   const stepHint = el('p', { class: 'dst-step-hint' });
   const paneHost = el('div', {});
@@ -558,17 +619,21 @@ function editorPage(d, isNew: boolean): HTMLElement {
     paneHost.replaceChildren(panes[s.key]);
   }
 
+  //  보통 설정 — 사람이 현실적으로 직접 정하는 것만: 이름 · 사용 · 어떤 자료 · 무엇을 남길지.
   panes.basic = el('div', {},
-    row2(
-      F('이름', '목록에 보일 이름입니다.', labelIn),
-      F('식별자(key)', isNew ? '소문자 슬러그(a-z0-9._-). 이 값이 이 설정 화면의 주소가 됩니다 — 만든 뒤에는 바꾸지 않는 것을 권합니다.' : '만든 뒤에는 바꾸지 않습니다.', keyIn)),
-    el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 이 증류기 사용' })));
-
-  panes.scope = el('div', {},
+    F('이름', '목록에 보일 이름입니다.', labelIn),
+    el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 이 증류기 사용' })),
+    el('p', { class: 'dst-sub-t', text: '어떤 자료를 맡을까요' }),
     F('자료 종류', '비우면 전체. 슬랙만 다루는 증류기면 slack 만 고르세요.', kindsWrap),
     F('대상 채널', '한 줄에 하나. 비우면 채널을 가리지 않습니다. 아래 목록에서 눌러 담으면 오타가 없습니다.', el('div', {}, incCh, chPick)),
-    F('제외 채널', '알림봇·모니터링 채널처럼 지식화할 게 없는 곳을 빼세요. (이미 수집된 뒤라면 커넥터에서 막는 게 낫습니다 — 저장공간을 계속 먹습니다.)', excCh),
+    F('제외 채널', '알림봇·모니터링 채널처럼 지식으로 남길 게 없는 곳을 빼세요.', excCh),
     el('label', { class: 'inline' }, botChk, el('span', { text: ' 봇이 쓴 메시지는 제외' })),
+    el('p', { class: 'dst-sub-t', text: '무엇을 지식으로 남길까요' }),
+    F('지식화 기준', '이 팀에서 무엇이 남길 가치가 있는지 그대로 쓰세요. 이 문장이 AI의 판단 기준이 됩니다.', critIn),
+    F('결과 문서 형식', '제목 규칙·섹션 구성 등을 자유롭게 쓰세요.', fmtIn));
+
+  panes.scope = el('div', {},
+    F('식별자(key)', isNew ? '소문자 슬러그(a-z0-9._-). 이 값이 이 설정 화면의 주소가 됩니다 — 비우면 자동으로 만듭니다.' : '만든 뒤에는 바꾸지 않습니다.', keyIn),
     fold('세부 조건(길이·기간)',
       row2(
         F('본문 최소 길이', '이 길이보다 짧은 자료는 건너뜁니다. 0이면 제한 없음.', minIn),
@@ -594,14 +659,11 @@ function editorPage(d, isNew: boolean): HTMLElement {
     F('조건 결합', 'OR 권장. AND 는 모든 축을 만족해야 해서 값진 스레드를 많이 버립니다(실측 21% 유실).', rMatch));
 
   panes.what = el('div', {},
-    F('지식화 기준', '이 팀에서 무엇이 남길 가치가 있는지 그대로 쓰세요. 이 문장이 AI의 판단 기준이 됩니다.', critIn),
-    F('결과 문서 형식', '제목 규칙·섹션 구성 등을 자유롭게 쓰세요.', fmtIn),
     el('label', { class: 'inline' }, threadChk, el('span', { text: ' 스레드를 묶어 하나의 지식으로 (권장)' })),
-    fold('분류·이름 규칙',
-      F('분류 고정', '항상 한 분류에 넣으려면 분류 key 를 쓰세요. 비우면 AI가 내용에 맞게 고릅니다.', catIn),
-      row2(
-        F('문서 유형 기본값', '', typeSel),
-        F('지식 이름 접두어', '산출 지식의 이름을 이 문자열로 시작하게 합니다.', prefixIn))));
+    F('분류 고정', '항상 한 분류에 넣으려면 분류 key 를 쓰세요. 비우면 AI가 내용에 맞게 고릅니다.', catIn),
+    row2(
+      F('문서 유형 기본값', '', typeSel),
+      F('지식 이름 접두어', '산출 지식의 이름을 이 문자열로 시작하게 합니다.', prefixIn)));
 
   panes.run = el('div', {},
     row2(
@@ -681,7 +743,7 @@ function editorPage(d, isNew: boolean): HTMLElement {
     el('div', { class: 'dst-head-main' }, titleEl,
       el('p', { class: 'dst-sub', text: isNew
         ? '무엇을 어떤 기준으로 어떤 형식의 지식으로 만들지 정합니다. 오른쪽에서 지금 설정이 무엇을 집는지 바로 확인할 수 있습니다.'
-        : '식별자 ' + d.key + (d.last_run_at ? ' · 마지막 실행 ' + relTime(d.last_run_at) + ' · ' + (d.last_status || '') : ' · 아직 실행된 적 없음') })),
+        : (d.last_run_at ? '마지막 실행 ' + relTime(d.last_run_at) + ' · ' + (d.last_status === 'ok' ? '성공' : d.last_status ? '실패' : '') : '아직 실행한 적 없음') })),
     headActs);
 
   const form = el('div', { class: 'dst-form' }, el('div', { class: 'card' }, stepHint, paneHost));

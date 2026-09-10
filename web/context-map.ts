@@ -106,8 +106,11 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
   const searchable = Math.max(0, Number(st.distill?.output || 0) - Number(st.classify?.backlog || 0));
 
   // ── 역 넷(장소 = 흰 카드) — 같은 해부 4칸: 문패(유리 아이콘 · 이름 · 수) / 정의 / 실물 / 발치 ──
-  const station = (o: { href: string; icon: string; name: string; v: string; unit: string; def: string; x: HTMLElement; foot: string; lv?: string }) =>
-    el('a', { class: 'cxm-st' + (o.lv ? ' is-' + o.lv : ''), href: o.href },
+  //  #3830(2026-09-10 원준): 장소 카드는 **그 장소로** 간다 — 외부 앱→[외부 앱 연결] · 자료→[자료] 앱 · 지식→레일 [위키] ·
+  //   AI 세션→레일 [AI 세션]. 이 화면은 새 셸의 액자(iframe) 안에서 살므로 셸에 한 줄 올려 보낸다(goShell). 기계 셋은 이 앱 안의 탭.
+  const station = (o: { href: string; go?: ShellDest; icon: string; name: string; v: string; unit: string; def: string; x: HTMLElement; foot: string; lv?: string }) =>
+    el('a', { class: 'cxm-st' + (o.lv ? ' is-' + o.lv : ''), href: o.href,
+      ...(o.go ? { onclick: (ev: MouseEvent) => { ev.preventDefault(); goShell(o.go!); } } : {}) },
       el('span', { class: 'cxm-st-h' },
         appGlassIcon(o.icon, 'cxm-st-gi'),
         el('b', { class: 'cxm-st-t', text: o.name }),
@@ -123,7 +126,7 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
   const extFoot = collectors.length
     ? '수집 연결 ' + fmt(collectors.length) + '개' + svcs.filter(([, v]) => v.n > 1).slice(0, 2).map(([, v]) => ' · ' + v.label + ' ' + v.n).join('')
     : '외부 서비스를 연결하면 그 내용이 자료로 들어옵니다';
-  const stExt = station({ href: '#/context/sources', icon: 'apps', name: '외부 앱', v: fmt(svcs.length), unit: '종', def: '슬랙·노션·깃허브처럼 자료가 생기는 곳입니다', x: extX, foot: extFoot, lv: lv.collect });
+  const stExt = station({ href: '#/connect', go: { route: '#/connect' }, icon: 'apps', name: '외부 앱', v: fmt(svcs.length), unit: '종', def: '슬랙·노션·깃허브처럼 자료가 생기는 곳입니다', x: extX, foot: extFoot, lv: lv.collect });
 
   const rawX = el('span', { class: 'cxm-srcs' },
     ...(topSys.length
@@ -137,7 +140,7 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
           return el('span', { class: 'cxm-src-row', title: f.label + ' ' + fmt(v.n) + '건' }, mk, el('span', { class: 'cxm-src-t', text: f.label }), el('b', { class: 'num', text: fmt(v.n) }));
         })
       : [el('span', { class: 'cxm-empty', text: '아직 들어온 자료가 없습니다' })]));
-  const stRaw = station({ href: '#/context/sources', icon: 'src', name: '자료', v: fmt(st.collect?.output), unit: '건', def: '가져온 원문 그대로 둡니다. AI 는 자료를 직접 쓰지 않습니다', x: rawX,
+  const stRaw = station({ href: '#/sources', go: { route: '#/sources' }, icon: 'src', name: '자료', v: fmt(st.collect?.output), unit: '건', def: '가져온 원문 그대로 둡니다. AI 는 자료를 직접 쓰지 않습니다', x: rawX,
     foot: (st.collect?.recent_24h ? '오늘 +' + fmt(st.collect.recent_24h) : '오늘 새 자료 없음') + (backlog ? ' · 증류 대기 ' + fmt(backlog) + '건' : ' · 밀린 자료 없음') });
 
   const knowX = el('span', { class: 'cxm-kns' },
@@ -147,7 +150,7 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
           k.lifecycle === 'pending' ? el('span', { class: 'pill pill-warn', text: '승인 대기' }) : el('span', { class: 'cxm-kn-m', text: relTime(k.updated_at) })))
       : [el('span', { class: 'cxm-empty', text: '아직 지식이 없습니다' })]));
   const classifyEvery = st.classify?.job?.any_enabled ? '자동 분류 ' + intervalText(st.classify.job.interval_sec) : '자동 분류 꺼짐';
-  const stKnow = station({ href: '#/context/category', icon: 'wiki', name: '지식', v: fmt(st.distill?.output), unit: '건',
+  const stKnow = station({ href: '#/knowledge', go: { section: 'wiki', route: '#/knowledge' }, icon: 'wiki', name: '지식', v: fmt(st.distill?.output), unit: '건',
     def: '증류를 통과해 남은 것입니다. 카테고리 ' + fmt(st.classify?.categories) + '칸에 정리됩니다', x: knowX,
     foot: classifyEvery + ' · 점검 발견 ' + fmt(findings), lv: lv.distill });
 
@@ -156,7 +159,7 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
     el('span', { class: 'cxm-sess-row' },
       el('i', { class: 'cxm-sess-ai', 'aria-hidden': 'true' }, svcLogo('claude-headless') || el('span', { text: 'AI' })),
       el('span', { class: 'cxm-sess-a' }, el('span', { text: '팀이 쌓은 지식으로 답합니다 ' }), el('i', { class: 'cxm-sess-ref', text: '지식 참조' }))));
-  const stAI = station({ href: '#/context/deliver', icon: 'chat', name: 'AI 세션', v: sessD ? fmt(busy) : '—', unit: '작업 중', def: '시작할 때 읽고, 대화 중에 검색해 씁니다', x: aiX,
+  const stAI = station({ href: '#/terminal', go: { section: 'sess', route: '#/terminal' }, icon: 'chat', name: 'AI 세션', v: sessD ? fmt(busy) : '—', unit: '작업 중', def: '시작할 때 읽고, 대화 중에 검색해 씁니다', x: aiX,
     foot: '검색 대상 ' + fmt(searchable) + '건' + (startDocs !== null ? ' · 항상 읽는 것 ' + fmt(startDocs) : '') });
 
   // ── 기계 셋(선로 위 어두운 칩) — 이름 · 수 · 상태 배지 · 살아 있는 점 + 주기 ──
@@ -270,4 +273,20 @@ export async function renderContextInbox(box: HTMLElement): Promise<void> {
 export function inboxCount(d: any): number {
   const st = (d && d.stages) || {}; const g = (d && d.gates) || {};
   return Number(g.knowledge_pending || 0) + Number(g.classification_proposed || 0) + Number(st.manage?.open?.total || 0);
+}
+
+// ── 셸로 가는 길(#3830) ─────────────────────────────────────────────────────
+//  이 화면은 새 셸의 앱 액자(iframe) 안에서 산다. 다른 앱·구역은 액자 밖이라 location.hash 로는 못 간다 — 셸이 듣는
+//  postMessage 로 한 줄 올린다(main.ts: `lively:open-route` 는 그 주소의 탭을 열고, `lively:open-section` 은 레일
+//  구역을 고른 뒤 그 구역이 두고 간 자리로 간다). 액자 밖(클래식 셸)이면 그냥 주소로 간다.
+type ShellDest = { route: string; section?: 'wiki' | 'sess' };
+function goShell(d: ShellDest): void {
+  const framed = (() => { try { return window.parent && window.parent !== window; } catch { return false; } })();
+  if (framed) {
+    try {
+      window.parent.postMessage(d.section ? { type: 'lively:open-section', section: d.section } : { type: 'lively:open-route', href: d.route }, location.origin);
+      return;
+    } catch { /* 부모가 안 받으면 아래 폴백 */ }
+  }
+  location.hash = d.route;
 }
