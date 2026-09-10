@@ -20,7 +20,7 @@
 //   · **사각지대를 맨 위에** — "증류기를 켰는데 왜 안 줄지?"의 답이 목록보다 먼저 보인다.
 //   · **채널은 고르는 것** — 실재하는 채널 목록(건수·잔량 포함)에서 눌러 담는다(오타 원천 차단).
 //   · **반사판은 늘 곁에** — 설정을 만지는 내내 "지금 이게 무엇을 집는가"가 오른쪽에 붙어 있다.
-import { api, busy, cardHead, el, keepSideScroll, relTime, toast } from './core.js';
+import { api, busy, cardHead, el, keepSideScroll, relTime, replaceKids, toast } from './core.js';
 import { confirmDialog, skeleton } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
 
@@ -466,7 +466,7 @@ function editorPage(d, isNew: boolean): HTMLElement {
         rLoss.replaceChildren(el('span', { class: 'admin-hint', text: '이 범위엔 아직 지식이 된 스레드가 없어 유실률을 잴 수 없습니다.' }));
       } else {
         const bad = fi.loss_pct > 5;
-        rLoss.replaceChildren(el('b', { style: 'color:var(' + (bad ? '--coral-text' : '--mint-deep') + ')',
+        replaceKids(rLoss,el('b', { style: 'color:var(' + (bad ? '--coral-text' : '--mint-deep') + ')',
           text: (bad ? '⚠ ' : '✓ ') + '이미 지식이 된 스레드의 ' + fi.loss_pct + '% 가 이 필터에 걸러집니다' }),
           el('span', { class: 'admin-hint', text: ' (' + (fi.known_threads - fi.kept_known) + '/' + fi.known_threads + '건)' }),
           bad ? el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: '그만큼 앞으로 지식을 놓칩니다. AI에게 "이 증류기 사전 필터를 튜닝해줘"라고 하면 유실을 억제한 값을 실측으로 찾아줍니다.' }) : null);
