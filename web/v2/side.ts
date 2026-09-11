@@ -32,7 +32,7 @@ import { findMatcher } from '../lib/find.js';
 import { splitFolderRows, foldCardRows } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsTouch } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버다(선언 한 줄이 그걸 말한다)
 import { confirmDialog } from '../ui-primitives.js';
-import { SESS_STATES } from '../session-status.js';
+import { SESS_STATES, isDotState, rowDotCls } from '../session-status.js';   // #3778 2판 — 목록 줄의 점은 «나를 기다리는 것» 셋만
 import { lastAsk, watchLastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { sourcesFindInput, sourcesFindShown, sourcesSideBody, sourcesSideCount, sourcesUploadPick, toggleSourcesFind } from './sources.js';   // #2423 자료 앱 사이드바 내용
@@ -1280,7 +1280,9 @@ function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
   const p = s.projectId ? last!.data.projects.find((x) => x.id === s.projectId) : null;
   const t = sessText(s, p ? p.name : '');
   const ak = last!.activeKey();
-  const st = !pastRow && SESS_STATES[s.stateKey] ? s.stateKey : '';
+  //  ★ 홈과 같은 자(#3778 2판) — 셋만 점이 된다. 종전엔 아홉 가지를 전부 넘겨, 색 규칙이 없는 상태가
+  //   `currentColor` 로 떨어져 **대기 중과 오프라인이 같은 글자색 점**이 됐다(의도한 회색이 아니었다).
+  const st = !pastRow && isDotState(s.stateKey) ? s.stateKey : '';
   const ownerId = String((s.raw && s.raw.owner) || '');
   return {
     id: 'sess:' + s.id,
@@ -2654,7 +2656,9 @@ function sumEl(sess: Sess[], past: Sess[] = []): HTMLElement | null {
 // 세션 행 — 상태점 · 세션을 실제로 구분해 주는 글(sessText) · 남의 세션이면 소유자 얼굴 · 상태어.
 function sessRow(s: Sess, activeKey: string, text: { main: string; sub: string }, pastRow = false): HTMLElement {
   const st = SESS_STATES[s.stateKey];
-  const cls = dotCls(s.stateKey);
+  //  ★ 점은 «나를 기다리는 것» 셋만 그린다(#3778 2판) — 종전엔 오프라인이 지난 세션과 **같은 빈 고리**였다.
+  //   「몸이 있나」는 아래 .past 톤과 오른쪽 시각이 말한다. 어휘 전체는 [필터] 팝오버가 그대로 들고 있다.
+  const cls = rowDotCls(s.stateKey);
   const raw = s.raw || {};
   const owner = ownerName(s);
   // 프로젝트명 반복을 걷어낸 뒤의 이름·'지금 하는 일'(하네스 pane 제목 = 클래식 카드의 💬 줄).
