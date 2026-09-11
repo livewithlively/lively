@@ -433,7 +433,10 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .v2-find--apps { padding: 0 2px 7px; }
 
 .v2-app-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 1px 2px 12px; scrollbar-width: thin; scrollbar-color: transparent transparent; }
-.v2-app-list:hover { scrollbar-color: var(--line-strong) transparent; }
+/*  손을 얹으면 막대만 보인다 — 트랙은 끝까지 투명. 막대 색은 WIKI·관리 사이드바(27-start-onboarding.css)와 같다.
+    ⚠ 선언 안 된 토큰을 쓰면 이 줄이 통째로 무효가 되어 **브라우저 기본 막대**(밝은 트랙 + 회색 막대)로 돌아간다 —
+    #1883 부터 그랬고, 카드와 사이드바 테두리 사이에 흰 세로 띠로 보였다(#3778). 계약 테스트 ⑥이 그 재발을 막는다. */
+.v2-app-list:hover { scrollbar-color: var(--muted-3-line) transparent; }
 /*  홈 — 시키는 칸 아래 최근에 연 앱 한 줄(#1954). 전체는 [모든 앱]이 런치패드로 연다. */
 /* 처음 설정 이어서 하기(#2171) — 시키는 칸 바로 아래 한 줄. 배너가 아니라 «있는지 없는지» 정도의 존재감:
    홈의 첫 문장은 «무엇을 할까요?» 이고, 이 줄은 그 다음이어야 한다(끌고 가지 않기로 한 것의 짝). */
