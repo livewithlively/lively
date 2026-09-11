@@ -214,3 +214,46 @@ export function nextAfterSetup(state) {
   if (state && state.nodeRunning) return null;
   return "node-start";
 }
+
+/**
+ * 알림 클릭 → 웹 창을 그 화면(해시)으로 보낸다 (#3896). 창이 아니라 **webContents 하나만** 받는다 — 판정을 표로 못박으려고.
+ *
+ * ★ 기다릴지는 `isLoadingMainFrame()` 으로 정한다 — `isLoading()` 이 아니다. electron.d.ts 가 둘을 가른다: 앞의 것은
+ *  "본문 문서(액자 말고)가 싣는 중인가", 뒤의 것은 "어느 프레임이든 싣는 중인가". 종전 코드는 `isLoading()` 이 참이면
+ *  `did-finish-load` 를 기다렸는데 그 이벤트는 **본문 문서만** 낸다. 세션 화면은 터미널을 액자로 실으므로, 그 액자가 싣는
+ *  순간 누른 클릭은 본문이 이미 다 실려 있어 **다시 오지 않을** 이벤트를 기다리다 사라졌다.
+ * · 싣는 중에 누르면 갈 곳을 **하나만** 기억한다(마지막 클릭). 누를 때마다 리스너를 쌓으면 한참 뒤 다른 로드에서 옛 클릭이 튀어나온다.
+ * · 지금 가는 클릭은 기다리던 옛 클릭을 지운다 — 다음 로드가 그 옛 화면으로 되돌리지 않게.
+ * · 본문 로드가 실패하거나 창이 닫히면 기억을 버린다(`failed`) — 나중에 성공한 로드가 옛 클릭으로 사람을 끌고 가면 안 된다.
+ * @returns {{ open(wc: object, hash: string): "now"|"pending"|"skip", loaded(wc: object): boolean, failed(): void }}
+ */
+export function createHashNav() {
+  let pending = null;
+  const alive = (wc) => !!wc && !(typeof wc.isDestroyed === "function" && wc.isDestroyed());
+  const go = (wc, hash) => {
+    try {
+      const p = wc.executeJavaScript(`location.hash = ${JSON.stringify(hash)}`);
+      if (p && typeof p.catch === "function") p.catch(() => { /* 그 사이 문서가 바뀌었다 */ });
+    } catch { /* 그 사이 창이 사라졌다 */ }
+  };
+  return {
+    open(wc, hash) {
+      if (!hash || !alive(wc)) return "skip";
+      //  isLoadingMainFrame 이 없는 판(구 Electron·가짜 객체)이면 isLoading 으로 잰다 — 종전 판정으로 물러설 뿐 더 나빠지지 않는다.
+      const mainLoading = typeof wc.isLoadingMainFrame === "function" ? wc.isLoadingMainFrame() : !!(wc.isLoading && wc.isLoading());
+      if (mainLoading) { pending = hash; return "pending"; }
+      pending = null;
+      go(wc, hash);
+      return "now";
+    },
+    loaded(wc) {
+      if (!pending) return false;
+      const hash = pending;
+      pending = null;
+      if (!alive(wc)) return false;
+      go(wc, hash);
+      return true;
+    },
+    failed() { pending = null; },
+  };
+}

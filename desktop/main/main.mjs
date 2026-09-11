@@ -24,7 +24,7 @@ import { trayMenuModel } from "./tray-menu.mjs";
 import { contextMenuModel, runContextMenuAction } from "./context-menu.mjs";
 import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
 import { gatewayAdvice } from "./gateway-input.mjs";
-import { appReady, nodeStateOf, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup } from "./web-shell.mjs";
+import { appReady, nodeStateOf, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup, createHashNav } from "./web-shell.mjs";
 import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, surfaceNavTarget, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
 import { EXTENSIONS_DIRNAME, INSTALLED_FILE, RULESET_SHIM_PAGE, RULESET_SHIM_HTML, enableRulesetsScript, manifestRulesets, parseInstalled, serializeInstalled, crxZipOffset, readZipEntries, readZipEntryData, safeExtensionId } from "./browser-extensions.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
@@ -33,7 +33,7 @@ import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
 import { APP_ID } from "./win-stale-install.mjs";
-import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, sessionHash, pickPersonEvents, planPersonBanners, rememberSeen, personLink, streamEvent, parseSse, reconnectDelay, stableStream, SEEN_MAX } from "./notify.mjs";
+import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, sessionHash, pickPersonEvents, planPersonBanners, rememberSeen, personLink, streamEvent, parseSse, reconnectDelay, stableStream, SEEN_MAX, keepBanner } from "./notify.mjs";
 import { enrichPathFromLoginShell } from "./login-path.mjs";
 import { execFileSync } from "node:child_process";
 
@@ -594,17 +594,30 @@ let notifyPrefsCache = { ...NOTIFY_DEFAULTS };   // 서버에서 마지막으로
 /** 유형별 켜짐 — 서버 값. 아직 못 받았으면 기본값(전부 켜짐): 설정을 못 읽었다고 알림이 멎으면 안 된다. */
 function notifyPrefs() { return notifyPrefsCache; }
 
+// ★ 띄운 배너는 **여기서 쥔다**(#3896). 지역 변수로만 두면 GC 가 JS 객체를 가져가고, 그러면 네이티브 알림의 delegate 가
+//  끊겨(Electron v43.3.0 electron_api_notification.cc 소멸자 set_delegate(nullptr) → notification.cc NotificationClicked 는
+//  delegate 가 없으면 아무것도 안 한다) **그 뒤의 클릭이 조용히 버려진다.** 배너가 뜨고 바로 누르면 가고, 조금 있다 누르면
+//  안 가던 것("어떤 때는 넘어가고 어떤 때는 안 넘어간다")의 정체다 — 실측: 안 쥔 객체는 gc() 한 번에 사라졌다.
+//  놓는 때는 눌렀을 때와 상한 초과뿐이다. Windows 는 배너가 시간이 지나 알림 센터로 들어갈 때도 'close'(timedOut)를 내는데,
+//  거기서도 누를 수 있으므로 close 로 놓으면 같은 증상이 남는다.
+const liveBanners = new Set();
+// 알림 클릭이 웹 창을 어느 화면으로 보낼지 — 싣는 중이면 한 곳만 기억했다가 다 실린 뒤 보낸다(web-shell.mjs createHashNav).
+const hashNav = createHashNav();
+
 /** 배너 한 장. 클릭하면 그 세션 화면으로 간다(묶음 배너는 갈 곳이 하나가 아니므로 앱만 띄운다). */
 function showBanner({ title, body, event }) {
   try {
     if (!Notification.isSupported()) return;          // 리눅스 등 알림 데몬이 없는 환경 — 조용히 넘긴다
     const n = new Notification({ title, body });
     n.on("click", () => {
+      liveBanners.delete(n);                                           // 누른 배너는 OS 가 치운다 — 더 쥘 까닭이 없다
       if (event && event.id) return openSessionInApp(event.id);        // 세션 알림 → 그 세션 화면
       if (event && event.link) return openHashInApp(event.link);       // 사람 알림 → 그 프로젝트 화면
       showMain();                                                      // 묶음 배너 — 갈 곳이 하나가 아니다
     });
     n.show();
+    //  상한을 넘어 놓이는 배너에 close() 를 부르지 않는다 — 실측(Electron 43.3.0): close() 한 배너는 놓아도 GC 되지 않아 그대로 쌓인다.
+    keepBanner(liveBanners, n);
   } catch { /* OS 가 알림을 막았어도 앱은 계속 돈다 */ }
 }
 
@@ -612,9 +625,7 @@ function showBanner({ title, body, event }) {
 function openHashInApp(hash) {
   const r = showApp();
   if (!r || !r.ok || !hash || !appWin || appWin.isDestroyed()) return;
-  const wc = appWin.webContents;
-  const go = () => { try { void wc.executeJavaScript(`location.hash = ${JSON.stringify(hash)}`).catch(() => {}); } catch { /* 창이 사라졌다 */ } };
-  if (wc.isLoading()) wc.once("did-finish-load", go); else go();
+  hashNav.open(appWin.webContents, hash);
 }
 /** 세션 알림 클릭 — id 형식을 먼저 본다(응답을 그대로 주소로 쓰지 않는다). */
 function openSessionInApp(id) { openHashInApp(sessionHash(id)); }
@@ -762,20 +773,24 @@ function showApp() {
       if (autoApplyTimer) { clearTimeout(autoApplyTimer); autoApplyTimer = null; }
       void reloadIfStale();   // #1841 — 창은 닫아도 안 죽는다. 다시 보일 때 낡았으면 스스로 다시 싣는다.
     });
-    appWin.on("closed", () => { appWin = null; appLoaded = { url: null, token: null }; });
+    appWin.on("closed", () => { appWin = null; appLoaded = { url: null, token: null }; hashNav.failed(); });
     appWin.on("moved", saveAppBounds);
     appWin.on("resized", saveAppBounds);
     // 못 실었으면(게이트웨이 다운·주소 오류·오프라인) 빈 창을 두지 않는다 — 마법사의 '라이블리 열기' 카드에 사유를 적고 거기서 다시 시도한다.
     //  -3(ERR_ABORTED)은 리다이렉트·중복 로드의 부수 신호라 오류가 아니다.
     appWin.webContents.on("did-fail-load", (_e, code, desc, failedUrl, isMainFrame) => {
       if (!isMainFrame || code === -3) return;
+      hashNav.failed();   // 못 실은 창으로 가려던 알림 클릭은 버린다 — 나중에 성공한 로드가 그 옛 클릭으로 끌고 가지 않게(#3896)
       webError = `라이블리 화면을 열지 못했습니다 — ${desc || code} (${failedUrl || url})`;
       appLoaded = { url: null, token: null };
       send(IPC.LOG, { stream: "raw", line: webError });
       if (appWin && !appWin.isDestroyed()) appWin.hide();
       showWindow(); void refreshState();
     });
-    appWin.webContents.on("did-finish-load", () => { if (webError) { webError = null; void refreshState(); } });
+    appWin.webContents.on("did-finish-load", () => {
+      if (appWin && !appWin.isDestroyed()) hashNav.loaded(appWin.webContents);   // 싣는 도중 누른 알림 — 다 실린 지금 그 화면으로(#3896)
+      if (webError) { webError = null; void refreshState(); }
+    });
     // 사람이 웹에서 **다른 워크스페이스로 옮겨 갔나**(#2215) — 웹뷰만 옮겨가고 이 PC 의 로컬(토큰·노드·MCP)은
     //  그대로라 조용히 어긋난다. 해시 라우팅이라 in-page 도 함께 듣는다(둘 다 같은 자리로 보낸다).
     appWin.webContents.on("did-navigate", (_e, navUrl) => void offerWorkspaceRebind(navUrl));

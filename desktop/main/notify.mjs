@@ -122,6 +122,35 @@ export function sessionHash(id) {
   return /^[A-Za-z0-9_.-]{1,120}$/.test(s) ? "#/s/" + s : null;
 }
 
+/**
+ * 쥐고 있을 배너 수의 상한(#3896) — 끝없이 쌓이지 않게 하는 울타리다. 이보다 오래된 배너는 놓는다(놓인 배너는 눌러도 반응하지 않는다).
+ *  50 인 까닭: Windows 알림 센터는 앱마다 최대 20개만 남기고(더 오래된 것은 밀려난다) 7일 뒤 만료한다
+ *  (Microsoft Learn «Toast Notification and Action Center Overview for Windows 10»). 그래서 Windows 에선 알림 센터에서
+ *  아직 누를 수 있는 배너를 전부 쥐고 있게 된다.
+ */
+export const BANNER_KEEP_MAX = 50;
+
+/**
+ * 띄운 배너 객체를 **쥔다**(#3896). 안 쥐면 GC 가 가져가고, 그 뒤에 누른 클릭은 조용히 사라진다(main.mjs showBanner 머리말).
+ *  상한을 넘으면 가장 먼저 쥔 것부터 놓고 그 목록을 돌려준다.
+ * @param {Set<object>} kept 쥐고 있는 배너(넣은 순서가 곧 오래된 순서)
+ * @param {object} n 방금 띄운 배너(Electron Notification)
+ * @param {number} [max] 상한 — 양의 정수가 아니면 BANNER_KEEP_MAX 로 본다
+ * @returns {object[]} 이번에 놓은 배너
+ */
+export function keepBanner(kept, n, max = BANNER_KEEP_MAX) {
+  if (!kept || !n) return [];
+  const cap = Number.isInteger(max) && max > 0 ? max : BANNER_KEEP_MAX;
+  kept.add(n);
+  const out = [];
+  while (kept.size > cap) {
+    const old = kept.values().next().value;
+    kept.delete(old);
+    out.push(old);
+  }
+  return out;
+}
+
 // ── 사람 알림 (#1842 2차) ────────────────────────────────────────────────────
 // 세션 알림과 **판정 위치가 다르다**: 세션은 스냅샷 두 장을 앱이 견주지만(서버엔 '전이'라는 개념이 없다),
 //  사람 알림은 서버가 "since 이후 나에게 온 것"을 이미 골라 준다(/api/ui/notify/feed). 앱이 할 일은
