@@ -708,5 +708,8 @@ t("[#2439] runtimeChoice 가 tmux 옵션에서 rows.push 까지 이어진다", (
   assert.match(src, /runtimeRaw, \.\.\.labelParts/, "구조분해가 라벨 앞에서 받는다");
   assert.match(src, /runtimeChoice: runtimeRaw === "chat"/, "중간 객체가 우리 낱말로 옮긴다");
   assert.match(src, /runtimeChoice: p\.runtimeChoice/, "★ rows.push 가 그것을 실제로 담는다");
-  assert.match(src, /"@box_runtime"/, "생성이 그 옵션을 남긴다");
+  //  #3892 — 표식 목록이 한 벌(session-meta-heal.ts)로 옮겨졌다: 옵션 이름은 그 빌더에, 생성은 그 빌더에 모드를 넘긴다.
+  const heal = readFileSync(join(here, "session-meta-heal.ts"), "utf8");
+  assert.match(heal, /"@box_runtime", "chat"/, "표식 목록이 그 옵션을 박는다");
+  assert.match(src, /sessionMetaCmds\(id, \{[^}]*runtimeChat: chatRuntime/, "생성이 그 옵션을 남긴다(모드를 표식 목록에 넘긴다)");
 });
