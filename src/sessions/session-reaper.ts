@@ -26,7 +26,9 @@
 //  ② attached>0: 누가 보는 중 → 제외. **단 무기한은 아니다**(#2148) — `attach_idle_minutes` 를 켜면 그 시간 넘게
 //     입출력이 없는 attach 는 존중하지 않는다(원격 tmux 에서 유령 클라이언트가 이 신호를 영구 참으로 만들었다).
 //     0(기본)이면 종전대로 무기한 존중이라 셀프호스트 동작은 그대로다.
-//  ③ busy(작업 중)·waiting(승인/선택 대기): 죽이면 진행 중 작업·대기 중 결정을 잃는다 → 제외.
+//  ③ busy(작업 중)·waiting(승인/선택 대기): 죽이면 진행 중 작업·대기 중 결정을 잃는다 → 제외. **이것도 무기한은 아니다**
+//     (#3894) — `busy_idle_minutes` 를 켜면 **스스로 증명하지 못하는 보호**(승인 대기 · 셸의 pane 포그라운드 추정)는
+//     사람이 그 시간 넘게 안 본 세션에서 존중하지 않는다. 하네스가 직접 말하는 작업 중(스피너·훅·app-server)은 그대로다.
 //  ④ **desired-state(org_session_state) 레코드가 있는 세션만 회수** — 회수 = 반드시 복원 가능(restorable)해야 한다.
 //     레코드 없는(구버전·managed) 세션은 회수해도 복원 못 하므로 손대지 않는다(회수 ⊆ 복원가능 보장).
 //  ⑤ idle 지속(now - last_busy, 없으면 created)이 TTL 미만이면 제외.
@@ -97,9 +99,14 @@ export interface ReapSkipReasons {
   managed: number; noState: number; attached: number; working: number; recent: number; failed: number; target: number; cap: number;
   /** ⑥ 하네스가 띄운 작업(백그라운드 셸·빌드 등)이 살아 있어 남겨둔 수(#2652). 두 축이 같이 쓴다. */
   jobs: number;
+  /**
+   * #3894 — tmux 를 **못 봐서** DB desired 행으로 채워진 행(observed:false)이라 남겨둔 수. 그 행은 attached·working·awaiting 이
+   *  전부 기본값(false)이라 판정 재료가 없다 — 모르면 안 죽인다. 이 수가 크면 그 tick 에 중계(브로커 재접속 창 등)가 안 닿았다.
+   */
+  unobserved: number;
 }
 
-const emptyReasons = (): ReapSkipReasons => ({ managed: 0, noState: 0, attached: 0, working: 0, recent: 0, failed: 0, target: 0, cap: 0, jobs: 0 });
+const emptyReasons = (): ReapSkipReasons => ({ managed: 0, noState: 0, attached: 0, working: 0, recent: 0, failed: 0, target: 0, cap: 0, jobs: 0, unobserved: 0 });
 
 /** 유휴 축의 tick 결과. **CP(reclaimhealth·tenanttick)가 이 모양을 읽는다** — 필드를 지우지 마라. */
 export interface ReapResult {
@@ -142,6 +149,7 @@ export interface ReapCandidate { id: string; idleSince: number }
  *
  * @param cutoffSec       이 시각 **이하**로 유휴면 회수 대상(축마다 TTL 이 다르다 — 평시 TTL vs 완화 TTL).
  * @param attachTtlMin    0 = attach 를 무기한 존중(종전 동작). >0 이면 그 시간 넘게 조용한 attach 는 안 존중.
+ * @param busyTtlMin      0 = ③ 을 무기한 존중(종전 동작). >0 이면 스스로 증명 못 하는 ③ 은 사람이 그 시간 넘게 안 봤을 때 안 존중.
  */
 export function pickReapCandidates(o: {
   live: ReadonlyArray<SessionInfo>;
@@ -150,16 +158,52 @@ export function pickReapCandidates(o: {
   nowSec: number;
   cutoffSec: number;
   attachTtlMin: number;
+  busyTtlMin: number;
   reasons: ReapSkipReasons;
 }): ReapCandidate[] {
-  const { live, restorable, managedIds, nowSec, cutoffSec, attachTtlMin, reasons } = o;
+  const { live, restorable, managedIds, nowSec, cutoffSec, attachTtlMin, busyTtlMin, reasons } = o;
   const candidates: ReapCandidate[] = [];
   for (const s of live) {
+    //  #3894 — **관측 못 한 행은 판정하지 않는다.** 매니지드 중계가 tmux 를 «못 본» tick 엔 목록이 DB desired 행을
+    //   observed:false 로 채운다(session-unobserved.ts — 화면이 살아 있는 세션을 죽은 것처럼 그리지 않게 한 폴백). 그 행의
+    //   attached·working·awaiting 은 관측이 아니라 기본값 false 라 ②·③ 이 통째로 무력화된다 — 그대로 판정하면 사람이 붙어
+    //   일하던 세션을 «아무도 없고 조용하다» 로 걷고, 목록은 못 봤어도 kill 은 닿는 순간(중계는 간헐적으로 끊긴다)에 죽인다.
+    if (s.observed === false) { reasons.unobserved++; continue; }
     if (managedIds.has(s.id)) { reasons.managed++; continue; }                 // ① managed
     if (!restorable.has(s.id)) { reasons.noState++; continue; }                // ④ 복원 불가면 손대지 않음
     // ⑤ 유휴 판정에 쓸 마지막 활동 시각 — ② 의 attach TTL 판정도 이 값을 쓰므로 **먼저** 구한다.
     const lastSeen = Math.max(s.lastActive || 0, s.lastAttached || 0);  // 마지막 활동 = 작업 또는 열람
     const idleSince = lastSeen || s.created || 0;
+    // #3894 — **③ 에도 끝을 둔다. 단 스스로 증명하지 못하는 보호에만.** (③ 설명은 아래, 여기는 판정 재료)
+    //  ③ 은 무기한이었다. 실측 2026-09-11 lively-46e3: 승인 대기로 159~218분 방치된 세션 둘, 26시간째 `working` 인
+    //  AI 로그인 자리 셋이 어느 경로로도 안 걷혀 세션 예약(각 1GB)이 노드 축소를 막았다. ② 에 #2148 이 붙인 것과
+    //  같은 안전망이다 — 신호가 거짓으로 굳어도 회수가 영영 멈추지 않게.
+    //  · **하네스가 스스로 말하는 작업 중**(스피너·신선한 훅 busy·app-server 턴 — `harnessWorking`)은 상한 없이 존중한다.
+    //    지금 돌고 있다는 증거이고, 크론·위탁 워커(kind task)는 애초에 사람이 안 본다 — «사람이 안 봤다» 로 그걸 죽이면
+    //    멀쩡한 작업이 죽는다.
+    //  · 상한이 서는 것은 둘이다 — ⓐ 승인·선택 대기(사람의 결정을 기다린다 — 사람이 오래 안 오면 그 결정은 버려진 것이다)
+    //    ⓑ pane 포그라운드 추정뿐인 작업 중(`paneWorking` — 로그인 TUI·vim·tail -f 처럼 오래 떠 있는 무엇이든 «실행 중» 이다).
+    //  ⚠ 출처는 목록이 싣는다(terminal/sessions.ts). **agentState 로 짐작하지 않는 이유**(적대검토): shell·exited 는 «스피너·보고
+    //   경로가 닫혀 있다» 는 뜻일 뿐 «AI 가 없다» 가 아니다 — 셸 세션 안 `lively run` 의 AI 는 agentState 가 shell 인 채 돌고,
+    //   tmux 표식이 빈 claude 세션은 exited·working 으로 보였다(2026-09-11 둘 · #3892 가 관측 쪽을 고쳤다). agentState 로 가르면
+    //   그 AI 를 «pane 추정» 으로 걷는다. 값이 없는 행(구 노드 등)만 agentState 로 짐작한다.
+    const shellLike = s.agentState === "shell" || s.agentState === "exited";
+    const paneWorking = s.paneWorking ?? (!!s.working && shellLike);
+    const harnessWorking = s.harnessWorking ?? ((!!s.working || s.agentState === "busy") && !shellLike);
+    const guarded = !!s.working || !!s.awaiting || s.agentState === "busy" || s.agentState === "waiting";
+    //  상한이 이 세션의 ③ 을 열 수 있나 — 켜져 있고, 보호가 스스로 증명 못 하는 것일 때만. **꺼져 있으면 아래 전부 종전 그대로다.**
+    const capped = busyTtlMin > 0 && guarded && !harnessWorking;
+    //  ⚠ **시계가 이 변경의 전부다.** pane 추정은 관측할 때마다 lastActive 를 지금으로 밀어 올린다(sessions.ts
+    //   `if (busy || shellWorking) lastBusy = nowSec`) — idleSince 로 재면 상한이 **영영 안 선다**(실측 AI 로그인 자리 셋의
+    //   lastActive 가 전부 0분). 그래서 상한이 걸린 세션은 사람 신호(lastAttached·lastViewed)로 재고, lastActive 는 pane 추정이
+    //   밀지 않았을 때만 더한다 — 승인 대기는 lastActive 를 안 밀므로(phase.ts isActivityProgress) 그 값이 «일이 멈추고 대기가
+    //   시작된 시각» 이다. 막 뜬 다이얼로그를 «사람이 오래 안 봤다» 로 걷지 않는다(#1221 이 지키던 것).
+    //  ⚠ ②·⑤ 도 이 시계로 본다 — ② 를 idleSince 로 두면 탭이 붙은(유령 포함) pane 추정 세션은 lastActive 가 늘 지금이라
+    //   ③ 까지 오지도 못한다(적대검토 지적). 상한은 ③ 을 열 뿐 ⑤ 를 대신하지 않는다(TTL 보다 짧게 잘못 잡은 역전 방지).
+    //  ⚠ 시계가 없으면(열람·활동·생성 전부 0) 존중한다 — 모르면 안 죽인다(② 의 #15 와 같은 교리).
+    const clock = capped
+      ? (Math.max(s.lastAttached || 0, s.lastViewed || 0, paneWorking ? 0 : (s.lastActive || 0)) || s.created || 0)
+      : idleSince;
     // ② 누가 보는 중 — **다만 무기한은 아니다**(#2148).
     //  attach 는 '지금 보는 중'을 뜻하지만 그 신호가 거짓일 수 있다: 원격 tmux 에서는 웹 탭이 재연결할 때마다
     //  옛 클라이언트가 안 끊겨 쌓이고, 그러면 `attached>0` 이 영구히 참이 되어 **회수가 영원히 멈춘다**
@@ -169,7 +213,7 @@ export function pickReapCandidates(o: {
     //  같은 교리가 테넌트 축엔 이미 있다(#1445 attach_idle_ttl_min) — 세션 축만 예외로 남아 있었다.
     if (s.attached) {
       const attachCutoffSec = nowSec - attachTtlMin * 60;
-      if (attachTtlMin <= 0 || !idleSince || idleSince > attachCutoffSec) { reasons.attached++; continue; }
+      if (attachTtlMin <= 0 || !clock || clock > attachCutoffSec) { reasons.attached++; continue; }
     }
     // ③ 작업/대기 중 — **접속 여부와 무관한 `working` 을 함께 본다.** agentState 는 attached==0 이면 busy 여도
     //  offline 이 되므로(탭=온라인 규칙), 그 값만 보면 **아무도 안 붙은 채 크론·빌드가 도는 세션이 '작업 중'으로
@@ -177,7 +221,8 @@ export function pickReapCandidates(o: {
     //  #1221 — `awaiting`(접속 무관 '승인 대기')도 함께 본다. working 을 도입할 때 busy 만 구제하고 waiting 은
     //  남겨 둬서, **탭을 닫아 둔 채 승인 다이얼로그가 떠 있는 세션은 여전히 회수 대상**이었다(agentState 가
     //  offline 으로 덮이고 working=false). 그걸 죽이면 사람이 내리려던 결정이 통째로 사라진다.
-    if (s.working || s.awaiting || s.agentState === "busy" || s.agentState === "waiting") { reasons.working++; continue; }
+    //  #3894 — 상한이 걸린 세션(capped)만, 사람이 그 상한 넘게 안 봤을 때 여기를 통과한다(판정 재료는 위).
+    if (guarded && (!capped || !clock || clock > nowSec - busyTtlMin * 60)) { reasons.working++; continue; }
     // ⑤ idle 판정 = **마지막 활동 시각** — 세 축의 최대값을 쓴다.
     //   · lastActive(@box_last_busy): AI 가 돈 시각. busy 관측 기반이라 **대화 대기 중엔 갱신되지 않고, 셸 세션엔 아예 없다.**
     //   · lastAttached(session_last_attached): 마지막으로 탭이 붙은 시각 = **사람이 보고 있었다는 신호.**
@@ -187,8 +232,10 @@ export function pickReapCandidates(o: {
     //   된 순간, 42분 전까지 열람 중이던 세션이 'lastActive 149시간 전' 으로 판정돼 회수됐다(그 세션은 대화만 하고
     //   있어서 busy 로 관측된 적이 오래됐다). attached 는 '지금 보는 중'만 말하고 '방금까지 보고 있었다'는
     //   lastAttached 에만 있다 — 네트워크가 잠깐 끊기는 것과 방치를 가르는 유일한 신호다.
-    if (!idleSince || idleSince > cutoffSec) { reasons.recent++; continue; }  //   TTL 미만 = 최근 → 보존
-    candidates.push({ id: s.id, idleSince });
+    //  ⚠ ③ 의 상한을 넘겨 온 세션도 여기서 **같은 시계로** 다시 본다 — 상한은 ③ 을 열 뿐 ⑤ 를 대신하지 않는다
+    //   (busy_idle_minutes 를 TTL 보다 짧게 잘못 잡았을 때의 역전을 막는다 · ② 의 #12 와 같은 규율).
+    if (!clock || clock > cutoffSec) { reasons.recent++; continue; }  //   TTL 미만 = 최근 → 보존
+    candidates.push({ id: s.id, idleSince: clock });
   }
   return candidates;
 }
@@ -376,6 +423,7 @@ export async function reapIdleSessions(deps?: ReapSources): Promise<ReapResult> 
     live, restorable, managedIds, nowSec,
     cutoffSec: nowSec - ttlMin * 60,
     attachTtlMin: policy.attach_idle_minutes ?? 0,
+    busyTtlMin: policy.busy_idle_minutes ?? 0,
     reasons,
   });
   // ⑥ 하네스가 띄운 작업이 도는 세션은 뺀다(#2652). **후보가 나온 뒤에만** 프로세스를 본다 — 평시엔 후보가
@@ -394,7 +442,8 @@ export async function reapIdleSessions(deps?: ReapSources): Promise<ReapResult> 
       logger.warn({ err: e, id: c.id }, "session-reaper: 회수 실패(계속)");
     }
   }
-  const skipped = reasons.managed + reasons.noState + reasons.attached + reasons.working + reasons.recent + reasons.failed + reasons.jobs;
+  const skipped = reasons.managed + reasons.noState + reasons.attached + reasons.working + reasons.recent + reasons.failed + reasons.jobs
+    + reasons.unobserved;
   // 정책이 켜져 있으면 **매 tick** 남긴다(회수 0건도) — 5분에 한 줄이고, 이 한 줄이 없으면 "왜 아무것도 안 죽었나"를
   //  박스에서 추측으로 파야 한다. noState 가 크면 백필(session-state-backfill)이 필요하다는 신호다.
   //  ⚠ **무엇을 걷었는지(id)도 남긴다**(#2652) — 종전엔 개수뿐이라, 사라진 세션의 주인이 «왜 회수됐나»를 물으면
@@ -621,6 +670,7 @@ export async function reapPressureSessions(deps?: PressureReapDeps): Promise<Pre
           //  압박이면 **완화 TTL**로 갈아탄다 — 다만 "방금까지 쓰던 세션"은 그래도 안 건드린다(그 하한선이 이 값이다).
           cutoffSec: nowSec - (policy.pressure_idle_minutes ?? 0) * 60,
           attachTtlMin: policy.attach_idle_minutes ?? 0,
+          busyTtlMin: policy.busy_idle_minutes ?? 0,
           reasons,
         });
         scanned += live.length;
@@ -659,7 +709,7 @@ export async function reapPressureSessions(deps?: PressureReapDeps): Promise<Pre
 
   const participating = perWorkspace.filter((w) => w.participated).length;
   if (all.length === 0) {
-    const skipped = reasons.managed + reasons.noState + reasons.attached + reasons.working + reasons.recent + reasons.jobs;
+    const skipped = reasons.managed + reasons.noState + reasons.attached + reasons.working + reasons.recent + reasons.jobs + reasons.unobserved;
     logger.info({ usedPct, swapPct, workspaces: workspaces.length, participating, scanned, skipped, skipReasons: reasons, perWorkspace },
       "session-reaper tick(압박 회수 — 걷을 후보 없음)");
     //  ⚠ `perWorkspace` 를 반드시 함께 돌려준다 — «왜 한 건도 안 걷었나»의 답이 전부 여기 있다.
@@ -707,7 +757,7 @@ export async function reapPressureSessions(deps?: PressureReapDeps): Promise<Pre
   //  (hidepid 로 남의 uid /proc 를 못 읽는 격리 박스가 정확히 이 모양이 된다 — 이 기능이 노리는 바로 그 환경).
   const rssMeasured = all.some((c) => c.rssMb > 0);
   const skipped = reasons.managed + reasons.noState + reasons.attached + reasons.working + reasons.recent
-    + reasons.failed + reasons.target + reasons.cap + reasons.jobs;
+    + reasons.failed + reasons.target + reasons.cap + reasons.jobs + reasons.unobserved;
   //  ⚠ 압박 회수는 **사후 추적이 특히 중요하다** — 사용자에겐 "세션이 사라졌다"로 보이므로, 무엇을 왜 걷었는지가
   //   로그에 없으면 #1220 이 고치려던 그 상황(earlyoom 이 죽였는데 아무도 몰라 '회수'로 오인)을 우리가 재현한다.
   //   ⓘ 그 주석을 적어 놓고 **정작 id 는 안 남기고 있었다**(#2652 실측: 사라진 세션의 주인이 물었을 때, 답을

@@ -125,6 +125,25 @@ export function isPhaseFresh(r: { at: number } | null, nowSec: number): boolean 
   return !!r && r.at <= nowSec + 60 && nowSec - r.at <= PHASE_TTL_SEC;
 }
 
+/**
+ * #3894 — **하네스가 스스로 말하는 작업 중**인가. 회수 상한(busy_idle_minutes)이 «pane 포그라운드 추정» 과 가르는 값이다.
+ *
+ *  ⚠ 왜 observeAgentRun 의 busy·보고와 따로 재나: 그 둘은 offline 에 묶여 있다. **셸 하네스 세션은 늘 offline** 이라,
+ *   그 안에서 `lively run` 으로 도는 AI 의 스피너·훅 busy 는 버려지고 pane 포그라운드 추정(shellWorking)만 남는다.
+ *   회수 상한은 그 추정에만 걸리므로, 거기서 버리면 살아 있는 AI 를 «사람이 안 봤다» 로 걷게 된다 — 그래서 하네스 종류와
+ *   무관하게 잰다. (같은 날 적대검토가 잡은 더 큰 모양 — tmux 표식이 빈 claude 세션이 exited·working 으로 보이던 것 — 은
+ *   #3892 가 관측을 해소된 하네스로 옮겨 닫았다. 이 판정은 그 수정과 무관하게 성립한다.)
+ *  · 스피너 — 포그라운드가 **셸이 아닐 때만** 센다. 셸이면 그 글리프는 끝난 하네스가 남긴 제목일 수 있다(busy 가 offline 을
+ *    보는 것과 같은 이유다).
+ *  · 훅 보고 — 신선한(PHASE_TTL_SEC 안) busy 만 센다. 만료가 있어 멈춘 보고가 영구 보호가 되지 않는다.
+ */
+export function harnessReportsBusy(i: {
+  paneCmd: string; paneTitle: string; reported: { phase: ReportedPhase; at: number } | null; nowSec: number;
+}): boolean {
+  if (!SHELL_CMDS.has((i.paneCmd || "").trim()) && isSpinning(i.paneTitle)) return true;
+  return isPhaseFresh(i.reported, i.nowSec) && i.reported?.phase === "busy";
+}
+
 // 실행 단계 판정 — **보고와 스크래핑 두 출처의 우선순위표**. 순수 함수라 표 자체를 테스트로 못박는다.
 //  ⚠ 지금은 보고가 스크래핑을 **덮지 않고 더한다**(3·4번 규칙이 살아 있다). 훅 배선이 전 세션에 퍼지기 전까진
 //   보고가 없는 세션(구 세션·incognito=LIVELY_OFF·훅 비활성)이 남고, 그 세션들은 종전 판정 그대로여야 하기 때문이다.

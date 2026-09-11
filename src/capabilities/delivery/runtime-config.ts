@@ -258,6 +258,13 @@ export const runtimeConfigCapabilities: Capability[] = [
           if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.attach_idle_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=attach 를 무기한 존중)`);
           patchIn.attach_idle_minutes = Math.floor(n);
         }
+        // #3894 작업 중·승인 대기 보호의 상한 — 스스로 증명 못 하는 ③(승인 대기·셸 추정 작업)을 사람이 이 시간 넘게
+        //  안 봤으면 존중하지 않는다(0=끔, 종전 동작). ⚠ 위 attach 와 같은 함정: 여기와 아래 zod 둘 다에 있어야 값이 산다.
+        if (s.busy_idle_minutes !== undefined) {
+          const n = Number(s.busy_idle_minutes);
+          if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.busy_idle_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=작업 중·승인 대기를 무기한 존중)`);
+          patchIn.busy_idle_minutes = Math.floor(n);
+        }
         // #2509 전역 압박 회수 — 순번·상한·여유. 압박 축은 박스 전역이라 «누구부터 걷나»가 새로 생긴 질문이고,
         //  그 답을 코드에 박지 않고 여기로 뺐다(운영 대시보드에서 워크스페이스마다 조절).
         //  ⚠ 위 두 축과 같은 함정: 이 블록과 아래 zod **둘 다**에 있어야 값이 살아남는다.
@@ -651,11 +658,12 @@ export const runtimeConfigCapabilities: Capability[] = [
         per_session_request_mb: z.number().int().min(0).max(1_048_576).optional().describe("세션당 스케줄링 예약치(MB) — 노드에 자리를 얼마나 차지하는 것으로 칠지. 0=미설정(심사가 MemoryMax 를 그대로 쓴다). 캡은 폭주 상한이라 크게 잡아야 하는데 그 값으로 배치를 심사하면 노드가 놀면서도 새 세션을 거절한다 — 실사용 기준으로 이 값을 따로 둔다(k8s requests/limits 와 같은 분리). MemoryMax 이하여야"),
       }).optional().describe("per-session cgroup 메모리 격리(#1059 D) — 세션당 MemoryHigh/Max(MB) + 스케줄링 예약치(#2120). 0=무제한(무회귀). 캡을 걸면 세션이 box-cgspawn scope 로 격리돼 폭주 세션만 OOM-kill·박스 생존"),
       session_reclaim_policy: z.object({
-        idle_ttl_minutes: z.number().int().min(0).max(43_200).optional().describe("이 분(minute)을 넘게 idle 인 세션을 자동 회수. 0=끔(무회귀). managed·attached·busy·waiting 은 항상 제외"),
+        idle_ttl_minutes: z.number().int().min(0).max(43_200).optional().describe("이 분(minute)을 넘게 idle 인 세션을 자동 회수. 0=끔(무회귀). managed 는 항상 제외 · attached 는 attach_idle_minutes, 승인 대기·셸 작업은 busy_idle_minutes 를 켜기 전까지 제외 · 하네스가 말하는 작업 중은 항상 제외"),
         pressure_used_pct: z.number().int().min(RECLAIM_PRESSURE_PCT_MIN).max(RECLAIM_PRESSURE_PCT_MAX).optional().describe("메모리 사용률이 이 %를 넘으면 평시 TTL 을 기다리지 않고 회수(#1220). 0=끔. RSS 큰 세션부터 걷고 임계 밑으로 내려가면 멈춘다. ⚠ 상한이 earlyoom 발동선(94%)보다 낮게 잡혀 있다(#1675 ⑤) — 그 위 값은 earlyoom 이 먼저 죽여 영영 발동하지 못한다"),
         pressure_idle_minutes: z.number().int().min(0).max(43_200).optional().describe("압박 회수가 쓰는 완화 idle 기준(분) — 압박이어도 이보다 최근에 쓴 세션은 안 건드린다. 평시 TTL 보다 짧게(예: 평시 1440·압박 60)"),
         pressure_swap_pct: z.number().int().min(RECLAIM_PRESSURE_PCT_MIN).max(RECLAIM_SWAP_PCT_MAX).optional().describe("스왑 사용률이 이 %를 넘으면 압박으로 보고 회수(#1675 ⑤). 0=끔. 물리 메모리가 여유로워 보여도 스왑이 차 있으면 그 박스는 이미 벼랑이다 — 전면장애 실측이 물리 82%·스왑 99.9% 였다. earlyoom 은 -s 100 으로 스왑을 안 보므로 이 축은 경합 없이 게이트웨이가 먼저 잡는다"),
         attach_idle_minutes: z.number().int().min(0).max(43_200).optional().describe("탭이 붙어 있어도(attached>0) 이 분을 넘게 입출력이 없으면 회수(#2148). 0=끔(attach 를 무기한 존중, 종전 동작). idle_ttl_minutes 보다 길게 잡아라. 원격 tmux 에서 재연결 잔재가 attached 를 영구 참으로 만들면 회수가 영영 멈추는데, 그 안전망이다"),
+        busy_idle_minutes: z.number().int().min(0).max(43_200).optional().describe("승인 대기·셸 작업으로 보이는 세션도 사람이 이 분을 넘게 안 봤으면 회수(#3894). 0=끔(무기한 존중, 종전 동작). 하네스가 스스로 말하는 작업 중(스피너·훅·app-server)에는 걸리지 않는다. attach_idle_minutes 보다 길게 잡아라. 승인 다이얼로그가 방치되거나 pane 포그라운드 추정이 «실행 중» 으로 굳으면 회수가 영영 멈추는데, 그 안전망이다"),
         pressure_priority: z.number().int().min(RECLAIM_PRIORITY_MIN).max(RECLAIM_PRIORITY_MAX).optional().describe("전역 압박 회수에서 이 워크스페이스의 순번 — 낮을수록 먼저 걷힌다(#2509). 기본 100. 압박 축은 박스 전역이라(물리·스왑은 워크스페이스마다 다르지 않다) 임계를 넘으면 회수가 박스 단위로 한 번 돈다 — 그때 «어느 워크스페이스부터»를 정하는 값이다. 실서비스 200 · 개발용 50 처럼 두면 개발용이 먼저 걷힌다. ⚠ 참가 여부가 아니다(그건 pressure_used_pct/pressure_swap_pct 가 정한다). 전부 같으면 순수 RSS 내림차순"),
         pressure_max_reap: z.number().int().min(RECLAIM_MAX_REAP_MIN).max(RECLAIM_MAX_REAP_MAX).optional().describe("한 tick 에 이 워크스페이스에서 걷을 최대 세션 수(#2509). 0=무제한(기본). 회수는 되돌릴 수 없어 폭발반경 상한이 필요하다 — RSS 측정 실패로 목표 판정이 영영 안 서는 경우가 실제로 있는데, 그때 한 워크스페이스를 통째로 비우지 않게 막는다"),
         pressure_release_margin_pct: z.number().int().min(RECLAIM_RELEASE_MARGIN_MIN).max(RECLAIM_RELEASE_MARGIN_MAX).optional().describe("압박 회수의 정지 여유(%p) — 임계보다 이만큼 더 내려갈 때까지 걷는다(#2509). 0=종전(임계 바로 밑에서 정지). 정지선이 임계에 붙어 있으면 회수 직후 다음 tick 이 또 발동해 세션이 계속 걷힌다 — 히스테리시스다. ⚠ 임계를 낮추는 것과 다르다: 발동은 원래 임계로 하고 정지만 더 내려간다"),
