@@ -2993,21 +2993,30 @@ async function giveUpReconnect() {
 }
 
 /** 포기 상태의 유일한 출구. 터미널 내용은 지우지 않는다 — 마지막 출력이 사용자에게 가장 필요한 정보다. */
-function showRetryBar() {
+export function showRetryBar() {
   if (document.getElementById('retry-bar')) return;
   const bar = el('div', { class: 'ended-bar', id: 'retry-bar' },
     el('span', { text: '서버에 연결하지 못했습니다. 네트워크나 게이트웨이 상태를 확인한 뒤 다시 시도해 주세요.' }),
     el('button', {
       class: 'gate-retry', text: '다시 시도',
       onclick: () => {
-        const b = document.getElementById('retry-bar');
-        if (b && b.parentNode) b.parentNode.removeChild(b);
+        hideRetryBar();
         gaveUp = false; attempts = 0; reconnectDelay = 1500; offlineTries = 0;
         connectNow();
       },
     }));
-  const root = document.getElementById('root');
-  if (root) root.insertBefore(bar, root.firstChild);
+  // ⚠ 배너는 반드시 `#main`(세로 flex) 안, 터미널 판(#panes) 바로 위에 넣는다 — 종료 배너(showEndedBar)와 같은 자리.
+  //  종전엔 `#root` 맨 앞(= `#ws` 의 형제)에 넣었는데, `#ws` 는 `height: 100dvh` 고정이라 배너 높이만큼 전체가
+  //  화면보다 커지고 body 의 overflow:hidden 에 **터미널 아래(입력줄)가 잘렸다**(#3870 원준님 실측 2026-09-11 —
+  //  «일부 안내문이 떠 있으면 화면이 아래로 밀린다»). #main 안이면 #panes(flex:1·min-height:0)가 그만큼 줄고 #term-host 의 ResizeObserver 가 xterm 을 다시 맞춘다.
+  const main = document.getElementById('main');
+  if (main && panesEl && panesEl.parentNode === main) main.insertBefore(bar, panesEl);
+  else { const root = document.getElementById('root'); if (root) root.insertBefore(bar, root.firstChild); }
+}
+/** 포기 배너 걷기 — 포기 상태(gaveUp)가 풀리는 곳에서 같이 부른다. 판 크기 변화는 #term-host 의 ResizeObserver 가 받아 xterm 을 다시 맞춘다. */
+export function hideRetryBar() {
+  const b = document.getElementById('retry-bar');
+  if (b) b.remove();
 }
 // 세션 종료 확정(#835) — 재연결을 멈추고 '닫힘'을 명시한다. 게이트로 화면을 덮지 않는 이유: 마지막 출력이
 //  사용자에게 가장 필요한 정보다(무슨 일이 있었는지 읽고 복사해야 한다). 그래서 터미널은 그대로 두고
@@ -3216,6 +3225,7 @@ async function connectNow() {
   sock.onopen = () => {
     dlog('ws', 'open');
     connecting = false; wasConnected = true; reconnectDelay = 1500; denyRetries = 0; attempts = 0; gaveUp = false; // 붙었으면 입장 허용 확정 → 거부·포기 카운트 리셋
+    hideRetryBar(); // #3870 — 포기가 풀리는 이 자리에서 «연결하지 못했습니다» 배너도 걷는다(상단은 '연결됨'인데 배너가 남아 화면을 밀던 것)
     syncedThisConn = false; // 이 연결에서 재접속 상태동기(t:'st')를 아직 안 보냄
     nudgeTries = 0; needBackfill = !didBackfill; wantRedrawCap = false; // 넛지 상한·백필/재캡처 대기는 '연결 단위'
     lastKnownState = null;  // 백엔드·팬 상태는 이 연결에서 다시 관측한다(옛 연결 사본으로 캡처를 판정하지 않는다)
