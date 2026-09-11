@@ -31,11 +31,19 @@ test("① 전부 있음 — 이름·일·서랍·자료·수집기·AI 가 실�
 
 test("② 빈 상태 — 서랍·자료·수집기 0, 첫 지시 없음 → 사실대로 + 다음 트리거 '자료가 들어오면'", () => {
   const p = buildFirstTurnPrompt(base({ drawers: [], categories: [], uploads: empty, collectors: [], firstOrder: null }));
-  assert.match(p, /서랍: 아직 없음/);
+  assert.match(p, /카테고리: 아직 없음 — 다음 작업\(증류\)에서 리브가 자료를 읽고 만든다/);
   assert.match(p, /올린 자료: 없음/);
   assert.match(p, /연결한 자료 가져오기: 없음/);
   assert.match(p, /첫 지시: \(고르지 않음\)/);
-  assert.match(p, /\*\*자료가 들어오면 증류 작업/);
+  assert.match(p, /\*\*자료가 들어오면 증류 작업\(카테고리를 만들고/);
+});
+
+//  (#1631, 2026-09-11) 처음 설정에는 서랍을 고르는 자리가 없다(PR#638 이 문답을 걷어냈다) — 카테고리는 2턴에서 리브가 만든다.
+//   1턴이 «서랍을 아직 안 골랐다» 고 짚으면 사람에게 없는 할 일을 준다.
+test("②′ 서랍을 고르라고 하지 않는다 — 카테고리는 다음 작업에서 리브가 만든다", () => {
+  const p = buildFirstTurnPrompt(base({ drawers: [], categories: [], uploads: empty, collectors: [], firstOrder: null }));
+  assert.doesNotMatch(p, /나중에 고를게요/);
+  assert.doesNotMatch(p, /서랍을 아직 안 골랐다/);
 });
 
 test("③ 이름을 건너뛴 사람 — 이름을 지어 부르지 말라고 못박고 이름을 내지 않는다", () => {
@@ -87,7 +95,8 @@ test("⑧ 꺼진 수집기 — '꺼짐' 표시, 켜짐 수에서 제외", () => 
 
 test("⑨ 금지 구획은 입력과 무관하게 항상 들어간다", () => {
   const p = buildFirstTurnPrompt(base({ collectors: [], uploads: empty, drawers: [], displayName: null, work: null }));
-  assert.match(p, /수집기·증류기·지식을 \*\*만들지 마라\.\*\*/);
+  //  카테고리도 1턴에서는 만들지 않는다(#1631) — 2턴이 자료를 읽은 뒤 만든다. 온보딩 답만 보고 찍어내면 틀에 박힌다.
+  assert.match(p, /카테고리·수집기·증류기·지식을 \*\*만들지 마라\.\*\*/);
   assert.match(p, /질문하지 마라/);
   assert.match(p, /\*\*턴을 끝내라\.\*\*/);
   assert.match(p, /다시 조회하지 마라/);

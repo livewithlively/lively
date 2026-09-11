@@ -83,6 +83,9 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
       logger.info({ member: c.id, session: sid, reason: d.reason }, "리브 2턴 — 포기");
       out.gaveUp++; continue;
     }
+    //  일하는 형태·직무(#1631) — 2턴이 카테고리를 만들 재료다(자료가 0건이면 이것뿐이다). 후보 행에는 welcome 만 있어 따로 읽는다.
+    //   못 읽어도 2턴은 쏜다 — 지시문에 «없음» 으로 실린다.
+    const work = await withTenant(tenant, () => getLivProfile(c.id)).then((p) => p?.work?.asis ?? null).catch(() => null);
     //  ★ reopen(#1631) — 세션이 사라졌지만 **일은 남아 있다.** 새 창구를 열고 2턴 지시를 그 첫 지시로 넣는다.
     //   실측 2026-08-31(dev): 1턴을 성공으로 끝낸 리브 세션이 수집 대기 20분 사이에 사라졌고, 종전 코드는 그 자리에서
     //   영구 포기해 그 사람의 증류기 15개가 영원히 꺼진 채 남았다(온보딩 완주 → 지식 0건).
@@ -92,6 +95,7 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
       const done0 = Date.parse(String(c.welcome.done_at));
       const prompt0 = buildSecondTurnPrompt({
         displayName: c.display_name,
+        work,
         drawers: c.welcome.drawers ?? [],
         firstOrder: c.welcome.first_order ?? null,
         collectors: collectors.map((x) => ({ label: x.label, preset_key: x.preset_key, enabled: x.enabled, ran: !!x.lastRunAt && Date.parse(x.lastRunAt) > done0 })),
@@ -127,6 +131,7 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
     const done = Date.parse(String(c.welcome.done_at));
     const prompt = buildSecondTurnPrompt({
       displayName: c.display_name,
+      work,
       drawers: c.welcome.drawers ?? [],
       firstOrder: c.welcome.first_order ?? null,
       collectors: collectors.map((x) => ({ label: x.label, preset_key: x.preset_key, enabled: x.enabled, ran: !!x.lastRunAt && Date.parse(x.lastRunAt) >= done })),
