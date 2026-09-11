@@ -99,7 +99,8 @@ async function main() {
     try { cc?.stdin.end(); } catch { /* 이미 닫힘 */ }
     try { cc?.kill(); } catch { /* 이미 종료 */ }
     if (created) result.cleanup = await run(["kill-session", "-t", SID]);   // 이 하네스가 만든 세션만
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 임시폴더 */ }
+    await sleep(500);   // 리더가 로그 파일을 놓을 때까지 — 윈도우는 열린 파일이 든 폴더를 못 지운다
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 임시폴더 — 남아도 판정과 무관 */ }
   };
 
   try {
@@ -151,49 +152,73 @@ async function main() {
         await sleep(2);
       }
     };
-    const viaStream = async (name, lines, text, { product = true } = {}) => {
-      const idx = readLog().length;
+    // 한 번 보낸 것의 도착분 — 조용해질 때까지(300ms) 모은다. 콘솔(ConPTY)이 제어 바이트를 바꿔 넘길 수 있어서
+    //  기대 길이로 끊지 않는다(바뀐 길이면 시간초과까지 기다리거나 일찍 끊긴다).
+    const collect = async (fromIdx, timeoutMs = 4000) => {
       const t0 = Date.now();
-      for (const l of lines) write(l);
-      const r = await expectBytes(idx, utf8hex(text));
-      result.cases.push({ name, product, surface: "stream", lines, ok: r.ok, want: utf8hex(text), got: r.got, ms: r.last ? r.last - t0 : null });
+      for (;;) {
+        const rows = readLog().slice(fromIdx);
+        const quiet = rows.length > 0 && Date.now() - rows.at(-1).t > 300;
+        if (quiet || Date.now() - t0 > timeoutMs) return { got: rows.map((r) => r.hex).join(""), last: rows.at(-1)?.t ?? null };
+        await sleep(20);
+      }
+    };
+    // 판정 기준 = **종전 경로가 넘기던 것과 같은가**(CLI 프로세스 = #3904 이전 한글 경로) + 유니코드는 UTF-8 그대로인가.
+    //  콘솔이 제어 바이트를 바꿔 넘기는 일이 있어도 두 경로가 똑같이 바뀌면 이 변경의 회귀가 아니다.
+    const compare = async (name, text, { product }) => {
+      let idx = readLog().length;
+      const cliRun = await run(["send-keys", "-t", SID, ...tokens(text)]);
+      const cli = await collect(idx);
+      await sleep(150);
+      idx = readLog().length;
+      for (const l of probeLines(SID, text)) write(l);
+      const stream = await collect(idx);
+      await sleep(150);
+      const want = utf8hex(text);
+      const same = stream.got === cli.got;
+      const exact = stream.got === want;
+      result.cases.push({ name, product, lines: probeLines(SID, text).map((l) => l.slice(0, 120)), ok: product ? same && exact : same, same, exact, want, cliGot: cli.got, streamGot: stream.got, cliErr: cliRun.err });
       save();
-      await sleep(120);
-      return r.ok;
     };
 
     // 관측 장치 배선 — 이게 안 되면 이하 전부 '빈 델타'로 무의미하다
-    if (!(await viaStream("배선 확인('.')", probeLines(SID, "."), ".", { product: false }))) throw new Error("리더 배선 실패 — '.' 이 pane 에 안 닿았다");
-
-    // ── 정확성(제품 형식) ──
-    const productCases = [
-      ["ASCII", "abc"],
-      ["한글", "한글"],
-      ["이모지(BMP 밖)", "🚀"],
-      ["경계 U+00FF", "ÿ"],
-      ["경계 U+0100", "Ā"],
-      ["혼합 + Enter", "a한 b\r"],
-      ["Tab·ESC[A·BS", "\t\x1b[A\x7f"],
-      ["제어문자 0x01~0x1f(0x03 제외)", Array.from({ length: 31 }, (_, i) => String.fromCharCode(i + 1)).filter((c) => c !== "\x03").join("")],
-    ];
-    for (const [name, text] of productCases) await viaStream(name, probeLines(SID, text), text);
     {
       const idx = readLog().length;
-      for (const s of ["가", "나", "다"]) for (const l of probeLines(SID, s)) write(l);   // 조합 확정이 음절마다 따로 오는 모양
-      const r = await expectBytes(idx, utf8hex("가나다"));
-      result.cases.push({ name: "한글 음절 3줄 연속", product: true, surface: "stream", ok: r.ok, want: utf8hex("가나다"), got: r.got });
-      save();
+      for (const l of probeLines(SID, ".")) write(l);
+      const r = await expectBytes(idx, utf8hex("."));
+      if (!r.ok) throw new Error("리더 배선 실패 — '.' 이 pane 에 안 닿았다");
+      await sleep(150);
     }
 
-    // ── 비교군(판정 대상 아님 — 원인 재현·종전 경로) ──
-    await viaStream("옛 줄 형식 한글(-N 없음 = 합치기 경로. 3.3.7 이면 깨져야 원인 재현)", [`send-keys -t ${SID} ${tokens("한글").join(" ")}`], "한글", { product: false });
+    // ── [제품] 이번에 형식이 바뀐 줄(0xff 초과 토큰 → `-N 1` 제어 스트림) ──
+    await compare("한글", "한글", { product: true });
+    await compare("이모지(BMP 밖)", "🚀", { product: true });
+    await compare("경계 U+0100", "\u0100", { product: true });
+    await compare("혼합 + 공백 + Enter", "a한 b\r", { product: true });
+    await compare("한글 + Tab + 방향키(ESC[A)", "한\t\x1b[A", { product: true });
+    await compare("한글 600자(청크 두 줄)", "가".repeat(600), { product: true });
     {
       const idx = readLog().length;
-      const r0 = await run(["send-keys", "-t", SID, ...tokens("한글")]);
-      const r = await expectBytes(idx, utf8hex("한글"));
-      result.cases.push({ name: "종전 한글 경로(CLI 프로세스)", product: false, surface: "cli", ok: r.ok, want: utf8hex("한글"), got: r.got, err: r0.err });
+      for (const s of ["가", "나", "다"]) for (const l of probeLines(SID, s)) write(l);   // 조합 확정이 음절마다 따로 오는 모양 — 순서
+      const r = await collect(idx);
+      result.cases.push({ name: "한글 음절 3줄 연속(순서)", product: true, ok: r.got === utf8hex("가나다"), want: utf8hex("가나다"), streamGot: r.got });
       save();
-      await sleep(120);
+      await sleep(150);
+    }
+
+    // ── [비교] 형식이 안 바뀐 줄(0xff 이하만) — 종전 경로와 같은지만 본다 ──
+    await compare("ASCII", "abc", { product: false });
+    await compare("경계 U+00FF", "\u00ff", { product: false });
+    await compare("Tab·ESC[A·DEL", "\t\x1b[A\x7f", { product: false });
+    await compare("제어문자 0x01~0x1f(0x03 제외)", Array.from({ length: 31 }, (_, i) => String.fromCharCode(i + 1)).filter((c) => c !== "\x03").join(""), { product: false });
+    {
+      // 원인 재현 — 합치기를 타는 옛 줄 형식(-N 없음). 3.3.7 서버면 UTF-8 이 두 번 인코딩돼 도착해야 한다.
+      const idx = readLog().length;
+      write(`send-keys -t ${SID} ${tokens("한글").join(" ")}`);
+      const r = await collect(idx);
+      result.cases.push({ name: "원인 재현: 옛 줄 형식 한글(-N 없음 — 3.3.7 이면 깨져야 정상)", product: false, ok: r.got === utf8hex("한글"), want: utf8hex("한글"), streamGot: r.got });
+      save();
+      await sleep(150);
     }
 
     // ── 지연: 보낸 순간 → pane 이 받은 순간(리더가 적은 시각) ──
@@ -222,9 +247,18 @@ async function main() {
     result.latency = { cliHangul: stats(lat.cliHangul), cliProcessExit: stats(lat.cliProcessExit), streamHangul: stats(lat.streamHangul), streamAscii: stats(lat.streamAscii), raw: lat };
     save();
 
-    // Ctrl-C 는 맨 끝에 — 리더를 죽일 수 있어서(그러면 뒤 측정이 전부 빈다). 죽었는지도 따로 잰다.
-    await viaStream("Ctrl-C(0x03)", probeLines(SID, "\x03"), "\x03");
-    result.readerAliveAfterCtrlC = await viaStream("Ctrl-C 뒤 리더 생존('.')", probeLines(SID, "."), ".", { product: false });
+    // Ctrl-C 는 맨 끝에 — 리더를 죽일 수 있어서(그러면 뒤 측정이 전부 빈다). 형식이 안 바뀐 줄이라 [비교]로만 남긴다.
+    {
+      let idx = readLog().length;
+      for (const l of probeLines(SID, "\x03")) write(l);
+      const r = await collect(idx);
+      result.cases.push({ name: "Ctrl-C(0x03)", product: false, ok: r.got === "03", want: "03", streamGot: r.got });
+      await sleep(150);
+      idx = readLog().length;
+      for (const l of probeLines(SID, ".")) write(l);
+      result.readerAliveAfterCtrlC = (await expectBytes(idx, utf8hex("."))).ok;
+      save();
+    }
   } catch (e) {
     result.error = String(e?.stack || e);
   } finally {
@@ -236,7 +270,10 @@ async function main() {
   const productCases = result.cases.filter((c) => c.product);
   const allOk = !result.error && productCases.length > 0 && productCases.every((c) => c.ok);
   console.log(`\npsmux 입력 하네스 — bin ${result.bin} (${result.binFrom}) · -V ${result.binVersion ?? "?"} · 잰 서버 ${result.serverVersion ?? "?"}`);
-  for (const c of result.cases) console.log(`${c.ok ? "ok  " : "FAIL"} ${c.product ? "[제품]" : "[비교]"} ${c.name}${c.ok ? "" : `  want=${c.want} got=${c.got}`}`);
+  for (const c of result.cases) {
+    const detail = c.ok ? "" : `  want=${c.want} stream=${c.streamGot}${c.cliGot !== undefined ? ` cli=${c.cliGot}` : ""}`;
+    console.log(`${c.ok ? "ok  " : "FAIL"} ${c.product ? "[제품]" : "[비교]"} ${c.name}${detail.slice(0, 400)}`);
+  }
   if (result.latency) {
     const f = (s) => (s ? `p50 ${s.p50}ms · p90 ${s.p90}ms · max ${s.max}ms (n=${s.n})` : "측정 실패");
     console.log(`\n지연(보냄→pane 도착)\n  종전 한글(CLI 프로세스) ${f(result.latency.cliHangul)}\n  제품 한글(제어 스트림)   ${f(result.latency.streamHangul)}\n  ASCII(제어 스트림)       ${f(result.latency.streamAscii)}`);
