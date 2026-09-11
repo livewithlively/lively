@@ -48,6 +48,10 @@ export interface SweepJob {
   readonly run: () => Promise<unknown>;
 }
 
+/** 표식 되채우기 정비 주기(#3892). 되채우기 쿨다운(`META_HEAL_COOLDOWN_MS`)과 **같은 자**다 — 더 잦으면 쿨다운에 걸려 헛돌고,
+ *  더 드물면 표식이 빈 판이 «중단됨» 으로 서 있는 창이 길어진다(그동안 사람이 보내는 말은 403 으로 막힌다). */
+export const META_HEAL_SWEEP_MS = 60_000;
+
 /** 원래 하우스키핑이 쓰던 주기 그대로 — 새 정책을 만들지 않는다(`background-sweeps` 의 setInterval 값). */
 export const TEN_MIN_MS = 10 * 60_000;
 export const SIX_HOURS_MS = 6 * 60 * 60_000;
@@ -91,6 +95,11 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 이게 없으면 그 세션들은 **회수 면역이면서 죽으면 복원도 안 된다**(고객사 A 실측: 38건 중 19건).
   { key: "session-state-backfill", intervalMs: SWEEP_MIN_INTERVAL_MS,
     run: () => import("./session-state-backfill.js").then((m) => m.backfillSessionStates()) },
+  // 표식 되채우기 — 세션 호스트 스냅샷(#3892 후속). 목록 소유가 세션 호스트로 넘어간 테넌트에선 게이트웨이 `collectSessions`
+  //  의 되채우기가 안 불린다. 호스트엔 DB 가 없어 표식(@box_owner)이 빈 판은 주인에게도 안 보이고 «중단됨» 으로 선다
+  //  (실측 2026-09-11 box-sangmin-yoon-d78e541c). ⚠ 반드시 테넌트 스코프 — 스냅샷도 DB 행도 그 테넌트로 좁혀야 한다.
+  { key: "session-meta-heal", intervalMs: META_HEAL_SWEEP_MS,
+    run: () => import("./session-meta-heal-sweep.js").then((m) => m.sweepSessionMetaHeal()) },
   // 위탁 배차(#869 P2) — **전역**이다. 실측(2026-08-31): `org_task` 3건이 queued·attempt=0·node_id 없이
   //  **3~4일** 방치돼 있었다. 크론은 도는데(CP 가 굴린다) 배차가 한 번도 안 됐다 — 그중 둘이
   //  «미분류 지식 12건 분류»·«자료 증류» 로 **맥락 파이프라인의 본체**다.

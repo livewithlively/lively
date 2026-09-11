@@ -113,6 +113,24 @@ export function needsMetaHeal(i: { harnessRaw: string; row: { owner?: string | n
   return !!i.row && !!String(i.row.owner || "").trim() && !String(i.harnessRaw || "").trim() && !String(i.managed || "").trim();
 }
 
+/**
+ * (순수) **세션 호스트 스냅샷의 한 행**을 되채울까 (#3892 후속).
+ *
+ *  ── 왜 따로 있나 ──
+ *  세션 목록 소유가 노드의 세션 호스트로 넘어간 테넌트에서는 게이트웨이가 `collectSessions` 를 안 돌려 위 판정이
+ *   불리지 않는다. 그런데 세션 호스트는 노드 프로세스라 **DB 가 없다** — 표식이 빈 판을 스스로 못 알아보고, 소유자 표식이
+ *   비어 있으니 게이트웨이 가시성 판정(`nodeSessionVisible`: 소유자·초대)에서 **주인에게도 안 보인다.** 그 사이 DB 행은
+ *   «중단됨» 으로 떠서 사람은 «살아 있는 세션이 회수됐다» 로 겪는다(실측 2026-09-11 box-sangmin-yoon-d78e541c).
+ *  그래서 스냅샷 쪽에서는 tmux 원시 하네스 대신 **행의 소유자 칸**을 표지로 쓴다 — 노드엔 DB 가 없어 그 칸이 곧
+ *   tmux `@box_owner` 이고, 모든 생성 경로가 표식 묶음의 **첫** 명령으로 박는 값이다.
+ *  ① DB 행 있음 · 소유자 있음 ② 그 행이 **박스 세션**이다(`node_id` 없음 — 멤버 PC 노드 세션의 tmux 는 게이트웨이가
+ *   칠 수 없다) ③ 스냅샷 행의 소유자가 비었다 ④ 상시세션이 아니다.
+ */
+export function needsSnapshotMetaHeal(i: { snapshotOwner: string | null | undefined; row: { owner?: string | null; node_id?: string | null } | undefined; managed: string | null | undefined }): boolean {
+  return !!i.row && !!String(i.row.owner || "").trim() && !String(i.row.node_id || "").trim()
+    && !String(i.snapshotOwner || "").trim() && !String(i.managed || "").trim();
+}
+
 /** 되채우기 쿨다운 — 실패해도(중계 끊김) 이만큼 뒤에 다시 시도한다. 성공하면 다음 폴링부터 ②가 거짓이라 더 안 나간다. */
 export const META_HEAL_COOLDOWN_MS = 60_000;
 

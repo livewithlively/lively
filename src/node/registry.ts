@@ -247,6 +247,23 @@ export function nodeSessionsInScope(now: number = Date.now()): SessionInfo[] {
 }
 
 /**
+ * 이 테넌트의 **선언된 세션 호스트**가 올린 세션 스냅샷 — 가시성 필터 없이 (#3892).
+ *
+ *  표식 되채우기 정비(`sessions/session-meta-heal-sweep.ts`) 전용이다. 세션 호스트엔 DB 가 없어 표식이 빈 판을 스스로
+ *   못 고치고, 소유자 표식이 비면 `nodeSessionsFor(viewer)` 가 주인에게서도 그 행을 거른다 — 그래서 **가시성 필터 전**을 봐야 한다.
+ *  ⚠ **선언된 호스트만**(`declaredOnly`) — 되채우기는 게이트웨이 tmux 경로로 나가는데, 그 길로 닿는 판은 매니지드 세션
+ *   컨테이너뿐이다. 멤버 PC 노드의 판은 그 컴퓨터의 tmux 에 있어 게이트웨이가 칠 수 없다.
+ *  ⚠ `nodeSessionsInScope` 를 거치지 않는다 — 그 안의 사유별 계수는 알림 스윕의 계기라 여기서 세면 숫자가 오염된다.
+ */
+export function sessionHostSnapshotSessions(now: number = Date.now()): SessionInfo[] {
+  const nodes: Array<{ declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly SessionInfo[] }> = [];
+  for (const [id, st] of inScope(states)) {
+    nodes.push({ declared: declaredSessionHost({ session_host: st.sessionHost }), online: conns.has(keyOf(id)), stateAgeMs: now - st.ts, sessions: st.sessions });
+  }
+  return nodeSnapshotSessions(nodes, STATE_STALE_MS, true);
+}
+
+/**
  * 스냅샷에서 **빠진 세션이 어느 사유로 빠졌나** 를 창 단위로 남긴다 (#3741 후속).
  *
  * ── 왜 (2026-09-09) ──────────────────────────────────────────────────────────
