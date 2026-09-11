@@ -137,6 +137,9 @@ function spawnAttachTerm(bin: string, args: string[], env: Record<string, string
 }
 
 const liveTerms = new Set<AttachTerm>();  // 이 인스턴스가 띄운 살아있는 attach 클라 — 종료 훅이 일괄 kill 한다.
+// #3905 — 끊긴 중계를 다시 붙이려고 걸어 둔 타이머(종료 훅이 한꺼번에 거둔다)와 «종료 중» 표지(아래 «끊긴 중계 흡수»).
+const pendingReattach = new Set<NodeJS.Timeout>();
+let attachShuttingDown = false;
 
 // ── 유령 attach 정리(#2148) ────────────────────────────────────────────────
 // **원격 tmux(매니지드)에서는 `term.kill()` 이 attach 클라이언트를 죽이지 못한다.**
@@ -459,8 +462,170 @@ function handleLegacyMsg(term: AttachTerm, msg: { t?: string; d?: unknown; c?: u
   }
 }
 
+// ── 끊긴 중계 흡수 (#3905) ──────────────────────────────────────────────────────
+// **무엇이 끊나.** 매니지드의 attach 는 tmux 를 직접 띄우지 않는다 — 중계(`LIVELY_TMUX_EXEC` = tmux-relay)가 노드 브로커의
+//  exec 로 세션 컨테이너 안 `tmux -CC attach` 에 스트림을 잇는다. 그 스트림은 **브로커 프로세스를 지난다.** 그래서 브로커가
+//  재기동하면(브로커가 싣는 파일을 바꾼 배포마다 전 노드) 중계가 소켓을 잃고 끝나고, 종전엔 그 끝이 곧 `ws.close()` 였다 —
+//  사람의 탭이 끊기고 브라우저 재연결 루프가 다시 붙었다.
+//  실측(2026-09-11, 세션 호스트 전 테넌트 켜기 뒤): 브로커를 재기동한 배포 두 판에서 노드 경로 attach 가 창 안 1건·2건 끊겼다.
+//  브로커 자신은 Stopping→Started 가 약 30ms 다 — **끊긴 것은 세션이 아니라 스트림 하나**다.
+//
+// **그래서 흡수한다.** 소켓(브라우저 채널)은 연 채로 두고, 같은 argv 로 attach 를 다시 띄워 **같은 채널에 잇는다.**
+//  tmux 세션은 컨테이너 안에서 멀쩡하므로 새 클라이언트가 붙을 뿐이다. 브라우저에 보이는 것은 잠깐의 멈춤이다.
+//
+// **끊김과 끝을 가르는 축은 종료코드가 아니다.** 중계는 브로커 소켓이 닫히면 exit 0 으로 끝나는데(tmux-relay.cjs 의
+//  `socket.on("close") → exit(0)`), tmux 가 스스로 끝나도 같은 0 이다. 가르는 것은 스트림이다 — tmux control 클라이언트는
+//  스스로 끝날 때(세션 종료·detach·서버 종료) 스트림에 `%exit` 를 남긴다. 끊긴 스트림에는 그게 안 온다.
+//  ⚠ `%exit` 는 **존중한다** — 누군가 의도해서 뗀 클라이언트(detach-client)를 몰래 다시 붙이면 그 의도를 우회한다.
+//
+// **브라우저 쪽 계약(web/standalone/terminal.ts makeControl) 때문에 지키는 것 셋:**
+//  ① 브라우저는 WS 연결마다 파서를 새로 만들고 도입자(`\x1bP1000p`)를 **연결 첫머리에서만** 기대한다 → 다시 붙은 스트림의
+//     도입자는 **떼고** 보낸다. 도입자 앞에 온 것(중계·tmux 의 오류 문구)은 control 스트림이 아니므로 아예 안 보낸다.
+//  ② 끊긴 스트림은 줄 중간에서 멎었을 수 있다 → 이어 붙이기 전에 줄을 닫는다(`\n`). 반쪽 줄은 그 줄만 버려진다. 반쯤 온
+//     `%begin` 블록은 브라우저가 1.5초 뒤 스스로 빠져나와 다시 그린다(blockLost) — 여기서 가짜 `%end` 를 꽂지 않는다
+//     (반쪽 캡처가 백필로 처리되면 화면·스크롤백이 지워진다).
+//  ③ **재연결 경로와 같은 복구만** 한다 — 마지막 크기(`refresh-client -C`)를 다시 보내고 팬 상태를 한 번 묻는다(`st`).
+//     백필(capture)은 안 한다: 브라우저의 백필은 화면·스크롤백을 비우고 쓰므로, 스크롤백을 지키는 것이 흡수의 이유와 어긋난다.
+//     끊긴 동안 나온 출력은 오늘의 재연결과 똑같이 놓친다 — 앱의 다음 그리기가 채운다.
+//
+// ⚠ **대상은 좁다** — control 모드 + 중계를 거치는 attach + tmux(psmux 아님)뿐이다. 로컬 tmux(셀프호스트·멤버 PC)엔 그
+//  끊김원이 없고, 첫 attach 가 control 스트림을 한 번도 못 연 경우(스폰 실패·세션 없음)는 종전대로 닫는다.
+// ⚠ **상한이 있다** — 끊김 하나에 30초·12회. 못 붙으면 종전처럼 닫는다(브라우저 재연결 루프가 받는다). 다시 붙은 스트림이
+//  10초를 못 버티고 또 끊기면 **같은 끊김**으로 센다 — 요동하는 브로커에 attach 를 끝없이 띄우지 않게.
+// ⚠ 게이트(lvly-cloud `deploy/attach-cut-probe.sh`)가 아래 두 메시지를 **글자 그대로** 센다 — 바꾸면 거기도 바꿔라.
+//  두 메시지 어디에도 «종료» 를 넣지 마라: 게이트는 `ws attach 종료` 를 부분일치로 절단으로 센다.
+export const ATTACH_ABSORBED_MSG = "ws attach 흡수";
+export const ATTACH_ABSORB_GAVE_UP_MSG = "ws attach 흡수 포기";
+export const RELAY_REATTACH_DELAYS_MS: readonly number[] = [250, 500, 1_000, 2_000, 3_000];
+export const RELAY_REATTACH_BUDGET_MS = 30_000;
+export const RELAY_REATTACH_MAX = 12;
+/** 다시 붙은 스트림이 이만큼 버틴 뒤 끊기면 **새 끊김**으로 센다(예산을 새로). 그보다 빨리 끊기면 같은 끊김의 연장이다. */
+export const RELAY_STABLE_MS = 10_000;
+/** 흡수 중(control 모드에 다시 들어서기 전) 쥐고 있을 명령 수 상한 — 붙여넣기 한 번이 512B 청크 수백 개다. */
+const CMD_QUEUE_MAX = 1_000;
+const CONTROL_INTRO = Buffer.from("\x1bP1000p", "latin1");
+const EMPTY_BUF = Buffer.alloc(0);
+const PRE_TEXT_MAX = 2_048;
+const STREAM_TAIL_MAX = 64;
+/**
+ * 다시 붙기가 **확정으로** 실패한 문구 — 세션(또는 그 컨테이너·tmux 서버)이 없다. 재시도해도 안 붙으므로 곧바로 닫는다.
+ *  · tmux: `can't find session` · `no server running` · `error connecting to <소켓>`(서버 없음)
+ *  · 중계: `attach 실패: 4xx`(exec-create 거절 — 컨테이너 없음 404·멈춤 409·권한 403) · `업그레이드되지 않음(4xx)`
+ * ⚠ 그 밖(5xx·ECONNREFUSED·ENOENT — 브로커가 아직 안 섰다)은 **일시**다. 그게 흡수가 기다리는 바로 그 창이다.
+ */
+const RELAY_DEFINITIVE_RE = /can'?t find session|no server running|error connecting to|session not found|no such session|no sessions|attach 실패: 4\d\d\b|업그레이드되지 않음\(4\d\d\)/i;
+
+export type RelayCloseReason = "not-relay" | "socket-closed" | "shutting-down" | "never-established" | "tmux-exit" | "session-gone" | "budget";
+export type RelayLossDecision = { action: "reattach"; delayMs: number } | { action: "close"; reason: RelayCloseReason };
+export interface RelayLossInput {
+  /** 이 attach 가 흡수 대상인가 — control 모드 + 중계 + tmux. */
+  absorb: boolean;
+  socketOpen: boolean;
+  shuttingDown?: boolean;
+  /** 이 attach 가 control 스트림을 한 번이라도 열었나. */
+  established: boolean;
+  /** 방금 끝난 세대의 스트림이 `%exit` 로 끝났나. */
+  sawExit: boolean;
+  /** 방금 끝난 세대가 도입자 전에 낸 문구(다시 붙기 실패의 사유). */
+  failureText: string;
+  /** 이번 끊김 뒤 이미 시도한 다시 붙기 횟수. */
+  attempts: number;
+  /** 이번 끊김이 시작된 뒤 흐른 시간. */
+  sinceLossMs: number;
+  delaysMs?: readonly number[];
+  budgetMs?: number;
+  maxAttempts?: number;
+}
+
+/**
+ * 이 끊김이 **새 끊김**인가 (순수) — 끊긴 적이 없었거나, 다시 붙은 스트림이 안정 시간 **이상** 버틴 뒤 끊겼다.
+ *  그 밖(control 스트림을 못 연 세대 · 안정 시간 전에 또 끊긴 세대)은 같은 끊김의 연장이다 — 시도·경과를 이어 센다(요동 상한).
+ */
+export function relayLossIsNew(o: { lossAt: number; sawIntroThisGen: boolean; establishedAt: number; now: number; stableMs: number }): boolean {
+  return o.lossAt === 0 || (o.sawIntroThisGen && o.now - o.establishedAt >= o.stableMs);
+}
+
+/** 끊겼다 — 다시 붙을까, 종전처럼 닫을까 (순수 — 판정표는 terminal-pty-reattach.test 가 지킨다). */
+export function relayLossDecision(o: RelayLossInput): RelayLossDecision {
+  if (!o.absorb) return { action: "close", reason: "not-relay" };
+  if (o.shuttingDown) return { action: "close", reason: "shutting-down" };
+  if (!o.socketOpen) return { action: "close", reason: "socket-closed" };
+  if (!o.established) return { action: "close", reason: "never-established" };
+  if (o.sawExit) return { action: "close", reason: "tmux-exit" };
+  if (RELAY_DEFINITIVE_RE.test(o.failureText)) return { action: "close", reason: "session-gone" };
+  if (o.attempts >= (o.maxAttempts ?? RELAY_REATTACH_MAX) || o.sinceLossMs >= (o.budgetMs ?? RELAY_REATTACH_BUDGET_MS)) {
+    return { action: "close", reason: "budget" };
+  }
+  const delays = o.delaysMs?.length ? o.delaysMs : RELAY_REATTACH_DELAYS_MS;
+  return { action: "reattach", delayMs: delays[Math.min(o.attempts, delays.length - 1)]! };
+}
+
+/**
+ * attach 한 세대(term 하나)의 control 스트림에서 흡수에 필요한 사실만 뽑는다 (순수 — 조각 경계를 시험이 친다).
+ *  · `strip=false`(첫 세대) — 바이트는 **종전 그대로** 흘리고 관찰만 한다.
+ *  · `strip=true`(다시 붙은 세대) — 도입자 전은 쥐고(안 보낸다), 도입자는 떼고, 그 뒤만 보낸다(머리말 ①).
+ */
+export class ControlStreamWatch {
+  /** 이 세대 스트림이 control 모드 도입자를 냈다. */
+  sawIntro = false;
+  private probe: Buffer = EMPTY_BUF;   // 도입자가 조각 경계에 걸칠 때를 위한 앞 조각 꼬리(도입자 길이-1 바이트까지)
+  private pre: Buffer = EMPTY_BUF;     // 도입자 전 바이트(상한 PRE_TEXT_MAX) — 다시 붙기 실패의 사유
+  private tail = "";                   // 도입자 뒤 스트림의 꼬리(latin1, 상한 STREAM_TAIL_MAX) — `%exit` 판별
+
+  constructor(private readonly strip: boolean) {}
+
+  /** 조각 하나 → 브라우저로 보낼 바이트. */
+  feed(chunk: Buffer): Buffer {
+    if (this.sawIntro) { this.keepTail(chunk); return chunk; }
+    const joined = this.probe.length ? Buffer.concat([this.probe, chunk]) : chunk;
+    const at = joined.indexOf(CONTROL_INTRO);
+    if (at < 0) {
+      this.keepPre(chunk);
+      this.probe = joined.subarray(Math.max(0, joined.length - (CONTROL_INTRO.length - 1)));
+      return this.strip ? EMPTY_BUF : chunk;
+    }
+    this.sawIntro = true;
+    const introInChunk = at - this.probe.length;   // 이 조각에서 도입자가 시작한 자리(음수 = 앞 조각에서 시작했다)
+    if (introInChunk > 0) this.keepPre(chunk.subarray(0, introInChunk));
+    const rest = chunk.subarray(introInChunk + CONTROL_INTRO.length);
+    this.probe = EMPTY_BUF;
+    this.keepTail(rest);
+    return this.strip ? rest : chunk;
+  }
+
+  /**
+   * 스트림이 tmux 의 `%exit` 로 끝났나 — **줄 머리**에서만 본다. `%output` 값 안의 개행은 8진(`\012`)으로 오므로
+   *  «개행 뒤 `%exit`» 는 값이 흉내 낼 수 없다. 줄 끝 CR 이 둘일 수 있다(매니지드는 PTY 가 두 층 — makeControl 주석).
+   */
+  endedWithExit(): boolean { return /(?:^|\n)%exit(?:[\s\x1b]|$)/.test(this.tail); }
+
+  /** 도입자 전에 온 문구(utf8). */
+  failureText(): string { return this.pre.toString("utf8"); }
+
+  private keepTail(b: Buffer): void {
+    if (!b.length) return;
+    this.tail = (this.tail + b.subarray(Math.max(0, b.length - STREAM_TAIL_MAX)).toString("latin1")).slice(-STREAM_TAIL_MAX);
+  }
+
+  private keepPre(b: Buffer): void {
+    if (!b.length || this.pre.length >= PRE_TEXT_MAX) return;
+    this.pre = Buffer.concat([this.pre, b.subarray(0, PRE_TEXT_MAX - this.pre.length)]);
+  }
+}
+
+/** attachSession 의 시험 전용 주입점 — 제품 호출부(세션 호스트·게이트웨이·워커)는 아무것도 안 넘긴다. */
+export interface AttachSessionOptions {
+  /** attach term 을 띄우는 자리. 기본은 제품 spawnAttachTerm. */
+  spawn?: (bin: string, args: string[], env: Record<string, string>) => AttachTerm;
+  /** tmux 중계 argv. 기본은 tmuxExecArgv. */
+  relayArgv?: () => string[];
+  reattachDelaysMs?: readonly number[];
+  reattachBudgetMs?: number;
+  stableMs?: number;
+}
+
 // attach 본체 — 게이트웨이 로컬(WebSocket)과 노드 에이전트(채널 어댑터 #869)가 공유한다.
-export function attachSession(ws: AttachSocket, id: string): void {
+export function attachSession(ws: AttachSocket, id: string, opts: AttachSessionOptions = {}): void {
   // 스폰 실패 폭주 차단(#869) — 이 세션 attach 가 최근 연속 실패했으면(예: node-pty 가 이 OS 에서 spawn 불가 = spawn-helper
   //  비호환) 스폰을 건너뛰고 즉시 닫는다. pty 할당 자체를 안 하므로 fd 누수가 원천 차단(정상 스폰 1회로 스트릭 리셋).
   const sf = spawnFailStreak.get(id);
@@ -493,19 +658,26 @@ export function attachSession(ws: AttachSocket, id: string): void {
       //  ★ 명령형 tmux 는 tmux-exec 의 seam 이 덮지만 **attach 는 그 경로가 아니다**(장수 PTY 다).
       //   게이트웨이와 tmux 서버가 다른 곳에 있는 배포를 위해 여기도 갈아끼울 수 있어야 한다.
       //   계약은 같다: 지정한 프로그램에 tmux argv 를 그대로 이어 붙인다.
-      const relay = tmuxExecArgv();
+      const relay = (opts.relayArgv ?? tmuxExecArgv)();
       const [abin, ...aprefix] = relay.length ? relay : [TMUX_BIN];
-      term = spawnAttachTerm(abin!, [...aprefix, ...args], env);
+      const spawn = opts.spawn ?? spawnAttachTerm;
+      const attachArgv = [...aprefix, ...args];
+      term = spawn(abin!, attachArgv, env);
       liveTerms.add(term); // 종료 훅이 회수할 수 있게 추적(#687 고아 방지)
       acquireAttachRef(id);  // #2148 — 마지막 WS 가 닫힐 때 유령 클라이언트를 끊기 위한 참조수
       spawnFailStreak.delete(id); // 정상 스폰 → 실패 스트릭 리셋(#869)
       // 시작 레이스 방지: tmux -CC 가 tty 를 no-echo 로 잡기 전에 명령을 쓰면 pty 가 그 명령을 '에코백'하고,
       //  그 에코가 control 도입자(\x1bP1000p)보다 먼저 도착해 클라가 raw 로 오인 → 명령 텍스트가 화면에 뜬다.
       //  → tmux 의 '첫 출력'(= control 모드 진입·no-echo 완료)이 오기 전까지 명령을 큐에 모았다가 그때 flush.
+      //  #3905 — 끊긴 중계를 다시 붙이는 동안에도 같은 큐가 입력을 쥔다(잃지 않고 미룬다).
       let ready = false;
       const cmdQueue: string[] = [];
+      //  #3905 — 다시 붙은 클라이언트에 **다시 보낼 크기**. 브라우저는 크기를 연결 때만 보내므로 여기서 기억하지 않으면
+      //   새 클라이언트가 node-pty 기본값(80x24)으로 서서 창이 한 번 줄었다 늘어난다.
+      let lastResize: string | null = null;
       const writeCmd: SendCmd = (line) => {
-        if (!ready) { cmdQueue.push(line); return; }
+        if (line.startsWith("refresh-client -C ")) lastResize = line;
+        if (!ready) { if (cmdQueue.length < CMD_QUEUE_MAX) cmdQueue.push(line); return; }
         try { term?.write(line + "\n"); } catch { /* socket closed */ }
       };
       // 입력 경로는 멀티플렉서가 가른다(#1541) — tmux 는 control 스트림 그대로, psmux 는 CLI 펌프.
@@ -513,11 +685,89 @@ export function attachSession(ws: AttachSocket, id: string): void {
         ? createInputPump(id, (argv) => execFileP(TMUX_BIN, argv, { timeout: 5000, env, windowsHide: true }), writeCmd)
         : null;
       const sendCmd: SendCmd = pump ? (line) => pump.sendCmd(line) : writeCmd;
-      term.onData((d) => {
-        if (!ready) { ready = true; for (const q of cmdQueue) { try { term?.write(q + "\n"); } catch { /* noop */ } } cmdQueue.length = 0; }
-        try { ws.send(d as unknown as Buffer); } catch { /* socket closed */ }
-      });
-      term.onExit(() => { if (term) liveTerms.delete(term); try { ws.close(); } catch { /* already closed */ } });
+
+      // ── 끊긴 중계 흡수 (#3905 — 위 «끊긴 중계 흡수» 머리말) ──
+      const absorb = CONTROL_MODE && relay.length > 0 && !pump;
+      let closed = false;             // 소켓이 닫혔다(cleanup 이 돌았다) — 그 뒤엔 아무것도 띄우지 않는다
+      let endsWithNewline = true;     // 브라우저로 마지막 보낸 바이트가 줄 끝인가 — 이어 붙일 때 줄을 닫을지(머리말 ②)
+      let established = false;        // 이 attach 가 control 스트림을 한 번이라도 열었나
+      let establishedAt = 0;          // 지금 세대가 control 스트림을 연 시각
+      let lossAt = 0;                 // 이번 끊김이 시작된 시각(0 = 끊김이 없었다)
+      let attempts = 0;               // 이번 끊김 뒤 다시 붙기를 시도한 횟수
+      let reattachTimer: NodeJS.Timeout | null = null;
+      const forward = (buf: Buffer): void => {
+        if (!buf.length) return;
+        endsWithNewline = buf[buf.length - 1] === 0x0a;
+        try { ws.send(buf); } catch { /* socket closed */ }
+      };
+      //  세대 하나가 끝났다(또는 다시 띄우기가 던졌다) — 판정하고, 다시 붙거나 종전처럼 닫는다.
+      const onLoss = (sawIntroThisGen: boolean, sawExit: boolean, failureText: string): void => {
+        const now = Date.now();
+        //  새 끊김이면 시도·경과를 새로 센다. 아니면 같은 끊김의 연장이다(요동 상한).
+        if (relayLossIsNew({ lossAt, sawIntroThisGen, establishedAt, now, stableMs: opts.stableMs ?? RELAY_STABLE_MS })) { lossAt = now; attempts = 0; }
+        const d = relayLossDecision({
+          absorb, socketOpen: !closed, shuttingDown: attachShuttingDown, established, sawExit, failureText,
+          attempts, sinceLossMs: now - lossAt, delaysMs: opts.reattachDelaysMs, budgetMs: opts.reattachBudgetMs,
+        });
+        if (d.action === "close") {
+          //  «흡수 포기» 는 **다시 붙으려다 못 붙은** 경우뿐이다(세션 없음·예산). 다시 붙은 뒤 tmux 가 스스로 끝낸 것(%exit)이나
+          //   소켓이 먼저 닫힌 것은 흡수의 실패가 아니다 — 그걸 포기로 남기면 게이트·사람이 흡수가 깨졌다고 읽는다.
+          if (attempts > 0 && (d.reason === "session-gone" || d.reason === "budget")) {
+            logger.warn({ id, attempts, reason: d.reason, gapMs: now - lossAt, detail: failureText.slice(0, 200) || undefined }, ATTACH_ABSORB_GAVE_UP_MSG);
+          }
+          try { ws.close(); } catch { /* already closed */ }
+          return;
+        }
+        ready = false;   // 새 클라이언트가 control 모드에 들어설 때까지 명령을 쥔다
+        attempts++;
+        logger.info({ id, attempt: attempts, delayMs: d.delayMs }, "ws attach 중계 끊김 — 같은 채널로 다시 붙는다");
+        const tm = setTimeout(() => {
+          pendingReattach.delete(tm);
+          if (reattachTimer === tm) reattachTimer = null;
+          reattach();
+        }, d.delayMs);
+        reattachTimer = tm;
+        pendingReattach.add(tm);
+      };
+      const bind = (t: AttachTerm, respawned: boolean): void => {
+        const watch = new ControlStreamWatch(respawned);
+        t.onData((d) => {
+          if (t !== term || closed) return;   // 옛 세대 · 닫힌 소켓에 늦게 온 조각
+          const out = watch.feed(d as unknown as Buffer);
+          if (!respawned) {
+            if (!ready) { ready = true; for (const q of cmdQueue) { try { t.write(q + "\n"); } catch { /* noop */ } } cmdQueue.length = 0; }
+            if (watch.sawIntro && !established) { established = true; establishedAt = Date.now(); }
+            forward(out);
+            return;
+          }
+          if (!watch.sawIntro) return;         // 다시 붙는 중 — 도입자 전(중계·tmux 의 오류 문구)은 control 스트림이 아니다
+          if (!ready) {
+            //  다시 붙었다 — ② 줄을 닫고 ③ 크기 → 미룬 입력 → 팬 상태 순으로 보낸다(재연결 경로와 같은 복구).
+            if (!endsWithNewline) forward(Buffer.from("\n"));
+            ready = true;
+            establishedAt = Date.now();
+            const seq = [...(lastResize ? [lastResize] : []), ...cmdQueue.splice(0), stateCmd(false)];
+            for (const q of seq) { try { t.write(q + "\n"); } catch { /* noop */ } }
+            logger.info({ id, attempts, gapMs: establishedAt - lossAt }, ATTACH_ABSORBED_MSG);
+          }
+          forward(out);
+        });
+        t.onExit(() => {
+          liveTerms.delete(t);
+          if (t !== term || closed) return;    // 이미 다음 세대로 넘어갔거나 소켓이 먼저 닫혔다(cleanup 이 정리했다)
+          onLoss(watch.sawIntro, watch.endedWithExit(), watch.failureText());
+        });
+      };
+      const reattach = (): void => {
+        if (closed || attachShuttingDown) return;
+        let t: AttachTerm;
+        try { t = spawn(abin!, attachArgv, env); }
+        catch (err) { onLoss(false, false, (err as Error)?.message ?? String(err)); return; }
+        term = t;
+        liveTerms.add(t);
+        bind(t, true);
+      };
+      bind(term, false);
       ws.on("message", (raw) => {
         let msg: { t?: string; d?: unknown; c?: unknown; r?: unknown; n?: unknown };
         try { msg = JSON.parse(raw.toString()); } catch { return; }
@@ -531,6 +781,8 @@ export function attachSession(ws: AttachSocket, id: string): void {
       //  아직 보고 있는 다른 탭의 클라이언트까지 끊는다. 한 번만 풀리게 잠근다.
       let released = false;
       const cleanup = () => {
+        closed = true;                        // #3905 — 이 뒤로는 끊긴 중계를 다시 붙이지 않는다
+        if (reattachTimer) { clearTimeout(reattachTimer); pendingReattach.delete(reattachTimer); reattachTimer = null; }
         pump?.close();                        // 대기 입력 폐기 + 타이머 해제(#1541 — 닫힌 세션에 유령 입력·타이머 잔류 금지)
         if (term) liveTerms.delete(term);
         try { term?.kill("SIGTERM"); } catch { /* already gone */ }
@@ -685,6 +937,12 @@ export async function countAttachChildren(): Promise<number | null> {
 }
 
 export function killAttachedPtys(): void {
+  //  #3905 — 종료 중에는 끊긴 중계를 다시 붙이지 않는다. 여기서 죽인 term 들의 exit 가 뒤이어 오는데, 흡수가 그걸
+  //   «끊김» 으로 읽고 새 attach 를 띄우면 방금 회수한 PTY 가 도로 생긴다(#687 이 막는 바로 그 고아).
+  //   호출부는 종료 경로뿐이다(index.ts 시그널 핸들러 · SessionHost.shutdown) — 표지를 되돌리는 길을 두지 않는다.
+  attachShuttingDown = true;
+  for (const tm of pendingReattach) clearTimeout(tm);
+  pendingReattach.clear();
   for (const t of liveTerms) { try { t.kill("SIGKILL"); } catch { /* noop */ } }
   liveTerms.clear();
 }
