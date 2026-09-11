@@ -68,6 +68,18 @@ async function main() {
 
   let sid = null;
   let ws = null;
+  let cleaning = null;
+  const cleanup = () => (cleaning ??= (async () => {   // 한 번만 — 시그널과 finally 가 겹쳐도 두 번 지우지 않는다
+    try { ws?.close(); } catch { /* noop */ }
+    if (sid) {
+      const del = await api("DELETE", `/api/ui/terminal/sessions/${encodeURIComponent(sid)}?node=${encodeURIComponent(NODE)}`).catch((e) => ({ status: 0, text: String(e) }));
+      result.cleanup = { status: del.status };
+    }
+  })());
+  // Ctrl-C 로 끊어도 임시 세션을 지운다 — finally 는 시그널 종료에선 돌지 않는다
+  const onSignal = () => { void cleanup().finally(() => { result.interrupted = true; save(); process.exit(130); }); };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
   try {
     const nodes = await api("GET", "/api/ui/nodes");
     const nodeRow = (nodes.json?.nodes || []).find((n) => n.id === NODE);
@@ -155,11 +167,7 @@ async function main() {
   } catch (e) {
     result.error = String(e?.stack || e);
   } finally {
-    try { ws?.close(); } catch { /* noop */ }
-    if (sid) {
-      const del = await api("DELETE", `/api/ui/terminal/sessions/${encodeURIComponent(sid)}?node=${encodeURIComponent(NODE)}`).catch((e) => ({ status: 0, text: String(e) }));
-      result.cleanup = { status: del.status };
-    }
+    await cleanup();
     result.finishedAt = new Date().toISOString();
     save();
   }

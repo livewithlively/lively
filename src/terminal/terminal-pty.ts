@@ -9,7 +9,7 @@
 // TERMINAL_LEGACY_ATTACH=1 이면 옛 방식(plain `tmux attach`, tmux 가 화면 painting + copy-mode 스크롤)으로 폴백.
 // ws 종료 = attach 클라만 종료(tmux 세션은 영속). 셸 미경유(argv).
 import { spawn as ptySpawn } from "node-pty";
-import { spawn as cpSpawn, execFile as cpExecFile } from "node:child_process";   // psmux 파이프 attach 백엔드 + CLI 입력(#1541)
+import { spawn as cpSpawn, execFile as cpExecFile } from "node:child_process";   // psmux 파이프 attach 백엔드(#1541) + 유령 attach detach-client
 import { promisify } from "node:util";
 import { logger } from "../log.js";
 import os from "node:os";

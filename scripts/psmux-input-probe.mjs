@@ -95,13 +95,18 @@ async function main() {
   });
   let cc = null;
   let created = false;
-  const cleanup = async () => {
+  let cleaning = null;
+  const cleanup = () => (cleaning ??= (async () => {   // 한 번만 — 시그널과 finally 가 겹쳐도 두 번 지우지 않는다
     try { cc?.stdin.end(); } catch { /* 이미 닫힘 */ }
     try { cc?.kill(); } catch { /* 이미 종료 */ }
     if (created) result.cleanup = await run(["kill-session", "-t", SID]);   // 이 하네스가 만든 세션만
     await sleep(500);   // 리더가 로그 파일을 놓을 때까지 — 윈도우는 열린 파일이 든 폴더를 못 지운다
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 임시폴더 — 남아도 판정과 무관 */ }
-  };
+  })());
+  // Ctrl-C 로 끊어도 거둔다 — finally 는 시그널 종료에선 돌지 않는다(남으면 이 하네스의 세션·attach 클라가 PC 에 산다)
+  const onSignal = () => { void cleanup().finally(() => { result.interrupted = true; save(); process.exit(130); }); };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
 
   try {
     result.binVersion = (await run(["-V"])).out;
@@ -279,6 +284,9 @@ async function main() {
     console.log(`\n지연(보냄→pane 도착)\n  종전 한글(CLI 프로세스) ${f(result.latency.cliHangul)}\n  제품 한글(제어 스트림)   ${f(result.latency.streamHangul)}\n  ASCII(제어 스트림)       ${f(result.latency.streamAscii)}`);
   }
   if (result.error) console.log(`\n오류: ${result.error}`);
+  const cleanupNote = !result.cleanup ? "만든 세션 없음"
+    : result.cleanup.err ? `실패 — 테스트 세션 ${SID} 이 남았을 수 있다(지우기: psmux kill-session -t ${SID}) · ${result.cleanup.err}` : "완료";
+  console.log(`정리: ${cleanupNote}`);
   console.log(`\n판정: ${allOk ? "PASS — 제품 형식 줄이 전부 바이트 그대로 도착" : "FAIL"} · 결과 파일 ${OUT}`);
   process.exit(allOk ? 0 : 1);
 }
