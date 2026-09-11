@@ -866,6 +866,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //   아래 프로젝트 기록 실패와 같은 근거로 방금 만든 세션만 되돌린다: 사용자 작업 전이고 첫 지시도 아직 큐에 없다.
     //  ⚠ DB 행은 **판이 사라진 것을 확인했을 때만** 지운다. kill 까지 실패했으면(중계가 통째로 끊긴 판) 판이 살아 있을 수 있고,
     //   그때 행까지 지우면 소유자를 아무도 모르는 판이 된다 — 행을 남기면 목록이 표식을 되채운다(collectSessions #3892).
+    //  ⓘ 표식은 박혔는데 응답만 잃은 경우에도 되돌린다(재확인 왕복을 두지 않았다). 중계가 한 호출 안에서 재시도로 흡수하는
+    //   부류이고, 남는 최악이 «503 뒤 다시 만들기» 라서다 — 위의 ensure·new-session 실패 롤백과 같은 위험 등급이다.
     const gone = await tmux(["kill-session", "-t", id]).then(() => true, (ke) => isSessionGoneError(ke));
     if (gone && inside && mirrored) await deleteSessionState(id).catch(() => undefined);
     throw new HttpError(503, `세션 표식을 기록하지 못해 세션 생성을 취소했습니다: ${(e as Error)?.message ?? e}`);

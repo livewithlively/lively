@@ -266,6 +266,7 @@ test("N4 상시세션이면 안 한다 — 그 표식은 keep-alive 가 소유�
 
 test("N5 행의 소유자가 비었으면 안 한다 — 빈 소유자를 박으면 접근 판정이 틀린다 (E23)", () => {
   assert.equal(needsMetaHeal({ harnessRaw: "", row: dbRow({ owner: "" }), managed: null }), false);
+  assert.equal(needsMetaHeal({ harnessRaw: "", row: dbRow({ owner: "  " }), managed: null }), false, "공백뿐인 소유자도 빈 값이다");
   assert.equal(needsMetaHeal({ harnessRaw: "", row: { owner: null }, managed: null }), false);
 });
 
