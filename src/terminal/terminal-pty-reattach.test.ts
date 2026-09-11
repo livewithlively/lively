@@ -5,8 +5,10 @@
 // 시험 이름의 E번호는 사양 엣지 표의 행이다(표: 이 태스크의 사양 — 행 수 = 최소 시나리오 수).
 //  ① 끊김(스트림이 `%exit` 없이 끝남)이면 **소켓을 안 닫고** 같은 argv 로 다시 붙는다.
 //  ② 브라우저 계약 — 다시 붙은 스트림의 도입자·그 앞 문구는 안 보내고, 줄을 닫고 잇고, 크기→미룬 입력→상태 순(백필 없음).
-//  ③ **종전 동작을 지킨다** — `%exit` · 중계 아님 · control 스트림을 연 적 없음 · 세션 없음 · 예산 초과는 닫는다.
+//  ③ **종전 동작을 지킨다** — `%exit` · 중계 아님 · control 스트림을 연 적 없음 · 세션 없음 · 예산 초과 · 종료는 닫는다.
 //  ④ 게이트(lvly-cloud attach-cut-probe.sh)가 세는 메시지가 글자 그대로다.
+// ⚠ 실시간 타이머를 쓴다 — «기다렸다 본다» 는 고정 대기가 아니라 **조건이 설 때까지**(until) 기다린다. 부하 걸린 CI 에서
+//  고정 대기는 흔들린다. «안 일어나야 한다» 를 볼 때만 고정 대기를 쓴다(그땐 대기가 길수록 엄격하다).
 // 실행: npm run build && node dist/terminal/terminal-pty-reattach.test.js
 import assert from "node:assert/strict";
 import {
@@ -20,6 +22,14 @@ const INTRO = "\x1bP1000p";
 const tests: Array<[string, () => void | Promise<void>]> = [];
 const t = (name: string, fn: () => void | Promise<void>): void => { tests.push([name, fn]); };
 const tick = (ms = 0): Promise<void> => new Promise((r) => setTimeout(r, ms));
+/** 조건이 설 때까지 기다린다 — 상한을 넘기면 **무엇을 기다렸는지** 말하며 실패한다(undefined 접근으로 죽지 않게). */
+async function until(what: string, cond: () => boolean, ms = 3_000): Promise<void> {
+  const t0 = Date.now();
+  while (!cond()) {
+    if (Date.now() - t0 > ms) throw new Error(`${ms}ms 안에 안 섰다: ${what}`);
+    await tick(2);
+  }
+}
 
 // ── 로그를 붙잡는다 — 게이트가 세는 메시지만 본다(출력은 삼킨다) ──
 type Log = { level: string; obj: Record<string, unknown>; msg: string };
@@ -91,7 +101,7 @@ async function start(o: {
     reattachBudgetMs: o.budgetMs ?? 5_000,
     stableMs: o.stableMs ?? 10_000,
   });
-  await tick();   // attachSession 은 Promise 한 틱 뒤에 띄운다
+  await until("첫 attach 스폰(attachSession 은 Promise 한 틱 뒤에 띄운다)", () => spawnCalls >= 1);
   return { sock, terms, id, spawns: () => spawnCalls };
 }
 
@@ -180,6 +190,14 @@ t("E2(관찰) strip 이면 도입자 전 문구는 한 바이트도 안 내고 �
   assert.match(w.failureText(), /attach 실패: connect ENOENT/);
 });
 
+t("E2b(관찰) 도입자가 조각 경계에 걸쳐도 실패 사유에 도입자 조각이 섞이지 않는다", () => {
+  const w = new ControlStreamWatch(true);
+  w.feed(Buffer.from("warming\n\x1bP10", "latin1"));
+  w.feed(Buffer.from("00p%begin 2 2 0\n", "latin1"));
+  assert.equal(w.sawIntro, true);
+  assert.equal(w.failureText(), "warming\n");
+});
+
 t("E27 `%exit` 는 줄 머리에서만 — 값 안의 글자·%exited 는 끝이 아니다 · CR 둘·조각 경계·첫 줄·끝 줄바꿈 없음은 끝이다", () => {
   const judge = (strip: boolean, ...chunks: string[]): boolean => {
     const w = new ControlStreamWatch(strip);
@@ -219,8 +237,8 @@ t("E1·E2·E3·E4·E5 ★ 끊긴 중계 — 소켓 유지 · 같은 argv · 도�
   terms[0]!.exit();                                                        // %exit 없이 끝났다
   sock.msg({ t: "i", d: "ls\r" });
   assert.equal(sock.closes, 0, "E1 끊김에서 소켓을 닫았다");
-  await tick(30);
-  assert.equal(terms.length, 2, "E1 다시 붙기를 안 띄웠다");
+  await until("E1 다시 붙기 스폰", () => terms.length >= 2);
+  assert.equal(terms.length, 2);
   assert.equal(terms[1]!.bin, terms[0]!.bin);
   assert.deepEqual(terms[1]!.args, terms[0]!.args);
   terms[1]!.emit("lvly tmux-relay: 준비 중\n");
@@ -239,7 +257,7 @@ t("E1·E2·E3·E4·E5 ★ 끊긴 중계 — 소켓 유지 · 같은 argv · 도�
 t("E4b 줄 끝에서 끊긴 스트림엔 줄바꿈을 더하지 않는다", async () => {
   const { sock, terms } = await start();
   establishThenCut(terms, "%output %1 done\n");
-  await tick(30);
+  await until("다시 붙기 스폰", () => terms.length >= 2);
   terms[1]!.emit(INTRO + "%begin 2 2 0\n");
   assert.equal(sock.text(), INTRO + "%output %1 done\n" + "%begin 2 2 0\n");
   sock.close();
@@ -249,7 +267,7 @@ t("E6 크기를 받은 적 없으면 크기 줄 없이 [입력, 상태]", async 
   const { sock, terms } = await start();
   establishThenCut(terms);
   sock.msg({ t: "i", d: "q" });
-  await tick(30);
+  await until("다시 붙기 스폰", () => terms.length >= 2);
   terms[1]!.emit(INTRO);
   assert.deepEqual(terms[1]!.writes, ["send-keys -H 71\n", stateCmd(false) + "\n"]);
   sock.close();
@@ -260,7 +278,7 @@ t("E7 끊긴 사이 입력이 없으면 [크기, 상태]", async () => {
   terms[0]!.emit(INTRO + "%begin 1 1 0\n");
   sock.msg({ t: "r", c: 90, r: 30 });
   terms[0]!.exit();
-  await tick(30);
+  await until("다시 붙기 스폰", () => terms.length >= 2);
   terms[1]!.emit(INTRO);
   assert.deepEqual(terms[1]!.writes, ["refresh-client -C 90x30\n", stateCmd(false) + "\n"]);
   sock.close();
@@ -272,7 +290,7 @@ t("E8 끊긴 사이 크기가 바뀌면 새 클라이언트의 첫 쓰기가 최
   sock.msg({ t: "r", c: 120, r: 40 });
   terms[0]!.exit();
   sock.msg({ t: "r", c: 100, r: 30 });
-  await tick(30);
+  await until("다시 붙기 스폰", () => terms.length >= 2);
   terms[1]!.emit(INTRO);
   assert.equal(terms[1]!.writes[0], "refresh-client -C 100x30\n");
   sock.close();
@@ -283,7 +301,7 @@ t("E9(경계) 끊긴 사이 입력 1001개 — 1000개만 가고 1001번째는 �
   establishThenCut(terms);
   for (let k = 0; k < 1000; k++) sock.msg({ t: "i", d: "a" });
   sock.msg({ t: "i", d: "b" });
-  await tick(60);
+  await until("다시 붙기 스폰", () => terms.length >= 2);
   terms[1]!.emit(INTRO);
   assert.equal(terms[1]!.writes.length, 1001, "입력 1000 + 상태 1");
   assert.equal(terms[1]!.writes.filter((w) => w === "send-keys -H 61\n").length, 1000);
@@ -296,7 +314,7 @@ t("E10 tmux 가 `%exit` 로 끝냈으면 곧바로 닫고 다시 안 연다(의�
   terms[0]!.emit(INTRO + "%output %1 x\n%exit detached\n\x1b\\");
   terms[0]!.exit();
   assert.equal(sock.closes, 1);
-  await tick(30);
+  await tick(40);
   assert.equal(spawns(), 1);
 });
 
@@ -304,7 +322,7 @@ t("E11 중계가 아니면(로컬 tmux) 끊겨도 곧바로 닫는다", async ()
   const { sock, terms, spawns } = await start({ relay: [] });
   establishThenCut(terms);
   assert.equal(sock.closes, 1);
-  await tick(30);
+  await tick(40);
   assert.equal(spawns(), 1);
 });
 
@@ -313,7 +331,7 @@ t("E12 첫 attach 가 control 스트림을 한 번도 못 열었으면 곧바로
   terms[0]!.emit("sh: 1: tmux: not found\n");
   terms[0]!.exit();
   assert.equal(sock.closes, 1);
-  await tick(30);
+  await tick(40);
   assert.equal(spawns(), 1);
 });
 
@@ -322,9 +340,9 @@ t("E13 다시 붙기가 «세션 없음» 을 받으면 더 기다리지 않고 
     onSpawn: (ft, n) => { if (n === 1) { ft.emit("can't find session: box-x\r\n"); ft.exit(); } },
   });
   establishThenCut(terms);
+  await until("세션 없음으로 닫힘", () => sock.closes === 1);
   await tick(40);
-  assert.equal(spawns(), 2);
-  assert.equal(sock.closes, 1);
+  assert.equal(spawns(), 2, "세션 없음 뒤에 또 띄웠다");
   assert.equal(logsFor(id, ATTACH_ABSORB_GAVE_UP_MSG).map((l) => l.obj.reason).join(","), "session-gone");
   assert.equal(sock.text().includes("can't find"), false);
 });
@@ -338,7 +356,7 @@ t("E14 브로커가 아직 안 선 동안(일시 실패 ×2)은 기다렸다 다
     },
   });
   establishThenCut(terms);
-  await tick(80);
+  await until("흡수 기록", () => logsFor(id, ATTACH_ABSORBED_MSG).length === 1);
   assert.equal(terms.length, 4);
   assert.equal(sock.closes, 0);
   assert.deepEqual(logsFor(id, ATTACH_ABSORBED_MSG).map((l) => l.obj.attempts), [3]);
@@ -352,7 +370,7 @@ t("E15 다시 붙기가 아무 문구 없이 끝나도 일시로 보고 다시 �
     onSpawn: (ft, n) => { if (n === 1) ft.exit(); if (n === 2) ft.emit(INTRO); },
   });
   establishThenCut(terms);
-  await tick(60);
+  await until("흡수 기록", () => logsFor(id, ATTACH_ABSORBED_MSG).length === 1);
   assert.equal(terms.length, 3);
   assert.equal(sock.closes, 0);
   assert.deepEqual(logsFor(id, ATTACH_ABSORBED_MSG).map((l) => l.obj.attempts), [2]);
@@ -366,8 +384,8 @@ t("E16 다시 띄우기 자체가 예외를 던져도 일시로 보고 다시 �
     onSpawn: (ft, n) => { if (n === 2) ft.emit(INTRO); },
   });
   establishThenCut(terms);
-  await tick(60);
-  assert.equal(spawns(), 3);
+  await until("흡수 기록", () => logsFor(id, ATTACH_ABSORBED_MSG).length === 1);
+  assert.equal(spawns(), 3, "예외 1 + 성공 1 이어야 한다");
   assert.equal(sock.closes, 0);
   assert.deepEqual(logsFor(id, ATTACH_ABSORBED_MSG).map((l) => l.obj.attempts), [2]);
   sock.close();
@@ -379,11 +397,10 @@ t("E17 예산을 넘기면 종전처럼 닫는다 · 흡수 포기(예산) · �
     onSpawn: (ft, n) => { if (n > 0) { ft.emitUtf8("lvly tmux-relay: attach 실패: 503: node channel unavailable\n"); ft.exit(); } },
   });
   establishThenCut(terms);
-  await tick(150);
-  assert.equal(sock.closes, 1);
+  await until("예산 초과로 닫힘", () => sock.closes === 1);
   assert.equal(logsFor(id, ATTACH_ABSORB_GAVE_UP_MSG).map((l) => l.obj.reason).join(","), "budget");
   const n = spawns();
-  await tick(40);
+  await tick(60);
   assert.equal(spawns(), n, "닫은 뒤에도 띄웠다");
 });
 
@@ -391,7 +408,7 @@ t("E20 기다리는 사이 소켓이 닫히면 다시 안 띄운다 — 종료 �
   const { sock, terms, id, spawns } = await start({ delays: [20] });
   establishThenCut(terms);
   sock.close();
-  await tick(50);
+  await tick(60);
   assert.equal(spawns(), 1);
   assert.equal(attachRefCount(id), 0);
   assert.equal(logsFor(id, "ws attach 종료").length, 1);
@@ -400,7 +417,7 @@ t("E20 기다리는 사이 소켓이 닫히면 다시 안 띄운다 — 종료 �
 t("E20b 소켓이 닫힌 뒤 늦게 온 출력 조각은 브라우저로 안 보낸다", async () => {
   const { sock, terms } = await start();
   establishThenCut(terms);
-  await tick(30);
+  await until("다시 붙기 스폰", () => terms.length >= 2);
   terms[1]!.emit(INTRO + "%begin 2 2 0\n");
   sock.close();
   const before = sock.sent.length;
@@ -413,8 +430,7 @@ t("E20b 소켓이 닫힌 뒤 늦게 온 출력 조각은 브라우저로 안 보
 t("E20c 다시 붙는 시도가 도는 중(도입자 전)에 소켓이 닫히면, 그 시도의 끝을 끊김으로 읽지 않는다 — 더 안 띄운다", async () => {
   const { sock, terms, spawns } = await start({ delays: [5] });
   establishThenCut(terms);
-  await tick(30);
-  assert.equal(spawns(), 2, "다시 붙기 시도가 안 떴다 — 이 시험이 아무것도 안 본다");
+  await until("다시 붙기 시도 스폰", () => spawns() >= 2);
   sock.close();                                                   // 사람이 탭을 닫았다
   assert.deepEqual(terms[1]!.killed, ["SIGTERM"]);
   terms[1]!.exit();                                               // 회수(SIGTERM)의 결과로 그 시도가 끝난다
@@ -428,20 +444,19 @@ t("E21 요동 — 다시 붙자마자 또 끊기면 같은 끊김으로 누적�
     onSpawn: (ft, n) => { if (n > 0) { ft.emit(INTRO + "%begin 9 9 0\n"); ft.exit(); } },
   });
   establishThenCut(terms);
-  await tick(400);
-  assert.equal(sock.closes, 1);
+  await until("상한에서 닫힘", () => sock.closes === 1, 5_000);
   assert.equal(spawns(), 1 + RELAY_REATTACH_MAX);
   assert.equal(logsFor(id, ATTACH_ABSORB_GAVE_UP_MSG).map((l) => l.obj.reason).join(","), "budget");
 });
 
 t("E22b 안정 시간을 넘겨 버틴 뒤의 끊김은 새 끊김이다 — 시도를 1부터 다시 센다", async () => {
-  const { sock, terms, id } = await start({ delays: [5], stableMs: 20 });
+  const { sock, terms, id } = await start({ delays: [5], stableMs: 50 });
   establishThenCut(terms);
-  await tick(20);
+  await until("첫 다시 붙기 스폰", () => terms.length >= 2);
   terms[1]!.emit(INTRO + "%begin 2 2 0\n");
-  await tick(40);
+  await tick(150);                                  // 안정 시간(50ms)을 넉넉히 넘겨 버텼다
   terms[1]!.exit();
-  await tick(20);
+  await until("두 번째 다시 붙기 스폰", () => terms.length >= 3);
   terms[2]!.emit(INTRO + "%begin 3 3 0\n");
   assert.deepEqual(logsFor(id, ATTACH_ABSORBED_MSG).map((l) => l.obj.attempts), [1, 1]);
   assert.equal(sock.closes, 0);
@@ -451,7 +466,7 @@ t("E22b 안정 시간을 넘겨 버틴 뒤의 끊김은 새 끊김이다 — 시
 t("E23 흡수 뒤 곧 tmux 가 `%exit` 로 끝내면 닫되, 그건 흡수 포기가 아니다", async () => {
   const { sock, terms, id } = await start();
   establishThenCut(terms);
-  await tick(30);
+  await until("다시 붙기 스폰", () => terms.length >= 2);
   terms[1]!.emit(INTRO + "%begin 2 2 0\n");
   terms[1]!.emit("%exit\n\x1b\\");
   terms[1]!.exit();
@@ -470,7 +485,7 @@ t("E29 게이트 계약 — 흡수 두 메시지는 글자 그대로 · 흡수 �
 
 // ⚠ 맨 끝 — killAttachedPtys 는 프로세스 전역 «종료 중» 표지를 세운다(되돌리는 길이 없다).
 //  방어가 두 겹이라(대기 타이머를 걷는다 · «종료 중» 표지) **두 모양을 함께** 친다 — 한 모양만 치면 한 겹이 죽어도 초록이다.
-t("E24 프로세스 종료(일괄 회수) 뒤에는 다시 붙지 않는다 — ① 이미 걸린 대기 ② 회수한 attach 의 뒤늦은 exit", async () => {
+t("E24 프로세스 종료(일괄 회수) 뒤에는 다시 붙지 않고 소켓을 남기지 않는다 — ① 이미 걸린 대기 ② 회수한 attach 의 뒤늦은 exit", async () => {
   const waiting = await start({ delays: [20] });
   establishThenCut(waiting.terms);                           // ① 다시 붙기 대기가 걸린 채로 종료가 온다
   const alive = await start({ delays: [20] });
@@ -480,7 +495,9 @@ t("E24 프로세스 종료(일괄 회수) 뒤에는 다시 붙지 않는다 — 
   alive.terms[0]!.exit();
   await tick(60);
   assert.equal(waiting.spawns(), 1, "① 종료 뒤에 대기가 attach 를 띄웠다");
+  assert.equal(waiting.sock.closes, 1, "① 종료가 다시 붙기를 기다리던 소켓을 안 닫았다(흡수 전엔 닫혔다)");
   assert.equal(alive.spawns(), 1, "② 회수한 attach 의 exit 를 끊김으로 읽고 다시 띄웠다");
+  assert.equal(alive.sock.closes, 1, "② 회수한 attach 의 소켓이 안 닫혔다");
 });
 
 let pass = 0;

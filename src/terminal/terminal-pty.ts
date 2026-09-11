@@ -137,8 +137,8 @@ function spawnAttachTerm(bin: string, args: string[], env: Record<string, string
 }
 
 const liveTerms = new Set<AttachTerm>();  // 이 인스턴스가 띄운 살아있는 attach 클라 — 종료 훅이 일괄 kill 한다.
-// #3905 — 끊긴 중계를 다시 붙이려고 걸어 둔 타이머(종료 훅이 한꺼번에 거둔다)와 «종료 중» 표지(아래 «끊긴 중계 흡수»).
-const pendingReattach = new Set<NodeJS.Timeout>();
+// #3905 — 끊긴 중계를 다시 붙이려고 걸어 둔 타이머 → 그 소켓을 닫는 손(종료 훅이 한꺼번에 거둔다)과 «종료 중» 표지(아래 «끊긴 중계 흡수»).
+const pendingReattach = new Map<NodeJS.Timeout, () => void>();
 let attachShuttingDown = false;
 
 // ── 유령 attach 정리(#2148) ────────────────────────────────────────────────
@@ -484,6 +484,8 @@ function handleLegacyMsg(term: AttachTerm, msg: { t?: string; d?: unknown; c?: u
 //  ② 끊긴 스트림은 줄 중간에서 멎었을 수 있다 → 이어 붙이기 전에 줄을 닫는다(`\n`). 반쪽 줄은 그 줄만 버려진다. 반쯤 온
 //     `%begin` 블록은 브라우저가 1.5초 뒤 스스로 빠져나와 다시 그린다(blockLost) — 여기서 가짜 `%end` 를 꽂지 않는다
 //     (반쪽 캡처가 백필로 처리되면 화면·스크롤백이 지워진다).
+//     ⚠ 그 1.5초는 **원래 `%begin` 부터** 센다 — 빨리(250ms) 다시 붙으면 그 창 안에 온 **새 세대의 출력도** 블록에 삼켜졌다가
+//      넛지로 다시 그려진다. 끊김이 블록 한가운데 떨어질 확률이 작고(블록은 명령 응답이라 짧다) 복구가 넛지 한 번이라 받아들인다.
 //  ③ **재연결 경로와 같은 복구만** 한다 — 마지막 크기(`refresh-client -C`)를 다시 보내고 팬 상태를 한 번 묻는다(`st`).
 //     백필(capture)은 안 한다: 브라우저의 백필은 화면·스크롤백을 비우고 쓰므로, 스크롤백을 지키는 것이 흡수의 이유와 어긋난다.
 //     끊긴 동안 나온 출력은 오늘의 재연결과 똑같이 놓친다 — 앱의 다음 그리기가 채운다.
@@ -545,7 +547,11 @@ export function relayLossIsNew(o: { lossAt: number; sawIntroThisGen: boolean; es
   return o.lossAt === 0 || (o.sawIntroThisGen && o.now - o.establishedAt >= o.stableMs);
 }
 
-/** 끊겼다 — 다시 붙을까, 종전처럼 닫을까 (순수 — 판정표는 terminal-pty-reattach.test 가 지킨다). */
+/**
+ * 끊겼다 — 다시 붙을까, 종전처럼 닫을까 (순수 — 판정표는 terminal-pty-reattach.test 가 지킨다).
+ *  ⚠ `socketOpen`·`shuttingDown` 은 오늘 호출부가 이미 거른다(onExit·reattach 가 closed·종료 표지를 먼저 본다). 여기서도 보는 것은
+ *   판정표가 호출부의 순서에 기대지 않고 **혼자** 참이게 두려는 방어다 — 호출부를 옮기는 날 이 칸이 받는다.
+ */
 export function relayLossDecision(o: RelayLossInput): RelayLossDecision {
   if (!o.absorb) return { action: "close", reason: "not-relay" };
   if (o.shuttingDown) return { action: "close", reason: "shutting-down" };
@@ -587,6 +593,9 @@ export class ControlStreamWatch {
     this.sawIntro = true;
     const introInChunk = at - this.probe.length;   // 이 조각에서 도입자가 시작한 자리(음수 = 앞 조각에서 시작했다)
     if (introInChunk > 0) this.keepPre(chunk.subarray(0, introInChunk));
+    //  앞 조각에서 시작했으면 그 도입자 앞머리는 앞 조각 몫으로 이미 pre 에 들어갔다 — 떼어 낸다(실패 사유에 도입자 조각이 안 섞이게).
+    //   ⚠ pre 가 상한에 닿았으면 그 바이트가 안 들어갔을 수 있어 떼지 않는다(사유는 앞머리가 중요하다 — 꼬리 몇 바이트는 무해).
+    else if (introInChunk < 0 && this.pre.length < PRE_TEXT_MAX) this.pre = this.pre.subarray(0, Math.max(0, this.pre.length + introInChunk));
     const rest = chunk.subarray(introInChunk + CONTROL_INTRO.length);
     this.probe = EMPTY_BUF;
     this.keepTail(rest);
@@ -727,7 +736,7 @@ export function attachSession(ws: AttachSocket, id: string, opts: AttachSessionO
           reattach();
         }, d.delayMs);
         reattachTimer = tm;
-        pendingReattach.add(tm);
+        pendingReattach.set(tm, () => { try { ws.close(); } catch { /* already closed */ } });
       };
       const bind = (t: AttachTerm, respawned: boolean): void => {
         const watch = new ControlStreamWatch(respawned);
@@ -941,8 +950,11 @@ export function killAttachedPtys(): void {
   //   «끊김» 으로 읽고 새 attach 를 띄우면 방금 회수한 PTY 가 도로 생긴다(#687 이 막는 바로 그 고아).
   //   호출부는 종료 경로뿐이다(index.ts 시그널 핸들러 · SessionHost.shutdown) — 표지를 되돌리는 길을 두지 않는다.
   attachShuttingDown = true;
-  for (const tm of pendingReattach) clearTimeout(tm);
+  //   ⚠ 다시 붙기를 **기다리는** attach 는 살아 있는 term 이 없어 아래 kill 로는 소켓이 안 닫힌다(흡수 전엔 죽인 term 의 exit 가
+  //    소켓을 닫았다). 그 소켓도 여기서 닫는다 — «종료가 소켓을 남기지 않는다» 는 종전 성질. 닫기가 cleanup 을 불러 표를 고치므로 사본을 돈다.
+  const waiting = [...pendingReattach];
   pendingReattach.clear();
+  for (const [tm, closeSocket] of waiting) { clearTimeout(tm); closeSocket(); }
   for (const t of liveTerms) { try { t.kill("SIGKILL"); } catch { /* noop */ } }
   liveTerms.clear();
 }
