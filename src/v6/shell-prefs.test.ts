@@ -209,10 +209,16 @@ test("E11 접두사가 없거나 몸이 빈 행 키는 버린다", () => {
   for (const k of ["foo", "sess:", "inst:", "route:", "app:terminal", "p:12"]) {
     assert.equal(isShellRowKey(k), false, `E11 «${k}» 를 행 키로 받았다`);
   }
-  //  화면 키에 들어올 수 없는 글자 — 공백·제어문자·encodeURIComponent 가 늘 이스케이프하는 글자.
+  //  화면 키에 들어올 수 없는 것 — 공백·제어문자·따옴표·꺾쇠·백틱·마크다운 링크 찌꺼기 `](`.
   const ctl = String.fromCharCode(0);
-  for (const k of ["route:raw:a b", `route:raw:a${ctl}b`, "route:raw:<script>", "route:raw:x]", "sess:box a", "inst:a/b"]) {
-    assert.equal(isShellRowKey(k), false, `E11 «${JSON.stringify(k)}» 를 행 키로 받았다`);
+  for (const k of ["route:raw:a b", `route:raw:a${ctl}b`, "route:raw:<script>", 'route:raw:a"b', "route:raw:a`b", "route:raw:x](y", "sess:box a", "inst:a/b"]) {
+    assert.equal(isShellRowKey(k), false, `E11·E40 «${JSON.stringify(k)}» 를 행 키로 받았다`);
+  }
+});
+
+test("★E39 해시에서 브라우저가 안 바꾸는 글자([ ] { } | \\ ^)는 멀쩡한 주소일 수 있다 — 버리지 않는다(조회 정규화라 오탐 = 영구 삭제)", () => {
+  for (const k of ["route:raw:f?path=a[1].txt", "route:raw:a|b", "route:raw:a{b}", "route:raw:a^b", "route:raw:a\\b", "route:raw:x]"]) {
+    assert.equal(isShellRowKey(k), true, `★E39 «${k}» 를 버렸다 — 사람이 친 주소의 치움·고정이 조회 한 번에 사라진다`);
   }
 });
 
@@ -260,6 +266,16 @@ test("A18 왕복이 안정적이다(정규화 결과를 다시 정규화해도 �
   });
   assert.deepEqual(normalizeShellPrefs(once), once,
     "멱등이 아니다 — 조회 때 한 번 더 도는 정규화가 저장된 값을 바꾼다");
+});
+
+test("★R5 통째 교체를 거절한 저장(null)은 409 로 알린다 — 성공을 가장하지 않는다(capability 배선)", () => {
+  //  store 는 «patch 로 관리되는 행이라 통째 교체를 안 받았다» 를 null 로 돌려준다(pg-test E36). 그 null 을 200 으로
+  //   흘리면 옛 번들은 저장된 줄 안다 — 409 여야 옛 화면의 post 가 실패로 받는다.
+  const src = readFileSync(path.join(ROOT, "src/capabilities/shell-prefs.ts"), "utf8");
+  assert.match(src, /const out = await setShellPrefs\(uid, input\?\.prefs\);\s*if \(!out\) throw new HttpError\(409,/,
+    "R5 setShellPrefs 의 null(거절)을 409 로 바꾸는 배선이 없다");
+  assert.match(src, /if \(patch && typeof patch === "object" && !Array\.isArray\(patch\)\) return await patchShellPrefs\(uid, patch\);/,
+    "R5 patch 가 있으면 병합으로 가는 분기가 없다 — 새 화면의 저장까지 409 로 떨어진다");
 });
 
 // ── C. seam — 서버 표 ↔ 화면 선언 ───────────────────────────────────────────

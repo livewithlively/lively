@@ -129,6 +129,7 @@ function init(): void {
  */
 export function reloadRailPrefs(): void {
   if (!inited) return;
+  const hadSources = order.includes('sources');
   try {
     const raw = localStorage.getItem(MAIN_STORE);
     order = raw ? normalizeOrder(JSON.parse(raw)) : defaultOrder();
@@ -137,7 +138,12 @@ export function reloadRailPrefs(): void {
   //   (아직 옛 기본값의 'sources' 를 든 사본)으로 order 를 갈아끼우므로 청소가 그대로 되돌려진다 — 표식은
   //   이미 서 있어 두 번 다시 돌지 않는다. 그래서 **이번 로드에 청소한 경우에만** 정본에도 반영한다.
   //   (표식 자체는 init() 이 세우므로 «브라우저당 한 번» 은 그대로다 — 사람이 나중에 다시 고정하면 그 결정이 산다.)
-  if (cleanedSrcThisLoad && order.includes('sources')) {
+  //  #3887 — 이 청소는 **정본이 옛 기본값을 되돌려 놓은 그 한 번**에만 돈다: 표식을 한 번 쓰면 내리고, 다시 읽기 전
+  //   순서에 이미 'sources' 가 있었다면(이 페이지에서 사람이 다시 고정했다) 건드리지 않는다. 다시 읽기는 부팅 동기 말고도
+  //   저장 응답(onShellPrefsAdopted)마다 불린다 — 표식이 페이지 내내 서 있으면 그때마다 사람의 고정을 서버에서 지웠다.
+  const cleanNow = cleanedSrcThisLoad && !hadSources;
+  cleanedSrcThisLoad = false;
+  if (cleanNow && order.includes('sources')) {
     order = order.filter((k) => k !== 'sources');
     try { localStorage.setItem(MAIN_STORE, JSON.stringify(order)); } catch (_) { /* 이번 화면은 된다 */ }
     shellPrefsPush();   // 정본에도 내려야 다른 기기·다음 로드가 다시 밀어 넣지 않는다

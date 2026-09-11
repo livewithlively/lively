@@ -17,7 +17,10 @@ let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
 const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };
 const chk = (n, c, why) => (c ? ok(n) : bad(n, why || ""));
-const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+//  값 비교 — 객체 키 순서는 무시한다(jsonb 가 늘어놓는 순서를 판정에 섞지 않는다). 배열 순서는 본다(순서가 뜻이다).
+//  ⚠ 맵 **순서** 자체를 재는 행(O2·O3·E21)은 Object.keys 를 따로 본다.
+const sortKeys = (v) => Array.isArray(v) ? v.map(sortKeys) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys(v[k])])) : v;
+const same = (a, b) => JSON.stringify(sortKeys(a)) === JSON.stringify(sortKeys(b));
 
 const A = "__shellpref_pg_a__", B = "__shellpref_pg_b__";
 const PIN = "lively_v2_app_pin", OPENED = "lively_v2_side_grpopened", DISMISS = "lively_v2_side_dismissed", GROUP = "lively_v2_side_group";
@@ -35,11 +38,13 @@ try {
     const r = await store.patchShellPrefs(A, { [PIN]: ["sess:box-1"] });
     const db = await raw(A);
     chk("E18 행이 없어도 patch 가 행을 만들고 그 저장소만 담는다",
-      r.saved === true && same(r.prefs, { [PIN]: ["sess:box-1"] }) && same(db, { [PIN]: ["sess:box-1"] }), JSON.stringify({ r, db }));
+      r.saved === true && r.merged === true && same(r.prefs, { [PIN]: ["sess:box-1"] }) && same(db, { [PIN]: ["sess:box-1"], "~patched": true }),
+      JSON.stringify({ r, db }));
   }
 
   // ── ★E16 patch 는 **든 저장소만** 바꾼다 — 다른 기기가 해 둔 저장소는 그대로 ──
   {
+    await cleanup();   // 통째 교체로 씨앗을 심으려면 patch 표식이 없는 행이어야 한다(E36)
     await store.setShellPrefs(A, { [PIN]: ["sess:box-1"], [OPENED]: ["p:1"], [DISMISS]: { "route:sources": "" }, [GROUP]: "proj" });
     const r = await store.patchShellPrefs(A, { [OPENED]: ["p:1", "p:2"] });
     const db = await raw(A);
@@ -61,21 +66,45 @@ try {
       !(DISMISS in afterEmpty) && !(ORDER in afterEmpty) && same(afterEmpty[PIN], ["sess:box-1"]), JSON.stringify(afterEmpty));
   }
 
-  // ── E19 patch 가 없는 저장(구버전 화면)은 종전대로 통째 교체 ──
+  // ── ★E36 patch 로 쓴 행에는 통째 교체(옛 번들 탭)를 받지 않는다 — null(=409) · 행 불변 ──
   {
+    const before = await raw(A);
     const r = await store.setShellPrefs(A, { [GROUP]: "proj" });
     const db = await raw(A);
-    chk("E19 prefs 만 오면 통째 교체다 — 요청에 없는 저장소는 지워진다(구버전 화면의 «비움» 이 서버에 닿는다)",
-      same(db, { [GROUP]: "proj" }) && same(r.prefs, { [GROUP]: "proj" }), JSON.stringify(db));
+    chk("★E36 patch 로 쓴 행(~patched)에 통째 교체가 오면 거절(null)하고 행을 안 바꾼다 — 낡은 캐시의 통째 교체가 다른 기기의 정리를 덮지 못한다",
+      r === null && same(db, before) && db["~patched"] === true, JSON.stringify({ r, db }));
+  }
+
+  // ── E19·E37 patch 로 쓴 적 없는 행은 종전대로 통째 교체 ──
+  {
+    await cleanup();
+    await store.setShellPrefs(A, { [PIN]: ["sess:box-1"], [OPENED]: ["p:1"] });
+    const r = await store.setShellPrefs(A, { [GROUP]: "proj" });
+    const db = await raw(A);
+    chk("E19·E37 patch 로 쓴 적 없는 행은 prefs 로 통째 교체다 — 요청에 없는 저장소는 지워진다(구버전 화면의 «비움» 이 서버에 닿는다)",
+      r !== null && same(db, { [GROUP]: "proj" }) && same(r.prefs, { [GROUP]: "proj" }) && !("~patched" in db), JSON.stringify(db));
+    await store.patchShellPrefs(A, { [PIN]: ["sess:box-1"] });
+    await store.patchShellPrefs(A, { [OPENED]: ["p:1"] });
+    await store.patchShellPrefs(A, { [DISMISS]: { "route:sources": "" } });
+  }
+
+  // ── R3 병합 응답엔 merged 표식이 있고, 저장 전용 칸(~patched·~order)은 새지 않는다 ──
+  {
+    const r = await store.patchShellPrefs(A, { [GROUP]: "proj" });
+    const g = await store.getShellPrefs(A);
+    const leaked = Object.keys(r.prefs).concat(Object.keys(g.prefs)).filter((k) => k.startsWith("~"));
+    chk("R3 patch 응답은 merged:true · 조회·응답에 저장 전용 칸이 없다", r.merged === true && !("merged" in g) && leaked.length === 0,
+      JSON.stringify({ merged: r.merged, leaked }));
   }
 
   // ── E20 허용목록 밖 키만 든 patch 는 아무것도 안 바꾼다 ──
   {
     const before = await raw(A);
-    const r = await store.patchShellPrefs(A, { evil_store: ["x"], "~order:lively_v2_side_dismissed": ["route:x"] });
+    const r = await store.patchShellPrefs(A, { evil_store: ["x"], "~order:lively_v2_side_dismissed": ["route:x"], "~patched": false });
     const db = await raw(A);
-    chk("E20 허용목록 밖 키(저장 전용 순서 칸 포함)만 든 patch 는 문서를 안 바꾸고 지금 문서를 돌려준다",
-      same(db, before) && same(r.prefs, { [GROUP]: "proj" }), JSON.stringify({ before, db, r }));
+    const now = await store.getShellPrefs(A);
+    chk("E20 허용목록 밖 키(저장 전용 칸 포함)만 든 patch 는 문서를 안 바꾸고 지금 문서를 돌려준다",
+      same(db, before) && same(r.prefs, now.prefs) && r.prefs[GROUP] === "proj", JSON.stringify({ before, db, r }));
   }
 
   // ── ★E21 patch 에도 상한·형식이 걸리고, 버린 개수를 알린다 ──
@@ -112,6 +141,7 @@ try {
   // ── O3 통째 교체(구버전 화면) 경로도 순서 칸을 적는다 ──
   {
     const long = "route:raw:projects2/p/9", short = "route:home";
+    await cleanup();   // 통째 교체 경로 — patch 표식 없는 행에서
     await store.setShellPrefs(A, { [DISMISS]: { [long]: "", [short]: "" } });
     const got = await store.getShellPrefs(A);
     chk("O3 통째 교체로 저장한 맵도 조회에서 순서가 되살아난다", same(Object.keys(got.prefs[DISMISS]), [long, short]), JSON.stringify(Object.keys(got.prefs[DISMISS])));
@@ -124,6 +154,15 @@ try {
     const got = await store.getShellPrefs(A);
     chk("O4 순서 칸 없는 옛 문서도 맵·다른 저장소가 온전히 내려간다",
       Object.keys(got.prefs[DISMISS]).length === 2 && got.prefs[DISMISS]["route:home"] === "done" && got.prefs[GROUP] === "proj", JSON.stringify(got.prefs));
+  }
+
+  // ── E41 저장된 prefs 가 객체가 아니면(과거 손상) {} 로 보고 병합한다 — 배열로 굳지 않는다 ──
+  {
+    await itemsPool.query(`UPDATE member_shell_pref SET prefs = '[1,2]'::jsonb WHERE member_id = $1`, [A]);
+    const r = await store.patchShellPrefs(A, { [GROUP]: "proj" });
+    const db = await raw(A);
+    chk("E41 배열로 손상된 행도 patch 한 번에 객체로 돌아온다(`배열 || 객체` 로 굳지 않는다)",
+      db && !Array.isArray(db) && db[GROUP] === "proj" && r.prefs[GROUP] === "proj", JSON.stringify(db));
   }
 
   // ── E16′ 동시에 온 두 patch(다른 저장소)가 서로를 지우지 않는다 — 한 문장 병합 ──

@@ -5,6 +5,7 @@
 //  정규화·허용목록·상한은 shell-pref-store 가 전담(normalizeShellPrefs). 저장은 POST(RestMount 는 GET/POST 만 허용).
 import { z } from "zod";
 import type { Capability } from "./types.js";
+import { HttpError } from "./rest-util.js";
 import { getShellPrefs, patchShellPrefs, setShellPrefs } from "../v6/shell-pref-store.js";
 
 // ── 내 새 셸 개인화 조회 ──
@@ -25,6 +26,8 @@ const shellPrefsIndex: Capability = {
 //  #3887 — `patch` 가 있으면 **그 저장소만** 병합하고(null·빈 값 = 그 저장소 지움), 없으면 종전대로 `prefs` 로 통째 교체한다.
 //   새 화면은 둘을 **함께** 보낸다: 옛 서버는 `patch` 를 모르고 `prefs` 로 교체한다(종전과 같다). `patch` 만 보내면
 //   옛 서버는 `prefs` 가 없는 요청을 «빈 문서로 교체» 로 읽어 계정의 정리를 통째로 지운다.
+//   ⚠ patch 로 한 번이라도 쓴 행에는 통째 교체(옛 번들 탭)를 **409 로 거절**한다 — 낡은 캐시의 통째 교체 한 번이 다른
+//    기기의 정리를 덮고, 새 화면은 덮인 저장소를 다시 보내지 않아 그대로 굳는다(shell-pref-store.ts PATCHED_KEY).
 const shellPrefsSet: Capability = {
   name: "shell_prefs_set",
   title: "셸 개인화 저장",
@@ -40,7 +43,9 @@ const shellPrefsSet: Capability = {
     const uid = user?.userId ?? "";
     const patch = input?.patch;
     if (patch && typeof patch === "object" && !Array.isArray(patch)) return await patchShellPrefs(uid, patch);
-    return await setShellPrefs(uid, input?.prefs);
+    const out = await setShellPrefs(uid, input?.prefs);
+    if (!out) throw new HttpError(409, "이 계정의 셸 설정은 새 화면이 관리합니다 — 페이지를 새로 고친 뒤 다시 해 주세요");
+    return out;
   },
 };
 

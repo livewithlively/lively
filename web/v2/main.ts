@@ -1562,7 +1562,8 @@ async function migrateSessionDismissals(): Promise<void> {
   try {
     for (let i = 0; i < plan.sessionIds.length; i += 500) await dismissSessions(plan.sessionIds.slice(i, i + 500));
   } catch (e) { console.warn('[side] 치움 기록 옮기기 실패 — 다음 부팅에 다시 시도합니다', e); return; }
-  dismissed = plan.nextMap;
+  //  #3887 — 옮기는 동안(await) 사람이 치운 행이 있을 수 있다 — 옮기기 전에 뜬 계획(plan.nextMap)으로 덮지 말고 **지금 맵**에서 세션 키만 뺀다.
+  dismissed = withoutSessionKeys(dismissed);
   sessDismissMigrated = true;
   saveDismissed();
   for (const id of plan.sessionIds) dismissedSess.add(id);

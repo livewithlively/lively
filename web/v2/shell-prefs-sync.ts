@@ -6,12 +6,14 @@
 //   한 고정·치움이 그 판에 통째로 덮였다. 사람은 아무것도 안 눌렀는데 결정이 사라진다.
 //
 // ── 어떻게 ────────────────────────────────────────────────────────────────────
-//  · **기준판(base)** — «이 창이 마지막으로 서버와 같다고 확인한 저장소별 값». 부팅 동기와 저장 성공 뒤에만 선다.
-//  · 저장은 **기준판과 다른 저장소만** patch 로 보낸다(서버가 그 저장소만 병합한다). 기준판이 없으면(부팅 조회 실패)
-//    무엇이 바뀌었는지 모르므로 종전대로 통째 교체다.
-//  · 응답은 저장 뒤 서버 문서 전체다. 저장소마다 **보낸 뒤로 이 창 캐시가 그대로면** 서버 값을 캐시에 얹는다 —
-//    서버가 상한·형식으로 버린 것과 다른 기기가 바꾼 저장소가 그 자리에서 화면에 온다. 그새 캐시가 바뀌었으면
-//    캐시를 두고 기준판만 서버 값으로 옮긴다(다음 저장이 새 값을 보낸다).
+//  · **기준판(base)** — «이 창이 서버와 같다고 아는 저장소별 값». 부팅 때 **늘** 선다:
+//    조회 성공 → 서버판을 얹은 뒤의 캐시 · 서버에 이력 없음 → 빈 판 · 조회 실패 → **부팅 스냅숏**(서버판을 얹기 전 캐시).
+//    그래서 조회가 실패해도 통째 교체를 보내지 않는다 — «이 창에서 로드 뒤 바뀐 것» 만 보낸다.
+//  · 저장은 **기준판과 다른 저장소만** patch 로 보낸다(서버가 그 저장소만 병합한다).
+//  · 응답에서 얹는 것은 **보낸 저장소의 서버 정규화 결과**(상한·형식으로 버린 뒤)뿐이다 — 보낸 뒤로 캐시가 그대로일 때만.
+//    ⚠ **안 보낸 저장소는 얹지 않는다**(적대검토 r2). 다른 기기의 값이 «더 새 결정» 인지 «낡은 캐시의 통째 교체» 인지
+//     여기서는 가를 수 없다 — 얹으면 조회 실패 창·옛 번들 탭의 통째 교체 한 번이 이 창에 영구히 채택된다.
+//  · 응답에 병합 표식(merged)이 없으면 옛 서버다 — prefs 로 통째 교체됐으니 기준판은 보낼 때 캐시 전부, 얹는 것 없음.
 //  비교는 저장소 값의 JSON(순서 포함 — 레일·치움 순서는 뜻이 있다). 빈 저장소는 '' 로 «없음» 과 같게 친다.
 
 /** 저장소 모양 — shell-prefs.ts 와 같다. */
@@ -25,47 +27,53 @@ export function canonOf(kind: SyncKind, v: unknown): string {
 }
 
 /**
- * 이번 저장에 무엇을 싣나.
- * @param now  지금 캐시의 저장소별 비교값(동기 저장소 전부)
- * @param base 기준판 — null 이면 서버가 무엇을 가졌는지 모른다
- * @returns patch = patch 에 실을 저장소 이름(비었으면 보낼 것 없음) · null 이면 통째 교체만
+ * 조회 응답이 서버 정본으로 믿을 모양인가 — `{ prefs: 객체, saved: 불리언 }`.
+ *  api() 는 2xx 인데 JSON 이 아니면 null 을 돌려준다(lib/net.ts) — 그걸 «서버에 이력 없음» 으로 읽으면 안 된다.
  */
-export function planPush(now: Record<string, string>, base: Record<string, string> | null): { patch: string[] | null } {
-  if (!base) return { patch: null };
-  return { patch: Object.keys(now).filter((name) => now[name] !== (base[name] ?? '')) };
+export function isPrefsResponse(v: unknown): v is { prefs: Record<string, unknown>; saved: boolean } {
+  if (!v || typeof v !== 'object') return false;
+  const r = v as Record<string, unknown>;
+  return !!r.prefs && typeof r.prefs === 'object' && !Array.isArray(r.prefs) && typeof r.saved === 'boolean';
+}
+
+/** 이번 저장에 patch 로 실을 저장소 — 기준판과 비교값이 다른 것(비었으면 보낼 것이 없다). */
+export function planPush(now: Record<string, string>, base: Record<string, string>): string[] {
+  return Object.keys(now).filter((name) => now[name] !== (base[name] ?? ''));
 }
 
 export interface AdoptInput {
-  /** 동기 저장소 이름 전부. */
-  names: string[];
-  /** 보내기 직전의 기준판(없었으면 null). */
-  base: Record<string, string> | null;
-  /** 실어 보낸 저장소 → 보낼 때의 캐시 비교값. 통째 교체였으면 저장소 전부. */
+  /** 보내기 직전의 기준판. */
+  base: Record<string, string>;
+  /** 실어 보낸 저장소 → 보낼 때의 캐시 비교값. */
   sent: Record<string, string>;
+  /** 보낼 때의 캐시 비교값 전부 — 옛 서버는 이것(prefs)으로 통째 교체했다. */
+  all: Record<string, string>;
   /** 응답을 받은 지금의 캐시 비교값. */
   cacheNow: Record<string, string>;
-  /** 응답(저장 뒤 서버 문서)의 비교값. */
-  server: Record<string, string>;
+  /** 병합 응답(merged)의 저장소별 비교값. null = 병합 표식 없음(옛 서버의 통째 교체). */
+  server: Record<string, string> | null;
 }
 
 /**
  * 저장 응답을 받았다 — 새 기준판과 «캐시에 서버 값을 얹을 저장소» 를 정한다.
- *  얹는 조건은 하나다: 이 창의 캐시가 **서버가 받은 그 값(또는 이 창이 서버와 같다고 알던 값)에서 안 바뀌었다**.
- *   · 보낸 저장소: 보낼 때 값 그대로면 서버 값(상한·형식으로 버린 뒤)을 얹는다.
- *   · 안 보낸 저장소: 기준판 그대로면 서버 값(다른 기기의 변경)을 얹는다.
- *   · 그새 바뀐 저장소는 얹지 않는다 — 방금 사람이 한 일을 서버의 옛 값으로 되돌리면 그게 바로 이 모듈이 막으려는 사고다.
- *  새 기준판은 저장소마다 서버 값이다(서버가 지금 가진 것 — 다음 저장의 비교 기준).
+ *  · 옛 서버(server=null): 보낸 prefs 로 통째 교체됐다 → 기준판 = 보낼 때 캐시 전부 · 얹는 것 없음.
+ *  · 보낸 저장소: 기준판 ← 서버 값. 보낼 때 값 그대로인데 서버 값이 다르면(버림) 얹는다.
+ *    그새 바뀐 저장소는 얹지 않는다 — 방금 사람이 한 일을 되돌리지 않는다(다음 저장이 새 값을 보낸다).
+ *  · 안 보낸 저장소: 기준판·캐시 모두 그대로(모듈 머리말 — 남의 값은 채택하지 않는다).
  */
 export function adoptResponse(i: AdoptInput): { base: Record<string, string>; adopt: string[] } {
-  const next: Record<string, string> = {};
+  if (!i.server) return { base: { ...i.all }, adopt: [] };
+  const next: Record<string, string> = { ...i.base };
   const adopt: string[] = [];
-  for (const name of i.names) {
+  for (const name of Object.keys(i.sent)) {
     const server = i.server[name] ?? '';
     next[name] = server;
-    const known = Object.prototype.hasOwnProperty.call(i.sent, name) ? i.sent[name] : i.base ? (i.base[name] ?? '') : null;
-    if (known === null) continue;   // 기준판도 없고 보내지도 않았다 — 캐시가 서버와 같았는지 모르니 건드리지 않는다
-    const cache = i.cacheNow[name] ?? '';
-    if (cache === known && cache !== server) adopt.push(name);
+    if ((i.cacheNow[name] ?? '') === i.sent[name] && server !== i.sent[name]) adopt.push(name);
   }
   return { base: next, adopt };
+}
+
+/** 저장 실패 뒤 다시 보낼 때까지 기다릴 시간(ms) — n 번째 재시도. 다 쓰면 null(다음 조작이 다시 보낸다). */
+export function retryDelay(n: number): number | null {
+  return [5_000, 20_000, 60_000][n] ?? null;
 }
