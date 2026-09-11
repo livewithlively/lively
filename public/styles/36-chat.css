@@ -140,23 +140,53 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
    그 아래에서는 [연결됨]·얼굴·[⋯] 만으로도 제목이 두 글자로 굶는다. */
 /* 칸이 좁아질 때 **무엇부터 포기하나** — 위에서부터 차례로. 전부 [⋯] 안에 사본이 있거나(두 단추),
    다른 데서 이미 말하는 것(연결 상태는 제목 앞 점, 노드는 [⋯ ▸ 이 세션])이라 줄만 잃고 기능은 안 잃는다. */
-@container schead (max-width: 1040px) { .sc-head .sc-act-dup { display: none; } }          /* 화면 복구·환경 설정 → [⋯] */
-@container schead (max-width: 900px)  { .sc-head .sc-termstat { display: none; } }         /* 연결됨 → 제목 앞 상태점 */
-@container schead (max-width: 900px)  { .sc-head .sc-titlebox { min-width: 14ch; } }       /* 제목 바닥을 낮춘다 */
-@container schead (max-width: 780px)  { .sc-head .sc-titlebox { min-width: 0; }
-  .sc-run-top .dt-chip-sel { max-width: 108px; } .sc-run-top .sc-run-harness { max-width: 132px; } }
-@container schead (max-width: 660px)  { .sc-head .sc-meta { display: none; } }              /* 노드 알약 → [⋯ ▸ 이 세션] */
-@container schead (max-width: 560px)  { .sc-run-top .dt-chip-sel { max-width: 84px; } .sc-run-top .sc-run-harness { max-width: 96px; } }
-.sc-act { font-size: 12.5px; padding: 4px 8px; border-radius: 6px; color: var(--ink-sub); }
-.sc-act:hover { background: var(--bg-tint); color: var(--ink); }
-.sc-act-on { background: var(--bg-punch); color: var(--ink); }
+/* ★ 순서를 뒤집었다(원준 2026-09-10). 종전 사다리는 «되찾을 수 있나»로 순서를 매겼다 — [⋯] 안에 사본이
+   있으면 먼저 접었다. 그래서 **가장 자주 쓰는 단추가 제일 먼저**(1040px) 사라지고, **기능이 아예 없는
+   노드 알약이 제일 나중까지**(660px) 버텼다. 사람이 겪는 순서는 그 반대다:
+
+     «이게 돌아가는 컴퓨터 파란 박스 안에 들어있는게 사이즈 줄였을 때 가장 먼저 사라지는것으로 두고 싶어.
+      가장 덜중요해(그냥 표시만 하는거고 기능이 없음). 버튼이 사라지면 안되지.» — 원준 2026-09-10
+
+   그래서 기준을 **«얼마나 자주 쓰나»** 로 바꾼다. 되찾을 수 있다는 사실은 순서가 아니라 안전망이다.
+     ① 노드      — 표시만 하고 기능이 없다. 전체 이름은 [⋯ ▸ 이 세션] 에 남는다
+     ② 하네스    — 거의 바꿀 일이 없다(읽기 전용 칩·선택기 둘 다 .sc-ax-h)
+     ③ 모델·추론강도 — 자주 바꾸는 축이라 마지막까지 버틴다(.sc-ax-me)
+     ✗ 연결됨·화면 복구·환경 설정·[⋯] — **폭으로는 안 사라진다**. 압력은 제목 바닥이 받는다. */
+@container schead (max-width: 1000px) { .sc-head .sc-meta { display: none; } }             /* ① 노드 */
+@container schead (max-width: 880px)  { .sc-head .sc-titlebox { min-width: 14ch; } }
+@container schead (max-width: 820px)  { .sc-head .sc-ax-h { display: none; } }             /* ② 하네스 */
+@container schead (max-width: 720px)  { .sc-head .sc-titlebox { min-width: 0; }
+  .sc-run-top .dt-chip-sel { max-width: 108px; } }
+@container schead (max-width: 620px)  { .sc-head .sc-ax-me { display: none; } }            /* ③ 모델·추론강도 */
+/* ★ 머리줄의 옷은 **칩(.dt-chip-sel)이 정본**이다(원준 2026-09-10: «하네스, 모델, 추론강도는 호버하면
+   박스 나오는 저 세팅이 진짜 디자인적으로 제일 예쁜 것 같거든 … 저거 3개는 차라리 다른걸 저기에 맞추던가»).
+   요지는 **테두리를 미리 그려 두지 않는 것**이다 — 쉴 때는 글자만 있고, 손을 얹으면 그때 상자가 나타난다.
+   그래서 바는 평상시 글자줄이고 손을 얹는 순간 조작면이 된다.
+   종전엔 이 줄에 크기 4종(10·11.5·12·12.5)·굵기 3종(500·600·700)·회색 3종이 섞여 있었다(실측 2026-09-10).
+   이제 이름(13.5·800)만 예외고 나머지는 전부 12·500·--ink-sub·22px·999px 한 벌이다. */
+.sc-act { font: inherit; font-size: 12px; font-weight: 500; color: var(--ink-sub);
+  height: 22px; padding: 1px 7px; border: 1px solid transparent; border-radius: 999px; background: transparent; }
+.sc-act:hover { border-color: var(--line-net); color: var(--blue); background: transparent; }
+.sc-act-on { border-color: var(--line-net); color: var(--blue); background: var(--bg-tint); }
+/* 연결 상태 + [화면 복구] 한 덩어리 — 테두리를 **묶음이** 쥐고 안쪽 단추는 제 테두리를 안 그린다.
+   손을 얹으면 둘이 함께 뜬다: «지금 어떤가»와 «그걸 고치는 단추»가 한 몸이라는 걸 모양이 말한다. */
+.sc-pair { display: inline-flex; align-items: center; gap: 0; flex: none;
+  border: 1px solid transparent; border-radius: 999px; }
+.sc-pair:hover { border-color: var(--line-net); }
+.sc-pair[hidden] { display: none; }
+.sc-pair .sc-act { border-color: transparent; }
+.sc-pair .sc-act:hover { color: var(--blue); }
+.sc-pair-sep { width: 1px; height: 12px; background: var(--line-net); flex: none; }
+.sc-pair .sc-termstat[hidden] + .sc-pair-sep { display: none; }
 /* 함께 보는 사람(#3778) — 얼굴 스택이 곧 [공유] 다. 문패(v2 셸)에 있던 .pn-faces 가 이 자리로 내려왔다.
    단추이므로 hover 에 반응해야 «누를 수 있다»가 읽힌다 — 얼굴만 있으면 장식으로 본다. */
-.sc-faces { display: inline-flex; align-items: center; padding: 3px 5px 3px 4px; margin-right: 2px;
-  border: 0; border-radius: 999px; background: none; cursor: pointer; }
+.sc-faces { display: inline-flex; align-items: center; height: 22px; padding: 0 3px 0 2px; margin-right: 2px;
+  border: 1px solid transparent; border-radius: 999px; background: none; cursor: pointer;
+  font: inherit; font-size: 12px; font-weight: 500; flex: none; }
+.sc-faces:hover { border-color: var(--line-net); background: transparent; }
 .sc-faces:hover { background: var(--bg-tint); }
 .sc-faces:hover .sc-face-add { border-color: var(--blue); color: var(--blue); }
-.sc-face { width: 21px; height: 21px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+.sc-face { width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
   font-size: 10px; font-weight: 700; color: var(--on-fill); border: 2px solid var(--bg); margin-left: -6px; flex: none; }
 .sc-face:first-child { margin-left: 0; }
 .sc-face-more { background: var(--gray-bg); color: var(--ink-sub); font-size: 9.5px; }
@@ -165,7 +195,9 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   font-size: 12px; font-weight: 600; line-height: 1; }
 @media (max-width: 720px) { .sc-faces { padding-left: 2px; padding-right: 2px; } }
 /* 터미널 연결 상태(#1744) — 상단바를 합치며 터미널 툴바에 있던 한 줄이 여기로 왔다. 터미널이 열려 있을 때만 뜬다. */
-.sc-termstat { font-size: 11.5px; color: var(--muted); white-space: nowrap; margin-right: 2px; }
+.sc-termstat { font-size: 12px; font-weight: 500; color: var(--ink-sub); white-space: nowrap;
+  height: 22px; padding: 1px 7px; display: inline-flex; align-items: center; }
+.sc-termstat[hidden] { display: none; }
 .sc-termstat[hidden] { display: none; }
 .sc-termstat.ok { color: var(--mint-deep); }
 .sc-termstat.err { color: var(--coral); }

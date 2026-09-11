@@ -308,9 +308,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   paintTitle();
   // 겉에 둘 것 = **터미널을 보다가 손이 자주 가는 것**(화면 복구·환경 설정). 보기 전환·목차처럼 가끔 쓰는 것은 [⋯] 안으로
   //  내린다(상민님 2026-08-19). 종전엔 반대였다 — 화면이 깨졌을 때 복구가 메뉴 두 단계 뒤에 있었다.
+  //  ⚠ 종전의 `sc-act-dup`(= [⋯] 안에 사본이 있으니 좁아지면 먼저 접는다)은 **뗐다**(원준 2026-09-10):
+  //   이 둘은 폭으로 사라지지 않는다. 자주 쓰는 것을 먼저 접는 순서가 뒤집혀 있었다(36-chat.css 사다리 주석).
   const chatBadge = el('span', { class: 'sc-beta', text: '베타', hidden: true, title: '대화 인터페이스는 베타예요 — 표시가 어긋나면 터미널로 보세요' });
-  const fixBtn = el('button', { class: 'btn-text sc-act sc-act-dup', type: 'button', text: '화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구합니다', onclick: () => termAct('reconnect') }) as HTMLButtonElement;
-  const setBtn = el('button', { class: 'btn-text sc-act sc-act-dup', type: 'button', text: '환경 설정', title: '터미널 글꼴·크기·테마·커서·스크롤 속도', onclick: () => termAct('settings') }) as HTMLButtonElement;
+  const fixBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구합니다', onclick: () => termAct('reconnect') }) as HTMLButtonElement;
+  const setBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '환경 설정', title: '터미널 글꼴·크기·테마·커서·스크롤 속도', onclick: () => termAct('settings') }) as HTMLButtonElement;
   // 상단바 통합(#1744) — 터미널 페이지가 갖고 있던 것들이 이 줄로 온다: [파일](우패널 탐색기) · 연결 상태 · [⋯](터미널 조작).
   const filesBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '파일', title: '이 세션의 작업 폴더를 오른쪽 패널에서 봅니다(업로드·다운로드)', onclick: () => {
     const on = opts.onToggleFiles ? opts.onToggleFiles() : false;
@@ -361,16 +363,20 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  얼굴 줄이 바뀌면 **이 세션 것일 때만** 다시 그린다(presence 가 '바뀐 것'만 알려준다).
   const offViewers = onViewers((sid) => { if (sid === target.id) paintFaces(); });
 
+  //  ★ 연결 상태와 [화면 복구] 는 **한 덩어리**다(원준 2026-09-10) — «지금 어떤가»와 «그걸 고치는 단추»라
+  //   서로를 설명한다. 테두리 하나를 같이 쓰므로 손을 얹으면 둘이 함께 뜬다.
+  const fixPair = el('span', { class: 'sc-pair' }, termStatusEl, el('span', { class: 'sc-pair-sep', 'aria-hidden': 'true' }), fixBtn);
   const headR = el('div', { class: 'sc-head-r' },
-    termStatusEl,
-    facesEl,
     opts.onToggleFiles ? filesBtn : null,
-    [fixBtn, setBtn],   // 보이기는 setMode 가 정한다 — 늦게 붙는 터미널에도 자리가 남게 항상 DOM 에 둔다
+    fixPair,
+    setBtn,             // 보이기는 setMode 가 정한다 — 늦게 붙는 터미널에도 자리가 남게 항상 DOM 에 둔다
     moreBtn);
   //  #3784 — 머리줄 우클릭 = 이 세션의 메뉴(사이드바 행과 같은 것). 표만 단다 — 셸 배선이 읽는다.
   const head = el('div', { class: 'sc-head', 'data-ctx': 'session', 'data-sid': first.id },
     el('div', { class: 'sc-head-l' },
-      dot, titleHost, chatBadge,
+      //  ★ 얼굴 스택은 **세션 이름 바로 오른쪽**이다(원준 2026-09-10) — «이 세션은 무엇이고 누가 보나»가
+      //   한 덩어리로 읽힌다. 종전엔 오른쪽 조작부에 섞여 있어 조작 단추처럼 보였다.
+      dot, titleHost, facesEl, chatBadge,
       el('span', { class: 'sc-meta' }, runEl)),
     headR);
 
@@ -385,12 +391,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   // 상단 선택기로 바꾼다. 런타임 변경을 지원하는 CLI 는 그 자리에서 바꾸고, 지원하지 않는 CLI·다른 하네스는 같은 폴더와
   // 최근 대화를 넘긴 새 프로세스로 이어 연다. 구현 방식과 무관하게 사용자는 여기서 고른 뒤 곧바로 이어 입력한다.
   const chipMode = el('span', { class: 'dt-chip', hidden: true });
-  const chipProv = el('span', { class: 'dt-chip', hidden: true });
-  const selHarness = el('select', { class: 'dt-chip dt-chip-sel sc-run-harness', hidden: true, 'aria-label': 'AI 하네스' }) as HTMLSelectElement;
-  const chipModel = el('span', { class: 'dt-chip', hidden: true });
-  const chipEffort = el('span', { class: 'dt-chip', hidden: true });
-  const selModel = el('select', { class: 'dt-chip dt-chip-sel', hidden: true, 'aria-label': '모델' }) as HTMLSelectElement;
-  const selEffort = el('select', { class: 'dt-chip dt-chip-sel', hidden: true, 'aria-label': '추론강도' }) as HTMLSelectElement;
+  const chipProv = el('span', { class: 'dt-chip sc-ax-h', hidden: true });
+  const selHarness = el('select', { class: 'dt-chip dt-chip-sel sc-run-harness sc-ax-h', hidden: true, 'aria-label': 'AI 하네스' }) as HTMLSelectElement;
+  const chipModel = el('span', { class: 'dt-chip sc-ax-me', hidden: true });
+  const chipEffort = el('span', { class: 'dt-chip sc-ax-me', hidden: true });
+  const selModel = el('select', { class: 'dt-chip dt-chip-sel sc-ax-me', hidden: true, 'aria-label': '모델' }) as HTMLSelectElement;
+  const selEffort = el('select', { class: 'dt-chip dt-chip-sel sc-ax-me', hidden: true, 'aria-label': '추론강도' }) as HTMLSelectElement;
   // 터미널 보기에서도 항상 보이는 상단 실행 설정. **제목 오른쪽, 세션 조작 왼쪽** — 머리줄 하나에 같이 선다
   //  (원준 2026-08-25 "여전히 두 줄이잖아"). 종전엔 폭이 좁아질 때 겹칠까 봐 아예 둘째 줄을 강제(flex 1 1 100%)
   //  했는데, 그러면 넓은 화면에서도 늘 두 줄이었다. 지금은 들어가면 한 줄, 안 들어가면 저절로 다음 줄로 접힌다
@@ -739,8 +745,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     termHost.hidden = m !== 'term';
     chatHost.hidden = m === 'term';
     chatBadge.hidden = m !== 'chat';
-    fixBtn.hidden = m !== 'term'; setBtn.hidden = m !== 'term';        // 터미널 조작은 터미널을 보고 있을 때만 겉에 둔다
-    termStatusEl.hidden = m !== 'term' || !termStatusEl.textContent;   // 연결 상태도 마찬가지(#1744)
+    //  ★ 판정을 «터미널을 보고 있나(m)» 에서 «터미널이 있나(hasTerm)» 로 옮긴다(원준 2026-09-10:
+    //   «환경설정은 중요한거같아»). 종전엔 대화로 보기만 해도 [화면 복구]·[환경 설정]·연결 상태가 통째로
+    //   사라졌다 — 폭과 무관하게. 터미널이 있으면 그 조작은 보고 있지 않아도 할 수 있어야 한다.
+    //   터미널이 아예 없는 세션에서는 그대로 숨는다(죽은 단추를 만들지 않는다).
+    const t = hasTerm();
+    fixBtn.hidden = !t; setBtn.hidden = !t;
+    termStatusEl.hidden = !t || !termStatusEl.textContent;             // 연결 상태도 마찬가지(#1744)
+    fixPair.hidden = fixBtn.hidden && termStatusEl.hidden;
     paintRunHead();                                                   // 모델·추론강도도 마찬가지 — 터미널을 볼 때만 머리줄에 선다
     if (m === 'chat') { view.scrollToBottom(); view.input.focus(); pokePoll(); }   // 가려진 동안 느슨했던 폴을 그 자리에서 따라잡는다
   }
