@@ -119,6 +119,11 @@ jobs:
             echo "APPLE_API_KEY: 내용 감지 → 파일로 변환($APPLE_API_KEY)"
           fi
           npm run icon
+          # ⚠ electron-builder 는 **26.16.1 이상**이어야 한다(#3907). 26.16.0 이하는 CSC_LINK 용 임시 키체인을 난수 암호로 만들어 놓고
+          #  `security set-key-partition-list -k` 에는 **p12 암호**(CSC_KEY_PASSWORD)를 넘긴다. macOS 26.5 까지는 잠금이 풀린
+          #  키체인이면 그 암호를 검사하지 않아 조용히 통과했고(26.3 실측: 틀린 암호도 exit 0), 26.6 러너부터 검사해서
+          #  `SecKeychainUnlock: The user name or passphrase you entered is not correct.` 로 죽었다(v0.1.365 mac 자산 누락).
+          #  시크릿 탓이 아니다 — 바로 앞의 `security import -P` 는 같은 암호로 성공한다. 업스트림 electron-builder#10066 · #10172.
           if [ -n "${CSC_LINK:-}" ]; then
             npx electron-builder --mac --publish never          # 진짜 인증서 — package.json 의 배포 설정 그대로
           else
