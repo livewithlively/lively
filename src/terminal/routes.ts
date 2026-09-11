@@ -39,7 +39,7 @@ import { isProjectSessionDir } from "../project/project-fs.js";
 // #2116 — 죽은 세션 메타의 '남에게도 보이나' 판정을 다른 게이트와 **같은 술어**로 맞춘다(cwd 축).
 const sharedByFolder = (dir: string): boolean => isProjectSessionDir(dir);
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
-import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, nodeSessionGone, isSelfNode, isSessionHostNode, liveNodes, nodeOfSession, nodeSessionHarness, gatewayDefersHere, listCentralSessions } from "../node/registry.js";
+import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, nodeSessionGone, isSelfNode, isSessionHostNode, liveNodes, nodeOfSession, nodeSessionHarness, gatewayDefersHere, listCentralSessions, remoteNodeOfSession } from "../node/registry.js";
 import type { NodeSessionInfo } from "../node/registry.js";
 import { relayNodeId, sessionRelayNodeId, sameTmuxCoordinate, isBoxSessionRow } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #2636 — 화면이 안 준 좌표는 서버가 되찾는다 · #3745 — 박스 세션엔 세션 호스트 좌표도 같은 tmux 다
 import type { NodeOp } from "../node/protocol.js";
@@ -910,8 +910,11 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const uid = idOf(userOf(req));
     const text = String(((req.body ?? {}) as Record<string, unknown>).text ?? "");
     if (!text.trim()) throw new HttpError(400, "보낼 내용이 없습니다");
-    const { nodeOfSession } = await import("../node/registry.js");
-    const nodeId = nodeOfSession(req.params.id);
+    //  #2600 T2 d6 — «좌표가 있다» 가 아니라 **«정말 저쪽 기계다»** 로 가른다(remoteNodeOfSession — 대화창·키 라우트와 같은 함수).
+    //   세션 호스트가 상주하면 매니지드 세션 전부에 호스트 좌표가 붙는데, 그걸 노드 세션으로 읽으면 말이 아웃박스(#1753 —
+    //   입력창 확인·에코 확정·재시도)를 건너뛰고 호스트 send-keys 로 곧바로 친다(2026-09-11 실측: 응답이 `queued·outbox_id`
+    //   가 아니라 `{ok:true}` 였다). 로그인·대화상자에 멈춘 세션이면 그 글자가 조용히 사라지는 바로 그 경로다.
+    const nodeId = (await remoteNodeOfSession(req.params.id, sessionGone)) ?? "";
     if (nodeId) {
       const v = await nodeCanAttach(nodeId, req.params.id, uid);
       if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
@@ -938,7 +941,8 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     ];
     const want = AXES.map((a) => ({ ...a, v: String(b[a.axis] ?? "").trim() })).filter((a) => a.v);
     if (!want.length) throw new HttpError(400, "바꿀 값이 없습니다");
-    const nodeId = nodeOfSession(req.params.id);
+    //  #2600 T2 d6 — 프롬프트 라우트와 같은 판정(remoteNodeOfSession). 매니지드 세션의 슬래시 명령도 아웃박스로 간다.
+    const nodeId = (await remoteNodeOfSession(req.params.id, sessionGone)) ?? "";
     if (nodeId) {
       const v = await nodeCanAttach(nodeId, req.params.id, uid);
       if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
@@ -1064,7 +1068,10 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const input = sessionHandoffInput(st, harness, flags, b.context);
     input.theme = themeOf(req, b);
     res.setHeader("Cache-Control", "no-store");
-    const nodeId = relayNodeId(st.node_id, isSelfNode) || nodeOfSession(id) || "";   // #2592 — 셀프 좌표는 중앙 경로로
+    //  #2592 — 셀프 좌표는 중앙 경로로. #2600 T2 d6 — **세션 호스트 좌표도** 저쪽 기계가 아니다(remoteNodeOfSession):
+    //   종전 `nodeOfSession(id)` 는 매니지드 세션의 호스트를 새 세션을 만들 노드로 골라, 멤버에게는 «본인이 등록한 노드가
+    //   아니고 공유 노드도 아닙니다» 403 이 났다(2026-09-11 실측) — «다른 AI 로 전환» 이 매니지드에서 통째로 막혀 있었다.
+    const nodeId = relayNodeId(st.node_id, isSelfNode) || (await remoteNodeOfSession(id, sessionGone)) || "";
     if (nodeId) {
       await requireCreatableNode(me, nodeId);
       const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);

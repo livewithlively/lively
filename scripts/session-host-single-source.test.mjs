@@ -346,4 +346,40 @@ t("[S16] 대화창·키 라우트·대화 감시자는 remoteNodeOfSession 으�
   assert.ok(!watch.some((l) => /\bnodeOfSession\s*\(/.test(l)), `${WATCH} 가 좌표만으로 저쪽 기계를 판정한다`);
 });
 
+// ── S17: 말 배달·명령·전환도 «정말 저쪽 기계인가» 로 가른다 (#2600 T2 d6 후속) ─────────────────────────────
+//  왜: S16 과 같은 실수가 세 자리에 더 있었다(2026-09-11 프로덕션 실측).
+//   ① `POST …/prompt` — 호스트 좌표를 노드로 읽어 매니지드 세션의 말이 **아웃박스를 건너뛰고** 호스트 send-keys 로 갔다
+//      (응답이 `queued·outbox_id` 가 아니라 `{ok:true}`). 로그인·대화상자에 멈춘 세션이면 글자가 조용히 사라지는 경로다.
+//   ② `POST …/runtime` — 모델·추론강도 슬래시 명령이 같은 길을 탔다.
+//   ③ `POST …/handoff` — 호스트를 새 세션을 만들 노드로 골라 **403 «본인이 등록한 노드가 아니고 공유 노드도 아닙니다»**.
+//   그리고 `deliverPrompt` 는 좌표를 안 받으면 스스로 되찾는다(리브 2턴) — 판정이 **불리는 함수 안에도** 있어야 한다.
+//  ⚠ 줄 단위·핸들러 단위로 본다(`code()` 는 문자열 속 `/*` 에 걸린다 — S10c 머리말).
+const DELIVER = "src/terminal/deliver-prompt.ts";
+t("[S17] 프롬프트·런타임·전환 라우트와 deliverPrompt 는 remoteNodeOfSession 으로 저쪽 기계를 가른다", () => {
+  const src = read(TERM_ROUTES);
+  const handler = (sig) => {
+    const at = src.indexOf(sig);
+    assert.ok(at >= 0, `${TERM_ROUTES} 에서 ${sig} 를 못 찾았다 — 경로가 바뀌었나`);
+    const next = src.indexOf("\n  app.", at + sig.length);
+    return src.slice(at, next < 0 ? undefined : next).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+  };
+  for (const [name, sig] of [
+    ["프롬프트", 'app.post("/api/ui/terminal/sessions/:id/prompt"'],
+    ["런타임", 'app.post("/api/ui/terminal/sessions/:id/runtime"'],
+    ["전환", 'app.post("/api/ui/terminal/sessions/:id/handoff"'],
+  ]) {
+    const body = handler(sig);
+    assert.ok(body.length > 5, `${name} 라우트 본문을 ${body.length}줄밖에 못 잘랐다 — 이 가드가 아무것도 안 보고 있다`);
+    assert.ok(body.some((l) => /remoteNodeOfSession\s*\(/.test(l)),
+      `${name} 라우트가 remoteNodeOfSession 을 안 쓴다 — 세션 호스트 좌표를 저쪽 기계로 읽는다`);
+    assert.ok(!body.some((l) => /\bnodeOfSession\s*\(\s*(req\.params\.id|id)\s*\)/.test(l)),
+      `${name} 라우트에 좌표만으로 저쪽 기계를 가르는 nodeOfSession(…) 이 남아 있다`);
+  }
+  const deliver = codeLines(DELIVER);
+  assert.ok(deliver.some((l) => /remoteNodeOfSession\s*\(\s*sessionId\s*,\s*sessionGone\s*\)/.test(l)),
+    `${DELIVER} 의 좌표 되찾기가 remoteNodeOfSession 이 아니다 — 좌표를 안 준 호출(리브 2턴)이 아웃박스를 건너뛴다`);
+  assert.ok(!deliver.some((l) => /\bnodeOfSession\s*\(\s*sessionId\s*\)/.test(l)),
+    `${DELIVER} 에 좌표만으로 저쪽 기계를 가르는 nodeOfSession(sessionId) 이 남아 있다`);
+});
+
 console.log(`\n${pass} passed — 세션 호스트 단일 출처(#2600 T1·T2 d4·d6)`);
