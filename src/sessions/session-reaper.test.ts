@@ -28,8 +28,12 @@ async function run(opts: {
   managed?: Array<string | null>; reapThrows?: Set<string>;
   // #2148 attach 전용 TTL — 미지정이면 '그 필드가 아예 없는 구 정책'(=종전 동작: attach 무기한 존중)
   attachIdle?: number;
+  // #3894 ③ 상한 — 미지정이면 '그 필드가 아예 없는 구 정책'(=종전 동작: ③ 무기한 존중)
+  busyIdle?: number;
+  // ⑥ 에 «작업이 도는 세션» 으로 답할 id(기본 없음)
+  jobs?: ReadonlySet<string>;
 }): Promise<{ res: Awaited<ReturnType<typeof reapIdleSessions>>; reaped: string[] }> {
-  const { ttl = TTL, live = [], states, managed = [], reapThrows = new Set<string>(), attachIdle } = opts;
+  const { ttl = TTL, live = [], states, managed = [], reapThrows = new Set<string>(), attachIdle, busyIdle, jobs = new Set<string>() } = opts;
   // ⑥(#2652) 기본 stub — **이 러너는 실제 tmux·/proc 를 만지지 않는다.** 안 주면 기본 구현이 진짜
   //  `tmux list-panes` 를 부르고, tmux 가 없는 면(CI 리눅스 러너)에선 «못 봤다»로 후보를 전부 보호해
   //  이 파일의 회수 단언이 통째로 뒤집힌다. ⑥ 자체의 검증은 아래 D1·D2·D7 이 seam 을 직접 주입해 한다.
@@ -39,12 +43,13 @@ async function run(opts: {
     loadPolicy: async () => ({
       idle_ttl_minutes: ttl,
       ...(attachIdle === undefined ? {} : { attach_idle_minutes: attachIdle }),
+      ...(busyIdle === undefined ? {} : { busy_idle_minutes: busyIdle }),
     }),
     listLive: async () => live,
     listStates: async () => states ?? live.map((s) => ({ id: s.id })), // 기본: 라이브 전부 desired-state 있음
     listManaged: async () => managed.map((id) => ({ session_id: id })),
     reap: async (id: string) => { if (reapThrows.has(id)) throw new Error("boom"); reaped.push(id); },
-    liveJobs: async () => new Set<string>(),
+    liveJobs: async (ids) => new Set([...ids].filter((id) => jobs.has(id))),
     now,
   });
   return { res, reaped };
@@ -197,7 +202,7 @@ async function run(opts: {
   const states = live.filter((s) => s.id !== "s-nostate").map((s) => ({ id: s.id }));
   const { res, reaped } = await run({ live, states, managed: ["s-managed"] });
   assert.deepEqual(reaped, ["reap-me"]);
-  assert.deepEqual(res.skipReasons, { managed: 1, noState: 1, attached: 1, working: 1, recent: 1, failed: 0, target: 0, cap: 0, jobs: 0 },
+  assert.deepEqual(res.skipReasons, { managed: 1, noState: 1, attached: 1, working: 1, recent: 1, failed: 0, target: 0, cap: 0, jobs: 0, unobserved: 0 },
     "skip 사유별 카운트가 정확해야 한다(noState 가 크면 백필 필요 신호). target·cap 은 압박 회수 전용이라 평시엔 0"
     + " · jobs 는 ⑥ 전용(여기선 프로브 미주입 = 기본 구현이 tmux 를 못 봐 0)");
 }
@@ -314,6 +319,184 @@ const ATT_CUT = NOW_SEC - ATT * 60;    // 이 시각 이하로 유휴면 attach 
   const { reaped, res } = await run({ attachIdle: ATT, live: [sess({ id: "unknown", attached: true, created: 0, lastActive: undefined, lastAttached: undefined })] });
   assert.deepEqual(reaped, [], "활동 신호가 없으면 attach 를 깨지 않는다");
   assert.equal(res.skipReasons?.attached, 1);
+}
+
+// ── #3894 ③ 보호의 상한(busy_idle_minutes) ─────────────────────────────────────────────
+// ③(작업 중·승인 대기)에는 끝이 없었다. 실측 2026-09-11 lively-46e3: 승인 대기로 159~218분 방치된 세션 둘,
+//  26시간째 working 인 AI 로그인 자리 셋이 어느 경로로도 안 걷혔다. 표는 스크래치패드 spec.md 의 B1~B21 이다.
+//  ★ 이 표의 심장은 B7·B8·B11(시계)과 B12(하네스가 말하는 작업은 안 건드린다)다 — 셸 추정 작업은 관측할 때마다
+//   lastActive 를 지금으로 밀어 올리므로, idleSince 로 재는 구현은 B7·B8·B11 에서 빨간불이 나야 한다.
+const BUSY = 240;                         // ③ 상한(분)
+const BUSY_CUT = NOW_SEC - BUSY * 60;     // 이 시각 이하로 사람이 안 봤으면 ③ 을 존중하지 않는다
+const ANCIENT = 1;                        // 아주 낡은 시각(epoch 1초)
+/** 셸 세션의 pane 포그라운드 추정 작업(AI 로그인 자리 모양) — lastActive 는 방금 밀려 올라가 있다. */
+const paneWork = (over: Partial<SessionInfo>): SessionInfo =>
+  sess({ harness: "shell", agentState: "shell", working: true, lastActive: NOW_SEC, created: ANCIENT, ...over });
+/** 탭 없이 승인 대기(하네스 보고 없음) — lastActive 는 대기가 시작된 뒤로 안 움직인다. */
+const waitingSess = (over: Partial<SessionInfo>): SessionInfo =>
+  sess({ agentState: "offline", working: false, awaiting: true, created: ANCIENT, ...over });
+
+// B1 상한 필드 부재(구 정책) — 종전대로 무기한 존중
+{
+  const { reaped, res } = await run({ live: [waitingSess({ id: "b1", lastActive: ANCIENT, lastAttached: ANCIENT })] });
+  assert.deepEqual(reaped, [], "B1 상한이 없으면 승인 대기는 무기한 존중(무회귀)");
+  assert.equal(res.skipReasons?.working, 1);
+}
+// B2 상한 0 — 끔
+{
+  const { reaped, res } = await run({ busyIdle: 0, live: [paneWork({ id: "b2", lastAttached: ANCIENT })] });
+  assert.deepEqual(reaped, [], "B2 상한 0 이면 셸 작업도 무기한 존중(무회귀)");
+  assert.equal(res.skipReasons?.working, 1);
+}
+// B3 승인 대기 · 상한 안
+{
+  const { reaped, res } = await run({ busyIdle: BUSY, live: [waitingSess({ id: "b3", lastAttached: BUSY_CUT + 60 })] });
+  assert.deepEqual(reaped, [], "B3 사람이 본 지 상한 안이면 승인 대기를 존중");
+  assert.equal(res.skipReasons?.working, 1);
+}
+// B4 승인 대기 · 상한 밖
+{
+  const { reaped } = await run({ busyIdle: BUSY, live: [waitingSess({ id: "b4", lastAttached: BUSY_CUT - 60 })] });
+  assert.deepEqual(reaped, ["b4"], "B4 상한을 넘겨 방치된 승인 대기는 회수 후보가 된다");
+}
+// B5·B6 경계 — 정확히 상한이면 회수, 1초 안쪽이면 존중
+{
+  const eq = await run({ busyIdle: BUSY, live: [waitingSess({ id: "b5", lastAttached: BUSY_CUT })] });
+  assert.deepEqual(eq.reaped, ["b5"], "B5 방치 == 상한은 회수(경계 포함)");
+  const in1 = await run({ busyIdle: BUSY, live: [waitingSess({ id: "b6", lastAttached: BUSY_CUT + 1 })] });
+  assert.deepEqual(in1.reaped, [], "B6 상한 1초 안쪽은 존중");
+}
+// B7 ★ 셸 추정 작업 — lastActive 가 방금이어도 사람이 안 본 지 상한 밖이면 회수(AI 로그인 자리 c0d69d9d 모양)
+{
+  const { reaped } = await run({ busyIdle: BUSY, live: [paneWork({ id: "b7", lastAttached: BUSY_CUT - 60 })] });
+  assert.deepEqual(reaped, ["b7"], "B7 셸 추정 작업은 스스로 민 lastActive 가 아니라 마지막 열람으로 잰다");
+}
+// B8 ★ 셸 추정 작업 · 한 번도 안 봤다 → 생성 시각으로 잰다(AI 로그인 자리 3b7968ea·7108971d 모양)
+{
+  const { reaped } = await run({ busyIdle: BUSY, live: [paneWork({ id: "b8", created: BUSY_CUT - 60 })] });
+  assert.deepEqual(reaped, ["b8"], "B8 열람 기록이 없으면 생성 시각이 시계다");
+}
+// B9 셸 추정 작업 · 한 번도 안 봤지만 막 생겼다
+{
+  const { reaped, res } = await run({ busyIdle: BUSY, live: [paneWork({ id: "b9", created: BUSY_CUT + 60 })] });
+  assert.deepEqual(reaped, [], "B9 생긴 지 상한 안이면 존중");
+  assert.equal(res.skipReasons?.working, 1);
+}
+// B10 셸 추정 작업 · 탭 붙은 건 오래지만 화면을 최근에 봤다(lastViewed)
+{
+  const { reaped, res } = await run({ busyIdle: BUSY, live: [paneWork({ id: "b10", lastAttached: ANCIENT, lastViewed: BUSY_CUT + 60 })] });
+  assert.deepEqual(reaped, [], "B10 화면 열람(lastViewed)도 사람 신호다");
+  assert.equal(res.skipReasons?.working, 1);
+}
+// B11 ★ AI 가 없다고 판정된(exited) 세션의 working — 이것도 pane 추정뿐이다(39d499af 모양)
+{
+  const { reaped } = await run({ busyIdle: BUSY, live: [sess({ id: "b11", harness: "claude", agentState: "exited", working: true, lastActive: NOW_SEC, lastAttached: BUSY_CUT - 60, created: ANCIENT })] });
+  assert.deepEqual(reaped, ["b11"], "B11 exited 의 working 은 셸 추정과 같은 시계로 잰다");
+}
+// B12 ★ 하네스가 말하는 작업 중 — 모든 시계가 아주 낡아도 상한과 무관하게 존중(크론·위탁 워커는 아무도 안 본다)
+{
+  const { reaped, res } = await run({ busyIdle: BUSY, live: [sess({ id: "b12", harness: "claude", agentState: "offline", working: true, lastActive: ANCIENT, lastAttached: ANCIENT, created: ANCIENT })] });
+  assert.deepEqual(reaped, [], "B12 스피너·훅이 말하는 작업 중에는 상한이 안 선다");
+  assert.equal(res.skipReasons?.working, 1);
+}
+// B13 하네스 작업 중 + 승인 대기 동시 — 작업 증거가 이긴다
+{
+  const { reaped, res } = await run({ busyIdle: BUSY, live: [sess({ id: "b13", agentState: "offline", working: true, awaiting: true, lastActive: ANCIENT, lastAttached: ANCIENT, created: ANCIENT })] });
+  assert.deepEqual(reaped, [], "B13 작업 증거가 있으면 승인 대기가 겹쳐도 존중");
+  assert.equal(res.skipReasons?.working, 1);
+}
+// B14 agentState=busy(working 필드 없는 구 행) — 하네스 작업으로 본다
+{
+  const { reaped, res } = await run({ busyIdle: BUSY, live: [sess({ id: "b14", agentState: "busy", working: undefined, lastActive: ANCIENT, created: ANCIENT })] });
+  assert.deepEqual(reaped, [], "B14 agentState busy 는 상한과 무관하게 존중");
+  assert.equal(res.skipReasons?.working, 1);
+}
+// B15 agentState=waiting(탭이 붙어 있다) — attach 상한·③ 상한 둘 다 넘으면 회수
+{
+  const { reaped } = await run({ attachIdle: ATT, busyIdle: BUSY, live: [sess({ id: "b15", attached: true, agentState: "waiting", lastActive: ANCIENT, lastAttached: ANCIENT, created: ANCIENT })] });
+  assert.deepEqual(reaped, ["b15"], "B15 탭에 뜬 승인 대기도 두 상한을 다 넘으면 회수");
+}
+// B16 ★ 상한(1분)이 평시 TTL(60분)보다 짧게 잘못 잡혔다 — 상한은 ③ 을 열 뿐 ⑤ 를 대신하지 않는다
+{
+  const { reaped, res } = await run({ busyIdle: 1, live: [waitingSess({ id: "b16", lastAttached: NOW_SEC - 5 * 60 })] });
+  assert.deepEqual(reaped, [], "B16 평시 TTL 미달이면 ③ 상한을 넘겨도 회수하지 않는다");
+  assert.equal(res.skipReasons?.recent, 1);
+  assert.equal(res.skipReasons?.working, 0);
+}
+// B17 시계가 전부 없다 — 모르면 안 죽인다
+{
+  const { reaped, res } = await run({ busyIdle: BUSY, live: [paneWork({ id: "b17", created: 0, lastAttached: undefined, lastViewed: undefined })] });
+  assert.deepEqual(reaped, [], "B17 열람·생성 시각이 없으면 존중");
+  assert.equal(res.skipReasons?.working, 1);
+}
+// B18 ★ 승인 대기가 막 시작됐다(lastActive 상한 안) — 사람이 오래 안 봤어도 존중(#1221 이 지키던 결정)
+{
+  const { reaped, res } = await run({ busyIdle: BUSY, live: [waitingSess({ id: "b18", lastActive: BUSY_CUT + 60, lastAttached: ANCIENT })] });
+  assert.deepEqual(reaped, [], "B18 대기는 lastActive(일이 멈춘 시각)부터 잰다");
+  assert.equal(res.skipReasons?.working, 1);
+}
+// B19 상한을 넘겨 온 세션이라도 ⑥(하네스가 띄운 작업)이 살아 있으면 존중
+{
+  const { reaped, res } = await run({ busyIdle: BUSY, jobs: new Set(["b19"]), live: [paneWork({ id: "b19", lastAttached: ANCIENT })] });
+  assert.deepEqual(reaped, [], "B19 ⑥ 은 ③ 상한과 무관하게 그대로다");
+  assert.equal(res.skipReasons?.jobs, 1);
+}
+// B21 상한을 넘긴 세션들의 순서 — 그 시계가 오래된 것부터(평시 순서 규약)
+{
+  const { reaped } = await run({
+    busyIdle: BUSY,
+    live: [
+      paneWork({ id: "b21-newer", lastAttached: BUSY_CUT - 100 }),
+      waitingSess({ id: "b21-older", lastAttached: BUSY_CUT - 9000 }),
+    ],
+  });
+  assert.deepEqual(reaped, ["b21-older", "b21-newer"], "B21 사람이 안 본 지 오래된 것부터 걷는다");
+}
+// B27(#3894 적대검토 인접 결함) ★ 관측 못 한 행(observed:false)은 판정하지 않는다 — 보호 신호가 전부 기본값이다.
+//  중계가 tmux 를 못 본 tick 엔 목록이 DB desired 행을 채운다. 그 행은 attached·working·awaiting 이 false 라, 판정하면
+//  사람이 붙어 일하던 세션을 «아무도 없고 조용하다» 로 걷는다. 상한과 무관하게(켜져 있든 꺼져 있든) 남긴다.
+{
+  const live = [
+    sess({ id: "b27-unobserved", observed: false, lastActive: CUTOFF - 100, created: ANCIENT }),
+    sess({ id: "b27-observed", lastActive: CUTOFF - 100, created: ANCIENT }),
+  ];
+  const { reaped, res } = await run({ busyIdle: BUSY, live });
+  assert.deepEqual(reaped, ["b27-observed"], "B27 관측 못 한 행은 걷지 않고, 관측된 행은 종전대로 걷는다");
+  assert.equal(res.skipReasons?.unobserved, 1, "B27 남긴 사유가 unobserved 로 보인다(중계가 안 닿은 tick 의 관측창)");
+  assert.equal(res.skipped, 1, "B27 skipped 합에도 들어간다");
+}
+// ── 목록이 출처를 실어 준 행(harnessWorking·paneWorking) — agentState 짐작보다 이게 정본이다 ──
+//  적대검토가 잡은 자리: tmux `@box_harness` 가 빈 claude 세션은 AI 가 살아 있어도 exited·working 으로 보인다.
+//  agentState 로만 가르면 그 AI 를 pane 추정으로 걷는다 — 목록이 옵션과 무관하게 잰 출처를 실으면 그걸 따른다.
+// B22 ★ exited 로 보이지만 하네스가 작업 중이라고 말한다(옵션 빈 claude TUI) — 사람 신호가 아주 낡아도 존중
+{
+  const { reaped, res } = await run({ busyIdle: BUSY, live: [sess({ id: "b22", harness: "claude", agentState: "exited", working: true, harnessWorking: true, paneWorking: true, lastActive: NOW_SEC, lastAttached: ANCIENT, created: ANCIENT })] });
+  assert.deepEqual(reaped, [], "B22 목록이 하네스 작업이라고 실었으면 agentState 가 exited 여도 상한이 안 선다");
+  assert.equal(res.skipReasons?.working, 1);
+}
+// B23 셸 세션 안에서 `lively run` 으로 AI 를 돌린다 — 훅이 busy 를 보고하면 하네스 작업이다
+{
+  const { reaped, res } = await run({ busyIdle: BUSY, live: [paneWork({ id: "b23", harnessWorking: true, paneWorking: true, lastAttached: ANCIENT })] });
+  assert.deepEqual(reaped, [], "B23 셸 안의 AI 가 스스로 말하면 존중");
+  assert.equal(res.skipReasons?.working, 1);
+}
+// B24 목록이 실은 출처가 agentState 짐작을 이긴다 — offline 이어도 pane 추정뿐이라고 실었으면 상한이 선다
+{
+  const { reaped } = await run({ busyIdle: BUSY, live: [sess({ id: "b24", agentState: "offline", working: true, harnessWorking: false, paneWorking: true, lastActive: NOW_SEC, lastAttached: BUSY_CUT - 60, created: ANCIENT })] });
+  assert.deepEqual(reaped, ["b24"], "B24 출처 필드가 있으면 그게 정본이다");
+}
+// B25 ★ 탭이 붙은(유령 포함) pane 추정 세션 — ② 가 스스로 민 lastActive 로 재면 ③ 까지 오지도 못한다(적대검토 지적)
+{
+  const on = await run({ attachIdle: ATT, busyIdle: BUSY, live: [paneWork({ id: "b25", attached: true, harnessWorking: false, paneWorking: true, lastAttached: ANCIENT })] });
+  assert.deepEqual(on.reaped, ["b25"], "B25 상한이 켜져 있으면 ② 도 사람 신호로 잰다");
+  const off = await run({ attachIdle: ATT, busyIdle: 0, live: [paneWork({ id: "b25-off", attached: true, harnessWorking: false, paneWorking: true, lastAttached: ANCIENT })] });
+  assert.deepEqual(off.reaped, [], "B25 상한이 꺼져 있으면 ② 는 종전 그대로(무회귀)");
+  assert.equal(off.res.skipReasons?.attached, 1, "B25 꺼져 있을 때 보류 사유도 종전 그대로 attached");
+}
+// B26 승인 대기인데 pane 추정이 lastActive 를 밀고 있다(app-server 대기 + 옵션 빈 pane 에서 뭔가 실행) — 그 값은 시계가 아니다
+{
+  const { reaped } = await run({ busyIdle: BUSY, live: [sess({ id: "b26", agentState: "waiting", working: false, awaiting: true, harnessWorking: false, paneWorking: true, lastActive: NOW_SEC, lastAttached: BUSY_CUT - 60, created: ANCIENT })] });
+  assert.deepEqual(reaped, ["b26"], "B26 pane 추정이 민 lastActive 로는 승인 대기의 시계를 늘리지 않는다");
 }
 
 console.log("session-reaper(유휴 축): all passed");
@@ -514,6 +697,24 @@ const one = (policy: Partial<SessionReclaimPolicy>, live: SessionInfo[], over: P
     usedPct: 99, totalMb: 100_000,
   });
   assert.deepEqual(reaped, ["ok"], "상시·접속중·작업중·복원불가는 압박이어도 회수 대상이 아니다(점유가 제일 커도)");
+}
+
+// B20(#3894) — 압박 축도 **같은 판정**을 쓴다: ③ 상한은 켜져 있을 때만, 스스로 증명 못 하는 보호에만 열린다.
+//  사람이 안 본 지 상한 밖인 승인 대기는 걷히고, 상한 안인 승인 대기·하네스가 말하는 작업 중은 점유가 커도 남는다.
+{
+  const PB = 240;
+  const live = [
+    sess({ id: "wait-stale", awaiting: true, lastAttached: NOW_SEC - PB * 60 - 60, created: 1 }),
+    sess({ id: "wait-fresh", awaiting: true, lastAttached: NOW_SEC - PB * 60 + 60, created: 1 }),
+    sess({ id: "agent-busy", working: true, agentState: "offline", lastActive: 1, lastAttached: 1, created: 1 }),
+  ];
+  const { reaped } = await runPressure({
+    workspaces: [one({ pressure_used_pct: 90, pressure_idle_minutes: P_IDLE, busy_idle_minutes: PB, pressure_max_reap: 10 }, live, {
+      rss: { "wait-stale": 10, "wait-fresh": 999, "agent-busy": 999 },
+    })],
+    usedPct: 99, totalMb: 100_000,
+  });
+  assert.deepEqual(reaped, ["wait-stale"], "B20 압박에서도 ③ 상한은 유휴 축과 같은 판정이다");
 }
 
 // P10 — 메모리를 못 재면 물리 축은 발동하지 않는다(모르면 사용자 자산을 안 건드린다)

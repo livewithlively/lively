@@ -336,6 +336,14 @@ export interface SessionInfo {
   //  결정을 잃는다**(working 을 도입할 때 busy 만 구제하고 waiting 은 남겨 둔 구멍). 표시는 종전대로 탭이 있을 때만
   //  '확인 필요'로 색을 주고, 이 값은 회수 판정에만 쓴다.
   awaiting?: boolean;
+  // #3894 — **working 의 출처**(회수 판정 전용). working 은 아래 둘의 합집합이라 그 값만으로는 «누가 작업 중이라고 말하나»
+  //  를 못 가른다. 회수 상한(busy_idle_minutes)은 스스로 증명 못 하는 보호에만 걸리므로 그 구분이 필요하다.
+  //  · harnessWorking — 하네스가 스스로 말한다(스피너·신선한 훅 busy 보고·app-server 턴). 하네스 종류와 무관하게 잰다
+  //    — 셸 세션 안에서 `lively run` 으로 도는 AI 는 agentState 가 shell 이어도 여기서는 참이다(phase.ts harnessReportsBusy).
+  //  · paneWorking — pane 포그라운드가 셸이 아니라는 추정(shellWorking). 참이면 lastActive 는 그 추정이 밀어 올린 값이다.
+  //  둘 다 없는 행(구 노드·관측 못 한 행)은 회수기가 agentState 로 짐작한다.
+  harnessWorking?: boolean;
+  paneWorking?: boolean;
   // 실시간 작업 요약(#req) — Claude Code 가 pane_title 에 써두는 '지금 하는 일' 요약(상태 글리프 제거). 없으면 빈 문자열 → 프론트가 label 로 폴백.
   title?: string;
   // #2197 — 사람이 **마지막으로 시킨 말**(훅 UserPromptSubmit 보고 → org_session_state.last_prompt, 300자 상한). 사이드바 세션 행

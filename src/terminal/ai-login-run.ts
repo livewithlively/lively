@@ -19,6 +19,7 @@ import { memberShOut } from "./terminal-member-fs.js";
 import { MEMBER_HOME_BASE } from "./terminal-transcript.js";
 import { aiLoginArgv, isAiLoginHarness, EXIT_MARK, type AiLoginHarness } from "./ai-login-flow.js";
 import { sessionExecConfigured, sessionSpawnArgv } from "./session-exec.js";
+import { tenantSlug } from "./catalog.js";
 import type { LivelyUser } from "../context.js";
 
 /** 한 사람 · 한 하네스의 로그인 자리. 이름이 짧아야 경로가 길어지지 않는다. */
@@ -141,6 +142,24 @@ async function spawnAt(user: LivelyUser | null, osUser: string | null, h: AiLogi
 
 /** 이 사람·이 하네스의 하네스 자리(세션 컨테이너). 한 번 만들고 재사용한다. */
 const loginSessions = new Map<string, string>();
+/** #3894 — 그 자리가 살아 있다고 마지막으로 확인한 시각(ms). 이 창 안에서는 다시 묻지 않는다(상태 폴링마다 중계 왕복을 안 늘린다). */
+const seatVerifiedAt = new Map<string, number>();
+/** #3894 — 같은 자리를 동시에 두 번 만들지 않는다. 둘 다 «없음» 을 보고 하나씩 만들면 하나는 표에서 빠진 채 컨테이너로 샌다. */
+const seatInflight = new Map<string, Promise<string>>();
+/**
+ * #3894 — 살아 있음 재확인 간격. 회수된 자리를 이 창 안에서 한 번 더 내줘도 괜찮다: 회수는 tmux 만 죽이고, 그 세션
+ *  컨테이너는 브로커의 닻 없는 유예(5분) 동안 남아 exec 이 된다.
+ */
+export const SEAT_RECHECK_MS = 30_000;
+
+/**
+ * 자리 표의 키 — **테넌트 · 사람 · 하네스.**
+ *  ⚠ #3894 — 테넌트가 빠져 있었다. 공유 게이트웨이(중앙 모드)는 여러 워크스페이스를 한 프로세스로 서비스하고, 멤버 id 는
+ *   워크스페이스마다 이메일 앞부분으로 만들어져(members.ts uniqueMemberId) 같은 사람이면 대개 같다. 그러면 워크스페이스 A 의
+ *   자리 id 를 B 에서 내준다 — 컨테이너 이름은 테넌트로 갈리므로(session-exec `lvly-s-<slug>-<sid>`) B 에선 «없는 자리» 다.
+ *   종전엔 그게 거짓 «미설치» 였고, 살아 있음을 재면서부터는 두 워크스페이스가 번갈아 새 자리를 만들어 옛 것이 샌다.
+ */
+function seatKey(user: LivelyUser, h: string): string { return `${tenantSlug() ?? ""}|${ownerKey(user)}:${h}`; }
 
 /**
  * 하네스 바이너리를 돌릴 **세션 컨테이너**를 확보한다.
@@ -151,19 +170,79 @@ const loginSessions = new Map<string, string>();
  *  ⚠ #3668 T3 — 로그인 **프로브**(profiles.aiLoginCheck)도 이 자리를 쓴다. 그래서 키가 문자열이다:
  *   프로브 전용 하네스(antigravity)는 AiLoginHarness 가 아니다. 자리를 공유해야 «띄운 자리»와 «잰 자리»가
  *   갈리지 않는다 — 갈리면 로그인은 세션 컨테이너에서 되는데 판정은 다른 자리를 봐서 영영 «미로그인» 이 된다.
+ *  ⚠ #3894 — **기억해 둔 자리가 아직 살아 있는지 본다.** 이 표는 게이트웨이 메모리라, 회수기가 그 자리를 걷어도
+ *   모른다. 종전엔 매니지드에서 이 자리가 회수될 일이 없었다(pane 포그라운드 추정이 늘 «실행 중» 이라 ③ 이 영구 보호).
+ *   #3894 가 그 보호에 상한을 붙이자 자리가 걷힐 수 있게 됐고, 그러면 죽은 id 를 계속 내준다 — 컨테이너가 사라진 뒤엔
+ *   중계가 «세션 컨테이너가 없습니다» 로 죽고, 판정은 거짓 «미설치»·로그인은 «띄우지 못했습니다» 가 게이트웨이
+ *   재기동 전까지 이어진다. «없다» 는 확답일 때만 새로 만든다 — 판정 불가(중계 불통)는 종전대로 재사용한다.
  */
-export async function ensureHarnessSeat(user: LivelyUser, h: string): Promise<string> {
-  const key = `${ownerKey(user)}:${h}`;
+export async function ensureHarnessSeat(user: LivelyUser, h: string, deps: SeatDeps = {}): Promise<string> {
+  const key = seatKey(user, h);
+  const pending = seatInflight.get(key);
+  if (pending) return pending;
+  const p = resolveSeat(key, user, h, deps).finally(() => seatInflight.delete(key));
+  seatInflight.set(key, p);
+  return p;
+}
+
+async function resolveSeat(key: string, user: LivelyUser, h: string, deps: SeatDeps): Promise<string> {
+  const now = (deps.now ?? Date.now)();
   const had = loginSessions.get(key);
-  if (had) return had;
-  const { createSession } = await import("./sessions.js");
-  const s = await createSession(user, {
+  if (had) {
+    if (now - (seatVerifiedAt.get(key) ?? 0) < SEAT_RECHECK_MS) return had;
+    const gone = deps.gone ?? (async (id: string) => (await import("./tmux-exec.js")).sessionGone(id));
+    if (!(await gone(had))) { seatVerifiedAt.set(key, now); return had; }
+    loginSessions.delete(key);
+    seatVerifiedAt.delete(key);
+  }
+  const create = deps.create ?? (async (u: LivelyUser, input: Parameters<typeof import("./sessions.js").createSession>[1]) =>
+    (await import("./sessions.js")).createSession(u, input));
+  const s = await create(user, {
     kind: "login", label: `AI 로그인 (${h})`, rootKey: "personal", subpath: "",
     harness: "shell", flags: {}, autoApprove: false, loginProfile: true,
   });
   loginSessions.set(key, s.id);
+  seatVerifiedAt.set(key, now);
   return s.id;
 }
+
+/** ensureHarnessSeat 의 시험 이음매 — 실 tmux·세션 생성 없이 «살아 있나 / 새로 만든다 / 지금» 만 갈아 끼운다. */
+export interface SeatDeps {
+  gone?: (sessionId: string) => Promise<boolean>;
+  create?: (user: LivelyUser, input: Parameters<typeof import("./sessions.js").createSession>[1]) => Promise<{ id: string }>;
+  now?: () => number;
+}
+
+/**
+ * #3894 — **사람이 로그인 화면에서 이 자리를 쓰고 있다**고 남긴다(열람 도장 `@box_last_seen`).
+ *
+ *  회수 상한은 사람 신호로 잰다. 그런데 로그인 흐름은 탭을 붙이지도(attach) 화면 도장을 찍지도 않고, 러너는 pane 밖에서
+ *  exec 로 떠서 ⑥(하네스가 띄운 작업)에도 안 잡힌다 — 그대로 두면 이 자리의 시계는 **생성 시각**뿐이라, 오래 재사용된 자리에서
+ *  시작한 장치 인증(최대 15분)이 도중에 걷힐 수 있다. 그래서 사람의 조작(시작·상태 폴링·붙여넣기) 자리에서만 찍는다.
+ *  ⚠ ensureHarnessSeat 안에서 찍지 않는다 — 크론이 부르는 헤드리스 하네스 판정(resolveHeadlessHarness → aiLoginCheck)도
+ *   그 함수를 지나므로, 거기서 찍으면 사람이 없어도 자리가 영영 안 걷힌다.
+ *  기억한 자리가 없으면 아무것도 안 한다(새로 만들지 않는다). 실패는 삼킨다 — 도장 하나 못 찍은 대가는 «회수가 조금 이르다» 다.
+ */
+export async function touchHarnessSeat(
+  user: LivelyUser | null, h: string,
+  deps: { seen?: (sessionId: string) => Promise<void>; now?: () => number } = {},
+): Promise<void> {
+  if (!user) return;
+  const key = seatKey(user, h);
+  const sid = loginSessions.get(key);
+  if (!sid) return;
+  //  폴링마다 찍지 않는다 — 회수 상한은 시간 단위라 1분 해상도면 충분하고, 도장 하나가 중계 왕복 하나다.
+  const now = (deps.now ?? Date.now)();
+  const last = seatTouchedAt.get(key);
+  if (last && last.sid === sid && now - last.at < SEAT_TOUCH_MS) return;
+  const seen = deps.seen ?? (async (id: string) => (await import("./phase.js")).markSessionSeen(id));
+  await seen(sid).then(() => { seatTouchedAt.set(key, { sid, at: now }); }, () => undefined);
+}
+
+/** #3894 — 사람 조작 도장을 마지막으로 찍은 자리·시각. 자리가 바뀌면(sid 가 다르면) 바로 다시 찍는다. */
+const seatTouchedAt = new Map<string, { sid: string; at: number }>();
+/** #3894 — 도장 간격. 회수 상한(시간 단위)에 비해 충분히 촘촘하고, 상태 폴링(초 단위)마다 중계를 치지 않는다. */
+export const SEAT_TOUCH_MS = 60_000;
 
 function ownerKey(user: LivelyUser): string { return String(user.userId || user.email || "solo"); }
 
@@ -178,10 +257,12 @@ export async function startAiLogin(osUser: string | null, h: AiLoginHarness, use
  *  ⚠ 키가 문자열인 이유는 ensureHarnessSeat 와 같다(프로브 전용 하네스). */
 export async function dropLoginSession(user: LivelyUser | null, h: string): Promise<void> {
   if (!user) return;
-  const key = `${ownerKey(user)}:${h}`;
+  const key = seatKey(user, h);
   const sid = loginSessions.get(key);
   if (!sid) return;
   loginSessions.delete(key);
+  seatVerifiedAt.delete(key);
+  seatTouchedAt.delete(key);
   try {
     const { killSession } = await import("./sessions.js");
     await killSession(user, sid, { admin: true });

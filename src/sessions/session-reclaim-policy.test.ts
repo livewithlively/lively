@@ -16,6 +16,22 @@ delete process.env.LIVELY_SESSION_IDLE_TTL_MIN;
 delete process.env.LIVELY_SESSION_PRESSURE_PCT;
 delete process.env.LIVELY_SESSION_PRESSURE_IDLE_MIN;
 delete process.env.LIVELY_SESSION_PRESSURE_SWAP_PCT;
+delete process.env.LIVELY_SESSION_ATTACH_IDLE_MIN;
+delete process.env.LIVELY_SESSION_BUSY_IDLE_MIN;
+
+// ── #3894 ③ 보호 상한 — 기본은 끔(무회귀), 범위 [0, 30일] 로 갇히고, 관리탭 > env 시드 ──
+{
+  assert.equal(DEFAULT_SESSION_RECLAIM_POLICY.busy_idle_minutes, 0, "P1 기본은 끔 — 켜기 전엔 ③ 을 무기한 존중");
+  assert.equal(normalizeSessionReclaimPolicy({}).busy_idle_minutes, 0, "P1 필드가 없는 구 정책도 0 으로 채워진다");
+  assert.equal(normalizeSessionReclaimPolicy({ busy_idle_minutes: 480 }).busy_idle_minutes, 480);
+  assert.equal(normalizeSessionReclaimPolicy({ busy_idle_minutes: RECLAIM_TTL_MIN_MAX + 1 }).busy_idle_minutes, RECLAIM_TTL_MIN_MAX, "P2 상한 클램프");
+  assert.equal(normalizeSessionReclaimPolicy({ busy_idle_minutes: -5 }).busy_idle_minutes, 0, "P2 음수 → 0(끔)");
+  assert.equal(normalizeSessionReclaimPolicy({ busy_idle_minutes: null }).busy_idle_minutes, 0, "P2 null 이 켜진 값으로 뒤집히지 않는다");
+  process.env.LIVELY_SESSION_BUSY_IDLE_MIN = "600";
+  assert.equal(normalizeSessionReclaimPolicy(null).busy_idle_minutes, 600, "DB 가 비면 env 시드");
+  assert.equal(normalizeSessionReclaimPolicy({ busy_idle_minutes: 0 }).busy_idle_minutes, 0, "관리탭의 0(끔)이 env 시드를 이긴다");
+  delete process.env.LIVELY_SESSION_BUSY_IDLE_MIN;
+}
 
 // ── 정책 해석: 기본값 = 0(회수 끔, 무회귀) ──
 {

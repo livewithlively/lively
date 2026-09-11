@@ -11,7 +11,7 @@ import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { aiLoginStep, isAiLoginHarness, parseAiLogin, type AiLoginHarness } from "./ai-login-flow.js";   // #2055 터미널 없는 AI 로그인
-import { cancelAiLogin, dropLoginSession, pasteAiLogin, readAiLogin, startAiLogin } from "./ai-login-run.js";
+import { cancelAiLogin, dropLoginSession, pasteAiLogin, readAiLogin, startAiLogin, touchHarnessSeat } from "./ai-login-run.js";
 import { logger } from "../log.js";
 import { carrySessionDismissals, closeSessionAppInstances } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
@@ -296,6 +296,8 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     //  ⚠ user 를 넘긴다 — 매니지드에서 로그인 명령은 **세션 컨테이너**에서 돌아야 한다(하네스가 거기에만 있다).
     //   안 넘기면 종전처럼 tmux 컨테이너에서 돌아 «<하네스> 없음» 이 난다(#2454 이미지 분할 이후).
     await startAiLogin(seat, h, userOf(req));
+    //  #3894 — 사람이 이 자리를 쓰는 중이라고 남긴다(회수 상한은 사람 신호로 잰다 — touchHarnessSeat 머리말).
+    await touchHarnessSeat(userOf(req), h);
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true });
   }));
@@ -307,6 +309,8 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
       readAiLogin(seat, h),
       aiLoginCheck(userOf(req), h).catch(() => null),
     ]);
+    //  #3894 — 화면이 폴링하는 동안은 사람이 그 자리 앞에 있다. 장치 인증(최대 15분) 도중에 자리가 걷히지 않게 도장을 찍는다.
+    await touchHarnessSeat(userOf(req), h);
     const st = parseAiLogin(h, raw);
     res.setHeader("Cache-Control", "no-store");
     res.json({ ...st, loggedIn: check?.loggedIn ?? null, step: aiLoginStep(st, check?.loggedIn ?? null) });
@@ -316,6 +320,7 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     const h = loginHarnessOf(req);
     const code = String(((req.body ?? {}) as Record<string, unknown>).code ?? "");
     await pasteAiLogin(await loginSeat(req), h, code);
+    await touchHarnessSeat(userOf(req), h);   // #3894 — 사람의 조작이다(위 state 와 같은 이유)
     res.json({ ok: true });
   }));
   app.post("/api/ui/me/ai-login/cancel", auth, wrap(async (req, res) => {
