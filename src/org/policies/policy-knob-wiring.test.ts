@@ -46,15 +46,22 @@ const TARGETS: Array<{ key: string; knobs: string[] }> = [
   { key: "session_reclaim_policy", knobs: Object.keys(DEFAULT_SESSION_RECLAIM_POLICY) },
   { key: "delegate_policy", knobs: Object.keys(DEFAULT_DELEGATE_POLICY) },
 ];
+// ⚠ 이름이 **들어 있나** 가 아니라 **그 자리에 선언됐나** 를 본다(#3894 실측).
+//  종전 단언은 `includes(knob)` 였다. 그런데 설명문이 다른 노브를 이름으로 가리키면(«busy_idle_minutes 를 켜기 전까지»)
+//  그 문자열이 zod 블록에 들어 있어, **그 노브의 zod 필드를 지워도 이 시험이 초록이었다** — 필드를 지우고 돌려 보고서야
+//  드러났다. 노브 이름은 서로를 설명하느라 늘 설명문에 나온다(«idle_ttl_minutes 보다 길게»). 그래서 모양으로 잰다:
+//   · 검증부 — 값이 patch 로 **옮겨 담기나**(`patchIn.<knob> =`). 그게 이 층이 하는 일의 전부다.
+//   · zod — 줄머리에 `<knob>: z.` 로 **선언됐나**.
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 for (const { key: policyKey, knobs } of TARGETS) {
   const validate = blockOf(policyKey);
   const zod = zodOf(policyKey);
   for (const knob of knobs) {
-    assert.ok(validate.includes(knob),
-      `${policyKey}.${knob} 가 capability 검증부에 없다 — 관리탭에서 저장해도 값이 조용히 버려진다`
+    assert.match(validate, new RegExp(`\\bpatchIn\\.${escapeRe(knob)}\\s*=`),
+      `${policyKey}.${knob} 가 capability 검증부에서 patch 로 안 옮겨진다 — 관리탭에서 저장해도 값이 조용히 버려진다`
       + ` (src/capabilities/delivery/runtime-config.ts 의 그 블록에 필드를 추가하라)`);
-    assert.ok(zod.includes(knob),
-      `${policyKey}.${knob} 가 zod 스키마에 없다 — 미선언 하위 키는 strip 되어 요청이 200 인데 값이 사라진다`);
+    assert.match(zod, new RegExp(`^\\s*${escapeRe(knob)}:\\s*z\\.`, "m"),
+      `${policyKey}.${knob} 가 zod 스키마에 선언돼 있지 않다 — 미선언 하위 키는 strip 되어 요청이 200 인데 값이 사라진다`);
   }
 }
 

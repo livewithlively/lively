@@ -47,7 +47,7 @@ import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, psmuxUnsafeToken, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
 import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
-import { sessionActivityTitle, paneAwaitingInput, resolveAgentPhase, observeAgentRun } from "./phase.js";
+import { sessionActivityTitle, paneAwaitingInput, resolveAgentPhase, observeAgentRun, harnessReportsBusy, parseReportedPhase } from "./phase.js";
 import { sessionMetaCmds, sessionWindowCmds, metaHealCmds, needsMetaHeal, makeMetaHealGate } from "./session-meta-heal.js";   // #3892 — 표식 한 벌 + 표식 없는 세션 되채우기
 import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, mintSessionMcpToken, revokeSessionHookToken } from "./profiles.js";
 import { ensureMemberKitSeeded } from "./member-kit-seed.js";
@@ -269,6 +269,10 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     const { offline, busy, reportedFresh, shellWorking } = observeAgentRun({
       harness: d.harness, paneCmd: p.paneCmdRaw, paneTitle: p.paneTitleRaw, stateRaw: p.stateRaw, nowSec,
     });
+    // #3894 — 회수 상한이 «하네스가 말하는 작업 중» 과 «pane 추정» 을 가르는 값(phase.ts harnessReportsBusy).
+    //  위 busy·reportedFresh 는 해소된 하네스로 잰 offline 에 묶여, **셸 세션 안에서 `lively run` 으로 도는 AI** 의 스피너·훅
+    //  busy 는 버려지고 shellWorking(pane 추정)만 남는다. 회수 상한은 그 추정에만 걸리므로, 하네스의 말은 offline 과 무관하게 잰다.
+    const harnessBusy = harnessReportsBusy({ paneCmd: p.paneCmdRaw, paneTitle: p.paneTitleRaw, reported: parseReportedPhase(p.stateRaw), nowSec });
     // #1059 — **셸 세션에서 뭔가 돌고 있는가**(shellWorking). 셸 하네스는 스피너 관측 대상이 아니라 lastActive 가 영원히 안
     //  생기고, 그러면 F(idle 회수)의 유일한 보호 신호가 '마지막 열람' 하나뿐이 된다 → **셸에서 `lively run` 으로 AI 를
     //  돌리거나 긴 빌드를 걸어 둔 채 탭을 닫으면 회수된다**(상민님 지적). pane 포그라운드가 셸이 아니면 사용자가
@@ -303,7 +307,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     rows.push({
       name: p.name, created: p.created, attached: p.attached, paneTitleRaw: p.paneTitleRaw,
       offline, busy, shellWorking, lastBusy,
-      reportedFresh, lastAttached: p.lastAttached, lastViewed: p.lastViewed,
+      reportedFresh, harnessBusy, lastAttached: p.lastAttached, lastViewed: p.lastViewed,
       //  #2439 — 이 세션이 어느 모드로 떴나. ⚠ 이 push 는 필드를 **하나씩 골라** 담는다 —
       //   위에서 만들어 둔 값이라도 여기 안 적으면 조용히 사라진다(실측: 386행 중 0행만 값을 가졌다).
       runtimeChoice: p.runtimeChoice,
@@ -363,6 +367,11 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       working: appServer ? asPhase === "busy" : !!(r.busy || r.shellWorking || r.reportedFresh?.phase === "busy"),
       // 승인 대기도 마찬가지 — 화면 스크래핑이 아니라 우리가 들고 있는 승인 목록이 사실이다.
       awaiting: appServer ? asPhase === "waiting" : !!(r.reportedFresh?.phase === "waiting" || waitingIds.has(r.name)),
+      // #3894 — working 은 두 출처의 합집합이라 회수 상한은 그걸로 출처를 못 가른다. 그래서 둘을 따로 싣는다(회수 판정 전용).
+      //  · harnessWorking — 하네스(스피너·훅 보고·app-server 턴)가 스스로 말하는 작업 중. 상한 없이 존중한다.
+      //  · paneWorking — pane 포그라운드 추정(shellWorking). 이게 참이면 lastActive 는 그 추정이 매 관측 밀어 올린 값이다.
+      harnessWorking: appServer ? asPhase === "busy" : !!r.harnessBusy,
+      paneWorking: !!r.shellWorking,
       title: sessionActivityTitle(r.paneTitleRaw, r.harness),
       lastActive: r.lastBusy || undefined, // 마지막 작업 시각. 한 번도 작업 안 했으면 undefined → 프론트가 created 로 폴백.
       lastAttached: r.lastAttached || undefined, // #1098 마지막 열람(탭 붙음) 시각 — '안 본 작업 완료' 판정용.

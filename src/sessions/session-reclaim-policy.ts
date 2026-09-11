@@ -11,7 +11,9 @@
 // 기본값 0 = **회수 끔**(무회귀·놀람 방지): 아무 세션도 자동으로 죽지 않는다. 운영자가 넉넉한 TTL(예: 고객사 A
 //  16GB → 180~1440분)을 관리탭에서 걸어야 그때부터 그 시간 넘게 idle 인 세션이 회수된다. 회수돼도 desired-state
 //  (org_session_state)는 보존되어 restorable 로 남고, 열면 lazy resume(E). **회수 불변식(정책 아님, reaper 하드코딩)**:
-//  managed(상시)·attached>0(누가 보는 중)·busy(작업 중)·waiting(승인 대기)는 절대 회수 안 함(#687 오kill 교훈).
+//  managed(상시)·attached>0(누가 보는 중)·busy(작업 중)·waiting(승인 대기)는 회수 안 함(#687 오kill 교훈).
+//  단 attached(#2148 attach_idle_minutes)와 «스스로 증명하지 못하는» 작업 중·승인 대기(#3894 busy_idle_minutes)에는
+//  켜면 상한이 선다 — 그 신호가 거짓으로 굳어도 회수가 영영 멈추지 않게 하는 안전망이다(둘 다 기본 0=끔).
 //
 // 관련: src/sessions/session-reaper.ts(이 정책으로 통합목록을 순회·회수) · src/sessions/session-memory-policy.ts(같은 seam 원형) ·
 //  src/sessions/session-state.ts(회수해도 보존되는 desired-state).
@@ -77,6 +79,24 @@ export interface SessionReclaimPolicy {
    */
   attach_idle_minutes: number;
   /**
+   * #3894 **작업 중·승인 대기 보호의 상한(분)** — 그 보호가 «스스로 증명하지 못하는» 신호일 때, 사람이 이 시간 넘게
+   *  안 봤으면 존중하지 않는다. 0 = 종전 동작(회수 안전 불변식 ③ 을 무기한 존중).
+   *
+   * 왜 필요(2026-09-11 lively-46e3 실측): ③ 에는 끝이 없었다. 승인 대기로 159~218분 방치된 세션 둘, pane 포그라운드가
+   *  늘 «실행 중» 으로 읽혀 26시간째 `working` 인 AI 로그인 자리 셋이 어느 경로로도 안 걷혔다. `attach_idle_minutes` 가
+   *  ② 에 붙인 것과 같은 안전망을 ③ 에 붙인다.
+   *
+   * ⚠ **상한이 걸리는 것과 안 걸리는 것**(판정은 session-reaper.ts pickReapCandidates ③):
+   *  · 걸린다 — 승인·선택 대기(사람의 결정을 기다린다) · 셸 세션의 «실행 중»(pane 포그라운드가 셸이 아니라는 추정).
+   *  · 안 걸린다 — 하네스가 **스스로 말하는** 작업 중(스피너·훅 보고·app-server 턴). 그건 지금 돌고 있다는 증거라
+   *    사람이 몇 시간을 안 봐도 존중한다 — 크론·위탁 워커는 애초에 아무도 안 본다.
+   * ⚠ 시계는 «사람 신호»(마지막 열람)다 — 셸 추정 작업은 관측할 때마다 lastActive 를 지금으로 밀어 올리므로
+   *  그 값을 쓰면 상한이 영영 안 선다.
+   *
+   * ⚠ attach_idle_minutes 보다 **길게** 잡아라 — ③ 은 «일하는 중일 수도 있다» 는 신호라 ② 보다 오회수 비용이 크다.
+   */
+  busy_idle_minutes: number;
+  /**
    * #2509 **전역 압박 회수에서 이 워크스페이스의 순번** — 낮을수록 먼저 걷힌다. 기본 100.
    *
    * 왜 필요한가: 압박 축은 **박스 전역**이라(물리·스왑은 워크스페이스마다 다르지 않다) 임계를 넘으면 회수가
@@ -121,6 +141,7 @@ export const DEFAULT_SESSION_RECLAIM_POLICY: SessionReclaimPolicy = {
   pressure_idle_minutes: 60, // 켰을 때의 기본 하한 — '한 시간 넘게 손 안 댄 세션'
   pressure_swap_pct: 0,      // #1675 ⑤ — 0 = 끔(무회귀). 켜는 값은 90 안팎을 권한다(그 아래는 평시에도 닿는 박스가 있다)
   attach_idle_minutes: 0,    // #2148 — 0 = 끔(무회귀). 셀프호스트 동작은 종전 그대로다.
+  busy_idle_minutes: 0,      // #3894 — 0 = 끔(무회귀). 매니지드는 CP 캡(reclaim_busy_idle_min)이 켠다.
   // #2509 전역 압박 회수의 순서·상한·여유. 기본값은 **전부 «종전과 똑같이 동작»** 으로 잡는다:
   //  순번이 전부 같으면 순수 RSS 순(#1220 교리), 상한 0 = 무제한, 여유 0 = 임계 바로 밑에서 정지.
   //  운영자가 박스 사정에 맞춰 관리탭에서 조절한다.
@@ -202,6 +223,8 @@ const policy = definePolicy<SessionReclaimPolicy>({
     pressure_swap_pct: { env: "LIVELY_SESSION_PRESSURE_SWAP_PCT", min: RECLAIM_PRESSURE_PCT_MIN, max: RECLAIM_SWAP_PCT_MAX },
     // #2148 — 신규 노브라 loose 를 쓰지 않는다(0='끔'이 의미 있는 선택이므로 null/"" 이 0 으로 뒤집히면 안 된다).
     attach_idle_minutes: { env: "LIVELY_SESSION_ATTACH_IDLE_MIN", min: RECLAIM_TTL_MIN_MIN, max: RECLAIM_TTL_MIN_MAX },
+    // #3894 — attach 와 같은 규약(신규 노브라 loose 금지 · 0='끔'이 의미 있는 선택).
+    busy_idle_minutes: { env: "LIVELY_SESSION_BUSY_IDLE_MIN", min: RECLAIM_TTL_MIN_MIN, max: RECLAIM_TTL_MIN_MAX },
     // #2509 — 전역 압박 회수의 순서·상한·여유. env 시드는 **박스 전체 기본값**의 자리다: 이 파일의 시드는
     //  프로세스 전역이라 모든 워크스페이스의 base 가 되고, 관리탭 저장이 그 위를 워크스페이스별로 덮는다.
     //  (95곳짜리 박스에서 «전부 이렇게, 몇 곳만 다르게»를 표현하는 유일한 방법이 이 층이다.)
