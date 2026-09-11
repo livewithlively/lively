@@ -24,7 +24,8 @@ import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { manifestRefs, manifestProblems, GITHUB_SAFE } from "../verify-update-manifest.mjs";
 import { versionLabel } from "./tray-menu.mjs";
 import { RETRYABLE_KINDS } from "./ipc-contract.mjs";
-import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX, phaseEventKind, streamEvent, parseSse, reconnectDelay, stableStream } from "./notify.mjs";
+import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX, phaseEventKind, streamEvent, parseSse, reconnectDelay, stableStream, keepBanner, BANNER_KEEP_MAX } from "./notify.mjs";
+import { createHashNav } from "./web-shell.mjs";
 import { updateStatusNote } from "./update-policy.mjs";
 import { posix as pposix } from "node:path";
 
@@ -1932,6 +1933,117 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
   t("A14 세션 해시 — 형식이 아닌 id 는 주소로 만들지 않는다(응답을 그대로 믿지 않는다)", () => {
     assert.equal(sessionHash("box-jang-8abcdb3b"), "#/s/box-jang-8abcdb3b");
     for (const bad of ["", null, "a b", "../../etc", "javascript:alert(1)", "x".repeat(200)]) assert.equal(sessionHash(bad), null, String(bad));
+  });
+  // ── #3896 알림을 눌러도 그 화면으로 안 가던 두 자리 — 배너 수명(keepBanner) · 이동 대기(createHashNav) ──
+  //  실동작(GC·액자 로딩)은 Electron 이 있어야 재므로 verify-notify-click.mjs 가 대조군과 함께 잰다. 여기는 판정과 배선이다.
+  t("A14a ★ 배너를 쥔다 — 상한까지는 그대로, 넘으면 가장 먼저 쥔 것만 놓아 돌려준다(경계: 상한 · 상한+1)", () => {
+    const kept = new Set();
+    const a = { id: "a" }, b = { id: "b" }, c = { id: "c" };
+    assert.deepEqual(keepBanner(kept, a, 2), [], "K1 첫 배너에서 무언가를 놓았다");
+    assert.ok(kept.has(a), "K1 쥐지 않았다 — GC 가 가져가면 그 뒤의 클릭이 사라진다");
+    assert.deepEqual(keepBanner(kept, b, 2), [], "K2 크기가 상한과 같을 뿐인데 놓았다");
+    assert.deepEqual(keepBanner(kept, c, 2), [a], "K3 상한을 넘었는데 가장 먼저 쥔 것을 놓지 않았다");
+    assert.deepEqual([...kept], [b, c], "K3 방금 쥔 배너가 밀려났다");
+    assert.deepEqual(keepBanner(kept, c, 2), [], "K4 이미 쥔 배너를 다시 넣었더니 무언가를 놓았다");
+    assert.equal(kept.size, 2, "K4");
+  });
+  t("A14b 배너 쥐기 — 빈 입력엔 아무것도 안 하고, 이상한 상한은 기본 상한으로 본다(전부 놓아 버리지 않는다)", () => {
+    const kept = new Set();
+    assert.deepEqual(keepBanner(kept, null), [], "K5");
+    assert.equal(kept.size, 0, "K5 없는 배너를 쥐었다");
+    assert.deepEqual(keepBanner(null, { id: "x" }), [], "K5 쥘 자리가 없을 때");
+    for (const bad of [0, -1, NaN, 1.5, "3"]) {
+      const s = new Set([{ i: 1 }]);
+      assert.deepEqual(keepBanner(s, { i: 2 }, bad), [], `K6 상한 ${String(bad)} 에 쥔 배너를 놓았다`);
+      assert.equal(s.size, 2, `K6 상한 ${String(bad)}`);
+    }
+    const full = new Set(Array.from({ length: BANNER_KEEP_MAX }, (_, i) => ({ i })));
+    assert.equal(keepBanner(full, { i: "new" }).length, 1, "K6 기본 상한이 BANNER_KEEP_MAX 가 아니다");
+  });
+  //  가짜 webContents — 보낸 코드를 가짜 location 에 실제로 돌려 **창의 해시가 무엇이 되는지**로 단언한다(코드 문자열 모양을 보지 않는다).
+  const fakeWc = ({ loading = false, mainLoading = false, destroyed = false, noMainFrameApi = false, throws = false, rejects = false } = {}) => {
+    const wc = {
+      state: { loading, mainLoading, destroyed },
+      hashes: [],
+      isDestroyed: () => wc.state.destroyed,
+      isLoading: () => wc.state.loading,
+      executeJavaScript: (code) => {
+        const loc = { hash: "" };
+        new Function("location", code)(loc);
+        wc.hashes.push(loc.hash);
+        if (throws) throw new Error("창이 사라졌다");
+        return rejects ? Promise.reject(new Error("문서가 바뀌었다")) : Promise.resolve();
+      },
+    };
+    if (!noMainFrameApi) wc.isLoadingMainFrame = () => wc.state.mainLoading;
+    return wc;
+  };
+  t("A14c ★ 알림 클릭 이동 — 액자만 싣는 중이면 기다리지 않고 지금 간다(종전: 다시 오지 않을 did-finish-load 를 기다렸다)", () => {
+    const idle = fakeWc();
+    assert.equal(createHashNav().open(idle, "#/s/a"), "now", "N1");
+    assert.deepEqual(idle.hashes, ["#/s/a"], "N1 한가한 창인데 이동하지 않았다");
+    const frameOnly = fakeWc({ loading: true, mainLoading: false });
+    assert.equal(createHashNav().open(frameOnly, "#/s/b"), "now", "N2 액자만 싣는 중인데 기다리기로 했다");
+    assert.deepEqual(frameOnly.hashes, ["#/s/b"], "N2 이동하지 않았다");
+  });
+  t("A14d 본문을 싣는 중이면 한 곳만 기억했다가 다 실린 뒤 한 번 간다 — 여러 번 누르면 마지막 것", () => {
+    const nav = createHashNav();
+    const wc = fakeWc({ loading: true, mainLoading: true });
+    assert.equal(nav.open(wc, "#/s/a"), "pending", "N3");
+    assert.deepEqual(wc.hashes, [], "N3 싣는 도중에 보냈다 — 새 문서가 그 해시를 지운다");
+    assert.equal(nav.open(wc, "#/s/b"), "pending", "N4");
+    wc.state.loading = wc.state.mainLoading = false;
+    assert.equal(nav.loaded(wc), true, "N3 다 실렸는데 기다리던 이동을 하지 않았다");
+    assert.deepEqual(wc.hashes, ["#/s/b"], "N4 마지막 클릭 한 번만 가야 한다");
+    assert.equal(nav.loaded(wc), false, "N7 같은 클릭이 두 번 쓰였다");
+    assert.deepEqual(wc.hashes, ["#/s/b"], "N7");
+    assert.equal(createHashNav().loaded(wc), false, "N6 기다리는 게 없는데 이동했다");
+  });
+  t("A14e 기다리던 클릭은 로드 실패와 «지금 가는 클릭» 이 지운다 — 나중 로드가 옛 화면으로 끌고 가지 않는다", () => {
+    const nav = createHashNav();
+    const wc = fakeWc({ loading: true, mainLoading: true });
+    nav.open(wc, "#/s/old");
+    nav.failed();
+    wc.state.loading = wc.state.mainLoading = false;
+    assert.equal(nav.loaded(wc), false, "N5 실패한 로드의 클릭이 다음 로드에서 되살아났다");
+    assert.deepEqual(wc.hashes, [], "N5");
+    const nav2 = createHashNav();
+    const wc2 = fakeWc({ loading: true, mainLoading: true });
+    nav2.open(wc2, "#/s/old");
+    wc2.state.loading = wc2.state.mainLoading = false;
+    assert.equal(nav2.open(wc2, "#/s/new"), "now", "N8");
+    assert.equal(nav2.loaded(wc2), false, "N8 지금 간 뒤에 옛 클릭이 다시 튀어나왔다");
+    assert.deepEqual(wc2.hashes, ["#/s/new"], "N8");
+  });
+  t("A14f 알림 클릭 이동 — 입력이 이상하거나 창이 사라졌으면 아무것도 안 하고, 실패가 새어 나오지 않는다", () => {
+    const nav = createHashNav();
+    const wc = fakeWc({ loading: true, mainLoading: true });
+    for (const bad of ["", null, undefined]) assert.equal(nav.open(wc, bad), "skip", `N9 hash=${String(bad)}`);
+    assert.equal(nav.open(null, "#/s/a"), "skip", "N9 창 없음");
+    const gone = fakeWc({ destroyed: true });
+    assert.equal(nav.open(gone, "#/s/a"), "skip", "N9 파괴된 창");
+    wc.state.loading = wc.state.mainLoading = false;
+    assert.equal(nav.loaded(wc), false, "N9 건너뛴 클릭이 기다림으로 남았다");
+    assert.deepEqual([...wc.hashes, ...gone.hashes], [], "N9 이동이 일어났다");
+    assert.equal(createHashNav().open(fakeWc({ loading: true, noMainFrameApi: true }), "#/s/a"), "pending", "N10 isLoadingMainFrame 이 없으면 종전 판정(isLoading)으로 물러서야 한다");
+    assert.doesNotThrow(() => createHashNav().open(fakeWc({ throws: true }), "#/s/a"), "N11 executeJavaScript 예외가 새어 나왔다");
+    assert.doesNotThrow(() => createHashNav().open(fakeWc({ rejects: true }), "#/s/a"), "N11 거절이 새어 나왔다(처리 안 된 거절은 프로세스를 죽인다)");
+  });
+  t("A14g 배선 — 띄운 배너를 쥐고 누를 때만 놓으며, 창의 로드 이벤트가 이동 대기를 잇는다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    const banner = main.slice(main.indexOf("function showBanner("), main.indexOf("function openHashInApp("));
+    assert.ok(/keepBanner\(liveBanners, n\)/.test(banner), "W1 띄운 배너를 쥐지 않는다 — GC 뒤의 클릭이 사라진다");
+    assert.ok(/n\.on\("click", \(\) => \{\s*liveBanners\.delete\(n\)/.test(banner), "W2 누른 배너를 놓지 않는다");
+    assert.ok(!/on\("close"/.test(banner), "W3 close 로 놓는다 — Windows 는 배너가 알림 센터로 들어갈 때도 close 를 낸다");
+    assert.ok(!/\.close\(\)/.test(banner), "W4 놓는 배너에 close() 를 부른다 — 실측(Electron 43.3.0): close() 한 배너는 GC 되지 않아 상한이 울타리 구실을 못 한다");
+    const open = main.slice(main.indexOf("function openHashInApp("), main.indexOf("function openSessionInApp("));
+    assert.ok(/hashNav\.open\(appWin\.webContents, hash\)/.test(open), "W5 알림 클릭 이동을 createHashNav 로 하지 않는다");
+    assert.ok(!/isLoading\(\)|once\("did-finish-load"/.test(open), "W5 종전 대기(isLoading → did-finish-load)가 남아 있다");
+    const on = (ev) => { const i = main.indexOf(`appWin.webContents.on("${ev}"`); return i < 0 ? "" : main.slice(i, main.indexOf("});", i)); };
+    assert.ok(/hashNav\.loaded\(/.test(on("did-finish-load")), "W6 다 실린 뒤 기다리던 이동을 하지 않는다");
+    const fail = on("did-fail-load");
+    assert.ok(fail.indexOf("code === -3") >= 0 && fail.indexOf("hashNav.failed()") > fail.indexOf("code === -3"), "W6 본문 로드 실패(ERR_ABORTED 제외)에서 기다리던 클릭을 버리지 않는다");
+    assert.ok(/appWin\.on\("closed", \(\) => \{[^\n]*hashNav\.failed\(\)/.test(main), "W6 창이 닫혀도 기다리던 클릭이 남는다");
   });
   t("A15 배선 — main.mjs 가 알림 폴러를 실제로 걸고 Notification 을 띄운다", () => {
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
