@@ -20,24 +20,14 @@
 //  범위를 옮겨 「안쪽/바깥쪽」을 만든다. 겨냥이 맞았다는 것은 고장 설정이 실제로 'bravo' 를 집어내는
 //  것으로 증명한다(아래 G1).
 
-import { mkdtempSync, writeFileSync, copyFileSync, rmSync, existsSync, readFileSync } from "node:fs";
-import { spawn } from "node:child_process";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { dumpDom, findChrome } from "./headless-chrome.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-const CANDIDATES = [
-  process.env.CHROME_BIN,
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  "/Applications/Chromium.app/Contents/MacOS/Chromium",
-  "/usr/bin/google-chrome",
-  "/usr/bin/google-chrome-stable",
-  "/usr/bin/chromium",
-  "/usr/bin/chromium-browser",
-].filter(Boolean);
-const chrome = CANDIDATES.find((p) => existsSync(p));
+const chrome = findChrome();
 if (!chrome) {
   console.log("skip  크롬을 못 찾아 건너뜁니다(CHROME_BIN 으로 지정) — 런타임 우클릭 검증 미실행");
   process.exit(0);
@@ -127,47 +117,20 @@ const cases = [
   ...EDGES.map((e) => ({ ...e, id: e.id + ".broken", rcsw: true, capture: false })),
 ];
 
-const dir = mkdtempSync(path.join(tmpdir(), "ctx-rclick-"));
-let results;
-try {
-  for (const f of ["xterm.min.js", "xterm.min.css"]) copyFileSync(path.join(VENDOR, f), path.join(dir, f));
-  writeFileSync(path.join(dir, "page.html"), PAGE.replace("__CASES__", JSON.stringify(cases)));
-  // 크롬을 **끝나기를 기다리지 않고** 돌린다: 결과 표지가 stdout 에 보이는 순간 끊는다.
-  //  ⚠ 실측 — 이 페이지의 크롬은 DOM 을 다 뱉고도 종료에서 매달린다(단독 2초, 러너 안에서는 45초 상한까지).
-  //  종료를 기다리면 그 대기가 그대로 테스트 시간이 되고 CI 파일당 예산(45초)을 넘긴다.
-  const dom = await new Promise((resolve, reject) => {
-    const child = spawn(chrome, [
-      "--headless=old", "--disable-gpu", "--no-sandbox", "--no-first-run", "--no-default-browser-check",
-      // 신선한 프로필로 뜨면 크롬이 컴포넌트 갱신·백그라운드 네트워킹을 기다린다 — 전부 끈다
-      "--disable-background-networking", "--disable-component-update", "--disable-sync",
-      "--disable-default-apps", "--disable-extensions", "--metrics-recording-only", "--mute-audio",
-      "--disable-client-side-phishing-detection", "--no-pings", "--disable-domain-reliability",
-      "--disable-breakpad", "--disable-crash-reporter",
-      // ⚠ user-data-dir 을 반드시 temp 로 — 없으면 크롬이 실 HOME 을 건드려 러너의 HOME 가드가 깨진다
-      `--user-data-dir=${path.join(dir, "profile")}`,
-      // --timeout 은 **실시간** 상한이다. 이게 없으면 xterm 이 타이머를 계속 걸어 가상시간이 더디게 흘러
-      //  --virtual-time-budget 만으로는 페이지가 안 끝난다(실측 90초).
-      "--timeout=20000", "--virtual-time-budget=15000", "--dump-dom", `file://${path.join(dir, "page.html")}`,
-    ], { env: { ...process.env, HOME: dir }, stdio: ["ignore", "pipe", "pipe"] });
-
-    let out = "", errOut = "", settled = false;
-    const done = (fn, v) => { if (settled) return; settled = true; clearTimeout(timer); try { child.kill("SIGKILL"); } catch (_) {} fn(v); };
-    const timer = setTimeout(() => done(reject, new Error("크롬이 30초 안에 결과를 안 냈다\n" + errOut.slice(0, 800))), 30_000);
-    child.stdout.on("data", (b) => { out += b; if (out.includes("ENDRESULT")) done(resolve, out); });
-    child.stderr.on("data", (b) => { errOut += b; });
-    child.on("error", (e) => done(reject, e));
-    child.on("close", () => done(resolve, out));   // 표지 없이 끝났으면 아래 파싱에서 잡는다
-  });
-  const m = dom.match(/RESULT(\[.*?\])ENDRESULT/s);
-  if (!m) {
-    console.error("FAIL  크롬이 결과를 안 냈다 — 페이지가 끝까지 못 갔다");
-    process.exit(1);
-  }
-  const unesc = (s) => s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
-  results = JSON.parse(unesc(m[1]));
-} finally {
-  rmSync(dir, { recursive: true, force: true });
+// 크롬 실행·표지 대기·임시 디렉터리 치우기는 scripts/headless-chrome.mjs 한 벌이 맡는다(#3890 — 치우기 경주로
+//  단언 0개 종료가 나던 자리). 이 페이지는 xterm 이 타이머를 계속 걸어 가상시간을 넉넉히 준다.
+const dom = await dumpDom(chrome, {
+  html: PAGE.replace("__CASES__", JSON.stringify(cases)),
+  copy: ["xterm.min.js", "xterm.min.css"].map((f) => path.join(VENDOR, f)),
+  prefix: "ctx-rclick-",
+});
+const m = dom.match(/RESULT(\[.*?\])ENDRESULT/s);   // 표지 없이 끝났으면 여기서 잡는다
+if (!m) {
+  console.error("FAIL  크롬이 결과를 안 냈다 — 페이지가 끝까지 못 갔다");
+  process.exit(1);
 }
+const unesc = (s) => s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+const results = JSON.parse(unesc(m[1]));
 
 const by = Object.fromEntries(results.map((r) => [r.id, r]));
 // 진단용 — 무엇이 실제로 잡혔는지 한 줄씩 보고 싶을 때 RCLICK_DEBUG=1

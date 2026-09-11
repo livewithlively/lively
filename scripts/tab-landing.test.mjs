@@ -12,12 +12,13 @@
 //   엔진이 부르는 셸 의존(core·shell-prefs·embed)만 얇게 갈아 끼우고, el/sv 는 진짜 lib/dom.ts 를 쓴다.
 //   크롬이 없는 면에서는 런타임 절만 건너뛴다(값·배선은 그대로 돈다).
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { dumpDom, findChrome } from "./headless-chrome.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => readFileSync(path.join(root, p), "utf8");
@@ -118,13 +119,7 @@ try {
 }
 
 // ── R — 런타임: 진짜 엔진(web/v2/tabs.ts)을 헤드리스 크롬에서 ──────────────────
-const CANDIDATES = [
-  process.env.CHROME_BIN,
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  "/Applications/Chromium.app/Contents/MacOS/Chromium",
-  "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser",
-].filter(Boolean);
-const chrome = CANDIDATES.find((p) => existsSync(p));
+const chrome = findChrome();
 if (!chrome) {
   console.log("skip  크롬을 못 찾아 런타임 절(R)을 건너뜁니다(CHROME_BIN 으로 지정)");
   console.log(`\n${pass} passed`);
@@ -279,40 +274,13 @@ ${SCENARIOS}
 })();
 </script>`;
 
-const dir = mkdtempSync(path.join(tmpdir(), "tab-landing-rt-"));
-let R, child = null;
-try {
-  writeFileSync(path.join(dir, "page.html"), PAGE);
-  //  크롬은 결과 표지가 stdout 에 보이는 순간 끊는다 — 종료를 기다리면 매달리는 판이 있다(ctx-rclick-runtime 실측).
-  const dom = await new Promise((resolve, reject) => {
-    child = spawn(chrome, [
-      "--headless=old", "--disable-gpu", "--no-sandbox", "--no-first-run", "--no-default-browser-check",
-      "--disable-background-networking", "--disable-component-update", "--disable-sync",
-      "--disable-default-apps", "--disable-extensions", "--metrics-recording-only", "--mute-audio",
-      "--disable-client-side-phishing-detection", "--no-pings", "--disable-domain-reliability",
-      "--disable-breakpad", "--disable-crash-reporter",
-      `--user-data-dir=${path.join(dir, "profile")}`,   // ⚠ temp 프로필 — 실 HOME 을 건드리지 않는다
-      "--timeout=20000", "--virtual-time-budget=5000", "--dump-dom", `file://${path.join(dir, "page.html")}`,
-    ], { env: { ...process.env, HOME: dir }, stdio: ["ignore", "pipe", "pipe"] });
-    let out = "", errOut = "", settled = false;
-    const done = (fn, v) => { if (settled) return; settled = true; clearTimeout(timer); try { child.kill("SIGKILL"); } catch (_) {} fn(v); };
-    const timer = setTimeout(() => done(reject, new Error("크롬이 30초 안에 결과를 안 냈다\n" + errOut.slice(0, 800))), 30_000);
-    child.stdout.on("data", (b) => { out += b; if (out.includes("ENDRESULT")) done(resolve, out); });
-    child.stderr.on("data", (b) => { errOut += b; });
-    child.on("error", (e) => done(reject, e));
-    child.on("close", () => done(resolve, out));
-  });
-  const m = dom.match(/RESULT(\{.*?\})ENDRESULT/s);
-  ok(!!m, "R0 [배선] 크롬이 시나리오를 끝까지 돌려 결과를 냈다");
-  const unesc = (s) => s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
-  R = JSON.parse(unesc(m[1]));
-} finally {
-  //  ⚠ SIGKILL 뒤에도 크롬이 프로필에 잠깐 더 쓴다 — 곧바로 지우면 ENOTEMPTY 로 **단언을 하나도 안 돈 채** 죽는다(실측).
-  //   끝나기를 잠깐 기다리고, 지우기는 재시도하고, 그래도 안 되면 알리기만 한다(임시 디렉터리다).
-  if (child && child.exitCode === null && child.signalCode === null) await new Promise((r) => { child.once("close", r); setTimeout(r, 3000); });
-  try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
-  catch (e) { console.log(`note  임시 디렉터리를 못 지웠습니다(${e.code}) — ${dir}`); }
-}
+//  크롬 실행·표지 대기·임시 디렉터리 치우기는 scripts/headless-chrome.mjs 한 벌이 맡는다 — 이 파일이 처음 들고 있던
+//   복사본은 결과를 받자마자 프로필을 지워 ENOTEMPTY 로 단언 0개 종료가 났다(실측). 시나리오가 동기라 가상시간은 짧게.
+const dom = await dumpDom(chrome, { html: PAGE, prefix: "tab-landing-rt-", virtualTimeBudget: 5000 });
+const m = dom.match(/RESULT(\{.*?\})ENDRESULT/s);
+ok(!!m, "R0 [배선] 크롬이 시나리오를 끝까지 돌려 결과를 냈다");
+const unesc = (s) => s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+const R = JSON.parse(unesc(m[1]));
 ok(!R.CRASH, "R0′ [배선] 엔진이 페이지 안에서 죽지 않았다", R.CRASH);
 if (process.env.TAB_LANDING_DEBUG) console.log("DBG", show(R));
 
