@@ -46,11 +46,9 @@ import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWrit
 import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, psmuxUnsafeToken, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
-import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, type TmuxCmd, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
-import {
-  sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
-  paneAwaitingInput, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
-} from "./phase.js";
+import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
+import { sessionActivityTitle, paneAwaitingInput, resolveAgentPhase, observeAgentRun } from "./phase.js";
+import { sessionMetaCmds, sessionWindowCmds, metaHealCmds, needsMetaHeal, makeMetaHealGate } from "./session-meta-heal.js";   // #3892 — 표식 한 벌 + 표식 없는 세션 되채우기
 import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, mintSessionMcpToken, revokeSessionHookToken } from "./profiles.js";
 import { ensureMemberKitSeeded } from "./member-kit-seed.js";
 import { logger } from "../log.js";
@@ -186,6 +184,9 @@ export async function listLiveSessionIds(opts?: { strict?: boolean }): Promise<s
   return raw.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("box-"));
 }
 
+// #3892 — 표식 되채우기의 세션당 쿨다운(프로세스 수명). 목록 폴링은 뷰어 수만큼 돌므로 폴링마다 보내지 않는다.
+const metaHealGate = makeMetaHealGate();
+
 // me=null 이면 필터 없이 전부(owned=false 고정 — 뷰어별 owned 는 소비자가 재계산).
 /**
  * @param strict true 면 **tmux 를 못 본 것**(서버 없음이 아닌 실패)을 삼키지 않고 throw 한다.
@@ -213,7 +214,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     catch (e) { hiddenUnknown = true; console.warn(`[visibility] 프로젝트 공개범위 판정 실패 — 프로젝트 세션을 숨깁니다: ${(e as Error)?.message}`); }
   }
   const nowSec = Math.floor(Date.now() / 1000);
-  // 1차: 파싱 + 전역 lastBusy 갱신(스피너 기반, 뷰어 무관 — 정렬 recency 일관성).
+  // 1차: 파싱만(tmux 한 줄 → 원시 값). 실행 관측·lastBusy 갱신은 2차(desired 해소 뒤)에서 한다 — 아래 #3892.
   const parsed: Array<Record<string, any>> = [];
   // 2차 산출: desired 해소 + 가시성 필터를 통과한 것만.
   const rows: Array<Record<string, any>> = [];
@@ -221,33 +222,12 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     if (!line.startsWith("box-")) continue;
     const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, appRaw, managedRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, lastSeenRaw, paneTitleRaw, runtimeRaw, ...labelParts] = line.split("\t");
     const invites = parseInvites(invitesRaw);
-    const offline = isAgentOffline(harness, paneCmdRaw);
-    const busy = !offline && isSpinning(paneTitleRaw);
-    // #1221 하네스 보고(@box_state). 신선하면 이게 스크래핑보다 우선한다(resolveAgentPhase 우선순위표).
-    const reported = offline ? null : parseReportedPhase(stateRaw);
-    const reportedFresh = isPhaseFresh(reported, nowSec) ? reported : null;
-    // #1059 — **셸 세션에서 뭔가 돌고 있는가**. 셸 하네스는 스피너 관측 대상이 아니라 lastActive 가 영원히 안 생기고,
-    //  그러면 F(idle 회수)의 유일한 보호 신호가 '마지막 열람' 하나뿐이 된다 → **셸에서 `lively run` 으로 AI 를
-    //  돌리거나 긴 빌드를 걸어 둔 채 탭을 닫으면 회수된다**(상민님 지적). pane 포그라운드가 셸이 아니면 사용자가
-    //  무언가 실행 중이라는 뜻이므로 그것도 '활동'으로 인정해 시각을 갱신한다.
-    //  ⚠ 상태 표시는 '셸' 그대로 둔다 — vim 을 열어 둔 것까지 '작업 중'으로 부르면 그건 과장이다. 여기서 쓰는 건
-    //   **회수 판정용 활동 시각**뿐이다.
-    const shellWorking = (!r_harnessIsAgent(harness)) && !SHELL_CMDS.has((paneCmdRaw || "").trim());
-    // 마지막 작업 시각 = max(이번 프로세스 관측, tmux 에 영속된 값). busy(또는 셸에서 실행 중)면 지금으로 갱신.
-    const persisted = Number(lastBusyRaw) || 0;
-    let lastBusy = Math.max(getLastBusy(name), persisted);
-    if (busy || shellWorking) {
-      lastBusy = nowSec;
-      setLastBusy(name, nowSec);
-      if (nowSec - persisted >= 30) {
-        void tmuxQuiet(["set-option", "-t", name, "@box_last_busy", String(nowSec)]); // 30초 스로틀 — 폴링마다 쓰지 않는다
-        void touchSessionBusy(name, nowSec).catch(() => { /* 비치명 — desired-state 없음(구 세션·노드)·DB 다운 */ }); // #1059 E — restorable 카드 시간표시 미러(같은 스로틀)
-      }
-    }
     // ⚠ 가시성 판정은 여기서 하지 않는다 — desired(소유자·초대·프로젝트)를 **DB 로 해소한 뒤**여야 한다.
     //  tmux 값으로 먼저 거르면 DB 에서 초대가 추가된 세션이 목록에 아예 안 올라온다(2차 패스로 미룬다).
     parsed.push({
-      name, created, attached, paneTitleRaw, offline, busy, shellWorking, lastBusy, reportedFresh,
+      name, created, attached, paneTitleRaw,
+      //  #3892 — 관측 재료는 원시 값 그대로 넘긴다(판정은 해소된 하네스로 2차에서). harnessRaw 는 «표식이 비었나» 의 표지다.
+      paneCmdRaw: paneCmdRaw || "", stateRaw: stateRaw || "", persistedLastBusy: Number(lastBusyRaw) || 0, harnessRaw: harness || "",
       // #2170 — 상시세션 출처 표식. **desired 해소(resolveDesired)를 타지 않는다**: 상시세션은 DB 미러가
       //  아예 없으므로(#1059 E) 대응 컬럼이 없고, TmuxDesired 에 넣으면 "DB 컬럼이 있는 값"이라는 그 인터페이스의
       //  계약(필드는 DB 컬럼과 1:1)이 깨진다. tmux 만이 아는 관측값으로 그대로 올린다.
@@ -280,7 +260,40 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
   //  전부 tmux 폴백으로 흐른다 — 목록은 장애 중에도 보여야 한다(그게 복구를 하는 자리다).
   const desiredMap = await loadDesiredMap(parsed.map((p) => p.name));
   for (const p of parsed) {
-    const d = resolveDesired(desiredMap.get(p.name), p.tmuxDesired);
+    const row = desiredMap.get(p.name);
+    const d = resolveDesired(row, p.tmuxDesired);
+    // ★ #3892 — 실행 관측은 **해소된 하네스**(DB → tmux 폴백)로 잰다. 종전엔 1차 패스가 tmux 원시 @box_harness 로 쟀고
+    //  나머지(하네스 표시·셸 판정·회수)는 전부 이 d 를 봤다. 둘이 갈리는 세션 — 생성이 판과 표식 사이에서 끊겨 표식이
+    //  빈 세션 — 은 «AI 종료(exited)» 와 «셸 작업(working)» 이 함께 참이 되어, 돌고 있는데 회색 «셸» 점으로 섰다
+    //  (근거·실측은 phase.ts observeAgentRun 머리말). 노드(DB 없음)는 d 가 곧 tmux 값이라 종전과 같다.
+    const { offline, busy, reportedFresh, shellWorking } = observeAgentRun({
+      harness: d.harness, paneCmd: p.paneCmdRaw, paneTitle: p.paneTitleRaw, stateRaw: p.stateRaw, nowSec,
+    });
+    // #1059 — **셸 세션에서 뭔가 돌고 있는가**(shellWorking). 셸 하네스는 스피너 관측 대상이 아니라 lastActive 가 영원히 안
+    //  생기고, 그러면 F(idle 회수)의 유일한 보호 신호가 '마지막 열람' 하나뿐이 된다 → **셸에서 `lively run` 으로 AI 를
+    //  돌리거나 긴 빌드를 걸어 둔 채 탭을 닫으면 회수된다**(상민님 지적). pane 포그라운드가 셸이 아니면 사용자가
+    //  무언가 실행 중이라는 뜻이므로 그것도 '활동'으로 인정해 시각을 갱신한다.
+    //  ⚠ 상태 표시는 '셸' 그대로 둔다 — vim 을 열어 둔 것까지 '작업 중'으로 부르면 그건 과장이다. 여기서 쓰는 건
+    //   **회수 판정용 활동 시각**뿐이다.
+    // 마지막 작업 시각 = max(이번 프로세스 관측, tmux 에 영속된 값). busy(또는 셸에서 실행 중)면 지금으로 갱신.
+    //  ⚠ 뷰어와 무관해야 한다(정렬 recency 일관성·회수 판정) — 그래서 아래 가시성 continue 보다 **앞**이다.
+    const persisted = p.persistedLastBusy as number;
+    let lastBusy = Math.max(getLastBusy(p.name), persisted);
+    if (busy || shellWorking) {
+      lastBusy = nowSec;
+      setLastBusy(p.name, nowSec);
+      if (nowSec - persisted >= 30) {
+        void tmuxQuiet(["set-option", "-t", p.name, "@box_last_busy", String(nowSec)]); // 30초 스로틀 — 폴링마다 쓰지 않는다
+        void touchSessionBusy(p.name, nowSec).catch(() => { /* 비치명 — desired-state 없음(구 세션·노드)·DB 다운 */ }); // #1059 E — restorable 카드 시간표시 미러(같은 스로틀)
+      }
+    }
+    // ★ #3892 — 표식(@box_*)이 빈 채 살아 있는 세션을 DB 행으로 되채운다. tmux 표식을 직접 읽는 입구(세션 프로젝트 바꾸기의
+    //  소유자 확인 · 대화 배달의 하네스 판정 · 창 옵션)가 그 세션에서 조용히 틀리지 않게. 판정·목록은 session-meta-heal.ts.
+    //  ⚠ 뷰어와 무관한 일이라 가시성 continue 앞이다. 응답을 막지 않는다(삼키는 묶음 · 세션당 쿨다운).
+    if (row && needsMetaHeal({ harnessRaw: p.harnessRaw, row, managed: p.managed }) && metaHealGate(p.name, nowSec * 1000)) {
+      logger.warn({ id: p.name }, "표식(@box_*)이 빈 라이브 세션 — DB desired 행으로 되채운다(#3892: 생성이 판과 표식 사이에서 끊긴 세션)");
+      void tmuxBatchQuiet(metaHealCmds(p.name, row));
+    }
     const owned = me !== null && !!d.owner && d.owner === me;
     // 가시성 판정은 canSeeSession 단일 술어로(#1291) — 예전엔 여기 인라인 사본이 있어 라이브 목록과 복원 목록이
     //  갈릴 수 있었다(위 주석이 경계하던 바로 그 이중구현).
@@ -289,8 +302,8 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     if (me !== null && !canSeeSession({ dir: d.dir ?? "", owner: d.owner, invites: d.invites, projectId: d.projectId ?? 0 }, me, hidden)) continue;
     rows.push({
       name: p.name, created: p.created, attached: p.attached, paneTitleRaw: p.paneTitleRaw,
-      offline: p.offline, busy: p.busy, shellWorking: p.shellWorking, lastBusy: p.lastBusy,
-      reportedFresh: p.reportedFresh, lastAttached: p.lastAttached, lastViewed: p.lastViewed,
+      offline, busy, shellWorking, lastBusy,
+      reportedFresh, lastAttached: p.lastAttached, lastViewed: p.lastViewed,
       //  #2439 — 이 세션이 어느 모드로 떴나. ⚠ 이 push 는 필드를 **하나씩 골라** 담는다 —
       //   위에서 만들어 둔 값이라도 여기 안 적으면 조용히 사라진다(실측: 386행 중 0행만 값을 가졌다).
       runtimeChoice: p.runtimeChoice,
@@ -838,30 +851,25 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  종전엔 값 하나에 중계 왕복 하나였다 — 매니지드에서 회당 0.45~1.0초라 이 블록만으로 5~10초였다
   //  (실측 2026-09-04). tmux 는 한 호출에서 `;` 로 여러 명령을 받으므로 **왕복 수를 값 개수에서 떼어낸다**.
   //  실행 순서·실패 의미는 종전 그대로다(앞이 실패하면 뒤는 안 돈다 · 호출 전체가 비-0). 계약·근거는 tmux-exec.ts 머리말.
-  const meta: TmuxCmd[] = [
-    ["set-option", "-t", id, "@box_owner", ownerId(user)],
-    ["set-option", "-t", id, "@box_label", label],
-    ["set-option", "-t", id, "@box_harness", harness.key],
-    //  ★ #2439 — 이 세션이 **어느 모드로 떴나**. 배달·화면이 같은 값을 봐야 판정이 갈리지 않는다
-    //   (갈렸을 때 pane 은 셸인데 대화창은 죽은 세션이 됐다 — 2026-09-01 실측).
-    ...(chatRuntime ? [["set-option", "-t", id, "@box_runtime", "chat"] as TmuxCmd] : []),
-    ["set-option", "-t", id, "@box_kind", input.kind],   // #2162 — 종류(@box_* 와 같은 자리·같은 규약)
-    ["set-option", "-t", id, "@box_dir", target],
-    ["set-option", "-t", id, "@box_auto", input.autoApprove ? "1" : "0"],
-    ["set-option", "-t", id, "@box_flags", encodeOptJson(appliedFlags)],
-    ["set-option", "-t", id, "@box_invites", encodeOptJson(invites)],
-    // 앱 세션이면 앱 id 를 박아둔다(#1780 D4) — @box_project 등과 같은 자리·같은 규약(desired 미러는 app_id 컬럼). 관측·귀속용.
-    ...(input.appId ? [["set-option", "-t", id, "@box_app", String(input.appId)] as TmuxCmd] : []),
-    // 프로젝트 세션엔 프로젝트 id 를 박아둔다 — listSessions 의 projectId(프론트 세션 귀속·카운트) + 작업 타임라인 귀속용.
-    //  (#452 이후 입장 게이트 canAttach 는 멤버십을 안 봄 — 이 id 는 표시·귀속 목적으로만 남는다.)
-    //  ⚠ 종전엔 @box_managed **뒤**에 박혔다. 둘은 서로를 안 읽는 독립 옵션이고 그 사이에서 값을 읽는 코드도
-    //   없으므로 순서를 앞으로 당겨 한 묶음에 넣는다(왕복 둘을 아낀다).
-    ...(input.projectId ? [
-      ["set-option", "-t", id, "@box_project", String(input.projectId)] as TmuxCmd,
-      ["set-option", "-t", id, "@box_project_src", input.projectSrc === "org" ? "org" : "v6"] as TmuxCmd,
-    ] : []),
-  ];
-  await tmuxBatch(meta);
+  //  #3892 — 목록은 session-meta-heal.ts 한 벌이다(표식이 빈 세션을 되채우는 쪽과 같은 목록 — 한쪽에만 더하는 어긋남 차단).
+  //   ⚠ 프로젝트 표식은 종전엔 @box_managed **뒤**에 박혔다. 둘은 서로를 안 읽는 독립 옵션이라 한 묶음에 넣었다(#3537).
+  const meta = sessionMetaCmds(id, {
+    owner: ownerId(user), label, harness: harness.key, runtimeChat: chatRuntime, kind: input.kind,
+    dir: target, autoApprove: !!input.autoApprove, flags: appliedFlags, invites,
+    appId: input.appId, projectId: input.projectId, projectSrc: input.projectSrc,
+  });
+  try { await tmuxBatch(meta); }
+  catch (e) {
+    //  ★ #3892 — 판은 떴는데 표식을 못 박았다. 그대로 던지면 **표식 없는 세션이 AI 를 돌린 채 남는다** — 사람은 오류를 보고
+    //   다시 만들어 세션이 둘이 되고, 남은 쪽은 소유자·하네스 표식이 없어 목록·입구가 조용히 틀린다(실측 2026-09-11:
+    //   롤 교대의 SIGTERM 15ms 뒤 이 묶음이 relay «Command failed» 로 죽은 되살리기 — session-meta-heal.ts 머리말).
+    //   아래 프로젝트 기록 실패와 같은 근거로 방금 만든 세션만 되돌린다: 사용자 작업 전이고 첫 지시도 아직 큐에 없다.
+    //  ⚠ DB 행은 **판이 사라진 것을 확인했을 때만** 지운다. kill 까지 실패했으면(중계가 통째로 끊긴 판) 판이 살아 있을 수 있고,
+    //   그때 행까지 지우면 소유자를 아무도 모르는 판이 된다 — 행을 남기면 목록이 표식을 되채운다(collectSessions #3892).
+    const gone = await tmux(["kill-session", "-t", id]).then(() => true, (ke) => isSessionGoneError(ke));
+    if (gone && inside && mirrored) await deleteSessionState(id).catch(() => undefined);
+    throw new HttpError(503, `세션 표식을 기록하지 못해 세션 생성을 취소했습니다: ${(e as Error)?.message ?? e}`);
+  }
   // 상시세션 keep-alive 가 만든 세션이면 **그 상시세션 id 를 박는다**(#2170). 정리기가 나중에 이 세션을 걷어도
   //  되는지 판정하는 유일한 근거다 — 없으면 정리기는 작업 폴더 문자열이 겹친다는 이유만으로 남의 세션을 죽인다.
   //  ⚠ 못 박으면 **방금 만든 세션을 되돌린다**(best-effort 로 삼키지 않는다). 표식 없는 상시세션은 다음 tick 이
@@ -895,13 +903,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  미지정이면 아무것도 안 박는다 → 판정이 실행 폴더에서 파생한다(신규·복원이 같은 규칙을 타게).
   // 마우스 휠 스크롤 + window-size latest(상세 근거는 tmux-exec.ts ensureSessionOpts 주석 — #252 깨짐 수정).
   //  #3537 — 위 메타와 같은 이유로 한 묶음. 전부 비치명이라 묶음째 삼킨다(tmuxBatchQuiet 머리말).
-  await tmuxBatchQuiet([
-    ...(input.writeVis ? [["set-option", "-t", id, "@box_write_vis", String(input.writeVis)] as TmuxCmd] : []),
-    ...(input.restrictRead ? [["set-option", "-t", id, "@box_restrict", "1"] as TmuxCmd] : []),
-    ["set-option", "-t", id, "mouse", "on"],
-    ["set-window-option", "-t", id, "aggressive-resize", "off"],
-    ["set-window-option", "-t", id, "window-size", "latest"],
-  ]);
+  //  #3892 — 목록은 session-meta-heal.ts 한 벌(되채우기도 같은 목록을 보낸다).
+  await tmuxBatchQuiet(sessionWindowCmds(id, { writeVis: input.writeVis, restrictRead: input.restrictRead }));
   // 세션 desired-state DB 미러(#1059 E) — 재부팅(tmux 사망)에도 복원 가능한 목록으로 남긴다. tmux @box_* 와 같은 값을 미러.
   //  ⚠ best-effort: DB 가 죽어도 세션 생성은 이미 끝났다(위 tmux new-session) — upsert 실패로 세션을 되돌리지 않는다.
   //  managed(상시) 세션은 skip — keep-alive(ensureAllManagedSessions)가 그 영속을 소유하므로 restorable 로 이중화하면
