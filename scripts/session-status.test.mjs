@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const mod = await import(join(root, "public/app/session-status.js"));
-const { SESS_STATES, SESS_STATE_KEYS, sessStateKey, sessLabel, sessRank, sessIsDead, isUnreadDone, lastViewedAt } = mod;
+const { SESS_STATES, SESS_STATE_KEYS, sessStateKey, sessLabel, sessRank, sessIsDead, isUnreadDone, lastViewedAt, DOT_STATES, isDotState, rowDotCls } = mod;
 
 let pass = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -147,6 +147,43 @@ ok("⑱작업 기록이 없으면 '작업 완료' 판정 불가(false)");
   // 살아있는 세션에는 절대 안 붙는다 — restorable 이 아니면 OOM 표시가 있어도 무시.
   assert.equal(sessStateKey({ restorable: false, oomKilled: true, agentState: 'idle', attached: true }), 'idle');
   ok("㉗ 살아있는 세션엔 안 붙는다(restorable 일 때만 의미 있는 사실)");
+}
+
+// ── 목록 줄의 점 어휘 (#3778 2판) ────────────────────────────────────────────
+//  신고(원준 2026-09-10): "회색 점 붙어있는 세션하고 지난 세션하고는 다른거야?"
+//  실측으로 확인한 것: **오프라인과 지난 세션이 같은 픽셀**이었다(6px·채움 없음·inset 1.5px #5D7197).
+//  뜻은 정반대인데(살아 있다 / 없어졌다) 점이 구분하지 못했다.
+//
+//  ⇒ 규칙: 점은 «지금 나를 기다리는 것» 셋만 말한다. 「몸이 있나」는 행의 톤과 오른쪽 시각이 진다.
+{
+  const dcl = (k) => rowDotCls(k);
+
+  // ⓐ 점이 뜨는 셋 — 색이 붙는다
+  assert.equal(dcl("waiting"), "wait");
+  assert.equal(dcl("busy"), "busy");
+  assert.equal(dcl("done"), "done");
+  ok("㉘ 확인 필요·작업 중·작업 완료만 점 색을 받는다(waiting→wait 이름이 바뀌는 것까지)");
+
+  // ⓑ 살아 있지만 조용한 셋 — 점 없음
+  for (const k of ["idle", "offline", "shell"]) assert.equal(dcl(k), "quiet", `${k} 는 점이 없어야 한다`);
+  ok("㉙ 대기 중·오프라인·셸은 점을 안 단다 — 살아 있지만 나를 기다리진 않는다");
+
+  // ⓒ ★ 몸이 없어진 것들 — 점 없음. 오프라인과 **같은 값**을 받는 것이 이 규칙의 핵심이다:
+  //   둘이 «같은 표식»이어서가 아니라 **둘 다 점을 안 달기** 때문이고, 그 구분은 톤과 시각이 진다.
+  for (const k of ["restorable", "exited_user", "oom_killed", "log"]) assert.equal(dcl(k), "quiet", `${k} 는 점이 없어야 한다`);
+  assert.equal(dcl("offline"), dcl("restorable"));
+  ok("㉚ ★ 중단됨·종료됨·메모리 부족·기록도 점이 없다 — 오프라인과 «같은 빈 고리»를 다투던 충돌이 사라진다");
+
+  // ⓓ 모르는 값·빈 값도 안전하게 떨어진다(새 상태가 조용히 고리를 얻는 일이 없게)
+  for (const k of ["", "made-up", undefined, null]) assert.equal(dcl(k), "quiet", `${String(k)} 는 quiet 여야 한다`);
+  ok("㉛ 모르는 상태·빈 값은 점을 안 단다 — 기본값이 «안 그린다» 쪽이다");
+
+  // ⓔ 배선 — 어휘 표 전체를 훑어 셋만 참이다. 새 상태가 생기면 여기서 걸려 «점을 줄지» 를 정하게 된다.
+  const dotted = SESS_STATE_KEYS.filter((k) => isDotState(k));
+  assert.deepEqual(dotted, ["waiting", "done", "busy"].filter((k) => SESS_STATE_KEYS.includes(k)));
+  assert.equal(dotted.length, 3);
+  assert.deepEqual([...DOT_STATES].sort(), ["busy", "done", "waiting"]);
+  ok("㉜ 상태 아홉 가지 중 점이 붙는 건 정확히 셋이다(새 상태가 생기면 이 줄이 먼저 걸린다)");
 }
 
 console.log(`\n${pass} passed`);

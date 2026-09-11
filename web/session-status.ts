@@ -141,3 +141,38 @@ export function shouldRestoreOnOpen(s: { restorable?: boolean; owned?: boolean; 
   return !!s && !!s.restorable && !!s.owned && !s.trashed;
 }
 
+
+// ── 목록 줄의 점 — 「지금 나를 기다리는 것」 셋만 그린다 (#3778 2판, 원준 2026-09-10) ──────────
+//
+//  ★ 종전엔 점 하나가 **두 질문**에 동시에 답하려 했다:
+//   ⓐ 지금 나에게 뭘 요구하나(확인 필요·작업 중·작업 완료) — 색 채움이 말한다
+//   ⓑ 이 세션의 몸이 아직 있나 — 속 빈 고리가 «없어졌다» 를 말한다
+//  그런데 **오프라인이 그 빈 고리를 가져다 써서** 살아 있는 세션과 없어진 세션이 같은 표식을 달았다
+//  (실측 2026-09-10, 매니지드 서빙 CSS: 둘 다 6px · 채움 없음 · inset 1.5px #5D7197 — 픽셀까지 같다).
+//
+//  ★ 게다가 그 점은 **거의 모든 줄에 있었다** — 한 계정 284건 중 271건이 오프라인이었다(#2110, 8/26).
+//   모든 줄에 있는 표식은 정보가 아니라 배경이고, 그 배경이 하필 「없어졌다」와 같은 모양이라
+//   정작 알려야 할 것을 덮었다.
+//
+//  ⇒ **점은 ⓐ 만 말한다.** ⓑ 는 행의 톤과 오른쪽 시각이 말한다 — 이미 그 일을 하고 있다
+//   (트리 `.v2-ss-row.past`, 홈·[AI 세션] `.v2-app-inst--past`). 홈 목록은 처음부터 이 규칙이었고
+//   (#1954 PRIORITY_ST), 트리와 [AI 세션]만 옛 어휘를 쓰고 있었다.
+//
+//  ⚠ **이 규칙은 «글자 없이 점만 서는 목록 줄» 에만 적용된다.** 범례(필터 팝오버)·요약(개수 옆의 점)·
+//   상태 글자 옆의 점은 그대로 아홉 가지를 다 쓴다 — 거기선 글자나 숫자가 함께 있어 점이 혼자 뜻을 지지 않는다.
+//   「아무도 안 보고 있다(오프라인)」를 골라 보는 길은 그래서 필터에 그대로 남는다.
+export const DOT_STATES = ['waiting', 'busy', 'done'] as const;
+
+/** 이 상태가 목록 줄에서 점으로 떠야 하나 — 곧 «지금 나를 기다리나». */
+export function isDotState(stateKey: string): boolean {
+  return stateKey === 'waiting' || stateKey === 'busy' || stateKey === 'done';
+}
+
+/**
+ * 목록 줄의 점 색 클래스.
+ *  셋이 아니면 `'quiet'` — **자리는 지키되 아무것도 안 그린다.** 요소를 빼 버리면 그 자리만큼
+ *  글자가 왼쪽으로 밀려 목록의 기둥이 줄마다 어긋난다(트리 `.v2-ss-row > .v2-dot` 의 margin).
+ */
+export function rowDotCls(stateKey: string): string {
+  return stateKey === 'waiting' ? 'wait' : isDotState(stateKey) ? stateKey : 'quiet';
+}

@@ -54,6 +54,11 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-dot.idle { background: var(--muted-2); box-shadow: none; }
 .v2-dot.off { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2); }
 .v2-dot.shell { background: var(--muted-head); box-shadow: none; border-radius: 2px; }
+/* 「조용한 줄」의 점 자리 — **자리는 지키되 아무것도 안 그린다**(#3778 2판).
+   점은 «지금 나를 기다리는 것» 셋만 말한다. 종전엔 오프라인이 지난 세션과 같은 빈 고리라
+   살아 있는 세션과 없어진 세션이 같은 표식을 달았고, 그 점이 거의 모든 줄에 있어(284건 중 271건)
+   정작 알려야 할 것을 덮었다. 요소를 빼지 않는 이유는 빼면 글자가 그만큼 왼쪽으로 밀려서다. */
+.v2-dot.quiet { background: transparent; box-shadow: none; }
 @keyframes v2pulse { 50% { opacity: .35; } }
 .v2-cnt { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; color: var(--muted-2); }
 .v2-muted { color: var(--muted); font-size: 13px; }
@@ -355,7 +360,11 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .v2-ss-past .v2-car { transition: transform .15s ease; }
 .v2-ss-past.open .v2-car { transform: rotate(90deg); }
 /* 지난 세션 행 — 이름은 같은 잉크색이다(흐린 회색 본문 금지). 굵기만 한 급 낮춰 '지금 도는 것'과 결을 가른다. */
-.v2-ss-row.past .t { font-weight: 450; }
+.v2-ss-row.past .t { font-weight: 450; color: var(--muted); }
+/* 점이 «몸이 있나» 를 더는 말하지 않으므로(#3778 2판) 그 일은 **톤과 오른쪽 시각**이 온전히 진다.
+   종전엔 굵기만 450 이고 색은 살아 있는 줄과 같아서, 구분이 사실상 점 하나에 매달려 있었다.
+   호버·선택 때는 제 색을 되찾는다 — 손을 얹으면 «이어서 할 수 있다» 가 먼저다. */
+.v2-ss-row.past:hover .t, .v2-ss-row.past.on .t { color: var(--ink); }
 .v2-tree-note { margin: 10px var(--side-x, 8px) 0 0; padding: 10px 12px; border: 1px dashed var(--line-net); border-radius: 9px; font-size: 13px; color: var(--muted); line-height: 1.55; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 .v2-tree-note .btn-text { font-size: 13px; padding: 0; }
 /* 「전체 프로젝트 · N」 — 진행 중이 아닌 것들을 접어 두는 묶음 머리(#1719 개편 안2). 섹션 라벨의 결로,
