@@ -25,7 +25,8 @@
 //  키 문자열은 **선언한 파일에 한 벌만** 있어야 한다(#1875 E7 — 두 파일이 각자 적으면 한쪽에만 접미사가
 //   붙어 그 화면만 남의 워크스페이스 기록을 본다). 그래서 여기서 목록을 다시 적지 않고, 선언 자리가
 //   자기를 등록한다. 덤으로 «이 저장소는 워크스페이스의 내용이다»와 «정본이 어디냐»가 선언 한 줄에 함께 선다.
-import { api, wsKey } from '../core.js';
+import { api, currentWorkspace, wsKey } from '../core.js';
+import { adoptResponse, canonOf, isPrefsResponse, planPush, retryDelay } from './shell-prefs-sync.js';   // #3887 — 무엇을 보내고 무엇을 받아 얹나(순수)
 
 /** 저장소의 모양 — list=순서 있는 문자열 목록 · map=문자열→문자열 · str=문자열 하나. */
 export type ShellPrefKind = 'list' | 'map' | 'str';
@@ -99,11 +100,79 @@ export function shellPrefsApply(prefs: Record<string, unknown> | null | undefine
 const API = '/api/ui/v6/shell-prefs';
 let timer: any = null;
 let ready = false;   // 첫 동기가 끝나기 전에는 올리지 않는다(아래 shellPrefsPush 주석)
+const POST_TIMEOUT_MS = 15_000;
+//  캐시 키는 **이 모듈이 뜰 때의** 워크스페이스로 굳는다(register → wsKey). 요청 헤더는 **보낼 때의** 선택을 읽는다(lib/net.ts).
+//   다른 탭이 워크스페이스를 바꾸면 이 창의 저장이 남의 워크스페이스 행에 쓰인다 — 그때는 보내지 않는다(#3887).
+const LOADED_WS = currentWorkspace();
 
-function post(): Promise<void> {
-  return api(API, { method: 'POST', body: JSON.stringify({ prefs: shellPrefsBody() }) })
-    .then(() => undefined)
-    .catch(() => { /* 서버 저장 실패는 조용히 — 캐시엔 이미 반영됐고 다음 조작이 다시 올린다 */ });
+/** 동기 저장소마다 지금 캐시의 비교값(shell-prefs-sync.ts canonOf). */
+function snapshot(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const st of stores) if (st.sync) out[st.base] = canonOf(st.kind, readStore(st));
+  return out;
+}
+
+//  #3887 — 기준판: 이 창이 **서버와 같다고 아는** 저장소별 값(shell-prefs-sync.ts 머리말). 부팅 동기에서 늘 선다 —
+//   그 전(null)에는 보내지 않는다. 저장은 기준판과 다른 저장소만 patch 로 보낸다.
+let base: Record<string, string> | null = null;
+//  한 창에서 저장은 한 번에 하나 — 도는 중에 또 바뀌면 끝난 뒤 한 번 더(늦게 도착한 옛 저장이 새 값을 덮지 않게).
+let inflight = false;
+let again = false;
+let retries = 0;
+let retryTimer: any = null;
+const adoptedHooks: Array<() => void> = [];
+
+/**
+ * 저장 응답으로 **캐시가 서버 값으로 바뀌었다** — 모듈 상태를 다시 읽고 그려야 한다(부팅 동기와 같은 일).
+ *  서버가 상한·형식으로 버린 뒤의 값이 여기로 온다(보낸 저장소만). 호출부는 셸 하나(main.ts)다.
+ */
+export function onShellPrefsAdopted(fn: () => void): void { adoptedHooks.push(fn); }
+
+/** 실패한 저장을 조금 뒤 다시 보낸다 — 캐시엔 이미 있고 기준판이 그대로라 같은 저장소가 다시 실린다. 다 쓰면 다음 조작을 기다린다. */
+function scheduleRetry(): void {
+  const ms = retryDelay(retries);
+  if (ms === null || retryTimer) return;
+  retries++;
+  retryTimer = setTimeout(() => { retryTimer = null; void post(); }, ms);
+}
+
+async function post(): Promise<void> {
+  if (!base || currentWorkspace() !== LOADED_WS) return;
+  if (inflight) { again = true; return; }
+  inflight = true;
+  let failed = false;
+  try {
+    const now = snapshot();
+    const names = planPush(now, base);
+    if (!names.length) return;   // 서버와 같다 — 보낼 것이 없다
+    const body = shellPrefsBody();
+    //  ⚠ 통째(prefs)도 **함께** 싣는다 — 옛 서버는 patch 를 모르고 prefs 로 교체한다(종전과 같다).
+    //   patch 만 보내면 옛 서버는 prefs 가 없는 요청을 «빈 문서로 교체» 로 읽어 이 계정의 정리를 통째로 지운다.
+    const payload = { prefs: body, patch: Object.fromEntries(names.map((name) => [name, name in body ? body[name] : null])) };
+    const sent = Object.fromEntries(names.map((name) => [name, now[name]]));
+    //  응답 없이 멈춘 요청 하나가 이 창의 저장을 영영 막지 않게(한 번에 하나이므로) — 끊고 실패로 친다.
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    const cut = ctl ? setTimeout(() => ctl.abort(), POST_TIMEOUT_MS) : null;
+    let res: any;
+    try { res = await api(API, { method: 'POST', body: JSON.stringify(payload), signal: ctl ? ctl.signal : undefined }); }
+    finally { if (cut) clearTimeout(cut); }
+    retries = 0;
+    const merged = !!res && res.merged === true && !!res.prefs && typeof res.prefs === 'object';
+    let server: Record<string, string> | null = null;
+    if (merged) { server = {}; for (const st of stores) if (st.sync) server[st.base] = canonOf(st.kind, res.prefs[st.base]); }
+    const out = adoptResponse({ base, sent, all: now, cacheNow: snapshot(), server });
+    base = out.base;
+    if (res && res.dropped) console.warn('[shell-prefs] 서버가 상한·형식으로 버렸습니다', res.dropped);
+    if (!out.adopt.length) return;
+    for (const st of stores) if (st.sync && out.adopt.includes(st.base)) writeStore(st, res.prefs[st.base]);
+    for (const fn of adoptedHooks) { try { fn(); } catch (_) { /* 한 화면이 못 그려도 나머지는 그린다 */ } }
+  } catch (_) {
+    failed = true;   // 조용히 — 캐시엔 이미 반영됐고 기준판이 그대로라 다시 보낼 때 같은 저장소가 실린다
+  } finally {
+    inflight = false;
+    if (again) { again = false; void post(); }
+    else if (failed) scheduleRetry();
+  }
 }
 
 /**
@@ -115,6 +184,9 @@ function post(): Promise<void> {
  */
 export function shellPrefsPush(): void {
   if (!ready) return;
+  //  새 결정은 **제 몫의 재시도**를 새로 받는다 — 예산을 페이지 수명 동안 한 번만 쓰면, 긴 장애 뒤의 결정은 자동으로는
+  //   영영 안 올라가고 새로 고치는 순간 부팅 동기가 서버의 옛 값으로 덮는다(코드 리뷰 지적).
+  retries = 0;
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => { timer = null; void post(); }, 400);
 }
@@ -126,22 +198,29 @@ export function shellPrefsTouch(key: string): void {
 }
 
 /**
- * 부팅 1회 — 서버 정본을 받아 캐시에 얹는다.
+ * 부팅 1회 — 서버 정본을 받아 캐시에 얹고, **기준판을 세운다**(#3887).
  * @returns 캐시가 **바뀌었나**(호출부가 다시 읽어 그릴지 판단한다).
  *
- * 실패하면 캐시 그대로 간다(무해 — 종전 동작). 서버에 이력이 없고 이 브라우저에 정리가 있으면
- *  그걸 1회 이관한다 — 기존 사용자가 업그레이드하며 자기 정리를 잃지 않는다.
+ *  · 조회 성공(이력 있음) → 서버판을 캐시에 얹는다 · 기준판 = 얹은 뒤의 캐시.
+ *  · 조회 성공(이력 없음) → 기준판 = 빈 판. 이 브라우저에 정리가 있으면 patch 로 1회 이관한다 —
+ *    기존 사용자가 업그레이드하며 자기 정리를 잃지 않는다.
+ *  · 조회 실패·모양 불량 → 캐시 그대로 간다 · 기준판 = **부팅 스냅숏**(얹기 전 캐시). 그래서 이 창은 로드 뒤에
+ *    바뀐 저장소만 보낸다 — ⚠ 종전엔 여기서 통째 교체를 보냈고, 지난주 캐시를 든 창의 조회 한 번 실패가
+ *    다른 기기의 오늘 정리를 통째로 덮었다.
  */
 export async function shellPrefsSync(): Promise<boolean> {
-  let server: any = null;
-  try { server = await api(API); }
-  catch (_) { ready = true; return false; }
+  const bootBase = snapshot();
+  let server: unknown = null;
+  try { server = await api(API); } catch (_) { server = null; }
   ready = true;
-  if (server && server.saved) {
+  if (!isPrefsResponse(server)) { base = bootBase; return false; }
+  if (server.saved) {
     const before = JSON.stringify(shellPrefsBody());
     shellPrefsApply(server.prefs);
+    base = snapshot();
     return JSON.stringify(shellPrefsBody()) !== before;
   }
-  if (Object.keys(shellPrefsBody()).length) void post();   // 1회 이관(디바운스 없이)
+  base = Object.fromEntries(Object.keys(bootBase).map((name) => [name, '']));
+  if (Object.keys(shellPrefsBody()).length) void post();   // 1회 이관(디바운스 없이) — 비지 않은 저장소 전부가 patch 로 실린다
   return false;
 }

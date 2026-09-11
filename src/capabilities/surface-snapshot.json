@@ -3304,7 +3304,7 @@
   "rest": [
    "POST /api/ui/v6/shell-prefs"
   ],
-  "input_hash": "cece975d859e2a3e"
+  "input_hash": "1a3dce31033332b7"
  },
  {
   "name": "project_folder_index_v6",
