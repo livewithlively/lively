@@ -252,11 +252,8 @@ function recordDefers(why: string): void {
  *  (`empty` = 판정은 ok 인데 호스트들이 본 세션이 0 — 모름으로 접었다).
  */
 export function hostOwnedCentralSessions(now: number = Date.now()): SessionInfo[] | null {
-  const nodes: Array<{ declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly SessionInfo[] }> = [];
-  for (const [id, st] of inScope(states)) {
-    nodes.push({ declared: declaredSessionHost({ session_host: st.sessionHost }), online: conns.has(keyOf(id)), stateAgeMs: now - st.ts, sessions: st.sessions });
-  }
-  const r = hostOwnedSnapshot(nodes, STATE_STALE_MS);
+  //  재료는 `scopeNodeFacts` 한 벌이다(#3892 리뷰 — 루프 사본이 늘면 칸이 늘 때 하나만 고쳐진다).
+  const r = hostOwnedSnapshot(scopeNodeFacts(now), STATE_STALE_MS);
   recordDefers(r.why);
   return r.rows;
 }
