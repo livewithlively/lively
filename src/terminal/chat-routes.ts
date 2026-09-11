@@ -39,7 +39,7 @@ import { wrap, HttpError } from "../http/rest-util.js";
 import { canAttach, sessionGone } from "./terminal-sessions.js";
 import { getSessionState, sessionConvsFor, dirSharedWithOtherSession, convsTakenByOtherSession } from "../sessions/session-state.js";
 import { isChatKey, sendKeyToSession, type ChatKey } from "./send-keys.js";
-import { nodeOfSession, nodeCanAttach, nodeSupports, nodeRpc } from "../node/registry.js";
+import { nodeOfSession, nodeCanAttach, nodeSupports, nodeRpc, remoteNodeOfSession } from "../node/registry.js";
 import { markSessionSeen } from "./phase.js";
 import { markViewing, viewersOf } from "./session-presence.js";   // #2116 — "지금 보고 있는 사람"(구글 문서식 얼굴 줄)
 import { listMembers } from "../org/store.js";
@@ -58,15 +58,17 @@ const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 async function gateRead(id: string, req: express.Request): Promise<void> {
   const u = userOf(req); const uid = idOf(u);
   if (!uid) throw new HttpError(403, "사용자 신원이 없습니다");
-  const nodeId = nodeOfSession(id);
+  // ⚠ '노드에 등록됨'과 '파일이 저쪽에 있음'은 다르다(#2055 실측 2026-08-26): 게이트웨이 박스가 노드로도
+  //  등록돼 있으면 **이 박스의 로컬 세션까지** 노드 스냅샷에 잡힌다(applyLiveTheme·prompt 라우트가 이미 같은
+  //  함정을 겪었다). 그때 여기서 409 로 물러나면 화면은 중앙 기록으로 폴백하는데, 그 기록은 아직 비어 있어
+  //  **대화창이 통째로 빈 채로 남는다**. 이 박스의 세션이면 로컬 파일로 답한다.
+  //  #2600 T2 d6 — «정말 저쪽인가» 는 `remoteNodeOfSession` 한 곳이 답한다: 세션 호스트 좌표는 같은 tmux 라
+  //   묻지 않고, 소유가 넘어간 테넌트면 호스트 스냅샷으로 답한다(종전엔 대화창을 열 때마다 has-session — 분당 10).
+  const nodeId = await remoteNodeOfSession(id, sessionGone);
   if (nodeId) {
     const v = await nodeCanAttach(nodeId, id, uid);
     if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
-    // ⚠ '노드에 등록됨'과 '파일이 저쪽에 있음'은 다르다(#2055 실측 2026-08-26): 게이트웨이 박스가 노드로도
-    //  등록돼 있으면 **이 박스의 로컬 세션까지** 노드 스냅샷에 잡힌다(applyLiveTheme·prompt 라우트가 이미 같은
-    //  함정을 겪었다). 그때 여기서 409 로 물러나면 화면은 중앙 기록으로 폴백하는데, 그 기록은 아직 비어 있어
-    //  **대화창이 통째로 빈 채로 남는다**. 이 박스의 tmux 에 실제로 있으면 로컬 파일로 답한다.
-    if (await sessionGone(id)) throw new HttpError(409, "node");   // 정말 저쪽 컴퓨터 것 — 중앙 기록으로
+    throw new HttpError(409, "node");   // 정말 저쪽 컴퓨터 것 — 중앙 기록으로
   }
   if (await canAttach(id, uid)) return;
   const st = await getSessionState(id);
@@ -179,7 +181,10 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     const action = actionOf(body);
     if (!action) throw new HttpError(400, "action 은 approve|deny|interrupt 만 허용됩니다");
     const uid = idOf(userOf(req));
-    if (nodeOfSession(id)) throw new HttpError(409, "그 컴퓨터의 세션에는 아직 키를 보낼 수 없습니다 — 터미널에서 직접 눌러 주세요.");
+    //  ⚠ #2600 T2 d6 — «노드 좌표가 있다» 가 아니라 **«정말 저쪽 기계다»** 로 가른다(gateRead 와 같은 함수). 세션 호스트가
+    //   상주하면 매니지드 세션 **전부**에 호스트 좌표가 붙어(스냅샷에서 되찾는다), 종전 `nodeOfSession(id)` 검사는 이
+    //   게이트웨이의 세션에도 409 를 냈다 — 대화창의 승인·거부·중단이 전 테넌트 켜기(2026-09-11) 뒤로 전부 막히는 모양이다.
+    if (await remoteNodeOfSession(id, sessionGone)) throw new HttpError(409, "그 컴퓨터의 세션에는 아직 키를 보낼 수 없습니다 — 터미널에서 직접 눌러 주세요.");
     if (!(await canAttach(id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
     const st = await getSessionState(id);
     const harness = await harnessOf(id, st?.harness);

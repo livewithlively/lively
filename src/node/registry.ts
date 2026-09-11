@@ -17,7 +17,7 @@ import { authNodeTokenDetailed, getNode, touchNode, appendNodeLinkEvent, type Or
 import { denialMessage, denialKey, shouldLogDenial, type NodeAuthOutcome } from "./auth-denial.js";   // #2161
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
 import { beatRefreshes } from "./state-freshness.js";   // #2600 T2 d6 — 박동은 스냅샷이 있을 때만 나이를 되돌린다
-import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, nodeSnapshotSessions, nodeSnapshotVerdict, sessionHostVerdict, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
+import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, nodeSnapshotSessions, nodeSnapshotVerdict, sessionHostVerdict, hostOwnedSnapshot, remoteNodeCoordinate, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
 import { makeTmuxCallCensus, censusSite } from "../terminal/tmux-call-census.js";   // #2600 T2 d6 — 판정 계수(같은 세 칸: 슬러그·축·호출부)
 import { selfNodePossible } from "../exec-topology.js";   // #2599 T2 — 「이 판정이 성립하는 배포인가」의 선결 조건
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
@@ -231,11 +231,80 @@ const defersCensus = makeTmuxCallCensus(DEFERS_CENSUS_EVERY);
  */
 export function gatewayDefersHere(now: number = Date.now()): boolean {
   const v = sessionHostVerdict(sessionHostsInScope(now), STATE_STALE_MS);
+  recordDefers(v.why);
+  return v.owns;
+}
+
+/** 판정 계수 한 칸 — 소유 판정을 묻는 자리는 전부 여기로 센다(호출부는 스택에서 뽑는다). 비치명. */
+function recordDefers(why: string): void {
   try {
-    const rows = defersCensus.record(currentTenant()?.slug, v.why, censusSite(new Error().stack));
+    const rows = defersCensus.record(currentTenant()?.slug, why, censusSite(new Error().stack));
     if (rows) logger.info({ defersCensus: { window: DEFERS_CENSUS_EVERY, rows } }, "세션 호스트 소유 판정 계수(창)");
   } catch { /* 계수 때문에 판정이 흔들리면 안 된다 */ }
-  return v.owns;
+}
+
+/**
+ * 이 테넌트의 **중앙(박스) 세션** — 소유가 넘어갔으면 선언된 세션 호스트 스냅샷의 합, 아니면 null (#2600 T2 d6).
+ *  판정·합·«비면 모름» 규율은 순수 함수 `self-node.hostOwnedSnapshot` 이 하고, 여기는 **재료만** 모은다.
+ *
+ * ⚠ 판정과 합이 **같은 순간의 같은 재료**를 보게 한 번에 모은다(동기 — 그 사이에 스냅샷이 바뀔 틈이 없다).
+ * ⚠ 사유는 소유 판정 계수에 같이 센다 — 소비자가 계속 tmux 를 친다면 «왜 못 넘겼나» 가 거기 나온다
+ *  (`empty` = 판정은 ok 인데 호스트들이 본 세션이 0 — 모름으로 접었다).
+ */
+export function hostOwnedCentralSessions(now: number = Date.now()): SessionInfo[] | null {
+  //  재료는 `scopeNodeFacts` 한 벌이다(#3892 리뷰 — 루프 사본이 늘면 칸이 늘 때 하나만 고쳐진다).
+  const r = hostOwnedSnapshot(scopeNodeFacts(now), STATE_STALE_MS);
+  recordDefers(r.why);
+  return r.rows;
+}
+
+/**
+ * **중앙(박스) 세션 목록**의 출처 한 곳 — 소유가 넘어갔으면 세션 호스트 스냅샷, 아니면 게이트웨이 tmux (#2600 T2 d6).
+ *
+ * ── 왜 한 곳인가 ─────────────────────────────────────────────────────────────
+ * «지금 중앙 tmux 에 무엇이 있나» 를 묻는 자리가 이름만 다르게 여럿이다 — 자기노드 판정(`probeSelfNodes`)·
+ *  관리자 세션 뷰(CP idle 이 60초마다)·desired 백필. 셋이 각자 `listSessionsRaw()` 를 부르면 d4 가 목록 라우트와
+ *  알림 스윕을 옮긴 뒤에도 그 테넌트에 분당 ~50번 tmux 가 남는다(2026-09-11 계수 실측). 출처를 여기 하나로 두면
+ *  «소유가 넘어간 테넌트에서 게이트웨이는 tmux 를 안 묻는다» 가 그 셋에 한 번에 선다(가드 S14).
+ *
+ * ⚠ 행은 호스트가 **같은 함수**(`listSessionsRaw({strict})`)로 만든 것 그대로다 — 필드가 같다.
+ * ⚠ `strict` 는 종전 경로로 떨어질 때만 뜻이 있다. 호스트 스냅샷은 애초에 strict 관측만 올라온다(가드 S11).
+ */
+export async function listCentralSessions(opts?: { strict?: boolean }): Promise<SessionInfo[]> {
+  const owned = hostOwnedCentralSessions();
+  if (owned) return owned;
+  const { listSessionsRaw } = await import("../terminal/sessions.js");
+  return listSessionsRaw(opts);
+}
+
+/**
+ * 이 세션 호스트가 **지금 본** 세션 id — 그 노드 하나의 관측 (#2600 T2 d6, 세션 장부의 `live`).
+ *  null = 이 스코프에 그 id 의 선언된 호스트가 없거나 · 끊겼거나 · 스냅샷이 없거나 낡았다(호출부는 종전 tmux).
+ *  자격 판정은 목록 소유·알림 스윕과 **같은 술어**(`nodeSnapshotVerdict`, 선언 필수)다 — 자를 다시 쓰지 않는다.
+ */
+export function sessionHostLiveIds(nodeId: string, now: number = Date.now()): string[] | null {
+  const k = keyOf(nodeId);
+  const st = states.get(k);
+  if (!st) return null;
+  const v = nodeSnapshotVerdict({ declared: declaredSessionHost({ session_host: st.sessionHost }), online: conns.has(k), stateAgeMs: now - st.ts }, STATE_STALE_MS, true);
+  return v.take ? st.sessions.map((s) => s.id) : null;
+}
+
+/**
+ * 이 세션이 **정말 다른 기계의 것인가** — 노드 id 면 그 기계, null 이면 이 게이트웨이의 세션 (#2600 T2 d6).
+ *  판정은 순수 함수 `self-node.remoteNodeCoordinate` 가 하고, 여기는 재료(스냅샷 좌표·선언·중앙 세션)만 모은다.
+ *  대화창(`chat-routes`)과 대화 파일 감시자(`transcript-watch`)가 **같은 이 함수**를 부른다 — 두 벌이면 한쪽만 고쳐진다.
+ * @param gone 게이트웨이 tmux 의 «그 세션 없음» 확답(소유가 안 넘어간 테넌트에서만 불린다 — 시험 seam 이 이걸 바꿔 끼운다)
+ */
+export async function remoteNodeOfSession(sessionId: string, gone: (id: string) => Promise<boolean>): Promise<string | null> {
+  const nodeId = nodeOfSession(sessionId);
+  if (!nodeId) return null;   // 좌표가 없다 — 중앙 세션 집합을 모을 이유도 없다(계수도 안 센다)
+  const owned = isSessionHostNode(nodeId) ? null : hostOwnedCentralSessions();
+  return remoteNodeCoordinate({
+    sessionId, nodeId, isSessionHost: isSessionHostNode,
+    centralIds: owned ? new Set(owned.map((s) => s.id)) : null,
+    gone,
+  });
 }
 
 /**
@@ -388,8 +457,12 @@ function probeSelfNodes(): Promise<void> {
   const run = (async () => {
     try {
       // strict — tmux 가 **답해서** 준 목록일 때만 쓴다. '못 봤다'를 빈 목록으로 접으면 판정 근거가 사라진다.
-      const { listSessionsRaw } = await import("../terminal/sessions.js");
-      const mine = new Set((await listSessionsRaw({ strict: true })).map((s) => s.id));
+      //  #2600 T2 d6 — «게이트웨이 tmux 목록» 은 소유가 넘어간 테넌트면 선언된 세션 호스트 스냅샷의 합이다
+      //   (listCentralSessions). 판정(sharesGatewayTmux)은 한 글자도 안 바뀐다 — **입력만** 같은 사실의 다른 출처다.
+      //   ⚠ 이 판정을 `selfNodePossible()` 로 건너뛰지 않는다: 매니지드에서도 실제로 잡았다(2026-09-10 06:52Z, 선언이
+      //    거둬졌는데 아직 붙어 있던 세션 호스트 둘). 종전엔 멤버 PC 가 영원히 후보라 30초마다 전 세션을 capture-pane 까지
+      //    훑었다(2026-09-11 실측 분당 34 — 그 테넌트 tmux 호출의 절반).
+      const mine = new Set((await listCentralSessions({ strict: true })).map((s) => s.id));
       for (const [k, st] of states) {
         // #2600 T2 — **선언된 세션 호스트는 면제한다.** 그 노드는 게이트웨이와 같은 tmux 를 보는 것이
         //  정상이다(매니지드 세션 호스트는 같은 브로커 소켓으로 그 tmux 에 닿는다 — 그게 존재 이유다).

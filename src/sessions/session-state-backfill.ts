@@ -14,7 +14,8 @@
 //  `project_src` 도 tmux 에서 안 읽고 있어 v6 로 가정한다(대다수) — org 프로젝트 세션이면 프로젝트 링크만 어긋난다.
 import path from "node:path";
 import { logger } from "../log.js";
-import { roots, listSessionsRaw, resolveRootPath, type SessionInfo } from "../terminal/terminal-sessions.js";
+import { roots, resolveRootPath, type SessionInfo } from "../terminal/terminal-sessions.js";
+import { listCentralSessions } from "../node/registry.js";   // #2600 T2 d6 — 중앙 세션 목록의 출처는 한 곳(소유가 넘어갔으면 세션 호스트 스냅샷)
 import type { LivelyUser } from "../context.js";
 import { listAllSessionStates, upsertSessionState } from "./session-state.js";
 import { listManagedSessions } from "./managed-sessions.js";
@@ -57,7 +58,10 @@ export async function backfillSessionStates(deps?: {
   resolveRoot?: typeof resolveRootPath;
   upsert?: typeof upsertSessionState;
 }): Promise<BackfillResult> {
-  const listLive = deps?.listLive ?? listSessionsRaw;
+  //  #2600 T2 d6 — 출처 판정은 **여기**(불리는 함수 안)다. 이 함수는 요청 정비표와 CP 하우스키핑 틱 두 자리에서
+  //   불리고, 호출부에 판정을 심으면 한 자리만 고쳐진다(#789 가 알림 스윕에서 그랬다 — 가드 S14).
+  //   소유가 넘어간 테넌트면 세션 호스트 스냅샷, 아니면 종전 게이트웨이 tmux(listCentralSessions 머리말).
+  const listLive = deps?.listLive ?? (() => listCentralSessions());
   const listStates = deps?.listStates ?? listAllSessionStates;
   const listManaged = deps?.listManaged ?? listManagedSessions;
   const resolve = deps?.resolveRoot ?? resolveRootPath;
