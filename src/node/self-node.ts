@@ -230,6 +230,37 @@ export function sessionHostVerdict(
 }
 
 /**
+ * 소유가 넘어간 테넌트의 **중앙(박스) 세션 목록** — 선언된 세션 호스트 스냅샷의 합(순수) (#2600 T2 d6).
+ *  `rows` 가 null 이면 «tmux 대신 쓸 수 없다» 이고, 호출부는 종전대로 게이트웨이 tmux 를 본다.
+ *
+ * ── 왜 필요한가 (2026-09-11 계수 실측) ────────────────────────────────────────
+ * 전 테넌트 켜기(#3749) 뒤에도 게이트웨이는 그 테넌트에 분당 ~70번 tmux 를 쳤다. 목록 라우트·알림 스윕은
+ *  d4 에서 이미 호스트 스냅샷으로 옮겼는데, **같은 질문(«지금 중앙 tmux 에 무엇이 있나»)을 다른 이름으로
+ *  묻는 자리**가 남아 있었다 — 자기노드 판정(30초마다 전 세션 capture-pane 까지)·CP idle 이 60초마다 부르는
+ *  관리자 세션 뷰·desired 백필. 셋 다 «게이트웨이 tmux 목록» 을 원하는데, 소유가 넘어간 테넌트에서 그 목록의
+ *  정본은 이미 호스트 스냅샷이다(목록 라우트가 그걸 사람에게 보여 준다).
+ *
+ * ── 규율 ──────────────────────────────────────────────────────────────────────
+ *  · 소유 판정(`sessionHostVerdict`)이 **ok 일 때만** 쓴다 — 선언된 호스트가 전부 온라인·신선할 때다.
+ *    그래서 합에 드는 호스트 집합이 곧 판정이 본 집합이다(`declaredOnly` — 멤버 PC 세션은 중앙 목록이 아니다).
+ *  · ★ **합이 비면 null** 이다. 세션 호스트는 그 노드에 그 테넌트 세션이 있을 때만 선다(배치 게이트) —
+ *    그러니 «자격 있는 호스트가 있는데 중앙 세션이 0» 은 정상 상태가 아니라 «아직 못 덮은 순간» 이다
+ *    (새 노드에 호스트가 서기 전의 창 · T3 착수 조건 ②). 그 모름을 «0개» 로 답하면 가장 비싼 소비자
+ *    (CP idle 의 정지 판정)가 «바쁜 세션 없음» 으로 읽는다. 모르면 종전 경로가 답한다(fail-closed).
+ *  · 신선도·죽음 지평선은 판정과 **같은 자**를 받는다(인자로 — 여기서 숫자를 다시 쓰지 않는다).
+ */
+export function hostOwnedSnapshot<T>(
+  nodes: ReadonlyArray<{ declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly T[] }>,
+  staleMs: number,
+  deadMs: number = SESSION_HOST_DEAD_MS,
+): { rows: T[] | null; why: SessionHostWhy | "empty" } {
+  const v = sessionHostVerdict(nodes, staleMs, deadMs);
+  if (!v.owns) return { rows: null, why: v.why };
+  const rows = nodeSnapshotSessions(nodes, staleMs, true);
+  return rows.length ? { rows, why: v.why } : { rows: null, why: "empty" };
+}
+
+/**
  * 이 노드를 셀프 노드로 **새로 표시할 것인가** — 판정 한 칸의 결정 (#2600 T2).
  *
  * ⚠ 이름이 «이 노드가 셀프 노드인가» 가 **아니다**. 이미 확정된 노드에는 `false` 를 돌려준다(다시 표시할
@@ -357,6 +388,46 @@ export function sameTmuxCoordinate(o: {
   isSessionHost: (id: string) => boolean;
 }): (id: string) => boolean {
   return o.boxRow ? (id: string): boolean => o.isSelf(id) || o.isSessionHost(id) : o.isSelf;
+}
+
+/**
+ * 이 세션이 **정말 다른 기계의 것인가**(순수) — 노드 좌표를 **스냅샷에서** 되찾은 자리용 (#2600 T2 d6).
+ *  답이 노드 id 면 그 기계로 물러나고(대화창 409 `node` · 감시 안 함), null 이면 이 게이트웨이의 세션으로 다룬다.
+ *
+ * ── 왜 필요한가 (2026-09-11 계수 실측) ────────────────────────────────────────
+ * 대화창(`chat-routes` gateRead)과 대화 파일 감시자(`transcript-watch` start)가 «좌표가 있으면 게이트웨이
+ *  tmux 에 `has-session` 을 물어, 있으면 이 박스 것» 이라는 #2055 의 방어를 쓴다. 전 테넌트에 세션 호스트가
+ *  서자 **모든 매니지드 세션에 호스트 좌표가 붙었고**, 그 방어가 대화창을 열 때마다 tmux 를 쳤다(분당 10).
+ *
+ * ── 판정(좁혀 가는 순서) ─────────────────────────────────────────────────────
+ *  ① 좌표가 없다 → null.
+ *  ② 좌표가 **선언된 세션 호스트** → null. 그 호스트는 자기 노드의 세션 컨테이너만 보고하므로 그 스냅샷에서
+ *     되찾은 세션은 정의상 이 게이트웨이의 박스 세션이고, 같은 tmux 에 닿는다(#3745 `sameTmuxCoordinate`
+ *     와 같은 판단). ⚠ 그쪽이 `boxRow` 를 함께 보는 이유는 좌표가 **화면·DB** 에서도 오기 때문이다 —
+ *     여기서는 좌표의 출처가 그 호스트의 스냅샷 자체라 행을 물을 필요가 없다(DB 왕복도 없다).
+ *  ③ 그 밖의 좌표(멤버 PC)는 «정말 저쪽인가» 를 확인한다 — 셀프 노드가 중앙 세션을 가로챈 모양(#2055)을
+ *     걸러야 해서다. 소유가 넘어간 테넌트면(`centralIds` 가 있으면) **중앙 세션 집합**으로 답하고 tmux 를
+ *     안 묻는다. 아니면 종전대로 `gone`(게이트웨이 tmux 의 «없다» 확답)에 묻는다.
+ *  ⚠ `gone` 이 던지면 «모른다» 다 — 종전 호출부들이 그랬듯 **이 박스 것으로 접는다**(null). 저쪽이라고
+ *   단정하면 대화창이 빈 중앙 기록으로 물러나고, 그게 #2055 가 막으려던 증상이다.
+ */
+export async function remoteNodeCoordinate(o: {
+  sessionId: string;
+  /** 스냅샷에서 되찾은 좌표(`registry.nodeOfSession` — 셀프 노드는 이미 접혀 온다) */
+  nodeId: string | null;
+  isSessionHost: (id: string) => boolean;
+  /** 소유가 넘어간 테넌트의 중앙 세션 id 집합 — 넘어가지 않았으면 null */
+  centralIds: ReadonlySet<string> | null;
+  /** 게이트웨이 tmux 의 «그 세션 없음» 확답 */
+  gone: (id: string) => Promise<boolean>;
+}): Promise<string | null> {
+  const nodeId = String(o.nodeId ?? "").trim();
+  if (!nodeId) return null;
+  if (o.isSessionHost(nodeId)) return null;
+  if (o.centralIds) return o.centralIds.has(o.sessionId) ? null : nodeId;
+  let gone = false;
+  try { gone = await o.gone(o.sessionId); } catch { gone = false; }
+  return gone ? nodeId : null;
 }
 
 /**

@@ -284,4 +284,66 @@ t("[S13] 게이트웨이는 박동을 받아 나이만 되돌리고, 스냅샷�
     `${REGISTRY} 의 박동 처리가 fail-closed 술어(beatRefreshes)를 안 부른다 — 빈 스냅샷이 신선해질 수 있다`);
 });
 
+// ── S14: «지금 중앙 tmux 에 무엇이 있나» 의 출처는 `listCentralSessions` 한 곳이다 (#2600 T2 d6) ────────
+//  왜: 2026-09-11 계수 — 목록 라우트·알림 스윕을 호스트 스냅샷으로 옮긴 뒤에도 같은 질문을 **다른 이름으로** 묻는
+//   자리 셋이 그 테넌트에 분당 ~50번 tmux 를 쳤다(자기노드 판정 34 · CP idle 의 관리자 세션 뷰 12 · 백필 3.4).
+//   셋 중 하나라도 `listSessionsRaw()` 로 되돌아가면 «소유가 넘어간 테넌트에 tmux 0» 이 조용히 깨진다.
+//  ⚠ 줄 단위로 본다(`code()` 는 문자열 속 `/*` 에 걸린다 — S10c 머리말).
+const codeLines = (rel) => read(rel).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+const BACKFILL = "src/sessions/session-state-backfill.ts";
+const TERM_ROUTES = "src/terminal/routes.ts";
+
+t("[S14] 자기노드 판정·관리자 세션 뷰·백필은 중앙 세션을 listCentralSessions 로 읽는다", () => {
+  const src = read(REGISTRY);
+  const at = src.indexOf("function probeSelfNodes(");
+  assert.ok(at >= 0, `${REGISTRY} 에서 probeSelfNodes 를 못 찾았다 — 이름이 바뀌었나`);
+  const body = src.slice(at, src.indexOf("\n}\n", at)).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+  assert.ok(body.length > 10, `probeSelfNodes 본문을 ${body.length}줄밖에 못 잘랐다 — 이 가드가 아무것도 안 보고 있다`);
+  assert.ok(body.some((l) => /listCentralSessions\s*\(/.test(l)),
+    `probeSelfNodes 가 listCentralSessions 를 안 부른다 — 30초마다 전 세션 capture-pane 이 돌아온다`);
+  assert.ok(!body.some((l) => /listSessionsRaw\s*\(/.test(l)),
+    `probeSelfNodes 가 listSessionsRaw 를 직접 부른다 — 소유가 넘어간 테넌트에서도 tmux 를 친다`);
+
+  const routes = codeLines(TERM_ROUTES);
+  assert.ok(routes.some((l) => /listCentralSessions\s*\(/.test(l)), `${TERM_ROUTES} 의 관리자 세션 뷰가 listCentralSessions 를 안 부른다`);
+  assert.ok(!routes.some((l) => /listSessionsRaw\s*\(/.test(l)),
+    `${TERM_ROUTES} 에 listSessionsRaw 호출이 되살아났다 — CP idle 이 60초마다 그 테넌트 tmux 를 친다`);
+
+  const backfill = codeLines(BACKFILL);
+  assert.ok(backfill.some((l) => /deps\?\.listLive\s*\?\?\s*\(\(\)\s*=>\s*listCentralSessions\(\)\)/.test(l)),
+    `${BACKFILL} 의 기본 출처가 listCentralSessions 가 아니다 — 판정이 불리는 함수 안에 있어야 두 호출부가 같이 옮겨간다`);
+  assert.ok(!backfill.some((l) => /\blistSessionsRaw\b/.test(l)), `${BACKFILL} 가 listSessionsRaw 를 직접 쓴다`);
+});
+
+// ── S15: 장부 `live` 는 그 브로커 노드의 세션 호스트 관측을 먼저 본다 (#2600 T2 d6) ──────────────────
+//  왜: 브로커가 노드마다·테넌트마다 회수 틱마다 장부를 부르고, 종전엔 그때마다 게이트웨이가 list-sessions 를 쳤다
+//   (노드 5 × 테넌트 6 = 분당 35). 출처 판정(`ledgerLiveFrom`)을 우회해 tmux 를 곧바로 물으면 그게 돌아온다.
+const LEDGER = "src/terminal/session-ledger.ts";
+t("[S15] 장부 라우트의 live 는 ledgerLiveFrom 을 지난다(tmux 직행 금지)", () => {
+  const lines = codeLines(LEDGER);
+  assert.ok(lines.some((l) => /listLive:\s*ledgerLiveFrom\s*\(/.test(l)), `${LEDGER} 라우트가 ledgerLiveFrom 을 안 쓴다`);
+  assert.ok(!lines.some((l) => /listLive:\s*\(\)\s*=>\s*listLiveSessionIds/.test(l)),
+    `${LEDGER} 라우트가 live 를 tmux 로 직행한다 — 세션 호스트가 서 있어도 분당 35번 list-sessions 가 돌아온다`);
+});
+
+// ── S16: «이 좌표가 정말 다른 기계인가» 는 `remoteNodeOfSession` 한 곳이다 (#2600 T2 d6) ────────────────
+//  왜 둘인가: ① 대화창·감시자가 좌표가 있으면 매번 has-session 을 쳤다(전 테넌트 켜기 뒤 매니지드 세션 **전부**에
+//   호스트 좌표가 붙어 분당 10). ② ★ 대화창 키 라우트는 `nodeOfSession(id)` 만 보고 409 를 냈다 — 호스트 좌표가
+//   붙은 순간 매니지드 세션의 승인·거부·중단이 전부 막힌다. 둘 다 «좌표가 있다» 를 «저쪽 기계다» 로 읽은 같은 실수다.
+const CHAT = "src/terminal/chat-routes.ts";
+const WATCH = "src/terminal/transcript-watch.ts";
+t("[S16] 대화창·키 라우트·대화 감시자는 remoteNodeOfSession 으로 «저쪽 기계인가» 를 묻는다", () => {
+  const chat = codeLines(CHAT);
+  assert.ok(chat.filter((l) => /remoteNodeOfSession\s*\(/.test(l)).length >= 2,
+    `${CHAT} 의 gateRead·키 라우트 중 remoteNodeOfSession 을 안 쓰는 자리가 있다`);
+  assert.ok(!chat.some((l) => /if\s*\(\s*nodeOfSession\s*\(\s*id\s*\)\s*\)\s*throw/.test(l)),
+    `${CHAT} 에 «좌표가 있으면 409» 가 되살아났다 — 세션 호스트가 서면 매니지드 세션의 키 입력이 전부 막힌다`);
+  assert.ok(!chat.some((l) => /await\s+sessionGone\s*\(\s*id\s*\)/.test(l)),
+    `${CHAT} 가 좌표 판정을 위해 tmux 를 직접 묻는다`);
+  const watch = codeLines(WATCH);
+  assert.ok(watch.some((l) => /remoteNodeOfSession\s*\(\s*id\s*,\s*deps\.sessionGone\s*\)/.test(l)),
+    `${WATCH} 가 remoteNodeOfSession(seam 을 거친 판정) 을 안 쓴다`);
+  assert.ok(!watch.some((l) => /\bnodeOfSession\s*\(/.test(l)), `${WATCH} 가 좌표만으로 저쪽 기계를 판정한다`);
+});
+
 console.log(`\n${pass} passed — 세션 호스트 단일 출처(#2600 T1·T2 d4·d6)`);

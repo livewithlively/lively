@@ -15,7 +15,7 @@ import { cancelAiLogin, dropLoginSession, pasteAiLogin, readAiLogin, startAiLogi
 import { logger } from "../log.js";
 import { carrySessionDismissals, closeSessionAppInstances } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
-import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
+import { roots, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";        //  하기 위한 파사드(chat-routes 대화창과 같은 관문)
 import { resolveSessionDir } from "../sessions/session-desired.js";
@@ -39,7 +39,7 @@ import { isProjectSessionDir } from "../project/project-fs.js";
 // #2116 — 죽은 세션 메타의 '남에게도 보이나' 판정을 다른 게이트와 **같은 술어**로 맞춘다(cwd 축).
 const sharedByFolder = (dir: string): boolean => isProjectSessionDir(dir);
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
-import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, nodeSessionGone, isSelfNode, isSessionHostNode, liveNodes, nodeOfSession, nodeSessionHarness, gatewayDefersHere } from "../node/registry.js";
+import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, nodeSessionGone, isSelfNode, isSessionHostNode, liveNodes, nodeOfSession, nodeSessionHarness, gatewayDefersHere, listCentralSessions } from "../node/registry.js";
 import type { NodeSessionInfo } from "../node/registry.js";
 import { relayNodeId, sessionRelayNodeId, sameTmuxCoordinate, isBoxSessionRow } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #2636 — 화면이 안 준 좌표는 서버가 되찾는다 · #3745 — 박스 세션엔 세션 호스트 좌표도 같은 tmux 다
 import type { NodeOp } from "../node/protocol.js";
@@ -1594,8 +1594,12 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
   app.get("/api/ui/terminal/admin/sessions", auth, wrap(async (req, res) => {
     if (!userOf(req).scopes?.includes("admin")) throw new HttpError(403, "admin 권한이 필요합니다");
     res.setHeader("Cache-Control", "no-store");
+    //  #2600 T2 d6 — «이 박스의 모든 중앙 세션» 은 소유가 넘어간 테넌트면 세션 호스트 스냅샷이다(listCentralSessions).
+    //   CP idle(gwclient.listAllSessions)이 running 테넌트마다 60초마다 부르는 자리라, 종전엔 그때마다 게이트웨이가
+    //   list-sessions + 세션마다 capture-pane 을 쳤다(2026-09-11 실측 분당 12). 필드는 호스트가 **같은 함수**
+    //   (listSessionsRaw)로 만든 행 그대로라 CP 가 읽는 working·awaiting·agentState·attached·lastActive 가 같다.
     const [central, managed] = await Promise.all([
-      listSessionsRaw(),
+      listCentralSessions(),
       listManagedSessions().catch(() => [] as Array<{ session_id: string | null }>),
     ]);
     const managedIds = new Set(managed.map((m) => m.session_id).filter((x): x is string => !!x));

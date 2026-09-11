@@ -12,6 +12,7 @@
 //             ★ exited_at = 사람이 /exit·logout 으로 끝낸 세션(#3822). 소비자는 이것을 «끝났다» 로 읽어 컨테이너를 걷되
 //               행은 남긴다(복원 좌표 보존) — 판정은 여기가 아니라 브로커(sessionledger.ts)가 한다.
 //  observed = 지금 tmux 에 있는 box-* 세션 id. **못 봤으면 null** — «없다» 와 «모른다» 를 섞지 않는다(#835).
+//             #2600 T2 d6 — 브로커가 자기 노드를 실어 보내면 그 노드 **세션 호스트의 관측**으로 답한다(ledgerLiveFrom).
 //  판정(원한다/은퇴했다/모른다)은 소비자(브로커 sessionledger.ts)가 한다 — 여기는 사실만 준다.
 //
 // ── 누가 부르나 · 어떻게 여나 ───────────────────────────────────────────────
@@ -27,6 +28,8 @@
 //  로 세션 id 목록을 읽는다. 그래서 라우터·프록시는 붙이지 않고 **비밀을 아는 쪽만 계산할 수 있는 서명**을
 //  하나 더 요구한다 — `x-lvly-ledger-auth = HMAC-SHA256(비밀, "ledger:<slug>")` (brokernet 의 hubClientToken 과
 //  같은 꼴). 인터넷 클라이언트도 세션도 비밀을 모르므로 못 만든다. 새 env 는 없다.
+//  ⓘ `?node=` 는 서명 밖이다 — 서명을 통과한 요청이 «자기 테넌트의 어느 노드 관측을 쓸지» 를 고를 뿐이라 여는 범위가
+//   넓어지지 않는다(다른 노드 이름을 대도 같은 테넌트의 세션 id 다).
 import crypto from "node:crypto";
 import type express from "express";
 import { wrap, HttpError } from "../http/rest-util.js";
@@ -34,6 +37,8 @@ import { resolveTenantFromHeaders } from "../org/tenant-context.js";
 import { listSessionLedgerRows, type SessionLedgerRow } from "../sessions/session-state.js";
 import { listManagedSessions } from "../sessions/managed-sessions.js";
 import { listLiveSessionIds } from "./terminal-sessions.js";
+import { sessionHostNodeId } from "../node/session-host-provision.js";   // #2600 T2 d6 — (테넌트, 노드) → 세션 호스트 id 는 한 벌
+import { sessionHostLiveIds } from "../node/registry.js";
 
 export interface SessionLedgerBody {
   authoritative: true;
@@ -69,6 +74,40 @@ export async function buildSessionLedger(d: LedgerDeps): Promise<SessionLedgerBo
   };
 }
 
+/**
+ * 장부 `live` 의 출처를 고른다(순수 조립) — 그 브로커 노드의 **세션 호스트가 지금 본 것**이 있으면 그것,
+ *  아니면 종전 게이트웨이 tmux (#2600 T2 d6).
+ *
+ * ── 왜 (2026-09-11 계수 실측) ───────────────────────────────────────────────
+ * 브로커는 노드마다·테넌트마다 회수 틱마다 이 장부를 부른다. 그때마다 게이트웨이가 `list-sessions` 를 쳤다 —
+ *  노드 5 × 테넌트 6 으로 분당 35번(그 테넌트에 세션 호스트가 전부 서 있는데도).
+ *
+ * ── 왜 노드 **하나**의 스냅샷으로 충분한가 ─────────────────────────────────────
+ * 소비자인 회수 ②(`sessionledger.reapPlan`)는 **그 브로커 노드의 컨테이너만** 훑는다. 세션 호스트는
+ *  (노드, 테넌트) 축이라 자기 노드의 세션만 보고한다(`LIVELY_TMUX_LIST_SCOPE=node`, #3797). 그러니 그 노드
+ *  호스트의 스냅샷이 곧 «그 브로커가 판정할 세션 전량» 이고, 다른 노드 호스트의 신선도를 기다릴 이유가 없다.
+ *  ⚠ 여분의 id 는 무해하지만 **빠진 id 는 곧 회수 후보**다. 그래서 그 노드 하나에 대해서는 빠짐이 없어야 하고,
+ *   그 근거는 둘이다: 호스트 스냅샷은 strict 로만 올라온다(«못 봤으면 안 올린다» — 가드 S11) · 12초 신선도.
+ *   (그리고 회수 ②는 desired 가 원하는 세션을 tmux 와 무관하게 남기고, 나머지도 «안이 비었을 때만» 걷는다.)
+ *
+ * ── 종전 경로로 떨어지는 경우 (fail-closed) ─────────────────────────────────────
+ *  노드를 안 실어 보낸 브로커(옛 판) · 슬러그·노드 모양이 틀림 · 그 노드에 선언된 호스트가 없음·끊김·낡음.
+ *  ⚠ 호스트가 자격이 있고 스냅샷이 **빈 목록**이면 그대로 쓴다 — strict 관측의 «0개» 는 확답이다(모름이 아니다).
+ */
+export function ledgerLiveFrom(o: {
+  slug: string | null | undefined;
+  /** 브로커가 실어 보낸 자기 노드 이름(`?node=`) — 요청값이라 모양을 믿지 않는다 */
+  node: unknown;
+  /** 그 세션 호스트가 자격이 있을 때만 id 목록, 아니면 null(`registry.sessionHostLiveIds`) */
+  hostLive: (nodeId: string) => string[] | null;
+  tmuxLive: () => Promise<string[]>;
+}): () => Promise<string[]> {
+  const node = typeof o.node === "string" ? o.node.trim() : "";
+  const hostId = o.slug && node ? sessionHostNodeId(o.slug, node) : null;
+  const ids = hostId ? o.hostLive(hostId) : null;
+  return ids ? async () => ids : o.tmuxLive;
+}
+
 export const LEDGER_AUTH_HEADER = "x-lvly-ledger-auth";
 
 /** 장부 서명(순수) — 브로커(lvly-cloud sessionledger.ts)가 **같은 식**으로 만든다. 한쪽만 바꾸면 401 이 된다. */
@@ -79,11 +118,12 @@ export function ledgerAuthToken(secret: string, slug: string): string {
 /**
  * 접근 판정(순수) — 비밀 미설정이면 404(경로가 없는 것과 같다), 테넌트 헤더가 비밀과 안 맞거나 **장부 서명이
  *  없거나 틀리면** 401. 실패 사유를 가르지 않는다(«비밀은 맞는데 서명이 없다» 를 밖에 말할 이유가 없다).
+ *  200 이면 **서명이 묶인 슬러그**를 함께 준다 — 라우트가 그 테넌트의 세션 호스트를 찾을 때 같은 값을 쓰게.
  */
 export function ledgerAccess(
   headers: Record<string, string | string[] | undefined>,
   env: NodeJS.ProcessEnv = process.env,
-): { status: 200 | 401 | 404; why: string } {
+): { status: 200 | 401 | 404; why: string; slug?: string } {
   const secret = (env.LIVELY_TENANT_HEADER_SECRET || "").trim();
   if (!secret) return { status: 404, why: "매니지드 배포가 아니다" };
   const r = resolveTenantFromHeaders(headers, env);
@@ -94,7 +134,7 @@ export function ledgerAccess(
   if (got.length !== want.length || !crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want))) {
     return { status: 401, why: "장부 서명 없음/불일치" };
   }
-  return { status: 200, why: "ok" };
+  return { status: 200, why: "ok", slug: r.tenant.slug };
 }
 
 export function registerSessionLedgerRoute(app: express.Express): void {
@@ -106,7 +146,12 @@ export function registerSessionLedgerRoute(app: express.Express): void {
     res.json(await buildSessionLedger({
       listRows: listSessionLedgerRows,
       listManaged: listManagedSessions,
-      listLive: () => listLiveSessionIds({ strict: true }),
+      listLive: ledgerLiveFrom({
+        slug: a.slug,
+        node: req.query.node,
+        hostLive: sessionHostLiveIds,
+        tmuxLive: () => listLiveSessionIds({ strict: true }),
+      }),
     }));
   }));
 }
