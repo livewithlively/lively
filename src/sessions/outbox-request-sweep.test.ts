@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { withTenant } from "../org/tenant-context.js";
 import { outboxRequestSweepMiddleware, resetSweepDebounce, shouldSweep, jobIntervalMs, sweptKeys, sweptAt,
-  SWEEP_JOBS, SWEEP_MIN_INTERVAL_MS, AWAITING_SWEEP_INTERVAL_MS, TEN_MIN_MS, SIX_HOURS_MS, TASK_TICK_MS,
+  SWEEP_JOBS, SWEEP_MIN_INTERVAL_MS, AWAITING_SWEEP_INTERVAL_MS, TEN_MIN_MS, SIX_HOURS_MS, TASK_TICK_MS, META_HEAL_SWEEP_MS,
   type SweepJob } from "./outbox-request-sweep.js";
 
 let pass = 0;
@@ -195,12 +195,14 @@ t("[F14] 정비 결과를 로그에 펼쳐 찍는다 — «돌았다»만 찍으
 });
 
 // ── G1~G7 · 남은 정비를 표에 올린 뒤 (#2246) ────────────────────────────────
-t("[G1] 표에 아홉 정비가 있고 첫 목격에 전부 발사한다", () => {
+t("[G1] 표에 열 정비가 있고 첫 목격에 전부 발사한다", () => {
   resetSweepDebounce();
   //  일곱 = background-sweeps 여덟 중 파괴적인 reapIdleSessions 를 뺀 수 · 하나 = 위탁 배차(별도 스텝).
+  //  #3892 — 세션 호스트 스냅샷 표식 되채우기(session-meta-heal)가 테넌트 정비로 하나 늘었다. 목록 소유가 호스트로 넘어간
+  //   테넌트에선 게이트웨이 collectSessions 의 되채우기가 안 불려, 요청에 얹는 것 말고 닿는 길이 없다.
   const perTenant = SWEEP_JOBS.filter((j) => (j.scope ?? "tenant") === "tenant");
-  assert.equal(perTenant.length, 9, "테넌트 정비 아홉(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩)");
-  assert.equal(SWEEP_JOBS.length, 10, "전역 하나(task-dispatch)가 더 있다");
+  assert.equal(perTenant.length, 10, "테넌트 정비 열(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기)");
+  assert.equal(SWEEP_JOBS.length, 11, "전역 하나(task-dispatch)가 더 있다");
   asManaged(() => { run(); });
   //  ⚠ 전역 정비의 키는 `<정비>:*` 다 — 전부 `키:테넌트` 로 가정하면 안 된다.
   assert.deepEqual(sweptKeys().sort(),
@@ -218,6 +220,7 @@ t("[G2] 각 정비의 주기가 원래 하우스키핑과 같은 값이다 — �
     "session-state-backfill": SWEEP_MIN_INTERVAL_MS, // 종전 5분
     "task-dispatch": TASK_TICK_MS,                   // 종전 task-scheduler 의 TICK_MS(5초)
     "builtin-app-seed": SIX_HOURS_MS,                // 코드 소유 앱은 롤 때만 바뀐다
+    "session-meta-heal": META_HEAL_SWEEP_MS,         // #3892 — 새 정비(원래 하우스키핑에 없던 것). 되채우기 쿨다운과 같은 60초
   };
   for (const j of SWEEP_JOBS) assert.equal(j.intervalMs, want[j.key], `${j.key} 의 주기가 다르다`);
   assert.deepEqual(Object.keys(want).sort(), SWEEP_JOBS.map((j) => j.key).sort(), "표와 기대가 같은 집합이어야 한다");
