@@ -19,7 +19,8 @@ import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";        //  하기 위한 파사드(chat-routes 대화창과 같은 관문)
 import { resolveSessionDir } from "../sessions/session-desired.js";
-import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited, markSessionSuperseded, resolveSessionSuccessor, retiredSessionIds } from "../sessions/session-state.js";   // #2231 — 복원된 옛 id 는 지우지 않고 이정표로 남긴다
+import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited, markSessionSuperseded, resolveSessionSuccessor, retiredSessionIds, conversationPeers, type SessionState } from "../sessions/session-state.js";   // #2231 — 복원된 옛 id 는 지우지 않고 이정표로 남긴다 · #3891 같은 대화를 도는 세션 후보
+import { adoptVerdict, createKeyedSerializer, type AdoptProbe } from "./restore-adopt.js";   // #3891 — 복원을 다시(또는 동시에) 불러도 같은 대화를 둘로 만들지 않는다
 import { convIdFromTranscriptPath, mayForgetOldState, mappingReportStatus } from "../sessions/conv-mapping.js";   // #2122 — 복원이 대화 매핑을 잃지 않게 하는 순수 규칙 · #2151 — 매핑 보고 응답 규약 // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { currentTenant } from "../org/tenant-context.js";
 import { PRIMARY_TENANT_ID, clearSessionWorkspace, sessionWorkspaceIds, sessionInWorkspace } from "../org/tenancy/registry.js"; // #1750 후속 — 세션→워크스페이스 정본 / #1875 목록 격리
@@ -100,6 +101,32 @@ async function carryConvMapping(newId: string, convId: string, st: { owner: stri
     if (ok) return true;
   }
   return false;
+}
+
+/** #3891 — 같은 세션(테넌트·id)의 복원 요청을 이 프로세스 안에서 한 줄로 세운다(restore 라우트 · createKeyedSerializer 머리말). */
+const restoreSerial = createKeyedSerializer();
+
+/**
+ * #3891 — 끊긴 복원의 뒷정리를 **이미 떠 있는 세션**에 채운다(멱등 — 이미 된 칸은 그대로 둔다).
+ *
+ *  정상 복원(restore 라우트 본문)이 새 세션을 만든 뒤 하는 칸들과 같다: 소속 기록 · 아웃박스 승계 · 인스턴스 ·
+ *  치움 승계 · 옛 인스턴스 닫기 · 옛 행 이정표. 다른 점은 둘이다.
+ *   · **실패해도 세션을 죽이지 않는다.** 정상 경로는 소속 기록이 실패하면 방금 만든 세션을 되물리지만, 이 세션은
+ *     사람이 이미 쓰고 있을 수 있다(끊긴 뒤 목록에서 눌러 들어가 일하던 실측 — d78e541c).
+ *   · 대화 매핑은 채우지 않는다 — 이 세션을 **대화로 찾았다**는 것 자체가 매핑이 이미 있다는 뜻이다.
+ *  메타(@box_*)는 여기서 다시 박지 않는다 — 목록 관측이 desired 행으로 채우는 자리(#3892)다(두 벌을 두지 않는다).
+ */
+async function settleInterruptedRestore(oldId: string, st: SessionState, newId: string, projectId: number | null): Promise<void> {
+  await recordSessionTenant(newId).catch((e) => logger.warn({ err: e, id: oldId, newId }, "restore(이어 붙이기): 소속 기록 실패(비치명 — 세션은 살려 둔다)"));
+  try {
+    const { carryOutbox } = await import("../sessions/session-outbox.js");
+    const moved = await carryOutbox(oldId, newId);
+    if (moved) logger.info({ id: oldId, newId, moved }, "restore(이어 붙이기): 미배달 지시 승계");
+  } catch (e) { logger.warn({ err: e, id: oldId, newId }, "restore(이어 붙이기): 미배달 지시 승계 실패(비치명 — 옛 행은 남는다)"); }
+  await registerSessionInstance(newId, st.owner, { appId: st.app_id, projectId, title: st.label || newId });
+  await carrySessionDismissals(oldId, newId).catch((e) => logger.warn({ err: e, id: oldId, newId }, "restore(이어 붙이기): 치움 승계 실패(비치명)"));
+  await closeSessionAppInstances(oldId, "restore").catch((e) => logger.warn({ err: e, id: oldId }, "restore(이어 붙이기): 옛 앱 인스턴스 닫기 실패(비치명)"));
+  await markSessionSuperseded(oldId, newId).catch((e) => logger.warn({ err: e, id: oldId, newId }, "restore(이어 붙이기): 옛 행 이정표 기록 실패(비치명)"));
 }
 
 // (#3626) themeOf · prepareRemoteAppSession · relayNodeOp 는 세션 생성 관문(session-launch.ts)으로 옮겼다 —
@@ -1211,7 +1238,9 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
   //  (전부 자동 spawn 이 아니라 '열 때만' 재생성 = 재부팅 직후 OOM 재현 방지, #1059 E). 소유자 또는 admin 만.
   //  원 소유자 신원으로 재생성해야 격리(box_owner)·CLAUDE_CONFIG_DIR·git 자격이 원 세션과 같다. 새 tmux id 를 얻으므로
   //  옛 desired-state 레코드는 지운다(새 세션이 자기 레코드를 가짐 → restorable 카드가 라이브 세션으로 교체된다).
-  app.post("/api/ui/terminal/sessions/:id/restore", auth, wrap(async (req, res) => {
+  //  ★ #3891 — 같은 세션의 복원은 **한 줄로** 돈다(restoreSerial — createKeyedSerializer 머리말). 뒤 요청은 앞 요청이
+  //   끝난 뒤 아래 판정을 처음부터(행을 다시 읽어) 한다 — 그래서 동시에 두 번 불려도 세션이 둘로 서지 않는다.
+  app.post("/api/ui/terminal/sessions/:id/restore", auth, wrap(restoreSerial.wrap((req: express.Request) => `${currentTenant()?.id ?? ""}|${req.params.id}`, async (req: express.Request, res: express.Response) => {
     res.setHeader("Cache-Control", "no-store");
     const id = req.params.id;
     const st = await getSessionState(id);
@@ -1359,6 +1388,41 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     //   훅 보고 때 경로·id 일치를 강제했고, 여기선 그 하네스의 id 규약으로 한 번 더 거른다). 종전엔 컬럼이 한 번
     //   null 이 되면 그 세션은 **영구 picker** 였다(매핑을 되찾을 길이 없었다).
     const mappedId = st.claude_session_id || convIdFromTranscriptPath(st.harness, st.transcript_path);
+    // ★ #3891 — **이 대화를 이미 이어 도는 세션이 있으면 새로 만들지 않고 그리로 잇는다.**
+    //  복원은 판(하네스)이 뜬 뒤 뒷정리 전에 끊길 수 있다 — 실측 2026-09-11 08:45:00Z: 롤이 게이트웨이를 SIGTERM 한
+    //  15ms 뒤 새 세션(d78e541c)의 메타 relay 가 죽어 요청이 실패했다. 새 세션은 떠 있는데 옛 행엔 이정표가 없어
+    //  목록에 같은 세션이 두 줄 섰고, 화면은 제자리에 남아 보낸 말도 안 갔다. 여기서 그대로 새로 만들면 다시 부른
+    //  복원(화면의 재시도·사람의 재전송)이 같은 대화로 세션을 **하나 더** 띄운다 — 한 대화 파일에 하네스 둘이 붙는다.
+    //  그 세션은 태어날 때 이 대화 id 를 받는다(createSession carryConv) — 그래서 끊겨도 여기서 대화로 찾아진다.
+    //  ⚠ 확답만 믿는다(adoptVerdict): 산 것이 있으면 잇고, **모르면 만들지 않는다**(force 면 사람이 고른 대로 만든다).
+    //  ⚠ 옛 id 자신의 생사는 바로 위에서 이미 갈랐다(살아 있으면 already) — 이 판정은 그 뒤다.
+    if (mappedId) {
+      //  ⚠ 후보를 **못 물었으면** «없다» 가 아니라 «모른다» 다 — 확답 규칙 그대로 만들지 않는다(force 면 사람이 고른 대로).
+      const peers = await conversationPeers(id, mappedId, st.owner).catch(() => null);
+      if (peers === null && !force) {
+        throw new HttpError(409, "이 대화를 이어 도는 세션이 있는지 확인하지 못했습니다 — 잠시 후 다시 시도하거나, "
+          + "그대로 새 세션으로 되살리려면 화면의 [강제로 되살리기] 를 눌러 주세요(대화는 이어집니다).");
+      }
+      const probes: AdoptProbe[] = [];
+      for (const p of peers ?? []) {
+        //  노드 좌표 행은 묻지 않는다 — 이 갈래는 박스 복원이고, 박스 대화 파일을 노드 세션이 들 수는 없다.
+        if (relayNodeId(p.node_id, isSelfNode)) continue;
+        const gone = await sessionGoneVerdict(p.id);
+        probes.push({ id: p.id, alive: gone === null ? null : !gone });
+      }
+      const adopt = adoptVerdict(id, probes, force);
+      if (adopt.kind === "unknown") {
+        throw new HttpError(409, "이 대화를 이어 도는 세션의 상태를 확인하지 못했습니다 — 잠시 후 다시 시도하거나, "
+          + "그대로 새 세션으로 되살리려면 화면의 [강제로 되살리기] 를 눌러 주세요(대화는 이어집니다).");
+      }
+      if (adopt.kind === "adopt") {
+        await settleInterruptedRestore(id, st, adopt.id, projRef.projectId ?? null);
+        logger.info({ id, adopted: adopt.id }, "restore: 같은 대화를 이미 도는 세션으로 잇는다(#3891 — 끊긴 복원의 뒷정리)");
+        //  응답은 이정표(superseded) 갈래와 **같은 모양**이다 — 화면은 이미 그 모양을 «옮겨 간다» 로 읽는다(resumeSession).
+        res.json({ ok: true, already: true, id: adopt.id, movedTo: adopt.id });
+        return;
+      }
+    }
     const resumeUuid = mappedId
       && (st.harness !== "claude" || await transcriptResumable(id, st, mappedId).catch(() => false))
       ? mappedId : null;
@@ -1381,6 +1445,9 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       //   없을 수 있다 — SessionStart 훅은 한 줄도 쌓이기 전에 UUID 를 보고한다.
       //  createSession 이 claude 하네스에서만 적용(resume 우선 · 없으면 resumePick).
       ...(precise ? { resume: resumeUuid as string } : { resumePick: true }),
+      //  #3891 — 이 세션이 태어나는 순간(desired 행)부터 이 대화를 도는 세션으로 찾아지게 한다. 이 요청이 뒷정리 전에
+      //   끊겨도 다시 부른 복원이 위 판정으로 이리로 잇는다. 값은 아래 carryConvMapping 과 같다(picker 복원도 승계한다).
+      ...(mappedId ? { carryConv: { convId: mappedId, transcriptPath: st.transcript_path ?? null } } : {}),
     });
     // ★ 소속(워크스페이스) 기록 — **세션을 만드는 자리마다** 붙는다(#2179 → 되살림 #3579).
     //  종전엔 생성 6곳 중 이 한 곳(복원 — 박스/로컬)만 빠져 있었다. 그러면 복원으로 되살린 세션이
@@ -1422,7 +1489,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     //  #2231 — 지우지 않고 **이어진 곳을 적는다**(옛 id 를 든 화면·링크가 새 세션으로 이어지도록). 목록에서 빠지는 건 같다.
     if (carried) await markSessionSuperseded(id, session.id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 desired-state 이정표 기록 실패(비치명)"));
     res.json({ ok: true, session });
-  }));
+  })));
 
   // #1059 — 하네스 훅(work-flag)이 **"이 세션 지금 활동했다"**를 보고한다. 회수(F)가 이 시각을 본다.
   //  왜: 종전 활동 관측은 게이트웨이가 5분마다 pane 제목 스피너를 훔쳐보는 방식이라 tick 사이에 짧게 끝나는

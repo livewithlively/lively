@@ -31,7 +31,8 @@ import { mountSessionTasks, type SessionTasksHandle } from './session-tasks.js';
 import { onSessionEvents } from './session-events.js';   // #3699 대화 파일 통보(되묻기 → 밀어주기)
 import { effortChoices, effortKo, findHarness, flagChoices, prettyModel, providerLabel, runCatalog, type RunHarness } from './v2/run-picker.js';
 import { rememberCreated } from './v2/created-cache.js';
-import { rememberFirstPrompt } from './v2/quick-session.js';   // #2439 — 되살린 세션의 첫 지시 낙관 렌더   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
+import { rememberFirstPrompt, rememberUnsentDraft, takeFirstPrompt } from './v2/quick-session.js';   // #2439 — 되살린 세션의 첫 지시 낙관 렌더   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게 · #3891 못 간 말은 옮겨 간 화면 입력칸으로
+import { withRetry } from './lib/restore-retry.js';   // #3891 — 복원 요청은 끊김에만 짧게 다시 묻는다(서버 복원이 멱등이라 안전)
 // #3778 — 「지금 보고 있는 사람」·[공유] 는 **세션의 머리줄**에 산다. 종전엔 셸 문패(v2/panes.ts)에 있었는데,
 //  그 줄의 왼쪽은 프로젝트 이름이라 한 줄이 두 주체를 번갈아 말했다 — 「공유」가 프로젝트 공유로 읽혔다.
 //  세션은 이미 자기 머리줄을 갖고 있다(여기) — 이름·하네스·⋯ 가 다 여기 있으니 공유도 여기가 집이다.
@@ -131,6 +132,9 @@ export interface SessionChatOpts {
   terminalSrc?: ((s: SessionChatTarget) => string | null) | null;
   openHref?: string | null;
   firstPrompt?: string | null;
+  /** #3891 — 사람이 친 글인데 **전달하지 못한 것**. 입력칸에 되돌려 둔다(보낸 척 그리지 않는다 — firstPrompt 와 반대).
+   *  멈춘 세션에서 보내 되살렸는데 말 전달만 실패한 경우, 옮겨 간 이 화면이 그 글을 받는다(reviveWithPrompt). */
+  draft?: string | null;
   trail?: TrailWidget | null;
   onPickProject?: (anchor: HTMLElement) => void;
   onRename?: (label: string) => Promise<void>;
@@ -464,6 +468,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     escActive: () => true,
     opening: null,
   });
+  //  #3891 — 전달하지 못한 글은 입력칸으로 돌아온다(opts.draft 머리말). 높이도 글에 맞춘다(입력 이벤트가 맞춘다).
+  if (opts.draft && !view.input.value) {
+    view.input.value = opts.draft;
+    view.input.dispatchEvent(new Event('input'));
+  }
 
   /**
    * **대화창이 이 세션의 본자리인가** — 어느 탭으로 열지를 정한다.
@@ -1666,7 +1675,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       window.setTimeout(() => { if (!destroyed) view.setNote(''); }, 2500);
     } catch (e: any) { if (!quiet) view.setNote(e?.message || '키를 보내지 못했습니다.'); }
   }
-  /** 이 세션을 되살려(또는 그 대화를 이어받아) 새 세션으로 간다. btn 없이도 부를 수 있다 — 자동 복원 경로(#1820). */
   /**
    * 멈춘 세션에 **말로** 말을 걸었다 (#2439 ②③) — 되살리고, 그 말을 되살아난 세션의 첫 지시로 넘긴다.
    *
@@ -1677,25 +1685,60 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    *  서버 아웃박스가 들고 있다가 넣는다(#1753). 여기서 «떴는지» 를 화면이 판정하지 않는다.
    *  그리고 `rememberFirstPrompt` 로 새 세션 화면이 그 말을 낙관적으로 그리게 한다 — 옮겨 가는 순간 방금 친
    *  말이 사라지면 사람은 그게 갔는지 알 수 없다.
+   *
+   *  ★ #3891 — **어느 칸에서 끊겨도 친 말을 잃지 않는다.** 실측(2026-09-11 08:45Z 매니지드): 롤이 복원 요청을 중간에
+   *   잘랐는데 종전 화면은 그 실패를 삼키고 «세션을 이어서 여는 중…» 에 멈췄다 — 보낸 말은 한 번도 안 갔고, 서버엔
+   *   이미 뜬 세션이 따로 남아 사이드바에 같은 세션이 두 줄 섰다(아래 catch 는 resumeSession 이 오류를 삼켜 닿지 않았다).
+   *   · 복원이 끝내 실패 → 여기 남는다: 말풍선에 «못 보냈다» · 친 글은 입력칸으로 · 도는 표시를 내린다.
+   *   · 복원은 됐는데 말 전달만 실패 → **그래도 옮겨 간다**(여기 남으면 두 줄·갇힘이 그대로다). 그 글은 옮겨 간
+   *     화면의 입력칸에 돌려 둔다. 전달을 다시 쏘지는 않는다 — 응답만 잃은 경우 같은 말이 두 번 들어간다.
+   *   · 되살리는 중에 또 보내면 **이 화면에서는** 복원을 하나 더 띄우지 않는다 — 친 글은 입력칸에 돌려준다.
+   *     (다른 탭·액자·대기 지시의 [강제로 되살리기]처럼 다른 자리에서 같은 세션 복원이 겹치는 것은 서버가 한 줄로
+   *     세워 막는다 — routes.ts restoreSerial. 이 깃발은 이 화면의 재전송만 맡는다.)
    */
+  let reviving = false;
   async function reviveWithPrompt(text: string): Promise<void> {
+    if (reviving) {
+      if (!view.input.value) { view.input.value = text; view.input.dispatchEvent(new Event('input')); }
+      toast('세션을 이어서 여는 중이에요 — 열리면 그 세션에서 보내 주세요.');
+      return;
+    }
+    reviving = true;
     view.removeOpening(); view.list.querySelector('.sc-empty')?.remove();
     const pd = addPending(text);
     pd.state.textContent = '세션을 이어서 여는 중…';
     view.scrollToBottom();
+    let routed = false;
     try {
-      await resumeSession(null, { canRestore: true }, async (newId) => {
+      routed = await resumeSession(null, {
+        canRestore: true,
+        onRetry: () => { if (!destroyed) pd.state.textContent = '연결이 잠깐 끊겨 다시 여는 중…'; },
+      }, async (newId) => {
         rememberFirstPrompt(newId, text);
-        await api(`/api/ui/terminal/sessions/${encodeURIComponent(newId)}/prompt`, { method: 'POST', body: JSON.stringify({ text }) });
+        try {
+          await api(`/api/ui/terminal/sessions/${encodeURIComponent(newId)}/prompt`, { method: 'POST', body: JSON.stringify({ text }) });
+        } catch (e: any) {
+          takeFirstPrompt(newId);              // 안 간 말을 간 것처럼 그리지 않는다
+          rememberUnsentDraft(newId, text);    // 옮겨 간 화면의 입력칸으로(opts.draft)
+          toast(`세션은 이어서 열었는데 보낸 말은 전달하지 못했어요 — 입력칸에 다시 넣어 두었어요. ${e?.message || ''}`.trim());
+        }
       });
-    } catch (e: any) {
-      //  resumeSession 이 자기 실패는 toast 로 말한다 — 여기서는 **그 말이 안 갔다는 사실**을 말풍선에 남긴다.
-      pd.state.textContent = '보내지 못했어요 — 다시 시도해 주세요';
-      toast(e?.message || '세션을 이어서 열지 못했습니다.');
-    }
+    } finally { reviving = false; }
+    if (routed || destroyed) return;
+    //  못 열었다 — 사유는 resumeSession 이 토스트로 이미 말했다. 여기서는 **그 말이 안 갔다는 사실**을 제자리에 남긴다.
+    const i = pending.indexOf(pd); if (i >= 0) pending.splice(i, 1);
+    pd.state.remove(); running = false;
+    view.settle(pd.t); view.busy(false);
+    view.error(pd.t, '보내지 못했어요 — 세션을 이어서 열지 못했습니다. 친 글은 입력칸에 돌려 두었어요.');
+    if (!view.input.value) { view.input.value = text; view.input.dispatchEvent(new Event('input')); }
   }
 
-  async function resumeSession(btn?: HTMLButtonElement | null, hint?: { canRestore?: boolean }, beforeRoute?: (newId: string) => Promise<void>): Promise<void> {
+  /**
+   * 이 세션을 되살려(또는 그 대화를 이어받아) 새 세션으로 옮겨 간다. btn 없이도 부를 수 있다 — 자동 복원 경로(#1820).
+   *  돌려주는 값 = **옮겨 갔나**(#3891) — 부른 쪽이 실패를 제자리에서 마감할 수 있게 한다. 종전엔 실패를 토스트로
+   *  삼키고 아무것도 안 돌려줘서, 말로 되살리던 화면(reviveWithPrompt)이 «여는 중…» 에 영영 멈췄다.
+   */
+  async function resumeSession(btn?: HTMLButtonElement | null, hint?: { canRestore?: boolean; onRetry?: () => void }, beforeRoute?: (newId: string) => Promise<void>): Promise<boolean> {
     const orig = btn ? btn.textContent : '';
     if (btn) { btn.disabled = true; btn.textContent = '여는 중…'; }
     try {
@@ -1708,7 +1751,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  (2026-08-26 상민님 신고 · session-log-routes.ts 폴백). 목록이 조용해도 프레임이 말했으면 그 말을 믿는다.
       //  /restore 는 이미 살아 있으면 already:true 로 되돌려주므로(routes.ts), 잘못 들어가도 새 세션을 만들지 않는다.
       if (isBox() && (target.raw?.restorable || hint?.canRestore)) {
-        const r: any = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/restore`, { method: 'POST', body: '{}' });
+        //  ★ #3891 — **끊긴 실패에만** 짧게 다시 묻는다(restore-retry.ts). 수 초짜리 이 요청은 롤 교대에 잘린다.
+        //   다시 물어도 안전한 건 서버 복원이 같은 대화를 둘로 만들지 않아서다(restore-adopt.ts) — 아래 이어보기엔 안 건다.
+        const r: any = await withRetry(
+          () => api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/restore`, { method: 'POST', body: '{}' }),
+          { stop: () => destroyed, onRetry: () => { hint?.onRetry?.(); if (btn) btn.textContent = '다시 여는 중…'; } });
         if (r?.session) rememberCreated(r.session);
         // #2231 — `movedTo` = "그 id 는 이미 이어졌고, 대화는 이 새 세션에서 돌고 있다". 종전엔 이 경우 서버가
         //  404(`복원할 세션 상태가 없습니다`)를 냈고 화면은 거기서 멈췄다 — 낡은 탭·두 번째로 누른 칸이 전부
@@ -1733,11 +1780,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       // 라우팅은 호출자(탭)에게 — 전역 주소를 여기서 바꾸면 숨은 탭의 복원이 활성 탭을 끌고 간다(opts.onResumed 주석).
       if (opts.onResumed) opts.onResumed(nextId);
       else location.hash = '#/s/' + encodeURIComponent(nextId);
+      return true;
     } catch (e: any) {
       toast(e?.message || '이어받기 세션을 만들지 못했습니다.');
       // ⚠ **자동** 복원 실패는 잠근 채로 둔다(#1834 후속) — 종전엔 여기서 풀어 줘, 실패가 반복되는 동안
       //  (노드가 잠깐 오프라인인 때 등) 같은 화면이 계속 되살리기를 시도했다. 사람이 버튼을 누르면 다시 된다.
       if (btn) { resumeAuto = false; btn.disabled = false; btn.textContent = orig || '이어서 대화하기'; }
+      return false;
     }
   }
 
@@ -1958,9 +2007,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   «살아 있다» 로 읽고 터미널을 얹었고, 프레임은 곧 «중단됨» 배너를 띄웠다 — 사람이 본 것은 그 배너뿐이었다.
   //   모를 때는 대화로 연다: 기록이 보이고, 말을 걸면 그때 되살아난다(살아 있었다면 그대로 배달된다).
   //   ⚠ 터미널로 가는 문은 그대로다([⋯ ▸ 터미널로 보기]) — 첫 화면만 바꾼다.
-  setMode(chatHome() || target.raw?.observed === false ? 'chat' : 'term');
+  //  ★ #3891 — **전달하지 못한 글을 들고 왔으면(opts.draft) 그 글이 보이는 대화로 연다.** 터미널이 첫 화면이면 입력칸이
+  //   숨어서 «입력칸에 다시 넣어 두었어요» 가 거짓말이 된다. 사람이 고른 것으로 친다(modeChosen) — 행이 오갈 때
+  //   화면이 스스로 터미널로 되돌려 글을 다시 가리지 않게. 터미널로 가는 문은 그대로다.
+  const draftBack = !!opts.draft && view.input.value === opts.draft;
+  if (draftBack) modeChosen = true;
+  setMode(chatHome() || target.raw?.observed === false || draftBack ? 'chat' : 'term');
 
   void open();
+  //  open() 은 시작하자마자 안내를 비운다 — 그 뒤에 적어야 남는다.
+  if (draftBack) view.setNote('보내지 못한 말을 입력칸에 돌려 두었어요 — 보내면 이 세션에 들어갑니다.');
 
   return {
     id: first.id,

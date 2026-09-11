@@ -579,6 +579,26 @@ async function successorByConversation(id: string): Promise<string | null> {
 }
 
 /**
+ * #3891 — 이 대화를 **같이 들고 있는 다른 세션** 후보(최근 순). 복원을 다시 불렀을 때 «이미 이어 도는 세션» 을 찾는 재료다
+ *  (판정은 terminal/restore-adopt.ts — 여기는 행만 준다. 살아 있는지는 호출자가 확답으로 묻는다).
+ *
+ *  successorByConversation 과 같은 축(대화 id · 소유자 · 이정표 없음 · 최근 순)이되 둘이 다르다:
+ *   · 여기는 **여럿**을 준다 — 최근 행이 죽은 껍데기여도 그 뒤의 산 세션을 놓치지 않게.
+ *   · 사람이 끝낸 행(exited_at)은 뺀다 — 그 id 의 판은 다시 살아나지 않으니 물을 값어치가 없다.
+ *  ⚠ 소유자 스코프 — 남의 세션으로 잇지 않는다(대화 id 는 승계되지만 소유자는 승계되지 않는다).
+ */
+export async function conversationPeers(oldId: string, conv: string, owner: string, limit = 3): Promise<Array<{ id: string; node_id: string | null }>> {
+  if (onNode() || !oldId || !conv || !owner) return [];
+  const r = await itemsPool.query(
+    `SELECT id, node_id FROM org_session_state
+      WHERE claude_session_id=$1 AND owner=$2 AND id<>$3 AND superseded_by IS NULL AND exited_at IS NULL
+      ORDER BY COALESCE(last_busy, created, 0) DESC, created_at DESC LIMIT $4`,
+    [conv, owner, oldId, Math.max(1, Math.min(10, limit))],
+  );
+  return r.rows.map((x: Record<string, unknown>) => ({ id: String(x.id), node_id: (x.node_id as string | null) ?? null }));
+}
+
+/**
  * #2231 후속 — 주어진 id 중 **이미 이어진(은퇴한)** 것만 돌려준다.
  *
  *  목록의 라이브 절반(tmux 관측 collectSessions · 노드 스냅샷)은 DB 를 안 본다. 그래서 이어진 뒤에도 그 tmux 가

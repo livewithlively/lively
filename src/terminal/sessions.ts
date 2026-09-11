@@ -30,7 +30,7 @@ import { wrapAsMember, type CgroupLimit } from "./terminal-isolation.js";
 import { tmuxInSessionContainer, sessionEnsureArgv, sessionPaneArgv, ensureSessionContainerViaRelay } from "./session-tmux.js";   // #2545 — 새 세션은 자기 세션 컨테이너 안 tmux(3단계)
 import { onNode } from "../exec-topology.js";   // #2599 T2 — 「노드 프로세스인가」의 단일 출처
 import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
-import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState, type SessionState, type SessionStateInput } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
+import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState, setClaudeSessionId, type SessionState, type SessionStateInput } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원) · #3891 복원 대화 선기록
 import { memberMkdir, memberWriteFile, memberShOut, execAt, type ExecAt } from "./terminal-member-fs.js";
 import os from "node:os";
 import path from "node:path";
@@ -602,6 +602,17 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     created: createdSec, last_busy: null,
   });
   let mirrored = false;   // #2545 — 새 경로가 행을 먼저 썼나(뒤쪽 미러를 건너뛰고, 실패하면 지운다)
+  //  #3891 — 복원이 이어받는 대화를 **desired 행이 선 그 자리에서** 함께 적는다(CreateInput.carryConv 머리말).
+  //   왜 여기서: 복원 요청은 판이 뜬 뒤 뒷정리 전에 끊길 수 있다(실측 2026-09-11 — 롤 SIGTERM 15ms 뒤 메타 relay 사망).
+  //   그러면 떠 있는 세션이 대화로 찾아지지 않아, 다시 부른 복원이 같은 대화로 세션을 **하나 더** 만든다.
+  //   best-effort — 못 적어도 세션은 뜬다(복원 라우트의 carryConvMapping 이 뒤에서 다시 적고, 훅도 곧 같은 값을 보고한다).
+  //   행이 나중에 지워지면(판 실패) 이 값도 그 행과 함께 사라진다 — 따로 치울 것이 없다.
+  const carryConvNow = async (): Promise<void> => {
+    const c = input.carryConv;
+    if (!c?.convId || onNode()) return;   // 노드엔 DB 가 없다(노드 복원은 게이트웨이 릴레이가 매핑을 적는다)
+    await setClaudeSessionId(id, c.convId, ownerId(user), c.transcriptPath ?? null)
+      .catch((e) => { console.warn(`[terminal] 복원 대화 매핑 선기록 실패(${id}) — 뒤 승계가 다시 적는다:`, (e as Error)?.message ?? e); });
+  };
   const args = ["new-session", "-d", "-s", id];
   // 한글(멀티바이트) 편집 정상화 — pane 에 UTF-8 로케일 주입(#633). 세션스코프 -e 라 전역/타세션 누수 없음.
   //  격리(box-spawn=sudo)·비격리 두 분기 공통으로 먼저 넣는다(sudo 기본 env_keep 이 LANG/LC_* 를 보존). 근거는 PANE_LOCALE 주석.
@@ -701,6 +712,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       if (input.kind !== "managed") {
         try { await upsertSessionState(desiredRow()); mirrored = true; }
         catch (e) { console.warn(`[terminal] 세션 desired-state 미러 실패(${id}) — 세션은 계속:`, (e as Error)?.message ?? e); }
+        if (mirrored) await carryConvNow();   // #3891 — 판을 띄우기 **전에** 대화까지 적어 둔다
       }
       //  ② 컨테이너 — ensure 훅(매니지드: 브로커 /lvly/session/ensure). 실패는 **실패다**: 방금 쓴 행을 지우고 503.
       //   옛 경로로 조용히 접지 않는다(옛 판/새 판이 섞인 반쪽 상태가 가장 나쁘다 — tmux-relocation-plan 규율 1).
@@ -910,9 +922,12 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  영속을 소유하므로 desired-state 미러를 만들지 않는다(#1059 E) — 판정 근거만 바뀌고 동작은 같다.
   //  #2545 — 새 경로는 이미 썼다(mirrored). 옛 경로는 종전대로 여기서 쓴다(값은 desiredRow 한 벌).
   if (input.kind !== "managed" && !mirrored) {
+    let upserted = false;
     try {
       await upsertSessionState(desiredRow());
+      upserted = true;
     } catch (e) { console.warn(`[terminal] 세션 desired-state 미러 실패(${id}) — 세션은 계속:`, (e as Error)?.message ?? e); }
+    if (upserted) await carryConvNow();   // #3891 — 옛 경로도 행이 서는 자리에서(이 경로는 판·메타 뒤라 창이 좁을 뿐 규칙은 같다)
   }
   // 이름을 **AI 가 다시 짓는 일은 여기서 하지 않는다**(#1979 — 발의 윤상민 2026-08-25).
   //  종전(#1719)엔 여기서 하네스를 **헤드리스로 따로 스폰**해 이름을 지었다(구 src/terminal/session-name-ai.ts).

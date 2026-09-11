@@ -431,6 +431,11 @@ export interface CreateInput {
   managed?: string;
   // #1059 — claude UUID 를 모를 때 인자 없는 --resume 로 후보 picker 를 띄운다(restorable 복원. resume 과 배타 — resume 우선).
   resumePick?: boolean;
+  // #3891 — **복원 전용**: 이 세션이 이어받는 대화. desired 행이 서는 **그 순간** 함께 적는다(createSession).
+  //  복원 요청은 판(하네스)이 뜬 뒤 뒷정리 전에 끊길 수 있다(롤 SIGTERM 실측) — 그때도 이 세션이 태어날 때부터
+  //  «그 대화를 도는 세션» 으로 찾아져야 다시 부른 복원이 새로 만들지 않고 이리로 잇는다(routes.ts restore · restore-adopt.ts).
+  //  resume(argv)과 따로 둔다: picker 로 뜨는 복원도 매핑은 승계한다(routes.ts carryConvMapping 과 같은 값).
+  carryConv?: { convId: string; transcriptPath?: string | null };
   // #1516 — 로그인 전용 세션: 이 하네스의 **로그인 명령**을 셸에서 돌린다(하네스 TUI 를 띄우지 않는다).
   //  자격이 만료된 상태에서 그 하네스로 세션을 열면 즉사해 로그인 자체가 불가능하기 때문(harnessLoginArgv 주석).
   //  harness 는 'shell' 로 보낸다 — 이 세션은 AI 세션이 아니라 로그인 절차용이다.
