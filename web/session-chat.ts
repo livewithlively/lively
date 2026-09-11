@@ -306,13 +306,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     input.select();
   }
   paintTitle();
-  // 겉에 둘 것 = **터미널을 보다가 손이 자주 가는 것**(화면 복구·환경 설정). 보기 전환·목차처럼 가끔 쓰는 것은 [⋯] 안으로
-  //  내린다(상민님 2026-08-19). 종전엔 반대였다 — 화면이 깨졌을 때 복구가 메뉴 두 단계 뒤에 있었다.
+  // 겉에 둘 것 = **화면이 깨졌을 때 손이 바로 가야 하는 것**(화면 복구) 하나다. 보기 전환·목차처럼 가끔 쓰는
+  //  것은 [⋯] 안으로 내린다(상민님 2026-08-19) — 종전엔 반대라 복구가 메뉴 두 단계 뒤에 있었다.
+  //  ★ [환경 설정]은 2026-09-11 에 겉에서 **뺐다**(원준: «화면 복구가 중요한거야»). 글꼴·테마·커서·스크롤은
+  //   한 번 정하면 다시 안 여는 값이라 겉에 상주할 이유가 없다. [⋯ ▸ 터미널] 에 이미 같은 줄이 있어
+  //   **기능은 그대로**고 줄만 돌려준다. 반면 [화면 복구]는 연결 상태와 한 덩어리로 끝까지 남는다 —
+  //   «지금 어떤가»와 «그걸 고치는 단추»는 같이 있어야 서로를 설명한다.
   //  ⚠ 종전의 `sc-act-dup`(= [⋯] 안에 사본이 있으니 좁아지면 먼저 접는다)은 **뗐다**(원준 2026-09-10):
   //   이 둘은 폭으로 사라지지 않는다. 자주 쓰는 것을 먼저 접는 순서가 뒤집혀 있었다(36-chat.css 사다리 주석).
   const chatBadge = el('span', { class: 'sc-beta', text: '베타', hidden: true, title: '대화 인터페이스는 베타예요 — 표시가 어긋나면 터미널로 보세요' });
   const fixBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구합니다', onclick: () => termAct('reconnect') }) as HTMLButtonElement;
-  const setBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '환경 설정', title: '터미널 글꼴·크기·테마·커서·스크롤 속도', onclick: () => termAct('settings') }) as HTMLButtonElement;
   // 상단바 통합(#1744) — 터미널 페이지가 갖고 있던 것들이 이 줄로 온다: [파일](우패널 탐색기) · 연결 상태 · [⋯](터미널 조작).
   const filesBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '파일', title: '이 세션의 작업 폴더를 오른쪽 패널에서 봅니다(업로드·다운로드)', onclick: () => {
     const on = opts.onToggleFiles ? opts.onToggleFiles() : false;
@@ -368,8 +371,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const fixPair = el('span', { class: 'sc-pair' }, termStatusEl, el('span', { class: 'sc-pair-sep', 'aria-hidden': 'true' }), fixBtn);
   const headR = el('div', { class: 'sc-head-r' },
     opts.onToggleFiles ? filesBtn : null,
-    fixPair,
-    setBtn,             // 보이기는 setMode 가 정한다 — 늦게 붙는 터미널에도 자리가 남게 항상 DOM 에 둔다
+    fixPair,            // 보이기는 setMode 가 정한다 — 늦게 붙는 터미널에도 자리가 남게 항상 DOM 에 둔다
     moreBtn);
   //  #3784 — 머리줄 우클릭 = 이 세션의 메뉴(사이드바 행과 같은 것). 표만 단다 — 셸 배선이 읽는다.
   const head = el('div', { class: 'sc-head', 'data-ctx': 'session', 'data-sid': first.id },
@@ -750,7 +752,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   사라졌다 — 폭과 무관하게. 터미널이 있으면 그 조작은 보고 있지 않아도 할 수 있어야 한다.
     //   터미널이 아예 없는 세션에서는 그대로 숨는다(죽은 단추를 만들지 않는다).
     const t = hasTerm();
-    fixBtn.hidden = !t; setBtn.hidden = !t;
+    fixBtn.hidden = !t;
     termStatusEl.hidden = !t || !termStatusEl.textContent;             // 연결 상태도 마찬가지(#1744)
     fixPair.hidden = fixBtn.hidden && termStatusEl.hidden;
     paintRunHead();                                                   // 모델·추론강도도 마찬가지 — 터미널을 볼 때만 머리줄에 선다
@@ -914,8 +916,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     }));
     if (hasTerm()) {
       rows.push(el('div', { class: 'sc-more-sec', text: '터미널' }));
-      // ⚠ 화면 복구·환경 설정은 **겉에도 있고 여기도 있다**(2026-09-10). 겉의 두 단추는 칸이 좁아지면 접히는데
-      //  (머리줄 한 줄 규약), 종전엔 여기에 사본이 없어 **접히는 순간 그 기능이 아예 사라졌다** — 곁칸을 켜면
+// ⚠ [화면 복구]는 **겉에도 있고 여기도 있다** — 겉의 것은 폭으로 안 사라지므로 여기 줄은 되찾는 길이
+      //  아니라 메뉴를 훑는 사람을 위한 사본이다. 반면 [환경 설정]은 2026-09-11 부터 **여기가 유일한 자리**다.
       //  터미널 화면을 복구할 길이 없어지는 상태였다. 접히는 것은 '자리'지 '기능'이 아니어야 한다.
       rows.push(row('화면 복구', '화면이 깨지거나 어긋났을 때 재연결로 복구합니다', () => termAct('reconnect')));
       rows.push(row('환경 설정', '터미널 글꼴·크기·테마·커서·스크롤 속도', () => termAct('settings')));
