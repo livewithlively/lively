@@ -74,6 +74,9 @@ export interface ShellPrefs {
   saved?: boolean;
   /** 이번 저장에서 버린 것(저장소 → 개수). 버린 게 없으면 칸이 없다 — 조용히 버리지 않는다(#3887). */
   dropped?: Record<string, ShellPrefDrop>;
+  /** 저장소 단위 병합으로 저장했다(patchShellPrefs). 화면은 이 표식이 있을 때만 응답의 정규화 결과를 캐시에 얹는다 —
+   *  옛 서버는 patch 를 모르고 통째 교체하므로 표식이 없다(#3887). */
+  merged?: boolean;
 }
 
 // 방어 상한 — 값은 화면 상태지 자료가 아니다. 깨진/악성 입력이 무한정 쌓이지 않게 자른다.
@@ -86,10 +89,12 @@ const clip = (v: unknown, max: number): string => String(v ?? "").slice(0, max);
 /** 서버가 세션·인스턴스 주체로 받는 자 — capabilities/app-instances.ts SUBJECT_RE 와 같다. 이 자를 못 넘는 id 는 아무것도 가리키지 않는다. */
 const SUBJECT_RE = /^[A-Za-z0-9._:-]{1,160}$/;
 /**
- * 화면 키에 들어올 수 없는 글자 — 공백·제어문자, 그리고 encodeURIComponent 가 늘 이스케이프하는 글자.
- *  `(`·`)`·`'` 는 이스케이프되지 않아 멀쩡한 주소에도 있다(파일 경로 `report (final).pdf`) — 넣지 않는다.
+ * 화면 키에 들어올 수 없는 것 — 공백·제어문자, 따옴표·꺾쇠·백틱(브라우저가 해시에서도 늘 이스케이프한다), 그리고 마크다운 링크
+ *  찌꺼기 `](`(실측 `sess:box-…](https:`). ⚠ 좁게 둔다: `[ ] { } | \ ^` 는 해시에서 브라우저가 안 바꾸는 글자라
+ *  사람이 친 주소에 멀쩡히 있을 수 있고, 조회도 이 정규화를 거치므로 **오탐 하나가 곧 사람의 결정의 영구 삭제**다.
+ *  `(`·`)`·`'` 는 encodeURIComponent 도 안 바꾼다(파일 경로 `report (final).pdf`).
  */
-const ROUTE_BAD = /[\s\u0000-\u001f\u007f<>"`[\]{}|\\^]/;
+const ROUTE_BAD = /[\s\p{Cc}<>"`]|\]\(/u;
 /** 쿼리에 자격이 든 화면 — 행 키로 두면 일회용 코드가 계정 행에 남는다(실측 `route:raw:activate?code=…`, device-auth 승인 주소). */
 const ROUTE_SECRET = /[?&](?:code|token|access_token|refresh_token|id_token|secret|client_secret|password|passwd|api_key|apikey)=/i;
 
@@ -238,14 +243,30 @@ export async function getShellPrefs(memberId: string): Promise<ShellPrefs> {
   return { prefs: normalizeShellPrefs(fromStoredShellPrefs(rows[0].prefs ?? {})), saved: true };
 }
 
-/** 새 셸 개인화 저장(전체 덮어쓰기, upsert) — 구버전 화면의 길. 정규화 후 저장·반환(프론트 즉시 반영용). */
-export async function setShellPrefs(memberId: string, prefs: unknown): Promise<ShellPrefs> {
+/**
+ * patch 로 한 번이라도 쓴 행의 표식(저장 전용 칸). 이 행에는 **통째 교체를 받지 않는다**(setShellPrefs → null).
+ *  왜: 통째 교체는 구버전 화면(배포 전에 연 탭 — 새로 고칠 때까지 옛 번들이 돈다)의 길이다. 그 탭의 캐시는 낡아서,
+ *   한 번의 통째 교체가 그 사이 다른 기기에서 한 정리를 모두 덮는다. 종전엔 다음 통째 저장이 되덮어 복구했지만,
+ *   새 화면은 바뀐 저장소만 보내므로 덮인 저장소를 다시 보내지 않는다 — 막지 않으면 낡은 문서가 그대로 굳는다.
+ *  대가: 옛 탭에서 그 뒤에 한 결정은 서버에 안 남는다(그 탭을 새로 고치면 사라진다). 옛 서버는 이 칸을 모르고
+ *   통째 교체 때 떨군다 — 되돌림(롤백) 동안은 종전 동작이다.
+ */
+const PATCHED_KEY = "~patched";
+
+/**
+ * 새 셸 개인화 저장(전체 덮어쓰기, upsert) — 구버전 화면의 길. 정규화 후 저장·반환(프론트 즉시 반영용).
+ * @returns null = 이 행은 patch 로 관리된다 — 통째 교체를 거절했다(PATCHED_KEY). 호출부가 409 로 알린다.
+ */
+export async function setShellPrefs(memberId: string, prefs: unknown): Promise<ShellPrefs | null> {
   if (!memberId) throw new Error("no member");
   const { prefs: clean, dropped } = normalizeShellPrefsReport(prefs);
-  await q(itemsPool,
+  const rows = await q(itemsPool,
     `INSERT INTO member_shell_pref(member_id, prefs, updated_at) VALUES ($1, $2::jsonb, now())
-     ON CONFLICT (tenant_id, member_id) DO UPDATE SET prefs = EXCLUDED.prefs, updated_at = now()`,
+     ON CONFLICT (tenant_id, member_id) DO UPDATE SET prefs = EXCLUDED.prefs, updated_at = now()
+       WHERE NOT (jsonb_typeof(member_shell_pref.prefs) = 'object' AND member_shell_pref.prefs ? '${PATCHED_KEY}')
+     RETURNING 1 AS ok`,
     [memberId, JSON.stringify(toStored(clean))]);
+  if (!rows.length) return null;
   return withDrops(clean, dropped, memberId);
 }
 
@@ -272,12 +293,16 @@ export async function patchShellPrefs(memberId: string, patch: unknown): Promise
     sets[store] = v;
     if (kind === "map") sets[orderKey(store)] = Object.keys(v as Record<string, string>);
   }
-  if (!Object.keys(sets).length && !clears.length) return getShellPrefs(memberId);
+  if (!Object.keys(sets).length && !clears.length) return { ...(await getShellPrefs(memberId)), merged: true };
+  sets[PATCHED_KEY] = true;   // 이 행은 이제 patch 로 관리된다 — 옛 번들의 통째 교체를 받지 않는다(PATCHED_KEY 머리말)
+  //  저장된 값이 객체가 아니면(과거 손상·손으로 고친 행) {} 로 보고 병합한다 — `배열 || 객체` 는 배열로 굳어 영영 안 풀린다.
   const rows = await q(itemsPool,
     `INSERT INTO member_shell_pref(member_id, prefs, updated_at) VALUES ($1, $2::jsonb, now())
      ON CONFLICT (tenant_id, member_id) DO UPDATE
-       SET prefs = (member_shell_pref.prefs - $3::text[]) || EXCLUDED.prefs, updated_at = now()
+       SET prefs = ((CASE WHEN jsonb_typeof(member_shell_pref.prefs) = 'object' THEN member_shell_pref.prefs ELSE '{}'::jsonb END)
+                    - $3::text[]) || EXCLUDED.prefs,
+           updated_at = now()
      RETURNING prefs`,
     [memberId, JSON.stringify(sets), clears]);
-  return withDrops(normalizeShellPrefs(fromStoredShellPrefs(rows[0]?.prefs ?? {})), dropped, memberId);
+  return { ...withDrops(normalizeShellPrefs(fromStoredShellPrefs(rows[0]?.prefs ?? {})), dropped, memberId), merged: true };
 }
