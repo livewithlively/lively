@@ -229,6 +229,26 @@ try {
     await h.respond(1, merged({ a: ["x", "1"], b: ["y"] }));
   }
 
+  // ★E35b — 재시도 예산은 결정마다 — 긴 장애로 다 쓴 뒤의 새 결정도 제 몫의 재시도를 받는다
+  {
+    const h = await boot({ get: { saved: true, prefs: { a: ["x"], b: ["y"] } } });
+    const fail = (i) => h.posts[i].reject(new Error("503"));
+    setList(h.A, ["x", "1"]);
+    await h.push();
+    fail(0); await flush();
+    for (const [i, wait] of [[1, 5_000], [2, 20_000], [3, 60_000]]) { await advance(wait); fail(i); await flush(); }
+    await advance(120_000);
+    ok(h.posts.length === 4, `H-E35b 한 결정의 재시도는 세 번에서 멈춘다(${h.posts.length})`);
+    setList(h.B, ["y", "later"]);   // 장애가 길어진 뒤의 새 결정
+    await h.push();
+    ok(h.posts.length === 5, `H-E35b 새 결정의 저장이 나간다(${h.posts.length})`);
+    fail(4); await flush();
+    await advance(5_000);
+    ok(h.posts.length === 6 && J(h.posts[5].body.patch) === J({ a: ["x", "1"], b: ["y", "later"] }),
+      `★H-E35b 예산을 다 쓴 뒤의 새 결정도 5초 뒤 다시 보낸다 — 안 그러면 복구된 뒤에도 안 올라가고 새로 고치면 사라진다 — ${J(h.posts[5] && h.posts[5].body.patch)}`);
+    await h.respond(5, merged({ a: ["x", "1"], b: ["y", "later"] }));
+  }
+
   // ★E38 — 다른 탭이 워크스페이스를 바꿨으면 보내지 않는다(캐시 키는 로드 때 워크스페이스, 요청은 지금 워크스페이스)
   {
     const h = await boot({ get: { saved: true, prefs: { a: ["x"], b: ["y"] } } });
