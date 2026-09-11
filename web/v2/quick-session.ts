@@ -26,6 +26,23 @@ export function takeFirstPrompt(sessionId: string): string | null {
   return t;
 }
 
+/**
+ * #3891 — 사람이 친 글인데 **그 세션에 전달하지 못한 것** — 그 세션 화면이 뜰 때 입력칸에 되돌려 둔다.
+ *  firstPrompt 와 반대 뜻이다: 저건 «보냈으니 도는 모양으로 먼저 그려라», 이건 «안 갔으니 다시 보낼 수 있게 돌려줘라».
+ *  멈춘 세션에 말을 걸어 되살렸는데(reviveWithPrompt) 말 전달만 실패하면, 화면은 새 세션으로 옮겨 가고 글은 여기로 온다
+ *  — 제자리에 남으면 사이드바에 같은 세션이 두 줄 서고 사람은 옛 대화창에 갇힌다(실측 2026-09-11). 같은 이유로 여기 한 곳에 둔다.
+ */
+const unsentDrafts = new Map<string, string>();
+export function rememberUnsentDraft(sessionId: string, text: string): void {
+  const t = String(text || '').trim();
+  if (sessionId && t) unsentDrafts.set(sessionId, t);
+}
+export function takeUnsentDraft(sessionId: string): string | null {
+  const t = unsentDrafts.get(sessionId) ?? null;
+  unsentDrafts.delete(sessionId);
+  return t;
+}
+
 // 이름은 **서버가 짓는다**(#1808, src/terminal/session-name.ts) — initialPrompt 를 넘기면 그 값으로 label 이 정해진다.
 //  종전엔 여기서 앞 27자를 잘라 label 로 같이 보냈는데, 그 규칙이 클라와 서버 두 곳에 있으면 반드시 갈라진다.
 

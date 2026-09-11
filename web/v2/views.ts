@@ -6,7 +6,7 @@ import { el, personName, relTime, state, sv, toast } from '../core.js';
 import { composerAttach } from './compose-attach.js';
 import { projMatches } from '../lib/proj-match.js';
 import { composerMention } from './compose-mention.js';
-import { isCreatingQuickSession, openQuickSession, takeFirstPrompt } from './quick-session.js';
+import { isCreatingQuickSession, openQuickSession, takeFirstPrompt, takeUnsentDraft } from './quick-session.js';
 import { createRunPicker } from './run-picker.js';
 import { mountSessionChat, type SessionChatHandle, type SessionChatTarget } from '../session-chat.js';
 import type { TrailWidget } from '../session-trail.js';
@@ -501,6 +501,8 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
     openHref: vopts.solo ? location.pathname + '#/s/' + encodeURIComponent(s.id) : soloSessionUrl(s.id),
     // 홈 입력창이 방금 연 세션이면 그 첫 지시를 낙관적으로 먼저 그린다(서버가 하네스 입력창이 뜬 뒤 실제로 넣는다).
     firstPrompt: takeFirstPrompt(s.id),
+    // #3891 — 멈춘 세션에서 보내 되살렸는데 말 전달만 실패했으면, 그 글이 이 화면의 입력칸으로 돌아온다(보낸 척 그리지 않는다).
+    draft: takeUnsentDraft(s.id),
     trail: vopts.trail || null,
     onPickProject: vopts.onPickProject,   // 상단바 [프로젝트 연결] 드롭다운(#1749)
     onRename: vopts.onRename,             // 제목 = 세션 이름(#1719) — 고치면 사이드바·목록이 그 이름으로 바뀐다
