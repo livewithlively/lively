@@ -98,6 +98,9 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   // 표식 되채우기 — 세션 호스트 스냅샷(#3892 후속). 목록 소유가 세션 호스트로 넘어간 테넌트에선 게이트웨이 `collectSessions`
   //  의 되채우기가 안 불린다. 호스트엔 DB 가 없어 표식(@box_owner)이 빈 판은 주인에게도 안 보이고 «중단됨» 으로 선다
   //  (실측 2026-09-11 box-sangmin-yoon-d78e541c). ⚠ 반드시 테넌트 스코프 — 스냅샷도 DB 행도 그 테넌트로 좁혀야 한다.
+  //  ⓘ 셀프호스트·registry 하우스키핑(`startBackgroundSweeps` 의 perTenant)에는 **일부러 안 싣는다** — 세션 호스트 선언은
+  //   매니지드 브로커의 프로비저닝(`session-host-provision`)만 만든다. 그러니 셀프호스트에선 목록이 늘 게이트웨이
+  //   `collectSessions` 이고 그쪽 되채우기가 이미 돈다(요청별 테넌시 = 매니지드일 때만 이 표가 돈다).
   { key: "session-meta-heal", intervalMs: META_HEAL_SWEEP_MS,
     run: () => import("./session-meta-heal-sweep.js").then((m) => m.sweepSessionMetaHeal()) },
   // 위탁 배차(#869 P2) — **전역**이다. 실측(2026-08-31): `org_task` 3건이 queued·attempt=0·node_id 없이

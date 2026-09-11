@@ -149,9 +149,18 @@ export function nodeOnline(id: string): boolean { return conns.has(keyOf(id)); }
  *  이 목록에 **안 들어간다** = 그 노드로는 소유를 놓지 않는다(fail-closed).
  */
 export function sessionHostsInScope(now: number = Date.now()): Array<{ declared: boolean; online: boolean; stateAgeMs: number | null }> {
-  const out: Array<{ declared: boolean; online: boolean; stateAgeMs: number | null }> = [];
+  return scopeNodeFacts(now).map(({ declared, online, stateAgeMs }) => ({ declared, online, stateAgeMs }));
+}
+
+/**
+ * 이 스코프 노드들의 판정 재료 한 벌 — 선언·온라인·스냅샷 나이·세션 (#3892 리뷰).
+ *  `sessionHostsInScope`·`nodeSessionsInScope`·`sessionHostSnapshotSessions` 가 같은 루프를 각자 들고 있었다 — 재료에 칸이
+ *  늘면(`nodeSnapshotVerdict` 가 볼 값) 사본 중 하나만 고쳐지는 모양이 된다(#789 가 알림 스윕 사본 하나만 고쳐 겪은 그것). 여기 한 곳만 고친다.
+ */
+function scopeNodeFacts(now: number): Array<{ declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly SessionInfo[] }> {
+  const out: Array<{ declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly SessionInfo[] }> = [];
   for (const [id, st] of inScope(states)) {
-    out.push({ declared: declaredSessionHost({ session_host: st.sessionHost }), online: conns.has(keyOf(id)), stateAgeMs: now - st.ts });
+    out.push({ declared: declaredSessionHost({ session_host: st.sessionHost }), online: conns.has(keyOf(id)), stateAgeMs: now - st.ts, sessions: st.sessions });
   }
   return out;
 }
@@ -237,10 +246,7 @@ export function gatewayDefersHere(now: number = Date.now()): boolean {
  *  쓰지 마라. 그쪽은 `nodeSessionsFor(viewer)` 가 가시성을 판정한다.
  */
 export function nodeSessionsInScope(now: number = Date.now()): SessionInfo[] {
-  const nodes: Array<{ declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly SessionInfo[] }> = [];
-  for (const [id, st] of inScope(states)) {
-    nodes.push({ declared: declaredSessionHost({ session_host: st.sessionHost }), online: conns.has(keyOf(id)), stateAgeMs: now - st.ts, sessions: st.sessions });
-  }
+  const nodes = scopeNodeFacts(now);
   //  ★ 사유별 **세션 수**를 센다(아래 머리말) — 비치명이라 실패해도 목록은 그대로 나간다.
   try { recordSnapshotCensus(nodes, STATE_STALE_MS); } catch { /* 계수 때문에 목록이 흔들리면 안 된다 */ }
   return nodeSnapshotSessions(nodes, STATE_STALE_MS);
@@ -256,10 +262,7 @@ export function nodeSessionsInScope(now: number = Date.now()): SessionInfo[] {
  *  ⚠ `nodeSessionsInScope` 를 거치지 않는다 — 그 안의 사유별 계수는 알림 스윕의 계기라 여기서 세면 숫자가 오염된다.
  */
 export function sessionHostSnapshotSessions(now: number = Date.now()): SessionInfo[] {
-  const nodes: Array<{ declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly SessionInfo[] }> = [];
-  for (const [id, st] of inScope(states)) {
-    nodes.push({ declared: declaredSessionHost({ session_host: st.sessionHost }), online: conns.has(keyOf(id)), stateAgeMs: now - st.ts, sessions: st.sessions });
-  }
+  const nodes = scopeNodeFacts(now);
   return nodeSnapshotSessions(nodes, STATE_STALE_MS, true);
 }
 

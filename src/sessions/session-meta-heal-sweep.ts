@@ -15,6 +15,13 @@
 //  요청에 얹은 테넌트 정비(outbox-request-sweep `SWEEP_JOBS`)로 돈다. 선언된 세션 호스트의 신선한 스냅샷에서 소유자 칸이
 //   빈 행만 골라(대부분의 판에선 0건이라 DB 를 묻지도 않는다) DB 행을 한 번에 읽고, `needsSnapshotMetaHeal` 이 참인 판에
 //   게이트웨이 목록과 **같은 창구**(`healSessionMeta` — 같은 쿨다운·같은 명령)로 보낸다.
+//
+// ── 생성 중인 판과 겹쳐도 되나 (격리 리뷰가 추적한 경주) ────────────────────────────
+//  createSession 은 DB 행을 **먼저** 쓰고 판·표식을 뒤따라 보낸다. 그래서 멀쩡히 생성 중인 판이 표식 묶음 직전 스냅샷에
+//   소유자 빈 값으로 잡혀 여기서 되채울 수 있다. 무해하다: ① 되채우는 값은 그 DB 행 = createSession 이 곧 박을 같은 값이고
+//   (set-option 이라 멱등) ② 누가 한 번 @box_owner 를 박으면 이 판정은 영구히 거짓이 되며 ③ 소유자 빈 판은 아무에게도 안 보여
+//   그 사이 이름 바꾸기·초대 같은 제3의 쓰기가 끼어들 입구가 없다. createSession 의 표식 실패 롤백(kill → 행 삭제)도
+//   여기서 먼저 박은 값과 무관하게 같은 결말이다.
 import type { SessionInfo } from "../terminal/catalog.js";
 import type { SessionState } from "./session-state.js";
 import { needsSnapshotMetaHeal } from "../terminal/session-meta-heal.js";
