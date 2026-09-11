@@ -112,7 +112,7 @@ export function takeWatchLines(acc: string): { msgs: WatchMsg[]; rest: string } 
 /** 화면이 새로 붙은 뒤 참조가 0 이 돼도 이만큼은 들고 있는다 — 새로고침마다 다시 띄우지 않으려고. */
 export const LINGER_MS = 20_000;
 /** 아직 파일이 없다(첫 대화 전)·중계가 잠깐 답을 안 한다 — 다시 걸어 보는 간격(상한까지 늘린다). */
-const RETRY_MIN_MS = 3_000;
+export const RETRY_MIN_MS = 3_000;
 const RETRY_MAX_MS = 30_000;
 /** 자란 사실을 **뭉쳐서** 보낸다 — 한 턴에 수십 줄이 붙어도 화면은 한 번 읽으면 된다. */
 export const COALESCE_MS = 200;
@@ -141,6 +141,21 @@ interface Watch {
 const watches = new Map<string, Watch>();
 /** 지금 «밀 수 있는» 세션 수 — 전이 로그에 함께 실어, 한 줄만 봐도 이 기능이 살아 있는지 알 수 있게 한다. */
 let liveCount = 0;
+
+/**
+ * 감시자가 바깥에 묻는 두 판정 — **테스트 seam** 이다(운영 경로는 이 기본값을 그대로 쓴다).
+ *
+ *  왜 두나(#3889): 재시도는 «시간이 흐르며 몇 번 되거나» 가 본질이라 소스 모양으로는 잴 수 없다. 모양 단언(E14)이
+ *   초록인 채로 프로덕션에서 3초 무한 루프가 돌았다. 실제로 돌려서 세려면 이 둘을 갈아 끼울 자리가 있어야 한다.
+ */
+const deps = { resolveTranscript, sessionGone };
+
+/** 시험 전용 — 판정을 갈아 끼우고, 되돌리는 함수를 돌려준다. */
+export function _setTranscriptWatchDepsForTest(over: Partial<typeof deps>): () => void {
+  const prev = { ...deps };
+  Object.assign(deps, over);
+  return () => { Object.assign(deps, prev); };
+}
 
 /** 이 세션의 감시가 **지금 실제로 돌고 있나**. 화면이 폴 주기를 늦춰도 되는지의 유일한 근거다. */
 export function transcriptWatchLive(sessionId: string): boolean {
@@ -193,6 +208,32 @@ function scheduleRetry(id: string, w: Watch): void {
   w.retry = setTimeout(() => { w.retry = null; inTenant(w, () => { void start(id, w); }); }, ms);
 }
 
+/**
+ * «볼 수 있다» 를 증명하기 전에 끝난 감시자 — **세션이 끝났는지부터** 묻는다 (#3889).
+ *
+ *  ── 왜 (프로덕션 실측 2026-09-11) ──────────────────────────────────────────────────
+ *  컨테이너가 이미 없는 세션의 대화창이 열려 있으면, 이 자리가 그 세션에 중계를 **3초마다 무한히** 되띄웠다
+ *   (세션 하나에 35분 658회 · 매번 허브 왕복 + 노드 브로커 404). 복원은 늘 **새 id** 로 앉히므로
+ *   (`routes.ts` restore) 옛 id 의 컨테이너는 다시 서지 않는다 — 되거는 것은 전부 헛일이다.
+ *  ⇒ 노드 세션(`node`)·못 읽는 하네스(`unreadable`)와 같은 결로 **접는다.**
+ *
+ *  ── 판정은 «확답 only» 다 ──────────────────────────────────────────────────────────
+ *  `sessionGone` 은 «모른다» 를 `false` 로 접는다. 그래서 중계가 잠깐 불통이라 죽은 감시자는 여기서 멈추지 않고
+ *   사다리대로 되건다. 멈추는 것은 **끝났다는 확답**을 받았을 때뿐이다.
+ *  ⚠ 영구 정지는 아니다 — 새 구독이 오면(`acquireTranscriptWatch`) 한 번 다시 시도한다. 판정은 틀릴 수 있다(#2108).
+ */
+async function settleUnproven(id: string, w: Watch): Promise<void> {
+  const gone = await deps.sessionGone(id).catch(() => false);
+  //  묻는 사이에 접혔거나(stopped) 누가 먼저 다시 띄웠으면(새 구독) 손대지 않는다.
+  if (w.stopped || w.child || w.local || w.retry) return;
+  if (gone) {
+    //  live 는 이미 거짓이라 setLive 는 아무 말도 안 한다 — 이 결말은 따로 남긴다(안 보이면 멈췄는지 못 잰다, E21 과 같은 이유).
+    logger.info({ sessionId: id, liveCount }, "대화 파일 감시 — 세션이 끝나 되걸지 않는다(새 구독이 오면 다시 본다)");
+    return;
+  }
+  scheduleRetry(id, w);
+}
+
 /** 감시자를 띄운다(또는 다시 띄운다). 실패는 던지지 않는다 — 폴링이 안전망이므로 조용히 다시 건다. */
 async function start(id: string, w: Watch): Promise<void> {
   if (w.stopped || w.child || w.local) return;
@@ -203,12 +244,12 @@ async function start(id: string, w: Watch): Promise<void> {
   //   로컬 세션까지 노드로 잡힌다(#2055 실측 함정). 배달과 같은 기준을 쓴다 — «이 박스의 tmux 에 있나».
   if (w.onNode === null) {
     const nid = nodeOfSession(id);
-    w.onNode = nid ? await sessionGone(id).catch(() => false) : false;
+    w.onNode = nid ? await deps.sessionGone(id).catch(() => false) : false;
   }
   if (w.onNode) { setLive(id, w, false, "node"); return; }
   let target;
   try {
-    target = await resolveTranscript(id);
+    target = await deps.resolveTranscript(id);
   } catch (err) {
     logger.debug({ sessionId: id, err: (err as Error)?.message }, "대화 파일 감시 — 위치를 못 정했다(다시 시도)");
     setLive(id, w, false, "locate-failed");
@@ -225,7 +266,9 @@ async function start(id: string, w: Watch): Promise<void> {
   }
   w.file = target.found.file;
   w.uuid = target.uuid;
-  w.retryMs = RETRY_MIN_MS;   // 자리를 찾았다 — 다음에 죽어도 30초부터 다시 세지 않는다
+  //  ⚠ 여기서 재시도 간격을 되돌리지 않는다(#3889). «자리를 찾았다» 는 컨테이너 없이도 성립한다 — 위치 찾기는
+  //   DB·멤버 홈만 본다. 그걸 증명으로 치면 없는 세션에서 사다리가 매번 3초로 돌아가 무한히 되띄운다(실측 35분 658회).
+  //   간격은 감시자가 `ready` 로 «볼 수 있다» 를 증명했을 때만 되돌린다(아래 stdout 처리).
   //  첫 관측치는 «자랐다» 가 아니라 **기준선**이다 — 화면은 이미 그만큼 읽고 있다(붙자마자 전체를 되읽게 하지 않는다).
   if (w.sent < target.found.size) w.sent = target.found.size;
 
@@ -243,12 +286,19 @@ async function start(id: string, w: Watch): Promise<void> {
     const child = spawn(argv[0], argv.slice(1), { stdio: ["ignore", "pipe", "pipe"] });
     w.child = child;
     let acc = "";
+    //  이 감시자가 «볼 수 있다» 를 증명했나(#3889) — 죽은 뒤 어떻게 되걸지가 이 한 비트로 갈린다.
+    let proved = false;
     child.stdout?.on("data", (chunk: Buffer) => {
       //  자르기 계약은 순수 함수가 쥔다(takeWatchLines) — 조용히 틀리는 종류라 시험 가능한 자리에 둔다.
       const cut = takeWatchLines(acc + chunk.toString("utf8"));
       acc = cut.rest;
       for (const msg of cut.msgs) {
-        if (msg.ready) { setLive(id, w, true); continue; }
+        if (msg.ready) {
+          proved = true;
+          w.retryMs = RETRY_MIN_MS;   // 증명했다 — 다음에 죽어도 30초부터 다시 세지 않는다
+          setLive(id, w, true);
+          continue;
+        }
         //  ★ 감시자가 «그 자리에 파일이 안 보인다» 고 말했다 — 프로세스는 살아 있으니 되띄우지 않고,
         //   **밀 수 없다는 사실만** 내린다. 화면은 그 즉시 종전 주기로 돌아간다(늦춘 채 안 남는다).
         //   파일이 나타나면 감시자가 스스로 `ready` 를 다시 올린다(주기 관측이 계속 돈다).
@@ -268,7 +318,8 @@ async function start(id: string, w: Watch): Promise<void> {
       if (w.child !== child) return;                  // 이미 갈아탔다
       w.child = null;
       setLive(id, w, false, "exited");
-      scheduleRetry(id, w);                           // 살아 있는 화면이 있으면 다시 띄운다
+      if (proved) { scheduleRetry(id, w); return; }   // 돌다가 죽었다 — 살아 있는 화면이 있으면 곧바로 다시 띄운다
+      void settleUnproven(id, w);                     // 한 번도 못 봤다 — 세션이 끝났는지부터 묻는다
     });
     return;
   }
