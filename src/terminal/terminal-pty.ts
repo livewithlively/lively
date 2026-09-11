@@ -9,7 +9,7 @@
 // TERMINAL_LEGACY_ATTACH=1 이면 옛 방식(plain `tmux attach`, tmux 가 화면 painting + copy-mode 스크롤)으로 폴백.
 // ws 종료 = attach 클라만 종료(tmux 세션은 영속). 셸 미경유(argv).
 import { spawn as ptySpawn } from "node-pty";
-import { spawn as cpSpawn, execFile as cpExecFile } from "node:child_process";   // psmux 파이프 attach 백엔드 + CLI 입력(#1541)
+import { spawn as cpSpawn, execFile as cpExecFile } from "node:child_process";   // psmux 파이프 attach 백엔드(#1541) + 유령 attach detach-client
 import { promisify } from "node:util";
 import { logger } from "../log.js";
 import os from "node:os";
@@ -281,20 +281,13 @@ export function inputToSendKeys(d: string): string[] {
   }
   return cmds;
 }
-// ── psmux 입력 경로 (#1541) — 같은 의도를 **다른 표면**으로 보낸다 ─────────────────
-// psmux 는 `send-keys -H`(hex)를 **받지 않는다**. 공식 `docs/tmux_args_reference.md` 가 send-keys 에 대해
-//  "Not accepted: `-c`, `-F`, `-H`, `-K`, `-M`" 로 `-H` 를 명시 배제하고, 실측도 일치한다
-//  (`-H 41 42 43` → 화면에 `41 42 43` 리터럴. CLI·control 양쪽).
-// 대안은 tmux 표준 키 표기 `0xNN` 인데 **인코딩 단위가 바이트가 아니라 코드포인트**여야 한다:
+// ── psmux 입력 경로 (#1541 · #3904) — 같은 의도를 **다른 표면**으로 보낸다 ─────────────────
+// psmux 3.3.7 은 `send-keys -H`(hex 바이트)를 **받지 않는다**(`-H 41 42 43` → 화면에 `41 42 43` 리터럴 — 3.3.8 에서
+//  구현됐다, 업스트림 688db46). 그래서 tmux 표준 키 표기 `0xNN` 을 쓰는데 **인코딩 단위가 바이트가 아니라 코드포인트**여야 한다:
 //   UTF-8 바이트(`한`=ed 95 9c) → `íU\` 로 깨짐 ❌ / 코드포인트(`한`=0xd55c) → `한` ✅ (BMP 밖 이모지도 정상)
-// ⚠ 그리고 psmux 는 **CLI 파서와 control 파서가 갈려 있다** — 같은 `0xNN` 이 CLI 로는 한글·이모지까지 되는데
-//  control mode stdin 으로는 ASCII(2자리)만 된다(4자리 hex 를 못 받는다). 10-1 의 "PTY 에서 -CC 만 침묵"과
-//  같은 계열이다. → **출력은 control mode(파이프) 유지, 입력만 CLI 호출**로 갈라 보낸다.
-// 인젝션 안전성은 그대로 승계된다 — 값이 전부 `0x…` 토큰이고 execFile argv(셸 미경유)라
-//  `;kill-server;` 를 쳐도 서버가 살고 화면엔 리터럴로만 도달한다(실측). `-l`(리터럴)로 바꿔 보안 경계를
-//  새로 그릴 필요 **없다**.
-const SENDKEYS_CHUNK = 512;    // 한 호출에 싣는 키 토큰 수 — 토큰 최대 8자라 ~4.6KB(Windows 명령줄 한도 32767자 대비 여유)
-const INPUT_DEBOUNCE_MS = 16;  // 키 배치 창(≈1프레임) — 매 키마다 프로세스를 띄우지 않게 묶는다
+// 인젝션 안전성 — 값이 전부 `0x…` 토큰이라 `;kill-server;` 를 쳐도 서버가 살고 화면엔 리터럴로만 도달한다(실측).
+//  `-l`(리터럴)로 바꿔 보안 경계를 새로 그릴 필요 **없다**.
+const SENDKEYS_CHUNK = 512;    // 한 명령에 싣는 키 토큰 수 — 토큰 최대 8자라 ~4.6KB(Windows 명령줄 한도 32767자 대비 여유)
 /**
  * 입력 d → `psmux send-keys` **argv 배열들**(순수 함수). 셸을 안 거치므로 argv 요소는 인용 불요.
  *
@@ -310,67 +303,30 @@ export function inputToSendKeysArgv(id: string, d: string): string[][] {
   return out;
 }
 /**
- * psmux 입력 펌프 — 배치(디바운스) + **순차 실행**(순서 보장).
+ * 입력 d → psmux **제어 스트림에 쓸 줄들**(순수 함수). 프로세스를 띄우지 않는다(#3904).
  *
- * 입력을 CLI 로 가르면 축이 둘로 갈린다: **입력은 비동기(프로세스 spawn)** · **명령은 동기(stdin write)**.
- * 그대로 두면 순서가 뒤집힌다 — 방금 친 글자가 pane 에 닿기 전에 `capture-pane` 이 나가 **그 글자가 빠진
- * 화면**을 백필하는 식(재접속마다 마지막 입력이 사라져 보인다). 그래서 **입력과 명령을 하나의 직렬 체인**에
- * 태운다. 체인이 곧 순서다.
- *
- * 배치가 필요한 이유는 비용이다 — 키 하나에 프로세스 하나면 타이핑이 그대로 프로세스 폭풍이 된다.
- * 16ms(≈1프레임) 창으로 묶고, 붙여넣기처럼 큰 입력은 청크로 갈라지되 같은 체인이라 글자가 섞이지 않는다.
+ * 종전(#1541)엔 0xff 를 넘는 토큰(한글·이모지)이 섞인 입력만 `psmux send-keys` **CLI 프로세스**로 보냈다.
+ *  «제어 스트림은 4자리 hex 를 못 받는다»는 실측 때문이었는데, 원인은 파서가 아니라 제어 모드의 **send 합치기**
+ *  (`coalesce_send_commands`)였다. 3.3.7 은 합친 바이트를 글자 하나씩 latin-1 로 옮겨 `send -lt '<…>'` 로 다시
+ *  파싱하므로 UTF-8 이 한 번 더 인코딩된다(`send 0x4e2d` → `ä¸­` — 업스트림 688db46 이 3.3.8 에서 고친 결함).
+ *  0xff 이하는 latin-1 과 같아서 멀쩡했고, 그래서 **영문은 빠른데 한글만 느린** 입력이 됐다(Windows 프로세스 기동이
+ *  글자마다 끼었다).
+ * 합치기는 `-N`·`-R`·`-X`·`-p` 가 붙은 send 를 **건너뛴다**(3.3.7·3.3.8 `decode_send_command` 동일). 건너뛴 명령은
+ *  일반 send-keys 처리기로 가는데, 거기는 `0xNNNN` 을 곧장 글자로 바꿔 한 번에 쓴다. 그래서 0xff 를 넘는 토큰이 실린
+ *  줄에만 `-N 1`(반복 1회 = 뜻이 안 바뀐다)을 붙인다. 0xff 이하만 실린 줄은 종전 형식 그대로다(#1541 이후 실사용 경로).
+ * ⚠ 형식을 바꾸면 실기기(psmux)에서 다시 재야 한다 — `scripts/psmux-input-probe.mjs` 가 이 함수와 같은 줄을 보낸다.
  */
-export interface InputPump {
-  /** 클라 입력 — 디바운스 창으로 묶어 순차 전송. */
-  sendInput(d: string): void;
-  /** control 명령 — 대기 입력을 **먼저** 내보낸 뒤 같은 체인에 태운다(입력↔명령 순서 보존). */
-  sendCmd(line: string): void;
-  /** 연결 종료 — 대기 입력 폐기 + 타이머 해제. 이후 아무것도 보내지 않는다. */
-  close(): void;
-  /** 체인이 빌 때까지. 순서·순차 계약을 실제로 재는 관측점(테스트·종료 대기). */
-  idle(): Promise<void>;
+export function psmuxInputLines(id: string, d: string): string[] {
+  return inputToSendKeysArgv(id, d).map(([cmd, flag, target, ...toks]) =>
+    (toks.some((tk) => tk.length > 4) ? [cmd, "-N", "1", flag, target, ...toks] : [cmd, flag, target, ...toks]).join(" "));
 }
-export function createInputPump(
-  id: string,
-  run: (argv: string[]) => Promise<unknown>,
-  write: (line: string) => void,
-  debounceMs: number = INPUT_DEBOUNCE_MS,
-): InputPump {
-  let closed = false;
-  let chain: Promise<void> = Promise.resolve();
-  let pending = "";
-  let timer: NodeJS.Timeout | null = null;
-  const enqueue = (fn: () => Promise<unknown> | unknown): void => {
-    chain = chain.then(() => (closed ? undefined : fn())).then(() => undefined, (err) => {
-      // 전송 1건 실패가 세션을 끊지 않는다 — 다음 입력은 계속 흐른다(체인은 이어진다).
-      logger.warn({ err: (err as Error)?.message ?? String(err), id }, "psmux 입력 전송 실패(비치명)");
-    });
-  };
-  const flush = (): void => {
-    if (timer) { clearTimeout(timer); timer = null; }
-    if (!pending) return;
-    const d = pending; pending = "";
-    // ⚠ 지연의 정체(#1541 실측): psmux 입력은 배치마다 **CLI 프로세스를 새로 띄운다**. Windows 에서 프로세스
-    //  생성은 수십 ms 라, 중앙 세션(제어 스트림에 바로 쓰기)과 나란히 두면 타이핑이 눈에 띄게 늦다.
-    //  psmux 의 control-mode stdin 은 **2자리 토큰(0xNN)** 은 받아준다 → 코드포인트가 0xff 이하인 배치
-    //  (영문·숫자·기호·제어키 = 타이핑의 대부분)는 프로세스 없이 스트림으로 보낸다. 한글처럼 3자리 이상
-    //  토큰이 섞인 배치만 종전대로 CLI 로 간다(정확성 우선 — 여기서 잘못 보내면 글자가 깨진다).
-    for (const argv of inputToSendKeysArgv(id, d)) {
-      const streamable = argv.every((a) => !a.startsWith("0x") || a.length === 4);
-      if (streamable) enqueue(() => write(argv.join(" ")));
-      else enqueue(() => run(argv));
-    }
-  };
-  return {
-    sendInput(d) {
-      if (!d || closed) return;
-      pending += d;
-      if (!timer) timer = setTimeout(flush, debounceMs);
-    },
-    sendCmd(line) { flush(); enqueue(() => write(line)); },
-    close() { closed = true; if (timer) { clearTimeout(timer); timer = null; } pending = ""; },
-    idle() { return chain; },
-  };
+/**
+ * psmux 입력 싱크 — 입력을 받은 즉시 제어 스트림에 쓴다(#3904). 타이머·체인·프로세스가 없다.
+ *  tmux 경로(`send-keys -H`)와 같은 모양이라 입력과 백필·상태 명령이 **부른 순서대로** 나간다.
+ *  (종전 입력 펌프의 16ms 디바운스·직렬 체인은 비동기 CLI 호출의 순서를 지키려던 것이라 CLI 와 함께 걷었다.)
+ */
+export function psmuxInputSink(id: string, write: SendCmd): { sendInput(d: string): void } {
+  return { sendInput: (d) => { for (const line of psmuxInputLines(id, d)) write(line); } };
 }
 
 // 리사이즈: control-mode 클라 크기(= tmux 창 크기 결정). 1..2000 클램프.
@@ -426,8 +382,8 @@ export function mouseResetCmd(): string {
   return `run-shell -b 'printf "\\033[?1000l\\033[?1002l\\033[?1003l\\033[?1005l\\033[?1006l\\033[?1015l" > #{pane_tty}'`;
 }
 
-// psmux: 주면 **그 백엔드용으로** 두 군데가 갈린다(#1541) — ① 입력은 control 스트림이 아니라 그 싱크(CLI)로,
-//  ② 리사이즈 구분자는 콤마. 둘 다 psmux 라는 **하나의 사실**에서 나오므로 인자 하나로 묶는다.
+// psmux: 주면 **그 백엔드용으로** 두 군데가 갈린다(#1541) — ① 입력은 `send-keys -H` 대신 그 싱크(psmuxInputSink —
+//  코드포인트 줄)로, ② 리사이즈 구분자는 콤마. 둘 다 psmux 라는 **하나의 사실**에서 나오므로 인자 하나로 묶는다.
 //  나머지(백필·상태·복구)는 두 경우 모두 control 스트림 그대로 — 응답(%begin/%end 블록)이 그 스트림으로
 //  되돌아오므로 옮길 수 없다.
 export function handleControlMsg(send: SendCmd, msg: { t?: string; d?: unknown; c?: unknown; r?: unknown; n?: unknown; st?: unknown }, psmux?: { sendInput(d: string): void }): void {
@@ -508,11 +464,9 @@ export function attachSession(ws: AttachSocket, id: string): void {
         if (!ready) { cmdQueue.push(line); return; }
         try { term?.write(line + "\n"); } catch { /* socket closed */ }
       };
-      // 입력 경로는 멀티플렉서가 가른다(#1541) — tmux 는 control 스트림 그대로, psmux 는 CLI 펌프.
-      const pump = isPsmuxBin(TMUX_BIN)
-        ? createInputPump(id, (argv) => execFileP(TMUX_BIN, argv, { timeout: 5000, env, windowsHide: true }), writeCmd)
-        : null;
-      const sendCmd: SendCmd = pump ? (line) => pump.sendCmd(line) : writeCmd;
+      // 입력 인코딩은 멀티플렉서가 가른다(#1541) — tmux 는 `send-keys -H`, psmux 는 코드포인트 줄. 둘 다 같은 control
+      //  스트림에 곧장 쓴다(#3904 — psmux 도 입력 때문에 프로세스를 띄우지 않는다).
+      const psmuxSink = isPsmuxBin(TMUX_BIN) ? psmuxInputSink(id, writeCmd) : undefined;
       term.onData((d) => {
         if (!ready) { ready = true; for (const q of cmdQueue) { try { term?.write(q + "\n"); } catch { /* noop */ } } cmdQueue.length = 0; }
         try { ws.send(d as unknown as Buffer); } catch { /* socket closed */ }
@@ -522,7 +476,7 @@ export function attachSession(ws: AttachSocket, id: string): void {
         let msg: { t?: string; d?: unknown; c?: unknown; r?: unknown; n?: unknown };
         try { msg = JSON.parse(raw.toString()); } catch { return; }
         if (!term) return;
-        if (CONTROL_MODE) handleControlMsg(sendCmd, msg, pump ?? undefined);
+        if (CONTROL_MODE) handleControlMsg(writeCmd, msg, psmuxSink);
         else handleLegacyMsg(term, msg);
       });
       // 회수는 **SIGTERM 명시** — 기본 SIGHUP 은 tmux -CC 클라가 무시해 좀비로 남는다(위 (3)). 여기가 연결 단위
@@ -531,7 +485,6 @@ export function attachSession(ws: AttachSocket, id: string): void {
       //  아직 보고 있는 다른 탭의 클라이언트까지 끊는다. 한 번만 풀리게 잠근다.
       let released = false;
       const cleanup = () => {
-        pump?.close();                        // 대기 입력 폐기 + 타이머 해제(#1541 — 닫힌 세션에 유령 입력·타이머 잔류 금지)
         if (term) liveTerms.delete(term);
         try { term?.kill("SIGTERM"); } catch { /* already gone */ }
         if (released) return;
