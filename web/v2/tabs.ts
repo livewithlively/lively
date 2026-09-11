@@ -12,7 +12,8 @@
 //  · 같은 화면이 이미 다른 탭에 열려 있으면 새로 그리지 않고 **그 탭으로 간다**(한 세션 = 한 탭, #1598 의 셸 안 판 —
 //    같은 세션 터미널을 두 번 붙이지 않는다).
 //  · 탭 목록(라우트·제목)은 브라우저에 기억되고, 다시 열면 **게으르게**(처음 눌렀을 때) 그린다.
-//  · 마지막 탭은 닫으면 홈으로 바뀐다(빈 셸을 만들지 않는다).
+//  · 보던 탭을 닫으면 **가장 최근에 보던 탭**으로 간다(#3890 — VS Code 기본값, lib/tab-landing.ts 머리말).
+//    갈 곳이 없으면(마지막 탭) 홈으로 바뀐다(빈 셸을 만들지 않는다).
 //  · **홈은 고정 탭이 아니다**(상민님 2026-08-20). 맨 왼쪽에 못 닫는 홈을 박아 두면 늘 켜 두는 화면 하나가
 //    자리를 먹고, 그 탭만 규칙이 달라(못 닫힘·못 끌림) 줄 전체가 두 문법이 된다. 홈은 사이드바 [새 작업]이
 //    **새 탭으로** 여는 여느 화면이고, 그 탭에서 세션을 열면 그 자리가 곧 그 세션이 된다(브라우저 새 탭 문법).
@@ -20,6 +21,7 @@
 import { anchoredPopover, el, sv } from '../core.js';
 import { deviceStore } from './shell-prefs.js';   // #2460 — 열린 창은 이 기기의 사실
 import { EMBEDDED } from './embed.js';
+import { nextStamp, pickLanding, planRestore, seenValue } from '../lib/tab-landing.js';
 
 export interface ShellTab {
   id: string;
@@ -39,6 +41,9 @@ export interface ShellTab {
   //  (홈 탭은 '거쳐 가는 빈 탭'이라 그 위에 다른 화면이 덮인다 — main.ts onHash ⓪). 그래서 이 한 값만은
   //  DOM 밖에도 둔다 — 새로고침·앱 재시작도 넘어가도록 저장본(save)에 함께 실린다.
   draft?: string;
+  //  이 기기에서 이 탭으로 **마지막으로 들어온 시각**(ms, #3890) — 활성화할 때 찍는다. 0 = 본 적 없다.
+  //  닫은 뒤 갈 곳을 «가장 최근에 보던 화면» 으로 고르는 재료라 저장본에도 실린다(새로고침을 넘는다).
+  seenAt: number;
 }
 
 export interface TabsHooks {
@@ -50,6 +55,10 @@ export interface TabsHooks {
   /** 탭이 활성화됐다 — fresh 면 아직 안 그린 탭(렌더 필요). hash 반영·no-aside 토글은 호출자가 한다. */
   onActivate(tab: ShellTab, fresh: boolean): void;
   onClose(tab: ShellTab): void;
+  /** 보던 탭을 닫은 뒤 **이 탭으로 가도 되나**(#3890) — 셸이 아는 «그 대상이 아직 있나». 안 주면 전부 된다.
+   *  서버가 모르는 세션·인스턴스를 가리키는 낡은 탭은 목록에도 안 서는 **안 보이는 화면**이라, 가장 최근이어도 거기로 가면
+   *  사람 눈엔 뜬금없는 화면이 올라온다. */
+  canLand?(tab: ShellTab): boolean;
   /** 이 탭 이름을 탭에서 바로 고칠 수 있나 — 지금은 세션 탭만(두 번 누르면 편집기가 열린다). */
   canRename?(tab: ShellTab): boolean;
   /** 탭에서 고친 이름을 서버에 반영 — 실패 알림은 호출자가 낸다. */
@@ -114,6 +123,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
   const tabs: ShellTab[] = [];
   let activeTab: ShellTab | null = null;
   let seq = 0;
+  let stamp = 0;   // 마지막으로 찍은 «본 시각» — 다음 도장은 늘 이보다 크다(lib/tab-landing nextStamp)
   // 줄은 두 겹이다(원준 2026-08-20 "[모든 탭] 단추가 다른 탭을 가린다"):
   //  · strip(.v2-tabs) — 자리만 잡는 바깥 틀. 모바일 상단 바가 통째로 옮겨 가는 것도 이 요소다.
   //  · scroll(.v2-tabs-scroll) — 탭이 눕고 **여기만 굴러간다**.
@@ -129,7 +139,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
       center: el('div', { class: 'v2-tabpane', hidden: true }),
       aside: el('div', { class: 'v2-aside-pane', hidden: true }),
       rendered: false, chat: null, appInstanceId: null, appId: null, appView: null, seq: 0,
-      draft: draft || '',
+      draft: draft || '', seenAt: 0,
     };
     centerHost.append(t.center);
     asideHost.append(t.aside);
@@ -141,10 +151,12 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     if (EMBEDDED) return;
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
-        //  draft(아직 안 보낸 지시)는 있을 때만 싣는다 — 빈 문자열까지 적으면 저장본이 쓸데없이 커진다.
+        //  draft(아직 안 보낸 지시)·seen(본 시각, #3890)은 있을 때만 싣는다 — 빈 값까지 적으면 저장본이 쓸데없이 커진다.
         //  ⚠ 지나가는 화면(#/welcome)은 저장하지 않는다 — 되살아나면 서버 판정을 우회한다(routeSticky).
-        tabs: tabs.filter((t) => routeSticky(t.route))
-          .map((t) => (t.draft ? { route: t.route, title: t.title, draft: t.draft.slice(0, 8000) } : { route: t.route, title: t.title })),
+        tabs: tabs.filter((t) => routeSticky(t.route)).map((t) => {
+          const o = t.draft ? { route: t.route, title: t.title, draft: t.draft.slice(0, 8000) } : { route: t.route, title: t.title };
+          return t.seenAt > 0 ? { ...o, seen: t.seenAt } : o;
+        }),
         active: Math.max(0, tabs.filter((t) => routeSticky(t.route)).indexOf(activeTab as ShellTab)),
       }));
     } catch (_) { /* noop */ }
@@ -152,6 +164,9 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
 
   function activate(tab: ShellTab): void {
     if (activeTab === tab) return;
+    //  #3890 — 들어오는 탭에 «지금» 을 찍는다. 보는 구간은 한 번에 하나라 **들어온 순서가 곧 최근에 본 순서**다 —
+    //   보던 탭을 닫았을 때 남은 탭 중 도장이 가장 큰 것이 «바로 전에 보던 화면» 이다(close → pickLanding).
+    tab.seenAt = stamp = nextStamp(stamp, Date.now());
     for (const t of tabs) { t.center.hidden = t !== tab; t.aside.hidden = t !== tab; }
     activeTab = tab;
     const fresh = !tab.rendered;
@@ -187,7 +202,13 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     tab.center.remove(); tab.aside.remove();
     if (activeTab === tab) {
       activeTab = null;
-      const next = tabs[Math.min(i, tabs.length - 1)] || add('#/', { activate: false });
+      //  ★ #3890 — 옆 칸이 아니라 **가장 최근에 보던 탭**으로 간다(VS Code 기본값 · lib/tab-landing 머리말).
+      //   종전엔 배열에서 닫힌 자리의 옆 칸이었는데, 탭 줄을 안 그리므로(main.ts TABS_OFF) 사람은 그 순서를 볼 수
+      //   없다 — 서버도 모르는 옛 세션 탭이 옆 칸이라는 이유로 올라왔다(상민님 신고 2026-09-11).
+      //   갈 곳이 없으면 홈 — 쓰다 만 지시가 없는 빈 홈이 이미 있으면 그걸 쓴다(빈 홈을 하나 더 쌓지 않는다).
+      const next = pickLanding(tabs, (t) => !hooks.canLand || hooks.canLand(t))
+        || tabs.find((t) => routeKey(t.route) === 'home' && !(t.draft || '').trim())
+        || add('#/', { activate: false });
       activate(next);
     } else { paint(); save(); }
   }
@@ -443,25 +464,25 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     scroll.scrollLeft += e.deltaY;
   }, { passive: false });
 
-  // 저장된 탭 복원 — 라우트·제목·아직 안 보낸 지시만(화면 내용은 처음 누를 때 그린다). 못 읽으면 빈 채로 시작.
+  // 저장된 탭 복원 — 라우트·제목·아직 안 보낸 지시·본 시각만(화면 내용은 처음 누를 때 그린다). 못 읽으면 빈 채로 시작.
   let restoredActive = 0;
   try {
     const st = EMBEDDED ? null : JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
     if (st && Array.isArray(st.tabs)) {
+      const wantIdx = Math.max(0, Number(st.active) || 0);
       // ⚠ 복원에는 **중복 제거**가 필요하다 — 저장본에 같은 화면이 두 번 들어 있으면(옛 버그가 만든 잔재도) 그대로
       //  탭 두 개로 되살아나고, 그 뒤로는 find() 가 첫 번째만 잡으므로 둘째가 영영 남는다(원준 2026-08-20 신고).
-      const seen = new Set<string>();
+      //  옛 저장본에 박혀 있던 #/welcome 도 되살리지 않는다(#2171 routeSticky).
+      //  ★ 상한(12)은 **보던 것 + 최근에 본 순서**로 자른다(#3890). 종전 `slice(0, 12)` 는 앞에서 12개 = 가장 오래 연
+      //   탭을 남기고 방금 연 탭을 버렸다 — 옛 탭이 새로고침마다 살아남아 배열 앞쪽에 눌러앉은 뿌리다.
       let want = -1;
-      const wantIdx = Math.max(0, Number(st.active) || 0);
-      st.tabs.slice(0, 12).forEach((t: any, i: number) => {
-        if (!t || typeof t.route !== 'string') return;
-        if (!routeSticky(t.route)) return;   // 옛 저장본에 박혀 있던 #/welcome 을 되살리지 않는다(#2171)
-        const k = routeKey(t.route);
-        if (seen.has(k)) return;
-        seen.add(k);
-        mkTab(t.route, typeof t.title === 'string' ? t.title : undefined, typeof t.draft === 'string' ? t.draft : undefined);
+      for (const i of planRestore(st.tabs, wantIdx, 12, routeKey, routeSticky)) {
+        const t = st.tabs[i];
+        const tab = mkTab(t.route, typeof t.title === 'string' ? t.title : undefined, typeof t.draft === 'string' ? t.draft : undefined);
+        tab.seenAt = seenValue(t.seen);
+        stamp = Math.max(stamp, tab.seenAt);   // 새로 찍을 도장이 복원된 어느 값보다도 크게(시계가 뒤로 가도)
         if (i === wantIdx) want = tabs.length - 1;
-      });
+      }
       restoredActive = Math.min(Math.max(0, want >= 0 ? want : 0), Math.max(0, tabs.length - 1));
     }
   } catch (_) { /* noop */ }

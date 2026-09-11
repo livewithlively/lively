@@ -388,6 +388,9 @@ export async function bootV2(): Promise<void> {
       // 탭 닫기 = AppWindow 연결 해제. AppInstance·세션·worker 생애주기는 별도라 여기서 종료 API를 부르지 않는다.
       dropProjView(tab); shellProject.delete(tab); drawSide();
     },
+    //  #3890 — 보던 창을 닫은 뒤 갈 곳은 «가장 최근에 보던 창» 인데, 서버가 모르는 대상을 가리키는 낡은 창은 뺀다.
+    //   그런 창은 좌측 목록에도 안 선다(sideInstances ③ 의 같은 판정) — 안 보이는 화면이 닫기 뒤에 불쑥 뜨면 안 된다.
+    canLand: (tab) => tabTargetAlive(tab.route),
     // 탭 두 번 눌러 이름 바꾸기(원준 2026-08-20) — 세션 탭만. 판정은 세션 화면의 규칙과 같다:
     //  내 세션이고 살아 있고 복원 대기가 아닐 때(session-chat canRename).
     canRename: (tab) => {
@@ -1841,10 +1844,7 @@ async function closeSideRow(key: string): Promise<void> {
   //   점 없는 상태의 행이 영영 안 치워졌고, 보고 있던 '작업 완료' 행도 그랬다(활성 행은 점을 미리 끄므로 '' 로 적혔다).
   dismissed[key] = dismissBasis.get(key) || '';
   saveDismissed();
-  //  창은 **그 행의 것을 전부** 닫는다(#2026). find() 는 첫 하나만 잡는데, 같은 화면이 두 탭에 열려 있으면
-  //   (복원 잔재·옛 버그가 만든 짝 — tabs.ts 복원 dedupe 주석) 하나만 닫혀 행이 그대로 남는다 —
-  //   누른 사람 눈엔 "× 를 눌렀는데 안 없어진다"다. 판정은 행 키(sideRowKey)로 한다 — 쿼리만 다른 같은 화면도 함께 닫힌다.
-  if (tabsApi) for (const t of [...tabsApi.tabs]) if (sideRowKey(t.route) === key) tabsApi.close(t);
+  closeRowTabs(key);
   if (instanceId) {
     try { await closeAppInstance(instanceId); appInstances = appInstances.filter((x) => x.id !== instanceId); }
     catch (_) { toast('앱을 닫지 못했습니다'); }
@@ -1868,7 +1868,7 @@ async function dismissSessionRow(key: string): Promise<void> {
   const ids = [...new Set([sid, ...held.map((x) => String(x.subject_ref))])];
   for (const x of ids) dismissedSess.add(x);
   appInstances = appInstances.filter((x) => !held.includes(x));
-  if (tabsApi) for (const t of [...tabsApi.tabs]) if (sideRowKey(t.route) === key) tabsApi.close(t);
+  closeRowTabs(key);
   drawSide();
   try { await dismissSessions(ids); }
   catch (e: any) {
@@ -1878,6 +1878,21 @@ async function dismissSessionRow(key: string): Promise<void> {
     drawSide();
   }
   refreshSideNow();
+}
+
+/**
+ * 한 행의 창을 전부 닫는다 — **보고 있는 창은 맨 나중에**.
+ *  창은 **그 행의 것을 전부** 닫는다(#2026). find() 는 첫 하나만 잡는데, 같은 화면이 두 탭에 열려 있으면
+ *   (복원 잔재·옛 버그가 만든 짝 — tabs.ts 복원 dedupe 주석) 하나만 닫혀 행이 그대로 남는다 —
+ *   누른 사람 눈엔 "× 를 눌렀는데 안 없어진다"다. 판정은 행 키(sideRowKey)로 한다 — 쿼리만 다른 같은 화면도 함께 닫힌다.
+ *  #3890 — 닫은 뒤 갈 곳(tabs.ts close → lib/tab-landing)은 **보던 창이 닫히는 순간 한 번** 정해진다. 그때 같은 행의
+ *   다른 창이 남아 있으면 그게 «가장 최근에 보던 창» 으로 뽑혀 한 번 그려졌다가(대화 폴링까지 붙었다가) 곧바로 닫힌다.
+ */
+function closeRowTabs(key: string): void {
+  if (!tabsApi) return;
+  const cur = tabsApi.current();
+  const row = tabsApi.tabs.filter((t) => sideRowKey(t.route) === key);
+  for (const t of row.sort((a, b) => Number(a === cur) - Number(b === cur))) tabsApi.close(t);
 }
 
 /**
