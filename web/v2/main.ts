@@ -10,7 +10,7 @@
 import { renderOnboarding, onboardingDone, markWelcomeSeen } from './onboarding.js'; // #/welcome 처음 설정(#1813·#2171)
 import { $view, anchoredPopover, api, el, state, takeShellSwitch, toast } from '../core.js';
 import { EMBEDDED } from './embed.js';   // #1898 — 끼워 넣은 판은 셸 전환 도장을 소비하지 않는다
-import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsSync } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버
+import { deviceStore, onShellPrefsAdopted, shellPrefStore, shellPrefsPush, shellPrefsSync } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘 일감'을 자르는 자(달력 자정이 아니다)
 import { renderLiv } from '../liv.js';
@@ -459,14 +459,16 @@ export async function bootV2(): Promise<void> {
   //  ★ #2460 — 사람이 고른 것(고정·치움·묶는 축·접힘·레일 순서·최근 앱)의 정본은 서버다.
   //   캐시로 먼저 그리고(위 drawSide), 정본이 오면 그 값으로 갈아끼운다. 막지 않는다 — 서버가 느리거나
   //   실패해도 화면은 이 브라우저가 기억하던 대로 이미 서 있다(대시보드 #1129 와 같은 방식).
-  const prefsSynced = shellPrefsSync().then((changed) => {
-    if (!changed) return;
+  const reloadShellPrefs = (): void => {
     readDismissed();
     reloadSidePrefs();
     reloadRailPrefs();
     drawSide();
     tabsApi?.paint();
-  });
+  };
+  //  #3887 — 저장 응답으로 캐시가 서버 값이 됐을 때(서버가 상한·형식으로 버렸거나 다른 기기가 바꾼 저장소)도 같은 일을 한다.
+  onShellPrefsAdopted(reloadShellPrefs);
+  const prefsSynced = shellPrefsSync().then((changed) => { if (changed) reloadShellPrefs(); });
   await loadData();
   void prefsSynced.then(() => migrateSessionDismissals());   // #3857 — 옛 치움 맵(세션 행)을 서버 정본으로 한 번 옮긴다
   await repairUnknownSessNames();   // 이미 이름을 잃은 탭이 있을 때만 — 서버 기록에서 되찾아 온다(위 주석)
@@ -1842,6 +1844,9 @@ async function closeSideRow(key: string): Promise<void> {
   const instanceId = sideRowInstance.get(key);
   //  적는 값은 **판정과 같은 자**여야 한다(dismissKey 주석 · #2110). 종전엔 표시용으로 걸러진 status.key 를 적어
   //   점 없는 상태의 행이 영영 안 치워졌고, 보고 있던 '작업 완료' 행도 그랬다(활성 행은 점을 미리 끄므로 '' 로 적혔다).
+  //  #3887 — 이미 있던 키를 다시 치우면 **맨 뒤로** 옮긴다(지우고 적는다). 서버는 넘치면 앞(오래된 것)부터 버리는데,
+  //   제자리에 덮어쓰면 방금 치운 행이 옛 자리에 남아 먼저 버려진다.
+  delete dismissed[key];
   dismissed[key] = dismissBasis.get(key) || '';
   saveDismissed();
   closeRowTabs(key);
