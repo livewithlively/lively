@@ -184,6 +184,9 @@ async function post(): Promise<void> {
  */
 export function shellPrefsPush(): void {
   if (!ready) return;
+  //  새 결정은 **제 몫의 재시도**를 새로 받는다 — 예산을 페이지 수명 동안 한 번만 쓰면, 긴 장애 뒤의 결정은 자동으로는
+  //   영영 안 올라가고 새로 고치는 순간 부팅 동기가 서버의 옛 값으로 덮는다(코드 리뷰 지적).
+  retries = 0;
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => { timer = null; void post(); }, 400);
 }
