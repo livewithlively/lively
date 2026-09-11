@@ -28,6 +28,38 @@ export function isAgentOffline(harness: string, paneCmd: string): boolean {
   return !harness || harness === "shell" || SHELL_CMDS.has((paneCmd || "").trim());
 }
 
+/** 목록 한 줄의 실행 관측 네 값 — `observeAgentRun` 의 결과. */
+export interface AgentRunObservation {
+  /** AI 가 안 돈다(셸 하네스이거나 pane 포그라운드가 셸). */
+  offline: boolean;
+  /** 스피너가 돈다(AI 가 돌 때만 본다). */
+  busy: boolean;
+  /** 신선한 하네스 보고(#1221) — AI 가 돌 때만 읽는다. */
+  reportedFresh: { phase: ReportedPhase; at: number } | null;
+  /** 셸 세션에서 무언가 실행 중이다(#1059 — 회수 판정용 활동 신호, 셸 하네스 전용). */
+  shellWorking: boolean;
+}
+
+/**
+ * 실행 관측(순수) — **해소된 하네스**로 잰다 (#3892).
+ *
+ * ⚠ `harness` 에 tmux 원시 `@box_harness` 를 넘기지 마라. 그 옵션이 빈 세션(생성이 판과 표식 사이에서 끊긴 세션)은
+ *  «빈 하네스 = 셸» 로 읽혀 offline 도 참(AI 종료)이고 shellWorking 도 참(pane 에서 claude 가 돈다)이 된다.
+ *  목록은 그 행을 `agentState:"exited"` + `working:true` 로 내고, 화면(session-status.ts)은 exited 를 working 보다 먼저
+ *  «셸» 로 접어 **돌고 있는 세션이 회색 셸 점으로 서고 「지금 볼 것」 에 안 오른다**(실측 2026-09-11 매니지드 —
+ *  box-sangmin-yoon-d78e541c · box-wonjoon-jang-39d499af, 둘 다 DB 하네스는 claude).
+ *  해소된 하네스(DB desired → tmux 폴백)로 재면 «AI 가 돈다» 와 «셸 작업» 은 원리상 배타다 — 에이전트 하네스면
+ *  shellWorking 이 늘 거짓, 셸 하네스면 offline 이 늘 참.
+ */
+export function observeAgentRun(i: { harness: string; paneCmd: string; paneTitle: string; stateRaw: string; nowSec: number }): AgentRunObservation {
+  const offline = isAgentOffline(i.harness, i.paneCmd);
+  const busy = !offline && isSpinning(i.paneTitle);
+  const reported = offline ? null : parseReportedPhase(i.stateRaw);
+  const reportedFresh = isPhaseFresh(reported, i.nowSec) ? reported : null;
+  const shellWorking = !r_harnessIsAgent(i.harness) && !SHELL_CMDS.has((i.paneCmd || "").trim());
+  return { offline, busy, reportedFresh, shellWorking };
+}
+
 // pane 화면 내용으로 '사용자 선택/승인 대기'(확인 필요) 감지. 2.5초 캐시(폴링 버스트 공유 — 캐시는 tmux-exec 에 은닉).
 //
 // ⚠ 화면 전체를 grep 하면 안 된다(#853 오탐). Claude Code 는 **과거 사용자 메시지도 '❯ ' 프리픽스로**

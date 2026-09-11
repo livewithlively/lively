@@ -99,6 +99,7 @@
   "dist/terminal/session-exec.js",
   "dist/terminal/session-first-prompt.js",
   "dist/terminal/session-host.js",
+  "dist/terminal/session-meta-heal.js",
   "dist/terminal/session-name.js",
   "dist/terminal/session-ops.js",
   "dist/terminal/session-project.js",
