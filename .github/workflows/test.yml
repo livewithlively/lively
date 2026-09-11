@@ -108,6 +108,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/store/app-instance-dismiss.pg-test.mjs
+      # ④-d 새 셸 개인화 저장(#3887) — 목으로는 못 보는 것: **저장소 단위 병합이 다른 저장소를 안 지우나 · jsonb 를 지나도
+      #    치움 순서가 되살아나나**. 병합은 SQL 한 문장(`prefs - 지울 칸 || 넣을 칸`)이고, jsonb 는 객체 키를 길이순으로
+      #    다시 늘어놓는다 — 둘 다 실제 Postgres 가 돌려주는 값으로만 판정된다.
+      - name: 셸 개인화 저장(병합·순서) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/shell-pref-store.pg-test.mjs
       # ⑤ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.
