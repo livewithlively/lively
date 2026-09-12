@@ -63,6 +63,7 @@ import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable, unknownStateM
 import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js";   // #1851 — 세션 휴지통
 import { trashMapFor } from "../sessions/session-trash.js";                        // #1851 — 목록 행에 휴지통 표식
 import { sessionHandoffInput } from "./session-handoff.js";
+import { resumePlan, resumedKind, type ResumeCheck } from "./resume-plan.js";   // #3870 — 이어받기 인자 결정(순수·엣지 표 시험)
 
 import { sessionHarnessKey } from "./deliver-prompt.js";   // #1683 후속2 — 정의는 deliver-prompt.ts(#1631 이동)
 
@@ -82,6 +83,52 @@ async function transcriptResumable(id: string, st: { harness?: string | null; di
     tfs.stat,
   );
   return !!found && found.size > 0;
+}
+
+/**
+ * #3870 — 이어받을 대화가 **그 기계에 있나**, 세 값으로. `present` | `absent` | `unknown`.
+ *
+ *  왜 세 값인가: 종전엔 «있다/없다» 둘뿐이라 «못 봤다» 가 «없다» 로 접혔다. 그 접힘이 두 방향으로 사고를 낸다 —
+ *   ① 못 보는 기계(사람 PC 노드)를 «없다» 로 읽으면 멀쩡한 대화를 두고 새 대화를 연다(맥락 유실).
+ *   ② «없다» 를 확인하고도 종전처럼 인자 없는 `--resume`(피커)로 폴백하면, 그 폴더에 대화가 한 건도 없는 기계에서
+ *      **빠져나올 수 없는 빈 피커**가 뜬다(아래 머리말).
+ *
+ *  ── 빈 피커가 왜 «갇힘» 인가 (실측 2026-09-11 → 09-12, box-wonjoon-jang-940a8f0d «온보딩 과정 설계») ──
+ *  맥북에서 만든 세션이 리눅스 세션호스트로 복원되며 작업 폴더는 번역됐지만 대화 파일은 안 따라왔다. 그 자리에서
+ *  `claude --resume <uuid>` 가 돌아 **Resume session 피커**가 떴고 목록은 0건이었다. 그 화면은:
+ *   · 하네스가 살아 있어 목록엔 «확인 대기» 로 선다(phase.detectAwaiting 이 `Enter to select` 를 본다) —
+ *     사람은 «AI 가 뭘 묻는다» 로 읽는데 실제로는 **한 턴도 시작하지 못한** 세션이다.
+ *   · 사람이 치는 글자가 전부 피커의 **검색창**으로 들어간다(실측: 검색창에 «온보딩» 이 박혀 있었다).
+ *   · 대화 파일이 없으니 대화창도 404 다 — 어느 화면으로도 사실을 알 수 없다.
+ *  하루를 갇혀 있었고, 같은 모양으로 죽은 세션이 하나 더 있었다(box-wonjoon-jang-7a108f1a).
+ *
+ *  ⚠ 옛 설계는 «없는 id 로 열면 claude 가 즉시 죽고 #1516 런처가 그 에러를 화면에 남긴다» 를 안전망으로 삼았다.
+ *   그 전제가 깨졌다 — 지금 Claude Code 는 **죽지 않고 피커를 연다**. 시끄럽게 실패하던 자리가 조용한 함정이 됐다.
+ *   그래서 판정을 호출부로 올린다: **확인해서 없으면 새 대화로 연다**(피커를 열지 않는다).
+ *
+ *  ⚠ `unknown` 의 세 출처 — ① claude 가 아닌 하네스(대화 파일 규약 미실측 · 종전 주석 그대로) ② **사람 PC 노드**
+ *   ③ 중계·조회 실패. ②가 핵심이다: 그 파일은 그 PC 에 있고 우리 stat 은 이 테넌트의 실행환경(세션호스트·박스)만
+ *   본다 — 거기서 빈손인 것은 «없다» 가 아니라 «여기선 못 본다» 다. 그걸 «없다» 로 읽으면 맥북 세션을 복원할
+ *   때마다 멀쩡한 대화를 버리고 새 대화를 연다(함정보다 나쁜 실패다).
+ *
+ *  ⚠ 가르는 자는 **노드 종류(org_node.kind)** 다 — `worker`(세션호스트 등, 소유자 홈을 우리와 같이 본다)만
+ *   확답으로 친다. `member`(사람 PC)·조회 실패·미등록은 전부 «모른다». DB 행을 보는 이유는 «선언» 축
+ *   (session_host, 인메모리 hello 상태)이 재시작 직후나 미보고 노드에서 비어 있을 수 있어서다 —
+ *   그 공백이 그대로 «못 본다» 로 흐르면 안전하지만, kind 는 등록 때 박히는 값이라 흔들리지 않는다.
+ */
+async function resumeTranscriptCheck(
+  id: string,
+  st: { harness?: string | null; dir?: string | null; owner?: string | null; transcript_path?: string | null },
+  uuid: string,
+  nodeId: string | null,
+): Promise<ResumeCheck> {
+  if ((st.harness || "claude") !== "claude") return "unknown";       // 규약 미실측 — 종전대로 검사 없이 시도한다
+  if (nodeId) {
+    const kind = await getNode(nodeId).then((n) => n?.kind ?? null).catch(() => null);
+    if (kind !== "worker") return "unknown";                         // 사람 PC·모르는 노드 — 그 파일은 여기서 안 보인다
+  }
+  try { return (await transcriptResumable(id, st, uuid)) ? "present" : "absent"; }
+  catch { return "unknown"; }                                        // 중계 실패 = «못 봤다»(#2257 과 같은 규율)
 }
 
 // ── #2122 복원이 대화 매핑을 **잃지 않게** 하는 두 장치 ───────────────────────────────────────────────
@@ -1325,7 +1372,17 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       //  ① desired-state 행 ② 노드 세션 **내구 맵**(org_node_session_map — 세션 수명과 무관하게 남는 표, #1752)
       //  ③ 저장된 대화 파일 경로에서 재독(convIdFromTranscriptPath). ②③ 은 ①이 비었을 때만 본다(=null 전파 자가치유).
       const durableMap = st.claude_session_id ? null : (await nodeSessionMapFor([id]).catch(() => null))?.get(id) ?? null;
-      const resumeId = st.claude_session_id || durableMap?.conv_uuid || convIdFromTranscriptPath(st.harness, st.transcript_path);
+      const mappedNodeId = st.claude_session_id || durableMap?.conv_uuid || convIdFromTranscriptPath(st.harness, st.transcript_path);
+      // #3870 — 종전엔 여기서 **확인 없이** 그 id 로 `--resume` 을 걸었다(위 머리말의 «노드에 있어 존재 확인을 못 한다»).
+      //  세션호스트 노드는 같은 멤버 홈을 보므로 확답이 나온다 — 없으면 피커가 아니라 **새 대화**다(resumeTranscriptCheck 머리말).
+      const nodeCheck: ResumeCheck = mappedNodeId ? await resumeTranscriptCheck(id, st, mappedNodeId, nodeId) : "unknown";
+      const nodePlan = resumePlan({ mappedId: mappedNodeId, harness: st.harness || "claude", check: nodeCheck, branch: "node" });
+      //  ⚠ 아래 승계(carryConvMapping·내구 맵)도 이 값을 쓴다 — 그게 맞다. «새 대화» 로 열었으면 그 세션은
+      //   옛 대화를 **안 돌고 있으므로**, 새 세션 id → 옛 대화 uuid 를 적으면 거짓 매핑이다(#3891 의 adopt 판정이
+      //   그걸 보고 «이 대화를 도는 세션» 이라고 답하게 된다). 옛 매핑 자체는 잃지 않는다 —
+      //   옛 desired-state 행은 지우지 않고 이정표만 적으므로(#2231 markSessionSuperseded) 거기 그대로 남는다.
+      const resumeId = nodePlan.resume ?? null;
+      if (nodeCheck === "absent") logger.warn({ id, node: nodeId, convId: mappedNodeId }, "restore(node): 이어받을 대화가 그 노드에 없다 — 빈 피커 대신 새 대화로 연다(#3870)");
       const input: CreateInput = {
         // #2162 — 복원은 **원래 종류를 되살린다**. human 으로 굳히면 앱 세션이 복원될 때 종류를 잃는다.
         kind: normalizeSessionKind(st.kind),
@@ -1335,7 +1392,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
         readOnly: st.read_only, incognito: st.incognito,
         writeVis: st.write_vis ?? undefined, restrictRead: !!st.restrict_read,
         appId: st.app_id || undefined,
-        ...(resumeId ? { resume: resumeId } : { resumePick: true }),
+        ...nodePlan,   // #3870 — resume | resumePick | 새 대화(빈 객체). 판정은 resume-plan.ts(엣지 표 시험).
       };
       const owner = st.owner;
       // #1541 hostProfile — 원 소유자 기준(생성 때와 같은 판정). 조회 실패 = false(주입 유지).
@@ -1362,7 +1419,9 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       //  #2231 — 지우지 않고 **이어진 곳을 적는다**(옛 id 를 든 화면·링크가 새 세션으로 이어지도록). 목록에서 빠지는 건 같다.
       if (carried) await markSessionSuperseded(id, session.id).catch((e) => logger.warn({ err: e, id }, "restore(node): 옛 desired-state 이정표 기록 실패(비치명)"));
       const ln = liveNodes().find((n) => n.id === nodeId);
-      res.json({ ok: true, session: { ...session, node: { id: nodeId, name: ln?.name || nodeId, online: true } } });
+      //  #3870 — «이어받았나» 를 사실대로 싣는다. 새 대화로 열었으면 화면이 «이어받았어요» 라고 말하면 안 된다.
+      res.json({ ok: true, resumed: resumedKind(nodePlan),
+        session: { ...session, node: { id: nodeId, name: ln?.name || nodeId, online: true } } });
       return;
     }
     // 라이브 경합 방어 — 그새 다시 떠 있으면 복원 대신 그대로 안내(라이브가 SoT).
@@ -1435,10 +1494,12 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
         return;
       }
     }
-    const resumeUuid = mappedId
-      && (st.harness !== "claude" || await transcriptResumable(id, st, mappedId).catch(() => false))
-      ? mappedId : null;
-    const precise = !!resumeUuid;
+    //  #3870 — 판정을 두 값에서 **세 값**으로(resumeTranscriptCheck 머리말). 종전의 «있다» 는 그대로 정밀 복원이고,
+    //   «없다» 는 이제 피커가 아니라 새 대화다 — 그 폴더의 대화가 이 기계에 한 건도 없으면 피커는 빈 화면이라
+    //   사람이 거기서 빠져나올 수 없다. «모른다» 만 종전대로 피커로 간다(사람이 눈으로 고를 기회를 뺏지 않는다).
+    const boxCheck: ResumeCheck = mappedId ? await resumeTranscriptCheck(id, st, mappedId, null) : "unknown";
+    const boxPlan = resumePlan({ mappedId, harness: st.harness || "claude", check: boxCheck, branch: "box" });
+    if (boxCheck === "absent") logger.warn({ id, convId: mappedId }, "restore: 이어받을 대화가 이 기계에 없다 — 빈 피커 대신 새 대화로 연다(#3870)");
     const session = await createSession(owner, {
       kind: normalizeSessionKind(st.kind),   // #2162 — 복원은 원래 종류를 되살린다
       label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",
@@ -1456,7 +1517,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       //   사라져 웹터미널이 4410 → 자동 복원 → 또 즉사 로 **복원 루프**를 돈다(실측 신고). 매핑이 있어도 대화가
       //   없을 수 있다 — SessionStart 훅은 한 줄도 쌓이기 전에 UUID 를 보고한다.
       //  createSession 이 claude 하네스에서만 적용(resume 우선 · 없으면 resumePick).
-      ...(precise ? { resume: resumeUuid as string } : { resumePick: true }),
+      ...boxPlan,   // #3870 — resume | resumePick | 새 대화(빈 객체). 판정은 resume-plan.ts(엣지 표 시험).
       //  #3891 — 이 세션이 태어나는 순간(desired 행)부터 이 대화를 도는 세션으로 찾아지게 한다. 이 요청이 뒷정리 전에
       //   끊겨도 다시 부른 복원이 위 판정으로 이리로 잇는다. 값은 아래 carryConvMapping 과 같다(picker 복원도 승계한다).
       ...(mappedId ? { carryConv: { convId: mappedId, transcriptPath: st.transcript_path ?? null } } : {}),
@@ -1500,7 +1561,8 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     //   보이고 사용자가 지울 수 있다) 대화를 잃지는 않는다 — 다음 복원이 그 행에서 매핑을 다시 이관한다(자가치유).
     //  #2231 — 지우지 않고 **이어진 곳을 적는다**(옛 id 를 든 화면·링크가 새 세션으로 이어지도록). 목록에서 빠지는 건 같다.
     if (carried) await markSessionSuperseded(id, session.id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 desired-state 이정표 기록 실패(비치명)"));
-    res.json({ ok: true, session });
+    //  #3870 — 위 노드 갈래와 같은 축(그 머리말).
+    res.json({ ok: true, resumed: resumedKind(boxPlan), session });
   })));
 
   // #1059 — 하네스 훅(work-flag)이 **"이 세션 지금 활동했다"**를 보고한다. 회수(F)가 이 시각을 본다.
