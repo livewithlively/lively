@@ -86,6 +86,23 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
     //  일하는 형태·직무(#1631) — 2턴이 카테고리를 만들 재료다(자료가 0건이면 이것뿐이다). 후보 행에는 welcome 만 있어 따로 읽는다.
     //   못 읽어도 2턴은 쏜다 — 지시문에 «없음» 으로 실린다.
     const work = await withTenant(tenant, () => getLivProfile(c.id)).then((p) => p?.work?.asis ?? null).catch(() => null);
+    //  묶음(#1631) — 카테고리 위의 **화면 층**. 처음 설정이 직업·직무로 심지만 그때 실패했을 수 있으니 여기서 한 번 더 받친다(멱등).
+    //   ⚠ 스윕엔 원래 답(무대·직무)이 따로 없다 — `work.asis` 가 «무대 · 직무» 로 합쳐진 한 줄이라 뒤 토막을 직무로 본다.
+    //    모르는 값이면 groupSetFor 가 default 집합으로 떨어지므로 **빈손이 되지 않는다**(그게 이 폴백의 목적이다).
+    const groups = await withTenant(tenant, async () => {
+      const { listCategoryGroups, seedCategoryGroups } = await import("../../v6/category-group-store.js");
+      let rows = await listCategoryGroups();
+      if (!rows.length) {
+        const { WORK_ASIS_SEP } = await import("../store/members.js");
+        const job = String(work ?? "").split(WORK_ASIS_SEP).slice(-1)[0]?.trim() || null;
+        await seedCategoryGroups({ stage: null, job, actor: c.id }).catch((err) => {
+          logger.warn({ err, member: c.id, ws: tenant.slug }, "리브 2턴 — 묶음 시드 실패(묶음 없이 간다)");
+          return null;
+        });
+        rows = await listCategoryGroups();
+      }
+      return rows.map((g) => ({ key: String(g.key), name: String(g.name), hint: (g as { hint?: string | null }).hint ?? null }));
+    }).catch(() => [] as Array<{ key: string; name: string; hint: string | null }>);
     //  ★ reopen(#1631) — 세션이 사라졌지만 **일은 남아 있다.** 새 창구를 열고 2턴 지시를 그 첫 지시로 넣는다.
     //   실측 2026-08-31(dev): 1턴을 성공으로 끝낸 리브 세션이 수집 대기 20분 사이에 사라졌고, 종전 코드는 그 자리에서
     //   영구 포기해 그 사람의 증류기 15개가 영원히 꺼진 채 남았다(온보딩 완주 → 지식 0건).
@@ -95,7 +112,7 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
       const done0 = Date.parse(String(c.welcome.done_at));
       const prompt0 = buildSecondTurnPrompt({
         displayName: c.display_name,
-        work,
+        work, groups,
         drawers: c.welcome.drawers ?? [],
         firstOrder: c.welcome.first_order ?? null,
         collectors: collectors.map((x) => ({ label: x.label, preset_key: x.preset_key, enabled: x.enabled, ran: !!x.lastRunAt && Date.parse(x.lastRunAt) > done0 })),
@@ -131,7 +148,7 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
     const done = Date.parse(String(c.welcome.done_at));
     const prompt = buildSecondTurnPrompt({
       displayName: c.display_name,
-      work,
+      work, groups,
       drawers: c.welcome.drawers ?? [],
       firstOrder: c.welcome.first_order ?? null,
       collectors: collectors.map((x) => ({ label: x.label, preset_key: x.preset_key, enabled: x.enabled, ran: !!x.lastRunAt && Date.parse(x.lastRunAt) >= done })),

@@ -500,13 +500,23 @@ export const welcomeCapabilities: Capability[] = [
           await applyLaneSkeleton({ drawers: skeletonDrawers, cadence: s(input.cadence, 20), actor: userId });
         } catch (e) { console.warn(`[welcome] 레인 뼈대를 만들지 못했습니다: ${(e as Error)?.message ?? e}`); }
       }
+      // ── 묶음 시드(#1631) ── 갈래(카테고리)는 금세 열 개를 넘는다. 그때 화면이 한 줄로 늘어서면 «내 일» 이 안 보인다.
+      //  그래서 그 사람의 무대·직무에서 나온 3~5개 묶음을 미리 넣어 둔다(v6/category-groups.ts — 다섯 원칙의 분할이라
+      //  「기타」가 없다). 묶음은 **화면에서만 보이는 층**이라 분류·증류·소환은 한 칸도 안 바뀐다.
+      //  ⚠ 멱등: 이미 묶음이 있으면 아무것도 안 한다(사람이 고친 이름·순서를 덮지 않는다).
+      //  ⚠ 비치명: 못 만들어도 처음 설정은 끝난 것이다 — 묶음은 나중에 화면·리브가 언제든 만들 수 있다.
+      try {
+        const { seedCategoryGroups } = await import("../../v6/category-group-store.js");
+        await seedCategoryGroups({ stage: s(input.stage, 40), job: s(input.job, 200), actor: userId });
+      } catch (e) { console.warn(`[welcome] 카테고리 묶음을 시드하지 못했습니다: ${(e as Error)?.message ?? e}`); }
 
       // ── 업무 방식과 결정 ── 리브의 기억이 사는 자리에 남긴다(다음 세션의 리브가 이걸 읽는다).
       const job = s(input.job, 200);
       const stage = s(input.stage, 40);
       const nowline = s(input.nowline, 300);
       const firstOrder = s(input.first_order, 400);
-      const asis = [stage ? STAGE_LABEL[stage] ?? stage : null, job].filter(Boolean).join(" · ") || null;
+      const { WORK_ASIS_SEP } = await import("../../org/store/members.js");
+      const asis = [stage ? STAGE_LABEL[stage] ?? stage : null, job].filter(Boolean).join(WORK_ASIS_SEP) || null;
       if (asis || nowline) {
         await appendLivProfile(userId, {
           work: { asis: asis ?? undefined, tobe: nowline ? `시간을 가장 많이 쓰는 일: ${nowline}` : undefined, by: "self" },

@@ -75,8 +75,12 @@ test("⑭ 꺼진 수집기는 판정에서 뺀다", () => {
   assert.deepEqual(decideSecondTurn(st({ collectors: [{ enabled: false, lastRunAt: null }] })), { action: "fire", partial: false, waitedMin: 1 });
 });
 
+const GROUPS = [
+  { key: "plan", name: "정하는 일", hint: "무엇을 왜 만들기로 했는지" },
+  { key: "align", name: "팀과 맞춘 것", hint: "사람과 오간 기록" },
+];
 const pin = (over: Partial<SecondTurnInput> = {}): SecondTurnInput => ({
-  displayName: "수아", work: "회사·조직에서 팀과 함께 일한다 · 디자인", drawers: ["산출물", "기록"], firstOrder: "지난 시안 리뷰 피드백만 모아 줘",
+  displayName: "수아", work: "회사·조직에서 팀과 함께 일한다 · 디자인", groups: GROUPS, drawers: ["산출물", "기록"], firstOrder: "지난 시안 리뷰 피드백만 모아 줘",
   collectors: [{ label: "슬랙 #design", preset_key: "slack", enabled: true, ran: true }, { label: "노션", preset_key: "notion", enabled: true, ran: false }],
   partial: true, waitedMin: 20, ...over,
 });
@@ -241,4 +245,33 @@ test("㉘ 시드 liv-distill 도 같은 단계를 갖는다 — 지시문과 스
   assert.ok(step < b.indexOf("### 3. 판정 단위로 가른다"), "카테고리 단계가 레인 단계보다 뒤에 있다");
   assert.match(b, /0개로 끝내지 않는다/);
   assert.doesNotMatch(b, /자료 0건이면 여기서 멈춘다/);   // 자료 0건이어도 카테고리는 만든다 — 옛 문장이 되살아나면 안 된다
+  //  묶음(#1631, 2026-09-12) — 스킬도 «지시문이 준 목록에서 고르기만 한다» 를 말해야 지시문과 어긋나지 않는다.
+  assert.match(b, /`group`/);
+  assert.match(b, /새 묶음을 만들지 않는다/);
+  assert.match(b, /화면에서만/);                        // 묶음이 분류·검색에 안 쓰인다는 경계
+});
+
+// ── 묶음(#1631, 2026-09-12 원준 결정) — 카테고리를 만들 때 묶음도 함께 정한다 ──────────────
+//  묶음은 화면에서만 보이는 상위 층이고, 직업·직무별 룰베이스 집합이 그 사람 일 전체를 덮는다(그 밖 묶음 없음).
+//  지시문이 그 집합을 **실어 보내야** 리브가 새 묶음을 지어내거나 「기타」로 미루지 않는다.
+test("㉛ 묶음 집합이 지시문에 실리고, 새로 만들거나 미루지 말라고 못박는다", () => {
+  const p = buildSecondTurnPrompt(pin());
+  for (const g of GROUPS) {
+    assert.ok(p.includes(`\`${g.key}\``) && p.includes(g.name) && p.includes(g.hint), `${g.key} 줄이 없다`);
+  }
+  assert.match(p, /`group`/);                      // category_create 의 어느 칸에 넣는지
+  assert.match(p, /새 묶음을 만들지 마라/);
+  assert.match(p, /「기타」/);                       // 「기타」로 미루지 말라는 금지
+  assert.ok(p.indexOf("묶음") < p.indexOf("org_distiller_upsert"), "묶음 규칙이 증류기 단계보다 뒤에 있다");
+});
+test("㉛′ 이미 있는 카테고리를 쓸 때도 묶음이 비어 있으면 채운다 — 재사용 경로가 「그 밖」을 만들지 않게", () => {
+  const p = buildSecondTurnPrompt(pin());
+  assert.match(p, /이미 있는 카테고리를 쓰는데 묶음이 비어 있으면/);
+  assert.match(p, /`category_update`/);
+});
+test("㉜ 묶음이 아직 없는 워크스페이스면 그 구획을 아예 싣지 않는다 — 없는 것을 고르라고 하지 않는다", () => {
+  const p = buildSecondTurnPrompt(pin({ groups: [] }));
+  assert.doesNotMatch(p, /새 묶음을 만들지 마라/);
+  assert.doesNotMatch(p, /`group`/);
+  assert.match(p, /category_create/);               // 카테고리 단계 자체는 그대로 있다
 });

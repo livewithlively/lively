@@ -84,6 +84,47 @@ export async function initV6CategoryTeam(pool: Pool): Promise<void> {
       : `CREATE UNIQUE INDEX IF NOT EXISTS category_key_uq ON category(key) WHERE state <> 'merged'`,
     "category_key_uq 보류(분류축 key 중복)");
 
+  // ── 1-b) category_group — **화면에서만 보이는 묶음**(#1631). 분류는 그대로 1단이다. ──
+  //  지식은 여전히 카테고리 **하나**에만 속한다. 묶음은 그 카테고리들을 화면에서 갈라 보여 주는 이름표일 뿐이고,
+  //  분류기 후보에도, 증류기 목적지(target_category)에도, 검색·소환에도 **들어가지 않는다**.
+  //  그래서 묶음이 틀려도 지식은 한 건도 안 움직인다 — 화면에서 한 칸 옆에 보일 뿐이다(v6/category-groups.ts 머리말).
+  //  ⚠ 바로 위 1-a 에서 걷어낸 `space` 의 부활이 아니다: space 는 **분류의 층**이었고(분류기가 match_spaces 로 좁혔다)
+  //   소프트웨어 회사의 고정 세 칸이었다. 여기 묶음은 **표시의 층**이고, 직업·직무에서 파생돼 그 사람 말로 붙으며,
+  //   사람이 이름을 바꾸고 옮길 수 있다.
+  //  category.group_key 는 이 표의 key 를 가리키는 **소프트 참조**(FK 없음) — 묶음이 사라져도 카테고리는 안 죽는다.
+  //   고아(가리키는 묶음이 없는 group_key)를 안 만드는 책임은 쓰기 경로에 있다(v6/category-group-store.ts removeCategoryGroup).
+  //  hint = 한 줄 뜻. 리브 2턴 지시문과 화면 소제목이 이 문장을 그대로 싣는다 — 없으면 이름의 어감으로만 고르게 된다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS category_group(
+      id SERIAL PRIMARY KEY,
+      key TEXT NOT NULL,
+      name TEXT NOT NULL,
+      hint TEXT,
+      sort INT NOT NULL DEFAULT 0,
+      state TEXT NOT NULL DEFAULT 'active',
+      origin TEXT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now());
+    ${ensureCheck("category_group", {
+      category_group_state_chk: "state IN ('active','archived')",
+    })}
+    -- 새로 만드는 DB 에는 무의미하다(바로 위 CREATE 에 hint 가 이미 있다). 이 줄은 **이미 category_group 을
+    -- 가진 DB** 를 위한 것이다 — CREATE TABLE IF NOT EXISTS 는 기존 테이블에 컬럼을 더해 주지 않으므로,
+    -- hint 없이 이 표가 만들어진 박스(이 브랜치를 중간 상태로 띄운 dev·프리뷰)는 이 ALTER 로만 컬럼을 받는다.
+    -- category 의 layout_x/layout_y 와 같은 관례이고, 지우면 그런 DB 가 영영 hint 를 못 받는다.
+    ALTER TABLE category_group ADD COLUMN IF NOT EXISTS hint TEXT;
+    ALTER TABLE category ADD COLUMN IF NOT EXISTS group_key TEXT;
+  `);
+  //  key 유일 인덱스 — category_key_uq 와 **같은 방식**(보류형 + tenant_id 유무로 모양 결정. 근거는 위 머리말).
+  //   archived 를 빼는 건 team_key_uq 관례 그대로다(치운 묶음의 key 는 다시 쓸 수 있어야 한다).
+  const groupTenantScoped = ((await pool.query(
+    `SELECT 1 FROM information_schema.columns WHERE table_name='category_group' AND column_name='tenant_id'`)).rowCount ?? 0) > 0;
+  await softUniqueIndex(pool,
+    groupTenantScoped
+      ? `CREATE UNIQUE INDEX IF NOT EXISTS category_group_key_uq ON category_group(tenant_id, key) WHERE state <> 'archived'`
+      : `CREATE UNIQUE INDEX IF NOT EXISTS category_group_key_uq ON category_group(key) WHERE state <> 'archived'`,
+    "category_group_key_uq 보류(묶음 key 중복)");
+
   // ── 2) category_edge — 도메인間 관계. axis='should'(의도, 수동 저작) | 'is'(코드 import 의존, 스캔 도출). ──
   //  should↔is 갭 = 아키텍처 부채 신호(후속). 한 (from,to,axis) 당 1엣지: is 는 스캔 upsert, should 는 수동.
   await pool.query(`

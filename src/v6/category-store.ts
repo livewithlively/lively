@@ -10,18 +10,23 @@ import { auditOrgContent, restoreSnapshot, type WriteCtx } from "./content-audit
 import { embeddingInputText } from "./embedding-provider.js";
 import { markEmbeddingPending, CATEGORY_TARGET } from "./embedding-backfill.js";
 import { knowledgeVisWhere } from "./knowledge-store.js";
+import { resolveGroupKey } from "./category-group-store.js";
 import type { Viewer } from "./visibility.js";
 
 // entry_name·view_mode(#592) 포함 — 지식탭 카테고리 뷰(list|table|entry)가 목록/상세에서 바로 읽는다.
 //  구 delete 스냅샷(두 컬럼 부재)의 복원은 restoreSnapshot 이 부재 키를 생략해 DB DEFAULT 로 수렴(v6/content-audit.ts).
+//  group_key(#1631) — **화면에서만 보이는 묶음**(category_group.key 소프트 참조). 분류에는 안 쓰인다:
+//   분류기 후보·증류기 목적지(target_category)·검색/소환 어디에도 안 들어가고, 여기 목록·상세에 실려 화면이 갈라 그릴 뿐이다.
 const CATEGORY_COLS =
-  `id, key, name, description, should, cross_cutting, origin, status, state, entry_name, view_mode, created_at, updated_at`;
+  `id, key, name, description, should, cross_cutting, origin, status, state, entry_name, view_mode, group_key, created_at, updated_at`;
 
 export interface CategoryRow {
   id: number; key: string; name: string | null;
   description: string | null; should: string | null; cross_cutting: boolean;
   origin: string | null; status: string; state: string;
   entry_name: string | null; view_mode: string;
+  // 화면에서만 보이는 묶음(#1631) — category_group.key. null = 어느 묶음에도 안 든다.
+  group_key: string | null;
   created_at: string; updated_at: string;
   // 오너 팀(team_category relation='owner') — listCategories 만 채운다(LEFT JOIN). 쓰기/감사 경로는 base 컬럼만.
   owner_team_id?: number | null; owner_team_key?: string | null; owner_team_name?: string | null;
@@ -263,16 +268,19 @@ export async function getCategoryByKey(key: string): Promise<CategoryRow | undef
 }
 
 export async function createCategory(
-  input: { key: string; name?: string; description?: string; should?: string; cross_cutting?: boolean },
+  input: { key: string; name?: string; description?: string; should?: string; cross_cutting?: boolean; group?: string | null },
   ctx?: WriteCtx,
 ): Promise<CategoryRow> {
   const origin = ctx?.source === "mcp" ? "agent" : "human";
+  //  묶음(#1631) — 없는 key 면 여기서 400(resolveGroupKey). 판정을 capability 가 아니라 **스토어 한 곳**에 두는 이유는
+  //   updateCategory 의 state 주석과 같다: REST 경로엔 zod 검증이 없어서 위에서 거르면 MCP 와 웹이 갈린다.
+  const group = await resolveGroupKey(input.group);
   const row: CategoryRow = await one(itemsPool,
-    `INSERT INTO category(key, name, description, should, cross_cutting, origin, status, state, created_at, updated_at)
-     VALUES($1,$2,$3,$4,COALESCE($5,false),$6,'confirmed','active',now(),now())
+    `INSERT INTO category(key, name, description, should, cross_cutting, origin, status, state, group_key, created_at, updated_at)
+     VALUES($1,$2,$3,$4,COALESCE($5,false),$6,'confirmed','active',$7,now(),now())
      RETURNING ${CATEGORY_COLS}`,
     [input.key, input.name ?? null, input.description ?? null,
-     input.should ?? null, input.cross_cutting ?? null, origin]);
+     input.should ?? null, input.cross_cutting ?? null, origin, group.groupKey]);
   await auditCategory(input.key, "insert", null, row, ctx);
   return row;
 }
@@ -301,7 +309,7 @@ async function assertDeprecatable(id: number, key: string): Promise<void> {
 
 export async function updateCategory(
   id: number,
-  patch: { name?: string; description?: string; should?: string; cross_cutting?: boolean; state?: string },
+  patch: { name?: string; description?: string; should?: string; cross_cutting?: boolean; state?: string; group?: string | null },
   ctx?: WriteCtx,
 ): Promise<CategoryRow> {
   const before = await getCategory(id);
@@ -312,14 +320,18 @@ export async function updateCategory(
     throw new HttpError(400, "state 는 active|deprecated 만 가능합니다(merged 는 병합 경로가 정합니다)");
   }
   if (nextState === "deprecated" && before.state !== "deprecated") await assertDeprecatable(id, before.key);
+  //  묶음(#1631) — 3상이다: 키 부재=미변경 / 빈 문자열·null=해제 / 값=그 묶음(없는 key 면 400).
+  //   COALESCE 로는 «해제» 를 표현할 수 없어(null 이 곧 «안 건드림» 이다) 조건부 SET 으로 가른다.
+  const group = await resolveGroupKey(patch.group);
   // COALESCE($n, col): undefined→null→기존값 보존(부분 수정).
   const row: CategoryRow = await one(itemsPool,
     `UPDATE category SET
        name=COALESCE($2,name), description=COALESCE($3,description),
        should=COALESCE($4,should), cross_cutting=COALESCE($5,cross_cutting),
-       state=COALESCE($6,state), updated_at=now()
+       state=COALESCE($6,state), group_key=CASE WHEN $7::boolean THEN $8::text ELSE group_key END, updated_at=now()
      WHERE id=$1 RETURNING ${CATEGORY_COLS}`,
-    [id, patch.name ?? null, patch.description ?? null, patch.should ?? null, patch.cross_cutting ?? null, nextState]);
+    [id, patch.name ?? null, patch.description ?? null, patch.should ?? null, patch.cross_cutting ?? null, nextState,
+     group.change, group.groupKey]);
   await auditCategory(before.key, "update", before, row, ctx);
   // #1153 — 정의 벡터 재계산. 임베딩 입력(이름+설명+should)이 **실제로 바뀐** 경우에만 pending 으로 되돌린다
   //  (무변경 저장에 헛임베딩을 태우지 않는다 — knowledge 쓰기 경로와 동일 idiom). 백그라운드 스윕이 채운다.

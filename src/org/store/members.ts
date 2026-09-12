@@ -124,6 +124,12 @@ export async function setMemberOnboardingStep(
 //  서버가 **볼 수 없는 것**뿐이다 — 온보딩·파이프라인·하네스 인벤토리는 각자 자기 자리에서 라이브
 //  계산되므로 여기 복제하면 두 개의 진실이 생긴다(#850 이 온보딩에서 이미 내린 결론).
 export interface LivWork { asis?: string; tobe?: string; at?: string; by?: "ai" | "self" }
+/**
+ * `work.asis` 는 «무대 · 직무» 를 이 구분자로 이어 붙인 **한 줄**이다(처음 설정이 만든다).
+ *  ⚠ 붙이는 곳(welcome.ts)과 되가르는 곳(org/liv/second-turn-sweep.ts — 묶음 시드의 직무 폴백)이
+ *   서로 다른 파일이라, 한쪽만 구분자를 바꾸면 컴파일은 통과하고 **조용히 어긋난다**. 그래서 한 자리에 둔다.
+ */
+export const WORK_ASIS_SEP = " · ";
 /** 처음 설정의 결과. 무엇을 만들었는지까지 남긴다 — "왜 이 서랍이 있죠?" 에 답할 유일한 근거다. */
 //  session_id(#1631) — 처음 설정 직후 열린 **리브 세션**. 다시 반영해도 세션을 또 열지 않는 근거(멱등)이자 화면이 그리로 보내는 좌표.
 //  distill_at / distill_gave_up_at / distill_note — 2턴(증류 지시)을 그 세션에 넣었나·포기했나·왜(second-turn-sweep). 둘 다 없으면 대기 중.
