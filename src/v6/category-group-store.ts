@@ -66,11 +66,30 @@ export interface GroupAssignPlan {
  *  «없다» 만 들으면 다시 찍어 보는 수밖에 없다. 목록을 주면 그 자리에서 고쳐 다시 부른다.
  */
 export function planGroupAssign(
-  input: { group?: string | null; groupKeys: string[] },
+  input: { group?: string | null; groupKeys: string[]; creating?: boolean },
 ): GroupAssignPlan {
-  if (input.group === undefined) return { change: false, groupKey: null, error: null };
+  //  ★ 하드 규칙(원준 2026-09-12): «모든 카테고리가 하드하게 저 셋 중 하나로 들어간다».
+  //   그래서 **묶음이 하나라도 있는 워크스페이스**에서는 (a) 묶음 없이 카테고리를 만들 수 없고
+  //   (b) 이미 든 카테고리를 묶음 밖으로 뺄 수 없다. 지시문에 맡기지 않고 여기서 막는다 —
+  //   리브도 사람도 REST 도 이 한 자리를 지난다. 묶음이 아직 0개인 워크스페이스(옛 판)는 종전대로 둔다.
+  const has = input.groupKeys.length > 0;
+  if (input.group === undefined) {
+    if (has && input.creating) {
+      return { change: false, groupKey: null,
+        error: `카테고리는 묶음 하나에 반드시 들어갑니다 — 지금 있는 묶음: ${listKeys(input.groupKeys)}.`
+          + " group 에 그 key 중 하나를 주세요(묶음은 화면에서만 보이는 층이라 분류에는 쓰이지 않습니다)." };
+    }
+    return { change: false, groupKey: null, error: null };
+  }
   const want = input.group === null ? "" : String(input.group).trim();
-  if (!want) return { change: true, groupKey: null, error: null };   // 빈 문자열·null = 해제
+  if (!want) {
+    if (has) {
+      return { change: false, groupKey: null,
+        error: `카테고리를 묶음 밖으로 뺄 수 없습니다 — 지금 있는 묶음: ${listKeys(input.groupKeys)}.`
+          + " 다른 묶음으로 옮기거나, 묶음 자체를 지우세요(category_group_remove)." };
+    }
+    return { change: true, groupKey: null, error: null };   // 묶음이 없는 워크스페이스에서만 해제가 뜻을 갖는다
+  }
   if (input.groupKeys.includes(want)) return { change: true, groupKey: want, error: null };
   return {
     change: true, groupKey: null,
@@ -148,9 +167,10 @@ export async function activeGroupKeys(): Promise<string[]> {
  *  ⚠ **판정은 스토어 한 곳에서만** 한다(이 레포 관례): REST 경로엔 zod 검증이 없어서 capability 에서
  *   거르면 MCP 와 웹의 동작이 갈린다(dev 실측 2026-09-03 의 조용한 no-op 이 그 자리였다).
  */
-export async function resolveGroupKey(group?: string | null): Promise<GroupAssignPlan> {
-  if (group === undefined) return { change: false, groupKey: null, error: null };   // DB 왕복도 아끼자
-  const plan = planGroupAssign({ group, groupKeys: await activeGroupKeys() });
+export async function resolveGroupKey(group?: string | null, creating = false): Promise<GroupAssignPlan> {
+  //  ⚠ 만들 때는 group 이 없어도 DB 를 봐야 한다 — «묶음이 있으면 반드시 하나» 를 여기서 막기 때문이다.
+  if (group === undefined && !creating) return { change: false, groupKey: null, error: null };
+  const plan = planGroupAssign({ group, groupKeys: await activeGroupKeys(), creating });
   if (plan.error) throw new HttpError(400, plan.error);
   return plan;
 }

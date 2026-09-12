@@ -274,7 +274,7 @@ export async function createCategory(
   const origin = ctx?.source === "mcp" ? "agent" : "human";
   //  묶음(#1631) — 없는 key 면 여기서 400(resolveGroupKey). 판정을 capability 가 아니라 **스토어 한 곳**에 두는 이유는
   //   updateCategory 의 state 주석과 같다: REST 경로엔 zod 검증이 없어서 위에서 거르면 MCP 와 웹이 갈린다.
-  const group = await resolveGroupKey(input.group);
+  const group = await resolveGroupKey(input.group, true);
   const row: CategoryRow = await one(itemsPool,
     `INSERT INTO category(key, name, description, should, cross_cutting, origin, status, state, group_key, created_at, updated_at)
      VALUES($1,$2,$3,$4,COALESCE($5,false),$6,'confirmed','active',$7,now(),now())

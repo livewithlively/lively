@@ -93,14 +93,16 @@ test("⑤ study 의 2단 답이 실제 묶음 집합으로 간다 — 빈손이 
   //  ⚠ 단계를 안 고르고 넘어가도(2단 건너뛰기) **학업·연구에 맞는** 묶음이 나와야 한다.
   //   study 가 무대 폴백 표에 없으면 groupSetFor 는 조용히 default(회사원용)로 떨어진다 —
   //   빈손이 아니라서 «묶음이 나왔다» 로는 절대 안 잡히는 고장이다. 그래서 집합을 특정해 못박는다.
-  const byStage = groupSetFor("study", null).map((g) => g.key);
-  assert.deepEqual(byStage, groupSetFor(null, "학생").map((g) => g.key),
+  //  ⚠ key 로 비교하지 않는다 — 2026-09-12 개편으로 key 는 어느 집합이든 g1·g2·g3 로 **고정**됐다
+  //   (사람이 이름을 바꿔도 카테고리가 가리키는 값이 안 변하게). 집합이 다른지는 **이름**으로 본다.
+  const byStage = groupSetFor("study", null).map((g) => g.name);
+  assert.deepEqual(byStage, groupSetFor(null, "학부생").map((g) => g.name),
     `study 폴백이 학업용 집합이 아니다: ${byStage.join(",")}`);
-  assert.notDeepEqual(byStage, groupSetFor(null, null).map((g) => g.key),
+  assert.notDeepEqual(byStage, groupSetFor(null, null).map((g) => g.name),
     "study 폴백이 default(회사원용) 집합으로 떨어졌다");
-  //  다섯 원칙을 다 덮는다 — 「기타」로 새는 자료가 없어야 한다.
+  //  세 갈래를 다 덮는다 — 「기타」로 새는 자료가 없어야 한다.
   const covers = new Set(groupSetFor("study", null).flatMap((g) => g.covers));
-  for (const c of ["make", "exchange", "money", "rule", "learn"]) {
+  for (const c of ["own", "traded", "received"]) {
     assert.ok(covers.has(c as never), `study 폴백이 「${c}」 를 안 덮는다`);
   }
 });
