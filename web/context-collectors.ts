@@ -119,7 +119,8 @@ export async function renderCollectors(host: HTMLElement): Promise<void> {
     matchId: (id) => id.startsWith('collector-'),
     readOnly: true,   // 잡의 주인은 수집기(enabled → syncCollectorJob). 여기서 켜고 끄면 주인과 어긋난다.
     missingLine: '자동 수집이 아직 없습니다 — 켜진 수집기가 없기 때문입니다.',
-    managedElsewhere: '수집기는 잡을 따로 만들지 않습니다. 위에서 수집기를 켜면 그 자동 수집이 함께 등록되고, 끄면 같이 멈춥니다.',
+    managedElsewhere: '수집기를 켜면 그 수집기의 자동 수집이 함께 켜지고, 끄면 같이 멈춥니다.',
+    unitName: '수집기',
   }, reload));
 }
 
@@ -349,11 +350,8 @@ function collectorEditor(c: any | null, presets: any[], reload: () => void, newP
     }) as HTMLInputElement;
     inputs[f.key] = { el: inp, secret: !!f.secret };
     // 픽커 지원 필드(노션 페이지·클릭업 리스트) — 저장된 수집기에서만 조회할 수 있다(토큰이 있어야 하므로).
-    const ctrl = (f.picker && c)
-      ? el('div', { class: 'cxc-pick-row' }, inp,
-          el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '목록에서 고르기',
-            onclick: () => openScopePicker(c, f, inp) }))
-      : inp;
+    //  값은 id 나열이라 사람에게는 **이름 칩**으로 보인다(#3830 — 「32da9ddde7768…」를 비개발자가 읽을 수 없다).
+    const ctrl = (f.picker && c) ? pickChips(c, f, inp, fr.ph ?? '', String(fr.label ?? f.label ?? '항목').split(' ').pop() || '항목') : inp;
     // 기본 칸의 힌트는 자리표시자가 이미 말한다 — 같은 문장을 두 번 적지 않는다(FRIENDLY 가 한 줄 더 주면 그것만).
     //  고급 칸은 서버 힌트를 아래에 둔다(개발자가 읽을 자리).
     const node = F((fr.label ?? f.label ?? f.key) + (f.required && basic ? ' *' : ''), basic ? (fr.hint ?? null) : (f.secret ? null : (f.hint ?? null)), ctrl);
@@ -509,15 +507,80 @@ function computerIcon(): SVGElement {
   return n;
 }
 
+// ── 픽커 칸(노션 페이지·클릭업 리스트) — 값은 id 나열, 보이는 것은 이름 칩(#3830). ──────────────────
+//  이름은 그 수집기의 discover(목록 조회)로 푼다 — [목록에서 고르기]가 이미 부르는 같은 읽기 전용 호출이고, 수집기마다
+//  한 번만 부른다. 못 풀면(자격 없음·삭제된 페이지) 짧은 id 칩으로 떨어진다. 원문 칸은 「주소로 직접 넣기」 뒤에 있다.
+type PickOpts = Record<string, Array<{ id: string; label: string }>>;
+/** null = 목록을 못 받았다(자격 없음·서버 오류) — 「이름이 없다」와 갈라야 화면이 사실대로 말한다. */
+const discoverCache = new Map<number, Promise<PickOpts | null>>();
+function discoverOptions(c: any): Promise<PickOpts | null> {
+  let pr = discoverCache.get(c.id);
+  if (!pr) {
+    pr = api(`/api/ui/org/collectors/${c.id}/discover`, { method: 'POST', body: '{}' })
+      .then((r: any) => (r && r.fields ? r.fields as PickOpts : null)).catch(() => null);
+    discoverCache.set(c.id, pr);
+  }
+  return pr;
+}
+/** 노션 id 는 대시가 있기도 없기도 하다 — 끝 32자리 16진으로 맞춰 비교한다. */
+const normId = (v: string) => { const h = String(v).toLowerCase().replace(/[^0-9a-f]/g, ''); return h.length >= 32 ? h.slice(-32) : String(v).trim(); };
+
+function pickChips(c: any, f: any, inp: HTMLInputElement, emptyText: string, noun: string): HTMLElement {
+  const names = new Map<string, string>();
+  const chips = el('div', { class: 'cxc-pchips' });
+  const why = el('p', { class: 'cxc-pick-why', hidden: true });
+  const raw = el('div', { class: 'cxc-pick-raw', hidden: true }, inp);
+  const ids = () => String(inp.value || '').split(',').map((x) => x.trim()).filter(Boolean);
+  //  이름을 못 풀면 id 조각(「32da9ddd…」)이 아니라 「페이지 1」처럼 센다 — id 는 사람에게 뜻이 없다(툴팁에만 둔다).
+  //  주소를 붙여 넣은 값은 주소가 곧 사람이 알아보는 이름이라 그대로 짧게 보인다.
+  const shortId = (id: string, i: number) => /^https?:/i.test(id)
+    ? id.replace(/^https?:\/\//i, '').slice(0, 36) + (id.length > 44 ? '…' : '')
+    : `${noun} ${i + 1}`;
+  const paint = () => {
+    const list = ids();
+    chips.replaceChildren();
+    if (!list.length) { chips.append(el('span', { class: 'cxc-pchips-empty', text: emptyText || '비어 있음' })); return; }
+    for (const [i, id] of list.entries()) {
+      const label = names.get(normId(id));
+      const rm = el('button', { class: 'cxc-pchip-x', type: 'button', 'aria-label': (label || '이 항목') + ' 빼기', text: '×' });
+      rm.addEventListener('click', () => {
+        inp.value = ids().filter((x) => x !== id).join(',');
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+        paint();
+      });
+      chips.append(el('span', { class: 'cxc-pchip' + (label ? '' : ' is-raw'), title: label ? id : '이름을 찾지 못했습니다 — ' + id },
+        el('span', { class: 'cxc-pchip-t', text: label || shortId(id, i) }), rm));
+    }
+  };
+  paint();
+  void discoverOptions(c).then((fields) => {
+    for (const o of ((fields && fields[f.key]) || [])) names.set(normId(o.id), o.label);
+    if (!fields && ids().length) {
+      why.textContent = `${c.preset_label || '외부 앱'}에서 ${noun} 이름을 불러오지 못해 번호로 보입니다 — 연결이 끊겼을 수 있습니다. 위 [연결 관리]에서 확인하세요.`;
+      why.hidden = false;
+    }
+    paint();
+  });
+  const pick = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '목록에서 고르기' });
+  pick.addEventListener('click', () => openScopePicker(c, f, inp, (picked) => { for (const o of picked) names.set(normId(o.id), o.label); paint(); }));
+  const rawBtn = el('button', { class: 'btn-text', type: 'button', text: '주소로 직접 넣기' });
+  rawBtn.addEventListener('click', () => {
+    raw.hidden = !raw.hidden;
+    rawBtn.textContent = raw.hidden ? '주소로 직접 넣기' : '주소 칸 닫기';
+    if (!raw.hidden) inp.focus();
+  });
+  inp.addEventListener('change', paint);
+  return el('div', { class: 'cxc-pick' }, chips, why, el('div', { class: 'cxc-pick-acts' }, pick, rawBtn), raw);
+}
+
 // ── 보조 오버레이 ──────────────────────────────────────────────────────────
-async function openScopePicker(c: any, f: any, inp: HTMLInputElement) {
+async function openScopePicker(c: any, f: any, inp: HTMLInputElement, onApply?: (picked: Array<{ id: string; label: string }>) => void) {
   const box = el('div', {}, el('p', { class: 'admin-hint', text: '목록을 불러오는 중…' }));
   const back = overlay(`${f.label || f.key} — 목록에서 고르기`, box);
   try {
     const r = await api(`/api/ui/org/collectors/${c.id}/discover`, { method: 'POST', body: '{}' });
     const opts: any[] = (r.fields && r.fields[f.key]) || [];
     if (!opts.length) { box.replaceChildren(el('p', { class: 'admin-hint', text: r.note || '고를 항목이 없습니다 — 직접 입력하세요.' })); return; }
-    const normId = (v: string) => { const h = String(v).toLowerCase().replace(/[^0-9a-f]/g, ''); return h.length >= 32 ? h.slice(-32) : String(v).trim(); };
     const selected = new Set(String(inp.value || '').split(',').map(normId).filter(Boolean));
     const checks = new Map<string, HTMLInputElement>();
     const rows = opts.map((o) => {
@@ -529,6 +592,8 @@ async function openScopePicker(c: any, f: any, inp: HTMLInputElement) {
     const apply = el('button', { class: 'btn btn-primary btn-sm', text: '적용' });
     apply.addEventListener('click', () => {
       inp.value = [...checks.entries()].filter(([, cb]) => cb.checked).map(([id]) => id).join(',');
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      onApply?.(opts.filter((o) => checks.get(o.id)?.checked).map((o) => ({ id: String(o.id), label: String(o.label) })));
       back.remove();
       toast('골랐습니다 — [저장]을 눌러야 반영됩니다');
     });
