@@ -2888,9 +2888,14 @@ let gaveUp = false;
 //   즉 이 결함의 «원인» 이 아니라 «부류» 를 막는다.
 let connProven = false, stableTimer = null;
 const CONN_STABLE_MS = 10_000;
-function markConnProven() {
+export function markConnProven() {
   connProven = true;
   attempts = 0; gaveUp = false; reconnectDelay = 1500;
+  //  #3870 — 포기 뒤에도 탭 복귀(visibilitychange)·[화면 복구]는 connectNow 를 직접 불러 다시 붙는다. 그렇게 붙어
+  //   버텼으면 «연결하지 못했습니다» 배너는 거짓이다(실측: 상단은 '연결됨'인데 배너가 남아 화면만 밀고 있었다).
+  //   onopen 이 아니라 여기서 걷는 이유 — gaveUp 이 풀리는 곳과 같아야 한다. 붙자마자 죽는 판(#3546)에서
+  //   배너만 먼저 걷히면, gaveUp 이 남아 재연결은 멈췄는데 '다시 시도' 출구도 없는 화면이 된다.
+  hideRetryBar();
 }
 // ── 우클릭 메뉴(#3784) — 셸(web/v2/ctx-*)의 메뉴가 iframe 안까지는 못 오므로 이 문서에서 같은 문법으로 세운다 ──
 //  복사는 Cmd+C 와 **같은 길**을 탄다(xterm 선택 → copyText / 마우스모드 앱(Claude) 드래그 선택 → ^C 브리지 1회 —
@@ -3007,21 +3012,30 @@ async function giveUpReconnect() {
 }
 
 /** 포기 상태의 유일한 출구. 터미널 내용은 지우지 않는다 — 마지막 출력이 사용자에게 가장 필요한 정보다. */
-function showRetryBar() {
+export function showRetryBar() {
   if (document.getElementById('retry-bar')) return;
   const bar = el('div', { class: 'ended-bar', id: 'retry-bar' },
     el('span', { text: '서버에 연결하지 못했습니다. 네트워크나 게이트웨이 상태를 확인한 뒤 다시 시도해 주세요.' }),
     el('button', {
       class: 'gate-retry', text: '다시 시도',
       onclick: () => {
-        const b = document.getElementById('retry-bar');
-        if (b && b.parentNode) b.parentNode.removeChild(b);
+        hideRetryBar();
         gaveUp = false; attempts = 0; reconnectDelay = 1500; offlineTries = 0;
         connectNow();
       },
     }));
-  const root = document.getElementById('root');
-  if (root) root.insertBefore(bar, root.firstChild);
+  // ⚠ 배너는 반드시 `#main`(세로 flex) 안, 터미널 판(#panes) 바로 위에 넣는다 — 종료 배너(showEndedBar)와 같은 자리.
+  //  종전엔 `#root` 맨 앞(= `#ws` 의 형제)에 넣었는데, `#ws` 는 `height: 100dvh` 고정이라 배너 높이만큼 전체가
+  //  화면보다 커지고 body 의 overflow:hidden 에 **터미널 아래(입력줄)가 잘렸다**(#3870 원준님 실측 2026-09-11 —
+  //  «일부 안내문이 떠 있으면 화면이 아래로 밀린다»). #main 안이면 #panes(flex:1·min-height:0)가 그만큼 줄고 #term-host 의 ResizeObserver 가 xterm 을 다시 맞춘다.
+  const main = document.getElementById('main');
+  if (main && panesEl && panesEl.parentNode === main) main.insertBefore(bar, panesEl);
+  else { const root = document.getElementById('root'); if (root) root.insertBefore(bar, root.firstChild); }
+}
+/** 포기 배너 걷기 — 포기 상태(gaveUp)가 풀리는 곳에서 같이 부른다. 판 크기 변화는 #term-host 의 ResizeObserver 가 받아 xterm 을 다시 맞춘다. */
+export function hideRetryBar() {
+  const b = document.getElementById('retry-bar');
+  if (b) b.remove();
 }
 // 세션 종료 확정(#835) — 재연결을 멈추고 '닫힘'을 명시한다. 게이트로 화면을 덮지 않는 이유: 마지막 출력이
 //  사용자에게 가장 필요한 정보다(무슨 일이 있었는지 읽고 복사해야 한다). 그래서 터미널은 그대로 두고
