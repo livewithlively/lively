@@ -1314,7 +1314,12 @@ async function uniqueUploadName(name) {
 //  자동 전송 안 함 — 사용자가 설명을 덧붙여 Enter. (업로드 PUT 가 상위 폴더를 자동 생성.)
 async function dropFileToAgent(file) {
   if (!file) return;
-  let name = (file.name || 'pasted').split(/[/\\]/).pop().replace(/[^\w.\-가-힣]/g, '_');
+  // ★ #3870 — **맥에서 온 한글 파일명이 통째로 `_` 가 되던 것.** 맥 파일시스템(APFS/HFS+)은 파일명을 NFD 로
+  //  들고 있어 `file.name` 이 «경진대회» = ㄱ+ㅕ+ㅇ… (자모 U+1100~U+11FF) 로 온다. 아래 허용집합의 `가-힣` 은
+  //  **완성형 음절**(U+AC00~U+D7A3)이라 그 자모가 한 글자도 안 맞고, 이름 전체가 밑줄로 치환됐다
+  //  (실측: `경진대회 참가신청서-라이블리-3.html` → `________________________-_________-3.html`).
+  //  서버는 이미 NFC 정본으로 쓰므로(#1278b nfcPath) 여기서 미리 합치는 것이 그 규약과 같은 자다.
+  let name = (file.name || 'pasted').normalize('NFC').split(/[/\\]/).pop().replace(/[^\w.\-가-힣]/g, '_');
   if (!/\.[a-z0-9]+$/i.test(name)) name += '.' + (((file.type || '').split('/')[1]) || 'png');
   name = await uniqueUploadName(name);
   const rel = 'uploads/' + name;
