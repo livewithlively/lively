@@ -891,6 +891,12 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
  */
 function restCards(standing: SideInstance[], searching: boolean): ProjGrp[] {
   if (!last) return [];
+  //  ★ **홈에서만** 세운다. [AI 세션]·[확인할 것] 은 같은 붓(appListKids → projListKids)을 쓰지만
+  //   성격이 정반대다 — 거기는 이미 **전수 명부**라 빠진 세션이 없고, 대신 사람이 건 **거름망**이 있다
+  //   (renderSessions 의 stateFilter · 지난 세션 40줄 상한). 거기서 이 카드를 세우면 «거름망에 걸러진
+  //   프로젝트» 가 카드로 되살아나 **필터가 무력해진다**(「작업 중」만 보겠다고 걸었는데 끝난 프로젝트가
+  //   줄줄이 선다). 홈은 반대로 목록이 좁아서 구멍이 생긴 자리라 여기만 메운다.
+  if ((hooks.section?.() || 'home') !== 'home') return [];
   const has = new Set<number>();
   for (const r of standing) if (r.project && r.project.id) has.add(r.project.id);
   const now = Date.now();

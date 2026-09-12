@@ -150,5 +150,30 @@ check(dg(NOW + DAY) === "오늘",
 check(dg(NOW - 30 * DAY) !== "" && dg(NOW - 400 * DAY) !== "",
   "G8 ★ 이 어휘엔 **바닥이 없다** — 한 달 전도 1년 전도 이름이 나온다(홈이 어제에서 끊겼던 건 이쪽 한계가 아니었다)");
 
-console.log(`\nside-rest-cards: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
+
+// ───────────────────────── H. 배선 — «어디서 세우는가» (규칙이 맞아도 엉뚱한 데서 부르면 화면이 깨진다)
+//
+//  홈과 [AI 세션]·[확인할 것] 은 **같은 붓**(appListKids → projListKids)을 쓰지만 성격이 정반대다.
+//  거기는 이미 전수 명부라 빠진 세션이 없고, 대신 사람이 건 **거름망**이 있다(stateFilter · 지난 세션 40줄 상한).
+//  거기서 rest 카드를 세우면 걸러진 프로젝트가 카드로 되살아나 **필터가 무력해진다.**
+//  그리고 압정 층을 가르기 **전**에 합쳐야 한다 — 뒤에 붙이면 압정한 rest 카드가 「고정」에도 못 서고
+//  `if (g.pinned) continue` 에도 걸려 통째로 사라진다(이 판이 고치는 바로 그 부류의 구멍이다).
+{
+  const { readFileSync } = await import("node:fs");
+  const SIDE = readFileSync(path.join(root, "web/v2/side.ts"), "utf8");
+  const fn = SIDE.slice(SIDE.indexOf("function restCards("), SIDE.indexOf("function projGrpCard("));
+
+  check(/hooks\.section\?\.\(\)\s*\|\|\s*'home'\)\s*!==\s*'home'\)\s*return \[\]/.test(fn),
+    "H1 ★ rest 카드는 **홈에서만** 선다 — [AI 세션] 에서 세우면 그 구역의 거름망이 무력해진다",
+    "restCards 안에 홈 구역 가드가 없다");
+
+  const kids = SIDE.slice(SIDE.indexOf("function projListKids("), SIDE.indexOf("function restCards("));
+  const merge = kids.indexOf("restCards(rest");
+  const pinned = kids.indexOf("groups.filter((g) => g.pinned)");
+  check(merge > 0 && pinned > 0 && merge < pinned,
+    "H2 ★ rest 카드는 **압정 층을 가르기 전에** 합친다 — 뒤에 붙이면 압정한 rest 카드가 통째로 사라진다",
+    `합치는 자리 ${merge} · 압정 가르는 자리 ${pinned}`);
+}
+
+console.log(`\nside-rest-cards(배선): ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
 process.exit(fail ? 1 : 0);
