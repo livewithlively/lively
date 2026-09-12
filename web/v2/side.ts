@@ -758,9 +758,12 @@ function projGrpHead(g: ProjGrp): HTMLElement {
   //   ⇒ 신호를 **호버가 뺏어가지 않는 자리**로 옮긴다. 행이 이미 쓰는 언어(흐린 톤)를 카드에도 쓰는 것이라
   //    새 문법이 아니다. 고리는 그대로 두되(호버 전 두 번째 단서) 혼자 짊어지지는 않는다.
   const allPast = !g.live && g.past > 0;
+  //  줄이 하나도 안 선 카드(#3778 5판)는 `rows` 가 비어 있다 — 개수는 접힘 안 것을 쓴다.
+  //   안 그러면 툴팁이 «세션 0» 이라고 말하는데 바로 옆 개수 칩은 8 이라고 말하는, 서로 어긋나는 화면이 된다.
+  const headN = g.rows.length || g.past;
   const head = el('div', { class: 'v2-pg-row' + (g.active && !g.open ? ' act' : '') + (g.pinned ? ' pinned' : '') + (allPast ? ' past' : '') },
     el('button', { class: 'v2-pg-t', type: 'button', 'aria-expanded': String(g.open),
-      title: g.name + (g.id ? `\n#${g.id} · 세션 ${g.rows.length}` : '\n프로젝트에 붙지 않은 세션과 화면'),
+      title: g.name + (g.id ? `\n#${g.id} · 세션 ${headN}` : `\n프로젝트에 붙지 않은 세션과 화면 ${headN}`),
       //  ⚠ **두 번째 클릭은 삼킨다** — 더블클릭은 «이름 고치기»(아래 dblclick)라, 접기가 두 번 일어나면 사람이 고른
       //   접힘 상태가 편집 도중에 뒤집힌다. 첫 클릭의 접기는 그대로 둔다(단일 클릭 문법은 안 건드린다 — #2579 와 같은 처방).
       onclick: (e: MouseEvent) => { if (e.detail >= 2) return; toggleGrp(g.key, g.open); } },
@@ -774,7 +777,7 @@ function projGrpHead(g: ProjGrp): HTMLElement {
       //  세션이 하나뿐인 묶음은 개수를 안 쓴다 — 접힌 줄 하나가 곧 그 하나다(위 grpSums 주석과 같은 사유).
       //  ★ 줄이 하나도 안 선 카드(#3778 5판)는 **접힘 안 개수**를 대신 쓴다 — 그 카드의 내용이 그것뿐이라
       //   여기 숫자가 없으면 «세션이 몇 개 있는지» 를 펴 봐야만 알 수 있다(원준 2026-09-12: "개수로라도 보여야").
-      (g.rows.length || g.past) > 1 ? el('span', { class: 'v2-cnt', text: String(g.rows.length || g.past) }) : null),
+      headN > 1 ? el('span', { class: 'v2-cnt', text: String(headN) }) : null),
     //  ★고정(#3778) — 카드째 맨 위로. 「프로젝트 없음」 묶음은 고정할 프로젝트가 없으므로 압정도 없다(트리와 같은 규율).
     g.id ? pinBtn(g.key, '위에 고정 — 이 프로젝트와 그 안의 세션을 통째로 맨 위로 올려 둡니다') : null,
     g.id ? newSessBtn(g.id) : null,
@@ -888,6 +891,12 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
  */
 function restCards(standing: SideInstance[], searching: boolean): ProjGrp[] {
   if (!last) return [];
+  //  ★ **홈에서만** 세운다. [AI 세션]·[확인할 것] 은 같은 붓(appListKids → projListKids)을 쓰지만
+  //   성격이 정반대다 — 거기는 이미 **전수 명부**라 빠진 세션이 없고, 대신 사람이 건 **거름망**이 있다
+  //   (renderSessions 의 stateFilter · 지난 세션 40줄 상한). 거기서 이 카드를 세우면 «거름망에 걸러진
+  //   프로젝트» 가 카드로 되살아나 **필터가 무력해진다**(「작업 중」만 보겠다고 걸었는데 끝난 프로젝트가
+  //   줄줄이 선다). 홈은 반대로 목록이 좁아서 구멍이 생긴 자리라 여기만 메운다.
+  if ((hooks.section?.() || 'home') !== 'home') return [];
   const has = new Set<number>();
   for (const r of standing) if (r.project && r.project.id) has.add(r.project.id);
   const now = Date.now();
