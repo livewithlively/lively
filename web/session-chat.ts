@@ -682,14 +682,39 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     // ⚠ '대화가 지금 흐르고 있으면' 확인 배너를 내린다 — 훅의 waiting 보고는 사람이 터미널에서 답한 뒤 **다음 훅 보고**
     //  (PostToolUse — 긴 도구면 그 도구가 끝날 때)까지 남는다(실측 2026-08-18: 답했는데 배너가 계속 떠 있음 신고).
     //  트랜스크립트에 새 줄이 흐른다는 건 대화상자가 이미 닫혔다는 뜻이다 — 목록 폴링보다 빠르고 확실한 신호.
+    /**
+     * 배너가 할 말 — **«승인 대기» 와 «아직 시작도 못 함» 은 다른 사건이다** (#3870).
+     *
+     *  목록의 awaiting 은 화면 스크래핑이다(phase.detectAwaiting — 하단에 `Enter to select` 같은 힌트가 보이면 참).
+     *  그래서 하네스가 **첫 턴을 시작하기 전에 띄우는 화면**도 전부 «확인 대기» 로 잡힌다 — 신뢰 대화상자,
+     *  로그인 화면, 그리고 이어받기 피커. 종전 문구(«세션이 승인이나 선택을 기다리고 있어요»)는 그 경우
+     *  사람에게 **거짓말**이었다: 내 작업에 대해 AI 가 뭘 묻는 줄 알고 기다리는데, 실제로는 그 세션이
+     *  한 줄도 시작하지 못한 채 서 있었다(실측 2026-09-11 → 09-12, 빈 피커에 하루).
+     *
+     *  가르는 자: **lastActive**(sessions.ts «마지막 작업 시각. 한 번도 작업 안 했으면 undefined»). 한 번이라도
+     *  턴이 돌았으면 종전 문구가 맞고, 한 번도 안 돌았으면 그 세션은 아직 문 앞에 있다 — 그렇게 말한다.
+     */
+    const waitWords = (): HTMLElement[] => (!target.raw?.lastActive
+      ? [el('b', { text: '아직 시작하지 못한 세션이에요' }),
+         el('span', { text: ' — 터미널에 뜬 화면(신뢰 확인 · 로그인 · 이어받기 목록)에 답해야 첫 지시를 받습니다.' })]
+      : [el('b', { text: '확인이 필요해요' }),
+         el('span', { text: ' — 세션이 승인이나 선택을 기다리고 있어요. 무엇을 묻는지는 터미널에 떠 있습니다.' })]);
     const waiting = !dead() && !running && (!!target.raw?.awaiting || target.raw?.agentState === 'waiting');
     waitBar.hidden = !waiting;
     if (waiting && !waitBar.childElementCount) {
       waitBar.replaceChildren(
         el('span', { class: 'v2-dot wait', 'aria-hidden': 'true' }),
-        el('div', { class: 'sc-wait-t' }, el('b', { text: '확인이 필요해요' }), el('span', { text: ' — 세션이 승인이나 선택을 기다리고 있어요. 무엇을 묻는지는 터미널에 떠 있습니다.' })),
+        el('div', { class: 'sc-wait-t' }, ...waitWords()),
         el('div', { class: 'sc-wait-acts' },
-          hasTerm() ? el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '터미널에서 답하기', onclick: () => setMode('term') }) : null,
+          //  ★ #3870 — 종전 onclick 은 `setMode('term')` 이었고 그건 **눌러도 아무 일이 안 나는 단추**였다.
+          //   이 세션의 기본 화면이 이미 터미널이라(아래 마운트의 자동 전환 — chatMode='tmux' + hasTerm), 배너가
+          //   뜰 때 사람은 **이미 터미널을 보고 있다**. setMode('term') 은 그 상태에서 대입이 전부 멱등이라
+          //   안내도 토스트도 포커스도 없이 끝난다(실측 신고 2026-09-12: «눌러도 아무것도 안돼»).
+          //   게다가 termFrame 에 focus 를 거는 자리가 코드에 한 줄도 없어, 대화 모드에서 눌러 넘어간 경우에도
+          //   키보드는 액자 밖에 남았다 — 어느 경로로 눌러도 «답할 수 있게» 해 주지 못했다.
+          //   termAct 는 이미 그 규율을 갖고 있다(«터미널이 있어야 하는 동작 — 닫혀 있으면 먼저 연다 · 막다른 버튼 금지»):
+          //   닫혀 있으면 열고, 프레임이 아직이면 담아 뒀다가, 뜨면 focus 를 보내 **커서를 터미널에 놓는다.**
+          hasTerm() ? el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '터미널에서 답하기', onclick: () => termAct('focus') }) : null,
           canKeys() ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '기본 선택으로 답하기', onclick: () => sendKey('approve') }) : null,
           canKeys() ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '거부', onclick: () => sendKey('deny') }) : null));
     }
@@ -1300,7 +1325,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (r?.session) rememberCreated(r.session);
       const next = String(r?.session?.id || r?.movedTo || '');
       if (next && next !== target.id) {
-        toast('이어받기 세션을 열었어요 — 대기 중이던 지시는 그 세션으로 넘어갑니다.');
+        //  #3870 — 서버가 «이어받을 대화가 그 기계에 없어 새 대화로 열었다»(resumed:'fresh') 고 말할 수 있다.
+        //   그때 «이어받기 세션» 이라고 하면 사람은 옛 대화가 붙어 있는 줄 알고 그 위에서 말을 잇는다.
+        toast(r?.resumed === 'fresh'
+          ? '이어받을 대화 기록이 그 컴퓨터에 없어 새 대화로 열었어요 — 대기 중이던 지시는 그 세션으로 넘어갑니다.'
+          : '이어받기 세션을 열었어요 — 대기 중이던 지시는 그 세션으로 넘어갑니다.');
         if (opts.onResumed) opts.onResumed(next); else location.hash = '#/s/' + encodeURIComponent(next);
         return;
       }
