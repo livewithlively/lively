@@ -30,6 +30,31 @@ export const groupTier = (g: string): number => (g === PINNED_GROUP ? 0 : g === 
 /** 볼 일이 아닌 행의 순위 — 우선상태(0·1·2) 뒤. */
 export const QUIET_RANK = 9;
 
+/**
+ * 마지막 작업 일시 → 날짜 묶음 이름. 오늘·어제는 그렇게 부르고, 그 앞은 날짜로.
+ *
+ * ★ **이 어휘엔 바닥이 없다** — 한 달 전이든 작년이든 이름이 나온다. 홈 목록이 어제에서 끊겼던 것은
+ *  이 함수의 한계가 아니라 **행을 세우는 쪽**이 날짜로 자르고 있었기 때문이다(main.ts ① sessRowVerdict).
+ *  #3778 5판에서 그 사실을 이용한다: 줄이 하나도 없는 프로젝트도 카드를 세우고, 이름은 여기서 그대로 받는다.
+ *  새 묶음 이름을 만들지 않으므로 목록의 문법이 한 벌 그대로다.
+ *
+ * ⚠ 하루는 **시각차가 아니라 달력**으로 센다 — 어제 23:59 와 오늘 00:01 은 2분 차이지만 「어제」다.
+ * ⚠ 시계가 밀려 미래 시각이 오면 「오늘」이다(diff ≤ 0) — 「내일」이라는 묶음은 목록에 없다.
+ *
+ * (main.ts 에 있던 것을 옮겼다 — 사이드바도 같은 어휘를 써야 하는데 main.ts 는 side.ts 를 **가져다 쓰는**
+ *  쪽이라 반대로는 못 가져온다. 묶음 이름이 한 자리에 모인다는 이 파일 머리말의 규율과도 맞다.)
+ */
+export function dayGroup(at: number, now: number): string {
+  if (!at) return '언젠가';
+  const d = new Date(at); const n = new Date(now);
+  const day = (x: Date): number => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(n) - day(d)) / 86400000);
+  if (diff <= 0) return '오늘';
+  if (diff === 1) return '어제';
+  return d.getFullYear() === n.getFullYear() ? `${d.getMonth() + 1}월 ${d.getDate()}일`
+    : `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일`;
+}
+
 // ══ 행 ════════════════════════════════════════════════════════════════════════
 
 /** 한 번 「지금 볼 것」에 선 행의 자리. */

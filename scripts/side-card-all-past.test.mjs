@@ -59,9 +59,17 @@ lay(projectPastRows([done("끝남", 1, DAY), run("도는중", 1, 0)], 1, NONE, 1
   ["끝남"], 1,
   "B1 도는 세션은 접힘이 아니라 앞면이라 여기 안 들어온다");
 
-lay(projectPastRows([done("내것", 1, DAY), { ...done("버린것", 1, DAY), trashed: true }], 1, NONE, 12),
+//  ★ 5판에서 칸 이름을 고쳤다: `trashed` 는 **Sess 에 없는 칸**이라 이 판정이 실제 자료에서 한 번도 안 걸렸다
+//   (views.ts `isTrashedSess = !!s.trashedAt`). 4판의 이 줄은 손으로 지은 `{trashed:true}` 객체만 걸러서
+//   «휴지통을 뺀다» 를 통과시켰지만, 화면에서는 휴지통 세션이 카드 접힘에 그대로 서 있었다.
+//   **테스트가 자료형과 다른 모양을 지어 넣으면 그 테스트는 통과하면서 아무것도 안 본다.**
+lay(projectPastRows([done("내것", 1, DAY), { ...done("버린것", 1, DAY), trashedAt: "2026-09-01T00:00:00Z" }], 1, NONE, 12),
   ["내것"], 1,
-  "B2 휴지통 세션은 뺀다 — 되돌리기 전에 열리면 안 된다(#1851)");
+  "B2 휴지통 세션은 뺀다 — 되돌리기 전에 열리면 안 된다(#1851). ★ 판정 칸은 실제 자료와 같은 `trashedAt` 이다");
+
+lay(projectPastRows([{ ...done("옛칸", 1, DAY), trashed: true }], 1, NONE, 12),
+  ["옛칸"], 1,
+  "B2′ ★ 옛 칸 이름(`trashed`)은 **안 본다** — 그 칸은 Sess 에 없으므로 그걸 보는 판정은 아무도 못 거른다");
 
 lay(projectPastRows([done("우리", 1, DAY), done("남의프로젝트", 2, DAY)], 1, NONE, 12),
   ["우리"], 1,

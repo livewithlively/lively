@@ -29,7 +29,7 @@
 //   캐시다(shell-prefs.ts). 선언 한 줄이 어느 쪽인지 말한다 — shellPrefStore = 계정 · deviceStore = 이 기기.
 import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { findMatcher } from '../lib/find.js';
-import { splitFolderRows, foldCardRows, projectPastRows, type PastRowLike } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음
+import { splitFolderRows, foldCardRows, projectPastRows, restProjectCards, type PastRowLike, type RestCardLike } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsTouch } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버다(선언 한 줄이 그걸 말한다)
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES, isDotState, rowDotCls } from '../session-status.js';   // #3778 2판 — 목록 줄의 점은 «나를 기다리는 것» 셋만
@@ -37,7 +37,7 @@ import { lastAsk, watchLastAsk } from './last-ask.js';   // #2016 6차 — 세�
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { sourcesFindInput, sourcesFindShown, sourcesSideBody, sourcesSideCount, sourcesUploadPick, toggleSourcesFind } from './sources.js';   // #2423 자료 앱 사이드바 내용
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
-import { orderCards, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from './hold-rules.js';   // #3856 — 카드 자리 자물쇠(순수)
+import { dayGroup, orderCards, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from './hold-rules.js';   // #3856 — 카드 자리 자물쇠(순수)
 import { migratePinKeys } from './pin-migrate.js';   // #2402 — 복원으로 id 가 바뀔 때 핀을 옮기는 규칙(순수·값검증)
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
 import { confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 휴지통·아카이브
@@ -772,7 +772,9 @@ function projGrpHead(g: ProjGrp): HTMLElement {
       g.open ? null : grpFacesEl(g),
       grpSums(g),
       //  세션이 하나뿐인 묶음은 개수를 안 쓴다 — 접힌 줄 하나가 곧 그 하나다(위 grpSums 주석과 같은 사유).
-      g.rows.length > 1 ? el('span', { class: 'v2-cnt', text: String(g.rows.length) }) : null),
+      //  ★ 줄이 하나도 안 선 카드(#3778 5판)는 **접힘 안 개수**를 대신 쓴다 — 그 카드의 내용이 그것뿐이라
+      //   여기 숫자가 없으면 «세션이 몇 개 있는지» 를 펴 봐야만 알 수 있다(원준 2026-09-12: "개수로라도 보여야").
+      (g.rows.length || g.past) > 1 ? el('span', { class: 'v2-cnt', text: String(g.rows.length || g.past) }) : null),
     //  ★고정(#3778) — 카드째 맨 위로. 「프로젝트 없음」 묶음은 고정할 프로젝트가 없으므로 압정도 없다(트리와 같은 규율).
     g.id ? pinBtn(g.key, '위에 고정 — 이 프로젝트와 그 안의 세션을 통째로 맨 위로 올려 둡니다') : null,
     g.id ? newSessBtn(g.id) : null,
@@ -838,7 +840,10 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
   //   여기 선 행은 소속을 말해 줄 머리글이 없으므로 **두 줄 그대로**(프로젝트 칩을 남긴다).
   const pinnedRows = shown.filter((r) => r.pinned);
   const rest = shown.filter((r) => !r.pinned);
-  const groups = projGroups(rest, !!q);
+  //  ★ 줄이 안 선 프로젝트의 카드를 여기서 **합쳐서** 든다(#3778 5판, 아래 restCards 머리말).
+  //   ⚠ 압정 층을 가르기 **전**이어야 한다 — 뒤에 붙이면 압정한 rest 카드가 「고정」에도 못 서고
+  //    아래 `if (g.pinned) continue` 에도 걸려 **통째로 사라진다**. 지금 고치는 그 부류의 구멍이다.
+  const groups = [...projGroups(rest, !!q), ...restCards(rest, !!q)];
   //  ★ 프로젝트 축에서는 **카드째** 고정한다(#3778, 원준 2026-09-09). 이 축의 단위는 세션이 아니라 프로젝트라,
   //   압정도 그 단위여야 한다 — 카드가 올라오면 그 안의 세션은 **자동으로 따라 올라온다**(집합을 안 건드리고 자리만 옮긴다).
   //   ⚠ 카드를 여기서 다시 정렬하지 않는다 — 「고정」 층으로 통째로 옮길 뿐, 그 층 안의 순서도 아래 순서도
@@ -853,6 +858,7 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
     for (const r of pinnedRows) kids.push(appRowEl(r, o));
     for (const g of pinnedGrps) kids.push(projGrpCard(g, o, !!q));
   }
+  //  날짜 묶음 이름이 같은 어휘라(dayGroup) rest 카드도 위 목록과 한 줄기로 이어진다: 오늘 · 어제 · 9월 10일 · …
   for (const g of groups) {
     if (g.pinned) continue;                         // 이미 위 「고정」 층에 섰다
     if (g.bucket && g.bucket !== lastBucket) {
@@ -862,6 +868,40 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
     kids.push(projGrpCard(g, o, !!q));
   }
   return kids;
+}
+
+/**
+ * **줄이 하나도 안 선 프로젝트**의 카드 (#3778 5판, 원준 2026-09-12).
+ *
+ *  신고: "사이드바에서 아예 어떻게도 볼 수 없는 숨겨져 있는 세션이 존재하는 것 자체가 말이 안 된다."
+ *  실측: 내 세션 190개 중 **33개**가 홈 목록 어디에도 없었다 — **카드가 안 서는 프로젝트 24개** 안에.
+ *
+ *  4판은 접힘 «안쪽»을 전량으로 넓혔지만 그건 카드가 이미 서 있을 때의 이야기다. 카드가 없으면
+ *  넓힌 접힘도 그릴 자리가 없다. 그래서 5판은 **카드가 서는 조건**을 바꾼다 — 내 세션이 있는
+ *  프로젝트는 전부 카드를 갖는다. 그러면 «안 보이는 세션» 이 정의상 0 이 된다.
+ *
+ *  ⚠ **서 있는 줄의 규칙은 안 건드린다.** 이 카드들은 전부 **접힌 한 줄**이라 목록이 줄 단위로 안 길어진다
+ *   (원준님 계정에서 24줄). «홈이 명부가 되면 안 된다»(#2208) 가 걱정한 것은 줄이 늘어나는 것이었다.
+ *  ⚠ 자리 자물쇠(stepCardHold)를 안 태운다 — 이 카드들은 서 있는 줄이 없어 층·순위가 움직일 일이 없고,
+ *   자물쇠에 넣으면 pruneHolds 가 매 판 정리해야 할 기억만 24개 는다.
+ *  ⚠ 아카이브·휴지통 프로젝트는 뺀다 — 그 둘은 발치 도크가 따로 받는다(secFoot).
+ */
+function restCards(standing: SideInstance[], searching: boolean): ProjGrp[] {
+  if (!last) return [];
+  const has = new Set<number>();
+  for (const r of standing) if (r.project && r.project.id) has.add(r.project.id);
+  const now = Date.now();
+  const out: ProjGrp[] = [];
+  for (const c of restProjectCards(last.data.sessions as unknown as RestCardLike[], has)) {
+    const p = last.data.projects.find((x) => x.id === c.id);
+    if (!p || isArchivedProj(p) || isTrashedProj(p)) continue;
+    const key = 'p:' + c.id;
+    //  찾는 중이면 이름이 걸린 것만 — 목록의 다른 카드는 행 단위로 이미 걸러져 왔다(instMatch).
+    if (searching && !findMatcher(sideFilter.trim().toLowerCase())(p.name)) continue;
+    out.push({ key, id: c.id, name: p.name, bucket: dayGroup(c.at, now), rows: [], open: false,
+      active: false, pinned: isPinned(key), counts: {}, live: 0, past: c.n, rank: QUIET_RANK, at: c.at });
+  }
+  return out;
 }
 
 /** 프로젝트 카드 한 장 — 머리글 + (펼쳤으면) 그 안의 세션들.
@@ -883,10 +923,17 @@ function projGrpCard(g: ProjGrp, o: RowOpts, searching = false): HTMLElement {
   //  ⇒ 그 결과 홈 카드와 [AI 세션] 카드가 **같은 내용**이 된다(원준: "둘이 달라질 이유가 있나").
   const standing = new Set<string>();
   for (const r of g.rows) if (r.id.startsWith('sess:')) standing.add(r.id.slice(5));
-  const extra = projectPastRows(last?.data.sessions as PastRowLike[] | undefined, g.id, standing, MAX_SESS);
+  //  앞면이 하나도 없는 카드에서는 도는 세션도 접힘이 받는다(keepLive) — 안 그러면 «치운 도는 세션» 하나뿐인
+  //   프로젝트의 카드가 펴도 **텅 빈다**. 그 세션은 줄로도 안 서므로(치움이 live 보다 먼저 판정된다) 어디에도 없게 된다.
+  const extra = projectPastRows(last?.data.sessions as PastRowLike[] | undefined, g.id, standing, MAX_SESS,
+    { keepLive: !g.rows.length });
   const extraRows = extra.rows.map((s) => sessAsInst(s as unknown as Sess, true, ''));
   const folded = [...fold.folded, ...extraRows];
-  const foldOpen = fold.open || (!!extra.total && pastSet.has(g.key));
+  //  ★ **앞면이 하나도 없으면 접힘을 펴 둔다**(#3778 5판) — foldCardRows 의 "본문이 없으면 덮을 것이 없다" 와
+  //   같은 규율을 카드 전체에 적용한 것이다. 줄이 안 선 프로젝트의 카드는 내용이 「지난 세션 n」 하나뿐이라,
+  //   접어 두면 펴도 **뚜껑만 나오고** 세션을 보려면 한 번 더 눌러야 한다 — 「폴더를 펼쳐도 그 세션이 안
+  //   보였다」(#762·#1808)로 이미 두 번 고친 그 증상이다.
+  const foldOpen = fold.open || !fold.now.length || (!!extra.total && pastSet.has(g.key));
   //  「외 n개」 — 상한을 넘는 만큼은 프로젝트 화면이 받는다(트리의 v2-ss-more 와 같은 규약).
   const over = extra.total - extra.rows.length;
   return el('div', { class: 'v2-pg' + (g.open ? ' open' : ''), 'data-anch': g.key },
