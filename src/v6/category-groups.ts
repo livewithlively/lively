@@ -119,6 +119,10 @@ export const GROUP_SETS: Record<string, GroupDef[]> = {
 
 /** 무대(stage) → 직무 집합. 직무를 안 골랐거나 모르는 값일 때 그 다음으로 본다. */
 const STAGE_FALLBACK: Record<string, string> = {
+  //  study(학업·연구, #1631)는 옛 academy+student 를 합친 값이다. 단계를 안 고른 사람에게 주는
+  //   기본값은 넓은 쪽(「학생」 집합)으로 둔다 — 석·박사는 2단에서 「연구·대학원」 직무가 잡히므로
+  //   여기까지 내려오지 않는다(groupSetFor 는 직무를 먼저 본다).
+  study: "학생",
   student: "학생",
   academy: "연구·대학원",
   solo: "1인 사업",

@@ -135,6 +135,10 @@ export const WORK_ASIS_SEP = " · ";
 //  distill_at / distill_gave_up_at / distill_note — 2턴(증류 지시)을 그 세션에 넣었나·포기했나·왜(second-turn-sweep). 둘 다 없으면 대기 중.
 export interface LivWelcome {
   done_at: string; drawers?: string[]; first_order?: string | null; session_id?: string | null;
+  /** 이 워크스페이스를 무엇에 쓰는가(company|solo|study, #1631). **자리** 축이라 워크스페이스 칸에 산다 —
+   *  사람 축(직무)은 계정 층 `work` 에 그대로 있다. 둘을 한 칸에 두면 워크스페이스 둘을 만든 사람에게
+   *  뒤가 앞을 덮는다(#2265 가 고친 바로 그 사고). */
+  stage?: string | null;
   distill_at?: string | null; distill_gave_up_at?: string | null; distill_note?: string | null;
   /** 세션이 사라져 **다시 연** 시각(#1631). 딱 한 번만 다시 연다 — 이 값이 있으면 다음엔 포기한다. */
   distill_reopened_at?: string | null;
