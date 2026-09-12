@@ -268,7 +268,9 @@ const SECTION_EXIT = { 'review-queue': '#/knowledge/review', 'wiki-categories': 
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
 // (증류기는 #1419 에서 [맥락 관리 ▸ 증류]로 이관 — 여기 목록에 없다. 서버 scope 도 memory(워킹레벨)라
 //  애초에 관리자 전용이 아니었다: 팀이 자기 채널의 증류 기준을 직접 조절하는 게 그 기능의 취지다.)
-const ADMIN_ONLY = ['member-add', 'member-access', 'login-idp', 'credentials', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'automation', 'audit', 'session-share', 'visibility-axes',
+// 2026-09-12 대표 결정 — 워크스페이스 관리(외부 내보내기·자동화)는 구성원도 한다. 여기 남는 것은 인원 관리와 인프라·감사다.
+//  ('embeddings' 는 남긴다 — 백필은 구성원이 할 수 있으나 그 화면의 설정 저장이 runtime-config(admin) 이라 반쪽이 된다.)
+const ADMIN_ONLY = ['member-add', 'member-access', 'login-idp', 'credentials', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'audit', 'session-share', 'visibility-axes',
   // 'nodes' = 조직 전체 컴퓨터 + 공유 지정. 구성원 개인 컴퓨터가 그대로 보이고, 공유 지정은 남의 기계를
   //  전체에 여는 결정이라 관리자 전용. (개인용 [내 설정 ▸ 내 컴퓨터]='me-nodes' 는 여기 넣지 않는다.)
   'nodes'];

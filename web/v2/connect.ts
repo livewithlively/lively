@@ -462,7 +462,9 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   const spec = svc.token ? CRED_KINDS.find((x: any) => x.kind === svc.token) : null;
   //  지금 이 앱을 켜는 길 — 목록(viaAccount)과 같은 판정. svc.oauth 만 보면 Slack 처럼 OAuth 가 안 열린 앱이 막다른 버튼이 된다(#2202 A1).
   const account = !!((svc.oauth && v.oauthMap.has(svc.oauth)) || (svc as any).appConnect);
-  const isAdmin = hasScope('admin');
+  //  2026-09-12 대표 결정 — 팀 수집·쓰기 도구·아웃바운드는 «워크스페이스를 어떻게 굴릴까»라 구성원이 한다.
+  //   (관리자 전용으로 남는 것은 인원 관리와 인프라뿐 — 데이터베이스·게이트웨이 열쇠는 위에서 따로 admin 을 본다.)
+  const isAdmin = hasScope('memory') || hasScope('admin');
   const noun = SCOPE_NOUN[svc.key] || '것';
 
   //  #2232 — OAuth 릴레이에서 **막 돌아온 탭**이다(main.ts 가 표식을 남긴다). 이 탭은 [허용]을 누르느라 새로 열린 탭이라
@@ -585,7 +587,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   const unit = COLLECT_UNIT[svc.key];
   let collect: CollectFace;
   //  ⚠ 자료 가져오기를 «직접 사용» 축에 매달지 않는다 — 근거가 달라 어긋난다(#2202 실측: 수집기가 돌고 있는데 화면은 «꺼짐»).
-  if (svc.key === 'slack') collect = !isAdmin ? quietCollectFace('관리자만', '워크스페이스 관리자가 켤 수 있어요 — 켜면 공개 채널이 함께 보는 자료함으로 들어옵니다.', onCollect)
+  if (svc.key === 'slack') collect = !isAdmin ? quietCollectFace('권한 필요', '이 워크스페이스의 구성원이 켤 수 있어요 — 켜면 공개 채널이 함께 보는 자료함으로 들어옵니다.', onCollect)
     : slackTeamCollectCard(onCollect);
   else if (svc.key === 'notion') collect = isAdmin ? notionTeamCollectCard(onCollect)
     : quietCollectFace('관리자만', '워크스페이스 관리자가 켤 수 있어요 — 노션에서 고른 페이지만 함께 보는 자료함으로 들어옵니다.', onCollect);
@@ -593,10 +595,10 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     : quietCollectFace('관리자만', '워크스페이스 관리자가 켤 수 있어요 — Drive 문서가 함께 보는 자료함으로 들어옵니다.', onCollect);
   else if (svc.key === 'linear') collect = isAdmin ? memberTokenCollectCard(svc.key, onCollect)
     : quietCollectFace('관리자만', '워크스페이스 관리자가 켤 수 있어요 — 켜면 이슈·댓글·문서가 함께 보는 자료함으로 들어옵니다.', onCollect);
-  else if (svc.key === 'gitlab') collect = !isAdmin ? quietCollectFace('관리자만', '워크스페이스 관리자가 켤 수 있어요 — 켜면 고른 프로젝트의 이슈·MR 대화가 함께 보는 자료함으로 들어옵니다.', onCollect)
+  else if (svc.key === 'gitlab') collect = !isAdmin ? quietCollectFace('권한 필요', '이 워크스페이스의 구성원이 켤 수 있어요 — 켜면 고른 프로젝트의 이슈·MR 대화가 함께 보는 자료함으로 들어옵니다.', onCollect)
     : !(cred && cred.has_secret) ? quietCollectFace('꺼짐', 'GitLab 은 계정 로그인 토큰으로는 자료를 못 읽어요 — 위 [내 계정으로 직접 사용]에서 개인 액세스 토큰(read_api)을 저장하면 여기서 켤 수 있어요.', onCollect)
     : memberTokenCollectCard(svc.key, onCollect);
-  else if (svc.key === 'figma' || svc.key === 'clickup' || svc.key === 'github') collect = !isAdmin ? quietCollectFace('관리자만', `워크스페이스 관리자가 켤 수 있어요 — 켜면 ${svc.label}의 ${unit}${eulReul(unit) === '을' ? '이' : '가'} 함께 보는 자료함으로 들어옵니다.`, onCollect)
+  else if (svc.key === 'figma' || svc.key === 'clickup' || svc.key === 'github') collect = !isAdmin ? quietCollectFace('권한 필요', `이 워크스페이스의 구성원이 켤 수 있어요 — 켜면 ${svc.label}의 ${unit}${eulReul(unit) === '을' ? '이' : '가'} 함께 보는 자료함으로 들어옵니다.`, onCollect)
     : st !== 'on' ? quietCollectFace('꺼짐', svc.key === 'github' ? '위 [내 계정으로 직접 사용]을 먼저 켜면 여기서 켤 수 있어요 — 연결 화면에서 고른 저장소가 범위가 돼요.' : '위 [내 계정으로 직접 사용]에서 토큰을 저장하면 여기서 켤 수 있어요 — 내 토큰으로 읽어 와요.', onCollect)
     : memberTokenCollectCard(svc.key, onCollect);
   else collect = quietCollectFace('아직 없어요',
@@ -615,7 +617,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   //  종전엔 관리탭 [데이터 연결]에 «위키 아웃바운드»·«프로젝트 아웃바운드»라는 별개 화면으로 있었다. 그런데 그 둘은
   //  각각 «노션 이야기»·«클릭업 이야기»다 — 같은 앱을 두 화면에서 설명하면 노션을 보러 온 사람이 자기 노션 설정의
   //  절반을 못 찾는다. 그래서 그 앱 상세의 칸 하나로 들어왔다. 앞의 두 연결과 **반대 방향**이고, 켜고 끄는 것이
-  //  워크스페이스 전체에 걸리므로 관리자에게만 보인다(관리탭에서도 admin 전용이었다).
+  //  워크스페이스 전체에 걸리는 설정이라 구성원 권한(memory)에서 보인다(2026-09-12 — 종전 admin 전용).
   const outbound = isAdmin && (svc.key === 'notion' || svc.key === 'clickup') ? el('div', {}) : null;
   if (outbound) {
     outbound.replaceChildren(skeleton('내보내기 설정을 불러오는 중'));

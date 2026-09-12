@@ -1,5 +1,6 @@
 // delivery ▸ mcp-servers — MCP 서버 레지스트리(프리셋·추가/수정·제거·프록시 스냅샷 발행).
 import type { Capability } from "../types.js";
+import { canManageWorkspace } from "../principal.js";
 import { z } from "zod";
 import { HttpError } from "../rest-util.js";
 import { refreshProxySnapshot } from "../../mcp/mcp-proxy.js";
@@ -8,7 +9,7 @@ import type { LivelyUser } from "../../context.js";
 import { MEANING } from "../../org/delivery/meaning.js";
 import { listMcpServers, upsertMcpServer, removeMcpServer } from "../../org/store.js";
 import { MCP_SERVER_PRESETS } from "../../org/delivery/mcp-server-presets.js";
-import { actorOf, restOnly, restRead, slug, str } from "./shared.js";
+import { actorOf, restRead, restWork, slug, str } from "./shared.js";
 
 export const mcpServersCapabilities: Capability[] = [
   // ── MCP 서버 레지스트리 ──
@@ -20,7 +21,7 @@ export const mcpServersCapabilities: Capability[] = [
       // servers_all(#1169) — org_overview 가 admin 에게 주던 **전량**(모든 필드 · disabled 포함)을 같은 모양으로.
       //  위 servers 는 상태칩 전용 축약(활성 + 접속정보 있는 것만, 6개 필드)이라 관리 목록으로는 쓸 수 없다.
       //  시크릿은 어느 쪽에도 없다(auth_env 는 환경변수 '이름').
-      const isAdmin = !!(user?.scopes && user.scopes.includes("admin"));
+      const isAdmin = canManageWorkspace(user);   // 2026-09-12 — 외부 도구 서버 관리도 워크스페이스 관리 축
       return {
         servers: all.filter((s) => s.enabled && (s.transport === "stdio" ? !!s.command : !!s.url)).map((s) => ({
           name: s.name, transport: s.transport, url: s.url, command: s.command, auth_env: s.auth_env, enabled: s.enabled,
@@ -31,11 +32,11 @@ export const mcpServersCapabilities: Capability[] = [
   // 외부 도구 서버(MCP) 기본 프리셋. 구 이름 org_connector_catalog / /org/connector-catalog 는 **오해를 부르는
   //  이름이었다**(#837) — 담긴 건 org_connector(패시브 미러)가 아니라 org_mcp_server 다. 개명하되 **구 REST 경로는
   //  별칭으로 남긴다**(이미 배포된 클라이언트 보호). MCP 툴 이름은 세션마다 tools/list 로 새로 발견되므로 개명해도 안전.
-  restOnly("org_mcp_server_presets", "외부 도구 서버(MCP) 기본 프리셋",
+  restWork("org_mcp_server_presets", "외부 도구 서버(MCP) 기본 프리셋",
     "관리탭 [AI 도구 ▸ 외부 도구 서버] 추가 시 프리셋으로 채우는 기본 MCP 서버 정본(호스팅 OAuth). 코드 SoT(mcp-server-presets.ts). 시크릿 없음. ※ 외부 자료 수집(org_connector 미러)과는 무관하다 — 구 이름 org_connector_catalog.",
     [{ method: "GET", paths: ["/api/ui/org/mcp-server-presets", "/api/ui/org/connector-catalog"], parse: () => ({}) }],
     async () => ({ catalog: MCP_SERVER_PRESETS })),
-  restOnly("org_mcp_upsert", "MCP 서버 추가·수정",
+  restWork("org_mcp_upsert", "MCP 서버 추가·수정",
     "조직 MCP 서버를 저장한다. transport http(url)|stdio(command). 인증은 auth_env(환경변수 이름만 — 시크릿 금지).",
     [{ method: "POST", paths: ["/api/ui/org/mcp-server"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -110,7 +111,7 @@ export const mcpServersCapabilities: Capability[] = [
       auth_scope_key: z.string().nullable().optional(),
       auth_mode: z.enum(["bearer", "oauth", "sigv4"]).nullable().optional().describe("bearer=정적토큰(기본) / oauth=per-member OAuth(T2) / sigv4=AWS 요청서명(#746)"),
     }),
-  restOnly("org_mcp_refresh", "MCP 프록시 스냅샷 새로고침(발행)",
+  restWork("org_mcp_refresh", "MCP 프록시 스냅샷 새로고침(발행)",
     "proxy 모드 MCP 서버의 상류 tools/list 를 다시 캡처해 스냅샷(핀)으로 저장한다 — 버전업/새 툴 반영. 다음 세션부터 구성원에 전파(재설치 0).",
     [{ method: "POST", paths: ["/api/ui/org/mcp-server/refresh"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -128,7 +129,7 @@ export const mcpServersCapabilities: Capability[] = [
     }, {
       name: z.string().describe("스냅샷을 다시 뜰 proxy 모드 MCP 서버 이름"),
     }),
-  restOnly("org_mcp_remove", "MCP 서버 제거",
+  restWork("org_mcp_remove", "MCP 서버 제거",
     "조직 MCP 서버를 제거한다.",
     [{ method: "POST", paths: ["/api/ui/org/mcp-server/remove"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {

@@ -178,7 +178,7 @@ const orgGoogleCollect: Capability = {
   description:
     "\"자료 가져오기\" 상태 — 드라이브·Gmail 수집기의 켜짐 여부, 이 관리자의 구글 연결과 동의 범위, 동의 시작 가능 여부, " +
     "그리고 지금 조합이 구글 미검증 100명 한도를 태우는지(consumes_user_cap). 토글은 org_google_collect_set.",
-  scope: "admin", input: {},
+  scope: "memory", input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/google/collect"], parse: () => ({}) }] },
   handler: async (_input, user) => {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
@@ -189,12 +189,12 @@ const orgGoogleCollect: Capability = {
 const orgGoogleCollectSet: Capability = {
   name: "org_google_collect_set", title: "구글 자료 가져오기 켜기/끄기",
   description:
-    "\"자료 가져오기\" 토글(admin). enabled=true 인데 내 구글 연결이 없으면 needs_connect=true 와 authorization_url 을 " +
+    "\"자료 가져오기\" 토글(구성원). enabled=true 인데 내 구글 연결이 없으면 needs_connect=true 와 authorization_url 을 " +
     "돌려준다 — 그 화면에서 [허용]하면 연결이 저장되고, 다시 이 토글을 부르면 수집기가 만들어진다(token_source=member:<나>, " +
     "토큰 복사 0). services 로 모을 서비스를 고른다. ★**Gmail 은 1차 런칭 대상이 아니다**(2026-08-26 결정) — 제한범위라 " +
     "CASA·불가역 100명 한도를 태운다. 넣어 불러도 켜지지 않고, 이미 켜져 있던 것은 건드리지 않고 skipped 로 알린다. " +
     "false 면 끈다(삭제 아님 — 커서·자료 보존).",
-  scope: "admin",
+  scope: "memory",
   input: { enabled: z.boolean().describe("true=켜기 · false=끄기"), services: SERVICES.optional() },
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/org/google/collect"], parse: (req) => req.body ?? {} }] },
   handler: async (input, user, ctx) => {
@@ -265,9 +265,9 @@ const orgGoogleCollectSet: Capability = {
 const orgGoogleCollectConnect: Capability = {
   name: "org_google_collect_connect", title: "구글 연결(범위 선택) 시작",
   description:
-    "구글 동의를 시작한다(admin) — 반환된 authorization_url 을 열어 [허용]하면 내 금고에 저장된다. 이미 연결된 뒤에 " +
+    "구글 동의를 시작한다(구성원) — 반환된 authorization_url 을 열어 [허용]하면 내 금고에 저장된다. 이미 연결된 뒤에 " +
     "services 를 넓혀 부르면 **증분 인가**라 기존 동의를 잃지 않고 범위만 넓어진다.",
-  scope: "admin", input: { services: SERVICES.optional() },
+  scope: "memory", input: { services: SERVICES.optional() },
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/org/google/collect/connect"], parse: (req) => req.body ?? {} }] },
   handler: async (input, user) => {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");

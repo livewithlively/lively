@@ -64,7 +64,7 @@ const appSetEnabled: Capability = {
   name: "org_app_set_enabled",
   title: "앱 활성/비활성",
   description: "앱을 켜거나 끈다(비파괴). 끄면 새 실행을 막고 현재 worker run은 정지한다. AI 세션·설치 자산은 보존한다.",
-  scope: "admin",
+  scope: "memory",
   input: { app_id: z.string(), enabled: z.boolean() },
   expose: {
     mcp: true,
@@ -215,7 +215,7 @@ const appActivityCap: Capability = {
   name: "org_app_activity",
   title: "앱 활동 로그",
   description: "설치된 앱들이 자기 자격으로 호출한 도구 활동을 앱별·도구별로 집계한다(호출수·성공/실패·최근시각). app_id 를 주면 그 앱만, days 로 기간(기본 7·최대 365). 관측 전용. 관리자.",
-  scope: "admin",
+  scope: "memory",
   input: { app_id: z.string().optional(), days: z.number().optional() },
   expose: {
     mcp: true,

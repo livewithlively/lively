@@ -15,10 +15,10 @@ import { runAutoBackfillSweep } from "../../v6/embedding-backfill.js";
 // #586 커넥터 UX — 비동기 실행(run 엔티티)·스코프 발견.
 import { startConnectorRun, listConnectorRuns, getConnectorRun, cancelConnectorRun } from "../../connectors/run-tracker.js";
 import { discoverConnectorScope } from "../../connectors/discover.js";
-import { actorOf, restOnly, str } from "./shared.js";
+import { actorOf, restWork, str } from "./shared.js";
 
 export const connectorsReadCapabilities: Capability[] = [
-  restOnly("org_connectors", "외부 자료 수집(커넥터) 목록",
+  restWork("org_connectors", "외부 자료 수집(커넥터) 목록",
     "관리탭 [외부 자료 수집] — 등록된 커넥터(슬랙·노션·클릭업·지메일·드라이브 등 **패시브 미러 싱크**) 설정 목록. 시크릿 값은 담기지 않는다. " +
     "실행 이력·로그는 org_connector_runs/org_connector_run_log, 사람 매핑은 org_connector_members, 지금 싱크는 org_connector_sync_run. " +
     "⚠ AI 가 실시간 호출하는 외부 시스템(MCP 서버·사내 API 도구)은 이게 아니라 org_mcp_servers·org_tools 다.",
@@ -28,7 +28,7 @@ export const connectorsReadCapabilities: Capability[] = [
 
 export const connectorsCapabilities: Capability[] = [
   // ── 커넥터 설정/토큰 (프로젝트 #541) — config=평문, secrets=암호화(secret-box) ──
-  restOnly("org_connector_upsert", "커넥터 설정·토큰 저장",
+  restWork("org_connector_upsert", "커넥터 설정·토큰 저장",
     "커넥터(slack/notion/clickup/…)의 설정(config, 평문)과 토큰(secrets, 암호화 저장)을 저장한다. secrets 는 값이 오면 갱신·빈값/미전송이면 유지. 시크릿 저장엔 게이트웨이 CONNECTOR_SECRET_KEY 필요.",
     [{ method: "POST", paths: ["/api/ui/org/connector"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -58,7 +58,7 @@ export const connectorsCapabilities: Capability[] = [
       note: z.string().nullable().optional(),
     }),
   // ── #586 커넥터 실행(run) — 비동기 "지금 싱크" + 실행 이력/로그(폴링). ──
-  restOnly("org_connector_sync_run", "커넥터 지금 싱크(비동기)",
+  restWork("org_connector_sync_run", "커넥터 지금 싱크(비동기)",
     "커넥터 싱크를 백그라운드로 시작하고 run_id 를 즉시 반환한다(긴 full 백필도 HTTP 타임아웃 없음). 로그·상태는 runs API 로 폴링.",
     [{ method: "POST", paths: ["/api/ui/org/connector/sync"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -71,7 +71,7 @@ export const connectorsCapabilities: Capability[] = [
       system: z.string().describe("커넥터 시스템(slack·notion·clickup 등)"),
       full: z.boolean().optional().describe("true=전체 백필(커서 무시), 기본 false=증분"),
     }),
-  restOnly("org_connector_runs", "커넥터 실행 이력",
+  restWork("org_connector_runs", "커넥터 실행 이력",
     "커넥터 실행(connector_run) 목록 — 상태·모드·트리거·소요. 로그는 개별 run 조회로. limit(≤100, 기본 20)·offset 으로 과거 이력 페이지네이션(#709).",
     [{ method: "GET", paths: ["/api/ui/org/connector/runs"], parse: (req) => ({
       system: req.query?.system ? String(req.query.system) : undefined,
@@ -90,7 +90,7 @@ export const connectorsCapabilities: Capability[] = [
       limit: z.number().int().min(1).max(100).optional().describe("페이지 크기(≤100, 기본 20)"),
       offset: z.number().int().min(0).optional().describe("페이지 오프셋(기본 0) — 최신 N건 너머 과거 이력(#709)"),
     }),
-  restOnly("org_connector_run_log", "커넥터 실행 로그",
+  restWork("org_connector_run_log", "커넥터 실행 로그",
     "실행 1건의 메타 + 로그 청크(offset 이후) — 웹이 폴링으로 이어붙여 진행상황을 본다.",
     [{ method: "GET", paths: ["/api/ui/org/connector/runs/:id"], parse: (req) => ({
       id: Number(req.params?.id), offset: req.query?.offset ? Number(req.query.offset) : 0,
@@ -106,7 +106,7 @@ export const connectorsCapabilities: Capability[] = [
       id: z.number().int().positive().describe("connector_run id(org_connector_runs 로 조회)"),
       offset: z.number().int().min(0).optional().describe("로그 바이트 오프셋(기본 0) — 이 위치 이후 청크만 받아 이어붙인다"),
     }),
-  restOnly("org_connector_run_cancel", "커넥터 실행 중지",
+  restWork("org_connector_run_cancel", "커넥터 실행 중지",
     "진행 중인 실행을 중지한다(자식 프로세스 kill + canceled 기록). 커서 미전진이라 데이터 손실 없음 — 다음 run 이 재수집.",
     [{ method: "POST", paths: ["/api/ui/org/connector/runs/:id/cancel"], parse: (req) => ({ id: Number(req.params?.id) }) }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -116,7 +116,7 @@ export const connectorsCapabilities: Capability[] = [
     }, {
       id: z.number().int().positive().describe("중지할 connector_run id — 커서 미전진이라 데이터 손실 없음(다음 run 이 재수집)"),
     }),
-  restOnly("org_connector_discover", "커넥터 스코프 목록 조회",
+  restWork("org_connector_discover", "커넥터 스코프 목록 조회",
     "저장된 토큰으로 소스의 선택지(노션 공유 페이지/DB, 클릭업 리스트)를 조회한다 — 관리탭 픽커용.",
     [{ method: "POST", paths: ["/api/ui/org/connector/discover"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>) => {
@@ -128,7 +128,7 @@ export const connectorsCapabilities: Capability[] = [
       system: z.string().describe("커넥터 시스템(notion·clickup 등) — 저장된 토큰으로 선택지를 조회한다"),
     }),
 
-  restOnly("org_connector_remove", "커넥터 설정 제거",
+  restWork("org_connector_remove", "커넥터 설정 제거",
     "커넥터 설정/토큰 행을 제거한다(env 폴백으로 복귀).",
     [{ method: "POST", paths: ["/api/ui/org/connector/remove"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -153,7 +153,7 @@ export const connectorMembersCapabilities: Capability[] = [
   //  안 가져오므로 관리자가 외부 id(ClickUp 숫자 id 등)를 **손으로 타이핑**해야 했다 — 어디서 찾는지도 모르고
   //  오타는 조용히 매칭 실패로 끝난다. 여기선 커넥터가 실제 목록을 주므로 드롭다운으로 고르기만 하면 된다.
   //  listUsers 를 안 다는 커넥터(gmail·gdrive — 개인 OAuth 라 '멤버' 개념이 없다)는 supported:false 로 답한다.
-  restOnly("org_connector_members", "커넥터 사람 매핑 목록",
+  restWork("org_connector_members", "커넥터 사람 매핑 목록",
     "커넥터(clickup·slack·notion)의 사용자 목록과 각자의 org_member 매핑 상태를 계산해 반환한다 — 관리탭 [외부 자료 수집 ▸ 멤버 매핑] 패널용. 구 이름 org_connector_clickup_members.",
     [{ method: "GET", paths: ["/api/ui/org/connector/:system/members", "/api/ui/org/connector/clickup/members"],
        parse: (req) => ({ system: String((req.params as Record<string, string>)?.system ?? "clickup") }) }],

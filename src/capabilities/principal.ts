@@ -15,6 +15,17 @@ export function viewerOf(u: { userId?: string; scopes?: string[] } | undefined):
   return u?.userId || null;
 }
 
+/**
+ * 이 요청이 **워크스페이스 관리**를 할 수 있나(2026-09-12 대표 결정).
+ *  «워크스페이스를 어떻게 굴릴까»(외부 앱 연결·수집·증류·분류·도구·경보·예약·아웃바운드)는 관리자 전용이 아니다 —
+ *  일상적으로 굴리는 사람이 곧 고치는 사람이다(#1289 «누구나 관리» 의 연장). 그래서 워킹레벨 scope(memory)로 잰다.
+ *  ⚠ **인원 관리는 여기 해당하지 않는다** — 구성원 추가·제거·권한 변경·비밀번호 초기화·토큰 발급은 admin,
+ *   워크스페이스 초대·내보내기는 owner 판정(delivery/workspace-registry.ts)이다. 그 둘은 이 술어로 열지 마라.
+ */
+export function canManageWorkspace(u: { scopes?: string[] } | undefined): boolean {
+  return !!u?.scopes?.includes("memory") || !!u?.scopes?.includes("admin");
+}
+
 /** 이 요청이 조직 운영 권한(admin)인가 — 가시성 우회가 아니라 **메타데이터 노출·관리 표면** 판정에 쓴다. */
 export function isAdmin(u: { scopes?: string[] } | undefined): boolean {
   return !!u?.scopes?.includes("admin");

@@ -169,6 +169,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   let WS: any = null;
   async function loadWelcome() {
     try { WS = await api('/api/ui/me/welcome'); } catch (_) { WS = null; }
+    if (WS && WS.joining) JOIN = WS.joining;   // #3872 — 합류자 여부·팀 이름·인원·지식 수
     return WS;
   }
   /** 지금 아는 **진짜** 갈래 집계. 서버를 아직 못 읽었으면 빈 배열(연출 숫자를 만들지 않는다). */
@@ -964,7 +965,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   let CONN = null;
   /** 한 번이라도 물어봤나. ⚠ 이게 없으면 서버가 답을 못 줄 때 '못 읽음 → 다시 그림 → 또 물음'이 영원히 돈다. */
   let connTried = false;
-  const isAdmin = () => { try { return (state.me && Array.isArray(state.me.scopes) && state.me.scopes.includes('admin')) === true; } catch (_) { return false; } };
+  //  2026-09-12 — 팀 수집을 켜는 것은 워크스페이스 관리 축(구성원)이다. 초대로 합류한 사람이 앱을 연결해도
+  //   개인 MCP 축으로 새지 않고 팀 자료함으로 들어온다(종전에는 admin 만이라 합류자는 영영 못 켰다).
+  const isAdmin = () => { try { const sc = (state.me && state.me.scopes) || []; return Array.isArray(sc) && (sc.includes('memory') || sc.includes('admin')); } catch (_) { return false; } };
   /* ★ #2243 (원준 2026-08-28: "온보딩 <연결하기> 로 슬랙·노션은 MCP 말고 수집기가 돌아가게") ──────────────────
    *  이 화면이 약속하는 것은 «그동안 쌓인 자료를 가져온다» 다. 개인 연결(금고에 자격 한 줄 = AI 도구·MCP)은 그 약속과
    *  무관하고, 노션은 그 토큰(DCR)으로 수집도 못 한다(#1881). 그래서 슬랙·노션은 **수집기 축(org_collector)** 으로 잇고
@@ -1434,16 +1437,29 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   //  #2232 — 순서: 파일 → **AI 고르기·연결** → 외부 앱 → 내 컴퓨터(원준님 2026-08-28: "AI 골라서 연결하는 플로우가 먼저, 그 다음 외부 앱, 로컬은 그 다음").
   //  ★ 2026-08-31(원준님) — 'read'·b1~can(리브와의 챗봇 문답)을 걷어냈다. [앱] 다음은 곧장 마무리다.
   const ORDER = ['name', 'stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];
-  const STEP_OF = Object.fromEntries(ORDER.map((k, i) => [k, i]));
+  //  #3872 — **이미 굴러가는 팀에 합류한 사람**의 차례표. 둘의 차이는 둘뿐이다:
+  //   ① 맨 앞에 «어느 팀에 왔는지»(team)를 둔다 — 종전엔 자기가 어디에 들어왔는지 모른 채 이름부터 물었다.
+  //   ② «어디에서 일하고 계세요?»(stage)를 묻지 않는다 — 그건 워크스페이스가 이미 정해 둔 값이다.
+  //   자료 올리기·외부 앱·내 컴퓨터는 **그대로 둔다**(원준 2026-09-12: "그들도 자료를 로컬에서 업로드 할 수 있어야지").
+  const ORDER_JOIN = ['team', 'name', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];
+  const STEP_OF = Object.fromEntries([...ORDER, 'team'].map((k, i) => [k, i]));
+  //  서버가 준 사실(GET /api/ui/me/welcome 의 joining) — 판정은 화면이 하지 않는다.
+  let JOIN = null;
+  const isJoin = () => !!(JOIN && JOIN.is_join);
+  const FLOW = () => (isJoin() ? ORDER_JOIN : ORDER);
+  /** 지금 차례표에서 이 장면 **다음**. 두 차례표가 갈리는 자리(name 다음)를 여기 한 곳으로 모은다. */
+  function nextScene(cur) { const f = FLOW(); const i = f.indexOf(cur); return (i >= 0 && i + 1 < f.length) ? f[i + 1] : 'app'; }
 
-  const QPROG = ['stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];   // 막2 진행 눈금
+  const QPROG_ALL = ['stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];   // 막2 진행 눈금
+  const QPROG = () => QPROG_ALL.filter((k) => FLOW().includes(k));
 
   /* ── 막1·막2: 가운데 질문 기둥 ── */
   function qHead(prog, lead, title, help) {
-    const at = QPROG.indexOf(prog);
+    const prog_ = QPROG();
+    const at = prog_.indexOf(prog);
     // 눈금은 지나온 자리로 돌아가는 문이기도 하다 — 앞 단계는 눌러서 고칠 수 있다(원준님 2026-08-25).
     return `<div class="ob-q-top"><div class="ob-q-ic">L</div></div>
-      ${at >= 0 ? `<div class="ob-q-prog">${QPROG.map((k, i) => i < at
+      ${at >= 0 ? `<div class="ob-q-prog">${prog_.map((k, i) => i < at
           ? `<button class="ob-on ob-go" data-jump="${k}" aria-label="${esc(SCENE_LABEL[k] || '')}(으)로 돌아가기"></button>`
           : `<i class="${i === at ? 'ob-on' : ''}"></i>`).join('')}</div>` : ''}
       ${lead ? `<p class="ob-q-lead">${lead}</p>` : ''}
@@ -1457,12 +1473,31 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   }
 
   const SCENES = {
+    /* #3872 — 합류자의 첫 화면. **어디에 들어왔는지**를 먼저 말한다(종전엔 그 말 없이 이름부터 물었다).
+     *  숫자는 서버 실측(joining)만 쓴다 — 0 이면 그 줄을 아예 쓰지 않는다(없는 것을 있다고 하지 않는다). */
+    team: {
+      html: () => {
+        const nm = (JOIN && JOIN.workspace_name) ? String(JOIN.workspace_name) : '';
+        const cnt = (JOIN && Number(JOIN.member_count)) || 0;
+        const kn = (JOIN && Number(JOIN.knowledge_n)) || 0;
+        const bits = [cnt ? `구성원 ${cnt}명` : '', kn ? `지식 ${kn.toLocaleString('ko-KR')}건` : ''].filter(Boolean).join(' · ');
+        return qHead(null,
+          '저는 리브예요. 이 워크스페이스를 돌보는 담당자입니다.',
+          nm ? `${esc(nm)} 팀에 오셨어요.` : '팀 워크스페이스에 오셨어요.',
+          bits ? `${bits}이 이미 쌓여 있어요. 여기 AI는 그걸 알고 답합니다. 시작하기 전에 두어 가지만 여쭐게요.`
+               : '여기 AI는 팀이 쌓아 둔 자료를 알고 답합니다. 시작하기 전에 두어 가지만 여쭐게요.')
+          + `<button class="ob-btn ob-btn-pri" id="teamGo">시작하기</button>`;
+      },
+      bind: (el) => { $('#teamGo', el).onclick = () => goScene(nextScene('team')); },
+    },
     /* 막1 — 민낯. 노션 p1: 이름 하나만, 가운데. */
     name: {
       html: () => qHead(null,
-        '안녕하세요, 저는 리브예요. 이 워크스페이스를 계속 돌봐 드릴 담당자입니다.',
-        '어떻게 불러 드릴까요?',
-        '이름이든 별명이든 편한 대로 적어 주세요. 나중에 언제든 바꾸실 수 있어요.')
+        isJoin() ? '저는 리브예요. 이 워크스페이스를 돌보는 담당자입니다.'
+                 : '안녕하세요, 저는 리브예요. 이 워크스페이스를 계속 돌봐 드릴 담당자입니다.',
+        isJoin() ? '팀에서 어떻게 불러 드릴까요?' : '어떻게 불러 드릴까요?',
+        isJoin() ? '구성원 목록과 작업 기록에 이 이름으로 보여요. 나중에 언제든 바꾸실 수 있어요.'
+                 : '이름이든 별명이든 편한 대로 적어 주세요. 나중에 언제든 바꾸실 수 있어요.')
         + `<div class="ob-q-write"><input id="nameIn" type="text" placeholder="예: 원준" value="${esc(S.nameSet ? S.name : '')}"></div>
            <button class="ob-btn ob-btn-pri" id="nameGo">이렇게 불러 주세요</button>
            <button class="ob-q-skip" data-skip>그냥 넘어갈게요</button>`,
@@ -1489,10 +1524,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             })
             .catch(() => { /* 비치명 — 마무리에서 한 번 더 보낸다 */ });
         };
-        const go = () => { const v = inp.value.trim(); if (v) { S.name = v; S.nameSet = true; saveName(v); } goScene('stage'); };
+        const go = () => { const v = inp.value.trim(); if (v) { S.name = v; S.nameSet = true; saveName(v); } goScene(nextScene('name')); };
         $('#nameGo', el).onclick = go;
         inp.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) go(); });
-        $('[data-skip]', el).onclick = () => goScene('stage');
+        $('[data-skip]', el).onclick = () => goScene(nextScene('name'));
         inp.focus();
       },
     },
@@ -1549,9 +1584,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         뒤에 [파일 추가]로 바뀐다. */
     files: {
       html: () => qHead('files',
-        `${esc(S.name)}님, 먼저 파일부터 받겠습니다.`,
-        '지금 가지고 계신 파일을 올려 주세요.',
-        '파일이든 폴더든 끌어다 놓으시면 됩니다. 받는 즉시 읽기 시작해서, 다음 단계를 하시는 동안 정리해 둡니다.')
+        isJoin() ? `${esc(S.name)}님이 가진 자료도 올려 두시겠어요?` : `${esc(S.name)}님, 먼저 파일부터 받겠습니다.`,
+        isJoin() ? '내 자료를 올려 주세요.' : '지금 가지고 계신 파일을 올려 주세요.',
+        isJoin() ? '올린 자료는 기본적으로 나만 봅니다. 팀에 공개할지는 자료마다 따로 정합니다. 파일이든 폴더든 끌어다 놓으시면 됩니다.'
+                 : '파일이든 폴더든 끌어다 놓으시면 됩니다. 받는 즉시 읽기 시작해서, 다음 단계를 하시는 동안 정리해 둡니다.')
         //  #1813 f27094f2 — 고르기는 **한 번에 끝난다**(모달·팝오버·버튼 둘 전부 폐기, 원준님 2026-08-27). 폴더째는 끌어다 놓기가 받는다.
         + `<div class="ob-drop ${S.upN ? 'ob-has' : ''}" id="upZone">
             <span class="ob-drop-t" id="upZoneT">${S.upN ? `${S.upN}개를 받았어요` : '여기에 끌어다 놓으세요'}</span>
@@ -3132,7 +3168,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       toast('지난번에 하시던 자리에서 이어 갑니다.');
       return;
     }
-    renderSB(); goScene(S.scene || 'name');
+    //  #3872 — 합류자는 «어디에 왔는지» 부터. (서버를 못 물었으면 JOIN 이 null 이라 종전대로 이름부터.)
+    renderSB(); goScene(S.scene || (isJoin() ? 'team' : 'name'));
   }
 
   /* ── 부팅 ── */
@@ -3146,7 +3183,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   // 장면 바로 열기 — 셸에선 질의가 해시 뒤에 붙는다(#/welcome?scene=b1). 검토용.
   const want = new URLSearchParams(location.search).get('scene') || new URLSearchParams((location.hash.split('?')[1] || '')).get('scene');
   if (want && STEP_OF[want] != null) { demoJump = true; goScene(want); }
-  else if (hadLocal) { renderSB(); goScene(S.scene || 'name'); schedulePush(); }
+  //  #3872 — 이 탭에 하던 자리가 있으면 그 자리부터(종전 그대로). 다만 «합류자인가»는 그 뒤 문구·차례표가
+  //   쓰므로 서버에 한 번 물어 둔다(응답이 늦어도 화면은 기다리지 않는다).
+  else if (hadLocal) { renderSB(); void loadWelcome(); goScene(S.scene || 'name'); schedulePush(); }
   else { renderSB(); void resumeFromServer(); }
   return { destroy() {
     destroyed = true;
