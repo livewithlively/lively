@@ -407,7 +407,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  (원준 2026-08-25 "여전히 두 줄이잖아"). 종전엔 폭이 좁아질 때 겹칠까 봐 아예 둘째 줄을 강제(flex 1 1 100%)
   //  했는데, 그러면 넓은 화면에서도 늘 두 줄이었다. 지금은 들어가면 한 줄, 안 들어가면 저절로 다음 줄로 접힌다
   //  (.sc-head 가 flex-wrap 이라 겹칠 일은 없다 — 좁아지면 제목이 먼저 …로 줄고, 그 다음에 이 묶음이 내려간다).
-  head.insertBefore(el('span', { class: 'dt-chips sc-run-top' }, chipProv, selHarness, chipModel, selModel, chipEffort, selEffort), headR);
+  //  ★ 이 묶음에 이름을 둔다 — [⋯] 설정 창이 열릴 때 **선택기를 복제하지 않고 그 자리로 데려갔다가**
+  //   닫을 때 여기로 되돌리기 때문이다(openMore). 배선이 하나뿐이라 두 자리가 갈릴 일이 없다.
+  const runTop = el('span', { class: 'dt-chips sc-run-top' }, chipProv, selHarness, chipModel, selModel, chipEffort, selEffort) as HTMLElement;
+  head.insertBefore(runTop, headR);
   const chip = (n: HTMLElement, v: string, tip?: string): void => { n.textContent = v; if (tip && tip !== v) n.title = tip; else n.removeAttribute('title'); n.hidden = !v; };
   const MODE_KO: Record<string, string> = { default: '기본', auto: '자동', acceptEdits: '수정 자동승인', bypassPermissions: '전부 자동', plan: '계획', dontAsk: '묻지 않음' };
   // 세션 도중 `/model` 로 모델을 바꾸면 그 사실이 사용자 줄에 남는다("Set model to <b>Opus 5 (1M context)</b> and saved …", ANSI 굵기 포함).
@@ -897,85 +900,170 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     } catch (e: any) { toast(e?.message || '지우지 못했습니다.'); }
   }
 
+  // ── [⋯] = 이 세션의 설정 창 (#3778, 원준 2026-09-10) ────────────────────────
+  //  종전엔 드롭다운 한 장에 11줄이 세 구역으로 섞여 있었다. 되돌릴 수 없는 [대화 기록 완전 삭제]가
+  //  [링크 복사] 바로 위에 **평범한 줄**로 앉아 있었고, 정작 자주 쓰는 것과 한 번 정하면 끝인 것이
+  //  같은 무게로 나열됐다. 원준님 지시: «드롭다운이 아니라 모달로, 좀 제대로된 설정 창이 나오게 …
+  //  기능단위로 다 쪼개서 카테고라이즈부터 다시해서».
+  //
+  //  문법은 **좌하단 프로필 창과 같은 것**을 쓴다(v2/me-modal.ts) — 그래서 클래스도 그대로 `.v2me-*` 다.
+  //   같은 문법이라는 사실을 사람이 모양으로 먼저 읽고, 우리는 셸을 두 벌 만들지 않는다.
+  //
+  //  ★ [실행] 구역은 **선택기를 복제하지 않는다** — 머리줄의 그것을 잠시 데려왔다가 닫을 때 되돌린다.
+  //   복제하면 paintAxis/switchAxis 배선이 두 벌이 되어 언젠가 갈린다. 그리고 이 구역이 있어야
+  //   좁은 칸(≤620px, 칩이 물러난 상태)에서도 모델·추론강도를 바꿀 수 있다 — 사다리가 만든 구멍을 여기서 받는다.
+  let moreOpen = false;   // 두 번 열면 창 둘이 **같은 선택기**를 서로 뺏어간다(아래 ★ 이주) — 한 번에 하나만.
   function openMore(): void {
-    const rows: HTMLElement[] = [];
-    const row = (label: string, desc: string, onClick: () => void): HTMLElement =>
-      el('button', { class: 'sc-more-row', type: 'button', onclick: () => { close(); onClick(); } },
-        el('span', { class: 'n', text: label }), el('span', { class: 'm', text: desc }));
-    rows.push(el('div', { class: 'sc-more-sec', text: '보기' }));
-    if (hasTerm()) {
-      // 상민님 지시(2026-08-18): 대화 인터페이스가 아직 미완성이라 **터미널이 기본**, 대화는 '베타'를 달고 뒤에 둔다.
-      //  ⚠ codex app-server 세션(#2055)만 예외다 — 거기서는 대화창이 **유일한 말 거는 자리**이고(pane 은 셸),
-      //   터미널은 셸을 쓰러 가는 곳이다. 같은 항목에 다른 뜻을 담으면서 같은 문구를 쓰면 사람이 헤맨다.
-      rows.push(mode === 'term'
+    if (moreOpen) return;
+    moreOpen = true;
+    const opener = document.activeElement as HTMLElement | null;
+    const back = el('div', { class: 'v2me-back' });
+    const panel = el('section', { class: 'v2me v2set', role: 'dialog', 'aria-modal': 'true', 'aria-label': '이 세션 설정' });
+    let closed = false;
+    const close = (): void => {
+      if (closed) return;
+      closed = true; moreOpen = false;
+      //  데려온 선택기를 **먼저** 제자리로(패널을 지우면 같이 사라진다).
+      runTop.append(chipProv, selHarness, chipModel, selModel, chipEffort, selEffort);
+      back.remove();
+      document.removeEventListener('keydown', onKey, true);
+      if (opener && document.contains(opener)) opener.focus();
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      if (document.body.lastElementChild !== back) return;   // 안쪽에 또 창이 떠 있으면 그쪽이 먼저 먹는다
+      e.stopPropagation(); close();
+    };
+    document.addEventListener('keydown', onKey, true);
+    back.addEventListener('mousedown', (e: MouseEvent) => { if (e.target === back) close(); });
+
+    const ic = (d: string[]): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'v2me-nav-ic', 'aria-hidden': 'true' },
+      ...d.map((x) => sv('path', { d: x })));
+    //  한 줄 = 이름 + 설명 + (단추). 설명은 **지금 값**을 말한다 — 무엇이 켜져 있는지 감추지 않는다.
+    const row = (label: string, desc: string, act: string, onClick: () => void, danger?: boolean): HTMLElement =>
+      el('div', { class: 'v2set-row' + (danger ? ' danger' : '') },
+        el('div', { class: 'v2set-t' }, el('span', { class: 'n', text: label }), el('span', { class: 'm', text: desc })),
+        el('button', { class: 'btn btn-sm' + (danger ? ' v2set-danger' : ' btn-ghost'), type: 'button', text: act,
+          onclick: () => { if (!danger) close(); onClick(); } }));
+    const note = (t: string): HTMLElement => el('p', { class: 'v2set-note', text: t });
+
+    const secs: Array<{ key: string; label: string; icon: string[]; kids: (HTMLElement | null)[]; danger?: boolean }> = [];
+
+    // ── 이 세션 — 이름·소속·주소 ──
+    secs.push({ key: 'sess', label: '이 세션', icon: ['M4 5.5h16v13H4z', 'M4 9.5h16'], kids: [
+      canRename() ? row('세션 이름', idLabel(titleText) ? '아직 이름이 없어요' : titleText, '바꾸기', () => startRename()) : null,
+      opts.onPickProject && target.owned
+        ? row('프로젝트', target.projectId ? (target.projectName || '이름 없는 프로젝트') : '아직 프로젝트에 붙어 있지 않아요',
+            target.projectId ? '바꾸기·떼기' : '연결', () => opts.onPickProject!(moreBtn))
+        : null,
+      row('링크 복사', '지금 보고 있는 이 화면의 주소', '복사', async () => {
+        try { await navigator.clipboard.writeText(location.href); toast('링크를 복사했습니다.'); }
+        catch { window.prompt('이 링크를 복사하세요:', location.href); }
+      }),
+      opts.openHref ? row(opts.solo ? '전체 화면으로 열기' : '새 창으로 열기',
+        opts.solo ? '사이드바까지 있는 라이블리 화면' : '이 세션만 담은 창(대화 + 발자취)', '열기 ↗',
+        () => { window.open(opts.openHref!, '_blank', 'noopener'); }) : null,
+    ] });
+
+    // ── 보기 — 이 화면을 어떻게 볼까 ──
+    secs.push({ key: 'view', label: '보기', icon: ['M4 5.5h16v10H4z', 'M9 19.5h6', 'M12 15.5v4'], kids: [
+      hasTerm() ? (mode === 'term'
         ? row(chatFirst() ? '대화로 보기' : '대화로 보기 (베타)',
-          chatFirst() ? '이 세션은 대화창이 본자리예요 — Codex 와 여기서 주고받습니다' : '터미널 대신 대화창으로 — 표시가 어긋나면 터미널로 돌아오세요',
-          () => { modeChosen = true; setMode('chat'); })
+            chatFirst() ? '이 세션은 대화창이 본자리예요 — Codex 와 여기서 주고받습니다' : '터미널 대신 대화창으로 — 표시가 어긋나면 터미널로 돌아오세요',
+            '대화로', () => { modeChosen = true; setMode('chat'); })
         : row('터미널로 보기',
-          chatFirst() ? '같은 작업 폴더의 셸이에요 — 대화는 여기서 말고 대화창에서 합니다' : '승인 대화상자·로그인처럼 터미널이 맞는 순간이 있어요',
-          () => { modeChosen = true; setMode('term'); }));
+            chatFirst() ? '같은 작업 폴더의 셸이에요 — 대화는 여기서 말고 대화창에서 합니다' : '승인 대화상자·로그인처럼 터미널이 맞는 순간이 있어요',
+            '터미널로', () => { modeChosen = true; setMode('term'); })) : null,
+      row('목차', '이 세션에 보낸 질문 목록 — 누르면 그 자리로', '열기', () => openIndex()),
+      row('글자 크기', `지금 ${CHAT_FONT_LABELS[fontStep] ?? '보통'} — 이 세션에만 적용돼요`, '다음 크기', () => {
+        fontStep = nextFontStep(fontStep);
+        view.setFontStep(fontStep);
+        toast(`글자 크기: ${CHAT_FONT_LABELS[fontStep]}`);
+      }),
+      isBox() && target.owned && target.live && String(target.raw?.harness || '') === 'codex'
+        ? row('대화를 터미널로 넘기기', '대화창이 쥔 Codex 대화를 놓아, 터미널에서 이어가게 합니다', '넘기기', async () => {
+            try {
+              const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(target.id) + '/codex-chat/release', { method: 'POST' });
+              toast(r?.released
+                ? '대화를 놓았습니다 — 터미널에서  codex resume ' + String(r.thread_id || '').slice(0, 8) + '…  으로 이어가세요'
+                : '지금 대화창이 쥐고 있는 Codex 대화가 없습니다');
+            } catch (e: any) { toast('넘기지 못했습니다 — ' + ((e && e.message) || e), true); }
+          }) : null,
+    ] });
+
+    // ── 터미널 ──
+    if (hasTerm()) secs.push({ key: 'term', label: '터미널', icon: ['M4 5.5h16v13H4z', 'M8 10l3 2.5-3 2.5', 'M13 15.5h4'], kids: [
+      row('화면 복구', '화면이 깨지거나 어긋났을 때 재연결로 복구합니다', '복구', () => termAct('reconnect')),
+      row('환경 설정', '글꼴·크기·테마·커서·스크롤 속도 — 이 터미널에만 적용돼요', '열기', () => termAct('settings')),
+      row('사용법 안내', '터미널·단축키 간단 사용법', '보기', () => termAct('help')),
+    ] });
+
+    // ── 실행 — 무엇으로 도나. 머리줄의 선택기를 그대로 데려온다(위 ★). ──
+    const runHost = el('div', { class: 'v2set-run' });
+    secs.push({ key: 'run', label: '실행', icon: ['M12 3.4l1.9 5.7 5.7 1.9-5.7 1.9L12 18.6l-1.9-5.7-5.7-1.9 5.7-1.9z'], kids: [
+      el('div', { class: 'v2set-row' },
+        el('div', { class: 'v2set-t' }, el('span', { class: 'n', text: '무엇으로 도나' }),
+          el('span', { class: 'm', text: 'AI · 모델 · 추론강도 — 고르면 그 자리에서 바뀝니다' })),
+        runHost),
+      target.node ? el('div', { class: 'v2set-row' },
+        el('div', { class: 'v2set-t' }, el('span', { class: 'n', text: '돌아가는 컴퓨터' }),
+          el('span', { class: 'm', text: String(target.node) })),
+        el('span', { class: 'v2set-ro', text: '읽기 전용' })) : null,
+      note('칸이 좁아지면 머리줄의 칩이 물러납니다 — 그때도 여기서 바꿀 수 있어요.'),
+    ] });
+
+    // ── 사람 ──
+    const sh = shareSessOf(target);
+    if (sh) secs.push({ key: 'ppl', label: '사람', icon: ['M12 12.2a4.1 4.1 0 1 0 0-8.2 4.1 4.1 0 0 0 0 8.2', 'M4.6 20.2a7.4 7.4 0 0 1 14.8 0'], kids: [
+      row('함께 보는 사람', sh.owned ? '이 세션을 볼 사람을 고릅니다 — 기본은 나만 봐요' : '이 세션을 누가 볼 수 있는지 봅니다',
+        sh.owned ? '고르기' : '보기', () => { const s2 = shareSessOf(target); if (s2) openSharePopover(facesEl, s2); }),
+    ] });
+
+    // ── 정리 — 되돌릴 수 없는 것은 **맨 아래 따로**. 종전엔 [링크 복사] 바로 위 평범한 줄이었다. ──
+    const tidy: (HTMLElement | null)[] = [
+      opts.onArchive && target.owned && target.live && !target.raw?.restorable
+        ? row('이 세션 보관', '터미널을 내려놓고 대화·설정은 남겨요 — [보관한 세션]에서 되살립니다', '보관', () => opts.onArchive!()) : null,
+      target.owned && (target.logId || !target.live)
+        ? row('대화 기록 완전 삭제', '중앙에 저장된 이 대화를 영구히 지워요 — 되돌릴 수 없어요', '삭제', () => void purgeThis(), true) : null,
+    ];
+    if (tidy.some(Boolean)) secs.push({ key: 'tidy', label: '정리', icon: ['M4 7h16', 'M9 7V4h6v3', 'M6 7l1 13h10l1-13'], kids: tidy, danger: true });
+
+    // ── 셸 ──
+    const navEl = el('nav', { class: 'v2me-nav', 'aria-label': '설정 항목' });
+    const contEl = el('div', { class: 'v2me-cont' });
+    const btns = new Map<string, HTMLElement>();
+    const panes = new Map<string, HTMLElement>();
+    const show = (k: string): void => {
+      btns.forEach((b, key) => { b.classList.toggle('on', key === k); b.setAttribute('aria-current', String(key === k)); });
+      panes.forEach((pn, key) => { pn.hidden = key !== k; });
+      //  선택기는 [실행] 을 볼 때만 데려온다 — 다른 칸을 보는 동안 머리줄이 비어 있으면 뒤가 허전하다.
+      if (k === 'run') runHost.append(chipProv, selHarness, chipModel, selModel, chipEffort, selEffort);
+      else runTop.append(chipProv, selHarness, chipModel, selModel, chipEffort, selEffort);
+      contEl.scrollTop = 0;
+    };
+    for (const sec of secs) {
+      const b = el('button', { class: 'v2me-nav-b' + (sec.danger ? ' v2me-nav-out' : ''), type: 'button', onclick: () => show(sec.key) },
+        ic(sec.icon), el('span', { text: sec.label }));
+      btns.set(sec.key, b);
+      if (sec.danger) navEl.append(el('div', { class: 'v2me-nav-sp' }));
+      navEl.append(b);
+      const pane = el('div', { class: 'v2me-pane v2set-pane', hidden: true }, ...sec.kids.filter(Boolean) as HTMLElement[]);
+      panes.set(sec.key, pane);
+      contEl.append(pane);
     }
-    rows.push(row('목차', '이 세션에 보낸 질문 목록 — 누르면 그 자리로', () => openIndex()));
-    // 글자 크기(#2055) — 브라우저 확대는 사이드바·터미널까지 같이 키운다. 이 화면만 키우는 자리가 없었다.
-    //  누르면 한 단계씩 순환하고, 지금 값이 설명줄에 그대로 보인다(무엇이 켜져 있는지 감추지 않는다).
-    rows.push(row('글자 크기', `지금 ${CHAT_FONT_LABELS[fontStep] ?? '보통'} — 누르면 다음 크기로`, () => {
-      fontStep = nextFontStep(fontStep);
-      view.setFontStep(fontStep);
-      toast(`글자 크기: ${CHAT_FONT_LABELS[fontStep]}`);
-    }));
-    if (hasTerm()) {
-      rows.push(el('div', { class: 'sc-more-sec', text: '터미널' }));
-// ⚠ [화면 복구]는 **겉에도 있고 여기도 있다** — 겉의 것은 폭으로 안 사라지므로 여기 줄은 되찾는 길이
-      //  아니라 메뉴를 훑는 사람을 위한 사본이다. 반면 [환경 설정]은 2026-09-11 부터 **여기가 유일한 자리**다.
-      //  터미널 화면을 복구할 길이 없어지는 상태였다. 접히는 것은 '자리'지 '기능'이 아니어야 한다.
-      rows.push(row('화면 복구', '화면이 깨지거나 어긋났을 때 재연결로 복구합니다', () => termAct('reconnect')));
-      rows.push(row('환경 설정', '터미널 글꼴·크기·테마·커서·스크롤 속도', () => termAct('settings')));
-      rows.push(row('사용법 안내', '터미널·단축키 간단 사용법', () => termAct('help')));
-    }
-    rows.push(el('div', { class: 'sc-more-sec', text: '이 세션' }));
-    // 이름은 상단바에 상시로 두지 않는다(위 제목 주석) — 고칠 일이 있을 때만 여기서 연다.
-    if (canRename()) rows.push(row('세션 이름 바꾸기', idLabel(titleText) ? '아직 이름이 없어요' : titleText, () => startRename()));
-    // 프로젝트도 이름과 같은 이유로 머리줄에서 내려왔다 — 이름은 사이드바·우패널에 이미 있고, 여기는 '바꿀 때' 오는 자리다.
-    //  설명줄이 지금 붙은 프로젝트를 말해 주므로 메뉴를 여는 것만으로도 소속을 확인할 수 있다(정보를 잃지 않는다).
-    if (opts.onPickProject && target.owned) {
-      rows.push(row(target.projectId ? '프로젝트 바꾸기·떼기' : '프로젝트 연결',
-        target.projectId ? (target.projectName || '이름 없는 프로젝트') : '이 세션은 아직 프로젝트에 붙어 있지 않아요',
-        () => opts.onPickProject!(moreBtn)));
-    }
-    // 대화를 터미널로 넘기기(#2055) — codex app-server 모드에서만 뜻이 있다.
-    //  왜 이 항목이 필요한가: codex 는 **스레드당 writer 를 하나만** 허용한다(실측). 대화창이 그 대화를 쥔 동안
-    //  터미널에서 `codex resume <id>` 를 치면 `active writer` 로 거부된다. 놓아 주는 유일한 방법이 서버 프로세스를
-    //  내리는 것이라, 그 동작을 사람이 부를 수 있게 여기에 둔다. 놓으면 그 자리에서 이어갈 명령을 알려 준다.
-    if (isBox() && target.owned && target.live && String(target.raw?.harness || '') === 'codex') {
-      rows.push(row('대화를 터미널로 넘기기', '대화창이 쥔 Codex 대화를 놓아, 터미널에서 이어가게 합니다', async () => {
-        try {
-          const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(target.id) + '/codex-chat/release', { method: 'POST' });
-          // released=false = 넘길 것이 없다(이미 넘겼거나 이 세션은 종전 tmux 모드) — 사실대로 말한다.
-          toast(r?.released
-            ? '대화를 놓았습니다 — 터미널에서  codex resume ' + String(r.thread_id || '').slice(0, 8) + '…  으로 이어가세요'
-            : '지금 대화창이 쥐고 있는 Codex 대화가 없습니다');
-        } catch (e: any) { toast('넘기지 못했습니다 — ' + ((e && e.message) || e), true); }
-      }));
-    }
-    // 보관 — 터미널만 내려놓고 대화·설정은 남긴다. 살아 있는 내 세션에만(내릴 것이 있어야 보관이다).
-    if (opts.onArchive && target.owned && target.live && !target.raw?.restorable)
-      rows.push(row('이 세션 보관', '터미널을 내려놓고 대화·설정은 남겨요 — [보관한 세션]에서 되살립니다', () => opts.onArchive!()));
-    // 기록 완전 삭제(#1850) — 보관 **바로 다음** 자리다. 둘은 같은 축의 양 끝이고(되돌릴 수 있음 ↔ 없음),
-    //  사람이 '보관'을 찾다가 '완전 삭제'를 발견하는 순서가 곧 우리가 권하는 순서다(먼저 보관, 그 다음 삭제).
-    //  ⚠ 사이드바(지난 세션 전용)와 달리 **도는 세션도 허용**한다 — 메뉴를 열어 고르는 자리라 실수로 눌리지 않고,
-    //   확인창이 '앞으로의 대화도 기록되지 않는다'까지 말한다(live 플래그).
-    if (target.owned && (target.logId || !target.live)) {
-      rows.push(row('대화 기록 완전 삭제', '중앙에 저장된 이 대화를 영구히 지워요 — 되돌릴 수 없어요', () => void purgeThis()));
-    }
-    rows.push(row('링크 복사', '지금 보고 있는 이 화면의 주소', async () => {
-      try { await navigator.clipboard.writeText(location.href); toast('링크를 복사했습니다.'); }
-      catch { window.prompt('이 링크를 복사하세요:', location.href); }
-    }));
-    if (opts.openHref) rows.push(el('a', { class: 'sc-more-row', href: opts.openHref, target: '_blank', rel: 'noopener', onclick: () => close() },
-      el('span', { class: 'n', text: opts.solo ? '전체 화면으로 열기 ↗' : '새 창으로 열기 ↗' }),
-      el('span', { class: 'm', text: opts.solo ? '사이드바까지 있는 라이블리 화면' : '이 세션만 담은 창(대화 + 발자취)' })));
-    const panel = el('div', { class: 'dash-pop-panel sc-more' }, ...rows);
-    const close = anchoredPopover(moreBtn, panel);
+    const nm = cleanName() || paneTitle() || shownName();
+    panel.append(
+      el('header', { class: 'v2me-h' },
+        el('div', { class: 'v2me-h-txt' },
+          el('div', { class: 'v2me-h-name', text: nm }),
+          el('div', { class: 'v2me-h-sub', text: [target.projectName || '', '#' + String(target.id).slice(0, 8)].filter(Boolean).join(' · ') })),
+        el('button', { class: 'v2me-x', type: 'button', 'aria-label': '닫기', title: '닫기 (Esc)', onclick: close },
+          sv('svg', { viewBox: '0 0 24 24', class: 'v2me-x-ic', 'aria-hidden': 'true' },
+            sv('path', { d: 'M6 6l12 12' }), sv('path', { d: 'M18 6 6 18' })))),
+      el('div', { class: 'v2me-body' }, navEl, contEl));
+    back.append(panel);
+    document.body.append(back);
+    show(secs[0].key);
   }
 
   // ── 대화 파일 → 대화창 ────────────────────────────────────────────────────────────────
