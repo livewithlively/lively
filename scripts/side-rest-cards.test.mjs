@@ -75,10 +75,18 @@ lay(restProjectCards([mine(7, DAY, { trashed: true })], NONE), "7:1",
   "C3 ★★ 휴지통 판정은 **`trashedAt`** 으로 한다 — `trashed` 는 Sess 에 없는 칸이라 실제 자료에서 한 번도 안 걸린다 " +
   "(4판이 그 이름을 써서 휴지통 세션이 카드 접힘에 그대로 섰다)");
 
+//  ★ 프로젝트에 안 붙은 세션도 카드를 갖는다 — 안 그러면 그것도 «어디에도 없는 세션» 이다(실측 47개).
+//   셋 다 같은 한 장(id 0 =「프로젝트 없음」 묶음)으로 모인다.
 for (const [pid, n] of [[0, "0"], [null, "null"], [undefined, "undefined"]]) {
-  lay(restProjectCards([mine(pid, DAY)], NONE), "",
-    `C4 프로젝트 id 가 ${n} 이면(「프로젝트 없음」) 카드를 안 만든다`);
+  lay(restProjectCards([mine(pid, DAY)], NONE), "0:1",
+    `C4 ★ 프로젝트 id 가 ${n} 이어도 「프로젝트 없음」 카드로 선다`);
 }
+
+lay(restProjectCards([mine(0, DAY), mine(null, 2 * DAY), mine(7, 3 * DAY)], NONE), "0:2,7:1",
+  "C4′ ★ 프로젝트 없는 세션들은 **한 장**으로 모이고, 프로젝트 있는 것과 따로 선다");
+
+lay(restProjectCards([mine(0, DAY)], new Set([0])), "",
+  "C4″ ★ 「프로젝트 없음」 묶음이 이미 서 있으면 카드를 새로 안 만든다 — id 0 도 hasCard 를 탄다");
 
 lay(restProjectCards([{ projectId: 7, owned: false, lastSeen: NOW - DAY }], NONE), "",
   "C5 ★ 남의 세션만 있는 프로젝트는 카드를 **안** 세운다 — 안 그러면 동료만 일하는 프로젝트가 내 홈에 쌓인다");

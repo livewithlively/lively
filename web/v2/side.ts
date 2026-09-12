@@ -893,13 +893,15 @@ function restCards(standing: SideInstance[], searching: boolean): ProjGrp[] {
   const now = Date.now();
   const out: ProjGrp[] = [];
   for (const c of restProjectCards(last.data.sessions as unknown as RestCardLike[], has)) {
-    const p = last.data.projects.find((x) => x.id === c.id);
-    if (!p || isArchivedProj(p) || isTrashedProj(p)) continue;
+    //  id 0 = 「프로젝트 없음」 묶음 — 찾을 프로젝트가 없는 것이 정상이다(projGrpHead 가 이미 그 경우를 안다).
+    const p = c.id ? last.data.projects.find((x) => x.id === c.id) : null;
+    if (c.id && (!p || isArchivedProj(p) || isTrashedProj(p))) continue;
+    const name = p ? p.name : '프로젝트 없음';
     const key = 'p:' + c.id;
     //  찾는 중이면 이름이 걸린 것만 — 목록의 다른 카드는 행 단위로 이미 걸러져 왔다(instMatch).
-    if (searching && !findMatcher(sideFilter.trim().toLowerCase())(p.name)) continue;
-    out.push({ key, id: c.id, name: p.name, bucket: dayGroup(c.at, now), rows: [], open: false,
-      active: false, pinned: isPinned(key), counts: {}, live: 0, past: c.n, rank: QUIET_RANK, at: c.at });
+    if (searching && !findMatcher(sideFilter.trim().toLowerCase())(name)) continue;
+    out.push({ key, id: c.id, name, bucket: dayGroup(c.at, now), rows: [], open: false,
+      active: false, pinned: !!c.id && isPinned(key), counts: {}, live: 0, past: c.n, rank: QUIET_RANK, at: c.at });
   }
   return out;
 }

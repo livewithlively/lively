@@ -161,7 +161,10 @@ export function projectPastRows<T extends PastRowLike>(
   cap: number,
   o: { keepLive?: boolean } = {},
 ): { rows: T[]; total: number } {
-  if (!projectId) return { rows: [], total: 0 };
+  //  ★ `projectId` 0 은 **「프로젝트 없음」 묶음**이다 — 빈 값이 아니다(#3778 5판).
+  //   4판은 여기서 0 을 «묻지 마라» 로 읽고 빈 결과를 돌려줬는데, 그 바람에 프로젝트에 안 붙은 세션은
+  //   접힘에도 못 들어가 **어디에도 없었다**(실측: 그 계정에서 47개). 아래 비교가 `Number(s.projectId || 0)`
+  //   라 0 도 정확히 걸린다 — 프로젝트 없는 세션끼리만 모인다.
   const hit: T[] = [];
   for (const s of all || []) {
     if (!s || Number(s.projectId || 0) !== projectId) continue;
@@ -238,8 +241,11 @@ export function restProjectCards<T extends RestCardLike>(
   const by = new Map<number, RestCard>();
   for (const s of all || []) {
     if (!s || !s.owned || s.trashedAt) continue;
+    //  id 0 = 「프로젝트 없음」 묶음. **빼지 않는다** — 프로젝트에 안 붙었다는 이유로 안 보이면
+    //   그것도 «어디에도 없는 세션» 이다(실측 47개). 그 카드는 사이드바 트리가 이미 쓰는 자리이고
+    //   「외 n개」도 갈 곳이 있다(#/p/0 = 프로젝트 없는 세션들의 작업대, main.ts:918).
     const id = Number(s.projectId || 0);
-    if (!id || hasCard.has(id)) continue;
+    if (hasCard.has(id)) continue;
     const at = Number(s.lastSeen) || 0;
     const c = by.get(id);
     if (c) { c.n++; if (at > c.at) c.at = at; }
