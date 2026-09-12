@@ -30,7 +30,7 @@ const parseOf = (name: string) => {
   const keys = Object.keys(cap("category_update").input as Record<string, unknown>);
   const body: Record<string, unknown> = {
     name: "새 이름", description: "한 줄", should: "가".repeat(50),
-    cross_cutting: true, state: "deprecated",
+    cross_cutting: true, state: "deprecated", group: "align",
   };
   //  스키마에 키가 늘었는데 이 표를 안 고치면 여기서 걸린다 — «parse 에 빠뜨림» 과 같은 자리다.
   const untested = keys.filter((k) => k !== "id" && !(k in body));
@@ -57,13 +57,55 @@ const parseOf = (name: string) => {
   assert.equal(parse({}).state, undefined, "미지정은 undefined — 부분 수정에서 «안 건드림» 이다");
 }
 
+// ★ 묶음(group, #1631)은 **3상**이다 — 키 부재=미변경 / null·빈 문자열=해제 / 값=그 묶음.
+//  `b.group != null ? String(b.group) : undefined` 로 읽으면 null(해제)이 미변경으로 뭉개져,
+//  웹에서 [묶음 빼기] 를 눌러도 200 을 받고 아무 일도 안 한다 — state 때 겪은 그 조용한 no-op 과 같은 자리다.
+{
+  const parse = parseOf("category_update");
+  assert.equal(parse({}).group, undefined, "미지정은 undefined(안 건드림)");
+  assert.ok("group" in parse({}), "키 자체는 살아 있어야 한다 — 핸들러가 3상을 구분한다");
+  assert.equal(parse({ group: null }).group, null, "★ null 은 «해제» 다(미변경으로 뭉개면 안 된다)");
+  assert.equal(parse({ group: "" }).group, "", "빈 문자열도 해제로 스토어까지 간다");
+  assert.equal(parse({ group: "align" }).group, "align");
+  assert.equal(parse({ group: "없는묶음" }).group, "없는묶음",
+    "★ 거르지 말고 넘겨야 스토어가 «그런 묶음이 없습니다» 로 400 을 낼 수 있다");
+}
+
 // 만들 때도 같은 규율 — 스키마의 키가 parse 에 다 있나.
 {
   const parse = parseOf("category_create");
-  const out = parse({ key: "brewing", name: "양조", should: "가".repeat(50), description: "한 줄", cross_cutting: true });
+  const out = parse({ key: "brewing", name: "양조", should: "가".repeat(50), description: "한 줄", cross_cutting: true, group: "work" });
   for (const k of Object.keys(cap("category_create").input as Record<string, unknown>)) {
     assert.ok(k in out, `★ category_create.${k} 가 REST parse 에서 사라진다`);
   }
+  assert.equal(out.group, "work", "만들 때 정한 묶음이 그대로 실려야 한다");
+  assert.equal(parse({ key: "brewing", name: "양조", should: "가".repeat(50) }).group, undefined, "안 주면 묶음 없음");
 }
 
-console.log("ok  분류축 REST parse — 입력 스키마의 필드를 하나도 빠뜨리지 않는다(state 포함)");
+// 묶음 op(#1631) — key 를 안 줘도 만들 수 있어야 한다(이름에서 슬러그). 삭제는 경로 파라미터에서 key 가 온다.
+{
+  const upsert = parseOf("category_group_upsert");
+  const out = upsert({ name: "내가 만든 것", hint: "작업물·문서", sort: 2 }, {});
+  for (const k of Object.keys(cap("category_group_upsert").input as Record<string, unknown>)) {
+    assert.ok(k in out, `★ category_group_upsert.${k} 가 REST parse 에서 사라진다`);
+  }
+  assert.equal(out.key, undefined, "key 를 안 주면 핸들러가 이름에서 슬러그를 만든다");
+  assert.equal(out.hint, "작업물·문서", "★ 한 줄 뜻이 사라지면 리브·화면이 이름만 보고 고르게 된다");
+  assert.equal(out.sort, 2);
+  assert.equal(upsert({ name: "x", sort: "3" }).sort, 3, "숫자 문자열도 순서로 읽는다");
+  assert.equal(upsert({ name: "x", sort: "나중" }).sort, undefined, "숫자가 아니면 미지정(기존 순서 보존)");
+  assert.throws(() => upsert({ hint: "이름이 없다" }), /이름/, "이름 없이는 못 만든다");
+  assert.throws(() => upsert({ key: "A 대문자 공백", name: "x" }), /슬러그/, "key 모양은 여기서 본다(경로가 아니라 값이다)");
+
+  const remove = parseOf("category_group_remove");
+  const rout = remove({ reassign_to: "ref" }, { key: "make" });
+  for (const k of Object.keys(cap("category_group_remove").input as Record<string, unknown>)) {
+    assert.ok(k in rout, `★ category_group_remove.${k} 가 REST parse 에서 사라진다`);
+  }
+  assert.equal(rout.key, "make", "지울 묶음은 경로에서 온다");
+  assert.equal(rout.reassign_to, "ref");
+  assert.equal(remove({}, { key: "make" }).reassign_to, null,
+    "★ 안 주면 null 로 스토어까지 간다 — 거기서 «카테고리 N개가 있습니다» 로 거절된다");
+}
+
+console.log("ok  분류축 REST parse — 입력 스키마의 필드를 하나도 빠뜨리지 않는다(state·group·묶음 op 포함)");

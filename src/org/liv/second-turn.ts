@@ -12,11 +12,18 @@
 //  ── 낡은 실측 문제 ──
 //  1턴이 실은 숫자는 그 순간의 것이다. 2턴은 **다시 읽고** 시작하라고 못박는다(세션 관성 실측: classify-knowledge-stale-session-inertia).
 
+import { groupSetPromptLines } from "../../v6/category-groups.js";
+
 export interface SecondTurnCollector { label: string; preset_key: string; enabled: boolean; ran: boolean }
 export interface SecondTurnInput {
   displayName: string | null;
   /** 처음 설정에서 답한 일하는 형태·직무 한 줄(liv_profile.work.asis). 자료가 0건이면 카테고리를 만들 재료는 이것뿐이다. */
   work: string | null;
+  /**
+   * 이 워크스페이스의 **묶음**(카테고리 위의 화면 층, #1631). 처음 설정이 직업·직무로 심어 둔다.
+   *  리브는 이 중에서 **고르기만** 한다 — 새로 만들지 않는다. 비어 있으면(옛 워크스페이스) 그 구획을 아예 싣지 않는다.
+   */
+  groups: Array<{ key: string; name: string; hint?: string | null }>;
   drawers: string[];
   firstOrder: string | null;
   collectors: SecondTurnCollector[];
@@ -61,6 +68,11 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
     "   - **이미 있는 카테고리가 받을 수 있으면 그것을 쓴다.** 어느 카테고리에도 안 맞는 자료 덩어리가 있을 때만 `category_create` 로 더한다. 같은 범위를 이름만 바꿔 또 만들지 않는다.",
     "   - 나누는 기준은 내용(무슨 일에 대한 자료인가)이다. 자료 종류(슬랙·노션·메일)로 나누지 않는다. 보통 3~6개, 자료가 1~3건이면 1~3개. **자료가 0건이면 일하는 형태·직무로 2~3개를 만든다 — 0개로 끝내지 않는다.**",
     "   - 값: `key` 는 영문 소문자·숫자·하이픈 40자 이내(증류기 key 가 `liv-<카테고리 key>` 가 된다) · `name` 은 한국어 · `should` 는 400~600자로 범위(한 문장), 자료에서 본(자료가 없으면 그 직무에서 흔한) 구체적인 예 3~5개, 안 들어가는 것과 그것이 가는 옆 카테고리 이름을 쓴다(회사·팀 이름과 민감정보 규칙은 쓰지 않는다) · `description` 은 한 줄.",
+    ...(i.groups.length ? [
+      "   - **묶음도 함께 정한다.** 이 워크스페이스의 묶음은 아래가 전부이고, 이 사람 일 전체를 덮는다. `category_create` 의 `group` 에 그 key 를 넣는다. **새 묶음을 만들지 마라.** 「기타」 같은 자리로 미루지도 마라 — 그런 묶음은 없다.",
+      "     **이미 있는 카테고리를 쓰는데 묶음이 비어 있으면** 그 자리에서 `category_update` 로 묶음만 채운다(내용은 건드리지 않는다). 안 채우면 그 카테고리는 화면에서 «묶음을 정해 주세요» 에 남는다.",
+      ...groupSetPromptLines(i.groups).map((l) => `  ${l}`),
+    ] : []),
     "   - **묻지 않고 만든다.** 사람은 나중에 화면에서 이름을 바꾸거나 치울 수 있다. 물을 것이 생겨도 카테고리를 다 만든 뒤에 묻는다(`lively-taxonomy` 스킬의 항목별 승인 절차는 여기서 쓰지 않는다).",
     "   - 만든 뒤 `category_list` 로 다시 읽어 실제로 생겼는지 확인한다. 만들기가 실패하면 오류 문구를 그대로 두고, 요약 첫 줄에 «카테고리를 만들지 못했다»와 그 이유를 쓴다.",
     "3. **카테고리(서랍)마다 증류기를 세운다** — `org_distiller_upsert`. 스코프(`match_kinds`·`include_channels`)·기준(`criteria_md`: 이 카테고리에서 지식이 되는 것은 무엇인가)·형식(`format_md`: 결과의 꼴)·`target_category`(그 카테고리 key). **catch-all 레인 하나를 반드시**(priority 낮게, 스코프 넓게) — 없으면 어느 증류기에도 안 걸린 자료가 조용히 사라진다. 자세한 규율은 `distiller-authoring` 스킬.",

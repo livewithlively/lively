@@ -2,8 +2,10 @@
 //  사용자가 명시적으로 유지하라고 한 표면이라 마크업·클래스·동작을 바꾸지 않는다(검색·★내소유·트리 펼침·
 //  도구 섹션·폭 리사이즈(--pjv-side-w, localStorage 'pjv:sideW' — 프로젝트 탭 공유)·접기).
 //  콘텐츠와의 접점은 3개뿐: ① [data-cat-val] 클릭 위임(onSelect) ② 문서 열기(onOpen) ③ rebuild().
-import { api, busy, el, keepSideScroll, state, sv } from './core.js';
+import { api, busy, el, keepSideScroll, state, sv, wsKey } from './core.js';
 import { reviewNavBadge } from './review.js';   // #837 검토 대기 배지(대기 0이면 안 그려진다)
+//  카테고리 묶음(#1631) — 계약(타입·조회·이름)은 category-form.ts 한 벌뿐이다(그쪽 머리말 참조).
+import { catGroupName, fetchCategoryGroups, type CatGroup } from './category-form.js';
 import { isCategoryHomeDoc, KN_UNCAT, knFetchAuthoredTree, knFetchCategoryIndex, knFetchUncategorizedCount, knFolderFirstSort, knPageIcon } from './wiki-data.js';
 
 // WIKI 인덱스(#336) — '전체' 하위 '인덱스(핀)' 필터의 가짜 카테고리 센티넬. data-cat-val 위임에 실린다.
@@ -38,16 +40,45 @@ function knSideItem(label, catVal, on, opts?) {
     el('span', { class: 'pjv-side-navlabel', text: label }));
 }
 
+// ── 묶음 접힘 기억(#1631) ──────────────────────────────────────────────────────
+//  묶음 key 를 담으므로 **그 워크스페이스의 내용**이다 → 워크스페이스별로 갈린다(#1875).
+//  못 읽거나 못 쓰더라도(프라이빗 모드·깨진 값) 화면은 전부 펼친 채로 그대로 돈다.
+const KN_GROUP_COLLAPSE_KEY = wsKey('kn:bundles:collapsed');
+let knCollapsedCache: Set<string> | null = null;
+function knCollapsedGroups(): Set<string> {
+  if (knCollapsedCache) return knCollapsedCache;
+  let s = new Set<string>();
+  try {
+    const v = JSON.parse(localStorage.getItem(KN_GROUP_COLLAPSE_KEY) || '[]');
+    if (Array.isArray(v)) s = new Set(v.filter((x: any) => typeof x === 'string'));
+  } catch (_) { /* 전부 펼친 채로 시작한다 */ }
+  knCollapsedCache = s;
+  return s;
+}
+function knSetGroupCollapsed(key: string, off: boolean): void {
+  const s = knCollapsedGroups();
+  if (off) s.add(key); else s.delete(key);
+  try { localStorage.setItem(KN_GROUP_COLLAPSE_KEY, JSON.stringify(Array.from(s))); } catch (_) { /* noop */ }
+}
+
 // 분류축 섹션 컨테이너 — 프로젝트 탭 폴더 행(볼드 라벨 + 우측 캐럿)과 동일 마크업.
-//  ⚠ #1631: 종전엔 이 자리가 space(사업/제품/시스템) 3묶음이었다. 그 축이 사라져 묶음은 하나다 —
+//  ⚠ #1631: 종전엔 이 자리가 space(사업/제품/시스템) 3묶음이었다가 그 축이 사라져 하나가 됐고, 이제는
+//   **화면에서만 보이는 묶음**(category group)마다 하나씩 선다. 분류·검색은 여전히 1단이다.
 //   클래스(.kn-space-group)는 검색 필터(knSideFilterNav)가 잡는 셀렉터라 이름 그대로 둔다.
-function knCatGroup(countEl?: any) {
-  const caret = el('span', { class: 'pjv-side-folder-caret kn-space-caret', 'aria-hidden': 'true', text: '▾' });
-  const grp = el('details', { class: 'kn-space-group', open: '' },
-    el('summary', { class: 'pjv-side-navitem pjv-side-navfolder pjv-side-navspace kn-space-head' },
-      el('span', { class: 'pjv-side-navlabel', text: '분류축' }),
-      countEl || null, caret));
+function knCatGroup(label: string, countEl?: any, opts?: { key?: string; title?: string; fix?: boolean }) {
+  const key = (opts && opts.key) || '';
+  const open = !knCollapsedGroups().has(key);
+  const caret = el('span', { class: 'pjv-side-folder-caret kn-space-caret', 'aria-hidden': 'true', text: open ? '▾' : '▸' });
+  const head = el('summary', { class: 'pjv-side-navitem pjv-side-navfolder pjv-side-navspace kn-space-head',
+    ...(opts && opts.title ? { title: opts.title } : {}) },
+    el('span', { class: 'pjv-side-navlabel', text: label }),
+    countEl || null, caret);
+  const grp = el('details', { class: 'kn-space-group' + (opts && opts.fix ? ' kn-space-fix' : ''),
+    'data-grp': key, open }, head);
   grp.addEventListener('toggle', () => { caret.textContent = (grp as any).open ? '▾' : '▸'; });
+  //  접힘은 **사람이 머리를 눌렀을 때만** 기억한다 — 검색이 강제로 펴는 것(knSideFilterNav)은 사람의
+  //   결정이 아니라서 기억을 덮으면 안 된다. 클릭 시점의 open 은 아직 뒤집히기 전이라 «지금 열림 = 곧 닫힘» 이다.
+  head.addEventListener('click', () => { knSetGroupCollapsed(key, (grp as any).open); });
   return grp;
 }
 
@@ -176,12 +207,42 @@ function buildKnowledgeNav(nav, allCats: any[], selected, myIds: Set<string>, op
   }
   {
     const cats = allCats || [];
-    if (cats.length) {
-      const hasCounts = cats.some((c) => Number.isFinite(Number(c.knowledge_count)));
-      const total = cats.reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
-      const grp = knCatGroup(hasCounts ? el('span', { class: 'pjv-side-navcount', title: '전체 지식 수', text: String(total) }) : null);
-      for (const c of cats) grp.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, false, favOpts));
+    const groups: CatGroup[] = (opts && opts.groups) || [];
+    //  소제목의 수 = 그 구획 지식 수 합계. 못 재는 값을 0 으로 쓰면 «비었다» 는 거짓말이 되므로 셀 수 있을 때만 싣는다.
+    const countOf = (items: any[]) => {
+      if (!items.some((c) => Number.isFinite(Number(c.knowledge_count)))) return null;
+      const n = items.reduce((s, c) => s + (Number(c.knowledge_count) || 0), 0);
+      return el('span', { class: 'pjv-side-navcount', title: '지식 ' + n + '개', text: String(n) });
+    };
+    const section = (label: string, items: any[], o?: any) => {
+      const grp = knCatGroup(label, countOf(items), o);
+      for (const c of items) grp.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, false, favOpts));
       nav.append(grp);
+    };
+    if (cats.length && groups.length) {
+      //  묶음별 구획(#1631) — 카테고리가 10개를 넘으면 한 덩어리로는 구조가 안 보인다. 표시 전용이라
+      //   행(knNavCatNode)·클릭 위임(data-cat-val)·별·지연 트리는 종전 그대로다.
+      const byKey = new Map<string, any[]>();
+      for (const g of groups) byKey.set(g.key, []);
+      const loose: any[] = [];
+      for (const c of cats) {
+        const b = typeof c.group === 'string' ? byKey.get(c.group) : undefined;
+        if (b) b.push(c); else loose.push(c);
+      }
+      //  빈 묶음은 안 그린다 — 여긴 훑는 자리라 고를 것이 없는 소제목은 줄만 먹는다(묶음을 손보는 자리는 분류체계 탭).
+      for (const g of groups) {
+        const items = byKey.get(g.key) || [];
+        if (items.length) section(catGroupName(g), items, { key: g.key, title: g.hint || undefined });
+      }
+      //  묶음이 아직 안 정해진 것은 **맨 아래**다. 분류체계 탭에선 맨 위(고치러 가는 자리라서)지만,
+      //   여긴 매일 훑는 자리라 수선 거리가 늘 맨 위를 차지하면 정작 볼 것이 밀린다.
+      if (loose.length) {
+        section('묶음을 정해 주세요', loose,
+          { key: '*none', fix: true, title: '아직 묶음이 없는 분류입니다 — 분류체계 탭에서 정할 수 있습니다.' });
+      }
+    } else if (cats.length) {
+      //  종전 평면 — 묶음이 없거나 못 받았을 때. 이 경로가 무회귀의 보증이다.
+      section('분류축', cats, { key: '' });
     }
   }
   // 미분류(#1091) — 어느 카테고리에도 안 걸린 지식. 트리 맨 아래(프로젝트 탭 '기타 (미분류)'와 같은 자리).
@@ -205,7 +266,13 @@ async function knSideFilterNav(nav: any, q: string) {
   nav.querySelectorAll('.kn-side-hits').forEach((n: any) => n.remove());
   const applyGroups = () => {
     nav.querySelectorAll('.kn-space-group').forEach((g: any) => {
-      g.hidden = !!query && !Array.from(g.querySelectorAll('.kn-nav-catwrap')).some((w: any) => !w.hidden);
+      const hit = Array.from(g.querySelectorAll('.kn-nav-catwrap')).some((w: any) => !w.hidden);
+      g.hidden = !!query && !hit;
+      //  검색 중에는 일치가 든 구획을 펴 준다(#1631) — 접어 둔 구획 안의 결과가 통째로 안 보이면
+      //   «검색해도 안 나온다» 가 된다. 검색어를 지우면 접어 둔 대로 되돌린다.
+      //   ⚠ 여기서 바꾼 open 은 **기억에 안 남는다** — 접힘은 사람이 머리를 눌렀을 때만 적는다(knCatGroup).
+      const want = query ? (hit || g.open) : !knCollapsedGroups().has(g.dataset.grp || '');
+      if (g.open !== want) g.open = want;
     });
     const anyVis = !query || wraps.some((w) => !w.hidden);
     const note = nav.querySelector('.kn-side-noresult');
@@ -341,6 +408,7 @@ function createWikiSide(opts: any) {
   const sideState = { q: '' };
   const myIds = myCatIdSet();
   let cats: any[] = [];
+  let groups: CatGroup[] = [];   // 묶음(#1631) — 빈 배열이면 사이드바가 종전 평면으로 그려진다
   let uncatCount = 0;   // 미분류 지식 수(#1091) — 0 이면 '미분류' 노드를 안 그린다
   const favCatIds = new Set<string>();
 
@@ -362,7 +430,7 @@ function createWikiSide(opts: any) {
 
   function buildSide() {
     buildKnowledgeNav(nav, cats, opts.selected ? opts.selected() : '', myIds,
-      { indexed: true, onOpen: opts.onOpen, favCatIds, onToggleFav: toggleCatFav, uncatCount });
+      { indexed: true, onOpen: opts.onOpen, favCatIds, onToggleFav: toggleCatFav, uncatCount, groups });
     side.replaceChildren(...[
       el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '지식 카테고리' }), collapseBtn),
       knMakeSideSearch(nav, sideState), nav,
@@ -381,6 +449,9 @@ function createWikiSide(opts: any) {
 
   const ready = (async () => {
     try { cats = await fetchAllCats(); } catch (_) { /* graceful: 사이드바 생략(콘텐츠는 계속) */ }
+    //  묶음(#1631) — 실패·미지원이면 빈 배열이라 트리가 종전 평면으로 선다. 여기서 죽으면 사이드바가
+    //   통째로 안 그려지므로(ready 가 reject) 계약이 바뀌어도 버티게 한 겹 더 감싼다.
+    try { groups = await fetchCategoryGroups(); } catch (_) { groups = []; }
     if (opts.uncategorized) {
       try { uncatCount = await knFetchUncategorizedCount(); } catch (_) { /* graceful: '미분류' 노드만 생략 */ }
     }
