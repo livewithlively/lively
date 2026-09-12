@@ -88,7 +88,7 @@ const orgGithubAppRegister: Capability = {
     "private_key(PEM)는 installation token(=clone 자격)을 찍는 데 쓰이며 별도 행(scope_key=app:key)에 들어간다 — " +
     "매니지드는 이 키를 테넌트에 두지 않고 컨트롤플레인이 대신 찍는다. " +
     "⚠ 값은 저장 후 다시 볼 수 없다(등록 여부만 보인다).",
-  scope: "admin",
+  scope: "memory",
   input: {
     client_id: z.string().describe("GitHub App 의 Client ID(Iv1.… 또는 Iv23…)"),
     client_secret: z.string().describe("GitHub App 의 Client secret — 생성 직후 한 번만 보인다"),

@@ -92,8 +92,8 @@ export const linearCollectCapabilities = makeMemberTokenCollect({
 // Linear 동의 시작(재연결·토큰 교체) + 매니지드 릴레이 완료 — 노션·구글의 connect/oauth_complete 와 같은 모양.
 const orgLinearCollectConnect: Capability = {
   name: "org_linear_collect_connect", title: "Linear 연결(라이블리 앱 동의) 시작",
-  description: "라이블리 Linear 앱 동의를 시작한다(admin) — 반환된 authorization_url 을 열어 [허용]하면 내 금고(linear_app)에 저장되고, org_linear_collect_set 으로 켜면 그 연결로 수집기가 돈다. 이미 연결돼 있어도 다시 동의할 수 있다(토큰 교체).",
-  scope: "admin", input: {},
+  description: "라이블리 Linear 앱 동의를 시작한다(구성원) — 반환된 authorization_url 을 열어 [허용]하면 내 금고(linear_app)에 저장되고, org_linear_collect_set 으로 켜면 그 연결로 수집기가 돈다. 이미 연결돼 있어도 다시 동의할 수 있다(토큰 교체).",
+  scope: "memory", input: {},
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/org/linear/collect/connect"], parse: () => ({}) }] },
   handler: async (_input, user) => {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
@@ -126,7 +126,7 @@ const orgCollectScopeOptions: Capability = {
     "그 앱에서 «고를 수 있는 것»(저장소·프로젝트·팀·파일·리스트·채널)을 **호출자 본인의 연결**로 조회한다 — 화면이 토글 목록으로 그린다. " +
     "지원: github(저장소) · gitlab(프로젝트) · linear(팀) · figma(파일, 팀 id 를 넣은 경우) · clickup(리스트) · slack(공개 채널). " +
     "읽기 전용이고 권한을 넓히지 않는다. 목록을 못 만들면 에러가 아니라 freeform=true + note 로 답한다(화면은 텍스트 입력으로 떨어진다).",
-  scope: "admin",
+  scope: "memory",
   //  #923 — REST 는 :system 경로 파라미터로 싣지만, 스키마에 안 적으면 zod 가 strip 해 MCP 로는 부를 수 없다.
   input: {
     system: z.enum(["github", "gitlab", "linear", "figma", "clickup", "slack"]).describe("어느 앱의 «고를 수 있는 것»을 볼지"),

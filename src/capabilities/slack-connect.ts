@@ -80,7 +80,7 @@ export async function slackCollectState(callerId: string): Promise<SlackCollectS
 const orgSlackCollect: Capability = {
   name: "org_slack_collect", title: "슬랙 자료 가져오기 상태",
   description: "\"자료 가져오기\" 상태 — 검색 수집기(공개채널, 켠 관리자의 연결로 돈다)와 봇 수집기(초대 채널·비공개)의 켜짐 여부, 봇 토큰 유무, 내 연결 여부. 토글은 org_slack_collect_set.",
-  scope: "admin", input: {},
+  scope: "memory", input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/slack/collect"], parse: () => ({}) }] },
   handler: async (_input, user) => {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
@@ -94,7 +94,7 @@ const orgSlackCollectSet: Capability = {
     "\"자료 가져오기\" 토글(admin). enabled=true 면 호출자의 Slack 연결(금고)로 공개채널 검색 수집기를 만들거나 켜고(token_source=member:<나>), " +
     "봇 토큰이 있으면 봇 수집기도 함께 켠다(비공개 채널은 그 채널에서 /invite @Lively 한 것만). 토큰을 복사하지 않는다. " +
     "false 면 둘 다 끈다(삭제 아님 — 커서·자료 보존). 켜려면 호출자가 먼저 me_oauth_connect 로 Slack 을 연결해야 한다.",
-  scope: "admin",
+  scope: "memory",
   input: {
     enabled: z.boolean().describe("true=켜기(내 연결로) · false=끄기"),
     bot: z.boolean().optional().describe("봇 수집기도 함께(기본 true — 봇 토큰이 없으면 조용히 건너뛴다)"),
@@ -160,7 +160,7 @@ const orgSlackCollectSet: Capability = {
 const orgSlackAppManifest: Capability = {
   name: "org_slack_app_manifest", title: "Slack 앱 매니페스트(한 클릭 생성 링크)",
   description: "이 게이트웨이의 OAuth 콜백(org_profile.gateway_url + /oauth/callback)이 redirect 로 박힌 Slack 앱 매니페스트와 api.slack.com 생성 링크. 셀프호스팅 관리자는 링크를 열어 [Create] → Client ID/Secret 만 [AI 도구 ▸ Slack ▸ OAuth 클라이언트] 에 넣으면 된다(구 7단계 → 3단계).",
-  scope: "admin", input: {},
+  scope: "memory", input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/slack/app-manifest"], parse: () => ({}) }] },
   handler: async () => {
     const p = await getOrgProfile();

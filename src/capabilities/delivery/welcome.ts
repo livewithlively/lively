@@ -272,7 +272,8 @@ export const welcomeCapabilities: Capability[] = [
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
       const { listSources, getSource } = await import("../../v6/source-store.js");
-      const rows = await listSources({ limit: SAMPLE_CAP, offset: 0 }, null).catch(() => [] as Array<Record<string, unknown>>);
+      //  ⚠ 뷰어는 **이 사람**이다(2026-09-12). null(특권)로 부르면 이 사람에게 안 보이는 남의 자료까지 AI 에게 넘어간다.
+      const rows = await listSources({ limit: SAMPLE_CAP, offset: 0 }, userId).catch(() => [] as Array<Record<string, unknown>>);
       const listed = (rows as Array<{ id?: number; title?: string | null }>)
         .map((r) => ({ id: Number(r.id ?? 0), title: String(r.title ?? "") }))
         .filter((r) => r.title);
@@ -584,6 +585,9 @@ export async function welcomeSnapshot(userId: string) {
   const { getMember, getLivProfile } = await import("../../org/store.js");
   const { listSources, countSources } = await import("../../v6/source-store.js");
   const { listCategories } = await import("../../v6/category-store.js");
+  //  #3872 — 「초대로 합류한 사람」 판정 재료. 계정 서버에 묻지 않는다(이 워크스페이스 안의 사실만 본다).
+  const { listMembers, getOrgProfile } = await import("../../org/store.js");
+  const { countKnowledge } = await import("../../v6/knowledge-store.js");
 
   // AI 가 이어져 있나 — **분석을 누르기 전에** 알아야 한다. 안 그러면 사람이 «읽어 주세요» 를 누르고
   //  나서야 거절을 본다.
@@ -598,20 +602,34 @@ export async function welcomeSnapshot(userId: string) {
   const { memberLoggedInHarnessesAny } = await import("../../terminal/profiles.js");
   const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
 
-  const [member, liv, entries, total, cats, loggedIn] = await Promise.all([
+  const [member, liv, entries, total, cats, loggedIn, memberRows, orgProfile, knowledgeN] = await Promise.all([
     getMember(userId),
     getLivProfile(userId),
-    listSources({ limit: SAMPLE_CAP, offset: 0 }, null).catch(() => [] as Array<Record<string, unknown>>),
-    countSources({}, null).catch(() => 0),
+    //  ⚠ 뷰어는 **이 사람**이다(2026-09-12) — 종전엔 null(특권)이라 팀 워크스페이스에 갓 들어온 구성원에게도
+    //   남이 올린 비공개 자료의 제목이 최대 200건 실려 나갔다(처음 설정 화면·리브 1턴 프롬프트 양쪽).
+    listSources({ limit: SAMPLE_CAP, offset: 0 }, userId).catch(() => [] as Array<Record<string, unknown>>),
+    countSources({}, userId).catch(() => 0),
     listCategories(null).catch(() => [] as Array<Record<string, unknown>>),
     memberLoggedInHarnessesAny(userId).catch(() => [] as string[]),
+    listMembers().catch(() => [] as Array<{ kind?: string; state?: string }>),
+    getOrgProfile().catch(() => null as { display_name?: string | null; name?: string | null } | null),
+    countKnowledge({}, userId).catch(() => 0),
   ]);
   // 헤드리스 규약을 아는 하네스로만 센다 — 로그인했어도 헤드리스로 못 돌리면 분석이 안 된다.
   const aiHarnesses = loggedIn.filter((k) => HEADLESS_KEYS.includes(k));
   const rows = (entries as Array<{ kind?: string | null; title?: string | null }>);
   const done = !!(liv.welcome?.done_at || liv.onboarded_at);
+  //  #3872 — **이미 다른 사람이 있는 워크스페이스에 들어왔나.** 이 한 줄이 처음 설정의 갈래를 정한다:
+  //   혼자면 «내 공간을 여는 사람», 둘 이상이면 «이미 굴러가는 팀에 합류한 사람»이다.
+  //   ⚠ 가입 시각으로 못 가른다 — org_member 에 created_at 이 없다. 그리고 역할(owner)도 여기서는 모른다
+  //    (매니지드에서 그 판정은 계정 서버에 있다). 인원 수는 이 워크스페이스 안에서 즉시 알 수 있는 사실이다.
+  const humans = (memberRows as Array<{ kind?: string; state?: string }>)
+    .filter((m) => (m.kind ?? "human") === "human" && (m.state ?? "active") === "active").length;
+  const wsName = (orgProfile?.display_name || orgProfile?.name || "").trim();
   return {
     done,   // 어느 표식이든 하나면 끝난 것(#2039 와 합류)
+    //  #3872 — 합류자 화면의 재료. is_join=false 면 종전(내 공간을 여는 사람) 그대로다.
+    joining: { is_join: humans >= 2, member_count: humans, workspace_name: wsName || null, knowledge_n: Number(knowledgeN) || 0 },
     done_at: liv.welcome?.done_at ?? null,
     // #2171 — **보여준 적 있나**(끝냈나와 별개). 자동 진입은 이 표식으로 평생 한 번만 한다.
     shown_at: liv.welcome_shown_at ?? null,
@@ -685,6 +703,7 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
       collectors: collectors.map((c) => ({ label: c.label, preset_key: c.preset_key, enabled: c.enabled, sync_interval_sec: c.sync_interval_sec })),
       aiHarnesses: usable,
       harness: usable[0] ?? "claude",
+      joining: snap.joining,   // #3872 — 합류자면 리브가 팀 자료를 «이 사람이 올린 것»으로 읽지 않는다
     });
     //  세션을 열까 말까는 순수 판정으로(kickoff-plan) — 재사용·AI 미연결·생성 셋뿐이다.
     const plan = planLivKickoff(o.priorSession, usable);

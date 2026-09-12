@@ -23,6 +23,9 @@ export interface FirstTurnInput {
   collectors: Array<{ label: string; preset_key: string; enabled: boolean; sync_interval_sec: number }>;
   aiHarnesses: string[];                            // 로그인 확인된 하네스
   harness: string;                                  // 이 세션이 도는 하네스
+  //  #3872 — 이미 굴러가는 팀에 **합류한 사람**인가. 합류자면 워크스페이스의 자료는 이 사람이 올린 것이 아니다 —
+  //   그걸 «올린 자료» 로 읽어 주면 리브가 첫 문장부터 남의 일을 이 사람 일로 만든다(실측 #3872).
+  joining?: { is_join: boolean; member_count: number; workspace_name: string | null; knowledge_n: number } | null;
 }
 
 export const FIRST_TURN_NAME_CAP = 40;
@@ -46,8 +49,13 @@ function factsBlock(i: FirstTurnInput): string {
   if (others.length) lines.push(`- 그 밖에 이미 있는 갈래 ${others.length}개: ${others.map((c) => c.name).join(" · ")}`);
 
   lines.push("");
+  const join = i.joining?.is_join ? i.joining : null;
+  if (join) {
+    lines.push(`- 이 사람은 **이미 있는 팀에 합류**했다(구성원 ${n(join.member_count)}명${join.workspace_name ? ` · ${join.workspace_name}` : ""}).`);
+    lines.push(`- 팀에 이미 쌓인 지식 ${n(join.knowledge_n)}건 — **이 사람이 만든 것이 아니다.**`);
+  }
   if (i.uploads.total > 0) {
-    lines.push(`- 올린 자료 ${n(i.uploads.total)}건${i.uploads.kinds.length ? ` — ${i.uploads.kinds.map((k) => `${k.name} ${k.n}`).join(", ")}` : ""}`);
+    lines.push(`- ${join ? "이 사람이 볼 수 있는 자료" : "올린 자료"} ${n(i.uploads.total)}건${i.uploads.kinds.length ? ` — ${i.uploads.kinds.map((k) => `${k.name} ${k.n}`).join(", ")}` : ""}`);
     const shown = i.uploads.names.slice(0, FIRST_TURN_NAME_CAP);
     if (shown.length) lines.push(`  · 제목: ${shown.join(" / ")}${i.uploads.total > shown.length ? ` … 외 ${n(i.uploads.total - shown.length)}건` : ""}`);
     for (const f of i.uploads.forms.slice(0, 5)) lines.push(`  · 같은 꼴이 반복됨: "${f.skel}" ${f.names.length}건`);
@@ -74,14 +82,20 @@ export function buildFirstTurnPrompt(i: FirstTurnInput): string {
     ? "첫 수집이 한 바퀴 돈 뒤"
     : (i.uploads.total > 0 ? "올린 자료를 읽은 뒤 곧" : "자료가 들어오면");
   return [
-    "너는 이 워크스페이스의 담당자 **리브**다. 방금 이 사람이 처음 설정을 마쳤고, 이 세션은 그 직후에 열렸다.",
+    i.joining?.is_join
+      ? "너는 이 워크스페이스의 담당자 **리브**다. 방금 이 사람이 **이미 굴러가는 팀에 합류해** 처음 설정을 마쳤고, 이 세션은 그 직후에 열렸다."
+      : "너는 이 워크스페이스의 담당자 **리브**다. 방금 이 사람이 처음 설정을 마쳤고, 이 세션은 그 직후에 열렸다.",
     "",
     "## 지금 워크스페이스의 실측(서버가 방금 읽은 값 — 다시 조회하지 마라)",
     factsBlock(i),
     "",
     "## 이 턴에서 할 일",
-    "1. 위 실측을 **이 사람의 말로** 정리해 보여 줘라 — 무엇을 답했고, 무엇이 만들어졌고, 자료와 수집이 어디까지 와 있는지. 표나 목록으로 짧게. 숫자는 위 값 그대로.",
-    "2. 빠진 것이 있으면 사실만 짚어라(예: 자료가 없다, AI 로그인이 안 됐다). 지금 고치라고 재촉하지 마라.",
+    i.joining?.is_join
+      ? "1. **이 팀에 이미 있는 것**을 이 사람의 말로 짧게 소개하라 — 지식이 얼마나 쌓여 있고 무엇을 다루는 팀인지(위 갈래 이름에서 읽어라). 이 사람이 올린 자료와 팀의 자료를 **섞어 말하지 마라.**"
+      : "1. 위 실측을 **이 사람의 말로** 정리해 보여 줘라 — 무엇을 답했고, 무엇이 만들어졌고, 자료와 수집이 어디까지 와 있는지. 표나 목록으로 짧게. 숫자는 위 값 그대로.",
+    i.joining?.is_join
+      ? "2. 그다음 **이 사람이 지금 시켜 볼 만한 일 세 가지**를 제안하라 — 위 갈래·지식에서 실제로 나온 것만. 없는 프로젝트·수치를 지어내지 마라."
+      : "2. 빠진 것이 있으면 사실만 짚어라(예: 자료가 없다, AI 로그인이 안 됐다). 지금 고치라고 재촉하지 마라.",
     `3. 마지막에 이렇게 알려라: **${nextWhen} 증류 작업(카테고리를 만들고 자료를 지식으로 정리하는 일)을 한 번 더 시작한다**. 그때 이 세션으로 다시 지시가 오고, 끝나면 알림이 간다고.`,
     "4. 그리고 **턴을 끝내라.**",
     "",
