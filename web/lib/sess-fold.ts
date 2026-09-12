@@ -129,7 +129,11 @@ export interface PastRowLike {
   live?: boolean;
   alive?: boolean;
   lastSeen?: number;
-  trashed?: boolean;
+  /** 휴지통 표식 — **칸 이름이 `trashedAt` 인 것이 핵심이다**(views.ts `isTrashedSess = !!s.trashedAt`).
+   *  4판은 이 자리를 `trashed?: boolean` 으로 뒀는데 **Sess 에 없는 칸**이라 실제 자료에서 한 번도 안 걸렸다 —
+   *  즉 휴지통 세션이 카드 접힘 안에 그대로 섰다(#1851 이 막으려던 «되돌리기 전에 열린다»). 테스트는
+   *  `{trashed:true}` 객체를 손으로 지어 넣어 그 구멍을 못 봤다. 자료형과 **같은 이름**을 쓰는 것이 고침이다. */
+  trashedAt?: string | null;
   logId?: string | null;
   altIds?: string[];
 }
@@ -139,9 +143,14 @@ export interface PastRowLike {
  *
  *  · `shown` — 이미 그 카드에 **서 있는** 줄의 세션 id. 같은 세션을 두 번 그리지 않는다.
  *  · `cap`   — 펼쳤을 때 그릴 상한. 넘는 만큼은 `total` 로만 말하고 «외 n개» 로 프로젝트 화면에 넘긴다.
+ *  · `keepLive` — 도는 세션도 담는다. **앞면이 하나도 없는 카드에서만** 켠다(#3778 5판) — 아래 ⚠ 참조.
  *
  *  ⚠ **날짜로 자르지 않는다.** 이 목록이 시간이 지나도 안 줄어드는 것이 이 함수의 존재 이유다.
  *  ⚠ 휴지통 것은 뺀다 — 휴지통은 별도 화면이고, 거기 있는 것을 여기 세우면 되돌리기 전에 열리게 된다(#1851).
+ *  ⚠ 도는 세션은 기본적으로 뺀다 — 그건 접힘이 아니라 **앞면**에 설 것이기 때문이다. 그런데 **앞면이 하나도
+ *   없는 카드**에서는 그 이유가 사라진다: 치운 도는 세션(sess-visibility 규칙 ② 가 규칙 ③ live 보다 먼저다)은
+ *   줄로도 안 서고 접힘에서도 빠져 **어디에도 없다**. 그 카드가 통째로 비어 버린다. `keepLive` 가 그 구멍을 막는다
+ *   (foldCardRows 의 "본면이 없으면 덮을 것이 없다" 와 같은 규율).
  *  ⚠ 주인으로 거르지 않는다 — [AI 세션] 구역과 같은 집합이어야 «둘이 같다» 가 참이 된다. 남의 세션은
  *   행이 주인 얼굴을 달고 서므로(#2026) 누구 것인지는 줄이 스스로 말한다.
  */
@@ -150,17 +159,97 @@ export function projectPastRows<T extends PastRowLike>(
   projectId: number,
   shown: ReadonlySet<string>,
   cap: number,
+  o: { keepLive?: boolean } = {},
 ): { rows: T[]; total: number } {
-  if (!projectId) return { rows: [], total: 0 };
+  //  ★ `projectId` 0 은 **「프로젝트 없음」 묶음**이다 — 빈 값이 아니다(#3778 5판).
+  //   4판은 여기서 0 을 «묻지 마라» 로 읽고 빈 결과를 돌려줬는데, 그 바람에 프로젝트에 안 붙은 세션은
+  //   접힘에도 못 들어가 **어디에도 없었다**(실측: 그 계정에서 47개). 아래 비교가 `Number(s.projectId || 0)`
+  //   라 0 도 정확히 걸린다 — 프로젝트 없는 세션끼리만 모인다.
   const hit: T[] = [];
   for (const s of all || []) {
     if (!s || Number(s.projectId || 0) !== projectId) continue;
-    if (s.live && s.alive) continue;                       // 도는 세션은 접힘이 아니라 앞면이다
-    if (s.trashed) continue;
+    if (s.live && s.alive && !o.keepLive) continue;        // 도는 세션은 접힘이 아니라 앞면이다(앞면이 있을 때만)
+    if (s.trashedAt) continue;
     const names = [s.id, s.logId || '', ...(s.altIds || [])].filter(Boolean);
     if (names.some((n) => shown.has(String(n)))) continue;  // 이미 서 있다
     hit.push(s);
   }
   hit.sort((a, b) => (Number(b.lastSeen) || 0) - (Number(a.lastSeen) || 0));
   return { rows: cap > 0 ? hit.slice(0, cap) : hit, total: hit.length };
+}
+
+
+// ── 「어디에도 없는 세션」을 0 으로 (#3778 5판, 원준 2026-09-12) ──────────────────────
+//
+//  신고: "사이드바에서 아예 어떻게도 볼 수 없는 숨겨져 있는 세션이 존재하는 것 자체가 말이 안 된다.
+//   그럼 그거 쓰려면 프로젝트까지 들어가서 지금 안 열린 세션 찾아서 다시 열어야 하잖아."
+//
+//  실측(2026-09-12, 원준님 계정): **내 세션 190개 중 33개**가 홈 사이드바 어디에도 없었다.
+//  그 33개는 **카드가 안 서는 프로젝트 24개** 안에 있었다 — 4판이 접힘 안쪽을 전량으로 넓혔지만,
+//  그건 «카드가 이미 서 있을 때» 의 이야기였다. 카드 자체가 없으면 넓힌 접힘도 그릴 자리가 없다.
+//
+//  ★ 원인은 규칙 하나가 아니라 **서로 다른 시기의 규칙 셋이 같은 자리를 다른 기준으로 판정**한 것이다:
+//   ① 7/23 «어느 탭에 열려 있으면 온라인» — 탭 줄은 8/25 에 없어졌는데 판정만 남았다
+//   ② 8/27 «홈은 오늘 붙들고 있는 것» — 날짜로 자르니 어제 이전 프로젝트가 통째로 빠진다
+//   ③ 9/10 «내가 안 닫은 세션은 남긴다» — 닫는 길이 × 하나뿐이라 한쪽으로만 쌓인다
+//  세 기준 중 어느 것도 화면에 안 나타난다. 그래서 «기준 없이 사라진다» 로 읽혔다.
+//
+//  ⇒ **기준을 하나 더 얹지 않는다. 바닥을 바꾼다.** 홈 목록의 바닥을 «오늘» 이 아니라 **프로젝트**로 둔다:
+//   내 세션이 있는 프로젝트는 전부 카드를 갖고, 그 카드가 그 프로젝트의 세션 전량을 진다.
+//   그러면 «안 보이는 세션» 이 정의상 0 이 된다.
+//
+//  ⚠ 그래도 **서 있는 줄의 규칙은 그대로다**(#2208·#3855 의 취지 — 홈이 명부가 되면 안 된다).
+//   새로 서는 카드는 **접힌 한 줄**이라 목록이 줄 단위로 길어지지 않는다. 원준님 계정에서 24줄이 는다.
+//  ⚠ 새 묶음 이름을 만들지 않는다 — 날짜 어휘(hold-rules dayGroup)는 이미 바닥이 없어서, 한 달 전
+//   프로젝트는 「8월 13일」 묶음에 그대로 선다. 목록의 문법이 한 벌 그대로여야 두 축으로 안 읽힌다.
+
+/** 카드를 **새로 세울지** 묻는 판정이 세션에게 묻는 것 전부. */
+export interface RestCardLike {
+  projectId?: number | null;
+  lastSeen?: number;
+  trashedAt?: string | null;
+  /** 내 세션인가(views.ts Sess.owned). */
+  owned?: boolean;
+}
+
+/** 줄이 하나도 없어서 새로 세우는 카드 한 장. */
+export interface RestCard {
+  /** 프로젝트 id. */
+  id: number;
+  /** 그 프로젝트에서 가장 최근에 쓴 시각 — 날짜 묶음 이름과 순서를 이 값이 정한다. */
+  at: number;
+  /** 그 카드가 지는 내 세션 수(접힘에 「지난 세션 n」으로 나올 값의 하한). */
+  n: number;
+}
+
+/**
+ * **줄이 하나도 안 선 프로젝트**의 카드를 세운다 — 홈 목록에서 안 보이는 세션을 0 으로 만드는 자리.
+ *
+ *  · `hasCard` — 이미 카드가 선 프로젝트 id. 그 프로젝트는 건드리지 않는다(같은 카드를 두 번 세우지 않는다).
+ *
+ *  ⚠ **날짜로 자르지 않는다** — 이 목록에 바닥이 없는 것이 이 함수의 존재 이유다(4판 projectPastRows 와 같은 규율).
+ *  ⚠ 휴지통은 뺀다 — 휴지통은 별도 화면이고, 거기 있는 것으로 카드를 세우면 되돌리기 전에 열린다(#1851).
+ *  ⚠ **내 세션만 센다.** 이미 선 카드 **안**은 남의 세션도 담지만(projectPastRows — 행이 주인 얼굴을 달고 선다),
+ *   카드를 **새로 세우는** 이유는 내 일이어야 한다. 아니면 동료만 일하는 프로젝트가 내 홈에 카드로 쌓인다.
+ *  ⚠ 도는 세션도 센다. 도는 세션은 보통 ① 이 줄로 세우므로 여기 안 오지만, 이 함수의 약속은
+ *   «내 세션이 있으면 카드가 있다» 이지 «끝난 세션이 있으면» 이 아니다 — 예외를 두면 구멍이 다시 생긴다.
+ */
+export function restProjectCards<T extends RestCardLike>(
+  all: readonly T[] | null | undefined,
+  hasCard: ReadonlySet<number>,
+): RestCard[] {
+  const by = new Map<number, RestCard>();
+  for (const s of all || []) {
+    if (!s || !s.owned || s.trashedAt) continue;
+    //  id 0 = 「프로젝트 없음」 묶음. **빼지 않는다** — 프로젝트에 안 붙었다는 이유로 안 보이면
+    //   그것도 «어디에도 없는 세션» 이다(실측 47개). 그 카드는 사이드바 트리가 이미 쓰는 자리이고
+    //   「외 n개」도 갈 곳이 있다(#/p/0 = 프로젝트 없는 세션들의 작업대, main.ts:918).
+    const id = Number(s.projectId || 0);
+    if (hasCard.has(id)) continue;
+    const at = Number(s.lastSeen) || 0;
+    const c = by.get(id);
+    if (c) { c.n++; if (at > c.at) c.at = at; }
+    else by.set(id, { id, at, n: 1 });
+  }
+  return [...by.values()].sort((a, b) => b.at - a.at);
 }
