@@ -33,6 +33,7 @@ import { effortChoices, effortKo, findHarness, flagChoices, prettyModel, provide
 import { rememberCreated } from './v2/created-cache.js';
 import { rememberFirstPrompt, rememberUnsentDraft, takeFirstPrompt } from './v2/quick-session.js';   // #2439 — 되살린 세션의 첫 지시 낙관 렌더   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게 · #3891 못 간 말은 옮겨 간 화면 입력칸으로
 import { withRetry } from './lib/restore-retry.js';   // #3891 — 복원 요청은 끊김에만 짧게 다시 묻는다(서버 복원이 멱등이라 안전)
+import { canForceRestore, RESTORE_FORCE_LABEL } from './lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다
 // #3778 — 「지금 보고 있는 사람」·[공유] 는 **세션의 머리줄**에 산다. 종전엔 셸 문패(v2/panes.ts)에 있었는데,
 //  그 줄의 왼쪽은 프로젝트 이름이라 한 줄이 두 주체를 번갈아 말했다 — 「공유」가 프로젝트 공유로 읽혔다.
 //  세션은 이미 자기 머리줄을 갖고 있다(여기) — 이름·하네스·⋯ 가 다 여기 있으니 공유도 여기가 집이다.
@@ -1342,9 +1343,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //   이제 서버가 사실대로 409 를 주니, **사람에게 고르게 한다**: 한 번 더 누르면 강제로 되살린다.
       //   ⚠ 두 번 누르게 하는 것이 곧 확인이다 — 옛 세션이 실은 살아 있을 수도 있음을 알고 새로 여는 선택이라
       //    자동으로 대신 골라 주지 않는다.
-      if (e?.status === 409 && !pd.forceRestore) {
+      //  ⚠ #3870 — 판정을 `status === 409` 에서 **서버가 실은 canForce** 로 좁혔다. 같은 라우트의 409 중
+      //   노드 오프라인·노드 무응답·노드 직접생성(좌표 없음)은 force 로 풀리지 않는다 — 종전 검사는 그 셋에도
+      //   버튼을 내밀어, 한 번 더 눌러도 같은 거절이 돌아오는 헛 선택지를 만들었다.
+      if (canForceRestore(e) && !pd.forceRestore) {
         pd.forceRestore = true;
-        restoreTo = '강제로 되살리기';
+        restoreTo = RESTORE_FORCE_LABEL;
         toast('이 세션이 있는 컨테이너의 상태를 확인할 수 없어요. 한 번 더 누르면 대화를 이어받아 새로 되살립니다.');
       } else {
         toast(e?.message || '이어서 열지 못했어요.');

@@ -29,7 +29,9 @@ export function wrap(fn: AsyncHandler): express.RequestHandler {
             cause: c instanceof Error ? { message: c.message, code: (c as NodeJS.ErrnoException).code } : c,
           }, "web ui request failed");
         }
-        res.status(err.status).json({ error: err.message });
+        //  #3870 — 구조화 정보(err.body)를 같이 싣는다. `error` 는 **뒤에** 펼쳐 message 가 이기게 한다:
+        //   body 가 실수로 error 를 들고 와도 사용자 안내문이 조용히 덮이지 않는다. body 가 없으면 종전과 바이트 동일.
+        res.status(err.status).json({ ...(err.body ?? {}), error: err.message });
         return;
       }
       const msg = err instanceof Error ? err.message : "";

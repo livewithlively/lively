@@ -3067,7 +3067,9 @@ function showEndedBar(o) {
   const bar = el('div', { class: 'ended-bar' + (o.info ? ' info' : '') }, el('span', { class: 'ended-ic', text: o.icon || '⏹' }), txt);
   if (o.restoreBtn) { // 내가 /exit 로 끝낸 세션 — 되살릴지는 사용자가 정한다(자동 복원 안 함).
     const rb = el('button', { class: 'ended-cta', text: o.restoreLabel || '다시 열기' });
-    rb.onclick = () => { rb.disabled = true; rb.textContent = '여는 중…'; restoreThisSession(); };
+    //  #3870 — force 는 «옛 것이 살아 있을 수도 있음을 알고 새로 만든다» 는 선언이라 **사람이 이 버튼을 누른 것**이
+    //   곧 그 확인이다(서버가 canForce 를 준 뒤에만 이 라벨로 선다 — 아래 restoreThisSession 의 catch).
+    rb.onclick = () => { rb.disabled = true; rb.textContent = '여는 중…'; restoreThisSession(o.restoreForce); };
     bar.append(rb);
   }
   bar.append(el('a', { class: 'ended-cta', href: apiUrl('/ui/#/terminal'), target: '_blank', rel: 'noopener', text: '세션 목록 열기 →' }));
@@ -3082,6 +3084,23 @@ function showEndedBar(o) {
 // 언제 판정하나 — 두 시점이 같은 표를 쓴다: ① 페이지가 뜰 때(메타가 restorable 이라고 하면 WS 를 붙이기 전에)
 //  ② 붙어 있다가 4410(세션 종료 확정)을 받았을 때. 순수 판정(scripts/terminal-restore-gate.test.mjs 가 표를 지킨다).
 //  'end'=종료 배너(되살릴 근거 없음) · 'notowner'=중단됐지만 남의 세션 · 'ask'=버튼으로 물어봄 · 'auto'=자동 복원 · 'loop'=재복원 차단.
+/**
+ * 서버가 «이건 강제로 되살릴 수 있다» 고 말했나 (순수, #3870).
+ *
+ * ⚠ **web/lib/restore-force.ts 와 같은 규칙이다.** 사본이 둘인 이유는 이 번들이 SPA 와 분리된 tsconfig
+ *  (web/standalone/tsconfig.json — rootDir 가 이 폴더)라 web/lib 을 import 할 수 없어서다. 두 사본이 같은
+ *  답을 내는지는 scripts/restore-force.test.mjs 가 같은 표로 지킨다(갈리면 그 시험이 빨강).
+ * ⚠ 상태코드로 가르면 안 된다 — 복원 409 에는 force 로 **안** 풀리는 것(노드 오프라인·무응답·좌표 없음)이
+ *  섞여 있다. 그래서 서버가 풀리는 쪽에만 canForce 를 싣고(src/terminal/routes.ts stateUnknownRestore) 그것만 본다.
+ */
+export function canForceRestore(e) {
+  if (!e || typeof e !== 'object') return false;
+  if (Number(e.status) !== 409) return false;
+  const body = e.body;
+  if (!body || typeof body !== 'object') return false;
+  return body.canForce === true;   // 참값 흉내(문자열 'true'·1)는 승격하지 않는다
+}
+
 export function goneMode(meta, isNode, alreadyRestored, typed) {
   // #1791 — 노드 세션도 중앙 desired-state(node_id)를 가진다. 판정표는 박스와 같다 — 메타(GET …?node=)가 복원 가능이라 하면
   //  같은 길로 간다(복원 자체는 서버가 그 노드에 create 를 릴레이). isNode 는 호환용 인자로 남긴다(판정에 안 쓴다).
@@ -3155,12 +3174,24 @@ function showRestoringBanner(meta) {
     body: why + ' 같은 폴더·설정으로 다시 열고 대화를 이어받습니다.' });
 }
 // 복원 실행 — 목록 카드 [복원] 과 같은 엔드포인트. 새 세션은 새 id 를 받으므로 그 주소로 갈아탄다(현재 URL 은 죽은 id).
-async function restoreThisSession() {
+async function restoreThisSession(force?) {
   try { if (ws && ws.readyState <= 1) ws.close(); } catch (_) { /* noop */ }
   let r = null;
-  try { r = await api(sUrl('/restore'), { method: 'POST', body: '{}' }); }
+  try { r = await api(sUrl('/restore') + (force ? '?force=1' : ''), { method: 'POST', body: '{}' }); }
   catch (e) {
     sessionEnded = true;
+    //  #3870 — 서버가 «상태를 모르겠다(force 로 풀린다)» 고 하면 그 선택지를 **이 배너에서** 준다. 종전엔 서버 문구를
+    //   그대로 body 에 실었는데, 그 문구는 «화면의 [강제로 되살리기] 를 눌러 주세요» 라고 대화창에만 있는 버튼을
+    //   지목한다 — 이 화면엔 없어서 «누르라는데 없다» 가 됐다(실측 2026-09-12, 원준님 신고).
+    //   force 로 한 번 더 눌렀는데도 같은 답이면(force 참) 되풀이하지 않고 사유만 남긴다.
+    if (canForceRestore(e) && !force) {
+      showEndedBar({
+        title: '상태를 확인하지 못했어요.',
+        body: '이 세션이 있는 곳이 끝난 건지 응답만 늦는 건지 모르는 상태예요. 잠시 뒤 다시 열어 보거나, 그대로 새로 열어 대화를 이어받을 수 있어요.',
+        icon: '❓', info: true, restoreBtn: true, restoreLabel: '강제로 되살리기', restoreForce: true,
+      });
+      return;
+    }
     showEndedBar({ title: '열지 못했습니다.', body: (e && e.message || String(e)) + ' — 세션 목록에서 다시 시도해 주세요.' });
     return;
   }

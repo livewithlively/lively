@@ -1293,6 +1293,24 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
 }
 
 // ── ③ 복원(#1059 E) + 하네스 훅 보고(active·claude-uuid·exited, #1221) + 관리자 전 세션 메타뷰(#1059 F) ──
+
+/**
+ * «모른다» 로 멈추는 복원 409 (#3752 ④) — 확답을 못 받아 **새로 만들지 않고** 사람에게 넘기는 자리.
+ *
+ * ★ #3870 — 그 선택지를 화면이 그릴 수 있게 `canForce` 를 **응답에 싣는다.** 종전엔 문구만 «화면의
+ *  [강제로 되살리기] 를 눌러 주세요» 라고 했는데, 그 버튼을 실제로 만드는 화면은 대화창 하나뿐이었다 —
+ *  나머지(단독 터미널 부팅 게이트·판 목록·세션 목록·대시보드)는 이 문장을 그대로 토스트해서 **없는 버튼을
+ *  누르라고** 했다(실측 2026-09-12, 원준님 신고: 서버 원문 그대로 화면에 떴다).
+ * ⚠ 같은 복원 라우트의 다른 409(노드 오프라인·노드 무응답·노드 직접생성으로 좌표 없음)에는 **붙이지 않는다** —
+ *  그것들은 force 로 풀리지 않는다(노드가 켜지거나 그 컴퓨터에서 이어야 한다). 상태코드만 보고 버튼을 내밀면
+ *  눌러도 같은 거절이 돌아오는 헛 선택지가 된다(종전 대화창의 `status === 409` 검사가 그랬다).
+ */
+function stateUnknownRestore(what: string): HttpError {
+  return new HttpError(409, `${what} — 잠시 후 다시 시도하거나, `
+    + "그대로 새 세션으로 되살리려면 화면의 [강제로 되살리기] 를 눌러 주세요(대화는 이어집니다).",
+    { body: { canForce: true } });
+}
+
 function registerRestoreReportRoutes(app: express.Express, auth: express.RequestHandler): void {
   // 복원(#1059 E) — restorable(재부팅/reaper 로 tmux 에서 사라졌으나 desired-state 가 DB 에 남은) 세션을 lazy 재생성한다.
   //  저장된 desired-state(rootKey·subpath·harness·flags·invites·mode)로 createSession 하고, claude 하네스는 resume=<옛 id>
@@ -1439,8 +1457,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     const goneVerdict = await sessionGoneVerdict(id);
     if (goneVerdict === false) { res.json({ ok: true, already: true, id }); return; }
     if (goneVerdict === null && !force) {
-      throw new HttpError(409, "이 세션이 있는 컨테이너의 상태를 확인하지 못했습니다 — 잠시 후 다시 시도하거나, "
-        + "그대로 새 세션으로 되살리려면 화면의 [강제로 되살리기] 를 눌러 주세요(대화는 이어집니다).");
+      throw stateUnknownRestore("이 세션이 있는 컨테이너의 상태를 확인하지 못했습니다");
     }
     const owner = { userId: st.owner } as LivelyUser;
     // 이어받을 대화 UUID — **훅이 보고한 매핑만** 쓴다(그 대화 파일이 그 소유자 홈에 실제로 있을 때만).
@@ -1474,8 +1491,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       //  ⚠ 후보를 **못 물었으면** «없다» 가 아니라 «모른다» 다 — 확답 규칙 그대로 만들지 않는다(force 면 사람이 고른 대로).
       const peers = await conversationPeers(id, mappedId, st.owner).catch(() => null);
       if (peers === null && !force) {
-        throw new HttpError(409, "이 대화를 이어 도는 세션이 있는지 확인하지 못했습니다 — 잠시 후 다시 시도하거나, "
-          + "그대로 새 세션으로 되살리려면 화면의 [강제로 되살리기] 를 눌러 주세요(대화는 이어집니다).");
+        throw stateUnknownRestore("이 대화를 이어 도는 세션이 있는지 확인하지 못했습니다");
       }
       const probes: AdoptProbe[] = [];
       for (const p of peers ?? []) {
@@ -1486,8 +1502,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       }
       const adopt = adoptVerdict(id, probes, force);
       if (adopt.kind === "unknown") {
-        throw new HttpError(409, "이 대화를 이어 도는 세션의 상태를 확인하지 못했습니다 — 잠시 후 다시 시도하거나, "
-          + "그대로 새 세션으로 되살리려면 화면의 [강제로 되살리기] 를 눌러 주세요(대화는 이어집니다).");
+        throw stateUnknownRestore("이 대화를 이어 도는 세션의 상태를 확인하지 못했습니다");
       }
       if (adopt.kind === "adopt") {
         await settleInterruptedRestore(id, st, adopt.id, projRef.projectId ?? null);
