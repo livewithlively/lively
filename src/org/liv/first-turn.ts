@@ -14,6 +14,7 @@
 
 export interface FirstTurnInput {
   displayName: string | null;                       // 온보딩에서 답한 이름(건너뛰었으면 null)
+  purpose: string | null;                           // 이 워크스페이스의 용도(1단 답) — liv_profile.welcome.stage
   work: { asis?: string; tobe?: string } | null;    // liv_profile.work
   drawers: string[];                                // 온보딩에서 만든 서랍(자료 갈래) 이름
   firstOrder: string | null;                        // 첫 지시로 고른 문장
@@ -35,6 +36,8 @@ const n = (x: number): string => x.toLocaleString("ko-KR");
 function factsBlock(i: FirstTurnInput): string {
   const lines: string[] = [];
   lines.push(`- 이름: ${i.displayName ? i.displayName : "(답하지 않음 — 이름을 지어 부르지 마라)"}`);
+  //  자리가 먼저다 — 같은 사람이라도 워크스페이스마다 담는 것이 다르고, 리브가 맞춰야 할 것은 **자리** 쪽이다.
+  lines.push(`- 이 워크스페이스의 용도: ${i.purpose ? i.purpose : "(답하지 않음)"}`);
   lines.push(`- 하는 일: ${i.work?.asis ? i.work.asis : "(답하지 않음)"}`);
   if (i.work?.tobe) lines.push(`- ${i.work.tobe}`);
   for (const d of i.decisions) lines.push(`- ${d.what}${d.why ? ` — ${d.why}` : ""}`);

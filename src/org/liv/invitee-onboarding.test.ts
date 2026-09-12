@@ -55,7 +55,7 @@ test("④ 합류자 판정은 서버가 준 사실만 쓴다 — 화면이 인�
 
 // ── 리브 1턴 — 합류자에게 팀 자료를 «이 사람이 올린 것» 으로 읽어 주지 않는다 ──
 const base = (over: Partial<FirstTurnInput> = {}): FirstTurnInput => ({
-  displayName: "수아", work: null, drawers: [], firstOrder: null, decisions: [],
+  displayName: "수아", purpose: null, work: null, drawers: [], firstOrder: null, decisions: [],
   uploads: { total: 3, kinds: [], names: ["a", "b", "c"], forms: [] },
   categories: [{ name: "산출물" }], collectors: [], aiHarnesses: ["claude"], harness: "claude", ...over,
 });
