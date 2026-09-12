@@ -525,8 +525,11 @@ export async function bootV2(): Promise<void> {
   histStamp();     // 첫 화면도 히스토리의 한 칸이다 — 안 찍어 두면 되돌아왔을 때 '새로 감'으로 오인한다
   bindAltOpen();
   // #3784 — 우클릭 메뉴. 뿌리 하나가 듣고 표(data-ctx / data-ctx-surface)를 위로 찾는다. 셸 자체가 맨 바깥 표면.
-  root.dataset.ctxSurface = 'shell';
-  mountCtxMenus(root, { longPress: true, menuKey: true });
+  //  ⚠ 뿌리는 **body** 다(#v2-root 가 아니다). 런치패드·[나] 창·통합검색·워크스페이스 팝오버·지식 요약 모달·
+  //   anchoredPopover 는 전부 `document.body` 에 붙는다 — #v2-root 에 걸면 **그 위에서 우클릭이 네이티브로
+  //   떨어진다**(원준님 실측 2026-09-12, 스크린샷의 macOS 메뉴). 표면 표도 같은 이유로 body 에 단다.
+  document.body.dataset.ctxSurface = 'shell';
+  mountCtxMenus(document.body, { longPress: true, menuKey: true });
   mountCtxShell({
     data: () => data,
     openRoute: (href, newTab) => {
