@@ -22,7 +22,7 @@ const cronList: Capability = {
   title: "스케줄 잡 목록",
   description: "서버사이드 스케줄 잡(org_cron) 목록 — 액션·주기·enabled·마지막 실행 상태/요약·다음 실행. 트리거 표준화의 관리 표면. " +
     "timezone = cron_expr 을 해석하는 벽시계 기준(조직 시간대).",
-  scope: "admin",
+  scope: "memory",
   input: {},
   expose: {
     mcp: true,
@@ -45,7 +45,7 @@ const cronSet: Capability = {
     "스케줄 2모드: cron_expr(절대 벽시계 5필드, 예 '0 9 * * 1-5')가 있으면 그게 우선, 없으면 interval_sec(상대, 최소 60s). " +
     "⚠ cron_expr 은 **조직 시간대**(org_profile.timezone, 기본 Asia/Seoul — cron_list 의 timezone)의 벽시계로 해석된다(UTC·서버 로컬 아님). " +
     "cron_expr=\"\"(빈문자열)로 보내면 interval 모드로 되돌림. params=액션 인자(예: refresh_repo→{repo}, connector_sync→{system}). 커스텀 잡은 이걸로 추가.",
-  scope: "admin",
+  scope: "memory",
   input: {
     id: z.string(),
     action: z.string().optional(),
@@ -115,7 +115,7 @@ const cronDelete: Capability = {
   title: "스케줄 잡 삭제",
   description:
     "스케줄 잡을 삭제한다. ⚠ 시드 기본 잡(refresh-all-domainmap)은 삭제해도 재부팅 시 시드(ON CONFLICT DO NOTHING)가 다시 만든다 — 끄려면 cron_set 으로 enabled=false.",
-  scope: "admin",
+  scope: "memory",
   input: { id: z.string() },
   expose: {
     mcp: true,
@@ -131,7 +131,7 @@ const cronRunNow: Capability = {
   name: "cron_run_now",
   title: "스케줄 잡 즉시 실행",
   description: "스케줄 잡을 주기와 무관하게 지금 1회 실행(온디맨드 'refresh now'). 결과 요약 반환. 이미 실행 중이면 skip.",
-  scope: "admin",
+  scope: "memory",
   input: { id: z.string() },
   expose: {
     mcp: true,
