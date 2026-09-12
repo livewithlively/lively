@@ -245,6 +245,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    "STAGES": {
     "company": {
      "label": "회사·조직",
+     "ack": "회사·팀 일을 담는 자리군요.",
      "axis": "어느 부서에 가까우세요?",
      "opts": [
       [
@@ -283,6 +284,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     },
     "solo": {
      "label": "1인·프리랜서",
+     "ack": "내 이름으로 하는 일을 담는 자리군요.",
      "axis": "어떤 일을 하고 계세요?",
      "opts": [
       [
@@ -317,6 +319,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     },
     "academy": {
      "label": "학교·연구",
+     "ack": "학교·연구실 자료를 담는 자리군요.",
      "axis": "어느 단계이신가요?",
      "opts": [
       [
@@ -343,6 +346,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     },
     "student": {
      "label": "학생",
+     "ack": "학업 자료를 담는 자리군요.",
      "axis": "어떤 일에 주로 사용하실 예정인가요?",
      "opts": [
       [
@@ -363,6 +367,40 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       ],
       [
        "취업",
+       "학생"
+      ]
+     ]
+    },
+    /* 「학업·연구」(#1631) — 옛 academy(단계) + student(용도) 를 **단계 축 하나로** 합친 것.
+     *  위 academy·student 는 화면에서 사라졌지만 지운 게 아니다: 하다 만 자리(#2207)에 옛 값이 남아
+     *  있으면 stageOf() 가 그걸로 2단을 그려야 한다. 새로 고르는 사람은 전부 이 study 로 온다. */
+    "study": {
+     "label": "학업·연구",
+     "ack": "학업·연구 자료를 담는 자리군요.",
+     "axis": "어느 단계세요?",
+     "opts": [
+      [
+       "학부생",
+       "학생"
+      ],
+      [
+       "석사",
+       "연구·대학원"
+      ],
+      [
+       "박사",
+       "연구·대학원"
+      ],
+      [
+       "포닥·연구원",
+       "연구·대학원"
+      ],
+      [
+       "교원",
+       "연구·대학원"
+      ],
+      [
+       "수험(자격·고시)",
        "학생"
       ]
      ]
@@ -1535,17 +1573,19 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     stage: {
       html: () => qHead('stage',
         `안녕하세요, 저는 리브예요. <b>이 워크스페이스를 계속 돌봐 드릴 담당자입니다.</b> 몇 가지만 여쭙고, 나머지는 자료를 보고 제가 알아서 세팅할게요.`,
-        '어디에서 일하고 계세요?',
+        '이 워크스페이스를 무엇에 쓰실 건가요?',
         '자세한 건 안 여쭙습니다. 두 번만 고르시면 됩니다.')
-        /* [새문구] 카드 설명 4줄 — 노션 카드형에 맞춰 새로 씀 */
+        /* (#1631) 축을 **사람에서 자리로** 옮겼다. 종전 «어디에서 일하고 계세요?» 는 그 사람을 물어서,
+         *  워크스페이스를 둘 만들어도 답이 같았고 그 자리가 무엇을 담는 곳인지는 끝내 아무도 몰랐다.
+         *  가르는 기준은 **소속**이다(공유 구조는 묻지 않는다 — 인원에서 나온다, #1875 D1 rail.ts).
+         *  옛 「학교·연구」+「학생」 두 장은 «학업·연구» 한 장으로 합쳤다(2단이 단계 축이라 한 장이면 된다). */
         + `<div class="ob-opt-cards">
-            ${card('회사·조직', '팀과 함께 회사 일을 합니다', ICONS.company, S.stage === 'company')}
-            ${card('1인·프리랜서', '내 이름으로 여러 일을 합니다', ICONS.solo, S.stage === 'solo')}
-            ${card('학교·연구', '연구실·학교에서 연구합니다', ICONS.academy, S.stage === 'academy')}
-            ${card('학생', '수업·시험·진로를 준비합니다', ICONS.student, S.stage === 'student')}
+            ${card('회사·팀 업무', '소속된 회사·기관의 일을 담습니다', ICONS.company, S.stage === 'company')}
+            ${card('내 사업·프리랜스', '내 이름으로 하는 일을 담습니다', ICONS.solo, S.stage === 'solo')}
+            ${card('학업·연구', '수업·논문·시험 자료를 담습니다', ICONS.academy, S.stage === 'study')}
           </div><button class="ob-q-skip" data-skip>나중에 정할게요</button>`,
       bind: (el) => {
-        const ID = { '회사·조직': 'company', '1인·프리랜서': 'solo', '학교·연구': 'academy', '학생': 'student' };
+        const ID = { '회사·팀 업무': 'company', '내 사업·프리랜스': 'solo', '학업·연구': 'study' };
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
           $$('.ob-opt-card', el).forEach((x) => x.classList.remove('ob-on')); c.classList.add('ob-on');
           const id = ID[c.dataset.opt]; if (S.stage !== id) { S.job = null; }
@@ -1556,7 +1596,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     },
     role: {
       html: () => qHead('role',
-        `${esc(stageOf().label)}이시군요.`,
+        //  ⚠ label 은 **카드용**(짧은 이름)이라 문장에 그대로 이으면 «회사·팀 업무이시군요» 가 된다.
+        //   문장은 갈래마다 따로 쓴 ack 를 쓴다. 그리고 1단을 **안 본 사람**(합류자 — ORDER_JOIN 에
+        //   stage 가 없다, #3872)에게는 되뇌지 않는다: 답한 적 없는 것을 «…시군요» 라고 하면 안 된다.
+        esc(S.stage ? (stageOf().ack || stageOf().label) : (S.name ? `${S.name}님, 하나만 더 여쭐게요.` : '하나만 더 여쭐게요.')),
         esc(stageOf().axis),
         '고르신 것에 맞춰 자료를 읽습니다. 목록에 없으면 직접 적어 주세요.')
         + `<div class="ob-opt-cards">${stageOf().opts.map(([l]) => card(l, '', jobIcon(l), S.job === l)).join('')}</div>
@@ -2786,7 +2829,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    *  남겨 두면 아무도 안 보는 결과를 위해 **그 사람 AI 구독으로 헤드리스 세션이 매번 돌아** 비용만 나간다.
    */
 
+  //  ⚠ 이 문장은 **계정 층**(liv_profile.work.asis)으로 간다 — 그래서 자리(용도)가 아니라 **사람이 하는 일**로 적는다.
+  //   자리는 워크스페이스 층(welcome.stage)이 따로 받는다(#2265 의 층 분리를 깨지 않으려고 둘로 나눠 둔 것이다).
   const STAGE_TEXT = { company: '회사·조직에서 팀과 함께 일한다', solo: '1인·프리랜서로 여러 일을 한다',
+    study: '학업·연구를 한다',
     academy: '학교·연구실에서 연구한다', student: '학생으로 수업·시험·진로를 준비한다' };
   function saveWork() {
     const asis = [S.stage ? STAGE_TEXT[S.stage] : null, S.job].filter(Boolean).join(' · ');

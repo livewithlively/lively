@@ -5,6 +5,7 @@ import { buildFirstTurnPrompt, FIRST_TURN_NAME_CAP, type FirstTurnInput } from "
 
 const base = (over: Partial<FirstTurnInput> = {}): FirstTurnInput => ({
   displayName: "수아",
+  purpose: "회사·팀 업무",
   work: { asis: "회사·조직에서 팀과 함께 일한다 · 디자인", tobe: "시간을 가장 많이 쓰는 일: 사람들과 맞추고 공유하는 일" },
   drawers: ["산출물", "기록"],
   firstOrder: "지난 시안 리뷰에서 나온 피드백만 모아 정리해 줘",
@@ -21,6 +22,7 @@ const empty = { total: 0, kinds: [], names: [], forms: [] };
 test("① 전부 있음 — 이름·일·서랍·자료·수집기·AI 가 실측 구획에 실린다", () => {
   const p = buildFirstTurnPrompt(base());
   assert.match(p, /- 이름: 수아/);
+  assert.match(p, /- 이 워크스페이스의 용도: 회사·팀 업무/);
   assert.match(p, /- 하는 일: 회사·조직에서 팀과 함께 일한다 · 디자인/);
   assert.match(p, /처음 설정이 만든 서랍 2개: 산출물 · 기록/);
   assert.match(p, /올린 자료 3건 — 슬랙 2, 회의록 1/);
@@ -44,6 +46,15 @@ test("②′ 서랍을 고르라고 하지 않는다 — 카테고리는 다음 
   const p = buildFirstTurnPrompt(base({ drawers: [], categories: [], uploads: empty, collectors: [], firstOrder: null }));
   assert.doesNotMatch(p, /나중에 고를게요/);
   assert.doesNotMatch(p, /서랍을 아직 안 골랐다/);
+});
+
+//  (#1631, 2026-09-12) 1단이 «자리» 를 묻게 바뀌었다 — 같은 사람이라도 워크스페이스마다 답이 다르므로
+//   리브가 맞춰야 할 것은 사람(하는 일)이 아니라 **자리(용도)** 다. 그래서 용도가 하는 일보다 위에 온다.
+test("①′ 자리가 사람보다 먼저 온다 — 안 고르면 지어내지 않는다", () => {
+  const p = buildFirstTurnPrompt(base());
+  assert.ok(p.indexOf("- 이 워크스페이스의 용도:") < p.indexOf("- 하는 일:"), "용도가 하는 일보다 아래에 있다");
+  const skipped = buildFirstTurnPrompt(base({ purpose: null }));
+  assert.match(skipped, /- 이 워크스페이스의 용도: \(답하지 않음\)/);
 });
 
 test("③ 이름을 건너뛴 사람 — 이름을 지어 부르지 말라고 못박고 이름을 내지 않는다", () => {

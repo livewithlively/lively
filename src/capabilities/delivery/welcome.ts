@@ -542,7 +542,7 @@ export const welcomeCapabilities: Capability[] = [
       const { getLivProfile: readLiv } = await import("../../org/store.js");
       const priorSession = (await readLiv(userId).catch(() => null))?.welcome?.session_id ?? null;
       const profile = await appendLivProfile(userId, {
-        welcome: { done_at: new Date().toISOString(), drawers: created, first_order: firstOrder, session_id: priorSession },
+        welcome: { done_at: new Date().toISOString(), drawers: created, first_order: firstOrder, session_id: priorSession, stage: stage || null },
         onboarded: true,
       });
       //  하다 만 자리(#2207)는 여기서 걷는다 — 끝난 사람에게 «이어서 하기» 가 남아 있으면 안 된다.
@@ -552,12 +552,13 @@ export const welcomeCapabilities: Capability[] = [
       // ── 리브 킥오프(#1631) ── 처음 설정이 끝났으니 리브 세션을 열고 1턴(현황 보고)을 넣는다. 화면은 응답의 liv.href 로 간다.
       //  ⚠ 비치명: 리브가 못 떠도(AI 미로그인·세션 한도 등) 처음 설정은 끝난 것이다 — 사람이 답한 것은 이미 반영됐다.
       //   사유는 liv.error 로 싣는다(감추지 않는다). 다시 눌러도 세션을 또 열지 않는다(priorSession 재사용).
-      const liv = await kickoffLivAfterWelcome(user, { priorSession, drawers: created, firstOrder, decisions, work: profile.work ?? null });
+      const liv = await kickoffLivAfterWelcome(user, { priorSession, drawers: created, firstOrder, decisions, work: profile.work ?? null,
+        purpose: stage ? STAGE_PURPOSE[stage] ?? stage : null });
       const welcome = profile.welcome ? { ...profile.welcome, session_id: liv.session_id ?? profile.welcome.session_id ?? null } : null;
       return { ok: true, created, skipped, welcome, liv };
     }, false, {
       name: z.string().optional().describe("이렇게 불러 주세요(닉네임)"),
-      stage: z.string().optional().describe("company|solo|academy|student"),
+      stage: z.string().optional().describe("company|solo|study (옛 academy|student 도 받는다)"),
       job: z.string().optional().describe("맡은 일"),
       drawers: z.array(z.union([z.string(), z.object({ name: z.string(), why: z.string().optional() })])).optional()
         .describe("승인한 자료함 갈래 — 실제 카테고리로 만든다"),
@@ -568,9 +569,19 @@ export const welcomeCapabilities: Capability[] = [
     }),
 ];
 
+//  ⚠ 두 표를 나눠 둔 이유 — 1단 답은 **두 곳**으로 간다.
+//   · STAGE_LABEL → work.asis(계정 층): "이 사람이 하는 일". 워크스페이스가 둘이어도 한 벌이라 사람 말로 적는다.
+//   · STAGE_PURPOSE → welcome.stage(워크스페이스 층): "이 자리가 담는 것". 워크스페이스마다 다르다.
+//   한 표로 합치면 #2265 가 고친 덮어쓰기가 그대로 되살아난다.
 const STAGE_LABEL: Record<string, string> = {
   company: "회사·조직에서 팀과 함께 일한다", solo: "1인·프리랜서로 여러 일을 한다",
+  study: "학업·연구를 한다",
   academy: "학교·연구실에서 연구한다", student: "학생으로 수업·시험·진로를 준비한다",
+};
+export const STAGE_PURPOSE: Record<string, string> = {
+  company: "회사·팀 업무", solo: "내 사업·프리랜스", study: "학업·연구",
+  //  옛 값(#1631 이전에 답한 사람)도 같은 자리를 가리킨다 — 화면에서만 사라졌다.
+  academy: "학업·연구", student: "학업·연구",
 };
 const SHARE_LABEL: Record<string, string> = {
   me: "나만 본다", team: "우리 팀이 같이 본다", dept: "여러 부서와 나눈다", ext: "고객·외부에 낸다",
@@ -671,6 +682,8 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
   firstOrder: string | null;
   decisions: Array<{ what: string; why?: string }>;
   work: { asis?: string; tobe?: string } | null;
+  /** 이 워크스페이스의 용도(1단 답의 사람 말). 1턴 프롬프트 맨 위에 실린다(#1631). */
+  purpose?: string | null;
 }): Promise<{ session_id: string | null; href: string | null; harness?: string; reused?: boolean; error?: string; reason?: string }> {
   const userId = user?.userId;
   if (!userId) return { session_id: null, href: null, error: "인증된 사용자가 아닙니다" };
@@ -694,6 +707,7 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
       .filter((k) => HEADLESS_KEYS.includes(k));
     const prompt = buildFirstTurnPrompt({
       displayName: snap.profile.display_name,
+      purpose: o.purpose ?? null,
       work: o.work,
       drawers: o.drawers,
       firstOrder: o.firstOrder,
