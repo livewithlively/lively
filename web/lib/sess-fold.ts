@@ -141,16 +141,21 @@ export interface PastRowLike {
 /**
  * 한 프로젝트 카드의 **접힘 안에 들어갈 지난 세션**.
  *
- *  · `shown` — 이미 그 카드에 **서 있는** 줄의 세션 id. 같은 세션을 두 번 그리지 않는다.
+ *  · `shown` — **목록에 이미 줄로 서 있는** 세션 id 전부(그 카드의 줄만이 아니다 — 아래 ⚠ 참조).
  *  · `cap`   — 펼쳤을 때 그릴 상한. 넘는 만큼은 `total` 로만 말하고 «외 n개» 로 프로젝트 화면에 넘긴다.
- *  · `keepLive` — 도는 세션도 담는다. **앞면이 하나도 없는 카드에서만** 켠다(#3778 5판) — 아래 ⚠ 참조.
  *
  *  ⚠ **날짜로 자르지 않는다.** 이 목록이 시간이 지나도 안 줄어드는 것이 이 함수의 존재 이유다.
  *  ⚠ 휴지통 것은 뺀다 — 휴지통은 별도 화면이고, 거기 있는 것을 여기 세우면 되돌리기 전에 열리게 된다(#1851).
- *  ⚠ 도는 세션은 기본적으로 뺀다 — 그건 접힘이 아니라 **앞면**에 설 것이기 때문이다. 그런데 **앞면이 하나도
- *   없는 카드**에서는 그 이유가 사라진다: 치운 도는 세션(sess-visibility 규칙 ② 가 규칙 ③ live 보다 먼저다)은
- *   줄로도 안 서고 접힘에서도 빠져 **어디에도 없다**. 그 카드가 통째로 비어 버린다. `keepLive` 가 그 구멍을 막는다
- *   (foldCardRows 의 "본면이 없으면 덮을 것이 없다" 와 같은 규율).
+ *  ★ **빼는 이유는 «이미 줄로 섰다» 하나다**(#3778 6판, 원준 2026-09-12 질문 "x 누르면 어디로 가는 거야?").
+ *   도는 세션은 보통 줄로 서므로 **자동으로** 빠진다 — 「도는 세션이니까 뺀다」는 별도 규칙을 두지 않는다.
+ *   5판까지는 그 별도 규칙이 있었고(`s.live && s.alive` 면 무조건 제외), 그게 구멍이었다:
+ *   **치운 도는 세션**은 줄로도 안 서고(sess-visibility 에서 dismissed 가 live 보다 **먼저** 판정된다)
+ *   접힘에서도 빠져 **어디에도 없었다**. × 툴팁이 「세션은 그대로 돌고」라고 말하니 그게 × 의 정상 경로다.
+ *   5판은 `keepLive: !g.rows.length` 로 그 구멍을 **부분만** 막아, 같은 몸짓의 결과가 «옆에 다른 세션이
+ *   있느냐» 에 갈렸다 — 신고의 「기준 없이 사라진다」와 같은 부류다. 예외를 없애는 것이 고침이다.
+ *  ⚠ 그래서 `shown` 은 **목록 전체**의 세션 행에서 모아야 한다. 세션 행 키는 출처와 무관하게 늘 `sess:<id>`
+ *   이므로(main.ts sideRowKey) 빠짐이 없다. 그 카드의 줄만 주면 **압정으로 맨 위에 선 세션**(압정 행은 카드
+ *   전에 따로 그린다)이 접힘에 한 번 더 선다.
  *  ⚠ 주인으로 거르지 않는다 — [AI 세션] 구역과 같은 집합이어야 «둘이 같다» 가 참이 된다. 남의 세션은
  *   행이 주인 얼굴을 달고 서므로(#2026) 누구 것인지는 줄이 스스로 말한다.
  */
@@ -159,19 +164,17 @@ export function projectPastRows<T extends PastRowLike>(
   projectId: number,
   shown: ReadonlySet<string>,
   cap: number,
-  o: { keepLive?: boolean } = {},
 ): { rows: T[]; total: number } {
   //  ★ `projectId` 0 은 **「프로젝트 없음」 묶음**이다 — 빈 값이 아니다(#3778 5판).
   //   4판은 여기서 0 을 «묻지 마라» 로 읽고 빈 결과를 돌려줬는데, 그 바람에 프로젝트에 안 붙은 세션은
-  //   접힘에도 못 들어가 **어디에도 없었다**(실측: 그 계정에서 47개). 아래 비교가 `Number(s.projectId || 0)`
+  //   접힘에도 못 들어가 **어디에도 없었다**(실측: 그 계정에서 20개). 아래 비교가 `Number(s.projectId || 0)`
   //   라 0 도 정확히 걸린다 — 프로젝트 없는 세션끼리만 모인다.
   const hit: T[] = [];
   for (const s of all || []) {
     if (!s || Number(s.projectId || 0) !== projectId) continue;
-    if (s.live && s.alive && !o.keepLive) continue;        // 도는 세션은 접힘이 아니라 앞면이다(앞면이 있을 때만)
-    if (s.trashedAt) continue;
+    if (s.trashedAt) continue;                             // 휴지통은 도는 중이어도 뺀다(#1851)
     const names = [s.id, s.logId || '', ...(s.altIds || [])].filter(Boolean);
-    if (names.some((n) => shown.has(String(n)))) continue;  // 이미 서 있다
+    if (names.some((n) => shown.has(String(n)))) continue;  // ★ 이미 줄로 섰다 — 유일한 제외 사유다
     hit.push(s);
   }
   hit.sort((a, b) => (Number(b.lastSeen) || 0) - (Number(a.lastSeen) || 0));

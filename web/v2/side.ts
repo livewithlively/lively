@@ -843,6 +843,17 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
   //   여기 선 행은 소속을 말해 줄 머리글이 없으므로 **두 줄 그대로**(프로젝트 칩을 남긴다).
   const pinnedRows = shown.filter((r) => r.pinned);
   const rest = shown.filter((r) => !r.pinned);
+  //  ★ «이미 줄로 섰나» 를 **목록 전체**로 묻는다(#3778 6판, 원준 2026-09-12 "x 누르면 어디로 가는 거야?").
+  //   카드 접힘에서 세션을 빼는 이유는 이것 하나다. 그 카드의 줄(`g.rows`)만 보면 두 군데가 새는데,
+  //   둘 다 이 줄이 막는다:
+  //    ⓐ **치운 도는 세션** — 줄로 안 서는데(dismissed 가 live 보다 먼저 판정된다) 종전 규칙이
+  //      «도는 세션은 앞면» 이라며 접힘에서도 빼서 **어디에도 없었다**. × 툴팁이 「세션은 그대로 돌고」
+  //      라고 말하니 그게 × 의 정상 경로다.
+  //    ⓑ **압정으로 맨 위에 선 세션** — 압정 행은 카드 전에 따로 그리므로 `g.rows` 밖이고,
+  //      그래서 접힘에 한 번 더 설 수 있었다.
+  //   세션 행 키는 출처(① 내 세션 · ③ 열린 창)와 무관하게 늘 `sess:<id>` 다(main.ts sideRowKey).
+  const standingSess = new Set<string>();
+  for (const r of shown) if (r.id.startsWith('sess:')) standingSess.add(r.id.slice(5));
   //  ★ 줄이 안 선 프로젝트의 카드를 여기서 **합쳐서** 든다(#3778 5판, 아래 restCards 머리말).
   //   ⚠ 압정 층을 가르기 **전**이어야 한다 — 뒤에 붙이면 압정한 rest 카드가 「고정」에도 못 서고
   //    아래 `if (g.pinned) continue` 에도 걸려 **통째로 사라진다**. 지금 고치는 그 부류의 구멍이다.
@@ -859,7 +870,7 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
     lastBucket = label;
     //  행이 먼저, 카드가 다음 — 낱개로 꽂은 것이 통째로 꽂은 것보다 좁고 급한 지목이다.
     for (const r of pinnedRows) kids.push(appRowEl(r, o));
-    for (const g of pinnedGrps) kids.push(projGrpCard(g, o, !!q));
+    for (const g of pinnedGrps) kids.push(projGrpCard(g, o, !!q, standingSess));
   }
   //  날짜 묶음 이름이 같은 어휘라(dayGroup) rest 카드도 위 목록과 한 줄기로 이어진다: 오늘 · 어제 · 9월 10일 · …
   for (const g of groups) {
@@ -868,7 +879,7 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
       kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g.bucket }) as HTMLElement);
       lastBucket = g.bucket;
     }
-    kids.push(projGrpCard(g, o, !!q));
+    kids.push(projGrpCard(g, o, !!q, standingSess));
   }
   return kids;
 }
@@ -918,7 +929,7 @@ function restCards(standing: SideInstance[], searching: boolean): ProjGrp[] {
 /** 프로젝트 카드 한 장 — 머리글 + (펼쳤으면) 그 안의 세션들.
  *  ★펼친 묶음 = 흰 카드 그릇 — 세션이 프로젝트의 **안**에 산다는 걸 면(面)이 말한다.
  *   들여쓰기+세로선만으로는 "목록 둘이 이웃한 그림"으로 읽혔다(상민님 2026-08-18, 트리 .v2-pj.open 과 같은 처방). */
-function projGrpCard(g: ProjGrp, o: RowOpts, searching = false): HTMLElement {
+function projGrpCard(g: ProjGrp, o: RowOpts, searching = false, standingSess?: ReadonlySet<string>): HTMLElement {
   //  ⚠ 카드 자체엔 고정 표식을 안 칠한다 — 「고정」 머리글과 파랗게 채워진 압정이 이미 말한다(트리의 .v2-pinb.on 과 같은 규율).
   //  ★ 카드 안에서 끝난 세션은 「지난 세션 n」 뒤로 접는다(#3778 안 C, 원준 2026-09-09) — 트리가 이미 쓰는 그 접힘이다.
   //   무엇이 접히고 무엇이 그대로 서는지의 잣대는 lib/sess-fold 에 있다(**끝난 것밖에 없으면 접지 않는다** 포함).
@@ -932,12 +943,15 @@ function projGrpCard(g: ProjGrp, o: RowOpts, searching = false): HTMLElement {
   //   그대로다. 접힘은 카드당 **한 줄**이라 목록을 길게 만들지 않는다. «홈이 명부가 되면 안 된다» 가 걱정한 것은
   //   줄이 늘어나는 것이었고, 접힌 숫자는 줄을 안 늘린다.
   //  ⇒ 그 결과 홈 카드와 [AI 세션] 카드가 **같은 내용**이 된다(원준: "둘이 달라질 이유가 있나").
-  const standing = new Set<string>();
-  for (const r of g.rows) if (r.id.startsWith('sess:')) standing.add(r.id.slice(5));
-  //  앞면이 하나도 없는 카드에서는 도는 세션도 접힘이 받는다(keepLive) — 안 그러면 «치운 도는 세션» 하나뿐인
-  //   프로젝트의 카드가 펴도 **텅 빈다**. 그 세션은 줄로도 안 서므로(치움이 live 보다 먼저 판정된다) 어디에도 없게 된다.
-  const extra = projectPastRows(last?.data.sessions as PastRowLike[] | undefined, g.id, standing, MAX_SESS,
-    { keepLive: !g.rows.length });
+  //  ★ «이미 섰나» 는 **목록 전체**로 묻는다(#3778 6판 — projListKids 의 standingSess 머리말).
+  //   이 카드의 줄만 세면 치운 도는 세션이 사라지고(그게 × 의 정상 경로다) 압정한 세션이 두 번 선다.
+  //   못 받은 판(직접 호출·시험)에서는 종전처럼 이 카드의 줄로 떨어진다 — 없는 것을 지어내지 않는다.
+  const standing = standingSess || (() => {
+    const own = new Set<string>();
+    for (const r of g.rows) if (r.id.startsWith('sess:')) own.add(r.id.slice(5));
+    return own;
+  })();
+  const extra = projectPastRows(last?.data.sessions as PastRowLike[] | undefined, g.id, standing, MAX_SESS);
   const extraRows = extra.rows.map((s) => sessAsInst(s as unknown as Sess, true, ''));
   const folded = [...fold.folded, ...extraRows];
   //  ★ **앞면이 하나도 없으면 접힘을 펴 둔다**(#3778 5판) — foldCardRows 의 "본문이 없으면 덮을 것이 없다" 와

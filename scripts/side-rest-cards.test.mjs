@@ -99,13 +99,16 @@ lay(restProjectCards([{ projectId: 7, owned: false, lastSeen: NOW }, mine(7, DAY
 lay(restProjectCards([{ projectId: 7, owned: true, live: true, alive: true, lastSeen: NOW }], NONE), "7:1",
   "D1 ★ 도는 세션만 있어도 카드를 세운다 — 약속은 «내 세션이 있으면 카드가 있다» 이지 «끝난 세션이 있으면» 이 아니다");
 
-{ // 그 카드의 접힘이 **비지 않는가** — 치운 도는 세션이 딱 그 경우다(치움이 live 보다 먼저 판정된다)
-  const live = { id: "s1", projectId: 7, live: true, alive: true, lastSeen: NOW };
-  const off = projectPastRows([live], 7, NONE, 12);
-  const on  = projectPastRows([live], 7, NONE, 12, { keepLive: true });
-  check(off.total === 0 && on.total === 1,
-    "D2 ★★ 앞면이 없는 카드는 도는 세션도 접힘이 받는다(keepLive) — 안 그러면 그 카드가 펴도 **텅 빈다**",
-    `keepLive 없이 ${off.total} · 켜면 ${on.total}`);
+{ // ★ 6판 — 같은 몸짓의 결과가 «옆에 다른 세션이 있느냐» 에 갈리지 않아야 한다.
+  //  5판은 `keepLive: !g.rows.length` 로 이 구멍을 **부분만** 막았다: 그 카드에 다른 줄이 있으면
+  //  치운 도는 세션이 그대로 사라졌다. 6판은 예외를 없애 두 경우를 같게 만든다.
+  const other = { id: "선줄",  projectId: 7, live: true, alive: true, lastSeen: NOW };
+  const gone  = { id: "치움",  projectId: 7, live: true, alive: true, lastSeen: NOW };
+  const alone = projectPastRows([gone], 7, NONE, 12);                      // 옆에 아무도 없다
+  const withN = projectPastRows([other, gone], 7, new Set(["선줄"]), 12);  // 옆에 선 줄이 있다
+  check(alone.total === 1 && withN.total === 1 && withN.rows[0].id === "치움",
+    "D2 ★★ 치운 도는 세션은 **옆에 다른 줄이 있든 없든** 접힘이 받는다 — 5판은 없을 때만 받았다",
+    `혼자 ${alone.total} · 옆에 줄 있을 때 ${withN.total}`);
 }
 
 // ───────────────────────── E. 순서
@@ -173,6 +176,34 @@ check(dg(NOW - 30 * DAY) !== "" && dg(NOW - 400 * DAY) !== "",
   check(merge > 0 && pinned > 0 && merge < pinned,
     "H2 ★ rest 카드는 **압정 층을 가르기 전에** 합친다 — 뒤에 붙이면 압정한 rest 카드가 통째로 사라진다",
     `합치는 자리 ${merge} · 압정 가르는 자리 ${pinned}`);
+}
+
+// ───────────────────────── I. 배선 — «이미 섰나» 를 **목록 전체**로 묻는가 (#3778 6판)
+//
+//  이 판의 본체는 값이 아니라 **무엇을 넘기는가** 다. 카드 접힘에서 세션을 빼는 유일한 사유가
+//  «이미 줄로 섰다» 인데, 그 «섰다» 를 **그 카드의 줄**로만 세면 두 군데가 샌다:
+//   ⓐ 치운 도는 세션 — 줄로 안 서는데 접힘에서도 빠져 어디에도 없다(× 의 정상 경로가 사라진다)
+//   ⓑ 압정으로 맨 위에 선 세션 — 압정 행은 카드 전에 따로 그려 `g.rows` 밖이라 접힘에 두 번 선다
+{
+  const { readFileSync } = await import("node:fs");
+  const SIDE = readFileSync(path.join(root, "web/v2/side.ts"), "utf8");
+  const kids = SIDE.slice(SIDE.indexOf("function projListKids("), SIDE.indexOf("function restCards("));
+
+  //  ★ 집합을 `shown`(목록 전체)에서 모아야 한다 — `rest`(압정 뺀 것)나 `g.rows`(그 카드)면 안 된다.
+  check(/for \(const r of shown\) if \(r\.id\.startsWith\('sess:'\)\) standingSess\.add/.test(kids),
+    "I1 ★★ «이미 섰나» 집합은 **목록 전체**(shown)에서 모은다 — rest·g.rows 면 압정 행이 빠진다",
+    "projListKids 가 shown 을 훑지 않는다");
+
+  const passes = (kids.match(/projGrpCard\(g, o, !!q, standingSess\)/g) || []).length;
+  check(passes === 2,
+    "I2 ★ 카드를 그리는 **두 자리**(「고정」 층 · 날짜 층) 모두에 그 집합을 넘긴다",
+    `넘기는 자리 ${passes}곳 — 한 곳이라도 빠지면 그 층의 카드만 조용히 옛 동작으로 돌아간다`);
+
+  const FOLD = readFileSync(path.join(root, "web/lib/sess-fold.ts"), "utf8");
+  const fn = FOLD.slice(FOLD.indexOf("export function projectPastRows"));
+  check(!/keepLive/.test(fn) && !/s\.live && s\.alive/.test(fn),
+    "I3 ★ 「도는 세션이니까 뺀다」 규칙과 그 예외(keepLive)가 **둘 다 없다** — 사유는 «이미 섰다» 하나다",
+    "projectPastRows 에 live 제외 규칙이나 keepLive 가 남아 있다");
 }
 
 console.log(`\nside-rest-cards(배선): ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
