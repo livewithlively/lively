@@ -29,7 +29,7 @@
 //   캐시다(shell-prefs.ts). 선언 한 줄이 어느 쪽인지 말한다 — shellPrefStore = 계정 · deviceStore = 이 기기.
 import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { findMatcher } from '../lib/find.js';
-import { splitFolderRows, foldCardRows } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음
+import { splitFolderRows, foldCardRows, projectPastRows, type PastRowLike } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsTouch } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버다(선언 한 줄이 그걸 말한다)
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES, isDotState, rowDotCls } from '../session-status.js';   // #3778 2판 — 목록 줄의 점은 «나를 기다리는 것» 셋만
@@ -873,12 +873,30 @@ function projGrpCard(g: ProjGrp, o: RowOpts, searching = false): HTMLElement {
   //   무엇이 접히고 무엇이 그대로 서는지의 잣대는 lib/sess-fold 에 있다(**끝난 것밖에 없으면 접지 않는다** 포함).
   const fold = foldCardRows(g.rows, { searching, opened: pastSet.has(g.key) });
   const row = (r: SideInstance) => appRowEl(r, { ...o, one: true });
+  //  ★ 접힘 안쪽은 **그 프로젝트의 지난 세션 전량**이다(#3778 4판, 원준 2026-09-12).
+  //   종전엔 카드가 받는 재료 자체가 «오늘 것 + 내가 안 닫은 것» 이라, 어제 이전 세션은 접힘 **숫자에도**
+  //   안 잡혔다. 그래서 시간이 지나면 「지난 세션 n」이 줄어들다 사라졌다 — 사람 눈엔 «만든 게 없어졌다» 다.
+  //   치운 세션도 여기 들어온다: × 의 뜻은 «위에서 치운다» 이지 «없앤다» 가 아니다.
+  //  ⚠ **서 있는 줄의 규칙은 안 건드린다** — 홈이 «오늘 붙들고 있는 것» 이라는 취지(#2208·#3855 상민님 승인안)는
+  //   그대로다. 접힘은 카드당 **한 줄**이라 목록을 길게 만들지 않는다. «홈이 명부가 되면 안 된다» 가 걱정한 것은
+  //   줄이 늘어나는 것이었고, 접힌 숫자는 줄을 안 늘린다.
+  //  ⇒ 그 결과 홈 카드와 [AI 세션] 카드가 **같은 내용**이 된다(원준: "둘이 달라질 이유가 있나").
+  const standing = new Set<string>();
+  for (const r of g.rows) if (r.id.startsWith('sess:')) standing.add(r.id.slice(5));
+  const extra = projectPastRows(last?.data.sessions as PastRowLike[] | undefined, g.id, standing, MAX_SESS);
+  const extraRows = extra.rows.map((s) => sessAsInst(s as unknown as Sess, true, ''));
+  const folded = [...fold.folded, ...extraRows];
+  const foldOpen = fold.open || (!!extra.total && pastSet.has(g.key));
+  //  「외 n개」 — 상한을 넘는 만큼은 프로젝트 화면이 받는다(트리의 v2-ss-more 와 같은 규약).
+  const over = extra.total - extra.rows.length;
   return el('div', { class: 'v2-pg' + (g.open ? ' open' : ''), 'data-anch': g.key },
     projGrpHead(g),
     g.open ? el('div', { class: 'v2-pg-list' },
       ...fold.now.map(row),
-      fold.folded.length ? cardPastHead(g.key, fold.folded.length, fold.open) : null,
-      ...(fold.open ? fold.folded.map(row) : [])) : null) as HTMLElement;
+      folded.length ? cardPastHead(g.key, folded.length + Math.max(0, over), foldOpen) : null,
+      ...(foldOpen ? folded.map(row) : []),
+      foldOpen && over > 0
+        ? el('a', { class: 'v2-ss-more', href: '#/p/' + g.id, text: `외 ${over}개` }) : null) : null) as HTMLElement;
 }
 
 /** 카드 안 「지난 세션 n」 — 오늘 끝낸 세션을 한 줄로 접어 둔다. 트리의 pastHead2 와 **같은 통**(pastSet)을 본다.

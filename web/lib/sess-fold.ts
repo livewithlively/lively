@@ -104,3 +104,63 @@ export function foldCardRows<T extends CardRow>(
     open: !!o.searching || !!o.opened || folded.some((r) => r.active),
   };
 }
+
+// ── 카드 안 「지난 세션」이 **시간이 지나도 안 줄게** (#3778 4판, 원준 2026-09-12) ─────────────
+//
+//  신고: "내가 쓰다가 사라진 세션이 엄청 많은데 지난 세션이 1개밖에 없다. 기준 없이 사라지는 느낌이다."
+//
+//  ★ 세 가지가 겹쳐 있었다(전부 실측·코드 확인):
+//   ① **치운 세션은 「지난 세션」으로 안 갔다.** 그냥 목록에서 없어졌다(sess-visibility 규칙 ②
+//      «치움 → 안 선다»). 사람의 모델은 «치우면 지난 세션 안으로 들어간다» 인데 그런 경로가 없었다.
+//   ② **홈 카드는 오늘 것만 받았다.** 어제 이전의 지난 세션은 카드에 오지도 않아 접힘 **숫자에도** 안 잡혔다.
+//   ③ **«내가 그 탭을 닫았나» 가 하루 뒤 생사를 갈랐다.** 안 닫았으면(kept) 어제 것도 서고, 닫았으면 안 선다.
+//      사람은 그걸 기억하지 않는다 — 그래서 어떤 건 남고 어떤 건 사라지는 것처럼 보였다.
+//
+//  ⇒ **서 있는 줄의 규칙은 안 건드린다.** 홈이 «오늘 붙들고 있는 것» 이라는 취지(#2208·#3855)는 그대로다.
+//   대신 **접힘 안쪽만 전량으로 넓힌다.** 접힘은 카드당 **한 줄**이라 목록을 길게 만들지 않는다 —
+//   «홈이 명부가 되면 안 된다» 가 걱정한 것은 줄이 늘어나는 것이었고, 접힌 숫자는 줄을 안 늘린다.
+//   그러면 홈 카드와 [AI 세션] 카드가 **같은 내용**이 된다(원준: "둘이 달라질 이유가 있나").
+
+/** 이 판정이 세션에게 묻는 것 전부. 한 세션이 여러 이름으로 불리므로(박스 id · 대화 uuid · 옛 박스 id) 셋 다 본다. */
+export interface PastRowLike {
+  id: string;
+  projectId?: number | null;
+  /** views.ts 의 두 칸 — 도는 세션은 둘 다 참이다. */
+  live?: boolean;
+  alive?: boolean;
+  lastSeen?: number;
+  trashed?: boolean;
+  logId?: string | null;
+  altIds?: string[];
+}
+
+/**
+ * 한 프로젝트 카드의 **접힘 안에 들어갈 지난 세션**.
+ *
+ *  · `shown` — 이미 그 카드에 **서 있는** 줄의 세션 id. 같은 세션을 두 번 그리지 않는다.
+ *  · `cap`   — 펼쳤을 때 그릴 상한. 넘는 만큼은 `total` 로만 말하고 «외 n개» 로 프로젝트 화면에 넘긴다.
+ *
+ *  ⚠ **날짜로 자르지 않는다.** 이 목록이 시간이 지나도 안 줄어드는 것이 이 함수의 존재 이유다.
+ *  ⚠ 휴지통 것은 뺀다 — 휴지통은 별도 화면이고, 거기 있는 것을 여기 세우면 되돌리기 전에 열리게 된다(#1851).
+ *  ⚠ 주인으로 거르지 않는다 — [AI 세션] 구역과 같은 집합이어야 «둘이 같다» 가 참이 된다. 남의 세션은
+ *   행이 주인 얼굴을 달고 서므로(#2026) 누구 것인지는 줄이 스스로 말한다.
+ */
+export function projectPastRows<T extends PastRowLike>(
+  all: readonly T[] | null | undefined,
+  projectId: number,
+  shown: ReadonlySet<string>,
+  cap: number,
+): { rows: T[]; total: number } {
+  if (!projectId) return { rows: [], total: 0 };
+  const hit: T[] = [];
+  for (const s of all || []) {
+    if (!s || Number(s.projectId || 0) !== projectId) continue;
+    if (s.live && s.alive) continue;                       // 도는 세션은 접힘이 아니라 앞면이다
+    if (s.trashed) continue;
+    const names = [s.id, s.logId || '', ...(s.altIds || [])].filter(Boolean);
+    if (names.some((n) => shown.has(String(n)))) continue;  // 이미 서 있다
+    hit.push(s);
+  }
+  hit.sort((a, b) => (Number(b.lastSeen) || 0) - (Number(a.lastSeen) || 0));
+  return { rows: cap > 0 ? hit.slice(0, cap) : hit, total: hit.length };
+}
