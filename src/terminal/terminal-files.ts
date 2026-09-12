@@ -23,8 +23,9 @@ import { memberLs, memberStat, memberMkdir, memberMv, memberRm, memberReadTo, me
 import { isConfined, probeLocal } from "./path-jail.js";   // #3668 T1 — 심링크를 해소한 뒤 접두를 본다
 import { receiveUpload, uploadError, nfcPath } from "./upload-file.js";
 import { ingestLocalUpload, supersedeLocalPath, localRootForBrowse } from "../ingest/local-file.js";   // #1881 올린 파일 = 자료 1건
-import { nodeCanAttach, nodeRpc, isSelfNode } from "../node/registry.js";
-import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다)
+import { nodeCanAttach, nodeRpc, isSelfNode, isSessionHostNode } from "../node/registry.js";
+import { relayNodeId, sameTmuxCoordinate, isBoxSessionRow } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #3745/#3870 — 박스 세션엔 세션 호스트 좌표도 같은 tmux 다
+import { getSessionState } from "../sessions/session-state.js";
 import { folderVariants } from "../project/project-fs.js";
 import {
   sharedFolderGate, renameSharedFolderAclPrefix, restrictedProjectFolders, projectFolderOf,
@@ -97,7 +98,22 @@ async function resolveInSession(req: express.Request, requireFile: boolean, cano
 //  중앙 세션이면 null(로컬 fs 경로). 거부 코드: 4410 gone→404 · 4462 offline→503 · 그 외 no-access→403.
 async function nodeFor(req: express.Request): Promise<string | null> {
   //  #2592 — 셀프 노드 좌표는 접는다(relayNodeId): 그 파일은 이 박스의 fs 에 그대로 있어 로컬 경로가 정답이다.
-  const nodeId = relayNodeId(req.query.node as string | undefined, isSelfNode);
+  //
+  //  ★ #3870 — **박스(중앙) 세션에 붙은 «선언된 세션 호스트» 좌표도 같은 «한 바퀴»다.** #3745 가 세션 DELETE
+  //   에서 이미 내린 판정인데 파일 op 만 빠져 있었다 — 그래서 매니지드 세션의 업로드·목록이 전부 죽어 있었다
+  //   (2026-09-12 실측, 세션 box-wonjoon-jang-d3a3e7e3 @ sesshost-lively-46e3-i-0a9831a1d88d435be):
+  //     `?node=<sesshost>` → PUT /file 500 `internal_error` · GET /ls 404 「디렉터리 없음」
+  //     `?node=` 없음      → 둘 다 200 (같은 파일, 같은 경로)
+  //   화면은 좌표를 지어내지 않는다 — 세션 호스트가 그 테넌트의 세션을 통째로 스냅샷에 실어 목록 행에 좌표가
+  //   붙고(nodeSessionsFor), 터미널 액자는 그 값을 `&node=` 로 그대로 싣는다(web/standalone/terminal.ts sUrl).
+  //   ⚠ **caps 는 이 축을 못 가른다.** 세션 호스트도 같은 에이전트 번들이라 `fsLs/fsWrite` 를 광고하지만,
+  //    그 세션은 컨테이너 안에 살아 노드 프로세스의 fs 에 없다 — 광고는 참이고 실행이 거짓이라 500 만 남는다.
+  //   접으면 아래 로컬 경로(resolveInSession → 격리 멤버 uid)가 종전대로 답한다. 멤버 PC 노드(선언 없음)는
+  //   이 변경의 밖이다 — 그 파일은 정말 그 컴퓨터에만 있으므로 릴레이가 유일한 길이다.
+  const desired = await getSessionState(req.params.id).catch(() => undefined);
+  const boxRow = isBoxSessionRow(desired);   // 행이 **있고** 노드가 없다 = 이 게이트웨이가 만든 세션
+  const nodeId = relayNodeId(req.query.node as string | undefined,
+    sameTmuxCoordinate({ boxRow, isSelf: isSelfNode, isSessionHost: isSessionHostNode }));
   if (!nodeId) return null;
   const v = await nodeCanAttach(nodeId, req.params.id, idOf(userOf(req)));
   if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
@@ -377,12 +393,20 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
       if (over) throw new HttpError(413, "파일이 너무 큽니다(개인 PC 노드 세션 업로드는 50MB까지 — 큰 파일은 그 PC에서 직접 넣어주세요)");
       const bodyBuf = Buffer.concat(bufs);
       let offset = 0;
+      // ★ #3870 — 노드가 돌려준 **절대경로**를 그대로 싣는다(종전엔 버리고 상대경로 `rel` 로 답했다).
+      //  이 응답의 용처가 그 차이를 만든다: 드롭·붙여넣기 업로드는 받은 `path` 를 **입력창에 꽂아** 그 안에서
+      //  도는 에이전트가 읽게 한다(web/standalone/terminal.ts dropFileToAgent). 에이전트의 cwd 는 세션 루트와
+      //  다를 수 있어(프로젝트 하위 폴더에서 뜬 하네스) 상대경로는 «파일이 없다» 가 된다 — 로컬 경로 분기가
+      //  절대경로(`abs`)를 주는 이유가 정확히 그것이고, 노드 분기만 그 약속을 어기고 있었다(agent.ts fsWrite 는
+      //  이미 `{ ok, path: abs }` 를 돌려준다 — 게이트웨이가 그걸 읽지 않았을 뿐이다).
+      let nodeAbs = "";
       do {
         const slice = bodyBuf.subarray(offset, offset + NODE_FS_CHUNK);
-        await nodeRpc(nodeId, "fsWrite", { id: req.params.id, path: rel, offset, data: slice.toString("base64"), user: u });
+        const r = await nodeRpc<{ path?: string }>(nodeId, "fsWrite", { id: req.params.id, path: rel, offset, data: slice.toString("base64"), user: u });
+        if (r?.path) nodeAbs = String(r.path);
         offset += NODE_FS_CHUNK;
       } while (offset < bodyBuf.length);
-      res.json({ ok: true, path: rel }); return;
+      res.json({ ok: true, path: nodeAbs || rel }); return;   // 구 노드가 경로를 안 주면 종전대로 상대경로
     }
     const { abs, osUser } = await resolveInSession(req, true, true);   // 생성 → NFC 정본(#1278b)
     try { await receiveUpload(req, abs, MAX_UPLOAD, osUser); }
