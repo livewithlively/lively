@@ -2196,7 +2196,7 @@
   "rest": [
    "POST /api/ui/categories"
   ],
-  "input_hash": "e3bfc02fd5bbcf33"
+  "input_hash": "8806c017327a6023"
  },
  {
   "name": "category_update",
@@ -2206,7 +2206,7 @@
   "rest": [
    "POST /api/ui/categories/:id"
   ],
-  "input_hash": "5edd52e84ff3bb5e"
+  "input_hash": "2d13147d55c0d9fe"
  },
  {
   "name": "category_view_set",
@@ -2237,6 +2237,36 @@
    "POST /api/ui/categories/:id/repos"
   ],
   "input_hash": "5b32506f6a62c36e"
+ },
+ {
+  "name": "category_group_list",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/category-groups"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "category_group_upsert",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/category-groups"
+  ],
+  "input_hash": "a08bdfdd35efbb80"
+ },
+ {
+  "name": "category_group_remove",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/category-groups/:key/delete"
+  ],
+  "input_hash": "8c077d0774e2d35c"
  },
  {
   "name": "category_edge_list",
