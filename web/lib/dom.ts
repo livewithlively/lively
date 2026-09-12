@@ -56,6 +56,19 @@ function el(tag: string, attrs?: any, ...children: any[]): any {
   return n;
 }
 
+/** replaceChildren 의 안전판 — Node 아닌 인자(특히 `조건 ? el(...) : null` 의 null)를 **문자열로 박지 않는다**.
+ *  DOM 의 replaceChildren 은 Node 가 아닌 것을 String() 으로 바꿔 넣어, 이 레포의 그 관용이 화면에 «null» 을 찍었다
+ *  (#3784/#863 — 원준님이 얼굴 스택 «[장] null [＋]» 로 신고). main 에서 이 자리로 가져온다(stage 정합). */
+function replaceKids(host: any, ...children: any[]): any {
+  const out: any[] = [];
+  for (const c of children.flat(Infinity)) {
+    if (c == null) continue;
+    out.push((c as any).nodeType ? c : document.createTextNode(String(c)));
+  }
+  host.replaceChildren(...out);
+  return host;
+}
+
 function sv(name: string, attrs?: any, ...children: any[]): any {
   const n: any = document.createElementNS(SVG_NS, name);
   if (attrs) for (const [k, v] of Object.entries<any>(attrs)) { if (v != null) n.setAttribute(k, v); }
@@ -84,5 +97,6 @@ export {
   el,
   interleave,
   reducedMotion,
+  replaceKids,
   sv,
 };
