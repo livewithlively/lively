@@ -76,3 +76,31 @@ test("⑥ 혼자 여는 사람의 1턴은 종전 그대로다 (무회귀)", () =
   assert.doesNotMatch(p, /합류/);
   assert.doesNotMatch(p, /팀에 이미 쌓인 지식/);
 });
+
+// ── #3872 후속(2026-09-13) — 개인 워크스페이스가 «구성원 2명 팀» 이 되던 것 ──
+//  실측(원준님 개인 워크스페이스 온보딩): 명부 3줄 = 본인 · 플랫폼 운영 계정(admin/ops@lvly.io, 매니지드가 모든 테넌트에 심는다) ·
+//   세션 호스트(system). listMembers() 를 사람으로 세면 «구성원 2명 · 이미 있는 팀에 합류» 가 되고, 리브가 첫 문장부터
+//   «합류 전에 만들어진 지식 3건은 당신이 쓴 게 아닙니다» 라고 말한다. lively-46e3 에선 미러 행 88개가 더 섞여 91명이었다(9/12).
+const read = (rel: string): string =>
+  readFileSync(new URL(rel, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+
+test("⑦ 구성원 수는 «자기 계정으로 들어오는 사람» 으로 센다 — 운영 계정·미러 행·system 행을 세지 않는다", () => {
+  const src = read("../../capabilities/delivery/welcome.ts");
+  assert.match(src, /countWorkspacePeople\(\{ managed: managedMode\(\) \}\)/, "«자기 계정으로 들어오는 사람» 수를 안 쓴다");
+  assert.doesNotMatch(src, /listMembers\(\)/, "welcome 이 다시 전체 명부를 센다(운영 계정·미러 행이 섞인다)");
+  const store = read("../store/members.ts");
+  const fn = store.slice(store.indexOf("export async function countWorkspacePeople"), store.indexOf("export async function getMember"));
+  assert.ok(fn.length > 0, "countWorkspacePeople 이 members.ts 에 없다");
+  assert.match(fn, /m\.kind='human' AND m\.state='active'/, "system·agent 행이나 비활성 행이 섞인다");
+  assert.match(fn, /'lvly_account'/, "매니지드 계정 신원(CP 프로비저닝)을 안 본다");
+  assert.match(fn, /'oidc'/, "SSO 신원을 안 본다");
+  assert.match(fn, /\$1::boolean = false AND EXISTS \(SELECT 1 FROM member_credential/,
+    "로컬 로그인 자격은 셀프호스트에서만 세야 한다 — 매니지드 운영 계정(admin)이 바로 그 자격으로 들어온다");
+});
+
+test("⑧ «팀에 이미 쌓인 지식» 은 설치가 심은 시드(사용 설명서 3건)를 빼고 센다", () => {
+  const src = read("../../capabilities/delivery/welcome.ts");
+  assert.match(src, /countKnowledge\(\{ excludeSeed: true \}, userId\)/, "시드 지식이 «팀이 쌓은 지식» 으로 세어진다");
+  const store = read("../../v6/knowledge-store.ts");
+  assert.match(store, /if \(f\.excludeSeed\) wh\.push\(`COALESCE\(k\.updated_by,''\) <> 'system'`\)/, "excludeSeed 필터가 store 에 없다");
+});

@@ -67,12 +67,19 @@ function factsBlock(i: FirstTurnInput): string {
   }
 
   lines.push("");
-  if (i.collectors.length) {
-    const on = i.collectors.filter((c) => c.enabled);
-    lines.push(`- 연결한 자료 가져오기 ${i.collectors.length}개(켜짐 ${on.length}): ${i.collectors.map((c) => `${c.label}(${c.preset_key}, ${Math.round(c.sync_interval_sec / 60)}분 주기${c.enabled ? "" : ", 꺼짐"})`).join(" · ")}`);
+  //  #3872 — «연결» 은 **켜진 것**만이다. 매니지드 프로비저닝은 모든 워크스페이스에 Notion·Slack 수집기 **빈 칸**(꺼짐·자격 없음)을
+  //   심어 둔다(notion-connect.ts 「CP 가 심어 둔 껍데기」). 종전엔 그 칸 수를 «연결한 자료 가져오기 2개(켜짐 0)» 로 실어 보내고
+  //   «첫 수집이 지금 돌고 있거나 곧 돈다» 고 못박아, 아무것도 잇지 않은 사람에게 리브가 «Notion·Slack 2개가 연결됐고 첫 수집이
+  //   곧 돕니다» 라고 말했다(2026-09-13 실측, 개인 워크스페이스). 꺼진 칸은 이름만 남기고 «연결이 아니다» 라고 못박는다.
+  const on = i.collectors.filter((c) => c.enabled);
+  const off = i.collectors.filter((c) => !c.enabled);
+  const offNote = off.length ? `꺼져 있는 칸 ${off.length}개(${off.map((c) => c.label).join(" · ")})` : "";
+  if (on.length) {
+    lines.push(`- 연결한 자료 가져오기 ${on.length}개: ${on.map((c) => `${c.label}(${c.preset_key}, ${Math.round(c.sync_interval_sec / 60)}분 주기)`).join(" · ")}`);
+    if (offNote) lines.push(`  · ${offNote}는 연결이 아니다 — 수집하지 않는다.`);
     lines.push("- 수집 상태: 첫 수집이 **지금 돌고 있거나 곧 돈다**. 아직 들어온 것이 적어 보여도 정상이다.");
   } else {
-    lines.push("- 연결한 자료 가져오기: 없음(외부 앱을 잇지 않음)");
+    lines.push(`- 연결한 자료 가져오기: 없음(외부 앱을 잇지 않음)${offNote ? ` — ${offNote}가 보여도 그건 연결이 아니다. «연결됐다»·«수집이 돈다»·«곧 돈다» 고 말하지 마라.` : ""}`);
   }
   lines.push(`- AI: 이 세션은 ${i.harness} 로 돈다${i.aiHarnesses.length ? ` (로그인 확인: ${i.aiHarnesses.join(", ")})` : ""}`);
   return lines.join("\n");
@@ -80,7 +87,7 @@ function factsBlock(i: FirstTurnInput): string {
 
 // ── TEMPLATE — 문안은 여기만 고친다 ─────────────────────────────────────────────
 export function buildFirstTurnPrompt(i: FirstTurnInput): string {
-  const waits = i.collectors.length > 0;
+  const waits = i.collectors.some((c) => c.enabled);   // #3872 — 꺼진 칸은 수집을 안 하니 기다릴 것도 없다
   const nextWhen = waits
     ? "첫 수집이 한 바퀴 돈 뒤"
     : (i.uploads.total > 0 ? "올린 자료를 읽은 뒤 곧" : "자료가 들어오면");

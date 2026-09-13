@@ -65,6 +65,10 @@ export interface KnowledgeFilter {
   categoryId?: number; uncategorized?: boolean; injection?: string; provenance?: string;
   lifecycle?: string; q?: string; limit?: number; offset?: number; orderBy?: string; is_wiki?: boolean; type?: string;
   light?: boolean;   // #1091 본문(body_md) 제외 — 트리·검색·카드 보강처럼 발췌를 안 그리는 소비자용
+  /** #3872 — 설치가 심은 «손 안 댄 시드»(updated_by='system', org/delivery/seed-content.ts)를 뺀다. 처음 설정의 «이미 쌓인
+   *  지식 N건» 은 사람·AI 가 만든 것만 세야 한다 — 기본 탑재 사용 설명서 3건을 «팀이 쌓아 온 지식» 이라고 읽어 줬다
+   *  (2026-09-13 실측, 개인 워크스페이스). 같은 잣대가 org/delivery/onboarding.ts 의 지식 수 판정에 이미 있다. */
+  excludeSeed?: boolean;
 }
 
 // listKnowledge / countKnowledge 공유 필터 — JOIN·WHERE·params 를 한 곳에서 조립(목록과 총계가 항상 같은 조건).
@@ -89,6 +93,7 @@ export function knowledgeListFilter(f: KnowledgeFilter): { join: string; where: 
   if (f.provenance) { params.push(f.provenance); wh.push(`k.provenance=$${params.length}`); }
   if (f.type) { params.push(f.type); wh.push(`k.type=$${params.length}`); }   // #290 page-type 필터
   if (f.is_wiki != null) { params.push(f.is_wiki); wh.push(`k.is_wiki=$${params.length}`); }
+  if (f.excludeSeed) wh.push(`COALESCE(k.updated_by,'') <> 'system'`);   // #3872 시드 제외(onboarding.ts 와 같은 식)
   // lifecycle: 미지정=active(격리 불변식의 뿌리 — 검색·recall·주입이 전부 이 기본값에 기댄다).
   //  #783 콤마 다중값 허용('active,pending') — WIKI 사이드바 트리가 검토 대기 지식을 배지와 함께 띄우기 위함.
   //  (MCP 는 zod enum 이라 단일값만 들어온다 — 다중값은 REST 전용 경로.)
