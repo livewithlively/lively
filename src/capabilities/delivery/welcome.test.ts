@@ -475,11 +475,13 @@ t("W2 히스토리에 쌓는 걸음마다 순번을 찍는다 + 출발점 도장
 t("W3 ★ 아무것도 안 답한 로컬 상태는 «있음» 이 아니다 — 한 번의 서버 실패가 이어 열기를 영영 가린다", () => {
   // 실측: 프리뷰 백엔드가 잠깐 죽은 사이 첫 화면이 sessionStorage 에 저장됐고, 그 뒤로 그 탭은
   //  서버에 다시 묻지 않았다(hadLocal=true) — 저장돼 있던 진행이 통째로 가려졌다.
-  assert.match(OB, /hadLocal = v\.scene !== 'name' \|\| !!v\.nameSet/, "빈 첫 화면을 «있음» 으로 읽는다");
+  //  #1631 — 맨 앞에 인사(intro)가 붙어 «첫 화면» 이 하나가 아니게 됐다: 인사·팀 소개·(안 적은) 이름이 모두 답이 없는 자리다.
+  //   행위(장면별 판정)는 src/org/liv/onboarding-intro.test.ts 가 식을 계산해 잰다 — 여기서는 문턱이 그 목록을 보는지만 못박는다.
+  assert.match(OB, /hadLocal = !BEFORE_ANSWER\.includes\(v\.scene\) \|\| !!v\.nameSet/, "빈 첫 화면을 «있음» 으로 읽는다");
 });
 
 t("W4 답이 하나라도 있어야 서버에 남긴다 — 열어보기만 한 사람을 다음 로그인마다 끌어오지 않는다", () => {
-  assert.match(OB, /const worthSaving = \(\) => S\.scene !== 'name' \|\| S\.nameSet/);
+  assert.match(OB, /const worthSaving = \(\) => !BEFORE_ANSWER\.includes\(S\.scene\) \|\| S\.nameSet/);
   assert.match(OB, /if \(pushOff \|\| !worthSaving\(\)\) return/, "문턱 없이 저장하면 first-run 판정이 그 사람을 놓아주지 않는다");
 });
 

@@ -845,8 +845,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   let obSeq = 0;
   /** 서버에 «어디까지 하셨나» 를 묻고 기다리는 한도. 넘으면 처음부터 연다 — 못 물었다고 화면이 안 열리면 안 된다. */
   const RESUME_WAIT_MS = 2500;
+  /** 기다리는 말(«지난번에 어디까지…»)을 띄우기 전에 조용히 기다리는 시간 — 금방 답이 오면 그 말은 아예 안 보인다(#1631). */
+  const RESUME_HINT_MS = 600;
   const fresh = () => ({
-    scene: 'name', name: '', nameSet: false, stage: null, job: null,
+    scene: 'intro', name: '', nameSet: false, stage: null, job: null,
     sources: [], connected: [], ai: null, aiConnected: false, aiName: null, terminal: null, app: null,
     aiHarness: '',          // #2255 고른 AI 의 **하네스 id** — `lively install` 이 이 값을 읽어 그것만 깐다(라벨은 못 읽는다)
     local: null,            // #1879 내 컴퓨터 설치 — 'done'|'getting'|'later'
@@ -866,6 +868,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     chatDone: [],           // 막3에서 끝난 단계들
   });
   let S = fresh();
+  /** 아직 **아무것도 답하지 않은** 장면 — 인사(intro)·팀 소개(team)·이름(name). 여기 머문 것은 «하다 만 것» 이 아니다
+   *   (이름을 적었으면 nameSet 이 따로 말한다). 아래 hadLocal·worthSaving 이 함께 본다.
+   *  ⚠ 마운트하는 동안 읽힌다 — 그래서 차례표(ORDER) 곁이 아니라 **여기**(hadLocal 보다 앞)에 둔다. 뒤에 두면 선언 전 참조(TDZ)로 화면이 통째로 죽는다.
+   *  ⚠ 인사를 맨 앞에 두면서(#1631) 생긴 목록이다. 종전엔 첫 화면이 이름 하나라 `scene !== 'name'` 이면 됐는데, 그대로 두면
+   *   인사만 보고 나간 사람이 «하다 만 사람» 으로 저장돼 다음 로그인에 이어 열기로 끌려온다(#2207 함정 3). */
+  const BEFORE_ANSWER = ['intro', 'team', 'name'];
   /** 이 탭에 남아 있던 진행이 있었나 — 있으면 그게 가장 새 것이다(아래 «어느 쪽이 정본인가» 참조).
    *  ⚠ **아무것도 답하지 않은 상태는 «있음» 으로 치지 않는다.** 서버를 못 물었을 때(장애·느림) 첫 화면이
    *   그대로 이 탭에 저장되는데, 그걸 «있음» 으로 읽으면 그 탭은 **다시는 서버에 묻지 않는다** — 한 번의
@@ -873,7 +881,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   let hadLocal = false;
   try {
     const v = JSON.parse(sessionStorage.getItem(KEY));
-    if (v && v.scene) { S = Object.assign(fresh(), v); hadLocal = v.scene !== 'name' || !!v.nameSet; }
+    if (v && v.scene) { S = Object.assign(fresh(), v); hadLocal = !BEFORE_ANSWER.includes(v.scene) || !!v.nameSet; }
   } catch (e) {}
 
   /* ── 하다 만 자리를 **서버에** 남긴다 (#2207) ─────────────────────────────────
@@ -890,8 +898,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const saveLocal = () => { try { sessionStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
   /** 남길 만한 진행인가 — **아무것도 답하지 않은 첫 화면은 «하다 만 것» 이 아니다.**
    *  ⚠ 이 문턱이 없으면 처음 설정을 **열어보기만 한** 사람도 다음 로그인마다 처음 설정으로 끌려간다
-   *   (서버 판정이 자리표를 흔적보다 세게 보기 때문이다 — first-run.ts ★). 답이 하나라도 있을 때부터 남긴다. */
-  const worthSaving = () => S.scene !== 'name' || S.nameSet;
+   *   (서버 판정이 자리표를 흔적보다 세게 보기 때문이다 — first-run.ts ★). 답이 하나라도 있을 때부터 남긴다.
+   *   «첫 화면» 이 어디까지인지는 BEFORE_ANSWER 가 말한다(인사·팀 소개·이름). */
+  const worthSaving = () => !BEFORE_ANSWER.includes(S.scene) || S.nameSet;
   function schedulePush() {
     if (pushOff || !worthSaving()) return;   // 끝난 사람의 진행은 남기지 않는다(서버도 거절한다)
     clearTimeout(pushT);
@@ -1474,18 +1483,20 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   /* ══════════════ 장면 차례 ══════════════ */
   //  #2232 — 순서: 파일 → **AI 고르기·연결** → 외부 앱 → 내 컴퓨터(원준님 2026-08-28: "AI 골라서 연결하는 플로우가 먼저, 그 다음 외부 앱, 로컬은 그 다음").
   //  ★ 2026-08-31(원준님) — 'read'·b1~can(리브와의 챗봇 문답)을 걷어냈다. [앱] 다음은 곧장 마무리다.
-  const ORDER = ['name', 'stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];
+  //  #1631(원준님 2026-09-13) — 맨 앞에 **인사(intro)** 를 둔다. 무엇을 묻기 전에 «Lively 가 무엇을 하는지»와
+  //   «이 뒤에서 기본 설정을 한다»를 먼저 말한다. 두 차례표가 모두 인사에서 시작하고, 그 다음은 nextScene 이 가른다.
+  const ORDER = ['intro', 'name', 'stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];
   //  #3872 — **이미 굴러가는 팀에 합류한 사람**의 차례표. 둘의 차이는 둘뿐이다:
-  //   ① 맨 앞에 «어느 팀에 왔는지»(team)를 둔다 — 종전엔 자기가 어디에 들어왔는지 모른 채 이름부터 물었다.
+  //   ① 인사(intro) 바로 다음에 «어느 팀에 왔는지»(team)를 둔다 — 종전엔 자기가 어디에 들어왔는지 모른 채 이름부터 물었다.
   //   ② «어디에서 일하고 계세요?»(stage)를 묻지 않는다 — 그건 워크스페이스가 이미 정해 둔 값이다.
   //   자료 올리기·외부 앱·내 컴퓨터는 **그대로 둔다**(원준 2026-09-12: "그들도 자료를 로컬에서 업로드 할 수 있어야지").
-  const ORDER_JOIN = ['team', 'name', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];
+  const ORDER_JOIN = ['intro', 'team', 'name', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];
   const STEP_OF = Object.fromEntries([...ORDER, 'team'].map((k, i) => [k, i]));
   //  서버가 준 사실(GET /api/ui/me/welcome 의 joining) — 판정은 화면이 하지 않는다.
   let JOIN = null;
   const isJoin = () => !!(JOIN && JOIN.is_join);
   const FLOW = () => (isJoin() ? ORDER_JOIN : ORDER);
-  /** 지금 차례표에서 이 장면 **다음**. 두 차례표가 갈리는 자리(name 다음)를 여기 한 곳으로 모은다. */
+  /** 지금 차례표에서 이 장면 **다음**. 두 차례표가 갈리는 자리(인사 다음·이름 다음)를 여기 한 곳으로 모은다. */
   function nextScene(cur) { const f = FLOW(); const i = f.indexOf(cur); return (i >= 0 && i + 1 < f.length) ? f[i + 1] : 'app'; }
 
   const QPROG_ALL = ['stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];   // 막2 진행 눈금
@@ -1510,8 +1521,41 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       <span class="ob-oc-chk">✓</span></button>`;
   }
 
+  /** 인사 장면의 그림(#1631) — 장식이 아니라 첫 문장 «맥락을 AI 에게 주입한다» 를 그대로 옮긴 흐름도다.
+   *   내 맥락(문서·대화·업무) ─┤ Lively ● ── 점 하나가 건너감 ──▶ AI(답을 냄 ✓). 움직임은 41-onboarding.css 의 인사 절.
+   *  보조기기에는 숨긴다 — 같은 말을 바로 아래 문장이 한다.
+   *  선 아이콘은 이 파일의 붓 그대로(24 뷰박스 · 획 1.7 · 둥근 끝). 서비스 로고를 안 쓰는 이유: 검은 로고(노션 등)는 다크에서 사라진다. */
+  function introArt() {
+    const ic = (d) => `<svg class="ob-in-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+    const chip = (d, t) => `<span class="ob-in-chip">${ic(d)}<span>${t}</span></span>`;
+    return `<div class="ob-in-art" aria-hidden="true"><div class="ob-in-flow">
+      <div class="ob-in-src">
+        ${chip('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>', '문서')}
+        ${chip('<path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8l-4 3v-3H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/>', '대화')}
+        ${chip('<path d="M10 6h10M10 12h10M10 18h10"/><path d="M4 6l1.2 1.2L7.5 5M4 12l1.2 1.2L7.5 11M4 18l1.2 1.2L7.5 17"/>', '업무')}
+      </div>
+      <span class="ob-in-join"></span>
+      <span class="ob-in-hub">Lively<span class="pulse-dot"></span></span>
+      <span class="ob-in-wire"><span class="ob-in-run"><i></i></span></span>
+      <span class="ob-in-ai">${ic('<path d="M12 3.5l1.9 4.6 4.6 1.9-4.6 1.9L12 16.5l-1.9-4.6L5.5 10l4.6-1.9z"/><path d="M18.5 15.5l.8 1.7 1.7.8-1.7.8-.8 1.7-.8-1.7-1.7-.8 1.7-.8z"/>')}<span>AI</span><span class="ob-in-ok">${ic('<path d="M6 12.5l3.8 3.8L18 8"/>')}</span></span>
+    </div></div>`;
+  }
+
   const SCENES = {
-    /* #3872 — 합류자의 첫 화면. **어디에 들어왔는지**를 먼저 말한다(종전엔 그 말 없이 이름부터 물었다).
+    /* 막0 — 인사(#1631, 원준님 2026-09-13). 무엇을 묻기 전에 **Lively 가 무엇을 하는지**와 **이 뒤에서 무엇을 하는지**를
+     *  먼저 말한다. 문구는 원준님 원문 그대로다.
+     *  그림(introArt)은 한 번만 흐르고 2초 안에 끝난다 — 계속 움직이는 것은 워드마크의 숨 쉬는 점 하나다. 움직임 줄이기 설정이면 끝난 그림만 보인다.
+     *  ⚠ 아무것도 묻지 않는 장면이다 — BEFORE_ANSWER 에 들어 있어 여기 머문 것은 저장·이어 열기의 대상이 아니다.
+     *  ⚠ 다음은 차례표가 정한다(nextScene): 혼자 여는 사람은 이름, 합류자는 팀 소개. 여기서 이름을 하드코딩하면 합류자가 팀 소개를 건너뛴다. */
+    intro: {
+      html: () => `${introArt()}
+        <h1 class="ob-q-title ob-in-title">Lively Beta의 유저가 되어주셔서 감사합니다!</h1>
+        <p class="ob-in-p">Lively는 사용자가 놓여있는 맥락을 저희가 직접 AI에게 풍부하게 주입해서 AI의 세팅 난이도를 줄이고, 양질의 결과물을 얻을 수 있도록 합니다.</p>
+        <p class="ob-in-p ob-in-next">이를 위해서 이 뒤에서는, 라이블리 사용을 위한 기본 설정을 진행합니다.</p>
+        <button class="ob-btn ob-btn-pri ob-in-go" id="introGo">계속하기</button>`,
+      bind: (el) => { $('#introGo', el).onclick = () => goScene(nextScene('intro')); },
+    },
+    /* #3872 — 합류자가 인사(intro) 다음에 보는 화면. **어디에 들어왔는지**를 먼저 말한다(종전엔 그 말 없이 이름부터 물었다).
      *  숫자는 서버 실측(joining)만 쓴다 — 0 이면 그 줄을 아예 쓰지 않는다(없는 것을 있다고 하지 않는다). */
     team: {
       html: () => {
@@ -3122,17 +3166,19 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     if (!sc) return;
     // 장면이 바뀌면 «내 컴퓨터» 폴링을 멈춘다 — 화면에 없는 타이머가 5초마다 도는 건 조용한 누수다.
     if (key !== 'local') { clearInterval(localTimer); localTimer = null; localBase = null; }
-    setStage(key === 'name' ? 'stage-name' : 'stage-q');
+    //  인사(intro)도 이름처럼 민낯이다 — 셸이 뒤에 비치면 «설정을 시작하기 전» 이라는 장면이 흐려진다(#1631).
+    setStage(key === 'intro' || key === 'name' ? 'stage-name' : 'stage-q');
     const col = $('#qcol');
     col.style.animation = 'none';
     if (animate !== false) { void col.offsetWidth; col.style.animation = ''; }
     col.classList.toggle('ob-wide', key === 'sources');
+    col.classList.toggle('ob-intro', key === 'intro');
     col.innerHTML = sc.html();
     syncBack();
     $$('[data-jump]', col).forEach((b) => b.onclick = () => goJump(b.dataset.jump));
     sc.bind && sc.bind(col);
   }
-  const SCENE_LABEL = { name: '이름', stage: '무대', role: '직무', files: '파일 올리기', sources: '앱 고르기',
+  const SCENE_LABEL = { intro: '인사', name: '이름', stage: '무대', role: '직무', files: '파일 올리기', sources: '앱 고르기',
     connect: '앱 연결', ai: 'AI 고르기', claude: 'AI 연결', terminal: '터미널', local: '내 컴퓨터 연결', app: '앱 받기' };
   /* 뒤로가기는 **지나온 자취**를 되짚는다 — 차례표를 거꾸로 세면 조건부로 건너뛴 장면(AI 없음 등)에 걸린다. */
   function goBack() { const prev = S.trail.pop(); if (!prev) return; save(); goScene(prev, { back: true }); }
@@ -3201,9 +3247,17 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   async function resumeFromServer() {
     if (destroyed) return;
     setStage('stage-name');
-    $('#qcol').innerHTML = `<div class="ob-q-top"><div class="ob-q-ic">L</div></div>
+    //  #1631 — 기다리는 말은 **조금 기다린 뒤에만** 띄운다. 처음 오는 사람은 곧장 인사를 봐야 하는데, 서버가 금방 답해도
+    //   그 사이에 «지난번에 어디까지 하셨는지» 가 먼저 번쩍였다 — 그 사람에게는 «지난번» 이 없다.
+    const col0 = $('#qcol');
+    col0.innerHTML = '';
+    const waitT = setTimeout(() => {
+      if (destroyed) return;
+      col0.innerHTML = `<div class="ob-q-top"><div class="ob-q-ic">L</div></div>
       <p class="ob-q-help">지난번에 어디까지 하셨는지 보고 있어요.</p>`;
+    }, RESUME_HINT_MS);
     const got = await Promise.race([loadWelcome(), sleep(RESUME_WAIT_MS)]);
+    clearTimeout(waitT);
     if (destroyed) return;                 // 기다리는 사이에 화면을 떠났다 — 없는 화면에 그리지 않는다
     const scene = resumeScene(got && got.progress);
     if (scene) {
@@ -3214,8 +3268,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       toast('지난번에 하시던 자리에서 이어 갑니다.');
       return;
     }
-    //  #3872 — 합류자는 «어디에 왔는지» 부터. (서버를 못 물었으면 JOIN 이 null 이라 종전대로 이름부터.)
-    renderSB(); goScene(S.scene || (isJoin() ? 'team' : 'name'));
+    //  처음부터 — 두 차례표 모두 인사(intro)에서 시작하고, 합류자는 인사 다음이 팀 소개다(nextScene · #3872·#1631).
+    //   ⚠ 종전 `S.scene || (isJoin() ? 'team' : 'name')` 은 S.scene 이 늘 채워져 있어(fresh) 뒤쪽이 한 번도 안 불렸다 —
+    //    합류자에게 팀 소개가 뜬 적이 없다. 차례표를 따라가게 하면 그 갈래가 저절로 산다.
+    renderSB(); goScene(S.scene || FLOW()[0]);
   }
 
   /* ── 부팅 ── */
@@ -3231,7 +3287,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   if (want && STEP_OF[want] != null) { demoJump = true; goScene(want); }
   //  #3872 — 이 탭에 하던 자리가 있으면 그 자리부터(종전 그대로). 다만 «합류자인가»는 그 뒤 문구·차례표가
   //   쓰므로 서버에 한 번 물어 둔다(응답이 늦어도 화면은 기다리지 않는다).
-  else if (hadLocal) { renderSB(); void loadWelcome(); goScene(S.scene || 'name'); schedulePush(); }
+  else if (hadLocal) { renderSB(); void loadWelcome(); goScene(S.scene || FLOW()[0]); schedulePush(); }
   else { renderSB(); void resumeFromServer(); }
   return { destroy() {
     destroyed = true;
