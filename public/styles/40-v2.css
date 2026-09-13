@@ -359,12 +359,25 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .v2-ss-past .v2-cnt { flex: none; }
 .v2-ss-past .v2-car { transition: transform .15s ease; }
 .v2-ss-past.open .v2-car { transform: rotate(90deg); }
-/* 지난 세션 행 — 이름은 같은 잉크색이다(흐린 회색 본문 금지). 굵기만 한 급 낮춰 '지금 도는 것'과 결을 가른다. */
+/* 지난 세션 행 — 이름 색은 한 단계 흐린 --muted.
+   ⚠ 굵기 450 은 **화면에서 500 으로 그려진다**(#3870 2026-09-13 실측): index.html 이 싣는 Pretendard 는 static 판이라
+   100 단위 굵기만 있고, CSS 글꼴 매칭은 450 을 500(살아 있는 줄과 같은 굵기)으로 올린다. 400 이하는 디자인 시스템의
+   금지 예외다. 그러니 굵기는 구분 수단이 못 된다 — 구분은 아래 «줄 내용 흐림» 이 진다. */
 .v2-ss-row.past .t { font-weight: 450; color: var(--muted); }
 /* 점이 «몸이 있나» 를 더는 말하지 않으므로(#3778 2판) 그 일은 **톤과 오른쪽 시각**이 온전히 진다.
-   종전엔 굵기만 450 이고 색은 살아 있는 줄과 같아서, 구분이 사실상 점 하나에 매달려 있었다.
    호버·선택 때는 제 색을 되찾는다 — 손을 얹으면 «이어서 할 수 있다» 가 먼저다. */
 .v2-ss-row.past:hover .t, .v2-ss-row.past.on .t { color: var(--ink); }
+/* ★ 지난 세션은 **줄 내용이 흐리다**(#3870 — 원준 2026-09-13: «지난 세션들 조금 흐리게 해서 비활성화된 느낌 주라고
+   했는데 … 그냥 차이가 없는데?»). 색 한 단계(--ink-sub → --muted)는 명도 차 ΔL* 7 남짓이라 눈에 안 띄었다.
+   흐림 .75 를 얹으면 ΔL* 약 21(라이트)·22(다크) — 세 배다. 홈·[AI 세션] 줄(.v2-app-inst--past)과 **같은 값**을 쓴다.
+   흐리는 것은 **내용**(이름·시각·얼굴)뿐이다 — 휴지통 단추(.v2-ss-x)는 조작이라 제 규칙(.45 → 1)을 그대로 따른다.
+   손을 얹거나 · 고르거나 · 키보드로 닿으면 제 농도로 돌아온다. 되찾기는 특이도 (0,4,0) 로 흐림 (0,3,0) 을
+   **순서와 무관하게** 이긴다 — 순서에 기대면 규칙이 하나 끼는 날 조용히 죽는다(#3778 교훈).
+   DS-EXCEPTION: 지난 세션 글자 대비 약 3:1(라이트 · 본문 기준 4.5:1 미만). 사람이 «비활성» 톤을 요구했고, 4.5:1 안에서
+   낼 수 있는 최대 차이(ΔL* 9 남짓)는 이미 배포돼 «차이가 없다» 판정을 받았다. 되찾기 규칙이 조작 순간의 대비를 보장한다.
+   2026-09-13 #3870 · 회귀 가드 scripts/side-past-dim-runtime.test.mjs(헤드리스 computed — 문자열로 닫지 않는다) */
+.v2-ss-row.past > .v2-ss-main, .v2-ss-row.past > .w, .v2-ss-row.past > .v2-ss-face { opacity: .75; }
+.v2-ss-row.past:is(:hover, .on, :focus-visible) > :is(.v2-ss-main, .w, .v2-ss-face) { opacity: 1; }
 .v2-tree-note { margin: 10px var(--side-x, 8px) 0 0; padding: 10px 12px; border: 1px dashed var(--line-net); border-radius: 9px; font-size: 13px; color: var(--muted); line-height: 1.55; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 .v2-tree-note .btn-text { font-size: 13px; padding: 0; }
 /* 「전체 프로젝트 · N」 — 진행 중이 아닌 것들을 접어 두는 묶음 머리(#1719 개편 안2). 섹션 라벨의 결로,
@@ -488,8 +501,10 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .v2-app-inst-ic { width: 17px; height: 17px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .v2-app-inst:hover .v2-app-inst-ic, .v2-app-inst.on .v2-app-inst-ic { stroke: var(--ink-sub); }
 /* 지난 세션(#2208) — 오늘 쓰고 이미 끝난 행. **영역을 나누지 않고** 행이 스스로 말한다(원준 지시 2026-08-27):
-   묶음은 「오늘」 그대로 두고 아이콘·제목만 한 단계 낮춘 톤으로. ⚠ opacity 로 흐리지 않는다 — 그건 '꺼짐'이라
-   눌러도 안 열릴 것처럼 보이고, 지난 세션은 **이어서 할 수 있는 것**이다. 호버·선택 때는 제 색을 되찾는다. */
+   묶음은 「오늘」 그대로 두고 아이콘·제목을 낮춘 톤으로. 호버·선택 때는 제 색을 되찾는다.
+   ⚠ 처음엔 «opacity 로 흐리지 않는다('꺼짐'으로 읽힌다)» 였다. 그런데 사람이 요구한 것이 바로 **비활성화된 느낌**이었고
+   (원준 2026-09-09 «비활성화되어 있는 느낌» · 09-13 «차이가 없는데?»), 색 한 단계만으로는 눈에 안 띄었다.
+   그래서 **내용은 흐리고 조작(압정·×)은 흐리지 않는다** — 누를 수 있는 것은 누를 수 있어 보여야 한다(아래 ★). */
 /* ⚠ 이 네 줄은 **한 번 죽어 있었다**(#3778 실측 2026-09-09, 태어난 #2208 그날부터):
    ① 제목 색이 `--ink-sub` 였는데 **행 자체가 이미 `--ink-sub`** 다(.v2-app-inst) — 같은 색을 같은 색으로 덮었다.
    ② 굵기 600 은 아래 `.v2-app-inst--1 .v2-app-inst-title { font-weight: 500 }` 과 **특이도가 같고(0,2,0) 그쪽이
@@ -506,6 +521,13 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .v2-app-inst--1.v2-app-inst--past .v2-app-inst-title { font-weight: 450; }
 .v2-app-inst--past:hover .v2-app-inst-title, .v2-app-inst--past.on .v2-app-inst-title { color: var(--ink); }
 .v2-app-inst--past:hover .v2-app-inst-ic, .v2-app-inst--past.on .v2-app-inst-ic { stroke: var(--muted); }
+/*  ★ 줄 내용 흐림(#3870, 2026-09-13) — 위 네 줄만으로는 «차이가 없다»(원준). 실측: 제목 --ink-sub → --muted 는
+    ΔL* 7 남짓, 한 줄 모드 굵기 450 은 static Pretendard 에서 500 으로 그려져 살아 있는 줄과 **같은 굵기**다.
+    흐림 .75 가 구분을 진다 — ΔL* 약 21~22(라이트 카드·다크). 트리의 지난 세션 줄(.v2-ss-row.past)과 같은 값.
+    되찾기는 :is() 로 특이도 (0,3,0) — 흐림 (0,2,0) 을 순서와 무관하게 이긴다. 대비 예외 기록은 .v2-ss-row.past 자리(DS-EXCEPTION).
+    ⚠ 줄(.v2-app-inst) 자체에 opacity 를 걸지 않는다 — 압정·× 까지 흐려지고, 고른 줄의 파란 마디(::before)도 흐려진다. */
+.v2-app-inst--past > :is(.v2-app-inst-open, .v2-app-inst-face, .v2-app-inst-face1, .v2-app-inst-ask, .v2-app-inst-meta, .v2-app-inst-project) { opacity: .75; }
+.v2-app-inst--past:is(:hover, .on, :focus-within) > :is(.v2-app-inst-open, .v2-app-inst-face, .v2-app-inst-face1, .v2-app-inst-ask, .v2-app-inst-meta, .v2-app-inst-project) { opacity: 1; }
 /*  압정·닫기 — 첫 줄 오른쪽에 겹쳐 뜬다. 안 보일 땐 display:none 이라 **자리도 안 먹는다**(#1954 3차).
     호버·포커스나 이미 고정된 행에서만 보인다 — 늘 보이면 행마다 단추 둘이 늘어서 목록이 도구모음이 된다. */
 .v2-app-inst-close, .v2-app-inst-pin { position: absolute; top: 7px; width: 22px; height: 22px; display: none; place-items: center; padding: 0; border: 0;
@@ -1945,7 +1967,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
    오른쪽 끝 고리 하나로는 안 됐다: 손을 얹으면 .v2-sums 가 숨고(그 자리를 압정·＋·[→] 가 받는다)
    목록을 훑는다는 건 곧 손을 얹는다는 것이라, 정작 보려는 순간에 신호가 없었다.
    ⚠ 굵기는 안 건드린다 — 머리글 700 은 카드와 그 안 행의 위계를 만드는 값이라 그걸 흔들면 층이 무너진다.
-   ⚠ opacity 로 흐리지 않는다 — 그건 '꺼짐'이라 눌러도 안 열릴 것처럼 보인다(.v2-app-inst--past 와 같은 사유).
+   ⚠ 카드 이름은 opacity 로 흐리지 않는다 — 흐림은 지난 **세션 줄**의 언어다(#3870). 카드는 프로젝트이고,
+     --ink → --muted 한 단계만으로 이미 ΔL* 30 이라 갈린다(세션 줄의 --ink-sub → --muted 는 7 이라 흐림이 필요했다).
    호버·선택 때는 제 색을 되찾는다 — 손을 얹으면 «살아 있고 누를 수 있다» 가 먼저다. */
 .v2-pg-row.past .v2-pg-t .n { color: var(--muted); }
 .v2-pg-row.past:hover .v2-pg-t .n, .v2-pg-row.past.act .v2-pg-t .n { color: var(--ink); }
