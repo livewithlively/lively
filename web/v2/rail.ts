@@ -17,7 +17,7 @@
 //  ⚠ 구역은 **사람이 고를 때만** 바뀐다. 주소를 따라 저절로 바꾸면, 홈 목록에서 세션 하나를 여는 순간
 //   사이드바가 통째로 [AI 세션]으로 갈아엎여 방금 보던 목록이 사라진다. 슬랙도 DM 탭에서 대화를 열어도
 //   탭은 DM 에 머문다. 그래서 구역은 이 모듈의 상태이고 브라우저에 기억한다.
-import { el, navOn, personName, profileAvatar, state, toast } from '../core.js';
+import { el, focusMovedIntoFrame, navOn, personName, profileAvatar, state, toast } from '../core.js';
 import { deviceStore, shellPrefStore, shellPrefsPush } from './shell-prefs.js';   // #2460 — 레일 순서는 계정, 접힘은 이 기기
 import { APPS, appHref, openLaunchpad, RECENT_STORE_KEY, type AppDef } from './apps.js';
 import { icon } from './icons.js';
@@ -237,19 +237,26 @@ function closePopover(): void {
   popEl.remove(); popEl = null;
   document.removeEventListener('mousedown', onDocDown, true);
   document.removeEventListener('keydown', onDocKey, true);
+  window.removeEventListener('blur', onWinBlur);
 }
 function onDocDown(e: MouseEvent): void {
   const t = e.target as HTMLElement;
   if (popEl && !popEl.contains(t) && !t.closest('.v2-rail-stack') && !t.closest('.v2-secdd') && !t.closest('.v2-ws')) closePopover();
 }
 function onDocKey(e: KeyboardEvent): void { if (e.key === 'Escape') closePopover(); }
+//  #3870 — 본문(앱 액자·세션 터미널)을 누른 것은 위 mousedown 에 오지 않는다. 그걸 안 받으면 메뉴는 빈 사이드바를
+//   찾아 눌러야만 닫혔다(원준 2026-09-13 "억지로 빈화면 찾아서 눌러야"). 프레임이 포커스를 가져간 blur 로 받는다.
+function onWinBlur(): void { if (focusMovedIntoFrame()) closePopover(); }
 function place(pop: HTMLElement, anchor: HTMLElement, below: boolean): void {
   const r = anchor.getBoundingClientRect();
   pop.style.left = Math.round(below ? Math.max(8, r.left) : r.right + 8) + 'px';
   pop.style.top = Math.round(below ? r.bottom + 6 : Math.max(8, r.top)) + 'px';
   document.body.append(pop);
   popEl = pop;
-  window.setTimeout(() => { document.addEventListener('mousedown', onDocDown, true); document.addEventListener('keydown', onDocKey, true); }, 0);
+  window.setTimeout(() => {
+    document.addEventListener('mousedown', onDocDown, true); document.addEventListener('keydown', onDocKey, true);
+    window.addEventListener('blur', onWinBlur);
+  }, 0);
 }
 
 /**
