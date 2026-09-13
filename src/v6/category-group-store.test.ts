@@ -13,7 +13,7 @@
 //   ⑤  묶음 삭제 · 옮길 곳이 없는 묶음         → 같은 갈래로 거절(자기 자신도 «없는 묶음»)
 //   ⑥  묶음 삭제 · reassignTo 정상            → 옮기고 삭제(ok)
 //   ⑦  빈 묶음 삭제                          → 옮길 곳 없이도 ok
-//   ⑧  group 해제(빈 문자열·null·공백)        → change=true, groupKey=null
+//   ⑧  group 해제(빈 문자열·null·공백)        → **묶음이 있으면 거절**(하드 규칙), 0개면 해제
 //   ⑨  group 미지정(undefined)               → change=false (부분 수정에서 «안 건드림»)
 //   ⑩  이름에서 key 슬러그(한글 포함)          → 항상 슬러그가 나온다
 import test from "node:test";
@@ -24,9 +24,12 @@ import { GROUP_SETS } from "./category-groups.js";
 const KEYS = ["build", "align", "metric"];
 
 test("① 묶음이 하나도 없으면 그 사람 직무의 집합을 시드한다", () => {
-  const plan = planGroupSeed({ existing: [], stage: "company", job: "개발" });
+  const plan = planGroupSeed({ existing: [], stage: "company", job: "개발·데이터" });
   assert.equal(plan.skipped, false);
-  assert.deepEqual(plan.groups.map((g) => g.key), GROUP_SETS["개발"].map((g) => g.key));
+  assert.deepEqual(plan.groups.map((g) => g.name), GROUP_SETS["개발·데이터"].map((g) => g.name));
+  //  옛 판 답(직무 9종)으로 남아 있는 사람도 같은 집합을 받는다 — 별칭이 끊기면 옛 사용자만 기본으로 떨어진다.
+  assert.deepEqual(planGroupSeed({ existing: [], stage: "company", job: "개발" }).groups.map((g) => g.name),
+    GROUP_SETS["개발·데이터"].map((g) => g.name));
   //  뜻이 함께 와야 한다 — 리브 2턴 지시문·화면 소제목이 이 문장을 그대로 싣는다.
   for (const g of plan.groups) assert.ok(g.hint.trim().length > 0, `${g.key}: 뜻이 비었다`);
   //  무대·직무를 모르면 default 집합 — 어느 경로로도 빈손이 없다.
@@ -34,7 +37,7 @@ test("① 묶음이 하나도 없으면 그 사람 직무의 집합을 시드한
 });
 
 test("② 이미 묶음이 있으면 아무것도 안 한다(멱등) — 사람이 고친 이름·순서를 덮지 않는다", () => {
-  const plan = planGroupSeed({ existing: ["work"], stage: "company", job: "개발" });
+  const plan = planGroupSeed({ existing: ["g1"], stage: "company", job: "개발·데이터" });
   assert.equal(plan.skipped, true);
   assert.deepEqual(plan.groups, []);
 });
@@ -83,10 +86,13 @@ test("⑦ 빈 묶음은 옮길 곳 없이도 지운다", () => {
   assert.equal(planGroupRemoval({ inUse: 0, reassignTo: "metric", groupKeys: KEYS }).reassignTo, null);
 });
 
-test("⑧ 빈 문자열·null 은 «해제» 다 — 어느 묶음에도 안 든다", () => {
+test("⑧ 빈 문자열·null 은 «해제» 뜻이지만, 묶음이 있으면 거절된다 — 셋 중 하나에 반드시 든다", () => {
   for (const v of ["", "   ", null]) {
-    assert.deepEqual(planGroupAssign({ group: v, groupKeys: KEYS }), { change: true, groupKey: null, error: null },
-      `해제 입력(${JSON.stringify(v)})이 해제로 안 읽힌다`);
+    const p = planGroupAssign({ group: v, groupKeys: KEYS });
+    assert.equal(p.change, false, `해제가 통과했다(${JSON.stringify(v)})`);
+    assert.match(String(p.error), /묶음 밖으로 뺄 수 없습니다/);
+    //  묶음이 아직 0개인 워크스페이스에서는 그 말이 뜻을 잃으므로 종전대로 통과한다.
+    assert.deepEqual(planGroupAssign({ group: v, groupKeys: [] }), { change: true, groupKey: null, error: null });
   }
 });
 
@@ -102,4 +108,32 @@ test("⑩ 이름에서 key 를 뽑는다 — 한글 이름도 빈손으로 안 �
   assert.match(ko, /^g-[0-9a-f]{10}$/, "ascii 로 안 떨어지는 이름은 해시로 내린다");
   assert.equal(groupKeyFrom("내가 만든 것"), ko, "같은 이름은 같은 key(안정적이어야 카테고리가 계속 가리킨다)");
   assert.equal(groupKeyFrom("   "), "", "이름이 비면 key 도 없다(호출부가 400 을 낸다)");
+});
+
+// ── 하드 규칙(#1631, 원준 2026-09-12): «모든 카테고리가 하드하게 셋 중 하나로 들어간다» ──────────
+//  지시문으로 부탁하는 것과 서버가 막는 것은 다르다. 리브도 사람도 REST 도 planGroupAssign 한 자리를 지난다.
+test("⑪ 묶음이 있는데 묶음 없이 만들려 하면 거절한다 — «반드시 하나»", () => {
+  const p = planGroupAssign({ group: undefined, groupKeys: ["g1", "g2", "g3"], creating: true });
+  assert.equal(p.change, false);
+  assert.match(String(p.error), /반드시 들어갑니다/);
+  assert.match(String(p.error), /g1/);
+});
+test("⑫ 묶음이 아직 0개면 종전대로 만들 수 있다 — 옛 워크스페이스를 세우지 않는다", () => {
+  assert.deepEqual(planGroupAssign({ group: undefined, groupKeys: [], creating: true }),
+    { change: false, groupKey: null, error: null });
+});
+test("⑬ 이미 든 카테고리를 묶음 밖으로 빼는 것(해제)은 거절한다", () => {
+  for (const g of [null, ""]) {
+    const p = planGroupAssign({ group: g, groupKeys: ["g1", "g2", "g3"] });
+    assert.equal(p.change, false, `해제가 통과했다(${JSON.stringify(g)})`);
+    assert.match(String(p.error), /묶음 밖으로 뺄 수 없습니다/);
+  }
+});
+test("⑭ 묶음이 0개인 워크스페이스에서는 해제가 그대로 통한다(뺄 묶음 자체가 없다)", () => {
+  assert.deepEqual(planGroupAssign({ group: null, groupKeys: [] }),
+    { change: true, groupKey: null, error: null });
+});
+test("⑮ 고치기(만들기 아님)는 group 을 안 줘도 통과한다 — 이름만 고치는 길을 막지 않는다", () => {
+  assert.deepEqual(planGroupAssign({ group: undefined, groupKeys: ["g1"] }),
+    { change: false, groupKey: null, error: null });
 });
