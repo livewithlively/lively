@@ -460,3 +460,74 @@
   overflow-wrap: anywhere; max-width: 100%;
 }
 .ob-login-v:hover { border-color: var(--blue); }
+
+/* ══ #1631 막0 인사(intro) — 「Lively Beta의 유저가 되어주셔서 감사합니다!」 (원준님 2026-09-13) ══
+   무엇을 묻기 전에 Lively 가 하는 일을 한 장면으로 보여 준다. 그림은 첫 문장을 그대로 옮긴 흐름도다:
+   내 맥락(문서·대화·업무) ─┤ Lively ● ── 점 하나가 건너감 ──▶ AI(답을 냄 ✓).
+   ★ 디자인 시스템 v2 §7 — 입장 리빌 250ms · 시차 80ms · ease-out, 상태 플래시 600ms 한 번. 계속 움직이는 것은 워드마크의 숨 쉬는 점 하나.
+     2초 안에 끝난다(마지막 AI 플래시 1360+600=1960ms). 바운스·회전·무한 장식은 없다.
+   ★ 기본값이 곧 «끝난 그림» 이다 — 움직임은 전부 아래 no-preference 블록 안에만 둔다. 움직임 줄이기 설정이면 그 블록이 빠져
+     끝난 그림이 그대로 보인다(04-domain-curation.css 의 전역 킬과 이중 안전).
+   ⚠ 선 긋기는 SVG 점선이 아니라 clip-path 로 드러낸다 — 늘어나는 상자에 SVG 점선 + non-scaling-stroke 를 쓰면 사파리에서 선이 안 닫힌다.
+   색은 전부 토큰이다(다크에서 스스로 뒤집힌다). */
+.ob-qcol.ob-intro{margin-block:auto; animation:none}   /* 기둥 전체의 rise 는 끈다 — 안의 부품이 제 차례에 들어온다 */
+.ob-in-art{display:flex; justify-content:center; border:1px solid var(--line); border-radius:16px; background:var(--surface); padding:26px 18px; margin-bottom:30px}
+.ob-in-flow{display:flex; align-items:center; width:100%; max-width:440px}
+.ob-in-src{display:flex; flex-direction:column; gap:8px; flex:none}
+.ob-in-chip{display:flex; align-items:center; gap:7px; height:30px; padding:0 12px 0 9px; border:1px solid var(--line); border-radius:8px; background:var(--bg); font-size:12.5px; font-weight:600; color:var(--ink-sub); white-space:nowrap}
+.ob-in-ic{width:15px; height:15px; flex:none; display:block}
+.ob-in-chip .ob-in-ic{color:var(--muted)}
+/* 세 칸을 하나로 묶는 괄호 — 높이 = 첫 칩 가운데에서 끝 칩 가운데까지(칩 30 + 틈 8, 두 번 = 76) + 선 굵기 1.5.
+   가운데 가로줄은 괄호를 지나 Lively 까지 이어진다. */
+.ob-in-join{position:relative; flex:none; width:30px; height:77.5px}
+.ob-in-join::before{content:''; position:absolute; left:0; top:0; width:16px; height:100%; border:1.5px solid var(--line-net-2); border-left:0; border-radius:0 10px 10px 0}
+.ob-in-join::after{content:''; position:absolute; left:0; right:0; top:50%; border-top:1.5px solid var(--line-net-2); transform:translateY(-50%)}
+.ob-in-hub{display:inline-flex; align-items:center; gap:7px; flex:none; padding:7px 13px; border:1px solid var(--line); border-radius:999px; background:var(--surface); font-size:17px; font-weight:800; letter-spacing:-.3px; line-height:1.2; color:var(--ink); white-space:nowrap}
+/* AI 로 가는 선 — 가운데 한 줄 + 화살촉. 점(.ob-in-run i)은 평소엔 안 보이고 한 번 건너갈 때만 뜬다. */
+.ob-in-wire{position:relative; flex:1; min-width:36px; height:18px; overflow:hidden}   /* 건너간 점의 끝 자리(translateX 100%)가 스크롤 넘침으로 남지 않게 선 안에 가둔다 */
+.ob-in-wire::before{content:''; position:absolute; left:6px; right:8px; top:50%; border-top:1.5px solid var(--line-net-2); transform:translateY(-50%)}
+.ob-in-wire::after{content:''; position:absolute; right:8px; top:50%; width:7px; height:7px; border-top:1.5px solid var(--line-net-2); border-right:1.5px solid var(--line-net-2); transform:translateY(-50%) rotate(45deg)}
+.ob-in-run{position:absolute; left:6px; right:16px; top:50%; height:0; opacity:0}
+.ob-in-run i{position:absolute; left:0; top:-3.5px; width:7px; height:7px; border-radius:50%; background:var(--mint)}
+.ob-in-ai{position:relative; flex:none; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; width:62px; height:62px; border:1px solid var(--ob-mint-ring); border-radius:12px; background:var(--bg-success); color:var(--ob-mint-ic); font-size:12.5px; font-weight:700}
+.ob-in-ai .ob-in-ic{width:20px; height:20px}
+.ob-in-ok{position:absolute; top:-7px; right:-7px; width:20px; height:20px; border-radius:50%; display:grid; place-items:center; background:var(--mint-fill); color:var(--ob-on-fill); box-shadow:0 0 0 2px var(--surface)}
+.ob-in-ok .ob-in-ic{width:12px; height:12px; stroke-width:2.6}
+.ob-in-title{margin-bottom:12px; word-break:keep-all; text-wrap:balance}
+.ob-in-p{font-size:15px; line-height:1.7; color:var(--ink-sub); margin:0 0 8px; word-break:keep-all; text-wrap:pretty}
+.ob-in-next{color:var(--ink)}
+.ob-in-go{margin-top:26px}
+@media (max-width: 480px){
+  .ob-in-art{padding:20px 12px; border-radius:12px; margin-bottom:24px}
+  .ob-in-src{gap:6px}
+  .ob-in-chip{height:28px; gap:6px; padding:0 9px 0 7px; font-size:12px}
+  .ob-in-join{width:24px; height:69.5px}   /* 칩 28 + 틈 6, 두 번 = 68 + 선 굵기 1.5 */
+  .ob-in-join::before{width:12px}
+  .ob-in-hub{gap:6px; padding:6px 10px; font-size:15px}
+  .ob-in-ai{width:54px; height:54px}
+  .ob-in-ai .ob-in-ic{width:18px; height:18px}
+  .ob-in-title{font-size:22px}
+  .ob-in-p{font-size:14.5px}
+}
+@media (prefers-reduced-motion: no-preference){
+  .ob-in-art, .ob-in-title, .ob-in-p, .ob-in-go{animation:obInRise 250ms ease-out both}
+  .ob-in-title{animation-delay:120ms}
+  .ob-in-p{animation-delay:200ms}
+  .ob-in-next{animation-delay:280ms}
+  .ob-in-go{animation-delay:360ms}
+  .ob-in-chip{animation:obInRise 250ms ease-out both}
+  .ob-in-chip:nth-child(1){animation-delay:160ms}
+  .ob-in-chip:nth-child(2){animation-delay:240ms}
+  .ob-in-chip:nth-child(3){animation-delay:320ms}
+  .ob-in-join{animation:obInDraw 250ms ease-out 500ms both}
+  .ob-in-hub{animation:obInRise 250ms ease-out 680ms both}
+  .ob-in-wire{animation:obInDraw 300ms ease-out 880ms both}
+  .ob-in-run{animation:obInRun 420ms ease-in-out 1020ms both}
+  .ob-in-ai{animation:obInLit 600ms ease-out 1360ms both}
+  .ob-in-ok{animation:obInPop 250ms ease-out 1440ms both}
+}
+@keyframes obInRise{from{opacity:0; transform:translateY(8px)}}
+@keyframes obInDraw{from{clip-path:inset(0 100% 0 0)} to{clip-path:inset(0 0 0 0)}}
+@keyframes obInRun{0%{opacity:0; transform:translateX(0)} 20%{opacity:1} 80%{opacity:1} 100%{opacity:0; transform:translateX(100%)}}
+@keyframes obInLit{0%{border-color:var(--line); background:var(--surface); color:var(--muted)} 45%{border-color:var(--mint); background:var(--bg-success); color:var(--ob-mint-ic)}}
+@keyframes obInPop{from{opacity:0; transform:scale(.6)}}
