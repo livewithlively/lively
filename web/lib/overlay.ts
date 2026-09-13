@@ -112,11 +112,8 @@ function anchoredPopover(anchor: any, panel: any): () => void {
   };
   const onDoc = (e: any) => { if (!panel.contains(e.target) && !anchor.contains(e.target)) close(); };
   const onKey = (e: any) => { if (e.key === 'Escape') close(); };
-  // ⚠ **iframe 위에서 열린 팝오버**(세션 화면의 터미널·앱 프레임)는 위 mousedown 만으로는 안 닫힌다 — 프레임 안을 누르면
-  //  그 이벤트는 프레임 문서로 가고 이 문서엔 아예 오지 않는다(#1744 신고: "영역 밖을 눌러도 안 닫혀").
-  //  프레임이 포커스를 가져가면 window blur 가 뜨고 그때 activeElement 가 그 IFRAME 이 된다 — 그 경우에만 닫는다.
-  //  (앱 전환·탭 전환도 blur 를 내지만 그땐 activeElement 가 그대로라, 돌아왔을 때 메뉴가 사라져 있지 않다.)
-  const onBlur = () => { if (document.activeElement && document.activeElement.tagName === 'IFRAME') close(); };
+  // ⚠ **iframe 위에서 열린 팝오버**(세션 화면의 터미널·앱 프레임)는 위 mousedown 만으로는 안 닫힌다 — focusMovedIntoFrame 머리말.
+  const onBlur = () => { if (focusMovedIntoFrame()) close(); };
   setTimeout(() => {
     document.addEventListener('mousedown', onDoc, true);
     document.addEventListener('keydown', onKey, true);
@@ -125,8 +122,20 @@ function anchoredPopover(anchor: any, panel: any): () => void {
   return close;
 }
 
+// 떠 있는 레이어의 '바깥 클릭'에서 **프레임 안을 누른 것**을 알아보는 자리 — window blur 에서 부른다.
+//  프레임 안을 누르면 그 mousedown 은 프레임 문서로 가고 이 문서엔 아예 오지 않는다(#1744 신고: "영역 밖을 눌러도 안 닫혀").
+//  새 셸은 본문 대부분이 프레임(앱 액자·세션 터미널)이라, 이걸 안 보는 메뉴는 빈 사이드바를 찾아 눌러야만 닫힌다(#3870 워크스페이스 메뉴).
+//  프레임이 포커스를 가져가면 window blur 가 뜨고 그때 activeElement 가 그 프레임이 된다 — 그 경우에만 참이다.
+//  (앱 전환·탭 전환도 blur 를 내지만 그땐 activeElement 가 그대로라, 돌아왔을 때 메뉴가 사라져 있지 않다.)
+//  데스크톱 앱의 곁칸 웹은 iframe 이 아니라 <webview> 라(#1829) 함께 본다.
+function focusMovedIntoFrame(): boolean {
+  const tag = document.activeElement?.tagName;
+  return tag === 'IFRAME' || tag === 'WEBVIEW';
+}
+
 export {
   anchoredPopover,
+  focusMovedIntoFrame,
   infoPop,
   toast,
   withTip,

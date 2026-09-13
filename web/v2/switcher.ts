@@ -4,13 +4,14 @@
 //   · 매니지드면 [다른 워크스페이스 · 새로 만들기 →](허브) · 승인 대기 중인 승격 요청(있으면 배지+승인/거절).
 //  워크스페이스 1개 = 게이트웨이 1개라, '전환'은 그 게이트웨이 주소를 새 탭으로 여는 것이다(개인↔팀은 서로 다른 게이트웨이).
 //  메뉴는 body 에 떠서(fixed) 사이드바 20초 재렌더에 지워지지 않는다. 데이터(연결·승격)는 **열 때** 한 번만 당긴다.
-import { api, currentWorkspace, el, personFace, profileAvatar, setCurrentWorkspace, state, toast } from '../core.js';
+import { api, currentWorkspace, el, focusMovedIntoFrame, personFace, profileAvatar, setCurrentWorkspace, state, toast } from '../core.js';
 import { inboxSection, peopleSection, type InviteForMe } from './ws-people.js';   // #1875 구성원·초대
 
 let openPanel: HTMLElement | null = null;
-function closeMenu(): void { if (openPanel) { openPanel.remove(); openPanel = null; document.removeEventListener('mousedown', onDoc, true); document.removeEventListener('keydown', onKey, true); } }
+function closeMenu(): void { if (openPanel) { openPanel.remove(); openPanel = null; document.removeEventListener('mousedown', onDoc, true); document.removeEventListener('keydown', onKey, true); window.removeEventListener('blur', onBlur); } }
 function onDoc(e: MouseEvent): void { if (openPanel && !openPanel.contains(e.target as Node) && !(e.target as HTMLElement).closest('.v2-ws')) closeMenu(); }
 function onKey(e: KeyboardEvent): void { if (e.key === 'Escape') closeMenu(); }
+function onBlur(): void { if (focusMovedIntoFrame()) closeMenu(); }   // #3870 — 본문 액자를 누른 것은 onDoc 에 안 온다(overlay.focusMovedIntoFrame 머리말)
 
 // #1875 — 인원 수가 최근에 확인된 값. status 를 부를 때마다 갱신하고, 문패는 이 값으로 배지를 그린다.
 //  ⚠ 서버(kindEffective)와 **같은 식**이어야 한다 — 두 곳이 다르면 화면과 게이트가 다른 말을 한다.
@@ -168,7 +169,7 @@ async function openMenu(anchor: HTMLElement): Promise<void> {
   panel.style.minWidth = Math.max(240, r.width) + 'px';
   document.body.append(panel);
   openPanel = panel;
-  setTimeout(() => { document.addEventListener('mousedown', onDoc, true); document.addEventListener('keydown', onKey, true); }, 0);
+  setTimeout(() => { document.addEventListener('mousedown', onDoc, true); document.addEventListener('keydown', onKey, true); window.addEventListener('blur', onBlur); }, 0);
 
   void refreshTeam(teamWrap).then((n) => { if (openPanel === panel && (w.kind === 'personal' || n > 0)) teamSection.hidden = false; });
   void refreshPromos(promoWrap);
