@@ -184,6 +184,18 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    *  ⚠ 상한(UP_KEEP)을 둔다 — 폴더째 수천 장을 올리면 진행 저장(welcome_progress)이 그만큼 커진다. 넘친 만큼은 숫자로만. */
   const THUMB = new Map();
   const UP_KEEP = 200;
+  /* #1968 올리는 동안의 진행률 — **바이트 기준** 백분율(파일 수로 세면 큰 파일 하나에서 «7개 중 3개» 에 한참 멈춘 듯 보인다).
+   *  진행 저장(welcome_progress)에는 싣지 않는다 — 새로고침하면 XHR 도 함께 죽으니 남길 값이 없다(그때 남는 건 upN·upBusy 뿐).
+   *  겹쳐 떨어뜨린 묶음(끌어다 놓기 두 번)은 한 분모로 합산하고, 올리는 중인 것이 0 이 되면 비운다.
+   *  cur: 진행 중 파일별 «지금까지 올라간 바이트» — 키는 {rel,size} 표식 객체(낱개 줄의 숫자를 제자리에서 바꾸는 데 rel 을 쓴다). */
+  const UPP = { total: 0, done: 0, cur: new Map() };
+  const upPct = () => {
+    if (!UPP.total) return null;
+    let inflight = 0; for (const v of UPP.cur.values()) inflight += v;
+    return Math.max(0, Math.min(100, Math.round(((UPP.done + inflight) / UPP.total) * 100)));
+  };
+  const upBusyText = () => { const p = upPct(); return `올리는 중 ${S.upBusy}개` + (p == null ? '' : ` · ${p}%`); };
+  const cssq = (s) => (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(String(s)) : String(s).replace(/["\\]/g, '\\$&');
   const noteFile = (it) => {
     if (!Array.isArray(S.upFiles)) S.upFiles = [];
     const f = it.file, rel = String(it.rel || f.name).replace(/^\/+/, '');
@@ -226,13 +238,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     const sum = `<div class="ob-files-sum"><span class="ob-files-n">${(S.upN || 0) + busy}개</span>${chips}</div>`;
     const line = [];
     for (const d of [...dirs.values()].reverse()) {
-      line.push(`<div class="ob-file${d.up ? ' ob-up' : ''}"><span class="ob-fi ob-fi-dir">${GLYPH.folder}</span><span class="ob-file-n" title="${esc(d.n)}">${esc(d.n)}</span><span class="ob-file-m">${d.up ? '올리는 중' : `${d.c}개 · ${fmtSize(d.s)}`}</span></div>`);
+      line.push(`<div class="ob-file${d.up ? ' ob-up' : ''}"><span class="ob-fi ob-fi-dir">${GLYPH.folder}</span><span class="ob-file-n" title="${esc(d.n)}">${esc(d.n)}</span><span class="ob-file-m">${d.up ? `올리는 중 ${d.c - d.up}/${d.c}` : `${d.c}개 · ${fmtSize(d.s)}`}</span></div>`);
     }
     for (const r of loose.slice().reverse()) {
       const k = kindOf(r.n), th = THUMB.get(r.r);
       const ic = th ? `<span class="ob-fi ob-fi-img"><img src="${esc(th)}" alt=""></span>` : `<span class="ob-fi ob-fi-${k}"><i>${esc(extOf(r.n))}</i></span>`;
       const m = r.st === 'up' ? '올리는 중…' : r.st === 'err' ? '올리지 못했어요' : fmtSize(r.s);
-      line.push(`<div class="ob-file${r.st === 'up' ? ' ob-up' : ''}${r.st === 'err' ? ' ob-err' : ''}">${ic}<span class="ob-file-n" title="${esc(r.n)}">${esc(r.n)}</span><span class="ob-file-m">${m}</span></div>`);
+      line.push(`<div class="ob-file${r.st === 'up' ? ' ob-up' : ''}${r.st === 'err' ? ' ob-err' : ''}" data-rel="${esc(r.r)}">${ic}<span class="ob-file-n" title="${esc(r.n)}">${esc(r.n)}</span><span class="ob-file-m">${m}</span></div>`);
     }
     const more = line.length > 6 ? `<div class="ob-files-more">전체 ${line.length}줄 — 목록 안에서 스크롤하세요</div>` : '';
     return sum + `<div class="ob-files-list">${line.join('')}</div>` + more;
@@ -1678,7 +1690,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //  #1813 f27094f2 — 고르기는 **한 번에 끝난다**(모달·팝오버·버튼 둘 전부 폐기, 원준님 2026-08-27). 폴더째는 끌어다 놓기가 받는다.
         + `<div class="ob-drop ${S.upN ? 'ob-has' : ''}" id="upZone">
             <span class="ob-drop-t" id="upZoneT">${S.upN ? `${S.upN}개를 받았어요` : '여기에 끌어다 놓으세요'}</span>
-            <span class="ob-drop-d" id="upZoneD">${S.upBusy ? `올리는 중 ${S.upBusy}개` : (S.upN ? '더 올리셔도 됩니다. 폴더째는 끌어다 놓으세요.' : '폴더째는 여기에 끌어다 놓으세요(고르기 창은 파일만 골라요). 정리도, 이름 짓기도 필요 없습니다.')}</span>
+            <span class="ob-drop-d" id="upZoneD">${S.upBusy ? upBusyText() : (S.upN ? '더 올리셔도 됩니다. 폴더째는 끌어다 놓으세요.' : '폴더째는 여기에 끌어다 놓으세요(고르기 창은 파일만 골라요). 정리도, 이름 짓기도 필요 없습니다.')}</span>
+            <span class="ob-drop-bar" id="upBar" ${S.upBusy && upPct() != null ? '' : 'hidden'}><i style="width:${upPct() || 0}%"></i></span>
             <span class="ob-drop-pick" id="upPick"></span>
           </div>
           <div class="ob-files" id="upList" hidden></div>
@@ -1688,12 +1701,25 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const zone = $('#upZone', el), list = $('#upList', el);
         let pickBtn = null;
         const paintList = () => { if (!list) return; const h = fileListHtml(); list.hidden = !h; list.innerHTML = h; };
+        /* #1968 올리는 동안의 진행 — 막대·백분율·낱개 줄의 숫자만 **제자리에서** 바꾼다(목록을 다시 그리지 않는다:
+         *  진행 이벤트는 초당 여러 번 오고, 목록은 파일 하나가 끝날 때 paintZone→paintList 가 새로 그린다). */
+        const paintProg = () => {
+          const d = $('#upZoneD', el), bar = $('#upBar', el), p = upPct();
+          if (d && S.upBusy) d.textContent = upBusyText();
+          if (bar) { bar.hidden = !S.upBusy || p == null; const i = bar.firstElementChild; if (i) i.style.width = `${p || 0}%`; }
+          if (list) for (const [k, v] of UPP.cur) {
+            if (!k.size || k.rel.includes('/')) continue;      // 폴더 안 파일은 폴더 줄이 «n/m» 으로 센다
+            const m = list.querySelector(`.ob-file[data-rel="${cssq(k.rel)}"] .ob-file-m`);
+            if (m) m.textContent = `올리는 중 ${Math.min(99, Math.round((v / k.size) * 100))}%`;   // 응답 대기 중엔 100 을 안 찍는다
+          }
+        };
         const paintZone = () => {
           const t = $('#upZoneT', el), d = $('#upZoneD', el), go = $('#fGo', el);
           if (!t || !d) return;
           t.textContent = S.upN ? `${S.upN}개를 받았어요` : '여기에 끌어다 놓으세요';
-          d.textContent = S.upBusy ? `올리는 중 ${S.upBusy}개` : (S.upN ? '더 올리셔도 됩니다. 폴더째는 끌어다 놓으세요.' : '폴더째는 여기에 끌어다 놓으세요(고르기 창은 파일만 골라요). 정리도, 이름 짓기도 필요 없습니다.');
+          d.textContent = S.upBusy ? upBusyText() : (S.upN ? '더 올리셔도 됩니다. 폴더째는 끌어다 놓으세요.' : '폴더째는 여기에 끌어다 놓으세요(고르기 창은 파일만 골라요). 정리도, 이름 짓기도 필요 없습니다.');
           zone.classList.toggle('ob-has', !!S.upN);
+          paintProg();
           if (go) { go.disabled = !S.upN; go.textContent = S.upN ? `${S.upN}개 올리고 계속` : '계속'; }
           if (pickBtn) pickBtn.textContent = (S.upN || S.upBusy) ? '파일 추가' : '파일 고르기';
           paintList();
@@ -1701,13 +1727,18 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const sendAll = async (items) => {
           if (!items.length) return;
           S.upBusy += items.length;
+          for (const it of items) UPP.total += (it.file && it.file.size) || 0;   // #1968 분모 — 겹쳐 떨어뜨린 묶음도 합산
           const rows = items.map((it) => noteFile(it));
           paintZone();
           for (let i = 0; i < items.length; i++) {
             const it = items[i], row = rows[i];
-            const rel = 'uploads/' + String(it.rel || it.file.name).replace(/^\/+/, '');
+            const bare = String(it.rel || it.file.name).replace(/^\/+/, '');
+            const rel = 'uploads/' + bare;
+            const cur = { rel: bare, size: (it.file && it.file.size) || 0 };   // #1968 진행 중 표식(UPP.cur 의 키)
+            UPP.cur.set(cur, 0);
             try {
-              const up = await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel)), it.file, () => {}, undefined);
+              const up = await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel)), it.file,
+                (pct) => { UPP.cur.set(cur, Math.round((cur.size * pct) / 100)); paintProg(); }, undefined);
               //  응답에 source_id 가 있으면 **자료로 등록까지** 된 것이다. 없으면 파일만 올라갔다 —
               //   그 차이를 여기서 안 세면 뒤(읽기 진행률)에서 «오지 않는 것» 을 기다리게 된다.
               //  등록이 안 됐으면 **사유까지** 받아 둔다(서버가 skipped 로 준다) — 사람에게 «왜 안 들어갔는지» 를
@@ -1721,7 +1752,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             } catch (e) { if (row) row.st = 'err'; toast(`${it.file.name} 을 올리지 못했어요 — ${e && e.message ? e.message : e}`); }
             //  ⚠ 읽기 진행률의 목표는 **등록된 수**다(올라간 수가 아니다). 종전엔 여기서 S.upN 을 박아
             //   뒤(startReading)에서 오지 않는 것을 기다렸다 — 실측 5/8·11/13 에서 60초를 세워 뒀다.
+            UPP.cur.delete(cur); UPP.done += cur.size;   // 실패한 파일도 «지나간 몫» 이다 — 막대가 뒤로 가지 않는다
             S.upBusy--; S.read.total = ingestedN(); save(); paintZone();
+            if (!S.upBusy) { UPP.total = 0; UPP.done = 0; UPP.cur.clear(); }   // 다 올랐다 — 다음 묶음은 0 에서
           }
           renderSB();
         };
@@ -3168,6 +3201,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     if (key !== 'local') { clearInterval(localTimer); localTimer = null; localBase = null; }
     //  인사(intro)도 이름처럼 민낯이다 — 셸이 뒤에 비치면 «설정을 시작하기 전» 이라는 장면이 흐려진다(#1631).
     setStage(key === 'intro' || key === 'name' ? 'stage-name' : 'stage-q');
+    host.dataset.scene = key;   // 장면 이름표 — 장면별 CSS(41-onboarding.css `.ob-root[data-scene=…]`)의 축
     const col = $('#qcol');
     col.style.animation = 'none';
     if (animate !== false) { void col.offsetWidth; col.style.animation = ''; }
