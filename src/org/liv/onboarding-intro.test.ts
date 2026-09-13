@@ -135,6 +135,20 @@ test("E8 탭 저장본이 인사·팀 소개·빈 이름뿐이면 «이 탭에 �
   assert.equal(hadLocal({ scene: "role" }), true, "이름 다음까지 온 탭의 진행을 무시한다");
 });
 
+test("E8′ 아무것도 답하지 않은 탭이 「이름」·「팀 소개」에 멈춰 있어도 서버에 진행이 없으면 인사부터 연다", () => {
+  //  배포 직후 가장 흔한 길 — 옛 처음 설정(이름부터)을 한 번 본 탭은 저장본이 {scene:'name'} 이다. 그 탭에서 다시 열면
+  //   hadLocal=false 라 서버에 묻고, 진행이 없으면 «처음부터» 로 가는데 그때 S.scene 을 그대로 쓰면 인사를 건너뛴다.
+  const tail = grab(/toast\('지난번에 하시던 자리에서 이어 갑니다\.'\);\s*return;\s*\}\s*([\s\S]*?)\n  \}\n/, "이어 열기의 «처음부터» 갈래");
+  const BEFORE = list("BEFORE_ANSWER");
+  for (const [flowName, start] of [["ORDER", "name"], ["ORDER", "intro"], ["ORDER_JOIN", "team"], ["ORDER_JOIN", "name"]]) {
+    const S: { scene: string; nameSet: boolean; trail: string[] } = { scene: start, nameSet: false, trail: start === "intro" ? [] : ["intro"] };
+    const hit = { to: "" };
+    compile(["S", "FLOW", "BEFORE_ANSWER", "renderSB", "goScene"], tail)(S, () => list(flowName), BEFORE, () => {}, (k: string) => { hit.to = k; });
+    assert.equal(hit.to, "intro", `${flowName} · 저장본 ${start} 에서 인사를 건너뛰고 ${hit.to} 부터 연다`);
+    assert.deepEqual(S.trail, [], `${flowName} · 저장본 ${start} 의 옛 자취가 남아 첫 장면의 «뒤로» 가 옛 자리로 간다`);
+  }
+});
+
 test("E9 새로 만든 목록은 마운트 중에 읽힌다 — 모든 쓰임보다 먼저 선언돼 있다(TDZ)", () => {
   const decl = code.indexOf("const BEFORE_ANSWER");
   assert.ok(decl >= 0, "BEFORE_ANSWER 선언이 없다");
