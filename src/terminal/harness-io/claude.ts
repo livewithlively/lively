@@ -9,7 +9,7 @@
 import path from "node:path";
 import type { HarnessSessionAdapter } from "./adapter.js";
 import { parseJsonLines, type ChatLine } from "./chat-line.js";
-import { claudeTranscriptRoots, claudeProjectsDirName } from "../terminal-transcript.js";
+import { claudeTranscriptRoots, claudeProjectsDirName, claudeProjectsDirExact } from "../terminal-transcript.js";
 
 const CONV_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
@@ -17,7 +17,9 @@ export const claudeIo: HarnessSessionAdapter = {
   key: "claude", label: "Claude Code",
   roots: (homes, owner) => claudeTranscriptRoots(homes, owner),
   filePattern: /^[A-Za-z0-9][A-Za-z0-9._-]*\.jsonl$/,
-  pathFor: (root, { cwd, convId }) => (cwd && CONV_ID_RE.test(convId) ? path.join(root, claudeProjectsDirName(cwd), `${convId}.jsonl`) : null),
+  //  #3870 — 규약으로 정확히 못 짚는 폴더(200자 초과 · Claude Code 가 해시 꼬리를 붙인다)엔 **틀린 경로 대신 null**.
+  //   틀린 경로를 내면 stat 이 빈손이라 «대화가 없다» 로 읽히고, 복원이 멀쩡한 대화를 버린다.
+  pathFor: (root, { cwd, convId }) => (cwd && claudeProjectsDirExact(cwd) && CONV_ID_RE.test(convId) ? path.join(root, claudeProjectsDirName(cwd), `${convId}.jsonl`) : null),
   // claude 의 대화 id 는 항상 UUID 다(대화 파일이 `<uuid>.jsonl`). 보고를 받을 때만 이 좁은 자를 댄다.
   convIdOk: (id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id),
   parse: (text, state) => ({ lines: parseJsonLines(text).filter((o) => !!o && typeof o === "object") as ChatLine[], state }),
