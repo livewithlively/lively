@@ -161,7 +161,8 @@ test("★★ E12 매니지드에서도 ✕ 가 돈다 — 삭제·나가기가 C
     "★ cpWsView 가 owner_count 를 안 싣는다 — 매니지드에서 공동 어드민도 이양을 강요당한다");
   //  ★ «나» 를 가리키는 키가 배포마다 다르다(코어 member_id vs CP 이메일) — is_me 를 흘려야
   //   «넘길 사람» 후보에서 내가 빠진다.
-  assert.match(REG, /is_creator: m\.role === "owner", is_me: m\.is_me/,
+  //  #1631 결정 7 — «만든 사람» 판정은 계정 서버의 is_creator 로 바뀌었다(옛 계정 서버는 role 로 접는다). is_me 흘리기는 그대로 지킨다.
+  assert.match(REG, /is_creator: m\.is_creator \?\? m\.role === "owner", is_me: m\.is_me/,
     "★ 매니지드 명부가 is_me 를 안 흘린다 — 넘길 후보에 내가 남는다(고르면 400)");
 });
 
@@ -199,4 +200,51 @@ test("E11 초대는 **메일이 실제로 나갔을 때만** '보냈어요' — 
   const m = body.indexOf("managedMode()"), r = body.indexOf("requireRegistry()");
   assert.ok(m > 0 && m < r, "workspace_invite_resolve 의 매니지드 분기가 requireRegistry 보다 뒤다 — 구성원 창의 [취소] 가 400 이다");
   assert.match(body, /workspace-invite-revoke/, "매니지드 취소가 CP 창구를 부르지 않는다");
+});
+
+// ── #1631 결정 7(원준 2026-09-13: «초대할 때 공동 관리자로 불러도 반영이 안된다고? 되게해야지») ──────────
+//  매니지드 명부의 권위는 계정 서버(CP)다. 코어가 역할을 흘리거나 지어내면 화면의 선택이 거짓말이 된다.
+
+test("★★ E14 매니지드에서 구성원 올리기·내리기·내보내기가 CP 로 간다 (#1631 결정 7)", () => {
+  //  종전엔 두 op 에 매니지드 분기가 없어 requireRegistry 400(«다중 워크스페이스가 아직 활성화되지 않았습니다…»)이
+  //   토스트로 그대로 떴다 — 매니지드 주인은 앱 안에서 사람을 내보낼 수도, 권한을 바꿀 수도 없었다.
+  const cases: Array<[string, string]> = [
+    ["workspace_member_add", "/api/tenant/workspace-member-role"],
+    ["workspace_member_remove", "/api/tenant/workspace-member-remove"],
+  ];
+  for (const [cap, route] of cases) {
+    const body = capBody(cap);
+    assert.match(body, /managedMode\(\)/, `${cap} 에 매니지드 분기가 없다`);
+    assert.ok(body.includes(route), `${cap} 이 CP 창구(${route})를 부르지 않는다`);
+    const m = body.indexOf("managedMode()"), r = body.indexOf("requireRegistry()");
+    assert.ok(m >= 0 && r > m, `${cap} 의 매니지드 분기가 requireRegistry 보다 뒤다 — 매니지드에서 그냥 거절된다`);
+  }
+});
+
+test("★★ E15 초대 창의 «공동 관리자로» 가 계정 서버까지 간다 (#1631 결정 7)", () => {
+  const body = capBody("workspace_invite");
+  assert.match(body, /"\/api\/tenant\/workspace-invite",\s*\{[^}]*role:/,
+    "★ 매니지드 초대가 역할을 싣지 않는다 — «공동 관리자로» 를 골라도 모두 구성원으로 들어온다");
+});
+
+test("★ E16 매니지드 명부의 «만든 사람»·수락 대기 역할은 CP 값이다 — 코어가 지어내지 않는다 (#1631 결정 7)", () => {
+  const body = capBody("workspace_people");
+  assert.doesNotMatch(body, /role: "member",\s*invited_by/,
+    "수락 대기 역할을 «member» 로 박아 둔다 — 공동 관리자로 보낸 초대가 «구성원으로» 로 보인다");
+  assert.match(body, /is_creator: m\.is_creator/,
+    "만든 사람을 CP 의 is_creator 로 가르지 않는다 — 공동 관리자까지 «만든 사람» 으로 접혀 권한 메뉴가 사라진다");
+});
+
+test("E17 «사람을 부르는 건 만든 사람이 합니다» 라고 말하지 않는다 — 공동 관리자도 한다 (#1631 결정 7)", () => {
+  const PEOPLE = read("web/v2/ws-people.ts");
+  assert.doesNotMatch(PEOPLE, /이 워크스페이스를 만든 사람이 합니다/,
+    "공동 관리자도 초대·권한 변경을 하는데 화면이 «만든 사람이 합니다» 라고 말한다");
+});
+
+test("E18 매니지드 구성원 줄(peopleSection)도 공동 관리자를 «공동 관리자» 라고 부른다 — «공동 owner» 섞인 말 금지 (#1631 격리 리뷰 후속)", () => {
+  const PEOPLE = read("web/v2/ws-people.ts");
+  assert.doesNotMatch(PEOPLE, /'공동 owner'/, "화면에 «공동 owner» 가 보인다 — 구성원 창(ROLE_LABEL)은 «공동 관리자» 다");
+  assert.match(PEOPLE, /m\.is_creator \? '만든 사람' : m\.role === 'owner' \? '공동 관리자' : m\.email \|\| '구성원'/);
+  //  AI 가 읽는 도구 설명·입력 설명도 같은 말 — 리브가 사람에게 «공동 owner» 라고 되풀이하지 않게(격리 리뷰 후속).
+  assert.doesNotMatch(read("src/capabilities/delivery/workspace-registry.ts"), /공동 owner/, "도구 설명·입력 설명에 «공동 owner» 가 남았다");
 });

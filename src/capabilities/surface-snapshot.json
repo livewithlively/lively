@@ -2086,7 +2086,7 @@
   "rest": [
    "POST /api/ui/me/workspaces/invite"
   ],
-  "input_hash": "e29202b6f5da6c16"
+  "input_hash": "8f9b8195bf127cfc"
  },
  {
   "name": "workspace_invite_resend",

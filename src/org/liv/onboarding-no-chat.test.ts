@@ -32,8 +32,15 @@ test("① 챗 문답 단계가 사라졌다", () => {
 
 test("② 그런데 끝까지 갈 수 있다 — [앱]이 마무리로 잇는다", () => {
   assert.match(code, /async function finishOnboarding\(\)/, "마무리 함수가 없다");
-  const calls = (code.match(/void finishOnboarding\(\)/g) || []).length;
+  //  [내 컴퓨터]·[앱] 두 장면의 출구 셋(받기 뒤 [계속] 둘 · [지금은 웹으로]) — 종전엔 파일 전체에서 세어 «정확히 3» 이었다.
+  //  (#1631, 원준 결정 2026-09-13) 초대로 들어온 사람의 차례표는 [앱] 으로 끝나지 않을 수 있다(설치 장면은 초대 전부터 계정이
+  //   있던 사람에게만) — 그래서 «차례표의 끝이면 마무리» 라는 출구가 하나 더 생겼다(goNext). 두 자리를 따로 센다.
+  const tail = code.slice(code.indexOf("    local: {"), code.indexOf("  /* ══════════════ 막3"));
+  assert.ok(tail.length > 0, "[내 컴퓨터]·[앱] 장면을 못 찾았다 — 검사가 헛돈다");
+  const calls = (tail.match(/void finishOnboarding\(\)/g) || []).length;
   assert.equal(calls, 3, `[앱] 장면의 출구 3개가 마무리로 안 간다(${calls}개)`);
+  const goNext = code.slice(code.indexOf("function goNext(cur, opts) {"), code.indexOf("function fitScene("));
+  assert.match(goNext, /else void finishOnboarding\(\);/, "[앱] 으로 끝나지 않는 차례표(합류자)가 마무리로 못 간다");
   assert.doesNotMatch(code, /goScene\('read'\)/, "아직 없어진 장면으로 보낸다");
   //  마무리가 실제로 워크스페이스를 바꾸는 그 호출을 유지한다(무회귀).
   assert.match(code, /api\('\/api\/ui\/me\/welcome', \{ method: 'POST'/, "반영 호출이 사라졌다");
