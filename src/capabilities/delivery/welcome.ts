@@ -22,6 +22,7 @@ import type { Capability } from "../types.js";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import { restRead } from "./shared.js";
+import type { LivJoin } from "../../org/store/members.js";
 
 /** 갈래 후보 상한 — 서랍이 열 개를 넘으면 고르는 일이 일이 된다. */
 const MAX_DRAWERS = 10;
@@ -430,6 +431,10 @@ export const welcomeCapabilities: Capability[] = [
         return t;
       };
 
+      //  (#1631) **합류자인가 — 서버가 스스로** 정한다(처음 설정 현황과 같은 판정). 화면이 보낸 값은 받지 않는다 —
+      //   받으면 초대로 들어온 사람이 요청 한 줄로 팀 구조를 바꾸고 리브를 띄울 수 있다.
+      const joining = await currentJoinFact(userId);
+
       // ── 부를 이름 ──
       const nickname = s(input.name, 80);
       const member = await getMember(userId);
@@ -454,62 +459,67 @@ export const welcomeCapabilities: Capability[] = [
           "/api/tenant/account-name", { name: nickname });
       }
 
-      // ── 자료함 갈래 ── 사람이 승인한 것만 만든다. 이미 있으면 건너뛴다(다시 눌러도 안전).
-      const wanted = Array.isArray(input.drawers) ? input.drawers.slice(0, MAX_DRAWERS) : [];
-      const existing = new Set((await listCategories(null).catch(() => [] as Array<{ key?: string }>)).map((c) => String(c.key ?? "")));
+      // ── 팀의 구조(갈래·증류기·레인·묶음) — 워크스페이스를 연 사람만 만든다(#1631, 원준 결정 2026-09-13) ──
+      //  초대로 들어온 사람은 팀이 이미 만들어 둔 것을 쓴다. 그 사람의 답(직무·용도)으로 팀 묶음을 심거나 레인을 세우면
+      //   신입의 처음 설정이 팀 설정을 바꾼다(리뷰 §3-2 ②). 이름·하는 일·완료 표식·진행 지우기는 아래에서 그대로 한다.
       const created: string[] = [];
       const skipped: string[] = [];
-      for (const d of wanted) {
-        const name = s(typeof d === "string" ? d : (d as Record<string, unknown>)?.name, 60);
-        if (!name) continue;
-        const key = drawerKey(name);
-        if (existing.has(key)) { skipped.push(name); continue; }
-        try {
-          await createCategory({
-            key, name,
-            //  정의는 필수다(category_create 가 40자 하한으로 막는다). 사람이 «왜 이 갈래인지»를 적었으면
-            //   그것을 쓰고, 안 적었으면 최소한 «무엇이 들어오는 자리인지» 를 문장으로 남긴다 — 빈 정의로 만들면
-            //   나중에 분류가 이름의 어감으로만 판정한다(#1631 실측: 정의 0자 워크스페이스가 실제로 나왔다).
-            should: s((d as Record<string, unknown>)?.why, 400)
-              ?? `처음 설정에서 만든 갈래입니다. ${name}에 해당하는 자료가 여기로 모이고, 다른 갈래에 더 맞는 자료는 그쪽으로 보냅니다. 쓰면서 범위가 또렷해지면 이 정의를 고쳐 주세요.`,
-          } as never, { actor: userId, source: "welcome" } as never);
-          created.push(name); existing.add(key);
-        } catch { skipped.push(name); }   // 권한이 없거나 경합 — 온보딩을 멈추지 않는다
-      }
+      if (!joining.is_join) {
+        // ── 자료함 갈래 ── 사람이 승인한 것만 만든다. 이미 있으면 건너뛴다(다시 눌러도 안전).
+        const wanted = Array.isArray(input.drawers) ? input.drawers.slice(0, MAX_DRAWERS) : [];
+        const existing = new Set((await listCategories(null).catch(() => [] as Array<{ key?: string }>)).map((c) => String(c.key ?? "")));
+        for (const d of wanted) {
+          const name = s(typeof d === "string" ? d : (d as Record<string, unknown>)?.name, 60);
+          if (!name) continue;
+          const key = drawerKey(name);
+          if (existing.has(key)) { skipped.push(name); continue; }
+          try {
+            await createCategory({
+              key, name,
+              //  정의는 필수다(category_create 가 40자 하한으로 막는다). 사람이 «왜 이 갈래인지»를 적었으면
+              //   그것을 쓰고, 안 적었으면 최소한 «무엇이 들어오는 자리인지» 를 문장으로 남긴다 — 빈 정의로 만들면
+              //   나중에 분류가 이름의 어감으로만 판정한다(#1631 실측: 정의 0자 워크스페이스가 실제로 나왔다).
+              should: s((d as Record<string, unknown>)?.why, 400)
+                ?? `처음 설정에서 만든 갈래입니다. ${name}에 해당하는 자료가 여기로 모이고, 다른 갈래에 더 맞는 자료는 그쪽으로 보냅니다. 쓰면서 범위가 또렷해지면 이 정의를 고쳐 주세요.`,
+            } as never, { actor: userId, source: "welcome" } as never);
+            created.push(name); existing.add(key);
+          } catch { skipped.push(name); }   // 권한이 없거나 경합 — 온보딩을 멈추지 않는다
+        }
 
-      // ── 올린 자료가 **지식이 되게** 켠다 ── 갈래(=위키 분류)만 만들면 빈 서랍이다.
-      //  로컬 자료 증류기는 첫 업로드 때 **꺼진 채로** 만들어져 있다(#1881 L3 local-preset 머리말):
-      //   셀프서브 사용자는 '증류기' 를 모르니 여기 «이렇게 나눴는데 맞나요» 승인이 그 스위치라고 설계돼 있었는데,
-      //   정작 그 자리에서 켜는 코드가 없었다(실측 2026-08-27) — 그래서 승인해도 자료가 자료로만 남았다.
-      //  ⚠ 갈래를 하나도 안 만든 사람(전부 건너뛴 경우)에게는 켜지 않는다 — 승인한 적이 없기 때문이다.
-      //  ⚠ 실패해도 온보딩은 끝난다(비치명) — 증류는 나중에 관리 화면에서도 켤 수 있다.
-      if (created.length) {
+        // ── 올린 자료가 **지식이 되게** 켠다 ── 갈래(=위키 분류)만 만들면 빈 서랍이다.
+        //  로컬 자료 증류기는 첫 업로드 때 **꺼진 채로** 만들어져 있다(#1881 L3 local-preset 머리말):
+        //   셀프서브 사용자는 '증류기' 를 모르니 여기 «이렇게 나눴는데 맞나요» 승인이 그 스위치라고 설계돼 있었는데,
+        //   정작 그 자리에서 켜는 코드가 없었다(실측 2026-08-27) — 그래서 승인해도 자료가 자료로만 남았다.
+        //  ⚠ 갈래를 하나도 안 만든 사람(전부 건너뛴 경우)에게는 켜지 않는다 — 승인한 적이 없기 때문이다.
+        //  ⚠ 실패해도 온보딩은 끝난다(비치명) — 증류는 나중에 관리 화면에서도 켤 수 있다.
+        if (created.length) {
+          try {
+            const { ensureLocalFilesDistiller } = await import("../../org/distill/local-preset.js");
+            await ensureLocalFilesDistiller({ enable: true, actor: userId, requester: userId, source: "welcome" });
+          } catch (e) { console.warn(`[welcome] 로컬 증류기를 켜지 못했습니다: ${(e as Error)?.message ?? e}`); }
+        }
+        // ── 레인 뼈대(#1631) ── 서랍(만든 것 + 이미 있던 것)마다 꺼진 증류기 초안 + catch-all. 리브(2턴)가 표본을 읽고
+        //  이 초안을 채운다 — 서버는 답만으로 정해지는 뼈대를 즉시 만들어 AI 없이도 "정리 자리"가 보이게 한다. 멱등·비치명.
+        const skeletonDrawers = wanted
+          .map((d) => s(typeof d === "string" ? d : (d as Record<string, unknown>)?.name, 60))
+          .filter((n): n is string => !!n)
+          .map((n) => ({ key: drawerKey(n), name: n }));
+        if (skeletonDrawers.length) {
+          try {
+            const { applyLaneSkeleton } = await import("../../org/liv/lane-skeleton.js");
+            await applyLaneSkeleton({ drawers: skeletonDrawers, cadence: s(input.cadence, 20), actor: userId });
+          } catch (e) { console.warn(`[welcome] 레인 뼈대를 만들지 못했습니다: ${(e as Error)?.message ?? e}`); }
+        }
+        // ── 묶음 시드(#1631) ── 갈래(카테고리)는 금세 열 개를 넘는다. 그때 화면이 한 줄로 늘어서면 «내 일» 이 안 보인다.
+        //  그래서 그 사람의 무대·직무에서 나온 3~5개 묶음을 미리 넣어 둔다(v6/category-groups.ts — 다섯 원칙의 분할이라
+        //  「기타」가 없다). 묶음은 **화면에서만 보이는 층**이라 분류·증류·소환은 한 칸도 안 바뀐다.
+        //  ⚠ 멱등: 이미 묶음이 있으면 아무것도 안 한다(사람이 고친 이름·순서를 덮지 않는다).
+        //  ⚠ 비치명: 못 만들어도 처음 설정은 끝난 것이다 — 묶음은 나중에 화면·리브가 언제든 만들 수 있다.
         try {
-          const { ensureLocalFilesDistiller } = await import("../../org/distill/local-preset.js");
-          await ensureLocalFilesDistiller({ enable: true, actor: userId, requester: userId, source: "welcome" });
-        } catch (e) { console.warn(`[welcome] 로컬 증류기를 켜지 못했습니다: ${(e as Error)?.message ?? e}`); }
+          const { seedCategoryGroups } = await import("../../v6/category-group-store.js");
+          await seedCategoryGroups({ stage: s(input.stage, 40), job: s(input.job, 200), actor: userId });
+        } catch (e) { console.warn(`[welcome] 카테고리 묶음을 시드하지 못했습니다: ${(e as Error)?.message ?? e}`); }
       }
-      // ── 레인 뼈대(#1631) ── 서랍(만든 것 + 이미 있던 것)마다 꺼진 증류기 초안 + catch-all. 리브(2턴)가 표본을 읽고
-      //  이 초안을 채운다 — 서버는 답만으로 정해지는 뼈대를 즉시 만들어 AI 없이도 "정리 자리"가 보이게 한다. 멱등·비치명.
-      const skeletonDrawers = wanted
-        .map((d) => s(typeof d === "string" ? d : (d as Record<string, unknown>)?.name, 60))
-        .filter((n): n is string => !!n)
-        .map((n) => ({ key: drawerKey(n), name: n }));
-      if (skeletonDrawers.length) {
-        try {
-          const { applyLaneSkeleton } = await import("../../org/liv/lane-skeleton.js");
-          await applyLaneSkeleton({ drawers: skeletonDrawers, cadence: s(input.cadence, 20), actor: userId });
-        } catch (e) { console.warn(`[welcome] 레인 뼈대를 만들지 못했습니다: ${(e as Error)?.message ?? e}`); }
-      }
-      // ── 묶음 시드(#1631) ── 갈래(카테고리)는 금세 열 개를 넘는다. 그때 화면이 한 줄로 늘어서면 «내 일» 이 안 보인다.
-      //  그래서 그 사람의 무대·직무에서 나온 3~5개 묶음을 미리 넣어 둔다(v6/category-groups.ts — 다섯 원칙의 분할이라
-      //  「기타」가 없다). 묶음은 **화면에서만 보이는 층**이라 분류·증류·소환은 한 칸도 안 바뀐다.
-      //  ⚠ 멱등: 이미 묶음이 있으면 아무것도 안 한다(사람이 고친 이름·순서를 덮지 않는다).
-      //  ⚠ 비치명: 못 만들어도 처음 설정은 끝난 것이다 — 묶음은 나중에 화면·리브가 언제든 만들 수 있다.
-      try {
-        const { seedCategoryGroups } = await import("../../v6/category-group-store.js");
-        await seedCategoryGroups({ stage: s(input.stage, 40), job: s(input.job, 200), actor: userId });
-      } catch (e) { console.warn(`[welcome] 카테고리 묶음을 시드하지 못했습니다: ${(e as Error)?.message ?? e}`); }
 
       // ── 업무 방식과 결정 ── 리브의 기억이 사는 자리에 남긴다(다음 세션의 리브가 이걸 읽는다).
       const job = s(input.job, 200);
@@ -552,10 +562,15 @@ export const welcomeCapabilities: Capability[] = [
       // ── 리브 킥오프(#1631) ── 처음 설정이 끝났으니 리브 세션을 열고 1턴(현황 보고)을 넣는다. 화면은 응답의 liv.href 로 간다.
       //  ⚠ 비치명: 리브가 못 떠도(AI 미로그인·세션 한도 등) 처음 설정은 끝난 것이다 — 사람이 답한 것은 이미 반영됐다.
       //   사유는 liv.error 로 싣는다(감추지 않는다). 다시 눌러도 세션을 또 열지 않는다(priorSession 재사용).
-      const liv = await kickoffLivAfterWelcome(user, { priorSession, drawers: created, firstOrder, decisions, work: profile.work ?? null,
-        purpose: stage ? STAGE_PURPOSE[stage] ?? stage : null });
+      //  (#1631, 원준 결정 2026-09-13) 초대로 들어온 사람에게는 리브를 띄우지 않는다 — 세션도 1턴도 2턴도 없다
+      //   (2턴 스윕은 welcome.session_id 가 있는 사람만 본다). 건너뛴 이유는 liv.reason 으로 싣고, 화면이 마무리 문구를
+      //   가를 판정(joining)도 함께 돌려준다.
+      const liv = joining.is_join
+        ? { session_id: null, href: null, reason: "join" }
+        : await kickoffLivAfterWelcome(user, { priorSession, drawers: created, firstOrder, decisions, work: profile.work ?? null,
+          purpose: stage ? STAGE_PURPOSE[stage] ?? stage : null });
       const welcome = profile.welcome ? { ...profile.welcome, session_id: liv.session_id ?? profile.welcome.session_id ?? null } : null;
-      return { ok: true, created, skipped, welcome, liv };
+      return { ok: true, created, skipped, welcome, liv, joining: { is_join: joining.is_join, via: joining.via } };
     }, false, {
       name: z.string().optional().describe("이렇게 불러 주세요(닉네임)"),
       stage: z.string().optional().describe("company|solo|study (옛 academy|student 도 받는다)"),
@@ -587,6 +602,131 @@ const SHARE_LABEL: Record<string, string> = {
   me: "나만 본다", team: "우리 팀이 같이 본다", dept: "여러 부서와 나눈다", ext: "고객·외부에 낸다",
 };
 
+// ── 합류 사실(#1631, 원준 결정 2026-09-13) ─────────────────────────────────────────
+//  처음 설정의 갈래는 인원수가 아니라 **«초대로 들어왔나»** 가 정한다. 종전 판정(자기 계정으로 들어오는 사람 ≥ 2)은
+//   동료가 먼저 들어와 있으면 워크스페이스를 만든 사람도 «합류자» 로 읽었다.
+//  · 매니지드 — 계정 서버가 안다(POST /api/tenant/membership → { ok, is_creator, joined_via, account_existed }).
+//    처음 설정 현황은 **폴링 자리**라 매번 묻지 않는다: 첫 성공 값을 워크스페이스 층(liv_profile.join)에 남기고 재사용한다.
+//    못 물으면(대상 없음·404·502·시간 초과·계약과 다른 모양) **저장하지 않고** 종전 판정(인원수)으로 폴백한다 — 다음 조회가 다시 묻는다.
+//  · 셀프호스트 — 등록부(gw_workspace.owner_member)가 안다. primary(등록부 판정 없음)는 인원수 폴백.
+//    «초대 전부터 계정이 있었나» 는 이 사람이 다른 워크스페이스에서 처음 설정을 끝낸 적이 있나로 본다.
+export type JoinVia = "creator" | "invite";
+export interface JoinFact { is_join: boolean; via: JoinVia | null; existing_account: boolean | null }
+export interface JoinFactDeps {
+  managed: boolean;
+  /** 이 워크스페이스 층에 남아 있는 합류 사실(liv_profile.join). */
+  stored: { via?: unknown; existing_account?: unknown } | null | undefined;
+  /** 계정 서버에 묻는다 — 물을 대상이 없으면 null, 실패면 던진다. */
+  askCp: () => Promise<unknown>;
+  /** 첫 성공 값을 남긴다. */
+  save: (j: LivJoin) => Promise<unknown>;
+  /** 셀프호스트 등록부 판정 — primary·등록부 없음이면 null. */
+  registryVia: () => Promise<JoinVia | null>;
+  /** 셀프호스트 — 이 사람이 다른 워크스페이스에서 처음 설정을 끝낸 적이 있나. */
+  onboardedElsewhere: () => Promise<boolean>;
+  /** 폴백 재료 — 이 워크스페이스를 자기 계정으로 쓰는 사람 수(countWorkspacePeople). */
+  people: number;
+  now: () => string;
+}
+
+const isVia = (v: unknown): v is JoinVia => v === "creator" || v === "invite";
+
+/** 계정 서버 답 → 합류 사실. 계약과 다른 모양이면 null — 지어내지 않는다(via 만 맞고 account_existed 가 없어도 버린다). */
+export function parseMembership(raw: unknown): { via: JoinVia; existing_account: boolean } | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  //  ⚠ 판정의 축은 joined_via 다(«초대로 들어왔나»). is_creator 는 주인을 넘겨받은 뒤 joined_via 와 갈릴 수 있어 판정에 쓰지 않는다.
+  if (r.ok !== true || !isVia(r.joined_via) || typeof r.account_existed !== "boolean") return null;
+  return { via: r.joined_via, existing_account: r.account_existed };
+}
+
+/** 합류 사실 판정 — 의존은 주입한다(welcome-join.test.ts 가 표로 잡는다). 던지지 않는다. */
+export async function resolveJoinFact(d: JoinFactDeps): Promise<JoinFact> {
+  const byPeople = (existing: boolean | null): JoinFact => ({ is_join: d.people >= 2, via: null, existing_account: existing });
+  if (d.managed) {
+    const s = d.stored;
+    if (s && isVia(s.via) && typeof s.existing_account === "boolean") {
+      return { is_join: s.via === "invite", via: s.via, existing_account: s.existing_account };
+    }
+    let got: { via: JoinVia; existing_account: boolean } | null = null;
+    try { got = parseMembership(await d.askCp()); } catch { got = null; }
+    if (!got) return byPeople(null);
+    //  저장이 실패해도 이번 판정은 쓴다 — 값이 틀린 게 아니라 못 남긴 것뿐이고, 다음 조회가 다시 묻는다.
+    await Promise.resolve().then(() => d.save({ ...got, at: d.now() })).catch(() => { /* 비치명 */ });
+    return { is_join: got.via === "invite", via: got.via, existing_account: got.existing_account };
+  }
+  const [via, elsewhere] = await Promise.all([
+    d.registryVia().catch(() => null),
+    d.onboardedElsewhere().catch(() => null),
+  ]);
+  if (via) return { is_join: via === "invite", via, existing_account: elsewhere };
+  return byPeople(elsewhere);
+}
+
+/** 계정 서버를 못 물었을 때 다시 묻기까지 기다리는 시간. 처음 설정 화면은 읽는 동안 1.5초마다 현황을 되묻는다 —
+ *  계정 서버가 느리거나 죽어 있으면 조회마다 제한 시간(5초)을 다 기다리게 되므로, 실패한 사람은 잠시 폴백으로만 답한다(저장은 안 한다). */
+const CP_JOIN_RETRY_MS = 60_000;
+const cpJoinRetryAt = new Map<string, number>();
+
+/** 지금 요청의 워크스페이스에서 이 사람의 합류 사실 — resolveJoinFact 에 실제 의존을 꽂는다. */
+async function joinFactFor(userId: string, liv: { join?: unknown } | null, people: number): Promise<JoinFact> {
+  const { managedMode, registryModeActive } = await import("../../org/tenancy/state.js");
+  const { currentTenant } = await import("../../org/tenant-context.js");
+  const tenant = currentTenant();
+  const retryKey = `${tenant?.slug ?? ""}|${userId}`;
+  return resolveJoinFact({
+    managed: managedMode(),
+    stored: (liv?.join ?? null) as JoinFactDeps["stored"],
+    people,
+    now: () => new Date().toISOString(),
+    askCp: async () => {
+      if ((cpJoinRetryAt.get(retryKey) ?? 0) > Date.now()) return null;
+      const { resolveCpTarget, callCp } = await import("./managed-cp.js");
+      try {
+        //  계정 id·slug 는 callCp 가 서버 신원에서 싣는다(화면이 보내는 값이 아니다).
+        const t = await resolveCpTarget({ userId, email: "", scopes: [], projects: [] } as unknown as LivelyUser, { optional: true });
+        if (!t) return null;
+        const r = await callCp(t, "/api/tenant/membership", {}, { timeoutMs: 5_000 });
+        cpJoinRetryAt.delete(retryKey);
+        return r;
+      } catch (e) {
+        //  백오프 표는 «잠깐 쉬기» 라 오래 들고 있을 이유가 없다 — 쌓일 때 이미 지난 항목을 걷는다(격리 리뷰 2026-09-13).
+        if (cpJoinRetryAt.size > 200) { const now = Date.now(); for (const [k, at] of cpJoinRetryAt) if (at <= now) cpJoinRetryAt.delete(k); }
+        cpJoinRetryAt.set(retryKey, Date.now() + CP_JOIN_RETRY_MS);
+        throw e;
+      }
+    },
+    save: async (j) => {
+      const { setLivJoin } = await import("../../org/store/members.js");
+      await setLivJoin(userId, j);
+    },
+    registryVia: async () => {
+      if (!registryModeActive()) return null;
+      const { PRIMARY_TENANT_ID, getWorkspaceBySlug } = await import("../../org/tenancy/registry.js");
+      //  primary 는 요청 맥락이 없다(tenant-middleware) — 거기는 등록부가 «누가 만들었나» 를 말해 주지 않으니 폴백한다.
+      if (!tenant || tenant.id === PRIMARY_TENANT_ID) return null;
+      const w = await getWorkspaceBySlug(tenant.slug);
+      if (!w) return null;
+      return w.owner_member === userId ? "creator" : "invite";
+    },
+    onboardedElsewhere: async () => {
+      const { onboardedInOtherWorkspace } = await import("../../org/store/members.js");
+      return onboardedInOtherWorkspace(userId, tenant?.id ?? null);
+    },
+  });
+}
+
+/** 반영(me_welcome_apply)이 스스로 판정할 때 — 처음 설정 현황과 같은 재료를 같은 규칙으로 읽는다. */
+async function currentJoinFact(userId: string): Promise<JoinFact> {
+  const { getLivProfile, countWorkspacePeople } = await import("../../org/store.js");
+  const { managedMode } = await import("../../org/tenancy/state.js");
+  const [liv, people] = await Promise.all([
+    getLivProfile(userId).catch(() => null),
+    countWorkspacePeople({ managed: managedMode() }).catch(() => 0),
+  ]);
+  return joinFactFor(userId, liv, Number(people) || 0);
+}
+
 /**
  * (#1631) 처음 설정 현황 **실측** — GET /api/ui/me/welcome 의 본문이자 리브 1턴 프롬프트의 재료.
  *  한 함수라야 화면과 리브가 **같은 숫자**를 본다(따로 조립하면 둘이 어긋난 채로 각자 옳다고 말한다).
@@ -596,8 +736,11 @@ export async function welcomeSnapshot(userId: string) {
   const { getMember, getLivProfile } = await import("../../org/store.js");
   const { listSources, countSources } = await import("../../v6/source-store.js");
   const { listCategories } = await import("../../v6/category-store.js");
-  //  #3872 — 「초대로 합류한 사람」 판정 재료. 계정 서버에 묻지 않는다(이 워크스페이스 안의 사실만 본다).
+  //  #3872·#1631 — 팀 소개의 숫자(인원)와 합류 판정의 폴백 재료. 판정 자체는 아래 joinFactFor(«초대로 들어왔나»).
   const { countWorkspacePeople, getOrgProfile } = await import("../../org/store.js");
+  //  (#1631) 이 워크스페이스의 용도를 먼저 정한 사람의 값 — 합류자는 물려받고, 없을 때만 묻는다.
+  const { workspacePurposeStage } = await import("../../org/store/members.js");
+  const { currentTenant } = await import("../../org/tenant-context.js");
   const { countKnowledge } = await import("../../v6/knowledge-store.js");
   const { managedMode } = await import("../../org/tenancy/state.js");
 
@@ -614,7 +757,7 @@ export async function welcomeSnapshot(userId: string) {
   const { memberLoggedInHarnessesAny } = await import("../../terminal/profiles.js");
   const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
 
-  const [member, liv, entries, total, cats, loggedIn, people, orgProfile, knowledgeN] = await Promise.all([
+  const [member, liv, entries, total, cats, loggedIn, people, orgProfile, knowledgeN, wsStage] = await Promise.all([
     getMember(userId),
     getLivProfile(userId),
     //  ⚠ 뷰어는 **이 사람**이다(2026-09-12) — 종전엔 null(특권)이라 팀 워크스페이스에 갓 들어온 구성원에게도
@@ -631,22 +774,25 @@ export async function welcomeSnapshot(userId: string) {
     //  #3872 — 설치가 심은 사용 설명서(시드 런북 3건)는 «팀이 쌓은 지식» 이 아니다. 그걸 세어 «지식 3건 — 합류 전에
     //   만들어진 것이라 당신이 쓴 건 아닙니다» 라고 읽어 줬다(2026-09-13 실측, 개인 워크스페이스).
     countKnowledge({ excludeSeed: true }, userId).catch(() => 0),
+    workspacePurposeStage(currentTenant()?.id ?? null).catch(() => null),
   ]);
   // 헤드리스 규약을 아는 하네스로만 센다 — 로그인했어도 헤드리스로 못 돌리면 분석이 안 된다.
   const aiHarnesses = loggedIn.filter((k) => HEADLESS_KEYS.includes(k));
   const rows = (entries as Array<{ kind?: string | null; title?: string | null }>);
   const done = !!(liv.welcome?.done_at || liv.onboarded_at);
-  //  #3872 — **이미 다른 사람이 있는 워크스페이스에 들어왔나.** 이 한 줄이 처음 설정의 갈래를 정한다:
-  //   혼자면 «내 공간을 여는 사람», 둘 이상이면 «이미 굴러가는 팀에 합류한 사람»이다.
-  //   ⚠ 가입 시각으로 못 가른다 — org_member 에 created_at 이 없다. 그리고 역할(owner)도 여기서는 모른다
-  //    (매니지드에서 그 판정은 계정 서버에 있다). 인원 수는 이 워크스페이스 안에서 즉시 알 수 있는 사실이다 —
-  //    단 «자기 계정으로 들어오는 사람» 만 센다(위 countWorkspacePeople).
+  //  인원 수 — «자기 계정으로 들어오는 사람» 만 센다(위 countWorkspacePeople). 팀 소개의 숫자이자, 합류 사실을 못 물었을 때의 폴백이다.
   const humans = Number(people) || 0;
   const wsName = (orgProfile?.display_name || orgProfile?.name || "").trim();
+  //  (#1631, 원준 결정 2026-09-13) 처음 설정의 갈래는 **«초대로 들어왔나»** 가 정한다(인원수가 아니다 — joinFactFor 머리말).
+  //   매니지드는 첫 성공 값을 저장해 두고 재사용하므로 이 폴링 자리에서 계정 서버를 매번 부르지 않는다.
+  const join = await joinFactFor(userId, liv, humans);
   return {
     done,   // 어느 표식이든 하나면 끝난 것(#2039 와 합류)
-    //  #3872 — 합류자 화면의 재료. is_join=false 면 종전(내 공간을 여는 사람) 그대로다.
-    joining: { is_join: humans >= 2, member_count: humans, workspace_name: wsName || null, knowledge_n: Number(knowledgeN) || 0 },
+    //  합류자 화면의 재료(#3872·#1631). is_join=false 면 종전(내 공간을 여는 사람) 그대로다.
+    //   existing_account — 초대 전부터 계정이 있었나(설치 장면을 보일지). 모르면 null 이고, 화면은 true 일 때만 보인다.
+    joining: { is_join: join.is_join, via: join.via, existing_account: join.existing_account, member_count: humans, workspace_name: wsName || null, knowledge_n: Number(knowledgeN) || 0 },
+    //  (#1631) 이 워크스페이스의 용도가 **이미 정해져 있나**(먼저 답한 사람의 welcome.stage). 합류자는 있으면 물려받고 없을 때만 묻는다.
+    workspace_purpose: (wsStage as string | null) ?? null,
     done_at: liv.welcome?.done_at ?? null,
     // #2171 — **보여준 적 있나**(끝냈나와 별개). 자동 진입은 이 표식으로 평생 한 번만 한다.
     shown_at: liv.welcome_shown_at ?? null,
@@ -723,7 +869,7 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
       collectors: collectors.map((c) => ({ label: c.label, preset_key: c.preset_key, enabled: c.enabled, sync_interval_sec: c.sync_interval_sec })),
       aiHarnesses: usable,
       harness: usable[0] ?? "claude",
-      joining: snap.joining,   // #3872 — 합류자면 리브가 팀 자료를 «이 사람이 올린 것»으로 읽지 않는다
+      //  합류 사실은 싣지 않는다 — 초대로 들어온 사람에게는 이 킥오프 자체가 불리지 않는다(#1631, me_welcome_apply).
     });
     //  세션을 열까 말까는 순수 판정으로(kickoff-plan) — 재사용·AI 미연결·생성 셋뿐이다.
     const plan = planLivKickoff(o.priorSession, usable);

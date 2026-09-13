@@ -618,7 +618,9 @@ function readSheet(s: any, sel: SrcSel): HTMLElement {
   const chan = String(f.container_name || '');
   const isFile = s.kind === 'local_file';
   const isChat = sys === 'slack' || sys === 'discord';
-  const priv = String(f.root || '') === 'personal' || s.visibility === 'members';
+  //  (#1631) 개인 루트 파일은 «올린 사람만» 이 기본이지만, 올릴 때 팀원 모두를 명시한 것(fields.share='team' — 초대로 들어온 사람의
+  //   처음 설정)은 아니다. 실제 잠금(visibility='members')이 있으면 그것이 먼저다.
+  const priv = s.visibility === 'members' || (String(f.root || '') === 'personal' && f.share !== 'team');
   const derived: any[] = s.knowledge || [];
 
   const meta = el('div', { class: 'v2-src-dmeta' },
@@ -632,12 +634,17 @@ function readSheet(s: any, sel: SrcSel): HTMLElement {
   //  문 — 파일이면 내려받기(browse API — #/f 와 같은 문)와 폴더, 남의 시스템이면 그 시스템으로.
   const acts = el('div', { class: 'v2-src-dacts' });
   const co = isFile ? fileCoords(s) : null;
+  //  (#1631) 개인 폴더 파일은 브라우즈 API 가 **보는 사람 자기** 폴더로 풀린다 — 팀원 모두가 보게 올린 자료(share=team)를 동료가 열면
+  //   «파일 없음» 이거나 같은 이름의 자기 파일이 열렸다. 그래서 개인 폴더 파일의 원본은 자료 id 로 연다(서버가 올린 사람 자리로 푼다).
+  const orig = co && co.root === 'personal' ? '/api/ui/sources/' + encodeURIComponent(String(s.id)) + '/original' : null;
+  const mine = !!myUploadName() && authorOf(s as SrcRow) === myUploadName();
   if (co) {
-    const dl = '/api/ui/terminal/browse/file?download=1&root=' + encodeURIComponent(co.root) + '&path=' + encodeURIComponent(co.path);
+    const dl = orig ? orig + '?download=1' : '/api/ui/terminal/browse/file?download=1&root=' + encodeURIComponent(co.root) + '&path=' + encodeURIComponent(co.path);
     acts.append(el('button', { class: 'btn btn-sm v2-src-primary', type: 'button',
       onclick: () => { void authDownload(apiUrl(dl), String(s.title || 'file')); } },
       treeIcon('down'), el('span', { text: '내려받기' })));
-    acts.append(el('a', { class: 'btn btn-sm', href: String(s.external_url), text: '폴더에서 열기' }));
+    //  폴더 문은 내 개인 폴더이거나 누구에게나 같은 자리(공유·프로젝트)일 때만 — 남의 개인 폴더 주소(#/f?root=personal)는 내 폴더로 풀린다.
+    if (!orig || mine) acts.append(el('a', { class: 'btn btn-sm', href: String(s.external_url), text: '폴더에서 열기' }));
   } else if (s.external_url && String(s.external_url).startsWith('#')) {
     acts.append(el('a', { class: 'btn btn-sm v2-src-primary', href: String(s.external_url), text: '폴더에서 열기' }));
   } else if (s.external_url) {
@@ -658,8 +665,8 @@ function readSheet(s: any, sel: SrcSel): HTMLElement {
   const bodyBox = el('div', { class: 'v2-srd-body' });
   if (co) {
     busy(bodyBox, el('div', { class: 'v2-src-skel' }));
-    const viewUrl = '/api/ui/terminal/browse/file?root=' + encodeURIComponent(co.root) + '&path=' + encodeURIComponent(co.path);
-    const dlUrl = '/api/ui/terminal/browse/file?download=1&root=' + encodeURIComponent(co.root) + '&path=' + encodeURIComponent(co.path);
+    const viewUrl = orig ?? '/api/ui/terminal/browse/file?root=' + encodeURIComponent(co.root) + '&path=' + encodeURIComponent(co.path);
+    const dlUrl = orig ? orig + '?download=1' : '/api/ui/terminal/browse/file?download=1&root=' + encodeURIComponent(co.root) + '&path=' + encodeURIComponent(co.path);
     const tok = localStorage.getItem(TOKEN_KEY);
     const ffetch = (u: string) => fetch(apiUrl(u), { headers: tok ? { Authorization: 'Bearer ' + tok } : {} });
     void buildFilePreview({
