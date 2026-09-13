@@ -105,6 +105,21 @@ test("⑯ 프롬프트 — 이름 없으면 '이 사람', 수집기 없음 문�
   assert.match(q, /첫 수집을 마친 것 슬랙 #design \/ 아직 안 끝난 것 노션/);
 });
 
+//  (#3872, 2026-09-13) 꺼진 칸은 연결이 아니다 — 매니지드가 심어 둔 Notion·Slack 빈 칸만 있는 워크스페이스에서 «첫 수집을 마친 것 없음»
+//   이라고 써서 리브가 «연결됐고 곧 돈다» 로 읽었다. 리브는 이 턴에서 org_collectors 를 다시 읽으니 «연결이 아니다» 를 못박아야 한다.
+test("⑯′ 꺼진 칸만 있으면 — «없음» + 그 칸은 연결이 아니라고 못박는다 · 켜진 것이 있으면 꺼진 칸은 덧붙임으로만", () => {
+  const shells = [
+    { label: "Notion — 팀 문서", preset_key: "notion", enabled: false, ran: false },
+    { label: "Slack — 팀 공개 채널", preset_key: "slack", enabled: false, ran: false },
+  ];
+  const p = buildSecondTurnPrompt(pin({ collectors: shells }));
+  assert.match(p, /- 수집기: 없음\(외부 앱을 잇지 않음\) — 자료는 올린 것뿐이며, 그것도 0건일 수 있다 — 꺼져 있는 칸 2개\(Notion — 팀 문서 · Slack — 팀 공개 채널\)는 연결이 아니다/);
+  assert.match(p, /«연결됐다»·«곧 돈다» 고 말하지 마라/);
+  assert.doesNotMatch(p, /첫 수집을 마친 것 없음/);
+  const q = buildSecondTurnPrompt(pin({ collectors: [{ label: "슬랙 #design", preset_key: "slack", enabled: true, ran: true }, ...shells] }));
+  assert.match(q, /첫 수집을 마친 것 슬랙 #design — 꺼져 있는 칸 2개/);
+});
+
 // ── 세션이 안 떠 있으면 1턴은 안 끝난 것이다(#1631, 2026-08-30 실측) ──
 //  실측: 세션 미기동 상태에서 온보딩 31초 만에 fire → distill_at 소진 → 영영 증류 지시 없음(자료 8건·레인 0).
 test("세션이 offline 이면 fire 하지 않고 기다린다 — 1턴이 안 끝났다", () => {

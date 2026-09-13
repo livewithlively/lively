@@ -24,7 +24,7 @@ export type { OrgSection, OrgMemory, MemoryInput } from "./store/sections.js";
 
 // ── org_member(+jsonb 부속: 온보딩 보고·하네스 관측·머신 별명·로컬 토글) ──
 export {
-  listMembers, getMember,
+  listMembers, countWorkspacePeople, getMember,
   getMemberOnboarding, setMemberOnboardingStep,
   getHarnessSnapshots, setHarnessSnapshot, removeHarnessMachine,
   getHarnessMachineAlias, setHarnessMachineAlias,
