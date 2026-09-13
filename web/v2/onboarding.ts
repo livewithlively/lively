@@ -3271,6 +3271,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     //  처음부터 — 두 차례표 모두 인사(intro)에서 시작하고, 합류자는 인사 다음이 팀 소개다(nextScene · #3872·#1631).
     //   ⚠ 종전 `S.scene || (isJoin() ? 'team' : 'name')` 은 S.scene 이 늘 채워져 있어(fresh) 뒤쪽이 한 번도 안 불렸다 —
     //    합류자에게 팀 소개가 뜬 적이 없다. 차례표를 따라가게 하면 그 갈래가 저절로 산다.
+    //   ⚠ 여기 온 탭은 **아무것도 답하지 않았다**(hadLocal=false). 그런데 그 탭의 저장본이 「이름」에 멈춰 있으면 — 인사가 생기기 전의
+    //    처음 설정을 한 번 본 탭, 인사를 지나 이름에서 그냥 나간 탭 — S.scene 이 'name' 이라 인사를 건너뛰고 이름부터 열었다.
+    //    답한 것이 없으니 차례표의 첫 장면으로 되돌린다. 자취도 비운다(안 비우면 첫 장면에서의 «뒤로» 가 옛 자리로 간다).
+    if (BEFORE_ANSWER.includes(S.scene)) { S.scene = FLOW()[0]; S.trail = []; }
     renderSB(); goScene(S.scene || FLOW()[0]);
   }
 
