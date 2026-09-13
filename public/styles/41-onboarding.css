@@ -338,6 +338,22 @@
    원칙: 지금 할 칸만 켜지고 끝난 칸은 ✓ 로 접힘 · 화면(카드)을 통째로 갈아치우지 않음 ·
    탈출로는 하단 상시 · 색은 전부 토큰(다크는 90-dark 재정의가 입힌다). */
 .ob-lgs{display:flex; flex-direction:column}
+/* ★ «AI 연결» 로그인 화면은 **한 화면에 들어간다**(#1968, 원준님 2026-09-13: 세로가 길어져 스크롤이 생기던 것).
+   설명(머리말·잔글씨)은 왼쪽, 걸음표·버튼은 오른쪽 — 두 단. 한 단으로 쌓으면 걸음 ②의 브라우저 그림까지 1,095px 이라
+   1280×720 창(본문 670px)에서 늘 스크롤이 생겼고, 그림을 빼고 여백을 다 줄여도 720 에는 못 들어갔다(실측).
+   두 단이면 가장 긴 상태(걸음 ② 켜짐)도 오른쪽 단 약 550px — 그림을 버리지 않고 선다.
+   기둥(560px)보다 넓은 880px 을 쓰되 **기둥의 가운데를 그대로 가운데로** 삼는다(breakout) — 다른 갈래(연결됨·없음·오류)는
+   기둥 폭 그대로라 장면을 통째로 넓히지 않는다. 좁은 창(<1000px)은 한 단으로 쌓인다(왼쪽 → 오른쪽 = 종전 순서). */
+@media (min-width: 1000px) {
+  .ob-lg-cols{width:min(880px, 94vw); margin-left:calc(50% - min(440px, 47vw)); display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1.2fr); column-gap:44px; align-items:start}
+  .ob-lg-cols .ob-lg-left, .ob-lg-cols .ob-lg-right{min-width:0}   /* 그리드 칸이 긴 주소(code)에 밀려 넓어지지 않게 */
+  .ob-lg-cols .ob-lg-right{padding-top:14px}   /* 걸음 ① 을 왼쪽 L 배지와 눈높이로 */
+  /* 아직 차례가 아닌 칸(idle)은 제목만 — 몸통은 켜질 때 펼쳐진다. 종전엔 흐린 채로 몸통까지 다 서 있어(걸음 ②의 그림 226px)
+     걸음 ① 상태가 가장 길었다(실측 709px > 670). «지금 할 칸만 켜진다» 는 그대로다 — 세 칸 제목은 늘 한 장에 있다. */
+  .ob-lg-cols .ob-lg-step.idle .ob-lg-in{display:none}
+  .ob-root[data-scene="claude"] .ob-qcol{padding-bottom:24px}   /* 아래 여백 60 → 24: 이 장면은 아래에 더 올 것이 없다 */
+}
+.ob-lg-notes .ob-note{line-height:1.6}
 .ob-lg-step{display:flex; gap:12px; padding:13px 0; border-top:1px solid var(--line-row); transition:opacity .25s}
 .ob-lg-step:first-child{border-top:0; padding-top:2px}
 .ob-lg-n{flex:none; width:23px; height:23px; border-radius:50%; display:grid; place-items:center; font-size:12px; font-weight:800; background:var(--bg-tint-2); color:var(--blue); transition:all .25s}
