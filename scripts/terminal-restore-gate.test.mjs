@@ -137,7 +137,7 @@ eq(goneMode({ movedTo: "" }, false, false), "end", "㉙B4 빈 이정표는 이�
 //  4410(박스엔 그 세션이 없다) → 종료 배너로 끝난다. 배선(주소 조립)만 소스로 확인한다.
 {
   // ⚠ **복원 함수 안의** 그 줄을 본다(#2231 로 같은 모양의 줄이 이동 경로에도 생겼다 — 첫 매치를 집으면 엉뚱한 줄을 잰다).
-  const from = src.indexOf("async function restoreThisSession()");
+  const from = src.indexOf("async function restoreThisSession(");
   assert.ok(from > 0, "restoreThisSession 을 찾지 못했습니다");
   const body = src.slice(from);
   const line = body.split("\n").find((l) => l.includes("location.replace(apiUrl('/ui/terminal.html?session=')"));

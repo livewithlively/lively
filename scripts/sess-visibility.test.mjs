@@ -174,7 +174,7 @@ ok(V({ lastSeen: DAY - 1 }) === "cut",
   ok(/tab\.route = href;/.test(resumed) && /void renderRoute\(tab\);/.test(resumed) && /onResumed: \(nid\) => resumedInTab\(tab, nid\)/.test(MAIN),
     "W12′ [이어서 대화하기]·자동 되살리기는 새 id 로 **라우트를 다시 돌린다**(resumedInTab → renderRoute) — 같은 생성 경로를 새 id 로 지난다");
   const PANES = read("web/v2/panes-parts.ts");
-  const paneRestore = PANES.slice(PANES.indexOf("async function restore(s: Sess)"), PANES.indexOf("async function purge(s: Sess"));
+  const paneRestore = PANES.slice(PANES.indexOf("async function restore(s: Sess"), PANES.indexOf("async function purge(s: Sess"));
   ok(/location\.hash = '#\/s\/' \+ encodeURIComponent\(String\(ns\.id\)\)/.test(paneRestore),
     "W12″ 프로젝트 셸 [되살리기]도 새 id 주소로 옮겨 가 같은 라우트(생성 경로)를 지난다");
 }

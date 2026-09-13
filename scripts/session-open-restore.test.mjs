@@ -148,7 +148,7 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   // 액자 안에서 복원하면 **액자인 채로** 옮겨야 한다 — embed 를 빠뜨리면 레거시 터미널 크롬이 액자 안에 또 뜬다.
   {
     const term = read("web/standalone/terminal.ts");
-    const rs = term.slice(term.indexOf("async function restoreThisSession()"));
+    const rs = term.slice(term.indexOf("async function restoreThisSession("));
     ok(/location\.replace\([\s\S]{0,400}EMBED \? '&embed=1' : ''/.test(rs),
       "③-s 복원으로 옮겨 갈 때 embed=1 을 이고 간다(액자 안 레거시 상단바 이중 표시 방지)");
   }
@@ -265,7 +265,7 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
     "⑧-a canAttach 실패 갈래는 복원 신호를 만들지 않는다 — 그 자리에 온 이유는 죽음이 아니라 권한이다. 살아 있는 세션에 복원을 약속하면 부팅 게이트가 복원으로 가고 already 가 돌아온다(무한 새로고침)");
 
   const term = read("web/standalone/terminal.ts");
-  const rs = term.slice(term.indexOf("async function restoreThisSession()"));
+  const rs = term.slice(term.indexOf("async function restoreThisSession("));
   const alreadyAt = rs.indexOf("r.already");
   ok(alreadyAt > 0, "⑧-b0 restoreThisSession 의 already 분기를 찾았다");
   const already = rs.slice(alreadyAt, rs.indexOf("\n", alreadyAt));   // 그 한 줄만 — 거리 창은 다음 분기까지 새어 오판한다
@@ -354,7 +354,9 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
     "⑩-S4 ★ 같은 세션(테넌트·id)의 복원 요청은 한 줄로 서고, 줄 안에서 행을 읽는다 — 동시에 두 번 불려도 둘 다 «아무도 안 만들었다» 를 보지 않는다");
   ok(/const restoreSerial = createKeyedSerializer\(\);/.test(src), "⑩-S4b 줄은 모듈에 하나다(요청마다 새로 만들면 아무것도 안 막는다)");
   // S5 — 후보를 못 물었으면 «없다» 가 아니라 «모른다»(만들지 않는다).
-  ok(/conversationPeers\(id, mappedId, st\.owner\)\.catch\(\(\) => null\);\s*\n\s*if \(peers === null && !force\) \{\s*\n\s*throw new HttpError\(409,/.test(blk),
+  //  #3870 — 그 409 를 만드는 자리가 stateUnknownRestore 헬퍼로 모였다(«모름» 409 셋이 같은 문구·같은
+  //   canForce 를 내야 해서 — 화면이 어디서든 [강제로 되살리기] 를 그릴 수 있게). 계약은 그대로다.
+  ok(/conversationPeers\(id, mappedId, st\.owner\)\.catch\(\(\) => null\);\s*\n\s*if \(peers === null && !force\) \{\s*\n\s*throw stateUnknownRestore\(/.test(blk),
     "⑩-S5 같은 대화 후보 조회가 실패하면 새로 만들지 않고 409(force 면 사람이 고른 대로)");
   // S1 — 박스 복원: 옛 id 생존(already) 판정 뒤, createSession 앞에서 «이미 이 대화를 도는 세션» 을 묻는다.
   const oldAlive = blk.indexOf("await sessionGoneVerdict(id)");
@@ -365,7 +367,8 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   const adoptBlk = blk.slice(adopt, create);
   ok(/conversationPeers\(id, mappedId, st\.owner\)/.test(blk.slice(0, adopt)) && /sessionGoneVerdict\(p\.id\)/.test(blk.slice(0, adopt)),
     "⑩-S1b 후보는 같은 주인·같은 대화 행이고, 생사는 확답(has-session)으로 묻는다");
-  ok(/adopt\.kind === "unknown"[\s\S]{0,80}throw new HttpError\(409/.test(adoptBlk) && /settleInterruptedRestore\(id, st, adopt\.id/.test(adoptBlk)
+  //  #3870 — 여기 409 도 stateUnknownRestore 헬퍼가 만든다(위 S5 와 같은 이유).
+  ok(/adopt\.kind === "unknown"[\s\S]{0,80}throw stateUnknownRestore\(/.test(adoptBlk) && /settleInterruptedRestore\(id, st, adopt\.id/.test(adoptBlk)
     && /movedTo: adopt\.id/.test(adoptBlk),
     "⑩-S1c 모르면 만들지 않고(409), 이으면 뒷정리를 채우고 이정표 갈래와 같은 모양(movedTo)으로 답한다");
   // S3 — 복원이 새 세션에 이 대화를 태어날 때부터 싣는다.
