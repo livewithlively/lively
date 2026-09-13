@@ -64,6 +64,7 @@ import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js"
 import { trashMapFor } from "../sessions/session-trash.js";                        // #1851 — 목록 행에 휴지통 표식
 import { sessionHandoffInput } from "./session-handoff.js";
 import { resumePlan, resumedKind, type ResumeCheck } from "./resume-plan.js";   // #3870 — 이어받기 인자 결정(순수·엣지 표 시험)
+import { claudeProjectsDirExact } from "./terminal-transcript.js";   // #3870 — 규약으로 폴더를 정확히 짚을 수 있나
 
 import { sessionHarnessKey } from "./deliver-prompt.js";   // #1683 후속2 — 정의는 deliver-prompt.ts(#1631 이동)
 
@@ -123,6 +124,8 @@ async function resumeTranscriptCheck(
   nodeId: string | null,
 ): Promise<ResumeCheck> {
   if ((st.harness || "claude") !== "claude") return "unknown";       // 규약 미실측 — 종전대로 검사 없이 시도한다
+  //  작업 폴더를 모르거나 규약이 그 폴더를 정확히 못 짚으면(200자 초과) «없다» 를 말할 자격이 없다 — 빈손은 «못 봤다» 다.
+  if (!st.dir || !claudeProjectsDirExact(st.dir)) return "unknown";
   if (nodeId) {
     const kind = await getNode(nodeId).then((n) => n?.kind ?? null).catch(() => null);
     if (kind !== "worker") return "unknown";                         // 사람 PC·모르는 노드 — 그 파일은 여기서 안 보인다
