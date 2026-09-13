@@ -180,6 +180,25 @@
   filter: blur(2.5px); opacity: .45; pointer-events: none; user-select: none; -webkit-user-select: none; }
 @media (prefers-reduced-motion: no-preference) {
   .v2-side, #v2-root > .v2-rail, #v2-root > .v2-topbar { transition: filter .28s ease, opacity .28s ease; } }
+/* ★ 막2·3 의 본문은 **창 전체의 가운데**에 선다(원준님 2026-09-13). 종전엔 셸의 가운데 열(레일·사이드바 오른쪽)
+   안에서만 가운데였다 — 유령 셸이 왼쪽 398px(레일 76 + 사이드바 316 + 손잡이 6)을 먹은 채라 질문 기둥이 오른쪽으로
+   치우쳐 보였다(실측 1440px 창: 기둥 중심 919px / 창 중심 720px). 유령을 흐려 두고 그 위에 얹는 구조이므로 기둥은
+   창을 기준으로 가운데가 맞다. 그래서 유령 셸일 때 본문을 창에 고정(fixed)해 전폭으로 펴고 바탕을 비운다 — 아래
+   유령(레일·사이드바)이 그대로 비쳐 보인다. 빵부스러기 줄도 기둥과 같은 폭으로 가운데에 세워 유령 위에 글자가
+   겹치지 않게 한다(나가는 문은 기둥의 오른쪽 끝).
+   ⚠ 맨 윗줄(.v2-topbar)은 덮지 않는다 — 데스크톱에선 그 줄이 창을 끄는 손잡이(-webkit-app-region: drag)다.
+   ⚠ z-index 는 유령 셸(손잡이 .v2-split 3)보다 위, 셸의 창·오버레이(.v2-ws-menu 60 · 동의창 88~90 · 런치패드 900)보다 아래.
+   ⚠ 좁은 화면(≤900px)은 애초에 옆 열이 없어(사이드바는 서랍) 손대지 않는다. */
+@media (min-width: 901px) {
+  #v2-root.ob-ghost .ob-root { position: fixed; top: 0; left: 0; right: 0; bottom: 0; height: auto; z-index: 35; background: transparent; }
+  #v2-root.ob-ghost.has-topbar .ob-root { top: var(--v2-tb-h, 42px); }
+  /* 브라우저(topbar-web)에선 맨 윗줄이 **왼쪽 두 열 위에만** 있고 가운데 열은 원래 전 높이였다(43-v2-topbar-search.css ①-b:
+     "오른쪽은 아무것도 안 얻으면서 42px 을 잃는다"). 그 42px 을 여기서 잃지 않는다 — 기둥은 창 꼭대기부터 선다.
+     (맥락 관리 app-ctx 는 줄이 전폭이라 제외 — 처음 설정에선 켜지지 않지만 규칙의 뜻을 맞춘다.) */
+  #v2-root.ob-ghost.has-topbar.topbar-web:not(.app-ctx) .ob-root { top: 0; }
+  #v2-root.ob-ghost .ob-root .ob-crumb { width: min(560px, 92%); margin: 0 auto; padding-left: 0; padding-right: 0; }
+  #v2-root.ob-ghost .ob-root[data-scene="sources"] .ob-crumb { width: min(820px, 94%); }
+}
 
 /* 되돌아가기 + 파일 받는 자리 (2026-08-25 플로우 재배치 — 로컬 업로드를 앞으로, 앱 연결을 뒤로) */
 .ob-q-top{display:flex;align-items:center;gap:10px;margin-bottom:14px}
@@ -197,6 +216,11 @@
 .ob-drop.ob-has{padding:18px 20px;border-style:solid}
 .ob-drop-t{display:block;font-size:15px;font-weight:700;color:var(--ink)}
 .ob-drop-d{display:block;font-size:12.5px;color:var(--muted)}
+/* 올리는 동안의 진행 막대(#1968) — 바이트 기준 백분율. «올리는 중 7개» 숫자만으로는 큰 파일 하나에서 화면이 멈춘 듯
+   보였다(원준님 2026-09-13). 막대는 상자 안 글 아래 한 줄, 다 오르면 사라진다. */
+.ob-drop-bar{display:block;width:min(280px,80%);height:4px;border-radius:2px;background:var(--line-net);overflow:hidden;margin-top:6px}
+.ob-drop-bar[hidden]{display:none}
+.ob-drop-bar i{display:block;height:100%;width:0;border-radius:2px;background:var(--blue-fill);transition:width .12s linear}
 
 /* AI 잇기 — setup-token 붙여넣기 (#1813). 토큰은 화면에 남기지 않는다(type=password). */
 .ob-tok{display:flex; flex-direction:column; gap:9px; margin:2px 0 16px}
