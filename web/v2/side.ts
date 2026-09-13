@@ -29,7 +29,7 @@
 //   캐시다(shell-prefs.ts). 선언 한 줄이 어느 쪽인지 말한다 — shellPrefStore = 계정 · deviceStore = 이 기기.
 import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { findMatcher } from '../lib/find.js';
-import { splitFolderRows, foldCardRows, projectPastRows, type PastRowLike } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음
+import { splitFolderRows, foldCardRows, projectPastRows, projCardRows, type PastRowLike } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음 · #3870 — 카드에 자기 화면 줄을 안 넣는다
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsTouch } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버다(선언 한 줄이 그걸 말한다)
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES, isDotState, rowDotCls } from '../session-status.js';   // #3778 2판 — 목록 줄의 점은 «나를 기다리는 것» 셋만
@@ -842,7 +842,10 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
   //  「고정」은 두 축 공통으로 맨 위다(#1954) — 압정한 행이 프로젝트 묶음 안에 갇히면 그 약속이 깨진다.
   //   여기 선 행은 소속을 말해 줄 머리글이 없으므로 **두 줄 그대로**(프로젝트 칩을 남긴다).
   const pinnedRows = shown.filter((r) => r.pinned);
-  const rest = shown.filter((r) => !r.pinned);
+  //  ★ 프로젝트 **자신의 화면**은 카드 안 줄로 세우지 않는다(#3870, 원준 2026-09-13 "프로젝트 폴더 안에는 세션만 있어야지").
+  //   카드 머리줄의 [→] 가 이미 그 화면으로 가는 문이다 — 잣대와 사유는 lib/sess-fold projCardRows 머리말.
+  //   ⚠ 「고정」 층은 거르지 않는다(사람이 꽂은 자리다). 날짜 축(appListKids)도 거르지 않는다(카드도 [→] 도 없다).
+  const rest = projCardRows(shown.filter((r) => !r.pinned));
   //  ★ «이미 줄로 섰나» 를 **목록 전체**로 묻는다(#3778 6판, 원준 2026-09-12 "x 누르면 어디로 가는 거야?").
   //   ⚠ 이 집합은 «어느 카드가 서나» 와 무관하다 — 카드는 종전처럼 **줄이 선 프로젝트만** 선다(7판에서 되돌렸다).
   //   카드 접힘에서 세션을 빼는 이유는 이것 하나다. 그 카드의 줄(`g.rows`)만 보면 두 군데가 새는데,
@@ -954,7 +957,9 @@ function appListKids(shown: SideInstance[], q: string, o: RowOpts = {}, empty?: 
       kids.push(appRowEl(inst, o));
     }
   }
-  if (shown.length) return kids;
+  //  빈 화면은 **그린 것**으로 가른다(#3870) — 프로젝트 축은 프로젝트 화면 줄을 카드에 안 넣으므로(projCardRows),
+  //   재료(shown)는 있는데 그릴 카드가 하나도 없을 수 있다. 재료로 가르면 그때 목록이 안내도 없이 텅 빈다.
+  if (kids.length) return kids;
   return [el('div', { class: 'v2-app-empty' },
     el('p', { text: q ? (empty?.found || '찾는 열린 앱이 없어요.') : (empty?.none || '열린 앱이 없어요.') }),
     q ? el('button', { class: 'btn-text', type: 'button', text: '검색 지우기', onclick: () => { sideFilter = ''; redraw(); } })
