@@ -2459,22 +2459,29 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //  «그 사이 물음»(between/펼침)은 스테퍼 밖 잔글씨로 유지 — antigravity 는 걸음 ③이 그 역할이라 뺀다.
         const hasDetail = h !== 'antigravity' && !!(g && g.detail && g.detail.length);
         const more = hasDetail ? `<button type="button" class="ob-more" id="cMore" data-label="${esc((g && g.more) || '자세히 보기')}" aria-expanded="false" aria-controls="cDetail">${esc((g && g.more) || '자세히 보기')} ▾</button>` : '';
-        return qHead('claude', lead, `${esc(picked)} 계정을 연결해 주세요.`,
-          (g && g.help) || '아래 걸음대로 하시면 됩니다.')
-          + `<div class="ob-tok ob-lgs">
+        //  ★ 두 단(#1968, 원준님 2026-09-13 «스크롤 안 되는 길이로»): 설명(머리말·잔글씨)은 왼쪽, 걸음표·버튼은 오른쪽.
+        //   한 단으로 쌓으면 걸음 ②의 브라우저 그림까지 1,095px 이라 1280×720 창(본문 670px)에서 늘 스크롤이 생겼다.
+        //   두 단이면 가장 긴 상태(걸음 ② 켜짐)도 오른쪽 단 약 550px — 그림을 버리지 않고 한 화면에 선다.
+        //   좁은 창(<1000px)에선 41-onboarding.css 가 한 단으로 되돌린다(왼쪽 → 오른쪽 순서 = 종전 순서).
+        return `<div class="ob-lg-cols"><div class="ob-lg-left">`
+          + qHead('claude', lead, `${esc(picked)} 계정을 연결해 주세요.`, (g && g.help) || '아래 걸음대로 하시면 됩니다.')
+          + `<div class="ob-tok ob-lg-notes">
               ${wsNote}
-              ${stepper}
-              ${LOGIN_INLINE[h] ? '' : termBox}
-              ${okBar}
               ${h !== 'antigravity' && g && (g.between || more) ? `<p class="ob-note ob-between">${g.between || ''}${more}</p>` : ''}
               ${hasDetail ? `<div class="ob-detail" id="cDetail" hidden><ol>${g.detail.map((t) => `<li>${t}</li>`).join('')}</ol></div>` : ''}
               ${c.loggedIn === null ? `<p class="ob-note">이 자리에선 ${esc(picked)} 로그인 여부를 서버가 확인하지 못해요. 로그인하셨다면 그대로 계속하셔도 됩니다.</p>` : ''}
+              ${otherNote}
+            </div></div>
+          <div class="ob-lg-right"><div class="ob-tok ob-lgs">
+              ${stepper}
+              ${LOGIN_INLINE[h] ? '' : termBox}
+              ${okBar}
               <p class="ob-err" id="cErr"></p>
               ${fbLine}
-              ${otherNote}
             </div>`
           + `<button class="ob-btn ob-btn-pri" id="cGo">로그인했어요</button>`
-          + laterLink;
+          + laterLink
+          + `</div></div>`;
       },
       bind: (el) => {
         const err = $('#cErr', el), go = $('#cGo', el);
