@@ -34,11 +34,17 @@ export interface SecondTurnInput {
 // ── TEMPLATE — 문안은 여기만 고친다 ─────────────────────────────────────────────
 export function buildSecondTurnPrompt(i: SecondTurnInput): string {
   const who = i.displayName ? `${i.displayName} 님` : "이 사람";
-  const ran = i.collectors.filter((c) => c.enabled && c.ran);
-  const pending = i.collectors.filter((c) => c.enabled && !c.ran);
-  const collectLine = i.collectors.length
-    ? `- 수집기: ${ran.length ? `첫 수집을 마친 것 ${ran.map((c) => c.label).join(" · ")}` : "첫 수집을 마친 것 없음"}${pending.length ? ` / 아직 안 끝난 것 ${pending.map((c) => c.label).join(" · ")}` : ""}`
-    : "- 수집기: 없음(외부 앱을 잇지 않음) — 자료는 올린 것뿐이며, 그것도 0건일 수 있다";   // 실측(태오 채점): "올린 자료만 있다"로 단정하면 자료 0건일 때 전제가 틀린다
+  const on = i.collectors.filter((c) => c.enabled);
+  const off = i.collectors.filter((c) => !c.enabled);
+  const ran = on.filter((c) => c.ran);
+  const pending = on.filter((c) => !c.ran);
+  //  #3872 — 꺼진 칸은 연결이 아니다. 매니지드가 모든 워크스페이스에 Notion·Slack 빈 칸(꺼짐·자격 없음)을 심어 두는데, 종전엔
+  //   그 칸이 있다는 이유로 «첫 수집을 마친 것 없음» 이라고 써서 리브가 «연결됐고 곧 돈다» 로 읽었다(2026-09-13 실측).
+  //   리브는 이 턴에서 org_collectors 를 다시 읽으므로 그 칸을 다시 보게 된다 — 그래서 «연결이 아니다» 를 여기 못박는다.
+  const offNote = off.length ? ` — 꺼져 있는 칸 ${off.length}개(${off.map((c) => c.label).join(" · ")})는 연결이 아니다(자격이 없는 빈 칸일 수 있다). «연결됐다»·«곧 돈다» 고 말하지 마라` : "";
+  const collectLine = on.length
+    ? `- 수집기: ${ran.length ? `첫 수집을 마친 것 ${ran.map((c) => c.label).join(" · ")}` : "첫 수집을 마친 것 없음"}${pending.length ? ` / 아직 안 끝난 것 ${pending.map((c) => c.label).join(" · ")}` : ""}${offNote}`
+    : `- 수집기: 없음(외부 앱을 잇지 않음) — 자료는 올린 것뿐이며, 그것도 0건일 수 있다${offNote}`;   // 실측(태오 채점): "올린 자료만 있다"로 단정하면 자료 0건일 때 전제가 틀린다
   return [
     `리브, 이제 **증류 작업**을 시작한다. 처음 설정이 끝난 지 ${i.waitedMin}분 지났다.`,
     "",

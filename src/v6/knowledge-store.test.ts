@@ -429,3 +429,10 @@ t("E9: 여러 줄 앵커(줄바꿈 포함)도 정확일치로 다룬다", () => 
 });
 
 console.log(`\n${pass} passed`);
+
+// #3872 — 시드 제외 필터. 처음 설정이 «팀에 쌓인 지식 N건» 을 셀 때 설치가 심은 런북 3건(updated_by='system')이 들어가면
+//  혼자 쓰는 워크스페이스에서 «합류 전에 만들어진 지식 3건» 이 된다. 기본(옵션 없음)은 종전 그대로 안 뺀다.
+t("excludeSeed — 손 안 댄 시드(updated_by='system')를 WHERE 에서 뺀다 · 기본은 안 뺀다", () => {
+  assert.match(knowledgeListFilter({ excludeSeed: true }).where, /COALESCE\(k\.updated_by,''\) <> 'system'/);
+  assert.doesNotMatch(knowledgeListFilter({}).where, /updated_by/);
+});

@@ -82,6 +82,34 @@ export async function listMembers(): Promise<OrgMember[]> {
   return r.rows.map(mapMember);
 }
 
+/**
+ * «이 워크스페이스를 자기 계정으로 쓰는 사람» 수 (#3872) — 처음 설정의 합류자 판정(delivery/welcome.ts `joining`) 재료.
+ *
+ *  ⚠ `listMembers().length` 로 세면 안 된다. org_member 에는 «이 워크스페이스의 동료» 가 아닌 행이 함께 산다:
+ *   · 커넥터가 미러한 외부 사람(클릭업 담당자·슬랙 사용자) — lively-46e3 실측(2026-09-12) 활성 사람 91행 중 88행
+ *   · 매니지드 프로비저닝이 **모든 테넌트에** 심는 플랫폼 운영 계정(`admin` / ops@lvly.io) — identities 가 비어 있고
+ *     로컬 로그인 자격(member_credential)만 있다
+ *   · 세션 호스트 같은 system 행(kind 로 걸러진다)
+ *  그냥 세면 혼자 쓰는 개인 워크스페이스가 «구성원 2명 팀» 이 되어, 처음 설정 첫 화면과 리브 1턴이 «이미 있는 팀에
+ *  합류했다 · 팀에 쌓인 지식 3건은 당신이 쓴 게 아니다» 라고 말한다(2026-09-13 실측 — 원준님 개인 워크스페이스 온보딩).
+ *
+ *  잣대는 «어떤 계정으로 들어오는 사람인가» 다:
+ *   · 매니지드 — CP 계정으로 들어온다 = identities 의 `lvly_account`(프로비저닝이 심는다, delivery/managed-cp.ts).
+ *     member_credential 은 여기서 **세지 않는다** — 운영 계정이 바로 그걸로 들어오기 때문이다.
+ *   · 셀프호스트 — 로컬 로그인 자격(`member_credential`).
+ *   · SSO(`oidc`)는 양쪽 다 사람이다.
+ */
+export async function countWorkspacePeople(opts: { managed: boolean }): Promise<number> {
+  const r = await itemsPool.query(
+    `SELECT count(*)::int AS n FROM org_member m
+      WHERE m.kind='human' AND m.state='active'
+        AND (EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(m.identities)='array' THEN m.identities ELSE '[]'::jsonb END) e
+                      WHERE e->>'system' IN ('lvly_account','oidc'))
+             OR ($1::boolean = false AND EXISTS (SELECT 1 FROM member_credential c WHERE c.member_id = m.id)))`,
+    [opts.managed]);
+  return Number((r.rows[0] as { n?: number } | undefined)?.n ?? 0);
+}
+
 export async function getMember(id: string): Promise<OrgMember | null> {
   //  ★ 지금 맥락으로 못박는다(#1879) — 접기가 남긴 짝이 있으면 tenant 없는 조회는 **아무 행이나**
   //   돌려준다. 상수(primary)로 박으면 매니지드에서 RLS 가 걸러 0행이 된다(실측) — 그래서 맥락식이다.

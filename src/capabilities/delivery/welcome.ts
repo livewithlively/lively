@@ -597,8 +597,9 @@ export async function welcomeSnapshot(userId: string) {
   const { listSources, countSources } = await import("../../v6/source-store.js");
   const { listCategories } = await import("../../v6/category-store.js");
   //  #3872 — 「초대로 합류한 사람」 판정 재료. 계정 서버에 묻지 않는다(이 워크스페이스 안의 사실만 본다).
-  const { listMembers, getOrgProfile } = await import("../../org/store.js");
+  const { countWorkspacePeople, getOrgProfile } = await import("../../org/store.js");
   const { countKnowledge } = await import("../../v6/knowledge-store.js");
+  const { managedMode } = await import("../../org/tenancy/state.js");
 
   // AI 가 이어져 있나 — **분석을 누르기 전에** 알아야 한다. 안 그러면 사람이 «읽어 주세요» 를 누르고
   //  나서야 거절을 본다.
@@ -613,7 +614,7 @@ export async function welcomeSnapshot(userId: string) {
   const { memberLoggedInHarnessesAny } = await import("../../terminal/profiles.js");
   const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
 
-  const [member, liv, entries, total, cats, loggedIn, memberRows, orgProfile, knowledgeN] = await Promise.all([
+  const [member, liv, entries, total, cats, loggedIn, people, orgProfile, knowledgeN] = await Promise.all([
     getMember(userId),
     getLivProfile(userId),
     //  ⚠ 뷰어는 **이 사람**이다(2026-09-12) — 종전엔 null(특권)이라 팀 워크스페이스에 갓 들어온 구성원에게도
@@ -622,9 +623,14 @@ export async function welcomeSnapshot(userId: string) {
     countSources({}, userId).catch(() => 0),
     listCategories(null).catch(() => [] as Array<Record<string, unknown>>),
     memberLoggedInHarnessesAny(userId).catch(() => [] as string[]),
-    listMembers().catch(() => [] as Array<{ kind?: string; state?: string }>),
+    //  ⚠ «사람» 은 자기 계정으로 들어오는 사람만이다(countWorkspacePeople 주석) — 명부 전체를 세면 매니지드가 모든
+    //   워크스페이스에 심는 운영 계정(admin/ops@lvly.io) 때문에 **혼자 쓰는 개인 워크스페이스도 «구성원 2명 팀»** 이 된다
+    //   (2026-09-13 실측). 조회 실패는 0 으로 접혀 합류자 갈래가 안 열릴 뿐 화면은 종전대로 뜬다.
+    countWorkspacePeople({ managed: managedMode() }).catch(() => 0),
     getOrgProfile().catch(() => null as { display_name?: string | null; name?: string | null } | null),
-    countKnowledge({}, userId).catch(() => 0),
+    //  #3872 — 설치가 심은 사용 설명서(시드 런북 3건)는 «팀이 쌓은 지식» 이 아니다. 그걸 세어 «지식 3건 — 합류 전에
+    //   만들어진 것이라 당신이 쓴 건 아닙니다» 라고 읽어 줬다(2026-09-13 실측, 개인 워크스페이스).
+    countKnowledge({ excludeSeed: true }, userId).catch(() => 0),
   ]);
   // 헤드리스 규약을 아는 하네스로만 센다 — 로그인했어도 헤드리스로 못 돌리면 분석이 안 된다.
   const aiHarnesses = loggedIn.filter((k) => HEADLESS_KEYS.includes(k));
@@ -633,9 +639,9 @@ export async function welcomeSnapshot(userId: string) {
   //  #3872 — **이미 다른 사람이 있는 워크스페이스에 들어왔나.** 이 한 줄이 처음 설정의 갈래를 정한다:
   //   혼자면 «내 공간을 여는 사람», 둘 이상이면 «이미 굴러가는 팀에 합류한 사람»이다.
   //   ⚠ 가입 시각으로 못 가른다 — org_member 에 created_at 이 없다. 그리고 역할(owner)도 여기서는 모른다
-  //    (매니지드에서 그 판정은 계정 서버에 있다). 인원 수는 이 워크스페이스 안에서 즉시 알 수 있는 사실이다.
-  const humans = (memberRows as Array<{ kind?: string; state?: string }>)
-    .filter((m) => (m.kind ?? "human") === "human" && (m.state ?? "active") === "active").length;
+  //    (매니지드에서 그 판정은 계정 서버에 있다). 인원 수는 이 워크스페이스 안에서 즉시 알 수 있는 사실이다 —
+  //    단 «자기 계정으로 들어오는 사람» 만 센다(위 countWorkspacePeople).
+  const humans = Number(people) || 0;
   const wsName = (orgProfile?.display_name || orgProfile?.name || "").trim();
   return {
     done,   // 어느 표식이든 하나면 끝난 것(#2039 와 합류)
