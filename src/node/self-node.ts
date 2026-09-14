@@ -430,6 +430,48 @@ export async function remoteNodeCoordinate(o: {
   return gone ? nodeId : null;
 }
 
+/** `sessionHostTarget` 이 맡기지 않은 이유 — 소유 판정 계수에 `session:<사유>` 로 센다. */
+export type SessionHostTargetWhy = "ok" | "no-coordinate" | "not-host" | "unqualified" | "absent" | "unsupported";
+
+/**
+ * 이 세션의 일(하네스 활동 보고 등)을 **어느 세션 호스트에 맡길까**(순수) — 맡길 호스트 id, 아니면 null (#2600 T2 d6).
+ *  null 이면 호출부는 종전대로 게이트웨이가 직접 한다(같은 tmux 에 중계로 닿는다).
+ *
+ * ── 왜 필요한가 (2026-09-14 계수 실측) ────────────────────────────────────────
+ * 하네스 훅의 활동 보고(`POST …/active`)가 매니지드 세션마다 게이트웨이 tmux 를 세 번 쳤다(show-options @box_state ·
+ *  set-option @box_state · set-option @box_last_busy) — 카나리아에서 분당 10, 그 테넌트에 남은 호출의 절반이다.
+ *  같은 tmux 를 **그 세션의 호스트**가 자기 노드에서 바로 만질 수 있고, 그 op(`markActive`)는 멤버 PC 노드에
+ *  이미 쓰던 것이다(«정책=게이트웨이, 실행=노드»).
+ *
+ * ── 판정(좁혀 가는 순서) ─────────────────────────────────────────────────────
+ *  ① 스냅샷 좌표가 없다 → null(no-coordinate).
+ *  ② 좌표가 선언된 세션 호스트가 아니다(멤버 PC) → null(not-host). 멤버 PC 세션은 desired 행이 좌표를 가져
+ *     호출부의 노드 갈래가 따로 받는다 — 이 판정은 중앙(박스) 세션만 다룬다.
+ *  ③ 그 호스트가 지금 자격이 없다(끊김·낡음 — 목록 소유와 같은 술어) → null(unqualified).
+ *  ④ 그 호스트의 관측에 그 세션이 없다(방금 만든 3초 창·이사 중) → null(absent). 옛 스냅샷에 남은 좌표를
+ *     믿고 맡기면 호스트가 «그런 세션 없다» 로 실패한다.
+ *  ⑤ 그 호스트가 그 op 를 모른다(구 번들) → null(unsupported). 보내면 `unknown op` 문자열이 돌아온다(#905 C4).
+ */
+export function sessionHostTarget(o: {
+  sessionId: string;
+  /** 스냅샷에서 되찾은 좌표(`registry.nodeOfSession`) */
+  nodeId: string | null;
+  isSessionHost: (id: string) => boolean;
+  /** 그 호스트가 자격이 있으면 지금 본 세션 id, 아니면 null(`registry.sessionHostLiveIds`) */
+  liveIds: (id: string) => readonly string[] | null;
+  /** 그 호스트가 이 op 를 아나(`registry.nodeSupports`) */
+  supports: (id: string) => boolean;
+}): { host: string | null; why: SessionHostTargetWhy } {
+  const nodeId = String(o.nodeId ?? "").trim();
+  if (!nodeId) return { host: null, why: "no-coordinate" };
+  if (!o.isSessionHost(nodeId)) return { host: null, why: "not-host" };
+  const ids = o.liveIds(nodeId);
+  if (!ids) return { host: null, why: "unqualified" };
+  if (!ids.includes(o.sessionId)) return { host: null, why: "absent" };
+  if (!o.supports(nodeId)) return { host: null, why: "unsupported" };
+  return { host: nodeId, why: "ok" };
+}
+
 /**
  * 사람에게 할 말 — «이 노드는 게이트웨이 자신이다» 하나의 사실을 여러 표면(등록 409·close 사유·관리 배지·CLI)이
  *  각자 다른 문장으로 말하면, 같은 상황을 겪은 두 사람이 서로 다른 원인을 짚는다. 문구를 여기 한 곳에 둔다.
