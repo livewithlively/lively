@@ -226,6 +226,75 @@ try {
     ok("🔴 ⑦ 첫 싱크에 같은 경로 두 판본 → 양쪽 다 보존 + 충돌 보고 · 내 파일 지워도 서버 문서 안 지워짐");
   }
 
+  // ══ ⑦ 🔴 중앙 삭제가 **되살아나지 않는다** — 원장을 pull 이 지워도(#3787 진동) ══
+  //  기제: push 의 «되살리지 않는다» 는 원장이 기억할 때만 성립하는데, pull 이 원장을 서버 스냅샷으로
+  //   통째 교체하면서 그 기억을 지운다 → 다음 push 가 «진짜 새 문서» 로 읽고 재업로드 → 사람이 또 지움 → 반복.
+  //   pull(턴마다)·push(도구마다)라 주기가 초 단위다 — 사람 눈에 자료가 깜빡인다(2026-09-14 실측 신고).
+  {
+    SERVER = {}; putServer("doc.md", "서버 원본");
+    const dir = await mkProj();
+    await turn(dir);                                                   // 받는다 → 원장에 기준선
+    assert.equal(readOr(path.join(dir, "doc.md")), "서버 원본", "⑦ 먼저 받아야 한다");
+
+    delete SERVER["doc.md"];                                           // 중앙에서 삭제(남이 웹에서 지움)
+    await run(PUSH, dir);
+    assert.ok(!SERVER["doc.md"], "⑦-a 삭제 직후 push 가 되살렸다");
+    assert.match(JSON.stringify(conflictsOf(dir)), /서버에서 사라짐/, "⑦-a 되살리지 않은 이유를 보고해야 한다");
+
+    // 🔴 여기가 지금 깨지는 자리 — pull 이 **실제로 돌면** 원장을 서버 스냅샷으로 통째 교체해 그 항목을 지운다.
+    //  ⚠ 삭제만으로는 재현이 안 된다: 지운 파일이 최신이었다면 manifest.newest 가 **내려가** pull 이
+    //   `newest <= last_pull` 로 조기 종료한다. 실제 사고(2026-09-14)에선 삭제 뒤 **다른 파일이 올라와**
+    //   newest 가 올랐고 그때 원장이 재작성됐다. 그 조건을 그대로 만든다.
+    putServer("other.md", "남이 올린 다른 문서");
+    await turn(dir);
+    assert.ok(!SERVER["doc.md"], "⑦-b **pull 이 원장을 재작성한 뒤에도** 되살아나면 안 된다(진동)");
+
+    // 여러 턴 반복해도 영구히 안 올라간다.
+    await turn(dir); await turn(dir);
+    assert.ok(!SERVER["doc.md"], "⑦-c 여러 턴 뒤에도 되살아나면 안 된다");
+    assert.equal(readOr(path.join(dir, "doc.md")), "서버 원본", "⑦-d 로컬 파일은 사람이 지울 때까지 그대로 둔다");
+    ok("🔴 ⑦ 중앙 삭제 → pull 이 여러 번 돌아도 되살아나지 않는다(#3787 진동)");
+  }
+
+  // ══ ⑧ 삭제 뒤 **로컬에서 고치면** 올라간다 — 묘비가 «영구 금지» 가 되면 안 된다 ══
+  {
+    SERVER = {}; putServer("doc.md", "서버 원본");
+    const dir = await mkProj();
+    await turn(dir);
+    delete SERVER["doc.md"];
+    await turn(dir);                                                   // 묘비가 선다
+    await turn(dir, async () => { await fsp.writeFile(path.join(dir, "doc.md"), "내가 새로 씀"); });
+    assert.equal(SERVER["doc.md"]?.body, "내가 새로 씀", "⑧ 삭제 뒤 로컬에서 새로 쓴 건 올라가야 한다");
+    ok("⑧ 중앙 삭제 뒤 로컬에서 고치면 올라간다(묘비가 영구 금지가 아니다)");
+  }
+
+  // ══ ⑨ 삭제 뒤 **로컬에서도 지우면** 조용히 수렴한다 — 묘비가 쌓이지 않는다 ══
+  {
+    SERVER = {}; putServer("doc.md", "서버 원본");
+    const dir = await mkProj();
+    await turn(dir);
+    delete SERVER["doc.md"];
+    await turn(dir);
+    await fsp.rm(path.join(dir, "doc.md"));
+    await turn(dir); await turn(dir);
+    assert.ok(!SERVER["doc.md"], "⑨ 양쪽 다 없으면 그대로");
+    assert.deepEqual(conflictsOf(dir), [], "⑨ 해소된 뒤엔 충돌 보고가 남으면 안 된다");
+    ok("⑨ 중앙·로컬 둘 다 삭제 → 조용히 수렴(충돌 0)");
+  }
+
+  // ══ ⑩ **내가 올린 직후** 남이 지워도 재업로드하지 않는다 ══
+  //  워터마크(last_pull)만으로 푸는 안이 여기서 깨진다 — 내가 올린 파일의 mtime 은 last_pull 보다 크다.
+  {
+    SERVER = {};
+    const dir = await mkProj();
+    await turn(dir, async () => { await fsp.writeFile(path.join(dir, "mine.md"), "내 문서"); });
+    assert.equal(SERVER["mine.md"]?.body, "내 문서", "⑩ 먼저 올라가야 한다");
+    delete SERVER["mine.md"];                                          // 남이 중앙에서 지움
+    await turn(dir); await turn(dir);
+    assert.ok(!SERVER["mine.md"], "⑩ 내가 올린 직후 남이 지워도 재업로드하면 안 된다");
+    ok("⑩ 올린 직후 중앙 삭제 → 재업로드 안 함(워터마크 단독안이 깨지는 자리)");
+  }
+
   console.log(`\n${pass} passed`);
 } finally {
   server.close();

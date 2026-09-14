@@ -190,19 +190,46 @@ function fromCache(cwd) {
 }
 
 
-// ── 싱크 원장 — pull 훅이 "실제로 받아서 지금 보유 중인 서버 파일"을 적어둔 것. 삭제·신규 판정의 유일한 근거. ──
-//  없음·깨짐 → 빈 원장 → 삭제 전파 0 · 서버에 없는 로컬 파일은 전부 '신규'로 취급(C3 이전과 동일) = fail-safe.
-// 동기화 비교 키는 **NFC 정본**이다(#1278b) — pull 훅과 같은 규칙. 맥 readdir 은 NFD 를 돌려주므로(실측)
-//  로컬 walk 결과를 서버 매니페스트와 바이트 비교하면 전량이 '새 파일'로 보여 재업로드·중복이 난다.
-//  ⚠ 접는 건 **키만**이다 — 디스크 읽기는 실제 로컬 이름(f.abs)으로, 서버 삭제는 서버가 준 실제 경로로 한다.
+// 동기화 비교 키는 **NFC 정본**이다(#1278b). 맥은 로컬에 NFD 로 저장된 이름을 readdir 로 그대로 돌려주므로
+//  (실측: NFC 로 써도 readdir 은 NFD 반환) 서버 경로와 바이트 비교하면 같은 파일이 매번 '새 파일'로 보인다
+//  → 전량 재업로드·중복. 원장 키·서버 조회 키를 전부 이걸로 접는다. 디스크 접근 경로는 접지 않는다(실제 이름 필요).
 const nk = (p) => String(p ?? "").normalize("NFC");
 
+// ── 싱크 원장 v2 — **base(공통조상)** 이다. 「지금 보유 중」이 아니라 「마지막으로 양쪽이 일치한 상태」. ──
+//  🔴 v1 이 진동을 냈다(#3787, 2026-09-14 실측): 원장을 pull 은 「지금 서버에 있는 것」으로, push 는
+//   「한때 받은 적 있는 것」으로 읽었다. 그래서 중앙에서 지운 파일을 ①push 가 «되살리지 않는다» 로 막고
+//   ②pull 이 원장을 서버 스냅샷으로 통째 교체해 그 기억을 지우고 ③다음 push 가 «진짜 새 문서» 로 재업로드
+//   → 사람이 또 지움 → 반복. pull(턴마다)·push(도구마다)라 주기가 초 단위여서 자료함이 눈에 띄게 깜빡였다.
+//
+//  v2 는 **삭제도 하나의 base 상태**로 적는다:
+//    files: { <경로>: {mtime,size} }        — 양쪽이 일치한 서버 버전
+//    tombs: { <경로>: {mtime,size,at} }     — **서버에서 사라진 걸 봤다**(사라지기 직전 우리가 갖고 있던 기준선)
+//  이러면 push 가 「로컬이 묘비와 같으면 그건 중앙이 지운 그 파일 → 안 올린다 / 다르면 삭제 뒤 새로 쓴 것 → 올린다」
+//  를 **추측 없이** 판정한다. 워터마크(last_pull)만으로 푸는 안은 «내가 올린 직후 남이 지운» 경우에 깨진다
+//  (그 파일의 mtime 이 last_pull 보다 크다 — project-bidi.test.mjs ⑩ 이 그 자리를 강제한다).
+//
+//  묘비 수명: 로컬에서도 그 파일이 사라지면 함께 지운다(할 일 끝). 로컬에 남아 있는 한 유지 — 그게 곧
+//  「이 파일은 이제 로컬 전용」이라는 사실이고, 그 기억이 없으면 다시 되살아난다.
+//  v1 원장은 tombs 없음으로 읽어 그대로 동작한다(하위호환).
 function readLedger(projDir) {
   try {
     const o = JSON.parse(fs.readFileSync(path.join(projDir, ".lively", "sync-ledger.json"), "utf8"));
-    const files = (o && o.files && typeof o.files === "object" && !Array.isArray(o.files)) ? o.files : {};
-    return Object.fromEntries(Object.entries(files).map(([k, v]) => [nk(k), v]));   // 구 원장(NFD 키)도 여기서 접힌다
-  } catch { return {}; }
+    const pick = (k) => {
+      const v = (o && o[k] && typeof o[k] === "object" && !Array.isArray(o[k])) ? o[k] : {};
+      return Object.fromEntries(Object.entries(v).map(([kk, vv]) => [nk(kk), vv]));   // 구 원장(NFD 키)도 여기서 접힌다
+    };
+    return { files: pick("files"), tombs: pick("tombs") };
+  } catch { return { files: {}, tombs: {} }; }   // 없음·깨짐 → 빈 원장 = 보호도 삭제전파도 안 함(fail-safe)
+}
+function writeLedger(projDir, files, tombs) {
+  try {
+    fs.writeFileSync(path.join(projDir, ".lively", "sync-ledger.json"),
+      JSON.stringify({ v: 2, at: new Date().toISOString(), files, tombs: tombs || {} }, null, 2) + "\n");
+  } catch { /* 실패는 무해 — 원장 없음은 fail-safe 쪽이다 */ }
+}
+/** 로컬 파일이 이 기준선과 **바이트 동일한 그 파일**인가 — pull·push 가 mtime 을 서버 값으로 맞추므로 정확히 일치한다. */
+function sameAsBaseline(st, base) {
+  return !!base && !!st && st.size === base.size && Math.floor(st.mtimeMs) === base.mtime;
 }
 
 // 서버가 자동 생성하는 파일 — up-sync 대상이 아니다(올리지도 지우지도 않는다). 내려주는 건 pull 이 한다.
@@ -335,14 +362,15 @@ async function localFiles(base) {
   catch { return; }
   const server = new Map((Array.isArray(manifest.files) ? manifest.files : []).map((f) => [nk(f.path), f]));
 
-  const ledger = readLedger(projDir);
+  const led = readLedger(projDir);
+  const ledger = led.files, tombs = led.tombs;
   // 🔴 서버·로컬 어느 쪽이든 전체를 못 봤으면 '서버에 없음'/'로컬에 없음'이 **'안 보임'과 구분되지 않는다**.
   //  그 상태에서 신규 판정(→덮어쓰기)도 삭제 판정(→지우기)도 하면 안 된다. 수정분 올리기는 여전히 안전하다
   //  (매니페스트에 **있는** 파일만 근거로 삼으므로).
   const complete = !manifest.truncated && !local.truncated;
 
   // 6) 판정 — 올릴 것 / 충돌
-  const push = [], conflicts = [];
+  const push = [], conflicts = [], tombDrop = [];
   for (const f of local.files) {
     if (f.size > MAX_BYTES) continue;
     if (SERVER_OWNED.has(f.path)) continue;                          // 서버 생성물 — 위 SERVER_OWNED 주석 참조
@@ -353,8 +381,22 @@ async function localFiles(base) {
       // ③ 매니페스트 상한에 잘려 안 보이는 서버 문서. ②③ 을 ① 로 오인해 올리면 각각 **남의 삭제를 되살리고**,
       // **남의 최신본을 우리 옛본으로 덮는다**. 원장과 truncated 가 셋을 가른다.
       if (!complete) continue;                                       // ③ 가능성 — 모르면 안 올린다
-      if (ledger[key]) { conflicts.push({ path: f.path, why: "받아둔 문서인데 서버에서 사라짐(중앙에서 삭제된 듯) — 되살리지 않고 로컬에 그대로 둠", last_pull: lastPull }); continue; } // ②
-      push.push(f);                                                  // ① 진짜 새 문서
+      // ② 기준선이 있다 = 한때 서버에서 받은 파일이다. 그 기준선은 **두 자리에** 있을 수 있다:
+      //   files — 아직 원장에 남아 있음(pull 이 삭제를 아직 못 봄. 지운 파일이 최신이었으면 manifest.newest 가
+      //           내려가 pull 이 `newest <= last_pull` 로 조기 종료하므로 이 상태가 오래 간다)
+      //   tombs — pull 이 「서버에서 사라진 걸 봤다」고 옮겨 적음(#3787 — 원장 재작성에도 안 지워진다)
+      //  판정은 **한 규칙**이다: 로컬이 기준선 그대로면 «중앙이 지운 그 파일» 이라 안 올리고, 다르면
+      //  «삭제 뒤 로컬에서 새로 쓴 것» 이라 올린다. 두 자리를 다르게 판정하면 같은 상황이 pull 타이밍에 따라
+      //  갈린다 — 그게 지금 «로컬에서 고쳤는데 영영 안 올라가는» 자리였다.
+      const baseline = ledger[key] || tombs[key];
+      if (baseline) {
+        if (f.size === baseline.size && f.mtime === baseline.mtime) {
+          conflicts.push({ path: f.path, why: "받아둔 문서인데 서버에서 사라짐(중앙에서 삭제된 듯) — 되살리지 않고 로컬에 그대로 둠(올리려면 파일을 고치세요)", held_mtime: baseline.mtime, last_pull: lastPull });
+          continue;
+        }
+        if (tombs[key]) tombDrop.push(key);                          // 고쳤다 → 묘비를 걷고 올린다
+      }
+      push.push(f);                                                  // ① 진짜 새 문서(기준선 없음) 또는 삭제 뒤 새로 씀
       continue;
     }
     if (f.size === s.size && f.mtime <= s.mtime) continue;           // 로컬이 서버와 같거나 더 옛것 → 할 일 없음
@@ -425,12 +467,14 @@ async function localFiles(base) {
   //      '지금 서버본이 곧 우리 것'이라 과다 주장이 아니다 — 서버가 그 바이트를 갖고 있다고 방금 응답했다.
   //    · 사라진 게 확실한 것(서버에도 없음 · 우리가 지움) → 제거. 안 빼면 우리가 지운 파일이 원장에 남고,
   //      삭제로 서버 newest 가 낮아져 pull 이 조기 종료하면 영영 남는다.
-  if (ledgerDrop.length || ledgerDropAfterPush.length || Object.keys(ledgerSet).length) {
+  if (ledgerDrop.length || ledgerDropAfterPush.length || tombDrop.length || Object.keys(ledgerSet).length) {
     try {
       const next = { ...ledger, ...ledgerSet };
       for (const p of [...ledgerDrop, ...ledgerDropAfterPush]) delete next[p];
-      fs.writeFileSync(path.join(projDir, ".lively", "sync-ledger.json"),
-        JSON.stringify({ v: 1, at: new Date().toISOString(), files: next }, null, 2) + "\n");
+      const nextTombs = { ...tombs };
+      for (const p of tombDrop) delete nextTombs[p];                 // 고쳐서 올렸다 → 묘비 해제
+      for (const p of Object.keys(ledgerSet)) delete nextTombs[p];   // 올라간 건 더 이상 묘비가 아니다
+      writeLedger(projDir, next, nextTombs);
     } catch { /* 실패는 무해 — 다음 pull 이 다시 쓴다 */ }
   }
 

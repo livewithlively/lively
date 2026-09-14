@@ -72,10 +72,15 @@ async function mkProj(name, marker, files = {}, ledger = null) {
   const dir = path.join(root, name);
   await fsp.mkdir(path.join(dir, ".lively"), { recursive: true });
   await fsp.writeFile(path.join(dir, ".lively", "project.json"), JSON.stringify(marker, null, 2) + "\n");
-  if (ledger) await fsp.writeFile(path.join(dir, ".lively", "sync-ledger.json"), JSON.stringify({ v: 1, files: ledger }, null, 2) + "\n");
+  if (ledger) await fsp.writeFile(path.join(dir, ".lively", "sync-ledger.json"), JSON.stringify({ v: 2, files: ledger, tombs: {} }, null, 2) + "\n");
   for (const [p, body] of Object.entries(files)) {
     await fsp.mkdir(path.dirname(path.join(dir, p)), { recursive: true });
     await fsp.writeFile(path.join(dir, p), body);
+    // 🔴 원장에 기준선이 있는 파일은 **그 mtime 을 찍는다** — pull 이 다운로드 후 utimes 로 하는 것과 같다.
+    //  불변식: 성공적으로 싱크된 파일은 로컬 mtime == 서버 mtime == 기준선 mtime. 이걸 안 맞추면 «받은 그대로»와
+    //  «로컬에서 고쳤다»가 구분되지 않아, 픽스처가 현실에 없는 상태(기준선은 있는데 mtime 이 딴 값)를 만든다.
+    const b = ledger && ledger[p];
+    if (b && typeof b.mtime === "number") { const t = new Date(b.mtime); await fsp.utimes(path.join(dir, p), t, t); }
   }
   return dir;
 }
