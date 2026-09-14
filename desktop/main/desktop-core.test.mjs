@@ -1440,6 +1440,114 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
   });
 }
 
+// ── Z7. 윈도우 코드서명 (#3940 · win-signing.mjs) — «서명이 유효한가» 와 «설치된 앱이 다음 업데이트를 받아들이는가» ──────
+// 서명판부터 resources/app-update.yml 에 publisherName 이 박히고, electron-updater 는 **다음** 설치기의 서명자를 그 이름과
+//  대조한다. 비면 검사가 조용히 꺼지고, 틀리면 첫 서명판을 깐 사용자는 그 뒤 업데이트를 영영 못 받는다. 우리 CN 은 한글이라
+//  실제 대조는 Windows 러너에서 electron-updater 의 함수로 하고(verify), 여기선 판정 규칙과 배선을 못박는다.
+{
+  const { withAzureSigning, signatureProblems, publisherProblems, signingTargets, gateMode } = await import("../win-signing.mjs");
+  const wf = readFileSync(fileURLToPath(new URL("../../.github/workflows/release-desktop.yml", import.meta.url)), "utf8");
+  const WANT = "CN=라이블리, O=라이블리";
+  const CREDS = { AZURE_TENANT_ID: "tenant", AZURE_CLIENT_ID: "client", AZURE_CLIENT_SECRET: "secret" };
+  const SIGN = { WIN_SIGN_ENDPOINT: "https://krc.codesigning.azure.net", WIN_SIGN_ACCOUNT: "lively", WIN_SIGN_PROFILE: "livelydesktop", WIN_SIGN_PUBLISHER: WANT };
+  const basePkg = () => ({ name: "lively-desktop", version: "0.1.0", build: { appId: "io.lvly.desktop", productName: "Lively", win: { target: ["nsis"], signtoolOptions: {} }, nsis: { oneClick: true } } });
+
+  t("Z7a 설정 끼우기 — 자격이 전부 있을 때만, 값은 그대로, 입력은 안 건드린다", () => {
+    // A1 전부 있음 → 4필드가 값 그대로 · signtool 설정 빠짐 · 나머지 보존 · 입력 불변
+    const pkg = basePkg();
+    const before = JSON.stringify(pkg);
+    const next = withAzureSigning(pkg, { ...CREDS, ...SIGN });
+    assert.deepEqual(next.build.win.azureSignOptions, { endpoint: "https://krc.codesigning.azure.net", codeSigningAccountName: "lively", certificateProfileName: "livelydesktop", publisherName: WANT });
+    assert.ok(!("signtoolOptions" in next.build.win), "signtool 설정이 남았다 — azureSignOptions 와 같이 쓰지 않는다");
+    assert.deepEqual(next.build.win.target, ["nsis"], "win 의 다른 설정이 사라졌다");
+    assert.deepEqual(next.build.nsis, { oneClick: true }, "win 밖의 설정이 바뀌었다");
+    assert.equal(next.build.productName, "Lively");
+    assert.equal(JSON.stringify(pkg), before, "입력 package.json 을 바꿨다");
+    // A2 자격 env 자체가 없음(포크·로컬 빌드) → 끼우지 않는다
+    assert.equal(withAzureSigning(basePkg(), { ...SIGN }), null);
+    // A3 ★ GitHub 은 없는 시크릿을 빈 문자열로 넘긴다 — 빈 값·공백은 «없음» 이다
+    assert.equal(withAzureSigning(basePkg(), { AZURE_TENANT_ID: "", AZURE_CLIENT_ID: "", AZURE_CLIENT_SECRET: "  ", ...SIGN }), null);
+    // A4 일부만 → 실패(조용히 무서명으로 나가면 안 된다)
+    assert.throws(() => withAzureSigning(basePkg(), { ...CREDS, AZURE_CLIENT_SECRET: "", ...SIGN }), /일부만/);
+    // A5 자격은 있는데 서명 대상 설정이 빠짐 → 실패
+    assert.throws(() => withAzureSigning(basePkg(), { ...CREDS, ...SIGN, WIN_SIGN_PUBLISHER: "" }), /WIN_SIGN_PUBLISHER/);
+    assert.throws(() => withAzureSigning(basePkg(), { ...CREDS, ...SIGN, WIN_SIGN_ENDPOINT: undefined }), /WIN_SIGN_ENDPOINT/);
+    // A6 값을 정규화하지 않는다 — 들어온 그대로가 app-update.yml 에 박혀야 게이트가 차이를 본다
+    const nfd = WANT.normalize("NFD");
+    assert.equal(withAzureSigning(basePkg(), { ...CREDS, ...SIGN, WIN_SIGN_PUBLISHER: nfd }).build.win.azureSignOptions.publisherName, nfd);
+  });
+
+  t("Z7b 서명 판독 — Valid 이고 타임스탬프가 있어야 통과", () => {
+    const good = { Status: "Valid", StatusMessage: "Signature verified.", Timestamped: true };
+    assert.deepEqual(signatureProblems(good), []);                                                               // B1
+    assert.ok(signatureProblems({ Status: "NotSigned", StatusMessage: "", Timestamped: false }).length >= 1, "무서명을 통과시켰다");  // B2
+    assert.ok(signatureProblems({ ...good, Status: "HashMismatch" }).length >= 1, "해시 불일치를 통과시켰다");        // B3
+    // B4 ★ 타임스탬프가 없으면 막는다 — Artifact Signing 인증서는 3일짜리라 사흘 뒤 그 서명은 무효가 된다
+    const noTs = signatureProblems({ ...good, Timestamped: false });
+    assert.equal(noTs.length, 1, JSON.stringify(noTs));
+    assert.match(noTs[0], /타임스탬프/);
+    assert.ok(signatureProblems(null).length >= 1, "판독 실패를 통과시켰다");                                        // B5
+    assert.ok(signatureProblems({}).length >= 1, "상태가 빈 판독을 통과시켰다");
+  });
+
+  t("Z7c 게시자 이름 — 비었거나 끼운 값과 한 글자라도 다르면 막는다", () => {
+    assert.deepEqual(publisherProblems([WANT], WANT), []);                                                       // C1
+    assert.deepEqual(publisherProblems(WANT, WANT), [], "문자열 하나로 적혀도 같은 이름이다");                        // C2
+    // C3 ★ 비면 설치된 앱이 다음 업데이트의 서명을 **검사하지 않는다**(NsisUpdater: publisherName == null → 건너뜀)
+    assert.match(publisherProblems(undefined, WANT).join(" "), /검사하지 않는다/);
+    assert.ok(publisherProblems(null, WANT).length >= 1, "null 을 통과시켰다");
+    assert.ok(publisherProblems([], WANT).length >= 1, "빈 목록을 통과시켰다");                                        // C4
+    assert.ok(publisherProblems([""], WANT).length >= 1, "빈 이름을 통과시켰다");
+    assert.ok(publisherProblems(["CN=라이블리,O=라이블리"], WANT).length >= 1, "공백 차이를 같은 이름으로 봤다");         // C5
+    assert.ok(publisherProblems([WANT.normalize("NFD")], WANT).length >= 1, "NFD 자모 분리를 같은 이름으로 봤다");      // C6
+    assert.deepEqual(publisherProblems(["CN=옛 이름", WANT], WANT), [], "여러 이름 중 하나면 된다");                  // C7
+    assert.deepEqual(publisherProblems(["CN=아무거나"], ""), [], "끼운 값이 없으면 존재만 본다");                      // C8
+  });
+
+  t("Z7d 검사 대상 — 설치기와 앱 exe 를 보고, blockmap·언인스톨러·다른 제품은 섞지 않는다", () => {
+    const rel = ["Lively-Setup-0.1.0.exe", "Lively-Setup-0.1.0.exe.blockmap", "latest.yml", "__uninstaller-nsis-lively-desktop.exe", "Other-Setup-1.0.0.exe", "win-unpacked"];
+    assert.deepEqual(signingTargets(rel, ["Lively.exe", "resources", "ffmpeg.dll"], "Lively"), { installers: ["Lively-Setup-0.1.0.exe"], app: ["win-unpacked/Lively.exe"] });  // D1·D2
+    assert.deepEqual(signingTargets(rel, ["resources"], "Lively").app, [], "앱 exe 가 없는데 대상에 넣었다");          // D3
+    assert.deepEqual(signingTargets(undefined, undefined, "Lively"), { installers: [], app: [] });               // D4
+  });
+
+  t("Z7e 게이트 모드 — 자격은 있는데 설정이 안 끼워졌으면 통과시키지 않는다", () => {
+    const opts = { publisherName: WANT };
+    for (const clientId of [undefined, "", "   "]) {
+      assert.equal(gateMode({ clientId, azureSignOptions: undefined }), "skip", `clientId=${JSON.stringify(clientId)} 인데 건너뛰지 않았다`);  // E1
+    }
+    assert.equal(gateMode({ clientId: "client", azureSignOptions: opts }), "verify");                            // E2
+    assert.equal(gateMode({ clientId: "client", azureSignOptions: undefined }), "misconfigured", "무서명 설치본이 서명된 척 나간다");  // E3
+    assert.equal(gateMode({ clientId: undefined, azureSignOptions: opts }), "verify", "설정이 끼워졌으면 자격과 무관하게 본다");      // E4
+  });
+
+  t("Z7f ★ 배선 — 끼우기는 빌드 직전 같은 스텝, 게이트는 빌드 뒤·업로드 앞에서 실패하면 막는다", () => {
+    // F1 package.json 에 박으면 자격 없는 빌드(포크·로컬 dist:win)가 서명 단계에서 죽는다
+    const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"));
+    assert.ok(!(pkg.build.win && pkg.build.win.azureSignOptions), "package.json 에 azureSignOptions 가 박혀 있다");
+    // F2 ⚠ 존재를 먼저 단언한다 — 위치만 비교하면 스텝이 없을 때 indexOf 가 -1 이라 통과한다(CL5 교훈)
+    const at = (s) => { const i = wf.indexOf(s); assert.ok(i >= 0, `워크플로에 «${s}» 가 없다`); return i; };
+    const configureAt = at("node win-signing.mjs configure");
+    const buildAt = at("electron-builder --win");
+    const verifyAt = at("node win-signing.mjs verify");
+    const uploadAt = at("softprops/action-gh-release");
+    assert.ok(configureAt < buildAt && buildAt < verifyAt && verifyAt < uploadAt, "순서가 끼우기 → 빌드 → 게이트 → 업로드가 아니다");
+    assert.ok(!wf.slice(configureAt, buildAt).includes("- name:"), "끼우기가 빌드와 다른 스텝이다");
+    // F3 게이트 스텝은 실패를 삼키지 않는다
+    const gateStep = wf.slice(0, verifyAt).split("- name:").pop();
+    assert.match(gateStep, /^\s*서명 유효성 \(win\)/, "게이트가 «서명 유효성 (win)» 스텝에 있지 않다");
+    assert.ok(!/continue-on-error:\s*true/.test(gateStep), "게이트가 continue-on-error 라 실패해도 릴리스가 나간다");
+    // F4 빌드 스텝 env — 비밀 전달 · 엔드포인트는 계정 리전 · 게시자 이름은 인증서 주체의 CN·O 만
+    const buildStep = wf.slice(0, buildAt).split("- name:").pop();
+    assert.match(buildStep, /AZURE_CLIENT_SECRET:\s*\$\{\{\s*secrets\.AZURE_CLIENT_SECRET\s*\}\}/, "빌드 스텝에 서비스 주체 비밀이 안 간다");
+    assert.match(buildStep, /WIN_SIGN_ENDPOINT:\s*https:\/\/krc\.codesigning\.azure\.net\s*$/m, "엔드포인트가 계정 리전(Korea Central)과 다르다 — 403");
+    const pub = /WIN_SIGN_PUBLISHER:\s*"([^"]*)"/.exec(buildStep);
+    assert.ok(pub, "빌드 스텝에 WIN_SIGN_PUBLISHER 가 없다");
+    // 인증서 주체(Certificate Subject Preview)에서 옮긴 값이다. 바꾸려면 인증서 주체를 다시 확인하고 이 단언도 같이 바꿔라.
+    assert.equal(pub[1], WANT, "게시자 이름이 인증서 주체의 CN·O 와 다르다 — 서명판 사용자의 업데이트가 끊긴다");
+  });
+}
+
 
 // ── H. 웹 UI 셸 (#1541 · web-shell.mjs) — 앱 창에 게이트웨이의 /ui/ 를 그대로 싣는다(화면 코드 두 벌 금지) ─────────
 {
