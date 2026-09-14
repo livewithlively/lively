@@ -265,13 +265,14 @@ function hostExec(sessionId: string, host: string, waitedMs: number, d: OutboxEx
       if (down > 0) await d.local.keys.down(sessionId, down).catch(() => { /* 다음 폴에서 다시 본다 */ });
       if (enter) await d.local.keys.enter(sessionId).catch(() => { /* 다음 폴에서 다시 본다 */ });
     };
-    if (demoted) return onGateway();
     if (down > OUTBOX_KEYS_MAX_DOWN) {
       //  상한보다 먼 선택지는 우리가 아는 대화상자가 아니다 — 대신 누르지 않는다(못 읽으면 안 누른다 · `trustAcceptDowns` 머리말).
       //   게이트웨이로 넘기지도 않는다: 호스트가 받지 않을 걸음을 게이트웨이 tmux 로 치면 상한이 뜻을 잃는다. 대화상자는 사람이 답할 수 있게 남는다.
+      //   ⚠ 강등보다 **먼저** 본다 — 이 행이 이미 강등돼 게이트웨이가 누르는 중이어도 상한은 같다(K4b).
       d.warn({ sessionId, host, down, max: OUTBOX_KEYS_MAX_DOWN }, "outbox: 선택지가 누르기 상한보다 멀다 — 대신 누르지 않는다");
       return;
     }
+    if (demoted) return onGateway();
     let r: unknown;
     try {
       r = await ask({ step: "keys", down, enter });

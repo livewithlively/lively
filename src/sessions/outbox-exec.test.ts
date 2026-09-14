@@ -352,6 +352,18 @@ test("★ K4 누르기 상한+1 — 호스트에 보내지 않고 게이트웨�
   assert.equal(r.count("warn"), 1);
 });
 
+test("★ K4b 누르기 상한+1 — 이 행이 이미 강등됐어도(앞 보기 실패) 게이트웨이 tmux 로 누르지 않는다", async () => {
+  const pane = trustDowns(OUTBOX_KEYS_MAX_DOWN + 1);
+  const r = rig({ host: (a) => { if (a.step === "peek") throw rpcErr(false); return { ok: true }; } });
+  const exec = await outboxExecFor(ID, r.deps);
+  await exec.peek();                                              // 안 보냈다 → 이 행은 강등(경고 1) · 보기는 게이트웨이가
+  assert.deepEqual(r.onGateway(), [["local.peek", ID]], "시험 전제: 앞 보기가 강등을 일으키지 않았다 — 아래 단언이 강등 뒤를 안 잰다");
+  await acceptTrustDialog(ID, pane, exec.trustKeys());
+  assert.equal(r.sentTo("keys").length, 0, "강등된 행이 상한을 넘는 칸을 호스트에 보냈다");
+  assert.deepEqual(r.onGateway(), [["local.peek", ID]], "강등된 행이 상한을 넘는 칸을 게이트웨이 tmux 로 눌렀다");
+  assert.equal(r.count("warn"), 2, "강등 경고 1 + 상한 경고 1");
+});
+
 test("F4a·F4b 누르기가 안 보냈다(sent=false)·거절(unsupported) — 같은 시도를 게이트웨이가(내리기 n → Enter)", async () => {
   const answers: Array<[string, () => unknown]> = [
     ["sent=false", () => { throw rpcErr(false); }],
