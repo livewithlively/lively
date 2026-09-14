@@ -53,7 +53,10 @@ const tree = (id, cls, { past = false, face = false, ctrl = true } = {}) =>
 
 const IDS = ["c-live", "c-past", "c-live-on", "c-past-on", "s-live", "s-past", "t-live", "t-past", "t-live-on", "t-past-on", "t-past-other"];
 
-const page = (theme) => `<!doctype html><html${theme === "dark" ? ' data-theme="dark"' : ""}><meta charset="utf-8">
+// 테마는 두 판 다 data-theme 로 못박는다 — 라이트를 비워 두면 «시스템 따름» 이라, 맥이 다크 모드면 헤드리스 크롬이
+//  prefers-color-scheme:dark 를 받아 90-dark.css 의 `:root:not([data-theme="light"])` 가 물리고 라이트 판을 다크 토큰으로 잰다
+//  (다크 모드 맥에서 W1 --canvas=#0C111D 로 빨간불 — #3948 실측). 앱이 «라이트를 골랐다» 를 표시하는 방법과 같다.
+const page = (theme) => `<!doctype html><html data-theme="${theme}"><meta charset="utf-8">
 <link rel="stylesheet" href="01-base.css"><link rel="stylesheet" href="40-v2.css"><link rel="stylesheet" href="90-dark.css">
 <body><div class="v2-side" style="width:300px">
 <div class="v2-pg open"><div class="v2-pg-list">
