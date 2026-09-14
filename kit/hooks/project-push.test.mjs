@@ -72,11 +72,25 @@ async function mkProj(name, marker, files = {}, ledger = null) {
   const dir = path.join(root, name);
   await fsp.mkdir(path.join(dir, ".lively"), { recursive: true });
   await fsp.writeFile(path.join(dir, ".lively", "project.json"), JSON.stringify(marker, null, 2) + "\n");
-  if (ledger) await fsp.writeFile(path.join(dir, ".lively", "sync-ledger.json"), JSON.stringify({ v: 1, files: ledger }, null, 2) + "\n");
+  const led = ledger ? JSON.parse(JSON.stringify(ledger)) : null;
   for (const [p, body] of Object.entries(files)) {
     await fsp.mkdir(path.dirname(path.join(dir, p)), { recursive: true });
     await fsp.writeFile(path.join(dir, p), body);
+    // 🔴 원장에 기준선이 있는 파일은 **«받은 그대로»** 를 표현해야 한다 — 그 상태의 정의가
+    //  «로컬 mtime == 기준선 mtime» 이기 때문이다(pull 이 다운로드 후 utimes 로 만드는 상태).
+    //  종전 픽스처는 파일을 «지금 시각» 으로 써서 기준선과 달랐고, 그러면 «받은 그대로» 와 «로컬에서 고쳤다» 가
+    //  구분되지 않는 **현실에 없는 상태**가 된다.
+    //  ⚠ utimes 로 찍은 값을 그대로 믿으면 안 된다 — 파일시스템 시각 정밀도가 낮으면(일부 CI 오버레이 fs)
+    //   ms 가 잘려 되읽은 값이 달라진다(실측: macOS 통과 · 리눅스 CI 실패). 그래서 **찍고 되읽어** 그 값을
+    //   기준선으로 삼는다. 테스트가 재려는 건 시각의 정확도가 아니라 «둘이 같다» 는 사실이다.
+    const b = led && led[p];
+    if (b && typeof b.mtime === "number") {
+      const t = new Date(b.mtime);
+      await fsp.utimes(path.join(dir, p), t, t);
+      b.mtime = Math.floor((await fsp.stat(path.join(dir, p))).mtimeMs);
+    }
   }
+  if (led) await fsp.writeFile(path.join(dir, ".lively", "sync-ledger.json"), JSON.stringify({ v: 2, files: led, tombs: {} }, null, 2) + "\n");
   return dir;
 }
 // hookTimeoutMs = run-custom 이 넘겨주는 '내가 SIGKILL 되는 시각'(LIVELY_HOOK_TIMEOUT_MS). 훅은 그 70% 에서 자력 종료한다.
