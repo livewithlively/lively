@@ -15,6 +15,7 @@
 //   S1 셀프호스트 · 등록부가 판정(비 primary)              → owner 면 creator, 아니면 invite · existing_account=다른 워크스페이스 완료 여부
 //   S2 셀프호스트 · primary(등록부 판정 없음)              → 인원수 폴백 · existing_account 는 그대로 계산
 //   A1 반영 — 합류자면 갈래·증류기·레인·묶음·리브 킥오프를 부르지 않는다(판정은 서버가 스스로)
+//   A3 반영 — 합류자의 용도 답은 워크스페이스 용도가 되지 않는다 · 합류자 칸엔 지금의 용도를 적는다(원준 결정 2026-09-14)
 //   U1 업로드 — «팀원 모두» 옵션은 자기 개인 루트 업로드에만 먹고, 기본값은 올린 사람만이다
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -179,6 +180,19 @@ test("A1 ★반영 — 합류자면 갈래·증류기·레인·묶음·리브 �
     "합류자에게도 리브를 띄운다(또는 건너뛴 이유를 안 싣는다)");
   assert.equal(HANDLER.split("kickoffLivAfterWelcome(").length, 2, "킥오프를 부르는 자리가 하나가 아니다");
   assert.match(HANDLER, /joining: \{ is_join: joining\.is_join, via: joining\.via \}/, "화면이 마무리 문구를 가를 판정을 응답에 안 싣는다");
+});
+
+test("A3 ★반영 — 합류자의 용도(stage)는 워크스페이스 용도가 되지 않는다 · 합류자 칸엔 지금의 용도를 적는다 (원준 2026-09-14 · 격리 리뷰)", () => {
+  const start = CODE.indexOf('restRead("me_welcome_apply"');
+  assert.ok(start >= 0, "반영 문을 못 찾았다 — 검사가 헛돈다");
+  const HANDLER = CODE.slice(start, CODE.indexOf("\n];", start));
+  //  workspacePurposeStage 는 구성원의 welcome.stage 를 «먼저 답한 순» 으로 읽는다 — 합류자의 답이 그 칸에 들어가면 워크스페이스 용도가 된다.
+  assert.match(HANDLER, /const stage = joining\.is_join\s*\?\s*await workspacePurposeStage\(currentTenant\(\)\?\.id \?\? null\)\.catch\(\(\) => null\)\s*:\s*s\(input\.stage, 40\);/,
+    "합류자가 보낸 용도가 그대로 welcome.stage 에 적힌다 — 먼저 끝낸 합류자가 워크스페이스 용도를 정한다");
+  assert.match(HANDLER, /welcome: \{[^}]*stage: stage \|\| null \}/, "완료 표식의 stage 가 판정한 값을 안 쓴다");
+  const gate = blockFrom(HANDLER, "if (!joining.is_join) {");
+  assert.ok(gate.includes("s(input.stage, 40)"), "묶음 시드가 주인 문 안에서 화면 값을 안 읽는다(무회귀)");
+  assert.equal(HANDLER.split("s(input.stage, 40)").length - 1, 2, "화면이 보낸 용도를 읽는 자리가 주인 문(묶음 시드)과 주인 갈래 둘이 아니다");
 });
 
 test("A2 리브 1턴에 합류자 갈래가 남아 있지 않다 — 이제 불리지 않는 분기다", () => {

@@ -176,7 +176,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     return WS;
   }
   /** (#1631) 이 워크스페이스의 용도를 먼저 정한 사람이 있으면 **합류자는 물려받는다** — 용도는 «자리» 의 성질이라 사람마다 다시 묻지 않는다.
-   *   물려받아야 2단(하는 일) 목록이 그 자리에 맞는다(안 물려받으면 stageOf() 폴백이 «회사 부서» 를 추측한다).
+   *   합류자는 용도·하는 일 장면을 지나지 않는다(원준 2026-09-14) — 물려받은 값은 그 사람의 «하는 일» 한 줄(work.asis)에만 쓰이고,
+   *   서버는 합류자의 답으로 워크스페이스 용도를 정하지 않는다(delivery/welcome.ts me_welcome_apply).
    *  ⚠ 지금 이 화면에서 직접 고른 값(S.stage)이 있으면 덮지 않는다 — 지금 답하는 사람이 세다. */
   function inheritPurpose() {
     if (isJoin() && WS && WS.workspace_purpose && !S.stage) { S.stage = String(WS.workspace_purpose); save(); }
@@ -1538,14 +1539,15 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   //  #1631(원준님 2026-09-13) — 맨 앞에 **인사(intro)** 를 둔다. 무엇을 묻기 전에 «Lively 가 무엇을 하는지»와
   //   «이 뒤에서 기본 설정을 한다»를 먼저 말한다. 두 차례표가 모두 인사에서 시작하고, 그 다음은 nextScene 이 가른다.
   const ORDER = ['intro', 'name', 'stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];
-  //  초대로 들어온 사람(합류자)의 차례표 뼈대(#3872 → #1631 원준 결정 2026-09-13). 사실에 따라 칸이 붙고 빠진다(flowFor):
+  //  초대로 들어온 사람(합류자)의 차례표(#3872 → #1631 원준 결정 2026-09-13 → #3872 원준 결정 2026-09-14). 사실에 따라 칸이 붙고 빠진다(flowFor):
   //   · team — 인사 다음에 «어느 팀에 왔는지» 를 먼저 말한다.
-  //   · stage — 없다. 이 워크스페이스의 용도는 먼저 정한 사람 것을 **물려받는다**(inheritPurpose). 아무도 안 정했을 때만 name 다음에 묻는다.
+  //   · stage·role — 없다. 용도·부서는 워크스페이스를 연 사람이 그 자리를 정하려고 답하는 질문이라 초대받은 사람이 다시 할 일이 아니다
+  //     (원준 2026-09-14). 용도는 먼저 정한 사람 것을 물려받기만 한다 — 아무도 안 정했어도 합류자에게는 묻지 않는다.
   //   · sources — **읽기 전용**(팀 연결은 보여 주되 수정은 못 하게). 팀에 켜진 수집이 없으면 이 칸도 없다.
   //   · connect — 없다(연결·해제·수집 계정 변경 불가).
-  //   · terminal·local·app — 초대 전부터 계정이 있던 사람(이전에 처음 설정을 해 본 사람)에게만 붙는다(JOIN_INSTALL).
+  //   · terminal·local·app — 처음 가입한 사람을 포함해 **모든 합류자**에게 붙는다(JOIN_INSTALL). 9/13 의 «초대 전부터 계정이 있던 사람만» 은 2026-09-14 결정으로 뒤집혔다.
   //   · 끝나면 리브·묶음 심기·2턴 없이 홈으로 간다(서버 반영이 스스로 가른다 — delivery/welcome.ts).
-  const ORDER_JOIN = ['intro', 'team', 'name', 'role', 'files', 'ai', 'claude', 'sources'];
+  const ORDER_JOIN = ['intro', 'team', 'name', 'files', 'ai', 'claude', 'sources'];
   const JOIN_INSTALL = ['terminal', 'local', 'app'];
   const STEP_OF = Object.fromEntries([...ORDER, 'team'].map((k, i) => [k, i]));
   /** 장면의 전체 순서(두 차례표를 합친 것) — «이 장면 다음» 을 차례표에 없는 장면에서도 찾게 한다(goNext·fitScene). */
@@ -1553,18 +1555,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   //  서버가 준 사실(GET /api/ui/me/welcome 의 joining·workspace_purpose) — 판정은 화면이 하지 않는다.
   let JOIN = null;
   const isJoin = () => !!(JOIN && JOIN.is_join);
-  /** 이 워크스페이스의 용도를 아직 아무도 안 정했나 — 그때만 합류자에게 1단을 묻는다. */
-  const askStage = () => !(WS && WS.workspace_purpose);
-  /** 설치 장면(터미널·내 컴퓨터·앱 받기)을 보일까 — 초대 전부터 계정이 있던 사람만. 모르면(null) 안 보인다. */
-  const showInstall = () => !!(JOIN && JOIN.existing_account === true);
   /** 차례표를 사실에서 만든다(순수 — 화면 상태를 읽지 않는다. invitee-onboarding.test 가 이 몸통을 그대로 돌린다). */
   function flowFor(f) {
     if (!f.join) return ORDER;
-    const at = ORDER_JOIN.indexOf('name') + 1;
-    const rest = ORDER_JOIN.slice(at).filter((k) => k !== 'sources' || f.teamSources > 0);
-    return [...ORDER_JOIN.slice(0, at), ...(f.askStage ? ['stage'] : []), ...rest, ...(f.existingAccount ? JOIN_INSTALL : [])];
+    return [...ORDER_JOIN.filter((k) => k !== 'sources' || f.teamSources > 0), ...JOIN_INSTALL];
   }
-  const FLOW = () => flowFor({ join: isJoin(), askStage: askStage(), teamSources: teamCollectOn().length, existingAccount: showInstall() });
+  const FLOW = () => flowFor({ join: isJoin(), teamSources: teamCollectOn().length });
   /** 지금 차례표에서 이 장면 **다음**. 두 차례표가 갈리는 자리(인사 다음·이름 다음)를 여기 한 곳으로 모은다. */
   function nextScene(cur) { const f = FLOW(); const i = f.indexOf(cur); return (i >= 0 && i + 1 < f.length) ? f[i + 1] : 'app'; }
   /** cur **다음** 장면으로 간다 — 차례표에 남은 장면이 없으면 마무리한다(합류자 차례표는 app 으로 끝나지 않을 수 있다).
@@ -1711,11 +1707,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     /* 막2 — 사이드바가 유령으로 등장. 노션 p2: 큰 질문 + 카드 선택지. */
     stage: {
       html: () => qHead('stage',
-        //  (#1631) 합류자가 이 장면에 오는 것은 **아무도 이 워크스페이스의 용도를 정하지 않았을 때**뿐이다. 그 사람은 [팀]·[이름]을
-        //   이미 지나왔고, 처음 설정 뒤 리브가 알아서 세팅하지도 않는다 — 그래서 자기소개·약속 대신 왜 묻는지만 말한다.
-        isJoin()
-          ? '이 워크스페이스가 무엇을 담는 곳인지 아직 아무도 정하지 않았어요. 정해 주시면 뒤에 들어오는 분들은 이 질문을 건너뜁니다.'
-          : `안녕하세요, 저는 리브예요. <b>이 워크스페이스를 계속 돌봐 드릴 담당자입니다.</b> 몇 가지만 여쭙고, 나머지는 자료를 보고 제가 알아서 세팅할게요.`,
+        //  (합류자는 이 장면을 지나지 않는다 — 원준 2026-09-14, ORDER_JOIN 머리말.)
+        `안녕하세요, 저는 리브예요. <b>이 워크스페이스를 계속 돌봐 드릴 담당자입니다.</b> 몇 가지만 여쭙고, 나머지는 자료를 보고 제가 알아서 세팅할게요.`,
         '이 워크스페이스를 무엇에 쓰실 건가요?',
         '자세한 건 안 여쭙습니다. 두 번만 고르시면 됩니다.')
         /* (#1631) 축을 **사람에서 자리로** 옮겼다. 종전 «어디에서 일하고 계세요?» 는 그 사람을 물어서,
@@ -1728,34 +1721,31 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             ${card('학업·연구', '수업·논문·시험 자료를 담습니다', ICONS.academy, S.stage === 'study')}
           </div><button class="ob-q-skip" data-skip>나중에 정할게요</button>`,
       bind: (el) => {
+        if (isJoin()) { goNext('stage', { back: true }); return; }   // 합류자 차례표엔 이 장면이 없다 — 주소(?scene=)·오래된 탭으로 와도 용도를 정하지 않는다(원준 2026-09-14)
         const ID = { '회사·팀 업무': 'company', '내 사업·프리랜스': 'solo', '학업·연구': 'study' };
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
           $$('.ob-opt-card', el).forEach((x) => x.classList.remove('ob-on')); c.classList.add('ob-on');
           const id = ID[c.dataset.opt]; if (S.stage !== id) { S.job = null; }
           S.stage = id; save(); saveWork(); await sleep(200); goScene('role');
         });
-        //  (#1631) 합류자가 건너뛰면 **정하지 않은 채로** 둔다 — 합류자의 답은 뒤에 오는 사람들이 물려받는 워크스페이스 용도가 된다.
-        //   조용히 «회사·팀 업무» 로 채우면 아무도 고른 적 없는 용도를 팀 전체가 물려받는다(주인은 종전 그대로).
-        $('[data-skip]', el).onclick = () => { if (!isJoin()) S.stage = S.stage || 'company'; goScene('role'); };
+        $('[data-skip]', el).onclick = () => { S.stage = S.stage || 'company'; goScene('role'); };
       },
     },
     role: {
       html: () => qHead('role',
         //  ⚠ label 은 **카드용**(짧은 이름)이라 문장에 그대로 이으면 «회사·팀 업무이시군요» 가 된다.
-        //   문장은 갈래마다 따로 쓴 ack 를 쓴다. 그리고 1단을 **이 차례표에서 묻지 않은 사람**(용도를 물려받은 합류자)에게는
-        //   되뇌지 않는다: 답한 적 없는 것을 «…자리군요» 라고 하면 안 된다(#3872·#1631).
-        esc(FLOW().includes('stage') && S.stage ? (stageOf().ack || stageOf().label) : (S.name ? `${S.name}님, 하나만 더 여쭐게요.` : '하나만 더 여쭐게요.')),
-        //  (#1631, 원준 결정 2026-09-13) 묻는 것은 그 사람의 정체성이 아니라 **이 워크스페이스에서 무슨 일을 하려는지**다 — 주인·합류자 모두.
+        //   문장은 갈래마다 따로 쓴 ack 를 쓴다. 합류자는 이 장면을 지나지 않는다(원준 2026-09-14 — ORDER_JOIN 머리말).
+        esc(S.stage ? (stageOf().ack || stageOf().label) : (S.name ? `${S.name}님, 하나만 더 여쭐게요.` : '하나만 더 여쭐게요.')),
+        //  (#1631, 원준 결정 2026-09-13) 묻는 것은 그 사람의 정체성이 아니라 **이 워크스페이스에서 무슨 일을 하려는지**다.
         //   갈래별 축(부서·일·단계)은 거르는 말로 아래에 둔다. 선택지·저장 값은 그대로다(v6/category-groups.ts 가 그 라벨을 키로 쓴다).
-        //   «고르신 것에 맞춰 자료를 읽습니다» 는 주인에게만 — 합류자의 답은 팀의 분류·묶음을 만들지 않는다.
         '이 워크스페이스에서 어떤 일을 하시나요?',
-        isJoin() ? `${esc(stageOf().axis)} 목록에 없으면 직접 적어 주세요.`
-                 : `${esc(stageOf().axis)} 고르신 것에 맞춰 자료를 읽습니다. 목록에 없으면 직접 적어 주세요.`)
+        `${esc(stageOf().axis)} 고르신 것에 맞춰 자료를 읽습니다. 목록에 없으면 직접 적어 주세요.`)
         + `<div class="ob-opt-cards">${stageOf().opts.map(([l]) => card(l, '', jobIcon(l), S.job === l)).join('')}</div>
            <div class="ob-q-write" hidden><input id="roleIn" type="text" placeholder="무슨 일을 하시는지 적어 주세요"><button class="ob-btn ob-btn-pri ob-btn-inline" id="roleInGo" style="margin-top:0">확인</button></div>
            <button class="ob-q-skip" data-other>목록에 없어요. 직접 적을게요</button>
            <button class="ob-q-skip" data-skip>나중에 정할게요</button>`,
       bind: (el) => {
+        if (isJoin()) { goNext('role', { back: true }); return; }   // 합류자 차례표엔 이 장면이 없다(원준 2026-09-14)
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
           $$('.ob-opt-card', el).forEach((x) => x.classList.remove('ob-on')); c.classList.add('ob-on');
           S.job = c.dataset.opt; save(); saveWork(); await sleep(200); goScene('files');
@@ -3411,7 +3401,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     if (scene) {
       S = Object.assign(fresh(), got.progress.state);
       inheritPurpose();
-      //  (#1631) 저장된 장면이 지금 차례표에 없으면(옛 합류자 차례표의 connect · 물려받은 용도의 stage · 설치 장면) 그 뒤의 첫 장면으로 연다.
+      //  (#1631) 저장된 장면이 지금 차례표에 없으면(옛 판 합류자 차례표의 role·stage·connect · 켜진 팀 수집이 없어 빠진 sources) 그 뒤의 첫 장면으로 연다.
       //   합류자는 팀 수집을 읽고 나서 맞춘다 — 안 읽고 맞추면 켜진 팀 수집이 있어도 sources 를 건너뛴다.
       if (isJoin() && collP) await Promise.race([collP, sleep(1500)]);
       if (destroyed) return;

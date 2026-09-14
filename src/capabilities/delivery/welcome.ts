@@ -522,11 +522,17 @@ export const welcomeCapabilities: Capability[] = [
       }
 
       // ── 업무 방식과 결정 ── 리브의 기억이 사는 자리에 남긴다(다음 세션의 리브가 이걸 읽는다).
+      //  (#3872, 원준 결정 2026-09-14) 워크스페이스 용도는 그 자리를 연 사람이 정한다 — 초대로 들어온 사람의 답은 용도가 되지 않는다.
+      //   welcome.stage 는 workspacePurposeStage 가 «먼저 답한 사람» 순으로 읽는 칸이라, 합류자에게는 화면이 보낸 값 대신
+      //   지금의 용도(아무도 안 정했으면 null)를 적는다. 화면은 합류자에게 용도를 묻지 않지만 주소(?scene=)·판정 전 틈으로 올 수 있다.
+      const { WORK_ASIS_SEP, workspacePurposeStage } = await import("../../org/store/members.js");
+      const { currentTenant } = await import("../../org/tenant-context.js");
       const job = s(input.job, 200);
-      const stage = s(input.stage, 40);
+      const stage = joining.is_join
+        ? await workspacePurposeStage(currentTenant()?.id ?? null).catch(() => null)
+        : s(input.stage, 40);
       const nowline = s(input.nowline, 300);
       const firstOrder = s(input.first_order, 400);
-      const { WORK_ASIS_SEP } = await import("../../org/store/members.js");
       const asis = [stage ? STAGE_LABEL[stage] ?? stage : null, job].filter(Boolean).join(WORK_ASIS_SEP) || null;
       if (asis || nowline) {
         await appendLivProfile(userId, {
