@@ -8,7 +8,7 @@
 //  엣지 표는 스크래치패드 `d6/pr1/spec.md` 의 P1~P9(가지 행 포함).
 import assert from "node:assert/strict";
 import test from "node:test";
-import { runOutboxStep, typedOutcomeOf, type OutboxStepDeps } from "./outbox-host-step.js";
+import { runOutboxStep, typedOutcomeOf, OUTBOX_KEYS_MAX_DOWN, type OutboxStepDeps } from "./outbox-host-step.js";
 import { firstPromptStep, trustAcceptDowns, tailOf } from "./session-first-prompt.js";
 import { injectFlushMs } from "./send-keys.js";
 import { isSessionGoneError } from "./tmux-exec.js";
@@ -173,6 +173,18 @@ test("P8d 누르기 — Enter 가 실패하면 at=enter", async () => {
   const h = fakeHost({ fail: (a) => (isKey("Enter")(a) ? killedErr() : null) });
   assert.deepEqual(await runOutboxStep({ step: "keys", id: ID, down: 0, enter: true }, h.deps), { ok: false, at: "enter" });
   assert.deepEqual(h.events, ["has-session", "send-keys Enter"]);
+});
+
+//  #3773 PR1 후속 — 칸 하나가 tmux 호출 하나라, 상한 없는 `down` 한 요청이 호스트에서 끝나지 않는 루프가 됐다. 게이트웨이도 같은 상수를 넘지 않는다.
+test("★ K1 누르기 상한 — down 이 정확히 상한이면 받는다: 확인 → 아래 상한 칸 → Enter", async () => {
+  const h = fakeHost();
+  assert.deepEqual(await runOutboxStep({ step: "keys", id: ID, down: OUTBOX_KEYS_MAX_DOWN, enter: true }, h.deps), { ok: true });
+  assert.deepEqual(h.events, ["has-session", ...Array.from({ length: OUTBOX_KEYS_MAX_DOWN }, () => "send-keys Down"), "send-keys Enter"]);
+});
+
+test("★ K2 누르기 상한+1 — Enter 유무와 무관하게 거절, tmux 0", async () => {
+  await rejectedWithoutTmux({ step: "keys", id: ID, down: OUTBOX_KEYS_MAX_DOWN + 1, enter: true }, `down ${OUTBOX_KEYS_MAX_DOWN + 1}`);
+  await rejectedWithoutTmux({ step: "keys", id: ID, down: OUTBOX_KEYS_MAX_DOWN + 1, enter: false }, `Enter 없는 down ${OUTBOX_KEYS_MAX_DOWN + 1}`);
 });
 
 // ── 보기(peek) ──────────────────────────────────────────────────────────────

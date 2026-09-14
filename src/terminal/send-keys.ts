@@ -67,6 +67,35 @@ export class SendKeysNotStarted extends Error {
   }
 }
 
+/** 치기가 멈춘 단계 — 세션 확인(`check`)에서 멈췄으면 **한 글자도 안 갔다**. 그 뒤(`text`·`enter`)는 입력칸에 무엇이 남았는지 모른다. */
+export type SendKeysStage = "check" | "text" | "enter";
+
+/**
+ * 계획 하나를 **정해진 순서로** 싣는다 — 세션 확인 → 글자(청크 순서 = 글자 순서) → flush 대기(규약 ②) → Enter.
+ *  이 호스트의 `sendKeysToSession` 과 세션 호스트의 아웃박스 치기(`outbox-host-step`)가 **같은 이 함수**를 쓴다(#2600 T2 d6 · #3773) —
+ *  순서가 두 벌이면 한쪽만 고쳐진다(예: flush 를 Enter 뒤로 옮기는 실수가 한 자리에만 난다).
+ *  실패는 던지지 않고 **멈춘 단계와 원래 오류**를 돌려준다 — «한 글자도 안 갔다» 를 예외로 알릴지 값으로 알릴지는 부른 쪽이 정한다.
+ *  ⚠ 빈 계획(`oneLine` 이 빔)을 거르는 것도 부른 쪽이다 — 여기는 받은 계획을 싣기만 한다.
+ */
+export async function runSendKeysPlan(
+  id: string,
+  plan: SendKeysPlan,
+  io: { tmux: (argv: string[]) => Promise<unknown>; sleep: (ms: number) => Promise<void> },
+): Promise<{ ok: true } | { ok: false; stage: SendKeysStage; err: unknown }> {
+  let stage: SendKeysStage = "check";
+  try {
+    await io.tmux(["has-session", "-t", id]);   // 부재면 여기서 멈춘다 — 없는 세션에 키를 흘리지 않는다
+    stage = "text";
+    for (const argv of plan.keys) await io.tmux(argv);
+    await io.sleep(injectFlushMs(plan.oneLine.length));
+    stage = "enter";
+    await io.tmux(plan.enter);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, stage, err };
+  }
+}
+
 /**
  * 이 호스트의 mux 세션에 텍스트를 넣고 제출한다. 세션이 없으면 throw(호출자가 error 로 보고한다).
  *
@@ -76,12 +105,9 @@ export class SendKeysNotStarted extends Error {
 export async function sendKeysToSession(id: string, text: string): Promise<void> {
   const plan = sendKeysPlan(id, text, TMUX_BIN);
   if (!plan.oneLine) throw new Error("주입할 텍스트가 비어 있습니다");
-  // 부재면 throw — 없는 세션에 키를 흘리지 않는다. 여기서 죽으면 **한 글자도 안 갔다**(SendKeysNotStarted).
-  try { await tmux(["has-session", "-t", id]); }
-  catch (e) { throw new SendKeysNotStarted(e); }
-  for (const argv of plan.keys) await tmux(argv); // 청크 순서 = 글자 순서
-  await new Promise((r) => setTimeout(r, injectFlushMs(plan.oneLine.length)));
-  await tmux(plan.enter);
+  const r = await runSendKeysPlan(id, plan, { tmux, sleep: (ms) => new Promise((res) => setTimeout(res, ms)) });
+  // 세션 확인에서 죽었으면 **한 글자도 안 갔다**(SendKeysNotStarted). 그 뒤의 실패는 원래 오류 그대로 — 입력칸에 반쪽이 남았을 수 있다.
+  if (!r.ok) throw r.stage === "check" ? new SendKeysNotStarted(r.err) : r.err;
 }
 
 // ── 단일 키(Enter·Escape) — 대화 화면(#1719 세션 대화창)이 승인·중단을 대신 누른다 ──

@@ -119,7 +119,8 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 /** 신뢰 대화상자에 보낼 키 — 시험은 tmux 없이 이걸 바꿔 끼운다. */
 export interface TrustKeys { down: (id: string, times: number) => Promise<void>; enter: (id: string) => Promise<void> }
-const TMUX_TRUST_KEYS: TrustKeys = { down: sendDownToSession, enter: (id) => sendKeyToSession(id, "Enter") };
+/** 이 호스트의 tmux 로 누르는 키 — 아웃박스 실행 자리의 게이트웨이 칸도 같은 키를 쓴다(`sessions/outbox-exec`, #3773). */
+export const TMUX_TRUST_KEYS: TrustKeys = { down: sendDownToSession, enter: (id) => sendKeyToSession(id, "Enter") };
 
 /**
  * 신뢰 대화상자를 **화면을 읽고** 수락한다 — «Yes» 까지 내린 뒤 Enter (#3626 · #3949).

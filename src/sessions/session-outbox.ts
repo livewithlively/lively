@@ -35,11 +35,10 @@
 //   교훈은 #2120~#2122 와 같다: **판정 함수의 정확성과 그 함수가 불리는 조건은 별개의 결함 축이다.**
 //
 //  관련: session-first-prompt.ts(준비 판정의 원조 — 홈 첫 지시도 이제 이 큐를 탄다) · harness-io/locate.ts(에코 확인의
-//  파일 찾기) · terminal/routes.ts(웹 보내기 → enqueue · 복원의 큐 승계) · web/session-chat.ts(대기·실패 상태 렌더).
+//  파일 찾기) · terminal/routes.ts(웹 보내기 → enqueue · 복원의 큐 승계) · web/session-chat.ts(대기·실패 상태 렌더) ·
+//  outbox-exec.ts(한 걸음 — 보기·누르기·치기 — 을 어디서 실행하나: 그 세션의 호스트 또는 게이트웨이, #3773).
 import path from "node:path";
 import { itemsPool } from "../db/client.js";
-import { tmux, isSessionGoneError } from "../terminal/tmux-exec.js";
-import { sendKeysToSession, sendKeyToSession, SendKeysNotStarted } from "../terminal/send-keys.js";
 import { firstPromptStep, acceptTrustDialog } from "../terminal/session-first-prompt.js";   // #3949 — 신뢰 대화상자는 읽고 누른다(첫 지시와 같은 함수)
 import { codexChatMode } from "../terminal/codex-chat-mode.js";
 import { harnessIo } from "../terminal/harness-io/adapter.js";
@@ -47,6 +46,7 @@ import { locateTranscript, ownerHomes } from "../terminal/harness-io/locate.js";
 import { localTranscriptFs, transcriptFsFor, type TranscriptFs } from "../terminal/harness-io/transcript-fs.js";
 import { sessionOsUser } from "../terminal/profiles.js";
 import { getSessionState, type SessionState } from "./session-state.js";
+import { outboxExecFor, type OutboxExec } from "./outbox-exec.js";   // #3773 — 한 걸음의 실행 자리(세션 호스트 또는 게이트웨이)
 import { logger } from "../log.js";
 
 export type OutboxStatus = "queued" | "sending" | "delivered" | "sent" | "failed";
@@ -137,16 +137,9 @@ export function stalledSinceNext(prev: string | null | undefined, reason: string
   return prev || nowIso;
 }
 
-/**
- * tmux 호출이 던졌다 — 이 세션은 **죽은 것인가, 못 닿는 것인가**(#2154 ②).
- *
- *  종전 코드는 `catch { return "gone" }` 였다. 그래서 노드 채널이 순간 빈 503(파킹 소켓 좀비) 하나, 중계
- *  타임아웃 하나로 그 세션의 대기 지시가 전부 버려졌다. 판정의 정본은 #835 의 isSessionGoneError 다 —
- *  tmux 가 **응답해서** "그런 세션 없음"이라고 말했거나(중계면 tmux 서버 증발까지) 그때만 gone 이다.
- */
-export function readyVerdictOnError(err: unknown): "gone" | "unknown" {
-  return isSessionGoneError(err) ? "gone" : "unknown";
-}
+//  tmux 호출이 던졌을 때 «죽었나·못 닿나»(#2154 ②) — 그 판정을 쓰는 곳이 게이트웨이가 직접 치는 칸뿐이라 실행 자리로 옮겼다(#3773).
+//   표 시험(session-outbox.test)이 이 이름으로 부르므로 여기서 다시 내보낸다.
+export { readyVerdictOnError } from "./outbox-exec.js";
 
 /** 에코 찾기용 바늘 — 트랜스크립트는 JSON 한 줄이라, 주입된 한 줄 텍스트를 JSON 문자열로 이스케이프한 형태로 찾는다.
  *  ⚠ **접두 160자만** 쓴다: 아주 긴 텍스트는 TUI 를 지나며 꼬리가 뒤섞일 수 있어(실측 2026-08-18, 3천자 프롬프트)
@@ -353,41 +346,73 @@ async function deliverLoop(sessionId: string): Promise<void> {
       continue;
     }
 
-    const ready = await waitReady(sessionId, harness, row.trust_ok);
+    //  실행 자리(#2600 T2 d6 · #3773) — 이 행의 걸음(보기·누르기·치기)을 그 세션의 호스트가 할까, 게이트웨이가 직접 할까. 행마다 한 번
+    //   고른다(새 세션이면 좌표를 잠깐 기다릴 수 있다 — outbox-exec 머리말). 갈린 결과를 남긴다(위 전송수단 로그와 같은 이유):
+    //   매니지드에서 «왜 아직 게이트웨이 tmux 를 치나» 를 여기서 읽는다.
+    const exec = await outboxExecFor(sessionId);
+    logger.info({ sessionId, seq: row.seq, host: exec.host, why: exec.why, waitedMs: exec.waitedMs }, "outbox: 실행 자리");
+    const ready = await waitReady(sessionId, harness, row.trust_ok, exec);
     if (ready !== "ready") {
       if (await settleStall(ready)) return;
       continue;
     }
 
     // 준비 확인됨 — 보낸다. 여기서부터는 **재전송하지 않는다**(중복 위험 — 파일 머리말).
-    const oneLine = flatOneLine(row.text);
-    try { await sendKeysToSession(sessionId, row.text); }
-    catch (e) {
-      // ⚠ **글자를 싣기 전에** 죽은 경우(SendKeysNotStarted = has-session 실패)만 되돌릴 수 있다 — 한 글자도
-      //  안 갔으니 중복 위험이 없다. 실측 2026-08-27: 진짜 유실 5건 중 하나가 정확히 여기였다(`send:
-      //  … has-session … node channel unavailable` → failed). 순간 장애 하나로 사람의 지시를 버리지 않는다.
-      //  글자를 싣기 시작한 뒤의 실패는 종전대로 failed — 입력칸에 반쪽이 남아 있을 수 있다.
-      if (e instanceof SendKeysNotStarted) {
-        if (await settleStall(readyVerdictOnError(e.cause))) return;
-        continue;
-      }
-      await mark(row.id, "failed", `send: ${(e as Error)?.message ?? e}`.slice(0, 300));
+    const sent = await sendReadyRow(row, harness, exec, (oneLine) => waitEcho(sessionId, st, oneLine));
+    if (sent.kind === "stall") {
+      if (await settleStall(sent.verdict)) return;
       continue;
     }
-    // 설정 명령(#1758)은 에코로 확인할 수 없다 — 슬래시 명령은 트랜스크립트에 친 글자 그대로가 아니라
-    //  `<command-name>` 형태로 적혀 이 바늘엔 영영 안 걸린다. 15초를 헛되이 기다리고 빈 Enter 를 덧보내는 대신
-    //  '보냄(미확인)'으로 마감한다 — 실제 적용 여부는 화면이 다음 턴의 model/effort 관측으로 스스로 안다.
-    if (row.kind === "control") { await mark(row.id, "sent", "control-no-echo"); continue; }
-    let echoed = await waitEcho(sessionId, st, oneLine);
-    if (needsSubmitRetry(echoed, harness)) {
-      // 미제출 방어(send-keys 규약 ② — TUI 가 글자를 다 받기 전에 Enter 가 닿으면 입력칸에 글만 남는다, 실측 2026-08-18).
-      //  판정 근거는 needsSubmitRetry 머리말 — **에코를 못 읽은 경우(unreadable)도 포함**한다(#1867).
-      await sendKeyToSession(sessionId, "Enter").catch(() => { /* 다음 에코 창에서 판정 */ });
-      echoed = await waitEcho(sessionId, st, oneLine);
-    }
-    if (echoed === "confirmed") await mark(row.id, "delivered");
-    else await mark(row.id, "sent", echoed === "unreadable" ? "echo-unreadable" : "echo-unconfirmed");
+    await mark(row.id, sent.status, sent.error);
   }
+}
+
+/** 준비가 확인된 한 행의 결말 — 배달 루프가 새긴다(`stall` 은 settleStall · 나머지는 그 상태로 mark). */
+export type SendOutcome =
+  | { kind: "stall"; verdict: "gone" | "unknown" }
+  | { kind: "mark"; status: "delivered" | "sent" | "failed"; error?: string };
+
+/**
+ * 준비가 확인된 한 행을 친다 — 치기 → 에코 확인 → (미제출이면) Enter 한 번 더 (#1753 · #3773).
+ *  DB 는 만지지 않는다 — 결말을 값으로 돌려주고 배달 루프가 새긴다. 그래서 시험이 가짜 실행 자리·에코를 끼워 이 함수를 그대로 부른다.
+ *
+ *  치기의 결말(`OutboxExec.type`) 넷:
+ *   · stall — **한 글자도 안 갔다**(세션 확인에서 멈춤). 들고 있을지 버릴지는 settleStall 이 정한다(#2154 ②) — 순간 장애 하나로
+ *     사람의 지시를 버리지 않는다(실측 2026-08-27: 진짜 유실 5건 중 하나가 `send: … has-session … node channel unavailable` 였다).
+ *   · fail — 치다 멈췄다. 입력칸에 반쪽이 남아 있을 수 있어 다시 치지 않고 failed.
+ *   · echo-only — 세션 호스트에 보냈는데 **쳤는지 모른다**(RPC 시간 초과·응답 전 끊김·모양 틀린 답). **다시 치지 않는다** — 에코가 확정해
+ *     줄 때만 delivered 이고 아니면 failed `send: host-unknown`(화면이 사람에게 재시도·삭제를 준다). 같은 지시가 두 번 가는 것보다
+ *     사람이 한 번 더 누르는 편이 되돌리기 쉽다. 미제출 방어 Enter 도 누르지 않는다 — 입력칸이 어떤 상태인지 모른다.
+ *   · echo — 다 쳤다. 아래 확인 경로(종전 그대로).
+ */
+export async function sendReadyRow(
+  row: Pick<OutboxRow, "text" | "kind">,
+  harness: string,
+  exec: Pick<OutboxExec, "type" | "enter">,
+  echo: (oneLine: string) => Promise<"confirmed" | "timeout" | "unreadable">,
+): Promise<SendOutcome> {
+  const oneLine = flatOneLine(row.text);
+  const typed = await exec.type(row.text);
+  if (typed.next === "stall") return { kind: "stall", verdict: typed.verdict };
+  if (typed.next === "fail") return { kind: "mark", status: "failed", error: typed.error };
+  if (typed.next === "echo-only") {
+    return (await echo(oneLine)) === "confirmed"
+      ? { kind: "mark", status: "delivered" }
+      : { kind: "mark", status: "failed", error: "send: host-unknown" };
+  }
+  // 설정 명령(#1758)은 에코로 확인할 수 없다 — 슬래시 명령은 트랜스크립트에 친 글자 그대로가 아니라
+  //  `<command-name>` 형태로 적혀 이 바늘엔 영영 안 걸린다. 15초를 헛되이 기다리고 빈 Enter 를 덧보내는 대신
+  //  '보냄(미확인)'으로 마감한다 — 실제 적용 여부는 화면이 다음 턴의 model/effort 관측으로 스스로 안다.
+  if (row.kind === "control") return { kind: "mark", status: "sent", error: "control-no-echo" };
+  let echoed = await echo(oneLine);
+  if (needsSubmitRetry(echoed, harness)) {
+    // 미제출 방어(send-keys 규약 ② — TUI 가 글자를 다 받기 전에 Enter 가 닿으면 입력칸에 글만 남는다, 실측 2026-08-18).
+    //  판정 근거는 needsSubmitRetry 머리말 — **에코를 못 읽은 경우(unreadable)도 포함**한다(#1867). 실패는 삼킨다(다음 에코 창에서 판정).
+    await exec.enter();
+    echoed = await echo(oneLine);
+  }
+  if (echoed === "confirmed") return { kind: "mark", status: "delivered" };
+  return { kind: "mark", status: "sent", error: echoed === "unreadable" ? "echo-unreadable" : "echo-unconfirmed" };
 }
 
 /**
@@ -440,31 +465,36 @@ async function mark(id: number, status: OutboxStatus, err?: string): Promise<voi
     [id, status, err ?? null]);
 }
 
+/** 준비 판정의 폴 간격 — 한 행이 sending 에 머무는 상한의 합(`outbox-exec.test` E15)이 이 값을 센다. */
+export const READY_POLL_MS = 500;
+
 /** 준비 판정 — 입력창이 뜰 때까지 READY_WINDOW_MS 안에서 폴링. 신뢰 대화상자는 trust_ok 일 때만 대신 누른다.
  *  ⚠ tmux 가 던졌다고 'gone' 이 아니다(#2154 ② · #835 와 같은 교리): 확답("그런 세션 없음"·중계 tmux 서버 증발)만
  *   gone 이고, 나머지(노드 채널 503·중계 타임아웃·도커 일시장애)는 **모름**이다. 종전엔 둘이 한 값이라, 순간 장애
- *   하나가 그 세션의 대기 지시를 전부 버리게 했다. */
-async function waitReady(sessionId: string, harness: string, trustOk: boolean): Promise<ReadyVerdict> {
-  const t0 = Date.now();
+ *   하나가 그 세션의 대기 지시를 전부 버리게 했다.
+ *  #3773 — 화면과 키는 실행 자리(`exec`)가 보고 누른다(그 세션의 호스트 또는 게이트웨이 — 닿았나도 거기서 접혀 온다).
+ *   **판정은 여기**, 게이트웨이 번들의 규칙으로 한다 — 호스트 번들은 따로 갱신되므로 판정을 거기 두면 두 판이 갈린다. */
+export async function waitReady(
+  sessionId: string, harness: string, trustOk: boolean,
+  exec: Pick<OutboxExec, "peek" | "trustKeys">,
+  clock: { now: () => number; sleep: (ms: number) => Promise<void> } = { now: Date.now, sleep },
+): Promise<ReadyVerdict> {
+  const t0 = clock.now();
   let acceptedTrust = false;
   for (;;) {
-    let pane = ""; let paneCmd = "";
-    try {
-      [pane, paneCmd] = await Promise.all([
-        tmux(["capture-pane", "-t", sessionId, "-p"]),
-        tmux(["display-message", "-p", "-t", sessionId, "#{pane_current_command}"]).then((s) => s.trim()),
-      ]);
-    } catch (e) { return readyVerdictOnError(e); }
-    const step = firstPromptStep({ pane, paneCmd, harness, elapsedMs: Date.now() - t0, maxMs: READY_WINDOW_MS, trustOk });
+    const seen = await exec.peek();
+    if (!seen.ok) return seen.verdict;
+    const step = firstPromptStep({ pane: seen.pane, paneCmd: seen.paneCmd, harness, elapsedMs: clock.now() - t0, maxMs: READY_WINDOW_MS, trustOk });
     if (step === "send") return "ready";
     if (step === "give-up") return "not-ready";
     if (step === "accept-trust" && !acceptedTrust) {
       //  #3949 — **화면을 읽고** «Yes» 로 옮긴 뒤 누른다(첫 지시와 같은 함수 — #3626). 종전엔 여기서 맹목 Enter 였고,
       //   현행 Claude Code 는 기본 선택이 «No, exit» 라 그 Enter 가 하네스를 끄고 이 지시를 «준비 안 됨» 으로 떨궜다.
       //   못 읽으면 아무것도 안 누르고 다음 폴에서 다시 본다 — 끝내 못 읽으면 READY_WINDOW_MS 뒤 not-ready 로 사람에게 남는다.
-      if ((await acceptTrustDialog(sessionId, pane)) === "accepted") acceptedTrust = true;
+      //  #3773 — 키는 실행 자리가 싣는다(호스트면 «내리기+Enter» 를 한 걸음으로).
+      if ((await acceptTrustDialog(sessionId, seen.pane, exec.trustKeys())) === "accepted") acceptedTrust = true;
     }
-    await sleep(500);
+    await clock.sleep(READY_POLL_MS);
   }
 }
 

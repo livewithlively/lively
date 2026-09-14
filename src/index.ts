@@ -102,9 +102,12 @@ console.log(`[boot] ${installTenantBinding()}`);
   const { mintAppToken } = await import("./apps/principal.js");
   const { materializeAppAssets } = await import("./apps/session-assets-gateway.js");
   const { ensureHarnessSeat, dropProbeSeat } = await import("./terminal/ai-login-run.js");   // #3668 T3
+  //  #3773 — 아웃박스는 노드 번들에 부채로 실려 registry 를 끌어오지 못한다. 호스트 재료(고르기·RPC·소유 판정)는 registry 한 곳의 것을 여기서 꽂는다.
+  const { sessionHostTargetFor, nodeRpc, gatewayDefersHere } = await import("./node/registry.js");
   registerGatewayCapabilities({ materializeMemberGit, resolveGitSecret, leaseGitSecretForNode,
     mintAppToken, materializeAppAssets: materializeAppAssets as never,
     harnessSeat: { ensure: ensureHarnessSeat, drop: dropProbeSeat },
+    outboxHost: { pick: sessionHostTargetFor, rpc: nodeRpc, defersHere: gatewayDefersHere },
     kitSeedDeps: { getMember, buildBundle: async () => (await buildInstallBundle(SEED_HARNESSES)).buffer } });
 }
 

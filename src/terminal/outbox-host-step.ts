@@ -19,14 +19,22 @@
 //  — 그래야 받는 쪽이 «아무것도 안 했다» 를 믿고 제 경로로 다시 할 수 있다.
 //
 // ⚠ DB 를 import 하지 않는다 — 노드 번들에 실린다(`scripts/node-agent-allowed-modules.json`, 가드 S19b).
-// ⚠ 키를 싣는 argv(tmux 키 이름·psmux 코드포인트)와 flush 지연은 `send-keys.ts` 의 계획 함수에서만 온다. 여기서 짓지 않는다.
+// ⚠ 키를 싣는 argv(tmux 키 이름·psmux 코드포인트)·flush 지연·치기 순서는 `send-keys.ts` 의 계획 함수와 싣기 함수(`runSendKeysPlan`)에서만
+//  온다. 여기서 짓지 않는다.
 import { TMUX_BIN } from "./catalog.js";
 import { tmux, isSessionGoneError } from "./tmux-exec.js";
-import { sendKeysPlan, sendKeyPlan, sendDownPlan, injectFlushMs } from "./send-keys.js";
+import { sendKeysPlan, sendKeyPlan, sendDownPlan, runSendKeysPlan } from "./send-keys.js";
 import { tailOf } from "./session-first-prompt.js";
 
 /** 걸음 이름 — 닫힌 목록이다. 여기 없는 이름은 거절한다(모르는 것을 짐작해 실행하지 않는다). */
 const STEPS = ["peek", "keys", "type"] as const;
+
+/**
+ * 누르기 한 걸음의 **아래 칸 상한** (#3773 PR1 후속) — 게이트웨이는 이보다 많이 시키지 않고(`sessions/outbox-exec`), 이 걸음은 넘으면
+ *  거절한다(tmux 0). 왜 있나: 칸 하나가 tmux 호출 하나다. 상한이 없으면 `down: 2^53-1` 같은 요청 하나가 호스트에서 끝나지 않는 루프가
+ *  되고, 그동안 RPC(15초)는 시간 초과로 끊겨 게이트웨이는 «눌렀는지 모른다» 만 안다. 신뢰 대화상자의 선택지는 둘~셋이라 8 이면 넉넉하다.
+ */
+export const OUTBOX_KEYS_MAX_DOWN = 8;
 
 /** 게이트웨이가 시키는 걸음(검증을 지난 모양). 봉투는 노드 프로토콜의 `ReqMsg.args` 다. */
 export type OutboxStepReq =
@@ -56,7 +64,7 @@ export type OutboxStepOutcome = PeekOutcome | KeysOutcome | TypeOutcome | StepRe
  *  잘못 읽고 누른 키는 되돌릴 수 없다(엉뚱한 선택지의 Enter · 반쪽 지시).
  *  · id 는 비지 않은 문자열이어야 한다 — `String(undefined)` 가 `"undefined"` 라는 세션을 찾게 두지 않는다.
  *  · keys 의 `down`·`enter` 는 **없으면** 0·false(누를 것이 없다)이고, 있으면 음이 아닌 정수·불리언이어야 한다 —
- *    `"1"` 을 1 로, `"true"` 를 참으로 읽지 않는다.
+ *    `"1"` 을 1 로, `"true"` 를 참으로 읽지 않는다. `down` 은 `OUTBOX_KEYS_MAX_DOWN` 을 넘으면 거절한다(상한과 같으면 받는다).
  *  · type 의 글이 공백뿐이면 거절한다 — `sendKeysToSession` 이 개행을 편 뒤 비면 «주입할 텍스트가 비어 있습니다» 로 던지는 것과 같은 뜻이다.
  */
 export function parseOutboxStep(args: unknown): OutboxStepReq | { unsupported: string } {
@@ -71,6 +79,7 @@ export function parseOutboxStep(args: unknown): OutboxStepReq | { unsupported: s
     const down = a.down === undefined ? 0 : a.down;
     const enter = a.enter === undefined ? false : a.enter;
     if (typeof down !== "number" || !Number.isSafeInteger(down) || down < 0) return { unsupported: "keys 의 down 은 0 이상의 정수여야 한다" };
+    if (down > OUTBOX_KEYS_MAX_DOWN) return { unsupported: `keys 의 down 은 ${OUTBOX_KEYS_MAX_DOWN} 이하여야 한다` };
     if (typeof enter !== "boolean") return { unsupported: "keys 의 enter 는 참·거짓이어야 한다" };
     return { step, id, down, enter };
   }
@@ -149,21 +158,10 @@ async function pressKeys(r: Extract<OutboxStepReq, { step: "keys" }>, d: OutboxS
 }
 
 /**
- * 치기 — 세션 확인 → 글자(청크 순서 = 글자 순서) → flush 대기 → Enter. `sendKeysToSession` 과 같은 순서·같은 계획 함수이고,
- *  다른 점은 **어디서 멈췄나를 값으로 남긴다**는 것 하나다(`typedOutcomeOf`).
+ * 치기 — 세션 확인 → 글자(청크 순서 = 글자 순서) → flush 대기 → Enter. 순서는 `sendKeysToSession` 과 **같은 함수**(`runSendKeysPlan`)가
+ *  정하고, 다른 점은 **어디서 멈췄나를 값으로 남긴다**는 것 하나다(`typedOutcomeOf`).
  */
 async function typeText(r: Extract<OutboxStepReq, { step: "type" }>, d: OutboxStepDeps): Promise<TypeOutcome> {
-  let stage: "check" | "text" | "enter" = "check";
-  try {
-    const plan = sendKeysPlan(r.id, r.text, d.bin);
-    await d.tmux(["has-session", "-t", r.id]);
-    stage = "text";
-    for (const argv of plan.keys) await d.tmux(argv);
-    await d.sleep(injectFlushMs(plan.oneLine.length));
-    stage = "enter";
-    await d.tmux(plan.enter);
-    return { ok: true, typed: "full" };
-  } catch (err) {
-    return typedOutcomeOf(stage, err, d.gone);
-  }
+  const out = await runSendKeysPlan(r.id, sendKeysPlan(r.id, r.text, d.bin), d);
+  return out.ok ? { ok: true, typed: "full" } : typedOutcomeOf(out.stage, out.err, d.gone);
 }

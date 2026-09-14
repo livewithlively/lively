@@ -441,8 +441,60 @@ t("[S19b] 아웃박스 걸음 모듈은 DB 표면을 import 하지 않고, 키 a
     `${OUTBOX_STEP} 가 DB 표면을 끌어왔다 — 세션 호스트에는 DB 가 없다`);
   assert.ok(!lines.some((l) => /["']send-keys["']/.test(l)),
     `${OUTBOX_STEP} 가 send-keys argv 를 손으로 짓는다 — psmux 노드에서 틀린 키가 간다`);
-  for (const fn of ["sendKeysPlan", "sendKeyPlan", "sendDownPlan", "injectFlushMs"]) {
+  //  flush 지연(`injectFlushMs`)은 치기 순서와 함께 `runSendKeysPlan` 이 싣는다(#3773 PR1 후속 — 순서 한 벌, 아래 S19c).
+  for (const fn of ["sendKeysPlan", "sendKeyPlan", "sendDownPlan", "runSendKeysPlan"]) {
     assert.ok(lines.some((l) => new RegExp(`\\b${fn}\\s*\\(`).test(l)), `${OUTBOX_STEP} 가 ${fn} 을 안 쓴다 — 키 규약이 두 벌이 된다`);
+  }
+});
+
+// ── S19: 아웃박스는 게이트웨이 tmux 를 직접 치지 않고 실행 자리를 지난다 (#2600 T2 d6 · #3773 PR2) ─────────────────────────────
+//  왜: 아웃박스는 준비 판정의 폴마다 화면을 읽고(tmux 둘) 신뢰 키·send-keys 를 게이트웨이 tmux 로 쳤다 — d6 «그 테넌트 tmux 0» 에
+//   남은 큰 자리였다. 배달 루프의 한 자리라도 tmux 로 직행하면 세션 호스트가 서 있어도 그 자리가 돌아온다. 호스트를 고르는 op 가
+//   `outboxStep` 이 아니면 옛 호스트를 거르는 관문(`nodeSupports`)이 엉뚱한 op 로 판정한다. 그리고 호스트 재료는 부팅이 registry 한 곳의
+//   것을 꽂는다 — 아웃박스는 노드 번들에 부채로 실려 있어 registry 를 import 하면 번들에 모듈 12개가 들어온다.
+//  ⚠ 줄 단위로 본다(`code()` 는 문자열 속 `/*` 에 걸린다 — S10c 머리말).
+const OUTBOX = "src/sessions/session-outbox.ts";
+const OUTBOX_EXEC = "src/sessions/outbox-exec.ts";
+t("[S19] 아웃박스는 tmux·send-keys 를 직접 부르지 않고 실행 자리를 지난다 · 호스트 판정 op 는 outboxStep · 부팅이 registry 의 재료를 꽂는다", () => {
+  const outbox = codeLines(OUTBOX);
+  assert.ok(outbox.length > 100, `${OUTBOX} 를 ${outbox.length}줄밖에 못 읽었다 — 이 가드가 아무것도 안 보고 있다`);
+  assert.deepEqual(outbox.filter((l) => /\b(tmux|sendKeysToSession|sendKeyToSession)\s*\(/.test(l)), [],
+    `${OUTBOX} 가 게이트웨이 tmux 로 직행한다 — 세션 호스트가 서 있어도 그 자리는 게이트웨이가 친다`);
+  assert.ok(outbox.some((l) => /=\s*await\s+outboxExecFor\s*\(\s*sessionId\s*\)/.test(l)), `${OUTBOX} 의 배달 루프가 실행 자리를 고르지 않는다`);
+  for (const [what, re] of [
+    ["준비 판정의 보기", /await\s+exec\.peek\s*\(\s*\)/],
+    ["신뢰 대화상자 키", /acceptTrustDialog\s*\(\s*sessionId\s*,\s*seen\.pane\s*,\s*exec\.trustKeys\s*\(\s*\)\s*\)/],
+    ["치기", /await\s+exec\.type\s*\(\s*row\.text\s*\)/],
+    ["미제출 방어 Enter", /await\s+exec\.enter\s*\(\s*\)/],
+  ]) assert.ok(outbox.some((l) => re.test(l)), `${OUTBOX} 의 ${what} 가 실행 자리를 안 지난다`);
+
+  const exec = codeLines(OUTBOX_EXEC);
+  assert.ok(exec.some((l) => /hostPick\s*\(\s*sessionId\s*,\s*"outboxStep"\s*\)/.test(l)), `${OUTBOX_EXEC} 의 호스트 고르기가 outboxStep 으로 묻지 않는다`);
+  assert.ok(exec.some((l) => /\.rpc\s*\(\s*host\s*,\s*"outboxStep"\s*,/.test(l)), `${OUTBOX_EXEC} 가 호스트에 outboxStep 이 아닌 op 를 보낸다`);
+  assert.ok(!exec.some((l) => /from\s+["']\.\.\/node\/registry\.js["']/.test(l)),
+    `${OUTBOX_EXEC} 가 registry 를 import 한다 — 노드 번들에 노드 연결·스토어 모듈이 들어온다`);
+
+  const index = codeLines("src/index.ts");
+  assert.ok(index.some((l) => /outboxHost:\s*\{\s*pick:\s*sessionHostTargetFor\s*,\s*rpc:\s*nodeRpc\s*,\s*defersHere:\s*gatewayDefersHere\s*\}/.test(l)),
+    "게이트웨이 부팅이 아웃박스 호스트 재료를 registry 한 곳(sessionHostTargetFor·nodeRpc·gatewayDefersHere)에서 꽂지 않는다");
+});
+
+// ── S19c: 치기 순서는 한 함수 (#3773 PR1 후속) ─────────────────────────────────────────────────────────────────────────
+//  왜: 확인 → 글자 → flush → Enter 순서가 게이트웨이(`sendKeysToSession`)와 세션 호스트(아웃박스 치기)에 두 벌로 있었다. 한쪽만 고치면
+//   (예: flush 를 Enter 뒤로) 같은 지시가 호스트로 갈 때와 게이트웨이로 갈 때 다르게 들어간다.
+const fnBody = (rel, sig) => {
+  const src = read(rel);
+  const at = src.indexOf(sig);
+  assert.ok(at >= 0, `${rel} 에서 ${sig} 를 못 찾았다 — 이름이 바뀌었나`);
+  const end = src.indexOf("\n}\n", at);
+  return src.slice(at, end < 0 ? undefined : end).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+};
+t("[S19c] 치기 순서는 runSendKeysPlan 한 곳 — 게이트웨이 sendKeysToSession 과 호스트 치기가 둘 다 그걸 부르고 순서를 손으로 짓지 않는다", () => {
+  for (const [rel, sig] of [["src/terminal/send-keys.ts", "export async function sendKeysToSession("], [OUTBOX_STEP, "async function typeText("]]) {
+    const body = fnBody(rel, sig);
+    assert.ok(body.length >= 3, `${rel} 의 ${sig} 본문을 ${body.length}줄밖에 못 잘랐다 — 이 가드가 아무것도 안 보고 있다`);
+    assert.ok(body.some((l) => /\brunSendKeysPlan\s*\(/.test(l)), `${rel} 의 치기가 runSendKeysPlan 을 안 부른다 — 순서가 두 벌이 된다`);
+    assert.ok(!body.some((l) => /"has-session"/.test(l)), `${rel} 의 치기가 세션 확인을 손으로 친다 — 순서를 다시 짓고 있다`);
   }
 });
 
