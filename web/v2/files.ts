@@ -206,7 +206,12 @@ export function createSessionFiles(host: HTMLElement, opts: FilesOpts): FilesHan
     if (!(e.dataTransfer && [...e.dataTransfer.types].includes('Files'))) return;
     e.preventDefault(); root.classList.add('fx-drag');
   });
-  root.addEventListener('dragleave', (e: DragEvent) => { if (e.target === root) root.classList.remove('fx-drag'); });
+  //  나갔는지는 «새로 들어간 요소가 이 앱 안인가» 로 가른다(#3948) — e.target 은 포인터가 떠난 요소라, 목록 줄 위에서
+  //   앱 밖으로 나가면 root 가 아니어서 «여기에 놓으면 이 폴더로 올라갑니다» 강조가 남았다. 프레임·창 밖이면 relatedTarget 은 null 이다.
+  root.addEventListener('dragleave', (e: DragEvent) => {
+    const to = e.relatedTarget as Node | null;
+    if (!(to && root.contains(to))) root.classList.remove('fx-drag');
+  });
   root.addEventListener('drop', (e: DragEvent) => {
     const files = [...((e.dataTransfer && e.dataTransfer.files) || [])];
     if (!files.length) return;
