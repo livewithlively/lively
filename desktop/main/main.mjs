@@ -22,7 +22,7 @@ import { runBootstrap, bootstrapPreview } from "./bootstrap.mjs";
 import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
 import { contextMenuModel, runContextMenuAction } from "./context-menu.mjs";
-import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
+import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor, cloudUrl } from "./ipc-contract.mjs";
 import { gatewayAdvice } from "./gateway-input.mjs";
 import { appReady, nodeStateOf, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup, createHashNav } from "./web-shell.mjs";
 import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, surfaceNavTarget, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
@@ -1186,6 +1186,77 @@ async function start(kind, opts) {
 }
 
 /**
+ * 쓸 수 있는 CLI 를 손에 쥔다 (#1541 T3 · #3968) — **두 시작 경로가 같은 단계를 쓴다.**
+ *
+ * ★ 조건은 '**CLI 가 없다**' 가 아니라 '**쓸 수 있는 CLI 가 없다**' 다.
+ *  앱보다 먼저 CLI 를 깔아 둔 PC 가 흔한데(=지금까지 CLI 로 쓰던 모든 사람), 그 구 CLI 는 `--json-events` 를
+ *  조용히 무시하고 exit 0 으로 끝낸다 → 앱은 이벤트를 하나도 못 받고 아무 설명 없이 멈춘다.
+ *  종전엔 '있으면 그대로 몬다' 라서 이 상태가 **영원히 안 풀렸다**(사람이 손으로 부트스트랩 한 줄을 쳐야 했다).
+ *
+ * ★ **어디서 받아오는지는 시작 경로가 정한다**(#3968): 주소 경로는 사람이 넣은 게이트웨이, 클라우드 경로는
+ *  라이블리 클라우드(app.lvly.io). 클라우드가 서빙하는 부트스트랩은 `MODE=cloud` 로 구워져 와서
+ *  `gateway-url` 을 **쓰지 않는다** — 그 값은 뒤이은 `setup --cloud` 의 로그인이 받아 온다(kit/cli/bootstrap.sh).
+ *  그래서 이 단계에 워크스페이스 주소가 필요 없다.
+ *
+ * @param {{url:string, cloud?:boolean}} src  부트스트랩을 받아올 주소와 그 성격
+ * @returns {Promise<{ok:true,cli:string}|{ok:false,error:string}>}
+ */
+async function ensureCli(src) {
+  const existing = locateCli(existsSync);
+  if (existing && state.cliOutdated === undefined) await refreshNodeStatus(existing);   // 아직 안 재봤으면 지금 잰다
+  if (existing && !state.cliOutdated && !state.cliBroken) return { ok: true, cli: existing };
+
+  // 새 PC(또는 계약을 모르는 구 CLI) — 그 주소가 서빙하는 부트스트랩으로 Node·CLI·PATH 를 확보한다.
+  // 문구가 사실과 맞아야 한다 — 이미 있는 걸 갈아끼우는 중에 "설치 중" 이라고 하면 사람은 뭘 하는지 모른다.
+  const label = !existing ? "라이블리 CLI 설치 중"
+    : state.cliBroken ? "라이블리 CLI 다시 설치 중(설치된 CLI 를 실행할 수 없습니다)"
+      : "라이블리 CLI 업데이트 중(설치된 버전이 오래됐습니다)";
+  state = { ...state, busy: true }; renderTray(); send(IPC.STATE, state);
+  progress = reduceProgress(null, { t: "start", cmd: "bootstrap" });
+  progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "start", i: 1, n: 2 });
+  send(IPC.PROGRESS, progress);
+  send(IPC.LOG, { stream: "raw", line: `$ ${bootstrapPreview(src.url) || ""}` });   // 무엇을 실행하는지 숨기지 않는다
+  const b = await runBootstrap({ gatewayUrl: src.url, onLine: (line) => send(IPC.LOG, { stream: "stderr", line }), timeoutMs: 15 * 60_000 });
+  // ★ 종료코드가 아니라 **CLI 가 실제로 생겼는지**로 판정한다 — `curl | sh` 는 curl 이 404 를 받아도 0 으로 끝난다.
+  const cli = locateCli(existsSync);
+  // ★ 업그레이드였다면 **실제로 말이 통하게 됐는지 다시 잰다.** 파일이 있다는 것만으로 넘어가면,
+  //  부트스트랩이 옛 키트를 그대로 남긴 경우(주소 오타로 404 등) 똑같은 침묵이 한 번 더 반복된다.
+  if (cli && existing) { state = { ...state, cliOutdated: undefined, cliBroken: null }; await refreshNodeStatus(cli); }
+  const stillBad = !cli || (existing && (state.cliOutdated || state.cliBroken));
+  if (stillBad) {
+    progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "fail", i: 1, n: 2 });
+    progress = reduceProgress(progress, { t: "end", ok: false, code: 1 });
+    state = { ...state, busy: false }; renderTray(); send(IPC.STATE, state); send(IPC.PROGRESS, progress);
+    return { ok: false, error: b.error || bootstrapFailNote(src, cli) };
+  }
+  progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "done", i: 1, n: 2 });
+  send(IPC.PROGRESS, progress);
+  state = { ...state, busy: false, cliPath: cli, cliFound: true };
+  await refreshState();
+  return { ok: true, cli };
+}
+
+/** 부트스트랩이 끝났는데도 쓸 수 있는 CLI 가 없다 — **다음 행동**을 준다(경로마다 사람이 쥔 패가 다르다). */
+function bootstrapFailNote(src, cli) {
+  if (cli) {
+    return state.cliBroken
+      ? `CLI 를 다시 설치했는데도 실행할 수 없습니다(${state.cliBroken}).`
+      : `CLI 를 업데이트했는데도 여전히 옛 버전입니다. 그 주소가 최신 키트를 서빙하는지 확인해 주세요: ${src.url}`;
+  }
+  // 클라우드 경로엔 사람이 고칠 '주소' 가 없다(그게 이 경로의 요지다) — 물을 게 없으니 **무엇이 막혔는지**를 말한다.
+  if (src.cloud) {
+    return `라이블리 클라우드에서 라이블리 CLI 를 받지 못했습니다: ${src.url}\n`
+      + "네트워크(사내 프록시·방화벽)가 이 주소를 막고 있지 않은지 확인한 뒤 다시 시도하세요. "
+      + "회사에 직접 설치한 라이블리라면 아래 «회사에 직접 설치했어요» 에 그 주소를 넣으세요.";
+  }
+  // ★ 여기서 "주소가 맞는지 확인하세요" 로 끝내면 사람은 **맞는 주소를 어디서 보는지**를 모른다(#2044).
+  //  매니지드에서 가장 흔한 원인이 그것이라(로그인 주소를 넣음) 다음 행동을 같이 준다.
+  return `이 주소에서 라이블리 CLI 를 받지 못했습니다: ${src.url}\n`
+    + "라이블리 클라우드라면 app.lvly.io 홈의 «데스크톱 앱·CLI 로 연결» 에 있는 워크스페이스 주소를, "
+    + "회사에 직접 설치했다면 관리자에게 받은 주소를 넣으세요.";
+}
+
+/**
  * 온보딩 (#1541 T3) — 주소 입력 한 번으로 **끝까지** 간다: (없으면) CLI 부트스트랩 → `lively setup`.
  *
  * `setup` 은 CLI 안에서 로그인 + 설치를 순서대로 한다. 앱이 login·install 을 따로 부르지 않는 이유가 그거다 —
@@ -1200,52 +1271,8 @@ async function onboard(url) {
   try { argvFor("login", { gateway: advice.url }); } catch (e) { return { ok: false, error: e.message }; }  // 형식 검사(한 자)
   const gw = advice.url;
 
-  // ★ 부트스트랩 조건은 '**CLI 가 없다**' 가 아니라 '**쓸 수 있는 CLI 가 없다**' 다.
-  //  앱보다 먼저 CLI 를 깔아 둔 PC 가 흔한데(=지금까지 CLI 로 쓰던 모든 사람), 그 구 CLI 는 `--json-events` 를
-  //  조용히 무시하고 exit 0 으로 끝낸다 → 앱은 이벤트를 하나도 못 받고 아무 설명 없이 멈춘다.
-  //  종전엔 '있으면 그대로 몬다' 라서 이 상태가 **영원히 안 풀렸다**(사람이 손으로 부트스트랩 한 줄을 쳐야 했다).
-  const existing = locateCli(existsSync);
-  if (existing && state.cliOutdated === undefined) await refreshNodeStatus(existing);   // 아직 안 재봤으면 지금 잰다
-  if (!existing || state.cliOutdated || state.cliBroken) {
-    // 새 PC(또는 계약을 모르는 구 CLI) — 게이트웨이가 서빙하는 부트스트랩으로 Node·CLI·PATH 를 확보한다.
-    // 문구가 사실과 맞아야 한다 — 이미 있는 걸 갈아끼우는 중에 "설치 중" 이라고 하면 사람은 뭘 하는지 모른다.
-    const label = !existing ? "라이블리 CLI 설치 중"
-      : state.cliBroken ? "라이블리 CLI 다시 설치 중(설치된 CLI 를 실행할 수 없습니다)"
-        : "라이블리 CLI 업데이트 중(설치된 버전이 오래됐습니다)";
-    state = { ...state, busy: true }; renderTray(); send(IPC.STATE, state);
-    progress = reduceProgress(null, { t: "start", cmd: "bootstrap" });
-    progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "start", i: 1, n: 2 });
-    send(IPC.PROGRESS, progress);
-    send(IPC.LOG, { stream: "raw", line: `$ ${bootstrapPreview(gw) || ""}` });   // 무엇을 실행하는지 숨기지 않는다
-    const b = await runBootstrap({ gatewayUrl: gw, onLine: (line) => send(IPC.LOG, { stream: "stderr", line }), timeoutMs: 15 * 60_000 });
-    // ★ 종료코드가 아니라 **CLI 가 실제로 생겼는지**로 판정한다 — `curl | sh` 는 curl 이 404 를 받아도 0 으로 끝난다.
-    const cli = locateCli(existsSync);
-    // ★ 업그레이드였다면 **실제로 말이 통하게 됐는지 다시 잰다.** 파일이 있다는 것만으로 넘어가면,
-    //  부트스트랩이 옛 키트를 그대로 남긴 경우(주소 오타로 404 등) 똑같은 침묵이 한 번 더 반복된다.
-    if (cli && existing) { state = { ...state, cliOutdated: undefined, cliBroken: null }; await refreshNodeStatus(cli); }
-    const stillBad = !cli || (existing && (state.cliOutdated || state.cliBroken));
-    if (stillBad) {
-      progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "fail", i: 1, n: 2 });
-      progress = reduceProgress(progress, { t: "end", ok: false, code: 1 });
-      state = { ...state, busy: false }; renderTray(); send(IPC.STATE, state); send(IPC.PROGRESS, progress);
-      return {
-        ok: false,
-        error: b.error || (cli
-          ? (state.cliBroken
-            ? `CLI 를 다시 설치했는데도 실행할 수 없습니다(${state.cliBroken}).`
-            : `CLI 를 업데이트했는데도 여전히 옛 버전입니다. 그 주소가 최신 키트를 서빙하는지 확인해 주세요: ${gw}`)
-          // ★ 여기서 "주소가 맞는지 확인하세요" 로 끝내면 사람은 **맞는 주소를 어디서 보는지**를 모른다(#2044).
-          //  매니지드에서 가장 흔한 원인이 그것이라(로그인 주소를 넣음) 다음 행동을 같이 준다.
-          : `이 주소에서 라이블리 CLI 를 받지 못했습니다: ${gw}\n`
-            + "라이블리 클라우드라면 app.lvly.io 홈의 «데스크톱 앱·CLI 로 연결» 에 있는 워크스페이스 주소를, "
-            + "회사에 직접 설치했다면 관리자에게 받은 주소를 넣으세요."),
-      };
-    }
-    progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "done", i: 1, n: 2 });
-    send(IPC.PROGRESS, progress);
-    state = { ...state, busy: false, cliPath: cli, cliFound: true };
-    await refreshState();
-  }
+  const c = await ensureCli({ url: gw, cloud: false });
+  if (!c.ok) return c;
   // 로그인 + 키트 설치는 CLI 의 setup 이 통째로 한다(순서·조건은 거기가 정본).
   const r = await start("setup", { gateway: gw });
   if (!r.ok) return r;
@@ -1254,6 +1281,28 @@ async function onboard(url) {
   //  진행 UI 가 실패(예: tmux 안내)를 보여주고 '다시 시도'는 node-start 를 재시도한다(lastRun).
   if (nextAfterSetup(state)) return start("node-start", {});
   return r;
+}
+
+/**
+ * 클라우드 시작 (#2044 의 나머지 반쪽 — #3968) — **주소를 묻지 않는 경로도 CLI 가 없는 PC 에서 시작돼야 한다.**
+ *
+ * ★ 종전엔 이 버튼이 곧장 `start("setup-cloud")` 로 갔고, 거기 CLI 가드가
+ *   «라이블리 CLI 를 찾지 못했습니다. 먼저 게이트웨이 주소를 입력하면 앱이 설치를 진행합니다.»
+ *  로 튕겼다. 그 문장은 이 버튼을 누른 사람에게 **알 수 없는 주소를 물어보는 것**이라, #2044 §0 이 없앤
+ *  닭-달걀(주소를 보려면 로그인해야 하고, 로그인하려면 주소가 필요하다)이 그대로 돌아온다.
+ *  매니지드 신규 설치는 **언제나 CLI 가 없는 PC** 라 이 경로는 첫 사용자에게 사실상 늘 막혀 있었다.
+ *
+ * ★ 설치의 끝은 주소 경로와 **같아야 한다**(노드까지) — 같은 앱에서 어떻게 시작했느냐로 결과가 갈리면 안 된다.
+ */
+async function onboardCloud(opts) {
+  if (running) return { ok: false, error: "이미 실행 중인 작업이 있습니다." };
+  let url;
+  try { url = cloudUrl(); } catch (e) { return { ok: false, error: e.message }; }   // 개발용 덮어쓰기(env)의 형식 오류
+  const c = await ensureCli({ url, cloud: true });
+  if (!c.ok) return c;
+  const r = await start("setup-cloud", opts || {});
+  if (!r.ok) return r;
+  return nextAfterSetup(state) ? start("node-start", {}) : r;
 }
 
 /** prompt → 렌더러로 넘기고 답을 기다린다. device-code 는 통지형이라 답하지 않는다(undefined). */
@@ -1270,13 +1319,9 @@ function askUser(p) {
 // ── IPC ─────────────────────────────────────────────────────────────────────
 ipcMain.handle(IPC.GET_STATE, async () => ({ state: await refreshState(), progress }));
 ipcMain.handle(IPC.RUN, async (_e, { kind, opts }) => {
-  // 클라우드 설치(#2044)는 **온보딩과 같은 끝**을 가져야 한다: 설치가 끝나면 노드까지 선다.
+  // 클라우드 설치(#2044·#3968)는 **온보딩과 같은 흐름**이다: (없으면) CLI 부트스트랩 → setup → 노드까지.
   //  주소 경로(onboard)가 그렇게 하는데 이쪽만 안 하면, 같은 앱에서 어떻게 시작했느냐로 결과가 갈린다.
-  if (kind === "setup-cloud") {
-    const r = await start("setup-cloud", opts || {});
-    if (!r.ok) return r;
-    return nextAfterSetup(state) ? start("node-start", {}) : r;
-  }
+  if (kind === "setup-cloud") return onboardCloud(opts);
   return start(kind, opts || {});
 });
 ipcMain.handle(IPC.CANCEL, () => { running?.handle?.cancel(); return { ok: true }; });

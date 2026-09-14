@@ -107,6 +107,25 @@ function harnessArgs(o) {
   return ["--harness", h];
 }
 
+/**
+ * 라이블리 클라우드 주소 (#2044 · #3968) — **`setup --cloud` 를 붙이는 곳과 CLI 를 받아오는 곳이 같은 값을 봐야 한다.**
+ *
+ * 클라우드 경로는 CLI 가 없는 PC 에서도 시작된다(그게 이 경로의 요지다). 그때 앱은 이 주소의 부트스트랩
+ *  (`<cloud>/cli`)으로 CLI 를 손에 쥔 뒤 `setup --cloud` 를 몬다 — 두 자리가 다른 주소를 보면, 개발용
+ *  덮어쓰기를 켠 사람이 **로컬 CP 로 로그인하면서 CLI 는 운영에서 받아 오는** 어긋남이 생긴다.
+ *
+ * ⚠ 기본값은 kit/cli/lively.mjs 의 `DEFAULT_CLOUD_URL` 과 **같아야** 한다. 앱은 그 파일을 import 할 수
+ *  없으므로(패키징 경계 — HARNESS_IDS 와 같은 사정) 여기 사본을 두고 desktop-core.test.mjs 가 일치를 못박는다.
+ */
+export const DEFAULT_CLOUD_URL = "https://app.lvly.io";
+export function cloudUrl(env = process.env) {
+  const c = String(env.LIVELY_CLOUD_URL || "").trim().replace(/\/+$/, "");
+  if (!c) return DEFAULT_CLOUD_URL;
+  // 이 값은 부트스트랩에서 `sh -c` 문자열에 들어간다 — 게이트웨이 주소와 같은 자로 막는다.
+  if (!/^https?:\/\/[^\s"'`;|&$()<>\\]+$/i.test(c)) throw new Error("LIVELY_CLOUD_URL 형식이 올바르지 않습니다.");
+  return c;
+}
+
 export function argvFor(kind, opts) {
   const o = opts || {};
   switch (kind) {
@@ -116,9 +135,10 @@ export function argvFor(kind, opts) {
     //  값을 인자로 노출하지 않는 이유: 이 경로의 요지가 "사람도 앱도 주소를 모른다" 이고, 렌더러가 임의
     //  클라우드 주소를 넣을 수 있으면 그건 다시 주소 입력이다(개발용 덮어쓰기는 env LIVELY_CLOUD_URL).
     case "setup-cloud": {
-      const c = String(process.env.LIVELY_CLOUD_URL || "").trim();
-      if (c && !/^https?:\/\/[^\s"'`;|&$()<>\\]+$/i.test(c)) throw new Error("LIVELY_CLOUD_URL 형식이 올바르지 않습니다.");
-      return [...(c ? ["setup", "--cloud", c] : ["setup", "--cloud"]), ...harnessArgs(o)];
+      // 형식 강제는 cloudUrl() 한 자리에서 한다 — 앱이 **CLI 를 받아오는 주소**와 같은 자를 써야 한다(#3968).
+      const explicit = String(process.env.LIVELY_CLOUD_URL || "").trim();
+      const c = cloudUrl();
+      return [...(explicit ? ["setup", "--cloud", c] : ["setup", "--cloud"]), ...harnessArgs(o)];
     }
     case "login": { const gw = gateway(o); return gw ? ["login", "--gateway", gw] : ["login"]; }
     // 로그아웃은 게이트웨이 인자를 받지 않는다 — 지금 로그인된 곳에서 나가는 것이지 '어디서' 를 고르는 게 아니다.
