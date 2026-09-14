@@ -272,6 +272,7 @@ export function __injectRefsForTest(refs: Record<string, any>): void {
   if ('ws' in refs) ws = refs.ws;
   if ('statusEl' in refs) statusEl = refs.statusEl;
   if ('panesEl' in refs) panesEl = refs.panesEl;
+  if ('explorerEl' in refs) explorerEl = refs.explorerEl;
 }
 let curDir = '';
 let sessionProjectId = 0; // 프로젝트 세션이면 그 id(loadSessionMeta 가 채움) — 업로드 위치를 뭐라 부를지 가른다(#1235)
@@ -2126,11 +2127,19 @@ async function newFolder() {
   try { await api(sUrl('/mkdir?path=' + encodeURIComponent(rel)), { method: 'POST' }); toast('폴더 생성: ' + name.trim()); loadDir(curDir); }
   catch (e) { toast('생성 실패: ' + e.message, true); }
 }
+// 끌기가 드롭존을 벗어났나(#3948). dragleave 의 target 은 «포인터가 떠난 요소» 라서, 존을 덮은 자식(xterm 캔버스·
+//  스크롤 영역·목록 줄) 위에서 존이나 프레임 밖으로 나가면 target 은 존 자신이 아니다. 종전 판정 `e.target === 존` 은
+//  그때 영영 참이 안 돼 강조·안내가 남았다 — 세션 화면에서 터미널(iframe)을 지나 오른쪽 자료에 놓으면 «여기에 놓으세요»
+//  가 그대로 떠 있던 것. 그래서 «새로 들어간 요소(relatedTarget)가 존 안인가» 로 가른다: 존 안이면 자식 사이 이동이고,
+//  존 밖이거나 null 이면 나간 것이다(프레임 밖으로 나가면 크로미움은 null 을 준다 — 다른 문서의 요소는 넘기지 않는다).
+export function dragLeftZone(zone: { contains(node: any): boolean }, relatedTarget: any): boolean {
+  return !(relatedTarget && zone.contains(relatedTarget));
+}
 // 드래그앤드랍 업로드 — 익스플로러 패널에 파일을 끌어다 놓으면 현재 폴더로 업로드.
-function setupDnd() {
+export function setupDnd() {
   const dz = explorerEl;
   dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('drag'); });
-  dz.addEventListener('dragleave', (e) => { if (e.target === dz) dz.classList.remove('drag'); });
+  dz.addEventListener('dragleave', (e) => { if (dragLeftZone(dz, e.relatedTarget)) dz.classList.remove('drag'); });
   dz.addEventListener('drop', async (e) => {
     e.preventDefault(); dz.classList.remove('drag');
     if (!explorerLoaded) { explorerLoaded = true; await loadDir(''); }
@@ -2140,7 +2149,7 @@ function setupDnd() {
 }
 // 터미널 화면에 파일(이미지 등)을 끌어다 놓으면 작업폴더로 업로드하고 경로를 입력창에 꽂는다(에이전트가 읽게).
 //  파일 드래그일 때만 가로채고(텍스트 드래그는 그대로), 드롭 위치 강조는 인라인 아웃라인으로 표시.
-function setupTermDrop() {
+export function setupTermDrop() {
   const dz = panesEl;
   if (!dz) return;
   let note = null;
@@ -2158,7 +2167,11 @@ function setupTermDrop() {
     if (!(e.dataTransfer && [...e.dataTransfer.types].includes('Files'))) return;
     e.preventDefault(); on();
   });
-  dz.addEventListener('dragleave', (e) => { if (e.target === dz) off(); });
+  dz.addEventListener('dragleave', (e) => { if (dragLeftZone(dz, e.relatedTarget)) off(); });
+  // dragleave 가 존까지 오지 않고 끌기가 끝나는 길도 있다 — 끌기 취소(크로미움 CDP dragCancel 실측)와, 포인터 아래 요소가
+  //  끌기 도중 다시 그려져 문서에서 빠진 경우(떠난 요소의 dragleave 가 존으로 올라오지 않는다). 끌기 중에는 포인터 이벤트가
+  //  오지 않으니, 안내가 떠 있는데 포인터가 움직였다면 끌기는 이미 끝났다 → 그때 걷는다.
+  window.addEventListener('pointermove', () => { if (note) off(); });
   dz.addEventListener('drop', async (e) => {
     const files = [...((e.dataTransfer && e.dataTransfer.files) || [])];
     if (!files.length) return;
