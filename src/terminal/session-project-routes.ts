@@ -23,7 +23,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { getOpt } from "./tmux-exec.js";
 import { adoptLegacyExecutionSession, executionSessionProject, markExecutionSessionApplied, setExecutionSessionProject, type ExecutionSessionProject } from "../v6/execution-session-store.js";
-import { latestProjectForSessionChain, recordSessionProject } from "../v6/project-session-store.js";
+import { latestProjectForSessionChain, recordSessionProject, resolveNodeFolder, type FolderSyncMode } from "../v6/project-session-store.js";
 import { canAttach } from "./terminal-sessions.js";
 import { isExternalExecutionSessionId } from "../org/auth/agent-identity.js";
 import { syncSessionAppInstanceProject } from "../org/store/app-instances.js";
@@ -154,24 +154,51 @@ async function adoptLegacyBinding(id: string, me: string): Promise<ExecutionSess
 
 /** 동적 AGENTS 주입용 단일 조회. cwd를 전혀 받지 않으며 실행 세션 id와 DB current binding만 본다.
  *  조회만으로 applied_revision을 올리지 않는다 — 훅이 stdout 전달을 끝낸 뒤 별도 ACK한다. */
+export interface SessionProjectContext {
+  found: boolean; changed: boolean; session_id: string; project_id: number | null;
+  revision: number; applied_revision: number; binding_epoch: number;
+  /** 프로젝트 상대 루트(project.folder, 예 "project/3787"). 노드가 자기 shared root 앞에 붙여 절대경로를 만든다. */
+  folder?: string;
+  /** 이 노드에서의 공유폴더 동기화 모드. 훅의 **유일한 권위**다(#3787 — 종전 로컬 마커 권위를 대체). */
+  sync?: FolderSyncMode;
+  /** 명시 바인딩(`lively init`)의 절대경로. null 이면 노드의 canonical 슬롯(`<shared root>/<folder>`)을 쓰라는 뜻. */
+  folder_abs_path?: string | null;
+  name?: string; content?: string;
+}
+
+/** cwd·마커와 무관한 동적 프로젝트 문맥. nodeId 를 주면 그 노드에서의 폴더·동기화 모드까지 함께 답한다(#3787).
+ *  ★ folder/sync 는 **changed 여부와 무관하게 매번** 싣는다 — 동기화 훅은 AGENTS.md 가 안 바뀐 턴에도
+ *   "어디에 무슨 모드로" 를 알아야 한다. 작은 필드라 매 턴 실어도 비용이 없고, changed 뒤로 미루면
+ *   두 번째 턴부터 훅이 답을 못 받아 동기화가 첫 턴에만 도는 조용한 고장이 된다. */
 export async function sessionProjectContext(
-  u: LivelyUser, id: string, knownRevisionRaw?: unknown,
-): Promise<{ found: boolean; changed: boolean; session_id: string; project_id: number | null; revision: number; applied_revision: number; binding_epoch: number; name?: string; content?: string }> {
+  u: LivelyUser, id: string, knownRevisionRaw?: unknown, nodeIdRaw?: unknown, includeContent = true,
+): Promise<SessionProjectContext> {
   if (!SID_RE.test(id)) throw new HttpError(400, "세션 id 형식 오류");
   const me = idOf(u);
   if (!me) throw new HttpError(403, "사용자 신원이 없습니다");
   const known = knownRevisionRaw == null || knownRevisionRaw === "" ? -1 : Number(knownRevisionRaw);
   if (!Number.isSafeInteger(known) || known < -1) throw new HttpError(400, "knownRevision 형식 오류");
+  const nodeId = String(nodeIdRaw ?? "").trim().slice(0, 128);
   const current = (await executionSessionProject(id, me)) ?? (await adoptLegacyBinding(id, me));
   if (!current) return { found: false, changed: known !== 0, session_id: id, project_id: null, revision: 0, applied_revision: 0, binding_epoch: 0 };
-  const base = {
+  const base: SessionProjectContext = {
     found: true, changed: known !== current.desired_revision, session_id: id, project_id: current.project_id,
     revision: current.desired_revision, applied_revision: current.applied_revision, binding_epoch: current.binding_epoch,
   };
-  if (!base.changed) return base;
   if (current.project_id == null) return base;
   const project = await loadProject(current.project_id);
   if (!project) return { ...base, project_id: null };
+  // 폴더·동기화 — 노드를 밝힌 호출(동기화 훅)에만 답한다. 안 밝히면 종전 응답 그대로(하위호환).
+  if (nodeId) {
+    const res = await resolveNodeFolder(project.id, me, nodeId);
+    base.folder = project.folder;
+    base.sync = project.folder ? res.sync : "none";   // folder 가 비면 조립할 슬롯이 없다 → 동기화 대상 아님
+    base.folder_abs_path = res.abs_path;
+  }
+  if (!base.changed) return base;
+  // 동기화 훅(content=0)은 폴더·모드만 필요하다 — AGENTS.md 는 최대 128KB 라 매 턴 실어 보내면 순수 낭비다.
+  //  ⚠ changed 는 그대로 둔다: 주입 훅이 ACK 로 revision 을 올리는 축과 섞이면 안 된다(여기선 ACK 를 안 보낸다).
+  if (!includeContent) return base;
   const content = await projectAgentsMd(project.id, project.folder);
   if (content == null) throw new HttpError(503, "프로젝트 AGENTS.md를 준비하지 못했습니다");
   return { ...base, name: project.name, content };
