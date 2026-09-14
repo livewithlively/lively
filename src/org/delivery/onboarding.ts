@@ -10,8 +10,9 @@
 //   빈 조직의 AI 가 맥락 블라인드가 되지도 않는다: context-ontology-guide 는 코드 소유 섹션이고
 //   publish.ts 가 **DB 행이 없어도** 렌더하므로(신규 조직 보존), 라이블리가 뭔지·도구가 뭔지는 그대로 간다.
 import { itemsPool } from "../../db/client.js";
-import { getSection, getMemberOnboarding, getRuntimeConfig, type ReportedStep } from "../store.js";
+import { getSection, getMemberOnboarding, getRuntimeConfig, countWorkspacePeople, type ReportedStep } from "../store.js";
 import { computePipelineOverview, stuckStages } from "../store/pipeline.js";
+import { managedMode } from "../tenancy/state.js";
 
 export interface OnboardingItem {
   key: string;
@@ -41,8 +42,12 @@ export interface OnboardingFacts {
   knowledgeAuthored: number;      // 시드 제외 — 조직이 실제로 쓴 지식
   categories: number;
   categoriesNoDefinition: number;
-  membersActive: number;
-  membersWithToken: number;
+  /** 사람 수 — «자기 계정으로 들어오는 사람»(store/members.ts countWorkspacePeople). 명부 행 수가 아니다(#3872). */
+  people: number;
+  /** 그중 폐기되지 않은 접속 토큰이 있는 사람 수. */
+  peopleWithToken: number;
+  /** 매니지드인가 — 혼자 쓰는 워크스페이스가 개인 워크스페이스로 성립하는 배포라 «구성원» 완료 기준이 갈린다. */
+  managed: boolean;
   dbSources: number;
   embeddingsOn: boolean;
   /** 파이프라인에서 '멈춤'으로 판정된 단계 이름들(pipeline.ts stuckStages). */
@@ -88,8 +93,17 @@ export function onboardingItems(f: OnboardingFacts): OnboardingItem[] {
     //  updated_by≠'bootstrap' 으로 이미 막고 있었는데 여기만 빠져 있었다.
     { key: "knowledge", label: "지식(런북·결정·설계)", done: f.knowledgeAuthored > 0, count: f.knowledgeAuthored,
       how: "knowledge_save 로 저작하거나, 수집한 자료를 증류해서 쌓입니다.", href: "#/knowledge" },
-    { key: "members", label: "구성원", done: f.membersActive > 1, count: f.membersActive,
-      how: `등록 ${f.membersActive}명 · 접속 토큰 보유 ${f.membersWithToken}명. 웹으로만 쓰면 토큰이 없어도 되고, 로컬 설치(/install)에는 필요합니다.`,
+    // 사람만 센다 — 운영 계정·세션 호스트·AI·연결 앱이 미러한 사람 행은 구성원이 아니다(#3872 전면 점검, 2026-09-14).
+    //  종전엔 명부 **전 행**을 세어, 매니지드에서 혼자 쓰는 워크스페이스가 «등록 3명 ✓» 였다(본인 · 운영 계정 · 세션 호스트).
+    //  완료 기준은 배포 형태로 갈린다:
+    //   · 매니지드 — 혼자 쓰는 워크스페이스는 개인 워크스페이스로 성립한다(#1875 — 개인/팀은 인원으로 갈리고 사람은 계정 서버 초대로 들어온다).
+    //     그래서 1명이면 완료다. 종전 «1명이면 미완»(#1618, 개인 워크스페이스 이전)은 매니지드에선 운영 계정·세션 호스트가 인원을 채워
+    //     발동한 적이 없다 — 세는 법만 고치고 기준을 두면 모든 개인 워크스페이스에 «구성원이 아직 갖춰지지 않았습니다» 가 새로 뜬다.
+    //   · 셀프호스트 박스 — 조직이 설치하고 구성원을 등록하는 자리라 종전대로 2명부터 완료다.
+    { key: "members", label: "구성원", done: f.people >= (f.managed ? 1 : 2), count: f.people,
+      how: `구성원 ${f.people}명 · 접속 토큰 보유 ${f.peopleWithToken}명.`
+        + (f.managed && f.people === 1 ? " 혼자 쓰는 워크스페이스라 더 챙길 것이 없습니다." : "")
+        + " 웹으로만 쓰면 토큰이 없어도 되고, 로컬 설치(/install)에는 필요합니다.",
       href: "#/system/members" },
     // 파이프라인 4단계를 **한 항목으로 접는다.** 넷을 다 펴면 체크리스트가 열 줄이 되어 처음 온 사람이
     //  안 읽는다 — 여기서 필요한 건 "돌고 있나"이고, 어디가 왜 막혔는지는 파이프라인 화면이 훨씬 잘 말한다.
@@ -120,8 +134,9 @@ export function summarizeOnboarding(items: OnboardingItem[]): Omit<OnboardingSta
 
 // 조직이 얼마나 셋업됐는지 라이브 계산(사실 수집만 — 판정은 위 순수 함수). 시크릿 없음.
 export async function computeOnboardingStatus(): Promise<OnboardingStatus> {
+  const managed = managedMode();
   const [identityEdited, knowledgeAuthored, categories, categoriesNoDefinition,
-    membersActive, membersWithToken, dbSources, embeddingsOn, pipeline] = await Promise.all([
+    people, peopleWithToken, dbSources, embeddingsOn, pipeline] = await Promise.all([
     // baseline 시드(updated_by='bootstrap')만 있으면 '미완' — 관리자가 실제 편집해야 done(자동 시드로 완료 오인 방지).
     getSection("org-defaults").then((s) => !!s?.body_md?.trim() && s.updated_by !== "bootstrap").catch(() => false),
     // 섹션(injection='always')은 제외 — '지식' 단계는 recalled 지식(런북·결정·설계)만.
@@ -129,11 +144,13 @@ export async function computeOnboardingStatus(): Promise<OnboardingStatus> {
     count("SELECT count(*)::int AS n FROM knowledge WHERE lifecycle='active' AND injection <> 'always' AND COALESCE(updated_by,'') <> 'system'"),
     count("SELECT count(*)::int AS n FROM category"),
     count("SELECT count(*)::int AS n FROM category WHERE COALESCE(should,'')=''"),
-    count("SELECT count(*)::int AS n FROM org_member WHERE state='active'"),
-    // ⚠ 테이블 이름은 auth_token 이다(org_token 아님). 처음에 틀린 이름으로 짰더니 count() 의 fail-open 이
-    //  오류를 0 으로 삼켜 **"토큰 보유 0명"이 조용히 사실처럼 표시됐다**(실측: 실제로는 6명). 그래서
-    //  이름을 손으로 다시 적지 않고 정본 판정(memberHasActiveToken)이 쓰는 조건을 그대로 쓴다.
-    count("SELECT count(*)::int AS n FROM org_member m WHERE m.state='active' AND EXISTS (SELECT 1 FROM auth_token t WHERE t.member_id = m.id AND t.revoked_at IS NULL)"),
+    // 사람 수 — 잣대는 store/members.ts 한 벌이다(여기서 명부 행을 다시 세지 않는다 — people-count-single-source.test).
+    //  조회 실패는 0 으로 접는다(미완 쪽 — «됐다» 로 오인하지 않는다, 위 count() 와 같은 원칙).
+    countWorkspacePeople({ managed }).catch(() => 0),
+    // 토큰 보유도 사람 중에서만 센다 — 운영 계정·세션 호스트도 토큰을 쥔다. 토큰 조건(auth_token · revoked_at IS NULL)은 정본
+    //  판정(memberHasActiveToken)과 같게 잣대 함수 안에 있다. ⚠ 여기서 표 이름을 손으로 적었다가 틀려, count() 의 fail-open 이
+    //  오류를 0 으로 삼켜 «토큰 보유 0명» 이 조용히 사실처럼 나간 적이 있다(실제로는 6명).
+    countWorkspacePeople({ managed, withActiveToken: true }).catch(() => 0),
     count("SELECT count(*)::int AS n FROM org_db_source"),
     getRuntimeConfig().then((c) => c.embedding_config?.provider !== "off").catch(() => false),
     computePipelineOverview().catch(() => null),
@@ -141,7 +158,7 @@ export async function computeOnboardingStatus(): Promise<OnboardingStatus> {
 
   const items = onboardingItems({
     identityEdited, knowledgeAuthored, categories, categoriesNoDefinition,
-    membersActive, membersWithToken, dbSources, embeddingsOn,
+    people, peopleWithToken, managed, dbSources, embeddingsOn,
     pipelineStuck: pipeline ? stuckStages(pipeline) : [],
     // 조회 실패(구 스키마 등)면 '물을 단계 아님'으로 — 못 본 것을 '멈췄다'고 단정하지 않는다(fail-open).
     pipelineApplicable: !!pipeline && (pipeline.stages.collect.output > 0 || pipeline.stages.distill.output > 0),

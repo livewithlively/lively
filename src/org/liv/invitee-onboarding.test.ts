@@ -199,10 +199,15 @@ test("⑦ 구성원 수는 «자기 계정으로 들어오는 사람» 으로 �
   const src = read("../../capabilities/delivery/welcome.ts");
   assert.match(src, /countWorkspacePeople\(\{ managed: managedMode\(\) \}\)/, "«자기 계정으로 들어오는 사람» 수를 안 쓴다");
   assert.doesNotMatch(src, /listMembers\(\)/, "welcome 이 다시 전체 명부를 센다(운영 계정·미러 행이 섞인다)");
+  //  #3872(2026-09-14) — 팀 소개가 말하는 수는 나를 뺀 사람이다(보는 사람까지 세면 혼자 있던 워크스페이스에 들어온 사람이 «구성원 2명»).
+  assert.match(src, /countWorkspacePeople\(\{ managed: managedMode\(\), except: userId \}\)/, "팀 소개의 수에서 보는 사람을 안 뺀다");
+  assert.match(src, /others_count: Number\(others\) \|\| 0/, "나를 뺀 수를 화면에 안 싣는다");
+  //  잣대는 한 벌(WORKSPACE_PERSON_SQL)이고 세는 함수·표식 함수가 같이 쓴다(2026-09-14 — people-count-single-source.test).
   const store = read("../store/members.ts");
-  const fn = store.slice(store.indexOf("export async function countWorkspacePeople"), store.indexOf("export async function getMember"));
-  assert.ok(fn.length > 0, "countWorkspacePeople 이 members.ts 에 없다");
-  assert.match(fn, /m\.kind='human' AND m\.state='active'/, "system·agent 행이나 비활성 행이 섞인다");
+  const fn = store.slice(store.indexOf("const WORKSPACE_PERSON_SQL"), store.indexOf("export async function getMember"));
+  assert.ok(fn.length > 0, "사람 잣대(WORKSPACE_PERSON_SQL)가 members.ts 에 없다");
+  assert.match(fn, /m\.kind='human'/, "system·agent 행이 섞인다");
+  assert.match(fn, /\$\{WORKSPACE_PERSON_SQL\} AND m\.state='active'/, "세는 함수가 비활성 행을 섞는다");
   assert.match(fn, /'lvly_account'/, "매니지드 계정 신원(CP 프로비저닝)을 안 본다");
   assert.match(fn, /'oidc'/, "SSO 신원을 안 본다");
   assert.match(fn, /\$1::boolean = false AND EXISTS \(SELECT 1 FROM member_credential/,
@@ -220,7 +225,10 @@ test("C5 팀 소개 — 사람 수를 «쌓였다» 고 하지 않고, 0 인 숫
   const team = blockFrom(code, "team: {\n      html");
   assert.doesNotMatch(team, /\$\{bits\}이 이미 쌓여 있어요/,
     "구성원 수와 지식 수를 한 문장에 «쌓여 있어요» 로 붙인다 — 지식이 0이면 «구성원 3명이 이미 쌓여 있어요» 가 된다");
-  assert.match(team, /cnt \?/, "구성원 수가 0 일 때 그 문장을 빼는 갈래가 없다");
+  assert.match(team, /others \?/, "먼저 들어와 있는 사람 수가 0 일 때 그 문장을 빼는 갈래가 없다");
+  //  #3872(2026-09-14) — 수는 나를 뺀 사람이다. member_count(나 포함)를 쓰면 혼자 있던 워크스페이스에 들어온 사람이 «구성원 2명» 을 본다.
+  assert.match(team, /JOIN\.others_count/, "팀 소개가 나를 뺀 수(others_count)를 안 쓴다");
+  assert.doesNotMatch(team, /JOIN\.member_count/, "팀 소개가 보는 사람까지 센 수(member_count)를 쓴다");
   assert.match(team, /kn \?/, "지식 수가 0 일 때 그 문장을 빼는 갈래가 없다");
   assert.doesNotMatch(team, /두어 가지만/, "합류자 차례표는 대여섯 장면인데 «두어 가지만» 이라고 약속한다");
 });

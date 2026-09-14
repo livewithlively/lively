@@ -398,7 +398,9 @@ async function loadWsView(slug: string, wsName: string): Promise<View> {
 async function loadBoxView(wsName: string): Promise<View> {
   const [org, dash] = await Promise.all([api('/api/ui/org/members') as Promise<any>, api('/api/ui/dash/members').catch(() => null) as Promise<any>]);
   const faces = new Map<string, any>(((dash && dash.members) || []).map((m: any) => [String(m.id), m]));
-  const rows: any[] = ((org && org.members) || []).filter((m: any) => m.kind === 'human' && m.state === 'active');
+  //  #3872 — 사람만 싣고 센다(서버 표식 is_person = «자기 계정으로 들어오는 사람»). kind 만 보면 연결 앱이 미러한 사람 행·로그인
+  //   계정이 없는 행이 구성원으로 서고 «구성원 N명» 에 세어졌다.
+  const rows: any[] = ((org && org.members) || []).filter((m: any) => m.is_person === true && m.state === 'active');
   const people: Person[] = rows.map((m) => {
     const f = faces.get(String(m.id)) || {};
     const scopes: string[] = Array.isArray(m.scopes) ? m.scopes : [];

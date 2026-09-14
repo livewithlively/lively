@@ -14,6 +14,8 @@ import {
   listMembers, listOrgHarnessAssets, listEnabledAssets, upsertOrgHarnessAsset, removeOrgHarnessAsset, listAssetPrefs, setAssetPref,
   clearAssetPref, clearAssetPrefs, getOrgHook, getOrgHarnessAsset, type AssetPrefKind, type HookHarness, type AssetKind
 } from "../../org/store.js";
+import { workspacePersonIds } from "../../org/store/members.js";
+import { managedMode } from "../../org/tenancy/state.js";
 import { effectiveVisible, targetsMember } from "../../org/asset-visibility.js"; // #699 per-member 유효 가시성 규칙(SoT)
 import { HARNESS_ASSET_KINDS, HOOK_HARNESSES, HOOK_HARNESSES_MSG, assertPrefKind, parseAssetFrontmatter, parseTargetMembers, restRead, restRuntime, slug, str, wctx } from "./shared.js";
 
@@ -192,6 +194,8 @@ export const harnessAssetsCapabilities: Capability[] = [
       if (!item) throw new HttpError(404, "대상 스킬/훅이 없습니다");
       const targetMembers = item.target_members ?? null;
       const prefBy = new Map((await listAssetPrefs({ target_kind: targetKind, ref_id: refId })).map((p) => [p.member_id, p.state]));
+      //  #3872 — 화면 요약 «구성원 N명» 은 사람만 센다(store/members.ts 잣대). 표 자체는 모든 행을 싣는다(예외 설정은 행 단위다).
+      const persons = await workspacePersonIds({ managed: managedMode() });
       const members = (await listMembers()).map((m) => {
         const override = prefBy.has(m.id) ? prefBy.get(m.id)! : null;
         // 가시성 정책(SoT)과 **비활성 구성원**은 직교한다 — asset-visibility 는 정책 레이어만 모델링하고 멤버 상태는 모른다.
@@ -201,6 +205,7 @@ export const harnessAssetsCapabilities: Capability[] = [
         const visible = effectiveVisible({ enabled: item.enabled, targetMembers, memberId: m.id, override });
         return {
           id: m.id, kind: m.kind, display_name: m.display_name, state: m.state,
+          is_person: persons.has(m.id),
           byDefault: targetsMember(targetMembers, m.id),
           override,
           effective: m.state === "active" && visible,

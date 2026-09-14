@@ -101,9 +101,12 @@ function membersEditor(detail, data) {
   };
   renderRows();
 
+  // #3872 — 합계는 사람과 전체 행을 따로 말한다. 명부에는 매니지드 운영 계정·세션 호스트·AI·연결 앱이 미러한 사람 행이 함께 있어
+  //  «총 N명» 이 사람 수가 아니었다(매니지드에서 혼자 쓰는 워크스페이스가 «총 3명»). 사람 판정은 서버 표식(is_person)만 쓴다.
+  const people = members.filter((m) => m.is_person && m.state === 'active').length;
   const searchInp = el('input', { type: 'search', class: 'admin-member-search',
     value: state.admin.memberSearch || '', autocomplete: 'off', spellcheck: 'false', 'aria-label': '구성원 검색',
-    placeholder: '이름·이메일·아이디로 검색  (총 ' + members.length + '명)',
+    placeholder: '이름·이메일·아이디로 검색  (구성원 ' + people + '명 · 전체 ' + members.length + '개)',
     oninput: (e) => { state.admin.memberSearch = e.target.value; renderRows(); } });
   // ＋ 추가 — 구 [구성원 추가] 탭을 대신한다(#837). 다른 모든 목록 화면과 같은 관례(＋ 버튼 → 폼)로 통일.
   //  구 탭은 저장 후 location.hash 로 [토큰] 탭에 점프하고 state.admin.memberAddPreselect 로 선택을 실어 날랐다.

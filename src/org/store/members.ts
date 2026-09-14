@@ -83,12 +83,14 @@ export async function listMembers(): Promise<OrgMember[]> {
 }
 
 /**
- * «이 워크스페이스를 자기 계정으로 쓰는 사람» 수 (#3872) — 처음 설정의 합류자 판정(delivery/welcome.ts `joining`) 재료.
+ * «이 워크스페이스를 자기 계정으로 쓰는 사람» (#3872) — **사람 수를 세는 모든 자리의 잣대**다: 처음 설정 팀 소개와 합류 판정 폴백
+ *  (delivery/welcome.ts `joining`), 조직 셋업 체크리스트 «구성원»(delivery/onboarding.ts), 명부 응답의 사람 표식(`is_person`).
  *
  *  ⚠ `listMembers().length` 로 세면 안 된다. org_member 에는 «이 워크스페이스의 동료» 가 아닌 행이 함께 산다:
  *   · 커넥터가 미러한 외부 사람(클릭업 담당자·슬랙 사용자) — lively-46e3 실측(2026-09-12) 활성 사람 91행 중 88행
  *   · 매니지드 프로비저닝이 **모든 테넌트에** 심는 플랫폼 운영 계정(`admin` / ops@lvly.io) — identities 가 비어 있고
- *     로컬 로그인 자격(member_credential)만 있다
+ *     로컬 로그인 자격(member_credential)만 있다. 2026-09-13 부터 계정 서버가 이 행을 종류 system 으로 심는다(#1631 — lively-46e3 에서
+ *     kind=system 확인, 9/14). 옛 테넌트가 전부 다시 심겼는지는 재지 않았다 — 종류만 믿지 않는 이유다.
  *   · 세션 호스트 같은 system 행(kind 로 걸러진다)
  *  그냥 세면 혼자 쓰는 개인 워크스페이스가 «구성원 2명 팀» 이 되어, 처음 설정 첫 화면과 리브 1턴이 «이미 있는 팀에
  *  합류했다 · 팀에 쌓인 지식 3건은 당신이 쓴 게 아니다» 라고 말한다(2026-09-13 실측 — 원준님 개인 워크스페이스 온보딩).
@@ -98,16 +100,41 @@ export async function listMembers(): Promise<OrgMember[]> {
  *     member_credential 은 여기서 **세지 않는다** — 운영 계정이 바로 그걸로 들어오기 때문이다.
  *   · 셀프호스트 — 로컬 로그인 자격(`member_credential`).
  *   · SSO(`oidc`)는 양쪽 다 사람이다.
+ *
+ *  2026-09-14 전면 점검(원준 — «사람수 카운트하는 모든 로직에서 쟤는 사람 아니니까 빠지게»): 이 잣대를 안 쓰고 사람을 세던 자리가
+ *   넷 더 있었다 — 체크리스트 «구성원»(종류 무관 전 행), 관리 ▸ 구성원 «총 N명», 스킬·훅 «대상 구성원» 요약, 셀프호스트 박스 구성원 창
+ *   (kind 만 봐서 미러된 사람 행까지). 그래서 조건을 한 벌로 두고 세는 함수와 표식 함수가 같이 쓴다
+ *   (org/store/people-count-single-source.test.ts 가 다른 자리의 행 세기를 막는다).
+ *  조건 안의 `$1` 은 managed 다.
  */
-export async function countWorkspacePeople(opts: { managed: boolean }): Promise<number> {
-  const r = await itemsPool.query(
-    `SELECT count(*)::int AS n FROM org_member m
-      WHERE m.kind='human' AND m.state='active'
+const WORKSPACE_PERSON_SQL = `m.kind='human'
         AND (EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(m.identities)='array' THEN m.identities ELSE '[]'::jsonb END) e
                       WHERE e->>'system' IN ('lvly_account','oidc'))
-             OR ($1::boolean = false AND EXISTS (SELECT 1 FROM member_credential c WHERE c.member_id = m.id)))`,
-    [opts.managed]);
+             OR ($1::boolean = false AND EXISTS (SELECT 1 FROM member_credential c WHERE c.member_id = m.id)))`;
+
+export interface WorkspacePeopleOpts {
+  managed: boolean;
+  /** 이 사람은 빼고 센다 — 처음 설정 팀 소개는 **먼저 들어와 있는 사람**을 말한다(보는 사람까지 세면 혼자 있던 워크스페이스가 «구성원 2명»). */
+  except?: string | null;
+  /** 폐기되지 않은 접속 토큰이 있는 사람만 — 체크리스트 «접속 토큰 보유». 조건은 memberHasActiveToken(store/tokens.ts)과 같다. */
+  withActiveToken?: boolean;
+}
+
+/** 활성 사람 수(위 잣대). */
+export async function countWorkspacePeople(opts: WorkspacePeopleOpts): Promise<number> {
+  const r = await itemsPool.query(
+    `SELECT count(*)::int AS n FROM org_member m
+      WHERE ${WORKSPACE_PERSON_SQL} AND m.state='active'
+        AND ($2::text IS NULL OR m.id <> $2::text)
+        AND ($3::boolean = false OR EXISTS (SELECT 1 FROM auth_token t WHERE t.member_id = m.id AND t.revoked_at IS NULL))`,
+    [opts.managed, opts.except ?? null, opts.withActiveToken === true]);
   return Number((r.rows[0] as { n?: number } | undefined)?.n ?? 0);
+}
+
+/** 사람인 구성원 id(위 잣대) — **상태는 따지지 않는다**(비활성 사람도 사람이다. 세는 쪽이 active 를 고른다). 명부 응답의 `is_person` 재료. */
+export async function workspacePersonIds(opts: { managed: boolean }): Promise<Set<string>> {
+  const r = await itemsPool.query(`SELECT m.id FROM org_member m WHERE ${WORKSPACE_PERSON_SQL}`, [opts.managed]);
+  return new Set(r.rows.map((x) => String((x as { id: unknown }).id)));
 }
 
 export async function getMember(id: string): Promise<OrgMember | null> {
