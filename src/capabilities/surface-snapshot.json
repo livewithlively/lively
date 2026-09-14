@@ -2046,7 +2046,7 @@
   "rest": [
    "POST /api/ui/me/workspaces/members/add"
   ],
-  "input_hash": "7a13e02f9ef818f2"
+  "input_hash": "275d5813178865ff"
  },
  {
   "name": "workspace_member_remove",
@@ -2056,7 +2056,7 @@
   "rest": [
    "POST /api/ui/me/workspaces/members/remove"
   ],
-  "input_hash": "de9c8a98f1ec1cd9"
+  "input_hash": "0bc58f44d6ee1af8"
  },
  {
   "name": "workspace_leave",
@@ -2086,7 +2086,7 @@
   "rest": [
    "POST /api/ui/me/workspaces/invite"
   ],
-  "input_hash": "e29202b6f5da6c16"
+  "input_hash": "8f9b8195bf127cfc"
  },
  {
   "name": "workspace_invite_resend",

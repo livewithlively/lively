@@ -50,6 +50,8 @@ export interface LocalUploadInput {
   uploader: { id: string | null; name?: string | null };
   /** 채널(최상위 폴더)이 없을 때의 채널명 — 프로젝트명·'uploads' 등 */
   channelFallback: string;
+  /** (#1631) 개인 루트 업로드를 «올린 사람만» 으로 잠그지 않는다 — 팀원 모두가 보는 자료. 라우트가 자기 개인 루트 업로드일 때만 켠다(share=team). */
+  shareWithTeam?: boolean;
 }
 export interface LocalIngestResult {
   ingested: boolean; kind: LocalIngestKind; reason?: string; source_id?: number; external_id?: string;
@@ -169,7 +171,7 @@ export async function ingestLocalUpload(u: LocalUploadInput): Promise<LocalInges
     body: built.body,
     occurred_at: st.mtime ?? undefined,
     updated_at: st.mtime ?? undefined,
-    fields: { path: rel, root: u.root.kind, ext: c.ext, bytes: st.size, extracted: built.extracted, local_kind: built.kind, ...(built.reason ? { local_reason: built.reason } : {}) },
+    fields: { path: rel, root: u.root.kind, ext: c.ext, bytes: st.size, extracted: built.extracted, local_kind: built.kind, ...(built.reason ? { local_reason: built.reason } : {}), ...(u.shareWithTeam ? { share: "team" } : {}) },
   };
 
   const id = await withTx(async (client) => {
@@ -182,7 +184,9 @@ export async function ingestLocalUpload(u: LocalUploadInput): Promise<LocalInges
     // 지웠다가 다시 올린 파일 — mirror 의 upsert 는 lifecycle 을 안 건드리므로 여기서 되살린다.
     if (row.lifecycle !== "active") await client.query(`UPDATE source SET lifecycle='active', updated_at=now() WHERE id=$1`, [row.id]);
     // 개인 폴더 = 올린 사람만(#1436 개인 폴더 self-only 와 대칭). 팀 WS 에서 홈 컴포저로 올린 것이 팀 자료함에 바로 보이지 않게.
-    if (u.root.kind === "personal" && u.uploader.id) {
+    //  (#1631) 단 올린 사람이 **팀원 모두** 를 명시했으면(shareWithTeam) 잠그지 않는다. 이미 잠긴 행을 열지는 않는다 — 전에 같은 경로로
+    //   «올린 사람만» 올라간 자료면 그대로 둔다(그 사람이 비공개로 둔 것을 다른 화면이 대신 열지 않는다).
+    if (u.root.kind === "personal" && u.uploader.id && !u.shareWithTeam) {
       await applyVisibility(client, row.id, [{ subject_kind: "member", member_id: u.uploader.id }]);
     }
     return row.id;
