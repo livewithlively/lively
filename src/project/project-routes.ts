@@ -26,7 +26,9 @@ import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드
 import { decorateNodeRows } from "../terminal/node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB)
 import { receiveUpload, uploadError, nfcPath } from "../terminal/upload-file.js";
 import { manifestFiles } from "./project-manifest.js";
-import { ingestLocalUpload, supersedeLocalPath } from "../ingest/local-file.js";   // #1881 올린 파일 = 자료 1건
+import { supersedeLocalPath } from "../ingest/local-file.js";
+import { finishUpload } from "../ingest/upload-finish.js";   // #3787 D — 업로드 마무리는 브라우즈 라우트와 한 함수
+import { isConfined, probeLocal } from "../terminal/path-jail.js";   // #3668 T1 — 쓰기 경로의 심링크 봉쇄
 
 const MAX_UPLOAD = 1024 * 1024 * 1024; // 1GB (#1870 — terminal-files 와 동일해야 한다. receiveUpload 스트리밍이라 RAM 무관)
 const MAX_PREVIEW = 25 * 1024 * 1024; // 25MB — 이미지·PDF 인라인 미리보기 허용(텍스트는 클라가 별도 크기 가드)
@@ -75,6 +77,20 @@ export function missingDirResponse(base: string, abs: string): { path: string; p
 }
 
 // base 기준 안전 경로 해소(.. 탈출 차단). requireFile=true 면 루트 자신 거부(파일 경로 필요).
+/**
+ * 글자 판정 + **심링크 봉쇄**(#3668 T1) — 쓰기(업로드·폴더 생성)가 지나는 문.
+ *  글자만 보는 resolveIn 은 `base/링크/…` 를 통과시킨다: 프로젝트 폴더 안에 `/etc` 를 가리키는 링크가 있으면
+ *  그 아래로 파일을 **써 넣을 수 있다**. 브라우즈 라우트는 이 관문이 있었고(terminal-files.ts assertJailed)
+ *  프로젝트 라우트에만 없었다 — 설계된 차이가 아니라 한쪽에만 있던 것이다.
+ *  거부 문구·코드는 글자 판정과 같다(어느 관문에 걸렸는지는 알려 줄 값이 아니다).
+ */
+async function resolveInProject(base: string, rel: unknown, requireFile: boolean): Promise<string> {
+  const abs = resolveIn(base, rel, requireFile);
+  //  프로젝트 폴더는 그룹 rw 라 게이트웨이가 직접 읽는다(격리 uid 프로브가 필요 없다 — resolveLocalFile 과 같은 전제).
+  if (!(await isConfined(base, abs, probeLocal))) throw new HttpError(400, "허용 경로를 벗어났습니다");
+  return abs;
+}
+
 function resolveIn(base: string, rel: unknown, requireFile: boolean): string {
   const r = String(rel ?? "").replace(/^[/\\]+/, "");
   const abs = path.resolve(base, r);
@@ -237,29 +253,21 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   //  덮는다**(같은 바이트 크기 · 다른 내용은 흔하다). 기존 클라이언트는 이 필드를 무시하므로 하위호환.
   app.put(`${prefix}/:id/file`, auth, wrap(async (req, res) => {
     const { project, base } = await projBase(Number(req.params.id), req);
-    const abs = resolveIn(base, nfcPath(req.query.path), true);   // 저장 이름은 NFC 정본(#1278b)
+    const abs = await resolveInProject(base, nfcPath(req.query.path), true);   // 저장 이름은 NFC 정본(#1278b)
     try { await receiveUpload(req, abs, MAX_UPLOAD, null); }
     catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
-    // 게이트웨이(lively)가 쓴 파일(644)·폴더 업로드가 만든 중간 폴더(755)에 그룹 rw — 격리 박스의 box_ 세션이
-    //  lively-shared 그룹으로 이 폴더를 쓰므로, 이게 없으면 세션 클로드가 업로드 파일을 못 고친다(#1246).
-    await grantSharedGroupWrite(abs, base, "file");
-    // 올린 파일 = 자료 1건(#1881 L1) — 다른 수집기와 같은 길(자료 → 증류기 → 지식·근거 칩). 실패해도 업로드는 성공이다.
+    // 마무리(그룹 rw·자료 등록·좌표 ref·결과 도장)는 **브라우즈 업로드와 같은 함수**다(#3787 D) — 갈리지 않게.
     const u = userOf(req);
-    const ing = await ingestLocalUpload({ root: { kind: "project", id: project.id }, folder: project.folder, base, abs, osUser: null,
-      uploader: { id: viewerOf(u), name: u?.email ?? null }, channelFallback: project.name })
-      .catch((e) => { console.warn(`[local-ingest] 자료 등록 실패 ${abs}: ${(e as Error)?.message ?? e}`); return null; });
-    const st = await fsp.stat(abs).catch(() => null);
-    // path(절대경로) — 올린 것을 **그 자리에서 AI 에게 넘기는** 화면이 쓴다(새 세션 창의 붙여넣기 첨부, #1819).
-    //  세션 cwd 는 프로젝트 폴더가 아니라 세션 전용 폴더라 상대경로로는 못 찾는다. 터미널 업로드 라우트가 이미
-    //  같은 계약을 갖고 있다(web/standalone/terminal.ts dropFileToAgent 가 j.path 를 그대로 입력창에 꽂는다).
-    // source_id — 이 파일이 자료로 등록됐으면 그 id(#1881). 화면이 "자료함에 담김"을 폴링 없이 알린다. 구 클라이언트는 무시.
-    res.json({ ok: true, path: abs, ...(st ? { mtime: Math.floor(st.mtimeMs), size: st.size } : {}), ...(ing?.ingested ? { source_id: ing.source_id } : {}) });
+    res.json(await finishUpload({
+      coord: { root: { kind: "project", id: project.id }, base, folder: project.folder, channelFallback: project.name },
+      abs, osUser: null, uploader: { id: viewerOf(u), name: u?.email ?? null },
+    }));
   }));
 
   // 새 폴더 생성
   app.post(`${prefix}/:id/folder`, auth, wrap(async (req, res) => {
     const { base } = await projBase(Number(req.params.id), req);
-    const abs = resolveIn(base, nfcPath(req.query.path), true);   // 폴더 이름도 NFC 정본(#1278b)
+    const abs = await resolveInProject(base, nfcPath(req.query.path), true);   // 폴더 이름도 NFC 정본(#1278b)
     await fsp.mkdir(abs, { recursive: true });
     // 게이트웨이 소유(lively)·umask(755)로 생긴 폴더는 box_ 격리 세션(lively-shared 그룹)이 못 쓴다 —
     //  프로젝트 폴더 자체(2770)와 같은 계약을 하위에도(#1246 신고 증상: 웹에서 만든 폴더에 클로드 쓰기 불가).

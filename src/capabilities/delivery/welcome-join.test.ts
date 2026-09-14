@@ -205,7 +205,11 @@ test("U1 업로드 — «팀원 모두» 옵션은 자기 개인 루트 업로�
   const ROUTE = strip(read("../../terminal/terminal-files.ts"));
   assert.match(ROUTE, /const shareWithTeam = String\(req\.query\.root \?\? ""\) === "personal" && String\(req\.query\.share \?\? ""\) === "team";/,
     "옵션이 개인 루트로 좁혀져 있지 않다");
-  assert.match(ROUTE, /ingestLocalUpload\(\{ \.\.\.loc, abs, osUser, shareWithTeam, uploader:/, "옵션이 등록까지 안 간다");
+  //  #3787 D — 업로드 마무리가 공용 한 자리(upload-finish.ts)로 옮겨졌다. 옵션은 **두 다리**를 다 건너야 한다:
+  //   라우트 → finishUpload → ingestLocalUpload. 한쪽만 보면 중간에서 떨어뜨려도 초록불이 된다.
+  assert.match(ROUTE, /finishUpload\(\{ coord, abs, osUser, shareWithTeam, uploader:/, "옵션이 업로드 마무리까지 안 간다");
+  const FINISH = strip(read("../../ingest/upload-finish.ts"));
+  assert.match(FINISH, /shareWithTeam: o\.shareWithTeam/, "마무리가 옵션을 등록으로 안 넘긴다");
   const INGEST = strip(read("../../ingest/local-file.ts"));
   assert.match(INGEST, /if \(u\.root\.kind === "personal" && u\.uploader\.id && !u\.shareWithTeam\) \{\s*await applyVisibility\(/,
     "개인 루트의 «올린 사람만» 이 기본값이 아니거나 옵션이 그 잠금을 안 푼다");

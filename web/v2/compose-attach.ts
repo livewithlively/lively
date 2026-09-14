@@ -24,7 +24,9 @@ import { attachName, pnIcon } from './panes-kit.js';
 const MAX_ATTACH = 1024 * 1024 * 1024;
 
 // rel = 프로젝트(또는 개인 폴더) **상대경로** — 지시 꼬리에 적는 값(노드 무관). abs = 서버가 준 절대경로, 칩 툴팁 표시용.
-interface Att { name: string; rel: string; abs: string; pct: number | null; ctl: AbortController | null }
+// ref = 서버가 준 **노드 무관 좌표**(`personal:<멤버>/<rel>` · `project:<id>/<rel>`). 지시문에 싣는 값이다.
+//  abs = 서버가 준 절대경로 — 칩 툴팁 표시용(게이트웨이 좌표라 세션이 다른 기계면 존재하지 않는다).
+interface Att { name: string; ref: string; abs: string; pct: number | null; ctl: AbortController | null }
 
 export interface ComposerAttach {
   /** 첨부 칩 줄 — 입력칸과 버튼 줄 사이에 넣는다(비면 숨김). */
@@ -74,7 +76,7 @@ export function composerAttach(opts: { projectId: () => number; onChanged?: () =
       if (f.size > MAX_ATTACH) { toast(`${f.name || '파일'} — 파일이 너무 커요(상한 1GB). 나눠서 올려주세요.`, true); continue; }
       const nm = attachName(f, items.map((a) => a.name));
       const ctl = new AbortController();
-      const a: Att = { name: nm, rel: '', abs: '', pct: 0, ctl };
+      const a: Att = { name: nm, ref: '', abs: '', pct: 0, ctl };
       items.push(a); paint();
       try {
         // 순차 업로드(upSend 와 같은 이유) — 병렬로 쏘면 큰 파일 여럿이 회선을 나눠 서로 오래 걸린다.
@@ -83,12 +85,10 @@ export function composerAttach(opts: { projectId: () => number; onChanged?: () =
         if (items.indexOf(a) < 0) continue;   // 올리는 중에 ✕(취소)로 이미 뺐다
         a.pct = null; a.ctl = null;
         a.abs = (j && j.path) || nm;
-        // 상대경로 — 프로젝트면 올린 이름 그대로(PUT ?path=<nm>), 개인 폴더면 uploads/ 아래.
-        // 프로젝트면 **상대경로**(노드가 자기 좌표로 편다). 개인 폴더는 **절대경로 그대로** —
-        //  개인 폴더의 위치를 세션에 알려 줄 좌표가 아직 없어서, 상대로 바꾸면 펴 줄 사람이 없다(순수 후퇴).
-        //  그래서 개인 폴더 첨부는 종전과 같고(매니지드 정상·로컬 노드는 종전처럼 못 찾음), 못 찾으면
-        //  주입 훅이 크게 말한다 — 무음 오답만은 어느 분기에서도 안 난다.
-        a.rel = opts.projectId() > 0 ? nm : a.abs;
+        // 좌표는 **서버가 준 것만** 쓴다(#3787). 여기서 지어내면 두 벌이 되고, 루트·격리 규칙이 바뀌면 조용히 어긋난다.
+        //  서버가 안 주면(구 게이트웨이) 아래 tail 이 종전처럼 절대경로로 떨어진다 — 매니지드에선 그대로 되고
+        //  로컬 노드에선 주입 훅이 «없다»고 크게 말한다(무음 오답은 어느 쪽에서도 안 난다).
+        a.ref = (j && j.ref) || '';
         ok++; paint();
         opts.onChanged?.();                   // 프로젝트 자료 칸이 같은 화면에 있으면 바로 보이게
       } catch (e: any) {
@@ -126,13 +126,14 @@ export function composerAttach(opts: { projectId: () => number; onChanged?: () =
     },
     busy: () => items.some((a) => a.pct != null),
     tail() {
-      const done = items.filter((a) => a.pct == null && a.rel);
+      const done = items.filter((a) => a.pct == null && (a.ref || a.abs));
       if (!done.length) return '';
-      const pid = opts.projectId();
-      // 프로젝트면 «프로젝트 #<id> 자료», 아니면 «내 개인 폴더 uploads/» — 둘 다 **노드와 무관한 신원**이다.
-      //  세션 쪽(project-agents-inject)이 이 표시를 자기 노드의 절대경로로 편다(#3787).
-      const where = pid > 0 ? `프로젝트 #${pid} 공유 폴더` : '내 개인 폴더';
-      return '\n\n첨부한 자료(' + where + '):\n' + done.map((a) => '- ' + a.rel).join('\n');
+      // 사람에겐 **이름**을, 기계에겐 **좌표**를 준다(#3787). 좌표는 `[lively:<ref>]` 한 꼴이라 파싱이 모호하지 않고,
+      //  세션 쪽(project-agents-inject)이 이걸 그 노드의 절대경로로 펴서 보여 준다 — 사람이 읽는 줄은 그 결과다.
+      //  ⚠ 절대경로를 싣지 않는 이유: 그건 게이트웨이 좌표라 세션이 멤버 PC 에서 돌면 존재하지 않는데, 지시문이
+      //   «첨부한 자료» 라고 단언하므로 AI 가 있다고 믿고 근처의 다른 파일을 집는다(#3787 의 원래 사고).
+      const line = (a: Att): string => (a.ref ? `- ${a.name}  [lively:${a.ref}]` : `- ${a.abs}`);
+      return '\n\n첨부한 자료:\n' + done.map(line).join('\n');
     },
     clear() { for (const a of items) a.ctl?.abort(); items.length = 0; paint(); },
   };

@@ -30,11 +30,11 @@ const RETIRED_SEED_KNOWLEDGE: string[] = ["project-closeout-routine"]; // → pr
 
 // 기본값이 «꺼짐 → 켜짐» 으로 바뀐 시드 훅 — 손 안 댄 기존 설치도 따라오게 한다(아래 승격 블록).
 //  · session-log-capture(#1752, 대표 결정 2026-08-18)
-//  · project-pull-turn·project-push·project-push-tool(#3787) — 「프로젝트 세션이면 그 프로젝트 자료가 cwd 에
+//  · project-pull-turn·project-pull-tool·project-push·project-push-tool(#3787) — 「프로젝트 세션이면 그 프로젝트 자료가 cwd 에
 //    있다」는 계약이 **실행 위치와 무관하게** 성립해야 한다. 종전엔 이 셋이 기본 꺼짐이라 로컬 노드 세션은
 //    공유폴더를 영영 못 받고(웹에서 붙인 첨부가 세션에 안 감 → AI 가 근처 다른 파일로 답하는 무음 오답),
 //    만든 산출물도 웹 자료함에 안 올라갔다. 매니지드(colocated)는 셋 다 즉시 no-op 이라 비용이 안 붙는다.
-const PROMOTE_ENABLED = new Set(["session-log-capture", "project-pull-turn", "project-push", "project-push-tool"]);
+const PROMOTE_ENABLED = new Set(["session-log-capture", "project-pull-turn", "project-pull-tool", "project-push", "project-push-tool"]);
 
 export async function seedDefaultContent(): Promise<SeedResult> {
   const ctx: WriteCtx = { actor: "system", source: "migration" };
