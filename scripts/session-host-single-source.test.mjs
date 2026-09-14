@@ -85,11 +85,12 @@ t("[S3] 어댑터는 PTY 일괄 회수(killAttachedPtys)를 직접 부르지 않
 //  아니라 «정책 경로» 라 이 표의 대상이 아니다. 여기서 막는 것은 **전송 어댑터**가 op 를 다시 구현하는 것이다.
 //  ⚠ `listSessionsRaw` 는 **일부러 뺐다** — 세션 op(`list`)의 구현이면서 동시에 WS 중계 어댑터가
 //   3초 상태 push(`pushState`)에 **정당하게** 쓴다. 넣으면 그 정당한 사용까지 빨간불이 된다.
-//   나머지 11 종은 어댑터가 부를 이유가 없다.
+//   나머지 12 종은 어댑터가 부를 이유가 없다(`runOutboxStep` — #3773 아웃박스 걸음).
 const OP_IMPLS = [
   "createSession", "killSession", "editSession", "applyValidatedInvites",
   "sendKeysToSession", "injectFirstPrompt", "applySessionProject",
   "markSessionActive", "markSessionSeen", "getSessionLabel", "sessionGone",
+  "runOutboxStep",
 ];
 
 t("[S4] WS 중계 어댑터가 세션 op 를 다시 구현하지 않는다", () => {
@@ -413,6 +414,36 @@ t("[S18] /active 는 reportSessionActivity 로 맡기고 알림 이름은 st.lab
   const relay = codeLines(RELAY);
   assert.ok(relay.some((l) => /sessionHostFor\s*\(\s*sid\s*,\s*"markActive"\s*\)/.test(l)),
     `${RELAY} 의 기본 호스트 판정이 sessionHostFor 를 안 지난다 — 맡길 곳 판정이 두 벌이 된다`);
+});
+
+// ── S19a: 아웃박스 걸음은 강제 상태 push 를 끌고 오지 않는다 (#2600 T2 d6 · #3773 PR1) ──────────────────────
+//  왜: 에이전트는 성공한 RPC 마다 상태를 전량 push 한다(strict 세션 목록 + 자원 표본). 아웃박스 걸음은 준비 판정의 폴(500ms)
+//   단위로 오므로, 응답 줄에서 면제(`pushesStateAfter`)가 빠지면 걸음마다 목록 관측 한 판이 따라붙는다. 술어 시험
+//   (`state-freshness.test`)은 값만 재고 배선은 못 잰다 — 그래서 응답 줄을 본다.
+//  ⚠ 줄 단위로 본다(`code()` 는 문자열 속 `/*` 에 걸린다 — S10c 머리말).
+t("[S19a] 에이전트의 성공 응답 뒤 강제 push 는 pushesStateAfter(req.op) 로 거른다", () => {
+  const res = codeLines(WS_ADAPTER).filter((l) => /t:\s*"res"[^\n]*ok:\s*true/.test(l));
+  assert.equal(res.length, 1, `${WS_ADAPTER} 에서 성공 응답 줄을 ${res.length}곳 찾았다 — 이 가드가 무엇을 보는지 모른다`);
+  assert.match(res[0], /if\s*\(\s*pushesStateAfter\s*\(\s*req\.op\s*\)\s*\)\s*void\s+pushState\s*\(\s*true\s*\)/,
+    `${WS_ADAPTER} 의 성공 응답 뒤 강제 push 가 op 를 가리지 않는다 — 아웃박스 폴마다 전량 push 가 따라붙는다`);
+});
+
+// ── S19b: 아웃박스 걸음 모듈 — DB 표면 0 · 키 argv 는 send-keys 의 계획 함수에서 (#2600 T2 d6 · #3773 PR1) ─────────
+//  왜 둘인가: ① 이 모듈은 세션 호스트(DB 자격 없는 노드 박스·멤버 PC)에서 돈다. 그런데 번들 허용목록에 `dist/db/client.js` 가
+//   이미 있어서, 여기에 DB import 가 새로 생겨도 번들 경계 가드는 **울지 않는다.** ② 키의 모양은 mux 마다 다르다(psmux 는
+//   키 이름을 모른다 — send-keys.ts 머리말 ③). 여기서 `["send-keys", …]` 를 손으로 지으면 윈도우 노드에서만 조용히 틀린 키가 간다.
+const OUTBOX_STEP = "src/terminal/outbox-host-step.ts";
+t("[S19b] 아웃박스 걸음 모듈은 DB 표면을 import 하지 않고, 키 argv 를 손으로 짓지 않는다", () => {
+  const lines = codeLines(OUTBOX_STEP);
+  const imports = lines.filter((l) => /^import\s/.test(l));
+  assert.ok(imports.length > 0, `${OUTBOX_STEP} 의 import 를 못 찾았다 — 이 가드가 아무것도 안 보고 있다`);
+  assert.deepEqual(imports.filter((l) => /["']\.\.\/(db|items|v6|org|sessions)\//.test(l)), [],
+    `${OUTBOX_STEP} 가 DB 표면을 끌어왔다 — 세션 호스트에는 DB 가 없다`);
+  assert.ok(!lines.some((l) => /["']send-keys["']/.test(l)),
+    `${OUTBOX_STEP} 가 send-keys argv 를 손으로 짓는다 — psmux 노드에서 틀린 키가 간다`);
+  for (const fn of ["sendKeysPlan", "sendKeyPlan", "sendDownPlan", "injectFlushMs"]) {
+    assert.ok(lines.some((l) => new RegExp(`\\b${fn}\\s*\\(`).test(l)), `${OUTBOX_STEP} 가 ${fn} 을 안 쓴다 — 키 규약이 두 벌이 된다`);
+  }
 });
 
 console.log(`\n${pass} passed — 세션 호스트 단일 출처(#2600 T1·T2 d4·d6)`);

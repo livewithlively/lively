@@ -1,4 +1,4 @@
-// 노드 상태 보고의 **신선도 계약** — 순수 술어 둘 (#2600 T2 d6).
+// 노드 상태 보고의 **신선도 계약** — 순수 술어 셋 (#2600 T2 d6).
 //
 // ── 왜 있나 (2026-09-09 매니지드 실측) ──────────────────────────────────────
 // 게이트웨이의 목록 소유 판정(`self-node.sessionHostVerdict`)은 «12초 안에 관측된 스냅샷»을 요구한다
@@ -14,6 +14,7 @@
 //  보내 스냅샷의 나이만 되돌린다. 반대로 «못 봤다»(`listSessionsRaw` 실패)는 관측이 아니므로 **아무것도 보내지
 //  않는다** — 스냅샷이 늙어 게이트웨이가 소유를 되찾는다(fail-closed). 이 레포의 «못 봤다 ≠ 없다» 교리
 //  (#835·#1251·#2154·#2544)가 여기서는 «못 봤다 ≠ 신선하다» 로 선다.
+import type { NodeOp } from "./protocol.js";
 
 /** 이번 주기에 무엇을 보낼까 — 내용을 실은 `state` 인가, 나이만 되돌리는 `beat` 인가. */
 export type PushKind = "state" | "beat";
@@ -40,4 +41,21 @@ export function statePushKind(o: { force: boolean; changed: boolean; tracked: nu
  */
 export function beatRefreshes(prev: { ts: number } | null | undefined): boolean {
   return !!prev;
+}
+
+/**
+ * 성공한 RPC 뒤에 상태를 **곧바로 전량** 보낼까(순수) — 아웃박스 걸음(`outboxStep`)만 아니다 (#2600 T2 d6 · #3773).
+ *
+ * 에이전트는 성공한 RPC 마다 강제 push 를 한다(`agent` 의 응답 처리 → `statePushKind({ force: true })` = `state`). 만들기·죽이기
+ *  같은 변경이 다음 3초 주기를 기다리지 않고 올라가는 자리이고, 그 한 번이 strict 세션 목록 + 자원 표본이다(`agent.pushState`).
+ *  사람이 누른 만큼만 오는 op 에는 싸다.
+ * 아웃박스 걸음은 사람 단위가 아니라 **폴 단위**로 온다 — 준비 판정은 500ms 마다 화면을 본다(`session-outbox` 의 waitReady).
+ *  그 보기마다 강제 push 가 따라붙으면 걸음 하나가 목록 관측 한 판을 끌고 온다. 걸음은 세션을 만들거나 없애지 않으므로
+ *  (보고·누르고·칠 뿐) 치기로 바뀌는 상태는 3초 주기 push 가 싣는다.
+ * ⚠ 면제는 그 op 하나다. 모르는 op 를 포함해 나머지는 **종전대로 보낸다** — 안 보내는 쪽으로 틀리면 변경이 늦게 보인다.
+ */
+const NO_FORCED_PUSH: ReadonlySet<string> = new Set<string>(["outboxStep" satisfies NodeOp]);
+
+export function pushesStateAfter(op: string): boolean {
+  return !NO_FORCED_PUSH.has(op);
 }

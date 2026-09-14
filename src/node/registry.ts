@@ -413,7 +413,7 @@ export function forgetNode(nodeId: string): void {
   const c = conns.get(k);
   if (c) {
     conns.delete(k);
-    for (const p of c.pending.values()) { clearTimeout(p.timer); p.reject(new Error("node-offline")); }
+    for (const p of c.pending.values()) { clearTimeout(p.timer); p.reject(Object.assign(new Error("node-offline"), { sent: true })); }   // 보낸 뒤 끊겼다 — 갔을 수 있다(#3773, nodeRpc 머리말)
     c.pending.clear();
     for (const { browser } of c.chans.values()) { try { browser.close(CLOSE_NODE_OFFLINE, "node-offline"); } catch { /* noop */ } }
     c.chans.clear();
@@ -635,19 +635,24 @@ export function nodeSupports(nodeId: string, op: NodeOp): boolean {
 }
 
 // 타입드 RPC — 노드에 op 실행을 위임하고 결과를 기다린다. 노드 미연결이면 즉시 실패.
+//  ★ 실패에는 **«보냈나»(`sent`)** 가 새겨져 있다 (#2600 T2 d6 · #3773). 같은 `node-offline` 이 반대 두 사실이었다 —
+//   연결이 없어 **보내지 않았다**(아래 첫 줄)와 보낸 뒤 **끊겼다**(응답 대기 중 연결 해제·노드 삭제). 다시 해도 무해한 op 면
+//   상관없지만, 치기(아웃박스)는 다시 보내면 같은 지시가 두 번 간다. 그래서 «안 갔다» 가 확실한 자리만 false 다:
+//   연결 없음 · 미지원 op · ws.send 가 던짐 = false / 시간 초과 · 응답 전 끊김 · 노드가 실행하다 실패 = true.
+//  ⚠ **메시지는 그대로다** — 호출부(deliver-prompt·routes·rpc-error·task-scheduler)가 문자열로 가른다. 읽는 쪽은 `rpc-error.rpcMaybeSent`.
 export async function nodeRpc<T = unknown>(nodeId: string, op: NodeOp, args?: Record<string, unknown>): Promise<T> {
   const c = conns.get(keyOf(nodeId));
-  if (!c) throw new Error("node-offline");
+  if (!c) throw Object.assign(new Error("node-offline"), { sent: false });
   // 🔴 미지원 노드엔 **보내지 않는다**(#905 C4). 보내면 구 노드가 `unknown op: <op>` 라는 **문자열**을 돌려주고,
   //  호출자는 그걸 "실패"와 구별하지 못한다 — 기능이 없는 건지 하다 터진 건지 모른 채 재시도·오진이 쌓인다.
   //  여기가 단일 관문이라 모든 호출자가 자동으로 보호된다. 에러코드는 기계가 분기할 수 있게 고정 문자열.
-  if (!c.caps.has(op)) throw new Error(`node-unsupported-op:${op}`);
+  if (!c.caps.has(op)) throw Object.assign(new Error(`node-unsupported-op:${op}`), { sent: false });
   const id = c.nextReq++;
   const msg: GwToNodeMsg = { t: "req", id, op, args };
   return await new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => { c.pending.delete(id); reject(new Error("node-rpc-timeout")); }, RPC_TIMEOUT_MS);
+    const timer = setTimeout(() => { c.pending.delete(id); reject(Object.assign(new Error("node-rpc-timeout"), { sent: true })); }, RPC_TIMEOUT_MS);
     c.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
-    try { c.ws.send(JSON.stringify(msg)); } catch (e) { clearTimeout(timer); c.pending.delete(id); reject(e as Error); }
+    try { c.ws.send(JSON.stringify(msg)); } catch (e) { clearTimeout(timer); c.pending.delete(id); reject(Object.assign(e instanceof Error ? e : new Error(String(e)), { sent: false })); }
   });
 }
 
@@ -845,7 +850,7 @@ function onNodeControlMsg(c: NodeConn, m: NodeToGwMsg): void {
     c.pending.delete(m.id);
     clearTimeout(p.timer);
     if (m.ok) p.resolve(m.data);
-    else p.reject(new Error(m.error || "node-op-failed"));
+    else p.reject(Object.assign(new Error(m.error || "node-op-failed"), { sent: true }));   // 노드가 받아 실행하다 실패했다 — 갔다(#3773)
     return;
   }
   if (m.t === "state") {
@@ -949,7 +954,7 @@ function onNodeDisconnected(c: NodeConn): void {
   const k = keyOf(c.node.id, c.tenant);
   if (conns.get(k) !== c) return; // 이미 새 연결로 교체됨(재연결 레이스) — 새 연결을 건드리지 않는다
   conns.delete(k);
-  for (const p of c.pending.values()) { clearTimeout(p.timer); p.reject(new Error("node-offline")); }
+  for (const p of c.pending.values()) { clearTimeout(p.timer); p.reject(Object.assign(new Error("node-offline"), { sent: true })); }   // 보낸 뒤 끊겼다 — 갔을 수 있다(#3773, nodeRpc 머리말)
   c.pending.clear();
   for (const { browser } of c.chans.values()) { try { browser.close(CLOSE_NODE_OFFLINE, "node-offline"); } catch { /* noop */ } }
   c.chans.clear();

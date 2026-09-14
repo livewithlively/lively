@@ -12,7 +12,7 @@ test("15행 · 목록 안의 op 는 전부 세션 op 다", () => {
   for (const op of SESSION_OPS) {
     assert.equal(isSessionOp(op), true, `${op} 가 세션 op 로 안 잡힌다`);
   }
-  assert.equal(SESSION_OPS.length, 12, "표를 바꿨으면 이 수도 함께 바꿔라(무심코 늘어나는 걸 막는다)");
+  assert.equal(SESSION_OPS.length, 13, "표를 바꿨으면 이 수도 함께 바꿔라(무심코 늘어나는 걸 막는다)");
 });
 
 // 노드 전용 op 는 그 PC 의 것(파일·위탁 태스크·앱 워커·provision·대화 런타임)이라 세션 호스트의 몫이

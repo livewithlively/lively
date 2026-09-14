@@ -29,7 +29,7 @@ import {
   selfUpdateBlockedForever,
   type GwToNodeMsg, type NodeToGwMsg, type ReqMsg,
 } from "./protocol.js";
-import { statePushKind } from "./state-freshness.js";   // #2600 T2 d6 — «봤는데 그대로» 는 침묵이 아니라 박동
+import { statePushKind, pushesStateAfter } from "./state-freshness.js";   // #2600 T2 d6 — «봤는데 그대로» 는 침묵이 아니라 박동 · 아웃박스 걸음은 강제 push 면제(#3773)
 // 위탁 태스크(P2) — 러너/리소스 샘플러는 중앙(게이트웨이 내장 노드)과 공유(node/tasks.ts).
 import { sampleResources, detectDocker, detectHarnesses, spawnTaskSession, checkTask, tailTask, type TaskWatch, type RunTaskInput } from "./tasks.js";
 import { provisionProjectRepos, markProvisionPending, type RepoSpec as ProvisionRepoSpec } from "../project/project-provision.js";
@@ -514,8 +514,10 @@ function connect(): void {
     if (m.t === "helloOk") { void maybeSelfUpdate(m.agentVerLatest); return; }
     if (m.t === "req") {
       const req = m as ReqMsg;
+      //  성공한 RPC 뒤엔 상태를 곧바로 전량 보낸다 — 단 아웃박스 걸음은 뺀다(#3773 · `pushesStateAfter` 머리말). 그 걸음은
+      //   준비 판정의 폴 단위(500ms)로 오는데, 강제 push 한 번이 strict 세션 목록 + 자원 표본이다.
       void runOp(req.op, req.args ?? {})
-        .then((data) => { ws.send(JSON.stringify({ t: "res", id: req.id, ok: true, data } satisfies NodeToGwMsg)); void pushState(true); })
+        .then((data) => { ws.send(JSON.stringify({ t: "res", id: req.id, ok: true, data } satisfies NodeToGwMsg)); if (pushesStateAfter(req.op)) void pushState(true); })
         .catch((e) => { try { ws.send(JSON.stringify({ t: "res", id: req.id, ok: false, error: (e as Error)?.message ?? String(e) } satisfies NodeToGwMsg)); } catch { /* noop */ } });
       return;
     }
