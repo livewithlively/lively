@@ -1,7 +1,7 @@
 // 브로커 전송 어댑터 — «이 컨테이너에서 이 argv 를 돌려 세 칸을 다오» 를 브로커 HTTP API 로 나른다 (#2600 T2 (d) d2).
 //
 // ── 무엇을 하나 ───────────────────────────────────────────────────────────────
-// 매니지드 배포에서 코어(게이트웨이/세션 호스트)는 tmux 를 **브로커** 를 통해 세션 컨테이너 안에서 돌린다. 오늘은 자식
+// 매니지드 배포에서 코어(세션 호스트)는 tmux 를 **브로커** 를 통해 세션 컨테이너 안에서 돌린다. 중앙 게이트웨이는 오늘도 자식
 //  프로세스(테넌트 이미지의 tmux-relay)가 그 일을 하고, 이 모듈은 코어가 **직접** 브로커를 부르는 클라이언트다.
 //  «무엇을 어디로» 는 `tmux-route.ts`(순수)가 정하고, 여기는 **전송만** 한다 — 두 엔드포인트 뿐이다:
 //   · `GET  /lvly/sessions`  → 이 노드가 아는 세션 줄(observed·sessions)
@@ -9,30 +9,26 @@
 //       ① `POST /containers/<c>/exec` → `{Id}`   ② `POST /exec/<Id>/start` (101 업그레이드 → raw 스트림 프레임)
 //       ③ `GET  /exec/<Id>/json` → `{Running, ExitCode}`
 //
-// ── 전송 둘 ───────────────────────────────────────────────────────────────────
-//  · 유닉스 소켓 — 헤더도 접두도 없다. 신원이 «어느 소켓으로 들어왔나» 라서다(그 테넌트에만 bind mount).
-//  · 허브 — 중앙 게이트웨이는 노드와 호스트가 다르다. 허브의 클라이언트 포트로 보내면 허브가 slug→노드를 해석해 역방향
-//    연결로 내려보낸다. 경로 접두 `/t/<slug>` 와 slug 귀속 토큰(HMAC-SHA256(secret, "hub:"+slug) hex — lvly-cloud
-//    brokernet.hubClientToken 과 같은 구성)이 그 계약이다.
+// ── 전송은 하나 ───────────────────────────────────────────────────────────────
+//  · 유닉스 소켓 — 헤더도 접두도 없다. 신원이 «어느 소켓으로 들어왔나» 라서다(그 테넌트에만 bind mount). 노드 박스의 세션 호스트가 쓴다.
+//  ⚠ 허브 전송(중앙 게이트웨이 → 허브 `/t/<slug>` · HMAC 토큰)은 #2600 T3-a(2026-09-14)로 걷었다.
+//   코어에서 그 전송을 쓰던 것은 게이트웨이의 그림자 대조 하나뿐이었다. 허브의 그 계약 자체는 서버 쪽(lvly-cloud)에 남는다 —
+//   게이트웨이의 중계(`tmux-relay.cjs`)가 아직 쓴다(#2600 T3-c 가 tmux 명령형을 걷는다).
 //
 // ── 규율 ───────────────────────────────────────────────────────────────────────
 //  ⚠ 환경변수를 읽지 않는다 — 전송 설정은 **인자로만** 받는다(코어 규율: 토폴로지 env 는 exec-topology 하나만 읽는다.
 //   구조 시험 scripts/exec-topology-single-source.test.mjs 가 그걸 지킨다). 이 파일의 시험(T10)이 소스 문자열로 다시 확인한다.
-//  ⚠ 런타임 의존은 node 내장(http·crypto)뿐. 코어 다른 모듈은 tmux-route 의 **타입만** 가져온다.
+//  ⚠ 런타임 의존은 node 내장(http)뿐. 코어 다른 모듈은 tmux-route 의 **타입만** 가져온다.
 //  ⚠ `execCapture` 는 **던지지 않는다** — 실패를 전부 `TmuxOutcome` 으로 접는다. 컨테이너 없음/정지(404/409)는 `gone:true`
 //   (tmux-route 의 gone 규약: 병합이 그 세션을 0행으로 접는다). 그 밖의 실패는 gone 없는 code 1 — 병합이 «통째로 못 봤다»
 //   로 읽어 strict 호출은 던지고 목록은 desired 폴백으로 간다(#835 «모르면 없다고 말하지 않는다»).
 //  ⚠ 업그레이드 소켓을 **우리가 먼저 닫지 않는다** — FIN 이 출력 프레임보다 먼저 도착해 teardown 이 앞서는 함정(테넌트 이미지
 //   session-exec-relay 머리말의 실측). 명령이 끝나면 브로커가 닫는다. 매달림은 유휴 타임아웃이 끊는다.
 import http from "node:http";
-import { createHmac } from "node:crypto";
 import type { SessionRow, TmuxOutcome } from "./tmux-route.js";
 
-export type BrokerTransport =
-  /** 유닉스 소켓 — 헤더·접두 없음(신원 = 어느 소켓). */
-  | { kind: "socket"; socketPath: string }
-  /** 허브 — 헤더 `x-lvly-channel-auth` = HMAC-SHA256(secret, "hub:"+slug) hex · 경로 접두 `/t/<slug>`. */
-  | { kind: "hub"; url: string; secret: string; slug: string };
+/** 유닉스 소켓 — 헤더·접두 없음(신원 = 어느 소켓). 허브 전송은 T3-a 로 걷었다(머리말). */
+export type BrokerTransport = { kind: "socket"; socketPath: string };
 
 export interface BrokerClient {
   /**
@@ -42,13 +38,6 @@ export interface BrokerClient {
   listSessions(): Promise<{ observed: boolean; sessions: SessionRow[] }>;
   /** 컨테이너 안에서 argv 를 돌려 세 칸을 받는다. 절대 throw 하지 않는다 — 실패는 TmuxOutcome 으로(머리말 규율). */
   execCapture(container: string, argv: string[]): Promise<TmuxOutcome>;
-}
-
-/** 허브 인증 헤더 이름 — lvly-cloud brokernet.CH_AUTH_HEADER 와 같다. */
-export const HUB_AUTH_HEADER = "x-lvly-channel-auth";
-/** 허브 클라이언트 토큰(순수) — lvly-cloud brokernet.hubClientToken 과 같은 구성. slug 에 묶여 탈취해도 그 테넌트뿐이다. */
-export function hubClientToken(secret: string, slug: string): string {
-  return createHmac("sha256", secret).update(`hub:${slug}`).digest("hex");
 }
 
 /**
@@ -86,36 +75,20 @@ export function makeDemuxer(): { feed(chunk: Buffer): void; stdout(): string; st
   };
 }
 
-type Wire = { base: http.RequestOptions; headers: Record<string, string>; prefix: string };
-
-/** 전송 → 요청 밑그림(순수). 소켓은 `socketPath`·빈 헤더·빈 접두, 허브는 host/port·토큰 헤더·`/t/<slug>`. */
-export function wireOf(t: BrokerTransport): Wire {
-  if (t.kind === "socket") return { base: { socketPath: t.socketPath }, headers: {}, prefix: "" };
-  const u = new URL(t.url);
-  //  허브는 평문 http 다(내부 주소). https 는 이 모듈의 계약 밖 — 조용히 http 로 보내지 않는다.
-  if (u.protocol !== "http:") throw new Error(`허브 URL 은 http 여야 한다: ${t.url}`);
-  return {
-    base: { host: u.hostname, port: Number(u.port) || 80 },
-    headers: { [HUB_AUTH_HEADER]: hubClientToken(t.secret, t.slug) },
-    prefix: `/t/${t.slug}`,
-  };
-}
-
 interface Reply { status: number; body: string }
 
 const fail = (stderr: string): TmuxOutcome => ({ code: 1, stdout: "", stderr });
 
 export function makeBrokerClient(t: BrokerTransport, opts?: { timeoutMs?: number }): BrokerClient {
   const timeoutMs = opts?.timeoutMs ?? 15_000;
-  const wire = wireOf(t);
 
   /** 요청-응답 한 번. 비-2xx 도 resolve(호출자가 상태로 갈린다) · 전송 오류·타임아웃은 reject. */
   const call = (method: "GET" | "POST", path: string, body?: unknown): Promise<Reply> => new Promise((resolve, reject) => {
     const data = body === undefined ? null : JSON.stringify(body);
-    const headers: Record<string, string> = { ...wire.headers };
+    const headers: Record<string, string> = {};
     if (data !== null) { headers["content-type"] = "application/json"; headers["content-length"] = String(Buffer.byteLength(data)); }
-    //  agent:false — 연결을 재사용하지 않는다. 유닉스 소켓·허브 모두 요청 하나가 연결 하나다(keep-alive 소켓이 남아 서버 종료를 붙드는 일이 없다).
-    const rq = http.request({ ...wire.base, agent: false, method, path: `${wire.prefix}${path}`, headers, timeout: timeoutMs }, (rs) => {
+    //  agent:false — 연결을 재사용하지 않는다. 요청 하나가 연결 하나다(keep-alive 소켓이 남아 서버 종료를 붙드는 일이 없다).
+    const rq = http.request({ socketPath: t.socketPath, agent: false, method, path, headers, timeout: timeoutMs }, (rs) => {
       const chunks: Buffer[] = [];
       rs.on("data", (d: Buffer) => chunks.push(d));
       rs.on("error", reject);
@@ -130,9 +103,9 @@ export function makeBrokerClient(t: BrokerTransport, opts?: { timeoutMs?: number
   const startAndCapture = (execId: string): Promise<{ stdout: string; stderr: string }> => new Promise((resolve, reject) => {
     const data = JSON.stringify({ Detach: false, Tty: false });
     const rq = http.request({
-      ...wire.base, agent: false, method: "POST", path: `${wire.prefix}/exec/${execId}/start`,
+      socketPath: t.socketPath, agent: false, method: "POST", path: `/exec/${execId}/start`,
       headers: {
-        ...wire.headers, "content-type": "application/json", "content-length": String(Buffer.byteLength(data)),
+        "content-type": "application/json", "content-length": String(Buffer.byteLength(data)),
         connection: "Upgrade", upgrade: "tcp",
       },
       timeout: timeoutMs,

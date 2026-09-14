@@ -7,7 +7,6 @@
 //  | 행  | 상황                                              | 기대                                                   |
 //  |-----|---------------------------------------------------|--------------------------------------------------------|
 //  | T1  | 소켓 전송 · listSessions                           | observed·sessions 그대로 · 인증 헤더 없음 · 접두 없음   |
-//  | T2  | 허브 전송 · listSessions                           | `/t/<slug>/lvly/sessions` · 헤더 = HMAC(독립 계산)     |
 //  | T3  | execCapture 정상(stdout·stderr 프레임 · ExitCode 0) | {code:0, stdout, stderr}                               |
 //  | T4  | ★ 프레임이 청크에 걸쳐 잘려 온다(머리 3+5 · 페이로드 2조각) | stdout/stderr 바르게 재조립                        |
 //  | T5  | ExitCode 1 + stderr `can't find session: x`        | code 1 · stderr 바이트 그대로                           |
@@ -16,13 +15,13 @@
 //  | T8  | start 가 업그레이드 대신 200                        | code 1 로 접힘 · 매달리지 않음                          |
 //  | T9  | timeoutMs 200 · 서버 무응답(create / 업그레이드 뒤 침묵) | 그 안에 code 1 로 끝남                             |
 //  | T10 | 배선 — 소스에 process.env · LIVELY_/LVLY_ 문자열 없음 | (정규식)                                              |
+//  #2600 T3-a(2026-09-14) — 허브 전송을 걷어 T2(허브 목록) 행을 함께 걷었다. 소켓 전송만 남는다.
 import assert from "node:assert/strict";
 import test from "node:test";
 import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createHmac } from "node:crypto";
 import { makeBrokerClient, makeDemuxer, type BrokerTransport } from "./broker-client.js";
 import type { SessionRow } from "./tmux-route.js";
 
@@ -113,7 +112,7 @@ async function startFake(): Promise<Fake> {
 const sockT = (f: Fake): BrokerTransport => ({ kind: "socket", socketPath: f.socketPath });
 const urls = (f: Fake): string[] => f.log.map((l) => `${l.method} ${l.url}`);
 
-// ── T1·T2 전송 ─────────────────────────────────────────────────────────────────
+// ── T1 전송 ─────────────────────────────────────────────────────────────────
 
 test("[T1] 소켓 전송 — listSessions 가 observed·sessions 를 그대로 · 인증 헤더 없음 · 경로 접두 없음", async () => {
   const f = await startFake();
@@ -136,28 +135,6 @@ test("[T1] 소켓 전송 — listSessions 가 observed·sessions 를 그대로 �
     (f as { sessions: unknown }).sessions = "not json obj";
     await assert.rejects(c2.listSessions(), /sessions 배열이 없다/);
   } finally { await f.close(); }
-});
-
-test("[T2] 허브 전송 — 경로 `/t/<slug>/lvly/sessions` · x-lvly-channel-auth = HMAC-SHA256(secret, 'hub:'+slug) hex", async () => {
-  //  허브는 TCP 다 — 가짜 서버를 루프백 포트에 하나 더 세운다(같은 핸들러 모양이면 충분하니 최소 구현).
-  const seen: Seen[] = [];
-  const server = http.createServer(async (req, res) => {
-    seen.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers, body: await readBody(req) });
-    res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ observed: true, node: "n1", sessions: [] }));
-  });
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  try {
-    const port = (server.address() as { port: number }).port;
-    const secret = "s3cr3t-" + Math.random().toString(36).slice(2);
-    const slug = "acme-1a2b";
-    const c = makeBrokerClient({ kind: "hub", url: `http://127.0.0.1:${port}`, secret, slug });
-    const got = await c.listSessions();
-    assert.deepEqual(got, { observed: true, sessions: [] });
-    assert.equal(seen.length, 1);
-    assert.equal(seen[0]!.url, `/t/${slug}/lvly/sessions`, "🔴 허브 경로 접두가 틀리다");
-    const expect = createHmac("sha256", secret).update(`hub:${slug}`).digest("hex");   // 독립 계산
-    assert.equal(seen[0]!.headers["x-lvly-channel-auth"], expect, "🔴 허브 토큰이 HMAC 값과 다르다");
-  } finally { await new Promise<void>((r) => server.close(() => r())); }
 });
 
 // ── T3~T5 execCapture 정상 경로 ──────────────────────────────────────────────
@@ -331,8 +308,10 @@ test("[T10] 배선 — 구현 소스에 process.env 가 없고 LIVELY_/LVLY_ 문
   assert.doesNotMatch(src, /process\s*\.\s*env/, "🔴 broker-client 가 환경변수를 읽는다 — exec-topology 만 읽는다");
   assert.doesNotMatch(src, /\bLIVELY_[A-Z_]+/, "🔴 코어 env 이름이 박혀 있다");
   assert.doesNotMatch(src, /\bLVLY_[A-Z_]+/, "🔴 매니지드 env 이름이 박혀 있다");
-  //  런타임 import 는 node 내장 둘뿐 · 코어 다른 모듈은 tmux-route 의 **타입만**.
+  //  #2600 T3-a — 허브 전송(HMAC 토큰·`/t/<slug>` 접두)을 걷었다. 되살아나면 코어가 다시 허브를 부른다.
+  assert.doesNotMatch(src, /createHmac|x-lvly-channel-auth|kind:\s*"hub"/, "🔴 걷힌 허브 전송이 broker-client 에 되살아났다");
+  //  런타임 import 는 node 내장 하나뿐 · 코어 다른 모듈은 tmux-route 의 **타입만**.
   const imports = [...src.matchAll(/^import\s+(type\s+)?.*?from\s+"([^"]+)"/gm)].map((m) => ({ typeOnly: !!m[1], from: m[2]! }));
-  assert.deepEqual(imports.filter((i) => !i.typeOnly).map((i) => i.from).sort(), ["node:crypto", "node:http"], "🔴 런타임 의존이 node 내장 밖으로 나갔다");
+  assert.deepEqual(imports.filter((i) => !i.typeOnly).map((i) => i.from).sort(), ["node:http"], "🔴 런타임 의존이 node 내장 밖으로 나갔다");
   if (isTs) assert.deepEqual(imports.filter((i) => i.typeOnly).map((i) => i.from), ["./tmux-route.js"]);
 });
