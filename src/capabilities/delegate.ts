@@ -167,7 +167,11 @@ const logs: Capability = {
       return { status: t.status, pending: t.status === "queued", chunk: "", next: from, done: false, exit: null };
     }
     let tail: TailResult;
-    if (t.node_id === CENTRAL_NODE_ID) tail = await tailTask(t.task_dir, from);
+    if (t.node_id === CENTRAL_NODE_ID) {
+      //  중앙 작업 폴더는 **요청자의 격리 경계**로 읽는다(저장소 분리 배포의 게이트웨이는 그 폴더를 직접 못 본다).
+      const { ensureMemberOsUser } = await import("../terminal/profiles.js");
+      tail = await tailTask(t.task_dir, from, await ensureMemberOsUser({ userId: t.requester } as never).catch(() => null));
+    }
     else if (nodeOnline(t.node_id)) tail = await nodeRpc<TailResult>(t.node_id, "tailTask", { taskDir: t.task_dir, from });
     else tail = { chunk: "", next: from, done: false, exit: null }; // 노드 오프라인 — 스케줄러 grace 가 처리, CLI 는 계속 폴링
     // DB 상 종결(스케줄러가 이미 수집)이면 tail 이 놓쳐도 done 을 확정한다(경합 방지).

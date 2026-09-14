@@ -15,8 +15,6 @@
 //  승인 우회를 쓰지 않는다. 경계는 `--disallowedTools`(liv-turn.ts 의 실측 참조)이고, 이 파일은 그 인자를
 //  만들지 않는다 — 스폰조차 여기서 하지 않고 org/liv/chat-turn.ts 의 startLivChatTurn 하나만 부른다(#1631 —
 //  처음 설정 킥오프·증류 지시도 같은 문을 지난다). 안전선이 한 자리에 있어야 약해질 때 눈에 띈다.
-import fsp from "node:fs/promises";
-import path from "node:path";
 import { z } from "zod";
 import type { Capability } from "../types.js";
 import { HttpError } from "../rest-util.js";
@@ -66,8 +64,11 @@ export const livChatCapabilities: Capability[] = [
       if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
       const dir = await turnDir(user, input.id);
       const { tailTask } = await import("../../node/tasks.js");
+      //  턴 폴더는 격리 경로라 **그 사용자 경계로** 읽는다(저장소 분리 배포의 게이트웨이는 직접 못 본다).
+      const { ensureMemberOsUser } = await import("../../terminal/profiles.js");
+      const osUser = await ensureMemberOsUser(user).catch(() => null);
       const from = Number.isFinite(input.from) && input.from >= 0 ? Math.floor(input.from) : 0;
-      return await tailTask(dir, from);
+      return await tailTask(dir, from, osUser);
     },
     false,  // mcp:false — 화면이 자기가 띄운 턴을 따라 읽는 문이다.
     {
@@ -88,7 +89,12 @@ export const livChatCapabilities: Capability[] = [
       const turn = ((await getLivProfile(userId)).chat?.turns ?? []).find((t) => t.id === input.id);
       // 프로필에 없으면 턴 폴더에서 읽는다(둘 중 하나만 남아도 멈출 수 있게).
       let sid = turn?.sid ?? "";
-      if (!sid) sid = (await fsp.readFile(path.join(await turnDir(user, input.id), "session"), "utf8").catch(() => "")).trim();
+      if (!sid) {
+        //  턴 폴더는 격리 경로라 **그 사용자 경계로** 읽는다.
+        const { readTaskText } = await import("../../node/tasks.js");
+        const { ensureMemberOsUser } = await import("../../terminal/profiles.js");
+        sid = ((await readTaskText(await turnDir(user, input.id), "session", await ensureMemberOsUser(user).catch(() => null))) ?? "").trim();
+      }
       if (!sid) {
         // 못 멈추면 **못 멈춘다고 말한다.** 조용히 실패하면 사람은 눌렀는데 안 멈춘 이유를 영영 모른다.
         return { stopped: false, reason: "이 턴의 세션을 찾지 못했습니다 — 멈추기가 붙기 전에 시작된 대화입니다. 리브는 계속 일하고, 끝나면 화면이 풀립니다." };

@@ -362,14 +362,14 @@ export const welcomeCapabilities: Capability[] = [
       const dir = path.join(abs, ".lively-task", input.id);
       const { tailTask } = await import("../../node/tasks.js");
       const from = Number.isFinite(input.from) && input.from >= 0 ? Math.floor(input.from) : 0;
-      const t = await tailTask(dir, from) as { chunk?: string; done?: boolean; exit?: number | null; next?: number };
+      const t = await tailTask(dir, from, osUser) as { chunk?: string; done?: boolean; exit?: number | null; next?: number };
       // ⚠ 판정은 **스트림 전체**에서 읽는다. 화면은 진행을 이어 읽느라 from 을 앞으로 밀어서,
       //  끝났을 때의 조각에는 정작 답이 안 들어 있다(실측 2026-08-26: AI 는 제대로 답했는데
       //  화면은 "판정을 읽지 못했다"로 떨어졌다 — 우리 읽기 쪽 결함이었다).
       //  done 일 때 한 번 더 처음부터 읽는 비용은 턴 하나 분량이라 무시할 만하다.
       if (!t.done) return { ...t, drawers: [] };
       const full = from > 0
-        ? await tailTask(dir, 0) as { chunk?: string }
+        ? await tailTask(dir, 0, osUser) as { chunk?: string }
         : t;
       return { ...t, drawers: parseDrawers(lastAssistantText(String(full.chunk ?? ""))) };
     }, false, {

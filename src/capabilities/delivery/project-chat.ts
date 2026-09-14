@@ -12,7 +12,6 @@
 //  ── 접근 ──
 //  프로젝트를 볼 수 있는 사람(project_get_v6 와 같은 가시성 게이트)만. 남의 대화는 구조상 못 건드린다(member_id = 늘 본인).
 import crypto from "node:crypto";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import type { Capability } from "../types.js";
@@ -88,7 +87,10 @@ export const projectChatCapabilities: Capability[] = [
       // 스폰이 성공한 뒤에 기억한다(실패한 턴의 세션 id 를 남기면 다음 턴이 없는 대화를 이어받으려 한다).
       const now = new Date().toISOString();
       if (!resume) await startProjectChat(p.id, userId, sessionId);
-      await fsp.writeFile(path.join(spawned.taskDir, "session"), spawned.sessionId, "utf8").catch(() => { /* best-effort */ });
+      //  턴 폴더는 격리 경로라 표지도 **그 사용자 경계로** 쓴다(저장소 분리 배포의 게이트웨이는 직접 못 쓴다).
+      const { writeTaskText } = await import("../../node/tasks.js");
+      const { ensureMemberOsUser } = await import("../../terminal/profiles.js");
+      await writeTaskText(spawned.taskDir, "session", spawned.sessionId, await ensureMemberOsUser(user).catch(() => null)).catch(() => { /* best-effort */ });
       await appendProjectChatTurn(p.id, userId, { id: turnId, text, at: now, sid: spawned.sessionId });
       return { turn_id: turnId, resumed: resume };
     },
@@ -108,13 +110,16 @@ export const projectChatCapabilities: Capability[] = [
       if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
       const p = await visibleProject(input.id, ctx?.viewer);
       const dir = await turnDir(user, p, input.tid);
-      const { tailTask, killTaskSession } = await import("../../node/tasks.js");
+      const { tailTask, killTaskSession, readTaskText } = await import("../../node/tasks.js");
+      //  턴 폴더는 격리 경로라 **그 사용자 경계로** 읽는다(저장소 분리 배포의 게이트웨이는 직접 못 본다).
+      const { ensureMemberOsUser } = await import("../../terminal/profiles.js");
+      const osUser = await ensureMemberOsUser(user).catch(() => null);
       const from = Number.isFinite(input.from) && input.from >= 0 ? Math.floor(input.from) : 0;
-      const tail = await tailTask(dir, from);
+      const tail = await tailTask(dir, from, osUser);
       // 끝난 턴의 껍데기 세션(exec $SHELL)을 거둔다 — 파일이 정본이라 세션은 더 필요 없다. 멱등(이미 없으면 무시).
       //  Stop 훅의 중앙 기록 캡처는 하네스가 끝나는 순간(exit 파일보다 먼저) 이미 돌았다.
       if (tail.done) {
-        const sid = (await fsp.readFile(path.join(dir, "session"), "utf8").catch(() => "")).trim();
+        const sid = ((await readTaskText(dir, "session", osUser)) ?? "").trim();
         if (sid) await killTaskSession(sid).catch(() => { /* 이미 없음 */ });
       }
       return tail;
@@ -137,7 +142,12 @@ export const projectChatCapabilities: Capability[] = [
       // 세션 id 는 **본인 대화 목차에서만** 꺼낸다 — 남의 턴을 멈추는 길이 구조상 없다. 없으면 턴 폴더의 session 파일.
       const chat = await getProjectChat(p.id, userId);
       let sid = chat?.turns.find((t) => t.id === input.tid)?.sid ?? "";
-      if (!sid) sid = (await fsp.readFile(path.join(await turnDir(user, p, input.tid), "session"), "utf8").catch(() => "")).trim();
+      if (!sid) {
+        //  턴 폴더는 격리 경로라 **그 사용자 경계로** 읽는다.
+        const { readTaskText } = await import("../../node/tasks.js");
+        const { ensureMemberOsUser } = await import("../../terminal/profiles.js");
+        sid = ((await readTaskText(await turnDir(user, p, input.tid), "session", await ensureMemberOsUser(user).catch(() => null))) ?? "").trim();
+      }
       if (!sid) return { stopped: false, reason: "이 턴의 세션을 찾지 못했습니다 — 리브는 계속 일하고, 끝나면 화면이 풀립니다." };
       const { killTaskSession } = await import("../../node/tasks.js");
       await killTaskSession(sid).catch(() => { /* 이미 끝났다 — 멈추라는 뜻은 이미 이뤄졌다 */ });
