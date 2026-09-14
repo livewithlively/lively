@@ -212,6 +212,11 @@ export function createSessionFiles(host: HTMLElement, opts: FilesOpts): FilesHan
     const to = e.relatedTarget as Node | null;
     if (!(to && root.contains(to))) root.classList.remove('fx-drag');
   });
+  //  dragleave 없이 끝나는 끌기(취소·목록 줄 다시 그리기)는 강조를 걷을 신호가 없다 — 끌기 중엔 포인터 이벤트가 오지 않으니
+  //   포인터가 움직였다면 끌기는 끝났다(web/standalone/terminal.ts setupTermDrop 과 같은 안전망). 창에 거는 리스너지만 부품끼리
+  //   주고받는 신호가 아니라 제 강조만 끄므로 탭마다 한 벌씩 받아도 맞다(#1819 신호 격리와 무관) — 닫을 때 destroy 에서 뗀다.
+  const dragDone = (): void => { if (root.classList.contains('fx-drag')) root.classList.remove('fx-drag'); };
+  window.addEventListener('pointermove', dragDone);
   root.addEventListener('drop', (e: DragEvent) => {
     const files = [...((e.dataTransfer && e.dataTransfer.files) || [])];
     if (!files.length) return;
@@ -228,5 +233,5 @@ export function createSessionFiles(host: HTMLElement, opts: FilesOpts): FilesHan
   }
 
   void loadDir('');
-  return { root, destroy() { destroyed = true; root.remove(); } };
+  return { root, destroy() { destroyed = true; window.removeEventListener('pointermove', dragDone); root.remove(); } };
 }
