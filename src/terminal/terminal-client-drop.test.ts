@@ -4,18 +4,21 @@
 //  xterm 자식 위에서 프레임 밖으로 나가면(relatedTarget=null) 그 조건이 영영 참이 안 됐다(헤드리스 크로미움 CDP 끌어놓기로 재현).
 // 단독 터미널 페이지 모듈(web/standalone/terminal.ts → dist/standalone/terminal.js)을 그대로 import 하고, 존·자식은 가짜 노드로 세운다.
 //  엣지 표: E1 파일 끌기 → 안내 · E2 존 안 자식 사이 → 유지 · E3 같은 화면의 존 밖 요소로 → 걷힘 · E4 프레임 밖(null) → 걷힘 ·
-//   E5 존 자신에서 나감 → 걷힘 · E6 터미널에 놓음 → 걷힘 + 업로드 요청 · E7 dragleave 없이 끝남 → 포인터 이동에 걷힘 ·
+//   E5 존 자신에서 나감 → 걷힘 · E6 터미널에 놓음 → 걷힘 + 업로드 PUT · E7 dragleave 없이 끝남 → 포인터 이동에 걷힘 ·
 //   E8 안내 없을 때 포인터 이동 → 무변화 · E9 판정의 빈 값(null·undefined) → 나감 · E10 경계(rel = 존 자신) → 유지 ·
-//   E11 파일 아닌 끌기 → 안 뜸 · X1·X2 파일 탐색기 강조(.drag)도 같은 판정.
-// fail-first: TERMJS_MOD=<판정을 `e.target === 존` 으로 되돌리고 포인터 안전망을 뺀 산출 모듈> 로 돌리면 E3·E4·E7·X1 이 빨간불이다.
+//   E11 파일 아닌 끌기 → 안 뜸 · X1~X3 파일 탐색기 강조(.drag)도 같은 규칙 · F1 새 셸 파일 앱(web/v2/files.ts) 배선.
+// fail-first: TERMJS_MOD=<판정을 `e.target === 존` 으로 되돌리고 포인터 안전망을 뺀 산출 모듈> 로 돌리면 E3·E4·E7·X1·X3 이,
+//  FILES_TS=<고치기 전 web/v2/files.ts> 로 돌리면 F1 이 빨간불이다.
 // 실행: npm run build && node dist/terminal/terminal-client-drop.test.js
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const MOD_PATH = process.env.TERMJS_MOD || path.resolve(here, "..", "standalone", "terminal.js");
 const MOD_URL = pathToFileURL(MOD_PATH).href;
+const FILES_TS = process.env.FILES_TS || path.resolve(here, "..", "..", "web", "v2", "files.ts");
 let seq = 0;
 
 type Listener = (ev: any) => void;
@@ -62,7 +65,7 @@ interface Harness {
   explorer: FakeNode;    // 같은 문서의 존 밖 요소 = 파일 탐색기 존
   rowA: FakeNode;        // 탐색기 목록 줄
   rowB: FakeNode;
-  fetched: string[];     // 나간 요청 URL — 드롭이 업로드 경로를 탔는지
+  fetched: string[];     // 나간 요청 «메서드 URL» — 드롭이 업로드 경로를 탔는지
   fireWindow: (type: string, ev?: any) => void;
 }
 
@@ -92,8 +95,14 @@ async function makeCtx(): Promise<Harness> {
   def("matchMedia", () => ({ matches: false }));
   def("requestAnimationFrame", (f: () => void) => setTimeout(f, 0));
   def("TERMJS_BUILD", "test");
-  // 요청은 기록만 하고 끝나지 않게 둔다 — 드롭이 업로드 경로를 «탔는지» 까지만 본다(그 뒤 전송은 이 테스트 범위 밖).
-  def("fetch", (url: unknown) => { fetched.push(String(url)); return new Promise(() => { /* pending */ }); });
+  // 목록 조회(겹치는 이름 확인)는 빈 폴더로 답하고, 업로드(PUT)는 끝나지 않게 둔다 — 업로드 요청이 «나갔는지» 까지만 본다
+  //  (그 뒤 경로를 입력창에 넣는 단계는 이 테스트 범위 밖).
+  def("fetch", (url: unknown, opts?: any) => {
+    const method = String((opts && opts.method) || "GET").toUpperCase();
+    fetched.push(`${method} ${String(url)}`);
+    if (method === "GET") return Promise.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) });
+    return new Promise(() => { /* pending */ });
+  });
 
   const mod: any = await import(`${MOD_URL}?n=${++seq}`);
   const zone = new FakeNode("div");
@@ -123,6 +132,7 @@ const showNote = (h: Harness): void => {
   h.zone.fire("dragover", drag({ target: h.canvas }));
   assert.equal(notes(h.zone).length, 1, "전제: 안내가 떠 있어야 한다");
 };
+const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 5));
 
 // ── 미니 async 러너 ──
 const tests: Array<[string, () => Promise<void> | void]> = [];
@@ -134,7 +144,7 @@ t("E9 판정의 빈 값 — 새로 들어간 요소가 null·undefined 면 «나
   assert.equal(h.mod.dragLeftZone(h.zone, null), true);
   assert.equal(h.mod.dragLeftZone(h.zone, undefined), true);
 });
-t("E10 경계 — 새로 들어간 요소가 존 자신이면 «존 안»", async () => {
+t("E10 판정 — 새로 들어간 요소가 존 자신이면 «존 안»", async () => {
   const h = await makeCtx();
   assert.equal(h.mod.dragLeftZone(h.zone, h.zone), false);
 });
@@ -173,7 +183,7 @@ t("E2 터미널 안 자식 사이를 옮겨 다니면 안내가 그대로다", a
   h.zone.fire("dragleave", drag({ target: h.canvas, relatedTarget: h.scrollbar }));
   assert.equal(notes(h.zone).length, 1);
 });
-t("E10 자식에서 존의 여백으로 옮겨도 안내가 그대로다", async () => {
+t("E10 행위 — 자식에서 존의 여백으로 옮겨도 안내가 그대로다", async () => {
   const h = await makeCtx();
   h.mod.setupTermDrop();
   showNote(h);
@@ -203,7 +213,7 @@ t("E5 존 자신에서 나가도 걷힌다(종전에도 되던 경우 — 보존
   h.zone.fire("dragleave", drag({ target: h.zone, relatedTarget: null }));
   assert.equal(notes(h.zone).length, 0);
 });
-t("E6 터미널에 놓으면 안내가 걷히고 이 세션의 uploads/ 로 업로드가 나간다", async () => {
+t("E6 터미널에 놓으면 안내가 걷히고 이 세션의 uploads/ 로 업로드(PUT)가 나간다", async () => {
   const h = await makeCtx();
   h.mod.setupTermDrop();
   showNote(h);
@@ -211,8 +221,9 @@ t("E6 터미널에 놓으면 안내가 걷히고 이 세션의 uploads/ 로 업�
   h.zone.fire("drop", e);
   assert.equal(notes(h.zone).length, 0);
   assert.equal(e.defaultPrevented, true);
-  await new Promise((r) => setTimeout(r, 0));
-  assert.ok(h.fetched.some((u) => u.includes("t-3948") && u.includes("uploads")), `업로드 경로 요청이 없다: ${JSON.stringify(h.fetched)}`);
+  for (let i = 0; i < 40 && !h.fetched.some((u) => u.startsWith("PUT ")); i++) await tick();
+  const put = h.fetched.find((u) => u.startsWith("PUT "));
+  assert.ok(put && put.includes("t-3948") && put.includes(encodeURIComponent("uploads/shot.png")), `업로드 요청이 없다: ${JSON.stringify(h.fetched)}`);
 });
 t("E7 ★dragleave 없이 끌기가 끝나도(취소·포인터 아래 요소 교체) 그 뒤 포인터가 움직이면 안내가 걷힌다", async () => {
   const h = await makeCtx();
@@ -250,6 +261,33 @@ t("X2 파일 탐색기 — 목록 줄 사이를 옮기면 강조가 유지된다
   h.explorer.fire("dragover", drag({ target: h.rowA }));
   h.explorer.fire("dragleave", drag({ target: h.rowA, relatedTarget: h.rowB }));
   assert.equal(h.explorer.classList.contains("drag"), true);
+});
+t("X3 ★파일 탐색기 — dragleave 없이 끌기가 끝나도 그 뒤 포인터가 움직이면 강조가 꺼진다", async () => {
+  const h = await makeCtx();
+  h.mod.setupDnd();
+  h.explorer.fire("dragover", drag({ target: h.rowA }));
+  assert.equal(h.explorer.classList.contains("drag"), true, "전제: 강조가 켜져야 한다");
+  h.fireWindow("pointermove");
+  assert.equal(h.explorer.classList.contains("drag"), false);
+});
+
+// 새 셸 파일 앱(web/v2/files.ts) — import·DOM 에 묶인 화면 모듈이라 배선만 소스에서 못박는다(레포 선례: category-groups-sidebar).
+//  주석은 지우고 본다 — 설명 주석에 남은 옛 문구가 거짓 빨강·초록을 만든 선례가 있다. 동작은 as-built 지식의 브라우저 전후 대조가 본다.
+const stripComments = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+t("F1 ★새 셸 파일 앱 — 강조를 끄는 판정은 relatedTarget 포함이고, dragleave 없이 끝난 끌기는 포인터 이동에 끄며, 닫을 때 그 리스너를 뗀다", () => {
+  const src = stripComments(readFileSync(FILES_TS, "utf8"));
+  const from = src.indexOf("addEventListener('dragleave'");
+  const to = src.indexOf("addEventListener('drop'");
+  assert.ok(from >= 0 && to > from, "dragleave·drop 배선을 못 찾았다");
+  const leave = src.slice(from, to);
+  assert.match(leave, /relatedTarget/, "새로 들어간 요소로 판정해야 한다");
+  assert.match(leave, /root\.contains\(/, "존 안인지 contains 로 가려야 한다");
+  assert.doesNotMatch(src, /e\.target\s*===\s*root/, "떠난 요소(target)로 판정하면 자식 위에서 나갈 때 강조가 남는다");
+  const reg = /window\.addEventListener\('pointermove',\s*(\w+)\)/.exec(src);
+  assert.ok(reg, "포인터 이동 안전망이 없다");
+  const destroyAt = src.lastIndexOf("destroy()");
+  assert.ok(destroyAt >= 0, "destroy 를 못 찾았다");
+  assert.match(src.slice(destroyAt), new RegExp(`window\\.removeEventListener\\('pointermove',\\s*${reg![1]}\\)`), "닫을 때 창 리스너를 떼야 한다");
 });
 
 async function main(): Promise<void> {

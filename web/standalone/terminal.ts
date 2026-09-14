@@ -2140,6 +2140,8 @@ export function setupDnd() {
   const dz = explorerEl;
   dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('drag'); });
   dz.addEventListener('dragleave', (e) => { if (dragLeftZone(dz, e.relatedTarget)) dz.classList.remove('drag'); });
+  // dragleave 없이 끝난 끌기(취소·목록 줄 다시 그리기)는 다음 포인터 이동에 강조를 끈다 — setupTermDrop 의 안전망과 같은 이유.
+  window.addEventListener('pointermove', () => { if (dz.classList.contains('drag')) dz.classList.remove('drag'); });
   dz.addEventListener('drop', async (e) => {
     e.preventDefault(); dz.classList.remove('drag');
     if (!explorerLoaded) { explorerLoaded = true; await loadDir(''); }
