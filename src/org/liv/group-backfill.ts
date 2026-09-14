@@ -25,17 +25,23 @@ export interface BackfillMember {
   workAsis?: string | null;
 }
 
-/** 보정의 기준이 될 사람 하나(가장 먼저 끝낸 주인) — 보정하지 않으면 null. */
+/**
+ * 보정의 기준이 될 사람 하나(가장 먼저 끝낸 주인)와 할 일 — 보정하지 않으면 null.
+ *  · 묶음 0개 → mode "seed": 그 사람 답으로 세 칸을 심고 묶음 밖 카테고리를 넣는다.
+ *  · 묶음 있음 → mode "place": 심지 않고 **묶음 밖 카테고리만** 넣는다. 실측(lively-agent-2-6a84, 2026-09-14 DB): 묶음 세 칸과
+ *    리브가 만든 4개는 제자리였고, 묶음보다 3분 먼저 생긴 계정 서버 기본 카테고리 5개만 묶음 밖이었다 — 0개일 때만 도는 보정으론 못 닿는다.
+ */
 export function planGroupBackfill(input: { hasGroups: boolean; members: BackfillMember[]; since?: string }):
-  { memberId: string; stage: string | null; workAsis: string | null } | null {
-  if (input.hasGroups) return null;
+  { memberId: string; stage: string | null; workAsis: string | null; mode: "seed" | "place" } | null {
   const since = Date.parse(input.since ?? GROUPS_FEATURE_SINCE);
   const owners = input.members
     .map((m) => ({ m, at: Date.parse(String(m.welcome?.done_at ?? "")) }))
     .filter(({ m, at }) => Number.isFinite(at) && at >= since && m.join?.via !== "invite")
     .sort((a, b) => a.at - b.at);
   const hit = owners[0]?.m;
-  return hit ? { memberId: hit.id, stage: hit.welcome?.stage ?? null, workAsis: hit.workAsis ?? null } : null;
+  return hit
+    ? { memberId: hit.id, stage: hit.welcome?.stage ?? null, workAsis: hit.workAsis ?? null, mode: input.hasGroups ? "place" : "seed" }
+    : null;
 }
 
 //  한 프로세스에서 워크스페이스마다 **결론이 난 뒤엔** 다시 보지 않는다 — 보정 대상은 새로 생기지 않는다
@@ -43,12 +49,12 @@ export function planGroupBackfill(input: { hasGroups: boolean; members: Backfill
 const settled = new Set<string>();
 export function resetGroupBackfillMemo(): void { settled.clear(); }
 
-export async function backfillCategoryGroups(): Promise<{ reason: "settled" | "has-groups" | "no-owner" | "seeded"; placed?: number }> {
+export async function backfillCategoryGroups(): Promise<{ reason: "settled" | "no-owner" | "placed" | "seeded"; placed?: number }> {
   const { currentTenant } = await import("../tenant-context.js");
   const ws = currentTenant()?.id ?? "primary";
   if (settled.has(ws)) return { reason: "settled" };
-  const { activeGroupKeys, seedCategoryGroups } = await import("../../v6/category-group-store.js");
-  if ((await activeGroupKeys()).length > 0) { settled.add(ws); return { reason: "has-groups" }; }
+  const { activeGroupKeys, placeUngroupedCategories, seedCategoryGroups } = await import("../../v6/category-group-store.js");
+  const hasGroups = (await activeGroupKeys()).length > 0;
   const { listMembers, getLivProfile, WORK_ASIS_SEP } = await import("../store/members.js");
   const members: BackfillMember[] = [];
   for (const p of await listMembers()) {
@@ -57,8 +63,14 @@ export async function backfillCategoryGroups(): Promise<{ reason: "settled" | "h
     if (!liv?.welcome) continue;
     members.push({ id: p.id, welcome: liv.welcome, join: liv.join ?? null, workAsis: liv.work?.asis ?? null });
   }
-  const plan = planGroupBackfill({ hasGroups: false, members });
+  const plan = planGroupBackfill({ hasGroups, members });
   if (!plan) { settled.add(ws); return { reason: "no-owner" }; }
+  if (plan.mode === "place") {
+    const placed = await placeUngroupedCategories({ actor: plan.memberId, source: "welcome" });
+    settled.add(ws);
+    if (placed.length) logger.info({ ws, member: plan.memberId, placed: placed.length }, "묶음 보정 — 묶음 밖에 남은 카테고리를 넣음");
+    return { reason: "placed", placed: placed.length };
+  }
   const gi = turnGroupInputs({ stage: plan.stage, workAsis: plan.workAsis, sep: WORK_ASIS_SEP });
   const r = await seedCategoryGroups({ stage: gi.stage, job: gi.job, actor: plan.memberId });
   settled.add(ws);

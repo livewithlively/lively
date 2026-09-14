@@ -10,13 +10,15 @@ const owner = (over: Partial<BackfillMember> = {}): BackfillMember => ({
   workAsis: "1인·프리랜서로 여러 일을 한다 · 디자인·크리에이티브", ...over,
 });
 
-test("F1 묶음이 이미 있으면 보정하지 않는다", () => {
-  assert.equal(planGroupBackfill({ hasGroups: true, members: [owner()] }), null);
+test("F1 묶음이 이미 있으면 심지 않고 묶음 밖 카테고리만 넣는다 — 기능 이후 주인이 없으면 그것도 안 한다", () => {
+  //  실측(lively-agent-2-6a84): 묶음 세 칸은 있었고 계정 서버 기본 카테고리 5개만 묶음 밖이었다.
+  assert.equal(planGroupBackfill({ hasGroups: true, members: [owner()] })?.mode, "place");
+  assert.equal(planGroupBackfill({ hasGroups: true, members: [owner({ welcome: { done_at: "2026-09-10T00:00:00Z" } })] }), null);
 });
 
 test("F2 묶음 0 · 기능 이후에 끝낸 주인 — 그 사람의 무대·직무로", () => {
   assert.deepEqual(planGroupBackfill({ hasGroups: false, members: [owner()] }),
-    { memberId: "agent-2", stage: "solo", workAsis: "1인·프리랜서로 여러 일을 한다 · 디자인·크리에이티브" });
+    { memberId: "agent-2", stage: "solo", workAsis: "1인·프리랜서로 여러 일을 한다 · 디자인·크리에이티브", mode: "seed" });
 });
 
 test("F3 기능 이전에 끝냈으면 옛 판 — 건드리지 않는다", () => {

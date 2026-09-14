@@ -478,6 +478,9 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-kmore { align-self: flex-start; margin: 2px 0 0 8px; border: 0; background: none; padding: 3px 0; font: inherit; font-size: 11.5px; font-weight: 700; color: var(--blue); cursor: pointer; }
 .v2-kmore:hover { text-decoration: underline; }
 .v2-kmore:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
+/* 묶음 카드(#1631) — 서가 카드 머리가 곧 묶음 이름이다(.v2-ksp-h 그대로). 빈 묶음 한 줄 · «묶음을 정해 주세요» 카드는 이름을 한 단계 흐리게. */
+.v2-ksp-empty { margin: 0; padding: 4px 8px 6px; white-space: normal; }
+.v2-ksp-fix .v2-ksp-h .n { color: var(--muted); }
 /* ── #3830 맥락 관리 — 이 앱에 있는 동안만 사이드바 열을 접는다 ──────────────────
    원준 2026-09-09: *"맥락관리 앱으로 들어간 다음에도 사이드바가 보이는데 굳이 필요가 없을 것 같아 …
     대신 뒤로가기 앞으로가기 검색 창은 전체 가로 다 차지하게 맨 상단에(슬랙처럼)."*
