@@ -19,7 +19,7 @@ import crypto from "node:crypto";
 import { itemsPool, q, one, withTx } from "../db/client.js";
 import { HttpError } from "../http-error.js";
 import { auditOrgContent, type WriteCtx } from "./content-audit.js";
-import { groupSetFor, type GroupDef } from "./category-groups.js";
+import { groupKeyForPrinciple, groupSetFor, principleForName, type GroupDef } from "./category-groups.js";
 
 const GROUP_COLS = `id, key, name, hint, sort, state, origin`;
 
@@ -134,6 +134,30 @@ export function planGroupSeed(
 ): { groups: GroupDef[]; skipped: boolean } {
   if (input.existing.length) return { groups: [], skipped: true };
   return { groups: groupSetFor(input.stage, input.job), skipped: false };
+}
+
+/**
+ * 묶음 밖 카테고리 배치 계획(순수, #1631 2026-09-14) — **묶음이 하나라도 있으면 어느 카테고리도 묶음 밖에 두지 않는다**
+ *  (원준 2026-09-12 «모든 카테고리가 하드하게 셋 중 하나»). 새로 만드는 카테고리는 planGroupAssign 이 400 으로 막지만,
+ *  **묶음보다 먼저 생긴 카테고리**(계정 서버가 심은 기본 카테고리 · 처음 설정 서랍 · 코드 스캔이 만든 축)는 막을 자리가 없었다 —
+ *  실측(lively-agent-2-6a84): 그런 카테고리는 아무도 묶음에 넣지 않았다.
+ *  · 대상: group_key 가 비었거나 **지금 없는 묶음**을 가리키는(고아) 카테고리. 칸은 이름 규칙(principleForName)으로 고른다.
+ *  · 이미 있는 묶음에 든 카테고리는 **건드리지 않는다** — 리브가 자료를 읽고 넣었거나 사람이 옮긴 것을 이름 규칙이 되돌리면 안 된다.
+ *  · 묶음이 0개면 빈 계획(옛 판 — 넣을 곳이 없다).
+ */
+export function planGroupPlacement(input: {
+  categories: Array<{ key: string; name?: string | null; group_key?: string | null }>;
+  groupKeys: readonly string[];
+}): Array<{ key: string; group_key: string }> {
+  if (!input.groupKeys.length) return [];
+  const out: Array<{ key: string; group_key: string }> = [];
+  for (const c of input.categories) {
+    const cur = String(c.group_key ?? "").trim();
+    if (cur && input.groupKeys.includes(cur)) continue;
+    const target = groupKeyForPrinciple(principleForName(c.name), input.groupKeys);
+    if (target) out.push({ key: c.key, group_key: target });
+  }
+  return out;
 }
 
 const listKeys = (keys: string[]): string => (keys.length ? keys.join(", ") : "(하나도 없음)");
@@ -275,15 +299,41 @@ export async function removeCategoryGroup(
 }
 
 /**
- * 처음 설정용 시드 — **멱등**. active 묶음이 하나라도 있으면 아무것도 안 한다.
- *  없으면 groupSetFor(stage, job) 의 집합을 sort 0..n 으로 넣는다(origin='welcome').
- *  ⚠ 룰 테이블은 어느 경로로 와도 다섯 원칙을 다 덮는다 — 「기타」 묶음이 없는 이유다(category-groups.ts).
+ * 묶음 밖 카테고리를 전부 넣는다(planGroupPlacement 의 DB 판). 멱등 — 다시 불러도 이미 든 것은 그대로다.
+ *  ⚠ UPDATE 는 «아직 묶음 밖인가» 를 WHERE 에 **다시** 건다 — 계획을 세운 뒤 사람·리브가 먼저 넣었으면 덮지 않는다.
+ *  감사는 카테고리 행으로 남긴다(setCategoryGroup 과 같은 동작 이름 set_group — 바뀐 것이 카테고리 행이다).
+ */
+export async function placeUngroupedCategories(ctx?: WriteCtx): Promise<Array<{ key: string; group_key: string }>> {
+  const groupKeys = await activeGroupKeys();
+  if (!groupKeys.length) return [];
+  const cats: Array<{ key: string; name: string | null; group_key: string | null }> = await q(itemsPool,
+    `SELECT key, name, group_key FROM category WHERE state<>'merged' ORDER BY key`);
+  const placed: Array<{ key: string; group_key: string }> = [];
+  for (const p of planGroupPlacement({ categories: cats, groupKeys })) {
+    const row = await one(itemsPool,
+      `UPDATE category SET group_key=$2, updated_at=now()
+         WHERE key=$1 AND state<>'merged'
+           AND (group_key IS NULL OR group_key NOT IN (SELECT key FROM category_group WHERE state='active'))
+       RETURNING key`, [p.key, p.group_key]);
+    if (!row) continue;   // 그 사이 누가 먼저 넣었다 — 덮지 않는다
+    const before = cats.find((c) => c.key === p.key)?.group_key ?? null;
+    await auditOrgContent("category", p.key, "set_group", { group_key: before }, { group_key: p.group_key }, ctx);
+    placed.push(p);
+  }
+  return placed;
+}
+
+/**
+ * 처음 설정용 시드 — **멱등**. active 묶음이 하나라도 있으면 새로 심지 않는다.
+ *  없으면 groupSetFor(stage, job) 의 세 칸을 sort 0..n 으로 넣는다(origin='welcome').
+ *  ⚠ 룰 테이블은 어느 경로로 와도 세 갈래를 다 덮는다 — 「기타」 묶음이 없는 이유다(category-groups.ts).
+ *  ★ 심었든 이미 있었든 **묶음 밖 카테고리를 남기지 않는다**(placeUngroupedCategories) — 계정 서버가 심은 기본 카테고리와
+ *   처음 설정 서랍은 묶음보다 먼저 생긴다. 이 한 줄이 없어서 그 카테고리들이 «묶음을 정해 주세요» 에 남았다(2026-09-14 실측).
  */
 export async function seedCategoryGroups(
   input: { stage?: string | null; job?: string | null; actor?: string | null },
-): Promise<{ created: string[]; skipped: boolean }> {
+): Promise<{ created: string[]; skipped: boolean; placed: Array<{ key: string; group_key: string }> }> {
   const plan = planGroupSeed({ existing: await activeGroupKeys(), stage: input.stage, job: input.job });
-  if (plan.skipped) return { created: [], skipped: true };
   const ctx: WriteCtx = { actor: input.actor ?? null, source: "welcome" };
   const created: string[] = [];
   for (let i = 0; i < plan.groups.length; i++) {
@@ -291,5 +341,15 @@ export async function seedCategoryGroups(
     await upsertCategoryGroup({ key: g.key, name: g.name, hint: g.hint, sort: i, origin: "welcome" }, ctx);
     created.push(g.key);
   }
-  return { created, skipped: false };
+  const placed = await placeUngroupedCategories(ctx);
+  return { created, skipped: plan.skipped, placed };
+}
+
+/** 묶음 밖 카테고리(이름) — 리브 2턴 지시문이 «이 턴을 끝내기 전에 0개» 로 싣는다. 묶음이 0개면 전부가 묶음 밖이다. */
+export async function listUngroupedCategories(): Promise<Array<{ key: string; name: string }>> {
+  return q(itemsPool,
+    `SELECT key, COALESCE(name, key) AS name FROM category
+      WHERE state<>'merged'
+        AND (group_key IS NULL OR group_key NOT IN (SELECT key FROM category_group WHERE state='active'))
+      ORDER BY name NULLS LAST, key`);
 }

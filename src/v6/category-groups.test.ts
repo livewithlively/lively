@@ -4,7 +4,7 @@
 //  말로 «MECE 하다» 는 다음 사람이 한 줄 고치면 깨진다. 그래서 집합마다 세 갈래의 **분할**을 단언한다.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GROUP_PRINCIPLES, GROUP_SETS, PRINCIPLE_TIE_BREAK, groupSetFor, groupSetPromptLines } from "./category-groups.js";
+import { GROUP_PRINCIPLES, GROUP_SETS, PRINCIPLE_TIE_BREAK, groupKeyForPrinciple, groupSetFor, groupSetPromptLines, principleForName } from "./category-groups.js";
 
 const SETS = Object.entries(GROUP_SETS);
 
@@ -107,4 +107,37 @@ test("⑧ 지시문에 실을 줄 — 칸마다 key·이름·뜻이 있고, 가�
   assert.match(lines[3], /누가 만들었나/);
   assert.match(lines[3], /사내 규정은 첫째 칸/);
   assert.deepEqual([...PRINCIPLE_TIE_BREAK].sort(), [...GROUP_PRINCIPLES].sort());
+});
+
+//  ── 이름 규칙(#1631, 2026-09-14) — 묶음보다 먼저 생긴 카테고리를 «그 밖» 에 두지 않는 서버의 마지막 받침 ──
+//   엣지 표 A1~A7(scratchpad/spec.md). 실측 계기: lively-agent-2-6a84 의 계정 서버 기본 카테고리가 아무 묶음에도 안 들었다.
+test("⑨ 이름 규칙 — 상대가 있는 말은 둘째 갈래, 바깥에서 받은 말은 셋째 갈래, 나머지는 첫째 갈래", () => {
+  for (const n of ["견적·계약", "정산·세금", "회의록"]) assert.equal(principleForName(n), "traded", n);
+  for (const n of ["리서치·자료", "시장·경쟁 동향"]) assert.equal(principleForName(n), "received", n);
+  for (const n of ["인쇄·제작", "업무 프로젝트", "개인"]) assert.equal(principleForName(n), "own", n);
+});
+
+test("⑩ «표준화» 는 «표준» 이 아니다 — 우리가 하는 일이다", () => {
+  assert.equal(principleForName("하네스 표준화"), "own");
+  assert.equal(principleForName("업계 표준"), "received");   // 대조 — «표준» 자체는 바깥에서 받은 것
+});
+
+test("⑪ 둘 다 걸리면 상대가 있는 쪽이 이긴다 · 빈 이름은 첫째 갈래", () => {
+  assert.equal(principleForName("고객 리서치"), "traded");
+  for (const n of ["", "   ", null, undefined]) assert.equal(principleForName(n), "own", `«${String(n)}»`);
+});
+
+test("⑫ 계정 서버 기본 카테고리 다섯 — 어느 것도 칸 밖으로 안 떨어진다", () => {
+  const got = Object.fromEntries(["업무 프로젝트", "리서치·자료", "사람·조직", "운영·행정", "개인"].map((n) => [n, principleForName(n)]));
+  assert.deepEqual(got, { "업무 프로젝트": "own", "리서치·자료": "received", "사람·조직": "traded", "운영·행정": "own", "개인": "own" });
+});
+
+test("⑬ 갈래 → key — 규약 칸이 있으면 그 칸, 없으면 순서상 첫 묶음, 묶음이 0개면 null", () => {
+  const all = ["g1", "g2", "g3"];
+  assert.equal(groupKeyForPrinciple("own", all), "g1");
+  assert.equal(groupKeyForPrinciple("traded", all), "g2");
+  assert.equal(groupKeyForPrinciple("received", all), "g3");
+  assert.equal(groupKeyForPrinciple("received", ["g2", "g1"]), "g2");          // g3 를 지웠다 → 화면 순서상 첫 묶음
+  assert.equal(groupKeyForPrinciple("traded", ["build", "align"]), "build");   // 사람이 이름으로 만든 key 뿐이어도 빈손 없음
+  assert.equal(groupKeyForPrinciple("own", []), null);                          // 묶음이 없으면 넣을 곳이 없다(옛 판)
 });

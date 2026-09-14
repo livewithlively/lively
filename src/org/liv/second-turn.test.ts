@@ -2,9 +2,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  decideSecondTurn, buildSecondTurnPrompt, SECOND_TURN_MAX_WAIT_MS, TURN1_DELIVERY_TTL_MS,
+  decideSecondTurn, buildSecondTurnPrompt, turnGroupInputs, SECOND_TURN_MAX_WAIT_MS, TURN1_DELIVERY_TTL_MS,
   type SecondTurnState, type SecondTurnInput,
 } from "./second-turn.js";
+import { GROUP_SETS } from "../../v6/category-groups.js";
 
 const DONE = Date.parse("2026-08-29T05:00:00Z");
 const st = (over: Partial<SecondTurnState> = {}): SecondTurnState => ({
@@ -79,8 +80,10 @@ const GROUPS = [
   { key: "plan", name: "정하는 일", hint: "무엇을 왜 만들기로 했는지" },
   { key: "align", name: "팀과 맞춘 것", hint: "사람과 오간 기록" },
 ];
+//  묶음이 없을 때 리브가 먼저 만들 세 칸 — 이 사람(디자인)의 룰 테이블 집합.
+const INTENDED = GROUP_SETS["디자인"].map(({ key, name, hint }) => ({ key, name, hint }));
 const pin = (over: Partial<SecondTurnInput> = {}): SecondTurnInput => ({
-  displayName: "수아", work: "회사·조직에서 팀과 함께 일한다 · 디자인", groups: GROUPS, drawers: ["산출물", "기록"], firstOrder: "지난 시안 리뷰 피드백만 모아 줘",
+  displayName: "수아", work: "회사·조직에서 팀과 함께 일한다 · 디자인", groups: GROUPS, intended: INTENDED, ungrouped: [], drawers: ["산출물", "기록"], firstOrder: "지난 시안 리뷰 피드백만 모아 줘",
   collectors: [{ label: "슬랙 #design", preset_key: "slack", enabled: true, ran: true }, { label: "노션", preset_key: "notion", enabled: true, ran: false }],
   partial: true, waitedMin: 20, ...over,
 });
@@ -284,9 +287,38 @@ test("㉛′ 이미 있는 카테고리를 쓸 때도 묶음이 비어 있으면
   assert.match(p, /이미 있는 카테고리를 쓰는데 묶음이 비어 있으면/);
   assert.match(p, /`category_update`/);
 });
-test("㉜ 묶음이 아직 없는 워크스페이스면 그 구획을 아예 싣지 않는다 — 없는 것을 고르라고 하지 않는다", () => {
+//  (#1631, 2026-09-14) ㉜ 를 뒤집는다 — 종전엔 «묶음이 없으면 단락을 싣지 않는다» 였고, 그 판에서 리브는 묶음 없는
+//   카테고리를 에러 없이 만들었다(실측 lively-agent-2-6a84: 서버의 하드 규칙은 묶음이 있어야 켜진다). 이제는 먼저 만들게 한다.
+test("㉜ 묶음이 아직 없으면 단락을 빼지 않고 «묶음부터 만든다» — 이 사람 직무의 세 칸을 그대로 싣는다", () => {
   const p = buildSecondTurnPrompt(pin({ groups: [] }));
-  assert.doesNotMatch(p, /새 묶음을 만들지 마라/);
-  assert.doesNotMatch(p, /`group`/);
-  assert.match(p, /category_create/);               // 카테고리 단계 자체는 그대로 있다
+  assert.match(p, /묶음부터 만든다/);
+  assert.match(p, /`category_group_upsert`/);
+  for (const g of INTENDED) assert.ok(p.includes(`\`${g.key}\``) && p.includes(g.name) && p.includes(g.hint), `${g.key} 줄이 없다`);
+  assert.match(p, /`group`/);                          // 만든 뒤엔 category_create 의 group 에 넣는다
+  assert.doesNotMatch(p, /새 묶음을 만들지 마라/);        // 없는 묶음 안에서 고르라고 하지 않는다
+  assert.ok(p.indexOf("category_group_upsert") < p.indexOf("org_distiller_upsert"), "묶음 만들기가 증류기 단계보다 뒤에 있다");
+});
+test("㉝ 묶음 밖 카테고리가 있으면 이름을 싣고 0개로 끝내게 한다", () => {
+  const p = buildSecondTurnPrompt(pin({ ungrouped: [{ key: "work", name: "업무 프로젝트" }, { key: "people", name: "사람·조직" }] }));
+  assert.match(p, /묶음 밖 카테고리 2개: 업무 프로젝트 · 사람·조직/);
+  assert.match(p, /\*\*0개\*\*여야/);
+});
+test("㉞ 묶음이 있고 묶음 밖이 없으면 종전 문구 그대로 — «묶음부터 만든다» 도 «묶음 밖 N개» 도 없다", () => {
+  const p = buildSecondTurnPrompt(pin());
+  assert.match(p, /새 묶음을 만들지 마라/);
+  assert.doesNotMatch(p, /묶음부터 만든다/);
+  assert.doesNotMatch(p, /묶음 밖 카테고리 \d+개/);
+});
+test("㉟ 직무를 못 골라 intended 도 비었으면 기본 세 칸으로 — 그래도 단락은 빠지지 않는다", () => {
+  const p = buildSecondTurnPrompt(pin({ groups: [], intended: [] }));
+  assert.match(p, /묶음부터 만든다/);
+  for (const g of GROUP_SETS.default) assert.ok(p.includes(g.name), `기본 칸 ${g.name} 이 없다`);
+});
+test("㊱ 2턴 묶음 재료 — 무대를 넘긴다: 학업인데 직무를 건너뛰었으면 학부생 세 칸(회사 기본이 아니다)", () => {
+  const gi = turnGroupInputs({ stage: "study", workAsis: "학업·연구를 한다", sep: " · " });
+  assert.deepEqual(gi.intended.map((g) => g.name), GROUP_SETS["학부생"].map((g) => g.name));
+  const gi2 = turnGroupInputs({ stage: "company", workAsis: "회사·조직에서 팀과 함께 일한다 · 디자인", sep: " · " });
+  assert.equal(gi2.job, "디자인");
+  assert.deepEqual(gi2.intended.map((g) => g.name), GROUP_SETS["디자인"].map((g) => g.name));
+  assert.equal(turnGroupInputs({ stage: null, workAsis: null, sep: " · " }).intended.length, 3);   // 재료가 없어도 빈손 없음
 });

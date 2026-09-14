@@ -201,8 +201,10 @@ t("[G1] 표에 열 정비가 있고 첫 목격에 전부 발사한다", () => {
   //  #3892 — 세션 호스트 스냅샷 표식 되채우기(session-meta-heal)가 테넌트 정비로 하나 늘었다. 목록 소유가 호스트로 넘어간
   //   테넌트에선 게이트웨이 collectSessions 의 되채우기가 안 불려, 요청에 얹는 것 말고 닿는 길이 없다.
   const perTenant = SWEEP_JOBS.filter((j) => (j.scope ?? "tenant") === "tenant");
-  assert.equal(perTenant.length, 10, "테넌트 정비 열(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기)");
-  assert.equal(SWEEP_JOBS.length, 11, "전역 하나(task-dispatch)가 더 있다");
+  //  #1631(2026-09-14) — 묶음 보정(category-group-backfill)이 테넌트 정비로 하나 늘었다. 처음 설정 뒤 묶음 0개로 남은
+  //   워크스페이스를 채우는 일이라 그 워크스페이스 컨텍스트 안에서만 돌 수 있고, 매니지드에선 요청에 얹는 것 말고 닿는 길이 없다.
+  assert.equal(perTenant.length, 11, "테넌트 정비 열한(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정)");
+  assert.equal(SWEEP_JOBS.length, 12, "전역 하나(task-dispatch)가 더 있다");
   asManaged(() => { run(); });
   //  ⚠ 전역 정비의 키는 `<정비>:*` 다 — 전부 `키:테넌트` 로 가정하면 안 된다.
   assert.deepEqual(sweptKeys().sort(),
@@ -221,6 +223,7 @@ t("[G2] 각 정비의 주기가 원래 하우스키핑과 같은 값이다 — �
     "task-dispatch": TASK_TICK_MS,                   // 종전 task-scheduler 의 TICK_MS(5초)
     "builtin-app-seed": SIX_HOURS_MS,                // 코드 소유 앱은 롤 때만 바뀐다
     "session-meta-heal": META_HEAL_SWEEP_MS,         // #3892 — 새 정비(원래 하우스키핑에 없던 것). 되채우기 쿨다운과 같은 60초
+    "category-group-backfill": TEN_MIN_MS,           // #1631 — 새 정비. 워크스페이스마다 결론이 나면 다시 안 보므로 주기는 «늦지 않을 정도» 면 된다
   };
   for (const j of SWEEP_JOBS) assert.equal(j.intervalMs, want[j.key], `${j.key} 의 주기가 다르다`);
   assert.deepEqual(Object.keys(want).sort(), SWEEP_JOBS.map((j) => j.key).sort(), "표와 기대가 같은 집합이어야 한다");
