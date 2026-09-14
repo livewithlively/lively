@@ -52,6 +52,7 @@ import { getProjectRow } from "../v6/project-store.js";   // #2549 — 삭제된
 import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 하네스 가용성(미보고 → 기준선)
 import { nodeOpenTo, nodeHostProfile } from "../node/node-access.js";
 import { createShellProject, firstPromptProjectPlan } from "../project/first-prompt-project.js";
+import { relocateAttachmentsToProject } from "../project/attach-relocate.js";
 import { launchSession, sessionInputFromBody, relayNodeOp, requireCreatableNode, registerSessionInstance, recordSessionTenant, chatFieldsOf, themeOf, prepareRemoteAppSession } from "./session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
@@ -1091,7 +1092,19 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const shellSpec = firstPromptProjectPlan(input);
     if (shellSpec) {
       const made = await createShellProject(shellSpec, idOf(userOf(req)));
-      if (made) { input.projectId = made.id; input.projectSrc = "v6"; input.rootKey = "shared"; input.subpath = made.folder; }
+      if (made) {
+        input.projectId = made.id; input.projectSrc = "v6"; input.rootKey = "shared"; input.subpath = made.folder;
+        // 첫 지시에 **명시 첨부**가 있었다면 그 파일을 이 프로젝트 폴더로 옮긴다(#3787).
+        //  컴포저는 첨부 시점에 프로젝트가 없어서 개인 폴더로 올린다(프로젝트는 방금 위에서 생겼다) — 그대로 두면
+        //  그 자료가 프로젝트 자료함에 안 뜨고, 동기화 축 밖이라 로컬 노드 세션이 못 읽는다. 지시문의 좌표 표기도
+        //  함께 고쳐 준다(주입 훅이 그 좌표로 이 컴퓨터의 실제 경로를 찍는다).
+        if (typeof input.initialPrompt === "string" && input.initialPrompt) {
+          const moved = await relocateAttachmentsToProject({
+            prompt: input.initialPrompt, projectId: made.id, folder: made.folder, memberId: idOf(userOf(req)),
+          });
+          input.initialPrompt = moved.prompt;
+        }
+      }
     }
     const nodeId = String(b.node ?? "").trim();
     res.setHeader("Cache-Control", "no-store");

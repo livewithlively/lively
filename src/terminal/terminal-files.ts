@@ -22,7 +22,8 @@ import { resolveSessionDir } from "../sessions/session-desired.js";
 import { memberLs, memberStat, memberMkdir, memberMv, memberRm, memberReadTo, memberPathProbe, type LsEntry } from "./terminal-member-fs.js";
 import { isConfined, probeLocal } from "./path-jail.js";   // #3668 T1 — 심링크를 해소한 뒤 접두를 본다
 import { receiveUpload, uploadError, nfcPath } from "./upload-file.js";
-import { ingestLocalUpload, supersedeLocalPath, localRootForBrowse, parseLocalExternalId, LOCAL_SYSTEM } from "../ingest/local-file.js";   // #1881 올린 파일 = 자료 1건 · #1631 자료 id 로 원본 열기
+import { supersedeLocalPath, localRootForBrowse, parseLocalExternalId, LOCAL_SYSTEM } from "../ingest/local-file.js";
+import { finishUpload, type UploadCoord } from "../ingest/upload-finish.js";   // #3787 D — 업로드 마무리(그룹 rw·자료·좌표·도장)는 한 자리
 import { getSource } from "../v6/source-store.js";   // #1631 — 자료 원본 창구의 공개범위(자료 상세와 같은 판정)
 import { nodeCanAttach, nodeRpc, isSelfNode, isSessionHostNode } from "../node/registry.js";
 import { relayNodeId, sameTmuxCoordinate, isBoxSessionRow } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #3745/#3870 — 박스 세션엔 세션 호스트 좌표도 같은 tmux 다
@@ -117,6 +118,20 @@ async function resolveInSession(req: express.Request, requireFile: boolean, cano
   const osUser = await sessionOsUser(req.params.id);
   await assertJailed(base, abs, osUser);
   return { base, abs, osUser };
+}
+
+/**
+ * 세션 작업폴더의 절대경로 → **알려진 좌표**(#3787 D). 못 잡으면 null(좌표를 지어내지 않는다).
+ *  세션 cwd 는 언제나 개인·공유 루트 안이므로(실측 2026-09-14: 534/534) 이 역함수가 거의 항상 답한다.
+ *  ⚠ 노드 세션에는 쓰지 않는다 — 그 바이트는 멤버 PC 에 있어 게이트웨이가 읽을 수 없다(자료 등록은 push 훅이 한다).
+ */
+async function sessionUploadCoord(u: LivelyUser, abs: string): Promise<UploadCoord | null> {
+  try {
+    const c = await rootRelOf(u, abs);
+    if (!c) return null;
+    const { base } = await resolveRootPath(u, c.root, "");
+    return await localRootForBrowse(c.root, u, base, abs);
+  } catch { return null; }
 }
 
 // 노드 세션 파일 릴레이(#875) — ?node= 면 게이트웨이가 nodeCanAttach 로 인가(정책=게이트웨이, 실행=노드 F7)하고 nodeId 반환.
@@ -306,29 +321,17 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     const { base, abs, osUser } = await resolveBrowse(req, true, true);   // 생성 → NFC 정본(#1278b)
     try { await receiveUpload(req, abs, MAX_UPLOAD, osUser); }
     catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
-    // 올린 파일 = 자료 1건(#1881 L1) — 개인 폴더는 올린 사람만 보는 자료, 공유 루트의 project/<id>/… 는 프로젝트 자료로 접는다.
-    //  실패해도 업로드는 성공이다(로그만).
     //  share=team(#1631) — **자기 개인 루트** 업로드에만 먹는 명시 옵션: «올린 사람만» 잠금을 걸지 않고 팀원 모두가 보는 자료로 둔다.
     //   초대로 들어온 사람의 처음 설정이 쓴다(원준 결정 2026-09-13 «합류자가 올린 파일은 팀원 모두가 본다»). 기본값은 종전 그대로(올린 사람만).
     //   ⚠ 공유 루트(root=shared)로 올리게 하지 않은 이유 — 매니지드에서 공유 루트는 테넌트 구분 없는 고정 경로다
     //    (profiles.ts resolveRootPath 의 격리 갈래 = SHARED_ISOLATED_BASE). 워크스페이스 사이 분리를 릴레이에만 기대는 자리에 팀 자료를 두지 않는다.
     const shareWithTeam = String(req.query.root ?? "") === "personal" && String(req.query.share ?? "") === "team";
-    let ing: Awaited<ReturnType<typeof ingestLocalUpload>> | null = null;
-    try {
-      const u = userOf(req);
-      const loc = await localRootForBrowse(String(req.query.root ?? ""), u, base, abs);
-      if (loc) ing = await ingestLocalUpload({ ...loc, abs, osUser, shareWithTeam, uploader: { id: viewerFor(req), name: u?.email ?? null } });
-    } catch (e) { console.warn(`[local-ingest] 자료 등록 실패 ${abs}: ${(e as Error)?.message ?? e}`); }
-    // path = 절대경로(#1870) — 새 세션 컴포저가 개인 폴더(root=personal)에 올린 첨부를 첫 지시에 절대경로로 적는다
-    //  (세션 cwd 는 세션 전용 폴더라 상대경로로는 못 찾는다 — 세션 라우트의 path 응답과 같은 이유).
-    // source_id — 자료로 등록됐으면 그 id(#1881). 구 클라이언트는 무시.
-    // skipped — 등록이 **안 된** 사유(#1631). 화면이 «왜 안 들어갔는지» 를 사람에게 사실대로 말하려면 이 값이 필요하다.
-    //  종전엔 성공만 알려 줘서, 실패한 파일은 화면에서 조용히 사라졌다(올린 사람은 다 들어간 줄 안다).
-    res.json({
-      ok: true, path: abs,
-      ...(ing?.ingested ? { source_id: ing.source_id } : {}),
-      ...(ing && !ing.ingested ? { skipped: ing.reason ?? ing.kind ?? "unknown" } : {}),
-    });
+    const u = userOf(req);
+    // 좌표 해석만 여기 남고 **마무리는 공용 한 자리**(finishUpload) — 프로젝트 업로드 라우트와 같은 함수다(#3787 D).
+    //  종전엔 여기와 project-routes 가 각자 마무리를 적어, 한쪽엔 그룹 rw 가 없고 다른 쪽엔 skipped 가 없었다.
+    const coord = await localRootForBrowse(String(req.query.root ?? ""), u, base, abs)
+      .catch((e) => { console.warn(`[local-ingest] 좌표 해석 실패 ${abs}: ${(e as Error)?.message ?? e}`); return null; });
+    res.json(await finishUpload({ coord, abs, osUser, shareWithTeam, uploader: { id: viewerFor(req), name: u?.email ?? null } }));
   }));
 
   // 디렉터리 목록(숨김 제외). 격리 세션(#524)은 멤버 uid 로(게이트웨이가 700 홈 못 읽으므로).
@@ -445,6 +448,13 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     const { abs, osUser } = await resolveInSession(req, true, true);   // 생성 → NFC 정본(#1278b)
     try { await receiveUpload(req, abs, MAX_UPLOAD, osUser); }
     catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
-    res.json({ ok: true, path: abs }); // abs = 세션 작업폴더 기준 절대경로(드롭 업로드가 입력창에 꽂아 cwd 무관하게 찾게)
+    // #3787 D — 이 라우트는 **좌표를 고르지 않는다**. 바이트는 세션 작업폴더(= 이미 정해진 자리)에 놓이고,
+    //  그 자리가 알려진 루트 안이면 마무리는 다른 업로드 입구와 **같은 함수**를 지난다(자료 등록·좌표 ref·도장).
+    //  종전엔 여기만 `{ok,path}` 로 끝나서, 세션에 드롭한 파일은 다음 push 훅이 돌 때까지 자료가 되지 않았다.
+    //  좌표를 못 잡으면(루트 밖) 종전 그대로 경로만 — 지어내지 않는다.
+    const u = userOf(req);
+    const coord = await sessionUploadCoord(u, abs);
+    res.json({ ...await finishUpload({ coord, abs, osUser, uploader: { id: viewerFor(req), name: u?.email ?? null } }), path: abs });
+    // path = 세션 작업폴더 기준 절대경로(드롭 업로드가 입력창에 꽂아 cwd 무관하게 찾게) — finishUpload 와 같은 값이지만 계약으로 못 박는다.
   }));
 }

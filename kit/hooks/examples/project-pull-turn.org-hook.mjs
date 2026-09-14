@@ -3,6 +3,8 @@
 //  ⚠ 키트 번들 파일 아님. run-custom.mjs 가 매 프롬프트마다 게이트웨이에서 fetch 해 임시 .mjs(ESM)로 실행한다.
 //  하는 일: SessionStart 의 project-pull 과 같은 단방향 공유폴더 pull 을 '턴마다'(프롬프트 제출 시) 수행해,
 //   세션 도중 웹에서 올린 문서가 바로 다음 턴에 로컬로 내려오게 한다(#828 — 세션 중 동기화 갭 해소).
+//  같은 소스가 **PostToolUse 로도 등록**된다(project-pull-tool) — 사람 지시 없이 오래 도는 세션(자율 루프·긴 턴)도
+//   도구를 쓰는 동안 새 자료를 받게. 그 판만 최소 간격(PULL_MIN_INTERVAL_MS)을 탄다.
 //  SessionStart 판과의 차이:
 //   ① 매 턴 도므로, 변경이 없으면 매니페스트 1회 조회로 즉시 종료(턴당 비용 최소 — newest<=last_pull 게이트).
 //   ② 다운로드에 시간예산(BUDGET_MS)을 둬 큰 변경이 턴을 오래 막지 않게 한다 — 예산 초과 시 부분만 받고
@@ -25,6 +27,8 @@ const SCOPE_HDRS = {
 
 
 const BUDGET_MS = 8000; // 턴 지연 상한 — 넘기면 부분만 받고 다음 턴에 이어받는다.
+// PostToolUse 판(project-pull-tool)의 최소 간격 — 도구 호출마다 네트워크를 타지 않게. (#3787)
+const PULL_MIN_INTERVAL_MS = 3000;
 
 // ── 프로젝트 폴더·동기화 모드 해석(#3787) — **서버가 권위, 마커는 캐시**. ──
 //  종전엔 로컬 마커(.lively/project.json)가 권위였고, 마커에 sync 가 없으면 경로 모양 추측
@@ -221,6 +225,23 @@ function untouched(st, base) {
   });
   let input = {}; try { input = JSON.parse(stdinData || "{}"); } catch { /* */ }
   const cwd = (input && typeof input.cwd === "string" && input.cwd) ? input.cwd : process.cwd();
+
+  // ── 장기 턴 배달(#3787) ────────────────────────────────────────────────────
+  //  pull 계기가 SessionStart·UserPromptSubmit 뿐이면 **사람 지시 없이 오래 도는 세션**은 턴이 끝날 때까지
+  //  새 자료를 못 받는다 — 「올려두면 그 세션이 본다」가 거기서 깨진다. 그래서 같은 소스를 PostToolUse 에도 건다.
+  //  대신 도구마다 네트워크를 타면 안 되므로 최소 간격을 둔다. 놓친 변경은 다음 도구·다음 프롬프트가 쓸어담는다
+  //  (pull 은 멱등하다 — 매니페스트 newest<=last_pull 이면 즉시 끝난다).
+  //  ⚠ UserPromptSubmit 판은 **제한하지 않는다**: 턴당 1회뿐이고, 모델이 지시를 보기 전에 받아둬야 한다.
+  const perTool = String(input.hook_event_name || input.hookEventName || "") === "PostToolUse";
+  if (perTool) {
+    const sp = path.join(os.tmpdir(), "lively-hooks",
+      `pull-${String(executionSessionId(input) || "anon").replace(/[^A-Za-z0-9._-]/g, "_")}.state`);
+    try { if (Date.now() - Number(JSON.parse(fs.readFileSync(sp, "utf8")).at || 0) < PULL_MIN_INTERVAL_MS) return; }
+    catch { /* 없음·깨짐 → 그냥 돈다(fail-open: 안 받는 것보다 한 번 더 받는 게 낫다) */ }
+    // 시작 시각을 **먼저** 적는다 — 느린 한 번이 도는 동안 뒤따르는 도구 호출이 겹쳐 몰리지 않게.
+    try { fs.mkdirSync(path.dirname(sp), { recursive: true, mode: 0o700 }); fs.writeFileSync(sp, JSON.stringify({ at: Date.now() })); }
+    catch { /* 무해 — 제한이 안 걸릴 뿐 */ }
+  }
 
   // 2) 게이트웨이 base + 토큰 — 해석보다 먼저다(서버에 물어야 하므로).
   const HOME = process.env.LIVELY_HOME || os.homedir();

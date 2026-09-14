@@ -82,8 +82,9 @@ test("④'' 안내가 사람이 보는 자리에 나온다 — 기록만 남기�
 
 //  사유는 **서버가 준 것만** 옮긴다. 지어내면 «압축이라 안 됩니다» 를 텍스트 파일에도 말하게 된다.
 test("⑤' 등록 실패 사유를 서버에서 받아 옮긴다 — 화면이 추측하지 않는다", () => {
+  //  #3787 D — 업로드 마무리는 입구마다가 아니라 공용 한 자리다(upload-finish.ts). 사유도 거기서 실린다.
   const srv = readFileSync(
-    new URL("../../terminal/terminal-files.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+    new URL("../../ingest/upload-finish.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
   assert.match(srv, /skipped: ing\.reason/, "서버가 등록 실패 사유를 안 내려준다");
   assert.match(SRC, /why: \(up && up\.skipped\) \|\| null/, "화면이 그 사유를 안 받는다");
   assert.match(SRC, /function failWhy\(fails\)/, "사유를 사람 말로 옮기는 자리가 없다");

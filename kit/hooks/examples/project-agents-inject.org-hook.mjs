@@ -12,13 +12,18 @@ const FLAG_DIR = path.join(os.tmpdir(), "lively-hooks");
 
 
 // ── 첨부 좌표 해석(#3787) — 지시에 실린 자료 표시를 **이 노드의 실제 절대경로**로 편다. ──
-//  왜 필요한가: 웹 컴포저는 이제 프로젝트 상대경로만 적는다(compose-attach.ts tail). 모델은 읽을 절대경로가
-//  있어야 하고, 그 절대경로는 세션이 어디서 도느냐에 따라 다르다. 여기서 편다 — 매니지드면 게이트웨이 경로,
-//  로컬 노드면 `~/workspace/project/<id>/…`.
+//  왜 필요한가: 컴포저는 이제 절대경로 대신 **노드 무관 좌표**를 적는다 — `- <보여줄 이름>  [lively:<ref>]`,
+//  ref 는 서버가 업로드 응답으로 준 자료 신원(`project:<id>/<rel>` · `personal:<멤버>/<rel>`) 그대로다.
+//  모델은 읽을 절대경로가 필요하고, 그 절대경로는 세션이 어디서 도느냐에 따라 다르다 — 그 변환이 여기다
+//  (매니지드면 게이트웨이 경로, 로컬 노드면 `~/workspace/project/<id>/…`).
 //  그리고 **없으면 크게 말한다**: 이 버그의 실제 피해는 파일이 안 온 것이 아니라, 없는데 있다고 믿은 AI 가
 //  근처의 다른 파일을 집어 자신 있게 답한 것(무음 오답)이었다.
-//  구 클라이언트·다른 입구(터미널 드롭·liv kickoff)는 여전히 게이트웨이 절대경로를 실을 수 있어, 그것도 접는다.
-const ATTACH_HEAD = /첨부한 자료\(([^)]*)\):\s*\n((?:\s*-\s*.+\n?)+)/g;
+//  구 클라이언트·다른 입구(터미널 드롭·liv kickoff)는 여전히 게이트웨이 절대경로나 맨 상대경로를 실으므로 그것도 접는다.
+//  ⚠ 헤더는 두 꼴을 다 받는다 — 새 판 `첨부한 자료:`, 구 판 `첨부한 자료(프로젝트 #12 공유 폴더):`.
+//   구 클라이언트가 한동안 남아 있고(브라우저 캐시), 그 세션이 조용히 좌표를 잃으면 정확히 이 버그가 재발한다.
+const ATTACH_HEAD = /첨부한 자료(?:\([^)]*\))?:\s*\n((?:\s*-\s*.+\n?)+)/g;
+/** `- 이름  [lively:project:12/a.png]` → ref 만. 좌표 표기가 없으면 null(구 판 = 경로가 본문에 그대로 있다). */
+const REF_LINE = /\[lively:([^\]]+)\]\s*$/;
 
 function sharedRootOf() {
   return process.env.TERMINAL_ROOT_SHARED || path.join(os.homedir(), "workspace");
@@ -30,8 +35,39 @@ function refoldAbs(p, projDir) {
   return m ? path.join(projDir, m[1]) : null;
 }
 
+/** `project:12/a/b.png` → { kind, id, rel }. 모르는 꼴이면 null. */
+function parseRef(ref) {
+  const i = String(ref).indexOf("/");
+  if (i < 0) return null;
+  const key = ref.slice(0, i), rel = ref.slice(i + 1);
+  if (!rel || rel.split("/").some((x) => x === "..")) return null;
+  const m = key.match(/^project:(\d+)$/);
+  if (m) return { kind: "project", id: Number(m[1]), rel };
+  if (/^personal:/.test(key)) return { kind: "personal", rel };
+  if (key === "shared") return { kind: "shared", rel };
+  return null;
+}
+
+/**
+ * 좌표 → 이 노드의 절대경로 후보. **규칙으로만** 만든다(여러 루트를 훑어 이름으로 찾지 않는다 —
+ *  그 탐색이 곧 「엉뚱한 동명 파일을 자신 있게 읽는」 이 버그의 재발이다).
+ *   ① 이 세션의 프로젝트 좌표 → 그 프로젝트 폴더 아래. 가장 흔하고 유일하게 확실한 경우다.
+ *   ② 그 외 좌표 → cwd 아래 같은 상대경로. 개인 폴더 세션(cwd = 개인 루트)에서 `personal:<나>/uploads/x.png`
+ *      가 정확히 그 자리에 있다 — **구성상 같은 자리**이고, 아래에서 existsSync 로 확인한 것만 「있다」고 말한다.
+ *   ③ 어느 쪽도 실물이 없으면 null → 호출부가 «이 컴퓨터에 없습니다» 로 크게 말한다.
+ */
+function absForRef(ref, projDir, cwd) {
+  const p = parseRef(ref);
+  if (!p) return null;
+  const cands = [];
+  if (p.kind === "project" && projDir) cands.push(path.join(projDir, p.rel));
+  if (cwd) cands.push(path.join(cwd, p.rel));
+  for (const c of cands) { try { if (fs.existsSync(c)) return c; } catch { /* */ } }
+  return cands[0] || null;    // 없으면 **첫 후보**를 돌려준다 — 「어디를 찾았는지」를 사람에게 말해 주기 위해
+}
+
 /** 프롬프트의 첨부 표시 → [{ shown, abs, exists }]. 없으면 빈 배열. */
-function resolveAttachments(prompt, projDir) {
+function resolveAttachments(prompt, projDir, cwd) {
   const out = [];
   const seen = new Set();
   const add = (shown, abs) => {
@@ -42,9 +78,15 @@ function resolveAttachments(prompt, projDir) {
   let m;
   ATTACH_HEAD.lastIndex = 0;
   while ((m = ATTACH_HEAD.exec(String(prompt || ""))) !== null) {
-    for (const line of m[2].split("\n")) {
+    for (const line of m[1].split("\n")) {
       const v = line.replace(/^\s*-\s*/, "").trim();
       if (!v) continue;
+      const r = v.match(REF_LINE);
+      if (r) {                                   // 새 판 — 좌표가 명시돼 있다
+        const shown = v.slice(0, r.index).trim() || r[1];
+        add(shown, absForRef(r[1], projDir, cwd));
+        continue;
+      }
       if (path.isAbsolute(v)) { add(v, fs.existsSync(v) || !projDir ? v : (refoldAbs(v, projDir) || v)); continue; }
       if (!projDir) continue;          // 상대경로인데 펼 좌표가 없다 — 말할 수 있는 게 없으니 조용히 넘긴다
       add(v, path.join(projDir, v));
@@ -143,7 +185,8 @@ export function executionSessionId(input = {}, env = process.env) {
     const projDir = (attachPid > 0 && (body.folder || body.folder_abs_path))
       ? (body.folder_abs_path ? String(body.folder_abs_path) : path.join(sharedRootOf(), String(body.folder)))
       : null;
-    const found = resolveAttachments(input.prompt ?? input.user_prompt ?? "", projDir);
+    const cwd = (input && typeof input.cwd === "string" && input.cwd) ? input.cwd : null;
+    const found = resolveAttachments(input.prompt ?? input.user_prompt ?? "", projDir, cwd);
     if (found.length) {
       const have = found.filter((f) => f.exists), miss = found.filter((f) => !f.exists);
       const lines = [];

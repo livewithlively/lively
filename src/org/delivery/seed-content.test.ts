@@ -99,12 +99,20 @@ const INJECTIONS = new Set(["always", "recalled"]);
 //  기본 꺼짐이면 로컬 노드 세션에선 그 계약이 거짓이 된다(자료도 안 오고, 만든 것도 안 올라간다).
 //  매니지드(colocated)는 셋 다 즉시 no-op 이라 비용이 안 붙는다 — 켜 두는 쪽의 손해가 없다.
 {
-  for (const id of ["project-pull", "project-pull-turn", "project-push", "project-push-tool"]) {
+  for (const id of ["project-pull", "project-pull-turn", "project-pull-tool", "project-push", "project-push-tool"]) {
     const h = DEFAULT_HOOKS.find((x) => x.id === id);
     assert.ok(h, `동기화 훅 '${id}' 이 시드에 없음`);
     assert.equal(h!.enabled, true, `동기화 훅 '${id}' 이 기본 꺼짐 — 로컬 노드 세션에서 cwd 싱크 계약이 깨진다(#3787)`);
   }
   // push 는 두 이벤트에 걸린다 — Stop 만이면 턴 하나가 통째로 싱크 지연이고, PostToolUse 만이면 Bash 밖 변경을 놓친다.
+  // #3787 — pull 계기가 SessionStart·UserPromptSubmit 뿐이면 **사람 지시 없이 오래 도는 세션**은 턴 내내 새
+  //  자료를 못 받는다. 그 구멍을 PostToolUse 판이 막는다(같은 소스, 최소 간격만 다름).
+  const pullTool = DEFAULT_HOOKS.find((x) => x.id === "project-pull-tool")!;
+  const pullTurn = DEFAULT_HOOKS.find((x) => x.id === "project-pull-turn")!;
+  assert.equal(pullTool.event, "PostToolUse", "project-pull-tool 은 PostToolUse 여야 한다");
+  assert.equal(pullTool.source_code, pullTurn.source_code, "pull 두 판은 **같은 소스**여야 한다(복제하면 반드시 갈라진다)");
+  assert.ok(/PULL_MIN_INTERVAL_MS/.test(pullTool.source_code), "PostToolUse 판의 자기제한이 소스에 없다 — 도구마다 네트워크를 탄다");
+
   const tool = DEFAULT_HOOKS.find((x) => x.id === "project-push-tool")!;
   assert.equal(tool.event, "PostToolUse", "project-push-tool 은 PostToolUse 여야 한다");
   assert.ok(/Bash/.test(tool.matcher ?? ""), "project-push-tool 매처에 Bash 가 없음 — 파일 변경의 상당수가 sed·리다이렉트·git 으로 일어난다");
