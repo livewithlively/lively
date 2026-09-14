@@ -40,7 +40,7 @@ import path from "node:path";
 import { itemsPool } from "../db/client.js";
 import { tmux, isSessionGoneError } from "../terminal/tmux-exec.js";
 import { sendKeysToSession, sendKeyToSession, SendKeysNotStarted } from "../terminal/send-keys.js";
-import { firstPromptStep } from "../terminal/session-first-prompt.js";
+import { firstPromptStep, acceptTrustDialog } from "../terminal/session-first-prompt.js";   // #3949 — 신뢰 대화상자는 읽고 누른다(첫 지시와 같은 함수)
 import { codexChatMode } from "../terminal/codex-chat-mode.js";
 import { harnessIo } from "../terminal/harness-io/adapter.js";
 import { locateTranscript, ownerHomes } from "../terminal/harness-io/locate.js";
@@ -459,8 +459,10 @@ async function waitReady(sessionId: string, harness: string, trustOk: boolean): 
     if (step === "send") return "ready";
     if (step === "give-up") return "not-ready";
     if (step === "accept-trust" && !acceptedTrust) {
-      await sendKeyToSession(sessionId, "Enter").catch(() => { /* 다음 폴에서 다시 본다 */ });
-      acceptedTrust = true;
+      //  #3949 — **화면을 읽고** «Yes» 로 옮긴 뒤 누른다(첫 지시와 같은 함수 — #3626). 종전엔 여기서 맹목 Enter 였고,
+      //   현행 Claude Code 는 기본 선택이 «No, exit» 라 그 Enter 가 하네스를 끄고 이 지시를 «준비 안 됨» 으로 떨궜다.
+      //   못 읽으면 아무것도 안 누르고 다음 폴에서 다시 본다 — 끝내 못 읽으면 READY_WINDOW_MS 뒤 not-ready 로 사람에게 남는다.
+      if ((await acceptTrustDialog(sessionId, pane)) === "accepted") acceptedTrust = true;
     }
     await sleep(500);
   }
