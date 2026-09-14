@@ -51,6 +51,18 @@ export function rewriteRefs(prompt: string, moved: Map<string, string>): string 
   });
 }
 
+/** 폴더 안에서 비어 있는 이름 — 겹치면 `이름-2.확장자`, `이름-3.확장자`… (컴포저 attachName 과 같은 규칙). */
+async function freeName(base: string, name: string): Promise<string> {
+  const dot = name.lastIndexOf(".");
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : "";
+  for (let i = 1; i < 100; i++) {
+    const cand = i === 1 ? name : `${stem}-${i}${ext}`;
+    try { await fsp.access(path.resolve(base, cand)); } catch { return cand; }
+  }
+  return `${stem}-${Date.now()}${ext}`;
+}
+
 export interface RelocateResult { prompt: string; moved: number; failed: number }
 
 /**
@@ -75,10 +87,12 @@ export async function relocateAttachmentsToProject(o: {
     try {
       const src = await resolveLocalFile(p);
       if (!src) { failed++; continue; }
-      const name = path.basename(p.rel);
+      await fsp.mkdir(base, { recursive: true });
+      //  이름 충돌은 **비켜 간다** — 갓 만든 프로젝트 폴더엔 AGENTS.md 가 이미 있고, 같은 이름 첨부가 오면
+      //  덮어쓰기는 그 프로젝트의 규칙 문서를 지우는 일이 된다. 사람이 올린 것을 잃지 않는 쪽으로 이름을 바꾼다.
+      const name = await freeName(base, path.basename(p.rel));
       const dest = path.resolve(base, name);
       if (dest !== base && !dest.startsWith(base + path.sep)) { failed++; continue; }
-      await fsp.mkdir(base, { recursive: true });
       if (src.osUser) {
         // 격리 멤버(#524)의 개인 폴더는 700 이라 **게이트웨이가 직접 못 읽는다** — 그 uid 로 읽어 내보낸다.
         //  읽기가 끝난 뒤에만 원본을 지운다(옮기기지 복사가 아니다). 지우기 실패는 무시 — 사본은 이미 섰다.
