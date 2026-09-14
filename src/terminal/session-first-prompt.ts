@@ -117,6 +117,27 @@ async function peek(id: string): Promise<{ pane: string; paneCmd: string }> {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/** 신뢰 대화상자에 보낼 키 — 시험은 tmux 없이 이걸 바꿔 끼운다. */
+export interface TrustKeys { down: (id: string, times: number) => Promise<void>; enter: (id: string) => Promise<void> }
+const TMUX_TRUST_KEYS: TrustKeys = { down: sendDownToSession, enter: (id) => sendKeyToSession(id, "Enter") };
+
+/**
+ * 신뢰 대화상자를 **화면을 읽고** 수락한다 — «Yes» 까지 내린 뒤 Enter (#3626 · #3949).
+ *  첫 지시(`injectFirstPrompt`)와 아웃박스(`session-outbox` 의 준비 판정)가 **둘 다 이 함수**를 부른다.
+ *  #3626 은 첫 지시 쪽만 고쳤는데, 게이트웨이에서 만든 세션의 첫 지시가 실제로 들어가는 곳은 아웃박스였고
+ *  거기는 계속 맹목 Enter 를 눌렀다(#3949) — 같은 판단이 두 자리에 있으면 한쪽만 고쳐진다.
+ *
+ * @returns `accepted` — 키를 보냈다. 결과는 다음 폴에서 화면으로 본다(키 실패도 삼킨다 — 다음 폴이 다시 판단한다).
+ *          `unreadable` — 선택지를 못 읽어 **아무것도 안 눌렀다**. 잘못 누르면 하네스가 꺼진다(trustAcceptDowns 머리말).
+ */
+export async function acceptTrustDialog(id: string, pane: string, keys: TrustKeys = TMUX_TRUST_KEYS): Promise<"accepted" | "unreadable"> {
+  const downs = trustAcceptDowns(tailOf(pane));
+  if (downs === null) return "unreadable";
+  if (downs > 0) await keys.down(id, downs).catch(() => { /* 다음 폴에서 다시 본다 */ });
+  await keys.enter(id).catch(() => { /* 다음 폴에서 다시 본다 */ });
+  return "accepted";
+}
+
 /**
  * 첫 지시를 넣는다 — 입력창이 뜰 때까지 폴링(0.4s)하고, 신뢰 대화상자면 수락하고, 뜨면 넣는다.
  *  maxMs 를 넘기면 포기한다(warn). 세션이 그새 사라져도(사용자가 닫음) 조용히 끝난다.
@@ -135,16 +156,14 @@ export async function injectFirstPrompt(id: string, harness: string, text: strin
     const step = firstPromptStep({ ...seen, harness, elapsedMs: Date.now() - t0, maxMs, trustOk });
     if (step === "give-up") { console.warn(`[terminal] 첫 지시를 넣지 못했다(${id}) — ${Math.round(maxMs / 1000)}초 안에 입력창이 안 떴다(로그인·오류 화면일 수 있다).`); return false; }
     if (step === "accept-trust" && !acceptedTrust) {
-      //  ★ #3626 — **화면을 읽고** «Yes» 로 옮긴 뒤 Enter. 기본 선택이 Yes 라는 전제는 틀렸다(trustAcceptDowns 머리말).
-      //   못 읽으면(null) **아무것도 안 누르고** 기다린다 — 잘못 누르면 하네스가 종료되고 그 세션이 통째로 사라진다.
-      const downs = trustAcceptDowns(tailOf(seen.pane));
-      if (downs === null) {
+      //  ★ #3626 — **화면을 읽고** «Yes» 로 옮긴 뒤 Enter(acceptTrustDialog — 아웃박스와 같은 함수, #3949).
+      //   기본 선택이 Yes 라는 전제는 틀렸다. 못 읽으면 **아무것도 안 누르고** 기다린다 — 잘못 누르면 하네스가 종료되고
+      //   그 세션이 통째로 사라진다.
+      if ((await acceptTrustDialog(id, seen.pane)) === "unreadable") {
         console.warn(`[terminal] 신뢰 대화상자의 선택지를 못 읽었다(${id}) — 대신 누르지 않는다(사람이 답할 수 있게 남긴다).`);
         await sleep(pollMs);
         continue;
       }
-      await sendDownToSession(id, downs).catch(() => { /* 다음 폴에서 다시 본다 */ });
-      await sendKeyToSession(id, "Enter").catch(() => { /* 다음 폴에서 다시 본다 */ });
       acceptedTrust = true;
       await sleep(pollMs);
       continue;
