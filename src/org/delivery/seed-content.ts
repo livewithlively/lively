@@ -28,6 +28,14 @@ export interface SeedResult { hooks: number; skills: number; knowledge: number; 
 //  (updated_by='system')만 회수해 orphan/이중출처를 막는다(#878). 이동 시 여기 이름을 넣는다.
 const RETIRED_SEED_KNOWLEDGE: string[] = ["project-closeout-routine"]; // → project-closeout 스킬로 이동(#878)
 
+// 기본값이 «꺼짐 → 켜짐» 으로 바뀐 시드 훅 — 손 안 댄 기존 설치도 따라오게 한다(아래 승격 블록).
+//  · session-log-capture(#1752, 대표 결정 2026-08-18)
+//  · project-pull-turn·project-push·project-push-tool(#3787) — 「프로젝트 세션이면 그 프로젝트 자료가 cwd 에
+//    있다」는 계약이 **실행 위치와 무관하게** 성립해야 한다. 종전엔 이 셋이 기본 꺼짐이라 로컬 노드 세션은
+//    공유폴더를 영영 못 받고(웹에서 붙인 첨부가 세션에 안 감 → AI 가 근처 다른 파일로 답하는 무음 오답),
+//    만든 산출물도 웹 자료함에 안 올라갔다. 매니지드(colocated)는 셋 다 즉시 no-op 이라 비용이 안 붙는다.
+const PROMOTE_ENABLED = new Set(["session-log-capture", "project-pull-turn", "project-push", "project-push-tool"]);
+
 export async function seedDefaultContent(): Promise<SeedResult> {
   const ctx: WriteCtx = { actor: "system", source: "migration" };
   const res: SeedResult = { hooks: 0, skills: 0, knowledge: 0 };
@@ -56,11 +64,13 @@ export async function seedDefaultContent(): Promise<SeedResult> {
         res.hooks++;
         continue;
       }
-      // ── #1752 일회성 기본값 승격: session-log-capture 를 기본 켬(대표 결정 2026-08-18). ──
-      //  대상은 **손 안 댄 시드**(updated_by='system' — 운영자·에이전트가 한 번이라도 만졌으면 updated_by 가 그 사람)뿐이다.
-      //  즉 '아무도 의사를 밝힌 적 없는' 행만 새 기본값을 따라간다 — 운영자가 명시로 끈 박스는 영원히 꺼진 채다.
+      // ── 일회성 기본값 승격 — **손 안 댄 시드만** 새 기본값을 따라간다. ──
+      //  대상은 updated_by='system'(운영자·에이전트가 한 번이라도 만졌으면 updated_by 가 그 사람)뿐이다.
+      //  즉 '아무도 의사를 밝힌 적 없는' 행만 따라가고, 운영자가 명시로 끈 박스는 영원히 꺼진 채다.
       //  (아래 source_code 갱신 경로는 enabled 를 보존하는 규약이라 여기로는 기본값 변경이 영영 안 닿는다 — 별도 블록이 필요했다.)
-      if (h.id === "session-log-capture" && h.enabled && before.updated_by === "system" && !before.enabled) {
+      //  ⚠ 여기 넣는 건 «신규 설치 기본값을 바꿨으니 기존 설치도 따라오게 한다» 는 뜻이다. 부트스트랩(default-content)
+      //   만 고치면 **이미 뜬 박스엔 영영 안 간다** — 그 함정 때문에 이 블록이 존재한다.
+      if (PROMOTE_ENABLED.has(h.id) && h.enabled && before.updated_by === "system" && !before.enabled) {
         await upsertOrgHook({
           id: h.id, label: h.label, harness: h.harness as HookHarness, event: h.event, matcher: h.matcher,
           source_code: h.source_code, timeout_sec: h.timeout_sec, note: h.note, summary: h.summary,

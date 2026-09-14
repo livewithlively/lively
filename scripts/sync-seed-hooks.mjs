@@ -21,9 +21,15 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.join(here, "..", "src", "org", "delivery", "default-content.ts");
 const EX_DIR = path.join(here, "..", "kit", "hooks", "examples");
 
+// 같은 소스를 **다른 이벤트로도** 등록하는 훅의 별칭 — 훅 행 하나는 이벤트 하나뿐이라(event 는 코드 소유 잠금
+//  필드) 두 이벤트에 걸려면 행이 둘이어야 한다. 소스를 복제하면 반드시 갈라지므로 한 파일을 공유한다.
+//  project-push-tool: 같은 up-sync 를 PostToolUse 에서도 돈다(#3787 — Stop 만이면 턴 하나가 통째로 싱크 지연).
+//   훅 본문이 stdin 의 hook_event_name 으로 두 판을 구분한다(PostToolUse 판은 변경 선검사·자기제한을 탄다).
+const SOURCE_ALIAS = { "project-push-tool": "project-push" };
+
 // 예제 파일이 있는 훅만 대상 — 없는 훅(delegate-router 등)은 DB 캡처본을 그대로 둔다.
 export function exampleSourceFor(id) {
-  const f = path.join(EX_DIR, `${id}.org-hook.mjs`);
+  const f = path.join(EX_DIR, `${SOURCE_ALIAS[id] ?? id}.org-hook.mjs`);
   return fs.existsSync(f) ? fs.readFileSync(f, "utf8") : null;
 }
 

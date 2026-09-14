@@ -6,7 +6,12 @@
 //  올릴 곳 — 컴포저가 선 자리에 따라 갈린다(둘 다 세션이 열리기 **전**에 존재하는 안정된 workspace다):
 //   · 프로젝트가 있으면 — 그 프로젝트 공유 폴더(PUT /api/ui/v6/projects/:id/file — 자료 칸에 바로 보인다)
 //   · 없으면(홈 런처·프로젝트 없는 칸) — 내 개인 폴더 uploads/ (PUT /api/ui/terminal/browse/file?root=personal)
-//  어느 쪽이든 서버가 준 **절대경로**를 첫 지시 꼬리에 적는다 — 사용자가 어느 cwd를 골라도 첨부 좌표가 흔들리지 않는다.
+//  꼬리에 적는 좌표(#3787): **게이트웨이 절대경로를 적지 않는다.** 그 값(`/var/lib/lvly/.../project/<id>/<name>`)은
+//  게이트웨이 박스의 경로라, 세션이 **로컬 노드(멤버 노트북)에서 돌면 그 경로가 존재하지 않는다** — 그런데 지시문은
+//  «첨부한 자료» 라고 단언하므로 AI 는 있다고 믿고 근처의 다른 파일을 집어 답한다(실측: 붙여넣은 스크린샷을 세 번
+//  연속 다른 이미지로 설명). 그래서 **프로젝트 상대경로**만 적고, 절대경로는 세션 쪽이 자기 노드 기준으로 편다
+//  (project-agents-inject 가 서버에서 받은 폴더로 펴 준다). 매니지드에선 같은 값이 나오고, 로컬에선 실제로 있는
+//  경로가 나온다. 공유폴더 동기화(project-pull/pull-turn)가 그 파일을 이미 그 자리에 내려둔다.
 //
 //  업로드는 authUploadProgress(XHR) — 상한이 1GB 로 열려(#1870) 진행률 없는 업로드는 멈춘 것과 구분이 안 된다.
 //  진행률은 그 파일의 칩에 % 로 얹고, 올리는 중엔 ✕ 가 취소를 겸한다. 올리는 중 전송(Enter)은 호출자가
@@ -18,7 +23,8 @@ import { attachName, pnIcon } from './panes-kit.js';
 // 서버 상한과 같은 값(terminal-files.ts·project-routes.ts MAX_UPLOAD = 1GB) — 서버까지 갔다 413 으로 돌아오기 전에 거른다.
 const MAX_ATTACH = 1024 * 1024 * 1024;
 
-interface Att { name: string; abs: string; pct: number | null; ctl: AbortController | null }
+// rel = 프로젝트(또는 개인 폴더) **상대경로** — 지시 꼬리에 적는 값(노드 무관). abs = 서버가 준 절대경로, 칩 툴팁 표시용.
+interface Att { name: string; rel: string; abs: string; pct: number | null; ctl: AbortController | null }
 
 export interface ComposerAttach {
   /** 첨부 칩 줄 — 입력칸과 버튼 줄 사이에 넣는다(비면 숨김). */
@@ -68,14 +74,17 @@ export function composerAttach(opts: { projectId: () => number; onChanged?: () =
       if (f.size > MAX_ATTACH) { toast(`${f.name || '파일'} — 파일이 너무 커요(상한 1GB). 나눠서 올려주세요.`, true); continue; }
       const nm = attachName(f, items.map((a) => a.name));
       const ctl = new AbortController();
-      const a: Att = { name: nm, abs: '', pct: 0, ctl };
+      const a: Att = { name: nm, rel: '', abs: '', pct: 0, ctl };
       items.push(a); paint();
       try {
         // 순차 업로드(upSend 와 같은 이유) — 병렬로 쏘면 큰 파일 여럿이 회선을 나눠 서로 오래 걸린다.
         const j: any = await authUploadProgress(urlFor(nm), f, (pct: number) => { if (items.indexOf(a) >= 0) { a.pct = pct; paint(); } }, ctl.signal);
         if (j && j.source_id) srcCount++;
         if (items.indexOf(a) < 0) continue;   // 올리는 중에 ✕(취소)로 이미 뺐다
-        a.pct = null; a.ctl = null; a.abs = (j && j.path) || nm;
+        a.pct = null; a.ctl = null;
+        a.abs = (j && j.path) || nm;
+        // 상대경로 — 프로젝트면 올린 이름 그대로(PUT ?path=<nm>), 개인 폴더면 uploads/ 아래.
+        a.rel = opts.projectId() > 0 ? nm : ('uploads/' + nm);
         ok++; paint();
         opts.onChanged?.();                   // 프로젝트 자료 칸이 같은 화면에 있으면 바로 보이게
       } catch (e: any) {
@@ -113,10 +122,13 @@ export function composerAttach(opts: { projectId: () => number; onChanged?: () =
     },
     busy: () => items.some((a) => a.pct != null),
     tail() {
-      const done = items.filter((a) => a.pct == null && a.abs);
+      const done = items.filter((a) => a.pct == null && a.rel);
       if (!done.length) return '';
-      const where = opts.projectId() > 0 ? '이 프로젝트 공유 폴더' : '내 개인 폴더';
-      return '\n\n첨부한 자료(' + where + '):\n' + done.map((a) => '- ' + a.abs).join('\n');
+      const pid = opts.projectId();
+      // 프로젝트면 «프로젝트 #<id> 자료», 아니면 «내 개인 폴더 uploads/» — 둘 다 **노드와 무관한 신원**이다.
+      //  세션 쪽(project-agents-inject)이 이 표시를 자기 노드의 절대경로로 편다(#3787).
+      const where = pid > 0 ? `프로젝트 #${pid} 공유 폴더` : '내 개인 폴더';
+      return '\n\n첨부한 자료(' + where + '):\n' + done.map((a) => '- ' + a.rel).join('\n');
     },
     clear() { for (const a of items) a.ctl?.abort(); items.length = 0; paint(); },
   };
