@@ -1,21 +1,23 @@
-// 초대로 합류한 사람의 처음 설정 (#3872 → #1631 결정 2026-09-13)
+// 초대로 합류한 사람의 처음 설정 (#3872 → #1631 결정 2026-09-13 → #3872 결정 2026-09-14)
 //
 //  #3872(2026-09-12) 지시: *"초대 합류자용 처음 설정을 따로 만드는게 좋겠어. 그들도 자료를 로컬에서 업로드 할 수 있어야지."*
 //  #1631(2026-09-13) 결정 — 합류자 차례표를 다시 짠다(knowledge signup-onboarding-two-paths-review-1631 §9·§11):
-//   · 판정은 «초대로 들어왔나»(서버 사실). 워크스페이스 용도는 먼저 정한 사람 것을 물려받는다 — 아무도 안 정했으면 그때만 묻는다.
+//   · 판정은 «초대로 들어왔나»(서버 사실). 워크스페이스 용도는 먼저 정한 사람 것을 물려받는다.
 //   · 팀의 외부 앱 연결은 **보여 주되 수정은 못 하게**(연결·해제·수집 계정 변경 불가) — connect 장면은 합류자에게 없다.
 //   · 올린 로컬 파일은 팀원 모두가 보는 팀 자료로.
 //   · 합류자에게 리브를 띄우지 않는다.
-//   · «터미널 → 내 컴퓨터 연결 / 앱 받기» 는 초대 전부터 계정이 있던 사람에게만.
-//  ⚠ 종전 가드 ②(«외부 앱·내 컴퓨터는 합류자에게도 그대로다»)는 이 결정으로 **뒤집혔다** — 대표 결정이 옛 가드를 이긴다.
+//  #3872(2026-09-14) 결정 — 원준님이 실제 초대 가입을 지나 본 뒤 합류자 차례를 다시 정했다:
+//   · «어느 부서에 가까우세요?»(role)를 뺀다 — *"이건 과거에 워크스페이스에 설정을 정하느라고 처음에 들어온 거거든? 초대받은 참가자가 이걸 또 할 필요는 없고"*.
+//     같은 까닭으로 용도(stage)도 묻지 않는다 — 아무도 안 정했어도 워크스페이스 설정은 초대받은 사람이 할 일이 아니다.
+//   · 외부 서비스 연결은 묻지 않는다(«설정 망치니까») — 켜진 팀 수집이 있을 때 보기 전용 목록만 둔다(9/13 그대로).
+//   · «터미널 → 내 컴퓨터 연결 / 앱 받기» 는 처음 가입한 사람을 포함해 **모든 합류자에게** — *"이거는 필요하겠다"*.
+//  ⚠ 9/13 의 «설치 장면은 초대 전부터 계정이 있던 사람에게만»·«아무도 안 정했으면 용도를 묻는다» 는 이 결정으로 **뒤집혔다**.
 //
-//  엣지 표(합류 · 용도 · 켜진 팀 수집 · 초대 전 계정) → 차례표:
-//   F1 주인(합류 아님)                       → ORDER 그대로
-//   F2 합류 · 용도 있음 · 수집 2 · 기존 계정  → intro team name role files ai claude sources terminal local app
-//   F3 합류 · 용도 없음 · 수집 2 · 기존 계정  → … name stage role … (stage 는 name 바로 다음)
-//   F4 합류 · 용도 있음 · 수집 0 · 처음 계정  → … claude 로 끝난다(sources·설치 장면 없음)
-//   F5 합류 · 용도 있음 · 수집 1 · 처음 계정  → … claude sources 로 끝난다
-//   F6 어느 합류 갈래에도 connect 가 없다
+//  엣지 표(합류 · 켜진 팀 수집) → 차례표:
+//   F1 주인(합류 아님)  → ORDER 그대로
+//   F2 합류 · 수집 2     → intro team name files ai claude sources terminal local app
+//   F3 합류 · 수집 0     → intro team name files ai claude terminal local app
+//   F4 어느 합류 갈래에도 stage·role·connect 가 없고, 끝은 앱 받기다
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -47,46 +49,37 @@ type Fn = (...args: unknown[]) => unknown;
 const compile = (params: string[], body: string): Fn => new Function(...params, body) as unknown as Fn;
 
 /** 소스의 flowFor 를 그대로 돌린다 — 글자가 아니라 계산 결과로 단언한다. */
-type Facts = { join: boolean; askStage: boolean; teamSources: number; existingAccount: boolean };
+type Facts = { join: boolean; teamSources: number };
 const flowOf = (f: Facts): string[] => compile(["ORDER", "ORDER_JOIN", "JOIN_INSTALL", "f"],
   `${blockFrom(code, "function flowFor(f) {")}\nreturn flowFor(f);`)(list("ORDER"), list("ORDER_JOIN"), list("JOIN_INSTALL"), f) as string[];
 
 test("F1 주인의 차례표는 종전 그대로다 (무회귀)", () => {
   const solo = list("ORDER");
-  assert.deepEqual(flowOf({ join: false, askStage: true, teamSources: 3, existingAccount: true }), solo);
-  assert.ok(solo.includes("stage") && solo.includes("connect") && !solo.includes("team"), "주인 차례표가 바뀌었다");
+  assert.deepEqual(flowOf({ join: false, teamSources: 3 }), solo);
+  assert.ok(solo.includes("stage") && solo.includes("role") && solo.includes("connect") && !solo.includes("team"), "주인 차례표가 바뀌었다");
 });
 
-test("F2·F3 ★합류자 — 용도는 물려받고, 아무도 안 정했을 때만 name 바로 다음에 묻는다", () => {
-  const base = { join: true, teamSources: 2, existingAccount: true };
-  assert.deepEqual(flowOf({ ...base, askStage: false }),
-    ["intro", "team", "name", "role", "files", "ai", "claude", "sources", "terminal", "local", "app"]);
-  assert.deepEqual(flowOf({ ...base, askStage: true }),
-    ["intro", "team", "name", "stage", "role", "files", "ai", "claude", "sources", "terminal", "local", "app"]);
+test("F2·F3 ★합류자 — 용도·부서를 묻지 않고, 터미널·내 컴퓨터·앱 받기는 처음 가입한 사람에게도 붙는다 (원준 2026-09-14)", () => {
+  assert.deepEqual(flowOf({ join: true, teamSources: 2 }),
+    ["intro", "team", "name", "files", "ai", "claude", "sources", "terminal", "local", "app"]);
+  assert.deepEqual(flowOf({ join: true, teamSources: 0 }),
+    ["intro", "team", "name", "files", "ai", "claude", "terminal", "local", "app"]);
 });
 
-test("F4·F5 ★합류자 — 설치 장면은 초대 전부터 계정이 있던 사람에게만, sources 는 켜진 팀 수집이 있을 때만", () => {
-  assert.deepEqual(flowOf({ join: true, askStage: false, teamSources: 0, existingAccount: false }),
-    ["intro", "team", "name", "role", "files", "ai", "claude"]);
-  assert.deepEqual(flowOf({ join: true, askStage: false, teamSources: 1, existingAccount: false }),
-    ["intro", "team", "name", "role", "files", "ai", "claude", "sources"]);
-});
-
-test("F6 어느 합류 갈래에도 connect(외부 앱 연결)가 없다", () => {
-  for (const askStage of [true, false]) for (const teamSources of [0, 1]) for (const existingAccount of [true, false]) {
-    const f = flowOf({ join: true, askStage, teamSources, existingAccount });
-    assert.ok(!f.includes("connect"), `합류자 차례표에 connect 가 있다: ${f.join(",")}`);
+test("F4 어느 합류 갈래에도 stage·role·connect 가 없고, 끝은 앱 받기다", () => {
+  for (const teamSources of [0, 1, 3]) {
+    const f = flowOf({ join: true, teamSources });
+    for (const k of ["stage", "role", "connect"]) assert.ok(!f.includes(k), `합류자 차례표에 ${k} 가 있다: ${f.join(",")}`);
     assert.equal(f[0], "intro"); assert.equal(f[1], "team");
+    assert.equal(f[f.length - 1], "app", `합류자 차례표가 앱 받기로 끝나지 않는다: ${f.join(",")}`);
   }
 });
 
-test("F7 차례표는 서버 사실에서만 만든다 — existing_account 는 true 일 때만, 용도는 서버가 준 값", () => {
+test("F7 차례표는 서버 사실 둘(합류 여부 · 켜진 팀 수집)로만 갈린다 — 초대 전 계정 여부·용도 유무로 갈리지 않는다", () => {
   assert.match(code, /if \(WS && WS\.joining\) JOIN = WS\.joining;/, "서버의 joining 을 안 싣는다");
   assert.match(code, /const isJoin = \(\) => !!\(JOIN && JOIN\.is_join\);/, "판정이 서버 사실에서 파생되지 않는다");
-  assert.match(code, /const showInstall = \(\) => !!\(JOIN && JOIN\.existing_account === true\);/, "설치 장면을 null·false 에도 보여 준다");
-  assert.match(code, /const askStage = \(\) => !\(WS && WS\.workspace_purpose\);/, "용도가 정해졌는지를 서버 값으로 안 본다");
-  assert.match(code, /const FLOW = \(\) => flowFor\(\{ join: isJoin\(\), askStage: askStage\(\), teamSources: teamCollectOn\(\)\.length, existingAccount: showInstall\(\) \}\);/,
-    "화면이 쓰는 차례표가 flowFor 를 안 거친다");
+  assert.match(code, /const FLOW = \(\) => flowFor\(\{ join: isJoin\(\), teamSources: teamCollectOn\(\)\.length \}\);/,
+    "화면이 쓰는 차례표가 flowFor 를 안 거친다(또는 다른 사실로 갈린다)");
   //  물려받기 — 합류자만, 지금 이 화면에서 고른 값은 덮지 않는다.
   assert.match(code, /if \(isJoin\(\) && WS && WS\.workspace_purpose && !S\.stage\) \{ S\.stage = String\(WS\.workspace_purpose\); save\(\); \}/,
     "먼저 정한 사람의 용도를 물려받지 않는다");
@@ -110,9 +103,16 @@ test("F8 이름 다음·AI 다음은 차례표가 정한다 — 차례표의 끝
   const goNext = compile(["SEQ_ALL", "FLOW", "goScene", "finishOnboarding", "cur"], `${blockFrom(code, "function goNext(cur, opts) {")}\ngoNext(cur);`);
   const SEQ = list("SEQ_ALL");
   const run = (flow: string[], cur: string) => { const hit = { to: "", fin: false }; goNext(SEQ, () => flow, (k: string) => { hit.to = k; }, () => { hit.fin = true; }, cur); return hit; };
-  assert.deepEqual(run(["intro", "team", "name", "role", "files", "ai", "claude"], "claude"), { to: "", fin: true }, "차례표 끝(claude)에서 마무리로 안 간다");
-  assert.deepEqual(run(["intro", "team", "name", "role", "files", "ai", "claude", "terminal", "local", "app"], "claude"), { to: "terminal", fin: false }, "건너뛴 sources 뒤를 못 찾는다");
+  assert.deepEqual(run(["intro", "team", "name", "files", "ai", "claude"], "claude"), { to: "", fin: true }, "차례표 끝(claude)에서 마무리로 안 간다");
+  assert.deepEqual(run(["intro", "team", "name", "files", "ai", "claude", "terminal", "local", "app"], "claude"), { to: "terminal", fin: false }, "건너뛴 sources 뒤를 못 찾는다");
   assert.deepEqual(run(list("ORDER"), "claude"), { to: "sources", fin: false }, "주인의 AI 다음이 sources 가 아니다(무회귀)");
+});
+
+test("F9 옛 판에서 용도·부서·외부 앱 장면에 멈춰 있던 합류자는 다음 남은 장면부터 이어 간다 (배포 직후 진행 중이던 사람)", () => {
+  const fit = compile(["SEQ_ALL", "FLOW", "key"], `${blockFrom(code, "function fitScene(key) {")}\nreturn fitScene(key);`);
+  const flow = flowOf({ join: true, teamSources: 0 });
+  for (const saved of ["stage", "role"]) assert.equal(fit(list("SEQ_ALL"), () => flow, saved), "files", `저장본 ${saved} 가 자료 올리기로 안 이어진다`);
+  for (const saved of ["sources", "connect"]) assert.equal(fit(list("SEQ_ALL"), () => flow, saved), "terminal", `저장본 ${saved} 가 터미널로 안 이어진다`);
 });
 
 // ── 팀 연결은 보여 주되 고치지 못한다 ────────────────────────────────────────────
@@ -168,10 +168,18 @@ test("C3 주인 — AI 를 안 이었을 때 없는 자리를 가리키거나 �
   assert.match(code, /\[AI 계정 연결\]/, "AI 로그인이 실제로 있는 자리(내 프로필 · 환경설정 ▸ AI 계정 연결)를 안 가리킨다");
 });
 
-test("C4 «하는 일» 질문은 주인·합류자 모두 이 워크스페이스 기준이고, 안 물은 용도를 되뇌지 않는다", () => {
+test("C4 «하는 일»·용도 장면은 주인 문구뿐이고, 합류자가 주소(?scene=)·오래된 탭으로 와도 곧장 다음 장면으로 내보낸다 (원준 2026-09-14 · 격리 리뷰)", () => {
   const role = code.slice(code.indexOf("    role: {"), code.indexOf("    files: {"));
   assert.match(role, /'이 워크스페이스에서 어떤 일을 하시나요\?'/, "질문이 워크스페이스 기준이 아니다");
-  assert.match(role, /FLOW\(\)\.includes\('stage'\) && S\.stage \? \(stageOf\(\)\.ack \|\| stageOf\(\)\.label\)/, "물려받은 용도를 «…자리군요» 로 되뇐다");
+  assert.match(role, /esc\(S\.stage \? \(stageOf\(\)\.ack \|\| stageOf\(\)\.label\)/, "머리글이 1단 답을 문장용 ack 로 되뇌지 않는다(무회귀)");
+  const stage = code.slice(code.indexOf("    stage: {"), code.indexOf("    role: {"));
+  for (const [key, scene] of [["stage", stage], ["role", role]] as const) {
+    const html = scene.slice(0, scene.indexOf("bind: (el) => {"));
+    assert.doesNotMatch(html, /isJoin\(\)/, `${key} 장면 문구에 합류자 갈래가 남았다 — 합류자 차례표엔 이 장면이 없다`);
+    assert.match(scene, new RegExp(`bind: \\(el\\) => \\{\\s*if \\(isJoin\\(\\)\\) \\{ goNext\\('${key}', \\{ back: true \\}\\); return; \\}`),
+      `${key} 장면이 합류자를 내보내지 않는다 — #/welcome?scene=${key} 로 온 합류자가 워크스페이스 용도·하는 일을 정할 수 있다`);
+    assert.equal(scene.split("isJoin()").length - 1, 1, `${key} 장면에 내보내기 말고 다른 합류자 갈래가 있다`);
+  }
 });
 
 // ── 리브 1턴 — 주인만 받는다 ─────────────────────────────────────────────────
