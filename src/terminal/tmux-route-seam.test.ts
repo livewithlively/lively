@@ -3,6 +3,9 @@
 // 명제 둘: ① 플래그가 꺼져 있으면(기본) 옛 경로(중계 프로그램 spawn)가 **한 바이트도** 안 바뀐다 — 가짜 브로커엔 요청 0.
 //         ② 켜져 있고 길이 있으면 코어가 목록(`GET /lvly/sessions`) → 계획 → exec 팬아웃 → 병합을 스스로 하고,
 //            실패는 execFile 오류와 같은 필드로 던져 상위 판정(`isSessionGoneError`·`isNoTmuxServer`)이 종전과 같이 갈린다.
+// #2600 T3-a(2026-09-14) — d3 «그림자 대조»(`LIVELY_TMUX_ROUTE=shadow`)를 걷었다. 검증(일치 98% · 설명 안 된 불일치 0)은
+//  끝났고, 게이트웨이가 표본(25%) 호출을 두 번 돌리는 비용만 남아서다. 그 값은 이제 **off** 로 읽힌다(아래 [T3-a]).
+//  그림자만 쓰던 **허브 전송**도 함께 걷었다 — 코어 경로는 노드 박스 브로커 소켓 하나다(아래 [S17]·[R7]).
 //  단언은 가짜 브로커·가짜 중계가 **받은 것**(요청 로그·argv 파일)으로 한다. 이 파일은 process.env 를 만지므로 afterEach 로 되돌린다.
 import { strict as assert } from "node:assert";
 import test, { afterEach } from "node:test";
@@ -12,7 +15,6 @@ import os from "node:os";
 import path from "node:path";
 import { installTenantSlugResolver } from "./catalog.js";
 import { tmux, tmuxRouteTransport, isSessionGoneError, isNoTmuxServer } from "./tmux-exec.js";
-import { installShadowReporter, resetShadowStats, shadowStats, type ShadowReport } from "./tmux-shadow.js";
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-trs-"));
 const SLUG = "acme";
@@ -20,14 +22,11 @@ const SOCK = path.join(TMP, `${SLUG}.sock`);
 //  가짜 중계 — 불리면 argv 를 파일에 적는다(옛 경로가 실제로 spawn 됐다는 증거).
 const RELAY_LOG = path.join(TMP, "relay.log");
 const RELAY = path.join(TMP, "relay.sh");
-//  d3 — 가짜 중계의 답을 시험이 정한다: RELAY_OUT 이 있으면 그 내용을 stdout 으로, RELAY_ERR 이 있으면 그 내용을 stderr 로 내고 exit 1.
-const RELAY_OUT = path.join(TMP, "relay.out");
-const RELAY_ERR = path.join(TMP, "relay.err");
-fs.writeFileSync(RELAY, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${RELAY_LOG}"\nif [ -f "${RELAY_ERR}" ]; then cat "${RELAY_ERR}" >&2; exit 1; fi\nif [ -f "${RELAY_OUT}" ]; then cat "${RELAY_OUT}"; else echo relayed; fi\n`, { mode: 0o755 });
+fs.writeFileSync(RELAY, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${RELAY_LOG}"\necho relayed\n`, { mode: 0o755 });
 const KEYS = ["LIVELY_TMUX_EXEC", "LIVELY_TMUX_ROUTE", "LVLY_TMUX_SOCK_TEMPLATE", "LVLY_HUB_URL", "LVLY_HUB_SECRET"] as const;
 afterEach(() => {
-  for (const k of KEYS) delete process.env[k]; installTenantSlugResolver(() => null); installShadowReporter(null); resetShadowStats();
-  for (const f of [RELAY_LOG, RELAY_OUT, RELAY_ERR]) { try { fs.unlinkSync(f); } catch { /* 없음 */ } }
+  for (const k of KEYS) delete process.env[k]; installTenantSlugResolver(() => null);
+  try { fs.unlinkSync(RELAY_LOG); } catch { /* 없음 */ }
 });
 const relayCalls = (): string[] => { try { return fs.readFileSync(RELAY_LOG, "utf8").trim().split("\n").filter(Boolean); } catch { return []; } };
 
@@ -62,12 +61,6 @@ function fakeBroker(o: { sessions: Sess[]; observed?: boolean; listStatus?: numb
   return { srv, got, listen: () => new Promise<void>((r) => srv.listen(SOCK, () => r())), close: () => new Promise<void>((r) => srv.close(() => r())) };
 }
 const on = (mode = "on"): void => { process.env.LIVELY_TMUX_EXEC = `${RELAY} {slug}`; process.env.LIVELY_TMUX_ROUTE = mode; process.env.LVLY_TMUX_SOCK_TEMPLATE = path.join(TMP, "{slug}.sock"); installTenantSlugResolver(() => SLUG); };
-//  d3 — 그림자는 떼어 놓고 돈다. 시험은 리포터를 갈아끼워 «다음 판정» 을 기다린다.
-//   ⚠ 시한을 둔다 — 그림자 줄이 빠지면(변이 M9) 영원히 안 오는데, 매달림은 빨간불이 아니다.
-const nextReport = (ms = 5_000): Promise<ShadowReport> => new Promise((resolve, reject) => {
-  const t = setTimeout(() => reject(new Error(`🔴 ${ms}ms 안에 그림자 판정이 안 왔다 — 그림자가 안 돌았다`)), ms);
-  installShadowReporter((rep) => { clearTimeout(t); resolve(rep); });
-});
 
 test("[S16·R0] 플래그 off(기본) — 옛 경로: 중계가 spawn 되고 브로커엔 요청 0", async () => {
   process.env.LIVELY_TMUX_EXEC = `${RELAY} {slug}`; process.env.LVLY_TMUX_SOCK_TEMPLATE = path.join(TMP, "{slug}.sock"); installTenantSlugResolver(() => SLUG);
@@ -80,6 +73,18 @@ test("[S16·R0] 플래그 off(기본) — 옛 경로: 중계가 spawn 되고 브
   } finally { await b.close(); }
 });
 
+test("[T3-a] ★ 걷힌 그림자 값(`shadow`)은 off 다 — 옛 경로(중계 1회)만 돌고 브로커엔 요청 0(두 번 실행 없음)", async () => {
+  on("shadow");
+  const b = fakeBroker({ sessions: [] }); await b.listen();
+  try {
+    assert.equal((await tmux(["list-sessions", "-F", "x"])).trim(), "relayed", "답은 옛 경로 그대로");
+    assert.deepEqual(relayCalls(), [`${SLUG} list-sessions -F x`], "중계가 종전 argv 로 1회");
+    //  떼어 놓은 대조가 남아 있었다면 이 창 안에 브로커를 부른다(표본 1 = 매 호출) — 오면 곧바로 빨간불.
+    for (let i = 0; i < 30 && b.got.length === 0; i++) await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(b.got, [], "🔴 shadow 인데 브로커에 요청이 갔다 — 그림자 대조(두 번 실행)가 살아 있다");
+  } finally { await b.close(); }
+});
+
 test("[S14] 플래그 on 인데 길이 없다(중계 없음 = 셀프호스트) / 슬러그 없음 → 새 경로 아님(null)", () => {
   process.env.LIVELY_TMUX_ROUTE = "on"; installTenantSlugResolver(() => SLUG);
   assert.equal(tmuxRouteTransport(), null, "브로커가 없으면 새 경로가 아니다");
@@ -88,13 +93,17 @@ test("[S14] 플래그 on 인데 길이 없다(중계 없음 = 셀프호스트) /
   assert.notEqual(tmuxRouteTransport(SLUG), null);
 });
 
-test("[S17] 전송 매핑 — 소켓은 {slug} 첫 하나만 치환 · 허브는 url·secret·slug 를 실어 보낸다", () => {
+test("[S17] 전송 매핑 — 소켓은 {slug} 첫 하나만 치환 · 허브 env 가 있어도 소켓이다(허브 전송은 T3-a 로 걷었다)", () => {
   process.env.LIVELY_TMUX_ROUTE = "on"; process.env.LIVELY_TMUX_EXEC = `${RELAY} {slug}`; process.env.LVLY_TMUX_SOCK_TEMPLATE = "/x/{slug}/{slug}.sock";
-  assert.deepEqual(tmuxRouteTransport(SLUG), { transport: { kind: "socket", socketPath: "/x/acme/{slug}.sock" }, slug: SLUG, mode: "on", sample: 1 }, "String.replace(문자열) = 첫 하나만 — relay·tmuxArgvFor 와 같은 의미");
+  const SOCKET = { transport: { kind: "socket", socketPath: "/x/acme/{slug}.sock" }, slug: SLUG };
+  assert.deepEqual(tmuxRouteTransport(SLUG), SOCKET, "String.replace(문자열) = 첫 하나만 — relay·tmuxArgvFor 와 같은 의미");
   process.env.LVLY_HUB_URL = "http://10.0.0.1:9093"; process.env.LVLY_HUB_SECRET = "sec";
-  assert.deepEqual(tmuxRouteTransport(SLUG), { transport: { kind: "hub", url: "http://10.0.0.1:9093", secret: "sec", slug: SLUG }, slug: SLUG, mode: "on", sample: 1 });
-  process.env.LIVELY_TMUX_ROUTE = "shadow:25";
-  assert.deepEqual(tmuxRouteTransport(SLUG)?.mode, "shadow"); assert.equal(tmuxRouteTransport(SLUG)?.sample, 0.25);
+  assert.deepEqual(tmuxRouteTransport(SLUG), SOCKET, "🔴 허브 env 가 코어 경로를 허브로 돌렸다 — 걷힌 허브 전송이 살아 있다");
+  //  #2600 T3-a — 그림자 값은 새 경로를 만들지 않는다(off).
+  for (const v of ["shadow", "shadow:25"]) {
+    process.env.LIVELY_TMUX_ROUTE = v;
+    assert.equal(tmuxRouteTransport(SLUG), null, `🔴 ${v} 가 코어 경로를 열었다`);
+  }
 });
 
 test("[R2] ★ 플래그 on — 목록 → 팬아웃(세션마다 exec) → 병합(sid 순) · 중계는 안 불린다", async () => {
@@ -145,121 +154,37 @@ test("[R6] 플래그 on — 세션 0 · 관측함 → «no server running»(상�
   } finally { await b2.close(); }
 });
 
-test("[R7] 설정 오류(https 허브)도 execFile 오류 모양(code·stderr)으로 던진다 — 맨 Error 가 아니다 · «못 봤다» 로 읽힌다", async () => {
-  on(); process.env.LVLY_HUB_URL = "https://h:9093"; process.env.LVLY_HUB_SECRET = "s";
-  await assert.rejects(tmux(["list-sessions", "-F", "x"]), (e: unknown) => {
-    const err = e as { code?: number; stderr?: string };
-    assert.equal(err.code, 1, "🔴 code 가 없는 맨 Error 다 — 상위 판정이 전부 거짓으로 떨어진다");
-    assert.match(String(err.stderr), /못 봤다/);
-    assert.equal(isNoTmuxServer(e), false); assert.equal(isSessionGoneError(e, "/opt/homebrew/bin/tmux", true), false);
-    return true;
-  });
-  assert.deepEqual(relayCalls(), [], "설정 오류를 옛 경로로 조용히 폴백하지 않는다(그러면 오설정이 영영 안 보인다)");
+test("[R7] ★ 소켓이 없는 박스(중앙 게이트웨이에서 `on` 오설정) — execFile 오류 모양의 «못 봤다» 로 드러난다 · 허브로 새지 않는다 · 옛 경로로 폴백하지 않는다", async () => {
+  //  허브 env 가 가리키는 곳에 **살아 있는** 가짜 허브를 세운다 — 걷힌 허브 전송이 살아 있으면 여기에 요청이 온다.
+  const hubGot: string[] = [];
+  const hub = http.createServer((q, s) => { hubGot.push(`${q.method} ${q.url}`); s.writeHead(200, { "content-type": "application/json" }); s.end(JSON.stringify({ observed: true, node: "n1", sessions: [] })); });
+  await new Promise<void>((r) => hub.listen(0, "127.0.0.1", () => r()));
+  try {
+    on(); process.env.LVLY_TMUX_SOCK_TEMPLATE = path.join(TMP, "no-such-dir", "{slug}.sock");
+    process.env.LVLY_HUB_URL = `http://127.0.0.1:${(hub.address() as { port: number }).port}`; process.env.LVLY_HUB_SECRET = "s";
+    await assert.rejects(tmux(["list-sessions", "-F", "x"]), (e: unknown) => {
+      const err = e as { code?: number; stderr?: string };
+      assert.equal(err.code, 1, "🔴 code 가 없는 맨 Error 다 — 상위 판정이 전부 거짓으로 떨어진다");
+      assert.match(String(err.stderr), /못 봤다/);
+      assert.equal(isNoTmuxServer(e), false); assert.equal(isSessionGoneError(e, "/opt/homebrew/bin/tmux", true), false);
+      return true;
+    });
+    assert.deepEqual(hubGot, [], "🔴 허브에 요청이 갔다 — 걷힌 허브 전송이 살아 있다");
+    assert.deepEqual(relayCalls(), [], "오설정을 옛 경로로 조용히 폴백하지 않는다(그러면 오설정이 영영 안 보인다)");
+  } finally { await new Promise<void>((r) => hub.close(() => r())); }
 });
 
-test("[S16] 배선 — 새 갈래는 tmux() 맨 앞의 한 줄이고 옛 execFile 줄은 글자 그대로 남아 있다", () => {
+test("[S16] 배선 — 새 갈래는 tmux() 맨 앞의 한 줄이고 옛 execFile 줄은 글자 그대로 · 걷힌 그림자·허브 전송은 흔적이 없다", () => {
   const src = fs.readFileSync(path.join(process.cwd(), "src", "terminal", "tmux-exec.ts"), "utf8");
   const i = src.indexOf("export async function tmux(args: string[]): Promise<string> {");
   assert.ok(i > 0);
   const body = src.slice(i, src.indexOf("\n}\n", i));
-  assert.ok(/const via = tmuxRouteTransport\(\);\s*\n\s*if \(via\?\.mode === "on"\) return tmuxViaRoute\(args, via\);/.test(body), "새 갈래가 seam 머리의 한 줄이다(on 일 때만)");
+  assert.ok(/const via = tmuxRouteTransport\(\);\s*\n\s*if \(via\) return tmuxViaRoute\(args, via\);/.test(body), "새 갈래가 seam 머리의 한 줄이다(on 일 때만 via 가 있다)");
   assert.ok(body.includes("execFileAsync(bin!, [...prefix, ...args], { timeout: tmuxTimeoutMs(relay), env: TMUX_ENV })"), "🔴 옛 경로의 실행(프로그램·argv·상한·env)이 바뀌었다");
-  assert.ok(/if \(via\?\.mode === "shadow"\) void shadowTmux\(/.test(body), "d3 — 그림자는 떼어 놓은(void) 한 줄이다: 옛 경로의 답·지연·예외에 손대지 않는다");
-});
-
-// ── d3 그림자 대조 — spec-d3.md R0~R5 ──────────────────────────────────────────────────────
-const A = { sid: "box-a-11111111", container: `lvly-s-${SLUG}-box-a-11111111`, inside: true };
-const B = { sid: "box-b-22222222", container: `lvly-s-${SLUG}-box-b-22222222`, inside: true };
-
-test("[R0·R1] shadow — 읽기 동사: 옛 경로(중계)의 stdout 이 바이트 그대로 돌아오고 · 브로커엔 목록+exec · 판정 match", async () => {
-  on("shadow");
-  fs.writeFileSync(RELAY_OUT, `${A.container}\n${B.container}\n`);
-  const b = fakeBroker({ sessions: [B, A] }); await b.listen();
-  try {
-    const rep = nextReport();
-    const out = await tmux(["list-sessions", "-F", "#{session_name}"]);
-    assert.equal(out, `${A.container}\n${B.container}\n`, "🔴 shadow 인데 답이 옛 경로 것이 아니다");
-    assert.deepEqual(relayCalls(), [`${SLUG} list-sessions -F #{session_name}`], "중계가 종전 argv 로 1회");
-    const r = await rep;
-    assert.deepEqual(r.verdict, { kind: "match" }); assert.equal(r.executed, true); assert.equal(r.verb, "list-sessions"); assert.equal(r.slug, SLUG);
-    assert.equal(b.got.filter((g) => g === "GET /lvly/sessions").length, 1);
-    assert.deepEqual(b.got.filter((g) => g.startsWith("POST /containers/")).sort(), [`POST /containers/${A.container}/exec`, `POST /containers/${B.container}/exec`], "읽기 동사는 코어 경로를 실제로 실행한다");
-    assert.equal(shadowStats().compared, 1); assert.equal(shadowStats().match, 1);
-  } finally { await b.close(); }
-});
-
-test("[R1b] shadow — 줄 집합이 같고 순서만 다르면 explained:order (브로커 팬아웃 = 색인 삽입순 · 코어 = sid 순)", async () => {
-  on("shadow");
-  fs.writeFileSync(RELAY_OUT, `${B.container}\n${A.container}\n`);
-  const b = fakeBroker({ sessions: [A, B] }); await b.listen();
-  try {
-    const rep = nextReport();
-    assert.equal(await tmux(["list-sessions", "-F", "#{session_name}"]), `${B.container}\n${A.container}\n`, "답은 여전히 옛 경로 순서 그대로");
-    assert.deepEqual((await rep).verdict, { kind: "explained", why: "order" });
-  } finally { await b.close(); }
-});
-
-test("[R2] shadow — 쓰기 동사(set-option -t)는 **계획만**: 브로커엔 GET /lvly/sessions 뿐(exec 0) · 중계 1회 · 판정 match", async () => {
-  on("shadow");
-  const b = fakeBroker({ sessions: [A] }); await b.listen();
-  try {
-    const rep = nextReport();
-    assert.equal((await tmux(["set-option", "-t", A.sid, "@box_label", "x"])).trim(), "relayed");
-    assert.deepEqual(relayCalls(), [`${SLUG} set-option -t ${A.sid} @box_label x`]);
-    const r = await rep;
-    assert.deepEqual(r.verdict, { kind: "match" }); assert.equal(r.executed, false);
-    assert.deepEqual(b.got, ["GET /lvly/sessions"], "🔴 쓰기 동사를 그림자가 실행했다(두 번 들어간다)");
-  } finally { await b.close(); }
-});
-
-test("[R3] shadow — 브로커가 죽어 있어도 옛 답 그대로 · 판정 explained:new-transport · tmux() 는 실패하지 않는다", async () => {
-  on("shadow");
-  const rep = nextReport();
-  assert.equal((await tmux(["list-sessions", "-F", "x"])).trim(), "relayed");
-  assert.deepEqual((await rep).verdict, { kind: "explained", why: "new-transport" });
-});
-
-test("[R4] shadow — 중계가 gone(exit 1)이면 **같은 오류**(code·stderr)를 던진다 · 코어 계획도 gone 이면 match", async () => {
-  on("shadow");
-  const gone = `can't find session: box-zzz-00000000 (session container lvly-s-${SLUG}-box-zzz-00000000 is gone)\n`;
-  fs.writeFileSync(RELAY_ERR, gone);
-  const b = fakeBroker({ sessions: [A] }); await b.listen();
-  try {
-    const rep = nextReport();
-    await assert.rejects(tmux(["has-session", "-t", "box-zzz-00000000"]), (e: unknown) => {
-      const err = e as { code: number; stderr: string };
-      assert.equal(err.code, 1); assert.equal(err.stderr, gone, "옛 경로의 stderr 가 바이트 그대로");
-      assert.equal(isSessionGoneError(e, "/opt/homebrew/bin/tmux", false), true);
-      return true;
-    });
-    const r = await rep;
-    assert.deepEqual(r.verdict, { kind: "match" }, "has-session 은 읽기라 실행됐고 코어도 exec 없이 gone 을 합성했다");
-    assert.deepEqual(b.got, ["GET /lvly/sessions"], "없는 세션엔 exec 을 안 보낸다");
-  } finally { await b.close(); }
-});
-
-test("[R4b] shadow — 옛 경로 성공인데 코어 목록엔 그 세션이 없다 → mismatch:plan (설명되지 않는 불일치가 드러난다)", async () => {
-  on("shadow");
-  const b = fakeBroker({ sessions: [] }); await b.listen();
-  try {
-    const rep = nextReport();
-    assert.equal((await tmux(["set-option", "-t", A.sid, "@x", "1"])).trim(), "relayed");
-    const r = await rep;
-    assert.equal(r.verdict.kind, "mismatch"); assert.equal((r.verdict as { why: string }).why, "plan");
-    assert.equal(shadowStats().mismatch.plan, 1);
-  } finally { await b.close(); }
-});
-
-test("[R5] shadow — 리포터가 던져도 tmux() 는 멀쩡하다 · 판정은 세어진다", async () => {
-  on("shadow");
-  installShadowReporter(() => { throw new Error("리포터 고장"); });
-  assert.equal((await tmux(["list-sessions", "-F", "x"])).trim(), "relayed");
-  //  떼어 놓은 그림자가 끝날 때까지 — 브로커가 없으니 연결 거절로 곧 끝난다.
-  for (let i = 0; i < 200 && shadowStats().compared === 0; i++) await new Promise((r) => setTimeout(r, 25));
-  assert.equal(shadowStats().compared, 1);
-});
-
-test("[R6] shadow — 플래그가 shadow 인데 길이 없으면(셀프호스트) 그림자도 없다 · 옛 경로만", async () => {
-  process.env.LIVELY_TMUX_ROUTE = "shadow"; process.env.LIVELY_TMUX_EXEC = `${RELAY} {slug}`; installTenantSlugResolver(() => null);
-  assert.equal(tmuxRouteTransport(), null, "슬러그 없음 = 중계도 못 채운다 = 그림자도 없다");
+  //  #2600 T3-a — 그림자 대조를 걷었다. 되살아나면(떼어 놓은 두 번째 실행) 게이트웨이가 다시 표본 호출을 두 번 돈다.
+  assert.ok(!/shadow/i.test(body), "🔴 tmux() 에 그림자 갈래가 남아 있다");
+  assert.ok(!/tmux-shadow/.test(src), "🔴 tmux-exec.ts 가 걷힌 tmux-shadow 를 아직 가리킨다");
+  assert.ok(!fs.existsSync(path.join(process.cwd(), "src", "terminal", "tmux-shadow.ts")), "🔴 tmux-shadow.ts 가 남아 있다");
+  //  허브 전송도 함께 걷었다 — 코어 경로의 전송은 노드 박스 브로커 소켓 하나다.
+  assert.ok(!/kind: "hub"/.test(src), "🔴 tmux-exec.ts 에 허브 전송 매핑이 남아 있다");
 });

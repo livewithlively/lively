@@ -33,6 +33,8 @@ const TOPOLOGY_ENV = [
   "LIVELY_MEMBER_EXEC", "LIVELY_MEMBER_ISOLATION", "LIVELY_BOX_SPAWN", "LIVELY_BOX_CGSPAWN",
   "LIVELY_NODE_TOKEN", "LIVELY_ATTACH_WORKER_K",
   //  #2600 T2 (d) d2 — 코어가 브로커에 직접 닿는 길·그 스위치. 중계(`*-relay.cjs`)가 읽던 값을 코어로 가져오면서 여기 단일출처로 묶는다.
+  //  #2600 T3-a — 허브 전송을 걷어 `LVLY_HUB_*` 는 이제 소유자(exec-topology)도 안 읽는다(중계 .cjs 만 읽는다). 그래도 목록에 둔다 —
+  //   코어의 다른 자리가 허브 env 를 다시 읽기 시작하면 걷힌 전송이 조용히 되살아나는 것이므로 여기서 막는다.
   "LIVELY_TMUX_ROUTE", "LVLY_HUB_URL", "LVLY_HUB_SECRET", "LVLY_TMUX_SOCK_TEMPLATE",
 ];
 
