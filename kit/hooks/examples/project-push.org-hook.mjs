@@ -282,8 +282,37 @@ async function localFiles(base) {
     finally { clearTimeout(t); }
   };
 
-  // 3) 🔴 대상 해석 — 서버가 권위, 실패 시 마커 캐시. push 는 both 에서만 돈다(사람이 그렇게 정한 폴더).
-  const target = (await askServer(jfetch, executionSessionId(input), process.env.LIVELY_NODE_ID)) ?? fromCache(cwd);
+  // ── 3) 상태 파일 — 실행 세션 단위. **직전 해석 결과(projDir)를 품는다.** ──
+  //  🔴 왜 projDir 을 캐시하나: 이 훅은 PostToolUse 로도 돈다(Bash 포함). 서버 조회를 선검사보다 먼저 두면
+  //   **도구를 쓸 때마다 게이트웨이 왕복**이 붙는다 — 한 턴에 Bash 를 100번 쓰면 왕복 100회다. 바뀐 게 없는
+  //   흔한 경우에 네트워크를 0으로 만들려면 «어느 폴더를 볼지»를 네트워크 없이 알아야 하고, 그 답이 이 캐시다.
+  //   소속이 턴 중에 바뀌면 캐시는 낡지만, 그때는 조기 종료가 한 번 헛돌 뿐이고 **Stop 판이 매 턴 전체 해석을
+  //   다시 한다** — 낡음의 비용이 «한 사이클 늦음» 으로 유계다.
+  const execId = executionSessionId(input);
+  const statePath = path.join(os.tmpdir(), "lively-hooks", `push-${(execId || "anon").replace(/[^A-Za-z0-9._-]/g, "_")}.state`);
+  const prevState = (() => { try { return JSON.parse(fs.readFileSync(statePath, "utf8")); } catch { return null; } })();
+
+  // 걷기 — 실측 0.02~0.13ms(레포 서브트리·닷파일은 안 걷는다), 자료 1,000건이어도 ~9ms.
+  const walkOf = async (dir) => {
+    const t0 = Date.now();
+    const l = await localFiles(dir);
+    return { local: l, walkMs: Date.now() - t0, stamp: l.files.reduce((a, f) => (f.mtime > a ? f.mtime : a), 0) + ":" + l.present.size };
+  };
+
+  // 3-a) 🔴 PostToolUse 저지연 경로 — **네트워크 앞에서** 끝낸다.
+  //  · 지난 성공 이후 로컬이 그대로면 올릴 것이 없다 → 즉시 종료(왕복 0).
+  //  · 걷기가 느린 폴더(자료 수천 건)면 스스로 물러나 최소 간격을 둔다 — 놓친 건 Stop 이 쓸어담는다.
+  //  ⚠ Stop 은 이 경로를 타지 않는다. 로컬이 그대로여도 서버는 바뀔 수 있고(남이 중앙에서 문서를 지움) 그건
+  //   push 가 충돌로 보고해야 할 사건이다 — 매 턴 대조하지 않으면 조용히 묻힌다(project-bidi.test.mjs ⑥).
+  let pre = null;
+  if (perTool && prevState && prevState.proj_dir && fs.existsSync(prevState.proj_dir)) {
+    if (Number(prevState.walk_ms) > SLOW_WALK_MS && Date.now() - Number(prevState.at || 0) < SLOW_MIN_INTERVAL_MS) return;
+    pre = await walkOf(prevState.proj_dir);
+    if (pre.stamp === prevState.stamp && prevState.pushed_clean) return;   // 로컬 무변경 → 네트워크 안 탄다
+  }
+
+  // 3-b) 대상 해석 — 서버가 권위, 실패 시 마커 캐시. push 는 both 에서만 돈다(사람이 그렇게 정한 폴더).
+  const target = (await askServer(jfetch, execId, process.env.LIVELY_NODE_ID)) ?? fromCache(cwd);
   if (!target || !target.projectId || !target.projDir) return;
   // 서버가 canonical 슬롯을 지목했는데 cwd 가 이미 이 프로젝트의 구 work.mjs 폴더 안이면 그쪽이 이긴다.
   if (target.slot) { const legacy = legacyDirForCwd(cwd, target.projectId); if (legacy) { target.projDir = legacy; target.slot = false; } }
@@ -292,26 +321,13 @@ async function localFiles(base) {
   if (!fs.existsSync(projDir)) return;                  // 올릴 폴더가 없다 — 만들지 않는다(push 는 읽기에서 시작한다)
   const lastPull = Number((readMarker(projDir) || {}).last_pull) || 0;
 
-  // 3-b) 로컬 걷기 + **변경 선검사** — 네트워크 앞에 둔다. 실측 0.02~0.13ms(레포 서브트리·닷파일은 안 걷는다),
-  //  자료 1,000건이어도 ~9ms. 그래서 PostToolUse 마다 돌아도 사실상 공짜다.
-  //  자기제한: 걷기가 SLOW_WALK_MS 를 넘는 폴더(자료 수천 건)에서는 PostToolUse 판이 스스로 물러나
-  //  최소 간격을 두고, 놓친 건 Stop 판이 쓸어담는다 — 한 턴에 편집이 수십 번이어도 턴이 늘어지지 않는다.
-  const walkedAt = Date.now();
-  const local = await localFiles(projDir);
-  const walkMs = Date.now() - walkedAt;
-  const stamp = local.files.reduce((a, f) => (f.mtime > a ? f.mtime : a), 0) + ":" + local.present.size;
-  const statePath = path.join(os.tmpdir(), "lively-hooks", `push-${projectId}.state`);
-  const prevState = (() => { try { return JSON.parse(fs.readFileSync(statePath, "utf8")); } catch { return null; } })();
+  // 선검사에서 **같은 폴더를** 이미 걸었으면 그 결과를 쓴다(두 번 걷지 않는다).
+  const walked = (pre && prevState && prevState.proj_dir === projDir) ? pre : await walkOf(projDir);
+  const { local, walkMs, stamp } = walked;
   const saveState = (extra) => {
     try { fs.mkdirSync(path.dirname(statePath), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(statePath, JSON.stringify({ stamp, at: Date.now(), walk_ms: walkMs, ...extra })); } catch { /* 무해 */ }
+      fs.writeFileSync(statePath, JSON.stringify({ stamp, at: Date.now(), walk_ms: walkMs, proj_dir: projDir, ...extra })); } catch { /* 무해 */ }
   };
-  // 🔴 **PostToolUse 에서만** 조기 종료한다. 로컬이 그대로여도 서버는 바뀔 수 있고(남이 중앙에서 문서를 지움),
-  //  그건 push 가 충돌로 보고해야 할 사건이다 — Stop 판이 매 턴 그 대조를 하지 않으면 조용히 묻힌다
-  //  (project-bidi.test.mjs ⑥ 이 정확히 이걸 강제한다: «되살리지 않았다면 이유를 보고해야 한다»).
-  if (perTool && prevState && prevState.stamp === stamp && prevState.pushed_clean) return;
-  if (perTool && prevState && Number(prevState.walk_ms) > SLOW_WALK_MS
-      && Date.now() - Number(prevState.at || 0) < SLOW_MIN_INTERVAL_MS) return;                                         // 자기제한 — Stop 이 받는다
 
   // 5) 서버 매니페스트 — '남이 그 사이 고쳤나'를 판정할 유일한 근거.
   let manifest;
