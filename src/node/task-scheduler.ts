@@ -80,12 +80,20 @@ export function isStalled(o: { startedAt: string | null; now: number; bytes: num
   return o.now - started > o.stallMs && o.bytes <= 0;
 }
 
+// 위탁 요청자의 격리 OS 유저 — 중앙 작업 폴더를 **그 경계로** 읽기 위해(저장소 분리 배포의 게이트웨이는 그 폴더를 못 본다).
+//  없거나 실패면 null = 로컬 fs(종전 동작). 스폰 때 이미 프로비저닝됐으므로 빠른 경로(조회)만 탄다.
+async function requesterOsUser(requester: string | null | undefined): Promise<string | null> {
+  if (!requester) return null;
+  const { ensureMemberOsUser } = await import("../terminal/profiles.js");
+  return ensureMemberOsUser({ userId: requester } as never).catch(() => null);
+}
+
 // 워커가 지금까지 뱉은 바이트. 중앙은 로컬 파일, 원격은 tailTask RPC(같은 함수의 릴레이).
 //  ⚠ 알 수 없으면 **1(진행 있음)** 을 돌려준다 — 조회 실패로 멀쩡한 작업을 죽이지 않기 위한 fail-safe.
 async function progressBytes(t: DelegateTask): Promise<number> {
   const dir = t.task_dir ?? "";
   if (!dir) return 1;
-  if (t.node_id === CENTRAL_NODE_ID) return (await tailTask(dir, 0)).next;
+  if (t.node_id === CENTRAL_NODE_ID) return (await tailTask(dir, 0, await requesterOsUser(t.requester))).next;
   if (!t.node_id || !nodeOnline(t.node_id)) return 1;   // 오프라인은 노드 유실 경로가 따로 처리한다
   const r = await nodeRpc<TailResult>(t.node_id, "tailTask", { taskDir: dir, from: 0 });
   return r?.next ?? 1;
@@ -475,7 +483,7 @@ async function watchRunning(): Promise<void> {
       }
       if (t.node_id === CENTRAL_NODE_ID) {
         // 중앙(내장 노드)은 스케줄러가 직접 감시 — 원격은 에이전트가 taskdone 을 push.
-        const out = await checkTask({ taskId: t.id, sessionId: t.session_id ?? "", taskDir: t.task_dir ?? "", harness: t.harness ?? undefined });   // #1710 — 하네스별 결과 스키마
+        const out = await checkTask({ taskId: t.id, sessionId: t.session_id ?? "", taskDir: t.task_dir ?? "", harness: t.harness ?? undefined, osUser: await requesterOsUser(t.requester) });   // #1710 — 하네스별 결과 스키마
         if (out) await finish(t, out.ok, out.exit, out.summary, out.error);
         continue;
       }

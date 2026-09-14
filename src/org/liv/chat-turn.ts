@@ -17,7 +17,6 @@
 //  도구 경계는 거부 목록(liv-turn.ts)이라 «Do you want to proceed?» 가 설 자리 자체가 없다. tmux 세션 킥오프에서
 //  사람이 봤던 session_rename·project_rename_v6 승인 화면(2026-09-14 실측)이 여기서는 구조적으로 안 생긴다.
 import crypto from "node:crypto";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import type { LivelyUser } from "../../context.js";
 import { livTurnArgs } from "../delivery/liv-turn.js";
@@ -130,7 +129,10 @@ export async function startLivChatTurn(user: LivelyUser, o: LivChatTurnOpts): Pr
 
     const now = new Date().toISOString();
     if (!resume) await setLivChat(userId, { session_id: sessionId, started_at: now, turns: [] });
-    await fsp.writeFile(path.join(spawned.taskDir, "session"), spawned.sessionId, "utf8").catch(() => { /* best-effort */ });
+    //  턴 폴더는 격리 경로라 표지도 **그 사용자 경계로** 쓴다(저장소 분리 배포의 게이트웨이는 직접 못 쓴다).
+    const { ensureMemberOsUser } = await import("../../terminal/profiles.js");
+    const { writeTaskText } = await import("../../node/tasks.js");
+    await writeTaskText(spawned.taskDir, "session", spawned.sessionId, await ensureMemberOsUser(user).catch(() => null)).catch(() => { /* best-effort */ });
     // 되그릴 수 있게 턴을 잇는다. **사람이 한 말만** 담는다 — 리브의 말은 그 턴의 진행 파일이 정본이다.
     //  숨김 턴은 지시문 대신 짧은 표식만 남긴다(지시문은 턴 폴더의 prompt 에 있다 — 프로필에 3KB 지시문을 복제하지 않는다).
     await appendLivTurn(userId, {
@@ -151,6 +153,8 @@ export async function livTurnDone(user: LivelyUser, turnId: string): Promise<boo
   if (!LIV_TURN_ID_RE.test(turnId)) return null;
   const dir = await livTurnDir(user, turnId).catch(() => null);
   if (!dir) return null;
-  try { await fsp.access(dir); } catch { return null; }
-  try { await fsp.access(path.join(dir, "exit")); return true; } catch { return false; }
+  //  턴 폴더는 격리 경로라 **그 사용자 경계로** 본다(저장소 분리 배포의 게이트웨이는 직접 못 본다).
+  const { ensureMemberOsUser } = await import("../../terminal/profiles.js");
+  const { taskDirDone } = await import("../../node/tasks.js");
+  return taskDirDone(dir, await ensureMemberOsUser(user).catch(() => null));
 }
