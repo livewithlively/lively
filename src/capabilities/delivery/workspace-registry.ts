@@ -410,6 +410,9 @@ export const workspaceRegistryCapabilities: Capability[] = [
     }, {
       slug: z.string().describe("팀 워크스페이스 slug"),
       member_id: z.string().describe("넣을 멤버 id(org_members 의 id)"),
+      //  #1631 결정 7 — 매니지드 분기가 읽는다: 계정 서버의 워크스페이스 키(workspace_invite·workspace_people 과 같은 이유 — 주면 slug 대신 쓴다).
+      //   선언하지 않으면 MCP 가 이 칸을 떼어 내(zod strip) 매니지드 호출이 워크스페이스를 잃는다(mcp-input-schema R2).
+      workspace_id: z.string().optional().describe("워크스페이스 id(매니지드 — 계정 서버의 키). 주면 slug 대신 쓴다"),
       role: z.enum(["owner", "member"]).optional().describe("기본 member"),
     }),
 
@@ -440,6 +443,9 @@ export const workspaceRegistryCapabilities: Capability[] = [
     }, {
       slug: z.string().describe("팀 워크스페이스 slug"),
       member_id: z.string().describe("뺄 멤버 id"),
+      //  #1631 결정 7 — 매니지드 분기가 읽는다: 계정 서버의 워크스페이스 키(workspace_invite·workspace_people 과 같은 이유 — 주면 slug 대신 쓴다).
+      //   선언하지 않으면 MCP 가 이 칸을 떼어 내(zod strip) 매니지드 호출이 워크스페이스를 잃는다(mcp-input-schema R2).
+      workspace_id: z.string().optional().describe("워크스페이스 id(매니지드 — 계정 서버의 키). 주면 slug 대신 쓴다"),
     }),
 
   restWork("workspace_leave", "워크스페이스 나가기",
