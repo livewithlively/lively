@@ -175,13 +175,44 @@ export async function listSourceTree(viewer?: Viewer): Promise<SourceTreeNode[]>
   const rows = await q(itemsPool,
     //  나무도 **대화 단위**로 센다(#2423 v3.1) — 목록이 fold 로 접는데 나무만 낱메시지로 세면 «슬랙 68»을 눌렀는데
     //   35건이 나온다(같은 화면의 두 숫자가 서로 거짓말). linked 도 스레드 단위로 올린다.
-    `SELECT COALESCE(s.external_system, 'authored') AS system,
-            COALESCE(s.fields->>'container_name', CASE WHEN s.external_system IS NULL THEN s.kind ELSE NULL END) AS container,
+    //  ⚠ 여기선 THREAD_KN/FOLD_REPLY 를 술어로 **쓰지 않는다**(2026-09-14 전면 장애). 그 둘은 행마다 source 를
+    //   다시 훑는 상관 서브쿼리라, LIMIT 이 없는 이 집계에선 자료 전건에 곱해져 한 번에 수백 초가 걸렸다.
+    //   그 사이 itemsPool(공유·max 20)이 고갈돼 게이트웨이 전 API 가 굶었다 — 사람 몇이 자료 탭을 여는 것만으로.
+    //   같은 판정을 스레드 루트 집합으로 **미리 한 번** 접어 두고 조인한다(의미 동등, THREAD_KN 의 전건×전건 제거).
+    `WITH visible AS (
+        SELECT s.id, s.external_system, s.external_id, s.parent_external_id, s.kind, s.fields,
+               s.occurred_at, s.updated_at
+          FROM source s
+         WHERE s.lifecycle='active' AND ${vis}
+     ),
+     roots AS (
+        -- 대화의 머리 행 — 부모가 없거나, 답글인데 그 부모가 수집돼 있지 않은 것(fail-open: 부모 없는 답글을
+        -- 접으면 그 자료는 영영 안 보인다). ⚠ NULL 검사를 서브쿼리 **안**에 두는 게 핵심이다 — 최상위를
+        -- OR 로 쓰면 PG 가 sublink 를 pull-up 하지 못해 행마다 도는 SubPlan 이 되고, 지금 형태여야
+        -- Hash Anti Join 으로 풀린다(NULL = x 는 참이 될 수 없어 부모 없는 행은 그대로 통과).
+        SELECT v.* FROM visible v
+         WHERE NOT EXISTS (SELECT 1 FROM source p
+                            WHERE p.external_id = v.parent_external_id
+                              AND p.external_system IS NOT DISTINCT FROM v.external_system
+                              AND p.lifecycle='active')
+     ),
+     linked_roots AS (
+        -- 지식이 붙은 자료를 제 스레드 루트로 올린 집합. 답글이면 부모가, 아니면 자신이 루트다
+        -- (부모 미수집이면 접히지 않으니 자신이 루트) — THREAD_KN 의 «자신 OR 자식» 두 갈래와 같은 판정이다.
+        SELECT DISTINCT COALESCE(par.id, ks_s.id) AS root_id
+          FROM (SELECT DISTINCT source_id FROM knowledge_source) ks
+          JOIN source ks_s ON ks_s.id = ks.source_id AND ks_s.lifecycle='active'
+          LEFT JOIN source par ON par.external_id = ks_s.parent_external_id
+               AND par.external_system IS NOT DISTINCT FROM ks_s.external_system
+               AND par.lifecycle='active'
+     )
+     SELECT COALESCE(r.external_system, 'authored') AS system,
+            COALESCE(r.fields->>'container_name', CASE WHEN r.external_system IS NULL THEN r.kind ELSE NULL END) AS container,
             count(*)::int AS n,
-            count(*) FILTER (WHERE ${THREAD_KN})::int AS linked,
-            max(COALESCE(s.occurred_at, s.updated_at)) AS newest
-       FROM source s
-      WHERE s.lifecycle='active' AND ${FOLD_REPLY} AND ${vis}
+            count(*) FILTER (WHERE lr.root_id IS NOT NULL)::int AS linked,
+            max(COALESCE(r.occurred_at, r.updated_at)) AS newest
+       FROM roots r
+       LEFT JOIN linked_roots lr ON lr.root_id = r.id
       GROUP BY 1, 2
       ORDER BY 3 DESC`, params);
   return rows as unknown as SourceTreeNode[];
