@@ -15,7 +15,7 @@
 //  · **답을 기다리는 동안 입력을 막는다.** 턴이 겹치면 대화 이어받기(--resume)가 꼬인다(sendWhileBusy=false).
 //  · 도구 이름은 사람 말로, 모르는 이름은 그대로(틀린 한국어보다 낯선 영어 한 줄이 낫다). 연속 도구는 한 줄로 접힌다(desktop 변형).
 //  · 그림은 세션 대화창과 **같은 문법**(desktop) — 한 제품 안에 대화창이 두 모양이면 안 된다.
-import { api } from './core.js';
+import { api, el } from './core.js';
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
 
 /**
@@ -39,6 +39,31 @@ const STALL_MS = 3 * 60_000;
 
 interface TurnStart { turn_id: string; resumed: boolean }
 interface TailResult { chunk?: string; next?: number; done?: boolean; exit?: number | null }
+
+// ── 리브가 스스로 띄운 턴(#1631, 원준 2026-09-14) ──
+//  처음 설정 킥오프·증류 지시는 서버가 조립한 지시문이라 사람이 쓴 말이 아니다. 종전엔 홈 탭의 tmux 세션에서 그 지시문이
+//  «내 말» 로 통째로 떠서 사람이 «내가 이런 걸 보낸 적이 없는데» 가 됐다. 이제 그 턴은 리브 탭에서 말풍선 없이
+//  «리브가 워크스페이스를 맞추는 중» 으로 뜨고, 끝나면 한 줄 표식만 남는다(무엇의 결과인지는 알아야 한다).
+export type AutoKind = 'kickoff' | 'distill';
+const autoKind = (k: unknown): AutoKind => (k === 'distill' ? 'distill' : 'kickoff');
+const AUTO_COPY: Record<AutoKind, { run: string; sub: string; done: string }> = {
+  kickoff: { run: '리브가 워크스페이스를 맞추고 있어요', sub: '답하신 내용과 올려 주신 자료를 읽고 있습니다. 잠시만요.', done: '처음 설정 직후, 리브가 워크스페이스를 살펴본 결과예요' },
+  distill: { run: '리브가 자료를 읽고 정리하고 있어요', sub: '카테고리를 만들고 자료를 지식으로 정리하는 중입니다. 몇 분 걸릴 수 있어요.', done: '리브가 자료를 읽고 정리한 결과예요' },
+};
+function autoFace(t: ChatTurn, kind: AutoKind, running: boolean): void {
+  const c = AUTO_COPY[kind];
+  const found = t.work.querySelector(':scope > .livc-auto') as HTMLElement | null;
+  const box: HTMLElement = found ?? el('div', { class: 'livc-auto' });
+  if (!found) t.work.prepend(box);
+  box.replaceChildren(running
+    ? el('div', { class: 'livc-auto-hero', role: 'status', 'aria-live': 'polite' },
+        el('span', { class: 'livc-auto-spin', 'aria-hidden': 'true' }),
+        el('div', {}, el('b', { text: c.run }), el('p', { class: 'livc-auto-sub', text: c.sub })))
+    : el('span', { class: 'livc-auto-done', text: c.done }));
+  //  편지 칸이 «오늘은 드릴 말씀이 없습니다» 로 어긋나지 않게 — 화면(liv.ts)이 이 신호를 듣고 편지를 «살펴보는 중» 으로 바꾼다.
+  if (running) document.body.dataset.livAuto = kind; else delete document.body.dataset.livAuto;
+  document.dispatchEvent(new CustomEvent('liv:auto', { detail: { kind, running } }));
+}
 
 /**
  * 도구 이름을 사람 말로.
@@ -146,14 +171,16 @@ export function mountLivChat(host: HTMLElement, askHost: HTMLElement): void {
    * 마지막 턴이 아직 돌고 있으면 거기서부터 live 로 이어붙는다.
    */
   async function replayHistory(): Promise<void> {
-    type Chat = { turns?: Array<{ id: string; text: string; at?: string }> } | null;
+    type Chat = { turns?: Array<{ id: string; text: string; at?: string; hidden?: boolean; kind?: string }> } | null;
     let chat: Chat = null;
     try { chat = ((await api('/api/ui/me/liv/chat')) as { chat: Chat }).chat; } catch { return; }
     const turns = chat?.turns ?? [];
     if (!turns.length) return;
     view.removeOpening();
     for (const tt of turns) {
-      const t = view.turn(tt.text);
+      //  서버가 띄운 숨김 턴(킥오프·증류)은 사람 말풍선을 그리지 않는다 — 위 AutoKind 머리말.
+      const auto = tt.hidden ? autoKind(tt.kind) : null;
+      const t = view.turn(auto ? null : tt.text, { ts: tt.at });
       let tail: TailResult | null = null;
       try { tail = await api(`/api/ui/me/liv/turn/${encodeURIComponent(tt.id)}?from=0`) as TailResult; }
       catch { t.work.remove(); continue; }
@@ -164,6 +191,7 @@ export function mountLivChat(host: HTMLElement, askHost: HTMLElement): void {
         view.event(t, ev);
       }
       const ageMs = tt.at ? Date.now() - Date.parse(tt.at) : 0;
+      if (auto) autoFace(t, auto, !tail.done && ageMs <= 30 * 60_000);
       if (!tail.done && ageMs > 30 * 60_000) {
         // 반나절 전에 시작해 아직도 '도는 중'인 턴 — 실행 세션이 죽어 done 이 안 찍힌 것이다(위 STALL_MS 주석). 잠그지 않는다.
         view.settle(t);
@@ -171,7 +199,7 @@ export function mountLivChat(host: HTMLElement, askHost: HTMLElement): void {
       } else if (!tail.done) {
         running = tt.id; stopping = false;
         view.running(t); view.busy(true);
-        void drain(tt.id, t, tail.next ?? 0).finally(() => { running = null; view.settle(t); view.busy(false); });
+        void drain(tt.id, t, tail.next ?? 0).finally(() => { running = null; view.settle(t); view.busy(false); if (auto) autoFace(t, auto, false); });
       } else {
         view.settle(t);
       }
