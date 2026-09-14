@@ -400,4 +400,45 @@ function pjvProjEdgePicker(anchor, p, dir, reload) {
   setTimeout(() => { try { search.focus(); } catch (_) { /* noop */ } }, 0);
 }
 
-export { pjvProjMetaPanel };
+// ── 속성 띠(#3916 허브) — 2열 표 대신 **칩 한 줄**. 같은 컨트롤(상태·리스트·팀원·기간·우선순위·태그·선행/후속)을 그대로 쓰고,
+//  이모지 글리프(🗂👤🗓⚑🏷) 대신 선 아이콘. 빈 값은 점선 칩으로(첫 화면의 절반이 빈칸을 «보여주던» 것을 걷는다).
+const FACT_GLYPH: Record<string, string> = {
+  list: '<path d="M3 6.7C3 5.8 3.72 5.1 4.6 5.1h3.55c.46 0 .9.22 1.18.58l.86 1.1h8.2c.88 0 1.6.72 1.6 1.6v8.42c0 .88-.72 1.6-1.6 1.6H4.6C3.72 18.9 3 18.2 3 17.3V6.7z"/>',
+  user: '<circle cx="12" cy="8" r="3.6"/><path d="M5 20a7 7 0 0 1 14 0"/>',
+  cal: '<rect x="3.3" y="5" width="17.4" height="15.2" rx="2.4"/><path d="M3.3 9.3h17.4"/><path d="M8 2.8v3.6M16 2.8v3.6"/>',
+  flag: '<path d="M6 20.5V4"/><path d="M6 4.7h10.3l-2.4 3.3 2.4 3.3H6z"/>',
+  tag: '<path d="M3.6 12.4 11 5a2 2 0 0 1 1.42-.6H19A1.4 1.4 0 0 1 20.4 5.8v6.6a2 2 0 0 1-.6 1.42l-7.4 7.4a1.55 1.55 0 0 1-2.2 0l-6.6-6.6a1.55 1.55 0 0 1 0-2.2Z"/><circle cx="16" cy="8" r="1.25"/>',
+  left: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
+  right: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+};
+function factGlyph(name: string) {
+  const n = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  n.setAttribute('class', 'pjh-ic'); n.setAttribute('viewBox', '0 0 24 24'); n.setAttribute('aria-hidden', 'true');
+  n.innerHTML = FACT_GLYPH[name] || '';
+  return n;
+}
+function pjvProjFactsStrip(p, members, reload) {
+  const edges = p.edges || { outgoing: [], incoming: [] };
+  // 태그 컨트롤의 빈 표식은 'Empty'(태스크 모달 어휘) — 칩엔 이름표 «태그»가 있으니 ＋ 만 남긴다.
+  const tagsCtl = pjvProjTagsField(p, reload);
+  const tagsEmpty = tagsCtl.querySelector('.pjv-tm-valbtn.empty');
+  if (tagsEmpty) tagsEmpty.textContent = '＋';
+  const chip = (glyph: string | null, label: string | null, control, empty = false) =>
+    el('div', { class: 'pjh-fact' + (empty ? ' empty' : '') }, glyph ? factGlyph(glyph) : null, label ? el('span', { class: 'pjh-fact-k', text: label }) : null, control);
+  return el('div', { class: 'pjh-facts pjv-tm-fields pjv-proj-meta', style: 'display:flex;grid-template-columns:none;padding:0;border:0' },
+    chip(null, null, pjvProjStatusPill(p, reload)),
+    chip('list', null, pjvProjListField(p, reload), p.list_id == null),
+    chip('user', (members || []).length ? null : '팀원', pjvProjTeamControl(members, (ids) => pjvSaveProjMembers(p.id, ids)), !(members || []).length),
+    chip('cal', null, pjvProjDatesField(p, reload), !p.start_date && !p.due_date),
+    chip('flag', p.priority ? null : '우선순위', pjvPriorityControl(p, (patch) => projPatch(p.id, patch, reload)), !p.priority),
+    chip('tag', (p.tags || []).length ? null : '태그', tagsCtl, !(p.tags || []).length),
+    chip('left', (edges.outgoing || []).length ? '선행' : null, pjvProjEdgesField(p, reload, 'out'), !(edges.outgoing || []).length),
+    chip('right', (edges.incoming || []).length ? '후속' : null, pjvProjEdgesField(p, reload, 'in'), !(edges.incoming || []).length),
+    ...((p.fields || []).filter((f) => f && (p.field_values || {})[String(f.id)] !== undefined)
+      .map((f) => chip(null, f.name, pjvFieldControl(p, f, () => pjvReloadKeepScroll(reload))))),
+    ...(p.external_url ? [chip(null, null, el('a', { class: 'pjv-proj-extlink', target: '_blank', rel: 'noopener noreferrer',
+      href: /^https?:\/\//i.test(String(p.external_url)) ? String(p.external_url) : '#',
+      text: (p.external_system === 'clickup' ? 'ClickUp' : (p.external_system || '원본')) + '에서 열기' }))] : []));
+}
+
+export { pjvProjFactsStrip, pjvProjMetaPanel };
