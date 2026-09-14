@@ -28,6 +28,7 @@
 //  ⚠ #2460 — 그중 **사람이 고른 것**(고정·접힘·묶는 축)은 서버가 정본이고 브라우저는 첫 페인트용
 //   캐시다(shell-prefs.ts). 선언 한 줄이 어느 쪽인지 말한다 — shellPrefStore = 계정 · deviceStore = 이 기기.
 import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
+import { planWikiCards, type WikiCardPlan } from './wiki-cards.js';
 import { findMatcher } from '../lib/find.js';
 import { splitFolderRows, foldCardRows, projectPastRows, projCardRows, type PastRowLike } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음 · #3870 — 카드에 자기 화면 줄을 안 넣는다
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsTouch } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버다(선언 한 줄이 그걸 말한다)
@@ -1735,7 +1736,7 @@ function renderProjTree(): void {
 //   ③ 순서는 개수가 아니라 **우리 팀이 맡은 것 먼저**(`/api/ui/me` 의 team_owner_category_ids). 매일 보는 곳이 위로.
 //   ④ 개수는 모노 글자가 아니라 **알약** — 이름과 같은 줄 오른쪽 끝에 고정폭으로 서서 겉돌지 않는다.
 //  ⚠ 이모지(📌🕘🧩)는 쓰지 않는다 — 아이콘은 `icons.ts` 한 벌에서 온다(원준: "이모티콘 쓸 일 있으면 DS 에 맞게 다시 그려라").
-interface WikiCat { id: number; name: string; key: string; description?: string | null; knowledge_count?: number }
+interface WikiCat { id: number; name: string; key: string; description?: string | null; knowledge_count?: number; group?: string | null }
 let wikiCats: WikiCat[] | null = null;
 let wikiLoading = false;
 let wikiPins: number | null = null;      // WIKI 인덱스(핀) 건수 — 뷰 줄의 알약
@@ -1743,9 +1744,8 @@ let wikiPinsLoading = false;
 //  ⚠ #1631: 종전엔 space(제품/사업/시스템) 3카드로 갈라 접었다 폈다. 그 축을 걷어냈으므로 카드는 하나다 —
 //   접기 상태(WIKI_CLOSED_STORE)도, 스페이스 아이콘·라벨도 함께 사라졌다. 「N개 더 보기」 캡은 그대로 남긴다
 //   (분류가 19개면 사이드바가 벽이 되는 건 space 와 무관한 문제였다).
-const wikiMore = new Set<string>();      // 「N개 더 보기」로 편 카드 — 페이지 수명(새로 열면 다시 접힌다)
+const wikiMore = new Set<string>();      // 「N개 더 보기」로 편 카드(키 = wiki-cards.ts 의 카드 key) — 페이지 수명(새로 열면 다시 접힌다)
 const WIKI_CARD_MAX = 6;                 // 카드 하나에 바로 보이는 분류 수. 넘으면 더 보기로 접는다
-const WIKI_CARD_KEY = 'cats';            // wikiMore 의 유일한 키(카드가 하나뿐)
 
 /** 우리 팀이 맡은 분류 id — `/api/ui/me` 가 이미 싣고 있다(team_owner_category_ids). 없으면 빈 집합(표식만 안 붙는다). */
 function ownerCatIds(): Set<number> {
@@ -1775,6 +1775,27 @@ function loadWikiCats(): void {
     if (last && (hooks.section?.() || 'home') === 'wiki') redraw();
   });
 }
+//  묶음(#1631) — 카테고리 위의 **화면 층**. 서가의 카드가 곧 묶음이다(종전 space 카드 자리 — 그 축이 걷히며 카드가 하나로 줄었다).
+//   실측(2026-09-14, lively-agent-2-6a84 DB): 묶음 세 칸이 있고 리브가 만든 분류 4개가 그 안에 들어 있었는데, 이 사이드바가
+//   묶음을 한 번도 안 불러서 사람 눈엔 «상위 카테고리가 아예 없다» 로 보였다 — 묶음을 그리는 건 클래식 wiki-side.ts 뿐이었다.
+interface WikiGroup { key: string; name: string; hint?: string | null; sort?: number }
+let wikiGroups: WikiGroup[] | null = null;
+let wikiGroupsLoading = false;
+const wikiClosed = new Set<string>();    // 사람이 접은 묶음 카드 — 페이지 수명(새로 열면 다시 펴진다)
+function loadWikiGroups(): void {
+  if (wikiGroups || wikiGroupsLoading) return;
+  wikiGroupsLoading = true;
+  void api('/api/ui/category-groups').then((d: any) => {
+    wikiGroups = ((d && d.groups) || []) as WikiGroup[];
+    wikiGroupsLoading = false;
+    if (last && (hooks.section?.() || 'home') === 'wiki') redraw();
+  }).catch(() => {
+    //  못 받으면 종전 한 카드로 선다(무회귀) — 묶음은 화면 층이라 분류·검색은 그대로다.
+    wikiGroupsLoading = false;
+    wikiGroups = [];
+    if (last && (hooks.section?.() || 'home') === 'wiki') redraw();
+  });
+}
 /** 핀 건수 한 번 — 목록은 안 받는다(limit=1, 서버가 total 을 준다). */
 function loadWikiPins(): void {
   if (wikiPins != null || wikiPinsLoading) return;
@@ -1801,6 +1822,7 @@ function renderWiki(): void {
   if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
   loadWikiCats();
   loadWikiPins();
+  loadWikiGroups();
 
   const q = sideFilter.trim().toLowerCase();
   const all = wikiCats || [];
@@ -1827,21 +1849,28 @@ function renderWiki(): void {
       c.description ? el('span', { class: 'v2-kcat-d', text: String(c.description) }) : null);
   };
 
-  const rows: HTMLElement[] = [];
-  if (all.length) {
-    const shownAll = all.filter(hit).sort(rank);
-    const capped = !q && !wikiMore.has(WIKI_CARD_KEY) && shownAll.length > WIKI_CARD_MAX;
-    const shown = capped ? shownAll.slice(0, WIKI_CARD_MAX) : shownAll;
-    if (shownAll.length) {
-      const kids: HTMLElement[] = shown.map(catRow);
-      if (capped) {
-        kids.push(el('button', { class: 'v2-kmore', type: 'button', text: (shownAll.length - shown.length) + '개 더 보기',
-          onclick: () => { wikiMore.add(WIKI_CARD_KEY); redraw(); } }));
-      }
-      rows.push(el('section', { class: 'v2-ksp open', 'aria-label': '분류' },
-        el('div', { class: 'v2-ksp-b' }, ...kids)));
+  //  카드 계획은 순수 함수 한 벌(web/v2/wiki-cards.ts) — 여기선 그대로 그리기만 한다(#1631).
+  const plans = planWikiCards({ cats: all, groups: wikiGroups || [], searching: !!q, hit, rank, activeCat, closed: wikiClosed });
+  const card = (p: WikiCardPlan): HTMLElement => {
+    const capped = !q && !wikiMore.has(p.key) && p.cats.length > WIKI_CARD_MAX;
+    const shown = capped ? p.cats.slice(0, WIKI_CARD_MAX) : p.cats;
+    const kids: HTMLElement[] = shown.map((c) => catRow(c as WikiCat));
+    if (capped) {
+      kids.push(el('button', { class: 'v2-kmore', type: 'button', text: (p.cats.length - shown.length) + '개 더 보기',
+        onclick: () => { wikiMore.add(p.key); redraw(); } }));
     }
-  }
+    if (!p.head) return el('section', { class: 'v2-ksp open', 'aria-label': '분류' }, el('div', { class: 'v2-ksp-b' }, ...kids));
+    if (!p.cats.length) kids.push(el('p', { class: 'v2-kcat-d v2-ksp-empty', text: '아직 이 묶음에 든 분류가 없어요.' }));
+    const head = p.head;
+    return el('section', { class: 'v2-ksp' + (p.open ? ' open' : '') + (head.fix ? ' v2-ksp-fix' : ''), 'aria-label': head.name },
+      el('button', { class: 'v2-ksp-h', type: 'button', 'aria-expanded': String(p.open), title: head.hint || head.name,
+        onclick: () => { if (wikiClosed.has(p.key)) wikiClosed.delete(p.key); else wikiClosed.add(p.key); redraw(); } },
+        el('span', { class: 'v2-car' + (p.open ? ' open' : ''), 'aria-hidden': 'true', text: '\u203a' }),
+        el('span', { class: 'n', text: head.name }),
+        el('span', { class: 'v2-ksp-n', text: String(p.cats.length) })),
+      p.open ? el('div', { class: 'v2-ksp-b' }, ...kids) : null);
+  };
+  const rows: HTMLElement[] = plans.map(card);
   if (!rows.length) {
     rows.push(el('p', { class: 'v2-empty', text: wikiCats ? (q ? '찾는 분류가 없어요.' : '아직 분류가 없어요.') : '불러오는 중…' }));
   }

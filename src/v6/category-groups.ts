@@ -136,3 +136,32 @@ export function groupSetPromptLines(set: Array<{ key: string; name: string; hint
       " 바깥에서 받아 둔 것(법령·표준·논문·교재) → 셋째 칸. 우리가 만든 사내 규정은 첫째 칸, 바깥 법령은 셋째 칸, 체결한 계약서는 둘째 칸이다.",
   ];
 }
+
+//  ── 이름 규칙 — 서버의 마지막 받침(#1631, 2026-09-14) ───────────────────────────
+//  묶음이 있는데 어느 묶음에도 안 든 카테고리(계정 서버가 심은 기본 카테고리 · 처음 설정 서랍 · 코드 스캔이 만든 축)를
+//   «그 밖» 에 두지 않으려고, 서버가 **이름만 보고** 한 칸을 준다(원준 «모든 카테고리가 하드하게 셋 중 하나»).
+//  내용을 읽고 가르는 것은 리브(2턴)의 몫이고, 리브·사람이 이미 넣은 카테고리는 이 규칙이 다시 건드리지 않는다
+//   (category-group-store.ts planGroupPlacement). 그래서 낱말은 **정밀도 우선**으로 좁게 둔다 —
+//   애매한 이름을 틀린 칸에 넣느니 가장 넓은 첫째 칸(own)에 두는 편이 덜 해롭다.
+//  ⚠ «기사»(내가 쓴 기사일 수 있다)·«지도»(지도교수·지도 데이터)처럼 두 뜻이 흔한 낱말은 뺐다. «표준화» 는 우리가 하는 일이라 «표준» 이 아니다.
+const TRADED_WORDS = /회의|미팅|협의|합의|요청|문의|상담|응대|고객|거래|계약|견적|발주|주문|정산|청구|결제|매출|세금|세무|투자|펀드레이징|이사회|제휴|파트너|채용|면접|피드백|수강생|메일|사람|영업/;
+const RECEIVED_WORDS = /시장|경쟁|동향|트렌드|리서치|조사|레퍼런스|참고|문헌|논문|교재|기출|법령|판례|규제|표준(?!화)|벤치마크/;
+
+/** 카테고리 이름 → 세 갈래. 둘 다 걸리면 PRINCIPLE_TIE_BREAK 순서(상대가 있는 것이 이긴다), 아무것도 없으면 own. */
+export function principleForName(name?: string | null): GroupPrinciple {
+  const n = String(name ?? "").trim();
+  if (!n) return "own";
+  const hit: Record<GroupPrinciple, boolean> = { traded: TRADED_WORDS.test(n), received: RECEIVED_WORDS.test(n), own: true };
+  return PRINCIPLE_TIE_BREAK.find((p) => hit[p]) ?? "own";
+}
+
+/**
+ * 갈래 → 지금 있는 묶음 key. 규약 칸(집합의 covers 로 정해진 g1·g2·g3)이 지금 없으면(사람이 지웠거나 이름으로 새로 만들었다)
+ *  **순서상 첫 묶음**으로 — 묶음이 하나라도 있으면 빈손이 없다. 묶음이 0개면 null(옛 판 — 넣을 곳이 없다).
+ *  ⚠ activeKeys 는 화면 순서(sort→key)대로 와야 한다(activeGroupKeys 가 그 순서다).
+ */
+export function groupKeyForPrinciple(p: GroupPrinciple, activeKeys: readonly string[]): string | null {
+  const want = GROUP_SETS.default.find((g) => g.covers.includes(p))?.key;
+  if (want && activeKeys.includes(want)) return want;
+  return activeKeys[0] ?? null;
+}
