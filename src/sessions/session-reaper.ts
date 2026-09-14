@@ -75,6 +75,9 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { logger } from "../log.js";
 import { listSessionsRaw, listSessionPanePids, reapCentralSession } from "../terminal/terminal-sessions.js";
+//  #2600 T2 d6 — 회수기 목록도 «지금 중앙 tmux 에 무엇이 있나» 의 출처 한 곳을 지난다(소유가 넘어간 테넌트는 호스트 스냅샷).
+//   2026-09-14 계수: 카나리아에서 회수기 목록이 분당 1.5+ 번 전 세션 capture-pane 을 쳤다. 행은 호스트가 같은 함수로 만든다.
+import { listCentralSessions } from "../node/registry.js";
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
 import { listAllSessionStates } from "./session-state.js";
 import { listManagedSessions } from "./managed-sessions.js";
@@ -405,7 +408,7 @@ export async function reapIdleSessions(deps?: ReapSources): Promise<ReapResult> 
   const ttlMin = policy.idle_ttl_minutes;
   if (!ttlMin || ttlMin <= 0) return { enabled: false, ttlMin: 0, scanned: 0, reaped: [], skipped: 0 };
 
-  const listLive = deps?.listLive ?? listSessionsRaw;
+  const listLive = deps?.listLive ?? listCentralSessions;
   const listStates = deps?.listStates ?? listAllSessionStates;
   const listManaged = deps?.listManaged ?? listManagedSessions;
   const reap = deps?.reap ?? reapCentralSession;
@@ -619,7 +622,7 @@ export async function reapPressureSessions(deps?: PressureReapDeps): Promise<Pre
   // ── ② 워크스페이스별 참가 판정 + 후보 수집 ──
   const targetsOf = deps?.targets ?? schedulerTargets;
   const within = deps?.within ?? (<T,>(t: TenantContext | null, fn: () => Promise<T>) => (t ? withTenant(t, fn) : fn()));
-  const listLive = deps?.listLive ?? listSessionsRaw;
+  const listLive = deps?.listLive ?? listCentralSessions;
   const listStates = deps?.listStates ?? listAllSessionStates;
   const listManaged = deps?.listManaged ?? listManagedSessions;
   const reap = deps?.reap ?? reapCentralSession;

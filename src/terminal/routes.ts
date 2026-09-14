@@ -15,7 +15,7 @@ import { cancelAiLogin, dropLoginSession, pasteAiLogin, readAiLogin, startAiLogi
 import { logger } from "../log.js";
 import { carrySessionDismissals, closeSessionAppInstances } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
-import { roots, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
+import { roots, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, canAttach, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";        //  하기 위한 파사드(chat-routes 대화창과 같은 관문)
 import { resolveSessionDir } from "../sessions/session-desired.js";
@@ -41,6 +41,7 @@ const sharedByFolder = (dir: string): boolean => isProjectSessionDir(dir);
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
 import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, nodeSessionGone, isSelfNode, isSessionHostNode, liveNodes, nodeOfSession, nodeSessionHarness, gatewayDefersHere, listCentralSessions, remoteNodeOfSession } from "../node/registry.js";
 import type { NodeSessionInfo } from "../node/registry.js";
+import { reportSessionActivity } from "./session-activity-relay.js";   // #2600 T2 d6 — 하네스 활동 보고를 그 세션의 호스트에
 import { relayNodeId, sessionRelayNodeId, sameTmuxCoordinate, isBoxSessionRow } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #2636 — 화면이 안 준 좌표는 서버가 되찾는다 · #3745 — 박스 세션엔 세션 호스트 좌표도 같은 tmux 다
 import type { NodeOp } from "../node/protocol.js";
 import { normalizeTheme } from "./catalog.js"; // #1683 테마 값 정규화(순수 — catalog 가 소유)
@@ -1617,10 +1618,13 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     const stNodeId = relayNodeId(st?.node_id, isSelfNode);
     if (st && !stNodeId) {
       if (st.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
-      const change = await markSessionActive(id, phase).catch((e) => { logger.warn({ err: e, id }, "활동 시각 기록 실패(비치명)"); return null; });
+      //  #2600 T2 d6 — 그 세션의 호스트가 서 있으면 보고를 **호스트에** 맡긴다(게이트웨이 tmux 세 번 → 0, 2026-09-14 계수
+      //   카나리아 10/분). 맡길 곳 판정·실패 시 직접 새기기·DB 미러는 `reportSessionActivity` 가 쥔다(불리는 함수 안에).
+      const change = await reportSessionActivity(id, phase).catch((e) => { logger.warn({ err: e, id }, "활동 시각 기록 실패(비치명)"); return null; });
       // #1842 — 단계가 **바뀐** 순간 그 자리에서 앱으로 민다. 폴링이 30초 뒤에 같은 사실을 다시 발견하는 대신,
       //  "AI 를 여러 개 돌리다 끝나는 것마다 바로 받는다"가 여기서 성립한다. 구독자가 없으면 아무 일도 안 한다.
-      if (change) void notifyPhaseChange(id, me, change);   // 응답을 막지 않는다 — 훅은 핫패스다
+      //  이름은 desired 행의 라벨을 준다 — 종전엔 전이마다 tmux 로 @box_label 을 다시 읽었다(같은 계수 1.1/분).
+      if (change) void notifyPhaseChange(id, me, change, st.label || undefined);   // 응답을 막지 않는다 — 훅은 핫패스다
       res.json({ ok: true });
       return;
     }

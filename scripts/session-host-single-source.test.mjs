@@ -382,4 +382,37 @@ t("[S17] 프롬프트·런타임·전환 라우트와 deliverPrompt 는 remoteNo
     `${DELIVER} 에 좌표만으로 저쪽 기계를 가르는 nodeOfSession(sessionId) 이 남아 있다`);
 });
 
+// ── S18: 하네스 활동 보고는 그 세션의 호스트에 맡기고, 회수기 목록은 중앙 목록 한 곳에서 (#2600 T2 d6 3판) ──────────
+//  왜: 2026-09-14 계수 — 카나리아 `lively-46e3` 에 남은 게이트웨이 tmux 22/분 중 `/active` 가 10(단계 읽기·쓰기·활동 시각)
+//   · 전이 알림의 라벨 재조회 1.1 · 유휴 회수기 목록 1.5+ 였다. 라우트가 `markSessionActive` 를 직접 부르면 호스트가
+//   서 있어도 세 번이 돌아오고, 회수기가 `listSessionsRaw` 로 돌아가면 전 세션 capture-pane 이 돌아온다.
+//  ⚠ 줄 단위·핸들러 단위로 본다(`code()` 는 문자열 속 `/*` 에 걸린다 — S10c 머리말).
+const RELAY = "src/terminal/session-activity-relay.ts";
+const REAPER = "src/sessions/session-reaper.ts";
+t("[S18] /active 는 reportSessionActivity 로 맡기고 알림 이름은 st.label · 회수기 목록은 listCentralSessions", () => {
+  const src = read(TERM_ROUTES);
+  const sig = 'app.post("/api/ui/terminal/sessions/:id/active"';
+  const at = src.indexOf(sig);
+  assert.ok(at >= 0, `${TERM_ROUTES} 에서 ${sig} 를 못 찾았다 — 경로가 바뀌었나`);
+  const next = src.indexOf("\n  app.", at + sig.length);
+  const body = src.slice(at, next < 0 ? undefined : next).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+  assert.ok(body.length > 10, `/active 본문을 ${body.length}줄밖에 못 잘랐다 — 이 가드가 아무것도 안 보고 있다`);
+  assert.ok(body.some((l) => /reportSessionActivity\s*\(\s*id\s*,\s*phase\s*\)/.test(l)),
+    `/active 가 reportSessionActivity 를 안 부른다 — 세션 호스트가 서 있어도 게이트웨이가 tmux 를 세 번 친다`);
+  assert.ok(!body.some((l) => /\bmarkSessionActive\s*\(/.test(l)),
+    `/active 가 markSessionActive 를 직접 부른다 — 맡길 곳 판정을 건너뛴다`);
+  assert.ok(body.some((l) => /notifyPhaseChange\s*\(\s*id\s*,\s*me\s*,\s*change\s*,\s*st\.label/.test(l)),
+    `/active 중앙 갈래의 전이 알림이 st.label 을 이름으로 안 준다 — 전이마다 tmux 로 라벨을 다시 읽는다`);
+
+  const reaper = codeLines(REAPER);
+  assert.equal(reaper.filter((l) => /deps\?\.listLive\s*\?\?\s*listCentralSessions\b/.test(l)).length, 2,
+    `${REAPER} 의 유휴·압박 회수기 둘 다 기본 목록이 listCentralSessions 여야 한다`);
+  assert.ok(!reaper.some((l) => /\?\?\s*listSessionsRaw\b/.test(l)),
+    `${REAPER} 에 listSessionsRaw 기본 목록이 남아 있다 — 소유가 넘어간 테넌트에서도 전 세션 capture-pane 을 친다`);
+
+  const relay = codeLines(RELAY);
+  assert.ok(relay.some((l) => /sessionHostFor\s*\(\s*sid\s*,\s*"markActive"\s*\)/.test(l)),
+    `${RELAY} 의 기본 호스트 판정이 sessionHostFor 를 안 지난다 — 맡길 곳 판정이 두 벌이 된다`);
+});
+
 console.log(`\n${pass} passed — 세션 호스트 단일 출처(#2600 T1·T2 d4·d6)`);

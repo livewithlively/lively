@@ -17,7 +17,7 @@ import { authNodeTokenDetailed, getNode, touchNode, appendNodeLinkEvent, type Or
 import { denialMessage, denialKey, shouldLogDenial, type NodeAuthOutcome } from "./auth-denial.js";   // #2161
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
 import { beatRefreshes } from "./state-freshness.js";   // #2600 T2 d6 — 박동은 스냅샷이 있을 때만 나이를 되돌린다
-import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, nodeSnapshotSessions, nodeSnapshotVerdict, sessionHostVerdict, hostOwnedSnapshot, remoteNodeCoordinate, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
+import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, nodeSnapshotSessions, nodeSnapshotVerdict, sessionHostVerdict, hostOwnedSnapshot, remoteNodeCoordinate, sessionHostTarget, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
 import { makeTmuxCallCensus, censusSite } from "../terminal/tmux-call-census.js";   // #2600 T2 d6 — 판정 계수(같은 세 칸: 슬러그·축·호출부)
 import { selfNodePossible } from "../exec-topology.js";   // #2599 T2 — 「이 판정이 성립하는 배포인가」의 선결 조건
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
@@ -288,6 +288,24 @@ export function sessionHostLiveIds(nodeId: string, now: number = Date.now()): st
   if (!st) return null;
   const v = nodeSnapshotVerdict({ declared: declaredSessionHost({ session_host: st.sessionHost }), online: conns.has(k), stateAgeMs: now - st.ts }, STATE_STALE_MS, true);
   return v.take ? st.sessions.map((s) => s.id) : null;
+}
+
+/**
+ * 이 세션의 일을 맡을 **세션 호스트** — 호스트 id, 아니면 null(호출부는 종전 게이트웨이 경로) (#2600 T2 d6).
+ *  판정은 순수 함수 `self-node.sessionHostTarget` 이 하고, 여기는 재료(스냅샷 좌표·선언·자격 관측·op 지원)만 모은다.
+ *  사유는 소유 판정 계수에 `session:<사유>` 로 센다 — 맡기지 못하는 이유가 프로덕션 로그에 그대로 나온다
+ *  (예: `session:absent` 가 많으면 방금 만든 세션의 보고가 스냅샷보다 빠르다는 뜻이다).
+ */
+export function sessionHostFor(sessionId: string, op: NodeOp, now: number = Date.now()): string | null {
+  const r = sessionHostTarget({
+    sessionId,
+    nodeId: nodeOfSession(sessionId),
+    isSessionHost: isSessionHostNode,
+    liveIds: (id) => sessionHostLiveIds(id, now),
+    supports: (id) => nodeSupports(id, op),
+  });
+  recordDefers(`session:${r.why}`);
+  return r.host;
 }
 
 /**
