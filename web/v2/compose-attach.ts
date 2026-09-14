@@ -84,7 +84,11 @@ export function composerAttach(opts: { projectId: () => number; onChanged?: () =
         a.pct = null; a.ctl = null;
         a.abs = (j && j.path) || nm;
         // 상대경로 — 프로젝트면 올린 이름 그대로(PUT ?path=<nm>), 개인 폴더면 uploads/ 아래.
-        a.rel = opts.projectId() > 0 ? nm : ('uploads/' + nm);
+        // 프로젝트면 **상대경로**(노드가 자기 좌표로 편다). 개인 폴더는 **절대경로 그대로** —
+        //  개인 폴더의 위치를 세션에 알려 줄 좌표가 아직 없어서, 상대로 바꾸면 펴 줄 사람이 없다(순수 후퇴).
+        //  그래서 개인 폴더 첨부는 종전과 같고(매니지드 정상·로컬 노드는 종전처럼 못 찾음), 못 찾으면
+        //  주입 훅이 크게 말한다 — 무음 오답만은 어느 분기에서도 안 난다.
+        a.rel = opts.projectId() > 0 ? nm : a.abs;
         ok++; paint();
         opts.onChanged?.();                   // 프로젝트 자료 칸이 같은 화면에 있으면 바로 보이게
       } catch (e: any) {
