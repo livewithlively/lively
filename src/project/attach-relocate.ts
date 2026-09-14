@@ -110,12 +110,16 @@ export async function relocateAttachmentsToProject(o: {
         catch { await fsp.copyFile(src.abs, dest); }
       }
       await grantSharedGroupWrite(dest, base, "file").catch(() => { /* 그룹 권한 실패는 비치명 */ });
-      await ingestLocalUpload({
+      //  ⚠ 자료 등록은 **기다리지 않는다**. 이 함수는 세션 생성 POST 안에서 돌고, ingest 는 큰 PDF·OOXML 을
+      //   본문 추출까지 하므로 초 단위로 늘어질 수 있다 — 그만큼 사람이 빈 화면을 본다. 세션이 그 파일을 읽는 데
+      //   필요한 것은 **파일이 그 자리에 있는 것**뿐이고(위에서 끝났다), 자료함 표시는 한 박자 늦어도 된다.
+      //   개인 좌표의 자료 행 내리기도 같이 뒤로 — 같은 파일이 두 자료로 남으면 자료함에 유령이 생긴다.
+      void ingestLocalUpload({
         root: { kind: "project", id: o.projectId }, folder: o.folder, base, abs: dest, osUser: null,
         uploader: { id: o.memberId, name: null }, channelFallback: "uploads",
-      }).catch(() => null);
-      //  개인 좌표의 자료 행은 내린다 — 같은 파일이 두 자료로 남으면 자료함에 유령이 생긴다.
-      await supersedeLocalPath(p.root, p.rel).catch(() => 0);
+      })
+        .then(() => supersedeLocalPath(p.root, p.rel))
+        .catch((e) => logger.warn({ err: e, ref }, "[attach-relocate] 자료 등록·정리 실패 — 파일 이동은 이미 끝났다"));
       moved.set(ref, localExternalId({ kind: "project", id: o.projectId }, name));
     } catch (e) {
       failed++;
