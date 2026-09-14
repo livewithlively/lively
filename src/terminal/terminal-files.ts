@@ -334,6 +334,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     res.json(await finishUpload({ coord, abs, osUser, shareWithTeam, uploader: { id: viewerFor(req), name: u?.email ?? null } }));
   }));
 
+  // 디렉터리 목록(숨김 제외). 격리 세션(#524)은 멤버 uid 로(게이트웨이가 700 홈 못 읽으므로).
   app.get("/api/ui/terminal/sessions/:id/ls", auth, wrap(async (req, res) => {
     const nodeId = await nodeFor(req);
     if (nodeId) { // 노드 세션 — 노드 로컬 fs 목록 릴레이(#875)
