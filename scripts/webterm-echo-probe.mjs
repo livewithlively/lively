@@ -112,24 +112,41 @@ async function main() {
         }
       }
     };
+    // 열리자마자 닫히는 것도 «못 붙음» 이다 — 게이트웨이는 막 만든 노드 세션이 노드 스냅샷(3초 주기)에 오르기 전이면
+    //  4403(no-access)으로 닫는다(src/node/registry.ts nodeCanAttach — 스냅샷에 없고 gone 확답도 아니면 4403). 브라우저도
+    //  그 코드에서 다시 붙는다. 그래서 열린 뒤 게이트웨이 판정이 끝날 때까지 지켜보고, 닫히면 다시 붙는다.
+    //  (함무라비 실측 2026-09-14: 생성 1초 뒤 붙으면 open → 10ms 뒤 4403. 종전엔 이걸 붙은 것으로 보고 40초를 기다렸다.)
+    const closes = [];
     const connect = async () => {
       const ticket = await api("POST", "/api/ui/terminal/ticket");
       const cookie = (ticket.headers.get("set-cookie") || "").split(";")[0];
       if (!cookie.startsWith("lively_term=")) throw new Error(`터미널 티켓 발급 실패: HTTP ${ticket.status}`);
       const u = new URL(gw);
       const wsUrl = `${u.protocol === "https:" ? "wss" : "ws"}://${u.host}${u.pathname.replace(/\/+$/, "")}/terminal/ws?session=${encodeURIComponent(sid)}&node=${encodeURIComponent(NODE)}`;
-      return await new Promise((resolve, reject) => {
+      const s = await new Promise((resolve, reject) => {
         const s = new WebSocket(wsUrl, { headers: { Cookie: cookie } });
         s.binaryType = "arraybuffer";
         const timer = setTimeout(() => { try { s.close(); } catch { /* noop */ } reject(new Error("WS 연결 시간 초과")); }, 15000);
         s.onopen = () => { clearTimeout(timer); resolve(s); };
         s.onerror = () => { clearTimeout(timer); reject(new Error("WS 연결 실패")); };
+        s.onclose = (e) => { closes.push({ code: e.code, reason: e.reason }); };
         s.onmessage = (e) => feed(new Uint8Array(e.data instanceof ArrayBuffer ? e.data : Buffer.from(String(e.data))));
       });
+      const watchUntil = performance.now() + 2000;
+      while (performance.now() < watchUntil && s.readyState === WebSocket.OPEN) await sleep(50);
+      if (s.readyState !== WebSocket.OPEN) {
+        const c = closes.at(-1);
+        const err = new Error(`WS 가 열리자마자 닫혔다(${c?.code ?? "?"} ${c?.reason ?? ""})`);
+        err.fatal = c?.code === 4410;   // session-gone — 다시 붙어도 없다
+        throw err;
+      }
+      return s;
     };
     for (let attempt = 1; attempt <= 10 && !ws; attempt++) {
-      try { ws = await connect(); } catch (e) { result.connectError = String(e.message || e); await sleep(1500); }
+      bytes.length = 0; lineBuf = "";   // 실패한 시도에서 온 조각이 준비 판정에 섞이지 않게
+      try { ws = await connect(); } catch (e) { result.connectError = String(e?.message || e); if (e?.fatal) break; await sleep(1500); }
     }
+    result.wsCloses = closes;
     if (!ws) throw new Error(`WS 에 붙지 못했다: ${result.connectError}`);
     const send = (msg) => ws.send(JSON.stringify(msg));
     send({ t: "r", c: 120, r: 30 });
@@ -137,8 +154,8 @@ async function main() {
     await sleep(800);
     send({ t: "i", d: "\r" });
     const readyBy = performance.now() + 40000;
-    while (performance.now() < readyBy && !(bytes.length > 0 && performance.now() - lastRx > 1500)) await sleep(50);
-    if (!bytes.length) throw new Error("셸 출력이 오지 않았다(40초)");
+    while (performance.now() < readyBy && ws.readyState === WebSocket.OPEN && !(bytes.length > 0 && performance.now() - lastRx > 1500)) await sleep(50);
+    if (!bytes.length) throw new Error(`셸 출력이 오지 않았다${ws.readyState === WebSocket.OPEN ? "(40초)" : ` — WS 닫힘 ${JSON.stringify(closes.at(-1))}`}`);
 
     const waitEcho = (needle, from, timeoutMs = 5000) => new Promise((resolve) => {
       if (indexOfSeq(bytes, needle, from) >= 0) { resolve(lastRx); return; }
