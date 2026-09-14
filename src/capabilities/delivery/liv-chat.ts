@@ -13,8 +13,8 @@
 //
 //  ── 안전 자세 ──
 //  승인 우회를 쓰지 않는다. 경계는 `--disallowedTools`(liv-turn.ts 의 실측 참조)이고, 이 파일은 그 인자를
-//  만들지 않는다 — livTurnArgs 하나만 부른다. 안전선이 한 자리에 있어야 약해질 때 눈에 띈다.
-import crypto from "node:crypto";
+//  만들지 않는다 — 스폰조차 여기서 하지 않고 org/liv/chat-turn.ts 의 startLivChatTurn 하나만 부른다(#1631 —
+//  처음 설정 킥오프·증류 지시도 같은 문을 지난다). 안전선이 한 자리에 있어야 약해질 때 눈에 띈다.
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
@@ -22,24 +22,13 @@ import type { Capability } from "../types.js";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import { restRead } from "./shared.js";
-import { livTurnArgs } from "../../org/delivery/liv-turn.js";
+//  턴 id 규약·턴 폴더·스폰은 org/liv/chat-turn.ts 가 쥔다(#1631) — 여기는 화면이 부르는 창구(REST 계약)만 남는다.
+import { LIV_TURN_MAX as TURN_MAX, LIV_TURN_ID_RE as TURN_ID_RE, livTurnDir, startLivChatTurn } from "../../org/liv/chat-turn.js";
 
-/** 한 턴 프롬프트 상한 — 사람이 채팅창에 치는 양이다(자료 본문은 올리기로 간다). */
-const TURN_MAX = 8000;
-/** 턴 id 는 **우리가 만든 hex 뿐**이다. 사람이 준 값이 폴더 이름이 되면 그 자리가 곧 경로 이동이다. */
-const TURN_ID_RE = /^t[0-9a-f]{16}$/;
-
-const newTurnId = (): string => `t${crypto.randomBytes(8).toString("hex")}`;
-
-/** 이 사람의 리브 대화 폴더 안에서 그 턴의 작업 폴더. 남의 것은 구조상 가리킬 수 없다
- *  (루트가 principal 로 해석되고, 턴 id 는 화이트리스트 정규식을 통과한 hex 뿐이다). */
+/** 이 사람의 리브 대화 폴더 안에서 그 턴의 작업 폴더 — 형식이 틀리면 400(창구의 오류 계약). 남의 것은 구조상 가리킬 수 없다. */
 async function turnDir(user: LivelyUser, turnId: string): Promise<string> {
   if (!TURN_ID_RE.test(turnId)) throw new HttpError(400, "턴 id 형식이 아닙니다");
-  const { resolveRootPath } = await import("../../terminal/profiles.js");
-  const { ensureMemberOsUser } = await import("../../terminal/profiles.js");
-  const osUser = await ensureMemberOsUser(user).catch(() => null);
-  const { abs } = await resolveRootPath(user, "personal", "liv", osUser ?? null);
-  return path.join(abs, ".lively-task", turnId);
+  return await livTurnDir(user, turnId);
 }
 
 export const livChatCapabilities: Capability[] = [
@@ -55,34 +44,9 @@ export const livChatCapabilities: Capability[] = [
       if (!text) throw new HttpError(400, "할 말이 비어 있습니다");
       if (text.length > TURN_MAX) throw new HttpError(400, `한 번에 보낼 수 있는 글자 수를 넘었습니다(${text.length} > ${TURN_MAX})`);
 
-      const { getLivProfile, setLivChat, appendLivTurn } = await import("../../org/store.js");
-      const prof = await getLivProfile(userId);
-      // 이어갈 대화가 있으면 이어받고, 없거나 restart 면 새로 만든다.
-      //  ⚠ 첫 턴과 이어가는 턴은 **주는 플래그가 다르다**(--session-id ↔ --resume). 이걸 뒤집으면
-      //   "리브가 방금 한 말을 잊는다"(--resume 누락) 또는 "없는 대화를 이어받으려다 죽는다"가 된다.
-      const restart = input.restart === true;
-      const prev = restart ? null : (prof.chat ?? null);
-      const sessionId = prev?.session_id ?? crypto.randomUUID();
-      const resume = !!prev;
-
-      const turnId = newTurnId();
-      const { spawnTaskSession } = await import("../../node/tasks.js");
-      const spawned = await spawnTaskSession({
-        user, taskId: turnId, rootKey: "personal", subpath: "liv",
-        prompt: text, harness: "claude",
-        extraFlags: livTurnArgs({ sessionId, resume }),
-        bypassPermissions: false,   // ⚠ 리브의 안전선. 이 줄이 사라지면 사람 앞에서 승인 없이 돈다.
-      });
-
-      // 스폰이 성공한 뒤에 기억한다 — 실패한 턴의 세션 id 를 남기면 다음 턴이 없는 대화를 이어받으려 한다.
-      const now = new Date().toISOString();
-      if (!resume) await setLivChat(userId, { session_id: sessionId, started_at: now, turns: [] });
-      // 되그릴 수 있게 턴을 잇는다. **사람이 한 말만** 담는다 — 리브의 말은 그 턴의 진행 파일이 정본이다.
-      // ⚠ 세션 id 를 **두 곳에** 남긴다. 프로필은 화면이 읽기 좋고, 턴 폴더는 프로필 쓰기가 실패해도 남는다.
-      //  멈추기는 이게 없으면 아예 불가능하다 — "시작만 되고 멈출 수 없는 상태"는 만들지 않는다.
-      await fsp.writeFile(path.join(spawned.taskDir, "session"), spawned.sessionId, "utf8").catch(() => { /* best-effort */ });
-      await appendLivTurn(userId, { id: turnId, text, at: now, sid: spawned.sessionId });
-      return { turn_id: turnId, resumed: resume };
+      // 이어받기(--resume)·새 대화(--session-id)·안전선·세션 id 두 곳 기록은 전부 chat-turn.ts 한 자리에 있다(#1631).
+      const r = await startLivChatTurn(user, { text, restart: input.restart === true });
+      return { turn_id: r.turn_id, resumed: r.resumed };
     },
     false,  // mcp:false — 이건 **화면이 리브를 부르는 문**이다. 리브가 자기를 다시 부르면 턴이 겹쳐 돈다.
     {

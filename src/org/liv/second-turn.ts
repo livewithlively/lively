@@ -140,6 +140,8 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
 // ── 판정 ────────────────────────────────────────────────────────────────────────
 export interface SecondTurnState {
   welcome: { done_at?: string | null; session_id?: string | null; distill_at?: string | null; distill_gave_up_at?: string | null;
+    /** 리브 탭의 대화 턴으로 킥오프한 사람(#1631) — 세션 대신 이 턴이 1턴이다. 스윕이 그 턴의 끝남을 session.working 으로 옮겨 준다. */
+    liv_turn_id?: string | null;
     /** 세션이 사라져 **다시 연** 시각(#1631). 한 번만 다시 연다 — 무한 재생성은 비용이고 유령 세션을 만든다. */
     distill_reopened_at?: string | null } | null;
   /** 세션 관측(listSessionsRaw). null = 그 세션이 이 박스에 없다(회수·종료·노드). */
@@ -164,7 +166,8 @@ export const TURN1_DELIVERY_TTL_MS = 2 * 60 * 60_000;
 
 export function decideSecondTurn(s: SecondTurnState): SecondTurnDecision {
   const w = s.welcome;
-  if (!w?.session_id || !w.done_at) return { action: "skip", reason: "no-kickoff" };
+  //  킥오프의 증거는 둘 중 하나 — tmux 세션(session_id) 또는 리브 대화 턴(liv_turn_id, #1631 2026-09-14).
+  if (!(w?.session_id || w?.liv_turn_id) || !w?.done_at) return { action: "skip", reason: "no-kickoff" };
   if (w.distill_at) return { action: "skip", reason: "already-fired" };
   if (w.distill_gave_up_at) return { action: "skip", reason: "gave-up" };
   const done = Date.parse(w.done_at);

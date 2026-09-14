@@ -26,6 +26,9 @@ export interface FirstTurnInput {
   collectors: Array<{ label: string; preset_key: string; enabled: boolean; sync_interval_sec: number }>;
   aiHarnesses: string[];                            // 로그인 확인된 하네스
   harness: string;                                  // 이 세션이 도는 하네스
+  /** 이 지시가 어디서 읽히나(#1631, 원준 2026-09-14). session = 사람이 여는 tmux 세션(종전) · chat = 리브 탭의 대화 턴(숨김 턴 —
+   *  사람은 지시문을 못 보고 리브의 답만 본다). 기본 session — 옛 호출부·시험이 그대로 맞는다. */
+  surface?: "session" | "chat";
 }
 
 export const FIRST_TURN_NAME_CAP = 40;
@@ -75,7 +78,7 @@ function factsBlock(i: FirstTurnInput): string {
   } else {
     lines.push(`- 연결한 자료 가져오기: 없음(외부 앱을 잇지 않음)${offNote ? ` — ${offNote}가 보여도 그건 연결이 아니다. «연결됐다»·«수집이 돈다»·«곧 돈다» 고 말하지 마라.` : ""}`);
   }
-  lines.push(`- AI: 이 세션은 ${i.harness} 로 돈다${i.aiHarnesses.length ? ` (로그인 확인: ${i.aiHarnesses.join(", ")})` : ""}`);
+  lines.push(`- AI: 이 ${i.surface === "chat" ? "대화는" : "세션은"} ${i.harness} 로 돈다${i.aiHarnesses.length ? ` (로그인 확인: ${i.aiHarnesses.join(", ")})` : ""}`);
   return lines.join("\n");
 }
 
@@ -85,8 +88,13 @@ export function buildFirstTurnPrompt(i: FirstTurnInput): string {
   const nextWhen = waits
     ? "첫 수집이 한 바퀴 돈 뒤"
     : (i.uploads.total > 0 ? "올린 자료를 읽은 뒤 곧" : "자료가 들어오면");
+  const chat = i.surface === "chat";
   return [
-    "너는 이 워크스페이스의 담당자 **리브**다. 방금 이 사람이 처음 설정을 마쳤고, 이 세션은 그 직후에 열렸다.",
+    chat
+      //  대화 표면 — 이 지시문은 화면에 안 보인다(숨김 턴). 리브가 «보내 주신 지시대로» 라고 하면 사람은 보낸 적 없는 말을 듣는다.
+      ? "너는 이 워크스페이스의 담당자 **리브**다. 방금 이 사람이 처음 설정을 마쳤고, 이 대화는 그 직후에 시작됐다. " +
+        "사람은 리브 화면의 대화창에서 **네 답만** 본다 — 이 지시문은 사람이 쓴 것이 아니니 «말씀하신»·«보내 주신 지시» 같은 말을 하지 마라. 첫 문장부터 사람에게 하는 말로 시작하라."
+      : "너는 이 워크스페이스의 담당자 **리브**다. 방금 이 사람이 처음 설정을 마쳤고, 이 세션은 그 직후에 열렸다.",
     "",
     "## 지금 워크스페이스의 실측(서버가 방금 읽은 값 — 다시 조회하지 마라)",
     factsBlock(i),
@@ -94,7 +102,7 @@ export function buildFirstTurnPrompt(i: FirstTurnInput): string {
     "## 이 턴에서 할 일",
     "1. 위 실측을 **이 사람의 말로** 정리해 보여 줘라 — 무엇을 답했고, 무엇이 만들어졌고, 자료와 수집이 어디까지 와 있는지. 표나 목록으로 짧게. 숫자는 위 값 그대로.",
     "2. 빠진 것이 있으면 사실만 짚어라(예: 자료가 없다, AI 로그인이 안 됐다). 지금 고치라고 재촉하지 마라.",
-    `3. 마지막에 이렇게 알려라: **${nextWhen} 증류 작업(카테고리를 만들고 자료를 지식으로 정리하는 일)을 한 번 더 시작한다**. 그때 이 세션으로 다시 지시가 오고, 끝나면 알림이 간다고.`,
+    `3. 마지막에 이렇게 알려라: **${nextWhen} 증류 작업(카테고리를 만들고 자료를 지식으로 정리하는 일)을 한 번 더 시작한다**. ${chat ? "그때 이 대화에서 네가 이어서 알리고, 끝난 결과도 이 대화에서 보여 준다고(따로 알림이 간다고는 말하지 마라)." : "그때 이 세션으로 다시 지시가 오고, 끝나면 알림이 간다고."}`,
     "4. 그리고 **턴을 끝내라.**",
     "",
     "## 하지 말 것",

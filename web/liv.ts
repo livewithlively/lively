@@ -14,7 +14,7 @@
 //  무엇이 덜 됐는지(카드)는 서버가 이미 정해서 준다(GET /api/ui/me/liv).
 //  화면이 자기 판정을 가지면 리브와 다른 답을 하고, 그게 #1618 이 잡아낸 실패다. 여기는 그리기만 한다.
 import { api, el, state } from './core.js';
-import { mountLivChat, livChatAsk, livChatFill } from './liv-chat.js';
+import { mountLivChat, livChatAsk, livChatFill, type AutoKind } from './liv-chat.js';
 import { bindCtx, bindCtxSurface } from './v2/ctx-registry.js';   // #3784 리브 화면 우클릭
 import { copyText } from './v2/ctx-menu.js';
 
@@ -122,6 +122,12 @@ export async function renderLiv(view: HTMLElement | null, opts: RenderLivOpts = 
     if (document.body.dataset.route !== 'liv') { clearInterval(poll); return; }  // 라우트를 떠나면 끝
     refreshLiv();
   }, 6000);
+  //  리브가 스스로 띄운 턴이 시작·끝날 때(liv-chat.ts autoFace) 편지를 곧바로 다시 그린다 — 6초 폴링만 믿으면 그 사이 «드릴 말씀이 없습니다» 가 뜬다.
+  const onAuto = (): void => {
+    if (document.body.dataset.route !== 'liv') { document.removeEventListener('liv:auto', onAuto); return; }
+    refreshLiv();
+  };
+  document.addEventListener('liv:auto', onAuto);
 }
 
 /** 화면 갱신 진입점 하나. 카드가 제출 뒤 자기 자신을 새로 그릴 때 **어느 칸에 사는지 알 필요가 없다** —
@@ -175,7 +181,16 @@ export async function fillLivCards(host: HTMLElement, askHost: HTMLElement): Pro
     : null;
   askHost.replaceChildren(...(ask ? [ask] : []));
 
-  host.replaceChildren(st.findings.length ? livLetter(st, host) : livQuiet());
+  //  리브가 서버에서 띄운 턴(처음 설정 킥오프·증류)을 돌리는 동안엔 «드릴 말씀이 없습니다» 가 거짓이다 — 대화 칸(liv-chat.ts)이 알려 준다.
+  const auto = document.body.dataset.livAuto as AutoKind | undefined;
+  host.replaceChildren(st.findings.length ? livLetter(st, host) : auto ? livWorking(auto) : livQuiet());
+}
+
+/** 리브가 스스로 띄운 턴이 도는 동안의 편지(#1631) — 무엇을 하고 있는지 한 줄, 끝나면 대화에서 이어진다는 것 한 줄. */
+function livWorking(kind: AutoKind): HTMLElement {
+  return el('div', { class: 'liv-letter-quiet liv-letter-working' },
+    el('p', { class: 'liv-quiet-say', text: kind === 'distill' ? '지금 자료를 읽고 정리하고 있어요.' : '지금 워크스페이스를 살펴보고 있어요.' }),
+    el('p', { class: 'liv-quiet-sub', text: '끝나면 아래 대화에서 이어서 말씀드릴게요.' }));
 }
 
 /** 사람 이름 — 편지는 누구에게 쓰는지가 있어야 편지다. 모르면 호칭 없이 시작한다(억지로 '고객님' 하지 않는다). */
