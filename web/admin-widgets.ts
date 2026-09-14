@@ -236,7 +236,11 @@ function targetMembersField(targetKind, item, isNew) {
   const paintSummary = () => {
     const exceptions = rows.filter((r) => r.override !== null).length;
     const inactive = rows.filter((r) => r.state !== 'active').length;
-    countEl.textContent = `구성원 ${rows.length - inactive}명`
+    // #3872 — «구성원 N명» 은 사람만 센다(서버 표식 is_person). 표에는 운영 계정·세션 호스트·AI 행도 함께 있어 따로 적는다.
+    const people = rows.filter((r) => r.is_person && r.state === 'active').length;
+    const nonPeople = rows.filter((r) => !r.is_person && r.state === 'active').length;
+    countEl.textContent = `구성원 ${people}명`
+      + (nonPeople ? ` · 사람 외 ${nonPeople}개` : '')
       + (inactive ? ` · 비활성 ${inactive}명` : '')
       + (exceptions ? ` · 예외 ${exceptions}명` : ' · 예외 없음');
     openBtn.disabled = !rows.length;

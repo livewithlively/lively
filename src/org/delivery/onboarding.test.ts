@@ -1,4 +1,4 @@
-// 온보딩 셋업 판정 — 사양 엣지 표(18행) 잠금. (#1618 후속)
+// 온보딩 셋업 판정 — 사양 엣지 표(18행 + #3872 구성원 13′·14′·17′) 잠금. (#1618 후속)
 //
 //  왜 생겼나: 이 자리에서 **거짓 완료**가 실제로 나갔다. 신규 워크스페이스는 제품이 심은 런북 3건으로
 //   시작하는데 '지식' 항목이 그걸 조직 지식으로 세어, 회사가 한 건도 안 쓴 상태에서 통과했다.
@@ -18,8 +18,9 @@ const OK: OnboardingFacts = {
   knowledgeAuthored: 12,
   categories: 8,
   categoriesNoDefinition: 0,
-  membersActive: 4,
-  membersWithToken: 3,
+  people: 4,
+  peopleWithToken: 3,
+  managed: false,
   dbSources: 1,
   embeddingsOn: true,
   pipelineStuck: [],
@@ -110,15 +111,24 @@ test("표12: 의미검색이 꺼져 있으면 '단어 일치로만 찾는다'는
   assert.match(it.how, /단어/, "조용한 폴백을 사람이 알 수 있어야 한다");
 });
 
-// 13·14행 — 경계
-test("표13·14: 구성원 1명이면 미완, 2명이면 완료", () => {
-  assert.equal(item({ ...OK, membersActive: 1 }, "members").done, false);
-  assert.equal(item({ ...OK, membersActive: 2 }, "members").done, true);
+// 13·14행 — 경계. 셀프호스트 박스(조직이 설치하고 구성원을 등록하는 자리)는 종전 기준 그대로다.
+test("표13·14: 셀프호스트 — 사람 1명이면 미완, 2명이면 완료", () => {
+  assert.equal(item({ ...OK, managed: false, people: 1 }, "members").done, false);
+  assert.equal(item({ ...OK, managed: false, people: 2 }, "members").done, true);
+});
+
+// 13′·14′행 — #3872(2026-09-14). 매니지드는 혼자 쓰는 워크스페이스가 개인 워크스페이스로 성립한다. 종전 판정은 명부 전 행을 세어
+//  운영 계정·세션 호스트가 인원을 채웠다 — 사람만 세면서 기준을 그대로 두면 모든 개인 워크스페이스가 «구성원 미완» 이 된다.
+test("표13′·14′: 매니지드 — 사람 1명이면 완료(개인 워크스페이스), 0명이면 미완", () => {
+  assert.equal(item({ ...OK, managed: true, people: 1, peopleWithToken: 0 }, "members").done, true,
+    "혼자 쓰는 개인 워크스페이스에 «구성원이 아직 갖춰지지 않았습니다» 가 뜬다");
+  assert.equal(item({ ...OK, managed: true, people: 0 }, "members").done, false, "자기 계정으로 들어오는 사람이 0명인데 완료다");
+  assert.equal(item({ ...OK, managed: false, people: 0 }, "members").done, false);
 });
 
 // 15행
 test("표15: 토큰 보유 수를 문구에 드러내되 게이트로 쓰지 않는다", () => {
-  const f: OnboardingFacts = { ...OK, membersActive: 41, membersWithToken: 6 };
+  const f: OnboardingFacts = { ...OK, people: 41, peopleWithToken: 6 };
   const it = item(f, "members");
   assert.equal(it.done, true, "토큰이 적어도 인원 조건을 만족하면 완료다");
   assert.match(it.how, /41/);
@@ -133,7 +143,7 @@ test("표16: 회사 정체성을 안 채우면 미완", () => {
 // 17행
 const FRESH: OnboardingFacts = {
   identityEdited: false, knowledgeAuthored: 0, categories: 0, categoriesNoDefinition: 0,
-  membersActive: 1, membersWithToken: 1, dbSources: 0, embeddingsOn: false,
+  people: 1, peopleWithToken: 1, managed: false, dbSources: 0, embeddingsOn: false,
   pipelineStuck: [], pipelineApplicable: false,
 };
 test("표17: 갓 만든 워크스페이스는 0%이고 선택 항목이 그 숫자를 부풀리지 않는다", () => {
@@ -143,6 +153,14 @@ test("표17: 갓 만든 워크스페이스는 0%이고 선택 항목이 그 숫�
   assert.equal(s.complete, false);
   // 필수 = 정체성·분류축·지식·구성원 4개(파이프라인은 물을 이유가 없어 선택으로 빠진다).
   assert.equal(s.total, 4, "선택 항목이 필수 개수에 섞이면 안 된다");
+});
+
+// 17′행 — 매니지드에서 갓 만든 개인 워크스페이스. 구성원은 운영 계정·세션 호스트로 채운 완료가 아니라 사람 1명으로 완료다.
+test("표17′: 매니지드 갓 만든 개인 워크스페이스는 필수 4개 중 구성원 하나만 완료", () => {
+  const s = summarizeOnboarding(onboardingItems({ ...FRESH, managed: true }));
+  assert.equal(s.total, 4, "선택 항목이 필수 개수에 섞이면 안 된다");
+  assert.equal(s.done, 1);
+  assert.equal(item({ ...FRESH, managed: true }, "members").done, true);
 });
 
 // 18행 — 이번 변경이 새로 만든 엣지: 파이프라인이라는 입력을 도입하면서 '그 입력을 못 구한 경우'가 생겼다.

@@ -1648,12 +1648,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     team: {
       html: () => {
         const nm = (JOIN && JOIN.workspace_name) ? String(JOIN.workspace_name) : '';
-        const cnt = (JOIN && Number(JOIN.member_count)) || 0;
+        //  사람 수는 **나를 뺀**, 먼저 들어와 있는 사람이다(joining.others_count). 나까지 세면 혼자 쓰던 워크스페이스에 초대로 들어온
+        //   사람이 «구성원 2명» 을 본다(2026-09-14 신고). 운영 계정·세션 호스트는 서버 잣대가 이미 뺐다(countWorkspacePeople).
+        const others = (JOIN && Number(JOIN.others_count)) || 0;
         const kn = (JOIN && Number(JOIN.knowledge_n)) || 0;
         //  사람 수와 지식 수는 **따로** 말한다 — 한 문장에 붙이면 지식이 0일 때 «구성원 3명이 이미 쌓여 있어요» 가 된다(격리 리뷰 2026-09-13).
         //   0 인 숫자는 그 문장을 아예 쓰지 않는다. 합류자 차례표는 대여섯 장면이라 «두어 가지» 라고 약속하지 않는다.
         const help = [
-          cnt ? `구성원 ${cnt}명이 함께 쓰고 있어요.` : '',
+          others ? `먼저 들어와 있는 구성원이 ${others}명 있어요.` : '',
           kn ? `팀이 쌓아 둔 지식 ${kn.toLocaleString('ko-KR')}건을 여기 AI가 알고 답합니다.` : '여기 AI는 팀이 쌓아 둔 자료를 알고 답합니다.',
           '시작하기 전에 몇 가지만 여쭐게요.',
         ].filter(Boolean).join(' ');
