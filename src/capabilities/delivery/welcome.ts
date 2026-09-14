@@ -757,7 +757,7 @@ export async function welcomeSnapshot(userId: string) {
   const { memberLoggedInHarnessesAny } = await import("../../terminal/profiles.js");
   const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
 
-  const [member, liv, entries, total, cats, loggedIn, people, orgProfile, knowledgeN, wsStage] = await Promise.all([
+  const [member, liv, entries, total, cats, loggedIn, people, others, orgProfile, knowledgeN, wsStage] = await Promise.all([
     getMember(userId),
     getLivProfile(userId),
     //  ⚠ 뷰어는 **이 사람**이다(2026-09-12) — 종전엔 null(특권)이라 팀 워크스페이스에 갓 들어온 구성원에게도
@@ -770,6 +770,10 @@ export async function welcomeSnapshot(userId: string) {
     //   워크스페이스에 심는 운영 계정(admin/ops@lvly.io) 때문에 **혼자 쓰는 개인 워크스페이스도 «구성원 2명 팀»** 이 된다
     //   (2026-09-13 실측). 조회 실패는 0 으로 접혀 합류자 갈래가 안 열릴 뿐 화면은 종전대로 뜬다.
     countWorkspacePeople({ managed: managedMode() }).catch(() => 0),
+    //  #3872(2026-09-14) — 팀 소개가 말하는 수(joining.others_count)는 **나를 뺀** 사람이다. 보는 사람까지 세면 혼자 쓰던 워크스페이스에
+    //   초대로 들어온 사람이 «구성원 2명» 을 본다(신고: 개인 워크스페이스에 한 명이 합류하자 «구성원 2명»). member_count 는 나를 포함한
+    //   전체로 남는다(합류 판정 폴백). 뺄셈이 아니라 id 로 뺀다 — 보는 사람이 잣대에 안 걸리는 경우(신원이 아직 안 심김)에 남의 한 명을 지우지 않게.
+    countWorkspacePeople({ managed: managedMode(), except: userId }).catch(() => 0),
     getOrgProfile().catch(() => null as { display_name?: string | null; name?: string | null } | null),
     //  #3872 — 설치가 심은 사용 설명서(시드 런북 3건)는 «팀이 쌓은 지식» 이 아니다. 그걸 세어 «지식 3건 — 합류 전에
     //   만들어진 것이라 당신이 쓴 건 아닙니다» 라고 읽어 줬다(2026-09-13 실측, 개인 워크스페이스).
@@ -790,7 +794,7 @@ export async function welcomeSnapshot(userId: string) {
     done,   // 어느 표식이든 하나면 끝난 것(#2039 와 합류)
     //  합류자 화면의 재료(#3872·#1631). is_join=false 면 종전(내 공간을 여는 사람) 그대로다.
     //   existing_account — 초대 전부터 계정이 있었나(설치 장면을 보일지). 모르면 null 이고, 화면은 true 일 때만 보인다.
-    joining: { is_join: join.is_join, via: join.via, existing_account: join.existing_account, member_count: humans, workspace_name: wsName || null, knowledge_n: Number(knowledgeN) || 0 },
+    joining: { is_join: join.is_join, via: join.via, existing_account: join.existing_account, member_count: humans, others_count: Number(others) || 0, workspace_name: wsName || null, knowledge_n: Number(knowledgeN) || 0 },
     //  (#1631) 이 워크스페이스의 용도가 **이미 정해져 있나**(먼저 답한 사람의 welcome.stage). 합류자는 있으면 물려받고 없을 때만 묻는다.
     workspace_purpose: (wsStage as string | null) ?? null,
     done_at: liv.welcome?.done_at ?? null,
