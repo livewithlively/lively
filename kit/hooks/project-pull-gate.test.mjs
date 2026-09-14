@@ -36,6 +36,7 @@ const USER_CLAUDE_MD = "# 내 프로젝트\n\n내가 손으로 쓴 규칙 — �
 // ── 가짜 게이트웨이 ──
 async function startGateway() {
   const newest = Date.now();
+  let ctxReply = null;   // 기본 = 구 서버(404) — 기존 케이스들은 종전대로 마커 캐시 경로를 탄다
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, "http://x");
     if (u.pathname === `/api/ui/v6/projects/${PROJECT_ID}/shared/manifest`) {
@@ -53,10 +54,18 @@ async function startGateway() {
       res.end(body);
       return;
     }
+    // #3787 — 동기화 훅의 **새 권위**: 이 세션이 어느 프로젝트고, 이 노드에서 폴더는 어디고, 모드는 무엇인가.
+    //  ctxReply 가 null 이면 404 를 준다 = "구 서버" 시늉 → 훅이 마커 캐시로 폴백하는 경로를 그대로 검증한다.
+    if (u.pathname.startsWith("/api/ui/execution-sessions/") && u.pathname.endsWith("/project-context")) {
+      if (!ctxReply) { res.writeHead(404); res.end(); return; }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ found: true, changed: true, session_id: "s", revision: 0, applied_revision: 0, binding_epoch: 0, ...ctxReply }));
+      return;
+    }
     res.writeHead(404); res.end();
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  return { server, base: `http://127.0.0.1:${server.address().port}` };
+  return { server, base: `http://127.0.0.1:${server.address().port}`, setContext: (v) => { ctxReply = v; } };
 }
 
 // 훅을 진짜 프로세스로 실행(stdin 에 이벤트 JSON). 훅 불변식상 항상 exit 0.
@@ -66,7 +75,7 @@ async function runHook(hookPath, cwd, base, extraEnv = {}) {
     env: { ...process.env, ...offlineLivelyEnv(), LIVELY_TOKEN: "test-token", LIVELY_GATEWAY_URL: base, LIVELY_HOME: cwd, ...extraEnv },
     stdio: ["pipe", "pipe", "pipe"],
   });
-  child.stdin.end(JSON.stringify({ cwd }));
+  child.stdin.end(JSON.stringify({ cwd, hook_event_name: "SessionStart" }));
   const code = await new Promise((r) => child.on("exit", r));
   assert.equal(code, 0, `훅은 절대 세션을 막지 않는다(exit 0) — 실제 ${code}`);
 }
@@ -82,7 +91,7 @@ async function mkProjectDir(root, dirRel, marker) {
 const readOrNull = (p) => { try { return fs.readFileSync(p, "utf8"); } catch { return null; } };
 
 async function main() {
-  const { server, base } = await startGateway();
+  const { server, base, setContext } = await startGateway();
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-pullgate-"));
   try {
     for (const [id, hookPath] of Object.entries(HOOKS)) {
@@ -239,6 +248,67 @@ async function main() {
         ok(`[${id}] 알 수 없는 sync 값 → 폴더소유권 폴백(사용자 폴더면 거부)`);
       }
     }
+
+    // ══ #3787 — **서버 권위** 경로. 이게 이제 주 경로이고, 위 케이스들은 서버가 안 잡힐 때의 폴백이다. ══
+    //  재현하는 고장: 로컬 노드 세션의 프로젝트 폴더는 `<shared root>/project/<id>` 인데, 마커를 쓰는 유일한
+    //  노드측 writer 가 **레포 프로비저닝 때만** 돌면서 sync 를 안 썼다 → 마커 없음/모드 없음 → 셋 다 no-op.
+    //  이제 서버가 폴더·모드를 직접 답하므로 **마커가 아예 없어도** 받아야 한다.
+    for (const [id, hookPath] of Object.entries(HOOKS)) {
+      // ① 마커 없는 canonical 슬롯 — 서버가 folder 를 답하면 노드가 <shared root>/<folder> 로 조립해 받는다.
+      {
+        const home = path.join(root, `srv-${id}-slot`);
+        const ws = path.join(home, "workspace");
+        const dir = path.join(ws, "project", String(PROJECT_ID));
+        await fsp.mkdir(dir, { recursive: true });                       // 폴더만 있고 **마커는 없다**(실제 고장 상태)
+        setContext({ project_id: PROJECT_ID, folder: `project/${PROJECT_ID}`, sync: "both", folder_abs_path: null });
+        await runHook(hookPath, dir, base, { TERMINAL_ROOT_SHARED: ws, LIVELY_SESSION_ID: "box-t-1", LIVELY_NODE_ID: "testnode" });
+        assert.equal(readOrNull(path.join(dir, "AGENTS.md")), SERVER_FILES["AGENTS.md"],
+          `[${id}] 마커가 없어도 서버가 지목한 슬롯이면 받아야 한다 — #3787 의 본체`);
+        assert.equal(readOrNull(path.join(dir, "docs", "spec.md")), SERVER_FILES["docs/spec.md"], `[${id}] 하위 문서도 받아야 한다`);
+        const cached = JSON.parse(readOrNull(path.join(dir, ".lively", "project.json")));
+        assert.equal(cached.sync, "both", `[${id}] 서버 답을 마커 캐시에 남겨야 한다(다음 턴 오프라인 폴백)`);
+        assert.equal(cached.project_id, PROJECT_ID, `[${id}] 캐시에 project_id`);
+        ok(`[${id}] 🔴 마커 없는 노드 슬롯 + 서버 권위 → pull 성공(#3787 본체)`);
+      }
+
+      // ② 서버가 sync:"none" 이라 답하면 **사용자 폴더든 슬롯이든** 안 쓴다 — 권위가 서버로 갔음을 증명.
+      {
+        const home = path.join(root, `srv-${id}-none`);
+        const ws = path.join(home, "workspace");
+        const dir = path.join(ws, "project", String(PROJECT_ID));
+        await fsp.mkdir(dir, { recursive: true });
+        setContext({ project_id: PROJECT_ID, folder: `project/${PROJECT_ID}`, sync: "none", folder_abs_path: null });
+        await runHook(hookPath, dir, base, { TERMINAL_ROOT_SHARED: ws, LIVELY_SESSION_ID: "box-t-2", LIVELY_NODE_ID: "testnode" });
+        assert.equal(readOrNull(path.join(dir, "AGENTS.md")), null, `[${id}] 서버가 none 이라 했는데 받았다`);
+        ok(`[${id}] 서버 sync:"none" → 아무것도 안 씀`);
+      }
+
+      // ③ 명시 바인딩(`lively init`) — 서버가 folder_abs_path 를 주면 슬롯이 아니라 **그 폴더**로 받는다.
+      {
+        const home = path.join(root, `srv-${id}-bind`);
+        const ws = path.join(home, "workspace");
+        const mine = path.join(home, "code", "myapp");
+        await fsp.mkdir(mine, { recursive: true });
+        await fsp.writeFile(path.join(mine, "CLAUDE.md"), USER_CLAUDE_MD);
+        setContext({ project_id: PROJECT_ID, folder: `project/${PROJECT_ID}`, sync: "pull", folder_abs_path: mine });
+        await runHook(hookPath, mine, base, { TERMINAL_ROOT_SHARED: ws, LIVELY_SESSION_ID: "box-t-3", LIVELY_NODE_ID: "testnode" });
+        assert.equal(readOrNull(path.join(mine, "AGENTS.md")), SERVER_FILES["AGENTS.md"], `[${id}] 명시 바인딩 폴더로 받아야 한다`);
+        assert.equal(readOrNull(path.join(ws, "project", String(PROJECT_ID), "AGENTS.md")), null,
+          `[${id}] 바인딩이 있는데 슬롯에도 쏟았다 — 두 자리에 쓰면 어느 쪽이 정본인지 사라진다`);
+        ok(`[${id}] 명시 바인딩(folder_abs_path) → 슬롯 대신 그 폴더로 pull`);
+      }
+
+      // ④ 소속 없음 — 서버가 project_id:null 이라 답하면 **마커가 있어도** 안 쓴다(서버의 확실한 음답이 이긴다).
+      {
+        const dir = await mkProjectDir(root, `srv-${id}-detached/home/lively/projects/${PROJECT_ID}`, { project_id: PROJECT_ID, sync: "pull" });
+        setContext({ project_id: null });
+        await runHook(hookPath, dir, base, { LIVELY_SESSION_ID: "box-t-4", LIVELY_NODE_ID: "testnode" });
+        assert.equal(readOrNull(path.join(dir, "AGENTS.md")), null, `[${id}] 서버가 "소속 없음" 이라 했는데 받았다`);
+        ok(`[${id}] 서버 "소속 없음" → 마커가 있어도 안 받음(확실한 음답)`);
+      }
+      setContext(null);   // 다음 훅 루프는 다시 구 서버(폴백) 시늉
+    }
+
     console.log(`\n${pass} passed`);
   } finally {
     server.close();

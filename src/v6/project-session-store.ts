@@ -198,6 +198,41 @@ export async function upsertProjectFolderBinding(b: {
   } finally { client.release(); }
 }
 
+// ── 노드별 동기화 해석(#3787) — "이 세션이 도는 노드에서 이 프로젝트 폴더는 어디고 모드는 무엇인가". ──
+//  ★ 이게 동기화 훅의 **유일한 권위**다. 종전엔 로컬 마커(.lively/project.json)가 권위였고 마커가 없으면
+//   경로 모양 추측(livelyOwnedDir: 조부모가 'lively' 인가)으로 폴백했는데, 노드의 자리는
+//   `<shared root>/project/<id>` 라 그 추측이 **항상 거짓**이었다 → 로컬 세션의 공유폴더 동기화가 통째로 죽어
+//   있었다(#3787: 붙여넣은 첨부가 세션에 영영 안 감 → AI 가 근처 다른 파일을 읽고 무음 오답).
+//  반환 abs_path 의 뜻:
+//   · null = **그 노드의 canonical 슬롯**을 쓰라 — 노드가 자기 roots() 로 `<shared root>/<folder>` 를 조립한다.
+//     서버는 노드의 홈을 알 필요가 없다(알 수도 없다 — 멤버 노트북은 노드 레지스트리에 없는 게 정상).
+//   · 문자열 = 사람이 `lively init` 으로 명시 바인딩한 절대경로(사용자 자기 폴더). 그 값을 그대로 쓴다.
+//  왜 미등록 기본이 both 인가: 노드 canonical 슬롯은 **라이블리가 만든 폴더**라 덮어써도 잃을 사용자 파일이
+//   없다(서버가 정본). 사용자 자기 폴더는 여기 안 걸린다 — 그건 명시 바인딩이 있어야만 나오고, 그 sync 는
+//   사람이 init 때 정한 값이다. 즉 "모르면 안 쓴다" 불변식은 경로 축에서 유지된다(모르는 폴더는 답하지 않는다).
+export interface NodeFolderResolution {
+  sync: FolderSyncMode;
+  abs_path: string | null;
+  source: "binding" | "slot";
+}
+export async function resolveNodeFolder(
+  projectId: number, memberId: string, nodeId: string,
+): Promise<NodeFolderResolution> {
+  const slot: NodeFolderResolution = { sync: "both", abs_path: null, source: "slot" };
+  if (!projectId || !nodeId) return slot;
+  // 멤버 전용 바인딩 > 환경 공유 바인딩, canonical > ephemeral. 같은 등급이면 최근에 살아있다고 보고된 것.
+  const rows: ProjectFolderBinding[] = await q(itemsPool,
+    `SELECT project_id, member_id, node_id, abs_path, sync, origin_key, binding_kind, created_at, seen_at
+       FROM project_folder_binding
+      WHERE project_id=$1 AND node_id=$2 AND member_id IN ($3, $4)
+      ORDER BY (member_id <> $4) DESC, (binding_kind='canonical') DESC, seen_at DESC
+      LIMIT 1`,
+    [projectId, nodeId, memberId || SHARED_BINDING_MEMBER, SHARED_BINDING_MEMBER]);
+  const hit = rows[0];
+  if (!hit) return slot;
+  return { sync: hit.sync, abs_path: hit.abs_path, source: "binding" };
+}
+
 export async function listProjectFolderBindings(projectId: number): Promise<ProjectFolderBinding[]> {
   return await q(itemsPool,
     `SELECT project_id, member_id, node_id, abs_path, sync, origin_key, binding_kind, created_at, seen_at

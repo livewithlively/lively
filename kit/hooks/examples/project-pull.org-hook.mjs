@@ -19,33 +19,135 @@ const SCOPE_HDRS = {
 };
 
 
-// ── 싱크 모드 게이트(#905 P1-②) — 이 폴더에 서버 파일을 쓸 자격이 있는가. ──
-//  배경(왜 이게 없으면 사고인가): 이 훅은 cwd 에서 **위로 40단계** 마커를 찾고, 찾은 폴더에 매니페스트 파일을
-//   '크기가 다르면' 덮어쓴다 — 그리고 stdout 을 안 내므로 **완전 무음**이다. 지금껏 안 터진 유일한 이유는
-//   마커가 **라이블리가 만든 폴더에만** 있었기 때문이다(workspace/project/<id> · ~/lively/projects/<id> —
-//   덮어써도 원래 서버가 정본이라 무해). 그런데 `lively init`(C2a)의 존재 이유가 **사용자 자기 폴더에 마커를
-//   심는 것**이라 그 불변식이 깨진다 → 사용자의 CLAUDE.md/AGENTS.md 가 조용히 날아간다.
-//  그래서 마커가 스스로 "나는 싱크 대상"이라고 말할 때만 쓴다: sync = none(안 씀) | pull(받기) | both(양방향, C3).
+// ── 프로젝트 폴더·동기화 모드 해석(#3787) — **서버가 권위, 마커는 캐시**. ──
+//  종전엔 로컬 마커(.lively/project.json)가 권위였고, 마커에 sync 가 없으면 경로 모양 추측
+//  (livelyOwnedDir: 조부모가 'lively' 인가)으로 폴백했다. 그런데 노드(멤버 노트북)의 프로젝트 폴더는
+//  `<shared root>/project/<id>` 라 그 추측이 **항상 거짓**이었고, 마커를 쓰는 유일한 노드측 writer
+//  (writeProvisionMarker)는 **레포 프로비저닝 때만** 돌면서 sync 를 안 썼다. 그래서 pull·pull-turn·push
+//  셋이 전부 같은 관문에서 죽어 있었다 — 로컬 세션은 공유폴더를 영영 못 받고, 만든 것도 못 올렸다.
+//  (#3787 실측: 웹 컴포저에 붙여넣은 스크린샷이 세션에 안 가서 AI 가 근처 다른 파일을 읽고 세 번 연속 오답)
+//
+//  왜 서버로 옮기는 게 안전한가: 「권위를 서버로 옮기면 오프라인에서 fail-open」 이 마커 설계의 근거였는데,
+//  이 훅들은 **어차피 매니페스트 fetch 에 실패하면 즉시 return** 한다. 덮어쓰기·업로드는 전부 네트워크를
+//  전제하므로 네트워크가 없으면 게이트가 뭐라 답하든 아무 일도 안 일어난다 — 새 실패모드가 없다.
+//
+//  해석 순서: ① 서버(execution_session → project_folder_binding) ② 마커 캐시(서버가 저술한 값만) ③ 없으면 no-op.
+//  ⚠ **cwd 에서 위로 마커를 찾아 올라가지 않는다.** 그 탐색이 `lively init` 이후 사용자 폴더를 삼킬 수 있던
+//   원래 위험원이었다. 이제 대상은 서버가 지목한 한 곳뿐이다.
 const SYNC_MODES = ["none", "pull", "both"];
-// sync 없는 **구 마커** 전용 폴백 — work.mjs 가 만드는 `~/lively/projects/<id>` 인가.
-//  이 한 꼴만 인정하는 이유: 라이블리 폴더 중 **경로 모양이 고정된 건 이것뿐**이다. 박스 폴더
-//  (<shared>/project/<folder>)는 folder 값이 임의라(실측: 'project/관리탭 수정' 같은 이름 기반이 실재) 구조로
-//  못 알아본다. 그렇다고 "부모가 project/projects 면 소유"로 넓히면 흔한 사용자 경로 `~/projects/<무언가>` 가
-//  걸려 **무음 파괴**가 난다 — 넓히는 쪽의 실패는 비가역이다. 박스 폴더는 대신 서버가 부팅 때 마커에 sync 를
-//  직접 stamp 한다(backfillMarkerSync, project-fs.ts) → 폴백이 필요 없다.
-//  grandparent 가 'lively' 여야 함에 주의: `~/projects/905`(사용자 코드)와 `~/lively/projects/905`(work.mjs)를 가른다.
-function livelyOwnedDir(projDir, projectId) {
+const SID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** 이 노드의 공유 워크스페이스 루트 — 노드 에이전트 roots() 와 **같은 계산**이어야 한다(다르면 엉뚱한 자리에 쏟는다). */
+function sharedRoot() {
+  return process.env.TERMINAL_ROOT_SHARED || path.join(os.homedir(), "workspace");
+}
+
+/** 실행 세션 id — project-agents-inject 와 **같은 규약**(그 훅이 이미 프로덕션에서 이 축으로 돌고 있다). */
+function executionSessionId(input, env = process.env) {
+  const direct = String(env.LIVELY_SESSION_ID || "").trim();
+  if (direct && SID_RE.test(direct)) return direct;
+  const native = String((input && (input.session_id || input.sessionId)) || "").trim();
+  const harness = String(env.LIVELY_HARNESS || "claude").trim().toLowerCase();
+  if (native && harness === "codex" && SID_RE.test(`codex-${native}`)) return `codex-${native}`;
+  if (native && harness === "claude" && SID_RE.test(`claude-${native}`)) return `claude-${native}`;
+  const codex = String(env.CODEX_THREAD_ID || env.CODEX_SESSION_ID || "").trim();
+  if (codex && SID_RE.test(`codex-${codex}`)) return `codex-${codex}`;
+  const claude = String(env.CLAUDE_SESSION_ID || "").trim();
+  if (claude && SID_RE.test(`claude-${claude}`)) return `claude-${claude}`;
+  return null;
+}
+
+/** 구 `work.mjs` 폴더(`~/lively/projects/<id>`) 인가 — **레거시 마커 전용 폴백**(#905 P1-② 의 잔존 경로).
+ *  왜 남기나: 그 시절 work.mjs 는 마커에 sync 를 안 적었다. 이걸 빼면 아직 그 설치를 쓰는 멤버의 동기화가
+ *  조용히 끊긴다(project-pull-gate.test.mjs ②가 그 무회귀를 강제한다). 이 한 꼴만 인정한다 — 넓히면
+ *  흔한 사용자 경로 `~/projects/<무언가>` 가 걸려 무음 파괴가 난다. work.mjs 가 canonical 슬롯으로 수렴하면 삭제한다.
+ *  ⚠ 이건 **위치** 폴백이지 권한 폴백이 아니다: 모드는 여전히 서버가 답하거나 마커에 명시돼 있어야 한다. */
+function legacyWorkDir(projDir, projectId) {
   const parent = path.dirname(projDir);
   return path.basename(projDir) === String(projectId)
     && path.basename(parent) === "projects"
     && path.basename(path.dirname(parent)) === "lively";
 }
-// 마커의 sync 가 우선. 없으면(구 마커) 위 폴백으로 **fail-safe** 판정 — 모르면 안 쓴다.
-//  (work.mjs·서버 마커 writer 가 앞으로 sync 를 명시하므로 이 폴백은 구 마커 전용 과도기 경로다.)
-function syncMode(meta, projDir, projectId) {
-  const m = String((meta && meta.sync) || "").trim().toLowerCase();
-  if (SYNC_MODES.includes(m)) return m;
-  return livelyOwnedDir(projDir, projectId) ? "pull" : "none";
+
+/** 서버가 canonical 슬롯을 지목했을 때, cwd 가 **이미 이 프로젝트의 다른 라이블리 폴더 안**이면 그쪽이 이긴다.
+ *  (구 work.mjs 설치 — 사람이 실제로 그 폴더에서 일하고 있는데 슬롯에 쏟으면 아무 데도 안 맞는다.) */
+function legacyDirForCwd(cwd, projectId) {
+  let dir = path.resolve(cwd);
+  for (let i = 0; i < 40; i++) {
+    if (legacyWorkDir(dir, projectId)) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+/** 마커 — 이제 **서버 응답의 사본**이다(판정 근거가 아니라 오프라인 폴백·워터마크 보관소). */
+function readMarker(projDir) {
+  try { return JSON.parse(fs.readFileSync(path.join(projDir, ".lively", "project.json"), "utf8")); } catch { return null; }
+}
+function writeMarker(projDir, patch) {
+  try {
+    const file = path.join(projDir, ".lively", "project.json");
+    const prev = readMarker(projDir) || {};
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ ...prev, ...patch }, null, 2) + "\n");
+  } catch { /* 캐시 실패는 무해 — 다음 턴에 서버가 다시 답한다 */ }
+}
+
+/** 서버에 "이 노드에서 이 프로젝트 폴더는 어디고 모드는 뭔가" 를 묻는다. 실패 → null(호출자가 캐시로 폴백). */
+async function askServer(jfetch, execId, nodeId) {
+  if (!execId) return null;
+  try {
+    // content=0 — 동기화 훅은 AGENTS.md 본문이 필요 없다(최대 128KB). 폴더·모드만 받는다.
+    const r = await jfetch(`/api/ui/execution-sessions/${encodeURIComponent(execId)}/project-context`
+      + `?content=0&knownRevision=-1&node=${encodeURIComponent(nodeId || "")}`);
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (!j || j.found !== true) return null;
+    const pid = Number(j.project_id || 0);
+    // 소속 없음 = 동기화 대상 아님. **캐시 폴백도 하지 않는다** — 서버가 "뗐다"고 말한 것이라 확실한 음답이다.
+    if (!Number.isInteger(pid) || pid <= 0) return { projectId: null };
+    if (j.sync === undefined) return null;          // 구 서버(node 파라미터 미지원) → 캐시로 폴백
+    const folder = String(j.folder || "").trim();
+    const mode = SYNC_MODES.includes(String(j.sync || "")) ? String(j.sync) : "none";
+    // folder_abs_path = 사람이 `lively init` 으로 명시 바인딩한 절대경로. 없으면 이 노드의 canonical 슬롯.
+    const abs = j.folder_abs_path ? String(j.folder_abs_path) : (folder ? path.join(sharedRoot(), folder) : null);
+    if (!abs) return { projectId: null };
+    // slot = 라이블리가 소유하는 자리(없으면 만들어도 된다). false = 사람이 init 한 자기 폴더 — 없으면 만들지 않는다
+    //  (지운 폴더를 빈 껍데기로 되살리면 "여기 프로젝트가 산다"는 거짓 신호가 남는다).
+    return { projectId: pid, projDir: abs, mode, slot: !j.folder_abs_path };
+  } catch { return null; }
+}
+
+/** 서버가 안 잡힐 때의 폴백 — cwd 위로 **한 번만** 훑어 캐시 마커를 찾는다. 캐시의 sync 는 서버가 저술한 값이다.
+ *  ⚠ 경로 모양 추측은 하지 않는다. 캐시에 sync 가 없으면(구 마커·수동 생성) 판정 불가 → none. */
+function fromCache(cwd) {
+  let dir = path.resolve(cwd);
+  for (let i = 0; i < 40; i++) {
+    const meta = readMarker(dir);
+    if (meta) {
+      if (meta.kind === "session") {                                   // 세션 폴더 마커 → 프로젝트 폴더로 건너뛴다(#1856)
+        const pd = typeof meta.project_dir === "string" ? meta.project_dir : null;
+        if (!pd) return null;
+        const pm = readMarker(pd);
+        if (!pm || pm.kind === "session") return null;
+        const m = String(pm.sync || "").trim().toLowerCase();
+        if (!SYNC_MODES.includes(m) || m === "none") return null;
+        return { projectId: Number(pm.project_id) || null, projDir: pd, mode: m, slot: false };
+      }
+      const pid = Number(meta.project_id) || null;
+      let m = String(meta.sync || "").trim().toLowerCase();
+      // 구 work.mjs 마커(sync 미기재) 무회귀 — 그 한 꼴에서만 pull 로 본다. 그 밖엔 "모르면 안 쓴다".
+      if (!SYNC_MODES.includes(m)) m = (pid && legacyWorkDir(dir, pid)) ? "pull" : "none";
+      if (m === "none") return null;
+      return { projectId: pid, projDir: dir, mode: m, slot: false };
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
 }
 
 // ── 싱크 원장(#905 C3) — "서버에서 받아 지금 보유 중인 파일"의 기준선. sync="both" 전용. ──
@@ -87,50 +189,16 @@ function untouched(st, base) {
   //   잘못 건너뛰면 **파일이 영영 안 오고**(조용한 데이터 부재), 잘못 동기화하면 낭비일 뿐이다.
   //   값을 넣는 쪽은 세션을 만드는 자리다(control/src/sessionbroker.ts storageLocality).
   if (String(process.env.LVLY_STORAGE_LOCALITY || "").trim().toLowerCase() === "colocated") return;
-  // 1) cwd — SessionStart 이벤트 stdin JSON 의 cwd 우선, 없으면 process.cwd()
+  // 1) 훅 입력(stdin JSON) — cwd 는 폴백 해석에만 쓴다(대상은 서버가 지목한다).
   const stdinData = await new Promise((resolve) => {
     let d = "", done = false; const fin = () => { if (!done) { done = true; resolve(d); } };
     try { process.stdin.setEncoding("utf8"); process.stdin.on("data", (c) => { d += c; if (d.length > 262144) fin(); }); process.stdin.on("end", fin); process.stdin.on("error", fin); setTimeout(fin, 500); }
     catch { fin(); }
   });
-  let cwd = process.cwd();
-  try { const o = JSON.parse(stdinData || "{}"); if (o && typeof o.cwd === "string" && o.cwd) cwd = o.cwd; } catch { /* */ }
+  let input = {}; try { input = JSON.parse(stdinData || "{}"); } catch { /* */ }
+  const cwd = (input && typeof input.cwd === "string" && input.cwd) ? input.cwd : process.cwd();
 
-  // 2) cwd 에서 위로 .lively/project.json 탐색(git 의 .git 발견과 동형). 없으면 no-op.
-  let dir = path.resolve(cwd), marker = null, projDir = null;
-  for (let i = 0; i < 40; i++) {
-    const m = path.join(dir, ".lively", "project.json");
-    if (fs.existsSync(m)) { marker = m; projDir = dir; break; }
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  if (!marker) return; // 프로젝트 세션 아님
-
-  let meta; try { meta = JSON.parse(fs.readFileSync(marker, "utf8")); } catch { return; }
-  // ── 세션 폴더 마커면 **프로젝트 폴더로 건너뛴다**(#1856). ──
-  //  cwd 가 프로젝트 폴더에서 세션 폴더로 바뀌면서(#1719) 위 탐색이 세션 폴더 마커에서 멈춘다 — 그 마커는
-  //  sync:"none"(세션 폴더에 서버 파일을 쏟지 않으려는 fail-safe)이라 아래 게이트에서 즉시 return 됐고,
-  //  그래서 **문서 싱크가 통째로 죽어 있었다**(원격 노드는 프로젝트 문서를 영영 못 받음). 세션 마커는
-  //  "프로젝트 폴더는 저기"(project_dir)를 알고 있으니, 그 폴더와 그 폴더의 마커로 갈아타 원래 대상에 적용한다.
-  if (meta && meta.kind === "session") {
-    const pd = meta.project_dir;
-    if (!pd || typeof pd !== "string") return;                  // 이 컴퓨터에 프로젝트 폴더가 없다 → 할 일 없음
-    const pm = path.join(pd, ".lively", "project.json");
-    if (!fs.existsSync(pm)) return;                             // 폴더만 있고 마커가 없다 → 싱크 대상 아님(fail-safe)
-    projDir = pd; marker = pm;
-    try { meta = JSON.parse(fs.readFileSync(marker, "utf8")); } catch { return; }
-    if (!meta || meta.kind === "session") return;               // 세션 마커가 세션 마커를 가리킨다 → 잘못된 상태
-  }
-  const projectId = meta && meta.project_id;
-  const lastPull = Number(meta && meta.last_pull) || 0;
-  if (!projectId) return;
-
-  // 2-b) 🔴 쓰기 자격 게이트 — 이 폴더가 싱크 대상이 아니면 **여기서 끝**(네트워크도 안 탄다).
-  const mode = syncMode(meta, projDir, projectId);
-  if (mode === "none") return;
-
-  // 3) 게이트웨이 base + 토큰 (session-preload/run-custom 와 동일 출처)
+  // 2) 게이트웨이 base + 토큰 (session-preload/run-custom 와 동일 출처) — 해석보다 먼저다(서버에 물어야 하므로).
   const HOME = process.env.LIVELY_HOME || os.homedir();
   const readLocal = (rel) => { try { return fs.readFileSync(path.join(HOME, ".lively", rel), "utf8").trim() || null; } catch { return null; } };
   const token = (process.env.LIVELY_TOKEN || "").trim() || readLocal("token");
@@ -143,6 +211,20 @@ function untouched(st, base) {
     try { return await fetch(base + p, { signal: ctl.signal, headers: { authorization: "Bearer " + token, ...SCOPE_HDRS } }); }
     finally { clearTimeout(t); }
   };
+
+  // 3) 🔴 대상 해석 — 서버가 권위, 실패 시 마커 캐시. 둘 다 못 답하면 여기서 끝(아무 폴더도 안 건드린다).
+  const target = (await askServer(jfetch, executionSessionId(input), process.env.LIVELY_NODE_ID)) ?? fromCache(cwd);
+  if (!target || !target.projectId || !target.projDir) return;
+  // 서버가 canonical 슬롯을 지목했는데 cwd 가 이미 이 프로젝트의 구 work.mjs 폴더 안이면 그쪽이 이긴다.
+  if (target.slot) { const legacy = legacyDirForCwd(cwd, target.projectId); if (legacy) { target.projDir = legacy; target.slot = false; } }
+  const { projectId, projDir } = target;
+  const mode = target.mode;
+  if (!SYNC_MODES.includes(mode) || mode === "none") return;
+  // 슬롯은 없으면 만든다(라이블리 소유). 명시 바인딩인데 폴더가 없으면 사람이 지운 것 → 건드리지 않는다.
+  if (!fs.existsSync(projDir)) { if (!target.slot) return; try { fs.mkdirSync(projDir, { recursive: true }); } catch { return; } }
+  // 캐시 갱신 — 다음 턴에 서버가 안 잡혀도 같은 판정이 나오게(서버가 저술한 값만 적는다).
+  writeMarker(projDir, { project_id: projectId, sync: mode });
+  const lastPull = Number((readMarker(projDir) || {}).last_pull) || 0;
 
   // 4) 매니페스트 → newest <= last_pull 이면 skip(박스가 안 바뀜)
   let manifest;
@@ -226,5 +308,5 @@ function untouched(st, base) {
 
   // 7) 마커 last_pull 갱신 — **전량 수렴했을 때만**(UserPromptSubmit 판과 동일 규칙). 실패분이 있는데 올리면
   //    그 파일은 서버가 또 바뀔 때까지 영구 누락되고, 더 나쁘게는 push 의 충돌검사 기준선이 거짓이 된다.
-  if (completed) { try { meta.last_pull = manifest.newest || lastPull; fs.writeFileSync(marker, JSON.stringify(meta, null, 2) + "\n"); } catch { /* */ } }
+  if (completed) writeMarker(projDir, { project_id: projectId, sync: mode, last_pull: manifest.newest || lastPull });
 })().then(() => process.exit(0)).catch(() => process.exit(0));

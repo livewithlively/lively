@@ -3824,7 +3824,7 @@
   "rest": [
    "GET /api/ui/execution-sessions/:id/project-context"
   ],
-  "input_hash": "f156bdfeb971fb39"
+  "input_hash": "bda6988521f63b88"
  },
  {
   "name": "session_project_context_applied",
