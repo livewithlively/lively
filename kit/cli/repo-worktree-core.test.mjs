@@ -374,6 +374,18 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   check("H2: 안 보이는 등록의 브랜치를 뺏지 않는다(다른 이름)", rJ2.branch !== rJ1.branch && /^wt\/base/.test(rJ2.branch), `${rJ1.branch} vs ${rJ2.branch}`);
   check("H2: 그 등록은 살아 있다", branchAt(join(outA, "base")) === rJ1.branch, branchAt(join(outA, "base")));
 
+  // ── L: locked 등록(사람이 `worktree lock` 으로 지킨 것 — 이동식 디스크 등)은 경로가 없어도 지우지 않고, 그 이름도 뺏지 않는다 ──
+  //  git 도 locked 는 remove 에 -f 를 두 번 요구한다. 지우지 않으면서 이름만 «비었다» 고 세면 add -b 가 git 의 브랜치 충돌로 죽는다.
+  const lockedPath = join(SB, "scratch", "locked-one");
+  const rL = await repoWorktree(ctx(proj), { repo: "base", path: lockedPath });
+  sh("git", ["-C", BASE, "worktree", "lock", lockedPath]);
+  rmSync(lockedPath, { recursive: true, force: true });                              // 경로 없음·부모 있음 = locked 만 아니면 스테일
+  let msgL = ""; try { await repoWorktree(ctx(proj), { repo: "base", path: join(SB, "scratch", "locked-two"), branch: rL.branch }); } catch (e) { msgL = String(e.message); }
+  const listL = lc(sh("git", ["-C", BASE, "worktree", "list", "--porcelain"], { allowFail: true }).stdout);
+  check("L: locked 등록은 스테일이어도 안 지운다 → 그 브랜치를 달라면 실패(등록 보존)", msgL.length > 0 && listL.includes(lc(normPath(lockedPath))), msgL ? "등록이 사라짐" : "성공해버림(locked 등록을 지웠다)");
+  const rL3 = await repoWorktree(ctx(proj), { repo: "base", path: join(SB, "scratch", "locked-three") });
+  check("L: 기본 이름 고를 때 locked 등록의 브랜치는 점유로 센다(다른 이름)", rL3.branch !== rL.branch && /^wt\/base/.test(rL3.branch), `${rL.branch} vs ${rL3.branch}`);
+
   rmSync(SB, { recursive: true, force: true });
   console.error(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

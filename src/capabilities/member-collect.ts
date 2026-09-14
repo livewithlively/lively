@@ -163,7 +163,7 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
   const get: Capability = {
     name: `org_${spec.system}_collect`, title: `${spec.appLabel} 자료 가져오기 상태`,
     description: `"자료 가져오기" 상태 — ${spec.appLabel} 수집기(켠 사람의 연결로 돈다)의 켜짐 여부·누구의 연결인지·내 자격 유무·범위. 토글은 org_${spec.system}_collect_set.`,
-    scope: "admin", input: {},
+    scope: "memory", input: {},
     expose: { mcp: true, rest: [{ method: "GET", paths: [`/api/ui/org/${spec.system}/collect`], parse: () => ({}) }] },
     handler: async (_input, user) => {
       if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
@@ -179,7 +179,7 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
       `(token_source=member:<나>, 토큰 복사 0). ${spec.outcome}${scopeDesc} 자격이 없으면 needs_connect, ` +
       (spec.requireScope ? "범위가 비어 있으면 needs_scope 로 답하고 켜지 않는다. " : "") +
       "false 면 끈다(삭제 아님 — 커서·자료 보존).",
-    scope: "admin",
+    scope: "memory",
     input: {
       enabled: z.boolean().describe("true=켜기(내 자격으로) · false=끄기"),
       scope: z.record(z.union([z.string(), z.array(z.string())])).optional().describe(

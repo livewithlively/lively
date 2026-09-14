@@ -6,6 +6,8 @@
 //  · 이 턴에서는 아무것도 **만들지 않는다**(카테고리·수집기·증류기·지식). 만드는 일은 첫 수집 배치가 돈 뒤 두 번째 트리거의 몫이다 —
 //    자료가 아직 안 모였는데 지금 만들면 온보딩 답만 보고 틀에 박힌 것을 찍어낸다(페르소나 채점에서 걸러야 할 바로 그 실패).
 //  · 리브는 서버 데이터를 다시 조회하지 않는다 — 여기 실린 숫자가 곧 이 순간의 실측이다(같은 것을 두 번 읽어 어긋날 일이 없다).
+//  · **이 턴은 워크스페이스를 연 사람만 받는다.** 초대로 들어온 사람에게는 리브를 띄우지 않는다(원준 결정 2026-09-13 —
+//    처음 설정 반영이 킥오프 자체를 건너뛴다, delivery/welcome.ts). 그래서 여기엔 합류자 갈래가 없다.
 //
 //  ── 형식 원칙 ──
 //  · 순수 함수: 입력 → 문자열. 조회·부수효과 없음(테스트가 표로 잡는다, first-turn.test.ts).
@@ -14,6 +16,7 @@
 
 export interface FirstTurnInput {
   displayName: string | null;                       // 온보딩에서 답한 이름(건너뛰었으면 null)
+  purpose: string | null;                           // 이 워크스페이스의 용도(1단 답) — liv_profile.welcome.stage
   work: { asis?: string; tobe?: string } | null;    // liv_profile.work
   drawers: string[];                                // 온보딩에서 만든 서랍(자료 갈래) 이름
   firstOrder: string | null;                        // 첫 지시로 고른 문장
@@ -23,6 +26,9 @@ export interface FirstTurnInput {
   collectors: Array<{ label: string; preset_key: string; enabled: boolean; sync_interval_sec: number }>;
   aiHarnesses: string[];                            // 로그인 확인된 하네스
   harness: string;                                  // 이 세션이 도는 하네스
+  /** 이 지시가 어디서 읽히나(#1631, 원준 2026-09-14). session = 사람이 여는 tmux 세션(종전) · chat = 리브 탭의 대화 턴(숨김 턴 —
+   *  사람은 지시문을 못 보고 리브의 답만 본다). 기본 session — 옛 호출부·시험이 그대로 맞는다. */
+  surface?: "session" | "chat";
 }
 
 export const FIRST_TURN_NAME_CAP = 40;
@@ -32,6 +38,8 @@ const n = (x: number): string => x.toLocaleString("ko-KR");
 function factsBlock(i: FirstTurnInput): string {
   const lines: string[] = [];
   lines.push(`- 이름: ${i.displayName ? i.displayName : "(답하지 않음 — 이름을 지어 부르지 마라)"}`);
+  //  자리가 먼저다 — 같은 사람이라도 워크스페이스마다 담는 것이 다르고, 리브가 맞춰야 할 것은 **자리** 쪽이다.
+  lines.push(`- 이 워크스페이스의 용도: ${i.purpose ? i.purpose : "(답하지 않음)"}`);
   lines.push(`- 하는 일: ${i.work?.asis ? i.work.asis : "(답하지 않음)"}`);
   if (i.work?.tobe) lines.push(`- ${i.work.tobe}`);
   for (const d of i.decisions) lines.push(`- ${d.what}${d.why ? ` — ${d.why}` : ""}`);
@@ -56,25 +64,37 @@ function factsBlock(i: FirstTurnInput): string {
   }
 
   lines.push("");
-  if (i.collectors.length) {
-    const on = i.collectors.filter((c) => c.enabled);
-    lines.push(`- 연결한 자료 가져오기 ${i.collectors.length}개(켜짐 ${on.length}): ${i.collectors.map((c) => `${c.label}(${c.preset_key}, ${Math.round(c.sync_interval_sec / 60)}분 주기${c.enabled ? "" : ", 꺼짐"})`).join(" · ")}`);
+  //  #3872 — «연결» 은 **켜진 것**만이다. 매니지드 프로비저닝은 모든 워크스페이스에 Notion·Slack 수집기 **빈 칸**(꺼짐·자격 없음)을
+  //   심어 둔다(notion-connect.ts 「CP 가 심어 둔 껍데기」). 종전엔 그 칸 수를 «연결한 자료 가져오기 2개(켜짐 0)» 로 실어 보내고
+  //   «첫 수집이 지금 돌고 있거나 곧 돈다» 고 못박아, 아무것도 잇지 않은 사람에게 리브가 «Notion·Slack 2개가 연결됐고 첫 수집이
+  //   곧 돕니다» 라고 말했다(2026-09-13 실측, 개인 워크스페이스). 꺼진 칸은 이름만 남기고 «연결이 아니다» 라고 못박는다.
+  const on = i.collectors.filter((c) => c.enabled);
+  const off = i.collectors.filter((c) => !c.enabled);
+  const offNote = off.length ? `꺼져 있는 칸 ${off.length}개(${off.map((c) => c.label).join(" · ")})` : "";
+  if (on.length) {
+    lines.push(`- 연결한 자료 가져오기 ${on.length}개: ${on.map((c) => `${c.label}(${c.preset_key}, ${Math.round(c.sync_interval_sec / 60)}분 주기)`).join(" · ")}`);
+    if (offNote) lines.push(`  · ${offNote}는 연결이 아니다 — 수집하지 않는다.`);
     lines.push("- 수집 상태: 첫 수집이 **지금 돌고 있거나 곧 돈다**. 아직 들어온 것이 적어 보여도 정상이다.");
   } else {
-    lines.push("- 연결한 자료 가져오기: 없음(외부 앱을 잇지 않음)");
+    lines.push(`- 연결한 자료 가져오기: 없음(외부 앱을 잇지 않음)${offNote ? ` — ${offNote}가 보여도 그건 연결이 아니다. «연결됐다»·«수집이 돈다»·«곧 돈다» 고 말하지 마라.` : ""}`);
   }
-  lines.push(`- AI: 이 세션은 ${i.harness} 로 돈다${i.aiHarnesses.length ? ` (로그인 확인: ${i.aiHarnesses.join(", ")})` : ""}`);
+  lines.push(`- AI: 이 ${i.surface === "chat" ? "대화는" : "세션은"} ${i.harness} 로 돈다${i.aiHarnesses.length ? ` (로그인 확인: ${i.aiHarnesses.join(", ")})` : ""}`);
   return lines.join("\n");
 }
 
 // ── TEMPLATE — 문안은 여기만 고친다 ─────────────────────────────────────────────
 export function buildFirstTurnPrompt(i: FirstTurnInput): string {
-  const waits = i.collectors.length > 0;
+  const waits = i.collectors.some((c) => c.enabled);   // #3872 — 꺼진 칸은 수집을 안 하니 기다릴 것도 없다
   const nextWhen = waits
     ? "첫 수집이 한 바퀴 돈 뒤"
     : (i.uploads.total > 0 ? "올린 자료를 읽은 뒤 곧" : "자료가 들어오면");
+  const chat = i.surface === "chat";
   return [
-    "너는 이 워크스페이스의 담당자 **리브**다. 방금 이 사람이 처음 설정을 마쳤고, 이 세션은 그 직후에 열렸다.",
+    chat
+      //  대화 표면 — 이 지시문은 화면에 안 보인다(숨김 턴). 리브가 «보내 주신 지시대로» 라고 하면 사람은 보낸 적 없는 말을 듣는다.
+      ? "너는 이 워크스페이스의 담당자 **리브**다. 방금 이 사람이 처음 설정을 마쳤고, 이 대화는 그 직후에 시작됐다. " +
+        "사람은 리브 화면의 대화창에서 **네 답만** 본다 — 이 지시문은 사람이 쓴 것이 아니니 «말씀하신»·«보내 주신 지시» 같은 말을 하지 마라. 첫 문장부터 사람에게 하는 말로 시작하라."
+      : "너는 이 워크스페이스의 담당자 **리브**다. 방금 이 사람이 처음 설정을 마쳤고, 이 세션은 그 직후에 열렸다.",
     "",
     "## 지금 워크스페이스의 실측(서버가 방금 읽은 값 — 다시 조회하지 마라)",
     factsBlock(i),
@@ -82,7 +102,7 @@ export function buildFirstTurnPrompt(i: FirstTurnInput): string {
     "## 이 턴에서 할 일",
     "1. 위 실측을 **이 사람의 말로** 정리해 보여 줘라 — 무엇을 답했고, 무엇이 만들어졌고, 자료와 수집이 어디까지 와 있는지. 표나 목록으로 짧게. 숫자는 위 값 그대로.",
     "2. 빠진 것이 있으면 사실만 짚어라(예: 자료가 없다, AI 로그인이 안 됐다). 지금 고치라고 재촉하지 마라.",
-    `3. 마지막에 이렇게 알려라: **${nextWhen} 증류 작업(카테고리를 만들고 자료를 지식으로 정리하는 일)을 한 번 더 시작한다**. 그때 이 세션으로 다시 지시가 오고, 끝나면 알림이 간다고.`,
+    `3. 마지막에 이렇게 알려라: **${nextWhen} 증류 작업(카테고리를 만들고 자료를 지식으로 정리하는 일)을 한 번 더 시작한다**. ${chat ? "그때 이 대화에서 네가 이어서 알리고, 끝난 결과도 이 대화에서 보여 준다고(따로 알림이 간다고는 말하지 마라)." : "그때 이 세션으로 다시 지시가 오고, 끝나면 알림이 간다고."}`,
     "4. 그리고 **턴을 끝내라.**",
     "",
     "## 하지 말 것",

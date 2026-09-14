@@ -5,6 +5,7 @@ import { buildFirstTurnPrompt, FIRST_TURN_NAME_CAP, type FirstTurnInput } from "
 
 const base = (over: Partial<FirstTurnInput> = {}): FirstTurnInput => ({
   displayName: "수아",
+  purpose: "회사·팀 업무",
   work: { asis: "회사·조직에서 팀과 함께 일한다 · 디자인", tobe: "시간을 가장 많이 쓰는 일: 사람들과 맞추고 공유하는 일" },
   drawers: ["산출물", "기록"],
   firstOrder: "지난 시안 리뷰에서 나온 피드백만 모아 정리해 줘",
@@ -21,10 +22,11 @@ const empty = { total: 0, kinds: [], names: [], forms: [] };
 test("① 전부 있음 — 이름·일·서랍·자료·수집기·AI 가 실측 구획에 실린다", () => {
   const p = buildFirstTurnPrompt(base());
   assert.match(p, /- 이름: 수아/);
+  assert.match(p, /- 이 워크스페이스의 용도: 회사·팀 업무/);
   assert.match(p, /- 하는 일: 회사·조직에서 팀과 함께 일한다 · 디자인/);
   assert.match(p, /처음 설정이 만든 서랍 2개: 산출물 · 기록/);
   assert.match(p, /올린 자료 3건 — 슬랙 2, 회의록 1/);
-  assert.match(p, /연결한 자료 가져오기 1개\(켜짐 1\): 슬랙 #design\(slack, 15분 주기\)/);
+  assert.match(p, /연결한 자료 가져오기 1개: 슬랙 #design\(slack, 15분 주기\)/);
   assert.match(p, /이 세션은 claude 로 돈다 \(로그인 확인: claude\)/);
   assert.match(p, /- 매주 반복하는 문서가 있다/);
 });
@@ -44,6 +46,15 @@ test("②′ 서랍을 고르라고 하지 않는다 — 카테고리는 다음 
   const p = buildFirstTurnPrompt(base({ drawers: [], categories: [], uploads: empty, collectors: [], firstOrder: null }));
   assert.doesNotMatch(p, /나중에 고를게요/);
   assert.doesNotMatch(p, /서랍을 아직 안 골랐다/);
+});
+
+//  (#1631, 2026-09-12) 1단이 «자리» 를 묻게 바뀌었다 — 같은 사람이라도 워크스페이스마다 답이 다르므로
+//   리브가 맞춰야 할 것은 사람(하는 일)이 아니라 **자리(용도)** 다. 그래서 용도가 하는 일보다 위에 온다.
+test("①′ 자리가 사람보다 먼저 온다 — 안 고르면 지어내지 않는다", () => {
+  const p = buildFirstTurnPrompt(base());
+  assert.ok(p.indexOf("- 이 워크스페이스의 용도:") < p.indexOf("- 하는 일:"), "용도가 하는 일보다 아래에 있다");
+  const skipped = buildFirstTurnPrompt(base({ purpose: null }));
+  assert.match(skipped, /- 이 워크스페이스의 용도: \(답하지 않음\)/);
 });
 
 test("③ 이름을 건너뛴 사람 — 이름을 지어 부르지 말라고 못박고 이름을 내지 않는다", () => {
@@ -84,13 +95,33 @@ test("⑦ 서랍 밖에 원래 있던 갈래는 따로 센다", () => {
   assert.doesNotMatch(p, /서랍 3개/);
 });
 
-test("⑧ 꺼진 수집기 — '꺼짐' 표시, 켜짐 수에서 제외", () => {
+//  (#3872, 2026-09-13) «연결» 은 켜진 것만이다 — 매니지드가 모든 워크스페이스에 심는 Notion·Slack 빈 칸(꺼짐·자격 없음)을
+//   «연결한 자료 가져오기 2개» 로 세고 «첫 수집이 곧 돈다» 고 못박아, 아무것도 잇지 않은 사람이 리브에게 그 말을 들었다.
+test("⑧ 꺼진 수집기 — 연결 수에 안 들어가고, 이름만 «연결이 아니다» 로 남는다", () => {
   const p = buildFirstTurnPrompt(base({ collectors: [
     { label: "노션", preset_key: "notion", enabled: true, sync_interval_sec: 3600 },
     { label: "깃허브", preset_key: "github", enabled: false, sync_interval_sec: 1800 },
   ] }));
-  assert.match(p, /연결한 자료 가져오기 2개\(켜짐 1\)/);
-  assert.match(p, /깃허브\(github, 30분 주기, 꺼짐\)/);
+  assert.match(p, /연결한 자료 가져오기 1개: 노션\(notion, 60분 주기\)/);
+  assert.match(p, /꺼져 있는 칸 1개\(깃허브\)는 연결이 아니다/);
+  assert.doesNotMatch(p, /깃허브\(github/);
+  assert.match(p, /지금 돌고 있거나 곧 돈다/);   // 켜진 것이 하나 있으니 수집은 돈다
+});
+
+test("⑧′ 꺼진 칸만 있으면 — 연결 없음 · «곧 돈다» 없음 · 다음 트리거는 자료 기준 · 연결됐다고 말하지 말라고 못박는다", () => {
+  const shells = [
+    { label: "Notion — 팀 문서", preset_key: "notion", enabled: false, sync_interval_sec: 600 },
+    { label: "Slack — 팀 공개 채널", preset_key: "slack", enabled: false, sync_interval_sec: 600 },
+  ];
+  const p = buildFirstTurnPrompt(base({ collectors: shells }));
+  assert.match(p, /- 연결한 자료 가져오기: 없음\(외부 앱을 잇지 않음\) — 꺼져 있는 칸 2개\(Notion — 팀 문서 · Slack — 팀 공개 채널\)가 보여도 그건 연결이 아니다/);
+  assert.match(p, /«연결됐다»·«수집이 돈다»·«곧 돈다» 고 말하지 마라/);
+  assert.doesNotMatch(p, /지금 돌고 있거나 곧 돈다/);
+  assert.doesNotMatch(p, /연결한 자료 가져오기 2개/);
+  assert.match(p, /\*\*올린 자료를 읽은 뒤 곧 증류 작업/);          // 자료 3건이 있으니 그 기준
+  const q = buildFirstTurnPrompt(base({ collectors: shells, uploads: empty }));
+  assert.match(q, /\*\*자료가 들어오면 증류 작업/);                  // 자료도 없으면 «들어오면»
+  assert.doesNotMatch(q, /첫 수집이 한 바퀴 돈 뒤/);
 });
 
 test("⑨ 금지 구획은 입력과 무관하게 항상 들어간다", () => {

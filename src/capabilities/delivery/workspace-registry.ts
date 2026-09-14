@@ -377,12 +377,23 @@ export const workspaceRegistryCapabilities: Capability[] = [
     }, { slug: z.string().describe("보관할 워크스페이스 slug") }),
 
   restWork("workspace_member_add", "워크스페이스 멤버 추가",
-    "워크스페이스 명부에 이 박스의 멤버를 **바로** 넣는다(owner 전용 — 상대의 수락 없이). role=owner 면 공동 owner. " +
+    "워크스페이스 명부에 이 박스의 멤버를 **바로** 넣는다(owner 전용 — 상대의 수락 없이). role=owner 면 공동 관리자. " +
     "사람을 불러서 본인이 수락하게 하려면 workspace_invite 를 쓴다(그쪽이 사람 대상 기본 경로다). " +
     "개인 워크스페이스에도 넣을 수 있고, 두 번째 사람이 들어온 순간 그 워크스페이스는 팀이 된다(#1875).",
     [{ method: "POST", paths: ["/api/ui/me/workspaces/members/add"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = requireMember(user);
+      if (managedMode()) {
+        //  #1631 결정 7(원준 2026-09-13) — 매니지드 명부의 권위는 계정 서버다. 여기서 되는 일은 **역할 바꾸기**(공동 관리자로
+        //   올리기·구성원으로 내리기)뿐이다 — «상대 수락 없이 바로 넣기» 는 매니지드에 없다(사람은 초대로 들어온다).
+        //   member_id 자리는 매니지드 명부가 준 **이메일**이다. 호출자 권한·만든 사람 보호는 계정 서버가 판정한다.
+        //   ⚠ requireRegistry() **앞**이어야 한다 — 뒤면 매니지드는 400 «다중 워크스페이스가 아직 활성화되지 않았습니다» 로 끊긴다.
+        const t = await resolveCpTarget(user);
+        const role = input.role === "owner" ? "owner" : "member";
+        const r = await callCp<{ ok: boolean; role?: string }>(t!, "/api/tenant/workspace-member-role",
+          { workspace_id: input.workspace_id ?? input.slug, email: input.member_id, role });
+        return { ok: true, role: r.role ?? role };
+      }
       requireRegistry();
       const ws = await findWs(input.slug);
       if (ws.id === PRIMARY_TENANT_ID) throw new HttpError(400, "primary 는 명부가 없습니다 — 박스 멤버 전원이 접근합니다");
@@ -399,6 +410,9 @@ export const workspaceRegistryCapabilities: Capability[] = [
     }, {
       slug: z.string().describe("팀 워크스페이스 slug"),
       member_id: z.string().describe("넣을 멤버 id(org_members 의 id)"),
+      //  #1631 결정 7 — 매니지드 분기가 읽는다: 계정 서버의 워크스페이스 키(workspace_invite·workspace_people 과 같은 이유 — 주면 slug 대신 쓴다).
+      //   선언하지 않으면 MCP 가 이 칸을 떼어 내(zod strip) 매니지드 호출이 워크스페이스를 잃는다(mcp-input-schema R2).
+      workspace_id: z.string().optional().describe("워크스페이스 id(매니지드 — 계정 서버의 키). 주면 slug 대신 쓴다"),
       role: z.enum(["owner", "member"]).optional().describe("기본 member"),
     }),
 
@@ -407,6 +421,13 @@ export const workspaceRegistryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/me/workspaces/members/remove"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = requireMember(user);
+      if (managedMode()) {
+        //  #1631 결정 7 — 매니지드 내보내기는 계정 서버가 한다(개인/팀 재단언·그 사람의 테넌트 구성원 처리가 나가기와 같은 경로).
+        //   member_id 자리는 명부가 준 이메일. 만든 사람·자기 자신은 계정 서버가 거절한다(자기 자신은 나가기로).
+        const t = await resolveCpTarget(user);
+        await callCp(t!, "/api/tenant/workspace-member-remove", { workspace_id: input.workspace_id ?? input.slug, email: input.member_id });
+        return { ok: true };
+      }
       requireRegistry();
       const ws = await findWs(input.slug);
       if (ws.id === PRIMARY_TENANT_ID) throw new HttpError(400, "primary 는 명부가 없습니다");
@@ -422,6 +443,9 @@ export const workspaceRegistryCapabilities: Capability[] = [
     }, {
       slug: z.string().describe("팀 워크스페이스 slug"),
       member_id: z.string().describe("뺄 멤버 id"),
+      //  #1631 결정 7 — 매니지드 분기가 읽는다: 계정 서버의 워크스페이스 키(workspace_invite·workspace_people 과 같은 이유 — 주면 slug 대신 쓴다).
+      //   선언하지 않으면 MCP 가 이 칸을 떼어 내(zod strip) 매니지드 호출이 워크스페이스를 잃는다(mcp-input-schema R2).
+      workspace_id: z.string().optional().describe("워크스페이스 id(매니지드 — 계정 서버의 키). 주면 slug 대신 쓴다"),
     }),
 
   restWork("workspace_leave", "워크스페이스 나가기",
@@ -478,8 +502,9 @@ export const workspaceRegistryCapabilities: Capability[] = [
         const r = await callCp<{
           workspace: { id: string; name: string; kind: "personal" | "team" };
           my_role: string;
-          members: Array<{ email: string; name: string | null; role: string; is_me: boolean }>;
-          pending: Array<{ email: string | null; expires_at: string; created_at?: string | null }>;
+          //  #1631 결정 7 — is_creator(만든 사람)·pending.role 은 새 계정 서버가 준다. 옛 계정 서버는 안 주므로 아래에서 접는다.
+          members: Array<{ email: string; name: string | null; role: string; is_me: boolean; is_creator?: boolean }>;
+          pending: Array<{ email: string | null; expires_at: string; created_at?: string | null; role?: string | null }>;
         }>(t!, "/api/tenant/workspace-people", { workspace_id: input.workspace_id ?? input.slug });
         const isOwner = r.my_role === "owner";
         return {
@@ -495,10 +520,12 @@ export const workspaceRegistryCapabilities: Capability[] = [
           //   #1875 D5″ — is_me 를 그대로 흘린다: 화면이 «넘길 사람» 후보에서 나를 뺄 때, 셀프호스트의
           //   member_id 비교는 여기서 통하지 않는다(내 core member_id ≠ 내 이메일).
           members: r.members.map((m) => ({ member_id: m.email, role: m.role, email: m.email,
-            display_name: m.name, is_creator: m.role === "owner", is_me: m.is_me })),
+            //  #1631 결정 7 — «만든 사람» 은 계정 서버의 is_creator 다. 공동 관리자도 role 이 owner 라 role 로 가르면
+            //   전원 «만든 사람» 으로 접혀 권한 메뉴가 사라진다. 옛 계정 서버(is_creator 없음)는 종전대로 role 로 가른다.
+            display_name: m.name, is_creator: m.is_creator ?? m.role === "owner", is_me: m.is_me })),
           //  ⚠ 보류 초대의 id 는 **이메일**이다(코드 원문은 CP 에도 없다). 취소·다시 보내기가 그 값으로 지목한다.
           //   created_at 은 옛 CP 가 안 주면 expires_at 으로 눕는다(종전 동작 — «보낸 때» 자리가 비는 것보다 낫다).
-          pending: isOwner ? r.pending.map((pi) => ({ id: pi.email ?? "", email: pi.email, role: "member",
+          pending: isOwner ? r.pending.map((pi) => ({ id: pi.email ?? "", email: pi.email, role: pi.role === "owner" ? "owner" : "member",
             invited_by: null, created_at: pi.created_at ?? pi.expires_at, expires_at: pi.expires_at })) : [],
           // 매니지드는 '이 박스의 사람' 이라는 후보 개념이 없다 — 초대는 **이메일로** 부른다.
           candidates: [],
@@ -555,8 +582,10 @@ export const workspaceRegistryCapabilities: Capability[] = [
         // #2188 — 초대도 여기서. owner 게이트·인원 캡·중복은 CP 의 inviteMember 가 그대로 판정한다.
         //  #3834 — CP 가 초대 링크를 **메일로 보낸다**. 응답의 delivery 는 실제 발송 결과에서만 온다(cpInviteView).
         const t = await resolveCpTarget(user);
+        //  #1631 결정 7(원준 2026-09-13) — 초대 창의 «공동 관리자로» 를 **계정 서버까지** 싣는다. 종전엔 이메일만 넘겨
+        //   무엇을 골라도 구성원으로 들어왔다. 수락·가입 합류 때 그 역할로 넣는 판정은 계정 서버가 한다.
         const r = await callCp<CpInviteOut>(t!, "/api/tenant/workspace-invite",
-          { workspace_id: input.workspace_id ?? input.slug, email: input.email }, { timeoutMs: 45_000 });
+          { workspace_id: input.workspace_id ?? input.slug, email: input.email, role: input.role === "owner" ? "owner" : "member" }, { timeoutMs: 45_000 });
         return { invite: cpInviteView(r, input.email) };
       }
       requireRegistry();
@@ -600,7 +629,7 @@ export const workspaceRegistryCapabilities: Capability[] = [
       // #2188 매니지드 — 위 workspace_people 과 같은 이유. 둘 중 하나면 된다.
       workspace_id: z.string().optional().describe("초대할 워크스페이스 id(매니지드 — 계정 서버의 키)"),
       email: z.string().describe("부를 사람의 이메일"),
-      role: z.enum(["owner", "member"]).optional().describe("기본 member. owner 면 공동 owner"),
+      role: z.enum(["owner", "member"]).optional().describe("기본 member. owner 면 공동 관리자"),
     }),
 
   restWork("workspace_invite_resend", "초대 다시 보내기(이메일)",

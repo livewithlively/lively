@@ -169,7 +169,18 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   let WS: any = null;
   async function loadWelcome() {
     try { WS = await api('/api/ui/me/welcome'); } catch (_) { WS = null; }
+    if (WS && WS.joining) JOIN = WS.joining;   // #3872·#1631 — 초대로 들어왔나·초대 전 계정·팀 이름·인원·지식 수
+    //  (#1631) 합류자 — 팀이 켜 둔 수집을 한 번 읽어 둔다. 읽기 전용 sources 장면과 차례표(그 장면을 넣을지)가 쓴다. 읽기만 한다.
+    if (isJoin() && !collP) collP = loadColl().catch(() => { /* 못 읽으면 켜진 것이 없는 것으로 본다 */ });
+    inheritPurpose();
     return WS;
+  }
+  /** (#1631) 이 워크스페이스의 용도를 먼저 정한 사람이 있으면 **합류자는 물려받는다** — 용도는 «자리» 의 성질이라 사람마다 다시 묻지 않는다.
+   *   합류자는 용도·하는 일 장면을 지나지 않는다(원준 2026-09-14) — 물려받은 값은 그 사람의 «하는 일» 한 줄(work.asis)에만 쓰이고,
+   *   서버는 합류자의 답으로 워크스페이스 용도를 정하지 않는다(delivery/welcome.ts me_welcome_apply).
+   *  ⚠ 지금 이 화면에서 직접 고른 값(S.stage)이 있으면 덮지 않는다 — 지금 답하는 사람이 세다. */
+  function inheritPurpose() {
+    if (isJoin() && WS && WS.workspace_purpose && !S.stage) { S.stage = String(WS.workspace_purpose); save(); }
   }
   /** 지금 아는 **진짜** 갈래 집계. 서버를 아직 못 읽었으면 빈 배열(연출 숫자를 만들지 않는다). */
   const realKinds = () => (WS && WS.uploads && Array.isArray(WS.uploads.kinds)) ? WS.uploads.kinds : [];
@@ -183,6 +194,18 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    *  ⚠ 상한(UP_KEEP)을 둔다 — 폴더째 수천 장을 올리면 진행 저장(welcome_progress)이 그만큼 커진다. 넘친 만큼은 숫자로만. */
   const THUMB = new Map();
   const UP_KEEP = 200;
+  /* #1968 올리는 동안의 진행률 — **바이트 기준** 백분율(파일 수로 세면 큰 파일 하나에서 «7개 중 3개» 에 한참 멈춘 듯 보인다).
+   *  진행 저장(welcome_progress)에는 싣지 않는다 — 새로고침하면 XHR 도 함께 죽으니 남길 값이 없다(그때 남는 건 upN·upBusy 뿐).
+   *  겹쳐 떨어뜨린 묶음(끌어다 놓기 두 번)은 한 분모로 합산하고, 올리는 중인 것이 0 이 되면 비운다.
+   *  cur: 진행 중 파일별 «지금까지 올라간 바이트» — 키는 {rel,size} 표식 객체(낱개 줄의 숫자를 제자리에서 바꾸는 데 rel 을 쓴다). */
+  const UPP = { total: 0, done: 0, cur: new Map() };
+  const upPct = () => {
+    if (!UPP.total) return null;
+    let inflight = 0; for (const v of UPP.cur.values()) inflight += v;
+    return Math.max(0, Math.min(100, Math.round(((UPP.done + inflight) / UPP.total) * 100)));
+  };
+  const upBusyText = () => { const p = upPct(); return `올리는 중 ${S.upBusy}개` + (p == null ? '' : ` · ${p}%`); };
+  const cssq = (s) => (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(String(s)) : String(s).replace(/["\\]/g, '\\$&');
   const noteFile = (it) => {
     if (!Array.isArray(S.upFiles)) S.upFiles = [];
     const f = it.file, rel = String(it.rel || f.name).replace(/^\/+/, '');
@@ -225,13 +248,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     const sum = `<div class="ob-files-sum"><span class="ob-files-n">${(S.upN || 0) + busy}개</span>${chips}</div>`;
     const line = [];
     for (const d of [...dirs.values()].reverse()) {
-      line.push(`<div class="ob-file${d.up ? ' ob-up' : ''}"><span class="ob-fi ob-fi-dir">${GLYPH.folder}</span><span class="ob-file-n" title="${esc(d.n)}">${esc(d.n)}</span><span class="ob-file-m">${d.up ? '올리는 중' : `${d.c}개 · ${fmtSize(d.s)}`}</span></div>`);
+      line.push(`<div class="ob-file${d.up ? ' ob-up' : ''}"><span class="ob-fi ob-fi-dir">${GLYPH.folder}</span><span class="ob-file-n" title="${esc(d.n)}">${esc(d.n)}</span><span class="ob-file-m">${d.up ? `올리는 중 ${d.c - d.up}/${d.c}` : `${d.c}개 · ${fmtSize(d.s)}`}</span></div>`);
     }
     for (const r of loose.slice().reverse()) {
       const k = kindOf(r.n), th = THUMB.get(r.r);
       const ic = th ? `<span class="ob-fi ob-fi-img"><img src="${esc(th)}" alt=""></span>` : `<span class="ob-fi ob-fi-${k}"><i>${esc(extOf(r.n))}</i></span>`;
       const m = r.st === 'up' ? '올리는 중…' : r.st === 'err' ? '올리지 못했어요' : fmtSize(r.s);
-      line.push(`<div class="ob-file${r.st === 'up' ? ' ob-up' : ''}${r.st === 'err' ? ' ob-err' : ''}">${ic}<span class="ob-file-n" title="${esc(r.n)}">${esc(r.n)}</span><span class="ob-file-m">${m}</span></div>`);
+      line.push(`<div class="ob-file${r.st === 'up' ? ' ob-up' : ''}${r.st === 'err' ? ' ob-err' : ''}" data-rel="${esc(r.r)}">${ic}<span class="ob-file-n" title="${esc(r.n)}">${esc(r.n)}</span><span class="ob-file-m">${m}</span></div>`);
     }
     const more = line.length > 6 ? `<div class="ob-files-more">전체 ${line.length}줄 — 목록 안에서 스크롤하세요</div>` : '';
     return sum + `<div class="ob-files-list">${line.join('')}</div>` + more;
@@ -244,6 +267,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    "STAGES": {
     "company": {
      "label": "회사·조직",
+     "ack": "회사·팀 일을 담는 자리군요.",
      "axis": "어느 부서에 가까우세요?",
      "opts": [
       [
@@ -282,6 +306,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     },
     "solo": {
      "label": "1인·프리랜서",
+     "ack": "내 이름으로 하는 일을 담는 자리군요.",
      "axis": "어떤 일을 하고 계세요?",
      "opts": [
       [
@@ -316,6 +341,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     },
     "academy": {
      "label": "학교·연구",
+     "ack": "학교·연구실 자료를 담는 자리군요.",
      "axis": "어느 단계이신가요?",
      "opts": [
       [
@@ -342,6 +368,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     },
     "student": {
      "label": "학생",
+     "ack": "학업 자료를 담는 자리군요.",
      "axis": "어떤 일에 주로 사용하실 예정인가요?",
      "opts": [
       [
@@ -362,6 +389,40 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       ],
       [
        "취업",
+       "학생"
+      ]
+     ]
+    },
+    /* 「학업·연구」(#1631) — 옛 academy(단계) + student(용도) 를 **단계 축 하나로** 합친 것.
+     *  위 academy·student 는 화면에서 사라졌지만 지운 게 아니다: 하다 만 자리(#2207)에 옛 값이 남아
+     *  있으면 stageOf() 가 그걸로 2단을 그려야 한다. 새로 고르는 사람은 전부 이 study 로 온다. */
+    "study": {
+     "label": "학업·연구",
+     "ack": "학업·연구 자료를 담는 자리군요.",
+     "axis": "어느 단계세요?",
+     "opts": [
+      [
+       "학부생",
+       "학생"
+      ],
+      [
+       "석사",
+       "연구·대학원"
+      ],
+      [
+       "박사",
+       "연구·대학원"
+      ],
+      [
+       "포닥·연구원",
+       "연구·대학원"
+      ],
+      [
+       "교원",
+       "연구·대학원"
+      ],
+      [
+       "수험(자격·고시)",
        "학생"
       ]
      ]
@@ -806,8 +867,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   let obSeq = 0;
   /** 서버에 «어디까지 하셨나» 를 묻고 기다리는 한도. 넘으면 처음부터 연다 — 못 물었다고 화면이 안 열리면 안 된다. */
   const RESUME_WAIT_MS = 2500;
+  /** 기다리는 말(«지난번에 어디까지…»)을 띄우기 전에 조용히 기다리는 시간 — 금방 답이 오면 그 말은 아예 안 보인다(#1631). */
+  const RESUME_HINT_MS = 600;
   const fresh = () => ({
-    scene: 'name', name: '', nameSet: false, stage: null, job: null,
+    scene: 'intro', name: '', nameSet: false, stage: null, job: null,
     sources: [], connected: [], ai: null, aiConnected: false, aiName: null, terminal: null, app: null,
     aiHarness: '',          // #2255 고른 AI 의 **하네스 id** — `lively install` 이 이 값을 읽어 그것만 깐다(라벨은 못 읽는다)
     local: null,            // #1879 내 컴퓨터 설치 — 'done'|'getting'|'later'
@@ -827,6 +890,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     chatDone: [],           // 막3에서 끝난 단계들
   });
   let S = fresh();
+  /** 아직 **아무것도 답하지 않은** 장면 — 인사(intro)·팀 소개(team)·이름(name). 여기 머문 것은 «하다 만 것» 이 아니다
+   *   (이름을 적었으면 nameSet 이 따로 말한다). 아래 hadLocal·worthSaving 이 함께 본다.
+   *  ⚠ 마운트하는 동안 읽힌다 — 그래서 차례표(ORDER) 곁이 아니라 **여기**(hadLocal 보다 앞)에 둔다. 뒤에 두면 선언 전 참조(TDZ)로 화면이 통째로 죽는다.
+   *  ⚠ 인사를 맨 앞에 두면서(#1631) 생긴 목록이다. 종전엔 첫 화면이 이름 하나라 `scene !== 'name'` 이면 됐는데, 그대로 두면
+   *   인사만 보고 나간 사람이 «하다 만 사람» 으로 저장돼 다음 로그인에 이어 열기로 끌려온다(#2207 함정 3). */
+  const BEFORE_ANSWER = ['intro', 'team', 'name'];
   /** 이 탭에 남아 있던 진행이 있었나 — 있으면 그게 가장 새 것이다(아래 «어느 쪽이 정본인가» 참조).
    *  ⚠ **아무것도 답하지 않은 상태는 «있음» 으로 치지 않는다.** 서버를 못 물었을 때(장애·느림) 첫 화면이
    *   그대로 이 탭에 저장되는데, 그걸 «있음» 으로 읽으면 그 탭은 **다시는 서버에 묻지 않는다** — 한 번의
@@ -834,7 +903,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   let hadLocal = false;
   try {
     const v = JSON.parse(sessionStorage.getItem(KEY));
-    if (v && v.scene) { S = Object.assign(fresh(), v); hadLocal = v.scene !== 'name' || !!v.nameSet; }
+    if (v && v.scene) { S = Object.assign(fresh(), v); hadLocal = !BEFORE_ANSWER.includes(v.scene) || !!v.nameSet; }
   } catch (e) {}
 
   /* ── 하다 만 자리를 **서버에** 남긴다 (#2207) ─────────────────────────────────
@@ -851,8 +920,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const saveLocal = () => { try { sessionStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
   /** 남길 만한 진행인가 — **아무것도 답하지 않은 첫 화면은 «하다 만 것» 이 아니다.**
    *  ⚠ 이 문턱이 없으면 처음 설정을 **열어보기만 한** 사람도 다음 로그인마다 처음 설정으로 끌려간다
-   *   (서버 판정이 자리표를 흔적보다 세게 보기 때문이다 — first-run.ts ★). 답이 하나라도 있을 때부터 남긴다. */
-  const worthSaving = () => S.scene !== 'name' || S.nameSet;
+   *   (서버 판정이 자리표를 흔적보다 세게 보기 때문이다 — first-run.ts ★). 답이 하나라도 있을 때부터 남긴다.
+   *   «첫 화면» 이 어디까지인지는 BEFORE_ANSWER 가 말한다(인사·팀 소개·이름). */
+  const worthSaving = () => !BEFORE_ANSWER.includes(S.scene) || S.nameSet;
   function schedulePush() {
     if (pushOff || !worthSaving()) return;   // 끝난 사람의 진행은 남기지 않는다(서버도 거절한다)
     clearTimeout(pushT);
@@ -964,7 +1034,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   let CONN = null;
   /** 한 번이라도 물어봤나. ⚠ 이게 없으면 서버가 답을 못 줄 때 '못 읽음 → 다시 그림 → 또 물음'이 영원히 돈다. */
   let connTried = false;
-  const isAdmin = () => { try { return (state.me && Array.isArray(state.me.scopes) && state.me.scopes.includes('admin')) === true; } catch (_) { return false; } };
+  //  2026-09-12 — 팀 수집을 켜는 것은 워크스페이스 관리 축(구성원)이다. 초대로 합류한 사람이 앱을 연결해도
+  //   개인 MCP 축으로 새지 않고 팀 자료함으로 들어온다(종전에는 admin 만이라 합류자는 영영 못 켰다).
+  const isAdmin = () => { try { const sc = (state.me && state.me.scopes) || []; return Array.isArray(sc) && (sc.includes('memory') || sc.includes('admin')); } catch (_) { return false; } };
   /* ★ #2243 (원준 2026-08-28: "온보딩 <연결하기> 로 슬랙·노션은 MCP 말고 수집기가 돌아가게") ──────────────────
    *  이 화면이 약속하는 것은 «그동안 쌓인 자료를 가져온다» 다. 개인 연결(금고에 자격 한 줄 = AI 도구·MCP)은 그 약속과
    *  무관하고, 노션은 그 토큰(DCR)으로 수집도 못 한다(#1881). 그래서 슬랙·노션은 **수집기 축(org_collector)** 으로 잇고
@@ -1010,6 +1082,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   };
   /** 토큰형 앱 수집기 켜기 — 서버 답(ok / needs_connect / needs_scope)을 그대로 돌려준다. 던지지 않는다. */
   async function startMemberCollect(id, scopeText) {
+    if (isJoin()) return { ok: false, message: '팀 연결은 처음 설정에서 바꾸지 않아요.' };   // (#1631) 합류자가 켜면 팀 수집기의 자격이 그 사람 계정으로 바뀐다
     const body: any = { enabled: true };
     if (id === 'figma' && scopeText && scopeText.trim()) body.scope = figmaScope(scopeText);
     if (id === 'gitlab' && scopeText && scopeText.trim()) body.scope = { projects: scopeText.trim() };
@@ -1024,6 +1097,35 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       try { out[id] = await api(`/api/ui/org/${svc}/collect`); } catch (_) { out[id] = null; }
     }));
     COLL = out;
+  }
+  /** (#1631) 합류자의 팀 수집 읽기(한 번) — loadWelcome 이 합류자로 판정하자마자 건다. */
+  let collP = null;
+  /** (#1631) 팀에 **켜진** 수집 — [{id,label,icon}]. connState 의 수집 판정과 같은 규칙이고, 못 읽은 것(null)은 켜진 것으로 치지 않는다. */
+  function teamCollectOn() {
+    const items = DATA.SOURCE_ROWS.flatMap((r) => r.items);
+    return Object.keys(COLLECT_FIRST).filter((id) => {
+      const c = COLL[id];
+      if (!c) return false;
+      return id === 'slack' ? !!(c.search && c.search.enabled) : !!c.enabled;
+    }).map((id) => {
+      const it = items.find((x) => x.id === id) || { label: id, logo: id };
+      return { id, label: it.label, icon: BRAND[it.logo] || '' };
+    });
+  }
+  /** (#1631) 합류자의 sources 장면 — **읽기 전용**(원준 결정 2026-09-13: 팀 연결은 보여 주되 수정은 못 하게).
+   *   켜진 팀 수집의 이름만 그린다. 고르기 카드·연결 모달·[연결 해제] 는 그리지 않고 [계속] 하나만 둔다. */
+  function joinSourcesHtml() {
+    const on = teamCollectOn();
+    return qHead('sources', '거의 다 왔어요.',
+      '이 팀은 이곳의 자료를 모으고 있어요.',
+      `${esc(on.map((x) => x.label).join(' · '))} 에 연결돼 있어요. 연결을 더하거나 끊는 일은 처음 설정에서 하지 않아요.`)
+      + `<div class="ob-opt-grid">${on.map((x) => `<div class="ob-opt-card ob-on ob-locked" aria-disabled="true"><span class="ob-oc-ic">${x.icon}</span><span class="ob-oc-one"><span class="ob-oc-t">${esc(x.label)}</span></span></div>`).join('')}</div>`
+      + `<button class="ob-btn ob-btn-pri" id="srcGo">계속</button>`;
+  }
+  function bindJoinSources(el) {
+    //  켜진 팀 수집이 없는데 여기 닿았다(수집 상태가 바뀌었거나 오래된 탭) — 자취를 남기지 않고 넘긴다(뒤로 와도 또 튕기지 않게).
+    if (!teamCollectOn().length) { goNext('sources', { back: true }); return; }
+    $('#srcGo', el).onclick = () => goNext('sources');
   }
   async function loadConn() {
     connTried = true;
@@ -1228,6 +1330,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    *  #2232 — 종전엔 «연결됐어요» 카드가 잠겨 되돌릴 길이 없었다(원준님 2026-08-28: "마음이 바뀌어서 해제할 수도 있게").
    *  관리자가 이 연결로 켠 팀 수집은 함께 끈다 — 연결이 없는데 «모으는 중» 으로 남으면 거짓 상태다. */
   async function svcDisconnect(id) {
+    if (isJoin()) throw new Error('팀 연결은 처음 설정에서 바꾸지 않아요.');   // (#1631) 합류자는 팀 연결을 끊지 못한다 — 팀 전체의 수집을 끄는 문이다
     const svc = svcOf(id); if (!svc || !CONN) throw new Error('연결 상태를 아직 못 읽었어요. 잠시 뒤 다시 눌러 주세요.');
     const oc = svc.oauth ? CONN.oauthMap.get(svc.oauth) : null;
     const cred = svc.token ? CONN.credMap.get(svc.token) : null;
@@ -1433,17 +1536,63 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   /* ══════════════ 장면 차례 ══════════════ */
   //  #2232 — 순서: 파일 → **AI 고르기·연결** → 외부 앱 → 내 컴퓨터(원준님 2026-08-28: "AI 골라서 연결하는 플로우가 먼저, 그 다음 외부 앱, 로컬은 그 다음").
   //  ★ 2026-08-31(원준님) — 'read'·b1~can(리브와의 챗봇 문답)을 걷어냈다. [앱] 다음은 곧장 마무리다.
-  const ORDER = ['name', 'stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];
-  const STEP_OF = Object.fromEntries(ORDER.map((k, i) => [k, i]));
+  //  #1631(원준님 2026-09-13) — 맨 앞에 **인사(intro)** 를 둔다. 무엇을 묻기 전에 «Lively 가 무엇을 하는지»와
+  //   «이 뒤에서 기본 설정을 한다»를 먼저 말한다. 두 차례표가 모두 인사에서 시작하고, 그 다음은 nextScene 이 가른다.
+  const ORDER = ['intro', 'name', 'stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];
+  //  초대로 들어온 사람(합류자)의 차례표(#3872 → #1631 원준 결정 2026-09-13 → #3872 원준 결정 2026-09-14). 사실에 따라 칸이 붙고 빠진다(flowFor):
+  //   · team — 인사 다음에 «어느 팀에 왔는지» 를 먼저 말한다.
+  //   · stage·role — 없다. 용도·부서는 워크스페이스를 연 사람이 그 자리를 정하려고 답하는 질문이라 초대받은 사람이 다시 할 일이 아니다
+  //     (원준 2026-09-14). 용도는 먼저 정한 사람 것을 물려받기만 한다 — 아무도 안 정했어도 합류자에게는 묻지 않는다.
+  //   · sources — **읽기 전용**(팀 연결은 보여 주되 수정은 못 하게). 팀에 켜진 수집이 없으면 이 칸도 없다.
+  //   · connect — 없다(연결·해제·수집 계정 변경 불가).
+  //   · terminal·local·app — 처음 가입한 사람을 포함해 **모든 합류자**에게 붙는다(JOIN_INSTALL). 9/13 의 «초대 전부터 계정이 있던 사람만» 은 2026-09-14 결정으로 뒤집혔다.
+  //   · 끝나면 리브·묶음 심기·2턴 없이 홈으로 간다(서버 반영이 스스로 가른다 — delivery/welcome.ts).
+  const ORDER_JOIN = ['intro', 'team', 'name', 'files', 'ai', 'claude', 'sources'];
+  const JOIN_INSTALL = ['terminal', 'local', 'app'];
+  const STEP_OF = Object.fromEntries([...ORDER, 'team'].map((k, i) => [k, i]));
+  /** 장면의 전체 순서(두 차례표를 합친 것) — «이 장면 다음» 을 차례표에 없는 장면에서도 찾게 한다(goNext·fitScene). */
+  const SEQ_ALL = ['intro', 'team', 'name', 'stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];
+  //  서버가 준 사실(GET /api/ui/me/welcome 의 joining·workspace_purpose) — 판정은 화면이 하지 않는다.
+  let JOIN = null;
+  const isJoin = () => !!(JOIN && JOIN.is_join);
+  /** 차례표를 사실에서 만든다(순수 — 화면 상태를 읽지 않는다. invitee-onboarding.test 가 이 몸통을 그대로 돌린다). */
+  function flowFor(f) {
+    if (!f.join) return ORDER;
+    return [...ORDER_JOIN.filter((k) => k !== 'sources' || f.teamSources > 0), ...JOIN_INSTALL];
+  }
+  const FLOW = () => flowFor({ join: isJoin(), teamSources: teamCollectOn().length });
+  /** 지금 차례표에서 이 장면 **다음**. 두 차례표가 갈리는 자리(인사 다음·이름 다음)를 여기 한 곳으로 모은다. */
+  function nextScene(cur) { const f = FLOW(); const i = f.indexOf(cur); return (i >= 0 && i + 1 < f.length) ? f[i + 1] : 'app'; }
+  /** cur **다음** 장면으로 간다 — 차례표에 남은 장면이 없으면 마무리한다(합류자 차례표는 app 으로 끝나지 않을 수 있다).
+   *  cur 가 차례표에 없어도(건너뛴 sources·오래된 탭의 connect) 전체 순서에서 그 뒤를 찾는다. */
+  function goNext(cur, opts) {
+    const at = SEQ_ALL.indexOf(cur);
+    const next = FLOW().find((k) => SEQ_ALL.indexOf(k) > at);
+    if (next) goScene(next, opts); else void finishOnboarding();
+  }
+  /** 저장된 장면을 지금 차례표에 맞춘다 — 없으면 전체 순서에서 그 뒤의 첫 장면, 그것도 없으면 차례표의 마지막 장면. */
+  function fitScene(key) {
+    const f = FLOW();
+    if (f.includes(key)) return key;
+    const at = SEQ_ALL.indexOf(key);
+    return f.find((k) => SEQ_ALL.indexOf(k) > at) || f[f.length - 1];
+  }
+  /** AI 두 장면(ai·claude)을 떠날 때. 합류자는 팀 수집을 **읽은 뒤에** 다음 칸을 정한다 — 안 읽고 정하면 켜진 팀 수집이 있어도 sources 를 건너뛴다. */
+  async function leaveAi() {
+    if (isJoin() && collP) await Promise.race([collP, sleep(2500)]);
+    goNext('claude');
+  }
 
-  const QPROG = ['stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];   // 막2 진행 눈금
+  const QPROG_ALL = ['stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];   // 막2 진행 눈금
+  const QPROG = () => QPROG_ALL.filter((k) => FLOW().includes(k));
 
   /* ── 막1·막2: 가운데 질문 기둥 ── */
   function qHead(prog, lead, title, help) {
-    const at = QPROG.indexOf(prog);
+    const prog_ = QPROG();
+    const at = prog_.indexOf(prog);
     // 눈금은 지나온 자리로 돌아가는 문이기도 하다 — 앞 단계는 눌러서 고칠 수 있다(원준님 2026-08-25).
     return `<div class="ob-q-top"><div class="ob-q-ic">L</div></div>
-      ${at >= 0 ? `<div class="ob-q-prog">${QPROG.map((k, i) => i < at
+      ${at >= 0 ? `<div class="ob-q-prog">${prog_.map((k, i) => i < at
           ? `<button class="ob-on ob-go" data-jump="${k}" aria-label="${esc(SCENE_LABEL[k] || '')}(으)로 돌아가기"></button>`
           : `<i class="${i === at ? 'ob-on' : ''}"></i>`).join('')}</div>` : ''}
       ${lead ? `<p class="ob-q-lead">${lead}</p>` : ''}
@@ -1456,13 +1605,72 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       <span class="ob-oc-chk">✓</span></button>`;
   }
 
+  /** 인사 장면의 그림(#1631) — 장식이 아니라 첫 문장 «맥락을 AI 에게 주입한다» 를 그대로 옮긴 흐름도다.
+   *   내 맥락(문서·대화·업무) ─┤ Lively ● ── 점 하나가 건너감 ──▶ AI(답을 냄 ✓). 움직임은 41-onboarding.css 의 인사 절.
+   *  보조기기에는 숨긴다 — 같은 말을 바로 아래 문장이 한다.
+   *  선 아이콘은 이 파일의 붓 그대로(24 뷰박스 · 획 1.7 · 둥근 끝). 서비스 로고를 안 쓰는 이유: 검은 로고(노션 등)는 다크에서 사라진다. */
+  function introArt() {
+    const ic = (d) => `<svg class="ob-in-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+    const chip = (d, t) => `<span class="ob-in-chip">${ic(d)}<span>${t}</span></span>`;
+    return `<div class="ob-in-art" aria-hidden="true"><div class="ob-in-flow">
+      <div class="ob-in-src">
+        ${chip('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>', '문서')}
+        ${chip('<path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8l-4 3v-3H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/>', '대화')}
+        ${chip('<path d="M10 6h10M10 12h10M10 18h10"/><path d="M4 6l1.2 1.2L7.5 5M4 12l1.2 1.2L7.5 11M4 18l1.2 1.2L7.5 17"/>', '업무')}
+      </div>
+      <span class="ob-in-join"></span>
+      <span class="ob-in-hub">Lively<span class="pulse-dot"></span></span>
+      <span class="ob-in-wire"><span class="ob-in-run"><i></i></span></span>
+      <span class="ob-in-ai">${ic('<path d="M12 3.5l1.9 4.6 4.6 1.9-4.6 1.9L12 16.5l-1.9-4.6L5.5 10l4.6-1.9z"/><path d="M18.5 15.5l.8 1.7 1.7.8-1.7.8-.8 1.7-.8-1.7-1.7-.8 1.7-.8z"/>')}<span>AI</span><span class="ob-in-ok">${ic('<path d="M6 12.5l3.8 3.8L18 8"/>')}</span></span>
+    </div></div>`;
+  }
+
   const SCENES = {
+    /* 막0 — 인사(#1631, 원준님 2026-09-13). 무엇을 묻기 전에 **Lively 가 무엇을 하는지**와 **이 뒤에서 무엇을 하는지**를
+     *  먼저 말한다. 문구는 원준님 원문 그대로다.
+     *  그림(introArt)은 한 번만 흐르고 2초 안에 끝난다 — 계속 움직이는 것은 워드마크의 숨 쉬는 점 하나다. 움직임 줄이기 설정이면 끝난 그림만 보인다.
+     *  ⚠ 아무것도 묻지 않는 장면이다 — BEFORE_ANSWER 에 들어 있어 여기 머문 것은 저장·이어 열기의 대상이 아니다.
+     *  ⚠ 다음은 차례표가 정한다(nextScene): 혼자 여는 사람은 이름, 합류자는 팀 소개. 여기서 이름을 하드코딩하면 합류자가 팀 소개를 건너뛴다. */
+    intro: {
+      html: () => `${introArt()}
+        <h1 class="ob-q-title ob-in-title">Lively Beta의 유저가 되어주셔서 감사합니다!</h1>
+        <p class="ob-in-p">Lively는 사용자가 놓여있는 맥락을 저희가 직접 AI에게 풍부하게 주입해서 AI의 세팅 난이도를 줄이고, 양질의 결과물을 얻을 수 있도록 합니다.</p>
+        <p class="ob-in-p ob-in-next">이를 위해서 이 뒤에서는, 라이블리 사용을 위한 기본 설정을 진행합니다.</p>
+        <button class="ob-btn ob-btn-pri ob-in-go" id="introGo">계속하기</button>`,
+      bind: (el) => { $('#introGo', el).onclick = () => goScene(nextScene('intro')); },
+    },
+    /* #3872 — 합류자가 인사(intro) 다음에 보는 화면. **어디에 들어왔는지**를 먼저 말한다(종전엔 그 말 없이 이름부터 물었다).
+     *  숫자는 서버 실측(joining)만 쓴다 — 0 이면 그 줄을 아예 쓰지 않는다(없는 것을 있다고 하지 않는다). */
+    team: {
+      html: () => {
+        const nm = (JOIN && JOIN.workspace_name) ? String(JOIN.workspace_name) : '';
+        //  사람 수는 **나를 뺀**, 먼저 들어와 있는 사람이다(joining.others_count). 나까지 세면 혼자 쓰던 워크스페이스에 초대로 들어온
+        //   사람이 «구성원 2명» 을 본다(2026-09-14 신고). 운영 계정·세션 호스트는 서버 잣대가 이미 뺐다(countWorkspacePeople).
+        const others = (JOIN && Number(JOIN.others_count)) || 0;
+        const kn = (JOIN && Number(JOIN.knowledge_n)) || 0;
+        //  사람 수와 지식 수는 **따로** 말한다 — 한 문장에 붙이면 지식이 0일 때 «구성원 3명이 이미 쌓여 있어요» 가 된다(격리 리뷰 2026-09-13).
+        //   0 인 숫자는 그 문장을 아예 쓰지 않는다. 합류자 차례표는 대여섯 장면이라 «두어 가지» 라고 약속하지 않는다.
+        const help = [
+          others ? `먼저 들어와 있는 구성원이 ${others}명 있어요.` : '',
+          kn ? `팀이 쌓아 둔 지식 ${kn.toLocaleString('ko-KR')}건을 여기 AI가 알고 답합니다.` : '여기 AI는 팀이 쌓아 둔 자료를 알고 답합니다.',
+          '시작하기 전에 몇 가지만 여쭐게요.',
+        ].filter(Boolean).join(' ');
+        return qHead(null,
+          '저는 리브예요. 이 워크스페이스를 돌보는 담당자입니다.',
+          nm ? `${esc(nm)} 팀에 오셨어요.` : '팀 워크스페이스에 오셨어요.',
+          help)
+          + `<button class="ob-btn ob-btn-pri" id="teamGo">시작하기</button>`;
+      },
+      bind: (el) => { $('#teamGo', el).onclick = () => goScene(nextScene('team')); },
+    },
     /* 막1 — 민낯. 노션 p1: 이름 하나만, 가운데. */
     name: {
       html: () => qHead(null,
-        '안녕하세요, 저는 리브예요. 이 워크스페이스를 계속 돌봐 드릴 담당자입니다.',
-        '어떻게 불러 드릴까요?',
-        '이름이든 별명이든 편한 대로 적어 주세요. 나중에 언제든 바꾸실 수 있어요.')
+        isJoin() ? '저는 리브예요. 이 워크스페이스를 돌보는 담당자입니다.'
+                 : '안녕하세요, 저는 리브예요. 이 워크스페이스를 계속 돌봐 드릴 담당자입니다.',
+        isJoin() ? '팀에서 어떻게 불러 드릴까요?' : '어떻게 불러 드릴까요?',
+        isJoin() ? '구성원 목록과 작업 기록에 이 이름으로 보여요. 나중에 언제든 바꾸실 수 있어요.'
+                 : '이름이든 별명이든 편한 대로 적어 주세요. 나중에 언제든 바꾸실 수 있어요.')
         + `<div class="ob-q-write"><input id="nameIn" type="text" placeholder="예: 원준" value="${esc(S.nameSet ? S.name : '')}"></div>
            <button class="ob-btn ob-btn-pri" id="nameGo">이렇게 불러 주세요</button>
            <button class="ob-q-skip" data-skip>그냥 넘어갈게요</button>`,
@@ -1489,28 +1697,32 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             })
             .catch(() => { /* 비치명 — 마무리에서 한 번 더 보낸다 */ });
         };
-        const go = () => { const v = inp.value.trim(); if (v) { S.name = v; S.nameSet = true; saveName(v); } goScene('stage'); };
+        const go = () => { const v = inp.value.trim(); if (v) { S.name = v; S.nameSet = true; saveName(v); } goScene(nextScene('name')); };
         $('#nameGo', el).onclick = go;
         inp.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) go(); });
-        $('[data-skip]', el).onclick = () => goScene('stage');
+        $('[data-skip]', el).onclick = () => goScene(nextScene('name'));
         inp.focus();
       },
     },
     /* 막2 — 사이드바가 유령으로 등장. 노션 p2: 큰 질문 + 카드 선택지. */
     stage: {
       html: () => qHead('stage',
+        //  (합류자는 이 장면을 지나지 않는다 — 원준 2026-09-14, ORDER_JOIN 머리말.)
         `안녕하세요, 저는 리브예요. <b>이 워크스페이스를 계속 돌봐 드릴 담당자입니다.</b> 몇 가지만 여쭙고, 나머지는 자료를 보고 제가 알아서 세팅할게요.`,
-        '어디에서 일하고 계세요?',
+        '이 워크스페이스를 무엇에 쓰실 건가요?',
         '자세한 건 안 여쭙습니다. 두 번만 고르시면 됩니다.')
-        /* [새문구] 카드 설명 4줄 — 노션 카드형에 맞춰 새로 씀 */
+        /* (#1631) 축을 **사람에서 자리로** 옮겼다. 종전 «어디에서 일하고 계세요?» 는 그 사람을 물어서,
+         *  워크스페이스를 둘 만들어도 답이 같았고 그 자리가 무엇을 담는 곳인지는 끝내 아무도 몰랐다.
+         *  가르는 기준은 **소속**이다(공유 구조는 묻지 않는다 — 인원에서 나온다, #1875 D1 rail.ts).
+         *  옛 「학교·연구」+「학생」 두 장은 «학업·연구» 한 장으로 합쳤다(2단이 단계 축이라 한 장이면 된다). */
         + `<div class="ob-opt-cards">
-            ${card('회사·조직', '팀과 함께 회사 일을 합니다', ICONS.company, S.stage === 'company')}
-            ${card('1인·프리랜서', '내 이름으로 여러 일을 합니다', ICONS.solo, S.stage === 'solo')}
-            ${card('학교·연구', '연구실·학교에서 연구합니다', ICONS.academy, S.stage === 'academy')}
-            ${card('학생', '수업·시험·진로를 준비합니다', ICONS.student, S.stage === 'student')}
+            ${card('회사·팀 업무', '소속된 회사·기관의 일을 담습니다', ICONS.company, S.stage === 'company')}
+            ${card('내 사업·프리랜스', '내 이름으로 하는 일을 담습니다', ICONS.solo, S.stage === 'solo')}
+            ${card('학업·연구', '수업·논문·시험 자료를 담습니다', ICONS.academy, S.stage === 'study')}
           </div><button class="ob-q-skip" data-skip>나중에 정할게요</button>`,
       bind: (el) => {
-        const ID = { '회사·조직': 'company', '1인·프리랜서': 'solo', '학교·연구': 'academy', '학생': 'student' };
+        if (isJoin()) { goNext('stage', { back: true }); return; }   // 합류자 차례표엔 이 장면이 없다 — 주소(?scene=)·오래된 탭으로 와도 용도를 정하지 않는다(원준 2026-09-14)
+        const ID = { '회사·팀 업무': 'company', '내 사업·프리랜스': 'solo', '학업·연구': 'study' };
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
           $$('.ob-opt-card', el).forEach((x) => x.classList.remove('ob-on')); c.classList.add('ob-on');
           const id = ID[c.dataset.opt]; if (S.stage !== id) { S.job = null; }
@@ -1521,14 +1733,19 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     },
     role: {
       html: () => qHead('role',
-        `${esc(stageOf().label)}이시군요.`,
-        esc(stageOf().axis),
-        '고르신 것에 맞춰 자료를 읽습니다. 목록에 없으면 직접 적어 주세요.')
+        //  ⚠ label 은 **카드용**(짧은 이름)이라 문장에 그대로 이으면 «회사·팀 업무이시군요» 가 된다.
+        //   문장은 갈래마다 따로 쓴 ack 를 쓴다. 합류자는 이 장면을 지나지 않는다(원준 2026-09-14 — ORDER_JOIN 머리말).
+        esc(S.stage ? (stageOf().ack || stageOf().label) : (S.name ? `${S.name}님, 하나만 더 여쭐게요.` : '하나만 더 여쭐게요.')),
+        //  (#1631, 원준 결정 2026-09-13) 묻는 것은 그 사람의 정체성이 아니라 **이 워크스페이스에서 무슨 일을 하려는지**다.
+        //   갈래별 축(부서·일·단계)은 거르는 말로 아래에 둔다. 선택지·저장 값은 그대로다(v6/category-groups.ts 가 그 라벨을 키로 쓴다).
+        '이 워크스페이스에서 어떤 일을 하시나요?',
+        `${esc(stageOf().axis)} 고르신 것에 맞춰 자료를 읽습니다. 목록에 없으면 직접 적어 주세요.`)
         + `<div class="ob-opt-cards">${stageOf().opts.map(([l]) => card(l, '', jobIcon(l), S.job === l)).join('')}</div>
            <div class="ob-q-write" hidden><input id="roleIn" type="text" placeholder="무슨 일을 하시는지 적어 주세요"><button class="ob-btn ob-btn-pri ob-btn-inline" id="roleInGo" style="margin-top:0">확인</button></div>
            <button class="ob-q-skip" data-other>목록에 없어요. 직접 적을게요</button>
            <button class="ob-q-skip" data-skip>나중에 정할게요</button>`,
       bind: (el) => {
+        if (isJoin()) { goNext('role', { back: true }); return; }   // 합류자 차례표엔 이 장면이 없다(원준 2026-09-14)
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
           $$('.ob-opt-card', el).forEach((x) => x.classList.remove('ob-on')); c.classList.add('ob-on');
           S.job = c.dataset.opt; save(); saveWork(); await sleep(200); goScene('files');
@@ -1549,13 +1766,18 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         뒤에 [파일 추가]로 바뀐다. */
     files: {
       html: () => qHead('files',
-        `${esc(S.name)}님, 먼저 파일부터 받겠습니다.`,
-        '지금 가지고 계신 파일을 올려 주세요.',
-        '파일이든 폴더든 끌어다 놓으시면 됩니다. 받는 즉시 읽기 시작해서, 다음 단계를 하시는 동안 정리해 둡니다.')
+        //  (#1631, 원준 결정 2026-09-13) 합류자가 올린 파일은 **팀원 모두가 보는 팀 자료**다 — 그 사실을 올리기 전에 말한다.
+        //   종전 «기본적으로 나만 봅니다 · 팀에 공개할지는 자료마다 따로 정합니다» 는 뒤 문장을 받쳐 줄 화면이 없었다.
+        //   «정리해 둡니다» 는 주인에게만 말한다 — 합류자의 처음 설정은 증류기·카테고리를 만들거나 켜지 않는다.
+        isJoin() ? `${S.name ? `${esc(S.name)}님이 ` : ''}가진 자료도 올려 두시겠어요?` : `${esc(S.name)}님, 먼저 파일부터 받겠습니다.`,
+        isJoin() ? '팀과 나눌 자료를 올려 주세요.' : '지금 가지고 계신 파일을 올려 주세요.',
+        isJoin() ? '올린 자료는 팀원 모두가 봅니다. 파일이든 폴더든 끌어다 놓으시면 됩니다.'
+                 : '파일이든 폴더든 끌어다 놓으시면 됩니다. 받는 즉시 읽기 시작해서, 다음 단계를 하시는 동안 정리해 둡니다.')
         //  #1813 f27094f2 — 고르기는 **한 번에 끝난다**(모달·팝오버·버튼 둘 전부 폐기, 원준님 2026-08-27). 폴더째는 끌어다 놓기가 받는다.
         + `<div class="ob-drop ${S.upN ? 'ob-has' : ''}" id="upZone">
             <span class="ob-drop-t" id="upZoneT">${S.upN ? `${S.upN}개를 받았어요` : '여기에 끌어다 놓으세요'}</span>
-            <span class="ob-drop-d" id="upZoneD">${S.upBusy ? `올리는 중 ${S.upBusy}개` : (S.upN ? '더 올리셔도 됩니다. 폴더째는 끌어다 놓으세요.' : '폴더째는 여기에 끌어다 놓으세요(고르기 창은 파일만 골라요). 정리도, 이름 짓기도 필요 없습니다.')}</span>
+            <span class="ob-drop-d" id="upZoneD">${S.upBusy ? upBusyText() : (S.upN ? '더 올리셔도 됩니다. 폴더째는 끌어다 놓으세요.' : '폴더째는 여기에 끌어다 놓으세요(고르기 창은 파일만 골라요). 정리도, 이름 짓기도 필요 없습니다.')}</span>
+            <span class="ob-drop-bar" id="upBar" ${S.upBusy && upPct() != null ? '' : 'hidden'}><i style="width:${upPct() || 0}%"></i></span>
             <span class="ob-drop-pick" id="upPick"></span>
           </div>
           <div class="ob-files" id="upList" hidden></div>
@@ -1565,12 +1787,25 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const zone = $('#upZone', el), list = $('#upList', el);
         let pickBtn = null;
         const paintList = () => { if (!list) return; const h = fileListHtml(); list.hidden = !h; list.innerHTML = h; };
+        /* #1968 올리는 동안의 진행 — 막대·백분율·낱개 줄의 숫자만 **제자리에서** 바꾼다(목록을 다시 그리지 않는다:
+         *  진행 이벤트는 초당 여러 번 오고, 목록은 파일 하나가 끝날 때 paintZone→paintList 가 새로 그린다). */
+        const paintProg = () => {
+          const d = $('#upZoneD', el), bar = $('#upBar', el), p = upPct();
+          if (d && S.upBusy) d.textContent = upBusyText();
+          if (bar) { bar.hidden = !S.upBusy || p == null; const i = bar.firstElementChild; if (i) i.style.width = `${p || 0}%`; }
+          if (list) for (const [k, v] of UPP.cur) {
+            if (!k.size || k.rel.includes('/')) continue;      // 폴더 안 파일은 폴더 줄이 «n/m» 으로 센다
+            const m = list.querySelector(`.ob-file[data-rel="${cssq(k.rel)}"] .ob-file-m`);
+            if (m) m.textContent = `올리는 중 ${Math.min(99, Math.round((v / k.size) * 100))}%`;   // 응답 대기 중엔 100 을 안 찍는다
+          }
+        };
         const paintZone = () => {
           const t = $('#upZoneT', el), d = $('#upZoneD', el), go = $('#fGo', el);
           if (!t || !d) return;
           t.textContent = S.upN ? `${S.upN}개를 받았어요` : '여기에 끌어다 놓으세요';
-          d.textContent = S.upBusy ? `올리는 중 ${S.upBusy}개` : (S.upN ? '더 올리셔도 됩니다. 폴더째는 끌어다 놓으세요.' : '폴더째는 여기에 끌어다 놓으세요(고르기 창은 파일만 골라요). 정리도, 이름 짓기도 필요 없습니다.');
+          d.textContent = S.upBusy ? upBusyText() : (S.upN ? '더 올리셔도 됩니다. 폴더째는 끌어다 놓으세요.' : '폴더째는 여기에 끌어다 놓으세요(고르기 창은 파일만 골라요). 정리도, 이름 짓기도 필요 없습니다.');
           zone.classList.toggle('ob-has', !!S.upN);
+          paintProg();
           if (go) { go.disabled = !S.upN; go.textContent = S.upN ? `${S.upN}개 올리고 계속` : '계속'; }
           if (pickBtn) pickBtn.textContent = (S.upN || S.upBusy) ? '파일 추가' : '파일 고르기';
           paintList();
@@ -1578,13 +1813,20 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const sendAll = async (items) => {
           if (!items.length) return;
           S.upBusy += items.length;
+          for (const it of items) UPP.total += (it.file && it.file.size) || 0;   // #1968 분모 — 겹쳐 떨어뜨린 묶음도 합산
           const rows = items.map((it) => noteFile(it));
           paintZone();
           for (let i = 0; i < items.length; i++) {
             const it = items[i], row = rows[i];
-            const rel = 'uploads/' + String(it.rel || it.file.name).replace(/^\/+/, '');
+            const bare = String(it.rel || it.file.name).replace(/^\/+/, '');
+            const rel = 'uploads/' + bare;
+            const cur = { rel: bare, size: (it.file && it.file.size) || 0 };   // #1968 진행 중 표식(UPP.cur 의 키)
+            UPP.cur.set(cur, 0);
             try {
-              const up = await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel)), it.file, () => {}, undefined);
+              //  (#1631) 합류자는 share=team — 서버가 «올린 사람만» 잠금을 걸지 않는다(자기 개인 루트 업로드에만 먹는 옵션, terminal-files.ts).
+              //   공유 루트로 보내지 않는 이유: 매니지드에서 공유 루트 경로에 워크스페이스 구분이 없다(profiles.ts resolveRootPath).
+              const up = await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel) + (isJoin() ? '&share=team' : '')), it.file,
+                (pct) => { UPP.cur.set(cur, Math.round((cur.size * pct) / 100)); paintProg(); }, undefined);
               //  응답에 source_id 가 있으면 **자료로 등록까지** 된 것이다. 없으면 파일만 올라갔다 —
               //   그 차이를 여기서 안 세면 뒤(읽기 진행률)에서 «오지 않는 것» 을 기다리게 된다.
               //  등록이 안 됐으면 **사유까지** 받아 둔다(서버가 skipped 로 준다) — 사람에게 «왜 안 들어갔는지» 를
@@ -1598,7 +1840,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             } catch (e) { if (row) row.st = 'err'; toast(`${it.file.name} 을 올리지 못했어요 — ${e && e.message ? e.message : e}`); }
             //  ⚠ 읽기 진행률의 목표는 **등록된 수**다(올라간 수가 아니다). 종전엔 여기서 S.upN 을 박아
             //   뒤(startReading)에서 오지 않는 것을 기다렸다 — 실측 5/8·11/13 에서 60초를 세워 뒀다.
+            UPP.cur.delete(cur); UPP.done += cur.size;   // 실패한 파일도 «지나간 몫» 이다 — 막대가 뒤로 가지 않는다
             S.upBusy--; S.read.total = ingestedN(); save(); paintZone();
+            if (!S.upBusy) { UPP.total = 0; UPP.done = 0; UPP.cur.clear(); }   // 다 올랐다 — 다음 묶음은 0 에서
           }
           renderSB();
         };
@@ -1626,6 +1870,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     /* 앱 고르기 — 로컬 파일은 앞에서 받았으므로 '내 컴퓨터 폴더' 항목은 뺀다. */
     sources: {
       html: () => {
+        if (isJoin()) return joinSourcesHtml();   // (#1631) 합류자 — 팀이 모으는 곳을 보여 주기만 한다(고르기·연결·해제 없음)
         // 뺀 셋: '내 컴퓨터 폴더'는 앞 단계(파일 올리기)가 대신하고, '딱히 없어요'는 아래 건너뛰기가 이미 그 자리다
         //  (버튼으로 두면 글이 길어 두 줄로 잘린다).
         //  #1879 — '로컬 깃 저장소'도 뺀다. 이건 외부 서비스 연결이 아니라 **내 컴퓨터에 라이블리를 까는 일**이고,
@@ -1677,6 +1922,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
              <button class="ob-q-skip" data-skip>가져올 곳이 없어요</button>`;
       },
       bind: (el) => {
+        if (isJoin()) { bindJoinSources(el); return; }   // (#1631) 해제·켜기 배선이 합류자에게 붙지 않는다
         //  서버에 **먼저** 묻는다 — 무엇이 이미 연결돼 있고 무엇이 아직 안 열렸는지는 서버만 안다.
         //   못 물으면 표 그대로 두고 그냥 진행한다(연결 못 읽었다고 온보딩이 막히면 안 된다).
         if (!CONN && !connTried) { void loadConn().then(() => renderScene('sources', false)); }
@@ -1751,6 +1997,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           <p class="ob-q-fine">지금 연결하지 못하셔도 괜찮아요 — <a href="#/connect" class="ob-link">외부 앱 연결</a>에서 언제든 다시 하실 수 있습니다.</p>${tokOpen ? modalHtml(tokOpen) : ''}`;
       },
       bind: (el) => {
+        if (isJoin()) { goNext('connect', { back: true }); return; }   // (#1631) 합류자 차례표엔 이 장면이 없다 — 오래된 탭·주소로 와도 연결 문을 열지 않는다
         //  들어올 때마다 서버에 묻는다 — 앞 장면에서 뒤로 왔을 수도, 다른 탭에서 이었을 수도 있다.
         if (!CONN && !connTried) { void loadConn().then(() => renderScene('connect', false)); }
         const redraw = () => renderScene('connect', false);
@@ -2005,9 +2252,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
           $$('.ob-opt-card', el).forEach((x) => x.classList.remove('ob-on')); c.classList.add('ob-on');
           setAi(c.dataset.opt); AIC = null; save(); renderSB(); await sleep(200);
-          goScene(S.ai === '아직 없어요' ? 'sources' : 'claude');
+          //  AI 연결을 건너뛰면 «AI 다음» 으로 — sources 로 박지 않는다(합류자는 켜진 팀 수집이 없으면 그 장면이 없다, #1631).
+          if (S.ai === '아직 없어요') void leaveAi(); else goScene('claude');
         });
-        $('[data-skip]', el).onclick = () => goScene('sources');
+        $('[data-skip]', el).onclick = () => void leaveAi();
       },
     },
     /* AI 잇기 — **실물**이다(#1813). 종전엔 900ms 기다렸다 무조건 «연결됐어요» 라고만 했다.
@@ -2087,7 +2335,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           return qHead('claude', lead, `이 자리엔 ${picked}${josa(S.ai, 0)} 아직 없어요.`,
             `${picked}${josa(S.ai, 1)} 쓰려면 그 CLI(<code>${bin}</code>)가 먼저 깔려 있어야 합니다.`)
             + `<div class="ob-tok">
-                <p class="ob-note">여기(라이블리 서버)에는 Claude 와 ChatGPT 가 준비돼 있어요. <b>${picked}</b>${josa(S.ai, 2)} <b>내 컴퓨터</b>에서 씁니다 — 다음 화면에서 이 컴퓨터를 이어 두시면 <b>${picked}${josa(S.ai, 0)} 없을 때 설치까지 같이 해 드립니다</b>(무엇을 어디서 받는지 보여 드리고 동의를 먼저 받아요).</p>
+                <p class="ob-note">여기(라이블리 서버)에는 Claude 와 ChatGPT 가 준비돼 있어요. <b>${picked}</b>${josa(S.ai, 2)} <b>내 컴퓨터</b>에서 씁니다${FLOW().includes('local') ? ` — 다음 화면에서 이 컴퓨터를 이어 두시면 <b>${picked}${josa(S.ai, 0)} 없을 때 설치까지 같이 해 드립니다</b>(무엇을 어디서 받는지 보여 드리고 동의를 먼저 받아요)` : ''}.</p>
                 ${otherNote}
               </div>`
             //  ⚠ 이 갈래는 **로그인 화면과 다르다.** 고른 AI 가 이 자리에 아예 없으니 [로그인했어요]가 없고,
@@ -2303,7 +2551,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         };
         const pass = (name, key) => { mark(name, key); toast('연결됐어요.'); renderScene('claude', false); };
         if (go) go.onclick = async () => {
-          if (AIC && aiOn(AIC.harness)) return goScene('sources');
+          if (AIC && aiOn(AIC.harness)) return void leaveAi();
           go.disabled = true; go.textContent = '확인 중…'; if (err) err.textContent = '';
           const c = await checkAi();
           if (c && c.loggedIn === true) return pass(AI_LABEL[c.harness] || S.ai, c.harness);
@@ -2327,7 +2575,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         if (skip) skip.onclick = () => {
           const o = (AIC && AIC.others || [])[0];
           if (!S.aiConnected && o) mark(AI_LABEL[o] || o, o);
-          goScene('sources');
+          void leaveAi();
         };
         //  «이 자리에 그 AI 가 없다» 갈래에만 뜬다 — 여기서 쓸 수 있는 AI 로 갈아타는 길.
         //   AIC 를 비워 두면 고르는 화면에서 무엇을 고르든 판정을 새로 묻는다(낡은 답이 안 남는다).
@@ -2587,17 +2835,29 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     //  끝났으니 «하다 만 자리» 저장을 멈춘다(#2207). 늦게 도착한 push 하나가 자리표를 되살리면 다음 로그인이 다시 온보딩으로 간다.
     pushOff = true; clearTimeout(pushT); pushT = null;
     ctx.onDone && ctx.onDone();
-    // (#1631) 서버가 리브 세션을 열어 뒀으면 **그 세션으로** 간다. 못 열었으면 사유를 말하고 홈으로.
-    const livHref = applied && applied.liv && applied.liv.href ? String(applied.liv.href) : '';
-    const noAi = !livHref && applied && applied.liv && applied.liv.reason === 'ai-not-connected';
-    const where = livHref ? '리브가 지금 워크스페이스를 살펴보고 있어요. 그 자리로 모시겠습니다.'
-      : noAi ? 'AI 를 아직 연결하지 않으셔서 리브는 지금 열지 않았어요 — 답을 못 하는 창이 되니까요. 왼쪽 [외부 앱 연결]에서 AI 를 이으면 리브가 이어서 정리해 드립니다. 워크스페이스로 모시겠습니다.'
-      : '워크스페이스로 모시겠습니다.';
     //  읽는 동안 쌓인 사실(등록 못 한 파일 등)을 **여기서** 말한다 — 챗을 걷어내면서 말할 자리가
     //   여기 하나 남았다. 조용히 삼키면 8개 올린 사람이 5건만 들어간 걸 모른 채 끝난다.
     const notes = (S.notes || []).filter(Boolean);
-    say(`정리했어요. ${where}`
-      + (notes.length ? `<p style="margin-top:10px">${notes.join('<br>')}</p>` : ''));
+    const notesHtml = notes.length ? `<p style="margin-top:10px">${notes.join('<br>')}</p>` : '';
+    //  (#1631, 원준 결정 2026-09-13) 초대로 들어온 사람에게는 리브를 띄우지 않는다 — 서버 반영이 스스로 가르고(joining) 그 판정을 돌려준다.
+    //   판정이 안 온 응답(구 서버)이면 화면이 받아 둔 사실로 떨어진다.
+    const joined = applied && applied.joining ? !!applied.joining.is_join : isJoin();
+    if (joined) {
+      say(`준비됐어요. 팀 워크스페이스로 모시겠습니다.${notesHtml}`);
+      await sleep(notes.length ? 3200 : 1400);
+      location.hash = '#/';
+      return;
+    }
+    // (#1631) 서버가 리브 세션을 열어 뒀으면 **그 세션으로** 간다. 못 열었으면 사유를 말하고 홈으로.
+    const livHref = applied && applied.liv && applied.liv.href ? String(applied.liv.href) : '';
+    const noAi = !livHref && applied && applied.liv && applied.liv.reason === 'ai-not-connected';
+    //  AI 로그인이 실제로 있는 자리는 [내 프로필 · 환경설정] 창의 [AI 계정 연결] 탭이다(v2/me-modal.ts — 레일·사이드바 발치의 내 이름이 그 창을 연다).
+    //   종전엔 «왼쪽 [외부 앱 연결]에서 AI 를 이으면 리브가 이어서 정리해 드립니다» 였는데, 그 화면엔 AI 로그인이 없고(v2/connect.ts)
+    //   리브는 처음 설정이 끝나는 순간에만 열려서(delivery/welcome.ts) 뒤 약속을 지킬 길도 없었다.
+    const where = livHref ? '리브가 지금 워크스페이스를 살펴보고 있어요. 그 자리로 모시겠습니다.'
+      : noAi ? 'AI 를 아직 연결하지 않으셔서 리브는 지금 열지 않았어요 — 답을 못 하는 창이 되니까요. AI 는 왼쪽 아래 내 이름을 누르면 나오는 [AI 계정 연결]에서 언제든 연결하실 수 있어요. 워크스페이스로 모시겠습니다.'
+      : '워크스페이스로 모시겠습니다.';
+    say(`정리했어요. ${where}${notesHtml}`);
     await sleep(notes.length ? 3200 : 1400);
     location.hash = livHref || '#/';
   }
@@ -2750,7 +3010,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    *  남겨 두면 아무도 안 보는 결과를 위해 **그 사람 AI 구독으로 헤드리스 세션이 매번 돌아** 비용만 나간다.
    */
 
+  //  ⚠ 이 문장은 **계정 층**(liv_profile.work.asis)으로 간다 — 그래서 자리(용도)가 아니라 **사람이 하는 일**로 적는다.
+  //   자리는 워크스페이스 층(welcome.stage)이 따로 받는다(#2265 의 층 분리를 깨지 않으려고 둘로 나눠 둔 것이다).
   const STAGE_TEXT = { company: '회사·조직에서 팀과 함께 일한다', solo: '1인·프리랜서로 여러 일을 한다',
+    study: '학업·연구를 한다',
     academy: '학교·연구실에서 연구한다', student: '학생으로 수업·시험·진로를 준비한다' };
   function saveWork() {
     const asis = [S.stage ? STAGE_TEXT[S.stage] : null, S.job].filter(Boolean).join(' · ');
@@ -3040,17 +3303,20 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     if (!sc) return;
     // 장면이 바뀌면 «내 컴퓨터» 폴링을 멈춘다 — 화면에 없는 타이머가 5초마다 도는 건 조용한 누수다.
     if (key !== 'local') { clearInterval(localTimer); localTimer = null; localBase = null; }
-    setStage(key === 'name' ? 'stage-name' : 'stage-q');
+    //  인사(intro)도 이름처럼 민낯이다 — 셸이 뒤에 비치면 «설정을 시작하기 전» 이라는 장면이 흐려진다(#1631).
+    setStage(key === 'intro' || key === 'name' ? 'stage-name' : 'stage-q');
+    host.dataset.scene = key;   // 장면 이름표 — 장면별 CSS(41-onboarding.css `.ob-root[data-scene=…]`)의 축
     const col = $('#qcol');
     col.style.animation = 'none';
     if (animate !== false) { void col.offsetWidth; col.style.animation = ''; }
     col.classList.toggle('ob-wide', key === 'sources');
+    col.classList.toggle('ob-intro', key === 'intro');
     col.innerHTML = sc.html();
     syncBack();
     $$('[data-jump]', col).forEach((b) => b.onclick = () => goJump(b.dataset.jump));
     sc.bind && sc.bind(col);
   }
-  const SCENE_LABEL = { name: '이름', stage: '무대', role: '직무', files: '파일 올리기', sources: '앱 고르기',
+  const SCENE_LABEL = { intro: '인사', name: '이름', stage: '무대', role: '직무', files: '파일 올리기', sources: '앱 고르기',
     connect: '앱 연결', ai: 'AI 고르기', claude: 'AI 연결', terminal: '터미널', local: '내 컴퓨터 연결', app: '앱 받기' };
   /* 뒤로가기는 **지나온 자취**를 되짚는다 — 차례표를 거꾸로 세면 조건부로 건너뛴 장면(AI 없음 등)에 걸린다. */
   function goBack() { const prev = S.trail.pop(); if (!prev) return; save(); goScene(prev, { back: true }); }
@@ -3119,20 +3385,40 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   async function resumeFromServer() {
     if (destroyed) return;
     setStage('stage-name');
-    $('#qcol').innerHTML = `<div class="ob-q-top"><div class="ob-q-ic">L</div></div>
+    //  #1631 — 기다리는 말은 **조금 기다린 뒤에만** 띄운다. 처음 오는 사람은 곧장 인사를 봐야 하는데, 서버가 금방 답해도
+    //   그 사이에 «지난번에 어디까지 하셨는지» 가 먼저 번쩍였다 — 그 사람에게는 «지난번» 이 없다.
+    const col0 = $('#qcol');
+    col0.innerHTML = '';
+    const waitT = setTimeout(() => {
+      if (destroyed) return;
+      col0.innerHTML = `<div class="ob-q-top"><div class="ob-q-ic">L</div></div>
       <p class="ob-q-help">지난번에 어디까지 하셨는지 보고 있어요.</p>`;
+    }, RESUME_HINT_MS);
     const got = await Promise.race([loadWelcome(), sleep(RESUME_WAIT_MS)]);
+    clearTimeout(waitT);
     if (destroyed) return;                 // 기다리는 사이에 화면을 떠났다 — 없는 화면에 그리지 않는다
     const scene = resumeScene(got && got.progress);
     if (scene) {
       S = Object.assign(fresh(), got.progress.state);
-      S.scene = scene;
+      inheritPurpose();
+      //  (#1631) 저장된 장면이 지금 차례표에 없으면(옛 판 합류자 차례표의 role·stage·connect · 켜진 팀 수집이 없어 빠진 sources) 그 뒤의 첫 장면으로 연다.
+      //   합류자는 팀 수집을 읽고 나서 맞춘다 — 안 읽고 맞추면 켜진 팀 수집이 있어도 sources 를 건너뛴다.
+      if (isJoin() && collP) await Promise.race([collP, sleep(1500)]);
+      if (destroyed) return;
+      S.scene = fitScene(scene);
       saveLocal();          // 이 탭에도 얹어 둔다 — 이제부터는 이 탭이 정본이다(서버로 다시 밀지 않는다)
-      renderSB(); goScene(scene);
+      renderSB(); goScene(S.scene);
       toast('지난번에 하시던 자리에서 이어 갑니다.');
       return;
     }
-    renderSB(); goScene(S.scene || 'name');
+    //  처음부터 — 두 차례표 모두 인사(intro)에서 시작하고, 합류자는 인사 다음이 팀 소개다(nextScene · #3872·#1631).
+    //   ⚠ 종전 `S.scene || (isJoin() ? 'team' : 'name')` 은 S.scene 이 늘 채워져 있어(fresh) 뒤쪽이 한 번도 안 불렸다 —
+    //    합류자에게 팀 소개가 뜬 적이 없다. 차례표를 따라가게 하면 그 갈래가 저절로 산다.
+    //   ⚠ 여기 온 탭은 **아무것도 답하지 않았다**(hadLocal=false). 그런데 그 탭의 저장본이 「이름」에 멈춰 있으면 — 인사가 생기기 전의
+    //    처음 설정을 한 번 본 탭, 인사를 지나 이름에서 그냥 나간 탭 — S.scene 이 'name' 이라 인사를 건너뛰고 이름부터 열었다.
+    //    답한 것이 없으니 차례표의 첫 장면으로 되돌린다. 자취도 비운다(안 비우면 첫 장면에서의 «뒤로» 가 옛 자리로 간다).
+    if (BEFORE_ANSWER.includes(S.scene)) { S.scene = FLOW()[0]; S.trail = []; }
+    renderSB(); goScene(S.scene || FLOW()[0]);
   }
 
   /* ── 부팅 ── */
@@ -3146,7 +3432,17 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   // 장면 바로 열기 — 셸에선 질의가 해시 뒤에 붙는다(#/welcome?scene=b1). 검토용.
   const want = new URLSearchParams(location.search).get('scene') || new URLSearchParams((location.hash.split('?')[1] || '')).get('scene');
   if (want && STEP_OF[want] != null) { demoJump = true; goScene(want); }
-  else if (hadLocal) { renderSB(); goScene(S.scene || 'name'); schedulePush(); }
+  //  #3872 — 이 탭에 하던 자리가 있으면 그 자리부터(종전 그대로). 다만 «합류자인가»는 그 뒤 문구·차례표가
+  //   쓰므로 서버에 한 번 물어 둔다(응답이 늦어도 화면은 기다리지 않는다).
+  else if (hadLocal) {
+    renderSB();
+    //  (#1631) 판정이 오면 자리를 한 번 맞춘다 — 이 탭의 장면이 지금 차례표에 없으면(옛 합류자 차례표의 connect 등) 자취 없이 그 뒤로 옮긴다.
+    void loadWelcome().then(async () => {
+      if (isJoin() && collP) await Promise.race([collP, sleep(1500)]);
+      if (!destroyed && S.scene && S.scene !== 'done' && !FLOW().includes(S.scene)) goScene(fitScene(S.scene), { back: true });
+    });
+    goScene(S.scene || FLOW()[0]); schedulePush();
+  }
   else { renderSB(); void resumeFromServer(); }
   return { destroy() {
     destroyed = true;

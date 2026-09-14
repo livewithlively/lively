@@ -41,7 +41,7 @@ export const orgAppTools: Capability = {
     "그 앱의 MCP 도구를 읽기/쓰기로 갈라 돌려준다 — 앱 상세가 «AI가 내 계정으로 하는 일»을 동사로 보여 주는 데 쓴다. " +
     "쓰기(write=true)는 org_tool.level='L2'(집행) — 그 앱에 **내 이름으로 기록이 남는** 도구다. " +
     "읽기 전용이고 권한을 넓히지 않는다. 도구가 없는 앱(ClickUp 등)은 빈 목록으로 답한다(에러가 아니다).",
-  scope: "admin",
+  scope: "memory",
   input: { system: z.string().min(1).max(40).describe("앱 키(github · slack · gitlab · figma · linear …)") },
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/:system/tools"], parse: (req) => ({ system: String((req.params as Record<string, string>)?.system ?? "") }) }] },
   handler: async (input, user) => {
@@ -70,9 +70,9 @@ export const orgAppTools: Capability = {
 export const orgAppToolsSetWrite: Capability = {
   name: "org_app_tools_set_write", title: "이 앱의 쓰기 도구 끄기/켜기",
   description:
-    "그 앱의 쓰기 도구(level=L2 — 이슈 만들기·메시지 보내기처럼 그 앱에 기록이 남는 것)를 한꺼번에 끈다/켠다(admin). " +
+    "그 앱의 쓰기 도구(level=L2 — 이슈 만들기·메시지 보내기처럼 그 앱에 기록이 남는 것)를 한꺼번에 끈다/켠다(구성원). " +
     "워크스페이스 전체에 적용된다(멤버별 도구 설정은 아직 없다). 읽기 도구(L0/L1)는 건드리지 않는다.",
-  scope: "admin",
+  scope: "memory",
   input: {
     system: z.string().min(1).max(40).describe("앱 키(github · slack …)"),
     enabled: z.boolean().describe("true=쓰기 켜기 · false=쓰기 끄기"),

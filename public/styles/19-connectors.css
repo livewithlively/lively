@@ -208,6 +208,9 @@ main.doc-mode { max-width: none; padding: 0; }
 .kn-space-head::-webkit-details-marker { display: none; }
 .kn-space-head .pjv-side-navlabel { font-weight: 700; color: var(--ink); }
 .kn-space-caret { cursor: pointer; }
+/* 묶음 구획(#1631) — 소제목이 여럿 선다. 「묶음을 정해 주세요」는 훑는 자리에선 수선 거리라 톤을 낮춘다
+   (고치는 자리는 분류체계 탭이다). .kn-space-head 규칙을 이기도록 셀렉터를 한 단계 길게 잡는다. */
+.kn-space-group.kn-space-fix .kn-space-head .pjv-side-navlabel { color: var(--muted-head); }
 /* 카테고리 행 — 개수는 오른쪽 끝(.pjv-side-navcount 재사용), 0 은 흐리게. ▸ 펼침 셰브런은 글리프 자리. */
 .kn-nav-cat { gap: 6px; }
 .kn-count-zero { opacity: .45; }

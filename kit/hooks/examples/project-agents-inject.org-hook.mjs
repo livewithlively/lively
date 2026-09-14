@@ -10,6 +10,49 @@ const FETCH_MS = 5000;
 const MAX_INJECT = 24 * 1024;
 const FLAG_DIR = path.join(os.tmpdir(), "lively-hooks");
 
+
+// ── 첨부 좌표 해석(#3787) — 지시에 실린 자료 표시를 **이 노드의 실제 절대경로**로 편다. ──
+//  왜 필요한가: 웹 컴포저는 이제 프로젝트 상대경로만 적는다(compose-attach.ts tail). 모델은 읽을 절대경로가
+//  있어야 하고, 그 절대경로는 세션이 어디서 도느냐에 따라 다르다. 여기서 편다 — 매니지드면 게이트웨이 경로,
+//  로컬 노드면 `~/workspace/project/<id>/…`.
+//  그리고 **없으면 크게 말한다**: 이 버그의 실제 피해는 파일이 안 온 것이 아니라, 없는데 있다고 믿은 AI 가
+//  근처의 다른 파일을 집어 자신 있게 답한 것(무음 오답)이었다.
+//  구 클라이언트·다른 입구(터미널 드롭·liv kickoff)는 여전히 게이트웨이 절대경로를 실을 수 있어, 그것도 접는다.
+const ATTACH_HEAD = /첨부한 자료\(([^)]*)\):\s*\n((?:\s*-\s*.+\n?)+)/g;
+
+function sharedRootOf() {
+  return process.env.TERMINAL_ROOT_SHARED || path.join(os.homedir(), "workspace");
+}
+
+/** 게이트웨이 절대경로를 이 노드 좌표로 접는다 — `…/project/<id>/<나머지>` 의 뒤쪽만 살린다. 못 접으면 null. */
+function refoldAbs(p, projDir) {
+  const m = String(p).replace(/\\/g, "/").match(/\/project\/[^/]+\/(.+)$/);
+  return m ? path.join(projDir, m[1]) : null;
+}
+
+/** 프롬프트의 첨부 표시 → [{ shown, abs, exists }]. 없으면 빈 배열. */
+function resolveAttachments(prompt, projDir) {
+  const out = [];
+  const seen = new Set();
+  const add = (shown, abs) => {
+    if (!abs || seen.has(abs)) return;
+    seen.add(abs);
+    out.push({ shown, abs, exists: fs.existsSync(abs) });
+  };
+  let m;
+  ATTACH_HEAD.lastIndex = 0;
+  while ((m = ATTACH_HEAD.exec(String(prompt || ""))) !== null) {
+    for (const line of m[2].split("\n")) {
+      const v = line.replace(/^\s*-\s*/, "").trim();
+      if (!v) continue;
+      if (path.isAbsolute(v)) { add(v, fs.existsSync(v) || !projDir ? v : (refoldAbs(v, projDir) || v)); continue; }
+      if (!projDir) continue;          // 상대경로인데 펼 좌표가 없다 — 말할 수 있는 게 없으니 조용히 넘긴다
+      add(v, path.join(projDir, v));
+    }
+  }
+  return out;
+}
+
 const readStdin = () => new Promise((resolve) => {
   let d = "", done = false; const fin = () => { if (!done) { done = true; resolve(d); } };
   try {
@@ -82,12 +125,40 @@ export function executionSessionId(input = {}, env = process.env) {
   try {
     const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), FETCH_MS);
     try {
-      const r = await fetch(`${base}/api/ui/execution-sessions/${encodeURIComponent(executionId)}/project-context?knownRevision=${known}`, { signal: ctl.signal, headers });
+      // node — 이 세션이 도는 노드. 주면 서버가 그 노드에서의 폴더(folder·folder_abs_path)까지 답한다(#3787).
+      const r = await fetch(`${base}/api/ui/execution-sessions/${encodeURIComponent(executionId)}/project-context`
+        + `?knownRevision=${known}&node=${encodeURIComponent(String(process.env.LIVELY_NODE_ID || ""))}`, { signal: ctl.signal, headers });
       if (!r.ok) return;
       body = await r.json();
     } finally { clearTimeout(t); }
   } catch { return; }
   if (!body) return;
+
+  // ── 첨부 좌표 — revision(changed) 과 **무관하게 매 턴** 판정한다. 첨부는 아무 턴에나 실려 온다. ──
+  const attachPid = Number(body.project_id || 0);
+  {
+    // 프로젝트가 없어도 판정한다 — 그때는 펴 줄 좌표가 없어 **절대경로의 존재 확인만** 하지만, 그거면 충분하다.
+    //  이 버그의 피해는 «파일이 안 온 것» 이 아니라 «없는데 있다고 믿고 근처 것을 읽은 것» 이라, 어느 분기에서든
+    //  «없다» 는 말이 나오는 쪽이 «조용히 틀리는» 쪽보다 낫다.
+    const projDir = (attachPid > 0 && (body.folder || body.folder_abs_path))
+      ? (body.folder_abs_path ? String(body.folder_abs_path) : path.join(sharedRootOf(), String(body.folder)))
+      : null;
+    const found = resolveAttachments(input.prompt ?? input.user_prompt ?? "", projDir);
+    if (found.length) {
+      const have = found.filter((f) => f.exists), miss = found.filter((f) => !f.exists);
+      const lines = [];
+      if (have.length) lines.push("[라이블리] 지시에 실린 자료의 **이 컴퓨터 경로**입니다 — 이 경로로 읽으세요:\n"
+        + have.map((f) => `- ${f.shown} → ${f.abs}`).join("\n"));
+      if (miss.length) lines.push("⚠ [라이블리] 아래 자료가 **이 컴퓨터에 없습니다** — 아직 안 내려왔거나 지워졌습니다:\n"
+        + miss.map((f) => `- ${f.shown} (찾은 자리: ${f.abs})`).join("\n")
+        + "\n\n**근처의 다른 파일을 대신 읽지 마세요.** 그 파일을 봤다고 말하지도 마세요 — 없으면 없다고 하고, "
+        + (attachPid > 0
+          ? `필요하면 \`project_get_v6(${attachPid})\` 의 자료나 웹 자료함을 확인하도록 사람에게 요청하세요.`
+          : "필요하면 사람에게 파일을 다시 올려 달라고 요청하세요."));
+      if (lines.length) await writeStdout(lines.join("\n\n") + "\n");
+    }
+  }
+
   if (body.changed !== true) {
     const revision = Number(body.revision || 0);
     const applied = Number(body.applied_revision || 0);

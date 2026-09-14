@@ -70,7 +70,7 @@ ok(/ctxMenu\(e\.clientX, e\.clientY, rows\)/.test(src["web/v2/panes-files.ts"]),
 ok(/dockMenu\(e\.clientX, e\.clientY/.test(src["web/v2/rail.ts"]), "E5c 레일 독 우클릭 그대로");
 
 // E6. 셸 부팅·클래식 부팅 둘 다 배선을 건다(액자 안은 다른 문서다).
-ok(/mountCtxMenus\(root, \{ longPress: true, menuKey: true \}\)/.test(src["web/v2/main.ts"]) && /mountCtxShell\(\{/.test(src["web/v2/main.ts"]), "E6a 셸 부팅");
+ok(/mountCtxMenus\(document\.body, \{ longPress: true, menuKey: true \}\)/.test(src["web/v2/main.ts"]) && /mountCtxShell\(\{/.test(src["web/v2/main.ts"]), "E6a 셸 부팅");
 ok(/mountClassicCtx\(\);/.test(src["web/main.ts"]) && /mountCtxMenus\(document\.body/.test(src["web/classic-ctx.ts"]), "E6b 클래식 부팅");
 ok(/'lively:open-route'/.test(src["web/v2/main.ts"]) && /'lively:open-route'/.test(src["web/v2/ctx-registry.ts"]), "E6c 액자 → 셸 「새 탭에서 열기」 통로");
 
@@ -121,5 +121,25 @@ ok(/if \(d === '\\r'\) undoStack\.reset\(\)/.test(T), "E11g 보내고 나면 되
 ok(/lineSelect: !!selI\.checked/.test(T) && /p\.lineSelect !== false/.test(T), "E11h 선택 흉내를 끄는 설정이 있다");
 ok(read("public/terminal.html").includes(".term-sel {"), "E11i 선택 표시 CSS");
 ok(read("scripts/build-standalone.mjs").includes('"line-edit.ts"'), "E11j 새 파일이 빌드 스탬프 입력에 들어간다");
+
+
+// E11. 아이콘(SVG) 위 우클릭 — 종전엔 `instanceof HTMLElement` 가드가 **SVGElement 를 통째로 걸러** 네이티브 메뉴가 떴다
+//  (원준님 실측 2026-09-12: 홈 앱 타일·아카이브 표의 아이콘. 우리 화면은 아이콘이 거의 다 SVG 라 구멍이 넓었다).
+//  ⚠ 주석 오탐 주의 — 이 파일의 머리말이 그 가드를 «쓰지 않는다» 고 인용한다. 실행 줄만 본다(오늘 세 번 밟은 함정).
+const Rcode = R.split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*") && !l.trim().startsWith("/*")).join("\n");
+ok(!/instanceof HTMLElement/.test(Rcode), "E11a 배선의 **실행 줄** 에 instanceof HTMLElement 가드가 없다(SVG 를 거른다)");
+ok(/const t = e\.target as Element \| null;\s*if \(!t \|\| t\.nodeType !== 1 \|\| typeof t\.closest !== 'function'\) return;/.test(R), "E11b 대상은 Element 로 받는다(nodeType·closest 로만 가린다)");
+ok(/const dset = \(n: Element\): DOMStringMap \| undefined =>/.test(R), "E11c data-* 는 SVGElement 에서도 읽는다(dset)");
+// E12. 제공자가 던져도 네이티브로 떨어지지 않는다 — 던지면 preventDefault 가 안 돌아 브라우저 메뉴가 뜬다.
+ok(/try \{ item = norm\(p\(hit, ev\)\); \} catch \(_\) \{ item = null; \}/.test(R), "E12a 항목 제공자 예외 격리");
+ok(/try \{ got = collectCtx\(t, eventOf\(e, t, root, e\.clientX, e\.clientY\)\); \} catch \(_\) \{ got = null; \}/.test(R), "E12b 수집 전체 예외 격리");
+ok(/try \{ showCtxMenu\(e\.clientX, e\.clientY, got\.rows, \{ title: got\.title, sub: got\.sub \}\); \} catch/.test(R), "E12c 띄우기 예외 격리(이미 preventDefault 한 뒤)");
+
+
+// E13. 뿌리는 body — 런치패드·[나] 창·통합검색·팝오버·모달이 전부 #v2-root 밖(body)에 붙는다.
+//  #v2-root 에 걸면 그 위에서 우클릭이 네이티브로 떨어진다(원준님 실측 2026-09-12).
+ok(/document\.body\.dataset\.ctxSurface = 'shell';\s*mountCtxMenus\(document\.body, \{ longPress: true, menuKey: true \}\)/.test(src["web/v2/main.ts"]), "E13a 셸 배선은 document.body 에 건다");
+ok(/const FRAME_SEL = 'iframe, webview';/.test(R) && /const OWN_MENU_SEL = '\.pn-ctx, \.tctx';/.test(R), "E13b 우리 메뉴는 프레임 가드가 아니라 제 가드로 가른다");
+ok(/if \(t\.closest\(OWN_MENU_SEL\)\) \{ e\.preventDefault\(\); return; \}/.test(R), "E13c 메뉴 위 우클릭은 네이티브도 안 띄운다");
 
 console.log(`\n${pass} passed`);

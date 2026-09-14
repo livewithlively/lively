@@ -6,7 +6,8 @@ import { pjvPopover } from '../projects/popover.js';   // #1841 행 ⋯ 메뉴 �
 import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import { overlay } from '../admin.js';
 // #1582 — 세션 종료·목록제거 확인창은 전 화면 공용 정의 하나만 쓴다.
-import { confirmSessionForget, endedToast } from '../session-actions.js';
+import { confirmForceRestore, confirmSessionForget, endedToast } from '../session-actions.js';
+import { canForceRestore, restorePath } from '../lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다
 import { TSESS_STATUS, relAgo, shortDir, tsessConfirmEnd } from './status-filter.js';
 import { termUrl } from './select-bar.js';
 import { memberName, openTermEdit } from './session-form.js';
@@ -225,15 +226,24 @@ function tsessRow(s, ctx) {
 
   // ── 동작(카드 때와 동일) ──
   const doOpen = () => window.open(openUrl(), '_blank');
-  const doRestore = async (btn) => {
+  const doRestore = async (btn, force?: boolean) => {
     btn.disabled = true; const keep = btn.textContent; btn.textContent = '여는 중…';
     try {
-      const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST', body: '{}' });
+      const r: any = await api(restorePath(s.id, force), { method: 'POST', body: '{}' });
       if (r && r.already) { doOpen(); toast('세션이 이미 살아있어 그대로 엽니다'); reRender(); return; }
       const ns = r && r.session;
       if (ns && ns.id) window.open(termUrl(ns.id, ns.label || s.label, ns.node && ns.node.id), '_blank');
       toast('열었어요 — 새 터미널에서 대화를 이어받아요(정확한 대화를 못 찾으면 목록에서 고르세요).'); reRender();
-    } catch (e: any) { toast('열지 못했어요 — ' + (e && e.message || e), true); btn.disabled = false; btn.textContent = keep; }
+    } catch (e: any) {
+      btn.disabled = false; btn.textContent = keep;
+      //  #3870 — 서버가 «모름이라 멈췄다(force 로 풀린다)» 고 하면 그 선택지를 여기서 준다(종전엔 «화면의
+      //   [강제로 되살리기] 를 눌러 주세요» 라는 서버 문구만 뜨고, 이 화면엔 그 버튼이 없었다).
+      if (canForceRestore(e) && !force) {
+        if (await confirmForceRestore({ name: s.label })) await doRestore(btn, true);
+        return;
+      }
+      toast('열지 못했어요 — ' + (e && e.message || e), true);
+    }
   };
   const doEnd = async () => {
     const ok = s.restorable

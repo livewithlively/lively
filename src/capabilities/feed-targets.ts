@@ -32,7 +32,7 @@ const feedTargetList: Capability = {
   name: "feed_target_list",
   title: "피드 목적지 목록",
   description: "위키 아웃바운드 피드 목적지(feed_target) 목록 + 각 피드의 매핑 카테고리·발행 카드 수. 발행 게이트(카테고리 N:M) 관리 표면. 카테고리 피커용 전체 카테고리 동봉.",
-  scope: "admin",
+  scope: "memory",
   input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/feed-targets"], parse: () => ({}) }] },
   handler: async () => {
@@ -56,7 +56,7 @@ const feedTargetCreate: Capability = {
   description:
     "새 노션 피드를 만들거나(부트스트랩: parent_page_id 하위에 '지식 피드' DB 생성) 기존 노션 DB 를 등록(database_id). " +
     "둘 다 #984 안전을 위해 피드 DB 를 인바운드 exclude_pages 에 자동 등록(우리 발행물이 재수집돼 observed 로 뒤집히는 것 차단). all_categories=true 면 매핑 없이 모든 정본 발행.",
-  scope: "admin",
+  scope: "memory",
   input: {
     title: z.string().max(200).optional(),
     parentPageId: z.string().max(200).optional(),
@@ -104,7 +104,7 @@ const feedTargetUpdate: Capability = {
   name: "feed_target_update",
   title: "피드 목적지 수정",
   description: "피드 제목·상태(active/paused)·all_categories(매핑 무시하고 모든 정본 발행) 패치. 주어진 키만 변경.",
-  scope: "admin",
+  scope: "memory",
   input: {
     id: z.number().int().positive(),
     title: z.string().max(200).optional(),
@@ -133,7 +133,7 @@ const feedTargetDelete: Capability = {
   name: "feed_target_delete",
   title: "피드 목적지 삭제",
   description: "피드 목적지 등록을 삭제(카테고리 매핑도 CASCADE). ⚠ 노션 DB 자체와 이미 발행된 카드·exclude_pages 항목은 남는다(외부 삭제는 하지 않음).",
-  scope: "admin",
+  scope: "memory",
   input: { id: z.number().int().positive() },
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/feed-targets/:id/delete"], parse: (req) => ({ id: Number(req.params?.id) }) }] },
   handler: async (input: any) => {
@@ -148,7 +148,7 @@ const feedTargetSetCategories: Capability = {
   name: "feed_target_set_categories",
   title: "피드 발행 카테고리 매핑",
   description: "이 피드로 발행할 카테고리 집합을 통째로 설정(발행 게이트, N:M). all_categories=true 인 피드는 이 매핑을 무시한다.",
-  scope: "admin",
+  scope: "memory",
   input: { id: z.number().int().positive(), categoryIds: z.array(z.number().int()).default([]) },
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/feed-targets/:id/categories"], parse: (req) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
@@ -167,7 +167,7 @@ const feedTargetDrain: Capability = {
   name: "feed_target_drain",
   title: "피드 즉시 발행(드레인)",
   description: "등록된 노션 피드 전체를 지금 1회 드레인(정본 지식 → 카드, 멱등). 백그라운드 실행(대량은 수십 초~분) — started 반환 후 진행. 상시 갱신은 cron push-wiki-notion.",
-  scope: "admin",
+  scope: "memory",
   input: {},
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/feed-targets/drain"], parse: () => ({}) }] },
   handler: async () => {

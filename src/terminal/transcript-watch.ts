@@ -30,7 +30,7 @@ import { emitSessionEvent } from "./harness-io/runtime-bus.js";
 import { resolveTranscript } from "./transcript-locate.js";
 import { sessionExecConfigured, sessionSpawnArgv } from "./session-exec.js";
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
-import { nodeOfSession } from "../node/registry.js";
+import { remoteNodeOfSession } from "../node/registry.js";   // #2600 T2 d6 — «정말 저쪽 기계인가» 는 대화창 gateRead 와 한 벌
 import { sessionGone } from "./terminal-sessions.js";
 
 /**
@@ -242,9 +242,10 @@ async function start(id: string, w: Watch): Promise<void> {
   //   찾지도 못할 파일을 되묻는 재시도가 돈다 — 줄이려던 바로 그 부하를 다른 이름으로 만드는 일이다.
   //  ⚠ **노드 등록 여부만으로 가르면 안 된다**: 게이트웨이 박스가 노드로도 등록된 배포에서는 이 박스의
   //   로컬 세션까지 노드로 잡힌다(#2055 실측 함정). 배달과 같은 기준을 쓴다 — «이 박스의 tmux 에 있나».
+  //  #2600 T2 d6 — 판정은 `remoteNodeOfSession` 한 곳(대화창 gateRead 와 **같은 함수**)이다. 세션 호스트 좌표는
+  //   같은 tmux 라 묻지 않고, 소유가 넘어간 테넌트면 호스트 스냅샷으로 답한다. «모른다» 는 이 박스 것으로 접는다.
   if (w.onNode === null) {
-    const nid = nodeOfSession(id);
-    w.onNode = nid ? await deps.sessionGone(id).catch(() => false) : false;
+    w.onNode = (await remoteNodeOfSession(id, deps.sessionGone)) !== null;
   }
   if (w.onNode) { setLive(id, w, false, "node"); return; }
   let target;

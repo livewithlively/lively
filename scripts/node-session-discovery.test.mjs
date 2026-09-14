@@ -73,7 +73,9 @@ ok(/catch \(e\)[\s\S]{0,120}seenNodeSessions\.delete/.test(DISCOVER()),
 ok(/if \(st\.discovered && !st\.root_key\)[\s\S]{0,300}HttpError\(409/.test(ROUTES),
   "C8 복원은 좌표 없는 discovered 행을 거절한다 — 추측하면 그 세션이 엉뚱한 폴더에서 되살아난다");
 
-const RESTORE_GUARD = () => slice(ROUTES, "if (st.discovered && !st.root_key)", "const resumeId = st.claude_session_id");
+//  #3870 — 구간 끝 표식을 옮긴다: 복원 노드 갈래에서 대화 id 를 모으는 줄이 `resumeId` 에서 `mappedNodeId` 로 바뀌었다
+//   (이어받기 인자는 이제 resume-plan 의 판정 결과라, «매핑된 id» 와 «실제로 걸 id» 가 다른 값이 됐다). 재는 불변식은 같다.
+const RESTORE_GUARD = () => slice(ROUTES, "if (st.discovered && !st.root_key)", "const mappedNodeId = st.claude_session_id");
 ok(RESTORE_GUARD().indexOf("409") < ROUTES.indexOf('rootKey: st.root_key || "shared"'),
   "C8b 그 거절은 좌표 폴백(root_key || 'shared')보다 **앞**에 선다 — 뒤에 두면 이미 추측한 뒤다");
 

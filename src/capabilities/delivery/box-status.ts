@@ -18,7 +18,7 @@ import { liveAttachCount, scanAttachProcs } from "../../terminal/terminal-pty.js
 import {
   getRuntimeConfig, getStoragePolicySource, getSessionMemoryPolicySource, getSessionReclaimPolicySource, getDelegatePolicySource
 } from "../../org/store.js";
-import { restOnly, str } from "./shared.js";
+import { restOnly, restWork, str } from "./shared.js";
 
 // #1059 G1 — Ollama 로드 모델 프로브(best-effort). 급성 스파이크(임베딩 모델 3.3GB)의 가시화용.
 //  임베딩 provider 가 http 이고 base_url 이 있을 때만, 그 host 의 /api/ps(Ollama 전용)를 짧게 찔러 로드 모델·용량을 본다.
@@ -49,13 +49,13 @@ export const boxStatusCapabilities: Capability[] = [
   // ── 경보 알림 채널(#813) — 박스가 위험해졌을 때 **사람에게 실제로 닿는** 경로. ──
   //  T5 로 가드는 넣었지만 그 사실을 아무도 모른다(로그는 안 보고, 관리탭·/readyz 는 가서 봐야 안다).
   //  ⚠ 웹훅 URL 은 시크릿이다 — **값을 응답에 절대 싣지 않는다**(configured 불리언만). 저장은 암호화(alerts.ts).
-  restOnly("org_alert_status", "경보 알림 설정",
-    "박스 경보(디스크 위험·DB 다운)를 보낼 웹훅 설정 상태. **URL 값은 반환하지 않는다**(설정 여부만). admin 전용.",
+  restWork("org_alert_status", "경보 알림 설정",
+    "박스 경보(디스크 위험·DB 다운)를 보낼 웹훅 설정 상태. **URL 값은 반환하지 않는다**(설정 여부만).",
     [{ method: "GET", paths: ["/api/ui/org/alert"], parse: () => ({}) }],
     async () => loadAlertChannel()),
 
-  restOnly("org_alert_set", "경보 알림 설정 저장",
-    "경보 웹훅을 등록/변경한다(슬랙·디스코드 incoming webhook 또는 임의 JSON 웹훅). url 을 비워 보내면 **미변경**(기존 유지). min_severity=warn|critical. admin 전용.",
+  restWork("org_alert_set", "경보 알림 설정 저장",
+    "경보 웹훅을 등록/변경한다(슬랙·디스코드 incoming webhook 또는 임의 JSON 웹훅). url 을 비워 보내면 **미변경**(기존 유지). min_severity=warn|critical.",
     [{ method: "POST", paths: ["/api/ui/org/alert"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       // ⚠ url 은 감사·로그에 남기지 않는다(시크릿). redactDeep 은 URL 패턴을 안 잡으므로 감사 스냅샷에 넣으면 그대로 샌다.
@@ -72,13 +72,13 @@ export const boxStatusCapabilities: Capability[] = [
       label: z.string().optional().describe("채널 라벨(메모용)"),
     }),
 
-  restOnly("org_alert_delete", "경보 알림 해제",
-    "등록된 경보 웹훅을 삭제한다. admin 전용.",
+  restWork("org_alert_delete", "경보 알림 해제",
+    "등록된 경보 웹훅을 삭제한다.",
     [{ method: "POST", paths: ["/api/ui/org/alert/delete"], parse: () => ({}) }],
     async () => ({ removed: await removeAlertChannel(), alert: await loadAlertChannel() })),
 
-  restOnly("org_alert_test", "경보 알림 테스트 전송",
-    "지금 등록된 웹훅으로 테스트 경보를 1건 보낸다. **설정이 실제로 닿는지 확인하는 유일한 방법** — 저장만 하고 안 보내보면 정작 장애 때 안 온다. admin 전용.",
+  restWork("org_alert_test", "경보 알림 테스트 전송",
+    "지금 등록된 웹훅으로 테스트 경보를 1건 보낸다. **설정이 실제로 닿는지 확인하는 유일한 방법** — 저장만 하고 안 보내보면 정작 장애 때 안 온다.",
     [{ method: "POST", paths: ["/api/ui/org/alert/test"], parse: () => ({}) }],
     async () => {
       const ch = await loadAlertChannel();

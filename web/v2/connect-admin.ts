@@ -22,7 +22,7 @@ export type OrgMcp = {
 
 /** 관리자면 조직 쪽 사실을 읽어 온다. 관리자가 아니면 null — 화면은 그 절반을 아예 그리지 않는다. */
 export async function loadOrgMcp(): Promise<OrgMcp | null> {
-  if (!hasScope('admin')) return null;
+  if (!(hasScope('memory') || hasScope('admin'))) return null;   // 2026-09-12 — 워크스페이스 관리 축
   const [srv, pre] = await Promise.all([
     api('/api/ui/org/mcp-servers').catch(() => null),
     api('/api/ui/org/mcp-server-presets').catch(() => null),

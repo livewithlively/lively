@@ -98,21 +98,21 @@ async function refresh(wrap: HTMLElement, slug: string, onChanged?: () => void):
   }
 
   if (d.can_invite) kids.push(inviteForm(d, slug, again));
-  else kids.push(el('p', { class: 'v2-ws-hint', text: '사람을 부르는 건 이 워크스페이스를 만든 사람이 합니다.' }));
+  else kids.push(el('p', { class: 'v2-ws-hint', text: '사람을 부르는 건 이 워크스페이스를 만든 사람과 공동 관리자가 합니다.' }));
 
   wrap.replaceChildren(...kids.filter(Boolean) as HTMLElement[]);
 }
 
 function memberRow(d: PeopleData, m: PeopleData['members'][number], slug: string, again: () => void): HTMLElement {
   const meId = String((state.me as any)?.userId || '');
-  const isMe = m.member_id === meId;
+  const isMe = (m as any).is_me === true || m.member_id === meId;
   // 만든 사람은 뺄 수 없다(서버도 막는다) — 뺄 수 없는 것에 ✕ 를 그려 놓고 눌렀을 때 오류를 내지 않는다.
   const canRemove = d.can_invite && !m.is_creator && !isMe;
   return el('div', { class: 'v2-ws-person' },
     el('span', { class: 'v2-ws-person-face', 'aria-hidden': 'true', text: (who(m).trim()[0] || '?').toUpperCase() }),
     el('span', { class: 'v2-ws-person-tt' },
       el('b', { text: who(m) + (isMe ? ' (나)' : '') }),
-      el('span', { text: m.is_creator ? '만든 사람' : m.role === 'owner' ? '공동 owner' : m.email || '구성원' })),
+      el('span', { text: m.is_creator ? '만든 사람' : m.role === 'owner' ? '공동 관리자' : m.email || '구성원' })),
     canRemove ? el('button', {
       class: 'v2-ws-del', type: 'button', title: '이 워크스페이스에서 빼기', text: '✕',
       onclick: async () => {
@@ -245,6 +245,8 @@ export interface MemberModalOpts {
 
 type Role = 'creator' | 'owner' | 'admin' | 'member';
 interface Person {
+  /** 매니지드 명부는 사람 축이 이메일이라 id 비교로 «나» 를 못 가린다 — 서버가 준 is_me 를 싣는다(#1631). */
+  isMe?: boolean;
   id: string; name: string; email: string | null; role: Role;
   avatar?: string | null; avatar_char?: string | null; avatar_color?: string | null;
   scopes?: string[];
@@ -372,7 +374,7 @@ export function openMemberModal(slug: string, wsName: string, opts: MemberModalO
     }
     if (!v.canManage) kids.push(el('p', { class: 'v2mem-note', text: primary
       ? '사람을 부르고 권한을 바꾸는 건 관리자가 합니다.'
-      : '사람을 부르고 권한을 바꾸는 건 이 워크스페이스를 만든 사람이 합니다.' }));
+      : '사람을 부르고 권한을 바꾸는 건 이 워크스페이스를 만든 사람과 공동 관리자가 합니다.' }));
     body.replaceChildren(...kids.filter(Boolean) as HTMLElement[]);
   };
   void paint();
@@ -386,7 +388,7 @@ async function loadWsView(slug: string, wsName: string): Promise<View> {
     wsName: d.workspace?.name || wsName, kind: d.kind_effective, count: d.member_count, canManage: d.can_invite,
     delivery: d.invite_delivery === 'email' ? 'email' : 'inapp',
     people: d.members.map((m: any) => ({
-      id: m.member_id, name: who(m), email: m.email, role: m.is_creator ? 'creator' : m.role === 'owner' ? 'owner' : 'member',
+      id: m.member_id, name: who(m), email: m.email, isMe: m.is_me === true || undefined, role: m.is_creator ? 'creator' : m.role === 'owner' ? 'owner' : 'member',
       avatar: m.avatar, avatar_char: m.avatar_char, avatar_color: m.avatar_color })),
     pending: d.pending, candidates: d.candidates,
   };
@@ -396,7 +398,9 @@ async function loadWsView(slug: string, wsName: string): Promise<View> {
 async function loadBoxView(wsName: string): Promise<View> {
   const [org, dash] = await Promise.all([api('/api/ui/org/members') as Promise<any>, api('/api/ui/dash/members').catch(() => null) as Promise<any>]);
   const faces = new Map<string, any>(((dash && dash.members) || []).map((m: any) => [String(m.id), m]));
-  const rows: any[] = ((org && org.members) || []).filter((m: any) => m.kind === 'human' && m.state === 'active');
+  //  #3872 — 사람만 싣고 센다(서버 표식 is_person = «자기 계정으로 들어오는 사람»). kind 만 보면 연결 앱이 미러한 사람 행·로그인
+  //   계정이 없는 행이 구성원으로 서고 «구성원 N명» 에 세어졌다.
+  const rows: any[] = ((org && org.members) || []).filter((m: any) => m.is_person === true && m.state === 'active');
   const people: Person[] = rows.map((m) => {
     const f = faces.get(String(m.id)) || {};
     const scopes: string[] = Array.isArray(m.scopes) ? m.scopes : [];
@@ -576,7 +580,8 @@ function issuedCard(i: Issued, onReplace?: (next: Issued) => void): HTMLElement 
 // ── 명부 — 한 줄에 얼굴·이름·권한, 조작은 ⋯ 메뉴(둘 이상이라 줄에 늘어놓지 않는다). ─────────
 
 function personRow(v: View, p: Person, slug: string, primary: boolean, meId: string, onIssued: (i: Issued) => void, again: () => void): HTMLElement {
-  const isMe = p.id === meId;
+  //  매니지드는 id 가 이메일이라 비교가 안 맞는다 — 서버의 is_me 를 먼저 본다(#1631). 없으면 종전 비교.
+  const isMe = p.isMe === true || p.id === meId;
   const rows: Array<{ label: string; run?: () => void; danger?: boolean; sep?: boolean }> = [];
   if (v.canManage && !isMe && p.role !== 'creator') {
     if (primary) {

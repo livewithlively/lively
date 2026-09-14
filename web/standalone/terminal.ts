@@ -1314,7 +1314,12 @@ async function uniqueUploadName(name) {
 //  자동 전송 안 함 — 사용자가 설명을 덧붙여 Enter. (업로드 PUT 가 상위 폴더를 자동 생성.)
 async function dropFileToAgent(file) {
   if (!file) return;
-  let name = (file.name || 'pasted').split(/[/\\]/).pop().replace(/[^\w.\-가-힣]/g, '_');
+  // ★ #3870 — **맥에서 온 한글 파일명이 통째로 `_` 가 되던 것.** 맥 파일시스템(APFS/HFS+)은 파일명을 NFD 로
+  //  들고 있어 `file.name` 이 «경진대회» = ㄱ+ㅕ+ㅇ… (자모 U+1100~U+11FF) 로 온다. 아래 허용집합의 `가-힣` 은
+  //  **완성형 음절**(U+AC00~U+D7A3)이라 그 자모가 한 글자도 안 맞고, 이름 전체가 밑줄로 치환됐다
+  //  (실측: `경진대회 참가신청서-라이블리-3.html` → `________________________-_________-3.html`).
+  //  서버는 이미 NFC 정본으로 쓰므로(#1278b nfcPath) 여기서 미리 합치는 것이 그 규약과 같은 자다.
+  let name = (file.name || 'pasted').normalize('NFC').split(/[/\\]/).pop().replace(/[^\w.\-가-힣]/g, '_');
   if (!/\.[a-z0-9]+$/i.test(name)) name += '.' + (((file.type || '').split('/')[1]) || 'png');
   name = await uniqueUploadName(name);
   const rel = 'uploads/' + name;
@@ -2888,9 +2893,14 @@ let gaveUp = false;
 //   즉 이 결함의 «원인» 이 아니라 «부류» 를 막는다.
 let connProven = false, stableTimer = null;
 const CONN_STABLE_MS = 10_000;
-function markConnProven() {
+export function markConnProven() {
   connProven = true;
   attempts = 0; gaveUp = false; reconnectDelay = 1500;
+  //  #3870 — 포기 뒤에도 탭 복귀(visibilitychange)·[화면 복구]는 connectNow 를 직접 불러 다시 붙는다. 그렇게 붙어
+  //   버텼으면 «연결하지 못했습니다» 배너는 거짓이다(실측: 상단은 '연결됨'인데 배너가 남아 화면만 밀고 있었다).
+  //   onopen 이 아니라 여기서 걷는 이유 — gaveUp 이 풀리는 곳과 같아야 한다. 붙자마자 죽는 판(#3546)에서
+  //   배너만 먼저 걷히면, gaveUp 이 남아 재연결은 멈췄는데 '다시 시도' 출구도 없는 화면이 된다.
+  hideRetryBar();
 }
 // ── 우클릭 메뉴(#3784) — 셸(web/v2/ctx-*)의 메뉴가 iframe 안까지는 못 오므로 이 문서에서 같은 문법으로 세운다 ──
 //  복사는 Cmd+C 와 **같은 길**을 탄다(xterm 선택 → copyText / 마우스모드 앱(Claude) 드래그 선택 → ^C 브리지 1회 —
@@ -3007,21 +3017,30 @@ async function giveUpReconnect() {
 }
 
 /** 포기 상태의 유일한 출구. 터미널 내용은 지우지 않는다 — 마지막 출력이 사용자에게 가장 필요한 정보다. */
-function showRetryBar() {
+export function showRetryBar() {
   if (document.getElementById('retry-bar')) return;
   const bar = el('div', { class: 'ended-bar', id: 'retry-bar' },
     el('span', { text: '서버에 연결하지 못했습니다. 네트워크나 게이트웨이 상태를 확인한 뒤 다시 시도해 주세요.' }),
     el('button', {
       class: 'gate-retry', text: '다시 시도',
       onclick: () => {
-        const b = document.getElementById('retry-bar');
-        if (b && b.parentNode) b.parentNode.removeChild(b);
+        hideRetryBar();
         gaveUp = false; attempts = 0; reconnectDelay = 1500; offlineTries = 0;
         connectNow();
       },
     }));
-  const root = document.getElementById('root');
-  if (root) root.insertBefore(bar, root.firstChild);
+  // ⚠ 배너는 반드시 `#main`(세로 flex) 안, 터미널 판(#panes) 바로 위에 넣는다 — 종료 배너(showEndedBar)와 같은 자리.
+  //  종전엔 `#root` 맨 앞(= `#ws` 의 형제)에 넣었는데, `#ws` 는 `height: 100dvh` 고정이라 배너 높이만큼 전체가
+  //  화면보다 커지고 body 의 overflow:hidden 에 **터미널 아래(입력줄)가 잘렸다**(#3870 원준님 실측 2026-09-11 —
+  //  «일부 안내문이 떠 있으면 화면이 아래로 밀린다»). #main 안이면 #panes(flex:1·min-height:0)가 그만큼 줄고 #term-host 의 ResizeObserver 가 xterm 을 다시 맞춘다.
+  const main = document.getElementById('main');
+  if (main && panesEl && panesEl.parentNode === main) main.insertBefore(bar, panesEl);
+  else { const root = document.getElementById('root'); if (root) root.insertBefore(bar, root.firstChild); }
+}
+/** 포기 배너 걷기 — 포기 상태(gaveUp)가 풀리는 곳에서 같이 부른다. 판 크기 변화는 #term-host 의 ResizeObserver 가 받아 xterm 을 다시 맞춘다. */
+export function hideRetryBar() {
+  const b = document.getElementById('retry-bar');
+  if (b) b.remove();
 }
 // 세션 종료 확정(#835) — 재연결을 멈추고 '닫힘'을 명시한다. 게이트로 화면을 덮지 않는 이유: 마지막 출력이
 //  사용자에게 가장 필요한 정보다(무슨 일이 있었는지 읽고 복사해야 한다). 그래서 터미널은 그대로 두고
@@ -3048,7 +3067,9 @@ function showEndedBar(o) {
   const bar = el('div', { class: 'ended-bar' + (o.info ? ' info' : '') }, el('span', { class: 'ended-ic', text: o.icon || '⏹' }), txt);
   if (o.restoreBtn) { // 내가 /exit 로 끝낸 세션 — 되살릴지는 사용자가 정한다(자동 복원 안 함).
     const rb = el('button', { class: 'ended-cta', text: o.restoreLabel || '다시 열기' });
-    rb.onclick = () => { rb.disabled = true; rb.textContent = '여는 중…'; restoreThisSession(); };
+    //  #3870 — force 는 «옛 것이 살아 있을 수도 있음을 알고 새로 만든다» 는 선언이라 **사람이 이 버튼을 누른 것**이
+    //   곧 그 확인이다(서버가 canForce 를 준 뒤에만 이 라벨로 선다 — 아래 restoreThisSession 의 catch).
+    rb.onclick = () => { rb.disabled = true; rb.textContent = '여는 중…'; restoreThisSession(o.restoreForce); };
     bar.append(rb);
   }
   bar.append(el('a', { class: 'ended-cta', href: apiUrl('/ui/#/terminal'), target: '_blank', rel: 'noopener', text: '세션 목록 열기 →' }));
@@ -3063,6 +3084,23 @@ function showEndedBar(o) {
 // 언제 판정하나 — 두 시점이 같은 표를 쓴다: ① 페이지가 뜰 때(메타가 restorable 이라고 하면 WS 를 붙이기 전에)
 //  ② 붙어 있다가 4410(세션 종료 확정)을 받았을 때. 순수 판정(scripts/terminal-restore-gate.test.mjs 가 표를 지킨다).
 //  'end'=종료 배너(되살릴 근거 없음) · 'notowner'=중단됐지만 남의 세션 · 'ask'=버튼으로 물어봄 · 'auto'=자동 복원 · 'loop'=재복원 차단.
+/**
+ * 서버가 «이건 강제로 되살릴 수 있다» 고 말했나 (순수, #3870).
+ *
+ * ⚠ **web/lib/restore-force.ts 와 같은 규칙이다.** 사본이 둘인 이유는 이 번들이 SPA 와 분리된 tsconfig
+ *  (web/standalone/tsconfig.json — rootDir 가 이 폴더)라 web/lib 을 import 할 수 없어서다. 두 사본이 같은
+ *  답을 내는지는 scripts/restore-force.test.mjs 가 같은 표로 지킨다(갈리면 그 시험이 빨강).
+ * ⚠ 상태코드로 가르면 안 된다 — 복원 409 에는 force 로 **안** 풀리는 것(노드 오프라인·무응답·좌표 없음)이
+ *  섞여 있다. 그래서 서버가 풀리는 쪽에만 canForce 를 싣고(src/terminal/routes.ts stateUnknownRestore) 그것만 본다.
+ */
+export function canForceRestore(e) {
+  if (!e || typeof e !== 'object') return false;
+  if (Number(e.status) !== 409) return false;
+  const body = e.body;
+  if (!body || typeof body !== 'object') return false;
+  return body.canForce === true;   // 참값 흉내(문자열 'true'·1)는 승격하지 않는다
+}
+
 export function goneMode(meta, isNode, alreadyRestored, typed) {
   // #1791 — 노드 세션도 중앙 desired-state(node_id)를 가진다. 판정표는 박스와 같다 — 메타(GET …?node=)가 복원 가능이라 하면
   //  같은 길로 간다(복원 자체는 서버가 그 노드에 create 를 릴레이). isNode 는 호환용 인자로 남긴다(판정에 안 쓴다).
@@ -3136,12 +3174,24 @@ function showRestoringBanner(meta) {
     body: why + ' 같은 폴더·설정으로 다시 열고 대화를 이어받습니다.' });
 }
 // 복원 실행 — 목록 카드 [복원] 과 같은 엔드포인트. 새 세션은 새 id 를 받으므로 그 주소로 갈아탄다(현재 URL 은 죽은 id).
-async function restoreThisSession() {
+async function restoreThisSession(force?) {
   try { if (ws && ws.readyState <= 1) ws.close(); } catch (_) { /* noop */ }
   let r = null;
-  try { r = await api(sUrl('/restore'), { method: 'POST', body: '{}' }); }
+  try { r = await api(sUrl('/restore') + (force ? '?force=1' : ''), { method: 'POST', body: '{}' }); }
   catch (e) {
     sessionEnded = true;
+    //  #3870 — 서버가 «상태를 모르겠다(force 로 풀린다)» 고 하면 그 선택지를 **이 배너에서** 준다. 종전엔 서버 문구를
+    //   그대로 body 에 실었는데, 그 문구는 «화면의 [강제로 되살리기] 를 눌러 주세요» 라고 대화창에만 있는 버튼을
+    //   지목한다 — 이 화면엔 없어서 «누르라는데 없다» 가 됐다(실측 2026-09-12, 원준님 신고).
+    //   force 로 한 번 더 눌렀는데도 같은 답이면(force 참) 되풀이하지 않고 사유만 남긴다.
+    if (canForceRestore(e) && !force) {
+      showEndedBar({
+        title: '상태를 확인하지 못했어요.',
+        body: '이 세션이 있는 곳이 끝난 건지 응답만 늦는 건지 모르는 상태예요. 잠시 뒤 다시 열어 보거나, 그대로 새로 열어 대화를 이어받을 수 있어요.',
+        icon: '❓', info: true, restoreBtn: true, restoreLabel: '강제로 되살리기', restoreForce: true,
+      });
+      return;
+    }
     showEndedBar({ title: '열지 못했습니다.', body: (e && e.message || String(e)) + ' — 세션 목록에서 다시 시도해 주세요.' });
     return;
   }

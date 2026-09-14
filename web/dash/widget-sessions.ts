@@ -24,7 +24,8 @@ import { dashSessRank, dashSessState } from './status.js';
 import { dashCtl, dashEmpty } from './chrome.js';
 import { openSessMenu, sessBaseSessions, sessFilterLabel, sessIsClosedProjSess, sessIsProjClosed, sessMatchSrc, sessMatchState, sessOpenFilterMenu, sessOpenPrefs } from './widget-sessions-popovers.js';
 // #1582 — 세션 종료 확인창은 전 화면 공용 정의 하나만 쓴다(문구가 화면마다 갈라지지 않게).
-import { confirmSessionEnd, endedToast } from '../session-actions.js';
+import { confirmForceRestore, confirmSessionEnd, endedToast } from '../session-actions.js';
+import { canForceRestore, restorePath } from '../lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다
 import { confirmDialog } from '../ui-primitives.js';
 
 // 위젯 한 벌의 지역 상태 — 종전 fillSessions 클로저의 let/const 를 그대로 옮겨 담은 것(이름·의미 무변경).
@@ -133,11 +134,16 @@ async function sessRestoreSelected(ctx: SessCtx) {
     title: items.length + '개 세션을 이어서 열까요?', confirmText: '복원', cancelText: '취소',
     message: '저장된 폴더·설정 그대로 다시 열리고, 대화도 이어받습니다.',
   })) return;
-  let ok = 0, failed = 0;
+  let ok = 0, failed = 0, unknown = 0;
   for (const s of items) { // 순차 — 세션 생성은 tmux 를 띄우는 일이라 한꺼번에 몰지 않는다.
-    try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST', body: '{}' }); ok++; } catch { failed++; }
+    //  #3870 — «상태를 못 봤다» 는 실패와 다르다(카드 [복원]과 같은 규율: force 는 건별로 사람이 고른다).
+    try { await api(restorePath(s.id), { method: 'POST', body: '{}' }); ok++; }
+    catch (e) { if (canForceRestore(e)) unknown++; else failed++; }
   }
-  toast(failed ? (ok + '개 복원 · ' + failed + '건 실패') : (ok + '개 세션을 복원했어요 — 대화를 이어받았습니다'), !!failed);
+  toast(failed || unknown
+    ? [ok + '개 복원', unknown ? unknown + '개 상태 확인 못함' : '', failed ? failed + '건 실패' : ''].filter(Boolean).join(' · ')
+      + (unknown ? ' — 확인 못한 건 그 카드의 [복원]을 다시 눌러 주세요' : '')
+    : (ok + '개 세션을 복원했어요 — 대화를 이어받았습니다'), !!(failed || unknown));
   ctx.selected.clear(); await ctx.reloadSessions();
 }
 // #870/#1146 열기 — 1개면 단독 탭, 여러 개면 방식 선택 팝업(각각 새 탭 / 한 탭 그리드. 터미널 탭과 동일 openGridPicker 재사용 — 두 벌 만들지 않는다).
@@ -261,18 +267,28 @@ function sessDraw(ctx: SessCtx) {
     if (s.restorable) {
       // #1059 E — 복원: 재부팅·회수로 꺼진 세션을 저장된 desired-state 로 재생성(claude 는 대화 이어받기). 새 세션이 뜨면 그걸 연다.
       openBtn.title = dExitedByUser ? '내가 종료한 세션 — 저장된 대화를 이어서 엽니다 (같은 폴더·설정)' : '재부팅·자동회수로 중단된 세션을 다시 엽니다 (같은 폴더·설정 + 대화 이어받기)';
-      openBtn.onclick = async () => {
+      const doRestore = async (force?: boolean) => {
         openBtn.disabled = true; openBtn.textContent = '여는 중…';
         try {
-          const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST', body: '{}' });
+          const r: any = await api(restorePath(s.id, force), { method: 'POST', body: '{}' });
           // 라이브 경합(already) — 그새 다시 떠 있으면 새로 만들지 않고 그 세션을 그대로 연다(오success 방지).
           if (r && r.already) { dashOpenSessionTab(s.id, s.label || '', s.node && s.node.id); toast('세션이 이미 살아있어 그대로 엽니다'); ctx.reloadSessions && ctx.reloadSessions(); return; }
           const ns = r && r.session;
           // #1791 — 노드에서 복원된 세션은 그 노드로 붙는다(서버가 session.node 를 준다).
           if (ns && ns.id) dashOpenSessionTab(ns.id, ns.label || s.label || '', ns.node && ns.node.id);
           toast('열었어요 — 새 터미널에서 대화를 이어받아요(정확한 대화를 못 찾으면 목록에서 고르세요).'); ctx.reloadSessions && ctx.reloadSessions();
-        } catch (e: any) { toast(dRestoreVerb + ' 실패 — ' + (e && e.message || e), true); openBtn.disabled = false; openBtn.textContent = dRestoreVerb; }
+        } catch (e: any) {
+          openBtn.disabled = false; openBtn.textContent = dRestoreVerb;
+          //  #3870 — 서버가 «모름이라 멈췄다(force 로 풀린다)» 고 하면 그 선택지를 여기서 준다(종전엔 «화면의
+          //   [강제로 되살리기] 를 눌러 주세요» 라는 서버 문구만 뜨고, 이 카드엔 그 버튼이 없었다).
+          if (canForceRestore(e) && !force) {
+            if (await confirmForceRestore({ name: s.label })) await doRestore(true);
+            return;
+          }
+          toast(dRestoreVerb + ' 실패 — ' + (e && e.message || e), true);
+        }
       };
+      openBtn.onclick = () => { void doRestore(); };
     } else {
       openBtn.onclick = () => dashOpenSessionTab(s.id, s.label || '', (s.node && s.node.id) || ''); // #869 원격 노드면 node 파라미터 · #1098 이미 열린 탭이면 그 탭으로
     }

@@ -94,8 +94,10 @@ export async function verifyLogin(email: string, plain: string): Promise<LoginRe
 //   `LIMIT 1` 에 ORDER BY 도 없어 어느 행이 뽑힐지도 비결정적이다.
 //   ⚠ 상수(primary)가 아니라 **지금 맥락**으로 못박는다 — 셀프호스트는 GUC 가 없어 primary 로 떨어지고,
 //    매니지드는 그 테넌트로 떨어진다. 상수로 박으면 매니지드에서 RLS 가 걸러 **0행**이 된다(실측).
+  //  #1631 — 사람만 찾는다. 사람이 아닌 구성원(운영 계정·에이전트)은 비밀번호가 어떤 경로로 남아 있어도 로그인하지 못한다
+  //   (저장 계층도 종류가 사람이 아니게 저장될 때 자격을 지운다 — org/store/members.ts upsertMember).
   const mr = await itemsPool.query(
-    `SELECT id FROM org_member WHERE lower(email)=$1 AND state='active'
+    `SELECT id FROM org_member WHERE lower(email)=$1 AND state='active' AND kind='human'
        AND tenant_id = ${TENANT_DEFAULT_EXPR} LIMIT 1`, [e]);
   const member = mr.rows[0] as { id: string } | undefined;
   if (!member) { await burn(plain); return { ok: false, reason: "no_account" }; }

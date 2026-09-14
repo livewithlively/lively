@@ -185,7 +185,21 @@ export async function listLiveSessionIds(opts?: { strict?: boolean }): Promise<s
 }
 
 // #3892 — 표식 되채우기의 세션당 쿨다운(프로세스 수명). 목록 폴링은 뷰어 수만큼 돌므로 폴링마다 보내지 않는다.
+//  ⚠ 한 벌이다 — 게이트웨이 목록(아래 collectSessions)과 세션 호스트 스냅샷 정비(sessions/session-meta-heal-sweep.ts)가
+//   같은 세션을 같은 창에 두 번 고치지 않게, 보내는 자리는 `healSessionMeta` 하나로 모았다.
 const metaHealGate = makeMetaHealGate();
+
+/**
+ * 표식(@box_*)이 빈 채 살아 있는 세션을 **DB desired 행으로 되채운다** — 보내면 참(쿨다운에 걸리면 거짓).
+ *  응답을 막지 않는다(삼키는 묶음 · 떼어 보냄). 무엇을 박나·언제 박나는 session-meta-heal.ts 가 정한다.
+ * @param via 누가 찾았나 — `list`(게이트웨이 목록) · `snapshot`(세션 호스트 스냅샷 정비). 로그로 갈래를 가른다.
+ */
+export function healSessionMeta(id: string, row: SessionState, via: "list" | "snapshot"): boolean {
+  if (!metaHealGate(id, Date.now())) return false;
+  logger.warn({ id, via }, "표식(@box_*)이 빈 라이브 세션 — DB desired 행으로 되채운다(#3892: 생성이 판과 표식 사이에서 끊긴 세션)");
+  void tmuxBatchQuiet(metaHealCmds(id, row));
+  return true;
+}
 
 // me=null 이면 필터 없이 전부(owned=false 고정 — 뷰어별 owned 는 소비자가 재계산).
 /**
@@ -294,10 +308,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     // ★ #3892 — 표식(@box_*)이 빈 채 살아 있는 세션을 DB 행으로 되채운다. tmux 표식을 직접 읽는 입구(세션 프로젝트 바꾸기의
     //  소유자 확인 · 대화 배달의 하네스 판정 · 창 옵션)가 그 세션에서 조용히 틀리지 않게. 판정·목록은 session-meta-heal.ts.
     //  ⚠ 뷰어와 무관한 일이라 가시성 continue 앞이다. 응답을 막지 않는다(삼키는 묶음 · 세션당 쿨다운).
-    if (row && needsMetaHeal({ harnessRaw: p.harnessRaw, row, managed: p.managed }) && metaHealGate(p.name, nowSec * 1000)) {
-      logger.warn({ id: p.name }, "표식(@box_*)이 빈 라이브 세션 — DB desired 행으로 되채운다(#3892: 생성이 판과 표식 사이에서 끊긴 세션)");
-      void tmuxBatchQuiet(metaHealCmds(p.name, row));
-    }
+    if (row && needsMetaHeal({ harnessRaw: p.harnessRaw, row, managed: p.managed })) healSessionMeta(p.name, row, "list");
     const owned = me !== null && !!d.owner && d.owner === me;
     // 가시성 판정은 canSeeSession 단일 술어로(#1291) — 예전엔 여기 인라인 사본이 있어 라이브 목록과 복원 목록이
     //  갈릴 수 있었다(위 주석이 경계하던 바로 그 이중구현).

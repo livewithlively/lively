@@ -132,7 +132,7 @@ function newFeedForm(rerender) {
 //  GitHub Issues·Jira 는 아웃바운드 어댑터 미구현(#975 예정) — 자리만 표시. 스키마·백엔드 변경 없이 기존 엔드포인트 orchestrate.
 async function projectOutboundEditor(detail, data) {
   const meaning = data.meaning && data.meaning['project-outbound'];
-  const canEdit = !!data.canEdit;
+  const canEdit = !!(data.canManage ?? data.canEdit);   // 2026-09-12 — 아웃바운드 on/off 는 워크스페이스 관리 축(구성원)
   //  #2556 — 클릭업 앱 상세 ▸ 내보내기 칸에서도 편다. feedTargetsEditor 와 같은 규약(머리만 접는다).
   const head = () => (embeddedHost(detail) ? [] : [sectionHead('프로젝트 아웃바운드', '우리 프로젝트와 과업의 변경을 외부 협업 도구로 내보냅니다.', meaning)]);
   busy(detail, ...head(), el('div', { class: 'card' }, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…'))));

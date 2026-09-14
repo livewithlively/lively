@@ -12,11 +12,26 @@
 //  ── 낡은 실측 문제 ──
 //  1턴이 실은 숫자는 그 순간의 것이다. 2턴은 **다시 읽고** 시작하라고 못박는다(세션 관성 실측: classify-knowledge-stale-session-inertia).
 
+import { GROUP_SETS, groupSetFor, groupSetPromptLines } from "../../v6/category-groups.js";
+
 export interface SecondTurnCollector { label: string; preset_key: string; enabled: boolean; ran: boolean }
 export interface SecondTurnInput {
   displayName: string | null;
   /** 처음 설정에서 답한 일하는 형태·직무 한 줄(liv_profile.work.asis). 자료가 0건이면 카테고리를 만들 재료는 이것뿐이다. */
   work: string | null;
+  /**
+   * 이 워크스페이스의 **묶음**(카테고리 위의 화면 층, #1631). 처음 설정이 직업·직무로 심어 둔다.
+   *  리브는 이 중에서 **고르기만** 한다 — 새로 만들지 않는다. 비어 있으면 아래 intended 를 **먼저 만들게** 한다
+   *  (종전엔 구획을 아예 뺐고, 그 판에서 리브가 묶음 없는 카테고리를 만들었다 — 2026-09-14 lively-agent-2-6a84).
+   */
+  groups: Array<{ key: string; name: string; hint?: string | null }>;
+  /**
+   * 묶음이 **없을 때** 리브가 먼저 만들 세 칸 — 이 사람의 무대·직무로 룰 테이블에서 고른 집합(groupSetFor). 묶음이 있으면 안 쓴다.
+   *  비었으면(판정 재료가 없었다) 기본 집합으로 간다 — 어느 경로로도 «묶음 없이 카테고리를 만들라» 는 지시가 나가지 않는다.
+   */
+  intended: Array<{ key: string; name: string; hint?: string | null }>;
+  /** 묶음 밖 카테고리(이름). 이 턴을 끝내기 전에 0개로 만든다 — 계정 서버 기본 카테고리·처음 설정 서랍이 여기 걸린다. */
+  ungrouped: Array<{ key: string; name: string }>;
   drawers: string[];
   firstOrder: string | null;
   collectors: SecondTurnCollector[];
@@ -24,14 +39,59 @@ export interface SecondTurnInput {
   waitedMin: number;         // 온보딩 끝난 뒤 흐른 시간(분)
 }
 
+/**
+ * 2턴이 묶음에 쓸 재료(순수, #1631) — 무대(welcome.stage)와 «무대 · 직무» 한 줄(work.asis)에서 직무를 되갈라 룰 테이블의 세 칸을 고른다.
+ *  ⚠ 무대를 넘긴다(2026-09-14) — 종전 받침은 무대를 null 로 넘겨, 직무를 건너뛴 학업 사용자가 회사 기본 이름을 받았다.
+ *  ⚠ 구분자는 주입받는다(`WORK_ASIS_SEP`, org/store/members.ts) — 이 파일은 DB 모듈을 끌어오지 않는 순수 모듈이다.
+ */
+export function turnGroupInputs(input: { stage?: string | null; workAsis?: string | null; sep: string }): {
+  stage: string | null; job: string | null; intended: Array<{ key: string; name: string; hint: string }>;
+} {
+  const stage = String(input.stage ?? "").trim() || null;
+  const job = String(input.workAsis ?? "").split(input.sep).slice(-1)[0]?.trim() || null;
+  return { stage, job, intended: groupSetFor(stage, job).map((g) => ({ key: g.key, name: g.name, hint: g.hint })) };
+}
+
+// ── 묶음 단락(#1631) — **빠지는 경우가 없다** ─────────────────────────────────────
+//  2026-09-14 실측(lively-agent-2-6a84): 묶음이 0개인 워크스페이스에서 이 단락이 통째로 빠졌고, 리브는 묶음 없는
+//   카테고리 4개를 에러 없이 만들었다 — 서버의 하드 규칙은 묶음이 **있어야** 켜지기 때문이다. 그래서:
+//  · 묶음이 있으면: 그 안에서 고른다(새로 만들지 않는다) — 종전 문구 그대로.
+//  · 없으면: 이 사람 직무의 세 칸(intended)을 **먼저** 만들게 한다 — 만드는 순간부터 하드 규칙이 켜진다.
+//  · 묶음 밖 카테고리가 남아 있으면 이름을 싣고 0개로 끝내게 한다.
+function groupStepLines(i: SecondTurnInput): string[] {
+  const has = i.groups.length > 0;
+  const set = has ? i.groups : (i.intended.length ? i.intended : GROUP_SETS.default);
+  const lines: string[] = has
+    ? [
+      "   - **묶음도 함께 정한다.** 이 워크스페이스의 묶음은 아래가 전부이고, 이 사람 일 전체를 덮는다. `category_create` 의 `group` 에 그 key 를 넣는다 — **안 넣으면 서버가 400 으로 막는다**(카테고리는 묶음 하나에 반드시 든다). **새 묶음을 만들지 마라.** 「기타」 같은 자리로 미루지도 마라 — 그런 묶음은 없다.",
+      "     **이미 있는 카테고리를 쓰는데 묶음이 비어 있으면** 그 자리에서 `category_update` 로 묶음만 채운다(내용은 건드리지 않는다). 안 채우면 그 카테고리는 화면에서 «묶음을 정해 주세요» 에 남는다.",
+    ]
+    : [
+      "   - **묶음부터 만든다 — 이 워크스페이스엔 아직 묶음이 없다.** 카테고리를 만들기 **전에** 아래 세 칸을 `category_group_upsert` 로 **key·이름·뜻을 그대로** 만든다(이름을 새로 짓지 않는다 — 이 사람의 직무에서 나온 룰베이스 집합이다). 만든 뒤 `category_group_list` 로 셋이 다 생겼는지 확인한다.",
+      "     그다음부터 카테고리는 **묶음도 함께 정한다.** `category_create` 의 `group` 에 그 key 를 넣는다 — **안 넣으면 서버가 400 으로 막는다**(카테고리는 묶음 하나에 반드시 든다). 「기타」 같은 자리로 미루지 마라 — 그런 묶음은 없다.",
+    ];
+  lines.push(...groupSetPromptLines(set).map((l) => `  ${l}`));
+  if (i.ungrouped.length) {
+    lines.push(`   - **묶음 밖 카테고리 ${i.ungrouped.length}개: ${i.ungrouped.map((c) => c.name).join(" · ")}** — 이 턴을 끝내기 전에 각각 \`category_update\` 로 위 세 칸 중 하나에 넣는다(내용은 건드리지 않는다). 묶음 밖 카테고리가 **0개**여야 이 단계가 끝난다.`);
+  }
+  lines.push("     이미 묶음에 든 카테고리도 자료를 읽어 보니 칸이 안 맞으면 `category_update` 로 옮긴다 — 서버가 이름만 보고 넣어 둔 것일 수 있다.");
+  return lines;
+}
+
 // ── TEMPLATE — 문안은 여기만 고친다 ─────────────────────────────────────────────
 export function buildSecondTurnPrompt(i: SecondTurnInput): string {
   const who = i.displayName ? `${i.displayName} 님` : "이 사람";
-  const ran = i.collectors.filter((c) => c.enabled && c.ran);
-  const pending = i.collectors.filter((c) => c.enabled && !c.ran);
-  const collectLine = i.collectors.length
-    ? `- 수집기: ${ran.length ? `첫 수집을 마친 것 ${ran.map((c) => c.label).join(" · ")}` : "첫 수집을 마친 것 없음"}${pending.length ? ` / 아직 안 끝난 것 ${pending.map((c) => c.label).join(" · ")}` : ""}`
-    : "- 수집기: 없음(외부 앱을 잇지 않음) — 자료는 올린 것뿐이며, 그것도 0건일 수 있다";   // 실측(태오 채점): "올린 자료만 있다"로 단정하면 자료 0건일 때 전제가 틀린다
+  const on = i.collectors.filter((c) => c.enabled);
+  const off = i.collectors.filter((c) => !c.enabled);
+  const ran = on.filter((c) => c.ran);
+  const pending = on.filter((c) => !c.ran);
+  //  #3872 — 꺼진 칸은 연결이 아니다. 매니지드가 모든 워크스페이스에 Notion·Slack 빈 칸(꺼짐·자격 없음)을 심어 두는데, 종전엔
+  //   그 칸이 있다는 이유로 «첫 수집을 마친 것 없음» 이라고 써서 리브가 «연결됐고 곧 돈다» 로 읽었다(2026-09-13 실측).
+  //   리브는 이 턴에서 org_collectors 를 다시 읽으므로 그 칸을 다시 보게 된다 — 그래서 «연결이 아니다» 를 여기 못박는다.
+  const offNote = off.length ? ` — 꺼져 있는 칸 ${off.length}개(${off.map((c) => c.label).join(" · ")})는 연결이 아니다(자격이 없는 빈 칸일 수 있다). «연결됐다»·«곧 돈다» 고 말하지 마라` : "";
+  const collectLine = on.length
+    ? `- 수집기: ${ran.length ? `첫 수집을 마친 것 ${ran.map((c) => c.label).join(" · ")}` : "첫 수집을 마친 것 없음"}${pending.length ? ` / 아직 안 끝난 것 ${pending.map((c) => c.label).join(" · ")}` : ""}${offNote}`
+    : `- 수집기: 없음(외부 앱을 잇지 않음) — 자료는 올린 것뿐이며, 그것도 0건일 수 있다${offNote}`;   // 실측(태오 채점): "올린 자료만 있다"로 단정하면 자료 0건일 때 전제가 틀린다
   return [
     `리브, 이제 **증류 작업**을 시작한다. 처음 설정이 끝난 지 ${i.waitedMin}분 지났다.`,
     "",
@@ -61,6 +121,7 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
     "   - **이미 있는 카테고리가 받을 수 있으면 그것을 쓴다.** 어느 카테고리에도 안 맞는 자료 덩어리가 있을 때만 `category_create` 로 더한다. 같은 범위를 이름만 바꿔 또 만들지 않는다.",
     "   - 나누는 기준은 내용(무슨 일에 대한 자료인가)이다. 자료 종류(슬랙·노션·메일)로 나누지 않는다. 보통 3~6개, 자료가 1~3건이면 1~3개. **자료가 0건이면 일하는 형태·직무로 2~3개를 만든다 — 0개로 끝내지 않는다.**",
     "   - 값: `key` 는 영문 소문자·숫자·하이픈 40자 이내(증류기 key 가 `liv-<카테고리 key>` 가 된다) · `name` 은 한국어 · `should` 는 400~600자로 범위(한 문장), 자료에서 본(자료가 없으면 그 직무에서 흔한) 구체적인 예 3~5개, 안 들어가는 것과 그것이 가는 옆 카테고리 이름을 쓴다(회사·팀 이름과 민감정보 규칙은 쓰지 않는다) · `description` 은 한 줄.",
+    ...groupStepLines(i),
     "   - **묻지 않고 만든다.** 사람은 나중에 화면에서 이름을 바꾸거나 치울 수 있다. 물을 것이 생겨도 카테고리를 다 만든 뒤에 묻는다(`lively-taxonomy` 스킬의 항목별 승인 절차는 여기서 쓰지 않는다).",
     "   - 만든 뒤 `category_list` 로 다시 읽어 실제로 생겼는지 확인한다. 만들기가 실패하면 오류 문구를 그대로 두고, 요약 첫 줄에 «카테고리를 만들지 못했다»와 그 이유를 쓴다.",
     "3. **카테고리(서랍)마다 증류기를 세운다** — `org_distiller_upsert`. 스코프(`match_kinds`·`include_channels`)·기준(`criteria_md`: 이 카테고리에서 지식이 되는 것은 무엇인가)·형식(`format_md`: 결과의 꼴)·`target_category`(그 카테고리 key). **catch-all 레인 하나를 반드시**(priority 낮게, 스코프 넓게) — 없으면 어느 증류기에도 안 걸린 자료가 조용히 사라진다. 자세한 규율은 `distiller-authoring` 스킬.",
@@ -79,6 +140,8 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
 // ── 판정 ────────────────────────────────────────────────────────────────────────
 export interface SecondTurnState {
   welcome: { done_at?: string | null; session_id?: string | null; distill_at?: string | null; distill_gave_up_at?: string | null;
+    /** 리브 탭의 대화 턴으로 킥오프한 사람(#1631) — 세션 대신 이 턴이 1턴이다. 스윕이 그 턴의 끝남을 session.working 으로 옮겨 준다. */
+    liv_turn_id?: string | null;
     /** 세션이 사라져 **다시 연** 시각(#1631). 한 번만 다시 연다 — 무한 재생성은 비용이고 유령 세션을 만든다. */
     distill_reopened_at?: string | null } | null;
   /** 세션 관측(listSessionsRaw). null = 그 세션이 이 박스에 없다(회수·종료·노드). */
@@ -103,7 +166,8 @@ export const TURN1_DELIVERY_TTL_MS = 2 * 60 * 60_000;
 
 export function decideSecondTurn(s: SecondTurnState): SecondTurnDecision {
   const w = s.welcome;
-  if (!w?.session_id || !w.done_at) return { action: "skip", reason: "no-kickoff" };
+  //  킥오프의 증거는 둘 중 하나 — tmux 세션(session_id) 또는 리브 대화 턴(liv_turn_id, #1631 2026-09-14).
+  if (!(w?.session_id || w?.liv_turn_id) || !w?.done_at) return { action: "skip", reason: "no-kickoff" };
   if (w.distill_at) return { action: "skip", reason: "already-fired" };
   if (w.distill_gave_up_at) return { action: "skip", reason: "gave-up" };
   const done = Date.parse(w.done_at);

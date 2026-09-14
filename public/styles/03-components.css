@@ -316,6 +316,46 @@ a.wikicat-owner:hover { text-decoration: underline; }
   .wikicat-row-acts { flex-basis: 100%; margin-left: 0; flex-wrap: wrap; justify-content: flex-start; opacity: 1; }
 }
 
+/* ── 카테고리 묶음(#1631) — **화면에서만 보이는 2단**. 데이터는 1단 그대로라 분류·검색엔 관여하지 않는다.
+   구획 머리(접기·이름 고치기·▲▼·지우기) + 행의 묶음 칸. 색은 전부 기존 토큰만 쓴다. ── */
+.wikicat-tophead { margin-bottom: 0; }   /* 구획 사이 여백은 .wikicat 의 gap 이 준다 — 두 번 주지 않는다 */
+.wikicat-bundlehead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; cursor: pointer; }
+.wikicat-bundle-tw { flex: none; width: 18px; padding: 3px; border: none; border-radius: 4px; background: none;
+  cursor: pointer; color: var(--muted-2); font-size: 10px; line-height: 1; text-align: center; }
+.wikicat-bundle-tw:hover { color: var(--ink-sub); background: var(--bg-tint); }
+.wikicat-bundle-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
+.wikicat-bundle-input { max-width: 100%; font-size: 13px; padding: 3px 7px; }
+.wikicat-bundle-acts { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; opacity: .55; transition: opacity .12s; }
+.wikicat-bundlehead:hover .wikicat-bundle-acts, .wikicat-bundlehead:focus-within .wikicat-bundle-acts { opacity: 1; }
+.wikicat-bundle-move { min-width: 30px; }
+/* 수선 구획 — «묶음을 정해 주세요». 「기타」 같은 영구 서랍이 아니라 **비워야 할 자리**라 경고 톤을 얹고,
+   0개면 구획 자체를 안 그린다(web/categories.ts). */
+.wikicat-bundle-fix .wikicat-bundlehead .wikicat-grouptitle { color: var(--warn-text); }
+.wikicat-bundle-note { margin: -2px 0 8px 26px; }
+/* 묶음 만들기 — 머리에 서는 인라인 입력(단추 ↔ 이름칸+만들기·취소 제자리 교체).
+   묶음이 0개인 평면 화면에도 서야 한다(그래야 마지막 묶음을 지운 뒤 되살릴 문이 남는다). */
+.wikicat-bundle-add { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; flex-wrap: wrap; }
+.wikicat-bundle-intro { margin: -2px 0 8px; }
+/* 행의 묶음 칸 — 오너 팀 셀렉트와 같은 문법(라벨은 작은 대문자 캡션, 값은 컴팩트 셀렉트). */
+/* max-width 를 두는 이유: 셀렉트는 기본적으로 옵션 글자 폭 아래로 안 줄어든다 — 묶음 이름이 길면
+   390px 에서 행 밖으로 밀려 가로 스크롤이 생긴다. 칸을 감싸 캡을 씌우고 필요하면 두 줄로 흐르게 한다. */
+.wikicat-bundle-pick { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; flex-wrap: wrap; font-size: 12px; }
+.wikicat-bundle-label { font-size: 10.5px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--muted-2); }
+.wikicat-bundle-sel { max-width: 100%; font-size: 12px; padding: 2px 6px; border: 1px solid var(--line-net-2);
+  border-radius: 6px; background: var(--bg-tint); color: var(--ink-sub); }
+/* 지울 때의 «어디로 옮길까요» — 묻는 자리에 답할 컨트롤이 함께 있어야 한다(확인창 안). */
+.wikicat-reassign { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wikicat-reassign-label { font-size: 12px; font-weight: 700; color: var(--ink-sub); }
+/* 좁은 화면 — 행 액션과 같은 규칙(.wikicat-row-acts)으로 머리 액션도 한 줄을 통째로 받는다.
+   안 그러면 ▲▼·지우기가 오른쪽으로 밀려 390px 에서 가로 스크롤이 생긴다. */
+@media (max-width: 640px) {
+  .wikicat-bundle-acts { flex-basis: 100%; margin-left: 0; justify-content: flex-start; opacity: 1; }
+  /* 머리에 단추가 둘([+ 추가]·[+ 묶음 추가])이고 이름 입력까지 펴지면 390px 에선 한 줄에 안 들어간다.
+     .wikicat-grouphead 는 다른 패널(자동화·컴퓨터·프리뷰)도 쓰므로 좁은 화면에서만 접히게 한다. */
+  .wikicat-grouphead { flex-wrap: wrap; }
+  .wikicat-bundle-add { margin-left: 0; }
+}
+
 /* 분류 폼의 연결 레포 체크박스 — 레포 수가 소수라 나열이 다중선택 <select> 보다 읽기 쉽다. */
 .catform-repos { display: flex; flex-wrap: wrap; gap: 8px 14px; }
 .catform-repo { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-sub); cursor: pointer; }

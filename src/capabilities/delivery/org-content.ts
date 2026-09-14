@@ -13,7 +13,7 @@ import {
   getOrgProfile, updateOrgProfile, listSections, updateSection, deleteSection, setSectionsOrder, sectionNameInUse, getRuntimeConfig
 } from "../../org/store.js";
 import { learnGroundTruth } from "../../org/knowledge.js";
-import { actorOf, restOnly, restRead, str } from "./shared.js";
+import { actorOf, restRead, restWork, str } from "./shared.js";
 
 // 세션 주입 섹션 — DB 행 + 코드 기본값 fold.
 type SectionRow = { body_md: string; version: number; sort: number; updated_at: string | null; updated_by: string | null };
@@ -124,7 +124,7 @@ export const orgContentCapabilities: Capability[] = [
     async () => learnGroundTruth()),
 
   // ── 프로필(표시명·게이트웨이 주소·시간대) ──
-  restOnly("org_update_profile", "조직 프로필 수정",
+  restWork("org_update_profile", "조직 프로필 수정",
     "조직 표시명/게이트웨이 주소/시간대를 수정한다. timezone 은 IANA 존(예 Asia/Seoul) — 스케줄러 cron 의 벽시계 기준이자 웹터미널 세션의 TZ.",
     [{ method: "POST", paths: ["/api/ui/org/profile"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -149,7 +149,7 @@ export const orgContentCapabilities: Capability[] = [
 
   // ── 항상-주입 섹션(injection='always' 문서) 관리 — N개 생성/편집/삭제/재정렬 (#335). ──
   //  매 세션 컨텍스트에 sort 순으로 조립된다. 죽은 ${rules}(지식-always)·고정 3섹션 화이트리스트 폐기.
-  restOnly("org_update_section", "조직 섹션 저장",
+  restWork("org_update_section", "조직 섹션 저장",
     "항상-주입 섹션(injection='always' markdown 문서)을 생성/편집한다. 신규는 sort 말미. 본문에 ${team}/${categories}/${wiki} 치환됨. "
     + "⚠ 제품 소유 가이드(context-ontology-guide)는 편집 불가 — 코드가 단일 출처(릴리스마다 자동 갱신)이고, 주입 여부만 org_runtime_update 의 inject_ontology_guide 로 제어한다(#1245).",
     [{ method: "POST", paths: ["/api/ui/org/section"], parse: (req) => req.body ?? {} }],
@@ -181,7 +181,7 @@ export const orgContentCapabilities: Capability[] = [
     }),
 
   // ── 섹션 삭제 — 감사 스냅샷 보존(복원가능). 기본 문서(context-ontology-guide 등)도 삭제 가능 — UI 가 경고/확인. ──
-  restOnly("org_delete_section", "조직 섹션 삭제",
+  restWork("org_delete_section", "조직 섹션 삭제",
     "항상-주입 섹션을 삭제한다(감사 스냅샷으로 보존 — content_restore 복원가능).",
     [{ method: "POST", paths: ["/api/ui/org/section/delete"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -192,7 +192,7 @@ export const orgContentCapabilities: Capability[] = [
     }),
 
   // ── 섹션 주입 순서 — sort 일괄 설정(orderedNames 순서 = 조립 순서). ──
-  restOnly("org_reorder_sections", "조직 섹션 순서",
+  restWork("org_reorder_sections", "조직 섹션 순서",
     "항상-주입 섹션의 주입 순서(sort)를 일괄 설정한다(order 배열 순서대로).",
     [{ method: "POST", paths: ["/api/ui/org/sections/order"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {

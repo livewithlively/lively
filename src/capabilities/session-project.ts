@@ -51,13 +51,16 @@ const sessionSetProject: Capability = {
 const sessionProjectContextInput = {
   session_id: z.string().min(1).max(128).describe("실행 세션 id"),
   known_revision: z.number().int().min(-1).optional().describe("클라이언트가 마지막으로 적용한 revision. 같으면 본문을 생략한다"),
+  // #3787 — 동기화 훅이 자기 노드를 밝히면 그 노드에서의 폴더·모드까지 답한다. 안 밝히면 종전 응답(하위호환).
+  node_id: z.string().max(128).optional().describe("호출한 세션이 도는 노드 id(LIVELY_NODE_ID). 주면 folder·sync·folder_abs_path 를 함께 돌려준다"),
+  include_content: z.boolean().optional().describe("AGENTS.md 본문을 실을지(기본 true). 동기화 훅은 폴더·모드만 필요하므로 false — REST 는 ?content=0"),
 };
 type SessionProjectContextInput = z.infer<z.ZodObject<typeof sessionProjectContextInput>>;
 
 const sessionProjectContextCap: Capability = {
   name: "session_project_context",
   title: "실행 세션 프로젝트 문맥",
-  description: "cwd와 무관하게 DB의 실행 세션 소속과 해당 프로젝트 AGENTS.md를 돌려준다. 동적 주입 훅 전용 REST 표면.",
+  description: "cwd와 무관하게 DB의 실행 세션 소속과 해당 프로젝트 AGENTS.md를 돌려준다. node_id 를 주면 그 노드에서의 공유폴더 위치(folder·folder_abs_path)와 동기화 모드(sync)까지 함께 답한다(#3787 — 동기화 훅의 권위). 동적 주입·동기화 훅 전용 REST 표면.",
   scope: null,
   input: sessionProjectContextInput,
   mutates: false,
@@ -66,13 +69,15 @@ const sessionProjectContextCap: Capability = {
     rest: [{ method: "GET", paths: ["/api/ui/execution-sessions/:id/project-context"], parse: (req) => ({
       session_id: String(req.params?.id ?? ""),
       known_revision: req.query?.knownRevision == null ? undefined : Number(req.query.knownRevision),
+      node_id: req.query?.node == null ? undefined : String(req.query.node),
+      include_content: req.query?.content == null ? undefined : String(req.query.content) !== "0",
     }) }],
   },
   handler: async (input: SessionProjectContextInput, user: LivelyUser, ctx?: CapabilityCtx) => {
     const sid = input.session_id.trim();
     // 외부 실행 id는 그 id를 x-lively-session으로 보낸 자기 요청만 조회할 수 있다. 관리형/web은 아래 owner gate가 한 번 더 막는다.
     if (isExternalExecutionSessionId(sid) && ctx?.session !== sid) throw new HttpError(403, "외부 실행 세션은 자기 문맥만 조회할 수 있습니다");
-    return await sessionProjectContext(user, sid, input.known_revision);
+    return await sessionProjectContext(user, sid, input.known_revision, input.node_id, input.include_content ?? true);
   },
 };
 

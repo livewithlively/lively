@@ -1,6 +1,7 @@
 // delivery ▸ 관리탭 단일 로드(org_overview) — 화면 한 장을 그리는 REST 전용 표면(#1169).
 //  payload 조립기는 각 도메인 모듈에서 import 한다(복제 금지 — 복제하면 화면과 메뉴 단위 API 가 갈린다).
 import type { Capability } from "../types.js";
+import { canManageWorkspace } from "../principal.js";
 import type { LivelyUser } from "../../context.js";
 import { MEANING } from "../../org/delivery/meaning.js";
 import { toolCandidates } from "../../mcp/mcp-surface.js";
@@ -59,7 +60,7 @@ export const overviewCapabilities: Capability[] = [
         members: memberRows, tokens, runtimeConfig, mcpServers, connectors,
         dbSources: dbSources.map(maskDbSource), envSources,
         orgHooks, lockedHookIds: isRuntime ? seedHookIds() : [], orgHarnessAssets, orgAssetPrefs, tools, builtins: isRuntime ? toolCandidates() : [], toolPolicy,
-        meaning: MEANING, canEdit: isAdmin, canRuntime: isRuntime,
+        meaning: MEANING, canEdit: isAdmin, canManage: canManageWorkspace(user), canRuntime: isRuntime,
       };
     }),
 ];

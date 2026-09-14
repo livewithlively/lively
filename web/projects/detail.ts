@@ -11,7 +11,9 @@
 import { api, applyReveal, el, errorNote, personFace, state, toast } from '../core.js';
 import { skeleton } from '../learn.js';
 import { projectBodyCommentRow, projectBodySection, projectKnowledgeSection } from './detail-body.js';
-import { pjvProjMetaPanel } from './detail-meta.js';
+import { mountProjectHub } from './detail-hub.js';
+import { HUB_TOOLS, type HubTool } from './detail-hub-layout.js';
+import { pjvProjFactsStrip, pjvProjMetaPanel } from './detail-meta.js';
 import { openProjectSessionForm, openProjectSettings, projectFolderSection, projectTerminalSection, projectTimelineSection } from './detail-sections.js';
 import { pjvTasksSection } from './detail-tasks.js';
 import { pjvSelReset } from './selection.js';
@@ -303,30 +305,36 @@ async function renderProjectV2Detail(view, idStr) {
     inp.addEventListener('blur', () => done(true));
   };
   titleEl.onclick = editTitle;
-  backRow.append(settingsBtn);   // '← 프로젝트'와 같은 줄 우측(#1233)
+  // 뒤로 줄 오른쪽 = [배치 편집](허브가 채운다) + [⚙ 프로젝트 세부 설정] — '← 프로젝트'와 같은 높이(#1233).
+  const hubActions = el('span', { class: 'pjh-actions', style: 'display:inline-flex;align-items:center;gap:8px' });
+  backRow.append(el('div', { class: 'proj-detail-actions' }, hubActions, settingsBtn));
   head.append(el('div', { class: 'proj-detail-titlebar' },
     // 상태 배지(타이틀 오른쪽) 제거 — 아래 메타행의 상태 필드(클릭해 변경)와 중복이라 그쪽만 남긴다.
     el('div', { class: 'proj-detail-titlebox' }, titleEl)));
-  // (본문은 헤더에서 빼고 태스크 위 '본문' 섹션으로 분리 — projectBodySection. 다른 섹션과 동일 위계.)
-  // 팀원 칩 행(proj-team-row) 제거 — 아래 메타 패널의 '팀원' 필드와 중복이라 한 곳(메타)만 남긴다.
-  // 클릭업식 메타데이터 패널 — 이름 바로 아래(태스크 박스 위). 상태·팀원·기간·우선순위·태그.
-  head.append(pjvProjMetaPanel(p, members, reload));
+  // 속성 띠(#3916) — 예전 2열 메타 패널(pjvProjMetaPanel)의 컨트롤을 칩 한 줄로. 컨트롤·저장 경로는 동일.
+  head.append(pjvProjFactsStrip(p, members, reload));
 
-  // 상세 본문 — 태스크(작업 위계)를 헤더 바로 아래 맨 위에 둔다(프로젝트의 핵심). 이어 공유 폴더 ·
-  //  터미널 세션 · 작업 타임라인(org #/projects 템플릿과 동형, v6 데이터·라우트). 모든 섹션 v6 API base 연결.
-  //  '필요/산출 지식'은 본문 바로 아래 '지식 흐름' 섹션으로 분리(#245) — 세부 설정 팝업에서 이관.
-  // 후속/선행 프로젝트는 별도 박스(projectEdgesSection)를 없애고 상단 프로퍼티(pjvProjMetaPanel)로 이관(#359).
-  // 본문+코멘트는 한 행으로 묶는다(#1233 — 접혀 있을 땐 본문 5 : 코멘트 2 로 나란히, 본문을 펼치거나 편집하면
-  //  본문이 전폭을 쓰고 코멘트는 그 아래로 내려간다). 코멘트가 세로 순서에서 빠지므로 아래 섹션들이 그만큼 올라온다.
-  // 터미널 세션 ↔ 공유 폴더 교환(#1233) — 터미널이 실제로 가장 자주 쓰이는데 2화면 아래에 있었다. '하위 태스크보다는
-  //  아래'라는 위계는 지키면서 올릴 수 있는 자리가 태스크 바로 다음이다.
-  view.replaceChildren(head,
-    projectBodyCommentRow(id, p, reload, members),
-    projectKnowledgeSection(id, p, reload),
-    pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []),
-    projectTerminalSection(id, members, meId, V6_BASE, p.name, p),
-    projectFolderSection(id, V6_BASE, p.folder),   // #1436 — p.folder = 공유 루트 기준 폴더 경로(공유 링크 좌표)
-    projectTimelineSection(id, members, V6_BASE));
+  // ── 상세 본문 = 도구 위젯 허브(#3916, 2026-09-14) ──
+  //  예전엔 본문+코멘트 · 지식 · 태스크 · 세션 · 폴더 · 타임라인 카드 여섯이 같은 무게로 세로 나열(≈2,000px)됐다. 이제 3열 격자의
+  //  위젯이고, 크기(S·M·L·XL)가 곧 뷰다. 섹션 렌더러 여섯은 그대로 살아 있다 — L·XL 과 «열기»가 그 카드를 그대로 앉힌다.
+  //  허브는 섹션 모듈을 직접 물지 않는다(배럴 순환) — 여기서 공장으로 넘긴다.
+  //  «열기» 주소 = #/projects2/p/:id/<도구> (라우터는 넷째 조각을 버리고 이 렌더러를 부른다 — 여기서 읽는다). 모달 안에선 제자리 전환.
+  const inModal = !!(view.closest && view.closest('.pjv-pm'));
+  const segs = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
+  const focus = (!inModal && segs[0] === 'projects2' && segs[1] === 'p' && segs[2] === idStr && (HUB_TOOLS as string[]).includes(segs[3] || '')) ? segs[3] as HubTool : null;
+  const hubHost = el('div', { class: 'pjh-host' });
+  view.replaceChildren(head, hubHost);
+  mountProjectHub(hubHost, {
+    id, p, members, reload, base: V6_BASE, inModal, focus, actionsHost: hubActions,
+    sections: {
+      tasks: () => pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []),
+      sessions: () => projectTerminalSection(id, members, meId, V6_BASE, p.name, p),
+      body: () => projectBodyCommentRow(id, p, reload, members),
+      folder: () => projectFolderSection(id, V6_BASE, p.folder),   // #1436 — p.folder = 공유 루트 기준 폴더 경로(공유 링크 좌표)
+      knowledge: () => projectKnowledgeSection(id, p, reload),
+      timeline: () => projectTimelineSection(id, members, V6_BASE),
+    },
+  });
   // 인라인 편집 재렌더면 리빌 애니메이션 대신 스크롤 복원(전면 재애니메이션도 '새로고침'처럼 보임) (#358)
   if (keepY != null) pjvRestoreScroll(keepY, keepHost); else applyReveal(Array.from(view.children).slice(1));
 }

@@ -1,6 +1,7 @@
 // 세션 대화 트랜스크립트 → '사용자 질문(프롬프트)만' 추출 (#745 카드 '내 질문' 팝아웃).
 //  Claude Code 는 세션 대화를 ~/.claude/projects/<cwd 인코딩>/<sessionUuid>.jsonl 에 append 한다.
-//  인코딩: cwd 의 '/' 와 '.' 를 '-' 로 (예: /Users/lively/.openclaw/workspace/project/657 → -Users-lively--openclaw-workspace-project-657).
+//  인코딩: cwd 의 **영숫자가 아닌 모든 글자**를 '-' 로 (예: /Users/lively/.openclaw/workspace/project/657 → -Users-lively--openclaw-workspace-project-657 ·
+//   /home/box_wonjoon-jang/box → -home-box-wonjoon-jang-box). 상세는 claudeProjectsDirName.
 //  ⚠ 접근 전제: 격리 OFF(현재 macOS 박스) = 세션이 게이트웨이 유저(lively)로 실행 → 트랜스크립트 직접 읽기 가능.
 //   격리 ON(리눅스 box_ 700홈)이면 이 경로가 안 읽히므로, 향후 drop-priv(wrapAsMember)로 확장해야 한다(지금은 빈 결과 폴백).
 import fsp from "node:fs/promises";
@@ -11,7 +12,7 @@ import type { EmbeddingProvider } from "../v6/embedding-provider.js";
 const CLAUDE_PROJECTS = path.join(os.homedir(), ".claude", "projects");
 
 function projectDirFor(cwd: string): string {
-  return path.join(CLAUDE_PROJECTS, cwd.replace(/[/.]/g, "-"));
+  return path.join(CLAUDE_PROJECTS, claudeProjectsDirName(cwd));
 }
 
 export interface Prompt { text: string; ts: string; author?: string; }
@@ -22,7 +23,20 @@ export interface Prompt { text: string; ts: string; author?: string; }
 //  10개인데 공유의 최신 1개만 읽고 있었다.
 export const PROFILES_ROOT = process.env.LIVELY_PROFILES_ROOT || path.join(os.homedir(), ".lively", "profiles");
 // #1746 하네스 세션 I/O 어댑터(harness-io/claude.ts)가 쓰는 규약 조각 — 이 파일의 경로 지식을 한 곳에 둔다(어댑터가 다시 적지 않게).
-export const claudeProjectsDirName = (cwd: string): string => cwd.replace(/[/.]/g, "-");
+//
+//  ★ #3870 — 규약은 **Claude Code 번들에서 읽는다**(2.1.270 실측): `k(e) = e.replace(/[^a-zA-Z0-9]/g, "-")`,
+//   결과가 200자를 넘으면 `${앞 200자}-${해시}`. 즉 **영숫자가 아닌 모든 글자**가 `-` 다.
+//   종전 이 줄은 `/` 와 `.` 만 바꿔서 멤버 홈(`/home/box_<slug>/…`)의 **밑줄**을 그대로 뒀다 — 실측 대조:
+//   cwd `/home/box_wonjoon-jang/box` 의 대화는 `-home-box-wonjoon-jang-box/` 에 있는데 이 함수는
+//   `-home-box_wonjoon-jang-box` 라는 **없는 폴더**를 가리켰다. 그래서 훅 보고 경로가 없는 세션은
+//   · 복원의 «대화가 그 기계에 있나» 가 거짓 «없다» 가 됐고(빈 피커 함정 수정의 전제를 무너뜨린다)
+//   · 대화창·질문 목록이 그 폴더를 못 읽었고 · 완전 삭제(#1850)는 그 대화 파일을 못 지운 채 «지웠다» 고 답했다.
+//  ⚠ 200자 초과는 해시 꼬리를 **재현하지 않는다**(그 해시는 번들 내부 함수라 판이 오르면 조용히 바뀐다).
+//   그 경우 이 이름은 Claude Code 의 폴더와 다르다 — 정확해야 하는 호출부는 `claudeProjectsDirExact` 로 먼저 묻는다.
+export const CLAUDE_PROJECT_DIR_MAX = 200;
+export const claudeProjectsDirName = (cwd: string): string => cwd.replace(/[^a-zA-Z0-9]/g, "-");
+/** 이 cwd 의 폴더 이름을 규약만으로 **정확히** 짚을 수 있나 — 200자를 넘으면 Claude Code 가 해시 꼬리를 붙여 못 짚는다. */
+export const claudeProjectsDirExact = (cwd: string): boolean => cwd.length <= CLAUDE_PROJECT_DIR_MAX;
 /** 이 소유자의 세션이 볼 수 있는 claude 대화 뿌리들 — 공유 홈 + 멤버 프로필(CLAUDE_CONFIG_DIR) + (격리 홈은 homes 로 받는다). */
 export function claudeTranscriptRoots(homes: string[], owner: string): string[] {
   const out = homes.map((h) => path.join(h, ".claude", "projects"));
@@ -83,7 +97,7 @@ function rootsForOwner(roots: Array<{ dir: string; author: string }>, owner: str
 //  0바이트 파일도 없는 것으로 본다(claude 가 못 읽는다). 뿌리(공유·프로필·격리홈) 전부를 훑는다 — access 뿐이라 싸다.
 export async function transcriptExists(cwd: string, sessionUuid: string, owner = ""): Promise<boolean> {
   if (!cwd || !sessionUuid) return false;
-  const enc = cwd.replace(/[/.]/g, "-");
+  const enc = claudeProjectsDirName(cwd);
   // owner 를 주면 그 사람이 볼 수 있는 뿌리만 — 남의 홈에 있는 동명 파일로 '있다'고 오판하지 않게.
   for (const { dir } of rootsForOwner(await transcriptRoots(), owner)) {
     try {
@@ -99,7 +113,7 @@ export async function transcriptExists(cwd: string, sessionUuid: string, owner =
 //  못 찾으면 null — 호출자가 '아직 기록 없음'으로 다룬다(추측 폴백 없음, 위 주석의 원칙 그대로).
 export async function findTranscriptFile(cwd: string, sessionUuid: string, owner = ""): Promise<{ file: string; size: number } | null> {
   if (!cwd || !sessionUuid) return null;
-  const enc = cwd.replace(/[/.]/g, "-");
+  const enc = claudeProjectsDirName(cwd);
   for (const { dir } of rootsForOwner(await transcriptRoots(), owner)) {
     const file = path.join(dir, enc, `${sessionUuid}.jsonl`);
     try {
@@ -393,7 +407,7 @@ export async function searchPromptsHybrid(sessions: Array<{ id: string; label: s
 export async function deleteTranscriptFiles(cwd: string, sessionUuid: string, owner = ""): Promise<number> {
   // uuid 형식 방어 — 이 값은 경로 조각이 된다. 라우트에서 이미 검증하지만 여기서도 막는다(삭제는 비가역).
   if (!cwd || !sessionUuid || !/^[A-Za-z0-9._-]{1,64}$/.test(sessionUuid) || sessionUuid.includes("..")) return 0;
-  const enc = cwd.replace(/[/.]/g, "-");
+  const enc = claudeProjectsDirName(cwd);
   let removed = 0;
   for (const { dir } of rootsForOwner(await transcriptRoots(), owner)) {
     const base = path.join(dir, enc);

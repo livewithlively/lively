@@ -82,6 +82,61 @@ export async function listMembers(): Promise<OrgMember[]> {
   return r.rows.map(mapMember);
 }
 
+/**
+ * «이 워크스페이스를 자기 계정으로 쓰는 사람» (#3872) — **사람 수를 세는 모든 자리의 잣대**다: 처음 설정 팀 소개와 합류 판정 폴백
+ *  (delivery/welcome.ts `joining`), 조직 셋업 체크리스트 «구성원»(delivery/onboarding.ts), 명부 응답의 사람 표식(`is_person`).
+ *
+ *  ⚠ `listMembers().length` 로 세면 안 된다. org_member 에는 «이 워크스페이스의 동료» 가 아닌 행이 함께 산다:
+ *   · 커넥터가 미러한 외부 사람(클릭업 담당자·슬랙 사용자) — lively-46e3 실측(2026-09-12) 활성 사람 91행 중 88행
+ *   · 매니지드 프로비저닝이 **모든 테넌트에** 심는 플랫폼 운영 계정(`admin` / ops@lvly.io) — identities 가 비어 있고
+ *     로컬 로그인 자격(member_credential)만 있다. 2026-09-13 부터 계정 서버가 이 행을 종류 system 으로 심는다(#1631 — lively-46e3 에서
+ *     kind=system 확인, 9/14). 옛 테넌트가 전부 다시 심겼는지는 재지 않았다 — 종류만 믿지 않는 이유다.
+ *   · 세션 호스트 같은 system 행(kind 로 걸러진다)
+ *  그냥 세면 혼자 쓰는 개인 워크스페이스가 «구성원 2명 팀» 이 되어, 처음 설정 첫 화면과 리브 1턴이 «이미 있는 팀에
+ *  합류했다 · 팀에 쌓인 지식 3건은 당신이 쓴 게 아니다» 라고 말한다(2026-09-13 실측 — 원준님 개인 워크스페이스 온보딩).
+ *
+ *  잣대는 «어떤 계정으로 들어오는 사람인가» 다:
+ *   · 매니지드 — CP 계정으로 들어온다 = identities 의 `lvly_account`(프로비저닝이 심는다, delivery/managed-cp.ts).
+ *     member_credential 은 여기서 **세지 않는다** — 운영 계정이 바로 그걸로 들어오기 때문이다.
+ *   · 셀프호스트 — 로컬 로그인 자격(`member_credential`).
+ *   · SSO(`oidc`)는 양쪽 다 사람이다.
+ *
+ *  2026-09-14 전면 점검(원준 — «사람수 카운트하는 모든 로직에서 쟤는 사람 아니니까 빠지게»): 이 잣대를 안 쓰고 사람을 세던 자리가
+ *   넷 더 있었다 — 체크리스트 «구성원»(종류 무관 전 행), 관리 ▸ 구성원 «총 N명», 스킬·훅 «대상 구성원» 요약, 셀프호스트 박스 구성원 창
+ *   (kind 만 봐서 미러된 사람 행까지). 그래서 조건을 한 벌로 두고 세는 함수와 표식 함수가 같이 쓴다
+ *   (org/store/people-count-single-source.test.ts 가 다른 자리의 행 세기를 막는다).
+ *  조건 안의 `$1` 은 managed 다.
+ */
+const WORKSPACE_PERSON_SQL = `m.kind='human'
+        AND (EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(m.identities)='array' THEN m.identities ELSE '[]'::jsonb END) e
+                      WHERE e->>'system' IN ('lvly_account','oidc'))
+             OR ($1::boolean = false AND EXISTS (SELECT 1 FROM member_credential c WHERE c.member_id = m.id)))`;
+
+export interface WorkspacePeopleOpts {
+  managed: boolean;
+  /** 이 사람은 빼고 센다 — 처음 설정 팀 소개는 **먼저 들어와 있는 사람**을 말한다(보는 사람까지 세면 혼자 있던 워크스페이스가 «구성원 2명»). */
+  except?: string | null;
+  /** 폐기되지 않은 접속 토큰이 있는 사람만 — 체크리스트 «접속 토큰 보유». 조건은 memberHasActiveToken(store/tokens.ts)과 같다. */
+  withActiveToken?: boolean;
+}
+
+/** 활성 사람 수(위 잣대). */
+export async function countWorkspacePeople(opts: WorkspacePeopleOpts): Promise<number> {
+  const r = await itemsPool.query(
+    `SELECT count(*)::int AS n FROM org_member m
+      WHERE ${WORKSPACE_PERSON_SQL} AND m.state='active'
+        AND ($2::text IS NULL OR m.id <> $2::text)
+        AND ($3::boolean = false OR EXISTS (SELECT 1 FROM auth_token t WHERE t.member_id = m.id AND t.revoked_at IS NULL))`,
+    [opts.managed, opts.except ?? null, opts.withActiveToken === true]);
+  return Number((r.rows[0] as { n?: number } | undefined)?.n ?? 0);
+}
+
+/** 사람인 구성원 id(위 잣대) — **상태는 따지지 않는다**(비활성 사람도 사람이다. 세는 쪽이 active 를 고른다). 명부 응답의 `is_person` 재료. */
+export async function workspacePersonIds(opts: { managed: boolean }): Promise<Set<string>> {
+  const r = await itemsPool.query(`SELECT m.id FROM org_member m WHERE ${WORKSPACE_PERSON_SQL}`, [opts.managed]);
+  return new Set(r.rows.map((x) => String((x as { id: unknown }).id)));
+}
+
 export async function getMember(id: string): Promise<OrgMember | null> {
   //  ★ 지금 맥락으로 못박는다(#1879) — 접기가 남긴 짝이 있으면 tenant 없는 조회는 **아무 행이나**
   //   돌려준다. 상수(primary)로 박으면 매니지드에서 RLS 가 걸러 0행이 된다(실측) — 그래서 맥락식이다.
@@ -124,18 +179,31 @@ export async function setMemberOnboardingStep(
 //  서버가 **볼 수 없는 것**뿐이다 — 온보딩·파이프라인·하네스 인벤토리는 각자 자기 자리에서 라이브
 //  계산되므로 여기 복제하면 두 개의 진실이 생긴다(#850 이 온보딩에서 이미 내린 결론).
 export interface LivWork { asis?: string; tobe?: string; at?: string; by?: "ai" | "self" }
+/**
+ * `work.asis` 는 «무대 · 직무» 를 이 구분자로 이어 붙인 **한 줄**이다(처음 설정이 만든다).
+ *  ⚠ 붙이는 곳(welcome.ts)과 되가르는 곳(org/liv/second-turn-sweep.ts — 묶음 시드의 직무 폴백)이
+ *   서로 다른 파일이라, 한쪽만 구분자를 바꾸면 컴파일은 통과하고 **조용히 어긋난다**. 그래서 한 자리에 둔다.
+ */
+export const WORK_ASIS_SEP = " · ";
 /** 처음 설정의 결과. 무엇을 만들었는지까지 남긴다 — "왜 이 서랍이 있죠?" 에 답할 유일한 근거다. */
 //  session_id(#1631) — 처음 설정 직후 열린 **리브 세션**. 다시 반영해도 세션을 또 열지 않는 근거(멱등)이자 화면이 그리로 보내는 좌표.
 //  distill_at / distill_gave_up_at / distill_note — 2턴(증류 지시)을 그 세션에 넣었나·포기했나·왜(second-turn-sweep). 둘 다 없으면 대기 중.
 export interface LivWelcome {
   done_at: string; drawers?: string[]; first_order?: string | null; session_id?: string | null;
+  /** 이 워크스페이스를 무엇에 쓰는가(company|solo|study, #1631). **자리** 축이라 워크스페이스 칸에 산다 —
+   *  사람 축(직무)은 계정 층 `work` 에 그대로 있다. 둘을 한 칸에 두면 워크스페이스 둘을 만든 사람에게
+   *  뒤가 앞을 덮는다(#2265 가 고친 바로 그 사고). */
+  stage?: string | null;
   distill_at?: string | null; distill_gave_up_at?: string | null; distill_note?: string | null;
   /** 세션이 사라져 **다시 연** 시각(#1631). 딱 한 번만 다시 연다 — 이 값이 있으면 다음엔 포기한다. */
   distill_reopened_at?: string | null;
+  /** (#1631, 원준 2026-09-14) 킥오프를 홈 탭의 tmux 세션이 아니라 **리브 탭의 대화 턴**으로 했을 때의 좌표 — session_id 대신 이 둘이 찍힌다.
+   *  liv_turn_id = 1턴(숨김 턴) id · liv_chat_id = 그 대화(claude 세션 uuid). 2턴 스윕은 세션에 배달하는 대신 이 대화에 증류 턴을 잇는다(liv/chat-turn.ts). */
+  liv_turn_id?: string | null; liv_chat_id?: string | null;
 }
 
 /**
- * (#1631) 2턴 대기 중인 사람 — 리브 세션은 열렸는데 증류 지시를 아직 안 넣었고 포기도 안 한 구성원.
+ * (#1631) 2턴 대기 중인 사람 — 리브 세션(session_id)이 열렸거나 리브 대화 턴(liv_turn_id)으로 킥오프했는데 증류 지시를 아직 안 넣었고 포기도 안 한 구성원.
  *  신원 전역 표라 테넌트 컨텍스트 없이 **모든 워크스페이스를 한 번에** 훑는다(스윕이 워크스페이스마다 돌지 않는다).
  *
  * ⚠ welcome 은 #2265 이후 **워크스페이스 칸**(by_workspace)에 산다. 옛 최상위 자리도 아직 남아 있을 수
@@ -154,7 +222,7 @@ export async function listLivSecondTurnCandidates(): Promise<Array<{ id: string;
         WHERE m.state='active' AND m.kind='human' AND e.value ? 'welcome'
      )
      SELECT id, display_name, ws, welcome FROM cand
-      WHERE welcome->>'session_id' IS NOT NULL
+      WHERE (welcome->>'session_id' IS NOT NULL OR welcome->>'liv_turn_id' IS NOT NULL)
         AND welcome->>'distill_at' IS NULL
         AND welcome->>'distill_gave_up_at' IS NULL
       ORDER BY welcome->>'done_at' ASC LIMIT 200`);
@@ -183,6 +251,8 @@ export interface LivWelcomeProgress {
   /** 화면이 쥔 진행 상태 그대로 — 서버는 해석하지 않는다. */
   state: Record<string, unknown>;
 }
+/** 합류 사실(#1631) — `via` 는 계정 서버의 joined_via, `existing_account` 는 «초대 전부터 계정이 있었나»(account_existed). */
+export interface LivJoin { via: "creator" | "invite"; existing_account: boolean; at: string }
 export interface LivDecision { at: string; what: string; why?: string; by?: string }
 /** 사람이 "그건 안 할게요"라고 한 것. `key` 는 카드 key(예: `org.embeddings`). */
 export interface LivDeclined { at: string; key: string; why?: string }
@@ -276,6 +346,9 @@ export interface LivTurnRef {
   /** 그 턴이 도는 세션 id. **멈추려면 이게 있어야 한다** — 없으면 사람은 시작만 하고 못 멈춘다.
    *  본인 프로필에서만 나오므로 남의 턴은 구조상 못 건드린다. */
   sid?: string;
+  /** 서버가 띄운 턴(킥오프·증류 지시, #1631) — 사람이 쓴 말이 아니라 화면이 «내 말» 로 그리지 않는다(liv/chat-turn.ts 머리말). */
+  hidden?: boolean;
+  kind?: "kickoff" | "distill";
 }
 
 export interface LivChat {
@@ -307,6 +380,14 @@ export interface LivProfile {
    *  '지금은 말고'지 '영영 말고'가 아니다.
    */
   welcome_deferred_at?: string | null;
+  /**
+   * 이 워크스페이스에 **어떻게 들어왔나**(#1631, 원준 결정 2026-09-13) — 처음 설정의 갈래(주인 / 초대로 들어온 사람)와
+   *  «터미널 → 내 컴퓨터 / 앱 받기» 장면을 보일지의 재료. 매니지드에선 계정 서버만 아는 사실이라, 처음 설정 현황(폴링 자리)이
+   *  매번 묻지 않도록 **첫 성공 값만** 여기 남기고 다음부터는 이 값을 쓴다(delivery/welcome.ts resolveJoinFact).
+   *  ⚠ welcome 안에 넣지 않는다 — 완료 반영이 welcome 을 통째로 덮는다(그 순간 합류 사실이 사라진다).
+   *  ⚠ 워크스페이스 층이다 — 같은 사람도 A 는 만들었고 B 에는 초대로 들어왔다.
+   */
+  join?: LivJoin | null;
   /** 대기 중인 요청(자격·객관식·업로드) 하나. 받으면 즉시 지운다 — 시크릿 값은 여기 오지 않는다. */
   secret_ask?: LivAsk | null;
   /** 사람이 고른 답들. 뒤에 쌓인다. */
@@ -405,8 +486,9 @@ export async function livAnswerStats(): Promise<Array<{
 //  옛 데이터는 **옮기지 않는다** — 읽을 때 워크스페이스 자리가 비어 있으면 옛 최상위 값으로 폴백하므로,
 //  기존 사용자는 자기 첫 워크스페이스에서 종전과 똑같이 보인다. 쓸 때부터 새 자리에 넣는다.
 
-/** 워크스페이스마다 달라야 하는 키 — 이 표가 이 변경의 전부다. */
-export const WORKSPACE_SCOPED_KEYS = ["welcome", "welcome_progress", "onboarded_at", "decisions"] as const;
+/** 워크스페이스마다 달라야 하는 키 — 이 표가 이 변경의 전부다.
+ *  `join`(#1631) — 이 워크스페이스에 만든 사람으로 왔나 초대로 왔나. 워크스페이스마다 다르다. */
+export const WORKSPACE_SCOPED_KEYS = ["welcome", "welcome_progress", "onboarded_at", "decisions", "join"] as const;
 export type WorkspaceScopedKey = (typeof WORKSPACE_SCOPED_KEYS)[number];
 
 /** 워크스페이스 층이 사는 자리. */
@@ -501,6 +583,65 @@ export async function getLivProfile(id: string): Promise<LivProfile> {
   const v = r.rows[0]?.liv_profile as unknown;
   const raw = (v && typeof v === "object" && !Array.isArray(v)) ? v as Record<string, unknown> : {};
   return viewForWorkspace(raw, currentTenant()?.id ?? null) as LivProfile;
+}
+
+/** 합류 사실의 **첫 성공 값**을 이 워크스페이스 층에 남긴다(#1631). 다음 조회부터는 계정 서버에 다시 묻지 않는다. */
+export async function setLivJoin(id: string, join: LivJoin): Promise<LivProfile> {
+  const cur = await getLivProfile(id);
+  const next: LivProfile = { ...cur, join };
+  return await writeLivProfile(id, next as unknown as Record<string, unknown>);
+}
+
+/**
+ * 이 사람이 **다른** 워크스페이스에서 처음 설정을 끝낸 적이 있나(순수, #1631) — 셀프호스트의 «초대 전부터 계정이 있었나» 재료.
+ *  by_workspace 의 칸 중 지금 워크스페이스가 아닌 칸에 onboarded_at 이 있으면 true.
+ *  ⚠ 옛 최상위 자리는 보지 않는다 — 그건 «아무 워크스페이스도 아직 안 쓴» 사람의 다리일 뿐 어느 워크스페이스 것인지 모른다(viewForWorkspace).
+ */
+export function hasOnboardedElsewhere(profile: unknown, workspaceId: string | null | undefined): boolean {
+  const p = isRec(profile) ? profile : {};
+  const box = isRec(p[BY_WORKSPACE]) ? (p[BY_WORKSPACE] as Rec) : {};
+  const ws = String(workspaceId ?? "").trim();
+  return Object.entries(box).some(([k, v]) => k !== ws && isRec(v) && !!v.onboarded_at);
+}
+export async function onboardedInOtherWorkspace(id: string, workspaceId: string | null | undefined): Promise<boolean> {
+  const r = await itemsPool.query(`SELECT liv_profile FROM org_member WHERE id=$1`, [id]);
+  return hasOnboardedElsewhere(r.rows[0]?.liv_profile, workspaceId);
+}
+
+/**
+ * (#1631) **이 워크스페이스의 용도** — 처음 설정 1단(`welcome.stage`)에 **먼저** 답한 사람의 값. 아무도 안 답했으면 null.
+ *
+ * 용도는 «자리» 의 성질이라 워크스페이스당 한 벌이어야 한다. 그런데 `welcome.stage` 는 구성원마다 한 칸
+ *  (`liv_profile.by_workspace[ws]`)에 살아서, 그대로 두면 먼저 답한 사람의 답이 나중에 들어온 사람에게 안 보인다.
+ *  초대로 들어온 사람은 이 값을 **물려받는다**(원준 결정 2026-09-13) — 없을 때만 그 사람에게 묻는다.
+ *
+ * ⚠ 표를 새로 만들지 않는다 — 이미 저장된 칸을 가로로 읽을 뿐이라 마이그레이션·RLS 표면이 안 는다.
+ * ⚠ 먼저 답한 사람 것을 쓴다(`done_at` 이 이른 순) — 나중 사람이 자리의 뜻을 바꿔 쓰지 못하게.
+ * ⚠ 워크스페이스 축이 있으면 **그 칸만** 본다 — 칸이 없는 구성원의 옛 최상위 welcome 을 빌려 오면 다른 워크스페이스에서
+ *  답한 용도가 새 워크스페이스로 새고, 먼저 답한 순이라 옛 값이 새 답을 계속 이긴다(격리 리뷰 2026-09-13).
+ *  용도 질문(#909)은 워크스페이스 칸(#2265)보다 늦게 생겨서 칸만 봐도 잃는 답이 없다.
+ */
+export async function workspacePurposeStage(workspaceId: string | null | undefined): Promise<string | null> {
+  const ws = String(workspaceId ?? "").trim();
+  //  워크스페이스 축이 없는 배포(단일 테넌트·등록부 primary)는 최상위 자리만 본다 — 거기가 곧 그 워크스페이스다.
+  const r = ws
+    ? await itemsPool.query(
+        `SELECT w FROM (
+           SELECT e.value->'welcome' AS w
+             FROM org_member m
+             LEFT JOIN LATERAL jsonb_extract_path(COALESCE(m.liv_profile->'by_workspace', '{}'::jsonb), $1) e(value) ON TRUE
+            WHERE m.state='active' AND m.kind='human'
+         ) x
+         WHERE w->>'stage' IS NOT NULL AND w->>'stage' <> ''
+         ORDER BY w->>'done_at' ASC NULLS LAST
+         LIMIT 1`, [ws])
+    : await itemsPool.query(
+        `SELECT liv_profile->'welcome' AS w FROM org_member
+          WHERE state='active' AND kind='human' AND COALESCE(liv_profile->'welcome'->>'stage', '') <> ''
+          ORDER BY liv_profile->'welcome'->>'done_at' ASC NULLS LAST LIMIT 1`);
+  const w = r.rows[0]?.w as { stage?: string | null } | undefined;
+  const stage = String(w?.stage ?? "").trim();
+  return stage || null;
 }
 
 /**
@@ -715,6 +856,14 @@ export async function upsertMember(m: MemberInput, actor?: string, source?: stri
   );
   const after = await getMember(m.id);
   await audit("org_member", m.id, before ? "update" : "insert", before, after, actor, source);
+  //  #1631(원준 2026-09-13) — **사람이 아닌 구성원은 로그인할 수 없다.** 계정 서버가 테넌트마다 심는 운영 구성원(admin,
+  //   ops@lvly.io)이 human+이메일로 만들어져 «새 human + 이메일 → 초기 비밀번호 자동 발급»을 탔고, 종류만 system 으로
+  //   다시 심어서는 그때 생긴 비밀번호·세션이 남는다. 그래서 종류가 사람이 아니면 여기서 치운다 — 멱등(없으면 0행).
+  //   ⚠ 로그인 판정(auth/local-accounts.ts verifyLogin)도 사람만 찾는다 — 두 겹이다.
+  if (after && after.kind !== "human") {
+    await itemsPool.query(`DELETE FROM member_credential WHERE member_id=$1`, [m.id]);
+    await itemsPool.query(`UPDATE web_session SET revoked_at=now() WHERE member_id=$1 AND revoked_at IS NULL`, [m.id]);
+  }
   // person/person_identity 동기화 — UI 편집이 즉시 게이트웨이 신원 매칭에 반영(load-bindings 와 동일 계약).
   if (after) await syncMemberToPerson(after);
   // (권한 토큰 전파 폐기 — P1) 유효 권한은 verifyDbToken 이 매 인증 시 intersection(토큰,멤버)로 계산한다.

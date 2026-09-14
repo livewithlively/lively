@@ -28,8 +28,9 @@
 //  ⚠ #2460 — 그중 **사람이 고른 것**(고정·접힘·묶는 축)은 서버가 정본이고 브라우저는 첫 페인트용
 //   캐시다(shell-prefs.ts). 선언 한 줄이 어느 쪽인지 말한다 — shellPrefStore = 계정 · deviceStore = 이 기기.
 import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
+import { planWikiCards, type WikiCardPlan } from './wiki-cards.js';
 import { findMatcher } from '../lib/find.js';
-import { splitFolderRows, foldCardRows } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음
+import { splitFolderRows, foldCardRows, projectPastRows, projCardRows, type PastRowLike } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음 · #3870 — 카드에 자기 화면 줄을 안 넣는다
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsTouch } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버다(선언 한 줄이 그걸 말한다)
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES, isDotState, rowDotCls } from '../session-status.js';   // #3778 2판 — 목록 줄의 점은 «나를 기다리는 것» 셋만
@@ -758,9 +759,12 @@ function projGrpHead(g: ProjGrp): HTMLElement {
   //   ⇒ 신호를 **호버가 뺏어가지 않는 자리**로 옮긴다. 행이 이미 쓰는 언어(흐린 톤)를 카드에도 쓰는 것이라
   //    새 문법이 아니다. 고리는 그대로 두되(호버 전 두 번째 단서) 혼자 짊어지지는 않는다.
   const allPast = !g.live && g.past > 0;
+  //  줄이 하나도 안 선 카드(#3778 5판)는 `rows` 가 비어 있다 — 개수는 접힘 안 것을 쓴다.
+  //   안 그러면 툴팁이 «세션 0» 이라고 말하는데 바로 옆 개수 칩은 8 이라고 말하는, 서로 어긋나는 화면이 된다.
+  const headN = g.rows.length || g.past;
   const head = el('div', { class: 'v2-pg-row' + (g.active && !g.open ? ' act' : '') + (g.pinned ? ' pinned' : '') + (allPast ? ' past' : '') },
     el('button', { class: 'v2-pg-t', type: 'button', 'aria-expanded': String(g.open),
-      title: g.name + (g.id ? `\n#${g.id} · 세션 ${g.rows.length}` : '\n프로젝트에 붙지 않은 세션과 화면'),
+      title: g.name + (g.id ? `\n#${g.id} · 세션 ${headN}` : `\n프로젝트에 붙지 않은 세션과 화면 ${headN}`),
       //  ⚠ **두 번째 클릭은 삼킨다** — 더블클릭은 «이름 고치기»(아래 dblclick)라, 접기가 두 번 일어나면 사람이 고른
       //   접힘 상태가 편집 도중에 뒤집힌다. 첫 클릭의 접기는 그대로 둔다(단일 클릭 문법은 안 건드린다 — #2579 와 같은 처방).
       onclick: (e: MouseEvent) => { if (e.detail >= 2) return; toggleGrp(g.key, g.open); } },
@@ -772,7 +776,9 @@ function projGrpHead(g: ProjGrp): HTMLElement {
       g.open ? null : grpFacesEl(g),
       grpSums(g),
       //  세션이 하나뿐인 묶음은 개수를 안 쓴다 — 접힌 줄 하나가 곧 그 하나다(위 grpSums 주석과 같은 사유).
-      g.rows.length > 1 ? el('span', { class: 'v2-cnt', text: String(g.rows.length) }) : null),
+      //  ★ 줄이 하나도 안 선 카드(#3778 5판)는 **접힘 안 개수**를 대신 쓴다 — 그 카드의 내용이 그것뿐이라
+      //   여기 숫자가 없으면 «세션이 몇 개 있는지» 를 펴 봐야만 알 수 있다(원준 2026-09-12: "개수로라도 보여야").
+      headN > 1 ? el('span', { class: 'v2-cnt', text: String(headN) }) : null),
     //  ★고정(#3778) — 카드째 맨 위로. 「프로젝트 없음」 묶음은 고정할 프로젝트가 없으므로 압정도 없다(트리와 같은 규율).
     g.id ? pinBtn(g.key, '위에 고정 — 이 프로젝트와 그 안의 세션을 통째로 맨 위로 올려 둡니다') : null,
     g.id ? newSessBtn(g.id) : null,
@@ -837,7 +843,22 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
   //  「고정」은 두 축 공통으로 맨 위다(#1954) — 압정한 행이 프로젝트 묶음 안에 갇히면 그 약속이 깨진다.
   //   여기 선 행은 소속을 말해 줄 머리글이 없으므로 **두 줄 그대로**(프로젝트 칩을 남긴다).
   const pinnedRows = shown.filter((r) => r.pinned);
-  const rest = shown.filter((r) => !r.pinned);
+  //  ★ 프로젝트 **자신의 화면**은 카드 안 줄로 세우지 않는다(#3870, 원준 2026-09-13 "프로젝트 폴더 안에는 세션만 있어야지").
+  //   카드 머리줄의 [→] 가 이미 그 화면으로 가는 문이다 — 잣대와 사유는 lib/sess-fold projCardRows 머리말.
+  //   ⚠ 「고정」 층은 거르지 않는다(사람이 꽂은 자리다). 날짜 축(appListKids)도 거르지 않는다(카드도 [→] 도 없다).
+  const rest = projCardRows(shown.filter((r) => !r.pinned));
+  //  ★ «이미 줄로 섰나» 를 **목록 전체**로 묻는다(#3778 6판, 원준 2026-09-12 "x 누르면 어디로 가는 거야?").
+  //   ⚠ 이 집합은 «어느 카드가 서나» 와 무관하다 — 카드는 종전처럼 **줄이 선 프로젝트만** 선다(7판에서 되돌렸다).
+  //   카드 접힘에서 세션을 빼는 이유는 이것 하나다. 그 카드의 줄(`g.rows`)만 보면 두 군데가 새는데,
+  //   둘 다 이 줄이 막는다:
+  //    ⓐ **치운 도는 세션** — 줄로 안 서는데(dismissed 가 live 보다 먼저 판정된다) 종전 규칙이
+  //      «도는 세션은 앞면» 이라며 접힘에서도 빼서 **어디에도 없었다**. × 툴팁이 「세션은 그대로 돌고」
+  //      라고 말하니 그게 × 의 정상 경로다.
+  //    ⓑ **압정으로 맨 위에 선 세션** — 압정 행은 카드 전에 따로 그리므로 `g.rows` 밖이고,
+  //      그래서 접힘에 한 번 더 설 수 있었다.
+  //   세션 행 키는 출처(① 내 세션 · ③ 열린 창)와 무관하게 늘 `sess:<id>` 다(main.ts sideRowKey).
+  const standingSess = new Set<string>();
+  for (const r of shown) if (r.id.startsWith('sess:')) standingSess.add(r.id.slice(5));
   const groups = projGroups(rest, !!q);
   //  ★ 프로젝트 축에서는 **카드째** 고정한다(#3778, 원준 2026-09-09). 이 축의 단위는 세션이 아니라 프로젝트라,
   //   압정도 그 단위여야 한다 — 카드가 올라오면 그 안의 세션은 **자동으로 따라 올라온다**(집합을 안 건드리고 자리만 옮긴다).
@@ -851,7 +872,7 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
     lastBucket = label;
     //  행이 먼저, 카드가 다음 — 낱개로 꽂은 것이 통째로 꽂은 것보다 좁고 급한 지목이다.
     for (const r of pinnedRows) kids.push(appRowEl(r, o));
-    for (const g of pinnedGrps) kids.push(projGrpCard(g, o, !!q));
+    for (const g of pinnedGrps) kids.push(projGrpCard(g, o, !!q, standingSess));
   }
   for (const g of groups) {
     if (g.pinned) continue;                         // 이미 위 「고정」 층에 섰다
@@ -859,7 +880,7 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
       kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g.bucket }) as HTMLElement);
       lastBucket = g.bucket;
     }
-    kids.push(projGrpCard(g, o, !!q));
+    kids.push(projGrpCard(g, o, !!q, standingSess));
   }
   return kids;
 }
@@ -867,18 +888,46 @@ function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLEl
 /** 프로젝트 카드 한 장 — 머리글 + (펼쳤으면) 그 안의 세션들.
  *  ★펼친 묶음 = 흰 카드 그릇 — 세션이 프로젝트의 **안**에 산다는 걸 면(面)이 말한다.
  *   들여쓰기+세로선만으로는 "목록 둘이 이웃한 그림"으로 읽혔다(상민님 2026-08-18, 트리 .v2-pj.open 과 같은 처방). */
-function projGrpCard(g: ProjGrp, o: RowOpts, searching = false): HTMLElement {
+function projGrpCard(g: ProjGrp, o: RowOpts, searching = false, standingSess?: ReadonlySet<string>): HTMLElement {
   //  ⚠ 카드 자체엔 고정 표식을 안 칠한다 — 「고정」 머리글과 파랗게 채워진 압정이 이미 말한다(트리의 .v2-pinb.on 과 같은 규율).
   //  ★ 카드 안에서 끝난 세션은 「지난 세션 n」 뒤로 접는다(#3778 안 C, 원준 2026-09-09) — 트리가 이미 쓰는 그 접힘이다.
   //   무엇이 접히고 무엇이 그대로 서는지의 잣대는 lib/sess-fold 에 있다(**끝난 것밖에 없으면 접지 않는다** 포함).
   const fold = foldCardRows(g.rows, { searching, opened: pastSet.has(g.key) });
   const row = (r: SideInstance) => appRowEl(r, { ...o, one: true });
+  //  ★ 접힘 안쪽은 **그 프로젝트의 지난 세션 전량**이다(#3778 4판, 원준 2026-09-12).
+  //   종전엔 카드가 받는 재료 자체가 «오늘 것 + 내가 안 닫은 것» 이라, 어제 이전 세션은 접힘 **숫자에도**
+  //   안 잡혔다. 그래서 시간이 지나면 「지난 세션 n」이 줄어들다 사라졌다 — 사람 눈엔 «만든 게 없어졌다» 다.
+  //   치운 세션도 여기 들어온다: × 의 뜻은 «위에서 치운다» 이지 «없앤다» 가 아니다.
+  //  ⚠ **서 있는 줄의 규칙은 안 건드린다** — 홈이 «오늘 붙들고 있는 것» 이라는 취지(#2208·#3855 상민님 승인안)는
+  //   그대로다. 접힘은 카드당 **한 줄**이라 목록을 길게 만들지 않는다. «홈이 명부가 되면 안 된다» 가 걱정한 것은
+  //   줄이 늘어나는 것이었고, 접힌 숫자는 줄을 안 늘린다.
+  //  ⇒ 그 결과 홈 카드와 [AI 세션] 카드가 **같은 내용**이 된다(원준: "둘이 달라질 이유가 있나").
+  //  ★ «이미 섰나» 는 **목록 전체**로 묻는다(#3778 6판 — projListKids 의 standingSess 머리말).
+  //   이 카드의 줄만 세면 치운 도는 세션이 사라지고(그게 × 의 정상 경로다) 압정한 세션이 두 번 선다.
+  //   못 받은 판(직접 호출·시험)에서는 종전처럼 이 카드의 줄로 떨어진다 — 없는 것을 지어내지 않는다.
+  const standing = standingSess || (() => {
+    const own = new Set<string>();
+    for (const r of g.rows) if (r.id.startsWith('sess:')) own.add(r.id.slice(5));
+    return own;
+  })();
+  const extra = projectPastRows(last?.data.sessions as PastRowLike[] | undefined, g.id, standing, MAX_SESS);
+  const extraRows = extra.rows.map((s) => sessAsInst(s as unknown as Sess, true, ''));
+  const folded = [...fold.folded, ...extraRows];
+  //  ★ **앞면이 하나도 없으면 접힘을 펴 둔다**(#3778 5판) — foldCardRows 의 "본문이 없으면 덮을 것이 없다" 와
+  //   같은 규율을 카드 전체에 적용한 것이다. 줄이 안 선 프로젝트의 카드는 내용이 「지난 세션 n」 하나뿐이라,
+  //   접어 두면 펴도 **뚜껑만 나오고** 세션을 보려면 한 번 더 눌러야 한다 — 「폴더를 펼쳐도 그 세션이 안
+  //   보였다」(#762·#1808)로 이미 두 번 고친 그 증상이다.
+  const foldOpen = fold.open || !fold.now.length || (!!extra.total && pastSet.has(g.key));
+  //  「외 n개」 — 상한을 넘는 만큼은 프로젝트 화면이 받는다(트리의 v2-ss-more 와 같은 규약).
+  const over = extra.total - extra.rows.length;
   return el('div', { class: 'v2-pg' + (g.open ? ' open' : ''), 'data-anch': g.key },
     projGrpHead(g),
     g.open ? el('div', { class: 'v2-pg-list' },
       ...fold.now.map(row),
-      fold.folded.length ? cardPastHead(g.key, fold.folded.length, fold.open) : null,
-      ...(fold.open ? fold.folded.map(row) : [])) : null) as HTMLElement;
+      folded.length ? cardPastHead(g.key, folded.length + Math.max(0, over), foldOpen) : null,
+      ...(foldOpen ? folded.map(row) : []),
+      foldOpen && over > 0
+        ? el('a', { class: 'v2-ss-more', href: '#/p/' + g.id, text: `외 ${over}개` }) : null) : null) as HTMLElement;
 }
 
 /** 카드 안 「지난 세션 n」 — 오늘 끝낸 세션을 한 줄로 접어 둔다. 트리의 pastHead2 와 **같은 통**(pastSet)을 본다.
@@ -909,7 +958,9 @@ function appListKids(shown: SideInstance[], q: string, o: RowOpts = {}, empty?: 
       kids.push(appRowEl(inst, o));
     }
   }
-  if (shown.length) return kids;
+  //  빈 화면은 **그린 것**으로 가른다(#3870) — 프로젝트 축은 프로젝트 화면 줄을 카드에 안 넣으므로(projCardRows),
+  //   재료(shown)는 있는데 그릴 카드가 하나도 없을 수 있다. 재료로 가르면 그때 목록이 안내도 없이 텅 빈다.
+  if (kids.length) return kids;
   return [el('div', { class: 'v2-app-empty' },
     el('p', { text: q ? (empty?.found || '찾는 열린 앱이 없어요.') : (empty?.none || '열린 앱이 없어요.') }),
     q ? el('button', { class: 'btn-text', type: 'button', text: '검색 지우기', onclick: () => { sideFilter = ''; redraw(); } })
@@ -1685,7 +1736,7 @@ function renderProjTree(): void {
 //   ③ 순서는 개수가 아니라 **우리 팀이 맡은 것 먼저**(`/api/ui/me` 의 team_owner_category_ids). 매일 보는 곳이 위로.
 //   ④ 개수는 모노 글자가 아니라 **알약** — 이름과 같은 줄 오른쪽 끝에 고정폭으로 서서 겉돌지 않는다.
 //  ⚠ 이모지(📌🕘🧩)는 쓰지 않는다 — 아이콘은 `icons.ts` 한 벌에서 온다(원준: "이모티콘 쓸 일 있으면 DS 에 맞게 다시 그려라").
-interface WikiCat { id: number; name: string; key: string; description?: string | null; knowledge_count?: number }
+interface WikiCat { id: number; name: string; key: string; description?: string | null; knowledge_count?: number; group?: string | null }
 let wikiCats: WikiCat[] | null = null;
 let wikiLoading = false;
 let wikiPins: number | null = null;      // WIKI 인덱스(핀) 건수 — 뷰 줄의 알약
@@ -1693,9 +1744,8 @@ let wikiPinsLoading = false;
 //  ⚠ #1631: 종전엔 space(제품/사업/시스템) 3카드로 갈라 접었다 폈다. 그 축을 걷어냈으므로 카드는 하나다 —
 //   접기 상태(WIKI_CLOSED_STORE)도, 스페이스 아이콘·라벨도 함께 사라졌다. 「N개 더 보기」 캡은 그대로 남긴다
 //   (분류가 19개면 사이드바가 벽이 되는 건 space 와 무관한 문제였다).
-const wikiMore = new Set<string>();      // 「N개 더 보기」로 편 카드 — 페이지 수명(새로 열면 다시 접힌다)
+const wikiMore = new Set<string>();      // 「N개 더 보기」로 편 카드(키 = wiki-cards.ts 의 카드 key) — 페이지 수명(새로 열면 다시 접힌다)
 const WIKI_CARD_MAX = 6;                 // 카드 하나에 바로 보이는 분류 수. 넘으면 더 보기로 접는다
-const WIKI_CARD_KEY = 'cats';            // wikiMore 의 유일한 키(카드가 하나뿐)
 
 /** 우리 팀이 맡은 분류 id — `/api/ui/me` 가 이미 싣고 있다(team_owner_category_ids). 없으면 빈 집합(표식만 안 붙는다). */
 function ownerCatIds(): Set<number> {
@@ -1725,6 +1775,27 @@ function loadWikiCats(): void {
     if (last && (hooks.section?.() || 'home') === 'wiki') redraw();
   });
 }
+//  묶음(#1631) — 카테고리 위의 **화면 층**. 서가의 카드가 곧 묶음이다(종전 space 카드 자리 — 그 축이 걷히며 카드가 하나로 줄었다).
+//   실측(2026-09-14, lively-agent-2-6a84 DB): 묶음 세 칸이 있고 리브가 만든 분류 4개가 그 안에 들어 있었는데, 이 사이드바가
+//   묶음을 한 번도 안 불러서 사람 눈엔 «상위 카테고리가 아예 없다» 로 보였다 — 묶음을 그리는 건 클래식 wiki-side.ts 뿐이었다.
+interface WikiGroup { key: string; name: string; hint?: string | null; sort?: number }
+let wikiGroups: WikiGroup[] | null = null;
+let wikiGroupsLoading = false;
+const wikiClosed = new Set<string>();    // 사람이 접은 묶음 카드 — 페이지 수명(새로 열면 다시 펴진다)
+function loadWikiGroups(): void {
+  if (wikiGroups || wikiGroupsLoading) return;
+  wikiGroupsLoading = true;
+  void api('/api/ui/category-groups').then((d: any) => {
+    wikiGroups = ((d && d.groups) || []) as WikiGroup[];
+    wikiGroupsLoading = false;
+    if (last && (hooks.section?.() || 'home') === 'wiki') redraw();
+  }).catch(() => {
+    //  못 받으면 종전 한 카드로 선다(무회귀) — 묶음은 화면 층이라 분류·검색은 그대로다.
+    wikiGroupsLoading = false;
+    wikiGroups = [];
+    if (last && (hooks.section?.() || 'home') === 'wiki') redraw();
+  });
+}
 /** 핀 건수 한 번 — 목록은 안 받는다(limit=1, 서버가 total 을 준다). */
 function loadWikiPins(): void {
   if (wikiPins != null || wikiPinsLoading) return;
@@ -1751,6 +1822,7 @@ function renderWiki(): void {
   if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
   loadWikiCats();
   loadWikiPins();
+  loadWikiGroups();
 
   const q = sideFilter.trim().toLowerCase();
   const all = wikiCats || [];
@@ -1777,21 +1849,28 @@ function renderWiki(): void {
       c.description ? el('span', { class: 'v2-kcat-d', text: String(c.description) }) : null);
   };
 
-  const rows: HTMLElement[] = [];
-  if (all.length) {
-    const shownAll = all.filter(hit).sort(rank);
-    const capped = !q && !wikiMore.has(WIKI_CARD_KEY) && shownAll.length > WIKI_CARD_MAX;
-    const shown = capped ? shownAll.slice(0, WIKI_CARD_MAX) : shownAll;
-    if (shownAll.length) {
-      const kids: HTMLElement[] = shown.map(catRow);
-      if (capped) {
-        kids.push(el('button', { class: 'v2-kmore', type: 'button', text: (shownAll.length - shown.length) + '개 더 보기',
-          onclick: () => { wikiMore.add(WIKI_CARD_KEY); redraw(); } }));
-      }
-      rows.push(el('section', { class: 'v2-ksp open', 'aria-label': '분류' },
-        el('div', { class: 'v2-ksp-b' }, ...kids)));
+  //  카드 계획은 순수 함수 한 벌(web/v2/wiki-cards.ts) — 여기선 그대로 그리기만 한다(#1631).
+  const plans = planWikiCards({ cats: all, groups: wikiGroups || [], searching: !!q, hit, rank, activeCat, closed: wikiClosed });
+  const card = (p: WikiCardPlan): HTMLElement => {
+    const capped = !q && !wikiMore.has(p.key) && p.cats.length > WIKI_CARD_MAX;
+    const shown = capped ? p.cats.slice(0, WIKI_CARD_MAX) : p.cats;
+    const kids: HTMLElement[] = shown.map((c) => catRow(c as WikiCat));
+    if (capped) {
+      kids.push(el('button', { class: 'v2-kmore', type: 'button', text: (p.cats.length - shown.length) + '개 더 보기',
+        onclick: () => { wikiMore.add(p.key); redraw(); } }));
     }
-  }
+    if (!p.head) return el('section', { class: 'v2-ksp open', 'aria-label': '분류' }, el('div', { class: 'v2-ksp-b' }, ...kids));
+    if (!p.cats.length) kids.push(el('p', { class: 'v2-kcat-d v2-ksp-empty', text: '아직 이 묶음에 든 분류가 없어요.' }));
+    const head = p.head;
+    return el('section', { class: 'v2-ksp' + (p.open ? ' open' : '') + (head.fix ? ' v2-ksp-fix' : ''), 'aria-label': head.name },
+      el('button', { class: 'v2-ksp-h', type: 'button', 'aria-expanded': String(p.open), title: head.hint || head.name,
+        onclick: () => { if (wikiClosed.has(p.key)) wikiClosed.delete(p.key); else wikiClosed.add(p.key); redraw(); } },
+        el('span', { class: 'v2-car' + (p.open ? ' open' : ''), 'aria-hidden': 'true', text: '\u203a' }),
+        el('span', { class: 'n', text: head.name }),
+        el('span', { class: 'v2-ksp-n', text: String(p.cats.length) })),
+      p.open ? el('div', { class: 'v2-ksp-b' }, ...kids) : null);
+  };
+  const rows: HTMLElement[] = plans.map(card);
   if (!rows.length) {
     rows.push(el('p', { class: 'v2-empty', text: wikiCats ? (q ? '찾는 분류가 없어요.' : '아직 분류가 없어요.') : '불러오는 중…' }));
   }

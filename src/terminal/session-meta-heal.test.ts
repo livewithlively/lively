@@ -11,7 +11,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { observeAgentRun, isSpinning, r_harnessIsAgent, PHASE_TTL_SEC } from "./phase.js";
-import { sessionMetaCmds, sessionWindowCmds, metaHealCmds, needsMetaHeal, makeMetaHealGate, META_HEAL_COOLDOWN_MS, type HealRow } from "./session-meta-heal.js";
+import { sessionMetaCmds, sessionWindowCmds, metaHealCmds, needsMetaHeal, needsSnapshotMetaHeal, makeMetaHealGate, META_HEAL_COOLDOWN_MS, type HealRow } from "./session-meta-heal.js";
 import { chunkTmuxCommands, tmuxBatchable, tmuxBatchRefOf, encodeOptJson, decodeOptJson, LIST_FMT, type TmuxCmd } from "./tmux-exec.js";
 import { resolveDesired, type TmuxDesired } from "../sessions/session-desired.js";
 import type { SessionState } from "../sessions/session-state.js";
@@ -268,6 +268,33 @@ test("N5 행의 소유자가 비었으면 안 한다 — 빈 소유자를 박으
   assert.equal(needsMetaHeal({ harnessRaw: "", row: dbRow({ owner: "" }), managed: null }), false);
   assert.equal(needsMetaHeal({ harnessRaw: "", row: dbRow({ owner: "  " }), managed: null }), false, "공백뿐인 소유자도 빈 값이다");
   assert.equal(needsMetaHeal({ harnessRaw: "", row: { owner: null }, managed: null }), false);
+});
+
+// ── S · 세션 호스트 스냅샷 행을 되채울지 (S-S) ─────────────────────────────────
+//  목록 소유가 세션 호스트로 넘어간 테넌트: 호스트엔 DB 가 없어 표식이 빈 판이 소유자 "" 로 올라온다(실측 d78e541c).
+
+test("S1 ★ 스냅샷 소유자 빈 값 · DB 소유자 있음 · 박스 세션 · 상시 아님 → 되채운다 (E36·E42)", () => {
+  assert.equal(needsSnapshotMetaHeal({ snapshotOwner: "", row: dbRow(), managed: undefined }), true);
+  assert.equal(needsSnapshotMetaHeal({ snapshotOwner: "  ", row: dbRow({ node_id: "" }), managed: "" }), true, "공백뿐인 소유자·빈 node_id 도 빈 값이다");
+  assert.equal(needsSnapshotMetaHeal({ snapshotOwner: null, row: dbRow({ node_id: null }), managed: null }), true);
+});
+
+test("S2 스냅샷에 소유자가 실려 있으면 안 한다 — 표식이 있는 판 (E37)", () => {
+  assert.equal(needsSnapshotMetaHeal({ snapshotOwner: "sangmin-yoon", row: dbRow(), managed: undefined }), false);
+});
+
+test("S3 DB 행이 노드 세션(node_id 있음)이면 안 한다 — 멤버 PC 의 tmux 는 게이트웨이가 칠 수 없다 (E38)", () => {
+  assert.equal(needsSnapshotMetaHeal({ snapshotOwner: "", row: dbRow({ node_id: "haruui-macbookair" }), managed: undefined }), false);
+});
+
+test("S4 상시세션이면 안 한다 (E39)", () => {
+  assert.equal(needsSnapshotMetaHeal({ snapshotOwner: "", row: dbRow(), managed: "ks-1" }), false);
+});
+
+test("S5 DB 행이 없거나 그 소유자가 비었으면 안 한다 — 정본 없이 짓지 않는다 (E40·E41)", () => {
+  assert.equal(needsSnapshotMetaHeal({ snapshotOwner: "", row: undefined, managed: undefined }), false);
+  for (const owner of ["", "  "]) assert.equal(needsSnapshotMetaHeal({ snapshotOwner: "", row: dbRow({ owner }), managed: undefined }), false, JSON.stringify(owner));
+  assert.equal(needsSnapshotMetaHeal({ snapshotOwner: "", row: { owner: null, node_id: null }, managed: undefined }), false);
 });
 
 // ── G · 쿨다운 (S-G) ────────────────────────────────────────────────────────────

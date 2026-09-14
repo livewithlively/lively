@@ -185,7 +185,7 @@ onNotionInstalled(async (memberId) => {
 const orgNotionCollect: Capability = {
   name: "org_notion_collect", title: "노션 자료 가져오기 상태",
   description: "\"자료 가져오기\" 상태 — 연결된 노션 워크스페이스마다 수집기 유무·켜짐 여부, 동의 시작 가능 여부. 토글은 org_notion_collect_set, 워크스페이스 추가·범위 재선택은 org_notion_collect_connect.",
-  scope: "admin", input: {},
+  scope: "memory", input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/notion/collect"], parse: () => ({}) }] },
   handler: async (_input, user) => {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
@@ -196,11 +196,11 @@ const orgNotionCollect: Capability = {
 const orgNotionCollectSet: Capability = {
   name: "org_notion_collect_set", title: "노션 자료 가져오기 켜기/끄기",
   description:
-    "\"자료 가져오기\" 토글(admin). enabled=true 인데 노션 연결(조직 슬롯)이 아직 없으면 needs_connect=true 와 " +
+    "\"자료 가져오기\" 토글(구성원). enabled=true 인데 노션 연결(조직 슬롯)이 아직 없으면 needs_connect=true 와 " +
     "authorization_url 을 돌려준다 — 그 URL 의 노션 화면에서 모을 페이지를 고르고 [허용]하면 연결이 저장되고 수집기가 " +
     "자동으로 준비된다(token_source=org:<workspace_id>, 토큰 복사 0). workspace_id 를 주면 그 워크스페이스만, " +
     "안 주면 연결된 전부를 켜고 끈다. 끄기는 삭제가 아니다 — 커서·자료가 남고 다시 켜면 이어받는다.",
-  scope: "admin",
+  scope: "memory",
   input: {
     enabled: z.boolean().describe("true=켜기 · false=끄기"),
     workspace_id: z.string().optional().describe("노션 워크스페이스 id — 지정하면 그 워크스페이스만(생략 시 전체)"),
@@ -246,8 +246,8 @@ const orgNotionCollectSet: Capability = {
 
 const orgNotionCollectConnect: Capability = {
   name: "org_notion_collect_connect", title: "노션 자료 가져오기 연결(워크스페이스 추가·범위 선택) 시작",
-  description: "노션 공개 통합 동의를 시작한다(admin) — 반환된 authorization_url 의 노션 화면에서 워크스페이스를 고르고 모을 페이지를 고르면 조직 수집 슬롯이 저장·갱신되고 그 워크스페이스의 수집기가 준비된다. 이미 연결된 워크스페이스를 다시 고르면 [페이지 더 고르기](범위 재선언), 다른 워크스페이스를 고르면 **추가 연결**이 된다.",
-  scope: "admin", input: {},
+  description: "노션 공개 통합 동의를 시작한다(구성원) — 반환된 authorization_url 의 노션 화면에서 워크스페이스를 고르고 모을 페이지를 고르면 조직 수집 슬롯이 저장·갱신되고 그 워크스페이스의 수집기가 준비된다. 이미 연결된 워크스페이스를 다시 고르면 [페이지 더 고르기](범위 재선언), 다른 워크스페이스를 고르면 **추가 연결**이 된다.",
+  scope: "memory", input: {},
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/org/notion/collect/connect"], parse: () => ({}) }] },
   handler: async (_input, user) => {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");

@@ -39,7 +39,8 @@ export interface CtxHit {
 export interface CtxEvent {
   e: MouseEvent;
   x: number; y: number;
-  target: HTMLElement;
+  /** 눌린 자리의 요소. **SVG 일 수 있다**(아이콘) — HTMLElement 로 좁히지 마라(#3784 실측: 아이콘 위에서 메뉴가 통째로 안 떴다). */
+  target: Element;
   /** 우클릭 시점의 선택 글(공백 제거). 없으면 ''. */
   selection: string;
   /** 눌린 자리의 링크(a[href]) — 있으면. */
@@ -79,7 +80,11 @@ export function registerCtxCommon(f: (ev: CtxEvent) => CtxRow[]): () => void {
 }
 
 const EDIT_SEL = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]';
-const FRAME_SEL = 'iframe, webview, .pn-ctx';
+/** data-* 읽기 — SVGElement 도 dataset 을 갖지만 Element 타입엔 없다(아이콘 위 우클릭, #3784). */
+const dset = (n: Element): DOMStringMap | undefined => (n as HTMLElement | SVGElement).dataset;
+const FRAME_SEL = 'iframe, webview';
+/** 우리 메뉴 자신 — 그 위에서 우클릭하면 **아무것도 안 띄운다**(네이티브도 아니다). */
+const OWN_MENU_SEL = '.pn-ctx, .tctx';
 
 function norm(r: CtxRow[] | CtxResult | null | undefined | void): CtxResult | null {
   if (!r) return null;
@@ -88,27 +93,29 @@ function norm(r: CtxRow[] | CtxResult | null | undefined | void): CtxResult | nu
 }
 
 /** 그 자리에서 메뉴 행을 모은다. 띄우지는 않는다(테스트·프로그램 호출용). */
-export function collectCtx(target: HTMLElement, ev: CtxEvent): { rows: CtxRow[]; title?: string; sub?: string } | null {
+export function collectCtx(target: Element, ev: CtxEvent): { rows: CtxRow[]; title?: string; sub?: string } | null {
   let item: CtxResult | null = null;
-  let itemEl: HTMLElement | null = null;
+  let itemEl: Element | null = null;
   let surface: CtxResult | null = null;
-  let n: HTMLElement | null = target;
+  let n: Element | null = target;
   while (n && n !== ev.root.parentElement) {
     if (!item) {
-      const bp = bound.get(n);
-      const kind = n.dataset ? n.dataset.ctx : undefined;
+      const bp = bound.get(n as HTMLElement);
+      const d = dset(n);
+      const kind = d ? d.ctx : undefined;
       const p = bp || (kind ? kinds.get(kind) : undefined);
       if (p) {
-        const hit: CtxHit = { el: n, kind: kind || 'bound', data: n.dataset };
-        item = norm(p(hit, ev));
+        const hit: CtxHit = { el: n as HTMLElement, kind: kind || 'bound', data: dset(n) as DOMStringMap };
+        try { item = norm(p(hit, ev)); } catch (_) { item = null; }   // 제공자가 던져도 메뉴 전체를 잃지 않는다(#3784)
         if (item) itemEl = n;
       }
     }
     if (!surface) {
-      const bs = boundSurface.get(n);
-      const sname = n.dataset ? n.dataset.ctxSurface : undefined;
+      const bs = boundSurface.get(n as HTMLElement);
+      const sd = dset(n);
+      const sname = sd ? sd.ctxSurface : undefined;
       const sp = bs || (sname ? surfaces.get(sname) : undefined);
-      if (sp) surface = norm(sp({ el: n, kind: sname || 'surface', data: n.dataset }, ev));
+      if (sp) { try { surface = norm(sp({ el: n as HTMLElement, kind: sname || 'surface', data: dset(n) as DOMStringMap }, ev)); } catch (_) { surface = null; } }
     }
     if (item && surface) break;
     n = n.parentElement;
@@ -131,7 +138,7 @@ export function collectCtx(target: HTMLElement, ev: CtxEvent): { rows: CtxRow[];
   return { rows, title: item?.title ?? surface?.title, sub: item?.sub ?? surface?.sub };
 }
 
-function eventOf(e: MouseEvent, target: HTMLElement, root: HTMLElement, x: number, y: number): CtxEvent {
+function eventOf(e: MouseEvent, target: Element, root: HTMLElement, x: number, y: number): CtxEvent {
   let selection = '';
   try { selection = String(window.getSelection()?.toString() || '').trim(); } catch (_) { /* noop */ }
   // 선택이 눌린 자리와 무관하면(다른 칸의 옛 선택) 선택으로 치지 않는다.
@@ -149,7 +156,7 @@ function eventOf(e: MouseEvent, target: HTMLElement, root: HTMLElement, x: numbe
 }
 
 /** 프로그램에서 띄운다(길게 누르기·메뉴 키). 띄울 것이 있었으면 true. */
-export function openCtxAt(target: HTMLElement, x: number, y: number, root: HTMLElement, e?: MouseEvent): boolean {
+export function openCtxAt(target: Element, x: number, y: number, root: HTMLElement, e?: MouseEvent): boolean {
   const ev = eventOf(e || new MouseEvent('contextmenu', { clientX: x, clientY: y, bubbles: true }), target, root, x, y);
   const got = collectCtx(target, ev);
   if (!got) return false;
@@ -161,15 +168,19 @@ export function openCtxAt(target: HTMLElement, x: number, y: number, root: HTMLE
 export function mountCtxMenus(root: HTMLElement, opts: { longPress?: boolean; menuKey?: boolean } = {}): () => void {
   const onCtx = (e: MouseEvent): void => {
     if (e.defaultPrevented || e.shiftKey) return;
-    const t = e.target as HTMLElement | null;
-    if (!t || !(t instanceof HTMLElement)) return;
+    //  ⚠ `instanceof HTMLElement` 로 좁히지 않는다 — **아이콘은 SVGElement 라 그 가드에 전부 걸렸다**(#3784 실측:
+    //   홈 앱 타일·아카이브 표의 아이콘 위에서 우클릭하면 macOS 네이티브 메뉴가 떴다). Element 면 충분하다:
+    //   closest·classList·dataset 은 SVGElement 에도 있다.
+    const t = e.target as Element | null;
+    if (!t || t.nodeType !== 1 || typeof t.closest !== 'function') return;
+    if (t.closest(OWN_MENU_SEL)) { e.preventDefault(); return; }   // 메뉴 위에서 네이티브가 뜨면 안 된다
     if (t.closest(FRAME_SEL)) return;
     if (t.closest(EDIT_SEL)) return;
-    const ev = eventOf(e, t, root, e.clientX, e.clientY);
-    const got = collectCtx(t, ev);
+    let got: { rows: CtxRow[]; title?: string; sub?: string } | null = null;
+    try { got = collectCtx(t, eventOf(e, t, root, e.clientX, e.clientY)); } catch (_) { got = null; }
     if (!got) return;                      // 아무도 할 말이 없으면 브라우저 메뉴
     e.preventDefault(); e.stopPropagation();
-    showCtxMenu(e.clientX, e.clientY, got.rows, { title: got.title, sub: got.sub });
+    try { showCtxMenu(e.clientX, e.clientY, got.rows, { title: got.title, sub: got.sub }); } catch (_) { /* 이미 preventDefault 했다 — 빈 메뉴가 네이티브보다 낫다 */ }
   };
   root.addEventListener('contextmenu', onCtx);
 
@@ -177,8 +188,8 @@ export function mountCtxMenus(root: HTMLElement, opts: { longPress?: boolean; me
   const onKey = (e: KeyboardEvent): void => {
     if (!opts.menuKey) return;
     if (!(e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey))) return;
-    const a = document.activeElement as HTMLElement | null;
-    if (!a || !root.contains(a) || a.closest(EDIT_SEL) || a.closest(FRAME_SEL)) return;
+    const a = document.activeElement as Element | null;
+    if (!a || typeof a.closest !== 'function' || !root.contains(a) || a.closest(EDIT_SEL) || a.closest(FRAME_SEL)) return;
     if (ctxIsOpen()) { closeCtxMenu(); return; }
     const r = a.getBoundingClientRect();
     if (openCtxAt(a, Math.round(r.left + Math.min(24, r.width / 2)), Math.round(r.bottom - 4), root)) { e.preventDefault(); e.stopPropagation(); }
@@ -186,12 +197,12 @@ export function mountCtxMenus(root: HTMLElement, opts: { longPress?: boolean; me
   root.addEventListener('keydown', onKey);
 
   // 손가락으로 길게 누르기(터치) — 우클릭이 없는 자리. 550ms, 8px 넘게 움직이면 취소(레일 독과 같은 규칙).
-  let lp = 0; let lpX = 0; let lpY = 0; let lpT: HTMLElement | null = null;
+  let lp = 0; let lpX = 0; let lpY = 0; let lpT: Element | null = null;
   const lpCancel = (): void => { if (lp) { window.clearTimeout(lp); lp = 0; } lpT = null; };
   const onDown = (e: PointerEvent): void => {
     if (!opts.longPress || e.pointerType !== 'touch') return;
-    const t = e.target as HTMLElement | null;
-    if (!t || t.closest(EDIT_SEL) || t.closest(FRAME_SEL)) return;
+    const t = e.target as Element | null;
+    if (!t || typeof t.closest !== 'function' || t.closest(EDIT_SEL) || t.closest(FRAME_SEL)) return;
     lpCancel(); lpX = e.clientX; lpY = e.clientY; lpT = t;
     lp = window.setTimeout(() => {
       lp = 0;

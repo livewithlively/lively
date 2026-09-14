@@ -22,7 +22,7 @@ import { dotCls, findSessIn, isMineSess, isTrashedSess, mergeSessions, projName,
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
 import { keepObserved, type ObsMemory } from './obs-carry.js';
-import { PINNED_GROUP, PRIORITY_GROUP, QUIET_RANK, pruneHolds, stepRowHold, type RowHold } from './hold-rules.js';   // #3856 — 「지금 볼 것」 해제·카드 자리 규칙(순수)   // #2544 후속 — 중계가 «못 본» 판을 직전 관측으로 잇는다(순수)
+import { PINNED_GROUP, PRIORITY_GROUP, QUIET_RANK, dayGroup, pruneHolds, stepRowHold, type RowHold } from './hold-rules.js';   // #3856 — 「지금 볼 것」 해제·카드 자리 규칙(순수)   // #2544 후속 — 중계가 «못 본» 판을 직전 관측으로 잇는다(순수)
 import { renderArchive, renderTrash } from './bins.js';   // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
 import { renderSourcesApp, renderSourceDetail } from './sources.js';   // #2423 자료 앱 — 열람실(사이드바 갈래는 side.ts)
 import { renderConnect, renderConnectApp, renderConnectData } from './connect.js';
@@ -525,8 +525,11 @@ export async function bootV2(): Promise<void> {
   histStamp();     // 첫 화면도 히스토리의 한 칸이다 — 안 찍어 두면 되돌아왔을 때 '새로 감'으로 오인한다
   bindAltOpen();
   // #3784 — 우클릭 메뉴. 뿌리 하나가 듣고 표(data-ctx / data-ctx-surface)를 위로 찾는다. 셸 자체가 맨 바깥 표면.
-  root.dataset.ctxSurface = 'shell';
-  mountCtxMenus(root, { longPress: true, menuKey: true });
+  //  ⚠ 뿌리는 **body** 다(#v2-root 가 아니다). 런치패드·[나] 창·통합검색·워크스페이스 팝오버·지식 요약 모달·
+  //   anchoredPopover 는 전부 `document.body` 에 붙는다 — #v2-root 에 걸면 **그 위에서 우클릭이 네이티브로
+  //   떨어진다**(원준님 실측 2026-09-12, 스크린샷의 macOS 메뉴). 표면 표도 같은 이유로 body 에 단다.
+  document.body.dataset.ctxSurface = 'shell';
+  mountCtxMenus(document.body, { longPress: true, menuKey: true });
   mountCtxShell({
     data: () => data,
     openRoute: (href, newTab) => {
@@ -1503,18 +1506,6 @@ const PRIORITY_ST: Record<string, { label: string; rank: number }> = {
   busy:    { label: '작업 중',   rank: 2 },   // 지금 돌고 있다
 };
 //  묶음 이름(지금 볼 것 · 고정)과 층은 hold-rules.ts 한 자리에 있다(#3856) — 카드 자리 규칙(side.ts)이 같은 값을 읽는다.
-
-/** 마지막 작업 일시 → 묶음 이름. 오늘·어제는 그렇게 부르고, 그 앞은 날짜로. */
-function dayGroup(at: number, now: number): string {
-  if (!at) return '언젠가';
-  const d = new Date(at); const n = new Date(now);
-  const day = (x: Date): number => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const diff = Math.round((day(n) - day(d)) / 86400000);
-  if (diff <= 0) return '오늘';
-  if (diff === 1) return '어제';
-  return d.getFullYear() === n.getFullYear() ? `${d.getMonth() + 1}월 ${d.getDate()}일`
-    : `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일`;
-}
 
 /**
  * 목록 안에서 **행이 스스로 움직이지 않게** 하는 자물쇠(#1954).

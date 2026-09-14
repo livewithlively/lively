@@ -48,6 +48,10 @@ export interface SweepJob {
   readonly run: () => Promise<unknown>;
 }
 
+/** 표식 되채우기 정비 주기(#3892). 되채우기 쿨다운(`META_HEAL_COOLDOWN_MS`)과 **같은 자**다 — 더 잦으면 쿨다운에 걸려 헛돌고,
+ *  더 드물면 표식이 빈 판이 «중단됨» 으로 서 있는 창이 길어진다(그동안 사람이 보내는 말은 403 으로 막힌다). */
+export const META_HEAL_SWEEP_MS = 60_000;
+
 /** 원래 하우스키핑이 쓰던 주기 그대로 — 새 정책을 만들지 않는다(`background-sweeps` 의 setInterval 값). */
 export const TEN_MIN_MS = 10 * 60_000;
 export const SIX_HOURS_MS = 6 * 60 * 60_000;
@@ -91,6 +95,14 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 이게 없으면 그 세션들은 **회수 면역이면서 죽으면 복원도 안 된다**(고객사 A 실측: 38건 중 19건).
   { key: "session-state-backfill", intervalMs: SWEEP_MIN_INTERVAL_MS,
     run: () => import("./session-state-backfill.js").then((m) => m.backfillSessionStates()) },
+  // 표식 되채우기 — 세션 호스트 스냅샷(#3892 후속). 목록 소유가 세션 호스트로 넘어간 테넌트에선 게이트웨이 `collectSessions`
+  //  의 되채우기가 안 불린다. 호스트엔 DB 가 없어 표식(@box_owner)이 빈 판은 주인에게도 안 보이고 «중단됨» 으로 선다
+  //  (실측 2026-09-11 box-sangmin-yoon-d78e541c). ⚠ 반드시 테넌트 스코프 — 스냅샷도 DB 행도 그 테넌트로 좁혀야 한다.
+  //  ⓘ 셀프호스트·registry 하우스키핑(`startBackgroundSweeps` 의 perTenant)에는 **일부러 안 싣는다** — 세션 호스트 선언은
+  //   매니지드 브로커의 프로비저닝(`session-host-provision`)만 만든다. 그러니 셀프호스트에선 목록이 늘 게이트웨이
+  //   `collectSessions` 이고 그쪽 되채우기가 이미 돈다(요청별 테넌시 = 매니지드일 때만 이 표가 돈다).
+  { key: "session-meta-heal", intervalMs: META_HEAL_SWEEP_MS,
+    run: () => import("./session-meta-heal-sweep.js").then((m) => m.sweepSessionMetaHeal()) },
   // 위탁 배차(#869 P2) — **전역**이다. 실측(2026-08-31): `org_task` 3건이 queued·attempt=0·node_id 없이
   //  **3~4일** 방치돼 있었다. 크론은 도는데(CP 가 굴린다) 배차가 한 번도 안 됐다 — 그중 둘이
   //  «미분류 지식 12건 분류»·«자료 증류» 로 **맥락 파이프라인의 본체**다.
@@ -106,6 +118,11 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 반드시 **테넌트 스코프**다 — 전역으로 달면 딱 한 테넌트만 앱을 받는다.
   { key: "builtin-app-seed", intervalMs: SIX_HOURS_MS,
     run: () => import("../apps/seed.js").then((m) => m.seedBuiltinApps()) },
+  // 묶음 보정(#1631, 2026-09-14) — 처음 설정을 끝냈는데 묶음이 0개로 남은 워크스페이스를 한 번 채운다(실측 lively-agent-2-6a84).
+  //  워크스페이스마다 결론이 나면 그 프로세스에선 다시 안 본다(group-backfill.ts) — 주기는 그 한 번이 늦지 않을 정도면 된다.
+  //  ⚠ 테넌트 스코프 — 묶음·카테고리·구성원 전부 그 워크스페이스 것이다.
+  { key: "category-group-backfill", intervalMs: TEN_MIN_MS,
+    run: () => import("../org/liv/group-backfill.js").then((m) => m.backfillCategoryGroups()) },
   //  ⚠ **`reapIdleSessions`(#1059 F)는 일부러 빼 뒀다** — tmux 세션을 **죽인다.** 정책 기본이 0(끔)이라
   //   당장은 no-op 이지만, 파괴적 동작을 이 표에 얹는 것은 #2148(매니지드 유휴 회수)의 판단이다.
   //   그 짝인 위 백필은 올린다 — 원래 주석이 "회수 **전에** 백필한다"고 못 박았고 백필 자체는 안전하다.

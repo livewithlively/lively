@@ -9,7 +9,8 @@
 //   · tick() — 8초 틱. **서명이 같으면 DOM 을 건드리지 않는다**(스크롤·입력 중인 글자 보호).
 //   · destroy() — 폴링·구독 정리.
 import { api, apiUrl, el, relTime, renderMarkdown, toast } from '../core.js';
-import { confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 — 보관 칸의 × 는 휴지통으로
+import { confirmForceRestore, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 — 보관 칸의 × 는 휴지통으로 · #3870 강제 복원 확인
+import { canForceRestore, restorePath } from '../lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다
 import { fmtSize } from '../projects/files.js';
 import { upDropZone, upFromInput, upSend, upToast, type UpItem } from '../projects/files-upload.js';
 import { confirmDialog } from '../ui-primitives.js';
@@ -571,11 +572,11 @@ function archivePart(ctx: PartCtx): Part {
     .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
   const canRestore = (s: Sess): boolean => !!(s.raw && s.raw.restorable);
 
-  async function restore(s: Sess): Promise<void> {
+  async function restore(s: Sess, force?: boolean): Promise<void> {
     if (workingId) return;
     workingId = s.id; sig = ''; paint();
     try {
-      const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST' });
+      const r: any = await api(restorePath(s.id, force), { method: 'POST' });
       toast('세션을 되살렸어요 — 대화가 이어집니다.');
       ctx.onChanged?.();
       // #1820 — 되살린 세션은 **새 id** 를 받는다. 그 화면으로 데려가지 않으면 "되살렸다는데 어디 있지?"가 된다
@@ -584,6 +585,14 @@ function archivePart(ctx: PartCtx): Part {
       if (ns && ns.id) { rememberCreated(ns); location.hash = '#/s/' + encodeURIComponent(String(ns.id)); }
       else if (r && r.already) location.hash = '#/s/' + encodeURIComponent(s.id);
     } catch (e: any) {
+      //  #3870 — 서버가 «모름이라 멈췄다(force 로 풀린다)» 고 하면 그 선택지를 **여기서** 준다. 종전엔 서버 문구를
+      //   그대로 토스트했는데, 그 문구는 «화면의 [강제로 되살리기] 를 눌러 주세요» 라고 대화창에만 있는 버튼을
+      //   지목한다 — 이 화면엔 없어서 막다른 안내였다.
+      if (canForceRestore(e) && !force) {
+        workingId = ''; sig = ''; paint();
+        if (await confirmForceRestore({ name: s.label })) { await restore(s, true); return; }
+        return;
+      }
       toast('되살리지 못했어요 — ' + (e && e.message ? e.message : e), true);
     } finally { workingId = ''; sig = ''; paint(); }
   }

@@ -112,6 +112,21 @@ export async function distillersPanel(detail, data) {
   detail.replaceChildren(body);
 }
 
+/**
+ * 이름과, 이름 뒤에 덧붙인 설명을 가른다 — 리브가 만든 증류기는 「제품 기획서 — 꺼 둠: …」「올린 파일 → 서랍 (테스트 계정 업로드 제외)」
+ *  처럼 설명을 이름에 붙여 둔다. 이름은 굵게, 설명은 흐리게 한 줄 아래로(#3830). 데이터는 건드리지 않는다 — 보여 주는 모양만.
+ *  괄호는 **띄어 쓴 끝 괄호**만 가른다(「이슈·PR 대화(GitHub·GitLab)」처럼 이름의 일부인 괄호는 둔다).
+ */
+function splitLabel(label: string): [string, string | null] {
+  let name = String(label || '').trim();
+  const notes: string[] = [];
+  const dash = name.indexOf(' — ');
+  if (dash > 0) { notes.push(name.slice(dash + 3).trim()); name = name.slice(0, dash).trim(); }
+  const m = name.match(/^(.*\S)\s+\(([^()]+)\)$/);
+  if (m) { name = m[1]; notes.unshift(m[2].trim()); }
+  return [name, notes.filter(Boolean).join(' · ') || null];
+}
+
 /** 카테고리 key → 이름. 화면에 key(`d-3a8863ce8e`·`gtm`)를 내보내지 않는다. */
 function categoryNames(catRes: any): (key: string | null | undefined) => string | null {
   const m = new Map<string, string>();
@@ -191,9 +206,10 @@ function distillerCard(d, st, catName, rerender) {
   // 머리 — 얼굴 · 이름(설정 링크) · 상태 · 표식 / 리브가 만듦 · 마지막 실행 … [스위치][설정]
   const main = el('div', { class: 'cxc-main' },
     el('div', { class: 'cxc-t' },
-      el('a', { class: 'cxc-name', href: pageHref(d.key), text: d.label || d.key }),
+      el('a', { class: 'cxc-name', href: pageHref(d.key), text: splitLabel(d.label || d.key)[0] }),
       el('span', { class: 'cxc-state' + (d.enabled ? ' is-on' : '') }, el('span', { class: 'cxc-state-dot', 'aria-hidden': 'true' }), el('span', { text: d.enabled ? '켜짐' : '꺼짐' })),
       catchAll ? el('span', { class: 'cxc-tag', text: '나머지 전부' }) : null),
+    splitLabel(d.label || d.key)[1] ? el('p', { class: 'cxc-desc', text: splitLabel(d.label || d.key)[1] }) : null,
     el('div', { class: 'cxc-m' },
       el('span', { class: 'cxc-kind', text: kindText(d) + ' 증류기' }),
       liv ? el('span', { class: 'cxc-liv', title: '리브가 미리 준비해 둔 증류기입니다' }, livIcon(), el('span', { text: '리브가 만듦' })) : el('span', { class: 'cxc-who', text: '직접 만듦' }),
@@ -255,8 +271,9 @@ function distillerRowCompact(d, st, catName, rerender) {
   row.append(faceStack(d),
     el('div', { class: 'cxc-main' },
       el('div', { class: 'cxc-t' },
-        el('a', { class: 'cxc-name', href: pageHref(d.key), text: d.label || d.key }),
+        el('a', { class: 'cxc-name', href: pageHref(d.key), text: splitLabel(d.label || d.key)[0] }),
         el('span', { class: 'cxc-state' }, el('span', { class: 'cxc-state-dot', 'aria-hidden': 'true' }), el('span', { text: '꺼짐' }))),
+      splitLabel(d.label || d.key)[1] ? el('p', { class: 'cxc-desc', text: splitLabel(d.label || d.key)[1] }) : null,
       el('div', { class: 'cxc-m' },
         el('span', { class: 'cxc-kind', text: kindText(d) + ' 증류기' }),
         liv ? el('span', { class: 'cxc-liv' }, livIcon(), el('span', { text: '리브가 만듦' })) : el('span', { class: 'cxc-who', text: '직접 만듦' }),
@@ -869,7 +886,7 @@ async function runJobCard(rerender) {
     missingLine: '증류 자동 실행이 없습니다 — 증류기를 만들어도 자료가 지식이 되지 않습니다.',
     // 분류와 같은 이유 — 구 세션주입판(distill_sources)은 params.session 이 있어야 돈다.
     unrunnable: (j) => (j.action === 'distill_sources' && !(j.params && j.params.session))
-      ? '지금 등록된 증류 잡은 상시 세션이 있어야 도는 구 방식인데, 그 세션이 지정돼 있지 않습니다 — 이대로 켜면 매번 실패합니다.'
+      ? '지금 등록된 증류 자동 실행은 늘 켜 둔 AI 세션이 있어야 도는 옛 방식인데, 그 세션이 정해져 있지 않습니다 — 이대로 켜면 매번 실패합니다.'
       : null,
     usesAi: true,
   }, rerender);

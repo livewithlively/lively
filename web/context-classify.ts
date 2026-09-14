@@ -75,7 +75,7 @@ export async function renderClassifiers(host: HTMLElement): Promise<void> {
     //  그건 params.session 이 필수라, 상시 세션을 먼저 등록하지 않고 켜면 매 틱 "타깃 상시 세션 미설정"
     //  error 를 낸다. 그 상태에서 '켜기'를 보여주면 못 지킬 약속이 된다.
     unrunnable: (j) => (j.action === 'classify_knowledge' && !(j.params && j.params.session))
-      ? '지금 등록된 분류 잡은 상시 세션이 있어야 도는 구 방식인데, 그 세션이 지정돼 있지 않습니다 — 이대로 켜면 매번 실패합니다.'
+      ? '지금 등록된 분류 자동 실행은 늘 켜 둔 AI 세션이 있어야 도는 옛 방식인데, 그 세션이 정해져 있지 않습니다 — 이대로 켜면 매번 실패합니다.'
       : null,
     usesAi: true,
   }, reload));

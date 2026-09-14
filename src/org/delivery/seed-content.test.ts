@@ -67,28 +67,49 @@ const INJECTIONS = new Set(["always", "recalled"]);
   ok(`시딩 훅 ${checked}종이 kit/hooks/examples/ SoT 와 바이트 일치(하드에딧·DB 재오염 가드)`);
 }
 
-// ── #905 P1-② 공유폴더 pull 훅의 '쓰기 자격 게이트' 존재 강제 — 이게 빠지면 사용자 폴더가 조용히 파괴된다. ──
-//  배경: pull 훅은 cwd 에서 위로 40단계 마커를 찾아 **찾은 폴더에 서버 파일을 덮어쓰고 stdout 을 안 낸다**(무음).
-//   여태 안 터진 건 마커가 라이블리 소유 폴더에만 있었기 때문인데, `lively init`(C2a)은 **사용자 폴더에 마커를
-//   심는 게 존재 이유**라 그 불변식을 깬다. 그래서 마커 sync(none|pull|both) 게이트 + 폴더소유권 fail-safe 폴백이
-//   두 pull 훅 모두에 반드시 있어야 한다. 누가 게이트를 지우면 여기서 걸린다.
+// ── 공유폴더 pull 훅의 '쓰기 자격 게이트' 존재 강제 — 이게 빠지면 사용자 폴더가 조용히 파괴된다(#905 P1-②). ──
+//  배경: pull 훅은 **찾은 폴더에 서버 파일을 덮어쓰고 stdout 을 안 낸다**(무음). 그래서 '여기 써도 되는가' 판정이
+//   생명이다. #3787 에서 그 판정의 **권위가 로컬 마커 → 서버**로 옮겨졌다(마커는 오프라인 폴백 캐시로 강등):
+//   종전 폴백(경로 모양 추측 livelyOwnedDir)은 노드의 자리 `<shared root>/project/<id>` 에서 **항상 거짓**이라
+//   로컬 세션의 동기화가 통째로 죽어 있었다. 여기서 강제하는 것은 **게이트의 존재**이지 그 구현이 아니다.
+//  누가 게이트를 지우면 여기서 걸린다. 실제 동작 증명은 project-pull-gate.test.mjs 가 훅을 돌려서 한다.
 {
   for (const id of ["project-pull", "project-pull-turn"]) {
     const h = DEFAULT_HOOKS.find((x) => x.id === id);
     assert.ok(h, `pull 훅 '${id}' 이 시드에 없음`);
     const src = h!.source_code;
-    assert.ok(/function syncMode\(/.test(src), `훅 '${id}' 에 syncMode 게이트가 없음 — 사용자 폴더 무음 파괴 위험(#905 §2)`);
-    // '정의됐나'와 '실제로 걸리나'를 따로 본다 — 정의만 있고 호출이 없으면 게이트는 장식이다.
-    //  ⚠ 여기는 게이트가 **사라진 것**을 잡는 트립와이어지 코드 모양을 강제하는 자리가 아니다. 한 줄로 쓰든
-    //   (if (syncMode(...) === "none")) 변수로 받든(const mode = syncMode(...)) 통과해야 한다 — 실제 동작 증명은
-    //   project-pull-gate.test.mjs 가 훅을 돌려서 한다(그게 이 계약의 진짜 게이트).
-    assert.ok(/(=|\()\s*syncMode\(/.test(src), `훅 '${id}' 이 syncMode 를 호출하지 않음 — 게이트가 정의만 되고 안 걸림`);
-    assert.ok(/===\s*"none"\)\s*return/.test(src),
-      `훅 '${id}' 이 sync='none' 에서 조기 return 하지 않음 — 게이트가 선언만 되고 안 걸림`);
-    assert.ok(/function livelyOwnedDir\(/.test(src),
-      `훅 '${id}' 에 폴더소유권 fail-safe 폴백(livelyOwnedDir)이 없음 — sync 키 없는 구 마커가 fail-open 된다`);
+    // ① 권위 조회 — 서버에 '이 노드에서 어디에 무슨 모드로' 를 묻는다.
+    assert.ok(/async function askServer\(/.test(src) && /await askServer\(/.test(src),
+      `훅 '${id}' 이 서버 권위(askServer)를 묻지 않음 — 판정 근거가 사라지면 아무 폴더에나 쓰게 된다(#3787)`);
+    // ② 오프라인 폴백 — 마커 캐시. 서버가 안 잡힐 때도 **추측이 아니라 서버가 저술한 값**으로만 판정한다.
+    assert.ok(/function fromCache\(/.test(src) && /\?\?\s*fromCache\(/.test(src),
+      `훅 '${id}' 에 마커 캐시 폴백(fromCache)이 없음 — 서버가 안 잡히면 판정 근거가 없어진다`);
+    // ③ 실제로 걸리나 — 모드가 none·미지이면 조기 return.
+    assert.ok(/mode === "none"\)\s*return/.test(src),
+      `훅 '${id}' 이 모드 none 에서 조기 return 하지 않음 — 게이트가 선언만 되고 안 걸림`);
+    // ④ 구 work.mjs 마커 무회귀 폴백 — 그 설치의 동기화가 조용히 끊기면 안 된다.
+    assert.ok(/function legacyWorkDir\(/.test(src),
+      `훅 '${id}' 에 구 work.mjs 마커 폴백(legacyWorkDir)이 없음 — sync 키 없는 기존 설치의 동기화가 끊긴다`);
   }
-  ok("pull 훅 2종에 쓰기 자격 게이트(syncMode + none 조기return + livelyOwnedDir 폴백) 존재");
+  ok("pull 훅 2종에 쓰기 자격 게이트(서버 권위 + 캐시 폴백 + none 조기return + 구 마커 무회귀) 존재");
+}
+
+// ── #3787 — cwd 싱크 3종은 **기본 설치에서 켜져 있어야** 한다. ──
+//  「프로젝트 세션이면 그 프로젝트 자료가 cwd 에 있다」는 실행 위치와 무관하게 성립해야 하는 계약이고,
+//  기본 꺼짐이면 로컬 노드 세션에선 그 계약이 거짓이 된다(자료도 안 오고, 만든 것도 안 올라간다).
+//  매니지드(colocated)는 셋 다 즉시 no-op 이라 비용이 안 붙는다 — 켜 두는 쪽의 손해가 없다.
+{
+  for (const id of ["project-pull", "project-pull-turn", "project-push", "project-push-tool"]) {
+    const h = DEFAULT_HOOKS.find((x) => x.id === id);
+    assert.ok(h, `동기화 훅 '${id}' 이 시드에 없음`);
+    assert.equal(h!.enabled, true, `동기화 훅 '${id}' 이 기본 꺼짐 — 로컬 노드 세션에서 cwd 싱크 계약이 깨진다(#3787)`);
+  }
+  // push 는 두 이벤트에 걸린다 — Stop 만이면 턴 하나가 통째로 싱크 지연이고, PostToolUse 만이면 Bash 밖 변경을 놓친다.
+  const tool = DEFAULT_HOOKS.find((x) => x.id === "project-push-tool")!;
+  assert.equal(tool.event, "PostToolUse", "project-push-tool 은 PostToolUse 여야 한다");
+  assert.ok(/Bash/.test(tool.matcher ?? ""), "project-push-tool 매처에 Bash 가 없음 — 파일 변경의 상당수가 sed·리다이렉트·git 으로 일어난다");
+  assert.equal(DEFAULT_HOOKS.find((x) => x.id === "project-push")!.event, "Stop", "project-push 는 Stop 이어야 한다(놓친 것 쓸어담는 그물)");
+  ok("cwd 싱크 훅 4종이 기본 켜짐 + push 가 Stop·PostToolUse 양쪽에 걸림(#3787)");
 }
 
 // ── 스킬 무결성 + 짝훅 참조 해결(paired_hook_id → 실제 시드 훅) ──

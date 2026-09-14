@@ -7,7 +7,8 @@ import type { LivelyUser } from "../../context.js";
 import { MEANING } from "../../org/delivery/meaning.js";
 import { assertNoHardSecrets } from "../../org/ingest/redact.js";
 import { listMembers, getMember, memberIdByEmail, upsertMember, removeMember, memberHasActiveToken, type MemberIdentity } from "../../org/store.js";
-import { unbindMemberIdentities } from "../../org/store/members.js";
+import { unbindMemberIdentities, workspacePersonIds } from "../../org/store/members.js";
+import { managedMode } from "../../org/tenancy/state.js";
 import { itemsPool } from "../../db/client.js";
 import { generateInitialPassword, setMemberPassword, hasCredential, membersWithCredentials } from "../../auth/local-accounts.js";
 // #697 매핑 소급 — 관리탭 멤버 매핑(person_identity) 변경을 이미 미러된 데이터에 즉시 재해소.
@@ -43,13 +44,15 @@ async function uniqueMemberId(base: string): Promise<string> {
 }
 
 // 구성원 명부 — 비-admin 은 이름/종류/상태만(이메일·신원·개인레이어 redact), admin 은 접속 열쇠·중앙박스 계정 보유 여부까지.
+//  is_person(#3872) — «자기 계정으로 들어오는 사람» 인가(store/members.ts 잣대). 화면이 사람 수를 셀 땐 이 표식만 본다 — kind 만 보면
+//   연결 앱이 미러한 사람 행이, 행 수를 세면 매니지드 운영 계정·세션 호스트까지 사람이 된다. 신원 자체는 싣지 않으니 비-admin 에게도 준다.
 export async function membersPayload(isAdmin: boolean) {
-  const members = await listMembers();
+  const [members, persons] = await Promise.all([listMembers(), workspacePersonIds({ managed: managedMode() })]);
   if (!isAdmin) {
-    return members.map((m) => ({ id: m.id, kind: m.kind, display_name: m.display_name, email: null, identities: [], body_md: "", state: m.state, scopes: [] }));
+    return members.map((m) => ({ id: m.id, kind: m.kind, display_name: m.display_name, email: null, identities: [], body_md: "", state: m.state, scopes: [], is_person: persons.has(m.id) }));
   }
   const credSet = await membersWithCredentials();
-  return Promise.all(members.map(async (m) => ({ ...m, hasToken: await memberHasActiveToken(m.id), hasAccount: credSet.has(m.id) })));
+  return Promise.all(members.map(async (m) => ({ ...m, hasToken: await memberHasActiveToken(m.id), hasAccount: credSet.has(m.id), is_person: persons.has(m.id) })));
 }
 
 export const membersReadCapabilities: Capability[] = [

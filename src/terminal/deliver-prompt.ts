@@ -53,9 +53,11 @@ export type DeliverResult =
 export async function deliverPrompt(sessionId: string, text: string, opts?: { owner?: string | null; nodeId?: string | null }): Promise<DeliverResult> {
   if (!text.trim()) throw new HttpError(400, "보낼 내용이 없습니다");
   const owner = opts?.owner ?? null;
+  //  #2600 T2 d6 — 좌표를 안 준 호출(리브 2턴 등)도 «정말 저쪽 기계인가» 로 가른다(remoteNodeOfSession — 라우트와 같은 함수).
+  //   세션 호스트 좌표를 노드로 읽으면 매니지드 세션의 말이 아웃박스를 건너뛴다(routes.ts 프롬프트 라우트 머리말).
   const nodeId = opts?.nodeId !== undefined
     ? (opts.nodeId || "")
-    : await import("../node/registry.js").then(({ nodeOfSession }) => nodeOfSession(sessionId) || "");
+    : ((await import("../node/registry.js").then(({ remoteNodeOfSession }) => remoteNodeOfSession(sessionId, sessionGone))) ?? "");
   // ── claude 대화 런타임(#2439) — chat 모드 세션은 stream-json 프로세스가 대화를 쥔다. ──
   //  왜 codex 분기보다 먼저 보나: 두 분기는 배타적이고(하네스가 다르다) 순서에 의미는 없지만,
   //  **판정 조건이 같은 모양**(모드 + 살아있음)이라 나란히 두면 다음 하네스를 얹을 자리가 분명해진다.

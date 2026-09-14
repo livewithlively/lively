@@ -30,6 +30,7 @@ export async function revokeSession(sessionId: string): Promise<void> {
     `UPDATE web_session SET revoked_at=now() WHERE session_hash=$1 AND revoked_at IS NULL`, [sha256(sessionId)]);
 }
 
+// (#1631) 사람만 — 사람이 아닌 구성원(운영 계정 등)의 세션은 종류가 바뀐 시점과 무관하게 통과하지 못한다(nonhuman-login.test).
 // 세션 → LivelyUser. scope = 멤버에서 LIVE(세션은 사람 본인 행위 → 최소권한 캡 없음). 멤버 비활성/만료/회수면 null.
 export async function userFromSession(sessionId: string): Promise<LivelyUser | null> {
   if (!process.env.ITEMS_DATABASE_URL) return null;
@@ -37,7 +38,7 @@ export async function userFromSession(sessionId: string): Promise<LivelyUser | n
     const r = await itemsPool.query(
       `SELECT s.member_id, m.email, m.state, m.scopes
          FROM web_session s JOIN org_member m ON m.id = s.member_id
-        WHERE s.session_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now()`,
+        WHERE s.session_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now() AND m.kind='human'`,
       [sha256(sessionId)],
     );
     const row = r.rows[0] as { member_id: string; email: string | null; state: string; scopes: unknown } | undefined;

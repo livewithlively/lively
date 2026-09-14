@@ -22,9 +22,11 @@ import { resolveSessionDir } from "../sessions/session-desired.js";
 import { memberLs, memberStat, memberMkdir, memberMv, memberRm, memberReadTo, memberPathProbe, type LsEntry } from "./terminal-member-fs.js";
 import { isConfined, probeLocal } from "./path-jail.js";   // #3668 T1 — 심링크를 해소한 뒤 접두를 본다
 import { receiveUpload, uploadError, nfcPath } from "./upload-file.js";
-import { ingestLocalUpload, supersedeLocalPath, localRootForBrowse } from "../ingest/local-file.js";   // #1881 올린 파일 = 자료 1건
-import { nodeCanAttach, nodeRpc, isSelfNode } from "../node/registry.js";
-import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다)
+import { ingestLocalUpload, supersedeLocalPath, localRootForBrowse, parseLocalExternalId, LOCAL_SYSTEM } from "../ingest/local-file.js";   // #1881 올린 파일 = 자료 1건 · #1631 자료 id 로 원본 열기
+import { getSource } from "../v6/source-store.js";   // #1631 — 자료 원본 창구의 공개범위(자료 상세와 같은 판정)
+import { nodeCanAttach, nodeRpc, isSelfNode, isSessionHostNode } from "../node/registry.js";
+import { relayNodeId, sameTmuxCoordinate, isBoxSessionRow } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #3745/#3870 — 박스 세션엔 세션 호스트 좌표도 같은 tmux 다
+import { getSessionState } from "../sessions/session-state.js";
 import { folderVariants } from "../project/project-fs.js";
 import {
   sharedFolderGate, renameSharedFolderAclPrefix, restrictedProjectFolders, projectFolderOf,
@@ -72,6 +74,30 @@ async function assertJailed(base: string, abs: string, osUser: string | null): P
   if (!ok) throw new HttpError(400, "허용 경로를 벗어났습니다");
 }
 
+// 파일 한 개를 응답으로 — 미리보기(상한 MAX_PREVIEW) 또는 내려받기(?download=1). 격리 멤버면 그 uid 로 stat+cat.
+//  브라우즈(root·path)와 자료 원본(자료 id, #1631)이 같은 한 벌을 지난다 — 상한·Content-Disposition·no-store 가 갈리지 않게.
+async function sendFile(res: express.Response, abs: string, osUser: string | null, download: boolean): Promise<void> {
+  const setDl = (): void => {
+    res.setHeader("Cache-Control", "no-store");
+    if (download) res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(abs))}`);
+  };
+  if (osUser) {
+    const st = await memberStat(osUser, abs);
+    if (!st) throw new HttpError(404, "파일 없음");
+    if (!st.file) throw new HttpError(400, "파일이 아닙니다");
+    if (!download && st.size > MAX_PREVIEW) throw new HttpError(413, "미리보기엔 너무 큽니다 — 다운로드하세요");
+    setDl();
+    await memberReadTo(osUser, abs, res).catch((e) => { if (!res.headersSent) throw new HttpError(500, "읽기 실패"); res.destroy(e as Error); });
+    return;
+  }
+  let st: fs.Stats;
+  try { st = await fsp.stat(abs); } catch { throw new HttpError(404, "파일 없음"); }
+  if (!st.isFile()) throw new HttpError(400, "파일이 아닙니다");
+  if (!download && st.size > MAX_PREVIEW) throw new HttpError(413, "미리보기엔 너무 큽니다 — 다운로드하세요");
+  setDl();
+  fs.createReadStream(abs).pipe(res);
+}
+
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 
@@ -97,7 +123,22 @@ async function resolveInSession(req: express.Request, requireFile: boolean, cano
 //  중앙 세션이면 null(로컬 fs 경로). 거부 코드: 4410 gone→404 · 4462 offline→503 · 그 외 no-access→403.
 async function nodeFor(req: express.Request): Promise<string | null> {
   //  #2592 — 셀프 노드 좌표는 접는다(relayNodeId): 그 파일은 이 박스의 fs 에 그대로 있어 로컬 경로가 정답이다.
-  const nodeId = relayNodeId(req.query.node as string | undefined, isSelfNode);
+  //
+  //  ★ #3870 — **박스(중앙) 세션에 붙은 «선언된 세션 호스트» 좌표도 같은 «한 바퀴»다.** #3745 가 세션 DELETE
+  //   에서 이미 내린 판정인데 파일 op 만 빠져 있었다 — 그래서 매니지드 세션의 업로드·목록이 전부 죽어 있었다
+  //   (2026-09-12 실측, 세션 box-wonjoon-jang-d3a3e7e3 @ sesshost-lively-46e3-i-0a9831a1d88d435be):
+  //     `?node=<sesshost>` → PUT /file 500 `internal_error` · GET /ls 404 「디렉터리 없음」
+  //     `?node=` 없음      → 둘 다 200 (같은 파일, 같은 경로)
+  //   화면은 좌표를 지어내지 않는다 — 세션 호스트가 그 테넌트의 세션을 통째로 스냅샷에 실어 목록 행에 좌표가
+  //   붙고(nodeSessionsFor), 터미널 액자는 그 값을 `&node=` 로 그대로 싣는다(web/standalone/terminal.ts sUrl).
+  //   ⚠ **caps 는 이 축을 못 가른다.** 세션 호스트도 같은 에이전트 번들이라 `fsLs/fsWrite` 를 광고하지만,
+  //    그 세션은 컨테이너 안에 살아 노드 프로세스의 fs 에 없다 — 광고는 참이고 실행이 거짓이라 500 만 남는다.
+  //   접으면 아래 로컬 경로(resolveInSession → 격리 멤버 uid)가 종전대로 답한다. 멤버 PC 노드(선언 없음)는
+  //   이 변경의 밖이다 — 그 파일은 정말 그 컴퓨터에만 있으므로 릴레이가 유일한 길이다.
+  const desired = await getSessionState(req.params.id).catch(() => undefined);
+  const boxRow = isBoxSessionRow(desired);   // 행이 **있고** 노드가 없다 = 이 게이트웨이가 만든 세션
+  const nodeId = relayNodeId(req.query.node as string | undefined,
+    sameTmuxCoordinate({ boxRow, isSelf: isSelfNode, isSessionHost: isSessionHostNode }));
   if (!nodeId) return null;
   const v = await nodeCanAttach(nodeId, req.params.id, idOf(userOf(req)));
   if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
@@ -234,26 +275,30 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
   // 미리보기/다운로드(?download=1). 격리 멤버면 그 uid 로 stat+cat.
   app.get("/api/ui/terminal/browse/file", auth, wrap(async (req, res) => {
     const { abs, osUser } = await resolveBrowse(req, true);
-    const download = req.query.download === "1";
-    const setDl = (): void => {
-      res.setHeader("Cache-Control", "no-store");
-      if (download) res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(abs))}`);
-    };
-    if (osUser) {
-      const st = await memberStat(osUser, abs);
-      if (!st) throw new HttpError(404, "파일 없음");
-      if (!st.file) throw new HttpError(400, "파일이 아닙니다");
-      if (!download && st.size > MAX_PREVIEW) throw new HttpError(413, "미리보기엔 너무 큽니다 — 다운로드하세요");
-      setDl();
-      await memberReadTo(osUser, abs, res).catch((e) => { if (!res.headersSent) throw new HttpError(500, "읽기 실패"); res.destroy(e as Error); });
-      return;
-    }
-    let st: fs.Stats;
-    try { st = await fsp.stat(abs); } catch { throw new HttpError(404, "파일 없음"); }
-    if (!st.isFile()) throw new HttpError(400, "파일이 아닙니다");
-    if (!download && st.size > MAX_PREVIEW) throw new HttpError(413, "미리보기엔 너무 큽니다 — 다운로드하세요");
-    setDl();
-    fs.createReadStream(abs).pipe(res);
+    await sendFile(res, abs, osUser, req.query.download === "1");
+  }));
+  // 자료(올린 파일)의 원본 — **자료 id 로** 연다(#1631). 개인 폴더 업로드를 «팀원 모두» 로 올린 자료(share=team)는 올린 사람이
+  //  아닌 사람도 목록·원문에서 보는데, 브라우즈 API(root=personal)는 **보는 사람 자기** 개인 폴더로 풀려 동료에게는 «파일 없음»
+  //  이거나 같은 이름의 자기 파일이 열렸다. 여기서는 좌표를 요청(root·path)이 아니라 자료 행(external_id)에서 풀고, 공개범위는
+  //  자료 상세와 같은 판정(getSource — 안 보이면 없는 자료와 같은 404)을 지난다. MCP source_artifact 와 같은 규칙이다.
+  //  ⚠ 개인 폴더 파일만 연다 — 읽기는 **올린 사람의 OS 사용자**로(격리 모드), 심링크 봉쇄도 브라우즈와 같이 건다.
+  //   공유·프로젝트 폴더는 브라우즈 API 가 누구에게나 같은 자리를 가리키고 폴더 공개범위 게이트까지 지나므로 그쪽을 쓴다.
+  app.get("/api/ui/sources/:id/original", auth, wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) throw new HttpError(404, "자료 없음");
+    //  신원 없는 요청(viewer=null)은 공개범위를 건너뛰는 특권 경로다 — 원본 바이트를 올린 사람 권한으로 내보내는 자리라 여기서 직접 막는다
+    //   (인증 계층은 userId 없는 신원을 들이지 않지만 그 보장은 다른 파일에 있다 — 격리 보안 리뷰 제안).
+    const viewer = viewerFor(req);
+    if (!viewer) throw new HttpError(404, "자료 없음");
+    const src = await getSource(id, viewer);
+    const loc = src && src.external_system === LOCAL_SYSTEM ? parseLocalExternalId(String(src.external_id ?? "")) : null;
+    if (!loc || loc.root.kind !== "personal") throw new HttpError(404, "자료 없음");
+    const owner = { userId: loc.root.member, email: "", scopes: [], projects: [] } as unknown as LivelyUser;
+    const osUser = await userOsUser(owner);
+    const { base, abs } = await resolveRootPath(owner, "personal", loc.rel, osUser);
+    if (abs === base) throw new HttpError(404, "자료 없음");
+    await assertJailed(base, abs, osUser);
+    await sendFile(res, abs, osUser, req.query.download === "1");
   }));
   // 업로드(raw 스트림 → 임시파일 → rename). 격리 멤버면 그 uid 로 써서 파일 소유자=멤버(세션 셸이 이후 편집 가능).
   //  취소·끊김이면 목적지는 손대지 않는다 — 덮어쓰기 업로드를 끊어도 원본이 살아있다(#797 — upload-file.ts).
@@ -263,11 +308,16 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
     // 올린 파일 = 자료 1건(#1881 L1) — 개인 폴더는 올린 사람만 보는 자료, 공유 루트의 project/<id>/… 는 프로젝트 자료로 접는다.
     //  실패해도 업로드는 성공이다(로그만).
+    //  share=team(#1631) — **자기 개인 루트** 업로드에만 먹는 명시 옵션: «올린 사람만» 잠금을 걸지 않고 팀원 모두가 보는 자료로 둔다.
+    //   초대로 들어온 사람의 처음 설정이 쓴다(원준 결정 2026-09-13 «합류자가 올린 파일은 팀원 모두가 본다»). 기본값은 종전 그대로(올린 사람만).
+    //   ⚠ 공유 루트(root=shared)로 올리게 하지 않은 이유 — 매니지드에서 공유 루트는 테넌트 구분 없는 고정 경로다
+    //    (profiles.ts resolveRootPath 의 격리 갈래 = SHARED_ISOLATED_BASE). 워크스페이스 사이 분리를 릴레이에만 기대는 자리에 팀 자료를 두지 않는다.
+    const shareWithTeam = String(req.query.root ?? "") === "personal" && String(req.query.share ?? "") === "team";
     let ing: Awaited<ReturnType<typeof ingestLocalUpload>> | null = null;
     try {
       const u = userOf(req);
       const loc = await localRootForBrowse(String(req.query.root ?? ""), u, base, abs);
-      if (loc) ing = await ingestLocalUpload({ ...loc, abs, osUser, uploader: { id: viewerFor(req), name: u?.email ?? null } });
+      if (loc) ing = await ingestLocalUpload({ ...loc, abs, osUser, shareWithTeam, uploader: { id: viewerFor(req), name: u?.email ?? null } });
     } catch (e) { console.warn(`[local-ingest] 자료 등록 실패 ${abs}: ${(e as Error)?.message ?? e}`); }
     // path = 절대경로(#1870) — 새 세션 컴포저가 개인 폴더(root=personal)에 올린 첨부를 첫 지시에 절대경로로 적는다
     //  (세션 cwd 는 세션 전용 폴더라 상대경로로는 못 찾는다 — 세션 라우트의 path 응답과 같은 이유).
@@ -377,12 +427,20 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
       if (over) throw new HttpError(413, "파일이 너무 큽니다(개인 PC 노드 세션 업로드는 50MB까지 — 큰 파일은 그 PC에서 직접 넣어주세요)");
       const bodyBuf = Buffer.concat(bufs);
       let offset = 0;
+      // ★ #3870 — 노드가 돌려준 **절대경로**를 그대로 싣는다(종전엔 버리고 상대경로 `rel` 로 답했다).
+      //  이 응답의 용처가 그 차이를 만든다: 드롭·붙여넣기 업로드는 받은 `path` 를 **입력창에 꽂아** 그 안에서
+      //  도는 에이전트가 읽게 한다(web/standalone/terminal.ts dropFileToAgent). 에이전트의 cwd 는 세션 루트와
+      //  다를 수 있어(프로젝트 하위 폴더에서 뜬 하네스) 상대경로는 «파일이 없다» 가 된다 — 로컬 경로 분기가
+      //  절대경로(`abs`)를 주는 이유가 정확히 그것이고, 노드 분기만 그 약속을 어기고 있었다(agent.ts fsWrite 는
+      //  이미 `{ ok, path: abs }` 를 돌려준다 — 게이트웨이가 그걸 읽지 않았을 뿐이다).
+      let nodeAbs = "";
       do {
         const slice = bodyBuf.subarray(offset, offset + NODE_FS_CHUNK);
-        await nodeRpc(nodeId, "fsWrite", { id: req.params.id, path: rel, offset, data: slice.toString("base64"), user: u });
+        const r = await nodeRpc<{ path?: string }>(nodeId, "fsWrite", { id: req.params.id, path: rel, offset, data: slice.toString("base64"), user: u });
+        if (r?.path) nodeAbs = String(r.path);
         offset += NODE_FS_CHUNK;
       } while (offset < bodyBuf.length);
-      res.json({ ok: true, path: rel }); return;
+      res.json({ ok: true, path: nodeAbs || rel }); return;   // 구 노드가 경로를 안 주면 종전대로 상대경로
     }
     const { abs, osUser } = await resolveInSession(req, true, true);   // 생성 → NFC 정본(#1278b)
     try { await receiveUpload(req, abs, MAX_UPLOAD, osUser); }

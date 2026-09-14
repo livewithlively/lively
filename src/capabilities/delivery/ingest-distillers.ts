@@ -1,5 +1,6 @@
 // delivery ▸ ingest-distillers — 인입 허용선 정책(#638/#783) + 자료 증류기(#1289).
 import type { Capability } from "../types.js";
+import { canManageWorkspace } from "../principal.js";
 import { z } from "zod";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
@@ -13,7 +14,7 @@ import {
   distillerSectionViews, measureFilterImpact, mergeDraftDistiller,
   describeScope, clearDistillerSeen, countDistillerSeen, prefilterCurve, prefilterThresholds, DEFAULT_DECISIVE_KEYWORDS, tuneDistiller
 } from "../../org/distill/distiller.js";
-import { actorOf, restOnly, restRead, restWork } from "./shared.js";
+import { actorOf, restRead, restWork } from "./shared.js";
 import { ensureLocalFilesDistiller, LOCAL_DISTILLER_KEY } from "../../org/distill/local-preset.js";
 import { ensureFigmaCommentsDistiller, FIGMA_DISTILLER_KEY } from "../../org/distill/figma-preset.js";   // #1881 L3
 
@@ -27,13 +28,13 @@ export const ingestDistillersCapabilities: Capability[] = [
   //   무력화되고, 파괴 반경이 조직 단위다(팀 단위인 증류기·분류기와 다른 점). canEdit 을 함께 준다.
   restRead("org_ingest_policy_list", "인입 허용선 정책 목록",
     "인입 허용선 정책 규칙 목록 — priority 내림차순. 규칙 0개면 디폴트 auto(현행 무변). " +
-    "조회는 전 구성원, 저장·삭제는 admin(응답의 canEdit 이 그 판정).",
+    "조회·저장·삭제 모두 구성원(응답의 canEdit 이 그 판정).",
     [{ method: "GET", paths: ["/api/ui/org/ingest-policy"], parse: () => ({}) }],
     async (_input: unknown, user: LivelyUser) => ({
       policies: await listIngestPolicies(),
-      canEdit: !!(user?.scopes && user.scopes.includes("admin")),
+      canEdit: canManageWorkspace(user),
     }), true),
-  restOnly("org_ingest_policy_upsert", "인입 허용선 정책 저장",
+  restWork("org_ingest_policy_upsert", "인입 허용선 정책 저장",
     "인입 정책 규칙 저장(id 있으면 수정 · preset 키가 있으면 그 프리셋 행을 갱신 · 둘 다 없으면 신규). " +
     "match_*(카테고리·시스템·채널·provenance·민감라벨·작성자(ai|human)·하네스·page-type)는 빈값=any. " +
     "action=auto|confirm|drop(신규 저장) · action_update=auto|review|stage|drop(기존 지식 수정). " +
@@ -78,7 +79,7 @@ export const ingestDistillersCapabilities: Capability[] = [
       priority: z.number().optional(),
       note: z.string().nullable().optional(),
     }),
-  restOnly("org_ingest_policy_remove", "인입 허용선 정책 삭제",
+  restWork("org_ingest_policy_remove", "인입 허용선 정책 삭제",
     "인입 정책 규칙 1개 삭제(id).",
     [{ method: "POST", paths: ["/api/ui/org/ingest-policy/remove"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -89,7 +90,7 @@ export const ingestDistillersCapabilities: Capability[] = [
     }, {
       id: z.number().int().positive().describe("삭제할 인입 정책 규칙 id(org_ingest_policy_list 로 조회)"),
     }),
-  restOnly("org_ingest_observability", "인입 게이트 관측",
+  restWork("org_ingest_observability", "인입 게이트 관측",
     "자동 인입 게이트 집계(기간 일수) — mirror auto·pending 생성·승인·반려·현재 대기. 검토 대시(파일럿 1순위 지표: 오너가 어디까지 자동 허용하나).",
     [{ method: "GET", paths: ["/api/ui/org/ingest-observability"], parse: (req) => ({ days: req.query?.days ? Number(req.query.days) : 30 }) }],
     async (input: Record<string, unknown>) => await ingestObservability(Number(input.days) || 30), {

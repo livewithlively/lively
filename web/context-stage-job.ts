@@ -1,4 +1,4 @@
-// context-stage-job.ts — 파이프라인 단계의 '언제 도나' 카드. 네 단계(수집·증류·분류·관리) 공용.
+// context-stage-job.ts — 파이프라인 단계의 「자동 실행」 판(구 '언제 도나' 카드). 네 단계(수집·증류·분류·관리) 공용.
 //
 //  왜 한 곳으로 모았나(#1618): 단계마다 실행 제어의 수준이 제각각이었다 —
 //   · 수집: 수집기를 켜면 잡이 자동 생성·활성(syncCollectorJob). 사람이 잡을 의식할 일이 없다.
@@ -20,7 +20,7 @@
 //   블래스트 반경이 멤버머신 훅과 다르다. 비-admin 은 상태 조회부터 막히므로 카드가 그 사실을 정직하게
 //   말하고 끝낸다(빈 카드·거짓 초록 금지). 단계 설정 자체는 비-admin 도 만질 수 있는 것이 있어(증류기는
 //   scope=memory) '기준은 세우는데 돌리지는 못하는' 비대칭이 남는다 — 서버 스코프 설계 몫으로 분리했다.
-import { api, cardHead, el, relTime, state, toast } from './core.js';
+import { api, el, relTime, state, sv, toast } from './core.js';
 
 /** 한 단계의 실행 잡 명세. actions 는 '이 단계의 잡으로 인정할 action' 목록(앞이 현행 권장 경로). */
 function statusWord(st: unknown): string {
@@ -69,6 +69,8 @@ export interface StageJobSpec {
    *  (같은 단계에도 의뢰자가 필요 없는 세션주입판이 있다 — 아래 판정부 주석).
    */
   usesAi?: boolean;
+  /** 이 단계의 기계 이름(수집기…) — 여러 개가 각자 도는 읽기 전용 단계의 문장에 쓴다(「켜진 수집기 3개가 …」). */
+  unitName?: string;
 }
 
 /** 주기 선택지 — 초 단위. 분 단위 임의 입력 대신 고른다(60초 미만은 서버가 거부하므로 애초에 못 고르게). */
@@ -96,17 +98,46 @@ async function patch(id: string, body: Record<string, unknown>): Promise<void> {
 }
 
 /**
- * 단계의 '언제 도나' 카드를 그린다. rerender = 변경 후 그 단계 화면을 다시 그리는 콜백
+ * 단계의 「자동 실행」 판을 그린다(구 '언제 도나' 카드). rerender = 변경 후 그 단계 화면을 다시 그리는 콜백
  *  (잡 상태가 단계 요약·잔량 문구를 바꾸므로 카드만 갱신하면 화면이 서로 다른 말을 한다).
+ *
+ *  #3830(2026-09-10 원준 "비개발자 기준 · 수집기 탭 이상 수준으로") — 수집기·증류기 목록과 같은 문법으로 다시 그렸다.
+ *   · 잡 id(`collector-1`·`distill-sources-headless`)를 화면 글자에서 뺐다 — 뜻이 개발자에게만 있어 시계 타일의 툴팁으로만.
+ *   · "잡"·"의뢰자" 같은 말을 쓰지 않는다. 상태는 한 문장(「30분마다 자동으로 돕니다 · 마지막 실행 12분 전 · 성공」).
+ *   · 켜고 끄기는 스위치 하나(DS §6.4). 위 계약 ①②③은 그대로다 — 모양과 말만 바뀌었다.
  */
 export async function stageJobCard(spec: StageJobSpec, rerender: () => void): Promise<HTMLElement> {
-  const card = el('div', { class: 'card', style: 'margin-top:14px' }, cardHead('언제 도나'));
+  const pill = el('span', { class: 'cxc-state', hidden: true });
+  const line = el('p', { class: 'cxr-line' });
+  const acts = el('div', { class: 'cxr-acts' });
+  const tile = el('span', { class: 'svc-tile cxc-tile cxc-tile-machine', 'aria-hidden': 'true' }, clockIcon());
+  const card = el('section', { class: 'cxr', 'aria-label': `${spec.stage} 자동 실행` },
+    el('div', { class: 'cxr-head' }, tile,
+      el('div', { class: 'cxr-main' }, el('div', { class: 'cxc-t' }, el('b', { class: 'cxr-t', text: '자동 실행' }), pill), line),
+      acts));
+  const setState = (on: boolean, text: string) => {
+    pill.hidden = false;
+    pill.className = 'cxc-state' + (on ? ' is-on' : '');
+    pill.replaceChildren(el('span', { class: 'cxc-state-dot', 'aria-hidden': 'true' }), el('span', { text: on ? '켜짐' : '꺼짐' }));
+    line.textContent = text;
+  };
+  const note = (kids: any[], warn = false) => { card.append(el('div', { class: 'cxr-note' + (warn ? ' is-warn' : '') }, ...kids)); };
+  const lastRun = (j: any) => (j && j.last_run_at)
+    ? ` · 마지막 실행 ${relTime(j.last_run_at)}${statusWord(j.last_status) ? ' · ' + statusWord(j.last_status) : ''}`
+    : ' · 아직 실행한 적 없음';
+  const turnOn = async (btn: HTMLButtonElement, c: NonNullable<StageJobSpec['create']>) => {
+    btn.disabled = true;
+    try {
+      await patch(c.id, { label: c.label, action: c.action, params: c.params ?? {}, interval_sec: c.interval_sec, enabled: true, note: c.note });
+      toast(`${spec.stage} 자동 실행을 켰습니다`); rerender();
+    } catch (e) { toast('실패 — ' + (e as Error).message, true); btn.disabled = false; }
+  };
 
   let jobs: any[] = [];
   try { const r = await api('/api/ui/cron'); jobs = (r && r.jobs) || []; }
   catch {
     // 비-admin — 상태를 볼 수 없다. 조용히 비우면 '없음'으로 오독되므로 이유를 말한다.
-    card.append(el('p', { class: 'admin-hint', text: `${spec.stage} 자동 실행 상태는 관리자만 볼 수 있습니다. 돌고 있는지 확인이 필요하면 관리자에게 문의하세요.` }));
+    line.textContent = `${spec.stage} 자동 실행 상태는 관리자만 볼 수 있습니다 — 돌고 있는지 확인이 필요하면 관리자에게 문의하세요.`;
     return card;
   }
 
@@ -116,91 +147,56 @@ export async function stageJobCard(spec: StageJobSpec, rerender: () => void): Pr
     .filter((j) => !spec.matchId || spec.matchId(String(j.id)));
   const job = found.find((j) => j.enabled === true) ?? found[0];
 
-  // ── 잡이 없다 ──────────────────────────────────────────────────────────
+  // ── 없다 ──────────────────────────────────────────────────────────────
   if (!job) {
-    card.append(el('p', { class: 'admin-hint' }, el('b', { text: spec.missingLine })));
-    if (spec.managedElsewhere) {
-      card.append(el('p', { class: 'admin-hint', text: spec.managedElsewhere }));
-      return card;
-    }
+    setState(false, spec.missingLine);
+    if (spec.managedElsewhere) { note([el('span', { text: spec.managedElsewhere })]); return card; }
     if (!spec.create) return card;
-
     const c = spec.create;
-    const mk = el('button', { class: 'btn btn-primary', text: `${spec.stage} 자동 실행 켜기 (${intervalText(c.interval_sec)})` });
-    mk.addEventListener('click', async () => {
-      (mk as HTMLButtonElement).disabled = true;
-      try {
-        await patch(c.id, { label: c.label, action: c.action, params: c.params ?? {}, interval_sec: c.interval_sec, enabled: true, note: c.note });
-        toast(`${spec.stage} 자동 실행을 켰습니다`); rerender();
-      } catch (e) { toast('실패 — ' + (e as Error).message, true); (mk as HTMLButtonElement).disabled = false; }
-    });
-    card.append(el('div', { style: 'margin-top:10px' }, mk));
-    if (spec.usesAi) {
-      card.append(el('p', { class: 'admin-hint', style: 'margin-top:8px',
-        text: '켜면 주기마다 AI 가 실제로 돌아 비용이 발생합니다. 아래에서 주기를 늦추거나 언제든 끌 수 있습니다.' }));
-    }
+    const mk = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: `${intervalText(c.interval_sec)} 자동 실행 켜기` }) as HTMLButtonElement;
+    mk.addEventListener('click', () => { void turnOn(mk, c); });
+    acts.append(mk);
+    if (spec.usesAi) note([el('span', { text: '켜면 정한 주기마다 AI가 실제로 돌아 비용이 듭니다. 켠 뒤에 주기를 늦추거나 언제든 끌 수 있습니다.' })]);
     return card;
   }
+  tile.setAttribute('title', '자동 실행 id — ' + (found.length === 1 ? String(job.id)
+    : `${found.length}개: ` + found.slice(0, 3).map((j) => j.id).join(', ') + (found.length > 3 ? ' …' : '')));
 
-  // ── 잡이 있다 — 상태 한 줄 ──────────────────────────────────────────────
-  const meta = el('div', { class: 'mini-meta' },
-    el('span', { class: 'pill' + (job.enabled ? ' pill-ok' : ''), text: job.enabled ? '켜짐' : '꺼짐' }),
-    el('span', { class: 'pill', text: job.id }),
-    el('span', { class: 'pill', text: intervalText(Number(job.interval_sec || 0)) }),
-    //  상태는 사람 말로(#3830) — 'ok' 가 화면에 그대로 나갔다.
-    el('span', { text: job.last_run_at ? `  마지막 실행 ${relTime(job.last_run_at)} · ${statusWord(job.last_status)}` : '  아직 실행 전' }));
-  card.append(meta);
-
-  // 읽기 전용 단계(수집) — 상태만 말하고, 조작은 잡의 주인(수집기)에게 맡긴다.
+  // ── 읽기 전용(수집) — 잡의 주인이 따로 있다. 여러 개가 각자 돌므로 합쳐서 한 문장으로 말한다. ──
   if (spec.readOnly) {
-    const others = found.length - 1;
-    if (others > 0) card.append(el('p', { class: 'admin-hint', text: `자동 수집 잡 ${found.length}개 중 켜진 것 ${found.filter((j) => j.enabled).length}개 — 위 목록의 수집기와 1:1 입니다.` }));
-    if (spec.managedElsewhere) card.append(el('p', { class: 'admin-hint', text: spec.managedElsewhere }));
+    const onJobs = found.filter((j) => j.enabled);
+    const latest = found.filter((j) => j.last_run_at)
+      .sort((a, b) => String(b.last_run_at).localeCompare(String(a.last_run_at)))[0];
+    const unit = spec.unitName;
+    setState(onJobs.length > 0, (onJobs.length
+      ? `켜진 ${unit ? unit + ' ' : ''}${onJobs.length}개가 각자 정한 주기로 자동으로 돕니다`
+      : `켜진 ${unit ? subj(unit) : '것이'} 없어 ${subj(spec.stage)} 돌지 않습니다`) + lastRun(latest));
+    if (spec.managedElsewhere) note([el('span', { text: spec.managedElsewhere })]);
     return card;
   }
 
   // 돌 수 없는 잡(구 세션주입판 등) — '켜기'를 주면 안 된다. 눌러도 매 틱 error 를 낼 뿐이다.
-  //  대신 현행 경로(create 명세 = 헤드리스판)로 **전환**을 준다. 구 잡은 꺼진 채 남겨 둔다 —
-  //  나중에 상시 세션을 붙여 쓰고 싶을 수 있고, 남의 설정을 대신 지우지 않는다.
+  //  대신 현행 경로(create 명세 = 헤드리스판)로 **전환**을 준다. 구 잡은 꺼진 채 남겨 둔다(남의 설정을 대신 지우지 않는다).
   const blocked = spec.unrunnable?.(job) ?? null;
   if (blocked && spec.create && spec.create.id !== job.id) {
     const c = spec.create;
-    const sw = el('button', { class: 'btn btn-primary btn-sm', text: `${spec.stage} 자동 실행 켜기 (지금 방식으로)` });
-    sw.addEventListener('click', async () => {
-      (sw as HTMLButtonElement).disabled = true;
-      try {
-        await patch(c.id, { label: c.label, action: c.action, params: c.params ?? {}, interval_sec: c.interval_sec, enabled: true, note: c.note });
-        toast(`${spec.stage} 자동 실행을 켰습니다`); rerender();
-      } catch (e) { toast('실패 — ' + (e as Error).message, true); (sw as HTMLButtonElement).disabled = false; }
-    });
-    card.append(
-      el('p', { class: 'admin-hint' }, el('b', { text: blocked })),
-      el('div', { style: 'margin-top:8px' }, sw),
-      el('p', { class: 'admin-hint', style: 'margin-top:8px',
-        text: `위 ${job.id} 는 꺼진 채로 둡니다 — 나중에 상시 세션을 붙여 쓰고 싶으면 그때 켜세요.` }));
+    setState(false, blocked);
+    const sw = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '지금 방식으로 자동 실행 켜기' }) as HTMLButtonElement;
+    sw.addEventListener('click', () => { void turnOn(sw, c); });
+    acts.append(sw);
+    note([el('span', { text: '지금 등록된 옛 방식은 꺼진 채로 둡니다 — 나중에 늘 켜 둔 AI 세션을 붙여 쓰고 싶으면 그때 켜세요.' })]);
     return card;
   }
 
-  // 꺼져 있으면 그게 첫 메시지다 — 잔량이 0이어도 '깨끗함'이 아니라 '멈춤'이다.
-  if (!job.enabled) {
-    const on = el('button', { class: 'btn btn-sm btn-primary', text: `${spec.stage} 자동 실행 켜기` });
-    on.addEventListener('click', async () => {
-      (on as HTMLButtonElement).disabled = true;
-      try { await patch(job.id, { enabled: true }); toast(`${spec.stage} 자동 실행을 켰습니다`); rerender(); }
-      catch (e) { toast((e as Error).message, true); (on as HTMLButtonElement).disabled = false; }
-    });
-    card.append(el('p', { class: 'admin-hint' },
-      el('b', { text: `꺼져 있어 ${subj(spec.stage)} 돌지 않습니다. ` }), on));
-  }
-
-  // ── 조절 — 주기 · 끄기 · 지금 실행. 여기서 끝나야 [설정 ▸ 자동화]로 나갈 일이 없다. ──
-  const controls = el('div', { class: 'mini-meta', style: 'margin-top:10px;gap:10px;flex-wrap:wrap' });
-
-  const sel = el('select', { class: 'input input-sm', 'aria-label': `${spec.stage} 실행 주기` }) as HTMLSelectElement;
+  // ── 있다 — 한 문장 + [주기][지금 한 번 실행][스위치]. 여기서 끝나야 [설정 ▸ 자동화]로 나갈 일이 없다. ──
   const cur = Number(job.interval_sec || 0);
+  //  꺼져 있으면 그게 첫 문장이다 — 잔량이 0이어도 '깨끗함'이 아니라 '멈춤'이다.
+  setState(!!job.enabled, (job.enabled ? `${intervalText(cur)} 자동으로 돕니다` : `꺼져 있어 ${subj(spec.stage)} 돌지 않습니다`) + lastRun(job));
+
+  const sel = el('select', { class: 'cxc-in cxr-sel', 'aria-label': `${spec.stage} 실행 주기` }) as HTMLSelectElement;
   const opts = INTERVALS.some(([s]) => s === cur) ? INTERVALS : [...INTERVALS, [cur, intervalText(cur)] as [number, string]];
-  for (const [s, label] of opts.sort((a, b) => a[0] - b[0])) {
-    sel.append(el('option', { value: String(s), text: label, ...(s === cur ? { selected: 'selected' } : {}) }));
+  for (const [sec, label] of opts.sort((a, b) => a[0] - b[0])) {
+    sel.append(el('option', { value: String(sec), text: label, ...(sec === cur ? { selected: 'selected' } : {}) }));
   }
   sel.addEventListener('change', async () => {
     const next = Number(sel.value);
@@ -208,66 +204,64 @@ export async function stageJobCard(spec: StageJobSpec, rerender: () => void): Pr
     try { await patch(job.id, { interval_sec: next }); toast(`주기를 ${intervalText(next)}로 바꿨습니다`); rerender(); }
     catch (e) { toast((e as Error).message, true); sel.disabled = false; sel.value = String(cur); }
   });
-  controls.append(el('span', { class: 'admin-hint', text: '주기' }), sel);
 
   // '지금 실행' — 설정 직후 "이게 진짜 도나"를 그 자리에서 확인하는 길. 이게 없으면 다음 주기까지
-  //  사람이 화면을 믿고 기다려야 하는데, 그 믿음이 틀렸던 게 이 프로젝트의 출발점이다.
-  const run = el('button', { class: 'btn btn-ghost btn-sm', text: '지금 한 번 실행' });
+  //  사람이 화면을 믿고 기다려야 하는데, 그 믿음이 틀렸던 게 이 카드의 출발점이다.
+  const run = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '지금 한 번 실행' }) as HTMLButtonElement;
   run.addEventListener('click', async () => {
-    (run as HTMLButtonElement).disabled = true;
+    run.disabled = true;
     run.textContent = '실행 중…';
     try {
       const r = await api(`/api/ui/cron/${encodeURIComponent(job.id)}/run`, { method: 'POST' });
       const st = (r && (r.status || r.last_status)) || 'ok';
-      toast(st === 'error' ? `실행했지만 오류가 났습니다 — 아래 마지막 실행 상태를 보세요` : `${spec.stage}를 한 번 실행했습니다`, st === 'error');
+      toast(st === 'error' ? '실행했지만 오류가 났습니다 — 마지막 실행 상태를 보세요' : `${spec.stage}를 한 번 실행했습니다`, st === 'error');
       rerender();
-    } catch (e) { toast('실행 실패 — ' + (e as Error).message, true); (run as HTMLButtonElement).disabled = false; run.textContent = '지금 한 번 실행'; }
+    } catch (e) { toast('실행 실패 — ' + (e as Error).message, true); run.disabled = false; run.textContent = '지금 한 번 실행'; }
   });
-  controls.append(run);
 
-  if (job.enabled) {
-    const off = el('button', { class: 'btn btn-ghost btn-sm', text: '자동 실행 끄기' });
-    off.addEventListener('click', async () => {
-      (off as HTMLButtonElement).disabled = true;
-      try { await patch(job.id, { enabled: false }); toast(`${spec.stage} 자동 실행을 껐습니다`); rerender(); }
-      catch (e) { toast((e as Error).message, true); (off as HTMLButtonElement).disabled = false; }
-    });
-    controls.append(off);
+  const sw = el('input', { type: 'checkbox', class: 'cxc-sw', role: 'switch', 'aria-label': `${spec.stage} 자동 실행 켜기` }) as HTMLInputElement;
+  sw.checked = !!job.enabled;
+  sw.addEventListener('change', async () => {
+    const next = sw.checked;
+    sw.disabled = true;
+    try { await patch(job.id, { enabled: next }); toast(`${spec.stage} 자동 실행을 ${next ? '켰' : '껐'}습니다`); rerender(); }
+    catch (e) { toast((e as Error).message, true); sw.checked = !next; sw.disabled = false; }
+  });
+  acts.append(sel, run, sw);
+
+  if (job.enabled && job.last_status && !['ok', 'running', 'canceled'].includes(String(job.last_status))) {
+    note([el('span', { text: '마지막 실행이 실패했습니다 — [지금 한 번 실행]으로 다시 확인해 보세요.' })], true);
   }
-  card.append(controls);
 
-  // ── 의뢰자 — 헤드리스 단계의 숨은 전제. 없으면 매 주기 HEADLESS_REQUESTER_MISSING 으로 죽는데,
-  //  종전엔 그 사실이 화면 어디에도 없어 '켜 뒀는데 아무 일도 안 일어난다'로만 보였다. 여기서 고치게 한다 —
-  //  다른 탭으로 보내면 이 카드가 지는 계약 ②가 깨진다. 지정할 값은 지금 보고 있는 사람 자신이 정답인
-  //  경우가 대부분이라(관리자가 자기 계정으로 돌린다) 한 번 누르면 끝나게 둔다.
-  //  ⚠ 판정은 **그 잡의 action** 으로 한다(단계로 하면 안 된다). 의뢰자를 요구하는 건 헤드리스 접수 경로
-  //   (_headless.ts headlessRequester)뿐이고, 같은 단계의 구 세션주입판(classify_knowledge·distill_sources)은
-  //   params.session 으로 돌아 의뢰자가 아예 필요 없다. 단계로 판정했더니 정상 동작 중인 세션주입 잡
-  //   (classify-unmapped-knowledge, last_status=ok)에 "실행이 매번 실패합니다"라는 거짓 경고가 붙었다.
+  // ── 실행 계정 — 헤드리스 단계의 숨은 전제. 없으면 매 주기 HEADLESS_REQUESTER_MISSING 으로 죽는다.
+  //  ⚠ 판정은 **그 잡의 action** 으로 한다(단계로 하면 안 된다) — 같은 단계의 구 세션주입판은 params.session 으로 돌아
+  //   계정이 필요 없다. 단계로 판정했더니 정상 동작 중인 세션주입 잡에 "매번 실패합니다"라는 거짓 경고가 붙었다.
   if (String(job.action || '').endsWith('_headless')) {
     const requester = (job.params && (job.params as any).requester) || job.created_by || null;
     if (requester) {
-      card.append(el('p', { class: 'admin-hint', style: 'margin-top:8px',
-        text: `AI 실행은 ${requester} 의 계정으로 돌아갑니다(비용도 그 계정에 붙습니다).` }));
+      note([el('span', { text: `AI는 ${requester} 의 계정으로 돌고, 비용도 그 계정에 붙습니다.` })]);
     } else {
       const meId = String((state.me && (state.me.userId || state.me.email)) || '');
-      const line = el('p', { class: 'admin-hint', style: 'margin-top:8px' },
-        el('b', { text: '의뢰자가 없어 실행이 매번 실패합니다. ' }),
-        el('span', { text: 'AI 를 어느 계정으로 돌릴지 정해야 합니다. ' }));
+      const kids: any[] = [el('b', { text: '실행할 AI 계정이 정해지지 않아 매번 실패합니다.' }), el('span', { text: 'AI를 누구의 계정으로 돌릴지 정해 주세요.' })];
       if (meId) {
-        const claim = el('button', { class: 'btn btn-sm', text: `${meId} 로 지정` });
+        const claim = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: `내 계정(${meId})으로 정하기` }) as HTMLButtonElement;
         claim.addEventListener('click', async () => {
-          (claim as HTMLButtonElement).disabled = true;
+          claim.disabled = true;
           try {
             await patch(job.id, { params: { ...(job.params || {}), requester: meId } });
-            toast(`의뢰자를 ${meId} 로 지정했습니다`); rerender();
-          } catch (e) { toast((e as Error).message, true); (claim as HTMLButtonElement).disabled = false; }
+            toast(`실행 계정을 ${meId} 로 정했습니다`); rerender();
+          } catch (e) { toast((e as Error).message, true); claim.disabled = false; }
         });
-        line.append(claim);
+        kids.push(claim);
       }
-      card.append(line);
+      note(kids, true);
     }
   }
-
   return card;
+}
+
+function clockIcon(): SVGElement {
+  const n = sv('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('circle', { cx: 12, cy: 12, r: 9 }), sv('path', { d: 'M12 7v5l3 2' }));
+  return n;
 }

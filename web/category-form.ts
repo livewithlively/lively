@@ -22,6 +22,59 @@ function saveRepos(categoryId, repos) {
   });
 }
 
+// ════════ 카테고리 묶음(#1631) — **화면에서만 보이는 2단**. 데이터는 1단 그대로다. ════════
+//  지식은 여전히 카테고리 **하나**에만 속하고, 묶음은 분류기 후보에도 증류기 목적지에도 검색·소환에도
+//  들어가지 않는다. 있는 이유는 하나다 — 카테고리가 10개를 넘으면 한눈에 구조가 안 보인다.
+//  그래서 묶음이 틀려도 지식은 한 건도 안 움직인다(화면에서 한 칸 옆에 보일 뿐이다).
+//
+//  ⚠ 계약(타입·조회·고르는 칸)이 **여기 한 벌만** 사는 이유: 소비자가 셋인데(분류체계 탭 web/categories.ts ·
+//   WIKI 사이드바 web/wiki-side.ts · 이 폼) 그중 아무도 되짚지 않는 리프가 이 파일이다.
+//   categories.ts 가 쥐면 categories → category-form → categories 로 순환이 된다.
+interface CatGroup {
+  id?: number;
+  key: string;
+  name?: string;
+  sort?: number;
+  state?: string;
+  category_count?: number;
+  hint?: string;
+}
+
+/** 묶음의 화면 이름 — 이름이 비면 key 로 떨어진다(이름표가 통째로 사라지지 않게). */
+function catGroupName(g: CatGroup): string {
+  return (g && (g.name || g.key)) || '';
+}
+
+/**
+ * 묶음 목록. **서버에 이 API 가 아직 없거나 실패하면 빈 배열**을 준다 — 호출부는 빈 배열을
+ *  «묶음이 없다» 로 읽어 종전 평면 화면으로 그대로 떨어진다(이 레포 관례의 graceful).
+ *  그래서 이 함수는 절대 throw 하지 않는다.
+ */
+async function fetchCategoryGroups(): Promise<CatGroup[]> {
+  try {
+    const d = await api('/api/ui/category-groups');
+    const raw = (d && d.groups) || [];
+    if (!Array.isArray(raw)) return [];
+    //  sort 가 비었거나 서로 겹치면 서버가 준 차례가 그대로 남는다(Array.sort 는 안정 정렬).
+    return raw.filter((g: any) => g && typeof g.key === 'string' && g.key.trim())
+      .sort((a: any, b: any) => (Number(a.sort) || 0) - (Number(b.sort) || 0));
+  } catch (_) { return []; }
+}
+
+/**
+ * 묶음 고르는 칸 — 폼과 목록 행이 **같은 선택지**를 쓰도록 옵션 만드는 자리를 하나로 둔다.
+ *  «— 묶음 없음 —» 은 지금 값이 어느 묶음도 아닐 때만 끼운다: 그건 「기타」 같은 영구 서랍이 아니라
+ *  «아직 안 정함» 이라서, 한 번 정하고 나면 되돌아갈 칸으로 남겨 두지 않는다.
+ */
+function categoryGroupSelect(groups: CatGroup[], cur: any, attrs?: any): HTMLSelectElement {
+  const has = groups.some((g) => g.key === cur);
+  const sel = el('select', Object.assign({ class: 'wikicat-bundle-sel' }, attrs || {}),
+    has ? null : el('option', { value: '', text: '— 묶음 없음 —' }),
+    ...groups.map((g) => el('option', { value: g.key, text: catGroupName(g), ...(g.hint ? { title: g.hint } : {}) }))) as HTMLSelectElement;
+  sel.value = has ? String(cur) : '';
+  return sel;
+}
+
 function openCategoryForm(existing, reload, opts) {
   const editing = !!existing;
   const repoOptions = (opts && opts.repos) || [];
@@ -58,6 +111,21 @@ function openCategoryForm(existing, reload, opts) {
         '이 분류가 사는 코드 레포입니다. 코드 스캔이 추정하는 것과 별개로, 여기서 직접 정합니다.'));
   }
 
+  // 묶음(#1631) — 화면에서만 보이는 2단. 고를 묶음이 없으면(서버 미지원·빈 목록) **칸 자체를 숨긴다**:
+  //  고를 게 없는 빈 컨트롤은 소음이고, 그 상태가 곧 종전 평면 화면이다.
+  //  새로 만들 때의 기본값은 첫 묶음 — 비워 두면 만들자마자 「묶음을 정해 주세요」 구획으로 떨어진다.
+  const groups: CatGroup[] = (opts && opts.groups) || [];
+  const groupSel = groups.length
+    ? categoryGroupSelect(groups, editing ? (existing.group || '') : groups[0].key, { 'aria-label': '묶음' })
+    : null;
+  const groupField = groupSel
+    ? el('div', { class: 'field', style: 'margin-top:12px' },
+        el('label', { class: 'field-label', text: '묶음' }),
+        groupSel,
+        el('p', { class: 'admin-hint', style: 'margin:6px 0 0' },
+          '분류를 화면에서 갈라 보여 주는 이름표입니다. 분류·검색에는 쓰이지 않으니, 나중에 바꿔도 지식은 움직이지 않습니다.'))
+    : null;
+
   const back = overlayBox(editing ? '분류 수정' : '새 분류',
     el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn),
     el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '키' }), keyIn),
@@ -65,6 +133,7 @@ function openCategoryForm(existing, reload, opts) {
       el('p', { class: 'admin-hint', style: 'margin:6px 0 0' },
         '이 분류로 무엇이 들어오고 무엇은 옆 분류로 가는지 적어 주세요. 이 글이 없으면 분류가 이름의 어감으로만 판정합니다. 400~600자 권장.')),
     el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '설명 (선택)' }), descIn),
+    groupField,
     repoField,
     el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
   setTimeout(() => nameIn.focus(), 0);
@@ -78,6 +147,8 @@ function openCategoryForm(existing, reload, opts) {
       if (editing) {
         await api('/api/ui/categories/' + existing.id, { method: 'POST', body: JSON.stringify({
           name, should: shouldIn.value.trim() || undefined, description: descIn.value.trim() || undefined,
+          //  빈 값(= «묶음 없음» 그대로)은 싣지 않는다 — 미변경이지 «비우기» 가 아니다.
+          group: (groupSel && groupSel.value) || undefined,
         }) });
         if (repoField) await saveRepos(existing.id, pickedRepos);
         toast('저장했습니다');
@@ -93,6 +164,7 @@ function openCategoryForm(existing, reload, opts) {
         }
         const r = await api('/api/ui/categories', { method: 'POST', body: JSON.stringify({
           key, name, should: shouldIn.value.trim(), description: descIn.value.trim() || undefined,
+          group: (groupSel && groupSel.value) || undefined,
         }) });
         // 레포는 생성 응답의 id 로 이어 저장. id 를 못 받으면(응답 형태 변화) 분류 생성 자체는 성공했으므로
         //  실패로 되돌리지 않고 레포만 건너뛴다 — 사용자는 [수정]에서 다시 지정할 수 있다.
@@ -108,4 +180,4 @@ function openCategoryForm(existing, reload, opts) {
   nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) go(); });   // IME 가드(#505)
 }
 
-export { openCategoryForm, slugifyKey };
+export { catGroupName, categoryGroupSelect, fetchCategoryGroups, openCategoryForm, slugifyKey, type CatGroup };

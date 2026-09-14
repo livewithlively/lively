@@ -212,7 +212,8 @@ export async function renderContext(view: HTMLElement, sub?: string | null, sub2
   const host = el('div', {}, skeleton('불러오는 중'));
   //  정의 한 줄(#3830) — 머리에서 내려왔다. 현황은 지도가 자기 캡션을 갖고 있어 중복이라 뺀다.
   const body = el('div', { class: 'ctx-body' },
-    stage.key === 'home' ? null : el('p', { class: 'ctx-hint', text: stage.hint }),
+    //  현황·수집기·증류기는 화면이 자기 머리(제목 + 한 줄 설명)를 갖고 있어 정의 한 줄이 두 번 선다(#3830) — 거기선 뺀다.
+    ['home', 'sources', 'distill'].includes(stage.key) ? null : el('p', { class: 'ctx-hint', text: stage.hint }),
     host);
   view.replaceChildren(el('div', { class: 'pjv-board-wrap ctx-board-wrap' },
     el('div', { class: 'card pjv-listboard ctx-board' }, buildHeader(stage), body)));

@@ -20,6 +20,7 @@ import { api, el } from './core.js';
 // ⚠ confirmDialog 는 **정의처(ui-primitives)에서 직접** 가져온다 — admin.ts 배럴을 거치면 이 leaf 가
 //  페이지 모듈을 역방향으로 끌어와 순환이 된다(admin-collector-presets.ts 와 같은 이유).
 import { confirmDialog } from './ui-primitives.js';
+import { RESTORE_FORCE_LABEL } from './lib/restore-force.js';   // #3870 — 버튼 글자는 서버 안내 문구가 지목하는 그 이름
 
 // ── 세션 로그 정책(서버 = 단일 진실) ──
 export interface SessionLogPolicy { enabled: boolean; harnesses: string[]; retentionDays: number }
@@ -99,6 +100,24 @@ export async function confirmSessionForget(opts: {
     lines: opts.lines || [],
     note: keepNote(fate, policy),
     extra: fate === 'all' || fate === 'some' ? sessionLogLink() : null,
+  });
+}
+
+// ── 강제로 되살리기(#3870) — 복원이 «모른다» 로 멈췄을 때 사람이 고르는 자리. ──
+//  여기 있는 다른 확인창과 성격이 다르다(파괴가 아니라 **생성**). 그래도 확인을 받는 이유는 #3752 ④ 의 규율이다:
+//  force 는 «옛 세션이 실은 살아 있을 수도 있음을 알고 새로 만든다» 는 선언이라, 화면이 대신 골라 주지 않는다.
+//  잃는 것은 없다(대화는 이어지고 옛 세션도 안 죽인다) — 그래서 위험 색을 쓰지 않고, 생길 수 있는 일만 말한다.
+export async function confirmForceRestore(opts: { name?: string }): Promise<boolean> {
+  const who = opts.name ? `「${opts.name}」` : '이 세션';
+  return confirmDialog({
+    title: `${who}${eulReul(opts.name || '이 세션')} 강제로 되살릴까요?`,
+    confirmText: RESTORE_FORCE_LABEL, cancelText: '취소',
+    message: '서버가 이 세션이 있는 곳의 상태를 확인하지 못했어요 — 끝난 건지 응답만 늦는 건지 모르는 상태입니다.',
+    lines: [
+      '그대로 새 세션을 열고 대화를 이어받습니다. 지금까지의 대화는 그대로 따라옵니다.',
+      '옛 세션이 실은 살아 있었다면 잠시 둘이 되지만, 빈 쪽은 자동으로 걷힙니다.',
+    ],
+    note: '급하지 않으면 [취소] 하고 잠시 뒤 다시 열어 보세요 — 대개 그 사이에 상태를 다시 볼 수 있게 됩니다.',
   });
 }
 

@@ -9,7 +9,8 @@
 //   · 도메인별로 묶는다 — 자기 도메인만 훑고 나가는 게 가장 빠른 검토다(#638: 워킹레벨이 오너보다 잘 검토).
 //   · 손이 안 떠난다 — j/k 이동 · Enter 펼침 · a 승인 · r 반려 · x 선택 → 일괄 승인.
 //   · 되돌릴 수 있다 — 신규 반려=휴지통(복원 가능) · 수정 반려=수정 전으로 되돌리기.
-import { api, busy, cardHead, el, errorNote, relTime, renderMarkdown, toast } from './core.js';
+import { api, busy, cardHead, el, errorNote, relTime, renderMarkdown, sv, toast } from './core.js';
+import { confirmDialog } from './ui-primitives.js';
 import { overlayBox, skeleton } from './learn.js';
 
 // 관리탭 스위치가 관리하는 규칙의 표식 — 사람이 손으로 만든 세부 규칙과 구분(서버 org_ingest_policy.preset).
@@ -19,22 +20,26 @@ const CAT_NONE = '__none__';
 // #802 '내 도메인'(내 팀이 오너인 카테고리 전체) 센티넬 — 단일 카테고리 key 가 아니라 집합이라 별도 값이 필요하다.
 const CAT_MINE = '__mine__';
 
-// 신규 저장 시 동작.
+// 신규 저장 시 동작 — 「제목 — 뜻」. 고르기 카드·규칙 줄·규칙 폼이 같은 표를 쓴다(#3830: 사람 말로).
 const CREATE_ACTS: [string, string][] = [
-  ['confirm', '검토 후 반영 — 승인 전에는 검색·세션주입에서 제외'],
-  ['auto', '즉시 반영 — 검토 없이 바로 지식이 됨(현행)'],
-  ['drop', '저장 금지 — 에이전트가 새 지식을 못 만듦'],
+  ['confirm', '확인한 뒤에 쓰기 — 확인 전에는 검색·AI 세션·목록에 나오지 않습니다'],
+  ['auto', '바로 쓰기 — 확인 없이 곧바로 지식이 됩니다'],
+  ['drop', '막기 — AI가 새 지식을 만들 수 없습니다'],
 ];
 // 기존 지식 수정 시 동작.
 const UPDATE_ACTS: [string, string][] = [
-  ['review', '반영하되 사후검토 — 반영 내용은 유지, 변경 diff는 검토 대기에 추가'],
-  ['stage', '승인 후 반영 — 라이브는 옛 승인본 유지(제안만 접수)'],
-  ['auto', '즉시 반영 — 검토 없음(현행)'],
-  ['drop', '수정 금지'],
+  ['review', '고친 대로 쓰고 나중에 확인 — 바로 반영하고, 무엇이 바뀌었는지 확인 목록에 쌓입니다'],
+  ['stage', '확인한 뒤에 바꾸기 — 확인 전까지는 예전 내용이 쓰입니다'],
+  ['auto', '바로 바꾸기 — 확인 없이 덮어씁니다'],
+  ['drop', '막기 — AI가 기존 지식을 고칠 수 없습니다'],
 ];
-const ACT_SHORT: Record<string, string> = {
-  auto: '즉시 반영', confirm: '검토 후 반영', drop: '금지', review: '반영 + 사후검토', stage: '승인 후 반영',
-};
+/** 「제목 — 뜻」 한 줄을 둘로. */
+function actParts(list: [string, string][], v: string): [string, string] {
+  const hit = list.find((x) => x[0] === v);
+  const t = hit ? hit[1] : String(v || '');
+  const i = t.indexOf(' — ');
+  return i > 0 ? [t.slice(0, i), t.slice(i + 3)] : [t, ''];
+}
 const HARNESSES = ['claude-code', 'codex', 'openclaw', 'cursor', 'cline', 'windsurf'];
 const PAGE_TYPES = ['decision', 'concept', 'how-to', 'reference', 'research', 'entity'];
 const TYPE_LABEL: Record<string, string> = {
@@ -147,9 +152,14 @@ export async function refreshReviewBadge(n?: number): Promise<void> {
 // ① 지식 검토 정책 — 정책(org_ingest_policy). 스위치 1개로 95%, 나머지는 '세부 규칙'.
 // ════════════════════════════════════════════════════════════════════
 export async function ingestPolicyPanel(detail, data): Promise<void> {
+  //  #3830(2026-09-10 원준 "일반 사용자 대상 — 쉬운 말 · 어려운 건 고급 설정") — 증류기 탭 아래의 이 판을 수집기·증류기와 같은 문법으로.
+  //   · 말: 「에이전트」→「AI」 · 「게이트」 없앰 · 「검토 후 반영」→「확인한 뒤에 쓰기」.
+  //   · 선택은 드롭다운이 아니라 **뜻이 붙은 고르기 카드** — 무엇이 일어나는지를 고르기 전에 읽는다.
+  //   · 세부 규칙은 맨 아래 접힌 「고급 설정」.
+  //   · 비-관리자에게는 누를 수 없는 스위치·카드를 그리지 않는다(#1419 — 누를 수 없는 버튼은 미끼다). 지금 걸린 것만 문장으로.
   rqEnsureStyles();
   const reload = () => ingestPolicyPanel(detail, data);
-  busy(detail, el('div', { class: 'card' }, skeleton('검토 게이트 설정을 불러오는 중')));
+  busy(detail, el('div', { class: 'card' }, skeleton('AI가 쓴 지식 확인 설정을 불러오는 중')));
   let policies: any[];
   let canEdit = false;
   try {
@@ -158,126 +168,97 @@ export async function ingestPolicyPanel(detail, data): Promise<void> {
     // 편집 가능 여부는 서버 판정을 그대로 받는다 — 프론트가 scope 를 재해석하면 '눌러도 403' 이 난다(#1419).
     canEdit = !!(r && r.canEdit);
   }
-  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '검토 게이트 설정을 불러오지 못했습니다'))); return; }
-  let obs: any = null;
-  try { obs = await api('/api/ui/org/ingest-observability?days=30'); } catch { obs = null; }
+  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, 'AI가 쓴 지식 확인 설정을 불러오지 못했습니다'))); return; }
+  const [obs, cats] = await Promise.all([
+    api('/api/ui/org/ingest-observability?days=30').catch(() => null),
+    api('/api/ui/categories').catch(() => null),
+  ]);
+  const catName = new Map<string, string>(((cats && cats.categories) || []).map((c: any) => [String(c.key), String(c.name || c.key)] as [string, string]));
 
   const preset = policies.find((p) => p.preset === GATE_PRESET) || null;
   const rules = policies.filter((p) => p.preset !== GATE_PRESET);   // 프리셋은 위 스위치가 관리 — 목록에서 제외(두 곳 편집 방지)
 
-  //  #1010 최상위 제목은 card 밖으로(관리탭 이중 박스 제거). sectionHead 는 admin.ts 로컬이라 여기선 section-title DOM 을 inline 복제.
-  //  권한 안내는 **모두에게** 보인다(관리자에게도) — 비관리자에게만 보이면 관리자는 남의 화면이 다른 걸 모른다(#1419).
-  detail.replaceChildren(
-    el('div', {},
-      el('div', { class: 'section-title' }, el('h2', { text: '지식 검토 정책' })),
-      el('p', { class: 'admin-hint', text: 'AI가 기록한 지식을 사람이 확인한 뒤에 유효해지도록 할지 정합니다.' }),
-      el('p', { class: 'admin-hint ctx-perm-line' },
-        canEdit ? null : el('span', { class: 'pill', text: '읽기 전용' }),
-        el('span', { class: 'admin-only-badge', text: '관리자' }),
-        ' 이 정책을 바꾸는 일은 관리자 전용입니다 — 조직 전체의 지식 인입 게이트라, 규칙 하나가 모든 구성원의 기록에 걸립니다. ',
-        canEdit ? '설정 내용은 모든 구성원이 볼 수 있습니다.'
-                : '지금 어떤 규칙이 걸려 있는지는 아래에서 그대로 보실 수 있습니다 — 내 지식이 왜 검토 대기로 갔는지 확인할 수 있습니다.')),
-    el('div', { class: 'card' },
-      cardHead('검토 게이트', '켜면 에이전트가 기록한 지식은 [WIKI ▸ 검토 대기]로 이동하고, 승인 전까지는 검색·세션주입·목록에 표시되지 않습니다. 사람이 웹에서 직접 쓴 지식은 영향을 받지 않습니다.'),
-      // 비-admin 에겐 읽기 전용 요약만 — 누를 수 없는 스위치·버튼은 안내가 아니라 미끼다(#1419).
-      canEdit ? gateCard(preset, obs, reload) : gateSummaryReadonly(preset),
-      canEdit ? rulesSection(rules, reload) : rulesSummaryReadonly(rules)));
+  const head = el('div', { class: 'cxc-head' },
+    el('div', { class: 'cxc-head-main' },
+      el('h3', { class: 'cxc-title' }, el('span', { text: 'AI가 쓴 지식 확인' })),
+      el('p', { class: 'cxc-lead', text: 'AI가 새로 쓰거나 고친 지식을 사람이 확인한 뒤에 쓰이게 할지 정합니다. 사람이 웹에서 직접 쓴 지식에는 걸리지 않습니다.' })),
+    el('div', { class: 'cxc-head-acts' },
+      el('span', { class: 'cxc-ro', title: '조직 전체의 지식에 걸리는 설정이라 관리자만 바꿀 수 있습니다', text: canEdit ? '관리자 설정' : '읽기 전용 · 관리자만 바꿈' })));
+  detail.replaceChildren(el('div', { class: 'cxc rvp' }, head, gateCard(preset, obs, reload, canEdit), rulesSection(rules, reload, canEdit, catName)));
 }
 
-/** 게이트 상태 읽기 전용 — 스위치 없이 '지금 켜져 있나'만. */
-function gateSummaryReadonly(preset: any) {
-  const on = !!(preset && preset.enabled);
-  return el('div', { class: 'mini-meta' },
-    el('span', { class: 'pill' + (on ? ' pill-ok' : ''), text: on ? '켜짐' : '꺼짐' }),
-    el('span', { text: on
-      ? '  에이전트가 기록한 지식은 승인 전까지 검색·세션주입에 나오지 않습니다.'
-      : '  에이전트가 기록한 지식이 곧바로 유효해집니다.' }));
-}
-
-/** 세부 규칙 읽기 전용 — 무엇이 걸려 있는지만(편집·추가 없음). */
-function rulesSummaryReadonly(rules: any[]) {
-  const box = el('div', { style: 'margin-top:12px' },
-    el('div', { class: 'section-title' }, el('h2', { text: '세부 규칙' })));
-  if (!rules.length) {
-    box.append(el('p', { class: 'admin-hint', text: '세부 규칙이 없습니다 — 위 게이트 설정만 적용됩니다.' }));
-    return box;
-  }
-  for (const p of rules) {
-    box.append(el('div', { class: 'mini-meta' },
-      el('span', { class: 'pill' + (p.enabled ? ' pill-ok' : ''), text: p.enabled ? '켜짐' : '꺼짐' }),
-      el('span', { class: 'pill', text: '신규 ' + (p.action || 'auto') }),
-      el('span', { class: 'pill', text: '수정 ' + (p.action_update || 'auto') }),
-      el('span', { text: '  ' + (p.note || describeMatch(p)) })));
-  }
-  return box;
-}
-
-/** 규칙의 매칭 조건을 한 줄 문장으로 — note 가 비었을 때 '무엇에 걸리는 규칙인지'를 보여준다. */
-function describeMatch(p: any): string {
-  const bits: string[] = [];
-  if (p.match_category) bits.push(`분류 ${p.match_category}`);
-  if (p.match_system) bits.push(`출처 ${p.match_system}`);
-  if (p.match_channel) bits.push(`채널 ${p.match_channel}`);
-  if (p.match_actor_kind) bits.push(p.match_actor_kind === 'ai' ? 'AI 작성' : '사람 작성');
-  if (p.match_agent) bits.push(`하네스 ${p.match_agent}`);
-  if (p.match_type) bits.push(`종류 ${p.match_type}`);
-  if (p.match_provenance) bits.push(`출처유형 ${p.match_provenance}`);
-  if (p.match_sensitive) bits.push(`민감 ${p.match_sensitive}`);
-  return bits.length ? bits.join(' · ') : '모든 지식';
-}
-
-// 프리셋 카드 — "에이전트가 기록한 지식" 한 덩어리. 스위치 + 신규/수정 액션 선택.
-function gateCard(preset: any, obs: any, reload: () => void) {
+// 「사람이 확인한 뒤에 쓰기」 카드 — 스위치 + (켜져 있으면) 새 지식/고칠 때 고르기 카드.
+function gateCard(preset: any, obs: any, reload: () => void, canEdit: boolean) {
   const on = !!(preset && preset.enabled);
   const createAct = (preset && preset.action) || 'confirm';
   const updateAct = (preset && preset.action_update) || 'review';
+  const card = el('section', { class: 'rvp-card' });
 
-  const sw = el('button', {
-    class: 'rq-sw', role: 'switch', 'aria-checked': on ? 'true' : 'false',
-    title: on ? '게이트 끄기' : '게이트 켜기',
-    onclick: () => gateSave({ enabled: !on, action: createAct, action_update: updateAct }, reload),
-  });
-
-  const createSel = el('select', { class: 'rq-sel', disabled: !on }) as HTMLSelectElement;
-  for (const [v, t] of CREATE_ACTS) createSel.append(el('option', { value: v, text: t }));
-  createSel.value = createAct;
-  createSel.onchange = () => gateSave({ enabled: true, action: createSel.value, action_update: updSel.value }, reload);
-
-  const updSel = el('select', { class: 'rq-sel', disabled: !on }) as HTMLSelectElement;
-  for (const [v, t] of UPDATE_ACTS) updSel.append(el('option', { value: v, text: t }));
-  updSel.value = updateAct;
-  updSel.onchange = () => gateSave({ enabled: true, action: createSel.value, action_update: updSel.value }, reload);
-
-  // 지금 무슨 일이 일어나는지 한 문장 — 설정값을 사람 말로 되풀이해준다(스위치만 보고 결과를 상상하지 않도록).
-  const stateText = on
-    ? `켜짐 — 에이전트가 새로 쓴 지식은 “${ACT_SHORT[createAct]}”, 기존 지식 수정은 “${ACT_SHORT[updateAct]}”. 사람이 웹에서 쓴 지식은 그대로 즉시 반영됩니다.`
-    : '꺼짐 — 에이전트가 기록한 지식이 사람 확인 없이 곧바로 유효해집니다(검색·세션주입에 즉시 노출).';
+  // 지금 무슨 일이 일어나는지 한 문장 — 설정값을 사람 말로 되풀이한다(스위치만 보고 결과를 상상하지 않도록).
+  //  켜져 있어도 둘 다 「바로」면 실제로 확인하는 지식은 없다 — 스위치의 "켜짐"과 결과가 어긋나 보이지 않게 그 사실을 말한다.
+  const noneChecked = on && createAct === 'auto' && (updateAct === 'auto' || updateAct === 'drop') || (on && createAct === 'drop' && updateAct === 'auto');
+  const stateText = !on
+    ? 'AI가 쓴 지식이 사람 확인 없이 곧바로 검색과 AI 세션에 쓰입니다.'
+    : noneChecked
+      ? `켜져 있지만 새 지식은 「${actParts(CREATE_ACTS, createAct)[0]}」, 고친 지식은 「${actParts(UPDATE_ACTS, updateAct)[0]}」로 골라 두어, 지금은 사람이 확인하는 지식이 없습니다.`
+      : `AI가 새로 쓴 지식은 「${actParts(CREATE_ACTS, createAct)[0]}」, 고친 지식은 「${actParts(UPDATE_ACTS, updateAct)[0]}」로 다룹니다.`;
+  const headRow = el('div', { class: 'rvp-head' },
+    el('span', { class: 'svc-tile cxc-tile cxc-tile-machine', 'aria-hidden': 'true' }, shieldIcon()),
+    el('div', { class: 'cxc-main' },
+      el('div', { class: 'cxc-t' },
+        el('b', { class: 'rvp-t', text: '사람이 확인한 뒤에 쓰기' }),
+        el('span', { class: 'cxc-state' + (on ? ' is-on' : '') },
+          el('span', { class: 'cxc-state-dot', 'aria-hidden': 'true' }), el('span', { text: on ? '켜짐' : '꺼짐' }))),
+      el('p', { class: 'rvp-line', text: stateText })));
+  if (canEdit) {
+    const sw = el('input', { type: 'checkbox', class: 'cxc-sw', role: 'switch', 'aria-label': '사람이 확인한 뒤에 쓰기' }) as HTMLInputElement;
+    sw.checked = on;
+    sw.addEventListener('change', () => {
+      const next = sw.checked;
+      sw.disabled = true;
+      void gateSave({ enabled: next, action: createAct, action_update: updateAct }, reload,
+        next ? '켰습니다 — AI가 쓴 지식은 확인한 뒤에 쓰입니다' : '껐습니다 — AI가 쓴 지식이 곧바로 쓰입니다',
+        () => { sw.checked = !next; sw.disabled = false; });
+    });
+    headRow.append(el('div', { class: 'cxc-acts' }, sw));
+  }
+  card.append(headRow);
 
   const waiting = obs ? (Number(obs.pending_now || 0) + Number(obs.rev_pending || 0)) : 0;
-  const hintBits: any[] = [];
-  if (obs && Number(obs.agent_auto || 0) > 0 && !on) {
-    hintBits.push(el('span', {}, '최근 30일간 에이전트가 검토 없이 반영한 신규 지식이 ', el('b', { text: `${obs.agent_auto}건` }), '입니다.'));
-  }
   if (waiting > 0) {
-    hintBits.push(el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge/review', text: `검토 대기 ${waiting}건 열기` }));
+    card.append(el('div', { class: 'rvp-wait' },
+      el('span', {}, el('b', { class: 'num', text: `${waiting.toLocaleString()}건` }), '이 사람의 확인을 기다리고 있습니다'),
+      el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge/review', text: '확인하러 가기 →' })));
   }
+  if (obs && Number(obs.agent_auto || 0) > 0 && !on) {
+    card.append(el('p', { class: 'rvp-note', text: `최근 30일 동안 AI가 확인 없이 곧바로 쓴 새 지식이 ${Number(obs.agent_auto).toLocaleString()}건입니다.` }));
+  }
+  if (!canEdit) return card;   // 읽는 사람에게는 위 문장이 전부다 — 누를 수 없는 고르기 카드는 그리지 않는다.
 
-  return el('div', { class: 'rq-gate' },
-    el('div', { class: 'rq-gate-head' },
-      el('span', { class: 'rq-gate-title', text: '에이전트가 기록한 지식' }),
-      sw),
-    el('p', { class: 'rq-gate-state', text: stateText }),
-    hintBits.length
-      ? el('div', { class: 'rq-gate-note' }, ...hintBits)
-      : null,
-    on ? null : el('p', { class: 'rq-gate-caption', text: '게이트를 켜면 아래 선택이 적용됩니다.' }),
-    el('div', { class: 'rq-gate-opts' + (on ? '' : ' is-off') },
-      el('label', {}, el('span', { class: 'rq-opt-label', text: '새 지식을 쓸 때' }), createSel),
-      el('label', {}, el('span', { class: 'rq-opt-label', text: '기존 지식을 수정할 때' }), updSel)));
+  const group = (title: string, name: string, list: [string, string][], cur: string, rec: string, pick: (v: string) => void) => {
+    const opts = el('div', { class: 'rvp-opts', role: 'radiogroup', 'aria-label': title });
+    for (const [v] of list) {
+      const [t, dsc] = actParts(list, v);
+      const r = el('input', { type: 'radio', name, value: v, ...(v === cur ? { checked: true } : {}), ...(on ? {} : { disabled: true }) }) as HTMLInputElement;
+      r.addEventListener('change', () => { if (r.checked) pick(v); });
+      opts.append(el('label', { class: 'rvp-opt' }, r,
+        el('span', { class: 'rvp-opt-x' },
+          el('b', {}, t, v === rec ? el('span', { class: 'rvp-rec', text: '추천' }) : null),
+          dsc ? el('span', { text: dsc }) : null)));
+    }
+    return el('div', { class: 'rvp-group' + (on ? '' : ' is-off') }, el('p', { class: 'rvp-gt', text: title }), opts);
+  };
+  if (!on) card.append(el('p', { class: 'rvp-caption', text: '스위치를 켜면 아래 방식이 적용됩니다.' }));
+  card.append(el('div', { class: 'rvp-groups' },
+    group('AI가 새 지식을 쓸 때', 'rvp-create', CREATE_ACTS, createAct, 'confirm',
+      (v) => { void gateSave({ enabled: true, action: v, action_update: updateAct }, reload, '바꿨습니다'); }),
+    group('AI가 기존 지식을 고칠 때', 'rvp-update', UPDATE_ACTS, updateAct, 'review',
+      (v) => { void gateSave({ enabled: true, action: createAct, action_update: v }, reload, '바꿨습니다'); })));
+  return card;
 }
 
-// 프리셋 규칙 upsert — 축은 고정(에이전트 저작), 액션·on/off 만 사람이 고른다.
-async function gateSave(patch: any, reload: () => void): Promise<void> {
+// 프리셋 규칙 upsert — 축은 고정(AI 저작), 방식·켜짐만 사람이 고른다.
+async function gateSave(patch: any, reload: () => void, msg: string, onFail?: () => void): Promise<void> {
   try {
     await api('/api/ui/org/ingest-policy', {
       method: 'POST',
@@ -292,58 +273,82 @@ async function gateSave(patch: any, reload: () => void): Promise<void> {
         note: '관리탭 스위치 — 에이전트가 기록한 지식',
       }),
     });
-    toast(patch.enabled ? '게이트를 켰습니다' : '게이트를 껐습니다');
+    toast(msg);
     reload();
-  } catch (e: any) { toast('실패 — ' + e.message, true); }
+  } catch (e: any) { toast('실패 — ' + e.message, true); onFail?.(); }
 }
 
-// 세부 규칙 — 전 축(도메인·출처·작성자·하네스·타입…) CRUD. 기본 접힘(고급).
-function rulesSection(rules: any[], reload: () => void) {
-  const rows = el('div', { class: 'rq-rows' });
-  if (!rules.length) {
-    rows.append(el('div', { class: 'rq-empty', text: '세부 규칙이 없습니다. 위 스위치만으로 충분한 경우가 대부분입니다 — 도메인·하네스·출처별로 다르게 하고 싶을 때만 추가하세요.' }));
-  }
-  for (const p of rules) {
-    const axes = [
-      p.match_actor_kind && (p.match_actor_kind === 'ai' ? '에이전트' : '사람'),
-      p.match_agent && ('하네스=' + p.match_agent),
-      p.match_category && ('도메인=' + p.match_category),
-      p.match_type && ('종류=' + (TYPE_LABEL[p.match_type] || p.match_type)),
-      p.match_provenance && (p.match_provenance === 'observed' ? '외부 자료 미러' : '저작'),
-      p.match_system && ('시스템=' + p.match_system),
-      p.match_channel && ('채널=' + p.match_channel),
-      p.match_sensitive && ('민감=' + p.match_sensitive),
-    ].filter(Boolean).join(' · ') || '모든 지식 쓰기';
-    const main = el('div', { class: 'rq-row-main', style: 'cursor:default' },
-      p.is_exception ? el('span', { class: 'rq-badge edit', text: '예외' }) : null,
-      el('span', { class: 'rq-title', text: axes }),
-      el('span', { class: 'rq-meta' },
-        el('span', { text: '신규: ' + (ACT_SHORT[p.action] || p.action) }),
-        el('span', { text: '수정: ' + (ACT_SHORT[p.action_update] || p.action_update || '즉시 반영') }),
-        p.enabled ? null : el('span', { class: 'rq-warn', text: '꺼짐' })),
-      el('span', { class: 'rq-acts' },
-        el('button', { class: 'btn btn-ghost btn-sm', text: p.enabled ? '끄기' : '켜기', onclick: () => ruleToggle(p, reload) }),
-        el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openIngestPolicyForm(p, reload) }),
-        el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => ruleDelete(p.id, reload) })));
-    rows.append(el('div', { class: 'rq-row' }, main));
-  }
-  const det = el('details', { style: 'margin-top:18px' },
-    el('summary', { style: 'cursor:pointer;font-size:13px;font-weight:700;color:var(--ink-sub)', text: `세부 규칙 (고급) — ${rules.length}개` }),
-    el('p', { class: 'admin-hint', style: 'margin-top:10px', text: '도메인·하네스·출처·지식 종류별로 다르게 적용하려면 규칙을 추가하세요. 여러 규칙에 걸리면 가장 보수적인 쪽이 적용됩니다(신규 금지>검토>즉시 · 수정 금지>승인 후>사후검토>즉시). “예외” 규칙은 그 누적을 건너뛰고 그 규칙대로 확정합니다 — “전부 검토하되 이 도메인만 자동통과” 같은 완화는 예외로만 가능합니다.' }),
-    el('div', { style: 'margin:8px 0 10px' },
-      el('button', { class: 'btn btn-ghost btn-sm', text: '+ 규칙 추가', onclick: () => openIngestPolicyForm(null, reload) })),
-    rows);
+// 세부 규칙 — 전 축(카테고리·출처·작성자·AI 도구·종류…) CRUD. 맨 아래 접힌 「고급 설정」.
+function rulesSection(rules: any[], reload: () => void, canEdit: boolean, catName: Map<string, string>) {
+  const det = el('details', { class: 'dsl-adv rvp-adv' },
+    el('summary', {},
+      el('span', { class: 'dsl-adv-t', text: '고급 설정' }),
+      el('span', { class: 'dsl-adv-d', text: rules.length
+        ? `세부 규칙 ${rules.length}개 — 카테고리·AI 도구·출처마다 다르게 확인합니다`
+        : '카테고리·AI 도구·출처마다 다르게 확인하고 싶을 때만 씁니다' })));
+  const body = el('div', { class: 'dsl-adv-body' },
+    el('p', { class: 'dst-intro', text: '위 설정은 AI가 쓴 지식 전부에 한 번에 걸립니다. 카테고리·AI 도구·출처·지식 종류마다 다르게 하고 싶을 때만 규칙을 더하세요. 여러 규칙에 걸리면 가장 조심스러운 쪽이 적용됩니다(막기 → 확인한 뒤에 → 바로 순서). 「예외」로 만든 규칙만 겹쳐도 그 규칙대로 곧바로 정해집니다 — 「전부 확인하되 이 카테고리만 바로 쓰기」 같은 완화는 예외로만 할 수 있습니다.' }));
+  if (canEdit) body.append(el('div', {}, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 규칙 더하기', onclick: () => openIngestPolicyForm(null, reload) })));
+  const list = el('div', { class: 'cxc-list' });
+  if (!rules.length) list.append(el('div', { class: 'cxc-empty' }, el('p', { class: 'cxc-empty-d', text: '세부 규칙이 없습니다 — 위 스위치 하나로 충분한 경우가 대부분입니다.' })));
+  for (const p of rules) list.append(ruleRow(p, reload, canEdit, catName));
+  body.append(list);
+  det.append(body);
   return det;
+}
+
+function ruleRow(p: any, reload: () => void, canEdit: boolean, catName: Map<string, string>) {
+  const axes = [
+    p.match_actor_kind && (p.match_actor_kind === 'ai' ? 'AI가 쓴 것' : '사람이 쓴 것'),
+    p.match_agent && ('AI 도구 ' + p.match_agent),
+    p.match_category && ('카테고리 「' + (catName.get(String(p.match_category)) || p.match_category) + '」'),
+    p.match_type && ('종류 ' + (TYPE_LABEL[p.match_type] || p.match_type)),
+    p.match_provenance && (p.match_provenance === 'observed' ? '외부 앱에서 가져온 자료' : '직접 쓴 것'),
+    p.match_system && ('출처 ' + p.match_system),
+    p.match_channel && ('채널 ' + p.match_channel),
+    p.match_sensitive && ('민감도 ' + p.match_sensitive),
+  ].filter(Boolean).join(' · ') || '모든 지식';
+  const row = el('div', { class: 'cxc-row' + (p.enabled ? '' : ' is-off') },
+    el('div', { class: 'cxc-main' },
+      el('div', { class: 'cxc-t' },
+        el('span', { class: 'cxc-name', text: axes }),
+        p.is_exception ? el('span', { class: 'cxc-tag', text: '예외' }) : null,
+        el('span', { class: 'cxc-state' + (p.enabled ? ' is-on' : '') },
+          el('span', { class: 'cxc-state-dot', 'aria-hidden': 'true' }), el('span', { text: p.enabled ? '켜짐' : '꺼짐' }))),
+      el('div', { class: 'cxc-m' },
+        el('span', { text: '새 지식 — ' + actParts(CREATE_ACTS, p.action)[0] }),
+        el('span', { class: 'cxc-sep', 'aria-hidden': 'true', text: '·' }),
+        el('span', { text: '고칠 때 — ' + actParts(UPDATE_ACTS, p.action_update || 'auto')[0] }))));
+  if (!canEdit) return row;
+  const sw = el('input', { type: 'checkbox', class: 'cxc-sw', role: 'switch', 'aria-label': '이 규칙 켜기' }) as HTMLInputElement;
+  sw.checked = !!p.enabled;
+  sw.addEventListener('change', () => { sw.disabled = true; void ruleToggle(p, reload); });
+  row.append(el('div', { class: 'cxc-acts' }, sw,
+    el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '고치기', onclick: () => openIngestPolicyForm(p, reload) }),
+    el('button', { class: 'btn-text btn-text-danger', type: 'button', text: '삭제', onclick: () => ruleDelete(p.id, reload) })));
+  return row;
+}
+
+function shieldIcon(): SVGElement {
+  const n = sv('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('path', { d: 'M12 3l7 3v5c0 4.5-3 8.4-7 10-4-1.6-7-5.5-7-10V6z' }), sv('path', { d: 'M9 12l2 2 4-4' }));
+  return n;
 }
 
 async function ruleToggle(pol: any, reload: () => void): Promise<void> {
   try {
     await api('/api/ui/org/ingest-policy', { method: 'POST', body: JSON.stringify({ ...pol, enabled: !pol.enabled }) });
     reload();
-  } catch (e: any) { toast('실패 — ' + e.message, true); }
+  } catch (e: any) { toast('실패 — ' + e.message, true); reload(); }
 }
 async function ruleDelete(id: number, reload: () => void): Promise<void> {
-  if (!confirm('이 규칙을 삭제할까요?')) return;
+  //  네이티브 confirm() 금지(DS §6.5 — 포커스가 확인에 놓여 파괴 동작이 오발된다). 잃는 것만 말한다.
+  const ok = await confirmDialog({
+    title: '이 규칙을 삭제할까요?',
+    message: '이 규칙에 걸리던 지식은 위 기본 설정을 따르게 됩니다. 이미 확인했거나 쓰인 지식은 그대로 남습니다.',
+    confirmText: '삭제', danger: true,
+  });
+  if (!ok) return;
   try { await api('/api/ui/org/ingest-policy/remove', { method: 'POST', body: JSON.stringify({ id }) }); toast('삭제했습니다'); reload(); }
   catch (e: any) { toast('실패 — ' + e.message, true); }
 }
@@ -368,36 +373,36 @@ export async function openIngestPolicyForm(pol: any, reload: () => void): Promis
 
   const actSel = sel(CREATE_ACTS, (pol && pol.action) || 'confirm');
   const updSel = sel(UPDATE_ACTS, (pol && pol.action_update) || 'auto');
-  const whoSel = sel([['', '전체 (누가 쓰든)'], ['ai', '에이전트 (MCP — AI가 쓴 것)'], ['human', '사람 (웹에서 직접 쓴 것)']], (pol && pol.match_actor_kind) || '');
-  const agentSel = sel([['', '전체 (모든 하네스)'], ...HARNESSES.map((h) => [h, h] as [string, string])], (pol && pol.match_agent) || '');
-  const catSel = sel([['', '전체 (모든 분류축)'], ...cats.map((c: any) => [c.key, (c.name || c.key) + ' (' + c.key + ')'] as [string, string])], (pol && pol.match_category) || '');
-  const typeSel = sel([['', '전체 (모든 종류)'], ...PAGE_TYPES.map((t) => [t, (TYPE_LABEL[t] || t) + ' (' + t + ')'] as [string, string])], (pol && pol.match_type) || '');
-  const provSel = sel([['', '전체'], ['authored', '저작 (에이전트·사람이 쓴 것)'], ['observed', '외부 자료 미러 (외부 원본 복제)']], (pol && pol.match_provenance) || '');
-  const sysSel = sel([['', '전체 (모든 시스템)'], ...['slack', 'notion', 'clickup', 'gmail', 'gdrive', 'discord'].map((s) => [s, s] as [string, string])], (pol && pol.match_system) || '');
-  const chanInp = el('input', { type: 'text', class: 'rq-sel', value: (pol && pol.match_channel) || '', placeholder: '특정 slack 채널·notion 폴더 id (비우면 시스템 전체)' }) as HTMLInputElement;
-  const sensSel = sel([['', '전체 (판정 무관)'], ['cooking', 'cooking (쿠킹 중)'], ['planning', 'planning (기획 단계)'], ['unfinished', 'unfinished (미완결)']], (pol && pol.match_sensitive) || '');
+  const whoSel = sel([['', '누가 쓰든'], ['ai', 'AI가 쓴 것'], ['human', '사람이 웹에서 쓴 것']], (pol && pol.match_actor_kind) || '');
+  const agentSel = sel([['', '모든 AI 도구'], ...HARNESSES.map((h) => [h, h] as [string, string])], (pol && pol.match_agent) || '');
+  const catSel = sel([['', '모든 카테고리'], ...cats.map((c: any) => [c.key, String(c.name || c.key)] as [string, string])], (pol && pol.match_category) || '');
+  const typeSel = sel([['', '모든 종류'], ...PAGE_TYPES.map((t) => [t, TYPE_LABEL[t] || t] as [string, string])], (pol && pol.match_type) || '');
+  const provSel = sel([['', '모두'], ['authored', '직접 쓴 것 (AI·사람)'], ['observed', '외부 앱에서 가져온 자료']], (pol && pol.match_provenance) || '');
+  const sysSel = sel([['', '모든 앱'], ...['slack', 'notion', 'clickup', 'gmail', 'gdrive', 'discord'].map((s) => [s, s] as [string, string])], (pol && pol.match_system) || '');
+  const chanInp = el('input', { type: 'text', class: 'rq-sel', value: (pol && pol.match_channel) || '', placeholder: '특정 슬랙 채널·노션 폴더 id — 비우면 그 앱 전체' }) as HTMLInputElement;
+  const sensSel = sel([['', '가리지 않음'], ['cooking', '아직 무르익는 중'], ['planning', '기획 단계'], ['unfinished', '끝나지 않은 이야기']], (pol && pol.match_sensitive) || '');
   const prioInp = el('input', { type: 'number', class: 'rq-sel', value: String((pol && pol.priority) || 0) }) as HTMLInputElement;
   const excChk = el('input', { type: 'checkbox', ...((pol && pol.is_exception) ? { checked: true } : {}) }) as HTMLInputElement;
   const enChk = el('input', { type: 'checkbox', ...((pol ? pol.enabled : true) ? { checked: true } : {}) }) as HTMLInputElement;
 
-  const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '규칙 추가' : '저장' }) as HTMLButtonElement;
+  const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '규칙 더하기' : '저장' }) as HTMLButtonElement;
   const form = el('div', { class: 'proj-settings' },
-    block('무엇을 할까 (신규 저장)', '이 규칙에 걸리는 새 지식을 어떻게 다룰지.', actSel),
-    block('무엇을 할까 (기존 지식 수정)', '이미 있는 지식을 고칠 때. 에이전트 쓰기의 상당수가 “수정”입니다.', updSel),
-    block('누가 썼나', '서버가 접속 경로로 판정합니다(MCP=에이전트 · 웹=사람). AI 자기보고가 아닙니다.', whoSel),
-    block('어느 하네스 (선택)', '특정 도구로 실행된 에이전트만. 비우면 모든 하네스.', agentSel),
-    block('어느 도메인 (선택)', '이 카테고리 지식에만 적용. 비우면 모든 도메인.', catSel),
-    block('지식 종류 (선택)', '예: 런북(how-to)만 사람 승인. 비우면 모든 종류.', typeSel),
-    block('경로 (선택)', '저작(에이전트·사람) vs 외부 자료 미러(외부 복제).', provSel),
-    block('시스템 (선택)', '외부 자료 미러의 출처. 비우면 모든 시스템.', sysSel),
-    block('출처 채널/폴더 (선택)', '특정 slack 채널·notion 폴더 등(id).', chanInp),
-    block('민감 라벨 (선택)', 'distill/미러 LLM 이 내용에서 판정.', sensSel),
-    block('예외 규칙', '켜면 이 규칙이 다른 규칙의 누적을 건너뛰고 확정합니다 — “전부 검토하되 여기만 자동통과” 용도.',
-      el('label', { class: 'inline' }, excChk, el('span', { text: ' 이 규칙을 예외(carve-out)로' }))),
-    block('우선순위', '예외가 여럿 걸릴 때 큰 값이 이깁니다.', prioInp),
-    block('켬', '', el('label', { class: 'inline' }, enChk, el('span', { text: ' 활성화' }))),
+    block('AI가 새 지식을 쓸 때', '이 규칙에 걸리는 새 지식을 어떻게 다룰지 고릅니다.', actSel),
+    block('AI가 기존 지식을 고칠 때', '이미 있는 지식을 고칠 때입니다. AI가 쓰는 것의 상당수가 「고치기」입니다.', updSel),
+    block('누가 썼나', '접속 경로로 서버가 판단합니다 — AI 도구로 연결해 쓴 것은 AI, 웹에서 쓴 것은 사람입니다.', whoSel),
+    block('어느 AI 도구 (선택)', '특정 AI 도구(claude-code·codex 등)로 쓴 것만. 비우면 모든 도구.', agentSel),
+    block('어느 카테고리 (선택)', '이 카테고리의 지식에만 적용합니다. 비우면 모든 카테고리.', catSel),
+    block('지식 종류 (선택)', '예: 방법·절차 문서만 사람이 확인. 비우면 모든 종류.', typeSel),
+    block('어디서 온 지식 (선택)', '직접 쓴 것과 외부 앱에서 가져온 자료를 가를 때 씁니다.', provSel),
+    block('어느 외부 앱 (선택)', '외부 앱에서 가져온 자료의 출처. 비우면 모든 앱.', sysSel),
+    block('채널·폴더 (선택)', '특정 슬랙 채널·노션 폴더 등의 id.', chanInp),
+    block('민감도 (선택)', 'AI가 내용을 읽고 붙인 표시입니다.', sensSel),
+    block('예외 규칙', '켜면 다른 규칙과 겹쳐도 이 규칙대로 곧바로 정해집니다 — 「전부 확인하되 여기만 바로 쓰기」 같은 때에 씁니다.',
+      el('label', { class: 'inline' }, excChk, el('span', { text: ' 이 규칙을 예외로' }))),
+    block('우선순위', '예외 규칙이 여럿 걸릴 때 숫자가 큰 쪽이 이깁니다.', prioInp),
+    block('켜기', '', el('label', { class: 'inline' }, enChk, el('span', { text: ' 이 규칙 켜기' }))),
     el('div', { class: 'ps-rules-actions' }, saveBtn));
-  const back = overlayBox(isNew ? '검토 규칙 추가' : '검토 규칙 수정', form);
+  const back = overlayBox(isNew ? '확인 규칙 더하기' : '확인 규칙 고치기', form);
   const boxw = back.querySelector('.ov-box'); if (boxw) boxw.classList.add('ov-box-wide');
   saveBtn.onclick = async () => {
     const body: any = {

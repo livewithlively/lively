@@ -6,6 +6,7 @@
 //   '어느 수집기의 토큰으로 부를지'를 요청 범위로 씌워야 한다(withCollector). 전역 바인딩을 쓰면 동시 요청이
 //   서로의 토큰을 덮는다(config.ts 주석 참조).
 import type { Capability } from "../types.js";
+import { canManageWorkspace } from "../principal.js";
 import { z } from "zod";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
@@ -22,7 +23,7 @@ import { itemsPool } from "../../db/client.js";
 import { ensureWikiRepoCollector } from "../../org/wiki-repo.js";
 import { ensureFigmaCommentsDistiller } from "../../org/distill/figma-preset.js";
 import { logger } from "../../log.js";
-import { actorOf, restOnly, restRead, str } from "./shared.js";
+import { actorOf, restRead, restWork, str } from "./shared.js";
 
 /** 수집기 1건 조회 + 바인딩 정보 — 실행·discover 가 공용으로 쓴다. */
 async function loadBinding(id: number): Promise<{ id: number; presetKey: string; instanceKey: string }> {
@@ -46,18 +47,18 @@ export const collectorsReadCapabilities: Capability[] = [
   restRead("org_collectors", "수집기 목록",
     "등록된 **수집기 인스턴스** 목록 + 고를 수 있는 프리셋 카탈로그(#1419). 한 프리셋(슬랙·노션 등)으로 수집기를 여러 개 만들 수 있다 — " +
     "워크스페이스가 둘이거나, 채널 그룹마다 주기·산출정책을 달리할 때. 시크릿 값은 담기지 않는다(설정 여부만). " +
-    "조회는 전 구성원, 생성·수정·삭제·실행은 admin(응답의 canEdit 이 그 판정). " +
+    "조회·생성·수정·삭제·실행 모두 구성원(응답의 canEdit 이 그 판정 — 인원 관리만 관리자). " +
     "⚠ 구 org_connectors(system 당 1개)의 후계 — 구 도구는 레거시 축으로 계속 동작하나 새 작업은 이걸 쓴다.",
     [{ method: "GET", paths: ["/api/ui/org/collectors"], parse: () => ({}) }],
     async (_input: unknown, user: LivelyUser) => ({
       collectors: await listCollectors(), presets: await collectorPresetCatalog(),
-      canEdit: !!(user?.scopes && user.scopes.includes("admin")),
+      canEdit: canManageWorkspace(user),
       meaning: MEANING["connector"],
     }), true),
 ];
 
 export const collectorsCapabilities: Capability[] = [
-  restOnly("org_collector_upsert", "수집기 저장",
+  restWork("org_collector_upsert", "수집기 저장",
     "수집기 인스턴스를 만들거나 고친다. id 를 주면 수정, 없으면 생성. secrets 는 값이 오면 갱신·빈값/미전송이면 유지(시크릿 저장엔 CONNECTOR_SECRET_KEY 필요). " +
     "enabled=true 로 저장하면 그 수집기 전용 자동 수집 잡(collector-<id>)이 등록된다. " +
     "⚠ 커서 네임스페이스(instance_key)는 생성 시에만 정해지고 이후 변경되지 않는다 — 바꾸면 그 수집기가 커서를 잃고 전체 재수집한다.",
@@ -112,7 +113,7 @@ export const collectorsCapabilities: Capability[] = [
       note: z.string().nullable().optional(),
     }),
 
-  restOnly("org_collector_sync_run", "수집기 지금 수집(비동기)",
+  restWork("org_collector_sync_run", "수집기 지금 수집(비동기)",
     "이 수집기의 수집을 백그라운드로 시작하고 run_id 를 즉시 반환한다(긴 full 백필도 HTTP 타임아웃 없음). 로그·상태는 org_connector_runs/…run_log 로 폴링(collector_id 필터).",
     [{ method: "POST", paths: ["/api/ui/org/collectors/:id/sync"], parse: (req) => ({
       id: Number((req.params as Record<string, string>)?.id), full: (req.body as Record<string, unknown>)?.full,
@@ -130,7 +131,7 @@ export const collectorsCapabilities: Capability[] = [
       full: z.boolean().optional().describe("true=전체 백필(커서 무시), 기본 false=증분"),
     }),
 
-  restOnly("org_collector_discover", "수집기 스코프 목록 조회",
+  restWork("org_collector_discover", "수집기 스코프 목록 조회",
     "이 수집기에 저장된 토큰으로 소스의 선택지(노션 공유 페이지/DB, 클릭업 리스트)를 조회한다 — 관리 화면 픽커용. 수집기마다 토큰이 다르므로 반드시 수집기 단위로 부른다.",
     [{ method: "POST", paths: ["/api/ui/org/collectors/:id/discover"], parse: (req) => ({
       id: Number((req.params as Record<string, string>)?.id),
@@ -145,7 +146,7 @@ export const collectorsCapabilities: Capability[] = [
     }),
 
   // ── 커스텀 프리셋(#1419 T2) — "커스텀하게 프리셋을 추가할 수 있게" ──
-  restOnly("org_collector_preset_upsert", "커스텀 프리셋 저장",
+  restWork("org_collector_preset_upsert", "커스텀 프리셋 저장",
     "수집 **프리셋**을 만들거나 고친다. 두 갈래: driver='clone'(내장 프리셋을 복제해 라벨·기본값만 바꾼 템플릿) 또는 " +
     "driver='http'|'rss'|'webhook'(코드 배포 없이 새 수집 방식을 정의 — 사내 API·공개 피드·웹훅 수신). " +
     "⚠ 자격(토큰)은 프리셋이 아니라 **수집기**가 갖는다 — 프리셋의 fields 에 secret:true 항목을 선언하면 각 수집기가 자기 값을 채운다. " +
@@ -180,7 +181,7 @@ export const collectorsCapabilities: Capability[] = [
       enabled: z.boolean().optional(),
     }),
 
-  restOnly("org_collector_preset_remove", "커스텀 프리셋 삭제",
+  restWork("org_collector_preset_remove", "커스텀 프리셋 삭제",
     "커스텀 프리셋을 지운다. 그 프리셋으로 만든 수집기가 하나라도 있으면 거부한다(지우면 그 수집기들이 없는 프리셋을 가리켜 조용히 멈춘다). 내장 프리셋은 지울 수 없다.",
     [{ method: "POST", paths: ["/api/ui/org/collector-presets/:id/remove"], parse: (req) => ({
       id: Number((req.params as Record<string, string>)?.id),
@@ -194,7 +195,7 @@ export const collectorsCapabilities: Capability[] = [
       id: z.number().int().positive().describe("삭제할 커스텀 프리셋 id"),
     }),
 
-  restOnly("org_collector_preview", "수집기 미리보기(실호출 샘플)",
+  restWork("org_collector_preview", "수집기 미리보기(실호출 샘플)",
     "저장된 설정으로 **실제로 한 번 호출해** 무엇이 잡히는지 샘플을 돌려준다 — 적재는 하지 않는다(읽기만). " +
     "필드 매핑이 맞는지, 고유 id 가 비지 않는지를 저장 전에 눈으로 확인하는 자리다. 최대 5건.",
     [{ method: "POST", paths: ["/api/ui/org/collectors/:id/preview"], parse: (req) => ({
@@ -233,7 +234,7 @@ export const collectorsCapabilities: Capability[] = [
       id: z.number().int().positive().describe("미리볼 수집기 id — 실제 호출하되 적재하지 않는다"),
     }),
 
-  restOnly("org_collector_remove", "수집기 삭제",
+  restWork("org_collector_remove", "수집기 삭제",
     "수집기와 그 자동 수집 잡을 지운다. 이미 수집된 자료·지식은 그대로 남는다(삭제 아님). " +
     "커서(connector_state)도 남겨 두므로 같은 instance_key 로 다시 만들면 이어받는다.",
     [{ method: "POST", paths: ["/api/ui/org/collectors/:id/remove"], parse: (req) => ({
@@ -249,7 +250,7 @@ export const collectorsCapabilities: Capability[] = [
       id: z.number().int().positive().describe("삭제할 수집기 id — 수집된 자료·지식은 남는다"),
     }),
 
-  restOnly("org_wiki_repo_ensure", "레포의 위키를 자료로 모으기",
+  restWork("org_wiki_repo_ensure", "레포의 위키를 자료로 모으기",
     "등록된 git 레포의 마크다운을 지식으로 인입하는 수집기를 준비한다(#1881 G9) — **자격증명이 더 필요하지 않다**. " +
     "레포를 등록하면 게이트웨이가 이미 공유 클론(workspace/repos/<name>)을 두고 최신화하므로, 이 도구는 그 경로를 " +
     "수집기 설정에 채워 넣을 뿐이다. 종전엔 사람이 서버에 들어가 직접 클론하고 절대경로를 타이핑해야 했다. " +

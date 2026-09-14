@@ -407,7 +407,7 @@ export async function repoWorktree(ctx, args) {
   //  있으므로 점유로 센다(그 이름을 뺏지 않는다).
   mkdirSync(dirname(wt), { recursive: true });
   const regs = listWorktrees(ctx, base);
-  const live = regs.filter((w) => !provablyGone(w.path));
+  const live = regs.filter((w) => w.locked || !provablyGone(w.path));   // locked = 경로가 없어도 점유(표적 정리도 안 지우므로 이름을 주면 add 가 죽는다)
 
   // ④ 브랜치 기본값 — **canonical 슬롯일 때만** project/<id>: 서버 provisionProjectRepos 와 같은 자리·같은 이름이라
   //  서로 멱등이다(먼저 뜬 쪽을 뒤에 온 쪽이 그대로 재사용). 슬롯 밖(path 를 따로 준 경우)에까지 project/<id> 를
