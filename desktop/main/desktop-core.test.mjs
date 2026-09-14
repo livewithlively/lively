@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { cliCandidates, locateCli, cliShimName, cliMissingHelp, bootstrapOneLiner, cliLaunchSpec } from "./cli-locate.mjs";
 import { bootstrapCommand, runBootstrap } from "./bootstrap.mjs";
 import { createNdjsonParser, runCli, reduceProgress, lastError, cliContractVerdict } from "./cli-runner.mjs";
-import { argvFor, RUN_KINDS, IPC, IPC_WEB } from "./ipc-contract.mjs";
+import { argvFor, RUN_KINDS, IPC, IPC_WEB, cloudUrl, DEFAULT_CLOUD_URL } from "./ipc-contract.mjs";
 import { normalizeGatewayInput, gatewayAdvice, isControlPlane, CONTROL_PLANE_HOSTS } from "./gateway-input.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
@@ -2435,19 +2435,121 @@ t("CL4 ★ 두 카드는 배타다 — 처음이면 클라우드 우선, 고칠 
   assert.match(html, /id="gw"[^>]*>/, "시작 카드의 주소칸이 없다");
 });
 
-t("CL5 ★ 배선 — 클라우드 버튼이 실제로 그 작업을 부르고, 설치 끝에 노드까지 선다", () => {
+t("CL5 ★ 배선 — 클라우드 버튼이 실제로 그 작업을 부르고, 설치 끝에 노드까지 선다 [E6·E7]", () => {
   const app = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
   assert.match(app, /window\.lively\.run\("setup-cloud"\)/, "버튼이 아무것도 안 부른다");
   const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  // IPC 는 클라우드 경로를 **따로** 몰아야 한다 — 그냥 start() 로 보내면 CLI 가드에 걸린다(CL6).
   const h = main.slice(main.indexOf("ipcMain.handle(IPC.RUN"));
   const seg = h.slice(0, h.indexOf("ipcMain.handle(IPC.CANCEL"));
   assert.ok(seg.includes('"setup-cloud"'), "메인이 클라우드 경로를 따로 몰지 않는다");
-  assert.ok(seg.includes("nextAfterSetup"), "설치 끝에 노드를 안 세운다 — 주소 경로와 결과가 갈린다");
+  // 흐름의 정본은 onboardCloud 다 — 끝이 주소 경로(onboard)와 같아야 한다.
+  const fn = cloudFlow(main);
+  assert.ok(seg.includes("onboardCloud"), "IPC 가 그 흐름을 안 탄다");
+  assert.ok(fn.includes("nextAfterSetup"), "설치 끝에 노드를 안 세운다 — 주소 경로와 결과가 갈린다");
   // ⚠ 가드의 **존재**를 먼저 단언한다. 위치만 비교하면 가드를 통째로 지웠을 때 indexOf 가 -1 이라
   //  "-1 < n" 으로 통과한다 — 실측(mutation Pb): 없는 가드를 있다고 읽었다.
-  const guardAt = seg.indexOf("if (!r.ok) return r;");
+  const guardAt = fn.indexOf("if (!r.ok) return r;");
   assert.ok(guardAt >= 0, "설치 실패 가드가 없다 — 실패한 설치 위에 노드를 올린다");
-  assert.ok(guardAt < seg.indexOf("nextAfterSetup"), "실패했는데 노드를 세우려 한다");
+  assert.ok(guardAt < fn.indexOf("nextAfterSetup"), "실패했는데 노드를 세우려 한다");
+});
+
+// ── #3968 — 클라우드 경로가 **CLI 없는 PC** 에서 시작될 수 있어야 한다 ────────────
+// 실측(2026-09-14 · 매니지드 최초 설치 · 앱 0.1.367 · 키트 미설치): [라이블리 클라우드로 로그인] 을 누르면
+//  «라이블리 CLI 를 찾지 못했습니다. 먼저 게이트웨이 주소를 입력하면 앱이 설치를 진행합니다.» 로 끝났다.
+//  start() 의 CLI 가드가 **모든** 작업에 걸려 있었고, 클라우드 경로만은 그 앞에서 CLI 를 쥐었어야 했다.
+//  #2044 가 없앤 닭-달걀(주소는 로그인해야 보이고, 로그인하려면 앱이 설치돼 있어야 한다)이 그대로 돌아온 자리다.
+//  ⚠ main.mjs 는 Electron 을 import 해 실행할 수 없다 — 이 파일 머리말의 원칙대로 **배선은 소스 구조로** 단언한다
+//   (기존 CL5·N2·GW15 와 같은 방식). 판단이 순수 모듈에 있는 축(E8~E12)은 아래에서 실제로 호출해 잰다.
+function cloudFlow(main) {
+  const at = main.indexOf("async function onboardCloud(");
+  assert.ok(at >= 0, "클라우드 흐름(onboardCloud)이 없다 — 버튼이 곧장 start() 로 가면 CLI 가드에 걸린다");
+  const end = main.indexOf("function askUser(", at);
+  assert.ok(end > at, "흐름의 끝을 못 찾았다(테스트가 보는 경계가 깨졌다)");
+  return main.slice(at, end);
+}
+
+t("CL6 ★ 클라우드 경로는 setup 전에 CLI 를 확보한다 — 주소를 묻는 막다른 길로 끝나지 않게 [E1·E4]", () => {
+  const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  const fn = cloudFlow(main);
+  const ensureAt = fn.indexOf("ensureCli(");
+  const startAt = fn.indexOf('start("setup-cloud"');
+  assert.ok(ensureAt >= 0, "CLI 확보 단계가 없다 — CLI 없는 PC(=모든 최초 설치)에서 이 버튼은 무조건 실패한다");
+  assert.ok(startAt >= 0, "클라우드 설치를 부르지 않는다");
+  assert.ok(ensureAt < startAt, "setup 을 먼저 몬다 — 그러면 CLI 가드가 먼저 튕긴다");
+  assert.match(fn, /if \(!c\.ok\) return c;/, "CLI 확보 실패에서 멈추지 않는다 — 없는 CLI 위에 setup 을 올린다");
+});
+
+t("CL7 ★ 클라우드 부트스트랩 출처는 클라우드다 — 새 PC 엔 저장된 게이트웨이 주소가 없다 [E1·E3]", () => {
+  const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  const fn = cloudFlow(main);
+  assert.match(fn, /cloudUrl\(\)/, "클라우드 주소를 안 쓴다");
+  assert.match(fn, /ensureCli\(\{\s*url,\s*cloud:\s*true\s*\}\)/, "클라우드 출처가 명시되지 않았다");
+  assert.ok(!/state\.gatewayUrl/.test(fn), "저장된 게이트웨이 주소를 본다 — 새 PC 엔 그 값이 null 이라 제자리다");
+  // 확보 단계는 **한 벌**이어야 한다(두 벌이 되면 한쪽만 낡는다). 주소 경로도 같은 함수를 쓴다.
+  const on = main.slice(main.indexOf("async function onboard("), main.indexOf("async function onboardCloud("));
+  assert.ok(on.includes("ensureCli("), "주소 경로가 CLI 확보를 따로 구현한다 — 단계가 두 벌이 됐다");
+  assert.match(on, /ensureCli\(\{ url: gw, cloud: false \}\)/, "주소 경로가 사람이 넣은 주소를 안 쓴다 [E5]");
+  // '쓸 수 있는 CLI' 판정(P2)은 확보 단계 안에 한 자리로 있어야 한다.
+  //  ⚠ 함수 전체에서 낱말만 찾으면 **공허하다** — `cliOutdated` 는 라벨 계산·재측정에도 나온다(실측 mutation M3:
+  //   건너뛰기 조건을 `if (existing)` 으로 깎았는데 GREEN 이었다). 건너뛰는 **그 조건식**만 본다.
+  const ens = main.slice(main.indexOf("async function ensureCli("), main.indexOf("function bootstrapFailNote("));
+  const guard = /if \(([^)]*)\) return \{ ok: true, cli: existing \};/.exec(ens);
+  assert.ok(guard, "쓸 수 있는 CLI 가 있어도 매번 다시 받는다 [E2]");
+  assert.match(guard[1], /cliOutdated/, "구버전 CLI 를 그냥 쓴다 — 앱이 진행 상황을 하나도 못 듣는다 [E3]");
+  assert.match(guard[1], /cliBroken/, "못 띄우는 CLI 를 그냥 쓴다 [E3]");
+});
+
+t("CL8 ★ 클라우드 CLI 는 워크스페이스를 몰라도 받아진다 — 그 한 줄에 테넌트 주소가 없다 [E1·E8]", () => {
+  const prev = process.env.LIVELY_CLOUD_URL;
+  delete process.env.LIVELY_CLOUD_URL;
+  try {
+    assert.equal(cloudUrl(), DEFAULT_CLOUD_URL);
+    // 실제로 spawn 될 명령을 잰다(문구가 아니라 argv). 여기에 워크스페이스 주소가 들어갈 자리가 없다.
+    assert.deepEqual(bootstrapCommand(cloudUrl(), "darwin"),
+      { cmd: "/bin/sh", args: ["-c", "curl -fsSL https://app.lvly.io/cli | sh"] });
+    assert.deepEqual(bootstrapCommand(cloudUrl(), "win32").args.slice(-1),
+      ["irm https://app.lvly.io/cli.ps1 | iex"]);
+    // env 미설정이면 argv 에도 주소를 안 붙인다 — CLI 의 기본값이 정본이다.
+    assert.deepEqual(argvFor("setup-cloud", {}), ["setup", "--cloud"]);
+  } finally { if (prev === undefined) delete process.env.LIVELY_CLOUD_URL; else process.env.LIVELY_CLOUD_URL = prev; }
+});
+
+t("CL9 클라우드 기본 주소는 CLI 의 것과 같아야 한다 — 두 자리가 갈리면 로그인과 설치가 다른 곳을 본다 [E8]", () => {
+  // 앱은 kit/cli/lively.mjs 를 import 할 수 없다(패키징 경계) — HARNESS_IDS 와 같은 사정이라 글자로 대조한다.
+  const cli = readFileSync(fileURLToPath(new URL("../../kit/cli/lively.mjs", import.meta.url)), "utf8");
+  const m = /export const DEFAULT_CLOUD_URL = "([^"]+)"/.exec(cli);
+  assert.ok(m, "kit/cli/lively.mjs 에서 DEFAULT_CLOUD_URL 을 못 찾았다(이름이 바뀌었나)");
+  assert.equal(DEFAULT_CLOUD_URL, m[1], "앱과 CLI 의 클라우드 주소가 갈렸다");
+});
+
+t("CL10 env 덮어쓰기는 argv 와 부트스트랩이 **같은 값**을 본다 [E9·E10]", () => {
+  const prev = process.env.LIVELY_CLOUD_URL;
+  try {
+    process.env.LIVELY_CLOUD_URL = "http://127.0.0.1:9999";
+    assert.deepEqual(argvFor("setup-cloud", {}), ["setup", "--cloud", "http://127.0.0.1:9999"]);
+    assert.equal(cloudUrl(), "http://127.0.0.1:9999");
+    assert.deepEqual(bootstrapCommand(cloudUrl(), "darwin").args,
+      ["-c", "curl -fsSL http://127.0.0.1:9999/cli | sh"]);
+    // 말미 슬래시는 두 자리가 같게 다듬는다(주소 입력과 같은 규약).
+    process.env.LIVELY_CLOUD_URL = "http://127.0.0.1:9999/";
+    assert.equal(cloudUrl(), "http://127.0.0.1:9999");
+    for (const bad of ["--token", "https://a b", "https://a;rm", "file:///etc/passwd", "app.lvly.io"]) {
+      process.env.LIVELY_CLOUD_URL = bad;
+      assert.throws(() => cloudUrl(), /형식/, `통과해버림: ${bad}`);
+      assert.throws(() => argvFor("setup-cloud", {}), /형식/, `argv 만 통과해버림: ${bad}`);
+    }
+  } finally { if (prev === undefined) delete process.env.LIVELY_CLOUD_URL; else process.env.LIVELY_CLOUD_URL = prev; }
+});
+
+t("CL11 ★ CLI 를 못 찾았을 때의 안내가 **주소를 모르는 사람**에게 막다른 길이 아니다 [E11·E12]", () => {
+  const help = cliMissingHelp("", "darwin");
+  assert.match(help, /클라우드로 로그인/, "주소 없이 시작되는 문을 안 가리킨다 — 그게 닭-달걀을 되살린 문장이었다");
+  assert.ok(!/먼저 게이트웨이 주소를 입력하면/.test(help),
+    "옛 문장 그대로다 — 매니지드 셀프서브에겐 물어볼 수 없는 값을 묻는다");
+  assert.match(help, /회사에 직접 설치/, "자가호스팅 안내가 사라졌다");
+  // E12 무회귀 — 주소를 알면 종전대로 그 플랫폼의 한 줄을 준다(GW8 과 같은 축).
+  assert.match(cliMissingHelp("https://acme.app.lvly.io", "win32"), /irm https:\/\/acme\.app\.lvly\.io\/cli\.ps1 \| iex/);
 });
 
 console.log(`\n${pass} passed`);

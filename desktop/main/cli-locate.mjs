@@ -107,7 +107,11 @@ export function bootstrapOneLiner(gatewayUrl, platform = process.platform) {
  */
 export function cliMissingHelp(gatewayUrl, platform = process.platform) {
   const one = bootstrapOneLiner(gatewayUrl, platform);
-  if (!one) return "라이블리 CLI 를 찾지 못했습니다. 먼저 게이트웨이 주소를 입력하면 앱이 설치를 진행합니다.";
+  // ⚠ 주소를 모를 때 **주소를 물어서는 안 된다**(#3968). 매니지드 셀프서브에겐 그게 곧 닭-달걀이다 —
+  //  주소는 로그인 후 화면 안에서만 보이는데, 로그인하려면 앱이 설치돼 있어야 한다. 주소 없이 시작되는
+  //  문(클라우드 로그인)을 먼저 가리키고, 주소는 그게 실제로 필요한 쪽(자가호스팅)에만 권한다.
+  if (!one) return "라이블리 CLI 를 찾지 못했습니다. [라이블리 클라우드로 로그인] 을 누르면 앱이 설치까지 진행합니다"
+    + " — 회사에 직접 설치한 라이블리라면 «회사에 직접 설치했어요» 에 그 주소를 넣으세요.";
   return platform === "win32"
     ? `라이블리 CLI 가 아직 없습니다. PowerShell 에서 아래 한 줄을 실행한 뒤 앱을 다시 여세요:\n  ${one}`
     : `라이블리 CLI 가 아직 없습니다. 터미널에서 아래 한 줄을 실행한 뒤 앱을 다시 여세요:\n  ${one}`;
