@@ -409,6 +409,12 @@ function startBackgroundSweeps(): void {
       .then(({ sweepLivSecondTurn }) => sweepLivSecondTurn())
       .catch((err) => logger.warn({ err }, "리브 2턴 스윕 실패(비치명 — 다음 tick 재시도)"));
   }, 60_000).unref();
+  // #1631 — 묶음 보정: 처음 설정을 끝냈는데 묶음이 0개로 남은 워크스페이스를 한 번 채운다(org/liv/group-backfill.ts).
+  //  워크스페이스마다 결론이 나면 다시 안 본다 — 부팅 2분 뒤 1회 + 1시간 주기면 충분하다(매니지드는 요청 정비표가 같은 함수를 부른다).
+  const groupBackfill = () => perTenant("category-group-backfill",
+    () => import("../org/liv/group-backfill.js").then((m) => m.backfillCategoryGroups()));
+  setTimeout(() => { void groupBackfill(); }, 120_000).unref();
+  setInterval(() => { void groupBackfill(); }, 60 * 60_000).unref();
 
   // #2022 — 유령 세션 인스턴스 청소(세션은 없는데 좌측 목록에 남은 행). 부팅 90초 뒤 1회 + 6h 주기.
   //  느긋해도 되는 일이다(조용한 지 3일 지난 것만 본다) — 자주 돌 이유가 없고, 닫기는 되돌릴 수 있다.

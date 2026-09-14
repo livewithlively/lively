@@ -106,6 +106,11 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 반드시 **테넌트 스코프**다 — 전역으로 달면 딱 한 테넌트만 앱을 받는다.
   { key: "builtin-app-seed", intervalMs: SIX_HOURS_MS,
     run: () => import("../apps/seed.js").then((m) => m.seedBuiltinApps()) },
+  // 묶음 보정(#1631, 2026-09-14) — 처음 설정을 끝냈는데 묶음이 0개로 남은 워크스페이스를 한 번 채운다(실측 lively-agent-2-6a84).
+  //  워크스페이스마다 결론이 나면 그 프로세스에선 다시 안 본다(group-backfill.ts) — 주기는 그 한 번이 늦지 않을 정도면 된다.
+  //  ⚠ 테넌트 스코프 — 묶음·카테고리·구성원 전부 그 워크스페이스 것이다.
+  { key: "category-group-backfill", intervalMs: TEN_MIN_MS,
+    run: () => import("../org/liv/group-backfill.js").then((m) => m.backfillCategoryGroups()) },
   //  ⚠ **`reapIdleSessions`(#1059 F)는 일부러 빼 뒀다** — tmux 세션을 **죽인다.** 정책 기본이 0(끔)이라
   //   당장은 no-op 이지만, 파괴적 동작을 이 표에 얹는 것은 #2148(매니지드 유휴 회수)의 판단이다.
   //   그 짝인 위 백필은 올린다 — 원래 주석이 "회수 **전에** 백필한다"고 못 박았고 백필 자체는 안전하다.
