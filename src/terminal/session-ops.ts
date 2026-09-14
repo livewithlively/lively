@@ -25,6 +25,7 @@ import {
 } from "./terminal-sessions.js";
 import { sendKeysToSession } from "./send-keys.js";
 import { injectFirstPrompt } from "./session-first-prompt.js";
+import { runOutboxStep } from "./outbox-host-step.js";
 import { applySessionProject } from "./session-project.js";
 import type { LivelyUser } from "../context.js";
 
@@ -34,7 +35,7 @@ import type { LivelyUser } from "../context.js";
  */
 export const SESSION_OPS = [
   "list", "create", "createAppSession", "kill", "edit", "gone", "label",
-  "sendKeys", "setProject", "injectFirstPrompt", "markActive", "markSeen",
+  "sendKeys", "setProject", "injectFirstPrompt", "markActive", "markSeen", "outboxStep",
 ] as const;
 
 export type SessionOp = (typeof SESSION_OPS)[number];
@@ -96,6 +97,10 @@ export async function runSessionOp(op: SessionOp, args: Record<string, unknown>)
         .catch((e) => console.warn(`[session-host] 첫 지시 주입 실패(${id}):`, (e as Error)?.message ?? e));
       return { ok: true };
     }
+
+    // #2600 T2 d6(#3773) — 아웃박스의 한 걸음(보기·누르기·치기). 준비 판정은 게이트웨이가 하고 여기는 실행만 한다.
+    //  ⚠ 거절·실패도 **값으로** 돌려준다 — 위 `sendKeys` 처럼 던지면 «한 글자도 안 쳤다» 가 오류 문자열로 뭉개진다.
+    case "outboxStep": return runOutboxStep(args);
 
     case "create":
     case "createAppSession": {

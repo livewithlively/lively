@@ -4,9 +4,10 @@
 //   보낼 것  P1 변화 있음 · P2 ★변화 없음(침묵이 아니라 박동) · P3 강제 · P4 위탁 태스크 추적 중 ·
 //            P5 강제 + 변화 없음
 //   받는 쪽  B1 스냅샷이 있으면 나이를 되돌린다 · B2 ★스냅샷이 아직 없으면 무시한다(fail-closed)
+//   RPC 뒤   #3773 P10 아웃박스 걸음만 강제 push 면제(스크래치패드 `d6/pr1/spec.md` — 배선은 가드 S19a)
 import assert from "node:assert/strict";
 import test from "node:test";
-import { beatRefreshes, statePushKind } from "./state-freshness.js";
+import { beatRefreshes, pushesStateAfter, statePushKind } from "./state-freshness.js";
 
 test("P1 세션 목록이 바뀌었으면 내용을 실어 보낸다", () => {
   assert.equal(statePushKind({ force: false, changed: true, tracked: 0 }), "state");
@@ -35,4 +36,14 @@ test("B1 스냅샷이 있으면 박동이 나이를 되돌린다", () => {
 test("★★ B2 스냅샷이 아직 없으면 박동을 무시한다 — 「본 적 없는 것」을 신선하다고 하면 빈 목록으로 소유가 넘어간다", () => {
   assert.equal(beatRefreshes(null), false);
   assert.equal(beatRefreshes(undefined), false);
+});
+
+test("★ #3773 P10 아웃박스 걸음(outboxStep) 뒤에는 강제 push 를 안 한다 — 준비 판정의 폴마다 전량 관측이 따라붙지 않게", () => {
+  assert.equal(pushesStateAfter("outboxStep"), false);
+});
+
+test("#3773 P10 그 밖의 op 는 종전대로 강제 push 한다 — 모르는 op·빈 이름·대소문자만 다른 이름도(안 보내는 쪽으로 틀리지 않는다)", () => {
+  for (const op of ["markActive", "create", "kill", "sendKeys", "injectFirstPrompt", "", "outboxstep", "unknownOp"]) {
+    assert.equal(pushesStateAfter(op), true, `${JSON.stringify(op)} 뒤 강제 push 가 빠졌다 — 만들기·죽이기가 3초 늦게 보인다`);
+  }
 });

@@ -41,3 +41,15 @@ export function translateNodeRpcError(msg: string, map: NodeRpcErrorMap): HttpEr
   }
   return new HttpError(502, map.failed(msg));
 }
+
+/**
+ * 이 nodeRpc 실패 뒤에 **그 요청이 노드에 갔을 수 있나**(순수, #2600 T2 d6 · #3773) — `sent === false` 일 때만 «안 갔다» 다.
+ *
+ *  표식은 `registry.nodeRpc` 가 새긴다: 연결 없음·미지원 op·ws.send 가 던짐 = false / 시간 초과·응답 전 끊김·노드가 실행하다
+ *  실패 = true. 메시지로는 못 가른다 — 같은 `node-offline` 이 «안 보냈다» 와 «보낸 뒤 끊겼다» 둘 다다(위 번역이 메시지만 보는 것과 축이 다르다).
+ *  ⚠ 표식이 없으면(다른 경로의 오류·문자열·null) **갔을 수 있다** 로 답한다. 다시 보내도 되는지 모르면 다시 보내지 않는 쪽이
+ *   안전하다 — 치기(아웃박스)를 두 번 하면 같은 지시가 두 번 간다.
+ */
+export function rpcMaybeSent(err: unknown): boolean {
+  return (err as { sent?: unknown } | null | undefined)?.sent !== false;
+}
