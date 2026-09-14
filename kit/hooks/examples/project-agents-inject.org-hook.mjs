@@ -45,7 +45,8 @@ function resolveAttachments(prompt, projDir) {
     for (const line of m[2].split("\n")) {
       const v = line.replace(/^\s*-\s*/, "").trim();
       if (!v) continue;
-      if (path.isAbsolute(v)) { add(v, fs.existsSync(v) ? v : (refoldAbs(v, projDir) || v)); continue; }
+      if (path.isAbsolute(v)) { add(v, fs.existsSync(v) || !projDir ? v : (refoldAbs(v, projDir) || v)); continue; }
+      if (!projDir) continue;          // 상대경로인데 펼 좌표가 없다 — 말할 수 있는 게 없으니 조용히 넘긴다
       add(v, path.join(projDir, v));
     }
   }
@@ -135,8 +136,13 @@ export function executionSessionId(input = {}, env = process.env) {
 
   // ── 첨부 좌표 — revision(changed) 과 **무관하게 매 턴** 판정한다. 첨부는 아무 턴에나 실려 온다. ──
   const attachPid = Number(body.project_id || 0);
-  if (attachPid > 0 && (body.folder || body.folder_abs_path)) {
-    const projDir = body.folder_abs_path ? String(body.folder_abs_path) : path.join(sharedRootOf(), String(body.folder));
+  {
+    // 프로젝트가 없어도 판정한다 — 그때는 펴 줄 좌표가 없어 **절대경로의 존재 확인만** 하지만, 그거면 충분하다.
+    //  이 버그의 피해는 «파일이 안 온 것» 이 아니라 «없는데 있다고 믿고 근처 것을 읽은 것» 이라, 어느 분기에서든
+    //  «없다» 는 말이 나오는 쪽이 «조용히 틀리는» 쪽보다 낫다.
+    const projDir = (attachPid > 0 && (body.folder || body.folder_abs_path))
+      ? (body.folder_abs_path ? String(body.folder_abs_path) : path.join(sharedRootOf(), String(body.folder)))
+      : null;
     const found = resolveAttachments(input.prompt ?? input.user_prompt ?? "", projDir);
     if (found.length) {
       const have = found.filter((f) => f.exists), miss = found.filter((f) => !f.exists);
@@ -146,7 +152,9 @@ export function executionSessionId(input = {}, env = process.env) {
       if (miss.length) lines.push("⚠ [라이블리] 아래 자료가 **이 컴퓨터에 없습니다** — 아직 안 내려왔거나 지워졌습니다:\n"
         + miss.map((f) => `- ${f.shown} (찾은 자리: ${f.abs})`).join("\n")
         + "\n\n**근처의 다른 파일을 대신 읽지 마세요.** 그 파일을 봤다고 말하지도 마세요 — 없으면 없다고 하고, "
-        + `필요하면 \`project_get_v6(${attachPid})\` 의 자료나 웹 자료함을 확인하도록 사람에게 요청하세요.`);
+        + (attachPid > 0
+          ? `필요하면 \`project_get_v6(${attachPid})\` 의 자료나 웹 자료함을 확인하도록 사람에게 요청하세요.`
+          : "필요하면 사람에게 파일을 다시 올려 달라고 요청하세요."));
       if (lines.length) await writeStdout(lines.join("\n\n") + "\n");
     }
   }
