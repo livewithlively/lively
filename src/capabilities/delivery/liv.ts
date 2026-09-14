@@ -13,7 +13,7 @@ import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import { restRead } from "./shared.js";
 import type { LivProfile } from "../../org/store/members.js";
-import { livFindings, livTopFindings, livMature, type LivSnapshot } from "../../org/delivery/liv-findings.js";
+import { livFindings, livTopFindings, livMature, LIV_PROPOSALS_ON, type LivSnapshot } from "../../org/delivery/liv-findings.js";
 import { askTargetVerdict, askStillOpen } from "../../org/delivery/liv-secret.js";
 import { livHomeMode } from "../../org/delivery/liv-home.js";
 
@@ -29,7 +29,8 @@ export const livCapabilities: Capability[] = [
     "리브 화면이 읽는 현황 하나 — '지금 손볼 것' 카드 목록과 대기 중인 요청(자격·객관식·업로드)을 반환한다. " +
     "`mode` 는 홈 전환용이 아니라 '리브의 손이 필요한가' 판정이다(능동 점검용). " +
     "판정은 온보딩·파이프라인의 기존 계산을 소비하며 여기서 새로 만들지 않는다. 카드마다 '리브에게 맡기기' 가 " +
-    "세션에 보낼 프롬프트가 실려 있어, 사람이 터미널을 직접 안 봐도 일이 진행된다.",
+    "세션에 보낼 프롬프트가 실려 있어, 사람이 터미널을 직접 안 봐도 일이 진행된다. " +
+    "⚠ 제안 카드는 지금 꺼져 있다(LIV_PROPOSALS_ON=false, 2026-09-14) — findings 는 빈 목록, total 은 0 이다.",
     [{ method: "GET", paths: ["/api/ui/me/liv"], parse: (req) => ({ choice: (req.query?.choice ?? "") as string }) }],
     async (input: { choice?: string }, user: LivelyUser) => {
       const userId = user?.userId;
@@ -93,8 +94,10 @@ export const livCapabilities: Capability[] = [
 
       return {
         mode: decision.mode, reason: decision.reason,
-        findings: livTopFindings(findings, TOP),
-        total: findings.length,
+        // 제안 카드는 꺼 둔다(LIV_PROPOSALS_ON — 원준 2026-09-14). 판정(mode)은 그대로 계산하고, 사람에게 내보내는
+        //  카드와 개수만 비운다 — 화면(#/liv)은 빈 목록이면 조용한 첫 화면을 그린다.
+        findings: LIV_PROPOSALS_ON ? livTopFindings(findings, TOP) : [],
+        total: LIV_PROPOSALS_ON ? findings.length : 0,
         // 화면이 상태를 그릴 근거 — 카드가 없어도 "무엇을 보고 그렇게 판단했나"를 보여줄 수 있어야 한다.
         context: { isAdmin, claudeLoggedIn, nodes, org: org ? { done: org.done, total: org.total, complete: org.complete } : null },
         // 리브가 세션에서 다시 묻지 않도록 프로필을 함께 준다(업무 방식·결정 이력). 거절 목록은 이미
