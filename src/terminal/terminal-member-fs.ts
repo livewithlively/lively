@@ -26,7 +26,7 @@ export const LS_JS =
   "process.stdout.write(JSON.stringify(o))";
 const STAT_JS =
   "const fs=require('fs');try{const s=fs.statSync(process.argv[1]);" +
-  "process.stdout.write(JSON.stringify({size:s.size,file:s.isFile(),dir:s.isDirectory()}))}" +
+  "process.stdout.write(JSON.stringify({size:s.size,file:s.isFile(),dir:s.isDirectory(),mtime:Math.floor(s.mtimeMs)}))}" +
   "catch{process.stdout.write('null')}";
 
 /**
@@ -176,7 +176,14 @@ export function memberNodeJson<T>(osUser: string, js: string, input: unknown): P
   });
 }
 
-export function memberStat(osUser: string, absPath: string): Promise<{ size: number; file: boolean; dir: boolean } | null> {
+/**
+ * 격리 멤버 uid 로 stat. mtime(ms, floor)까지 준다 — 업로드 응답의 **결과 도장**이 그 값이어야
+ *  up-sync 훅이 로컬 mtime 을 맞추고 원장 기준선으로 적는다(#3787: 게이트웨이 fsp.stat 은 700 홈을 못 읽어
+ *  개인 폴더 업로드만 도장이 비어 있었다). 필드 보탬이라 size·file·dir 만 읽던 호출부엔 무영향.
+ *  ⚠ 자는 `Math.floor(mtimeMs)` — 매니페스트·원장·프로젝트 라우트와 **같아야** 한다(round 로 재면 같은 파일이
+ *   두 값으로 갈려 «바뀌었다» 오판이 난다, #762).
+ */
+export function memberStat(osUser: string, absPath: string): Promise<{ size: number; file: boolean; dir: boolean; mtime?: number } | null> {
   return new Promise((resolve, reject) => {
     const c = memberSpawn(osUser, ["node", "-e", STAT_JS, absPath], ["ignore", "pipe", "pipe"]);
     const err = collectErr(c);
