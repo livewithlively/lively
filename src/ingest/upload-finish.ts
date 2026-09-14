@@ -16,6 +16,7 @@ import { localExternalId } from "./local-file-core.js";
 import type { LocalRoot } from "./local-file-core.js";
 import { ingestLocalUpload } from "./local-file.js";
 import { grantSharedGroupWrite } from "../project/project-fs.js";
+import { memberStat } from "../terminal/terminal-member-fs.js";   // 격리 멤버(#524) 개인 폴더는 그 uid 로만 stat 된다
 import { logger } from "../log.js";
 
 /** 업로드가 놓인 **좌표** — localRootForBrowse 의 반환과 같은 모양(프로젝트 라우트는 직접 만든다). */
@@ -62,7 +63,13 @@ export async function finishUpload(o: {
   }
   // ③ 도장 — up-sync 훅이 **로컬 mtime 을 이 값으로 맞추고 원장 기준선으로 적어야** 다음 pull 이
   //   「내가 올린 것」과 「남이 고친 것」을 구별한다. 없으면 크기·시각 추측으로 남의 최신본을 덮는다(#905 C3).
-  const st = await fsp.stat(abs).catch(() => null);
+  //  ⚠ 격리 멤버(#524)의 개인 폴더는 700 이라 **게이트웨이가 직접 stat 못 한다** — 그 uid 로 물어야 한다.
+  //   종전엔 여기가 fsp.stat 하나뿐이라 개인 폴더 업로드만 조용히 도장이 비었다(#3787 E2E 실측 2026-09-14).
+  const st = osUser
+    ? await memberStat(osUser, abs)
+      .then((r) => (r && r.file && r.mtime ? { mtimeMs: r.mtime, size: r.size } : null))   // mtime 없으면 도장 생략(0 은 epoch 이라 더 나쁘다)
+      .catch(() => null)
+    : await fsp.stat(abs).catch(() => null);
   return {
     ok: true, path: abs,
     // ④ 좌표 — 자료 external_id 와 **같은 문자열**. 절대경로(`path`)는 이 게이트웨이 것이라 세션이 다른
