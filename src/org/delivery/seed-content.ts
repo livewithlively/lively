@@ -34,7 +34,8 @@ const RETIRED_SEED_KNOWLEDGE: string[] = ["project-closeout-routine"]; // → pr
 //    있다」는 계약이 **실행 위치와 무관하게** 성립해야 한다. 종전엔 이 셋이 기본 꺼짐이라 로컬 노드 세션은
 //    공유폴더를 영영 못 받고(웹에서 붙인 첨부가 세션에 안 감 → AI 가 근처 다른 파일로 답하는 무음 오답),
 //    만든 산출물도 웹 자료함에 안 올라갔다. 매니지드(colocated)는 셋 다 즉시 no-op 이라 비용이 안 붙는다.
-const PROMOTE_ENABLED = new Set(["session-log-capture", "project-pull-turn", "project-pull-tool", "project-push", "project-push-tool"]);
+const PROMOTE_ENABLED = new Set(["session-log-capture",
+  "project-pull-turn", "project-pull-tool", "project-push", "project-push-tool", "project-push-turn", "project-push-start"]);
 
 export async function seedDefaultContent(): Promise<SeedResult> {
   const ctx: WriteCtx = { actor: "system", source: "migration" };

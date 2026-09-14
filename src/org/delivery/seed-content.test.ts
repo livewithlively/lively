@@ -99,7 +99,8 @@ const INJECTIONS = new Set(["always", "recalled"]);
 //  기본 꺼짐이면 로컬 노드 세션에선 그 계약이 거짓이 된다(자료도 안 오고, 만든 것도 안 올라간다).
 //  매니지드(colocated)는 셋 다 즉시 no-op 이라 비용이 안 붙는다 — 켜 두는 쪽의 손해가 없다.
 {
-  for (const id of ["project-pull", "project-pull-turn", "project-pull-tool", "project-push", "project-push-tool"]) {
+  for (const id of ["project-pull", "project-pull-turn", "project-pull-tool",
+    "project-push", "project-push-tool", "project-push-turn", "project-push-start"]) {
     const h = DEFAULT_HOOKS.find((x) => x.id === id);
     assert.ok(h, `동기화 훅 '${id}' 이 시드에 없음`);
     assert.equal(h!.enabled, true, `동기화 훅 '${id}' 이 기본 꺼짐 — 로컬 노드 세션에서 cwd 싱크 계약이 깨진다(#3787)`);
@@ -115,7 +116,25 @@ const INJECTIONS = new Set(["always", "recalled"]);
 
   const tool = DEFAULT_HOOKS.find((x) => x.id === "project-push-tool")!;
   assert.equal(tool.event, "PostToolUse", "project-push-tool 은 PostToolUse 여야 한다");
-  assert.ok(/Bash/.test(tool.matcher ?? ""), "project-push-tool 매처에 Bash 가 없음 — 파일 변경의 상당수가 sed·리다이렉트·git 으로 일어난다");
+  // #3787 — 매처를 도구 이름으로 좁히면 «도구를 안 쓰는 변경»(터미널 드롭·탐색기·다른 앱의 저장)이 통째로 빠진다.
+  //  선검사가 네트워크 앞에서 끝나므로(로컬 walk 0.02~0.13ms, 무변경이면 왕복 0) 넓혀도 비용이 거의 없다.
+  assert.equal(tool.matcher, ".*", "project-push-tool 매처가 좁다 — 파일은 어떤 도구를 쓰는 턴에도 바뀐다");
+
+  // up-sync 계기 전수 — **하나라도 빠지면 그만큼 파일이 늦게 간다.** Stop·PostToolUse 만이던 동안, 사람이
+  //  파일을 넣고 바로 지시를 치면 그 변경이 턴 하나를 통째로 기다렸다(2026-09-14 원준님 실측).
+  const upEvents = new Set(DEFAULT_HOOKS.filter((x) => /^project-push/.test(x.id) && x.enabled).map((x) => x.event));
+  for (const ev of ["Stop", "PostToolUse", "UserPromptSubmit", "SessionStart"]) {
+    assert.ok(upEvents.has(ev), `up-sync 가 ${ev} 에 안 걸려 있다 — 그 계기의 변경은 다음 턴까지 안 올라간다`);
+  }
+  //  SessionStart 판은 **pull 뒤에** 돈다 — 먼저 받고 나서 올린다(반대면 갓 뜬 슬롯이 빈 폴더로 판정될 여지가 생긴다).
+  const pushStart = DEFAULT_HOOKS.find((x) => x.id === "project-push-start")!;
+  const pullStart = DEFAULT_HOOKS.find((x) => x.id === "project-pull")!;
+  assert.ok(pushStart.sort > pullStart.sort, "SessionStart 에서 push 가 pull 보다 먼저 돈다");
+  //  같은 소스 한 파일이어야 한다 — 복제하면 반드시 갈라진다(push 는 팀 문서를 지우고 덮을 수 있는 훅이다).
+  for (const id of ["project-push-tool", "project-push-turn", "project-push-start"]) {
+    assert.equal(DEFAULT_HOOKS.find((x) => x.id === id)!.source_code,
+      DEFAULT_HOOKS.find((x) => x.id === "project-push")!.source_code, `${id} 가 project-push 와 다른 소스다`);
+  }
   assert.equal(DEFAULT_HOOKS.find((x) => x.id === "project-push")!.event, "Stop", "project-push 는 Stop 이어야 한다(놓친 것 쓸어담는 그물)");
   ok("cwd 싱크 훅 4종이 기본 켜짐 + push 가 Stop·PostToolUse 양쪽에 걸림(#3787)");
 }

@@ -24,6 +24,10 @@ import { isConfined, probeLocal } from "./path-jail.js";   // #3668 T1 — 심�
 import { receiveUpload, uploadError, nfcPath } from "./upload-file.js";
 import { supersedeLocalPath, localRootForBrowse, parseLocalExternalId, LOCAL_SYSTEM } from "../ingest/local-file.js";
 import { finishUpload, type UploadCoord } from "../ingest/upload-finish.js";   // #3787 D — 업로드 마무리(그룹 rw·자료·좌표·도장)는 한 자리
+import { projectOffsetOfSessionDir, projectRelForUpload } from "./node-upload-coord.js";   // #3787 — 노드 세션 업로드의 게이트웨이 좌표
+import { executionSessionProject } from "../v6/execution-session-store.js";
+import { getProjectRow } from "../v6/project-store.js";
+import { projectAbsPath } from "../project/project-fs.js";
 import { getSource } from "../v6/source-store.js";   // #1631 — 자료 원본 창구의 공개범위(자료 상세와 같은 판정)
 import { nodeCanAttach, nodeRpc, isSelfNode, isSessionHostNode } from "../node/registry.js";
 import { relayNodeId, sameTmuxCoordinate, isBoxSessionRow } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #3745/#3870 — 박스 세션엔 세션 호스트 좌표도 같은 tmux 다
@@ -118,6 +122,33 @@ async function resolveInSession(req: express.Request, requireFile: boolean, cano
   const osUser = await sessionOsUser(req.params.id);
   await assertJailed(base, abs, osUser);
   return { base, abs, osUser };
+}
+
+/**
+ * 노드 세션 업로드가 **게이트웨이 정본**으로 갈 자리인가(#3787). 못 잡으면 null → 종전대로 릴레이.
+ *  판정은 DB 한 줄(이 세션의 프로젝트)과 좌표 규약뿐이다 — 노드에 아무것도 묻지 않는다(왕복 0).
+ *  ⚠ 세션 작업폴더는 **노드 로컬 경로**(윈도우면 `C:\…`)라 게이트웨이 fs 로 풀면 안 된다. 규약으로만 접는다.
+ */
+async function gatewayUploadForNodeSession(sessionId: string, memberId: string, rel: string)
+  : Promise<{ base: string; rel: string; nodeAbs: string; coord: UploadCoord } | null> {
+  try {
+    if (!memberId) return null;
+    const cur = await executionSessionProject(sessionId, memberId);
+    const pid = Number(cur?.project_id || 0);
+    if (!Number.isInteger(pid) || pid <= 0) return null;          // 프로젝트 세션이 아니다
+    const dir = await resolveSessionDir(sessionId, async () => "");
+    const offset = projectOffsetOfSessionDir(dir, pid);
+    if (offset === null) return null;                             // cwd 가 그 프로젝트 폴더가 아니다
+    const projRel = projectRelForUpload(offset, rel);
+    if (!projRel) return null;
+    const row = await getProjectRow(pid);
+    if (!row?.folder) return null;
+    const base = projectAbsPath(row.folder);
+    //  노드에서의 절대경로 — 드롭 UI 가 입력창에 꽂을 값. 세션 cwd + 드롭 rel 을 **그 노드의 구분자로** 잇는다.
+    const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
+    const nodeAbs = dir.replace(/[\\/]+$/, "") + sep + String(rel).replace(/^[\\/]+/, "").split(/[\\/]/).join(sep);
+    return { base, rel: projRel, nodeAbs, coord: { root: { kind: "project", id: pid }, base, folder: row.folder, channelFallback: row.name } };
+  } catch { return null; }
 }
 
 /**
@@ -436,6 +467,25 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
       //  다를 수 있어(프로젝트 하위 폴더에서 뜬 하네스) 상대경로는 «파일이 없다» 가 된다 — 로컬 경로 분기가
       //  절대경로(`abs`)를 주는 이유가 정확히 그것이고, 노드 분기만 그 약속을 어기고 있었다(agent.ts fsWrite 는
       //  이미 `{ ok, path: abs }` 를 돌려준다 — 게이트웨이가 그걸 읽지 않았을 뿐이다).
+      // ★ #3787 — **게이트웨이가 정본을 먼저 쓴다.** 이 요청의 바이트는 브라우저 → 게이트웨이 → 노드로 흐르므로
+      //  게이트웨이 손에 이미 있다(노드에서 «만들어진» 파일과 반대다 — 그건 못 읽어서 push 훅이 필요하다).
+      //  종전엔 릴레이만 하고 자기 사본을 안 써서, 중앙에 닿는 길이 push 훅 하나뿐이었다 → **하네스가 안 돌면
+      //  영영 안 왔다**(실측 2026-09-14: 윈도우 노드 크레딧 소진 중 드롭한 파일이 몇 시간 로컬에만 있었다).
+      //  노드 배달은 **pull 이 한다** — 여기서 같이 릴레이하면 fsWrite 가 mtime 을 못 맞춰 두 사본의 mtime 이
+      //  갈리고, 원장 기준선이 없어 다음 pull 이 «공통 조상 없는 두 판본» 으로 보고 영구 거짓 충돌을 만든다.
+      //  드롭은 경로를 입력창에 꽂을 뿐이고 사람이 엔터를 치므로, project-pull-turn 이 모델보다 먼저 받아둔다.
+      const gw = await gatewayUploadForNodeSession(req.params.id, idOf(userOf(req)), rel);
+      if (gw) {
+        const absGw = path.resolve(gw.base, gw.rel);
+        if (absGw === gw.base || !absGw.startsWith(gw.base + path.sep)) throw new HttpError(400, "허용 경로를 벗어났습니다");
+        await fsp.mkdir(path.dirname(absGw), { recursive: true });
+        await fsp.writeFile(absGw, bodyBuf);
+        const fin = await finishUpload({ coord: gw.coord, abs: absGw, osUser: null, uploader: { id: viewerFor(req), name: userOf(req)?.email ?? null } });
+        // path 는 **노드에서의 절대경로**로 답한다 — 드롭 UI 가 이 값을 입력창에 꽂고, 그 안의 에이전트는 노드에 산다.
+        //  (아직 안 내려왔을 수 있지만 그게 맞는 경로다. 없으면 주입 훅이 «이 컴퓨터에 없습니다» 로 크게 말한다.)
+        res.json({ ...fin, path: gw.nodeAbs, delivery: "pull" }); return;
+      }
+      // 좌표를 못 잡는 세션(개인 폴더·프로젝트 밖) — 게이트웨이에 둘 자리가 없다. 종전대로 릴레이만.
       let nodeAbs = "";
       do {
         const slice = bodyBuf.subarray(offset, offset + NODE_FS_CHUNK);
