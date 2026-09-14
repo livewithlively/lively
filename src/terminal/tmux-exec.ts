@@ -9,10 +9,9 @@ import os from "node:os";
 import { TMUX_BIN, tenantSlug, isPsmuxBin } from "./catalog.js";
 import { execTopology, tmuxArgvFor, tmuxServerIsDedicated, type TmuxListScope } from "../exec-topology.js";   // #2599 T2 — 「어디서 도나」는 토폴로지 한 곳에만 묻는다
 import { planTmux, runPlan, outcomeToError, tmuxSessionOf } from "./tmux-route.js";                        // #2600 T2 (d) d2 — 코어 직접 경로의 «무엇을 어디로»
-import { makeBrokerClient, type BrokerTransport } from "./broker-client.js";                // #2600 T2 (d) d2 — 그 전송(소켓·허브)
-import { shadowTmux } from "./tmux-shadow.js";
+import { makeBrokerClient, type BrokerTransport } from "./broker-client.js";                // #2600 T2 (d) d2 — 그 전송(노드 박스 브로커 소켓 · 허브는 T3-a 로 걷었다)
 import { makeTmuxCallCensus, censusSite } from "./tmux-call-census.js";   // #2600 T2 d4 — 「이 프로세스가 아직 tmux 를 부르나」의 계기(전수·route 무관)
-import { logger } from "../log.js";                                               // #2600 T2 (d) d3 — 옛 경로가 답하고 코어 경로는 견주기만
+import { logger } from "../log.js";                                               // 계수 창 보고
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 
 const execFileAsync = promisify(execFile);
@@ -75,19 +74,17 @@ export function tmuxTimeoutMs(relay: readonly string[]): number {
 }
 
 /**
- * 코어 직접 경로(#2600 T2 (d) d2)가 **이 호출**에 성립하나 — 셋이 다 참일 때만: 플래그(`tmuxRoute`)·브로커에 닿는 길(`broker`)·
+ * 코어 직접 경로(#2600 T2 (d) d2)가 **이 호출**에 성립하나 — 셋이 다 참일 때만: 플래그(`tmuxRoute` = on)·브로커에 닿는 길(`broker`)·
  *  요청 슬러그. 하나라도 없으면 null = 종전 경로(중계). 슬러그 없는 호출(registry 의 primary 무컨텍스트)은 중계도 `{slug}` 를
- *  못 채우므로 여기서도 새 경로가 아니다 — 두 경로의 «성립 조건»이 같아야 그림자 대조가 같은 호출을 견준다.
+ *  못 채우므로 여기서도 새 경로가 아니다 — 두 경로의 «성립 조건»이 같아야 한다.
  *  ⚠ `{slug}` 치환은 `String.replace(문자열)` = **첫 번째 하나만** — `tmux-relay.cjs`·`tmuxArgvFor` 와 같은 의미를 지킨다.
  */
-export function tmuxRouteTransport(slug: string | null = tenantSlug()): { transport: BrokerTransport; slug: string; mode: "on" | "shadow"; sample: number; listScope: TmuxListScope } | null {
+export function tmuxRouteTransport(slug: string | null = tenantSlug()): { transport: BrokerTransport; slug: string; listScope: TmuxListScope } | null {
   const topo = execTopology();
-  if (topo.tmuxRoute === "off" || !topo.broker || !slug) return null;
-  const transport: BrokerTransport = topo.broker.kind === "hub"
-    ? { kind: "hub", url: topo.broker.url, secret: topo.broker.secret, slug }
-    : { kind: "socket", socketPath: topo.broker.template.replace("{slug}", slug) };
+  if (topo.tmuxRoute !== "on" || !topo.broker || !slug) return null;
+  const transport: BrokerTransport = { kind: "socket", socketPath: topo.broker.template.replace("{slug}", slug) };
   //  ★ 범위도 토폴로지에서 온다(#3797 T7) — 세션 호스트만 `node`. 여기서 지어내지 않는다.
-  return { transport, slug, mode: topo.tmuxRoute, sample: topo.tmuxShadowSample, listScope: topo.tmuxListScope };
+  return { transport, slug, listScope: topo.tmuxListScope };
 }
 
 /**
@@ -97,13 +94,13 @@ export function tmuxRouteTransport(slug: string | null = tenantSlug()): { transp
  *  목록 조회 자체가 실패하면 «못 봤다» 다 — «서버 없음»·«세션 없음» 문구로 위장하지 않는다(#2616).
  */
 export async function tmuxViaRoute(args: string[], via: { transport: BrokerTransport; slug: string; listScope?: TmuxListScope }): Promise<string> {
-  //  ⚠ 설정 오류(https 허브·형식 밖 슬러그)도 execFile 오류 모양으로 던진다 — 맨 Error 가 나가면 상위 판정이 전부 거짓으로
-  //   떨어져 «못 봤다» 조차 못 된다(블라인드 리뷰 ⑥-4). 여기서 접으면 strict 호출은 던지고 목록은 desired 폴백으로 간다.
+  //  ⚠ 전송 실패(소켓 없음 — 중앙 게이트웨이의 `on` 오설정)·형식 밖 슬러그도 execFile 오류 모양으로 던진다 — 맨 Error 가 나가면
+  //   상위 판정이 전부 거짓으로 떨어져 «못 봤다» 조차 못 된다(블라인드 리뷰 ⑥-4). 여기서 접으면 strict 호출은 던지고 목록은 desired 폴백으로 간다.
   const fold = (why: string, e: unknown): never => {
     throw outcomeToError({ code: 1, stdout: "", stderr: `${why}(못 봤다): ${(e as Error)?.message ?? String(e)}` });
   };
-  let client: ReturnType<typeof makeBrokerClient>;
-  try { client = makeBrokerClient(via.transport, { timeoutMs: TMUX_RELAY_TIMEOUT_MS, listScope: via.listScope }); } catch (e) { return fold("코어 직접 경로 설정 오류", e); }
+  //  소켓 전송은 만들다 던지지 않는다(검사할 URL 이 없다) — 만들 때의 접기는 허브(https 거절)의 몫이었고 T3-a 로 함께 걷었다.
+  const client = makeBrokerClient(via.transport, { timeoutMs: TMUX_RELAY_TIMEOUT_MS, listScope: via.listScope });
   let listed: Awaited<ReturnType<typeof client.listSessions>>;
   try { listed = await client.listSessions(); } catch (e) { return fold("브로커 세션 목록 조회 실패", e); }
   let out;
@@ -119,11 +116,11 @@ export async function tmuxViaRoute(args: string[], via: { transport: BrokerTrans
  * tmux 호출 계수 창 크기 (#2600 T2 d4). 이 값마다 «어느 테넌트에 어떤 동사를 몇 번» 표를 로그로 낸다.
  *
  * ── 왜 seam 인가 ──────────────────────────────────────────────────────────────
- * 이 프로젝트의 완료 조건 하나가 «게이트웨이가 그 테넌트에 tmux 를 부른 횟수 0» 이다. 그걸 그림자 대조로
- *  세면 **틀린다** — 그림자는 표본(기본 25%)·동시상한에 묶이고, 동사는 **불일치와 첫 건에만** 싣는다.
+ * 이 프로젝트의 완료 조건 하나가 «게이트웨이가 그 테넌트에 tmux 를 부른 횟수 0» 이다. 그걸 당시의 그림자 대조(d3 —
+ *  #2600 T3-a 로 걷었다)로 세면 **틀렸다** — 그림자는 표본(25%)·동시상한에 묶였고, 동사는 **불일치와 첫 건에만** 실었다.
  *  2026-09-08 에 실제로 그렇게 세고 «list-sessions 0건» 이라 결론했는데 같은 창의 요약은 compared 100 이었다.
  *  계기는 **이 seam** 에 있어야 한다: 모든 `tmux()` 가 여기를 지나고(`tmuxBatch`·`getOpt` 도 결국 여기다),
- *  route 모드(off/shadow/on)와 무관하며, 세션 호스트(route=on 이라 그림자가 아예 없다)에서도 같은 자로 잰다.
+ *  route 모드(off/on)와 무관하며, 세션 호스트(route=on)에서도 같은 자로 잰다.
  * ⚠ 로그에 싣는 것은 **슬러그·동사·호출부(`파일:줄`)뿐**이다 — argv 에는 세션 라벨·send-keys 본문이 있고
  *  그건 로그에 갈 것이 아니다(d2 §6-4). 호출부도 **파일명만** 싣는다(절대경로 금지 — 창이 수 KB 씩 는다).
  * ⚠ 0 으로 두면 보고가 꺼진다(계수 자체는 계속 — 부담이 되는 배포의 탈출구).
@@ -143,20 +140,11 @@ export async function tmux(args: string[]): Promise<string> {
   } catch { /* 계수 때문에 tmux 가 실패하면 안 된다 */ }
   //  #2600 T2 (d) d2 — 플래그가 `on` 이고 길이 있을 때만 코어 직접 경로. 아니면 아래 종전 경로가 **한 바이트도** 안 바뀐다.
   const via = tmuxRouteTransport();
-  if (via?.mode === "on") return tmuxViaRoute(args, via);
+  if (via) return tmuxViaRoute(args, via);
   const relay = tmuxExecArgv();
   const [bin, ...prefix] = relay.length ? relay : [TMUX_BIN];
-  const old = execFileAsync(bin!, [...prefix, ...args], { timeout: tmuxTimeoutMs(relay), env: TMUX_ENV });
-  //  d3 — `shadow` 면 같은 약속을 곁에서 지켜보며 코어 경로와 견준다. 떼어 놓는다(void): 이 호출의 답·지연·예외는 옛 경로 그대로다.
-  //   그림자는 절대 거절하지 않는다(tmux-shadow 규율). 엔진(broker-client)은 호출 시점에 만든다 — 만들다 던지면 그쪽이 드러낸다.
-  if (via?.mode === "shadow") void shadowTmux(args, via.slug, via.sample, old, () => shadowEngineFor(via));
-  const { stdout } = await old;
+  const { stdout } = await execFileAsync(bin!, [...prefix, ...args], { timeout: tmuxTimeoutMs(relay), env: TMUX_ENV });
   return stdout;
-}
-/** 그림자의 코어 경로 엔진 — `on` 경로(`tmuxViaRoute`)와 같은 클라이언트·같은 상한. */
-function shadowEngineFor(via: { transport: BrokerTransport; listScope?: TmuxListScope }) {
-  const client = makeBrokerClient(via.transport, { timeoutMs: TMUX_RELAY_TIMEOUT_MS, listScope: via.listScope });
-  return { list: () => client.listSessions(), exec: (c: string, argv: string[]) => client.execCapture(c, argv) };
 }
 export async function tmuxQuiet(args: string[]): Promise<void> { try { await tmux(args); } catch { /* 비치명 */ } }
 
