@@ -168,6 +168,32 @@ console.log(`\n${pass} passed`);
     assert.ok(!(e instanceof SendKeysNotStarted), "여기서 '안 갔다'고 말하면 같은 지시가 두 번 간다");
   });
 
+  //  #3773 PR1 후속 — 치기 순서가 두 벌이었다(여기 sendKeysToSession · 세션 호스트의 아웃박스 치기). 한 함수(runSendKeysPlan)로 접었고,
+  //   그 약속을 **실제로 부른 tmux 순서**로 잰다 — 한쪽만 순서가 바뀌면 같은 지시가 어디로 가느냐에 따라 다르게 들어간다.
+  {
+    const log = path.join(tmp, "argv.log");
+    const recorder = path.join(tmp, "record.mjs");
+    fs.writeFileSync(recorder, [
+      'import { appendFileSync } from "node:fs";',
+      "const a = process.argv.slice(2);",
+      `appendFileSync(${JSON.stringify(log)}, (a[0] === "send-keys" ? "send-keys " + a.slice(3).join(" ") : a[0]) + "\\n");`,
+    ].join("\n"));
+    process.env.LIVELY_TMUX_EXEC = `${process.execPath} ${recorder}`;
+    await at("[#3773] 게이트웨이 sendKeysToSession 과 세션 호스트의 치기가 **같은 순서**로 tmux 를 부른다(확인 → 글자 → Enter)", async () => {
+      await sendKeysToSession("box-yoon-1", "첫 줄\n둘째 줄");
+      const gateway = fs.readFileSync(log, "utf8").trim().split("\n");
+      assert.deepEqual(gateway, ["has-session", "send-keys -l 첫 줄 둘째 줄", "send-keys Enter"]);
+      const { runOutboxStep } = await import("./outbox-host-step.js");
+      const host: string[] = [];
+      await runOutboxStep({ step: "type", id: "box-yoon-1", text: "첫 줄\n둘째 줄" }, {
+        tmux: async (argv) => { host.push(argv[0] === "send-keys" ? `send-keys ${argv.slice(3).join(" ")}` : String(argv[0])); return ""; },
+        sleep: async () => {},
+        bin: "tmux",
+      });
+      assert.deepEqual(host, gateway, "호스트 치기의 tmux 순서가 게이트웨이와 다르다");
+    });
+  }
+
   if (saved === undefined) delete process.env.LIVELY_TMUX_EXEC; else process.env.LIVELY_TMUX_EXEC = saved;
   fs.rmSync(tmp, { recursive: true, force: true });
 }

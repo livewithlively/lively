@@ -17,7 +17,7 @@ import { authNodeTokenDetailed, getNode, touchNode, appendNodeLinkEvent, type Or
 import { denialMessage, denialKey, shouldLogDenial, type NodeAuthOutcome } from "./auth-denial.js";   // #2161
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
 import { beatRefreshes } from "./state-freshness.js";   // #2600 T2 d6 — 박동은 스냅샷이 있을 때만 나이를 되돌린다
-import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, nodeSnapshotSessions, nodeSnapshotVerdict, sessionHostVerdict, hostOwnedSnapshot, remoteNodeCoordinate, sessionHostTarget, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
+import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, nodeSnapshotSessions, nodeSnapshotVerdict, sessionHostVerdict, hostOwnedSnapshot, remoteNodeCoordinate, sessionHostTarget, selfNodeMessage, SELF_NODE_REASON, type SessionHostTargetWhy } from "./self-node.js";
 import { makeTmuxCallCensus, censusSite } from "../terminal/tmux-call-census.js";   // #2600 T2 d6 — 판정 계수(같은 세 칸: 슬러그·축·호출부)
 import { selfNodePossible } from "../exec-topology.js";   // #2599 T2 — 「이 판정이 성립하는 배포인가」의 선결 조건
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
@@ -206,6 +206,8 @@ export function isSessionHostNode(nodeId: string): boolean {
 
 /** 신선 임계 — 목록 소유 판정도 attach 정책과 **같은 자**를 쓴다(둘이 갈리면 «붙을 수는 있는데 목록엔 없다»가 난다). */
 export const NODE_STATE_STALE_MS = STATE_STALE_MS;
+/** RPC 한 번의 상한(`nodeRpc`) — 아웃박스 한 행이 sending 에 머무는 상한의 합(`sessions/outbox-exec.test` E15)이 이 값을 센다. */
+export const NODE_RPC_TIMEOUT_MS = RPC_TIMEOUT_MS;
 
 /**
  * 판정 계수 창 — 이 값마다 «어느 테넌트에서, 어떤 사유로, 어느 호출부가» 물었는지 표로 낸다 (#2600 T2 d6).
@@ -293,10 +295,21 @@ export function sessionHostLiveIds(nodeId: string, now: number = Date.now()): st
 /**
  * 이 세션의 일을 맡을 **세션 호스트** — 호스트 id, 아니면 null(호출부는 종전 게이트웨이 경로) (#2600 T2 d6).
  *  판정은 순수 함수 `self-node.sessionHostTarget` 이 하고, 여기는 재료(스냅샷 좌표·선언·자격 관측·op 지원)만 모은다.
- *  사유는 소유 판정 계수에 `session:<사유>` 로 센다 — 맡기지 못하는 이유가 프로덕션 로그에 그대로 나온다
- *  (예: `session:absent` 가 많으면 방금 만든 세션의 보고가 스냅샷보다 빠르다는 뜻이다).
+ *  사유는 소유 판정 계수에 `session:<사유>` 로 센다 — 맡기지 못하는 이유가 프로덕션 로그에 그대로 나온다.
+ *  ⚠ 방금 만든 세션의 보고가 스냅샷보다 빠르면 `session:absent` 가 아니라 **`session:no-coordinate`** 로 센다(#3773 재검증) —
+ *   좌표(`nodeOfSession`)와 관측(`sessionHostLiveIds`)이 같은 스냅샷 항목을 동기로 읽으므로 스냅샷에 없는 세션은 좌표부터 없다.
+ *   그래서 그 창은 자가호스팅의 모든 세션(좌표 없음)과 같은 사유로 보인다 — 가르려면 `gatewayDefersHere()` 를 함께 본다.
  */
 export function sessionHostFor(sessionId: string, op: NodeOp, now: number = Date.now()): string | null {
+  return sessionHostTargetFor(sessionId, op, now).host;
+}
+
+/**
+ * `sessionHostFor` 의 형제 — 호스트와 **맡기지 못한 사유**를 함께 돌려준다 (#2600 T2 d6 · #3773).
+ *  사유로 갈라야 하는 호출부가 쓴다: 아웃박스는 `no-coordinate` ∧ 소유가 넘어간 테넌트면 새 세션의 좌표를 잠깐 기다린다(`sessions/outbox-exec`).
+ *  판정·계수는 **이 한 곳**이다 — 두 함수가 각자 판정하면 같은 물음이 두 벌이 되고 계수도 두 번 센다.
+ */
+export function sessionHostTargetFor(sessionId: string, op: NodeOp, now: number = Date.now()): { host: string | null; why: SessionHostTargetWhy } {
   const r = sessionHostTarget({
     sessionId,
     nodeId: nodeOfSession(sessionId),
@@ -305,7 +318,7 @@ export function sessionHostFor(sessionId: string, op: NodeOp, now: number = Date
     supports: (id) => nodeSupports(id, op),
   });
   recordDefers(`session:${r.why}`);
-  return r.host;
+  return r;
 }
 
 /**

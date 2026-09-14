@@ -22,6 +22,8 @@
 import type { GitCredentialSecret } from "../org/credentials/git-credential-store.js";   // 타입 전용 — 런타임 간선 아님
 import type { ExecAt } from "../terminal/terminal-member-fs.js";                        // 타입 전용 — 런타임 간선 아님
 import type { LivelyUser } from "../context.js";                                        // 타입 전용 — 런타임 간선 아님
+import type { NodeOp } from "../node/protocol.js";                                       // 타입 전용 — 런타임 간선 아님
+import type { SessionHostTargetWhy } from "../node/self-node.js";                        // 타입 전용 — 런타임 간선 아님
 // ⚠ 위 「런타임 import 금지」의 유일한 예외(#2599 T2). exec-topology 는 **import 가 0 인 순수 잎**이고
 //  이 번들에 이미 실려 있다(terminal-isolation·sessions·session-state 가 쓴다) — 즉 이 간선은 번들에
 //  아무것도 더 끌어오지 않는다. 그 불변식(잎의 순수함)은 exec-topology-single-source 시험 S3 가 지킨다.
@@ -55,10 +57,22 @@ export interface GatewayCapabilities {
     ensure: (user: LivelyUser, key: string) => Promise<string>;
     drop: (user: LivelyUser | null, key: string) => Promise<void>;
   };
+  /**
+   * 아웃박스가 한 걸음(보기·누르기·치기)을 **세션 호스트에 맡길 재료** (#2600 T2 d6 · #3773) — 호스트 고르기(사유 포함)·노드 RPC·목록 소유 판정.
+   *  셋 다 `node/registry` 에 있고 registry 는 노드 연결·스냅샷·노드 스토어를 끌고 온다. 그런데 아웃박스(`session-outbox` → `outbox-exec`)는
+   *  `terminal/sessions` 의 첫 지시 간선으로 노드 번들에 **부채로 실려 있어서**, registry 를 import 하는 순간 모듈 12개가 번들에 들어온다(실측).
+   *  노드에서는 아웃박스가 돌지 않는다(DB 가 없어 행이 안 생긴다). 게이트웨이에서 등록이 빠지면 호스트를 못 골라 **종전 경로(게이트웨이 tmux)** 로
+   *  배달한다 — 기능은 살아 있고 d6 계수만 줄지 않는다.
+   */
+  outboxHost?: {
+    pick: (sessionId: string, op: NodeOp) => { host: string | null; why: SessionHostTargetWhy };
+    rpc: (host: string, op: NodeOp, args: Record<string, unknown>) => Promise<unknown>;
+    defersHere: () => boolean;
+  };
 }
 
 /** 선언된 능력 이름 — 배선 가드가 이 목록으로 index.ts 를 검사한다(추가하면 가드가 자동으로 요구한다). */
-export const GATEWAY_CAPABILITY_NAMES = ["materializeMemberGit", "resolveGitSecret", "leaseGitSecretForNode", "kitSeedDeps", "mintAppToken", "materializeAppAssets", "harnessSeat"] as const;
+export const GATEWAY_CAPABILITY_NAMES = ["materializeMemberGit", "resolveGitSecret", "leaseGitSecretForNode", "kitSeedDeps", "mintAppToken", "materializeAppAssets", "harnessSeat", "outboxHost"] as const;
 
 const caps: GatewayCapabilities = {};
 

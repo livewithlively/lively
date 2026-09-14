@@ -448,8 +448,10 @@ export type SessionHostTargetWhy = "ok" | "no-coordinate" | "not-host" | "unqual
  *  ② 좌표가 선언된 세션 호스트가 아니다(멤버 PC) → null(not-host). 멤버 PC 세션은 desired 행이 좌표를 가져
  *     호출부의 노드 갈래가 따로 받는다 — 이 판정은 중앙(박스) 세션만 다룬다.
  *  ③ 그 호스트가 지금 자격이 없다(끊김·낡음 — 목록 소유와 같은 술어) → null(unqualified).
- *  ④ 그 호스트의 관측에 그 세션이 없다(방금 만든 3초 창·이사 중) → null(absent). 옛 스냅샷에 남은 좌표를
- *     믿고 맡기면 호스트가 «그런 세션 없다» 로 실패한다.
+ *  ④ 그 호스트의 관측에 그 세션이 없다 → null(absent). 옛 스냅샷에 남은 좌표를 믿고 맡기면 호스트가 «그런 세션 없다» 로 실패한다.
+ *     ⚠ 방금 만든 세션의 3초 창은 여기가 아니라 ①(no-coordinate)이다(#3773 재검증) — registry 는 좌표(`nodeOfSession`)와
+ *      관측(`sessionHostLiveIds`)을 **같은 스냅샷 항목**에서 동기로 읽으므로, 스냅샷에 아직 없는 세션은 좌표부터 없다.
+ *      그래서 그 창은 자가호스팅의 모든 세션(좌표 없음)과 같은 사유로 보인다. 이 칸은 두 재료가 어긋난 입력에 대한 방어다(시험 A5).
  *  ⑤ 그 호스트가 그 op 를 모른다(구 번들) → null(unsupported). 보내면 `unknown op` 문자열이 돌아온다(#905 C4).
  */
 export function sessionHostTarget(o: {
