@@ -426,10 +426,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    *   대화 런타임(#2439)을 켜서 작업·승인·슬래시가 다 오는데도 **claude 세션은 터미널로 열렸다**
    *   — chatMode 가 'tmux' 라 chatFirst() 가 거짓이었기 때문이다(2026-09-01 상민님 신고).
    *
-   *  판정: codex app-server 이거나, **서버가 이 세션을 chat 런타임으로 연다**(runtimeMode).
+   *  판정: codex app-server 이거나, **서버가 이 세션을 chat 런타임으로 연다**(runtimeMode), 또는 **가입 온보딩의 리브 세션**이다.
    *  ⚠ 구 서버 행엔 runtimeMode 가 없다 → 종전 판정만 남는다(무회귀).
+   *  (#1631, 원준 2026-09-14) «가입 온보딩 때 처음에 만들어 주는 세션은 대화로 보기 형식으로 기본» — 처음 설정이 끝나면 서버가 여는
+   *   리브 킥오프 세션(src/org/liv/kickoff.ts LIV_SESSION_LABEL)은 터미널이 아니라 대화창으로 연다. 알아보는 자는 세션 이름이다
+   *   (서버 상수와 같은 글자 — liv-kickoff-chat-view 시험이 둘을 맞춘다). 사람이 이름을 바꾸면 여느 세션처럼 터미널이 기본으로 돌아간다.
    */
-  const chatHome = (): boolean => chatFirst() || String(target.raw?.runtimeMode || '') === 'chat';
+  const LIV_KICKOFF_LABEL = '리브 — 처음 설정 점검';
+  const livKickoff = (): boolean => String(target.label || '') === LIV_KICKOFF_LABEL;
+  const chatHome = (): boolean => chatFirst() || String(target.raw?.runtimeMode || '') === 'chat' || livKickoff();
 
   // 하네스·모델·추론강도 바꾸기 — 홈 입력창과 같은 서버 카탈로그를 쓴다(목록 두 벌 금지).
   // 런타임 명령이 확인된 축은 POST …/runtime, 나머지는 POST …/handoff 로 같은 작업 자리의 새 프로세스를 연다.
