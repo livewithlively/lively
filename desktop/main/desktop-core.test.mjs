@@ -1547,6 +1547,21 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.equal(pub[1], WANT, "게시자 이름이 인증서 주체의 CN·O 와 다르다 — 서명판 사용자의 업데이트가 끊긴다");
   });
 }
+{
+  const { powershellEnv } = await import("../win-signing.mjs");
+
+  t("Z7g PowerShell 판독 환경 — PSModulePath 를 물려주지 않는다(대소문자 무관), 나머지는 그대로", () => {
+    // 실측 run 34820230010: pwsh 스텝에서 powershell.exe(5.1)를 부르자 7 의 모듈 경로를 물려받아 Get-AuthenticodeSignature 를 못 실었다
+    const env = { PSModulePath: "C:\\Program Files\\PowerShell\\7\\Modules", Path: "C:\\Windows\\System32", SystemRoot: "C:\\Windows" };
+    const before = JSON.stringify(env);
+    assert.deepEqual(powershellEnv(env), { Path: "C:\\Windows\\System32", SystemRoot: "C:\\Windows" });              // G1
+    assert.deepEqual(powershellEnv({ psmodulepath: "a", PSMODULEPATH: "b", Other: "z" }), { Other: "z" }, "대소문자가 다른 키가 남았다");  // G2
+    assert.equal(JSON.stringify(env), before, "입력 env 를 바꿨다");                                                  // G3
+    // G4 배선 — 함수만 있고 판독이 안 쓰면 CI 에서 같은 실패가 난다
+    const src = readFileSync(fileURLToPath(new URL("../win-signing.mjs", import.meta.url)), "utf8");
+    assert.match(src, /execFileSync\("powershell\.exe"[^)]*env:\s*powershellEnv\(process\.env\)/, "서명 판독이 PSModulePath 를 뺀 환경으로 powershell.exe 를 부르지 않는다");
+  });
+}
 
 
 // ── H. 웹 UI 셸 (#1541 · web-shell.mjs) — 앱 창에 게이트웨이의 /ui/ 를 그대로 싣는다(화면 코드 두 벌 금지) ─────────

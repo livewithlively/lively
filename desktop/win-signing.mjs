@@ -115,6 +115,17 @@ export function gateMode({ clientId, azureSignOptions }) {
   return present(clientId) ? "misconfigured" : "skip";
 }
 
+/**
+ * powershell.exe(Windows PowerShell 5.1)에 넘길 환경 — PSModulePath 를 뺀다(키 대소문자 무관). 입력은 바꾸지 않는다.
+ *  pwsh(PowerShell 7) 스텝에서 부르면 7 의 모듈 경로를 물려받아 `Get-AuthenticodeSignature` 가 든 Security 모듈을 못 싣는다
+ *  (실측 run 34820230010: «found in the module 'Microsoft.PowerShell.Security', but the module could not be loaded»).
+ *  electron-updater 도 같은 이유로 `set "PSModulePath="` 뒤에 powershell.exe 를 부른다(electron-builder#7127).
+ * @param {Record<string, string | undefined>} env
+ */
+export function powershellEnv(env) {
+  return Object.fromEntries(Object.entries(env).filter(([k]) => k.toUpperCase() !== "PSMODULEPATH"));
+}
+
 // ── CLI ───────────────────────────────────────────────────────────────────────────────────────
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG = join(HERE, "package.json");
@@ -139,7 +150,7 @@ function readSignature(file) {
     "$o = [ordered]@{ Status = [string]$s.Status; StatusMessage = [string]$s.StatusMessage; Subject = [string]$(if ($c) { $c.Subject }); Issuer = [string]$(if ($c) { $c.Issuer }); NotAfter = [string]$(if ($c) { $c.NotAfter.ToUniversalTime().ToString('o') }); Timestamped = ($null -ne $s.TimeStamperCertificate) }",
     "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($o | ConvertTo-Json -Compress)))",
   ].join("; ");
-  const out = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps], { encoding: "utf8", timeout: 60_000 });
+  const out = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps], { encoding: "utf8", timeout: 60_000, env: powershellEnv(process.env) });
   return JSON.parse(Buffer.from(out.trim(), "base64").toString("utf8"));
 }
 
