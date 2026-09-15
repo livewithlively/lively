@@ -430,7 +430,8 @@
 .ob-npick .q{margin:7px 8px 4px; padding:5px 8px; border:1.5px solid var(--blue); border-radius:6px; color:var(--muted)}
 .ob-npick .h{padding:5px 10px 2px; font-size:10px; color:var(--muted)}
 .ob-npick .i{position:relative; padding:3px 10px 3px 25px; color:var(--ink)}
-.ob-npick .i::before{content:""; position:absolute; left:10px; top:5px; width:8px; height:10px; border:1px solid var(--muted); border-radius:2px}
+/* 문서 아이콘(접힌 모서리 + 줄 두 개) — 빈 네모로 그리면 체크박스로 읽혀 «체크박스 목록이 아니다»는 그림의 요지를 거스른다 */
+.ob-npick .i::before{content:""; position:absolute; left:10px; top:4px; width:7px; height:10px; border:1px solid var(--muted); border-radius:1px 3px 1px 1px; background:linear-gradient(var(--muted), var(--muted)) 1px 3px / 4px 1px no-repeat, linear-gradient(var(--muted), var(--muted)) 1px 6px / 4px 1px no-repeat}
 .ob-npick .i:last-child{padding-bottom:8px}
 .ob-linkline{margin-top:10px; font-size:12.5px}
 .ob-linkline a{color:var(--blue); font-weight:700; cursor:pointer}
