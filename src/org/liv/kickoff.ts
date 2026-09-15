@@ -6,7 +6,9 @@
 //    createSession 이 initialPrompt 를 받으면 아웃박스(입력창이 뜨면 배달·에코 확인 #1753) / codex app-server / 노드 배달까지
 //    알아서 가른다 — 여기서 send-keys 를 직접 치지 않는다.
 //  · 하네스는 **그 사람이 로그인한 것**(resolveHeadlessHarness — claude 하드코딩 금지, #1884). 비용 주체 = 사용자.
-//  · 세션 종류는 human — 사람이 열어 보고 이어서 말을 걸 수 있는 자기 세션이다(kind=task/managed 는 기계 세션).
+//  · 세션 종류는 **task** 다(원준 2026-09-15) — 사람이 열어 보고 이어 말을 거는 세션이지만, 첫 지시가 서버 조립물이라 이름 짓기·첫 지시
+//    프로젝트 자동 생성·그에 딸린 승인 프롬프트(session_rename·project_rename_v6)가 LIVELY_SESSION_KIND 게이트에서 건너뛴다(#1979 항목4).
+//    그래도 spawnTaskSession 이 아니라 createSession 이라 세션 호스트로 떠 매니지드에서도 뜬다 — 자세한 근거는 아래 createSession 자리 주석.
 //  · 워크스페이스 바인딩은 세션 생성 관문(session-launch.ts)과 같은 함수(recordSessionTenant) — registry 모드에서 이 세션이 어느 워크스페이스
 //    소속인지는 여기서 정해진다. 이걸 빼면 세션이 primary 로 취급된다.
 //
@@ -30,7 +32,11 @@ export async function livKickoff(user: LivelyUser, o: { prompt: string; harness?
 
   const harness = await resolveHeadlessHarness(userId, o.harness ?? null);
   const session = await createSession(user, {
-    kind: "human",
+    //  (#1631, 원준 2026-09-14) 킥오프 세션은 **task 종류**다 — 사람이 아닌 종류라 이름 짓기·첫 지시 프로젝트 자동 생성·그에 딸린
+    //  승인 프롬프트(session_rename·project_rename_v6)가 LIVELY_SESSION_KIND 게이트에서 구조적으로 건너뛴다(#1979 항목4). 그래도
+    //  spawnTaskSession(게이트웨이 로컬 워커)이 아니라 createSession 이라 세션 호스트로 뜬다 — 매니지드에서도 app·login 세션과 같은
+    //  프로비저닝을 타므로 헤드리스 위탁 경로의 «게이트웨이가 /work/shared 를 못 만진다» 500 을 안 겪는다.
+    kind: "task",
     label: LIV_SESSION_LABEL,
     rootKey: "personal", subpath: "",
     harness, flags: {}, autoApprove: false,
