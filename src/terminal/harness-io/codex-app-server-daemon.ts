@@ -84,15 +84,41 @@ export function portAlive(port: number, host = "127.0.0.1", timeoutMs = 700): Pr
  * 로컬(비격리·dev) 기동 — **detached + 로그파일**. 부모가 죽어도 살아남는다.
  *  stdio 를 파이프로 두면 게이트웨이가 죽는 순간 EOF/SIGPIPE 로 자식이 끌려 죽는다(1차 구현의 실패 원인).
  */
-export function spawnDetachedLocal(o: { port: number; cwd: string; logFd: number; bin?: string; env?: NodeJS.ProcessEnv }): number | undefined {
-  const p = spawn(o.bin ?? "codex", ["app-server", "--listen", `ws://127.0.0.1:${o.port}`], {
-    cwd: o.cwd,
-    env: o.env ?? process.env,
-    detached: true,
-    stdio: ["ignore", o.logFd, o.logFd],
+export function spawnDetachedLocal(o: {
+  port: number;
+  cwd: string;
+  logFd: number;
+  bin?: string;
+  env?: NodeJS.ProcessEnv;
+  /** 테스트 seam. Windows npm 실행 파일(.cmd)은 셸을 거쳐야 한다. */
+  platform?: NodeJS.Platform;
+  spawnFn?: typeof spawn;
+}): Promise<number | undefined> {
+  const platform = o.platform ?? process.platform;
+  return new Promise((resolve, reject) => {
+    let p;
+    try {
+      p = (o.spawnFn ?? spawn)(o.bin ?? "codex", ["app-server", "--listen", `ws://127.0.0.1:${o.port}`], {
+        cwd: o.cwd,
+        env: o.env ?? process.env,
+        detached: true,
+        stdio: ["ignore", o.logFd, o.logFd],
+        // npm 이 Windows 에 설치하는 codex 는 codex.cmd 다. CreateProcess 로 직접 띄우면 ENOENT 이므로
+        // 이 플랫폼에서만 cmd.exe 를 통한다. 프롬프트는 이 argv 에 들어오지 않는다(고정 인자뿐).
+        shell: platform === "win32",
+      });
+    } catch (e) {
+      reject(e);
+      return;
+    }
+    // spawn 오류는 생성자에서 throw 되지 않고 다음 tick 의 `error` 로도 온다. 리스너가 없으면
+    // Node 가 그 이벤트를 uncaught 로 올려 **노드 에이전트 전체를 종료**한다(Windows 실측 ENOENT).
+    p.once("error", reject);
+    p.once("spawn", () => {
+      p.unref();
+      resolve(p.pid);
+    });
   });
-  p.unref();
-  return p.pid;
 }
 
 /** WebSocket 전송 — 끊겨도 **서버는 살아 있다**(그게 이 파일의 존재 이유다). */
