@@ -41,6 +41,6 @@ export function aiLoginScopeHint(managed: boolean): string {
 /** 온보딩 «AI 연결» 로그인 화면의 안내(HTML 조각). 같은 규칙 — 아니면 빈 문자열. */
 export function aiLoginScopeNote(managed: boolean): string {
   return managed
-    ? '<p class="ob-note">AI 로그인은 <b>워크스페이스마다 따로</b>예요. 다른 워크스페이스에서 이미 이으셨더라도 여기선 한 번 더 필요합니다 — 지금 한 번만 이어 두면 이 워크스페이스에서는 계속 유지돼요.</p>'
+    ? '<p class="ob-note">AI 로그인은 <b>워크스페이스마다 따로</b>예요 — 여기서 한 번만 이어 두시면 계속 유지돼요.</p>'
     : "";
 }
