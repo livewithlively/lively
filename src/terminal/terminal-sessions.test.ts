@@ -425,38 +425,12 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   ok2(harnessLaunchArgv("shell", [], "linux").length === 0, "E4 POSIX 셸 세션(빈 cmd)은 감싸지 않는다");
   ok2(harnessLaunchArgv("shell", [], "darwin").length === 0, "E4 darwin 도 동일");
 
-  // ── E4c ★ Windows pane 셸의 UTF-8 프렐류드(#1541) ──────────────────────────────
-  //  계기(실측 hammurabi): pane 은 chcp 949 · [Console]::OutputEncoding=ks_c_5601-1987 로 시작해
-  //   `node x.mjs | Out-String` 과 `type <UTF-8 로그>` 의 한글이 깨졌다(직접 출력은 정상 — 읽는 층만 틀렸다).
-  //  이 분기는 mac/linux CI 에서 **한 번도 실행되지 않으므로**(#1510 §5) 계약을 정적으로 못박는다.
+  // ── E4c ★ Windows pane 셸은 psmux 기본 셸을 그대로 쓴다(#3982) ───────────────
+  //  실측(hammurabi): `-- powershell ...` 직접 실행은 CreateProcessW access denied, 같은 노드에서
+  //  명령 없는 psmux 기본 셸은 정상이다. 셸을 한 번 더 고르지 않아 psmux가 검증한 기본값(pwsh→powershell→cmd)을 쓴다.
   {
     const sh = harnessLaunchArgv("shell", [], "win32");
-    // 배선 단언 — argv 가 비면 아래 루프·정규식이 **아무것도 검사하지 않고 통과한다**(실측: red 상태에서
-    //  빈 배열이면 `.test(undefined)` 가 "undefined" 를 검사해 true 가 됐다). 먼저 존재를 못박는다.
-    ok2(sh.length === 5, `E4c 배선: Windows 셸 argv 가 5토큰이어야 한다 — 실제 ${sh.length}: ${JSON.stringify(sh)}`);
-    ok2(sh[0] === "powershell", `E4c Windows 셸 세션은 powershell 을 띄운다: ${sh[0]}`);
-    ok2(sh.includes("-NoExit"), "E4c -NoExit — 프렐류드 뒤 대화형 프롬프트로 남는다(셸 세션이니까)");
-    ok2(!sh.includes("-NoProfile"), "E4c 사용자 프로필은 그대로 로드한다(사용자 설정이 이긴다)");
-    const i = sh.indexOf("-EncodedCommand");
-    ok2(i > 0 && i === sh.length - 2, "E4c -EncodedCommand 페이로드는 마지막 토큰이다");
-
-    // 스크립트는 명령줄 문법에 직접 보간하지 않고 불투명 base64 토큰으로 둔다. psmux의 직접 실행 경계는
-    // paneLaunchArgv가 별도로 맡는다(#3982).
-    for (const tok of sh) {
-      ok2(!/["'\t ]/.test(tok), `E4c ★ 토큰에 psmux 소실·분해 문자가 없다: ${JSON.stringify(tok)}`);
-    }
-    const b64 = sh[sh.length - 1];
-    ok2(/^[A-Za-z0-9+/]+={0,2}$/.test(b64), `E4c ★ 페이로드는 base64 알파벳만 (${b64.length}자)`);
-
-    // 페이로드가 **실제로 네 축을 다 세우는지** — UTF-16LE 로 되돌려 내용을 본다(문구가 아니라 설정 대상).
-    const ps = Buffer.from(b64, "base64").toString("utf16le");
-    ok2(/chcp\s+65001/.test(ps), `E4c 네이티브 자식용 콘솔 코드페이지(chcp 65001)를 세운다`);
-    ok2(/\[Console\]::OutputEncoding\s*=/.test(ps), "E4c ★ 파이프 정상화의 핵심([Console]::OutputEncoding)을 세운다 — chcp 만으론 안 고쳐진다(실측)");
-    ok2(/\[Console\]::InputEncoding\s*=/.test(ps), "E4c 타이핑한 한글이 네이티브 자식에게 갈 때(InputEncoding)");
-    ok2(/\$OutputEncoding\s*=/.test(ps), "E4c 네이티브 자식 stdin 으로 보낼 때($OutputEncoding)");
-    ok2(/UTF8Encoding\(\$false\)/.test(ps), "E4c BOM 없는 UTF-8 (BOM 이 붙으면 파이프 첫 바이트가 오염된다)");
-    // 프렐류드가 실패해도 셸은 떠야 한다 — 설정마다 try/catch.
-    ok2((ps.match(/try\{/g) || []).length >= 4, "E4c 설정마다 try/catch — 한 줄이 실패해도 셸은 뜬다");
+    ok2(sh.length === 0, `E4c Windows 셸 세션은 사용자 psmux 기본 셸을 쓴다: ${JSON.stringify(sh)}`);
 
     // 하네스 세션은 감싸지 않는다 — 감싸려면 하네스 argv 를 PowerShell 문자열에 이어붙여야 하고
     //  그게 catalog.ts 가 막는 인젝션 경계다(E4b 와 같은 규칙).
@@ -465,7 +439,7 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     ok2(!h.includes("-EncodedCommand"), "E4c ★ 하네스 argv 가 PowerShell 스크립트에 섞이지 않는다");
 
     // 엣지: 새로 도입한 분기에 cmd 가 아예 없을 때(null/undefined) 크래시하지 않는다.
-    ok2(harnessLaunchArgv("shell", null as unknown as string[], "win32")[0] === "powershell", "E4c cmd=null 도 셸 세션으로 취급");
+    ok2(harnessLaunchArgv("shell", null as unknown as string[], "win32").length === 0, "E4c cmd=null 도 기본 셸 세션으로 취급");
     ok2(harnessLaunchArgv("shell", undefined as unknown as string[], "linux").length === 0, "E4c POSIX cmd=undefined 는 빈 argv");
     // 경계: 빈 문자열 한 개는 length>0 이므로 하네스 취급(프렐류드로 갈아치우지 않는다).
     ok2(harnessLaunchArgv("shell", [""], "win32").length === 1, "E4c cmd=[''] 는 하네스 취급(길이 1 유지)");
