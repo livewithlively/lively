@@ -557,13 +557,9 @@ export const welcomeCapabilities: Capability[] = [
       //   welcome 만 찍으면 다음 부팅에 first_run 이 여전히 true 라 처음 설정이 또 뜬다.
       //  (#1631) 이미 열린 리브 세션이 있으면 그 좌표를 지킨다 — welcome 은 통째로 덮이는 필드라 여기서 안 실으면 사라진다.
       const { getLivProfile: readLiv } = await import("../../org/store.js");
-      const priorWelcome = (await readLiv(userId).catch(() => null))?.welcome ?? null;
-      const priorSession = priorWelcome?.session_id ?? null;
-      //  (#1631 2026-09-14) 리브 탭 대화로 킥오프한 좌표도 같은 이유로 지킨다 — 안 실으면 다시 눌렀을 때 대화를 또 연다.
-      const priorTurn = priorWelcome?.liv_turn_id ?? null;
+      const priorSession = (await readLiv(userId).catch(() => null))?.welcome?.session_id ?? null;
       const profile = await appendLivProfile(userId, {
-        welcome: { done_at: new Date().toISOString(), drawers: created, first_order: firstOrder, session_id: priorSession,
-          liv_turn_id: priorTurn, liv_chat_id: priorWelcome?.liv_chat_id ?? null, stage: stage || null },
+        welcome: { done_at: new Date().toISOString(), drawers: created, first_order: firstOrder, session_id: priorSession, stage: stage || null },
         onboarded: true,
       });
       //  하다 만 자리(#2207)는 여기서 걷는다 — 끝난 사람에게 «이어서 하기» 가 남아 있으면 안 된다.
@@ -574,16 +570,13 @@ export const welcomeCapabilities: Capability[] = [
       //  ⚠ 비치명: 리브가 못 떠도(AI 미로그인·세션 한도 등) 처음 설정은 끝난 것이다 — 사람이 답한 것은 이미 반영됐다.
       //   사유는 liv.error 로 싣는다(감추지 않는다). 다시 눌러도 세션을 또 열지 않는다(priorSession 재사용).
       //  (#1631, 원준 결정 2026-09-13) 초대로 들어온 사람에게는 리브를 띄우지 않는다 — 세션도 1턴도 2턴도 없다
-      //   (2턴 스윕은 welcome.session_id 나 liv_turn_id 가 있는 사람만 본다). 건너뛴 이유는 liv.reason 으로 싣고, 화면이 마무리 문구를
+      //   (2턴 스윕은 welcome.session_id 가 있는 사람만 본다). 건너뛴 이유는 liv.reason 으로 싣고, 화면이 마무리 문구를
       //   가를 판정(joining)도 함께 돌려준다.
       const liv = joining.is_join
         ? { session_id: null, href: null, reason: "join" }
-        : await kickoffLivAfterWelcome(user, { priorSession, priorTurn, drawers: created, firstOrder, decisions, work: profile.work ?? null,
+        : await kickoffLivAfterWelcome(user, { priorSession, drawers: created, firstOrder, decisions, work: profile.work ?? null,
           purpose: stage ? STAGE_PURPOSE[stage] ?? stage : null });
-      const welcome = profile.welcome
-        ? { ...profile.welcome, session_id: liv.session_id ?? profile.welcome.session_id ?? null,
-          liv_turn_id: liv.turn_id ?? profile.welcome.liv_turn_id ?? null, liv_chat_id: liv.chat_id ?? profile.welcome.liv_chat_id ?? null }
-        : null;
+      const welcome = profile.welcome ? { ...profile.welcome, session_id: liv.session_id ?? profile.welcome.session_id ?? null } : null;
       return { ok: true, created, skipped, welcome, liv, joining: { is_join: joining.is_join, via: joining.via } };
     }, false, {
       name: z.string().optional().describe("이렇게 불러 주세요(닉네임)"),
@@ -841,28 +834,25 @@ export async function welcomeSnapshot(userId: string) {
 export type WelcomeSnapshot = Awaited<ReturnType<typeof welcomeSnapshot>>;
 
 /**
- * (#1631) 처음 설정 직후 리브를 띄운다 — me_welcome_apply 의 마지막 걸음.
- *  · (원준 2026-09-14) 기본은 **리브 탭의 대화 턴**(href «#/liv», 숨김 턴 — 사람은 리브의 답만 본다). 종전의 «홈 탭 tmux 세션» 은
- *    claude 로그인이 없을 때만(대화 턴이 claude 문법이라) 남는다.
- *  · 이미 띄운 것(priorSession·priorTurn)이 있으면 **다시 띄우지 않고** 그 좌표를 돌려준다(다시 눌러도 안전).
+ * (#1631) 처음 설정 직후 리브 세션을 연다 — me_welcome_apply 의 마지막 걸음.
+ *  · (원준 2026-09-14) **진짜 세션**(createSession, kind=task)을 열고 그 세션으로 보낸다(href «#/s/<id>»). 헤드리스 대화 턴은 매니지드
+ *    게이트웨이에서 로컬 워커를 못 띄워 500 이 나므로 폐기했다 — createSession 은 세션 호스트로 떠 매니지드에서도 된다(실측 2026-09-15).
+ *    화면은 그 세션을 대화 보기로 열고(session-chat livKickoff), 지시문(첫 프롬프트)은 숨긴다.
+ *  · 이미 띄운 세션(priorSession)이 있으면 **다시 띄우지 않고** 그 좌표를 돌려준다(다시 눌러도 안전).
  *  · 1턴 프롬프트는 welcomeSnapshot(화면과 같은 실측) + 이 반영이 남긴 결정 + 이 워크스페이스의 수집기 목록으로 조립한다.
  *  · 어떤 실패도 던지지 않는다 — { error } 로 돌려주고 온보딩은 성공으로 끝난다(사람이 답한 것은 이미 반영됐다).
  */
 export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
   priorSession: string | null;
-  /** 이미 리브 탭 대화 턴으로 킥오프했으면 그 턴 id(#1631 2026-09-14) — 있으면 또 열지 않고 «#/liv» 만 돌려준다. */
-  priorTurn?: string | null;
   drawers: string[];
   firstOrder: string | null;
   decisions: Array<{ what: string; why?: string }>;
   work: { asis?: string; tobe?: string } | null;
   /** 이 워크스페이스의 용도(1단 답의 사람 말). 1턴 프롬프트 맨 위에 실린다(#1631). */
   purpose?: string | null;
-}): Promise<{ session_id: string | null; href: string | null; harness?: string; reused?: boolean; error?: string; reason?: string; via?: "chat" | "session"; turn_id?: string; chat_id?: string }> {
+}): Promise<{ session_id: string | null; href: string | null; harness?: string; reused?: boolean; error?: string; reason?: string }> {
   const userId = user?.userId;
   if (!userId) return { session_id: null, href: null, error: "인증된 사용자가 아닙니다" };
-  //  대화 턴으로 이미 킥오프했으면 멱등 — 처음 설정을 다시 눌러도 대화를 또 열지 않는다(세션 길의 priorSession 과 같은 규칙).
-  if (o.priorTurn) return { session_id: null, href: "#/liv", reused: true, via: "chat", turn_id: o.priorTurn };
   try {
     const { listCollectors, appendLivProfile } = await import("../../org/store.js");
     const { buildFirstTurnPrompt } = await import("../../org/liv/first-turn.js");
@@ -903,26 +893,13 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
       console.info(`[welcome] 리브 킥오프 보류(${userId}) — AI 미연결`);
       return { session_id: null, href: null, reason: plan.reason, error: "AI 를 아직 연결하지 않아 리브 세션을 열지 않았습니다" };
     }
-    // ── (#1631, 원준 2026-09-14) 킥오프는 **리브 탭의 대화 턴**으로 — 홈 탭에 tmux 세션을 여는 대신 리브 화면에서 리브가 답한다.
-    //  · 지시문은 숨김 턴(hidden)이라 사람은 리브의 답만 본다 · 승인 프롬프트·이름 짓기·자동 프로젝트가 없다(chat-turn.ts 머리말).
-    //  · 대화 턴은 claude 만 돈다(liv-turn.ts 의 거부 목록·세션 플래그가 claude 문법) — claude 로그인이 없으면 종전 세션 길로 간다.
-    if (usable.includes("claude")) {
-      const { startLivChatTurn } = await import("../../org/liv/chat-turn.js");
-      const { LIV_SESSION_LABEL } = await import("../../org/liv/kickoff.js");
-      const made = await startLivChatTurn(user, {
-        text: buildFirstTurnPrompt({ ...turnInput, harness: "claude", surface: "chat" }),
-        hidden: true, kind: "kickoff", label: LIV_SESSION_LABEL,
-      });
-      //  대화 좌표를 welcome 에 남긴다 — 다음 반영이 이걸 보고 재사용하고, 2턴(증류 트리거)이 이 대화에 잇는다.
-      const cur = await import("../../org/store.js").then((m) => m.getLivProfile(userId)).catch(() => null);
-      if (cur?.welcome) await appendLivProfile(userId, { welcome: { ...cur.welcome, liv_turn_id: made.turn_id, liv_chat_id: made.chat_id } }).catch(() => { /* 비치명 */ });
-      return { session_id: null, href: "#/liv", harness: "claude", via: "chat", turn_id: made.turn_id, chat_id: made.chat_id };
-    }
-    const made = await livKickoff(user, { prompt: buildFirstTurnPrompt({ ...turnInput, harness: plan.harness, surface: "session" }), harness: plan.harness });
+    //  (#1631, 원준 2026-09-15) 진짜 세션(createSession, kind=task)을 연다 — 지시문은 화면(session-chat livKickoff)이 숨긴다.
+    //   surface:"chat" 문안: 이 지시문은 화면에 안 보이니 리브가 «보내 주신 지시대로» 라고 말하지 않게 한다(하네스는 claude 든 아니든 같은 문안).
+    const made = await livKickoff(user, { prompt: buildFirstTurnPrompt({ ...turnInput, harness: plan.harness, surface: "chat" }), harness: plan.harness });
     //  세션 좌표를 welcome 에 남긴다 — 다음 반영이 이걸 보고 재사용하고, 2턴(증류 트리거)이 이 세션을 찾는다.
     const cur = await import("../../org/store.js").then((m) => m.getLivProfile(userId)).catch(() => null);
     if (cur?.welcome) await appendLivProfile(userId, { welcome: { ...cur.welcome, session_id: made.session_id } }).catch(() => { /* 비치명 */ });
-    return { session_id: made.session_id, href: made.href, harness: made.harness, via: "session" };
+    return { session_id: made.session_id, href: made.href, harness: made.harness };
   } catch (e) {
     const msg = (e as Error)?.message ?? String(e);
     console.warn(`[welcome] 리브 킥오프 실패(${userId}) — 처음 설정은 끝난 것으로 둔다:`, msg);

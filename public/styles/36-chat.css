@@ -475,3 +475,11 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .stk-q-desc { font-size: 11.5px; line-height: 1.45; color: var(--muted); }
 .stk-q-opt.is-on .stk-q-desc { color: inherit; opacity: .9; }
 .cxl-ask-btn:disabled { opacity: .45; cursor: default; }
+
+/* #1631 (원준 2026-09-15) — 리브 킥오프 세션의 로딩. 서버가 넣은 첫 지시는 숨기고, 리브가 워크스페이스를 맞추는 동안 이 줄이 대신 뜬다. */
+.sc-liv-boot { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; margin: 2px 0 6px;
+  border: 1px solid var(--line-net); border-radius: 12px; background: var(--bg-tint); color: var(--ink-sub); font-size: 13.5px; line-height: 1.6; }
+.sc-liv-boot-spin { flex: none; width: 16px; height: 16px; margin-top: 1px; border-radius: 50%;
+  border: 2px solid var(--line-net); border-top-color: var(--ink); animation: sc-liv-boot-spin 1s linear infinite; }
+@keyframes sc-liv-boot-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .sc-liv-boot-spin { animation: none; border-top-color: var(--line-net); } }

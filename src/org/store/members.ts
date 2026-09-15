@@ -197,13 +197,10 @@ export interface LivWelcome {
   distill_at?: string | null; distill_gave_up_at?: string | null; distill_note?: string | null;
   /** 세션이 사라져 **다시 연** 시각(#1631). 딱 한 번만 다시 연다 — 이 값이 있으면 다음엔 포기한다. */
   distill_reopened_at?: string | null;
-  /** (#1631, 원준 2026-09-14) 킥오프를 홈 탭의 tmux 세션이 아니라 **리브 탭의 대화 턴**으로 했을 때의 좌표 — session_id 대신 이 둘이 찍힌다.
-   *  liv_turn_id = 1턴(숨김 턴) id · liv_chat_id = 그 대화(claude 세션 uuid). 2턴 스윕은 세션에 배달하는 대신 이 대화에 증류 턴을 잇는다(liv/chat-turn.ts). */
-  liv_turn_id?: string | null; liv_chat_id?: string | null;
 }
 
 /**
- * (#1631) 2턴 대기 중인 사람 — 리브 세션(session_id)이 열렸거나 리브 대화 턴(liv_turn_id)으로 킥오프했는데 증류 지시를 아직 안 넣었고 포기도 안 한 구성원.
+ * (#1631) 2턴 대기 중인 사람 — 리브 세션(session_id)은 열렸는데 증류 지시를 아직 안 넣었고 포기도 안 한 구성원.
  *  신원 전역 표라 테넌트 컨텍스트 없이 **모든 워크스페이스를 한 번에** 훑는다(스윕이 워크스페이스마다 돌지 않는다).
  *
  * ⚠ welcome 은 #2265 이후 **워크스페이스 칸**(by_workspace)에 산다. 옛 최상위 자리도 아직 남아 있을 수
@@ -222,7 +219,7 @@ export async function listLivSecondTurnCandidates(): Promise<Array<{ id: string;
         WHERE m.state='active' AND m.kind='human' AND e.value ? 'welcome'
      )
      SELECT id, display_name, ws, welcome FROM cand
-      WHERE (welcome->>'session_id' IS NOT NULL OR welcome->>'liv_turn_id' IS NOT NULL)
+      WHERE welcome->>'session_id' IS NOT NULL
         AND welcome->>'distill_at' IS NULL
         AND welcome->>'distill_gave_up_at' IS NULL
       ORDER BY welcome->>'done_at' ASC LIMIT 200`);
