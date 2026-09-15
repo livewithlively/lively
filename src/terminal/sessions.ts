@@ -44,7 +44,7 @@ import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWrit
 //  #2165 — DB 를 타는 둘(mintAppToken·materializeAppAssets)은 게이트웨이 능력이다. 노드는 게이트웨이가
 //   미리 발급·추출해 실어 보낸 것(input.appSession)을 쓰므로 이 경로에 오지 않는다.
 import { gatewayUrl } from "../gateway-url.js";
-import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, psmuxUnsafeToken, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
+import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, paneLaunchArgv, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
 import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
 import { sessionActivityTitle, paneAwaitingInput, resolveAgentPhase, observeAgentRun, harnessReportsBusy, parseReportedPhase } from "./phase.js";
@@ -596,14 +596,6 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       : chatRuntime
         ? chatRuntimePaneArgv({ label: harness.label, bin: harness.bin || harness.key })
         : harnessLaunchArgv(harness.key, cmd);
-  //  🔴 #3626 — 윈도우 노드(psmux)가 못 나르는 토큰(따옴표·공백)이 섞였으면 **여기서 멈춘다**. 그대로 보내면 pane 이
-  //   뜨지도 못한 채 세션이 사라지고, 화면엔 «세션이 끝났거나 삭제되어…» 만 남아 원인을 아무도 못 읽는다(상민님 신고
-  //   2026-09-08). 값은 고치지 않는다(psmuxUnsafeToken 머리말) — 어느 인자가 문제인지 말하고 생성을 거절한다.
-  if (process.platform === "win32") {
-    const bad = psmuxUnsafeToken(launch);
-    if (bad) throw new HttpError(400, `이 컴퓨터(Windows 노드)에서는 따옴표나 공백이 든 실행 인자를 넘길 수 없어 세션을 만들지 않았습니다: ${bad}`);
-  }
-
   const invites = await validInvites(input.invites, ownerId(user));
   // 이름(#1808) — ① 사람이 준 이름 ② 없으면 **첫 지시**로 짓는다 ③ 그것도 없으면 id(= '아직 이름 없음' 표식. 근거는 아래 tmux(args) 뒤 주석).
   //  #2545 — 선언을 여기로 올렸다: 새 경로는 desired 행을 new-session **전**에 쓴다(생성 순서 역전). 값은 종전과 같다.
@@ -781,7 +773,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //  ⚠ 값이 없으면(멤버 미상·scope 0) 아무것도 안 실어 종전 경로(공유 파일)로 떨어진다 — 무회귀.
     const mcpToken = await mintSessionMcpToken(ownerId(user), id).catch(() => null);
     if (mcpToken) args.push("-e", `LIVELY_MCP_TOKEN=${mcpToken}`);
-    if (launch.length) args.push(...launch);
+    // #3982 — psmux는 `--`가 없으면 pane argv를 한 PowerShell 명령 문자열로 다시 합친다. 실행 경계를 명시해
+    // 대화 안내·설정 같은 공백/따옴표가 셸 문법이나 사용자의 zsh/PowerShell 명령으로 재해석되지 않게 한다.
+    args.push(...paneLaunchArgv(launch, process.platform));
   }
   // 웹터미널은 xterm.js 로 렌더된다 — pane TERM 을 xterm-256color 로 통일(색 일관성: 격리 세션은 box-spawn 이
   //  강제, 비격리(프로젝트·managed)는 여기 default-terminal 로. 서버 전역이나 '새 pane' 에만 적용=기존 세션 무영향, 멱등).

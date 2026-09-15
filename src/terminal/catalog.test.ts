@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { HARNESSES, harnessSettingsArgv, harnessThemeArgv, harnessThemeEnvArgs, psmuxUnsafeToken, installTenantSlugResolver, roots, sharedRoot, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
+import { readFileSync } from "node:fs";
+import { HARNESSES, harnessSettingsArgv, harnessThemeArgv, harnessThemeEnvArgs, paneLaunchArgv, installTenantSlugResolver, roots, sharedRoot, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 
 test("Codex 현행 5.6 모델과 모델별 추론강도 차이를 카탈로그가 보존한다", () => {
   const c = HARNESSES.find((h) => h.key === "codex")!;
@@ -131,7 +132,6 @@ function decodedWindowsPane(argv: string[]): { script: string; intro: string } {
 
 test("★ Windows Codex app-server pane 은 psmux-safe 명령으로 열리고 안내 의미를 보존한다(#3982)", () => {
   const argv = codexAppServerPaneArgv("win32");
-  assert.equal(psmuxUnsafeToken(argv), null, "psmux 가 못 나르는 따옴표·공백 토큰이 없어야 한다");
   const { script, intro } = decodedWindowsPane(argv);
   assert.match(intro, /Codex/);
   assert.match(intro, /대화창/);
@@ -142,7 +142,6 @@ test("★ Windows Codex app-server pane 은 psmux-safe 명령으로 열리고 �
 
 test("Windows의 다른 대화 런타임도 안전하고, 모드가 없으면 빈 괄호를 만들지 않는다", () => {
   const argv = chatRuntimePaneArgv({ label: "Claude Code", bin: "claude" }, "win32");
-  assert.equal(psmuxUnsafeToken(argv), null);
   const { intro } = decodedWindowsPane(argv);
   assert.match(intro, /Claude Code/);
   assert.match(intro, /claude/);
@@ -156,6 +155,22 @@ test("플랫폼 값은 정확히 win32 일 때만 Windows 우회를 쓴다", () 
 
 test("플랫폼을 생략하면 현재 실행 플랫폼과 같은 argv 를 만든다", () => {
   assert.deepEqual(codexAppServerPaneArgv(), codexAppServerPaneArgv(process.platform));
+});
+
+test("★ Windows psmux pane 명령은 -- 뒤에서 직접 실행해 공백·따옴표를 셸 명령으로 재해석하지 않는다(#3982)", () => {
+  const launch = ["powershell", "-NoExit", "-Command", "Write-Host '대화 창'"];
+  assert.deepEqual(paneLaunchArgv(launch, "win32"), ["--", ...launch]);
+});
+
+test("pane 명령 구분자는 Windows에만 붙고, 빈 명령에는 붙지 않는다", () => {
+  assert.deepEqual(paneLaunchArgv(["sh", "-l"], "linux"), ["sh", "-l"]);
+  assert.deepEqual(paneLaunchArgv(["zsh", "-l"], "darwin"), ["zsh", "-l"]);
+  assert.deepEqual(paneLaunchArgv([], "win32"), []);
+});
+
+test("createSession의 실제 new-session 조립도 pane 실행 경계를 한 관문에서 쓴다", () => {
+  const src = readFileSync(new URL("../../src/terminal/sessions.ts", import.meta.url), "utf8");
+  assert.match(src, /args\.push\(\.\.\.paneLaunchArgv\(launch, process\.platform\)\)/);
 });
 
 // harnessSettingsArgv — claude 스폰의 --settings(theme+statusLine) 병합 seam. 이 함수가 회귀하면 statusLine 이
@@ -193,13 +208,13 @@ test("harnessSettingsArgv: 비claude(codex)는 statusLine 무시하고 theme arg
   assert.deepEqual(harnessSettingsArgv("codex", { theme: "dark", managed: true }), harnessThemeArgv("codex", "dark"));
 });
 
-// ── #3626 (2026-09-08) — 윈도우 노드(psmux)는 따옴표가 든 토큰을 못 나른다: `--settings` JSON 이 곧 세션 즉사였다 ──
-//  홈에서 [시키기] 로 연 세션만 그 PC 에서 4410 으로 죽었다(홈만 화면 테마 헤더를 theme 으로 옮겼다). 같은 요청에
-//  x-lively-theme 헤더를 붙이면 죽고 떼면 살았다(hammurabi 실측). 이 표는 그 갈림을 붙박는다.
-test("harnessSettingsArgv: win32(psmux) 에서는 theme·managed 가 있어도 --settings 를 얹지 않는다(#3626)", () => {
-  assert.deepEqual(harnessSettingsArgv("claude", { theme: "dark", platform: "win32" }), []);
-  assert.deepEqual(harnessSettingsArgv("claude", { theme: "dark", managed: true, platform: "win32" }), []);
-  assert.deepEqual(harnessSettingsArgv("codex", { theme: "dark", platform: "win32" }), []);
+// ── #3982 — `--` 직접 실행 경계가 pane의 JSON/공백 인자를 보존한다. Windows도 테마 인자를 잃지 않는다. ──
+test("harnessSettingsArgv: win32도 pane argv 테마를 싣되 POSIX statusLine은 제외한다(#3982)", () => {
+  assert.deepEqual(harnessSettingsArgv("claude", { theme: "dark", platform: "win32" }), harnessThemeArgv("claude", "dark"));
+  const managed = JSON.parse(harnessSettingsArgv("claude", { theme: "dark", managed: true, platform: "win32" })[1]);
+  assert.equal(managed.theme, "dark");
+  assert.equal("statusLine" in managed, false);
+  assert.deepEqual(harnessSettingsArgv("codex", { theme: "dark", platform: "win32" }), harnessThemeArgv("codex", "dark"));
 });
 
 test("harnessSettingsArgv: win32 가 아니면 종전 그대로(무회귀)", () => {
@@ -210,15 +225,6 @@ test("harnessSettingsArgv: win32 가 아니면 종전 그대로(무회귀)", () 
 test("harnessThemeEnvArgs: win32 에서는 JSON env(opencode) 도 얹지 않는다 — psmux 가 따옴표를 벗긴다", () => {
   assert.ok(harnessThemeEnvArgs("opencode", "dark").length > 0, "다른 표면에선 종전대로 나간다");
   assert.deepEqual(harnessThemeEnvArgs("opencode", "dark", "win32"), []);
-});
-
-test("psmuxUnsafeToken: 따옴표·공백·탭이 든 토큰을 잡고, 깨끗한 argv 는 null", () => {
-  assert.equal(psmuxUnsafeToken(["claude", "--model", "opus", "--effort", "xhigh", "--dangerously-skip-permissions"]), null);
-  assert.equal(psmuxUnsafeToken(["claude", "--settings", '{"theme":"dark"}']), '{"theme":"dark"}');
-  assert.equal(psmuxUnsafeToken(["node", "C:\\Program Files\\x.js"]), "C:\\Program Files\\x.js");
-  assert.equal(psmuxUnsafeToken(["sh", "-c", "echo\thi"]), "echo\thi");
-  assert.equal(psmuxUnsafeToken(["x", "it's"]), "it's");
-  assert.equal(psmuxUnsafeToken([]), null);
 });
 
 // ── 대화 런타임 세션의 pane (#2439, 2026-09-01) ────────────────────────────────────

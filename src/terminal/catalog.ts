@@ -604,36 +604,31 @@ const WIN_UTF8_PS = [
   "if($u){try{[Console]::OutputEncoding=$u}catch{};try{[Console]::InputEncoding=$u}catch{};try{$OutputEncoding=$u}catch{}}",
 ].join("\n");
 
-// `-EncodedCommand`(UTF-16LE base64)로 넘긴다 — **인용부호를 아예 안 쓰기 위해서**다.
-//  psmux 3.3.7 은 인자의 `"` · `'` · 탭을 삼키고(opt-json.test.ts 가 세운 계약), 공백은 인자를 쪼갠다.
-//  base64 는 그 문자를 하나도 안 쓰므로 psmux 를 통과해도 스크립트가 원형 그대로 도착한다.
+// `-EncodedCommand`(UTF-16LE base64)로 넘긴다 — 스크립트를 실행 argv와 분리된 불투명 값으로 유지하기 위해서다.
+//  paneLaunchArgv의 `--`가 psmux의 직접 실행 경계를 보장하고, base64는 안내문·프렐류드가 PowerShell 명령줄
+//  문법에 직접 섞이지 않게 한다.
 //  (여기엔 보간할 값이 없다 — 위 상수 하나뿐이라 아래 인젝션 경계 규칙과 어긋나지 않는다.)
 function winPowerShellArgv(script: string): string[] {
   return ["powershell", "-NoLogo", "-NoExit", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
 }
 
 /**
- * Windows 셸 세션이 실행할 argv. 토큰에 `"` `'` 탭 **공백**이 하나도 없어야 한다(psmux 통과 조건).
+ * Windows 셸 세션이 실행할 argv.
  *
  * `powershell`(5.1)을 명시한다 — psmux 의 Windows 기본 셸과 같고 어느 Windows 에나 있다(pwsh 는 없을 수 있다).
  */
 /**
- * 윈도우 노드(psmux)가 **못 나르는** pane 명령 토큰 — 있으면 그 토큰, 없으면 null (순수).
+ * pane 실행 argv를 mux 옵션 뒤에 싣는다(순수).
  *
- *  규칙의 출처는 아래 winShellArgv 머리말(«토큰에 `"` `'` 탭 공백이 하나도 없어야 한다»)이고, 이 함수는 그 규칙을
- *  **실행 직전에 재는 자**다. 실측(#3626, hammurabi psmux 2026-09-08 — execFile 로 토큰 배열을 그대로 넘겨 자식이
- *  받은 argv 를 파일로 적게 했다):
- *     `--x` `a b`                     → 자식 argv `--x` `a` `b`   (공백에서 다시 쪼개진다)
- *     `--settings` `{"theme":"dark"}` → 자식이 **아예 안 뜬다**  (따옴표 든 토큰 — 세션이 그 자리에서 죽는다)
- *  그래서 이런 토큰이 섞이면 조용히 죽는 pane 을 만들지 말고 생성 자체를 **읽을 수 있는 오류**로 멈춘다
- *  (sessions.ts createSession). 값을 고쳐 주지는 않는다 — 어떤 값이 오는지는 호출자마다 뜻이 달라 여기서
- *  짐작해 바꾸면 «다른 값으로 조용히 성공» 이 되고, 그건 죽는 것보다 찾기 어렵다.
+ * Windows psmux 3.3.7은 `new-session ... <argv>`처럼 구분자 없이 받은 위치 인자를 한 문자열로 합쳐
+ * 기본 PowerShell의 `-Command`로 다시 실행한다. 그래서 공백·따옴표가 재해석되고, 긴 EncodedCommand는
+ * 바깥 PowerShell까지 한 번 더 생겨 CreateProcessW가 실패했다(#3982 hammurabi 실측).
+ *
+ * psmux의 tmux 호환 계약은 `--` 뒤 인자를 raw argv로 서버에 전달해 직접 실행하는 것이다. 이 경계를 쓰면
+ * 값은 셸 문법이 아니라 위치 인자 그대로 남는다. POSIX tmux 경로는 검증된 종전 argv를 유지한다.
  */
-export function psmuxUnsafeToken(argv: readonly string[]): string | null {
-  for (const tok of argv) {
-    if (/["'\s]/.test(String(tok))) return String(tok);
-  }
-  return null;
+export function paneLaunchArgv(argv: readonly string[], platform: string = process.platform): string[] {
+  return platform === "win32" && argv.length ? ["--", ...argv] : [...argv];
 }
 
 export function winShellArgv(): string[] {
@@ -746,10 +741,9 @@ export function chatRuntimePaneArgv(o: { label: string; bin: string; mode?: stri
     `여기서  ${o.bin}  을 실행하면 대화창과 **다른 대화**가 열립니다(같은 대화는 한 곳만 쥘 수 있습니다).`,
     "대화를 이 터미널로 옮기려면 대화창에서 [터미널로 넘기기] 를 누르세요.",
     line].join("\n");
-  // Windows 노드의 psmux 는 공백·따옴표가 든 pane argv 토큰을 보존하지 못한다(#3626). 종전 POSIX `sh -c`
-  // 안내는 APP_SERVER_SH 자체가 곧 금지 토큰이라, 기본 app-server 인 Codex 세션을 만들기 전에 가드가 400 으로
-  // 멈췄다(#3982). 안내문은 UTF-8 base64 로 한 번, PowerShell 스크립트 전체는 UTF-16LE base64 로 다시 감싼다.
-  // psmux 가 보는 argv 는 안전한 영숫자 토큰뿐이고, 안내문은 스크립트 문법에 직접 보간되지 않는다.
+  // Windows에는 POSIX `sh -c` 대신 PowerShell을 쓴다. 안내문은 UTF-8 base64로 한 번, PowerShell 스크립트
+  // 전체는 UTF-16LE base64로 다시 감싼다. paneLaunchArgv의 직접 실행 경계와 합쳐 안내문이 스크립트 문법이나
+  // 바깥 PowerShell 명령으로 재해석되지 않는다(#3982).
   if (platform === "win32") {
     const introB64 = Buffer.from(intro, "utf8").toString("base64");
     const script = [
@@ -855,20 +849,13 @@ function managedStatusLineSpec(): { type: string; command: string } {
  *  claude 외 하네스는 statusLine 주입 경로가 없어 종전 테마 argv 그대로(무회귀).
  */
 export function harnessSettingsArgv(harnessKey: string, opts: { theme?: unknown; managed?: boolean; platform?: string }): string[] {
-  //  🔴 #3626 (2026-09-08, hammurabi 실측) — **윈도우 노드(psmux)에는 `--settings` 를 아예 얹지 않는다.**
-  //   값이 JSON 이라 따옴표가 들어가는데, psmux 는 pane 명령 토큰을 공백으로 다시 쪼개고 따옴표가 든 토큰은
-  //   자식을 **띄우지조차 못한다**(psmuxUnsafeToken 머리말의 실측). 그 결과가 «홈에서 [시키기] → 세션 즉사
-  //   (4410 session-gone)» 였다 — 홈 경로만 화면 테마 헤더를 theme 으로 옮겨 이 인자가 붙었고, 프로젝트를 골라
-  //   연 세션은 theme 이 없어 멀쩡했다. claude 는 `--settings` 에 파일 경로도 받지만 그 경로에 공백이 들 수 있어
-  //   (`C:\Users\홍 길동\…`) 같은 함정이다. 테마는 «실행 시점에만 얹는 방법이 있는 하네스에만» 주는 값이고
-  //   (HARNESS_THEME 머리말), 이 표면엔 그 방법이 없으니 **손대지 않는다** — 하네스는 사람의 설정대로 뜬다.
-  //   statusLine(managed) 도 POSIX sh 명령이라 이 표면에선 애초에 못 돈다.
-  if (opts.platform === "win32") return [];
   if (String(harnessKey || "") !== "claude") return harnessThemeArgv(harnessKey, opts.theme);
   const s: Record<string, unknown> = {};
   const t = normalizeTheme(opts.theme);
   if (t) s.theme = t;
-  if (opts.managed) s.statusLine = managedStatusLineSpec();
+  // statusLine 명령은 POSIX 셸 문법이라 Windows Claude에는 싣지 않는다. theme JSON은 paneLaunchArgv의
+  // psmux 직접 실행 경계가 보존하므로 Windows에서도 안전하다(#3982).
+  if (opts.managed && opts.platform !== "win32") s.statusLine = managedStatusLineSpec();
   return Object.keys(s).length ? ["--settings", JSON.stringify(s)] : [];
 }
 
