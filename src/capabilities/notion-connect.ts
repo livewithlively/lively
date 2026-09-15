@@ -19,6 +19,7 @@ import { z } from "zod";
 import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { listCollectors, upsertCollector, type CollectorView } from "../org/store/collectors.js";
+import { itemsPool } from "../db/client.js";
 import { listSecretsByKindPublic, GATEWAY_OWNER } from "../org/credentials/member-secret-store.js";
 import { NOTION_PUBLIC_KIND } from "../org/credentials/notion-oauth.js";
 import { startNotionPublicConsent, completeNotionInstall, notionPublicReady, onNotionInstalled } from "../org/credentials/oauth-broker.js";
@@ -87,6 +88,12 @@ export interface NotionWorkspaceState extends NotionWorkspaceRow {
   enabled: boolean;
   /** 미러 스탬프 축(external_instance) — 스윕 범위가 이 값이다. 진단용으로 드러낸다. */
   instance: string | null;
+  /** 이 워크스페이스에서 모아 둔 노션 페이지 수(데이터베이스 칸·보관된 것 제외). 수집기가 없거나 셀 수 없었으면 null.
+   *  사람이 «빠진 페이지가 있나»를 재는 숫자다(#1968) — 노션 선택 화면엔 전체 선택이 없어 하나씩 고르다 빠뜨리기 쉽다. */
+  pages: number | null;
+  /** 첫 수집이 끝났는가 — 성공한 실행이 한 번이라도 있거나 이미 모인 페이지가 있으면 true.
+   *  끝나기 전의 0 은 «0개»가 아니다: 화면은 이 값이 true 일 때만 수를 말한다. */
+  first_sync_done: boolean;
 }
 
 export interface NotionCollectState {
@@ -101,13 +108,18 @@ export interface NotionCollectState {
 export async function notionCollectState(): Promise<NotionCollectState> {
   const [all, ws] = await Promise.all([listCollectors(), orgWorkspaces()]);
   const byWs = new Map(notionCollectors(all).map((c) => [boundWorkspace(c), c] as const));
+  const bound = ws.map((w) => byWs.get(w.id)).filter((c): c is CollectorView => !!c);
+  const [pageCounts, okRuns] = await Promise.all([
+    countMirroredPages([...new Set(bound.map(mirrorInstance))]),
+    collectorsWithOkRun(bound.map((c) => c.id)),
+  ]);
   const workspaces: NotionWorkspaceState[] = ws.map((w) => {
-    const c = byWs.get(w.id);
+    const c = byWs.get(w.id) ?? null;
     return {
       ...w,
       collector_id: c?.id ?? null,
       enabled: !!c?.enabled,
-      instance: c ? (c.config?.instance ?? "default") : null,
+      ...collectedView(c, pageCounts, okRuns),
     };
   });
   return {
@@ -115,6 +127,47 @@ export async function notionCollectState(): Promise<NotionCollectState> {
     workspaces,
     ready: await notionPublicReady().catch(() => false),
   };
+}
+
+/** 미러 스탬프 축 — 커넥터가 쓰는 값과 **같은 식**이어야 한다(connectors/notion/client.ts 의 `c.instance || "default"`).
+ *  listCollectors 는 비어 있는 설정값을 "" 로 돌려주므로 `?? "default"` 로 받으면 "" 축을 보게 된다(그 축엔 미러가 없다). */
+function mirrorInstance(c: CollectorView): string {
+  return c.config?.instance || "default";
+}
+
+/** 워크스페이스 한 줄의 수집 결과(#1968) — 순수 판정. pageCounts=null 은 «셀 수 없었다»(0 과 다르다). */
+function collectedView(c: CollectorView | null, pageCounts: Map<string, number> | null, okRuns: Set<number>):
+  Pick<NotionWorkspaceState, "instance" | "pages" | "first_sync_done"> {
+  if (!c) return { instance: null, pages: null, first_sync_done: false };
+  const instance = mirrorInstance(c);
+  const pages = pageCounts ? (pageCounts.get(instance) ?? 0) : null;
+  //  실행 기록(connector_run.collector_id)은 #1419 이관 뒤부터만 남는다 — 기록 없는 옛 수집기도 자료가 있으면 끝난 것이다.
+  return { instance, pages, first_sync_done: okRuns.has(c.id) || (pages ?? 0) > 0 };
+}
+
+/** 축별 노션 페이지 수(살아 있는 것만). 데이터베이스 칸(kind=database)은 페이지가 아니라 뺀다 — 행은 노션에서도 페이지다.
+ *  숫자는 덤이다: 못 세면 null 로 알린다. 0 으로 뭉개면 화면이 «하나도 못 모았다»고 거짓말한다. */
+async function countMirroredPages(instances: string[]): Promise<Map<string, number> | null> {
+  if (!instances.length) return new Map();
+  try {
+    const r = await itemsPool.query(
+      `SELECT external_instance AS inst, count(*)::int AS n
+         FROM knowledge
+        WHERE external_system='notion' AND external_instance = ANY($1::text[]) AND lifecycle='active'
+          AND COALESCE(fields->'notion'->>'kind', 'page') <> 'database'
+        GROUP BY external_instance`, [instances]);
+    return new Map((r.rows as Array<{ inst: unknown; n: unknown }>).map((row) => [String(row.inst), Number(row.n)]));
+  } catch { return null; }
+}
+
+/** 성공으로 끝난 실행이 한 번이라도 있는 수집기. connector_run 이 아직 없는 배포(한 번도 안 돈 곳)면 빈 집합. */
+async function collectorsWithOkRun(ids: number[]): Promise<Set<number>> {
+  if (!ids.length) return new Set();
+  try {
+    const r = await itemsPool.query(
+      `SELECT DISTINCT collector_id FROM connector_run WHERE collector_id = ANY($1::bigint[]) AND status='ok'`, [ids]);
+    return new Set((r.rows as Array<{ collector_id: unknown }>).map((row) => Number(row.collector_id)));
+  } catch { return new Set(); }
 }
 
 /**
@@ -285,4 +338,4 @@ export function shouldStampInstance(existing: CollectorView | null): boolean {
   return enteringToggle && existing.instance_key !== LEGACY_INSTANCE_KEY;
 }
 
-export const __notionCollectTestables = { boundWorkspace, adoptable, keyForWorkspace, shouldStampInstance };
+export const __notionCollectTestables = { boundWorkspace, adoptable, keyForWorkspace, shouldStampInstance, collectedView, mirrorInstance };
