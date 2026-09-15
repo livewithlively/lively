@@ -595,7 +595,7 @@ export function paneLaunchArgv(argv: readonly string[], platform: string = proce
   return platform === "win32" && argv.length ? ["--", ...argv] : [...argv];
 }
 
-// 하네스 실행 argv → 런처로 감싼 argv. cmd 가 비면 감쌀 하네스가 없으므로 psmux가 고른 기본 셸을 그대로 띄운다.
+// 하네스 실행 argv → 런처로 감싼 argv. cmd 가 비면 감쌀 하네스가 없으므로 플랫폼 셸을 띄운다.
 //
 // ⚠ Windows(psmux 노드)에서는 감싸지 않는다 (#1541 실측). 이 런처는 **POSIX 셸 스크립트**인데
 //  Windows 노드의 pane 셸은 PowerShell 이라 그 스크립트가 그대로 파싱된다 → 하네스는 시작조차 못 하고
@@ -606,14 +606,14 @@ export function paneLaunchArgv(argv: readonly string[], platform: string = proce
 //  세션은 셸로 남는다)이 Windows 에선 없다 — 그건 알려진 갭이고, PowerShell 판 런처는 별도로 만들어야 한다.
 //  ⚠ 여기서 문자열 보간으로 PowerShell 스크립트를 조립하지 말 것: 이 자리는 하네스·플래그가 위치인자로만
 //   들어가야 하는 인젝션 경계다(위 LAUNCH_SH 주석). 검증 없이 급조한 래퍼를 끼우는 것보다 안 감싸는 게 낫다.
-//   하네스 세션은 ConPTY 에 UTF-8 을 직접 쓰고 xterm.js 가 UTF-8 로 디코드한다. 빈 셸 pane은 psmux가
-//   검증한 기본 셸을 써야 하므로, 별도 PowerShell 프렐류드를 실행하려고 셸을 한 겹 더 만들지 않는다(#3982).
+//   하네스 세션은 ConPTY 에 UTF-8 을 직접 쓰고 xterm.js 가 UTF-8 로 디코드한다. 빈 Windows pane은
+//   실행 정책에 막힌 PowerShell을 피하려고 cmd.exe를 raw argv로 직접 실행한다(#3982).
 export function harnessLaunchArgv(harnessKey: string, cmd: string[], platform: string = process.platform): string[] {
   const argv = Array.isArray(cmd) ? cmd : [];
-  // #3982 hammurabi 실측: psmux 기본 셸은 정상인데 `-- powershell ...`로 Windows PowerShell 5.1을
-  // 직접 고르면 단말 정책에서 CreateProcessW access denied가 난다. 빈 pane에 별도 셸을 강제할 이유가 없으므로
-  // psmux의 검증된 선택(pwsh → powershell → cmd)에 맡긴다. 실제 하네스 argv만 아래 직접 실행 경계를 탄다.
-  if (platform === "win32") return argv;
+  // #3982 hammurabi 실측: Windows PowerShell 5.1은 CreateProcessW access denied였고, 명령 없는 pane도
+  // psmux가 실행 가능성이 아니라 파일 존재만 보고 그 PowerShell을 먼저 골라 즉시 죽었다. 빈 pane은 실행 정책의
+  // 영향을 받지 않는 cmd.exe를 명시한다. 실제 하네스 argv는 계속 raw argv 직접 실행 경계를 탄다.
+  if (platform === "win32") return argv.length ? argv : ["cmd.exe", "/K"];
   if (!argv.length) return argv;
   return ["sh", "-c", LAUNCH_SH, "lively-launch", harnessFailNotice(harnessKey), harnessNotFoundNotice(harnessKey), ...argv];
 }
@@ -700,11 +700,11 @@ export function chatRuntimePaneArgv(o: { label: string; bin: string; mode?: stri
     `여기서  ${o.bin}  을 실행하면 대화창과 **다른 대화**가 열립니다(같은 대화는 한 곳만 쥘 수 있습니다).`,
     "대화를 이 터미널로 옮기려면 대화창에서 [터미널로 넘기기] 를 누르세요.",
     line].join("\n");
-  // Windows pane은 psmux 기본 셸을 그대로 쓴다. 이 pane은 대화 런타임의 보조 터미널이라 실행할 프로그램이 없고,
-  // 별도 powershell.exe를 직접 고르면 일부 단말 정책에서 CreateProcessW access denied가 난다(#3982 실기기).
-  // 안내문보다 세션이 실제로 서는 것이 우선이며, 화면은 chatMode/runtimeMode로 이미 대화창을 연다.
+  // Windows pane은 실행 정책에 막힌 PowerShell과 그것을 먼저 고르는 psmux 기본 셸 선택을 모두 피한다.
+  // cmd.exe를 raw argv로 직접 실행하면 따옴표·공백을 셸 문자열로 합치지 않으면서 pane이 실제로 남는다(#3982).
+  // 안내문은 Windows에서 생략되지만 화면은 chatMode/runtimeMode로 이미 대화창을 연다.
   if (platform === "win32") {
-    return [];
+    return ["cmd.exe", "/K"];
   }
   return ["sh", "-c", APP_SERVER_SH, "lively-chat-pane", intro];
 }
