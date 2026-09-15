@@ -274,7 +274,7 @@ async function connect(o: CodexChatOpts): Promise<AppServerTransport> {
     let fd: number | undefined;
     try {
       fd = fs.openSync(logPath, "a");
-      spawnDetachedLocal({ port, cwd: o.cwd, logFd: fd, env: { ...process.env, ...sessionEnv(o.sessionId) } });
+      await spawnDetachedLocal({ port, cwd: o.cwd, logFd: fd, env: { ...process.env, ...sessionEnv(o.sessionId) } });
     } catch (e) {
       throw new CodexChatUnavailable(`codex app-server 를 띄우지 못했습니다 — ${msg(e)}`, e);
     } finally {

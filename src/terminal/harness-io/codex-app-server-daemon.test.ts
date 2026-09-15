@@ -4,7 +4,9 @@
 //  재기동되는 순간 **돌던 턴이 통째로 유실**됐다(실측 2026-08-26 dev: 프롬프트 18:23:46 → stage-sync 재기동
 //  18:24:38 → 답 영영 없음). 여기서 지키는 것은 그 재발을 막는 성질들이다.
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { detachedStartSh, PORT_BASE, PORT_SPAN, sessionPort } from "./codex-app-server-daemon.js";
+import { spawnDetachedLocal } from "./codex-app-server-daemon.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -73,5 +75,66 @@ t("★ S6 기동을 **확인해서** 말한다 — `&` 는 즉시 0 이라 그�
 t("S4 로그를 남긴다 — 떼어 놓은 프로세스는 사후 진단이 유일한 창이다", () => {
   assert.match(detachedStartSh(39123, "$HOME/.codex/lively-app-server-s1.log"), /lively-app-server-s1\.log/);
 });
+
+type SpawnCall = { command: string; args: string[]; options: Record<string, unknown> };
+
+function fakeSpawn(outcome: "spawn" | "error", calls: SpawnCall[], unrefs: { n: number }) {
+  return ((command: string, args: string[], options: Record<string, unknown>) => {
+    calls.push({ command, args, options });
+    const child = new EventEmitter() as EventEmitter & { pid?: number; unref: () => void };
+    child.pid = 321;
+    child.unref = () => { unrefs.n++; };
+    setImmediate(() => outcome === "spawn" ? child.emit("spawn") : child.emit("error", new Error("spawn codex ENOENT")));
+    return child;
+  }) as never;
+}
+
+await (async () => {
+  const calls: SpawnCall[] = [], unrefs = { n: 0 };
+  const pid = await spawnDetachedLocal({
+    port: 39123, cwd: "C:\\work", logFd: 7, platform: "win32",
+    spawnFn: fakeSpawn("spawn", calls, unrefs),
+  });
+  assert.equal(pid, 321);
+  assert.equal(calls[0]?.command, "codex");
+  assert.deepEqual(calls[0]?.args, ["app-server", "--listen", "ws://127.0.0.1:39123"]);
+  assert.equal(calls[0]?.options.shell, true, "Windows npm 의 codex.cmd 는 셸 없이 CreateProcess 할 수 없다");
+  assert.equal(unrefs.n, 1, "기동 성공 뒤 부모 수명에서 떼어 놓는다");
+  pass++; console.log("ok  ★ L1 Windows 는 codex.cmd 를 셸로 실행한다");
+})();
+
+await (async () => {
+  const calls: SpawnCall[] = [], unrefs = { n: 0 };
+  await spawnDetachedLocal({
+    port: 39123, cwd: "/work", logFd: 7, platform: "linux",
+    spawnFn: fakeSpawn("spawn", calls, unrefs),
+  });
+  assert.equal(calls[0]?.options.shell, false, "POSIX 는 argv 직접 실행을 유지한다");
+  pass++; console.log("ok  L2 POSIX 는 셸 해석을 켜지 않는다");
+})();
+
+await (async () => {
+  const calls: SpawnCall[] = [], unrefs = { n: 0 };
+  await assert.rejects(
+    spawnDetachedLocal({
+      port: 39123, cwd: "C:\\work", logFd: 7, platform: "win32",
+      spawnFn: fakeSpawn("error", calls, unrefs),
+    }),
+    /spawn codex ENOENT/,
+  );
+  assert.equal(unrefs.n, 0, "기동하지 못한 프로세스를 성공처럼 떼지 않는다");
+  pass++; console.log("ok  ★ L3 비동기 spawn 오류를 받아 노드 프로세스까지 죽이지 않는다");
+})();
+
+await (async () => {
+  await assert.rejects(
+    spawnDetachedLocal({
+      port: 39123, cwd: "/work", logFd: 7, platform: "linux",
+      spawnFn: (() => { throw new Error("동기 spawn 실패"); }) as never,
+    }),
+    /동기 spawn 실패/,
+  );
+  pass++; console.log("ok  L4 동기 spawn 오류도 같은 실패 값으로 돌려준다");
+})();
 
 console.log(`\n${pass} passed`);
