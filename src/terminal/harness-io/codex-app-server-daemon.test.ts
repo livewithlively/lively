@@ -5,8 +5,11 @@
 //  18:24:38 → 답 영영 없음). 여기서 지키는 것은 그 재발을 막는 성질들이다.
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { detachedStartSh, PORT_BASE, PORT_SPAN, sessionPort } from "./codex-app-server-daemon.js";
-import { spawnDetachedLocal } from "./codex-app-server-daemon.js";
+import { readLocalRolloutChunk, spawnDetachedLocal } from "./codex-app-server-daemon.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -135,6 +138,28 @@ await (async () => {
     /동기 spawn 실패/,
   );
   pass++; console.log("ok  L4 동기 spawn 오류도 같은 실패 값으로 돌려준다");
+})();
+
+await (async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "lively-codex-rollout-"));
+  try {
+    const dated = path.join(home, "sessions", "2026", "09", "15");
+    mkdirSync(dated, { recursive: true });
+    writeFileSync(path.join(dated, "rollout-2026-09-15T00-00-00-thread-other.jsonl"), "다른 대화\n");
+    const wanted = path.join(dated, "rollout-2026-09-15T00-00-01-01a0a3f3-8e21-7b41-a203-8b58dfbca1c5.jsonl");
+    writeFileSync(wanted, "가나다라마바사\n");
+
+    const stat = await readLocalRolloutChunk("01a0a3f3-8e21-7b41-a203-8b58dfbca1c5", 0, 0, home);
+    assert.deepEqual({ found: stat.found, size: stat.size, data: stat.data }, { found: true, size: 22, data: "" });
+    const part = await readLocalRolloutChunk("01a0a3f3-8e21-7b41-a203-8b58dfbca1c5", 3, 6, home);
+    assert.equal(Buffer.from(part.data, "base64").toString("utf8"), "나다");
+    assert.equal(part.offset, 3);
+    assert.equal(part.eof, false);
+    assert.equal((await readLocalRolloutChunk("../탈출", 0, 10, home)).found, false, "스레드 id 로 홈 밖 파일을 고를 수 없다");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+  pass++; console.log("ok  ★ R5 운영체제 경로 API로 Codex rollout을 찾아 범위만 읽는다");
 })();
 
 console.log(`\n${pass} passed`);

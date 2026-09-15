@@ -18,7 +18,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CodexAppServer, type AppServerTransport, type ApprovalDecision, type ApprovalRequest } from "./codex-app-server.js";
-import { detachedStartSh, portAlive, sessionPort, spawnDetachedLocal, waitPort, wsTransport } from "./codex-app-server-daemon.js";
+import { detachedStartSh, localRolloutPath, portAlive, sessionPort, spawnDetachedLocal, waitPort, wsTransport } from "./codex-app-server-daemon.js";
 import { spawn } from "node:child_process";
 import { memberShOut, memberSpawnArgv, memberWriteFile } from "../terminal-member-fs.js";   // 파일 op·멤버 자리 실행
 import { MEMBER_HOME_BASE } from "../terminal-transcript.js";
@@ -594,13 +594,7 @@ export async function rolloutPath(osUser: string | null, threadId: string): Prom
     // ⚠ memberSh 가 아니라 memberShOut 이다 — memberSh 는 stdout 을 버리고 void 를 돌려줘서, 여기서 쓰면
     //  **항상 빈 경로**가 나온다(실측 2026-08-27: 격리·매니지드에서 화면이 답 파일을 못 찾던 원인).
     if (osUser) return String(await memberShOut(osUser, sh)).trim().split("\n")[0] ?? "";
-    return await new Promise<string>((resolve) => {
-      const p = spawn("sh", ["-c", sh], { stdio: ["ignore", "pipe", "ignore"] });
-      let out = "";
-      p.stdout?.on("data", (c: Buffer) => { out += c.toString("utf8"); });
-      p.on("exit", () => resolve(out.trim().split("\n")[0] ?? ""));
-      p.on("error", () => resolve(""));
-    });
+    return await localRolloutPath(threadId);
   } catch { return ""; }
 }
 

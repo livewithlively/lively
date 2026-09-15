@@ -1,6 +1,7 @@
 // 순수 단위 체크(node:assert) — 세션 대화창(#1719)의 두 순수 규칙: 트랜스크립트 읽기 구간 · 단일 키 argv.
 //  라우트 자체(파일·tmux·인가)는 여기서 안 띄운다 — 구간 계산과 키 표면 규칙만 표로 못박는다.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { transcriptRange, TRANSCRIPT_MAX_CHUNK } from "../sessions/transcript-range.js";
 import { sendKeyPlan, isChatKey } from "./send-keys.js";
 
@@ -40,6 +41,15 @@ t("[8] 키 — tmux 는 키 이름, psmux 는 코드포인트 · 허용 키는 E
   assert.deepEqual(sendKeyPlan("box-a", "Escape", "C:\\x\\psmux.exe"), ["send-keys", "-t", "box-a", "0x1b"]);
   assert.equal(isChatKey("Enter"), true); assert.equal(isChatKey("Escape"), true);
   assert.equal(isChatKey("y"), false); assert.equal(isChatKey(""), false); assert.equal(isChatKey(undefined), false);
+});
+
+t("[9] 원격 노드 대화는 중앙 로그 폴백 전에 Codex rollout RPC를 읽는다", () => {
+  const source = import.meta.url.endsWith(".ts") ? "./chat-routes.ts" : "./chat-routes.js";
+  const routes = readFileSync(new URL(source, import.meta.url), "utf8");
+  assert.match(routes, /gateRead\(id, req, true\)/, "transcript 라우트가 원격 노드를 읽을 기회를 열어야 한다");
+  assert.match(routes, /nodeSupports\(nodeId, "chatTranscript"\)/, "구 노드에 새 RPC를 보내면 안 된다");
+  assert.match(routes, /nodeSessionMapFor\(\[id\]\)/, "사용자 입력이 아니라 서버가 보관한 thread id를 써야 한다");
+  assert.match(routes, /readNodeCodexTranscript\(\{/, "노드 rollout을 공통 ChatLine으로 읽어야 한다");
 });
 
 console.log(`chat-routes: ${pass} passed`);

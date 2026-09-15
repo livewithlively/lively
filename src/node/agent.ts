@@ -368,6 +368,16 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
       const ok = answer(String(args.id ?? ""), String(args.askId ?? ""), args.value);
       return { ok, stale: !ok };
     }
+    // app-server의 실제 답은 이 노드의 Codex rollout에 남는다. 게이트웨이가 보관한 threadId만 받고
+    // CODEX_HOME 아래에서 제한 청크를 돌려준다 — 사용자 입력 경로나 셸은 이 표면에 없다(#3982).
+    case "chatTranscript": {
+      const { readLocalRolloutChunk } = await import("../terminal/harness-io/codex-app-server-daemon.js");
+      return readLocalRolloutChunk(
+        String(args.threadId ?? ""),
+        Number(args.offset) || 0,
+        Number(args.len) || 0,
+      );
+    }
     // 노드 세션 파일 릴레이(#875) — @box_dir 봉쇄(.. 탈출 거부). 노드는 멤버 본인 머신(단일 유저)이라 OS-유저 격리 없이
     //  plain fs. 인가는 게이트웨이(nodeCanAttach)가 이미 끝냈다는 전제(F7 — runOp 는 기계적 실행만).
     case "fsLs": {
