@@ -608,7 +608,9 @@ const WIN_UTF8_PS = [
 //  psmux 3.3.7 은 인자의 `"` · `'` · 탭을 삼키고(opt-json.test.ts 가 세운 계약), 공백은 인자를 쪼갠다.
 //  base64 는 그 문자를 하나도 안 쓰므로 psmux 를 통과해도 스크립트가 원형 그대로 도착한다.
 //  (여기엔 보간할 값이 없다 — 위 상수 하나뿐이라 아래 인젝션 경계 규칙과 어긋나지 않는다.)
-const WIN_UTF8_B64 = Buffer.from(WIN_UTF8_PS, "utf16le").toString("base64");
+function winPowerShellArgv(script: string): string[] {
+  return ["powershell", "-NoLogo", "-NoExit", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
+}
 
 /**
  * Windows 셸 세션이 실행할 argv. 토큰에 `"` `'` 탭 **공백**이 하나도 없어야 한다(psmux 통과 조건).
@@ -635,7 +637,7 @@ export function psmuxUnsafeToken(argv: readonly string[]): string | null {
 }
 
 export function winShellArgv(): string[] {
-  return ["powershell", "-NoLogo", "-NoExit", "-EncodedCommand", WIN_UTF8_B64];
+  return winPowerShellArgv(WIN_UTF8_PS);
 }
 
 // 하네스 실행 argv → 런처로 감싼 argv. cmd 가 비면(셸 세션) 감쌀 하네스는 없지만, Windows 는 UTF-8
@@ -719,8 +721,8 @@ const APP_SERVER_SH = [
   'printf \'\\n%s\\n\\n\' "$1"',
   'exec "${SHELL:-/bin/sh}" -il',
 ].join("\n");
-export function codexAppServerPaneArgv(): string[] {
-  return chatRuntimePaneArgv({ label: "Codex", bin: "codex", mode: "App Server" });
+export function codexAppServerPaneArgv(platform: string = process.platform): string[] {
+  return chatRuntimePaneArgv({ label: "Codex", bin: "codex", mode: "App Server" }, platform);
 }
 
 /**
@@ -736,7 +738,7 @@ export function codexAppServerPaneArgv(): string[] {
  *   «AI 가 안 뜬다» 고 오해한다 — 그래서 무엇이 어디에 있는지 첫 화면에 적는다.
  *  ⚠ 그 하네스 명령을 여기서 그냥 치라고 쓰지 않는다 — 그건 **새 대화**를 연다.
  */
-export function chatRuntimePaneArgv(o: { label: string; bin: string; mode?: string }): string[] {
+export function chatRuntimePaneArgv(o: { label: string; bin: string; mode?: string }, platform: string = process.platform): string[] {
   const line = "─".repeat(60);
   const intro = [line,
     `이 세션의 ${o.label} 대화는 **대화창**이 맡습니다${o.mode ? `(${o.mode})` : ""}.`,
@@ -744,6 +746,21 @@ export function chatRuntimePaneArgv(o: { label: string; bin: string; mode?: stri
     `여기서  ${o.bin}  을 실행하면 대화창과 **다른 대화**가 열립니다(같은 대화는 한 곳만 쥘 수 있습니다).`,
     "대화를 이 터미널로 옮기려면 대화창에서 [터미널로 넘기기] 를 누르세요.",
     line].join("\n");
+  // Windows 노드의 psmux 는 공백·따옴표가 든 pane argv 토큰을 보존하지 못한다(#3626). 종전 POSIX `sh -c`
+  // 안내는 APP_SERVER_SH 자체가 곧 금지 토큰이라, 기본 app-server 인 Codex 세션을 만들기 전에 가드가 400 으로
+  // 멈췄다(#3982). 안내문은 UTF-8 base64 로 한 번, PowerShell 스크립트 전체는 UTF-16LE base64 로 다시 감싼다.
+  // psmux 가 보는 argv 는 안전한 영숫자 토큰뿐이고, 안내문은 스크립트 문법에 직접 보간되지 않는다.
+  if (platform === "win32") {
+    const introB64 = Buffer.from(intro, "utf8").toString("base64");
+    const script = [
+      WIN_UTF8_PS,
+      `$m=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${introB64}'))`,
+      "Write-Host ''",
+      "Write-Host $m",
+      "Write-Host ''",
+    ].join("\n");
+    return winPowerShellArgv(script);
+  }
   return ["sh", "-c", APP_SERVER_SH, "lively-chat-pane", intro];
 }
 

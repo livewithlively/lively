@@ -957,7 +957,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       // ★ app-server 세션의 pane 은 **셸**이다. 그런데 아웃박스 배달자는 "입력창이 뜨면 send-keys" 로 넣는다 —
       //  그 세션에서는 사람의 첫 문장이 **zsh 프롬프트에 타이핑**된다(명령으로 실행되거나 그냥 사라진다).
       //  실측 2026-08-26(사용자 신고 "첫 프롬프트도 씹히고"). 여기서는 프로토콜로 보낸다 — 답이 값으로 온다.
-      //  실패하면 아웃박스로 내려간다: 그래야 로그인 전이라 서버를 못 여는 경우에도 지시가 큐에 남는다.
+      //  실패해도 아웃박스로 내리지 않는다. pane 은 셸이라 아웃박스 send-keys가 사람의 문장을 명령으로 실행한다.
       void (async () => {
         const { sendCodexChat } = await import("./harness-io/codex-chat-runtime.js");
         try {
@@ -967,9 +967,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
           await rememberCodexThread({ sessionId: id, threadId: r.threadId, owner: ownerId(user), osUser });
         }
         catch (e) {
-          console.warn(`[terminal] 첫 지시 app-server 전송 실패(${id}) — 아웃박스로 폴백:`, (e as Error)?.message ?? e);
-          const { enqueuePrompt } = await import("../sessions/session-outbox.js");
-          await enqueuePrompt(id, prompt, { trustOk }).catch(() => undefined);
+          console.warn(`[terminal] 첫 지시 app-server 전송 실패(${id}) — 셸에는 넣지 않습니다:`, (e as Error)?.message ?? e);
         }
       })();
     } else if (isNode) {
