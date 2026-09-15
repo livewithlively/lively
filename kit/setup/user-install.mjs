@@ -167,7 +167,7 @@ function mergeBlocks(...blocks) {
   return out;
 }
 
-// auto-approve — 발행 묶음 .lively/auto-approve.json 의 'mcp__lively__<tool>' 목록을 settings.json
+// auto-approve — 발행 묶음 .lively/auto-approve.json 의 Lively 두 서버 도구 목록을 settings.json
 //  permissions.allow 에 반영. 멤버 본인 항목은 보존, 이전에 lively 가 넣은 것 중 빠진 건 회수(reconcile).
 function mergeAutoApprove() {
   let want = [];
@@ -516,20 +516,31 @@ function codexExtraMcpLines() {
   return out;
 }
 
-// auto-approve(codex) — 발행 묶음 .lively/auto-approve.json 의 'mcp__lively__<tool>' → codex per-tool 승인 오버라이드.
-//  [mcp_servers.lively.tools.<바툴명>] approval_mode = "approve"(승인 없이 실행). 센티넬(CDX_BEGIN..END) 안이라
+// Lively가 직접 관리하는 두 MCP 서버의 완전한 도구 식별자를 분해한다. 다른 서버는 조직/사용자 소유이므로
+// 이 기본 정책에 끌어들이지 않는다.
+function managedAutoApproveParts(full) {
+  if (typeof full !== "string") return null;
+  for (const server of ["lively", "lively-local"]) {
+    const prefix = `mcp__${server}__`;
+    if (!full.startsWith(prefix)) continue;
+    const tool = full.slice(prefix.length);
+    return /^[A-Za-z0-9_-]+$/.test(tool) ? { server, tool } : null;
+  }
+  return null;
+}
+
+// auto-approve(codex) — 발행 묶음 .lively/auto-approve.json 의 두 Lively 서버 도구 → codex per-tool 승인 오버라이드.
+//  [mcp_servers.<서버>.tools.<바툴명>] approval_mode = "approve"(승인 없이 실행). 센티넬(CDX_BEGIN..END) 안이라
 //  재설치마다 통째 재생성 = reconcile(auto_approve 끈 툴은 자동 제거). claude 의 permissions.allow 대응물.
-function codexAutoApproveLines() {
+function codexAutoApproveLines(includeLocal = true) {
   const out = [];
   try {
     const d = JSON.parse(readFileSync(cloneAbs(join(".lively", "auto-approve.json")), "utf8"));
     for (const full of (d.allow || [])) {
-      if (typeof full !== "string") continue;
-      const m = full.match(/^mcp__lively__(.+)$/); // 바 tool 명 추출(lively 서버 툴 한정)
-      if (!m) continue;
-      const tool = m[1];
-      if (!/^[A-Za-z0-9_-]+$/.test(tool)) continue; // TOML 키 안전
-      out.push(`[mcp_servers.lively.tools.${tool}]`, 'approval_mode = "approve"', "");
+      const part = managedAutoApproveParts(full);
+      if (!part) continue;
+      if (part.server === "lively-local" && !includeLocal) continue;
+      out.push(`[mcp_servers.${part.server}.tools.${part.tool}]`, 'approval_mode = "approve"', "");
     }
   } catch { /* 없으면 빈 */ }
   return out;
@@ -589,11 +600,12 @@ function codexLocalServerLines() {
 
 function codexManagedBlock(mcpUrl) {
   const wf = codexHookCmd("work-flag.mjs");
+  const localServer = codexLocalServerLines();
   return [
     CDX_BEGIN, "",
     ...codexLivelyServerLines(mcpUrl),
-    ...codexLocalServerLines(),
-    ...codexAutoApproveLines(), // [mcp_servers.lively.tools.X] approval_mode="approve" — 자동승인 툴
+    ...localServer,
+    ...codexAutoApproveLines(localServer.length > 0), // 두 Lively 서버의 툴별 approval_mode="approve"
     ...codexExtraMcpLines(),
     // ── 전용 훅 — claude 의 userLevelHooksBlock 과 같은 자리 ──
     ...cdxHook("SessionStart", codexHookCmd("session-preload.mjs"), 10, "startup|resume|clear"),
@@ -778,8 +790,8 @@ function opencodeConfigPath() {
   return json;                            // 둘 다 없으면 표준 .json 으로 만든다
 }
 
-// auto-approve(opencode) — 발행 묶음 .lively/auto-approve.json 의 'mcp__lively__<tool>' 을
-//  opencode 의 permission 키(`lively_<tool>`)로 옮긴다. ⚠ 툴 이름 체계가 claude 와 다르다(#1519 §4).
+// auto-approve(opencode) — 두 Lively 서버 도구를
+//  opencode 의 permission 키(`<server>_<tool>`)로 옮긴다. ⚠ 툴 이름 체계가 claude 와 다르다(#1519 §4).
 //  회수: 우리가 넣은 키 목록을 ~/.lively/managed-opencode-permission.json 에 남겨, 다음 설치 때
 //  '더는 원치 않는 것'만 걷는다(멤버가 손으로 넣은 permission 은 그 목록 밖이라 보존된다 — claude 와 동형).
 function opencodePermission(cur) {
@@ -787,8 +799,8 @@ function opencodePermission(cur) {
   try {
     const d = JSON.parse(readFileSync(cloneAbs(join(".lively", "auto-approve.json")), "utf8"));
     want = (Array.isArray(d.allow) ? d.allow : [])
-      .map((s) => (typeof s === "string" ? /^mcp__lively__(.+)$/.exec(s) : null))
-      .filter(Boolean).map((m) => `lively_${m[1]}`);
+      .map(managedAutoApproveParts)
+      .filter(Boolean).map((part) => `${part.server}_${part.tool}`);
   } catch { /* 번들에 없으면 회수만 수행 */ }
   const prevPath = join(LIVELY, "managed-opencode-permission.json");
   let prev = []; try { prev = JSON.parse(readFileSync(prevPath, "utf8")); if (!Array.isArray(prev)) prev = []; } catch { /* */ }
@@ -926,8 +938,8 @@ function agyMcpConfig() {
   return { mcpServers: servers };
 }
 
-// auto-approve(antigravity) — 발행 묶음 .lively/auto-approve.json 의 'mcp__lively__<tool>' 을
-//  antigravity 규칙(`mcp(lively/<tool>)`)으로 옮겨 settings.json permissions.allow 에 반영(#1689 실측 문법).
+// auto-approve(antigravity) — 두 Lively 서버 도구를
+//  antigravity 규칙(`mcp(<server>/<tool>)`)으로 옮겨 settings.json permissions.allow 에 반영(#1689 실측 문법).
 //  회수: 우리가 넣은 규칙 목록을 ~/.lively/managed-antigravity-permission.json 에 남겨 다음 설치 때
 //  '더는 원치 않는 것'만 걷는다(멤버가 손으로 넣은 규칙은 목록 밖이라 보존 — claude·opencode 와 동형).
 function agyMergePermissions() {
@@ -935,8 +947,8 @@ function agyMergePermissions() {
   try {
     const d = JSON.parse(readFileSync(cloneAbs(join(".lively", "auto-approve.json")), "utf8"));
     want = (Array.isArray(d.allow) ? d.allow : [])
-      .map((s) => (typeof s === "string" ? /^mcp__lively__(.+)$/.exec(s) : null))
-      .filter(Boolean).map((m) => `mcp(lively/${m[1]})`);
+      .map(managedAutoApproveParts)
+      .filter(Boolean).map((part) => `mcp(${part.server}/${part.tool})`);
   } catch { /* 번들에 없으면 회수만 수행 */ }
   const prevPath = join(LIVELY, "managed-antigravity-permission.json");
   let prev = []; try { prev = JSON.parse(readFileSync(prevPath, "utf8")); if (!Array.isArray(prev)) prev = []; } catch { /* */ }
@@ -1159,8 +1171,8 @@ function installGrok(ctx) {
     console.log("  · grok org-context 시드 보류(오프라인) — 다음 설치/업데이트가 채움");
   }
 
-  // (d) auto-approve — grok 은 ~/.claude/settings.json 의 permissions.allow(mcp__lively__*)를 compat 로 읽어
-  //  lively__* 로 재작성한다(#1701 실측 — 이 재작성은 permission rules 에만 있고 훅 matcher 엔 없다).
+  // (d) auto-approve — grok 은 ~/.claude/settings.json 의 permissions.allow(MCP 완전 식별자)를 compat 로 읽어
+  //  서버별 규칙으로 재작성한다(#1701 실측 — 이 재작성은 permission rules 에만 있고 훅 matcher 엔 없다).
   //  네이티브 [permission] 테이블은 위 (b) 주석의 이유로 싣지 않는다 — WIRING 이 mergeAutoApprove() 를 호출한다.
 }
 

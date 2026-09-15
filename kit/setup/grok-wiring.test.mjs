@@ -41,7 +41,7 @@ const { HOOK_SCRIPTS: HOOKS } = await import(pathToFileURL(join(KIT, "setup", "u
 // 번들 setup/ 목록은 매니페스트 단일 출처를 따른다 — 사본을 두면 파일이 하나 늘 때 여기만 빠져
 //  "설치기가 번들 안에서 import 크래시" 로 죽는다(kit-manifest.SETUP_FILES 주석 참조).
 const { SETUP_FILES } = await import(pathToFileURL(join(KIT, "setup", "kit-manifest.mjs")).href);
-function makeBundle({ autoApprove = ["mcp__lively__whoami", "mcp__lively__knowledge_get"], withAdapter = true } = {}) {
+function makeBundle({ autoApprove = ["mcp__lively__whoami", "mcp__lively__knowledge_get", "mcp__lively-local__lively_local_repo_list"], withAdapter = true } = {}) {
   rmSync(BUNDLE, { recursive: true, force: true });
   mkdirSync(join(BUNDLE, ".claude", "hooks"), { recursive: true });
   mkdirSync(join(BUNDLE, ".lively"), { recursive: true });
@@ -116,7 +116,8 @@ install();
 
   // [GW2b] auto-approve 채널 — grok 은 ~/.claude/settings.json permissions 를 compat 로 읽는다(#1701 실측).
   const allow = readJson(CLAUDE_SETTINGS)?.permissions?.allow ?? [];
-  (allow.includes("mcp__lively__whoami") && allow.includes("mcp__lively__knowledge_get"))
+  (allow.includes("mcp__lively__whoami") && allow.includes("mcp__lively__knowledge_get")
+    && allow.includes("mcp__lively-local__lively_local_repo_list"))
     ? ok("GW2b auto-approve → 샌드박스 ~/.claude/settings.json permissions.allow 반영(compat 채널)")
     : bad("GW2b auto-approve", JSON.stringify(allow));
 

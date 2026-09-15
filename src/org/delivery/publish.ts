@@ -17,7 +17,8 @@ import { installBundleTarArgs } from "./bundle-tar.js";
 // (#1313 R18) 구 동적 import("../store.js") 5건을 정적으로 환원 — store 는 publish/materialize 를 import 하지
 //  않아 순환이 없다(scripts/check-imports.mjs 게이트로 확인). 동적 유지 대상은 진짜 지연이 필요한 것들만
 //  (generator .mjs 경로 해석·v6 등).
-import { getOrgProfile, getRuntimeConfig, listMcpServers, listAutoApproveTools, listSections, getMember, getLivProfile } from "../store.js";
+import { getOrgProfile, getRuntimeConfig, listMcpServers, listSections, getMember, getLivProfile } from "../store.js";
+import { listAutoApproveToolIds } from "./auto-approve.js";
 import { logger } from "../../log.js";
 
 // generator 의 buildStaticContext 를 in-process import — DB 진실원천을 stale 파일기반 lively-org 대신
@@ -208,9 +209,9 @@ async function writeRuntimeBundle(stageDir: string): Promise<void> {
   // 클라 직접등록(레인 C) 번들 — mode='proxy' 는 게이트웨이 대리·통제 대상이라 제외(불변식 #894, mcp-client-bundle.ts).
   const mcps = toClientBundleServers(await listMcpServers());
   await writeFile(join(dir, "mcp-servers.json"), JSON.stringify({ servers: mcps }, null, 2) + "\n");
-  // auto-approve — 멤버 설치기가 settings.json 의 무확인 실행 허용목록(permissions.allow)에 머지.
-  //  MCP 툴 이름은 하네스에서 'mcp__lively__<tool>' 로 노출되므로 그 형태로 굳힌다(lively=등록 라벨).
-  const autoApprove = (await listAutoApproveTools()).map((t) => `mcp__lively__${t.name}`);
+  // auto-approve — 멤버 설치기가 각 하네스의 무확인 실행 허용목록에 머지.
+  //  lively와 lively-local의 완전한 MCP 도구 식별자를 함께 굳힌다.
+  const autoApprove = await listAutoApproveToolIds();
   await writeFile(join(dir, "auto-approve.json"), JSON.stringify({ allow: autoApprove }, null, 2) + "\n");
 }
 
