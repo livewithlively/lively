@@ -1453,7 +1453,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       { t: '노션 화면 열기', done: '열었어요', body: `<p class="ob-lg-d">모을 페이지를 고르는 건 <b>노션 화면 자체</b>예요 — 우리가 따로 물을 게 없습니다.</p><button type="button" class="ob-btn ob-btn-pri ob-btn-inline" id="oaGo">Notion 화면 열기 ↗</button>` },
       //  #1968(원준 2026-09-15) — 노션 선택 화면은 체크박스 목록이 아니다: «추가» 줄·검색창·최근/즐겨찾기 몇 개뿐이고 «전체 선택»이 없다.
       //   목록이 다 뜰 줄 알고 들어갔다가 하나씩 검색해 골랐다는 실측 그대로 그리고, 맨 위 페이지만 고르면 된다는 걸 그림보다 먼저 말한다.
-      { t: '맨 위 페이지 검색해서 고르고 «액세스 허용»', done: '골랐어요', body: `<p class="ob-lg-d">${NOTION_PICK_TIP}</p>${cnMock('notion.so', `<div class="t">Lively 의 페이지 접근 허용 필요</div><div class="ob-npick"><div class="add">＋ 페이지와 데이터베이스 추가</div><div class="q">페이지 및 데이터베이스 검색…</div><div class="h">Recents</div><div class="i">회의록</div><div class="i">제품 기획서</div><div class="h">Favorites</div><div class="i">팀 위키</div></div><div class="cap">목록엔 최근·즐겨찾기만 보여요. 맨 위 페이지 이름을 검색하세요.</div>${cnMockBtn('액세스 허용')}`)}<p class="ob-lg-d" style="margin-top:6px">고른 페이지와 그 아래 페이지만 들어와요. 빠진 페이지는 나중에 «외부 앱 연결»에서 더 고를 수 있어요.</p>` },
+      { t: '맨 위 페이지 검색해서 고르고 «액세스 허용»', done: '골랐어요', body: `<p class="ob-lg-d">${NOTION_PICK_TIP}</p>${cnMock('notion.so', `<div class="t">Lively 의 페이지 접근 허용 필요</div><div class="ob-npick"><div class="add">＋ 페이지와 데이터베이스 추가</div><div class="q">페이지 및 데이터베이스 검색…</div><div class="h">Recents</div><div class="i">회의록</div><div class="i">제품 기획서</div><div class="h">Favorites</div><div class="i">팀 위키</div></div><div class="cap">목록엔 최근·즐겨찾기만 보여요. 맨 위 페이지 이름을 검색하세요.</div>${cnMockBtn('액세스 허용')}`)}<p class="ob-lg-d" style="margin-top:6px">고른 페이지와 그 아래 페이지만 들어와요.</p>` },
       { t: '끝나기를 기다리면 됩니다', done: '', body: cnWaitLine() },
     ];
     if (!useTok && id === 'github') return [
@@ -1499,7 +1499,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   };
   const CN_TRUST = {
     slack: '로그인은 슬랙 화면에서만 해요 — 라이블리는 비밀번호를 받지 않습니다.',
-    notion: '나중에 페이지를 더 열고 싶으면 노션의 연결 관리에서 추가하면 돼요.',
+    notion: '빠진 페이지는 나중에 «외부 앱 연결»에서 더 고르면 돼요.',   // #1968 — 더 고르는 길을 한 갈래로(노션 쪽 연결 관리가 아니라 우리 화면)
     figma: '팀 주소 한 번은 피그마가 팀 목록을 안 알려줘서예요 — 어느 도구든 이 한 걸음은 같습니다.',
     clickup: '작업·댓글은 자료함이 아니라 프로젝트 탭의 미러로 들어와요.',
     github: '허용 화면에서 고른 저장소만 우리가 볼 수 있어요 — 나중에 GitHub 에서 언제든 바꿉니다.',
@@ -3483,6 +3483,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   return { destroy() {
     destroyed = true;
     clearInterval(readTimer); clearInterval(localTimer); clearTimeout(toastT);
+    if (notionSyncPoll) { clearInterval(notionSyncPoll); notionSyncPoll = null; }   // #1968 — 처음 설정을 통째로 떠나도 노션 첫 수집 폴링이 남지 않게
     removeEventListener('popstate', onPop);
     removeEventListener('pagehide', onPageHide);
     document.removeEventListener('visibilitychange', onLeave);
