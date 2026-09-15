@@ -60,7 +60,7 @@ function builtinToggles(data) {
     const override = byName[name];                    // org_tool builtin 행(있으면 운영자 재정의)
     const exposed = override ? override.enabled !== false : def;  // 최종 노출
     const enChk = el('input', { type: 'checkbox' }); enChk.checked = exposed;
-    const aaChk = el('input', { type: 'checkbox' }); aaChk.checked = override ? !!override.auto_approve : false;
+    const aaChk = el('input', { type: 'checkbox' }); aaChk.checked = override ? !!override.auto_approve : true;
     // 주입모드(#187): 코드 기본값(defAlways) + 운영자 override(always_load). '' = 기본, 'always' = 항상, 'deferred' = 검색 시 로드. Claude Code 전용.
     const defAlways = cand.alwaysLoadDefault === true;
     const alSel = el('select', {},

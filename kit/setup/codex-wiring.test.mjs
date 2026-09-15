@@ -44,7 +44,7 @@ const { HOOK_SCRIPTS: HOOKS } = await import(pathToFileURL(join(KIT, "setup", "u
 // 번들 setup/ 목록은 매니페스트 단일 출처를 따른다 — 사본을 두면 파일이 하나 늘 때 여기만 빠져
 //  "설치기가 번들 안에서 import 크래시" 로 죽는다(kit-manifest.SETUP_FILES 주석 참조).
 const { SETUP_FILES } = await import(pathToFileURL(join(KIT, "setup", "kit-manifest.mjs")).href);
-function makeBundle({ withCli = true, mcpServers = [], autoApprove = ["mcp__lively__whoami"] } = {}) {
+function makeBundle({ withCli = true, mcpServers = [], autoApprove = ["mcp__lively__whoami", "mcp__lively-local__lively_local_repo_list"] } = {}) {
   rmSync(BUNDLE, { recursive: true, force: true });
   mkdirSync(join(BUNDLE, ".claude", "hooks"), { recursive: true });
   mkdirSync(join(BUNDLE, ".lively"), { recursive: true });
@@ -159,8 +159,9 @@ let toml = install();
 
 // ── ⑬ auto-approve 목록 반영 ────────────────────────────────────────────────
 {
-  const has = /\[mcp_servers\.lively\.tools\.whoami\]\s*\napproval_mode = "approve"/.test(toml);
-  has ? ok("⑬ auto-approve → 툴별 승인 표시") : bad("⑬ auto-approve", "표시 없음");
+  const core = /\[mcp_servers\.lively\.tools\.whoami\]\s*\napproval_mode = "approve"/.test(toml);
+  const local = /\[mcp_servers\.lively-local\.tools\.lively_local_repo_list\]\s*\napproval_mode = "approve"/.test(toml);
+  core && local ? ok("⑬ auto-approve → lively·lively-local 툴별 승인 표시") : bad("⑬ auto-approve", `lively=${core} lively-local=${local}`);
 }
 
 // ── ② 프록시 없음(구버전 번들) → http 직결 폴백 ────────────────────────────
@@ -172,8 +173,9 @@ makeBundle({ withCli: false });
   const tok = /^bearer_token_env_var = "LIVELY_TOKEN"$/m.test(b);
   const stamp = /\[mcp_servers\.lively\.http_headers\]\s*\nx-lively-harness = "codex"/.test(t);
   const noCmd = !/^command = /m.test(b);
-  url && tok && stamp && noCmd ? ok("② 프록시 부재 → http 직결 + 정적 harness 헤더")
-    : bad("② http 폴백", `url=${url} tok=${tok} stamp=${stamp} noCmd=${noCmd}`);
+  const noOrphanLocalApproval = !/\[mcp_servers\.lively-local\.tools\./.test(t);
+  url && tok && stamp && noCmd && noOrphanLocalApproval ? ok("② 프록시 부재 → http 직결 + 정적 harness 헤더")
+    : bad("② http 폴백", `url=${url} tok=${tok} stamp=${stamp} noCmd=${noCmd} local고아승인=${!noOrphanLocalApproval}`);
 }
 
 // ── ③ 롤백 스위치(mcp-transport=http) — 프록시가 있어도 http ────────────────

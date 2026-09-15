@@ -43,7 +43,7 @@ const { HOOK_SCRIPTS: HOOKS } = await import(pathToFileURL(join(KIT, "setup", "u
 // 번들 setup/ 목록은 매니페스트 단일 출처를 따른다 — 사본을 두면 파일이 하나 늘 때 여기만 빠져
 //  "설치기가 번들 안에서 import 크래시" 로 죽는다(kit-manifest.SETUP_FILES 주석 참조).
 const { SETUP_FILES } = await import(pathToFileURL(join(KIT, "setup", "kit-manifest.mjs")).href);
-function makeBundle({ autoApprove = ["mcp__lively__whoami", "mcp__lively__knowledge_get"], withAdapter = true } = {}) {
+function makeBundle({ autoApprove = ["mcp__lively__whoami", "mcp__lively__knowledge_get", "mcp__lively-local__lively_local_repo_list"], withAdapter = true } = {}) {
   rmSync(BUNDLE, { recursive: true, force: true });
   mkdirSync(join(BUNDLE, ".claude", "hooks"), { recursive: true });
   mkdirSync(join(BUNDLE, ".lively"), { recursive: true });
@@ -87,7 +87,8 @@ install();
 {
   const cfg = readJson(CFG);
   const okMcp = cfg?.mcp?.lively?.type === "local" && Array.isArray(cfg.mcp.lively.command) && cfg.mcp.lively.environment?.LIVELY_HARNESS === "opencode";
-  const okPerm = cfg?.permission?.lively_whoami === "allow" && cfg?.permission?.lively_knowledge_get === "allow";
+  const okPerm = cfg?.permission?.lively_whoami === "allow" && cfg?.permission?.lively_knowledge_get === "allow"
+    && cfg?.permission?.["lively-local_lively_local_repo_list"] === "allow";
   existsSync(PLUGIN) && okMcp && okPerm
     ? ok("W1 설치 → 어댑터 + mcp.lively(type/command배열/env) + permission(lively_*)")
     : bad("W1 기본 설치", `plugin=${existsSync(PLUGIN)} mcp=${okMcp} perm=${okPerm}`);
@@ -100,9 +101,9 @@ install();
   const after = [digest(CFG), digest(PLUGIN)].join("|");
   const cfg = readJson(CFG);
   const permCount = Object.keys(cfg?.permission ?? {}).length;
-  before === after && permCount === 2
+  before === after && permCount === 3
     ? ok("W2 설치 멱등(2회 실행 결과 바이트 동일 · 항목 누적 없음)")
-    : bad("W2 멱등", `동일=${before === after} permission=${permCount}개(기대 2)`);
+    : bad("W2 멱등", `동일=${before === after} permission=${permCount}개(기대 3)`);
 }
 
 // ── W3/W4 사용자 키·플러그인 보존 ───────────────────────────────────────────
@@ -154,11 +155,12 @@ install();
   install();
   const cfg = readJson(CFG);
   const pruned = cfg?.permission?.lively_knowledge_get === undefined;
+  const localPruned = cfg?.permission?.["lively-local_lively_local_repo_list"] === undefined;
   const keptOurs = cfg?.permission?.lively_whoami === "allow";
   const keptMember = cfg?.permission?.lively_my_own === "allow";
-  pruned && keptOurs && keptMember
+  pruned && localPruned && keptOurs && keptMember
     ? ok("W7 자동승인 회수 — 빠진 키만 제거, 멤버가 넣은 동종 키는 보존")
-    : bad("W7 회수", `제거=${pruned} 유지=${keptOurs} 멤버보존=${keptMember}`);
+    : bad("W7 회수", `제거=${pruned} 로컬제거=${localPruned} 유지=${keptOurs} 멤버보존=${keptMember}`);
 }
 
 // ── W8 못 읽는 설정(.jsonc 주석)은 설치·제거 모두 무수정 ────────────────────

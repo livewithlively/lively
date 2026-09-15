@@ -43,6 +43,7 @@ function writeCfg(tools = [], { managed = true } = {}) {
     BEGIN, "",
     "[mcp_servers.lively]", 'command = "/x/.lively/bin/lively"', 'args = ["mcp"]', "",
     "[mcp_servers.lively.env]", 'LIVELY_HARNESS = "codex"', "",
+    "[mcp_servers.lively-local]", 'command = "/x/.lively/bin/lively"', 'args = ["mcp-local"]', "",
     ...toolLines,
     "[[hooks.SessionStart]]", 'matcher = "startup|resume|clear"',
     "[[hooks.SessionStart.hooks]]", 'type = "command"', 'command = "node hook.mjs"', "timeout = 10", "",
@@ -51,23 +52,25 @@ function writeCfg(tools = [], { managed = true } = {}) {
   writeFileSync(CFG, USER_HEAD + block + USER_TAIL);
 }
 const cfg = () => readFileSync(CFG, "utf8");
-const approvedTools = (s) => (s.match(/\[mcp_servers\.lively\.tools\.([A-Za-z0-9_-]+)\]/g) || []).map((x) => x.slice("[mcp_servers.lively.tools.".length, -1)).sort();
+const approvedTools = (s) => [...s.matchAll(/\[mcp_servers\.(lively|lively-local)\.tools\.([A-Za-z0-9_-]+)\]/g)]
+  .map((m) => `${m[1]}/${m[2]}`).sort();
 const full = (t) => `mcp__lively__${t}`;
+const local = (t) => `mcp__lively-local__${t}`;
 
 // ── B1 목록 추가(빈 → 2) ───────────────────────────────────────────────────
 writeCfg([]);
 {
-  const changed = reconcileCodexAutoApprove([full("whoami"), full("knowledge_save")]);
+  const changed = reconcileCodexAutoApprove([full("whoami"), full("knowledge_save"), local("lively_local_repo_list")]);
   const got = approvedTools(cfg());
-  changed && got.join(",") === "knowledge_save,whoami"
-    ? ok("B1 목록 추가 → 승인 테이블 생성") : bad("B1 추가", `changed=${changed} got=${got.join(",")}`);
+  changed && got.join(",") === "lively-local/lively_local_repo_list,lively/knowledge_save,lively/whoami"
+    ? ok("B1 두 서버 목록 추가 → 서버별 승인 테이블 생성") : bad("B1 추가", `changed=${changed} got=${got.join(",")}`);
 }
 
 // ── B2 목록 축소(2 → 1) = 회수 ─────────────────────────────────────────────
 {
   const changed = reconcileCodexAutoApprove([full("whoami")]);
   const got = approvedTools(cfg());
-  changed && got.join(",") === "whoami"
+  changed && got.join(",") === "lively/whoami"
     ? ok("B2 목록 축소 → 빠진 툴 회수") : bad("B2 회수", `changed=${changed} got=${got.join(",")}`);
 }
 
@@ -111,7 +114,7 @@ writeCfg([]);
 {
   reconcileCodexAutoApprove([full("whoami"), full("bad.name"), full("also bad"), "mcp__other__tool", "쓰레기"]);
   const got = approvedTools(cfg());
-  got.join(",") === "whoami"
+  got.join(",") === "lively/whoami"
     ? ok("B7 잡값·비안전 키 제외(안전한 것만 반영)") : bad("B7 키 안전성", got.join(","));
 }
 

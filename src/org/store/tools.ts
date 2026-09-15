@@ -167,7 +167,7 @@ export async function upsertTool(t: OrgToolInput, ctx: WriteCtx = {}): Promise<O
        version=org_tool.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [t.name, kind, t.enabled ?? before?.enabled ?? true, t.title ?? before?.title ?? null,
      t.description ?? before?.description ?? "", scope, JSON.stringify(inputSchema), method, url, authEnv,
-     t.auto_approve ?? before?.auto_approve ?? false, alwaysLoad, level, authKind, authScopeKey, piiScrub, logArgs,
+     t.auto_approve ?? before?.auto_approve ?? (kind === "builtin"), alwaysLoad, level, authKind, authScopeKey, piiScrub, logArgs,
      t.note ?? before?.note ?? null, t.sort ?? before?.sort ?? 0, ctx.actor ?? null],
   );
   const after = await getTool(t.name);
