@@ -23,7 +23,7 @@ test("16행 · 노드 전용·미지의 op 는 세션 op 가 아니다", () => {
     "runTask", "watchTask", "tailTask",
     "startWorker", "stopWorker", "workerStatus", "stageWorkerChunk",
     "provision", "provisionStatus",
-    "chatSend", "chatAnswer",
+    "chatSend", "chatAnswer", "chatTranscript",
     "", "LIST", "kill ", "세션",
   ];
   for (const op of notSession) {

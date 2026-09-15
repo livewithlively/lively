@@ -19,12 +19,109 @@
 //    그 파일이므로, 클라이언트가 잠깐 끊겨도 답은 도착한다 — 이것이 이 설계의 핵심 이득이다.
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import fsp from "node:fs/promises";
 import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 import type { AppServerTransport } from "./codex-app-server.js";
 
 /** 포트 범위 — 사용자 서비스 대역을 피해 높은 자리에서 고른다(충돌 시 아래 probe 가 다음 칸으로 민다). */
 export const PORT_BASE = 39_000;
 export const PORT_SPAN = 2_000;
+
+/** 노드 RPC 한 장에 싣는 원문 상한. base64 로 불어나도 WS 1MB 상한에 여유가 있다. */
+export const CODEX_TRANSCRIPT_CHUNK_BYTES = 384 * 1024;
+
+export interface LocalRolloutChunk {
+  found: boolean;
+  size: number;
+  offset: number;
+  data: string;
+  eof: boolean;
+}
+
+const validThreadId = (threadId: string): boolean => /^[A-Za-z0-9-]{8,64}$/.test(threadId);
+const rolloutPaths = new Map<string, string>();
+
+/**
+ * 이 컴퓨터의 CODEX_HOME 안에서 스레드의 최신 rollout을 찾는다.
+ *
+ * 셸 glob을 쓰지 않는다. Windows에는 `sh`가 없고, 스레드 id를 경로로 받으면 홈 밖 파일을
+ * 읽는 표면이 생기기 때문이다. 날짜 세 단계와 정해진 파일명만 훑는다.
+ */
+export async function localRolloutPath(
+  threadId: string,
+  codexHome = process.env.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex"),
+): Promise<string> {
+  if (!validThreadId(threadId)) return "";
+  const memoKey = `${codexHome}\0${threadId}`;
+  const memo = rolloutPaths.get(memoKey);
+  if (memo) return memo;
+  const root = path.join(codexHome, "sessions");
+  let newest = "";
+  let newestAt = -1;
+  try {
+    const years = await fsp.readdir(root, { withFileTypes: true });
+    for (const year of years) {
+      if (!year.isDirectory() || !/^\d{4}$/.test(year.name)) continue;
+      const yearPath = path.join(root, year.name);
+      const months = await fsp.readdir(yearPath, { withFileTypes: true }).catch(() => []);
+      for (const month of months) {
+        if (!month.isDirectory() || !/^\d{2}$/.test(month.name)) continue;
+        const monthPath = path.join(yearPath, month.name);
+        const days = await fsp.readdir(monthPath, { withFileTypes: true }).catch(() => []);
+        for (const day of days) {
+          if (!day.isDirectory() || !/^\d{2}$/.test(day.name)) continue;
+          const dayPath = path.join(monthPath, day.name);
+          const files = await fsp.readdir(dayPath, { withFileTypes: true }).catch(() => []);
+          for (const file of files) {
+            if (!file.isFile() || !file.name.startsWith("rollout-") || !file.name.endsWith(`-${threadId}.jsonl`)) continue;
+            const candidate = path.join(dayPath, file.name);
+            const st = await fsp.stat(candidate).catch(() => null);
+            if (st?.isFile() && st.mtimeMs > newestAt) { newest = candidate; newestAt = st.mtimeMs; }
+          }
+        }
+      }
+    }
+  } catch { return ""; }
+  if (newest) rolloutPaths.set(memoKey, newest);
+  return newest;
+}
+
+/**
+ * 노드의 Codex rollout을 제한된 바이트 범위로 읽는다. 외부에서 받는 것은 스레드 id뿐이고,
+ * 실제 경로는 위 함수가 CODEX_HOME 아래에서 계산하므로 임의 파일 읽기로 넓어지지 않는다.
+ * len=0은 크기만 묻는 요청이다.
+ */
+export async function readLocalRolloutChunk(
+  threadId: string,
+  offsetRaw: number,
+  lenRaw: number,
+  codexHome?: string,
+): Promise<LocalRolloutChunk> {
+  const file = await localRolloutPath(threadId, codexHome);
+  if (!file) return { found: false, size: 0, offset: 0, data: "", eof: true };
+  try {
+    const st = await fsp.stat(file);
+    if (!st.isFile()) return { found: false, size: 0, offset: 0, data: "", eof: true };
+    const size = st.size;
+    const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.min(size, Math.floor(offsetRaw))) : 0;
+    const len = Number.isFinite(lenRaw) ? Math.max(0, Math.min(CODEX_TRANSCRIPT_CHUNK_BYTES, Math.floor(lenRaw))) : 0;
+    if (len === 0 || offset >= size) return { found: true, size, offset, data: "", eof: offset >= size };
+    const fh = await fsp.open(file, "r");
+    try {
+      const buf = Buffer.alloc(Math.min(len, size - offset));
+      const { bytesRead } = await fh.read(buf, 0, buf.length, offset);
+      return {
+        found: true,
+        size,
+        offset,
+        data: buf.subarray(0, bytesRead).toString("base64"),
+        eof: offset + bytesRead >= size,
+      };
+    } finally { await fh.close(); }
+  } catch { return { found: false, size: 0, offset: 0, data: "", eof: true }; }
+}
 
 /**
  * (순수) 세션 id → 기본 포트. 결정론적이라 **레지스트리 없이** 재접속할 수 있다.

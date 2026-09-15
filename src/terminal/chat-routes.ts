@@ -25,8 +25,8 @@
 //  세션 상세(GET …/sessions/:id)의 restorable 규칙과 같다 — 소유자·admin, 프로젝트 세션이면 전원(#452).
 //
 //  ── 안 하는 것 ──
-//  · 노드(멤버 PC) 세션의 파일은 여기서 못 읽는다(파일이 그 컴퓨터에 있다) → 409 `node` 를 주고, 화면은 중앙 세션 기록
-//    (v6/sessions/:uuid/log — Stop 훅이 턴마다 올린 것)으로 물러난다. 노드 릴레이 op 는 후속.
+//  · 노드(멤버 PC) Codex 세션은 gateway가 보관한 thread id로 노드의 rollout을 제한 청크로 읽는다(#3982).
+//    app-server 턴에는 Stop 훅이 돌지 않아 중앙 기록이 비므로, 그 폴백만으로는 Windows·macOS 모두 답이 사라진다.
 //  · 대화 id 를 **추측하지 않는다**(sessions.ts restore 원칙) — work-flag 훅이 보고한 매핑이 없으면 404.
 //
 //  ── 파일이 어디 있나(#1437 ②) ──
@@ -37,7 +37,7 @@ import type express from "express";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { canAttach, sessionGone } from "./terminal-sessions.js";
-import { getSessionState, sessionConvsFor, dirSharedWithOtherSession, convsTakenByOtherSession } from "../sessions/session-state.js";
+import { getSessionState, sessionConvsFor, dirSharedWithOtherSession, convsTakenByOtherSession, nodeSessionMapFor } from "../sessions/session-state.js";
 import { isChatKey, sendKeyToSession, type ChatKey } from "./send-keys.js";
 import { nodeOfSession, nodeCanAttach, nodeSupports, nodeRpc, remoteNodeOfSession } from "../node/registry.js";
 import { markSessionSeen } from "./phase.js";
@@ -50,12 +50,13 @@ import { parseWindow } from "./harness-io/parse-cache.js";
 import { toNdjson, THIN_MAX_BYTES, THIN_CHAIN_MAX_BYTES } from "./harness-io/chat-line.js";
 import { resolveConvChain, readThinChain, convUuidsInDir } from "./harness-io/conv-chain.js";
 import { harnessOf, resolveTranscript } from "./transcript-locate.js";   // #3699 — «어느 파일인가» 는 한 벌
+import { readNodeCodexTranscript } from "./node-chat-transcript.js";
 
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 
 // 세션에 붙을 수 있나(라이브) 또는 죽었어도 그 기록을 볼 수 있나(restorable 규칙). 못 보면 throw.
-async function gateRead(id: string, req: express.Request): Promise<void> {
+async function gateRead(id: string, req: express.Request, allowRemoteNode = false): Promise<string | null> {
   const u = userOf(req); const uid = idOf(u);
   if (!uid) throw new HttpError(403, "사용자 신원이 없습니다");
   // ⚠ '노드에 등록됨'과 '파일이 저쪽에 있음'은 다르다(#2055 실측 2026-08-26): 게이트웨이 박스가 노드로도
@@ -68,12 +69,13 @@ async function gateRead(id: string, req: express.Request): Promise<void> {
   if (nodeId) {
     const v = await nodeCanAttach(nodeId, id, uid);
     if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
+    if (allowRemoteNode) return nodeId;
     throw new HttpError(409, "node");   // 정말 저쪽 컴퓨터 것 — 중앙 기록으로
   }
-  if (await canAttach(id, uid)) return;
+  if (await canAttach(id, uid)) return null;
   const st = await getSessionState(id);
   const mine = !!st && (st.owner === uid || !!u.scopes?.includes("admin"));
-  if (st && (mine || (st.project_id ?? 0) > 0)) return;
+  if (st && (mine || (st.project_id ?? 0) > 0)) return null;
   throw new HttpError(403, "세션에 접근할 수 없습니다");
 }
 
@@ -109,12 +111,36 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
   app.get("/api/ui/terminal/sessions/:id/transcript", auth, wrap(async (req, res) => {
     const id = String(req.params.id ?? "");
     if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
-    await gateRead(id, req);
+    const nodeId = await gateRead(id, req, true);
     res.setHeader("Cache-Control", "no-store");
     // ?uuid= — 이 박스의 **다른 대화 파일**(맥락 압축 전 파일 — 아래 X-Prev-Session 으로 알려준 것). 같은 실행 폴더·같은 소유자 뿌리
     //  안에서만 찾으므로 남의 대화를 가리킬 수 없다(박스 인가는 위 gateRead 가 이미 했다).
     const want = String(req.query.uuid ?? "").trim();
     if (want && !/^[A-Za-z0-9._-]{1,128}$/.test(want)) throw new HttpError(400, "uuid 형식 오류");
+    if (nodeId) {
+      // 구 노드에는 새 op를 보내지 않는다. 기존 409 폴백을 유지하고, 최신 노드만 영속 rollout을 직접 읽는다.
+      if (!nodeSupports(nodeId, "chatTranscript")) throw new HttpError(409, "node");
+      const mapped = (await nodeSessionMapFor([id])).get(id);
+      if (!mapped || mapped.node_id !== nodeId) throw new HttpError(404, "이 노드 세션의 대화 id를 아직 모릅니다(첫 대화가 오가면 생깁니다).");
+      // ?uuid는 압축 전 대화를 읽는 표면이다. 원격 노드는 현재 매핑만 서버가 소유하므로 다른 id를 임의로 넘기지 않는다.
+      if (want && want !== mapped.conv_uuid) throw new HttpError(404, "요청한 원격 대화 기록을 찾지 못했습니다.");
+      const got = await readNodeCodexTranscript({
+        nodeId,
+        sessionId: id,
+        threadId: mapped.conv_uuid,
+        query: req.query as Record<string, unknown>,
+        rpc: (node, op, args) => nodeRpc(node, op, args),
+      });
+      if (!got) throw new HttpError(404, "대화 기록 파일을 찾지 못했습니다(아직 한 줄도 안 쌓였거나 노드에서 읽을 수 없습니다).");
+      res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+      res.setHeader("X-Log-Bytes", String(got.bytes));
+      res.setHeader("X-Log-From", String(got.from));
+      res.setHeader("X-Log-To", String(got.to));
+      res.setHeader("X-Session-Uuid", got.uuid);
+      res.setHeader("X-Harness", "codex");
+      res.end(got.ndjson);
+      return;
+    }
     //  ★ 어느 파일인가의 계산은 **transcript-locate 한 벌**이다(#3699) — 대화 파일 감시자가 같은 답을
     //   써야 «화면이 읽는 파일» 과 «감시자가 지켜보는 파일» 이 안 갈린다. 말(상태·문장)은 여기서 한다.
     const t = await resolveTranscript(id, want);
