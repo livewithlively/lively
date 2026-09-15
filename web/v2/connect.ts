@@ -18,6 +18,7 @@ import { confirmDialog, skeleton } from '../ui-primitives.js';
 import { svcTile } from '../svc-icons.js';
 import { CRED_KINDS, openGitCredentialManager, svcTokenForm } from '../admin-credentials.js';
 import { LOGIN_SERVICES, partition, slackChannelPolicyCard, type SvcView } from '../me-logins.js';
+import { NOTION_PICK_TIP, notionCollectedLine, notionCollectedPages } from './notion-pick.js';   // #1968 — 노션 고르기 안내·모은 페이지 수(처음 설정과 한 벌)
 //  #2556 — 관리탭 [데이터 연결] 묶음을 여기로 걷어 왔다. 화면만 옮겼고 **패널은 그것 그대로 부른다**(사본 0):
 //   레포·DB 는 아래 [코드와 데이터] 두 화면이, 아웃바운드 둘은 노션·클릭업 **앱 상세의 [내보내기] 칸**이 편다.
 //   그 패널들은 host 에 붙은 표식(markEmbedded)을 보고 자기 제목만 접는다 — 저장 경로·조회 경로는 한 벌.
@@ -1092,7 +1093,7 @@ function notionTeamCollectCard(onState: CollectState): CollectFace {
   const body = panel.body;
   const openConsent = (url: string, after: () => void): void => {
     window.open(url, '_blank', 'noopener');
-    toast('노션 화면에서 가져올 페이지를 고르고 [액세스 허용]을 누르세요 — 돌아오면 이 화면이 갱신됩니다');
+    toast(`${NOTION_PICK_TIP} 다 고르고 [액세스 허용]을 누르면 이 화면이 갱신됩니다`);
     window.addEventListener('focus', () => after(), { once: true });
   };
   const paint = async (): Promise<void> => {
@@ -1110,11 +1111,15 @@ function notionTeamCollectCard(onState: CollectState): CollectFace {
       notes.push(on.length > 1
         ? `노션 워크스페이스 ${on.length}곳에서 가져오고 있어요 — 각 워크스페이스에서 고른 페이지(와 그 하위)만 읽습니다.`
         : `'${wsName(on[0] || wsAll[0])}' 워크스페이스에서 가져오고 있어요 — 노션에서 고른 페이지(와 그 하위)만 읽습니다.`);
+      //  #1968 — 첫 수집이 끝나면 모은 페이지 수로 말한다. 끝나기 전엔 수를 말하지 않는다(그때의 0 은 «0개»가 아니다).
+      const n = notionCollectedPages(s);
+      if (n !== null) notes.push(`${notionCollectedLine(n)} ${n > 0 ? '빠진 페이지는 아래 [페이지 더 고르기]로 보태면 됩니다.' : '아래 [페이지 더 고르기]로 모을 페이지를 골라 주세요.'}`);
+      else if (on.some((w: any) => !w.first_sync_done)) notes.push('첫 수집이 끝나면 모은 페이지 수가 여기 보여요.');
     }
     else if (wsAll.length) notes.push(wsAll.length > 1
       ? `노션 워크스페이스 ${wsAll.length}곳이 연결돼 있어요 — 켜면 바로 모으기 시작합니다.`
       : '연결은 돼 있어요 — 켜면 바로 모으기 시작합니다.');
-    else if (s && s.ready) notes.push('켜면 노션 화면이 열려요 — 거기서 가져올 페이지를 고르면 바로 시작됩니다. 토큰이나 설정을 만질 일은 없어요.');
+    else if (s && s.ready) notes.push(`켜면 노션 화면이 열려요. ${NOTION_PICK_TIP} 토큰이나 설정을 만질 일은 없어요.`);
     else notes.push('노션 연결 준비가 아직 안 됐어요 — 아래에 Lively Notion 통합의 값 두 개를 넣으면 열립니다. 지금 당장은 관리 화면의 외부 자료 수집에서 토큰 방식으로도 연결할 수 있어요.');
     const extra: HTMLElement[] = [];
     if (!(s && s.ready) && !wsAll.length) {
@@ -1150,7 +1155,9 @@ function notionTeamCollectCard(onState: CollectState): CollectFace {
           } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
           await paint();
         };
-        return el('label', { class: 'cn-toggle' }, c, el('span', { text: ' ' + wsName(w) }));
+        //  #1968 — 첫 수집이 끝난 워크스페이스는 모은 페이지 수를 이름 옆에 붙인다(어느 곳에서 빠졌는지 보이게).
+        const counted = w.first_sync_done && typeof w.pages === 'number' ? ` · 페이지 ${w.pages.toLocaleString('ko-KR')}개` : '';
+        return el('label', { class: 'cn-toggle' }, c, el('span', { text: ' ' + wsName(w) + counted }));
       })));
     }
     if (wsAll.length) {
@@ -1162,6 +1169,8 @@ function notionTeamCollectCard(onState: CollectState): CollectFace {
             else toast('노션 화면을 열지 못했습니다', true);
           } catch (e: any) { toast((e && e.message) || '노션 화면을 열지 못했습니다', true); }
         } }));
+      //  #1968 — 다시 고르러 가는 버튼 바로 아래에 같은 안내를 둔다(노션 화면엔 전체 선택이 없다).
+      extra.push(el('span', { class: 'cn-set-hint', text: NOTION_PICK_TIP }));
     }
     chk.onchange = async () => {
       chk.disabled = true;

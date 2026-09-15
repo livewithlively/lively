@@ -99,4 +99,51 @@ t("워크스페이스 키는 uuid 앞 8자 — 짧고 사람이 읽을 수 있�
   assert.notEqual(keyForWorkspace("aaaaaaaa-0000-0000-0000-000000000000"), keyForWorkspace("bbbbbbbb-0000-0000-0000-000000000000"));
 });
 
+// ── 모은 페이지 수(#1968) — 첫 수집이 끝난 뒤에만 수를 말한다. 표 S1~S9(행마다 하나). ──
+//  화면은 first_sync_done 이 true 이고 pages 가 수일 때만 «노션 페이지 N개를 모았어요»를 말한다(web/v2/notion-pick.ts).
+const { collectedView, mirrorInstance } = __notionCollectTestables;
+const counts = (o: Record<string, number>): Map<string, number> => new Map(Object.entries(o));
+const ws1 = (): CollectorView => col({ config: { token_source: "org:ws-1", instance: "ws-1" } });
+
+t("S1 수집기가 없으면 수도 끝남도 없다 — 동의만 끝난 워크스페이스", () => {
+  assert.deepEqual(collectedView(null, counts({ default: 5 }), new Set([1])), { instance: null, pages: null, first_sync_done: false });
+});
+
+t("S2 설정 instance 가 빈 값이면 커넥터처럼 'default' 축을 센다 — '' 축엔 미러가 없다", () => {
+  const c = col({ config: { token_source: "org:ws-1", instance: "" } });
+  assert.equal(mirrorInstance(c), "default");
+  assert.deepEqual(collectedView(c, counts({ default: 5, "": 0 }), new Set()), { instance: "default", pages: 5, first_sync_done: true });
+});
+
+t("S3 성공한 실행도 모인 페이지도 없으면 끝나지 않은 것이다 — 수집 전의 0 은 «0개»가 아니다", () => {
+  assert.deepEqual(collectedView(ws1(), counts({}), new Set()), { instance: "ws-1", pages: 0, first_sync_done: false });
+});
+
+t("S4 성공한 실행이 있으면 0개여도 끝난 것이다 — 고른 페이지가 없다는 걸 사람에게 말해야 한다", () => {
+  const c = ws1();
+  assert.deepEqual(collectedView(c, counts({}), new Set([c.id])), { instance: "ws-1", pages: 0, first_sync_done: true });
+});
+
+t("S5 셀 수 없었으면 수는 null 이다(0 으로 뭉개지 않는다) — 끝남은 실행 기록으로 판정한다", () => {
+  const c = ws1();
+  assert.deepEqual(collectedView(c, null, new Set([c.id])), { instance: "ws-1", pages: null, first_sync_done: true });
+});
+
+t("S6 셀 수 없고 성공 실행도 없으면 끝나지 않은 것이다", () => {
+  assert.deepEqual(collectedView(ws1(), null, new Set()), { instance: "ws-1", pages: null, first_sync_done: false });
+});
+
+t("S7 실행 기록이 없는 옛 수집기도 페이지가 1개라도 있으면 끝난 것이다(경계값)", () => {
+  assert.deepEqual(collectedView(ws1(), counts({ "ws-1": 1 }), new Set()), { instance: "ws-1", pages: 1, first_sync_done: true });
+});
+
+t("S8 다른 워크스페이스 축의 페이지는 세지 않는다", () => {
+  assert.deepEqual(collectedView(ws1(), counts({ "ws-2": 9 }), new Set()), { instance: "ws-1", pages: 0, first_sync_done: false });
+});
+
+t("S9 다른 수집기의 성공 실행으로 끝났다고 하지 않는다", () => {
+  const c = ws1();
+  assert.deepEqual(collectedView(c, counts({}), new Set([c.id + 1000])), { instance: "ws-1", pages: 0, first_sync_done: false });
+});
+
 console.log(`\n${pass} passed`);
