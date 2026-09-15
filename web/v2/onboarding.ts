@@ -20,6 +20,7 @@ import { aiLoginScopeNote } from './ai-login-scope.js';   // #2476 — 그 안�
 //   서비스 표·연결 판정은 me-logins.ts(=[외부 앱 연결] 화면 v2/connect.ts 와 같은 정본), 토큰 발급처·생김새는
 //   admin-credentials.ts 의 CRED_KINDS. **표가 두 벌이 되면 조용히 어긋난다** — 여기서 다시 만들지 않는다.
 import { LOGIN_SERVICES, partition } from '../me-logins.js';
+import { NOTION_PICK_TIP, notionCollectedPages, notionCollectedLine } from './notion-pick.js';   // #1968 — 노션 고르기 안내·모은 페이지 수(외부 앱 연결과 한 벌)
 import { CRED_KINDS } from '../admin-credentials.js';
 export const OB_DONE_KEY = 'lively_ob_done';
 /** 빠른 로컬 캐시 — 첫 그림에서 화면이 깜빡이지 않게 쓴다. **정본은 서버**(아래 fetchOnboardingDone). */
@@ -1091,6 +1092,31 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   }
   let COLL: any = {};
   const collectMode = (id) => !!COLLECT_FIRST[id] && isAdmin();
+  /** (#1968) 켜진 수집의 한 줄 — 노션은 첫 수집이 끝나면 **모은 페이지 수**로 말한다. 빠진 페이지가 있는지 사람이 바로 재게. */
+  function collectOnDesc(id) {
+    const n = id === 'notion' ? notionCollectedPages(COLL.notion) : null;
+    if (n === null) return COLLECT_ON_DESC[id] || '모으고 있어요.';
+    return `${notionCollectedLine(n)} ${n > 0 ? '빠진 페이지는 «외부 앱 연결»에서 더 고를 수 있어요.' : '«외부 앱 연결»에서 모을 페이지를 골라 주세요.'}`;
+  }
+  /** (#1968) 노션 첫 수집을 기다린다 — 연결 장면에 머무는 동안만 8초마다 묻고(최대 5분), 끝나면 한 번 다시 그린다.
+   *   모달이 열려 있으면 다시 그리지 않는다(걸음·입력을 날리지 않게) — 모달이 닫힐 때의 다시 그리기가 새 숫자를 싣는다. */
+  let notionSyncPoll = null;
+  function watchNotionFirstSync() {
+    if (notionSyncPoll || !collectMode('notion')) return;
+    const s = COLL.notion;
+    if (!(s && s.enabled) || notionCollectedPages(s) !== null) return;
+    const until = Date.now() + 5 * 60 * 1000;
+    const stop = () => { clearInterval(notionSyncPoll); notionSyncPoll = null; };
+    notionSyncPoll = setInterval(async () => {
+      if (S.scene !== 'connect' || Date.now() > until) { stop(); return; }
+      let next;
+      try { next = await api('/api/ui/org/notion/collect'); } catch (_) { return; }
+      COLL = { ...COLL, notion: next };
+      if (notionCollectedPages(next) === null) return;
+      stop();
+      if (!tokOpen && S.scene === 'connect') renderScene('connect', false);
+    }, 8000);
+  }
   async function loadColl() {
     const out: any = {};
     await Promise.all(Object.entries(COLLECT_FIRST).map(async ([id, svc]) => {
@@ -1425,7 +1451,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     ];
     if (!useTok && id === 'notion') return [
       { t: '노션 화면 열기', done: '열었어요', body: `<p class="ob-lg-d">모을 페이지를 고르는 건 <b>노션 화면 자체</b>예요 — 우리가 따로 물을 게 없습니다.</p><button type="button" class="ob-btn ob-btn-pri ob-btn-inline" id="oaGo">Notion 화면 열기 ↗</button>` },
-      { t: '모을 페이지 고르고 «액세스 허용»', done: '골랐어요', body: `${cnMock('notion.so', `<div class="t">Lively 가 접근할 페이지를 선택하세요</div><div class="ob-consent"><span>☑ 회사 위키</span><span>☑ 제품 문서</span><span>☐ 개인 메모</span></div>${cnMockBtn('액세스 허용', 'ob-bb-dark')}`)}<p class="ob-lg-d" style="margin-top:6px">여기서 체크한 페이지(와 그 하위)만 들어와요 — 지금이 곧 범위 고르기입니다.</p>` },
+      //  #1968(원준 2026-09-15) — 노션 선택 화면은 체크박스 목록이 아니다: «추가» 줄·검색창·최근/즐겨찾기 몇 개뿐이고 «전체 선택»이 없다.
+      //   목록이 다 뜰 줄 알고 들어갔다가 하나씩 검색해 골랐다는 실측 그대로 그리고, 맨 위 페이지만 고르면 된다는 걸 그림보다 먼저 말한다.
+      { t: '맨 위 페이지 검색해서 고르고 «액세스 허용»', done: '골랐어요', body: `<p class="ob-lg-d">${NOTION_PICK_TIP}</p>${cnMock('notion.so', `<div class="t">Lively 의 페이지 접근 허용 필요</div><div class="ob-npick"><div class="add">＋ 페이지와 데이터베이스 추가</div><div class="q">페이지 및 데이터베이스 검색…</div><div class="h">Recents</div><div class="i">회의록</div><div class="i">제품 기획서</div><div class="h">Favorites</div><div class="i">팀 위키</div></div><div class="cap">목록엔 최근·즐겨찾기만 보여요. 맨 위 페이지 이름을 검색하세요.</div>${cnMockBtn('액세스 허용')}`)}<p class="ob-lg-d" style="margin-top:6px">고른 페이지와 그 아래 페이지만 들어와요.</p>` },
       { t: '끝나기를 기다리면 됩니다', done: '', body: cnWaitLine() },
     ];
     if (!useTok && id === 'github') return [
@@ -1471,7 +1499,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   };
   const CN_TRUST = {
     slack: '로그인은 슬랙 화면에서만 해요 — 라이블리는 비밀번호를 받지 않습니다.',
-    notion: '나중에 페이지를 더 열고 싶으면 노션의 연결 관리에서 추가하면 돼요.',
+    notion: '빠진 페이지는 나중에 «외부 앱 연결»에서 더 고르면 돼요.',   // #1968 — 더 고르는 길을 한 갈래로(노션 쪽 연결 관리가 아니라 우리 화면)
     figma: '팀 주소 한 번은 피그마가 팀 목록을 안 알려줘서예요 — 어느 도구든 이 한 걸음은 같습니다.',
     clickup: '작업·댓글은 자료함이 아니라 프로젝트 탭의 미러로 들어와요.',
     github: '허용 화면에서 고른 저장소만 우리가 볼 수 있어요 — 나중에 GitHub 에서 언제든 바꿉니다.',
@@ -1982,7 +2010,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               const it = all.find((sv) => sv.id === id) || { label: id };
               const st = connState(id);
               const saved = collectMode(id) && tokenSaved(id);
-              const desc = st === 'on' ? (collectMode(id) ? (COLLECT_ON_DESC[id] || '모으고 있어요.') : '연결됐어요.')
+              const desc = st === 'on' ? (collectMode(id) ? collectOnDesc(id) : '연결됐어요.')
                 : st === 'blocked' ? '아직 준비 중이에요.'
                 : unknown ? '연결 상태를 확인하고 있어요.'
                 : saved ? '거의 다 됐어요. 눌러서 가져오기를 시작하세요.'
@@ -2000,6 +2028,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         if (isJoin()) { goNext('connect', { back: true }); return; }   // (#1631) 합류자 차례표엔 이 장면이 없다 — 오래된 탭·주소로 와도 연결 문을 열지 않는다
         //  들어올 때마다 서버에 묻는다 — 앞 장면에서 뒤로 왔을 수도, 다른 탭에서 이었을 수도 있다.
         if (!CONN && !connTried) { void loadConn().then(() => renderScene('connect', false)); }
+        watchNotionFirstSync();   // #1968 — 노션이 켜졌는데 첫 수집 전이면, 끝나는 대로 모은 페이지 수를 싣는다
         const redraw = () => renderScene('connect', false);
         /** 이어진 것을 화면·사이드바·결정 기록에 반영한다. **서버가 그렇다고 한 뒤에만** 부른다. */
         const markConnected = (id) => {
@@ -3454,6 +3483,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   return { destroy() {
     destroyed = true;
     clearInterval(readTimer); clearInterval(localTimer); clearTimeout(toastT);
+    if (notionSyncPoll) { clearInterval(notionSyncPoll); notionSyncPoll = null; }   // #1968 — 처음 설정을 통째로 떠나도 노션 첫 수집 폴링이 남지 않게
     removeEventListener('popstate', onPop);
     removeEventListener('pagehide', onPageHide);
     document.removeEventListener('visibilitychange', onLeave);
