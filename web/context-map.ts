@@ -75,8 +75,11 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
   const findings = Number(st.manage?.open?.total || 0);
   const inboxN = pending + proposed + findings;
 
-  // 외부 앱 — 수집기가 연결된 서비스 종류(preset_key). 켜짐 여부는 기계(수집기)가 말하므로 여기선 로고가 제 색으로 선다.
-  const collectors: any[] = (colD && colD.collectors) || [];
+  // 외부 앱 — **실제로 연결된** 수집기의 서비스 종류만(#1631 원준 2026-09-15). 매니지드는 워크스페이스마다 노션·슬랙 등 수집기 **껍데기**를
+  //  enabled:false 로 심어 두는데(자료 가져오기 토글을 껐거나 아직 안 켠 것), 종전엔 그 껍데기까지 세어 «연결도 안 한 슬랙» 이 제 색 아이콘으로 떴다.
+  //  연결의 조건: 켜져 있고(enabled) 자격이 있다(인라인 시크릿이 있거나 token_source 가 금고 연결을 가리킨다). 둘 중 하나도 없으면 «연결됨» 이 아니다.
+  const collectors: any[] = (((colD && colD.collectors) || []) as any[])
+    .filter((c: any) => c && c.enabled === true && (Object.values(c.secretsSet || {}).some(Boolean) || String((c.config && c.config.token_source) || "").trim()));
   const bySvc = new Map<string, { n: number; label: string }>();
   for (const c of collectors) {
     const raw = String(c.preset_key || c.key || '').toLowerCase();
