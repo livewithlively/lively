@@ -675,6 +675,12 @@ function localGuideNodes(gw, slot, data, opts?: any) {
       el('a', { href: '#/start/migrate', text: '[예전 환경 가져오기]' }), ' — 켜서 ',
       el('code', { class: 'md-code', text: '온보딩 도와줘' }), ' 라고 말하면(또는 ',
       el('code', { class: 'md-code', text: 'lively onboarding' }), ') AI 가 읽어서 정리를 도와줍니다. 원본은 건드리지 않아요.'),
+    // 노드 연결은 설치·로그인과 **다른 단계**다. 여기서 말하지 않으면, 설치를 마친 사람이 [내 컴퓨터] 에
+    //  자기 기계가 없는 것을 보고 연결이 실패했다고 읽는다 — 실제로는 아무도 시키지 않은 명령이 남은 것이다.
+    el('p', { class: 'admin-hint' }, '이 컴퓨터를 웹에서 열고 싶으면(세션 열기·작업 위탁) 한 줄이 더 필요해요 — ',
+      el('code', { class: 'md-code', text: 'lively node --daemon' }), ' 을 실행하면 ',
+      el('a', { href: '#/system/me-nodes', text: '[내 컴퓨터]' }), ' 목록에 나타납니다. 자세한 건 ',
+      el('a', { href: '#/learn/docs/nodes', text: '[컴퓨터 연결(노드)]' }), ' 에 있어요.'),
     el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, '설치 후 쓸 수 있는 ',
       el('code', { class: 'md-code', text: 'lively' }), ' 명령 · Claude/Codex 차이 · 문제 해결은 ',
       el('a', { href: '#/learn/docs/cli', text: '[AI 세션 명령어]' }), ' 에서 보세요.'));
