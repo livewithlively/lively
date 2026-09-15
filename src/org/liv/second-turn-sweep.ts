@@ -7,7 +7,7 @@
 //  · 배달은 라우트와 같은 함수(deliverPrompt) — 박스면 아웃박스(입력창 확인·에코), codex app-server 면 프로토콜, 노드면 릴레이.
 //  · 실패는 삼키지 않는다: 쏘지 못한 이유는 로그에, 포기는 distill_gave_up_at + distill_note 로 프로필에 남는다.
 import { logger } from "../../log.js";
-import { buildSecondTurnPrompt, decideSecondTurn, turnGroupInputs, TURN1_DELIVERY_TTL_MS } from "./second-turn.js";
+import { buildSecondTurnPrompt, decideSecondTurn, turnGroupInputs } from "./second-turn.js";
 import { onceAtATime } from "../../util/once-at-a-time.js";
 
 // 동시 호출 가드(#1631) — 매니지드는 **테넌트마다** 틱이 들어오는데 후보 목록은 신원 전역(org_member)이라
@@ -22,26 +22,7 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
   const { listLivSecondTurnCandidates, appendLivProfile, getLivProfile, listCollectors } = await import("../store.js");
   const { listSessionsRaw } = await import("../../terminal/terminal-sessions.js");
   const { listOutbox } = await import("../../sessions/session-outbox.js");
-  const { workspaceForSession, listWorkspaces, PRIMARY_TENANT_ID, PRIMARY_SLUG } = await import("../tenancy/registry.js");
-  const { livTurnDone, livChatRunningTurn, startLivChatTurn } = await import("./chat-turn.js");   // (#1631 2026-09-14) 대화 킥오프 후보의 관측·2턴
-  //  대화 킥오프 후보의 워크스페이스는 후보 행의 칸 키로 푼다 — 표는 tick 당 한 번만 읽는다(후보 200명이 200번 읽지 않게).
-  let wsAll: Promise<Array<{ id: string; slug: string }>> | null = null;
-  const workspaceById = async (id: string | null): Promise<{ id: string; slug: string } | null> => {
-    if (!id) return null;
-    wsAll ??= listWorkspaces().catch(() => [] as Array<{ id: string; slug: string }>);
-    return (await wsAll).find((w) => w.id === id) ?? null;
-  };
-  //  (#1631 격리 리뷰) 대화 킥오프의 «세션 관측» — ① 킥오프 턴이 끝났나(1턴) ② **지금 마지막 턴**이 도는 중인가(사람이 리브와 대화 중일 수
-  //   있다 — 킥오프 턴 id 는 고정값이라 그것만 보면 첫 턴 뒤로는 영영 «한가함» 이 된다). 킥오프 턴이 exit 없이 죽으면(OOM 등) 배달 상한 뒤
-  //   offline 로 넘겨 판정표가 포기하게 한다 — 세션 길의 «없다고 확인된 것만 포기» 와 같은 자리(TURN1_DELIVERY_TTL_MS).
-  //   폴더가 없어 관측 불가(null)면 끝난 것으로 본다 — 막힌 것으로 두면 영영 안 쏜다.
-  const chatTurnState = async (tenant: { id: string; slug: string }, asUser: never, kickoffTurnId: string, waitedMs: number) =>
-    withTenant(tenant, async () => {
-      const kickoffDone = await livTurnDone(asUser, kickoffTurnId);
-      if (kickoffDone === false) return waitedMs > TURN1_DELIVERY_TTL_MS ? { working: false, agentState: "offline" } : { working: true, agentState: "busy" };
-      const running = await livChatRunningTurn(asUser);
-      return running ? { working: true, agentState: "busy" } : { working: false, agentState: "idle" };
-    }).catch(() => ({ working: false, agentState: "idle" }));
+  const { workspaceForSession, PRIMARY_TENANT_ID, PRIMARY_SLUG } = await import("../tenancy/registry.js");
   const { withTenant } = await import("../tenant-context.js");
   const { listCronJobs } = await import("../cron-store.js");
   const { collectorJobId } = await import("../store/collectors.js");
@@ -75,15 +56,10 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
   for (const c of candidates) {
     //  (#1631 2026-09-14) 킥오프가 리브 탭 대화 턴이었던 사람 — 세션이 아니라 **그 턴의 끝남**이 «1턴이 끝났나» 이고,
     //   2턴도 세션 배달이 아니라 같은 대화에 잇는 숨김 턴이다. 워크스페이스는 후보 행의 칸 키(workspace_id)가 말한다
-    //   (세션이 없으니 gw_session_map 으로 못 푼다).
-    const viaChat = !!c.welcome.liv_turn_id && !c.welcome.session_id;
-    const sid = viaChat ? "" : String(c.welcome.session_id);
-    const ws = viaChat ? await workspaceById(c.workspace_id) : await workspaceForSession(sid).catch(() => null);
+    const sid = String(c.welcome.session_id);
+    const ws = await workspaceForSession(sid).catch(() => null);
     const tenant = ws ? { id: ws.id, slug: ws.slug } : { id: PRIMARY_TENANT_ID, slug: PRIMARY_SLUG };
-    const asUser = { userId: c.id, email: "", scopes: [], projects: [] } as never;
-    const s = viaChat
-      ? await chatTurnState(tenant, asUser, String(c.welcome.liv_turn_id), now - Date.parse(String(c.welcome.done_at)))
-      : await sessionIn(tenant, sid);
+    const s = await sessionIn(tenant, sid);
     // 수집기와 그 잡의 마지막 실행 — 그 워크스페이스 안에서 읽는다.
     const collectors = await withTenant(tenant, async () => {
       const cols = await listCollectors().catch(() => []);
@@ -92,7 +68,7 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
       return cols.map((col) => ({ label: col.label, preset_key: col.preset_key, enabled: col.enabled, lastRunAt: lastRun.get(collectorJobId(col.id)) ?? null }));
     }).catch((err) => { logger.warn({ err, member: c.id, ws: tenant.slug }, "리브 2턴 — 수집기 조회 실패(다음 tick 재시도)"); return null; });
     if (!collectors) { out.failed++; continue; }
-    const outboxPending = s && !viaChat ? (await listOutbox(sid).catch(() => [])).length : 0;   // 대화 턴엔 아웃박스가 없다(프롬프트 파일로 바로 돈다)
+    const outboxPending = s ? (await listOutbox(sid).catch(() => [])).length : 0;
 
     const d = decideSecondTurn({
       welcome: c.welcome,
@@ -184,26 +160,18 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
       partial: d.partial, waitedMin: d.waitedMin,
     });
     try {
-      //  unlessBusy — 판정 뒤 스폰 사이에 사람이 말을 걸었을 수 있다. 잠금 안에서 한 번 더 보고, 바쁘면 던진다(아래 catch 가 «대기» 로 센다).
-      if (viaChat) await withTenant(tenant, () => startLivChatTurn(asUser, { text: prompt, hidden: true, kind: "distill", label: "리브 — 자료 정리", unlessBusy: true }));
-      else await withTenant(tenant, () => deliverPrompt(sid, prompt, { owner: c.id }));
+      await withTenant(tenant, () => deliverPrompt(sid, prompt, { owner: c.id }));
       // ⚠ 표식은 **그 워크스페이스 컨텍스트 안에서** 찍는다(#2265) — welcome 은 워크스페이스 칸에 살아서,
       //  컨텍스트 밖에서 쓰면 옛 최상위 자리에 남아 후보에서 안 빠진다(= 2턴이 매 tick 반복 발사된다).
       await withTenant(tenant, async () => {
         const cur = await getLivProfile(c.id).catch(() => null);
         await appendLivProfile(c.id, { welcome: { ...(cur?.welcome ?? c.welcome), distill_at: new Date(now).toISOString(), distill_note: d.partial ? "partial" : null } });
       });
-      logger.info({ member: c.id, session: sid || null, chat: viaChat, partial: d.partial, waitedMin: d.waitedMin }, viaChat ? "리브 2턴 — 리브 대화에 증류 턴을 이었다" : "리브 2턴 — 증류 지시 주입");
+      logger.info({ member: c.id, session: sid, partial: d.partial, waitedMin: d.waitedMin }, "리브 2턴 — 증류 지시 주입");
       out.fired++;
     } catch (err) {
-      if (viaChat && (err as { code?: string })?.code === "liv-chat-busy") {
-        //  리브가 답하는 중 — 실패가 아니라 «지금은 아니다». distill_at 을 안 찍었으니 다음 tick 에 다시 판정한다.
-        out.waited++;
-        logger.info({ member: c.id, turn: (err as { turnId?: string }).turnId }, "리브 2턴 — 리브가 답하는 중이라 다음 tick 에");
-        continue;
-      }
       out.failed++;
-      logger.warn({ err, member: c.id, session: sid || null, chat: viaChat }, "리브 2턴 — 주입 실패(다음 tick 재시도)");
+      logger.warn({ err, member: c.id, session: sid }, "리브 2턴 — 주입 실패(다음 tick 재시도)");
     }
   }
   return out;

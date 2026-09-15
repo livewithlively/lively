@@ -492,6 +492,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    *   리브 킥오프 세션(src/org/liv/kickoff.ts LIV_SESSION_LABEL)은 터미널이 아니라 대화창으로 연다. 알아보는 자는 세션 이름이다
    *   (서버 상수와 같은 글자 — liv-kickoff-chat-view 시험이 둘을 맞춘다). 사람이 이름을 바꾸면 여느 세션처럼 터미널이 기본으로 돌아간다.
    */
+  //  #1631 — 서버 킥오프 세션 이름(src/org/liv/kickoff.ts LIV_SESSION_LABEL)과 **글자가 같아야** 이 세션을 알아본다(둘이 갈리면 숨김·로딩이 조용히 꺼진다 — liv-kickoff-chat-view 시험이 잠근다).
+  //   ⚠ SessionInfo 에 kind 가 안 실려 지금은 이름으로 가른다 — 사람이 다른 세션을 이 이름으로 바꾸면 그 세션도 첫 말을 숨긴다(막다른 길은 아님, [터미널로 보기]로 원문). kind 가 프런트까지 오면 그걸로 바꾼다.
   const LIV_KICKOFF_LABEL = '리브 — 처음 설정 점검';
   const livKickoff = (): boolean => String(target.label || '') === LIV_KICKOFF_LABEL;
   const chatHome = (): boolean => chatFirst() || String(target.raw?.runtimeMode || '') === 'chat' || livKickoff();
@@ -1128,6 +1130,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const pending: Pending[] = [];
   let outboxTimer: number | null = null;
   let firstPrompt: string | null = opts.firstPrompt ? String(opts.firstPrompt) : null;   // 홈 입력창의 첫 지시(한 번만 그린다)
+  //  #1631 (원준 2026-09-15) — 리브 킥오프 세션은 서버가 첫 지시를 넣는다. 그 지시는 사람이 쓴 게 아니라 화면에 안 보이게 하고(사람 말풍선·발자취 모두), 답만 보인다.
+  let kickoffOpened = false;
   let pollTimer: number | null = null;
   let poking = false;                         // 깨워 둔 폴이 아직 안 돌았나(pokePoll — 밀어내기 방지)
   let destroyed = false;
@@ -1170,6 +1174,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (INTERRUPT_RE.test(text)) { if (cur) view.settle(cur.t, { interrupted: true }); running = false; return; }
       if (CONTINUED_RE.test(text)) { view.divider('맥락 압축 — 이전 대화를 요약해 이어감', text); cur = newRec(null); running = true; return; }
       if (INJECTED_RE.test(text)) return;                       // 슬래시 명령·리마인더 — 사람 말이 아니다
+      //  #1631 — 킥오프 세션의 **첫 지시**(서버가 넣은 것)는 사람 말풍선으로도 발자취로도 그리지 않는다. 그 위엔 «살펴보는 중» 을 띄우고,
+      //   답(assistant)이 오면 아래 assistant 분기가 로딩을 걷고 그 자리에 이어진다. 이후 사람이 직접 친 말은 kickoffOpened 로 통과한다.
+      if (livKickoff() && !kickoffOpened) {
+        kickoffOpened = true;
+        cur = newRec(null, o.timestamp); running = true; view.running(cur.t);
+        cur.t.work.append(el('div', { class: 'sc-liv-boot', role: 'status', 'aria-live': 'polite' },
+          el('span', { class: 'sc-liv-boot-spin', 'aria-hidden': 'true' }),
+          el('span', { text: '리브가 워크스페이스를 맞추고 있어요 — 답하신 내용과 올려 주신 자료를 읽는 중이에요.' })));
+        return;
+      }
 
       // 타임라인(우패널)의 장(章) 머리 — 이 지시 아래로 그동안의 일이 묶인다(#1719 C안).
       //  ★ 고장이었던 자리(#1819 원준 2026-08-21 신고 "질문을 훨씬 많이 했는데 2개만 보인다"):
@@ -1195,6 +1209,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (o.message?.model && realModelId(String(o.message.model))) setModel(prettyModel(String(o.message.model)));
       if (o.effort) setObserved('effort', String(o.effort));
       if (!cur) cur = newRec(null);
+      cur.t.work.querySelector('.sc-liv-boot')?.remove();   // #1631 킥오프 로딩 걷기 — 첫 답이 온다
       cur.evs.push(o); view.event(cur.t, o); running = true;
       if (trail) trailMsg(trail, o, 'end');
       return;
@@ -1473,7 +1488,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         : null;
       // codex app-server 세션(#2055)은 **여기가 말 거는 자리**다 — pane 은 셸이라 터미널로 보내면 사람이
       //  말 걸 곳 없는 화면을 본다(실제로 그렇게 헤맸다). 그래서 이 경우만 문구도 버튼도 다르다.
-      const msg = chatFirst() && notYet && canType() ? '아직 주고받은 말이 없어요 — 아래에 바로 말을 걸어 보세요.'
+      const msg = livKickoff() && notYet ? (canType() ? '리브가 워크스페이스를 맞추고 있어요 — 답하신 내용과 올려 주신 자료를 읽는 중이에요. 잠시만요.'
+          : '리브가 워크스페이스를 살펴보다 멈췄어요 — 시작하다 걸렸을 수 있어요. 터미널로 보기에 그 이유가 있습니다.')
+        : chatFirst() && notYet && canType() ? '아직 주고받은 말이 없어요 — 아래에 바로 말을 걸어 보세요.'
         : nodeMsg ? nodeMsg
         : !tries.length ? '이 세션의 대화 id 를 아직 몰라 여기서 읽을 수 없어요 — 첫 턴이 끝나면 중앙 기록으로 보입니다. 지금은 터미널로 보세요.'
         //  ⚠ 죽은 세션에 «찾지 못했어요» 로 끝내지 않는다(#1631) — 하네스가 죽어도 래퍼는 **그 pane 에 사유를 적고
