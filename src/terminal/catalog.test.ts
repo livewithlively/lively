@@ -123,19 +123,19 @@ test("app-server 모드 pane 안내는 '그냥 codex 를 치라'고 말하지 �
   assert.match(intro, /resume|넘기기/, "이어가는 법(인계)을 알려 준다");
 });
 
-test("★ Windows Codex app-server pane 은 psmux가 검증한 기본 셸을 그대로 쓴다(#3982)", () => {
-  assert.deepEqual(codexAppServerPaneArgv("win32"), [],
-    "별도 powershell.exe를 직접 실행하면 단말 정책에서 CreateProcessW access denied가 난다");
+test("★ Windows Codex app-server pane 은 실행 가능한 cmd.exe를 명시한다(#3982)", () => {
+  assert.deepEqual(codexAppServerPaneArgv("win32"), ["cmd.exe", "/K"],
+    "psmux 기본 선택은 실행 정책에 막힌 PowerShell도 존재만 하면 골라 pane이 즉시 죽는다");
 });
 
-test("Windows의 다른 대화 런타임도 같은 기본 셸 경계를 쓴다", () => {
-  assert.deepEqual(chatRuntimePaneArgv({ label: "Claude Code", bin: "claude" }, "win32"), []);
+test("Windows의 다른 대화 런타임도 같은 cmd.exe 경계를 쓴다", () => {
+  assert.deepEqual(chatRuntimePaneArgv({ label: "Claude Code", bin: "claude" }, "win32"), ["cmd.exe", "/K"]);
 });
 
-test("플랫폼 값은 정확히 win32 일 때만 psmux 기본 셸을 쓴다", () => {
+test("플랫폼 값은 정확히 win32 일 때만 cmd.exe를 쓴다", () => {
   assert.equal(codexAppServerPaneArgv("darwin")[0], "sh");
   assert.equal(codexAppServerPaneArgv("win32 ")[0], "sh");
-  assert.deepEqual(codexAppServerPaneArgv("win32"), []);
+  assert.deepEqual(codexAppServerPaneArgv("win32"), ["cmd.exe", "/K"]);
 });
 
 test("플랫폼을 생략하면 현재 실행 플랫폼과 같은 argv 를 만든다", () => {
@@ -145,6 +145,7 @@ test("플랫폼을 생략하면 현재 실행 플랫폼과 같은 argv 를 만�
 test("★ Windows psmux pane 명령은 -- 뒤에서 직접 실행해 공백·따옴표를 셸 명령으로 재해석하지 않는다(#3982)", () => {
   const launch = ["powershell", "-NoExit", "-Command", "Write-Host '대화 창'"];
   assert.deepEqual(paneLaunchArgv(launch, "win32"), ["--", ...launch]);
+  assert.deepEqual(paneLaunchArgv(codexAppServerPaneArgv("win32"), "win32"), ["--", "cmd.exe", "/K"]);
 });
 
 test("pane 명령 구분자는 Windows에만 붙고, 빈 명령에는 붙지 않는다", () => {

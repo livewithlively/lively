@@ -425,12 +425,12 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   ok2(harnessLaunchArgv("shell", [], "linux").length === 0, "E4 POSIX 셸 세션(빈 cmd)은 감싸지 않는다");
   ok2(harnessLaunchArgv("shell", [], "darwin").length === 0, "E4 darwin 도 동일");
 
-  // ── E4c ★ Windows pane 셸은 psmux 기본 셸을 그대로 쓴다(#3982) ───────────────
-  //  실측(hammurabi): `-- powershell ...` 직접 실행은 CreateProcessW access denied, 같은 노드에서
-  //  명령 없는 psmux 기본 셸은 정상이다. 셸을 한 번 더 고르지 않아 psmux가 검증한 기본값(pwsh→powershell→cmd)을 쓴다.
+  // ── E4c ★ Windows pane 셸은 실행 가능한 cmd.exe를 직접 쓴다(#3982) ────────────
+  //  실측(hammurabi): `-- powershell ...` 직접 실행은 CreateProcessW access denied. 명령 없는 pane도
+  //  psmux가 존재만 확인한 PowerShell을 먼저 골라 즉시 죽었다. 실행 정책의 영향을 받지 않는 cmd.exe를 명시한다.
   {
     const sh = harnessLaunchArgv("shell", [], "win32");
-    ok2(sh.length === 0, `E4c Windows 셸 세션은 사용자 psmux 기본 셸을 쓴다: ${JSON.stringify(sh)}`);
+    ok2(sh.join(" ") === "cmd.exe /K", `E4c Windows 셸 세션은 cmd.exe를 직접 쓴다: ${JSON.stringify(sh)}`);
 
     // 하네스 세션은 감싸지 않는다 — 감싸려면 하네스 argv 를 PowerShell 문자열에 이어붙여야 하고
     //  그게 catalog.ts 가 막는 인젝션 경계다(E4b 와 같은 규칙).
@@ -439,7 +439,7 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     ok2(!h.includes("-EncodedCommand"), "E4c ★ 하네스 argv 가 PowerShell 스크립트에 섞이지 않는다");
 
     // 엣지: 새로 도입한 분기에 cmd 가 아예 없을 때(null/undefined) 크래시하지 않는다.
-    ok2(harnessLaunchArgv("shell", null as unknown as string[], "win32").length === 0, "E4c cmd=null 도 기본 셸 세션으로 취급");
+    ok2(harnessLaunchArgv("shell", null as unknown as string[], "win32").join(" ") === "cmd.exe /K", "E4c cmd=null 도 Windows 셸 세션으로 취급");
     ok2(harnessLaunchArgv("shell", undefined as unknown as string[], "linux").length === 0, "E4c POSIX cmd=undefined 는 빈 argv");
     // 경계: 빈 문자열 한 개는 length>0 이므로 하네스 취급(프렐류드로 갈아치우지 않는다).
     ok2(harnessLaunchArgv("shell", [""], "win32").length === 1, "E4c cmd=[''] 는 하네스 취급(길이 1 유지)");
