@@ -123,34 +123,19 @@ test("app-server 모드 pane 안내는 '그냥 codex 를 치라'고 말하지 �
   assert.match(intro, /resume|넘기기/, "이어가는 법(인계)을 알려 준다");
 });
 
-function decodedWindowsPane(argv: string[]): { script: string; intro: string } {
-  assert.deepEqual(argv.slice(0, 4), ["powershell", "-NoLogo", "-NoExit", "-EncodedCommand"]);
-  const script = Buffer.from(argv[4] ?? "", "base64").toString("utf16le");
-  const introB64 = script.match(/FromBase64String\('([A-Za-z0-9+/=]+)'\)/)?.[1] ?? "";
-  return { script, intro: Buffer.from(introB64, "base64").toString("utf8") };
-}
-
-test("★ Windows Codex app-server pane 은 psmux-safe 명령으로 열리고 안내 의미를 보존한다(#3982)", () => {
-  const argv = codexAppServerPaneArgv("win32");
-  const { script, intro } = decodedWindowsPane(argv);
-  assert.match(intro, /Codex/);
-  assert.match(intro, /대화창/);
-  assert.match(intro, /넘기기/);
-  assert.doesNotMatch(script, /(^|\n)\s*(?:codex|Start-Process\s+codex)(?:\s|$)/im,
-    "보조 터미널이 별도 Codex TUI 를 실행하면 안 된다");
+test("★ Windows Codex app-server pane 은 psmux가 검증한 기본 셸을 그대로 쓴다(#3982)", () => {
+  assert.deepEqual(codexAppServerPaneArgv("win32"), [],
+    "별도 powershell.exe를 직접 실행하면 단말 정책에서 CreateProcessW access denied가 난다");
 });
 
-test("Windows의 다른 대화 런타임도 안전하고, 모드가 없으면 빈 괄호를 만들지 않는다", () => {
-  const argv = chatRuntimePaneArgv({ label: "Claude Code", bin: "claude" }, "win32");
-  const { intro } = decodedWindowsPane(argv);
-  assert.match(intro, /Claude Code/);
-  assert.match(intro, /claude/);
-  assert.doesNotMatch(intro, /\(\)/);
+test("Windows의 다른 대화 런타임도 같은 기본 셸 경계를 쓴다", () => {
+  assert.deepEqual(chatRuntimePaneArgv({ label: "Claude Code", bin: "claude" }, "win32"), []);
 });
 
-test("플랫폼 값은 정확히 win32 일 때만 Windows 우회를 쓴다", () => {
+test("플랫폼 값은 정확히 win32 일 때만 psmux 기본 셸을 쓴다", () => {
   assert.equal(codexAppServerPaneArgv("darwin")[0], "sh");
   assert.equal(codexAppServerPaneArgv("win32 ")[0], "sh");
+  assert.deepEqual(codexAppServerPaneArgv("win32"), []);
 });
 
 test("플랫폼을 생략하면 현재 실행 플랫폼과 같은 argv 를 만든다", () => {
