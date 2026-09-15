@@ -13,8 +13,9 @@
 //  → 항상 항목별 diff(추가/변경/제거)를 찍는다. src/org/delivery/default-content.ts 재생성 후 커밋 전 `git diff` 로 재확인.
 //  (DB 없이 지식만 다시 굳히려면 `node scripts/sync-seed-knowledge.mjs` — seed-knowledge/*.md 편집 후.)
 //
-//  ⚠ 훅·스킬은 org_hook/org_harness_asset **전체**를 캡처한다 — 이 스크립트는 defaults 의 SoT 인
-//    라이블리 게이트웨이에서만 돌린다는 전제(고객사·실험 자산이 섞인 DB 에서 돌리지 말 것).
+//  ⚠ 훅·스킬은 org_hook/org_harness_asset 전체를 읽는다. 다만 SEED_EXCLUDED_HOOK_IDS 훅과
+//    frontmatter.internal_only 자산은 제외한다 — 이 스크립트는 defaults 의 SoT 인 라이블리 게이트웨이에서만
+//    돌린다는 전제(고객사·실험 자산이 섞인 DB 에서 돌리지 말 것).
 //  ⚠ **내부 전용 자산은 `frontmatter.internal_only = true` 로 표시하면 시드에서 통째로 빠진다**(excludeInternalOnly).
 //    우리 박스 특유의 경로(`workspace/productivity/...`)·포트(:8080)·사내 히스토리가 본문에 박힌 자산은 고객
 //    박스에서 무의미하거나 오해를 부른다. SEED_ENABLED_POLICY(=포함하되 기본값을 고정)와 **다르다** — 그건
@@ -38,6 +39,14 @@ const KNOWLEDGE_NAMES = [
   "runbook-bootstrap-domains",       // src/scheduler/index.ts — 도메인맵 is 부트스트랩 프롬프트
   "domainmap-is-bootstrap-runbook",  // src/scheduler/index.ts — 〃 (도구 델타)
 ];
+
+// ⚠ 고객 기본 시드에서 제외할 조직 커스텀 훅.
+//  canonical(Lively) DB 는 우리 조직이 직접 실험·운영하는 훅도 함께 담는다. capture 가 org_hook 전체를
+//  읽는다고 그 훅까지 고객 기본값인 것은 아니다. 이 목록은 on/off 정책(SEED_ENABLED_POLICY)과 다르다:
+//  여기에 든 훅은 꺼진 채 배포되는 것도 아니고 DEFAULT_HOOKS 에 아예 들어가지 않는다.
+const SEED_EXCLUDED_HOOK_IDS = new Set([
+  "delegation-nudge", // 도구 호출 수로 서브에이전트 위임을 권하는 Lively 선택 훅 — 조직별 opt-in
+]);
 
 // ⚠ 신규 설치 기본값 고정 — **라이블리 DB 의 on/off 는 "우리 조직이 고른 값"이지 "신규 고객 기본값"이 아니다.**
 //  capture 는 DB 를 스냅샷하므로, 여기 등재하지 않으면 우리 토글이 그대로 고객 디폴트로 굳는다.
@@ -175,6 +184,12 @@ export function excludeInternalOnly(rows) {
   for (const r of rows) ((r && r.frontmatter && r.frontmatter.internal_only === true) ? excluded : kept).push(r);
   return { kept, excluded };
 }
+// canonical DB 전용 훅 분리 — 전체 캡처와 선택 캡처 모두에서 고객 DEFAULT_HOOKS 로 새지 않게 한다.
+export function excludeSeedHooks(rows) {
+  const kept = [], excluded = [];
+  for (const r of rows || []) ((r && SEED_EXCLUDED_HOOK_IDS.has(r.id)) ? excluded : kept).push(r);
+  return { kept, excluded };
+}
 // 현재 시드 vs DB 캡처 항목별 판정(추가/변경/제거) — id 기준, JSON 동등성으로 변경 감지.
 export function diffRows(current, next) {
   const c = byId(current), n = byId(next), added = [], changed = [], removed = [];
@@ -232,13 +247,17 @@ async function main() {
   }
   const { default: pg } = await import("pg");
   const pool = new pg.Pool({ connectionString: process.env.ITEMS_DATABASE_URL, max: 2 });
-  const nextHooks = (await pool.query(
+  const capturedHooks = (await pool.query(
     `SELECT id, label, harness, event, matcher, timeout_sec, note, summary, enabled, sort, source_code
        FROM org_hook ORDER BY sort, id`)).rows;
   const capturedSkills = (await pool.query(
     `SELECT id, kind, label, harness, description, frontmatter, paired_hook_id, enabled, sort, body
        FROM org_harness_asset ORDER BY kind, sort, id`)).rows;
   await pool.end();
+
+  // Lively 조직이 선택해 쓰는 커스텀 훅은 고객 시드에서 통째로 제외 — 꺼진 행조차 배포하지 않는다.
+  const { kept: nextHooks, excluded: internalHooks } = excludeSeedHooks(capturedHooks);
+  if (internalHooks.length) console.warn(`ⓘ Lively 조직 전용이라 시드에서 제외: ${internalHooks.map((r) => r.id).join(", ")}`);
 
   // 내부 전용(frontmatter.internal_only) 자산은 고객 시드에서 통째로 제외 — 본문도 안 나간다(위 헤더 ⚠ 참조).
   const { kept: nextSkills, excluded: internalSkills } = excludeInternalOnly(capturedSkills);
@@ -254,7 +273,9 @@ async function main() {
 
   // 현재 시드에서 훅·스킬 배열 파싱 — 항목별 diff·선택 반영의 기준.
   const currentSrc = fs.existsSync(OUT) ? fs.readFileSync(OUT, "utf8") : null;
-  const currentHooks = currentSrc ? parseModuleArray(currentSrc, "DEFAULT_HOOKS") : [];
+  const capturedCurrentHooks = currentSrc ? parseModuleArray(currentSrc, "DEFAULT_HOOKS") : [];
+  const { kept: currentHooks, excluded: leakedCurrentHooks } = excludeSeedHooks(capturedCurrentHooks);
+  if (leakedCurrentHooks.length) console.warn(`⚠ 현행 시드에 섞인 Lively 조직 전용 훅을 제거: ${leakedCurrentHooks.map((r) => r.id).join(", ")}`);
   const currentSkills = currentSrc ? parseModuleArray(currentSrc, "DEFAULT_SKILLS") : [];
 
   const hookD = diffRows(currentHooks, nextHooks), skillD = diffRows(currentSkills, nextSkills);
