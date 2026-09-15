@@ -222,8 +222,9 @@ if [ "$MODE" = cloud ]; then
 fi
 say "  다음 두 명령을 실행하세요:"
 say ""
-say "      lively login      # 접속 토큰 입력(화면에 안 보임)"
-say "      lively install    # 키트 설치"
+say "      lively login          # 접속 토큰 입력(화면에 안 보임)"
+say "      lively install        # 키트 설치"
+say "      lively node --daemon  # 이 컴퓨터를 [내 컴퓨터] 목록에 연결(선택)"
 say ""
 say "  (지금 창에서 'lively: command not found' 가 나면 새 터미널을 열거나  source ~/.zshrc)"
 say ""
