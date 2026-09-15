@@ -6,7 +6,8 @@
 //
 //  ── 왜 스위치인가 ──
 //  App Server 는 공식 문서가 *"experimental and aren't supported for production workloads"* 라고 못박은 표면이다.
-//  그래서 ⓐ 기본은 종전 그대로 ⓑ 켠 배포에서도 실패하면 종전 경로로 폴백 ⓒ 언제든 끌 수 있어야 한다.
+//  그래서 언제든 tmux 모드로 끌 수 있어야 한다. 다만 app-server 로 연 세션의 pane 은 셸이므로, 한 입력만
+//  send-keys로 폴백할 수는 없다 — 모드 전환은 다음 세션 생성부터 적용한다.
 //  켜는 값은 배포 env 하나다(`LIVELY_CODEX_CHAT=app-server`) — 조직 설정으로 올리는 건 실박스 검증 뒤에 한다.
 //
 //  ── ★ 왜 pane 이 셸이어야 하나 ──

@@ -221,15 +221,3 @@ export async function bindNodeSessionProjectOrKill(args: {
     throw new HttpError(503, `프로젝트 소속을 기록하지 못해 노드 세션 생성을 취소했습니다: ${(e as Error)?.message ?? e}`);
   }
 }
-
-/**
- * create 에서 떼어 둔 첫 지시를 **DB 소속이 확정된 뒤** 노드에 넣는다(#1867).
- *  실패는 비치명 — 세션은 살아 있고 사람이 대화창에서 다시 칠 수 있다.
- */
-export async function injectDeferredFirstPrompt(args: {
-  nodeId: string; sessionId: string; harness: string; text: string; trustOk: boolean;
-}): Promise<void> {
-  await nodeRpc(args.nodeId, "injectFirstPrompt", {
-    id: args.sessionId, harness: args.harness, text: args.text, trustOk: args.trustOk,
-  }).catch((e) => console.warn(`[node] 첫 지시 예약 실패(${args.sessionId}) — 세션은 살아 있습니다:`, (e as Error)?.message ?? e));
-}

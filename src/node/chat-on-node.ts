@@ -13,7 +13,12 @@
 //   «답 없이 매달린 요청은 없다» 같은 불변식이 갈리고, 그중 하나는 반드시 빠진다.
 import { logger } from "../log.js";
 
-export interface ChatOnNodeResult { ok: boolean; convId?: string; error?: string }
+export interface ChatOnNodeResult { ok: boolean; convId?: string; steered?: boolean; error?: string }
+export interface ChatOnNodeDeps {
+  sessionDir?: (sessionId: string) => Promise<string>;
+  sendCodexChat?: (o: { sessionId: string; text: string; cwd: string; osUser: null }) =>
+    Promise<{ threadId: string; steered?: boolean }>;
+}
 
 /**
  * 이 노드의 세션에 **대화 런타임으로** 말을 건다.
@@ -21,11 +26,20 @@ export interface ChatOnNodeResult { ok: boolean; convId?: string; error?: string
  *  ⚠ 실패를 «보냈다» 로 접지 않는다 — 게이트웨이가 그 사실을 보고 종전 경로(sendKeys)로 내려간다.
  *   여기서 조용히 성공을 반환하면 사람은 답을 영영 기다린다.
  */
-export async function deliverChatOnNode(sessionId: string, text: string, harness: string): Promise<ChatOnNodeResult> {
+export async function deliverChatOnNode(
+  sessionId: string, text: string, harness: string, deps: ChatOnNodeDeps = {},
+): Promise<ChatOnNodeResult> {
   try {
-    const { sessionDir } = await import("../terminal/terminal-sessions.js");
-    const dir = await sessionDir(sessionId);
+    const dir = await (deps.sessionDir
+      ? deps.sessionDir(sessionId)
+      : import("../terminal/terminal-sessions.js").then(({ sessionDir }) => sessionDir(sessionId)));
     const key = harness || "claude";
+    if (key === "codex") {
+      const send = deps.sendCodexChat
+        ?? (await import("../terminal/harness-io/codex-chat-runtime.js")).sendCodexChat;
+      const r = await send({ sessionId, text, cwd: dir, osUser: null });
+      return { ok: true, convId: r.threadId, steered: !!r.steered };
+    }
     const { sendClaudeChat, ensureGrokChat, sendGrokChat, ensureAntigravityChat, ensureOpencodeChat, ClaudeChatUnavailable } =
       await import("../terminal/harness-io/claude-chat-runtime.js");
     try {
