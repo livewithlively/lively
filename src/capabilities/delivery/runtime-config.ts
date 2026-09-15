@@ -24,9 +24,10 @@ import {
 import { kitVersion } from "../../org/delivery/publish.js";
 import { DEFAULT_WRITEBACK_NOTICE } from "../../org/delivery/hook-defaults.js";
 import {
-  getRuntimeConfig, updateRuntimeConfig, HOOK_RELAY_DECISIONS, type HookRelayDecision, listAutoApproveTools,
+  getRuntimeConfig, updateRuntimeConfig, HOOK_RELAY_DECISIONS, type HookRelayDecision,
   type UiNavConfig, type UiAnnouncement, type UiProfile, // #1454 S2~S5 — 매니지드 표면 노브
 } from "../../org/store.js";
+import { listAutoApproveToolIds } from "../../org/delivery/auto-approve.js";
 import {
   type EmbeddingConfigPatch, DEFAULT_EMBEDDING_BATCH_SIZE, DEFAULT_EMBEDDING_TIMEOUT_MS, DEFAULT_EMBEDDING_BACKFILL_MIN_MB,
   EMBEDDING_BATCH_MIN, EMBEDDING_BATCH_MAX, EMBEDDING_TIMEOUT_MIN_MS, EMBEDDING_TIMEOUT_MAX_MS, EMBEDDING_BACKFILL_MIN_MB_MIN,
@@ -71,9 +72,9 @@ export const runtimeConfigCapabilities: Capability[] = [
       // 훅이 동적으로 필요한 것만(비밀 아님): hooks 토글 + 너지문구. work_roots(디렉토리 경로)는
       //  비-admin 에게 노출 안 함 — 설치 번들(.lively/work-roots, 멤버 본인 설치 경로)로만 전달.
       const c = await getRuntimeConfig();
-      // write_tools(기록 인정 툴)·auto_approve(자동승인 툴 'mcp__lively__<tool>')도 훅이 동적으로 읽음(B) —
+      // write_tools(기록 인정 툴)·auto_approve(자동승인 툴의 완전한 MCP 식별자)도 훅이 동적으로 읽음(B) —
       //  툴 '이름'뿐이라 비밀 아님(work_roots 와 달리 노출 OK). 훅이 매 세션 settings.json permissions.allow 에 reconcile.
-      const autoApprove = (await listAutoApproveTools()).map((t) => `mcp__lively__${t.name}`);
+      const autoApprove = await listAutoApproveToolIds();
       // kit_version(#858) — 현재 서빙 중인 설치 번들의 지문. session-preload 가 로컬 ~/.lively/kit-version 과
       //  비교해 다르면 백그라운드 재설치를 띄운다(키트 코드·배선 자동 갱신 — 멤버 수동 업데이트 폐지).
       //  이미 매 세션 오는 응답에 얹으므로 왕복이 늘지 않는다. 계산 실패 시 null → 멤버는 아무것도 안 한다(fail-safe).

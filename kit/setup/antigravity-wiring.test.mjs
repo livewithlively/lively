@@ -47,7 +47,7 @@ const { HOOK_SCRIPTS: HOOKS } = await import(pathToFileURL(join(KIT, "setup", "u
 // 번들 setup/ 목록은 매니페스트 단일 출처를 따른다 — 사본을 두면 파일이 하나 늘 때 여기만 빠져
 //  "설치기가 번들 안에서 import 크래시" 로 죽는다(kit-manifest.SETUP_FILES 주석 참조).
 const { SETUP_FILES } = await import(pathToFileURL(join(KIT, "setup", "kit-manifest.mjs")).href);
-function makeBundle({ autoApprove = ["mcp__lively__whoami", "mcp__lively__knowledge_get"], withAdapter = true } = {}) {
+function makeBundle({ autoApprove = ["mcp__lively__whoami", "mcp__lively__knowledge_get", "mcp__lively-local__lively_local_repo_list"], withAdapter = true } = {}) {
   rmSync(BUNDLE, { recursive: true, force: true });
   mkdirSync(join(BUNDLE, ".claude", "hooks"), { recursive: true });
   mkdirSync(join(BUNDLE, ".lively"), { recursive: true });
@@ -108,7 +108,9 @@ install();
   // mcp_config — command **문자열**(+args 배열) + LIVELY_HARNESS stamp. 배열 command 를 쓰면 agy 스키마 위반이다.
   const lv = mcp?.mcpServers?.lively;
   const okMcp = typeof lv?.command === "string" && Array.isArray(lv?.args) && lv.args[0] === "mcp" && lv?.env?.LIVELY_HARNESS === "antigravity";
-  const okPerm = Array.isArray(st?.permissions?.allow) && st.permissions.allow.includes("mcp(lively/whoami)") && st.permissions.allow.includes("mcp(lively/knowledge_get)");
+  const okPerm = Array.isArray(st?.permissions?.allow) && st.permissions.allow.includes("mcp(lively/whoami)")
+    && st.permissions.allow.includes("mcp(lively/knowledge_get)")
+    && st.permissions.allow.includes("mcp(lively-local/lively_local_repo_list)");
   (plug?.name === "lively" && okHooks && okMcp && okPerm)
     ? ok("AW1 설치 → plugin.json + 글로벌 hooks.json(4이벤트·어댑터 command) + mcp_config(문자열 command·stamp) + allow 규칙")
     : bad("AW1 기본 설치", `plugin=${plug?.name} hooks=${okHooks} mcp=${okMcp} perm=${okPerm}`);
@@ -120,9 +122,9 @@ install();
   install();
   const after = treeDigest(PLUGIN) + "||" + digest(SETTINGS) + "||" + digest(HOOKSJSON);
   const allow = readJson(SETTINGS)?.permissions?.allow ?? [];
-  (before === after && allow.length === 2)
+  (before === after && allow.length === 3)
     ? ok("AW2 설치 멱등(2회 실행 결과 바이트 동일 · allow 누적 없음)")
-    : bad("AW2 멱등", `동일=${before === after} allow=${allow.length}개(기대 2)`);
+    : bad("AW2 멱등", `동일=${before === after} allow=${allow.length}개(기대 3)`);
 }
 
 // ── AW3/AW4 사용자 설정·다른 플러그인 보존 ──────────────────────────────────
@@ -175,11 +177,12 @@ install();
   install();
   const allow = readJson(SETTINGS)?.permissions?.allow ?? [];
   const pruned = !allow.includes("mcp(lively/knowledge_get)");
+  const localPruned = !allow.includes("mcp(lively-local/lively_local_repo_list)");
   const keptOurs = allow.includes("mcp(lively/whoami)");
   const keptMember = allow.includes("mcp(lively/my_manual)") && allow.includes("command(git)");
-  (pruned && keptOurs && keptMember)
+  (pruned && localPruned && keptOurs && keptMember)
     ? ok("AW7 자동승인 회수 — 빠진 규칙만 제거, 멤버 수동 규칙 보존")
-    : bad("AW7 회수", `제거=${pruned} 유지=${keptOurs} 멤버보존=${keptMember} allow=${JSON.stringify(allow)}`);
+    : bad("AW7 회수", `제거=${pruned} 로컬제거=${localPruned} 유지=${keptOurs} 멤버보존=${keptMember} allow=${JSON.stringify(allow)}`);
 }
 
 // ── AW8 못 읽는 settings.json — 설치·제거 무수정 + 플러그인은 그래도 설치 ────
