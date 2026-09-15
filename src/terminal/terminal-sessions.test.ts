@@ -440,8 +440,8 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     const i = sh.indexOf("-EncodedCommand");
     ok2(i > 0 && i === sh.length - 2, "E4c -EncodedCommand 페이로드는 마지막 토큰이다");
 
-    // ★ psmux 통과 조건 — 이 계약이 깨지면 스크립트가 pane 에 도착하지 못한다.
-    //  psmux 3.3.7 은 인자의 `"` · `'` · 탭을 삼키고(opt-json.test.ts), 공백은 인자를 쪼갠다.
+    // 스크립트는 명령줄 문법에 직접 보간하지 않고 불투명 base64 토큰으로 둔다. psmux의 직접 실행 경계는
+    // paneLaunchArgv가 별도로 맡는다(#3982).
     for (const tok of sh) {
       ok2(!/["'\t ]/.test(tok), `E4c ★ 토큰에 psmux 소실·분해 문자가 없다: ${JSON.stringify(tok)}`);
     }

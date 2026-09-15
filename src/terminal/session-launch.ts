@@ -3,8 +3,9 @@
 //
 //  왜 한 곳인가 — 두 라우트가 «같은 일»을 각자 적어 두었고, 그 사본이 갈라진 자리에서 사고가 났다:
 //   · 홈만 화면 테마(`x-lively-theme` 헤더)를 CreateInput.theme 으로 옮겼다. 그 값이 claude 의
-//     `--settings {"theme":"dark"}` 인자가 되는데, 윈도우 노드의 psmux 는 따옴표가 든 토큰을 못 나른다
-//     (catalog.ts psmuxUnsafeToken 머리말). 그래서 **홈에서 연 세션만** 그 PC 에서 즉사했고 프로젝트를 고르고 연
+//     `--settings {"theme":"dark"}` 인자가 되는데, 윈도우 노드의 psmux 실행 경계가 없으면 따옴표 든 argv를
+//     PowerShell 명령 문자열로 다시 해석한다(catalog.ts paneLaunchArgv 머리말). 그래서 **홈에서 연 세션만**
+//     그 PC 에서 즉사했고 프로젝트를 고르고 연
 //     세션은 멀쩡했다(상민님 신고 2026-09-08 · hammurabi 실측: 같은 요청에 헤더만 붙이면 4410 session-gone, 떼면
 //     정상). 인자 자체의 고침은 catalog.ts(harnessSettingsArgv) 에 있고, 여기서는 **두 입구가 같은 입력을 만들게**
 //     해 다음 갈림을 막는다 — 한쪽에만 있는 필드가 곧 한쪽에서만 나는 사고다.
