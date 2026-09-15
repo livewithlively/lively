@@ -34,7 +34,7 @@ import { nodeRpc, nodeSupports, nodeOnline, isSelfNode, nodeAgentStale } from ".
 import type { NodeOp } from "../node/protocol.js";
 import { nodeOfflineNote } from "../node/offline-note.js";      // #1849 — 오프라인 원인 추정 한 문장
 import { translateNodeRpcError } from "../node/rpc-error.js";
-import { bindNodeSessionProjectOrKill, injectDeferredFirstPrompt, nodeProjectCreatePlan } from "../node/provision-remote.js";
+import { bindNodeSessionProjectOrKill, nodeProjectCreatePlan } from "../node/provision-remote.js";
 import { createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { currentTenant } from "../org/tenant-context.js";
 import { PRIMARY_TENANT_ID, setSessionWorkspace } from "../org/tenancy/registry.js";   // #1750 후속 — 세션→워크스페이스 정본
@@ -262,10 +262,12 @@ export async function launchSession(user: LivelyUser, input: CreateInput, opts: 
     }
     await mirrorNodeSession({ ...session, invites: opts.invites }, nodeId, input, me);
     if (plan.deferredPrompt) {
-      await injectDeferredFirstPrompt({
-        nodeId, sessionId: session.id, harness: session.harness || input.harness, text: plan.deferredPrompt,
-        trustOk: autoTrustWorkspace({ projectId: input.projectId, subpath: input.subpath }),
-      });
+      // 첫 지시도 후속 지시와 같은 판정을 쓴다. Codex App Server pane 은 셸이므로 여기서 곧바로
+      // injectFirstPrompt(send-keys)를 부르면 사람의 지시가 zsh/PowerShell 명령이 된다(#3982).
+      const { deliverPrompt } = await import("./deliver-prompt.js");
+      await deliverPrompt(session.id, plan.deferredPrompt, {
+        owner: me, nodeId, firstPromptTrustOk: autoTrustWorkspace({ projectId: input.projectId, subpath: input.subpath }),
+      }).catch((e) => logger.warn({ id: session.id, err: (e as Error)?.message }, "노드 첫 지시 전송 실패 — 세션은 살아 있습니다"));
     }
     //  ★ 이 갈래는 **노드에 만든 세션**이다 — 그 기계에 산다(onNode=true).
     return { ...withChatFields(session, true), node: { id: nodeId, online: true } };

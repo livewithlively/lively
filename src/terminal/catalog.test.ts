@@ -109,7 +109,7 @@ test("★ {slug} 없는 템플릿은 무시한다(전 테넌트 공유가 되면
 
 // ── #2055 codex app-server 모드의 pane ─────────────────────────────────────────
 test("★ app-server 모드 pane 은 codex TUI 가 아니라 셸이다(스레드 writer 가 둘이 되면 대화가 갈린다)", () => {
-  const argv = codexAppServerPaneArgv();
+  const argv = codexAppServerPaneArgv("linux");
   assert.equal(argv[0], "sh");
   const joined = argv.join(" ");
   assert.match(joined, /exec "\$\{SHELL:-\/bin\/sh\}" -il/, "끝에 사람이 쓰는 셸로 남아야 한다");
@@ -117,9 +117,45 @@ test("★ app-server 모드 pane 은 codex TUI 가 아니라 셸이다(스레드
 });
 
 test("app-server 모드 pane 안내는 '그냥 codex 를 치라'고 말하지 않는다 — 그건 새 대화다", () => {
-  const intro = codexAppServerPaneArgv().at(-1) ?? "";
+  const intro = codexAppServerPaneArgv("linux").at(-1) ?? "";
   assert.match(intro, /대화창/, "대화가 어디서 도는지 알려 준다");
   assert.match(intro, /resume|넘기기/, "이어가는 법(인계)을 알려 준다");
+});
+
+function decodedWindowsPane(argv: string[]): { script: string; intro: string } {
+  assert.deepEqual(argv.slice(0, 4), ["powershell", "-NoLogo", "-NoExit", "-EncodedCommand"]);
+  const script = Buffer.from(argv[4] ?? "", "base64").toString("utf16le");
+  const introB64 = script.match(/FromBase64String\('([A-Za-z0-9+/=]+)'\)/)?.[1] ?? "";
+  return { script, intro: Buffer.from(introB64, "base64").toString("utf8") };
+}
+
+test("★ Windows Codex app-server pane 은 psmux-safe 명령으로 열리고 안내 의미를 보존한다(#3982)", () => {
+  const argv = codexAppServerPaneArgv("win32");
+  assert.equal(psmuxUnsafeToken(argv), null, "psmux 가 못 나르는 따옴표·공백 토큰이 없어야 한다");
+  const { script, intro } = decodedWindowsPane(argv);
+  assert.match(intro, /Codex/);
+  assert.match(intro, /대화창/);
+  assert.match(intro, /넘기기/);
+  assert.doesNotMatch(script, /(^|\n)\s*(?:codex|Start-Process\s+codex)(?:\s|$)/im,
+    "보조 터미널이 별도 Codex TUI 를 실행하면 안 된다");
+});
+
+test("Windows의 다른 대화 런타임도 안전하고, 모드가 없으면 빈 괄호를 만들지 않는다", () => {
+  const argv = chatRuntimePaneArgv({ label: "Claude Code", bin: "claude" }, "win32");
+  assert.equal(psmuxUnsafeToken(argv), null);
+  const { intro } = decodedWindowsPane(argv);
+  assert.match(intro, /Claude Code/);
+  assert.match(intro, /claude/);
+  assert.doesNotMatch(intro, /\(\)/);
+});
+
+test("플랫폼 값은 정확히 win32 일 때만 Windows 우회를 쓴다", () => {
+  assert.equal(codexAppServerPaneArgv("darwin")[0], "sh");
+  assert.equal(codexAppServerPaneArgv("win32 ")[0], "sh");
+});
+
+test("플랫폼을 생략하면 현재 실행 플랫폼과 같은 argv 를 만든다", () => {
+  assert.deepEqual(codexAppServerPaneArgv(), codexAppServerPaneArgv(process.platform));
 });
 
 // harnessSettingsArgv — claude 스폰의 --settings(theme+statusLine) 병합 seam. 이 함수가 회귀하면 statusLine 이
@@ -190,14 +226,14 @@ test("psmuxUnsafeToken: 따옴표·공백·탭이 든 토큰을 잡고, 깨끗�
 //   **한 대화에 하네스가 둘** 붙었다(실측 box-yoon-a7da7c38). 사람 눈엔 «선택지가 대화창에
 //   안 뜨고 시간만 올라가는» 화면이 된다.
 test("[#2439] 대화 런타임 세션의 pane 은 셸이고, 안내가 하네스마다 맞다", () => {
-  const argv = chatRuntimePaneArgv({ label: "Claude Code", bin: "claude" });
+  const argv = chatRuntimePaneArgv({ label: "Claude Code", bin: "claude" }, "linux");
   assert.equal(argv[0], "sh", "셸을 띄운다(하네스 TUI 가 아니라)");
   const intro = argv.at(-1) ?? "";
   assert.match(intro, /대화창/, "무엇이 어디에 있는지 첫 화면에 적는다");
   assert.match(intro, /claude/, "그 하네스 명령을 여기서 치면 다른 대화가 열린다고 알린다");
   assert.ok(!/Codex/.test(intro), "★ codex 문구가 다른 하네스에 새지 않는다");
   //  codex 는 종전 문구를 그대로 유지한다(도는 것을 흔들지 않는다).
-  const cx = codexAppServerPaneArgv().at(-1) ?? "";
+  const cx = codexAppServerPaneArgv("linux").at(-1) ?? "";
   assert.match(cx, /Codex/);
   assert.match(cx, /App Server/);
 });

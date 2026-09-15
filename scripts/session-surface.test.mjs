@@ -149,7 +149,7 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
   const deliver = read("src/terminal/deliver-prompt.ts");
   ok(/setClaudeSessionId\(sessionId, r\.convId/.test(deliver),
     "㉝ ★ 대화 런타임이 연 대화 id 를 세션 매핑에 적는다 — 안 적으면 중간 응답이 화면에 안 온다");
-  ok(/r\.convId !== st\?\.claude_session_id/.test(deliver),
+  ok(/r\.convId !== (?:localState|st)\?\.claude_session_id/.test(deliver),
     "㉝-b 같은 값이면 다시 쓰지 않는다(매 프롬프트마다 DB 를 두드리지 않게)");
 
   //  ★ 선택지 카드(#2439) — 상민님이 계속 신고한 그것.
