@@ -89,8 +89,8 @@ async function main() {
 
   // (3) 토큰·게이트웨이 — env 우선, 없으면 ~/.lively/{token,gateway-url}. 토큰 없으면 조용히 종료.
   const readCfg = (rel) => { try { return readFileSync(join(homedir(), ".lively", rel), "utf8").trim(); } catch { return ""; } };
-  const token = (process.env.LIVELY_TOKEN || "").trim() || readCfg("token");
-  const gw = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readCfg("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
+  const token = readCfg("token") || (process.env.LIVELY_TOKEN || "").trim();
+  const gw = (readCfg("gateway-url") || (process.env.LIVELY_GATEWAY_URL || "").trim() || "http://localhost:8080").replace(/\/$/, "");
   if (!token) process.exit(0);
 
   // 시도했음을 먼저 기록(성공·실패 무관 — 스로틀은 '시도' 기준이라 게이트웨이가 잠깐 죽어도 핫패스를 안 때린다).

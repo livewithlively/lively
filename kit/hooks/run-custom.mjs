@@ -81,8 +81,9 @@ const DEFAULT_RELAY = ["deny", "ask", "defer"];
 const cacheFile = () => join(LIVELY, `custom-hooks-${EVENT.replace(/[^A-Za-z]/g, "")}.json`);
 
 const readLocal = (rel) => { try { return readFileSync(join(LIVELY, rel), "utf8").trim() || null; } catch { return null; } };
-const TOKEN = (process.env.LIVELY_TOKEN || "").trim() || readLocal("token");
-const GW = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readLocal("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
+// 자격은 **파일이 env 를 이긴다**(#916·#2617 의 훅 판 — 근거는 hooks/session-preload.mjs 의 우선순위 주석).
+const TOKEN = readLocal("token") || (process.env.LIVELY_TOKEN || "").trim();
+const GW = (readLocal("gateway-url") || (process.env.LIVELY_GATEWAY_URL || "").trim() || "http://localhost:8080").replace(/\/$/, "");
 
 function emitContext(text) {
   if (!text) return;

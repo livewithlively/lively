@@ -380,8 +380,9 @@ function reconcileOneClaudeConfig(cj, gw, token) {
 async function main() {
   if (hookDisabled()) return;
 
-  const token = (process.env.LIVELY_TOKEN || "").trim() || readL("token");
-  const gwRaw = (process.env.LIVELY_GATEWAY_URL || "").trim() || readL("gateway-url");
+  // 자격은 **파일이 env 를 이긴다**(#916·#2617 의 훅 판 — 근거는 hooks/session-preload.mjs 의 우선순위 주석).
+  const token = readL("token") || (process.env.LIVELY_TOKEN || "").trim();
+  const gwRaw = readL("gateway-url") || (process.env.LIVELY_GATEWAY_URL || "").trim();
   if (!token || !gwRaw) return;                       // 미설치/무토큰 — 업데이트할 게 없다
   const gw = gwRaw.replace(/\/+$/, "").replace(/\/mcp$/, "");
 
@@ -462,8 +463,8 @@ async function main() {
 //   이미 exit 하고, 어드민 토글(hooks.self_update)은 아래 hookDisabled 로 main() 과 같은 판정을 쓴다.
 function mcpOnly() {
   if (hookDisabled()) return;
-  const token = (process.env.LIVELY_TOKEN || "").trim() || readL("token");
-  const gwRaw = (process.env.LIVELY_GATEWAY_URL || "").trim() || readL("gateway-url");
+  const token = readL("token") || (process.env.LIVELY_TOKEN || "").trim();
+  const gwRaw = readL("gateway-url") || (process.env.LIVELY_GATEWAY_URL || "").trim();
   if (!token || !gwRaw) return;                      // 미설치/무토큰 — 되살릴 등록 자체가 없다
   reconcileClaudeMcp(gwRaw.replace(/\/+$/, "").replace(/\/mcp$/, ""), token);
 }
