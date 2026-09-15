@@ -1566,10 +1566,13 @@ async function afterLogin(gw, tok) {
   registerClaudeMcp(); // claude 미설치 판정·안내 포함. (#247 — 구명 registerLivelyMcp 잔재 호출이 여기서 크래시했다)
   // tmux 서버 전역 env 는 **고칠 수 있다** — 아래 '이 셸은 못 고친다'의 유일한 예외라 먼저 친다(#3728).
   syncTmuxGlobalEnv(gw, tok);
-  // codex 는 토큰을 config.toml 에 안 굽고 LIVELY_TOKEN 을 읽으므로(bearer_token_env_var) 재등록할 게 없다.
+  // codex 는 stdio 프록시로 등록되므로(setup/user-install.mjs) 재등록할 게 없다 — 프록시도 파일을 읽는다.
   //  대신 **이 셸의 env 는 우리가 못 고친다**(자식이 부모 셸을 못 바꾼다) → 조용히 두지 말고 사실대로 알린다.
+  //  ⚠ 영향 표면은 하네스가 아니라 **자격을 env 로도 읽는 경로**다 — codex 만 지목하던 종전 문구는 두 겹으로
+  //   틀렸다: claude 로 띄운 세션도 같은 셸이면 똑같이 물려받고(하네스 무관), 반대로 MCP 는 파일 우선이라 멀쩡하다.
   if (ENV_TOKEN_AT_START && ENV_TOKEN_AT_START !== tok) {
-    warn(`이 셸의 LIVELY_TOKEN 은 아직 이전 토큰입니다 — ${RELOAD_SHELL_HINT} 뒤에 codex 를 쓰세요.`);
+    warn(`이 셸의 LIVELY_TOKEN 은 아직 이전 토큰입니다 — ${RELOAD_SHELL_HINT}. `
+      + `claude·codex 어느 쪽이든 이 셸에서 띄우면 옛 신원을 물려받습니다.`);
   }
   // ★ 노드도 지금 로그인한 곳으로 따라오게 한다(#2215). 종전엔 MCP 만 다시 굽고 노드는 그대로 뒀다 —
   //  그래서 워크스페이스를 옮겨도 그 PC 는 여전히 **이전 테넌트의 노드**였다(새 곳에선 세션이 안 열리고,
@@ -2209,13 +2212,13 @@ async function cmdDoctor(opts) {
       `이 셸 env: ${normGw(gwEnv)} · 파일: ${normGw(gwFile)} — CLI·MCP 는 파일을 쓰지만 env 를 직접 읽는 도구는 앞의 주소로 갑니다`,
       `tmux set-environment -g LIVELY_GATEWAY_URL ${normGw(gwFile)}  후 새 세션 (또는 ${RELOAD_SHELL_HINT})`);
   }
-  // #916 — 이 셸의 env 가 파일과 다르면 **codex 와 이미 떠 있는 세션은 옛 신원으로** 게이트웨이에 붙는다.
+  // #916 — 이 셸의 env 가 파일과 다르면 **이 셸에서 띄운 세션이 옛 신원으로** 게이트웨이에 붙는다(하네스 무관).
   //  CLI 는 파일을 정본으로 쓰므로 위 두 줄은 멀쩡해 보이는데, 그 상태가 정확히 #916 이었다.
   //  진단이 이걸 안 보여줘서 그때는 /api/ui/me 를 손으로 찔러보고서야 잡혔다 → 도구화한다. ⚠ 값은 안 찍는다(사실만).
   if (ENV_TOKEN_AT_START && tokFile) {
     const same = ENV_TOKEN_AT_START === tokFile;
     chk("신원 일치(이 셸 env ↔ 파일)", same,
-      same ? "일치" : "이 셸의 LIVELY_TOKEN 이 ~/.lively/token 과 다릅니다 — codex 는 옛 신원으로 붙습니다",
+      same ? "일치" : "이 셸의 LIVELY_TOKEN 이 ~/.lively/token 과 다릅니다 — 이 셸에서 띄우는 세션이 옛 신원으로 붙습니다",
       RELOAD_SHELL_HINT);
   }
   chk("Claude Code", st.harness.claude.installed, st.harness.claude.installed ? "PATH 에 있음" : "미설치 또는 PATH 밖", "curl -fsSL https://claude.ai/install.sh | bash");

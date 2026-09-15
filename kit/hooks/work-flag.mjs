@@ -172,8 +172,9 @@ try {
       const boxId = (process.env.LIVELY_SESSION_ID || "").trim();
       if ((reason === "prompt_input_exit" || reason === "logout") && boxId && /^box-/.test(boxId)) {
         const readCfg = (rel) => { try { return readFileSync(join(homedir(), ".lively", rel), "utf8").trim(); } catch { return ""; } };
-        const token = (process.env.LIVELY_TOKEN || "").trim() || readCfg("token");
-        const gw = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readCfg("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
+        // 자격은 **파일이 env 를 이긴다**(#916·#2617 의 훅 판 — 근거는 hooks/session-preload.mjs 의 우선순위 주석).
+        const token = readCfg("token") || (process.env.LIVELY_TOKEN || "").trim();
+        const gw = (readCfg("gateway-url") || (process.env.LIVELY_GATEWAY_URL || "").trim() || "http://localhost:8080").replace(/\/$/, "");
         if (token) {
           const ctl = new AbortController();
           const to = setTimeout(() => ctl.abort(), 1200);
@@ -238,8 +239,8 @@ try {
     const mappedFlag = join(FLAG_DIR, `${boxId}.${sid}.mapped`);
     const isBox = boxId && /^box-/.test(boxId);
     const readCfg = (rel) => { try { return readFileSync(join(homedir(), ".lively", rel), "utf8").trim(); } catch { return ""; } };
-    const token = isBox ? ((process.env.LIVELY_TOKEN || "").trim() || readCfg("token")) : "";
-    const gw = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readCfg("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
+    const token = isBox ? (readCfg("token") || (process.env.LIVELY_TOKEN || "").trim()) : "";
+    const gw = (readCfg("gateway-url") || (process.env.LIVELY_GATEWAY_URL || "").trim() || "http://localhost:8080").replace(/\/$/, "");
     // 최근 N ms 안에 시도했나 — 실패를 영구화하지 않으면서 핫패스 스톨도 막는 쿨다운(플래그 mtime).
     const cooling = (flagPath, ms) => { try { return Date.now() - statSync(flagPath).mtimeMs < ms; } catch { return false; } };
     const post = async (path, body) => {

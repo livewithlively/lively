@@ -102,13 +102,18 @@ const STATIC = readLocal("context.md");
 
 // 플러그인 설치 경로(#1473) — Claude Code 플러그인의 userConfig 값은 훅 프로세스에 CLAUDE_PLUGIN_OPTION_<KEY> 로 export 된다.
 //  키트 설치(curl|sh)는 ~/.lively/{token,gateway-url} 파일을 깔지만 플러그인 설치는 그 파일이 없다 — 그래서 env 폴백을 둔다.
-//  우선순위: LIVELY_* (명시 오버라이드) > CLAUDE_PLUGIN_OPTION_* (플러그인) > ~/.lively 파일(키트). 셋 다 없으면 종전 기본값.
+//  우선순위: ~/.lively 파일(키트) > CLAUDE_PLUGIN_OPTION_* (플러그인) > LIVELY_* . 셋 다 없으면 종전 기본값.
+//  ⚠ env 가 **맨 뒤**인 이유(#916·#2617 의 훅 판): env 는 오버라이드가 아니라 '파일의 캐시'다 — 설치기가 rc 에
+//   `export LIVELY_TOKEN="$(cat ~/.lively/token)"` 를 심고, 세션은 tmux pane 이라 **서버가 처음 뜬 시점의 환경**을
+//   물려받는다. 그래서 재로그인·주소변경 뒤 env 는 항상 옛 값이고, env 가 이기면 훅만 옛 신원으로 조용히 붙는다
+//   (둘 다 유효한 토큰이면 401 도 안 나 알아챌 수 없다). CLI(lively.mjs token()/gateway())·MCP 프록시는 이미
+//   파일 우선이라 훅만 어긋나 있었다. 파일이 없을 때만 폴백 — 플러그인·프로비저닝·CI 경로는 그대로 산다.
 const pluginOpt = (key) => (process.env[`CLAUDE_PLUGIN_OPTION_${key}`] || "").trim();
 
 // OFF 면 토큰 파일도 안 읽는다(클린룸 유지 — 종전 최상단 exit 이 하던 일). !TOKEN 시 정적만 주입하는 처리는 main() 에서.
-const TOKEN = OFF ? "" : ((process.env.LIVELY_TOKEN || "").trim() || pluginOpt("TOKEN") || readLocal("token"));
+const TOKEN = OFF ? "" : (readLocal("token") || pluginOpt("TOKEN") || (process.env.LIVELY_TOKEN || "").trim());
 
-const GW = ((process.env.LIVELY_GATEWAY_URL || "").trim() || pluginOpt("GATEWAY_URL") || readLocal("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
+const GW = (readLocal("gateway-url") || pluginOpt("GATEWAY_URL") || (process.env.LIVELY_GATEWAY_URL || "").trim() || "http://localhost:8080").replace(/\/$/, "");
 
 // 플러그인 모드 자격 미러(#1473) — 플러그인 설정값을 `~/.lively` 파일로도 굳힌다. **조직 스킬 본문과 lively CLI 가
 //  그 파일을 전제로 REST 를 호출**하기 때문이다(예: curl -H "Bearer $(cat ~/.lively/token)").
