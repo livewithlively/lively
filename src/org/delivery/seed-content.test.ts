@@ -44,6 +44,7 @@ const INJECTIONS = new Set(["always", "recalled"]);
     assert.equal(typeof h.enabled, "boolean", `훅 '${h.id}' enabled 타입`);
   }
   assert.ok(DEFAULT_HOOKS.length >= 6, `기대 훅 ≥6, 실제 ${DEFAULT_HOOKS.length}`);
+  assert.ok(!ids.has("delegation-nudge"), "Lively 조직 선택 훅 delegation-nudge가 고객 기본 시드에 섞임");
   ok(`훅 ${DEFAULT_HOOKS.length}종 무결성(고유 id·event·source_code·harness)`);
 }
 

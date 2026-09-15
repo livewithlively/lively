@@ -2,7 +2,7 @@
 //  diffRows(추가/변경/제거 판정) · mergeSelective(선택 id 만 반영·나머지 현행 보존) · parseCaptureArgs · lineDiff.
 //  DB 불요(순수함수만 import — 모듈 하단 main 가드가 import 시 실행을 막는다).
 //  실행: node scripts/capture-default-content.test.mjs
-import { diffRows, mergeSelective, parseCaptureArgs, lineDiff, excludeInternalOnly, applySeedEnabledPolicy } from "./capture-default-content.mjs";
+import { diffRows, mergeSelective, parseCaptureArgs, lineDiff, excludeInternalOnly, excludeSeedHooks, applySeedEnabledPolicy } from "./capture-default-content.mjs";
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -51,6 +51,41 @@ eq("args 기본 only=null(전체)", parseCaptureArgs([]).only, null);
   const { kept, excluded } = excludeInternalOnly(rows);
   eq("internal_only=true 만 제외", excluded.map((r) => r.id), ["internal-skill"]);
   eq("나머지는 시드에 보존(플래그 없음·false 포함)", kept.map((r) => r.id), ["public-skill", "no-frontmatter", "falsy-flag"]);
+}
+// excludeSeedHooks — canonical DB 의 조직 선택 훅은 고객 기본 시드에 들어가지 않는다.
+// 사양 엣지 표 5행을 그대로 옮긴다 — 행 수 = 시나리오 수.
+{
+  // ① 대상 + 일반 훅이 함께 있으면 대상만 제외한다.
+  {
+    const { kept, excluded } = excludeSeedHooks([{ id: "delegation-nudge" }, { id: "delegate-router" }]);
+    eq("훅 제외① delegation-nudge만 제외", excluded.map((r) => r.id), ["delegation-nudge"]);
+    eq("훅 제외① 일반 훅은 유지", kept.map((r) => r.id), ["delegate-router"]);
+  }
+  // ② 대상이 없으면 입력을 그대로 유지한다.
+  {
+    const { kept, excluded } = excludeSeedHooks([{ id: "delegate-router" }, { id: "knowledge-recall" }]);
+    eq("훅 제외② 대상 없으면 전부 유지", kept.map((r) => r.id), ["delegate-router", "knowledge-recall"]);
+    eq("훅 제외② 제외 0건", excluded, []);
+  }
+  // ③ 새 헬퍼의 입력이 비었거나 부재인 경우도 안전하다.
+  {
+    eq("훅 제외③ 빈 배열", excludeSeedHooks([]), { kept: [], excluded: [] });
+    eq("훅 제외③ 행 부재", excludeSeedHooks(undefined), { kept: [], excluded: [] });
+  }
+  // ④ id 경계 — 접두·접미 변형은 정확한 대상이 아니다.
+  {
+    const rows = [{ id: "delegation-nudge-v2" }, { id: "my-delegation-nudge" }];
+    const { kept, excluded } = excludeSeedHooks(rows);
+    eq("훅 제외④ 정확한 id만 제외", kept.map((r) => r.id), ["delegation-nudge-v2", "my-delegation-nudge"]);
+    eq("훅 제외④ 변형 id 제외 0건", excluded, []);
+  }
+  // ⑤ 현행 시드에 대상이 남아 있어도 선택 캡처 전에 양쪽을 거르면 되살아나지 않는다(배선 단언).
+  {
+    const current = excludeSeedHooks([{ id: "delegation-nudge", v: 1 }, { id: "delegate-router", v: 1 }]).kept;
+    const next = excludeSeedHooks([{ id: "delegation-nudge", v: 2 }, { id: "delegate-router", v: 2 }]).kept;
+    const out = mergeSelective(current, next, new Set(["delegate-router"]));
+    eq("훅 제외⑤ 선택 캡처에서도 최종 시드 유입 0건", out.map((r) => r.id), ["delegate-router"]);
+  }
 }
 // lineDiff — 공통 접두/접미 제외한 가운데만
 eq("lineDiff 가운데 블록만", lineDiff("a\nb\nc", "a\nX\nc"), "      - b\n      + X");
