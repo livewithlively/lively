@@ -460,10 +460,15 @@ export async function reviewQueuePanel(detail, data?): Promise<void> {
   let mineCats: string[] = [];
   try { const s = await api('/api/ui/review-queue/summary'); mineCats = (s && s.mine_category_keys) || []; } catch { mineCats = []; }
   let gateOn: boolean | null = null;   // admin 만 조회 가능 — 아니면 null(배너 생략)
+  //  #4018: 스위치는 프리셋 행만 반영하지만 게이트는 전체 규칙을 평가한다 — 손으로 만든 confirm 세부 규칙이
+  //   켜져 있으면 스위치가 꺼져 있어도 「곧바로 쓰인다」는 거짓이다. 그땐 그 문장을 띄우지 않는다.
+  let ruleConfirm = false;
   try {
     const r = await api('/api/ui/org/ingest-policy');
-    const p = ((r && r.policies) || []).find((x: any) => x.preset === GATE_PRESET);
+    const ps: any[] = (r && r.policies) || [];
+    const p = ps.find((x: any) => x.preset === GATE_PRESET);
     gateOn = !!(p && p.enabled);
+    ruleConfirm = ps.some((x: any) => x.preset !== GATE_PRESET && x.enabled !== false && x.action === 'confirm');
   } catch { gateOn = null; }
 
   // 두 소스를 한 목록으로 — 사람에겐 '검토할 것' 하나일 뿐이다.
@@ -561,10 +566,15 @@ export async function reviewQueuePanel(detail, data?): Promise<void> {
     stat((obs.rejected || 0) + (obs.rev_rejected || 0), '최근 반려', obs.days + '일 내 반려·되돌리기'),
     stat(obs.agent_auto, '검토 없이 반영', obs.days + '일 내 에이전트가 게이트 없이 즉시 반영한 신규 지식')) : null;
 
-  const banner = (gateOn === false)
+  //  #4018: 꺼져 있어도 이미 대기 중인 건은 남는다(켜 두었을 때 들어온 것 · AI 가 스스로 대기로 둔 것).
+  //   「꺼짐 = 곧바로 쓰임」만 말하면 바로 아래 목록과 모순돼 보인다 — 실측 신고: "꺼짐인데 왜 2건이 기다리지?"
+  //   말은 설정 판(#3830)과 맞춘다: 「사람이 확인한 뒤에 쓰기」 · AI · 게이트 없음.
+  const nWait = items.length;
+  const banner = (gateOn === false && !ruleConfirm)
     ? el('div', { class: 'rq-dup', style: 'display:flex;align-items:center;gap:10px' },
-      el('span', { style: 'flex:1', text: '지식 검토 정책가 꺼져 있습니다 — 에이전트가 쓴 지식이 사람 확인 없이 곧바로 유효해집니다.' }),
-      el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/ingest-policy', text: '게이트 설정' }))
+      el('span', { style: 'flex:1', text: '「사람이 확인한 뒤에 쓰기」가 꺼져 있어, AI가 새로 쓰는 지식은 확인 없이 곧바로 쓰입니다.'
+        + (nWait ? ` 아래 ${nWait.toLocaleString()}건은 이미 확인 대기로 들어와 있어 승인하거나 반려해야 풀립니다.` : '') }),
+      el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/ingest-policy', text: '설정 보기' }))
     : null;
 
   const card = el('div', { class: 'card' },
