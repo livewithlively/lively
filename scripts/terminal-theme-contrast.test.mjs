@@ -78,9 +78,12 @@ assert.ok(THEMES[HC_KEY], `고대비 테마 '${HC_KEY}' 가 있어야 한다 —
   ok(`'${HC_KEY}' 커서·선택영역 대비 4.5:1 이상`);
 }
 
-// 5. 어떤 슬롯도 종전(xterm 기본 팔레트 폴백)보다 나빠지지 않는다.
+// 5. Solarized brightBlack 은 종전(xterm 기본 팔레트 폴백)보다 읽힌다 — **이 슬롯 하나만** 재는 단언이다.
 //    공식 팔레트를 넣는 것 자체가 목적이 아니다 — 목적은 읽히게 하는 것이고, Solarized 공식 brightBlack(base03)은
 //    배경색과 같아 그 슬롯 글자를 통째로 지운다. 그래서 그 슬롯만 같은 팔레트의 base01 로 올려 뒀다(#586e75).
+//    ⚠ 다른 슬롯까지 «종전보다 낫다» 는 뜻이 아니다. 공식값을 그대로 싣는 bright 계열은 폴백보다 낮아진다
+//     (실측 #002b36 위: brightGreen 9.30→2.79 · brightYellow 12.09→3.37 · brightMagenta 4.56→3.43 · brightRed 3.59→3.26).
+//     그 대비는 Solarized 의 설계(bright 넷 = 회색 계단)이고, 읽기가 우선이면 고대비 변형(3번)을 고르는 것이 이 PR 의 답이다.
 {
   const { theme } = THEMES.solarized;
   assert.notEqual(theme.brightBlack, theme.background, "Solarized brightBlack 이 배경색과 같으면 그 글자는 보이지 않는다");
