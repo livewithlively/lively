@@ -10,6 +10,8 @@
 //     ⚠ 종전 규칙은 `리스 있으면 아무 노드나` 였다 — 리스 하나로 남의 노트북이 열렸다(#1540 이 닫은 구멍).
 //  단일 프로세스 전제(기존 스케줄러와 동일) — LIVELY_NO_SCHEDULER=1 이면 기동 안 함.
 import { logger } from "../log.js";
+import { gatewayUrl } from "../gateway-url.js";   // #4012 T5 — 판이 붙을 게이트웨이 주소(보내는 쪽이 안다)
+import { tenantSlug } from "../terminal/catalog.js";   // #4012 T5 — 판의 워크스페이스 소속
 import { withTenant } from "../org/tenant-context.js";
 import { schedulerTargets } from "../scheduler/tenant-fanout.js";
 import { sharedRoot } from "../terminal/terminal-sessions.js";
@@ -316,6 +318,10 @@ async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Ma
   const runArgs: Record<string, unknown> = {
     user: { userId: t.requester }, taskId: t.id, rootKey: "shared", subpath: t.subpath,
     prompt: t.prompt, harness: t.harness, repo: t.repo, gitRef: t.git_ref, flags: t.flags ?? {}, env,
+    //  #4012 T5 — 판이 붙을 곳을 **보내는 쪽이** 정한다. 이 호출은 withTenant 안이라 둘 다 이 워크스페이스 값이다.
+    //   실패해도 배정을 막지 않는다 — 없으면 안 싣고(노드는 자기 게이트웨이로 폴백) 종전대로 간다.
+    gatewayUrl: await gatewayUrl().catch(() => null),
+    tenantSlug: tenantSlug(),
   };
   let r: RunTaskResult;
   if (pick.id === CENTRAL_NODE_ID) {

@@ -117,6 +117,15 @@ export const SESSION_ENV_GROUPS: readonly SessionEnvGroup[] = [
       "슬러그는 공개 식별자라 비밀 아님. 단일 테넌트 배포에서는 코어가 아예 안 싣는다(무회귀).",
   },
   {
+    title: "붙을 게이트웨이",
+    names: ["LIVELY_GATEWAY_URL"],
+    keep: "keep",
+    why:
+      "#4012 T5 — 위탁 판 안의 하네스·MCP·훅이 **어느 게이트웨이에 붙을지**. 미보존이면 판이 `~/.lively/gateway-url` " +
+      "로 폴백해, 한 박스에 게이트웨이가 둘이거나 앱 로그인이 다른 곳을 가리킬 때 **남의 워크스페이스에 붙는다**" +
+      "(2026-09-16 실사고: olddev 83개 테넌트의 증류가 운영 워크스페이스에 썼다). 공개 주소라 비밀 아님.",
+  },
+  {
     title: "실행 모드",
     names: ["LIVELY_MODE", "LIVELY_READONLY", "LIVELY_INCOGNITO", "LIVELY_OFF"],
     keep: "keep",
