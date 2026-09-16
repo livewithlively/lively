@@ -114,6 +114,35 @@ export interface RunTaskInput {
   //  조회해 실어 보낸다. 없으면 노드는 종전대로 DB 를 읽으려다 실패하고 "레지스트리에 없다"는 오진을 낸다.
   //  중앙(게이트웨이 내장 노드) 실행 시엔 미설정 — 거기선 DB 를 직접 읽는 게 정상이다.
   repoAuth?: RepoProvisionAuth;
+  // ★ 이 위탁을 낸 **게이트웨이의 주소·워크스페이스** (#4012 T5). 판 안의 하네스·MCP·훅이 **어디에 붙을지**다.
+  //  왜 필요(2026-09-16 실사고): 한 박스에 게이트웨이가 둘 있거나(맥미니 olddev + 매니지드 노드) 앱 로그인이 다른
+  //   곳을 가리키면, 판이 `~/.lively/gateway-url` 을 읽어 **남의 워크스페이스에 붙었다** — olddev 의 83개 테넌트
+  //   증류 배치가 운영 워크스페이스 자료를 읽고 지식을 썼다. 대화형 세션은 이미 LVLY_TENANT_SLUG 를 싣는데
+  //   위탁 판만 둘 다 빠져 있었다.
+  //  ⚠ 노드엔 DB 가 없으므로 여기서 조회하지 않는다 — **보낸 쪽(게이트웨이)이 안다.** 없으면 안 싣는다(구 게이트웨이 무회귀).
+  gatewayUrl?: string | null;
+  tenantSlug?: string | null;
+}
+
+//  주소 모양 — `src/gateway-url.ts` 의 SAFE_GATEWAY_URL 과 같은 자. 그 모듈은 DB 를 끌어와 노드 번들에 못 들인다.
+const TASK_GW_URL = /^https?:\/\/[A-Za-z0-9._-]+(:\d{1,5})?$/;
+//  슬러그 모양 — `terminal/catalog.ts` 의 SAFE_SLUG 와 같은 자.
+const TASK_TENANT_SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/**
+ * 위탁 판에 싣는 «어디에 붙나» env (#4012 T5) — 순수 함수.
+ *
+ * 이 값은 tmux 명령줄(`-e K=V`)에 그대로 펼쳐지므로 **모양이 아니면 싣지 않는다**(조용히 뺀다 — 그러면 판은
+ *  종전처럼 로컬 설정으로 간다. 이상한 값을 실어 명령줄을 여는 것보다 낫다).
+ * 끝의 `/` 는 다듬는다 — 훅들이 base 에 경로를 이어 붙인다.
+ */
+export function taskGatewayEnvArgs(gatewayUrl: string | null | undefined, tenantSlug: string | null | undefined): string[] {
+  const out: string[] = [];
+  const u = typeof gatewayUrl === "string" ? gatewayUrl.trim().replace(/\/+$/, "") : "";
+  if (u && TASK_GW_URL.test(u)) out.push("-e", `LIVELY_GATEWAY_URL=${u}`);
+  const s = typeof tenantSlug === "string" ? tenantSlug.trim() : "";
+  if (s && TASK_TENANT_SLUG.test(s)) out.push("-e", `LVLY_TENANT_SLUG=${s}`);
+  return out;
 }
 export interface RunTaskResult { sessionId: string; taskDir: string; workspace: string }
 
@@ -471,6 +500,8 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   //  이 경로의 AI 는 **항상 전체 공개로** 기록했다(잠긴 프로젝트를 위탁해도 마찬가지였다).
   //  세션 id 를 실어야 게이트웨이가 캡을 조회할 수 있고, 캡은 tmux 옵션(아래)이 권위다.
   args.push("-e", `LIVELY_SESSION_ID=${id}`);
+  // #4012 T5 — 이 판이 붙을 게이트웨이·워크스페이스. 안 실으면 판이 `~/.lively/gateway-url` 을 읽어 남의 워크스페이스에 붙는다.
+  args.push(...taskGatewayEnvArgs(input.gatewayUrl, input.tenantSlug));
   // 자격 리스(§8-3) — setup-token env. 리스가 없으면 노드 로컬 프로필/자격 폴백(중앙=box_ 홈, 멤버 PC=본인 ~/.claude).
   //  ⚠ 중앙 박스 격리(osUser)에서는 이 판이 곧 `sudo → box-spawn` 이라, sudoers 가 보존하지 않는 이름은
   //   **오류 없이** 사라진다. 이름이 런타임에 정해지는 유일한 주입 자리라 시험이 정적으로 못 덮는다 —
