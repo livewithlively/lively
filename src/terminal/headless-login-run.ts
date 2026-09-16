@@ -21,7 +21,7 @@
 //  · 서버가 다음 조회에서 .tok 을 읽어 멤버 비밀로 저장하고, 곧바로 지운 뒤 «저장했다» 표식(.stored)을 남긴다.
 //  · 아무도 안 거두면 러너가 상한(20분)에 .tok 을 지우고 끝난다 — 발급만 되고 저장 안 된 자격을 홈에 남기지 않는다.
 //  · CLI 는 **임시 HOME** 에서 돈다 — 멤버의 ~/.claude.json · ~/.codex 를 건드리지 않는다(평소 로그인과 섞이지 않게).
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { EXIT_MARK } from "./ai-login-flow.js";
 import {
   HEADLESS_SECRET_KIND, SETUP_TOKEN_PATTERN_SOURCE, TOKEN_CAPTURED_MARK, CAPTURED_LINE,
@@ -45,6 +45,28 @@ export const HEADLESS_RUN_LIMIT_MS = 20 * 60_000;
  *   그래서 멈춤도 신호가 아니라 **pid 파일 삭제**로 전한다 — 러너가 매 박동마다 «이 파일이 아직 내 것인가» 를 본다.
  */
 export const HEADLESS_ALIVE_SEC = 5;
+
+/** 러너의 tmux 호출 하나의 상한(ms). 조회의 «끝났다» 여유(HEADLESS_DEAD_SEC)가 이 값에 기대므로 한 곳에서 정한다. */
+export const HEADLESS_TMUX_CALL_TIMEOUT_MS = 10_000;
+
+/**
+ * 조회가 «러너가 끝났다» 고 말하는 심박 나이(초) — **이보다 오래됐을 때만**(같으면 아직 산 것이다).
+ *  시작 판정(HEADLESS_ALIVE_SEC)보다 훨씬 너그럽다. 러너는 tmux 호출마다 직전에 심박을 찍지만, 호출 하나가 상한
+ *  (HEADLESS_TMUX_CALL_TIMEOUT_MS)까지 막힐 수 있고 자리 CPU 가 몰리면 전체가 밀린다. 산 러너를 «끝났다» 고 말하면
+ *  사람은 멀쩡한 시도를 버린다 — 반대쪽(죽은 러너를 조금 늦게 알아채기)이 훨씬 싸다.
+ *  이 판정이 잡는 것은 **정리 없이 사라진 러너**다(자리 회수 · 강제 종료 · 기동 실패). 취소·상한·저장은 pid 파일을
+ *  지우므로 바로 잡힌다.
+ */
+export const HEADLESS_DEAD_SEC = 45;
+
+/**
+ * 러너 기록(.log)의 첫 줄 머리 — `LVLY_RUN <실행 id>`. 조회는 이 id 가 pid 파일의 주인과 다르면 그 기록을 버린다.
+ *  ⚠ 왜 필요한가(실측 2026-09-17, 매니지드): 취소 뒤 조회 3회 중 2회가 **옛 주소 화면**을 되살렸다. 러너 박동은
+ *   «주인 확인 → 화면 캡처(느림) → 기록 쓰기» 라, 캡처 도중 지운 기록을 다시 쓴다. 새 시도와 겹치면 사람은
+ *   **죽은 시도의 주소**로 승인하고 그 코드를 새 러너에 넣는다 — CLI 는 state 가 달라 거절한다.
+ */
+export const HEADLESS_RUN_MARK = "LVLY_RUN";
+const RUN_ID_RE = /^[0-9a-f]{8,64}$/;
 
 /** 한 사람 · 한 하네스의 발급 자리. 대화형 로그인(lvly-login-*)과 파일이 겹치지 않는다. */
 export function headlessSlot(osUser: string | null, h: HeadlessLoginHarness): string {
@@ -93,28 +115,41 @@ export function headlessPaneCmd(argv: string[], watchdogSec: number = HEADLESS_P
 
 /**
  * 러너 본문(node -e). **자기완결**이어야 한다 — 로그인 자리에는 코어 코드가 없다(세션 이미지엔 /app 이 없다).
- *  수명 규약: pid 파일에 **자기 고유값**을 쓰고 0.5초마다 시각을 갱신한다. 파일이 사라지거나 남의 값으로 바뀌면
- *  (취소 · 저장 완료 · 새 시도) 스스로 끝낸다 — 남의 pid 파일은 지우지 않는다(HEADLESS_ALIVE_SEC 머리말).
- *  인자: [이름표, log, in, pid, tok, mode('tmux'|'pipe'), tmux 경로('-' = 안 씀), ...명령]
+ *  수명 규약: 시작 스크립트가 pid 파일에 **이번 실행 id** 를 먼저 써 두고, 러너는 그 id 를 제 것으로 삼아 0.5초마다
+ *  시각을 갱신한다. 파일이 사라지거나 남의 값으로 바뀌면(취소 · 저장 완료 · 새 시도) 스스로 끝낸다 — 남의 pid 파일은
+ *  지우지 않는다(HEADLESS_ALIVE_SEC 머리말). 뜨기도 전에 자리를 잃었으면 아무것도 안 하고 끝낸다.
+ *  쓰기는 전부 **직전에** 주인을 다시 본다 — 캡처가 느린 사이 취소가 들어오면 지운 기록을 되살린다(HEADLESS_RUN_MARK).
+ *   · 기록은 실행마다 이름이 다른 임시 파일(`<log>.<id>.w`)에 쓰고 rename 으로 바꿔 끼운다 — 남의 임시 파일을 건드리지
+ *     않고, 경로를 새로 «만드는» 쓰기(append)가 없다. 파이프 모드는 그렇게 만든 파일의 fd 에만 덧붙인다.
+ *   · 자격 파일은 쓴 **뒤에도** 주인을 본다 — 그 사이 자리를 잃었으면 지운다(headlessCleanSh 의 pid→tok 순서와 한 짝).
+ *   · tmux 호출마다 **직전에** 심박을 찍는다 — 호출 하나가 막혀도 조회가 산 러너를 «끝났다» 고 읽지 않게.
+ *  인자: [이름표, log, in, pid, tok, 실행 id, mode('tmux'|'pipe'), tmux 경로('-' = 안 씀), ...명령]
  *   ⚠ `node -e <script> a b` 는 a 가 argv[1] 이다(ai-login-run D1 과 같은 함정) — 첫 인자는 사람이 알아볼 이름표다.
  */
 export function headlessRunnerJs(): string {
   return `"use strict";
 const cp=require("child_process"),fs=require("fs"),os=require("os"),path=require("path");
 const A=process.argv;
-const log=A[2],inp=A[3],pidf=A[4],tokf=A[5],mode=A[6],tmuxBin=A[7],argv=A.slice(8);
+const log=A[2],inp=A[3],pidf=A[4],tokf=A[5],me=A[6],mode=A[7],tmuxBin=A[8],argv=A.slice(9);
 const EXIT=${JSON.stringify(EXIT_MARK)},CAP=${JSON.stringify(CAPTURED_LINE)},MARK=${JSON.stringify(TOKEN_CAPTURED_MARK)};
 const SRC=${JSON.stringify(SETUP_TOKEN_PATTERN_SOURCE)};
-const LIMIT=${HEADLESS_RUN_LIMIT_MS},t0=Date.now();
-const me=process.pid+"-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,10);
-try{fs.writeFileSync(pidf,me,{mode:0o600})}catch(_){}
-const home=fs.mkdtempSync(path.join(os.tmpdir(),"lvly-hl-"));
-let got=false,ended=false,child=null,tick=()=>{},onEnd=()=>{};
+const LIMIT=${HEADLESS_RUN_LIMIT_MS},TMO=${HEADLESS_TMUX_CALL_TIMEOUT_MS},t0=Date.now();
+const HDR=${JSON.stringify(HEADLESS_RUN_MARK + " ")}+me+"\\n";
+const W=log+"."+me+".w";
 const mine=()=>{try{return fs.readFileSync(pidf,"utf8")===me}catch(_){return false}};
+if(!me||!mine())process.exit(0);
+const home=fs.mkdtempSync(path.join(os.tmpdir(),"lvly-hl-"));
+let got=false,ended=false,child=null,tick=()=>{},onEnd=()=>{},add=(s)=>{};
+const touch=()=>{try{const t=new Date();fs.utimesSync(pidf,t,t)}catch(_){}};
 const beat=()=>{try{const t=new Date();fs.utimesSync(pidf,t,t);return mine()}catch(_){return false}};
-const put=(s)=>{try{fs.writeFileSync(log+".w",s,{mode:0o600});fs.renameSync(log+".w",log)}catch(_){}};
-const add=(s)=>{try{fs.appendFileSync(log,s,{mode:0o600})}catch(_){}};
-const keep=(v)=>{if(got)return;try{fs.writeFileSync(tokf,v,{mode:0o600});got=true}catch(_){}};
+const put=(s)=>{if(!mine())return false;
+  try{fs.writeFileSync(W,HDR+s,{mode:0o600})}catch(_){return true}
+  if(!mine()){try{fs.unlinkSync(W)}catch(_){}return false}
+  try{fs.renameSync(W,log)}catch(_){}
+  return true};
+const keep=(v)=>{if(got||!mine())return;
+  try{fs.writeFileSync(tokf,v,{mode:0o600});got=true}catch(_){}
+  if(!mine()){try{fs.unlinkSync(tokf)}catch(_){}}};
 const end=()=>{if(ended)return;ended=true;
   try{onEnd()}catch(_){}
   if(child){try{child.kill()}catch(_){}}
@@ -125,8 +160,11 @@ if(mode==="tmux"){
   const tenv=Object.assign({},process.env,{SHELL:"/bin/sh",LVLY_HL_HOME:home});
   delete tenv.TMUX;delete tenv.TMUX_PANE;
   const sock=path.join(home,".tmux.sock");
-  const T=(a)=>cp.spawnSync(tmuxBin,["-u","-S",sock].concat(a),{encoding:"utf8",env:tenv,timeout:10000});
+  const T=(a)=>{if(mine())touch();return cp.spawnSync(tmuxBin,["-u","-S",sock].concat(a),{encoding:"utf8",env:tenv,timeout:TMO})};
+  let last="";
   onEnd=()=>{T(["kill-server"])};
+  add=(s)=>{put(last+s)};
+  if(!put(""))end();
   const r=T(["-f","/dev/null","new-session","-d","-s","hl","-x","500","-y","50",argv[0]]);
   if(r.status!==0){add("Error: 터미널을 띄우지 못했어요 — "+String(r.stderr||(r.error&&r.error.message)||"").trim().slice(0,200)+"\\n"+EXIT+" 127\\n");end()}
   tick=()=>{
@@ -137,11 +175,16 @@ if(mode==="tmux"){
     const m=s.match(new RegExp(SRC));
     if(m)keep(m[0]);
     s=s.replace(new RegExp(SRC,"g"),MARK).split("\\n").map((l)=>l.replace(/\\s+$/,"")).join("\\n").replace(/\\n{3,}/g,"\\n\\n");
-    put(s);
+    if(!put(s)){end();return}
+    last=s;
     if(s.includes(EXIT)&&(!got||!fs.existsSync(tokf)))end();
   };
 }else{
-  const out=fs.openSync(log,"a",0o600);
+  let out=-1;
+  try{out=fs.openSync(W,"a",0o600);fs.writeSync(out,HDR)}catch(_){end()}
+  if(!mine()){try{fs.unlinkSync(W)}catch(_){}end()}
+  try{fs.renameSync(W,log)}catch(_){end()}
+  add=(s)=>{if(!mine())return;try{fs.writeSync(out,s)}catch(_){}};
   const env=Object.assign({},process.env,{CODEX_HOME:home});
   child=cp.spawn(argv[0],argv.slice(1),{stdio:["pipe",out,out],env});
   child.on("error",(e)=>{child=null;add("\\nError: "+e.message+"\\n"+EXIT+" 127\\n");end()});
@@ -164,8 +207,12 @@ process.on("SIGTERM",()=>end());
  *  ai-login-run.loginStartSh 와 같은 규약이다 — pid 파일로만 생존 판정(자기참조 금지) · 죽은 자리는 흔적째 치움 ·
  *  바이너리가 없으면 127. 더한 것: 0700 폴더 · umask 077 · tmux 경로 해소(게이트웨이 PATH 에 brew 가 없을 수 있다) ·
  *  생존은 pid 가 아니라 **심박 나이**로 잰다(HEADLESS_ALIVE_SEC — 컨테이너가 바뀌어도 같은 답).
+ *  pid 파일에는 **러너를 띄우기 전에** 이번 실행 id 를 쓴다 — 러너가 뜨는 동안(노드 기동 · tmux 준비)에도 자리의 주인이
+ *  정해져 있어야 조회가 «아직 시작 중» 과 «끝났다» 를 가른다. 러너는 이 id 를 인자로 받아 제 것으로 삼는다.
  */
-export function headlessStartSh(o: { home: string; slotName: string; harness: HeadlessLoginHarness }): string {
+export function headlessStartSh(o: { home: string; slotName: string; harness: HeadlessLoginHarness; runId: string }): string {
+  //  id 는 셸 한 줄에 그대로 실린다 — 모양을 못박는다(비었거나 이상하면 러너가 누구의 자리인지 모른다).
+  if (!RUN_ID_RE.test(String(o.runId ?? ""))) throw new Error("발급 실행 id 가 올바르지 않습니다.");
   const p = headlessPaths(o.home, o.slotName);
   const argv = headlessLoginArgv(o.harness);
   const pty = headlessNeedsPty(o.harness);
@@ -182,21 +229,40 @@ export function headlessStartSh(o: { home: string; slotName: string; harness: He
     `mkdir -p -m 700 ${q(p.dir)} 2>/dev/null; chmod 700 ${q(p.dir)} 2>/dev/null || true`,
     `lvly_age() { n=$(date +%s); m=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0); echo $((n - m)); }`,
     `if [ -f ${q(p.pid)} ] && [ "$(lvly_age ${q(p.pid)})" -lt ${HEADLESS_ALIVE_SEC} ]; then echo running; exit 0; fi`,
-    `rm -f ${q(p.log)} ${q(p.log + ".w")} ${q(p.inp)} ${q(p.pid)} ${q(p.tok)} ${q(p.stored)} 2>/dev/null || true`,
+    headlessCleanSh(p),
     `umask 077`,
+    `printf '%s' ${q(o.runId)} > ${q(p.pid)}`,
     pty
-      ? `nohup node -e ${q(headlessRunnerJs())} ${q(o.slotName)} ${q(p.log)} ${q(p.inp)} ${q(p.pid)} ${q(p.tok)} tmux "$LVLY_TMUX" ${q(headlessPaneCmd(argv))} >/dev/null 2>&1 &`
-      : `nohup node -e ${q(headlessRunnerJs())} ${q(o.slotName)} ${q(p.log)} ${q(p.inp)} ${q(p.pid)} ${q(p.tok)} pipe - ${argv.map(q).join(" ")} >/dev/null 2>&1 &`,
+      ? `nohup node -e ${q(headlessRunnerJs())} ${q(o.slotName)} ${q(p.log)} ${q(p.inp)} ${q(p.pid)} ${q(p.tok)} ${q(o.runId)} tmux "$LVLY_TMUX" ${q(headlessPaneCmd(argv))} >/dev/null 2>&1 &`
+      : `nohup node -e ${q(headlessRunnerJs())} ${q(o.slotName)} ${q(p.log)} ${q(p.inp)} ${q(p.pid)} ${q(p.tok)} ${q(o.runId)} pipe - ${argv.map(q).join(" ")} >/dev/null 2>&1 &`,
     `echo started`,
   );
   return lines.join("\n");
 }
 
-/** 조회 한 번에 셋(로그 · 저장 표식 · 잡은 자격)을 읽는 구분자 — CLI 출력에 나올 수 없는 글자로 둔다. */
+/**
+ * (순수) 자리의 흔적을 지우는 한 줄 — 시작과 취소가 같이 쓴다.
+ *  ⚠ **pid 가 자격 파일(.tok)보다 앞이어야 한다.** 러너의 keep 은 «주인 확인 → 자격 쓰기 → 주인 재확인(아니면 지움)»
+ *   이다. rm 이 .tok 을 먼저 지우고 pid 를 나중에 지우면, 그 사이에 쓴 자격을 러너도 rm 도 안 지운다(비밀이 남는다).
+ *  기록 임시 파일은 실행마다 이름이 달라(`<log>.<id>.w`) 글롭으로 지운다 — 이전 판의 `<log>.w` 도 함께.
+ */
+export function headlessCleanSh(p: HeadlessPaths): string {
+  return `rm -f ${q(p.pid)} ${q(p.log)} ${q(p.log)}.*.w ${q(p.log + ".w")} ${q(p.inp)} ${q(p.tok)} ${q(p.stored)} 2>/dev/null || true`;
+}
+
+/** 조회 한 번에 넷(로그 · 저장 표식 · 잡은 자격 · 자리 주인)을 읽는 구분자 — CLI 출력에 나올 수 없는 글자로 둔다. */
 const SEP_STORED = "<<LVLY-HL-STORED>>";
 const SEP_TOK = "<<LVLY-HL-TOK>>";
+const SEP_PID = "<<LVLY-HL-PID>>";
+/** 끝 표식 — 이것까지 와야 조회가 온전하다. 없으면 pid 칸이 잘린 것과 «pid 파일 없음» 을 가를 수 없다(리뷰 #4051). */
+const SEP_END = "<<LVLY-HL-END>>";
 
-/** (순수) 조회 스크립트. 파일이 없으면 빈 칸이다. */
+/**
+ * (순수) 조회 스크립트. 파일이 없으면 빈 칸이다.
+ *  pid 칸은 `<심박 나이 초> <주인 id>`, 파일이 없으면 빈 줄이다. 나이를 못 재면(`stat` 이 없는 자리 · 이상한 출력) `?` 를
+ *  쓴다 — ⚠ 산술에 숫자가 아닌 값(빈 값 · `12:34`)이나 앞자리 0(`0899` — 8진수로 읽힌다)이 들어가면 dash·bash 는
+ *  스크립트째 죽고, 그러면 조회 전체가 빈 값이 된다. 그래서 두 값을 **따로** 검사한다.
+ */
 export function headlessReadSh(p: HeadlessPaths): string {
   return [
     `cat ${q(p.log)} 2>/dev/null`,
@@ -204,26 +270,70 @@ export function headlessReadSh(p: HeadlessPaths): string {
     `cat ${q(p.stored)} 2>/dev/null`,
     `printf '\\n%s\\n' '${SEP_TOK}'`,
     `cat ${q(p.tok)} 2>/dev/null`,
-    `true`,
+    `printf '\\n%s\\n' '${SEP_PID}'`,
+    `if [ -f ${q(p.pid)} ]; then`
+      + ` n=$(date +%s 2>/dev/null); m=$(stat -c %Y ${q(p.pid)} 2>/dev/null || stat -f %m ${q(p.pid)} 2>/dev/null); a='?';`
+      + ` case "$n" in ''|*[!0-9]*|0?*) ;; *) case "$m" in ''|*[!0-9]*|0?*) ;; *) a=$((n - m));; esac;; esac;`
+      + ` printf '%s ' "$a"; cat ${q(p.pid)} 2>/dev/null; fi`,
+    `printf '\\n%s\\n' '${SEP_END}'`,
   ].join("; ");
 }
 
-export interface HeadlessRead { log: string; stored: boolean; captured: string | null }
-/** (순수) 조회 결과 → 세 칸. */
+export interface HeadlessRead {
+  /** 러너 기록(머리 줄은 뗐다). 지금 자리 주인의 것이 아니면 빈 값이다. */
+  log: string;
+  stored: boolean;
+  /** ⚠ 비밀 — readHeadlessLogin 머리말. */
+  captured: string | null;
+  /**
+   * 러너가 끝났다 — 시도의 흔적(기록 · 저장 표식)이 있는데 자리 주인이 없거나, 주인의 심박이 멈췄다.
+   *  조회가 온전하지 않거나 자리가 비어 있으면 false 다 — 모르면 끝났다고 하지 않는다. 특히 **빈 자리**(시작이 실패했거나
+   *  아직 아무것도 없다)를 «끝났다» 고 하면, 화면이 방금 보인 구체적 시작 오류(암호화 키 없음 · tmux 없음 · 중계 실패)를
+   *  엉뚱한 사유로 덮는다(리뷰 #4051).
+   */
+  ended: boolean;
+}
+const HEADER_RE = new RegExp(`^${HEADLESS_RUN_MARK} ([0-9a-f]{8,64})\\n`);
+
+/**
+ * (순수) 조회 결과 → 네 칸 + 러너 수명 판정.
+ *  · 기록 첫 줄의 실행 id 가 자리 주인과 다르면 그 기록은 남의 시도의 것이다 — 버린다.
+ *  · 머리 없는 기록(이전 판 러너)은 믿는다 — 배포 순간 진행 중이던 연결을 안 깬다.
+ *  · 심박 나이는 정수만 믿는다(`?` · 이상한 출력은 «모름» — 나이로는 판정하지 않는다).
+ */
 export function splitHeadlessRead(out: string): HeadlessRead {
   const s = String(out ?? "");
-  const i = s.lastIndexOf(`\n${SEP_STORED}\n`);
-  const j = s.lastIndexOf(`\n${SEP_TOK}\n`);
-  if (i < 0 || j < i) return { log: "", stored: false, captured: null };
-  const log = s.slice(0, i);
+  const e = s.lastIndexOf(`\n${SEP_END}`);
+  const k = e < 0 ? -1 : s.lastIndexOf(`\n${SEP_PID}\n`, e);
+  const j = k < 0 ? -1 : s.lastIndexOf(`\n${SEP_TOK}\n`, k);
+  const i = j < 0 ? -1 : s.lastIndexOf(`\n${SEP_STORED}\n`, j);
+  if (i < 0) return { log: "", stored: false, captured: null, ended: false };
+  let log = s.slice(0, i);
   const stored = s.slice(i + SEP_STORED.length + 2, j).trim().length > 0;
-  const tok = s.slice(j + SEP_TOK.length + 2).trim();
-  return { log, stored, captured: tok || null };
+  const tok = s.slice(j + SEP_TOK.length + 2, k).trim();
+  const pid = s.slice(k + SEP_PID.length + 2, e).trim();
+
+  //  자리 주인: 파일이 없으면 빈 줄. 있으면 «나이 주인» — 주인이 비어 있을 수 있다(시작 스크립트가 쓰는 찰나).
+  const sp = pid.indexOf(" ");
+  const ageStr = pid ? (sp < 0 ? pid : pid.slice(0, sp)) : "";
+  const owner = pid && sp >= 0 ? pid.slice(sp + 1).trim() : "";
+  const age = /^-?\d+$/.test(ageStr) ? Math.max(0, Number(ageStr)) : null;
+  const trace = log.length > 0 || stored;
+  const ended = (!pid && trace) || (age !== null && age > HEADLESS_DEAD_SEC);
+
+  const hm = log.match(HEADER_RE);
+  if (hm) {
+    log = log.slice(hm[0].length);
+    if (owner && hm[1] !== owner) log = "";   // 남의 시도가 남긴 화면 — 옛 주소를 보이면 사람이 죽은 시도로 승인한다
+  }
+  return { log, stored, captured: tok || null, ended };
 }
 
 /** 발급을 시작한다(멱등 — 이미 돌고 있으면 그대로). */
 export async function startHeadlessLogin(osUser: string | null, h: HeadlessLoginHarness, user?: LivelyUser | null): Promise<void> {
-  const script = headlessStartSh({ home: loginHomeOf(osUser), slotName: headlessSlot(osUser, h), harness: h });
+  const script = headlessStartSh({
+    home: loginHomeOf(osUser), slotName: headlessSlot(osUser, h), harness: h, runId: randomBytes(9).toString("hex"),
+  });
   const out = await spawnAtLoginSeat(user ?? null, osUser, headlessSeatKey(h), script);
   if (!/started|running/.test(out)) throw new Error(`연결 명령을 띄우지 못했습니다 — ${out.slice(0, 160)}`);
 }
@@ -250,8 +360,10 @@ export async function pasteHeadlessLogin(osUser: string | null, h: HeadlessLogin
 export async function markHeadlessStored(osUser: string | null, h: HeadlessLoginHarness): Promise<void> {
   const p = headlessPaths(loginHomeOf(osUser), headlessSlot(osUser, h));
   await runAtLoginSeatSh(osUser, [
-    `rm -f ${q(p.tok)} ${q(p.pid)}`,
+    //  표식을 **먼저** 쓴다 — 지운 뒤에 쓰면 그 사이의 조회가 «자격도 주인도 없는데 잡았다는 기록» 을 보고
+    //   «저장 전에 잃었다» 고 말한다(리뷰 #4051). 러너는 이미 잡았으므로(got) 자격 파일을 다시 쓰지 않는다.
     `date -u +%Y-%m-%dT%H:%M:%SZ > ${q(p.stored)}`,
+    `rm -f ${q(p.pid)} ${q(p.tok)}`,
     `echo ok`,
   ].join("\n"));
 }
@@ -260,9 +372,7 @@ export async function markHeadlessStored(osUser: string | null, h: HeadlessLogin
 export async function cancelHeadlessLogin(osUser: string | null, h: HeadlessLoginHarness): Promise<void> {
   const p = headlessPaths(loginHomeOf(osUser), headlessSlot(osUser, h));
   //  ⚠ 프로세스를 슬롯 이름으로도, pid 로도 찾지 않는다. pid 파일을 **지우는 것이 곧 멈춤 신호**다(러너 머리말).
-  await runAtLoginSeatSh(osUser,
-    `rm -f ${q(p.pid)} ${q(p.log)} ${q(p.log + ".w")} ${q(p.inp)} ${q(p.tok)} ${q(p.stored)} 2>/dev/null || true; echo ok`,
-  ).catch(() => "");
+  await runAtLoginSeatSh(osUser, `${headlessCleanSh(p)}; echo ok`).catch(() => "");
 }
 
 /** 이 하네스가 저장할 비밀 종류(재수출 — 라우트가 flow 를 따로 import 하지 않게). */

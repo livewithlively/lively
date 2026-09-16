@@ -12,7 +12,7 @@ import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { aiLoginStep, isAiLoginHarness, parseAiLogin, type AiLoginHarness } from "./ai-login-flow.js";   // #2055 터미널 없는 AI 로그인
 import { cancelAiLogin, dropLoginSession, pasteAiLogin, readAiLogin, startAiLogin, touchHarnessSeat } from "./ai-login-run.js";
-import { headlessLoginStep, isHeadlessLoginHarness, parseHeadlessLogin, type HeadlessLoginHarness } from "./headless-login-flow.js";   // #4051 사람 없이 도는 작업의 자격을 화면에서
+import { headlessStateOf, isHeadlessLoginHarness, type HeadlessLoginHarness } from "./headless-login-flow.js";   // #4051 사람 없이 도는 작업의 자격을 화면에서
 import {
   cancelHeadlessLogin, headlessSeatKey, markHeadlessStored, pasteHeadlessLogin, readHeadlessLogin, startHeadlessLogin,
 } from "./headless-login-run.js";
@@ -474,10 +474,10 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
         storeError = r.error;
       }
     }
-    const st = parseHeadlessLogin(h, got.log, { stored });
-    if (storeError && !st.error) st.error = storeError;
+    //  비밀 값은 넘기지 않는다 — «거둘 자격이 있었나» 만(headlessStateOf 머리말: 그러면 끝남으로 안 본다).
+    const st = headlessStateOf(h, { log: got.log, ended: got.ended, hasCaptured: !!got.captured }, { stored, storeError });
     res.setHeader("Cache-Control", "no-store");
-    res.json({ ...st, step: headlessLoginStep(st), ...(runner ? { runner } : {}) });
+    res.json({ ...st, ...(runner ? { runner } : {}) });
   }));
   app.post("/api/ui/me/headless-login/paste", auth, wrap(async (req, res) => {
     const h = headlessHarnessOf(req);

@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import {
   HEADLESS_LOGIN_HARNESSES, HEADLESS_SECRET_KIND, headlessLoginArgv, headlessNeedsPty, isHeadlessLoginHarness,
   findSetupToken, redactSetupToken, isSetupTokenShaped, TOKEN_CAPTURED_MARK, CAPTURED_LINE,
-  parseHeadlessLogin, headlessLoginStep,
+  parseHeadlessLogin, headlessLoginStep, headlessStateOf, HEADLESS_ENDED_MESSAGE, HEADLESS_LOST_MESSAGE,
 } from "./headless-login-flow.js";
 import { parseAiLogin, stripAnsi, EXIT_MARK } from "./ai-login-flow.js";
 import { SANDBOX_CREDS } from "../node/sandbox-credentials.js";
@@ -107,6 +107,55 @@ t("★ F12 잡음 표시는 한 줄 전체일 때만 — 다른 글 속의 같�
   const fake = parseHeadlessLogin("codex", `${fx("codex-device-auth.txt")}\nsay ${CAPTURED_LINE} here\n\n${EXIT_MARK} 0\n`);
   assert.notEqual(fake.captured, true);
   assert.equal(headlessLoginStep(fake), "failed");
+});
+
+t("★ L6 러너가 끝났으면 실패로 말하고, 받을 러너가 없는 주소·코드는 내보내지 않는다", () => {
+  const gone = parseHeadlessLogin("claude", SCREEN, { ended: true });
+  assert.equal(headlessLoginStep(gone), "failed", "영영 «코드를 넣으세요» 로 두지 않는다");
+  assert.equal(gone.error, HEADLESS_ENDED_MESSAGE);
+  assert.equal(gone.url, undefined, "사람이 그 주소로 승인해도 아무 일이 없다");
+  assert.notEqual(gone.needsPaste, true);
+  const cx = parseHeadlessLogin("codex", fx("codex-device-auth.txt"), { ended: true });
+  assert.deepEqual([cx.url, cx.code, headlessLoginStep(cx)], [undefined, undefined, "failed"], "codex 일회용 코드도 안 내보낸다");
+  const live = parseHeadlessLogin("claude", SCREEN, { ended: false });
+  assert.equal(headlessLoginStep(live), "paste-code", "산 러너는 그대로다(배선 — 같은 화면이 끝남 표시로만 갈린다)");
+  assert.equal(headlessLoginStep(parseHeadlessLogin("claude", "", { ended: true })), "failed", "기록이 없어도 끝난 건 끝난 것");
+});
+
+t("★ L11·L13·L19 끝난 러너(거둘 자격 파일 없음)의 우선순위 — 저장 > 종료 오류 > «잃었어요» / «끝났어요»", () => {
+  const stored = parseHeadlessLogin("claude", SCREEN, { ended: true, stored: true });
+  assert.equal(headlessLoginStep(stored), "done", "L11 저장이 이긴다");
+  assert.equal(stored.error, undefined, "L11 저장된 시도에 실패 문장을 싣지 않는다(오류부터 보는 화면이 틀리게 읽는다)");
+  const ex = parseHeadlessLogin("claude", `env: claude: No such file or directory\n${EXIT_MARK} 127\n`, { ended: true });
+  assert.equal(headlessLoginStep(ex), "failed");
+  assert.match(String(ex.error), /127/, "L13 더 구체적인 종료 오류가 이긴다");
+  const noTok = parseHeadlessLogin("claude", `${SCREEN}\n${EXIT_MARK} 0\n`, { ended: true });
+  assert.match(String(noTok.error), /자격을 받지 못했어요/, "정상 종료인데 못 잡음(F8) 문장이 이긴다");
+  const lost = parseHeadlessLogin("claude", `${SCREEN} abcd#efgh\n ${TOKEN_CAPTURED_MARK}\n`, { ended: true });
+  assert.equal(headlessLoginStep(lost), "failed", "L19 잡았다는 기록만 있고 자격도 러너도 없다 — 영영 «기다림» 에 두지 않는다");
+  assert.equal(lost.error, HEADLESS_LOST_MESSAGE);
+  assert.equal(lost.url, undefined);
+});
+
+t("★ L12·L20 상태 조립 — 거둘 자격 파일이 있으면 러너가 끝났어도 «끝남» 이 아니다(이번 조회가 저장한다)", () => {
+  const capLog = `${SCREEN} abcd#efgh\n ${TOKEN_CAPTURED_MARK}\n`;
+  const pending = headlessStateOf("claude", { log: capLog, ended: true, hasCaptured: true }, { stored: false });
+  assert.equal(pending.step, "waiting", "L12 저장을 기다린다");
+  assert.equal(pending.error, undefined);
+  const saved = headlessStateOf("claude", { log: capLog, ended: true, hasCaptured: true }, { stored: true });
+  assert.equal(saved.step, "done", "이번 조회가 저장했다");
+  const failedStore = headlessStateOf("claude", { log: capLog, ended: true, hasCaptured: true }, { stored: false, storeError: "저장 실패 — 키 없음" });
+  assert.deepEqual([failedStore.step, failedStore.error], ["failed", "저장 실패 — 키 없음"],
+    "L20 저장 실패 사유가 보인다(«끝났어요» 로 덮지 않는다)");
+  const gone = headlessStateOf("claude", { log: capLog, ended: true, hasCaptured: false }, { stored: false });
+  assert.deepEqual([gone.step, gone.error], ["failed", HEADLESS_LOST_MESSAGE], "자격 파일도 없으면 잃은 것이다");
+  const ended = headlessStateOf("claude", { log: SCREEN, ended: true, hasCaptured: false }, { stored: false });
+  assert.deepEqual([ended.step, ended.error, ended.url], ["failed", HEADLESS_ENDED_MESSAGE, undefined]);
+  const live = headlessStateOf("claude", { log: SCREEN, ended: false, hasCaptured: false }, { stored: false });
+  assert.equal(live.step, "paste-code", "산 러너는 그대로다");
+  assert.match(String(live.url), /^https:\/\/claude\.com\/cai\/oauth\/authorize\?/);
+  const empty = headlessStateOf("claude", { log: "", ended: false, hasCaptured: false }, { stored: false });
+  assert.equal(empty.step, "starting", "빈 자리는 시작 중(끝남 판정은 조회가 흔적을 보고 한다)");
 });
 
 t("★ F13·F14 하네스 목록·저장 종류 = 중앙 샌드박스 판이 빌리는 표", () => {
