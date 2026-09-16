@@ -1566,10 +1566,15 @@ async function afterLogin(gw, tok) {
   registerClaudeMcp(); // claude 미설치 판정·안내 포함. (#247 — 구명 registerLivelyMcp 잔재 호출이 여기서 크래시했다)
   // tmux 서버 전역 env 는 **고칠 수 있다** — 아래 '이 셸은 못 고친다'의 유일한 예외라 먼저 친다(#3728).
   syncTmuxGlobalEnv(gw, tok);
-  // codex 는 토큰을 config.toml 에 안 굽고 LIVELY_TOKEN 을 읽으므로(bearer_token_env_var) 재등록할 게 없다.
+  // codex 는 기본이 stdio 프록시 등록이라(setup/user-install.mjs) 재등록할 게 없다 — 프록시도 파일을 읽는다.
   //  대신 **이 셸의 env 는 우리가 못 고친다**(자식이 부모 셸을 못 바꾼다) → 조용히 두지 말고 사실대로 알린다.
+  //  ⚠ 영향 표면은 하네스가 아니라 **이 셸의 env 를 물려받아 그대로 쓰는 것**이다(#959) — codex 만 지목하던 종전
+  //   문구는 틀렸다. 이 셸에서 바로 연 claude·codex 의 훅·MCP 는 파일을 읽어 멀쩡하고, 옛 값을 쓰는 건 둘이다:
+  //   ① env 로 토큰을 읽는 도구(http 직결 codex 의 bearer_token_env_var 등) ② 이 셸에서 띄운 노드·tmux 가 여는 창 —
+  //   라이블리가 띄운 창의 훅은 env 를 그 세션 몫으로 믿는다(hooks/session-preload.mjs 의 우선순위 주석).
   if (ENV_TOKEN_AT_START && ENV_TOKEN_AT_START !== tok) {
-    warn(`이 셸의 LIVELY_TOKEN 은 아직 이전 토큰입니다 — ${RELOAD_SHELL_HINT} 뒤에 codex 를 쓰세요.`);
+    warn(`이 셸의 LIVELY_TOKEN 은 아직 이전 토큰입니다 — ${RELOAD_SHELL_HINT}. `
+      + `그 전까지 이 셸에서 띄우는 노드·tmux 와 env 로 토큰을 읽는 도구는 이전 신원을 씁니다.`);
   }
   // ★ 노드도 지금 로그인한 곳으로 따라오게 한다(#2215). 종전엔 MCP 만 다시 굽고 노드는 그대로 뒀다 —
   //  그래서 워크스페이스를 옮겨도 그 PC 는 여전히 **이전 테넌트의 노드**였다(새 곳에선 세션이 안 열리고,
@@ -2203,19 +2208,27 @@ async function cmdDoctor(opts) {
   //   환경**을 global 로 굳혀 물려준다 — 같은 서버에서 새 창을 열어도 옛 값 그대로다(2026-09-03 실측:
   //   8/26 에 뜬 서버가 9/1 의 주소 변경을 못 따라가 40일 가까이 옛 주소를 물려줬다).
   //  ⚠ 주소는 시크릿이 아니라 **값을 보여준다**(토큰 검사와 다른 점) — 어느 쪽이 옛것인지 사람이 봐야 고친다.
+  //  ⚠ 아래 신원 검사와 달리 라이블리가 띄운 창에서도 ✗ 로 둔다(#959) — 주소가 갈리면 그 창의 훅(env 를 믿는다)과
+  //   CLI·MCP(파일을 믿는다)가 **서로 다른 게이트웨이**로 간다. 신원은 공유 홈 박스에서 의도적으로 갈리지만(#1719),
+  //   주소가 갈린 창은 실제로 두 워크스페이스에 나뉘어 붙은 상태다(#4012 부류).
   const gwFile = readLively("gateway-url"), gwEnv = (process.env.LIVELY_GATEWAY_URL || "").trim();
   if (gwEnv && gwFile && normGw(gwEnv) !== normGw(gwFile)) {
     chk("게이트웨이 일치(이 셸 env ↔ 파일)", false,
       `이 셸 env: ${normGw(gwEnv)} · 파일: ${normGw(gwFile)} — CLI·MCP 는 파일을 쓰지만 env 를 직접 읽는 도구는 앞의 주소로 갑니다`,
       `tmux set-environment -g LIVELY_GATEWAY_URL ${normGw(gwFile)}  후 새 세션 (또는 ${RELOAD_SHELL_HINT})`);
   }
-  // #916 — 이 셸의 env 가 파일과 다르면 **codex 와 이미 떠 있는 세션은 옛 신원으로** 게이트웨이에 붙는다.
-  //  CLI 는 파일을 정본으로 쓰므로 위 두 줄은 멀쩡해 보이는데, 그 상태가 정확히 #916 이었다.
-  //  진단이 이걸 안 보여줘서 그때는 /api/ui/me 를 손으로 찔러보고서야 잡혔다 → 도구화한다. ⚠ 값은 안 찍는다(사실만).
+  // #916 — 이 셸의 env 가 파일과 다르면 **이 셸의 env 를 물려받는 것**(여기서 띄운 노드·tmux 의 창, env 로 토큰을 읽는
+  //  도구)이 옛 신원으로 게이트웨이에 붙는다. CLI·MCP 는 파일을 정본으로 쓰므로 위 두 줄은 멀쩡해 보이는데, 그 상태가
+  //  정확히 #916 이었다. 진단이 이걸 안 보여줘서 그때는 /api/ui/me 를 손으로 찔러보고서야 잡혔다 → 도구화한다.
+  //  ⚠ 라이블리가 띄운 창(LIVELY_SESSION_ID)에선 다른 것이 정상일 수 있다 — 공유 홈 박스는 그 창 주인 몫의 훅 토큰을
+  //   env 로 싣는다(#1719). 그래서 거기선 ✗ 대신 사실만 적는다. ⚠ 값은 안 찍는다(사실만).
   if (ENV_TOKEN_AT_START && tokFile) {
     const same = ENV_TOKEN_AT_START === tokFile;
-    chk("신원 일치(이 셸 env ↔ 파일)", same,
-      same ? "일치" : "이 셸의 LIVELY_TOKEN 이 ~/.lively/token 과 다릅니다 — codex 는 옛 신원으로 붙습니다",
+    const spawnedPane = !!(process.env.LIVELY_SESSION_ID || "").trim();
+    chk("신원 일치(이 셸 env ↔ 파일)", same || spawnedPane,
+      same ? "일치"
+        : spawnedPane ? "라이블리가 띄운 창 — 이 창의 LIVELY_TOKEN 은 띄운 쪽이 실은 값이라 ~/.lively/token 과 다를 수 있습니다"
+        : "이 셸의 LIVELY_TOKEN 이 ~/.lively/token 과 다릅니다 — 이 셸에서 띄우는 노드·tmux 와 env 로 토큰을 읽는 도구가 이전 신원을 씁니다",
       RELOAD_SHELL_HINT);
   }
   chk("Claude Code", st.harness.claude.installed, st.harness.claude.installed ? "PATH 에 있음" : "미설치 또는 PATH 밖", "curl -fsSL https://claude.ai/install.sh | bash");

@@ -81,8 +81,15 @@ function hookDisabled() {
   } catch { return false; }
 }
 
-const TOKEN = (process.env.LIVELY_TOKEN || "").trim() || readLocal("token");
-const GW = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readLocal("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
+// 자격·주소 — 사람이 연 셸이면 파일이, 라이블리가 띄운 pane(LIVELY_SESSION_ID)이면 env 가 이긴다(#959).
+//  근거 전문은 hooks/session-preload.mjs 의 «훅의 자격·주소 우선순위» 주석.
+const SPAWNED = !!(process.env.LIVELY_SESSION_ID || "").trim();
+const pickCred = (envName, fileVal) => {
+  const env = (process.env[envName] || "").trim();
+  return (SPAWNED ? (env || fileVal) : (fileVal || env)) || "";
+};
+const TOKEN = pickCred("LIVELY_TOKEN", readLocal("token"));
+const GW = (pickCred("LIVELY_GATEWAY_URL", readLocal("gateway-url")) || "http://localhost:8080").replace(/\/$/, "");
 
 // ── 대상 하네스별 자산 배치 규약 ──
 // 반환: { root(자산 루트), file(절대경로), skillDir?(스킬 디렉터리) } 또는 null(미지원=skip).

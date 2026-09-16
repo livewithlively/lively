@@ -87,10 +87,16 @@ async function main() {
   try { prevSig = readFileSync(stateFile, "utf8").trim(); lastAt = statSync(stateFile).mtimeMs; } catch { /* 첫 보고 */ }
   if (!shouldReport(prevSig, curSig, lastAt, Date.now())) process.exit(0);
 
-  // (3) 토큰·게이트웨이 — env 우선, 없으면 ~/.lively/{token,gateway-url}. 토큰 없으면 조용히 종료.
+  // (3) 토큰·게이트웨이 — 사람이 연 셸이면 ~/.lively/{token,gateway-url} 이, 라이블리가 띄운 pane(LIVELY_SESSION_ID)이면
+  //  env 가 이긴다(#959 — 근거 전문은 hooks/session-preload.mjs 의 «훅의 자격·주소 우선순위» 주석). 토큰 없으면 조용히 종료.
   const readCfg = (rel) => { try { return readFileSync(join(homedir(), ".lively", rel), "utf8").trim(); } catch { return ""; } };
-  const token = (process.env.LIVELY_TOKEN || "").trim() || readCfg("token");
-  const gw = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readCfg("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
+  const spawned = !!(process.env.LIVELY_SESSION_ID || "").trim();
+  const pickCred = (envName, fileVal) => {
+    const env = (process.env[envName] || "").trim();
+    return (spawned ? (env || fileVal) : (fileVal || env)) || "";
+  };
+  const token = pickCred("LIVELY_TOKEN", readCfg("token"));
+  const gw = (pickCred("LIVELY_GATEWAY_URL", readCfg("gateway-url")) || "http://localhost:8080").replace(/\/$/, "");
   if (!token) process.exit(0);
 
   // 시도했음을 먼저 기록(성공·실패 무관 — 스로틀은 '시도' 기준이라 게이트웨이가 잠깐 죽어도 핫패스를 안 때린다).
