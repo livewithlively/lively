@@ -100,7 +100,29 @@ export async function markFinished(id: number, ok: boolean, result: Record<strin
     //  방치 배치의 기록도 같은 이유로 되돌린다 — 레인이 없어 별 테이블에 남기므로 위 DELETE 가 못 지운다.
     try { await itemsPool.query(`DELETE FROM org_stranded_seen WHERE task_id=$1`, [id]); }
     catch { /* 테이블 없음 등 — 무해 */ }
+    //  분류기 표식도 같은 축이다(#3994 T5 · #968) — 종전엔 이 되돌리기가 없어서, 실패한 분류 배치의
+    //   지식이 «봤음» 으로 남아 인박스에서 영구히 빠졌다(실측 942건이 미분류인데 backlog 0).
+    try { await itemsPool.query(`DELETE FROM org_classifier_seen WHERE task_id=$1`, [id]); }
+    catch { /* 테이블 없음 등 — 무해 */ }
   }
+}
+
+/**
+ * 배정이 왜 안 됐는지를 그 태스크에 적어 둔다(#3994 T5 · #968).
+ *
+ * 대기 상한으로 죽을 때 사람이 보는 문장은 «적합 노드 없음» 한 줄이었다 — 정작 마지막 시도가
+ *  «하네스를 보고한 노드 없음» 이었는지 «스폰 예외» 였는지는 **어디에도 안 남았다**. 실패 문장이
+ *  원인을 못 담으면 사람은 10분마다 같은 추측을 반복한다.
+ *
+ * queued 인 동안만 덮어쓴다 — 이미 끝난 태스크의 결과를 뒤늦은 시도 기록으로 덮지 않는다.
+ */
+export async function noteAssignFailure(id: number, code: string | null, reason: string | null): Promise<void> {
+  const mark = JSON.stringify({ last_assign: { code, reason, at: new Date().toISOString() } });
+  try {
+    await itemsPool.query(
+      `UPDATE org_task SET result = COALESCE(result,'{}'::jsonb) || $2::jsonb, updated_at=now()
+       WHERE id=$1 AND status='queued'`, [id, mark]);
+  } catch { /* 비치명 — 배정 자체를 막지 않는다 */ }
 }
 /**
  * 재큐 — 노드 유실 등으로 다른 노드에 다시 배정한다.

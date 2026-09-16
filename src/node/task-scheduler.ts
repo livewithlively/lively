@@ -23,8 +23,9 @@ import { getNode, listNodes } from "./store.js";
 import { remoteDelegateAllowed } from "./node-access.js";
 import {
   queuedTasks, runningTasks, runningCountByNode, markRunning, markFinished, requeue, setNodeLost, getTask,
-  matchNode, type DelegateTask, type SchedulableNode,
+  noteAssignFailure, matchNode, type DelegateTask, type SchedulableNode,
 } from "./task-store.js";
+import type { AssignFailCode } from "./assign-outcome.js";
 import { spawnTaskSession, checkTask, killTaskSession, sampleResources, detectDocker, detectHarnesses, tailTask, type RunTaskResult, type TailResult } from "./tasks.js";
 import { nodeHarnesses } from "./protocol.js";
 import { detectAuthFailure, cronJobIdFromMarker } from "./task-failure.js";
@@ -218,18 +219,20 @@ function armTaskDoneHook(): void {
 const QUEUE_MAX_MS = Math.max(0, Number(process.env.LIVELY_TASK_QUEUE_MAX_MS ?? 600_000));
 
 // 배치 불가 사유(하네스에게 '왜 안 되는지'를 즉답 — 로컬 폴백 판단 재료). 각 후보 노드의 탈락 이유를 모은다.
-function capacityReason(t: Pick<DelegateTask, "need_cpu" | "need_ram_mb" | "need_disk_mb" | "needs_docker" | "harness">, nodes: SchedulableNode[]): string {
-  if (!nodes.length) return "가용 노드 없음(쓸 수 있는 노드가 없음 — 위탁은 중앙 + 본인이 등록한 노드 + 관리자가 공유 노드로 지정한 노드에만 갑니다. 공유 노드를 쓰려면 내 셋업토큰 등록이 필요합니다)";
+//  ★ 문장 옆에 **코드**를 함께 낸다(#3994 T5 · #968) — 호출부가 «기다리면 풀리는 것(capacity)»과
+//   «영영 못 도는 것»을 가르려면 판정 축이 필요한데, 문장을 파싱해 가르면 문구를 다듬는 순간 조용히 깨진다.
+function capacityReason(t: Pick<DelegateTask, "need_cpu" | "need_ram_mb" | "need_disk_mb" | "needs_docker" | "harness">, nodes: SchedulableNode[]): { code: AssignFailCode; text: string } {
+  if (!nodes.length) return { code: "no_nodes", text: "가용 노드 없음(쓸 수 있는 노드가 없음 — 위탁은 중앙 + 본인이 등록한 노드 + 관리자가 공유 노드로 지정한 노드에만 갑니다. 공유 노드를 쓰려면 내 셋업토큰 등록이 필요합니다)" };
   // #1884 — 하네스를 못 띄우는 건 용량 문제가 아니다. 후보 전부가 그 사유면 그렇게 말한다(셋업토큰 안내로 헛다리 짚지 않게).
   if (!nodes.some((n) => n.harnesses.includes(t.harness))) {
     // ⚠ #2128 — "지원하는 노드 없음"이라고 **단정하지 않는다.** 이 목록은 노드가 hello 로 스스로 보고한 것이고,
     //  낡은 인스턴스가 좁은 PATH 로 굳으면 **그 CLI 가 잘 도는 PC 도 없다고 보고한다**(실측 2026-08-26 hammurabi:
     //  claude 세션 8/8 이 정상 실행되는데 검출은 [shell] 하나였다). 그 상태에서 "없다"고 못 박으면 사람은 설치·
     //  셋업토큰을 의심하며 헛다리를 짚는다. 사실(보고된 목록)만 대고, 보고가 틀릴 수 있다는 것과 조치를 함께 말한다.
-    return `하네스 ${t.harness} 를 보고한 노드 없음 — ` + nodes.map((n) => `${n.id}: [${n.harnesses.join(",")}]`).join(" · ")
+    return { code: "no_harness", text: `하네스 ${t.harness} 를 보고한 노드 없음 — ` + nodes.map((n) => `${n.id}: [${n.harnesses.join(",")}]`).join(" · ")
       + `. 이 목록은 각 노드가 스스로 보고한 것입니다 — 그 CLI 가 깔려 있는데도 안 보이면 그 PC 에서`
       + ` \`lively node --daemon\` 을 다시 실행해 주세요(낡은 인스턴스가 좁은 PATH 로 굳으면 못 찾습니다).`
-      + ` 정말 없다면 그 CLI 가 깔린 노드를 등록하거나 잡/위탁의 하네스를 바꾸세요.`;
+      + ` 정말 없다면 그 CLI 가 깔린 노드를 등록하거나 잡/위탁의 하네스를 바꾸세요.` };
   }
   const bits = nodes.map((n) => {
     if (!n.harnesses.includes(t.harness)) return `${n.id}: 하네스 ${t.harness} 미지원`;
@@ -241,7 +244,8 @@ function capacityReason(t: Pick<DelegateTask, "need_cpu" | "need_ram_mb" | "need
     if (t.need_cpu != null && Math.max(0, n.res.cpus - n.res.load1) < t.need_cpu) return `${n.id}: 유휴코어 ${Math.max(0, n.res.cpus - n.res.load1).toFixed(1)} < 요구 ${t.need_cpu}`;
     return `${n.id}: 부적합`;
   });
-  return "가용 노드 없음 — " + bits.join(" · ");
+  //  후보도 있고 하네스도 있는데 못 갔다 = 지금 **자리**가 없다. 자리는 나면 풀리므로 정상 배압이다.
+  return { code: "capacity", text: "가용 노드 없음 — " + bits.join(" · ") };
 }
 
 // 자격 리스(④) — 의뢰자가 등록한 셋업토큰을 env 로 싣는다.
@@ -304,11 +308,11 @@ async function candidatesFor(t: DelegateTask, counts: Map<string, number>, extra
 
 // 한 태스크를 후보와 매칭해 실제 배정(spawn)한다. counts/extra 는 같은 tick 과배정 방지(단발 호출은 빈 extra).
 //  반환: assigned 되면 nodeId, 아니면 사람이 읽을 reason(하네스 로컬 폴백 판단용).
-export interface AssignResult { assigned: boolean; nodeId?: string; reason?: string }
+export interface AssignResult { assigned: boolean; nodeId?: string; reason?: string; code?: AssignFailCode }
 async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Map<string, number>): Promise<AssignResult> {
   const { nodes, env } = await candidatesFor(t, counts, extra);
   const pick = matchNode(t, nodes);
-  if (!pick) return { assigned: false, reason: capacityReason(t, nodes) };
+  if (!pick) { const why = capacityReason(t, nodes); return { assigned: false, code: why.code, reason: why.text }; }
   const runArgs: Record<string, unknown> = {
     user: { userId: t.requester }, taskId: t.id, rootKey: "shared", subpath: t.subpath,
     prompt: t.prompt, harness: t.harness, repo: t.repo, gitRef: t.git_ref, flags: t.flags ?? {}, env,
@@ -318,7 +322,7 @@ async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Ma
     r = await spawnTaskSession(runArgs as never);   // 중앙 = 게이트웨이 프로세스 → DB 를 직접 읽는다(주입 불필요)
   } else {
     const n = await getNode(pick.id);
-    if (!n || !n.enabled) return { assigned: false, reason: `선정 노드 ${pick.id} 비활성` };
+    if (!n || !n.enabled) return { assigned: false, code: "node_disabled", reason: `선정 노드 ${pick.id} 비활성` };
     // 🔴 원격 노드엔 **DB 가 없다**(#905 C4) — 레포 정보를 여기서 해소해 실어 보내지 않으면, 노드의
     //  ensureBaseClone 이 getRepo() 로 localhost:5432 에 붙으려다 실패하고 409 "레포의 git 주소가 레지스트리에
     //  없습니다" 라는 **오진**을 낸다(레포는 멀쩡한데 사용자를 헛다리 짚게 한다 — 오늘 라이브 버그).
@@ -336,7 +340,7 @@ async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Ma
 export async function tryAssignNow(t: DelegateTask): Promise<AssignResult> {
   const counts = await runningCountByNode();
   try { return await assignOne(t, counts, new Map()); }
-  catch (err) { return { assigned: false, reason: `배치 오류: ${(err as Error)?.message ?? err}` }; }
+  catch (err) { return { assigned: false, code: "spawn_error", reason: `배치 오류: ${(err as Error)?.message ?? err}` }; }
 }
 
 /**
@@ -391,19 +395,27 @@ async function assignQueuedWith(counts: Map<string, number>, extra: Map<string, 
       // 큐 대기 상한(⑤) — 적합 노드를 QUEUE_MAX 안에 못 얻으면 무한 대기 대신 no_capacity 실패.
       //  ★ 백오프보다 **먼저** 본다 — 백오프 중인 태스크도 제 시각에 끝나야 한다(상한이 미뤄지면 안 된다).
       if (QUEUE_MAX_MS > 0 && now - new Date(t.created_at).getTime() > QUEUE_MAX_MS) {
-        await markFinished(t.id, false, { reason: "no_capacity_timeout" }, `대기 시간 초과(${Math.round(QUEUE_MAX_MS / 60000)}분) — 적합 노드 없음`);
+        // 마지막으로 **왜** 못 갔는지를 실패 문장에 싣는다(#3994 T5 · #968) — 종전 문구는 늘 «적합 노드 없음»
+        //  이라, 그 10분 동안 하네스를 보고한 노드가 없었는지·스폰이 죽었는지가 어디에도 안 남았다.
+        //  기록은 noteAssignFailure 가 매 시도마다 해 둔다(없으면 종전 문구 그대로).
+        const last = (t.result as { last_assign?: { code?: string; reason?: string } } | null)?.last_assign ?? null;
+        await markFinished(t.id, false, { reason: "no_capacity_timeout", ...(last ? { last_assign: last } : {}) },
+          `대기 시간 초과(${Math.round(QUEUE_MAX_MS / 60000)}분) — ${last?.reason || "적합 노드 없음"}`);
         logger.info({ task: t.id }, "큐 대기 초과 — no_capacity 실패");
         assignBackoff.delete(t.id);
         continue;
       }
       const bo = assignBackoff.get(t.id);
       if (bo && now < bo.nextAt) continue;              // 아직 백오프 중 — 이 tick 은 건너뛴다
-      await assignOne(t, counts, extra); // 실패해도 큐 유지(다음 tick 재시도, 상한까지)
+      const r = await assignOne(t, counts, extra); // 실패해도 큐 유지(다음 tick 재시도, 상한까지)
+      //  못 간 이유를 그 태스크에 적어 둔다(#3994 T5) — 상한으로 죽을 때 이 값이 곧 실패 문장이 된다.
+      if (!r.assigned) await noteAssignFailure(t.id, r.code ?? null, r.reason ?? null);
       assignBackoff.delete(t.id);        // 던지지 않았으면 연속이 끊긴다(용량 부족 포함 — 백오프 대상 아님)
     } catch (err) {
       const n = (assignBackoff.get(t.id)?.n ?? 0) + 1;
       const wait = assignBackoffDelayMs(n);
       assignBackoff.set(t.id, { n, nextAt: now + wait });
+      await noteAssignFailure(t.id, "spawn_error", (err as Error)?.message ?? String(err));
       logger.warn({ err: (err as Error)?.message, task: t.id, attempt: n, retryInMs: wait },
         "위탁 배정 실패 — 백오프 뒤 재시도");
     }

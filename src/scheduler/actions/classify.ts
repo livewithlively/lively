@@ -65,7 +65,15 @@ export async function runClassifyKnowledgeHeadless(params: Record<string, unknow
         });
         // '봤다'는 **배치를 낸 시점에** 기록한다(LLM 자기보고 아님 — #1289 교훈).
         //  이게 없으면 LLM 이 '못 정하겠다'고 넘긴 지식이 updated_at DESC 맨 앞에 영원히 남는다.
-        await markClassifierSeen(c.id, inbox.map((x) => x.name));
+        //  ⚠ 단 **접수된 배치만**이다(#3994 T5 · #968). 종전엔 결과와 무관하게 찍어서, 한 번도 실행되지
+        //   않은 배치의 지식 942건이 «봤음» 으로 숨고 인박스가 0 으로 보였다. 열쇠(task_id)를 함께 남겨
+        //   그 작업이 실패하면 markFinished 가 되돌린다.
+        const { acceptedTaskId } = await import("./headless-accept.js");
+        const acceptedId = acceptedTaskId(r);
+        if (acceptedId != null) {
+          const key = typeof acceptedId === "number" ? acceptedId : (Number(acceptedId) || null);
+          await markClassifierSeen(c.id, inbox.map((x) => x.name), key);
+        }
         await recordClassifierRun(c.id, r.status, r.summary);
         out.push({ classifier: c.key, ...(r.summary as object) });
       } catch (e) {
