@@ -43,7 +43,7 @@ async function resolveSyncTargets(params: Record<string, unknown>): Promise<Arra
 export async function runConnectorSync(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
   // #586 run-tracker 경유 — 실행이 connector_run 엔티티로 기록되고(상태·로그·통계) 웹에서 관찰 가능.
   //  크론은 완주를 기다려 잡 상태에 결과를 남긴다(타임아웃·중복 가드는 tracker 내부).
-  const { startConnectorRun } = await import("../../connectors/run-tracker.js");
+  const { startConnectorRun, RunCapacityError } = await import("../../connectors/run-tracker.js");
   const targets = await resolveSyncTargets(params);
   const out: unknown[] = [];
   for (const t of targets) {
@@ -53,7 +53,11 @@ export async function runConnectorSync(params: Record<string, unknown>): Promise
       if (run.alreadyRunning) { out.push({ system: t.system, collector: t.label, ok: true, skipped: "already_running", run_id: run.runId }); continue; }
       const r = await run.done;
       out.push({ system: t.system, collector: t.label, ok: r.ok, run_id: run.runId, exit_code: r.exitCode });
-    } catch (e) { out.push({ system: t.system, collector: t.label, ok: false, error: (e as Error)?.message ?? String(e) }); }
+    } catch (e) {
+      //  #3994 T3 — 판 자리 없음은 실패가 아니라 배압이다(행을 안 만들었고, 도는 수집이 끝나면 다음 주기에 선다).
+      if (e instanceof RunCapacityError) { out.push({ system: t.system, collector: t.label, ok: true, skipped: "capacity", reason: e.message }); continue; }
+      out.push({ system: t.system, collector: t.label, ok: false, error: (e as Error)?.message ?? String(e) });
+    }
   }
   // #669 sync 완료 후 임베딩 잔량 스윕(백그라운드·중복 자체 거부) — 미러가 남긴 pending(신규·제목/본문 변경 리셋)을
   //  10분 주기 스윕을 기다리지 않고 곧바로 흡수. 실패는 삼킨다(다음 주기/다음 sync 가 또 돈다).

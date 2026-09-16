@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { syncBatchStatus, orphanVerdict, childHeartbeatMs } from "./sync-outcome.js";
+import { syncBatchStatus, orphanVerdict, childHeartbeatMs, unitRunAlive } from "./sync-outcome.js";
 
 const r = (p: string): string => readFileSync(new URL(p, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 const CRON = r("../scheduler/actions/connector.ts");
@@ -24,6 +24,8 @@ test("표 A — 수집 tick 의 잡 상태는 타깃 결과에서 나온다", ()
   assert.equal(syncBatchStatus(undefined), "ok", "A2 undefined 를 실패로 봤다");
   //  A3 이미 도는 중 — 기다리면 풀린다(정상 배압).
   assert.equal(syncBatchStatus([{ ok: true, skipped: "already_running" }]), "ok", "A3 정상 배압을 실패로 봤다");
+  //  A3b 판 자리 없음(#3994 T3) — 행을 안 만들었고 기다리면 풀린다(배압).
+  assert.equal(syncBatchStatus([{ ok: true, skipped: "capacity" }, { ok: true }]), "ok", "A3b 판 자리 없음을 실패로 봤다 — 서킷브레이커가 멀쩡한 수집기를 끈다");
   //  A4 하나라도 실패
   assert.equal(syncBatchStatus([{ ok: false, error: "boom" }]), "error", "A4 실패를 정상으로 적었다 — #968 계열 재발");
   //  A5 부분 실패 — 성공으로 접지 않는다.
@@ -60,6 +62,25 @@ test("표 C — 부모 재시작 시 살아 있는 자식은 이어받고, 죽�
       assert.equal(orphanVerdict({ pid, aliveAndOurs: alive }).kill, false, `kill 지시가 나왔다 (pid=${String(pid)} alive=${alive})`);
     }
   }
+});
+
+test("표 C2 — 판 실행(#3994 T3)의 생존 입력: 박동이 임계 안이면 산 것 · 끊기면 판이 «산다» 고 답할 때만", () => {
+  const S = 120_000;
+  //  박동 신선 — 판에 묻지 않아도 산 것(판 상태가 뭐든)
+  for (const unitLive of [true, false, null]) {
+    assert.equal(unitRunAlive({ quietMs: 0, staleMs: S, unitLive }), true, `신선·${unitLive}`);
+    assert.equal(unitRunAlive({ quietMs: S, staleMs: S, unitLive }), true, `경계(정확히 임계)·${unitLive}`);
+  }
+  //  박동 끊김(임계+1)
+  assert.equal(unitRunAlive({ quietMs: S + 1, staleMs: S, unitLive: true }), true, "끊겼어도 판이 산다고 답하면 산 것");
+  assert.equal(unitRunAlive({ quietMs: S + 1, staleMs: S, unitLive: false }), false, "판이 죽었으면 죽은 것");
+  assert.equal(unitRunAlive({ quietMs: S + 1, staleMs: S, unitLive: null }), false, "★ 모름을 삶으로 접으면 행이 영원히 running 이다");
+  //  박동 시각을 못 읽음(NaN) — 신선하다고 치지 않는다
+  assert.equal(unitRunAlive({ quietMs: NaN, staleMs: S, unitLive: null }), false);
+  assert.equal(unitRunAlive({ quietMs: NaN, staleMs: S, unitLive: true }), true);
+  //  입양 판정과 엮으면 — 판 행(pid 없음)도 살아 있으면 이어받고 kill 지시는 없다
+  assert.deepEqual(orphanVerdict({ pid: null, aliveAndOurs: unitRunAlive({ quietMs: 5, staleMs: S, unitLive: null }) }), { close: false, kill: false, adopt: true });
+  assert.deepEqual(orphanVerdict({ pid: null, aliveAndOurs: unitRunAlive({ quietMs: S + 1, staleMs: S, unitLive: false }) }), { close: true, kill: false, adopt: false });
 });
 
 test("표 B6 — 자식 하트비트 주기는 유령 판정 임계의 절반 이하다(경계값 포함)", () => {

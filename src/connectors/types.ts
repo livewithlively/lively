@@ -106,4 +106,11 @@ export interface Connector {
    *  · 반환 size = Content-Length 힌트(도구가 크기 캡·스트리밍 abort 정책 적용). 삭제/이동/권한상실 = null(→ unavailable→skip).
    */
   fetchArtifact?(externalId: string): Promise<{ stream: Readable | Buffer; mime: string; filename?: string; size?: number } | null>;
+  /**
+   * (선택) **게이트웨이 로컬 디스크**에 기대는 수집인가(#3994 T3). 수집 중 받은 파일을 게이트웨이가 서빙하거나
+   *  (notion 첨부 → `/api/ui/notion-assets`), 게이트웨이 호스트의 경로를 읽는다(domain-wiki 로컬 레포).
+   *  매니지드는 긴 수집을 게이트웨이 밖 일시 유닛(판)에서 돌리는데, 판은 그 디스크를 못 본다 —
+   *  이 표지가 있으면 수집은 **게이트웨이 자식으로만** 돈다(교대에 끊길 수 있는 종전 한계를 안고).
+   */
+  readonly needsGatewayDisk?: boolean;
 }
