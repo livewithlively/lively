@@ -608,8 +608,11 @@ async function syncShell(): Promise<void> {
   else if (atPage === 'trash') renderTrash(at.center, data, binHooks, at.aside);
   for (const t of tabsApi.tabs) {
     if (!t.chat) continue;
-    const sid = routeKey(t.route).startsWith('s:') ? routeKey(t.route).slice(2) : '';
+    //  #4032 — 리브 탭도 세션 대화창을 쥔다. 라우트에 세션 id 가 없으니 **붙어 있는 세션**(chat.id)으로 찾는다.
+    const livTab = routeKey(t.route) === 'liv';
+    const sid = routeKey(t.route).startsWith('s:') ? routeKey(t.route).slice(2) : livTab ? t.chat.id : '';
     const s = sid ? findSess(sid) : null;
+    if (livTab) { if (s && t.chat.id === s.id) t.chat.update({ ...s, projectName: projName(data, s.projectId) }); continue; }
     // ★ 셸이 **틀린 프로젝트로** 마운트돼 있으면 그 탭을 다시 그린다(#1834 재발 처방).
     //  세션을 목록에서 못 찾은 판에는 loose(0)로 마운트되는데, 그대로 두면 문패가 '프로젝트 없는 세션'이고
     //  그 셸의 세션 목록도 남의 것(프로젝트 없는 세션들)이 된다 — 세션 화면이 남의 세션으로 바뀌던 사고의
@@ -1149,11 +1152,33 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       else await renderConnect(tab.center);
       if (seq !== tab.seq) return;
     } else if (page === 'liv') {
+      if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
       tab.center.replaceChildren();
       const host = el('div', { class: 'v2-livpage' });
       tab.center.append(host);
       tab.aside.replaceChildren();
-      await renderLiv(host, { rail: null, embedded: true });   // rail 없음 = 카드·편지는 본문에(종전 drawAsideLiv 도 null 을 돌려줬다)
+      await renderLiv(host, {
+        rail: null, embedded: true,   // rail 없음 = 카드·편지는 본문에(종전 drawAsideLiv 도 null 을 돌려줬다)
+        //  #4032 — 리브는 진짜 세션이다. 그 세션 대화창은 **이 셸의 목록**으로 붙인다: 20초 갱신이 tab.chat 으로 상태를 흘리고,
+        //   탭을 떠나면 셸이 부순다(세션 화면과 같은 수명). 목록에 아직 없으면(방금 열었거나 첫 판) 한 번 새로 읽는다.
+        mountSession: async (h, sid, o) => {
+          if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
+          if (!findSess(sid)) await loadData();
+          if (seq !== tab.seq || !h.isConnected) return null;
+          const handle = renderSession(h, data, sid, {
+            chatHome: true,
+            isVisible: () => tabsApi?.current() === tab && o.isVisible(),
+            onResumed: o.onResumed,
+          });
+          tab.chat = handle;
+          return handle;
+        },
+        onSessionCreated: (row: any) => {
+          if (!row || !row.id) return;
+          data.sessions = mergeSessions([row], []).concat(data.sessions.filter((x) => x.id !== String(row.id)));
+          drawSide(); tabsApi?.paint();
+        },
+      });
     } else if (page === 'welcome') {
       // 처음 설정(#1813) — 리브가 이름·무대·자료·AI 를 묻고 채팅으로 이어진다. 막1(이름)에서는 사이드바·탭 줄을 숨긴다(노션 p1).
       tab.center.replaceChildren();

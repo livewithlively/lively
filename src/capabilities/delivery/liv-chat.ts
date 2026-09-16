@@ -1,121 +1,59 @@
-// delivery ▸ liv-chat — 리브와의 대화 한 턴(#1631 v1). 터미널을 걷어내고 말풍선으로 가기 위한 서버쪽.
+// delivery ▸ liv-chat — 리브 탭이 부르는 창구(#1631 · #4032). 리브는 **진짜 세션**이다(org/liv/session.ts).
 //
-//  ── 왜 위탁(delegate)에 안 얹었나 ──
-//  기획은 "턴마다 위탁 태스크"를 권고했지만 org_task 는 **배치 계약**이다: 실패하면 자동 재시도(같은
-//  부작용이 두 번 난다) · 가용 노드 없으면 no_capacity(사람이 말을 걸었는데 할 답이 아니다) · 타임아웃 1시간.
-//  그래서 턴은 org_task 행을 만들지 않고 **spawnTaskSession 만** 직접 쓴다 — 워크스페이스 해석 · 멤버 OS
-//  유저 격리 · tmux 감독 · 자격 리스는 그대로 얻고, 배치 의미만 안 탄다.
-//  (노드 위탁은 나중에 "내 PC 에서 리브 돌리기"로 열린다. 그때 쓸 seam 은 이미 공용이다.)
+//  ── 무엇이 바뀌었나(#4032, 상민님 결정 2026-09-16) ──
+//  종전엔 리브 탭의 한 마디가 헤드리스 한 턴이었다(me_liv_turn → spawnTaskSession). 그 경로는 게이트웨이가 도는 기계의 tmux 를
+//  직접 불러, 세션을 노드의 세션 컨테이너에 띄우는 매니지드에서는 한 번도 안 떴다(500 — 판이 sudo 에서 즉사, 다음 set-option 이
+//  «no server running»). 이제 리브 탭은 그 사람의 리브 세션 하나를 찾아(없으면 첫 말로 연다) **그 세션 대화창**을 붙인다.
+//  말 보내기·멈춤·되살리기·되그리기는 전부 세션 대화창(web/session-chat.ts)의 것을 그대로 쓴다 — 여기엔 좌표 두 개만 남는다.
 //
-//  ── 왜 개인 루트의 liv 폴더인가 ──
-//  세션 시작 훅의 리브 게이트가 `basename(cwd) === "liv"` 다. 그 폴더에서 돌아야 리브가 리브가 되고,
-//  웹터미널 리브 세션과 **같은 자리**라 두 표면이 한 대화로 보인다.
-//
-//  ── 안전 자세 ──
-//  승인 우회를 쓰지 않는다. 경계는 `--disallowedTools`(liv-turn.ts 의 실측 참조)이고, 이 파일은 그 인자를
-//  만들지 않는다 — 스폰조차 여기서 하지 않고 org/liv/chat-turn.ts 의 startLivChatTurn 하나만 부른다(#1631 —
-//  처음 설정 킥오프·증류 지시도 같은 문을 지난다). 안전선이 한 자리에 있어야 약해질 때 눈에 띈다.
+//  ── mcp:false ──
+//  이 문들은 **화면이 리브를 여는 자리**다. 리브가 자기를 다시 부르면 세션이 겹쳐 선다.
 import { z } from "zod";
 import type { Capability } from "../types.js";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import { restRead } from "./shared.js";
-//  턴 id 규약·턴 폴더·스폰은 org/liv/chat-turn.ts 가 쥔다(#1631) — 여기는 화면이 부르는 창구(REST 계약)만 남는다.
-import { LIV_TURN_MAX as TURN_MAX, LIV_TURN_ID_RE as TURN_ID_RE, livTurnDir, startLivChatTurn } from "../../org/liv/chat-turn.js";
+import { LIV_PROMPT_MAX, currentLivSessionId, ensureLivSession } from "../../org/liv/session.js";
 
-/** 이 사람의 리브 대화 폴더 안에서 그 턴의 작업 폴더 — 형식이 틀리면 400(창구의 오류 계약). 남의 것은 구조상 가리킬 수 없다. */
-async function turnDir(user: LivelyUser, turnId: string): Promise<string> {
-  if (!TURN_ID_RE.test(turnId)) throw new HttpError(400, "턴 id 형식이 아닙니다");
-  return await livTurnDir(user, turnId);
+/** (순수) 첫 말 검사 — 비었으면 400, 상한을 넘으면 몇 자 넘었는지 말하는 400. 통과하면 다듬은 글. */
+export function livFirstWords(raw: unknown): string {
+  const text = String(raw ?? "").trim();
+  if (!text) throw new HttpError(400, "할 말이 비어 있습니다");
+  if (text.length > LIV_PROMPT_MAX) throw new HttpError(400, `한 번에 보낼 수 있는 글자 수를 넘었습니다(${text.length} > ${LIV_PROMPT_MAX})`);
+  return text;
 }
 
 export const livChatCapabilities: Capability[] = [
-  restRead("me_liv_turn", "리브에게 말 걸기(한 턴)",
-    "리브와의 대화 한 턴을 시작한다. 헤드리스로 돌고 진행은 me_liv_turn_log 로 이어 읽는다. " +
-    "첫 턴은 새 대화를 만들고, 이후 턴은 같은 대화를 이어받는다(restart:true 로 새로 시작). " +
-    "⚠ 리브는 승인 우회 없이 돈다 — 셸·파일·바깥 도구가 세션에 아예 없고 라이블리 도구만 있다.",
-    [{ method: "POST", paths: ["/api/ui/me/liv/turn"], parse: (req) => req.body ?? {} }],
-    async (input: Record<string, unknown>, user: LivelyUser) => {
-      const userId = user?.userId;
-      if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      const text = String(input.text ?? "").trim();
-      if (!text) throw new HttpError(400, "할 말이 비어 있습니다");
-      if (text.length > TURN_MAX) throw new HttpError(400, `한 번에 보낼 수 있는 글자 수를 넘었습니다(${text.length} > ${TURN_MAX})`);
-
-      // 이어받기(--resume)·새 대화(--session-id)·안전선·세션 id 두 곳 기록은 전부 chat-turn.ts 한 자리에 있다(#1631).
-      const r = await startLivChatTurn(user, { text, restart: input.restart === true });
-      return { turn_id: r.turn_id, resumed: r.resumed };
-    },
-    false,  // mcp:false — 이건 **화면이 리브를 부르는 문**이다. 리브가 자기를 다시 부르면 턴이 겹쳐 돈다.
-    {
-      // ⚠ text 에 zod .max() 를 두지 않는다 — 상한 초과는 핸들러가 "몇 자 넘었는지"를 말해 주는 게 낫다.
-      //  스키마에서 튕기면 SDK 가 핸들러 앞에서 거절해 사람은 이유 없는 실패만 본다(#1442 의 취지).
-      text: z.string().describe("리브에게 할 말(한 턴)"),
-      restart: z.boolean().optional().describe("true 면 이어가던 대화를 놓고 새로 시작한다"),
-    }),
-
-  restRead("me_liv_turn_log", "리브 턴 진행 읽기",
-    "그 턴의 진행 스트림(JSONL)을 바이트 오프셋부터 이어 읽는다. done=true 면 끝난 것이고 exit 로 성패를 안다. " +
-    "화면은 이 청크를 말풍선·액션카드로 그린다(원문은 버리지 않고 접는다 — 펼치면 '진짜 했다'의 증거다).",
-    [{ method: "GET", paths: ["/api/ui/me/liv/turn/:id"], parse: (req) => ({
-      id: String(req.params?.id ?? ""), from: req.query?.from ? Number(req.query.from) : 0,
-    }) }],
-    async (input: { id: string; from: number }, user: LivelyUser) => {
-      if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
-      const dir = await turnDir(user, input.id);
-      const { tailTask } = await import("../../node/tasks.js");
-      //  턴 폴더는 격리 경로라 **그 사용자 경계로** 읽는다(저장소 분리 배포의 게이트웨이는 직접 못 본다).
-      const { ensureMemberOsUser } = await import("../../terminal/profiles.js");
-      const osUser = await ensureMemberOsUser(user).catch(() => null);
-      const from = Number.isFinite(input.from) && input.from >= 0 ? Math.floor(input.from) : 0;
-      return await tailTask(dir, from, osUser);
-    },
-    false,  // mcp:false — 화면이 자기가 띄운 턴을 따라 읽는 문이다.
-    {
-      id: z.string().describe("턴 id(me_liv_turn 이 준 값)"),
-      from: z.number().optional().describe("이어 읽기 시작할 바이트 오프셋(기본 0)"),
-    }),
-
-  restRead("me_liv_turn_stop", "하던 것 멈추기",
-    "돌고 있는 턴을 멈춘다. 사람이 시작만 할 수 있고 멈추지는 못하면 그건 대화가 아니다 — " +
-    "리브가 엉뚱한 길로 갔거나 오래 걸릴 때 끊을 수 있어야 한다. 이미 끝난 턴이면 아무 일도 안 한다.",
-    [{ method: "POST", paths: ["/api/ui/me/liv/turn/:id/stop"], parse: (req) => ({ id: String(req.params?.id ?? "") }) }],
-    async (input: { id: string }, user: LivelyUser) => {
-      const userId = user?.userId;
-      if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      if (!TURN_ID_RE.test(input.id)) throw new HttpError(400, "턴 id 형식이 아닙니다");
-      // 세션 id 는 **본인 프로필에서만** 꺼낸다 — 남의 턴을 멈추는 길이 구조적으로 없다.
-      const { getLivProfile } = await import("../../org/store.js");
-      const turn = ((await getLivProfile(userId)).chat?.turns ?? []).find((t) => t.id === input.id);
-      // 프로필에 없으면 턴 폴더에서 읽는다(둘 중 하나만 남아도 멈출 수 있게).
-      let sid = turn?.sid ?? "";
-      if (!sid) {
-        //  턴 폴더는 격리 경로라 **그 사용자 경계로** 읽는다.
-        const { readTaskText } = await import("../../node/tasks.js");
-        const { ensureMemberOsUser } = await import("../../terminal/profiles.js");
-        sid = ((await readTaskText(await turnDir(user, input.id), "session", await ensureMemberOsUser(user).catch(() => null))) ?? "").trim();
-      }
-      if (!sid) {
-        // 못 멈추면 **못 멈춘다고 말한다.** 조용히 실패하면 사람은 눌렀는데 안 멈춘 이유를 영영 모른다.
-        return { stopped: false, reason: "이 턴의 세션을 찾지 못했습니다 — 멈추기가 붙기 전에 시작된 대화입니다. 리브는 계속 일하고, 끝나면 화면이 풀립니다." };
-      }
-      const { killTaskSession } = await import("../../node/tasks.js");
-      await killTaskSession(sid).catch(() => { /* 이미 끝났다 — 멈추라는 뜻은 이미 이뤄졌다 */ });
-      return { stopped: true };
-    },
-    false, { id: z.string().describe("멈출 턴 id") }),
-
-  restRead("me_liv_chat", "지금 이어가는 대화",
-    "이 사람이 이어가고 있는 대화와 그 턴 목록. 화면이 **새로고침 뒤 기록을 되그리는** 근거다 — " +
-    "본문은 담지 않는다(각 턴의 진행을 me_liv_turn_log 로 읽어 그린다).",
-    [{ method: "GET", paths: ["/api/ui/me/liv/chat"], parse: () => ({}) }],
+  restRead("me_liv_session", "리브 세션 찾기",
+    "이 사람이 이 워크스페이스에서 이어 가는 리브 세션 id(없으면 null). 세션이 복원돼 id 가 바뀌었으면 이어진 id 를 준다. " +
+    "화면은 이 id 의 세션 대화창을 리브 탭에 붙인다.",
+    [{ method: "GET", paths: ["/api/ui/me/liv/session"], parse: () => ({}) }],
     async (_input: unknown, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      const { getLivProfile } = await import("../../org/store.js");
-      const chat = (await getLivProfile(userId)).chat ?? null;
-      // 되그리기는 **최근 것부터 값이 있다** — 오래된 턴까지 다 읽으면 화면이 뜨는 데 오래 걸린다.
-      return { chat: chat ? { ...chat, turns: (chat.turns ?? []).slice(-12) } : null };
+      return { session_id: await currentLivSessionId(userId) };
+    }),
+
+  restRead("me_liv_session_open", "리브에게 첫 말 걸기",
+    "리브 세션이 없으면 이 말을 첫 지시로 세션을 연다(created:true — session 에 생성 응답 한 장). " +
+    "이미 있으면 그 세션 id 만 돌려주고 말은 넣지 않는다(created:false) — 화면이 그 세션 대화창에서 보낸다.",
+    [{ method: "POST", paths: ["/api/ui/me/liv/session"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const text = livFirstWords(input.text);
+      try {
+        return await ensureLivSession(user, text);
+      } catch (e) {
+        if (e instanceof HttpError) throw e;
+        //  세션을 못 연 이유를 사람에게 그대로 말한다 — 이 자리의 실패가 500 «internal_error» 로 뭉개져 원인을 못 찾은 것이 #4032 였다.
+        throw new HttpError(503, `리브를 열지 못했습니다 — ${(e as Error)?.message ?? e}`, { cause: e });
+      }
+    },
+    false,
+    {
+      // ⚠ text 에 zod .max() 를 두지 않는다 — 상한 초과는 핸들러가 "몇 자 넘었는지"를 말해 주는 게 낫다(#1442).
+      text: z.string().describe("리브에게 할 첫 말"),
     }),
 
   restRead("me_liv_ask_dismiss", "물음 접어두기",
@@ -137,15 +75,5 @@ export const livChatCapabilities: Capability[] = [
         declined: { at: new Date().toISOString(), key, why: "지금은 안 하겠다고 화면에서 접음" },
       });
       return { ask: null, dismissed: true, profile: await setLivSecretAsk(userId, null) };
-    }),
-
-  restRead("me_liv_chat_reset", "리브와 새 대화 시작",
-    "지금 이어가던 대화를 놓는다. 다음 턴이 첫 턴이 된다(이전 대화 기록은 지우지 않는다 — 이어받기만 끊는다).",
-    [{ method: "POST", paths: ["/api/ui/me/liv/chat-reset"], parse: () => ({}) }],
-    async (_input: unknown, user: LivelyUser) => {
-      const userId = user?.userId;
-      if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      const { setLivChat } = await import("../../org/store.js");
-      return { profile: await setLivChat(userId, null) };
     }),
 ];
