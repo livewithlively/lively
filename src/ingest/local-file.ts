@@ -14,7 +14,6 @@ import { withTx, itemsPool } from "../db/client.js";
 import type { RawItem } from "../items/store.js";
 import type { LivelyUser } from "../context.js";
 import { mirrorSourceV6 } from "../v6/mirror/mirror-source.js";
-import { applyVisibility } from "../v6/source-vis-policy.js";
 import { normalizeExternalInstance } from "../org/ingest/external-identity.js";
 import { getProjectRow } from "../v6/project-store.js";
 import { projectAbsPath } from "../project/project-fs.js";
@@ -50,8 +49,6 @@ export interface LocalUploadInput {
   uploader: { id: string | null; name?: string | null };
   /** 채널(최상위 폴더)이 없을 때의 채널명 — 프로젝트명·'uploads' 등 */
   channelFallback: string;
-  /** (#1631) 개인 루트 업로드를 «올린 사람만» 으로 잠그지 않는다 — 팀원 모두가 보는 자료. 라우트가 자기 개인 루트 업로드일 때만 켠다(share=team). */
-  shareWithTeam?: boolean;
 }
 export interface LocalIngestResult {
   ingested: boolean; kind: LocalIngestKind; reason?: string; source_id?: number; external_id?: string;
@@ -171,7 +168,7 @@ export async function ingestLocalUpload(u: LocalUploadInput): Promise<LocalInges
     body: built.body,
     occurred_at: st.mtime ?? undefined,
     updated_at: st.mtime ?? undefined,
-    fields: { path: rel, root: u.root.kind, ext: c.ext, bytes: st.size, extracted: built.extracted, local_kind: built.kind, ...(built.reason ? { local_reason: built.reason } : {}), ...(u.shareWithTeam ? { share: "team" } : {}) },
+    fields: { path: rel, root: u.root.kind, ext: c.ext, bytes: st.size, extracted: built.extracted, local_kind: built.kind, ...(built.reason ? { local_reason: built.reason } : {}) },
   };
 
   const id = await withTx(async (client) => {
@@ -183,12 +180,16 @@ export async function ingestLocalUpload(u: LocalUploadInput): Promise<LocalInges
     if (!row) throw new Error("자료 행을 찾지 못했습니다(upsert 직후)");
     // 지웠다가 다시 올린 파일 — mirror 의 upsert 는 lifecycle 을 안 건드리므로 여기서 되살린다.
     if (row.lifecycle !== "active") await client.query(`UPDATE source SET lifecycle='active', updated_at=now() WHERE id=$1`, [row.id]);
-    // 개인 폴더 = 올린 사람만(#1436 개인 폴더 self-only 와 대칭). 팀 WS 에서 홈 컴포저로 올린 것이 팀 자료함에 바로 보이지 않게.
-    //  (#1631) 단 올린 사람이 **팀원 모두** 를 명시했으면(shareWithTeam) 잠그지 않는다. 이미 잠긴 행을 열지는 않는다 — 전에 같은 경로로
-    //   «올린 사람만» 올라간 자료면 그대로 둔다(그 사람이 비공개로 둔 것을 다른 화면이 대신 열지 않는다).
-    if (u.root.kind === "personal" && u.uploader.id && !u.shareWithTeam) {
-      await applyVisibility(client, row.id, [{ subject_kind: "member", member_id: u.uploader.id }]);
-    }
+    // ⚠ (#4007) 여기서 «올린 사람만» 으로 잠그지 않는다 — 되살리지 마라.
+    //  종전(#1436·#1631)엔 개인 루트 업로드를 무조건 업로더 1인으로 잠갔다. 그런데 **자료·지식은 이미
+    //  워크스페이스로 갈린다**(tenant_id + RLS `tenant_isolation`; db/tenant-column.ts 의 IDENTITY_GLOBAL_TABLES 에
+    //  source·knowledge 가 없다. #1875 실측: 자료 100 vs 0, 겹침 0). 개인 프라이버시는 개인 워크스페이스가 받는
+    //  축이라, 그 위에 워크스페이스 **안쪽** 잠금을 또 두면 같은 걱정을 두 번 처리하면서 부작용만 남는다.
+    //  실제로 부작용만 나왔다(2026-09-16 실측): 정책 0개인 조직에 잠긴 자료 69건 · 공개 포스터에서 뽑은 지식이
+    //  derived_from 상속으로 잠김 · anyLockedContext() 가 참이 되어 조직 전체 db_query self 차단.
+    //  워크스페이스 안에서 자료를 가르고 싶으면 그건 부서 구분이고, 도구는 org_source_vis_policy(EE)다 —
+    //  로컬 업로드도 mirrorSourceV6 → stampSourceVisibility 를 지나므로 match_system='local' 정책이 그대로 먹는다.
+    //  ★ 그 경로는 axisOn('source') 를 본다. 여기서 applyVisibility 를 직접 부르면 그 가드를 우회한다(종전의 실제 결함).
     return row.id;
   });
   // 자료가 생겼으면 그걸 지식으로 만들 증류기가 있어야 한다 — 없으면 꺼진 채로 만들어 둔다(승인 때 켠다). 실패해도 자료 등록엔 무관.

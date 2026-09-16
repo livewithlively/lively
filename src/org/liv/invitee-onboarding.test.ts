@@ -146,11 +146,12 @@ test("R3 켜진 팀 수집 판정 — 못 읽은 것은 켜진 것으로 치지 
 });
 
 // ── 올린 자료는 팀원 모두 · 마무리 · 문구 ──────────────────────────────────────
-test("C1 합류자 파일 — «팀원 모두가 봅니다» 이고, 업로드가 그 옵션을 싣는다(주인은 그대로)", () => {
+test("C1 합류자 파일 — «팀원 모두가 봅니다» 이고, 업로드에 옛 share=team 갈래가 없다 (#4007)", () => {
   const files = code.slice(code.indexOf("    files: {"), code.indexOf("    sources: {"));
   assert.match(files, /올린 자료는 팀원 모두가 봅니다\./, "합류자에게 공개 범위를 안 알린다");
   assert.doesNotMatch(files, /기본적으로 나만 봅니다/, "옛 «나만 봅니다» 문구가 남았다");
-  assert.match(files, /root=personal&path=' \+ encodeURIComponent\(rel\) \+ \(isJoin\(\) \? '&share=team' : ''\)/, "합류자 업로드가 팀 옵션을 안 싣는다(또는 주인에게도 싣는다)");
+  //  (#4007) 이제 주인·합류자 구분이 없다 — 개인 루트 업로드를 아무도 잠그지 않으므로 풀 옵션도 없다.
+  assert.match(files, /root=personal&path=' \+ encodeURIComponent\(rel\)\), it\.file,/, "업로드가 옛 share=team 갈래를 아직 태운다");
 });
 
 test("C2 마무리 — 합류자면 리브 없이 홈으로, 판정은 서버 응답을 따른다", () => {

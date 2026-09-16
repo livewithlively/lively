@@ -43,8 +43,6 @@ export async function finishUpload(o: {
   abs: string;
   osUser: string | null;
   uploader: { id: string | null; name: string | null };
-  /** #1631 — 자기 개인 루트 업로드를 «올린 사람만» 으로 잠그지 않는다. 개인 루트에서만 의미가 있다. */
-  shareWithTeam?: boolean;
 }): Promise<UploadFinished> {
   const { coord, abs, osUser } = o;
   // ① 공유 그룹 rw — 게이트웨이(lively)가 쓴 644 파일을 격리 세션의 box_ 사용자가 고칠 수 있게(#1246).
@@ -58,7 +56,7 @@ export async function finishUpload(o: {
   if (coord) {
     ing = await ingestLocalUpload({
       root: coord.root, folder: coord.folder ?? null, base: coord.base, abs, osUser,
-      uploader: o.uploader, channelFallback: coord.channelFallback, shareWithTeam: o.shareWithTeam,
+      uploader: o.uploader, channelFallback: coord.channelFallback,
     }).catch((e) => { logger.warn({ err: e, abs }, "[local-ingest] 자료 등록 실패"); return null; });
   }
   // ③ 도장 — up-sync 훅이 **로컬 mtime 을 이 값으로 맞추고 원장 기준선으로 적어야** 다음 pull 이
