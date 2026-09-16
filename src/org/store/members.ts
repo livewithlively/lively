@@ -332,29 +332,16 @@ export interface LivAnswer {
   by?: "self" | "liv";
 }
 
-/** 리브와의 대화 한 줄기(#1631 v1 채팅). **세션이 아니라 여기 산다** — 게이트웨이가 재시작해도
- *  다음 턴이 같은 대화를 이어받는다(`--resume <session_id>`). 대화 내용은 담지 않는다:
- *  본문은 하네스가 자기 트랜스크립트에 갖고 있고, 여기 복제하면 진실이 둘이 된다. */
-/** 지나간 턴 한 건 — **본문이 아니라 어디서 읽을지**만 담는다(본문은 그 턴의 진행 파일에 있다). */
-export interface LivTurnRef {
-  id: string;      // 턴 id(그 턴의 작업 폴더 이름)
-  text: string;    // 사람이 한 말 — 이건 어디에도 안 남아서 여기 담는다(리브의 말은 진행 파일에 있다)
+/**
+ * 리브 세션 좌표(#4032) — 리브 탭이 붙는 **진짜 세션**(org/liv/session.ts). 대화 본문은 담지 않는다 —
+ *  본문은 그 세션의 대화 파일이 정본이다. 세션이 복원되면 새 id 가 되는데, 좌표는 복원 이정표(superseded_by)를
+ *  따라가 읽으므로 여기 옛 id 가 남아 있어도 길을 잃지 않는다.
+ *  ⚠ 워크스페이스 층이다(WORKSPACE_SCOPED_KEYS) — 세션은 워크스페이스마다 따로 산다.
+ */
+export interface LivSessionRef {
+  id: string;
+  /** 이 좌표를 적은 시각(ISO). */
   at: string;
-  /** 그 턴이 도는 세션 id. **멈추려면 이게 있어야 한다** — 없으면 사람은 시작만 하고 못 멈춘다.
-   *  본인 프로필에서만 나오므로 남의 턴은 구조상 못 건드린다. */
-  sid?: string;
-  /** 서버가 띄운 턴(킥오프·증류 지시, #1631) — 사람이 쓴 말이 아니라 화면이 «내 말» 로 그리지 않는다(liv/chat-turn.ts 머리말). */
-  hidden?: boolean;
-  kind?: "kickoff" | "distill";
-}
-
-export interface LivChat {
-  /** claude 대화 세션 uuid. 첫 턴이 만들고 이후 턴이 이어받는다. */
-  session_id: string;
-  started_at: string;
-  /** 이 대화의 턴들(오래된 것부터). **화면이 새로고침 뒤 기록을 되그리는 근거**다.
-   *  ⚠ 리브의 말을 여기 복제하지 않는다 — 진행 파일이 정본이고, 복제하면 진실이 둘이 된다. */
-  turns?: LivTurnRef[];
 }
 
 export interface LivProfile {
@@ -389,8 +376,8 @@ export interface LivProfile {
   secret_ask?: LivAsk | null;
   /** 사람이 고른 답들. 뒤에 쌓인다. */
   answers?: LivAnswer[];
-  /** 지금 이어가고 있는 대화. 새로 시작하면 갈아끼운다(null 이면 다음 턴이 첫 턴). */
-  chat?: LivChat | null;
+  /** 리브 탭이 붙는 세션(#4032). 없으면 첫 말이 새로 연다 — 처음 설정 킥오프가 연 세션(welcome.session_id)이 폴백이다. */
+  liv_session?: LivSessionRef | null;
 }
 
 const LIV_LIST_CAP = 50; // 결정·거절 이력 상한 — 오래된 것부터 버린다(프로필은 로그가 아니다)
@@ -399,19 +386,6 @@ const LIV_LIST_CAP = 50; // 결정·거절 이력 상한 — 오래된 것부터
 export async function setLivSecretAsk(id: string, ask: LivAsk | null): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur, secret_ask: ask };
-  return await writeLivProfile(id, next as unknown as Record<string, unknown>);
-}
-
-/** 이어갈 대화를 정한다(null = 다음 턴이 첫 턴). 대화 **본문은 저장하지 않는다** — 이어받을 열쇠만.
- *  ⚠ 이 함수는 읽고-쓰기라, 같은 사람이 동시에 두 턴을 시작하면 뒤가 앞을 덮는다. 리브 화면은 답을
- *   기다리는 동안 입력을 막으므로 v1 에선 그 경합이 생기지 않는다(막는 게 풀리면 여기부터 다시 봐야 한다). */
-/** 이 대화에 턴 하나를 잇는다. 되그릴 수 있는 만큼만 들고 있는다(오래된 것부터 버린다). */
-export async function appendLivTurn(id: string, turn: LivTurnRef, cap = 30): Promise<LivProfile> {
-  const cur = await getLivProfile(id);
-  const chat = cur.chat;
-  if (!chat) return cur;                       // 대화가 없으면 이을 곳도 없다
-  const turns = [...(chat.turns ?? []), turn].slice(-cap);
-  const next: LivProfile = { ...cur, chat: { ...chat, turns } };
   return await writeLivProfile(id, next as unknown as Record<string, unknown>);
 }
 
@@ -432,10 +406,9 @@ export async function setLivWelcomeProgress(id: string, progress: LivWelcomeProg
   return await writeLivProfile(id, next as unknown as Record<string, unknown>);
 }
 
-export async function setLivChat(id: string, chat: LivChat | null): Promise<LivProfile> {
-  const cur = await getLivProfile(id);
-  const next: LivProfile = { ...cur, chat };
-  return await writeLivProfile(id, next as unknown as Record<string, unknown>);
+/** 리브 세션 좌표를 이 워크스페이스 층에 적는다(null = 지운다, #4032). */
+export async function setLivSession(id: string, ref: LivSessionRef | null): Promise<LivProfile> {
+  return await writeLivProfile(id, { liv_session: ref });
 }
 
 /**
@@ -484,8 +457,9 @@ export async function livAnswerStats(): Promise<Array<{
 //  기존 사용자는 자기 첫 워크스페이스에서 종전과 똑같이 보인다. 쓸 때부터 새 자리에 넣는다.
 
 /** 워크스페이스마다 달라야 하는 키 — 이 표가 이 변경의 전부다.
- *  `join`(#1631) — 이 워크스페이스에 만든 사람으로 왔나 초대로 왔나. 워크스페이스마다 다르다. */
-export const WORKSPACE_SCOPED_KEYS = ["welcome", "welcome_progress", "onboarded_at", "decisions", "join"] as const;
+ *  `join`(#1631) — 이 워크스페이스에 만든 사람으로 왔나 초대로 왔나. 워크스페이스마다 다르다.
+ *  `liv_session`(#4032) — 리브 탭이 붙는 세션. 세션은 워크스페이스마다 따로 산다. */
+export const WORKSPACE_SCOPED_KEYS = ["welcome", "welcome_progress", "onboarded_at", "decisions", "join", "liv_session"] as const;
 export type WorkspaceScopedKey = (typeof WORKSPACE_SCOPED_KEYS)[number];
 
 /** 워크스페이스 층이 사는 자리. */

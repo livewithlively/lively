@@ -1,261 +1,255 @@
-// 리브와의 대화 — 터미널 대신 말풍선(#1631 v1). 그림·입력·스크롤은 **공용 대화창**(web/chat-view.ts, #1719)이 맡고,
-//  이 파일은 리브 고유의 것만 든다: 어디서 읽고(me/liv/turn 진행 파일) 어디로 보내는지(POST me/liv/turn), 되그리기, 멈춤.
+// 리브 탭의 대화 칸 — 리브는 **진짜 세션**이다(#4032, 상민님 결정 2026-09-16).
 //
-//  ── 왜 터미널을 걷어내나 ──
-//  v0 는 웹터미널을 재사용했다. 두뇌를 먼저 검증하려는 선택이었고 그건 성공했다. 그런데 리브의 대상은
-//  "라이블리를 1도 모르는 사람"이고, 그 사람이 마주하는 화면 오른쪽 절반이 **까만 터미널**이었다.
-//  잘 대답해도 그 자리가 무섭다. 두뇌는 그대로 두고 표면만 바꾼다(D2·D5).
+//  ── 무엇이 바뀌었나 ──
+//  종전엔 한 마디마다 서버가 헤드리스 한 턴을 띄우고(POST me/liv/turn) 이 파일이 그 진행 파일을 당겨 읽어 그렸다.
+//  그 턴은 게이트웨이가 도는 기계의 tmux 에 떠서, 세션을 노드의 세션 컨테이너에 띄우는 매니지드에서는 한 번도 안 떴다(500).
+//  이제 리브 탭은 그 사람의 리브 세션 하나(GET me/liv/session)를 찾아 **그 세션 대화창**(web/session-chat.ts)을 붙인다.
+//  보내기·멈춤·되살리기·되그리기는 전부 세션 대화창의 것이다 — 여기 남는 건 «어느 세션인가» 와 «없으면 첫 말로 연다» 뿐이다.
 //
-//  ── 무엇을 그리나 ──
-//  서버가 헤드리스 한 턴을 띄우고(POST me/liv/turn) 진행을 JSONL 로 남긴다. 화면은 그 줄을 바이트
-//  오프셋으로 이어 읽어 대화창에 넘긴다: assistant 의 글 → 말 / 도구 호출 → 작업 슬립(접힘) / 마지막 result → 답이
-//  비어 있을 때만.
-//
-//  ── 이 화면이 지키는 것 ──
-//  · **답을 기다리는 동안 입력을 막는다.** 턴이 겹치면 대화 이어받기(--resume)가 꼬인다(sendWhileBusy=false).
-//  · 도구 이름은 사람 말로, 모르는 이름은 그대로(틀린 한국어보다 낯선 영어 한 줄이 낫다). 연속 도구는 한 줄로 접힌다(desktop 변형).
-//  · 그림은 세션 대화창과 **같은 문법**(desktop) — 한 제품 안에 대화창이 두 모양이면 안 된다.
-import { api, el } from './core.js';
-import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
+//  ── 이 칸이 지키는 것 ──
+//  · 리브 세션은 **대화 보기가 본자리**다(chatHome) — 리브의 대상은 터미널을 모르는 사람이다.
+//  · 세션이 되살아나면(복원) 새 id 다 — 전역 주소를 바꾸지 않고 **이 칸만** 새 세션으로 갈아 붙인다(onResumed).
+//  · 리브가 던진 물음(자격·객관식·올리기)은 **입력칸 바로 위**에 앉는다(askHost) — 대화와 같은 칸이다.
+//  · 카드가 리브에게 말을 거는 문(livChatAsk)·입력칸에 담기만 하는 문(livChatFill)은 **리브 칸 안의 입력칸**만 만진다 —
+//    셸은 탭 DOM 을 살려 두므로 문서 전체에서 입력칸을 찾으면 다른 탭의 세션에 말이 간다.
+import { api } from './core.js';
+import { createChatView, type ChatView } from './chat-view.js';
+import type { SessionChatHandle } from './session-chat.js';
+import { mergeSessions, renderSession } from './v2/views.js';
+import { rememberCreated, takeCreated } from './v2/created-cache.js';
+import { rememberFirstPrompt } from './v2/quick-session.js';
 
-/**
- * 진행을 다시 물어보는 간격.
- *
- * 조각(글자 단위)이 와도 이 간격마다 그리므로 **이 값이 곧 체감 속도**다. 900ms 면 조각이 와도
- * 뭉텅이로 나타나 스트리밍이 아니게 된다. 400ms 는 20초 턴에 50회 남짓인데, 한 번이 파일을
- * 오프셋부터 이어 읽는 값싼 요청이라 감당된다.
- * ⚠ 진짜 밀어주기(SSE)가 아니라 **당겨오기**다 — 부드러운 타이핑이 아니라 짧은 뭉치로 나타난다.
- */
-const POLL_MS = 400;
-/** 진행 읽기가 연달아 몇 번까지 실패해도 버티나. 배포·네트워크 blip 은 몇 초면 지나간다. */
-const RETRY_MAX = 6;
-/**
- * 진행이 **이만큼 안 늘면** 그 턴은 끝난 것으로 본다(done 표식이 없어도).
- * 실측 2026-08-18: 리브 턴의 실행 세션이 회수·사망하면 진행 파일에 done 이 영영 안 찍힌다 → 화면은 "리브가 하는 중…"에
- * 입력이 잠긴 채 멈춘다(홈이 리브 대화라 아무 말도 못 건다). 서버가 못 알려주면 화면이 시간을 근거로 풀어 준다 —
- * 대신 조용히 풀지 않고 "끝나지 못했다"고 말한다.
- */
-const STALL_MS = 3 * 60_000;
+/** 셸이 리브 세션 대화창을 붙이는 문 — v2 셸은 자기 세션 목록·20초 갱신·탭 수명으로 붙인다. 없으면 이 파일이 스스로 목록을 읽는다(클래식 셸). */
+export type LivSessionMounter = (
+  host: HTMLElement,
+  id: string,
+  o: { onResumed: (newId: string) => void; isVisible: () => boolean },
+) => Promise<SessionChatHandle | null>;
 
-interface TurnStart { turn_id: string; resumed: boolean }
-interface TailResult { chunk?: string; next?: number; done?: boolean; exit?: number | null }
-
-// ── 리브가 스스로 띄운 턴(#1631, 원준 2026-09-14) ──
-//  처음 설정 킥오프·증류 지시는 서버가 조립한 지시문이라 사람이 쓴 말이 아니다. 종전엔 홈 탭의 tmux 세션에서 그 지시문이
-//  «내 말» 로 통째로 떠서 사람이 «내가 이런 걸 보낸 적이 없는데» 가 됐다. 이제 그 턴은 리브 탭에서 말풍선 없이
-//  «리브가 워크스페이스를 맞추는 중» 으로 뜨고, 끝나면 한 줄 표식만 남는다(무엇의 결과인지는 알아야 한다).
-export type AutoKind = 'kickoff' | 'distill';
-const autoKind = (k: unknown): AutoKind => (k === 'distill' ? 'distill' : 'kickoff');
-const AUTO_COPY: Record<AutoKind, { run: string; sub: string; done: string }> = {
-  kickoff: { run: '리브가 워크스페이스를 맞추고 있어요', sub: '답하신 내용과 올려 주신 자료를 읽고 있습니다. 잠시만요.', done: '처음 설정 직후, 리브가 워크스페이스를 살펴본 결과예요' },
-  distill: { run: '리브가 자료를 읽고 정리하고 있어요', sub: '카테고리를 만들고 자료를 지식으로 정리하는 중입니다. 몇 분 걸릴 수 있어요.', done: '리브가 자료를 읽고 정리한 결과예요' },
-};
-function autoFace(t: ChatTurn, kind: AutoKind, running: boolean): void {
-  const c = AUTO_COPY[kind];
-  const found = t.work.querySelector(':scope > .livc-auto') as HTMLElement | null;
-  const box: HTMLElement = found ?? el('div', { class: 'livc-auto' });
-  if (!found) t.work.prepend(box);
-  box.replaceChildren(running
-    ? el('div', { class: 'livc-auto-hero', role: 'status', 'aria-live': 'polite' },
-        el('span', { class: 'livc-auto-spin', 'aria-hidden': 'true' }),
-        el('div', {}, el('b', { text: c.run }), el('p', { class: 'livc-auto-sub', text: c.sub })))
-    : el('span', { class: 'livc-auto-done', text: c.done }));
-  //  편지 칸이 «오늘은 드릴 말씀이 없습니다» 로 어긋나지 않게 — 화면(liv.ts)이 이 신호를 듣고 편지를 «살펴보는 중» 으로 바꾼다.
-  if (running) document.body.dataset.livAuto = kind; else delete document.body.dataset.livAuto;
-  document.dispatchEvent(new CustomEvent('liv:auto', { detail: { kind, running } }));
+export interface LivChatOpts {
+  mountSession?: LivSessionMounter | null;
+  /** 첫 말로 리브 세션을 새로 열었다 — 셸이 사이드바에 곧바로 싣는다(생성 응답 한 장). */
+  onSessionCreated?: ((row: unknown) => void) | null;
 }
 
-/**
- * 도구 이름을 사람 말로.
- *
- * 이 화면의 전제가 "무대 뒤를 드러내지 않는다"인데, 액션카드에 `ToolSearch` 같은 하네스 내부 이름이
- * 그대로 뜨면 그 전제가 카드 한 장으로 깨진다(실측: 첫 대화에서 그렇게 떴다). 그렇다고 감추지는 않는다 —
- * 카드가 있다는 사실 자체가 '진짜 했다'의 증거라, **이름만 사람 말로 바꾸고 원문은 접어 둔다.**
- * ⚠ 모르는 이름은 **그대로 둔다.** 그럴싸한 한국어를 지어내면 사람이 무슨 일이 있었는지 오해한다.
- */
-const TOOL_LABELS: Record<string, string> = {
-  ToolSearch: '쓸 도구 찾기',
-  Skill: '전담 절차 실행',
-  TodoWrite: '할 일 정리',
-  AskUserQuestion: '물어보기',
-};
-function toolLabel(name: string): { label: string } {
-  if (name.startsWith('mcp__lively__')) return { label: '라이블리 설정' };
-  if (name.startsWith('mcp__')) return { label: '연결한 도구 사용' };
-  return { label: TOOL_LABELS[name] ?? name };
+interface LivSessionRef { session_id: string | null }
+interface LivOpened { session_id: string; created: boolean; session?: { id?: string } | null }
+
+// ── 리브가 지금 일하는 중인가 — 편지 칸(web/liv.ts)이 «드릴 말씀이 없습니다» 대신 «일하는 중» 을 쓰는 재료 ──
+let livBusy = false;
+export function livChatBusy(): boolean { return livBusy; }
+function setBusy(on: boolean): void {
+  if (livBusy === on) return;
+  livBusy = on;
+  document.dispatchEvent(new CustomEvent('liv:busy', { detail: { busy: on } }));
 }
+
+/** 지금 리브 칸 — 카드의 문(livChatAsk·livChatFill)이 **이 칸 안에서만** 입력칸을 찾는다. */
+let livHost: HTMLElement | null = null;
+/** 지금 붙어 있는 리브 칸을 걷는 손잡이 — 다시 붙이거나 라우트를 떠날 때 부른다. */
+let current: { destroy: () => void } | null = null;
+
+/**
+ * 리브 칸을 걷는다 — 대화창의 폴링·리스너는 **부숴야만** 멈춘다(화면에서 떨어져도 계속 돈다).
+ *  · 클래식 셸: 라우터가 매 이동 앞에 부른다(web/main.ts — wkRouteCleanup 과 같은 자리). 안 부르면 리브 탭을 드나들 때마다
+ *    세션 대화창의 폴링 루프와 message 리스너가 하나씩 쌓인다.
+ *  · v2 셸: 세션 대화창은 탭 수명(tab.chat)으로 셸이 부순다. 여기서는 빈 대화와 진행 중인 붙이기만 걷는다.
+ */
+export function livChatCleanup(): void {
+  const c = current;
+  current = null;
+  livHost = null;
+  c?.destroy();
+  setBusy(false);
+}
+
+/** 셸 없이(클래식) 리브 세션 대화창을 붙인다 — 목록을 한 번 읽어 그 세션 한 장으로 그린다. */
+const mountFromLists: LivSessionMounter = async (host, id, o) => {
+  const [live, logs] = await Promise.all([
+    api('/api/ui/terminal/sessions?includeProjects=1').then((d: any) => (d && d.sessions) || []).catch(() => [] as any[]),
+    api('/api/ui/v6/sessions?limit=40').then((d: any) => (d && d.sessions) || []).catch(() => [] as any[]),
+  ]);
+  //  방금 연 세션은 목록에 한 박자 늦게 오른다 — 생성 응답 한 장을 먼저 깐다(목록 행이 있으면 그게 이긴다).
+  const made = takeCreated(id);
+  const rows = made ? [made, ...(live as any[])] : (live as any[]);
+  return renderSession(host, { projects: [], sessions: mergeSessions(rows, logs as any[]), loadedAt: Date.now() }, id, {
+    chatHome: true, isVisible: o.isVisible, onResumed: o.onResumed,
+  });
+};
 
 /** askHost = 리브가 던진 물음이 앉는 자리. **대화와 같은 칸, 입력 바로 위**에 끼운다. */
-export function mountLivChat(host: HTMLElement, askHost: HTMLElement): void {
-  let view: ChatView;
-  // 지금 도는 턴 — 멈추려면 무엇을 멈출지 알아야 한다.
-  let running: string | null = null;
-  let stopping = false;
+export function mountLivChat(host: HTMLElement, askHost: HTMLElement, opts: LivChatOpts = {}): void {
+  livChatCleanup();                          // 앞 칸(다시 그리기 전의 것)을 먼저 걷는다
+  livHost = host;
+  const mount = opts.mountSession ?? mountFromLists;
+  const ownsHandle = !opts.mountSession;   // 셸이 붙였으면 수명(파괴)도 셸이 쥔다 — 두 번 부수지 않는다
+  let handle: SessionChatHandle | null = null;
+  let emptyView: ChatView | null = null;     // 세션이 없을 때의 빈 대화(첫 말을 받는 자리)
+  let gen = 0;                               // 늦게 끝난 붙이기가 새 화면을 덮지 않게
+  const isVisible = (): boolean => host.isConnected && document.body.dataset.route === 'liv';
+  current = {
+    destroy: () => {
+      ++gen;                                 // 진행 중인 붙이기·첫 말은 끝나도 화면을 안 만진다
+      if (ownsHandle) handle?.destroy();
+      handle = null;
+      emptyView?.destroy();
+      emptyView = null;
+    },
+  };
 
-  /** 하던 것 멈추기 — 시작만 할 수 있고 멈추지는 못하면 그건 대화가 아니다. 못 멈췄으면 못 멈췄다고 말한다. */
-  async function stopTurn(): Promise<void> {
-    if (!running || stopping) return;
-    stopping = true;
-    view.setNote('멈추는 중…');
-    const r = await api(`/api/ui/me/liv/turn/${encodeURIComponent(running)}/stop`, { method: 'POST', body: '{}' })
-      .catch((e) => ({ stopped: false, reason: (e as Error).message })) as { stopped?: boolean; reason?: string };
-    if (!r?.stopped) {
-      view.setNote(r?.reason || '멈추지 못했습니다 — 리브가 계속 일하고 있습니다.');
-      stopping = false;
-    }
+  /** 세션 대화창의 대화 칸(.livc-wrap)에 물음 자리를 끼운다 — 입력칸(.livc-note·.livc-foot) 바로 위. */
+  function dockAsk(): void {
+    const wrap = host.querySelector('.sc-chat .livc-wrap');
+    if (!wrap) return;
+    const note = wrap.querySelector(':scope > .livc-note');
+    if (note) note.before(askHost); else wrap.append(askHost);
   }
 
-  view = createChatView(host, {
-    who: { me: '나', ai: '리브' },
-    placeholder: '리브에게 말하기',
-    busyPlaceholder: '리브가 하는 중…',
-    toolLabel,
-    thinking: 'hide',
-    sendWhileBusy: false,
-    // 그림은 세션 대화창과 같은 Claude Desktop 문법(상민님 결정 2026-08-18 — "리브도 desktop 스타일로"): 오른쪽 말풍선·이름표 없는 답·
-    //  연속 도구 한 줄 접힘·✻. #1631 의 '일지' 그림은 chat-view 의 journal 변형으로 남아 있다(한 플래그).
-    style: 'desktop',
-    onSend: (text) => sendTurn(text),
-    onStop: stopTurn,
-    escActive: () => document.body.dataset.route === 'liv' || !!document.body.dataset.ui,
-    opening: null,   // 첫 화면의 초대는 편지가 한다(#1719 재구성) — 같은 초대를 두 곳에 두지 않는다
-    askHost,
-  });
-
-  async function drain(turnId: string, t: ChatTurn, from0 = 0): Promise<void> {
-    let from = from0;
-    let sawText = false;
-    let fails = 0;
-    let grewAt = Date.now();
-    for (;;) {
-      let tail: TailResult;
-      try {
-        tail = await api(`/api/ui/me/liv/turn/${encodeURIComponent(turnId)}?from=${from}`) as TailResult;
-        fails = 0;
-      } catch (e) {
-        // 한 번 끊겼다고 턴을 버리지 않는다 — 리브는 서버에서 계속 일하고 진행도 계속 쌓인다. 오프셋을 들고 다시 붙는다.
-        fails++;
-        if (fails <= RETRY_MAX) { await new Promise((s) => setTimeout(s, Math.min(POLL_MS * 2 ** (fails - 1), 5000))); continue; }
-        view.error(t, '진행을 따라가지 못했습니다. 리브는 계속 일하고 있을 수 있으니, 화면을 새로고침하면 이어서 보입니다.');
-        return;
-      }
-      if (tail.chunk) {
-        for (const line of tail.chunk.split('\n')) {
-          if (!line.trim()) continue;
-          let ev: any;
-          try { ev = JSON.parse(line); } catch { continue; }  // 잘린 줄 — 다음 청크에서 온전히 온다
-          if (ev.type === 'stream_event') { view.stream(t, ev); sawText = true; continue; }
-          if (ev.type === 'result') {
-            if (!sawText && String(ev.result ?? '').trim()) view.event(t, { type: 'assistant', message: { content: [{ type: 'text', text: String(ev.result) }] } });
-            continue;
-          }
-          if (view.event(t, ev).text) sawText = true;
-        }
-        from = tail.next ?? from;
-        grewAt = Date.now();
-        view.scroll();
-      }
-      if (tail.done) { view.settle(t, { exit: tail.exit }); view.scroll(); return; }
-      if (Date.now() - grewAt > STALL_MS) {
-        view.settle(t);
-        view.error(t, '이 요청은 끝나지 못했습니다(진행이 멈췄어요). 다시 말씀해 주시면 이어서 해 보겠습니다.');
-        return;
-      }
-      await new Promise((s) => setTimeout(s, POLL_MS));
-    }
+  /** 일하는 중 — 대화창의 입력 상자가 도는 동안 dt-busy 를 단다(chat-view busy). 그 표식을 그대로 읽는다. */
+  function watchBusy(): void {
+    const form = host.querySelector('.sc-chat .livc-compose');
+    if (!form) { setBusy(false); return; }
+    const read = (): void => { if (livHost === host) setBusy(form.classList.contains('dt-busy')); };
+    read();
+    new MutationObserver(read).observe(form, { attributes: true, attributeFilter: ['class'] });
   }
 
-  /**
-   * 지난 대화를 되그린다 — 일지인데 지난 장을 못 펼치면 일지가 아니다.
-   * 턴 목록만 받아 각 턴의 진행을 처음부터 한 번씩 읽어 같은 방식으로 그린다. 조각은 건너뛴다(완성본에 같은 글이 있다).
-   * 마지막 턴이 아직 돌고 있으면 거기서부터 live 로 이어붙는다.
-   */
-  async function replayHistory(): Promise<void> {
-    type Chat = { turns?: Array<{ id: string; text: string; at?: string; hidden?: boolean; kind?: string }> } | null;
-    let chat: Chat = null;
-    try { chat = ((await api('/api/ui/me/liv/chat')) as { chat: Chat }).chat; } catch { return; }
-    const turns = chat?.turns ?? [];
-    if (!turns.length) return;
-    view.removeOpening();
-    for (const tt of turns) {
-      //  서버가 띄운 숨김 턴(킥오프·증류)은 사람 말풍선을 그리지 않는다 — 위 AutoKind 머리말.
-      const auto = tt.hidden ? autoKind(tt.kind) : null;
-      const t = view.turn(auto ? null : tt.text, { ts: tt.at });
-      let tail: TailResult | null = null;
-      try { tail = await api(`/api/ui/me/liv/turn/${encodeURIComponent(tt.id)}?from=0`) as TailResult; }
-      catch { t.work.remove(); continue; }
-      for (const line of String(tail.chunk ?? '').split('\n')) {
-        if (!line.trim()) continue;
-        let ev: any; try { ev = JSON.parse(line); } catch { continue; }
-        if (ev.type === 'stream_event' || ev.type === 'result') continue;
-        view.event(t, ev);
-      }
-      const ageMs = tt.at ? Date.now() - Date.parse(tt.at) : 0;
-      if (auto) autoFace(t, auto, !tail.done && ageMs <= 30 * 60_000);
-      if (!tail.done && ageMs > 30 * 60_000) {
-        // 반나절 전에 시작해 아직도 '도는 중'인 턴 — 실행 세션이 죽어 done 이 안 찍힌 것이다(위 STALL_MS 주석). 잠그지 않는다.
-        view.settle(t);
-        view.error(t, '이 요청은 끝나지 못했습니다(그때 진행이 멈췄어요). 다시 말씀해 주시면 이어서 해 보겠습니다.');
-      } else if (!tail.done) {
-        running = tt.id; stopping = false;
-        view.running(t); view.busy(true);
-        void drain(tt.id, t, tail.next ?? 0).finally(() => { running = null; view.settle(t); view.busy(false); if (auto) autoFace(t, auto, false); });
-      } else {
-        view.settle(t);
-      }
-      view.scroll();
+  /** o.sent = 방금 그 말로 세션을 열었다(서버가 넣는다) · o.draft = 아직 안 간 말(못 붙이면 입력칸으로 돌려준다). */
+  async function show(id: string, o: { sent?: boolean; draft?: string } = {}): Promise<void> {
+    const my = ++gen;
+    if (ownsHandle) handle?.destroy();
+    handle = null;
+    emptyView?.destroy();                      // 빈 대화의 Esc·시계 리스너를 걷는다(화면은 곧 대화창이 덮는다)
+    emptyView = null;
+    setBusy(false);
+    let h: SessionChatHandle | null = null;
+    try { h = await mount(host, id, { onResumed: (nid) => { void show(nid); }, isVisible }); }
+    catch (e) { console.warn('[liv] 리브 세션 대화창을 붙이지 못했다', e); }
+    if (my !== gen || !host.isConnected) { if (ownsHandle) h?.destroy(); return; }
+    if (!h) {
+      //  목록에서 못 찾았다(지워졌거나 목록이 아직 안 왔다) — 막다른 화면 대신 말할 자리를 준다. 첫 말이 새로 열거나 그 세션을 되찾는다.
+      //  ⚠ 방금 친 말을 잃지 않는다 — 안 갔으면 입력칸으로 돌려주고, 이미 갔으면 갔다고 말한다(다시 보내면 두 번 간다).
+      if (o.sent) paintEmpty('리브에게 보냈습니다. 대화를 아직 불러오지 못했으니 잠시 뒤 새로고침해 주세요.');
+      else if (o.draft) paintEmpty('보내지 못했습니다 — 리브 대화를 불러오지 못했습니다. 아래 글을 다시 보내 주세요.', o.draft);
+      else paintEmpty('지난 대화를 불러오지 못했습니다. 말씀하시면 이어서 하겠습니다.');
+      return;
     }
+    handle = h;
+    dockAsk();
+    watchBusy();
   }
 
-  async function sendTurn(text: string): Promise<void> {
-    view.removeOpening();
+  /** 말 보내기 — 붙은 대화창의 입력칸으로 넣고 보낸다(멈춘 세션이면 대화창이 되살리면서 보낸다). */
+  function sendIntoSession(text: string): void {
+    const input = host.querySelector('.sc-chat .livc-input') as HTMLTextAreaElement | null;
+    const form = host.querySelector('.sc-chat .livc-compose') as HTMLFormElement | null;
+    if (!input || !form) return;
+    input.value = text;
+    input.dispatchEvent(new Event('input'));
+    if (!input.disabled) form.requestSubmit();
+  }
+
+  /** 리브 세션이 아직 없다 — 입력칸만 있는 빈 대화. 첫 말이 세션을 연다. */
+  function paintEmpty(note?: string, draft?: string): void {
+    ++gen;
+    if (ownsHandle) handle?.destroy();
+    handle = null;
+    emptyView?.destroy();
+    setBusy(false);
+    let view: ChatView | null = null;
+    view = createChatView(host, {
+      who: { me: '나', ai: '리브' },
+      placeholder: '리브에게 말하기',
+      busyPlaceholder: '리브를 부르는 중…',
+      toolLabel: (name: string) => ({ label: name }),
+      thinking: 'hide',
+      sendWhileBusy: false,
+      style: 'desktop',
+      onSend: (text) => (view ? startWith(view, text) : undefined),
+      escActive: () => false,
+      opening: null,   // 첫 화면의 초대는 편지가 한다(#1719 재구성) — 같은 초대를 두 곳에 두지 않는다
+      askHost,
+    });
+    if (note) view.setNote(note);
+    if (draft) { view.input.value = draft; view.input.dispatchEvent(new Event('input')); }
+    emptyView = view;
+  }
+
+  async function startWith(view: ChatView, text: string): Promise<void> {
+    const my = gen;
     const t = view.turn(text);
-    view.running(t); view.scroll(); view.busy(true);
+    view.running(t); view.busy(true); view.scroll();
+    let r: LivOpened;
     try {
-      const r = await api('/api/ui/me/liv/turn', { method: 'POST', body: JSON.stringify({ text }) }) as TurnStart;
-      running = r.turn_id; stopping = false;
-      await drain(r.turn_id, t);
+      r = await api('/api/ui/me/liv/session', { method: 'POST', body: JSON.stringify({ text }) }) as LivOpened;
     } catch (e) {
+      view.settle(t); view.busy(false);
       view.error(t, `보내지 못했습니다. ${(e as Error).message}`);
-    } finally {
-      running = null; stopping = false;
-      view.settle(t); view.busy(false); view.input.focus();
+      return;
     }
+    if (my !== gen || !host.isConnected) return;
+    if (r.created) {
+      //  세션 대화창이 붙자마자 이 말을 «보낸 모양» 으로 먼저 그린다(서버가 입력창이 뜬 뒤 실제로 넣는다).
+      rememberFirstPrompt(r.session_id, text);
+      if (r.session) { rememberCreated(r.session); opts.onSessionCreated?.(r.session); }
+      await show(r.session_id, { sent: true });
+      return;
+    }
+    //  이미 리브 세션이 있었다(다른 탭·처음 설정이 방금 열었다) — 그 대화창을 붙이고 거기서 보낸다.
+    await show(r.session_id, { draft: text });
+    if (handle) sendIntoSession(text);
   }
 
-  void replayHistory();
-  view.input.focus();
+  async function boot(): Promise<void> {
+    const my = gen;
+    let ref: LivSessionRef | null = null;
+    try { ref = await api('/api/ui/me/liv/session') as LivSessionRef; }
+    catch { ref = null; }
+    if (my !== gen || !host.isConnected) return;
+    if (ref && ref.session_id) await show(ref.session_id);
+    else paintEmpty(ref ? undefined : '리브 대화를 확인하지 못했습니다. 말씀하시면 이어서 하겠습니다.');
+  }
+
+  void boot();
 }
 
-/**
- * 카드(맡기기·객관식 답·업로드·자격 저장)가 리브에게 말을 거는 **유일한 문**.
- * 리브가 답하는 중이면 버리지 않고 기다린다 — 끝내 못 보내면 친 글은 입력칸에 남겨 사람이 직접 보낼 수 있게 한다.
- */
+/** 이 리브 칸의 입력칸 — 세션 대화창이 붙었으면 그 입력칸, 아니면 빈 대화의 입력칸. */
+function livInput(): { input: HTMLTextAreaElement; form: HTMLFormElement } | null {
+  const h = livHost;
+  if (!h || !h.isConnected) return null;
+  const input = h.querySelector('.livc-input') as HTMLTextAreaElement | null;
+  const form = h.querySelector('.livc-compose') as HTMLFormElement | null;
+  return input && form ? { input, form } : null;
+}
+
 /**
  * 입력칸에 **담기만** 한다(보내지 않는다). 침묵 화면의 '이런 것도 부탁하실 수 있어요' 가 쓰는 문.
  * 보내기까지 하면 사람이 문장을 고칠 기회를 뺏는다 — 예시는 출발점이지 완성된 지시가 아니다.
  */
 export function livChatFill(text: string): void {
-  const input = document.querySelector('.livc-input') as HTMLTextAreaElement | null;
-  if (!input) return;
-  input.value = text;
-  input.dispatchEvent(new Event('input'));
-  input.focus();
+  const c = livInput();
+  if (!c) return;
+  c.input.value = text;
+  c.input.dispatchEvent(new Event('input'));
+  c.input.focus();
 }
 
+/**
+ * 카드(맡기기·객관식 답·업로드·자격 저장)가 리브에게 말을 거는 **유일한 문**.
+ * 리브 칸이 아직 준비 중이면(세션 대화창을 붙이는 중) 기다린다 — 끝내 못 보내면 친 글은 입력칸에 남겨 사람이 직접 보낼 수 있게 한다.
+ */
 export function livChatAsk(text: string): void {
   const t0 = Date.now();
   const tryOnce = (): void => {
-    const form = document.querySelector('.livc-compose') as HTMLFormElement | null;
-    const input = document.querySelector('.livc-input') as HTMLTextAreaElement | null;
-    if (!form || !input) return;
-    if (input.disabled) {
-      if (Date.now() - t0 > 120_000) { input.value = text; return; }
+    const c = livInput();
+    if (!c || c.input.disabled) {
+      if (Date.now() - t0 > 120_000) { if (c) c.input.value = text; return; }
       setTimeout(tryOnce, 500);
       return;
     }
-    input.value = text;
-    form.requestSubmit();
+    c.input.value = text;
+    c.input.dispatchEvent(new Event('input'));
+    c.form.requestSubmit();
   };
   tryOnce();
 }

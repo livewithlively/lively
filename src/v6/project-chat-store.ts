@@ -16,7 +16,7 @@ export interface ProjectChat {
   turns: ProjectChatTurn[];
 }
 
-/** 되그리기 목차 상한 — 그 이상은 앞부터 버린다(대화 자체는 하네스 세션이 기억한다). 홈 리브(members.ts appendLivTurn cap 30)와 같은 크기 감각. */
+/** 되그리기 목차 상한 — 그 이상은 앞부터 버린다(대화 자체는 하네스 세션이 기억한다). 홈 리브 v1(members.ts appendLivTurn cap 30 — #4032 에서 진짜 세션으로 옮기며 걷었다)과 같은 크기 감각. */
 const TURN_CAP = 40;
 
 function rowToChat(row: any): ProjectChat | null {
