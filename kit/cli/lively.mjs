@@ -2764,7 +2764,7 @@ async function cmdSetup(opts = {}) {
   if (opts.cloud) {
     await cmdLogin({ cloud: opts.cloud });
     await cmdInstall(opts);
-    say(dim("\n  ") + bold("lively onboarding") + dim(" 을 실행하여 라이블리 초기 설정을 진행하세요."));
+    setupDoneHints();
     return;
   }
   if (opts.gateway) writeLively("gateway-url", normGw(opts.gateway));
@@ -2778,8 +2778,18 @@ async function cmdSetup(opts = {}) {
   else if (accepted === null) info("로그인 상태를 확인하지 못했습니다(네트워크?) — 그대로 설치를 시도합니다.");
   else await cmdLogin({});
   await cmdInstall(opts);
-  // 설치 완료 → 온보딩 안내(정적 문구만 · #1024). 자동 실행·Y/n 프롬프트 없음 — 대화형/비대화형 모두 안전.
+  setupDoneHints();
+}
+
+// 설치 완료 안내 — 클라우드·자체 호스팅 **두 출구가 같은 말**을 하도록 한 자리에 둔다(정적 문구만 · #1024).
+//  자동 실행·Y/n 프롬프트 없음 — 대화형/비대화형 모두 안전.
+function setupDoneHints() {
   say(dim("\n  ") + bold("lively onboarding") + dim(" 을 실행하여 라이블리 초기 설정을 진행하세요."));
+  // 노드 연결은 **login·install 과 별개의 단계**다 — 이 안내가 없으면 설치를 끝낸 사람이 [내 컴퓨터] 목록에
+  //  자기 기계가 없는 것을 보고 "연결이 실패했다"고 읽는다(실제로는 아무도 시키지 않은 명령이 남아 있는 것).
+  //  문서(#/learn/docs/nodes)엔 두 줄로 적혀 있지만 설치 흐름의 어느 출력에도 나오지 않았다.
+  //  ⚠ 선택이다 — 웹에서 이 컴퓨터로 세션을 열거나 작업을 맡길 때만 필요한 상시 데몬이라 «시키지» 않고 알린다.
+  say(dim("  ") + bold("lively node --daemon") + dim(" 을 실행하면 이 컴퓨터가 [내 컴퓨터] 목록에 연결됩니다(선택 — 웹에서 세션 열기·작업 위탁)."));
 }
 
 // ── 10. 인자 파싱 · 디스패치 ───────────────────────────────────────────────
