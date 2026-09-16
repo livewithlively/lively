@@ -45,6 +45,9 @@ const HOOK_CASES = [
     path: "/api/ui/terminal/usage", rule: "pane" },
   { hook: "work-flag.mjs", args: [], stdin: { session_id: SID, hook_event_name: "SessionStart" },
     path: "/claude-uuid", rule: "pane", boxOnly: true },
+  // work-flag 의 정상종료 보고는 SessionStart 와 **다른 분기**다(자격을 따로 고른다) — 첫 판이 여기서도 파일을 우선했다.
+  { hook: "work-flag.mjs", args: [], stdin: { session_id: SID, hook_event_name: "SessionEnd", reason: "prompt_input_exit" },
+    path: "/exited", rule: "pane", boxOnly: true },
   { hook: "self-update.mjs", args: [], stdin: null, path: "/api/ui/org/runtime-config", rule: "file" },
 ];
 
@@ -90,6 +93,9 @@ const MODES = [
     pane: { gw: "plugin", tok: "plugin" } },
   { key: "M9 라이블리 pane · 플러그인 옵션", sid: "box-credtest-1", files: true, env: ENVF, plugin: true, only: "session-preload.mjs",
     pane: { gw: "env", tok: "env" } },
+  //  pane 에서도 플러그인은 파일보다 앞이다(env 가 비었을 때) — M9 는 env 가 이겨 이 순서를 못 본다.
+  { key: "M10 라이블리 pane · env 없음 · 플러그인 옵션", sid: "box-credtest-1", files: true, env: { tok: false, gw: false }, plugin: true,
+    only: "session-preload.mjs", pane: { gw: "plugin", tok: "plugin" } },
 ];
 
 // 스텁 게이트웨이 — 받은 요청을 적고 404 로 답한다(훅은 전부 fail-open). 러너 훅 목록에만 본문 훅 하나를 준다:
@@ -180,7 +186,7 @@ await Promise.all(Array.from({ length: 6 }, async () => {
 jobs.forEach(({ mode, c, want }, i) => {
   const { r, log, urls } = results[i];
   const hits = log.filter((h) => h.path.endsWith(c.path));
-  const name = `${mode.key} · ${c.hook}`;
+  const name = `${mode.key} · ${c.hook}${c.stdin?.hook_event_name ? `(${c.stdin.hook_event_name})` : ""}`;
   if (!want) {
     check(`${name} → 요청 없음`, hits.length === 0,
       `요청 ${hits.length}건: ${hits.map((h) => `${h.gw} ${h.auth}`).join(" · ")}`);
