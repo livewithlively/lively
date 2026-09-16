@@ -472,12 +472,94 @@ async function assertNotGatewayBox(tmuxPath) {
     + "\n  (이 컴퓨터의 세션은 웹에서 '중앙 컴퓨터(기본)' 로 그대로 열립니다.)", 2);
 }
 
+/**
+ * `lively node` 인자 해석(순수 — 테스트 seam).
+ *
+ * ★ 왜 판정을 떼어냈나(#4006, 2026-09-16 실측): 종전 해석은 `rest[0]` + `includes("--daemon")` 뿐이라
+ *  **모르는 인자를 통째로 무시**했다. 그래서 `lively node --help` 가 도움말이 아니라 인자 없는 `lively node`
+ *  와 똑같이 동작했고, 이미 데몬이 도는 컴퓨터에서 같은 id 에이전트를 하나 더 띄웠다. 게이트웨이는 같은
+ *  노드의 새 연결마다 옛 연결을 끊으므로(src/node/registry.ts) 둘이 1초 간격으로 서로를 쫓아냈다 —
+ *  3분 동안 교체 162회, 그 노드의 웹 터미널이 2초마다 끊겼다 붙었다
+ *  (지식 `lively-node-help-flag-starts-duplicate-agent`).
+ *  «모르면 실행한다» 를 «모르면 멈추고 사용법을 보여준다» 로 뒤집는 자리라 표로 고정한다.
+ *
+ * @param {string[]} rest `lively node` 뒤의 인자 원형
+ * @returns {{action:"help"|"stop"|"keepawake"|"run", daemon:boolean, id:string|null, rest:string[], error:string|null}}
+ */
+export function parseNodeArgv(rest = []) {
+  const out = { action: "run", daemon: false, id: null, rest: [], error: null };
+  const args = (Array.isArray(rest) ? rest : []).map((a) => String(a));
+  // 도움말이 가장 세다 — `--daemon --help` 처럼 섞여 와도 **아무것도 기동하지 않는다**(그게 이 가드의 요지다).
+  if (args.some((a) => a === "--help" || a === "-h") || args[0] === "help") return { ...out, action: "help" };
+  if (args[0] === "stop") return { ...out, action: "stop", rest: args.slice(1) };
+  // keepawake 뒤 인자(on/off)는 그대로 넘긴다 — 이 가드가 소비하지 않는다.
+  if (args[0] === "keepawake") return { ...out, action: "keepawake", rest: args.slice(1) };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--daemon") { out.daemon = true; continue; }
+    if (a === "--id") {
+      const v = args[i + 1];
+      // 값이 없거나 플래그 모양이면 오류다. 종전엔 조용히 호스트명 슬러그로 떨어져, 사람은 다른 이름으로
+      //  등록한 줄 알지만 실제로는 기존 노드 id 로 등록·기동되는 상태가 됐다.
+      if (v === undefined || v === "" || v.startsWith("-")) return { ...out, error: "`--id` 에는 노드 이름이 필요합니다 (예: --id my-box)" };
+      out.id = v; i++; continue;
+    }
+    return { ...out, error: a.startsWith("-") ? `알 수 없는 옵션: ${a}` : `알 수 없는 하위명령: ${a}` };
+  }
+  return out;
+}
+
+/** `lively node` 사용법 — 인자를 틀리면 **실행 대신** 이것을 보여준다. */
+export function nodeUsage() {
+  return [
+    "사용법: lively node [옵션]",
+    "",
+    "  (옵션 없음)          이 터미널에서 노드를 실행합니다 (Ctrl-C 로 종료)",
+    "  --daemon             상시화 — 부팅·로그인마다 자동 연결 (macOS LaunchAgent · Linux systemd --user)",
+    "  --id <이름>          노드 이름을 직접 지정 (기본: 이 컴퓨터의 호스트명)",
+    "  stop                 상시화 해제 (노드 등록·번들은 남습니다)",
+    "  keepawake [off]      이 컴퓨터가 자지 않게 / 되돌리기 (전역 절전 설정 변경)",
+    "  --help, -h           이 도움말",
+    "",
+    "⚠ 이 컴퓨터에서 노드 에이전트가 이미 돌고 있으면 '옵션 없음' 실행은 거부합니다 — 같은 이름으로 둘이",
+    "   붙으면 게이트웨이가 번갈아 쫓아내 웹 접속이 1초 간격으로 끊깁니다.",
+    "   먼저 `lively node stop` 으로 내리거나, 상시화는 `lively node --daemon` 으로 다시 앉히세요.",
+  ].join("\n");
+}
+
+/**
+ * 전경(포그라운드) 기동을 막아야 하나(순수 — 테스트 seam, #4006).
+ *
+ *  `running` 은 `nodeStatus().running` 의 3값을 그대로 받는다: true=돈다 · false=없다 · null=**모른다**.
+ *  ⚠ «모른다» 를 «있다» 로 눕히지 않는다 — 프로브를 못 도는 환경(권한·명령 부재)에서 처음 설치가 통째로 막힌다.
+ *   막아서 얻는 것(중복 방지)보다 잘못 막아서 잃는 것(설치 불가)이 크고, 못 막아도 종전과 같을 뿐이다.
+ *  ⚠ `--daemon` 은 스스로 옛 인스턴스를 걷고 다시 앉히므로(bootout→bootstrap · pkill→spawn) 막지 않는다 —
+ *   재실행이 곧 복구 경로다([[stale-node-agent-instance-win-relauncher-2127-2128]]).
+ */
+export function foregroundDuplicateBlock({ daemon = false, running = null } = {}) {
+  if (daemon || running !== true) return { block: false };
+  return {
+    block: true,
+    why: "이 컴퓨터에서 노드 에이전트가 이미 돌고 있습니다 — 하나 더 띄우면 게이트웨이가 둘을 번갈아 쫓아내\n"
+      + "  그 노드의 웹 접속이 1초 간격으로 끊깁니다(2026-09-16 실측).\n"
+      + "  · 그것을 내리고 이 터미널에서 돌리려면:  lively node stop   그다음   lively node\n"
+      + "  · 상시화를 다시 앉히려면:                lively node --daemon",
+  };
+}
+
 async function cmdNode(rest) {
-  const sub = rest[0];
-  if (sub === "stop") return nodeStop();
-  if (sub === "keepawake") return nodeKeepAwake(rest.slice(1));   // #1849 — 시스템 잠자기 자체를 끈다(권한 1회)
-  const daemon = rest.includes("--daemon");
-  const nodeId = (rest.includes("--id") ? rest[rest.indexOf("--id") + 1] : "") || slugHost();
+  // 인자 해석은 순수함수 한 벌이 진다(#4006) — 모르는 인자를 무시하지 않는다.
+  const parsed = parseNodeArgv(rest);
+  if (parsed.action === "help") { say(nodeUsage()); return; }
+  if (parsed.error) die(`${parsed.error}\n\n${nodeUsage()}`, 2);
+  if (parsed.action === "stop") return nodeStop();
+  if (parsed.action === "keepawake") return nodeKeepAwake(parsed.rest);   // #1849 — 시스템 잠자기 자체를 끈다(권한 1회)
+  const daemon = parsed.daemon;
+  const nodeId = parsed.id || slugHost();
+  // ★ 중복 기동 차단은 **등록·번들·기동보다 먼저** 온다(#4006) — 뒤에 두면 막더라도 node-agent.env 가 이미 덮인 뒤다.
+  //  daemon 일 때는 프로브조차 돌리지 않는다(상시화는 스스로 교체하므로 물어볼 이유가 없다).
+  const dup = foregroundDuplicateBlock({ daemon, running: daemon ? null : nodeStatus().running });
+  if (dup.block) die(dup.why, 3);
   const gw = gateway(), tok = token();
   if (!gw || !tok) die("로그인이 필요합니다 — `lively login` 먼저.", 2);
   // tmux 필수 — 웹터미널·위탁 세션이 tmux 로 실행된다. 등록/설치 전에 확보한다(반쪽 상태 방지):
