@@ -124,10 +124,12 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/project-category-apply.pg-test.mjs
-      # ⑤-b 출처 나무 집계의 의미 — 이 쿼리의 실패 양식은 크래시가 아니라 «화면 숫자만 틀림»이다.
-      #    접기 단위(대화 1건)·지식 롤업(답글→루트)·fail-open(부모 미수집)이 전부 SQL 조건이라
-      #    목으로는 검증 대상 자체가 빠진다. 상관 서브쿼리 → 사전집계 CTE 재작성의 안전망.
-      - name: 출처 나무 집계(접기·롤업) PG 통합 테스트
+      # ⑤-b 자료 접기·지식 롤업(나무·목록·총계 공용 술어)의 의미와 모양 — 실패 양식이 크래시가 아니라
+      #    «화면 숫자만 틀림» 또는 «결과는 같은데 수백 초»다. 접기 단위(대화 1건)·지식 롤업(답글→루트)·
+      #    fail-open(부모 미수집)이 전부 SQL 조건이라 목으로는 검증 대상 자체가 빠지고, 느린 모양으로 되돌아가도
+      #    결과가 같아 의미 시험으로는 안 잡힌다 — 그래서 실행 계획(해시가 아닌 SubPlan 0)까지 본다.
+      #    상관 서브쿼리 → anti-join·비상관 IN 재작성(2026-09-14 전면 장애)의 안전망.
+      - name: 자료 접기·지식 롤업(나무·목록·총계) PG 통합 테스트
         if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
