@@ -35,6 +35,11 @@ import {
   type DelegatePolicy, type DelegatePolicyPatch, resolveDelegatePolicy, normalizeDelegatePolicy,
   delegatePolicySource, invalidateDelegatePolicyCache,
 } from "../policies/delegate-policy.js";
+// 맥락관리 잡 실행 신원(#4012 T1 · #3994 D1) — 증류·분류·관리를 누구 자격으로 돌리나. 같은 seam(DB 우선, 비면 env 시드).
+import {
+  type ContextJobPolicy, type ContextJobPolicyPatch, resolveContextJobPolicy, normalizeContextJobPolicy,
+  contextJobPolicySource,
+} from "../policies/context-job-policy.js";
 import { audit } from "./audit.js";
 
 // ════════ 런타임 설정(훅 on/off · work-roots · writeback 너지) — org_runtime_config 단일행 ════════
@@ -55,6 +60,7 @@ export interface OrgRuntimeConfig {
   call_log_policy: CallLogPolicy; // MCP 호출 감사로그 보관(#1082) — 보존일수. DB 우선, 비면 env 시드 → 90일. 0=무기한
   session_memory_policy: SessionMemoryPolicy; // per-session cgroup 메모리 격리(#1059 D) — 세션당 MemoryHigh/Max(MB). 0=무제한(무회귀). DB 우선, 비면 env 시드
   session_reclaim_policy: SessionReclaimPolicy; // idle 세션 자동 회수(#1059 F) — idle TTL(분). 0=끔(무회귀). DB 우선, 비면 env 시드
+  context_job_policy: ContextJobPolicy; // 맥락관리 잡 실행 신원(#4012 T1 · #3994 D1) — 증류·분류·관리를 누구 자격으로. 미설정이면 종전 동작
   delegate_policy: DelegatePolicy; // 위탁 태스크 정책(#1101) — 무출력 stall 상한(ms). 0=가드 끔. DB 우선, 비면 env 시드 → 5분
   hook_relay_decisions: HookRelayDecision[]; // 러너가 PreToolUse 에서 전파할 결정(#892). 기본 deny/ask/defer — allow 는 명시 opt-in
   session_share: SessionShareConfig; // 세션이력 캡처 정책(#905 C1). 기본 enabled=true(#1752 — 명시 false 만 끔). 관리탭 ▸ 세션 공유.
@@ -138,7 +144,7 @@ const usageUrlSafe = (v: unknown): string | null => (typeof v === "string" && v.
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -167,6 +173,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     call_log_policy: resolveCallLogPolicy(row?.call_log_policy), // #1082 — 구 DB(컬럼 부재)면 기본값(90일)
     session_memory_policy: resolveSessionMemoryPolicy(row?.session_memory_policy), // #1059 D — DB 우선, 비면 env 시드 → 0/0(무제한, 무회귀)
     session_reclaim_policy: resolveSessionReclaimPolicy(row?.session_reclaim_policy), // #1059 F — DB 우선, 비면 env 시드 → 0(회수 끔, 무회귀)
+    context_job_policy: resolveContextJobPolicy(row?.context_job_policy), // #4012 T1 — DB 우선, 비면 env 시드 → 미설정
     delegate_policy: resolveDelegatePolicy(row?.delegate_policy), // #1101 — DB 우선, 비면 env 시드 → 300000(5분)
     hook_relay_decisions: relayDecisionsSafe(row?.hook_relay_decisions), // #892 — 구 DB(컬럼 부재)면 기본값
     session_share: resolveSessionShare(row?.session_share), // #905 C1 — 구 DB(컬럼 부재)면 기본값(enabled=false)
@@ -206,6 +213,7 @@ export async function updateRuntimeConfig(
     session_memory_policy?: SessionMemoryPolicyPatch;
     session_reclaim_policy?: SessionReclaimPolicyPatch;
     delegate_policy?: DelegatePolicyPatch;
+    context_job_policy?: ContextJobPolicyPatch;
     hook_relay_decisions?: HookRelayDecision[];
     session_share?: SessionSharePatch;
     hook_grace_ms?: number | null;
@@ -317,6 +325,16 @@ export async function updateRuntimeConfig(
     const raw = await itemsPool.query(`SELECT delegate_policy FROM org_runtime_config WHERE id=1`);
     delegatePolicy = (raw.rows[0] as { delegate_policy?: unknown } | undefined)?.delegate_policy ?? {};
   }
+  // 맥락관리 잡 실행 신원(#4012 T1) — 위와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**.
+  //  ⚠ before 를 병합의 바닥으로 쓰지 않는다 — before 는 env 시드가 섞인 resolved 값이라, 관리탭에서
+  //   실행 멤버를 **지운** 저장이 시드로 되살아난다(사람이 끈 것이 안 꺼진다). patch 를 그대로 정규화한다.
+  let contextJobPolicy: unknown;
+  if (patch.context_job_policy !== undefined) {
+    contextJobPolicy = normalizeContextJobPolicy(patch.context_job_policy);
+  } else {
+    const raw = await itemsPool.query(`SELECT context_job_policy FROM org_runtime_config WHERE id=1`);
+    contextJobPolicy = (raw.rows[0] as { context_job_policy?: unknown } | undefined)?.context_job_policy ?? {};
+  }
   // 세션 공유(#905 C1) — storage_policy 와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**(before 되쓰기 금지).
   //  건드리면 before(resolved) 위에 patch 를 얹어 정규화(잡값·미지원 하네스·범위초과 방어).
   let sessionShare: unknown;
@@ -334,8 +352,8 @@ export async function updateRuntimeConfig(
     : before.oidc_config;
 
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$21,$27::jsonb,$23::jsonb,$24::jsonb,$25,$26,$28,$29,$30,$31::jsonb,1,now(),$13)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$21,$27::jsonb,$23::jsonb,$24::jsonb,$25,$26,$28,$29,$30,$31::jsonb,$32::jsonb,1,now(),$13)
      ON CONFLICT (tenant_id, id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
@@ -349,12 +367,13 @@ export async function updateRuntimeConfig(
        inject_ontology_guide=EXCLUDED.inject_ontology_guide, oidc_config=EXCLUDED.oidc_config,
        ui_nav=EXCLUDED.ui_nav, announcement=EXCLUDED.announcement, ui_profile=EXCLUDED.ui_profile, usage_url=EXCLUDED.usage_url,
        ui_mode=EXCLUDED.ui_mode, workspace_kind=EXCLUDED.workspace_kind, workspace_hub_url=EXCLUDED.workspace_hub_url, worker_policy=EXCLUDED.worker_policy,
+       context_job_policy=EXCLUDED.context_job_policy,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
      JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs, embeddingBackfillPaused, JSON.stringify(sessionMemoryPolicy), JSON.stringify(sessionReclaimPolicy), JSON.stringify(callLogPolicy), injectOntologyGuide, JSON.stringify(delegatePolicy),
      // #1454 S2~S5 — announcement 는 null 이면 SQL NULL(json 'null' 이 아니라 컬럼 NULL — 미표시의 정본 표현).
      JSON.stringify(uiNav), announcement === null ? null : JSON.stringify(announcement), uiProfile, usageUrl,
-     JSON.stringify(oidcConfig), uiMode, workspaceKind, workspaceHubUrl, JSON.stringify(workerPolicy)],
+     JSON.stringify(oidcConfig), uiMode, workspaceKind, workspaceHubUrl, JSON.stringify(workerPolicy), JSON.stringify(contextJobPolicy)],
   );
   // 저장 즉시 반영 — /readyz 임계치·로그 재니터가 캐시를 들고 있다(게이트웨이 재시작 없이 먹어야 한다).
   if (patch.storage_policy !== undefined) invalidateStoragePolicyCache();
@@ -416,6 +435,11 @@ export function getSessionReclaimPolicySource(): Promise<"db" | "env" | "default
 // 위탁 태스크 정책(#1101)의 출처(관리 UI 안내) — db(관리탭 저장)·env(.env 시드)·default(코드 기본값).
 export function getDelegatePolicySource(): Promise<"db" | "env" | "default"> {
   return policySourceOf("delegate_policy", delegatePolicySource);
+}
+
+// 맥락관리 잡 실행 신원(#4012 T1)의 출처(관리 UI 안내) — db(관리탭 저장)·env(.env 시드)·default(미설정).
+export function getContextJobPolicySource(): Promise<"db" | "env" | "default"> {
+  return policySourceOf("context_job_policy", contextJobPolicySource);
 }
 
 // ── 매니지드 표면 노브 4종만 경량 조회(#1454 S2~S5) — /api/ui/me 전용. ──

@@ -1,5 +1,5 @@
 // 크론 액션: 미매핑 코드 분류(map_unmapped·map_unmapped_headless)·레포 is 최초 부트스트랩(bootstrap_is) — R16 원문 이동.
-import { resolveSessionTmux, injectToSession, headlessRequester, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
+import { resolveSessionTmux, injectToSession, resolveJobRunner, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 
 // LLM 판단주체 — 상시 LLM 세션(라이블리 시드, **팀플랜 과금 내**)에 분류 태스크를 주입한다.
 //  ⚠ 원 결정("headless `claude -p`+토큰 = API 별도 과금이라 폐기")은 스테일 — F5 실측(2026-07-15)에서 headless claude -p 는
@@ -31,7 +31,7 @@ export async function runMapInject(params: Record<string, unknown>): Promise<{ s
 //  repo 를 위탁에 넘겨 공유 base clone→worktree 를 작업 cwd 로 자동 준비 → 헤드리스 세션이 코드를 Read/Grep 할 수 있다(세션판보다 오히려 코드 접근이 확실).
 export async function runMapHeadless(params: Record<string, unknown>, jobId: string, createdBy: string | null): Promise<{ status: string; summary: unknown }> {
   const repo = String(params.repo ?? "context-ontology");
-  const requester = headlessRequester(params, createdBy);
+  const requester = await resolveJobRunner(params.requester, createdBy);
   if (!requester) return HEADLESS_REQUESTER_MISSING;
   const { listUnmappedCodeUnits } = await import("../../domainmap/core/mappings.js");
   let inbox: Array<{ path: string }>;

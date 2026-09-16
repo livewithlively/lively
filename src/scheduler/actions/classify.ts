@@ -2,7 +2,7 @@
 //  #1419 T4 — 분류기(org_classifier)가 생기면서 대상·기준·후보축이 **설정**이 됐다. 잡은 두 모드로 돈다:
 //   · params.classifier 지정 → 그 분류기 하나 · 미지정 → 켜진 분류기 전부(병렬 접수, 증류 잡과 동형)
 //   · 분류기가 하나도 없으면 **종전 전역 동작 그대로**(무중단 — listUnmappedKnowledge(50) + 기존 프롬프트)
-import { resolveSessionTmux, injectToSession, headlessRequester, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
+import { resolveSessionTmux, injectToSession, resolveJobRunner, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 import { listClassifiers, getClassifier, classifierInbox, markClassifierSeen, recordClassifierRun, type ClassifierRow } from "../../org/store/classifiers.js";
 
 // #982 미분류 지식 분류 주입 — map_unmapped 의 지식판. 카테고리 0건 지식이 있을 때만 상시세션에 분류 프롬프트 주입.
@@ -30,7 +30,7 @@ export async function runClassifyKnowledgeInject(params: Record<string, unknown>
 // #1061 classify_knowledge 의 헤드리스판 — 인박스(미분류 지식) 있을 때만, 매 배치 fresh claude -p 로 분류(관성 회피).
 //  buildClassifyKnowledgePrompt(세션판과 동일 — 관성 대응 '매 배치 should 재조회·근거 인용 강제' 포함) 재사용. 배치 50/수렴은 인박스가 담보(다음 주기가 잔여 드레인).
 export async function runClassifyKnowledgeHeadless(params: Record<string, unknown>, jobId: string, createdBy: string | null): Promise<{ status: string; summary: unknown }> {
-  const requester = headlessRequester(params, createdBy);
+  const requester = await resolveJobRunner(params.requester, createdBy);
   if (!requester) return HEADLESS_REQUESTER_MISSING;
 
   // ── #1419 T4 — 분류기가 있으면 분류기별로 접수(배타 배정·기준·후보축이 분류기 설정에서 온다). ──

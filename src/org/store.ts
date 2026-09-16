@@ -56,7 +56,7 @@ export {
   HOOK_RELAY_DECISIONS, DEFAULT_HOOK_RELAY_DECISIONS,
   getRuntimeConfig, updateRuntimeConfig, getUiSurface,
   getEmbeddingConfigSource, getStoragePolicySource, getCallLogPolicySource,
-  getSessionMemoryPolicySource, getSessionReclaimPolicySource, getDelegatePolicySource,
+  getSessionMemoryPolicySource, getSessionReclaimPolicySource, getDelegatePolicySource, getContextJobPolicySource,
 } from "./store/runtime-config.js";
 export type { OrgRuntimeConfig, HookRelayDecision, UiNavConfig, UiAnnouncement, UiProfile, UiSurfaceConfig, WorkspaceKind } from "./store/runtime-config.js";
 
