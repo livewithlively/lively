@@ -134,3 +134,16 @@ test("★ 시작에 실패해도 던지지 않는다 — 막다른 카드를 만
   assert.match(c, /\$\{base\}\/start[^]{0,300}catch \(e\)[^]{0,120}view\.failed/,
     "시작 실패는 화면에 한 줄로 알리고, 화면은 종전 «창으로 열기» 를 그대로 둔다");
 });
+
+test("★ #4051 헤드리스 시작이 실패하면 조회하지 않는다 — 구체적 사유를 «시작 중»·«늦네요» 로 덮지 않는다", () => {
+  //  리뷰(#4051): 시작 실패(암호화 키 없음 · tmux 없음 · 중계 실패) 뒤에도 폴링하면, 빈 자리의 조회가 그 사유를
+  //   «시작 중» → 30초 뒤 «주소가 늦네요» 로 덮는다. 사람은 엉뚱한 안내를 보고 [다시 시도]만 반복한다.
+  const c = code(SRC);
+  const i = c.indexOf("catch (e) {", c.indexOf("${base}/start"));
+  assert.ok(i > 0, "시작 실패 자리를 찾았다");
+  const block = c.slice(i, c.indexOf("void tick();", i));
+  assert.ok(block.length > 0 && block.length < 400, "시작 실패 블록이 폴링 시작보다 앞에 있다");
+  assert.match(block, /view\.failed\(/, "사유를 먼저 알린다");
+  assert.match(block, /if \(purpose === 'headless'\) \{ stopped = true; return; \}/, "헤드리스는 거기서 멈춘다(폴링을 시작하지 않는다)");
+  assert.ok(!/purpose === 'login'/.test(block), "대화형 로그인의 종전 동작은 건드리지 않는다");
+});

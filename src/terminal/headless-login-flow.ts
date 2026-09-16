@@ -104,12 +104,22 @@ export interface HeadlessLoginState extends AiLoginState {
   stored?: boolean;
 }
 
+/** 러너가 끝났는데 저장도 잡음도 종료 오류도 없을 때 사람에게 하는 말(화면이 [다시 시도] 안내를 덧붙인다). */
+export const HEADLESS_ENDED_MESSAGE = "연결 시도가 끝났어요(취소됐거나 시간이 지났어요).";
+/** 잡았다는 기록은 있는데 자격 파일도 러너도 없다 — 저장하기 전에 사라졌다(상한 · 자리 회수). 기다려도 안 온다. */
+export const HEADLESS_LOST_MESSAGE = "자격을 받았지만 저장하기 전에 연결 시도가 끝났어요.";
+
 /**
  * (순수) 러너 로그 → 화면 상태.
  *  주소·코드·붙여넣기 판단은 대화형 로그인 파서를 그대로 쓴다 — 출력 모양이 같다(머리말). 여기서 더하는 것은
- *  «자격을 잡았나» 와 «저장했나» 둘뿐이다.
+ *  «자격을 잡았나» · «저장했나» · «러너가 끝났나» 셋이다.
+ *  `ended` — 러너가 더는 없고 **거둘 자격 파일도 없다**(headlessStateOf 가 그렇게만 넘긴다). 그때 화면에 남은 주소·코드는
+ *   받을 러너가 없는 것이라 내보내지 않는다 — 사람이 그 주소로 승인하고 코드를 넣어도 아무 일이 없다(실측 2026-09-17).
+ *   기록에 «잡았다» 표시가 있었다면 그 자격은 저장 전에 사라진 것이다 — «기다림» 에 두면 영영 안 끝난다.
  */
-export function parseHeadlessLogin(h: HeadlessLoginHarness, raw: string, o: { stored?: boolean } = {}): HeadlessLoginState {
+export function parseHeadlessLogin(
+  h: HeadlessLoginHarness, raw: string, o: { stored?: boolean; ended?: boolean } = {},
+): HeadlessLoginState {
   //  ⚠ 로그에는 토큰이 없어야 한다(러너가 표식으로 바꿔 쓴다). 혹시 남아 있어도 **화면으로는 절대 안 내보낸다** —
   //   파서가 보는 글에서 먼저 지운다(주소 고르기가 토큰을 주소 조각으로 오인할 일도 함께 막는다).
   const text = redactSetupToken(raw);
@@ -124,6 +134,13 @@ export function parseHeadlessLogin(h: HeadlessLoginHarness, raw: string, o: { st
       ? "승인은 끝났지만 자격을 받지 못했어요. 다시 시도해 주세요."
       : `연결 명령이 ${st.exitCode} 로 끝났어요.`;
   }
+  //  저장했으면 끝난 러너가 정상이다. 종료 오류가 있으면 그 문장이 더 구체적이다.
+  if (o.ended && !st.stored) {
+    if (!st.error) st.error = st.captured ? HEADLESS_LOST_MESSAGE : HEADLESS_ENDED_MESSAGE;
+    delete st.url;
+    delete st.code;
+    st.needsPaste = false;
+  }
   return st;
 }
 
@@ -135,4 +152,20 @@ export function headlessLoginStep(st: HeadlessLoginState): AiLoginStep {
   if (!st.url) return st.exited ? "failed" : "starting";
   if (st.needsPaste) return "paste-code";
   return st.exited ? "waiting" : "open-url";
+}
+
+/**
+ * (순수) 상태 경로가 사람에게 줄 한 장 — 이번 조회(기록 · 러너 수명 · 거둘 자격 파일이 있나) + 이번 조회의 저장 결과.
+ *  ⚠ «끝남» 은 **거둘 자격 파일이 없을 때만** 판정에 넘긴다 — 러너가 끝났어도 자격 파일이 있으면 이번 조회가 저장한다.
+ *   저장이 실패했으면 그 사유가 화면에 가야 한다(«끝났어요» 로 덮지 않는다).
+ *  비밀 값은 받지 않는다 — «있나» 만 받는다.
+ */
+export function headlessStateOf(
+  h: HeadlessLoginHarness,
+  read: { log: string; ended: boolean; hasCaptured: boolean },
+  o: { stored: boolean; storeError?: string | null },
+): HeadlessLoginState & { step: AiLoginStep } {
+  const st = parseHeadlessLogin(h, read.log, { stored: o.stored, ended: read.ended && !read.hasCaptured });
+  if (o.storeError && !st.error) st.error = o.storeError;
+  return { ...st, step: headlessLoginStep(st) };
 }

@@ -156,7 +156,12 @@ export function startInlineAiLogin(
 
   void (async () => {
     try { await api(`${base}/start`, { method: 'POST', body: JSON.stringify({ harness, restart: opts.restart === true }) }); }
-    catch (e) { view.failed(`여기서 바로 시작하지 못했어요 — ${(e as Error)?.message || e}`); }
+    catch (e) {
+      view.failed(`여기서 바로 시작하지 못했어요 — ${(e as Error)?.message || e}`);
+      //  헤드리스(#4051)는 시작이 실패하면 조회하지 않는다 — 띄운 것이 없으니 조회는 «시작 중»·«늦네요» 로 방금 보인
+      //   구체적 사유(암호화 키 없음 · tmux 없음 · 중계 실패)를 덮을 뿐이다. [다시 시도]가 새로 띄운다.
+      if (purpose === 'headless') { stopped = true; return; }
+    }
     void tick();
   })();
 
