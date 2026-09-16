@@ -112,6 +112,13 @@ export async function enqueueHeadlessTask(o: { prompt: string; requester: string
   //   가장 비싼 모델로 돌고 있는 것을 청구서를 보고서야 알았다. 관측이 없으면 같은 사고가 또 조용히 난다.
   const ran = { harness, model: run.flags["--model"] ?? null, effort: run.flags["--effort"] ?? null,
     ...(run.dropped.length ? { ignored_settings: run.dropped } : {}) };
-  if (!assign.assigned) return { status: "ok", summary: { task_id: task.id, queued: true, reason: assign.reason, requester: o.requester, ...ran, ...extra } };
+  // 미배정을 무엇으로 적을까(#3994 T5 · #968) — **자리 부족만 정상**이고 나머지는 실패다.
+  //  종전엔 전부 ok 였다: 후보가 하나도 없어 10분 뒤 죽을 배치도 «정상 접수» 로 기록돼, 크론 화면도
+  //  서킷 브레이커도 10시간 동안 아무 말을 하지 않았다(실측 199/200 실패). 판정은 assign-outcome(순수).
+  const { headlessEnqueueStatus } = await import("../../node/assign-outcome.js");
+  if (!assign.assigned) {
+    const status = headlessEnqueueStatus({ assigned: false, code: assign.code });
+    return { status, summary: { task_id: task.id, queued: status === "ok", assign_code: assign.code ?? null, reason: assign.reason, requester: o.requester, ...ran, ...extra } };
+  }
   return { status: "ok", summary: { task_id: task.id, assigned_node: assign.nodeId, requester: o.requester, ...ran, ...extra } };
 }

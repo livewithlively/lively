@@ -66,18 +66,19 @@ export async function runDistillHeadless(params: Record<string, unknown>, jobId:
     if (b.distillerId) await recordDistillerRunSafe(b.distillerId, r.status, r.summary);
     // 배치에 낸 자료를 '판정함'으로 기록 — 안 하면 skip 한 것이 다음 배치에 그대로 다시 올라온다(실측 64% 재독).
     //  실패 배치는 task-store.markFinished 가 이 기록을 되돌린다(자료 유실 방지).
-    const sum = r.summary as Record<string, unknown> | undefined;
-    const tid = sum?.task_id;
     //  이번 tick 에 **실제로 접수된** 배치인가 — enqueueHeadlessTask 는 배치 없이도 돌아온다(중첩 스킵·
     //   하네스 해소 실패·태스크 생성 실패). 그 경우 판정을 기록하면 아무도 안 본 자료가 숨는다.
-    const accepted = r.status === "ok" && !sum?.skipped && tid != null;
-    if (b.distillerId) await markSeenSafe(b.distillerId, b.ids, (tid as string | number | undefined) ?? null);
+    //  ⚠ 레인 배치도 같은 규율을 받는다(#3994 T5) — 종전엔 레인만 accepted 를 안 보고 무조건 찍었고,
+    //   그래서 열쇠 없는 기록(되돌릴 수 없는 «봤음»)이 레인 인박스에서 자료를 영구히 숨길 수 있었다.
+    const { acceptedTaskId } = await import("./headless-accept.js");
+    const acceptedId = acceptedTaskId(r);
+    if (b.distillerId) { if (acceptedId != null) await markSeenSafe(b.distillerId, b.ids, acceptedId); }
     //  레인 없는 배치도 판정을 기록해야 인박스가 전진한다 — 없으면 LLM 이 skip 한 자료가 매 tick 같은
     //   집합으로 다시 올라와 배치가 영원히 반복된다(왜 = org_stranded_seen DDL 주석).
     //  ⚠ accepted 일 때만 남긴다. 되돌릴 열쇠(task_id)가 없는 기록은 자료를 영구히 숨기므로,
     //   재독(비용)보다 유실(무증상)이 나쁘다. 특히 중첩 스킵은 task_id 가 **이전** 태스크의 것이라
     //   그 배치가 성공하면 markFinished 의 되돌리기조차 안 걸린다.
-    else if (accepted) await markStrandedSeenSafe(b.ids, tid as string | number);
+    else if (acceptedId != null) await markStrandedSeenSafe(b.ids, acceptedId);
     out.push({ distiller: b.key, status: r.status, ...(r.summary as Record<string, unknown>) });
   }
   return { status: "ok", summary: { batches: out } };
