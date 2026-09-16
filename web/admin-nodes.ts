@@ -141,8 +141,27 @@ async function loadNodes() {
 //  공유 해제·연결 차단은 좁히는 방향이라 즉시 적용한다.
 function nodeActions(reload) {
   return {
-    // 공유 **해제**만 있다(#1558) — 이미 있는 컴퓨터를 공유로 올리는 경로는 서버에도 없다. 공유 컴퓨터는
-    //  처음부터 그 목적으로 등록한다(openSharedNodeForm). 해제는 좁히는 방향이라 확인 없이 즉시.
+    // 공유 **켜기**(#4004) — 내 컴퓨터를 조직 전체에 여는 일이다. 넓히는 방향이라 확인을 받는다.
+    //  서버는 주인 본인에게만 허용한다(남의 노드는 관리자라도 400) — 그래서 이 동작은 [내 컴퓨터] 목록에만 붙는다.
+    async share(n) {
+      const okd = await confirmDialog({
+        title: '이 컴퓨터를 공유 컴퓨터로 전환할까요?',
+        message: (n.name || n.id) + ' 를 구성원 누구나 쓸 수 있게 됩니다.',
+        lines: [
+          '구성원이 이 컴퓨터에 AI 세션을 열고 오래 걸리는 작업을 맡길 수 있습니다.',
+          '그 사람들이 이 컴퓨터의 파일과 도구를 그대로 쓰게 되니, 개인 자료가 있는 노트북에는 권하지 않습니다.',
+        ],
+        note: '언제든 [공유 해제]로 되돌릴 수 있습니다. 아이디가 그대로라 열려 있던 세션은 끊기지 않습니다.',
+        confirmText: '공유로 전환',
+      });
+      if (!okd) return;
+      try {
+        await api('/api/ui/nodes/' + encodeURIComponent(n.id) + '/share', { method: 'POST', body: JSON.stringify({ shared: true }) });
+        toast('공유 컴퓨터로 전환했습니다 — 이제 구성원 누구나 씁니다');
+        reload();
+      } catch (e) { toast('변경 실패 — ' + e.message, true); }
+    },
+    // 해제는 좁히는 방향이라 확인 없이 즉시. 주인 본인 또는 관리자가 누른다.
     async unshare(n) {
       try {
         await api('/api/ui/nodes/' + encodeURIComponent(n.id) + '/share', { method: 'POST', body: JSON.stringify({ shared: false }) });
@@ -187,11 +206,17 @@ function nodeActions(reload) {
   };
 }
 
-// 소유자 액션(공유 토글 제외) — 내 컴퓨터든 남의 컴퓨터든 '그 기계를 다루는' 일은 같다.
+// 소유자 액션 — 내 컴퓨터에 내가 하는 일 전부. 공유 토글도 여기 있다(#4004): 내 컴퓨터를 조직에 열지 말지는
+//  그 컴퓨터 주인이 정한다(관리자가 아니어도 된다). 남의 컴퓨터엔 이 줄이 뜨지 않는다.
 const ownerActs = (act, n) => el('div', { class: 'wikicat-row-acts' },
   el('button', { class: 'btn btn-ghost btn-sm', text: n.enabled === false ? '연결 허용' : '연결 차단',
     title: n.enabled === false ? '이 컴퓨터가 다시 연결되도록 허용합니다.' : '이 컴퓨터의 연결을 막습니다(작업은 못 들어오고, 등록은 남습니다).',
     onclick: () => act.setEnabled(n, n.enabled === false) }),
+  el('button', { class: 'btn btn-ghost btn-sm', text: n.shared ? '공유 해제' : '공유 컴퓨터로 전환',
+    title: n.shared
+      ? '공유를 거두고 나만 쓰도록 되돌립니다.'
+      : '구성원 누구나 이 컴퓨터를 쓸 수 있게 합니다. 아이디가 그대로라 열려 있던 세션은 끊기지 않습니다.',
+    onclick: () => (n.shared ? act.unshare(n) : act.share(n)) }),
   el('button', { class: 'btn btn-ghost btn-sm', text: '접속 열쇠 재발급', onclick: () => act.rotate(n) }),
   el('button', { class: 'btn btn-ghost btn-sm', text: '지우기', onclick: () => act.remove(n) }));
 
@@ -202,7 +227,8 @@ const guideLine = (text) => el('p', { class: 'admin-hint' },
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ① [내 설정 ▸ 내 컴퓨터] — 전 구성원. 관리자 전용이 아니다: 자기 컴퓨터를 연결하고 관리하는 건 누구나 하는 일이다.
-//   공유 토글은 여기 없다(#1540: 개방은 조직의 결정 = 관리자 몫). 내 컴퓨터가 공유로 지정돼 있으면 배지로 알린다.
+//   공유 토글도 여기 있다(#4004) — 내 컴퓨터를 조직에 열지 말지는 그 컴퓨터 주인이 정한다(관리자가 아니어도 된다).
+//   남의 컴퓨터를 공유로 올리는 경로는 여전히 없다(서버가 400).
 // ─────────────────────────────────────────────────────────────────────────────
 export async function myNodesPanel(detail, data) {
   const me = meId();
@@ -231,21 +257,19 @@ export async function myNodesPanel(detail, data) {
           sharedOthers, (n) => nodeRow(n, null, null),
           '아직 공유로 지정된 컴퓨터가 없습니다.'),
       ]),
-      // 내 컴퓨터가 공유로 지정돼 있으면 반드시 알린다 — 내 기계에서 남의 작업이 도는 상태이므로.
       // 내 목록에 공유 컴퓨터가 섞여 있으면 반드시 알린다 — 내 이름으로 등록돼 있지만 남의 작업이 도는 기계다.
-      //  (공유 컴퓨터는 관리자가 등록하므로 보통 그 관리자 본인의 목록에 뜬다. 예전에 승격됐던 노드도 여기 걸린다.)
       sharedMine ? el('p', { class: 'admin-hint' },
-        document.createTextNode('내 목록 중 ' + sharedMine + '대가 공유 컴퓨터입니다 — 구성원 누구나 그 컴퓨터를 씁니다. 공유 해제는 '),
-        el('a', { href: '#/system/nodes', text: '설정 ▸ 컴퓨터(노드)' }),
-        document.createTextNode(' 에서 합니다(관리자). 연결 차단·지우기는 여기서 직접 할 수 있습니다.')) : null,
+        document.createTextNode('내 목록 중 ' + sharedMine
+          + '대가 공유 컴퓨터입니다 — 구성원 누구나 그 컴퓨터를 씁니다. 되돌리려면 그 줄의 [공유 해제]를 누르세요.')) : null,
       guideLine('컴퓨터를 새로 연결하려면 그 컴퓨터에서 명령 세 줄을 실행하면 됩니다.'),
     ].filter(Boolean)),
   ].filter(Boolean));
 }
 
-// 공유 컴퓨터 등록 폼 — **공유는 여기서만 켜진다.** 이미 붙어 있는 컴퓨터를 나중에 공유로 올리는 경로는 없다
-//  (그러면 구성원 개인 노트북이 어느 날 조직 공용이 되고, 그걸 하려면 관리 화면이 남의 개인 컴퓨터를 늘어놔야
-//  한다). 순서도 그래서 뒤집혀 있다 — **먼저 여기서 등록해 자리를 만들고**, 그 자리에 그 컴퓨터를 연결한다.
+// 공유 컴퓨터 등록 폼 — **아직 연결되지 않은 공용 서버의 자리를 미리 만드는** 경로(관리자). 순서가 뒤집혀
+//  있는 게 요점이다: **먼저 여기서 등록해 자리를 만들고**, 그 자리에 그 컴퓨터를 연결한다.
+//  이미 연결된 **자기** 컴퓨터를 공유로 바꾸는 것은 [내 설정 ▸ 내 컴퓨터]의 [공유 컴퓨터로 전환](#4004) —
+//  아이디가 그대로라 열려 있던 세션이 끊기지 않는다. 남의 컴퓨터는 어느 경로로도 올릴 수 없다.
 function openSharedNodeForm(reload) {
   const idInp = el('input', { type: 'text', style: psInputStyle, placeholder: 'build-server-1' });
   const nameInp = el('input', { type: 'text', style: psInputStyle, placeholder: '빌드 서버 1호' });
@@ -294,9 +318,9 @@ function openSharedNodeForm(reload) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ② [운영·감사 ▸ 컴퓨터(노드)] — 관리자. **조직이 함께 쓰는 컴퓨터**만 다룬다.
-//   ⚠ 구성원 개인 컴퓨터는 **여기 안 보인다.** 관리자가 볼 이유가 없기 때문이다 — 승격(남의 것을 공유로
-//    올리기)이라는 동작 자체를 없앴으므로, 남의 개인 컴퓨터를 늘어놓을 목적이 사라졌다. 각자의 컴퓨터는
-//    각자 [내 설정 ▸ 내 컴퓨터]에서 관리한다. ADMIN_ONLY 인 이유는 공유 컴퓨터를 만들고 없애는 화면이라서다.
+//   ⚠ 구성원 개인 컴퓨터는 **여기 안 보인다.** 관리자가 볼 이유가 없기 때문이다 — 남의 것을 공유로 올리는
+//    동작이 없으므로(#1558·#4004: 자기 것은 주인이 [내 컴퓨터]에서 직접 켠다) 늘어놓을 목적이 사라졌다.
+//    각자의 컴퓨터는 각자 [내 설정 ▸ 내 컴퓨터]에서 관리한다. ADMIN_ONLY 인 이유는 공유 컴퓨터를 만들고 없애는 화면이라서다.
 // ─────────────────────────────────────────────────────────────────────────────
 export async function orgNodesPanel(detail, data) {
   const reload = () => orgNodesPanel(detail, data);
@@ -319,7 +343,7 @@ export async function orgNodesPanel(detail, data) {
       onclick: () => act.setEnabled(n, n.enabled === false) }),
     el('button', { class: 'btn btn-ghost btn-sm', text: '접속 열쇠 재발급', onclick: () => act.rotate(n) }),
     el('button', { class: 'btn btn-ghost btn-sm', text: '공유 해제',
-      title: '공유를 거두고 등록한 사람 전용으로 되돌립니다. 다시 공유하려면 지우고 공유용으로 새로 등록하세요.',
+      title: '공유를 거두고 등록한 사람 전용으로 되돌립니다. 그 사람이 [내 설정 ▸ 내 컴퓨터]에서 다시 켤 수 있습니다.',
       onclick: () => act.unshare(n) }),
     el('button', { class: 'btn btn-ghost btn-sm', text: '지우기', onclick: () => act.remove(n) }));
 
@@ -336,7 +360,7 @@ export async function orgNodesPanel(detail, data) {
       // 이 화면이 '조직 전체 컴퓨터 목록'이 아니라는 걸 분명히 한다 — 안 보이는 게 결함이 아니라 설계다.
       el('p', { class: 'admin-hint' },
         '구성원이 각자 연결한 개인 컴퓨터는 여기 보이지 않습니다. 그 컴퓨터들은 연결한 본인만 쓰고, 각자 [내 설정 ▸ 내 컴퓨터]에서 관리합니다. '
-        + '이미 연결된 개인 컴퓨터를 공유로 올리는 기능은 없습니다 — 공유 컴퓨터는 위에서 그 목적으로 등록합니다.'),
+        + '남의 컴퓨터를 공유로 올릴 수는 없습니다 — 각자 자기 컴퓨터를 [내 컴퓨터]에서 공유로 전환하고, 아직 연결되지 않은 공용 서버는 위에서 새로 등록합니다.'),
       guideLine('구성원은 각자 자기 컴퓨터를 연결합니다.'),
     ].filter(Boolean)),
   ].filter(Boolean));
