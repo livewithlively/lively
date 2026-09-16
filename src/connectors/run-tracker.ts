@@ -19,20 +19,23 @@ const FLUSH_BYTES = 16_384;       // 즉시 flush 임계
 //  통째로 사라져 run 행이 'running'으로 박제되고, 중복 가드가 그 유령 행을 근거로 새 싱크를 계속 막았다.
 //  status(의도)와 별개로 **부모가 1.5초마다 갱신하는 heartbeat_at(생존 증거)** 를 두고, 끊긴 지 STALE 이상이면
 //  죽은 실행으로 판정해 정리한다 — 상태 행과 실제 프로세스가 어긋나도 자가 치유되는 구조.
-const HEARTBEAT_STALE_MS = 120_000;
+export const HEARTBEAT_STALE_MS = 120_000;
 
 // 이 게이트웨이가 띄운 살아있는 run — 취소(사용자 중지)와 종료 기록이 같은 행을 두고 경합하지 않게 한다.
 const liveRuns = new Map<number, { child: ChildProcess; canceled: boolean }>();
 
 /** pid 가 **해당 system 의** run-sync 프로세스일 때만 kill — pid 재사용으로 무관한 프로세스(다른 커넥터의
  *  정상 run 포함)를 죽이지 않게 명령줄에 run-sync + system 명이 모두 있어야 한다. */
-async function killIfRunSync(pid: number | null | undefined, system: string): Promise<boolean> {
+async function isOurRunSync(pid: number | null | undefined, system: string): Promise<boolean> {
   if (!pid || !Number.isFinite(pid)) return false;
   const cmd = await new Promise<string>((resolve) => {
     execFile("ps", ["-p", String(pid), "-o", "command="], (err, stdout) => resolve(err ? "" : String(stdout)));
   });
-  if (!cmd.includes("run-sync") || !cmd.includes(system)) return false;
-  try { process.kill(pid, "SIGKILL"); return true; } catch { return false; }
+  return cmd.includes("run-sync") && cmd.includes(system);
+}
+async function killIfRunSync(pid: number | null | undefined, system: string): Promise<boolean> {
+  if (!(await isOurRunSync(pid, system))) return false;
+  try { process.kill(pid as number, "SIGKILL"); return true; } catch { return false; }
 }
 // 타임아웃 정책(#586 실배포 교훈): 고정 상한은 대형 워크스페이스의 정당한 장기 full 백필을 죽여
 //  "매번 30분 낭비 후 처음부터" 라이브락을 만든다(고객사 A 1,010페이지+DB 848 실측). 커넥터는 수 초마다
@@ -195,7 +198,9 @@ export async function startConnectorRun(
     [system, mode, opts.trigger ?? "cron", opts.startedBy ?? null, opts.collectorId ?? null]);
   const runId = Number((ins.rows[0] as { id: string | number }).id);
 
-  const args = ["--env-file-if-exists=.env", "dist/connectors/run-sync.js", system];
+  //  #3994 T2-a — 자식에게 자기 run 번호를 넘긴다. 하트비트(생존 증거)를 자식이 직접 찍어야
+  //   부모(게이트웨이)가 재시작해도 «살아 있는 수집» 이 유령으로 오판되지 않는다.
+  const args = ["--env-file-if-exists=.env", "dist/connectors/run-sync.js", system, "--run", String(runId)];
   // 수집기 바인딩을 자식에게 넘긴다 — 자식은 이 id 로 config·커서 네임스페이스를 해소한다(config.bindCollector).
   if (opts.collectorId) args.push("--collector", String(opts.collectorId));
   if (opts.full) args.push("--full");
@@ -293,13 +298,25 @@ export async function recoverOrphanConnectorRuns(): Promise<void> {
   //  스윕 전에 시작된 **정상** run 을 '재시작 잔재'로 오인해 죽일 수 있다(리뷰 지적). liveRuns = 내 자식 전부.
   const own = [...liveRuns.keys()];
   const marker = "\n[tracker] 게이트웨이 재시작으로 추적 중단 — 부팅 시 정리. 커서 미전진이라 다음 run 이 재수집합니다.";
-  const r = await itemsPool.query(
-    `UPDATE connector_run SET status='error', finished_at=now(),
-            log = right(log || $2, ${LOG_CAP}), log_total = log_total + char_length($2::text)
-     WHERE status='running' AND NOT (id = ANY($1::bigint[])) RETURNING id, system, pid`, [own, marker]);
-  for (const g of r.rows as Array<{ id: number; system: string; pid: number | null }>) {
-    const killed = await killIfRunSync(g.pid, g.system);
-    logger.warn({ runId: g.id, system: g.system, pid: g.pid, killed }, "부팅 스윕 — 고아 connector_run 정리");
+  //  ★ 무조건 닫고 죽이던 자리(#3994 T2-a). 수집 자식은 부모와 함께 죽지 않으므로, kill 이 빗나가면
+  //   그 자식이 완주해 **커서를 전진시키는데 run 행은 이미 error** 인 스플릿브레인이 났다.
+  //   살아 있으면 이어받고(adopt), 죽었을 때만 닫는다. 판정은 orphanVerdict 한 곳.
+  const { orphanVerdict } = await import("./sync-outcome.js");
+  const cand = await itemsPool.query(
+    `SELECT id, system, pid FROM connector_run WHERE status='running' AND NOT (id = ANY($1::bigint[]))`, [own]);
+  for (const g of cand.rows as Array<{ id: number; system: string; pid: number | null }>) {
+    const aliveAndOurs = await isOurRunSync(g.pid, g.system);
+    const v = orphanVerdict({ pid: g.pid, aliveAndOurs });
+    if (v.adopt) {
+      logger.warn({ runId: g.id, system: g.system, pid: g.pid }, "부팅 스윕 — 살아 있는 수집 자식을 이어받는다(죽이지 않음)");
+      continue;
+    }
+    await itemsPool.query(
+      `UPDATE connector_run SET status='error', finished_at=now(),
+              log = right(log || $2, ${LOG_CAP}), log_total = log_total + char_length($2::text)
+       WHERE id=$1 AND status='running'`, [g.id, marker])
+      .catch((e) => logger.warn({ e: (e as Error)?.message, runId: g.id }, "고아 run 정리 실패(무시)"));
+    logger.warn({ runId: g.id, system: g.system, pid: g.pid, killed: false }, "부팅 스윕 — 고아 connector_run 정리");
   }
 }
 

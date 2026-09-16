@@ -63,7 +63,11 @@ export async function runConnectorSync(params: Record<string, unknown>): Promise
   //   «수집은 됐는데 지식이 안 는다» 로 보이고, 그 사이를 설명할 방법이 없다(실측: 자료 12건이 그대로).
   //   비용은 안 든다 — 미증류가 0이면 증류 잡은 배치를 아예 안 만들고 DB 질의 한 번으로 끝난다.
   void nudgeDistillNow();
-  return { status: "ok", summary: { systems: out } };
+  //  ★ 결과를 사실대로 적는다(#3994 T2-a) — 종전엔 타깃 실패를 summary 에 담고도 무조건 "ok" 였다.
+  //   그 값이 org_cron.last_status 가 되고 연속실패 서킷브레이커는 status 로만 판정하므로 영원히
+  //   트립하지 않았다. 15분마다 강제 종료되는 수집기가 무기한 초록불이던 자리(파이프라인 화면 포함).
+  const { syncBatchStatus } = await import("../../connectors/sync-outcome.js");
+  return { status: syncBatchStatus(out), summary: { systems: out } };
 }
 
 /**
@@ -97,7 +101,10 @@ export async function runConnectorPush(params: Record<string, unknown>): Promise
       out.push({ system: sys, ok: true, tail: (r.stdout || "").trim().split("\n").slice(-1)[0] ?? "" });
     } catch (e) { out.push({ system: sys, ok: false, error: (e as Error)?.message ?? String(e) }); }
   }
-  return { status: "ok", summary: { systems: out } };
+  //  수집과 같은 규율(#3994 T2-a) — 아웃바운드 실패도 잡 상태에 올린다. 종전엔 여기도 무조건 "ok" 라
+  //   push 가 매번 죽어도 크론은 정상으로 보였다(같은 병이 이 파일에 두 군데 있었다).
+  const { syncBatchStatus } = await import("../../connectors/sync-outcome.js");
+  return { status: syncBatchStatus(out), summary: { systems: out } };
 }
 
 export async function runWikiPush(): Promise<{ status: string; summary: unknown }> {

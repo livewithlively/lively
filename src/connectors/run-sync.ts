@@ -34,6 +34,12 @@ const fullFlag = process.argv.includes("--full");
 // --collector <id> (#1419 T1) — 이 실행이 대리하는 수집기 인스턴스. 없으면 레거시 단일 인스턴스 모드.
 const collectorArgIdx = process.argv.indexOf("--collector");
 const collectorId = collectorArgIdx >= 0 ? Number(process.argv[collectorArgIdx + 1]) : 0;
+// --run <id> (#3994 T2-a) — 이 실행을 기록하는 connector_run 행. 생존 증거(heartbeat)를 **자식이 직접** 찍는다.
+//  종전엔 부모(게이트웨이)가 자식 stdout 을 읽어 1.5초마다 찍었다. 그래서 부모가 재시작하면 하트비트가
+//  멈추고, 수집 자식은 부모와 함께 죽지 않으므로 «살아서 긁는 실행» 이 유령으로 판정돼 error 로 닫혔다.
+//  번호를 못 받으면(옛 부모·수동 실행) 자기기록을 건너뛴다 — 종전 동작 그대로.
+const runArgIdx = process.argv.indexOf("--run");
+const runRowId = runArgIdx >= 0 ? Number(process.argv[runArgIdx + 1]) : 0;
 
 // 이름 검증은 **수집기 바인딩 뒤로** 미룬다(#1419 T2) — 커스텀 프리셋(http/rss/webhook)은 코드 레지스트리에
 //  없는 이름이라 여기서 거르면 범용 수집기가 영영 못 뜬다. 프리셋 카탈로그를 봐야 판정할 수 있고,
@@ -57,6 +63,18 @@ if (!name) {
 await loadEnterprise();
 
 await initAllSchemas({ quiet: true });
+
+// 자기기록 — 유령 판정 임계보다 충분히 짧은 주기로 자기 생존을 적는다(#3994 T2-a).
+//  unref: 이 타이머가 프로세스 종료를 막지 않는다. 실패는 삼킨다 — 기록이 안 된다고 수집을 멈추지 않는다.
+if (Number.isFinite(runRowId) && runRowId > 0) {
+  const { HEARTBEAT_STALE_MS } = await import("./run-tracker.js");
+  const { childHeartbeatMs } = await import("./sync-outcome.js");
+  const beat = setInterval(() => {
+    void itemsPool.query(`UPDATE connector_run SET heartbeat_at=now() WHERE id=$1 AND status='running'`, [runRowId])
+      .catch(() => { /* 비치명 — 다음 주기에 다시 */ });
+  }, childHeartbeatMs(HEARTBEAT_STALE_MS));
+  beat.unref();
+}
 
 // ── 수집기 바인딩(#1419 T1) — **첫 설정 해소보다 먼저.** 이 뒤로 모든 resolveConnectorConfig 는 이 인스턴스의
 //  config/secrets 를 본다(커넥터 모듈은 그 사실을 모른 채 종전 코드 그대로 돈다). 바인딩 실패는 치명이다 —
