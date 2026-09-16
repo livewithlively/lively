@@ -252,8 +252,16 @@ async function buildDistillPolicySummary(): Promise<string> {
     ].filter(Boolean).join(" & ") || "전체";
     return `{${m}}→${String(p.action)}`;
   });
+  // 검토를 실제로 요구하는 규칙이 하나도 없으면 pending 은 선택지가 아니다 — 있지도 않은 규칙에 기대어
+  //  LLM 이 '민감해 보인다'는 이유로 자진 격리하는 것을 막는다. 실측(#4018, 2026-09-16): 전 규칙이
+  //  auto/drop 인 조직(lively-46e3)에 '미확정·초안·검토판' 성격의 증류 산출 11건이 pending 으로 갇혀
+  //  있었다 — 전부 insert·v1·actor_kind=ai·channel=mcp(저장 시점부터 자진 pending).
+  const anyConfirm = active.some((p) => p.action === "confirm");
+  const tail = anyConfirm
+    ? `confirm 이면 lifecycle='pending', drop 이면 skip, 아니면 active.`
+    : `confirm 규칙이 하나도 없으므로 lifecycle 을 **지정하지 마**(pending 금지) — drop 에 걸리면 skip, 나머지는 전부 active 다. 내용이 '쿠킹중·기획단계·미확정' 으로 보여도 네가 격리하지 않는다.`;
   return `허용선 정책(여러 규칙 걸리면 가장 보수적 우선, drop>confirm>auto): ${parts.join(" / ")}. ` +
-    `distill 산출은 provenance=authored. 각 지식의 category(고른 도메인)·내용상 민감성을 판단해 대입하고 — confirm 이면 lifecycle='pending', drop 이면 skip, 아니면 active.`;
+    `distill 산출은 provenance=authored. 각 지식의 category(고른 도메인)·내용상 민감성을 판단해 대입하고 — ${tail}`;
 }
 
 // distill 프롬프트 — **단일 라인**(send-keys -l 주입용, 개행 금지). source(raw 자료)→knowledge 증류.
