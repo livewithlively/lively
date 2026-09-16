@@ -267,7 +267,7 @@ export async function launchSession(user: LivelyUser, input: CreateInput, opts: 
       // injectFirstPrompt(send-keys)를 부르면 사람의 지시가 zsh/PowerShell 명령이 된다(#3982).
       const { deliverPrompt } = await import("./deliver-prompt.js");
       await deliverPrompt(session.id, plan.deferredPrompt, {
-        owner: me, nodeId, firstPromptTrustOk: autoTrustWorkspace({ projectId: input.projectId, subpath: input.subpath }),
+        owner: me, nodeId, firstPromptTrustOk: autoTrustWorkspace({ projectId: input.projectId, subpath: input.subpath, rootKey: input.rootKey, kind: input.kind }),
       }).catch((e) => logger.warn({ id: session.id, err: (e as Error)?.message }, "노드 첫 지시 전송 실패 — 세션은 살아 있습니다"));
     }
     //  ★ 이 갈래는 **노드에 만든 세션**이다 — 그 기계에 산다(onNode=true).

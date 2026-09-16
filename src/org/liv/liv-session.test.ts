@@ -4,7 +4,8 @@
 //  기계의 tmux 를 직접 불러, 판이 sudo 에서 즉사하고 다음 `tmux set-option` 이 «no server running» 으로 던졌다(게이트웨이 로그 6건).
 //  이제 리브 탭은 그 사람의 리브 세션 하나를 찾아(없으면 첫 말로 연다) 세션 대화창을 붙인다.
 //
-//  사양·엣지 표: 표 A(지금의 리브 세션) · 표 B(좌표 읽기) · 표 C(첫 말 경계) — 행마다 한 단언.
+//  사양·엣지 표: 표 A(지금의 리브 세션) · 표 B(좌표 읽기) · 표 C(첫 말 경계) · 표 D(한 줄로 선 확보) — 행마다 한 단언.
+//   표 E(리브 폴더의 신뢰 대화상자)는 판정 행 E1~E9 가 terminal/session-create-guards.test 에, 배선 E10 이 여기 있다.
 //  ① 순수 판정은 값으로 · ② 프로필 층은 순수 함수로 · ③ DB·tmux·DOM 에 걸린 배선은 소스 구조로 못박는다(레포 선례).
 //  ⚠ 리브 세션을 실제로 여는 경로(ensureLivSession)는 여기서 부르지 않는다 — DB 가 없으면 곧장 세션 생성으로 흘러
 //   이 기계에 폴더·tmux 를 만든다.
@@ -15,6 +16,7 @@ import { LIV_CHAT_LABEL, LIV_PROMPT_MAX, LIV_SUBPATH, pickLivSession, serialByKe
 import { BY_WORKSPACE, WORKSPACE_SCOPED_KEYS, mergeForWorkspace, viewForWorkspace } from "../store/members.js";
 import { livChatCapabilities, livFirstWords } from "../../capabilities/delivery/liv-chat.js";
 import { HttpError } from "../../http-error.js";
+import { autoTrustWorkspace } from "../../terminal/session-create-guards.js";
 
 const code = (s: string): string => s.replace(/^[ \t]*\/\/.*$/gm, "");
 const ME = "me";
@@ -141,6 +143,8 @@ const WEB_MAIN = code(readFileSync("web/v2/main.ts", "utf8"));
 const WEB_CLASSIC = code(readFileSync("web/main.ts", "utf8"));
 const WEB_CHAT = readFileSync("web/session-chat.ts", "utf8");   // 레이블 상수는 주석까지 본다
 const BOOT_HOOK = readFileSync("kit/hooks/examples/liv-session-boot.org-hook.mjs", "utf8");
+const SESSIONS_TS = code(readFileSync("src/terminal/sessions.ts", "utf8"));
+const LAUNCH_TS = code(readFileSync("src/terminal/session-launch.ts", "utf8"));
 
 test("★★ 헤드리스 리브 턴이 없다 — 모듈·프로필 필드·화면 배선 전부", () => {
   assert.equal(existsSync("src/org/liv/chat-turn.ts"), false, "★ 헤드리스 리브 턴 모듈(chat-turn.ts)이 남아 있다");
@@ -169,6 +173,19 @@ test("★★ 리브 세션 = 보통 세션 — 생성 관문(launchSession) · t
   assert.equal(LIV_SUBPATH, "liv");
   assert.match(BOOT_HOOK, /if \(path\.basename\(cwd\) !== "liv"\) process\.exit\(0\);/, "리브 부팅 훅 게이트가 liv 폴더가 아니다");
   assert.doesNotMatch(BOOT_HOOK, /셸은 없다|Bash·파일 도구가 아예 없다/, "★ 리브 부팅 훅이 없는 제한(셸 없음)을 말한다");
+});
+
+//  표 E10 — 끝단 검증에서 잡혔다(2026-09-16 매니지드): 리브 세션이 신뢰 대화상자 앞에서 멈춰 첫 말이 영영 안 들어갔다.
+test("★★ 표 E10 — 서버가 연 리브 세션은 신뢰 대화상자를 대신 수락한다(로컬·노드 두 호출부 모두)", () => {
+  //  리브 세션 모듈이 여는 바로 그 좌표·종류(task · personal · LIV_SUBPATH)로 판정을 묻는다 — 폴더 이름이 갈리면 여기서 빨개진다.
+  assert.equal(autoTrustWorkspace({ kind: "task", rootKey: "personal", subpath: LIV_SUBPATH }), true,
+    "★ 리브 세션의 첫 말이 신뢰 대화상자 앞에서 멈춘다");
+  assert.match(SESSION, /kind: "task",\s*label: o\.label,\s*rootKey: "personal", subpath: LIV_SUBPATH,/, "리브 세션이 task 종류로 개인 루트의 리브 폴더에서 안 열린다");
+  //  판정은 루트 키와 종류를 받아야 한다 — 공유 루트의 liv, 사람이 고른 liv 와 가른다. 세션 생성의 두 호출부가 모두 넘겨야 한다.
+  assert.match(SESSIONS_TS, /autoTrustWorkspace\(\{ projectId: input\.projectId, subpath: subpathUsed, rootKey: rootKeyUsed, kind: input\.kind \}\)/,
+    "★ 로컬·매니지드 세션 생성이 신뢰 판정에 루트 키·종류를 안 넘긴다");
+  assert.match(LAUNCH_TS, /firstPromptTrustOk: autoTrustWorkspace\(\{ projectId: input\.projectId, subpath: input\.subpath, rootKey: input\.rootKey, kind: input\.kind \}\)/,
+    "노드 세션 생성이 신뢰 판정에 루트 키·종류를 안 넘긴다");
 });
 
 test("★★ 화면 — 리브 탭은 리브 세션 대화창을 대화 보기로 붙이고, 복원되면 그 칸만 갈아 붙인다", () => {

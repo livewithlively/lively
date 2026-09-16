@@ -14,14 +14,18 @@
 //  · 세션이 회수돼 복원되면 새 id 가 된다 — 좌표는 복원 이정표(resolveSessionSuccessor)를 따라가 읽고, 읽은 김에 고쳐 적는다.
 //  · 작업 폴더는 <개인 루트>/liv 다 — 리브 부팅 훅(org_hook liv-session-boot)의 게이트가 basename(cwd) === "liv" 다.
 //    이 폴더가 아니면 그 세션은 리브의 정체성·현황을 못 받는다.
+//  · 그 폴더는 라이블리가 정한 자리라, 서버가 task 종류로 연 리브 세션은 세션 생성이 신뢰 대화상자를 대신 수락한다
+//    (terminal/session-create-guards.ts — 종류 task 는 요청으로 못 만들어서, 사람이 같은 이름의 폴더를 골라 연 세션과 갈린다).
+//    이게 빠지면 첫 말이 그 물음 앞에서 멈춘다(2026-09-16 매니지드 실측 — 아웃박스 trust_ok=false 로 sending 고착).
 //  · 종류는 task — 첫 지시가 서버 조립물일 수 있어(킥오프·2턴) 이름 짓기·첫 지시 프로젝트 자동 생성 훅이 건너뛴다(#1979 항목4).
 //  · 도구 제한은 두지 않는다(상민님 결정 2026-09-16) — 보통 세션과 같은 승인 흐름을 탄다.
 import type { LivelyUser } from "../../context.js";
 import type { LaunchedSession } from "../../terminal/session-launch.js";
 import { logger } from "../../log.js";
+import { LIV_SUBPATH } from "./folder.js";
 
-/** 리브 세션의 작업 폴더(개인 루트 아래). 리브 부팅 훅의 게이트가 이 이름을 본다. */
-export const LIV_SUBPATH = "liv";
+//  리브 폴더 이름은 잎 모듈(folder.ts)에 있다 — 세션 생성의 신뢰 판정도 같은 값을 본다.
+export { LIV_SUBPATH };
 /**
  * 리브 탭에서 첫 말로 연 세션의 이름. 화면(web/session-chat.ts)이 이 글자로 리브 세션을 알아보고 대화창으로 연다
  *  (liv-session.test 가 두 글자를 맞춘다). 킥오프 세션 이름은 kickoff.ts LIV_SESSION_LABEL 이다.

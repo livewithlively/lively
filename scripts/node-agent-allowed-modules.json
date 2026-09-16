@@ -35,6 +35,7 @@
   "dist/org/credentials/github-repo-url.js",
   "dist/org/delivery/liv-secret.js",
   "dist/org/ingest/redact.js",
+  "dist/org/liv/folder.js",
   "dist/org/policies/call-log-policy.js",
   "dist/org/policies/context-job-policy.js",
   "dist/org/policies/delegate-policy.js",
