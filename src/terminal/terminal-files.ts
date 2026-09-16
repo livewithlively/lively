@@ -352,17 +352,14 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     const { base, abs, osUser } = await resolveBrowse(req, true, true);   // 생성 → NFC 정본(#1278b)
     try { await receiveUpload(req, abs, MAX_UPLOAD, osUser); }
     catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
-    //  share=team(#1631) — **자기 개인 루트** 업로드에만 먹는 명시 옵션: «올린 사람만» 잠금을 걸지 않고 팀원 모두가 보는 자료로 둔다.
-    //   초대로 들어온 사람의 처음 설정이 쓴다(원준 결정 2026-09-13 «합류자가 올린 파일은 팀원 모두가 본다»). 기본값은 종전 그대로(올린 사람만).
-    //   ⚠ 공유 루트(root=shared)로 올리게 하지 않은 이유 — 매니지드에서 공유 루트는 테넌트 구분 없는 고정 경로다
-    //    (profiles.ts resolveRootPath 의 격리 갈래 = SHARED_ISOLATED_BASE). 워크스페이스 사이 분리를 릴레이에만 기대는 자리에 팀 자료를 두지 않는다.
-    const shareWithTeam = String(req.query.root ?? "") === "personal" && String(req.query.share ?? "") === "team";
+    //  (#4007) share=team 질의는 폐기했다 — 개인 루트 업로드를 더는 «올린 사람만» 으로 잠그지 않으므로 풀 잠금이 없다.
+    //   옛 클라이언트가 계속 붙여 보내도 무해하다(읽는 곳이 없다). 이유는 ingest/local-file.ts 의 #4007 주석에.
     const u = userOf(req);
     // 좌표 해석만 여기 남고 **마무리는 공용 한 자리**(finishUpload) — 프로젝트 업로드 라우트와 같은 함수다(#3787 D).
     //  종전엔 여기와 project-routes 가 각자 마무리를 적어, 한쪽엔 그룹 rw 가 없고 다른 쪽엔 skipped 가 없었다.
     const coord = await localRootForBrowse(String(req.query.root ?? ""), u, base, abs)
       .catch((e) => { console.warn(`[local-ingest] 좌표 해석 실패 ${abs}: ${(e as Error)?.message ?? e}`); return null; });
-    res.json(await finishUpload({ coord, abs, osUser, shareWithTeam, uploader: { id: viewerFor(req), name: u?.email ?? null } }));
+    res.json(await finishUpload({ coord, abs, osUser, uploader: { id: viewerFor(req), name: u?.email ?? null } }));
   }));
 
   // 디렉터리 목록(숨김 제외). 격리 세션(#524)은 멤버 uid 로(게이트웨이가 700 홈 못 읽으므로).

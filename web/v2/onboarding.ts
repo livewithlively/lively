@@ -1794,7 +1794,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         뒤에 [파일 추가]로 바뀐다. */
     files: {
       html: () => qHead('files',
-        //  (#1631, 원준 결정 2026-09-13) 합류자가 올린 파일은 **팀원 모두가 보는 팀 자료**다 — 그 사실을 올리기 전에 말한다.
+        //  (#1631, 원준 결정 2026-09-13 · #4007 로 주인까지 확대) 올린 파일은 **이 워크스페이스 사람 모두가 보는 자료**다 — 올리기 전에 말한다.
         //   종전 «기본적으로 나만 봅니다 · 팀에 공개할지는 자료마다 따로 정합니다» 는 뒤 문장을 받쳐 줄 화면이 없었다.
         //   «정리해 둡니다» 는 주인에게만 말한다 — 합류자의 처음 설정은 증류기·카테고리를 만들거나 켜지 않는다.
         isJoin() ? `${S.name ? `${esc(S.name)}님이 ` : ''}가진 자료도 올려 두시겠어요?` : `${esc(S.name)}님, 먼저 파일부터 받겠습니다.`,
@@ -1851,9 +1851,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             const cur = { rel: bare, size: (it.file && it.file.size) || 0 };   // #1968 진행 중 표식(UPP.cur 의 키)
             UPP.cur.set(cur, 0);
             try {
-              //  (#1631) 합류자는 share=team — 서버가 «올린 사람만» 잠금을 걸지 않는다(자기 개인 루트 업로드에만 먹는 옵션, terminal-files.ts).
-              //   공유 루트로 보내지 않는 이유: 매니지드에서 공유 루트 경로에 워크스페이스 구분이 없다(profiles.ts resolveRootPath).
-              const up = await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel) + (isJoin() ? '&share=team' : '')), it.file,
+              //  (#4007) share=team 은 폐기 — 개인 루트 업로드는 이제 주인·합류자 구분 없이 이 워크스페이스 사람 모두가 본다.
+              //   공유 루트로 보내지 않는 이유는 종전과 같다: 매니지드에서 공유 루트 경로에 워크스페이스 구분이 없다(profiles.ts resolveRootPath).
+              const up = await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel)), it.file,
                 (pct) => { UPP.cur.set(cur, Math.round((cur.size * pct) / 100)); paintProg(); }, undefined);
               //  응답에 source_id 가 있으면 **자료로 등록까지** 된 것이다. 없으면 파일만 올라갔다 —
               //   그 차이를 여기서 안 세면 뒤(읽기 진행률)에서 «오지 않는 것» 을 기다리게 된다.

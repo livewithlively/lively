@@ -13,6 +13,7 @@ import { init as initDomainmapSchema } from "../domainmap/core/schema.js";
 import { initActivitySchema } from "../activity/schema.js";
 import { initV6Schema } from "../v6/schema.js";
 import { ensureTenantColumn, pinIdentityGlobalTenant } from "../db/tenant-column.js";
+import { reconcilePersonalUploadVisibilitySafe } from "../v6/vis-personal-unlock.js"; // #4007 — 개인 업로드 자동 잠금 소급 해제(멱등)
 import { logger } from "../log.js";
 
 // 직렬 체인 — 멱등(부팅마다·단독 CLI 신규 DB 에서도 성립). quiet: run-sync CLI 는 종전대로 무로그(부팅 로그는 유지).
@@ -64,4 +65,8 @@ export async function initAllSchemas(opts?: { quiet?: boolean }): Promise<void> 
     // 짝이 있어 접지 못한 행 — 자동으로 고르면 데이터를 잃는다. 사람이 정해야 한다.
     logger.warn(`[schema] 신원 전역 표에 워크스페이스로 갈라진 행이 남아 있습니다 — ${ig.conflicts.join(" · ")}`);
   }
+  // #4007 — 걷어낸 «개인 루트 업로드 자동 잠금» 이 남긴 행을 되돌린다. **ensureTenantColumn 뒤**여야 한다
+  //  (테넌트별로 정책 유무를 가리므로). 멱등이고, 로컬 대상 정책이 생긴 테넌트에서는 아무것도 하지 않는다.
+  //  비치명 — 이 조정이 실패해도 부팅은 계속된다(다음 부팅에 다시 시도).
+  await reconcilePersonalUploadVisibilitySafe();
 }

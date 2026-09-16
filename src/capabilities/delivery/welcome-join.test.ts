@@ -201,17 +201,17 @@ test("A2 리브 1턴에 합류자 갈래가 남아 있지 않다 — 이제 불�
   assert.doesNotMatch(strip(SRC.slice(SRC.indexOf("export async function kickoffLivAfterWelcome"))), /joining:/, "킥오프가 아직 합류 사실을 1턴에 싣는다");
 });
 
-test("U1 업로드 — «팀원 모두» 옵션은 자기 개인 루트 업로드에만 먹고, 기본값은 올린 사람만이다", () => {
-  const ROUTE = strip(read("../../terminal/terminal-files.ts"));
-  assert.match(ROUTE, /const shareWithTeam = String\(req\.query\.root \?\? ""\) === "personal" && String\(req\.query\.share \?\? ""\) === "team";/,
-    "옵션이 개인 루트로 좁혀져 있지 않다");
-  //  #3787 D — 업로드 마무리가 공용 한 자리(upload-finish.ts)로 옮겨졌다. 옵션은 **두 다리**를 다 건너야 한다:
-  //   라우트 → finishUpload → ingestLocalUpload. 한쪽만 보면 중간에서 떨어뜨려도 초록불이 된다.
-  assert.match(ROUTE, /finishUpload\(\{ coord, abs, osUser, shareWithTeam, uploader:/, "옵션이 업로드 마무리까지 안 간다");
-  const FINISH = strip(read("../../ingest/upload-finish.ts"));
-  assert.match(FINISH, /shareWithTeam: o\.shareWithTeam/, "마무리가 옵션을 등록으로 안 넘긴다");
+test("U1 업로드 — 개인 루트 업로드를 «올린 사람만» 으로 잠그지 않는다 (#4007)", () => {
+  //  왜 '없음' 을 단언하나: 이건 되돌리기 쉬운 삭제다. 자료·지식은 이미 워크스페이스로 갈리므로(RLS tenant_isolation,
+  //   #1875 실측 자료 100 vs 0) 그 안쪽 자동 잠금은 중복 기제였고, 실제로 부작용만 냈다(정책 0개 조직에 잠긴 자료 69건 ·
+  //   공개 포스터 지식이 derived_from 상속으로 잠김 · db_query self 전면 차단). 워크스페이스 안에서 가르고 싶으면
+  //   그건 부서 구분이고 도구는 org_source_vis_policy(EE)다 — 로컬 업로드도 stampSourceVisibility 를 지나므로 그게 먹는다.
   const INGEST = strip(read("../../ingest/local-file.ts"));
-  assert.match(INGEST, /if \(u\.root\.kind === "personal" && u\.uploader\.id && !u\.shareWithTeam\) \{\s*await applyVisibility\(/,
-    "개인 루트의 «올린 사람만» 이 기본값이 아니거나 옵션이 그 잠금을 안 푼다");
-  assert.match(INGEST, /\.\.\.\(u\.shareWithTeam \? \{ share: "team" \} : \{\}\)/, "팀에 연 사실이 자료에 남지 않는다(화면이 «올린 사람만» 이라고 잘못 말한다)");
+  assert.doesNotMatch(INGEST, /applyVisibility/, "개인 루트 자동 잠금이 되살아났다 — axisOn 가드를 우회하는 자리다");
+  assert.doesNotMatch(INGEST, /shareWithTeam/, "풀 잠금이 없는데 푸는 옵션이 남았다");
+  //  #3787 D — 옵션은 라우트 → finishUpload → ingestLocalUpload 세 자리를 건넜다. 지운 것도 세 자리 다 봐야 한다.
+  const ROUTE = strip(read("../../terminal/terminal-files.ts"));
+  assert.doesNotMatch(ROUTE, /shareWithTeam/, "라우트에 죽은 배선이 남았다");
+  const FINISH = strip(read("../../ingest/upload-finish.ts"));
+  assert.doesNotMatch(FINISH, /shareWithTeam/, "업로드 마무리에 죽은 옵션이 남았다");
 });
