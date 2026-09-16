@@ -4,7 +4,7 @@
 //   · mismatch·outdated — 결정적 SQL 판정. **이 틱 안에서** 발견을 쌓고 auto 면 조치까지 한다(LLM 비용 0).
 //   · contradiction·code_drift — 후보를 좁혀 헤드리스 배치로 접수. 판정은 AI 가 하고
 //     org_manager_finding_report 로 되돌려 적는다.
-import { headlessRequester, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
+import { resolveJobRunner, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 import { listManagers, getManager, needsLlm } from "../../org/store/managers.js";
 import { runManager, type ManagerRunResult } from "../../org/manage/run-manager.js";
 
@@ -27,7 +27,7 @@ export async function runManagers(
 
   // LLM 이 필요한 관리기가 하나라도 있으면 의뢰자가 있어야 한다 — 결정적 관리기만이면 없어도 돈다
   //  (분류 어긋남·아웃데이티드는 LLM 을 안 쓰므로 과금 귀속이 필요 없다).
-  const requester = headlessRequester(params, createdBy);
+  const requester = await resolveJobRunner(params.requester, createdBy);
   if (!requester && targets.some((m) => needsLlm(m.kind))) return HEADLESS_REQUESTER_MISSING;
 
   const out: ManagerRunResult[] = [];

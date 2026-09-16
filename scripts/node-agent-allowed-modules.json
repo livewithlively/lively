@@ -36,6 +36,7 @@
   "dist/org/delivery/liv-secret.js",
   "dist/org/ingest/redact.js",
   "dist/org/policies/call-log-policy.js",
+  "dist/org/policies/context-job-policy.js",
   "dist/org/policies/delegate-policy.js",
   "dist/org/policies/knob.js",
   "dist/org/policies/runtime-loaders.js",

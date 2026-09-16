@@ -1,6 +1,6 @@
 // 크론 액션: 자료 distill(distill_sources·distill_sources_headless, #541/#1289) — R16 원문 이동.
 //  미증류 source(slack/gmail 등 raw)를 LLM 이 지식으로 자동증류 — 증류기(#1289) 스코프·기준·형식 + 배치 선정 로직 포함.
-import { resolveSessionTmux, injectToSession, headlessRequester, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
+import { resolveSessionTmux, injectToSession, resolveJobRunner, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 import { logger } from "../../log.js";
 
 // 자료 distill 주입(#541) — map_unmapped 의 자료판. 미증류 source 가 있을 때만 상시세션에 distill 프롬프트 주입.
@@ -46,9 +46,8 @@ export async function runDistillHeadless(params: Record<string, unknown>, jobId:
   if (!pick.batches.length) return idleSummary(pick.considered, {});
   const out: unknown[] = [];
   for (const b of pick.batches) {
-    // 의뢰자 우선순위: 잡 params > 증류기 설정 > 잡 created_by.
-    const requester = headlessRequester(
-      { requester: params.requester ?? b.requester ?? undefined }, createdBy);
+    // 의뢰자 우선순위: 잡 params > 증류기 설정 > **워크스페이스 실행 멤버**(#4012 T1) > 잡 created_by.
+    const requester = await resolveJobRunner(params.requester ?? b.requester, createdBy);
     if (!requester) { out.push({ distiller: b.key, ...HEADLESS_REQUESTER_MISSING.summary }); continue; }
     // 제공자·모델·추론강도(#4008) — **증류기 설정이 먼저**, 없으면 잡 params, 그래도 없으면 그 하네스의
     //  자동화 기본값(enqueueHeadlessTask 가 하네스 해소 뒤에 대입한다).
