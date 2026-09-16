@@ -138,6 +138,7 @@ const MEMBERS = code(readFileSync("src/org/store/members.ts", "utf8"));
 const WEB_LIV = code(readFileSync("web/liv-chat.ts", "utf8"));
 const WEB_LIV_PAGE = code(readFileSync("web/liv.ts", "utf8"));
 const WEB_MAIN = code(readFileSync("web/v2/main.ts", "utf8"));
+const WEB_CLASSIC = code(readFileSync("web/main.ts", "utf8"));
 const WEB_CHAT = readFileSync("web/session-chat.ts", "utf8");   // 레이블 상수는 주석까지 본다
 const BOOT_HOOK = readFileSync("kit/hooks/examples/liv-session-boot.org-hook.mjs", "utf8");
 
@@ -152,7 +153,7 @@ test("★★ 헤드리스 리브 턴이 없다 — 모듈·프로필 필드·화
 test("★★ 세션을 못 열면 원인을 말하는 503 — 500 «internal_error» 로 뭉개지지 않는다(#4032 의 본체)", () => {
   assert.match(CAP, /try \{\s*return await ensureLivSession\(user, text\);\s*\} catch \(e\) \{\s*if \(e instanceof HttpError\) throw e;[\s\S]*?throw new HttpError\(503, `리브를 열지 못했습니다 — \$\{\(e as Error\)\?\.message \?\? e\}`, \{ cause: e \}\);/,
     "★ 세션을 못 연 이유가 500 으로 뭉개진다");
-  assert.match(CAP, /return \{ session_id: await currentLivSessionId\(userId\) \};/, "찾기가 복원 이정표를 따라간 id 를 안 준다");
+  assert.match(CAP, /return \{ session_id: await currentLivSessionId\(userId, \{ heal: false \}\) \};/, "찾기가 복원 이정표를 따라간 id 를 안 준다");
 });
 
 test("★★ 리브 세션 = 보통 세션 — 생성 관문(launchSession) · task 종류 · liv 폴더 · 도구 제한 없음 · 좌표 기록 · 한 줄로 선 확보", () => {
@@ -181,6 +182,26 @@ test("★★ 화면 — 리브 탭은 리브 세션 대화창을 대화 보기�
   assert.match(WEB_CHAT, /const chatHome = \(\): boolean => [^\n]*!!opts\.chatHome/, "★ 옵션이 보기 판정에 안 들어간다(리브 탭에 터미널이 뜬다)");
   //  카드의 문은 리브 칸 안의 입력칸만 만진다 — 셸이 탭 DOM 을 살려 두므로 문서 전체를 뒤지면 다른 탭 세션에 말이 간다.
   assert.doesNotMatch(WEB_LIV, /document\.querySelector\('\.livc-(input|compose)'\)/, "★ 카드가 문서 전체에서 입력칸을 찾는다");
+});
+
+test("★★ 리브 칸의 수명 — 떠나면 걷고, 못 붙이면 첫 말을 잃지 않고, 조회는 읽기만 한다(격리 리뷰 반영)", () => {
+  //  세션 대화창의 폴링·message 리스너는 **부숴야만** 멈춘다 — 클래식 셸은 라우트 이동마다 걷는다(안 걷으면 드나들 때마다 쌓인다).
+  assert.match(WEB_LIV, /export function livChatCleanup\(\): void \{/, "리브 칸을 걷는 문이 없다");
+  assert.match(WEB_LIV, /export function mountLivChat\([^)]*\): void \{\s*livChatCleanup\(\);/, "다시 붙일 때 앞 칸을 안 걷는다");
+  assert.match(WEB_LIV, /current = \{\s*destroy: \(\) => \{\s*\+\+gen;[^\n]*\s*if \(ownsHandle\) handle\?\.destroy\(\);\s*handle = null;\s*emptyView\?\.destroy\(\);/, "★ 걷기가 대화창·빈 대화·진행 중인 붙이기를 다 멈추지 않는다");
+  const route = WEB_CLASSIC.slice(WEB_CLASSIC.indexOf("async function route()"));
+  assert.ok(route.indexOf("livChatCleanup();") > 0 && route.indexOf("livChatCleanup();") < route.indexOf("await renderLiv(view);"),
+    "★ 클래식 라우터가 이동마다 리브 칸을 안 걷는다(폴링·리스너 누수)");
+  assert.match(WEB_MAIN, /if \(routeKey\(cur\.route\) === 'liv'\) livChatCleanup\(\);/, "v2 셸이 리브 탭을 떠날 때 안 걷는다");
+  assert.match(WEB_MAIN, /if \(routeKey\(tab\.route\) === 'liv'\) livChatCleanup\(\);/, "v2 셸이 리브 탭을 닫을 때 안 걷는다");
+  //  이미 세션이 있던 첫 말 — 대화창을 못 붙이면 그 말을 입력칸으로 돌려준다(보낸 척하지 않는다). 새로 연 경우엔 이미 갔다고 말한다.
+  assert.match(WEB_LIV, /await show\(r\.session_id, \{ sent: true \}\);/, "새로 연 세션의 첫 말이 «갔다» 로 표시되지 않는다");
+  assert.match(WEB_LIV, /await show\(r\.session_id, \{ draft: text \}\);/, "★ 이미 있던 세션의 첫 말이 못 붙으면 사라진다");
+  assert.match(WEB_LIV, /else if \(o\.draft\) paintEmpty\([^\n]*, o\.draft\);/, "못 간 말을 빈 대화에 안 돌려준다");
+  assert.match(WEB_LIV, /if \(draft\) \{ view\.input\.value = draft;/, "빈 대화가 돌려받은 말을 입력칸에 안 넣는다");
+  //  조회(GET)는 읽기만 — 읽기전용 판정은 메서드로 가르므로 GET 이 쓰면 그 판정을 몰래 넘는다.
+  assert.match(CAP, /return \{ session_id: await currentLivSessionId\(userId, \{ heal: false \}\) \};/, "★ 조회 창구가 좌표를 고쳐 쓴다(GET 에 쓰기)");
+  assert.match(SESSION, /if \(o\.heal !== false && id && id !== prof\?\.liv_session\?\.id\) \{/, "heal:false 가 쓰기를 막지 않는다");
 });
 
 test("★★ 리브 탭에서 연 세션 이름이 서버·화면에서 같다 — 갈리면 사이드바로 연 리브 세션이 터미널로 열린다", () => {

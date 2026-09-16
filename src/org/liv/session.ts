@@ -67,8 +67,11 @@ export function pickLivSession(f: LivSessionFacts): string | null {
   return f.successor || f.state?.superseded_by || null;
 }
 
-/** 지금의 리브 세션 id — 없으면 null. 좌표가 옛 id 면 고쳐 적는다(비치명). */
-export async function currentLivSessionId(userId: string): Promise<string | null> {
+/**
+ * 지금의 리브 세션 id — 없으면 null. 좌표가 옛 id 면 고쳐 적는다(heal — 비치명).
+ *  o.heal=false 는 **읽기만** 한다 — 조회(GET) 창구가 쓰기를 하지 않게(읽기전용 판정은 메서드로 가른다). 사슬은 매번 따라가므로 답은 같다.
+ */
+export async function currentLivSessionId(userId: string, o: { heal?: boolean } = {}): Promise<string | null> {
   if (!userId) return null;
   const { getLivProfile, setLivSession } = await import("../store.js");
   const prof = await getLivProfile(userId).catch(() => null);
@@ -83,7 +86,7 @@ export async function currentLivSessionId(userId: string): Promise<string | null
   const alive = !!state && !state.superseded_by;
   const successor = alive ? null : await resolveSessionSuccessor(stored).catch(() => null);
   const id = pickLivSession({ stored, state: state ?? null, successor, trashed: trashedIds.length > 0, me: userId });
-  if (id && id !== prof?.liv_session?.id) {
+  if (o.heal !== false && id && id !== prof?.liv_session?.id) {
     await setLivSession(userId, { id, at: new Date().toISOString() })
       .catch((err) => logger.warn({ err, member: userId, session: id }, "리브 세션 좌표 갱신 실패(비치명)"));
   }
