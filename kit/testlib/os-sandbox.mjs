@@ -24,7 +24,8 @@ export const WIN = process.platform === "win32";
 //   env 를 통째로 물려받아 그 안의 LIVELY_TOKEN·LIVELY_SESSION_ID 가 **진짜**였다. 훅은 토큰을 `env → 파일` 순으로
 //   읽고 게이트웨이 기본 주소가 http://localhost:8080 이라, 테스트 한 번이 dev 게이트웨이에 POST 해서 **살아 있는
 //   세션 3개의 대화 매핑을 "s7" 로 덮었다**(웹 대화창의 이어읽기·정밀 복원이 깨진다).
-//  ⚠ HOME 샌드박스로는 절대 못 막는다 — 훅에서 env 가 파일보다 **우선**이기 때문이다. 그래서 값을 비우는 것이
+//  ⚠ HOME 샌드박스로는 절대 못 막는다 — 훅은 라이블리가 띄운 pane(LIVELY_SESSION_ID)에선 env 를 파일보다 **우선**하고,
+//   파일이 없으면 어디서든 env 로 폴백한다(#959, hooks/session-preload.mjs 의 우선순위 주석). 그래서 값을 비우는 것이
 //   유일한 차단이고, 스텁 게이트웨이가 필요한 테스트는 이 조각 **뒤에** 자기 값을 세우면 된다(뒤 키가 이긴다).
 export const offlineLivelyEnv = () => ({
   LIVELY_TOKEN: "", LIVELY_SESSION_ID: "", LIVELY_GATEWAY_URL: "", LIVELY_NODE_TOKEN: "",

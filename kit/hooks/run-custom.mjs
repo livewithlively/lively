@@ -81,9 +81,16 @@ const DEFAULT_RELAY = ["deny", "ask", "defer"];
 const cacheFile = () => join(LIVELY, `custom-hooks-${EVENT.replace(/[^A-Za-z]/g, "")}.json`);
 
 const readLocal = (rel) => { try { return readFileSync(join(LIVELY, rel), "utf8").trim() || null; } catch { return null; } };
-// 자격은 **파일이 env 를 이긴다**(#916·#2617 의 훅 판 — 근거는 hooks/session-preload.mjs 의 우선순위 주석).
-const TOKEN = readLocal("token") || (process.env.LIVELY_TOKEN || "").trim();
-const GW = (readLocal("gateway-url") || (process.env.LIVELY_GATEWAY_URL || "").trim() || "http://localhost:8080").replace(/\/$/, "");
+// 자격·주소 — 사람이 연 셸이면 파일이, 라이블리가 띄운 pane(LIVELY_SESSION_ID)이면 env 가 이긴다(#959).
+//  근거 전문은 hooks/session-preload.mjs 의 «훅의 자격·주소 우선순위» 주석.
+const SPAWNED = !!(process.env.LIVELY_SESSION_ID || "").trim();
+const pickCred = (envName, fileVal) => {
+  const env = (process.env[envName] || "").trim();
+  return (SPAWNED ? (env || fileVal) : (fileVal || env)) || "";
+};
+const TOKEN = pickCred("LIVELY_TOKEN", readLocal("token"));
+const GW_PICKED = pickCred("LIVELY_GATEWAY_URL", readLocal("gateway-url")).replace(/\/$/, "");
+const GW = GW_PICKED || "http://localhost:8080";
 
 function emitContext(text) {
   if (!text) return;
@@ -305,6 +312,11 @@ function spawnHook(hook, stdin, ext, expectHash) {
         input: stdin, timeout, killSignal: "SIGKILL", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
         env: {
           ...process.env,
+          // 본문 훅도 러너가 고른 **같은 신원·같은 주소**로 나가게 한다(#959). 훅 본문은 대개 «env 먼저» 로 고르므로,
+          //  사람이 연 셸에서 rc 가 심은 옛 LIVELY_TOKEN 을 그대로 물려받으면 러너만 새 신원이고 본문은 옛 신원이 된다.
+          //  라이블리가 띄운 pane 에선 러너가 고른 값이 곧 그 env 라 달라지는 게 없다. 고른 값이 없으면 싣지 않는다.
+          ...(TOKEN ? { LIVELY_TOKEN: TOKEN } : {}),
+          ...(GW_PICKED ? { LIVELY_GATEWAY_URL: GW_PICKED } : {}),
           ...(HARNESS ? { LIVELY_HARNESS: HARNESS } : {}),
           LIVELY_HOOK_TIMEOUT_MS: String(timeout),
         }, maxBuffer: 4 * 1024 * 1024,

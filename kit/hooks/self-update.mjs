@@ -380,7 +380,11 @@ function reconcileOneClaudeConfig(cj, gw, token) {
 async function main() {
   if (hookDisabled()) return;
 
-  // 자격은 **파일이 env 를 이긴다**(#916·#2617 의 훅 판 — 근거는 hooks/session-preload.mjs 의 우선순위 주석).
+  // 자격·주소는 **언제나 파일이 이긴다** — 다른 훅과 달리 라이블리가 띄운 pane 에서도 그렇다(#959).
+  //  이 스크립트가 다루는 것은 세션이 아니라 **이 머신의 키트 설치**(~/.lively·공유 .claude.json)이고, 그 설치의 주인은
+  //  `lively` CLI 와 같은 출처(파일 = 이 머신의 로컬 로그인)다. pane 의 env 를 따르면 공유 홈 박스에선 세션이 끝나면 회수될
+  //  훅 토큰(#1719)이 공유 설정에 구워질 수 있고, 위탁 판(#4012 T5)에선 **다른 게이트웨이의 키트**로 이 머신을 다시 깐다.
+  //  파일이 없을 때만(플러그인·프로비저닝·CI) env 로 폴백한다. 세션 쪽 규칙은 hooks/session-preload.mjs 의 우선순위 주석.
   const token = readL("token") || (process.env.LIVELY_TOKEN || "").trim();
   const gwRaw = readL("gateway-url") || (process.env.LIVELY_GATEWAY_URL || "").trim();
   if (!token || !gwRaw) return;                       // 미설치/무토큰 — 업데이트할 게 없다
@@ -463,7 +467,7 @@ async function main() {
 //   이미 exit 하고, 어드민 토글(hooks.self_update)은 아래 hookDisabled 로 main() 과 같은 판정을 쓴다.
 function mcpOnly() {
   if (hookDisabled()) return;
-  const token = readL("token") || (process.env.LIVELY_TOKEN || "").trim();
+  const token = readL("token") || (process.env.LIVELY_TOKEN || "").trim();       // main() 과 같은 판정 — 설치의 주인은 파일
   const gwRaw = readL("gateway-url") || (process.env.LIVELY_GATEWAY_URL || "").trim();
   if (!token || !gwRaw) return;                      // 미설치/무토큰 — 되살릴 등록 자체가 없다
   reconcileClaudeMcp(gwRaw.replace(/\/+$/, "").replace(/\/mcp$/, ""), token);
