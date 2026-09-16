@@ -65,7 +65,7 @@ const fn = (s: string, name: string): string => {
   assert.match(watch, /isSandboxTaskDir\(t\.task_dir\)\s*\?\s*await checkSandboxTask/, "W3 감시는 종료 줄 판정");
   assert.match(DELEGATE, /isSandboxTaskDir\(t\.task_dir\)\) \{\s*[^}]*tailTask\(t\.task_dir, from, null\)/, "W3 로그 tail 은 직접 읽기");
   assert.match(DELEGATE, /isSandboxTaskDir\(t\.task_dir\)\) await stopSandboxTask/, "W3 취소는 op 멈춤");
-  assert.match(REAPER, /SELECT id, node_id, session_id, requester, task_dir, finished_at/, "W3 회수기가 폴더 좌표를 읽는다");
+  assert.match(REAPER, /SELECT id, node_id, session_id, requester, task_dir,/, "W3 회수기가 폴더 좌표를 읽는다");
 }
 
 // W4 표지 — 기본 제공 맥락 잡이 싣고, 스토어가 쓴다.
@@ -83,7 +83,32 @@ const fn = (s: string, name: string): string => {
   assert.match(STORE, /\.\.\.\(execProfile \? \["exec_profile"\] : \[\]\)/, "W4 스토어가 칼럼을 쓴다");
 }
 
+// W6~W9 — codex 패리티(#4012 T2).
+{
+  const reap = fn(SCHED, "reapKill");
+  assert.ok(reap.indexOf("harvestSandboxReturn(") >= 0 && reap.indexOf("harvestSandboxReturn(") < reap.indexOf("reapSandboxTask("),
+    "W6 회수기: 수확이 치우기보다 먼저");
+  const fin = fn(SCHED, "finish");
+  assert.ok(fin.indexOf("harvestSandboxReturn(t)") >= 0 && fin.indexOf("harvestSandboxReturn(t)") < fin.indexOf("reapSandboxTask("),
+    "W6 종결: 수확이 치우기보다 먼저");
+  assert.match(REAPER, /task_dir, harness, finished_at/, "W6 회수기가 하네스를 읽는다");
+  const assign = fn(SCHED, "assignOne");
+  const guard = assign.indexOf('t.harness === "codex"');
+  assert.ok(guard >= 0 && guard < assign.indexOf("spawnSandboxTask("), "W7 codex 한 번에 하나 — 띄우기 전에");
+  assert.match(assign, /runningCountFor\(\{ requester: t\.requester, harness: "codex", taskDirPrefix: sandboxDataRoot\(\), except: t\.id \}\) > 0/, "W7 좌표");
+  assert.match(assign.slice(guard, assign.indexOf("spawnSandboxTask(")), /code: "capacity"/, "W7 기다리면 풀리는 배압");
+  const cand = fn(SCHED, "candidatesFor");
+  assert.match(cand, /route\.central === "sandbox" \? await sandboxLeaseFor\(t\) : await leaseEnvFor\(t\)/, "W8 자격 표 가르기");
+  assert.ok(cand.indexOf("schedulingRoute(") < cand.indexOf("sandboxLeaseFor("), "W8 경로가 먼저 정해진다");
+  const creds = readFileSync(path.join(ROOT, "web/admin-credentials.ts"), "utf8");
+  assert.match(creds, /kind: 'codex_auth_json'[^\n]*memberOnly: true/, "W9 등록 화면 종류(개인 전용)");
+  const verify = src("src/org/credentials/credential-verify.ts");
+  assert.match(verify, /\[CODEX_AUTH_KIND\]: \(token\) => describeCodexAuth\(parseCodexAuth\(token\)\)/, "W9 확인기");
+  const store = src("src/node/task-store.ts");
+  assert.match(store, /task_dir LIKE \$3 ESCAPE/, "W7 접두 LIKE 는 이스케이프한다");
+}
+
 // W5 스키마.
 assert.match(SCHEMA, /ALTER TABLE org_task ADD COLUMN IF NOT EXISTS exec_profile TEXT/, "W5");
 
-console.log("✓ sandbox-wiring — 경로·배정·감시·멈춤·회수·도구·표지·스키마 배선 (W1~W5)");
+console.log("✓ sandbox-wiring — 경로·배정·감시·멈춤·회수·도구·표지·스키마·codex 패리티 배선 (W1~W9)");

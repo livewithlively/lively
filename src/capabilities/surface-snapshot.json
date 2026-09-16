@@ -4034,7 +4034,7 @@
   "rest": [
    "POST /api/ui/me/credential"
   ],
-  "input_hash": "fa5bf8dd3c9d34f1"
+  "input_hash": "727188efb867982b"
  },
  {
   "name": "me_credential_verify",
@@ -4044,7 +4044,7 @@
   "rest": [
    "POST /api/ui/me/credential/verify"
   ],
-  "input_hash": "8210f8cb9a2d130f"
+  "input_hash": "3a380d23c2aeb541"
  },
  {
   "name": "me_credential_delete",
@@ -4054,7 +4054,7 @@
   "rest": [
    "POST /api/ui/me/credential/delete"
   ],
-  "input_hash": "beaaea6ecc43e453"
+  "input_hash": "8daa808bfbdb2617"
  },
  {
   "name": "org_credentials",
@@ -4074,7 +4074,7 @@
   "rest": [
    "POST /api/ui/org/credential"
   ],
-  "input_hash": "dbfc46d1e610ee4f"
+  "input_hash": "02bdf26b17416dfa"
  },
  {
   "name": "org_credential_delete",
@@ -4084,7 +4084,7 @@
   "rest": [
    "POST /api/ui/org/credential/delete"
   ],
-  "input_hash": "91c5cf81eb08e0a7"
+  "input_hash": "bfa7865147308910"
  },
  {
   "name": "me_aws_credentials",

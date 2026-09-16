@@ -104,7 +104,7 @@ assert.deepEqual(schedulingRoute(true, false), { central: null, remotes: true },
 
 // ── S6: 판 스크립트를 실제 sh 로 ────────────────────────────────────────────
 interface Run { rc: number; argv: string; stdin: string; fd3: string; stderr: string; ran: boolean; env: string }
-function runScript(o: { harness: "claude" | "codex"; curlRc?: number; creds?: Record<string, string>; harnessRc?: number; rotate?: boolean }): Run {
+function runScript(o: { harness: "claude" | "codex"; curlRc?: number; creds?: Record<string, string>; harnessRc?: number; rotate?: boolean; writeFd3?: boolean }): Run {
   const root = fs.mkdtempSync(path.join(TMP, "run-"));
   const bin = path.join(root, "bin");
   const credDir = path.join(root, "cred");
@@ -122,6 +122,8 @@ function runScript(o: { harness: "claude" | "codex"; curlRc?: number; creds?: Re
     `cat > "${root}/stdin"`,
     `echo "TOKEN=\${CLAUDE_CODE_OAUTH_TOKEN:-}|MCP=\${LIVELY_MCP_TOKEN:-}|CFG=\${CLAUDE_CONFIG_DIR:-}" > "${root}/env"`,
     o.rotate ? 'printf "%s" "rotated-auth" > "$CODEX_HOME/auth.json"' : ":",
+    //  판 안 에이전트 흉내 — 반환 채널에 아무거나 쓰려 한다(F1: 막혀야 한다).
+    o.writeFd3 ? '{ printf "%s" "INJECTED" >&3; } 2>/dev/null || true' : ":",
     `exit ${o.harnessRc ?? 0}`,
   ].join("\n") + "\n", { mode: 0o755 });
   const script = sandboxRunScript({ harness: o.harness, flags: [], systemPrompt: false, bypassPermissions: true, gatewayUrl: GW })
@@ -175,6 +177,14 @@ function runScript(o: { harness: "claude" | "codex"; curlRc?: number; creds?: Re
   const codexRot = runScript({ harness: "codex", creds: { lively: "L", "codex-auth": "orig-auth" }, rotate: true, harnessRc: 4 });
   assert.equal(codexRot.fd3, "rotated-auth", "S6 갱신본만 fd3 로");
   assert.equal(codexRot.rc, 4, "S5 반환 뒤에도 하네스 종료코드 보존");
+  //  ★ F1 — 하네스(와 그 도구)가 fd3 에 써도 반환 파일에 안 남는다. 스크립트만 쓴다.
+  const injClaude = runScript({ harness: "claude", creds: { lively: "L", anthropic: "A" }, writeFd3: true });
+  assert.equal(injClaude.rc, 0, `F1 claude ${injClaude.stderr}`);
+  assert.equal(injClaude.fd3, "", "F1 claude 하네스는 반환 채널에 못 쓴다");
+  const injCodex = runScript({ harness: "codex", creds: { lively: "L", "codex-auth": "orig-auth" }, writeFd3: true });
+  assert.equal(injCodex.fd3, "", "F1 codex 하네스도 못 쓴다");
+  const injRot = runScript({ harness: "codex", creds: { lively: "L", "codex-auth": "orig-auth" }, writeFd3: true, rotate: true });
+  assert.equal(injRot.fd3, "rotated-auth", "F2 갱신본만 — 하네스가 쓴 것은 섞이지 않는다");
   const codexNoAuth = runScript({ harness: "codex", creds: { lively: "L" } });
   assert.equal(codexNoAuth.rc, SANDBOX_EXIT_NOCRED, "S5 codex 자격 없음 → 70");
   assert.equal(codexNoAuth.ran, false);

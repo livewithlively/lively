@@ -10,12 +10,13 @@ import {
   setMemberSecret, deleteMemberSecret, getMemberSecret,
 } from "../org/credentials/member-secret-store.js";
 import { verifyCredential, verifierExists } from "../org/credentials/credential-verify.js";
+import { CODEX_AUTH_KIND, CREDENTIAL_SECRET_MAX, parseCodexAuth } from "../org/credentials/codex-auth.js";
 import { lastAuthFailureFor } from "../node/auth-failure-response.js"; // #1675 ③ 자격 건강 상태
 
 // 알려진 kind — 표면 문서/검증용(스토어는 형식만 검증하므로 신규 커넥터가 kind 를 늘려도 되지만, 오타 방지 힌트).
 const KNOWN_KINDS = [
   "gitlab_pat", "github_pat", "slack_user_token", "google_oauth_refresh", "clickup_token",
-  "notion_token", "aws_role_arn", "prometheus_bearer", "figma_token",
+  "notion_token", "aws_role_arn", "prometheus_bearer", "figma_token", "claude_setup_token", CODEX_AUTH_KIND,
 ];
 const KIND_DESC = `자격 종류(예: ${KNOWN_KINDS.join(", ")} — 신규 커넥터가 확장 가능)`;
 
@@ -25,6 +26,24 @@ function s(v: unknown, max = 4096): string {
   if (t.length > max) throw new HttpError(400, `값이 ${max}자를 초과합니다`);
   return t;
 }
+/**
+ * 저장할 시크릿 검사(#4012 T2) — 없으면 null(=기존 유지). **자르지 않고 거절한다.**
+ *  · 상한은 CREDENTIAL_SECRET_MAX(16KB) — 다른 입력칸의 4096 자보다 넓다. codex 로그인 파일(auth.json)은
+ *    JWT 두 개가 들어가 4KB 를 넘을 수 있어, 종전 상한에서는 등록 자체가 막혔다.
+ *  · codex 자격은 **형식을 본다** — 다른 파일·잘린 JSON 을 저장해 두면 한참 뒤 판이 조용히 인증 실패로 멈춘다.
+ */
+export function validateMemberSecret(kind: string, secret: unknown): string | null {
+  if (secret === undefined || secret === null) return null;
+  const v = String(secret);
+  if (v.length > CREDENTIAL_SECRET_MAX) throw new HttpError(400, `시크릿이 ${CREDENTIAL_SECRET_MAX}자를 초과합니다`);
+  if (kind.trim().toLowerCase() === CODEX_AUTH_KIND && v.trim() && !parseCodexAuth(v)) {
+    throw new HttpError(400,
+      "codex 로그인 파일(auth.json)로 읽히지 않습니다 — `codex login` 뒤 `~/.codex/auth.json` 의 내용을 통째로 붙여넣으세요"
+      + "(ChatGPT 로그인이면 tokens 가, API 키 방식이면 OPENAI_API_KEY 가 있어야 합니다).");
+  }
+  return v;
+}
+
 function metaOf(v: unknown): Record<string, unknown> {
   if (v === undefined || v === null) return {};
   if (typeof v !== "object" || Array.isArray(v)) throw new HttpError(400, "meta 는 객체여야 합니다");
@@ -72,12 +91,14 @@ const meCredentialSet: Capability = {
     if (s(i.kind).toLowerCase() === "aws_role_arn") {
       throw new HttpError(403, "aws_role_arn 은 개인 자격으로 등록할 수 없습니다 — 관리자가 통합 자격(org)으로만 등록합니다. AWS 단기자격은 me_aws_credentials 로 발급받으세요.");
     }
-    if (i.secret !== undefined && s(i.secret) && !secretsEnabled()) {
+    //  ⚠ 형식·길이 검사가 **암호화 키 확인보다 먼저**다 — 틀린 값은 어떤 배포에서든 틀린 값이다.
+    const secret = validateMemberSecret(s(i.kind), i.secret);
+    if (secret !== null && secret.trim() && !secretsEnabled()) {
       throw new HttpError(400, "시크릿 암호화 키(CONNECTOR_SECRET_KEY) 미설정 — 자격을 저장할 수 없습니다");
     }
     const cred = await setMemberSecret(
       memberOwner(user.userId), i.kind, i.scope_key,
-      { secret: i.secret === undefined ? null : s(i.secret), meta: metaOf(i.meta), label: s(i.label, 200) || null },
+      { secret, meta: metaOf(i.meta), label: s(i.label, 200) || null },
       user.userId,
     );
     return { credential: cred };

@@ -74,6 +74,19 @@ export async function runningCountByNode(): Promise<Map<string, number>> {
   return new Map((r.rows as Array<{ node_id: string; n: number }>).map((x) => [x.node_id, x.n]));
 }
 
+/**
+ * 실행 중인 태스크 수 — 의뢰자·하네스·작업 폴더 접두로 좁힌다(#4012 T2: 같은 멤버의 codex 샌드박스 판은 한 번에 하나).
+ *  `except` 는 지금 배정하려는 태스크 자신(재시도 중인 행이 자기를 세지 않게).
+ */
+export async function runningCountFor(o: { requester: string; harness: string; taskDirPrefix: string; except?: number }): Promise<number> {
+  const like = `${o.taskDirPrefix.replace(/[\\%_]/g, "\\$&")}/%`;
+  const r = await itemsPool.query(
+    `SELECT count(*)::int AS n FROM org_task
+      WHERE status='running' AND requester=$1 AND harness=$2 AND task_dir LIKE $3 ESCAPE '\\' AND id <> $4`,
+    [o.requester, o.harness, like, o.except ?? 0]);
+  return Number((r.rows[0] as { n?: number } | undefined)?.n ?? 0);
+}
+
 export async function markRunning(id: number, nodeId: string, sessionId: string, taskDir: string): Promise<void> {
   const r = await itemsPool.query(
     `UPDATE org_task SET status='running', node_id=$2, session_id=$3, task_dir=$4,

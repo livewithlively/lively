@@ -24,7 +24,7 @@ import { nodeOnline, nodeRpc, nodeSessionGone, schedulableRemotes, onTaskDone } 
 import { getNode, listNodes } from "./store.js";
 import { remoteDelegateAllowed } from "./node-access.js";
 import {
-  queuedTasks, runningTasks, runningCountByNode, markRunning, markFinished, requeue, setNodeLost, getTask,
+  queuedTasks, runningTasks, runningCountByNode, runningCountFor, markRunning, markFinished, requeue, setNodeLost, getTask,
   noteAssignFailure, matchNode, type DelegateTask, type SchedulableNode,
 } from "./task-store.js";
 import type { AssignFailCode } from "./assign-outcome.js";
@@ -35,8 +35,9 @@ import { handleAuthFailure } from "./auth-failure-response.js";
 import { reapFailedTaskSessions, decideReap, type FailedTaskRow, type ReapAttempt } from "./failed-session-reaper.js";
 import {
   sandboxAvailable, isContextJob, isSandboxTaskDir, schedulingRoute, spawnSandboxTask, checkSandboxTask,
-  stopSandboxTask, reapSandboxTask, SandboxBusyError, SANDBOX_HARNESSES,
+  stopSandboxTask, reapSandboxTask, SandboxBusyError, SANDBOX_HARNESSES, sandboxDataRoot,
 } from "./sandbox-task.js";
+import { SANDBOX_CREDS, sandboxLeaseFor, harvestSandboxReturn } from "./sandbox-credentials.js";
 
 export const CENTRAL_NODE_ID = "central";
 const TICK_MS = 5_000;
@@ -175,6 +176,8 @@ async function reapKill(t: FailedTaskRow): Promise<ReapAttempt> {
       const { revokeSessionHookToken } = await import("../terminal/profiles.js");
       await revokeSessionHookToken(t.session_id).catch(() => { /* 다음 회차 */ });
     }
+    //  codex 판이 토큰을 갱신했으면 **치우기 전에** 거둔다(치우면 반환 파일도 사라진다 — #4012 T2).
+    await harvestSandboxReturn({ id: t.id, requester: t.requester, harness: String(t.harness ?? ""), task_dir: t.task_dir ?? null });
     const r = await reapSandboxTask(String(t.task_dir), false);
     return decideReap(r.done, null, r.why, r.reached);
   }
@@ -217,6 +220,8 @@ async function finish(t: DelegateTask, ok: boolean, exit: number | null, summary
     //   실패 세션 회수기가 보존 상한대로 나중에 지운다). 유닛은 둘 다 비운다(같은 키로 다시 띄울 수 있게).
     const { revokeSessionHookToken } = await import("../terminal/profiles.js");
     if (t.session_id) await revokeSessionHookToken(t.session_id).catch(() => { /* 회수기가 다시 본다 */ });
+    //  codex 판이 토큰을 갱신했으면 **치우기 전에** 거둔다(#4012 T2). 성공·실패 모두 — 실패 판도 갱신은 했을 수 있다.
+    await harvestSandboxReturn(t);
     await reapSandboxTask(String(t.task_dir), !ok).catch(() => { /* 회수기가 다시 본다 */ });
   } else if (ok && t.session_id && t.node_id) {
     if (t.node_id === CENTRAL_NODE_ID) await killTaskSession(t.session_id).catch(() => { /* 이미 없음 */ });
@@ -312,11 +317,13 @@ export async function leaseEnvFor(
 //   **연결 시점 스냅샷**이라, 관리자가 공유를 끈 뒤에도 그 노드가 재연결하기 전까지 계속 열려 보인다 —
 //   정책 변경이 즉시 듣지 않는 건 접근통제에서 결함이다. 쿼리 1회(노드 수는 수십 규모)로 그걸 없앤다.
 async function candidatesFor(t: DelegateTask, counts: Map<string, number>, extra: Map<string, number>): Promise<{ nodes: SchedulableNode[]; env?: Record<string, string> }> {
-  const env = await leaseEnvFor(t);
-  const running = (id: string): number => (counts.get(id) ?? 0) + (extra.get(id) ?? 0);
-  const nodes: SchedulableNode[] = [];
   //  #4012 T3 — 샌드박스 op 가 있는 박스(매니지드)에서 중앙은 **맥락 잡 전용 샌드박스**다(schedulingRoute 머리말).
   const route = schedulingRoute(sandboxAvailable(), isContextJob(t));
+  //  자격 — 샌드박스 판은 **샌드박스 자격 표**(codex 포함, #4012 T2)로, 그 밖은 원격 노드 리스 표로 빌린다.
+  //   ⚠ 두 표를 합치지 않는다: codex 를 원격 리스 표에 넣으면 공유 노드가 노드 주인 로그인으로 codex 판을 돈다.
+  const env = route.central === "sandbox" ? await sandboxLeaseFor(t) : await leaseEnvFor(t);
+  const running = (id: string): number => (counts.get(id) ?? 0) + (extra.get(id) ?? 0);
+  const nodes: SchedulableNode[] = [];
   if (route.central === "sandbox") {
     if (!sandboxHarnesses || Date.now() - sandboxHarnesses.at > SANDBOX_HARNESS_TTL_MS) {
       sandboxHarnesses = { at: Date.now(), list: (await detectHarnesses()).filter((h) => SANDBOX_HARNESSES.includes(h)) };
@@ -374,13 +381,19 @@ async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Ma
     //  자격이 없으면 **지금** 끝낸다 — 기다려도 안 풀리고, 종전엔 이 경우가 10분 뒤 «적합 노드 없음» 으로만 드러났다.
     //   실패로 닫으면 증류 «판정함» 기록도 되돌아가(markFinished) 자료가 인박스로 돌아온다.
     if (!env) {
-      const lease = LEASE_SECRET[t.harness];
-      const reason = lease
-        ? `실행 멤버(${t.requester})의 ${t.harness} 자격(${lease.kind})이 없거나 멤버가 비활성이다 — 그 멤버의 '내 로그인'(me_credential_set)에서 등록하세요`
-        : `${t.harness} 는 아직 중앙 자격 리스가 없다(#4012 T2) — 맥락 잡 실행 하네스를 claude 로 두세요`;
+      const cred = Object.hasOwn(SANDBOX_CREDS, t.harness) ? SANDBOX_CREDS[t.harness] : undefined;
+      const reason = cred
+        ? `실행 멤버(${t.requester})의 ${t.harness} 자격(${cred.kind})이 없거나 멤버가 비활성이다 — 그 멤버가 내 자격(me_credential_set)에서 등록하세요`
+        : `${t.harness} 는 중앙 샌드박스 자격이 없는 하네스다 — 맥락 잡 실행 하네스를 claude·codex 로 두세요`;
       await markFinished(t.id, false, { reason: "no_credential", last_assign: { code: "no_credential", reason } }, reason);
       logger.warn({ task: t.id, requester: t.requester, harness: t.harness }, "맥락 잡 자격 없음 — 접수 즉시 실패");
       return { assigned: false, code: "no_credential", reason };
+    }
+    //  같은 멤버의 codex 판은 **한 번에 하나** — 둘이 동시에 토큰을 갱신하면 한쪽이 다른 쪽의 refresh token 을
+    //   무효화할 수 있다(#4012 T2). 기다리면 풀리는 것이라 배압(capacity)이다.
+    if (t.harness === "codex"
+      && await runningCountFor({ requester: t.requester, harness: "codex", taskDirPrefix: sandboxDataRoot(), except: t.id }) > 0) {
+      return { assigned: false, code: "capacity", reason: `실행 멤버(${t.requester})의 codex 판이 이미 돌고 있다 — 토큰 갱신 충돌을 피해 한 번에 하나씩` };
     }
     try {
       r = await spawnSandboxTask({ ...(runArgs as object), attempt: t.attempt + 1, timeoutSec: t.timeout_sec } as never);

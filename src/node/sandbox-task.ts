@@ -198,7 +198,9 @@ export function sandboxRunScript(i: SandboxScriptInput): string {
       `CLAUDE_CODE_OAUTH_TOKEN=$(cat "$CREDENTIALS_DIRECTORY/anthropic" 2>/dev/null) || { echo "lvly-task: 판에 claude 자격이 없다" >&2; exit ${SANDBOX_EXIT_NOCRED}; }`,
       "export CLAUDE_CODE_OAUTH_TOKEN",
       'export CLAUDE_CONFIG_DIR="$HOME/.claude"',
-      spec.run(bin, f, "/task/in/prompt.txt", bypass),
+      //  `3>&-` — 반환 채널(fd 3)은 **이 스크립트만** 쓴다. 하네스와 그 도구(에이전트의 셸)가 물려받으면
+      //   판 안 에이전트가 게이트웨이가 믿는 자리에 아무거나 쓸 수 있다.
+      `${spec.run(bin, f, "/task/in/prompt.txt", bypass)} 3>&-`,
       "exit $?",
     );
   } else {
@@ -215,7 +217,7 @@ export function sandboxRunScript(i: SandboxScriptInput): string {
       'export CODEX_HOME="$HOME/.codex"',
       'mkdir -p "$CODEX_HOME"',
       `install -m 600 "$CREDENTIALS_DIRECTORY/codex-auth" "$CODEX_HOME/auth.json" 2>/dev/null || { echo "lvly-task: 판에 codex 자격이 없다" >&2; exit ${SANDBOX_EXIT_NOCRED}; }`,
-      spec.run(bin, f, "/task/in/prompt.txt", bypass),
+      `${spec.run(bin, f, "/task/in/prompt.txt", bypass)} 3>&-`,
       "rc=$?",
       //  codex 는 토큰을 갱신하면 auth.json 을 다시 쓴다 — 버리면 저장된 자격이 낡는다. 달라졌을 때만 반환 채널(fd 3)로.
       'if ! cmp -s "$CREDENTIALS_DIRECTORY/codex-auth" "$CODEX_HOME/auth.json"; then cat "$CODEX_HOME/auth.json" >&3 2>/dev/null; fi',
