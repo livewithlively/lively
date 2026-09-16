@@ -117,7 +117,7 @@ export const ingestDistillersCapabilities: Capability[] = [
     "스코프: match_kinds(slack·email…)·match_system·include/exclude_channels·include/exclude_authors·exclude_bots·min_chars·lookback_days. " +
     "기준: criteria_md(무엇을 지식화하나 — 팀마다 다른 자유서술). " +
     "형식: format_md(결과 문서 모양)·target_category(분류 고정)·default_type(page-type)·name_prefix·thread_aware(스레드를 한 지식으로). " +
-    "실행: batch_size·mode(headless|session)·session_ref·model·effort·requester. priority 높을수록 자료를 먼저 가져간다.",
+    "실행: batch_size·mode(headless|session)·session_ref·harness(AI 제공자)·model·effort·requester. priority 높을수록 자료를 먼저 가져간다.",
     [{ method: "POST", paths: ["/api/ui/org/distillers"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const distiller = await upsertDistiller(input as DistillerUpsertInput, actorOf(user), "web");
@@ -155,8 +155,9 @@ export const ingestDistillersCapabilities: Capability[] = [
       batch_max_msgs: z.number().optional().describe("한 배치 메시지 상한(1~2000, 기본 20). 스레드를 최근순으로 누적하다 이 값을 넘으면 멈춘다. ⚠ 첫 스레드는 예외 — 상한을 넘어도 통째로 담는다(171메시지 스레드는 그것 하나만 처리)."),
       mode: z.enum(["headless", "session"]).optional(),
       session_ref: z.string().nullable().optional(),
-      model: z.string().nullable().optional(),
-      effort: z.string().nullable().optional(),
+      harness: z.string().nullable().optional().describe("실행할 AI CLI(claude·codex·antigravity·grok). 비우면 자동 — 의뢰자가 로그인한 하네스 중에서 고른다(claude 우선). model 은 **이 하네스의 모델 이름**이어야 한다(다르면 그 하네스의 자동화 기본값으로 대체)."),
+      model: z.string().nullable().optional().describe("모델. 비우면 그 하네스의 자동화 기본값(claude=opus · codex=gpt-5.6-sol · antigravity=gemini-3.8-flash-high · grok=grok-4.6). ⚠ 비움이 «CLI 계정 기본» 을 뜻하지 않는다 — 무인 배치가 가장 비싼 모델로 도는 것을 막기 위해 라이블리가 기본을 정한다(#4008)."),
+      effort: z.string().nullable().optional().describe("추론강도. 비우면 그 하네스의 자동화 기본값(claude=low · codex=medium · antigravity=high · grok=medium)."),
       requester: z.string().nullable().optional(),
       note: z.string().nullable().optional(),
       reset_seen: z.boolean().optional().describe("판정 이력 초기화 — 이 증류기가 '보고 버린' 자료를 다시 인박스에 올린다(기준을 바꿔 재검토할 때). 이미 증류된 자료는 그대로 제외되므로 중복 증류는 없다."),

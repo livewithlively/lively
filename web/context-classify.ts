@@ -3,6 +3,7 @@
 import { api, busy, cardHead, el, fmtNum, relTime, toast, uiText } from './core.js';
 import { confirmDialog } from './admin.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
+import { runConfig } from './context-run-config.js';    // #4008 제공자·모델·추론강도 공용 선택기
 
 let editingKey: string | null = null;
 let creating = false;
@@ -151,6 +152,9 @@ function editor(c: any | null, reload: () => void) {
   const thIn = el('input', { type: 'number', style: S, step: '0.05', min: '0', max: '1', value: String(c?.confirm_threshold ?? 0.8) }) as HTMLInputElement;
   const batchIn = el('input', { type: 'number', style: S, min: '1', max: '500', value: String(c?.batch_size ?? 50) }) as HTMLInputElement;
   const reqIn = el('input', { type: 'text', style: S, value: c?.requester ?? '', placeholder: '비우면 잡 생성자' }) as HTMLInputElement;
+  //  제공자·모델·추론강도(#4008) — 분류기는 DB 에 model·effort 칸이 있는데 **화면이 그걸 안 물었다.**
+  //   그래서 여기서 만든 분류기는 전부 값이 비었고, 빈 값은 CLI 계정 기본(=가장 비싼 모델)으로 돌았다.
+  const run = runConfig({ harness: c?.harness ?? null, model: c?.model ?? null, effort: c?.effort ?? null }, S);
   const resetChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
 
   const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '분류기 만들기' : '저장' }) as HTMLButtonElement;
@@ -167,6 +171,7 @@ function editor(c: any | null, reload: () => void) {
         criteria_md: critIn.value.trim() || null, candidate_categories: candIn.value,
         confirm_threshold: Number(thIn.value), batch_size: Number(batchIn.value) || 50,
         requester: reqIn.value.trim() || null,
+        ...run.value(),
         reset_seen: resetChk.checked,
       }) });
       toast(isNew ? '분류기를 만들었습니다' : '저장했습니다');
@@ -188,6 +193,10 @@ function editor(c: any | null, reload: () => void) {
     F('확정 기준 확신도', '이 값 이상이면 바로 확정, 미만이면 사람 검토로 보냅니다. 높일수록 사람 손이 늘고 정확해집니다.', thIn),
     F('한 번에 처리할 지식 수', '', batchIn),
     F('의뢰자', '이 사람의 AI 계정으로 실행되고 과금됩니다.', reqIn),
+    F('AI 제공자', '이 분류기를 어느 AI 로 돌릴지. 「자동」이면 의뢰자가 로그인한 AI 중에서 고릅니다(클로드 우선).', run.harnessSel),
+    F('모델', '분류 기준이 까다로우면 더 좋은 모델을 권합니다. 정확해지는 만큼 비쌉니다.', run.modelSel),
+    F('추론 강도', '높일수록 정확하고 비쌉니다.', run.effortSel),
+    run.hint,
     el('label', { class: 'admin-check' }, resetChk, ' 이미 판정한 지식을 다시 보기 — 기준을 바꿨을 때 켜세요'),
     el('label', { class: 'admin-check' }, enabledChk, ' 이 분류기 사용'),
     el('div', { class: 'ctx-actions' }, saveBtn, cancelBtn));

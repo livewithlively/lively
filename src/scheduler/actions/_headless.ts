@@ -28,23 +28,32 @@ export function headlessRequester(params: Record<string, unknown>, createdBy: st
 }
 export const HEADLESS_REQUESTER_MISSING = { status: "error" as const, summary: { error: "의뢰자 미설정 — params.requester(멤버 id/이메일)를 지정하거나, 로그인 상태로 잡을 다시 저장해 created_by 를 남기세요." } };
 
-// #1101 헤드리스 실행 모델·추론강도 — 잡 params(model/effort)를 claude 하네스 플래그(--model/--effort)로 변환.
-//  세션 주입판은 관리세션 flags 가 모델을 정하지만, 헤드리스엔 이 경로가 없어 계정 기본모델로 떨어지던 갭(관리세션 sonnet/xhigh 무시).
-//  빈 값은 생략(계정 기본). 값 검증은 실행 직전 tasks.ts spawnTaskSession 의 FLAG_WHITELIST 가 한 번 더 한다(choices 밖이면 무시).
-export function headlessFlags(params: Record<string, unknown>): Record<string, string> {
-  const f: Record<string, string> = {};
-  const model = typeof params.model === "string" ? params.model.trim() : "";
-  const effort = typeof params.effort === "string" ? params.effort.trim() : "";
-  if (model) f["--model"] = model;
-  if (effort) f["--effort"] = effort;
-  return f;
+// #1101/#4008 헤드리스 실행 모델·추론강도 — 설정(증류기·분류기·관리기 행) 우선, 없으면 잡 params.
+//  ⚠ **여기서 플래그로 굳히지 않는다.** 하네스마다 모델 이름이 완전히 다르므로(opus ↔ gpt-5.6-sol ↔
+//   gemini-3.8-flash-high), 어느 CLI 로 돌지 정해지기 전에 값을 확정하면 그 값이 맞는지 판단할 수가 없다.
+//   종전엔 여기서 `{"--model": v}` 를 만들어 넘겼고, 하네스가 그 모델을 모르면 harnessFlagArgs 가 **조용히
+//   버려** `--model` 없이 실행됐다 — 그게 곧 «CLI 계정 기본 모델»(claude 는 fable)이고, 무인 배치가 가장
+//   비싼 모델로 도는 결말이었다(원준님 2026-09-16: 증류가 페이블로 돌아 토큰이 다 빨렸다).
+//   그래서 이 함수는 **희망값만** 실어 보내고, 확정은 하네스 해소 직후 enqueueHeadlessTask 가 한다.
+export function headlessRun(
+  cfg: { model?: string | null; effort?: string | null },
+  params: Record<string, unknown>,
+): { model: string | null; effort: string | null } {
+  const from = (a: unknown, b: unknown): string | null => {
+    for (const v of [a, b]) if (typeof v === "string" && v.trim()) return v.trim();
+    return null;
+  };
+  return { model: from(cfg.model, params.model), effort: from(cfg.effort, params.effort) };
 }
 
-// #1884 잡 params.harness — 헤드리스 실행 하네스. 비우면 자동(의뢰자가 로그인한 하네스 기준, claude 우선). 값 검증은 접수 시
-//  resolveHeadlessHarness 가 한다(헤드리스 불가 하네스면 error 로 보고 — 조용히 claude 로 바꾸지 않는다).
-export function headlessHarness(params: Record<string, unknown>): string | null {
-  const h = typeof params.harness === "string" ? params.harness.trim() : "";
-  return h || null;
+// #1884/#4008 헤드리스 실행 하네스 — 설정(행) 우선, 없으면 잡 params, 그래도 없으면 자동(의뢰자가 로그인한
+//  하네스 기준, claude 우선). 값 검증은 접수 시 resolveHeadlessHarness 가 한다(헤드리스 불가 하네스면
+//  error 로 보고 — 조용히 claude 로 바꾸지 않는다).
+//  cfg 를 앞에 둔 이유: 증류기·분류기·관리기는 **자기 제공자를 스스로 정할 수 있어야 한다**(#4008). 종전엔
+//   이 축이 잡 params 에만 있어서, 한 잡이 여러 레인을 돌리는데 제공자는 잡 하나로 묶여 있었다.
+export function headlessHarness(params: Record<string, unknown>, cfg?: { harness?: string | null }): string | null {
+  for (const v of [cfg?.harness, params.harness]) if (typeof v === "string" && v.trim()) return v.trim();
+  return null;
 }
 
 // #1058/#1061 헤드리스 위탁 접수 — 세션 주입 대신 위탁(delegate) 파이프라인에 태스크를 넣어 **매 실행 새 헤드리스 one-shot**
@@ -58,7 +67,11 @@ export function headlessHarness(params: Record<string, unknown>): string | null 
 //   실행 신원 = 의뢰자(headlessRequester)의 클로드 로그인/프로필. 중앙 단일프로필 박스는 공유 로그인 폴백.
 //  중첩 가드: 같은 잡의 이전 태스크가 아직 queued/running 이면 이번 주기는 건너뛴다(requester_session='cron:<id>' 마커) → pileup 방지.
 //  fire-and-forget: 접수·배치까지가 잡 책임(실행·결과수집은 위탁 스케줄러가 5s tick 으로). 결과 요약은 org_task.result / delegate_status.
-export async function enqueueHeadlessTask(o: { prompt: string; requester: string; jobId: string; repo?: string | null; harness?: string | null; flags?: Record<string, string>; extra?: Record<string, unknown>; marker?: string; nodePref?: string | null }): Promise<{ status: string; summary: unknown }> {
+//  모델·추론강도(#4008): `model`/`effort` 는 **희망값**이다 — 하네스를 정한 **뒤에** automationFlags 가 확정한다.
+//   비었거나 그 하네스가 모르는 값이면 그 하네스의 자동화 기본값으로 간다(catalog.AUTOMATION_DEFAULTS).
+//   종전(flags 를 통째로 받던 시절)엔 여기에 이미 굳은 `--model` 이 들어와, 하네스가 모르면 조용히 버려지고
+//   CLI 계정 기본(=가장 비싼 모델)으로 돌았다. 그 자리를 닫는 것이 이 함수의 새 책임이다.
+export async function enqueueHeadlessTask(o: { prompt: string; requester: string; jobId: string; repo?: string | null; harness?: string | null; model?: string | null; effort?: string | null; extra?: Record<string, unknown>; marker?: string; nodePref?: string | null }): Promise<{ status: string; summary: unknown }> {
   // 중첩 방지 마커 — 기본은 잡 단위(cron:<job>). #1289 증류기처럼 한 잡이 여러 배치를 병렬 접수하면 배치별로 갈라
   //  넘긴다(cron:<job>#<key>) — 안 그러면 첫 배치가 나머지를 전부 '진행 중'으로 막는다.
   const marker = o.marker || "cron:" + o.jobId;
@@ -79,10 +92,15 @@ export async function enqueueHeadlessTask(o: { prompt: string; requester: string
   try { harness = await resolveHeadlessHarness(o.requester, o.harness ?? null); }
   catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e), requester: o.requester, ...extra } }; }
 
+  // 모델·추론강도 확정(#4008) — **하네스가 정해진 지금** 대입한다(왜 여기인지는 headlessRun 주석).
+  //  dropped 는 «설정값이 이 하네스 것이 아니어서 기본으로 갈아탔다» 는 관측 — 잡 요약에 실어 조용히 넘어가지 않게 한다.
+  const { automationFlags } = await import("../../terminal/catalog.js");
+  const run = automationFlags(harness, { model: o.model, effort: o.effort });
+
   let task: Awaited<ReturnType<typeof createTask>>;
   // nodePref(#1881) — 잡이 실행 위치를 고정할 수 있다(예: node="central" = 게이트웨이 박스에서).
   //  기본은 미지정(스케줄러 자유 배정 — 오프로드 취지). matchNode 가 node_pref 있으면 그 노드만 후보로 삼는다.
-  try { task = await createTask({ requester: o.requester, requesterSession: marker, prompt: o.prompt, harness, repo: o.repo ?? null, flags: o.flags ?? {}, nodePref: o.nodePref ?? null }); }
+  try { task = await createTask({ requester: o.requester, requesterSession: marker, prompt: o.prompt, harness, repo: o.repo ?? null, flags: run.flags, nodePref: o.nodePref ?? null }); }
   catch (e) { return { status: "error", summary: { error: "위탁 태스크 생성 실패: " + ((e as Error)?.message ?? String(e)), requester: o.requester, harness } }; }
 
   // 요청→즉답: 지금 배치 가능한지 그 자리에서 판정(위탁 스케줄러 tick 을 안 기다림). 안 되면 큐에 남겨 상한 내 재시도(중첩가드가 pileup 차단).
@@ -90,6 +108,10 @@ export async function enqueueHeadlessTask(o: { prompt: string; requester: string
   try { assign = await tryAssignNow(task); }
   catch (e) { return { status: "error", summary: { error: "배치 오류: " + ((e as Error)?.message ?? String(e)), task_id: task.id } }; }
 
-  if (!assign.assigned) return { status: "ok", summary: { task_id: task.id, queued: true, reason: assign.reason, requester: o.requester, harness, ...extra } };
-  return { status: "ok", summary: { task_id: task.id, assigned_node: assign.nodeId, requester: o.requester, harness, ...extra } };
+  //  model·effort 를 요약에 싣는다(#4008) — 종전엔 **무엇으로 돌았는지 어디에도 안 남아서**, 증류가 몇 주째
+  //   가장 비싼 모델로 돌고 있는 것을 청구서를 보고서야 알았다. 관측이 없으면 같은 사고가 또 조용히 난다.
+  const ran = { harness, model: run.flags["--model"] ?? null, effort: run.flags["--effort"] ?? null,
+    ...(run.dropped.length ? { ignored_settings: run.dropped } : {}) };
+  if (!assign.assigned) return { status: "ok", summary: { task_id: task.id, queued: true, reason: assign.reason, requester: o.requester, ...ran, ...extra } };
+  return { status: "ok", summary: { task_id: task.id, assigned_node: assign.nodeId, requester: o.requester, ...ran, ...extra } };
 }

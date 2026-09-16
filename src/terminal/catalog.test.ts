@@ -18,9 +18,13 @@ test("설치된 각 하네스의 현행 모델 목록을 반영한다", () => {
   assert.ok(models("claude").includes("fable"));
   assert.deepEqual(models("grok"), ["grok-4.6"]);
   assert.ok(HARNESSES.find((h) => h.key === "grok")!.flags.find((f) => f.name === "--effort")?.choices?.includes("xhigh"));
+  //  antigravity 는 `agy models` 실측 목록을 그대로 싣는다 — 새 계열을 넣고, **없어진 계열은 뺀다**
+  //   (그록 4.5 에서 배운 것과 같은 규칙: 목록에 없는 모델은 고르는 즉시 실패한다).
+  //   2026-09-16 재실측: 3.8 계열이 생기고 3.5 계열이 빠졌다.
+  assert.ok(models("antigravity").includes("gemini-3.8-flash-high"));
   assert.ok(models("antigravity").includes("gemini-3.7-flash-high"));
   assert.ok(models("antigravity").includes("gemini-3.6-flash-medium"));
-  assert.ok(models("antigravity").includes("gemini-3.5-flash-low"));
+  assert.ok(!models("antigravity").some((m) => m.startsWith("gemini-3.5-")));
   assert.ok(models("opencode").includes("opencode/nemotron-3.5-lightning-free"));
 });
 

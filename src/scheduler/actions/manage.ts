@@ -4,7 +4,7 @@
 //   · mismatch·outdated — 결정적 SQL 판정. **이 틱 안에서** 발견을 쌓고 auto 면 조치까지 한다(LLM 비용 0).
 //   · contradiction·code_drift — 후보를 좁혀 헤드리스 배치로 접수. 판정은 AI 가 하고
 //     org_manager_finding_report 로 되돌려 적는다.
-import { headlessRequester, HEADLESS_REQUESTER_MISSING, headlessFlags, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
+import { headlessRequester, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 import { listManagers, getManager, needsLlm } from "../../org/store/managers.js";
 import { runManager, type ManagerRunResult } from "../../org/manage/run-manager.js";
 
@@ -33,14 +33,15 @@ export async function runManagers(
   const out: ManagerRunResult[] = [];
   for (const m of targets) {
     const enqueue = requester
-      ? async (prompt: string, o: { model?: string | null; effort?: string | null; requester?: string | null; repo?: string | null; extra?: Record<string, unknown> }) =>
+      ? async (prompt: string, o: { harness?: string | null; model?: string | null; effort?: string | null; requester?: string | null; repo?: string | null; extra?: Record<string, unknown> }) =>
           enqueueHeadlessTask({
             prompt, requester: o.requester || requester, jobId,
             // repo 를 주면 base clone→worktree 를 자동 준비해 작업 cwd 로 삼는다(#1419 T8) —
             //  지식↔코드 비교는 코드를 실제로 읽어야 판정할 수 있고, 워크트리 없이는 AI 가 추측하게 된다.
             repo: o.repo ?? null,
-            harness: headlessHarness(params),   // 관리기 설정엔 하네스 축이 없다 — 잡 params 만(비우면 의뢰자 로그인 기준 자동)
-            flags: headlessFlags({ model: o.model ?? params.model, effort: o.effort ?? params.effort }),
+            // 제공자·모델·추론강도(#4008) — 관리기 설정 우선, 없으면 잡 params, 그래도 없으면 그 하네스의 자동화 기본값.
+            harness: headlessHarness(params, o),
+            ...headlessRun(o, params),
             extra: o.extra,
             // 관리기별로 마커를 갈라 준다 — 한 잡이 여러 관리기를 병렬 접수할 때 첫 관리기가
             //  나머지를 전부 '진행 중'으로 막지 않게(#1289 증류기에서 배운 것과 같은 함정).

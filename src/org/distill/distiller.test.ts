@@ -29,7 +29,7 @@ const mk = (o: Partial<DistillerRow> = {}): DistillerRow => ({
   criteria_md: null, format_md: null, target_category: null, default_type: null,
   name_prefix: null, thread_aware: false,
   prefilter_level: 0, prefilter_rules: null, prompt_sections: null,
-  batch_size: 3, batch_max_msgs: 20, mode: "headless", session_ref: null, model: null, effort: null, requester: null,
+  batch_size: 3, batch_max_msgs: 20, mode: "headless", session_ref: null, harness: null, model: null, effort: null, requester: null,
   last_run_at: null, last_status: null, last_summary: null, note: null, updated_at: null,
   ...o,
 });
