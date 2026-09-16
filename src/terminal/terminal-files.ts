@@ -306,18 +306,15 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     const { base, abs, osUser } = await resolveBrowse(req, true, true);   // 생성 → NFC 정본(#1278b)
     try { await receiveUpload(req, abs, MAX_UPLOAD, osUser); }
     catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
-    // 올린 파일 = 자료 1건(#1881 L1) — 개인 폴더는 올린 사람만 보는 자료, 공유 루트의 project/<id>/… 는 프로젝트 자료로 접는다.
+    // 올린 파일 = 자료 1건(#1881 L1) — 공유 루트의 project/<id>/… 는 프로젝트 자료로 접는다.
     //  실패해도 업로드는 성공이다(로그만).
-    //  share=team(#1631) — **자기 개인 루트** 업로드에만 먹는 명시 옵션: «올린 사람만» 잠금을 걸지 않고 팀원 모두가 보는 자료로 둔다.
-    //   초대로 들어온 사람의 처음 설정이 쓴다(원준 결정 2026-09-13 «합류자가 올린 파일은 팀원 모두가 본다»). 기본값은 종전 그대로(올린 사람만).
-    //   ⚠ 공유 루트(root=shared)로 올리게 하지 않은 이유 — 매니지드에서 공유 루트는 테넌트 구분 없는 고정 경로다
-    //    (profiles.ts resolveRootPath 의 격리 갈래 = SHARED_ISOLATED_BASE). 워크스페이스 사이 분리를 릴레이에만 기대는 자리에 팀 자료를 두지 않는다.
-    const shareWithTeam = String(req.query.root ?? "") === "personal" && String(req.query.share ?? "") === "team";
+    //  (#4007) share=team 질의는 폐기했다 — 개인 루트 업로드를 더는 «올린 사람만» 으로 잠그지 않으므로 풀 잠금이 없다.
+    //   옛 클라이언트가 계속 붙여 보내도 무해하다(읽는 곳이 없다). 이유는 ingest/local-file.ts 의 #4007 주석에.
     let ing: Awaited<ReturnType<typeof ingestLocalUpload>> | null = null;
     try {
       const u = userOf(req);
       const loc = await localRootForBrowse(String(req.query.root ?? ""), u, base, abs);
-      if (loc) ing = await ingestLocalUpload({ ...loc, abs, osUser, shareWithTeam, uploader: { id: viewerFor(req), name: u?.email ?? null } });
+      if (loc) ing = await ingestLocalUpload({ ...loc, abs, osUser, uploader: { id: viewerFor(req), name: u?.email ?? null } });
     } catch (e) { console.warn(`[local-ingest] 자료 등록 실패 ${abs}: ${(e as Error)?.message ?? e}`); }
     // path = 절대경로(#1870) — 새 세션 컴포저가 개인 폴더(root=personal)에 올린 첨부를 첫 지시에 절대경로로 적는다
     //  (세션 cwd 는 세션 전용 폴더라 상대경로로는 못 찾는다 — 세션 라우트의 path 응답과 같은 이유).

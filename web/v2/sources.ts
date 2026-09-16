@@ -544,7 +544,7 @@ function metaOf(sel: SrcSel, r: SrcRow): string {
 
 function rowOf(r: SrcRow, sel: SrcSel): HTMLElement {
   const f = r.fields || {};
-  const priv = r.visibility === 'members' || String(f.root || '') === 'personal';
+  const priv = r.visibility === 'members';   // (#4007) 개인 루트라는 이유만으로 잠그지 않는다 — 실제 잠금만 자물쇠다
   const isFile = r.kind === 'local_file';
   const lead = isFile
     ? el('span', { class: 'v2-srl-ext ' + extClass(String(f.ext || '')), text: String(f.ext || 'file').toUpperCase().slice(0, 4) })
@@ -581,7 +581,7 @@ function lockGlyph(): SVGElement {
   r.setAttribute('x', '5'); r.setAttribute('y', '10'); r.setAttribute('width', '14'); r.setAttribute('height', '10'); r.setAttribute('rx', '2');
   const p = document.createElementNS(ns, 'path'); p.setAttribute('d', 'M8 10V7a4 4 0 0 1 8 0v3');
   svg.append(r, p);
-  const t = document.createElementNS(ns, 'title'); t.textContent = '올린 사람만 봅니다';
+  const t = document.createElementNS(ns, 'title'); t.textContent = '지정된 사람만 봅니다';
   svg.append(t);
   return svg;
 }
@@ -618,9 +618,9 @@ function readSheet(s: any, sel: SrcSel): HTMLElement {
   const chan = String(f.container_name || '');
   const isFile = s.kind === 'local_file';
   const isChat = sys === 'slack' || sys === 'discord';
-  //  (#1631) 개인 루트 파일은 «올린 사람만» 이 기본이지만, 올릴 때 팀원 모두를 명시한 것(fields.share='team' — 초대로 들어온 사람의
-  //   처음 설정)은 아니다. 실제 잠금(visibility='members')이 있으면 그것이 먼저다.
-  const priv = s.visibility === 'members' || (String(f.root || '') === 'personal' && f.share !== 'team');
+  //  (#4007) 개인 루트 자동 잠금을 없앴으므로 root/share 추정을 하지 않는다 — 실제 잠금(visibility='members')만 본다.
+  //   그 잠금은 이제 부서 구분 정책(org_source_vis_policy, EE)에서만 온다.
+  const priv = s.visibility === 'members';
   const derived: any[] = s.knowledge || [];
 
   const meta = el('div', { class: 'v2-src-dmeta' },
@@ -629,7 +629,7 @@ function readSheet(s: any, sel: SrcSel): HTMLElement {
     ...(isFile && f.bytes ? [el('span', { class: 'mono', text: bytesText(f.bytes) })] : []),
     ...(authorOf(s as SrcRow) ? [el('span', { text: shortPerson(authorOf(s as SrcRow)) + (isFile ? ' 님이 올렸습니다' : '') })] : []),
     el('span', { class: 'mono', text: absLike(s.occurred_at || s.updated_at) }),
-    el('span', { class: 'vis' }, priv ? '올린 사람만 봅니다' : '이 워크스페이스 사람 모두가 봅니다'));
+    el('span', { class: 'vis' }, priv ? '지정된 사람만 봅니다' : '이 워크스페이스 사람 모두가 봅니다'));
 
   //  문 — 파일이면 내려받기(browse API — #/f 와 같은 문)와 폴더, 남의 시스템이면 그 시스템으로.
   const acts = el('div', { class: 'v2-src-dacts' });
