@@ -62,6 +62,7 @@ export async function runClassifyKnowledgeHeadless(params: Record<string, unknow
           harness: headlessHarness(params, c),
           ...headlessRun(c, params),
           extra: { classifier: c.key, unmapped: inbox.length },
+          execProfile: "context",   // #4012 T3 — 기본 제공 맥락 잡: 매니지드에선 중앙 샌드박스로만 간다
         });
         // '봤다'는 **배치를 낸 시점에** 기록한다(LLM 자기보고 아님 — #1289 교훈).
         //  이게 없으면 LLM 이 '못 정하겠다'고 넘긴 지식이 updated_at DESC 맨 앞에 영원히 남는다.
@@ -92,7 +93,7 @@ export async function runClassifyKnowledgeHeadless(params: Record<string, unknow
   catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e) } }; }
   if (!inbox.length) return { status: "ok", summary: { skipped: "미분류 지식 없음", unmapped: 0 } };
   const prompt = (typeof params.prompt === "string" && params.prompt.trim()) ? params.prompt.trim() : buildClassifyKnowledgePrompt(inbox.length);
-  return enqueueHeadlessTask({ prompt, requester, jobId, harness: headlessHarness(params), ...headlessRun({}, params), extra: { unmapped: inbox.length } });
+  return enqueueHeadlessTask({ prompt, requester, jobId, harness: headlessHarness(params), ...headlessRun({}, params), extra: { unmapped: inbox.length }, execProfile: "context" });
 }
 
 /**

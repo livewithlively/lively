@@ -9,6 +9,8 @@ export interface DelegateTask {
   prompt: string; harness: string; subpath: string; repo: string | null; git_ref: string | null; flags: Record<string, string>;
   need_cpu: number | null; need_ram_mb: number | null; need_disk_mb: number | null;
   needs_docker: boolean; node_pref: string | null; env_lease: boolean;
+  /** #4012 T3 — 실행 프로필('context' = 기본 제공 맥락 잡). 없으면 종전 위탁. 구 스키마 행은 undefined 다. */
+  exec_profile?: string | null;
   status: DelegateStatus; node_id: string | null; session_id: string | null; task_dir: string | null;
   attempt: number; max_attempts: number; timeout_sec: number;
   node_lost_at: string | null; result: Record<string, unknown> | null; error: string | null;
@@ -23,17 +25,22 @@ export async function createTask(input: {
   repo?: string | null; gitRef?: string | null;
   flags?: Record<string, string>; needCpu?: number | null; needRamMb?: number | null; needDiskMb?: number | null;
   needsDocker?: boolean; nodePref?: string | null; timeoutSec?: number; maxAttempts?: number;
+  // #4012 T3 — 실행 프로필('context'). 비우면 컬럼을 안 쓴다(harness 와 같은 규율 — 구 호출자 SQL 무변경).
+  execProfile?: string | null;
 }): Promise<DelegateTask> {
   const harness = (input.harness ?? "").trim();   // 빈 값은 컬럼을 아예 안 써서 DB DEFAULT 가 살아 있게 한다
+  const execProfile = (input.execProfile ?? "").trim();
+  const extraCols = [...(harness ? ["harness"] : []), ...(execProfile ? ["exec_profile"] : [])];
+  const extraVals = [...(harness ? [harness] : []), ...(execProfile ? [execProfile] : [])];
   const r = await itemsPool.query(
     `INSERT INTO org_task(requester, requester_session, prompt, subpath, repo, git_ref, flags, need_cpu, need_ram_mb, need_disk_mb,
-                          needs_docker, node_pref, timeout_sec, max_attempts${harness ? ", harness" : ""})
-       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14${harness ? ",$15" : ""}) RETURNING *`,
+                          needs_docker, node_pref, timeout_sec, max_attempts${extraCols.map((c) => `, ${c}`).join("")})
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14${extraVals.map((_, i) => `,$${15 + i}`).join("")}) RETURNING *`,
     [input.requester, input.requesterSession ?? null, input.prompt, input.subpath ?? "", input.repo ?? null, input.gitRef ?? null,
      JSON.stringify(input.flags ?? {}), input.needCpu ?? null, input.needRamMb ?? null, input.needDiskMb ?? null,
      !!input.needsDocker, input.nodePref ?? null,
      Math.min(Math.max(60, input.timeoutSec ?? 3600), 6 * 3600), Math.min(Math.max(1, input.maxAttempts ?? 2), 5),
-     ...(harness ? [harness] : [])],
+     ...extraVals],
   );
   return r.rows[0] as DelegateTask;
 }
