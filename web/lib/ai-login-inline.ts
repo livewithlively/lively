@@ -55,6 +55,21 @@ export interface InlineLoginHandle {
   stop(): void;
 }
 
+/**
+ * 무엇을 위한 로그인인가.
+ *  · login    — 내가 앉아서 쓰는 세션의 로그인(`claude auth login` · `codex login --device-auth`).
+ *  · headless — **사람 없이 도는 작업**(증류·분류·관리)의 자격 발급(#4051 — `claude setup-token` · 따로 된 codex 로그인).
+ *    화면이 하는 일(주소 열기 · 코드 넣기)은 같고, 서버 자리와 «끝났다» 의 뜻만 다르다: 헤드리스는 서버가 자격을
+ *    **저장했을 때**(stored)만 끝이다. 자격 파일 존재 판정(loggedIn)은 이 용도와 무관하다.
+ */
+export type InlineLoginPurpose = 'login' | 'headless';
+const LOGIN_BASE: Readonly<Record<InlineLoginPurpose, string>> = Object.freeze({
+  login: '/api/ui/me/ai-login',
+  headless: '/api/ui/me/headless-login',
+});
+/** 헤드리스 자격을 화면에서 받을 수 있는 하네스 — 서버 `HEADLESS_LOGIN_HARNESSES` 와 같은 목록이어야 한다. */
+export const HEADLESS_INLINE: Readonly<Record<string, true>> = Object.freeze({ claude: true, codex: true });
+
 /** 주소가 이만큼 안 오면 «늦네요» 라고 말한다 — 그래도 **계속 기다린다**. */
 export const STALL_MS = 30_000;
 /** 상태 폴링 간격. */
@@ -71,8 +86,11 @@ const TICK_MS = 2_000;
  *   화면은 종전 «창으로 열기» 탈출로를 그대로 두면 된다.
  */
 export function startInlineAiLogin(
-  harness: string, view: InlineLoginView, opts: { restart?: boolean; alive?: () => boolean } = {},
+  harness: string, view: InlineLoginView,
+  opts: { restart?: boolean; alive?: () => boolean; purpose?: InlineLoginPurpose } = {},
 ): InlineLoginHandle {
+  const purpose: InlineLoginPurpose = opts.purpose === 'headless' ? 'headless' : 'login';
+  const base = LOGIN_BASE[purpose];
   let stopped = false;
   const alive = (): boolean => !stopped && (opts.alive ? opts.alive() : true);
   let lastUrl = ''; let lastCode = ''; let saidPaste = false;
@@ -93,7 +111,7 @@ export function startInlineAiLogin(
   const tick = async (): Promise<void> => {
     if (!alive()) return;
     let st: Record<string, unknown> | null = null;
-    try { st = await api(`/api/ui/me/ai-login/state?harness=${encodeURIComponent(harness)}`) as Record<string, unknown>; }
+    try { st = await api(`${base}/state?harness=${encodeURIComponent(harness)}`) as Record<string, unknown>; }
     catch (_) { /* 잠깐 못 물었다 — 다음 틱에. 조회 실패로 화면을 지우지 않는다 */ }
     if (!alive()) return;
 
@@ -103,12 +121,16 @@ export function startInlineAiLogin(
     //   그래서 «이번 시도의 결과» 로만 인정한다: 주소를 한 번 봤거나(사람이 브라우저에서 끝냈다),
     //   프로세스가 끝났거나(CLI 가 «이미 로그인됨» 이라며 스스로 종료했다).
     if (st && wasLoggedIn === null) wasLoggedIn = st.loggedIn === true;   // 첫 조회가 기준선이다
-    if (st && st.loggedIn === true && (wasLoggedIn === false || st.exited === true)) {
+    //  헤드리스(#4051)는 «이번 시도에서 서버가 저장했다» 하나만 끝이다 — 자격 파일 판정과 섞지 않는다.
+    const finished = purpose === 'headless'
+      ? !!st && st.stored === true
+      : !!st && st.loggedIn === true && (wasLoggedIn === false || st.exited === true);
+    if (finished) {
       if (!saidDone) {
         saidDone = true; stopped = true;
         view.done();
         //  끝났으면 그 자리를 치운다 — 남겨 두면 다음 사람이 **만료된 코드**를 본다.
-        try { await api('/api/ui/me/ai-login/cancel', { method: 'POST', body: JSON.stringify({ harness }) }); }
+        try { await api(`${base}/cancel`, { method: 'POST', body: JSON.stringify({ harness }) }); }
         catch (_) { /* 정리 실패는 사람에게 알릴 일이 아니다 */ }
       }
       return;
@@ -133,14 +155,14 @@ export function startInlineAiLogin(
   };
 
   void (async () => {
-    try { await api('/api/ui/me/ai-login/start', { method: 'POST', body: JSON.stringify({ harness, restart: opts.restart === true }) }); }
+    try { await api(`${base}/start`, { method: 'POST', body: JSON.stringify({ harness, restart: opts.restart === true }) }); }
     catch (e) { view.failed(`여기서 바로 시작하지 못했어요 — ${(e as Error)?.message || e}`); }
     void tick();
   })();
 
   return {
     async paste(code: string): Promise<void> {
-      await api('/api/ui/me/ai-login/paste', { method: 'POST', body: JSON.stringify({ harness, code }) });
+      await api(`${base}/paste`, { method: 'POST', body: JSON.stringify({ harness, code }) });
     },
     stop(): void { stopped = true; },
   };

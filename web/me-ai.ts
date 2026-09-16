@@ -13,7 +13,7 @@ import { svcTokenForm } from './admin-credentials.js';
 //  ★ #2477 — «화면에서 끝나는 로그인» 의 프로토콜은 한 벌이다(처음 설정과 공유). 여기선 그리기만 한다.
 import {
   isInlineCardHarness, startInlineAiLogin, ensureLoginTerminal, loginTerminalSrc, loginTerminalPopoutUrl,
-  type InlineLoginHandle, type LoginTerminal,
+  HEADLESS_INLINE, type InlineLoginHandle, type LoginTerminal,
 } from './lib/ai-login-inline.js';
 
 // ── [내 설정 ▸ 내 AI 계정] 박스 — 내 AI 계정(#1085). ──
@@ -233,46 +233,140 @@ function aiAccountRow(a, mySessions, reload) {
     //   **아무 일도 안 일어난다**(오류도 없다). 실측(2026-09-01, 상민님 신고)으로 밟았다.
     panel);
 }
-// ── 헤드리스 인증 실패 줄(#1675 → 여기로 옮겨 되살림, 2026-09-03) ────────────────────────
-//  **무엇이 다른가:** 위 계정 행들은 «내가 앉아서 쓰는 세션» 이 무엇으로 도는지다. 이 줄은 «사람이 안 보는
-//   동안 도는 것»(증류 · 분류 · 에이전트 크론 · 위탁)이 무엇으로 도는지다 — 그 실행은 내가 등록해 둔
-//   `claude setup-token`(member_secret kind=claude_setup_token)을 빌려 **내 Claude 계정으로** 돈다
-//   (src/node/task-scheduler.ts — CLAUDE_CODE_OAUTH_TOKEN 으로 리스).
-//  **왜 실패를 화면이 말해야 하나:** 그 토큰이 폐기·만료되면 자동 작업이 auth/init 에서 막히는데, 화면은
-//   아무 데도 안 변한다 — 증류가 안 돌고 크론이 안 도는 것을 며칠 뒤에 안다. #1675 가 그래서 배지를 만들었다.
-//  ⚠ **그 배지가 한동안 어디에도 안 떴다.** 배지는 [외부 서비스]의 «Claude (헤드리스 실행)» 행에 붙어
-//   있었는데, #2243 이 그 앱을 `LOGIN_SERVICES.hidden` 으로 내렸고 me-logins 의 `partition` 은 hidden 을
-//   네 버킷 전부에서 건너뛴다 → 행이 안 만들어지니 배지도 못 붙었다(주소로 여는 상세에도 없었다).
-//   그래서 **자리를 옮겨** 되살린다: 여기는 앱 카탈로그가 아니라 «내 AI 가 무엇으로 도나» 를 보는 화면이라,
-//   목록에서 내려도 사라지지 않는다. 신호 출처는 그대로 서버 한 곳이다(me/credentials 의 headless_auth_failure).
-//  ⚠ 실패가 **마지막 등록보다 나중**일 때만 말한다 — 다시 등록했으면 지난 실패는 이미 해결된 것이다.
-function headlessAuthWarn(creds: any, reload: () => void): HTMLElement | null {
-  const fail = creds?.headless_auth_failure;
-  if (!fail) return null;
-  const cred = (creds.credentials || []).find((c: any) => c.kind === 'claude_setup_token');
-  if (!cred?.has_secret) return null;   // 등록한 적 없는 사람에게 남의 실패를 보여주지 않는다
-  const failAt = fail.at ? new Date(fail.at).getTime() : 0;
-  const setAt = cred.updated_at ? new Date(cred.updated_at).getTime() : 0;
-  if (!(failAt > setAt)) return null;
-  //  ⚠ 카드 안에 카드를 만들지 않는다(디자인시스템 §9 — me-logins.ts 가 같은 자리에 적어 둔 규칙).
-  //   이 카드 body 의 **맨 위 한 줄**로 앉힌다: 계정 행들을 읽기 전에 먼저 눈에 들어와야 하는 사실이다.
-  return el('div', { class: 'svc-conn-blurb', style: 'margin:0 0 12px' },
-    el('span', { class: 'pill pill-warn', text: '인증 실패' }),
-    el('span', { text: ' ' + relTime(fail.at) + ' · ' + String(fail.label || '')
-      + ' — 사람 없이 도는 작업(증류 · 분류 · 에이전트 크론 · 위탁)이 내 Claude 계정으로 인증하지 못했습니다.'
-      + ' 터미널에서 `claude setup-token` 을 다시 실행해 나온 토큰으로 바꾸세요.'
-      + ' 내 PC(노드)에서 실행된 작업이었다면 그 PC 의 Claude 로그인을 다시 하셔야 합니다 —'
-      + ' 그 경우 이 안내는 30일 뒤 저절로 사라집니다.'
-      + ' 이 실패로 멈춘 예약 작업이 있다면 관리 ▸ 자동화에서 다시 켜세요.' }),
-    el('div', { class: 'admin-actions', style: 'margin:8px 0 0' },
-      el('button', {
-        type: 'button', class: 'btn btn-ghost btn-sm', text: '토큰 교체',
-        onclick: () => {
-          const host = el('div', { class: 'svc-form-host', style: 'min-width:min(460px, 78vw)' });
-          const back = overlay('Claude 헤드리스 토큰 교체', host);
-          host.append(svcTokenForm('claude_setup_token', () => { back.remove(); reload(); }));
-        },
-      })));
+// ── 사람 없이 도는 작업(#4012 T12 · #4051) ─────────────────────────────────────────────
+//  **무엇이 다른가:** 위 계정 행들은 «내가 앉아서 쓰는 세션» 이 무엇으로 도는지다. 이 칸은 «사람이 안 보는 동안 도는
+//   것»(증류 · 분류 · 관리)이 무엇으로 도는지다. 그 실행은 중앙 샌드박스 판에서 **따로 연결한 자격**
+//   (member_secret claude_setup_token · codex_auth_json)으로만 돈다 — 위의 대화형 로그인을 빌리지 않는다.
+//  **왜 여기 있나:** 종전엔 그 자격을 넣는 길이 «터미널에서 setup-token → 숨은 화면에 붙여넣기» 뿐이었고, 자격이 없으면
+//   증류가 조용히 `no_credential` 로 끝났다(잡 겉상태는 초록). 이제 [연결]이 대화형 로그인과 같은 «주소 열기 → 코드
+//   넣기» 로 끝나고, 멈췄으면 이 행이 사유를 말한다(#1675 의 «인증 실패» 줄은 이 행의 «멈춤» 상태로 흡수했다 —
+//   그 줄은 토큰을 이미 등록한 사람에게만 떴다. **아예 없는 사람**이 정작 막혀 있었다).
+//  ⚠ 행 아래 펼쳐지는 카드는 지우는 경로가 없다(위 aiAccountRow 와 같은 교리 — 받은 주소·치던 코드를 지키려고).
+const HEADLESS_HINT: Record<string, string> = {
+  claude: '주소를 열어 Claude 계정으로 로그인하고 Authorize 를 누르세요. 브라우저에 나온 코드를 아래에 붙여넣으면 끝납니다.',
+  codex: '주소를 열고 아래 코드를 넣은 뒤 ChatGPT 계정으로 로그인하세요. 끝나면 이 자리가 저절로 바뀝니다.',
+};
+
+function headlessRow(h: any, reload: () => void) {
+  const panel = el('div', { class: 'aiacct-login', hidden: true });
+  let handle: InlineLoginHandle | null = null;
+  const fail = h.failure;
+  const st = fail
+    ? { text: '멈춤', cls: 'pill pill-warn', tip: String(fail.message || '') + (fail.reason === 'auth_failure'
+      //  #1675 의 안내를 잇는다 — 내 PC(노드)의 로그인으로 돈 작업이었다면 여기서 다시 연결해도 그 PC 는 그대로다.
+      ? ' 내 PC(노드)에서 돈 작업이었다면 그 PC 에서 Claude 로그인을 다시 하셔야 합니다(이 표시는 30일 뒤 사라집니다). 멈춘 예약 작업은 관리 ▸ 자동화에서 다시 켜세요.'
+      : '') }
+    : h.connected
+      ? { text: '연결됨', cls: 'pill pill-ok', tip: '사람 없이 도는 작업이 이 계정으로 실행됩니다. 연결은 저장된 자격이 있다는 뜻이며, 인증이 실패하면 이 자리에 «멈춤» 이 뜹니다.' }
+      : { text: '연결 안 됨', cls: 'pill', tip: '아직 연결하지 않았습니다. [연결] 을 누르면 이 자리에서 끝납니다.' };
+  const sub = fail
+    ? `${fail.message} · ${relTime(fail.at)}`
+    : h.connected
+      ? `${h.via === 'screen' ? '화면에서 연결함' : '토큰으로 연결함'}${h.connected_at ? ' · ' + relTime(h.connected_at) : ''}`
+      : '아직 연결하지 않았어요.';
+
+  /** 토큰을 이미 갖고 있는 사람의 탈출로 — 종전 붙여넣기 폼을 그대로 연다(폼은 자격 금고 소유). */
+  const pasteToken = () => {
+    const host = el('div', { class: 'svc-form-host', style: 'min-width:min(460px, 78vw)' });
+    const back = overlay(`${h.label} 자격 직접 넣기`, host);
+    host.append(svcTokenForm(h.kind, () => { back.remove(); reload(); }));
+  };
+
+  const paint = () => {
+    const addr = el('code', { class: 'aiacct-addr', text: '주소를 받는 중이에요…' });
+    const open = el('a', { class: 'btn btn-primary btn-sm', target: '_blank', rel: 'noopener', text: '열기 ↗', hidden: true });
+    const code = el('button', { type: 'button', class: 'aiacct-code', hidden: true, title: '눌러서 복사' });
+    code.onclick = () => { void navigator.clipboard?.writeText(code.textContent || '').then(() => toast('복사했어요')); };
+    const pasteRow = el('div', { class: 'aiacct-paste', hidden: true });
+    const inp = el('input', { class: 'input', type: 'text', placeholder: '브라우저에서 받은 코드', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
+    const put = el('button', { class: 'btn btn-primary btn-sm', text: '넣기' }) as HTMLButtonElement;
+    const hint = el('div', { class: 'aiacct-note', style: 'padding:0 12px 10px', text: HEADLESS_HINT[h.key] || '' });
+    const noteEl = el('span', { class: 'aiacct-note' });
+    const note = (t: string) => { noteEl.textContent = t || ''; };
+    const submit = async () => {
+      const v = inp.value.trim(); if (!v || !handle) return;
+      put.disabled = true; put.textContent = '넣는 중…';
+      try { await handle.paste(v); put.textContent = '넣었어요'; note('코드를 넣었어요 — 자격을 받아 저장하는 중이에요.'); }
+      catch (e: any) { put.disabled = false; put.textContent = '넣기'; note('코드를 넣지 못했어요 — ' + ((e && e.message) || e)); }
+    };
+    put.onclick = submit;
+    inp.onkeydown = (ev) => { if (ev.key === 'Enter' && !ev.isComposing) { ev.preventDefault(); void submit(); } };
+    pasteRow.append(inp, put);
+    panel.replaceChildren(
+      el('div', { class: 'aiacct-addrrow' }, addr, open),
+      hint, code, pasteRow,
+      el('div', { class: 'aiacct-foot' },
+        el('button', { type: 'button', class: 'ob-linkbtn', text: '다시 시도', onclick: () => { handle?.stop(); run(true); } }),
+        el('button', { type: 'button', class: 'ob-linkbtn', text: '토큰을 직접 넣기', onclick: () => pasteToken() }),
+        noteEl));
+    return {
+      url: (u: string) => { addr.textContent = u.replace(/^https?:\/\//, ''); open.setAttribute('href', u); open.hidden = false; },
+      code: (c: string) => { code.textContent = c; code.hidden = false; },
+      needsPaste: () => { pasteRow.hidden = false; setTimeout(() => inp.focus(), 100); },
+      done: () => {
+        panel.replaceChildren(el('div', { class: 'aiacct-ok', text: '✓ 연결했어요. 이제 사람 없이 도는 작업이 이 계정으로 실행됩니다.' }));
+        setTimeout(() => reload(), 1200);
+      },
+      failed: (m: string) => note(m + ' — [다시 시도] 를 누르거나, 토큰이 있으면 직접 넣으셔도 됩니다.'),
+      stalled: () => note('주소가 늦네요 — 조금 더 기다려 주세요.'),
+    };
+  };
+  //  연타 방지 — 짧은 간격의 두 시작은 서버에서 러너 둘이 잠깐 같은 파일을 두고 겨룬다(리뷰 #4051). 사람의 두 번째 누름은
+  //   대개 «반응이 없나» 라서, 막는 대신 조용히 흘린다(진행 중인 카드는 그대로 채워진다).
+  let startedAt = 0;
+  const run = (restart?: boolean) => {
+    if (Date.now() - startedAt < 2500) return;
+    startedAt = Date.now();
+    panel.hidden = false;
+    handle?.stop();   // 앞 시도의 폴링을 멈춘다 — panel 이 같은 노드라 alive() 로는 안 멈춘다
+    handle = startInlineAiLogin(h.key, paint(), { restart, purpose: 'headless', alive: () => document.body.contains(panel) });
+  };
+  const canInline = HEADLESS_INLINE[h.key] === true;
+  return el('div', { class: 'aiacct' },
+    el('div', { class: 'aiacct-txt' },
+      el('div', { class: 'aiacct-head' },
+        el('span', { class: 'aiacct-name', text: h.label }),
+        withTip(el('span', { class: st.cls, text: st.text }), st.tip)),
+      el('div', { class: 'aiacct-sub', text: sub })),
+    el('div', { class: 'aiacct-act' },
+      canInline
+        ? el('button', {
+          type: 'button', class: h.connected && !fail ? 'btn btn-ghost btn-sm' : 'btn btn-primary btn-sm',
+          text: h.connected ? '다시 연결' : '연결',
+          //  ⚠ 누르면 **새로** 띄운다(restart) — 지난 시도의 주소·코드는 이미 죽었다(대화형 로그인과 같은 이유, #2232).
+          onclick: () => run(true),
+        })
+        : el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '토큰 넣기', onclick: () => pasteToken() })),
+    panel);
+}
+
+/** 워크스페이스 실행 멤버 한 줄 — «누구 계정으로 도나» 를 사실대로. 모르면 말하지 않는다. */
+function runnerLine(st: any): HTMLElement | null {
+  const r = st?.runner;
+  if (!r) return null;
+  let text = '';
+  if (r.is_me) text = '이 워크스페이스의 증류·분류·관리는 내 계정으로 실행됩니다.';
+  else if (r.member) text = `이 워크스페이스의 증류·분류·관리는 ${r.name || r.member}님 계정으로 실행됩니다. 여기서 연결한 내 자격은 내 이름으로 도는 작업에만 쓰입니다.`;
+  else if (st.can_set_runner) text = r.source === 'db'
+    ? '이 워크스페이스의 실행 멤버가 비어 있어요. 증류·분류·관리는 각 작업을 켠 사람 계정으로 실행됩니다.'
+    : '아직 실행 멤버가 정해지지 않았어요. 여기서 연결하면 이 워크스페이스의 증류·분류·관리가 내 계정으로 실행됩니다.';
+  else text = '이 워크스페이스의 실행 멤버는 관리자가 정합니다. 여기서 연결한 내 자격은 내 이름으로 도는 작업에만 쓰입니다.';
+  return el('p', { class: 'admin-hint', style: 'margin:6px 0 0', text });
+}
+
+/** «사람 없이 도는 작업» 묶음 — 계정 행들 **아래**에 한 칸 띄워 앉힌다(카드 안에 카드를 만들지 않는다, 디자인시스템 §9). */
+function headlessSection(st: any, reload: () => void): HTMLElement[] {
+  const rows = (st?.harnesses || []) as any[];
+  if (!rows.length) return [];
+  const anyFail = rows.some((r) => r.failure);
+  return [
+    el('div', { style: 'margin:22px 0 2px; display:flex; align-items:center; gap:8px; flex-wrap:wrap' },
+      el('span', { class: 'aiacct-name', text: '사람 없이 도는 작업' }),
+      anyFail ? el('span', { class: 'pill pill-warn', text: '확인 필요' }) : null),
+    el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: '증류·분류·관리처럼 내가 자리에 없어도 도는 작업은, 여기서 따로 연결한 계정으로 실행됩니다.' }),
+    ...(runnerLine(st) ? [runnerLine(st) as HTMLElement] : []),
+    ...rows.map((r) => headlessRow(r, reload)),
+  ];
 }
 
 function myAiAccountsCard() {
@@ -287,19 +381,20 @@ function myAiAccountsCard() {
     try {
       // 세션은 실패해도 계정 카드는 보여준다(개수는 부가정보) — 터미널이 없는 배포에서도 로그인 상태는 유효하다.
       //  자격도 같다 — 못 읽으면 헤드리스 경고 줄만 없고 계정 행은 그대로 뜬다(부가 신호 하나가 화면을 못 잡아먹는다).
-      const [acc, ses, creds] = await Promise.all([
+      const [acc, ses, headless] = await Promise.all([
         api('/api/ui/me/ai-accounts'),
         api('/api/ui/terminal/sessions?includeProjects=1').catch(() => ({ sessions: [] })),
-        api('/api/ui/me/credentials').catch(() => null),
+        //  #4051 — 못 읽으면(구 서버 등) 그 칸만 없다. 계정 행은 그대로 뜬다.
+        api('/api/ui/me/headless').catch(() => null),
       ]);
       const meId = (state.me && (state.me.userId || state.me.email)) || '';
       const mine = (((ses || {}) as any).sessions || []).filter((s) => s.owner === meId);   // 프로젝트 세션은 전원 공개라 소유자로 좁힌다
       const accounts = ((acc || {}) as any).accounts || [];
       // 공용 계정이라는 사실은 행의 '서버 공용' 배지(+툴팁)로 충분하다 — 같은 말을 배너로 또 적지 않는다(사용자 요구).
-      const warn = headlessAuthWarn(creds, load);   // 있으면 계정 행보다 **위**에 — 먼저 읽혀야 하는 사실이다
-      body.replaceChildren(...(warn ? [warn] : []), ...(accounts.length
+      body.replaceChildren(...(accounts.length
         ? accounts.map((a) => aiAccountRow(a, mine, load))
-        : [el('p', { class: 'admin-hint' }, ...uiText('이 서버에 로그인이 필요한 AI 가 없습니다.'))]));
+        : [el('p', { class: 'admin-hint' }, ...uiText('이 서버에 로그인이 필요한 AI 가 없습니다.'))]),
+      ...headlessSection(headless, load));
     } catch (e) { body.replaceChildren(errorNote(e, '내 AI 계정 상태를 불러오지 못했습니다')); }
   };
   void load();

@@ -1,6 +1,7 @@
 // org_runtime_config — 런타임 설정 단일행(훅 on/off·화이트리스트·정책 seam 들).
 //  (#1313 R18) 구 org/store.ts 에서 verbatim 분리. ⚠ #688 '원본 재조회' 분기·정책 seam import 는 그대로(단순화 금지).
 import { itemsPool } from "../../db/client.js";
+import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";   // #4051 — 조건부 UPDATE 를 이 워크스페이스 행으로 못박는다
 import { readOidcSettings, mergeOidcSettings, type OidcSettings, type OidcSettingsPatch } from "../../auth/oidc-config.js"; // #1520 외부 IdP 로그인 설정 seam
 // 임베딩(벡터검색 #172) config seam — embedding_config 정규화/병합(env 시드 + DB 우선). 무순환(provider 모듈은 store 미import).
 import {
@@ -440,6 +441,32 @@ export function getDelegatePolicySource(): Promise<"db" | "env" | "default"> {
 // 맥락관리 잡 실행 신원(#4012 T1)의 출처(관리 UI 안내) — db(관리탭 저장)·env(.env 시드)·default(미설정).
 export function getContextJobPolicySource(): Promise<"db" | "env" | "default"> {
   return policySourceOf("context_job_policy", contextJobPolicySource);
+}
+
+/**
+ * #4051 — 실행 멤버가 **한 번도 정해진 적 없을 때만** 이 멤버로 채운다. 채웠으면 true.
+ *
+ *  «정해진 적 없음» = DB 원본에 `runner_member` 키가 없고 env 시드도 없다. 관리자가 비운 것(키가 있고 null)은 결정이라
+ *   건드리지 않는다(normalizeContextJobPolicy 머리말 — 비운 것이 되살아나면 사람이 끈 것이 안 꺼진다).
+ *  ⚠ 판정과 쓰기를 **한 문장**으로 한다(WHERE 에 조건). updateRuntimeConfig 로 «읽고 → 쓰면» 그 사이에 관리자가 정한
+ *   값을 덮을 수 있고, 두 사람이 동시에 연결하면 나중 사람이 이긴다 — 여기서는 먼저 쓴 사람만 남는다.
+ */
+export async function fillContextJobRunnerIfUnset(memberId: string, actor: string, source: string): Promise<boolean> {
+  const clean = normalizeContextJobPolicy({ runner_member: memberId }).runner_member;
+  if (!clean) return false;
+  if (contextJobPolicySource({}) === "env") return false;   // env 시드가 값이다 — 기본값 자리가 비어 있지 않다
+  const before = await getRuntimeConfig();
+  const r = await itemsPool.query(
+    `UPDATE org_runtime_config
+        SET context_job_policy = $1::jsonb, version = version + 1, updated_at = now(), updated_by = $2
+      WHERE id = 1 AND tenant_id = ${TENANT_DEFAULT_EXPR}
+        AND NOT (COALESCE(context_job_policy, '{}'::jsonb) ? 'runner_member')`,
+    [JSON.stringify({ runner_member: clean }), actor],
+  );
+  if (!r.rowCount) return false;
+  const after = await getRuntimeConfig();
+  await audit("org_runtime_config", "1", "update", before, after, actor, source);
+  return true;
 }
 
 // ── 매니지드 표면 노브 4종만 경량 조회(#1454 S2~S5) — /api/ui/me 전용. ──

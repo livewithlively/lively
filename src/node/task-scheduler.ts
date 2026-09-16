@@ -203,6 +203,19 @@ async function reapFailedSessions(): Promise<void> {
   }
 }
 
+/**
+ * #4051 — 맥락 잡이 자격 때문에 멈췄다는 사실을 실행 멤버에게 알린다(앱 알림 · 반나절에 한 번).
+ *  동적 import — 이 파일은 노드 에이전트 번들 경계 가까이에 있다(무거운 간선을 늘리지 않는다). **던지지 않는다.**
+ */
+async function notifyHeadless(o: { memberId: string; harness: string; reason: "no_credential" | "auth_failure"; label?: string | null }): Promise<void> {
+  try {
+    const { notifyHeadlessCredentialProblem } = await import("../org/credentials/headless-connect.js");
+    await notifyHeadlessCredentialProblem(o);
+  } catch (err) {
+    logger.warn({ err: (err as Error)?.message, requester: o.memberId }, "헤드리스 자격 알림 실패(비치명)");
+  }
+}
+
 // 상태 전이만 DB 에 기록한다 — 의뢰 세션 통지는 하지 않는다(§11: 흐름은 CLI 프로세스가 pull/스트림).
 async function finish(t: DelegateTask, ok: boolean, exit: number | null, summary?: string, error?: string): Promise<void> {
   liveSeen.delete(t.id);
@@ -230,6 +243,8 @@ async function finish(t: DelegateTask, ok: boolean, exit: number | null, summary
   logger.info({ task: t.id, ok, node: t.node_id, auth: auth?.label ?? null }, "위탁 태스크 종결");
 
   // 자격 실패 대응 — 크론 정지 + 대기분 취소 + 알림. 실패해도 종결 자체는 이미 끝났다.
+  //  #4051 — 맥락 잡이면 실행 멤버의 화면에도 올린다(조직 웹훅은 관리자만 본다 — 고칠 사람은 그 멤버다).
+  if (auth && isContextJob(t)) await notifyHeadless({ memberId: t.requester, harness: t.harness, reason: "auth_failure", label: auth.label });
   if (auth) {
     const policy = await effectiveDelegatePolicy(loadDelegatePolicy).catch(() => null);
     await handleAuthFailure(
@@ -387,6 +402,9 @@ async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Ma
         : `${t.harness} 는 중앙 샌드박스 자격이 없는 하네스다 — 맥락 잡 실행 하네스를 claude·codex 로 두세요`;
       await markFinished(t.id, false, { reason: "no_credential", last_assign: { code: "no_credential", reason } }, reason);
       logger.warn({ task: t.id, requester: t.requester, harness: t.harness }, "맥락 잡 자격 없음 — 접수 즉시 실패");
+      //  #4051 — 그 멤버 **화면으로** 올린다. 잡 겉상태는 초록이라(증류·분류·관리 액션은 ok 를 돌려준다) 알리지 않으면
+      //   아무도 모른다. 하네스가 판 자격 표에 없는 경우는 관리자 설정 문제라 멤버에게 보내지 않는다. 던지지 않는다.
+      if (cred) await notifyHeadless({ memberId: t.requester, harness: t.harness, reason: "no_credential" });
       return { assigned: false, code: "no_credential", reason };
     }
     //  같은 멤버의 codex 판은 **한 번에 하나** — 둘이 동시에 토큰을 갱신하면 한쪽이 다른 쪽의 refresh token 을
