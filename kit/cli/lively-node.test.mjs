@@ -121,6 +121,35 @@ async function lively(h, args, { expectFail = false } = {}) {
 }
 
 try {
+  // ⑨⑩ 인자 가드(#4006) — **도움말과 모르는 인자는 아무것도 기동하지 않는다.**
+  //  계기(2026-09-16 실측): `lively node --help` 가 도움말이 아니라 인자 없는 `lively node` 와 같아서, 이미
+  //   데몬이 도는 컴퓨터에 같은 id 에이전트를 하나 더 띄웠다. 게이트웨이가 둘을 1초 간격으로 번갈아 쫓아내
+  //   그 노드의 웹 터미널이 3분간 2초마다 끊겼다(교체 162회).
+  //  순수 판정은 node-argv-guard.test.mjs 가 표로 굳힌다. 여기서는 **실제 CLI 를 띄워 부작용이 0 인지**
+  //   (등록 POST · node-agent.env)를 본다 — 그게 이 사고의 실제 피해였다.
+  {
+    const HG = newHome("h-guard");
+    const envPath = join(HG.home, ".lively", "node-agent.env");
+    const before = posts.length;
+
+    const rh = await lively(HG, ["node", "--help"]);
+    check("⑨ node --help → 성공 종료", rh.code === 0, `code=${rh.code}\n${rh.err.slice(-300)}`);
+    // ⚠ CLI 의 say() 는 stderr 로 나간다(stdout 은 --json 용으로 비워 둔다) — 둘을 합쳐서 본다.
+    check("⑨ node --help → 사용법을 낸다", /사용법: lively node/.test(rh.out + rh.err), (rh.out + rh.err).slice(0, 200) || "(빈 출력)");
+    check("⑨ ★ node --help 는 등록도 접속정보 파일도 만들지 않는다(부작용 0)",
+      posts.length === before && !existsSync(envPath),
+      `등록 POST ${posts.length - before}건 · env존재=${existsSync(envPath)}`);
+
+    const ru = await lively(HG, ["node", "--frobnicate"], { expectFail: true });
+    check("⑩ 모르는 인자 → 비-0 종료", ru.code !== 0, `code=${ru.code}`);
+    check("⑩ 모르는 인자 → 그 인자를 지목하고 사용법을 낸다",
+      /--frobnicate/.test(ru.out + ru.err) && /사용법: lively node/.test(ru.out + ru.err),
+      (ru.out + ru.err).slice(-300) || "(빈 출력)");
+    check("⑩ ★ 모르는 인자도 부작용 0",
+      posts.length === before && !existsSync(envPath),
+      `등록 POST ${posts.length - before}건 · env존재=${existsSync(envPath)}`);
+  }
+
   const H = newHome("h-daemon");
 
   // ① `lively node --daemon` — 등록(POST) → 번들 pull → env 파일 → 데몬 등록. foreground 로 블록되지 않고 종료해야 한다.
