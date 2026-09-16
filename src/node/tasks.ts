@@ -570,12 +570,12 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
 export interface TaskWatch { taskId: number; sessionId: string; taskDir: string; harness?: string; osUser?: string | null }
 export interface TaskOutcome { taskId: number; ok: boolean; exit: number | null; summary?: string; error?: string }
 
-const SUMMARY_CAP = 8 * 1024;
+export const SUMMARY_CAP = 8 * 1024;
 
 // 진행 스트림에서 최종 텍스트를 뽑는다 — **하네스별 스키마**(HEADLESS.extract)로(#1710).
 //  종전엔 claude 의 `type=result` 하나만 알아서, 다른 하네스로 돌린 위탁은 요약이 통째로 빈 값이 됐다.
 //  못 찾으면 마지막 비어있지 않은 줄(진행 중 크래시 등) — 요약 목적이라 근사로 충분.
-function extractResult(streamJsonl: string, harnessKey?: string): string {
+export function extractResult(streamJsonl: string, harnessKey?: string): string {
   const spec = HEADLESS[harnessKey || "claude"] ?? HEADLESS.claude;
   const got = spec.extract(streamJsonl);
   if (got) return got;

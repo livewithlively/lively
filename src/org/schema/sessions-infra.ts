@@ -470,6 +470,10 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   // 레포 자동 provision(#869 P2 후속) — 기존 org_task 테이블에도 소급(CREATE IF NOT EXISTS 는 컬럼 추가 안 함).
   await pool.query(`ALTER TABLE org_task ADD COLUMN IF NOT EXISTS repo TEXT`);
   await pool.query(`ALTER TABLE org_task ADD COLUMN IF NOT EXISTS git_ref TEXT`);
+  // #4012 T3 — 실행 프로필. 'context' = 기본 제공 맥락 잡(증류·분류·관리). 샌드박스 op 가 있는 박스(매니지드)에서는
+  //  이 표지가 붙은 태스크만 중앙 샌드박스로 가고, 멤버 PC·워커 노드로 나가지 않는다(상민님 2026-09-16 결정).
+  //  NULL = 종전 위탁(사람의 delegate_run 등).
+  await pool.query(`ALTER TABLE org_task ADD COLUMN IF NOT EXISTS exec_profile TEXT`);
   // #1675 리뷰 — '내 로그인' 화면이 매 렌더마다 그 사람의 마지막 자격 실패를 찾는다(lastAuthFailureFor).
   //  org_task 는 지우는 경로가 없어 계속 자라는 테이블이라(증류 크론만으로 하루 ~1,300행), 인덱스 없이
   //  seq scan 하면 그 조회가 곧 부하다 — 이미 Postgres 타임아웃을 겪은 박스에서는 특히.

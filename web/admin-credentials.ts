@@ -138,6 +138,15 @@ const CRED_KINDS: Array<{ kind: string; label: string; secretLabel: string; secr
   // #1101(b)/#1299 — 헤드리스 claude -p(위탁) 실행 인증. task-scheduler 가 requester 의 member_secret(kind=claude_setup_token)을 CLAUDE_CODE_OAUTH_TOKEN 으로 리스한다. member 전용(격리 박스엔 공유 폴백 없음 — #1014) → 조직 자격 폼에선 숨긴다(memberOnly).
   //  ⚠ kind 는 member-secret-store 의 KIND_RE(소문자·숫자·_)를 지켜야 한다 — 하이픈이면 저장 단계에서 거부된다(#1299 초판 결함).
   { kind: 'claude_setup_token', label: 'Claude 헤드리스 토큰(setup-token)', secretLabel: 'setup-token', help: '터미널에서 `claude setup-token` 을 실행해 나온 토큰을 붙여넣으세요(클로드에 로그인된 상태에서 발급). 헤드리스 분류·에이전트 크론(claude -p)이 이 토큰으로 내 Claude 계정으로 인증·실행됩니다(구독 크레딧 과금). 내 세션·에이전트 실행에만 쓰이고 타 구성원에게 노출되지 않습니다.', memberOnly: true },
+  // #4012 T2 — codex 는 무인 토큰이 따로 없어 ChatGPT 로그인 파일(auth.json) 통째가 자격이다. 중앙 맥락 잡(증류·분류·관리)이
+  //  이 파일로 내 ChatGPT 계정으로 돈다. 판 안에서 토큰이 갱신되면 저장본이 새것으로 바뀐다(같은 계정일 때만).
+  { kind: 'codex_auth_json', label: 'Codex 헤드리스 로그인(auth.json)', secretLabel: 'auth.json 내용', secretPh: '{"tokens":{…},"last_refresh":"…"}', memberOnly: true,
+    help: '중앙에서 도는 맥락 잡(증류·분류·관리)이 이 파일로 내 ChatGPT 계정으로 codex 를 실행합니다(구독 과금). 판 안에서 토큰이 갱신되면 여기 저장된 값도 새것으로 바뀝니다.',
+    steps: [
+      '내 PC 터미널에서 **중앙용으로 따로** 로그인합니다: `mkdir -p ~/.codex-central && CODEX_HOME=~/.codex-central codex login` (Windows PowerShell: `mkdir $HOME\\.codex-central; $env:CODEX_HOME="$HOME\\.codex-central"; codex login`) — 평소 쓰는 로그인과 나눠야 한쪽의 토큰 갱신이 다른 쪽을 끊지 않습니다',
+      '`cat ~/.codex-central/auth.json` 으로 나온 내용을 **통째로** 복사합니다(PowerShell: `Get-Content $HOME\\.codex-central\\auth.json`)',
+      '아래 칸에 붙여넣고 [저장] — 저장하면 어느 ChatGPT 계정인지 바로 알려 드립니다',
+    ] },
 ];
 const AWS_REGIONS = ['ap-northeast-2', 'ap-northeast-1', 'us-east-1', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-1'];
 

@@ -61,6 +61,7 @@ export async function runDistillHeadless(params: Record<string, unknown>, jobId:
       // node(#1881) — 실행 노드 고정(예: "central" = 게이트웨이 박스). 비우면 스케줄러 자유 배정(램 여유 순).
       nodePref: typeof params.node === "string" && params.node.trim() ? params.node.trim() : null,
       extra: { distiller: b.key, undistilled: b.ids.length, backlog: b.backlog },
+      execProfile: "context",   // #4012 T3 — 기본 제공 맥락 잡: 매니지드에선 중앙 샌드박스로만 간다
     });
     if (b.distillerId) await recordDistillerRunSafe(b.distillerId, r.status, r.summary);
     // 배치에 낸 자료를 '판정함'으로 기록 — 안 하면 skip 한 것이 다음 배치에 그대로 다시 올라온다(실측 64% 재독).

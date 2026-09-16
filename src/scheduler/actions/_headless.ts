@@ -106,7 +106,10 @@ export function headlessHarness(params: Record<string, unknown>, cfg?: { harness
 //   비었거나 그 하네스가 모르는 값이면 그 하네스의 자동화 기본값으로 간다(catalog.AUTOMATION_DEFAULTS).
 //   종전(flags 를 통째로 받던 시절)엔 여기에 이미 굳은 `--model` 이 들어와, 하네스가 모르면 조용히 버려지고
 //   CLI 계정 기본(=가장 비싼 모델)으로 돌았다. 그 자리를 닫는 것이 이 함수의 새 책임이다.
-export async function enqueueHeadlessTask(o: { prompt: string; requester: string; jobId: string; repo?: string | null; harness?: string | null; model?: string | null; effort?: string | null; extra?: Record<string, unknown>; marker?: string; nodePref?: string | null }): Promise<{ status: string; summary: unknown }> {
+export async function enqueueHeadlessTask(o: { prompt: string; requester: string; jobId: string; repo?: string | null; harness?: string | null; model?: string | null; effort?: string | null; extra?: Record<string, unknown>; marker?: string; nodePref?: string | null;
+  // #4012 T3 — 실행 프로필. 'context' = 기본 제공 맥락 잡(증류·분류·관리) — 샌드박스 op 가 있는 박스에서는 중앙 샌드박스로만 간다.
+  execProfile?: string | null;
+}): Promise<{ status: string; summary: unknown }> {
   // 중첩 방지 마커 — 기본은 잡 단위(cron:<job>). #1289 증류기처럼 한 잡이 여러 배치를 병렬 접수하면 배치별로 갈라
   //  넘긴다(cron:<job>#<key>) — 안 그러면 첫 배치가 나머지를 전부 '진행 중'으로 막는다.
   const marker = o.marker || "cron:" + o.jobId;
@@ -135,7 +138,7 @@ export async function enqueueHeadlessTask(o: { prompt: string; requester: string
   let task: Awaited<ReturnType<typeof createTask>>;
   // nodePref(#1881) — 잡이 실행 위치를 고정할 수 있다(예: node="central" = 게이트웨이 박스에서).
   //  기본은 미지정(스케줄러 자유 배정 — 오프로드 취지). matchNode 가 node_pref 있으면 그 노드만 후보로 삼는다.
-  try { task = await createTask({ requester: o.requester, requesterSession: marker, prompt: o.prompt, harness, repo: o.repo ?? null, flags: run.flags, nodePref: o.nodePref ?? null }); }
+  try { task = await createTask({ requester: o.requester, requesterSession: marker, prompt: o.prompt, harness, repo: o.repo ?? null, flags: run.flags, nodePref: o.nodePref ?? null, execProfile: o.execProfile ?? null }); }
   catch (e) { return { status: "error", summary: { error: "위탁 태스크 생성 실패: " + ((e as Error)?.message ?? String(e)), requester: o.requester, harness } }; }
 
   // 요청→즉답: 지금 배치 가능한지 그 자리에서 판정(위탁 스케줄러 tick 을 안 기다림). 안 되면 큐에 남겨 상한 내 재시도(중첩가드가 pileup 차단).

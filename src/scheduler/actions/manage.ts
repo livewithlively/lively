@@ -47,6 +47,9 @@ export async function runManagers(
             //  나머지를 전부 '진행 중'으로 막지 않게(#1289 증류기에서 배운 것과 같은 함정).
             //  레포별로 또 갈라지므로 레포까지 마커에 넣는다(한 관리기가 레포 셋을 동시에 접수할 수 있다).
             marker: `cron:${jobId}#${m.key}${o.repo ? `@${o.repo}` : ""}`,
+            //  #4012 T3 — 레포가 없는 관리 판만 맥락 잡 샌드박스로 간다. 샌드박스에는 레포 워크트리가 없어서
+            //   코드를 읽어야 하는 판(repo 지정)은 종전 경로에 둔다.
+            execProfile: o.repo ? null : "context",
           })
       : undefined;
     out.push(await runManager(m, enqueue));
