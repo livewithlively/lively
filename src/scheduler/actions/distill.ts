@@ -1,6 +1,6 @@
 // 크론 액션: 자료 distill(distill_sources·distill_sources_headless, #541/#1289) — R16 원문 이동.
 //  미증류 source(slack/gmail 등 raw)를 LLM 이 지식으로 자동증류 — 증류기(#1289) 스코프·기준·형식 + 배치 선정 로직 포함.
-import { resolveSessionTmux, injectToSession, headlessRequester, HEADLESS_REQUESTER_MISSING, headlessFlags, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
+import { resolveSessionTmux, injectToSession, headlessRequester, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 import { logger } from "../../log.js";
 
 // 자료 distill 주입(#541) — map_unmapped 의 자료판. 미증류 source 가 있을 때만 상시세션에 distill 프롬프트 주입.
@@ -50,15 +50,18 @@ export async function runDistillHeadless(params: Record<string, unknown>, jobId:
     const requester = headlessRequester(
       { requester: params.requester ?? b.requester ?? undefined }, createdBy);
     if (!requester) { out.push({ distiller: b.key, ...HEADLESS_REQUESTER_MISSING.summary }); continue; }
-    // 모델·추론강도도 잡 params 우선, 없으면 증류기 설정.
-    const flags = headlessFlags({ model: params.model ?? b.model ?? undefined, effort: params.effort ?? b.effort ?? undefined });
+    // 제공자·모델·추론강도(#4008) — **증류기 설정이 먼저**, 없으면 잡 params, 그래도 없으면 그 하네스의
+    //  자동화 기본값(enqueueHeadlessTask 가 하네스 해소 뒤에 대입한다).
+    //  ⚠ 종전엔 잡 params 가 증류기 설정을 이겼다. 레인은 채널마다 성격이 다른데 잡은 하나라서, 잡에 모델을
+    //   한 번 박으면 **모든 레인의 설정이 통째로 무시됐다** — 레인별 설정 화면이 있는데 안 듣는 상태였다.
     const r = await enqueueHeadlessTask({
       prompt: await applyPromptOverride(params, b), requester, jobId,
-      harness: headlessHarness(params),   // 증류기 설정엔 하네스 축이 없다 — 잡 params 만(비우면 의뢰자 로그인 기준 자동)
+      harness: headlessHarness(params, b),
+      ...headlessRun(b, params),
       marker: b.key ? "cron:" + jobId + "#" + b.key : undefined,
       // node(#1881) — 실행 노드 고정(예: "central" = 게이트웨이 박스). 비우면 스케줄러 자유 배정(램 여유 순).
       nodePref: typeof params.node === "string" && params.node.trim() ? params.node.trim() : null,
-      flags, extra: { distiller: b.key, undistilled: b.ids.length, backlog: b.backlog },
+      extra: { distiller: b.key, undistilled: b.ids.length, backlog: b.backlog },
     });
     if (b.distillerId) await recordDistillerRunSafe(b.distillerId, r.status, r.summary);
     // 배치에 낸 자료를 '판정함'으로 기록 — 안 하면 skip 한 것이 다음 배치에 그대로 다시 올라온다(실측 64% 재독).
@@ -83,7 +86,7 @@ export async function runDistillHeadless(params: Record<string, unknown>, jobId:
 interface DistillBatch {
   distillerId: number | null; key: string | null;
   ids: number[]; backlog: number; prompt: string; targeting: string | null;
-  requester: string | null; model: string | null; effort: string | null;
+  requester: string | null; harness: string | null; model: string | null; effort: string | null;
 }
 
 // 잡의 프롬프트 오버라이드 적용 — 합성 규칙(대상 지정부 보존)은 org/distill/distiller.ts 의 composeDistillPrompt 가 단일 출처.
@@ -119,7 +122,7 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
       distillerId: d.id, key: d.key, ids, backlog: await countDistillerBacklog(d, all),
       prompt: buildDistillerPrompt({ distiller: d, rows: inbox, policySummary, threadKnowledge: threadKn }),
       targeting: buildDistillerTargeting(d, inbox, threadKn),
-      requester: d.requester, model: d.model, effort: d.effort,
+      requester: d.requester, harness: d.harness, model: d.model, effort: d.effort,
     }], considered: 1 };
   }
 
@@ -134,7 +137,7 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
     return { batches: [{
       distillerId: null, key: null, ids: inbox.map((s) => Number(s.id)), backlog: inbox.length,
       prompt: buildDistillPrompt(inbox.length, policySummary), targeting: null,
-      requester: null, model: null, effort: null,
+      requester: null, harness: null, model: null, effort: null,
     }], considered: 0 };
   }
 
@@ -149,7 +152,7 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
       distillerId: d.id, key: d.key, ids, backlog: await countDistillerBacklog(d, all),
       prompt: buildDistillerPrompt({ distiller: d, rows: inbox, policySummary, threadKnowledge: threadKn }),
       targeting: buildDistillerTargeting(d, inbox, threadKn),
-      requester: d.requester, model: d.model, effort: d.effort,
+      requester: d.requester, harness: d.harness, model: d.model, effort: d.effort,
     });
     if (opt.one) break;   // 세션 주입판 — 매 틱 하나만.
   }
@@ -168,11 +171,16 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
       //   영구히 빼는 유실이 되고, 켜진 레인 몫까지 침범한다. override 없는 배치는 composeDistillPrompt 가
       //   targeting 을 붙이지 않으므로 프롬프트에 직접 얹는다.
       const strandedTargeting = buildStrandedTargeting(stranded);
+      //  ⚠ 이 배치는 레인이 없어 model·effort 가 null 이다 — **그게 이 사고의 진원지였다**(#4008).
+      //   null 은 종전에 «`--model` 을 안 붙임» 이었고, 그건 곧 CLI 계정 기본 모델(claude 는 fable)이다.
+      //   레인은 전부 sonnet 으로 고정해 뒀는데 실행시간의 대부분을 쓰는 이 배치만 그 고정을 안 탔다
+      //   (실측 2026-09-04: 방치 배치가 증류 실행시간의 77%). 지금은 null 이 «그 하네스의 자동화 기본값»
+      //   으로 해소된다(automationFlags) — 설정할 자리가 없는 배치일수록 기본이 정해져 있어야 한다.
       batches.push({
         distillerId: null, key: null, ids: stranded.map((s2) => Number(s2.id)), backlog: stranded.length,
         prompt: strandedTargeting + "\n\n" + buildDistillPrompt(stranded.length, policySummary, true),
         targeting: strandedTargeting,
-        requester: null, model: null, effort: null,
+        requester: null, harness: null, model: null, effort: null,
       });
     }
   }

@@ -47,6 +47,7 @@ export interface DistillerRow {
   batch_max_msgs: number;    // 메시지 상한(첫 스레드는 예외)
   mode: string;
   session_ref: string | null;
+  harness: string | null;
   model: string | null;
   effort: string | null;
   requester: string | null;
@@ -63,7 +64,7 @@ export const DISTILLER_SEL = `id, key, label, enabled, priority,
   exclude_bots, min_chars, lookback_days,
   criteria_md, format_md, target_category, default_type, name_prefix, thread_aware,
   prefilter_level, prefilter_rules, prompt_sections,
-  batch_size, batch_max_msgs, mode, session_ref, model, effort, requester,
+  batch_size, batch_max_msgs, mode, session_ref, harness, model, effort, requester,
   last_run_at, last_status, last_summary, note, updated_at`;
 
 // 배정 순서 = priority DESC, id ASC. 한 자료는 이 순서상 **가장 앞선(=우선순위 높은) 증류기 하나에만** 배정된다.
@@ -649,7 +650,7 @@ export function mergeDraftDistiller(saved: DistillerRow | undefined, draft: Reco
     include_authors: null, exclude_authors: null, exclude_bots: true, min_chars: 0, lookback_days: null,
     criteria_md: null, format_md: null, target_category: null, default_type: null, name_prefix: null,
     thread_aware: true, prefilter_level: 0, prefilter_rules: null, prompt_sections: null,
-    batch_size: 3, batch_max_msgs: 20, mode: "headless", session_ref: null, model: null, effort: null,
+    batch_size: 3, batch_max_msgs: 20, mode: "headless", session_ref: null, harness: null, model: null, effort: null,
     requester: null, last_run_at: null, last_status: null, last_summary: null, note: null, updated_at: null,
   } as DistillerRow);
   if (!draft) return base;

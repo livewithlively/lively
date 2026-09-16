@@ -20,7 +20,7 @@ const mk = (over: Partial<ClassifierRow> = {}): ClassifierRow => ({
   min_chars: 0, lookback_days: null,
   criteria_md: null, candidate_categories: null, confirm_threshold: 0.8,
   batch_size: 50, mode: "headless", session_ref: null,
-  model: null, effort: null, requester: null,
+  harness: null, model: null, effort: null, requester: null,
   last_run_at: null, last_status: null, last_summary: null, note: null,
   ...over,
 });

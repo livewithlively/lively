@@ -145,6 +145,7 @@ export interface DistillerUpsertInput {
   batch_max_msgs?: number;
   mode?: string;
   session_ref?: string | null;
+  harness?: string | null;
   model?: string | null;
   effort?: string | null;
   requester?: string | null;
@@ -172,7 +173,7 @@ const D_SEL = `id, key, label, enabled, priority,
   exclude_bots, min_chars, lookback_days,
   criteria_md, format_md, target_category, default_type, name_prefix, thread_aware,
   prefilter_level, prefilter_rules, prompt_sections,
-  batch_size, batch_max_msgs, mode, session_ref, model, effort, requester,
+  batch_size, batch_max_msgs, mode, session_ref, harness, model, effort, requester,
   last_run_at, last_status, last_summary, note, updated_at`;
 
 // 부분 갱신의 병합 규칙(순수 — 테스트 seam). 이 결함의 전부가 이 한 줄의 판정이다:
@@ -328,6 +329,7 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
     batch_max_msgs: batchMsgs,
     mode,
     session_ref: sessionRef,
+    harness: pick("harness", normText(input.harness)),
     model: pick("model", normText(input.model)),
     effort: pick("effort", normText(input.effort)),
     requester: pick("requester", normText(input.requester)),
@@ -343,6 +345,7 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
          criteria_md=$15, format_md=$16, target_category=$17, default_type=$18, name_prefix=$19, thread_aware=$20,
          batch_size=$21, mode=$22, session_ref=$23, model=$24, effort=$25, requester=$26, note=$27,
          prefilter_level=$29, prefilter_rules=$30::jsonb, batch_max_msgs=$31, prompt_sections=$32::jsonb,
+         harness=$33,
          version=version+1, updated_at=now(), updated_by=$28
        WHERE id=$1 RETURNING ${D_SEL}`,
       [targetId, vals.key, vals.label, vals.enabled, vals.priority,
@@ -351,7 +354,7 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
        vals.criteria_md, vals.format_md, vals.target_category, vals.default_type, vals.name_prefix, vals.thread_aware,
        vals.batch_size, vals.mode, vals.session_ref, vals.model, vals.effort, vals.requester, vals.note, actor ?? null,
        vals.prefilter_level, vals.prefilter_rules ? JSON.stringify(vals.prefilter_rules) : null, vals.batch_max_msgs,
-       vals.prompt_sections ? JSON.stringify(vals.prompt_sections) : null]);
+       vals.prompt_sections ? JSON.stringify(vals.prompt_sections) : null, vals.harness]);
     await audit("org_distiller", String(targetId), "update", before, r.rows[0], actor, source);
     await ensureJobForEnabled(r.rows[0], actor);
     return r.rows[0];
@@ -363,8 +366,8 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
        exclude_bots, min_chars, lookback_days,
        criteria_md, format_md, target_category, default_type, name_prefix, thread_aware,
        batch_size, mode, session_ref, model, effort, requester, note, created_by, updated_by,
-       prefilter_level, prefilter_rules, batch_max_msgs, prompt_sections)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$27,$28,$29::jsonb,$30,$31::jsonb)
+       prefilter_level, prefilter_rules, batch_max_msgs, prompt_sections, harness)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$27,$28,$29::jsonb,$30,$31::jsonb,$32)
      RETURNING ${D_SEL}`,
     [vals.key, vals.label, vals.enabled, vals.priority,
      vals.match_kinds, vals.match_system, vals.include_channels, vals.exclude_channels,
@@ -372,7 +375,7 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
      vals.criteria_md, vals.format_md, vals.target_category, vals.default_type, vals.name_prefix, vals.thread_aware,
      vals.batch_size, vals.mode, vals.session_ref, vals.model, vals.effort, vals.requester, vals.note, actor ?? null,
      vals.prefilter_level, vals.prefilter_rules ? JSON.stringify(vals.prefilter_rules) : null, vals.batch_max_msgs,
-     vals.prompt_sections ? JSON.stringify(vals.prompt_sections) : null]);
+     vals.prompt_sections ? JSON.stringify(vals.prompt_sections) : null, vals.harness]);
   await audit("org_distiller", String(r.rows[0].id), "insert", null, r.rows[0], actor, source);
   await ensureJobForEnabled(r.rows[0], actor);
   return r.rows[0];

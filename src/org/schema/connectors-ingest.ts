@@ -216,7 +216,7 @@ export async function initClassifierRegistry(pool: Pool): Promise<void> {
       batch_size  INT NOT NULL DEFAULT 50,
       mode        TEXT NOT NULL DEFAULT 'headless',
       session_ref TEXT,
-      model TEXT, effort TEXT, requester TEXT,
+      harness TEXT, model TEXT, effort TEXT, requester TEXT,
       -- ④ 관측
       last_run_at TIMESTAMPTZ, last_status TEXT, last_summary JSONB,
       note TEXT,
@@ -231,6 +231,7 @@ export async function initClassifierRegistry(pool: Pool): Promise<void> {
       org_classifier_batch_chk: "batch_size BETWEEN 1 AND 500",
       org_classifier_threshold_chk: "confirm_threshold BETWEEN 0 AND 1",
     })}
+    ALTER TABLE org_classifier ADD COLUMN IF NOT EXISTS harness TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS org_classifier_key_uq ON org_classifier(key);
     CREATE INDEX IF NOT EXISTS org_classifier_enabled_idx ON org_classifier(enabled, priority DESC, id);
     -- #1631: 분류축의 space 를 걷어냈으므로 '그 space 로 좁히기'도 걷는다. 좁히려면 candidate_categories 를 쓴다.
@@ -298,7 +299,7 @@ export async function initManagerRegistry(pool: Pool): Promise<void> {
       criteria_md TEXT,
       -- ④ 실행(LLM 판정이 필요한 kind 만 씀)
       batch_size INT NOT NULL DEFAULT 20,
-      model TEXT, effort TEXT, requester TEXT,
+      harness TEXT, model TEXT, effort TEXT, requester TEXT,
       -- ⑤ 관측
       last_run_at TIMESTAMPTZ, last_status TEXT, last_summary JSONB,
       note TEXT,
@@ -312,6 +313,7 @@ export async function initManagerRegistry(pool: Pool): Promise<void> {
       org_manager_action_chk: "action_level IN ('report','propose','auto')",
       org_manager_batch_chk: "batch_size BETWEEN 1 AND 200",
     })}
+    ALTER TABLE org_manager ADD COLUMN IF NOT EXISTS harness TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS org_manager_key_uq ON org_manager(key);
     CREATE INDEX IF NOT EXISTS org_manager_enabled_idx ON org_manager(enabled, priority DESC, id);
     -- #1631: 위와 같은 이유. 좁히려면 match_categories 를 쓴다(이미 있다).
@@ -442,7 +444,7 @@ export async function initIngestPolicyAndDistillers(pool: Pool): Promise<void> {
       batch_size  INT NOT NULL DEFAULT 50,
       mode        TEXT NOT NULL DEFAULT 'headless',
       session_ref TEXT,
-      model TEXT, effort TEXT, requester TEXT,
+      harness TEXT, model TEXT, effort TEXT, requester TEXT,
       -- ⑤ 관측
       last_run_at TIMESTAMPTZ, last_status TEXT, last_summary JSONB,
       note TEXT,
@@ -522,6 +524,11 @@ export async function initIngestPolicyAndDistillers(pool: Pool): Promise<void> {
     --  미지정 = 코드 기본값(제품 개선이 계속 흘러든다) · 빈 문자열 = 그 조각을 뺀다(둘을 구분한다).
     --  criteria·format 은 기존 criteria_md·format_md 가 저장소이므로 여기 담지 않는다(이중 출처 금지).
     ALTER TABLE org_distiller ADD COLUMN IF NOT EXISTS prompt_sections JSONB;
+    -- harness(#4008) — 이 자동화가 **어느 AI CLI 로** 도는가(claude·codex·antigravity·grok). NULL = 자동
+    --  (의뢰자가 로그인한 하네스 중에서 고른다 — node/headless-harness.ts). 종전엔 이 축이 잡 params 에만
+    --  있어서, 화면에서 만든 증류기·분류기·관리기는 제공자를 고를 수 없었고 model 도 «어느 하네스의 모델인지»
+    --  알 수 없는 문자열이었다. model·effort 와 한 묶음이어야 그 셋이 서로를 검증한다.
+    ALTER TABLE org_distiller ADD COLUMN IF NOT EXISTS harness TEXT;
     ${ensureCheck("org_distiller", { org_distiller_prefilter_chk: "prefilter_level BETWEEN 0 AND 100" })}
   `);
 }
