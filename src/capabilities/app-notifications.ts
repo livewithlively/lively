@@ -37,7 +37,12 @@ const appNotify: Capability = {
     if (input.member_id && input.member_id !== target) {
       throw new HttpError(403, "지금은 이 앱 토큰의 주인에게만 알림을 보낼 수 있습니다");
     }
-    const r = await notifyMember({ appId: user?.appId ?? null, memberId: target, ...input });
+    //  ⚠ 입력을 통째로 펼치지 않는다(#4051) — REST 경로는 본문을 그대로 넘기므로(zod 로 거르지 않는다), 펼치면 앱이
+    //   서버 전용 칸(now·cooldownMs)을 실어 **중복 억제를 풀 수 있다.** 스키마에 있는 네 칸만 옮긴다.
+    const r = await notifyMember({
+      appId: user?.appId ?? null, memberId: target,
+      title: input.title, body: input.body, href: input.href, dedupe_key: input.dedupe_key,
+    });
     if (!r.ok) {
       const status = r.denial === "notify-title-required" ? 400 : 403;
       throw new HttpError(status, r.denial);

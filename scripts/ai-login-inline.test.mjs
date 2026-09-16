@@ -28,15 +28,36 @@ test("★ 한 벌이다 — 두 화면이 같은 모듈을 쓰고, 자기 폴링
   for (const [name, s] of [["onboarding", ONB], ["me-ai", MEAI]]) {
     assert.match(s, /from ['"][^'"]*ai-login-inline\.js['"]/, `${name} 이 공용 모듈을 가져온다`);
     const c = code(s);
-    assert.ok(!/ai-login\/state/.test(c), `${name} 이 상태 폴링을 스스로 하지 않는다`);
-    assert.ok(!/ai-login\/start/.test(c), `${name} 이 시작을 스스로 부르지 않는다`);
-    assert.ok(!/ai-login\/paste/.test(c), `${name} 이 붙여넣기를 스스로 부르지 않는다`);
+    //  #4051 — 헤드리스 발급(headless-login/*)도 같은 규율이다: 화면은 모듈만 부른다.
+    assert.ok(!/(ai|headless)-login\/state/.test(c), `${name} 이 상태 폴링을 스스로 하지 않는다`);
+    assert.ok(!/(ai|headless)-login\/start/.test(c), `${name} 이 시작을 스스로 부르지 않는다`);
+    assert.ok(!/(ai|headless)-login\/paste/.test(c), `${name} 이 붙여넣기를 스스로 부르지 않는다`);
   }
   //  그리고 그 호출은 **모듈 안에** 있어야 한다(아무도 안 부르는 죽은 모듈이 아니다).
+  //   경로는 용도(로그인·헤드리스)별 바닥 + 동사로 조립한다 — 바닥 두 개와 동사 네 개가 다 있어야 한다.
   const c = code(SRC);
-  for (const p of ["ai-login/start", "ai-login/state", "ai-login/paste", "ai-login/cancel"]) {
-    assert.ok(c.includes(p), `모듈이 ${p} 를 부른다`);
+  assert.match(c, /login: '\/api\/ui\/me\/ai-login'/, "대화형 로그인 바닥");
+  assert.match(c, /headless: '\/api\/ui\/me\/headless-login'/, "헤드리스 발급 바닥(#4051)");
+  for (const v of ["start", "state", "paste", "cancel"]) {
+    assert.ok(c.includes("${base}/" + v), `모듈이 ${v} 를 부른다`);
   }
+});
+
+test("★ #4051 헤드리스 발급 — 서버와 같은 하네스 목록, «끝났다» 는 저장했을 때만", () => {
+  //  기대값은 하드코딩한다(표를 표로 검증하지 않는다). 서버 목록과도 대조한다 — 어긋나면 화면은 [연결]을 주는데
+  //   서버가 400 을 내거나, 서버는 되는데 화면이 버튼을 안 준다.
+  const m = SRC.match(/HEADLESS_INLINE[^=]*=\s*Object\.freeze\(\{([^}]*)\}/);
+  assert.ok(m, "HEADLESS_INLINE 표를 못 찾았다");
+  const keys = [...m[1].matchAll(/(\w+)\s*:\s*true/g)].map((x) => x[1]).sort();
+  assert.deepEqual(keys, ["claude", "codex"], "중앙 샌드박스 판이 빌리는 자격은 claude·codex 뿐이다(SANDBOX_CREDS)");
+  const FLOW = readFileSync(new URL("../src/terminal/headless-login-flow.ts", import.meta.url), "utf8");
+  const sm = FLOW.match(/HEADLESS_LOGIN_HARNESSES = \[([^\]]*)\]/);
+  assert.ok(sm, "서버 목록을 못 찾았다");
+  assert.deepEqual([...sm[1].matchAll(/"(\w+)"/g)].map((x) => x[1]).sort(), keys, "화면 목록 = 서버 목록");
+  //  완료 판정 — 헤드리스는 «이번 시도에서 서버가 저장했다» 하나다. 자격 파일 판정(loggedIn)을 쓰면 이미 대화형으로
+  //   로그인한 사람은 누르자마자 «끝났다» 가 되고, 정작 판이 쓸 자격은 저장되지 않는다.
+  const c = code(SRC);
+  assert.match(c, /purpose === 'headless'\s*\?\s*!!st && st\.stored === true/, "헤드리스는 stored 로만 끝난다");
 });
 
 test("★ 어느 하네스가 «주소·코드로 끝나나» 는 한 곳에서만 정한다", () => {
@@ -59,7 +80,7 @@ test("★ 다시 시도는 **새로** 띄운다 — 안 그러면 죽은 코드�
 test("★ 완료하면 그 자리를 치운다 — 안 치우면 다음 사람이 만료된 코드를 본다", () => {
   const c = code(SRC);
   assert.match(c, /loggedIn === true/, "완료 판정은 **자격 확인**이 한다(프로세스 종료와 다른 사실)");
-  assert.match(c, /ai-login\/cancel/, "끝나면 정리한다");
+  assert.match(c, /\$\{base\}\/cancel/, "끝나면 정리한다");
 });
 
 test("★ «이미 로그인돼 있다» 를 «이번에 끝났다» 로 읽지 않는다 — [다시 로그인] 이 죽는다", () => {
@@ -89,7 +110,7 @@ test("★ 주소가 늦어도 화면을 덮지 않는다 — 상한은 «말하�
 test("★ 조회 실패를 화면 지우기로 옮기지 않는다", () => {
   const c = code(SRC);
   //  state 조회는 catch 로 삼키고 다음 틱에 다시 묻는다(끊긴 순간이 곧 실패는 아니다).
-  assert.match(c, /ai-login\/state[^]{0,200}catch/, "조회 실패는 다음 틱으로 넘긴다");
+  assert.match(c, /\$\{base\}\/state[^]{0,200}catch/, "조회 실패는 다음 틱으로 넘긴다");
   assert.ok(!/replaceChildren/.test(c), "모듈은 DOM 을 모른다 — 화면을 갈아치울 수 없다");
   assert.ok(!/document\./.test(c), "모듈은 DOM 을 모른다");
 });
@@ -110,6 +131,6 @@ test("★ 모듈이 스스로 새 탭을 열지 않는다 — 창을 여는 것�
 
 test("★ 시작에 실패해도 던지지 않는다 — 막다른 카드를 만들지 않는다", () => {
   const c = code(SRC);
-  assert.match(c, /ai-login\/start[^]{0,300}catch \(e\)[^]{0,120}view\.failed/,
+  assert.match(c, /\$\{base\}\/start[^]{0,300}catch \(e\)[^]{0,120}view\.failed/,
     "시작 실패는 화면에 한 줄로 알리고, 화면은 종전 «창으로 열기» 를 그대로 둔다");
 });

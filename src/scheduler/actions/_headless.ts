@@ -61,7 +61,7 @@ async function defaultWorkspaceRunner(): Promise<string | null> {
   const { getRuntimeConfig } = await import("../../org/store.js");
   return (await getRuntimeConfig()).context_job_policy?.runner_member ?? null;
 }
-export const HEADLESS_REQUESTER_MISSING = { status: "error" as const, summary: { error: "의뢰자 미설정 — params.requester(멤버 id/이메일)를 지정하거나, 로그인 상태로 잡을 다시 저장해 created_by 를 남기세요." } };
+export const HEADLESS_REQUESTER_MISSING = { status: "error" as const, summary: { error: "실행 멤버 미설정 — 워크스페이스 실행 멤버(context_job_policy.runner_member)를 정하거나, params.requester(멤버 id)를 지정하거나, 로그인 상태로 잡을 다시 저장해 created_by 를 남기세요." } };
 
 // #1101/#4008 헤드리스 실행 모델·추론강도 — 설정(증류기·분류기·관리기 행) 우선, 없으면 잡 params.
 //  ⚠ **여기서 플래그로 굳히지 않는다.** 하네스마다 모델 이름이 완전히 다르므로(opus ↔ gpt-5.6-sol ↔

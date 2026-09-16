@@ -484,6 +484,9 @@ export async function bootV2(): Promise<void> {
   //  그 뒤로는 자기가 자기를 되살리는 고리가 된다(원준님 신고 2026-08-27 "시도때도없이 떠서 돌아버리겠어").
   //  ⚠ 사람이 **스스로** 처음 설정을 다시 열 길은 남긴다 — 홈의 «이어서 하기» 가 붙이는 `?resume=1` 은 통과.
   if (boot && routeKey(boot) === 'raw:welcome' && !boot.includes('resume=1')) boot = null;
+  // #4051 — «내 AI 계정» 창 주소로 켰으면 탭은 평소대로 되살리고 창만 연다(ME_AI_ROUTE 머리말).
+  const openAiAcct = !!boot && ME_AI_ROUTE.test(boot);
+  if (openAiAcct) boot = null;
   // 처음 설정을 아직 안 끝낸 **처음 오는 사람**만 홈 대신 #/welcome 으로(#1813). 딥링크가 있으면 그쪽이 우선.
   //  ⚠ 판정은 **서버**(me.first_run — src/org/delivery/first-run.ts)다. 종전엔 localStorage 하나로 정해서
   //   몇 달째 쓰던 사람도 새 브라우저·다른 기기·시크릿창이면 홈 대신 처음 설정이 떴다(원준님 신고 2026-08-26,
@@ -522,6 +525,12 @@ export async function bootV2(): Promise<void> {
     tabsApi.activate(t);
   }
   drawSide();
+  if (openAiAcct) {
+    //  주소는 지금 탭의 자리로 — 창을 닫고 새로고침해도 다시 안 열린다. replaceState 는 hashchange 를 안 낸다.
+    const back = tabsApi.active().route || '#/';
+    history.replaceState(null, '', location.pathname + location.search + (back.startsWith('#') ? back : '#' + back));
+    openMeModal({ tab: 'aiacct' });
+  }
 
   window.addEventListener('hashchange', () => { histStamp(); void onHash(); });
   histStamp();     // 첫 화면도 히스토리의 한 칸이다 — 안 찍어 두면 되돌아왔을 때 '새로 감'으로 오인한다
@@ -993,10 +1002,25 @@ function applyTabChrome(tab: ShellTab): void {
 }
 
 /** 주소가 바뀌었다(링크 클릭·뒤로가기) — 활성 탭이 그 화면으로 이동한다. 이미 다른 탭에 있으면 그 탭으로 간다. */
+/**
+ * #4051 — «내 AI 계정» 창 주소(알림이 가리킨다). **탭이 아니라 창**이다 — onHash 와 부팅 둘 다 이 주소를 탭으로 만들지
+ *  않고 창만 연다. 한 곳에서 판정해야 두 자리가 어긋나지 않는다(어긋나면 부팅에서만 «모르는 화면» 탭이 선다).
+ */
+const ME_AI_ROUTE = /^#\/me\/ai(?:[/?]|$)/;
+
 async function onHash(): Promise<void> {
   if (!tabsApi) return;
   if (suppressHash > 0) { suppressHash--; return; }
   let hash = location.hash || '#/';
+  // #4051 — «내 AI 계정» 창으로 가는 주소(알림 «사람 없이 도는 작업이 멈췄어요» 가 가리킨다). 화면(탭)이 아니라 **창**이라
+  //  탭을 만들지 않는다 — 창을 열고 주소만 지금 탭의 자리로 되돌린다(안 되돌리면 창을 닫은 뒤 새로고침에서 다시 열린다).
+  if (ME_AI_ROUTE.test(hash)) {
+    openMeModal({ tab: 'aiacct' });
+    const back = tabsApi.active().route || '#/';
+    suppressHash++;
+    location.replace(location.pathname + location.search + (back.startsWith('#') ? back : '#' + back));
+    return;
+  }
   // ★ 프로젝트 주소는 '거쳐 가는 문'이다(원준 2026-08-20 "그거 눌렀을 때 열리는 탭도 그냥 세션이 열리는걸로").
   //  사이드바에서 프로젝트 제목을 누르면 #/p/<id> 로 오는데, 그대로 탭을 만들면 **프로젝트 탭**이 하나 생겼다가
   //  그 안에서 다시 세션으로 바뀐다(제목이 두 번 바뀌고, 이미 프로젝트 탭이 있으면 그 낡은 탭이 켜졌다).
