@@ -14,6 +14,7 @@ import { deviceStore, onShellPrefsAdopted, shellPrefStore, shellPrefsPush, shell
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘 일감'을 자르는 자(달력 자정이 아니다)
 import { renderLiv } from '../liv.js';
+import { livChatCleanup } from '../liv-chat.js';   // #4032 — 리브 칸 걷기
 import { CLASSIC_PAGES, appByKey, appFrame, nativeAppByRoute, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
 import { projMatches } from '../lib/proj-match.js';
@@ -384,6 +385,7 @@ export async function bootV2(): Promise<void> {
     },
     onClose: (tab) => {
       if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
+      if (routeKey(tab.route) === 'liv') livChatCleanup();   // #4032 — 리브 탭을 닫으면 그 칸도 걷는다
       if (tab.appView) { tab.appView.destroy(); tab.appView = null; }
       // 탭 닫기 = AppWindow 연결 해제. AppInstance·세션·worker 생애주기는 별도라 여기서 종료 API를 부르지 않는다.
       dropProjView(tab); shellProject.delete(tab); drawSide();
@@ -1040,6 +1042,7 @@ async function onHash(): Promise<void> {
   if (!hop && fromHome && (cur.draft || '').trim()) { tabsApi.add(hash); return; }
   if (!hop && !fromHome && (targetInstance || currentInstance)) { tabsApi.add(hash); return; }
   if (cur.chat) { cur.chat.destroy(); cur.chat = null; }   // 세션 화면을 떠나면 그 폴링·리스너를 끈다
+  if (routeKey(cur.route) === 'liv') livChatCleanup();     // 리브 탭을 떠나면 그 칸(빈 대화·진행 중인 붙이기)도 걷는다(#4032)
   dropProjView(cur);                                       // 프로젝트 화면(#1757)의 리브 턴 폴링도
   cur.route = hash;
   tabsApi.routed(cur);     // 제목·noAside 를 새 라우트로 먼저 — 그 뒤에 크롬을 맞춘다(거꾸로 하면 no-aside 가 한 화면 늦게 따라온다, 실측 #1777)

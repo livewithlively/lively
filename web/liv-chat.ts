@@ -46,6 +46,22 @@ function setBusy(on: boolean): void {
 
 /** 지금 리브 칸 — 카드의 문(livChatAsk·livChatFill)이 **이 칸 안에서만** 입력칸을 찾는다. */
 let livHost: HTMLElement | null = null;
+/** 지금 붙어 있는 리브 칸을 걷는 손잡이 — 다시 붙이거나 라우트를 떠날 때 부른다. */
+let current: { destroy: () => void } | null = null;
+
+/**
+ * 리브 칸을 걷는다 — 대화창의 폴링·리스너는 **부숴야만** 멈춘다(화면에서 떨어져도 계속 돈다).
+ *  · 클래식 셸: 라우터가 매 이동 앞에 부른다(web/main.ts — wkRouteCleanup 과 같은 자리). 안 부르면 리브 탭을 드나들 때마다
+ *    세션 대화창의 폴링 루프와 message 리스너가 하나씩 쌓인다.
+ *  · v2 셸: 세션 대화창은 탭 수명(tab.chat)으로 셸이 부순다. 여기서는 빈 대화와 진행 중인 붙이기만 걷는다.
+ */
+export function livChatCleanup(): void {
+  const c = current;
+  current = null;
+  livHost = null;
+  c?.destroy();
+  setBusy(false);
+}
 
 /** 셸 없이(클래식) 리브 세션 대화창을 붙인다 — 목록을 한 번 읽어 그 세션 한 장으로 그린다. */
 const mountFromLists: LivSessionMounter = async (host, id, o) => {
@@ -63,14 +79,23 @@ const mountFromLists: LivSessionMounter = async (host, id, o) => {
 
 /** askHost = 리브가 던진 물음이 앉는 자리. **대화와 같은 칸, 입력 바로 위**에 끼운다. */
 export function mountLivChat(host: HTMLElement, askHost: HTMLElement, opts: LivChatOpts = {}): void {
+  livChatCleanup();                          // 앞 칸(다시 그리기 전의 것)을 먼저 걷는다
   livHost = host;
-  setBusy(false);
   const mount = opts.mountSession ?? mountFromLists;
   const ownsHandle = !opts.mountSession;   // 셸이 붙였으면 수명(파괴)도 셸이 쥔다 — 두 번 부수지 않는다
   let handle: SessionChatHandle | null = null;
   let emptyView: ChatView | null = null;     // 세션이 없을 때의 빈 대화(첫 말을 받는 자리)
   let gen = 0;                               // 늦게 끝난 붙이기가 새 화면을 덮지 않게
   const isVisible = (): boolean => host.isConnected && document.body.dataset.route === 'liv';
+  current = {
+    destroy: () => {
+      ++gen;                                 // 진행 중인 붙이기·첫 말은 끝나도 화면을 안 만진다
+      if (ownsHandle) handle?.destroy();
+      handle = null;
+      emptyView?.destroy();
+      emptyView = null;
+    },
+  };
 
   /** 세션 대화창의 대화 칸(.livc-wrap)에 물음 자리를 끼운다 — 입력칸(.livc-note·.livc-foot) 바로 위. */
   function dockAsk(): void {
@@ -89,7 +114,8 @@ export function mountLivChat(host: HTMLElement, askHost: HTMLElement, opts: LivC
     new MutationObserver(read).observe(form, { attributes: true, attributeFilter: ['class'] });
   }
 
-  async function show(id: string): Promise<void> {
+  /** o.sent = 방금 그 말로 세션을 열었다(서버가 넣는다) · o.draft = 아직 안 간 말(못 붙이면 입력칸으로 돌려준다). */
+  async function show(id: string, o: { sent?: boolean; draft?: string } = {}): Promise<void> {
     const my = ++gen;
     if (ownsHandle) handle?.destroy();
     handle = null;
@@ -102,7 +128,10 @@ export function mountLivChat(host: HTMLElement, askHost: HTMLElement, opts: LivC
     if (my !== gen || !host.isConnected) { if (ownsHandle) h?.destroy(); return; }
     if (!h) {
       //  목록에서 못 찾았다(지워졌거나 목록이 아직 안 왔다) — 막다른 화면 대신 말할 자리를 준다. 첫 말이 새로 열거나 그 세션을 되찾는다.
-      paintEmpty('지난 대화를 불러오지 못했습니다. 말씀하시면 이어서 하겠습니다.');
+      //  ⚠ 방금 친 말을 잃지 않는다 — 안 갔으면 입력칸으로 돌려주고, 이미 갔으면 갔다고 말한다(다시 보내면 두 번 간다).
+      if (o.sent) paintEmpty('리브에게 보냈습니다. 대화를 아직 불러오지 못했으니 잠시 뒤 새로고침해 주세요.');
+      else if (o.draft) paintEmpty('보내지 못했습니다 — 리브 대화를 불러오지 못했습니다. 아래 글을 다시 보내 주세요.', o.draft);
+      else paintEmpty('지난 대화를 불러오지 못했습니다. 말씀하시면 이어서 하겠습니다.');
       return;
     }
     handle = h;
@@ -121,7 +150,7 @@ export function mountLivChat(host: HTMLElement, askHost: HTMLElement, opts: LivC
   }
 
   /** 리브 세션이 아직 없다 — 입력칸만 있는 빈 대화. 첫 말이 세션을 연다. */
-  function paintEmpty(note?: string): void {
+  function paintEmpty(note?: string, draft?: string): void {
     ++gen;
     if (ownsHandle) handle?.destroy();
     handle = null;
@@ -142,6 +171,7 @@ export function mountLivChat(host: HTMLElement, askHost: HTMLElement, opts: LivC
       askHost,
     });
     if (note) view.setNote(note);
+    if (draft) { view.input.value = draft; view.input.dispatchEvent(new Event('input')); }
     emptyView = view;
   }
 
@@ -162,11 +192,11 @@ export function mountLivChat(host: HTMLElement, askHost: HTMLElement, opts: LivC
       //  세션 대화창이 붙자마자 이 말을 «보낸 모양» 으로 먼저 그린다(서버가 입력창이 뜬 뒤 실제로 넣는다).
       rememberFirstPrompt(r.session_id, text);
       if (r.session) { rememberCreated(r.session); opts.onSessionCreated?.(r.session); }
-      await show(r.session_id);
+      await show(r.session_id, { sent: true });
       return;
     }
     //  이미 리브 세션이 있었다(다른 탭·처음 설정이 방금 열었다) — 그 대화창을 붙이고 거기서 보낸다.
-    await show(r.session_id);
+    await show(r.session_id, { draft: text });
     if (handle) sendIntoSession(text);
   }
 

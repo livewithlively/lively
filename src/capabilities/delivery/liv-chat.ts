@@ -31,7 +31,8 @@ export const livChatCapabilities: Capability[] = [
     async (_input: unknown, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      return { session_id: await currentLivSessionId(userId) };
+      //  조회는 읽기만 한다(heal:false) — 옛 좌표 고쳐 적기는 첫 말·2턴 스윕이 한다.
+      return { session_id: await currentLivSessionId(userId, { heal: false }) };
     }),
 
   restRead("me_liv_session_open", "리브에게 첫 말 걸기",
