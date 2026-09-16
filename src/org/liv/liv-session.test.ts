@@ -11,7 +11,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { LIV_CHAT_LABEL, LIV_PROMPT_MAX, LIV_SUBPATH, pickLivSession, storedLivSession, type LivSessionFacts } from "./session.js";
+import { LIV_CHAT_LABEL, LIV_PROMPT_MAX, LIV_SUBPATH, pickLivSession, serialByKey, storedLivSession, type LivSessionFacts } from "./session.js";
 import { BY_WORKSPACE, WORKSPACE_SCOPED_KEYS, mergeForWorkspace, viewForWorkspace } from "../store/members.js";
 import { livChatCapabilities, livFirstWords } from "../../capabilities/delivery/liv-chat.js";
 import { HttpError } from "../../http-error.js";
@@ -60,6 +60,40 @@ test("★★ 표 C — 첫 말은 비면 400, 8000자까지 허용, 8001자부�
   assert.equal(livFirstWords(at), at, "C2 정확히 상한은 통과해야 한다");
   assert.throws(() => livFirstWords(at + "나"), (e: unknown) => e instanceof HttpError && e.status === 400 && /8001 > 8000/.test(e.message), "C3");
   assert.equal(livFirstWords(`  ${at}  `), at, "C4 앞뒤 공백은 세지 않는다");
+});
+
+// ── 표 D — 리브 세션 확보를 한 줄로(두 탭에서 동시에 첫 말 → 세션 하나) ─────────────────────
+test("★★ 표 D — 같은 열쇠는 한 줄로, 다른 열쇠는 따로, 앞이 실패해도 뒤는 돌고, 끝나면 열쇠가 남지 않는다", async () => {
+  const q = serialByKey();
+  const log: string[] = [];
+  const gate = (): { p: Promise<void>; open: () => void } => { let open!: () => void; const p = new Promise<void>((r) => { open = r; }); return { p, open }; };
+  // D1 같은 열쇠 — 앞 일이 끝나기 전에 뒤 일이 시작하면 «세션이 없다» 를 둘 다 보고 둘 다 연다.
+  const g1 = gate();
+  const a = q.run("ws|me", async () => { log.push("a+"); await g1.p; log.push("a-"); return "A"; });
+  const b = q.run("ws|me", async () => { log.push("b+"); return "B"; });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(log, ["a+"], "D1 ★ 앞 일이 도는 중에 뒤 일이 시작했다(세션이 둘 선다)");
+  g1.open();
+  assert.deepEqual(await Promise.all([a, b]), ["A", "B"]);
+  assert.deepEqual(log, ["a+", "a-", "b+"], "D1 순서");
+  // D2 다른 열쇠 — 다른 사람·다른 워크스페이스는 서로 기다리지 않는다.
+  const g2 = gate();
+  const seen: string[] = [];
+  const c = q.run("ws|u1", async () => { seen.push("c+"); await g2.p; return "C"; });
+  const d = q.run("ws|u2", async () => { seen.push("d+"); return "D"; });
+  //  기다리면 영영 안 끝난다(앞 일은 아래에서야 풀린다) — 멈추지 않고 곧바로 빨간불이 되게 시한을 건다.
+  const within = await Promise.race([d, new Promise((r) => setTimeout(() => r("기다렸다"), 200))]);
+  assert.equal(within, "D", "D2 ★ 다른 열쇠가 앞 일을 기다렸다(한 사람이 여는 동안 모두가 멈춘다)");
+  assert.deepEqual(seen, ["c+", "d+"]);
+  g2.open();
+  assert.equal(await c, "C");
+  // D3 앞 일이 실패 — 그 실패는 그 호출자에게만 가고, 뒤 일은 돈다.
+  const e = q.run("ws|me", async () => { throw new Error("세션을 못 열었다"); });
+  const f = q.run("ws|me", async () => "F");
+  await assert.rejects(e, /세션을 못 열었다/, "D3 앞 실패가 삼켜졌다");
+  assert.equal(await f, "F", "D3 ★ 앞 실패가 뒤 일을 막았다(그 사람은 다시는 리브를 못 연다)");
+  // D4 끝나면 열쇠가 남지 않는다.
+  assert.equal(q.size(), 0, "D4 끝난 열쇠가 남았다(사람 수만큼 쌓인다)");
 });
 
 // ── 프로필 층 — 리브 세션은 워크스페이스마다 따로 ──────────────────────────────────────

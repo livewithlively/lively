@@ -19,7 +19,6 @@
 import type { LivelyUser } from "../../context.js";
 import type { LaunchedSession } from "../../terminal/session-launch.js";
 import { logger } from "../../log.js";
-import { createKeyedSerializer } from "../../terminal/restore-adopt.js";
 
 /** 리브 세션의 작업 폴더(개인 루트 아래). 리브 부팅 훅의 게이트가 이 이름을 본다. */
 export const LIV_SUBPATH = "liv";
@@ -122,10 +121,27 @@ export async function openLivSession(user: LivelyUser, o: { prompt: string; labe
 }
 
 /**
- * 같은 사람의 «리브 세션 확보» 를 **한 줄로 세운다** — 리브 탭을 두 개 열어 두고 동시에 보내면 세션이 둘 서는 자리다.
+ * (도구) 같은 열쇠의 비동기 일을 **한 줄로 세운다** — 앞 일이 끝나야 뒤 일이 시작한다. 다른 열쇠는 서로 기다리지 않는다.
+ *  앞 일이 실패해도 뒤 일은 돈다(뒤 일은 처음부터 다시 판정한다). 끝난 열쇠는 지운다(열쇠가 사람 수만큼 쌓이지 않게).
+ */
+export function serialByKey(): { run<T>(key: string, fn: () => Promise<T>): Promise<T>; size(): number } {
+  const tails = new Map<string, Promise<unknown>>();
+  return {
+    async run<T>(key: string, fn: () => Promise<T>): Promise<T> {
+      const prev = tails.get(key) ?? Promise.resolve();
+      const mine = prev.catch(() => undefined).then(fn);
+      tails.set(key, mine);
+      try { return await mine; } finally { if (tails.get(key) === mine) tails.delete(key); }
+    },
+    size: () => tails.size,
+  };
+}
+
+/**
+ * 같은 사람의 «리브 세션 확보» 를 한 줄로 — 리브 탭을 두 개 열어 두고 동시에 보내면 세션이 둘 서는 자리다.
  *  게이트웨이는 한 프로세스가 여러 워크스페이스를 받으므로 열쇠에 워크스페이스를 넣는다.
  */
-const opening = createKeyedSerializer();
+const opening = serialByKey();
 
 export interface EnsuredLivSession { session_id: string; created: boolean; session?: LaunchedSession }
 
