@@ -199,13 +199,18 @@ async function recordDistillerRunSafe(id: number, status: string, summary: unkno
 }
 
 // #638 인입 허용선 정책을 distill 프롬프트용 요약으로 — LLM 이 각 지식을 규칙에 대입해 lifecycle 자기판정. 규칙 0이면 기본 auto 안내.
+//  ⚠ 규칙 0개 분기는 오래 "'쿠킹중·기획단계·미확정·미완결' 이면 규칙이 없어도 pending 으로 저장해" 라고 지시했다(#638 설계, 어니스트 CTO 요구).
+//   그 한 문장이 제품의 기본값을 뒤집었다 — 관리탭 「사람이 확인한 뒤에 쓰기」가 **꺼짐**인데도 증류 산출이 검토 큐에 갇혔고
+//   (authoring.ts 의 서버 클램프가 에이전트의 자진 pending 을 존중한다), 스위치를 끄면 그 행이 enabled=false 로 이 필터에서 빠져
+//   오히려 지시가 되살아났다. 실측: #1639(어니스트 20건, 2026-08-12) · #4018(2026-09-16, 스위치 꺼짐인데 2건 대기).
+//   ⇒ 규칙 0개 = 게이트 없음(ingest-policy.ts DEFAULT_DECISION)을 프롬프트도 그대로 말한다. 검토가 필요한 조직은 스위치를 켠다.
 async function buildDistillPolicySummary(): Promise<string> {
   let rows: Array<Record<string, unknown>> = [];
   try { const { listIngestPolicies } = await import("../../org/store.js"); rows = (await listIngestPolicies()) as unknown as Array<Record<string, unknown>>; }
   catch { rows = []; }
   const active = rows.filter((p) => p.enabled !== false);
   if (!active.length) {
-    return "설정된 허용선 정책 규칙이 없어 기본은 active(즉시 지식화) — 단 '쿠킹중·기획단계·미확정·미완결' 성격의 내용은 규칙이 없어도 lifecycle='pending' 으로 저장해 오너 검토를 받아.";
+    return "설정된 허용선 정책 규칙이 없다 — 전부 active(즉시 지식화)다. lifecycle 을 **지정하지 마**(pending 금지) — 네가 '쿠킹중·기획단계·미확정' 이라고 판단해도 마찬가지다. 그 판단은 조직이 관리탭에서 「사람이 확인한 뒤에 쓰기」를 켜서 하는 것이지 네가 하는 것이 아니다.";
   }
   const parts = active.map((p) => {
     const m = [
