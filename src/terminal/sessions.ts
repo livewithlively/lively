@@ -806,7 +806,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  ⚠ 로그인 상태는 쓰지 않는다(#2232 에서 보류된 판단 그대로).
   //  비치명 — 못 심어도 세션은 뜬다(종전대로 프롬프트가 뜰 뿐). 같은 부류의 선례: ensureGitSafeDirectory(#522).
   //  신뢰 자동화의 판정은 **한 자리에서만** 낸다(#1867) — 루트 그 자체이거나 그 프로젝트의 canonical 폴더.
-  const trustOk = autoTrustWorkspace({ projectId: input.projectId, subpath: subpathUsed });
+  const trustOk = autoTrustWorkspace({ projectId: input.projectId, subpath: subpathUsed, rootKey: rootKeyUsed, kind: input.kind });
   //  ⚠ 하네스마다 **자리도 형식도 다르다**(#2478) — 표에 있는 하네스만 다룬다(모르는 하네스엔 짐작해 쓰지 않는다).
   if (TRUST_PLANS[harness.key]) {
     //  설정 파일은 그 세션이 **실제로 쓸** 자리다.
