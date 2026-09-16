@@ -26,6 +26,7 @@ import { svcLogo } from './svc-logos.js';
 import { icon as lineIcon } from './v2/icons.js';
 import { confirmDialog, skeleton } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
+import { runConfig } from './context-run-config.js';    // #4008 제공자·모델·추론강도 공용 선택기
 
 const PAGE_TYPES = ['', 'decision', 'concept', 'how-to', 'reference', 'research', 'entity'];
 const KINDS = ['slack', 'email', 'discord', 'transcript', 'minutes', 'notion_doc', 'clickup_doc', 'drive_file', 'local_file', 'other'];
@@ -512,12 +513,13 @@ function editorPage(d, isNew: boolean): HTMLElement {
   modeSel.append(el('option', { value: 'session', text: '늘 켜 둔 AI 세션에 보내서' }));
   if (v('mode')) modeSel.value = v('mode');
   const sessIn = el('input', { type: 'text', class: 'dst-in dst-in-sm', value: v('session_ref'), placeholder: '「늘 켜 둔 AI 세션」일 때만' });
-  const modelSel = el('select', { class: 'dst-in dst-in-sm' }) as HTMLSelectElement;
-  for (const m of ['', 'fable', 'opus', 'sonnet', 'haiku']) modelSel.append(el('option', { value: m, text: m || '계정 기본값' }));
-  if (v('model')) modelSel.value = v('model');
-  const effortSel = el('select', { class: 'dst-in dst-in-sm' }) as HTMLSelectElement;
-  for (const m of ['', 'low', 'medium', 'high', 'xhigh', 'max']) effortSel.append(el('option', { value: m, text: m || '기본값' }));
-  if (v('effort')) effortSel.value = v('effort');
+  //  제공자·모델·추론강도(#4008) — 종전엔 이 자리에 claude 의 모델 목록이 **박혀 있었다**. 그래서 ① codex·
+  //   antigravity 로 도는 워크스페이스는 모델을 아예 못 골랐고 ② 빈 값이 «계정 기본값» 이라고 적혀 있었는데
+  //   그 기본은 CLI 가 올리는 값이라(claude → fable) 무인 증류가 가장 비싼 모델로 돌았다. 선택지는 서버
+  //   카탈로그에서 오고, 빈 값의 뜻은 «그 하네스의 자동화 기본값» 으로 화면이 이름을 대어 말한다.
+  const run = runConfig({ harness: v('harness'), model: v('model'), effort: v('effort') }, '');
+  const { harnessSel, modelSel, effortSel } = run;
+  for (const sel of [harnessSel, modelSel, effortSel]) sel.className = 'dst-in dst-in-sm';
   const reqIn = el('input', { type: 'text', class: 'dst-in dst-in-sm', value: v('requester'), placeholder: '구성원 id — 비우면 자동 실행을 만든 사람' });
 
   const collect = () => {
@@ -550,7 +552,7 @@ function editorPage(d, isNew: boolean): HTMLElement {
       batch_max_msgs: Number((batchMsgIn as HTMLInputElement).value) || 20,
       mode: modeSel.value,
       session_ref: (sessIn as HTMLInputElement).value.trim() || null,
-      model: modelSel.value || null, effort: effortSel.value || null,
+      ...run.value(),
       requester: (reqIn as HTMLInputElement).value.trim() || null,
       // 조각: 손대지 않은(빈) 칸은 **키를 아예 안 보낸다** — 미지정=기본값이고, 빈 문자열은 '그 조각을 뺀다'는
       //  다른 뜻이기 때문이다. 조각 UI 를 아직 안 불러왔으면 이 필드를 건드리지 않는다(기존 설정 보존).
@@ -772,9 +774,11 @@ function editorPage(d, isNew: boolean): HTMLElement {
       row2(
         F('실행 방식', '매번 새 세션에서 돌리면 이전 판단에 끌려가지 않습니다(권장).', modeSel),
         F('늘 켜 둔 세션 id', '「늘 켜 둔 AI 세션에 보내서」일 때만 필요합니다.', sessIn)),
+      F('AI 제공자', '이 증류기를 어느 AI 로 돌릴지. 「자동」이면 실행 계정이 로그인한 AI 중에서 고릅니다(클로드 우선).', harnessSel),
       row2(
         F('모델', '남길 기준이 까다로우면 더 좋은 모델을 권합니다. 정확해지는 만큼 비쌉니다.', modelSel),
-        F('추론 강도', '높일수록 정확하고 비쌉니다.', effortSel))),
+        F('추론 강도', '높일수록 정확하고 비쌉니다.', effortSel)),
+      run.hint),
     fold('AI 지시문 — 실제로 보내는 문장',
       intro('AI에게 실제로 보내는 문장을 조각별로 손봅니다. 비워 두면 기본 문장이 나가고, 제품이 좋아지면 자동으로 따라옵니다.'),
       sectionsHost));

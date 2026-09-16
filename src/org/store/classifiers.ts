@@ -14,7 +14,7 @@ export interface ClassifierRow {
   min_chars: number; lookback_days: number | null;
   criteria_md: string | null; candidate_categories: string[] | null; confirm_threshold: number;
   batch_size: number; mode: string; session_ref: string | null;
-  model: string | null; effort: string | null; requester: string | null;
+  harness: string | null; model: string | null; effort: string | null; requester: string | null;
   last_run_at: string | null; last_status: string | null; last_summary: unknown;
   note: string | null;
   /** 파생 — 화면용 '무엇을 맡나' 한 줄 요약. */
@@ -24,7 +24,7 @@ export interface ClassifierRow {
 const COLS = `id, key, label, enabled, priority, target, confidence_below,
   match_types, match_provenance, match_systems, exclude_names,
   min_chars, lookback_days, criteria_md, candidate_categories, confirm_threshold,
-  batch_size, mode, session_ref, model, effort, requester,
+  batch_size, mode, session_ref, harness, model, effort, requester,
   last_run_at, last_status, last_summary, note`;
 
 /** 사람이 읽는 스코프 한 줄 — 목록에서 '이 분류기가 뭘 맡나'가 바로 보이게. */
@@ -173,7 +173,7 @@ export interface ClassifierUpsertInput {
   min_chars?: number; lookback_days?: number | null;
   criteria_md?: string | null; candidate_categories?: string[] | string | null; confirm_threshold?: number;
   batch_size?: number; mode?: string; session_ref?: string | null;
-  model?: string | null; effort?: string | null; requester?: string | null; note?: string | null;
+  harness?: string | null; model?: string | null; effort?: string | null; requester?: string | null; note?: string | null;
   /** 기준을 바꿔 다시 보고 싶을 때 — '봤다' 기록을 비운다. */
   reset_seen?: boolean;
 }
@@ -213,6 +213,7 @@ export async function upsertClassifier(input: ClassifierUpsertInput, actor?: str
     batch_size: Math.min(500, Math.max(1, Number(pick(input.batch_size, cur?.batch_size ?? 50)) || 50)),
     mode: pick(input.mode, cur?.mode ?? "headless"),
     session_ref: input.session_ref === undefined ? (cur?.session_ref ?? null) : input.session_ref,
+    harness: input.harness === undefined ? (cur?.harness ?? null) : input.harness,
     model: input.model === undefined ? (cur?.model ?? null) : input.model,
     effort: input.effort === undefined ? (cur?.effort ?? null) : input.effort,
     requester: input.requester === undefined ? (cur?.requester ?? null) : input.requester,
@@ -222,7 +223,8 @@ export async function upsertClassifier(input: ClassifierUpsertInput, actor?: str
   const vals = [row.key, row.label, row.enabled, row.priority, row.target, row.confidence_below,
     row.match_types, row.match_provenance, row.match_systems, row.exclude_names,
     row.min_chars, row.lookback_days, row.criteria_md, row.candidate_categories, row.confirm_threshold,
-    row.batch_size, row.mode, row.session_ref, row.model, row.effort, row.requester, row.note, actor ?? null];
+    row.batch_size, row.mode, row.session_ref, row.model, row.effort, row.requester, row.note, actor ?? null,
+    row.harness];
 
   let id: number;
   if (cur) {
@@ -231,16 +233,17 @@ export async function upsertClassifier(input: ClassifierUpsertInput, actor?: str
               match_types=$7, match_provenance=$8, match_systems=$9, exclude_names=$10,
               min_chars=$11, lookback_days=$12, criteria_md=$13, candidate_categories=$14, confirm_threshold=$15,
               batch_size=$16, mode=$17, session_ref=$18, model=$19, effort=$20, requester=$21, note=$22,
+              harness=$24,
               version=version+1, updated_at=now(), updated_by=$23
-         WHERE id=$24`, [...vals, cur.id]);
+         WHERE id=$25`, [...vals, cur.id]);
     id = cur.id;
   } else {
     const ins = await itemsPool.query(
       `INSERT INTO org_classifier(key, label, enabled, priority, target, confidence_below,
          match_types, match_provenance, match_systems, exclude_names,
          min_chars, lookback_days, criteria_md, candidate_categories, confirm_threshold,
-         batch_size, mode, session_ref, model, effort, requester, note, created_by, updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$23)
+         batch_size, mode, session_ref, model, effort, requester, note, created_by, updated_by, harness)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$23,$24)
        RETURNING id`, vals);
     id = Number((ins.rows[0] as { id: string | number }).id);
   }

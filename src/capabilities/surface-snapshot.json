@@ -1174,7 +1174,7 @@
   "rest": [
    "POST /api/ui/org/distillers"
   ],
-  "input_hash": "ee04aef088d4095e"
+  "input_hash": "eca1f0a5ec9e48f2"
  },
  {
   "name": "org_distiller_remove",
@@ -1255,7 +1255,7 @@
   "rest": [
    "POST /api/ui/org/classifiers"
   ],
-  "input_hash": "bfc1f8b6dd7b4189"
+  "input_hash": "08b00c5f32f85132"
  },
  {
   "name": "org_classifier_preview",
@@ -1295,7 +1295,7 @@
   "rest": [
    "POST /api/ui/org/managers"
   ],
-  "input_hash": "ed7c69b280563191"
+  "input_hash": "2674f465a982d6d7"
  },
  {
   "name": "org_manager_run",

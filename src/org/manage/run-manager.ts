@@ -27,7 +27,7 @@ export interface ManagerRunResult {
  */
 export async function runManager(
   m: ManagerRow,
-  enqueue?: (prompt: string, opts: { model?: string | null; effort?: string | null; requester?: string | null; repo?: string | null; extra?: Record<string, unknown> }) => Promise<{ status: string; summary: unknown }>,
+  enqueue?: (prompt: string, opts: { harness?: string | null; model?: string | null; effort?: string | null; requester?: string | null; repo?: string | null; extra?: Record<string, unknown> }) => Promise<{ status: string; summary: unknown }>,
 ): Promise<ManagerRunResult> {
   const base = { manager: m.key, kind: m.kind };
   try {
@@ -62,7 +62,7 @@ export async function runManager(
         return { ...base, candidates: 0, skipped: "닮은 지식 쌍 없음" };
       }
       const r = await enqueue(buildContradictionPrompt(m, cands), {
-        model: m.model, effort: m.effort, requester: m.requester,
+        harness: m.harness, model: m.model, effort: m.effort, requester: m.requester,
         extra: { manager: m.key, candidates: cands.length },
       });
       await recordManagerRun(m.id, r.status, r.summary);
@@ -95,7 +95,7 @@ export async function runManager(
     const out: unknown[] = [];
     for (const [repo, group] of byRepo) {
       const r = await enqueue(buildCodeDriftPrompt(m, group), {
-        model: m.model, effort: m.effort, requester: m.requester, repo,
+        harness: m.harness, model: m.model, effort: m.effort, requester: m.requester, repo,
         extra: { manager: m.key, repo, candidates: group.length },
       });
       out.push({ repo, candidates: group.length, ...(r.summary as object) });

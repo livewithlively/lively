@@ -17,7 +17,7 @@ export interface ManagerRow {
   match_provenance: string | null; exclude_names: string[] | null; lookback_days: number | null;
   threshold: number | null; stale_days: number | null;
   action_level: string; criteria_md: string | null;
-  batch_size: number; model: string | null; effort: string | null; requester: string | null;
+  batch_size: number; harness: string | null; model: string | null; effort: string | null; requester: string | null;
   last_run_at: string | null; last_status: string | null; last_summary: unknown; note: string | null;
   /** 파생 — 열린 발견 수(목록 배지). */
   open_findings?: number;
@@ -26,7 +26,7 @@ export interface ManagerRow {
 const COLS = `id, key, label, kind, enabled, priority,
   match_categories, match_types, match_provenance, exclude_names, lookback_days,
   threshold, stale_days, action_level, criteria_md,
-  batch_size, model, effort, requester, last_run_at, last_status, last_summary, note`;
+  batch_size, harness, model, effort, requester, last_run_at, last_status, last_summary, note`;
 
 /** kind 별 사람 읽는 이름 — 화면·요약 공용(한 곳에서 정의해 표기가 갈리지 않게). */
 export const MANAGER_KIND_LABEL: Record<ManagerKind, string> = {
@@ -173,7 +173,7 @@ export interface ManagerUpsertInput {
   match_provenance?: string | null; exclude_names?: unknown; lookback_days?: number | null;
   threshold?: number | null; stale_days?: number | null;
   action_level?: string; criteria_md?: string | null;
-  batch_size?: number; model?: string | null; effort?: string | null; requester?: string | null;
+  batch_size?: number; harness?: string | null; model?: string | null; effort?: string | null; requester?: string | null;
   note?: string | null;
 }
 
@@ -219,6 +219,7 @@ export async function upsertManager(input: ManagerUpsertInput, actor?: string, s
     input.requester === undefined ? (cur?.requester ?? null) : input.requester,
     input.note === undefined ? (cur?.note ?? null) : input.note,
     actor ?? null,
+    input.harness === undefined ? (cur?.harness ?? null) : input.harness,   // $21 — 뒤에 붙인다(앞 번호를 밀지 않으려고)
   ];
 
   let id: number;
@@ -228,16 +229,17 @@ export async function upsertManager(input: ManagerUpsertInput, actor?: string, s
               match_categories=$6, match_types=$7, match_provenance=$8, exclude_names=$9,
               lookback_days=$10, threshold=$11, stale_days=$12, action_level=$13, criteria_md=$14,
               batch_size=$15, model=$16, effort=$17, requester=$18, note=$19,
+              harness=$21,
               version=version+1, updated_at=now(), updated_by=$20
-         WHERE id=$21`, [...vals, cur.id]);
+         WHERE id=$22`, [...vals, cur.id]);
     id = cur.id;
   } else {
     const ins = await itemsPool.query(
       `INSERT INTO org_manager(key, label, kind, enabled, priority,
          match_categories, match_types, match_provenance, exclude_names,
          lookback_days, threshold, stale_days, action_level, criteria_md,
-         batch_size, model, effort, requester, note, created_by, updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20)
+         batch_size, model, effort, requester, note, created_by, updated_by, harness)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20,$21)
        RETURNING id`, vals);
     id = Number((ins.rows[0] as { id: string | number }).id);
   }

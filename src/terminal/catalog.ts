@@ -243,11 +243,11 @@ export const HARNESSES: Harness[] = [
     //  bin 은 key 와 다르다(agy). 안내·재시작 문구를 key 로 만들면 없는 명령을 안내하게 된다(harnessFailNotice 참조).
     key: "antigravity", label: "Antigravity", bin: "agy", provider: { id: "google", label: "Google Gemini" },
     autoApproveFlag: "--dangerously-skip-permissions",   // 실측(agy 1.1.13 --help)
-    // 모델은 `agy models` 실측 목록을 그대로 싣는다. 최신 3.7만 남기면 이미 설치본이 지원하는 3.5/3.6을
-    // 상단에서 고를 수 없으므로, 새 모델 추가와 기존 지원 모델 보존을 함께 반영한다.
+    // 모델은 `agy models` 실측 목록을 그대로 싣는다(2026-09-16 재실측: 3.8 계열이 생기고 3.5 계열은 목록에서 빠졌다).
+    // 없어진 모델을 남기면 고르는 즉시 실패하고, 새 모델을 안 넣으면 화면이 설치본보다 뒤처진다 — 둘 다 목록으로 맞춘다.
     // codex 와 같은 이유로 빈 값(=하네스 기본)을 기본으로 두어 특정 문자열에 사용자를 묶지 않는다.
     flags: [
-      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low", "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low", "gemini-3.5-flash-high", "gemini-3.5-flash-medium", "gemini-3.5-flash-low", "gemini-3.1-pro-high", "gemini-3.1-pro-low", "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"] },
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low", "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low", "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low", "gemini-3.1-pro-high", "gemini-3.1-pro-low", "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"] },
       { name: "--effort", label: "추론강도(effort)", desc: "", type: "select", choices: ["", "low", "medium", "high"], default: "medium" },   // claude 와 달리 3단계(실측)
     ],
     failHint: ["로그인이 필요하다고 나오면 화면에 뜨는 주소를 브라우저에서 열고, 함께 표시되는 코드를 입력하세요."],
@@ -288,6 +288,72 @@ export const HARNESSES: Harness[] = [
   },
   { key: "shell", label: "셸 (에이전트 없음)", bin: "", provider: { id: "none", label: "AI 없음" }, flags: [] },
 ];
+
+// ── 무인 자동화의 모델·추론강도 기본값(#4008) ─────────────────────────────────────────────
+//
+// 왜 별도 표인가: 위 `FlagDef.default` 는 **사람이 여는 새 세션 화면**의 기본값이다(claude=fable/high).
+//  대화형은 사람이 옆에서 보고 있고 한 번에 한 질문이라 비싼 기본이 합리적이지만, 무인 배치는 성격이 정반대다 —
+//  증류·분류·관리는 매 주기 수십 배치를 자동으로 접수하고 아무도 안 본다. 그 자리에 대화형 기본이 그대로
+//  흘러들면서 실제로 사고가 났다(원준님 2026-09-16: «증류가 페이블로 돌아 토큰이 다 빨렸다»).
+//
+// ⚠ 사고의 구조는 «설정을 안 했다» 가 아니라 **«안 하면 무엇이 되는지 아무도 안 정했다»** 였다.
+//  model 이 비면 headlessFlags 가 `--model` 을 통째로 생략했고, 그러면 그 계정의 CLI 기본 모델이 뜬다.
+//  CLI 기본은 우리가 정하는 값이 아니라 **하네스가 올려 버리는 값**이라(claude 는 fable 로 올라갔다),
+//  라이블리는 «비워 두면 싼 모델» 을 약속한 적이 없는데 사용자는 그렇게 읽는다. 그 어긋남을 여기서 닫는다.
+//
+// 값의 근거(원준님 2026-09-16 지정 · 각 CLI 실측 목록과 대조):
+//  · claude      opus/low          — 별칭 `opus` = 최신 Opus(=Opus 5). 무인 배치는 강도를 낮춰 토큰을 아낀다.
+//  · codex       gpt-5.6-sol/medium
+//  · antigravity gemini-3.8-flash-high — 이 하네스는 모델 이름에 강도가 박혀 있고(`-high`) --effort 도 따로 받는다.
+//  · grok        grok-4.6/medium   — 지정 없음. `grok models` 에 모델이 하나뿐이라 그것 + 중간 강도로 둔다.
+//
+// ⚠ **하네스가 정해진 뒤에** 대입해야 한다. 이 값들은 하네스마다 문법이 달라서(opus 는 codex 에서 무의미),
+//  하네스 해소 전에 flags 를 굳히면 harnessFlagArgs 가 choices 밖이라며 **조용히 버리고** 다시 CLI 기본으로
+//  떨어진다 — 고치기 전과 똑같은 결말이다. 그래서 적용점은 enqueueHeadlessTask 안(하네스 해소 직후)이다.
+export interface AutomationRun { model: string; effort: string }
+export const AUTOMATION_DEFAULTS: Record<string, AutomationRun> = {
+  claude: { model: "opus", effort: "low" },
+  codex: { model: "gpt-5.6-sol", effort: "medium" },
+  antigravity: { model: "gemini-3.8-flash-high", effort: "high" },
+  grok: { model: "grok-4.6", effort: "medium" },
+};
+
+/** 그 하네스가 이 플래그로 받는 값인가(카탈로그 choices 가 정본). 빈 값은 '미지정'이라 false. */
+function flagAccepts(harnessKey: string, flag: string, value: string): boolean {
+  if (!value) return false;
+  const def = HARNESSES.find((h) => h.key === harnessKey)?.flags.find((f) => f.name === flag);
+  if (!def) return false;
+  return !def.choices || def.choices.includes(value);
+}
+
+/**
+ * 무인 배치 한 건의 `--model`·`--effort` 를 확정한다(순수 — 엣지 표로 검증: catalog-automation.test).
+ *
+ *  축마다 따로 판정한다: ① 설정값이 이 하네스에서 유효하면 그것 ② 아니면 이 하네스의 자동화 기본값
+ *  ③ 기본값조차 없는 하네스면 그 축을 생략(=CLI 기본, 종전 동작).
+ *
+ *  ⚠ ②가 이 함수의 요점이다. 종전엔 «유효하지 않으면 생략» 이라 **하네스가 바뀐 설정이 조용히 CLI 기본으로
+ *   떨어졌다**(codex 로 로그인한 사람의 증류기에 model='sonnet' 이 남아 있는 상황 — 실제로 흔하다).
+ *   생략은 안전해 보이지만 무인 배치에서는 **가장 비싼 모델로 도는 것**을 뜻한다.
+ *  반환된 `dropped` 는 «설정한 값이 이 하네스 것이 아니라 기본으로 갈아탔다» 는 관측용 — 잡 요약에 실린다.
+ */
+export function automationFlags(
+  harnessKey: string, want: { model?: string | null; effort?: string | null },
+): { flags: Record<string, string>; dropped: string[] } {
+  const base = AUTOMATION_DEFAULTS[harnessKey];
+  const flags: Record<string, string> = {};
+  const dropped: string[] = [];
+  for (const [flag, raw, fallback] of [
+    ["--model", want.model, base?.model] as const,
+    ["--effort", want.effort, base?.effort] as const,
+  ]) {
+    const asked = String(raw ?? "").trim();
+    if (flagAccepts(harnessKey, flag, asked)) { flags[flag] = asked; continue; }
+    if (asked) dropped.push(`${flag}=${asked}`);
+    if (fallback && flagAccepts(harnessKey, flag, fallback)) flags[flag] = fallback;
+  }
+  return { flags, dropped };
+}
 
 export interface SessionInfo {
   /**
