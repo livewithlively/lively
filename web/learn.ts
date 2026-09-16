@@ -680,7 +680,7 @@ function localGuideNodes(gw, slot, data, opts?: any) {
     el('p', { class: 'admin-hint' }, '이 컴퓨터를 웹에서 열고 싶으면(세션 열기·작업 위탁) 한 줄이 더 필요해요 — ',
       el('code', { class: 'md-code', text: 'lively node --daemon' }), ' 을 실행하면 ',
       el('a', { href: '#/system/me-nodes', text: '[내 컴퓨터]' }), ' 목록에 나타납니다. 자세한 건 ',
-      el('a', { href: '#/learn/docs/nodes', text: '[컴퓨터 연결(노드)]' }), ' 에 있어요.'),
+      el('a', { href: '#/learn/docs/nodes', text: '[내 컴퓨터 연결]' }), ' 에 있어요.'),
     el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, '설치 후 쓸 수 있는 ',
       el('code', { class: 'md-code', text: 'lively' }), ' 명령 · Claude/Codex 차이 · 문제 해결은 ',
       el('a', { href: '#/learn/docs/cli', text: '[AI 세션 명령어]' }), ' 에서 보세요.'));
