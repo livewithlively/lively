@@ -1,5 +1,7 @@
-// delivery ▸ project-chat — 새 셸 프로젝트 화면의 **리브 대화**(#1757). 홈 리브(liv-chat.ts)와 같은 기계(헤드리스 한 턴 =
+// delivery ▸ project-chat — 새 셸 프로젝트 화면의 **리브 대화**(#1757). 홈 리브 v1 과 같은 기계(헤드리스 한 턴 =
 //  채팅 한 턴, 진행은 파일 tail)를 **프로젝트 폴더에서** 돌린다.
+//  ⚠ 홈 리브는 #4032 에서 진짜 세션(org/liv/session.ts)으로 옮겼다. 이 파일은 아직 헤드리스 턴이고, 그 스폰(spawnTaskSession)은
+//   게이트웨이가 도는 기계의 tmux 를 불러 **매니지드에서는 뜨지 않는다**(홈 리브 500 과 같은 뿌리 — #4032 원인규명).
 //
 //  ── 홈 리브와 무엇이 같고 다른가 ──
 //  같다: spawnTaskSession(승인 우회 없음 · 셸·파일·바깥 도구 없음 = livTurnArgs 의 거부 목록) · 진행 tail · 멈춤 · 되그리기 목차.
@@ -24,7 +26,7 @@ import { projectChatPersona } from "../../org/delivery/project-chat-prompt.js";
 import { getProject } from "../../v6/project-store.js";
 import { appendProjectChatTurn, getProjectChat, startProjectChat } from "../../v6/project-chat-store.js";
 
-/** 한 턴 프롬프트 상한 — 홈 리브(liv-chat.ts)와 같다. */
+/** 한 턴 프롬프트 상한 — 홈 리브의 첫 말(org/liv/session.ts LIV_PROMPT_MAX)과 같다. */
 const TURN_MAX = 8000;
 /** 턴 id 는 **우리가 만든 hex 뿐** — 사람이 준 값이 폴더 이름이 되면 그 자리가 곧 경로 이동이다. */
 const TURN_ID_RE = /^t[0-9a-f]{16}$/;

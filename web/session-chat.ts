@@ -147,6 +147,8 @@ export interface SessionChatOpts {
    *  ⚠ 미지정이면 이 화면이 전역 주소를 바꾼다. 셸 안에서는 그게 곧 **활성 탭의 주소**라, 숨은 탭에서 일어난
    *   복원이 지금 보고 있는 탭을 남의 새 세션으로 끌고 갔다. 셸(v2/main.ts)은 이 콜백으로 **그 탭만** 옮긴다. */
   onResumed?: (newId: string) => void;
+  /** 이 화면은 **대화 보기가 본자리**다(#4032 리브 탭) — 세션 이름·런타임과 무관하게 대화창으로 연다. 터미널은 [보기]로 여전히 열린다. */
+  chatHome?: boolean;
 }
 export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, opts: SessionChatOpts): SessionChatHandle {
   let target = first;
@@ -435,8 +437,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  #1631 — 서버 킥오프 세션 이름(src/org/liv/kickoff.ts LIV_SESSION_LABEL)과 **글자가 같아야** 이 세션을 알아본다(둘이 갈리면 숨김·로딩이 조용히 꺼진다 — liv-kickoff-chat-view 시험이 잠근다).
   //   ⚠ SessionInfo 에 kind 가 안 실려 지금은 이름으로 가른다 — 사람이 다른 세션을 이 이름으로 바꾸면 그 세션도 첫 말을 숨긴다(막다른 길은 아님, [터미널로 보기]로 원문). kind 가 프런트까지 오면 그걸로 바꾼다.
   const LIV_KICKOFF_LABEL = '리브 — 처음 설정 점검';
+  //  #4032 — 리브 탭에서 첫 말로 연 리브 세션(src/org/liv/session.ts LIV_CHAT_LABEL). 대화가 본자리인 것은 같고, 첫 말은 사람이 쓴 것이라 숨기지 않는다.
+  const LIV_CHAT_LABEL = '리브 — 대화';
   const livKickoff = (): boolean => String(target.label || '') === LIV_KICKOFF_LABEL;
-  const chatHome = (): boolean => chatFirst() || String(target.raw?.runtimeMode || '') === 'chat' || livKickoff();
+  const livChat = (): boolean => String(target.label || '') === LIV_CHAT_LABEL;
+  const chatHome = (): boolean => chatFirst() || String(target.raw?.runtimeMode || '') === 'chat' || livKickoff() || livChat() || !!opts.chatHome;
 
   // 하네스·모델·추론강도 바꾸기 — 홈 입력창과 같은 서버 카탈로그를 쓴다(목록 두 벌 금지).
   // 런타임 명령이 확인된 축은 POST …/runtime, 나머지는 POST …/handoff 로 같은 작업 자리의 새 프로세스를 연다.

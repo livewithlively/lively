@@ -85,7 +85,7 @@ export async function detectHarnesses(): Promise<string[]> {
 // ── 태스크 스폰 ──
 export interface RunTaskInput {
   user: LivelyUser;            // 의뢰자(과금·귀속 신원 — D1: 의뢰자 시트)
-  // 작업 폴더 이름이 되는 id. 위탁은 org_task 의 숫자 id, 리브 대화 턴(#1631)은 문자열 턴 id 다
+  // 작업 폴더 이름이 되는 id. 위탁은 org_task 의 숫자 id, 리브 계열 헤드리스 턴(프로젝트 대화·처음 설정 분석)은 문자열 턴 id 다
   //  (턴은 org_task 행을 만들지 않는다 — 배치 의미(재시도·용량·타임아웃)가 채팅 한 턴에 안 맞는다).
   taskId: number | string;
   rootKey: string;             // v1: 'shared' 만 허용(검증은 호출부)
@@ -95,7 +95,7 @@ export interface RunTaskInput {
   repo?: string | null;        // 지정 시 게이트웨이가 공유 base clone→worktree 자동 provision, cwd=worktree(#458 재사용)
   gitRef?: string | null;      // worktree 분기 기준 브랜치(origin/<ref>) — 없으면 base HEAD
   flags?: Record<string, string>;  // 화이트리스트(--model/--effort)만 적용
-  // 리브 대화 턴(#1631) 전용 축 — **사람이 준 값이 아니라 코드가 만든 인자**를 화이트리스트 밖으로 싣는다
+  // 리브 계열 헤드리스 턴 전용 축 — **사람이 준 값이 아니라 코드가 만든 인자**를 화이트리스트 밖으로 싣는다
   //  (--disallowedTools 거부 목록 · --session-id/--resume). 위탁은 안 쓴다(undefined).
   //  ⚠ 여기 사람 텍스트를 넣지 마라 — 이 배열은 셸 명령줄에 그대로 펼쳐진다. 사람 텍스트는 프롬프트 파일뿐이다.
   extraFlags?: string[];
@@ -290,9 +290,9 @@ export async function prepareTaskDir(baseWs: string, sharedBase: string, taskId:
 
 export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResult> {
   // 루트 축 — 위탁(delegate)은 **공유 루트**다: 결과물이 남고 팀이 본다.
-  //  리브 대화 턴(#1631)만 **개인 루트**다. 두 가지 이유이고 둘 다 축소하면 안 된다:
-  //   ① 세션 시작 훅의 리브 게이트가 `basename(cwd) === "liv"` 라, 그 폴더에서 돌아야 리브가 리브가 된다.
-  //   ② 웹터미널 리브 세션과 **같은 자리**를 써야 두 표면이 한 대화로 보인다.
+  //  처음 설정 분석(me_welcome_analyze)만 **개인 루트**(<개인 루트>/liv)다 — 그 사람이 올린 자료를 그 사람 몫으로 읽는 한 번짜리 턴이다.
+  //  (홈 리브의 대화 턴도 여기였다 — #4032 에서 진짜 세션(org/liv/session.ts)으로 옮겼다. 이 함수의 tmux 는 게이트웨이가 도는
+  //   기계의 것이라, 세션을 노드의 세션 컨테이너에 띄우는 매니지드에서는 판이 뜨지 않는다.)
   //  그 외 값은 계속 막는다 — 임의 루트를 여는 순간 이 함수가 범용 실행기가 된다.
   if (input.rootKey !== "shared" && input.rootKey !== "personal") {
     throw new Error(`위탁 워크스페이스 루트는 shared·personal 만 지원합니다: ${input.rootKey}`);
@@ -323,7 +323,7 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   //  둬 레포를 오염시키지 않는다(untracked). 미지정이면 빈 워크스페이스(cwd=baseWs, 프롬프트가 알아서 준비).
   let workspace = baseWs;
   if (input.repo) {
-    // 레포 준비는 **위탁 전용 경로**다(리브 대화 턴은 레포를 안 쓴다). 그쪽 id 는 org_task 의 숫자라
+    // 레포 준비는 **위탁 전용 경로**다(리브 계열 턴은 레포를 안 쓴다). 그쪽 id 는 org_task 의 숫자라
     //  여기서 그 계약을 명시적으로 지킨다 — 문자열 id 가 흘러들면 조용히 NaN 폴더가 생기는 대신 여기서 멈춘다.
     const numericTaskId = Number(input.taskId);
     if (!Number.isInteger(numericTaskId)) {
