@@ -219,6 +219,28 @@ try {
       JSON.stringify({ d, reaps: opsOf("reap").map((q) => q.head.unit) }));
   }
   {
+    //  동시 시작 — 같은 범위로 둘이 겹쳐 들어와도 판 1 · running 행 1(트랜잭션 advisory lock).
+    //   op 응답을 늦춰 두 요청이 «도는 행 재확인» 을 같은 창에서 지나게 한다 — 락이 없으면 둘 다 판을 띄우고 행을 둘 만든다.
+    //   (W4 는 소스 순서만 본다 — 이건 실제 동시성으로 본다.)
+    await settle();
+    op.reqs.length = 0;
+    opReply = async (req) => {
+      if (req.head.op === "launch") await sleep(800);
+      return { ok: true, unit: "u", state: "active" };
+    };
+    const [r1, r2] = await Promise.all([
+      tracker.startConnectorRun(W, { trigger: "cron", startedBy: TAG }),
+      tracker.startConnectorRun(W, { trigger: "manual", startedBy: TAG }),
+    ]);
+    const running = Number((await itemsPool.query(`SELECT count(*) FROM connector_run WHERE system=$1 AND status='running'`, [W])).rows[0].count);
+    const fresh = [r1, r2].filter((r) => !r.alreadyRunning).length;
+    chk("W-b2 동시 시작 둘 → 판 1 · running 행 1 · 나머지는 같은 id 로 alreadyRunning",
+      opsOf("launch").length === 1 && running === 1 && fresh === 1 && r1.runId === r2.runId,
+      JSON.stringify({ launches: opsOf("launch").length, running, r1: { ...r1, done: undefined }, r2: { ...r2, done: undefined } }));
+    await settle();
+    await Promise.race([Promise.all([r1.done, r2.done]), sleep(15_000)]);
+  }
+  {
     const n0 = Number((await itemsPool.query(`SELECT count(*) FROM connector_run`)).rows[0].count);
     opReply = async (req) => (req.head.op === "launch" ? { ok: false, code: "busy", error: "gateway-job 판이 가득 찼다(2/2)" } : { ok: true });
     let err = null;

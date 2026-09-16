@@ -73,12 +73,15 @@ test("[W4] ★ 게이트웨이 — 경로를 먼저 정하고, 판 경로는 락
   before(unit, "u.launchRunUnit(", "await insert(\"running\"", "★ 행은 판이 선 **뒤에** 만든다(busy 에 빈 행이 안 쌓인다)");
   assert.match(unit, /withTx\(async \(client\)/, "락·행 삽입이 한 트랜잭션");
   assert.match(unit, /case "busy":\s*throw new RunCapacityError\(/, "busy → 행 없이 RunCapacityError");
-  const busy = unit.slice(unit.indexOf('case "busy":'), unit.indexOf('case "fallback":'));
+  //  분기 구간은 case 라벨로 자른다 — 라벨이 없으면 indexOf 가 -1 이라 구간이 조용히 틀어진다(그래서 먼저 확인한다).
+  const at = (k: string): number => { const i = unit.indexOf(k); assert.ok(i >= 0, `분기 라벨이 없다: ${k}`); return i; };
+  const busy = unit.slice(at('case "busy":'), at('case "fallback":'));
   assert.doesNotMatch(busy, /insert\(/, "busy 에 행을 만들었다");
-  const fb = unit.slice(unit.indexOf('case "fallback":'), unit.indexOf("default:"));
+  const fb = unit.slice(at('case "fallback":'), at('case "fail":'));
   assert.doesNotMatch(fb, /insert\(/, "fallback 은 행을 안 만든다(자식 길이 만든다)");
-  const dflt = unit.slice(unit.indexOf("default:"));
-  before(dflt, "launchMayHaveStarted(", 'await insert("error"', "섰을 수 있는 판은 실패 행보다 먼저 멈추라고 전한다");
+  const fail = unit.slice(at('case "fail":'));
+  before(fail, "launchMayHaveStarted(", 'await insert("error"', "섰을 수 있는 판은 실패 행보다 먼저 멈추라고 전한다");
+  assert.doesNotMatch(unit, /\bdefault:/, "응답 분류는 망라한다 — default 로 받으면 새 분류가 조용히 실패 길로 간다");
   assert.match(unit, /watchRunUnit\(runId, slug\)/, "판 실행의 done 은 감시");
   assert.match(unit, /jobEnvDoc\(childEnv\(system\)\)/, "판 env = 자식 길 env 에서 뺀 것(같은 입력)");
 });

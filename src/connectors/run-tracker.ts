@@ -345,7 +345,7 @@ async function startRunInUnit(
       case "fallback":
         logger.warn({ system, slug, code: launch.reply.code, error: launch.reply.error }, "수집 판을 세우지 못해 게이트웨이 자식으로 실행");
         return { kind: "fallback", why };
-      default: {
+      case "fail": {
         if (u.launchMayHaveStarted(launch.reply.code)) await u.stopRunUnit(slug, runId).catch(() => false);
         await insert("error", `[tracker] 판을 띄우지 못했다(${why}). 커서 미전진이라 다음 run 이 재수집합니다.\n`);
         logger.error({ system, slug, runId, code: launch.reply.code, error: launch.reply.error }, "수집 판 띄우기 실패");
