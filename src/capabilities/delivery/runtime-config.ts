@@ -31,7 +31,7 @@ import { listAutoApproveToolIds } from "../../org/delivery/auto-approve.js";
 import {
   type EmbeddingConfigPatch, DEFAULT_EMBEDDING_BATCH_SIZE, DEFAULT_EMBEDDING_TIMEOUT_MS, DEFAULT_EMBEDDING_BACKFILL_MIN_MB,
   EMBEDDING_BATCH_MIN, EMBEDDING_BATCH_MAX, EMBEDDING_TIMEOUT_MIN_MS, EMBEDDING_TIMEOUT_MAX_MS, EMBEDDING_BACKFILL_MIN_MB_MIN,
-  EMBEDDING_BACKFILL_MIN_MB_MAX
+  EMBEDDING_BACKFILL_MIN_MB_MAX, DEFAULT_EMBEDDING_SEND_DIMENSIONS,
 } from "../../v6/embedding-provider.js";
 import { encryptSecret, secretsEnabled } from "../../org/credentials/secret-box.js";
 import { normalizeDomains, normalizeIssuer, oidcEnvSeed, type OidcSettings, type OidcSettingsPatch, type OidcSettingsPublic } from "../../auth/oidc-config.js";
@@ -557,6 +557,13 @@ export const runtimeConfigCapabilities: Capability[] = [
           if (!Number.isFinite(backfillMinMb) || backfillMinMb < EMBEDDING_BACKFILL_MIN_MB_MIN || backfillMinMb > EMBEDDING_BACKFILL_MIN_MB_MAX) throw new HttpError(400, `embedding_config.backfill_min_available_mb 는 ${EMBEDDING_BACKFILL_MIN_MB_MIN}~${EMBEDDING_BACKFILL_MIN_MB_MAX} 정수여야 합니다`);
           backfillMinMb = Math.floor(backfillMinMb);
         }
+        // 차원 고정(#4015) — 요청 바디에 dimensions 를 실을지. 비우면 기본 true(업스트림을 갈아타도 차원이 안 바뀐다).
+        //  엄격 boolean 이 아니라 관용 파싱을 쓴다 — 이 값의 소유자는 CP 노브(LVLY_EMBED_SEND_DIMENSIONS)이고
+        //  그쪽은 env 문자열로 온다. 최종 정규화는 store 의 normalizeEmbeddingConfig 가 한 번 더 한다.
+        let sendDims = DEFAULT_EMBEDDING_SEND_DIMENSIONS;
+        if (e.send_dimensions !== undefined && e.send_dimensions !== null && e.send_dimensions !== "") {
+          sendDims = !["false", "0", "no", "off"].includes(String(e.send_dimensions).trim().toLowerCase());
+        }
         // #688 관리탭에서 끄기 저장 = '명시적 off' 마커 — .env(EMBEDDINGS_*) 시드로 부활하지 않는다(관리탭 > env).
         patch.embedding_config = provider === "off" ? { provider: "off", explicit: true } : {
           provider: "http",
@@ -567,6 +574,7 @@ export const runtimeConfigCapabilities: Capability[] = [
           batch_size: batchSize,
           request_timeout_ms: timeoutMs,
           backfill_min_available_mb: backfillMinMb,
+          send_dimensions: sendDims,
         };
       }
       // 세션 공유(세션이력 캡처) 정책(#905 C1) — 관리탭 ▸ 세션 공유. 잡값·미지원 하네스·범위초과는 여기서 400,

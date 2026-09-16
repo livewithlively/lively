@@ -27,6 +27,12 @@ export interface EmbeddingConfig {
   //  가용 메모리가 이 값(MB) 미만이면 이번 스윕을 건너뛰고 다음 주기에 재시도(pending 은 DB 유지, 재진입 안전). 0=게이트 비활성(무회귀).
   //  배경: claude 세션 baseline + 임베딩 3.3GB 스파이크 겹침이 스왑0 물리 초과로 박스를 뻗게 함(고객사 A 2026-07-21). 권장=임베딩 백엔드 상주분+헤드룸.
   backfill_min_available_mb: number;
+  // 요청 바디에 `dimensions` 를 싣나(#4015). ★ 이게 있어야 «업스트림 갈아타기»가 cp.env 한 줄로 유지된다 —
+  //  없으면 외부 API(OpenAI text-embedding-3-* 기본 1536 등)로 옮기는 순간 차원이 달라져 컬럼 drop+recreate 와
+  //  **전량 재임베딩**이 강제된다. 실으면 서버가 그 차원으로 잘라 준다(Matryoshka; Ollama 도 지원 — 2026-09-16 실측:
+  //  bge-m3 에 dimensions=64 를 보내면 실제로 64차원이 온다).
+  //  기본 true 지만 미지원 서버에서 회귀가 없다 — 400/422 가 오면 한 번 빼고 재시도한 뒤 그 뒤로 안 싣는다(자동 협상).
+  send_dimensions: boolean;
 }
 
 // 임베딩 백엔드 1개. resolveEmbeddingProvider(config) 가 config 를 보고 구현을 고른다.
@@ -46,10 +52,11 @@ export const DEFAULT_EMBEDDING_DIMENSIONS = 1024; // bge-m3 / KURE-v1 둘 다 10
 export const DEFAULT_EMBEDDING_BATCH_SIZE = 8;
 export const DEFAULT_EMBEDDING_TIMEOUT_MS = 300000; // 요청당 300초. batch_size 를 이 안에 끝나게 잡는 게 정석 — 타임아웃은 이상치용 안전망(초과 시 배치 축소 재시도).
 export const DEFAULT_EMBEDDING_BACKFILL_MIN_MB = 0; // 0=백필 메모리 게이트 비활성(무회귀). 관리자가 박스 크기 보고 설정(#1059).
+export const DEFAULT_EMBEDDING_SEND_DIMENSIONS = true; // #4015 — 차원 고정이 기본. 미지원 서버는 자동 협상으로 빠진다.
 export const EMBEDDING_OFF: EmbeddingConfig = {
   provider: "off", base_url: null, model: null, dimensions: DEFAULT_EMBEDDING_DIMENSIONS, auth_env_ref: null,
   batch_size: DEFAULT_EMBEDDING_BATCH_SIZE, request_timeout_ms: DEFAULT_EMBEDDING_TIMEOUT_MS,
-  backfill_min_available_mb: DEFAULT_EMBEDDING_BACKFILL_MIN_MB,
+  backfill_min_available_mb: DEFAULT_EMBEDDING_BACKFILL_MIN_MB, send_dimensions: DEFAULT_EMBEDDING_SEND_DIMENSIONS,
 };
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
@@ -57,6 +64,12 @@ const str = (v: unknown): string | null => (typeof v === "string" && v.trim() !=
 const clampInt = (v: unknown, fallback: number, min: number, max: number): number => {
   const n = Math.floor(Number(v));
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+};
+// 불린 정규화 — DB JSONB·env 는 문자열("false"·"0")로 올 수 있다. 미지정(null/undefined)은 fallback.
+const normBool = (v: unknown, fallback: boolean): boolean => {
+  if (v === null || v === undefined || v === "") return fallback;
+  if (typeof v === "boolean") return v;
+  return !["false", "0", "no", "off"].includes(String(v).trim().toLowerCase());
 };
 export const EMBEDDING_BATCH_MIN = 1, EMBEDDING_BATCH_MAX = 512;             // 배치 상한(과대 요청 방지)
 export const EMBEDDING_TIMEOUT_MIN_MS = 1000, EMBEDDING_TIMEOUT_MAX_MS = 3600000; // 1초~1시간
@@ -75,6 +88,7 @@ export function normalizeEmbeddingConfig(raw: unknown): EmbeddingConfig {
     batch_size: clampInt(o.batch_size, DEFAULT_EMBEDDING_BATCH_SIZE, EMBEDDING_BATCH_MIN, EMBEDDING_BATCH_MAX),
     request_timeout_ms: clampInt(o.request_timeout_ms, DEFAULT_EMBEDDING_TIMEOUT_MS, EMBEDDING_TIMEOUT_MIN_MS, EMBEDDING_TIMEOUT_MAX_MS),
     backfill_min_available_mb: clampInt(o.backfill_min_available_mb, DEFAULT_EMBEDDING_BACKFILL_MIN_MB, EMBEDDING_BACKFILL_MIN_MB_MIN, EMBEDDING_BACKFILL_MIN_MB_MAX),
+    send_dimensions: normBool(o.send_dimensions, DEFAULT_EMBEDDING_SEND_DIMENSIONS),
   };
 }
 
@@ -91,6 +105,7 @@ export function embeddingConfigFromEnv(): EmbeddingConfig {
     batch_size: process.env.EMBEDDINGS_BATCH_SIZE ?? null,           // 비면 normalize 가 기본값(8)로
     request_timeout_ms: process.env.EMBEDDINGS_TIMEOUT_MS ?? null,   // 비면 normalize 가 기본값(300000)로
     backfill_min_available_mb: process.env.EMBEDDINGS_BACKFILL_MIN_MB ?? null, // 비면 normalize 가 기본값(0=비활성)로
+    send_dimensions: process.env.EMBEDDINGS_SEND_DIMENSIONS ?? null,           // 비면 normalize 가 기본값(true)로
   });
 }
 
@@ -162,6 +177,10 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
   private readonly timeoutMs: number;
   private readonly url: string;
   private readonly authEnvRef: string | null;
+  private readonly sendDimensions: boolean;
+  // 자동 협상 상태(#4015) — null=미확인 · false=이 업스트림은 `dimensions` 를 거부한다(그 뒤로 안 싣는다).
+  //  provider 인스턴스 수명 안에서만 기억한다(설정이 바뀌면 새 인스턴스가 다시 협상한다).
+  private dimsRejected = false;
 
   constructor(cfg: EmbeddingConfig) {
     this.model = cfg.model ?? "bge-m3";
@@ -172,6 +191,7 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
     // base 가 이미 /v1/embeddings 로 끝나면 그대로(고객이 풀 URL 지정), 아니면 표준 경로 부착.
     this.url = /\/v1\/embeddings$/.test(base) ? base : `${base}/v1/embeddings`;
     this.authEnvRef = cfg.auth_env_ref;
+    this.sendDimensions = cfg.send_dimensions !== false;
   }
 
   // 시크릿은 런타임에 env 이름에서 해소(DB/설정엔 키 값 미저장). 키 없으면 헤더 생략(무인증 사이드카 허용).
@@ -231,15 +251,27 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
   }
 
   // 실제 1회 HTTP 호출 — 요청마다 새 AbortSignal.timeout(초과 시 TimeoutError → 상위에서 축소 재시도).
+  //  #4015: `dimensions` 를 실어 **업스트림이 무엇이든 차원을 우리 스키마에 맞춘다**(vector(N) 컬럼과 어긋나면
+  //   저장이 통째로 깨진다). 안 받는 서버는 400/422 로 답하므로 그때 한 번 빼고 재시도한 뒤 그 뒤로 안 싣는다.
   private async embedRequest(texts: string[]): Promise<number[][]> {
+    const withDims = this.sendDimensions && !this.dimsRejected;
+    const payload: Record<string, unknown> = { model: this.model, input: texts };
+    if (withDims) payload.dimensions = this.dimensions;
     const res = await fetch(this.url, {
       method: "POST",
       headers: { "content-type": "application/json", ...this.authHeader() },
-      body: JSON.stringify({ model: this.model, input: texts }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
+      // ★ 협상은 여기서 한 번만 — `dimensions` 를 모르는 서버(400/422)면 그 필드를 영구히 빼고 다시 부른다.
+      //  이 갈래가 없으면 «차원 고정» 기능이 구형 백엔드를 쓰는 셀프호스팅 배포를 깨뜨린다(무회귀 요구).
+      if (withDims && (res.status === 400 || res.status === 422)) {
+        this.dimsRejected = true;
+        console.warn(`[embeddings] 업스트림이 dimensions 를 거부(${res.status}) — 그 필드 없이 재시도합니다(이후 생략).`);
+        return this.embedRequest(texts);
+      }
       throw new Error(`embedding endpoint ${res.status} ${res.statusText}: ${body.slice(0, 200)}`);
     }
     const json = (await res.json()) as { data?: Array<{ embedding: number[]; index: number }> };
