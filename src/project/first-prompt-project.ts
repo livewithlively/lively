@@ -164,7 +164,7 @@ export function shellProjectFromPrompt(promptRaw: string | null | undefined): Sh
  */
 export async function createShellProject(
   spec: ShellProjectSpec, actor: string,
-): Promise<{ id: number; folder: string } | null> {
+): Promise<{ id: number; folder: string; name: string | null } | null> {
   try {
     // ⚠ dedupe:false — 이름이 임시값("새 작업")이라 서로 같아서, 켜 두면 30초 안에 연 두 세션이 **한 프로젝트를 공유**한다
     //  (2026-08-25 dev 실측: 빈 세션과 슬래시 세션이 project/2009 를 함께 받았다). 세션마다 자기 작업면이어야 한다.
@@ -175,9 +175,10 @@ export async function createShellProject(
       { name: spec.name, description: spec.description, dedupe: false, name_source: spec.nameSource }, { actor, source: "web" });
     // 폴더·AGENTS.md 확보 + project.folder 확정(resolveProjectBase) — 이게 있어야 cwd 로 쓸 수 있다.
     await ensureAgentsMd(project.id);
-    const folder = (await getProjectRow(project.id))?.folder ?? "";
+    const row = await getProjectRow(project.id);
+    const folder = row?.folder ?? "";
     if (!folder) return null;                                   // 폴더를 못 만들었으면 cwd 로 쓸 수 없다
-    return { id: project.id, folder };
+    return { id: project.id, folder, name: row?.name ?? null };
   } catch (e) {
     console.warn("[first-prompt-project] 첫 지시 프로젝트 선생성 실패 — 개인 루트에서 연다:", (e as Error)?.message ?? e);
     return null;
