@@ -1664,8 +1664,9 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     const rows = cases.split("\n").filter((l) => l && !l.startsWith("#")).map((l) => l.split("\t").map(unescape));
     const kinds = rows.reduce((m, r) => ({ ...m, [r[0]]: (m[r[0]] || 0) + 1 }), {});
     // D2 표가 비거나 한 종류가 통째로 빠지면 양쪽 점검이 «0건 통과» 로 초록이 된다 — 개수를 먼저 못박는다.
-    assert.ok(kinds.dn >= 10 && kinds.manifest >= 8 && kinds.tag >= 5, `사례 표가 줄었다: ${JSON.stringify(kinds)}`);
-    assert.deepEqual(Object.keys(kinds).sort(), ["dn", "manifest", "tag"], "C# 자가 점검이 모르는 종류가 섞였다");
+    assert.ok(kinds.dn >= 10 && kinds.manifest >= 8 && kinds.tag >= 5 && kinds.feed >= 5, `사례 표가 줄었다: ${JSON.stringify(kinds)}`);
+    assert.deepEqual(Object.keys(kinds).sort(), ["dn", "feed", "manifest", "tag"], "C# 자가 점검이 모르는 종류가 섞였다");
+    for (const kind of Object.keys(kinds)) assert.match(helperSrc, new RegExp(`case "${kind}":`), `C# 자가 점검이 «${kind}» 행을 돌리지 않는다`);
     let checked = 0;
     for (const [, subject, publisher, want, note] of rows.filter((r) => r[0] === "dn")) {                          // D1
       assert.equal(String(W.subjectMatches(subject, publisher)), want, `${note} — ${subject} / ${publisher}`);
@@ -1752,6 +1753,17 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.match(helperSrc, /LatestUrl = RepoUrl \+ "\/releases\/latest"/, "최신 릴리스가 아닌 곳을 본다");
     // H3 버전별 값이 없다 — 다시 빌드하지 않고 계속 쓰는 파일이다(주석은 빼고 본다).
     assert.ok(!/Lively-Setup-\d/.test(helperSrc.replace(/^\s*\/\/.*$/gm, "")), "도우미 코드에 특정 버전의 설치 파일 이름이 박혀 있다");
+    // H8 최신 릴리스에 윈도우 자산이 아직 없으면(태그 직후 수 분) 직전 릴리스로 받는다 — 404 일 때만, 피드에서, 개수 상한을 두고.
+    assert.match(helperSrc, /FeedUrl = RepoUrl \+ "\/releases\.atom"/);
+    const fallback = helperSrc.slice(helperSrc.indexOf("static async Task<(string Tag, string Yml)> FetchManifestAsync"), helperSrc.indexOf("public static string NewWorkDir"));
+    assert.ok(fallback.length > 0, "직전 릴리스로 거슬러 가는 길이 없다 — 태그 직후 실행한 사람은 설치가 실패한다");
+    assert.match(fallback, /catch \(HttpStatusException first\) when \(first\.Status == 404\)/, "404 가 아닌 오류(망·서버)에서도 옛 판으로 간다");
+    assert.match(fallback, /Rules\.TagsFromFeed\(feed\.Body, latest\)/);
+    assert.match(fallback, /i < Config\.MaxFallbackReleases/, "거슬러 볼 개수에 상한이 없다");
+    assert.match(fallback, /when \(e\.Status == 404\)/);
+    assert.match(fallback, /\n\s+throw;\n/, "거슬러 볼 곳이 없을 때 처음 오류를 내지 않는다");
+    assert.match(helperSrc, /MaxFallbackReleases = [1-9];/);
+    assert.match(helperSrc.slice(helperSrc.indexOf("public static async Task<Prepared> PrepareAsync")), /await FetchManifestAsync\(fetcher, latest, log, ct\)/, "준비 단계가 거슬러 가는 길을 쓰지 않는다");
     // H4 받기 → sha512 대조(다르면 멈춤) → 서명 확인. 실행은 준비가 끝난 뒤다.
     const prepare = helperSrc.slice(helperSrc.indexOf("public static async Task<Prepared> PrepareAsync"), helperSrc.indexOf("public static string NewWorkDir"));
     const iDownload = prepare.indexOf("fetcher.DownloadAsync(");

@@ -58,6 +58,13 @@ namespace Lively.Setup
         public const string RepoUrl = "https://github.com/" + Owner + "/" + Repo;
         /// <summary>최신 릴리스. Accept: application/json 이면 {"tag_name": …} 을 준다(electron-updater GitHubProvider.getLatestTagName 과 같은 길).</summary>
         public const string LatestUrl = RepoUrl + "/releases/latest";
+        /// <summary>
+        /// 릴리스 목록(Atom) — 최신 릴리스에 윈도우 자산이 아직 없을 때 직전 릴리스를 찾는 데 쓴다. API 가 아니라 한도가 없다
+        /// (electron-updater GitHubProvider 도 이 피드를 읽는다).
+        /// </summary>
+        public const string FeedUrl = RepoUrl + "/releases.atom";
+        /// <summary>최신 릴리스가 비었을 때 거슬러 올라가 볼 릴리스 수.</summary>
+        public const int MaxFallbackReleases = 5;
         public const string UserAgent = "Lively-Setup/1.0";
         public const int MaxTextBytes = 1 << 20;                 // latest.yml · 릴리스 JSON 상한
         public const long MaxInstallerBytes = 1L << 31;          // 설치 파일 상한(2GB) — 넘으면 무언가 잘못됐다
@@ -102,6 +109,25 @@ namespace Lively.Setup
             }
             if (tag == null || !TagRe.IsMatch(tag)) throw new FormatException("최신 릴리스의 태그를 읽지 못했다: " + (tag ?? "(없음)"));
             return tag;
+        }
+
+        static readonly Regex FeedTagRe = new Regex(
+            "href=\"" + Regex.Escape(Config.RepoUrl) + "/releases/tag/([^\"/?#]+)\"", Opts);
+
+        /// <summary>
+        /// 릴리스 피드(Atom) → 태그 목록(피드 순서 = 최근 것부터, 중복·exclude·형식이 틀린 태그 제외).
+        /// 사전 릴리스(예: win-installer)도 섞여 나온다 — 그 릴리스엔 latest.yml 이 없어 받는 단계에서 걸러진다.
+        /// </summary>
+        public static List<string> TagsFromFeed(string atom, string exclude)
+        {
+            var tags = new List<string>();
+            foreach (Match m in FeedTagRe.Matches(atom ?? ""))
+            {
+                var tag = Uri.UnescapeDataString(m.Groups[1].Value);
+                if (!TagRe.IsMatch(tag) || tag == exclude || tags.Contains(tag)) continue;
+                tags.Add(tag);
+            }
+            return tags;
         }
 
         static string Unquote(string v)
@@ -562,11 +588,11 @@ namespace Lively.Setup
         {
             stage?.Invoke(Stage.Resolve, null);
             var release = await fetcher.GetTextAsync(Config.LatestUrl, "application/json", ct).ConfigureAwait(false);
-            var tag = Rules.TagFromRelease(release.Body, release.FinalUrl);
-            log.Write("최신 릴리스 태그 " + tag);
-            var yml = await fetcher.GetTextAsync(Config.AssetUrl(tag, "latest.yml"), null, ct).ConfigureAwait(false);
-            var manifest = Rules.ParseManifest(yml.Body);
-            log.Write("latest.yml — 버전 " + manifest.Version + " · " + manifest.Path + " · 크기 " + manifest.Size + " · sha512 " + manifest.Sha512);
+            var latest = Rules.TagFromRelease(release.Body, release.FinalUrl);
+            log.Write("최신 릴리스 태그 " + latest);
+            var (tag, yml) = await FetchManifestAsync(fetcher, latest, log, ct).ConfigureAwait(false);
+            var manifest = Rules.ParseManifest(yml);
+            log.Write("latest.yml(" + tag + ") — 버전 " + manifest.Version + " · " + manifest.Path + " · 크기 " + manifest.Size + " · sha512 " + manifest.Sha512);
 
             stage?.Invoke(Stage.Download, manifest);
             var file = Path.Combine(workDir, manifest.Path);
@@ -581,6 +607,41 @@ namespace Lively.Setup
             var subject = await Task.Run(() => Authenticode.Check(file, Config.Publisher), ct).ConfigureAwait(false);
             log.Write("서명 확인 — 유효 · 서명자 " + subject);
             return new Prepared { Tag = tag, Manifest = manifest, File = file, Subject = subject };
+        }
+
+        /// <summary>
+        /// 최신 릴리스의 latest.yml. 없으면(404) 직전 릴리스로 거슬러 올라간다.
+        /// 태그를 올리면 릴리스는 곧바로 «최신» 이 되지만 윈도우 설치 파일과 latest.yml 은 데스크톱 빌드가 끝난 뒤(수 분 뒤)
+        /// 붙는다(release.yml · release-desktop.yml). 그 사이 실행한 사람도 설치되게 직전 판을 받는다 — 설치된 앱이 새 판으로 스스로 올라간다.
+        /// 거슬러 볼 곳도 없으면 처음 404 를 그대로 낸다.
+        /// </summary>
+        static async Task<(string Tag, string Yml)> FetchManifestAsync(Fetcher fetcher, string latest, Log log, CancellationToken ct)
+        {
+            try
+            {
+                var yml = await fetcher.GetTextAsync(Config.AssetUrl(latest, "latest.yml"), null, ct).ConfigureAwait(false);
+                return (latest, yml.Body);
+            }
+            catch (HttpStatusException first) when (first.Status == 404)
+            {
+                log.Write("최신 릴리스 " + latest + " 에 latest.yml 이 아직 없다 — 새 판을 올리는 중일 수 있어 직전 릴리스를 찾는다");
+                var feed = await fetcher.GetTextAsync(Config.FeedUrl, "application/atom+xml", ct).ConfigureAwait(false);
+                var candidates = Rules.TagsFromFeed(feed.Body, latest);
+                for (int i = 0; i < candidates.Count && i < Config.MaxFallbackReleases; i++)
+                {
+                    try
+                    {
+                        var yml = await fetcher.GetTextAsync(Config.AssetUrl(candidates[i], "latest.yml"), null, ct).ConfigureAwait(false);
+                        log.Write("직전 릴리스 " + candidates[i] + " 로 받는다");
+                        return (candidates[i], yml.Body);
+                    }
+                    catch (HttpStatusException e) when (e.Status == 404)
+                    {
+                        log.Write(candidates[i] + " 에도 latest.yml 이 없다");
+                    }
+                }
+                throw;
+            }
         }
 
         public static string NewWorkDir()
@@ -892,6 +953,10 @@ namespace Lively.Setup
                     case "tag":
                         want = f[3] == "ok" ? "ok|" + f[4] : "error";
                         got = Try(() => "ok|" + Rules.TagFromRelease(f[1], f[2]));
+                        break;
+                    case "feed":
+                        want = f[3];
+                        got = string.Join(",", Rules.TagsFromFeed(f[1], f[2]));
                         break;
                     default:
                         want = "알 수 없는 종류";
