@@ -70,6 +70,11 @@ S.setMigrationOwnership(async (q) => {
   ownCalls.push(q);
   return new Set(q.rels.filter((r) => !path.posix.basename(r).startsWith("foreign")));
 });
+//  이름 이력 — 실제로는 이 워크스페이스 감사 기록 조회다. 이 시험에선 표에 적힌 것만 옛 이름이다.
+const NAME_HISTORY = new Map<number, string[]>();
+const nameCalls: number[] = [];
+const fakeNameHistory = async (id: number): Promise<string[]> => { nameCalls.push(id); return NAME_HISTORY.get(id) ?? []; };
+S.setMigrationNameHistory(fakeNameHistory);
 const OS_USER = "box_tester";
 
 // ═══ S1 자리 고르기 ═══════════════════════════════════════════════════════════
@@ -490,6 +495,76 @@ test("S3 M20 소유 확인이 실패하면 아무것도 옮기지 않는다 — 
   }
 });
 
+test("S3 M21 ★ 이름을 바꾼 프로젝트 — 옛 이름 머리의 AGENTS.md 도 이 워크스페이스 이력에 그 이름이 있으면 옮긴다(규칙 보존)", async () => {
+  const L = path.join(LOCAL_ROOT, "project", "101");
+  const old = agentsMd("옛 이름 시절 규칙", "d", 101, "옛 이름");
+  put(path.join(L, "AGENTS.md"), old);
+  NAME_HISTORY.set(101, ["옛 이름", "새 이름"]);
+  relayOn();
+  try {
+    S.resetMigrationMemo();
+    const st = await S.projectStorage("project/101", actor, { id: 101, name: "새 이름" });
+    assert.equal(read(path.join(st.base, "AGENTS.md")), old, "배포 뒤 첫 접촉이 이름 바꾸기여도 사람 규칙이 건너가야 한다");
+    assert.equal(exists(path.join(L, "AGENTS.md")), false, "옮긴 원본은 보관으로 빠진다");
+    assert.equal(read(path.join(L, ".lively", "migrated", "AGENTS.md")), old);
+    assert.ok(nameCalls.includes(101), "옛 이름은 그 프로젝트 번호로 물어야 한다");
+  } finally { relayOff(); NAME_HISTORY.delete(101); }
+});
+
+test("S3 M22·M23 옛 이름 모양이어도 이력에 없거나 번호가 다르면 남의 것일 수 있다 — 옮기지 않는다", async () => {
+  const L22 = path.join(LOCAL_ROOT, "project", "102");
+  put(path.join(L22, "AGENTS.md"), agentsMd("남의 규칙", "d", 102, "이력에 없는 이름"));
+  NAME_HISTORY.set(102, ["우리가 붙인 옛 이름"]);
+  //  M23 — 이 프로젝트(103)의 이력에 있는 이름이지만 머리 번호가 다른 프로젝트(7)다
+  const L23 = path.join(LOCAL_ROOT, "project", "103");
+  put(path.join(L23, "AGENTS.md"), agentsMd("남의 규칙", "d", 7, "옛 이름 103"));
+  NAME_HISTORY.set(103, ["옛 이름 103"]);
+  relayOn();
+  try {
+    S.resetMigrationMemo();
+    const s22 = await S.projectStorage("project/102", actor, { id: 102, name: "지금 이름" });
+    const s23 = await S.projectStorage("project/103", actor, { id: 103, name: "지금 이름" });
+    assert.equal(exists(path.join(s22.base, "AGENTS.md")), false, "M22 이력에 없는 이름");
+    assert.equal(exists(path.join(s23.base, "AGENTS.md")), false, "M23 번호가 다른 머리");
+    assert.ok(exists(path.join(L22, "AGENTS.md")) && exists(path.join(L23, "AGENTS.md")), "제자리에 둔다");
+  } finally { relayOff(); NAME_HISTORY.delete(102); NAME_HISTORY.delete(103); }
+});
+
+test("S3 M24 ★ 이름 이력 조회가 실패하면 옮기지 않고, 다음 열기에서 다시 간다 — 여는 것 자체는 된다", async () => {
+  const L = path.join(LOCAL_ROOT, "project", "104");
+  const old = agentsMd("규칙 104", "d", 104, "옛 이름 104");
+  put(path.join(L, "AGENTS.md"), old);
+  relayOn();
+  S.setMigrationNameHistory(async () => { throw new Error("db down"); });
+  try {
+    S.resetMigrationMemo();
+    const st = await S.projectStorage("project/104", actor, { id: 104, name: "새 이름 104" });
+    assert.equal(st.base, path.join(MEMBER_ROOT, "project", "104"), "이력 조회가 실패해도 저장소는 열린다");
+    assert.equal(exists(path.join(st.base, "AGENTS.md")), false, "소유를 모르면 옮기지 않는다(fail-closed)");
+    await assert.rejects(S.ownsAgentsMd(old, { id: 104, name: "새 이름 104" }), /db down/, "판정 실패를 «남의 것» 으로 삼키면 영영 안 옮긴다");
+    //  조회가 살아나면 — 같은 프로세스에서도 다시 간다(실패는 확정으로 기억하지 않는다)
+    S.setMigrationNameHistory(fakeNameHistory);
+    NAME_HISTORY.set(104, ["옛 이름 104"]);
+    const r = await S.migrateLocalToMember(st);
+    assert.equal(r.copied, 1);
+    assert.equal(read(path.join(st.base, "AGENTS.md")), old);
+  } finally { relayOff(); S.setMigrationNameHistory(fakeNameHistory); NAME_HISTORY.delete(104); }
+});
+
+test("S3 M25 머리가 이 프로젝트 번호 모양이 아니면 이름 이력을 묻지 않는다 · 지금 이름이면 묻지 않는다", async () => {
+  nameCalls.length = 0;
+  const p = { id: 105, name: "지금 이름" };
+  assert.equal(await S.ownsAgentsMd(agentsMd("r", "d", 105, "지금 이름"), p), true);
+  assert.equal(await S.ownsAgentsMd("# 사람이 쓴 문서\n\n내용\n", p), false);
+  assert.equal(await S.ownsAgentsMd(agentsMd("r", "d", 1050, "지금 이름"), p), false, "번호 접미가 다른 머리(1050)는 105 가 아니다");
+  assert.equal(await S.ownsAgentsMd("", p), false);
+  assert.deepEqual(nameCalls, [], "헛조회 — 번호가 안 맞으면 DB 에 묻지 않는다");
+  assert.equal(await S.ownsAgentsMd(agentsMd("r", "d", 105, "옛 이름"), p), false, "이력이 비었으면 옛 이름을 증명할 수 없다");
+  assert.deepEqual(nameCalls, [105]);
+  assert.equal(await S.ownsAgentsMd(agentsMd("r", "d", 105, "옛 이름"), { id: 105, name: null }), false,
+    "지금 이름을 모르면(저장소를 이름 없이 열었다) 이력도 이 파일을 증명하지 못한다 — 이력이 비었다");
+});
+
 // ═══ S7 배선 ═══════════════════════════════════════════════════════════════════
 
 const src = (rel: string): string => fs.readFileSync(new URL(rel, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
@@ -571,4 +646,15 @@ test("W9 기본 소유 확인은 이 워크스페이스 자료 표에서 그 프
   assert.match(src("../terminal/session-project-routes.ts"), /projectStorage\(project\.folder, \{ user: u \}, \{ id: project\.id, name: project\.name \}\)/);
   assert.match(src("../ingest/local-file.ts"), /\{ id: row\.id, name: row\.name \}/);
   //  stage 판 — 노드 업로드 정본(terminal-files)은 stage 에 아직 없다.
+});
+
+test("W10·W11 기본 이름 이력은 이 워크스페이스 감사 기록의 before/after 이름이다", () => {
+  //  stage 판 — 첫 지시 첨부 옮기기(routes → relocateAttachmentsToProject)가 stage 에 아직 없다(main 판 시험이 잠근다).
+  assert.match(src("./first-prompt-project.ts"), /return \{ id: project\.id, folder, name: row\?\.name \?\? null \};/);
+  const store = src("./project-storage.ts");
+  assert.match(store, /SELECT before->>'name' AS n FROM org_content_audit WHERE entity='project' AND entity_key=\$1/);
+  assert.match(store, /SELECT after->>'name' AS n FROM org_content_audit WHERE entity='project' AND entity_key=\$1/);
+  assert.match(store, /\[String\(projectId\)\]\);/, "감사 행의 entity_key 는 문자열 id 다(auditProject(String(id), …))");
+  assert.match(store, /if \(t != null && \(await ownsAgentsMd\(t, project\)\)\) out\.add\(f\.rel\);/, "이관이 옛 이름 판정을 안 쓴다");
+  assert.match(src("../v6/project-store.ts"), /auditOrgContent\("project", entityKey, op, before, after, ctx\)/, "감사 기록의 entity 이름이 바뀌면 이력 조회가 빈손이 된다");
 });

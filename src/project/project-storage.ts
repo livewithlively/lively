@@ -333,7 +333,8 @@ export async function projectStorage(folder: string, actor: StorageActor | null,
 //   증명된 파일만 옮기고, 증명 못 한 것은 제자리에 둔다(옮기지도 보관하지도 않는다):
 //    · 일반 파일 — 이 워크스페이스에 그 좌표(`project:<id>/<rel>`)의 자료 행이 있다. 자료 표는 워크스페이스로 갈리고,
 //      게이트웨이 로컬에 파일을 두던 길(곁칸 업로드·노드 업로드 정본·첫 지시 첨부)은 전부 자료로 등록했다.
-//    · AGENTS.md — 첫 줄이 이 프로젝트의 머리(`# <이름>   (프로젝트 #<id>)`)다.
+//    · AGENTS.md — 첫 줄이 이 프로젝트의 머리(`# <이름>   (프로젝트 #<id>)`)다. 이름은 지금 이름이거나 이 워크스페이스가
+//      그 프로젝트에 붙였던 옛 이름(감사 기록)이다 — 배포 뒤 첫 접촉이 이름 바꾸기면 게이트웨이 쪽 원본은 옛 이름을 달고 있다.
 //    · CLAUDE.md — 우리가 쓴 import 한 줄이면 누구의 것이든 내용이 같다.
 //   빈 폴더는 소유를 증명할 수 없어 옮기지 않는다.
 
@@ -363,6 +364,38 @@ const dbOwnership: OwnershipCheck = async ({ projectId, rels }) => {
 let ownership: OwnershipCheck = dbOwnership;
 /** 시험 전용 — 소유 확인을 갈아 끼운다(null = 기본 DB 조회) */
 export function setMigrationOwnership(fn: OwnershipCheck | null): void { ownership = fn ?? dbOwnership; }
+
+/** 이 워크스페이스가 그 프로젝트에 붙였던 이름들 */
+export type NameHistory = (projectId: number) => Promise<string[]>;
+
+const dbNameHistory: NameHistory = async (projectId) => {
+  const { itemsPool } = await import("../db/client.js");
+  //  이름 바꾸기는 전부 감사 행(before·after 에 행 전체)을 남긴다(project-store claimProjectName·updateProject).
+  const got = await itemsPool.query(
+    `SELECT DISTINCT n FROM (
+       SELECT before->>'name' AS n FROM org_content_audit WHERE entity='project' AND entity_key=$1
+       UNION ALL
+       SELECT after->>'name' AS n FROM org_content_audit WHERE entity='project' AND entity_key=$1
+     ) t WHERE n IS NOT NULL AND n <> ''`,
+    [String(projectId)]);
+  return (got.rows as Array<{ n: string }>).map((r) => r.n);
+};
+let nameHistory: NameHistory = dbNameHistory;
+/** 시험 전용 — 이름 이력 조회를 갈아 끼운다(null = 기본 DB 조회) */
+export function setMigrationNameHistory(fn: NameHistory | null): void { nameHistory = fn ?? dbNameHistory; }
+
+/**
+ * 이 AGENTS.md 가 **이 워크스페이스의 그 프로젝트** 것인가 — 첫 줄이 지금 이름의 머리이거나, 이 워크스페이스가
+ *  그 프로젝트에 붙였던 옛 이름의 머리다. 이관과 규칙 폴백(agents-md readRules)이 같은 판정을 쓴다.
+ *  이력 조회 실패는 던진다(호출부가 fail-closed 로 다룬다).
+ */
+export async function ownsAgentsMd(content: string, project: StorageProject): Promise<boolean> {
+  if (isAgentsMdOf(content, project)) return true;
+  const first = content.split(/\r?\n/, 1)[0] ?? "";
+  //  이 프로젝트 번호의 머리 모양이 아니면 이력을 볼 것도 없다(헛조회를 안 한다)
+  if (!first.startsWith("# ") || !first.endsWith(`   (프로젝트 #${project.id})`)) return false;
+  return (await nameHistory(project.id)).some((name) => isAgentsMdOf(content, { id: project.id, name }));
+}
 
 async function walkLocal(base: string, cap: number): Promise<{ files: LocalFile[]; truncated: boolean }> {
   const files: LocalFile[] = [];
@@ -401,7 +434,7 @@ async function provenOwned(project: StorageProject, files: LocalFile[]): Promise
   for (const f of files) {
     if (f.rel === "AGENTS.md") {
       const t = await fsp.readFile(f.abs, "utf8").catch(() => null);
-      if (t != null && isAgentsMdOf(t, project)) out.add(f.rel);
+      if (t != null && (await ownsAgentsMd(t, project))) out.add(f.rel);
       continue;
     }
     if (f.rel === "CLAUDE.md") {
