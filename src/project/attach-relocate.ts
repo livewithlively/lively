@@ -77,7 +77,7 @@ export async function relocateAttachmentsToProject(o: {
   //  옮겨 갈 자리는 프로젝트 저장소가 정한다(#4064) — 매니지드면 세션이 일하는 멤버 저장소다. 게이트웨이 로컬로
   //  옮기면 세션은 그 첨부를 못 읽는다(주입 훅이 «이 컴퓨터에 없습니다» 로 말하게 된다).
   let store: ProjectStorage;
-  try { store = await projectStorage(o.folder, { memberId: o.memberId }); }
+  try { store = await projectStorage(o.folder, { memberId: o.memberId }, { id: o.projectId }); }
   catch (e) {
     logger.warn({ err: e, projectId: o.projectId }, "[attach-relocate] 프로젝트 저장소를 못 열었다 — 첨부는 종전 좌표로 둔다");
     return { prompt: o.prompt, moved: 0, failed: 0 };

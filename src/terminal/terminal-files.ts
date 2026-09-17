@@ -145,7 +145,7 @@ async function gatewayUploadForNodeSession(sessionId: string, memberId: string, 
     if (!row?.folder) return null;
     //  정본의 자리는 프로젝트 저장소가 정한다(#4064) — 매니지드면 멤버 저장소(동기화 매니페스트가 읽는 바로 그 자리).
     //  게이트웨이 로컬에 쓰면 매니페스트가 못 봐서 노드로 영영 안 내려간다.
-    const store = await projectStorage(row.folder, { memberId });
+    const store = await projectStorage(row.folder, { memberId }, { id: pid, name: row.name });
     const base = store.base;
     //  노드에서의 절대경로 — 드롭 UI 가 입력창에 꽂을 값. 세션 cwd + 드롭 rel 을 **그 노드의 구분자로** 잇는다.
     const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
