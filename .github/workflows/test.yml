@@ -151,6 +151,16 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/mirror/notion-sweep.pg-test.mjs
+      # ⑤-e 프로젝트 저장소 이관의 소유 확인(#4064) — 매니지드 게이트웨이 로컬 폴더는 워크스페이스로 안 갈려
+      #    «이 워크스페이스 것으로 증명된 파일만» 멤버 저장소로 옮긴다. 증명이 SQL 에 산다: AGENTS.md 는 «그 파일이
+      #    쓰인 시각에 쓰던 이름»(가장 늦은 감사 행·창 경계·창 상한·이름 없는 행), 일반 파일은 자료 좌표 대조.
+      #    너무 넓으면 번호가 겹친 남이 이름 사전으로 우리 규칙을 끌어가고, 너무 좁으면 사람 규칙이 안 건너간다 —
+      #    가짜 조회로는 조건 하나를 지워도 초록이다. 이관은 가짜 중계로 끝까지 돌린다.
+      - name: 프로젝트 저장소 이관 소유 확인 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/project/project-storage-ownership.pg-test.mjs
       # ⑥ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.
