@@ -26,6 +26,7 @@ import { svcLogo } from './svc-logos.js';
 import { icon as lineIcon } from './v2/icons.js';
 import { confirmDialog, skeleton } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
+import { isWholeDistillJob } from './lib/stage-job-pick.js';
 import { runConfig } from './context-run-config.js';    // #4008 제공자·모델·추론강도 공용 선택기
 
 const PAGE_TYPES = ['', 'decision', 'concept', 'how-to', 'reference', 'research', 'entity'];
@@ -891,6 +892,9 @@ async function runJobCard(rerender) {
     //  #4052 — 종전 문장은 «증류기를 만들어도 자료가 지식이 되지 않습니다» 였는데, 증류기를 켜면 잡이 함께 생긴다(#2415).
     //   사실인 부분만 남긴다.
     missingLine: '증류 자동 실행이 없어 쌓인 자료가 지식이 되지 않습니다.',
+    //  #4052 후속 — 켜진 레인 전부를 접수하는 전체 잡을 대표로 보인다. 처음 설정이 심은 local-files 전용 잡(10분)이
+    //   목록 앞에 오면 카드가 그 주기로 말하고, 끌 때 그 잡만 꺼져 나머지 레인은 계속 돌았다.
+    prefer: isWholeDistillJob,
     // 분류와 같은 이유 — 구 세션주입판(distill_sources)은 params.session 이 있어야 돈다.
     unrunnable: (j) => (j.action === 'distill_sources' && !(j.params && j.params.session))
       ? '지금 등록된 증류 자동 실행은 늘 켜 둔 AI 세션이 있어야 도는 옛 방식인데, 그 세션이 정해져 있지 않습니다 — 이대로 켜면 매번 실패합니다.'

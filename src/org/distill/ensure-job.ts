@@ -74,6 +74,49 @@ export function planDistillJob(jobs: readonly DistillJobRow[], distillerKey: str
 }
 
 /**
+ * 전용 잡이 맡은 증류기(순수) — **켜진** 잡이 묶인 대상(`params.distiller`, key 또는 id 문자열)의 집합.
+ *
+ *  무지정(전체 접수) 잡은 이 증류기들을 집지 않는다(#4052 후속 — scheduler/actions/distill.ts). 안 그러면 같은 자료가
+ *  두 잡에서 나간다: 중첩 방지 표식이 잡마다 달라(`cron:<job>#<key>`) 같은 틱에 돌면 판정 기록 전에 둘 다 인박스를 읽는다
+ *  (실측 2026-09-17: 처음 설정이 심은 local-files 전용 잡과 전체 잡이 함께 켜진 워크스페이스).
+ *  꺼진 전용 잡은 아무것도 맡지 않는다 — 그 증류기는 전체 잡이 집는다(증류기의 켜짐이 레인 스위치이고, 전용 잡이 꺼진 것을
+ *  «그 레인 증류 중단» 으로 읽지 않는다. 종전에도 전체 잡은 켜진 증류기 전부를 집었다).
+ *
+ *  ⚠ 가정: «켜진 전용 잡 = 그 레인이 실제로 돈다». 전용 잡이 실행 계정을 못 찾으면 그 배치는 건너뛰고 판정도 안 남아
+ *   (runDistillHeadless) 레인이 멈추는데, 전체 잡은 그 레인을 이미 뺐다. 지금은 괜찮다 — 전용 잡을 만드는 프리셋 셋
+ *   (local·github·figma)이 켤 때 **증류기 행에** 실행 계정을 박고, 실행 계정 해소 순서(레인 > 잡 > 워크스페이스 > 만든 사람)도
+ *   두 잡이 같아서 전용 잡이 못 찾는 계정은 전체 잡도 거의 못 찾는다. 전용 잡을 만드는 새 경로를 낼 때는 이 가정을 지켜라.
+ */
+export function dedicatedDistillerKeys(jobs: readonly DistillJobRow[]): Set<string> {
+  const out = new Set<string>();
+  for (const j of jobs) {
+    const pin = pinnedTo(j);
+    if (j.enabled && pin) out.add(pin);
+  }
+  return out;
+}
+
+/**
+ * 전체 잡이 배치를 낼 증류기(순수) — 켜진 증류기에서 전용 잡이 맡은 것을 뺀다. 순서는 그대로.
+ *  묶음은 key 로도 id 로도 적힌다 — 전용 잡이 실제로 부르는 getDistiller(distiller.ts)와 같은 규칙으로 읽는다:
+ *  숫자뿐이면 id, 아니면 key. 그래야 id 로 묶인 전용 잡과도 겹치지 않고, 숫자 모양 key 를 엉뚱하게 빼지도 않는다.
+ */
+export function servedDistillers<T extends { key?: unknown; id?: unknown }>(enabled: readonly T[], dedicated: ReadonlySet<string>): T[] {
+  if (!dedicated.size) return [...enabled];
+  const byId = new Set<string>();
+  const byKey = new Set<string>();
+  for (const pin of dedicated) (/^\d+$/.test(pin) ? byId : byKey).add(pin);
+  return enabled.filter((d) => !byKey.has(String(d.key ?? "")) && !byId.has(String(d.id ?? "")));
+}
+
+/** 이 워크스페이스의 `distill_sources_headless` 잡 전부(꺼진 것 포함). 못 읽으면 던진다 — 폴백은 호출부가 정한다. */
+export async function readDistillJobs(): Promise<DistillJobRow[]> {
+  const { itemsPool } = await import("../../db/client.js");
+  const r = await itemsPool.query(`SELECT id, enabled, params FROM org_cron WHERE action='distill_sources_headless'`);
+  return r.rows as DistillJobRow[];
+}
+
+/**
  * 계획을 실제로 적용한다. 실패는 던지지 않는다 — 증류기 저장은 이미 끝났고, 잡 정비는 그것을 되돌릴 이유가 아니다.
  * @returns 무엇을 했는지(로그·요약용). 아무것도 안 했으면 action='none'.
  */
@@ -83,9 +126,7 @@ export async function ensureDistillJob(distillerKey: string, actor?: string | nu
 
   let jobs: DistillJobRow[] = [];
   try {
-    const r = await itemsPool.query(
-      `SELECT id, enabled, params FROM org_cron WHERE action='distill_sources_headless'`);
-    jobs = r.rows as DistillJobRow[];
+    jobs = await readDistillJobs();
   } catch {
     return { action: "none", reason: "잡 목록을 읽지 못했다(테이블 부재 등)" };
   }
