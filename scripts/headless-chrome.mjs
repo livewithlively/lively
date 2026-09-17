@@ -42,6 +42,9 @@ export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", p
     return await new Promise((resolve, reject) => {
       const child = spawn(chrome, [
         "--headless=old", "--disable-gpu", "--no-sandbox", "--no-first-run", "--no-default-browser-check",
+        // ⚠ 맥에서 세션(launchd Background 도메인)이 새 프로필로 크롬을 띄우면 «키체인 발견할 수 없음» 모달이 **사람 화면**에
+        //  뜰 수 있다(지식 headless-chrome-keychain-dialog-macos) — OS 키체인 대신 목 키체인·기본 저장소를 쓴다.
+        "--use-mock-keychain", "--password-store=basic",
         // 신선한 프로필로 뜨면 크롬이 컴포넌트 갱신·백그라운드 네트워킹을 기다린다 — 전부 끈다
         "--disable-background-networking", "--disable-component-update", "--disable-sync",
         "--disable-default-apps", "--disable-extensions", "--metrics-recording-only", "--mute-audio",
