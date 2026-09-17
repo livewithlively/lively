@@ -17,6 +17,7 @@ import { carrySessionDismissals, closeSessionAppInstances } from "../org/store/a
 import { accountRoutesActive, publishNotify, sessionEventKey } from "../v6/notify-bus.js";
 import { hereSlug, notifyAccountOf } from "../v6/notify-scope.js";
 import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
+import { SESSION_STARTING_GRACE_MS } from "./sessions.js";   // #4065 — 갓 만든 세션을 «중단됨» 으로 내지 않는 창(배럴 비노출 — 모듈에서 직접)
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";        //  하기 위한 파사드(chat-routes 대화창과 같은 관문)
 import { resolveSessionDir } from "../sessions/session-desired.js";
@@ -480,7 +481,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const remote = nodeSessionsFor(idOf(userOf(req)));
     // 복원 가능(#1059 E) — DB desired-state 에만 있고 지금 tmux 에 없는 세션(재부팅 사망·reaper 회수). 라이브 우선(이중표기 방지).
     //  #1791 — 노드 세션 행(node_id)도 여기 온다: 노드 스냅샷에 살아 있는 id 는 라이브가 SoT 라 뺀다(local ∪ remote).
-    const restorable = await listRestorableSessions(userOf(req), new Set([...all, ...remote].map((s) => s.id)));
+    //  #4065 — 갓 만든 세션은 관측(호스트 스냅샷)에 늦게 잡힌다. 그 창에서 «중단됨» 으로 내면 화면이 대화창으로 열린다.
+    const restorable = await listRestorableSessions(userOf(req), new Set([...all, ...remote].map((s) => s.id)),
+      { startingGraceMs: SESSION_STARTING_GRACE_MS });
     const proj = (s: SessionInfo): boolean => isProjectSessionDir(s.dir);
     const keep = (s: SessionInfo): boolean => includeProjects || !proj(s) || (ownedProjectsOnly && !!s.owned);
     const local = all.filter(keep);

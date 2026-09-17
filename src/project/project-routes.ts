@@ -15,6 +15,7 @@ import { projectAbsPath, grantSharedGroupWrite } from "./project-fs.js";
 import { canSeeProjectRow, effectiveViewer } from "../v6/visibility.js";
 import { viewerOf } from "../capabilities/principal.js";
 import { listSessions, listRestorableSessions, validateInvites, type CreateInput } from "../terminal/terminal-sessions.js";
+import { SESSION_STARTING_GRACE_MS } from "../terminal/sessions.js";   // #4065 — AI 세션 탭과 같은 창(배럴 비노출 — 모듈에서 직접)
 import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
 import { ensureAgentsMd, readProjectAgentsMd } from "../v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
@@ -384,7 +385,9 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     // #1791 — 복원 가능 행에 노드 세션(node_id)도 온다: 노드 경로는 이 박스의 base 아래가 아니므로 projectId 로 좁힌다.
     //  노드 스냅샷에 살아 있는 id 는 라이브가 SoT(local ∪ remote 제외).
     const pid = Number(req.params.id);
-    const restorable = (await listRestorableSessions(userOf(req), new Set([...all, ...remote].map((s) => s.id))))
+    //  #4065 — AI 세션 탭과 같은 규칙: 갓 만든 세션은 «중단됨» 이 아니라 «시작 중» 이다.
+    const restorable = (await listRestorableSessions(userOf(req), new Set([...all, ...remote].map((s) => s.id)),
+      { startingGraceMs: SESSION_STARTING_GRACE_MS }))
       .filter((s) => (s.node ? s.projectId === pid : underBase(s)));
     await decorateNodeRows(restorable);
     // AI 세션 탭과 같은 규칙으로 이중표기를 접는다(#1716) — 게이트웨이와 노드가 같은 박스면 같은 tmux 세션이
