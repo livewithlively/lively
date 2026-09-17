@@ -35,6 +35,8 @@ build-info.json
 desktop/node_modules/
 desktop/release/
 desktop/build/
+desktop/installer-helper/bin/
+desktop/installer-helper/obj/
 
 # 웹 빌드 산출물 — **전부 git 밖이다**(#2054). dist/ 와 같은 취급.
 #  ⚠ 종전엔 public/app 과 단독 페이지 번들을 **커밋했다**. 그 관행이 치르던 비용이 셋이고, 셋 다

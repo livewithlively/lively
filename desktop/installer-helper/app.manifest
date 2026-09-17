@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 라이블리 설치 도우미 (#4066) -->
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="Lively.Setup" />
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <!-- 관리자 권한을 요청하지 않는다. 받아서 실행하는 설치 파일(NSIS, 사용자 단위 설치)도 권한이 필요 없다.
+             이 선언이 없으면 Windows 는 이름에 "Setup" 이 든 exe 를 설치 프로그램으로 추정해 UAC 창을 띄운다. -->
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 · 11 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <!-- 시스템 DPI 인식. 창 배치는 AutoScaleMode.Dpi 가 맞춘다. 모니터별 DPI 대응은 .NET Framework WinForms 가
+           app.config 없이는 하지 못하므로 켜지 않는다(DPI 가 다른 모니터로 옮기면 Windows 가 확대해 그린다). -->
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true</dpiAware>
+    </windowsSettings>
+  </application>
+</assembly>
