@@ -55,7 +55,10 @@ export const authHeaders = (): Record<string, string> => {
 
 // ══ 자료 — 공유 폴더에 쌓인 것. 끌어다 놓으면 올라간다 ═══════════════════════════
 export type FileItem = { name: string; path: string; type: 'dir' | 'file'; size: number; mtime: number; empty?: boolean };
-export const MACHINE_FILES = new Set(['CLAUDE.md', 'AGENTS.md', '.DS_Store', 'package-lock.json', 'yarn.lock']);
+// 기계가 만드는 잡음 파일 — 자료 칸에서 가린다. AGENTS.md·CLAUDE.md 는 **여기 없다**: 일반 파일과 똑같이 보이고
+//  열리고 지워진다(#4064, 상민 2026-09-17). ⚠ 프로젝트 규칙은 AGENTS.md 안에만 산다 — 지우면 규칙도 같이 지워지고,
+//  서버는 다음 재생성 때 빈 규칙으로 새로 만든다.
+export const MACHINE_FILES = new Set(['.DS_Store', 'package-lock.json', 'yarn.lock']);
 export const NOISE_RE = /\/(__pycache__|node_modules|dist|build|\.next|coverage|venv)\//;
 export const TRASH_DIR = '휴지통';
 const isImg = (n: string): boolean => /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(n);

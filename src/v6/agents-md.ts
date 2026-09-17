@@ -2,24 +2,21 @@
 //  ⚠ 레포 '경로'는 절대 넣지 않는다(머신마다 달라). 여기엔 이름·메타·태스크 인덱스·조회 key + 코드 확보 '방법'(툴)만 —
 //   경로는 그 머신에서 lively_local_repo_worktree 가 해석한다(codeWorkSection).
 //  호출처: (1) project-routes 의 매니페스트/규칙 엔드포인트, (2) projects-v6 캐퍼빌리티(생성·상태·팀원·레포·카테고리 변경 직후).
-//  base 를 주면 그대로 쓰고, 안 주면 프로젝트 folder 를 해결(없으면 물리 폴더 생성)해서 쓴다 — 생성 직후에도 동작.
+//  저장소(store)를 주면 그대로 쓰고, 안 주면 프로젝트 folder 를 해결(없으면 물리 폴더 생성)해 만든 사람 권한으로 연다.
+//  ★ #4064 — AGENTS.md·CLAUDE.md 는 **일반 파일과 같은 자리**에 산다(project-storage). 매니지드에선 그 자리가 세션이
+//   일하는 멤버 저장소라, 세션이 직접 만든 AGENTS.md·CLAUDE.md 를 만날 수 있다 — 사람이 쓴 내용은 덮지 않는다(readRules·CLAUDE.md 절).
 import fsp from "node:fs/promises";
 import path from "node:path";
 import {
   getProject as getProjectV6, setProjectFolder,
   upsertProjectFolderBinding, SHARED_BINDING_MEMBER,
 } from "./project-store.js";
-import { projectAbsPath, createProjectFolder, grantSharedGroupWrite } from "../project/project-fs.js";
+import { createProjectFolder, grantSharedGroupWrite } from "../project/project-fs.js";
+import { projectStorage, type ProjectStorage } from "../project/project-storage.js";
+import { RULES_MARK, RULES_PLACEHOLDER, pickRules, nextClaudeMd, type RulesSource } from "./agents-md-rules.js";
 // 폴더 바인딩의 환경 id — 박스(게이트웨이 호스트)는 'central'(CENTRAL_NODE_ID 와 같은 어휘). 노드 스케줄러를
 //  import 하면 registry/WS 체인이 딸려 와 순환 위험이 있어, 이 leaf 에서는 리터럴로 둔다(값은 한 낱말·불변).
 const CENTRAL_NODE = "central";
-
-const RULES_MARK = "<!-- LIVELY:RULES — 아래는 사람이 작성·편집 (digest 는 자동 갱신, 규칙은 보존) -->";
-// 규칙이 비었을 때 '## 규칙' 본문 자리표시 — HTML 주석이라 사람이 파일을 열면 힌트로 보이되 AI 에겐 지시문으로
-//  읽히지 않는다(과거엔 안내 문장을 그대로 써넣어 AI 컨텍스트를 오염시켰다 — #246). 규칙을 저장하면 사라진다.
-const RULES_PLACEHOLDER = "<!-- (아직 작성된 규칙이 없습니다) 이 프로젝트에서 AI가 지켰으면 하는 규칙을 적으세요 — 웹: 프로젝트 ▸ 세부 설정 ▸ 규칙 -->";
-// 구(舊) 기본 템플릿 문장 — 디스크의 기존 AGENTS.md 에 본문으로 박혀 있을 수 있어, 읽을 때 '빈 규칙'으로 이관 처리한다.
-const LEGACY_DEFAULT_RULES = "여기에 이 프로젝트에서 AI가 지켰으면 하는 걸 적으세요. (예: 새로 만들기 전에 비슷한 게 있는지 먼저 찾는다 / 큰 변경·삭제는 먼저 물어본다)";
 
 // 프로젝트 마무리(close-out) 루틴 — 모든 프로젝트 공통이라 digest(자동 섹션)에 박는다. 프로젝트 폴더에서만 노출돼
 //  '플젝 세션일 때만' 보이고(플젝 밖 0비용), 전역 always 주입의 과주입·미작동(라이브 템플릿 ${rules} 부재)을 피한다.
@@ -82,27 +79,23 @@ function buildProjectDigest(p: any): string {
   return L.join("\n").trim();
 }
 
-function extractRules(content: string): string | null {
-  const i = content.indexOf(RULES_MARK);
-  if (i < 0) return null;
-  const body = content.slice(i + RULES_MARK.length)
-    .replace(/^\s*##\s*규칙\s*\n?/, "")
-    .replace(/<!--[\s\S]*?-->/g, "")  // 자리표시 주석 제거 → 주석만 있으면 빈 규칙
-    .trim();
-  return body === LEGACY_DEFAULT_RULES ? "" : body;  // 구 기본 템플릿 문장도 빈 규칙으로 이관
-}
-// 구 CLAUDE.md 의 사람 규칙(LIVELY:REFS 자동블록 제외) — AGENTS.md 최초 생성 시 1회 이관.
-function stripClaudeManaged(content: string): string {
-  const s = content.indexOf("<!-- LIVELY:REFS");
-  return (s >= 0 ? content.slice(0, s) : content).trim();
+/**
+ * 규칙(사람 편집 영역)과 그 출처 — 판정은 agents-md-rules.pickRules 한 자리.
+ *  저장소를 옮기는 중이면(멤버 저장소에 AGENTS.md 가 아직 없다) 게이트웨이 쪽 원본도 재료로 준다 — 이관이 그 파일에
+ *  닿기 전이면 사람 규칙은 거기 있다. 원본은 옮겨지는 순간 그 자리에서 빠지므로 지운 규칙이 되살아나지는 않는다.
+ */
+async function readRules(store: ProjectStorage): Promise<{ rules: string; from: RulesSource }> {
+  const agents = await store.readText(path.join(store.base, "AGENTS.md"));
+  const original = agents == null && store.localBase !== store.base
+    ? await fsp.readFile(path.join(store.localBase, "AGENTS.md"), "utf8").catch(() => null)
+    : null;
+  const claude = await store.readText(path.join(store.base, "CLAUDE.md"));
+  return pickRules({ agents, original, claude });
 }
 
-// 규칙(사람 편집 영역)만 읽는다 — 세부설정 규칙 블록 로드용. AGENTS.md 없으면 구 CLAUDE.md 에서 1회 이관.
-export async function readProjectAgentsMd(base: string): Promise<{ rules: string }> {
-  let existing = ""; try { existing = await fsp.readFile(path.join(base, "AGENTS.md"), "utf8"); } catch { /* 없음 */ }
-  let rules = extractRules(existing);
-  if (rules == null) { try { rules = stripClaudeManaged(await fsp.readFile(path.join(base, "CLAUDE.md"), "utf8")); } catch { rules = ""; } }
-  return { rules: rules || "" };
+// 규칙(사람 편집 영역)만 읽는다 — 세부설정 규칙 블록 로드용.
+export async function readProjectAgentsMd(store: ProjectStorage): Promise<{ rules: string }> {
+  return { rules: (await readRules(store)).rules };
 }
 
 // ── .lively/project.json 마커 — 호스트 로컬(공유 매니페스트가 '.' 시작 전부 제외 → 동기화 안 됨, 각 호스트가 직접 생성). ──
@@ -128,43 +121,52 @@ async function writeProjectMarker(base: string, p: any): Promise<void> {
   await grantSharedGroupWrite(file, base, "file");
 }
 
-// 프로젝트 folder(없으면 물리 폴더 생성)를 절대경로로 해결. 생성 직후엔 folder 가 비어 있으므로 여기서 만든다.
-async function resolveProjectBase(p: any): Promise<string> {
+// 프로젝트 folder(없으면 물리 폴더 생성)를 해결. 생성 직후엔 folder 가 비어 있으므로 여기서 만든다.
+async function resolveProjectFolder(p: any): Promise<string> {
   let folder = p.folder;
   if (!folder) {
     folder = await createProjectFolder(p.id);
     // 채널은 감사 제약(mcp/web/connector/cli/migration/unknown)을 따른다 — index.ts 의 ensureFolder 와 동일하게 web.
     await setProjectFolder(p.id, folder, { source: "web" });
   }
-  return projectAbsPath(folder);
+  return folder;
+}
+
+/** 요청 밖 호출(캐퍼빌리티의 재생성)이 쓰는 저장소 — 만든 사람 권한. 만든 사람이 없으면 저장소가 신원을 요구할 수 있다 */
+export async function agentsMdStorage(p: { id: number; folder?: string | null; created_by?: string | null }): Promise<ProjectStorage> {
+  const folder = await resolveProjectFolder(p);
+  return projectStorage(folder, p.created_by ? { memberId: String(p.created_by) } : null);
 }
 
 // AGENTS.md(+ CLAUDE.md @import) 를 현재 프로젝트 상태로 재생성(write-if-changed). 비치명적으로 호출(.catch).
-//  base 를 주면 그대로(엔드포인트는 이미 검증된 base 보유), 안 주면 folder 해결(캐퍼빌리티 호출용).
-export async function ensureAgentsMd(projectId: number, base?: string, manualOverride?: string): Promise<void> {
+//  store 를 주면 그대로(엔드포인트는 요청자 권한으로 이미 연 저장소 보유), 안 주면 만든 사람 권한으로 연다(캐퍼빌리티 호출용).
+export async function ensureAgentsMd(projectId: number, store?: ProjectStorage, manualOverride?: string): Promise<void> {
   const p = await getProjectV6(projectId).catch(() => null);
   if (!p) return;
-  const resolvedBase = base ?? (await resolveProjectBase(p));
-  const manual = manualOverride !== undefined ? manualOverride : (await readProjectAgentsMd(resolvedBase)).rules;
-  const content = `${buildProjectDigest(p)}\n\n${RULES_MARK}\n## 규칙\n${(manual && manual.trim()) || RULES_PLACEHOLDER}\n`;
-  await fsp.mkdir(resolvedBase, { recursive: true });
-  const file = path.join(resolvedBase, "AGENTS.md");
-  let prev = ""; try { prev = await fsp.readFile(file, "utf8"); } catch { /* */ }
-  if (content !== prev) await fsp.writeFile(file, content);
+  const st = store ?? (await agentsMdStorage(p));
+  const found = manualOverride !== undefined ? { rules: manualOverride, from: "none" as RulesSource } : await readRules(st);
+  const content = `${buildProjectDigest(p)}\n\n${RULES_MARK}\n## 규칙\n${(found.rules && found.rules.trim()) || RULES_PLACEHOLDER}\n`;
+  await st.mkdirp(st.base);
+  const file = path.join(st.base, "AGENTS.md");
+  const prev = (await st.readText(file)) ?? "";
+  if (content !== prev) await st.writeText(file, content);
   // 게이트웨이가 만든 파일(644)은 box_ 격리 세션이 못 고친다 — 그룹 rw 로(매 호출 재적용 = 구 파일도 지나가며 치유, #1246).
-  await grantSharedGroupWrite(file, resolvedBase, "file");
+  await st.grantGroup(file, "file");
   // Claude Code 는 CLAUDE.md 를 로드하므로 한 줄 import 로 AGENTS.md 를 끌어온다(Codex 는 AGENTS.md 네이티브).
-  const claude = path.join(resolvedBase, "CLAUDE.md");
-  let prevC = ""; try { prevC = await fsp.readFile(claude, "utf8"); } catch { /* */ }
-  if (prevC.trim() !== "@AGENTS.md") await fsp.writeFile(claude, "@AGENTS.md\n");
-  await grantSharedGroupWrite(claude, resolvedBase, "file");
-  // .lively/project.json 마커도 같이 보장 — 박스 프로젝트 폴더가 로컬 PC(work.mjs)와 동일하게 마커를 갖도록.
-  await writeProjectMarker(resolvedBase, p);
+  //  ★ 사람이 쓴 CLAUDE.md 는 덮지 않는다 — import 줄만 맨 위에 보탠다. import 한 줄로 정리하는 건 ①없을 때
+  //   ②규칙을 방금 CLAUDE.md 에서 옮겨 왔을 때(내용은 이제 AGENTS.md 규칙에 있다) ③구 자동블록 형식일 때뿐이다.
+  const claude = path.join(st.base, "CLAUDE.md");
+  const nextC = nextClaudeMd(await st.readText(claude), found.from);
+  if (nextC != null) await st.writeText(claude, nextC);
+  await st.grantGroup(claude, "file");
+  // .lively/project.json 마커도 같이 보장 — **게이트웨이 쪽 자리**에 둔다(호스트 로컬 마커). 멤버 저장소에 심으면
+  //  그 폴더에서 도는 중앙 세션의 동기화 훅이 마커를 보고 자기 폴더를 자기에게 pull 한다(#4064).
+  await writeProjectMarker(st.localBase, p);
   // 폴더 바인딩 등록(#905 P1-①) — "이 프로젝트가 어느 환경 어디에 사는가" 인벤토리에 박스 폴더를 올린다.
   //  (project.folder 는 경로해석용 정본 컬럼으로 그대로 두고, 이 테이블은 멤버 노트북·워커노드까지 아우르는
   //   N:M 인벤토리다 — 설계가 세는 폴더 3개 중 하나가 이 박스 폴더다.) 실패해도 비치명(호출부가 .catch).
   await upsertProjectFolderBinding({
     projectId: p.id, memberId: SHARED_BINDING_MEMBER, nodeId: CENTRAL_NODE,
-    absPath: resolvedBase, sync: "pull",
+    absPath: st.localBase, sync: "pull",
   }).catch(() => { /* 인벤토리 실패가 AGENTS.md 생성을 막지 않는다 */ });
 }
