@@ -12,7 +12,7 @@
 //     미리보기 새로고침이 검색어마다 돌지 않게).
 //  목록은 body 에 붙는 떠 있는 층(position:fixed)이다 — 카드·접힘(details)의 overflow 에 잘리지 않고 모달 위에도 뜬다.
 //  행·얼굴 모양은 초대 피커(.proj-mp-*)를 그대로 쓴다(새 모양을 만들지 않는다). 순수 규칙은 lib/person-pick.
-import { el } from './dom.js';
+import { el, replaceKids } from './dom.js';
 import { api } from './net.js';
 import { state } from './state.js';
 import { personFace } from './avatar.js';
@@ -71,6 +71,8 @@ export function loadPersonDirectory(src: PersonSource = 'people'): Promise<PickP
 }
 
 let seq = 0;
+/** 목록에 한 번에 그리는 줄 수 상한 — 넘치면 «더 치면 좁혀진다» 한 줄. */
+const MAX_ROWS = 60;
 
 export function personSelect(o: PersonSelectOpts = {}): PersonSelect {
   const src: PersonSource = o.source || 'people';
@@ -128,7 +130,9 @@ export function personSelect(o: PersonSelectOpts = {}): PersonSelect {
     cur = next;
     query = '';
     closeMenu();
-    paintValue();
+    //  force — 고르는 순간 칸은 포커스를 쥐고 있다(줄·× 는 mousedown 에서 preventDefault, Enter 는 keydown).
+    //   강제하지 않으면 칸에 **치던 검색어가 남고** 이름은 blur 뒤에야 보인다(격리 리뷰 #4052).
+    paintValue(true);
     if (!changed) return;
     try { o.onChange?.(cur); } catch { /* 호출부 오류가 칸을 망가뜨리지 않게 */ }
     root.dispatchEvent(new Event('change', { bubbles: true }));
@@ -173,11 +177,18 @@ export function personSelect(o: PersonSelectOpts = {}): PersonSelect {
     const empty = (text: string): void => { rows = []; active = -1; menu.replaceChildren(el('div', { class: 'proj-mp-empty', text })); };
     if (loaded === 'wait') return empty('구성원 목록을 불러오는 중입니다…');
     if (loaded === 'fail') return empty('구성원 목록을 불러오지 못했습니다 — 구성원 id 를 직접 적어 주세요.');
-    rows = pickMatches(people, query, meId());
-    if (!rows.length) return empty(people.length ? '이름이 맞는 사람이 없습니다.' : '고를 수 있는 구성원이 없습니다.');
+    const all = pickMatches(people, query, meId());
+    if (!all.length) return empty(people.length ? '이름이 맞는 사람이 없습니다.' : '고를 수 있는 구성원이 없습니다.');
+    //  줄 수 상한 — 명부가 큰 조직에서 글자마다 전 명부를 다시 그리지 않는다. 넘치면 «더 치면 좁혀진다» 를 말한다.
+    //   지금 값이 잘린 쪽에 있으면 맨 끝에 붙여 ✓ 가 보이게 한다(고른 사람이 목록에서 사라진 것처럼 보이지 않게).
+    rows = all.slice(0, MAX_ROWS);
+    const curRow = all.findIndex((p) => p.id === cur);
+    if (curRow >= MAX_ROWS) rows.push(all[curRow]);
+    const more = all.length - rows.length;
     if (active >= rows.length) active = rows.length - 1;
     const me = meId();
-    menu.replaceChildren(...rows.map((p, i) => {
+    //  replaceKids — DOM replaceChildren 은 null 을 글자 «null» 로 넣는다(lib/dom 머리말). 아래 «더 있음» 줄이 조건부다.
+    replaceKids(menu, ...rows.map((p, i) => {
       const on = p.id === cur;
       return el('div', {
         class: 'proj-mp-row psel-opt' + (on ? ' on' : '') + (i === active ? ' is-active' : ''),
@@ -189,7 +200,7 @@ export function personSelect(o: PersonSelectOpts = {}): PersonSelect {
       el('span', { class: 'proj-mp-name' }, p.name, p.id === me ? el('span', { class: 'psel-me', text: ' (나)' }) : null),
       p.sub ? el('span', { class: 'psel-sub', text: p.sub }) : null,
       el('span', { class: 'proj-mp-check' + (on ? ' on' : ''), 'aria-hidden': 'true', text: on ? '✓' : '' }));
-    }));
+    }), more > 0 ? el('div', { class: 'proj-mp-empty psel-more', text: `${more}명 더 있습니다 — 이름을 더 치면 좁혀집니다.` }) : null);
     if (active >= 0) {
       input.setAttribute('aria-activedescendant', `${listId}-${active}`);
       //  고른 줄이 목록 안에서 보이게 — **목록만** 굴린다. scrollIntoView 는 조상(페이지)까지 굴려, 칸이 화면 밖으로
@@ -237,6 +248,7 @@ export function personSelect(o: PersonSelectOpts = {}): PersonSelect {
       if (rows.length) { active = Math.min(active + 1, rows.length - 1); paintMenu(); }
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
+      if (!open) openMenu();   // ↓ 와 같게 — 닫힌 목록에서 눌러도 연다
       if (rows.length) { active = Math.max(active - 1, 0); paintMenu(); }
     } else if (e.key === 'Enter') {
       if (open && active >= 0 && rows[active]) { e.preventDefault(); commit(rows[active].id); }
