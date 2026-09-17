@@ -116,6 +116,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/shell-pref-store.pg-test.mjs
+      # ④-e 로그인 판 작업 행(#4067) — 목으로는 못 보는 것: **작업 수명의 규칙이 SQL 조건 그 자체다**.
+      #    «살아 있을 때만 끝낸다(먼저 온 끝이 이긴다)» · «붙여넣기 코드는 꺼내며 지운다(동시 박동에도 한 번)» ·
+      #    «돌지 않은 행만 지운다». 가짜 저장소는 이 규칙을 흉내 낼 뿐이라 조건 하나를 지워도 초록이다.
+      - name: 로그인 판 작업 행 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/terminal/login-job-store.pg-test.mjs
       # ⑤ 프로젝트↔카테고리 연결의 정직성 — 반영 못 하면 성공을 가장하지 않고 409/404 로 끊는지.
       #    이 버그는 반환값이 거짓말한 것이라(스토어는 정직, 핸들러가 그 값을 버림) **핸들러 호출 + DB
       #    read-back** 이 아니면 못 잡는다.

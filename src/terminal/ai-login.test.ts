@@ -7,7 +7,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { HARNESSES } from "./catalog.js";
-import { harnessHasCredential, harnessLoginProbe } from "./profiles.js";
+import { harnessHasCredential, harnessLoginProbe, listedHarnessInstalled } from "./profiles.js";
+import { registerGatewayCapabilities } from "../sessions/gateway-capabilities.js";
+import { unfreezeExecTopology } from "../exec-topology.js";
 
 let pass = 0, fail = 0;
 const t = (name: string, fn: () => void): void => {
@@ -262,6 +264,60 @@ t("★ 프로브형(antigravity)도 중계 배포에선 **그 사람 자리**에
   const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"), PROFILES.indexOf("async function memberFileExists"));
   assert.match(fn, /const osUser = \(osSt\.ready && osSt\.provisioned\) \|\| memberExecConfigured\(\) \? osSt\.osUser : null/, "중계 배포에서 프로브 자리가 게이트웨이다");
   //  #3668 T3 — 그 «자리» 는 이제 세션 컨테이너다(위 ★T3). osUser 는 그 자리의 uid·HOME 을 정하는 재료로 남는다.
+});
+
+// ── #4067 설치 판정을 세션 자리 없이 (K20–K22) ────────────────────────────────────────────────
+t("★ K20–K22 설치는 배포가 싣는 목록으로 답한다 — 자리를 쓰는 배포 + 자격 파일 하네스만 · 목록이 없거나 깨졌으면 종전 자리 · agy 는 예외", () => {
+  const KEYS = ["LIVELY_SESSION_EXEC", "LIVELY_SESSION_HARNESSES", "LIVELY_NODE_TOKEN"] as const;
+  const keep = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+  const set = (k: string, v: string | undefined): void => { if (v === undefined) delete process.env[k]; else process.env[k] = v; };
+  const ensured: string[] = [];
+  const seat = { ensure: async (_u: unknown, k: string) => { ensured.push(k); return "sid"; }, drop: async () => undefined };
+  const quiet = console.error;
+  console.error = () => undefined;   // 능력 미등록 경고는 이 시험의 의도다
+  try {
+    for (const k of KEYS) set(k, undefined);
+    unfreezeExecTopology();
+    set("LIVELY_SESSION_HARNESSES", "claude,codex,antigravity,grok");
+    registerGatewayCapabilities({ harnessSeat: seat });
+    assert.equal(listedHarnessInstalled("claude"), undefined, "세션 경계가 없는 배포(셀프호스트)는 원래 자리를 안 띄운다 — 대신하지 않는다");
+    set("LIVELY_SESSION_EXEC", "node relay.cjs {slug}");
+    registerGatewayCapabilities({ harnessSeat: undefined });
+    assert.equal(listedHarnessInstalled("claude"), undefined, "자리 능력이 없는 프로세스(노드)도 대신하지 않는다");
+    registerGatewayCapabilities({ harnessSeat: seat });
+    assert.equal(listedHarnessInstalled("claude"), true);
+    assert.equal(listedHarnessInstalled("codex"), true);
+    assert.equal(listedHarnessInstalled("grok"), true);
+    assert.equal(listedHarnessInstalled("antigravity"), undefined, "K22 프로브 하네스는 판정 자체가 그 자리에서 돈다 — 예외");
+    assert.equal(listedHarnessInstalled("opencode"), undefined, "자격 파일이 없는 하네스는 대신하지 않는다");
+    set("LIVELY_SESSION_HARNESSES", "claude,antigravity");
+    assert.equal(listedHarnessInstalled("codex"), false, "목록에 없으면 «이 자리엔 없다»");
+    assert.equal(listedHarnessInstalled("claude"), true);
+    set("LIVELY_SESSION_HARNESSES", undefined);
+    assert.equal(listedHarnessInstalled("claude"), undefined, "K21 목록이 없으면(구 배포) 종전 자리");
+    set("LIVELY_SESSION_HARNESSES", "claude,Codex");
+    assert.equal(listedHarnessInstalled("claude"), undefined, "깨진 목록의 일부를 믿지 않는다");
+    assert.deepEqual(ensured, [], "판정이 자리를 만들지 않는다");
+  } finally {
+    console.error = quiet;
+    registerGatewayCapabilities({ harnessSeat: undefined });
+    for (const k of KEYS) set(k, keep[k]);
+    unfreezeExecTopology();
+  }
+});
+
+t("★ K20 aiLoginCheck — 목록 판정이 자리보다 **먼저**고, 답이 나오면 자리를 만들지 않고 끝난다(로그인은 파일 판정)", () => {
+  const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"), PROFILES.indexOf("async function releaseSeat"))
+    .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  const listedAt = fn.indexOf("listedHarnessInstalled(h.key)");
+  const seatAt = fn.indexOf("harnessSeat(user, h.key, osUser)");
+  assert.ok(listedAt > 0 && seatAt > listedAt, "목록 판정이 자리 확보보다 앞이어야 한다");
+  const branch = fn.slice(fn.lastIndexOf("\n", listedAt) + 1, seatAt);
+  assert.match(branch, /const listed = osUser \? listedHarnessInstalled\(h\.key\) : undefined;/, "자리를 띄웠을 조건(osUser)에서만 대신한다");
+  assert.match(branch, /if \(listed !== undefined\) \{[\s\S]*return out;[\s\S]*\}/, "답이 나오면 거기서 끝난다");
+  assert.match(branch, /aiAccountStatus\(user, osSt\)/, "로그인은 종전 ② 와 같은 파일 판정");
+  assert.doesNotMatch(branch, /runAtSeat|releaseSeat/, "목록 판정 가지에서 자리를 만지지 않는다");
+  assert.match(branch, /if \(!listed\) return out;/, "없는 CLI 에 로그인을 묻지 않는다(⑦ 과 같은 규칙)");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

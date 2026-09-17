@@ -140,6 +140,25 @@ export interface ExecTopology {
    *   옛 경로로 조용히 폴백하지 않는 것이 의도다(그러면 오설정이 영영 안 보인다).
    */
   broker: { kind: "socket"; template: string } | null;
+  /**
+   * 세션 이미지에 설치된 하네스 키(`LIVELY_SESSION_HARNESSES`, #4067) — 배포자가 이미지와 함께 싣는 값이다
+   *  (lvly-cloud `deploy/lvly-gw.sh`, 그 값과 이미지의 일치는 lvly-cloud `sessionharness.test` 가 지킨다).
+   *  «그 AI 가 설치돼 있나» 를 **세션 컨테이너를 띄우지 않고** 답하는 근거다(profiles.aiLoginCheck).
+   *  null = 배포가 모른다(셀프호스트·구 배포) — 호출부는 종전대로 실물(자리)을 본다.
+   */
+  sessionHarnesses: readonly string[] | null;
+}
+
+/**
+ * `LIVELY_SESSION_HARNESSES` 파서(순수) — 쉼표 목록. 칸마다 앞뒤 공백을 벗기고 빈 칸은 버린다.
+ *  ⚠ 모양 밖의 칸이 **하나라도** 있으면 목록 전체를 모름(null)으로 본다 — 깨진 값의 일부만 믿으면
+ *   «설치됨» 이 조용히 줄거나 늘어난다. 모르면 호출부가 실물을 본다(느리지만 틀리지 않는다).
+ */
+export function parseSessionHarnesses(raw: string | undefined): readonly string[] | null {
+  const parts = String(raw ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  if (!parts.every((p) => /^[a-z][a-z0-9-]{0,31}$/.test(p))) return null;
+  return Object.freeze([...new Set(parts)]);
 }
 
 /**
@@ -231,7 +250,10 @@ export function computeExecTopology(env: NodeJS.ProcessEnv = process.env): ExecT
   const sockTemplate = (env.LVLY_TMUX_SOCK_TEMPLATE || "").trim() || "/lvly/tenants/{slug}/sock/session.sock";
   const broker: ExecTopology["broker"] = relayTmux ? { kind: "socket", template: sockTemplate } : null;
 
-  return { sessionHost, tmux, isolation, storage, hooks, nodeToken, attachWorkerK, tmuxRoute, tmuxListScope, broker };
+  // ── sessionHarnesses (#4067) ──  세션 이미지의 하네스 목록. 없거나 깨졌으면 null(모름).
+  const sessionHarnesses = parseSessionHarnesses(env.LIVELY_SESSION_HARNESSES);
+
+  return { sessionHost, tmux, isolation, storage, hooks, nodeToken, attachWorkerK, tmuxRoute, tmuxListScope, broker, sessionHarnesses };
 }
 
 let frozen: ExecTopology | null = null;

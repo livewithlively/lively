@@ -123,6 +123,12 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 테넌트 스코프 — 묶음·카테고리·구성원 전부 그 워크스페이스 것이다.
   { key: "category-group-backfill", intervalMs: TEN_MIN_MS,
     run: () => import("../org/liv/group-backfill.js").then((m) => m.backfillCategoryGroups()) },
+  // 로그인 판 정리(#4067) — 사람이 떠났거나 응답이 끊긴 CP 로그인 판을 멈추고, 끝난 판의 폴더를 치운다
+  //  (상민님 2026-09-17: «끝나거나 오래 진행이 없으면 꺼서 CP 에 남기지 말 것»). 판 자신의 박동도 요청이라
+  //  판이 도는 한 이 정비가 깨어난다. 판이 없는 배포(셀프호스트)에선 그 함수가 곧바로 돌아간다.
+  //  ⚠ 테넌트 스코프 — 작업 행은 RLS 로 그 워크스페이스 것만 보인다.
+  { key: "login-job-reap", intervalMs: META_HEAL_SWEEP_MS,
+    run: () => import("../terminal/login-job.js").then((m) => m.sweepLoginJobs()) },
   //  ⚠ **`reapIdleSessions`(#1059 F)는 일부러 빼 뒀다** — tmux 세션을 **죽인다.** 정책 기본이 0(끔)이라
   //   당장은 no-op 이지만, 파괴적 동작을 이 표에 얹는 것은 #2148(매니지드 유휴 회수)의 판단이다.
   //   그 짝인 위 백필은 올린다 — 원래 주석이 "회수 **전에** 백필한다"고 못 박았고 백필 자체는 안전하다.

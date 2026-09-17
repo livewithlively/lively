@@ -35,6 +35,7 @@ import {
   tmuxArgvFor,
   unfreezeExecTopology,
   parseTmuxRoute,
+  parseSessionHarnesses,
   type ExecTopology,
 } from "./exec-topology.js";
 
@@ -54,6 +55,7 @@ const TOPO_KEYS = [
   "LIVELY_BOX_CGSPAWN",
   "LIVELY_ATTACH_WORKER_K",
   "LIVELY_TMUX_ROUTE", "LVLY_TMUX_SOCK_TEMPLATE",   // #2600 T3-a — 허브 env(URL·비밀)는 토폴로지가 더는 안 읽는다
+  "LIVELY_SESSION_HARNESSES",   // #4067 — 세션 이미지의 하네스 목록
 ] as const;
 
 /** 시험용 env 한 벌 — 적지 않은 키는 «미설정»이다. */
@@ -689,6 +691,8 @@ test("★ §7 설정이 아무것도 없는 배포의 값 한 벌 — 종전과 
     tmuxListScope: "cluster",
     tmuxRoute: "off",
     broker: null,
+    //  #4067 — 세션 이미지 하네스 목록. 설정 없음 = 모름(호출부가 실물을 본다).
+    sessionHarnesses: null,
   });
 });
 
@@ -802,4 +806,39 @@ test("§d2-4 새 필드가 종전 필드를 흔들지 않는다 — 같은 env �
   const a = computeExecTopology(E({ ...MANAGED, LIVELY_ATTACH_WORKER_K: "4" }));
   const b = computeExecTopology(E({ ...MANAGED, LIVELY_ATTACH_WORKER_K: "4", LIVELY_TMUX_ROUTE: "on", LVLY_HUB_URL: "http://h:9093", LVLY_HUB_SECRET: "s" }));
   for (const k of ["sessionHost", "tmux", "isolation", "storage", "hooks", "nodeToken", "attachWorkerK"] as const) assert.deepEqual(b[k], a[k], k);
+});
+
+// ── #4067 세션 이미지 하네스 목록(K32) — «설치돼 있나» 를 세션 컨테이너 없이 답하는 근거 ─────────────────
+test("★ K32 LIVELY_SESSION_HARNESSES — 부재·빈·공백은 모름(null) · 칸 하나라도 형식 밖이면 통째로 모름 · 중복은 한 번", () => {
+  const table: Array<[string | undefined, readonly string[] | null]> = [
+    [undefined, null],
+    ["", null],
+    ["   ", null],
+    [",,", null],
+    ["claude", ["claude"]],
+    [" claude , codex,antigravity,grok ", ["claude", "codex", "antigravity", "grok"]],
+    ["claude,,codex,", ["claude", "codex"]],
+    ["claude,claude,codex", ["claude", "codex"]],
+    ["claude,Codex", null],
+    ["claude,co dex", null],
+    ["claude,../x", null],
+    ["claude,$(id)", null],
+    ["claude,-codex", null],
+    ["claude," + "a".repeat(33), null],
+    ["a".repeat(32), ["a".repeat(32)]],
+  ];
+  for (const [raw, want] of table) {
+    assert.deepEqual(parseSessionHarnesses(raw), want, JSON.stringify(raw));
+    assert.deepEqual(computeExecTopology(E({ LIVELY_SESSION_HARNESSES: raw })).sessionHarnesses, want, `토폴로지: ${JSON.stringify(raw)}`);
+  }
+  const v = parseSessionHarnesses("claude,codex")!;
+  assert.ok(Object.isFrozen(v), "읽는 쪽이 목록을 바꾸지 못한다");
+});
+
+test("K32 목록은 다른 축을 바꾸지 않는다 — 매니지드 env 에 얹어도 나머지 값이 같다", () => {
+  const managed = { LIVELY_SESSION_ENSURE: "ensure {slug}", LIVELY_TMUX_EXEC: "relay {slug}", LIVELY_MEMBER_EXEC: "mx", LIVELY_SESSION_EXEC: "sx {slug}" };
+  const a = computeExecTopology(E(managed));
+  const b = computeExecTopology(E({ ...managed, LIVELY_SESSION_HARNESSES: "claude,codex" }));
+  assert.deepEqual({ ...b, sessionHarnesses: null }, a);
+  assert.deepEqual(b.sessionHarnesses, ["claude", "codex"]);
 });

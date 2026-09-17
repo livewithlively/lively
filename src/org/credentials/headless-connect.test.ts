@@ -6,11 +6,16 @@ import {
   decideRunnerFill, validateHeadlessSecret, storeHeadlessCredential, pickFailures, headlessNotice,
   notifyHeadlessCredentialProblem, HEADLESS_NOTICE_COOLDOWN_MS, HEADLESS_NOTICE_HREF, HEADLESS_NOTICE_APP,
   isActiveAdminMember, memberIsAdminNow, headlessAdminFor, claimRunnerFromScreen, hasHeadlessCredential, headlessCredentialRow,
+  headlessAdminBasis, adminFromBasis, HEADLESS_ADMIN_BASES,
   type StoreDeps, type ClaimDeps,
 } from "./headless-connect.js";
 
 let pass = 0;
-const t = async (name: string, fn: () => void | Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
+const t = async (name: string, fn: () => void | Promise<void>): Promise<void> => {
+  try { await fn(); } catch (e) { console.log(`not ok  ${name}`); throw e; }
+  pass++;
+  console.log(`ok  ${name}`);
+};
 const TOKEN = "sk-ant-oat01-" + "Qq7_-".repeat(18) + "endAA";
 const CODEX = JSON.stringify({ tokens: { access_token: "a", refresh_token: "r", account_id: "acc-9" }, last_refresh: "2026-09-17T00:00:00Z" });
 
@@ -339,6 +344,45 @@ await t("★ 배선 M1·M5·M10·M12 — 헤드리스 경로 셋이 판정 한 �
   assert.match(hc, /fillContextJobRunnerIfUnset\(memberId, actor, "headless-connect"\)/);
   assert.match(hc, /hasCredential: async \(id\) => hasHeadlessCredential\(/, "409 판정은 «연결됨» 한 벌");
   assert.match(hc, /const c = headlessCredentialRow\(creds, h\);/, "화면의 «연결됨» 도 같은 한 벌");
+});
+
+await t("★ K29 관리자 근거(#4067) — 판의 결과는 토큰 없이 온다: 시작 때 근거를 적고 결과 때 잰다 · 근거로 잰 값 = 한 벌 판정", async () => {
+  //  근거 표 — 토큰에서만 읽는다(구성원 조회 없음).
+  assert.equal(headlessAdminBasis({ tokenSource: "static", scopes: ["admin"] }), "none");
+  assert.equal(headlessAdminBasis({ tokenSource: "db", scopes: ["admin"], appId: "app-1" }), "none");
+  assert.equal(headlessAdminBasis({ tokenSource: "session", scopes: ["admin"] }), "token");
+  assert.equal(headlessAdminBasis({ tokenSource: "db", scopes: ["items"] }), "member");
+  assert.equal(headlessAdminBasis({ scopes: "admin" }), "member", "모르는 모양의 권한은 토큰 근거가 아니다");
+  assert.equal(headlessAdminBasis({}), "member");
+  assert.deepEqual([...HEADLESS_ADMIN_BASES].sort(), ["member", "none", "token"], "DB CHECK 와 같은 셋");
+  const SCHEMA = readFileSync(new URL("../schema/sessions-infra.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+  assert.match(SCHEMA, /admin_basis TEXT NOT NULL DEFAULT 'none' CHECK \(admin_basis IN \('none','token','member'\)\)/,
+    "모르면 관리자 아님(none)이 기본값");
+  //  근거로 잰다 — member 는 **결과 때** 역할을 읽는다(시작과 결과 사이에 바뀐 역할이 이긴다).
+  let role: string[] = ["admin"];
+  const seen: string[] = [];
+  const lookup = async (id: string) => { seen.push(id); return { state: "active", scopes: role }; };
+  assert.equal(await adminFromBasis("member", "boss", lookup), true);
+  role = ["items"];
+  assert.equal(await adminFromBasis("member", "boss", lookup), false, "강등되면 결과 때 관리자가 아니다");
+  assert.deepEqual(seen, ["boss", "boss"]);
+  assert.equal(await adminFromBasis("token", "boss", lookup), true);
+  assert.equal(await adminFromBasis("none", "boss", async () => ({ state: "active", scopes: ["admin"] })), false);
+  for (const bad of [undefined, null, "", "admin", "TOKEN", 1, {}]) {
+    assert.equal(await adminFromBasis(bad, "boss", async () => ({ state: "active", scopes: ["admin"] })), false, `모르는 근거 ${String(bad)} 는 닫힌 쪽`);
+  }
+  assert.equal(seen.length, 2, "token·none·모름은 구성원을 읽지 않는다");
+  //  한 벌 — 같은 입력에서 (근거 → 판정) 과 종전 판정이 늘 같다.
+  const users = [
+    { tokenSource: "static", scopes: ["admin"] }, { tokenSource: "db", scopes: ["admin"], appId: "a" },
+    { tokenSource: "session", scopes: ["admin"] }, { tokenSource: "db", scopes: ["items"] }, { scopes: "admin" },
+  ];
+  for (const who of ["boss", "staff"]) {
+    const lk = async (id: string) => (id === "boss" ? { state: "active", scopes: ["admin"] } : { state: "active", scopes: [] });
+    for (const u of users) {
+      assert.equal(await adminFromBasis(headlessAdminBasis(u), who, lk), await headlessAdminFor(u, who, lk), `${who} ${JSON.stringify(u)}`);
+    }
+  }
 });
 
 console.log(`\n${pass} passed`);
