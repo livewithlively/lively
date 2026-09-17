@@ -918,6 +918,53 @@ await t("K37c 유닛 이름은 한 번만 적힌다 — 두 번째 표시는 아
   assert.deepEqual(w.opsOf("stop"), []);
 });
 
+// ── 판이 없는 배포 · 표가 아직 없는 창 (운영 실측 2026-09-17) ─────────────────────────
+
+/** 저장소 호출을 센다 — «DB 를 안 건드렸나» 를 보려고. */
+function countStore(w: World): { calls: string[] } {
+  const calls: string[] = [];
+  const s = w.d.store as unknown as Record<string, unknown>;
+  for (const k of Object.keys(s)) {
+    const f = s[k];
+    if (typeof f !== "function" || k === "newJobSecret" || k === "jobSecretMatches") continue;
+    s[k] = (...a: unknown[]) => { calls.push(k); return (f as (...x: unknown[]) => unknown)(...a); };
+  }
+  return { calls };
+}
+
+await t("★ K39 판이 없는 배포(셀프호스트) — 시작·상태·붙여넣기·취소·감시가 작업 행을 **읽지도 않는다**", async () => {
+  const w = world();
+  w.env.sandbox = false;
+  const c = countStore(w);
+  assert.deepEqual(await start(w), { mode: "legacy" });
+  assert.equal(await loginState(w), null);
+  assert.equal(await loginJobHeadlessState({ memberId: ME, harness: "claude" }, w.d), null);
+  assert.equal(await pasteLoginJob({ memberId: ME, purpose: "login", harness: "codex", code: "abcd" }, w.d), false);
+  assert.equal(await cancelLoginJob({ memberId: ME, purpose: "login", harness: "codex" }, w.d), false);
+  assert.deepEqual(await sweepLoginJobs(w.d), { expired: 0, reaped: 0 });
+  assert.deepEqual(c.calls, [], "종전 로그인의 조회마다 DB 를 치지 않는다");
+  assert.equal(w.ops.length, 0);
+});
+
+await t("★ K40 작업 표가 아직 없는 창(마이그레이션 전) — 500 이 아니라 종전 경로 · 그 밖의 DB 오류는 그대로 드러난다", async () => {
+  const w = world();
+  const missing = Object.assign(new Error('relation "org_login_job" does not exist'), { code: "42P01" });
+  const st = w.d.store as unknown as Record<string, unknown>;
+  for (const k of ["latestLoginJob", "openLoginJobs"]) st[k] = async () => { throw missing; };
+  assert.deepEqual(await start(w), { mode: "legacy" });
+  assert.equal(w.opsOf("launch").length, 0, "표가 없으면 판을 띄우지 않는다");
+  assert.equal(await loginState(w), null);
+  assert.equal(await loginJobHeadlessState({ memberId: ME, harness: "codex" }, w.d), null);
+  assert.equal(await pasteLoginJob({ memberId: ME, purpose: "login", harness: "codex", code: "abcd" }, w.d), false);
+  assert.equal(await cancelLoginJob({ memberId: ME, purpose: "login", harness: "codex" }, w.d), false);
+  assert.deepEqual(await sweepLoginJobs(w.d), { expired: 0, reaped: 0 });
+  const down = Object.assign(new Error("terminating connection"), { code: "57P01" });
+  for (const k of ["latestLoginJob", "openLoginJobs"]) st[k] = async () => { throw down; };
+  await assert.rejects(start(w), /terminating connection/, "표가 있는데 DB 가 아픈 것은 숨기지 않는다");
+  await assert.rejects(loginState(w), /terminating connection/);
+  await assert.rejects(sweepLoginJobs(w.d), /terminating connection/);
+});
+
 // ── 순수 판정 ─────────────────────────────────────────────────────────────────
 
 await t("staleReason — 경계는 끝낸다(>=) · 끝난 행은 이유 없음 · 첫 박동 전엔 만든 시각부터", () => {
