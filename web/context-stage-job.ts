@@ -20,12 +20,15 @@
 //   블래스트 반경이 멤버머신 훅과 다르다. 비-admin 은 상태 조회부터 막히므로 카드가 그 사실을 정직하게
 //   말하고 끝낸다(빈 카드·거짓 초록 금지). 단계 설정 자체는 비-admin 도 만질 수 있는 것이 있어(증류기는
 //   scope=memory) '기준은 세우는데 돌리지는 못하는' 비대칭이 남는다 — 서버 스코프 설계 몫으로 분리했다.
-import { api, el, relTime, state, sv, toast } from './core.js';
+import { api, el, loadPersonDirectory, personSelect, relTime, sv, toast } from './core.js';
+import { effectiveRunner, pickLabel, type PickPerson } from './lib/person-pick.js';
 
 /** 한 단계의 실행 잡 명세. actions 는 '이 단계의 잡으로 인정할 action' 목록(앞이 현행 권장 경로). */
 function statusWord(st: unknown): string {
   const s = String(st || '');
-  return s === 'ok' ? '성공' : s === 'running' ? '진행 중' : s === 'canceled' ? '중지됨' : s ? '실패' : '';
+  return s === 'ok' ? '성공' : s === 'running' ? '진행 중' : s === 'canceled' ? '중지됨'
+    : s === 'skipped' ? '건너뜀'   // 앞 실행이 아직 도는 중이라 이번 회차를 건너뛴 것 — 실패가 아니다(scheduler/engine)
+    : s ? '실패' : '';
 }
 
 export interface StageJobSpec {
@@ -236,28 +239,72 @@ export async function stageJobCard(spec: StageJobSpec, rerender: () => void): Pr
   // ── 실행 계정 — 헤드리스 단계의 숨은 전제. 없으면 매 주기 HEADLESS_REQUESTER_MISSING 으로 죽는다.
   //  ⚠ 판정은 **그 잡의 action** 으로 한다(단계로 하면 안 된다) — 같은 단계의 구 세션주입판은 params.session 으로 돌아
   //   계정이 필요 없다. 단계로 판정했더니 정상 동작 중인 세션주입 잡에 "매번 실패합니다"라는 거짓 경고가 붙었다.
-  if (String(job.action || '').endsWith('_headless')) {
-    const requester = (job.params && (job.params as any).requester) || job.created_by || null;
-    if (requester) {
-      note([el('span', { text: `AI는 ${requester} 의 계정으로 돌고, 비용도 그 계정에 붙습니다.` })]);
-    } else {
-      const meId = String((state.me && (state.me.userId || state.me.email)) || '');
-      const kids: any[] = [el('b', { text: '실행할 AI 계정이 정해지지 않아 매번 실패합니다.' }), el('span', { text: 'AI를 누구의 계정으로 돌릴지 정해 주세요.' })];
-      if (meId) {
-        const claim = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: `내 계정(${meId})으로 정하기` }) as HTMLButtonElement;
-        claim.addEventListener('click', async () => {
-          claim.disabled = true;
-          try {
-            await patch(job.id, { params: { ...(job.params || {}), requester: meId } });
-            toast(`실행 계정을 ${meId} 로 정했습니다`); rerender();
-          } catch (e) { toast((e as Error).message, true); claim.disabled = false; }
-        });
-        kids.push(claim);
-      }
-      note(kids, true);
-    }
-  }
+  if (String(job.action || '').endsWith('_headless')) card.append(await runnerNote(spec.stage, job, rerender));
   return card;
+}
+
+/**
+ * 이 자동 실행이 **누구의 AI 계정으로** 도는지 — 이름으로 말하고, 그 자리에서 바꾸게 한다(#4052).
+ *
+ *  종전엔 «AI는 sangmin-yoon 의 계정으로 돌고…» 처럼 구성원 id 를 그대로 보였고, 정해지지 않았으면 [내 계정(id)으로
+ *   정하기] 단추 하나뿐이었다 — 다른 사람으로 정할 길이 없었고, 그 id 가 누구인지 볼 화면도 없었다(상민님 2026-09-17).
+ *
+ *  보이는 계정은 **서버가 실제로 쓰는 것**과 같아야 한다 — 순서는 scheduler/actions/_headless.resolveJobRunner 그대로:
+ *   ① 이 자동 실행에 정한 계정(params.requester) → ② 워크스페이스 실행 계정(context_job_policy.runner_member)
+ *   → ③ 자동 실행을 만든 사람(created_by). 종전 카드는 ②를 건너뛰어, 워크스페이스 설정으로 도는 잡을 «만든 사람» 계정으로 보였다.
+ *  ⚠ 레인(증류기·분류기·관리기)이 자기 실행 계정을 정했으면 그 레인은 **그 계정으로** 돈다 — 그 사실은 레인 설정 칸이 말한다.
+ *  고르는 칸의 값은 ①이다. 비우면 ②·③을 따르고, 그 이름을 칸의 빈 글로 보인다.
+ *  ③이 명부에 없는 계정이면(매니지드에선 운영 계정이 잡을 심는다) 경고한다 — 그 계정엔 AI 자격이 없어 실제로는 돌지 않는다.
+ */
+async function runnerNote(stage: string, job: any, rerender: () => void): Promise<HTMLElement> {
+  const explicit = String((job.params && job.params.requester) || '').trim();
+  const [runner, people] = await Promise.all([
+    api('/api/ui/me/headless').then((r: any) => (r && r.runner) || null).catch(() => null),
+    loadPersonDirectory('people').catch((): PickPerson[] | null => null),
+  ]);
+  const wsId = String((runner && runner.member) || '').trim();
+  const creator = String(job.created_by || '').trim();
+  const known = (id: string): boolean => !people || !!pickLabel(people, id)?.known;   // 명부를 못 읽었으면 경고하지 않는다
+  const nameOf = (id: string): string => {
+    const lab = people ? pickLabel(people, id) : null;
+    if (lab && lab.known) return lab.name;
+    return id === wsId && runner && runner.name ? String(runner.name) : id;
+  };
+  const fallback = effectiveRunner({ workspace: wsId, creator })?.id ?? '';
+  const effective = effectiveRunner({ explicit, workspace: wsId, creator })?.id ?? '';
+
+  const pick = personSelect({
+    value: explicit,
+    label: `${stage} 실행 계정`,
+    emptyText: !fallback ? '누구의 계정으로 돌릴지 고르세요'
+      : wsId ? `비워 두면 워크스페이스 기본 — ${nameOf(wsId)}`
+      : `비워 두면 자동 실행을 켠 사람 — ${nameOf(creator)}`,
+    onChange: async (id) => {
+      const params: Record<string, unknown> = { ...(job.params || {}) };
+      if (id) params.requester = id; else delete params.requester;
+      try {
+        await patch(job.id, { params });
+        toast(id ? `실행 계정을 ${nameOf(id)} 님으로 정했습니다`
+          : fallback ? `이 자동 실행의 실행 계정을 비웠습니다 — ${nameOf(fallback)} 님의 계정으로 돕니다` : '실행 계정을 비웠습니다');
+        rerender();
+      } catch (e) { toast((e as Error).message, true); pick.set(explicit); }
+    },
+  });
+
+  let text: string;
+  let warn = false;
+  if (!effective) {
+    text = '실행할 AI 계정이 정해지지 않아 돌지 않습니다. 누구의 계정으로 돌릴지 골라 주세요.';
+    warn = true;
+  } else if (!known(effective)) {
+    text = `AI가 구성원 목록에 없는 계정(${effective})으로 돌게 되어 있습니다 — 그 계정에 AI 자격이 없으면 돌지 않습니다. 사람을 골라 주세요.`;
+    warn = true;
+  } else {
+    text = `AI는 ${nameOf(effective)} 님의 계정으로 돌고, 비용도 그 계정에 붙습니다.`;
+  }
+  return el('div', { class: 'cxr-note cxr-runner' + (warn ? ' is-warn' : '') },
+    el('span', { class: 'cxr-runner-t', text }),
+    el('div', { class: 'cxr-runner-pick' }, pick.el));
 }
 
 function clockIcon(): SVGElement {

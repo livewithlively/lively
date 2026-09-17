@@ -61,6 +61,17 @@ function publicOidc(s: OidcSettings): OidcSettingsPublic {
   };
 }
 
+/**
+ * 기본 실행 멤버로 앉혀도 되는 구성원인가(#4052) — 안 되면 사람에게 보일 이유, 되면 null.
+ *  운영 계정(system)·AI 구성원·나간 사람은 사람의 AI 자격이 없다 — 그 이름으로 돌면 아무도 모르게 실패한다.
+ */
+export function runnerFillRefusal(id: string, m: { state?: string | null; kind?: string | null } | null): string | null {
+  if (!m) return `구성원 '${id}' 가 없습니다`;
+  if (m.state !== "active") return `'${id}' 는 활성 구성원이 아닙니다`;
+  if (m.kind !== "human") return `'${id}' 는 사람 구성원이 아닙니다(${m.kind ?? "종류 모름"})`;
+  return null;
+}
+
 export const runtimeConfigCapabilities: Capability[] = [
   // ── 발행(검증 + 산출 확인) ──
   // ── 런타임 설정(훅 on/off · work-roots · 너지) ──
@@ -736,4 +747,36 @@ export const runtimeConfigCapabilities: Capability[] = [
         trust_unverified_email: z.boolean().optional().describe("⚠ IdP 가 email_verified 를 아예 안 줄 때만 켠다 — 켜면 미검증 이메일로도 구성원에 매칭된다"),
       }).optional().describe("회사 계정(OIDC) 웹 로그인 설정(#1520) — DB 우선, 비면 .env(OIDC_*) 시드. 리디렉션 URI 는 <게이트웨이>/api/ui/auth/oidc/callback"),
     }),
+  // #4052 — 워크스페이스 실행 멤버(D1)를 **정해진 적 없을 때만** 채운다. 매니지드 CP 가 새 워크스페이스의 오너를
+  //  기본 실행 계정으로 앉히는 자리다(증류·분류 자동 실행을 켠 채로 시작하는데, 계정이 비면 운영 계정 이름으로 돌아
+  //  아무도 모르게 실패한다). org_runtime_update 로는 못 한다 — 그건 무조건 덮어쓰고, «읽고 → 쓰면» 그 사이
+  //  관리자가 정한 값을 덮는다. 판정·쓰기를 한 문장으로 하는 store.fillContextJobRunnerIfUnset(#4051)을 그대로 쓴다.
+  //  에이전트 표면(MCP)에는 안 연다 — 사람이 정할 값은 org_runtime_update 가 이미 받는다.
+  {
+    name: "org_context_job_runner_fill",
+    title: "기본 실행 멤버 채우기(비어 있을 때만)",
+    description: "맥락관리 잡(증류·분류·관리)의 워크스페이스 실행 멤버(context_job_policy.runner_member)가 **한 번도 정해진 적 없을 때만** " +
+      "이 구성원으로 채운다. 관리자가 비워 둔 것(명시적 null)·이미 정해진 것·env 시드는 건드리지 않는다. 활성 사람 구성원만 받는다.",
+    scope: "admin",
+    input: {
+      member: z.string().describe("기본 실행 멤버로 앉힐 구성원 id(활성 사람 구성원)"),
+    },
+    expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/org/context-job-runner/fill"], parse: (req) => req.body ?? {} }] },
+    handler: async (input: Record<string, unknown>, user: LivelyUser) => {
+      const id = str(input.member, "member", 128).trim();
+      if (!id) throw new HttpError(400, "member(구성원 id)가 필요합니다");
+      const { getMember } = await import("../../org/store/members.js");
+      const m = await getMember(id);
+      const refusal = runnerFillRefusal(id, m);
+      if (refusal || !m) throw new HttpError(400, `${refusal} — 기본 실행 멤버로 정할 수 없습니다`);
+      const { fillContextJobRunnerIfUnset, getContextJobPolicySource } = await import("../../org/store/runtime-config.js");
+      const filled = await fillContextJobRunnerIfUnset(m.id, actorOf(user), "context-job-runner-fill");
+      const c = await getRuntimeConfig();
+      return {
+        filled,
+        runner_member: c.context_job_policy?.runner_member ?? null,
+        source: await getContextJobPolicySource(),
+      };
+    },
+  },
 ];

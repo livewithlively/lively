@@ -20,7 +20,7 @@
 //   · **사각지대를 맨 위에** — "증류기를 켰는데 왜 안 줄지?"의 답이 목록보다 먼저 보인다.
 //   · **채널은 고르는 것** — 실재하는 채널 목록(건수·잔량 포함)에서 눌러 담는다(오타 원천 차단).
 //   · **반사판은 늘 곁에** — 설정을 만지는 내내 "지금 이게 무엇을 집는가"가 오른쪽에 붙어 있다.
-import { api, busy, el, relTime, replaceKids, sv, toast } from './core.js';
+import { api, busy, el, personSelect, relTime, replaceKids, sv, toast } from './core.js';
 import { svcTile } from './svc-icons.js';
 import { svcLogo } from './svc-logos.js';
 import { icon as lineIcon } from './v2/icons.js';
@@ -520,7 +520,8 @@ function editorPage(d, isNew: boolean): HTMLElement {
   const run = runConfig({ harness: v('harness'), model: v('model'), effort: v('effort') }, '');
   const { harnessSel, modelSel, effortSel } = run;
   for (const sel of [harnessSel, modelSel, effortSel]) sel.className = 'dst-in dst-in-sm';
-  const reqIn = el('input', { type: 'text', class: 'dst-in dst-in-sm', value: v('requester'), placeholder: '구성원 id — 비우면 자동 실행을 만든 사람' });
+  //  실행 계정(#4052) — 종전엔 «구성원 id» 를 치는 글자칸이었다(그 id 를 볼 화면이 없었다). 이름으로 찾아 고른다.
+  const reqPick = personSelect({ value: v('requester'), emptyText: '비워 두면 자동 실행에 정한 계정으로 돕니다', label: '실행 계정' });
 
   const collect = () => {
     const kw = rKw.value.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -553,7 +554,7 @@ function editorPage(d, isNew: boolean): HTMLElement {
       mode: modeSel.value,
       session_ref: (sessIn as HTMLInputElement).value.trim() || null,
       ...run.value(),
-      requester: (reqIn as HTMLInputElement).value.trim() || null,
+      requester: reqPick.value() || null,
       // 조각: 손대지 않은(빈) 칸은 **키를 아예 안 보낸다** — 미지정=기본값이고, 빈 문자열은 '그 조각을 뺀다'는
       //  다른 뜻이기 때문이다. 조각 UI 를 아직 안 불러왔으면 이 필드를 건드리지 않는다(기존 설정 보존).
       ...(sectionsLoaded.v ? { prompt_sections: (() => {
@@ -770,7 +771,7 @@ function editorPage(d, isNew: boolean): HTMLElement {
       row2(
         F('한 번에 읽을 대화 수', 'AI가 한 번에 읽는 대화 묶음 수입니다(자료 건수가 아닙니다). 2~3을 권합니다.', batchIn),
         F('한 번에 담을 메시지 상한', '대화를 담다가 이 수를 넘으면 멈춥니다. 첫 대화는 예외로 통째로 담습니다. 20~40을 권합니다.', batchMsgIn)),
-      F('실행 계정', '이 사람의 AI 계정으로 돌고, 비용도 그 계정에 붙습니다.', reqIn),
+      F('실행 계정', '이 사람의 AI 계정으로 돌고, 비용도 그 계정에 붙습니다.', reqPick.el),
       row2(
         F('실행 방식', '매번 새 세션에서 돌리면 이전 판단에 끌려가지 않습니다(권장).', modeSel),
         F('늘 켜 둔 세션 id', '「늘 켜 둔 AI 세션에 보내서」일 때만 필요합니다.', sessIn)),
@@ -887,7 +888,9 @@ async function runJobCard(rerender) {
       action: 'distill_sources_headless', params: {}, interval_sec: 1800,
       note: '켜진 증류기별로 미증류 자료 배치를 헤드리스 AI 세션에 접수. 증류기가 없으면 전 자료 공통 기본 증류.',
     },
-    missingLine: '증류 자동 실행이 없습니다 — 증류기를 만들어도 자료가 지식이 되지 않습니다.',
+    //  #4052 — 종전 문장은 «증류기를 만들어도 자료가 지식이 되지 않습니다» 였는데, 증류기를 켜면 잡이 함께 생긴다(#2415).
+    //   사실인 부분만 남긴다.
+    missingLine: '증류 자동 실행이 없어 쌓인 자료가 지식이 되지 않습니다.',
     // 분류와 같은 이유 — 구 세션주입판(distill_sources)은 params.session 이 있어야 돈다.
     unrunnable: (j) => (j.action === 'distill_sources' && !(j.params && j.params.session))
       ? '지금 등록된 증류 자동 실행은 늘 켜 둔 AI 세션이 있어야 도는 옛 방식인데, 그 세션이 정해져 있지 않습니다 — 이대로 켜면 매번 실패합니다.'

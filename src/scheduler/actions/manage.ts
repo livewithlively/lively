@@ -4,7 +4,7 @@
 //   · mismatch·outdated — 결정적 SQL 판정. **이 틱 안에서** 발견을 쌓고 auto 면 조치까지 한다(LLM 비용 0).
 //   · contradiction·code_drift — 후보를 좁혀 헤드리스 배치로 접수. 판정은 AI 가 하고
 //     org_manager_finding_report 로 되돌려 적는다.
-import { resolveJobRunner, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
+import { resolveJobRunner, explicitRunner, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 import { listManagers, getManager, needsLlm } from "../../org/store/managers.js";
 import { runManager, type ManagerRunResult } from "../../org/manage/run-manager.js";
 
@@ -25,17 +25,19 @@ export async function runManagers(
   } catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e) } }; }
   if (!targets.length) return { status: "ok", summary: { skipped: "켜진 관리기 없음" } };
 
-  // LLM 이 필요한 관리기가 하나라도 있으면 의뢰자가 있어야 한다 — 결정적 관리기만이면 없어도 돈다
+  // LLM 이 필요한 관리기가 있으면 돌릴 계정이 있어야 한다 — 결정적 관리기만이면 없어도 돈다
   //  (분류 어긋남·아웃데이티드는 LLM 을 안 쓰므로 과금 귀속이 필요 없다).
+  //  #4052 — 관리기가 자기 실행 계정을 정했으면 그걸로 돈다(잡 수준이 비어도). 종전엔 잡 수준이 비면 그런 관리기까지 멈췄다.
   const requester = await resolveJobRunner(params.requester, createdBy);
-  if (!requester && targets.some((m) => needsLlm(m.kind))) return HEADLESS_REQUESTER_MISSING;
+  if (!requester && targets.some((m) => needsLlm(m.kind) && !explicitRunner(m.requester))) return HEADLESS_REQUESTER_MISSING;
 
   const out: ManagerRunResult[] = [];
   for (const m of targets) {
-    const enqueue = requester
+    const runner = explicitRunner(m.requester) ?? requester;
+    const enqueue = runner
       ? async (prompt: string, o: { harness?: string | null; model?: string | null; effort?: string | null; requester?: string | null; repo?: string | null; extra?: Record<string, unknown> }) =>
           enqueueHeadlessTask({
-            prompt, requester: o.requester || requester, jobId,
+            prompt, requester: explicitRunner(o.requester) ?? runner, jobId,
             // repo 를 주면 base clone→worktree 를 자동 준비해 작업 cwd 로 삼는다(#1419 T8) —
             //  지식↔코드 비교는 코드를 실제로 읽어야 판정할 수 있고, 워크트리 없이는 AI 가 추측하게 된다.
             repo: o.repo ?? null,

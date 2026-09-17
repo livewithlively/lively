@@ -786,6 +786,16 @@
   "input_hash": "e4899b729f8f8961"
  },
  {
+  "name": "org_context_job_runner_fill",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/context-job-runner/fill"
+  ],
+  "input_hash": "c8a393e3ff4dc512"
+ },
+ {
   "name": "org_alert_status",
   "scope": "memory",
   "mcp": true,

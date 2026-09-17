@@ -2,7 +2,7 @@
 //  #1419 T4 — 분류기(org_classifier)가 생기면서 대상·기준·후보축이 **설정**이 됐다. 잡은 두 모드로 돈다:
 //   · params.classifier 지정 → 그 분류기 하나 · 미지정 → 켜진 분류기 전부(병렬 접수, 증류 잡과 동형)
 //   · 분류기가 하나도 없으면 **종전 전역 동작 그대로**(무중단 — listUnmappedKnowledge(50) + 기존 프롬프트)
-import { resolveSessionTmux, injectToSession, resolveJobRunner, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
+import { resolveSessionTmux, injectToSession, resolveJobRunner, explicitRunner, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 import { listClassifiers, getClassifier, classifierInbox, markClassifierSeen, recordClassifierRun, type ClassifierRow } from "../../org/store/classifiers.js";
 
 // #982 미분류 지식 분류 주입 — map_unmapped 의 지식판. 카테고리 0건 지식이 있을 때만 상시세션에 분류 프롬프트 주입.
@@ -30,8 +30,10 @@ export async function runClassifyKnowledgeInject(params: Record<string, unknown>
 // #1061 classify_knowledge 의 헤드리스판 — 인박스(미분류 지식) 있을 때만, 매 배치 fresh claude -p 로 분류(관성 회피).
 //  buildClassifyKnowledgePrompt(세션판과 동일 — 관성 대응 '매 배치 should 재조회·근거 인용 강제' 포함) 재사용. 배치 50/수렴은 인박스가 담보(다음 주기가 잔여 드레인).
 export async function runClassifyKnowledgeHeadless(params: Record<string, unknown>, jobId: string, createdBy: string | null): Promise<{ status: string; summary: unknown }> {
+  //  잡 수준 실행 계정(잡 params → 워크스페이스 실행 멤버 → 만든 사람). 분류기가 자기 계정을 정했으면 그쪽이 앞선다.
+  //  ⚠ #4052 — 여기서 곧바로 «미설정» 으로 끝내지 않는다. 종전엔 잡 수준이 비면 **자기 계정을 정한 분류기까지** 못 돌았다
+  //   (화면의 «실행 계정» 칸을 채워도 안 듣는 자리). 멈추는 판정은 아래에서 «돌릴 계정이 정말 하나도 없을 때» 만 한다.
   const requester = await resolveJobRunner(params.requester, createdBy);
-  if (!requester) return HEADLESS_REQUESTER_MISSING;
 
   // ── #1419 T4 — 분류기가 있으면 분류기별로 접수(배타 배정·기준·후보축이 분류기 설정에서 온다). ──
   //  분류기가 하나도 없으면 아래 레거시 전역 경로로 떨어진다(무중단).
@@ -48,16 +50,20 @@ export async function runClassifyKnowledgeHeadless(params: Record<string, unknow
   } catch { /* org_classifier 부재(구 배포) → 레거시 경로 */ }
 
   if (targets.length) {
+    // 어느 분류기도 돌릴 계정이 없으면 종전과 같은 실패 — 연속 실패 차단기(#1675 ④)가 세는 자리다.
+    if (!requester && !targets.some((c) => explicitRunner(c.requester))) return HEADLESS_REQUESTER_MISSING;
     const out: unknown[] = [];
     for (const c of targets) {
       try {
+        const runner = explicitRunner(c.requester) ?? requester;
+        if (!runner) { out.push({ classifier: c.key, ...HEADLESS_REQUESTER_MISSING.summary }); continue; }
         const inbox = await classifierInbox(c);
         if (!inbox.length) { out.push({ classifier: c.key, skipped: "인박스 비었음" }); continue; }
         const prompt = (typeof params.prompt === "string" && params.prompt.trim())
           ? params.prompt.trim()
           : buildClassifierPrompt(c, inbox);
         const r = await enqueueHeadlessTask({
-          prompt, requester: c.requester || requester, jobId,
+          prompt, requester: runner, jobId,
           // 제공자·모델·추론강도(#4008) — 분류기 설정 우선, 없으면 잡 params, 그래도 없으면 그 하네스의 자동화 기본값.
           harness: headlessHarness(params, c),
           ...headlessRun(c, params),
@@ -87,6 +93,7 @@ export async function runClassifyKnowledgeHeadless(params: Record<string, unknow
   }
 
   // ── 레거시 전역 경로 — 분류기가 하나도 없는 배포. 종전과 정확히 같다. ──
+  if (!requester) return HEADLESS_REQUESTER_MISSING;
   const { listUnmappedKnowledge } = await import("../../v6/knowledge-store.js");
   let inbox: Array<{ name: string }>;
   try { inbox = await listUnmappedKnowledge(50); }

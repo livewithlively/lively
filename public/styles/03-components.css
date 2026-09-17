@@ -488,3 +488,28 @@ a.wikicat-owner:hover { text-decoration: underline; }
 .toast.coral::before { background: var(--coral); }
 .toast .btn-text { padding: 0 2px; color: var(--blue); }
 
+/* ── 사람 한 명 고르기(#4052, lib/person-select) — 이름으로 찾아 고르는 드롭다운. 값은 구성원 id, 보이는 건 이름.
+   칸은 .cf-trigger(컴팩트 피커)와 같은 높이·테두리, 목록 행·얼굴은 초대 피커(.proj-mp-*)를 그대로 쓴다.
+   목록은 body 에 붙는 fixed 층이라 카드·접힘의 overflow 에 안 잘리고, 모달(.ov-back 1450)·ⓘ(1500) 위에 뜬다. */
+.psel { min-width: 0; max-width: 420px; }
+.psel-box { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 6px 0 10px; box-sizing: border-box;
+  border: 1px solid var(--line-net); border-radius: 9px; background: var(--bg); cursor: text; }
+.psel-box:hover { border-color: var(--line-net-2); }
+.psel-box:focus-within { outline: 2px solid var(--blue); outline-offset: 1px; }
+.psel-face { flex: none; display: inline-flex; }
+.psel-face[hidden] { display: none; }
+.psel-in { flex: 1; min-width: 0; padding: 7px 0; border: 0; outline: none; background: transparent;
+  font: inherit; font-size: 13.5px; color: var(--ink); }
+.psel-in::placeholder { color: var(--muted-2); }
+.psel-clear { flex: none; width: 24px; height: 24px; border: 0; border-radius: 6px; background: none;
+  color: var(--muted-2); font-size: 15px; line-height: 1; cursor: pointer; }
+.psel-clear:hover { background: var(--bg-tint); color: var(--ink); }
+.psel-clear:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.psel-clear[hidden] { display: none; }
+.psel-caret { flex: none; padding: 0 2px; color: var(--muted-2); font-size: 11px; cursor: pointer; }
+.psel-note { margin: 5px 0 0; font-size: 12px; line-height: 1.5; color: var(--warn-ink); word-break: keep-all; }
+.psel-note[hidden] { display: none; }
+.psel-menu { position: fixed; right: auto; z-index: 1600; }
+.psel-opt.is-active { background: var(--bg-sel); }
+.psel-me { color: var(--muted-2); font-weight: 400; }
+.psel-sub { flex: none; font-size: 12px; color: var(--muted-2); }

@@ -376,7 +376,7 @@ function awsRoleCard(creds: any[], reload: () => void) {
   const targetSel = el('select', {},
     el('option', { value: '', text: '전원 기본 (조직 통합 · readonly 권장)' }),
     el('option', { value: 'member', text: '특정 구성원 오버라이드' })) as HTMLSelectElement;
-  const member = memberCombo({ placeholder: '구성원 id 선택/검색 (예: daon)' });
+  const member = memberCombo({ placeholder: '이름으로 찾아 고르기' });
   const memberField = field('대상 구성원', member.el);
   const arnIn = el('input', { type: 'text', placeholder: 'arn:aws:iam::123456789012:role/lively-readonly' });
   const regionSel = el('select', {}, ...AWS_REGIONS.map((r) => el('option', { value: r, text: r })));

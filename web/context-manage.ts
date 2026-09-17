@@ -2,7 +2,7 @@
 //
 //  두 서브탭: '발견'(일감)이 먼저고 '관리기'(설정)가 뒤다 — 여기 오는 사람의 90%는 설정을 바꾸러 오는 게
 //  아니라 **쌓인 것을 처리하러** 온다. 설정 화면을 먼저 보여 주면 매번 한 번 더 눌러야 한다.
-import { api, busy, cardHead, el, fmtNum, relTime, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, fmtNum, personSelect, relTime, toast, uiText } from './core.js';
 import { confirmDialog } from './admin.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
 import { runConfig } from './context-run-config.js';    // #4008 제공자·모델·추론강도 공용 선택기
@@ -338,13 +338,16 @@ function managerEditor(m: any | null, reload: () => void) {
     placeholder: '예) 고객 대응 문서는 표현이 달라도 결론이 같으면 모순이 아니다.' }) as HTMLTextAreaElement;
   critIn.value = m?.criteria_md ?? '';
   const batchIn = el('input', { type: 'number', style: S, min: '1', max: '200', value: String(m?.batch_size ?? 20) }) as HTMLInputElement;
-  const reqIn = el('input', { type: 'text', style: S, value: m?.requester ?? '', placeholder: '판단이 필요한 종류에만 쓰입니다' }) as HTMLInputElement;
-  //  제공자·모델·추론강도(#4008) — 의뢰자와 같은 이유로 **AI 가 판정하는 종류에만** 쓰인다(모순·코드 비교).
+  //  실행 계정(#4052) — 종전엔 구성원 id 를 치는 글자칸이었다. 이름으로 찾아 고른다.
+  //   AI 가 판정하는 종류(모순·코드 비교)에만 쓰이므로 아래 runFields 안에 두어 함께 숨긴다 — 쓰이지 않는 칸은 묻지 않는다.
+  const reqPick = personSelect({ value: m?.requester ?? '', emptyText: '비워 두면 자동 실행에 정한 계정으로 돕니다', label: '실행 계정' });
+  //  제공자·모델·추론강도(#4008) — 실행 계정과 같은 이유로 **AI 가 판정하는 종류에만** 쓰인다(모순·코드 비교).
   //   분류 어긋남·아웃데이티드는 SQL 판정이라 LLM 을 아예 안 쓴다 — 그 종류에서 이 칸을 보여 주면
   //   «골랐는데 안 듣는다» 가 되므로 syncSensitivity 가 함께 숨긴다.
   const run = runConfig({ harness: m?.harness ?? null, model: m?.model ?? null, effort: m?.effort ?? null }, S);
   const runFields = el('div', {},
-    F('AI 제공자', '「자동」이면 의뢰자가 로그인한 AI 중에서 고릅니다(클로드 우선).', run.harnessSel),
+    F('실행 계정', '모순·코드 비교는 AI 가 판정합니다 — 이 사람의 AI 계정으로 돌고, 비용도 그 계정에 붙습니다.', reqPick.el),
+    F('AI 제공자', '「자동」이면 실행 계정이 로그인한 AI 중에서 고릅니다(클로드 우선).', run.harnessSel),
     F('모델', '판단이 까다로우면 더 좋은 모델을 권합니다. 정확해지는 만큼 비쌉니다.', run.modelSel),
     F('추론 강도', '높일수록 정확하고 비쌉니다.', run.effortSel),
     run.hint) as HTMLElement;
@@ -364,7 +367,7 @@ function managerEditor(m: any | null, reload: () => void) {
         stale_days: staleIn.value.trim() ? Number(staleIn.value) : null,
         criteria_md: critIn.value.trim() || null,
         batch_size: Number(batchIn.value) || 20,
-        requester: reqIn.value.trim() || null,
+        requester: reqPick.value() || null,
         ...run.value(),
       }) });
       toast(isNew ? '관리기를 만들었습니다' : '저장했습니다');
@@ -385,7 +388,6 @@ function managerEditor(m: any | null, reload: () => void) {
     thField, staleField,
     F('판단 기준', '이 조직에서 무엇을 문제로 볼지 적으세요. 판단이 필요한 종류(모순·코드 비교)의 AI 지시문에 들어갑니다.', critIn),
     F('한 번에 검사할 수', '', batchIn),
-    F('의뢰자', '모순·코드 비교는 AI 가 판정합니다 — 이 사람의 계정으로 실행·과금됩니다.', reqIn),
     runFields,
     el('label', { class: 'admin-check' }, enabledChk, ' 이 관리기 사용'),
     el('div', { class: 'ctx-actions' }, saveBtn, cancelBtn));
