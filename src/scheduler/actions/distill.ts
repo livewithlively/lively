@@ -143,8 +143,14 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
     }], considered: 0 };
   }
 
+  //  #4052 후속 — 전용 잡이 켜진 증류기는 **그 잡이** 맡는다(예: 처음 설정이 심은 local-files 전용 10분 잡).
+  //   이 경로(무지정 = 전체 접수)가 또 집으면 같은 자료가 두 잡에서 나간다 — 중첩 방지 표식이 잡마다 달라 같은 틱이면
+  //   판정 기록 전에 둘 다 인박스를 읽는다. 배치만 뺀다: 폴백 판정(위)과 방치 계산(아래)은 **켜진 증류기 전부**로 한다
+  //   (그 레인 자료를 «방치» 로 세거나, 켜진 레인이 전부 전용이라고 전역 폴백으로 떨어지면 다시 두 번 나간다).
+  const dedicated = await dedicatedDistillersSafe();
+  const serve = enabled.filter((d) => !dedicated.has(String(d.key)) && !dedicated.has(String(d.id)));
   const batches: DistillBatch[] = [];
-  for (const d of enabled) {
+  for (const d of serve) {
     const inbox = await listDistillerInbox(d, all);
     // 이 스레드에 이미 있는 지식(#1289) — 답글만 혼자 온 배치가 부모 지식을 못 찾아 파편을 만드는 걸 막는다.
     const threadKn = await listThreadKnowledge(inbox);
@@ -207,6 +213,14 @@ async function idleSummary(considered: number, extra: Record<string, unknown>): 
   return { status: "ok", summary: {
     skipped: "켜진 증류기가 이미 판정함(처리 중) — 새로 낼 배치 없음",
     undistilled, stranded: 0, distillers: considered, ...extra } };
+}
+
+// 전용 잡이 맡은 증류기 — 잡 목록을 못 읽으면 아무것도 빼지 않는다(종전 동작: 전체 잡이 켜진 증류기 전부를 집는다).
+async function dedicatedDistillersSafe(): Promise<Set<string>> {
+  try {
+    const { readDistillJobs, dedicatedDistillerKeys } = await import("../../org/distill/ensure-job.js");
+    return dedicatedDistillerKeys(await readDistillJobs());
+  } catch { return new Set(); }
 }
 
 // 판정 기록 — 실패해도 배치를 깨지 않는다(다음 배치가 그 자료를 다시 볼 뿐, 지금까지의 동작으로 되돌아간다).

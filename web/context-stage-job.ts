@@ -22,6 +22,7 @@
 //   scope=memory) '기준은 세우는데 돌리지는 못하는' 비대칭이 남는다 — 서버 스코프 설계 몫으로 분리했다.
 import { api, el, loadPersonDirectory, personSelect, relTime, sv, toast } from './core.js';
 import { effectiveRunner, pickLabel, type PickPerson } from './lib/person-pick.js';
+import { pickStageJob, stageOffTargets } from './lib/stage-job-pick.js';
 
 /** 한 단계의 실행 잡 명세. actions 는 '이 단계의 잡으로 인정할 action' 목록(앞이 현행 권장 경로). */
 function statusWord(st: unknown): string {
@@ -74,6 +75,11 @@ export interface StageJobSpec {
   usesAi?: boolean;
   /** 이 단계의 기계 이름(수집기…) — 여러 개가 각자 도는 읽기 전용 단계의 문장에 쓴다(「켜진 수집기 3개가 …」). */
   unitName?: string;
+  /**
+   * 켜진 잡이 여럿일 때 **대표로 보여 줄 잡**의 조건(#4052 후속, lib/stage-job-pick). 없으면 목록 순 첫 켜진 잡.
+   *  증류가 쓴다 — 한 레인 전용 잡(local-files 10분)이 목록 앞에 오면 카드가 그 주기로 말하고 그 잡만 껐다.
+   */
+  prefer?: (job: any) => boolean;
 }
 
 /** 주기 선택지 — 초 단위. 분 단위 임의 입력 대신 고른다(60초 미만은 서버가 거부하므로 애초에 못 고르게). */
@@ -148,7 +154,7 @@ export async function stageJobCard(spec: StageJobSpec, rerender: () => void): Pr
   //  matchId 가 있으면 같은 action 을 쓰는 남의 계보를 먼저 걷어낸다(수집의 sync-<system> — 위 주석).
   const found = spec.actions.map((a) => jobs.filter((j) => j.action === a)).flat()
     .filter((j) => !spec.matchId || spec.matchId(String(j.id)));
-  const job = found.find((j) => j.enabled === true) ?? found[0];
+  const job = pickStageJob(found, spec.prefer);
 
   // ── 없다 ──────────────────────────────────────────────────────────────
   if (!job) {
@@ -227,8 +233,18 @@ export async function stageJobCard(spec: StageJobSpec, rerender: () => void): Pr
   sw.addEventListener('change', async () => {
     const next = sw.checked;
     sw.disabled = true;
-    try { await patch(job.id, { enabled: next }); toast(`${spec.stage} 자동 실행을 ${next ? '켰' : '껐'}습니다`); rerender(); }
-    catch (e) { toast((e as Error).message, true); sw.checked = !next; sw.disabled = false; }
+    //  끌 때는 이 단계의 켜진 잡 **전부**를 끈다(#4052 후속) — 대표 하나만 끄면 같은 일을 하는 다른 잡이 계속 돌아
+    //   다시 그려도 «켜짐» 이고, 사람은 끈 줄 알았는데 AI 비용이 난다. 켤 때는 대표 하나만(꺼 둔 다른 잡은 되살리지 않는다).
+    const targets = next ? [job] : stageOffTargets(found, job);
+    try {
+      for (const t of targets) await patch(t.id, { enabled: next });
+      toast(`${spec.stage} 자동 실행을 ${next ? '켰' : '껐'}습니다` + (targets.length > 1 ? ` (자동 실행 ${targets.length}개)` : ''));
+      rerender();
+    } catch (e) {
+      //  여럿을 끄다 중간에 실패하면 일부만 꺼졌다 — 추측으로 되돌리지 말고 다시 그려 실제 상태를 보인다.
+      toast((e as Error).message, true); sw.checked = !next; sw.disabled = false;
+      if (targets.length > 1) rerender();
+    }
   });
   acts.append(sel, run, sw);
 
