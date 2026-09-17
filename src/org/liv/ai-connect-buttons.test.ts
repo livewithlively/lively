@@ -49,7 +49,9 @@ test("② 그래도 빠져나갈 문은 **하나** 남아 있다 — 사람을 �
 
 test("③ 성공하면 목록 화면으로 간다 — 이 흐름을 지운 적 없다(무회귀)", () => {
   const BIND = SRC.slice(SRC.indexOf("      bind: (el) => {", SRC.indexOf("    claude: {")));
-  assert.match(BIND, /const pass = \(name, key\) => \{ mark\(name, key\); toast\('연결됐어요\.'\); renderScene\('claude', false\); \};/,
+  //  #4051 — 알림 문구는 «사람 없이 도는 작업» 허용이 남았는지에 따라 갈린다(scripts/onboarding-headless.test.mjs W9 가 잠근다).
+  //   여기서 지키는 것은 «성공하면 이 장면을 다시 그린다» 하나다.
+  assert.match(BIND, /const pass = \(name, key\) => \{ mark\(name, key\); toast\([^;]*\); renderScene\('claude', false\); \};/,
     "성공 뒤 이 장면을 다시 그리지 않는다 — «연결됨 체크» 목록 화면에 못 닿는다");
   assert.match(SCENE, /연결됨<\/span><\/span><span class="ob-oc-chk">/,
     "연결된 AI 를 체크로 보여 주는 카드가 사라졌다");
