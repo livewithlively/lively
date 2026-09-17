@@ -171,4 +171,6 @@ export const domainWikiConnector: Connector = {
   name: SYSTEM,
   backfill,
   postSync,
+  //  게이트웨이 호스트의 레포 경로(repo_path)를 읽고 git pull 한다 — 판에는 그 경로가 없다(#3994 T3).
+  needsGatewayDisk: true,
 };

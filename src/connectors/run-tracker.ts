@@ -8,9 +8,13 @@
 //     프로세스 내부용 — REST 와 크론이 섞여도 이 DB 가드가 겹침을 막는다).
 //   · 로그는 tail 400KB 로 캡(right) — 대형 백필도 행이 비대해지지 않게. 전체 관측이 필요하면 stats·검증기.
 //   · 게이트웨이 재시작으로 고아가 된 running 행은 다음 시작 시 error 로 정리(2시간 기준).
+//   · (#3994 T3) 매니지드에선 수집을 게이트웨이 **밖** 일시 유닛(판)에서 돌린다 — run-unit.ts 머리말.
+//     그때 이 파일의 추적(trackRunChild)은 판 안 엔트리(job-entry)가 부르고, 게이트웨이는 기다리기·멈추기·치우기만 한다.
 import { spawn, execFile, type ChildProcess } from "node:child_process";
-import { itemsPool, tenantBindingActive, tenantBindingSql } from "../db/client.js";
+import { itemsPool, tenantBindingActive, tenantBindingSql, withTx } from "../db/client.js";
 import { logger } from "../log.js";
+import { HttpError } from "../http-error.js";
+import type { JobRoute } from "./run-unit.js";   // 타입만 — run-unit 은 동적으로 부른다(아래 unitMod)
 
 const LOG_CAP = 400_000;          // connector_run.log tail 캡(문자)
 const FLUSH_MS = 1500;            // 로그 flush 주기(하트비트 겸용)
@@ -159,6 +163,78 @@ export interface StartRunResult {
   done: Promise<{ ok: boolean; exitCode: number | null }>;
 }
 
+/**
+ * 판 자리가 없다(#3994 T3) — 박스·프로필 동시 상한. **행을 만들지 않았다.** 기다리면 풀린다(배압):
+ *  크론은 이번 틱을 건너뛴 것으로 적고(실패 아님), 사람의 «지금 수집» 에는 그대로 사유를 보여 준다.
+ */
+export class RunCapacityError extends HttpError {
+  constructor(message: string) { super(503, message); this.name = "RunCapacityError"; }
+}
+
+const unitMod = (): Promise<typeof import("./run-unit.js")> => import("./run-unit.js");
+
+/**
+ * 판을 쓸 수 있는 박스인가 + 이 워크스페이스 slug — 둘 다 있어야 판 이름을 짓는다. 없으면 null.
+ *  · 새 판(launch) — `sandboxAvailable()`: 소켓이 있고 되돌림 스위치(LIVELY_TASK_SANDBOX=off)가 꺼져 있지 않다.
+ *  · 이미 도는 판의 관리(manage: 정지·상태·입양) — **소켓만** 본다. 스위치를 켠 뒤에도 켜기 전에 뜬 판은 멈추고 치울 수 있어야 한다
+ *    (스위치가 그 판들을 «관리 불능» 으로 만들면 사용자 중지가 조용히 먹히지 않는다).
+ */
+async function unitContext(o: { manage?: boolean } = {}): Promise<{ slug: string } | null> {
+  try {
+    const [sbx, { tenantSlug }] = await Promise.all([import("../node/sandbox-task.js"), import("../terminal/catalog.js")]);
+    const slug = tenantSlug();
+    if (!slug) return null;
+    if (!o.manage) return sbx.sandboxAvailable() ? { slug } : null;
+    const fs = await import("node:fs");
+    try { return fs.statSync(sbx.sandboxOpSock()).isSocket() ? { slug } : null; } catch { return null; }
+  } catch { return null; }
+}
+
+/**
+ * 커넥터가 게이트웨이 디스크에 기대나(#3994 T3) — null 은 «못 가렸다»(판으로 보내지 않는다).
+ *  수집기 실행이면 프리셋을 해소해 **기반 모듈**을 본다(복제 프리셋은 원본 모듈의 표지를 따른다). 범용 드라이버
+ *  (http·rss·webhook)는 디스크를 안 쓴다.
+ */
+async function connectorNeedsGatewayDisk(system: string, collectorId: number | null | undefined): Promise<boolean | null> {
+  try {
+    const { connectors } = await import("./index.js");
+    if (!collectorId) {
+      const c = connectors[system];
+      return c ? c.needsGatewayDisk === true : null;
+    }
+    const { resolvePreset, moduleNameOf } = await import("../org/store/collector-presets.js");
+    const preset = await resolvePreset(system);
+    if (!preset) return null;
+    const mod = moduleNameOf(preset);
+    if (!mod) return false;
+    const c = connectors[mod];
+    return c ? c.needsGatewayDisk === true : null;
+  } catch { return null; }
+}
+
+/** 이 수집의 실행 자리(판/자식) — 판정은 run-unit.jobRoute 한 곳. */
+async function decideRunRoute(system: string, collectorId: number | null | undefined): Promise<{ route: JobRoute; slug: string | null }> {
+  const [{ jobRoute }, ctx] = await Promise.all([unitMod(), unitContext()]);
+  const pre = jobRoute({
+    sandbox: !!ctx, codeRoot: process.env.LIVELY_CODE_ROOT, slug: ctx?.slug,
+    switchValue: process.env.LIVELY_GATEWAY_JOB, needsGatewayDisk: false,
+  });
+  //  커넥터 해소(DB 조회일 수 있다)는 판을 쓸 수 있는 박스에서만 한다.
+  if (!pre.unit) return { route: pre, slug: ctx?.slug ?? null };
+  const disk = await connectorNeedsGatewayDisk(system, collectorId);
+  return {
+    route: jobRoute({ sandbox: true, codeRoot: process.env.LIVELY_CODE_ROOT, slug: ctx!.slug, switchValue: process.env.LIVELY_GATEWAY_JOB, needsGatewayDisk: disk }),
+    slug: ctx!.slug,
+  };
+}
+
+/** run 로그에 한 줄 보탠다(tail 캡). onlyRunning 이면 이미 닫힌 행에는 안 쓴다. 실패는 삼킨다. */
+export async function appendRunLog(runId: number, text: string, o: { onlyRunning?: boolean } = {}): Promise<void> {
+  await itemsPool.query(
+    `UPDATE connector_run SET log = right(log || $2, ${LOG_CAP}), log_total = log_total + char_length($2::text) WHERE id=$1${o.onlyRunning ? " AND status='running'" : ""}`,
+    [runId, text]).catch((e) => logger.warn({ e: (e as Error)?.message, runId }, "connector_run 로그 추가 실패(무시)"));
+}
+
 export async function startConnectorRun(
   system: string,
   opts: { full?: boolean; trigger?: "cron" | "manual"; startedBy?: string | null; collectorId?: number | null } = {},
@@ -174,6 +250,8 @@ export async function startConnectorRun(
 
   // 유령 정리 — 하트비트가 STALE 이상 끊긴 running 행은 추적(부모)이 죽은 것(게이트웨이 재시작 등).
   //  error 로 닫고, 자식이 살아 남아있으면 kill(명령줄 검증) — 커서 미전진이라 데이터는 다음 run 이 재수집.
+  //  (#3994 T3) 판 실행(pid 없음)은 판 추적기가 1.5초마다 박동을 찍는다 — 끊겼다면 판이 죽었거나 DB 에 못 닿는다.
+  //   행을 닫고 그 판에 **멈추라고 전한다**(이름이 run id 에서 나오므로 남의 판을 건드릴 수 없다).
   const ghostMarker = `\n[tracker] 추적 끊김(게이트웨이 재시작 등, 하트비트 ${Math.round(HEARTBEAT_STALE_MS / 1000)}s 무응답) — 정리됨. 커서 미전진이라 다음 run 이 재수집합니다.`;
   const ghosts = await itemsPool.query(
     `UPDATE connector_run SET status='error', finished_at=now(),
@@ -181,8 +259,21 @@ export async function startConnectorRun(
      WHERE ${scopeSql} AND status='running' AND heartbeat_at < now() - interval '${Math.round(HEARTBEAT_STALE_MS / 1000)} seconds'
        AND NOT (id = ANY($2::bigint[]))
      RETURNING id, pid`, [scopeVal, [...liveRuns.keys()], ghostMarker]);
+  const ghostUnits: number[] = [];
   for (const g of ghosts.rows as Array<{ id: number; pid: number | null }>) {
-    if (await killIfRunSync(g.pid, system)) logger.warn({ runId: g.id, pid: g.pid }, "유령 run 의 잔존 자식 프로세스 종료");
+    if (g.pid) {
+      if (await killIfRunSync(g.pid, system)) logger.warn({ runId: g.id, pid: g.pid }, "유령 run 의 잔존 자식 프로세스 종료");
+    } else ghostUnits.push(Number(g.id));
+  }
+  if (ghostUnits.length) {
+    const ctx = await unitContext({ manage: true });
+    if (ctx) {
+      const u = await unitMod();
+      for (const id of ghostUnits) {
+        const stopped = await u.stopRunUnit(ctx.slug, id).catch(() => false);
+        logger.warn({ runId: id, slug: ctx.slug, stopped }, "유령 run 의 판에 정지를 전했다");
+      }
+    }
   }
 
   // 중복 가드 — 이미 도는 run 이 있으면 그걸 돌려준다(멱등 UX: 버튼 연타·크론 겹침 안전).
@@ -192,11 +283,94 @@ export async function startConnectorRun(
     return { runId: Number((running.rows[0] as { id: string | number }).id), alreadyRunning: true, done: Promise.resolve({ ok: true, exitCode: null }) };
   }
 
+  //  #3994 T3 — 실행 자리. 판을 쓸 수 있으면 판, 판 경로가 이 박스에서 아직 안 서면(fallback) 자식으로 내려온다.
+  const { route, slug } = await decideRunRoute(system, opts.collectorId);
+  let note = (await unitMod()).jobRouteNote(route);
+  if (route.unit && slug) {
+    const viaUnit = await startRunInUnit(system, opts, slug, String(process.env.LIVELY_CODE_ROOT), { scopeSql, scopeVal });
+    if (viaUnit.kind === "started") return viaUnit.result;
+    note = `[tracker] 게이트웨이 자식으로 실행 — 판을 세우지 못했다(${viaUnit.why}). 게이트웨이 교대에 끊길 수 있습니다.`;
+  }
+  return await startRunAsChild(system, opts, note);
+}
+
+/** 판 실행 결과 — 섰거나(행이 있다), 이 박스에서 판 경로가 아직 안 서서 자식으로 내려가야 하거나. */
+type UnitStart = { kind: "started"; result: StartRunResult } | { kind: "fallback"; why: string };
+
+/**
+ * 판에서 수집을 띄운다(#3994 T3) — **판이 먼저, 행이 나중**이다.
+ *  ① 같은 범위의 트랜잭션 락 안에서 «이미 도는가» 를 다시 보고 ② run id 를 먼저 받아 ③ 판을 띄운 뒤 ④ 행을 커밋한다.
+ *  판 추적기(job-entry)는 자기 행이 보일 때까지 기다린다(JOB_ROW_WAIT_MS) — 커밋 전에 게이트웨이가 죽으면 행이 없으니
+ *  판은 아무것도 안 긁고 끝난다(고아 수집 0). 거꾸로(행이 먼저) 하면 자리 없음(busy)마다 빈 실행 행이 쌓인다.
+ *  · 자리 없음 → RunCapacityError(행 없음) · 이 박스에서 판 경로가 아직 안 섬 → fallback
+ *  · 그 밖의 실패 → 실패 행을 남긴다(사유 포함). 판이 섰을 수 있는 실패면 멈추라고 먼저 전한다.
+ */
+async function startRunInUnit(
+  system: string,
+  opts: { full?: boolean; trigger?: "cron" | "manual"; startedBy?: string | null; collectorId?: number | null },
+  slug: string, codeRoot: string, scope: { scopeSql: string; scopeVal: string | number },
+): Promise<UnitStart> {
+  const u = await unitMod();
+  const mode = opts.full ? "full" : "incremental";
+  //  끝난 판의 결과 폴더 청소 — 기다리던 게이트웨이가 교대로 사라지면 아무도 안 치운다. 실패해도 시작을 막지 않는다.
+  void u.reapFinishedRunUnits(slug, async (ids) => {
+    const r = await itemsPool.query(`SELECT id FROM connector_run WHERE id = ANY($1::bigint[]) AND status='running'`, [ids]);
+    return new Set((r.rows as Array<{ id: string | number }>).map((x) => Number(x.id)));
+  }).catch((e) => logger.warn({ e: (e as Error)?.message, slug }, "끝난 수집 판 청소 실패(무시)"));
+
+  const tenantKey = String(tenantBindingSql()?.params?.[0] ?? "");
+  const out = await withTx(async (client): Promise<UnitStart | { kind: "running"; runId: number }> => {
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`connector_run:${tenantKey}:${scope.scopeVal}`]);
+    const again = await client.query(
+      `SELECT id FROM connector_run WHERE ${scope.scopeSql} AND status='running' ORDER BY started_at DESC LIMIT 1`, [scope.scopeVal]);
+    if (again.rows[0]) return { kind: "running", runId: Number((again.rows[0] as { id: string | number }).id) };
+    const seq = await client.query(`SELECT nextval(pg_get_serial_sequence('connector_run','id')) AS id`);
+    const runId = Number((seq.rows[0] as { id: string | number }).id);
+    const job = { system, runId, collectorId: opts.collectorId ?? null, full: opts.full === true };
+    const memMb = Number(process.env.LIVELY_GATEWAY_JOB_MEM_MB) > 0 ? Number(process.env.LIVELY_GATEWAY_JOB_MEM_MB) : null;
+    const launch = await u.launchRunUnit({ slug, codeRoot, job, env: u.jobEnvDoc(childEnv(system)), memMb });
+    const insert = async (status: "running" | "error", log: string): Promise<void> => {
+      await client.query(
+        `INSERT INTO connector_run(id, system, mode, trigger, started_by, collector_id, status, finished_at, log, log_total)
+         VALUES($1,$2,$3,$4,$5,$6,$7, CASE WHEN $7='running' THEN NULL ELSE now() END, $8, char_length($8::text))`,
+        [runId, system, mode, opts.trigger ?? "cron", opts.startedBy ?? null, opts.collectorId ?? null, status, log]);
+    };
+    const why = `${launch.reply.code ?? "?"}: ${String(launch.reply.error ?? "").slice(0, 500)}`;
+    switch (launch.cls) {
+      case "ok":
+        await insert("running", `[tracker] 판 ${launch.unit} 에서 실행 — 게이트웨이 교대·재시작에 끊기지 않습니다.\n`);
+        return { kind: "started", result: { runId, alreadyRunning: false, done: watchRunUnit(runId, slug) } };
+      case "busy":
+        throw new RunCapacityError(`수집 판 자리가 없습니다(${why}) — 도는 수집이 끝나면 다음 주기에 시작합니다.`);
+      case "fallback":
+        logger.warn({ system, slug, code: launch.reply.code, error: launch.reply.error }, "수집 판을 세우지 못해 게이트웨이 자식으로 실행");
+        return { kind: "fallback", why };
+      case "fail": {
+        if (u.launchMayHaveStarted(launch.reply.code)) await u.stopRunUnit(slug, runId).catch(() => false);
+        await insert("error", `[tracker] 판을 띄우지 못했다(${why}). 커서 미전진이라 다음 run 이 재수집합니다.\n`);
+        logger.error({ system, slug, runId, code: launch.reply.code, error: launch.reply.error }, "수집 판 띄우기 실패");
+        return { kind: "started", result: { runId, alreadyRunning: false, done: Promise.resolve({ ok: false, exitCode: null }) } };
+      }
+    }
+  });
+  if (out.kind === "running") {
+    return { kind: "started", result: { runId: out.runId, alreadyRunning: true, done: Promise.resolve({ ok: true, exitCode: null }) } };
+  }
+  return out;
+}
+
+/** 종전 길 — 게이트웨이 자식으로 run-sync 를 띄우고 이 프로세스가 추적한다. note 가 있으면 로그 첫 줄로 남긴다. */
+async function startRunAsChild(
+  system: string,
+  opts: { full?: boolean; trigger?: "cron" | "manual"; startedBy?: string | null; collectorId?: number | null },
+  note: string | null,
+): Promise<StartRunResult> {
   const mode = opts.full ? "full" : "incremental";
   const ins = await itemsPool.query(
     `INSERT INTO connector_run(system, mode, trigger, started_by, collector_id) VALUES($1,$2,$3,$4,$5) RETURNING id`,
     [system, mode, opts.trigger ?? "cron", opts.startedBy ?? null, opts.collectorId ?? null]);
   const runId = Number((ins.rows[0] as { id: string | number }).id);
+  if (note) await appendRunLog(runId, `${note}\n`);
 
   //  #3994 T2-a — 자식에게 자기 run 번호를 넘긴다. 하트비트(생존 증거)를 자식이 직접 찍어야
   //   부모(게이트웨이)가 재시작해도 «살아 있는 수집» 이 유령으로 오판되지 않는다.
@@ -210,7 +384,32 @@ export async function startConnectorRun(
     await itemsPool.query(`UPDATE connector_run SET pid=$2 WHERE id=$1`, [runId, child.pid])
       .catch((e) => logger.warn({ e: (e as Error)?.message, runId }, "connector_run pid 기록 실패(무시)"));
   }
+  const done = trackRunChild(runId, child, {
+    isCanceled: () => liveRuns.get(runId)?.canceled === true,
+    onClose: () => { liveRuns.delete(runId); },
+  });
+  return { runId, alreadyRunning: false, done };
+}
 
+export interface TrackOpts {
+  /** 이 프로세스가 자식을 멈췄나(사용자 중지) — 끝 기록을 canceled 로. */
+  isCanceled(): boolean;
+  /** 자식이 닫힌 직후(끝 기록 전). */
+  onClose?(): void;
+  /** 자식 출력의 사본을 받을 곳(판 안 추적기가 자기 stdout 에 남긴다). */
+  echo?(chunk: Buffer): void;
+  /**
+   * 끝 기록을 «아직 running 인 행에만» 쓴다(#3994 T3 판 추적기). 행이 이미 닫혔으면(사용자 중지·유령 정리) 덮지 않는다 —
+   *  게이트웨이 자식 길은 종전대로 무조건 쓴다(그 길의 중지는 이 프로세스의 canceled 플래그가 나른다).
+   */
+  guardFinal?: boolean;
+}
+
+/**
+ * 자식(run-sync) 하나를 추적해 connector_run 행에 적는다 — 로그 스트리밍·하트비트·정체/하드캡 종료·끝 기록.
+ *  게이트웨이(자식 길)와 판 안 엔트리(job-entry)가 **같은 함수**를 쓴다: 판으로 옮겨도 기록 규칙이 한 벌이다.
+ */
+export function trackRunChild(runId: number, child: ChildProcess, o: TrackOpts): Promise<{ ok: boolean; exitCode: number | null }> {
   // ── 로그 스트리밍 — 버퍼 + 주기/임계 flush. append 는 tail 캡(right). flush = 하트비트 겸용. ──
   let buf = "";
   let flushing = Promise.resolve();
@@ -232,7 +431,7 @@ export async function startConnectorRun(
     return flushing;
   };
   const timer = setInterval(() => { void flush(); }, FLUSH_MS);
-  const onChunk = (c: Buffer) => { lastOutputAt = Date.now(); buf += c.toString("utf8"); if (buf.length >= FLUSH_BYTES) void flush(); };
+  const onChunk = (c: Buffer) => { lastOutputAt = Date.now(); buf += c.toString("utf8"); o.echo?.(c); if (buf.length >= FLUSH_BYTES) void flush(); };
   child.stdout?.on("data", onChunk);
   child.stderr?.on("data", onChunk);
 
@@ -250,13 +449,13 @@ export async function startConnectorRun(
     }
   }, 60_000);
 
-  const done = new Promise<{ ok: boolean; exitCode: number | null }>((resolve) => {
+  return new Promise<{ ok: boolean; exitCode: number | null }>((resolve) => {
     child.on("error", (err) => { buf += `\n[tracker] spawn 실패: ${err.message}`; });
     child.on("close", (code) => {
       clearInterval(timer);
       clearInterval(killer);
-      const canceled = liveRuns.get(runId)?.canceled === true;
-      liveRuns.delete(runId);
+      const canceled = o.isCanceled();
+      o.onClose?.();
       void (async () => {
         await flush();
         // 마지막 pino JSON 라인에서 요약(stats) 추출 — 실패해도 무해(로그가 원본).
@@ -276,15 +475,67 @@ export async function startConnectorRun(
         const ok = code === 0;
         // 정상 완주(exit 0)는 취소 플래그보다 우선 — kill 직전에 이미 끝난 run 을 canceled 로 오기록하지 않게(리뷰 지적).
         await itemsPool.query(
-          `UPDATE connector_run SET status=$2, exit_code=$3, finished_at=now(), stats=$4::jsonb WHERE id=$1`,
+          `UPDATE connector_run SET status=$2, exit_code=$3, finished_at=now(), stats=$4::jsonb WHERE id=$1${o.guardFinal ? " AND status='running'" : ""}`,
           [runId, ok ? "ok" : canceled ? "canceled" : "error", code, stats == null ? null : JSON.stringify(stats)])
           .catch((e) => logger.warn({ e: (e as Error)?.message, runId }, "connector_run 종료 기록 실패"));
         resolve({ ok, exitCode: code });
       })();
     });
   });
+}
 
-  return { runId, alreadyRunning: false, done };
+/** 판 감시 주기 — DB 한 줄 조회. 판 추적기가 끝을 적으면 다음 주기에 안다. */
+const UNIT_WATCH_MS = 5_000;
+/** 박동이 끊긴 채 판 상태를 끝내 못 읽으면(op 에 못 닿음) 이만큼 뒤에 실패로 닫는다. */
+const UNIT_BLIND_CLOSE_MS = 15 * 60_000;
+
+/**
+ * 판 실행이 끝나기를 기다린다(#3994 T3) — 크론의 `done`. 기록은 판 추적기가 하고, 이 함수는 **읽기만** 한다.
+ *  · 행이 running 을 벗어나면 끝 — 판 결과 폴더를 치운다.
+ *  · 박동이 끊겼고(유령 임계) 판이 **죽었으면** 판 추적기가 끝을 못 적은 것이다 — 사유(유닛 상태·stderr 꼬리)를 붙여 닫는다.
+ *    판이 살아 있거나 상태를 모르면(op 못 닿음) 계속 본다. 다만 모르는 채 박동이 UNIT_BLIND_CLOSE_MS 넘게 끊기면 닫는다.
+ *  · 이 게이트웨이가 교대로 사라지면 이 대기도 사라진다 — 판과 기록은 그대로 간다(다음 시작의 유령 정리·결과 폴더 청소가 수습).
+ */
+export function watchRunUnit(runId: number, slug: string, o: { everyMs?: number } = {}): Promise<{ ok: boolean; exitCode: number | null }> {
+  const every = o.everyMs ?? UNIT_WATCH_MS;
+  return new Promise((resolve) => {
+    const finish = (v: { ok: boolean; exitCode: number | null }): void => {
+      void unitMod().then((u) => u.reapRunUnit(slug, runId)).catch(() => false);
+      resolve(v);
+    };
+    const tick = async (): Promise<void> => {
+      try {
+        const r = await itemsPool.query(
+          `SELECT status, exit_code, EXTRACT(EPOCH FROM (now() - heartbeat_at)) * 1000 AS quiet_ms FROM connector_run WHERE id=$1`, [runId]);
+        const row = r.rows[0] as { status: string; exit_code: number | null; quiet_ms: string | number } | undefined;
+        if (!row) { resolve({ ok: false, exitCode: null }); return; }
+        if (row.status !== "running") { finish({ ok: row.status === "ok", exitCode: row.exit_code }); return; }
+        const quiet = Number(row.quiet_ms);
+        if (quiet > HEARTBEAT_STALE_MS) {
+          const u = await unitMod();
+          const st = await u.runUnitState(slug, runId).catch(() => null);
+          const live = u.jobUnitLive(st);
+          if (live === false || (live === null && quiet > UNIT_BLIND_CLOSE_MS)) {
+            const tail = live === false ? await u.runUnitStderrTail(slug, runId) : "";
+            const reason = live === false ? u.jobGoneReason(st) : `판 상태를 읽지 못한 채 박동이 ${Math.round(quiet / 60000)}분 끊겼다`;
+            const marker = `\n[tracker] ${reason}${tail ? ` — stderr: ${tail.slice(-1500)}` : ""}. 커서 미전진이라 다음 run 이 재수집합니다.`;
+            const upd = await itemsPool.query(
+              `UPDATE connector_run SET status='error', finished_at=now(),
+                      log = right(log || $2, ${LOG_CAP}), log_total = log_total + char_length($2::text)
+               WHERE id=$1 AND status='running'`, [runId, marker]);
+            if (upd.rowCount) {
+              if (live === null) await u.stopRunUnit(slug, runId).catch(() => false);
+              logger.warn({ runId, slug, reason }, "수집 판이 끝 기록 없이 끝나 실패로 닫았다");
+              finish({ ok: false, exitCode: null });
+              return;
+            }
+          }
+        }
+      } catch { /* DB 일시 오류 — 다음 주기 */ }
+      setTimeout(() => { void tick(); }, every);
+    };
+    setTimeout(() => { void tick(); }, every);
+  });
 }
 
 /**
@@ -301,14 +552,33 @@ export async function recoverOrphanConnectorRuns(): Promise<void> {
   //  ★ 무조건 닫고 죽이던 자리(#3994 T2-a). 수집 자식은 부모와 함께 죽지 않으므로, kill 이 빗나가면
   //   그 자식이 완주해 **커서를 전진시키는데 run 행은 이미 error** 인 스플릿브레인이 났다.
   //   살아 있으면 이어받고(adopt), 죽었을 때만 닫는다. 판정은 orphanVerdict 한 곳.
-  const { orphanVerdict } = await import("./sync-outcome.js");
+  const { orphanVerdict, unitRunAlive } = await import("./sync-outcome.js");
   const cand = await itemsPool.query(
-    `SELECT id, system, pid FROM connector_run WHERE status='running' AND NOT (id = ANY($1::bigint[]))`, [own]);
-  for (const g of cand.rows as Array<{ id: number; system: string; pid: number | null }>) {
-    const aliveAndOurs = await isOurRunSync(g.pid, g.system);
+    `SELECT id, system, pid, EXTRACT(EPOCH FROM (now() - heartbeat_at)) * 1000 AS quiet_ms
+     FROM connector_run WHERE status='running' AND NOT (id = ANY($1::bigint[]))`, [own]);
+  let ctx: { slug: string } | null | undefined;   // 판 실행 행을 만났을 때만 한 번 묻는다
+  for (const g of cand.rows as Array<{ id: number; system: string; pid: number | null; quiet_ms: string | number }>) {
+    let aliveAndOurs: boolean;
+    if (g.pid) aliveAndOurs = await isOurRunSync(g.pid, g.system);
+    else {
+      //  #3994 T3 — pid 없는 행은 판 실행이다(자식 실행은 띄우자마자 pid 를 적는다). 생존 입력을 pid 가 아니라
+      //   판 추적기의 박동과 판 상태에서 받는다. 판정 규율(orphanVerdict)은 그대로다.
+      const quietMs = Number(g.quiet_ms);
+      let unitLive: boolean | null = null;
+      if (!(quietMs <= HEARTBEAT_STALE_MS)) {
+        if (ctx === undefined) ctx = await unitContext({ manage: true });
+        if (ctx) {
+          const u = await unitMod();
+          unitLive = u.jobUnitLive(await u.runUnitState(ctx.slug, Number(g.id)).catch(() => null));
+        }
+      }
+      aliveAndOurs = unitRunAlive({ quietMs, staleMs: HEARTBEAT_STALE_MS, unitLive });
+    }
     const v = orphanVerdict({ pid: g.pid, aliveAndOurs });
     if (v.adopt) {
-      logger.warn({ runId: g.id, system: g.system, pid: g.pid }, "부팅 스윕 — 살아 있는 수집 자식을 이어받는다(죽이지 않음)");
+      logger.warn({ runId: g.id, system: g.system, pid: g.pid }, g.pid
+        ? "부팅 스윕 — 살아 있는 수집 자식을 이어받는다(죽이지 않음)"
+        : "부팅 스윕 — 살아 있는 수집 판을 이어받는다(판 추적기가 기록을 잇는다)");
       continue;
     }
     await itemsPool.query(
@@ -339,7 +609,7 @@ export async function cancelConnectorRun(id: number, actor?: string | null): Pro
   }
   await killIfRunSync(row.pid, row.system);
   // status='running' 가드 — 자연 종료(close 기록)와 경합해도 완주 결과를 canceled 로 덮지 않는다(리뷰 지적).
-  const marker = `\n[tracker] ${who}(추적 부모 부재 — 직접 정리)`;
+  const marker = row.pid ? `\n[tracker] ${who}(추적 부모 부재 — 직접 정리)` : `\n[tracker] ${who} — 판에 정지를 전한다`;
   const upd = await itemsPool.query(
     `UPDATE connector_run SET status='canceled', finished_at=now(),
             log = right(log || $2, ${LOG_CAP}), log_total = log_total + char_length($2::text)
@@ -347,6 +617,16 @@ export async function cancelConnectorRun(id: number, actor?: string | null): Pro
   if (!upd.rowCount) {
     const cur = (await itemsPool.query(`SELECT status FROM connector_run WHERE id=$1`, [id])).rows[0] as { status: string } | undefined;
     return { ok: false, message: `이미 종료된 실행(${cur?.status ?? "?"})` };
+  }
+  if (!row.pid) {
+    //  #3994 T3 판 실행 — 행을 **먼저** 닫았다(판 추적기의 끝 기록은 running 행에만 쓴다 — 여기 canceled 를 안 덮는다).
+    //   그다음 판을 멈춘다. 멈춤은 비대기이고, 이미 끝난 판이면 op 가 성공으로 접는다.
+    const ctx = await unitContext({ manage: true });
+    if (ctx) {
+      const stopped = await (await unitMod()).stopRunUnit(ctx.slug, id).catch(() => false);
+      if (!stopped) return { ok: true, message: "중지로 기록했지만 판에 정지를 전하지 못했습니다 — 판은 시간 상한에 스스로 끝납니다." };
+      return { ok: true, message: "중지됨 — 판에 정지를 전했습니다. 커서 미전진이라 다음 run 이 재수집합니다." };
+    }
   }
   return { ok: true, message: "중지됨" };
 }

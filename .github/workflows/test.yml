@@ -134,6 +134,15 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/source-tree.pg-test.mjs
+      # ⑤-c 수집 판(#3994 T3) — 매니지드에서 수집을 게이트웨이 밖 일시 유닛으로 뺀 경로의 **run 행 상태 전이**.
+      #    판 엔트리를 실제 프로세스로 띄우고(수집 자식까지 진짜 run-sync), 게이트웨이 경로는 가짜 op 소켓 앞에서 돌린다.
+      #    «판 먼저·행 나중» · 자기 행을 본 뒤에만 수집 · 끝 기록은 running 행에만 · 취소는 행을 먼저 닫는다 ·
+      #    기록 없이 죽은 판은 감시가 닫는다 — 전부 SQL 조건과 순서라 목 풀로는 하나를 지워도 초록이다.
+      - name: 수집 판(게이트웨이 밖 수집) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/connectors/job-entry.pg-test.mjs
       # ⑥ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.

@@ -20,6 +20,7 @@ export interface SyncTargetOutcome {
  *
  *  · 타깃이 0개면 ok — 켜진 수집기가 없는 것은 실패가 아니다.
  *  · `skipped:"already_running"` 은 ok — 이미 도는 중이고 기다리면 풀린다(정상 배압).
+ *    `skipped:"capacity"`(#3994 T3 — 판 자리 없음, 행을 안 만들었다)도 같다.
  *    단 그건 **ok 가 참일 때만** 이다. 실패에 붙은 skipped 를 정상으로 접지 않는다.
  *  · ok 가 비었거나(undefined) 항목이 객체가 아니면 **실패로 본다** — 모르는 결과를 정상으로 적지 않는다.
  */
@@ -61,6 +62,20 @@ export interface OrphanVerdict {
 export function orphanVerdict(inp: OrphanInput): OrphanVerdict {
   if (inp.aliveAndOurs) return { close: false, kill: false, adopt: true };
   return { close: true, kill: false, adopt: false };
+}
+
+/**
+ * 판 실행(#3994 T3)의 «살아 있나» — orphanVerdict 의 aliveAndOurs 자리에 들어가는 입력.
+ *
+ *  판(게이트웨이 밖 일시 유닛)에는 pid 가 없다(run 행의 pid 가 비어 있다). 대신 판 안 추적기가 1.5초마다 **자기 행에**
+ *   박동을 찍으므로, 박동이 곧 생존 증거다 — 게이트웨이가 몇 번 재시작해도 박동은 안 멈춘다.
+ *  · 박동이 임계 안이면 산 것이다(판에 묻지 않는다).
+ *  · 박동이 끊겼으면 판에 물어 **살아 있다고 답할 때만** 산 것이다. 모르면(op 에 못 닿음) 죽은 것으로 본다 —
+ *    «모름» 을 «삶» 으로 접으면 행이 영원히 running 으로 남아 그 수집기의 다음 실행이 막힌다(유령 정리도 같은 기준이다).
+ */
+export function unitRunAlive(i: { quietMs: number; staleMs: number; unitLive: boolean | null }): boolean {
+  if (Number.isFinite(i.quietMs) && i.quietMs <= i.staleMs) return true;
+  return i.unitLive === true;
 }
 
 /** 자식이 자기 생존을 적는 주기 — 유령 판정 임계보다 충분히 짧아야 한다(임계의 1/2 이하). */
