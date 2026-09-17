@@ -136,12 +136,20 @@ export async function enqueueHeadlessTask(o: { prompt: string; requester: string
 
   const { createTask } = await import("../../node/task-store.js");
   const { tryAssignNow } = await import("../../node/task-scheduler.js");
-  const { resolveHeadlessHarness } = await import("../../node/headless-harness.js");
+  const { resolveHeadlessHarness, resolveSandboxHarness } = await import("../../node/headless-harness.js");
+  const { isContextJob, sandboxAvailable } = await import("../../node/sandbox-task.js");
 
   // 실행 하네스(#1884) — 명시가 무효(헤드리스 불가)면 접수하지 않고 잡 결과로 말한다. 로그인 프로브 실패는 안에서 claude 로 접는다.
+  //  #4052 후속 — 샌드박스 판으로 갈 맥락 잡(매니지드)은 **로그인 프로브를 부르지 않는다**. 그 판은 저장된 헤드리스 자격으로 돌고,
+  //   프로브는 사람 없는 새 워크스페이스에도 로그인 세션을 띄워 테넌트를 못 재우게 했다(resolveSandboxHarness 머리말).
+  //   판정은 배정(task-scheduler)과 같은 두 술어다 — 여기서 갈리면 프로브 없이 고른 하네스가 tmux 판으로 가거나 그 반대가 된다.
+  const sandboxed = isContextJob({ exec_profile: o.execProfile ?? null }) && sandboxAvailable();
   let harness: string;
-  try { harness = await resolveHeadlessHarness(o.requester, o.harness ?? null); }
-  catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e), requester: o.requester, ...extra } }; }
+  try {
+    harness = sandboxed
+      ? await resolveSandboxHarness(o.requester, o.harness ?? null)
+      : await resolveHeadlessHarness(o.requester, o.harness ?? null);
+  } catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e), requester: o.requester, ...extra } }; }
 
   // 모델·추론강도 확정(#4008) — **하네스가 정해진 지금** 대입한다(왜 여기인지는 headlessRun 주석).
   //  dropped 는 «설정값이 이 하네스 것이 아니어서 기본으로 갈아탔다» 는 관측 — 잡 요약에 실어 조용히 넘어가지 않게 한다.
