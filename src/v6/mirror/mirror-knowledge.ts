@@ -8,7 +8,7 @@ import { classifyIngest } from "../../org/ingest/ingest-classify.js";
 import type { RawItem } from "../../items/store.js";
 import { resolveIngestPolicy } from "../../org/ingest/ingest-policy.js";
 import { getIngestPolicyRules } from "../../org/ingest/ingest-policy-load.js";
-import { auditConnector, auditLifecycleSweep } from "./mirror-common.js";
+import { auditConnector, auditLifecycleSweep, claimSyncStateSql } from "./mirror-common.js";
 import { boundCollector } from "../../connectors/config.js";
 
 /**
@@ -34,7 +34,10 @@ async function applyCollectorTargetCategory(client: pg.PoolClient, name: string,
 
 // notion(및 K류) → knowledge(observed) 멱등 upsert. 본문 실변경 시에만 audit. true=적재, false=skip.
 //  #638 lifecycle: 신규는 인입정책(auto→active | confirm→pending | drop→skip), 재싱크는 사람 검토상태 보존(archived 전파만).
-export async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, system: string, externalId: string): Promise<boolean> {
+//  claimKey(#4059): 적재한 수집기 표식 — 주면 sync_state.seen_by 에 남긴다(mirror-common.claimSyncStateSql). 없으면 무변.
+export async function mirrorKnowledgeV6(
+  client: pg.PoolClient, it: RawItem, system: string, externalId: string, claimKey?: string,
+): Promise<boolean> {
   const instance = normalizeExternalInstance(it.provenance.instance);
   // 🔴H1 redact — 쓰기 전 평문 시크릿 마스킹.
   const title = it.title == null ? null : redactString(String(it.title));
@@ -96,11 +99,12 @@ export async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, syst
         name, title, body_md, injection, provenance, lifecycle, confidence, source,
         external_system, external_instance, external_id, external_url,
         occurred_at, last_synced_at, parent_external_id, parent_name,
-        fields, raw, author, sort, updated_at, updated_by)
+        fields, raw, author, sort, updated_at, updated_by, sync_state)
       VALUES($1,$2,$3,'recalled','observed',$14,'observed',$4,
              $4,$5,$6,$7,
              $8, now(), $9, $10,
-             $11::jsonb, $12::jsonb, $13, COALESCE($15, 0), now(), $13)
+             $11::jsonb, $12::jsonb, $13, COALESCE($15, 0), now(), $13,
+             CASE WHEN $17::text IS NULL THEN '{}'::jsonb ELSE ${claimSyncStateSql("NULL::jsonb", "$17")} END)
      ON CONFLICT (tenant_id, external_system, external_instance, external_id) WHERE external_id IS NOT NULL
      DO UPDATE SET
         title=EXCLUDED.title, body_md=EXCLUDED.body_md,
@@ -116,13 +120,16 @@ export async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, syst
         embedding_vector=CASE WHEN $16::boolean THEN NULL ELSE knowledge.embedding_vector END,
         embedding_model=CASE WHEN $16::boolean THEN NULL ELSE knowledge.embedding_model END,
         embedding_updated_at=CASE WHEN $16::boolean THEN NULL ELSE knowledge.embedding_updated_at END,
+        -- #4059 수집기 표식 — 재싱크한 수집기를 seen_by 에 더한다(다른 수집기의 표식은 그대로 둔다).
+        sync_state=CASE WHEN $17::text IS NULL THEN knowledge.sync_state
+                        ELSE ${claimSyncStateSql("knowledge.sync_state", "$17")} END,
         version=knowledge.version + 1, updated_at=now(), updated_by=EXCLUDED.updated_by
      RETURNING name`,
     [name, title, body, system,
      instance, externalId, it.provenance.external_url ?? null,
      it.occurred_at ?? null, it.parent_external_id ?? null, parentName,
      JSON.stringify(fields), raw == null ? null : JSON.stringify(raw), author,
-     lifecycle, sort, contentChanged],
+     lifecycle, sort, contentChanged, claimKey ?? null],
   );
   const finalName = (r.rows[0] as { name: string }).name;
   await applyCollectorTargetCategory(client, finalName, isInsert);
