@@ -12,6 +12,8 @@
 // ⚠ 이 하네스가 **덮지 못하는 한 조각**: 하네스 훅 보고 라우트(`POST …/sessions/:id/active`)가 전이를 만들면
 //  publishNotify 를 부르는 그 배선. 그건 tmux 세션이 실제로 필요해 격리 스택에서만 확인되고,
 //  여기서는 publishNotify 를 직접 불러 그 아래 전 구간을 잰다.
+//  #4054 — 발행 주소는 «워크스페이스 + 사람» 이다. 판정 없이 등록한 라우트는 자기 워크스페이스(primary)만 받는다.
+//   워크스페이스 표시·다른 워크스페이스·클릭 경로는 verify-notify-workspace.mjs 가 잰다.
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -74,11 +76,11 @@ const express = require(${JSON.stringify(join(ROOT, "node_modules", "express"))}
     // ── 병렬 세션 5개가 잇달아 끝나는 순간을 그대로 발행 ──
     const t0 = Date.now();
     for (let i = 1; i <= EXPECT; i++) {
-      bus.publishNotify("alice", { type: "session", id: "box-jang-p" + i, name: "병렬 작업 " + i,
+      bus.publishNotify({ ws: "primary", member: "alice" }, { type: "session", id: "box-jang-p" + i, name: "병렬 작업 " + i,
         prev: "busy", phase: "idle", key: bus.sessionEventKey("box-jang-p" + i, "idle", 1000 + i), ts: Date.now() });
     }
     // 중복 발행(재시도·중복 보고) 이 배너를 두 번 만들지 않는지도 함께 본다
-    bus.publishNotify("alice", { type: "session", id: "box-jang-p1", name: "병렬 작업 1",
+    bus.publishNotify({ ws: "primary", member: "alice" }, { type: "session", id: "box-jang-p1", name: "병렬 작업 1",
       prev: "busy", phase: "idle", key: bus.sessionEventKey("box-jang-p1", "idle", 1001), ts: Date.now() });
 
     const timeout = new Promise((r) => setTimeout(() => r("timeout"), 5000));

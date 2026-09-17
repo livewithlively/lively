@@ -144,6 +144,42 @@ async function api(path: string, opts: any = {}): Promise<any> {
   return data;
 }
 
+// ── 주소가 워크스페이스를 고른다 (#4054) ────────────────────────────────────────
+//  데스크톱 앱이 셀프호스트 다중 워크스페이스의 알림을 누르면 `/ui/?lvly_ws=<slug>#/s/<id>` 를 싣는다 — 그 세션은 그
+//  워크스페이스에 있고, 창의 웹은 다른 워크스페이스를 골라 두었을 수 있다(desktop/main/notify.mjs clickTarget).
+//  그 값을 **이 모듈이 실릴 때** 선택에 반영한다. 부팅(boot)에서 바꾸면 늦다 — 워크스페이스별 저장소 키(wsKey)를 모듈이
+//  실릴 때 한 번 계산하는 자리가 있어서 이번 판이 옛 키로 돈다(web/main.ts #2460 머리말). 이 모듈은 우리 모듈 import 0 인
+//  leaf 라 그 누구보다 먼저 실린다. 반영한 뒤엔 주소에서 지운다 — 새로고침·주소 복사로 선택이 되돌려지지 않게.
+//  ⚠ 최상위 문서에서만 한다 — 액자(곁칸 웹 칸·앱 embed)는 바깥의 선택을 바꾸면 안 된다(같은 오리진이면 저장소가 하나다).
+const WORKSPACE_PARAM = 'lvly_ws';
+const WORKSPACE_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/**
+ * 페이지 주소의 쿼리 → 고를 워크스페이스와 그 파라미터를 뺀 쿼리(순수).
+ * @returns 파라미터가 없으면 null. `slug` 는 '' = primary(선택 해제), null = 형식이 아님(선택은 그대로 두고 파라미터만 뺀다).
+ */
+function workspaceFromSearch(search: string): { slug: string | null; search: string } | null {
+  const q = new URLSearchParams(search || '');
+  if (!q.has(WORKSPACE_PARAM)) return null;
+  const raw = (q.get(WORKSPACE_PARAM) || '').trim().toLowerCase();
+  q.delete(WORKSPACE_PARAM);
+  const rest = q.toString();
+  const slug = raw === 'primary' ? '' : (WORKSPACE_SLUG_RE.test(raw) ? raw : null);
+  return { slug, search: rest ? '?' + rest : '' };
+}
+
+function adoptWorkspaceFromUrl(): void {
+  try {
+    if (typeof window === 'undefined' || window.top !== window) return;
+    const r = workspaceFromSearch(location.search);
+    if (!r) return;
+    if (r.slug !== null) setCurrentWorkspace(r.slug);
+    history.replaceState(history.state, '', location.pathname + r.search + location.hash);
+  } catch (_) { /* 주소를 못 고치는 문맥 — 파라미터가 남을 뿐, 선택은 이미 반영됐다 */ }
+}
+// ⚠ 모듈 맨 끝에서 부른다 — 위의 const(WORKSPACE_KEY 등)가 선언되기 전에 부르면 TDZ 예외가 catch 에 삼켜져 조용히 안 된다.
+adoptWorkspaceFromUrl();
+
 export {
   TOKEN_KEY,
   api,
@@ -152,5 +188,6 @@ export {
   setUnauthorizedHandler,
   currentWorkspace,
   setCurrentWorkspace,
+  workspaceFromSearch,
   wsKey,
 };
