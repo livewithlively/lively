@@ -12,6 +12,8 @@
 //   같은 파일이 "접속 여부와 무관한 신호"라고 명시한 값이고, 회수(reaper)가 승인 대기 세션을 죽이지 않으려고
 //   이미 이 값을 쓴다. 알림도 같은 진실을 봐야 한다.
 
+import { webUiUrl, webOrigin } from "./web-shell.mjs";
+
 /** 알림 종류 — 사용자가 켠 것만 뜬다(#1842 결정: 세 갈래). */
 export const NOTIFY = {
   WAITING: "session_waiting",   // AI 가 내 결정을 기다린다(승인·선택) — 놓치면 AI 가 그대로 멈춰 선다
@@ -64,52 +66,120 @@ export function snapshotSessions(sessions) {
  * @param {Map} next 방금 받은 스냅샷
  * @param {object} [prefs] 유형별 on/off
  */
-export function diffSessions(prev, next, prefs) {
+export function diffSessions(prev, next, prefs, ws = null) {
   if (!prev) return [];                                  // 콜드스타트: 기준선만 잡고 아무것도 알리지 않는다
   const on = { ...NOTIFY_DEFAULTS, ...(prefs || {}) };
+  const where = wsLabelOf(ws);                           // #4054 — 폴링은 앱이 매인 워크스페이스의 목록이다
   const events = [];
   for (const [id, cur] of next) {
     const was = prev.get(id);
     // ① 대기 진입 — 새 세션이면 '대기 아님' 에서 온 것으로 본다(첫 관측이 이미 대기면 알린다)
     if (cur.awaiting && !(was && was.awaiting)) {
-      if (on[NOTIFY.WAITING]) events.push({ kind: NOTIFY.WAITING, id, name: cur.name });
+      if (on[NOTIFY.WAITING]) events.push({ kind: NOTIFY.WAITING, id, name: cur.name, ws: where });
       continue;                                          // 한 세션은 한 번에 한 사건만(대기가 완료를 이긴다)
     }
     if (!was) continue;                                  // 새 세션인데 대기도 아니면 알릴 것이 없다
     // ② 완료 — 돌던 게 멎었다
     if (was.working && !cur.working && !cur.awaiting) {
-      if (on[NOTIFY.DONE]) events.push({ kind: NOTIFY.DONE, id, name: cur.name });
+      if (on[NOTIFY.DONE]) events.push({ kind: NOTIFY.DONE, id, name: cur.name, ws: where });
     }
   }
   return events;
 }
 
+// ── 워크스페이스 표시 (#4054) ────────────────────────────────────────────────
+// 신고(상민님 2026-09-17): "모든 알림에 대해 상단에 슬랙처럼 어느 워크스페이스의 알림인지 명시해야 할 것 같다."
+//  한 사람이 워크스페이스 여럿에 속하고, 앱은 그 전부의 사건을 받는다(서버 notify-scope.ts). 배너가 워크스페이스를
+//  말하지 않으면 사람은 «이게 어디 일이지»를 누르기 전엔 모르고, 앱은 어디로 가야 하는지 모른다.
+//  그래서 **배너 맨 윗줄(제목)을 워크스페이스 이름**으로 쓰고, 무슨 일인지는 그 아래로 내린다.
+
+/** 배너 윗줄에 적을 워크스페이스 이름의 상한 — OS 가 제목을 한 줄로 자른다. */
+export const WS_NAME_MAX = 60;
+
 /**
- * 이벤트 → 배너 문구. 제목은 **무슨 일인지**(어느 세션인지는 본문) — macOS·Windows 모두 제목을 굵게 한 줄로
- *  보여주므로, 세션 이름이 길면 제목에 두면 잘려서 무슨 일인지 자체를 잃는다. 슬랙도 제목은 짧은 식별자다.
- *  본문 문구는 어미까지 끝맺는다(ui-copy-complete-sentence-endings).
+ * 서버가 준 워크스페이스 표시를 **다시 본다**(순수). 모양이 아니면 null — 그때 배너·클릭은 종전 그대로다(구 게이트웨이).
+ *  이름은 한 줄로 접어 자르고, 가는 길(via)은 셋 중 하나로 좁힌다. 입장 주소(enter)는 여기서 믿지 않는다 — 누를 때 enterUrlWith 가 본다.
+ * @returns {{slug:string,name:string,current:boolean,via:"same"|"header"|"enter",enter?:string}|null}
  */
-export function bannerFor(event) {
-  const name = String(event.name || "").slice(0, 120);
-  if (event.kind === NOTIFY.WAITING) return { title: "확인을 기다려요", body: name + " — 눌러서 이어가세요." };
-  if (event.kind === NOTIFY.DONE) return { title: "작업을 마쳤어요", body: name };
-  return { title: "라이블리", body: name };
+export function wsLabelOf(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const slug = String(raw.slug ?? "").trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(slug)) return null;
+  const via = raw.via === "enter" || raw.via === "header" ? raw.via : "same";
+  const name = String(raw.name ?? "").replace(/\s+/g, " ").trim().slice(0, WS_NAME_MAX);
+  const out = { slug, name, current: raw.current === true, via };
+  if (via === "enter" && typeof raw.enter === "string") out.enter = raw.enter;
+  return out;
 }
 
-/** 여러 건을 한 장으로 묶을 때의 문구. 종류가 섞이면 '알림'으로 뭉뚱그린다. */
-export function digestFor(events) {
+/** 무슨 일인지(종전 제목)와 그 내용(종전 본문). 본문 문구는 어미까지 끝맺는다(ui-copy-complete-sentence-endings). */
+function eventText(event) {
+  const name = String(event.name || "").slice(0, 120);
+  if (event.kind === NOTIFY.WAITING) return { what: "확인을 기다려요", body: name + " — 눌러서 이어가세요.", short: name };
+  if (event.kind === NOTIFY.DONE) return { what: "작업을 마쳤어요", body: name, short: name };
+  if (event.kind === NOTIFY.PERSON) {
+    const what = String(event.title || "라이블리"), body = String(event.body || "");
+    return { what, body, short: body };
+  }
+  return { what: "라이블리", body: name, short: name };
+}
+
+/** 워크스페이스 이름을 윗줄로 올린 모양. macOS 는 부제가 있고(Electron `subtitle` 은 macOS 전용), 그 밖은 본문 앞에 붙인다. */
+function withWorkspace(name, what, body, short, platform) {
+  if (platform === "darwin") return { title: name, subtitle: what, body };
+  return { title: name, body: short ? `${what} — ${short}` : what };
+}
+
+/**
+ * 이벤트 → 배너 문구.
+ *  · 워크스페이스 이름을 알면 **제목 = 워크스페이스**(#4054), 무슨 일인지는 부제(macOS) 또는 본문 앞.
+ *  · 모르면 종전 모양 — 제목은 **무슨 일인지**(어느 세션인지는 본문). macOS·Windows 모두 제목을 굵게 한 줄로
+ *    보여주므로, 세션 이름이 길면 제목에 두면 잘려서 무슨 일인지 자체를 잃는다.
+ * @param {object} event  diffSessions·streamEvent·pickPersonEvents 가 만든 사건(`ws` 가 붙어 있을 수 있다)
+ * @param {string} [platform]  process.platform — 부제를 쓸지 가른다
+ */
+export function bannerFor(event, platform = "linux") {
+  const t = eventText(event);
+  const ws = wsLabelOf(event.ws);
+  if (ws && ws.name) return withWorkspace(ws.name, t.what, t.body, t.short, platform);
+  return { title: t.what, body: t.body };
+}
+
+/** 묶음이 한 워크스페이스의 것인가 — 전부 같은 slug 이고 이름이 있으면 그 표시, 아니면 null. */
+function oneWorkspace(events) {
+  let first = null;
+  for (const e of events) {
+    const ws = wsLabelOf(e.ws);
+    if (!ws || !ws.name) return null;
+    if (!first) first = ws;
+    else if (first.slug !== ws.slug) return null;
+  }
+  return first;
+}
+
+/** 여러 건을 한 장으로 묶을 때의 문구. 종류가 섞이면 '알림'으로 뭉뚱그리고, 워크스페이스가 섞이면 그 수를 말한다. */
+export function digestFor(events, platform = "linux") {
   const n = events.length;
   const kinds = new Set(events.map((e) => e.kind));
-  if (kinds.size === 1 && kinds.has(NOTIFY.WAITING)) return { title: "확인을 기다려요", body: `세션 ${n}개가 내 결정을 기다리고 있어요.` };
-  if (kinds.size === 1 && kinds.has(NOTIFY.DONE)) return { title: "작업을 마쳤어요", body: `세션 ${n}개가 일을 끝냈어요.` };
-  return { title: "라이블리", body: `새 알림이 ${n}개 있어요.` };
+  const base = kinds.size === 1 && kinds.has(NOTIFY.WAITING) ? { title: "확인을 기다려요", body: `세션 ${n}개가 내 결정을 기다리고 있어요.` }
+    : kinds.size === 1 && kinds.has(NOTIFY.DONE) ? { title: "작업을 마쳤어요", body: `세션 ${n}개가 일을 끝냈어요.` }
+      : { title: "라이블리", body: `새 알림이 ${n}개 있어요.` };
+  const ws = oneWorkspace(events);
+  if (ws) {
+    const out = { title: ws.name, body: base.body };
+    if (platform === "darwin" && base.title !== "라이블리") out.subtitle = base.title;   // 부제는 무슨 일인지 말할 게 있을 때만
+    return out;
+  }
+  const places = new Set(events.map((e) => wsLabelOf(e.ws)?.slug).filter(Boolean));
+  if (places.size > 1) return { title: "라이블리", body: `워크스페이스 ${places.size}곳에서 새 알림이 ${n}개 왔어요.` };
+  return base;
 }
 
 /** 배너를 몇 장 띄울지 — 적으면 개별로, 많으면 묶음 한 장으로. 순수 판정이라 표로 못박는다. */
-export function planBanners(events, max = MAX_BANNERS) {
+export function planBanners(events, max = MAX_BANNERS, platform = "linux") {
   if (!events.length) return [];
-  if (events.length <= max) return events.map((e) => ({ ...bannerFor(e), event: e }));
-  return [{ ...digestFor(events), event: null }];
+  if (events.length <= max) return events.map((e) => ({ ...bannerFor(e, platform), event: e }));
+  return [{ ...digestFor(events, platform), event: null }];
 }
 
 /**
@@ -170,17 +240,18 @@ export const SEEN_MAX = 300;
  * @param {object} [prefs] 유형별 on/off
  * @returns {Array} 배너로 만들 이벤트(호출자가 seen 에 넣는다)
  */
-export function pickPersonEvents(items, seen, prefs) {
+export function pickPersonEvents(items, seen, prefs, ws = null) {
   const on = { ...NOTIFY_DEFAULTS, ...(prefs || {}) };
   const rows = Array.isArray(items) ? items : [];
   if (!seen) return [];                              // 콜드스타트: 앱을 켠 순간 지난 24시간이 배너로 쏟아지면 안 된다
   if (!on[NOTIFY.PERSON]) return [];
+  const where = wsLabelOf(ws);                       // #4054 — 이 피드는 앱이 매인 워크스페이스의 것이다
   const out = [];
   for (const it of rows) {
     const key = String(it && it.key || "");
     if (!key || seen.has(key)) continue;
     out.push({ kind: NOTIFY.PERSON, id: null, key, link: personLink(it && it.link),
-      title: String(it.text && it.text.title || "라이블리"), body: String(it.text && it.text.body || "") });
+      title: String(it.text && it.text.title || "라이블리"), body: String(it.text && it.text.body || ""), ws: where });
   }
   return out;
 }
@@ -202,11 +273,11 @@ export function personLink(link) {
   return /^#\/[A-Za-z0-9/_.:%-]{1,200}$/.test(s) ? s : null;
 }
 
-/** 여러 건이면 개별 배너 대신 한 장으로 — 세션 쪽 planBanners 와 같은 규칙을 사람 알림에도 적용한다. */
-export function planPersonBanners(events, max = MAX_BANNERS) {
+/** 여러 건이면 개별 배너 대신 한 장으로 — 세션 쪽 planBanners 와 같은 규칙(워크스페이스 윗줄 포함)을 사람 알림에도 적용한다. */
+export function planPersonBanners(events, max = MAX_BANNERS, platform = "linux") {
   if (!events.length) return [];
-  if (events.length <= max) return events.map((e) => ({ title: e.title, body: e.body, event: e }));
-  return [{ title: "라이블리", body: `새 알림이 ${events.length}개 있어요.`, event: null }];
+  if (events.length <= max) return events.map((e) => ({ ...bannerFor({ ...e, kind: NOTIFY.PERSON }, platform), event: e }));
+  return [{ ...digestFor(events.map((e) => ({ ...e, kind: NOTIFY.PERSON })), platform), event: null }];
 }
 
 // ── 실시간 스트림 (#1842 3차) ────────────────────────────────────────────────
@@ -245,7 +316,7 @@ export function streamEvent(ev, seen, prefs) {
   if (!on[kind]) return null;
   const key = String(ev.key || `s:${ev.id}:${ev.phase}`);
   if (seen && seen.has(key)) return null;              // 재연결 직후 같은 사건이 다시 올 수 있다
-  return { kind, id: String(ev.id), key, name: String(ev.name || "").trim() || "이름 없는 세션" };
+  return { kind, id: String(ev.id), key, name: String(ev.name || "").trim() || "이름 없는 세션", ws: wsLabelOf(ev.ws) };
 }
 
 /**
@@ -284,4 +355,81 @@ export function reconnectDelay(attempt) {
  */
 export function stableStream(connectedMs) {
   return (Number(connectedMs) || 0) >= 10_000;
+}
+
+// ── 배너를 누르면 어디로 가나 (#4054) ─────────────────────────────────────────
+// 신고(상민님 2026-09-17): "다른 워크스페이스 작업완료 알림을 누르면 워크스페이스가 전환되면서 가야 하는데,
+//  보고 있는 워크스페이스에서 세션을 열려고 해서 안 열린다." 종전 클릭은 **언제나 지금 창에 해시만** 바꿨다.
+//  사건의 워크스페이스(ws.via)가 길을 정한다:
+//   · same   — 앱이 매인 워크스페이스. 창이 그 주소를 싣고 있으면 해시, 다른 곳을 싣고 있으면 그 주소로 다시 싣는다.
+//   · header — 셀프호스트 다중: 주소는 같고 선택만 다르다. 창이 고른 워크스페이스가 같으면 해시, 아니면 `?lvly_ws=` 로 싣는다.
+//   · enter  — 매니지드의 다른 워크스페이스: 주소가 다르고 이 앱의 로그인(토큰)은 매인 워크스페이스 하나뿐이다.
+//     그래서 **계정 서버의 입장 주소**로 브라우저에서 연다 — 계정 서버가 로그인을 태워 그 세션 화면에 내려놓는다
+//     (lvly-cloud `/ws/:id/enter?to=`). 앱 창을 그 주소로 옮기지 않는 까닭: 앱 창은 매인 게이트웨이만 싣는 규약이고
+//     (web-shell.openTargetFor), 이 앱엔 그 워크스페이스의 로그인이 없다. 워크스페이스 레일의 전환도 같은 길을 탄다.
+
+/** 웹이 고른 워크스페이스를 담는 저장소 키 — web/lib/net.ts `WORKSPACE_KEY` 와 **같아야 한다**(desktop-core.test.mjs 가 맞춘다). */
+export const WEB_WORKSPACE_KEY = "lively.workspace";
+
+/** 앱 창의 웹이 지금 고른 워크스페이스를 읽는 한 줄(executeJavaScript). 못 읽으면 null — 그때는 주소로 다시 싣는다. */
+export const READ_WEB_WORKSPACE_JS = `(() => { try { return localStorage.getItem(${JSON.stringify(WEB_WORKSPACE_KEY)}) || ""; } catch (e) { return null; } })()`;
+
+/** 실시간 스트림 주소 — 다른 워크스페이스 사건까지 청한다(`all=1`, 서버 notify-routes.ts). */
+export function streamUrl(gatewayUrl) {
+  const gw = String(gatewayUrl || "").trim().replace(/\/+$/, "");
+  return gw ? `${gw}/api/ui/notify/stream?all=1` : null;
+}
+
+const HASH_RE = /^#\/[A-Za-z0-9/_.:%-]{1,200}$/;
+const ENTER_PATH_RE = /^\/ws\/[0-9a-fA-F-]{36}\/enter$/;
+
+/**
+ * 계정 서버 입장 주소 + 착지 해시 → 브라우저로 열 주소(순수). 서버가 준 값이라도 **다시 본다**:
+ *  출처가 아는 계정 서버(cpOrigins) 중 하나 · 경로 `/ws/<uuid>/enter` · 쿼리·조각·계정정보 없음 · 해시는 화면 해시 모양.
+ * @param {string} enter 계정 서버가 준 입장 주소
+ * @param {string} hash  `#/…` 착지 해시(sessionHash·personLink 결과)
+ * @param {string[]} cpOrigins 아는 계정 서버 출처들(예: https://app.lvly.io)
+ * @returns {string|null}
+ */
+export function enterUrlWith(enter, hash, cpOrigins) {
+  let u;
+  try { u = new URL(String(enter || "")); } catch { return null; }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+  if (!(Array.isArray(cpOrigins) ? cpOrigins : []).includes(u.origin)) return null;
+  if (u.username || u.password || u.search || u.hash) return null;
+  if (!ENTER_PATH_RE.test(u.pathname)) return null;
+  if (!HASH_RE.test(String(hash || ""))) return null;
+  return `${u.origin}${u.pathname}?to=${encodeURIComponent(hash)}`;
+}
+
+/** 워크스페이스 선택값 정규화 — 비었으면 primary(웹 net.ts 와 같은 규약: 미선택 = primary). */
+const selectedWs = (v) => (String(v ?? "").trim().toLowerCase() || "primary");
+
+/**
+ * 배너를 눌렀을 때 할 일(순수) — 사양 표 K1~K12.
+ * @param {object|null} event 배너의 사건(묶음이면 null)
+ * @param {{gatewayUrl?:string|null, windowUrl?:string|null, windowWs?:string|null, cpOrigins?:string[]}} ctx
+ *   gatewayUrl = 앱이 매인 게이트웨이 · windowUrl = 앱 창이 지금 싣는 주소(없으면 null) ·
+ *   windowWs = 앱 창의 웹이 고른 워크스페이스(모르면 null) · cpOrigins = 아는 계정 서버 출처
+ * @returns {{how:"app"}|{how:"hash",hash:string}|{how:"load",url:string}|{how:"external",url:string}}
+ */
+export function clickTarget(event, ctx = {}) {
+  const hash = event && event.id ? sessionHash(event.id) : (event && event.link ? personLink(event.link) : null);
+  if (!hash) return { how: "app" };                                          // K1 갈 곳이 하나가 아니거나 형식이 아니다
+  const ws = wsLabelOf(event.ws);
+  if (!ws) return { how: "hash", hash };                                     // K2 구 게이트웨이 — 종전 그대로
+  if (ws.via === "enter") {
+    const url = enterUrlWith(ws.enter, hash, ctx.cpOrigins);
+    return url ? { how: "external", url } : { how: "app" };                 // K5 · K6(엉뚱한 워크스페이스에서 열지 않는다)
+  }
+  const ui = webUiUrl(ctx.gatewayUrl);
+  if (!ui) return { how: "hash", hash };                                     // 매인 곳을 모른다 — 종전 그대로
+  const home = webOrigin(ui);
+  const shown = ctx.windowUrl ? webOrigin(ctx.windowUrl) : null;
+  if (ws.via === "header") {
+    if (shown === home && ctx.windowWs != null && selectedWs(ctx.windowWs) === ws.slug) return { how: "hash", hash };   // K7
+    return { how: "load", url: `${ui}?lvly_ws=${encodeURIComponent(ws.slug)}${hash}` };                               // K8
+  }
+  if (!ctx.windowUrl || shown === home) return { how: "hash", hash };      // K3 · K9
+  return { how: "load", url: ui + hash };                                    // K4 · K11 창이 다른 출처를 싣고 있다
 }

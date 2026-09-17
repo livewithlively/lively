@@ -24,7 +24,7 @@ import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { manifestRefs, manifestProblems, GITHUB_SAFE } from "../verify-update-manifest.mjs";
 import { versionLabel } from "./tray-menu.mjs";
 import { RETRYABLE_KINDS } from "./ipc-contract.mjs";
-import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX, phaseEventKind, streamEvent, parseSse, reconnectDelay, stableStream, keepBanner, BANNER_KEEP_MAX } from "./notify.mjs";
+import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX, phaseEventKind, streamEvent, parseSse, reconnectDelay, stableStream, keepBanner, BANNER_KEEP_MAX, wsLabelOf, digestFor, clickTarget, enterUrlWith, streamUrl, WEB_WORKSPACE_KEY, READ_WEB_WORKSPACE_JS, WS_NAME_MAX } from "./notify.mjs";
 import { createHashNav } from "./web-shell.mjs";
 import { updateStatusNote } from "./update-policy.mjs";
 import { posix as pposix } from "node:path";
@@ -2159,11 +2159,12 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.ok(/n\.on\("click", \(\) => \{\s*liveBanners\.delete\(n\)/.test(banner), "W2 누른 배너를 놓지 않는다");
     assert.ok(!/on\("close"/.test(banner), "W3 close 로 놓는다 — Windows 는 배너가 알림 센터로 들어갈 때도 close 를 낸다");
     assert.ok(!/\.close\(\)/.test(banner), "W4 놓는 배너에 close() 를 부른다 — 실측(Electron 43.3.0): close() 한 배너는 GC 되지 않아 상한이 울타리 구실을 못 한다");
-    const open = main.slice(main.indexOf("function openHashInApp("), main.indexOf("function openSessionInApp("));
+    const open = main.slice(main.indexOf("function openHashInApp("), main.indexOf("function loadInApp("));
     assert.ok(/hashNav\.open\(appWin\.webContents, hash\)/.test(open), "W5 알림 클릭 이동을 createHashNav 로 하지 않는다");
     assert.ok(!/isLoading\(\)|once\("did-finish-load"/.test(open), "W5 종전 대기(isLoading → did-finish-load)가 남아 있다");
     const on = (ev) => { const i = main.indexOf(`appWin.webContents.on("${ev}"`); return i < 0 ? "" : main.slice(i, main.indexOf("});", i)); };
     assert.ok(/hashNav\.loaded\(/.test(on("did-finish-load")), "W6 다 실린 뒤 기다리던 이동을 하지 않는다");
+    assert.ok(/hashNav\.loaded\(/.test(on("did-stop-loading")), "W7 did-stop-loading 에서 기다리던 이동을 안 푼다 — did-finish-load 시점엔 본문이 아직 싣는 중으로 보여 그 틈의 클릭이 사라진다(#4054 실측)");
     const fail = on("did-fail-load");
     assert.ok(fail.indexOf("code === -3") >= 0 && fail.indexOf("hashNav.failed()") > fail.indexOf("code === -3"), "W6 본문 로드 실패(ERR_ABORTED 제외)에서 기다리던 클릭을 버리지 않는다");
     assert.ok(/appWin\.on\("closed", \(\) => \{[^\n]*hashNav\.failed\(\)/.test(main), "W6 창이 닫혀도 기다리던 클릭이 남는다");
@@ -2262,7 +2263,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
   });
   t("A28 배선 — 스트림이 살아 있으면 폴링은 배너를 만들지 않되 기준선은 늘 갱신한다", () => {
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
-    assert.ok(/\/api\/ui\/notify\/stream/.test(main), "실시간 스트림에 붙지 않는다");
+    assert.ok(/fetch\(streamUrl\(gw\)/.test(main), "실시간 스트림에 붙지 않는다(주소는 notify.streamUrl — A45)");
     const poll = main.slice(main.indexOf("async function pollNotifications("), main.indexOf("async function pollPersonFeed("));
     const snapAt = poll.indexOf("notifySnapshot = next;");
     const gateAt = poll.indexOf("if (!streamAlive)");
@@ -2284,6 +2285,190 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.ok(!/streamAlive = true;\s*streamTries = 0;/.test(conn),
       "★붙는 순간 카운터를 0 으로 되돌린다 — 즉시 끊기는 서버에 초당 한 번씩 재접속한다(#2041 실측)");
     assert.ok(/stableStream\(/.test(conn), "안정연결 판정을 쓰지 않는다");
+  });
+
+  // ── #4054 알림의 워크스페이스 — 배너 윗줄(D1~D8) · 누르면 어디로 가나(K1~K12) ──────────────────
+  //  신고(상민님 2026-09-17): 보고 있지 않은 워크스페이스의 작업완료 알림을 누르면 전환되지 않고 지금 워크스페이스에서
+  //  세션을 열려다 실패한다 · 모든 알림 윗줄에 어느 워크스페이스인지 적어야 한다.
+  const CP_ORIGINS = ["https://app.lvly.io"];
+  const GW = "https://lively-46e3.app.lvly.io";
+  const WS_ID = "244ae282-255c-4cdb-843c-26c250e366a8";
+  const ENTER = `https://app.lvly.io/ws/${WS_ID}/enter`;
+  const HERE = { slug: "lively-46e3", name: "Lively", current: true, via: "same" };
+  const OTHER = { slug: "soltimal-adce", name: "NCEO", current: false, via: "enter", enter: ENTER };
+  const REG = (slug, name) => ({ slug, name, current: false, via: "header" });
+  t("A30 D1 ★ 이름을 알면 윗줄(제목)이 워크스페이스 — macOS 는 무슨 일을 부제로, 그 밖은 본문 앞에", () => {
+    const ev = { kind: NOTIFY.DONE, id: "box-a-1", name: "빌드 고치기", ws: OTHER };
+    assert.deepEqual(bannerFor(ev, "darwin"), { title: "NCEO", subtitle: "작업을 마쳤어요", body: "빌드 고치기" });
+    assert.deepEqual(bannerFor(ev, "win32"), { title: "NCEO", body: "작업을 마쳤어요 — 빌드 고치기" });
+    assert.deepEqual(bannerFor(ev, "linux"), { title: "NCEO", body: "작업을 마쳤어요 — 빌드 고치기" });
+    assert.ok(!("subtitle" in bannerFor(ev, "win32")), "부제는 macOS 전용이다 — 다른 OS 에선 버려져 무슨 일인지가 사라진다");
+  });
+  t("A31 D2 확인 대기 — 윗줄은 워크스페이스, 무슨 일은 «확인을 기다려요»", () => {
+    const ev = { kind: NOTIFY.WAITING, id: "box-a-2", name: "배포 승인", ws: HERE };
+    const mac = bannerFor(ev, "darwin");
+    assert.equal(mac.title, "Lively");
+    assert.equal(mac.subtitle, "확인을 기다려요");
+    assert.ok(mac.body.includes("배포 승인"));
+    assert.deepEqual(bannerFor(ev, "win32"), { title: "Lively", body: "확인을 기다려요 — 배포 승인" });
+  });
+  t("A32 D3·D8 이름이 없거나(구 게이트웨이) 공백뿐이면 종전 모양 그대로", () => {
+    const legacyDone = { title: "작업을 마쳤어요", body: "빌드" };
+    assert.deepEqual(bannerFor({ kind: NOTIFY.DONE, name: "빌드" }, "darwin"), legacyDone);
+    assert.deepEqual(bannerFor({ kind: NOTIFY.DONE, name: "빌드", ws: { ...HERE, name: "   " } }, "darwin"), legacyDone);
+    assert.deepEqual(bannerFor({ kind: NOTIFY.DONE, name: "빌드", ws: { slug: "Bad Slug", name: "X" } }, "darwin"), legacyDone, "형식 아닌 표시를 믿었다");
+    assert.deepEqual(bannerFor({ kind: NOTIFY.WAITING, name: "승인" }), { title: "확인을 기다려요", body: "승인 — 눌러서 이어가세요." });
+  });
+  t("A33 D4 사람 알림 — 윗줄 워크스페이스, 무슨 일 = 서버 제목, 본문 = 서버 본문(매인 워크스페이스 표시가 붙는다)", () => {
+    const items = [{ key: "p1", link: "#/projects2/p/7", text: { title: "장원준님이 댓글을 남겼어요", body: "확인 부탁드려요." } }];
+    const evs = pickPersonEvents(items, new Set(), undefined, HERE);
+    assert.deepEqual(evs[0].ws, HERE, "사람 알림에 매인 워크스페이스 표시가 안 붙었다");
+    const [b] = planPersonBanners(evs, undefined, "darwin");
+    assert.deepEqual({ title: b.title, subtitle: b.subtitle, body: b.body }, { title: "Lively", subtitle: "장원준님이 댓글을 남겼어요", body: "확인 부탁드려요." });
+    const [w] = planPersonBanners(evs, undefined, "win32");
+    assert.deepEqual({ title: w.title, body: w.body }, { title: "Lively", body: "장원준님이 댓글을 남겼어요 — 확인 부탁드려요." });
+    const [old] = planPersonBanners(pickPersonEvents(items, new Set()), undefined, "win32");
+    assert.deepEqual({ title: old.title, body: old.body }, { title: "장원준님이 댓글을 남겼어요", body: "확인 부탁드려요." }, "표시 없는 사람 알림이 종전 모양이 아니다");
+    // 폴링 사건에도 매인 워크스페이스 표시가 붙는다
+    const a = new Map([["s1", { id: "s1", name: "x", awaiting: false, working: true }]]);
+    const bb = new Map([["s1", { id: "s1", name: "x", awaiting: false, working: false }]]);
+    assert.deepEqual(diffSessions(a, bb, undefined, HERE)[0].ws, HERE);
+    assert.equal(diffSessions(a, bb)[0].ws, null);
+  });
+  t("A34 D5·D6 묶음 — 한 워크스페이스면 그 이름이 윗줄, 섞이면 «라이블리» + 워크스페이스 수", () => {
+    const ev = (i, ws) => ({ kind: NOTIFY.DONE, id: "s" + i, name: "세션" + i, ws });
+    const same = planBanners([1, 2, 3, 4].map((i) => ev(i, OTHER)), undefined, "darwin");
+    assert.equal(same.length, 1);
+    assert.deepEqual({ title: same[0].title, subtitle: same[0].subtitle, event: same[0].event }, { title: "NCEO", subtitle: "작업을 마쳤어요", event: null });
+    assert.match(same[0].body, /4개/);
+    const mixed = digestFor([ev(1, OTHER), ev(2, HERE), ev(3, OTHER), ev(4, HERE)], "darwin");
+    assert.equal(mixed.title, "라이블리");
+    assert.match(mixed.body, /워크스페이스 2곳/);
+    assert.match(mixed.body, /4개/);
+    // 사람 알림 묶음은 부제로 쓸 «무슨 일» 이 없다 — 빈 말(«라이블리»)을 부제로 올리지 않는다
+    const people = digestFor([1, 2, 3, 4].map((i) => ({ kind: NOTIFY.PERSON, key: "k" + i, title: "t", body: "b", ws: HERE })), "darwin");
+    assert.deepEqual(people, { title: "Lively", body: "새 알림이 4개 있어요." });
+    // 표시가 하나라도 없으면 종전 묶음 문구
+    assert.equal(digestFor([ev(1, OTHER), ev(2, null)], "darwin").title, "작업을 마쳤어요");
+  });
+  t("A35 D7 이름 상한 — 60자에서 자르고 한 줄로 접는다", () => {
+    const long = "가".repeat(WS_NAME_MAX + 5);
+    assert.equal(WS_NAME_MAX, 60);
+    assert.equal(bannerFor({ kind: NOTIFY.DONE, name: "x", ws: { ...HERE, name: long } }, "win32").title, "가".repeat(60));
+    assert.equal(wsLabelOf({ ...HERE, name: " 라이블리\n  팀 " }).name, "라이블리 팀");
+  });
+  t("A36 표시 검증(wsLabelOf) — slug 모양·가는 길 셋만, 입장 주소는 enter 일 때만 싣는다", () => {
+    for (const bad of [null, undefined, "x", 3, {}, { slug: "" }, { slug: "Has Space" }, { slug: "../x" }, { slug: "-a" }]) assert.equal(wsLabelOf(bad), null, JSON.stringify(bad));
+    assert.deepEqual(wsLabelOf({ slug: "A-1", name: "n", current: "yes", via: "weird", enter: ENTER }), { slug: "a-1", name: "n", current: false, via: "same" });
+    assert.deepEqual(wsLabelOf(OTHER), OTHER);
+    assert.equal(wsLabelOf({ ...OTHER, enter: 42 }).enter, undefined);
+    assert.deepEqual(streamEvent({ type: "session", id: "box-a-1", name: "n", prev: "busy", phase: "idle", key: "k", ws: OTHER }, new Set()).ws, OTHER, "스트림 사건의 표시를 버렸다");
+    assert.equal(streamEvent({ type: "session", id: "box-a-1", name: "n", prev: "busy", phase: "idle", key: "k2" }, new Set()).ws, null);
+  });
+  t("A37 K1 갈 곳이 없으면(묶음·형식 아닌 id·바깥 링크) 앱 창만 연다", () => {
+    for (const ev of [null, undefined, { kind: NOTIFY.DONE, id: "a b", ws: HERE }, { kind: NOTIFY.PERSON, link: "https://evil.example", ws: OTHER }]) {
+      assert.deepEqual(clickTarget(ev, { gatewayUrl: GW, windowUrl: GW + "/ui/", cpOrigins: CP_ORIGINS }), { how: "app" }, JSON.stringify(ev));
+    }
+  });
+  t("A38 K2 표시 없는 사건(구 게이트웨이)은 종전처럼 지금 창의 해시", () => {
+    assert.deepEqual(clickTarget({ id: "box-a-1" }, { gatewayUrl: GW, windowUrl: "https://elsewhere.example/ui/", cpOrigins: CP_ORIGINS }), { how: "hash", hash: "#/s/box-a-1" });
+  });
+  t("A39 K3·K9 매인 워크스페이스 사건 + 창이 그 주소(또는 창 없음) → 해시", () => {
+    const ctx = { gatewayUrl: GW, cpOrigins: CP_ORIGINS };
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: HERE }, { ...ctx, windowUrl: GW + "/ui/#/home" }), { how: "hash", hash: "#/s/box-a-1" });
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: HERE }, { ...ctx, windowUrl: null }), { how: "hash", hash: "#/s/box-a-1" });
+    assert.deepEqual(clickTarget({ link: "#/projects2/p/7", ws: HERE }, { ...ctx, windowUrl: GW + "/ui/" }), { how: "hash", hash: "#/projects2/p/7" });
+  });
+  t("A40 K4·K11 ★ 창이 다른 출처를 싣고 있으면 해시를 거기 꽂지 않고 매인 곳을 다시 싣는다(스킴·포트만 달라도 다른 곳)", () => {
+    const ctx = { gatewayUrl: GW, cpOrigins: CP_ORIGINS };
+    const want = { how: "load", url: GW + "/ui/#/s/box-a-1" };
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: HERE }, { ...ctx, windowUrl: "https://soltimal-adce.app.lvly.io/ui/#/home" }), want);
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: HERE }, { ...ctx, windowUrl: "http://lively-46e3.app.lvly.io/ui/" }), want);
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: HERE }, { ...ctx, windowUrl: "https://lively-46e3.app.lvly.io:8443/ui/" }), want);
+  });
+  t("A41 K5 ★ 다른 워크스페이스(enter) → 앱 창은 두고 브라우저로 계정 서버 입장 주소 + 착지 해시", () => {
+    for (const windowUrl of [null, GW + "/ui/"]) {
+      assert.deepEqual(clickTarget({ id: "box-sangmin-yoon-b0b0", ws: OTHER }, { gatewayUrl: GW, windowUrl, cpOrigins: CP_ORIGINS }),
+        { how: "external", url: `${ENTER}?to=%23%2Fs%2Fbox-sangmin-yoon-b0b0` });
+    }
+    // 착지 해시는 사람 링크도 같다
+    assert.deepEqual(clickTarget({ link: "#/projects2/p/7", ws: OTHER }, { gatewayUrl: GW, cpOrigins: CP_ORIGINS }),
+      { how: "external", url: `${ENTER}?to=%23%2Fprojects2%2Fp%2F7` });
+  });
+  t("A42 K6·K10 입장 주소가 아는 계정 서버가 아니거나 형식이 아니면 어디로도 보내지 않고 앱 창만 연다", () => {
+    const bad = [
+      undefined, "", "nope",
+      `https://evil.example/ws/${WS_ID}/enter`,
+      `https://app.lvly.io.evil.example/ws/${WS_ID}/enter`,
+      `http://app.lvly.io/ws/${WS_ID}/enter`,
+      `https://app.lvly.io:444/ws/${WS_ID}/enter`,
+      `https://u:p@app.lvly.io/ws/${WS_ID}/enter`,
+      `${ENTER}?to=%23%2Fhome`,
+      `${ENTER}#/x`,
+      `https://app.lvly.io/ws/${WS_ID}/leave`,
+      `https://app.lvly.io/ws/${WS_ID.slice(1)}/enter`,
+      `javascript:alert(1)`,
+    ];
+    for (const enter of bad) {
+      assert.deepEqual(clickTarget({ id: "box-a-1", ws: { ...OTHER, enter } }, { gatewayUrl: GW, windowUrl: GW + "/ui/", cpOrigins: CP_ORIGINS }), { how: "app" }, String(enter));
+    }
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: OTHER }, { gatewayUrl: GW, cpOrigins: [] }), { how: "app" }, "아는 계정 서버가 없는데 열었다");
+    assert.equal(enterUrlWith(ENTER, "#/a b", CP_ORIGINS), null, "해시 모양이 아닌데 실었다");
+    assert.equal(enterUrlWith(ENTER, "#/s/x", CP_ORIGINS), `${ENTER}?to=%23%2Fs%2Fx`);
+    // 개발용 계정 서버(http) 는 그 출처를 아는 경우에만
+    assert.equal(enterUrlWith(`http://127.0.0.1:9000/ws/${WS_ID}/enter`, "#/s/x", ["http://127.0.0.1:9000"]), `http://127.0.0.1:9000/ws/${WS_ID}/enter?to=%23%2Fs%2Fx`);
+  });
+  t("A43 K7 셀프호스트 다중: 창이 고른 워크스페이스가 사건의 것과 같으면 해시(비었으면 primary)", () => {
+    const ctx = { gatewayUrl: "https://olddev.lvly.io", windowUrl: "https://olddev.lvly.io/ui/#/home", cpOrigins: CP_ORIGINS };
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: REG("haru", "하루") }, { ...ctx, windowWs: "HARU " }), { how: "hash", hash: "#/s/box-a-1" });
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: REG("primary", "본사") }, { ...ctx, windowWs: "" }), { how: "hash", hash: "#/s/box-a-1" });
+  });
+  t("A44 K8 ★ 셀프호스트 다중: 고른 것이 다르거나 모르면 매인 주소를 ?lvly_ws= 로 다시 싣는다", () => {
+    const base = { gatewayUrl: "https://olddev.lvly.io", cpOrigins: CP_ORIGINS };
+    const want = (slug) => ({ how: "load", url: `https://olddev.lvly.io/ui/?lvly_ws=${slug}#/s/box-a-1` });
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: REG("haru", "하루") }, { ...base, windowUrl: "https://olddev.lvly.io/ui/", windowWs: "" }), want("haru"));
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: REG("haru", "하루") }, { ...base, windowUrl: "https://olddev.lvly.io/ui/", windowWs: null }), want("haru"), "모르는데 해시로 꽂았다");
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: REG("primary", "본사") }, { ...base, windowUrl: "https://olddev.lvly.io/ui/", windowWs: "haru" }), want("primary"));
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: REG("haru", "하루") }, { ...base, windowUrl: "https://other.example/ui/", windowWs: "haru" }), want("haru"), "다른 출처의 선택값을 믿었다");
+    // 경로 접두가 있는 게이트웨이도 그 접두를 살린다
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: REG("haru", "하루") }, { gatewayUrl: "https://corp.example.com/lively", windowUrl: null, windowWs: null }),
+      { how: "load", url: "https://corp.example.com/lively/ui/?lvly_ws=haru#/s/box-a-1" });
+  });
+  t("A45 K12 스트림은 다른 워크스페이스까지 청한다(all=1) · 웹이 고른 워크스페이스 저장소 키는 웹과 같다", () => {
+    assert.equal(streamUrl("https://gw.example/"), "https://gw.example/api/ui/notify/stream?all=1");
+    assert.equal(streamUrl(""), null);
+    const net = readFileSync(fileURLToPath(new URL("../../web/lib/net.ts", import.meta.url)), "utf8");
+    const key = /const WORKSPACE_KEY = '([^']+)'/.exec(net)?.[1];
+    assert.equal(key, WEB_WORKSPACE_KEY, "웹의 워크스페이스 선택 키가 바뀌었다 — 앱이 엉뚱한 값을 읽고 매번 다시 싣는다");
+    assert.ok(READ_WEB_WORKSPACE_JS.includes(JSON.stringify(WEB_WORKSPACE_KEY)));
+  });
+  t("A46 배선 — 스트림 주소·배너 모양·클릭 경로·매인 곳 이동 시 초기화가 main.mjs 에 실제로 걸려 있다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    const conn = main.slice(main.indexOf("async function connectNotifyStream("), main.indexOf("function scheduleStreamRetry("));
+    assert.ok(/fetch\(streamUrl\(gw\)/.test(conn), "스트림이 다른 워크스페이스를 청하지 않는다");
+    assert.ok(/bannerFor\(hit, process\.platform\)/.test(conn), "실시간 배너에 플랫폼(부제 여부)을 안 넘긴다");
+    const banner = main.slice(main.indexOf("function showBanner("), main.indexOf("async function openFromBanner("));
+    assert.ok(/new Notification\(\{ title, body, \.\.\.\(subtitle \? \{ subtitle \} : \{\}\) \}\)/.test(banner), "부제(워크스페이스 아래 줄)를 버린다");
+    assert.ok(/void openFromBanner\(event\)/.test(banner), "클릭이 새 경로 판정을 안 탄다");
+    const open = main.slice(main.indexOf("async function openFromBanner("), main.indexOf("function cpOrigins("));
+    assert.ok(/clickTarget\(event, \{ gatewayUrl: state\.gatewayUrl, windowUrl, windowWs, cpOrigins: cpOrigins\(\) \}\)/.test(open), "클릭 판정에 창·매인 곳·계정 서버를 안 넘긴다");
+    assert.ok(/t\.how === "external"\) \{ await shell\.openExternal\(t\.url\)/.test(open), "다른 워크스페이스를 브라우저로 안 연다");
+    assert.ok(/t\.how === "load"\) \{ loadInApp\(t\.url\)/.test(open), "매인 곳을 다시 싣지 않는다");
+    assert.ok(/READ_WEB_WORKSPACE_JS/.test(open) && /ws\.via === "header"/.test(open), "셀프호스트 다중에서 창의 선택을 안 묻는다");
+    const load = main.slice(main.indexOf("function loadInApp("), main.indexOf("function resetNotifyBinding("));
+    assert.ok(load.indexOf("hashNav.failed()") >= 0 && load.indexOf("hashNav.failed()") < load.indexOf("loadURL(url)"), "다시 싣기 전에 기다리던 해시를 안 버린다");
+    const poll = main.slice(main.indexOf("async function pollNotifications("), main.indexOf("async function pollPersonFeed("));
+    assert.ok(/diffSessions\(notifySnapshot, next, prefs, boundWs\)/.test(poll), "폴링 배너에 매인 워크스페이스 표시가 없다");
+    const feed = main.slice(main.indexOf("async function pollPersonFeed("));
+    const wsAt = feed.indexOf("boundWs = wsLabelOf(data.workspace)"), pickAt = feed.indexOf("pickPersonEvents(");
+    assert.ok(wsAt >= 0 && wsAt < pickAt, "피드의 워크스페이스 표시를 사람 알림보다 먼저 받지 않는다");
+    assert.ok(/pickPersonEvents\(data && data\.items, personSeen, notifyPrefs\(\), boundWs\)/.test(feed));
+    const refresh = main.slice(main.indexOf("async function refreshState("), main.indexOf("function syncWindows("));
+    assert.ok(/if \(state\.gatewayUrl\) resetNotifyBinding\(\)/.test(refresh), "매인 곳이 바뀌어도 옛 스트림·기준선을 안 버린다");
+    const reset = main.slice(main.indexOf("function resetNotifyBinding("), main.indexOf("async function connectNotifyStream("));
+    for (const k of ["notifySnapshot = null", "personSeen = null", "personSince = null", "boundWs = null", "streamSeen.clear()", "streamCtl.abort()"]) {
+      assert.ok(reset.includes(k), `초기화에 ${k} 가 없다`);
+    }
   });
 }
 

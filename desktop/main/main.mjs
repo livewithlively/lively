@@ -22,7 +22,7 @@ import { runBootstrap, bootstrapPreview } from "./bootstrap.mjs";
 import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
 import { contextMenuModel, runContextMenuAction } from "./context-menu.mjs";
-import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor, cloudUrl } from "./ipc-contract.mjs";
+import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor, cloudUrl, DEFAULT_CLOUD_URL } from "./ipc-contract.mjs";
 import { gatewayAdvice } from "./gateway-input.mjs";
 import { appReady, nodeStateOf, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup, createHashNav } from "./web-shell.mjs";
 import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, surfaceNavTarget, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
@@ -33,7 +33,7 @@ import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
 import { APP_ID } from "./win-stale-install.mjs";
-import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, sessionHash, pickPersonEvents, planPersonBanners, rememberSeen, personLink, streamEvent, parseSse, reconnectDelay, stableStream, SEEN_MAX, keepBanner } from "./notify.mjs";
+import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, pickPersonEvents, planPersonBanners, rememberSeen, streamEvent, parseSse, reconnectDelay, stableStream, SEEN_MAX, keepBanner, wsLabelOf, clickTarget, streamUrl, READ_WEB_WORKSPACE_JS } from "./notify.mjs";
 import { enrichPathFromLoginShell } from "./login-path.mjs";
 import { execFileSync } from "node:child_process";
 
@@ -85,7 +85,12 @@ async function refreshState({ deep = false } = {}) {
   next.gatewayUrl = readTrim(join(LIVELY_DIR, "gateway-url"));
   // 매인 곳이 바뀌었으면(워크스페이스 이동) '이미 물어봤다' 기록을 버린다(#2215) — 안 그러면 되돌아왔을 때
   //  다시 어긋나 있는데도 영영 안 묻는다. 기록의 뜻이 "그 주소를 그때 물었다"가 아니라 "지금 기준에서 물었다"이므로.
-  if (next.gatewayUrl !== state.gatewayUrl) driftAsked.clear();
+  if (next.gatewayUrl !== state.gatewayUrl) {
+    driftAsked.clear();
+    // #4054 — 알림도 옛 곳을 놓는다: 열린 스트림은 끊길 때까지 **옛 주소**에 붙어 있어, 옛 워크스페이스 사건이
+    //  새 창에서 열리려다 실패한다. 기준선·커서도 옛 곳의 것이라 새 목록과 견주면 가짜 배너가 뜬다.
+    if (state.gatewayUrl) resetNotifyBinding();
+  }
   next.loggedIn = existsSync(join(LIVELY_DIR, "token"));
   // 토큰이 **있다**와 **먹힌다**는 다르다 — 게이트웨이가 401 로 거부한 그 토큰이 그대로면 로그인이 필요한 상태다.
   //  파일의 토큰이 바뀌면(다시 로그인) 저절로 풀린다 — 따로 초기화할 자리가 없어 빠뜨릴 일이 없다.
@@ -590,6 +595,8 @@ let streamTimer = null;             // 재연결 예약
 const streamSeen = new Set();       // 이미 띄운 스트림 사건 key(재연결 직후 중복 방지)
 
 let notifyPrefsCache = { ...NOTIFY_DEFAULTS };   // 서버에서 마지막으로 받은 값. 받기 전엔 전부 켜짐.
+// 앱이 매인 워크스페이스의 표시(#4054) — 알림 피드가 싣는다. 폴링·사람 알림 배너의 윗줄이 된다(실시간 사건은 사건마다 싣는다).
+let boundWs = null;
 
 /** 유형별 켜짐 — 서버 값. 아직 못 받았으면 기본값(전부 켜짐): 설정을 못 읽었다고 알림이 멎으면 안 된다. */
 function notifyPrefs() { return notifyPrefsCache; }
@@ -604,16 +611,15 @@ const liveBanners = new Set();
 // 알림 클릭이 웹 창을 어느 화면으로 보낼지 — 싣는 중이면 한 곳만 기억했다가 다 실린 뒤 보낸다(web-shell.mjs createHashNav).
 const hashNav = createHashNav();
 
-/** 배너 한 장. 클릭하면 그 세션 화면으로 간다(묶음 배너는 갈 곳이 하나가 아니므로 앱만 띄운다). */
-function showBanner({ title, body, event }) {
+/** 배너 한 장. 클릭하면 그 사건의 화면으로 간다(묶음 배너는 갈 곳이 하나가 아니므로 앱만 띄운다). */
+function showBanner({ title, subtitle, body, event }) {
   try {
     if (!Notification.isSupported()) return;          // 리눅스 등 알림 데몬이 없는 환경 — 조용히 넘긴다
-    const n = new Notification({ title, body });
+    //  #4054 — 윗줄은 워크스페이스 이름이다(notify.bannerFor). subtitle 은 macOS 에서만 오고, 다른 OS 는 본문에 합쳐 온다.
+    const n = new Notification({ title, body, ...(subtitle ? { subtitle } : {}) });
     n.on("click", () => {
       liveBanners.delete(n);                                           // 누른 배너는 OS 가 치운다 — 더 쥘 까닭이 없다
-      if (event && event.id) return openSessionInApp(event.id);        // 세션 알림 → 그 세션 화면
-      if (event && event.link) return openHashInApp(event.link);       // 사람 알림 → 그 프로젝트 화면
-      showMain();                                                      // 묶음 배너 — 갈 곳이 하나가 아니다
+      void openFromBanner(event);
     });
     n.show();
     //  상한을 넘어 놓이는 배너에 close() 를 부르지 않는다 — 실측(Electron 43.3.0): close() 한 배너는 놓아도 GC 되지 않아 그대로 쌓인다.
@@ -621,14 +627,55 @@ function showBanner({ title, body, event }) {
   } catch { /* OS 가 알림을 막았어도 앱은 계속 돈다 */ }
 }
 
+/**
+ * 배너 클릭 → 그 사건의 워크스페이스·화면으로 (#4054). 어디로 갈지는 notify.clickTarget 한 자리가 정한다(표로 검증):
+ *  지금 창의 해시 · 매인 곳을 다시 싣기(창이 다른 곳을 싣고 있거나, 셀프호스트에서 다른 워크스페이스를 골라 둔 경우) ·
+ *  계정 서버 입장 주소를 브라우저로(매니지드의 다른 워크스페이스) · 앱 창만(묶음).
+ *  종전엔 무엇이든 지금 창의 해시만 바꿔서, 다른 워크스페이스의 세션을 보고 있던 워크스페이스에서 열려다 실패했다.
+ */
+async function openFromBanner(event) {
+  try {
+    const ws = event ? wsLabelOf(event.ws) : null;
+    const wc = appWin && !appWin.isDestroyed() ? appWin.webContents : null;
+    const windowUrl = wc ? (wc.getURL() || null) : null;
+    let windowWs = null;
+    //  셀프호스트 다중만 — 창의 웹이 지금 고른 워크스페이스를 묻는다. 싣는 중이거나 못 읽으면 null(→ 주소로 다시 싣는다).
+    if (ws && ws.via === "header" && wc && !wc.isLoadingMainFrame()) {
+      const v = await wc.executeJavaScript(READ_WEB_WORKSPACE_JS).catch(() => null);
+      windowWs = typeof v === "string" ? v : null;
+    }
+    const t = clickTarget(event, { gatewayUrl: state.gatewayUrl, windowUrl, windowWs, cpOrigins: cpOrigins() });
+    if (t.how === "external") { await shell.openExternal(t.url); return; }
+    if (t.how === "hash") { openHashInApp(t.hash); return; }
+    if (t.how === "load") { loadInApp(t.url); return; }
+    showMain();                                                        // 묶음·갈 곳 없음
+  } catch { /* 클릭 처리 실패가 앱을 흔들지 않는다 */ }
+}
+/** 아는 계정 서버 출처 — 입장 주소를 브라우저로 열기 전에 대 본다(서버가 준 주소라도 그대로 믿지 않는다). */
+function cpOrigins() {
+  const out = new Set([webOrigin(DEFAULT_CLOUD_URL)]);
+  try { out.add(webOrigin(cloudUrl())); } catch { /* 개발용 덮어쓰기가 형식 오류 — 기본만 */ }
+  return [...out].filter(Boolean);
+}
 /** 알림 클릭 → 앱 창을 띄우고 그 화면으로. 이미 실려 있으면 해시만 바꾼다(전체 리로드는 보던 화면을 날린다). */
 function openHashInApp(hash) {
   const r = showApp();
   if (!r || !r.ok || !hash || !appWin || appWin.isDestroyed()) return;
   hashNav.open(appWin.webContents, hash);
 }
-/** 세션 알림 클릭 — id 형식을 먼저 본다(응답을 그대로 주소로 쓰지 않는다). */
-function openSessionInApp(id) { openHashInApp(sessionHash(id)); }
+/** 알림 클릭 → 앱 창에 그 주소를 새로 싣는다(매인 게이트웨이의 `/ui/…` 만 온다 — clickTarget). 기다리던 해시 이동은 버린다. */
+function loadInApp(url) {
+  const r = showApp();
+  if (!r || !r.ok || !url || !appWin || appWin.isDestroyed()) return;
+  hashNav.failed();   // 싣던 중에 눌러 둔 해시가 이 로드 뒤에 옛 화면으로 끌고 가지 않게(#3896 규약)
+  appWin.loadURL(url).catch(() => { /* did-fail-load 가 처리 */ });
+}
+/** 매인 워크스페이스가 바뀌었다(#4054) — 옛 곳의 기준선·커서·표시를 버리고 스트림을 끊는다(finally 가 새 주소로 다시 붙는다). */
+function resetNotifyBinding() {
+  notifySnapshot = null; personSeen = null; personSince = null; boundWs = null;
+  streamSeen.clear();
+  if (streamCtl) { try { streamCtl.abort(); } catch { /* 이미 끝났다 */ } }
+}
 
 /**
  * 실시간 스트림에 붙는다 (#1842). 게이트웨이가 하네스 훅 보고를 받는 **그 순간** 사건을 밀어 주므로,
@@ -644,7 +691,8 @@ async function connectNotifyStream() {
   streamCtl = ctl;
   let openedAt = 0;
   try {
-    const res = await fetch(`${gw}/api/ui/notify/stream`, {
+    //  #4054 — 다른 워크스페이스 사건까지 청한다(서버가 계정으로 확인한 것만 준다). 사건마다 워크스페이스 표시가 붙는다.
+    const res = await fetch(streamUrl(gw), {
       headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
       signal: ctl.signal,
     });
@@ -667,7 +715,7 @@ async function connectNotifyStream() {
         if (!hit) continue;
         streamSeen.add(hit.key);
         while (streamSeen.size > SEEN_MAX) streamSeen.delete(streamSeen.values().next().value);
-        showBanner({ ...bannerFor(hit), event: hit });
+        showBanner({ ...bannerFor(hit, process.platform), event: hit });
       }
     }
   } catch { /* 끊김·타임아웃·게이트웨이 재시작 — 아래에서 다시 붙는다 */ }
@@ -698,7 +746,7 @@ async function pollNotifications() {
   if (notifyPolling) return;
   const gw = String(state.gatewayUrl || "").replace(/\/+$/, "");
   const token = state.ready && gw ? readTrim(join(LIVELY_DIR, "token")) : "";
-  if (!token) { notifySnapshot = null; personSeen = null; personSince = null; streamSeen.clear(); notifyPrefsCache = { ...NOTIFY_DEFAULTS }; return; }
+  if (!token) { notifySnapshot = null; personSeen = null; personSince = null; boundWs = null; streamSeen.clear(); notifyPrefsCache = { ...NOTIFY_DEFAULTS }; return; }
   notifyPolling = true;
   try {
     const res = await fetch(`${gw}/api/ui/terminal/sessions`, {
@@ -710,11 +758,11 @@ async function pollNotifications() {
     const next = snapshotSessions(data && data.sessions);
     await pollPersonFeed(gw, token);                     // 설정·사람 알림을 함께 받아 온다(설정이 아래 판정에 바로 쓰인다)
     const prefs = notifyPrefs();
-    const events = diffSessions(notifySnapshot, next, prefs);
+    const events = diffSessions(notifySnapshot, next, prefs, boundWs);   // #4054 — 이 목록은 매인 워크스페이스의 것
     notifySnapshot = next;                               // ★ 기준선은 스트림 유무와 무관하게 늘 갱신한다 —
     //  연결이 끊기는 순간 폴링이 그 자리에서 이어받아야 하는데, 기준선이 낡아 있으면 그 사이 전이를 통째로
     //  놓치거나(오래된 스냅샷과 비교) 과거를 한꺼번에 다시 띄운다.
-    if (!streamAlive) for (const b of planBanners(events)) showBanner(b);   // 스트림이 살아 있으면 배너는 그쪽이 만든다
+    if (!streamAlive) for (const b of planBanners(events, undefined, process.platform)) showBanner(b);   // 스트림이 살아 있으면 배너는 그쪽이 만든다
   } catch { /* 게이트웨이가 꺼졌거나 네트워크가 끊겼다 — 기준선을 남기고 다음 폴에서 이어 본다 */ }
   finally { notifyPolling = false; }
 }
@@ -730,11 +778,13 @@ async function pollPersonFeed(gw, token) {
   const data = await res.json();
   // 서버가 실어 보낸 알림 설정을 캐시에 반영한다(왕복을 하나 더 만들지 않는다).
   if (data && data.prefs && typeof data.prefs === "object") notifyPrefsCache = { ...NOTIFY_DEFAULTS, ...data.prefs };
-  const events = pickPersonEvents(data && data.items, personSeen, notifyPrefs());
+  //  #4054 — 매인 워크스페이스의 표시(이름). 구 게이트웨이는 안 싣는다 → 받던 값을 유지한다(없으면 종전 배너).
+  if (data && data.workspace) boundWs = wsLabelOf(data.workspace) || boundWs;
+  const events = pickPersonEvents(data && data.items, personSeen, notifyPrefs(), boundWs);
   if (!personSeen) personSeen = new Set();             // 첫 폴 = 기준선(위 pickPersonEvents 가 이미 빈 배열을 줬다)
   rememberSeen(personSeen, events);
   personSince = (data && data.now) || personSince;     // 서버 시계를 쓴다 — 앱 시계와 어긋나도 사건을 건너뛰지 않게
-  for (const b of planPersonBanners(events)) showBanner(b);
+  for (const b of planPersonBanners(events, undefined, process.platform)) showBanner(b);
 }
 
 // ── 라이블리 화면 = 웹 UI 창 (web-shell.mjs) ────────────────────────────────
@@ -790,6 +840,12 @@ function showApp() {
     appWin.webContents.on("did-finish-load", () => {
       if (appWin && !appWin.isDestroyed()) hashNav.loaded(appWin.webContents);   // 싣는 도중 누른 알림 — 다 실린 지금 그 화면으로(#3896)
       if (webError) { webError = null; void refreshState(); }
+    });
+    // #4054 — did-finish-load 시점엔 isLoadingMainFrame() 이 **아직 참**이다(실측 43.3.0: finish 에서 참 → 곧이은 did-stop-loading 에서 거짓).
+    //  그 틈에 누른 클릭은 대기로 가는데 그 대기를 풀 did-finish-load 는 다시 오지 않는다 — 멈춘 순간에도 한 번 더 푼다(loaded 는 기다리는 것이 있을 때만 움직인다).
+    //  실패한 로드는 did-fail-load 가 먼저 대기를 버리므로 여기서 엉뚱한 화면으로 가지 않는다.
+    appWin.webContents.on("did-stop-loading", () => {
+      if (appWin && !appWin.isDestroyed()) hashNav.loaded(appWin.webContents);
     });
     // 사람이 웹에서 **다른 워크스페이스로 옮겨 갔나**(#2215) — 웹뷰만 옮겨가고 이 PC 의 로컬(토큰·노드·MCP)은
     //  그대로라 조용히 어긋난다. 해시 라우팅이라 in-page 도 함께 듣는다(둘 다 같은 자리로 보낸다).

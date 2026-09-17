@@ -21,6 +21,7 @@ import { stateDir } from "./ops/state-dir.js";
 import { fileURLToPath } from "node:url";
 import type { BearerVerifier } from "./auth/bearer.js";
 import { registerNotifyRoutes } from "./v6/notify-routes.js";
+import { resolveNotifyRoutes } from "./v6/notify-scope.js";
 import type { LivelyUser } from "./context.js";
 import { restMounts, isReadOnlyBlocked } from "./capabilities/index.js";
 import { viewerOf } from "./capabilities/principal.js";
@@ -393,7 +394,9 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
 
   // ── 알림 실시간 스트림(#1842) — 앱이 물고 있으면 세션이 끝나는 그 순간 배너가 뜬다(SSE). ──
   //  capability(JSON 응답 전제) 로는 못 만드는 표면이라 라우트로 직접 연다. 인증은 다른 표면과 같은 미들웨어.
-  registerNotifyRoutes(app, mw("memory"), (req) => userOf(req)?.userId || "");
+  //  #4054 — 받는 자리는 «워크스페이스 + 사람»(notify-scope.ts). 다른 워크스페이스는 `?all=1`(데스크톱 앱)일 때만.
+  registerNotifyRoutes(app, mw("memory"), (req) => userOf(req)?.userId || "",
+    (req, me, all) => resolveNotifyRoutes(userOf(req), me, all));
 
   // ── 정적 프론트 — dist/web.js 기준 레포루트/public. 해시 라우팅이라 서버 폴백 불필요. ──
   const publicDir = fileURLToPath(new URL("../public", import.meta.url));

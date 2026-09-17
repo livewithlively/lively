@@ -18,7 +18,8 @@ import {
 } from "./headless-login-run.js";
 import { logger } from "../log.js";
 import { carrySessionDismissals, closeSessionAppInstances } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
-import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
+import { accountRoutesActive, publishNotify, sessionEventKey } from "../v6/notify-bus.js";
+import { hereSlug, notifyAccountOf } from "../v6/notify-scope.js";
 import { roots, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, canAttach, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";        //  하기 위한 파사드(chat-routes 대화창과 같은 관문)
@@ -1713,10 +1714,13 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
   //   되고(무회귀), 구 훅 + 새 게이트웨이는 state 없이 종전대로 동작한다. 새 경로였다면 앞 조합이 404 로 죽는다.
   // 전이 하나를 그 세션 주인에게 민다(#1842). **무엇이 알림인지는 여기서 정하지 않는다** — 앱이 해석한다.
   //  이름은 지금 하는 일(pane 제목)이 있으면 그걸, 없으면 세션 라벨을 준다(앱이 다시 폴백한다).
+  //  #4054 — 발행은 «어느 워크스페이스의 누구» 로 한다. 매니지드에서 다른 워크스페이스를 받는 앱이 있으면
+  //   세션 주인의 계정 id 를 함께 싣는다(그 앱들은 구성원 아이디가 아니라 계정으로 맞춘다 — notify-scope.ts).
   const notifyPhaseChange = async (id: string, owner: string, change: { prev: string | null; phase: string; at: number }, nameHint?: string): Promise<void> => {
     try {
+      const account = accountRoutesActive() ? await notifyAccountOf(owner) : null;
       // 노드 세션의 tmux 는 그 PC 에 있어 getSessionLabel(로컬 tmux)이 못 읽는다 → 호출자가 아는 이름을 준다.
-      publishNotify(owner, {
+      publishNotify({ ws: hereSlug(), member: owner, account }, {
         type: "session", id, name: nameHint || (await getSessionLabel(id).catch(() => "")) || "",
         prev: change.prev, phase: change.phase,
         key: sessionEventKey(id, change.phase, change.at), ts: change.at,
