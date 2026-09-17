@@ -35,6 +35,41 @@ export function pickHeadlessHarness(i: { explicit?: string | null; loggedIn: rea
 }
 
 /**
+ * 맥락 잡 **샌드박스 판**의 실행 하네스(#4052 후속) — 대화형 로그인을 재지 않고 **저장된 헤드리스 자격**으로 고른다.
+ *
+ *  왜: 샌드박스 판은 멤버의 대화형 로그인이 아니라 멤버 비밀(sandbox-credentials SANDBOX_CREDS)로 돈다(#4012 T2).
+ *   그런데 종전엔 이 판도 resolveHeadlessHarness → memberUsableHarnesses 를 거쳤고, 로그인 파일이 없으면 **프로브**가 돌아
+ *   그 멤버 자리에 «AI 로그인 (antigravity)» 세션을 띄웠다(ai-login-run.ensureHarnessSeat). 크론이 주기마다 부르니 사람이
+ *   한 번도 안 들어온 새 워크스페이스에도 그 세션이 «일하는 중» 으로 남아 관리 서버가 테넌트를 재우지 못했다
+ *   (실측 2026-09-17 sangmin-yoon-37de: 분류 잡이 돈 05:09·06:13 에 하나씩 · 절전 «busy» 보류). 자리 기억이 게이트웨이
+ *   메모리라 교대마다 새 자리가 또 생긴다. 프로브의 전제(«사람이 AI 연결을 하려는 순간») 가 크론에선 성립하지 않는다.
+ *  규칙: 명시가 있으면 종전처럼 검증만 한다. 없으면 자격이 있는 하네스 중 claude 우선, 하나도 없으면 claude —
+ *   그 경우 배정이 no_credential 로 정직하게 끝나고 멤버에게 알린다(task-scheduler, 종전과 같은 끝).
+ *  자격 조회가 실패하면 그 하네스는 «자격 없음» 으로 본다(던지지 않는다 — 잡이 멈추지 않게).
+ */
+export async function resolveSandboxHarness(
+  memberId: string,
+  explicit?: string | null,
+  hasCred: (memberId: string, harness: string) => Promise<boolean> = defaultHasSandboxCred,
+): Promise<string> {
+  const ex = String(explicit ?? "").trim();
+  if (ex) return pickHeadlessHarness({ explicit: ex, loggedIn: [] });
+  const { SANDBOX_CREDS } = await import("./sandbox-credentials.js");
+  const withCred: string[] = [];
+  for (const h of Object.keys(SANDBOX_CREDS)) {
+    if (await hasCred(memberId, h).catch(() => false)) withCred.push(h);
+  }
+  const picked = pickHeadlessHarness({ loggedIn: withCred });
+  logger.debug({ member: memberId, harness: picked, withCred }, `샌드박스 판 하네스 선택: ${picked} — 저장된 자격 [${withCred.join(",")}]`);
+  return picked;
+}
+
+async function defaultHasSandboxCred(memberId: string, harness: string): Promise<boolean> {
+  const { sandboxLeaseFor } = await import("./sandbox-credentials.js");
+  return !!(await sandboxLeaseFor({ requester: memberId, harness }));
+}
+
+/**
  * 의뢰자(멤버 id/이메일) 기준으로 실행 하네스를 정한다. 명시가 있으면 프로브 없이 검증만 한다(무효면 던진다).
  *  프로브(로그인 확인)가 실패해도 던지지 않는다 — 종전 기본(claude)으로 접어 잡이 멈추지 않게 한다.
  */
