@@ -13,7 +13,9 @@ import {
 } from "./project-store.js";
 import { createProjectFolder, grantSharedGroupWrite } from "../project/project-fs.js";
 import { projectStorage, type ProjectStorage } from "../project/project-storage.js";
-import { RULES_MARK, RULES_PLACEHOLDER, pickRules, nextClaudeMd, type RulesSource } from "./agents-md-rules.js";
+import {
+  RULES_MARK, RULES_PLACEHOLDER, pickRules, nextClaudeMd, agentsMdHeader, isAgentsMdOf, type RulesSource,
+} from "./agents-md-rules.js";
 // 폴더 바인딩의 환경 id — 박스(게이트웨이 호스트)는 'central'(CENTRAL_NODE_ID 와 같은 어휘). 노드 스케줄러를
 //  import 하면 registry/WS 체인이 딸려 와 순환 위험이 있어, 이 leaf 에서는 리터럴로 둔다(값은 한 낱말·불변).
 const CENTRAL_NODE = "central";
@@ -51,7 +53,7 @@ function codeWorkSection(repos: string[]): string[] {
 
 function buildProjectDigest(p: any): string {
   const L: string[] = [];
-  L.push(`# ${p.name}   (프로젝트 #${p.id})`, "");
+  L.push(agentsMdHeader(p), "");
   L.push("> 이 파일은 lively 가 자동 생성합니다(아래 '규칙'만 사람이 편집). 상세·최신은 lively MCP 로 조회하세요.", "");
   L.push("## 메타데이터");
   L.push(`- 상태: ${p.status}${p.due_date ? ` · 기한: ${p.due_date}` : ""}`);
@@ -83,12 +85,14 @@ function buildProjectDigest(p: any): string {
  * 규칙(사람 편집 영역)과 그 출처 — 판정은 agents-md-rules.pickRules 한 자리.
  *  저장소를 옮기는 중이면(멤버 저장소에 AGENTS.md 가 아직 없다) 게이트웨이 쪽 원본도 재료로 준다 — 이관이 그 파일에
  *  닿기 전이면 사람 규칙은 거기 있다. 원본은 옮겨지는 순간 그 자리에서 빠지므로 지운 규칙이 되살아나지는 않는다.
+ *  ⚠ 그 원본은 **이 프로젝트의 것으로 증명될 때만** 쓴다(첫 줄 대조) — 게이트웨이 로컬 폴더는 워크스페이스로 안 갈린다.
  */
 async function readRules(store: ProjectStorage): Promise<{ rules: string; from: RulesSource }> {
   const agents = await store.readText(path.join(store.base, "AGENTS.md"));
-  const original = agents == null && store.localBase !== store.base
+  const raw = agents == null && store.localBase !== store.base
     ? await fsp.readFile(path.join(store.localBase, "AGENTS.md"), "utf8").catch(() => null)
     : null;
+  const original = raw != null && store.project && isAgentsMdOf(raw, store.project) ? raw : null;
   const claude = await store.readText(path.join(store.base, "CLAUDE.md"));
   return pickRules({ agents, original, claude });
 }
@@ -133,9 +137,9 @@ async function resolveProjectFolder(p: any): Promise<string> {
 }
 
 /** 요청 밖 호출(캐퍼빌리티의 재생성)이 쓰는 저장소 — 만든 사람 권한. 만든 사람이 없으면 저장소가 신원을 요구할 수 있다 */
-export async function agentsMdStorage(p: { id: number; folder?: string | null; created_by?: string | null }): Promise<ProjectStorage> {
+export async function agentsMdStorage(p: { id: number; name?: string | null; folder?: string | null; created_by?: string | null }): Promise<ProjectStorage> {
   const folder = await resolveProjectFolder(p);
-  return projectStorage(folder, p.created_by ? { memberId: String(p.created_by) } : null);
+  return projectStorage(folder, p.created_by ? { memberId: String(p.created_by) } : null, { id: p.id, name: p.name ?? null });
 }
 
 // AGENTS.md(+ CLAUDE.md @import) 를 현재 프로젝트 상태로 재생성(write-if-changed). 비치명적으로 호출(.catch).

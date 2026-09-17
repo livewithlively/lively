@@ -6,8 +6,10 @@
 // 실행: npm run build && node --test dist/v6/agents-md-rules.test.js
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
 import {
   RULES_MARK, RULES_PLACEHOLDER, CLAUDE_IMPORT, GENERATED_BANNER, pickRules, nextClaudeMd, sameRules,
+  agentsMdHeader, isAgentsMdOf,
 } from "./agents-md-rules.js";
 
 // 생성기가 쓰는 모양 그대로 — digest(자동) + 표식 + 규칙.
@@ -110,4 +112,27 @@ test("같은 사람 규칙인지 — 자동 영역이 달라도 규칙이 같으
   assert.equal(sameRules(generated(""), generated("")), true, "둘 다 빈 규칙이면 같다");
   assert.equal(sameRules(generated("A"), "A"), false, "표식 없는 문서는 규칙을 비교할 수 없다");
   assert.equal(sameRules("A", "A"), false);
+});
+
+test("H1·H5 이 프로젝트 머리로 시작하면 이 프로젝트의 AGENTS.md 다(CRLF 도)", () => {
+  const p = { id: 4064, name: "자료탭 표시 확인" };
+  assert.equal(agentsMdHeader(p), "# 자료탭 표시 확인   (프로젝트 #4064)", "생성기가 쓰는 머리와 글자까지 같아야 한다");
+  assert.equal(isAgentsMdOf(`${agentsMdHeader(p)}\n\n본문`, p), true);
+  assert.equal(isAgentsMdOf(`${agentsMdHeader(p)}\r\n\r\n본문`, p), true);
+});
+
+test("H2·H3·H4 ★ 이름·번호 중 하나라도 다르거나 이름을 모르면 남의 것일 수 있다 — 거짓", () => {
+  const p = { id: 7, name: "우리 프로젝트" };
+  assert.equal(isAgentsMdOf(`${agentsMdHeader({ id: 7, name: "남의 프로젝트" })}\n`, p), false, "같은 번호의 다른 워크스페이스 프로젝트");
+  assert.equal(isAgentsMdOf(`${agentsMdHeader({ id: 8, name: "우리 프로젝트" })}\n`, p), false);
+  assert.equal(isAgentsMdOf(`${agentsMdHeader(p)}\n`, { id: 7 }), false, "이름을 모르면 증명할 수 없다");
+  assert.equal(isAgentsMdOf(`${agentsMdHeader(p)}\n`, { id: 7, name: "" }), false);
+  assert.equal(isAgentsMdOf(`\n${agentsMdHeader(p)}\n`, p), false, "첫 줄이어야 한다");
+});
+
+test("W8 생성기는 머리를 한 함수로 만들고, 규칙 폴백은 그 머리와 맞을 때만 옛 원본을 쓴다", () => {
+  const gen = fs.readFileSync(new URL("./agents-md.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+  assert.match(gen, /L\.push\(agentsMdHeader\(p\), ""\)/, "생성기 머리가 대조 함수와 다른 글자로 쓰이면 이관이 제 AGENTS.md 를 못 알아본다");
+  assert.match(gen, /const original = raw != null && store\.project && isAgentsMdOf\(raw, store\.project\) \? raw : null;/,
+    "옛 원본을 대조 없이 쓰면 같은 번호를 가진 남의 워크스페이스 규칙이 섞인다");
 });

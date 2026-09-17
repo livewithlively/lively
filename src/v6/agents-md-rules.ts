@@ -38,6 +38,22 @@ export function hasClaudeImport(content: string): boolean {
   return content.split(/\r?\n/).some((l) => l.trim() === CLAUDE_IMPORT);
 }
 
+/** 생성기가 쓰는 AGENTS.md 첫 줄 — 한 자리에서만 만든다(생성기·이관의 소유 대조가 같은 글자를 본다) */
+export function agentsMdHeader(p: { id: number; name?: string | null }): string {
+  return `# ${p.name ?? ""}   (프로젝트 #${p.id})`;
+}
+
+/**
+ * 이 AGENTS.md 가 **이 프로젝트의** 생성물인가 — 첫 줄이 그 프로젝트의 머리와 같다.
+ *  매니지드 게이트웨이의 옛 로컬 폴더는 워크스페이스로 안 갈려(project-storage «이관») id 만으로는 남의 것일 수 있다.
+ *  이름을 모르면 증명할 수 없다(거짓).
+ */
+export function isAgentsMdOf(content: string, p: { id: number; name?: string | null }): boolean {
+  if (p.name == null || p.name === "") return false;
+  const first = content.split(/\r?\n/, 1)[0] ?? "";
+  return first === agentsMdHeader(p);
+}
+
 /** 우리가 쓴 AGENTS.md 인가 — 규칙 표식이나 생성 문장이 있으면 우리 것이다 */
 export function isGeneratedAgentsMd(content: string): boolean {
   return content.includes(RULES_MARK) || content.includes(GENERATED_BANNER);

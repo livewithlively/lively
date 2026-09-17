@@ -19,6 +19,7 @@
 // ── 이관 — migrateLocalToMember ───────────────────────────────────────────────
 //  멤버 모드로 처음 열 때, 게이트웨이 로컬에만 있던 파일(곁칸 업로드·AGENTS.md·옮겨 둔 첨부)을 멤버 저장소로 옮긴다.
 //  덮어쓰지 않는다: 없으면 복사(mtime 보존) · 내용이 같으면 그대로 · 다르면 «이름 (이관 사본).확장자» 로 나란히 둔다.
+//  **이 워크스페이스의 것으로 증명된 파일만** 옮긴다(아래 «이관» 머리말 — 게이트웨이 로컬 폴더는 워크스페이스로 안 갈린다).
 //  처리한 원본은 게이트웨이 쪽 `.lively/migrated/` 로 옮겨 보관한다 — 데이터는 남기되, 사람이 멤버 저장소에서 지운
 //  파일이 다음 이관에서 되살아나지 않게(원본이 걷는 대상에서 빠진다). 실패한 파일은 제자리에 남아 다음에 다시 간다.
 import fs from "node:fs";
@@ -38,7 +39,8 @@ import {
 import { isConfined, probeLocal } from "../terminal/path-jail.js";
 import { receiveUpload } from "../terminal/upload-file.js";
 import { tenantSlug } from "../terminal/catalog.js";
-import { CLAUDE_IMPORT, sameRules } from "../v6/agents-md-rules.js";
+import { CLAUDE_IMPORT, sameRules, isAgentsMdOf } from "../v6/agents-md-rules.js";
+import { LOCAL_SYSTEM, LOCAL_INSTANCE, localExternalId } from "../ingest/local-file-core.js";
 
 export interface StorageEntry { name: string; type: "dir" | "file"; size: number; mtime: number; repo?: true; empty?: true }
 export interface StorageHit { name: string; path: string; type: "dir" | "file"; size: number; mtime: number }
@@ -51,6 +53,8 @@ export interface ProjectStorage {
   readonly osUser: string | null;
   /** 게이트웨이 로컬 자리 — 호스트 마커·이관 원본이 사는 곳. 로컬 모드면 base 와 같다 */
   readonly localBase: string;
+  /** 어느 프로젝트의 저장소인가 — 이관의 소유 확인 재료(모르면 null → 이관하지 않는다) */
+  readonly project: StorageProject | null;
   /** 디렉터리 한 칸(숨김 제외). 못 읽으면 null */
   list(abs: string): Promise<StorageEntry[] | null>;
   /** 이름에 q 가 든 파일·폴더(숨김 제외, 깊이·결과 상한) */
@@ -75,6 +79,9 @@ export interface ProjectStorage {
   /** 심링크를 해소한 뒤에도 base 안인가(#3668 T1) — op 가 도는 자리에서 해소한다 */
   confined(abs: string): Promise<boolean>;
 }
+
+/** 저장소가 속한 프로젝트 — 이름은 AGENTS.md 머리 대조에만 쓴다 */
+export interface StorageProject { id: number; name?: string | null }
 
 /** 요청 밖에서(생성물 재생성 등) 누구 권한으로 만질지 — 요청이면 그 사용자, 아니면 멤버 id */
 export type StorageActor = { user: LivelyUser } | { memberId: string };
@@ -145,9 +152,9 @@ export async function localSearch(base: string, q: string, limit = 100): Promise
   return out;
 }
 
-function localStorage(base: string): ProjectStorage {
+function localStorage(base: string, project: StorageProject | null): ProjectStorage {
   return {
-    base, osUser: null, localBase: base,
+    base, osUser: null, localBase: base, project,
     list: localList,
     search: (q, limit) => localSearch(base, q, limit),
     manifest: (limit = MANIFEST_FILE_CAP) => manifestFiles(base, limit),
@@ -263,9 +270,9 @@ export const PROJECT_PLACE_JS = stdinJs(
   "if(e.code==='EEXIST'||fs.existsSync(q.dest)){try{fs.unlinkSync(q.tmp)}catch(x){}r='exists'}else{fs.renameSync(q.tmp,q.dest)}}" +
   "if(r==='ok'&&q.mtime>0){try{const t=q.mtime/1000;fs.utimesSync(q.dest,t,t)}catch(x){}}" + out("r"));
 
-function memberStorage(base: string, osUser: string, localBase: string): ProjectStorage {
+function memberStorage(base: string, osUser: string, localBase: string, project: StorageProject | null): ProjectStorage {
   const self: ProjectStorage = {
-    base, osUser, localBase,
+    base, osUser, localBase, project,
     list: (abs) => memberNodeJson<StorageEntry[] | null>(osUser, PROJECT_LIST_JS, { dir: abs }),
     search: async (q, limit = 100) => (await memberNodeJson<StorageHit[] | null>(osUser, PROJECT_SEARCH_JS, { base, q, limit })) ?? [],
     manifest: async (limit = MANIFEST_FILE_CAP) =>
@@ -302,41 +309,75 @@ const hasIdentity = (a: StorageActor): boolean =>
  * 이 프로젝트 폴더를 **누구 권한으로 어디서** 만질지 고른다.
  *  ⚠ 저장소가 분리된 배포에서 신원이 없으면 던진다 — 게이트웨이 로컬로 폴백하면 사람이 못 보는 자리에 쓰게 된다
  *   («모르면 안 쓴다»). 요청 밖 호출부(생성물 재생성)는 .catch 로 비치명 처리한다.
+ *  project 를 모르면 이관하지 않는다 — 옛 파일이 이 워크스페이스의 것인지 증명할 재료가 없다(아래 «이관»).
  */
-export async function projectStorage(folder: string, actor: StorageActor | null): Promise<ProjectStorage> {
+export async function projectStorage(folder: string, actor: StorageActor | null, project?: StorageProject | null): Promise<ProjectStorage> {
   const localBase = projectAbsPath(folder);   // 범위 판정은 두 모드 공통 — project/·legacy-project/ 밖이면 여기서 던진다
-  if (!memberExecConfigured()) return localStorage(localBase);   // 저장소가 붙어 있는 배포: 종전 그대로(신원 왕복 0)
+  const p = project ?? null;
+  if (!memberExecConfigured()) return localStorage(localBase, p);   // 저장소가 붙어 있는 배포: 종전 그대로(신원 왕복 0)
   if (!actor || !hasIdentity(actor)) throw new Error("저장소가 분리된 배포에서는 누구 권한으로 프로젝트 파일을 만질지 정해야 합니다");
   const user = actorUser(actor);
   const osUser = await resolveMemberOsUser(userSlug(user));
-  if (!fileOpsAtMemberBoundary(osUser)) return localStorage(localBase);   // 격리 킬스위치(off) — 종전 폴백
+  if (!fileOpsAtMemberBoundary(osUser)) return localStorage(localBase, p);   // 격리 킬스위치(off) — 종전 폴백
   const { abs: base } = await resolveRootPath(user, "shared", folder, osUser);
-  const store = memberStorage(base, osUser as string, localBase);
-  await settleMigration(store);
+  const store = memberStorage(base, osUser as string, localBase, p);
+  if (p) await settleMigration(store);
   return store;
 }
 
 // ── 이관 ──────────────────────────────────────────────────────────────────────
+//  ★★ 소유 확인 — 매니지드 게이트웨이 하나가 모든 워크스페이스를 서빙하는데 게이트웨이 로컬 공유 루트
+//   (PROJECT_SHARED_BASE)는 워크스페이스로 갈리지 않는다(lvly-cloud deploy/lvly-gw.sh 는 TERMINAL_ROOT_SHARED 를
+//   안 준다). 프로젝트 id 는 워크스페이스끼리 겹칠 수 있다(공용 DB 의 키는 (tenant_id, id) — db/tenant-column.ts).
+//   그러니 `project/<id>` 폴더에 **남의 워크스페이스 파일이 섞여 있을 수 있다.** 이관은 이 워크스페이스의 것으로
+//   증명된 파일만 옮기고, 증명 못 한 것은 제자리에 둔다(옮기지도 보관하지도 않는다):
+//    · 일반 파일 — 이 워크스페이스에 그 좌표(`project:<id>/<rel>`)의 자료 행이 있다. 자료 표는 워크스페이스로 갈리고,
+//      게이트웨이 로컬에 파일을 두던 길(곁칸 업로드·노드 업로드 정본·첫 지시 첨부)은 전부 자료로 등록했다.
+//    · AGENTS.md — 첫 줄이 이 프로젝트의 머리(`# <이름>   (프로젝트 #<id>)`)다.
+//    · CLAUDE.md — 우리가 쓴 import 한 줄이면 누구의 것이든 내용이 같다.
+//   빈 폴더는 소유를 증명할 수 없어 옮기지 않는다.
 
-export interface MigrationReport { copied: number; same: number; renamed: number; failed: number; more: boolean }
+export interface MigrationReport { copied: number; same: number; renamed: number; failed: number; foreign: number; more: boolean }
 interface LocalFile { rel: string; abs: string; size: number; mtime: number }
 
-async function walkLocal(base: string, limit: number): Promise<{ files: LocalFile[]; dirs: string[]; more: boolean }> {
+/** 이 워크스페이스가 자료로 가진 좌표만 돌려준다(상대경로 집합) */
+export type OwnershipCheck = (q: { projectId: number; rels: string[] }) => Promise<Set<string>>;
+
+const dbOwnership: OwnershipCheck = async ({ projectId, rels }) => {
+  const out = new Set<string>();
+  if (!rels.length) return out;
+  //  DB 는 여기서만 늦게 가져온다 — 이 모듈의 나머지는 DB 없이 시험한다.
+  const [{ itemsPool }, { normalizeExternalInstance }] = await Promise.all([
+    import("../db/client.js"), import("../org/ingest/external-identity.js"),
+  ]);
+  const byId = new Map(rels.map((r) => [localExternalId({ kind: "project", id: projectId }, r), r]));
+  const got = await itemsPool.query(
+    `SELECT external_id FROM source WHERE external_system=$1 AND external_instance=$2 AND external_id = ANY($3::text[])`,
+    [LOCAL_SYSTEM, normalizeExternalInstance(LOCAL_INSTANCE), [...byId.keys()]]);
+  for (const row of got.rows as Array<{ external_id: string }>) {
+    const r = byId.get(row.external_id);
+    if (r) out.add(r);
+  }
+  return out;
+};
+let ownership: OwnershipCheck = dbOwnership;
+/** 시험 전용 — 소유 확인을 갈아 끼운다(null = 기본 DB 조회) */
+export function setMigrationOwnership(fn: OwnershipCheck | null): void { ownership = fn ?? dbOwnership; }
+
+async function walkLocal(base: string, cap: number): Promise<{ files: LocalFile[]; truncated: boolean }> {
   const files: LocalFile[] = [];
-  const dirs: string[] = [];
-  let more = false;
+  let truncated = false;
   async function walk(dir: string, rel: string, depth: number): Promise<void> {
     if (depth > 24) return;
     let entries: fs.Dirent[];
     try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
-      if (files.length >= limit) { more = true; return; }
+      if (files.length >= cap) { truncated = true; return; }
       if (e.name.startsWith(".")) continue;   // .lively(마커·이관 보관)·임시파일은 옮기지 않는다
       const abs = path.join(dir, e.name);
       const r = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) {
         if (await isGitRepoRoot(abs)) continue;   // provision 레포 — 코드는 git 이 소유한다(매니페스트와 같은 규칙)
-        dirs.push(r);
         await walk(abs, r, depth + 1);
         continue;
       }
@@ -350,7 +391,30 @@ async function walkLocal(base: string, limit: number): Promise<{ files: LocalFil
   //  생성기가 멤버 쪽에서 규칙을 읽는다(요청은 이관을 15초만 기다린다).
   const first = (f: LocalFile): number => (f.rel === "AGENTS.md" ? 0 : f.rel === "CLAUDE.md" ? 1 : 2);
   files.sort((a, b) => first(a) - first(b));
-  return { files, dirs, more };
+  return { files, truncated };
+}
+
+/** 이 워크스페이스의 것으로 증명된 파일(머리말 «소유 확인») */
+async function provenOwned(project: StorageProject, files: LocalFile[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  const plain: string[] = [];
+  for (const f of files) {
+    if (f.rel === "AGENTS.md") {
+      const t = await fsp.readFile(f.abs, "utf8").catch(() => null);
+      if (t != null && isAgentsMdOf(t, project)) out.add(f.rel);
+      continue;
+    }
+    if (f.rel === "CLAUDE.md") {
+      const t = f.size <= 64 ? await fsp.readFile(f.abs, "utf8").catch(() => null) : null;
+      if (t != null && t.trim() === CLAUDE_IMPORT) out.add(f.rel);
+      continue;
+    }
+    plain.push(f.rel);
+  }
+  for (let i = 0; i < plain.length; i += 500) {
+    for (const r of await ownership({ projectId: project.id, rels: plain.slice(i, i + 500) })) out.add(r);
+  }
+  return out;
 }
 
 async function sha256Local(abs: string): Promise<string> {
@@ -421,21 +485,27 @@ async function stashLocal(localBase: string, rel: string): Promise<void> {
 }
 
 /**
- * 게이트웨이 로컬 → 멤버 저장소. 덮어쓰지 않는다 · 원본은 보관한다 · 실패한 파일은 제자리에 남긴다(머리말).
- *  멤버 모드가 아니면(로컬 저장소) 할 일이 없다.
+ * 게이트웨이 로컬 → 멤버 저장소. 이 워크스페이스의 것만 · 덮어쓰지 않는다 · 원본은 보관한다 ·
+ *  실패한 파일은 제자리에 남긴다(머리말). 멤버 모드가 아니거나 프로젝트를 모르면 할 일이 없다.
  */
 export async function migrateLocalToMember(store: ProjectStorage, limit = MIGRATE_BATCH): Promise<MigrationReport> {
-  const rep: MigrationReport = { copied: 0, same: 0, renamed: 0, failed: 0, more: false };
-  if (!store.osUser || store.localBase === store.base) return rep;
+  const rep: MigrationReport = { copied: 0, same: 0, renamed: 0, failed: 0, foreign: 0, more: false };
+  if (!store.osUser || !store.project || store.localBase === store.base) return rep;
   const osUser = store.osUser;
-  const { files, dirs, more } = await walkLocal(store.localBase, limit);
-  rep.more = more;
-  if (!files.length && !dirs.length) return rep;
+  const { files: all, truncated } = await walkLocal(store.localBase, MANIFEST_FILE_CAP);
+  if (!all.length) return rep;
+  const owned = await provenOwned(store.project, all);
+  const mine = all.filter((f) => owned.has(f.rel));
+  rep.foreign = all.length - mine.length;
+  const files = mine.slice(0, limit);
+  //  남은 내 파일이 있으면 다음 열기가 이어 간다. 걷기가 상한에 잘렸는데 이번에 옮긴 것이 없으면 더 나아갈 수 없다
+  //  — 그때까지 «남았다» 고 하면 미리보기 폴링마다 5천 개를 다시 걷는다.
+  rep.more = mine.length > limit || (truncated && files.length > 0);
+  if (!files.length) return rep;
+  const dirs = [...new Set(files.map((f) => path.posix.dirname(f.rel)).filter((d) => d !== "."))];
   await memberNodeJson<boolean>(osUser, PROJECT_MKDIRS_JS, { dirs: [store.base, ...dirs.map((d) => path.join(store.base, d))] });
-  const info = files.length
-    ? await memberNodeJson<Record<string, { file: boolean; size: number } | null>>(osUser, PROJECT_INFO_JS,
-      { items: files.map((f, i) => ({ key: String(i), path: path.join(store.base, f.rel) })) })
-    : {};
+  const info = await memberNodeJson<Record<string, { file: boolean; size: number } | null>>(osUser, PROJECT_INFO_JS,
+    { items: files.map((f, i) => ({ key: String(i), path: path.join(store.base, f.rel) })) });
   const sameSize = files.map((f, i) => ({ f, key: String(i) })).filter(({ f, key }) => {
     const m = info?.[key];
     return !!m && m.file && m.size === f.size;
@@ -466,8 +536,10 @@ export async function migrateLocalToMember(store: ProjectStorage, limit = MIGRAT
       logger.warn({ err: e, file: f.abs }, "[project-storage] 이관 실패 — 원본은 제자리에 남아 다음 열기에서 다시 간다");
     }
   }
-  //  비워진 로컬 폴더를 걷는다(깊은 것부터). 안 비었으면 rmdir 이 실패하고 그대로 남는다.
-  for (const d of [...dirs].sort((a, b) => b.split("/").length - a.split("/").length)) {
+  //  옮긴 파일이 있던 로컬 폴더만 걷는다(깊은 것부터). 남의 파일이 남아 있으면 rmdir 이 실패하고 그대로 남는다.
+  const touched = new Set<string>();
+  for (const d of dirs) { for (let cur = d; cur && cur !== "."; cur = path.posix.dirname(cur)) touched.add(cur); }
+  for (const d of [...touched].sort((a, b) => b.split("/").length - a.split("/").length)) {
     await fsp.rmdir(path.join(store.localBase, d)).catch(() => { /* 남은 것이 있다 */ });
   }
   return rep;
@@ -481,7 +553,7 @@ const retryAt = new Map<string, number>();
 export function resetMigrationMemo(): void { settled.clear(); running.clear(); retryAt.clear(); }
 
 async function settleMigration(store: ProjectStorage): Promise<void> {
-  const key = `${tenantSlug() ?? ""} ${store.localBase}`;
+  const key = JSON.stringify([tenantSlug() ?? "", store.localBase]);
   if (settled.has(key)) return;
   let run = running.get(key);
   if (!run) {
@@ -490,8 +562,8 @@ async function settleMigration(store: ProjectStorage): Promise<void> {
       .then((r) => {
         if (r.failed === 0 && !r.more) settled.add(key);
         if (r.failed) retryAt.set(key, Date.now() + MIGRATE_RETRY_MS);
-        if (r.copied || r.same || r.renamed || r.failed) {
-          logger.info({ ...r, from: store.localBase, to: store.base }, "[project-storage] 게이트웨이 로컬 → 멤버 저장소 이관");
+        if (r.copied || r.same || r.renamed || r.failed || r.foreign) {
+          logger.info({ ...r, from: store.localBase, to: store.base, project: store.project?.id }, "[project-storage] 게이트웨이 로컬 → 멤버 저장소 이관");
         }
       })
       .catch((e) => {

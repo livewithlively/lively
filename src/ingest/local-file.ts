@@ -242,7 +242,7 @@ export async function resolveLocalFile(p: { root: LocalRoot; rel: string }, uplo
     //  자리는 프로젝트 저장소가 정한다(#4064) — 저장소가 붙은 배포면 종전처럼 게이트웨이 로컬(그룹 rw 라 직접 읽는다),
     //  분리된 배포면 멤버 저장소를 올린 사람(없으면 만든 사람) 권한으로 읽는다.
     const who = uploaderHint || row.created_by || null;
-    const store = await projectStorage(row.folder, who ? { memberId: who } : null).catch(() => null);
+    const store = await projectStorage(row.folder, who ? { memberId: who } : null, { id: row.id, name: row.name }).catch(() => null);
     if (!store) return null;
     const abs = path.resolve(store.base, rel);
     if (abs !== store.base && !abs.startsWith(store.base + path.sep)) return null;

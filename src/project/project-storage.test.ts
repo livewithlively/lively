@@ -26,7 +26,7 @@ for (const k of ["LIVELY_MEMBER_EXEC", "LIVELY_MEMBER_ISOLATION", "LIVELY_TENANT
 const S = await import("./project-storage.js");
 const { manifestFiles } = await import("./project-manifest.js");
 const { fileOpsAtMemberBoundary } = await import("../terminal/terminal-isolation.js");
-const { RULES_MARK, GENERATED_BANNER } = await import("../v6/agents-md-rules.js");
+const { RULES_MARK, GENERATED_BANNER, agentsMdHeader } = await import("../v6/agents-md-rules.js");
 
 after(() => { delete process.env.LIVELY_MEMBER_EXEC; fs.rmSync(TMP, { recursive: true, force: true }); });
 
@@ -59,8 +59,17 @@ const walkNames = (dir: string): string[] => {
   if (exists(dir)) go(dir);
   return out;
 };
-const agentsMd = (rules: string, digest: string): string => `# 프로젝트\n\n${GENERATED_BANNER}.\n${digest}\n\n${RULES_MARK}\n## 규칙\n${rules}\n`;
+const P = (id: number): { id: number; name: string } => ({ id, name: `프로젝트 ${id}` });
+//  생성기 모양 그대로 — 머리(이 프로젝트) + 생성 문장 + digest + 규칙 표식
+const agentsMd = (rules: string, digest: string, id: number, name = P(id).name): string =>
+  `${agentsMdHeader({ id, name })}\n\n${GENERATED_BANNER}.\n${digest}\n\n${RULES_MARK}\n## 규칙\n${rules}\n`;
 const actor = { memberId: "tester" };
+//  소유 확인 — 실제로는 이 워크스페이스의 자료 표 조회다. 이 시험에선 이름이 «foreign» 으로 시작하는 파일만 남의 것으로 본다.
+const ownCalls: Array<{ projectId: number; rels: string[] }> = [];
+S.setMigrationOwnership(async (q) => {
+  ownCalls.push(q);
+  return new Set(q.rels.filter((r) => !path.posix.basename(r).startsWith("foreign")));
+});
 const OS_USER = "box_tester";
 
 // ═══ S1 자리 고르기 ═══════════════════════════════════════════════════════════
@@ -296,12 +305,14 @@ test("★★ S3 이관 — 없으면 복사 · 같으면 그대로 · 다르면 
   put(path.join(L, ".lively", "project.json"), "{}"); put(path.join(L, ".hidden"), "h");         // M7
   put(path.join(L, "repo", ".git"), "gitdir: x"); put(path.join(L, "repo", "code.ts"), "code");  // M8
   put(path.join(L, "CLAUDE.md"), "@AGENTS.md\n"); put(path.join(M, "CLAUDE.md"), "# 사람 메모\n");  // M9
-  put(path.join(L, "AGENTS.md"), agentsMd("규칙 R", "옛 digest"));                                  // M10
-  put(path.join(M, "AGENTS.md"), agentsMd("규칙 R", "새 digest"));
+  put(path.join(L, "AGENTS.md"), agentsMd("규칙 R", "옛 digest", 90));                              // M10
+  put(path.join(M, "AGENTS.md"), agentsMd("규칙 R", "새 digest", 90));
+  put(path.join(L, "foreign.txt"), "남의 것"); put(path.join(L, "docs", "foreign-x.txt"), "남의 것 2");   // M17
+  put(path.join(L, "docs", "mine.txt"), "내 것");
   relayOn();
   try {
     S.resetMigrationMemo();
-    const st = await S.projectStorage("project/90", actor);
+    const st = await S.projectStorage("project/90", actor, P(90));
     assert.equal(st.base, M);
 
     assert.equal(read(path.join(M, "a.txt")), "alpha", "M1 없는 파일은 복사한다");
@@ -314,23 +325,33 @@ test("★★ S3 이관 — 없으면 복사 · 같으면 그대로 · 다르면 
     assert.equal(read(path.join(M, "dup (이관 사본).txt")), "other", "M4 이미 있는 사본도 덮지 않는다");
     assert.equal(read(path.join(M, "dup (이관 사본 2).txt")), "local-dup", "M4 다음 번호로 비켜 간다");
     assert.equal(read(path.join(M, "sub", "deep", "x.txt")), "x", "M5 하위 폴더째 옮긴다");
-    assert.ok(fs.statSync(path.join(M, "emptydir")).isDirectory(), "M6 빈 폴더도 사람이 만든 것이다");
+    assert.equal(exists(path.join(M, "emptydir")), false, "M6 빈 폴더는 누구 것인지 증명할 수 없어 옮기지 않는다");
     assert.equal(exists(path.join(M, ".hidden")), false, "M7 숨김은 옮기지 않는다");
     assert.equal(exists(path.join(M, ".lively")), false, "M7 호스트 마커는 옮기지 않는다(중앙 세션의 자기 pull 방지)");
     assert.equal(exists(path.join(M, "repo")), false, "M8 레포는 옮기지 않는다");
     assert.equal(read(path.join(M, "CLAUDE.md")), "# 사람 메모\n", "M9 사람이 쓴 CLAUDE.md 는 그대로");
     assert.equal(exists(path.join(M, "CLAUDE (이관 사본).md")), false, "M9 우리 import 한 줄은 사본으로 남길 정보가 없다");
-    assert.equal(read(path.join(M, "AGENTS.md")), agentsMd("규칙 R", "새 digest"), "M10 규칙이 같으면 멤버 쪽 그대로");
+    assert.equal(read(path.join(M, "AGENTS.md")), agentsMd("규칙 R", "새 digest", 90), "M10 규칙이 같으면 멤버 쪽 그대로");
     assert.equal(exists(path.join(M, "AGENTS (이관 사본).md")), false, "M10 digest 만 다른 사본은 소음이다");
     assert.deepEqual(walkNames(M).filter((n) => n.startsWith(".migrate-")), [], "임시파일이 남으면 안 된다");
 
-    for (const rel of ["a.txt", "same.txt", "diff.txt", "dup.txt", "sub/deep/x.txt", "CLAUDE.md", "AGENTS.md"]) {
+    assert.equal(exists(path.join(M, "foreign.txt")), false, "M17 이 워크스페이스 자료가 아닌 파일은 옮기지 않는다");
+    assert.equal(exists(path.join(M, "docs", "foreign-x.txt")), false, "M17 하위 폴더에서도 마찬가지");
+    assert.equal(read(path.join(M, "docs", "mine.txt")), "내 것", "M17 같은 폴더의 내 파일은 옮긴다");
+    assert.equal(read(path.join(L, "foreign.txt")), "남의 것", "M17 남의 것은 제자리에 둔다");
+    assert.equal(read(path.join(L, "docs", "foreign-x.txt")), "남의 것 2");
+    assert.equal(exists(path.join(L, ".lively", "migrated", "foreign.txt")), false, "M17 남의 것은 보관(이동)도 하지 않는다");
+    assert.ok(exists(path.join(L, "docs")), "남의 파일이 남은 로컬 폴더는 걷지 않는다");
+    assert.ok(exists(path.join(L, "emptydir")), "M6 옮기지 않은 빈 폴더는 그대로 둔다");
+    assert.ok(ownCalls.some((c) => c.projectId === 90 && c.rels.includes("foreign.txt") && c.rels.includes("a.txt")), "소유 확인에 그 프로젝트 id 로 물어야 한다");
+    assert.ok(ownCalls.every((c) => !c.rels.includes("AGENTS.md") && !c.rels.includes("CLAUDE.md")), "생성물은 자료 표가 아니라 내용으로 판정한다");
+
+    for (const rel of ["a.txt", "same.txt", "diff.txt", "dup.txt", "sub/deep/x.txt", "docs/mine.txt", "CLAUDE.md", "AGENTS.md"]) {
       assert.equal(exists(path.join(L, rel)), false, `처리한 원본은 제자리에서 빠진다: ${rel}`);
       assert.ok(exists(path.join(L, ".lively", "migrated", rel)), `처리한 원본은 보관한다(지우지 않는다): ${rel}`);
     }
     assert.equal(read(path.join(L, ".lively", "migrated", "diff.txt")), "local-version");
     assert.equal(exists(path.join(L, "sub")), false, "M5 비워진 로컬 폴더는 걷힌다");
-    assert.equal(exists(path.join(L, "emptydir")), false, "M6 옮긴 빈 폴더는 걷힌다");
     assert.equal(read(path.join(L, ".hidden")), "h", "M7 숨김 원본은 그대로");
     assert.equal(read(path.join(L, ".lively", "project.json")), "{}", "M7 마커는 그대로");
     assert.equal(read(path.join(L, "repo", "code.ts")), "code", "M8 레포 원본은 그대로");
@@ -338,35 +359,35 @@ test("★★ S3 이관 — 없으면 복사 · 같으면 그대로 · 다르면 
     //  M12 — 사람이 옮겨진 파일을 지운 뒤 다시 열어도 되살아나지 않는다.
     fs.rmSync(path.join(M, "a.txt"));
     S.resetMigrationMemo();
-    await S.projectStorage("project/90", actor);
+    await S.projectStorage("project/90", actor, P(90));
     assert.equal(exists(path.join(M, "a.txt")), false, "M12 지운 파일이 이관으로 되살아나면 안 된다");
     const again = await S.migrateLocalToMember(st);
-    assert.deepEqual(again, { copied: 0, same: 0, renamed: 0, failed: 0, more: false }, "M12 두 번째 이관은 할 일이 없다");
+    assert.deepEqual(again, { copied: 0, same: 0, renamed: 0, failed: 0, foreign: 2, more: false }, "M12 두 번째 이관은 내 할 일이 없다(남의 것 둘은 그대로 센다)");
   } finally { relayOff(); }
 });
 
 test("S3 M10b·M11 — 사람 규칙이 다른 AGENTS.md 는 나란히 · 멤버 쪽에 없으면 그대로 복사", async () => {
   const L1 = path.join(LOCAL_ROOT, "project", "91");
   const M1 = path.join(MEMBER_ROOT, "project", "91");
-  put(path.join(L1, "AGENTS.md"), agentsMd("옛 규칙", "d1"));
-  put(path.join(M1, "AGENTS.md"), agentsMd("다른 규칙", "d2"));
+  put(path.join(L1, "AGENTS.md"), agentsMd("옛 규칙", "d1", 91));
+  put(path.join(M1, "AGENTS.md"), agentsMd("다른 규칙", "d2", 91));
   const L2 = path.join(LOCAL_ROOT, "project", "92");
-  put(path.join(L2, "AGENTS.md"), agentsMd("옛 규칙", "d1"));
+  put(path.join(L2, "AGENTS.md"), agentsMd("옛 규칙", "d1", 92));
   relayOn();
   try {
     S.resetMigrationMemo();
-    await S.projectStorage("project/91", actor);
-    assert.equal(read(path.join(M1, "AGENTS.md")), agentsMd("다른 규칙", "d2"), "M10b 멤버 쪽 규칙을 덮지 않는다");
-    assert.equal(read(path.join(M1, "AGENTS (이관 사본).md")), agentsMd("옛 규칙", "d1"), "M10b 옛 규칙은 사본으로 보인다");
-    await S.projectStorage("project/92", actor);
-    assert.equal(read(path.join(MEMBER_ROOT, "project", "92", "AGENTS.md")), agentsMd("옛 규칙", "d1"), "M11 규칙이 든 AGENTS.md 가 건너간다");
+    await S.projectStorage("project/91", actor, P(91));
+    assert.equal(read(path.join(M1, "AGENTS.md")), agentsMd("다른 규칙", "d2", 91), "M10b 멤버 쪽 규칙을 덮지 않는다");
+    assert.equal(read(path.join(M1, "AGENTS (이관 사본).md")), agentsMd("옛 규칙", "d1", 91), "M10b 옛 규칙은 사본으로 보인다");
+    await S.projectStorage("project/92", actor, P(92));
+    assert.equal(read(path.join(MEMBER_ROOT, "project", "92", "AGENTS.md")), agentsMd("옛 규칙", "d1", 92), "M11 규칙이 든 AGENTS.md 가 건너간다");
   } finally { relayOff(); }
 });
 
 test("S3 M13 못 읽는 파일은 제자리에 남고 실패로 센다 — 고치면 다음 이관이 가져간다", { skip: process.getuid?.() === 0 ? "root 는 권한 비트를 무시한다" : false }, async () => {
   relayOn();
   try {
-    const st = await S.projectStorage("project/93", actor);   // 로컬이 아직 비어 있을 때 연다(이관 할 일 0)
+    const st = await S.projectStorage("project/93", actor, P(93));   // 로컬이 아직 비어 있을 때 연다(이관 할 일 0)
     const L = st.localBase;
     put(path.join(L, "ok.txt"), "ok");
     put(path.join(L, "locked.txt"), "secret");
@@ -379,7 +400,7 @@ test("S3 M13 못 읽는 파일은 제자리에 남고 실패로 센다 — 고�
     assert.deepEqual(walkNames(st.base).filter((n) => n.startsWith(".migrate-")), [], "실패해도 임시파일을 남기지 않는다");
     fs.chmodSync(path.join(L, "locked.txt"), 0o644);
     const r2 = await S.migrateLocalToMember(st);
-    assert.deepEqual(r2, { copied: 1, same: 0, renamed: 0, failed: 0, more: false });
+    assert.deepEqual(r2, { copied: 1, same: 0, renamed: 0, failed: 0, foreign: 0, more: false });
     assert.equal(read(path.join(st.base, "locked.txt")), "secret");
   } finally { relayOff(); }
 });
@@ -388,8 +409,8 @@ test("S3 M14 게이트웨이 쪽 폴더가 없으면 할 일도 중계 호출도
   relayOn();
   try {
     const before = relayCalls().length;
-    const st = await S.projectStorage("project/94", actor);
-    assert.deepEqual(await S.migrateLocalToMember(st), { copied: 0, same: 0, renamed: 0, failed: 0, more: false });
+    const st = await S.projectStorage("project/94", actor, P(94));
+    assert.deepEqual(await S.migrateLocalToMember(st), { copied: 0, same: 0, renamed: 0, failed: 0, foreign: 0, more: false });
     assert.equal(relayCalls().length, before, "열기만 했는데 멤버 경계를 두드리면 안 된다");
   } finally { relayOff(); }
 });
@@ -399,7 +420,7 @@ test("S3 M15 동시에 두 번 열어도 한 번만 옮긴다", async () => {
   relayOn();
   try {
     S.resetMigrationMemo();
-    await Promise.all([S.projectStorage("project/95", actor), S.projectStorage("project/95", { user: user("tester") })]);
+    await Promise.all([S.projectStorage("project/95", actor, P(95)), S.projectStorage("project/95", { user: user("tester") }, P(95))]);
     const M = path.join(MEMBER_ROOT, "project", "95");
     assert.equal(read(path.join(M, "c.txt")), "c");
     assert.deepEqual(fs.readdirSync(M).sort(), ["c.txt"], "경합으로 사본이 생기면 안 된다");
@@ -409,7 +430,7 @@ test("S3 M15 동시에 두 번 열어도 한 번만 옮긴다", async () => {
 test("S3 M16 한 번에 옮기는 수를 넘으면 나눠서 이어 간다", async () => {
   relayOn();
   try {
-    const st = await S.projectStorage("project/96", actor);
+    const st = await S.projectStorage("project/96", actor, P(96));
     for (const n of ["1", "2", "3", "4", "5"]) put(path.join(st.localBase, `${n}.txt`), n);
     const r1 = await S.migrateLocalToMember(st, 2);
     assert.equal(r1.copied, 2);
@@ -420,6 +441,53 @@ test("S3 M16 한 번에 옮기는 수를 넘으면 나눠서 이어 간다", asy
     assert.equal(r3.more, false);
     assert.deepEqual(fs.readdirSync(st.base).sort(), ["1.txt", "2.txt", "3.txt", "4.txt", "5.txt"]);
   } finally { relayOff(); }
+});
+
+test("S3 M18 ★ 첫 줄이 이 프로젝트 머리가 아닌 AGENTS.md 는 남의 것일 수 있다 — 옮기지 않는다", async () => {
+  const L = path.join(LOCAL_ROOT, "project", "97");
+  put(path.join(L, "AGENTS.md"), agentsMd("남의 규칙", "d", 97, "다른 워크스페이스 프로젝트"));
+  put(path.join(L, "CLAUDE.md"), "# 누군가의 메모\n");
+  put(path.join(L, "ok.txt"), "ok");
+  relayOn();
+  try {
+    S.resetMigrationMemo();
+    const st = await S.projectStorage("project/97", actor, P(97));
+    assert.equal(exists(path.join(st.base, "AGENTS.md")), false, "남의 규칙이 이 프로젝트의 AGENTS.md 가 되면 안 된다");
+    assert.equal(exists(path.join(st.base, "CLAUDE.md")), false, "import 한 줄이 아닌 CLAUDE.md 는 누구 것인지 모른다");
+    assert.equal(read(path.join(st.base, "ok.txt")), "ok");
+    assert.ok(exists(path.join(L, "AGENTS.md")) && exists(path.join(L, "CLAUDE.md")), "남의 것일 수 있는 원본은 제자리에 둔다");
+  } finally { relayOff(); }
+});
+
+test("S3 M19 프로젝트를 모르고 연 저장소는 이관하지 않는다", async () => {
+  const L = path.join(LOCAL_ROOT, "project", "98");
+  put(path.join(L, "a.txt"), "a");
+  relayOn();
+  try {
+    S.resetMigrationMemo();
+    const st = await S.projectStorage("project/98", actor);
+    assert.equal(st.project, null);
+    assert.equal(exists(path.join(st.base, "a.txt")), false);
+    assert.equal(read(path.join(L, "a.txt")), "a");
+    assert.deepEqual(await S.migrateLocalToMember(st), { copied: 0, same: 0, renamed: 0, failed: 0, foreign: 0, more: false });
+  } finally { relayOff(); }
+});
+
+test("S3 M20 소유 확인이 실패하면 아무것도 옮기지 않는다 — 여는 것 자체는 된다", async () => {
+  const L = path.join(LOCAL_ROOT, "project", "99");
+  put(path.join(L, "a.txt"), "a");
+  relayOn();
+  S.setMigrationOwnership(async () => { throw new Error("db down"); });
+  try {
+    S.resetMigrationMemo();
+    const st = await S.projectStorage("project/99", actor, P(99));
+    assert.equal(st.base, path.join(MEMBER_ROOT, "project", "99"), "이관이 실패해도 저장소는 열린다");
+    assert.equal(exists(path.join(st.base, "a.txt")), false, "소유를 모르면 옮기지 않는다(fail-closed)");
+    assert.equal(read(path.join(L, "a.txt")), "a");
+  } finally {
+    relayOff();
+    S.setMigrationOwnership(async (q) => new Set(q.rels.filter((r) => !path.posix.basename(r).startsWith("foreign"))));
+  }
 });
 
 // ═══ S7 배선 ═══════════════════════════════════════════════════════════════════
@@ -459,7 +527,7 @@ test("W3 생성기·주입·자료 원본이 게이트웨이 로컬 경로로 �
   const agents = src("../v6/agents-md.ts");
   assert.match(agents, /await st\.writeText\(file, content\)/, "AGENTS.md 를 저장소로 쓰지 않는다");
   assert.match(agents, /nextClaudeMd\(await st\.readText\(claude\), found\.from\)/, "CLAUDE.md 를 사람 글 보존 판정 없이 쓴다");
-  assert.match(src("../terminal/session-project-routes.ts"), /projectStorage\(folder, \{ user: u \}\)/, "주입이 요청자 권한 저장소를 안 연다");
+  assert.match(src("../terminal/session-project-routes.ts"), /projectStorage\(project\.folder, \{ user: u \}, /, "주입이 요청자 권한 저장소를 안 연다");
   assert.match(src("../ingest/local-file.ts"), /projectStorage\(row\.folder, /, "자료 원본이 저장소를 안 연다");
 });
 
@@ -476,4 +544,31 @@ test("W5 호스트 마커는 게이트웨이 쪽에만 — 멤버 저장소(중�
   const agents = src("../v6/agents-md.ts");
   assert.match(agents, /await writeProjectMarker\(st\.localBase, p\)/);
   assert.doesNotMatch(agents, /writeProjectMarker\(st\.base/);
+});
+
+
+test("W7 ★ 목록 라우트도 목록을 읽기 **전에** 멤버 모드 링크 봉쇄를 건다(리뷰 blocking)", () => {
+  const body = routeBody(src("./project-routes.ts"), "app.get(`${prefix}/:id/files`");
+  const jail = body.indexOf("await jailIfMember(store, abs)");
+  const list = body.indexOf("await store.list(abs)");
+  assert.ok(jail > 0, "목록 라우트에 봉쇄가 없다 — 세션이 심은 링크로 폴더 밖 목록이 곁칸에 나간다");
+  assert.ok(list > jail, "봉쇄가 목록을 읽은 뒤에 오면 소용없다");
+  for (const head of ["app.get(`${prefix}/:id/file`", "app.post(`${prefix}/:id/rename`", "app.post(`${prefix}/:id/move`", "app.delete(`${prefix}/:id/file`"]) {
+    assert.match(routeBody(src("./project-routes.ts"), head), /await jailIfMember\(store, /, `${head} 에 봉쇄가 없다`);
+  }
+  for (const head of ["app.put(`${prefix}/:id/file`", "app.post(`${prefix}/:id/folder`"]) {
+    assert.match(routeBody(src("./project-routes.ts"), head), /await resolveInProject\(store, /, `${head} 가 쓰기 관문을 안 지난다`);
+  }
+});
+
+test("W9 기본 소유 확인은 이 워크스페이스 자료 표에서 그 프로젝트 좌표를 찾는다 · 모든 입구가 프로젝트를 넘긴다", () => {
+  const store = src("./project-storage.ts");
+  assert.match(store, /localExternalId\(\{ kind: "project", id: projectId \}, r\)/, "자료 좌표를 다른 모양으로 만들면 아무것도 소유로 안 잡힌다");
+  assert.match(store, /FROM source WHERE external_system=\$1 AND external_instance=\$2 AND external_id = ANY\(\$3::text\[\]\)/);
+  assert.match(store, /if \(p\) await settleMigration\(store\);/, "프로젝트를 모르면 이관하지 않아야 한다");
+  assert.match(src("./project-routes.ts"), /projectStorage\(project\.folder, \{ user: userOf\(req\) \}, \{ id: project\.id, name: project\.name \}\)/);
+  assert.match(src("../v6/agents-md.ts"), /\{ id: p\.id, name: p\.name \?\? null \}/);
+  assert.match(src("../terminal/session-project-routes.ts"), /projectStorage\(project\.folder, \{ user: u \}, \{ id: project\.id, name: project\.name \}\)/);
+  assert.match(src("../ingest/local-file.ts"), /\{ id: row\.id, name: row\.name \}/);
+  //  stage 판 — 노드 업로드 정본(terminal-files)은 stage 에 아직 없다.
 });
