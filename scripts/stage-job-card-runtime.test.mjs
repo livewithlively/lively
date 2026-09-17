@@ -8,6 +8,9 @@
 //  K3 모두 꺼진 상태에서 켜면 전체 잡 **하나만** 켠다(꺼 둔 전용 잡은 되살리지 않는다).
 //  K4 대표 조건이 없는 단계는 종전처럼 첫 켜진 잡이 대표 — 끄기는 역시 켜진 잡 전부.
 //  K5 켜진 잡이 하나면 그 하나만 끄고, 알림에 개수를 붙이지 않는다.
+//  K6 ★ 전체 잡이 둘인 옛 매니지드 모양(distill-lanes + local-files 전용 + distill-sources-headless) — 대표는 정본
+//      (create.id), 끄면 셋 다 꺼지고, 다시 그려 켜면 정본 **하나만** 켜진다(«껐다 켜기» 가 정리 경로다, #4052 리뷰).
+//  K7 여럿을 끄다 중간 요청이 실패하면 — 앞의 것은 꺼진 채, 오류 알림, 카드를 다시 그린다(추측으로 되돌리지 않는다).
 //
 // 왜 런타임인가: 스위치 → 요청의 대상·횟수는 소스 모양으로 안 보인다(#4052 사람 고르기 칸에서 소스 정규식이 놓친 교훈).
 //  카드 모듈을 esbuild 로 묶어 헤드리스 크롬에 올리고, cron·실행 계정·명부 API 는 fetch 대역으로 준다.
@@ -46,7 +49,7 @@ writeFileSync(bundlePath, bundle);
 const html = `<!doctype html><html lang="en"><meta charset="utf-8"><style>body{display:none}</style><body>
 <div id="host"></div><div id="toasts"></div><pre id="out"></pre>
 <script>
-window.__posts = []; window.__runs = []; window.__jobs = []; window.__gets = 0;
+window.__posts = []; window.__runs = []; window.__jobs = []; window.__gets = 0; window.__failIds = [];
 const J = (o) => new Response(JSON.stringify(o), { status: 200, headers: { 'content-type': 'application/json' } });
 window.fetch = async (url, opts = {}) => {
   const u = String(url);
@@ -55,6 +58,10 @@ window.fetch = async (url, opts = {}) => {
   if (run && m === 'POST') { window.__runs.push(decodeURIComponent(run[1])); return J({ status: 'ok' }); }
   if (u.includes('/api/ui/cron') && m === 'POST') {
     const b = JSON.parse(opts.body || '{}');
+    if (window.__failIds.includes(b.id)) {
+      window.__posts.push({ id: b.id, enabled: b.enabled, failed: true });
+      return new Response(JSON.stringify({ error: 'boom' }), { status: 500, headers: { 'content-type': 'application/json' } });
+    }
     window.__posts.push({ id: b.id, enabled: b.enabled });
     const j = window.__jobs.find((x) => x.id === b.id);
     if (j && typeof b.enabled === 'boolean') j.enabled = b.enabled;
@@ -83,7 +90,9 @@ const asc = (s) => String(s).replace(/[\\u0080-\\uffff]/g, (c) => '\\\\u' + c.ch
     create: { id: 'distill-sources-headless', label: 'x', action: 'distill_sources_headless', params: {}, interval_sec: 1800, note: 'x' },
   };
   const PLAIN = Object.assign({}, DISTILL, { prefer: undefined });
-  const render = async (spec) => { const card = await SJC.stageJobCard(spec, () => {}); host.replaceChildren(card); await wait(30); return card; };
+  let rerenders = 0;
+  const render = async (spec) => { const card = await SJC.stageJobCard(spec, () => { rerenders++; }); host.replaceChildren(card); await wait(30); return card; };
+  const selVal = (card) => (card.querySelector('select.cxr-sel') ? card.querySelector('select.cxr-sel').value : null);
   const sw = (card) => card.querySelector('input.cxc-sw');
   const flip = async (card) => { const s = sw(card); s.checked = !s.checked; s.dispatchEvent(new Event('change', { bubbles: true })); await wait(80); };
   const toasts = () => [...document.querySelectorAll('#toasts .toast')].map((t) => asc(t.textContent));
@@ -120,6 +129,32 @@ const asc = (s) => String(s).replace(/[\\u0080-\\uffff]/g, (c) => '\\\\u' + c.ch
   card = await render(DISTILL);
   await flip(card);
   R.k5 = { posts: window.__posts.slice(), toasts: toasts() };
+
+  // K6 — 전체 잡 둘 + 전용 하나(옛 매니지드) — 목록 순은 서버와 같다(sort, id)
+  reset([job('distill-lanes', true, 600, {}), job('distill-local-files', true, 600, { distiller: 'local-files' }), job('distill-sources-headless', true, 1800, {})]);
+  card = await render(DISTILL);
+  R.k6 = { interval: selVal(card) };
+  await flip(card);
+  R.k6.offPosts = window.__posts.slice();
+  window.__posts = [];
+  card = await render(DISTILL);
+  R.k6.checkedAfterOff = sw(card) ? sw(card).checked : null;
+  R.k6.intervalAfterOff = selVal(card);
+  await flip(card);
+  R.k6.onPosts = window.__posts.slice();
+
+  // K7 — 여럿을 끄다 두 번째 요청이 실패
+  reset([job('distill-local-files', true, 600, { distiller: 'local-files' }), job('distill-sources-headless', true, 1800, {})]);
+  window.__failIds = ['distill-sources-headless'];
+  card = await render(DISTILL);
+  rerenders = 0;
+  await flip(card);
+  R.k7 = {
+    posts: window.__posts.slice(), rerenders,
+    toasts: [...document.querySelectorAll('#toasts .toast')].map((t) => ({ err: t.classList.contains('coral'), text: asc(t.textContent) })),
+    checked: sw(card).checked, disabled: sw(card).disabled,
+  };
+  window.__failIds = [];
 
   R.gets = window.__gets;
   document.getElementById('out').textContent = MK[0] + JSON.stringify(R) + MK[1];
@@ -162,5 +197,18 @@ assert.deepEqual(R.k4.posts, [OFF("distill-local-files"), OFF("distill-sources-h
 assert.deepEqual(R.k5.posts, [OFF("distill-sources-headless")], "K5 하나면 그 하나만");
 assert.equal(R.k5.toasts.length, 1, "K5 알림 한 번");
 assert.doesNotMatch(un(R.k5.toasts[0]), /개\)/, "K5 하나일 땐 개수를 붙이지 않는다");
+// ★ K6
+assert.equal(R.k6.interval, "1800", "★ K6 전체 잡이 둘이면 정본(distill-sources-headless)이 대표 — 목록 앞의 distill-lanes(10분)가 아니다");
+assert.deepEqual(R.k6.offPosts, [OFF("distill-lanes"), OFF("distill-local-files"), OFF("distill-sources-headless")], "★ K6 끄면 셋 다");
+assert.equal(R.k6.checkedAfterOff, false, "K6 다시 그리면 꺼짐");
+assert.equal(R.k6.intervalAfterOff, "1800", "K6 모두 꺼져도 대표는 정본");
+assert.deepEqual(R.k6.onPosts, [{ id: "distill-sources-headless", enabled: true }], "★ K6 다시 켜면 정본 하나만 — «껐다 켜기» 로 전체 잡이 하나로 정리된다");
+// K7
+assert.deepEqual(R.k7.posts, [OFF("distill-local-files"), { id: "distill-sources-headless", enabled: false, failed: true }], "K7 앞 요청은 반영, 둘째에서 실패");
+assert.equal(R.k7.rerenders, 1, "K7 실패해도 다시 그린다(일부만 꺼진 실제 상태를 보인다)");
+assert.equal(R.k7.toasts.length, 1, "K7 알림 한 번");
+assert.equal(R.k7.toasts[0].err, true, "K7 오류 알림");
+assert.equal(R.k7.checked, true, "K7 스위치는 누르기 전 값으로 — 다시 그린 카드가 실제 상태를 말한다");
+assert.equal(R.k7.disabled, false, "K7 스위치를 다시 쓸 수 있다");
 
-console.log("✓ stage-job-card-runtime — K1~K5 (전체 잡 대표 · 끄기 전부 · 켜기 하나 · 종전 규칙 · 하나)");
+console.log("✓ stage-job-card-runtime — K1~K7 (전체 잡 대표 · 끄기 전부 · 켜기 하나 · 종전 규칙 · 하나 · 정본 수렴 · 부분 실패)");

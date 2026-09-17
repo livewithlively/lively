@@ -7,7 +7,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { dedicatedDistillerKeys, planDistillJob, type DistillJobRow } from "./ensure-job.js";
+import { dedicatedDistillerKeys, planDistillJob, servedDistillers, type DistillJobRow } from "./ensure-job.js";
 
 const job = (id: string, enabled: boolean, params: Record<string, unknown> | null): DistillJobRow => ({ id, enabled, params });
 const keys = (jobs: DistillJobRow[]): string[] => [...dedicatedDistillerKeys(jobs)].sort();
@@ -45,6 +45,41 @@ test("D9 전용 둘(key·id) + 무지정 하나 → 두 대상", () => {
   ]), ["7", "local-files"]);
 });
 
+// ── S2 전체 잡이 배치를 낼 증류기 — 켜진 증류기에서 전용 잡 몫을 뺀다 ───────────────────────
+const lanes = [
+  { id: 3, key: "local-files" }, { id: 7, key: "slack-ops" }, { id: 9, key: "12" }, { id: 12, key: "default" },
+];
+const served = (pins: string[]): string[] => servedDistillers(lanes, new Set(pins)).map((d) => d.key);
+
+test("S1 전용 잡이 없으면 켜진 증류기 전부(순서 그대로)", () => {
+  assert.deepEqual(served([]), ["local-files", "slack-ops", "12", "default"]);
+});
+test("S2 ★ key 로 묶인 전용 잡의 증류기는 빠진다", () => {
+  assert.deepEqual(served(["local-files"]), ["slack-ops", "12", "default"]);
+});
+test("S3 ★ id 로 묶인(숫자뿐) 전용 잡의 증류기는 빠진다", () => {
+  assert.deepEqual(served(["7"]), ["local-files", "12", "default"]);
+});
+test("S4 숫자뿐인 묶음은 id 로만 읽는다 — key 가 숫자 모양인 증류기를 엉뚱하게 빼지 않는다(getDistiller 와 같은 규칙)", () => {
+  //  "12" 는 id 12(default)를 가리킨다 — key "12"(id 9)는 남는다.
+  assert.deepEqual(served(["12"]), ["local-files", "slack-ops", "12"]);
+});
+test("S5 없는 증류기를 가리키는 묶음은 아무것도 빼지 않는다", () => {
+  assert.deepEqual(served(["gone", "999"]), ["local-files", "slack-ops", "12", "default"]);
+});
+test("S6 여럿을 한꺼번에 빼고, 입력 목록은 바꾸지 않는다", () => {
+  const before = JSON.stringify(lanes);
+  assert.deepEqual(served(["local-files", "7", "12"]), ["12"]);
+  assert.equal(JSON.stringify(lanes), before);
+});
+test("S7 전용 판정 → 배치 대상까지 이어서 — 처음 설정 뒤의 모양(전체 잡 + local-files 전용 잡)", () => {
+  const jobs = [job("distill-sources-headless", true, {}), job("distill-local-files", true, { distiller: "local-files" })];
+  assert.deepEqual(servedDistillers(lanes, dedicatedDistillerKeys(jobs)).map((d) => d.key), ["slack-ops", "12", "default"]);
+  //  전용 잡을 끄면 그 레인은 다시 전체 잡이 집는다.
+  const off = [jobs[0], job("distill-local-files", false, { distiller: "local-files" })];
+  assert.deepEqual(servedDistillers(lanes, dedicatedDistillerKeys(off)).map((d) => d.key), ["local-files", "slack-ops", "12", "default"]);
+});
+
 // ── S1 CP 가 증류 크론을 기본 증류기보다 먼저 심는 이유 — 코어 판정이 그 순서를 전제한다 ─────
 test("C1 ★ 켜진 무지정 distill-sources-headless 가 있으면 default 를 켜도 잡을 더 만들지 않는다(잡 1개)", () => {
   assert.equal(planDistillJob([job("distill-sources-headless", true, {})], "default").action, "none");
@@ -63,9 +98,8 @@ const pick = (() => {
   return s.slice(i, s.indexOf("\n}\n", i));
 })();
 
-test("W1 ★ 전체 잡 경로는 전용 잡이 켜진 증류기를 배치에서 뺀다(key·id 둘 다로 대조)", () => {
-  assert.match(pick, /const dedicated = await dedicatedDistillersSafe\(\);/);
-  assert.match(pick, /const serve = enabled\.filter\(\(d\) => !dedicated\.has\(String\(d\.key\)\) && !dedicated\.has\(String\(d\.id\)\)\);/);
+test("W1 ★ 전체 잡 경로는 전용 잡이 켜진 증류기를 배치에서 뺀다(판정은 위 S·D 의 순수 함수)", () => {
+  assert.match(pick, /const serve = servedDistillers\(enabled, await dedicatedDistillersSafe\(\)\);/);
   assert.match(pick, /for \(const d of serve\) \{/, "배치는 serve 로 만든다");
   assert.ok(!/for \(const d of enabled\) \{/.test(pick), "켜진 증류기 전부로 배치를 만들던 옛 루프가 남지 않는다");
 });

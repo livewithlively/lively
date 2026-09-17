@@ -147,8 +147,8 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
   //   이 경로(무지정 = 전체 접수)가 또 집으면 같은 자료가 두 잡에서 나간다 — 중첩 방지 표식이 잡마다 달라 같은 틱이면
   //   판정 기록 전에 둘 다 인박스를 읽는다. 배치만 뺀다: 폴백 판정(위)과 방치 계산(아래)은 **켜진 증류기 전부**로 한다
   //   (그 레인 자료를 «방치» 로 세거나, 켜진 레인이 전부 전용이라고 전역 폴백으로 떨어지면 다시 두 번 나간다).
-  const dedicated = await dedicatedDistillersSafe();
-  const serve = enabled.filter((d) => !dedicated.has(String(d.key)) && !dedicated.has(String(d.id)));
+  const { servedDistillers } = await import("../../org/distill/ensure-job.js");
+  const serve = servedDistillers(enabled, await dedicatedDistillersSafe());
   const batches: DistillBatch[] = [];
   for (const d of serve) {
     const inbox = await listDistillerInbox(d, all);

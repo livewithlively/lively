@@ -77,7 +77,8 @@ export interface StageJobSpec {
   unitName?: string;
   /**
    * 켜진 잡이 여럿일 때 **대표로 보여 줄 잡**의 조건(#4052 후속, lib/stage-job-pick). 없으면 목록 순 첫 켜진 잡.
-   *  증류가 쓴다 — 한 레인 전용 잡(local-files 10분)이 목록 앞에 오면 카드가 그 주기로 말하고 그 잡만 껐다.
+   *  조건을 만족하는 잡이 여럿이면 create.id(정본)가 먼저다. 증류가 쓴다 — 한 레인 전용 잡(local-files 10분)이 목록 앞에 오면
+   *  카드가 그 주기로 말하고 그 잡만 껐다.
    */
   prefer?: (job: any) => boolean;
 }
@@ -154,7 +155,7 @@ export async function stageJobCard(spec: StageJobSpec, rerender: () => void): Pr
   //  matchId 가 있으면 같은 action 을 쓰는 남의 계보를 먼저 걷어낸다(수집의 sync-<system> — 위 주석).
   const found = spec.actions.map((a) => jobs.filter((j) => j.action === a)).flat()
     .filter((j) => !spec.matchId || spec.matchId(String(j.id)));
-  const job = pickStageJob(found, spec.prefer);
+  const job = pickStageJob(found, spec.prefer, spec.create?.id);
 
   // ── 없다 ──────────────────────────────────────────────────────────────
   if (!job) {

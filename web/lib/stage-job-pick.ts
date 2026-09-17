@@ -9,14 +9,27 @@
 type StageJob = { id?: unknown; enabled?: unknown; params?: unknown };
 
 /**
- * 대표 잡 — 켜진 것 중 prefer 를 만족하는 잡 → 켜진 잡 → (모두 꺼짐) prefer 를 만족하는 잡 → 첫 잡. 목록 순. 없으면 null.
- *  모두 꺼져 있을 때도 prefer 를 먼저 보는 이유: 대표가 곧 [켜기] 가 켜는 잡이다 — 전용 잡이 대표면 켜도 한 레인만 돈다.
- *  prefer 가 없으면 종전 규칙(첫 켜진 잡 → 첫 잡) 그대로.
+ * 대표 잡. 없으면 null. 순서:
+ *  ① 켜진 것 중 prefer 를 만족하는 잡 → ② 켜진 잡 → ③ (모두 꺼짐) prefer 를 만족하는 잡 → ④ 첫 잡.
+ *  ①·③ 안에서는 preferId(화면이 만드는 잡 = 제품의 정본 id)가 있으면 그것이 먼저고, 없으면 목록 순 첫 것이다.
+ *
+ *  · 모두 꺼져 있을 때도 prefer 를 먼저 보는 이유: 대표가 곧 [켜기] 가 켜는 잡이다 — 전용 잡이 대표면 켜도 한 레인만 돈다.
+ *  · preferId 를 보는 이유: 전체 잡이 둘인 옛 매니지드 워크스페이스(distill-lanes + distill-sources-headless)에서 카드로
+ *    껐다 켜면 목록 순으로는 distill-lanes(10분)가 켜진다. 그런데 관리 서버의 절전 예외·배치 창·가동 틱이 보는 것은
+ *    distill-sources-headless 다(#4052 리뷰). 정본 id 가 대표여야 «껐다 켜기» 가 정리 경로가 된다.
+ *  · prefer 가 없으면 preferId 도 보지 않는다 — 종전 규칙(첫 켜진 잡 → 첫 잡) 그대로.
  */
-export function pickStageJob<T extends StageJob>(found: readonly T[], prefer?: (j: T) => boolean): T | null {
+export function pickStageJob<T extends StageJob>(found: readonly T[], prefer?: (j: T) => boolean, preferId?: string | null): T | null {
+  const best = (list: readonly T[]): T | undefined => {
+    if (!prefer) return undefined;
+    const ok = list.filter(prefer);
+    return (preferId ? ok.find((j) => j.id === preferId) : undefined) ?? ok[0];
+  };
   const on = found.filter((j) => j.enabled === true);
-  return (prefer ? on.find(prefer) : undefined) ?? on[0]
-    ?? (prefer ? found.find(prefer) : undefined) ?? found[0] ?? null;
+  const preferredOn = best(on);
+  const firstOn = on[0];
+  const preferredAny = best(found);
+  return preferredOn ?? firstOn ?? preferredAny ?? found[0] ?? null;
 }
 
 /** 스위치를 끌 때 끌 잡 — 이 단계의 **켜진 잡 전부**(대표 포함). 켜진 것이 없으면 대표만. */

@@ -81,6 +81,11 @@ export function planDistillJob(jobs: readonly DistillJobRow[], distillerKey: str
  *  (실측 2026-09-17: 처음 설정이 심은 local-files 전용 잡과 전체 잡이 함께 켜진 워크스페이스).
  *  꺼진 전용 잡은 아무것도 맡지 않는다 — 그 증류기는 전체 잡이 집는다(증류기의 켜짐이 레인 스위치이고, 전용 잡이 꺼진 것을
  *  «그 레인 증류 중단» 으로 읽지 않는다. 종전에도 전체 잡은 켜진 증류기 전부를 집었다).
+ *
+ *  ⚠ 가정: «켜진 전용 잡 = 그 레인이 실제로 돈다». 전용 잡이 실행 계정을 못 찾으면 그 배치는 건너뛰고 판정도 안 남아
+ *   (runDistillHeadless) 레인이 멈추는데, 전체 잡은 그 레인을 이미 뺐다. 지금은 괜찮다 — 전용 잡을 만드는 프리셋 셋
+ *   (local·github·figma)이 켤 때 **증류기 행에** 실행 계정을 박고, 실행 계정 해소 순서(레인 > 잡 > 워크스페이스 > 만든 사람)도
+ *   두 잡이 같아서 전용 잡이 못 찾는 계정은 전체 잡도 거의 못 찾는다. 전용 잡을 만드는 새 경로를 낼 때는 이 가정을 지켜라.
  */
 export function dedicatedDistillerKeys(jobs: readonly DistillJobRow[]): Set<string> {
   const out = new Set<string>();
@@ -89,6 +94,19 @@ export function dedicatedDistillerKeys(jobs: readonly DistillJobRow[]): Set<stri
     if (j.enabled && pin) out.add(pin);
   }
   return out;
+}
+
+/**
+ * 전체 잡이 배치를 낼 증류기(순수) — 켜진 증류기에서 전용 잡이 맡은 것을 뺀다. 순서는 그대로.
+ *  묶음은 key 로도 id 로도 적힌다 — 전용 잡이 실제로 부르는 getDistiller(distiller.ts)와 같은 규칙으로 읽는다:
+ *  숫자뿐이면 id, 아니면 key. 그래야 id 로 묶인 전용 잡과도 겹치지 않고, 숫자 모양 key 를 엉뚱하게 빼지도 않는다.
+ */
+export function servedDistillers<T extends { key?: unknown; id?: unknown }>(enabled: readonly T[], dedicated: ReadonlySet<string>): T[] {
+  if (!dedicated.size) return [...enabled];
+  const byId = new Set<string>();
+  const byKey = new Set<string>();
+  for (const pin of dedicated) (/^\d+$/.test(pin) ? byId : byKey).add(pin);
+  return enabled.filter((d) => !byKey.has(String(d.key ?? "")) && !byId.has(String(d.id ?? "")));
 }
 
 /** 이 워크스페이스의 `distill_sources_headless` 잡 전부(꺼진 것 포함). 못 읽으면 던진다 — 폴백은 호출부가 정한다. */
