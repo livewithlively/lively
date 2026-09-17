@@ -84,12 +84,63 @@ export async function listSessions(user: LivelyUser, opts?: { strict?: boolean }
   return collectSessions(ownerId(user), opts?.strict === true);
 }
 
+/**
+ * 목록이 «관측에 없는 갓 만든 세션» 을 «중단됨» 으로 읽지 않는 창 (#4065, 2026-09-17).
+ *
+ * ── 왜 필요한가 ─────────────────────────────────────────────────────────────
+ * 새 경로의 생성 순서는 **DB 행이 맨 먼저**다(`createSession` ① 행 → ② 컨테이너 → ③ 홈 → ④ tmux). 그리고 매니지드에서
+ *  목록의 라이브 절반은 세션 호스트 스냅샷인데, 그 노드에 그 테넌트 호스트가 아직 없으면 스냅샷에 안 잡힌다.
+ *  그 사이 목록은 이 세션을 «중단됨(restorable)» 으로 냈고, 화면은 대화창으로 열렸다 — 실측 2026-09-17: 새 노드의
+ *  첫 세션 셋이 11초·18초·24.5초 동안 그랬다(lvly-cloud 쪽은 호스트를 배치 즉시 세우도록 고쳤다 — 그래도 생성 중
+ *  0~3초 창은 남는다).
+ *
+ * ── 왜 90초인가 ─────────────────────────────────────────────────────────────
+ * 호스트가 늦게 서는 최악(스캔 30초 + 코드 대기 한 주기 30초 + 계정 생성 수 초 + 스냅샷 3초)이 70초 남짓이고,
+ *  첫 지시 주입기도 90초를 기다린다. 넘기면 종전대로 정직하게 «중단됨» 이라고 말한다.
+ *  노드 세션 메타의 기동 창(`session-meta.NODE_STARTUP_GRACE_MS` 20초)과 같은 부류지만 기다리는 대상이 다르다
+ *  (저건 노드의 mux 기동, 이건 매니지드 세션 호스트 기동).
+ */
+export const SESSION_STARTING_GRACE_MS = 90_000;
+
+/**
+ * 이 desired 행이 **아직 뜨는 중**일 수 있나 (#4065, 순수) — 목록이 «중단됨» 대신 «시작 중» 으로 낼 행인가.
+ *
+ *  · 사람이 끝냈거나(exited_at) 끝난 사유가 적힌 행(exit_reason — OOM 등)은 이미 끝난 사실이 있다 → 아니다.
+ *  · 노드 스냅샷에서 **발견한** 행(#2022)은 게이트웨이가 만든 세션이 아니다 → 아니다.
+ *  · 만든 시각을 모르면 아니다(종전 판정 그대로).
+ *  · 시계가 어긋나 조금 미래인 행은 갓 만든 것으로 본다. 유예보다 먼 미래는 이상값이라 종전대로 둔다.
+ *  · 유예가 0·음수·NaN 이면 아래 두 비교가 함께 참일 수 없어 언제나 거짓이다(= 유예 없음).
+ */
+export function isStartingDesiredRow(
+  s: Pick<SessionState, "created" | "exited_at" | "exit_reason" | "discovered">,
+  nowMs: number,
+  graceMs: number,
+): boolean {
+  if (s.exited_at || s.exit_reason || s.discovered) return false;
+  if (s.created == null) return false;
+  const ageMs = nowMs - Number(s.created) * 1000;
+  if (!Number.isFinite(ageMs)) return false;
+  return ageMs < graceMs && ageMs > -graceMs;
+}
+
+export interface RestorableListOpts {
+  /**
+   * #4065 — 만든 지 이만큼(ms)이 안 된 행은 «중단됨» 대신 **«시작 중»(살아 있는 행)** 으로 낸다. 0·미지정 = 종전.
+   *  ⚠ 목록 화면(AI 세션 탭·프로젝트 세션 목록)만 켠다. «지난 세션» 을 판정하는 호출자(휴지통 묶음 등)는 켜지 않는다 —
+   *   켜면 도는 세션을 지난 세션으로 셀 수 없게 된다(그 반대 방향의 오답).
+   */
+  startingGraceMs?: number;
+  /** 시험용 시계(ms). */
+  nowMs?: number;
+}
+
 // 복원 가능(restorable) 세션(#1059 E) — DB desired-state 에는 있으나 지금 tmux 에 **없는** 이 사용자 소유 세션.
 //  = 재부팅으로 tmux 서버가 죽었거나 F(reaper)가 회수한 세션. 라이브 목록(liveIds)에 있는 건 제외(tmux 우선 — 이중표기 방지).
 //  호출자(routes.ts GET /terminal/sessions)가 라이브 tmux + 노드 세션에 이걸 병합한다(노드 병합과 같은 패턴).
 //  ⚠ owner-scoped: 소유자만 자기 restorable 세션을 본다(초대·프로젝트 공유 복원목록은 후속 — 재부팅 생존의 핵심은 owner).
 //  DB 다운/오류면 빈 배열(복원목록은 최적화지 필수 기능이 아니다 — 라이브 세션 표시를 막지 않는다).
-export async function listRestorableSessions(user: LivelyUser, liveIds: Set<string>): Promise<SessionInfo[]> {
+//  #4065 — `opts.startingGraceMs` 를 주면 갓 만든 행은 «시작 중» 행으로 나간다(`isStartingDesiredRow`).
+export async function listRestorableSessions(user: LivelyUser, liveIds: Set<string>, opts: RestorableListOpts = {}): Promise<SessionInfo[]> {
   const me = ownerId(user);
   if (!me) return [];
   // ⚠ 가시성은 **라이브 세션과 같은 규칙**이어야 한다 — 프로젝트 폴더 세션은 로그인한 전원(#452), 개인 세션은
@@ -106,21 +157,27 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
   try { hidden = await hiddenProjects(me); }
   catch { hiddenUnknown = true; }
   const out: SessionInfo[] = [];
+  const nowMs = opts.nowMs ?? Date.now();
+  const graceMs = opts.startingGraceMs ?? 0;
   for (const s of states) {
     if (liveIds.has(s.id)) continue; // tmux 에 살아있음 → 라이브가 SoT
     // 라이브(collectSessions)와 동일 술어: 프로젝트 폴더가 아니고, 내 것도 아니고, 초대도 안 됐으면 안 보인다.
     if (hiddenUnknown && dirToProjectFolder(s.dir || "")) continue;   // 판정 불가 → 프로젝트 세션은 감춘다
     if (!canSeeSession(s, me, hidden)) continue;
+    //  #4065 — 갓 만든 세션은 관측에 아직 안 잡혔을 뿐이다. «중단됨» 이라 부르지 않고 살아 있는 행으로 낸다
+    //   (복원 약속 없음 · 상태는 «대기 중»). 화면은 이 행에 터미널을 붙인다 — 대화창으로 떨어지지 않는다.
+    const starting = isStartingDesiredRow(s, nowMs, graceMs);
     out.push({
       id: s.id, label: s.label || s.id, harness: s.harness || "shell", dir: s.dir || "",
       autoApprove: s.auto_approve, owner: s.owner, owned: s.owner === me,
       created: s.created || 0, attached: false, invites: s.invites, flags: s.flags,
       projectId: s.project_id || 0, appId: s.app_id || undefined,
-      agentState: "offline", title: "",
+      agentState: starting ? "idle" : "offline", title: "",
       lastActive: s.last_busy || undefined,
       // #2022 — 게이트웨이가 노드 스냅샷에서 **발견한** 행은 workspace 좌표를 모른다 → 되살릴 수 없다.
       //  여기서 true 로 내보내면 화면이 "열면 되살아난다"(#1820)고 약속한 뒤 409 를 받는다. 약속을 하지 않는다.
-      restorable: !(s.discovered && !s.root_key),
+      restorable: starting ? false : !(s.discovered && !s.root_key),
+      ...(starting ? { starting: true } : {}),
       discovered: !!s.discovered,
       exitedByUser: !!s.exited_at, // #1059 — 사용자 정상 종료 표시가 찍혔으면 '종료됨', 아니면 '복원 가능(중단됨)'.
       // #1251 — 사용자 종료가 아닌데 사유가 'oom' 이면 earlyoom 이 죽인 것. 둘이 겹치면 사용자 종료가 이긴다(더 확실한 사실).
