@@ -309,7 +309,13 @@ async function resolveActor(
 //     person 에 계속 해소·적재한다(드랍 스크립트가 person 을 보존 대상으로 명시). 구 knowledge_unit 미러
 //     (knowledge-mirror.ts)는 dead/parallel 로 보존(삭제 안 함 — 롤백/회귀 테스트 참조용). knowledge 의 parent
 //     링크는 parent_name(자기참조)로 적재시 즉시 도출(구 resolveParents 별도 패스 불필요 — mirror 가 직접 채움). ──
-export async function ingestItems(items: RawItem[], opts?: { onError?: (it: RawItem, err: unknown) => void }): Promise<number> {
+//  opts.claimKey(#4059) — 이 적재를 한 **수집기의 표식**(connectors/config.collectorClaimKey). 주면 미러가 지식 행에
+//   «이 수집기가 이 행을 봤다» 를 남긴다(knowledge.sync_state.seen_by). 한 워크스페이스를 수집기 여럿이 나눠 맡을 때
+//   전체 점검 스윕이 **자기 몫만** 정리하는 근거다. 안 주면 표식을 건드리지 않는다(종전 동작).
+export async function ingestItems(
+  items: RawItem[],
+  opts?: { onError?: (it: RawItem, err: unknown) => void; claimKey?: string },
+): Promise<number> {
   const client = await itemsPool.connect();
   const actorCache = new Map<string, string>();
   let n = 0;
@@ -327,7 +333,7 @@ export async function ingestItems(items: RawItem[], opts?: { onError?: (it: RawI
       //  best-effort: 미러 실패가 인입(외부 계약·read-your-writes)을 깨면 안 되므로 try/catch 격리 —
       //  logger.warn 만 하고 다음 싱크가 멱등 수렴(external 멱등키 ON CONFLICT). 카운트는 인입 시도 단위.
       try {
-        await mirrorExternalToV6(client, it);
+        await mirrorExternalToV6(client, it, { claimKey: opts?.claimKey });
       } catch (err) {
         logger.warn({ err, system: it.provenance.system, externalId: it.provenance.external_id },
           "v6 외부 미러 적재 실패(무시) — 다음 싱크가 수렴");

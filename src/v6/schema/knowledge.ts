@@ -60,6 +60,9 @@ export async function initV6Knowledge(pool: Pool): Promise<void> {
     ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
     UPDATE knowledge SET created_at = updated_at WHERE created_at IS NULL;
     ALTER TABLE knowledge ALTER COLUMN created_at SET DEFAULT now();
+    -- sync_state(#4059): 수집기 표식(seen_by)·비게 된 시각(unclaimed_since) — 노션 전체 점검 스윕이 자기 몫만 정리하는 근거.
+    --  위 CREATE 에 원래 있던 칸이지만, 그 줄이 들어가기 전에 만든 DB 에선 미러 쓰기가 통째로 실패하므로 멱등 보강(값 없는 추가 = 재작성 없음).
+    ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS sync_state JSONB NOT NULL DEFAULT '{}'::jsonb;
     CREATE UNIQUE INDEX IF NOT EXISTS knowledge_external_uidx ON knowledge(external_system, external_instance, external_id) WHERE external_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS knowledge_injection_idx ON knowledge(injection);
     CREATE INDEX IF NOT EXISTS knowledge_wiki_idx ON knowledge(is_wiki) WHERE is_wiki;

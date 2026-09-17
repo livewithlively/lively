@@ -29,6 +29,11 @@ export interface PostSyncCtx {
   ingested: number;
   /** 항목 단위 미러 실패 수 — 0 이 아니면 오케스트레이터가 커서를 전진시키지 않는다(#541). */
   mirrorFailures: number;
+  /**
+   * 이 run 이 미러 행에 남긴 수집기 표식(#4059 — connectors/config.collectorClaimKey). 적재(ingestItems)와
+   *  **같은 값**이다 — 후처리가 «이 수집기가 이번에 본 행» 을 표식으로 가려 스윕 범위를 자기 몫으로 좁힌다.
+   */
+  claimKey: string;
 }
 
 /**

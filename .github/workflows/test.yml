@@ -126,6 +126,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/source-tree.pg-test.mjs
+      # ⑤-d 노션 전체 점검 스윕의 수집기 몫(#4059) — 한 워크스페이스를 수집기 여럿이 나눠 맡을 때 한 수집기의
+      #    점검이 남의 몫을 보관하던 사고(soltimal 2026-09-17, 5,385건)의 안전망. 판정이 전부 jsonb 표식 떼기·
+      #    «아무도 안 맡음»·비게 된 시각 비교라 목 러너로는 조건 하나를 지워도 초록이다 — 행을 깔고 스윕 뒤 다시 읽는다.
+      - name: 노션 스윕 수집기 몫 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/mirror/notion-sweep.pg-test.mjs
       # ⑤ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.
