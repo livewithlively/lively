@@ -5,7 +5,8 @@ import { readFileSync } from "node:fs";
 import {
   decideRunnerFill, validateHeadlessSecret, storeHeadlessCredential, pickFailures, headlessNotice,
   notifyHeadlessCredentialProblem, HEADLESS_NOTICE_COOLDOWN_MS, HEADLESS_NOTICE_HREF, HEADLESS_NOTICE_APP,
-  type StoreDeps,
+  isActiveAdminMember, memberIsAdminNow, headlessAdminFor, claimRunnerFromScreen, hasHeadlessCredential, headlessCredentialRow,
+  type StoreDeps, type ClaimDeps,
 } from "./headless-connect.js";
 
 let pass = 0;
@@ -219,6 +220,125 @@ await t("★ S(원자성) 실행 멤버 채우기는 한 문장 — 이 워크�
   assert.match(body, /contextJobPolicySource\(\{\}\) === "env"\) return false/);
   assert.match(body, /if \(!r\.rowCount\) return false/);
   assert.match(body, /await audit\(/, "바꿨으면 감사 기록을 남긴다");
+});
+
+// ── 관리자 판정 · 화면에서 실행 멤버 정하기 (M — 2026-09-17 실측 뒤) ──
+
+await t("★ M1·M2·M3 관리자 판정은 구성원의 실제 역할 — 활성 + admin(로그인 토큰의 권한이 아니다)", async () => {
+  assert.equal(isActiveAdminMember({ state: "active", scopes: ["items", "admin"] }), true, "M1");
+  assert.equal(isActiveAdminMember({ state: "active", scopes: ["items", "context", "runtime"] }), false, "M2 역할에 admin 이 없다");
+  assert.equal(isActiveAdminMember({ state: "disabled", scopes: ["admin"] }), false, "M3 비활성");
+  assert.equal(isActiveAdminMember(null), false, "M3 없음");
+  assert.equal(isActiveAdminMember({ state: "active", scopes: "admin" }), false, "모르는 모양은 아니다");
+  const seen: string[] = [];
+  const lookup = async (id: string) => {
+    seen.push(id);
+    return id === "boss" ? { state: "active", scopes: ["admin"] } : id === "staff" ? { state: "active", scopes: ["items"] } : null;
+  };
+  assert.equal(await memberIsAdminNow("boss", lookup), true);
+  assert.equal(await memberIsAdminNow("staff", lookup), false);
+  assert.equal(await memberIsAdminNow("ghost", lookup), false);
+  assert.deepEqual(seen, ["boss", "staff", "ghost"], "배선 — 그 멤버의 기록을 실제로 읽었다");
+});
+
+await t("★ M4 구성원을 못 읽으면 관리자가 아니다(닫힌 쪽)", async () => {
+  assert.equal(await memberIsAdminNow("x", async () => { throw new Error("db down"); }), false);
+});
+
+await t("★ M1·M2 헤드리스 경로의 관리자 판정 한 벌 — 토큰 admin 이거나 구성원 역할 admin · 정적·앱 토큰은 안 된다", async () => {
+  const seen: string[] = [];
+  const lookup = async (id: string) => { seen.push(id); return id === "boss" ? { state: "active", scopes: ["admin"] } : { state: "active", scopes: ["items"] }; };
+  assert.equal(await headlessAdminFor({ tokenSource: "db", scopes: ["items", "code"] }, "boss", lookup), true,
+    "M1 데스크톱 기기 토큰(admin 없음)이어도 구성원이 관리자면 관리자");
+  assert.equal(await headlessAdminFor({ tokenSource: "db", scopes: ["items"] }, "staff", lookup), false, "M2 둘 다 아니면 아니다");
+  assert.deepEqual(seen, ["boss", "staff"], "배선 — 토큰에 admin 이 없을 때 구성원 기록을 실제로 읽었다");
+  seen.length = 0;
+  assert.equal(await headlessAdminFor({ tokenSource: "session", scopes: ["admin"] }, "ghost", lookup), true,
+    "토큰(세션) admin 이면 관리자 — 구성원 조회가 비어 오는 자리(보조 워크스페이스)에서도 종전보다 좁아지지 않는다");
+  assert.deepEqual(seen, [], "토큰이 이미 관리자면 묻지 않는다");
+  assert.equal(await headlessAdminFor({ tokenSource: "static", scopes: ["admin"] }, "boss", lookup), false,
+    "회수할 수 없는 정적 토큰은 정책을 못 쓴다(web.ts B5 와 같은 선)");
+  assert.equal(await headlessAdminFor({ tokenSource: "db", scopes: ["admin"], appId: "some-app" }, "boss", lookup), false,
+    "앱 세션 토큰도 못 쓴다(requireAppTool 과 같은 선)");
+  assert.equal(await headlessAdminFor({ scopes: "admin" }, "staff", lookup), false, "모르는 모양의 토큰 권한은 권한이 아니다");
+});
+
+await t("★ M6·M8 «연결됨» 한 벌 — 화면의 버튼 조건과 서버의 409 가 같은 규칙", () => {
+  const row = (kind: string, o: { scope_key?: string | null; has_secret?: boolean } = {}) => ({ kind, scope_key: "", has_secret: true, ...o });
+  assert.equal(hasHeadlessCredential([row("claude_setup_token")]), true);
+  assert.equal(hasHeadlessCredential([row("codex_auth_json")]), true, "codex 만 있어도 판은 돈다");
+  assert.equal(hasHeadlessCredential([row("claude_setup_token", { has_secret: false })]), false, "행만 있고 값이 없다");
+  assert.equal(hasHeadlessCredential([row("claude_setup_token", { scope_key: "repo-x" })]), false, "기본 칸이 아니다(판은 기본 칸을 빌린다)");
+  assert.equal(hasHeadlessCredential([row("anthropic_api_key")]), false, "판이 빌리는 종류가 아니다");
+  assert.equal(hasHeadlessCredential([]), false);
+  assert.equal(headlessCredentialRow([row("claude_setup_token", { scope_key: null })], "claude")?.kind, "claude_setup_token", "칸이 비어 온 행도 기본 칸이다");
+  assert.equal(headlessCredentialRow([row("claude_setup_token")], "codex"), undefined);
+});
+
+/** 화면 정하기의 가짜 의존성 — 무엇이 불렸나를 센다. */
+function claimDeps(o: { cred?: boolean; policy?: { current: string | null; source: "db" | "env" | "default" }; fillResult?: boolean } = {}) {
+  const calls = { hasCredential: [] as string[], policy: 0, fill: [] as unknown[][] };
+  const deps: ClaimDeps = {
+    hasCredential: async (id) => { calls.hasCredential.push(id); return o.cred ?? true; },
+    policy: async () => { calls.policy++; return o.policy ?? { current: null, source: "default" }; },
+    fillRunner: async (...a) => { calls.fill.push(a); return o.fillResult ?? true; },
+  };
+  return { deps, calls };
+}
+
+await t("★ M6·M10 화면에서 정하기 — 관리자 · 자격 있음 · 미지정 → 요청한 본인으로 채운다", async () => {
+  const { deps, calls } = claimDeps();
+  assert.deepEqual(await claimRunnerFromScreen({ memberId: "boss", actor: "boss", isAdmin: true }, deps), { ok: true, runner: "filled" });
+  assert.deepEqual(calls.fill, [["boss", "boss"]], "M10 대상은 요청한 본인");
+  assert.deepEqual(calls.hasCredential, ["boss"], "배선 — 그 멤버의 자격을 실제로 물었다");
+});
+
+await t("★ M7·M8 비관리자는 403 · 자격이 없으면 409 — 둘 다 아무것도 바꾸지 않는다", async () => {
+  const a = claimDeps();
+  const r1 = await claimRunnerFromScreen({ memberId: "staff", actor: "staff", isAdmin: false }, a.deps);
+  assert.equal(r1.ok === false && r1.status, 403);
+  assert.deepEqual([a.calls.hasCredential.length, a.calls.policy, a.calls.fill.length], [0, 0, 0], "M7 아무것도 묻지도 쓰지도 않는다");
+  const b = claimDeps({ cred: false });
+  const r2 = await claimRunnerFromScreen({ memberId: "boss", actor: "boss", isAdmin: true }, b.deps);
+  assert.equal(r2.ok === false && r2.status, 409);
+  assert.match(r2.ok === false ? r2.error : "", /연결해 주세요/, "무엇을 하면 되는지 말한다");
+  assert.deepEqual([b.calls.policy, b.calls.fill.length], [0, 0], "M8 자격 없는 멤버를 앉히면 모든 맥락 잡이 멈춘다");
+});
+
+await t("★ M9 관리자가 비워 둔 자리 · 이미 정해진 자리는 그대로 — 결과로 말한다", async () => {
+  const claim = (d: ClaimDeps) => claimRunnerFromScreen({ memberId: "boss", actor: "boss", isAdmin: true }, d);
+  const cleared = claimDeps({ policy: { current: null, source: "db" } });
+  assert.deepEqual(await claim(cleared.deps), { ok: true, runner: "cleared" });
+  assert.equal(cleared.calls.fill.length, 0, "비운 것은 결정이다");
+  const taken = claimDeps({ policy: { current: "other", source: "db" } });
+  assert.deepEqual(await claim(taken.deps), { ok: true, runner: "already-set" });
+  assert.equal(taken.calls.fill.length, 0);
+  const raced = claimDeps({ fillResult: false });
+  assert.deepEqual(await claim(raced.deps), { ok: true, runner: "already-set" }, "동시에 누가 먼저 채웠다");
+});
+
+await t("★ 배선 M1·M5·M10·M12 — 헤드리스 경로 셋이 판정 한 벌만 쓰고 · 정하기는 본인만 · 저장 결과를 로그에", () => {
+  const r = code(src("../../terminal/routes.ts"));
+  const from = r.indexOf('"/api/ui/me/headless-login/start"');
+  const to = r.indexOf('app.post("/api/ui/me/ai-accounts/logout"');
+  assert.ok(from > 0 && to > from, "헤드리스 경로 묶음을 찾았다");
+  const block = r.slice(from, to);
+  assert.equal((block.match(/await headlessAdminFor\((user|userOf\(req\)), me\)/g) || []).length, 3, "저장 · 상태 · 정하기 세 자리 모두 한 벌");
+  assert.ok(!/isAdmin\(|\.scopes\b|memberIsAdminNow\(/.test(block), "헤드리스 경로가 판정을 따로 만들지 않는다(토큰 권한·구성원 조회 직접 사용 금지)");
+  assert.match(block, /secret: got\.captured, actor: me, isAdmin: await headlessAdminFor\(user, me\)/, "M1 저장");
+  assert.match(block, /headlessStatusFor\(\{ memberId: me, isAdmin: await headlessAdminFor\(userOf\(req\), me\) \}\)/, "M5 상태");
+  const at = block.indexOf('app.post("/api/ui/me/headless/runner"');
+  assert.ok(at > 0, "정하기 경로가 있다");
+  const claim = block.slice(at, block.indexOf("}));", at));
+  assert.match(claim, /claimRunnerFromScreen\(\{ memberId: me, actor: me, isAdmin: await headlessAdminFor\(userOf\(req\), me\) \}\)/);
+  assert.ok(!/req\.(body|query|params)/.test(claim), "M10 요청에서 멤버를 읽지 않는다 — 대상은 인증된 본인");
+  assert.match(claim, /throw new HttpError\(out\.status, out\.error\)/, "거절은 그 상태코드로");
+  assert.match(block, /logger\.info\(\{ member: me, harness: h, stored: r\.ok, runner: r\.ok \? r\.runner : null \}/, "M12");
+  const hc = code(src("./headless-connect.ts"));
+  assert.match(hc, /fillContextJobRunnerIfUnset\(memberId, actor, "headless-claim"\)/, "정하기의 감사 출처는 자동 채우기와 가른다");
+  assert.match(hc, /fillContextJobRunnerIfUnset\(memberId, actor, "headless-connect"\)/);
+  assert.match(hc, /hasCredential: async \(id\) => hasHeadlessCredential\(/, "409 판정은 «연결됨» 한 벌");
+  assert.match(hc, /const c = headlessCredentialRow\(creds, h\);/, "화면의 «연결됨» 도 같은 한 벌");
 });
 
 console.log(`\n${pass} passed`);

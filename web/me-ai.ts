@@ -340,18 +340,43 @@ function headlessRow(h: any, reload: () => void) {
     panel);
 }
 
-/** 워크스페이스 실행 멤버 한 줄 — «누구 계정으로 도나» 를 사실대로. 모르면 말하지 않는다. */
-function runnerLine(st: any): HTMLElement | null {
+/**
+ * 워크스페이스 실행 멤버 한 줄 — «누구 계정으로 도나» 를 사실대로. 모르면 말하지 않는다.
+ *  연결은 됐는데 아직 비어 있으면(예전 판에서 연결했거나 자동 지정이 빠졌을 때) 여기서 바로 정하게 한다 —
+ *  관리 화면을 찾아가라고 하면 첫 사용자는 거기서 멈춘다(실측 2026-09-17: 데스크톱에서 연결한 관리자).
+ */
+function runnerLine(st: any, reload: () => void): HTMLElement | null {
   const r = st?.runner;
   if (!r) return null;
+  const connected = ((st?.harnesses || []) as any[]).some((h) => h && h.connected);
   let text = '';
+  let action: HTMLElement | null = null;
   if (r.is_me) text = '이 워크스페이스의 증류·분류·관리는 내 계정으로 실행됩니다.';
   else if (r.member) text = `이 워크스페이스의 증류·분류·관리는 ${r.name || r.member}님 계정으로 실행됩니다. 여기서 연결한 내 자격은 내 이름으로 도는 작업에만 쓰입니다.`;
-  else if (st.can_set_runner) text = r.source === 'db'
-    ? '이 워크스페이스의 실행 멤버가 비어 있어요. 증류·분류·관리는 각 작업을 켠 사람 계정으로 실행됩니다.'
-    : '아직 실행 멤버가 정해지지 않았어요. 여기서 연결하면 이 워크스페이스의 증류·분류·관리가 내 계정으로 실행됩니다.';
+  else if (st.can_set_runner && r.source === 'db') text = '이 워크스페이스의 실행 멤버가 비어 있어요. 증류·분류·관리는 각 작업을 켠 사람 계정으로 실행됩니다.';
+  else if (st.can_set_runner && connected) {
+    text = '연결은 됐지만 이 워크스페이스의 실행 멤버가 아직 정해지지 않았어요. 정하면 증류·분류·관리가 내 계정으로 실행됩니다.';
+    const btn = el('button', { type: 'button', class: 'btn btn-primary btn-sm', text: '실행 멤버로 정하기' }) as HTMLButtonElement;
+    btn.onclick = async () => {
+      btn.disabled = true; btn.textContent = '정하는 중…';
+      try {
+        const out = await api('/api/ui/me/headless/runner', { method: 'POST', body: JSON.stringify({}) }) as any;
+        toast(out?.runner === 'filled' ? '이제 이 워크스페이스의 증류·분류·관리가 내 계정으로 실행됩니다.'
+          : out?.runner === 'cleared' ? '이 워크스페이스는 실행 멤버를 비워 두기로 정해져 있어요 — 바꾸려면 관리 설정에서 정해 주세요.'
+            : '실행 멤버가 이미 정해져 있어요.');
+        reload();
+      } catch (e: any) {
+        btn.disabled = false; btn.textContent = '실행 멤버로 정하기';
+        toast('정하지 못했어요 — ' + ((e && e.message) || e), true);
+      }
+    };
+    action = btn;
+  }
+  else if (st.can_set_runner) text = '아직 실행 멤버가 정해지지 않았어요. 여기서 연결하면 이 워크스페이스의 증류·분류·관리가 내 계정으로 실행됩니다.';
   else text = '이 워크스페이스의 실행 멤버는 관리자가 정합니다. 여기서 연결한 내 자격은 내 이름으로 도는 작업에만 쓰입니다.';
-  return el('p', { class: 'admin-hint', style: 'margin:6px 0 0', text });
+  if (!action) return el('p', { class: 'admin-hint', style: 'margin:6px 0 0', text });
+  return el('div', { style: 'margin:6px 0 0; display:flex; align-items:center; gap:10px; flex-wrap:wrap' },
+    el('p', { class: 'admin-hint', style: 'margin:0; flex:1 1 260px', text }), action);
 }
 
 /** «사람 없이 도는 작업» 묶음 — 계정 행들 **아래**에 한 칸 띄워 앉힌다(카드 안에 카드를 만들지 않는다, 디자인시스템 §9). */
@@ -359,12 +384,13 @@ function headlessSection(st: any, reload: () => void): HTMLElement[] {
   const rows = (st?.harnesses || []) as any[];
   if (!rows.length) return [];
   const anyFail = rows.some((r) => r.failure);
+  const line = runnerLine(st, reload);
   return [
     el('div', { style: 'margin:22px 0 2px; display:flex; align-items:center; gap:8px; flex-wrap:wrap' },
       el('span', { class: 'aiacct-name', text: '사람 없이 도는 작업' }),
       anyFail ? el('span', { class: 'pill pill-warn', text: '확인 필요' }) : null),
     el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: '증류·분류·관리처럼 내가 자리에 없어도 도는 작업은, 여기서 따로 연결한 계정으로 실행됩니다.' }),
-    ...(runnerLine(st) ? [runnerLine(st) as HTMLElement] : []),
+    ...(line ? [line] : []),
     ...rows.map((r) => headlessRow(r, reload)),
   ];
 }

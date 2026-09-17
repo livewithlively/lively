@@ -458,12 +458,15 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     let storeError: string | null = null;
     let runner: string | null = null;
     if (!stored && got.captured) {
-      const { storeHeadlessCredential } = await import("../org/credentials/headless-connect.js");
-      const { isAdmin } = await import("../capabilities/principal.js");
+      const { storeHeadlessCredential, headlessAdminFor } = await import("../org/credentials/headless-connect.js");
       const me = headlessMemberOf(req);
+      //  관리자 판정은 헤드리스 경로의 한 벌이다 — 데스크톱 앱의 기기 로그인 토큰엔 admin 이 없어도 구성원 역할이
+      //   관리자면 관리자다(memberIsAdminNow 머리말). 정적·앱 토큰은 안 된다(headlessAdminFor 머리말).
       const r = await storeHeadlessCredential({
-        memberId: me, harness: h, secret: got.captured, actor: me, isAdmin: isAdmin(user),
+        memberId: me, harness: h, secret: got.captured, actor: me, isAdmin: await headlessAdminFor(user, me),
       });
+      //  실행 멤버 판정 결과는 응답 밖에서는 안 보인다 — 조용히 빠지면 원인을 못 찾는다(실측 2026-09-17). 비밀은 없다.
+      logger.info({ member: me, harness: h, stored: r.ok, runner: r.ok ? r.runner : null }, "headless: 화면 연결 저장");
       if (r.ok) {
         await markHeadlessStored(seat, h).catch(() => { /* 다음 조회가 다시 저장한다(같은 값 — 무해) */ });
         //  자리(세션 컨테이너)도 치운다 — 발급은 끝났다. 안 치우면 연결마다 컨테이너가 남는다.
@@ -494,11 +497,22 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
   }));
   //  [내 AI 계정] «사람 없이 도는 작업» 행 — 연결 여부 · 연결 뒤에 난 실패 · 워크스페이스 실행 멤버.
   app.get("/api/ui/me/headless", auth, wrap(async (req, res) => {
-    const user = userOf(req);
-    const { headlessStatusFor } = await import("../org/credentials/headless-connect.js");
-    const { isAdmin } = await import("../capabilities/principal.js");
+    const me = headlessMemberOf(req);
+    const { headlessStatusFor, headlessAdminFor } = await import("../org/credentials/headless-connect.js");
     res.setHeader("Cache-Control", "no-store");
-    res.json(await headlessStatusFor({ memberId: headlessMemberOf(req), isAdmin: isAdmin(user) }));
+    //  «정할 수 있나» 도 저장과 같은 판정이다 — 데스크톱의 관리자에게도 버튼·안내가 맞게 나온다.
+    res.json(await headlessStatusFor({ memberId: me, isAdmin: await headlessAdminFor(userOf(req), me) }));
+  }));
+  //  [이 워크스페이스의 실행 멤버로 정하기] — 연결은 됐는데 실행 멤버가 비어 있을 때 사람이 스스로 마무리한다.
+  //   대상은 언제나 요청한 본인이다(몸통의 멤버 id 를 읽지 않는다 — claimRunnerFromScreen 머리말).
+  app.post("/api/ui/me/headless/runner", auth, wrap(async (req, res) => {
+    const me = headlessMemberOf(req);
+    const { claimRunnerFromScreen, headlessAdminFor } = await import("../org/credentials/headless-connect.js");
+    const out = await claimRunnerFromScreen({ memberId: me, actor: me, isAdmin: await headlessAdminFor(userOf(req), me) });
+    logger.info({ member: me, ok: out.ok, runner: out.ok ? out.runner : null }, "headless: 실행 멤버 화면 지정");
+    if (!out.ok) throw new HttpError(out.status, out.error);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, runner: out.runner });   // 화면은 이 뒤에 칸을 다시 그린다(상태를 여기서 또 만들지 않는다)
   }));
 
   // 로그아웃 = 내 자격증명 파일 삭제(재로그인으로 복구 가능). 공유 계정(비격리 codex 등)은 서비스가 409 로 막는다.
