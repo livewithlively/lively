@@ -1718,8 +1718,14 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.ok(configure.indexOf("withSignExts(") < configure.indexOf("writeFileSync(PKG"), "package.json 을 쓴 뒤에 끼운다");
     assert.match(configure, /if \(!dist\)[^\n]*return 1/, "배포본이 없을 때 조용히 넘어간다");
     const dist = between("function electronDistFiles()", "function configure()");
-    assert.match(dist, /join\(HERE, "node_modules", "electron", "dist"\)/);
+    assert.match(dist, /join\(pkgDir, "dist"\)/);
+    assert.match(dist, /join\(HERE, "node_modules", "electron"\)/);
     assert.match(dist, /peHasSignature\(/);
+    // Electron 43 은 npm ci 때 실행 파일을 받지 않는다(postinstall 없음) — 없으면 공식 install.js 로 받아야 한다(run 35188494233 실측).
+    assert.match(dist, /if \(!existsSync\(dist\) && existsSync\(join\(pkgDir, "install\.js"\)\)\)/, "배포본이 없을 때 받지 않는다 — 러너에서 configure 가 멈춘다");
+    assert.match(dist, /execFileSync\(process\.execPath, \[join\(pkgDir, "install\.js"\)\]/);
+    const iInstall = dist.indexOf("install.js\")]"), iReaddir = dist.indexOf("readdirSync(dist)");
+    assert.ok(iInstall >= 0 && iReaddir > iInstall, "받기 전에 폴더를 읽는다");
     const verify = between("async function verify()", "function verifyFiles(");                                  // G2
     assert.match(verify, /peFilesUnder\(unpacked\)/, "앱 폴더 전수 판독이 없다");
     assert.match(verify, /appFilesProblems\(reports,\s*azure\.publisherName\)/, "앱 폴더 판독 결과로 막지 않는다");

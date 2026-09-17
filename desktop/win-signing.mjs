@@ -308,9 +308,19 @@ function readHead(file, n = 4096) {
   } finally { closeSync(fd); }
 }
 
-/** 러너에 받아진 Electron 배포본(npm ci 가 이 OS 용으로 받는다)의 최상위 PE 파일과 서명 자리 유무. 없으면 null. */
+/**
+ * 이 OS 용 Electron 배포본의 최상위 PE 파일과 서명 자리 유무. 끝내 없으면 null.
+ *  ⚠ Electron 43 은 `npm ci` 때 실행 파일을 받지 않는다 — postinstall 이 없고, 받기는 `install-electron`(= install.js) 명령이다.
+ *   electron-builder 는 자기 캐시(app-builder-lib util/electronGet.js)에 따로 받아 쓰므로 빌드는 되지만 이 폴더는 비어 있다
+ *   (실측 run 35188494233: 여기서 «배포본이 없다» 로 멈췄다). 그래서 없으면 같은 버전을 공식 스크립트로 받는다.
+ */
 function electronDistFiles() {
-  const dist = join(HERE, "node_modules", "electron", "dist");
+  const pkgDir = join(HERE, "node_modules", "electron");
+  const dist = join(pkgDir, "dist");
+  if (!existsSync(dist) && existsSync(join(pkgDir, "install.js"))) {
+    console.log("win: Electron 배포본이 없어 받는다 — node_modules/electron/install.js");
+    execFileSync(process.execPath, [join(pkgDir, "install.js")], { stdio: "inherit", timeout: 600_000 });
+  }
   if (!existsSync(dist)) return null;
   return readdirSync(dist).filter(isPeName).map((name) => ({ name, signed: peHasSignature(readHead(join(dist, name))) }));
 }
