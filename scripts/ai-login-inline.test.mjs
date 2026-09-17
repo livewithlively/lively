@@ -11,6 +11,8 @@ import test from "node:test";
 const SRC = readFileSync(new URL("../web/lib/ai-login-inline.ts", import.meta.url), "utf8");
 const ONB = readFileSync(new URL("../web/v2/onboarding.ts", import.meta.url), "utf8");
 const MEAI = readFileSync(new URL("../web/me-ai.ts", import.meta.url), "utf8");
+//  #4051 — 처음 설정의 «사람 없이 도는 작업» 허용 칸은 따로 된 파일이다(장면과 상태를 한 벌로 나누려고). 같은 규율을 진다.
+const ONB_HL = readFileSync(new URL("../web/v2/onboarding-headless.ts", import.meta.url), "utf8");
 /** 주석은 계약이 아니다 — «종전엔 이랬다» 를 설명한 줄에 걸리면 검열이지 검사가 아니다. */
 const code = (s) => s.split("\n").filter((l) => {
   const t = l.trim();
@@ -21,11 +23,12 @@ test("배선 · 세 소스를 실제로 읽었다(vacuous 방지)", () => {
   assert.ok(SRC.length > 2000);
   assert.ok(ONB.length > 10000);
   assert.ok(MEAI.length > 2000);
+  assert.ok(ONB_HL.length > 2000);
 });
 
 test("★ 한 벌이다 — 두 화면이 같은 모듈을 쓰고, 자기 폴링 루프를 갖지 않는다", () => {
   //  이 계약이 이 파일의 존재 이유다. 화면이 스스로 start/state 를 두드리기 시작하면 그 순간 사본이 둘이 된다.
-  for (const [name, s] of [["onboarding", ONB], ["me-ai", MEAI]]) {
+  for (const [name, s] of [["onboarding", ONB], ["me-ai", MEAI], ["onboarding-headless", ONB_HL]]) {
     assert.match(s, /from ['"][^'"]*ai-login-inline\.js['"]/, `${name} 이 공용 모듈을 가져온다`);
     const c = code(s);
     //  #4051 — 헤드리스 발급(headless-login/*)도 같은 규율이다: 화면은 모듈만 부른다.
