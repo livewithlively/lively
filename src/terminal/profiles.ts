@@ -17,6 +17,7 @@ import { memberSh, memberShOut, execAt, type ExecAt, type MemberExecAt } from ".
 import { sessionExecConfigured } from "./session-exec.js";   // #3668 T3 — 하네스 바이너리를 돌릴 자리가 세션 컨테이너인가
 import { gatewayCapability } from "../sessions/gateway-capabilities.js";   // #2165 — 세션 생성은 게이트웨이 능력이다(노드 번들에 로그인 러너를 안 싣는다)
 import { memberExecConfigured } from "./terminal-isolation.js";   // #2148 — 중계 배포에는 멤버 OS 계정이 없다(아래 memberOsStatus)
+import { execTopology } from "../exec-topology.js";   // #4067 — 세션 이미지의 하네스 목록(설치 판정을 자리 없이)
 import { roots, HARNESSES } from "./catalog.js";
 import { getOpt } from "./tmux-exec.js";
 import { loadDesiredOne } from "../sessions/session-desired.js";
@@ -380,6 +381,24 @@ async function harnessSeat(user: LivelyUser, key: string, osUser: string): Promi
   return { osUser, sessionId: await seat.ensure(user, key) };
 }
 
+/**
+ * (#4067) 자리를 띄우지 않고 «설치됨» 을 답할 수 있으면 그 답 — 아니면 undefined(호출부가 종전대로 자리를 본다).
+ *
+ *  ⚠ 왜(실측 2026-09-17, 상민님 새 워크스페이스): 확인 한 번에 멤버 세션 컨테이너(노드 예약 1024MB)를 띄웠다.
+ *   붐비는 노드에선 그 확인조차 `LVLY_NODE_CAPACITY` 로 못 섰고, 로그인 판을 CP 로 옮긴 뒤에도 이 확인이 남으면
+ *   «로그인했어요» 한 번에 여전히 컨테이너가 뜬다. 설치 여부는 **이미지의 성질**이지 사람마다 다른 사실이 아니다 —
+ *   배포가 이미지와 함께 싣는 목록(execTopology.sessionHarnesses)으로 답한다.
+ *  · 자리를 쓰는 배포(세션 경계 중계 + 자리 능력)에서만 대신한다 — 그 밖은 원래 자리를 안 띄운다.
+ *  · 자격 **파일** 하네스만 — 프로브 하네스(agy)는 로그인 판정 자체가 그 자리에서 CLI 를 돌려야 해서 자리가 남는다(예외).
+ *  · 목록이 없거나 깨졌으면(null) 모름 → 종전 자리. 대리값을 지어내지 않는다.
+ */
+export function listedHarnessInstalled(key: string): boolean | undefined {
+  if (!harnessHasCredential(key)) return undefined;
+  if (!sessionExecConfigured() || !gatewayCapability("harnessSeat")) return undefined;
+  const listed = execTopology().sessionHarnesses;
+  return listed ? listed.includes(key) : undefined;
+}
+
 // `sh -c` 한 줄을 주어진 자리에서 돌린다. 자리가 있으면 그 경계(세션 컨테이너 또는 멤버 uid), 없으면 게이트웨이 로컬.
 //  ⚠ 경계로 나갈 때 HOME 을 **명시**한다: 중계 exec 환경엔 그 유저의 passwd 항목이 없어 $HOME 이 다르고(memberLoggedInHarnesses
 //   머리말과 같은 함정), agy 는 자격을 HOME 기준으로 찾으므로 그 한 글자에 판정이 통째로 뒤집힌다.
@@ -421,6 +440,15 @@ export async function aiLoginCheck(user: LivelyUser, key: string): Promise<AiLog
     harness: h.key, label: h.label, bin: h.bin,
     installed: null, loggedIn: null, how: "none", steps: h.loginSteps ?? [],
   };
+  // #4067 — 자리 없이 답할 수 있으면 자리를 띄우지 않는다(listedHarnessInstalled 머리말). 로그인은 ② 와 같은 판정이다.
+  const listed = osUser ? listedHarnessInstalled(h.key) : undefined;
+  if (listed !== undefined) {
+    out.installed = listed;
+    if (!listed) return out;
+    out.how = "file";
+    out.loggedIn = (await aiAccountStatus(user, osSt)).find((a) => a.key === h.key)?.loggedIn ?? null;
+    return out;
+  }
   // 하네스 바이너리를 돌릴 자리(#3668 T3) — 매니지드면 세션 컨테이너, 셀프호스트면 null(호출부가 종전 자리를 쓴다).
   //  자리를 못 얻으면 **모름**으로 끝낸다(installed=null) — 게이트웨이 자리로 접으면 아래 ① 의 거짓 «미설치» 다.
   let seat: MemberExecAt | null = null;

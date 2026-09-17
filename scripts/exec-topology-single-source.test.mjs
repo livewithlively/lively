@@ -36,6 +36,8 @@ const TOPOLOGY_ENV = [
   //  #2600 T3-a — 허브 전송을 걷어 `LVLY_HUB_*` 는 이제 소유자(exec-topology)도 안 읽는다(중계 .cjs 만 읽는다). 그래도 목록에 둔다 —
   //   코어의 다른 자리가 허브 env 를 다시 읽기 시작하면 걷힌 전송이 조용히 되살아나는 것이므로 여기서 막는다.
   "LIVELY_TMUX_ROUTE", "LVLY_HUB_URL", "LVLY_HUB_SECRET", "LVLY_TMUX_SOCK_TEMPLATE",
+  //  #4067 — 세션 이미지의 하네스 목록(«설치돼 있나» 를 세션 컨테이너 없이 답하는 근거).
+  "LIVELY_SESSION_HARNESSES",
 ];
 
 // 테넌시/DB·경로 축이 계속 소유하는 자리(토폴로지가 아니다). 이 목록 밖에서 읽으면 실패한다.

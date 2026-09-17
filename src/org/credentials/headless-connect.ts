@@ -60,9 +60,35 @@ export async function headlessAdminFor(
   memberId: string,
   lookup?: (id: string) => Promise<{ state?: unknown; scopes?: unknown } | null>,
 ): Promise<boolean> {
-  if (user.tokenSource === "static" || user.appId) return false;
-  if (Array.isArray(user.scopes) && user.scopes.includes("admin")) return true;
-  return memberIsAdminNow(memberId, lookup);
+  return adminFromBasis(headlessAdminBasis(user), memberId, lookup);
+}
+
+/**
+ * 관리자 판정의 **근거** — 위 판정을 «토큰에서 읽는 부분» 과 «구성원 역할을 읽는 부분» 으로 가른 것(#4067).
+ *  CP 로그인 판은 결과를 **사용자 토큰 없이** 넘긴다. 그래서 시작 요청이 근거를 적어 두고(org_login_job.admin_basis)
+ *  결과가 올 때 adminFromBasis 로 잰다 — 구성원 역할은 그때 다시 읽는다(시작과 결과 사이에 바뀌었으면 결과 때의 역할).
+ *  · none   — 정적·앱 토큰(관리자일 수 없다)
+ *  · token  — 토큰(세션)이 admin
+ *  · member — 그 밖: 구성원의 실제 역할로 잰다
+ */
+export type HeadlessAdminBasis = "none" | "token" | "member";
+export const HEADLESS_ADMIN_BASES: readonly HeadlessAdminBasis[] = Object.freeze(["none", "token", "member"]);
+
+export function headlessAdminBasis(user: { tokenSource?: unknown; appId?: unknown; scopes?: unknown }): HeadlessAdminBasis {
+  if (user.tokenSource === "static" || user.appId) return "none";
+  if (Array.isArray(user.scopes) && user.scopes.includes("admin")) return "token";
+  return "member";
+}
+
+/** 근거로 판정한다. 모르는 근거는 관리자가 아니다(닫힌 쪽). */
+export async function adminFromBasis(
+  basis: unknown,
+  memberId: string,
+  lookup?: (id: string) => Promise<{ state?: unknown; scopes?: unknown } | null>,
+): Promise<boolean> {
+  if (basis === "token") return true;
+  if (basis === "member") return memberIsAdminNow(memberId, lookup);
+  return false;
 }
 
 // ── «연결됨» — 한 벌 ─────────────────────────────────────────────────────────

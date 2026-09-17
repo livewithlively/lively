@@ -479,4 +479,35 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  seq scan 하면 그 조회가 곧 부하다 — 이미 Postgres 타임아웃을 겪은 박스에서는 특히.
   //  ⚠ 반드시 org_task DDL **뒤**에 둔다(같은 초기화 안에서 순차 실행이라, 앞에 두면 테이블이 없어 실패한다).
   await pool.query(`CREATE INDEX IF NOT EXISTS org_task_requester_finished_idx ON org_task(requester, finished_at DESC)`);
+
+  // ── org_login_job — 하네스 로그인 **판**(#4012 T13 · #4067). CP 일시 유닛이 CLI 를 돌리고 이 행으로 게이트웨이와 주고받는다.
+  //  청/녹 교대·다른 슬롯이 받아도 같은 작업을 보게 DB 에 둔다(게이트웨이 메모리에 두면 교대 한 번에 작업이 사라진다).
+  //  ⚠ 자격 **값**은 여기에 없다 — secret_hash 는 판의 일회용 비밀의 sha256, paste 는 사람이 넣은 일회용 코드(암호화)이고
+  //   판이 가져가는 즉시 지운다. screen 은 판과 게이트웨이가 두 번 가린 화면이다(login-job-script.redactSecrets).
+  //  admin_basis — 헤드리스 결과는 사용자 토큰 없이(판의 콜백으로) 도착한다. 시작 요청의 토큰으로 «관리자 판정의 근거» 를
+  //   적어 두고 결과 때 그 근거로 잰다(headless-connect.headlessAdminBasis — 정적·앱 토큰은 none).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_login_job(
+      id BIGSERIAL PRIMARY KEY,
+      member_id TEXT NOT NULL,
+      harness TEXT NOT NULL,
+      purpose TEXT NOT NULL CHECK (purpose IN ('login','headless')),
+      status TEXT NOT NULL DEFAULT 'starting' CHECK (status IN ('starting','running','done','failed','cancelled','expired')),
+      secret_hash TEXT NOT NULL,
+      admin_basis TEXT NOT NULL DEFAULT 'none' CHECK (admin_basis IN ('none','token','member')),
+      screen TEXT NOT NULL DEFAULT '',
+      exit_code INT,
+      paste TEXT,
+      error TEXT,
+      unit TEXT,
+      reaped BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      ui_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      unit_seen_at TIMESTAMPTZ,
+      finished_at TIMESTAMPTZ);
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_login_job_member_idx ON org_login_job(member_id, purpose, harness, id DESC)`);
+  //  정리 감시가 보는 것 — 아직 도는 작업과 판 폴더를 안 치운 작업만(끝나고 치운 행은 안 본다).
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_login_job_open_idx ON org_login_job(id) WHERE status IN ('starting','running') OR reaped = false`);
 }

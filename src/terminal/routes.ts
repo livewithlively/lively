@@ -366,8 +366,67 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     if (!isAiLoginHarness(h)) throw new HttpError(400, "이 AI 는 화면에서 바로 로그인할 수 없습니다 — 터미널 안내를 따라 주세요.");
     return h;
   };
+  // ── #4067 — 로그인을 CP 판으로(세션 컨테이너 없이) ─────────────────────────────────────────────
+  //  아래 네 경로(대화형·헤드리스 × 시작·상태·붙여넣기·취소)는 **판으로 먼저** 묻고, 판이 못 받으면 종전 경로다.
+  //  시작은 판을 쓸 수 있나로, 나머지는 «지금 시도 작업 행이 있나» 로 가른다(login-job.ts 머리말 — 청/녹 두 슬롯이
+  //  같은 답을 봐야 한다). 사람 신원(userId)이 없는 토큰은 종전 경로다 — 작업 행의 주인이 될 수 없다.
+  const loginJobMember = (req: express.Request): string | null => userOf(req).userId || null;
+  const loginJobStart = async (req: express.Request, purpose: "login" | "headless", h: string): Promise<boolean> => {
+    const me = loginJobMember(req);
+    if (!me) return false;
+    const { startLoginJob } = await import("./login-job.js");
+    const { headlessAdminBasis } = await import("../org/credentials/headless-connect.js");
+    const r = await startLoginJob({
+      memberId: me, purpose, harness: h,
+      restart: ((req.body ?? {}) as Record<string, unknown>).restart === true,
+      //  헤드리스 결과는 토큰 없이 도착한다 — 관리자 판정의 근거를 지금 적어 둔다(대화형 로그인은 쓰지 않는다).
+      adminBasis: purpose === "headless" ? headlessAdminBasis(userOf(req)) : "none",
+    });
+    return r.mode === "job";
+  };
+  const loginJobPaste = async (req: express.Request, purpose: "login" | "headless", h: string, code: string): Promise<boolean> => {
+    const me = loginJobMember(req);
+    if (!me) return false;
+    const { pasteLoginJob } = await import("./login-job.js");
+    return pasteLoginJob({ memberId: me, purpose, harness: h, code });
+  };
+  const loginJobCancel = async (req: express.Request, purpose: "login" | "headless", h: string): Promise<boolean> => {
+    const me = loginJobMember(req);
+    if (!me) return false;
+    const { cancelLoginJob } = await import("./login-job.js");
+    return cancelLoginJob({ memberId: me, purpose, harness: h });
+  };
+  //  판의 콜백 — **사용자 인증이 아니다.** 판이 받은 작업별 일회용 비밀(Bearer)로 그 작업 하나만 연다.
+  //   테넌트는 앞단(CP 라우터)이 호스트로 정해 서명한 컨텍스트이고, 작업 행은 RLS 로 그 워크스페이스 것만 보인다.
+  const loginJobIdOf = (req: express.Request): number => {
+    const n = Number(req.params.id);
+    if (!Number.isSafeInteger(n) || n < 1) throw new HttpError(404, "없는 로그인 작업입니다");
+    return n;
+  };
+  const loginJobBearer = (req: express.Request): string => /^Bearer\s+(\S+)$/i.exec(String(req.headers.authorization ?? ""))?.[1] ?? "";
+  app.post("/api/login-jobs/:id/tick", wrap(async (req, res) => {
+    const { onLoginJobTick } = await import("./login-job.js");
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await onLoginJobTick(loginJobIdOf(req), loginJobBearer(req), req.body));
+  }));
+  app.post("/api/login-jobs/:id/result", wrap(async (req, res) => {
+    const { onLoginJobResult } = await import("./login-job.js");
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await onLoginJobResult(loginJobIdOf(req), loginJobBearer(req), req.body));
+  }));
+  app.post("/api/login-jobs/:id/end", wrap(async (req, res) => {
+    const { onLoginJobEnd } = await import("./login-job.js");
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await onLoginJobEnd(loginJobIdOf(req), loginJobBearer(req), req.body));
+  }));
+
   app.post("/api/ui/me/ai-login/start", auth, wrap(async (req, res) => {
     const h = loginHarnessOf(req);
+    if (await loginJobStart(req, "login", h)) {
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ ok: true });
+      return;
+    }
     const seat = await loginSeat(req);
     //  ⚠ restart 가 필요한 이유(실측 2026-08-28): 사람이 브라우저에서 **막히는** 경우가 있다 — 예컨대 ChatGPT
     //   계정에 «Codex용 장치 코드 인증» 이 꺼져 있으면 그 코드가 거기서 죽는다(#2232 원준님 실측). 그런데 우리
@@ -389,6 +448,20 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
   //  화면이 폴링하는 자리 — 주소·코드·다음 단계. loggedIn 은 **자격 확인**이 정한다(프로세스가 끝난 것과 다르다).
   app.get("/api/ui/me/ai-login/state", auth, wrap(async (req, res) => {
     const h = loginHarnessOf(req);
+    const me = loginJobMember(req);
+    if (me) {
+      const { loginJobLoginState } = await import("./login-job.js");
+      //  loggedIn 은 자격 **파일**로 잰다(aiAccountStatus) — 설치 확인까지 하는 aiLoginCheck 는 배포에 따라 자리를 띄운다.
+      const st = await loginJobLoginState({
+        memberId: me, harness: h,
+        loggedIn: async () => (await aiAccountStatus(userOf(req))).find((a) => a.key === h)?.loggedIn ?? null,
+      });
+      if (st) {
+        res.setHeader("Cache-Control", "no-store");
+        res.json(st);
+        return;
+      }
+    }
     const seat = await loginSeat(req);
     const [raw, check] = await Promise.all([
       readAiLogin(seat, h),
@@ -404,12 +477,14 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
   app.post("/api/ui/me/ai-login/paste", auth, wrap(async (req, res) => {
     const h = loginHarnessOf(req);
     const code = String(((req.body ?? {}) as Record<string, unknown>).code ?? "");
+    if (await loginJobPaste(req, "login", h, code)) { res.json({ ok: true }); return; }
     await pasteAiLogin(await loginSeat(req), h, code);
     await touchHarnessSeat(userOf(req), h);   // #3894 — 사람의 조작이다(위 state 와 같은 이유)
     res.json({ ok: true });
   }));
   app.post("/api/ui/me/ai-login/cancel", auth, wrap(async (req, res) => {
     const h = loginHarnessOf(req);
+    if (await loginJobCancel(req, "login", h)) { res.json({ ok: true }); return; }
     await cancelAiLogin(await loginSeat(req), h);
     //  로그인 자리(세션 컨테이너)도 치운다 — 안 치우면 로그인마다 컨테이너가 쌓인다.
     await dropLoginSession(userOf(req), h);
@@ -435,6 +510,11 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
   app.post("/api/ui/me/headless-login/start", auth, wrap(async (req, res) => {
     const h = headlessHarnessOf(req);
     headlessMemberOf(req);
+    if (await loginJobStart(req, "headless", h)) {
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ ok: true });
+      return;
+    }
     //  저장할 수 없는 배포면 **시작하지 않는다** — 사람이 브라우저에서 승인까지 한 뒤에 «저장 못 함» 을 보면 헛수고다.
     const { secretsEnabled } = await import("../org/credentials/secret-box.js");
     if (!secretsEnabled()) throw new HttpError(400, "이 서버에는 자격을 암호화해 둘 키가 없어 연결할 수 없습니다 — 관리자에게 CONNECTOR_SECRET_KEY 설정을 요청해 주세요.");
@@ -452,6 +532,16 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
   //  화면이 폴링하는 자리 — 주소·코드·다음 단계. 러너가 자격을 잡았으면 **여기서** 저장한다(요청 문맥 = 이 워크스페이스).
   app.get("/api/ui/me/headless-login/state", auth, wrap(async (req, res) => {
     const h = headlessHarnessOf(req);
+    {
+      //  판이 받은 시도면 저장은 판의 결과 콜백이 이미 했다 — 여기서는 행을 읽기만 한다.
+      const { loginJobHeadlessState } = await import("./login-job.js");
+      const st = await loginJobHeadlessState({ memberId: headlessMemberOf(req), harness: h });
+      if (st) {
+        res.setHeader("Cache-Control", "no-store");
+        res.json(st);
+        return;
+      }
+    }
     const user = userOf(req);
     const seat = await loginSeat(req);
     const got = await readHeadlessLogin(seat, h);
@@ -487,12 +577,14 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
   app.post("/api/ui/me/headless-login/paste", auth, wrap(async (req, res) => {
     const h = headlessHarnessOf(req);
     const code = String(((req.body ?? {}) as Record<string, unknown>).code ?? "");
+    if (await loginJobPaste(req, "headless", h, code)) { res.json({ ok: true }); return; }
     await pasteHeadlessLogin(await loginSeat(req), h, code);
     await touchHarnessSeat(userOf(req), headlessSeatKey(h));
     res.json({ ok: true });
   }));
   app.post("/api/ui/me/headless-login/cancel", auth, wrap(async (req, res) => {
     const h = headlessHarnessOf(req);
+    if (await loginJobCancel(req, "headless", h)) { res.json({ ok: true }); return; }
     await cancelHeadlessLogin(await loginSeat(req), h);
     await dropLoginSession(userOf(req), headlessSeatKey(h));
     res.json({ ok: true });
