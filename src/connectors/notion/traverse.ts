@@ -71,7 +71,17 @@ function discoverChildren(t: Traversal, node: PageNode): void {
         const child = pageNode(t, id);
         child.parentOverride = node.id;
         child.sort = order.length;
-        if (t.ledger) child.forceChanged = true; // 신규/이동/복원 자식 — 원장 불일치로만 이 분기에 온다
+        // 강제 수집은 원장 불일치(신규·이동·복원) 자식에만 건다. 델타에선 아는 자식이 위에서 빠지지만 가속 full 은
+        //  아는 자식도 여기 온다 — 그걸 강제하면 1req 관측 경로를 건너뛰어 **바뀐 페이지 아래 트리 전체를 다시 긁는다**
+        //  (#4059 실측: 루트 편집 하나에 13페이지 전부 재수집 · soltimal 큰 수집기 전체 점검 50분+ → 매시간 롤에 끊김).
+        //  아는 자식은 processPage 의 가속 full 판정이 편집시각을 대조해 바뀐 것만 다시 긁는다.
+        //  원장의 몫(mine)은 보지 않는다 — 이 자식은 이미 내 트리에서 발견됐고, 여기서 묻는 건 «다시 긁어야 하나» 뿐이다
+        //  (편집시각은 누가 적재했든 같은 사실 — loadNotionLedger 주석).
+        if (t.ledger) {
+          const led = t.ledger.byId.get(id);
+          const known = led && led.kind !== "database" && led.lifecycle === "active" && led.parentExt === node.id;
+          if (!known) child.forceChanged = true;
+        }
         order.push(id);
       } else if (type === "child_database") {
         if (t.ledger && !t.fastFull && !t.dbs.has(id)) {
