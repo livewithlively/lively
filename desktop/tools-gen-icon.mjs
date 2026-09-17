@@ -62,7 +62,8 @@ function ring(size, scale) {
  * ⚠ 이건 **디자이너 자산의 자리표시자**다 — 정식 로고가 나오면 이 함수 대신 그 PNG 를 넣으면 된다.
  */
 const BRAND = [0x16, 0xc7, 0x9a];               // 제품 초록 — public/index.html 파비콘과 같은 값
-function appIcon(S) {
+const appIcon = (S) => png(S, S, appIconRgba(S));
+function appIconRgba(S) {
   const buf = Buffer.alloc(S * S * 4);
   const pad = S * 0.08;                          // 캔버스 여백(독·시작메뉴 관례)
   const half = S / 2 - pad;                      // 타일 반폭
@@ -84,15 +85,21 @@ function appIcon(S) {
       buf[i + 3] = Math.round(255 * tile);
     }
   }
-  return png(S, S, buf);
+  return buf;
 }
 
 const b1 = ring(22, 1), b2 = ring(22, 2);
 // 앱 아이콘 — electron-builder 가 512px PNG 하나로 macOS icns·Windows ico 를 만든다.
 //  레포엔 안 담는다(생성물): desktop/build/ 는 gitignore. 빌드 스크립트가 매번 만든다.
 import { mkdirSync } from "node:fs";
+import { dibImage, icoFile } from "./ico.mjs";
 mkdirSync(new URL("./build/", import.meta.url), { recursive: true });
 writeFileSync(new URL("./build/icon.png", import.meta.url), appIcon(512));
+// 설치 도우미(installer-helper) 아이콘 — electron-builder 밖에서 빌드하므로 .ico 를 직접 만든다(#4066).
+writeFileSync(new URL("./build/installer-helper.ico", import.meta.url), icoFile([
+  ...[16, 24, 32, 48].map((size) => ({ size, data: dibImage(size, appIconRgba(size)) })),
+  { size: 256, data: appIcon(256) },
+]));
 const out = `// ⚠ **생성물이다** — 손으로 고치지 마라. 재생성: scratchpad/gen-icon.mjs (22x22 링, 검정+알파).
 // 레포에 바이너리 자산을 두지 않으려고 data URL 로 임베드한다(electron-builder files 목록도 단순해진다).
 // macOS 템플릿 이미지 규약(검정+알파만)을 지켜 다크/라이트 메뉴바 양쪽에서 자동 반전된다.

@@ -1563,6 +1563,295 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
   });
 }
 
+// ── Z8. 첫 설치 SmartScreen 경고 (#4066) — «서명 없는 DLL 도 서명한다» 와 «첫 설치는 고정된 설치 도우미로 받는다» ──────
+// 버전별 설치 파일은 릴리스마다 바뀌어 SmartScreen 평판이 쌓이지 않는다(서명은 정상이었다). 첫 설치용 도우미는 한 번 만들어
+//  계속 쓰는 파일이고(installer-helper/Program.cs), 받은 설치 파일을 설치된 앱의 자동 업데이트와 **같은 기준**으로 확인한다.
+//  그 기준(서명자 DN 대조)은 C#(도우미)과 JS(서명 게이트) 두 벌이라, 같은 사례 표(selftest-cases.tsv)로 둘 다 묶는다.
+//  행 번호(A1…J5)는 사양 엣지 표의 행이다.
+{
+  const W = await import("../win-signing.mjs");
+  const { dibImage, icoFile } = await import("../ico.mjs");
+  const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  const helperSrc = read("../installer-helper/Program.cs");
+  const helperProj = read("../installer-helper/LivelySetup.csproj");
+  const helperManifest = read("../installer-helper/app.manifest");
+  const cases = read("../installer-helper/selftest-cases.tsv");
+  const relWf = read("../../.github/workflows/release-desktop.yml");
+  const helperWf = read("../../.github/workflows/desktop-installer-helper.yml");
+  const WANT = "CN=라이블리, O=라이블리";
+
+  /** PE 머리 한 벌 — magic(PE32 0x10b / PE32+ 0x20b) · 데이터 디렉터리 수 · 인증서 테이블 크기 · PE 서명. */
+  const peHead = ({ magic = 0x20b, dirs = 16, secSize = 0, len = 1024, sig = "PE\0\0" } = {}) => {
+    const b = Buffer.alloc(len);
+    b.write("MZ", 0, "latin1");
+    const pe = 0x80;
+    b.writeUInt32LE(pe, 0x3c);
+    b.write(sig, pe, "latin1");
+    b.writeUInt16LE(magic, pe + 24);
+    const dirBase = pe + 24 + (magic === 0x10b ? 96 : 112);
+    b.writeUInt32LE(dirs, dirBase - 4);
+    b.writeUInt32LE(secSize ? 0x4000 : 0, dirBase + 32);
+    b.writeUInt32LE(secSize, dirBase + 36);
+    return b;
+  };
+
+  t("Z8a PE 서명 자리 판독 — 인증서 칸이 차 있으면 서명됨, 비었으면 서명 대상, PE 로 못 읽으면 모름", () => {
+    assert.equal(W.peHasSignature(peHead({ secSize: 15608 })), true);                                             // A1 (v0.1.369 설치기의 실제 크기)
+    assert.equal(W.peHasSignature(peHead()), false);                                                               // A2
+    assert.equal(W.peHasSignature(peHead({ magic: 0x10b, secSize: 8 })), true, "PE32(32비트) 머리를 잘못 읽었다"); // A3
+    assert.equal(W.peHasSignature(peHead({ magic: 0x10b })), false);
+    assert.equal(W.peHasSignature(peHead({ dirs: 4, secSize: 99 })), false, "데이터 디렉터리가 4개면 인증서 칸(5번째)이 없다");  // A4
+    assert.equal(W.peHasSignature(peHead({ dirs: 5, secSize: 99 })), true, "데이터 디렉터리가 5개면 인증서 칸이 있다");         // A5
+    for (const [why, buf] of [                                                                                    // A6
+      ["MZ 아님", Buffer.from("not a pe file at all, just some text bytes ......................")],
+      ["PE 서명 없음", peHead({ secSize: 99, sig: "NE\0\0" })],
+      ["모르는 magic", peHead({ magic: 0x107, secSize: 99 })],
+      ["잘린 머리", peHead({ secSize: 99 }).subarray(0, 0xa0)],
+      ["버퍼 아님", undefined],
+    ]) assert.equal(W.peHasSignature(buf), null, `${why} — 서명 여부로 판정했다`);
+  });
+
+  t("Z8b 서명할 DLL — 서명 자리가 빈 DLL 만, 이름순. 이미 서명된 것·exe·판독 불가는 넣지 않는다", () => {
+    // B1 Electron 43.3.0 win32-x64 배포본 실측(2026-09-17): DLL 8개 중 d3dcompiler_47·dxil 만 Microsoft 서명이 있다.
+    const dist = [
+      ["d3dcompiler_47.dll", true], ["dxcompiler.dll", false], ["dxil.dll", true], ["electron.exe", false],
+      ["ffmpeg.dll", false], ["libEGL.dll", false], ["libGLESv2.dll", false], ["vk_swiftshader.dll", false],
+      ["vulkan-1.dll", false], ["LICENSES.chromium.html", null], ["broken.dll", null],
+    ].map(([name, signed]) => ({ name, signed }));
+    assert.deepEqual(W.unsignedDlls(dist), ["dxcompiler.dll", "ffmpeg.dll", "libEGL.dll", "libGLESv2.dll", "vk_swiftshader.dll", "vulkan-1.dll"]);
+    assert.deepEqual(W.unsignedDlls([...dist].reverse()), W.unsignedDlls(dist), "읽은 순서에 따라 설정이 달라진다 — 이름순이 아니다");
+    const picked = W.unsignedDlls(dist);                                                                           // B2
+    for (const no of ["d3dcompiler_47.dll", "dxil.dll", "electron.exe", "broken.dll"]) assert.ok(!picked.includes(no), `${no} 를 넣었다`);
+    assert.deepEqual(W.unsignedDlls([{ name: "UPPER.DLL", signed: false }]), ["UPPER.DLL"], "대문자 확장자를 놓쳤다");  // B3
+    assert.deepEqual(W.unsignedDlls(null), []);                                                                    // B4
+    assert.deepEqual(W.unsignedDlls([null, { signed: false }]), []);
+  });
+
+  t("Z8c signExts 끼우기 — electron-builder 규칙으로 봐도 서명 없는 DLL 만 서명되고 Microsoft DLL 은 안 건드린다", () => {
+    const pkg = { name: "d", build: { productName: "Lively", win: { target: ["nsis"], azureSignOptions: { publisherName: WANT } }, nsis: { oneClick: true } } };
+    const before = JSON.stringify(pkg);
+    const names = ["ffmpeg.dll", "libEGL.dll"];
+    const next = W.withSignExts(pkg, names);
+    assert.deepEqual(next.build.win.signExts, names);
+    assert.deepEqual(next.build.win.azureSignOptions, { publisherName: WANT }, "서명 설정이 사라졌다");
+    assert.deepEqual(next.build.nsis, { oneClick: true });
+    assert.equal(W.withSignExts(null, names), null, "무서명 빌드에 끼웠다");                                        // C1
+    assert.equal(W.withSignExts(pkg, []), pkg, "이름이 없는데 바꿨다");                                               // C2
+    assert.equal(W.withSignExts(pkg, undefined), pkg, "이름 목록이 없는데 바꿨다");
+    const merged = W.withSignExts({ build: { win: { signExts: [".node", "ffmpeg.dll"] } } }, names);                 // C3
+    assert.deepEqual(merged.build.win.signExts, [".node", "ffmpeg.dll", "libEGL.dll"], "기존 항목을 지우거나 겹쳐 넣었다");
+    assert.equal(JSON.stringify(pkg), before, "입력을 바꿨다");                                                       // C4
+    // C5 app-builder-lib 26.16.1 winPackager.shouldSignFile 을 그대로 옮긴 참조 — 이름 전체를 «확장자» 자리에 넣어도 되는 근거.
+    const shouldSignFile = (file, signExts) => {
+      const isExe = file.endsWith(".exe");
+      if (!signExts?.length) return isExe;
+      if (signExts.some((ext) => file.endsWith(ext))) return true;
+      if (signExts.some((ext) => ext.startsWith("!") && file.endsWith(ext.substring(1)))) return false;
+      return isExe;
+    };
+    const exts = next.build.win.signExts;
+    assert.equal(shouldSignFile("ffmpeg.dll", exts), true);
+    assert.equal(shouldSignFile("libEGL.dll", exts), true);
+    assert.equal(shouldSignFile("d3dcompiler_47.dll", exts), false, "Microsoft 서명 DLL 을 우리 서명으로 갈아 끼운다");
+    assert.equal(shouldSignFile("dxil.dll", exts), false, "Microsoft 서명 DLL 을 우리 서명으로 갈아 끼운다");
+    assert.equal(shouldSignFile("Lively.exe", exts), true, "앱 exe 서명이 빠졌다");
+    // «.dll» 을 통째로 넣으면 이 규칙에선 긍정이 부정 패턴(!d3dcompiler_47.dll)보다 먼저라 막을 수 없다 — 이름으로 넣는 이유.
+    assert.equal(shouldSignFile("d3dcompiler_47.dll", [".dll", "!d3dcompiler_47.dll"]), true);
+  });
+
+  t("Z8d ★ 서명자 대조 — JS(서명 게이트)와 C#(설치 도우미)이 같은 사례 표를 같은 답으로 통과한다", () => {
+    const unescape = (s) => s.replace(/\\(.)/g, (_, c) => (c === "n" ? "\n" : c === "t" ? "\t" : c));
+    const rows = cases.split("\n").filter((l) => l && !l.startsWith("#")).map((l) => l.split("\t").map(unescape));
+    const kinds = rows.reduce((m, r) => ({ ...m, [r[0]]: (m[r[0]] || 0) + 1 }), {});
+    // D2 표가 비거나 한 종류가 통째로 빠지면 양쪽 점검이 «0건 통과» 로 초록이 된다 — 개수를 먼저 못박는다.
+    assert.ok(kinds.dn >= 10 && kinds.manifest >= 8 && kinds.tag >= 5, `사례 표가 줄었다: ${JSON.stringify(kinds)}`);
+    assert.deepEqual(Object.keys(kinds).sort(), ["dn", "manifest", "tag"], "C# 자가 점검이 모르는 종류가 섞였다");
+    let checked = 0;
+    for (const [, subject, publisher, want, note] of rows.filter((r) => r[0] === "dn")) {                          // D1
+      assert.equal(String(W.subjectMatches(subject, publisher)), want, `${note} — ${subject} / ${publisher}`);
+      checked++;
+    }
+    assert.equal(checked, kinds.dn, "dn 행을 다 돌지 않았다");
+    assert.deepEqual([...W.parseDn('CN="라이블리, 주식회사", O=라이블리')], [["CN", "라이블리, 주식회사"], ["O", "라이블리"]]);
+    assert.equal(W.subjectMatches(null, WANT), false);                                                              // D3
+    assert.equal(W.subjectMatches("CN=라이블리", ""), false, "게시자 이름이 비었는데 맞다고 했다");
+  });
+
+  t("Z8e 서명 판정 — 도우미는 우리 서명·타임스탬프 필수, 앱 폴더는 전부 유효 + 우리 것은 타임스탬프", () => {
+    const ours = { Status: "Valid", Timestamped: true, Subject: "CN=라이블리, O=라이블리, L=구로구, S=Seoul, C=KR" };
+    assert.deepEqual(W.ownSignatureProblems(ours, WANT), []);                                                      // E1
+    assert.match(W.ownSignatureProblems({ ...ours, Subject: "CN=Other, O=Other" }, WANT).join(" "), /게시자/);     // E2
+    assert.match(W.ownSignatureProblems({ ...ours, Timestamped: false }, WANT).join(" "), /타임스탬프/);
+    assert.ok(W.ownSignatureProblems({ ...ours, Status: "NotSigned", Subject: "" }, WANT).length >= 2, "무서명·서명자 없음을 둘 다 잡지 않았다");
+    assert.ok(W.ownSignatureProblems(null, WANT).length >= 1);
+
+    const ms = { Status: "Valid", Timestamped: false, Subject: "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" };
+    const files = [
+      { file: "win-unpacked/Lively.exe", ...ours },
+      { file: "win-unpacked/ffmpeg.dll", ...ours },
+      { file: "win-unpacked/d3dcompiler_47.dll", ...ms },
+    ];
+    assert.deepEqual(W.appFilesProblems(files, WANT), [], "남의 유효한 서명(타임스탬프 없음)을 막았다");          // F1
+    const unsigned = W.appFilesProblems([...files, { file: "win-unpacked/vulkan-1.dll", Status: "NotSigned", Subject: "" }], WANT);
+    assert.equal(unsigned.length, 1);                                                                               // F2
+    assert.match(unsigned[0], /vulkan-1\.dll.*NotSigned/, "서명 없는 DLL 을 통과시켰다");
+    assert.match(W.appFilesProblems([{ file: "win-unpacked/libEGL.dll", ...ours, Timestamped: false }], WANT).join(" "), /libEGL\.dll: 타임스탬프/);  // F3
+    assert.match(W.appFilesProblems([{ file: "x.dll", ...ours, Status: "HashMismatch" }], WANT).join(" "), /HashMismatch/);  // F4
+    assert.equal(W.appFilesProblems([], WANT).length, 1, "PE 가 하나도 없는데 통과시켰다");                          // F5
+    assert.equal(W.appFilesProblems(undefined, WANT).length, 1);
+    assert.equal(W.appFilesProblems([null], WANT).length, 1, "판독 실패를 통과시켰다");                                // F6
+    assert.equal(W.isPeName("resources/app.node"), true);                                                          // F7
+    assert.equal(W.isPeName("LIVELY.EXE"), true);
+    assert.equal(W.isPeName("resources/app.asar"), false);
+  });
+
+  t("Z8f ★ 게이트 배선 — configure 가 서명 없는 DLL 을 끼우고, verify 가 앱 폴더를 전수로 막고, verify-files 가 있다", () => {
+    const src = read("../win-signing.mjs");
+    const between = (a, b) => {
+      const i = src.indexOf(a), j = src.indexOf(b);
+      assert.ok(i >= 0 && j > i, `win-signing.mjs 에서 «${a}» ~ «${b}» 구간을 못 찾았다`);
+      return src.slice(i, j);
+    };
+    const configure = between("function configure()", "function readSignatures(");                                // G1
+    assert.match(configure, /electronDistFiles\(\)/, "Electron 배포본을 읽지 않는다");
+    assert.match(configure, /withSignExts\(next,\s*dlls\)/, "서명 없는 DLL 을 signExts 에 끼우지 않는다");
+    assert.ok(configure.indexOf("withSignExts(") < configure.indexOf("writeFileSync(PKG"), "package.json 을 쓴 뒤에 끼운다");
+    assert.match(configure, /if \(!dist\)[^\n]*return 1/, "배포본이 없을 때 조용히 넘어간다");
+    const dist = between("function electronDistFiles()", "function configure()");
+    assert.match(dist, /join\(pkgDir, "dist"\)/);
+    assert.match(dist, /join\(HERE, "node_modules", "electron"\)/);
+    assert.match(dist, /peHasSignature\(/);
+    // Electron 43 은 npm ci 때 실행 파일을 받지 않는다(postinstall 없음) — 없으면 공식 install.js 로 받아야 한다(run 35188494233 실측).
+    assert.match(dist, /if \(!existsSync\(dist\) && existsSync\(join\(pkgDir, "install\.js"\)\)\)/, "배포본이 없을 때 받지 않는다 — 러너에서 configure 가 멈춘다");
+    assert.match(dist, /execFileSync\(process\.execPath, \[join\(pkgDir, "install\.js"\)\]/);
+    const iInstall = dist.indexOf("install.js\")]"), iReaddir = dist.indexOf("readdirSync(dist)");
+    assert.ok(iInstall >= 0 && iReaddir > iInstall, "받기 전에 폴더를 읽는다");
+    const verify = between("async function verify()", "function verifyFiles(");                                  // G2
+    assert.match(verify, /peFilesUnder\(unpacked\)/, "앱 폴더 전수 판독이 없다");
+    assert.match(verify, /appFilesProblems\(reports,\s*azure\.publisherName\)/, "앱 폴더 판독 결과로 막지 않는다");
+    assert.match(src, /cmd === "verify-files"\) process\.exit\(verifyFiles\(/, "도우미용 verify-files 가 없다");
+    assert.match(between("function verifyFiles(", "if (process.argv[1]"), /ownSignatureProblems\(report,\s*publisher\)/);
+  });
+
+  t("Z8g ★ 설치 도우미 — 게시자·저장소가 릴리스와 같고, 확인한 뒤에만 실행하고, 권한을 요구하지 않는다", () => {
+    const constant = (name) => {
+      const m = new RegExp(`const string ${name} = "([^"]*)"`).exec(helperSrc);
+      assert.ok(m, `Program.cs 에 ${name} 상수가 없다`);
+      return m[1];
+    };
+    // H1 게시자 — 설치된 앱이 업데이트를 받아들이는 이름(release-desktop 의 WIN_SIGN_PUBLISHER)과 같아야 한다.
+    const relPub = /WIN_SIGN_PUBLISHER:\s*"([^"]*)"/.exec(relWf);
+    const helperPub = /WIN_SIGN_PUBLISHER:\s*"([^"]*)"/.exec(helperWf);
+    assert.ok(relPub && helperPub, "워크플로에 WIN_SIGN_PUBLISHER 가 없다");
+    assert.equal(constant("Publisher"), relPub[1], "도우미의 게시자가 릴리스 서명과 다르다 — 도우미가 모든 설치 파일을 거부한다");
+    assert.equal(helperPub[1], relPub[1], "도우미 서명 확인의 게시자가 릴리스와 다르다");
+    // H2 저장소 — 앱이 업데이트를 받는 곳(package.json publish)과 같은 곳의 최신 릴리스에서 받는다.
+    const pub = JSON.parse(read("../package.json")).build.publish[0];
+    assert.equal(constant("Owner"), pub.owner);
+    assert.equal(constant("Repo"), pub.repo);
+    assert.match(helperSrc, /LatestUrl = RepoUrl \+ "\/releases\/latest"/, "최신 릴리스가 아닌 곳을 본다");
+    // H3 버전별 값이 없다 — 다시 빌드하지 않고 계속 쓰는 파일이다(주석은 빼고 본다).
+    assert.ok(!/Lively-Setup-\d/.test(helperSrc.replace(/^\s*\/\/.*$/gm, "")), "도우미 코드에 특정 버전의 설치 파일 이름이 박혀 있다");
+    // H4 받기 → sha512 대조(다르면 멈춤) → 서명 확인. 실행은 준비가 끝난 뒤다.
+    const prepare = helperSrc.slice(helperSrc.indexOf("public static async Task<Prepared> PrepareAsync"), helperSrc.indexOf("public static string NewWorkDir"));
+    const iDownload = prepare.indexOf("fetcher.DownloadAsync(");
+    const iCompare = prepare.indexOf("string.Equals(sha, manifest.Sha512, StringComparison.Ordinal)");
+    const iCheck = prepare.indexOf("Authenticode.Check(file, Config.Publisher)");
+    assert.ok(iDownload >= 0 && iCompare > iDownload && iCheck > iCompare, `준비 순서가 받기 → 대조 → 서명 확인이 아니다: ${iDownload}/${iCompare}/${iCheck}`);
+    assert.match(prepare.slice(iCompare, iCheck), /throw new MismatchException/, "sha512 가 달라도 멈추지 않는다");
+    const start = helperSrc.slice(helperSrc.indexOf("async void Start()"), helperSrc.indexOf("void ShowError("));
+    const iPrepare = start.indexOf("Pipeline.PrepareAsync(");
+    const iNoInstall = start.indexOf("if (noInstall)");
+    const iRun = start.indexOf("Process.Start(");
+    assert.ok(iPrepare >= 0 && iNoInstall > iPrepare && iRun > iNoInstall, "확인 → 점검 모드 분기 → 실행 순서가 아니다");   // H4·H5
+    assert.match(start.slice(iNoInstall, iRun), /return;/, "점검 모드가 실행 전에 끝나지 않는다");
+    assert.match(start.slice(iRun), /UseShellExecute = false/, "설치 파일을 셸로 실행한다(CreateProcess 가 아니다)");     // H6
+    // H7 권한·형식·자가 점검 표·DLL 검색 범위
+    assert.match(helperManifest, /requestedExecutionLevel level="asInvoker"/, "관리자 권한을 요구하거나 설치 프로그램 추정(UAC)에 걸린다");
+    assert.match(helperProj, /<TargetFramework>net48<\/TargetFramework>/);
+    assert.match(helperProj, /<OutputType>WinExe<\/OutputType>/);
+    assert.match(helperProj, /<AssemblyName>Lively-Setup<\/AssemblyName>/);
+    assert.match(helperProj, /EmbeddedResource Include="selftest-cases\.tsv" LogicalName="selftest-cases\.tsv"/, "자가 점검 표가 exe 에 안 들어간다");
+    assert.match(helperSrc, /GetManifestResourceStream\("selftest-cases\.tsv"\)/);
+    assert.match(helperSrc, /\[assembly: DefaultDllImportSearchPaths\(DllImportSearchPath\.System32\)\]/, "옆에 놓인 DLL 을 실을 수 있다");
+    assert.match(helperSrc, /SetDefaultDllDirectories\(LOAD_LIBRARY_SEARCH_SYSTEM32\)/);
+  });
+
+  t("Z8h ★ 도우미 워크플로 — 수동 실행만, 덮어쓰기는 명시, 점검을 다 통과해야 사전 릴리스에 올린다", () => {
+    const on = helperWf.slice(helperWf.indexOf("\non:"), helperWf.indexOf("\npermissions:"));
+    assert.ok(on.length > 0, "on: 블록을 못 찾았다");
+    assert.match(on, /workflow_dispatch:/);                                                                         // I1
+    assert.ok(!/\n\s+(push|pull_request|pull_request_target|schedule|release|merge_group|workflow_run|repository_dispatch):/.test(on), "수동 실행 말고도 돈다 — 다시 빌드되면 평판이 0 이 된다");
+    assert.match(helperWf, /\n\s+RELEASE_TAG: win-installer\n/);                                                    // I2
+    assert.match(helperWf, /\n\s+ASSET_NAME: Lively-Setup\.exe\n/);
+    for (const k of ["WIN_SIGN_ENDPOINT", "WIN_SIGN_ACCOUNT", "WIN_SIGN_PROFILE"]) {                                // I3
+      const a = new RegExp(`${k}:\\s*(\\S+)`).exec(relWf), b = new RegExp(`${k}:\\s*(\\S+)`).exec(helperWf);
+      assert.ok(a && b && a[1] === b[1], `${k} 가 release-desktop 과 다르다: ${a && a[1]} ≠ ${b && b[1]}`);
+    }
+    const at = (s) => { const i = helperWf.indexOf(s); assert.ok(i >= 0, `도우미 워크플로에 «${s}» 가 없다`); return i; };
+    const steps = ["- name: 게시 자리 확인", "dotnet build", "'--self-test'", "Invoke-TrustedSigning", "verify-files", "'--dry-run'", "'--no-install'", "gh release upload", "- name: 게시 확인"];
+    const order = steps.map(at);                                                                                    // I4
+    assert.deepEqual([...order].sort((x, y) => x - y), order, "순서가 자리 확인 → 빌드 → 자가 점검 → 서명 → 서명 확인 → 받기 점검 → 화면 점검 → 게시 → 게시 확인이 아니다");
+    assert.ok(!/continue-on-error:\s*true/.test(helperWf.slice(0, at("gh release upload"))), "게시 전 점검 중 실패를 삼키는 스텝이 있다");  // I5
+    for (const probe of ["'--self-test'", "'--dry-run'", "'--no-install'"]) {
+      const step = helperWf.slice(at(probe), helperWf.indexOf("- name:", at(probe)));
+      assert.match(step, /ExitCode -ne 0\) \{ throw/, `${probe} 점검이 종료 코드로 막지 않는다`);
+    }
+    const guard = helperWf.slice(at("- name: 게시 자리 확인"), at("- name: 아이콘"));                                // I6
+    assert.match(guard, /if: inputs\.publish/);
+    assert.match(guard, /REPLACE" != "true" \][\s\S]*?exit 1/, "이미 있는 도우미를 replace 없이 덮는다");
+    const publish = helperWf.slice(at("- name: 게시 (사전 릴리스"), at("- name: 게시 확인"));
+    assert.match(publish, /if: inputs\.publish/);
+    assert.match(publish, /if \[ "\$REPLACE" = "true" \]; then clobber=\(--clobber\); fi/, "replace 가 아닌데도 덮을 수 있다");
+    assert.equal((publish.match(/--clobber/g) || []).length, 1, "clobber 가 조건 밖에서도 쓰인다");
+    const releaseCmds = [...publish.matchAll(/gh release (create|edit) [^\n]*/g)];                                  // I7
+    assert.equal(releaseCmds.length, 2, "create·edit 가 둘 다 있지 않다");
+    for (const m of releaseCmds) assert.match(m[0], /--prerelease/, `«최신 릴리스»가 될 수 있다: ${m[0]}`);
+    assert.match(helperWf.slice(at("- name: 서명 (Azure"), at("- name: 서명 확인")), /throw "서명 자격/, "서명 자격이 없어도 계속 간다");  // I8
+    assert.ok(!/installer-helper/.test(relWf), "태그 릴리스가 도우미를 건드린다");                                  // I9
+  });
+
+  t("Z8j ★ PR 마다 C# 판정 규칙도 본다 — 윈도우 CI 가 도우미를 빌드해 자가 점검하고, 서명·게시는 하지 않는다", () => {
+    const testWf = read("../../.github/workflows/test.yml");
+    const job = testWf.slice(testWf.indexOf("\n  test-windows:"));
+    assert.ok(testWf.indexOf("\n  test-windows:") > 0, "test.yml 에 test-windows 잡이 없다");
+    const i = job.indexOf("- name: 설치 도우미 빌드·자가 점검");
+    assert.ok(i >= 0, "윈도우 CI 가 도우미 자가 점검을 하지 않는다 — C#·JS 규칙이 갈라져도 PR 이 초록이 된다");       // I10
+    const next = job.indexOf("- name:", i + 1);
+    const step = job.slice(i, next < 0 ? undefined : next);
+    assert.match(step, /working-directory: desktop\/installer-helper/);
+    assert.match(step, /dotnet build/);
+    assert.match(step, /if \(\$LASTEXITCODE -ne 0\) \{ throw/, "빌드 실패를 막지 않는다");
+    assert.match(step, /'--self-test'/);
+    assert.match(step, /if \(\$p\.ExitCode -ne 0\) \{ throw/, "자가 점검 실패를 막지 않는다");
+    assert.ok(!/continue-on-error:\s*true/.test(step), "자가 점검 실패를 삼킨다");
+    assert.ok(!/Invoke-TrustedSigning|gh release|AZURE_|secrets\./.test(step), "PR CI 가 도우미를 서명하거나 게시한다");
+  });
+
+  t("Z8i 도우미 아이콘 — DIB 머리·픽셀 순서·마스크 경계, .ico 머리·항목·크기 경계", () => {
+    const rgba = Buffer.from([255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 1, 2, 3, 4]);   // 2x2: 빨강·초록 / 파랑·기타
+    const dib = dibImage(2, rgba);
+    assert.deepEqual([dib.readUInt32LE(0), dib.readInt32LE(4), dib.readInt32LE(8), dib.readUInt16LE(12), dib.readUInt16LE(14)], [40, 2, 4, 1, 32], "DIB 머리(높이는 XOR+AND 두 배)");  // J1
+    assert.deepEqual([...dib.subarray(40, 48)], [255, 0, 0, 0, 3, 2, 1, 4], "아래 줄(원본 둘째 줄)부터 BGRA 가 아니다");
+    assert.deepEqual([...dib.subarray(48, 56)], [0, 0, 255, 255, 0, 255, 0, 128]);
+    assert.equal(dib.length, 40 + 2 * 2 * 4 + 4 * 2, "크기 2 의 AND 마스크가 줄마다 4바이트가 아니다");            // J2
+    assert.equal(dibImage(32, Buffer.alloc(32 * 32 * 4)).length, 40 + 32 * 32 * 4 + 4 * 32, "크기 32 경계");
+    assert.equal(dibImage(33, Buffer.alloc(33 * 33 * 4)).length, 40 + 33 * 33 * 4 + 8 * 33, "크기 33 은 줄마다 8바이트(32비트 경계를 넘는다)");
+    assert.throws(() => dibImage(3, rgba), /맞지 않는다/);                                                          // J3
+    const png = Buffer.from("89504e470d0a1a0a", "hex");
+    const ico = icoFile([{ size: 2, data: dib }, { size: 256, data: png }]);                                         // J4
+    assert.deepEqual([ico.readUInt16LE(0), ico.readUInt16LE(2), ico.readUInt16LE(4)], [0, 1, 2]);
+    assert.deepEqual([ico[6], ico[7], ico.readUInt16LE(10), ico.readUInt16LE(12), ico.readUInt32LE(14), ico.readUInt32LE(18)], [2, 2, 1, 32, dib.length, 6 + 32]);
+    assert.deepEqual([ico[22], ico[23], ico.readUInt32LE(30), ico.readUInt32LE(34)], [0, 0, png.length, 6 + 32 + dib.length], "256px 는 폭·높이 0 으로 적는다");
+    assert.deepEqual(ico.subarray(6 + 32, 6 + 32 + dib.length), dib);
+    assert.deepEqual(ico.subarray(6 + 32 + dib.length), png);
+    assert.throws(() => icoFile([]), /없다/);                                                                        // J5
+    assert.throws(() => icoFile([{ size: 0, data: png }]), /1~256/);
+    assert.throws(() => icoFile([{ size: 257, data: png }]), /1~256/);
+    assert.equal(icoFile([{ size: 1, data: png }])[6], 1, "크기 1 은 받아야 한다");
+  });
+}
+
 
 // ── H. 웹 UI 셸 (#1541 · web-shell.mjs) — 앱 창에 게이트웨이의 /ui/ 를 그대로 싣는다(화면 코드 두 벌 금지) ─────────
 {

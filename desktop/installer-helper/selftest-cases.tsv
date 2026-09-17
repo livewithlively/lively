@@ -1,0 +1,32 @@
+# 설치 도우미 판정 사례 (#4066) — Program.cs(--self-test)와 desktop-core.test.mjs(Z8)가 **같은 표**로 검사한다.
+# 한 줄 = 한 사례 · 칸 구분 TAB · 칸 안의 줄바꿈 \n · TAB \t · 역슬래시 \\ · 마지막 칸은 설명
+# dn        서명자주체  게시자이름  기대(true|false)  설명
+# manifest  latest.yml  기대(ok|error)  path  sha512  size  설명
+# tag       응답본문  최종주소  기대(ok|error)  태그  설명
+dn	CN=라이블리, O=라이블리, L=구로구, S=Seoul, C=KR	CN=라이블리, O=라이블리	true	실제 서명자 — 주소 키(L·S·C)가 더 있어도 맞다
+dn	CN=라이블리, O=라이블리, L=구로구, S=Seoul, C=KR	CN=라이블리,O=라이블리	true	구분자 뒤 공백은 DN 파서가 무시한다
+dn	CN=라이블리, O=다른회사, C=KR	CN=라이블리, O=라이블리	false	O 가 다르다
+dn	CN=라이블리, C=KR	CN=라이블리, O=라이블리	false	O 가 없다
+dn	CN=라이블리, O=라이블리, L=구로구, S=Seoul, C=KR	CN=라이블리, O=라이블리	false	자모 분리(NFD)는 다른 이름이다
+dn	CN=Evil 라이블리, O=라이블리	CN=라이블리, O=라이블리	false	CN 이 다르다
+dn		CN=라이블리, O=라이블리	false	서명자 없음
+dn	CN=, O=라이블리		false	게시자 이름이 비면 CN 이 빈 인증서와도 맞지 않는다
+dn	CN=라이블리, O=라이블리, L=구로구, S=Seoul, C=KR	라이블리	true	DN 이 아닌 이름은 CN 하나와 대조한다
+dn	CN=라이블리, O=라이블리, L=구로구, S=Seoul, C=KR	라이블리 주식회사	false	DN 이 아닌 이름 — CN 과 다르다
+dn	CN="라이블리, 주식회사", O=라이블리	CN="라이블리, 주식회사"	true	따옴표 안의 쉼표는 구분자가 아니다
+dn	CN=라이블리 , O=라이블리	CN=라이블리, O=라이블리	true	값 뒤 공백은 떼고 본다
+manifest	version: 0.1.369\nfiles:\n  - url: Lively-Setup-0.1.369.exe\n    sha512: x48C5tYxn++cj/S49rlkO2ls6L5pgS8XcnO1kQHoju7ARAP+rhFdPG33DeYeLNTeLtyQWlvtn6arPrIFh8WyWg==\n    size: 108177880\npath: Lively-Setup-0.1.369.exe\nsha512: x48C5tYxn++cj/S49rlkO2ls6L5pgS8XcnO1kQHoju7ARAP+rhFdPG33DeYeLNTeLtyQWlvtn6arPrIFh8WyWg==\nreleaseDate: '2026-09-17T04:24:23.791Z'\n	ok	Lively-Setup-0.1.369.exe	x48C5tYxn++cj/S49rlkO2ls6L5pgS8XcnO1kQHoju7ARAP+rhFdPG33DeYeLNTeLtyQWlvtn6arPrIFh8WyWg==	108177880	실제 v0.1.369 latest.yml — files 목록을 먼저 본다
+manifest	version: 0.1.300\npath: Lively-Setup-0.1.300.exe\nsha512: x48C5tYxn++cj/S49rlkO2ls6L5pgS8XcnO1kQHoju7ARAP+rhFdPG33DeYeLNTeLtyQWlvtn6arPrIFh8WyWg==\n	ok	Lively-Setup-0.1.300.exe	x48C5tYxn++cj/S49rlkO2ls6L5pgS8XcnO1kQHoju7ARAP+rhFdPG33DeYeLNTeLtyQWlvtn6arPrIFh8WyWg==		files 가 없으면 최상위 path·sha512
+manifest	version: 0.1.370\nfiles:\n  - url: Lively-0.1.370.zip\n    sha512: y48C5tYyn++cj/S49rlkO2ls6L5pgS8XcnO1kQHoju7ARAP+rhFdPG33DeYeLNTeLtyQWlvtn6arPrIFh8WyWg==\n  - url: 'Lively-Setup-0.1.370.exe'\n    sha512: "x48C5tYxn++cj/S49rlkO2ls6L5pgS8XcnO1kQHoju7ARAP+rhFdPG33DeYeLNTeLtyQWlvtn6arPrIFh8WyWg=="\n    size: 5\npath: Lively-Setup-0.1.370.exe\nsha512: x48C5tYxn++cj/S49rlkO2ls6L5pgS8XcnO1kQHoju7ARAP+rhFdPG33DeYeLNTeLtyQWlvtn6arPrIFh8WyWg==\n	ok	Lively-Setup-0.1.370.exe	x48C5tYxn++cj/S49rlkO2ls6L5pgS8XcnO1kQHoju7ARAP+rhFdPG33DeYeLNTeLtyQWlvtn6arPrIFh8WyWg==	5	files 중 첫 .exe · 따옴표 값
+manifest	version: 1\npath: ../Lively-Setup.exe\nsha512: x48C5tYxn++cj/S49rlkO2ls6L5pgS8XcnO1kQHoju7ARAP+rhFdPG33DeYeLNTeLtyQWlvtn6arPrIFh8WyWg==\n	error				경로가 섞인 이름은 받지 않는다
+manifest	version: 1\npath: C:\\Windows\\evil.exe\nsha512: x48C5tYxn++cj/S49rlkO2ls6L5pgS8XcnO1kQHoju7ARAP+rhFdPG33DeYeLNTeLtyQWlvtn6arPrIFh8WyWg==\n	error				절대 경로는 받지 않는다
+manifest	version: 1\npath: Lively-Setup.zip\nsha512: x48C5tYxn++cj/S49rlkO2ls6L5pgS8XcnO1kQHoju7ARAP+rhFdPG33DeYeLNTeLtyQWlvtn6arPrIFh8WyWg==\n	error				exe 가 아니다
+manifest	version: 1\npath: Lively-Setup.exe?x=1\nsha512: x48C5tYxn++cj/S49rlkO2ls6L5pgS8XcnO1kQHoju7ARAP+rhFdPG33DeYeLNTeLtyQWlvtn6arPrIFh8WyWg==\n	error				쿼리가 붙은 이름은 받지 않는다
+manifest	version: 1\npath: Lively-Setup.exe\nsha512: abc\n	error				sha512 형식이 아니다
+manifest	version: 1\nsha512: x48C5tYxn++cj/S49rlkO2ls6L5pgS8XcnO1kQHoju7ARAP+rhFdPG33DeYeLNTeLtyQWlvtn6arPrIFh8WyWg==\n	error				path 가 없다
+manifest		error				빈 파일
+tag	{"id":390431535,"tag_name":"v0.1.369","update_url":"/livewithlively/lively/releases/tag/v0.1.369"}	https://github.com/livewithlively/lively/releases/tag/v0.1.369	ok	v0.1.369	github.com releases/latest 의 JSON
+tag	<html>...</html>	https://github.com/livewithlively/lively/releases/tag/v0.1.370	ok	v0.1.370	JSON 이 아니면 최종 주소의 태그
+tag	{"tag_name":"../../x"}	https://github.com/livewithlively/lively/releases	error		태그에 경로 문자가 있다
+tag	{}	https://github.com/livewithlively/lively/releases	error		태그가 없다
+tag	{"tag_name":"v0.1.369"}	https://github.com/livewithlively/lively/releases/tag/v9.9.9	ok	v0.1.369	JSON 이 있으면 JSON 을 믿는다
