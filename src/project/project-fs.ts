@@ -1,6 +1,9 @@
 // 프로젝트 전용 폴더 — 공유 워크스페이스의 'project/<id>' 아래. 터미널 세션의 작업 디렉토리이자
 //  공유 폴더의 실체. 폴더명 = 프로젝트 정수 id(불변·유일·경로안전: 공백·한글 없음). 사람 가독성은 폴더 내 AGENTS.md.
-//  SHARED_BASE 는 terminal-sessions ROOTS 'shared' base 와 반드시 일치(순환 import 회피 위해 env 직접 읽음).
+//  PROJECT_SHARED_BASE 는 **게이트웨이 로컬** 공유 루트다(순환 import 회피 위해 env 직접 읽음). 저장소가 붙은 배포에선
+//  terminal-sessions ROOTS 'shared' base 와 같지만, 격리 멤버의 공유 루트(SHARED_ISOLATED_BASE)·테넌트 루트(catalog.roots)
+//  와는 다를 수 있다 — 매니지드에선 실제로 다른 디렉터리다(#4064). 프로젝트 **파일**을 만지는 코드는 여기 경로를 직접
+//  쓰지 말고 project-storage.projectStorage() 를 지난다.
 import fsp from "node:fs/promises";
 import fs from "node:fs";
 import path from "node:path";

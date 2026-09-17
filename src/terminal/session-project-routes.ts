@@ -18,8 +18,7 @@ import { nodeOfSession, nodeRpc } from "../node/registry.js";
 import { translateNodeRpcError } from "../node/rpc-error.js";
 import { applySessionProject, type SessionProjectBind } from "./session-project.js";
 import { ensureAgentsMd } from "../v6/agents-md.js";
-import { projectAbsPath } from "../project/project-fs.js";
-import fsp from "node:fs/promises";
+import { projectStorage } from "../project/project-storage.js";
 import path from "node:path";
 import { getOpt } from "./tmux-exec.js";
 import { adoptLegacyExecutionSession, executionSessionProject, markExecutionSessionApplied, setExecutionSessionProject, type ExecutionSessionProject } from "../v6/execution-session-store.js";
@@ -33,13 +32,14 @@ const SID_RE = /^[A-Za-z0-9._-]{1,128}$/;
 /** 동적 주입으로 보낼 AGENTS.md 상한. */
 const AGENTS_MD_MAX = 128 * 1024;
 
-/** 이 프로젝트의 AGENTS.md 전문(#1856). 프로젝트가 소유한 생성물만 최신화해 읽고 세션 cwd는 건드리지 않는다. */
-async function projectAgentsMd(id: number, folder: string): Promise<string | null> {
-  if (!folder) return null;
+/** 이 프로젝트의 AGENTS.md 전문(#1856). 프로젝트가 소유한 생성물만 최신화해 읽는다 — 자리는 프로젝트 저장소(#4064). */
+async function projectAgentsMd(u: LivelyUser, project: { id: number; name: string; folder: string }): Promise<string | null> {
+  if (!project.folder) return null;
   try {
-    await ensureAgentsMd(id).catch(() => { /* 생성 실패해도 기존 파일이 있으면 읽는다 */ });
-    const body = await fsp.readFile(path.join(projectAbsPath(folder), "AGENTS.md"), "utf8");
-    return body.length > AGENTS_MD_MAX ? null : body;
+    const store = await projectStorage(project.folder, { user: u }, { id: project.id, name: project.name });
+    await ensureAgentsMd(project.id, store).catch(() => { /* 생성 실패해도 기존 파일이 있으면 읽는다 */ });
+    const body = await store.readText(path.join(store.base, "AGENTS.md"));
+    return body == null || body.length > AGENTS_MD_MAX ? null : body;
   } catch { return null; }
 }
 
@@ -199,7 +199,7 @@ export async function sessionProjectContext(
   // 동기화 훅(content=0)은 폴더·모드만 필요하다 — AGENTS.md 는 최대 128KB 라 매 턴 실어 보내면 순수 낭비다.
   //  ⚠ changed 는 그대로 둔다: 주입 훅이 ACK 로 revision 을 올리는 축과 섞이면 안 된다(여기선 ACK 를 안 보낸다).
   if (!includeContent) return base;
-  const content = await projectAgentsMd(project.id, project.folder);
+  const content = await projectAgentsMd(u, project);
   if (content == null) throw new HttpError(503, "프로젝트 AGENTS.md를 준비하지 못했습니다");
   return { ...base, name: project.name, content };
 }

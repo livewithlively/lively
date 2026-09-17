@@ -159,6 +159,15 @@ export function memberExecConfigured(): boolean {
   return execTopology().storage === "detached";
 }
 
+/**
+ * 파일 op 를 **멤버 경계**로 보낼 자리인가 — 격리 사용자 && 저장소가 분리된 배포(매니지드).
+ *  그 밖(자체 호스팅 격리 박스·노드 에이전트·비격리)은 게이트웨이가 그 폴더를 실제로 보므로 로컬 fs 다.
+ *  고르는 규칙은 하나다 — 위탁 작업 폴더(node/tasks.ts)와 프로젝트 폴더 저장소(project/project-storage.ts)가 같이 쓴다.
+ */
+export function fileOpsAtMemberBoundary(osUser: string | null | undefined, detached: boolean = memberExecConfigured()): boolean {
+  return !!osUser && detached;
+}
+
 // 세션 격리 게이트 — 활성 && 인프라 설치됨(box-spawn) && 그 멤버 OS 유저 존재 → osUser 반환, 아니면 null(→ 공유 폴백).
 //  createSession 이 이 값으로 분기: non-null 이면 wrapAsMember, null 이면 종전(#346 CLAUDE_CONFIG_DIR) 경로.
 //  3중 게이트라 secure-by-default 여도 미설치/미프로비저닝 박스는 폴백-세이프(무회귀). Linux 전용.

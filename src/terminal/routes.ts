@@ -1209,7 +1209,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         //  함께 고쳐 준다(주입 훅이 그 좌표로 이 컴퓨터의 실제 경로를 찍는다).
         if (typeof input.initialPrompt === "string" && input.initialPrompt) {
           const moved = await relocateAttachmentsToProject({
-            prompt: input.initialPrompt, projectId: made.id, folder: made.folder, memberId: idOf(userOf(req)),
+            prompt: input.initialPrompt, projectId: made.id, projectName: made.name, folder: made.folder, memberId: idOf(userOf(req)),
           });
           input.initialPrompt = moved.prompt;
         }

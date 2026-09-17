@@ -15,7 +15,7 @@ import type { LivelyUser } from "../context.js";
 import {
   TMUX_BIN, PANE_LOCALE, HARNESSES, resolveRootPath, resolveProfileConfigDir, profileConfigDir, sessionPrefix, ensureMemberOsUser,
 } from "../terminal/terminal-sessions.js";
-import { wrapAsMember, isolationInfraReady, memberExecConfigured } from "../terminal/terminal-isolation.js";
+import { wrapAsMember, isolationInfraReady, memberExecConfigured, fileOpsAtMemberBoundary } from "../terminal/terminal-isolation.js";
 import { memberRm, memberWriteFile, memberNodeJson } from "../terminal/terminal-member-fs.js";   // 저장소 분리 배포의 작업 폴더 op(아래 TaskFs)
 import { envKeepPolicy } from "../terminal/session-env-contract.js";
 import { provisionTaskRepo, type RepoProvisionAuth } from "../project/project-provision.js";
@@ -318,7 +318,7 @@ export interface TaskFs {
 
 /** (순수) 멤버 경계로 보낼 자리인가 — 격리 사용자 && 저장소 분리. */
 export function taskFsIsMember(osUser: string | null | undefined, detached: boolean): boolean {
-  return !!osUser && detached;
+  return fileOpsAtMemberBoundary(osUser, detached);   // 프로젝트 폴더 저장소와 한 벌(#4064)
 }
 
 // 읽기 범위 규칙 — 로컬·멤버가 **같은 식**을 쓴다(task-fs.test 가 두 구현을 같은 파일에 대조한다).
