@@ -229,9 +229,27 @@ async function expire(d: LoginJobDeps, j: LoginJobRow, why: StaleReason): Promis
   await stopUnit(d, j);
 }
 
+/**
+ * 작업 표가 **아직 없으면** 대신 줄 값 — 그 밖의 오류는 그대로 던진다.
+ *  ⚠ 왜(실측 2026-09-17, 첫 롤): 새 게이트웨이가 공용 DB 마이그레이션보다 **먼저** 요청을 받았다 — 2분 남짓
+ *   `relation "org_login_job" does not exist`. 그 창의 로그인은 500 이 아니라 종전 경로로 가야 한다.
+ *   셀프호스트도 스키마 체인이 listen 뒤에 비동기로 돈다(readyz 머리말) — 같은 창이 있다.
+ */
+const MISSING = Symbol("login-job-table-missing");
+async function orMissing<T, F>(p: Promise<T>, fallback: F): Promise<T | F> {
+  try { return await p; }
+  catch (e) {
+    if ((e as { code?: unknown })?.code === "42P01") return fallback;   // undefined_table
+    throw e;
+  }
+}
+
 /** 이 사람·용도·하네스의 **지금 시도** 작업(최근 RECENT_MS 안) — 없으면 null(종전 경로). */
 async function recentJob(d: LoginJobDeps, memberId: string, purpose: LoginPurpose, harness: string): Promise<LoginJobRow | null> {
-  const j = await d.store.latestLoginJob(memberId, purpose, harness);
+  //  판이 없는 배포(셀프호스트)는 작업 행을 **읽지도 않는다** — 종전 로그인의 조회마다 DB 를 치지 않게.
+  //   판의 유무(op 소켓)는 박스의 성질이라 청/녹 두 슬롯이 같은 답을 본다(«DB 가 정한다» 와 어긋나지 않는다).
+  if (!d.sandboxAvailable()) return null;
+  const j = await orMissing(d.store.latestLoginJob(memberId, purpose, harness), null);
   if (!j) return null;
   return d.now() - (ms(j.created_at) ?? 0) < RECENT_MS ? j : null;
 }
@@ -252,7 +270,9 @@ export async function startLoginJob(
 ): Promise<{ mode: "job"; jobId: number; resumed: boolean } | { mode: "legacy" }> {
   if (!loginJobSpec(o.purpose, o.harness)) return { mode: "legacy" };
   const d = await depsOf(inject);
-  const prev = await d.store.latestLoginJob(o.memberId, o.purpose, o.harness);
+  if (!d.sandboxAvailable()) return { mode: "legacy" };
+  const prev = await orMissing(d.store.latestLoginJob(o.memberId, o.purpose, o.harness), MISSING);
+  if (prev === MISSING) return { mode: "legacy" };
   if (isLive(prev)) {
     const why = staleReason(prev, d.now());
     if (!o.restart && !why) {
@@ -546,7 +566,7 @@ export async function sweepLoginJobs(inject: Partial<LoginJobDeps> = {}): Promis
   if (!d.sandboxAvailable()) return { expired: 0, reaped: 0 };
   let expired = 0;
   let reaped = 0;
-  for (const j of await d.store.openLoginJobs()) {
+  for (const j of await orMissing(d.store.openLoginJobs(), [])) {
     if (LIVE.has(j.status)) {
       const why = staleReason(j, d.now());
       if (why) { await expire(d, j, why); expired++; }
