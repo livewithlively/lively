@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { cleanEnterUrl, planNotifyRoutes, hereSlug, ownRouteNow, type RoutePlanInput } from "./notify-scope.js";
+import { cleanEnterUrl, planNotifyRoutes, hereSlug, ownRouteNow, tenantBaseOf, type RoutePlanInput } from "./notify-scope.js";
 import { withTenant } from "../org/tenant-context.js";
 
 // ── 알림 스트림이 받을 자리 (#4054) — 사양 표 S1~S12 ─────────────────────────────
@@ -63,6 +63,33 @@ test("S3c CP 가 «지금 여기»라고 한 줄은 slug 가 달라도 다른 �
     { slug: "soltimal-adce", name: "NCEO", enter_url: enter(UUID_C), is_current: false },
   ] }));
   assert.deepEqual(r.map((x) => x.ws), ["lively-46e3", "soltimal-adce"]);
+});
+
+test("S17 매니지드: 테넌트 주소 규칙을 알면 다른 워크스페이스의 웹 화면 주소를 싣는다(모르면 안 싣는다)", () => {
+  const withBase = planNotifyRoutes(managed({ tenantBase: { scheme: "https", parent: "app.lvly.io" } }));
+  assert.deepEqual(withBase.map((x) => x.label.url), [undefined, "https://wonjoon-jang-074e.app.lvly.io/ui/", "https://soltimal-adce.app.lvly.io/ui/"],
+    "자기 워크스페이스엔 주소를 싣지 않고, 다른 워크스페이스엔 <slug>.<도메인>/ui/");
+  assert.deepEqual(planNotifyRoutes(managed()).map((x) => x.label.url), [undefined, undefined, undefined]);
+  // 등록부 모드엔 규칙이 와도 싣지 않는다(같은 주소에서 선택만 바꾼다)
+  const reg = planNotifyRoutes({ mode: "registry", me: "alice", here: { slug: "primary", name: "" }, all: true,
+    tenantBase: { scheme: "https", parent: "app.lvly.io" }, registryWorkspaces: [{ slug: "haru", name: "하루" }] });
+  assert.equal(reg[1]!.label.url, undefined);
+});
+
+test("S18 테넌트 주소 규칙(tenantBaseOf) — «<자기 slug>.<도메인>» 꼴일 때만", () => {
+  assert.deepEqual(tenantBaseOf("https://lively-46e3.app.lvly.io", "lively-46e3"), { scheme: "https", parent: "app.lvly.io" });
+  assert.deepEqual(tenantBaseOf("https://Lively-46e3.App.lvly.io/", "LIVELY-46e3"), { scheme: "https", parent: "app.lvly.io" });
+  assert.deepEqual(tenantBaseOf("http://acme.dev.example.com", "acme"), { scheme: "http", parent: "dev.example.com" });
+  for (const [gw, slug] of [
+    ["https://olddev.lvly.io", "primary"],              // 이름이 slug 로 시작하지 않는다(셀프호스트)
+    ["https://lively-46e3.app.lvly.io/prefix", "lively-46e3"],   // 경로 접두
+    ["https://lively-46e3.app.lvly.io:8443", "lively-46e3"],     // 포트
+    ["https://lively-46e3.io", "lively-46e3"],          // 상위 도메인이 한 칸
+    ["https://lively-46e3x.app.lvly.io", "lively-46e3"],         // 이름 경계(접두만 같다)
+    ["ftp://lively-46e3.app.lvly.io", "lively-46e3"],
+    ["", "lively-46e3"], [null, "lively-46e3"], ["https://lively-46e3.app.lvly.io", ""],
+    ["https://u:p@lively-46e3.app.lvly.io", "lively-46e3"],
+  ] as const) assert.equal(tenantBaseOf(gw, slug), null, `${gw} · ${slug}`);
 });
 
 test("S4 매니지드: 계정이 확인되지 않으면 다른 워크스페이스를 받지 않는다(fail-closed)", () => {

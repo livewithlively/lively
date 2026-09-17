@@ -42,6 +42,12 @@ export interface NotifyWorkspace {
   via: "same" | "header" | "enter";
   /** `via=enter` 일 때만 — 계정 서버가 준 입장 주소. 착지 해시(`?to=`)는 앱이 붙인다. */
   enter?: string;
+  /**
+   * `via=enter` 일 때만 — 그 워크스페이스의 웹 화면 주소(`https://<slug>.<테넌트 도메인>/ui/`). 앱은 이것을 **먼저** 연다:
+   *  브라우저에 그 워크스페이스 로그인이 있으면 곧장 열리고, 없으면 그 화면의 게이트가 계정 서버 로그인을 거쳐 같은 해시로
+   *  되돌려 보낸다(#1771). 입장 주소(`enter`)는 계정 서버 로그인이 없으면 «오류 (401)» 에서 멈춘다 — 그래서 대비책이다.
+   */
+  url?: string;
 }
 
 export interface NotifySessionEvent {

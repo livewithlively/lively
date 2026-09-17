@@ -109,6 +109,7 @@ export function wsLabelOf(raw) {
   const name = String(raw.name ?? "").replace(/\s+/g, " ").trim().slice(0, WS_NAME_MAX);
   const out = { slug, name, current: raw.current === true, via };
   if (via === "enter" && typeof raw.enter === "string") out.enter = raw.enter;
+  if (via === "enter" && typeof raw.url === "string") out.url = raw.url;
   return out;
 }
 
@@ -364,9 +365,11 @@ export function stableStream(connectedMs) {
 //   · same   — 앱이 매인 워크스페이스. 창이 그 주소를 싣고 있으면 해시, 다른 곳을 싣고 있으면 그 주소로 다시 싣는다.
 //   · header — 셀프호스트 다중: 주소는 같고 선택만 다르다. 창이 고른 워크스페이스가 같으면 해시, 아니면 `?lvly_ws=` 로 싣는다.
 //   · enter  — 매니지드의 다른 워크스페이스: 주소가 다르고 이 앱의 로그인(토큰)은 매인 워크스페이스 하나뿐이다.
-//     그래서 **계정 서버의 입장 주소**로 브라우저에서 연다 — 계정 서버가 로그인을 태워 그 세션 화면에 내려놓는다
-//     (lvly-cloud `/ws/:id/enter?to=`). 앱 창을 그 주소로 옮기지 않는 까닭: 앱 창은 매인 게이트웨이만 싣는 규약이고
-//     (web-shell.openTargetFor), 이 앱엔 그 워크스페이스의 로그인이 없다. 워크스페이스 레일의 전환도 같은 길을 탄다.
+//     그래서 **브라우저**에서 연다. 먼저 그 워크스페이스의 웹 화면 주소(`ws.url` + 해시) — 브라우저에 그곳 로그인이 있으면
+//     곧장, 없으면 그 화면의 게이트가 계정 서버 로그인을 거쳐 같은 해시로 되돌린다(#1771). 그 주소를 못 믿으면 계정 서버
+//     입장 주소(`/ws/:id/enter?to=`)로 — 이것은 계정 서버 로그인이 없으면 «오류 (401)» 에서 멈추므로 대비책이다.
+//     앱 창을 그 주소로 옮기지 않는 까닭: 앱 창은 매인 게이트웨이만 싣는 규약이고(web-shell.openTargetFor), 이 앱엔
+//     그 워크스페이스의 로그인이 없다. 워크스페이스 레일의 전환도 앱 안에서는 같은 이유로 브라우저로 나간다.
 
 /** 웹이 고른 워크스페이스를 담는 저장소 키 — web/lib/net.ts `WORKSPACE_KEY` 와 **같아야 한다**(desktop-core.test.mjs 가 맞춘다). */
 export const WEB_WORKSPACE_KEY = "lively.workspace";
@@ -402,6 +405,26 @@ export function enterUrlWith(enter, hash, cpOrigins) {
   return `${u.origin}${u.pathname}?to=${encodeURIComponent(hash)}`;
 }
 
+/**
+ * 다른 워크스페이스의 웹 화면 주소 + 착지 해시 → 브라우저로 열 주소(순수). 서버가 준 값이라도 **다시 본다**:
+ *  호스트가 정확히 `<그 워크스페이스 slug>.<매인 게이트웨이 호스트의 상위 도메인>` 이고(형제 테넌트만),
+ *  스킴·포트가 매인 게이트웨이와 같고, 경로가 `/ui/` 이며 쿼리·조각·계정정보가 없을 때만.
+ * @returns {string|null}
+ */
+export function tenantUrlWith(url, slug, hash, gatewayUrl) {
+  let u, gw;
+  try { u = new URL(String(url || "")); gw = new URL(String(gatewayUrl || "")); } catch { return null; }
+  const labels = gw.hostname.toLowerCase().split(".");
+  if (labels.length < 3) return null;                                   // 상위 도메인이 한 칸이면 형제를 가를 수 없다
+  const want = `${String(slug || "").toLowerCase()}.${labels.slice(1).join(".")}`;
+  if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(String(slug || ""))) return null;
+  if (u.protocol !== gw.protocol || u.port !== gw.port || u.hostname.toLowerCase() !== want) return null;
+  if (u.hostname.toLowerCase() === gw.hostname.toLowerCase()) return null;   // 매인 곳은 이 길로 오지 않는다
+  if (u.username || u.password || u.search || u.hash || u.pathname !== "/ui/") return null;
+  if (!HASH_RE.test(String(hash || ""))) return null;
+  return `${u.origin}/ui/${hash}`;
+}
+
 /** 워크스페이스 선택값 정규화 — 비었으면 primary(웹 net.ts 와 같은 규약: 미선택 = primary). */
 const selectedWs = (v) => (String(v ?? "").trim().toLowerCase() || "primary");
 
@@ -419,8 +442,8 @@ export function clickTarget(event, ctx = {}) {
   const ws = wsLabelOf(event.ws);
   if (!ws) return { how: "hash", hash };                                     // K2 구 게이트웨이 — 종전 그대로
   if (ws.via === "enter") {
-    const url = enterUrlWith(ws.enter, hash, ctx.cpOrigins);
-    return url ? { how: "external", url } : { how: "app" };                 // K5 · K6(엉뚱한 워크스페이스에서 열지 않는다)
+    const url = tenantUrlWith(ws.url, ws.slug, hash, ctx.gatewayUrl) || enterUrlWith(ws.enter, hash, ctx.cpOrigins);
+    return url ? { how: "external", url } : { how: "app" };                 // K5 · K5b · K6(엉뚱한 워크스페이스에서 열지 않는다)
   }
   const ui = webUiUrl(ctx.gatewayUrl);
   if (!ui) return { how: "hash", hash };                                     // 매인 곳을 모른다 — 종전 그대로

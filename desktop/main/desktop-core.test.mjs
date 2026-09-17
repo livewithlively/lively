@@ -24,7 +24,7 @@ import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { manifestRefs, manifestProblems, GITHUB_SAFE } from "../verify-update-manifest.mjs";
 import { versionLabel } from "./tray-menu.mjs";
 import { RETRYABLE_KINDS } from "./ipc-contract.mjs";
-import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX, phaseEventKind, streamEvent, parseSse, reconnectDelay, stableStream, keepBanner, BANNER_KEEP_MAX, wsLabelOf, digestFor, clickTarget, enterUrlWith, streamUrl, WEB_WORKSPACE_KEY, READ_WEB_WORKSPACE_JS, WS_NAME_MAX } from "./notify.mjs";
+import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX, phaseEventKind, streamEvent, parseSse, reconnectDelay, stableStream, keepBanner, BANNER_KEEP_MAX, wsLabelOf, digestFor, clickTarget, enterUrlWith, tenantUrlWith, streamUrl, WEB_WORKSPACE_KEY, READ_WEB_WORKSPACE_JS, WS_NAME_MAX } from "./notify.mjs";
 import { createHashNav } from "./web-shell.mjs";
 import { updateStatusNote } from "./update-policy.mjs";
 import { posix as pposix } from "node:path";
@@ -2361,6 +2361,8 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     for (const bad of [null, undefined, "x", 3, {}, { slug: "" }, { slug: "Has Space" }, { slug: "../x" }, { slug: "-a" }]) assert.equal(wsLabelOf(bad), null, JSON.stringify(bad));
     assert.deepEqual(wsLabelOf({ slug: "A-1", name: "n", current: "yes", via: "weird", enter: ENTER }), { slug: "a-1", name: "n", current: false, via: "same" });
     assert.deepEqual(wsLabelOf(OTHER), OTHER);
+    assert.equal(wsLabelOf({ ...HERE, url: "https://x.app.lvly.io/ui/" }).url, undefined, "same 표시에 주소를 실었다");
+    assert.equal(wsLabelOf({ ...OTHER, url: "https://soltimal-adce.app.lvly.io/ui/" }).url, "https://soltimal-adce.app.lvly.io/ui/");
     assert.equal(wsLabelOf({ ...OTHER, enter: 42 }).enter, undefined);
     assert.deepEqual(streamEvent({ type: "session", id: "box-a-1", name: "n", prev: "busy", phase: "idle", key: "k", ws: OTHER }, new Set()).ws, OTHER, "스트림 사건의 표시를 버렸다");
     assert.equal(streamEvent({ type: "session", id: "box-a-1", name: "n", prev: "busy", phase: "idle", key: "k2" }, new Set()).ws, null);
@@ -2394,6 +2396,31 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     // 착지 해시는 사람 링크도 같다
     assert.deepEqual(clickTarget({ link: "#/projects2/p/7", ws: OTHER }, { gatewayUrl: GW, cpOrigins: CP_ORIGINS }),
       { how: "external", url: `${ENTER}?to=%23%2Fprojects2%2Fp%2F7` });
+  });
+  t("A41b K5b ★ 워크스페이스 웹 화면 주소가 있고 믿을 만하면 그것을 먼저 연다(브라우저 로그인이 없어도 게이트가 되돌려 준다)", () => {
+    const withUrl = { ...OTHER, url: "https://soltimal-adce.app.lvly.io/ui/" };
+    assert.deepEqual(clickTarget({ id: "box-sangmin-yoon-b0b0", ws: withUrl }, { gatewayUrl: GW, windowUrl: GW + "/ui/", cpOrigins: CP_ORIGINS }),
+      { how: "external", url: "https://soltimal-adce.app.lvly.io/ui/#/s/box-sangmin-yoon-b0b0" });
+    // 못 믿을 주소면 입장 주소로 물러난다
+    const bad = [
+      "https://evil.example/ui/", "https://soltimal-adce.app.lvly.io.evil.example/ui/", "https://other-ws.app.lvly.io/ui/",
+      "http://soltimal-adce.app.lvly.io/ui/", "https://soltimal-adce.app.lvly.io:8443/ui/", "https://soltimal-adce.app.lvly.io/ui/x",
+      "https://soltimal-adce.app.lvly.io/", "https://soltimal-adce.app.lvly.io/ui/?a=1", "https://soltimal-adce.app.lvly.io/ui/#/home",
+      "https://u:p@soltimal-adce.app.lvly.io/ui/", "https://soltimal-adce.lvly.io/ui/", "javascript:alert(1)", 42,
+    ];
+    for (const url of bad) {
+      assert.deepEqual(clickTarget({ id: "box-a-1", ws: { ...OTHER, url } }, { gatewayUrl: GW, cpOrigins: CP_ORIGINS }),
+        { how: "external", url: `${ENTER}?to=%23%2Fs%2Fbox-a-1` }, String(url));
+    }
+    // 매인 게이트웨이를 모르거나 상위 도메인이 한 칸이면 형제를 가를 수 없다 → 입장 주소
+    assert.equal(tenantUrlWith(withUrl.url, "soltimal-adce", "#/s/x", null), null);
+    assert.equal(tenantUrlWith("https://soltimal-adce.lvly.io/ui/", "soltimal-adce", "#/s/x", "https://lvly.io"), null);
+    // 매인 곳 자신을 다른 워크스페이스로 싣지 않는다
+    assert.equal(tenantUrlWith(GW + "/ui/", "lively-46e3", "#/s/x", GW), null);
+    assert.equal(tenantUrlWith(withUrl.url, "soltimal-adce", "#/a b", GW), null, "해시 모양이 아닌데 실었다");
+    assert.equal(tenantUrlWith(withUrl.url, "Bad Slug", "#/s/x", GW), null);
+    // 주소도 입장 주소도 못 믿으면 어디로도 안 보낸다
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: { ...OTHER, url: "https://evil.example/ui/", enter: "https://evil.example/ws/x/enter" } }, { gatewayUrl: GW, cpOrigins: CP_ORIGINS }), { how: "app" });
   });
   t("A42 K6·K10 입장 주소가 아는 계정 서버가 아니거나 형식이 아니면 어디로도 보내지 않고 앱 창만 연다", () => {
     const bad = [

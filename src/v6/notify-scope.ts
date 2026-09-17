@@ -51,6 +51,24 @@ export function cleanEnterUrl(raw: unknown, cpBase: string | null | undefined): 
   return `${u.origin}${u.pathname}`;
 }
 
+/**
+ * 이 게이트웨이 주소가 «`<자기 slug>.<테넌트 도메인>`» 꼴이면 그 도메인을 돌려준다(순수) — 다른 워크스페이스의
+ *  웹 화면 주소(`<slug>.<테넌트 도메인>`)를 만드는 재료다. 매니지드 테넌트 주소의 규칙이 그렇다(lvly-cloud router.hostToSlug).
+ *  꼴이 아니면(경로 접두·포트·다른 이름) null — 그때는 주소를 짓지 않고 입장 주소만 준다.
+ */
+export function tenantBaseOf(gatewayUrl: unknown, slug: string): { scheme: "https" | "http"; parent: string } | null {
+  let u: URL;
+  try { u = new URL(String(gatewayUrl ?? "")); } catch { return null; }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+  if (u.port || u.username || u.password || (u.pathname !== "/" && u.pathname !== "")) return null;
+  const host = u.hostname.toLowerCase();
+  const head = `${String(slug || "").trim().toLowerCase()}.`;
+  if (!SLUG_RE.test(head.slice(0, -1)) || !host.startsWith(head)) return null;
+  const parent = host.slice(head.length);
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(parent)) return null;   // 점이 하나 이상인 도메인만(최상위 한 칸으로는 짓지 않는다)
+  return { scheme: u.protocol === "https:" ? "https" : "http", parent };
+}
+
 export interface CpWorkspaceRow {
   slug?: string;
   name?: string;
@@ -77,6 +95,8 @@ export interface RoutePlanInput {
   cpWorkspaces?: readonly CpWorkspaceRow[] | null;
   /** 매니지드 — 계정 서버 출처(입장 주소 검증 기준). */
   cpBase?: string | null;
+  /** 매니지드 — 테넌트 주소 규칙(tenantBaseOf). 있으면 다른 워크스페이스의 웹 화면 주소를 싣는다. */
+  tenantBase?: { scheme: "https" | "http"; parent: string } | null;
   /** registry — 내가 속한 등록부 워크스페이스(primary 포함 가능). */
   registryWorkspaces?: readonly RegistryWorkspaceRow[] | null;
 }
@@ -88,7 +108,7 @@ export interface RoutePlanInput {
  * |---|---|---|---|
  * | 전부 | 아님 | 구성원 아이디로 | 없음 |
  * | single | 청함 | 구성원 아이디로 | 없음(워크스페이스가 하나다) |
- * | managed | 청함 | 구성원 아이디로 | **CP 확인 계정 id** 로 · via=enter · 입장 주소 검증 통과한 것만 |
+ * | managed | 청함 | 구성원 아이디로 | **CP 확인 계정 id** 로 · via=enter · 입장 주소 검증 통과한 것만 · 테넌트 주소 규칙을 알면 웹 화면 주소도 |
  * | managed | 청함 · 계정 미확인 | 구성원 아이디로 | 없음(fail-closed) |
  * | registry | 청함 | 구성원 아이디로 | 구성원 아이디로(박스 전역 신원) · via=header |
  */
@@ -115,6 +135,7 @@ export function planNotifyRoutes(i: RoutePlanInput): NotifyRoute[] {
       if (!enter) continue;                                   // 갈 길이 없는 자리는 만들지 않는다(눌러도 못 가는 배너)
       seen.add(slug);
       const label: NotifyWorkspace = { slug, name: cleanName(w?.name), current: false, via: "enter", enter };
+      if (i.tenantBase) label.url = `${i.tenantBase.scheme}://${slug}.${i.tenantBase.parent}/ui/`;
       out.push({ ws: slug, account, label });
     }
     return out;
@@ -138,13 +159,14 @@ export function hereSlug(): string {
   return String(currentTenant()?.slug || PRIMARY_WS).trim().toLowerCase() || PRIMARY_WS;
 }
 
-async function orgName(): Promise<string> {
+async function orgProfile(): Promise<{ name: string; gatewayUrl: string | null }> {
   try {
     const { getOrgProfile } = await import("../org/store/profile.js");
     const p = await getOrgProfile();
-    return cleanName(p?.display_name || p?.name || "");
-  } catch { return ""; }
+    return { name: cleanName(p?.display_name || p?.name || ""), gatewayUrl: p?.gateway_url ?? null };
+  } catch { return { name: "", gatewayUrl: null }; }
 }
+async function orgName(): Promise<string> { return (await orgProfile()).name; }
 
 async function registryName(slug: string): Promise<string> {
   try {
@@ -204,7 +226,8 @@ export async function resolveNotifyRoutes(user: LivelyUser, me: string, all: boo
     return { routes: planNotifyRoutes({ mode, me, here: { slug, name }, all, registryWorkspaces: rows }), transient };
   }
 
-  const name = await orgName();
+  const profile = await orgProfile();
+  const name = profile.name;
   if (mode === "single" || !all) return { routes: planNotifyRoutes({ mode, me, here: { slug, name }, all }), transient: false };
 
   // 매니지드 — 다른 워크스페이스는 CP 가 확인해 준 것만.
@@ -222,6 +245,7 @@ export async function resolveNotifyRoutes(user: LivelyUser, me: string, all: boo
         mode, me, all,
         here: { slug, name: cleanName(cur?.name) || name },
         account: target.accountId, cpWorkspaces: rows, cpBase: target.base,
+        tenantBase: tenantBaseOf(profile.gatewayUrl, slug),
       }),
       transient: false,
     };
@@ -248,7 +272,7 @@ export async function notifyAccountOf(member: string, now: number = Date.now()):
   if (!m) return null;
   if ((await tenancyMode()) !== "managed") return null;
   const t = currentTenant();
-  const key = `${t?.id ?? ""} ${m}`;
+  const key = `${t?.id ?? ""}\u0000${m}`;
   const hit = accountCache.get(key);
   if (hit && now - hit.at < ACCOUNT_TTL_MS) return hit.account;
   let account: string | null = null;
