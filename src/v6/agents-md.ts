@@ -85,16 +85,18 @@ function buildProjectDigest(p: any): string {
  * 규칙(사람 편집 영역)과 그 출처 — 판정은 agents-md-rules.pickRules 한 자리.
  *  저장소를 옮기는 중이면(멤버 저장소에 AGENTS.md 가 아직 없다) 게이트웨이 쪽 원본도 재료로 준다 — 이관이 그 파일에
  *  닿기 전이면 사람 규칙은 거기 있다. 원본은 옮겨지는 순간 그 자리에서 빠지므로 지운 규칙이 되살아나지는 않는다.
- *  ⚠ 그 원본은 **이 프로젝트의 것으로 증명될 때만** 쓴다(이관과 같은 판정 ownsAgentsMd — 지금 이름·옛 이름의 머리) —
- *  게이트웨이 로컬 폴더는 워크스페이스로 안 갈린다. 판정이 실패하면(이름 이력 조회 불가) 쓰지 않는다.
+ *  ⚠ 그 원본은 **이 프로젝트의 것으로 증명될 때만** 쓴다(이관과 같은 판정 ownsAgentsMd — 지금 이름, 또는 그 파일이
+ *  쓰인 시각에 쓰던 이름의 머리) — 게이트웨이 로컬 폴더는 워크스페이스로 안 갈린다. 판정이 실패하면 쓰지 않는다.
  */
 async function readRules(store: ProjectStorage): Promise<{ rules: string; from: RulesSource }> {
   const agents = await store.readText(path.join(store.base, "AGENTS.md"));
+  const localAgents = path.join(store.localBase, "AGENTS.md");
   const raw = agents == null && store.localBase !== store.base
-    ? await fsp.readFile(path.join(store.localBase, "AGENTS.md"), "utf8").catch(() => null)
+    ? await fsp.readFile(localAgents, "utf8").catch(() => null)
     : null;
   const project = store.project;
-  const original = raw != null && project && (await ownsAgentsMd(raw, project).catch(() => false)) ? raw : null;
+  const writtenAt = raw != null ? await fsp.stat(localAgents).then((st) => Math.floor(st.mtimeMs), () => 0) : 0;
+  const original = raw != null && project && (await ownsAgentsMd(raw, project, writtenAt).catch(() => false)) ? raw : null;
   const claude = await store.readText(path.join(store.base, "CLAUDE.md"));
   return pickRules({ agents, original, claude });
 }

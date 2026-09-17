@@ -71,11 +71,22 @@ S.setMigrationOwnership(async (q) => {
   ownCalls.push(q);
   return new Set(q.rels.filter((r) => !path.posix.basename(r).startsWith("foreign")));
 });
-//  이름 이력 — 실제로는 이 워크스페이스 감사 기록 조회다. 이 시험에선 표에 적힌 것만 옛 이름이다.
-const NAME_HISTORY = new Map<number, string[]>();
-const nameCalls: number[] = [];
-const fakeNameHistory = async (id: number): Promise<string[]> => { nameCalls.push(id); return NAME_HISTORY.get(id) ?? []; };
-S.setMigrationNameHistory(fakeNameHistory);
+//  그 시각에 쓰던 이름 — 실제로는 이 워크스페이스 감사 기록 조회다(SQL 은 실 Postgres 로 따로 쟀다 — PR 본문).
+//  이 시험에선 프로젝트별 시각표(이름을 붙인 시각)로 같은 뜻을 푼다: from 에 유효하던 이름 + (from, to] 에 붙인 이름.
+const TIMELINE = new Map<number, Array<{ at: number; name: string }>>();
+const nameCalls: Array<{ projectId: number; from: number; to: number }> = [];
+const fakeNamesAt = async (q: { projectId: number; from: Date; to: Date }): Promise<string[]> => {
+  const from = q.from.getTime();
+  const to = q.to.getTime();
+  nameCalls.push({ projectId: q.projectId, from, to });
+  const tl = [...(TIMELINE.get(q.projectId) ?? [])].sort((a, b) => a.at - b.at);
+  const inEffect = tl.filter((e) => e.at <= from).pop();
+  return [...new Set([...(inEffect ? [inEffect.name] : []), ...tl.filter((e) => e.at > from && e.at <= to).map((e) => e.name)])];
+};
+S.setMigrationNamesAt(fakeNamesAt);
+const DAY = 86_400_000;
+const T_WRITE = Date.parse("2026-09-10T03:00:00Z");   // 게이트웨이 쪽 AGENTS.md 가 마지막으로 쓰인 시각(배포 전)
+const stamp = (p: string, ms: number): void => { fs.utimesSync(p, ms / 1000, ms / 1000); };
 const OS_USER = "box_tester";
 
 // ═══ S1 자리 고르기 ═══════════════════════════════════════════════════════════
@@ -497,11 +508,14 @@ test("S3 M20 소유 확인이 실패하면 아무것도 옮기지 않는다 — 
   }
 });
 
-test("S3 M21 ★ 이름을 바꾼 프로젝트 — 옛 이름 머리의 AGENTS.md 도 이 워크스페이스 이력에 그 이름이 있으면 옮긴다(규칙 보존)", async () => {
+test("S3 M21 ★ 이름을 바꾼 프로젝트 — 그 파일이 쓰인 시각에 쓰던 이름의 머리면 옮긴다(규칙 보존)", async () => {
   const L = path.join(LOCAL_ROOT, "project", "101");
   const old = agentsMd("옛 이름 시절 규칙", "d", 101, "옛 이름");
   put(path.join(L, "AGENTS.md"), old);
-  NAME_HISTORY.set(101, ["옛 이름", "새 이름"]);
+  stamp(path.join(L, "AGENTS.md"), T_WRITE);
+  //  옛 이름은 파일을 쓰기 하루 전에 붙였고, 배포 뒤(하루 뒤) 새 이름으로 바꿨다 — 그 바꾸기가 첫 접촉이다
+  TIMELINE.set(101, [{ at: T_WRITE - DAY, name: "옛 이름" }, { at: T_WRITE + DAY, name: "새 이름" }]);
+  nameCalls.length = 0;
   relayOn();
   try {
     S.resetMigrationMemo();
@@ -509,62 +523,121 @@ test("S3 M21 ★ 이름을 바꾼 프로젝트 — 옛 이름 머리의 AGENTS.m
     assert.equal(read(path.join(st.base, "AGENTS.md")), old, "배포 뒤 첫 접촉이 이름 바꾸기여도 사람 규칙이 건너가야 한다");
     assert.equal(exists(path.join(L, "AGENTS.md")), false, "옮긴 원본은 보관으로 빠진다");
     assert.equal(read(path.join(L, ".lively", "migrated", "AGENTS.md")), old);
-    assert.ok(nameCalls.includes(101), "옛 이름은 그 프로젝트 번호로 물어야 한다");
-  } finally { relayOff(); NAME_HISTORY.delete(101); }
+    assert.deepEqual(nameCalls, [{ projectId: 101, from: T_WRITE - S.NAME_CLOCK_SKEW_MS, to: T_WRITE + S.NAME_CLOCK_SKEW_MS }],
+      "그 프로젝트 번호로, **그 파일이 쓰인 시각** 창을 물어야 한다");
+  } finally { relayOff(); TIMELINE.delete(101); }
 });
 
-test("S3 M22·M23 옛 이름 모양이어도 이력에 없거나 번호가 다르면 남의 것일 수 있다 — 옮기지 않는다", async () => {
-  const L22 = path.join(LOCAL_ROOT, "project", "102");
-  put(path.join(L22, "AGENTS.md"), agentsMd("남의 규칙", "d", 102, "이력에 없는 이름"));
-  NAME_HISTORY.set(102, ["우리가 붙인 옛 이름"]);
-  //  M23 — 이 프로젝트(103)의 이력에 있는 이름이지만 머리 번호가 다른 프로젝트(7)다
-  const L23 = path.join(LOCAL_ROOT, "project", "103");
-  put(path.join(L23, "AGENTS.md"), agentsMd("남의 규칙", "d", 7, "옛 이름 103"));
-  NAME_HISTORY.set(103, ["옛 이름 103"]);
+test("S3 M22 ★★ 이름을 바꿔 가며 사전을 쌓아도 소용없다 — 파일이 쓰인 뒤에 붙인 이름·그 전에 버린 이름은 증명이 아니다", async () => {
+  //  번호가 겹친 남의 워크스페이스(여기선 102)가 배포 뒤 이름을 30번 바꿔 «우리 이름» 을 이력에 넣었다
+  const L = path.join(LOCAL_ROOT, "project", "102");
+  put(path.join(L, "AGENTS.md"), agentsMd("남의 규칙", "d", 102, "사전 17"));
+  stamp(path.join(L, "AGENTS.md"), T_WRITE);
+  TIMELINE.set(102, [
+    { at: T_WRITE - 3 * DAY, name: "남의 워크스페이스 이름" },
+    ...Array.from({ length: 30 }, (_, i) => ({ at: T_WRITE + DAY + i * 1000, name: `사전 ${i + 1}` })),
+  ]);
+  //  M22b — 파일이 쓰이기 **전에** 그 이름을 잠깐 달았다가 버렸다(쓰일 때는 다른 이름이었다)
+  const L2 = path.join(LOCAL_ROOT, "project", "106");
+  put(path.join(L2, "AGENTS.md"), agentsMd("남의 규칙", "d", 106, "잠깐 단 이름"));
+  stamp(path.join(L2, "AGENTS.md"), T_WRITE);
+  TIMELINE.set(106, [{ at: T_WRITE - 2 * DAY, name: "잠깐 단 이름" }, { at: T_WRITE - DAY, name: "쓰일 때 이름" }]);
   relayOn();
   try {
     S.resetMigrationMemo();
-    const s22 = await S.projectStorage("project/102", actor, { id: 102, name: "지금 이름" });
-    const s23 = await S.projectStorage("project/103", actor, { id: 103, name: "지금 이름" });
-    assert.equal(exists(path.join(s22.base, "AGENTS.md")), false, "M22 이력에 없는 이름");
-    assert.equal(exists(path.join(s23.base, "AGENTS.md")), false, "M23 번호가 다른 머리");
-    assert.ok(exists(path.join(L22, "AGENTS.md")) && exists(path.join(L23, "AGENTS.md")), "제자리에 둔다");
-  } finally { relayOff(); NAME_HISTORY.delete(102); NAME_HISTORY.delete(103); }
+    const s102 = await S.projectStorage("project/102", actor, { id: 102, name: "사전 30" });
+    const s106 = await S.projectStorage("project/106", actor, { id: 106, name: "지금 이름" });
+    assert.equal(exists(path.join(s102.base, "AGENTS.md")), false, "M22 배포 뒤에 쌓은 이름으로 남의 AGENTS.md 를 끌어오면 안 된다");
+    assert.equal(exists(path.join(s106.base, "AGENTS.md")), false, "M22b 쓰일 때의 이름이 아니다");
+    assert.ok(exists(path.join(L, "AGENTS.md")) && exists(path.join(L2, "AGENTS.md")), "제자리에 둔다");
+    //  재시작 뒤 다시 열어도(메모 초기화) 답이 같다 — 창은 과거에 닫혀 있다
+    S.resetMigrationMemo();
+    await S.projectStorage("project/102", actor, { id: 102, name: "사전 31" });
+    assert.equal(exists(path.join(s102.base, "AGENTS.md")), false);
+  } finally { relayOff(); TIMELINE.delete(102); TIMELINE.delete(106); }
 });
 
-test("S3 M24 ★ 이름 이력 조회가 실패하면 옮기지 않고, 다음 열기에서 다시 간다 — 여는 것 자체는 된다", async () => {
+test("S3 M23 이름은 맞아도 첫 줄의 번호가 다른 프로젝트면 옮기지 않는다(묻지도 않는다)", async () => {
+  const L = path.join(LOCAL_ROOT, "project", "103");
+  put(path.join(L, "AGENTS.md"), agentsMd("남의 규칙", "d", 7, "옛 이름 103"));
+  stamp(path.join(L, "AGENTS.md"), T_WRITE);
+  TIMELINE.set(103, [{ at: T_WRITE - DAY, name: "옛 이름 103" }]);
+  nameCalls.length = 0;
+  relayOn();
+  try {
+    S.resetMigrationMemo();
+    const st = await S.projectStorage("project/103", actor, { id: 103, name: "지금 이름" });
+    assert.equal(exists(path.join(st.base, "AGENTS.md")), false);
+    assert.ok(exists(path.join(L, "AGENTS.md")));
+    assert.deepEqual(nameCalls, []);
+  } finally { relayOff(); TIMELINE.delete(103); }
+});
+
+test("S3 M24 ★ 이름 조회가 실패하면 옮기지 않고, 다음에 다시 간다 — 여는 것 자체는 된다", async () => {
   const L = path.join(LOCAL_ROOT, "project", "104");
   const old = agentsMd("규칙 104", "d", 104, "옛 이름 104");
   put(path.join(L, "AGENTS.md"), old);
+  stamp(path.join(L, "AGENTS.md"), T_WRITE);
   relayOn();
-  S.setMigrationNameHistory(async () => { throw new Error("db down"); });
+  S.setMigrationNamesAt(async () => { throw new Error("db down"); });
   try {
     S.resetMigrationMemo();
     const st = await S.projectStorage("project/104", actor, { id: 104, name: "새 이름 104" });
-    assert.equal(st.base, path.join(MEMBER_ROOT, "project", "104"), "이력 조회가 실패해도 저장소는 열린다");
+    assert.equal(st.base, path.join(MEMBER_ROOT, "project", "104"), "조회가 실패해도 저장소는 열린다");
     assert.equal(exists(path.join(st.base, "AGENTS.md")), false, "소유를 모르면 옮기지 않는다(fail-closed)");
-    await assert.rejects(S.ownsAgentsMd(old, { id: 104, name: "새 이름 104" }), /db down/, "판정 실패를 «남의 것» 으로 삼키면 영영 안 옮긴다");
-    //  조회가 살아나면 — 같은 프로세스에서도 다시 간다(실패는 확정으로 기억하지 않는다)
-    S.setMigrationNameHistory(fakeNameHistory);
-    NAME_HISTORY.set(104, ["옛 이름 104"]);
+    await assert.rejects(S.ownsAgentsMd(old, { id: 104, name: "새 이름 104" }, T_WRITE), /db down/,
+      "판정 실패를 «남의 것» 으로 삼키면 영영 안 옮긴다");
+    //  조회가 살아나면 다시 간다(실패는 확정으로 기억하지 않는다)
+    S.setMigrationNamesAt(fakeNamesAt);
+    TIMELINE.set(104, [{ at: T_WRITE - DAY, name: "옛 이름 104" }]);
     const r = await S.migrateLocalToMember(st);
     assert.equal(r.copied, 1);
     assert.equal(read(path.join(st.base, "AGENTS.md")), old);
-  } finally { relayOff(); S.setMigrationNameHistory(fakeNameHistory); NAME_HISTORY.delete(104); }
+  } finally { relayOff(); S.setMigrationNamesAt(fakeNamesAt); TIMELINE.delete(104); }
 });
 
-test("S3 M25 머리가 이 프로젝트 번호 모양이 아니면 이름 이력을 묻지 않는다 · 지금 이름이면 묻지 않는다", async () => {
+test("S3 M25 조회 없이 끝나는 경우 — 지금 이름 · 번호 모양이 아님 · 쓰인 시각을 모름", async () => {
   nameCalls.length = 0;
   const p = { id: 105, name: "지금 이름" };
-  assert.equal(await S.ownsAgentsMd(agentsMd("r", "d", 105, "지금 이름"), p), true);
-  assert.equal(await S.ownsAgentsMd("# 사람이 쓴 문서\n\n내용\n", p), false);
-  assert.equal(await S.ownsAgentsMd(agentsMd("r", "d", 1050, "지금 이름"), p), false, "번호 접미가 다른 머리(1050)는 105 가 아니다");
-  assert.equal(await S.ownsAgentsMd("", p), false);
-  assert.deepEqual(nameCalls, [], "헛조회 — 번호가 안 맞으면 DB 에 묻지 않는다");
-  assert.equal(await S.ownsAgentsMd(agentsMd("r", "d", 105, "옛 이름"), p), false, "이력이 비었으면 옛 이름을 증명할 수 없다");
-  assert.deepEqual(nameCalls, [105]);
-  assert.equal(await S.ownsAgentsMd(agentsMd("r", "d", 105, "옛 이름"), { id: 105, name: null }), false,
-    "지금 이름을 모르면(저장소를 이름 없이 열었다) 이력도 이 파일을 증명하지 못한다 — 이력이 비었다");
+  TIMELINE.set(105, [{ at: T_WRITE - DAY, name: "옛 이름" }]);
+  try {
+    assert.equal(await S.ownsAgentsMd(agentsMd("r", "d", 105, "지금 이름"), p, T_WRITE), true);
+    assert.equal(await S.ownsAgentsMd("# 사람이 쓴 문서\n\n내용\n", p, T_WRITE), false);
+    assert.equal(await S.ownsAgentsMd(agentsMd("r", "d", 1050, "옛 이름"), p, T_WRITE), false, "번호 접미가 다른 머리(1050)는 105 가 아니다");
+    assert.equal(await S.ownsAgentsMd("", p, T_WRITE), false);
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      assert.equal(await S.ownsAgentsMd(agentsMd("r", "d", 105, "옛 이름"), p, bad), false, `쓰인 시각 ${bad} 로는 증명 못 한다`);
+    }
+    assert.deepEqual(nameCalls, [], "헛조회 — 답이 정해진 경우 DB 에 묻지 않는다");
+    //  CRLF 머리도 같은 판정
+    assert.equal(await S.ownsAgentsMd(agentsMd("r", "d", 105, "옛 이름").replace(/\n/g, "\r\n"), p, T_WRITE), true);
+    assert.equal(await S.ownsAgentsMd(agentsMd("r", "d", 105, "옛 이름"), { id: 105, name: null }, T_WRITE), true,
+      "지금 이름을 몰라도 그 시각의 이름이면 증명된다");
+    assert.equal(await S.ownsAgentsMd(agentsMd("r", "d", 105, "옛 이름   (사본"), p, T_WRITE), false,
+      "머리의 이름이 그 시각 이름으로 **시작**만 해서는 안 된다 — 이름 전체가 같아야 한다");
+  } finally { TIMELINE.delete(105); }
+});
+
+test("S3 M26 시계 어긋남 경계 — 파일 시각 ±허용치 안에서 붙인 이름은 받고, 밖이면 안 받는다", async () => {
+  const p = { id: 107, name: "지금 이름" };
+  const K = S.NAME_CLOCK_SKEW_MS;
+  const md = agentsMd("r", "d", 107, "바꾼 이름");
+  const cases: Array<[string, number, boolean]> = [
+    ["DB 시각이 파일보다 조금 늦게 찍힘(허용치 안)", T_WRITE + K - 1, true],
+    ["정확히 +허용치", T_WRITE + K, true],
+    ["+허용치 넘음", T_WRITE + K + 1, false],
+    ["정확히 −허용치(그 시각에 유효)", T_WRITE - K, true],
+    ["훨씬 전에 붙여 쓰일 때까지 유효", T_WRITE - 5 * DAY, true],
+    //  허용치의 크기 — 상대값만 재면 0 이나 하루로 바꿔도 초록이다
+    ["DB 시계가 30초 앞섬(이름 바꾸기 직후 재생성이 파일을 씀)", T_WRITE + 30_000, true],
+    ["10분 뒤에 붙인 이름은 그 파일의 이름이 아니다", T_WRITE + 10 * 60_000, false],
+  ];
+  try {
+    for (const [label, at, want] of cases) {
+      TIMELINE.set(107, [{ at: T_WRITE - 10 * DAY, name: "처음 이름" }, { at, name: "바꾼 이름" }]);
+      assert.equal(await S.ownsAgentsMd(md, p, T_WRITE), want, label);
+    }
+  } finally { TIMELINE.delete(107); }
 });
 
 // ═══ S7 배선 ═══════════════════════════════════════════════════════════════════
@@ -656,9 +729,11 @@ test("W10·W11 첫 지시 첨부도 프로젝트 이름을 넘긴다 · 기본 �
   assert.match(src("../terminal/routes.ts"), /relocateAttachmentsToProject\(\{[^}]*projectName: made\.name,/, "첫 지시 첨부가 이름 없이 저장소를 연다");
   assert.match(src("./first-prompt-project.ts"), /return \{ id: project\.id, folder, name: row\?\.name \?\? null \};/);
   const store = src("./project-storage.ts");
-  assert.match(store, /SELECT before->>'name' AS n FROM org_content_audit WHERE entity='project' AND entity_key=\$1/);
-  assert.match(store, /SELECT after->>'name' AS n FROM org_content_audit WHERE entity='project' AND entity_key=\$1/);
-  assert.match(store, /\[String\(projectId\)\]\);/, "감사 행의 entity_key 는 문자열 id 다(auditProject(String(id), …))");
-  assert.match(store, /if \(t != null && \(await ownsAgentsMd\(t, project\)\)\) out\.add\(f\.rel\);/, "이관이 옛 이름 판정을 안 쓴다");
+  //  그 시각에 유효하던 이름(가장 늦은 행 하나) + 창 안에서 붙인 이름(상한) — 이력 전체를 받으면 사전 대조 길이 열린다
+  assert.match(store, /WHERE entity='project' AND entity_key=\$1 AND at <= \$2 AND after->>'name' IS NOT NULL\s+ORDER BY at DESC, id DESC LIMIT 1\)/);
+  assert.match(store, /WHERE entity='project' AND entity_key=\$1 AND at > \$2 AND at <= \$3 AND after->>'name' IS NOT NULL\s+ORDER BY at ASC, id ASC LIMIT \$\{NAMES_IN_WINDOW_MAX\}\)/);
+  assert.doesNotMatch(store, /before->>'name'/, "버린 이름(before)까지 받으면 그 시각의 이름이 아니다");
+  assert.match(store, /\[String\(projectId\), from, to\]\);/, "감사 행의 entity_key 는 문자열 id 다(auditProject(String(id), …))");
+  assert.match(store, /if \(t != null && \(await ownsAgentsMd\(t, project, f\.mtime\)\)\) out\.add\(f\.rel\);/, "이관이 그 파일의 시각으로 묻지 않는다");
   assert.match(src("../v6/project-store.ts"), /auditOrgContent\("project", entityKey, op, before, after, ctx\)/, "감사 기록의 entity 이름이 바뀌면 이력 조회가 빈손이 된다");
 });
