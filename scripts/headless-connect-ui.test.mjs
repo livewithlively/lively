@@ -35,6 +35,24 @@ test("★ [내 AI 계정] — 상태를 서버 한 곳에서 읽고, [연결]은
   assert.match(c, /text: '멈춤'/, "실패는 행의 상태로 말한다");
 });
 
+test("★ M11 실행 멤버 줄 — 연결됐는데 비어 있으면 그 자리에서 정한다(관리 화면으로 보내지 않는다)", () => {
+  //  실측(2026-09-17): 데스크톱에서 연결한 관리자의 실행 멤버가 비었다. 관리 화면을 찾아가라고 하면 첫 사용자는 멈춘다.
+  const c = code(MEAI);
+  const i = c.indexOf("function runnerLine(st: any, reload: () => void)");
+  assert.ok(i > 0, "실행 멤버 줄이 다시 그리기를 받는다");
+  const body = c.slice(i, c.indexOf("function headlessSection", i));
+  const cleared = body.indexOf("st.can_set_runner && r.source === 'db'");
+  const claim = body.indexOf("st.can_set_runner && connected");
+  assert.ok(cleared > 0 && claim > cleared, "관리자가 비운 자리 판정이 먼저다 — 버튼으로 그 결정을 뒤집지 않는다");
+  assert.match(body.slice(claim), /api\('\/api\/ui\/me\/headless\/runner', \{ method: 'POST'/, "버튼은 정하기 경로를 부른다");
+  assert.match(body.slice(claim), /reload\(\);/, "정한 뒤 다시 그린다");
+  assert.match(body, /\.some\(\(h\) => h && h\.connected\)/, "연결 여부는 행에서 읽는다(연결 전엔 버튼 없이 종전 안내)");
+  assert.match(body.slice(claim), /api\('\/api\/ui\/me\/headless\/runner', \{ method: 'POST', body: JSON\.stringify\(\{\}\) \}\)/,
+    "몸통은 빈 객체 — 대상은 서버가 인증된 본인으로 정한다");
+  assert.match(body.slice(claim), /runner === 'cleared'/, "비워 두기로 정해진 자리는 «이미 정해져 있다» 와 다르게 말한다");
+  assert.match(c, /const line = runnerLine\(st, reload\);/, "칸이 다시 그리기를 넘긴다");
+});
+
 test("★ 처음 설정 — 로그인이 확인된 갈래에서만 묻고, 헤드리스 용도로 새로 띄운다", () => {
   const i = ONB.indexOf("if (aiOn(c.harness)) {");
   const j = ONB.indexOf("// ── CLI 가 이 자리에 없다", i);
