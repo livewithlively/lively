@@ -81,9 +81,18 @@ test('고르기 칸 — 값이 바뀔 때만 change 를 올리고, 검색어는 
   assert.match(PSEL, /input\.addEventListener\('input', \(e\) => \{\s*e\.stopPropagation\(\);/, '검색어 타이핑은 새지 않는다');
   assert.match(PSEL, /if \(e\.isComposing\) return;/, '한글 조합 중 Enter 는 고르기가 아니다');
   assert.match(PSEL, /document\.body\.append\(menu\)/, '목록은 body 에 붙는다(overflow 에 안 잘린다)');
-  const m = /\.psel-menu\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*(\d+)/.exec(CSS);
-  assert.ok(m, '.psel-menu 는 fixed');
+  //  ★ 특이도(프리뷰 실측) — 03-components 는 13-projects 보다 먼저 로드된다. 한 클래스짜리 .psel-menu 는 뒤의
+  //   .proj-mp-menu(absolute · z 6)에 져서 목록이 문서 좌표(화면 위 -1482px)에 그려졌다. 두 클래스여야 이긴다.
+  const m = /\.proj-mp-menu\.psel-menu\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*(\d+)/.exec(CSS);
+  assert.ok(m, '목록 규칙은 .proj-mp-menu.psel-menu(두 클래스) — fixed');
   assert.ok(Number(m[1]) > 1450, '모달(.ov-back 1450) 위에 뜬다');
+  assert.ok(!/^\.psel-menu\s*\{/m.test(CSS), '한 클래스짜리 규칙이 남지 않는다(뒤 파일에 진다)');
+  assert.match(CSS, /^\.psel \.psel-in \{/m, '입력은 전역 input[type="text"](0,1,1)보다 높은 특이도');
+  //  목록 안 줄 맞춤은 목록만 굴린다 — scrollIntoView 는 페이지를 굴려 칸이 밀리면 목록이 닫혔다.
+  assert.ok(!/scrollIntoView/.test(PSEL), 'scrollIntoView 를 쓰지 않는다');
+  assert.match(PSEL, /menu\.scrollTop = row\.offsetTop/, '목록 컨테이너만 굴린다');
+  //  Esc — 목록이 닫혀 있어도 찾던 글이 남았으면 고른 이름으로 되돌린다(포커스 중 강제).
+  assert.match(PSEL, /if \(open \|\| dirty\) \{[^}]*paintValue\(true\)/, 'Esc 는 찾던 글을 되돌린다');
 });
 
 test('★ B1 증류 — 증류기(레인) 계정이 잡 계정보다 앞선다', () => {

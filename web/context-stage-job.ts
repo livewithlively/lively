@@ -273,19 +273,24 @@ async function runnerNote(stage: string, job: any, rerender: () => void): Promis
   const fallback = effectiveRunner({ workspace: wsId, creator })?.id ?? '';
   const effective = effectiveRunner({ explicit, workspace: wsId, creator })?.id ?? '';
 
+  //  빈 칸의 글 — 비웠을 때 **실제로** 누구로 도는지. 그 계정이 명부에 없으면(매니지드 운영 계정 admin 등) 이름 대신
+  //   «돌 계정이 없다» 고 말한다 — «비워 두면 … admin» 은 그 계정으로 멀쩡히 돈다고 읽힌다(프리뷰 실측).
+  const emptyText = !fallback ? '누구의 계정으로 돌릴지 고르세요'
+    : !known(fallback) ? '비워 두면 돌릴 사람 계정이 없습니다 — 고르세요'
+    : wsId ? `비워 두면 워크스페이스 기본 — ${nameOf(wsId)}`
+    : `비워 두면 자동 실행을 켠 사람 — ${nameOf(creator)}`;
   const pick = personSelect({
     value: explicit,
     label: `${stage} 실행 계정`,
-    emptyText: !fallback ? '누구의 계정으로 돌릴지 고르세요'
-      : wsId ? `비워 두면 워크스페이스 기본 — ${nameOf(wsId)}`
-      : `비워 두면 자동 실행을 켠 사람 — ${nameOf(creator)}`,
+    emptyText,
     onChange: async (id) => {
       const params: Record<string, unknown> = { ...(job.params || {}) };
       if (id) params.requester = id; else delete params.requester;
       try {
         await patch(job.id, { params });
         toast(id ? `실행 계정을 ${nameOf(id)} 님으로 정했습니다`
-          : fallback ? `이 자동 실행의 실행 계정을 비웠습니다 — ${nameOf(fallback)} 님의 계정으로 돕니다` : '실행 계정을 비웠습니다');
+          : fallback && known(fallback) ? `이 자동 실행의 실행 계정을 비웠습니다 — ${nameOf(fallback)} 님의 계정으로 돕니다`
+          : '실행 계정을 비웠습니다');
         rerender();
       } catch (e) { toast((e as Error).message, true); pick.set(explicit); }
     },

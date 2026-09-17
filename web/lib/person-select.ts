@@ -101,12 +101,13 @@ export function personSelect(o: PersonSelectOpts = {}): PersonSelect {
   const menu = el('div', { class: 'proj-mp-menu psel-menu', role: 'listbox', id: listId, hidden: true }) as HTMLElement;
 
   // ── 칸 ──────────────────────────────────────────────────────────────────
-  function paintValue(): void {
+  //  force — 포커스 중에도 칸 글을 고른 이름으로 되돌린다(Esc). 평소엔 찾는 중인 글을 덮지 않는다.
+  function paintValue(force = false): void {
     const lab = loaded === 'fail' ? null : pickLabel(people, cur);
     face.replaceChildren();
     if (lab) face.append(personFace(lab.id, 'proj-mp-ava proj-mp-ava-sm', lab.name));
     (face as HTMLElement).hidden = !lab;
-    if (!focused) input.value = loaded === 'fail' ? cur : (lab ? lab.name : '');
+    if (!focused || force) input.value = loaded === 'fail' ? cur : (lab ? lab.name : '');
     input.title = lab ? (lab.known ? `${lab.name} (${lab.id})` : lab.id) : '';
     input.placeholder = focused ? searchPh : (o.emptyText || searchPh);
     clear.hidden = !(clearable && cur && loaded !== 'fail');
@@ -191,7 +192,13 @@ export function personSelect(o: PersonSelectOpts = {}): PersonSelect {
     }));
     if (active >= 0) {
       input.setAttribute('aria-activedescendant', `${listId}-${active}`);
-      (menu.children[active] as HTMLElement | undefined)?.scrollIntoView?.({ block: 'nearest' });
+      //  고른 줄이 목록 안에서 보이게 — **목록만** 굴린다. scrollIntoView 는 조상(페이지)까지 굴려, 칸이 화면 밖으로
+      //   밀리면 목록이 스스로 닫혔다(프리뷰 실측: 한 글자 치자 폼 맨 위로 튀고 목록이 사라짐).
+      const row = menu.children[active] as HTMLElement | undefined;
+      if (row) {
+        if (row.offsetTop < menu.scrollTop) menu.scrollTop = row.offsetTop;
+        else if (row.offsetTop + row.offsetHeight > menu.scrollTop + menu.clientHeight) menu.scrollTop = row.offsetTop + row.offsetHeight - menu.clientHeight;
+      }
     } else input.removeAttribute('aria-activedescendant');
   }
 
@@ -234,7 +241,13 @@ export function personSelect(o: PersonSelectOpts = {}): PersonSelect {
     } else if (e.key === 'Enter') {
       if (open && active >= 0 && rows[active]) { e.preventDefault(); commit(rows[active].id); }
     } else if (e.key === 'Escape') {
-      if (open) { e.preventDefault(); e.stopPropagation(); closeMenu(); query = ''; paintValue(); input.select(); }
+      //  찾던 글이 남아 있으면(목록이 이미 닫혔어도) 고른 이름으로 되돌린다. 목록이 열려 있으면 그것만 닫고 멈춘다 —
+      //   바깥(모달)까지 Esc 가 번지면 칸 하나 닫으려다 창이 통째로 닫힌다.
+      const dirty = loaded !== 'fail' && input.value !== (pickLabel(people, cur)?.name ?? '');
+      if (open || dirty) {
+        e.preventDefault(); e.stopPropagation();
+        closeMenu(); query = ''; paintValue(true); input.select();
+      }
     } else if (e.key === 'Tab') {
       closeMenu();
     }
