@@ -27,7 +27,7 @@ import { finishUpload, type UploadCoord } from "../ingest/upload-finish.js";   /
 import { projectOffsetOfSessionDir, projectRelForUpload } from "./node-upload-coord.js";   // #3787 — 노드 세션 업로드의 게이트웨이 좌표
 import { executionSessionProject } from "../v6/execution-session-store.js";
 import { getProjectRow } from "../v6/project-store.js";
-import { projectAbsPath } from "../project/project-fs.js";
+import { projectStorage, type ProjectStorage } from "../project/project-storage.js";   // #4064 — 노드 업로드 정본의 자리
 import { getSource } from "../v6/source-store.js";   // #1631 — 자료 원본 창구의 공개범위(자료 상세와 같은 판정)
 import { nodeCanAttach, nodeRpc, isSelfNode, isSessionHostNode } from "../node/registry.js";
 import { relayNodeId, sameTmuxCoordinate, isBoxSessionRow } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #3745/#3870 — 박스 세션엔 세션 호스트 좌표도 같은 tmux 다
@@ -130,7 +130,7 @@ async function resolveInSession(req: express.Request, requireFile: boolean, cano
  *  ⚠ 세션 작업폴더는 **노드 로컬 경로**(윈도우면 `C:\…`)라 게이트웨이 fs 로 풀면 안 된다. 규약으로만 접는다.
  */
 async function gatewayUploadForNodeSession(sessionId: string, memberId: string, rel: string)
-  : Promise<{ base: string; rel: string; nodeAbs: string; coord: UploadCoord } | null> {
+  : Promise<{ store: ProjectStorage; base: string; rel: string; nodeAbs: string; coord: UploadCoord } | null> {
   try {
     if (!memberId) return null;
     const cur = await executionSessionProject(sessionId, memberId);
@@ -143,11 +143,14 @@ async function gatewayUploadForNodeSession(sessionId: string, memberId: string, 
     if (!projRel) return null;
     const row = await getProjectRow(pid);
     if (!row?.folder) return null;
-    const base = projectAbsPath(row.folder);
+    //  정본의 자리는 프로젝트 저장소가 정한다(#4064) — 매니지드면 멤버 저장소(동기화 매니페스트가 읽는 바로 그 자리).
+    //  게이트웨이 로컬에 쓰면 매니페스트가 못 봐서 노드로 영영 안 내려간다.
+    const store = await projectStorage(row.folder, { memberId });
+    const base = store.base;
     //  노드에서의 절대경로 — 드롭 UI 가 입력창에 꽂을 값. 세션 cwd + 드롭 rel 을 **그 노드의 구분자로** 잇는다.
     const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
     const nodeAbs = dir.replace(/[\\/]+$/, "") + sep + String(rel).replace(/^[\\/]+/, "").split(/[\\/]/).join(sep);
-    return { base, rel: projRel, nodeAbs, coord: { root: { kind: "project", id: pid }, base, folder: row.folder, channelFallback: row.name } };
+    return { store, base, rel: projRel, nodeAbs, coord: { root: { kind: "project", id: pid }, base, folder: row.folder, channelFallback: row.name } };
   } catch { return null; }
 }
 
@@ -475,9 +478,9 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
       if (gw) {
         const absGw = path.resolve(gw.base, gw.rel);
         if (absGw === gw.base || !absGw.startsWith(gw.base + path.sep)) throw new HttpError(400, "허용 경로를 벗어났습니다");
-        await fsp.mkdir(path.dirname(absGw), { recursive: true });
-        await fsp.writeFile(absGw, bodyBuf);
-        const fin = await finishUpload({ coord: gw.coord, abs: absGw, osUser: null, uploader: { id: viewerFor(req), name: userOf(req)?.email ?? null } });
+        if (!(await gw.store.confined(absGw))) throw new HttpError(400, "허용 경로를 벗어났습니다");   // 링크 해소 뒤 재판정(#3668 T1)
+        await gw.store.writeBuffer(absGw, bodyBuf);
+        const fin = await finishUpload({ coord: gw.coord, abs: absGw, osUser: gw.store.osUser, uploader: { id: viewerFor(req), name: userOf(req)?.email ?? null } });
         // path 는 **노드에서의 절대경로**로 답한다 — 드롭 UI 가 이 값을 입력창에 꽂고, 그 안의 에이전트는 노드에 산다.
         //  (아직 안 내려왔을 수 있지만 그게 맞는 경로다. 없으면 주입 훅이 «이 컴퓨터에 없습니다» 로 크게 말한다.)
         res.json({ ...fin, path: gw.nodeAbs, delivery: "pull" }); return;

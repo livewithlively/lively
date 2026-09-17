@@ -16,7 +16,7 @@ import type { LivelyUser } from "../context.js";
 import { mirrorSourceV6 } from "../v6/mirror/mirror-source.js";
 import { normalizeExternalInstance } from "../org/ingest/external-identity.js";
 import { getProjectRow } from "../v6/project-store.js";
-import { projectAbsPath } from "../project/project-fs.js";
+import { projectStorage } from "../project/project-storage.js";   // #4064 — 프로젝트 파일의 자리·실행 주체
 import { isGitRepoRoot } from "../project/project-manifest.js";
 import { extractOoxml, ooxmlKindFromName, printableRatio } from "../connectors/ooxml.js";
 import { extractHwp } from "../connectors/hwp.js";   // #3778 — 한글 .hwp 본문(OLE2 + BodyText 레코드)
@@ -239,10 +239,16 @@ export async function resolveLocalFile(p: { root: LocalRoot; rel: string }, uplo
   if (p.root.kind === "project") {
     const row = await getProjectRow(p.root.id);
     if (!row?.folder) return null;
-    const base = projectAbsPath(row.folder);
-    const abs = path.resolve(base, rel);
-    if (abs !== base && !abs.startsWith(base + path.sep)) return null;
-    return { abs, osUser: null };   // 프로젝트 공유폴더는 그룹 rw — 게이트웨이가 직접 읽는다
+    //  자리는 프로젝트 저장소가 정한다(#4064) — 저장소가 붙은 배포면 종전처럼 게이트웨이 로컬(그룹 rw 라 직접 읽는다),
+    //  분리된 배포면 멤버 저장소를 올린 사람(없으면 만든 사람) 권한으로 읽는다.
+    const who = uploaderHint || row.created_by || null;
+    const store = await projectStorage(row.folder, who ? { memberId: who } : null).catch(() => null);
+    if (!store) return null;
+    const abs = path.resolve(store.base, rel);
+    if (abs !== store.base && !abs.startsWith(store.base + path.sep)) return null;
+    //  멤버 저장소는 세션이 마음대로 쓰는 자리다 — 링크를 해소한 뒤에도 그 안인지 본다(브라우즈 라우트와 같은 관문).
+    if (store.osUser && !(await store.confined(abs).catch(() => false))) return null;
+    return { abs, osUser: store.osUser };
   }
   const member = p.root.kind === "personal" ? p.root.member : (uploaderHint ?? null);
   const user = userFor(member ?? "user");
@@ -257,8 +263,8 @@ export async function openLocalArtifact(externalId: string)
   const p = parseLocalExternalId(externalId);
   if (!p) return null;
   let hint: string | null = null;
-  if (p.root.kind === "shared") {
-    // shared 루트는 격리 여부에 따라 베이스가 갈린다 — 올린 사람으로 판정한다(자료 fields 에 남겨 둔 값).
+  if (p.root.kind === "shared" || p.root.kind === "project") {
+    // shared·project 루트는 격리 여부에 따라 베이스가 갈린다 — 올린 사람으로 판정한다(자료 fields 에 남겨 둔 값).
     const r = await itemsPool.query(
       `SELECT fields->>'author_external_id' AS m FROM source WHERE external_system=$1 AND external_instance=$2 AND external_id=$3 LIMIT 1`,
       [LOCAL_SYSTEM, normalizeExternalInstance(LOCAL_INSTANCE), externalId]);

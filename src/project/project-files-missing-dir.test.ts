@@ -34,9 +34,14 @@ eq(missingDirResponse(base, path.resolve(base, "../1937")), null, "A7 경계: �
 
 // ── 배선 — 라우트가 이 판정을 실제로 쓰는가 ──
 const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)).replace(/dist$/, "src"), "..", "..", "src", "project", "project-routes.ts"), "utf8");
-assert.ok(/catch\s*{[\s\S]{0,900}?missingDirResponse\(base, abs\)/.test(src),
-  "readdir 실패 catch 가 missingDirResponse 를 거쳐야 한다 — 안 거치면 404 가 그대로 나간다");
+//  #4064 — 목록은 저장소(project-storage)가 읽고, 못 읽은 디렉터리는 null 로 돌려준다(멤버 경계 중계의 고장은
+//  던진다 — 그걸 빈 폴더로 덮으면 거짓말이다). 그래서 판정 자리는 catch 가 아니라 «목록 null» 갈래다.
+assert.ok(/const listed = await store\.list\(abs\);[\s\S]{0,300}?if \(!listed\) \{[\s\S]{0,900}?missingDirResponse\(base, abs\)/.test(src),
+  "못 읽은 디렉터리(list → null) 갈래가 missingDirResponse 를 거쳐야 한다 — 안 거치면 404 가 그대로 나간다");
 pass++; console.log("ok  B1 readdir 실패 경로가 판정을 거친다");
+assert.doesNotMatch(src, /catch\s*\{[\s\S]{0,300}?missingDirResponse\(base, abs\)/,
+  "중계 고장(throw)까지 빈 폴더로 덮는 catch 가 생겼다");
+pass++; console.log("ok  B3 목록을 못 읽은 것과 중계가 고장 난 것을 구별한다");
 assert.ok(/missingDirResponse\(base, abs\);[\s\S]{0,200}?throw new HttpError\(404/.test(src),
   "판정이 null 이면 404 를 던져야 한다(하위 경로를 조용히 빈 목록으로 덮지 않는다)");
 pass++; console.log("ok  B2 판정이 null 이면 404 를 유지한다");

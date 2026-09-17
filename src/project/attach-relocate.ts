@@ -23,8 +23,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { localExternalId, parseLocalExternalId } from "../ingest/local-file-core.js";
 import { resolveLocalFile, ingestLocalUpload, supersedeLocalPath } from "../ingest/local-file.js";
-import { projectAbsPath, grantSharedGroupWrite } from "./project-fs.js";
-import { memberReadTo, memberRm } from "../terminal/terminal-member-fs.js";   // 격리 멤버(#524) 개인 폴더는 그 uid 로만 읽힌다
+import { projectStorage, type ProjectStorage } from "./project-storage.js";   // #4064 — 옮겨 갈 자리·실행 주체
+import { memberReadTo, memberRm, memberMv } from "../terminal/terminal-member-fs.js";   // 격리 멤버(#524) 개인 폴더는 그 uid 로만 읽힌다
 import { logger } from "../log.js";
 
 /** 지시문에 박힌 좌표 표기 — 컴포저 tail() 이 `- <이름>  [lively:<ref>]` 로 적는다. */
@@ -52,13 +52,13 @@ export function rewriteRefs(prompt: string, moved: Map<string, string>): string 
 }
 
 /** 폴더 안에서 비어 있는 이름 — 겹치면 `이름-2.확장자`, `이름-3.확장자`… (컴포저 attachName 과 같은 규칙). */
-async function freeName(base: string, name: string): Promise<string> {
+async function freeName(store: ProjectStorage, name: string): Promise<string> {
   const dot = name.lastIndexOf(".");
   const stem = dot > 0 ? name.slice(0, dot) : name;
   const ext = dot > 0 ? name.slice(dot) : "";
   for (let i = 1; i < 100; i++) {
     const cand = i === 1 ? name : `${stem}-${i}${ext}`;
-    try { await fsp.access(path.resolve(base, cand)); } catch { return cand; }
+    if (!(await store.stat(path.resolve(store.base, cand)))) return cand;
   }
   return `${stem}-${Date.now()}${ext}`;
 }
@@ -74,7 +74,15 @@ export async function relocateAttachmentsToProject(o: {
 }): Promise<RelocateResult> {
   const refs = refsInPrompt(o.prompt);
   if (!refs.length || !o.folder) return { prompt: o.prompt, moved: 0, failed: 0 };
-  const base = projectAbsPath(o.folder);
+  //  옮겨 갈 자리는 프로젝트 저장소가 정한다(#4064) — 매니지드면 세션이 일하는 멤버 저장소다. 게이트웨이 로컬로
+  //  옮기면 세션은 그 첨부를 못 읽는다(주입 훅이 «이 컴퓨터에 없습니다» 로 말하게 된다).
+  let store: ProjectStorage;
+  try { store = await projectStorage(o.folder, { memberId: o.memberId }); }
+  catch (e) {
+    logger.warn({ err: e, projectId: o.projectId }, "[attach-relocate] 프로젝트 저장소를 못 열었다 — 첨부는 종전 좌표로 둔다");
+    return { prompt: o.prompt, moved: 0, failed: 0 };
+  }
+  const base = store.base;
   const moved = new Map<string, string>();
   let failed = 0;
 
@@ -87,13 +95,19 @@ export async function relocateAttachmentsToProject(o: {
     try {
       const src = await resolveLocalFile(p);
       if (!src) { failed++; continue; }
-      await fsp.mkdir(base, { recursive: true });
+      await store.mkdirp(base);
       //  이름 충돌은 **비켜 간다** — 갓 만든 프로젝트 폴더엔 AGENTS.md 가 이미 있고, 같은 이름 첨부가 오면
       //  덮어쓰기는 그 프로젝트의 규칙 문서를 지우는 일이 된다. 사람이 올린 것을 잃지 않는 쪽으로 이름을 바꾼다.
-      const name = await freeName(base, path.basename(p.rel));
+      const name = await freeName(store, path.basename(p.rel));
       const dest = path.resolve(base, name);
       if (dest !== base && !dest.startsWith(base + path.sep)) { failed++; continue; }
-      if (src.osUser) {
+      if (store.osUser) {
+        // 멤버 저장소(#4064) — 옮기기 자체를 멤버 경계에서 한다. 개인 폴더와 프로젝트 폴더가 **같은 경계**
+        //  (같은 사람의 계정)일 때만 한 번의 mv 로 끝난다. 다른 경계면 옮기지 않는다(종전 좌표로 둔다).
+        //  mv 는 장치가 다르면 복사 뒤 원본을 지운다 — 원본 지우기가 실패하면 사본과 원본이 둘 다 남는다(잃지 않는다).
+        if (src.osUser !== store.osUser) { failed++; continue; }
+        await memberMv(store.osUser, src.abs, dest);
+      } else if (src.osUser) {
         // 격리 멤버(#524)의 개인 폴더는 700 이라 **게이트웨이가 직접 못 읽는다** — 그 uid 로 읽어 내보낸다.
         //  읽기가 끝난 뒤에만 원본을 지운다(옮기기지 복사가 아니다). 지우기 실패는 무시 — 사본은 이미 섰다.
         await new Promise<void>((resolve, reject) => {
@@ -109,13 +123,13 @@ export async function relocateAttachmentsToProject(o: {
         try { await fsp.rename(src.abs, dest); }
         catch { await fsp.copyFile(src.abs, dest); }
       }
-      await grantSharedGroupWrite(dest, base, "file").catch(() => { /* 그룹 권한 실패는 비치명 */ });
+      await store.grantGroup(dest, "file").catch(() => { /* 그룹 권한 실패는 비치명 */ });
       //  ⚠ 자료 등록은 **기다리지 않는다**. 이 함수는 세션 생성 POST 안에서 돌고, ingest 는 큰 PDF·OOXML 을
       //   본문 추출까지 하므로 초 단위로 늘어질 수 있다 — 그만큼 사람이 빈 화면을 본다. 세션이 그 파일을 읽는 데
       //   필요한 것은 **파일이 그 자리에 있는 것**뿐이고(위에서 끝났다), 자료함 표시는 한 박자 늦어도 된다.
       //   개인 좌표의 자료 행 내리기도 같이 뒤로 — 같은 파일이 두 자료로 남으면 자료함에 유령이 생긴다.
       void ingestLocalUpload({
-        root: { kind: "project", id: o.projectId }, folder: o.folder, base, abs: dest, osUser: null,
+        root: { kind: "project", id: o.projectId }, folder: o.folder, base, abs: dest, osUser: store.osUser,
         uploader: { id: o.memberId, name: null }, channelFallback: "uploads",
       })
         .then(() => supersedeLocalPath(p.root, p.rel))
