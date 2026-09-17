@@ -4,7 +4,7 @@
 //  이 순서가 뒤집히면 워크스페이스가 정한 자격이 안 먹거나(②가 ①을 이기면 레인별 지정이 죽고),
 //  설정이 있는데도 «마지막 저장자» 로 돌아간다(②를 건너뛰면 이 결정 자체가 무효다).
 import { strict as assert } from "node:assert";
-import { resolveJobRunner } from "./_headless.js";
+import { resolveJobRunner, explicitRunner } from "./_headless.js";
 
 const ws = (v: string | null) => async (): Promise<string | null> => v;
 const wsThrows = async (): Promise<string | null> => { throw new Error("DB 없음"); };
@@ -45,7 +45,31 @@ const run = async (): Promise<void> => {
   await resolveJobRunner(undefined, "maker", counting);
   assert.equal(called, 1, "명시가 없을 때만 조회한다(관측 장치가 살아 있다)");
 
-  console.log("✓ context-job-runner — 해소 사슬 (C1~C8 + 배선)");
+  // ── #4052 명시 계정 — 레인(증류기·분류기·관리기)이 잡보다 구체적이다(사양 표 A) ──
+  // ★ A1 둘 다 있으면 레인. 종전 증류는 잡이 이겨서 증류기의 «실행 계정» 칸이 안 들었다.
+  assert.equal(explicitRunner("lane-user", "job-user"), "lane-user", "A1 레인 우선");
+  // A2 레인이 없으면 잡
+  assert.equal(explicitRunner(undefined, "job-user"), "job-user", "A2 레인 없음");
+  assert.equal(explicitRunner(null, "job-user"), "job-user", "A2 레인 null");
+  // A3·A4 빈 문자열·공백은 «정하지 않음» — `||` 로 고르면 공백 한 칸이 신원 자리에 앉는다
+  assert.equal(explicitRunner("", "job-user"), "job-user", "A3 빈 레인");
+  assert.equal(explicitRunner("   ", "job-user"), "job-user", "A4 공백 레인");
+  // A5 문자열이 아닌 값(잡값)은 무시
+  for (const bad of [42, {}, true, [] as unknown] as unknown[]) {
+    assert.equal(explicitRunner(bad, "job-user"), "job-user", "A5 잡값 레인은 무시");
+  }
+  // A6·A8 둘 다 없으면 undefined — resolveJobRunner 가 워크스페이스 단계로 내려간다
+  assert.equal(explicitRunner(undefined, undefined), undefined, "A6 둘 다 없음");
+  assert.equal(explicitRunner(undefined, "   "), undefined, "A8 공백 잡");
+  assert.equal(explicitRunner(undefined), undefined, "A6 잡 인자 생략");
+  // A7 다듬는다
+  assert.equal(explicitRunner("  lane  ", "job-user"), "lane", "A7 다듬기");
+  // 사슬에 끼웠을 때 — 레인이 워크스페이스·만든 사람까지 모두 이긴다, 둘 다 없으면 워크스페이스로.
+  assert.equal(await resolveJobRunner(explicitRunner("lane-user", "job-user"), "maker", ws("ws-user")), "lane-user", "사슬 · 레인");
+  assert.equal(await resolveJobRunner(explicitRunner(null, "job-user"), "maker", ws("ws-user")), "job-user", "사슬 · 잡");
+  assert.equal(await resolveJobRunner(explicitRunner(" ", undefined), "maker", ws("ws-user")), "ws-user", "사슬 · 워크스페이스");
+
+  console.log("✓ context-job-runner — 해소 사슬 (C1~C8 + 배선) · 명시 계정 레인 우선 (A1~A8)");
 };
 
 await run();

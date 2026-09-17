@@ -30,6 +30,19 @@ export function headlessRequester(params: Record<string, unknown>, createdBy: st
 }
 
 /**
+ * 명시한 실행 계정 — **레인(증류기·분류기·관리기)이 잡보다 앞선다**(#4052). 둘 다 비었으면 undefined.
+ *
+ *  D1 ① 「레인·잡이 명시한 requester — 더 구체적이므로 이긴다」 에서 더 구체적인 쪽은 레인이다: 잡 하나가 레인 여럿을 돌린다.
+ *  분류·관리는 이미 레인 우선이었는데 **증류만 거꾸로**(잡 > 레인)였다 — 잡에 계정을 한 번 박으면 모든 증류기의
+ *  «실행 계정» 칸이 통째로 무시됐다(모델·추론강도가 #4008 에서 같은 이유로 먼저 뒤집혔다).
+ *  빈 문자열·공백·문자열이 아닌 값은 «정하지 않음» 이다(`||` 로 고르면 공백 한 칸이 신원 자리에 앉는다).
+ */
+export function explicitRunner(lane: unknown, job?: unknown): string | undefined {
+  for (const v of [lane, job]) if (typeof v === "string" && v.trim()) return v.trim();
+  return undefined;
+}
+
+/**
  * 맥락관리 잡(증류·분류·관리)을 **누구 자격으로 돌릴지** 정한다 (#4012 T1 · #3994 D1 확정).
  *
  * 우선순위:
