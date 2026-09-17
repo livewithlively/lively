@@ -1607,9 +1607,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     return f.find((k) => SEQ_ALL.indexOf(k) > at) || f[f.length - 1];
   }
   /** AI 두 장면(ai·claude)을 떠날 때. 합류자는 팀 수집을 **읽은 뒤에** 다음 칸을 정한다 — 안 읽고 정하면 켜진 팀 수집이 있어도 sources 를 건너뛴다. */
+  let leavingAi = false;   // #4051 — 떠나는 중(합류자는 최대 2.5초 기다린다)에는 헤드리스 칸이 장면을 다시 그리지 않는다
   async function leaveAi() {
-    if (isJoin() && collP) await Promise.race([collP, sleep(2500)]);
-    goNext('claude');
+    leavingAi = true;
+    try {
+      if (isJoin() && collP) await Promise.race([collP, sleep(2500)]);
+      goNext('claude');
+    } finally { leavingAi = false; }
   }
 
   const QPROG_ALL = ['stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];   // 막2 진행 눈금
@@ -3099,7 +3103,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    *  null = 아직 안 물어봤다 — 화면은 «확인 중» 으로 살고, 없는 답을 지어내지 않는다. */
   let AIC = null;
   /** #4051 — 고른 AI 의 «사람 없이 도는 작업» 자격(상태는 이 한 벌 — 장면의 제목·버튼과 칸이 같은 값을 본다). */
-  const HL = createHeadlessOffer({ rerender: () => renderScene('claude', false), toast });
+  //   다시 그리기는 아직 이 장면에 있을 때만이다 — 떠나는 중에 허용이 끝나도 장면이 되돌아가지 않는다(리뷰 #4051).
+  const HL = createHeadlessOffer({ rerender: () => { if (!leavingAi && S.scene === 'claude') renderScene('claude', false); }, toast });
   async function checkAi() {
     const h = aiHarness();
     //  #4051 — 헤드리스 자격도 **같이** 묻는다. 로그인이 확인된 장면이 제목(«한 번만 더 허용»)을 처음부터 맞게 그린다.

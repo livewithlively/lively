@@ -59,6 +59,13 @@ ok(ONB.length > 10000 && OFFER.length > 2000, "W0 [배선] 두 소스를 실제�
   ok(/HEADLESS_INLINE\[c\.harness\] \?/.test(branch) && (ONB.match(/id="hlBox"/g) || []).length === 1,
     "W7 O8 칸은 화면에서 받을 수 있는 하네스의 연결됨 갈래에만 있다(로그인 전 갈래에는 없다)");
 
+  //  떠나는 중에는 칸이 장면을 다시 그리지 않는다(합류자는 떠나기 전에 최대 2.5초 기다린다).
+  ok(/const HL = createHeadlessOffer\(\{ rerender: \(\) => \{ if \(!leavingAi && S\.scene === 'claude'\) renderScene\('claude', false\); \}, toast \}\);/.test(c),
+    "W16 칸의 다시 그리기는 아직 이 장면에 있고 떠나는 중이 아닐 때만");
+  const la = c.slice(c.indexOf("async function leaveAi()"), c.indexOf("const QPROG_ALL"));
+  ok(/leavingAi = true;\s*try \{[\s\S]*goNext\('claude'\);\s*\} finally \{ leavingAi = false; \}/.test(la),
+    "W17 떠나는 표시는 기다림 앞에서 켜지고, 무슨 일이 있어도 꺼진다");
+
   //  bind — 칸을 채운다(허용이 남았으면 칸이 스스로 시작한다).
   ok(/const hb = \$\('#hlBox', el\); if \(hb\) void HL\.paint\(hb, AIC\.harness,/.test(c), "W8 연결됨 장면은 칸을 그린다");
   ok(/toast\(HL\.pending\(key\) \? '로그인됐어요\. 한 번만 더 허용해 주세요\.' : '연결됐어요\.'\)/.test(c), "W9 O1 확인 알림도 남은 허용을 숨기지 않는다");
@@ -92,7 +99,7 @@ if (!chrome) {
 //   칸·공용 프로토콜·session-open 은 진짜다.
 const bundled = await build({
   stdin: {
-    contents: "import { createHeadlessOffer, headlessSeenOf, HEADLESS_FRESH_MS } from './onboarding-headless.ts'; window.__H = { createHeadlessOffer, headlessSeenOf, HEADLESS_FRESH_MS };",
+    contents: "import { createHeadlessOffer, headlessSeenOf, HEADLESS_FRESH_MS, HEADLESS_RETRY_GAP_MS } from './onboarding-headless.ts'; window.__H = { createHeadlessOffer, headlessSeenOf, HEADLESS_FRESH_MS, HEADLESS_RETRY_GAP_MS };",
     resolveDir: path.join(root, "web/v2"), loader: "ts",
   },
   bundle: true, format: "iife", write: false, logLevel: "silent",
@@ -214,8 +221,8 @@ var R = {};
   var b2 = mk({ wait: true }); await a.off.paint(b2, 'claude', 'Claude'); await sleep(30);
   var before = calls('/headless-login/start').map(function (c) { return c.body.restart; });
   q(b2, '#hlRetry').click();                 // 방금 시작했다(0초) — 흘린다
-  clock.t += 2499; q(b2, '#hlRetry').click(); // 경계 직전 — 흘린다
-  clock.t += 1; q(b2, '#hlRetry').click();    // 경계(2.5초) — 새로 띄운다
+  clock.t += __H.HEADLESS_RETRY_GAP_MS - 1; q(b2, '#hlRetry').click(); // 경계 직전 — 흘린다
+  clock.t += 1; q(b2, '#hlRetry').click();    // 경계 — 새로 띄운다
   q(b2, '#hlRetry').click();                  // 곧바로 한 번 더 — 흘린다
   await sleep(30);
   R.R5 = { before: before, after: calls('/headless-login/start').map(function (c) { return c.body.restart; }),
@@ -353,6 +360,31 @@ var R = {};
   R.R20 = { starts: calls('/headless-login/start').length, rerender: a.log.rerender, status: statusN(), pending: a.off.pending('claude') };
   bx2.remove();
 
+  // R21 O10 — 다른 하네스로 겹쳐 물었는데 옛 답(claude)이 늦게 왔다: 새 답(codex)을 덮지 않는다.
+  reset({ status: function () { return new Promise(function (r) { setTimeout(function () { r(ST(null, { connected: true, failure: null })()); }, 300); }); } });
+  a = offer();
+  var slow = a.off.load('claude');                          // 먼저 물었지만 늦게 온다(300ms)
+  ROUTES.status = ST(null, { connected: true, failure: null });
+  await a.off.load('codex');                                // 나중에 물었고 먼저 온다
+  var mid21 = (a.off.seen() || {}).harness;
+  await slow; await sleep(20);
+  R.R21 = { mid: mid21, seen: (a.off.seen() || {}).harness, codexPending: a.off.pending('codex'), status: statusN() };
+
+  // R22 O6·O10 — 묻는 중에 저장이 끝났다: 늦게 온 «아직» 답이 방금 저장한 사실을 덮지 않는다.
+  var n22 = 0;
+  reset({ status: ST(), start: function () { return { ok: true }; }, cancel: function () { return { ok: true }; },
+    state: function () { n22++; return n22 === 1 ? { step: 'waiting_code', url: 'https://claude.ai/oauth/authorize?r22=1', needsPaste: true } : { step: 'done', stored: true }; } });
+  a = offer(); await a.off.load('claude');
+  box = mk({ wait: true });
+  await a.off.paint(box, 'claude', 'Claude'); await sleep(50);
+  ROUTES.status = function () { return new Promise(function (r) { setTimeout(function () { r(ST()()); }, 3000); }); };
+  var stale = a.off.load('claude');                        // 되묻는 중(3초) — 답은 «아직»
+  await sleep(2300);                                       // 그 사이(2초 폴링) «저장됨» 을 받는다
+  var mid22 = { connected: (a.off.seen() || {}).connected, rerender: a.log.rerender };
+  await stale; await sleep(20);                            // 옛 답(«아직»)이 저장 **뒤에** 도착한다
+  R.R22 = { mid: mid22, pending: a.off.pending('claude'), connected: (a.off.seen() || {}).connected, rerender: a.log.rerender, status: statusN() };
+  box.remove();
+
   // R18 — 이름은 그대로 글자로 들어간다(칸은 innerHTML 로 그린다).
   reset({ status: ST({ connected: true, failure: null }) });
   a = offer(); await a.off.load('claude');
@@ -438,6 +470,11 @@ ok(R.R16.row === true && show(R.R16.paste) === show([{ harness: "claude", code: 
 ok(R.R17.chip === true && R.R17.code === "ABCD-EFGH" && R.R17.paste === false && show(R.R17.starts) === show([{ harness: "codex", restart: false }]),
   "R17 codex — 코드 칩이 보이고 붙여넣기 칸은 없다", show(R.R17));
 ok(R.R18.imgs === 0 && R.R18.xss === false, "R18 이름은 글자로 들어간다(마크업이 되지 않는다)", show(R.R18));
+ok(R.R21.status === 2 && R.R21.mid === "codex" && R.R21.seen === "codex" && R.R21.codexPending === false,
+  "R21 O10 다른 하네스로 겹쳐 물으면 늦게 온 옛 답이 새 답을 덮지 않는다", show(R.R21));
+ok(R.R22.mid.connected === true && R.R22.mid.rerender === 1, "R22′ [배선] 옛 답이 오기 전에 저장이 먼저 끝났다(순서가 시나리오대로다)", show(R.R22));
+ok(R.R22.status === 2 && R.R22.rerender === 1 && R.R22.connected === true && R.R22.pending === false,
+  "R22 O6 묻는 중에 저장이 끝나면, 늦게 온 «아직» 답이 저장 사실을 덮지 않는다", show(R.R22));
 ok(R.R19.starts === 0 && R.R19.rerender === 0 && R.R19.status === 1, "R19 O14 묻는 사이에 칸이 사라지면 아무것도 띄우지 않는다", show(R.R19));
 ok(R.R20.status === 2 && R.R20.starts === 0 && R.R20.rerender === 1 && R.R20.pending === false,
   "R20 O12 묻는 중에 다시 그린 칸은 오는 답(연결됨)을 기다린다 — 낡은 «남음» 으로 발급을 띄우지 않는다", show(R.R20));

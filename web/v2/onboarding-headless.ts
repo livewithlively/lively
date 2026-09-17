@@ -29,7 +29,7 @@ export interface HeadlessSeen {
 /** 이만큼 안에 잰 값은 다시 묻지 않는다 — checkAi 가 방금 잰 값으로 칸을 그린다(요청 한 번). */
 export const HEADLESS_FRESH_MS = 5_000;
 /** [새 주소 받기] 연타 간격 — 짧은 간격의 두 시작은 서버에서 러너 둘이 잠깐 같은 파일을 두고 겨룬다(리뷰 #4051). */
-const RETRY_GAP_MS = 2_500;
+export const HEADLESS_RETRY_GAP_MS = 2_500;
 
 const esc = (s: unknown): string => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -67,6 +67,8 @@ export function createHeadlessOffer(o: { rerender: () => void; toast: (m: string
   //  마지막으로 물은 때 — 답이 «모름»(null)이어도 센다. 안 세면 «남음 → 모름 → 남음» 으로 장면이 오락가락할 때마다 되묻는다.
   let asked: { harness: string; at: number } | null = null;
   let inflight: Promise<void> | null = null;
+  //  물은 차례 — 다른 하네스로 겹쳐 물었을 때 **늦게 도착한 옛 답**이 새 답을 덮지 않게(리뷰 #4051).
+  let gen = 0;
   let handle: InlineLoginHandle | null = null;
 
   async function load(h: string, maxAgeMs = 0): Promise<void> {
@@ -77,9 +79,11 @@ export function createHeadlessOffer(o: { rerender: () => void; toast: (m: string
       return;
     }
     asked = { harness: h, at: now() };
+    const my = ++gen;
     const p = (async () => {
-      try { seen = headlessSeenOf(await api('/api/ui/me/headless'), h); }
-      catch (_) { seen = null; }
+      let v: HeadlessSeen | null = null;
+      try { v = headlessSeenOf(await api('/api/ui/me/headless'), h); } catch (_) { v = null; }
+      if (my === gen) seen = v;
     })();
     inflight = p;
     try { await p; } finally { if (inflight === p) inflight = null; }
@@ -157,6 +161,7 @@ export function createHeadlessOffer(o: { rerender: () => void; toast: (m: string
         needsPaste: () => { if (pasteRow) pasteRow.hidden = false; if (inp) setTimeout(() => inp.focus(), 100); },
         //  끝났다 — 서버가 저장했다. 장면을 «연결됐어요» 로 다시 그린다(제목·주 버튼·다른 AI 카드가 돌아온다).
         done: () => {
+          gen++;   // 저장이 가장 새 사실이다 — 묻는 중이던 답이 이를 덮지 않게
           seen = { harness: h, connected: true, failed: false };
           asked = { harness: h, at: now() };
           o.toast(`연결했어요. 자리를 비우신 동안에도 ${label} 계정으로 정리합니다.`);
@@ -172,7 +177,7 @@ export function createHeadlessOffer(o: { rerender: () => void; toast: (m: string
       });
     };
     if (retry) retry.onclick = () => {
-      if (now() - startedAt < RETRY_GAP_MS) return;
+      if (now() - startedAt < HEADLESS_RETRY_GAP_MS) return;
       start(true);
     };
     start(false);   // ★ 누르지 않아도 시작한다 — 이것이 «곁다리» 였던 종전 칸과의 차이다
