@@ -27,6 +27,9 @@ export interface NotionRunStats {
   /** 가속 full 에서 원장 일치로 스킵(미방출)했지만 관측한 항목 — run-sync 가 last_synced_at 을 일괄 갱신(스윕 오탐 방지). */
   observedIds: string[];
   assets: number; assetFailures: number; requests: number;
+  /** 받은 첨부 바이트(이 run 누적) — 진행 신호다(progressTick). run 마다 새로 0 에서 센다 — 모듈 전역에 두면 게이트웨이 안에서 도는
+   *  수집기 미리보기(org_collector_preview)끼리 섞인다(#4031 계열). */
+  assetBytes: number;
 }
 
 // ── 트래버설 노드 ─────────────────────────────────────────────────────────────
@@ -101,6 +104,24 @@ export function dbNode(t: Traversal, id: string): DbNode {
     t.dbs.set(id, n);
   }
   return n;
+}
+
+// ── 진행 티커 판정 — 백필이 2분마다 부른다 ───────────────────────────────────────
+export interface ProgressSnapshot {
+  requests: number; pages: number; dbs: number;
+  assets: number; assetJobs: number; assetFailures: number; bytes: number;
+}
+/**
+ * 무엇이든 움직였으면 로그 한 줄, 아무것도 안 움직였으면 침묵(line=null).
+ *  침묵은 일부러다 — 추적기가 «15분 무출력 = 행 걸림» 으로 멈춘 run 을 끊는다(run-tracker STALL_MS).
+ *  그래서 움직임에 요청 수만 넣으면 안 된다: 서명 URL 이 살아 있어 요청 없이 첨부만 받는 구간이 15분을 넘으면
+ *  멀쩡히 받는 run 이 끊긴다(#4059 — 1GB 넘는 영상). 받은 바이트·끝난/실패한 첨부 수도 움직임이다.
+ */
+export function progressTick(prevSig: string | null, s: ProgressSnapshot): { sig: string; line: string | null } {
+  const sig = `${s.requests}|${s.assets}|${s.assetFailures}|${s.bytes}`;
+  if (sig === prevSig) return { sig, line: null };
+  const mb = (s.bytes / 1048576).toFixed(1);
+  return { sig, line: `[notion] 진행중 — 요청 ${s.requests} · 페이지 ${s.pages} · DB ${s.dbs} · 첨부 ${s.assets}/${s.assetJobs} · 받음 ${mb}MB` };
 }
 
 export function isChanged(t: Traversal, lastEdited: string | undefined): boolean {
