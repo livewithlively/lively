@@ -343,6 +343,11 @@ export interface CollectorBinding {
   outputMode?: import("../org/ingest/ingest-classify.js").CollectorOutputMode;
   /** 지식 직행 시 적용할 규칙(대상 분류·기본 유형·이름 접두어). output_config 원문. */
   outputConfig?: Record<string, unknown>;
+  /**
+   * 바인딩할 때 읽은 설정 판(org_collector.version, #4059). 설정이 바뀔 때마다 올라간다.
+   *  노션 전체 점검 스윕이 «이 run 이 본 범위가 지금 설정의 범위인가» 를 이 값으로 가른다.
+   */
+  version?: number;
 }
 
 // ── 해소 캐시 ──
@@ -390,6 +395,19 @@ export function boundCollector(): CollectorBinding | null {
  */
 export function collectorInstanceKey(): string {
   return activeBinding()?.instanceKey ?? "_";
+}
+
+/**
+ * 미러 행에 남기는 **수집기 표식**(#4059) — `<프리셋>:<커서 네임스페이스>`.
+ *  한 외부 워크스페이스를 수집기 여럿이 나눠 맡으면 미러 행(external_instance 축)을 함께 쓴다. 그때 «이번 run 이
+ *  못 본 것 = 사라진 것» 이라는 스윕 추론은 **그 수집기가 맡은 행에서만** 참이라, 누가 어느 행을 봤는지를 행에 남긴다.
+ *  커서 네임스페이스와 같은 축이라 같은 instance_key 로 다시 만든 수집기는 커서와 함께 표식도 이어받는다.
+ *  프리셋이 키에 들어가는 이유: instance_key 는 프리셋 안에서만 유일하다(org_collector_instance_uq).
+ *  바인딩이 없으면(레거시 단일 인스턴스) `<system>:_` — 마이그레이션된 기본 수집기(instance_key='_')와 같은 값이다.
+ */
+export function collectorClaimKey(system: string): string {
+  const b = activeBinding();
+  return `${b?.presetKey ?? system}:${b?.instanceKey ?? "_"}`;
 }
 
 /**
