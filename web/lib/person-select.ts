@@ -133,6 +133,8 @@ export function personSelect(o: PersonSelectOpts = {}): PersonSelect {
     //  force — 고르는 순간 칸은 포커스를 쥐고 있다(줄·× 는 mousedown 에서 preventDefault, Enter 는 keydown).
     //   강제하지 않으면 칸에 **치던 검색어가 남고** 이름은 blur 뒤에야 보인다(격리 리뷰 #4052).
     paintValue(true);
+    //  포커스가 남아 있으면 이름을 통째로 선택해 둔다 — 이어서 치면 새 검색이 된다(안 하면 «은서윤상» 처럼 이름 뒤에 붙는다 — 프리뷰 실측).
+    if (focused) input.select();
     if (!changed) return;
     try { o.onChange?.(cur); } catch { /* 호출부 오류가 칸을 망가뜨리지 않게 */ }
     root.dispatchEvent(new Event('change', { bubbles: true }));

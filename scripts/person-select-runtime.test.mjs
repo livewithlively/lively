@@ -111,7 +111,8 @@ const MK = ['PSEL' + 'RESULT:', ':PSEL' + 'END'];
   const md = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
   row.dispatchEvent(md);
   await wait(10);
-  R.r3 = { text: input.value, value: ps.value(), menuOpen: !!menu(), prevented: md.defaultPrevented, focusKept: document.activeElement === input };
+  R.r3 = { text: input.value, value: ps.value(), menuOpen: !!menu(), prevented: md.defaultPrevented, focusKept: document.activeElement === input,
+    sel: [input.selectionStart, input.selectionEnd] };
 
   type(input, 'ali');
   await wait(10);
@@ -200,7 +201,12 @@ assert.equal(R.r3.value, "carol", "R3 누르면 값이 바뀐다");
 assert.equal(R.r3.text, "Carol Park", "★ R3 칸에는 고른 이름 — 치던 검색어(car)가 남지 않는다");
 assert.equal(R.r3.menuOpen, false, "R3 목록이 닫힌다");
 assert.equal(R.r3.prevented, true, "R3 mousedown 기본 동작을 막는다(칸이 blur 로 목록을 먼저 닫지 않게)");
-if (R.realFocus) assert.equal(R.r3.focusKept, true, "R3 고른 뒤에도 칸에 포커스가 남는다");
+//  이 판(헤드리스 --dump-dom)에서 실제 포커스가 서는지 먼저 본다 — 안 서면 아래 두 단언은 잴 수 없다(대신 합성 focus 로 돈다).
+console.log(`note  실제 포커스: ${R.realFocus ? "섬" : "안 섬(합성 focus 이벤트로 진행)"}`);
+if (R.realFocus) {
+  assert.equal(R.r3.focusKept, true, "R3 고른 뒤에도 칸에 포커스가 남는다");
+  assert.deepEqual(R.r3.sel, [0, "Carol Park".length], "R3 고른 이름이 통째로 선택돼 있다 — 이어서 치면 새 검색(«은서윤상» 방지)");
+}
 // ★ R4
 assert.deepEqual(R.r4, { text: "Alice Kim", value: "alice", menuOpen: false }, "★ R4 Enter 로 골라도 이름이 보인다");
 // R5
