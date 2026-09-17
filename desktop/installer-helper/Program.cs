@@ -148,6 +148,8 @@ namespace Lively.Setup
                 if (km.Success && item != null && !item.ContainsKey(km.Groups[1].Value)) item[km.Groups[1].Value] = Unquote(km.Groups[2].Value);
             }
 
+            // 첫 .exe 를 고른다 — 지금 윈도우 타깃은 nsis x64 하나라 latest.yml 에 .exe 가 하나뿐이다. arm64 설치 파일이 같은
+            //  매니페스트에 더해지면 목록 순서가 선택을 정하게 되니, 그때는 아키텍처로 고르는 규칙을 먼저 넣는다.
             string path = null, sha = null, size = null;
             foreach (var it in items)
             {
@@ -799,7 +801,7 @@ namespace Lively.Setup
                     ExitCode = 0;
                     running = false;
                     await Task.Delay(1500);
-                    Close();
+                    if (!IsDisposed) Close();   // 기다리는 사이 사람이 «취소» 로 먼저 닫았을 수 있다
                     return;
                 }
 
@@ -815,6 +817,7 @@ namespace Lively.Setup
                 int code = process.ExitCode;
                 log.Write("설치 파일 종료 코드 " + code);
                 running = false;
+                if (IsDisposed) return;
                 if (code != 0)
                 {
                     Show();
@@ -834,6 +837,7 @@ namespace Lively.Setup
             {
                 log.Write("실패 — " + ex);
                 running = false;
+                if (IsDisposed) return;     // 창이 이미 닫혔으면 보여 줄 자리가 없다 — async void 밖으로 예외를 내보내지 않는다
                 if (!Visible) Show();
                 ShowError(Messages.Explain(ex));
             }

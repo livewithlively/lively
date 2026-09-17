@@ -1805,6 +1805,23 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.ok(!/installer-helper/.test(relWf), "태그 릴리스가 도우미를 건드린다");                                  // I9
   });
 
+  t("Z8j ★ PR 마다 C# 판정 규칙도 본다 — 윈도우 CI 가 도우미를 빌드해 자가 점검하고, 서명·게시는 하지 않는다", () => {
+    const testWf = read("../../.github/workflows/test.yml");
+    const job = testWf.slice(testWf.indexOf("\n  test-windows:"));
+    assert.ok(testWf.indexOf("\n  test-windows:") > 0, "test.yml 에 test-windows 잡이 없다");
+    const i = job.indexOf("- name: 설치 도우미 빌드·자가 점검");
+    assert.ok(i >= 0, "윈도우 CI 가 도우미 자가 점검을 하지 않는다 — C#·JS 규칙이 갈라져도 PR 이 초록이 된다");       // I10
+    const next = job.indexOf("- name:", i + 1);
+    const step = job.slice(i, next < 0 ? undefined : next);
+    assert.match(step, /working-directory: desktop\/installer-helper/);
+    assert.match(step, /dotnet build/);
+    assert.match(step, /if \(\$LASTEXITCODE -ne 0\) \{ throw/, "빌드 실패를 막지 않는다");
+    assert.match(step, /'--self-test'/);
+    assert.match(step, /if \(\$p\.ExitCode -ne 0\) \{ throw/, "자가 점검 실패를 막지 않는다");
+    assert.ok(!/continue-on-error:\s*true/.test(step), "자가 점검 실패를 삼킨다");
+    assert.ok(!/Invoke-TrustedSigning|gh release|AZURE_|secrets\./.test(step), "PR CI 가 도우미를 서명하거나 게시한다");
+  });
+
   t("Z8i 도우미 아이콘 — DIB 머리·픽셀 순서·마스크 경계, .ico 머리·항목·크기 경계", () => {
     const rgba = Buffer.from([255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 1, 2, 3, 4]);   // 2x2: 빨강·초록 / 파랑·기타
     const dib = dibImage(2, rgba);
