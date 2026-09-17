@@ -2461,6 +2461,19 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.deepEqual(clickTarget({ id: "box-a-1", ws: REG("haru", "하루") }, { gatewayUrl: "https://corp.example.com/lively", windowUrl: null, windowWs: null }),
       { how: "load", url: "https://corp.example.com/lively/ui/?lvly_ws=haru#/s/box-a-1" });
   });
+  t("A44b K13 경로 접두 게이트웨이 — 같은 출처의 다른 앱을 싣고 있으면 «이미 매인 곳» 으로 읽지 않는다(#4054 리뷰)", () => {
+    const gw = "https://corp.example.com/lively";
+    const own = { id: "box-a-1", ws: HERE };
+    assert.deepEqual(clickTarget(own, { gatewayUrl: gw, windowUrl: "https://corp.example.com/lively/ui/#/home" }), { how: "hash", hash: "#/s/box-a-1" });
+    assert.deepEqual(clickTarget(own, { gatewayUrl: gw, windowUrl: "https://corp.example.com/other-app/" }),
+      { how: "load", url: "https://corp.example.com/lively/ui/#/s/box-a-1" }, "같은 출처의 다른 앱에 해시를 꽂았다");
+    assert.deepEqual(clickTarget(own, { gatewayUrl: gw, windowUrl: "https://corp.example.com/lively-old/ui/" }),
+      { how: "load", url: "https://corp.example.com/lively/ui/#/s/box-a-1" }, "경로 접두의 경계(lively vs lively-old)를 못 갈랐다");
+    const reg = { id: "box-a-1", ws: REG("haru", "하루") };
+    assert.deepEqual(clickTarget(reg, { gatewayUrl: gw, windowUrl: "https://corp.example.com/other-app/", windowWs: "haru" }),
+      { how: "load", url: "https://corp.example.com/lively/ui/?lvly_ws=haru#/s/box-a-1" }, "다른 앱의 선택값을 믿었다");
+    assert.deepEqual(clickTarget(reg, { gatewayUrl: gw, windowUrl: "https://corp.example.com/lively/ui/", windowWs: "haru" }), { how: "hash", hash: "#/s/box-a-1" });
+  });
   t("A45 K12 스트림은 다른 워크스페이스까지 청한다(all=1) · 웹이 고른 워크스페이스 저장소 키는 웹과 같다", () => {
     assert.equal(streamUrl("https://gw.example/"), "https://gw.example/api/ui/notify/stream?all=1");
     assert.equal(streamUrl(""), null);
@@ -2493,9 +2506,30 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     const refresh = main.slice(main.indexOf("async function refreshState("), main.indexOf("function syncWindows("));
     assert.ok(/if \(state\.gatewayUrl\) resetNotifyBinding\(\)/.test(refresh), "매인 곳이 바뀌어도 옛 스트림·기준선을 안 버린다");
     const reset = main.slice(main.indexOf("function resetNotifyBinding("), main.indexOf("async function connectNotifyStream("));
-    for (const k of ["notifySnapshot = null", "personSeen = null", "personSince = null", "boundWs = null", "streamSeen.clear()", "streamCtl.abort()"]) {
+    for (const k of ["notifyGen++", "notifySnapshot = null", "personSeen = null", "personSince = null", "boundWs = null",
+      "notifyPrefsCache = { ...NOTIFY_DEFAULTS }", "streamSeen.clear()", "streamCtl.abort()", "setTimeout(() => void pollNotifications(), 0)"]) {
       assert.ok(reset.includes(k), `초기화에 ${k} 가 없다`);
     }
+  });
+  t("A47 배선 — 옛 매인 곳으로 떠난 폴·스트림은 초기화 뒤에 상태를 되써 넣지 않는다(세대 가드, #4054)", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    const poll = main.slice(main.indexOf("async function pollNotifications("), main.indexOf("async function pollPersonFeed("));
+    const genAt = poll.indexOf("const gen = notifyGen;");
+    const guards = [...poll.matchAll(/if \(gen !== notifyGen\) return;/g)].map((m) => m.index);
+    const snapAt = poll.indexOf("notifySnapshot = next;");
+    assert.ok(genAt >= 0 && genAt < poll.indexOf("await fetch("), "폴이 떠날 때의 세대를 쥐지 않는다");
+    assert.ok(guards.length >= 2 && guards.every((g) => g < snapAt), "기준선을 쓰기 전에 세대를 다시 보지 않는다(두 await 뒤 모두)");
+    assert.ok(/pollPersonFeed\(gw, token, gen\)/.test(poll), "사람 알림 폴에 세대를 넘기지 않는다");
+    assert.ok(/finally \{[\s\S]*?if \(gen !== notifyGen\) setTimeout\(\(\) => void pollNotifications\(\), 0\)/.test(poll),
+      "옛 폴이 끝난 뒤 새 곳 폴을 다시 부르지 않는다 — 초기화가 부른 폴이 이 폴에 막혀 건너뛰었을 수 있다");
+    const feed = main.slice(main.indexOf("async function pollPersonFeed("), main.indexOf("// ── 라이블리 화면 = 웹 UI 창"));
+    const fGuard = feed.indexOf("if (gen !== notifyGen) return;");
+    for (const k of ["notifyPrefsCache =", "boundWs = wsLabelOf", "rememberSeen(", "personSince ="]) {
+      assert.ok(fGuard >= 0 && fGuard < feed.indexOf(k), `사람 알림 폴이 세대를 보기 전에 ${k} 를 쓴다`);
+    }
+    const conn = main.slice(main.indexOf("async function connectNotifyStream("), main.indexOf("function scheduleStreamRetry("));
+    const sGen = conn.indexOf("const gen = notifyGen;"), sGuard = conn.indexOf("if (gen !== notifyGen) break;");
+    assert.ok(sGen >= 0 && sGen < conn.indexOf("await fetch(") && sGuard > 0 && sGuard < conn.indexOf("showBanner("), "끊기 직전 들어온 옛 곳 사건을 띄운다");
   });
 }
 

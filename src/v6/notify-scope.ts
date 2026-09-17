@@ -251,6 +251,8 @@ export async function resolveNotifyRoutes(user: LivelyUser, me: string, all: boo
     };
   } catch (err) {
     // 400·403(구성원 아님·계정 불일치)은 확답이다 — 넓히지 않는다. 502(못 닿음)는 일시적이다.
+    //  404 는 지금 callCp 가 502 로 접어 올라오지 않는다(400·403 만 그대로 올린다). 그래도 확답으로 둔다 — 그 매핑이 바뀌어
+    //  «테넌트·계정 없음» 이 그대로 오면 그것도 넓힐 근거가 없다는 확답이기 때문이다.
     const status = (err as { status?: number })?.status;
     const transient = !(status === 400 || status === 403 || status === 404);
     logger.warn({ err, status }, "알림 스트림: 계정 서버 워크스페이스 목록 실패 — 이 워크스페이스만 받는다");

@@ -12,7 +12,7 @@
 //   같은 파일이 "접속 여부와 무관한 신호"라고 명시한 값이고, 회수(reaper)가 승인 대기 세션을 죽이지 않으려고
 //   이미 이 값을 쓴다. 알림도 같은 진실을 봐야 한다.
 
-import { webUiUrl, webOrigin } from "./web-shell.mjs";
+import { webUiUrl } from "./web-shell.mjs";
 
 /** 알림 종류 — 사용자가 켠 것만 뜬다(#1842 결정: 세 갈래). */
 export const NOTIFY = {
@@ -429,6 +429,18 @@ export function tenantUrlWith(url, slug, hash, gatewayUrl) {
 const selectedWs = (v) => (String(v ?? "").trim().toLowerCase() || "primary");
 
 /**
+ * 창이 매인 게이트웨이의 웹 화면(`<게이트웨이>/ui/…`)을 싣고 있나 — 출처만이 아니라 **경로 접두까지** 본다.
+ *  경로 접두가 있는 게이트웨이(`https://corp.example.com/lively`)는 같은 출처에 다른 앱이 함께 설 수 있다 — 출처만 보면 그 앱을
+ *  «이미 매인 곳» 으로 읽고 해시를 거기 꽂는다(#4054 리뷰).
+ */
+function showsUi(windowUrl, ui) {
+  try {
+    const w = new URL(String(windowUrl || "")), u = new URL(String(ui || ""));
+    return w.origin === u.origin && w.pathname.startsWith(u.pathname);
+  } catch { return false; }
+}
+
+/**
  * 배너를 눌렀을 때 할 일(순수) — 사양 표 K1~K12.
  * @param {object|null} event 배너의 사건(묶음이면 null)
  * @param {{gatewayUrl?:string|null, windowUrl?:string|null, windowWs?:string|null, cpOrigins?:string[]}} ctx
@@ -447,12 +459,11 @@ export function clickTarget(event, ctx = {}) {
   }
   const ui = webUiUrl(ctx.gatewayUrl);
   if (!ui) return { how: "hash", hash };                                     // 매인 곳을 모른다 — 종전 그대로
-  const home = webOrigin(ui);
-  const shown = ctx.windowUrl ? webOrigin(ctx.windowUrl) : null;
+  const onUi = showsUi(ctx.windowUrl, ui);
   if (ws.via === "header") {
-    if (shown === home && ctx.windowWs != null && selectedWs(ctx.windowWs) === ws.slug) return { how: "hash", hash };   // K7
-    return { how: "load", url: `${ui}?lvly_ws=${encodeURIComponent(ws.slug)}${hash}` };                               // K8
+    if (onUi && ctx.windowWs != null && selectedWs(ctx.windowWs) === ws.slug) return { how: "hash", hash };   // K7
+    return { how: "load", url: `${ui}?lvly_ws=${encodeURIComponent(ws.slug)}${hash}` };                        // K8
   }
-  if (!ctx.windowUrl || shown === home) return { how: "hash", hash };      // K3 · K9
-  return { how: "load", url: ui + hash };                                    // K4 · K11 창이 다른 출처를 싣고 있다
+  if (!ctx.windowUrl || onUi) return { how: "hash", hash };                // K3 · K9
+  return { how: "load", url: ui + hash };                                    // K4 · K11 · K13 창이 매인 화면이 아닌 곳을 싣고 있다
 }

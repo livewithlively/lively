@@ -597,6 +597,9 @@ const streamSeen = new Set();       // 이미 띄운 스트림 사건 key(재연
 let notifyPrefsCache = { ...NOTIFY_DEFAULTS };   // 서버에서 마지막으로 받은 값. 받기 전엔 전부 켜짐.
 // 앱이 매인 워크스페이스의 표시(#4054) — 알림 피드가 싣는다. 폴링·사람 알림 배너의 윗줄이 된다(실시간 사건은 사건마다 싣는다).
 let boundWs = null;
+// 매인 곳의 세대(#4054) — 바뀔 때마다 올린다. 옛 곳으로 떠난 폴·스트림이 **초기화 뒤에** 돌아와 옛 기준선·커서·표시를
+//  되써 넣지 못하게, 자기가 떠난 세대와 지금 세대가 다르면 결과를 버린다(안 버리면 새 목록을 옛 기준선과 견줘 가짜 배너가 뜬다).
+let notifyGen = 0;
 
 /** 유형별 켜짐 — 서버 값. 아직 못 받았으면 기본값(전부 켜짐): 설정을 못 읽었다고 알림이 멎으면 안 된다. */
 function notifyPrefs() { return notifyPrefsCache; }
@@ -670,11 +673,19 @@ function loadInApp(url) {
   hashNav.failed();   // 싣던 중에 눌러 둔 해시가 이 로드 뒤에 옛 화면으로 끌고 가지 않게(#3896 규약)
   appWin.loadURL(url).catch(() => { /* did-fail-load 가 처리 */ });
 }
-/** 매인 워크스페이스가 바뀌었다(#4054) — 옛 곳의 기준선·커서·표시를 버리고 스트림을 끊는다(finally 가 새 주소로 다시 붙는다). */
+/**
+ * 매인 워크스페이스가 바뀌었다(#4054) — 옛 곳의 기준선·커서·표시·설정을 버리고 스트림을 끊는다(finally 가 새 주소로 다시 붙는다).
+ *  설정도 버린다: 알림 켬·끔은 워크스페이스의 구성원 행에 산다 — 옛 곳의 값을 새 곳 사건에 쓰지 않는다.
+ *  새 곳의 기준선은 바로 한 번 잡는다(다음 30초 폴을 기다리지 않는다). ⚠ 호출자(refreshState)가 state 를 새 값으로 바꾼 **뒤에**
+ *  돌도록 한 틱 미룬다 — 지금 부르면 옛 주소를 읽는다.
+ */
 function resetNotifyBinding() {
+  notifyGen++;
   notifySnapshot = null; personSeen = null; personSince = null; boundWs = null;
+  notifyPrefsCache = { ...NOTIFY_DEFAULTS };
   streamSeen.clear();
   if (streamCtl) { try { streamCtl.abort(); } catch { /* 이미 끝났다 */ } }
+  setTimeout(() => void pollNotifications(), 0);
 }
 
 /**
@@ -689,6 +700,7 @@ async function connectNotifyStream() {
   if (!token) { scheduleStreamRetry(); return; }
   const ctl = new AbortController();
   streamCtl = ctl;
+  const gen = notifyGen;                                 // #4054 — 이 연결이 붙은 매인 곳의 세대
   let openedAt = 0;
   try {
     //  #4054 — 다른 워크스페이스 사건까지 청한다(서버가 계정으로 확인한 것만 준다). 사건마다 워크스페이스 표시가 붙는다.
@@ -709,6 +721,7 @@ async function connectNotifyStream() {
       buf += dec.decode(value, { stream: true });
       const { events, rest } = parseSse(buf);
       buf = rest;
+      if (gen !== notifyGen) break;                      // 매인 곳이 바뀌었다 — 끊기 직전에 들어온 옛 곳의 사건은 띄우지 않는다
       const prefs = notifyPrefs();
       for (const ev of events) {
         const hit = streamEvent(ev, streamSeen, prefs);
@@ -748,6 +761,7 @@ async function pollNotifications() {
   const token = state.ready && gw ? readTrim(join(LIVELY_DIR, "token")) : "";
   if (!token) { notifySnapshot = null; personSeen = null; personSince = null; boundWs = null; streamSeen.clear(); notifyPrefsCache = { ...NOTIFY_DEFAULTS }; return; }
   notifyPolling = true;
+  const gen = notifyGen;                                 // #4054 — 이 폴이 떠난 매인 곳의 세대
   try {
     const res = await fetch(`${gw}/api/ui/terminal/sessions`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -756,7 +770,9 @@ async function pollNotifications() {
     if (!res.ok) return;                               // 401 은 watchTokenRejection 이 따로 처리한다
     const data = await res.json();
     const next = snapshotSessions(data && data.sessions);
-    await pollPersonFeed(gw, token);                     // 설정·사람 알림을 함께 받아 온다(설정이 아래 판정에 바로 쓰인다)
+    if (gen !== notifyGen) return;                       // 그 사이 매인 곳이 바뀌었다 — 옛 곳의 목록을 새 기준선으로 쓰지 않는다
+    await pollPersonFeed(gw, token, gen);                // 설정·사람 알림을 함께 받아 온다(설정이 아래 판정에 바로 쓰인다)
+    if (gen !== notifyGen) return;
     const prefs = notifyPrefs();
     const events = diffSessions(notifySnapshot, next, prefs, boundWs);   // #4054 — 이 목록은 매인 워크스페이스의 것
     notifySnapshot = next;                               // ★ 기준선은 스트림 유무와 무관하게 늘 갱신한다 —
@@ -764,18 +780,23 @@ async function pollNotifications() {
     //  놓치거나(오래된 스냅샷과 비교) 과거를 한꺼번에 다시 띄운다.
     if (!streamAlive) for (const b of planBanners(events, undefined, process.platform)) showBanner(b);   // 스트림이 살아 있으면 배너는 그쪽이 만든다
   } catch { /* 게이트웨이가 꺼졌거나 네트워크가 끊겼다 — 기준선을 남기고 다음 폴에서 이어 본다 */ }
-  finally { notifyPolling = false; }
+  finally {
+    notifyPolling = false;
+    //  옛 곳으로 떠난 폴이 막 끝났다 — 초기화가 부른 새 곳의 폴은 이 폴에 막혀 건너뛰었을 수 있으니 한 번 더 부른다.
+    if (gen !== notifyGen) setTimeout(() => void pollNotifications(), 0);
+  }
 }
 
 /**
  * 사람이 나를 부른 것(멘션·댓글·담당) — 판정은 서버가 한다(/api/ui/notify/feed). 앱은 커서를 들고 다니며
  *  새로 온 것만 띄운다. **커서 전진은 성공했을 때만** 한다 — 실패했는데 전진시키면 그 사이 알림이 영영 사라진다.
  */
-async function pollPersonFeed(gw, token) {
+async function pollPersonFeed(gw, token, gen) {
   const url = `${gw}/api/ui/notify/feed` + (personSince ? `?since=${encodeURIComponent(personSince)}` : "");
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) });
   if (!res.ok) return;                                 // 구 게이트웨이엔 이 엔드포인트가 없다(404) — 조용히 넘긴다
   const data = await res.json();
+  if (gen !== notifyGen) return;                       // #4054 — 옛 곳의 설정·커서·표시를 초기화 뒤에 되써 넣지 않는다
   // 서버가 실어 보낸 알림 설정을 캐시에 반영한다(왕복을 하나 더 만들지 않는다).
   if (data && data.prefs && typeof data.prefs === "object") notifyPrefsCache = { ...NOTIFY_DEFAULTS, ...data.prefs };
   //  #4054 — 매인 워크스페이스의 표시(이름). 구 게이트웨이는 안 싣는다 → 받던 값을 유지한다(없으면 종전 배너).
