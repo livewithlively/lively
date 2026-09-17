@@ -21,6 +21,7 @@
 //  B13 | 5초 전 · 남의 개인 세션(초대 없음)                    | 켬   | 안 보임
 //  B14 | 유예 0 · 음수(신규 옵션의 빈 값)                      | 켬   | 중단됨
 //  B15 | 배선 — AI 세션 탭·프로젝트 세션 목록은 켜고, 휴지통 묶음은 안 켠다(구조)
+//  B16 | 5초 전 · 노드 세션(node_id)                     | 켬   | 노드 이름·상태 보강 대상(«끊김» 자리표시자로 남지 않음) · 라이브 행은 안 건드림
 //
 // 실행: npm run build && node --test dist/terminal/session-starting-grace.test.js
 import { strict as assert } from "node:assert";
@@ -29,6 +30,7 @@ import test from "node:test";
 import { itemsPool } from "../db/client.js";
 import type { LivelyUser } from "../context.js";
 import { isStartingDesiredRow, listRestorableSessions, SESSION_STARTING_GRACE_MS, type RestorableListOpts } from "./sessions.js";
+import { decorateNodeRows } from "./node-session-state.js";
 
 const NOW_S = 1_800_000_000;     // 기준 시각(epoch 초) — 만든 시각과 시계를 이 값으로 맞춘다
 const NOW = NOW_S * 1000;
@@ -39,9 +41,13 @@ const ME = "kim";
 type Row = Record<string, unknown>;
 let rows: Row[] = [];
 let stateQueries = 0;
+let nodeQueries = 0;
+const NODE_ROWS = [{ id: "n-mac", name: "상민 맥북" }];
 (itemsPool as unknown as { query: unknown }).query = async (sqlIn: unknown) => {
   const sql = String(sqlIn).replace(/\s+/g, " ").trim();
   if (sql.startsWith("SELECT * FROM org_session_state WHERE superseded_by IS NULL")) { stateQueries++; return { rows }; }
+  //  노드 행 보강(decorateNodeRows)이 이름을 찾는 조회 — 이 시험 프로세스엔 연결된 노드가 없어 DB 갈래로 온다.
+  if (sql.startsWith("SELECT * FROM org_node ORDER BY created_at")) { nodeQueries++; return { rows: NODE_ROWS }; }
   throw new Error(`시험 페이크가 모르는 SQL: ${sql.slice(0, 80)}`);
 };
 
@@ -159,6 +165,29 @@ test("[4065-B14b] 판정 함수 — 형식 밖 시각은 시작 중이 아니다
   assert.equal(isStartingDesiredRow({ ...base, created: Number("x") }, NOW, SESSION_STARTING_GRACE_MS), false, "NaN");
   assert.equal(isStartingDesiredRow({ ...base, created: NOW_S }, NOW, Number.NaN), false, "유예 NaN");
   assert.equal(isStartingDesiredRow({ ...base, created: NOW_S }, NOW, SESSION_STARTING_GRACE_MS), true, "대조군");
+});
+
+//  B16 — 노드 세션(desired 행에 node_id)도 시작 중이면 노드 이름·연결 상태를 채운다. 안 채우면 막 만든 노드 세션이
+//   프로젝트 화면·세션 목록에서 자리표시자(`name=id · online:false` = «끊김»)로 보인다.
+test("[4065-B16] ★ 시작 중 노드 행도 노드 이름을 채운다 · 라이브 행과 노드 없는 행은 안 건드린다", async () => {
+  rows = [
+    row({ created: NOW_S - 5, node_id: "n-mac" }),             // 시작 중 + 노드
+    row({ created: NOW_S - 3600, node_id: "n-mac" }),          // 중단됨 + 노드(종전 갈래 — 대조군)
+    row({ created: NOW_S - 5 }),                               // 시작 중 · 노드 없음
+  ];
+  const out = await listRestorableSessions(user, new Set(), { startingGraceMs: SESSION_STARTING_GRACE_MS, nowMs: NOW });
+  const [startingNode, deadNode, startingPlain] = out;
+  assert.equal(startingNode!.starting, true, "전제: 첫 행은 시작 중");
+  assert.equal(deadNode!.restorable, true, "전제: 둘째 행은 중단됨");
+  //  라이브 행(관측에서 온 행)은 보강 대상이 아니다 — 스냅샷이 이미 정확한 이름·상태를 싣는다.
+  const liveRow = { ...startingNode!, id: "box-kim-live", starting: undefined, restorable: undefined, node: { id: "n-mac", name: "스냅샷 이름", online: true } };
+  const before = nodeQueries;
+  await decorateNodeRows([startingNode!, deadNode!, startingPlain!, liveRow]);
+  assert.ok(nodeQueries > before, "배선: 보강이 노드 이름을 실제로 조회했어야 한다");
+  assert.equal(startingNode!.node?.name, "상민 맥북", "🔴 시작 중 노드 행이 자리표시자 이름(id)으로 남았다 — 화면에 id 가 보인다");
+  assert.equal(deadNode!.node?.name, "상민 맥북", "중단됨 노드 행 보강(종전 동작)이 깨졌다");
+  assert.equal(startingPlain!.node, undefined, "노드 없는 행에 노드를 지어 붙였다");
+  assert.deepEqual(liveRow.node, { id: "n-mac", name: "스냅샷 이름", online: true }, "라이브 행을 덮었다");
 });
 
 test("[4065-B15] ★ 배선 — 목록 두 곳은 켜고, 휴지통 묶음은 안 켠다", () => {
