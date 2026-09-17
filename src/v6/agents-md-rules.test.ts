@@ -133,7 +133,9 @@ test("H2·H3·H4 ★ 이름·번호 중 하나라도 다르거나 이름을 모�
 test("W8 생성기는 머리를 한 함수로 만들고, 규칙 폴백은 그 머리와 맞을 때만 옛 원본을 쓴다", () => {
   const gen = fs.readFileSync(new URL("./agents-md.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
   assert.match(gen, /L\.push\(agentsMdHeader\(p\), ""\)/, "생성기 머리가 대조 함수와 다른 글자로 쓰이면 이관이 제 AGENTS.md 를 못 알아본다");
-  assert.match(gen, /const original = raw != null && project && \(await ownsAgentsMd\(raw, project\)\.catch\(\(\) => false\)\) \? raw : null;/,
+  assert.match(gen, /const writtenAt = raw != null \? await fsp\.stat\(localAgents\)\.then\(\(st\) => Math\.floor\(st\.mtimeMs\), \(\) => 0\) : 0;/,
+    "규칙 폴백이 그 원본이 쓰인 시각으로 묻지 않는다");
+  assert.match(gen, /const original = raw != null && project && \(await ownsAgentsMd\(raw, project, writtenAt\)\.catch\(\(\) => false\)\) \? raw : null;/,
     "옛 원본을 대조 없이 쓰면 같은 번호를 가진 남의 워크스페이스 규칙이 섞인다(W8b — 이관과 같은 판정, 실패하면 안 쓴다)");
   assert.doesNotMatch(gen, /isAgentsMdOf\(/, "규칙 폴백이 이관과 다른 판정(지금 이름만)을 쓰면 이름을 바꾼 프로젝트의 규칙이 빠진다");
 });
