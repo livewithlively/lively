@@ -26,7 +26,7 @@ export const LS_JS =
   "process.stdout.write(JSON.stringify(o))";
 const STAT_JS =
   "const fs=require('fs');try{const s=fs.statSync(process.argv[1]);" +
-  "process.stdout.write(JSON.stringify({size:s.size,file:s.isFile(),dir:s.isDirectory()}))}" +
+  "process.stdout.write(JSON.stringify({size:s.size,file:s.isFile(),dir:s.isDirectory(),mtime:Math.floor(s.mtimeMs)}))}" +
   "catch{process.stdout.write('null')}";
 
 /**
@@ -176,7 +176,8 @@ export function memberNodeJson<T>(osUser: string, js: string, input: unknown): P
   });
 }
 
-export function memberStat(osUser: string, absPath: string): Promise<{ size: number; file: boolean; dir: boolean } | null> {
+// mtime(ms, floor) — 프로젝트 저장소(#4064)의 파일 도장이 멤버 경계에서도 로컬과 같은 자로 나오게(main #947 과 같은 필드).
+export function memberStat(osUser: string, absPath: string): Promise<{ size: number; file: boolean; dir: boolean; mtime?: number } | null> {
   return new Promise((resolve, reject) => {
     const c = memberSpawn(osUser, ["node", "-e", STAT_JS, absPath], ["ignore", "pipe", "pipe"]);
     const err = collectErr(c);
