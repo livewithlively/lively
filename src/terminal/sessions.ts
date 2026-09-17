@@ -172,12 +172,14 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
       autoApprove: s.auto_approve, owner: s.owner, owned: s.owner === me,
       created: s.created || 0, attached: false, invites: s.invites, flags: s.flags,
       projectId: s.project_id || 0, appId: s.app_id || undefined,
-      agentState: starting ? "idle" : "offline", title: "",
+      agentState: "offline", title: "",
       lastActive: s.last_busy || undefined,
       // #2022 — 게이트웨이가 노드 스냅샷에서 **발견한** 행은 workspace 좌표를 모른다 → 되살릴 수 없다.
       //  여기서 true 로 내보내면 화면이 "열면 되살아난다"(#1820)고 약속한 뒤 409 를 받는다. 약속을 하지 않는다.
-      restorable: starting ? false : !(s.discovered && !s.root_key),
-      ...(starting ? { starting: true } : {}),
+      restorable: !(s.discovered && !s.root_key),
+      //  #4065 — 시작 중이면 위 두 칸(죽은 행의 모양)을 **덮는다**: 복원 약속 없음 · 상태 «대기 중».
+      //   발견 행은 `isStartingDesiredRow` 가 이미 걸러서 위 #2022 판정과 부딪히지 않는다.
+      ...(starting ? { agentState: "idle" as const, restorable: false, starting: true } : {}),
       discovered: !!s.discovered,
       exitedByUser: !!s.exited_at, // #1059 — 사용자 정상 종료 표시가 찍혔으면 '종료됨', 아니면 '복원 가능(중단됨)'.
       // #1251 — 사용자 종료가 아닌데 사유가 'oom' 이면 earlyoom 이 죽인 것. 둘이 겹치면 사용자 종료가 이긴다(더 확실한 사실).
