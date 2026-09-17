@@ -152,7 +152,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   //  파일을 안 만지므로 projBase 를 그대로 쓴다.
   const projStore = async (id: number, req: express.Request): Promise<{ project: { id: number; name: string; folder: string }; store: ProjectStorage; base: string }> => {
     const { project } = await projBase(id, req);
-    const store = await projectStorage(project.folder, { user: userOf(req) });
+    const store = await projectStorage(project.folder, { user: userOf(req) }, { id: project.id, name: project.name });
     return { project, store, base: store.base };
   };
 
@@ -163,6 +163,8 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const q = String(req.query.q ?? "").trim();
     if (q) { res.json({ search: q, items: await store.search(q) }); return; }
     const abs = resolveIn(base, req.query.path, false);
+    //  멤버 저장소에선 세션이 심은 링크를 따라 폴더 밖 목록이 나가지 않게 — 다른 파일 라우트·브라우즈 목록과 같은 관문.
+    await jailIfMember(store, abs);
     //  못 읽은 디렉터리는 null 로 온다. 멤버 경계 중계가 고장 난 것은 **던진다** — 그걸 빈 폴더로 덮으면 거짓말이다.
     const listed = await store.list(abs);
     if (!listed) {
