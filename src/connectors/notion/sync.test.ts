@@ -29,7 +29,7 @@ function spyPool(written: number) {
 }
 const stats = (over: Partial<NotionRunStats> = {}): NotionRunStats => ({
   instance: "ws-1", pages: 3, databases: 0, emitted: 2, failures: 0, failedIds: [], inaccessible: 0, inaccessibleIds: [],
-  retryIds: [], unattributed: 0, observedIds: ["o-1"], assets: 0, assetFailures: 0, requests: 0, ...over,
+  retryIds: [], unattributed: 0, observedIds: ["o-1"], assets: 0, assetFailures: 0, requests: 0, assetBytes: 0, ...over,
 });
 const ctx = (pool: unknown, over: Partial<PostSyncCtx> = {}): PostSyncCtx =>
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

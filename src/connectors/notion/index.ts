@@ -25,6 +25,7 @@ import type { NotionLedger } from "../../v6/connector-mirror.js"; // type-only �
 import { loadConfig, notionFetch, reqCount, resetReqCount } from "./client.js";
 import { downloadAsset, findUrlByPath, refreshAssetUrl } from "./assets.js";
 import { dbNode, pageNode } from "./state.js";
+import { startProgressTicker } from "./ticker.js";
 import type { NotionRunStats, PageNode, Traversal } from "./state.js";
 import { discoverSeeds, hydrateUsers, processDb, processPage } from "./traverse.js";
 import {
@@ -77,19 +78,12 @@ async function* backfill(opts?: BackfillOpts, onStats?: (s: NotionRunStats) => v
     commentsDenied: false,
     pages: new Map(), dbs: new Map(), dsToDb: new Map(), users: new Map(),
     assetJobs: new Map(),
-    stats: { instance: cfg.instance, pages: 0, databases: 0, emitted: 0, failures: 0, failedIds: [], inaccessible: 0, inaccessibleIds: [], retryIds: [], unattributed: 0, observedIds: [], assets: 0, assetFailures: 0, requests: 0 },
+    stats: { instance: cfg.instance, pages: 0, databases: 0, emitted: 0, failures: 0, failedIds: [], inaccessible: 0, inaccessibleIds: [], retryIds: [], unattributed: 0, observedIds: [], assets: 0, assetFailures: 0, requests: 0, assetBytes: 0 },
   };
   onStats?.(t.stats);
 
-  // 생존 티커 — 어떤 페이즈든 120초마다, 단 **요청 카운터가 실제로 늘었을 때만** 신호를 남긴다.
-  //  무조건 찍으면 진짜 행(fetch 정지)에도 살아있는 척이 되어 정체 감지가 무력화된다 — 진행 없으면 침묵을
-  //  유지해 run-tracker(15분 무출력=킬)가 행을 잡게 한다. 오탐(정상인데 침묵)은 이 티커+완료 로그가 제거.
-  let lastTickReq = -1;
-  const ticker = setInterval(() => {
-    if (reqCount === lastTickReq) return; // 무진전 — 침묵(정체 감지 존중)
-    lastTickReq = reqCount;
-    console.error(`[notion] 진행중 — 요청 ${reqCount} · 페이지 ${t.pages.size} · DB ${t.dbs.size} · 첨부 ${t.stats.assets}/${t.assetJobs.size}`);
-  }, 120_000);
+  // 생존 티커 — 120초마다, 실제로 움직였을 때만 한 줄(ticker.ts). 오탐(정상인데 침묵)은 이 티커+완료 로그가 제거.
+  const ticker = startProgressTicker(t, 120_000);
   try {
 
   if (delta) await discoverDelta(t, sinceRaw!);
