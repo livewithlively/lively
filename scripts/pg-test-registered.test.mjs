@@ -40,7 +40,18 @@ const RUNNER = src("scripts/run-tests.mjs");
 const WORKFLOW = src(".github/workflows/test.yml");
 
 const onDisk = findPgTests("src").sort();
-const registered = [...WORKFLOW.matchAll(/src\/[\w/.-]+\.pg-test\.mjs/g)].map((m) => m[0]);
+
+// 🔴 «등록» 은 **실행되는 명령**이지 파일 어딘가에 그 경로가 적혀 있는 것이 아니다.
+//  파일 전체를 훑으면 주석에 적힌 경로("언젠가 이것도 넣자", "원래 … 였다")까지 등록으로 세어,
+//  실제로는 아무도 안 돌리는 pg-test 를 통과시킨다 — 이 가드가 막으려는 바로 그 상황에서
+//  가드가 조용히 무력해진다(실측으로 확인한 거짓 통과). 그래서 줄마다 주석을 먼저 떼고
+//  `node <경로>` 호출만 센다. `run: |` 여러 줄 블록도 줄 단위라 그대로 걸린다.
+//  ⚠ 인용부호 안의 `#` 까지 주석으로 떼므로 그런 줄은 «미등록» 으로 읽힐 수 있다 —
+//   헛경보 방향이라 안전하다(거짓 통과보다 낫다).
+const registered = WORKFLOW.split("\n").flatMap((line) => {
+  const code = line.split("#")[0];
+  return [...code.matchAll(/\bnode\s+(src\/[\w/.-]+\.pg-test\.mjs)\b/g)].map((m) => m[1]);
+});
 const registeredSet = new Set(registered);
 
 // 이 가드의 **전제**를 먼저 못박는다 — 러너가 pg-test 를 자동 수집하게 바뀌면 수기 등록은 필요 없어지고
