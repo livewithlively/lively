@@ -12,7 +12,7 @@
 //  멀티테넌트에서는 그 위에 RLS 정책이 얹힌다(정책은 매니지드 배포가 건다 — 코어는 안 건다).
 //
 // ── 기본값이 한 식으로 두 모드를 덮는다 ────────────────────────────────────
-//   COALESCE(current_setting('app.tenant_id', true), '<단일테넌트 UUID>')::uuid
+//   형태는 `TENANT_DEFAULT_EXPR` 하나가 정한다(아래) — 여기 복제하면 고칠 때마다 이 줄이 뒤처진다.
 //  · 자가호스팅: GUC 가 없으니 상수로 떨어진다.
 //  · 매니지드:   컨텍스트가 있으면 그 값. 없으면 상수로 떨어지지만 **정책이 막는다** —
 //    정책은 `current_setting('app.tenant_id')` 를 **missing_ok 없이** 읽으므로 그 자리에서 오류다.
@@ -23,6 +23,7 @@
 //  카탈로그에 물어보면 **새 테이블이 자동으로 대상**이 된다.
 
 import { itemsPool } from "./client.js";
+import { logger } from "../log.js";
 
 /** 단일 테넌트 배포에서 모든 행이 갖는 값. 이 값 자체에 의미는 없다 — 상수라는 것이 전부다. */
 export const SINGLE_TENANT_ID = "00000000-0000-0000-0000-000000000000";
@@ -197,27 +198,41 @@ export function buildTenantColumnDdl(plan: TenantColumnPlan): string[] {
 //  문자열과 절대 같지 않다). 그래서 같은 식을 임시 표에 한 번 걸어 그 렌더 결과를 기준으로 삼는다.
 //  이렇게 하면 식이 또 바뀌어도 이 코드는 그대로고, 이미 맞는 표는 매 부팅 건드리지 않는다
 //  (SET DEFAULT 는 카탈로그만 바꾸지만 표마다 ACCESS EXCLUSIVE 를 잡는다 — 맞는 걸 다시 걸 이유가 없다).
-export function buildTenantDefaultRefreshDdl(tables: readonly string[]): string[] {
-  return tables.map((t) => `ALTER TABLE ${qi(t)} ALTER COLUMN tenant_id SET DEFAULT ${TENANT_DEFAULT_EXPR}`);
+export function buildTenantDefaultRefreshDdl(tables: readonly { schema: string; table: string }[]): string[] {
+  //  스키마를 한정한다 — app.* 표는 search_path 에 없어 이름만으로는 못 찾는다.
+  return tables.map((t) => `ALTER TABLE ${qi(t.schema)}.${qi(t.table)} ALTER COLUMN tenant_id SET DEFAULT ${TENANT_DEFAULT_EXPR}`);
 }
 
-/** 기본값이 지금 식과 어긋난 표를 고른다. `want` = Postgres 가 렌더한 «지금 식». */
+/**
+ * 기본값이 지금 식과 어긋난 표를 고른다. `want` = Postgres 가 렌더한 «지금 식».
+ *
+ * 🔴 `app` 스키마도 본다. 앱 데이터 표(`apps/store-schema.ts`)가 같은 기본값을 쓰는데 `public` 이
+ *  아니라 `app.<물리명>` 이다 — 여기서 빼면 그쪽 기존 표는 영영 옛 식을 물고 있으면서 부팅 로그는
+ *  «0표» 라 고쳐진 것처럼 보인다(실측으로 그 상태를 만들어 확인했다).
+ *  이 조회는 `ensureTenantColumn` 계열(public 전용)과 달리 **기본값만** 고치므로 폭발반경이 없다.
+ *
+ * 🔴 `, true` 형태(= missing_ok)만 고른다. «current_setting 이 들어간 모든 기본값» 으로 잡으면
+ *  바깥 정책 계층이 strict 기본값(`current_setting('app.tenant_id')::uuid`, `, true` 없음)을 걸어 둔
+ *  표까지 코어가 관대한 식으로 덮어쓴다 — 남의 DDL 을 조용히 바꾸는 소유권 위반이다
+ *  (같은 파일 #2198 이 «바깥 계층이 손댄 표는 건드리지 않는다» 를 같은 이유로 교훈으로 남겼다).
+ *  비교 문자열은 **PG 가 렌더한 형태**다(`'app.tenant_id'::text` 로 다시 쓴다).
+ */
 export const SQL_STALE_TENANT_DEFAULT = `
-  SELECT c.relname AS t
+  SELECT n.nspname AS s, c.relname AS t
     FROM pg_attrdef d
     JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
     JOIN pg_class c ON c.oid = d.adrelid
     JOIN pg_namespace n ON n.oid = c.relnamespace
-   WHERE n.nspname = 'public' AND c.relkind = 'r' AND NOT c.relispartition
+   WHERE n.nspname IN ('public', 'app') AND c.relkind = 'r' AND NOT c.relispartition
      AND a.attname = 'tenant_id'
-     AND pg_get_expr(d.adbin, d.adrelid) LIKE '%current_setting%'
+     AND pg_get_expr(d.adbin, d.adrelid) LIKE '%current_setting(''app.tenant_id''::text, true)%'
      AND pg_get_expr(d.adbin, d.adrelid) IS DISTINCT FROM $1
-   ORDER BY c.relname`;
+   ORDER BY n.nspname, c.relname`;
 
 /**
  * 이미 붙어 있는 tenant_id 컬럼의 기본값을 지금 식으로 따라잡힌다(멱등 — 맞는 표는 안 건드린다).
- *  신원 전역 표는 제외한다: 그쪽은 일부러 **상수**로 못박혀 있어(아래 pinIdentityGlobalTenant)
- *  current_setting 기반이 아니므로 위 조회에 애초에 잡히지 않는다.
+ *  신원 전역 표는 제외된다: 그쪽은 일부러 **상수**로 못박혀 있어(아래 pinIdentityGlobalTenant)
+ *  current_setting 이 아예 없으므로 위 조회에 잡히지 않는다.
  */
 export async function refreshTenantDefault(): Promise<{ refreshed: string[] }> {
   const client = await itemsPool.connect();
@@ -233,12 +248,23 @@ export async function refreshTenantDefault(): Promise<{ refreshed: string[] }> {
         WHERE d.adrelid = '__tenant_default_probe'::regclass AND a.attname = 'tenant_id'`)).rows[0]?.e ?? null;
     //  렌더 결과를 못 읽으면 **아무 것도 하지 않는다** — 기준 없이 갈아엎으면 맞는 표까지 건드린다.
     if (!want) return { refreshed: [] };
-    const stale = (await client.query(SQL_STALE_TENANT_DEFAULT, [want])).rows.map((r) => String(r.t));
-    for (const sql of buildTenantDefaultRefreshDdl(stale)) await client.query(sql);
-    return { refreshed: stale };
+    const stale = (await client.query(SQL_STALE_TENANT_DEFAULT, [want]))
+      .rows.map((r) => ({ schema: String(r.s), table: String(r.t) }));
+    //  롤링 배포 중 구 인스턴스의 장기 트랜잭션이 어느 표를 물고 있으면 ALTER 가 무한정 대기하고,
+    //  그 뒤 그 표의 독자들이 줄줄이 묶인다(ACCESS EXCLUSIVE 대기는 읽기까지 막는다).
+    //  멱등이므로 **못 잡은 표는 다음 부팅으로 넘긴다** — 기다리는 것보다 낫다.
+    await client.query("SET lock_timeout = '3s'");
+    const done: string[] = [];
+    for (const t of stale) {
+      const [sql] = buildTenantDefaultRefreshDdl([t]);
+      try { await client.query(sql); done.push(`${t.schema}.${t.table}`); }
+      catch (e) { logger.warn({ table: `${t.schema}.${t.table}`, err: String(e) }, "tenant default refresh 보류 — 다음 부팅에 재시도"); }
+    }
+    return { refreshed: done };
   } finally {
     //  커넥션은 풀로 돌아간다 — 임시 표를 남기면 다음 차용자가 이름 충돌을 본다.
     await client.query(`DROP TABLE IF EXISTS __tenant_default_probe`).catch(() => { /* 이미 죽은 커넥션 */ });
+    await client.query("RESET lock_timeout").catch(() => { /* 위와 같다 */ });
     client.release();
   }
 }

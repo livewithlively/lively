@@ -13,8 +13,9 @@
 //  `set_config('app.tenant_id','',false)` 를 건다(다음 차용자가 남의 테넌트를 물려받지 않게 — 정책
 //  입장에선 fail-closed 가 맞다). 그 뒤 그 커넥션을 빌린 쪽이 컨텍스트 없이 기본값 경로를 타면 죽는다.
 //
-//  판정 대상은 **기본값 식 하나**(TENANT_DEFAULT_EXPR)다. 그 식이 심기는 자리가 129개 테이블의 컬럼
-//  DEFAULT 와 여러 런타임 쿼리이므로, 여기서는 식 자체를 임시 테이블에 걸어 세 상태를 직접 본다.
+//  판정 대상은 **기본값 식 하나**(TENANT_DEFAULT_EXPR)다. 그 식이 심기는 자리는 tenant_id 를 가진 표
+//  전부의 컬럼 DEFAULT 와 여러 런타임 쿼리인데(개수는 ensureTenantColumn 이 카탈로그로 정한다),
+//  여기서는 식 자체를 임시 표에 걸어 세 상태를 직접 본다.
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const { TENANT_DEFAULT_EXPR, SINGLE_TENANT_ID } = await import(`${DIST}/db/tenant-column.js`);
@@ -65,7 +66,9 @@ try {
 
   await c.query(`DROP TABLE IF EXISTS ${T}`);
 } finally {
-  // 이 커넥션은 GUC 를 세션 스코프로 건드렸으므로 풀에 돌려보내지 않고 파기한다(위 ③ 이 그 이유다).
+  // 이 커넥션은 풀에 돌려보내지 않고 파기한다. 우리가 raw `set_config` 로 GUC 를 건드렸을 뿐이라
+  //  src/db/client.ts 의 반납 초기화 훅이 **안 돈다**(그 훅은 sessionBound 일 때만 걸린다) — 즉
+  //  이 커넥션의 오염은 아무도 치워 주지 않는다.
   c.release(true);
 }
 
