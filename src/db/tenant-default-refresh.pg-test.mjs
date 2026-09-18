@@ -1,6 +1,8 @@
 // 기본값 따라잡기(`refreshTenantDefault`) — **실제 Postgres 필요**(기본 npm test 체인 밖).
 //  CI 의 services:postgres 잡에서, 또는 로컬에서 수동 실행:
 //    npm run build && node --env-file=.env src/db/tenant-default-refresh.pg-test.mjs
+//  ⚠ 이 파일은 `refreshTenantDefault()` 를 부른다 — 즉 **마이그레이션을 실행한다**(자기가 만든 네 표만이
+//   아니라 그 DB 의 옛 식 표 전부에 ALTER 가 나간다). 붙는 DB 를 보고 돌려라.
 //
 // 왜 이 계층인가: 이 함수의 판정은 전부 **카탈로그가 기본값을 어떻게 렌더하나** 에 걸려 있다.
 //  대상 선별이 `pg_get_expr()` 결과에 대한 문자열 매치라, 소스를 읽어서는 무엇이 잡히고 무엇이
@@ -32,7 +34,7 @@ const defaultOf = async (rel) => (await itemsPool.query(
 
 const drop = async () => {
   for (const rel of [`public.${PUB}`, `public.${FINE}`, `public.${STRICT}`, `app.${APP}`]) {
-    await itemsPool.query(`DROP TABLE IF EXISTS ${rel}`).catch(() => { /* app 스키마가 없을 수 있다 */ });
+    await itemsPool.query(`DROP TABLE IF EXISTS ${rel}`);
   }
 };
 
@@ -51,8 +53,11 @@ try {
   // ① 옛 식을 가진 표는 고친다 — **스키마를 건너서도**. 이게 빠지면 앱 데이터 표가 영영 안 고쳐진다.
   chk("① 옛 기본값 표를 고친다 — public 과 app 둘 다",
     got.join(",") === `app.${APP},public.${PUB}`, `고친 표: ${got.join(", ") || "(없음)"}`);
-  chk("① public 표의 기본값이 실제로 바뀌었다", (await defaultOf(`public.${PUB}`))?.includes("NULLIF") === true, await defaultOf(`public.${PUB}`));
-  chk("① app 표의 기본값이 실제로 바뀌었다", (await defaultOf(`app.${APP}`))?.includes("NULLIF") === true, await defaultOf(`app.${APP}`));
+  //  «바뀌었다» 의 기준을 문자열로 적지 않는다 — 식이 또 바뀌면 그 복제가 기능과 무관한 이유로 깨진다.
+  //  기준은 바로 옆에 있다: 현행 식으로 만든 FINE 표를 같은 PG 가 렌더한 결과와 **완전 일치**해야 한다.
+  const want = await defaultOf(`public.${FINE}`);
+  chk("① public 표의 기본값이 현행 식과 같아졌다", await defaultOf(`public.${PUB}`) === want, `${await defaultOf(`public.${PUB}`)} ≠ ${want}`);
+  chk("① app 표의 기본값이 현행 식과 같아졌다", await defaultOf(`app.${APP}`) === want, `${await defaultOf(`app.${APP}`)} ≠ ${want}`);
 
   // ② 남의 것은 건드리지 않는다 — 바깥 정책 계층의 strict 기본값은 일부러 엄격한 것이다.
   chk("② 바깥 계층의 strict 기본값은 그대로 둔다",

@@ -203,6 +203,9 @@ export function buildTenantDefaultRefreshDdl(tables: readonly { schema: string; 
   return tables.map((t) => `ALTER TABLE ${qi(t.schema)}.${qi(t.table)} ALTER COLUMN tenant_id SET DEFAULT ${TENANT_DEFAULT_EXPR}`);
 }
 
+/** 관대한(missing_ok) 기본값을 알아보는 조각 — **Postgres 가 렌더한 형태**다(소스 문자열과 다르다). */
+export const LENIENT_RENDER_FRAGMENT = "current_setting('app.tenant_id'::text, true)";
+
 /**
  * 기본값이 지금 식과 어긋난 표를 고른다. `want` = Postgres 가 렌더한 «지금 식».
  *
@@ -217,9 +220,6 @@ export function buildTenantDefaultRefreshDdl(tables: readonly { schema: string; 
  *  (같은 파일 #2198 이 «바깥 계층이 손댄 표는 건드리지 않는다» 를 같은 이유로 교훈으로 남겼다).
  *  비교 문자열은 **PG 가 렌더한 형태**다(`'app.tenant_id'::text` 로 다시 쓴다).
  */
-/** 관대한(missing_ok) 기본값을 알아보는 조각 — **Postgres 가 렌더한 형태**다(소스 문자열과 다르다). */
-export const LENIENT_RENDER_FRAGMENT = "current_setting('app.tenant_id'::text, true)";
-
 export const SQL_STALE_TENANT_DEFAULT = `
   SELECT n.nspname AS s, c.relname AS t
     FROM pg_attrdef d
@@ -250,7 +250,11 @@ export async function refreshTenantDefault(): Promise<{ refreshed: string[] }> {
          FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
         WHERE d.adrelid = '__tenant_default_probe'::regclass AND a.attname = 'tenant_id'`)).rows[0]?.e ?? null;
     //  렌더 결과를 못 읽으면 **아무 것도 하지 않는다** — 기준 없이 갈아엎으면 맞는 표까지 건드린다.
-    if (!want) return { refreshed: [] };
+    if (!want) {
+      //  자가검증(아래)과 같은 실패 클래스다 — 조용히 0표로 끝나면 고쳐진 것처럼 보인다.
+      logger.warn("tenant default refresh 중단 — 기준 기본값을 읽지 못했다(고칠 표를 놓친다)");
+      return { refreshed: [] };
+    }
     //  🔴 같은 PG 가 같은 식을 렌더한 결과에 우리 조각이 없다면, 그 조각이 이 PG 의 렌더와 어긋난 것이다
     //   = 고칠 표를 **전부 놓친 채 «0표» 로 조용히 끝나는** 상태다. 거짓 안심을 소음으로 바꾼다.
     if (!want.includes(LENIENT_RENDER_FRAGMENT)) {
