@@ -172,9 +172,15 @@ export function sessionKey(env = process.env) {   // export=테스트용·순수
 //  딸려 들어가고 status 를 더럽힌다. admin 은 git 이 워크트리를 지울 때 함께 지우고 relinkAdmin 의 rename 도 따라오니
 //  수명이 정확히 워크트리와 같다 — 고아 스탬프가 남지 않는다.
 const ownerFileOf = (admin) => join(admin, "lively-owner.json");
+// 반환 셋을 가른다: 스탬프 객체 | null(«표시가 없다» = ENOENT) | false(«있는데 못 읽는다» — 손상·부분 쓰기·지금 쓰는 중).
+//  뭉개면 안 되는 이유: 아래 입양은 «표시가 없다» 일 때만 해야 한다. 못 읽는 것까지 «없다» 로 보면 남의 세션이 스탬프를
+//  쓰는 중인 찰나에 다른 세션이 그 자리를 지목해 소유를 가져간다 — 이 모듈이 막으려는 바로 그 일이 좁은 창으로 되돌아온다.
 function readOwner(admin) {
   if (!admin) return null;
-  try { const o = JSON.parse(readFileSync(ownerFileOf(admin), "utf8")); return o && typeof o === "object" ? o : null; } catch { return null; }
+  let txt;
+  try { txt = readFileSync(ownerFileOf(admin), "utf8"); }
+  catch (e) { return e && e.code === "ENOENT" ? null : false; }
+  try { const o = JSON.parse(txt); return o && typeof o === "object" ? o : false; } catch { return false; }
 }
 // best-effort — 쓰기에 실패해도 워크트리는 멀쩡하다. 실패의 대가는 «다음 호출이 이 자리를 남의 것으로 보고 비켜선다»
 //  뿐이라(유실 0) 예외를 올리지 않는다. 대신 성공 여부를 돌려 호출부가 안내에 실을 수 있게 한다.
@@ -502,18 +508,25 @@ export async function repoWorktree(ctx, args) {
     const out = { repo, worktree: wt, branch: b || null, base, admin: adminNow ? basename(adminNow) : null, note: "이미 워크트리가 있어 그대로 사용합니다." };
     // 내 것이 아닌 자리를 그대로 쓰는 경로는 이제 하나뿐이다 — 호출자가 path 로 그 자리를 **지목**한 경우(기본 자리는
     //  위에서 비켜섰다). 지목은 존중하되 조용히 넘기지는 않는다: 여기서 커밋하면 그 세션의 브랜치에 얹힌다.
-    if (!mine && !stamp) {
+    if (!mine && stamp === null) {
       // 주인 표시가 없는 자리를 **지목**했다 — 이 변경 이전에 뜬 워크트리가 여기 해당한다. 입양해서 이 세션 것으로
       //  표시한다: 표시를 안 하면 그 자리는 아무 세션도 못 쓰는 사석으로 남고 부를 때마다 같은 경고가 뜬다.
       //  남의 스탬프가 있는 자리는 입양하지 않는다(소유 탈취 금지) — 아래 경고로 간다.
       if (writeOwner(adminNow, { session: me, project_id: pid, branch: b || null, worktree: wt })) {
         out.note += " 주인 표시가 없던 자리라 이 세션 것으로 표시했습니다.";
+      } else {
+        // 표시를 남길 데가 없는 자리 — `.git` 이 디렉터리(사람이 손으로 clone 한 폴더)면 admin 자체가 없다.
+        //  이 툴의 워크트리가 아니므로 소유를 말할 수 없다. 조용히 넘기지는 않는다.
+        out.warning = `이 자리는 이 툴이 만든 워크트리가 아니라 소유를 확인할 수 없습니다 — 다른 사람·세션이 쓰는 폴더일 수 있습니다.`;
       }
     } else if (!mine) {
-      out.warning = `이 워크트리는 이 세션이 만든 자리가 아닙니다(세션 ${stamp.session ?? "?"}, 브랜치 '${b || "?"}').`
-        + ` 그 세션이 쓰는 중일 수 있으니 커밋 전에 git status 로 내가 안 만진 변경이 없는지 확인하세요`
-        + ` — 새 자리가 필요하면 path 인자를 빼고 다시 부르세요.`;
-    } else if (!me && (pid === null || pid === undefined) && stamp && stamp.session) {
+      out.warning = stamp === false
+        ? `이 워크트리의 주인 표시를 읽을 수 없습니다(손상됐거나 다른 세션이 지금 쓰는 중). 남의 자리일 수 있으니`
+          + ` 커밋 전에 git status 로 내가 안 만진 변경이 없는지 확인하세요 — 새 자리가 필요하면 path 인자를 빼고 다시 부르세요.`
+        : `이 워크트리는 이 세션이 만든 자리가 아닙니다(세션 ${stamp.session ?? "?"}, 브랜치 '${b || "?"}').`
+          + ` 그 세션이 쓰는 중일 수 있으니 커밋 전에 git status 로 내가 안 만진 변경이 없는지 확인하세요`
+          + ` — 새 자리가 필요하면 path 인자를 빼고 다시 부르세요.`;
+    } else if (!me && (pid === null || pid === undefined) && stamp && stamp.session) {   // stamp===false 면 읽을 이름이 없다
       // 신원 없는 호출은 소유 판정을 끄고 재사용한다(isMine) — 그래서 다른 세션의 자리도 그대로 열린다. 막지는
       //  않되(맨 터미널 CLI 의 멱등이 걸려 있다) 조용히 넘기지도 않는다.
       out.warning = `이 자리는 세션 ${stamp.session} 이 쓰던 곳인데, 이 호출엔 세션 신원이 없어 소유 판정 없이 재사용합니다`

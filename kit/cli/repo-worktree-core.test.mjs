@@ -451,6 +451,20 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   check("S8: 지목하면 입양한다(사석 방지)", stampOf(sAdopt.admin).session === "sess-E", JSON.stringify(stampOf(sAdopt.admin)));
   check("S8: 입양은 경고가 아니라 안내", !sAdopt.warning && /이 세션 것으로 표시/.test(sAdopt.note || ""), sAdopt.warning || sAdopt.note);
 
+  // S8-b) **읽을 수 없는** 스탬프(손상·쓰는 중)는 «표시가 없다» 와 다르다 — 입양하면 소유 탈취가 된다.
+  asSession("sess-F");
+  writeFileSync(join(BASE, ".git", "worktrees", sAdopt.admin, "lively-owner.json"), "{ 부분적으로 쓰다 만");
+  const sCorrupt = await repoWorktree(ctx(shared), { repo: "base", path: join(shared, "base") });
+  const stampRaw = readFileSync(join(BASE, ".git", "worktrees", sAdopt.admin, "lively-owner.json"), "utf8");
+  check("S8-b: 손상된 스탬프는 입양하지 않는다(덮어쓰기 0)", stampRaw === "{ 부분적으로 쓰다 만", stampRaw);
+  check("S8-b: 대신 경고한다", /읽을 수 없습니다/.test(sCorrupt.warning || ""), sCorrupt.warning || "(경고 없음)");
+
+  // S8-c) `.git` 이 디렉터리인 자리(사람이 손으로 clone 한 폴더)는 소유를 말할 수 없다 — 조용히 재사용하지 않는다.
+  const handClone = join(SB, "hand-clone");
+  sh("git", ["clone", "-q", join(SB, "origin-repo"), handClone]);
+  const sHand = await repoWorktree(ctx(shared), { repo: "base", path: handClone });
+  check("S8-c: 이 툴이 만들지 않은 자리는 경고한다", /소유를 확인할 수 없습니다/.test(sHand.warning || ""), sHand.warning || "(경고 없음)");
+
   // S9) 자리가 다 차면 막다른 길에 두지 않는다 — 누가 쥐고 있는지 + 출구를 메시지에 담는다.
   const full = join(SB, "full-cwd"); mkdirSync(full, { recursive: true });
   for (let i = 1; i <= 9; i++) { asSession(`sess-full-${i}`); await repoWorktree(ctx(full), { repo: "base" }); }
