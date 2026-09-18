@@ -13,6 +13,11 @@
 //  왜 목록을 여기 적지 않나 — 그 순간 이 파일이 세 번째 SoT 가 되어 같이 썩는다. 양쪽을 **각자의
 //     SoT 에서 읽어**(파일 시스템 ↔ test.yml) 대조하므로, 파일을 늘리거나 지워도 이 파일은 그대로다.
 //
+//  ⓘ **이 가드 자신은 test.yml 에 등록하지 않는다** — 확인: `node scripts/run-tests.mjs --scope=scripts`
+//     의 수집 목록에 이 파일이 있다. 이름이 `*.test.mjs` 라 러너가 자동으로 집어 가고(실 DB 를 안 쓰므로
+//     유닛 체인에 속한다), CI 는 그 러너를 통째로 돌린다. 등록을 강제하는 가드가 정작 자기만 수기
+//     등록이면 같은 사고를 자기 자신에게 되풀이하게 되므로, 자동 수집되는 계층에 두는 것이 요점이다.
+//
 //  실행: node scripts/pg-test-registered.test.mjs
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -69,9 +74,12 @@ t(`[P2] pg-test 파일을 디스크에서 찾았다 (${onDisk.length}개)`, () =
 
 t("[P3] 🔴 실재하는 pg-test 는 전부 test.yml 에 등록돼 있다", () => {
   const missing = onDisk.filter((p) => !registeredSet.has(p));
+  // 이 가드가 보는 것은 «test.yml 어딘가에서 `node <경로>` 로 실행된다» 까지다 — 그 스텝이 올바른 잡에
+  //  있는지·`ITEMS_DATABASE_URL` 을 받는지는 검사하지 않는다(YAML 구조 파싱을 들이지 않았다). 그러니
+  //  메시지도 거기까지만 말하고, 나머지는 옆 스텝을 본뜨라고 가리킨다.
   assert.deepEqual(missing, [],
-    "CI 에서 한 번도 실행되지 않는 pg-test 가 있다(초록이지만 아무도 안 본다). "
-    + `.github/workflows/test.yml 의 test 잡에 ITEMS_DATABASE_URL 을 준 스텝으로 추가하라: ${missing.join(" · ")}`);
+    "test.yml 에서 실행되지 않는 pg-test 가 있다 — CI 가 한 번도 돌리지 않는다(초록이지만 아무도 안 본다). "
+    + `옆의 pg-test 스텝을 그대로 본떠 추가하라: ${missing.join(" · ")}`);
 });
 
 t("[P4] test.yml 이 등록한 pg-test 는 전부 실재한다 — 개명·삭제 뒤 남은 죽은 스텝을 잡는다", () => {
