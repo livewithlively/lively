@@ -8,7 +8,7 @@
 import pg from "pg";
 import { itemsPool } from "../db/client.js";
 import { appRoleName } from "../org/tenancy/activate.js";
-import { SINGLE_TENANT_ID } from "../db/tenant-column.js";
+import { TENANT_DEFAULT_EXPR } from "../db/tenant-column.js";
 import { physicalTableName, columnDefs, type StoreColumn } from "./store-ddl.js";
 import { logger } from "../log.js";
 
@@ -54,7 +54,7 @@ export async function createAppTable(db: Q, appId: string, spec: AppTableSpec): 
   const rel = `app.${qi(physical)}`;
   await db.query(
     `CREATE TABLE IF NOT EXISTS ${rel} (
-       tenant_id uuid NOT NULL DEFAULT COALESCE(current_setting('app.tenant_id', true), '${SINGLE_TENANT_ID}')::uuid,
+       tenant_id uuid NOT NULL DEFAULT ${TENANT_DEFAULT_EXPR},
        id bigint GENERATED ALWAYS AS IDENTITY,
        ${cols.join(",\n       ")},
        created_at timestamptz NOT NULL DEFAULT now(),

@@ -12,7 +12,7 @@
 //  멀티테넌트에서는 그 위에 RLS 정책이 얹힌다(정책은 매니지드 배포가 건다 — 코어는 안 건다).
 //
 // ── 기본값이 한 식으로 두 모드를 덮는다 ────────────────────────────────────
-//   COALESCE(current_setting('app.tenant_id', true), '<단일테넌트 UUID>')::uuid
+//   형태는 `TENANT_DEFAULT_EXPR` 하나가 정한다(아래) — 여기 복제하면 고칠 때마다 이 줄이 뒤처진다.
 //  · 자가호스팅: GUC 가 없으니 상수로 떨어진다.
 //  · 매니지드:   컨텍스트가 있으면 그 값. 없으면 상수로 떨어지지만 **정책이 막는다** —
 //    정책은 `current_setting('app.tenant_id')` 를 **missing_ok 없이** 읽으므로 그 자리에서 오류다.
@@ -23,13 +23,20 @@
 //  카탈로그에 물어보면 **새 테이블이 자동으로 대상**이 된다.
 
 import { itemsPool } from "./client.js";
+import { logger } from "../log.js";
 
 /** 단일 테넌트 배포에서 모든 행이 갖는 값. 이 값 자체에 의미는 없다 — 상수라는 것이 전부다. */
 export const SINGLE_TENANT_ID = "00000000-0000-0000-0000-000000000000";
 
 /** 두 모드를 한 식으로 덮는 기본값. 엄격함은 정책이 갖는다(위 머리말). */
+//  🔴 `NULLIF(…, '')` 가 필요한 이유 — `missing_ok=true` 는 «미설정이면 NULL» 이지만, 커스텀 GUC 는 한 번
+//   설정했다가 치우면 미설정으로 **돌아가지 않는다**: `set_config(…,'')` 도 `RESET` 도 빈 문자열을 남긴다
+//   (커스텀 GUC 의 reset 값이 '' 이다). 그러면 COALESCE 가 NULL 을 못 봐 폴백하지 못하고 `''::uuid` 로 죽는다.
+//   그 '' 를 만드는 건 우리 코드다 — client.ts 의 release 훅이 커넥션 반납 전에 건다(정책 입장에선 fail-closed).
+//   즉 이 한 자리가 관대함을 잃으면, 그 커넥션을 물려받은 다음 요청이 «컨텍스트가 없다» 가 아니라
+//   «uuid 구문 오류» 로 죽는다. 회귀 넷: src/db/tenant-default-empty-guc.pg-test.mjs.
 export const TENANT_DEFAULT_EXPR =
-  `COALESCE(current_setting('app.tenant_id', true), '${SINGLE_TENANT_ID}')::uuid`;
+  `COALESCE(NULLIF(current_setting('app.tenant_id', true), ''), '${SINGLE_TENANT_ID}')::uuid`;
 
 /**
  * 신원·전역 표(#1750) — 컬럼은 두되 **값을 상수로 못박는다**.
@@ -175,6 +182,108 @@ export function buildTenantColumnDdl(plan: TenantColumnPlan): string[] {
     );
   }
   return ddl;
+}
+
+// ── 이미 붙어 있는 컬럼의 기본값 따라잡기 ───────────────────────────────────
+//
+// `ensureTenantColumn` 은 컬럼이 **없는** 표에만 손댄다(카탈로그가 그렇게 고른다). 그래서
+//  TENANT_DEFAULT_EXPR 을 고쳐도 **이미 tenant_id 가 붙은 표의 기본값은 옛 식 그대로**다 —
+//  `pg_attrdef` 에 그 순간의 문자열로 굳어 있기 때문이다. 신규 설치만 고쳐지고 기존 배포는 그대로라
+//  고친 의미가 없다(실측: 기존 DB 136개 표가 옛 식을 물고 있었고, 그래서 감사 INSERT 가 계속 죽었다).
+//  선례는 바로 아래 신원 전역 표 못박기 — 같은 이유로 같은 모양을 쓴다.
+//
+// 🔴 **다른 표의 기본값까지 갈아엎지 않는다.** 대상은 «current_setting 기반 기본값을 가졌는데 지금 식과
+//  다른» 표뿐이다. 무엇이 «지금 식» 인지는 우리가 문자열로 정하지 않고 **Postgres 가 렌더한 형태**로
+//  판정한다(PG 는 입력 식을 제 형태로 다시 써서 저장한다 — `::text` 캐스트를 끼워 넣는 식이라 소스
+//  문자열과 절대 같지 않다). 그래서 같은 식을 임시 표에 한 번 걸어 그 렌더 결과를 기준으로 삼는다.
+//  이렇게 하면 식이 또 바뀌어도 이 코드는 그대로고, 이미 맞는 표는 매 부팅 건드리지 않는다
+//  (SET DEFAULT 는 카탈로그만 바꾸지만 표마다 ACCESS EXCLUSIVE 를 잡는다 — 맞는 걸 다시 걸 이유가 없다).
+export function buildTenantDefaultRefreshDdl(tables: readonly { schema: string; table: string }[]): string[] {
+  //  스키마를 한정한다 — app.* 표는 search_path 에 없어 이름만으로는 못 찾는다.
+  return tables.map((t) => `ALTER TABLE ${qi(t.schema)}.${qi(t.table)} ALTER COLUMN tenant_id SET DEFAULT ${TENANT_DEFAULT_EXPR}`);
+}
+
+/** 관대한(missing_ok) 기본값을 알아보는 조각 — **Postgres 가 렌더한 형태**다(소스 문자열과 다르다). */
+export const LENIENT_RENDER_FRAGMENT = "current_setting('app.tenant_id'::text, true)";
+
+/**
+ * 기본값이 지금 식과 어긋난 표를 고른다. `want` = Postgres 가 렌더한 «지금 식».
+ *
+ * 🔴 `app` 스키마도 본다. 앱 데이터 표(`apps/store-schema.ts`)가 같은 기본값을 쓰는데 `public` 이
+ *  아니라 `app.<물리명>` 이다 — 여기서 빼면 그쪽 기존 표는 영영 옛 식을 물고 있으면서 부팅 로그는
+ *  «0표» 라 고쳐진 것처럼 보인다(실측으로 그 상태를 만들어 확인했다).
+ *  이 조회는 `ensureTenantColumn` 계열(public 전용)과 달리 **기본값만** 고치므로 폭발반경이 없다.
+ *
+ * 🔴 `, true` 형태(= missing_ok)만 고른다. «current_setting 이 들어간 모든 기본값» 으로 잡으면
+ *  바깥 정책 계층이 strict 기본값(`current_setting('app.tenant_id')::uuid`, `, true` 없음)을 걸어 둔
+ *  표까지 코어가 관대한 식으로 덮어쓴다 — 남의 DDL 을 조용히 바꾸는 소유권 위반이다
+ *  (같은 파일 #2198 이 «바깥 계층이 손댄 표는 건드리지 않는다» 를 같은 이유로 교훈으로 남겼다).
+ *  비교 문자열은 **PG 가 렌더한 형태**다(`'app.tenant_id'::text` 로 다시 쓴다).
+ */
+export const SQL_STALE_TENANT_DEFAULT = `
+  SELECT n.nspname AS s, c.relname AS t
+    FROM pg_attrdef d
+    JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+    JOIN pg_class c ON c.oid = d.adrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname IN ('public', 'app') AND c.relkind = 'r' AND NOT c.relispartition
+     AND a.attname = 'tenant_id'
+     AND pg_get_expr(d.adbin, d.adrelid) LIKE '%' || $2 || '%'
+     AND pg_get_expr(d.adbin, d.adrelid) IS DISTINCT FROM $1
+   ORDER BY n.nspname, c.relname`;
+
+/**
+ * 이미 붙어 있는 tenant_id 컬럼의 기본값을 지금 식으로 따라잡힌다(멱등 — 맞는 표는 안 건드린다).
+ *  신원 전역 표는 제외된다: 그쪽은 일부러 **상수**로 못박혀 있어(아래 pinIdentityGlobalTenant)
+ *  current_setting 이 아예 없으므로 위 조회에 잡히지 않는다.
+ */
+export async function refreshTenantDefault(): Promise<{ refreshed: string[] }> {
+  const client = await itemsPool.connect();
+  try {
+    //  임시 표는 이 세션에서만 보인다. 기본값 판정에만 쓰고 끝에서 지운다.
+    //  ⚠ `ON COMMIT DROP` 을 쓰면 안 된다 — 트랜잭션 밖에서는 CREATE 가 곧바로 커밋되며 그 자리에서
+    //   사라져, 바로 다음 조회가 아무 것도 못 찾고 **조용히 «고칠 표 없음»** 으로 끝난다(실측).
+    await client.query(`DROP TABLE IF EXISTS __tenant_default_probe`);
+    await client.query(`CREATE TEMP TABLE __tenant_default_probe(tenant_id uuid DEFAULT ${TENANT_DEFAULT_EXPR})`);
+    const want = (await client.query(
+      `SELECT pg_get_expr(d.adbin, d.adrelid) AS e
+         FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+        WHERE d.adrelid = '__tenant_default_probe'::regclass AND a.attname = 'tenant_id'`)).rows[0]?.e ?? null;
+    //  렌더 결과를 못 읽으면 **아무 것도 하지 않는다** — 기준 없이 갈아엎으면 맞는 표까지 건드린다.
+    if (!want) {
+      //  자가검증(아래)과 같은 실패 클래스다 — 조용히 0표로 끝나면 고쳐진 것처럼 보인다.
+      logger.warn("tenant default refresh 중단 — 기준 기본값을 읽지 못했다(고칠 표를 놓친다)");
+      return { refreshed: [] };
+    }
+    //  🔴 같은 PG 가 같은 식을 렌더한 결과에 우리 조각이 없다면, 그 조각이 이 PG 의 렌더와 어긋난 것이다
+    //   = 고칠 표를 **전부 놓친 채 «0표» 로 조용히 끝나는** 상태다. 거짓 안심을 소음으로 바꾼다.
+    if (!want.includes(LENIENT_RENDER_FRAGMENT)) {
+      logger.error({ want, fragment: LENIENT_RENDER_FRAGMENT },
+        "tenant default refresh 중단 — 대상 판별 조각이 이 Postgres 의 렌더와 어긋난다(고칠 표를 놓친다)");
+      return { refreshed: [] };
+    }
+    const stale = (await client.query(SQL_STALE_TENANT_DEFAULT, [want, LENIENT_RENDER_FRAGMENT]))
+      .rows.map((r) => ({ schema: String(r.s), table: String(r.t) }));
+    //  롤링 배포 중 구 인스턴스의 장기 트랜잭션이 어느 표를 물고 있으면 ALTER 가 무한정 대기하고,
+    //  그 뒤 그 표의 독자들이 줄줄이 묶인다(ACCESS EXCLUSIVE 대기는 읽기까지 막는다).
+    //  멱등이므로 **못 잡은 표는 다음 부팅으로 넘긴다** — 기다리는 것보다 낫다.
+    await client.query("SET lock_timeout = '3s'");
+    const done: string[] = [];
+    for (const t of stale) {
+      const [sql] = buildTenantDefaultRefreshDdl([t]);
+      try { await client.query(sql); done.push(`${t.schema}.${t.table}`); }
+      catch (e) { logger.warn({ table: `${t.schema}.${t.table}`, err: String(e) }, "tenant default refresh 보류 — 다음 부팅에 재시도"); }
+    }
+    return { refreshed: done };
+  } finally {
+    //  커넥션은 풀로 돌아간다 — 임시 표를 남기면 다음 차용자가 이름 충돌을 본다.
+    await client.query(`DROP TABLE IF EXISTS __tenant_default_probe`).catch(() => { /* 이미 죽은 커넥션 */ });
+    //  lock_timeout 은 **세션** 값이다 — 못 되돌린 커넥션을 풀에 돌려보내면 그걸 받은 다음 쿼리가
+    //  3초 만에 55P03 으로 죽는다. 되돌리기에 실패하면 커넥션을 파기한다(풀이 새로 연다).
+    let dirty = false;
+    await client.query("RESET lock_timeout").catch(() => { dirty = true; });
+    client.release(dirty);
+  }
 }
 
 // ── 신원 전역 표 못박기(#1879) ──────────────────────────────────────────────
