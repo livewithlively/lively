@@ -217,6 +217,9 @@ export function buildTenantDefaultRefreshDdl(tables: readonly { schema: string; 
  *  (같은 파일 #2198 이 «바깥 계층이 손댄 표는 건드리지 않는다» 를 같은 이유로 교훈으로 남겼다).
  *  비교 문자열은 **PG 가 렌더한 형태**다(`'app.tenant_id'::text` 로 다시 쓴다).
  */
+/** 관대한(missing_ok) 기본값을 알아보는 조각 — **Postgres 가 렌더한 형태**다(소스 문자열과 다르다). */
+export const LENIENT_RENDER_FRAGMENT = "current_setting('app.tenant_id'::text, true)";
+
 export const SQL_STALE_TENANT_DEFAULT = `
   SELECT n.nspname AS s, c.relname AS t
     FROM pg_attrdef d
@@ -225,7 +228,7 @@ export const SQL_STALE_TENANT_DEFAULT = `
     JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname IN ('public', 'app') AND c.relkind = 'r' AND NOT c.relispartition
      AND a.attname = 'tenant_id'
-     AND pg_get_expr(d.adbin, d.adrelid) LIKE '%current_setting(''app.tenant_id''::text, true)%'
+     AND pg_get_expr(d.adbin, d.adrelid) LIKE '%' || $2 || '%'
      AND pg_get_expr(d.adbin, d.adrelid) IS DISTINCT FROM $1
    ORDER BY n.nspname, c.relname`;
 
@@ -248,7 +251,14 @@ export async function refreshTenantDefault(): Promise<{ refreshed: string[] }> {
         WHERE d.adrelid = '__tenant_default_probe'::regclass AND a.attname = 'tenant_id'`)).rows[0]?.e ?? null;
     //  렌더 결과를 못 읽으면 **아무 것도 하지 않는다** — 기준 없이 갈아엎으면 맞는 표까지 건드린다.
     if (!want) return { refreshed: [] };
-    const stale = (await client.query(SQL_STALE_TENANT_DEFAULT, [want]))
+    //  🔴 같은 PG 가 같은 식을 렌더한 결과에 우리 조각이 없다면, 그 조각이 이 PG 의 렌더와 어긋난 것이다
+    //   = 고칠 표를 **전부 놓친 채 «0표» 로 조용히 끝나는** 상태다. 거짓 안심을 소음으로 바꾼다.
+    if (!want.includes(LENIENT_RENDER_FRAGMENT)) {
+      logger.error({ want, fragment: LENIENT_RENDER_FRAGMENT },
+        "tenant default refresh 중단 — 대상 판별 조각이 이 Postgres 의 렌더와 어긋난다(고칠 표를 놓친다)");
+      return { refreshed: [] };
+    }
+    const stale = (await client.query(SQL_STALE_TENANT_DEFAULT, [want, LENIENT_RENDER_FRAGMENT]))
       .rows.map((r) => ({ schema: String(r.s), table: String(r.t) }));
     //  롤링 배포 중 구 인스턴스의 장기 트랜잭션이 어느 표를 물고 있으면 ALTER 가 무한정 대기하고,
     //  그 뒤 그 표의 독자들이 줄줄이 묶인다(ACCESS EXCLUSIVE 대기는 읽기까지 막는다).
@@ -264,8 +274,11 @@ export async function refreshTenantDefault(): Promise<{ refreshed: string[] }> {
   } finally {
     //  커넥션은 풀로 돌아간다 — 임시 표를 남기면 다음 차용자가 이름 충돌을 본다.
     await client.query(`DROP TABLE IF EXISTS __tenant_default_probe`).catch(() => { /* 이미 죽은 커넥션 */ });
-    await client.query("RESET lock_timeout").catch(() => { /* 위와 같다 */ });
-    client.release();
+    //  lock_timeout 은 **세션** 값이다 — 못 되돌린 커넥션을 풀에 돌려보내면 그걸 받은 다음 쿼리가
+    //  3초 만에 55P03 으로 죽는다. 되돌리기에 실패하면 커넥션을 파기한다(풀이 새로 연다).
+    let dirty = false;
+    await client.query("RESET lock_timeout").catch(() => { dirty = true; });
+    client.release(dirty);
   }
 }
 

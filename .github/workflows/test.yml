@@ -93,6 +93,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/db/tenant-default-empty-guc.pg-test.mjs
+      # ③-c 그 기본값을 **이미 붙어 있는 표까지 따라잡는가** — 대상 선별이 `pg_get_expr()` 문자열 매치라
+      #    소스로는 무엇이 잡히고 무엇이 빠지는지 알 수 없고, 실패 방향이 «0표» 라 조용하다.
+      #    실제로 app 스키마가 통째로 빠진 적이 있는데 로그는 정상으로 보였다.
+      - name: 테넌트 기본값 따라잡기 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/db/tenant-default-refresh.pg-test.mjs
       # ④ OAuth 인가서버 스토어(#1473 T2) — 목으로는 못 보는 것들: now() 기준 만료, 인가코드 1회성(RETURNING
       #    rowCount), 코드·리프레시 재사용 시 **연쇄 회수**, 클라이언트 해제 kill-switch.
       - name: OAuth 인가서버 PG 통합 테스트
