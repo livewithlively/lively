@@ -12,7 +12,7 @@ import { initOrgSchema } from "../org/schema.js";
 import { init as initDomainmapSchema } from "../domainmap/core/schema.js";
 import { initActivitySchema } from "../activity/schema.js";
 import { initV6Schema } from "../v6/schema.js";
-import { ensureTenantColumn, pinIdentityGlobalTenant } from "../db/tenant-column.js";
+import { ensureTenantColumn, pinIdentityGlobalTenant, refreshTenantDefault } from "../db/tenant-column.js";
 import { reconcilePersonalUploadVisibilitySafe } from "../v6/vis-personal-unlock.js"; // #4007 — 개인 업로드 자동 잠금 소급 해제(멱등)
 import { logger } from "../log.js";
 
@@ -50,6 +50,11 @@ export async function initAllSchemas(opts?: { quiet?: boolean }): Promise<void> 
   //  단일 테넌트에서는 값이 상수라 동작이 달라지지 않는다 — SQL 방언을 하나로 유지하기 위한 것이다.
   const tc = await ensureTenantColumn();
   if (tc.ddl) note(`tenant column ready (테이블 ${tc.tables} · DDL ${tc.ddl})`);
+  //  ensureTenantColumn 은 컬럼이 **없는** 표에만 손대므로, 기본값 식을 고쳐도 이미 컬럼이 붙은 표는
+  //  옛 식을 그대로 물고 있다. 여기서 따라잡는다(멱등 — 이미 맞는 표는 건드리지 않는다).
+  //  pinIdentityGlobalTenant **앞**이어야 한다: 신원 전역 표는 그 뒤에 상수로 다시 못박히는 것이 맞다.
+  const td = await refreshTenantDefault();
+  if (td.refreshed.length) note(`tenant default refreshed (${td.refreshed.length}표)`);
   // #1879 — 신원 전역 표(사람·세션·토큰·자격)는 컬럼은 두되 값을 primary 로 **못박는다**. 기본값이
   //  컨텍스트를 따라가면 정책이 없어도 계정행이 워크스페이스마다 갈라진다(그러면 감사 서브쿼리가
   //  2행을 받아 org 쓰기가 전부 500 이 되고, tenant 없는 조회가 아무 행이나 돌려준다).
