@@ -13,8 +13,8 @@
 //  왜 목록을 여기 적지 않나 — 그 순간 이 파일이 세 번째 SoT 가 되어 같이 썩는다. 양쪽을 **각자의
 //     SoT 에서 읽어**(파일 시스템 ↔ test.yml) 대조하므로, 파일을 늘리거나 지워도 이 파일은 그대로다.
 //
-//  ⓘ **이 가드 자신은 test.yml 에 등록하지 않는다** — 확인: `node scripts/run-tests.mjs --scope=scripts`
-//     의 수집 목록에 이 파일이 있다. 이름이 `*.test.mjs` 라 러너가 자동으로 집어 가고(실 DB 를 안 쓰므로
+//  ⓘ **이 가드 자신은 test.yml 에 등록하지 않는다** — 확인: `node scripts/run-tests.mjs --scope=scripts --list`
+//     의 수집 목록에 이 파일이 있다(`--list` 없이 치면 확인이 아니라 그 면을 통째로 실행한다). 이름이 `*.test.mjs` 라 러너가 자동으로 집어 가고(실 DB 를 안 쓰므로
 //     유닛 체인에 속한다), CI 는 그 러너를 통째로 돌린다. 등록을 강제하는 가드가 정작 자기만 수기
 //     등록이면 같은 사고를 자기 자신에게 되풀이하게 되므로, 자동 수집되는 계층에 두는 것이 요점이다.
 //
@@ -23,7 +23,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel) => readFileSync(join(ROOT, rel), "utf8");
@@ -45,8 +45,11 @@ function findPgTests(dir) {
 const WORKFLOW = src(".github/workflows/test.yml");
 
 /** 러너가 **실제로** 수집하는 목록. 소스 텍스트가 아니라 행동을 본다 — 아래 P1 주석 참조. */
+//  stderr 는 **물려준다**(inherit). 정상 경로의 `--list` 는 stderr 에 아무 것도 안 쓰지만, 러너가 죽으면
+//  (플래그 제거·die·import 오류) execFileSync 는 `Command failed: …` 한 줄만 남기고 원인을 삼킨다 —
+//  실패는 시끄러운데 왜인지가 CI 로그에 안 남아 재현 없이는 못 고친다.
 const COLLECTED = execFileSync(process.execPath, ["scripts/run-tests.mjs", "--list"], {
-  cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+  cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"],
 }).split("\n").map((s) => s.trim()).filter(Boolean);
 
 const onDisk = findPgTests("src").sort();
@@ -80,9 +83,12 @@ t("[P1] 러너가 수집하는 목록에 pg-test 는 없다 — 그래서 수기
 // 등록을 강제하는 가드가 정작 자기만 안 돌면 막으려는 사고를 자기 자신에게 되풀이한다.
 //  헤더 주석이 «러너가 자동으로 집어 간다» 고 주장하므로, 그 주장을 여기서 기계로 단언한다.
 t("[P1-b] 이 가드 자신은 러너가 수집한다 — 그래서 test.yml 에 수기 등록하지 않는다", () => {
-  const self = "scripts/pg-test-registered.test.mjs";
+  // 자기 경로는 **파일 시스템에서 도출**한다 — 이름을 리터럴로 적으면 개명 때 엉뚱한 곳을 가리키는
+  //  헛경보가 되고(안전 방향이지만 사람을 헤매게 한다), 이 파일에도 값 복제가 하나 생긴다.
+  const self = relative(ROOT, fileURLToPath(import.meta.url)).split(sep).join("/");
   assert.ok(COLLECTED.includes(self),
-    `러너가 이 가드를 수집하지 않는다 — 아무도 안 돌린다. 수집 규칙이 바뀌었는지 확인하라(수집 ${COLLECTED.length}건)`);
+    `러너가 이 가드(${self})를 수집하지 않는다 — 아무도 안 돌린다. `
+    + `러너의 수집 면(scripts/)이나 파일 이름 규칙(*.test.mjs)이 바뀌었는지 확인하라(수집 ${COLLECTED.length}건)`);
 });
 
 // 글롭이 깨져 0건이 되면 아래 대조가 **전부 공허하게 통과**한다(빈 집합끼리는 항상 같다).
