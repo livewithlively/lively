@@ -156,6 +156,9 @@ function freeBranch(taken, want) {
 //  값이 곧 «이 세션» 이다. 훅과 다른 점은 CLAUDE_CODE_SESSION_ID 하나 — 훅은 stdin 의 session_id 로 받지만 MCP
 //  서버엔 그 입구가 없고, Claude Code 가 자식 프로세스에 싣는 이름이 이것이다(실측 2026-09-18: 동시 생존 중인
 //  mcp-local 프로세스들이 서로 다른 값을 갖고 있었다). 신원이 없으면 null — 그 땐 소유 판정을 하지 않는다(종전 동작).
+//  ⚠ 이 값이 세션 재개(--resume 등)에서 유지되는지는 하네스에 달려 있고 여기서 보장하지 않는다. 안 유지되면 재개한
+//   세션이 자기 어제 자리를 «주인 있는 남의 자리» 로 보고 옆자리를 판다 — 손실은 없고(작업은 그 자리에 그대로 있다)
+//   대가는 디렉터리 하나다. 되찾으려면 그 자리를 path 로 지목해 쓰면 된다(남의 스탬프는 덮지 않으니 경고가 뜬다).
 export function sessionKey(env = process.env) {   // export=테스트용·순수
   const direct = String(env.LIVELY_SESSION_ID || "").trim();
   if (direct) return direct;
@@ -194,28 +197,46 @@ function isMine(stamp, { pid, me, isSlot }) {
   if (pid !== null && pid !== undefined && stamp.project_id === pid) return true;
   return Boolean(me) && stamp.session === me;
 }
-// 이 자리를 지금 쓸 수 있나 — "free"(비었거나 워크트리가 아님) | "mine" | "other".
+// 이 자리를 지금 쓸 수 있나 — "free" | "mine" | "other"(다른 세션 것) | "unowned"(주인을 알 수 없는 자리).
+//  왜 other 와 unowned 를 가르나: **비켜서는 행동은 같아도 사람에게 할 말이 다르다.** 주인을 모르는 자리는
+//  ① 이 변경 이전에 뜬 워크트리 ② `.git` 이 디렉터리인 자리(사람이 손으로 clone 한 폴더 — 이 툴의 워크트리가 아니다)
+//  ③ 배관이 파손된 자리(#3678 사고 상태)다. 셋 다 "다른 세션이 쓰는 중" 이 아닌데 그렇게 안내하면 거짓말이 된다.
 //  워크트리가 아닌데 디렉터리만 있는 경우는 free 로 본다(종전과 같이 git 의 add 가 판정하게 둔다 — 비어 있으면 성공,
-//  아니면 git 이 거부한다). 배관이 파손된 자리(남의 admin 을 잇는 등)는 "other" 다: 고치지도 물지도 않고 비켜선다.
+//  아니면 git 이 거부한다).
 function slotStatus(ctx, wt, who) {
   if (!existsSync(gitfileOf(wt)) && !isGitRepo(ctx, wt)) return "free";
   const admin = adminOf(wt);
-  if (!admin || !existsSync(admin)) return "other";
+  if (!admin || !existsSync(admin)) return "unowned";
   const back = adminBackref(admin);
-  if (!back || !samePath(back, gitfileOf(wt))) return "other";
-  return isMine(readOwner(admin), who) ? "mine" : "other";
+  if (!back || !samePath(back, gitfileOf(wt))) return "unowned";
+  const stamp = readOwner(admin);
+  if (isMine(stamp, who)) return "mine";
+  return stamp ? "other" : "unowned";
 }
+// 비켜선 이유를 사람 말로 — 자리마다 사유가 다르므로 note 도 달라야 한다.
+const asideReason = (why) => (why === "other"
+  ? "다른 세션이 쓰고 있어"
+  : "이 툴이 만든 자리가 아니거나 주인 표시가 없어");
 // 쓸 수 있는 첫 자리 — <dir>/<repo>, <dir>/<repo>-2 … freeBranch 와 같은 규율을 경로에 적용한 것이다.
+//  ⚠ 여기서 고른 자리를 ⑤ 가 잡기 전에 다른 세션이 먼저 잡는 창이 있다(TOCTOU). 그 땐 자동으로 다시 고르지 않고
+//   git 의 실패를 그대로 올린다 — 조용한 공유가 아니라 시끄러운 실패이고(안전측), 호출자가 한 번 더 부르면 그 땐
+//   상대의 스탬프가 보여 비켜선다. 그 자리에서 재시도를 돌리는 건 창이 ms 단위라 값에 비해 흐름만 복잡해진다.
 //  상한이 9 인 이유(브랜치는 99): 자리는 디스크를 먹고, 10개가 찼다면 그건 배정 문제가 아니라 청소 문제다 —
 //  조용히 100번째를 파는 것보다 여기서 멈추고 사람에게 알리는 편이 낫다.
 function freeSlot(ctx, want, who) {
-  if (slotStatus(ctx, want, who) !== "other") return want;
-  for (let i = 2; i <= 9; i++) {
-    const alt = `${want}-${i}`;
-    if (slotStatus(ctx, alt, who) !== "other") return alt;
+  const taken = [];
+  for (let i = 1; i <= 9; i++) {
+    const at = i === 1 ? want : `${want}-${i}`;
+    const st = slotStatus(ctx, at, who);
+    if (st === "free" || st === "mine") return { path: at, why: i === 1 ? null : taken[0].why };
+    taken.push({ at, why: st, stamp: readOwner(adminOf(at)) });
   }
-  throw new Error(`쓸 수 있는 워크트리 자리가 없습니다(${want}, ${want}-2..9 가 전부 다른 세션 것입니다)`
-    + ` — 다 쓴 워크트리를 repo_worktree_remove 로 정리하거나 path 인자로 자리를 직접 지정하세요.`);
+  // 막다른 길에 두지 않는다 — 어느 자리가 누구 것인지까지 적는다(스탬프가 이미 그 정보를 갖고 있는데
+  //  안 보여주면 사람이 admin 의 json 을 아홉 번 열어 봐야 한다).
+  const who_ = taken.map((t) => `  ${t.at} — ${t.why === "other" ? `세션 ${t.stamp?.session ?? "?"}` : "주인 불명"}`
+    + `${t.stamp?.branch ? ` [${t.stamp.branch}]` : ""}${t.stamp?.stamped_at ? ` (${t.stamp.stamped_at})` : ""}`).join("\n");
+  throw new Error(`쓸 수 있는 워크트리 자리가 없습니다(${want}, ${want}-2..9 가 전부 차 있습니다):\n${who_}\n`
+    + `다 쓴 워크트리를 lively_local_repo_worktree_remove(CLI: lively repo worktree remove)로 정리하거나 path 인자로 자리를 직접 지정하세요.`);
 }
 
 // git 실패 한 줄 요약 — git 은 진행 메시지("Preparing worktree …")도 **stderr 에** 쓰므로 첫 줄이 곧 원인이 아니다
@@ -257,7 +278,8 @@ function branchHeldNote(ctx, base, branch) {
   const at = checkedOutBranches(listWorktrees(ctx, base)).get(branch);
   return at
     ? ` — 브랜치 '${branch}' 는 이미 '${at}' 워크트리가 쥐고 있습니다(git 은 한 브랜치를 두 워크트리에 못 겁니다).`
-      + ` 거기서 작업하거나, branch 인자로 다른 이름을 주세요.`
+      + ` 그 자리가 내 것이면 거기서 작업하고, 아니면 path·branch 인자 없이 다시 불러 옆자리를 받으세요`
+      + ` (남의 세션 워크트리에서 작업하지 말 것 — reset·stash 가 그쪽 작업에 닿습니다).`
     : "";
 }
 
@@ -460,7 +482,8 @@ export async function repoWorktree(ctx, args) {
   //  옮기지 않는다(멱등 계약). canonical 슬롯도 옮기지 않는다: 그 자리는 프로젝트 공용이고 서버 provision 과
   //  같은 자리여야 한다. 남는 건 «마커 없는 세션의 기본 자리 <cwd>/<repo>» — 여러 세션이 같은 cwd 에서 뜨면
   //  전부 이 한 자리로 수렴해 남의 워킹트리를 물던 바로 그 자리다.
-  const wt = (asked || who.isSlot) ? want : freeSlot(ctx, want, who);
+  const slot = (asked || who.isSlot) ? { path: want, why: null } : freeSlot(ctx, want, who);
+  const wt = slot.path;
   const asideFrom = wt === want ? null : want;
   const isSlot = canonical !== null && pid !== null && wt === canonical;
   const adminId = adminIdFor(wt, pid, canonical);
@@ -473,14 +496,28 @@ export async function repoWorktree(ctx, args) {
     const { admin } = verifyOwnAdmin(wt);                       // 남의 admin 을 잇고 있으면 여기서 멈춘다(조용히 재사용 금지)
     const adminNow = admin ? relinkAdmin(wt, admin, adminId) : null; // 서버 provision 등이 basename id 로 만든 것도 고유 id 로
     const b = ctx.sh("git", ["-C", wt, "rev-parse", "--abbrev-ref", "HEAD"], { allowFail: true }).stdout.trim();
-    const mine = isMine(readOwner(adminNow), who);
+    const stamp = readOwner(adminNow);
+    const mine = isMine(stamp, who);
     if (mine) writeOwner(adminNow, { session: me, project_id: pid, branch: b || null, worktree: wt });
     const out = { repo, worktree: wt, branch: b || null, base, admin: adminNow ? basename(adminNow) : null, note: "이미 워크트리가 있어 그대로 사용합니다." };
     // 내 것이 아닌 자리를 그대로 쓰는 경로는 이제 하나뿐이다 — 호출자가 path 로 그 자리를 **지목**한 경우(기본 자리는
     //  위에서 비켜섰다). 지목은 존중하되 조용히 넘기지는 않는다: 여기서 커밋하면 그 세션의 브랜치에 얹힌다.
-    if (!mine) {
-      out.warning = `이 워크트리는 이 세션이 만든 자리가 아닙니다(브랜치 '${b || "?"}'). 다른 세션이 쓰는 중일 수 있으니`
-        + ` 커밋 전에 git status 로 내가 안 만진 변경이 없는지 확인하세요 — 새 자리가 필요하면 path 인자를 빼고 다시 부르세요.`;
+    if (!mine && !stamp) {
+      // 주인 표시가 없는 자리를 **지목**했다 — 이 변경 이전에 뜬 워크트리가 여기 해당한다. 입양해서 이 세션 것으로
+      //  표시한다: 표시를 안 하면 그 자리는 아무 세션도 못 쓰는 사석으로 남고 부를 때마다 같은 경고가 뜬다.
+      //  남의 스탬프가 있는 자리는 입양하지 않는다(소유 탈취 금지) — 아래 경고로 간다.
+      if (writeOwner(adminNow, { session: me, project_id: pid, branch: b || null, worktree: wt })) {
+        out.note += " 주인 표시가 없던 자리라 이 세션 것으로 표시했습니다.";
+      }
+    } else if (!mine) {
+      out.warning = `이 워크트리는 이 세션이 만든 자리가 아닙니다(세션 ${stamp.session ?? "?"}, 브랜치 '${b || "?"}').`
+        + ` 그 세션이 쓰는 중일 수 있으니 커밋 전에 git status 로 내가 안 만진 변경이 없는지 확인하세요`
+        + ` — 새 자리가 필요하면 path 인자를 빼고 다시 부르세요.`;
+    } else if (!me && (pid === null || pid === undefined) && stamp && stamp.session) {
+      // 신원 없는 호출은 소유 판정을 끄고 재사용한다(isMine) — 그래서 다른 세션의 자리도 그대로 열린다. 막지는
+      //  않되(맨 터미널 CLI 의 멱등이 걸려 있다) 조용히 넘기지도 않는다.
+      out.warning = `이 자리는 세션 ${stamp.session} 이 쓰던 곳인데, 이 호출엔 세션 신원이 없어 소유 판정 없이 재사용합니다`
+        + ` — 그 세션이 작업 중이면 커밋이 섞입니다.`;
     }
     // 경고는 슬롯에서만 — 슬롯은 «어느 브랜치여야 하는지»(project/<pid>)가 정해져 있어 어긋남을 판정할 수 있다. 슬롯 밖은
     //  기대 브랜치가 없다(호출자가 branch 를 줬을 수도, wt/<repo>-n 일 수도) → 반환 branch 를 호출자가 본다.
@@ -523,7 +560,7 @@ export async function repoWorktree(ctx, args) {
   const out = { repo, worktree: wt, branch, base, ref: refBranch, admin: adminNow ? basename(adminNow) : null,
     note: `이 경로에서 작업하세요: ${wt} · base(${base})는 pristine 공유 원본이라 직접 작업 금지(커밋·빌드는 워크트리에서).` };
   if (asideFrom) {
-    out.note += ` · 기본 자리(${asideFrom})는 다른 세션이 쓰고 있어 옆자리로 비켜섰습니다.`;
+    out.note += ` · 기본 자리(${asideFrom})는 ${asideReason(slot.why)} 옆자리로 비켜섰습니다.`;
   }
   // 스탬프가 없으면 다음 호출이 이 자리를 «모르는 자리» 로 보고 또 옆으로 비켜선다 — 자리가 늘어나는 건 그 신호다.
   if (adminNow && !stamped) out.warning = `소유 표시(${basename(adminNow)}/lively-owner.json)를 쓰지 못했습니다 — 다음 호출이 이 자리를 재사용하지 않고 옆자리를 팝니다.`;

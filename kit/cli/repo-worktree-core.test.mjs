@@ -436,6 +436,30 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   check("S6: 소유 표시가 워킹트리에 안 보인다(add -A 오염 0)", dirtyA === "", dirtyA);
   check("S6: 소유 표시는 admin 안에 있다", existsSync(join(BASE, ".git", "worktrees", sA.admin, "lively-owner.json")), `${sA.admin} 에 없음`);
 
+  // S5-b) 지목해도 **남의 스탬프는 덮지 않는다** — 재사용은 되지만 소유는 넘어가지 않는다.
+  const stampOf = (adminId) => JSON.parse(readFileSync(join(BASE, ".git", "worktrees", adminId, "lively-owner.json"), "utf8"));
+  check("S5-b: 남의 자리를 지목해도 스탬프 주인은 그대로", stampOf(sA.admin).session === "sess-A", stampOf(sA.admin).session);
+
+  // S8) 주인 표시가 없는 자리(이 변경 이전에 뜬 워크트리) — 기본 호출은 비켜서되 사유를 바르게 말하고,
+  //  path 로 지목하면 입양한다(표시를 안 하면 아무도 못 쓰는 사석으로 남는다).
+  rmSync(join(BASE, ".git", "worktrees", sA.admin, "lively-owner.json"), { force: true });   // = 이 변경 이전에 뜬 워크트리
+  asSession("sess-E");
+  const sLegacy = await repoWorktree(ctx(shared), { repo: "base" });
+  check("S8: 주인 불명 자리는 비켜선다", sLegacy.worktree !== join(shared, "base"), sLegacy.worktree);
+  check("S8: 사유를 '다른 세션' 이라 거짓말하지 않는다", /주인 표시가 없어|만든 자리가 아니거나/.test(sLegacy.note || ""), sLegacy.note);
+  const sAdopt = await repoWorktree(ctx(shared), { repo: "base", path: join(shared, "base") });
+  check("S8: 지목하면 입양한다(사석 방지)", stampOf(sAdopt.admin).session === "sess-E", JSON.stringify(stampOf(sAdopt.admin)));
+  check("S8: 입양은 경고가 아니라 안내", !sAdopt.warning && /이 세션 것으로 표시/.test(sAdopt.note || ""), sAdopt.warning || sAdopt.note);
+
+  // S9) 자리가 다 차면 막다른 길에 두지 않는다 — 누가 쥐고 있는지 + 출구를 메시지에 담는다.
+  const full = join(SB, "full-cwd"); mkdirSync(full, { recursive: true });
+  for (let i = 1; i <= 9; i++) { asSession(`sess-full-${i}`); await repoWorktree(ctx(full), { repo: "base" }); }
+  asSession("sess-full-10");
+  let msgFull = ""; try { await repoWorktree(ctx(full), { repo: "base" }); } catch (e) { msgFull = String(e.message); }
+  check("S9: 자리 상한에 걸리면 실패한다", msgFull.length > 0, "성공해버림(10번째 자리를 팠다)");
+  check("S9: 누가 쥐고 있는지 알려준다", /sess-full-1\b/.test(msgFull), msgFull);
+  check("S9: 출구를 알려준다(정리 툴·path)", /lively_local_repo_worktree_remove/.test(msgFull) && /path/.test(msgFull), msgFull);
+
   // S7) 신원이 없는 호출(맨 터미널 CLI — 세션 id 도 프로젝트도 없다)은 종전대로 재사용한다.
   //  여기서 비켜서면 같은 명령을 두 번 친 사람이 매번 새 자리를 파게 된다(멱등 상실).
   const anon = join(SB, "anon-cwd"); mkdirSync(anon, { recursive: true });
