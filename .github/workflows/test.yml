@@ -169,6 +169,42 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/project/project-storage-ownership.pg-test.mjs
+      # ⑤-f 신원 전역 표 — 계정행이 워크스페이스마다 갈라지지 않는가. 이 버그는 **컬럼 기본값**(`tenant_id
+      #    DEFAULT current_setting(...)`)에 살았다: 쓰는 쪽 코드는 한 줄도 안 틀렸는데 DB 가 컨텍스트를 따라가
+      #    행을 늘린다. 기본값은 실 DDL 위에서만 발화하므로 목으로는 재현 자체가 불가능하다.
+      - name: 신원 전역 표(계정행 단일) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/db/identity-global-tenant.pg-test.mjs
+      # ⑤-g 화면 모드 기본값 — 스키마가 심는 DEFAULT 와 부팅 마이그레이션이 같은 값을 말하는가.
+      #    두 자리가 갈라져도 앱은 뜬다(새 행만 조용히 다른 모드로 생긴다) — 실 DDL 을 읽어야 보인다.
+      - name: 화면 모드 기본값 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/schema/ui-mode-default.pg-test.mjs
+      # ⑤-h 세션 승계 — «앞 세션을 이어받는다» 가 전부 SQL 조건과 순서다(누가 후계인가·한 번만·경쟁 시 하나).
+      #    가짜 저장소는 그 조건을 흉내 낼 뿐이라 조건 하나를 지워도 초록이다.
+      - name: 세션 승계 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/sessions/session-successor.pg-test.mjs
+      # ⑤-i 가시성 축 — «누가 무엇을 보는가» 는 보안 경계이고 판정이 전부 SQL 조건이다. 조건 하나가
+      #    느슨해지면 남의 것이 보이는데, 목 풀에서는 그 느슨함이 초록으로 지나간다.
+      - name: 가시성 축 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/visibility.pg-test.mjs
+      # ⑤-j 개인 해제(break-glass) — 위와 같은 경계의 **예외** 경로다. 해제가 실제로 열리는가보다
+      #    «해제가 끝나면 닫히는가 · 남의 것은 안 열리는가» 가 중요한데 그것도 SQL 조건이다.
+      - name: 가시성 개인 해제 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/vis-personal-unlock.pg-test.mjs
       # ⑥ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.
