@@ -20,6 +20,7 @@
 //
 //  실행: node scripts/pg-test-registered.test.mjs
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -41,8 +42,12 @@ function findPgTests(dir) {
   return out;
 }
 
-const RUNNER = src("scripts/run-tests.mjs");
 const WORKFLOW = src(".github/workflows/test.yml");
+
+/** 러너가 **실제로** 수집하는 목록. 소스 텍스트가 아니라 행동을 본다 — 아래 P1 주석 참조. */
+const COLLECTED = execFileSync(process.execPath, ["scripts/run-tests.mjs", "--list"], {
+  cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+}).split("\n").map((s) => s.trim()).filter(Boolean);
 
 const onDisk = findPgTests("src").sort();
 
@@ -62,9 +67,22 @@ const registeredSet = new Set(registered);
 // 이 가드의 **전제**를 먼저 못박는다 — 러너가 pg-test 를 자동 수집하게 바뀌면 수기 등록은 필요 없어지고
 //  이 가드도 test.yml 의 파일별 스텝도 걷어내야 한다. 전제가 사라졌는데 가드만 남으면, 사람은 이게 왜
 //  있는지 모른 채 새 파일을 계속 손으로 등록한다.
-t("[P1] 러너는 pg-test 를 자동 수집하지 않는다 — 그래서 수기 등록이 필요하다", () => {
-  assert.match(RUNNER, /\\\.pg-test\\\.mjs\$/,
-    "run-tests.mjs 가 pg-test 를 제외하지 않는다 — 자동 수집으로 바뀐 것이면 이 가드와 test.yml 의 파일별 스텝을 걷어내라");
+// 🔴 소스에서 제외 정규식 리터럴을 찾는 방식이 아니라 **러너를 돌려 수집 목록을 본다.** 리터럴 매칭은
+//  양방향으로 무르다: 제외를 `endsWith(".pg-test.mjs")` 로 리팩터하면 동작은 그대로인데 헛경보가 나고,
+//  반대로 조건부 자동수집을 얹으면서 리터럴만 남기면 전제가 사라졌는데도 통과한다(거짓 통과).
+t("[P1] 러너가 수집하는 목록에 pg-test 는 없다 — 그래서 수기 등록이 필요하다", () => {
+  const collectedPgTests = COLLECTED.filter((p) => p.endsWith(".pg-test.mjs"));
+  assert.deepEqual(collectedPgTests, [],
+    "러너가 pg-test 를 수집한다 — 자동 수집으로 바뀐 것이면 이 가드와 test.yml 의 파일별 스텝을 걷어내라: "
+    + collectedPgTests.join(" · "));
+});
+
+// 등록을 강제하는 가드가 정작 자기만 안 돌면 막으려는 사고를 자기 자신에게 되풀이한다.
+//  헤더 주석이 «러너가 자동으로 집어 간다» 고 주장하므로, 그 주장을 여기서 기계로 단언한다.
+t("[P1-b] 이 가드 자신은 러너가 수집한다 — 그래서 test.yml 에 수기 등록하지 않는다", () => {
+  const self = "scripts/pg-test-registered.test.mjs";
+  assert.ok(COLLECTED.includes(self),
+    `러너가 이 가드를 수집하지 않는다 — 아무도 안 돌린다. 수집 규칙이 바뀌었는지 확인하라(수집 ${COLLECTED.length}건)`);
 });
 
 // 글롭이 깨져 0건이 되면 아래 대조가 **전부 공허하게 통과**한다(빈 집합끼리는 항상 같다).
@@ -74,9 +92,10 @@ t(`[P2] pg-test 파일을 디스크에서 찾았다 (${onDisk.length}개)`, () =
 
 t("[P3] 🔴 실재하는 pg-test 는 전부 test.yml 에 등록돼 있다", () => {
   const missing = onDisk.filter((p) => !registeredSet.has(p));
-  // 이 가드가 보는 것은 «test.yml 어딘가에서 `node <경로>` 로 실행된다» 까지다 — 그 스텝이 올바른 잡에
-  //  있는지·`ITEMS_DATABASE_URL` 을 받는지는 검사하지 않는다(YAML 구조 파싱을 들이지 않았다). 그러니
-  //  메시지도 거기까지만 말하고, 나머지는 옆 스텝을 본뜨라고 가리킨다.
+  // 이 가드가 보는 것은 «test.yml 어딘가에서 `node <경로>` 로 실행된다» 까지다. 그 스텝이 올바른 잡에
+  //  있는지·`ITEMS_DATABASE_URL` 을 받는지·`if:`/`continue-on-error:` 로 사실상 꺼져 있지 않은지는
+  //  검사하지 않는다(YAML 구조 파싱을 들이지 않았다 — 실측으로 확인한 남은 맹점이다).
+  //  그러니 메시지도 거기까지만 말하고, 나머지는 옆 스텝을 본뜨라고 가리킨다.
   assert.deepEqual(missing, [],
     "test.yml 에서 실행되지 않는 pg-test 가 있다 — CI 가 한 번도 돌리지 않는다(초록이지만 아무도 안 본다). "
     + `옆의 pg-test 스텝을 그대로 본떠 추가하라: ${missing.join(" · ")}`);

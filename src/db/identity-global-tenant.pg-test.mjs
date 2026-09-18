@@ -46,14 +46,11 @@ try {
          VALUES($1,'human',$1,$1||'@example.invalid','active','["items"]'::jsonb)
        ON CONFLICT (tenant_id, id) DO UPDATE SET nickname='from-other-ws'`, [A]);
   } finally {
-    // 🔴 이 커넥션은 풀로 **돌려보내지 않고 파기**한다(release(true)). 위에서 세션 스코프
-    //  (`set_config(..., false)`)로 컨텍스트를 심었는데, 그 GUC 는 되돌릴 방법이 없다 —
-    //  `set_config(...,'')` 도 `RESET` 도 커스텀 GUC 를 **미설정이 아니라 빈 문자열**로 만든다(실측).
-    //  그 커넥션을 다음 차례가 빌리면 `COALESCE(current_setting('app.tenant_id', true), <단일테넌트>)`
-    //  가 NULL 이 아니라 '' 를 받아 폴백하지 못하고 `invalid input syntax for type uuid: ""` 로 죽는다
-    //  (실제로 아래 ② 의 audit() 이 그렇게 죽었다).
-    //  제품이 세션 스코프를 금하고 `SET LOCAL` 만 쓰는 이유가 이것이다(src/db/tenant-db.ts 머리말) —
-    //  여기서만 예외적으로 쓰는 건 «기본값이 컨텍스트를 따라가는가» 가 이 테스트의 검증 대상이라서다.
+    // 🔴 풀로 돌려보내지 않고 **파기**한다. 세션 스코프로 심은 tenant GUC 는 되돌릴 수단이 없어서다
+    //  (그 이유는 src/db/client.ts 의 wrapClient 주석에 있다) — 반납하면 다음 차용자가 죽는다.
+    //  실제로 아래 ② 의 audit() 이 그렇게 죽었다.
+    //  제품이 세션 스코프를 금하고 `SET LOCAL` 만 쓰는 이유도 같다(src/db/tenant-db.ts 머리말).
+    //  여기서만 예외로 쓰는 건 «기본값이 컨텍스트를 따라가는가» 가 이 테스트의 검증 대상이라서다.
     c.release(true);
   }
   const after = await rowsOf(A);

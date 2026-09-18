@@ -1,7 +1,10 @@
 name: test
 # 테스트 CI (#880) — 종전엔 release.yml(태그 빌드)뿐이라 테스트가 CI 에서 안 돌았다.
-#  ① 목 유닛 체인(npm test, DB 불요)  ② **device-auth PG 통합 테스트**(실제 Postgres 필요 — 원자적 발급·
-#     slow_down·ON-CONFLICT·DB시각 만료는 목 pg 로 검증 불가, #880 설계 R2-NEW2).
+#  ① 목 유닛 체인(npm test, DB 불요)  ② **PG 통합 테스트**(`*.pg-test.mjs` — 실제 Postgres 필요. 원자적
+#     발급·ON-CONFLICT·RETURNING rowCount·DB시각 만료·RLS 조건은 목 pg 로 검증 불가, #880 설계 R2-NEW2).
+#     ⚠ 이 계층은 러너 수집 밖이라 **아래에 파일별 스텝으로 등록해야만 돈다** — 등록을 빠뜨리면 파일은
+#      레포에 있고 CI 는 초록인데 한 번도 안 도는 무음 실패가 된다. `scripts/pg-test-registered.test.mjs`
+#      가 그 누락을 막는다(유닛 체인에 들어 있어 PR 마다 돈다).
 #  ⚠ items DB 는 pgvector 이미지여야 한다(items-db-pgvector-image-invariant, #172) — plain postgres 금지.
 # ⚠ 트리거 설계(#1508) — push 를 '**' 로 두면 PR 브랜치 하나에 CI 가 **두 번** 붙는다(push 이벤트 + pull_request
 #  이벤트). 실측 2026-08-04: 06:08:28 push / 06:08:30 pull_request 가 같은 커밋에 각각 돌았다(2분 22초짜리가 2배).
