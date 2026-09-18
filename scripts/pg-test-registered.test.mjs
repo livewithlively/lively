@@ -13,17 +13,24 @@
 //  왜 목록을 여기 적지 않나 — 그 순간 이 파일이 세 번째 SoT 가 되어 같이 썩는다. 양쪽을 **각자의
 //     SoT 에서 읽어**(파일 시스템 ↔ test.yml) 대조하므로, 파일을 늘리거나 지워도 이 파일은 그대로다.
 //
-//  ⓘ **이 가드 자신은 test.yml 에 등록하지 않는다** — 확인: `node scripts/run-tests.mjs --scope=scripts --list`
-//     의 수집 목록에 이 파일이 있다(`--list` 없이 치면 확인이 아니라 그 면을 통째로 실행한다). 이름이 `*.test.mjs` 라 러너가 자동으로 집어 가고(실 DB 를 안 쓰므로
-//     유닛 체인에 속한다), CI 는 그 러너를 통째로 돌린다. 등록을 강제하는 가드가 정작 자기만 수기
-//     등록이면 같은 사고를 자기 자신에게 되풀이하게 되므로, 자동 수집되는 계층에 두는 것이 요점이다.
+//  ⓘ **이 가드 자신은 test.yml 에 등록하지 않는다** — 이름이 `*.test.mjs` 라 러너가 자동으로 집어 가고
+//     (실 DB 를 안 쓰므로 유닛 체인에 속한다), CI 는 그 러너를 통째로 돌린다. 등록을 강제하는 가드가
+//     정작 자기만 수기 등록이면 같은 사고를 자기 자신에게 되풀이하게 되므로, 자동 수집되는 계층에
+//     두는 것이 요점이다. 확인: `node scripts/run-tests.mjs --scope=scripts --list` 의 목록에 이 파일이
+//     있다(`--list` 없이 치면 확인이 아니라 그 면을 통째로 실행한다).
+//
+//  🔴 **그 사실을 여기서 단언하려다 뺐다(기각된 대안).** 「수집 목록에 내가 있다」 를 단언해도, 수집이
+//     안 되면 이 파일이 **애초에 실행되지 않아** 그 단언도 돌지 않는다 — 지켜야 할 때 침묵하고 그 밖의
+//     경우에만 우는, 가드가 아니라 헛경보 장치다. 실제로 러너를 자식으로 띄워(`--list`) 확인하게 했더니
+//     CI 에서 부모와 자식의 수집 결과가 갈려(687 vs 609) 빨간불이 났다. **중첩 실행된 러너는 부모의
+//     세계를 재현하지 않는다** — 그래서 아래 P1 도 자식 러너가 아니라 러너 소스를 읽어 판정한다.
+//     이 파일이 실제로 도는지는 CI 로그에 이 파일 이름이 찍히는가로 확인한다.
 //
 //  실행: node scripts/pg-test-registered.test.mjs
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, join } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel) => readFileSync(join(ROOT, rel), "utf8");
@@ -45,12 +52,7 @@ function findPgTests(dir) {
 const WORKFLOW = src(".github/workflows/test.yml");
 
 /** 러너가 **실제로** 수집하는 목록. 소스 텍스트가 아니라 행동을 본다 — 아래 P1 주석 참조. */
-//  stderr 는 **물려준다**(inherit). 정상 경로의 `--list` 는 stderr 에 아무 것도 안 쓰지만, 러너가 죽으면
-//  (플래그 제거·die·import 오류) execFileSync 는 `Command failed: …` 한 줄만 남기고 원인을 삼킨다 —
-//  실패는 시끄러운데 왜인지가 CI 로그에 안 남아 재현 없이는 못 고친다.
-const COLLECTED = execFileSync(process.execPath, ["scripts/run-tests.mjs", "--list"], {
-  cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"],
-}).split("\n").map((s) => s.trim()).filter(Boolean);
+const RUNNER = src("scripts/run-tests.mjs");
 
 const onDisk = findPgTests("src").sort();
 
@@ -70,25 +72,22 @@ const registeredSet = new Set(registered);
 // 이 가드의 **전제**를 먼저 못박는다 — 러너가 pg-test 를 자동 수집하게 바뀌면 수기 등록은 필요 없어지고
 //  이 가드도 test.yml 의 파일별 스텝도 걷어내야 한다. 전제가 사라졌는데 가드만 남으면, 사람은 이게 왜
 //  있는지 모른 채 새 파일을 계속 손으로 등록한다.
-// 🔴 소스에서 제외 정규식 리터럴을 찾는 방식이 아니라 **러너를 돌려 수집 목록을 본다.** 리터럴 매칭은
-//  양방향으로 무르다: 제외를 `endsWith(".pg-test.mjs")` 로 리팩터하면 동작은 그대로인데 헛경보가 나고,
-//  반대로 조건부 자동수집을 얹으면서 리터럴만 남기면 전제가 사라졌는데도 통과한다(거짓 통과).
-t("[P1] 러너가 수집하는 목록에 pg-test 는 없다 — 그래서 수기 등록이 필요하다", () => {
-  const collectedPgTests = COLLECTED.filter((p) => p.endsWith(".pg-test.mjs"));
-  assert.deepEqual(collectedPgTests, [],
-    "러너가 pg-test 를 수집한다 — 자동 수집으로 바뀐 것이면 이 가드와 test.yml 의 파일별 스텝을 걷어내라: "
-    + collectedPgTests.join(" · "));
-});
-
-// 등록을 강제하는 가드가 정작 자기만 안 돌면 막으려는 사고를 자기 자신에게 되풀이한다.
-//  헤더 주석이 «러너가 자동으로 집어 간다» 고 주장하므로, 그 주장을 여기서 기계로 단언한다.
-t("[P1-b] 이 가드 자신은 러너가 수집한다 — 그래서 test.yml 에 수기 등록하지 않는다", () => {
-  // 자기 경로는 **파일 시스템에서 도출**한다 — 이름을 리터럴로 적으면 개명 때 엉뚱한 곳을 가리키는
-  //  헛경보가 되고(안전 방향이지만 사람을 헤매게 한다), 이 파일에도 값 복제가 하나 생긴다.
-  const self = relative(ROOT, fileURLToPath(import.meta.url)).split(sep).join("/");
-  assert.ok(COLLECTED.includes(self),
-    `러너가 이 가드(${self})를 수집하지 않는다 — 아무도 안 돌린다. `
-    + `러너의 수집 면(scripts/)이나 파일 이름 규칙(*.test.mjs)이 바뀌었는지 확인하라(수집 ${COLLECTED.length}건)`);
+// 이 가드의 **전제**를 먼저 못박는다 — 러너가 pg-test 를 자동 수집하게 바뀌면 수기 등록은 필요 없어지고
+//  이 가드도 test.yml 의 파일별 스텝도 걷어내야 한다. 전제가 사라졌는데 가드만 남으면, 사람은 이게 왜
+//  있는지 모른 채 새 파일을 계속 손으로 등록한다.
+//
+//  판정은 **수집 코드가 pg-test 를 언급하는가** 다(정규식 형태가 아니라 토큰). 형태를 못박으면
+//  `endsWith(".pg-test.mjs")` 같은 무해한 리팩터에 헛경보가 나고, 반복되면 사람이 가드를 꺼 버린다.
+//  반대로 제외를 **통째로 지우면** 언급이 사라져 빨간불이 뜬다 — 위험한 방향으로는 운다.
+//  (자식 러너를 띄워 실제 수집 목록을 보는 쪽이 더 엄밀해 보이나 성립하지 않는다 — 머리말의
+//   «기각된 대안» 참조. 중첩 실행된 러너는 부모와 다른 목록을 낸다.)
+t("[P1] 러너의 수집 코드가 pg-test 를 제외한다 — 그래서 수기 등록이 필요하다", () => {
+  const from = RUNNER.indexOf("function collect(");
+  assert.notEqual(from, -1, "run-tests.mjs 에서 collect() 를 못 찾았다 — 가드가 무엇을 볼지 모른다");
+  const body = RUNNER.slice(from, RUNNER.indexOf("\n}", from));
+  assert.match(body, /pg-test/,
+    "러너의 collect() 가 pg-test 를 더는 언급하지 않는다 — 자동 수집으로 바뀐 것이면 이 가드와 "
+    + "test.yml 의 파일별 스텝을 걷어내라(그대로 두면 아무 것도 지키지 않는 채 유지비만 든다)");
 });
 
 // 글롭이 깨져 0건이 되면 아래 대조가 **전부 공허하게 통과**한다(빈 집합끼리는 항상 같다).
