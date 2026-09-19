@@ -27,7 +27,7 @@
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다.
 //  ⚠ #2460 — 그중 **사람이 고른 것**(고정·접힘·묶는 축)은 서버가 정본이고 브라우저는 첫 페인트용
 //   캐시다(shell-prefs.ts). 선언 한 줄이 어느 쪽인지 말한다 — shellPrefStore = 계정 · deviceStore = 이 기기.
-import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
+import { api, el, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { planWikiCards, type WikiCardPlan } from './wiki-cards.js';
 import { findMatcher } from '../lib/find.js';
 import { splitFolderRows, foldCardRows, projectPastRows, projCardRows, type PastRowLike } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음 · #3870 — 카드에 자기 화면 줄을 안 넣는다
@@ -161,7 +161,7 @@ function readStores(): void {
   grpOpened = loadSet(GRPOPENED_STORE);
   try { groupProj = localStorage.getItem(GROUP_STORE) === 'proj'; } catch (_) { /* 못 읽어도 종전 축으로 돈다 */ }
   try { showDone = localStorage.getItem(DONE_KEY) === '1'; mineOnly = localStorage.getItem(MINE_KEY) === '1'; } catch (_) { /* noop */ }
-  try { projLens = localStorage.getItem(LENS_STORE) === 'active' ? 'active' : 'tree'; } catch (_) { /* 기본 렌즈(폴더 · 리스트)로 */ }
+  try { localStorage.removeItem(LENS_STORE_LEGACY); } catch (_) { /* noop */ }
   foldClosed = loadSet(FOLD_CLOSED_STORE);
 }
 
@@ -374,23 +374,20 @@ export interface SideInstance {
    *  · 객체면 그 뜻으로 그린다 — [AI 세션] 구역은 프로젝트 트리 행과 같은 것을 싣는다(보관 · 휴지통). */
   close?: { kind: 'x' | 'trash'; label: string; title: string; run: () => void } | null;
 }
-// ══ #2043 — [프로젝트] 구역의 **렌즈 둘**: 진행 중 ↔ 폴더 · 리스트 ═══════════════════════
-//  레일 [프로젝트]를 누르면 사이드바가 둘 떴다 — 이 트리(진행 중 · 프로젝트 › 세션)와, 액자 안 클래식 앱이 들고 온
-//  「폴더 · 리스트」 패널. 둘은 **다른 질문**에 답한다(무엇이 도나 / 어디에 정리돼 있나)라 하나를 버리지 않고 스위치로
-//  갈랐다(원준 2026-08-26, 5안 중 안 3 — 지식 project-sidebar-unify-5-proposals-2043). 클래식 패널은 액자 안에서
-//  더는 그리지 않는다(projects/board.ts renderProjectV2Board).
-//  · 기본은 폴더 · 리스트(원준 선택). 고른 렌즈는 이 브라우저가 기억한다.
-//  · 폴더 · 리스트 렌즈는 **리스트까지만**(프로젝트 행 없음) — 리스트를 누르면 가운데 보드가 그 리스트로 간다(#/projects2/l/<id>).
+// ══ #2043 — [프로젝트] 구역 = 「폴더 · 리스트」 하나 ═══════════════════════════════════
+//  레일 [프로젝트]를 누르면 사이드바가 둘 떴다 — 새 셸 트리(도는 세션이 있는 프로젝트 › 세션)와, 액자 안 클래식 앱이
+//  들고 온 「폴더 · 리스트」 패널. 처음엔 둘을 스위치로 갈랐다(원준 2026-08-26, 5안 중 안 3 — 지식
+//  project-sidebar-unify-5-proposals-2043). 2026-09-19 원준 지시로 스위치를 걷고 **폴더 · 리스트 하나로 고정**했다 —
+//  도는 세션은 [홈]·[AI 세션] 구역이 보여 준다. 클래식 패널은 액자 안에서 더는 그리지 않는다(projects/board.ts renderProjectV2Board).
+//  · **리스트까지만**(프로젝트 행 없음) — 리스트를 누르면 가운데 보드가 그 리스트로 간다(#/projects2/l/<id>).
 //  · 끌어다 놓기·리스트 ⋯ 메뉴는 1차에서 뺐다 — 리스트 설정·즐겨찾기 토글은 보드 머리줄의 ⌄ · ☆ 가 한다(#1067).
-const LENS_STORE = 'lively_v2_proj_lens';               // 'active' | 'tree'
+const LENS_STORE_LEGACY = 'lively_v2_proj_lens';   // 스위치가 남긴 고른 쪽 기록 — 이제 고를 것이 없어 치운다
 const FOLD_CLOSED_STORE = shellPrefStore('lively_v2_proj_fold_closed', 'list'); // 접어 둔 폴더 id
-type ProjLens = 'active' | 'tree';
-let projLens: ProjLens = 'tree';
 let foldClosed = new Set<string>();
-let favLists: Set<number> | null = null;   // 내 즐겨찾기 리스트(#670) — 이 렌즈에 처음 들어올 때 한 번 당긴다
+let favLists: Set<number> | null = null;   // 내 즐겨찾기 리스트(#670) — 이 구역에 처음 들어올 때 한 번 당긴다
 let favLoading = false;
 type NewKind = 'proj' | 'list' | 'folder';
-let newKind: NewKind = 'proj';             // ＋ 줄이 무엇을 만드나 — 폴더 · 리스트 렌즈에서만 셋 중 고른다
+let newKind: NewKind = 'proj';             // ＋ 줄이 무엇을 만드나 — [프로젝트] 구역의 ＋ 메뉴에서 셋 중 고른다
 const NEW_COPY: Record<NewKind, { ph: string; label: string }> = {
   proj: { ph: '새 프로젝트 이름을 적고 Enter', label: '새 프로젝트 이름' },
   list: { ph: '새 리스트 이름을 적고 Enter', label: '새 리스트 이름' },
@@ -1069,7 +1066,7 @@ function render(): void {
   const sideRoot = last.host.closest('.v2-side');
   sideRoot?.classList.toggle('ws-personal', wsKind === 'personal');
   //  #2016 — **무엇을 그릴지는 레일이 고른 구역이 정한다.** 홈은 종전 화면(열린 앱 목록) 그대로이고,
-  //   나머지 셋은 그 구역의 렌즈다: AI 세션 = 세션 전체, 프로젝트 = 프로젝트 트리, 위키 = 분류.
+  //   나머지 셋은 그 구역의 렌즈다: AI 세션 = 세션 전체, 프로젝트 = 폴더 · 리스트, 위키 = 분류.
   //   ⚠ 구역은 주소를 따라 저절로 바뀌지 않는다(rail.ts 머리말) — 목록에서 뭔가를 여는 순간
   //    사이드바가 갈아엎이면 방금 보던 목록이 사라진다.
   //  #2423 — 자료 앱이 활성인 동안 사이드바 칸은 자료의 것이다(앱 소유 사이드바). 구역이 아니라 주소로
@@ -1099,9 +1096,6 @@ function secHead(title: string, count: number | null, ...acts: Array<HTMLElement
     count != null ? el('span', { class: 'v2-app-count', text: String(count) }) : null,
     ...acts);
 }
-
-/** 켜져 있는 필터 수 — 0이면 요약 줄을 그리지 않는다. */
-function fltCount(): number { return (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) + (showDone ? 1 : 0); }
 
 // ── 찾기의 잣대 — **구역이 달라도 하나다**(원준 2026-08-31: "검색 아이콘 쪽 검색 품질이 너무 안 좋다") ──────
 //  종전엔 구역마다 `haystack.toLowerCase().includes(q)` 한 줄이었다. 붙어 있는 부분문자열 하나만 보므로
@@ -1476,43 +1470,8 @@ function renderInboxSide(): void {
   listAfter(keep);
 }
 
-// ══ [프로젝트] 구역 (#2016) — #1883 이전의 프로젝트 트리를 그대로 되살린다. ══════
-//  트리 기계(renderTree·projRow·sessRow·binRows)는 지우지 않고 남아 있었다 — 새 구역은 그 자리를 되찾은 것이다.
-function renderProjects(): void {
-  if (!last) return;
-  if (projLens === 'tree') { renderProjTree(); return; }   // #2043 — 렌즈가 갈린다(위 LENS_STORE 머리말)
-  const { host, data } = last;
-  const navEl = navRow();
-  const navHost = hooks.navHost?.() || null;
-  if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
-
-  const rows = buildRows(data);
-  const liveAll = data.sessions.filter(isLive);
-  const doneCount = rows.filter((r) => r.proj && r.done && !r.live.length).length;
-  const activeN = rows.filter((r) => r.proj && !r.archived).length;
-  countEl = el('span', { class: 'v2-k' });
-  treeEl = el('div', { class: 'v2-tree' }) as HTMLElement;
-
-  const fh = findHold();
-  const findEl = findShown() ? findInput('프로젝트 찾기') : null;
-  host.replaceChildren(
-    ...topBits(navEl, navHost),
-    el('section', { class: 'v2-app-space', 'aria-label': '프로젝트' },
-      secHead('프로젝트', null, countEl, newBtn(), findBtn(), filterBtn(activeN, liveAll, doneCount)),
-      lensSwitch(),
-      ...(findEl ? [el('div', { class: 'v2-find v2-find--apps' }, findEl)] : []),
-      ...(fltCount() ? [filterSummary(fltCount())] : []),
-      ...(newOpen ? [newProjRow()] : []),
-      treeEl),
-    secFoot());
-
-  renderTree(rows);
-  keepSideScroll(treeEl, 'v2-tree');
-  findRestore(findEl, fh);
-  bindFindKey();
-}
-
-// ══ [프로젝트] 구역 · 폴더 · 리스트 렌즈 (#2043) ══════════════════════════════════
+// ══ [프로젝트] 구역 (#2016) · 폴더 · 리스트 하나로 고정 (#2043, 위 FOLD_CLOSED_STORE 머리말) ══════════
+//  프로젝트 › 세션 트리 기계(renderTree·projRow·sessRow·binRows)는 renderLegacy 가 아직 쓴다 — 이 구역만 안 부른다.
 //  클래식 프로젝트 앱의 「폴더 · 리스트」 패널(projects/board.ts renderArea)을 새 셸 문법으로 다시 그린 것 — 리스트까지만.
 //  재료는 이미 V2Data 에 있다(main.ts loadData 가 lists · folders 를 프로젝트와 함께 당긴다, #1883). 즐겨찾기만 한 번 더 당긴다.
 interface TreeList { id: number; name: string; folder_id?: number | null; visibility?: string | null; settings?: { icon?: string | null } | null }
@@ -1525,7 +1484,7 @@ export function loadFavLists(): void {
     favLists = new Set<number>(((d && d.project_lists) || []).map((x: unknown) => Number(x)).filter((n: number) => Number.isFinite(n)));
     favLoading = false;
     saveFavTop();
-    if (last && (hooks.section?.() || 'home') === 'proj' && projLens === 'tree') redraw();
+    if (last && (hooks.section?.() || 'home') === 'proj') redraw();
   }).catch(() => { favLoading = false; favLists = new Set<number>(); });
 }
 
@@ -1571,31 +1530,7 @@ function projScopeKey(): string {
   return /^#\/projects2\/none/.test(location.hash) ? 'none' : '';
 }
 
-function setLens(k: ProjLens): void {
-  if (projLens === k) return;
-  projLens = k;
-  try { localStorage.setItem(LENS_STORE, k); } catch (_) { /* 못 남겨도 이번 화면은 된다 */ }
-  // 찾기 칸과 ＋ 줄은 렌즈마다 다른 것을 찾고 만든다 — 넘길 때 비운다(옛 검색어가 새 목록을 조용히 줄이면 안 된다).
-  sideFilter = ''; findOpen = false; newOpen = false; newDraft = ''; newErr = '';
-  redraw();
-}
-
-/** 렌즈 스위치 — [진행 중 | 폴더 · 리스트]. 답을 기다리는 세션이 있으면 **다른 렌즈에 있을 때** 진행 중 쪽에 앰버 점(숫자는 안 단다 —
- *  사이드바의 앰버 숫자 배지는 하나뿐이라는 #1719 규칙). 8/25 결정 ①(시간순 ↔ 프로젝트별 토글)과 같은 장치다. */
-function lensSwitch(): HTMLElement {
-  const data = last ? last.data : null;
-  const waiting = !!data && data.sessions.some((s) => isLive(s) && isMine(s) && s.stateKey === 'waiting');
-  const tab = (k: ProjLens, label: string, dot: boolean, title: string): HTMLElement =>
-    el('button', { class: 'v2-lens-b' + (projLens === k ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': String(projLens === k), title,
-      onclick: () => setLens(k) },
-      el('span', { text: label }),
-      dot ? el('i', { class: 'v2-lens-dot', role: 'img', 'aria-label': '답을 기다리는 세션이 있어요' }) : null);
-  return el('div', { class: 'v2-lens', role: 'tablist', 'aria-label': '무엇을 볼지' },
-    tab('active', '진행 중', waiting && projLens !== 'active', '진행 중 — 도는 세션이 있는 프로젝트와 그 세션'),
-    tab('tree', '폴더 · 리스트', false, '폴더 · 리스트 — 프로젝트가 정리된 자리. 리스트를 누르면 가운데 보드가 그 리스트로 갑니다'));
-}
-
-/** 폴더 · 리스트 렌즈의 ＋ — 무엇을 만들지 셋 중 고른다(프로젝트 · 리스트 · 폴더). 옛 패널의 「＋ 새로 만들기 ▾」(#1067) 자리. */
+/** 폴더 · 리스트의 ＋ — 무엇을 만들지 셋 중 고른다(프로젝트 · 리스트 · 폴더). 옛 패널의 「＋ 새로 만들기 ▾」(#1067) 자리. */
 function newMenuBtn(): HTMLElement {
   return el('button', {
     class: 'v2-add' + (newOpen ? ' on' : ''), type: 'button', 'aria-label': '새로 만들기', 'aria-haspopup': 'menu', 'aria-expanded': String(newOpen),
@@ -1613,7 +1548,7 @@ function newMenuBtn(): HTMLElement {
   }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-add-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })));
 }
 
-function renderProjTree(): void {
+function renderProjects(): void {
   if (!last) return;
   const { host, data } = last;
   const navEl = navRow();
@@ -1712,7 +1647,6 @@ function renderProjTree(): void {
     ...topBits(navEl, navHost),
     el('section', { class: 'v2-app-space', 'aria-label': '프로젝트' },
       secHead('프로젝트', null, newMenuBtn(), findBtn()),
-      lensSwitch(),
       ...(findEl ? [el('div', { class: 'v2-find v2-find--apps' }, findEl)] : []),
       ...(newOpen ? [newProjRow()] : []),
       listEl),
@@ -2251,7 +2185,7 @@ function newProjRow(): HTMLElement {
     line.classList.add('sending');
     try {
       if (newKind === 'list' || newKind === 'folder') {
-        // #2043 — 폴더 · 리스트 렌즈의 ＋. 만든 것을 목록에 **낙관적으로** 세운다(다음 폴링이 정본으로 덮는다 — 그때까지 이 줄이 선다).
+        // #2043 — [프로젝트] 구역(폴더 · 리스트)의 ＋. 만든 것을 목록에 **낙관적으로** 세운다(다음 폴링이 정본으로 덮는다 — 그때까지 이 줄이 선다).
         const isList = newKind === 'list';
         const made = await api(isList ? '/api/ui/v6/project-lists' : '/api/ui/v6/project-folders', { method: 'POST', body: JSON.stringify({ name }) })
           .then((d: any) => (d && (isList ? d.list : d.folder)) || d);
