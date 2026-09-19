@@ -23,6 +23,10 @@ const check = (n, cond, why) => (cond ? ok(n) : bad(n, why || "조건 불만족"
 const SB = mkdtempSync(join(tmpdir(), "wt-core-test-"));
 // hermetic — git 신원이 없는 머신(CI 러너·새 개발기)에서도 픽스처 커밋이 돌게 env 로 고정(#1313 R4 CI 승격에서 실측).
 process.env.GIT_AUTHOR_NAME = process.env.GIT_COMMITTER_NAME = "wt-core-test";
+// 세션 신원도 고정한다 — 소유 판정(#3678 후속)이 env 에서 «이 세션» 을 읽으므로, 안 고정하면 개발기(하네스 env 有)와
+//  CI(無)가 다른 경로를 탄다. 아래 asSession() 이 «다른 세션» 을 흉내낼 때 이 값만 갈아끼운다.
+process.env.CODEX_THREAD_ID = process.env.CODEX_SESSION_ID = process.env.CLAUDE_SESSION_ID = process.env.CLAUDE_CODE_SESSION_ID = "";
+process.env.LIVELY_SESSION_ID = "wt-core-test-A";
 process.env.GIT_AUTHOR_EMAIL = process.env.GIT_COMMITTER_EMAIL = "wt-core-test@test.local";
 const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   try { return { stdout: execFileSync(cmd, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }), stderr: "", code: 0 }; }
@@ -37,7 +41,7 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   process.env.LIVELY_REPOS_DIR = SB;                     // reposDir() → SB ⇒ base = SB/base
   process.env.TMPDIR = join(SB, "ostmp");                // os.tmpdir() → SB/ostmp (핀 기본경로를 샌드박스 안으로 — 실제 tmp 오염 방지)
   mkdirSync(join(SB, "ostmp"), { recursive: true });
-  const { repoWorktree, repoPin, repoPinRemove, REPO_NAME_RE, authNote, gitHostOf } = await import(pathToFileURL(join(HERE, "repo-worktree-core.mjs")));
+  const { repoWorktree, repoPin, repoPinRemove, REPO_NAME_RE, authNote, gitHostOf, sessionKey } = await import(pathToFileURL(join(HERE, "repo-worktree-core.mjs")));
 
   // ── 0) REPO_NAME_RE — 레포명은 경로 컴포넌트라 점세그먼트(traversal) 거부, 이름 속 점은 허용(#932 후속) ──
   check("REPO_NAME_RE: '..' 거부(traversal)", REPO_NAME_RE.test("..") === false, "'..' 통과");
@@ -385,6 +389,100 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   check("L: locked 등록은 스테일이어도 안 지운다 → 그 브랜치를 달라면 실패(등록 보존)", msgL.length > 0 && listL.includes(lc(normPath(lockedPath))), msgL ? "등록이 사라짐" : "성공해버림(locked 등록을 지웠다)");
   const rL3 = await repoWorktree(ctx(proj), { repo: "base", path: join(SB, "scratch", "locked-three") });
   check("L: 기본 이름 고를 때 locked 등록의 브랜치는 점유로 센다(다른 이름)", rL3.branch !== rL.branch && /^wt\/base/.test(rL3.branch), `${rL.branch} vs ${rL3.branch}`);
+
+  // ── S) 세션간 자리 점유(#3678 후속) — 이름(브랜치)에만 있던 규율을 자리(경로)에도 ────────────────────
+  //  회귀 방어: 같은 cwd 에서 뜬 두 세션이 기본 자리 <cwd>/<repo> 하나로 수렴했고, 재사용 판정에 소유자가 없어
+  //  뒤에 온 세션이 앞 세션의 **워킹트리와 브랜치를 그대로** 받았다(그 자리에서 커밋하면 남의 브랜치에 얹힌다).
+  const asSession = (sid) => { process.env.LIVELY_SESSION_ID = sid; };
+
+  // S0) 신원 해석은 훅(run-custom.executionSessionId)과 같은 규약 — 순수 함수라 env 주입으로 본다.
+  check("S0: LIVELY_SESSION_ID 우선", sessionKey({ LIVELY_SESSION_ID: "box-1", CLAUDE_CODE_SESSION_ID: "c" }) === "box-1", "우선순위 어긋남");
+  check("S0: codex 스레드 → codex- 접두", sessionKey({ CODEX_THREAD_ID: "t1" }) === "codex-t1", "codex 해석 어긋남");
+  check("S0: Claude Code 자식 env 폴백", sessionKey({ CLAUDE_CODE_SESSION_ID: "u1" }) === "claude-u1", "claude 폴백 없음");
+  check("S0: 신원 없으면 null(소유 판정 안 함)", sessionKey({}) === null, "null 이 아님");
+
+  const shared = join(SB, "shared-cwd");
+  mkdirSync(shared, { recursive: true });
+  asSession("sess-A");
+  const sA = await repoWorktree(ctx(shared), { repo: "base" });
+  check("S1: 첫 세션은 기본 자리", sA.worktree === join(shared, "base"), sA.worktree);
+  const sA2 = await repoWorktree(ctx(shared), { repo: "base" });
+  check("S1: 같은 세션 재호출은 같은 자리(멱등)", sA2.worktree === sA.worktree && sA2.branch === sA.branch, `${sA2.worktree} ${sA2.branch}`);
+
+  asSession("sess-B");
+  const sB = await repoWorktree(ctx(shared), { repo: "base" });
+  check("S2: 다른 세션은 남의 자리를 물지 않는다", sB.worktree !== sA.worktree, `둘 다 ${sB.worktree}`);
+  check("S2: 옆자리는 -2", sB.worktree === join(shared, "base-2"), sB.worktree);
+  check("S2: 브랜치도 다르다", sB.branch !== sA.branch, `${sA.branch} vs ${sB.branch}`);
+  check("S2: 비켜섰다는 사실을 알려준다", /비켜섰습니다/.test(sB.note || ""), sB.note);
+  check("S2: 앞 세션의 자리·브랜치는 그대로", branchAt(join(shared, "base")) === sA.branch, branchAt(join(shared, "base")));
+
+  asSession("sess-C");
+  const sC = await repoWorktree(ctx(shared), { repo: "base" });
+  check("S3: 세 번째 세션은 -3", sC.worktree === join(shared, "base-3"), sC.worktree);
+
+  // S4) canonical 슬롯은 **프로젝트 공용** — 세션이 달라도 같은 자리·같은 브랜치여야 서버 provision 과 멱등이다.
+  asSession("sess-D");
+  const sD = await repoWorktree(ctx(proj), { repo: "base" });
+  check("S4: 프로젝트 슬롯은 세션이 달라도 그대로 재사용", sD.worktree === join(proj, "base") && sD.branch === "project/999", `${sD.worktree} ${sD.branch}`);
+
+  // S5) path 로 남의 자리를 **지목**하면 지목은 존중하되(멱등 계약) 조용히 넘기지 않는다.
+  const sE = await repoWorktree(ctx(shared), { repo: "base", path: join(shared, "base") });
+  check("S5: 지목한 자리는 그대로 준다", sE.worktree === join(shared, "base"), sE.worktree);
+  check("S5: 남의 자리임을 경고한다", /이 세션이 만든 자리가 아닙니다/.test(sE.warning || ""), sE.warning || "(경고 없음)");
+
+  // S6) 소유 표시는 워킹트리를 더럽히지 않는다 — admin 에 두는 이유. 여기서 실패하면 `git add -A` 가 그 파일을 커밋한다.
+  const dirtyA = sh("git", ["-C", sA.worktree, "status", "--porcelain"], { allowFail: true }).stdout.trim();
+  check("S6: 소유 표시가 워킹트리에 안 보인다(add -A 오염 0)", dirtyA === "", dirtyA);
+  check("S6: 소유 표시는 admin 안에 있다", existsSync(join(BASE, ".git", "worktrees", sA.admin, "lively-owner.json")), `${sA.admin} 에 없음`);
+
+  // S5-b) 지목해도 **남의 스탬프는 덮지 않는다** — 재사용은 되지만 소유는 넘어가지 않는다.
+  const stampOf = (adminId) => JSON.parse(readFileSync(join(BASE, ".git", "worktrees", adminId, "lively-owner.json"), "utf8"));
+  check("S5-b: 남의 자리를 지목해도 스탬프 주인은 그대로", stampOf(sA.admin).session === "sess-A", stampOf(sA.admin).session);
+
+  // S8) 주인 표시가 없는 자리(이 변경 이전에 뜬 워크트리) — 기본 호출은 비켜서되 사유를 바르게 말하고,
+  //  path 로 지목하면 입양한다(표시를 안 하면 아무도 못 쓰는 사석으로 남는다).
+  rmSync(join(BASE, ".git", "worktrees", sA.admin, "lively-owner.json"), { force: true });   // = 이 변경 이전에 뜬 워크트리
+  asSession("sess-E");
+  const sLegacy = await repoWorktree(ctx(shared), { repo: "base" });
+  check("S8: 주인 불명 자리는 비켜선다", sLegacy.worktree !== join(shared, "base"), sLegacy.worktree);
+  check("S8: 사유를 '다른 세션' 이라 거짓말하지 않는다", /주인 표시가 없어|만든 자리가 아니거나/.test(sLegacy.note || ""), sLegacy.note);
+  const sAdopt = await repoWorktree(ctx(shared), { repo: "base", path: join(shared, "base") });
+  check("S8: 지목하면 입양한다(사석 방지)", stampOf(sAdopt.admin).session === "sess-E", JSON.stringify(stampOf(sAdopt.admin)));
+  check("S8: 입양은 경고가 아니라 안내", !sAdopt.warning && /이 세션 것으로 표시/.test(sAdopt.note || ""), sAdopt.warning || sAdopt.note);
+
+  // S8-b) **읽을 수 없는** 스탬프(손상·쓰는 중)는 «표시가 없다» 와 다르다 — 입양하면 소유 탈취가 된다.
+  asSession("sess-F");
+  writeFileSync(join(BASE, ".git", "worktrees", sAdopt.admin, "lively-owner.json"), "{ 부분적으로 쓰다 만");
+  const sCorrupt = await repoWorktree(ctx(shared), { repo: "base", path: join(shared, "base") });
+  const stampRaw = readFileSync(join(BASE, ".git", "worktrees", sAdopt.admin, "lively-owner.json"), "utf8");
+  check("S8-b: 손상된 스탬프는 입양하지 않는다(덮어쓰기 0)", stampRaw === "{ 부분적으로 쓰다 만", stampRaw);
+  check("S8-b: 대신 경고한다", /읽을 수 없습니다/.test(sCorrupt.warning || ""), sCorrupt.warning || "(경고 없음)");
+
+  // S8-c) `.git` 이 디렉터리인 자리(사람이 손으로 clone 한 폴더)는 소유를 말할 수 없다 — 조용히 재사용하지 않는다.
+  const handClone = join(SB, "hand-clone");
+  sh("git", ["clone", "-q", join(SB, "origin-repo"), handClone]);
+  const sHand = await repoWorktree(ctx(shared), { repo: "base", path: handClone });
+  check("S8-c: 이 툴이 만들지 않은 자리는 경고한다", /소유를 확인할 수 없습니다/.test(sHand.warning || ""), sHand.warning || "(경고 없음)");
+
+  // S9) 자리가 다 차면 막다른 길에 두지 않는다 — 누가 쥐고 있는지 + 출구를 메시지에 담는다.
+  const full = join(SB, "full-cwd"); mkdirSync(full, { recursive: true });
+  for (let i = 1; i <= 9; i++) { asSession(`sess-full-${i}`); await repoWorktree(ctx(full), { repo: "base" }); }
+  asSession("sess-full-10");
+  let msgFull = ""; try { await repoWorktree(ctx(full), { repo: "base" }); } catch (e) { msgFull = String(e.message); }
+  check("S9: 자리 상한에 걸리면 실패한다", msgFull.length > 0, "성공해버림(10번째 자리를 팠다)");
+  check("S9: 누가 쥐고 있는지 알려준다", /sess-full-1\b/.test(msgFull), msgFull);
+  check("S9: 출구를 알려준다(정리 툴·path)", /lively_local_repo_worktree_remove/.test(msgFull) && /path/.test(msgFull), msgFull);
+
+  // S7) 신원이 없는 호출(맨 터미널 CLI — 세션 id 도 프로젝트도 없다)은 종전대로 재사용한다.
+  //  여기서 비켜서면 같은 명령을 두 번 친 사람이 매번 새 자리를 파게 된다(멱등 상실).
+  const anon = join(SB, "anon-cwd"); mkdirSync(anon, { recursive: true });
+  delete process.env.LIVELY_SESSION_ID;
+  const n1 = await repoWorktree(ctx(anon), { repo: "base" });
+  const n2 = await repoWorktree(ctx(anon), { repo: "base" });
+  check("S7: 신원 없는 호출은 같은 자리를 재사용(멱등 유지)", n1.worktree === n2.worktree && n2.worktree === join(anon, "base"), `${n1.worktree} vs ${n2.worktree}`);
+
+  asSession("wt-core-test-A");
 
   rmSync(SB, { recursive: true, force: true });
   console.error(`\n${pass} passed, ${fail} failed`);
