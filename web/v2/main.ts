@@ -2355,15 +2355,18 @@ async function setSessionProject(sessionId: string, pid: number | null, tab: She
     return false;
   }
   toast(pid ? '프로젝트에 붙였어요. 다음 질문부터 프로젝트 맥락이 반영됩니다.' : '프로젝트에서 뗐어요.');
-  await loadData(); drawSide(); tabsApi?.paint();
-  const cur = data.sessions.find((x) => x.id === sessionId) || null;
-  //  ★ 셸(문패·세션 서랍·자료 칸)이 **옛 프로젝트로** 서 있으면 그 탭을 새 프로젝트로 다시 두른다.
-  //   종전엔 대화창·우패널만 고치고 셸은 8초 틱(syncShell 의 같은 대조)이 올 때까지 옛 프로젝트였다 —
-  //   문패에서 옮기면 누른 그 줄이 그대로 옛 이름을 말하고 있어 «안 됐나?» 로 읽힌다.
-  const have = shellProject.get(tab);
-  if (cur && have !== undefined && have !== (cur.projectId ? Number(cur.projectId) : 0)) { void renderRoute(tab); return true; }
-  if (tab.chat && cur && tab.chat.id === cur.id) tab.chat.update({ ...cur, projectName: projName(data, cur.projectId) });
-  drawAsideSession(tab, cur);
+  //  화면 맞추기는 **기다리지 않는다** — 고르는 창은 서버가 받은 순간 닫힌다(종전 드롭다운과 같은 박자).
+  void (async () => {
+    await loadData(); drawSide(); tabsApi?.paint();
+    const cur = data.sessions.find((x) => x.id === sessionId) || null;
+    //  ★ 셸(문패·세션 서랍·자료 칸)이 **옛 프로젝트로** 서 있으면 그 탭을 새 프로젝트로 다시 두른다.
+    //   종전엔 대화창·우패널만 고치고 셸은 8초 틱(syncShell 의 같은 대조)이 올 때까지 옛 프로젝트였다 —
+    //   문패에서 옮기면 누른 그 줄이 그대로 옛 이름을 말하고 있어 «안 됐나?» 로 읽힌다.
+    const have = shellProject.get(tab);
+    if (cur && have !== undefined && have !== (cur.projectId ? Number(cur.projectId) : 0)) { void renderRoute(tab); return; }
+    if (tab.chat && cur && tab.chat.id === cur.id) tab.chat.update({ ...cur, projectName: projName(data, cur.projectId) });
+    drawAsideSession(tab, cur);
+  })();
   return true;
 }
 
