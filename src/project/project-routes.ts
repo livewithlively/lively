@@ -29,6 +29,7 @@ import { decorateNodeRows } from "../terminal/node-session-state.js";   // #1791
 import { uploadError, nfcPath } from "../terminal/upload-file.js";
 import { supersedeLocalPath } from "../ingest/local-file.js";
 import { finishUpload } from "../ingest/upload-finish.js";   // #3787 D — 업로드 마무리는 브라우즈 라우트와 한 함수
+import { taskForProjectSession, taskKickoffPrompt } from "../v6/session-task.js";   // #4084 — 태스크에서 연 세션
 
 const MAX_UPLOAD = 1024 * 1024 * 1024; // 1GB (#1870 — terminal-files 와 동일해야 한다. receiveUpload 스트리밍이라 RAM 무관)
 const MAX_PREVIEW = 25 * 1024 * 1024; // 25MB — 이미지·PDF 인라인 미리보기 허용(텍스트는 클라가 별도 크기 가드)
@@ -412,6 +413,17 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
       //  화면에서 누굴 고르든 **만든 사람만** 보는 세션이 됐다(#1876 D1 이후 invites 가 유일한 열쇠인데도).
       invites: b.invites,
     };
+    // #4084 세션 = 태스크 — 태스크에서 연 세션. 이 프로젝트 안의 태스크만 받는다(남의 프로젝트 태스크를 잇는 길을 막는다).
+    //  세션 이름 = 태스크 이름(사람이 적은 이름이라 AI 가 다시 짓지 않는다 — label 이 오면 human 출처로 박힌다),
+    //  첫 지시를 비워 보내면 «#<id> 진행해» + 본문으로 채운다. 잇기 자체는 관문이 소속을 쓴 뒤에 한다(launchSession).
+    const taskIdRaw = b.taskId == null || b.taskId === "" ? 0 : Number(b.taskId);
+    if (taskIdRaw) {
+      const task = Number.isInteger(taskIdRaw) && taskIdRaw > 0 ? await taskForProjectSession(project.id, taskIdRaw) : null;
+      if (!task) throw new HttpError(400, `태스크 #${b.taskId} 는 이 프로젝트의 태스크가 아닙니다`);
+      input.taskId = task.id;
+      if (!String(input.label ?? "").trim()) input.label = task.name;
+      if (!input.initialPrompt) input.initialPrompt = taskKickoffPrompt(task);
+    }
     res.setHeader("Cache-Control", "no-store");
     // 노드 프로젝트 세션(#905 C4) — body.node 면 그 원격 노드에서 연다(provision 과 같은 게이트). 노드는 프로젝트
     //  무지(DB 없음)라 owner∪invites 로만 가시성을 판정하므로, 게이트웨이가 검증한 invites 스냅샷을 실어 보낸다.
