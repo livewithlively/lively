@@ -24,6 +24,7 @@ import { sessionNameFromAgent } from "./session-name.js";
 import { nodeOfSession, nodeRpc } from "../node/registry.js";
 import { getOpt, tmux } from "./tmux-exec.js";
 import { renameShellProjectForSession } from "../project/first-prompt-project.js";
+import { ensureSessionTask, sessionTaskOf, type SessionTask } from "../v6/session-task.js";
 
 const SID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 // session-project-routes.ts 와 같은 규칙(userId 우선, 없으면 email) — 소유자 비교의 축이 갈리면 안 된다.
@@ -37,6 +38,23 @@ export interface RelabelResult {
   source: LabelSource;
   /** applied=false 일 때만 — `taken`(이미 지어졌다) · `empty`(다듬으니 남는 게 없다) · `unknown`(미러 행 없음). */
   reason?: "taken" | "empty" | "unknown";
+  /**
+   * #4084 — 이 세션이 맡은 태스크(프로젝트 세션만). created=true 면 **이번 이름으로 방금 만들었다**.
+   *  이름이 걸쇠에 져도(applied:false) 이미 맡은 태스크가 있으면 싣는다 — 태스크에서 연 세션은 이름이 사람 것이라
+   *  늘 지는데, 모델이 자기 태스크를 아는 첫 자리가 바로 이 응답이다.
+   */
+  task?: SessionTask & { created: boolean };
+  /** task 가 있을 때 모델에게 주는 한 줄 — 완료 처리 방법. */
+  task_hint?: string;
+}
+
+const TASK_HINT =
+  "이 세션이 맡은 태스크입니다(프로젝트 보드에 보입니다). 요청받은 일을 끝내면(검증까지 마치고) " +
+  "`session_task {status:\"done\"}` 로 완료 처리하세요 — 같은 세션에서 후속 작업을 시작하면 `{status:\"in_progress\"}`.";
+
+/** 결과에 태스크를 얹는다 — 조회 실패는 조용히 무시(이름짓기는 실패를 만들지 않는다). */
+function withTask(r: RelabelResult, task: (SessionTask & { created: boolean }) | null): RelabelResult {
+  return task ? { ...r, task, task_hint: TASK_HINT } : r;
 }
 
 /**
@@ -53,6 +71,10 @@ export async function relabelSession(
   // 길이 초과·따옴표·마침표는 **거절하지 않고 다듬는다**(#1979 윤상민: "글자수 초과 이런건 걍 trim").
   const label = sessionNameFromAgent(rawName);
   if (!label) return { ok: true, applied: false, label: "", source, reason: "empty" };
+  const taskNow = async () => {
+    const t = await sessionTaskOf(id, me).catch(() => null);
+    return t ? { ...t, created: false } : null;
+  };
 
   // 소유권을 **쓰기 전에** 확정한다 — setSessionProject 와 같은 순서·같은 근거(남의 세션 id 를 DB 에 먼저
   //  claim 하게 두면 RPC 가 거부돼도 그 행이 공격자 소유로 남는다).
@@ -71,7 +93,7 @@ export async function relabelSession(
   if (!won) {
     // 미러 행이 아예 없을 수도 있다(구 세션·managed·미러 실패) — 그건 '졌다'와 다르지만 결과는 같다: 그냥 둔다.
     const exists = await getSessionState(id).then((s) => !!s).catch(() => false);
-    return { ok: true, applied: false, label, source, reason: exists ? "taken" : "unknown" };
+    return withTask({ ok: true, applied: false, label, source, reason: exists ? "taken" : "unknown" }, await taskNow());
   }
 
   // ② 화면 반영 — best-effort. 죽은 세션·꺼진 노드는 **정상**이다(DB 가 정본이고, 복원본이 이 이름으로 뜬다).
@@ -89,5 +111,10 @@ export async function relabelSession(
   //  출처(agent·human)로 가르지 않는다: 어느 쪽이든 기계로 자른 제목보다 낫고, 판정 근거는 '껍데기인가'다.
   //  실패·미소속·못 찾음은 전부 조용한 no-op — 이름은 부가정보고 이 함수는 실패를 만들지 않는다(파일 머리말 ②).
   await renameShellProjectForSession({ executionId: id, owner: me, name: label }).catch(() => { /* 비치명 */ });
-  return { ok: true, applied: true, label, source };
+  // ④ 세션 = 태스크(#4084 · 원준님 2026-09-19: "그 제목으로 하드하게 태스크를 만들도록").
+  //  이름이 정해지는 이 한 번의 왕복에 붙이면 모델이 기억해 주길 기대하지 않아도 태스크가 생긴다. 이미 맡은 태스크가
+  //  있으면(태스크에서 연 세션·두 번째 개명) 그대로 돌려줄 뿐 새로 만들지 않는다. 프로젝트 밖 세션은 null.
+  //  출처로 가르지 않는다 — 사람이 웹에서 처음 이름을 붙여도 그 세션의 일은 생긴 것이다.
+  const task = await ensureSessionTask({ sessionId: id, owner: me, name: label });
+  return withTask({ ok: true, applied: true, label, source }, task);
 }

@@ -31,6 +31,16 @@ const CLOSEOUT_SECTION = [
   "절차·최신 인자(MCP `list_id`/`follow_up` 등)는 **`project-closeout` 스킬**을 따른다(마무리·done 처리 시 이 스킬을 invoke).",
 ].join("\n");
 
+// 세션 = 태스크(#4084) — 프로젝트의 세션은 각자 태스크 하나를 맡는다(v6/session-task.ts). 태스크를 만드는 일은 서버가
+//  하드하게 하므로(이름짓기 · 태스크에서 열기) 모델에게 남는 일은 **끝났을 때 완료로 바꾸는 것** 하나다. 그 한 줄이
+//  프로젝트 세션에서 늘 보이도록 digest 에 박는다 — 훅(DB)이 아니라 여기 두는 이유: 이 절이 가리키는 툴(session_task)은
+//  게이트웨이 빌드에 있으므로 **같은 배포로** 켜져야 한다(훅만 먼저 살면 없는 툴을 부르라고 시킨다 — #2031 교훈).
+const SESSION_TASK_RULE = [
+  "## 세션 = 태스크",
+  "이 프로젝트의 세션은 각자 **태스크 하나**를 맡는다 — 세션이 이름을 지으면 서버가 그 이름으로 만들고, 사람이 태스크에서 연 세션은 그 태스크를 맡는다.",
+  "내 세션의 태스크는 `session_task` 로 본다(번호 불필요). 요청받은 일을 끝내면(검증까지) `session_task {status:\"done\"}`, 같은 세션에서 후속 작업을 시작하면 `{status:\"in_progress\"}`.",
+].join("\n");
+
 // 코드 작업 진입 — 프로젝트 세션은 코드가 체크아웃되지 않은 폴더에서 뜬다(#918: 세션 생성이 워크트리를 만들지 않는다).
 //  그래서 '코드를 어떻게 확보하나'를 프로젝트 폴더에서 항상 알려준다. 이게 없으면 에이전트가 공유 base 를 ls 로 더듬거나
 //  (#906) base 에서 직접 작업하는 사고로 간다 — 발견을 전역 WIKI 인덱스 제목 한 줄의 운에 맡기지 않는다.
@@ -77,6 +87,7 @@ function buildProjectDigest(p: any): string {
     }
     L.push("- 각 항목 상세: `project_get_v6` 의 tasks 로 id 조회.", "");
   }
+  L.push(SESSION_TASK_RULE, "");
   L.push(CLOSEOUT_SECTION, "");
   return L.join("\n").trim();
 }

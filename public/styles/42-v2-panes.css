@@ -375,6 +375,20 @@
 .pn-tcheck:hover { border-color: var(--blue); }
 .pn-tcheck.on { border-color: var(--mint-deep); background: var(--mint-deep); }
 .pn-tcheck.on::after { content: ''; position: absolute; left: 4.5px; top: 1px; width: 4px; height: 8px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(42deg); }
+/* #4084 세션 = 태스크 — 줄 끝 칩. 맡은 세션이 있으면(.on) 늘 보이고, 없으면 [세션 열기]는 줄에 손이 갈 때만 보인다
+   (터치 기기는 hover 가 없으므로 늘 보인다). 할 일 이름이 먼저라 칩은 절반을 넘지 않는다. */
+.pn-trow .n { flex: 1; min-width: 0; }
+.pn-tsess { flex: none; max-width: 45%; display: inline-flex; align-items: center; gap: 4px; margin-top: -1px; padding: 1px 7px; border: 1px solid var(--muted-3-line); border-radius: 999px; background: none; font: inherit; font-size: 11px; line-height: 16px; color: var(--muted-head); cursor: pointer; }
+.pn-tsess .ell { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pn-tsess:hover:not(:disabled) { border-color: var(--blue); color: var(--blue); }
+.pn-tsess:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.pn-tsess:disabled { cursor: default; }
+.pn-tsess.on { border-color: transparent; background: var(--ok-bg); color: var(--mint-deep); }
+.pn-tsess.on:hover { border-color: var(--mint-deep); color: var(--mint-deep); }
+@media (hover: hover) {
+  .pn-tsess:not(.on):not(.busy) { opacity: 0; }
+  .pn-trow:hover .pn-tsess, .pn-tsess:focus-visible { opacity: 1; }
+}
 
 .pn-ov { overflow: hidden; }
 .pn-md { flex: 1; min-height: 0; overflow: auto; padding: 14px 18px 18px; font-size: 13.5px; line-height: 1.7; color: var(--ink); }

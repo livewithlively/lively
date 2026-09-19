@@ -37,6 +37,7 @@ import { nodeOfflineNote } from "../node/offline-note.js";      // #1849 — 오
 import { translateNodeRpcError } from "../node/rpc-error.js";
 import { bindNodeSessionProjectOrKill, nodeProjectCreatePlan } from "../node/provision-remote.js";
 import { createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
+import { bindSessionTask } from "../v6/session-task.js";   // #4084 세션 = 태스크 — 태스크에서 연 세션
 import { currentTenant } from "../org/tenant-context.js";
 import { PRIMARY_TENANT_ID, setSessionWorkspace } from "../org/tenancy/registry.js";   // #1750 후속 — 세션→워크스페이스 정본
 import { mintAppToken } from "../apps/principal.js";
@@ -214,6 +215,18 @@ export const withChatFields = <T extends { harness?: string; runtimeChoice?: unk
   Object.assign(s, chatFieldsOf(String(s.harness || ""), onNode,
     s.runtimeChoice === "chat" ? "chat" : s.runtimeChoice === "terminal" ? "terminal" : undefined));
 
+/**
+ * #4084 — 태스크에서 연 세션이면 그 태스크를 잇는다. **비치명**: 세션은 이미 살아 있고 사람이 그 안에서 일을 시작할 수
+ *  있다 — 잇기에 실패하면 그 세션은 이름을 지을 때 종전 규칙(이름으로 새 태스크)을 탄다. 세션을 죽여 가며 지킬 값이 아니다.
+ */
+async function bindLaunchTask(sessionId: string, owner: string, input: CreateInput): Promise<void> {
+  const taskId = Number(input.taskId ?? 0);
+  if (!(taskId > 0)) return;
+  const bound = await bindSessionTask({ sessionId, owner, taskId })
+    .catch((e) => { logger.warn({ sessionId, taskId, err: (e as Error)?.message }, "세션 태스크 잇기 실패(비치명)"); return null; });
+  if (!bound) logger.warn({ sessionId, taskId }, "세션 태스크를 잇지 못했다 — 이름을 지을 때 새 태스크가 생긴다");
+}
+
 export interface LaunchOpts {
   /** 실행 노드(#1744). '' = 중앙 컴퓨터(기본). 노드면 그 PC 에서 세션이 뜨고 첫 지시는 노드가 로컬로 넣는다. */
   nodeId: string;
@@ -260,6 +273,8 @@ export async function launchSession(user: LivelyUser, input: CreateInput, opts: 
       await bindNodeSessionProjectOrKill({
         nodeId, sessionId: session.id, requester: me, harness: session.harness || input.harness, projectId: input.projectId,
       });
+      // #4084 — 태스크에서 연 세션: 소속을 쓴 **뒤**, 보류한 첫 지시를 넣기 **전**에 잇는다(첫 턴 문맥에 태스크가 실린다).
+      await bindLaunchTask(session.id, me, input);
     }
     await mirrorNodeSession({ ...session, invites: opts.invites }, nodeId, input, me);
     if (plan.deferredPrompt) {
@@ -274,6 +289,9 @@ export async function launchSession(user: LivelyUser, input: CreateInput, opts: 
     return { ...withChatFields(session, true), node: { id: nodeId, online: true } };
   }
   const session = await createSession(user, input);
+  // #4084 — 중앙 세션은 createSession 이 소속을 이미 썼다. 첫 지시는 하네스 입력창이 뜬 뒤(수 초) 들어가므로 여기서
+  //  이으면 첫 턴 문맥에 태스크가 실린다. 첫 지시 본문도 태스크 번호를 말하므로 경합해도 모델은 자기 일을 안다.
+  if (input.projectId && input.projectSrc !== "org") await bindLaunchTask(session.id, me, input);
   await recordSessionTenant(session.id, () => killSession(user, session.id, {}));
   await registerSessionInstance(session.id, me, { appId: input.appId, projectId: input.projectId, title: session.label });
   return withChatFields(session);

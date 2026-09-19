@@ -7,6 +7,27 @@ import { overlayBox } from '../learn.js';
 import { pjvPopover } from './popover.js';
 import { pjvReloadKeepScroll } from './state.js';
 import { pjvPatchTask } from './task-controls.js';
+import { spawnSession } from '../v2/quick-session.js';   // #4084 — 세션 생성은 한 곳(생성 캐시·첫 지시 규약이 거기 묶여 있다)
+
+// #4084 세션 = 태스크 — 세션 화면으로 간다. 보드는 새 셸 안의 액자로 떠 있으므로 주소는 **바깥 셸**이 연다
+//  (context-map.ts 와 같은 'lively:open-route' 규약). 액자가 아니면(구 셸 단독) 제 주소를 바꾼다.
+function pjvOpenSessionRoute(sid: string): void {
+  const href = '#/s/' + encodeURIComponent(sid);
+  if (window.parent && window.parent !== window) {
+    try { window.parent.postMessage({ type: 'lively:open-route', href }, location.origin); return; } catch (_) { /* 아래로 */ }
+  }
+  location.hash = href;
+}
+
+// #4084 — 이 태스크를 **맡은 새 세션**을 연다. 첫 지시는 서버가 «태스크 #<id> 진행해» + 본문으로 채우고, 세션 이름은
+//  태스크 이름이 된다. 잇는 순간 태스크는 «진행 중», 세션이 일을 끝내면 «완료»로 바꾼다(v6/session-task.ts).
+async function pjvOpenTaskSession(projectId, t, reload) {
+  const made = await spawnSession('', { projectId: Number(projectId), taskId: Number(t.id) });
+  if (!made) return;                                 // 이유는 spawnSession 이 toast 로 이미 말했다
+  toast('이 태스크를 맡은 세션을 열었어요.');
+  pjvReloadKeepScroll(reload);
+  pjvOpenSessionRoute(made.id);
+}
 
 // 더블클릭 → 하위 태스크 인라인 생성(클릭업식). 같은 행에 입력칸 1개만, Enter=생성, Esc/빈 blur=취소.
 function pjvShowInlineSubtask(projectId, parentTask, subBox, reload) {
@@ -40,6 +61,12 @@ function pjvRowMore(projectId, t, depth, reload, onAddSub) {
       b.onclick = () => { close(); onPick(); };
       return b;
     };
+    // #4084 세션 = 태스크 — 맡은 세션이 있으면 그리로 가는 길과 새 세션으로 이어 하는 길, 없으면 세션 열기.
+    const sess = Array.isArray(t.sessions) ? t.sessions : [];
+    if (depth === 0 && t.level !== 'subtask') {
+      if (sess.length) menu.append(mkItem('맡은 세션으로 가기' + (sess[0].label ? ` («${sess[0].label}»)` : ''), () => pjvOpenSessionRoute(String(sess[0].id))));
+      menu.append(mkItem(sess.length ? '새 세션으로 이어 하기' : '세션 열기', () => void pjvOpenTaskSession(projectId, t, reload)));
+    }
     if (depth === 0 && onAddSub) menu.append(mkItem('하위 태스크 추가', onAddSub));
     menu.append(mkItem('이름 변경', () => pjvRenameTask(btn, t, reload)));
     menu.append(mkItem('삭제', () => pjvDeleteTask(t, reload), true));
