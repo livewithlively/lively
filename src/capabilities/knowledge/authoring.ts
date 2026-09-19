@@ -6,13 +6,14 @@ import { HttpError } from "../rest-util.js";
 import type { Capability, CapabilityCtx } from "../types.js";
 import type { LivelyUser } from "../../context.js";
 import {
-  upsertKnowledge, setKnowledgeLifecycle, getKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
+  upsertKnowledge, setKnowledgeLifecycle, getKnowledgeGateFields, setKnowledgeWiki, deleteKnowledge,
   findSimilarKnowledge, moveKnowledge, appendBody, isDuplicateAppend, stampSessionVisibility, slugify,
   applyKnowledgeEdits, type KnowledgeEdit,
   setKnowledgeTitle,
 } from "../../v6/knowledge-store.js";
 // #783 인입 허용선 게이트 — 에이전트(MCP) 저작 지식의 자동 검토대기 + 기존 지식 수정 검토 큐.
 import { resolveKnowledgeGate } from "../../v6/knowledge-gate.js";
+import { denyLifecycleChange } from "./lifecycle-guard.js";
 import { proposeRevision, pendingStagedRevisionId } from "../../v6/knowledge-revision-store.js";
 import {
   assertKnowledgeWritable, BODY_MD_MAX, DEDUP_WARN_SIMILARITY, classificationInfo, seedSyncWarning, wikiLinkInfo,
@@ -355,7 +356,8 @@ export const knowledgeSetLifecycle: Capability = {
   name: "knowledge_set_lifecycle",
   title: "지식 lifecycle",
   description: "active/pending/superseded/archived 전환. pending→active = 검토 승인(#638/#783 게이트). active→pending = 검토대기로 되돌림. 제거(반려)는 폐기 — 대신 knowledge_delete(휴지통, 복원가능). archived 는 외부 미러 원본 아카이브 전파에도 쓰인다(#551). " +
-    "⚠ 승인(→active)과 '검토 대기 중 지식의 상태 변경'은 **사람 전용**(웹) — 에이전트(MCP)는 403. 자기가 쓴 지식을 스스로 승인할 수 없다.",
+    "⚠ 승인(→active)과 '검토 대기 중 지식의 상태 변경'은 **사람 전용**(웹) — 에이전트(MCP)는 403. 자기가 쓴 지식을 스스로 승인할 수 없다. " +
+    "외부 미러의 archived→active «복원» 은 사람도 403 — 원본에서 복원하면 싱크가 따라온다(#638). 미러의 pending→active 검토 승인은 정상 경로다.",
   scope: "memory",
   input: knowledgeSetLifecycleInput,
   expose: {
@@ -369,20 +371,14 @@ export const knowledgeSetLifecycle: Capability = {
   },
   handler: async (input: KnowledgeSetLifecycleInput, user: LivelyUser, ctx?: CapabilityCtx) => {
     await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
-    // 🔒 #783 자가승인 차단 — 이게 없으면 게이트가 통째로 무력화된다:
-    //  에이전트가 knowledge_save 로 pending 저장 → 곧바로 set_lifecycle(active) 로 스스로 승인 → 무검증 지식이 라이브.
-    //  검토는 사람의 행위다. knowledge_delete 가 같은 이유로 mcp 를 403 하는 것(자기 글 삭제 금지)과 동형 가드.
-    //  · →active(승인)는 MCP 금지. · 검토 대기(pending) 중인 지식의 상태 변경도 MCP 금지(큐에서 몰래 치우는 것 방지).
-    //  사람 경로(웹 REST, source='web')는 무영향 — 검토 큐·문서 배너의 승인 버튼이 그대로 동작한다.
-    if (ctx?.source === "mcp") {
-      if (input.lifecycle === "active") {
-        throw new HttpError(403, "승인(→active)은 사람이 웹 검토 큐에서 합니다 — 에이전트는 자기가 쓴 지식을 스스로 승인할 수 없습니다.");
-      }
-      const cur = await getKnowledgeLifecycle(input.name);
-      if (cur === "pending") {
-        throw new HttpError(403, "검토 대기 중인 지식의 상태 변경은 사람만 할 수 있습니다(검토 큐).");
-      }
-    }
+    // 🔒 전환 가드(#783 자가승인 차단 · #638 미러 복원 금지) — 판정은 denyLifecycleChange 한 곳에.
+    //  여기서 막아야 MCP·웹 REST·다른 클라이언트가 같은 규칙을 쓴다. UI 버튼 숨김은 안내일 뿐 규칙이 아니다.
+    const gate = await getKnowledgeGateFields(input.name);
+    const denied = denyLifecycleChange({
+      source: ctx?.source, target: input.lifecycle, current: gate.lifecycle, provenance: gate.provenance,
+      externalSystem: gate.external_system,
+    });
+    if (denied) throw new HttpError(403, denied);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return { knowledge: await setKnowledgeLifecycle(input.name, input.lifecycle, writeCtx) };
   },
