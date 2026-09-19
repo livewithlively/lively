@@ -120,7 +120,7 @@ export const PART_DEFS: PartDef[] = [
   { type: 'timeline', name: '타임라인', icon: 'clock', hint: '이 프로젝트에 남은 활동 기록입니다.' },
   { type: 'liv', name: '리브', icon: 'spark', hint: '이 프로젝트를 아는 리브와 대화합니다.' },
   // 이름을 '보관함'이 아니라 **보관한 세션**으로 둔다(원준 2026-08-20) — 무엇을 보관하는지가 이름에서 바로 읽혀야 한다.
-  { type: 'archive', name: '보관한 세션', icon: 'box', hint: '닫아 둔 AI 세션입니다. 대화 그대로 다시 살릴 수 있어요.' },
+  { type: 'archive', name: '지난 세션', icon: 'box', hint: '박스가 멈춰 지금은 안 도는 세션입니다. 대화 그대로 다시 살릴 수 있어요.' },
   { type: 'web', name: '웹', icon: 'globe', multi: true, hint: '주소를 넣으면 이 칸에서 그 페이지를 봅니다. 문서·레퍼런스를 옆에 띄워 두세요.' },
   { type: 'preview', name: '미리보기', icon: 'globe', hint: '띄워 둔 화면 목록입니다. 누르면 웹 칸에 그 화면이 실립니다.' },
   { type: 'editor', name: '뷰어', icon: 'eye', multi: true, hint: '자료의 파일을 골라 이 칸에서 봅니다 — 문서·그림·PDF·시안·영상. 여러 개를 띄워 나란히 볼 수 있어요.' },

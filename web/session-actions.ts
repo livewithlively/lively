@@ -189,13 +189,13 @@ export const sessionNames = (s: { id: string; logId?: string | null }): string[]
 // ── 프로젝트 아카이브(#1851) — 삭제가 아니라 '평소 화면에서 치우기'. 도는 세션이 있으면 멈춘다는 사실만 위험으로 말한다. ──
 export async function confirmProjectArchive(opts: { name: string; liveN: number }): Promise<boolean> {
   return confirmDialog({
-    title: `「${opts.name}」${eulReul(opts.name)} 아카이브로 보낼까요?`, danger: opts.liveN > 0, confirmText: '아카이브로', cancelText: '취소',
+    title: `「${opts.name}」${eulReul(opts.name)} 보관할까요?`, danger: opts.liveN > 0, confirmText: '보관하기', cancelText: '취소',
     message: opts.liveN > 0
       ? `지금 돌고 있는 세션 ${opts.liveN}개는 그 자리에서 멈추고 지난 세션이 됩니다.`
       : '이 프로젝트와 그 아래 세션이 사이드바·보드에서 빠집니다.',
     lines: [
       '태스크·팀원·지식 연결·세션 기록은 전부 그대로예요.',
-      '[아카이브] 화면에서 언제든 보관을 해제하면 원래 자리로 돌아옵니다.',
+      '[지난 세션] 화면의 「보관한 프로젝트」에서 언제든 해제하면 원래 자리로 돌아옵니다.',
     ],
     note: '지우는 것이 아닙니다 — 되돌릴 수 있어요.',
   });
