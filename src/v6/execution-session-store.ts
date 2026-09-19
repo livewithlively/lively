@@ -87,8 +87,10 @@ export async function setExecutionSessionProject(input: {
     if (!cur) { await client.query("ROLLBACK"); return null; }
     const next = executionBindingTransition(cur, input.projectId);
     if (next.changed) {
+      // task_id=NULL(#4084) — 세션이 맡은 태스크는 옛 프로젝트의 것이다. 소속이 바뀌면 연결만 푼다(태스크 상태는 그대로 —
+      //  끝났는지는 사람이 보드에서 정한다). 새 프로젝트의 태스크는 다음 session_task 호출이 이 세션 이름으로 만든다.
       await client.query(
-        `UPDATE execution_session SET desired_project_id=$3, desired_revision=$4, binding_epoch=$5,
+        `UPDATE execution_session SET desired_project_id=$3, desired_revision=$4, binding_epoch=$5, task_id=NULL,
            last_seen=now(), updated_at=now() WHERE id=$1 AND owner=$2`,
         [input.id, input.owner, next.project_id, next.desired_revision, next.binding_epoch]);
       await client.query(

@@ -26,6 +26,7 @@ import { latestProjectForSessionChain, recordSessionProject, resolveNodeFolder, 
 import { canAttach } from "./terminal-sessions.js";
 import { isExternalExecutionSessionId } from "../org/auth/agent-identity.js";
 import { syncSessionAppInstanceProject } from "../org/store/app-instances.js";
+import { sessionTaskOf, sessionTaskSection } from "../v6/session-task.js";
 
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 const SID_RE = /^[A-Za-z0-9._-]{1,128}$/;
@@ -201,7 +202,11 @@ export async function sessionProjectContext(
   if (!includeContent) return base;
   const content = await projectAgentsMd(u, project);
   if (content == null) throw new HttpError(503, "프로젝트 AGENTS.md를 준비하지 못했습니다");
-  return { ...base, name: project.name, content };
+  // #4084 — 이 세션이 맡은 태스크를 프로젝트 문맥 끝에 붙인다. 태스크에서 연 세션은 첫 주입에서 자기 태스크를 안다
+  //  (이름짓기로 생긴 태스크는 session_rename 응답이 먼저 알려 준다). 조회 실패는 문맥 전달을 막지 않는다.
+  const task = await sessionTaskOf(id, me).catch(() => null);
+  const section = task && task.project_id === project.id ? sessionTaskSection(task) : "";
+  return { ...base, name: project.name, content: section ? `${content}\n\n${section}` : content };
 }
 
 /** 훅이 동적 문맥(또는 detach 무효화)을 stdout에 넘긴 뒤 보내는 전달 확인. */

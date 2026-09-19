@@ -530,6 +530,10 @@ export interface CreateInput {
   //  기존 프로젝트를 고르면 화면이 프로젝트 세션 라우트로 가므로 이 필드는 그때 오지 않는다.
   //  값이 있으면 first-prompt-project 가 껍데기 대신 **사람 이름 프로젝트**(name_source: human)를 만든다.
   projectName?: string;
+  // #4084 세션 = 태스크 — 사람이 **태스크에서** 연 세션. 프로젝트 세션 라우트만 받는다(그 프로젝트 안의 태스크인지
+  //  라우트가 확인한다). 관문(launchSession)이 프로젝트 소속을 쓴 **뒤에** execution_session.task_id 로 잇는다 —
+  //  그래서 이 세션은 이름을 지어도 새 태스크를 만들지 않는다(v6/session-task.ts). 노드는 이 값을 쓰지 않는다(DB 없음).
+  taskId?: number;
   // #1780 D4 — 이 세션을 **앱으로** 띄운다. 설정 시 createSession 이 grant 검사 → 앱 토큰 발급 →
   //  cwd와 분리된 private app runtime home에 토큰·앱 하네스 자산을 물질화하고
   //  pane env LIVELY_HOME=<private session_home>·LIVELY_APP_ID=<id> 를 주입한다. session_home은 cwd와 분리된다.
