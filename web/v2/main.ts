@@ -24,7 +24,7 @@ import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 �
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
 import { keepObserved, type ObsMemory } from './obs-carry.js';
 import { PINNED_GROUP, PRIORITY_GROUP, QUIET_RANK, dayGroup, pruneHolds, stepRowHold, type RowHold } from './hold-rules.js';   // #3856 — 「지금 볼 것」 해제·카드 자리 규칙(순수)   // #2544 후속 — 중계가 «못 본» 판을 직전 관측으로 잇는다(순수)
-import { renderArchive, renderTrash } from './bins.js';   // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
+import { renderPast, renderTrash } from './bins.js';   // #1851 — 지난 세션(#/archive) · 휴지통(#/trash) 화면 · #3778 이름·주인공 교체
 import { renderSourcesApp, renderSourceDetail } from './sources.js';   // #2423 자료 앱 — 열람실(사이드바 갈래는 side.ts)
 import { renderConnect, renderConnectApp, renderConnectData } from './connect.js';
 import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
@@ -619,7 +619,7 @@ async function syncShell(): Promise<void> {
   const at = tabsApi.active();
   const atPage = parseRoute(at.route).segs[0];
   if (atPage === 'inbox') renderInbox(at.center, data);   // 확인할 것 — 같은 결로 따라온다
-  else if (atPage === 'archive') renderArchive(at.center, data, binHooks, at.aside);   // 아카이브·휴지통도 같은 결(#1851 → #1850 안 A: 곁칸 포함)
+  else if (atPage === 'archive') renderPast(at.center, data, binHooks, at.aside);   // 아카이브·휴지통도 같은 결(#1851 → #1850 안 A: 곁칸 포함)
   else if (atPage === 'trash') renderTrash(at.center, data, binHooks, at.aside);
   for (const t of tabsApi.tabs) {
     if (!t.chat) continue;
@@ -664,7 +664,7 @@ const binHooks = { onChanged: () => { void loadData({ projects: true }).then(() 
   drawSide(); tabsApi?.paint();
   // 그 화면 자체도 다시 — 되돌리기·완전 삭제 뒤 행이 그 자리에 남아 있으면 '안 됐나?'로 읽힌다(20초 결을 기다리지 않는다).
   const at = tabsApi?.active();
-  if (at) { const pg = parseRoute(at.route).segs[0]; if (pg === 'archive') renderArchive(at.center, data, binHooks, at.aside); else if (pg === 'trash') renderTrash(at.center, data, binHooks, at.aside); }
+  if (at) { const pg = parseRoute(at.route).segs[0]; if (pg === 'archive') renderPast(at.center, data, binHooks, at.aside); else if (pg === 'trash') renderTrash(at.center, data, binHooks, at.aside); }
 }); } };
 
 // ── 데이터 ──
@@ -929,7 +929,7 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   if (p === 'inbox') return { title: '확인할 것', noAside: true };
   //  #2423 자료 앱 — 목록은 «자료», 자료 하나는 그 제목이 정본이라 데이터가 오면 힌트로 따라잡는다.
   if (p === 'sources') return { title: segs[1] ? (routeTitleHint.get(key) || '자료') : '자료', noAside: true };
-  if (p === 'archive') return { title: '아카이브', noAside: false };   // #1851 → #1850 안 A: 곁칸이 '안에 든 것'을 보여 준다
+  if (p === 'archive') return { title: '지난 세션', noAside: false };   // #1851 → #1850 안 A: 곁칸이 '안에 든 것'을 보여 준다
   if (p === 'trash') return { title: '휴지통', noAside: false };
   if (p === 'connect') return { title: !segs[1] ? '외부 앱 연결' : segs[1] === '_git' ? '코드 저장소' : segs[1] === '_db' ? '데이터베이스' : '앱 연결', noAside: true };
   if (p === 'liv') return { title: '리브', noAside: true };
@@ -1170,7 +1170,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       // 아카이브·휴지통(#1851) — 사이드바 발치의 두 행이 여는 화면. ⚠ 'trash' 는 클래식 표(CLASSIC_PAGES)에도 있어
       //  이 분기가 그보다 **앞에** 서야 한다(뒤에 두면 WIKI 앱 프레임의 옛 휴지통이 열린다 — 그쪽은 화면 안 링크로 간다).
       markActive(page);
-      if (page === 'archive') renderArchive(tab.center, data, binHooks, tab.aside); else renderTrash(tab.center, data, binHooks, tab.aside);
+      if (page === 'archive') renderPast(tab.center, data, binHooks, tab.aside); else renderTrash(tab.center, data, binHooks, tab.aside);
     } else if (page === 'connect') {
       markActive('connect');
       tab.aside.replaceChildren();
@@ -1528,7 +1528,7 @@ function sideRowFace(route: string, draft?: string): Omit<SideInstance, 'id' | '
   else if (page === 'sources') { icon = 'src'; meta = '모아 둔 원본 자료'; }
   else if (page === 'connect') { icon = 'link'; meta = '외부 앱 연결'; }
   //  치워 둔 곳(#1851)은 클래식 지식 앱으로 접히므로(CLASSIC_PAGES) 여기서 먼저 가른다 — 아니면 '지식 트리…'가 붙는다.
-  else if (page === 'archive') { icon = 'archive'; meta = '보관해 둔 프로젝트'; }
+  else if (page === 'archive') { icon = 'archive'; meta = '멈춘 세션 · 치운 세션'; }
   else if (page === 'trash') { icon = 'trash'; meta = '버린 세션과 프로젝트'; }
   else if (page === 'liv') { icon = 'liv'; meta = '워크스페이스 담당자'; }
   else {

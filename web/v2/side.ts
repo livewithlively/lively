@@ -1196,7 +1196,6 @@ function secFoot(...rows: Array<HTMLElement | null>): HTMLElement {
   const data = last ? last.data : null;
   const ak = last ? last.activeKey() : '';
   const me = meId();
-  const archivedN = data ? data.projects.filter((p) => isArchivedProj(p) && !isTrashedProj(p)).length : 0;
   const trashedN = data ? data.projects.filter((p) => isTrashedProj(p)).length
     + data.sessions.filter((s) => isLooseTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length : 0;
   const dock = (key: 'archive' | 'trash' | 'connect', label: string, n: number, title: string): HTMLElement =>
@@ -1206,7 +1205,9 @@ function secFoot(...rows: Array<HTMLElement | null>): HTMLElement {
       n ? el('span', { class: 'v2-dock-n', text: String(n) }) : null);
   return el('footer', { class: 'v2-side-foot v2-side-foot--apps' }, updateSlot(), ...rows,
     el('nav', { class: 'v2-app-dock v2-app-dock--3', 'aria-label': '치워 둔 곳 · 연결' },
-      dock('archive', '아카이브', archivedN, '아카이브 — 통째로 보관한 프로젝트와 그 아래 세션'),
+      //  ★ 「아카이브」였던 자리 — #3778(원준 2026-09-19)에서 이름도 내용도 「지난 세션」이 됐다. 보관한 프로젝트는
+      //   그 화면 안의 칩 하나로 남는다. 숫자는 안 붙인다: 지난 세션은 늘 수백 건이라(실측 213) 숫자가 «할 일»로 읽힌다.
+      dock('archive', '지난 세션', 0, '지난 세션 — 멈춘 세션과 목록에서 치운 세션. 프로젝트로 묶어 보고 그대로 이어서 열 수 있어요'),
       dock('trash', '휴지통', trashedN, '휴지통 — 버린 프로젝트·세션을 되돌리거나 완전히 지웁니다'),
       dock('connect', '외부 앱 연결', 0, '외부 앱 연결 — 슬랙·노션·드라이브 같은 바깥 서비스를 잇습니다')),
     //  레일을 숨겼으면 레일 발치의 [앱]·[나]가 여기로 내려온다(안 B).
@@ -2019,7 +2020,7 @@ function tidyBtn(): HTMLElement {
   const b = el('button', {
     class: 'v2-flt-btn v2-tidyb' + (tidyOn ? ' on' : ''), type: 'button', 'aria-pressed': String(tidyOn),
     'aria-label': tidyOn ? '정리 끝내기' : '정리 — 여러 개 골라 한 번에',
-    title: tidyOn ? '정리 끝내기 (Esc)' : '정리 — 프로젝트를 여러 개 골라 한 번에 아카이브로 보냅니다',
+    title: tidyOn ? '정리 끝내기 (Esc)' : '정리 — 프로젝트를 여러 개 골라 한 번에 보관합니다',
   }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-flt-ic', 'aria-hidden': 'true' },
     sv('path', { d: 'M13 5h8m-8 7h8m-8 7h8' }), sv('path', { d: 'M3 17l2 2l4-4' }), sv('path', { d: 'M3 7l2 2l4-4' })));
   b.onclick = (e: Event) => { e.preventDefault(); setTidy(!tidyOn); };
@@ -2040,8 +2041,8 @@ async function tidyArchive(): Promise<void> {
   const myLiveN = rows.reduce((n, r) => n + r.live.filter(isMine).length, 0);
   const names = rows.slice(0, 3).map((r) => r.proj!.name).join(' · ') + (rows.length > 3 ? ` 외 ${rows.length - 3}개` : '');
   if (!await confirmDialog({
-    title: `프로젝트 ${rows.length}개를 아카이브로 보낼까요?`, danger: myLiveN > 0,
-    confirmText: '아카이브로', cancelText: '취소',
+    title: `프로젝트 ${rows.length}개를 보관할까요?`, danger: myLiveN > 0,
+    confirmText: '보관하기', cancelText: '취소',
     message: myLiveN > 0
       ? `지금 돌고 있는 내 세션 ${myLiveN}개는 그 자리에서 멈추고 지난 세션이 됩니다.`
       : '고른 프로젝트와 그 아래 세션이 사이드바·보드에서 빠집니다.',
@@ -2065,7 +2066,7 @@ async function tidyArchive(): Promise<void> {
   // ⚠ 단건과 달리 **[아카이브] 화면으로 데려가지 않는다** — 정리는 이어서 하는 일이라, 여기 남아야 다음 것을 고른다.
   toast(failed.length
     ? `${done}개를 보냈고 ${failed.length}개는 못 보냈어요 — ${failed[0]}${failed.length > 1 ? ' 외' : ''}`
-    : `${done}개를 아카이브로 보냈어요 — 발치 [아카이브]에서 볼 수 있어요`, failed.length > 0);
+    : `${done}개를 보관했어요 — 발치 [지난 세션] ▸ 「보관한 프로젝트」에서 볼 수 있어요`, failed.length > 0);
   setTidy(false);
   hooks.onArchived?.();
 }
@@ -2082,7 +2083,7 @@ function tidyBar(): HTMLElement {
 function paintTidyBar(): void {
   if (!tidyBarEl) return;
   const n = tidySel.size;
-  const go = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: n > 1 ? `${n}개를 아카이브로` : '아카이브로' }) as HTMLButtonElement;
+  const go = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: n > 1 ? `${n}개를 보관` : '보관하기' }) as HTMLButtonElement;
   if (!n) go.disabled = true;
   go.onclick = () => void tidyArchive();
   tidyBarEl.replaceChildren(
@@ -2467,13 +2468,12 @@ function renderTree(rowsIn?: Row[]): void {
   treeEl.replaceChildren(...kids);
 }
 
-// ── 아카이브 · 휴지통 행(#1851) ───────────────────────────────────────────────
+// ── 지난 세션 · 휴지통 행(#1851 · 이름 교체 #3778) ───────────────────────────
 //  두 행은 프로젝트 행과 같은 모양(아이콘 + 이름 + 개수)이되 **폴더가 아니다** — 누르면 오른쪽에 그 화면이 열린다
-//  (#/archive: 보관한 프로젝트와 그 아래 세션 목록 · #/trash: 버린 세션·삭제된 프로젝트, 되돌리기·완전 삭제).
+//  (#/archive: 멈춘 세션·치운 세션(＋보관한 프로젝트 칩) · #/trash: 버린 세션·삭제된 프로젝트, 되돌리기·완전 삭제).
 //  오른쪽 끝 압정 = [아래 고정] — 켜면 두 행이 트리 밖 발치에 서서 스크롤과 무관하게 늘 보인다(브라우저에 기억).
 function binRows(data: V2Data): HTMLElement[] {
   const me = meId();
-  const archivedN = data.projects.filter((p) => isArchivedProj(p) && !isTrashedProj(p)).length;
   // 휴지통 개수 = 통째로 버린 프로젝트(각 1) + **따로** 버린 내 세션(묶음 세션은 프로젝트 안에 든 것이라 안 센다). 세션은 소유자 단위.
   const trashedN = data.projects.filter((p) => isTrashedProj(p)).length
     + data.sessions.filter((s) => isLooseTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length;
@@ -2483,7 +2483,8 @@ function binRows(data: V2Data): HTMLElement[] {
       glyph(key, 'v2-bin-ic'), el('span', { class: 'n', text: label }), n ? el('span', { class: 'v2-cnt', text: String(n) }) : null,
       binPinBtn());
   return [
-    row('archive', '아카이브', archivedN, '아카이브 — 통째로 보관한 프로젝트와 그 아래 세션'),
+    //  숫자는 안 붙인다 — 지난 세션은 늘 수백 건이라(실측 213) 숫자가 «해야 할 일»로 읽힌다(#3778).
+    row('archive', '지난 세션', 0, '지난 세션 — 멈춘 세션과 목록에서 치운 세션. 프로젝트로 묶어 보고 그대로 이어서 열 수 있어요'),
     row('trash', '휴지통', trashedN, '휴지통 — 버린 프로젝트·세션을 되돌리거나 완전히 지웁니다'),
   ];
 }
@@ -2536,7 +2537,7 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
   // 이름은 언제나 같은 잉크색이다 — 완료·조용함은 태그·시각이 말한다(연회색 본문이 목록 절반이면 전체가 바래 보인다).
   const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': pk, title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' + (p ? '\n이름을 더블클릭하면 그 자리에서 고칠 수 있어요' : '') },
     caret, glyph(isOpen ? 'folder-open' : 'folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }),
-    r.trashed ? el('span', { class: 'v2-tag', text: '휴지통', title: '휴지통에 있는 프로젝트 — 도는 세션이 있어 보입니다' }) : r.archived ? el('span', { class: 'v2-tag', text: '보관됨', title: '아카이브에 있는 프로젝트 — 도는 세션이 있어 보입니다' }) : r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null,
+    r.trashed ? el('span', { class: 'v2-tag', text: '휴지통', title: '휴지통에 있는 프로젝트 — 도는 세션이 있어 보입니다' }) : r.archived ? el('span', { class: 'v2-tag', text: '보관됨', title: '보관한 프로젝트 — 도는 세션이 있어 보입니다' }) : r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null,
     sumEl(sess, past) || (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null),
     p ? newSessBtn(p.id) : null,
     p ? pinBtn(pk) : null);
@@ -2759,9 +2760,9 @@ function beginRenameProject(pk: string, p: Proj): void {
 
 // ── 치움(×) — 세션을 **내 목록에서** 치운다(#3857) ──────────────────────────────
 //  종전 이 자리는 «보관(지난 세션으로)» = DELETE …?reclaim=1 로 박스를 실제로 내렸다. 실행 축은 이제 정책만 다룬다
-//  (회수 idle 정책 · /exit) — 사람이 누르는 × 는 보임 축이고, 세션은 그대로 돈다. 치운 세션은 아카이브 ▸ 치운 세션에서
+//  (회수 idle 정책 · /exit) — 사람이 누르는 × 는 보임 축이고, 세션은 그대로 돈다. 치운 세션은 [지난 세션] 화면에서
 //  되돌리거나, 다시 열면 목록에 돌아온다. 실체는 셸(main.ts closeSideRow → dismissSessionRow)이 한다.
-const DISMISS_TIP = '목록에서 치우기 — 세션은 그대로 돌고, 아카이브 ▸ 치운 세션에서 되돌릴 수 있어요';
+const DISMISS_TIP = '목록에서 치우기 — 세션은 그대로 돌고, [지난 세션] 화면에서 다시 열거나 되돌릴 수 있어요';
 function dismissBtn(s: Sess): HTMLElement {
   const btn = el('button', {
     class: 'v2-ss-x', type: 'button', 'aria-label': s.label + ' 목록에서 치우기', title: DISMISS_TIP,
@@ -2837,7 +2838,7 @@ export function projectCtxRows(p: Proj): CtxRow[] {
     { sep: true, label: '' },
     archived
       ? { label: '보관 해제 — 원래 자리로', icon: 'archive', run: () => void setArchived(p, false, 0) }
-      : { label: '아카이브로 보내기', icon: 'archive', run: () => void setArchived(p, true, liveMine) },
+      : { label: '보관하기', icon: 'archive', run: () => void setArchived(p, true, liveMine) },
     // 삭제 = 휴지통으로(#1851 원준 2026-08-24). 메뉴의 맨 아래·위험색 — 파일 탐색기·노션과 같은 자리.
     { sep: true, label: '' },
     { label: '휴지통으로 보내기', icon: 'trash', danger: true, run: () => void trashProject(p) },

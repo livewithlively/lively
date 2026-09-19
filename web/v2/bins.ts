@@ -1,4 +1,6 @@
-// v2/bins.ts — 아카이브(#/archive) · 휴지통(#/trash) 화면(#1851 → #1850 안 A, 원준 2026-08-27 "A안으로 가자").
+// v2/bins.ts — 지난 세션(#/archive) · 휴지통(#/trash) 화면(#1851 → #1850 안 A, 원준 2026-08-27 "A안으로 가자").
+//  ⚠ 「아카이브」였던 자리는 #3778(원준 2026-09-19)에서 **「지난 세션」**이 됐다 — 주인공이 보관한 프로젝트에서
+//   세션으로 바뀌었고, 보관한 프로젝트는 같은 화면의 칩 하나로 남았다(renderPast 머리말).
 //
 //  ── 안 A「원장 표」 ──
 //  두 화면이 **같은 표 문법**을 쓴다(프로젝트 앱의 리스트 뷰와 같은 결): 열 머리 + 날짜 묶음 행 + 항목 행.
@@ -12,8 +14,9 @@
 import { api, el, relTime, sv, toast } from '../core.js';
 import { confirmSessionPurge, confirmSessionPurgeLocal, confirmSessionPurgeMany, fetchFootprint, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, splitFootprint, trashConfirmSkipped, eulReul, type Footprint } from '../session-actions.js';
 import { sessText } from './side.js';
-import { dotCls, findSessIn, isArchivedProj, isLiveSess, isLooseTrashedSess, isTrashedProj, isTrashedSess, projName, type Proj, type Sess, type V2Data } from './views.js';
+import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isTrashedProj, isTrashedSess, projName, type Proj, type Sess, type V2Data } from './views.js';
 import { listDismissedSessions, restoreDismissedSessions, type DismissedSession } from './app-instance.js';   // #3857 「치운 세션」
+import { groupPastByProject, isDismissedSess, pastNames, PAST_PERIODS, selectPast, standsInPast, type PastPeriod, type PastScope, type PastSessLike } from '../lib/past-sess.js';   // #3778 — 「지난 세션」의 잣대(순수)
 
 export interface BinHooks { onChanged?: () => void }
 
@@ -65,7 +68,8 @@ function sideLi(lead: HTMLElement | null, label: string, value: string, href?: s
 //  main.ts 가 20초 결로(그리고 되돌리기·완전 삭제 뒤) render* 를 통째로 다시 부르므로, 클로저에 두면 고른 것·검색어·
 //  초점·[더 보기]가 20초마다 증발한다(프리뷰 실측 2026-08-27). 진행 중 잠금(busy)도 같은 이유로 여기.
 const trashUi = { kind: 'all' as 'all' | 'project' | 'session', q: '', newestFirst: true, shown: PAGE, sel: new Set<string>(), focus: null as string | null };
-const archUi = { kind: 'all' as 'all' | 'live', q: '', newestFirst: true, shown: PAGE, sel: new Set<number>(), focus: null as number | null };
+//  「보관한 프로젝트」 모드의 고른 것·초점 — 세션 모드(pastUi)와 따로 산다(칩을 오가도 각자 자리를 지킨다).
+const archUi = { sel: new Set<number>(), focus: null as number | null };
 let binBusy = false;
 const guard = async (fn: () => Promise<void>): Promise<void> => { if (binBusy) return; binBusy = true; try { await fn(); } finally { binBusy = false; } };
 
@@ -454,88 +458,299 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
   if (scrollTop) host.scrollTop = scrollTop;
 }
 
-// ══════════════════════════════ 아카이브 ▸ 치운 세션 (#3857) ══════════════════════════════
-//  세션의 «보임 축» 에서 사람이 × 로 치운 것(org_app_instance closed·사유 user)을 보고 되돌리는 자리.
-//  종전엔 × 로 치운 세션을 **어디서도 볼 수 없었다**(브라우저 맵 한 칸에만 있었다) — 치운 걸 되찾을 길이 없으니
-//  사람은 × 를 겁내거나, 치웠다가 사라진 세션을 «버그로 사라졌다» 로 겪었다.
-//  ⚠ 시스템이 닫은 것(되살리기·완전 삭제·유령 청소)은 여기 **안 뜬다** — 서버가 사유 user 만 준다.
-//  ⚠ 한 세션이 여러 이름(박스 id · 대화 uuid · 옛 박스 id)으로 치워졌을 수 있다 — 지금 세션으로 풀어 한 줄로 접는다.
-//  재료는 전용 창구 하나(목록 폴링과 따로) — 이 화면이 20초마다 다시 그려져도 15초 안엔 다시 부르지 않는다.
+// ══════════════════════════════ 지난 세션 (#/archive) ══════════════════════════════
+//  원준 2026-09-19: "x 를 누르면 아카이브로 보내지 말고 지난 세션으로 보내. 아카이브라는 곳을 없애고 그냥 지난 세션을
+//   볼 수 있는 창으로 하는 게 좋겠음. 그 안에서도 프로젝트 단위로 묶어서 보거나 각종 필터 걸려서 쉽게 볼 수 있게."
+//
+//  ★ 종전엔 이 자리가 「아카이브」였고, 담는 것이 **보관한 프로젝트**였다. 그래서 세션의 두 축이 갈 곳을 잃었다:
+//   · 박스가 없는 세션(실행 축)은 홈에서 흐리게 보일 뿐 모아 보는 자리가 없었다(실측 2026-09-19: 원준 계정 213건).
+//   · × 로 치운 세션(보임 축)은 이 화면 발치의 「치운 세션」 표에만 있었고, × 툴팁이 그걸 «아카이브»라고 불렀다 —
+//     사람에겐 «보관함에 넣었다» 로 읽혔다.
+//  ⇒ 이 화면의 주인공을 **세션**으로 바꾼다. 두 축을 한 표에 싣고(가름은 칩), 보관한 프로젝트는 같은 화면의 딴 모드로 남긴다.
+//   잣대는 lib/past-sess.ts 한 자리에 있다(순수 함수 — scripts/past-sess.test.mjs 가 값으로 지킨다).
+//  ⚠ 주소(#/archive)는 그대로다 — 열어 둔 탭·고정한 자리가 그 문자열을 들고 있다. 바꾸면 그 창들이 빈 화면이 된다.
+//  ⚠ 「내 세션」만 싣는다 — 여기서 하는 일(이어서 열기·목록으로 되돌리기·휴지통으로)이 전부 주인의 몫이다.
+//   남의 세션은 프로젝트 화면 ▸ [지난 세션] 칸에서 본다.
 let dismissedCache: DismissedSession[] = [];
 let dismissedAt = 0;
 let dismissedLoading = false;
-function dismissedSection(data: V2Data, hooks: BinHooks): HTMLElement {
-  const sec = el('section', { class: 'v2-bin-sec v2-bin-dismissed' });
-  const paint = (): void => {
-    const seen = new Set<string>();
-    const rows: Array<{ ref: DismissedSession; s: Sess | undefined; key: string }> = [];
-    for (const d of dismissedCache) {
-      const s = findSessIn(data.sessions, String(d.session_id || ''));
-      if (!s && d.subject_state === 'gone') continue;      // 되살릴 수도 열 수도 없는 세션 — 되돌려도 설 자리가 없다
-      if (s && isTrashedSess(s)) continue;                 // 휴지통에 있으면 휴지통 화면의 것이다
-      const key = s ? s.id : String(d.session_id);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      rows.push({ ref: d, s, key });
-    }
-    const head = el('div', { class: 'v2-bin-tools' },
-      el('h2', { class: 'v2-bin-h2', text: '치운 세션' }),
-      el('span', { class: 'v2-bin-count', text: rows.length ? String(rows.length) : '' }));
-    if (!rows.length) {
-      sec.replaceChildren(head, el('p', { class: 'v2-bin-empty', text: dismissedLoading && !dismissedAt ? '불러오는 중…' : '목록에서 치운 세션이 없어요. 세션 행의 × 로 치우면 여기 모이고, 세션은 그대로 돌아요.' }));
-      return;
-    }
-    const restoreOne = (r: { ref: DismissedSession; s: Sess | undefined }, name: string) => guard(async () => {
-      const ids = [String(r.ref.session_id), ...(r.s ? [r.s.id] : [])];
-      try { await restoreDismissedSessions([...new Set(ids)]); }
-      catch (e: any) { toast('되돌리지 못했어요 — ' + (e?.message || e), true); return; }
-      toast(`「${name}」${eulReul(name)} 목록으로 되돌렸어요.`);
-      dismissedAt = 0; hooks.onChanged?.();
-    });
-    const trashOne = (r: { ref: DismissedSession; s: Sess | undefined }, name: string) => guard(async () => {
-      try {
-        const out = await sessionTrashOp('trash', r.s ? sessionNames(r.s) : [String(r.ref.session_id)]);
-        if (!out.done.length) { toast('휴지통으로 보내지 못했어요 — ' + (out.skipped[0]?.why || '처리된 세션이 없어요'), true); return; }
-      } catch (e: any) { toast('휴지통으로 보내지 못했어요 — ' + (e?.message || e), true); return; }
-      toast(`「${name}」${eulReul(name)} 휴지통으로 보냈어요 — 휴지통에서 되돌릴 수 있어요.`);
-      dismissedAt = 0; hooks.onChanged?.();
-    });
-    const body = el('tbody', {});
-    for (const r of rows) {
-      const pid = r.s ? r.s.projectId : (r.ref.subject_project_id ?? null);
-      const name = (r.s ? (sessText(r.s, projName(data, pid)).main || r.s.label) : '') || r.ref.subject_label || r.ref.title || String(r.ref.session_id);
-      body.append(el('tr', {},
-        el('td', { class: 'c-name' }, sessIcon(),
-          el('a', { class: 't', href: '#/s/' + encodeURIComponent(r.key), text: name, title: '세션을 엽니다 — 열면 목록에도 돌아와요', onclick: () => { dismissedAt = 0; } })),
-        el('td', { class: 'c-in' }, el('span', { text: pid ? projName(data, pid) : '프로젝트 없음' })),
-        el('td', { class: 'c-when' }, whenCell(r.ref.closed_at)),
-        el('td', { class: 'c-acts' }, el('span', { class: 'acts' },
-          el('button', { class: 'btn-text', type: 'button', text: '되돌리기', title: '홈 목록으로 되돌립니다', onclick: () => void restoreOne(r, name) }),
-          r.s && !isLiveSess(r.s)
-            ? el('button', { class: 'btn-text danger', type: 'button', text: '휴지통으로', title: '휴지통으로 보냅니다 — 되돌릴 수 있어요', onclick: () => void trashOne(r, name) })
-            : null))));
-    }
-    sec.replaceChildren(head,
-      el('div', { class: 'v2-bin-tblwrap' },
-        el('table', { class: 'v2-bin-tbl arch' },
-          el('thead', {}, el('tr', {}, el('th', { text: '이름' }), el('th', { text: '프로젝트' }), el('th', { text: '치운 때' }), el('th', {}))),
-          body)));
-  };
-  paint();
-  if (!dismissedLoading && Date.now() - dismissedAt > 15_000) {
-    dismissedLoading = true;
-    void listDismissedSessions()
-      .then((rows) => { dismissedCache = rows; dismissedAt = Date.now(); })
-      .catch(() => { /* 못 받았으면 직전 판을 그대로 둔다 */ })
-      .finally(() => { dismissedLoading = false; if (sec.isConnected) paint(); });
-  }
-  return sec;
+/** 치운 세션 재료(#3857) — 전용 창구 하나. 이 화면이 20초마다 다시 그려져도 15초 안엔 다시 부르지 않는다. */
+function ensureDismissed(repaint: () => void): void {
+  if (dismissedLoading || Date.now() - dismissedAt <= 15_000) return;
+  dismissedLoading = true;
+  void listDismissedSessions()
+    .then((rows) => { dismissedCache = rows; dismissedAt = Date.now(); })
+    .catch(() => { /* 못 받았으면 직전 판을 그대로 둔다 */ })
+    .finally(() => { dismissedLoading = false; repaint(); });
 }
 
-// ══════════════════════════════════ 아카이브 ═════════════════════════════════
-//  같은 표 문법 — 동사만 다르다(보관 해제 · 휴지통으로). 세션은 그대로 열 수 있으니 여기엔 파괴 동사가 없다.
-export function renderArchive(host: HTMLElement, data: V2Data, hooks: BinHooks = {}, aside?: HTMLElement | null): void {
-  const projs = data.projects.filter((p) => isArchivedProj(p) && !isTrashedProj(p));   // 버린 것은 휴지통이 맡는다
+/** 한 줄이 들고 있는 것 — 세션 행(내 세션)과, 세션 목록엔 없고 치움 기록만 남은 행을 같은 모양으로 만든다. */
+interface PastItem extends PastSessLike {
+  key: string; name: string; stateKey: string; stateLabel: string; s: Sess | null; dismissed: boolean;
+}
+
+/** 화면 상태 — 모듈 수준인 이유는 trashUi 와 같다(20초 결로가 render 를 통째로 다시 부른다). */
+const pastUi = {
+  mode: 'sess' as 'sess' | 'proj',      // 세션 보기 / 보관한 프로젝트 보기
+  scope: 'all' as PastScope,
+  period: 'all' as PastPeriod,
+  group: true,                          // 프로젝트로 묶기(끄면 날짜 묶음)
+  q: '', newestFirst: true, shown: PAGE,
+  sel: new Set<string>(), focus: null as string | null,
+  closed: new Set<number>(),            // 접어 둔 프로젝트 묶음
+};
+
+export function renderPast(host: HTMLElement, data: V2Data, hooks: BinHooks = {}, aside?: HTMLElement | null): void {
+  const ui = pastUi;
+  const now = Date.now();
+  const dism = new Set(dismissedCache.map((d) => String(d.session_id || '')).filter(Boolean));
+  const archProjs = data.projects.filter((p) => isArchivedProj(p) && !isTrashedProj(p));   // 버린 것은 휴지통이 맡는다
+
+  // ── 재료 ──
+  const items: PastItem[] = [];
+  const known = new Set<string>();
+  for (const s of data.sessions) {
+    if (!s.owned || isTrashedSess(s)) continue;
+    if (!standsInPast(s, dism)) continue;
+    const it: PastItem = {
+      id: s.id, logId: s.logId || null, altIds: s.altIds, projectId: s.projectId,
+      live: s.live, alive: s.alive, trashedAt: s.trashedAt || null, lastSeen: s.lastSeen,
+      key: s.id, name: sessText(s, projName(data, s.projectId)).main || s.label || s.id,
+      stateKey: s.stateKey, stateLabel: s.stateLabel, s, dismissed: isDismissedSess(s, dism),
+    };
+    items.push(it);
+    for (const n of pastNames(it)) known.add(n);
+  }
+  //  세션 목록엔 없고 치움 기록만 남은 줄 — 그래도 세운다(치운 것이 «어디에도 없는» 상태가 #3857 이 고친 그 증상이다).
+  //  ⚠ 서버가 gone 이라 한 것은 뺀다 — 되살릴 수도 열 수도 없어 되돌려도 설 자리가 없다.
+  for (const d of dismissedCache) {
+    const sid = String(d.session_id || '');
+    if (!sid || known.has(sid) || d.subject_state === 'gone') continue;
+    known.add(sid);
+    items.push({
+      id: sid, projectId: d.subject_project_id ?? null, live: false, alive: false, trashedAt: null,
+      lastSeen: Date.parse(String(d.closed_at || '')) || 0,
+      key: sid, name: String(d.subject_label || d.title || sid), stateKey: 'log', stateLabel: '기록', s: null, dismissed: true,
+    });
+  }
+
+  const needle = ui.q.trim().toLowerCase();
+  const hay = (it: PastItem): string => `${it.name} ${projName(data, it.projectId ?? null)} ${it.id}`.toLowerCase();
+  const visible = (): PastItem[] => selectPast(items, {
+    dismissed: dism, scope: ui.scope, period: ui.period, now, newestFirst: ui.newestFirst,
+    match: needle ? (it: PastItem) => hay(it).includes(needle) : undefined,
+  });
+  const dismN = items.filter((it) => it.dismissed).length;
+
+  // 고른 것 청소 — 다시 그릴 때 사라진 줄은 선택에서도 뺀다.
+  const keys = new Set(items.map((it) => it.key));
+  for (const k of Array.from(ui.sel)) if (!keys.has(k)) ui.sel.delete(k);
+  if (ui.focus && !keys.has(ui.focus)) ui.focus = null;
+
+  // ── 동작 ──
+  const restoreRows = (list: PastItem[]): Promise<void> => guard(async () => {
+    const ids = [...new Set(list.flatMap((it) => pastNames(it)))];
+    if (!ids.length) return;
+    try { await restoreDismissedSessions(ids); }
+    catch (e: any) { toast('되돌리지 못했어요 — ' + (e?.message || e), true); return; }
+    toast(list.length === 1 ? `「${list[0].name}」${eulReul(list[0].name)} 홈 목록으로 되돌렸어요.` : `세션 ${list.length}개를 홈 목록으로 되돌렸어요.`);
+    ui.sel.clear(); dismissedAt = 0; hooks.onChanged?.();
+  });
+  const trashRows = (list: PastItem[]): Promise<void> => guard(async () => {
+    const names = [...new Set(list.flatMap((it) => (it.s ? sessionNames(it.s) : [it.id])))];
+    if (!names.length) return;
+    try {
+      const out = await sessionTrashOp('trash', names);
+      if (!out.done.length) { toast('휴지통으로 보내지 못했어요 — ' + (out.skipped[0]?.why || '처리된 세션이 없어요'), true); return; }
+    } catch (e: any) { toast('휴지통으로 보내지 못했어요 — ' + (e?.message || e), true); return; }
+    toast((list.length === 1 ? `「${list[0].name}」${eulReul(list[0].name)}` : `세션 ${list.length}개를`) + ' 휴지통으로 보냈어요 — 휴지통에서 되돌릴 수 있어요.');
+    ui.sel.clear(); dismissedAt = 0; hooks.onChanged?.();
+  });
+
+  // ── 조각 ──
+  const tblWrap = el('div', { class: 'v2-bin-tblwrap' });
+  const chipsEl = el('div', { class: 'v2-bin-chips' });
+  const toolsEl = el('div', { class: 'v2-bin-tools' });
+  const barEl = el('div', { class: 'v2-bin-selbar' });
+  const countEl = el('span', { class: 'v2-bin-count' });
+  const search = el('input', { type: 'search', class: 'v2-bin-search', placeholder: '세션·프로젝트 이름으로 찾기', 'aria-label': '지난 세션에서 찾기' }) as HTMLInputElement;
+  search.value = ui.q;
+  search.addEventListener('input', () => { ui.q = search.value; ui.shown = PAGE; paint(); });
+
+  const chip = (on: boolean, label: string, n: number, onclick: () => void) =>
+    el('button', { class: 'v2-bin-chip' + (on ? ' on' : ''), type: 'button', text: `${label} ${n}`, 'aria-pressed': String(on), onclick });
+  const paintChips = () => {
+    chipsEl.replaceChildren(
+      chip(ui.mode === 'sess' && ui.scope === 'all', '전체', items.length, () => { ui.mode = 'sess'; ui.scope = 'all'; ui.shown = PAGE; paint(); }),
+      chip(ui.mode === 'sess' && ui.scope === 'dismissed', '치운 것', dismN, () => { ui.mode = 'sess'; ui.scope = 'dismissed'; ui.shown = PAGE; paint(); }),
+      //  ★ 보관한 프로젝트는 **없어지지 않는다** — 자리만 이 화면 안의 딴 모드로 옮겼다(사이드바 ▸ 프로젝트 우클릭 ▸ [보관하기]의 도착지).
+      chip(ui.mode === 'proj', '보관한 프로젝트', archProjs.length, () => { ui.mode = 'proj'; ui.shown = PAGE; paint(); }));
+  };
+  const paintTools = () => {
+    if (ui.mode === 'proj') { toolsEl.replaceChildren(chipsEl); return; }
+    const period = el('select', { class: 'v2-bin-pick', 'aria-label': '기간', onchange: (e: Event) => { ui.period = (e.target as HTMLSelectElement).value as PastPeriod; ui.shown = PAGE; paint(); } },
+      ...PAST_PERIODS.map((p) => el('option', { value: p.key, text: p.label, ...(p.key === ui.period ? { selected: 'selected' } : {}) }))) as HTMLSelectElement;
+    period.value = ui.period;
+    const grpBtn = el('button', { class: 'v2-bin-chip' + (ui.group ? ' on' : ''), type: 'button', text: '프로젝트로 묶기',
+      'aria-pressed': String(ui.group), title: ui.group ? '끄면 시간 순서로 늘어놓습니다' : '프로젝트마다 묶어서 보여 줍니다',
+      onclick: () => { ui.group = !ui.group; ui.shown = PAGE; paint(); } });
+    const sortBtn = el('button', { class: 'btn-text v2-bin-sort', type: 'button', text: ui.newestFirst ? '최근 순' : '오래된 순', title: '정렬을 바꿉니다',
+      onclick: () => { ui.newestFirst = !ui.newestFirst; paint(); } });
+    toolsEl.replaceChildren(chipsEl, period, grpBtn, el('span', { class: 'sp' }), search, sortBtn);
+  };
+  const paintBar = () => {
+    const vis = visible();
+    const picked = vis.filter((it) => ui.sel.has(it.key));
+    const anyDism = picked.some((it) => it.dismissed);
+    barEl.replaceChildren(...(picked.length ? [
+      el('span', { class: 'n', text: `${picked.length}개 선택` }),
+      anyDism ? el('button', { class: 'btn-text', type: 'button', text: '홈 목록으로', title: '홈 목록에 다시 세웁니다', onclick: () => void restoreRows(picked.filter((it) => it.dismissed)) }) : null,
+      el('button', { class: 'btn-text danger', type: 'button', text: '휴지통으로', onclick: () => void trashRows(picked) }),
+      el('button', { class: 'btn-text', type: 'button', text: '선택 해제', onclick: () => { ui.sel.clear(); paint(); } }),
+    ] : []), countEl);
+    countEl.textContent = vis.length === items.length ? `${items.length}개` : `${vis.length}개 표시 · 전체 ${items.length}`;
+  };
+
+  const rowOf = (it: PastItem): HTMLElement => {
+    const tr = el('tr', { class: (ui.focus === it.key ? 'focus' : '') + (it.dismissed ? ' dism' : '') },
+      el('td', { class: 'c-cb' }, cb(ui.sel.has(it.key), it.name + ' 선택', (on) => { if (on) ui.sel.add(it.key); else ui.sel.delete(it.key); paintBar(); paintAside(); })),
+      el('td', { class: 'c-name' }, sessIcon(),
+        el('a', { class: 't', href: '#/s/' + encodeURIComponent(it.key), text: it.name, title: '세션을 엽니다 — 그때 대화를 그대로 이어서 계속할 수 있어요', onclick: (ev: Event) => { ev.stopPropagation(); dismissedAt = 0; } }),
+        it.dismissed ? el('span', { class: 'v2-bin-tag', text: '치움', title: '내가 홈 목록에서 치운 세션이에요 — [홈 목록으로]를 누르면 다시 섭니다' }) : null),
+      ...(ui.group ? [] : [el('td', { class: 'c-in' }, el('span', { text: it.projectId ? projName(data, it.projectId) : '프로젝트 없음' }))]),
+      el('td', { class: 'c-kind' }, dot(it.stateKey), el('span', { text: it.stateLabel || '지난 세션' })),
+      el('td', { class: 'c-when' }, el('span', { class: 'm', text: whenMs(Number(it.lastSeen) || 0), title: it.lastSeen ? new Date(Number(it.lastSeen)).toLocaleString() : '' })),
+      el('td', { class: 'c-acts' }, el('span', { class: 'acts' },
+        it.dismissed ? el('button', { class: 'btn-text', type: 'button', text: '홈 목록으로', title: '홈 목록에 다시 세웁니다', onclick: () => void restoreRows([it]) }) : null,
+        el('button', { class: 'btn-text danger', type: 'button', text: '휴지통으로', title: '휴지통으로 보냅니다 — 되돌릴 수 있어요', onclick: () => void trashRows([it]) }))));
+    tr.addEventListener('click', (ev) => {
+      const t = ev.target as HTMLElement;
+      if (t.closest('button, input, a')) return;
+      ui.focus = ui.focus === it.key ? null : it.key;
+      paint();
+    });
+    return tr;
+  };
+
+  //  묶음 머리줄 — 프로젝트로 묶었으면 프로젝트(접을 수 있다), 아니면 날짜.
+  const projHead = (g: { id: number; rows: PastItem[] }): HTMLElement => {
+    const p = g.id ? data.projects.find((x) => x.id === g.id) : null;
+    const closed = ui.closed.has(g.id);
+    const name = g.id ? (p ? p.name : `#${g.id}`) : '프로젝트 없음';
+    const sel = g.rows.every((it) => ui.sel.has(it.key));
+    return el('tr', { class: 'g' + (closed ? ' closed' : '') },
+      el('td', { class: 'c-cb' }, cb(sel, `${name} 전체 선택`, (on) => { for (const it of g.rows) { if (on) ui.sel.add(it.key); else ui.sel.delete(it.key); } paint(); }, !sel && g.rows.some((it) => ui.sel.has(it.key)))),
+      el('td', { colspan: '3' },
+        el('button', { class: 'v2-bin-gt', type: 'button', 'aria-expanded': String(!closed), title: closed ? '펴기' : '접기',
+          onclick: () => { if (closed) ui.closed.delete(g.id); else ui.closed.add(g.id); paint(); } },
+          el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' }), folderIcon(), el('b', { text: name })),
+        p && isArchivedProj(p) ? el('span', { class: 'v2-bin-tag', text: '보관됨', title: '보관한 프로젝트예요 — [보관한 프로젝트] 칩에서 해제할 수 있어요' }) : null,
+        el('span', { class: 'n', text: ` · ${g.rows.length}` })),
+      el('td', { class: 'c-acts' }, g.id
+        ? el('a', { class: 'btn-text', href: '#/p/' + g.id, text: '프로젝트 열기 →', title: '그 프로젝트 화면을 엽니다' })
+        : null));
+  };
+
+  const paintTable = () => {
+    const vis = visible();
+    const body = el('tbody', {});
+    let drawn = 0;
+    if (ui.group) {
+      const groups = groupPastByProject(vis);
+      for (const g of groups) {
+        if (drawn >= ui.shown) break;
+        body.append(projHead(g));
+        if (ui.closed.has(g.id)) continue;
+        for (const it of g.rows) {
+          if (drawn >= ui.shown) break;
+          body.append(rowOf(it)); drawn++;
+        }
+      }
+    } else {
+      let cur = '';
+      for (const it of vis.slice(0, ui.shown)) {
+        const b = bucketOf(new Date(Number(it.lastSeen) || 0).toISOString());
+        if (b !== cur) {
+          cur = b;
+          const grp = vis.filter((x) => bucketOf(new Date(Number(x.lastSeen) || 0).toISOString()) === b);
+          const gAll = grp.every((x) => ui.sel.has(x.key));
+          body.append(el('tr', { class: 'g' },
+            el('td', { class: 'c-cb' }, cb(gAll, `${b} 전체 선택`, (on) => { for (const x of grp) { if (on) ui.sel.add(x.key); else ui.sel.delete(x.key); } paint(); }, !gAll && grp.some((x) => ui.sel.has(x.key)))),
+            el('td', { colspan: '4' }, el('b', { text: b }), el('span', { class: 'n', text: ` · ${grp.length}` }))));
+        }
+        body.append(rowOf(it)); drawn++;
+      }
+    }
+    const allOn = vis.length > 0 && vis.every((it) => ui.sel.has(it.key));
+    const master = cb(allOn, '보이는 세션 전체 선택', (on) => { for (const it of vis) { if (on) ui.sel.add(it.key); else ui.sel.delete(it.key); } paint(); }, !allOn && vis.some((it) => ui.sel.has(it.key)));
+    const left = vis.length - drawn;
+    tblWrap.replaceChildren(
+      el('table', { class: 'v2-bin-tbl arch past' },
+        el('thead', {}, el('tr', {},
+          el('th', { class: 'c-cb' }, master), el('th', { text: '세션' }),
+          ...(ui.group ? [] : [el('th', { text: '프로젝트' })]),
+          el('th', { text: '상태' }), el('th', { text: '마지막' }), el('th', {}))),
+        body),
+      ...(left > 0 ? [el('button', { class: 'btn-text v2-bin-more', type: 'button', text: `외 ${left}개 더 보기`, onclick: () => { ui.shown += PAGE; paint(); } })] : []),
+      ...(!vis.length ? [el('p', { class: 'v2-bin-empty', text: dismissedLoading && !dismissedAt ? '불러오는 중…' : needle || ui.period !== 'all' || ui.scope !== 'all' ? '이 조건엔 없어요 — 칩이나 기간을 바꿔 보세요.' : '지난 세션이 없어요. 세션이 멈추거나 × 로 치우면 여기 모입니다.' })] : []));
+  };
+
+  const paintAside = () => {
+    if (!aside) return;
+    const box = el('div', { class: 'v2-bin-side' });
+    const vis = visible();
+    const picked = vis.filter((it) => ui.sel.has(it.key));
+    if (picked.length > 1) {
+      box.append(el('div', { class: 'v2-bin-side-sum' },
+        el('h4', { text: `고른 ${picked.length}개` }),
+        el('p', { class: 'd', text: `치운 것 ${picked.filter((it) => it.dismissed).length} · 멈춘 것 ${picked.filter((it) => !it.dismissed).length}` }),
+        el('div', { class: 'act' },
+          picked.some((it) => it.dismissed) ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '홈 목록으로', onclick: () => void restoreRows(picked.filter((it) => it.dismissed)) }) : null,
+          el('button', { class: 'btn-text danger', type: 'button', text: '휴지통으로', onclick: () => void trashRows(picked) }))));
+    }
+    const it = items.find((x) => x.key === ui.focus) || (picked.length === 1 ? picked[0] : null);
+    if (!it) {
+      if (!picked.length) box.append(el('p', { class: 'v2-bin-side-hint', text: '행을 누르면 그 세션의 안이 여기 열립니다. 이름을 누르면 그 대화를 이어서 계속할 수 있어요.' }));
+      aside.replaceChildren(box);
+      return;
+    }
+    const detail = el('div', { class: 'v2-bin-side-detail' },
+      el('div', { class: 'h' }, sessIcon(), el('b', { text: it.name }), it.dismissed ? el('span', { class: 'tag', text: '치움' }) : null),
+      el('p', { class: 'meta', text: `${it.projectId ? projName(data, it.projectId) : '프로젝트 없음'} · ${it.stateLabel || '지난 세션'} · 마지막 ${whenMs(Number(it.lastSeen) || 0)}` }));
+    detail.append(el('div', { class: 'act' },
+      el('a', { class: 'btn btn-ghost btn-sm', href: '#/s/' + encodeURIComponent(it.key), text: '이어서 열기', onclick: () => { dismissedAt = 0; } }),
+      it.dismissed ? el('button', { class: 'btn-text', type: 'button', text: '홈 목록으로', onclick: () => void restoreRows([it]) }) : null,
+      el('button', { class: 'btn-text danger', type: 'button', text: '휴지통으로', onclick: () => void trashRows([it]) }),
+      it.projectId ? el('a', { class: 'btn-text', href: '#/p/' + it.projectId, text: '프로젝트 열기 →' }) : null));
+    box.append(detail);
+    aside.replaceChildren(box);
+  };
+
+  const paint = () => {
+    if (ui.mode === 'proj') { paintChips(); paintTools(); archivedProjects(tblWrap, barEl, countEl, data, hooks, aside, paint); return; }
+    paintChips(); paintTools(); paintTable(); paintBar(); paintAside();
+  };
+
+  const hadFocus = document.activeElement instanceof HTMLElement && document.activeElement.classList.contains('v2-bin-search');
+  const scrollTop = host.scrollTop;
+  host.replaceChildren(el('div', { class: 'v2-center v2-binpage wide' },
+    el('div', { class: 'v2-bin-top' },
+      el('div', {},
+        el('h1', { class: 'v2-title', text: '지난 세션' }),
+        el('p', { class: 'v2-desc', text: '박스가 멈춰 지금은 안 도는 세션과, 홈 목록에서 × 로 치운 세션이에요. 이름을 누르면 그때 대화를 그대로 이어서 계속할 수 있어요.' }))),
+    el('section', { class: 'v2-bin-sec' }, toolsEl, barEl, tblWrap)));
+  paint();
+  ensureDismissed(() => { if (host.isConnected) renderPast(host, data, hooks, aside); });
+  if (hadFocus) { search.focus(); const n = search.value.length; try { search.setSelectionRange(n, n); } catch { /* 일부 브라우저는 search 타입에 거부 */ } }
+  if (scrollTop) host.scrollTop = scrollTop;
+}
+
+// ── 같은 화면의 딴 모드: 보관한 프로젝트 ────────────────────────────────────────
+//  통째로 치워 둔 프로젝트와 그 아래 세션. 동사는 둘(보관 해제 · 휴지통으로) — 여기엔 파괴 동사가 없다.
+//  ⚠ 「아카이브」라는 **자리**는 없앴지만 프로젝트 보관 자체는 그대로다(사이드바 우클릭 ▸ [보관하기]).
+//   그 도착지가 이 모드다 — 없애면 보관한 프로젝트를 되돌릴 길이 사라진다.
+function archivedProjects(tblWrap: HTMLElement, barEl: HTMLElement, countEl: HTMLElement, data: V2Data, hooks: BinHooks, aside: HTMLElement | null | undefined, repaint: () => void): void {
+  const projs = data.projects.filter((p) => isArchivedProj(p) && !isTrashedProj(p));
   const sessOf = (p: Proj): Sess[] => data.sessions.filter((s) => Number(s.projectId) === p.id && !isTrashedSess(s))
     .sort((a, b) => Number(isLiveSess(b)) - Number(isLiveSess(a)) || b.lastSeen - a.lastSeen);
   const liveOf = (p: Proj): number => sessOf(p).filter(isLiveSess).length;
@@ -568,46 +783,12 @@ export function renderArchive(host: HTMLElement, data: V2Data, hooks: BinHooks =
     ui.sel.clear(); hooks.onChanged?.();
   });
 
-  const visible = (): Proj[] => {
-    const needle = ui.q.trim().toLowerCase();
-    return projs
-      .filter((p) => ui.kind === 'all' || liveOf(p) > 0)
-      .filter((p) => !needle || p.name.toLowerCase().includes(needle) || ('#' + p.id).includes(needle))
-      .sort((a, b) => ui.newestFirst
-        ? String(b.archived_at || '').localeCompare(String(a.archived_at || ''))
-        : String(a.archived_at || '').localeCompare(String(b.archived_at || '')));
-  };
-
-  const tblWrap = el('div', { class: 'v2-bin-tblwrap' });
-  const chipsEl = el('div', { class: 'v2-bin-chips' });
-  const barEl = el('div', { class: 'v2-bin-selbar' });
-  const countEl = el('span', { class: 'v2-bin-count' });
-  const search = el('input', { type: 'search', class: 'v2-bin-search', placeholder: '이름으로 찾기', 'aria-label': '아카이브에서 이름으로 찾기' }) as HTMLInputElement;
-  search.value = ui.q;
-  search.addEventListener('input', () => { ui.q = search.value; ui.shown = PAGE; paint(); });
-  const sortBtn = el('button', { class: 'btn-text v2-bin-sort', type: 'button', text: ui.newestFirst ? '최근 순' : '오래된 순', title: '정렬을 바꿉니다', onclick: () => { ui.newestFirst = !ui.newestFirst; sortBtn.textContent = ui.newestFirst ? '최근 순' : '오래된 순'; paint(); } });
-
-  const paintChips = () => {
-    const liveN = projs.filter((p) => liveOf(p) > 0).length;
-    const chip = (k: typeof ui.kind, label: string, n: number) => el('button', { class: 'v2-bin-chip' + (ui.kind === k ? ' on' : ''), type: 'button', text: `${label} ${n}`, 'aria-pressed': String(ui.kind === k), onclick: () => { ui.kind = k; ui.shown = PAGE; paint(); } });
-    chipsEl.replaceChildren(chip('all', '전체', projs.length), chip('live', '도는 세션 있음', liveN));
-  };
-  const paintBar = () => {
-    const vis = visible();
-    const picked = vis.filter((p) => ui.sel.has(p.id));
-    barEl.replaceChildren(...(picked.length ? [
-      el('span', { class: 'n', text: `${picked.length}개 선택` }),
-      el('button', { class: 'btn-text', type: 'button', text: '보관 해제', onclick: () => void unarchive(picked) }),
-      el('button', { class: 'btn-text danger', type: 'button', text: '휴지통으로', onclick: () => void toTrash(picked) }),
-      el('button', { class: 'btn-text', type: 'button', text: '선택 해제', onclick: () => { ui.sel.clear(); paint(); } }),
-    ] : []), countEl);
-    countEl.textContent = vis.length === projs.length ? '' : `${vis.length}개 표시`;
-  };
+  const visible = (): Proj[] => projs.slice().sort((a, b) => String(b.archived_at || '').localeCompare(String(a.archived_at || '')));
 
   const rowOf = (p: Proj): HTMLElement => {
     const ss = sessOf(p); const live = liveOf(p);
     const tr = el('tr', { class: (ui.focus === p.id ? 'focus' : '') },
-      el('td', { class: 'c-cb' }, cb(ui.sel.has(p.id), p.name + ' 선택', (on) => { if (on) ui.sel.add(p.id); else ui.sel.delete(p.id); paintBar(); paintAside(); })),
+      el('td', { class: 'c-cb' }, cb(ui.sel.has(p.id), p.name + ' 선택', (on) => { if (on) ui.sel.add(p.id); else ui.sel.delete(p.id); repaint(); })),
       el('td', { class: 'c-name' }, folderIcon(),
         el('a', { class: 't', href: '#/p/' + p.id, text: p.name, title: '프로젝트 화면을 엽니다', onclick: (ev: Event) => ev.stopPropagation() }),
         el('span', { class: 'mono', text: `#${p.id}` })),
@@ -620,96 +801,54 @@ export function renderArchive(host: HTMLElement, data: V2Data, hooks: BinHooks =
       const t = ev.target as HTMLElement;
       if (t.closest('button, input, a')) return;
       ui.focus = ui.focus === p.id ? null : p.id;
-      paint();
+      repaint();
     });
     return tr;
   };
 
-  const paintTable = () => {
-    const vis = visible();
-    const head = vis.slice(0, ui.shown);
-    const allOn = vis.length > 0 && vis.every((p) => ui.sel.has(p.id));
-    const someOn = vis.some((p) => ui.sel.has(p.id));
-    const master = cb(allOn, '보이는 항목 전체 선택', (on) => { for (const p of vis) { if (on) ui.sel.add(p.id); else ui.sel.delete(p.id); } paint(); }, someOn && !allOn);
-    const body = el('tbody', {});
-    let cur = '';
-    for (const p of head) {
-      const b = bucketOf(String(p.archived_at || ''));
-      if (b !== cur) {
-        cur = b;
-        const grp = vis.filter((x) => bucketOf(String(x.archived_at || '')) === b);
-        const gAll = grp.every((x) => ui.sel.has(x.id));
-        const gSome = grp.some((x) => ui.sel.has(x.id));
-        body.append(el('tr', { class: 'g' },
-          el('td', { class: 'c-cb' }, cb(gAll, `${b} 전체 선택`, (on) => { for (const x of grp) { if (on) ui.sel.add(x.id); else ui.sel.delete(x.id); } paint(); }, gSome && !gAll)),
-          el('td', { colspan: '3' }, el('b', { text: b }), el('span', { class: 'n', text: ` · ${grp.length}` })),
-          el('td', { class: 'c-acts' }, el('button', { class: 'btn-text', type: 'button', text: '이 묶음 보관 해제', onclick: () => void unarchive(grp) }))));
-      }
-      body.append(rowOf(p));
-    }
-    tblWrap.replaceChildren(
-      el('table', { class: 'v2-bin-tbl arch' },
-        el('thead', {}, el('tr', {},
-          el('th', { class: 'c-cb' }, master), el('th', { text: '이름' }), el('th', { text: '세션' }),
-          el('th', { text: '보관한 때' }), el('th', {}))),
-        body),
-      ...(vis.length > head.length ? [el('button', { class: 'btn-text v2-bin-more', type: 'button', text: `외 ${vis.length - head.length}개 더 보기`, onclick: () => { ui.shown += PAGE; paint(); } })] : []),
-      ...(!vis.length ? [el('p', { class: 'v2-bin-empty', text: ui.q.trim() ? '찾는 이름이 없어요.' : '이 조건엔 보관한 프로젝트가 없어요.' })] : []));
-  };
+  const vis = visible();
+  const body = el('tbody', {});
+  for (const p of vis) body.append(rowOf(p));
+  const allOn = vis.length > 0 && vis.every((p) => ui.sel.has(p.id));
+  const master = cb(allOn, '보이는 항목 전체 선택', (on) => { for (const p of vis) { if (on) ui.sel.add(p.id); else ui.sel.delete(p.id); } repaint(); }, !allOn && vis.some((p) => ui.sel.has(p.id)));
+  tblWrap.replaceChildren(
+    el('table', { class: 'v2-bin-tbl arch' },
+      el('thead', {}, el('tr', {},
+        el('th', { class: 'c-cb' }, master), el('th', { text: '이름' }), el('th', { text: '세션' }),
+        el('th', { text: '보관한 때' }), el('th', {}))),
+      body),
+    ...(!vis.length ? [el('p', { class: 'v2-bin-empty', text: '보관한 프로젝트가 없어요. 사이드바 프로젝트 행을 오른쪽 클릭 ▸ [보관하기]로 치워 두면 사이드바가 가벼워져요.' })] : []));
 
-  const paintAside = () => {
-    if (!aside) return;
-    const box = el('div', { class: 'v2-bin-side' });
-    const vis = visible();
-    const picked = vis.filter((p) => ui.sel.has(p.id));
-    if (picked.length > 1) {
-      box.append(el('div', { class: 'v2-bin-side-sum' },
-        el('h4', { text: `고른 ${picked.length}개` }),
-        el('p', { class: 'd', text: `프로젝트 ${picked.length} · 안의 세션 ${picked.reduce((a, p) => a + sessOf(p).length, 0)}` }),
-        el('div', { class: 'act' },
-          el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '보관 해제', onclick: () => void unarchive(picked) }),
-          el('button', { class: 'btn-text danger', type: 'button', text: '휴지통으로', onclick: () => void toTrash(picked) }))));
-    }
-    const p = projs.find((x) => x.id === ui.focus) || (picked.length === 1 ? picked[0] : null);
-    if (!p) {
-      if (!picked.length) box.append(el('p', { class: 'v2-bin-side-hint', text: '행을 누르면 그 프로젝트의 세션이 여기 열립니다.' }));
-      aside.replaceChildren(box);
-      return;
-    }
-    const ss = sessOf(p);
-    const detail = el('div', { class: 'v2-bin-side-detail' },
-      el('div', { class: 'h' }, folderIcon(), el('b', { text: p.name }), el('span', { class: 'tag', text: `#${p.id}` })),
-      el('p', { class: 'meta', text: `보관 ${when(p.archived_at)} · 세션 ${ss.length}개` }));
-    if (ss.length) {
-      detail.append(el('h5', { text: '세션' }));
-      for (const s of ss.slice(0, 8)) detail.append(sideLi(dot(s.stateKey), sessText(s, p.name).main || s.id, s.stateLabel, '#/s/' + encodeURIComponent(s.id)));
-      if (ss.length > 8) detail.append(el('p', { class: 'meta', text: `외 ${ss.length - 8}개` }));
-    } else detail.append(el('p', { class: 'meta', text: '이 프로젝트엔 세션이 없어요.' }));
-    detail.append(el('div', { class: 'act' },
-      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '보관 해제', onclick: () => void unarchive([p]) }),
-      el('button', { class: 'btn-text danger', type: 'button', text: '휴지통으로', onclick: () => void toTrash([p]) }),
-      el('a', { class: 'btn-text', href: '#/p/' + p.id, text: '프로젝트 열기 →' })));
-    box.append(detail);
+  const picked = vis.filter((p) => ui.sel.has(p.id));
+  barEl.replaceChildren(...(picked.length ? [
+    el('span', { class: 'n', text: `${picked.length}개 선택` }),
+    el('button', { class: 'btn-text', type: 'button', text: '보관 해제', onclick: () => void unarchive(picked) }),
+    el('button', { class: 'btn-text danger', type: 'button', text: '휴지통으로', onclick: () => void toTrash(picked) }),
+    el('button', { class: 'btn-text', type: 'button', text: '선택 해제', onclick: () => { ui.sel.clear(); repaint(); } }),
+  ] : []), countEl);
+  countEl.textContent = `${vis.length}개`;
+
+  if (!aside) return;
+  const box = el('div', { class: 'v2-bin-side' });
+  const p = projs.find((x) => x.id === ui.focus) || (picked.length === 1 ? picked[0] : null);
+  if (!p) {
+    box.append(el('p', { class: 'v2-bin-side-hint', text: '행을 누르면 그 프로젝트의 세션이 여기 열립니다.' }));
     aside.replaceChildren(box);
-  };
-
-  const paint = () => { paintChips(); paintTable(); paintBar(); paintAside(); };
-
-  const empty = !projs.length;
-  const hadFocus = document.activeElement instanceof HTMLElement && document.activeElement.classList.contains('v2-bin-search');
-  host.replaceChildren(el('div', { class: 'v2-center v2-binpage wide' },
-    el('div', { class: 'v2-bin-top' },
-      el('div', {},
-        el('h1', { class: 'v2-title', text: '아카이브' }),
-        el('p', { class: 'v2-desc', text: '끝났거나 한동안 안 볼 프로젝트, 그리고 목록에서 치운 세션이에요. 안의 세션은 그대로 열 수 있고, [보관 해제]·[되돌리기]를 누르면 원래 자리로 돌아갑니다.' }))),
-    empty
-      ? el('div', { class: 'v2-inbox-empty' }, el('p', { class: 'h', text: '보관한 프로젝트가 없어요.' }),
-          el('p', { class: 'sub', text: '사이드바 프로젝트 행을 오른쪽 클릭 ▸ [아카이브로 보내기]로 치워 두면 사이드바가 가벼워져요.' }))
-      : el('section', { class: 'v2-bin-sec' },
-          el('div', { class: 'v2-bin-tools' }, chipsEl, el('span', { class: 'sp' }), search, sortBtn),
-          barEl, tblWrap),
-    dismissedSection(data, hooks)));
-  if (!empty) paint();
-  else if (aside) aside.replaceChildren();
-  if (hadFocus && !empty) { search.focus(); const n = search.value.length; try { search.setSelectionRange(n, n); } catch { /* noop */ } }
+    return;
+  }
+  const ss = sessOf(p);
+  const detail = el('div', { class: 'v2-bin-side-detail' },
+    el('div', { class: 'h' }, folderIcon(), el('b', { text: p.name }), el('span', { class: 'tag', text: `#${p.id}` })),
+    el('p', { class: 'meta', text: `보관 ${when(p.archived_at)} · 세션 ${ss.length}개` }));
+  if (ss.length) {
+    detail.append(el('h5', { text: '세션' }));
+    for (const s of ss.slice(0, 8)) detail.append(sideLi(dot(s.stateKey), sessText(s, p.name).main || s.id, s.stateLabel, '#/s/' + encodeURIComponent(s.id)));
+    if (ss.length > 8) detail.append(el('p', { class: 'meta', text: `외 ${ss.length - 8}개` }));
+  } else detail.append(el('p', { class: 'meta', text: '이 프로젝트엔 세션이 없어요.' }));
+  detail.append(el('div', { class: 'act' },
+    el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '보관 해제', onclick: () => void unarchive([p]) }),
+    el('button', { class: 'btn-text danger', type: 'button', text: '휴지통으로', onclick: () => void toTrash([p]) }),
+    el('a', { class: 'btn-text', href: '#/p/' + p.id, text: '프로젝트 열기 →' })));
+  box.append(detail);
+  aside.replaceChildren(box);
 }

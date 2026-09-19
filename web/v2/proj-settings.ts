@@ -163,20 +163,20 @@ export function openProjSettings(opts: ProjSettingsOpts): void {
   //  도는 세션 수는 셸이 들고 있는 목록이 아니라 상세 응답엔 없으므로 여기선 묻지 않고(0), 사이드바 경로가 그 숫자를 안다.
   //  보내고 나면 창을 닫고 아카이브 화면으로 — 사라진 것이 어디로 갔는지 바로 보여 준다.
   const archived = !!p.archived_at;
-  const archBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: archived ? '보관 해제' : '아카이브로 보내기',
-    title: archived ? '원래 자리(사이드바·보드)로 되돌립니다' : '사이드바·보드에서 빼고 [아카이브]에 둡니다' }) as HTMLButtonElement;
+  const archBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: archived ? '보관 해제' : '보관하기',
+    title: archived ? '원래 자리(사이드바·보드)로 되돌립니다' : '사이드바·보드에서 빼고 [지난 세션] ▸ 「보관한 프로젝트」에 둡니다' }) as HTMLButtonElement;
   archBtn.onclick = () => {
     void (async () => {
       if (!archived && !await confirmProjectArchive({ name: String(p.name || ''), liveN: 0 })) return;
       archBtn.disabled = true;
       try {
         await api('/api/ui/v6/projects/' + id + '/archive', { method: 'POST', body: JSON.stringify({ archived: !archived }) });
-        toast(archived ? '보관을 해제했어요 — 원래 자리로 돌아왔어요.' : '아카이브로 보냈어요.');
+        toast(archived ? '보관을 해제했어요 — 원래 자리로 돌아왔어요.' : '보관했어요 — [지난 세션] ▸ 「보관한 프로젝트」에 있어요.');
         p.archived_at = archived ? null : new Date().toISOString();
         opts.onChanged?.();
         close();
         if (!archived) location.hash = '#/archive';
-      } catch (e: any) { archBtn.disabled = false; toast((archived ? '보관을 해제하지' : '아카이브로 보내지') + ' 못했어요 — ' + (e?.message || e), true); }
+      } catch (e: any) { archBtn.disabled = false; toast((archived ? '보관을 해제하지' : '보관하지') + ' 못했어요 — ' + (e?.message || e), true); }
     })();
   };
 
@@ -208,7 +208,7 @@ export function openProjSettings(opts: ProjSettingsOpts): void {
       sec('상태', '프로젝트가 지금 어느 단계인지 알려 줍니다.', stateRow),
       sec('본문', '무엇을 하는 프로젝트인지 적어 둡니다. 쓰면 저절로 저장되고, 세션과 리브가 이 글을 읽고 일합니다.', desc, el('div', { class: 'pn-set-foot' }, descChip)),
       sec('할 일', '큰 덩어리만 적어 두면 충분합니다. 자세한 것은 세션이 만들어 줍니다.', taskIn, taskList),
-      sec('보관', archived ? '지금 아카이브에 있어요. 해제하면 사이드바·보드에 다시 보입니다.' : '끝났거나 한동안 안 볼 프로젝트는 통째로 치워 둘 수 있어요. 태스크·세션·지식 연결은 그대로 남습니다.', el('div', { class: 'pn-set-foot' }, archBtn)),
+      sec('보관', archived ? '지금 보관 중이에요 — [지난 세션] 화면의 「보관한 프로젝트」에 있어요. 해제하면 사이드바·보드에 다시 보입니다.' : '끝났거나 한동안 안 볼 프로젝트는 통째로 치워 둘 수 있어요. 태스크·세션·지식 연결은 그대로 남습니다.', el('div', { class: 'pn-set-foot' }, archBtn)),
       sec('삭제', '프로젝트를 폴더째 휴지통으로 보냅니다 — 그 안의 내 세션도 함께 가고, 도는 세션은 멈춥니다. 휴지통에서 복원하면 함께 돌아와요.', el('div', { class: 'pn-set-foot' }, trashBtn))),
     el('footer', { class: 'pn-modal-f' },
       // ⚠ `#/projects/<id>` 가 아니다 — v1 프로젝트 탭 폐기(2026-06-23) 이후 그 경로는 **id 를 버리고** 보드로
