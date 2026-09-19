@@ -32,7 +32,7 @@ globalThis.document = { createElement: () => ({ style: {}, setAttribute() {}, ap
 const { defaultNodeId, nodeCanRunAi } = await import(join(root, "public/app/v2/run-picker.js"));
 // #3778 — 규칙의 집은 run-prefs.ts 로 옮겨졌다(run-picker 는 재수출). [⚙] 기본값 창의 «실행 컴퓨터» 설정을 실제 노드로
 //  푸는 resolveNodeDefault 도 거기 산다 — 설정이 비었으면(규칙대로) 이 규칙과 **같은 답**이어야 한다.
-const { resolveNodeDefault, resolveNodeChoice, NODE_CENTRAL } = await import(join(root, "public/app/v2/run-prefs.js"));
+const { resolveNodeDefault, resolveNodeChoice, NODE_CENTRAL, nodeOptions, nodeWhere, saveRunPrefs, saveSessionDefaults, runPrefs } = await import(join(root, "public/app/v2/run-prefs.js"));
 
 const n = (id, o) => ({ id, name: id, ...o });
 
@@ -186,8 +186,9 @@ const PREFS = read("web/v2/run-prefs.ts");
 const strip = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 const codeOnly = strip(PICKER);
 const prefsOnly = strip(PREFS);
-ok(/const nodeKey = \(\): string => resolveNodeDefault\(nodes, sessionDefaults\(\)\.nodeDefault\)/.test(codeOnly),
-  "E1 노드 값은 매번 «기본값 설정 → 규칙» 으로 다시 정한다(캐시된 직전 값을 되살리지 않는다)");
+ok(/const nodeKey = \(\): string => resolveNodeDefault\(nodes, nodePref\(\)\)/.test(codeOnly)
+  && /const nodePref = \(\): string => \(remember \? sessionDefaults\(\)\.nodeDefault : nodePrefLocal\)/.test(codeOnly),
+  "E1 노드 값은 매번 «실행 컴퓨터 설정(nodeDefault) → 규칙» 으로 다시 정한다(캐시된 직전 값을 되살리지 않는다)");
 ok(/id: defaultNodeId\(nodes\)/.test(prefsOnly) && /if \(pref === NODE_CENTRAL\) return \{ id: '', fellBack: null \};/.test(prefsOnly),
   "E2 설정이 비었거나 못 쓰면 규칙(defaultNodeId)으로 떨어진다");
 ok(!/prefs\.node\b/.test(codeOnly) && !/\bp\.node\b/.test(prefsOnly) && !/prefs\.node\b/.test(prefsOnly),
@@ -223,14 +224,79 @@ ok(/req\.query\.only/.test(ROUTES) && /runNodesFor/.test(ROUTES), "F6 서버에 
 //  실제로 그렇게 굳어서 «켜져 있는 맥북이 홈에서 계속 꺼짐으로 보이고 [시키기]가 딴 PC 로 갔다».
 ok(/export async function refreshNodes/.test(codeOnly), "N1 노드 축만 다시 읽는 문이 있다");
 ok(/config\?only=nodes/.test(codeOnly), "N2 그 문은 전체 config 가 아니라 노드 축만 부른다");
-ok(/refreshNodes\([\s\S]{0,40}\)[\s\S]{0,300}openSessionDefaults\(/.test(codeOnly),
-  "N3 [⚙] 기본값 창은 열기 전에 노드 축을 다시 읽는다 — «지금 꺼짐» 은 지금 사실이어야 한다");
+ok(/const freshenNodes = \(\): void => \{\s*void refreshNodes\(/.test(codeOnly)
+  && /nodeSel\.addEventListener\('pointerenter', freshenNodes\)/.test(codeOnly) && /nodeSel\.addEventListener\('focus', freshenNodes\)/.test(codeOnly),
+  "N3 줄의 실행 컴퓨터 칸은 손이 닿는 순간 노드 축을 다시 읽는다 — «지금 꺼짐» 은 지금 사실이어야 한다");
 ok(/const resolve = async \(\): Promise<RunPick> => \{[\s\S]{0,120}await refreshNodes\(/.test(codeOnly),
   "N4 [시키기] 직전에도 다시 읽는다");
 ok(/toast\(/.test(codeOnly) && /fellBack/.test(codeOnly), "N5 폴백이 났으면 화면이 그 사실을 말한다");
 for (const [f, why] of [["web/v2/views.ts", "홈"], ["web/v2/panes-parts.ts", "프로젝트"]]) {
   ok(/await runPicker\??\.resolve\(\)|runPicker \? await runPicker\.resolve\(\)/.test(strip(read(f))),
     `N6 ${why} 컴포저가 value() 가 아니라 resolve() 로 연다 (${f})`);
+}
+
+// ── K. 실행 컴퓨터 칸이 줄로 돌아왔다(#3778, 원준 2026-09-19 «매번 [⚙] 에 들어가기 귀찮다») ──────────────
+//  값의 집은 nodeDefault 하나 — 칸이 쓰고, [⚙] 창은 더 이상 그 항목을 들고 있지 않다. 둘이 한 값을 나눠 쓰면
+//  «창 저장이 칸에서 고른 값을 덮는다» 가 생긴다(K3 가 그 회귀를 잡는다).
+{
+  const me = n("mac", { name: "Macbookui-MacBookAir.local", online: true, mine: true, sessions: 3, connectedAt: 10 });
+  const win = n("win", { name: "WIN-PC", online: true, mine: true, sessions: 0, connectedAt: 20 });
+  const off = n("old", { name: "old-pc", online: false, mine: true });
+  const noai = n("sh", { name: "shell-box", online: true, mine: true, harnesses: ["shell"] });
+  const shared = n("team", { name: "team-box", online: true, shared: true, mine: false });
+  const label = (ns, v) => (nodeOptions(ns).find((o) => o.v === v) || {}).t;
+  const offOf = (ns, v) => (nodeOptions(ns).find((o) => o.v === v) || {}).off;
+
+  // 선택지 표 — «자동» 줄은 지금 풀린 곳의 이름을 함께 적는다(닫힌 칸만 보고 어디서 열리는지 알 수 있어야 한다).
+  eq(nodeOptions([]).map((o) => o.v).join(","), ",central", "K1a 노드가 없으면 자동·중앙 두 줄뿐");
+  eq(label([], ""), "자동 · 중앙 컴퓨터", "K1b 켜진 컴퓨터가 없으면 자동 = 중앙");
+  eq(label([me, win], ""), "자동 · 🖥 Macbookui-MacBookAir.local", "K1c 자동 줄은 규칙이 고른 컴퓨터(세션이 도는 내 맥)를 이름으로 적는다");
+  eq(label([shared], ""), "자동 · 🖥 team-box", "K1d 내 컴퓨터가 없으면 켜진 공유 컴퓨터를 적는다");
+  eq(label([off, noai], ""), "자동 · 중앙 컴퓨터", "K1e 꺼진·AI 없는 컴퓨터는 자동의 후보가 아니다");
+  eq(label([me], "central"), "중앙 컴퓨터", "K1f 중앙 줄");
+  eq(label([me], "mac"), "🖥 Macbookui-MacBookAir.local", "K1g 켜진 노드는 이름만");
+  eq(label([shared], "team"), "🖥 team-box (공유)", "K1h 공유 노드는 (공유)");
+  eq(label([off], "old"), "🖥 old-pc — 지금 꺼짐", "K1i 꺼진 노드는 그렇다고 적는다");
+  eq(label([noai], "sh"), "🖥 shell-box — AI 를 못 찾음", "K1j AI 를 못 띄우는 노드는 «못 찾음»(단정하지 않는다)");
+  eq(offOf([me], "mac"), false, "K2a 켜진 노드는 고를 수 있다");
+  eq(offOf([off], "old"), true, "K2b 꺼진 노드는 잠근다 — 줄은 «지금 값» 이라 고른 곳과 열리는 곳이 달라지면 안 된다");
+  eq(offOf([noai], "sh"), true, "K2c AI 를 못 띄우는 노드도 잠근다");
+  eq(offOf([me], ""), false, "K2d 자동은 늘 고를 수 있다");
+  eq(offOf([me], "central"), false, "K2e 중앙은 늘 고를 수 있다");
+  //  자동 줄이 적는 이름 = 실제로 열리는 곳. 두 자리가 갈리면 칸이 거짓말을 한다.
+  for (const ns of [[], [me], [me, win], [win, me], [shared], [off, shared], [noai, me], [off, noai]]) {
+    const to = resolveNodeDefault(ns, "");
+    const want = "자동 · " + (to ? "🖥 " + ns.find((x) => x.id === to).name : "중앙 컴퓨터");
+    eq(label(ns, ""), want, `K2f 자동 줄의 이름 = 규칙이 여는 곳 (${ns.map((x) => x.id).join("+") || "없음"})`);
+  }
+
+  // «지금 이 설정이면» — 칸의 title. 종전 [⚙] 창 칸 아래 줄의 사실을 그대로 옮긴다.
+  eq(nodeWhere([me, win], ""), "🖥 Macbookui-MacBookAir.local 에서 열려요(켜져 있는 내 컴퓨터).", "K3a 자동 → 내 컴퓨터");
+  eq(nodeWhere([shared], ""), "🖥 team-box 에서 열려요(켜져 있는 공유 컴퓨터).", "K3b 자동 → 공유 컴퓨터(«내 컴퓨터» 라 적지 않는다)");
+  eq(nodeWhere([off], ""), "중앙 컴퓨터에서 열려요(켜져 있는 내 컴퓨터가 없어요).", "K3c 자동 → 중앙");
+  eq(nodeWhere([me], NODE_CENTRAL), "중앙 컴퓨터에서 열려요.", "K3d 중앙을 고름");
+  eq(nodeWhere([me, win], "win"), "🖥 WIN-PC 에서 열려요.", "K3e 노드를 고름");
+  eq(nodeWhere([me, off], "old"), "🖥 old-pc 이(가) 지금 꺼져 있어 자동으로 🖥 Macbookui-MacBookAir.local 에서 열려요.", "K3f 고른 노드가 꺼짐 → 어디로 가는지 말한다");
+  eq(nodeWhere([off], "ghost"), "🖥 ghost 이(가) 지금 목록에 없어 자동으로 중앙 컴퓨터에서 열려요.", "K3g 고른 노드가 사라짐");
+  eq(nodeWhere([noai], "sh"), "🖥 shell-box 이(가) 띄울 수 있는 AI 를 못 찾아 자동으로 중앙 컴퓨터에서 열려요.", "K3h 고른 노드에 AI 가 안 잡힘");
+
+  // [⚙] 창 저장이 칸에서 고른 실행 컴퓨터를 지우지 않는다(값의 집이 하나라서 생길 수 있는 회귀).
+  const store = new Map();
+  globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => { store.set(k, String(v)); }, removeItem: (k) => { store.delete(k); } };
+  saveRunPrefs({ nodeDefault: "win", harness: "claude" });
+  saveSessionDefaults({ mode: "readonly", autoApprove: true, writeVis: "open" });
+  eq(runPrefs().nodeDefault, "win", "K4a [⚙] 저장 뒤에도 칸에서 고른 컴퓨터가 남는다");
+  eq(runPrefs().mode, "readonly", "K4b [⚙] 저장은 제 값(모드)을 쓴다");
+  eq(runPrefs().writeVis, "", "K4c 읽기전용이면 기록 범위를 비운다(종전 규칙 유지)");
+}
+//  배선 — 칸이 줄 맨 앞에 서고, 바꾸면 그 값의 집에 쓰고, 창에는 그 항목이 없다.
+{
+  const DEFAULTS = strip(read("web/v2/session-defaults.ts"));
+  ok(/el\('div', \{ class: 'v2-run' \}, nodeSel, sep0, provSel,/.test(codeOnly), "K5a 실행 컴퓨터 칸이 줄 맨 앞(제공자 칸 왼쪽)에 선다");
+  ok(/sel\('v2-run-node',/.test(codeOnly), "K5b 다른 칸과 같은 셀렉트(v2-run-sel — 같은 글꼴·크기·드롭다운)로 만든다");
+  ok(/nodeSel\.addEventListener\('change', \(\) => \{[\s\S]{0,120}saveRunPrefs\(\{ nodeDefault: nodeSel\.value \}\)/.test(codeOnly), "K5c 칸에서 고르면 nodeDefault 에 쓴다");
+  ok(/for \(const s of \[nodeSel, provSel, modelSel, effortSel\]\)/.test(codeOnly), "K5d 칸 폭 = 고른 값 규칙(fit)이 실행 컴퓨터 칸에도 걸린다");
+  ok(!/nodeDefault|실행 컴퓨터'|HELP\.node/.test(DEFAULTS), "K5e [⚙] 창은 실행 컴퓨터 항목을 더 이상 들고 있지 않다");
 }
 
 console.log(`\n${pass} assertions passed`);
