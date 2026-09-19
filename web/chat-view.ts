@@ -24,6 +24,7 @@ import { scanDiff, type DiffScan } from './chat-diff.js';
 import { CHAT_FONT_KEY, fontScale, parseFontStep } from './chat-font.js';
 import { bindCtx } from './v2/ctx-registry.js';   // #3784 대화 덩이 우클릭(답·질문·코드)
 import { copyText } from './v2/ctx-menu.js';
+import { prependKeepingView } from './lib/older-autoload.js';   // #3778 위로 붙이는 동안 보던 자리 지키기 — 헤드리스 테스트가 같은 함수를 잰다
 
 /** 도구 이름 → 사람 말. label 은 필수, detail 은 한 줄 요약(경로·명령 — Claude Code 의 `Read(src/x.ts)` 자리). */
 export interface ToolLabel { label: string; detail?: string }
@@ -553,11 +554,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
       try { localStorage.setItem(CHAT_FONT_KEY, String(n)); } catch { /* 스토리지가 막힌 브라우저 — 이번 화면에만 적용된다 */ }
       scroll();                              // 배율이 바뀌면 높이가 바뀐다 — 바닥에 붙어 있었으면 그대로 둔다
     },
-    prependKeepingView: (fn) => {
-      const before = list.scrollHeight; const top = list.scrollTop;
-      fn();
-      list.scrollTop = top + (list.scrollHeight - before);
-    },
+    prependKeepingView: (fn) => prependKeepingView(list, fn),
     destroy: () => { document.removeEventListener('keydown', onEsc); if (ticker) clearInterval(ticker); },
   };
 }
