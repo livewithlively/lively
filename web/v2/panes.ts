@@ -42,6 +42,7 @@ import { loadSessionActivities } from '../timeline-sources.js';
 import { loadThinTrail } from '../session-trail.js';
 import type { TlOut } from '../timeline.js';
 import { type V2Data } from './views.js';
+import { icon } from './icons.js';
 import { doorProjectName } from '../lib/door-name.js';   // #2579 — 문패 이름은 셸 목록이 정본(판이 든 사본은 안 늙는다)
 
 export interface PanesOpts {
@@ -61,6 +62,10 @@ export interface PanesOpts {
   onRenameSession?: (id: string, name: string) => Promise<void>;
   /** 문패 연필로 고친 프로젝트 이름 — main.ts 의 renameProject 가 서버·목록·사이드바·탭까지 한 번에 갱신한다(#2579). */
   onRenameProject?: (id: number, name: string) => Promise<void>;
+  /** 문패 [세션 옮기기](#3778) — 지금 보는 세션을 다른 프로젝트로 옮기거나 뗀다. 창·실행은 main.ts 가 쥔다. */
+  onMoveSession?: (sid: string) => void;
+  /** 그 세션을 옮길 수 있나 — 내 세션만(남의 세션은 [⋯] 에도 이 줄이 없다). 없으면 단추를 안 단다. */
+  canMoveSession?: (sid: string) => boolean;
 }
 export interface PanesHandle {
   destroy(): void;
@@ -888,6 +893,18 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   function paintDoor(): void {
     const p = pj();
     const st = p.status_category === 'done' ? { t: '끝남', c: 'done' } : p.status_category === 'unstarted' ? { t: '시작 전', c: 'todo' } : { t: '진행 중', c: 'run' };
+    // ── [세션 옮기기] (#3778, 원준 2026-09-19: «[⋯] 안에만 있지 말고 밖에도 빼놓은 버튼이 있고 싶다») ──
+    //  자리는 꼬리표(#번호 · 상태) 바로 뒤다 — 그 꼬리표가 곧 «이 세션이 지금 어디 있나» 이고, 단추는 그걸 바꾼다.
+    //  ⚠ 이름에 **«세션»** 을 넣는다: 이 줄은 프로젝트를 말하는 줄이라 «바꾸기» 만 두면 «프로젝트를 바꾼다(다른
+    //   프로젝트로 간다)» 로 읽힌다 — 옮겨지는 것은 지금 보는 세션이다(문패 [공유] 가 프로젝트 공유로 읽혔던 것과
+    //   같은 함정, 원준 2026-09-09). 세션이 없는 새 세션 자리·남의 세션이면 단추를 안 단다([⋯] 과 같은 조건).
+    const sid = curSession();
+    const move = sid && opts.onMoveSession && opts.canMoveSession?.(sid)
+      ? el('button', { class: 'pn-move', type: 'button', 'aria-label': loose ? '이 세션을 프로젝트에 붙이기' : '이 세션을 다른 프로젝트로 옮기기',
+          title: loose ? '이 세션을 프로젝트에 붙입니다' : '이 세션을 다른 프로젝트로 옮기거나 프로젝트에서 뗍니다',
+          onclick: () => opts.onMoveSession!(sid) },
+          icon('moveto', 'pn-i sm'), el('span', { class: 'pn-move-t', text: loose ? '프로젝트에 붙이기' : '세션 옮기기' }))
+      : null;
     door.replaceChildren(
       el('div', { class: 'pn-door-l' },
         // ⭐ 순서는 **이름 › 번호 › 상태**(원준 2026-09-03: "프로젝트 이름이 제일 왼쪽으로 가야 밸런스가 맞는다").
@@ -898,7 +915,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
         el('div', { class: 'pn-eyebrow' },
           loose ? el('span', { text: '아직 어느 프로젝트에도 붙지 않았어요.' }) : el('span', { class: 'mono', text: '#' + p.id }),
           loose ? null : el('span', { class: 'sep', text: '·' }),
-          loose ? null : el('span', { class: 'pn-state ' + st.c, text: st.t }))),
+          loose ? null : el('span', { class: 'pn-state ' + st.c, text: st.t }),
+          move)),
       el('div', { class: 'pn-door-r' },
         // ⭐ #3778 — 얼굴 줄과 [공유] 는 여기 없다. **세션의 머리줄**(session-chat.ts sc-head)로 내려갔다.
         //  이 줄의 왼쪽은 프로젝트 이름인데 그 둘만 세션에 작용해서, 한 줄이 «프로젝트 → 세션 → 프로젝트» 로
