@@ -3847,6 +3847,16 @@
   "input_hash": "b6f9caef520909c3"
  },
  {
+  "name": "session_task",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/terminal/sessions/:id/task"
+  ],
+  "input_hash": "f002ac84267737ac"
+ },
+ {
   "name": "preview_env_list",
   "scope": "code",
   "mcp": true,

@@ -35,6 +35,7 @@ const regenAgentsForList = async (listId: number | null) => {
 import { projectNameFromAgent } from "../v6/project-name.js";
 import { AUTO_CREATED_MARK } from "../project/first-prompt-project.js";
 import { executionSessionProject } from "../v6/execution-session-store.js";
+import { sessionsOfTasks } from "../v6/session-task.js";
 import {
   listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, claimProjectName, setProjectArchived, setProjectTrashed, getBoardFields,
   upsertProjectFolderBinding, findProjectsByOriginKey,
@@ -333,7 +334,14 @@ const projectGetV6: Capability = {
     //  다만 공개범위가 걸린 리스트라면 그 대상만 본다(#1291). 비대상에겐 "없음" 과 같은 404 로 응답해 존재를 숨긴다.
     const project = await getProject(input.id, ctx?.viewer ?? null);
     if (!project) throw new HttpError(404, `프로젝트 #${input.id} 없음`);
-    return { project };
+    // #4084 세션 = 태스크 — 각 태스크 줄에 그 태스크를 맡은 세션(최근 것 먼저)을 싣는다. 화면이 [세션 열기]를
+    //  «새로 열기»와 «그 세션으로 가기»로 가르는 근거다. 조회 실패는 상세를 막지 않는다(칩이 안 보일 뿐).
+    //  project-store 가 아니라 여기서 붙이는 이유: session-task 가 project-store 를 import 한다(순환 금지 — check-imports).
+    const rows = (project.tasks || []) as Array<Record<string, unknown> & { id: number }>;
+    const bySession = await sessionsOfTasks(rows.map((t) => Number(t.id)))
+      .catch(() => new Map<number, Array<{ id: string; label: string | null; owner: string }>>());
+    const tasks = rows.map((t) => ({ ...t, sessions: bySession.get(Number(t.id)) ?? [] }));
+    return { project: { ...project, tasks } };
   },
 };
 

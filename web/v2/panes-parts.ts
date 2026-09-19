@@ -464,13 +464,72 @@ function knowledgePart(ctx: PartCtx): Part {
 }
 
 // ══ 할 일 — 태스크 목록 ═══════════════════════════════════════════════════════
+//  #4084 세션 = 태스크(원준 2026-09-19) — 프로젝트의 세션은 각자 태스크 하나를 맡는다. 세션이 이름을 지으면 서버가
+//   그 이름으로 태스크를 만들고, 사람이 미리 적어 둔 태스크는 **여기서 [세션 열기]** 로 세션에게 맡긴다(원준 결정:
+//   "버튼을 누르면 그걸 세션으로 열 수 있게 하는 정도"). 줄 끝의 칩이 그 연결이다 — 맡은 세션이 있으면 그 세션
+//   이름(누르면 그 세션으로), 없으면 [세션 열기](누르면 그 태스크를 맡은 새 세션이 열린다).
+type TaskSess = { id: string; label: string | null };
+const taskSessions = (t: any): TaskSess[] => (Array.isArray(t && t.sessions) ? t.sessions : []);
+
 function tasksPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-tasks' });
   let sig = '';
+  let opening = 0;                                    // 지금 세션을 여는 중인 태스크(두 번 눌러 세션이 둘 생기지 않게)
+
+  const goTaskSession = (sid: string): void => requestOpenRoute('#/s/' + encodeURIComponent(sid));
+
+  /** 이 태스크를 맡은 **새** 세션을 연다. 첫 지시는 서버가 태스크 번호·본문으로 채운다(핸드오버 «#<id> 진행해» 와 같은 모양). */
+  async function openTaskSession(t: any): Promise<void> {
+    const tid = Number(t && t.id);
+    if (!(tid > 0) || !(ctx.id > 0) || opening) return;
+    opening = tid;
+    paintChips();
+    try {
+      const made = await spawnSession('', { projectId: ctx.id, taskId: tid });
+      if (!made) return;                              // 이유는 spawnSession 이 toast 로 이미 말했다
+      seedSessName(made.id, String(t.name || ''));
+      ctx.onSessionCreated?.(made.session);           // 목록에 지금 끼워 넣는다(20초 폴링을 기다리지 않게)
+      ctx.onChanged?.();                              // 칩이 세션 이름으로 바뀌도록 상세를 다시 읽는다
+      toast('이 할 일을 맡은 세션을 열었어요.');
+      goTaskSession(made.id);
+    } finally { opening = 0; paintChips(); }
+  }
+
+  function taskSessChip(t: any): HTMLElement {
+    const sess = taskSessions(t);
+    const tid = Number(t && t.id);
+    const busy = opening === tid;
+    if (sess.length && !busy) {
+      const s0 = sess[0];
+      const name = String(s0.label || '').trim() || '세션';
+      return el('button', {
+        class: 'pn-tsess on', type: 'button', 'data-tid': String(tid),
+        title: `이 할 일을 맡은 세션 «${name}»으로 가요` + (sess.length > 1 ? ` — 이 할 일에 붙은 세션은 모두 ${sess.length}개예요` : ''),
+        onclick: () => goTaskSession(s0.id),
+      }, pnIcon('chat', 'pn-i xs'), el('span', { class: 'ell', text: name + (sess.length > 1 ? ` 외 ${sess.length - 1}` : '') }));
+    }
+    return el('button', {
+      class: 'pn-tsess' + (busy ? ' busy' : ''), type: 'button', 'data-tid': String(tid), disabled: busy || !(ctx.id > 0),
+      title: '이 할 일을 맡은 새 세션을 열어요 — 세션이 이 할 일을 진행하고, 끝나면 완료로 표시해요',
+      onclick: () => void openTaskSession(t),
+    }, pnIcon('plus', 'pn-i xs'), el('span', { text: busy ? '여는 중…' : '세션 열기' }));
+  }
+
+  /** 여는 중 표시만 바꾼다(목록 전체를 다시 그리지 않는다 — 서명이 같아 paint 가 건너뛴다).
+   *  맡은 세션이 있는 줄([새 세션으로 이어 하기])도 여는 동안은 «여는 중…» 으로 바뀌어야 하므로 칩 전부를 본다. */
+  function paintChips(): void {
+    const tasks: any[] = Array.isArray(ctx.detail()?.project?.tasks) ? ctx.detail().project.tasks : [];
+    (root.querySelectorAll('.pn-tsess') as NodeListOf<HTMLElement>).forEach((b) => {
+      const t = tasks.find((x) => String(x.id) === b.dataset.tid);
+      if (t) b.replaceWith(taskSessChip(t));
+    });
+  }
+
   function paint(): void {
     const p = ctx.detail()?.project || {};
     const tasks: any[] = Array.isArray(p.tasks) ? p.tasks : [];
-    const s2 = tasks.map((t) => t.id + (t.status_category || '') + (t.name || '')).join('|');
+    // 세션(#4084)도 서명에 넣는다 — 태스크에서 세션을 연 직후 칩이 [세션 열기] → 세션 이름으로 바뀌어야 한다.
+    const s2 = tasks.map((t) => t.id + (t.status_category || '') + (t.name || '') + taskSessions(t).map((x) => x.id + (x.label || '')).join(',')).join('|');
     if (s2 === sig) return;
     sig = s2;
     if (!tasks.length) {
@@ -495,12 +554,16 @@ function tasksPart(ctx: PartCtx): Part {
                 .catch((e: any) => toast('바꾸지 못했어요 — ' + (e?.message || e), true));
             },
           }),
-          el('span', { class: 'n ell2', title: t.name, text: t.name || '이름 없는 할 일' }));
-        // #3784 우클릭 — 끝냄 토글 · 보드에서 보기 · 이름 복사
+          el('span', { class: 'n ell2', title: t.name, text: t.name || '이름 없는 할 일' }),
+          taskSessChip(t));
+        const sess = taskSessions(t);
+        // #3784 우클릭 — 끝냄 토글 · (#4084) 세션 열기 · 보드에서 보기 · 이름 복사
         bindCtx(trow, () => ({
           title: String(t.name || '할 일'), sub: isDone ? '끝냄' : '진행 중',
           rows: [
             { label: isDone ? '아직 안 끝난 것으로' : '끝냈다고 표시', icon: 'check', checked: isDone || undefined, run: () => (trow.querySelector('.pn-tcheck') as HTMLButtonElement | null)?.click() },
+            ...(sess.length ? [{ label: '맡은 세션으로 가기', icon: 'chat', run: () => goTaskSession(sess[0].id) }] : []),
+            { label: sess.length ? '새 세션으로 이어 하기' : '세션 열기', icon: 'plus', off: !(ctx.id > 0), run: () => void openTaskSession(t) },
             { label: '보드에서 보기', icon: 'proj', off: !(ctx.id > 0), run: () => requestOpenRoute('#/projects2/p/' + ctx.id) },
             { sep: true, label: '' },
             { label: '이름 복사', icon: 'copy', run: () => void copyText(String(t.name || '')).then((ok) => { if (ok) toast('복사했어요'); }) },

@@ -44,6 +44,7 @@ import { mappingCapabilities } from "./mapping.js";
 import { managedSessionCapabilities } from "./managed-session.js";
 import { sessionProjectCapabilities } from "./session-project.js";
 import { sessionRenameCapabilities } from "./session-rename.js";
+import { sessionTaskCapabilities } from "./session-task.js";
 import { previewEnvCapabilities } from "./preview-env.js";
 import { stackProfileCapabilities } from "./stack-profiles.js";
 import { delegateCapabilities } from "./delegate.js";
@@ -117,6 +118,7 @@ const all: Capability[] = [
   ...managedSessionCapabilities, // 상시 에이전트 세션 — admin scope. managed_session_list/set/delete/ensure. 격리 워크스페이스+keep-alive(createSession 재사용), 크론 타깃.
   ...sessionProjectCapabilities, // 세션↔프로젝트 변경(MCP+REST) + 실행 세션 동적 문맥(REST 전용). cwd가 아니라 x-lively-session/DB를 쓴다.
   ...sessionRenameCapabilities,  // #1979 세션 이름 짓기 — 세션이 자기 이름을 짓는다(헤드리스 스폰 없음). 세션당 1회 걸쇠.
+  ...sessionTaskCapabilities,    // #4084 세션 = 태스크 — 이 세션이 맡은 태스크 조회·완료 처리(id 없이).
   ...previewEnvCapabilities, // #1036 프리뷰 환경 — code scope. preview_env_list/set/delete/ensure/stop. /preview/<id>/ 서브패스로 워크트리 public 정적 서빙(shared-proxy).
   ...repoBranchCapabilities, // repo_branch_list — 정의는 context.ts(repo_* 군집). 자리는 여기 고정(표면 순서 = tools/list 순서).
   ...stackProfileCapabilities, // '어떻게 띄우나' 정의(stack_profile_list/set/delete) — 조회는 code, 정의는 admin(start_cmd = 셸 명령).
