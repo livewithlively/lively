@@ -17,11 +17,11 @@ declare const FitAddon: any;
 declare const WebglAddon: any;
 declare const WebLinksAddon: any;
 
-// 터미널 속 링크 열기(#1541) — 같은 게이트웨이의 /ui/ 화면 링크는 **셸 안에서 그 자리 이동**, 그 외는 새 창.
-//  · 이 문서가 셸(iframe, 세션 화면의 터미널)에 박혀 있고 링크가 같은 출처의 /ui/ 해시 화면이면 부모 셸의
-//    해시를 바꾼다 — 사용자가 기대하는 "앱 내 이동"이 정확히 이것이다(새 창·새 탭이 아니라).
-//  · 그 외(독립 탭·다른 출처)는 window.open — 데스크톱 앱에선 메인의 창 규칙(web-shell.openTargetFor)이
-//    같은 출처 = 앱 안 새 창 / 외부 = 시스템 브라우저로 가른다. 브라우저에선 새 탭.
+// 터미널 속 링크 열기(#1541 → #4083) — 어디서 열지는 linkOpenTarget 한 곳이 정한다.
+//  · 브라우저에선 **새 탭**이 기본이다 — 같은 게이트웨이의 /ui/ 화면 링크도(#4083, 아래 linkOpenTarget 머리말).
+//  · 데스크톱 앱은 브라우저 탭이 없다 — /ui/ 화면 링크는 종전대로 부모 셸의 해시를 바꿔 **앱 안에서** 연다
+//    (window.open 이면 메인의 창 규칙 web-shell.openTargetFor 가 같은 출처 = 앱 창 하나 더 / 외부 = 시스템 브라우저).
+//  · 미리보기·아티팩트 주소는 곁칸의 웹 칸으로 보낸다(아래 openLinkFromTerminal).
 // (순수 — 테스트 대상) 한 줄 텍스트에서 col(0-기준 셀 인덱스)이 걸친 URL 을 찾는다. 없으면 null.
 //  Cmd/Ctrl+클릭 링크 열기(#1541)의 판정부: 마우스 트래킹이 켜진 pane(claude 등 TUI)에서는 xterm 이
 //  클릭을 앱으로 보내므로 web-links 애드온(맨클릭)이 못 받는다 — 우회는 Shift+클릭뿐인데 사람들의 손은
@@ -41,25 +41,49 @@ export function urlAtColumn(lineText: string, col: number): string | null {
   return null;
 }
 
+// (순수 — 테스트 대상) 터미널 속 링크를 어디서 열지 — 'shell' 부모 셸 안 이동 · 'pane' 곁칸 웹 칸 · 'tab' 새 창(브라우저=새 탭).
+//  here.href = 이 문서 주소 · framed = 셸(iframe) 안에 박혀 있나 · desktop = 데스크톱 앱 안인가.
+//  ★ 같은 게이트웨이의 /ui/ 화면 링크(AI 가 주는 `<게이트웨이>/ui/#/…`)는 **브라우저에선 새 탭**이다(원준님 2026-09-19
+//   «브라우저가 있다면 새 탭에서»). 종전 'shell' 은 셸의 해시를 바꿔 **보던 화면을 떠나게** 했다 — 세션 탭에서 누르면
+//   셸 탭이 하나 늘며 그리로 넘어가, 링크를 보면서 AI 와 이어 말하려면 매번 사이드바로 되돌아와야 했다.
+//   데스크톱 앱만 'shell' 로 남는다 — 앱엔 브라우저 탭이 없고, window.open 은 앱 창을 하나 더 띄운다.
+export function linkOpenTarget(href: string, here: { href: string; framed: boolean; desktop: boolean }): 'shell' | 'pane' | 'tab' {
+  let u: URL, h: URL;
+  try { u = new URL(href, here.href); h = new URL(here.href); } catch (_) { return 'tab'; }
+  const uiPath = h.pathname.replace(/terminal(?:-grid)?\.html$/, '');
+  if (here.framed && u.origin === h.origin && u.pathname === uiPath && u.hash) return here.desktop ? 'shell' : 'tab';
+  // 미리보기 주소는 새 탭이 아니라 **곁칸의 웹 칸**으로 보낸다(원준 2026-08-21) — 화면을 고치는 동안 터미널↔새 탭 왕복을 없앤다.
+  //  아티팩트도 같은 길(원준 2026-08-21). claude.ai 는 브라우저에선 iframe 임베드를 스스로 막으므로(CSP frame-ancestors)
+  //  곁칸에 넣을지 새 탭으로 열지는 **부모가 정한다**(앱이면 webview 라 뚫린다, #1829). 터미널은 넘기기만 한다.
+  const toPane = (u.origin === h.origin && /\/preview\/[^/]+\//.test(u.pathname))
+    || (/(^|\.)claude\.ai$/.test(u.hostname) && /^\/code\/artifact\//.test(u.pathname));
+  return toPane && here.framed ? 'pane' : 'tab';
+}
+
+// 데스크톱 앱 안인가 — 능력 다리(`livelyDesktop`, desktop/preload/web.cjs)의 유무로만 본다(UA 추측 금지, browser-surface.ts 와 같은 규칙).
+//  preload 는 **최상위 프레임에만** 돈다(nodeIntegrationInSubFrames:false) — 셸 iframe 안의 이 문서엔 없고 부모에 있다.
+function inDesktopApp(): boolean {
+  for (const w of [window, window.parent, window.top]) {
+    try { if (w && (w as any).livelyDesktop) return true; } catch (_) { /* 교차 출처 부모 — 우리 앱이 아니다 */ }
+  }
+  return false;
+}
+function linkTargetHere(uri: string): 'shell' | 'pane' | 'tab' {
+  return linkOpenTarget(uri, { href: location.href, framed: window.parent !== window, desktop: inDesktopApp() });
+}
+
 function openLinkFromTerminal(uri: string): void {
   try {
     const u = new URL(uri, location.href);
-    const uiPath = location.pathname.replace(/terminal(?:-grid)?\.html$/, '');
-    if (u.origin === location.origin && u.pathname === uiPath && u.hash && window.parent !== window) {
+    const where = linkTargetHere(uri);
+    if (where === 'shell') {
       window.parent.location.hash = u.hash;   // 같은 출처 부모(셸) — 교차 출처면 아래 catch 로
       return;
     }
-    // 미리보기 주소는 새 탭이 아니라 **곁칸의 웹 칸**으로 보낸다(원준 2026-08-21).
-    //  종전엔 여기가 그대로 window.open 으로 빠져 라이블리 창이 하나 더 떴다 — 화면을 고치는 동안
-    //  터미널↔새 탭 왕복이 계속 일어난다. 셸이 이 알림을 받아 웹 칸을 켜고 주소를 싣는다.
+    // 곁칸 — 셸이 이 알림을 받아 웹 칸을 켜고 주소를 싣는다.
     //  ⚠ 부모가 안 듣는 판(구 셸·단독 페이지)에서는 아무 일도 안 일어나면 안 되므로, 셸이 받았다고
     //   답하지 않으면 잠시 뒤 새 탭으로 떨어진다.
-    //  아티팩트도 같은 길로 보낸다(원준 2026-08-21). 다만 claude.ai 는 남의 사이트라 **브라우저에서는
-    //  iframe 임베드를 스스로 막는다**(CSP frame-ancestors 'self') — 그래서 곁칸에 넣을지 새 탭으로 열지는
-    //  여기서 정하지 않고 **부모가 정한다**(앱이면 webview 라 뚫린다, #1829). 터미널은 넘기기만 한다.
-    const toPane = (u.origin === location.origin && /\/preview\/[^/]+\//.test(u.pathname))
-      || (/(^|\.)claude\.ai$/.test(u.hostname) && /^\/code\/artifact\//.test(u.pathname));
-    if (toPane && window.parent !== window) {
+    if (where === 'pane') {
       let taken = false;
       const ack = (e: MessageEvent): void => { if (e.data && e.data.type === 'lively:open-in-pane:ok') taken = true; };
       window.addEventListener('message', ack);
@@ -2760,30 +2784,7 @@ export async function boot() {
   //   비트래킹(셸) pane 의 맨클릭은 web-links 가 이미 처리하고, 드래그 선택을 지켜야 하므로 안 가로챈다.
   //  판정은 mousedown 에서 한다 — press 가 pty 로 새면 TUI 확인창이 그대로 뜬다. down/up/click 세 이벤트를
   //  한 판정(pendingLink)으로 함께 삼킨다.
-  const linkAtEvent = (ev: MouseEvent): string | null => {
-    if (!term) return null;
-    const screen = host.querySelector('.xterm-screen');
-    if (!screen) return null;
-    const r = screen.getBoundingClientRect();
-    if (!r.width || !r.height) return null;
-    const col = Math.floor((ev.clientX - r.left) / (r.width / term.cols));
-    const row = Math.floor((ev.clientY - r.top) / (r.height / term.rows));
-    if (col < 0 || row < 0 || col >= term.cols || row >= term.rows) return null;
-    const buf = term.buffer.active;
-    if (!buf.getLine(buf.viewportY + row)) return null;
-    // 긴 URL 은 다음 행으로 감싸인다 — 감싸인 이웃 행(isWrapped)을 이어 한 논리 줄로 보고, col 도 그만큼 민다.
-    let startY = buf.viewportY + row;
-    while (startY > 0 && buf.getLine(startY)?.isWrapped) startY--;
-    let text = '';
-    let colInLogical = col;
-    for (let y = startY; y < buf.length; y++) {
-      const l = buf.getLine(y);
-      if (!l || (y > startY && !l.isWrapped)) break;
-      if (y < buf.viewportY + row) colInLogical += term.cols;
-      text += l.translateToString(true).padEnd(term.cols);
-    }
-    return urlAtColumn(text, colInLogical);
-  };
+  const linkAtEvent = (ev: MouseEvent): string | null => linkAtPoint(host, ev.clientX, ev.clientY);
   const mouseTracked = (): boolean => { try { const m = term?.modes?.mouseTrackingMode; return !!m && m !== 'none'; } catch { return false; } };
   let pendingLink: string | null = null;
   host.addEventListener('mousedown', (ev: MouseEvent) => {
@@ -2946,6 +2947,47 @@ let sessionEnded = false; // 4410 수신 = 세션 종료 확정 → 재연결 �
 //  40회면 백오프 포함 약 3분이다. 그 뒤엔 멈추고 '다시 시도'를 사람 손에 넘긴다.
 const MAX_RECONNECT_ATTEMPTS = 40;
 let gaveUp = false;
+// 화면 좌표 → 그 칸에 걸친 URL(없으면 null). 클릭 열기(#1541)와 우클릭 [복사]·[링크 열기](#4083)가 같은 판정을 쓴다.
+function linkAtPoint(host: HTMLElement, clientX: number, clientY: number): string | null {
+  if (!term) return null;
+  const screen = host.querySelector('.xterm-screen');
+  if (!screen) return null;
+  const r = screen.getBoundingClientRect();
+  if (!r.width || !r.height) return null;
+  const col = Math.floor((clientX - r.left) / (r.width / term.cols));
+  const row = Math.floor((clientY - r.top) / (r.height / term.rows));
+  if (col < 0 || row < 0 || col >= term.cols || row >= term.rows) return null;
+  const buf = term.buffer.active;
+  if (!buf.getLine(buf.viewportY + row)) return null;
+  // 긴 URL 은 다음 행으로 감싸인다 — 감싸인 이웃 행(isWrapped)을 이어 한 논리 줄로 보고, col 도 그만큼 민다.
+  let startY = buf.viewportY + row;
+  while (startY > 0 && buf.getLine(startY)?.isWrapped) startY--;
+  let text = '';
+  let colInLogical = col;
+  for (let y = startY; y < buf.length; y++) {
+    const l = buf.getLine(y);
+    if (!l || (y > startY && !l.isWrapped)) break;
+    if (y < buf.viewportY + row) colInLogical += term.cols;
+    text += l.translateToString(true).padEnd(term.cols);
+  }
+  return urlAtColumn(text, colInLogical);
+}
+// (순수 — 테스트 대상) 우클릭 [복사]가 무엇을 잡나 + 링크 줄(#4083). sel = 웹(xterm) 선택 글 · appSel = 앱(Claude) 드래그
+//  선택을 복사할 판인가 · link = 커서 밑 링크('' = 없음).
+//  ★ 링크는 클릭 한 번에 열리는 **한 덩이**라 사람은 그 위에서 우클릭하면 이미 잡힌 것으로 본다(원준님 «드래그 안 해 놓은
+//   링크는 우클릭해도 복사 대상으로 안 잡힌다») — 선택이 없으면 [복사]가 그 주소를 잡는다. 선택이 있으면 선택이 우선이고
+//   (#3778 «드래그한 것을 복사»), 링크는 [링크 복사] 줄로 따로 준다. [링크 열기]는 커서 밑 링크 > URL 하나인 선택.
+export function ctxCopyPlan(sel: string, appSel: boolean, link: string): { copy: 'sel' | 'app' | 'link' | null; linkRow: boolean; openUrl: string } {
+  const copy = sel ? 'sel' : appSel ? 'app' : link ? 'link' : null;
+  const selUrl = /^https?:\/\/\S+$/.test(sel.trim()) ? sel.trim() : '';
+  return { copy, linkRow: !!link && copy !== 'link', openUrl: link || selUrl };
+}
+// 메뉴 힌트용 짧은 주소 — 스킴을 떼고 앞부분만(메뉴 폭 320px 안에서 이름을 밀어내지 않게).
+export function shortLink(url: string): string {
+  const s = String(url || '').replace(/^https?:\/\//i, '');
+  return s.length > 26 ? s.slice(0, 25) + '…' : s;
+}
+
 // ── 우클릭 메뉴(#3784) — 셸(web/v2/ctx-*)의 메뉴가 iframe 안까지는 못 오므로 이 문서에서 같은 문법으로 세운다 ──
 //  복사는 Cmd+C 와 **같은 길**을 탄다(xterm 선택 → copyText / 마우스모드 앱(Claude) 드래그 선택 → ^C 브리지 1회 —
 //  #972·#1117 의 규칙 그대로. 선택이 관측 안 됐으면 ^C 를 보내지 않는다(취소·종료 사고)). ⇧우클릭은 브라우저 메뉴.
@@ -2974,8 +3016,12 @@ function wireTermCtxMenu(host: HTMLElement): void {
     const appSelSeen = mouseOn && appDragSelect;
     const appSel = appSelSeen && (!xsel || appSelectAt >= xtermSelAt);
     const sel = appSel ? '' : xsel;
-    const canCopy = !!sel || appSel;
-    const url = /^https?:\/\/\S+$/.test(sel.trim()) ? sel.trim() : '';
+    // 커서 밑 링크도 잡는다(#4083 — 드래그 안 한 링크 위 우클릭). 무엇을 복사할지는 ctxCopyPlan 한 곳이 정한다.
+    const link = linkAtPoint(host, e.clientX, e.clientY) || '';
+    const plan = ctxCopyPlan(sel, appSel, link);
+    const canCopy = !!plan.copy;
+    const url = plan.openUrl;
+    const openHint = { shell: '이 창', pane: '곁칸', tab: inDesktopApp() ? '새 창' : '새 탭' }[url ? linkTargetHere(url) : 'tab'];
     const secure = !!(navigator.clipboard && navigator.clipboard.readText && window.isSecureContext);
     const fs = Number(term.options.fontSize) || 14;
     const setFont = (n: number): void => {
@@ -2985,17 +3031,19 @@ function wireTermCtxMenu(host: HTMLElement): void {
       toast('글자 크기 ' + v);
     };
     e.preventDefault(); e.stopPropagation();
-    dlog('ctx-copy', sel ? 'xterm len=' + sel.length : (appSel ? 'app' : 'none'));
+    dlog('ctx-copy', plan.copy === 'sel' ? 'xterm len=' + sel.length : plan.copy === 'link' ? 'link len=' + link.length : (plan.copy || 'none'));
     liteMenu(e.clientX, e.clientY, [
-      { label: '복사', hint: sel ? String(sel.length) + '자' : (appSel ? 'Claude 선택' : '선택한 글이 없어요'), off: !canCopy, run: () => {
-        if (sel) { copyText(sel, false, true); return; }
-        if (appSel) { clearAppSelect(); armClipboardPromise(); sendInput('\x03'); armBridgeMissHint(); }
+      { label: '복사', hint: plan.copy === 'sel' ? String(sel.length) + '자' : plan.copy === 'app' ? 'Claude 선택' : plan.copy === 'link' ? shortLink(link) : '선택한 글이 없어요', off: !canCopy, run: () => {
+        if (plan.copy === 'sel') copyText(sel, false, true);
+        else if (plan.copy === 'app') { clearAppSelect(); armClipboardPromise(); sendInput('\x03'); armBridgeMissHint(); }
+        else if (plan.copy === 'link') copyText(link, false, true);
       } },
+      ...(plan.linkRow ? [{ label: '링크 복사', hint: shortLink(link), run: () => copyText(link, false, true) }] : []),
+      ...(url ? [{ label: '링크 열기', hint: openHint, run: () => openLinkFromTerminal(url) }] : []),
       { label: '붙여넣기', hint: '⌘V', off: !secure, run: () => {
         navigator.clipboard.readText().then((t) => { if (t) pasteText(t); }).catch(() => toast('붙여넣기를 못 읽었어요 — ⌘V 로 붙여넣어 주세요.', true));
       } },
       { label: '전체 선택', hint: '⌘A', run: () => { try { term.selectAll(); } catch (_) { /* noop */ } } },
-      ...(url ? [{ label: '선택한 주소 열기', run: () => openLinkFromTerminal(url) }] : []),
       { sep: true, label: '' },
       { label: '화면 지우기', hint: '스크롤백만', run: () => { try { term.clear(); } catch (_) { /* noop */ } } },
       { label: '글자 크게', hint: String(fs) + '→' + Math.min(30, fs + 1), off: fs >= 30, run: () => setFont(fs + 1) },

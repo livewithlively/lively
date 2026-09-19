@@ -92,7 +92,7 @@ ok(/case 'ArrowDown'/.test(M) && /case 'ArrowRight'/.test(M) && /case 'Escape'|e
 const T = read("web/standalone/terminal.ts");
 ok(/wireTermCtxMenu\(host\);/.test(T) && /function wireTermCtxMenu\(host: HTMLElement\)/.test(T), "E10a 터미널 우클릭 배선");
 ok(/if \(e\.shiftKey \|\| IS_MOBILE\) return;/.test(T), "E10b ⇧우클릭·모바일은 브라우저 메뉴");
-ok(/if \(sel\) \{ copyText\(sel, false, true\); return; \}\s*if \(appSel\) \{ clearAppSelect\(\); armClipboardPromise\(\); sendInput\('\\x03'\); armBridgeMissHint\(\); \}/.test(T), "E10c 복사 = Cmd+C 와 같은 길(앱 선택 없으면 ^C 안 보냄) — 판정은 메뉴를 띄운 순간의 것");
+ok(/if \(plan\.copy === 'sel'\) copyText\(sel, false, true\);\s*else if \(plan\.copy === 'app'\) \{ clearAppSelect\(\); armClipboardPromise\(\); sendInput\('\\x03'\); armBridgeMissHint\(\); \}/.test(T) && /const plan = ctxCopyPlan\(sel, appSel, link\);/.test(T), "E10c 복사 = Cmd+C 와 같은 길(앱 선택 없으면 ^C 안 보냄) — 판정은 메뉴를 띄운 순간의 것(#4083 커서 밑 링크는 ctxCopyPlan)");
 // 우클릭의 누름·뗌을 xterm 에 안 넘긴다 — 넘기면 앱 선택(appDragSelect)이 «제자리 클릭» 으로 풀리고 셸 화면은 rightClickSelectsWord 로 선택이 갈린다(원준님 실측).
 ok(/const eat = \(e: MouseEvent\): void => \{ if \(e\.button === 2 && !e\.shiftKey && !IS_MOBILE\) \{ e\.stopPropagation\(\); e\.preventDefault\(\); \} \};\s*host\.addEventListener\('mousedown', eat, true\);\s*host\.addEventListener\('mouseup', eat, true\);/.test(T), "E10f 우클릭 누름·뗌은 capture 에서 삼킨다(xterm·앱에 안 간다)");
 ok(/const appSelSeen = mouseOn && appDragSelect;/.test(T) && !/if \(appDragSelect\) \{ clearAppSelect\(\); armClipboardPromise\(\); sendInput\('\\x03'\); armBridgeMissHint\(\); \}\s*\} \},/.test(T), "E10g [복사] 는 띄운 순간의 appSel 을 쓴다(누를 때 다시 읽지 않는다)");
