@@ -164,7 +164,9 @@ export function setRailSection(sec: RailSection, opts?: { navigate?: boolean }):
   section = sec;
   try { localStorage.setItem(SEC_STORE, sec); } catch (_) { /* 이번 화면은 된다 */ }
   drawRail();
-  hooks.onSection?.(sec, { navigate: changed || !!(opts && opts.navigate) });
+  //  navigate 를 **명시**하면 그 뜻이 이긴다 — 폰 아래 탭 바(v2/mobile.ts)는 구역을 바꾸되 주소는 옮기지 않는다(목록을
+  //   화면 한 장으로 열 뿐이라, 착지 주소로 가면 hashchange 가 방금 연 목록을 닫는다 #4088). 생략하면 종전대로 «바뀌면 간다».
+  hooks.onSection?.(sec, { navigate: opts && typeof opts.navigate === 'boolean' ? opts.navigate : changed });
 }
 
 /**

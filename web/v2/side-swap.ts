@@ -23,6 +23,7 @@
 //  아무 예고 없이 화면 절반이 좌우로 뒤집히면 그건 고장으로 읽힌다. 그래서 **처음 자리가 바뀌는 그 순간**
 //  왜 이렇게 했는지와 끄는 법을 안내한다(다시 보지 않기 체크). 끄면 종전처럼 곁칸이 늘 오른쪽에 고정된다.
 import { anchoredPopover, el, toast } from '../core.js';
+import { MOBILE_MQ } from './mobile.js';   // 좁은 폭 문턱(900) — 셸과 같은 값 하나만 둔다
 import { overlay } from '../ui-primitives.js';
 
 const KEY_OFF = 'lively_v2_side_swap_off';       // '1' = 자리 고정(자동 자리바꿈 끔)
@@ -42,7 +43,10 @@ const read = (k: string): boolean => { try { return localStorage.getItem(k) === 
 const write = (k: string, v: boolean): void => { try { if (v) localStorage.setItem(k, '1'); else localStorage.removeItem(k); } catch (_) { /* noop */ } };
 
 /** 자동 자리바꿈이 켜져 있나(기본 켜짐). */
-export const swapEnabled = (): boolean => !read(KEY_OFF);
+//  ⚠ 좁은 폭(≤900px)에선 곁칸이 아예 접혀 있다(42-v2-panes.css) — 그런데 폭 변수(--pn-side-w)는 남아 있어 «곁칸이
+//   화면 절반을 넘었다» 로 판정돼 세션을 열 때마다 자리바꿈 안내 창이 떴다(#4088 폰 실측). 곁칸이 없는 폭에선 «없는 이야기»다.
+const narrow = (): boolean => { try { return window.matchMedia(MOBILE_MQ).matches; } catch (_) { return false; } };   // = 42-v2-panes.css 곁칸 접힘 문턱
+export const swapEnabled = (): boolean => !read(KEY_OFF) && !narrow();
 
 export interface SideSwapHost {
   body: HTMLElement;        // .pn-body — 격자 그 자체
