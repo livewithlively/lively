@@ -20,6 +20,8 @@ import { normWebUrl } from './web-url.js';
 import { filesPart } from './panes-files.js';
 import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, authHeaders, kindOf, knTitle, openInViewerPart, pnIcon, pnNote } from './panes-kit.js';
 import { createPreviewKit } from './file-preview.js';
+import { htmlFrame } from '../lib/file-preview.js';        // #4075 — 시안(HTML)은 공용 렌더러의 격리 프레임으로(자르지 않고 스크립트 허용)
+import { attachFrameBridge } from '../lib/frame-bridge.js'; // #4075 — 격리 프레임 안 문서의 저장·복사·내려받기를 셸이 대신한다
 import type { TabKey } from '../lib/tab-key.js';
 import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
 import { composerAttach } from './compose-attach.js';
@@ -1189,6 +1191,7 @@ function viewerPart(ctx: PartCtx): Part {
   let q = '';
   //  살아 있는 미리보기(아래) — open() 이 읽으므로 **그보다 앞에** 선언한다(마운트 중 TDZ 사고의 재발 방지).
   let shownStamp = '';          // 지금 그려 둔 파일의 도장(수정 시각:크기) — '' 이면 비교할 것이 없다(목록 화면·아직 여는 중)
+  let unbridge: () => void = () => {};   // #4075 — 지금 떠 있는 시안 프레임의 검토 다리를 떼는 손잡이(다른 파일을 펼 때 뗀다)
   let checking = false;
   //  ── 고치기 (#762, 원준 2026-09-05: "뷰어 안에서 편집 버튼 누르면 편집도 가능하게") ────────────
   //   보는 화면이 곧 고치는 화면이다 — 시안 한 줄 고치자고 자료에서 내려받아 다른 앱에서 열고 다시 올릴 일이 아니다.
@@ -1459,9 +1462,16 @@ function viewerPart(ctx: PartCtx): Part {
       if (path !== p2) return;                       // 그 사이 다른 걸 골랐다
       shownStamp = stampFrom(r);
       if (k.kind === 'page') {
-        // 시안(HTML)은 격리 프레임(srcdoc)으로 — 스크립트·폼·상위 접근이 모두 막힌 채 그림만 보인다.
-        const f = el('iframe', { class: 'pn-ed-pv full', sandbox: '', tabindex: '-1' }) as HTMLIFrameElement;
-        f.srcdoc = txt.slice(0, 400_000);
+        // #4075 — 시안(HTML)은 공용 렌더러 htmlFrame 으로. 종전엔 이 칸만 제 프레임을 세우며 둘을 잘못했다:
+        //  ① 40만 자에서 말없이 잘랐다(잘린 html 은 긴 문서가 아니라 **깨진 문서**다 — 자른 자리가 태그·base64
+        //  한가운데면 그 뒤가 통째로 사라진다) ② sandbox='' 로 스크립트를 막아 스크립트로 그리는 보고서·코멘트를
+        //  다는 검토판이 백지나 읽기 전용으로 떴다. 공용 렌더러는 allow-same-origin 없이 allow-scripts 만 준다
+        //  (불투명 오리진 — 부모 DOM·쿠키·저장소 차단). 그 격리 때문에 문서가 못 하는 저장·복사·내려받기는
+        //  검토 다리(lib/frame-bridge)가 셸에서 대신한다 — 저장 이름 공간은 프로젝트·경로라 파일끼리 안 섞인다.
+        unbridge();
+        const f = htmlFrame(txt, base(p2), 'pn-ed-pv full') as HTMLIFrameElement;
+        f.tabIndex = -1;
+        unbridge = attachFrameBridge(f, `${ctx.id}:${p2}`);
         show(f, 'scale', () => PAGE_BASE);
       } else if (/\.(md|markdown)$/i.test(p2)) {
         //  글은 제 폭이 없다(칸에 맞춰 스스로 흐른다) — 맞춤 = 100%. 단추를 누르면 글자가 커진다.
