@@ -47,6 +47,11 @@ body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 au
 /* 타입별 표시면 */
 .fpg-img { max-width: 100%; max-height: 100%; margin: auto; border-radius: 8px; box-shadow: 0 2px 14px rgba(var(--shadow-ink), .14); }
 .fpg-pdf, .fpg-html { width: 100%; flex: 1 1 auto; min-height: 420px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+/* html 은 공용 렌더러가 '원문' 토글 자리로 .fp-wrap 한 겹에 싸서 준다(lib/file-preview.ts) — 그 한 겹이 스테이지의
+   flex 사슬을 끊어 위 flex:1 이 먹지 않았고, 프레임이 min-height(420px)에 멈춰 화면 중간에서 뷰어가 끝났다(#4083).
+   프레임을 품은 래퍼가 남는 높이를 받아 프레임에 넘긴다. '원문'으로 바꾸면 프레임이 빠져 래퍼는 내용 높이로 돌아간다.
+   (pdf 는 래퍼 없이 프레임이 바로 오므로 해당 없음.) */
+.fpg-stage > .fp-wrap:has(> .fpg-html) { flex: 1 1 auto; display: flex; flex-direction: column; }
 .fpg-video { max-width: 100%; max-height: 100%; margin: auto; border-radius: 8px; background: #000; }
 .fpg-audio { width: min(560px, 100%); margin: auto; }
 .fpg-code { margin: 0; width: 100%; max-width: 1100px; box-sizing: border-box; background: var(--bg-tint);
