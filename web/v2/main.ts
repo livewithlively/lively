@@ -8,7 +8,7 @@
 //  탭에 있으면 그 탭으로 간다(한 세션 = 한 탭). Alt+클릭 = 새 탭에서 열기.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
 import { renderOnboarding, onboardingDone, markWelcomeSeen } from './onboarding.js'; // #/welcome 처음 설정(#1813·#2171)
-import { $view, anchoredPopover, api, el, state, takeShellSwitch, toast } from '../core.js';
+import { $view, api, el, state, takeShellSwitch, toast } from '../core.js';
 import { EMBEDDED } from './embed.js';   // #1898 — 끼워 넣은 판은 셸 전환 도장을 소비하지 않는다
 import { deviceStore, onShellPrefsAdopted, shellPrefStore, shellPrefsPush, shellPrefsSync } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
@@ -17,7 +17,7 @@ import { renderLiv } from '../liv.js';
 import { livChatCleanup } from '../liv-chat.js';   // #4032 — 리브 칸 걷기
 import { CLASSIC_PAGES, appByKey, appFrame, nativeAppByRoute, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
-import { projMatches } from '../lib/proj-match.js';
+import { openProjPickModal, openProjPickPopover } from './proj-pick.js';   // 세션의 프로젝트 고르기 — 드롭다운·모달 두 그릇, 목록 한 벌
 import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, movePinnedSession, projLandingRoute, projectOrder, reloadSidePrefs, sessText, type SideInstance } from './side.js';
 import { dotCls, findSessIn, isMineSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type HomeDest, type Sess, type V2Data } from './views.js';
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
@@ -188,6 +188,9 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
     sessionId,
     onProjectChanged: () => { void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); }); },
     onRenameProject: (pid, name) => renameProject(pid, name),   // 문패 연필 — 사이드바 줄 더블클릭과 같은 경로(#2579)
+    // 문패 [세션 옮기기](#3778) — [⋯ ▸ 이 세션 ▸ 프로젝트] 와 같은 실행, 그릇만 모달. 조건도 같다(내 세션만).
+    canMoveSession: (sid) => { const s = data.sessions.find((x) => x.id === sid); return !!s && isMineSess(s); },   // 창이 찾는 방식과 같게(정확히 그 id)
+    onMoveSession: (sid) => openProjectMoveModal(sid, tab),
     // 서랍에서 세션을 갈아 끼웠다 — 셸은 살려 두고 **주소·탭 제목만** 그 세션 것으로(라우터를 다시 돌리지 않는다).
     onSessionPicked: (sid) => {
       // 세션을 고르면 그 세션 주소, 새 세션 자리로 돌아가면 **?new=1** 을 붙인 프로젝트 주소.
@@ -2325,65 +2328,43 @@ async function renameSession(sessionId: string, label: string, tab: ShellTab | n
   void loadData().then(() => { drawSide(); tabsApi?.paint(); });
 }
 
-// 세션의 프로젝트 소속(#1749) — 상단바 [프로젝트 연결]/[▾] 이 여는 검색 드롭다운.
+// 세션의 프로젝트 소속(#1749) — 고르는 목록은 v2/proj-pick.ts 한 벌이고, 입구가 둘이다:
+//  드롭다운 = [⋯ ▸ 이 세션 ▸ 프로젝트]·사이드바 우클릭(누른 자리에 붙는다) · 모달 = 문패 [세션 옮기기](#3778).
+//  둘 다 **같은 실행**(setSessionProject)을 부른다 — 입구가 늘어도 붙이기·떼기 뒤 화면 맞추기는 한 곳이다.
 function openProjectPicker(anchor: HTMLElement, sessionId: string, tab: ShellTab): void {
   const s = data.sessions.find((x) => x.id === sessionId);
   if (!s) return;
-  const rows = projectOrder(data);
-  const input = el('input', { class: 'v2-pjpick-in', type: 'search', placeholder: '프로젝트 검색', 'aria-label': '프로젝트 검색' }) as HTMLInputElement;
-  const listEl = el('div', { class: 'v2-pjpick-list', role: 'listbox' });
-  const note = el('p', { class: 'v2-fine v2-pjpick-note' });
-  const panel = el('div', { class: 'dash-pop-panel v2-pjpick' }, input, listEl, note);
-  let closePop: (() => void) | null = null;
-  let busyPick = false;
-
-  async function pick(pid: number | null): Promise<void> {
-    if (busyPick) return;
-    busyPick = true;
-    note.textContent = pid ? '붙이는 중…' : '떼는 중…';
-    try {
-      await api('/api/ui/terminal/sessions/' + encodeURIComponent(sessionId) + '/project', { method: 'POST', body: JSON.stringify({ projectId: pid }) });
-      toast(pid ? '프로젝트에 붙였어요. 다음 질문부터 프로젝트 맥락이 반영됩니다.' : '프로젝트에서 뗐어요.');
-      if (closePop) closePop();
-      await loadData(); drawSide(); tabsApi?.paint();
-      const cur = data.sessions.find((x) => x.id === sessionId) || null;
-      if (tab.chat && cur && tab.chat.id === cur.id) tab.chat.update({ ...cur, projectName: projName(data, cur.projectId) });
-      drawAsideSession(tab, cur);
-    } catch (e: any) {
-      busyPick = false;
-      note.textContent = '';
-      toast('프로젝트를 바꾸지 못했습니다 — ' + (e && e.message ? e.message : e), true);
-    }
+  openProjPickPopover(anchor, { rows: projectOrder(data), currentId: s.projectId ? Number(s.projectId) : null, onPick: (pid) => setSessionProject(sessionId, pid, tab) });
+}
+function openProjectMoveModal(sessionId: string, tab: ShellTab): void {
+  const s = data.sessions.find((x) => x.id === sessionId);
+  if (!s) return;
+  const pn = projName(data, s.projectId);
+  openProjPickModal({
+    rows: projectOrder(data), currentId: s.projectId ? Number(s.projectId) : null,
+    sessionName: sessText(s, pn).main || s.label || s.id, currentName: pn || null,
+    onPick: (pid) => setSessionProject(sessionId, pid, tab),
+  });
+}
+/** 붙이기(pid)·떼기(null)의 실행 — 서버에 반영하고 이 창을 그 값으로 맞춘다. 성공하면 true(고르는 창이 닫힌다). */
+async function setSessionProject(sessionId: string, pid: number | null, tab: ShellTab): Promise<boolean> {
+  try {
+    await api('/api/ui/terminal/sessions/' + encodeURIComponent(sessionId) + '/project', { method: 'POST', body: JSON.stringify({ projectId: pid }) });
+  } catch (e: any) {
+    toast('프로젝트를 바꾸지 못했습니다 — ' + (e && e.message ? e.message : e), true);
+    return false;
   }
-
-  const renderList = (): void => {
-    // 찾기 규칙은 홈 컴포저의 「프로젝트」 칸과 **같은 한 곳**(lib/proj-match.ts) — 번호·#번호·이름·번호 앞자리.
-    const hits = projMatches(rows, input.value.trim());
-    const kids: HTMLElement[] = [];
-    if (s.projectId) kids.push(el('button', { class: 'v2-pjpick-row v2-pjpick-none', type: 'button', role: 'option', onclick: () => void pick(null) },
-      el('span', { class: 'n', text: '프로젝트에서 떼기' }), el('span', { class: 'm', text: '프로젝트 없음으로' })));
-    for (const r of hits.slice(0, 50)) {
-      const cur = Number(s.projectId) === Number(r.proj.id);
-      kids.push(el('button', { class: 'v2-pjpick-row' + (cur ? ' cur' : ''), type: 'button', role: 'option', 'aria-selected': String(cur), onclick: () => { if (!cur) void pick(r.proj.id); },
-        title: r.proj.name + ' · #' + r.proj.id },
-        el('span', { class: 'n', text: r.proj.name }),
-        el('span', { class: 'm' }, el('span', { class: 'mono', text: '#' + r.proj.id }), r.done ? el('span', { class: 'v2-pjpick-done', text: '완료' }) : null, cur ? el('span', { class: 'v2-pjpick-cur', text: '✓ 지금' }) : null)));
-    }
-    if (hits.length > 50) kids.push(el('p', { class: 'v2-fine', text: `외 ${hits.length - 50}개 — 더 좁혀 검색하세요.` }));
-    if (!kids.length) kids.push(el('p', { class: 'v2-fine', text: '조건에 맞는 프로젝트가 없어요.' }));
-    listEl.replaceChildren(...kids);
-  };
-  input.oninput = renderList;
-  input.onkeydown = (e: KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.isComposing) {
-      e.preventDefault();
-      const first = listEl.querySelector('.v2-pjpick-row:not(.v2-pjpick-none):not(.cur)') as HTMLButtonElement | null;
-      if (first) first.click();
-    }
-  };
-  renderList();
-  closePop = anchoredPopover(anchor, panel);
-  window.setTimeout(() => input.focus(), 0);
+  toast(pid ? '프로젝트에 붙였어요. 다음 질문부터 프로젝트 맥락이 반영됩니다.' : '프로젝트에서 뗐어요.');
+  await loadData(); drawSide(); tabsApi?.paint();
+  const cur = data.sessions.find((x) => x.id === sessionId) || null;
+  //  ★ 셸(문패·세션 서랍·자료 칸)이 **옛 프로젝트로** 서 있으면 그 탭을 새 프로젝트로 다시 두른다.
+  //   종전엔 대화창·우패널만 고치고 셸은 8초 틱(syncShell 의 같은 대조)이 올 때까지 옛 프로젝트였다 —
+  //   문패에서 옮기면 누른 그 줄이 그대로 옛 이름을 말하고 있어 «안 됐나?» 로 읽힌다.
+  const have = shellProject.get(tab);
+  if (cur && have !== undefined && have !== (cur.projectId ? Number(cur.projectId) : 0)) { void renderRoute(tab); return true; }
+  if (tab.chat && cur && tab.chat.id === cur.id) tab.chat.update({ ...cur, projectName: projName(data, cur.projectId) });
+  drawAsideSession(tab, cur);
+  return true;
 }
 
 // 미사용 경고 방지 — 라우터 밖에서도 뷰를 갱신하고 싶을 때 쓰는 진입점(툴바 등 후속용).

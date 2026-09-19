@@ -840,6 +840,17 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .v2-pjpick-done { border: 1px solid var(--line-row); border-radius: 999px; padding: 0 6px; font-size: 10.5px; }
 .v2-pjpick-none .n { color: var(--coral-text); }
 .v2-pjpick-note:empty { display: none; }
+/* 문패 [세션 옮기기] 모달(#3778) — 찾기 칸·목록은 위 드롭다운과 **같은 부품**(v2/proj-pick.ts)이고 그릇만 가운데 창이다.
+   머리의 두 줄(옮길 세션 · 지금 있는 곳)이 «무엇을 어디서 옮기나»를 먼저 말한다 — 프로젝트 문패에서 열리는 창이라서다. */
+.ov-box.v2-pjmove { max-width: 480px; padding: 20px 22px 16px; display: flex; flex-direction: column; gap: 10px; }
+.v2-pjmove .ov-head { margin-bottom: 2px; }
+.v2-pjmove-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 14px; padding: 10px 12px;
+  border-radius: 10px; background: var(--bg-tint); font-size: 13px; }
+.v2-pjmove-fact { display: contents; }
+.v2-pjmove-fact .k { color: var(--muted); white-space: nowrap; }
+.v2-pjmove-fact .v { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-weight: 600; }
+.v2-pjmove-fact .v .mono { color: var(--muted); font-weight: 400; }
+.v2-pjmove .v2-pjpick-list { max-height: min(360px, 48vh); }
 .v2-liv-tag { display: inline-flex; align-items: center; gap: 7px; color: var(--mint-deep); font-weight: 800; font-size: 13px; }
 .v2-h1 { margin: 10px 0 0; font-size: 22px; font-weight: 800; letter-spacing: -.45px; line-height: 1.38; text-wrap: balance; word-break: keep-all; }
 .v2-title, .v2-desc { word-break: keep-all; }
