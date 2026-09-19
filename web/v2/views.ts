@@ -277,7 +277,7 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
   const destWrap = el('div', { class: 'v2-dest-grid' }, destMain.wrap, destPre.wrap);
   const dest = (): Dest => destMain.get();
   const send = el('button', { class: 'btn btn-primary v2-launch-send', type: 'button', title: 'Enter 로도 보낼 수 있어요' }, el('span', { text: '시키기' })) as HTMLButtonElement;
-  // [시키기] 왼쪽 세 칸 — 제공자(어느 회사 모델)·모델·추론강도(#1758). 기본은 내가 지난번에 고른 값이고,
+  // [시키기] 왼쪽 네 칸 — 실행 컴퓨터·제공자(어느 회사 모델)·모델·추론강도(#1758·#3778). 기본은 내가 지난번에 고른 값이고,
   //  여기서 바꾸면 그게 다음 기본이 된다(v2/run-picker.ts — '새 AI 세션' 폼과 같은 기억을 쓴다).
   const runPicker = createRunPicker();
   // 첨부(#1870) — 프로젝트 칸의 새 세션 자리와 **같은 모듈**(v2/compose-attach.ts). 홈은 프로젝트가 없으므로
