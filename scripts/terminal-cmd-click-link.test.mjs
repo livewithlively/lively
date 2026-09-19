@@ -10,8 +10,8 @@ import { importTerminalModule } from "./standalone-terminal-env.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = readFileSync(join(root, "web/standalone/terminal.ts"), "utf8");
-const { urlAtColumn, linkOpenTarget, ctxCopyPlan, shortLink } = await importTerminalModule();
-for (const f of [urlAtColumn, linkOpenTarget, ctxCopyPlan, shortLink]) assert.equal(typeof f, "function");
+const { urlAtColumn, urlAtCell, cellRow, linkOpenTarget, ctxCopyPlan, shortLink } = await importTerminalModule();
+for (const f of [urlAtColumn, urlAtCell, cellRow, linkOpenTarget, ctxCopyPlan, shortLink]) assert.equal(typeof f, "function");
 
 let pass = 0;
 const t = (n, fn) => { fn(); pass++; console.log(`ok  ${n}`); };
@@ -54,8 +54,8 @@ t("U7 스킴 없는 형태의 오탐 경계 — 경로 없는 점-이름·파일
 });
 t("W1 배선 — 판정은 mousedown 에서(press 가 pty 로 새면 TUI 확인창이 뜬다), down/up/click 캡처 셋이 한 판정을 공유", () => {
   assert.match(src, /pendingLink = wantsLink \? linkAtEvent\(ev\) : null/, "mousedown 에서 링크를 판정하지 않는다");
-  assert.match(src, /urlAtColumn\(text, colInLogical\)/, "판정이 urlAtColumn 을 안 쓴다");
-  assert.match(src, /isWrapped/, "감싸인 긴 URL(줄바꿈)을 잇지 않는다");
+  assert.match(src, /return urlAtCell\(rows, soft, y - from, col, term\.cols\);/, "판정이 urlAtCell(여러 행 잇기)을 안 쓴다");
+  assert.match(src, /rows\.push\(l \? cellRow\(l, term\.cols\) : ''\);\s*soft\.push\(!!\(l && l\.isWrapped\)\);/, "행을 칸 정렬로 펴지 않거나 감싸인 행(isWrapped)을 안 넘긴다");
   // 캡처(true) 3종 — 버블 단계면 xterm 이 먼저 먹는다
   for (const evName of ["mousedown", "mouseup", "click"]) {
     assert.match(src, new RegExp(`addEventListener\\('${evName}',[\\s\\S]{0,700}?\\}, true\\);`), `${evName} 이 캡처가 아니다`);
@@ -140,6 +140,97 @@ t("C1~C4 스킴 떼기 · 26자 경계 · 넘으면 25자+… · 빈 값", () =>
   const long = shortLink("https://" + "b".repeat(27));
   assert.equal(long, "b".repeat(25) + "…");
   assert.equal(shortLink(""), "");
+});
+
+// ── #4083 D. 여러 줄로 쪼개진 링크(urlAtCell) — 원준님 «화면이 작아서 두세 줄로 보이면 복사·클릭이 문제» ──
+//  Claude Code 2.1.277 은 Ink 의 wrap-ansi `{trim:false, hard:true}` 로 **제가** 줄을 끊는다(번들 실측) — 폭보다 긴 토큰은
+//  폭에서 잘려 다음 행 들여쓰기 뒤로 이어지고 isWrapped 가 아니다. 아래 claudeWrap 이 그 모양을 그대로 만든다.
+const claudeWrap = (token, cols, indent = 2, margin = 0) => {
+  const w = cols - indent - margin, out = [];
+  for (let i = 0; i < token.length; i += w) out.push(" ".repeat(indent) + token.slice(i, i + w));
+  return out;
+};
+const NO = (n) => Array(n).fill(false);
+const GOV = "https://lively-46e3.app.lvly.io/ui/#/f?root=shared&path=project%2F4076%2FGovTech_%EA%B0%9C%EB%B0%9C%EB%B3%B4%EA%B3%A0%EC%84%9C_%EA%B2%80%ED%86%A0%ED%8C%901.html";
+t("D1 셸 자동 줄바꿈(isWrapped) 2행 — 어느 행을 눌러도 전체 URL(종전 유지)", () => {
+  const U = "https://a.io/" + "x".repeat(30);   // 43자, 폭 20 → 20 + 20 + 3
+  const rows = [U.slice(0, 20), U.slice(20, 40), U.slice(40)];
+  const soft = [false, true, true];
+  assert.equal(urlAtCell(rows, soft, 0, 3, 20), U);
+  assert.equal(urlAtCell(rows, soft, 2, 1, 20), U);
+});
+t("D2 ★ Claude 2행(앞 행 폭 꽉 · 뒤 행 들여쓰기 2) — 어느 행을 눌러도 전체 URL", () => {
+  const rows = claudeWrap(GOV, 100);   // 158자 → 98 + 60
+  assert.equal(rows.length, 2);
+  assert.equal(urlAtCell(rows, NO(2), 0, 10, 100), GOV, "첫 행 조각만 열린다");
+  assert.equal(urlAtCell(rows, NO(2), 1, 30, 100), GOV, "둘째 행 조각은 스킴이 없어 아예 링크로 안 잡힌다");
+});
+t("D3 ★ Claude 3행(가운데 행 통째 URL) — 셋째 행을 눌러도 전체 URL", () => {
+  const rows = ["", "● 파일은 여기:", ...claudeWrap(GOV, 70), "", "  다음 문단"];
+  assert.equal(rows.length, 7);   // 68 + 68 + 22
+  assert.equal(urlAtCell(rows, NO(7), 4, 5, 70), GOV);
+  assert.equal(urlAtCell(rows, NO(7), 3, 40, 70), GOV);
+});
+t("D4 괄호로 감싼 (https://…) 가 쪼개져도 괄호 뺀 URL", () => {
+  const rows = claudeWrap("(" + GOV + ")", 90);
+  assert.equal(urlAtCell(rows, NO(rows.length), rows.length - 1, 3, 90), GOV);
+});
+t("D5 보통 줄바꿈이 폭을 꽉 채운 행 끝의 짧은 URL — 다음 행 낱말을 붙이지 않는다(토큰이 폭보다 짧다)", () => {
+  const head = "  see the doc at ";
+  const r0 = head + "x".repeat(80 - head.length - 17) + " https://a.io/abc";
+  assert.equal(r0.length, 80);
+  const rows = [r0, "  output and more words"];
+  assert.equal(urlAtCell(rows, NO(2), 0, 70, 80), "https://a.io/abc");
+});
+t("D6 앞 행 끝이 산문 낱말(폭 꽉) + 다음 행 맨 앞 bare host — 합치지 않는다", () => {
+  const r0 = "  " + "word ".repeat(15) + "visit the site";
+  const rows = [r0.slice(0, 80).padEnd(80, "e"), "  lively.io/x for more"];
+  assert.equal(rows[0].length, 80);
+  assert.equal(urlAtCell(rows, NO(2), 1, 4, 80), "https://lively.io/x");
+});
+t("D7 다음 행 첫 덩어리가 URL 글자가 아니면(· PDF) 잇지 않는다", () => {
+  const rows = [...claudeWrap("https://a.io/" + "p".repeat(65), 80), "  · PDF"];
+  assert.equal(rows.length, 2);
+  assert.equal(urlAtCell(rows, NO(2), 0, 5, 80), "https://a.io/" + "p".repeat(65));
+});
+t("D8 들여쓰기 경계 — 8칸이면 잇고 9칸이면 잇지 않는다", () => {
+  const T = "https://a.io/" + "q".repeat(150);
+  const r8 = claudeWrap(T, 100, 8);
+  assert.equal(urlAtCell(r8, NO(r8.length), 1, 20, 100), T);
+  const r9 = claudeWrap(T, 100, 9);
+  assert.notEqual(urlAtCell(r9, NO(r9.length), 0, 20, 100), T);
+});
+t("D9 오른쪽 여백 경계 — 폭−1 에서 끝난 행은 잇고, 폭−2 면 잇지 않는다", () => {
+  const m1 = claudeWrap(GOV, 100, 2, 1);
+  assert.equal(urlAtCell(m1, NO(m1.length), 0, 10, 100), GOV);
+  const m2 = claudeWrap(GOV, 100, 2, 2);
+  assert.notEqual(urlAtCell(m2, NO(m2.length), 0, 10, 100), GOV);
+});
+t("D10 ★ 한글 뒤 URL — 칸 index 로 누른 자리가 정확하다(시작·끝 칸 · 바로 밖)", () => {
+  const row = "링\0크\0: https://a.io/x";   // '링'·'크' 는 2칸씩 → 'h' 는 6번 칸, 끝 'x' 는 19번 칸
+  assert.equal(urlAtCell([row], [false], 0, 6, 80), "https://a.io/x");
+  assert.equal(urlAtCell([row], [false], 0, 19, 80), "https://a.io/x");
+  assert.equal(urlAtCell([row], [false], 0, 5, 80), null);
+  assert.equal(urlAtCell([row], [false], 0, 20, 80), null);
+});
+t("D11 URL 속 한글(넓은 글자 뒤 칸 '\\0')은 제거되고 한글은 그대로", () => {
+  assert.equal(urlAtCell(["https://a.io/한\0글\0"], [false], 0, 5, 80), "https://a.io/한글");
+});
+t("D12 이어지는 행의 들여쓰기 칸을 누르면 링크가 아니다", () => {
+  const rows = claudeWrap(GOV, 100);
+  assert.equal(urlAtCell(rows, NO(2), 1, 0, 100), null);
+  assert.equal(urlAtCell(rows, NO(2), 1, 1, 100), null);
+});
+t("D13 빈 입력·범위 밖 행·창 첫 행이 soft — null 이고 throw 없음", () => {
+  assert.equal(urlAtCell([], [], 0, 0, 80), null);
+  assert.equal(urlAtCell(["https://a.io/x"], [false], 5, 0, 80), null);
+  assert.equal(urlAtCell(["https://a.io/x"], [true], 0, 3, 80), "https://a.io/x");
+});
+t("D14 cellRow — 넓은 글자 뒤 칸 '\\0' · 빈 칸 ' ' · 여러 코드 단위 글자 '\\u0001' · 끝 공백 제거 · 폭에서 멈춤", () => {
+  const cells = [["링", 2], ["", 0], ["a", 1], ["", 1], ["😀", 2], ["", 0], ["b", 1], [" ", 1], ["", 1], ["z", 1]];
+  const line = { getCell: (x) => (x < cells.length ? { getChars: () => cells[x][0], getWidth: () => cells[x][1] } : undefined) };
+  assert.equal(cellRow(line, 9), "링\0a \u0001\0b");
+  assert.equal(cellRow(line, 99), "링\0a \u0001\0b  z");
 });
 
 // ── #4083 배선 — 위 판정들이 실제 경로에 물려 있나(관측 장치가 죽어 있으면 위 표는 통과하면서 아무것도 못 본다) ──
