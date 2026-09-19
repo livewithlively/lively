@@ -20,11 +20,18 @@ import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { findChrome } from "./headless-chrome.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const chrome = findChrome();
+//  크롬 찾기 — scripts/headless-chrome.mjs 의 후보와 같다. 그 모듈(dumpDom)은 --headless=old 전용이라 여기선 안 쓰고,
+//   이 파일이 stage·main 어디서든 혼자 돌게 후보만 둔다(stage 엔 그 모듈이 아직 없다).
+const chrome = [
+  process.env.CHROME_BIN,
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Chromium.app/Contents/MacOS/Chromium",
+  "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser",
+].filter(Boolean).find((p) => existsSync(p)) || null;
 if (!chrome) { console.log("skip  크롬을 못 찾아 건너뜁니다(CHROME_BIN 으로 지정) — 런타임 자동 불러오기 검증 미실행"); process.exit(0); }
 if (typeof WebSocket !== "function") { console.log("skip  이 node 에 WebSocket 이 없어 건너뜁니다(node 22+)"); process.exit(0); }
 
