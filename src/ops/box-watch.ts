@@ -307,8 +307,13 @@ export interface BoxWatchDeps {
 const levelOf = (s: BoxAlert["severity"]): "error" | "warn" | "info" =>
   s === "critical" ? "error" : s === "warn" ? "warn" : "info";
 
-/** 알림 1건 처리 — 로그는 항상 남기고, 전송은 '해제 규칙'을 지킨다. 보냈으면 true. */
-async function emit(a: BoxAlert, problemSent: boolean, send: AlertSender): Promise<boolean> {
+/**
+ * 알림 1건 처리 — 로그는 항상 남기고, 전송은 '해제 규칙'을 지킨다. 보냈으면 true.
+ *
+ * 다른 감시기(ops/cron-watch.ts)도 이걸 쓴다 — 해제 규칙을 복사하면 한쪽만 고쳐져 «문제는 안 알렸는데
+ *  복구는 알리는» 상태로 갈라진다. 규칙은 한 자리에 둔다.
+ */
+export async function emitAlert(a: BoxAlert, problemSent: boolean, send: AlertSender): Promise<boolean> {
   logger[levelOf(a.severity)]({ ...a.detail }, a.title); // 채널이 없어도 로그엔 항상 남는다
   // 알린 적 없는 문제의 해제는 보내지 않는다(받는 사람이 혼란스럽다).
   if (a.severity === "ok" && !problemSent) return false;
@@ -327,7 +332,7 @@ async function tick(deps: BoxWatchDeps): Promise<void> {
     const a = dbAlertFor(lastDbOk, db.ok, db.error);
     lastDbOk = db.ok;
     if (a) {
-      const sent = await emit(a, dbProblemSent, deps.send);
+      const sent = await emitAlert(a, dbProblemSent, deps.send);
       dbProblemSent = a.severity === "ok" ? false : (sent || dbProblemSent);
     }
   } catch (err) {
@@ -342,7 +347,7 @@ async function tick(deps: BoxWatchDeps): Promise<void> {
     const a = diskAlertFor(lastDisk, st.level, st);
     lastDisk = st.level;
     if (a) {
-      const sent = await emit(a, diskProblemSent, deps.send);
+      const sent = await emitAlert(a, diskProblemSent, deps.send);
       diskProblemSent = a.severity === "ok" ? false : (sent || diskProblemSent);
     }
   } catch (err) {
@@ -360,7 +365,7 @@ async function tick(deps: BoxWatchDeps): Promise<void> {
       const a = memAlertFor(lastMem, level, { usedPct, availableMb, totalMb });
       lastMem = level;
       if (a) {
-        const sent = await emit(a, memProblemSent, deps.send);
+        const sent = await emitAlert(a, memProblemSent, deps.send);
         memProblemSent = a.severity === "ok" ? false : (sent || memProblemSent);
       }
     } else {
@@ -432,7 +437,7 @@ async function tick(deps: BoxWatchDeps): Promise<void> {
           }
         }
         const a = earlyoomAlertFor(fresh);
-        if (a) await emit(a, false, deps.send);   // 전이가 아니라 사건 — problemSent 억제 로직을 쓰지 않는다
+        if (a) await emitAlert(a, false, deps.send);   // 전이가 아니라 사건 — problemSent 억제 로직을 쓰지 않는다
       }
     }
     pidSnapshot = snap.owners;   // 다음 tick 이 되짚을 기준(매핑을 끝낸 **뒤에** 갱신해야 한다)
@@ -462,7 +467,7 @@ async function tick(deps: BoxWatchDeps): Promise<void> {
         const a = ptyAlertFor(lastPty, level, st);
         lastPty = level;
         if (a) {
-          const sent = await emit(a, ptyProblemSent, deps.send);
+          const sent = await emitAlert(a, ptyProblemSent, deps.send);
           ptyProblemSent = a.severity === "ok" ? false : (sent || ptyProblemSent);
         }
       }
