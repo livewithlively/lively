@@ -46,6 +46,7 @@ import { sweepAwaitingNotifications } from "../sessions/awaiting-notifier.js"; /
 import { backfillSessionStates } from "../sessions/session-state-backfill.js"; // #1059 F 후속 — 레코드 없는 라이브 세션에 desired-state 미러
 import { ensureSharedCache } from "../ops/build-cache.js";
 import { startBoxWatch } from "../ops/box-watch.js";
+import { startCronWatch } from "../ops/cron-watch.js";
 import { sendBoxAlert } from "../ops/alerts.js";
 import { recoverOrphanConnectorRuns } from "../connectors/run-tracker.js";
 import { migrateConnectorsToCollectors } from "../org/store/collectors.js"; // #1419 T1 — 레거시 커넥터 → 수집기 승격(멱등)
@@ -260,6 +261,10 @@ export const DB_BOOT_STEPS: BootStep[] = [
   //  로그는 아무도 안 본다. 웹훅 미설정이면 send 는 조용히 no-op(로그는 그대로 남는다).
   //  스케줄러와 같은 게이트(단일 프로세스 하우스키핑 — 두 인스턴스가 같은 경보를 중복 발송하면 안 된다).
   { name: "box-watch", gate: "scheduler", run: startBoxWatchStep },
+  // 크론 감시 + 경보 — 스케줄 잡이 실패로 넘어갈 때/복구될 때만 같은 채널로 밀어서 알린다.
+  //  박스 감시와 같은 게이트(scheduler): 크론이 도는 프로세스에서만 감시가 돌아야 두 인스턴스가 같은
+  //  경보를 중복 발송하지 않는다.
+  { name: "cron-watch", gate: "scheduler", run: () => startCronWatch({ send: async (a) => (await sendBoxAlert(a)).sent }) },
   // 자동 pending 임베딩 백필(#669) — 부팅 30초 후 1회(배포/업데이트 직후 잔량 자가치유 — 30초는 사이드카
   //  Ollama 동시 부팅 박스의 헬스 확보 여유) + 10분 주기(미러 리셋·훅 실패 잔량 흡수; sync 완료 트리거의 폴백).
   //  provider off 면 설정 조회 후 no-op. 스케줄러와 같은 게이트 — 스모크 인스턴스(LIVELY_NO_SCHEDULER=1,

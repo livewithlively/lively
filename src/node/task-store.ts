@@ -108,9 +108,20 @@ export async function markRunning(id: number, nodeId: string, sessionId: string,
   }
 }
 export async function markFinished(id: number, ok: boolean, result: Record<string, unknown>, error?: string | null): Promise<void> {
-  await itemsPool.query(
-    `UPDATE org_task SET status=$2, result=$3::jsonb, error=$4, finished_at=now(), updated_at=now() WHERE id=$1`,
+  const r = await itemsPool.query(
+    `UPDATE org_task SET status=$2, result=$3::jsonb, error=$4, finished_at=now(), updated_at=now() WHERE id=$1
+      RETURNING requester_session`,
     [id, ok ? "done" : "failed", JSON.stringify(result), error ?? null]);
+  // 크론 되먹임 — 이 태스크를 낸 잡이 있으면 **실제 결과**를 org_cron 에 적는다(cron-task-feedback 머리말:
+  //  헤드리스 액션은 «접수 성공»을 ok 로 반환하므로, 이 되먹임이 없으면 죽은 잡이 계속 정상으로 보인다).
+  //  이 자리인 이유: 종결 경로(정상·타임아웃·무출력 stall·노드 유실·자격 없음·대기 초과)가 전부 여길 지난다.
+  //  동적 import — 스케줄러는 게이트웨이 쪽 모듈이고 이 파일은 노드 경계 가까이에 있다(같은 파일의 관례).
+  const row = r.rows[0] as { requester_session?: string | null } | undefined;
+  try {
+    const { cronJobIdOf, recordCronTaskOutcome } = await import("../scheduler/cron-task-feedback.js");
+    const jobId = cronJobIdOf(row?.requester_session);
+    if (jobId) await recordCronTaskOutcome({ jobId, taskId: id, ok, error });
+  } catch { /* 되먹임은 관측일 뿐 — 실패해도 태스크 종결은 유효하다 */ }
   // #1289 증류 배치가 실패하면 '판정함' 기록을 되돌린다 — 안 그러면 그 자료들이 아무도 안 본 채로 인박스에서
   //  영구히 빠진다(유실). 배치를 낸 시점에 기록하는 대가로 여기서 되돌려 균형을 맞춘다.
   //  증류와 무관한 위탁이면 지울 행이 없어 no-op. 테이블 부재(구버전 스키마)는 삼킨다.
