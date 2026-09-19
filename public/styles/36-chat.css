@@ -594,7 +594,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .v2set-row.danger .n { color: var(--danger-ink); }
 .v2set-danger { border: 1px solid var(--danger-line, var(--line-net)); background: none; color: var(--danger-ink); }
 .v2set-danger:hover { background: var(--danger-bg); }
-/*  [실행] — 머리줄에서 데려온 선택기가 앉는 자리. 세로로 쌓아 각자 제 폭을 갖는다(머리줄에선 한 줄이었다). */
+/*  [이 세션] «무엇으로 도나»(종전 [실행] 칸) — 머리줄에서 데려온 선택기가 앉는 자리. 세로로 쌓아 각자 제 폭을 갖는다(머리줄에선 한 줄이었다). */
 .v2set-run { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .v2set-run .dt-chip-sel { max-width: none; }
 .v2set-run .dt-chip[hidden], .v2set-run .dt-chip-sel[hidden] { display: none; }

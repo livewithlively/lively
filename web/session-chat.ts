@@ -948,7 +948,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  문법은 **좌하단 프로필 창과 같은 것**을 쓴다(v2/me-modal.ts) — 그래서 클래스도 그대로 `.v2me-*` 다.
   //   같은 문법이라는 사실을 사람이 모양으로 먼저 읽고, 우리는 셸을 두 벌 만들지 않는다.
   //
-  //  ★ [실행] 구역은 **선택기를 복제하지 않는다** — 머리줄의 그것을 잠시 데려왔다가 닫을 때 되돌린다.
+  //  ★ [이 세션] 의 «무엇으로 도나» 줄은 **선택기를 복제하지 않는다** — 머리줄의 그것을 잠시 데려왔다가 닫을 때 되돌린다.
+  //   (종전엔 [실행] 이라는 따로 된 칸이었다 — 2026-09-19 [이 세션] 아래로 합쳤다.)
   //   복제하면 paintAxis/switchAxis 배선이 두 벌이 되어 언젠가 갈린다. 그리고 이 구역이 있어야
   //   좁은 칸(≤620px, 칩이 물러난 상태)에서도 모델·추론강도를 바꿀 수 있다 — 사다리가 만든 구멍을 여기서 받는다.
   let moreOpen = false;   // 두 번 열면 창 둘이 **같은 선택기**를 서로 뺏어간다(아래 ★ 이주) — 한 번에 하나만.
@@ -959,11 +960,24 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const back = el('div', { class: 'v2me-back' });
     const panel = el('section', { class: 'v2me v2set', role: 'dialog', 'aria-modal': 'true', 'aria-label': '이 세션 설정' });
     let closed = false;
+    //  [이 세션] 은 창을 열면 바로 보이는 칸이라, 창을 열 때마다 선택기가 머리줄을 떠난다. 그 동안 머리줄 묶음의
+    //  **폭을 붙잡아 둔다** — 안 그러면 뒤에서 제목이 그 폭만큼 늘었다가, 닫을 때 다시 줄어드는 게 어두운 막 너머로 보인다.
+    const runHost = el('div', { class: 'v2set-run' });
+    const borrowRun = (): void => {
+      if (runHost.contains(selModel)) return;
+      const w = runTop.getBoundingClientRect().width;
+      if (w > 0) runTop.style.minWidth = w + 'px';
+      runHost.append(chipProv, selHarness, chipModel, selModel, chipEffort, selEffort);
+    };
+    const returnRun = (): void => {
+      runTop.append(chipProv, selHarness, chipModel, selModel, chipEffort, selEffort);
+      runTop.style.minWidth = '';
+    };
     const close = (): void => {
       if (closed) return;
       closed = true; moreOpen = false;
       //  데려온 선택기를 **먼저** 제자리로(패널을 지우면 같이 사라진다).
-      runTop.append(chipProv, selHarness, chipModel, selModel, chipEffort, selEffort);
+      returnRun();
       back.remove();
       document.removeEventListener('keydown', onKey, true);
       if (opener && document.contains(opener)) opener.focus();
@@ -988,7 +1002,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
 
     const secs: Array<{ key: string; label: string; icon: string[]; kids: (HTMLElement | null)[]; danger?: boolean }> = [];
 
-    // ── 이 세션 — 이름·소속·주소 ──
+    // ── 이 세션 — 이름·소속·주소, 그 아래 무엇으로 도나 ──
+    //  종전엔 [실행] 이 따로 한 칸이었다. 원준 2026-09-19: «실행 탭의 내용을 이 세션 탭 아래에 넣고 실행 탭 지워줘» —
+    //  모델·추론강도는 자주 바꾸는데 창을 열 때마다 칸을 한 번 더 눌러야 했다. 창을 열면 바로 보이는 첫 칸으로 옮긴다.
+    //  머리줄의 선택기를 데려오는 규칙(위 ★)은 그대로다 — 데려오는 시점만 [이 세션] 을 볼 때로 바뀌었다(아래 show).
     secs.push({ key: 'sess', label: '이 세션', icon: ['M4 5.5h16v13H4z', 'M4 9.5h16'], kids: [
       canRename() ? row('세션 이름', idLabel(titleText) ? '아직 이름이 없어요' : titleText, '바꾸기', () => startRename()) : null,
       opts.onPickProject && target.owned
@@ -1002,6 +1019,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       opts.openHref ? row(opts.solo ? '전체 화면으로 열기' : '새 창으로 열기',
         opts.solo ? '사이드바까지 있는 라이블리 화면' : '이 세션만 담은 창(대화 + 발자취)', '열기 ↗',
         () => { window.open(opts.openHref!, '_blank', 'noopener'); }) : null,
+      el('div', { class: 'v2set-row' },
+        el('div', { class: 'v2set-t' }, el('span', { class: 'n', text: '무엇으로 도나' }),
+          el('span', { class: 'm', text: 'AI · 모델 · 추론강도 — 고르면 그 자리에서 바뀝니다' })),
+        runHost),
+      target.node ? el('div', { class: 'v2set-row' },
+        el('div', { class: 'v2set-t' }, el('span', { class: 'n', text: '돌아가는 컴퓨터' }),
+          el('span', { class: 'm', text: String(target.node) })),
+        el('span', { class: 'v2set-ro', text: '읽기 전용' })) : null,
+      note('칸이 좁아지면 머리줄의 칩이 물러납니다 — 그때도 여기서 바꿀 수 있어요.'),
     ] });
 
     // ── 보기 — 이 화면을 어떻게 볼까 ──
@@ -1037,20 +1063,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       row('사용법 안내', '터미널·단축키 간단 사용법', '보기', () => termAct('help')),
     ] });
 
-    // ── 실행 — 무엇으로 도나. 머리줄의 선택기를 그대로 데려온다(위 ★). ──
-    const runHost = el('div', { class: 'v2set-run' });
-    secs.push({ key: 'run', label: '실행', icon: ['M12 3.4l1.9 5.7 5.7 1.9-5.7 1.9L12 18.6l-1.9-5.7-5.7-1.9 5.7-1.9z'], kids: [
-      el('div', { class: 'v2set-row' },
-        el('div', { class: 'v2set-t' }, el('span', { class: 'n', text: '무엇으로 도나' }),
-          el('span', { class: 'm', text: 'AI · 모델 · 추론강도 — 고르면 그 자리에서 바뀝니다' })),
-        runHost),
-      target.node ? el('div', { class: 'v2set-row' },
-        el('div', { class: 'v2set-t' }, el('span', { class: 'n', text: '돌아가는 컴퓨터' }),
-          el('span', { class: 'm', text: String(target.node) })),
-        el('span', { class: 'v2set-ro', text: '읽기 전용' })) : null,
-      note('칸이 좁아지면 머리줄의 칩이 물러납니다 — 그때도 여기서 바꿀 수 있어요.'),
-    ] });
-
     // ── 사람 ──
     const sh = shareSessOf(target);
     if (sh) secs.push({ key: 'ppl', label: '사람', icon: ['M12 12.2a4.1 4.1 0 1 0 0-8.2 4.1 4.1 0 0 0 0 8.2', 'M4.6 20.2a7.4 7.4 0 0 1 14.8 0'], kids: [
@@ -1075,9 +1087,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const show = (k: string): void => {
       btns.forEach((b, key) => { b.classList.toggle('on', key === k); b.setAttribute('aria-current', String(key === k)); });
       panes.forEach((pn, key) => { pn.hidden = key !== k; });
-      //  선택기는 [실행] 을 볼 때만 데려온다 — 다른 칸을 보는 동안 머리줄이 비어 있으면 뒤가 허전하다.
-      if (k === 'run') runHost.append(chipProv, selHarness, chipModel, selModel, chipEffort, selEffort);
-      else runTop.append(chipProv, selHarness, chipModel, selModel, chipEffort, selEffort);
+      //  선택기는 [이 세션] 을 볼 때만 데려온다 — 다른 칸을 보는 동안 머리줄이 비어 있으면 뒤가 허전하다.
+      if (k === 'sess') borrowRun();
+      else returnRun();
       contEl.scrollTop = 0;
     };
     for (const sec of secs) {
