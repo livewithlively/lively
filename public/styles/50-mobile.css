@@ -1,0 +1,222 @@
+/* ══════════════════════════════════════════════════════════════════════════════
+   50-mobile.css — 폰(≤640px) 전면 정비 (#4088, 원준 2026-09-19 "그냥 반응형으로 하지 말고 레이아웃을 페이지마다 다시")
+   ─────────────────────────────────────────────────────────────────────────────
+   문법은 **슬랙 모바일**이다.
+   · 왼쪽 레일(56px)은 없다 — 구역은 **아래 탭 바**(.v2-mtabs)가 맡는다. 폰에서 레일은 폭의 14% 를 늘 먹고 있었다(390px 실측).
+   · 구역의 **목록은 화면 한 장**이다 — 사이드바 서랍이 전폭으로 서고, 하나를 고르면 본문이 전폭으로 열린다.
+   · 맨 윗줄은 [☰] [검색 전폭] [타임라인] **한 줄** — 뒤로·앞으로·끌 손잡이·둘째 바(.v2-mbar)는 폰엔 없다.
+   · 본문 안 화면들은 «줄이는» 게 아니라 **세로 흐름으로 다시 짠다** — 표는 제목 열만, 통계 줄은 세로, 흐름 지도는 세로 선로.
+   태블릿(641~900)은 종전 서랍 셸(40-v2.css 모바일 블록)이 그대로다. JS 짝: web/v2/mobile.ts(PHONE_MQ = 같은 640).
+   ⚠ 캐스케이드 맨 뒤(90-dark 바로 앞)에 두는 이유: 화면 파일마다 흩어진 `@media (max-width: 760/900)` 규칙을 폰 문턱에서 되잡아야 해서다.
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* 아래 탭 바·더보기 판은 폰에서만 선다 — 넓은 폭에선 DOM 에만 있고 자리를 차지하지 않는다. */
+.v2-mtabs { display: none; }
+/* 창 맨 윗줄로 옮긴 [타임라인](web/v2/main.ts) — 데스크톱(>900)은 제 단추(.v2-tl-btn)가 있으니 숨긴다. */
+@media (min-width: 901px) { #v2-root.has-topbar > .v2-topbar > .v2-mbar-aside { display: none; } }
+/* 좁은 폭(≤900) 공통 — [타임라인] 은 맨 윗줄 오른쪽 끝, 둘째 바는 서지 않는다(단추가 없으니 43-v2-topbar-search 의 :has 규칙이 접는다). */
+@media (max-width: 900px) {
+  #v2-root.has-topbar > .v2-topbar > .v2-mbar-aside { order: 9; margin-right: 2px; -webkit-app-region: no-drag; }
+  #v2-root.has-topbar > .v2-topbar > .v2-mbar-aside[hidden] { display: none; }
+  /* 세션·프로젝트 화면의 **곁칸**(타임라인·자료·지식 — 42-v2-panes.css 가 좁은 폭에서 display:none 으로 접는다)은
+     [타임라인] 단추가 여는 **오른쪽 서랍**으로 산다(#4088 — 종전엔 폰·태블릿에서 닿을 길이 없었다). 셸의 빈 우패널
+     (.v2-aside — 칸 셸은 맥락을 곁칸에 두므로 늘 비어 있다)은 서랍으로 서지 않는다(안 그러면 빈 흰 판이 곁칸을 덮는다). */
+  #v2-root.m-aside .v2-main .pn-pane[data-zone="side"] { display: flex; position: fixed; top: 0; right: 0; bottom: 0; z-index: 40;
+    width: min(92vw, 420px); border-left: 1px solid var(--line); background: var(--bg); box-shadow: 0 0 0 1px var(--line), 0 18px 48px rgba(var(--shadow-ink), .24); }
+  .v2-aside:has(> .v2-aside-pane:empty) { display: none !important; }
+  /* 태블릿의 넓은 표(WIKI 목록·보드) — 카드 안에서 가로로 굴린다(액자 밖으로 새지 않게). */
+  .wk-board, .pjv-board-body { overflow-x: auto; }
+}
+
+@media (max-width: 640px) {
+  /* ── 0. 뿌리 ─────────────────────────────────────────────────────────────── */
+  #v2-root { --v2-mtabs-h: calc(56px + env(safe-area-inset-bottom, 0px)); }
+  /* 레일은 없다 — 여백도 서랍의 왼쪽 자리도 0. */
+  #v2-root.rail-mode, #v2-root.rail-mode.no-aside { padding-left: 0; }
+  #v2-root.rail-mode > .v2-rail { display: none; }
+  #v2-root.rail-mode .v2-side { left: 0; }
+
+  /* ── 1. 맨 윗줄 — [☰] [검색] [타임라인] 한 줄 ─────────────────────────────── */
+  #v2-root.has-topbar { --v2-tb-h: 48px; }
+  #v2-root.has-topbar > .v2-topbar { height: auto; min-height: var(--v2-tb-h); padding: env(safe-area-inset-top, 0px) 4px 0; gap: 4px; box-sizing: content-box; }
+  #v2-root.has-topbar > .v2-topbar > .v2-mbar-menu { width: 40px; height: 40px; margin: 0; }
+  #v2-root.has-topbar > .v2-topbar > .v2-mbar-menu .v2-mbar-ic { width: 20px; height: 20px; }
+  #v2-root.has-topbar > .v2-topbar > .v2-side-nav { flex: 1 1 auto; min-width: 0; margin: 0; padding: 0; }
+  #v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-nav-sp,
+  #v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-navb { display: none; }   /* 뒤로·앞으로는 브라우저 몫 */
+  #v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-nav-core { flex: 1 1 auto; min-width: 0; }
+  #v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-omnib { width: 100%; max-width: none; height: 36px; }
+  #v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-omnib-k { display: none; }   /* ⌘K 는 폰에 없다 */
+  #v2-root.has-topbar > .v2-topbar > .v2-tb-grip { display: none; }   /* 끌 창이 없다 */
+  #v2-root.has-topbar > .v2-topbar > .v2-mbar-aside { width: 40px; height: 40px; }
+  #v2-root.has-topbar > .v2-mbar { display: none !important; }
+
+  /* ── 2. 서랍 = 화면 한 장 (탭 바 위까지) ──────────────────────────────────── */
+  /* 서랍은 맨 윗줄 **아래**부터 선다 — ☰·검색·[타임라인] 이 그대로 보여 같은 단추로 닫는다. */
+  .v2-side, .v2-aside { top: calc(var(--v2-tb-h, 48px) + env(safe-area-inset-top, 0px)); bottom: var(--v2-mtabs-h); width: 100vw; max-width: 100vw; padding-top: 0; border-radius: 0; }
+  #v2-root:not(.has-topbar) .v2-side, #v2-root:not(.has-topbar) .v2-aside { top: 0; }
+  #v2-root.m-side .v2-side, #v2-root.m-aside .v2-aside { box-shadow: none; border-top: 1px solid var(--line); }
+  .v2-aside { width: min(100vw, 100%); }
+  /* 세션 화면의 곁칸(타임라인·자료·지식) 서랍도 같은 자리·같은 폭 */
+  #v2-root.m-aside .v2-main .pn-pane[data-zone="side"] { top: calc(var(--v2-tb-h, 48px) + env(safe-area-inset-top, 0px)); bottom: var(--v2-mtabs-h); width: 100vw; box-shadow: none; border-left: 0; border-top: 1px solid var(--line); }
+  /* 서랍 안 목록 줄 — 손가락 크기(44px) 그대로, 글자 15px. */
+  .v2-side-sec { padding: 14px 16px 6px 18px; }
+
+  /* ── 3. 아래 탭 바 — 슬랙의 [홈][DM][내 활동][더보기] ─────────────────────── */
+  .v2-mtabs { position: relative; z-index: 42; flex: none; display: flex; align-items: stretch; height: var(--v2-mtabs-h);
+    padding-bottom: env(safe-area-inset-bottom, 0px); box-sizing: border-box; border-top: 1px solid var(--line); background: var(--canvas); }
+  .v2-mtab { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    padding: 6px 2px 4px; border: 0; background: none; color: var(--muted); font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .v2-mtab:active { color: var(--ink); }
+  .v2-mtab.on { color: var(--blue); }
+  .v2-mtab-icw { position: relative; display: inline-flex; width: 28px; height: 26px; align-items: center; justify-content: center; border-radius: 9px; }
+  .v2-mtab.on .v2-mtab-icw { background: var(--bg-sel); }
+  .v2-mtab-ic { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .v2-mtab-t { font-size: 10.5px; font-weight: 700; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  /* 배지 — 레일의 그것(.v2-rail-bd)과 같은 붓. */
+  .v2-mtab-bd { position: absolute; top: -4px; right: -8px; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px;
+    background: var(--warn-deep); color: var(--on-fill); font-size: 10.5px; font-weight: 800; line-height: 17px; text-align: center; font-variant-numeric: tabular-nums; }
+
+  /* ── 4. [더보기] 판 — 탭 바 위로 올라오는 목록 ──────────────────────────── */
+  .v2-msheet { position: absolute; left: 0; right: 0; bottom: 100%; z-index: 43; max-height: min(72vh, 560px); overflow: auto;
+    background: var(--bg); border-top: 1px solid var(--line); border-radius: 16px 16px 0 0;
+    box-shadow: 0 -12px 40px rgba(var(--shadow-ink), .18); overscroll-behavior: contain; }
+  .v2-msheet[hidden] { display: none; }
+  .v2-msheet-h { position: sticky; top: 0; display: flex; align-items: center; justify-content: space-between; padding: 12px 8px 8px 18px; background: var(--bg); }
+  .v2-msheet-ht { font-size: 15px; font-weight: 800; color: var(--ink); }
+  .v2-msheet-x { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border: 0; border-radius: 10px; background: none; color: var(--muted); cursor: pointer; }
+  .v2-msheet-list { display: flex; flex-direction: column; padding: 0 8px calc(10px + env(safe-area-inset-bottom, 0px)); }
+  .v2-msheet-row { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 6px 10px; border: 0; border-radius: 10px; background: none;
+    color: var(--ink); font: inherit; font-size: 15px; font-weight: 600; text-decoration: none; text-align: left; cursor: pointer; }
+  .v2-msheet-row:active { background: var(--bg-tint); }
+  .v2-msheet-row .v2-mtab-ic { width: 22px; height: 22px; color: var(--ink-sub); }
+  .v2-msheet-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v2-msheet-go { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  /* 판이 열리면 배경막이 탭 바 아래로 깔린다(탭 바·판은 39 위). 배경막은 맨 윗줄을 덮지 않는다 — ☰·검색·[타임라인] 은
+     서랍이 열린 동안에도 제 색으로 보이고 같은 단추가 닫는다. */
+  #v2-root.m-sheet .v2-scrim { display: block; }
+  #v2-root.has-topbar > .v2-scrim { top: calc(var(--v2-tb-h, 48px) + env(safe-area-inset-top, 0px)); }
+
+  /* ── 5. 가운데 화면 공통 ───────────────────────────────────────────────── */
+  .v2-center { padding: 16px 16px 28px; }
+  .v2-title { font-size: 20px; }
+  /* 한글 keep-all 은 폰 폭에선 한 어절이 줄을 통째로 밀어낸다 — 어절 안에서도 꺾이게. */
+  .v2-desc, .v2-h1, .v2-title, .v2-frame-h .t { word-break: normal; overflow-wrap: anywhere; }
+  /* 홈 — 실행 줄의 칩은 줄바꿈하되 세로 구분선은 뗀다(줄 끝에 홀로 남던 그것). */
+  .v2-home { padding: 12px 16px 16px; }
+  .v2-home-launch { padding-top: clamp(8px, 3vh, 28px); }
+  .v2-run { flex-wrap: wrap; gap: 2px 0; }
+  .v2-run-sep { display: none; }
+  .v2-run-sel { max-width: 100%; }
+  .v2-launch-in { min-height: 56px; }
+  .v2-home-apps-row { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  /* 확인할 것 — 알림 줄: 제목이 두 줄까지 꺾이고 시각은 오른쪽 끝에 고정(제목 위에 겹치던 것). */
+  .v2-noti-row { display: flex; align-items: flex-start; width: 100%; min-width: 0; box-sizing: border-box; }
+  .v2-noti-row .tw { flex: 1 1 0%; min-width: 0; }
+  .v2-noti-row .t { white-space: normal; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.35; }
+  .v2-noti-row .st { flex: none; padding-top: 2px; }
+  .v2-noti-row .v2-noti-dot { margin-top: 6px; }
+  .v2-inbox-head { flex-wrap: wrap; gap: 8px; }
+  /* 외부 앱 연결 — 통계 셋은 한 줄로 흐르고, 찾기 칸은 그 아래 전폭. */
+  .cn-top { flex-direction: column; align-items: stretch; gap: 10px; }
+  .cn-sum { flex-wrap: wrap; gap: 8px 16px; }
+  .cn-sum-i { white-space: nowrap; }
+  .cn-find { width: 100%; }
+  .cn-head { align-items: flex-start; gap: 10px; }
+  /* 지난 세션·휴지통 — 표 줄은 이름이 꺾이고 부제는 아래로. */
+  .v2-bin-row { flex-wrap: wrap; row-gap: 2px; }
+  .v2-bin-row .tw { flex: 1 1 200px; flex-wrap: wrap; }
+  .v2-bin-row .t { white-space: normal; overflow-wrap: anywhere; }
+  .v2-bin-row .p { max-width: 100%; }
+  .v2-bin-tbl { overflow-x: hidden; }
+  .v2-bin-tools, .v2-bin-filters { flex-wrap: wrap; }
+  /* 자료 — 목록 위·원문 아래(48-v2-sources.css)는 그대로, 목록 높이만 조금 더. */
+  .v2-srl { max-height: 46%; }
+
+  /* ── 6. 프로젝트·세션 화면(칸 셸) ─────────────────────────────────────── */
+  /* 문패 — 한 줄에 이름(줄임) · 오른쪽에 [＋][ⓘ] 아이콘. 좌표·상태는 이름 아래 한 줄. */
+  .pn-door { padding: 8px 12px 8px 14px; gap: 8px; align-items: center; }
+  .pn-door-l { flex: 1 1 auto; min-width: 0; flex-direction: column; align-items: flex-start; gap: 1px; }
+  .pn-door-l .pn-title { flex: 0 1 auto; max-width: 100%; font-size: 17px; line-height: 1.3; }
+  .pn-door-l .pn-title-btn { margin-left: -6px; padding: 1px 6px; gap: 6px; }
+  .pn-title-ic { width: 16px; height: 16px; }
+  .pn-eyebrow { font-size: 11.5px; flex-wrap: wrap; row-gap: 2px; }
+  .pn-door-r { gap: 6px; }
+  .pn-door-r .pn-door-btn { width: 36px; height: 36px; padding: 0; justify-content: center; border-radius: 10px; }
+  .pn-door-r .pn-door-btn > span { display: none; }   /* 글자는 툴팁으로 — 폰의 문패는 아이콘 둘이다 */
+  .pn-door-r .pn-door-btn svg { width: 17px; height: 17px; }
+  .pn-door-r .sw-btn { display: none; }
+  /* 세션 머리줄·입력은 36-chat.css 의 ≤760 규칙이 맡는다. 대화 여백만 폰에 맞춘다. */
+  .livc-list { padding: 12px 12px 8px; }
+  .livc-desktop .livc-list { padding: 12px 12px 8px; }
+  .livc-desktop .dt-bubble { max-width: 94%; }
+
+  /* ── 7. 리브 ───────────────────────────────────────────────────────────── */
+  .v2-livpage { padding: 6px 8px 8px; }
+
+  /* ── 8. 앱 프레임(클래식 화면을 실은 액자) 머리줄 ──────────────────────── */
+  .v2-frame-h { padding: 6px 10px; }
+  .v2-frame-h .t { font-size: 14px; }
+
+  /* ── 9. 창들 — 내 프로필·환경설정(46-v2-me.css ≤760 이 전폭으로 만든다) · 통합검색 · 런치패드 ── */
+  .v2me-nav { gap: 2px; padding: 6px 8px; }
+  .v2me-nav-b { padding: 8px 10px; font-size: 13.5px; }
+  .v2-omni { padding: 10px 8px 8px; }
+  .v2-pad-grid { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+}
+
+/* ══ 클래식 화면(액자 안 · body.embed)과 공용 부품 — 폰 폭에서 세로 흐름으로 ═════════════════════
+   액자 안 문서는 같은 index.html 이라 이 파일이 같이 실린다. 폭은 액자의 폭(= 폰 전폭)이다. */
+@media (max-width: 640px) {
+  /* 표(프로젝트 보드·WIKI 목록·자료·검토 대기) — 폰에선 **제목 열만** 남긴다. 나머지 열은 표 밖(상세)에서 본다.
+     ⚠ 열을 숨기는 것이지 기능을 숨기는 것이 아니다 — 제목을 누르면 열리는 상세에 그 값이 전부 있다. */
+  .pjv-trow > .pjv-tcell:not(.pjv-trow-title-cell), .pjv-tgroup-head-cols > .pjv-tcell:not(.pjv-trow-title-cell),
+  .pjv-thead .pjv-tcell:not(.pjv-trow-title-cell), .pjv-colhead.pjv-stdcol,
+  .wk-trow > .wk-tcell, .wk-colhead .pjv-colhead.pjv-stdcol, .pjv-tcell-add { display: none; }
+  /* 행은 격자(열 폭을 JS 가 인라인으로 준다)가 아니라 **한 줄 flex** 로 — 숨긴 열이 빈 트랙으로 남지 않는다. */
+  .pjv-trow, .pjv-tgroup-head.pjv-tgroup-head-cols { display: flex !important; grid-template-columns: none !important; min-width: 0; }
+  .pjv-trow > .pjv-tcell, .pjv-tgroup-head-cols > .pjv-tcell { flex: none; }
+  .pjv-trow > .pjv-trow-title-cell, .pjv-tgroup-head-cols > .pjv-trow-title-cell { flex: 1 1 auto; min-width: 0; }
+  .pjv-trow-title { white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
+  /* 호버로만 뜨던 줄 안 단추들은 폰에 없다 — 같은 일은 줄 끝 ⋯ 메뉴가 한다(늘 보이게). */
+  .pjv-row-actions { display: none; }
+  .pjv-trow-more { opacity: 1; }
+  /* 보드 셸 카드는 main 패딩(넓은 화면 16px)을 음수 여백으로 상쇄해 뷰포트 끝까지 붙는다(16-projects-board.css) —
+     폰의 main 패딩은 위에서 8px 로 줄였으니 상쇄도 8px 다(16 그대로면 액자 밖으로 8px 넘친다). */
+  .pjv-listboard.pjv-has-side { margin-left: -8px; margin-right: -8px; }
+  /* 보드 머리 3층 — 줄바꿈하되 툴바 단추는 한 줄에 최대한. */
+  .pjv-board-header { padding-left: 10px; padding-right: 10px; }
+  .pjv-tasks-head-left, .pjv-tasks-head-right { flex-wrap: wrap; }
+  .pjv-board-pad, .wk-board-pad { padding-left: 10px; padding-right: 10px; }
+  /* 카드 폭·여백 */
+  body.embed main { padding-left: 8px; padding-right: 8px; }
+  body.embed .card { padding: 14px 14px; }
+  /* 맥락 관리 — 흐름 지도를 세로 선로로 (외부 앱 ↓ 수집기 ↓ 자료 ↓ 증류기 ↓ 지식 ↓ 주입 ↓ AI 세션). */
+  .cxm-floor { padding: 12px; }
+  .cxm-lane { flex-direction: column; overflow-x: visible; }
+  .cxm-st { min-width: 0; width: 100%; }
+  .cxm-duct { width: auto; height: auto; min-height: 72px; display: flex; align-items: center; justify-content: center; padding: 22px 0; }
+  .cxm-duct-c { position: static; transform: none; }
+  .cxm-wire { left: calc(50% - 1.5px); right: auto; top: -2px; bottom: -2px; width: 3px; height: auto; }
+  .cxm-wire.is-still { background: repeating-linear-gradient(180deg, var(--line-net-2) 0 8px, transparent 8px 14px); }
+  .cxm-wire.is-flow::after { background: repeating-linear-gradient(180deg, var(--mint) 0 10px, transparent 10px 22px); animation: cxm-flow-v 1.8s linear infinite; }
+  .cxm-arr { right: auto; left: calc(50% - 6.5px); top: auto; bottom: -3px; transform: rotate(90deg); }
+  .cxm-svts:has(.cxm-empty) { display: flex; align-items: center; justify-content: center; }
+  .cxm-empty { white-space: normal; }
+  .cxm-cell, .cxm-cell-inbox { flex-wrap: wrap; }
+  .cxm-cell-inbox > .btn { width: 100%; justify-content: center; }
+  .cxm-cell-s { flex: 1 1 100%; white-space: normal; }
+  /* 세션 이력 — 한 줄에 [제목·메타][완전 삭제][이어보기] 셋이 서던 것을 두 줄로. */
+  .sess-row { flex-wrap: wrap !important; row-gap: 6px !important; }
+  .sess-row > :first-child { flex: 1 1 100%; min-width: 0; }
+  /* 홈(클래식) 코크핏 — 폰에선 페이지 스크롤로, 인사 줄은 꺾인다. */
+  body[data-route="dashboard"] { height: auto; overflow: auto; }
+  body[data-route="dashboard"] main { padding: 10px 10px 16px; }
+  .dash-strip { flex-wrap: wrap; row-gap: 8px; }
+  .dash-acts { margin-left: 0; flex-wrap: wrap; width: 100%; }
+  .dash { height: auto; }
+  /* 로그인 문 — 카드 여백 */
+  #gate { padding: 16px; }
+  .gate-card { padding: 24px 20px; }
+}
+@keyframes cxm-flow-v { from { background-position: 0 0; } to { background-position: 0 22px; } }
