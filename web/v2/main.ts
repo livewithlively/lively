@@ -235,6 +235,7 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
     },
   }));
   tab.aside.replaceChildren();   // 우패널 없음 — 맥락은 화면 안(칸)에서 산다
+  if (tabsApi && tabsApi.active() === tab) applyTabChrome(tab);   // 좁은 폭의 [타임라인] 단추가 곁칸을 알게(#4088)
 }
 // 프로젝트 목록은 워크스페이스 전체(수백 건·설명 포함이라 1MB 를 넘는다) — 세션처럼 20초마다 당기지 않는다.
 const PROJ_TTL_MS = 5 * 60 * 1000;
@@ -313,6 +314,8 @@ export async function bootV2(): Promise<void> {
     mobile = mountMobileChrome(root, sideEl!, asideEl!);
     root.prepend(mobile.bar);
     root.append(mobile.scrim);
+    //  폰 아래 탭 바(#4088) — 맨 뒤(flex 열의 발치). 넓은 폭에선 CSS 가 숨긴다(50-mobile.css).
+    root.append(mobile.tabs);
     // 데스크톱 앱(frameless 창)이면 **창 맨 윗줄**을 셸이 가져간다. #1883 뒤에는 탭이 아니라
     // 창 버튼·드래그 영역만 남는다. 브라우저에서 연 웹 UI 에선 null 이다.
     titlebar = mountTitlebar(root);
@@ -332,6 +335,9 @@ export async function bootV2(): Promise<void> {
       webTopbar = el('div', { class: 'v2-topbar v2-topbar--web' }, el('div', { class: 'v2-tb-grip' })) as HTMLElement;
       root.prepend(webTopbar);
       root.classList.add('has-topbar', 'topbar-web');
+      //  #4088 — 좁은 폭의 [타임라인] 단추도 이 줄 오른쪽 끝으로. 종전엔 그 단추 하나를 위해 46px 짜리 바(.v2-mbar)가
+      //   한 줄 더 섰다(폰에서 크롬 한 줄은 대화 세 줄이다). 넓은 폭에선 CSS 가 숨긴다(데스크톱은 .v2-tl-btn 이 맡는다).
+      webTopbar.append(mobile.asideBtn);
     }
     if (titlebar) titlebar.host.prepend(mobile.menuBtn); else webTopbar?.prepend(mobile.menuBtn);
     //  넓은 폭에서 그 ☰ 는 이제 **레일을 여닫는다**(#2016 원준 2026-08-25: "지금 사이드바는 닫을 수는 없는
@@ -991,7 +997,11 @@ function applyTabChrome(tab: ShellTab): void {
   //   ⚠ 접기는 **열 폭 0** 이다(47-v2-rail.css:326 rail-hidden 과 같은 규율) — display:none 으로 빼면 그리드 열이
   //    한 칸씩 밀려 본문이 0px 열에 앉는다. 판정은 화면 키 하나(app:context)로, 여기 한 자리에서만 한다.
   root!.classList.toggle('app-ctx', CTX_FULL_WIDTH.has(activeKeyOf(tab.route)));
-  if (mobile) mobile.setAside(!tab.noAside || guest);   // 모바일 상단 바의 [타임라인] — 우패널이 없는 화면(앱 프레임)에선 버튼도 없다
+  //  모바일 맨 윗줄의 [타임라인] — 우패널이 없는 화면(앱 프레임)에선 버튼도 없다.
+  //  #4088 — 칸 셸(세션·프로젝트)은 우패널 대신 **곁칸**을 가진다. 좁은 폭에선 그 곁칸이 접혀 있으니(42-v2-panes.css)
+  //   이 단추가 그 곁칸을 서랍으로 연다(50-mobile.css `#v2-root.m-aside .pn-pane[data-zone="side"]`). 셸이 아직 안 섰으면
+  //   mountProjectShell 끝에서 이 함수를 한 번 더 부른다.
+  if (mobile) mobile.setAside(!tab.noAside || guest || (mobile.isMobile() && !!tab.center.querySelector('.pn-pane[data-zone="side"]')));
   // 리브 페이지를 떠나면 그 폴링이 멈추게(liv.ts 는 body.dataset.route==='liv' 동안만 폴링).
   document.body.dataset.route = routeKey(tab.route) === 'raw:liv' || parseRoute(tab.route).segs[0] === 'liv' ? 'liv' : 'v2';
 }
@@ -2022,6 +2032,7 @@ function syncRailBtn(): void {
 
 function drawSide(): void {
   drawRail();
+  mobile?.syncTabs(railCounts());   // 폰 아래 탭 바의 켜짐·배지도 레일과 같은 박자로(#4088)
   if (!sideEl) return;
   //  #2423 앱 소유 사이드바 — 자료 갈래는 side.ts render() 가 activeKey 로 직접 판정한다(구역들과 같은 틀).
   if (!sideTreeHost || !sideEl.contains(sideTreeHost)) {

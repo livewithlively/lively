@@ -42,7 +42,11 @@ const read = (k: string): boolean => { try { return localStorage.getItem(k) === 
 const write = (k: string, v: boolean): void => { try { if (v) localStorage.setItem(k, '1'); else localStorage.removeItem(k); } catch (_) { /* noop */ } };
 
 /** 자동 자리바꿈이 켜져 있나(기본 켜짐). */
-export const swapEnabled = (): boolean => !read(KEY_OFF);
+//  ⚠ 좁은 폭(≤900px)에선 곁칸이 아예 접혀 있다(42-v2-panes.css) — 그런데 폭 변수(--pn-side-w)는 남아 있어 «곁칸이
+//   화면 절반을 넘었다» 로 판정돼 세션을 열 때마다 자리바꿈 안내 창이 떴다(#4088 폰 실측). 곁칸이 없는 폭에선 «없는 이야기»다.
+const NARROW_MQ = '(max-width: 900px)';   // = 42-v2-panes.css 곁칸 접힘 문턱 · v2/mobile.ts MOBILE_MQ
+const narrow = (): boolean => { try { return window.matchMedia(NARROW_MQ).matches; } catch (_) { return false; } };
+export const swapEnabled = (): boolean => !read(KEY_OFF) && !narrow();
 
 export interface SideSwapHost {
   body: HTMLElement;        // .pn-body — 격자 그 자체
