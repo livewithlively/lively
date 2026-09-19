@@ -23,9 +23,9 @@
      (.v2-aside — 칸 셸은 맥락을 곁칸에 두므로 늘 비어 있다)은 서랍으로 서지 않는다(안 그러면 빈 흰 판이 곁칸을 덮는다). */
   #v2-root.m-aside .v2-main .pn-pane[data-zone="side"] { display: flex; position: fixed; top: 0; right: 0; bottom: 0; z-index: 40;
     width: min(92vw, 420px); border-left: 1px solid var(--line); background: var(--bg); box-shadow: 0 0 0 1px var(--line), 0 18px 48px rgba(var(--shadow-ink), .24); }
-  .v2-aside:has(> .v2-aside-pane:empty) { display: none !important; }
+  .v2-aside:has(> .v2-aside-pane:not([hidden]):empty) { display: none !important; }   /* ⚠ 탭마다 판이 하나씩(tabs.ts) — 안 보이는 탭의 빈 판에 걸리지 않게 [hidden] 을 뺀다 */
   /* 태블릿의 넓은 표(WIKI 목록·보드) — 카드 안에서 가로로 굴린다(액자 밖으로 새지 않게). */
-  .wk-board, .pjv-board-body { overflow-x: auto; }
+  .wk-board { overflow-x: auto; }   /* 프로젝트 보드의 가로 스크롤 상자(.pjv-board-scroll)는 원래부터 auto 다 */
 }
 
 @media (max-width: 640px) {
@@ -116,7 +116,6 @@
   .v2-noti-row .t { white-space: normal; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.35; }
   .v2-noti-row .st { flex: none; padding-top: 2px; }
   .v2-noti-row .v2-noti-dot { margin-top: 6px; }
-  .v2-inbox-head { flex-wrap: wrap; gap: 8px; }
   /* 외부 앱 연결 — 통계 셋은 한 줄로 흐르고, 찾기 칸은 그 아래 전폭. */
   .cn-top { flex-direction: column; align-items: stretch; gap: 10px; }
   .cn-sum { flex-wrap: wrap; gap: 8px 16px; }
@@ -129,7 +128,7 @@
   .v2-bin-row .t { white-space: normal; overflow-wrap: anywhere; }
   .v2-bin-row .p { max-width: 100%; }
   .v2-bin-tbl { overflow-x: hidden; }
-  .v2-bin-tools, .v2-bin-filters { flex-wrap: wrap; }
+  .v2-bin-tools { flex-wrap: wrap; }
   /* 자료 — 목록 위·원문 아래(48-v2-sources.css)는 그대로, 목록 높이만 조금 더. */
   .v2-srl { max-height: 46%; }
 
@@ -186,8 +185,8 @@
   .pjv-listboard.pjv-has-side { margin-left: -8px; margin-right: -8px; }
   /* 보드 머리 3층 — 줄바꿈하되 툴바 단추는 한 줄에 최대한. */
   .pjv-board-header { padding-left: 10px; padding-right: 10px; }
-  .pjv-tasks-head-left, .pjv-tasks-head-right { flex-wrap: wrap; }
-  .pjv-board-pad, .wk-board-pad { padding-left: 10px; padding-right: 10px; }
+  .pjv-tasks-head-left { flex-wrap: wrap; }   /* 오른쪽 툴바(.card-head-actions)는 22-responsive.css ≤720 이 이미 꺾는다 */
+  .wk-board-pad { padding-left: 10px; padding-right: 10px; }
   /* 카드 폭·여백 */
   body.embed main { padding-left: 8px; padding-right: 8px; }
   body.embed .card { padding: 14px 14px; }

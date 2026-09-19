@@ -91,8 +91,10 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   const closeAll = (returnFocus = false): void => {
     if (!open && !sheetOpen) return;
     const was = open;
+    const wasSheet = sheetOpen;
     open = null; sheetOpen = false; paint();
-    if (!was) return;
+    //  [더보기] 판도 같은 규칙 — Esc 로 닫았으면 초점을 연 단추([더보기])로 돌려준다(판이 hidden 이 되면 초점이 body 로 떨어진다).
+    if (!was) { if (wasSheet && returnFocus && moreBtn) moreBtn.focus({ preventScroll: true }); return; }
     const panel = was === 'side' ? side : aside;
     if (returnFocus) { (was === 'side' ? menuBtn : asideBtn).focus({ preventScroll: true }); }
     else if (panel.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
@@ -197,8 +199,9 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
           bd.setAttribute('aria-label', `확인할 것 ${inboxCount}건`);
         } else if (bd) bd.remove();
       }
-      //  목록이 열린 구역은 «눌린» 것으로도 보인다 — 같은 자리를 다시 누르면 닫힌다는 손짓.
-      b.setAttribute('aria-expanded', String(open === 'side' && k === sec && k !== 'home' && k !== 'inbox'));
+      //  목록을 여는 구역만 «펼침» 상태를 갖는다 — 같은 자리를 다시 누르면 닫힌다는 손짓. 홈·확인할 것은 화면으로 가는 단추라 그 속성이 없다.
+      if (k === 'home' || k === 'inbox') b.removeAttribute('aria-expanded');
+      else b.setAttribute('aria-expanded', String(open === 'side' && k === sec));
     }
     if (moreBtn) { moreBtn.classList.toggle('on', sheetOpen); moreBtn.setAttribute('aria-expanded', String(sheetOpen)); }
     sheet.hidden = !sheetOpen;
