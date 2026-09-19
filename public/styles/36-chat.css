@@ -235,7 +235,13 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-bar { display: flex; align-items: center; gap: 12px; padding: 12px 22px 16px; border-top: 1px solid var(--line); background: var(--bg-tint); }
 .sc-bar-t { font-size: 13px; color: var(--ink-sub); flex: 1; min-width: 0; line-height: 1.5; }
 
-.sc-older { display: flex; justify-content: center; padding: 8px 0 14px; }
+/* 위로 더(#3778) — 단추가 아니라 스크롤이 부른다(web/lib/older-autoload.ts). 이 줄이 보인다는 건 곧 부르고 있다는 뜻이라
+   조용한 한 줄이면 된다. 높이를 고정해 «불러오는 중 ↔ 실패·다시 시도» 가 바뀌어도 아래 대화가 밀리지 않게 한다. */
+.sc-older { display: flex; justify-content: center; align-items: center; gap: 8px; min-height: 32px; padding: 8px 0 14px; }
+.sc-older-t { font-size: 12.5px; line-height: 1.4; color: var(--muted); }
+.sc-older-spin { flex: none; width: 12px; height: 12px; border-radius: 50%; box-sizing: border-box;
+  border: 2px solid var(--line-net); border-top-color: var(--muted); animation: sc-liv-boot-spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .sc-older-spin { animation: none; } }
 .sc-empty p { font-size: 13.5px; line-height: 1.7; color: var(--ink-sub); margin: 0 0 10px; }
 
 .sc-idx { width: 340px; max-height: 60vh; overflow: auto; padding: 6px; }

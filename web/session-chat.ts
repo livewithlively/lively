@@ -14,7 +14,7 @@
 //  ── Claude Code(데스크톱)와 맞추려 한 것 ──
 //   턴 = 내 말 + 그 아래 AI 가 한 모든 것 / 도구 호출은 `읽기 src/x.ts` 식 이름+대상 한 줄, 펼치면 입출력 원문 / 생각은 접힌 카드 /
 //   돌 때 경과 시간 줄 + Esc 로 멈춤 / 답을 읽고 있으면 스크롤을 뺏지 않음 / 확인(승인) 대기는 배너로 / 긴 기록은 꼬리부터,
-//   위로 [이전 대화 불러오기] / 질문 목차 / 코드 복사 / 터미널은 **버리지 않고** 토글(승인 대화상자 등 터미널이 맞는 순간이 있다).
+//   위로 올리면 이전 대화가 저절로 이어 붙음(#3778 — 종전엔 꼭대기의 단추를 눌러야 했다) / 질문 목차 / 코드 복사 / 터미널은 **버리지 않고** 토글(승인 대화상자 등 터미널이 맞는 순간이 있다).
 //
 //  ── 안 하는 것 ──
 //   대화 uuid 를 추측하지 않는다(서버 원칙) — 매핑이 없으면 '기록 아직 없음'으로 말하고 터미널을 권한다.
@@ -34,6 +34,7 @@ import { rememberCreated } from './v2/created-cache.js';
 import { rememberFirstPrompt, rememberUnsentDraft, takeFirstPrompt } from './v2/quick-session.js';   // #2439 — 되살린 세션의 첫 지시 낙관 렌더   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게 · #3891 못 간 말은 옮겨 간 화면 입력칸으로
 import { withRetry } from './lib/restore-retry.js';   // #3891 — 복원 요청은 끊김에만 짧게 다시 묻는다(서버 복원이 멱등이라 안전)
 import { canForceRestore, RESTORE_FORCE_LABEL } from './lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다
+import { olderLoader, olderNext, olderRequest } from './lib/older-autoload.js';   // #3778 «위로 더» 는 단추가 아니라 스크롤이 부른다
 // #3778 — 「지금 보고 있는 사람」·[공유] 는 **세션의 머리줄**에 산다. 종전엔 셸 문패(v2/panes.ts)에 있었는데,
 //  그 줄의 왼쪽은 프로젝트 이름이라 한 줄이 두 주체를 번갈아 말했다 — 「공유」가 프로젝트 공유로 읽혔다.
 //  세션은 이미 자기 머리줄을 갖고 있다(여기) — 이름·하네스·⋯ 가 다 여기 있으니 공유도 여기가 집이다.
@@ -78,7 +79,7 @@ export interface SessionChatHandle {
   destroy(): void;
 }
 
-const WINDOW = 1_500_000;          // 첫 로드·[이전 불러오기] 한 번에 읽는 바이트(긴 세션은 30MB — 꼬리부터)
+const WINDOW = 1_500_000;          // 첫 로드·위로 더 불러오기 한 번에 읽는 바이트(긴 세션은 30MB — 꼬리부터)
 const POLL_RUN_MS = 700;           // 도는 중(블록 단위로 즉시 쌓인다 — 이 값이 체감 지연)
 const POLL_IDLE_MS = 3000;         // 살아 있고 안 도는 중(다음 지시를 터미널에서 칠 수도 있다)
 const POLL_SAFETY_MS = 30_000;     // #3699 서버가 밀어 주는 동안의 **안전망** 주기(통보를 놓쳐도 여기서 따라잡는다)
@@ -1548,30 +1549,53 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   }
 
   // 위로 더 — [from-WINDOW, from) 창을 읽어 **턴 단위로 거꾸로** 앞에 끼운다(보고 있던 자리는 그대로).
+  //  ★ #3778 — 부르는 것은 단추가 아니라 **스크롤**이다. 맨 위 표지가 화면 두 장 앞까지 오면 알아서 불러 붙인다
+  //   (lib/older-autoload.ts). 종전엔 꼭대기에 닿은 뒤 단추를 눌러야 해서 읽기가 거기서 끊겼다.
   let olderEl: HTMLElement | null = null;
+  let olderStalls = 0;    // 창이 한 바이트도 못 올라간 횟수 — olderRequest 가 창을 넓히고, 그래도 안 되면 그 줄을 건너뛴다
+  let olderGen = 0;       // clearAll 마다 +1 — 비우기 전에 떠난 요청이 새 목록에 옛 대화를 끼우지 않게
+  const olderAuto = olderLoader(view.list, () => loadOlder());
+  function olderBusyKids(): Node[] {
+    return [el('span', { class: 'sc-older-spin', 'aria-hidden': 'true' }),
+      el('span', { class: 'sc-older-t', text: loadedFrom > 0 ? '이전 대화 불러오는 중…' : '압축 전 대화 불러오는 중…' })];
+  }
   function olderBar(): void {
     olderEl?.remove();
     // ⚠ 타임라인 범위는 이제 이 창과 무관하다(#1819) — 얇은 판으로 **세션 전체**를 따로 붓는다(loadThinTrail).
-    if (loadedFrom <= 0 && !oldestPrev) { olderEl = null; return; }
-    const kb = Math.round(loadedFrom / 1024);
-    const label = loadedFrom > 0 ? `이전 대화 불러오기 (${kb >= 1024 ? (kb / 1024).toFixed(1) + 'MB' : kb + 'KB'} 더 있음)` : '압축 전 대화 불러오기';
-    const btn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: label }) as HTMLButtonElement;
-    btn.addEventListener('click', () => { void loadOlder(btn); });
-    const bar = el('div', { class: 'sc-older' }, btn) as HTMLElement;
+    if (loadedFrom <= 0 && !oldestPrev) { olderEl = null; olderAuto.watch(null); return; }
+    //  표지는 «불러오는 중» 한 가지 얼굴이다 — 이게 화면에 보인다는 건 곧 부르고 있다는 뜻이다(보이기 두 장 전에 이미 불렀다).
+    const bar = el('div', { class: 'sc-older', role: 'status' }, ...olderBusyKids()) as HTMLElement;
     olderEl = bar;
     view.list.prepend(bar);
+    olderAuto.watch(bar);
   }
-  async function loadOlder(btn: HTMLButtonElement): Promise<void> {
-    if (!src || (loadedFrom <= 0 && !oldestPrev)) return;
-    btn.disabled = true; btn.textContent = '불러오는 중…';
+  /** 실패 — 표지에 적고 멈춘다(되묻기 폭주 금지). 그 자리를 떠났다 돌아오거나 [다시 시도] 로 다시 부른다. */
+  function olderFailed(why: string): void {
+    const bar = olderEl;
+    if (!bar) return;
+    const retry = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '다시 시도' }) as HTMLButtonElement;
+    retry.addEventListener('click', () => { replaceKids(bar, ...olderBusyKids()); olderAuto.retry(); });
+    replaceKids(bar, el('span', { class: 'sc-older-t', text: '이전 대화를 불러오지 못했어요.', title: why }), retry);
+  }
+  async function loadOlder(): Promise<boolean> {
+    if (loadedFrom <= 0 && !oldestPrev) return false;
+    if (!src) { olderFailed('읽을 곳을 아직 모릅니다.'); return false; }
+    const gen = olderGen;
     // 같은 파일의 앞 창, 또는(파일 머리에 닿았으면) 압축 전 파일의 꼬리 창.
     const intoPrev = loadedFrom <= 0 && !!oldestPrev;
-    const q: Record<string, string | number> = intoPrev ? { uuid: oldestPrev as string, tail: WINDOW } : { from: Math.max(0, loadedFrom - WINDOW), to: loadedFrom };
+    const prevFrom = loadedFrom;
+    const r = olderRequest(loadedFrom, olderStalls, WINDOW);
+    const q: Record<string, string | number> = intoPrev ? { uuid: oldestPrev as string, tail: WINDOW } : { from: r.from, to: r.to };
     if (!intoPrev && src.kind === 'box' && oldestUuid && oldestUuid !== curUuid) q.uuid = oldestUuid;
     let chunk: RawChunk;
     try { chunk = await rawGet(srcPath(src, q)); }
-    catch (e: any) { btn.disabled = false; btn.textContent = '다시 시도'; toast(e?.message || '이전 대화를 불러오지 못했습니다.'); return; }
-    if (destroyed) return;
+    catch (e: any) { if (!destroyed && gen === olderGen) olderFailed(e?.message || '이전 대화를 불러오지 못했습니다.'); return false; }
+    if (destroyed || gen !== olderGen) return false;
+    //  한 바이트도 못 올라갔다 — 청한 구간이 한 줄의 꼬리 안이었다(olderRequest 머리말). 같은 요청을 되풀이하지 않고
+    //   다음 번엔 넓히거나 건너뛴다. 표지는 그대로라 로더가 «아직 그 거리 안인가» 를 다시 묻고 곧바로 이어 부른다.
+    const step = olderNext(prevFrom, olderStalls, chunk.from);
+    if (!intoPrev && !step.moved) { olderStalls = step.stalls; return true; }
+    olderStalls = 0;
     const from = chunk.from;                     // 서버가 줄 경계로 맞춘 창(#1746) — 첫 줄 버리기 없음
     if (intoPrev) { oldestUuid = oldestPrev; oldestPrev = null; }
     if (from === 0) oldestPrev = chunk.prev || null;
@@ -1646,6 +1670,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     for (let i = olderOps.length - 1; i >= 0; i--) olderOps[i]();
     trailResults(olderResults);   // 오류 표시는 **항목이 다 들어간 뒤** 얹는다(id 로 찾으므로 순서가 뒤집히면 못 찾는다)
     titleFromFirstAsk();
+    return true;
   }
 
   // 폴링 — 도는 중이면 촘촘히, 아니면 느슨히. 탭이 숨어 있으면 건너뛴다.
@@ -1744,7 +1769,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   }
   function clearAll(): void {
     recs.splice(0); cur = null; carry = ''; loadedFrom = loadedTo = 0; running = false;
-    view.list.replaceChildren(); olderEl = null;
+    view.list.replaceChildren(); olderEl = null; olderAuto.watch(null); olderGen++; olderStalls = 0;
     trail?.clear();
   }
 
@@ -2212,6 +2237,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         else if (src && src.kind === 'log' && isBox() && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; if (pollTimer) clearTimeout(pollTimer); schedule(); }
       }
     },
-    destroy() { destroyed = true; if (pollTimer) clearTimeout(pollTimer); stopWatchOutbox(); offEvents(); offViewers(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
+    destroy() { destroyed = true; if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }
