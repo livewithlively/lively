@@ -143,8 +143,10 @@ ok(V({ lastSeen: DAY - 1 }) === "cut",
     "W8 옮긴 뒤의 저장만 세션 키를 걸러낸다 — 옮기기 전에 걸러내면 옮길 것을 잃는다");
   ok(/if \(Array\.isArray\(out\?\.dismissed_sessions\)\) dismissedRefs =/.test(INST),
     "W9 치운 세션 id 는 성공한 판에서만 갈아 끼운다 — 실패 판에 빈 집합으로 덮으면 한 틱에 전부 되살아난다");
-  ok(/dismissedSection\(data, hooks\)/.test(BINS),
-    "W10 아카이브 화면에 「치운 세션」이 선다 — 치운 것을 보고 되돌릴 자리");
+  //  #3778(2026-09-19) — 「아카이브 ▸ 치운 세션」 표는 「지난 세션」 화면의 **한 표**로 합쳐졌다.
+  //   치운 것은 그 표에 「치움」 꼬리표를 달고 서고, 칩 하나로 그것만 골라 볼 수 있다.
+  ok(/scope === 'dismissed'/.test(BINS) && /'치운 것'/.test(BINS) && /restoreDismissedSessions\(ids\)/.test(BINS),
+    "W10 「지난 세션」 화면이 치운 것을 골라 보고 되돌릴 자리를 준다");
 
   //  W11 — 치움과 #3856 자물쇠(hold-rules.ts)의 맞물림. 「지금 볼 것」에 붙들린 세션을 치우면 그 행은 목록을 떠나고,
   //   목록 이탈은 곧 해제다(pruneHolds). 치운 행이 자물쇠를 들고 남으면 되돌렸을 때 옛 자리로 튀어 오른다.

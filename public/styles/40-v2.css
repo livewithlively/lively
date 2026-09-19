@@ -1850,6 +1850,17 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-bin-row.proj .tw { flex-direction: column; align-items: flex-start; gap: 1px; }
 .v2-bin-row.proj .t { font-weight: 650; }
 .v2-bin-row.proj .p { max-width: none; }
+/* 「지난 세션」 화면(#3778) — 표 문법은 그대로 쓰고 세 가지만 보탠다: 기간 고르개 · 묶음 머리줄의 접기 단추 · 작은 꼬리표. */
+.v2-bin-pick { font: inherit; font-size: 12px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--ink-note); }
+.v2-bin-pick:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-bin-gt { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.v2-bin-gt .v2-car { display: inline-block; transition: transform .12s ease; color: var(--muted-2); }
+.v2-bin-gt[aria-expanded="true"] .v2-car { transform: rotate(90deg); }
+.v2-bin-gt b { font-weight: 800; color: var(--ink-sub); }
+.v2-bin-gt:hover b { color: var(--ink); }
+.v2-bin-tag { margin-left: 7px; font-size: 11px; font-weight: 700; color: var(--muted-head); border: 1px solid var(--line-net); border-radius: 999px; padding: 1px 7px; }
+.v2-bin-tbl.past td.c-kind { color: var(--muted); }
+.v2-bin-tbl.past tr.dism td.c-name .t { color: var(--ink-sub); }
 .v2-bin-caret { flex: none; width: 22px; height: 22px; border: 0; background: none; border-radius: 6px; color: var(--muted); font-size: 12px; cursor: pointer; }
 .v2-bin-caret:hover { background: var(--bg-tint-2); color: var(--ink-note); }
 .v2-bin-caret.none { text-align: center; line-height: 22px; cursor: default; }
