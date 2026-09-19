@@ -341,6 +341,34 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
     reviewBanner = el('div', { class: 'wk-banner always' },
       el('span', { class: 'wk-banner-txt', text: '검토 대기 — 승인 전까지 검색·세션주입·목록에 노출되지 않습니다' + (k.confidence === 'ai' ? ' (에이전트가 작성)' : '') }),
       ...acts);
+  } else if (k.lifecycle === 'archived') {
+    // 보관은 되돌릴 수 있어야 한다 — 보관된 지식은 검색·세션주입·목록에서 빠지므로,
+    // 잘못 보관되면 사라졌다는 사실조차 눈에 띄지 않는다. MCP 는 →active 를 막으니(#783 자가승인 차단)
+    // 복원은 웹 경로에 있어야 한다.
+    //  단 미러(observed)는 제외한다. 미러의 보관은 사람이 정한 상태가 아니라 원본에서 전파된 것이고(#638),
+    //  재싱크가 원본을 다시 덮어쓴다(mirror-knowledge 의 lifecycle CASE) — 여기서 되살려도 다음 싱크에
+    //  조용히 되돌아가고, 원본이 복원되면 싱크가 알아서 active 로 올린다. 같은 이유로 이 파일의
+    //  canMeta 도 !observed 다.
+    const acts: any[] = [];
+    if (canEdit && !observed) {
+      acts.push(el('button', {
+        class: 'btn btn-ghost btn-sm', text: '↩ 복원',
+        onclick: async () => {
+          try {
+            await api('/api/ui/knowledge/' + encodeURIComponent(k.name) + '/lifecycle', { method: 'POST', body: JSON.stringify({ lifecycle: 'active' }) });
+            toast('복원 — 다시 지식으로 반영했습니다'); reload();
+          } catch (e: any) { toast('실패 — ' + e.message, true); }
+        },
+      }));
+    }
+    // 보관된 채로 검토 대기 수정을 안고 있을 수 있다(제안 산출은 lifecycle 을 보지 않는다).
+    // 복원이 검토의 전제라 배너는 이쪽이 이기되, 되돌린 뒤 할 일로 가는 길은 남긴다.
+    if (pendingRev) acts.push(el('a', { class: 'wk-banner-link', href: '#/knowledge/review', text: '검토 대기 →' }));
+    reviewBanner = el('div', { class: 'wk-banner always' },
+      el('span', { class: 'wk-banner-txt', text: observed
+        ? '보관됨 — 원본에서 복원하면 다음 동기화에 되살아납니다'
+        : '보관됨 — 검색·세션주입·목록에 나오지 않습니다' }),
+      ...acts);
   } else if (pendingRev) {
     reviewBanner = el('div', { class: 'wk-banner always' },
       el('span', { class: 'wk-banner-txt', text: pendingRev.mode === 'staged'
