@@ -20,7 +20,7 @@
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
-import { sessionKindFromRequest } from "../sessions/session-kind.js";
+import { isWorkSession, sessionKindFromRequest } from "../sessions/session-kind.js";
 import { createSession, killSession, normalizeCap, type CreateInput, type SessionInfo } from "./terminal-sessions.js";
 import { normalizeTheme } from "./catalog.js";
 import { autoTrustWorkspace } from "./session-create-guards.js";
@@ -37,7 +37,7 @@ import { nodeOfflineNote } from "../node/offline-note.js";      // #1849 — 오
 import { translateNodeRpcError } from "../node/rpc-error.js";
 import { bindNodeSessionProjectOrKill, nodeProjectCreatePlan } from "../node/provision-remote.js";
 import { createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
-import { bindSessionTask } from "../v6/session-task.js";   // #4084 세션 = 태스크 — 태스크에서 연 세션
+import { bindSessionTask, ensureSessionTask } from "../v6/session-task.js";   // #4084 세션 = 태스크
 import { currentTenant } from "../org/tenant-context.js";
 import { PRIMARY_TENANT_ID, setSessionWorkspace } from "../org/tenancy/registry.js";   // #1750 후속 — 세션→워크스페이스 정본
 import { mintAppToken } from "../apps/principal.js";
@@ -216,15 +216,33 @@ export const withChatFields = <T extends { harness?: string; runtimeChoice?: unk
     s.runtimeChoice === "chat" ? "chat" : s.runtimeChoice === "terminal" ? "terminal" : undefined));
 
 /**
- * #4084 — 태스크에서 연 세션이면 그 태스크를 잇는다. **비치명**: 세션은 이미 살아 있고 사람이 그 안에서 일을 시작할 수
- *  있다 — 잇기에 실패하면 그 세션은 이름을 지을 때 종전 규칙(이름으로 새 태스크)을 탄다. 세션을 죽여 가며 지킬 값이 아니다.
+ * #4084 세션 = 태스크 — 프로젝트에 붙은 세션에 **태스크를 붙인다**. 두 갈래뿐이다:
+ *   · `taskId` 가 왔다(사람이 태스크에서 [세션 열기]) → 그 태스크를 잇는다. 새로 만들지 않는다.
+ *   · 아니면 → **지금 이 세션의 이름으로 만든다**(ensureSessionTask).
+ *
+ *  ★ 2026-09-20 정정 — 만드는 자리를 이름짓기(relabelSession)에서 **여기로** 옮겼다. 종전엔 AI 가 `session_rename`
+ *   을 불러 주어야만 태스크가 생겨서, 배포 당일 실측에서 프로젝트 세션 6개 중 3개만 생겼다(나머지는 서버 규칙
+ *   이름만 달고 있었다 — 화면엔 이름이 보이니 사람 눈엔 «지어진» 세션이다). 세션 생성은 **서버가 반드시 지나는
+ *   자리**라 여기 붙이면 모델 재량이 사라진다. 이름이 더 좋아지면 relabelSession 이 태스크 이름을 따라 바꾼다.
+ *
+ *  이름이 세션 id 그대로면(첫 지시가 없어 규칙 이름조차 못 지은 세션) 만들지 않는다 — 빈 태스크를 쌓지 않는다.
+ *  **비치명**: 세션은 이미 살아 있다. 실패하면 로그만 남기고 세션은 그대로 둔다(태스크는 나중에 `session_task` 가 만든다).
  */
-async function bindLaunchTask(sessionId: string, owner: string, input: CreateInput): Promise<void> {
+async function attachLaunchTask(session: { id: string; label?: string | null }, owner: string, input: CreateInput): Promise<void> {
   const taskId = Number(input.taskId ?? 0);
-  if (!(taskId > 0)) return;
-  const bound = await bindSessionTask({ sessionId, owner, taskId })
-    .catch((e) => { logger.warn({ sessionId, taskId, err: (e as Error)?.message }, "세션 태스크 잇기 실패(비치명)"); return null; });
-  if (!bound) logger.warn({ sessionId, taskId }, "세션 태스크를 잇지 못했다 — 이름을 지을 때 새 태스크가 생긴다");
+  if (taskId > 0) {
+    const bound = await bindSessionTask({ sessionId: session.id, owner, taskId })
+      .catch((e) => { logger.warn({ sessionId: session.id, taskId, err: (e as Error)?.message }, "세션 태스크 잇기 실패(비치명)"); return null; });
+    if (!bound) logger.warn({ sessionId: session.id, taskId }, "세션 태스크를 잇지 못했다 — 이름을 지을 때 새 태스크가 생긴다");
+    return;
+  }
+  // 사람의 작업 세션만(#2162) · 조직에 아무것도 안 남기는 세션은 제외(읽기전용·인코그니토 — 훅도 안 도는 자리다).
+  if (!isWorkSession(input.kind) || input.readOnly || input.incognito) return;
+  const label = String(session.label ?? "").trim();
+  if (!label || label === session.id) return;
+  const task = await ensureSessionTask({ sessionId: session.id, owner, name: label })
+    .catch((e) => { logger.warn({ sessionId: session.id, err: (e as Error)?.message }, "세션 태스크 생성 실패(비치명)"); return null; });
+  if (task?.created) logger.info({ sessionId: session.id, task: task.id, name: task.name }, "세션 = 태스크: 태스크를 만들었다");
 }
 
 export interface LaunchOpts {
@@ -273,8 +291,8 @@ export async function launchSession(user: LivelyUser, input: CreateInput, opts: 
       await bindNodeSessionProjectOrKill({
         nodeId, sessionId: session.id, requester: me, harness: session.harness || input.harness, projectId: input.projectId,
       });
-      // #4084 — 태스크에서 연 세션: 소속을 쓴 **뒤**, 보류한 첫 지시를 넣기 **전**에 잇는다(첫 턴 문맥에 태스크가 실린다).
-      await bindLaunchTask(session.id, me, input);
+      // #4084 — 소속을 쓴 **뒤**, 보류한 첫 지시를 넣기 **전**에 태스크를 붙인다(첫 턴 문맥에 태스크가 실린다).
+      await attachLaunchTask(session, me, input);
     }
     await mirrorNodeSession({ ...session, invites: opts.invites }, nodeId, input, me);
     if (plan.deferredPrompt) {
@@ -290,8 +308,8 @@ export async function launchSession(user: LivelyUser, input: CreateInput, opts: 
   }
   const session = await createSession(user, input);
   // #4084 — 중앙 세션은 createSession 이 소속을 이미 썼다. 첫 지시는 하네스 입력창이 뜬 뒤(수 초) 들어가므로 여기서
-  //  이으면 첫 턴 문맥에 태스크가 실린다. 첫 지시 본문도 태스크 번호를 말하므로 경합해도 모델은 자기 일을 안다.
-  if (input.projectId && input.projectSrc !== "org") await bindLaunchTask(session.id, me, input);
+  //  붙이면 첫 턴 문맥에 태스크가 실린다. 첫 지시 본문도 태스크 번호를 말하므로 경합해도 모델은 자기 일을 안다.
+  if (input.projectId && input.projectSrc !== "org") await attachLaunchTask(session, me, input);
   await recordSessionTenant(session.id, () => killSession(user, session.id, {}));
   await registerSessionInstance(session.id, me, { appId: input.appId, projectId: input.projectId, title: session.label });
   return withChatFields(session);
