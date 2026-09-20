@@ -171,3 +171,39 @@ export function looksLikeText(buf: Buffer): boolean {
   const s = decodeLocalText(head);
   return countReplacement(s) / Math.max(1, s.length) < 0.01;
 }
+
+// ── 파일 휴지통의 순수 부분(#3778) — 보관 자리 계산. DB·FS 없음(도장 찍기·옮기기는 local-file.ts · project-routes.ts). ──
+export interface FileTrashStamp { batch: string; at: string; by: string | null; project_id: number; base_rel: string; held_rel: string }
+export const FILE_TRASH_DIR = path.posix.join(".lively", "trash");
+
+/** 지운 경로(base_rel) 아래 파일 하나가 보관 자리에서 어디에 있나 — 순수 계산. 경로는 전부 프로젝트 폴더 기준 posix 상대경로. */
+export function heldPathOf(stamp: Pick<FileTrashStamp, "base_rel" | "held_rel">, filePath: string): string {
+  const base = stamp.base_rel.replace(/\/+$/, "");
+  const file = filePath.replace(/\/+$/, "");
+  if (file === base) return stamp.held_rel;
+  if (!file.startsWith(base + "/")) throw new Error(`보관 도장과 파일 경로가 어긋납니다(${file} ∉ ${base})`);
+  return stamp.held_rel + file.slice(base.length);
+}
+
+/** 새 보관 묶음 — `.lively/trash/<batch>/<지운 것의 이름>`. batch 는 시각+난수(같은 이름을 두 번 지워도 안 겹친다). */
+export function newFileTrashStamp(projectId: number, rel: string, by: string | null, now = new Date(), rand = Math.random()): FileTrashStamp {
+  const clean = rel.split(path.sep).join("/").replace(/^\/+|\/+$/g, "");
+  const batch = now.getTime().toString(36) + "-" + Math.floor(rand * 0xffffff).toString(36).padStart(4, "0");
+  return { batch, at: now.toISOString(), by, project_id: projectId, base_rel: clean, held_rel: path.posix.join(FILE_TRASH_DIR, batch, path.posix.basename(clean)) };
+}
+
+/**
+ * 되살리기·완전 삭제 뒤 보관 묶음 폴더를 치워도 되나 — 순수 판정(리뷰 지적 2026-09-20).
+ *  ★ 묶음 안에는 **자료가 아닌 동행 파일**이 있을 수 있다: 폴더를 지우면 폴더째 옮기는데, zip·영상·실행 파일·점 파일은 애초에
+ *   자료 행이 없어(SKIP_EXT) 도장도 없고 휴지통 화면에도 안 선다. 남은 도장 수(DB)만 보고 묶음을 rm -rf 하면, 사람이 본 적 없는
+ *   그 파일들이 **«되살리기» 의 부작용으로** 영영 사라진다. 되살리기는 아무것도 없애지 않아야 한다.
+ *   · 되살리기: 파일 하나만 지웠던 묶음(그 파일이 묶음의 전부)일 때만 치운다. 폴더 묶음은 남긴다 — 빈 폴더가 남는 쪽이 낫다.
+ *   · 완전 삭제: 남은 도장이 0 이면 묶음째 치운다 — 사람이 지우기로 한 폴더의 나머지이고, 확인창이 그렇게 말한다.
+ *   · 도장이 하나라도 남았으면 어느 쪽이든 손대지 않는다(남은 자료의 바이트가 그 안에 있다).
+ */
+export function fileTrashBatchCleanup(op: "restore" | "purge", stamp: Pick<FileTrashStamp, "base_rel">, filePath: string, remaining: number): "remove" | "keep" {
+  if (!Number.isFinite(remaining) || remaining > 0) return "keep";
+  if (op === "purge") return "remove";
+  const single = stamp.base_rel.replace(/\/+$/, "") === filePath.replace(/\/+$/, "");
+  return single ? "remove" : "keep";
+}

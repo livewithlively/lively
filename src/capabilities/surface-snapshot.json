@@ -2747,6 +2747,16 @@
   "input_hash": "8eb98c3baa73c9cb"
  },
  {
+  "name": "source_trash_list",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/source-trash"
+  ],
+  "input_hash": "564b43b502c45c91"
+ },
+ {
   "name": "workspace_reclaim",
   "scope": "memory",
   "mcp": true,
@@ -3614,7 +3624,7 @@
   "rest": [
    "GET /api/ui/deleted"
   ],
-  "input_hash": "4df1c7851376a241"
+  "input_hash": "51372502cd10597f"
  },
  {
   "name": "content_restore",
@@ -3624,7 +3634,27 @@
   "rest": [
    "POST /api/ui/deleted/restore"
   ],
-  "input_hash": "6cf966c863571d19"
+  "input_hash": "66d811b951cc612c"
+ },
+ {
+  "name": "content_snapshot",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/deleted/snapshot"
+  ],
+  "input_hash": "66d811b951cc612c"
+ },
+ {
+  "name": "content_purge",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/deleted/purge"
+  ],
+  "input_hash": "07a4700d3c3b6d8b"
  },
  {
   "name": "vis_axis_list",

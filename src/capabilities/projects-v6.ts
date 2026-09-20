@@ -36,6 +36,8 @@ import { projectNameFromAgent } from "../v6/project-name.js";
 import { AUTO_CREATED_MARK } from "../project/first-prompt-project.js";
 import { executionSessionProject } from "../v6/execution-session-store.js";
 import { sessionsOfTasks } from "../v6/session-task.js";
+import { purgeDeleted } from "../v6/trash-store.js";   // #3778 — 프로젝트 완전 삭제 = 감사 스냅샷 본문까지
+import { auditOrgContent } from "../v6/content-audit.js";
 import {
   listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, claimProjectName, setProjectArchived, setProjectTrashed, getBoardFields,
   upsertProjectFolderBinding, findProjectsByOriginKey,
@@ -580,6 +582,10 @@ const projectPurgeV6: Capability = {
       parse: (req) => ({ id: parseId(req.params?.id) }) }],
   },
   handler: async (input: { id: number }, user: LivelyUser, ctx?: CapabilityCtx) => {
+    // #3778 — 완전 삭제는 사람(웹)만. 지식·카테고리·자료 삭제와 복원(content_restore)은 처음부터 이 잠금이 있었는데
+    //  그중 가장 파괴적인 이 능력만 빠져 있었다: 에이전트가 trash → purge 두 번으로 프로젝트와 묶음 세션의 지식·자료·태스크를
+    //  사람 확인 없이 흔적 없이 지울 수 있었다(삭제 경로 점검 2026-09-20). 휴지통으로 보내기(project_trash_v6)는 되돌릴 수 있어 그대로 연다.
+    if (ctx?.source === "mcp") throw new HttpError(403, "프로젝트 완전 삭제는 사람(웹)만 가능합니다 — 에이전트는 휴지통으로 보내기까지만 할 수 있어요");
     await assertProjectVisible(input.id, ctx, "프로젝트");
     const me = String(ctx?.actor ?? user?.userId ?? "");
     if (!me) throw new HttpError(401, "로그인이 필요합니다");
@@ -624,6 +630,13 @@ const projectPurgeV6: Capability = {
     const sessions = bundle.length ? await applySessionTrashOp(user, me, "purge", bundle) : { done: [], skipped: [] };
     const folder = (before as { folder?: string | null }).folder ?? null;
     await deleteProject(input.id, { actor: me, source: ctx?.source ?? "web" });
+    // #3778 — «완전 삭제» 는 본문까지다. 종전엔 deleteProject 의 감사 스냅샷(이름·본문)이 남아 WIKI 휴지통에서 되살아났다
+    //  (8/27 점검의 갭 4). 휴지통이 네 탭이 되면서 그 줄이 **같은 화면**(프로젝트 탭 ▸ 이름·본문만 되살릴 수 있는 것)에 서므로,
+    //  안 비우면 «완전히 지웠어요» 직후에 그 프로젝트가 바로 아래 다시 나타난다. 세션·지식 파기와 같은 원칙(행은 남기고 내용만 비움).
+    try {
+      const scrubbed = await purgeDeleted("project", String(input.id));
+      await auditOrgContent("project", String(input.id), "purge", null, { scrubbed_rows: scrubbed }, { actor: me, source: ctx?.source ?? "web" });
+    } catch { /* 비치명 — 본체는 이미 지워졌다. 남은 스냅샷은 휴지통 ▸ 프로젝트 탭에서 다시 지울 수 있다 */ }
     // 프로젝트 폴더(첨부·자료 파일) — 세션 경로와 같은 원칙(#1850 P4): DB 확정 **뒤** 디스크. 종전엔 여기만 안 지웠다.
     let folder_deleted = false;
     if (folder) {
