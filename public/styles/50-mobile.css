@@ -102,14 +102,31 @@
   .v2-title { font-size: 20px; }
   /* 한글 keep-all 은 폰 폭에선 한 어절이 줄을 통째로 밀어낸다 — 어절 안에서도 꺾이게. */
   .v2-desc, .v2-h1, .v2-title, .v2-frame-h .t { word-break: normal; overflow-wrap: anywhere; }
-  /* 홈 — 실행 줄의 칩은 줄바꿈하되 세로 구분선은 뗀다(줄 끝에 홀로 남던 그것). */
-  .v2-home { padding: 12px 16px 16px; }
-  .v2-home-launch { padding-top: clamp(8px, 3vh, 28px); }
-  .v2-run { flex-wrap: wrap; gap: 2px 0; }
-  .v2-run-sep { display: none; }
-  .v2-run-sel { max-width: 100%; }
-  .v2-launch-in { min-height: 56px; }
-  .v2-home-apps-row { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  /* 홈 — 가운데 정렬은 폰에서 위험하다: 내용이 화면보다 길면 flex 가운데 정렬은 위·아래로 똑같이 넘쳐 **위쪽은 스크롤로도 못 닿는다**
+     (390×664 실측: 날짜 줄이 y=-12, 인사말이 검색 줄 밑 — 원준 2026-09-20 "위에 검색 바 때문에 잘려 보여"). 데스크톱의
+     아래 여백 clamp(40px,14vh,130px) 도 폰에선 93px 을 그냥 먹었다. 위에서부터 쌓고, 넘치면 판(.v2-tabpane)이 굴린다. */
+  .v2-home { flex: 1 0 auto; padding: 12px 16px 16px; }
+  .v2-home-launch { justify-content: flex-start; padding-top: 14px; padding-bottom: 16px; }
+  .v2-home-launch .v2-h1, .v2-home-sub { font-size: 22px; }
+  .v2-dest-grid { margin-top: 14px; }
+  .v2-dest { min-height: 40px; }
+  .v2-launch, .v2-dest-grid + .v2-launch { margin-top: 8px; }
+  .v2-launch-in { min-height: 50px; }
+  /* 실행 줄(컴퓨터·제공자·모델·추론) — 폰에선 **가로로 미는 한 줄**. 종전엔 칩 넷이 [시키기] 옆 좁은 칸에서 한 줄씩 네 줄로
+     쌓여 카드가 128px 을 더 먹었고, 그만큼 아래 «최근에 연 앱» 이 탭 바에 걸렸다. 단추 줄은 그 아래 오른쪽 끝.
+     칩 사이 세로 구분선(.v2-run-sep)은 한 줄이니 데스크톱처럼 그대로 보인다(줄바꿈하던 때는 줄 끝에 홀로 남아 뗐었다). */
+  .v2-launch-row { flex-wrap: wrap; row-gap: 8px; }
+  .v2-launch-ctl { flex: 0 0 100%; min-width: 0; }   /* 0 0 100% — 줄어들 수 있으면 단추 옆 160px 칸에 끼어 첫 칩부터 잘린다(실측) */
+  .v2-run { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .v2-run::-webkit-scrollbar { display: none; }
+  .v2-run-sel { flex: none; max-width: none; }
+  /* 최근에 연 앱 — 3×2 격자는 폰 높이에서 늘 아래 탭 바에 걸려 잘려 보였다(원준 2026-09-20). **가로로 미는 한 줄**로(슬랙 모바일의
+     바로가기 줄) — 다섯째가 살짝 걸쳐 «더 있다»를 말한다. 좌우는 화면 끝까지 흘러나가게 홈 여백(16px)을 음수로 상쇄한다. */
+  .v2-home-apps { margin-top: 14px; }
+  .v2-home-apps-row { display: flex; grid-template-columns: none; gap: 4px; overflow-x: auto; overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity; scrollbar-width: none; margin: 0 -16px; padding: 0 16px 2px; }
+  .v2-home-apps-row::-webkit-scrollbar { display: none; }
+  .v2-home-app { flex: 0 0 78px; scroll-snap-align: start; padding: 10px 4px 8px; }
   /* 확인할 것 — 알림 줄: 제목이 두 줄까지 꺾이고 시각은 오른쪽 끝에 고정(제목 위에 겹치던 것). */
   .v2-noti-row { display: flex; align-items: flex-start; width: 100%; min-width: 0; box-sizing: border-box; }
   .v2-noti-row .tw { flex: 1 1 0%; min-width: 0; }
