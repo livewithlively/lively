@@ -8,6 +8,23 @@
 <!-- 테마 pre-paint(#1683) — 저장된 선호(lv:theme)를 CSS 로드 전에 <html data-theme> 으로 찍는다.
      키 없음 = 시스템 따름(@media prefers-color-scheme). 런타임 전환·동기화는 web/theme.ts 가 맡는다. -->
 <script>(function(){try{var t=localStorage.getItem('lv:theme');if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t)}catch(e){}})();</script>
+<!-- 부팅 중 화면(#4088) — 모듈 수백 개와 /api/ui/me 가 도는 동안 **흰 화면 대신** 선다(원준 2026-09-20: "워크스페이스 열기를 누르면
+     처음 화면이 좀 오래 하얀 화면"). 물러나는 것은 CSS 만으로: #gate·#app 둘 중 하나가 드러나면(hidden 이 풀리면) 뒤 형제인 이 판이 사라진다 —
+     부팅 코드 어느 갈래(로그인 문·새 셸·클래식·액자)도 이 판을 알 필요가 없다. 색은 토큰(01-base.css) — 첫 그리기는 어차피 그 CSS 뒤다. -->
+<style>
+  #boot-splash { position: fixed; inset: 0; z-index: 90; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+    background: var(--bg); color: var(--ink-sub); text-align: center; padding: 24px; }
+  #gate:not([hidden]) ~ #boot-splash, #app:not([hidden]) ~ #boot-splash { display: none; }
+  #boot-splash .boot-mark { font-size: 22px; }
+  .boot-bar { width: 120px; height: 3px; border-radius: 2px; background: var(--bg-tint-2); overflow: hidden; }
+  .boot-bar::after { content: ''; display: block; width: 40%; height: 100%; border-radius: 2px; background: var(--blue); animation: boot-bar 1.1s ease-in-out infinite; }
+  @keyframes boot-bar { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+  .boot-cap { margin: 0; font-size: 13.5px; }
+  /* 10초가 넘으면 그때 한 줄 — 모듈 로드가 죽어 이 판이 영영 서 있을 때 사람이 할 수 있는 일을 말한다. */
+  .boot-hint { margin: 0; font-size: 12.5px; color: var(--muted); opacity: 0; animation: boot-hint-in 300ms ease 10s forwards; }
+  @keyframes boot-hint-in { to { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .boot-bar::after { animation: none; width: 100%; opacity: .45; } }
+</style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css">
 <!-- 스타일시트 — 옛 단일 public/styles.css(8,600줄)를 섹션 주석 경계에서 화면별로 분할한 것(#1313 R50).
      ⚠ 이 <link> 나열 **순서가 곧 계약**이다: 파일 순서대로 이어붙인 합본이 옛 styles.css 와 byte 동일하며,
@@ -170,6 +187,14 @@
   <!-- 새 1탭 셸(#1719) — boot() 가 ui_mode=v2 면 여기에 그리고 위 클래식 크롬(배너·상단바·view·푸터)은 40-v2.css 가 숨긴다.
        클래식 페이지는 그대로 남아 ?embed=1 로 이 같은 문서를 iframe 에 실어 '앱'으로 뜬다(런치패드). -->
   <div id="v2-root" hidden></div>
+</div>
+
+<!-- 부팅 중 화면(#4088) — ⚠ 반드시 #gate·#app **뒤**에 둔다(형제 선택자 `~` 는 앞에서 뒤로만 간다 — 위 <style> 참조). -->
+<div id="boot-splash" role="status" aria-live="polite">
+  <div class="wordmark boot-mark">Lively<span class="pulse-dot" aria-hidden="true"></span></div>
+  <div class="boot-bar" aria-hidden="true"></div>
+  <p class="boot-cap">워크스페이스를 불러오는 중입니다.</p>
+  <p class="boot-hint">오래 걸리면 새로고침해 주세요.</p>
 </div>
 
 <div id="toasts" aria-live="polite"></div>
