@@ -34,6 +34,7 @@ import { bindCtxSurface } from './ctx-registry.js';   // #3784 곁칸 빈 자리
 import { type CtxRow } from './ctx-menu.js';
 //  ★ 탭 = 부품의 **인스턴스**(#762) — 배치가 드는 것은 '종류'가 아니라 '탭 열쇠'다(lib/tab-key 머리말).
 import { isTabKey, nextTabKey, tabBase, tabNum, type TabKey } from '../lib/tab-key.js';
+import { seedTasksTab } from '../lib/task-pane.js';   // #4084 — 저장된 배치에 «태스크» 탭을 한 번만 들인다
 import { hasBrowserSurface } from './browser-surface.js';
 import { onViewers, viewersOf } from './presence.js';           // #2116 — 지금 이 세션을 보고 있는 사람
 import { openSharePopover, shareSessOf } from './share-session.js';   // #2116 — 문패 [공유]
@@ -92,8 +93,9 @@ interface Layout {
 //  기본으로 되돌려 버리면 프로젝트를 옮길 때마다 같은 배치를 다시 맞춰야 한다.
 const LAYOUT_KEY = deviceStore('lively_panes_layout_v2');   // #1875 — projectId 로 키를 잡으므로 워크스페이스별    // { last: Layout, p: { [projectId]: Layout } }
 const LAYOUT_KEY_V1 = 'lively_panes_layout_v1'; // 전역 한 벌이던 옛 판 — 첫 이사 때 'last' 의 씨앗으로만 읽는다
+//  #4084 — 곁칸 기본에 «태스크»가 선다(원준 2026-09-20: "연동되어서 자동으로 보이게"). 종전엔 [+] 로 넣어야만 보였다.
 const DEF_LAYOUT = (): Layout => ({
-  main: ['sessions'], side: ['files', 'knowledge', 'apps'], bottom: ['timeline'],
+  main: ['sessions'], side: ['files', 'tasks', 'knowledge', 'apps'], bottom: ['timeline'],
   act: { main: 'sessions', side: 'files', bottom: 'timeline' },
   sideOn: true, bottomOn: false,
 });
@@ -140,9 +142,20 @@ function parseLayout(s: any): Layout | null {
   if (!lay.main.length && !lay.side.length && !lay.bottom.length) return null;
   return normalizeLayout(lay);
 }
-interface LayoutStore { last?: any; p?: Record<string, any> }
+interface LayoutStore { last?: any; p?: Record<string, any>; seeded?: Record<string, number> }
 function layoutStore(): LayoutStore {
   try { const s = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null'); return s && typeof s === 'object' ? s : {}; } catch (_) { return {}; }
+}
+/** #4084 — 이미 배치를 저장한 사람에게 «태스크» 탭을 **한 번만** 들인다(lib/task-pane seedTasksTab).
+ *  기본 배치만 고치면 쓰던 사람에겐 영영 안 보이고(배치는 프로젝트마다 저장되고 새 프로젝트는 마지막 것을 물려받는다),
+ *  열 때마다 넣으면 사람이 닫은 탭이 되살아난다 — 그래서 저장소에 표식(seeded.tasks)을 남기고 그 뒤론 손대지 않는다.
+ *  배치가 아예 없는 브라우저도 표식은 찍는다: 그 사람은 기본 배치로 이미 받았고, 나중에 닫으면 닫힌 채여야 한다. */
+function seedLayoutStore(): void {
+  if (EMBEDDED) return;                         // 끼워 넣은 판은 바깥 사람의 배치를 건드리지 않는다(saveLayout 과 같은 이유)
+  try {
+    const r = seedTasksTab(layoutStore());
+    if (r.changed) localStorage.setItem(LAYOUT_KEY, JSON.stringify(r.store));
+  } catch (_) { /* 저장소를 못 쓰는 문맥 — 기억만 못 할 뿐 */ }
 }
 /** 이 프로젝트의 배치 — 없으면 마지막으로 쓰던 것, 그것도 없으면 옛 전역 한 벌, 끝으로 기본. */
 function loadLayout(id: number): Layout {
@@ -160,6 +173,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const loose = id === 0;                       // 프로젝트 없는 세션들의 화면 — 공유 폴더·지식·할 일이 없다
   let detail: any = opts.detail;
   let dead = false;
+  seedLayoutStore();
   let lay = loadLayout(id);
   // 프로젝트 없는 세션 화면 — 공유 폴더·지식·할 일이 없으니 곁칸에 넣을 것도 없다. 빈 칸을 보여 주느니 접어 둔다.
   if (loose) { lay = { ...lay, side: lay.side.filter((t) => t === 'timeline'), bottom: [], bottomOn: false, sideOn: false }; }
@@ -180,7 +194,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       const st = layoutStore();
       const map = st.p && typeof st.p === 'object' ? st.p : {};
       map[String(id)] = lay;
-      localStorage.setItem(LAYOUT_KEY, JSON.stringify({ last: lay, p: map }));
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify({ ...st, last: lay, p: map }));   // ...st — 표식(seeded)을 지우지 않는다
     } catch (_) { /* noop */ }
   }
   saveLayout();   // loadLayout 의 교정(normalizeLayout)을 디스크에도 남긴다 — 갇힌 배치가 한 번 열고 끝나지 않게

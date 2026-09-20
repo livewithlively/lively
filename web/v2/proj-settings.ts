@@ -83,26 +83,37 @@ export function openProjSettings(opts: ProjSettingsOpts): void {
   //  저장했다는 신호는 토스트가 아니라 칸 아래 작은 글씨다 — 타자를 칠 때마다 토스트가 뜨면 그게 방해가 된다.
   const descChip = el('span', { class: 'pn-set-chip' });
   const setChip = (t: string, warn?: boolean): void => { descChip.textContent = t; descChip.classList.toggle('warn', !!warn); };
-  let descTimer: number | null = null, descSaving = false, descSaved = desc.value;
+  let descTimer: number | null = null, descSaving = false, descSaved = desc.value, descBlocked = false;
   const saveDesc = async (): Promise<void> => {
-    if (descSaving) return;
+    if (descSaving || descBlocked) return;
     const md = desc.value;
     if (md === descSaved) { setChip(''); return; }
     descSaving = true; setChip('저장 중…');
     try {
-      await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ description: md || null }) });
-      descSaved = md; p.description = md;
+      // #4084 가드 저장 — 고치기 시작한 글(descSaved)을 같이 보낸다. 그 사이 세션이 본문 끝에 덧붙인 기록은 서버가 살려
+      //  합쳐 돌려준다(통째 교체로 지우지 않는다). 꼬리가 아닌 곳이 바뀌었으면 409 — 아래 catch 가 덮지 않고 알린다.
+      const r = await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ description: md || null, description_base: descSaved }) });
+      const kept = String(r?.project?.description ?? md);
+      if (kept !== md && desc.value === md) { const s0 = desc.selectionStart, e0 = desc.selectionEnd; desc.value = kept; try { desc.setSelectionRange(s0, e0); } catch (_) { /* 포커스 없음 */ } }
+      descSaved = kept; p.description = kept;
       setChip('저장했어요.');
       window.setTimeout(() => { if (descChip.textContent === '저장했어요.') setChip(''); }, 1600);
       opts.onChanged?.();
     } catch (e: any) {
-      setChip('저장하지 못했어요.', true);
-      toast('본문을 저장하지 못했어요 — ' + (e?.message || e), true);
+      if (e?.status === 409) {
+        // 다른 곳에서 본문이 바뀌었다 — 같은 저장을 1.2초마다 되풀이하지 않게 멈추고, 사람이 창을 다시 열어 최신에서 잇게 한다.
+        descBlocked = true;
+        setChip('다른 곳에서 본문이 바뀌었어요 — 쓰던 글을 복사해 두고 이 창을 다시 열어 주세요.', true);
+      } else {
+        setChip('저장하지 못했어요.', true);
+        toast('본문을 저장하지 못했어요 — ' + (e?.message || e), true);
+      }
     }
     descSaving = false;
-    if (desc.value !== descSaved) queueDesc();   // 저장하는 동안 더 친 글이 있으면 곧바로 다음 저장을 건다
+    if (!descBlocked && desc.value !== descSaved) queueDesc();   // 저장하는 동안 더 친 글이 있으면 곧바로 다음 저장을 건다
   };
   const queueDesc = (): void => {
+    if (descBlocked) return;                     // 충돌로 멈춘 뒤엔 «쓰는 중…» 으로 안내를 덮지 않는다
     setChip('쓰는 중…');
     if (descTimer !== null) window.clearTimeout(descTimer);
     descTimer = window.setTimeout(() => { descTimer = null; void saveDesc(); }, 1200);

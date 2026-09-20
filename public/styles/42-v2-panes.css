@@ -360,7 +360,7 @@
 .pn-ctx-sep { height: 1px; margin: 4px 6px; background: var(--line-row); }
 
 /* ══ 지식 · 할 일 · 개요 · 타임라인 ══════════════════════════════════════════ */
-.pn-knlist, .pn-tlist { flex: 1; min-height: 0; overflow: auto; padding: 0 10px 14px; display: flex; flex-direction: column; gap: 1px; }
+.pn-knlist { flex: 1; min-height: 0; overflow: auto; padding: 0 10px 14px; display: flex; flex-direction: column; gap: 1px; }
 .pn-knrow { display: flex; align-items: center; gap: 8px; padding: 8px 9px; border: 0; border-radius: 8px; width: 100%; text-align: left; background: none; font: inherit; font-size: 12.5px; text-decoration: none; color: var(--ink); cursor: pointer; }
 .pn-knrow:hover { background: var(--bg-punch); }
 .pn-knrow svg { color: var(--muted-2); }
@@ -368,26 +368,112 @@
 .pn-knrel { flex: none; font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: var(--gray-bg); color: var(--muted-head); }
 .pn-knrel.prod { background: var(--ok-bg); color: var(--mint-deep); }
 
-.pn-trow { display: flex; align-items: flex-start; gap: 9px; padding: 7px 9px; border-radius: 8px; font-size: 12.5px; }
-.pn-trow:hover { background: var(--bg-punch); }
-.pn-trow.done .n { color: var(--muted); text-decoration: line-through; }
+/* 끝냄 체크 — 프로젝트 상세(proj-settings)의 할 일 줄이 쓴다. 곁칸 태스크 부품은 아래 .pn-tk 가 그린다. */
 .pn-tcheck { flex: none; width: 16px; height: 16px; margin-top: 1px; border: 1.5px solid var(--muted-3-line); border-radius: 5px; background: none; cursor: pointer; position: relative; }
 .pn-tcheck:hover { border-color: var(--blue); }
 .pn-tcheck.on { border-color: var(--mint-deep); background: var(--mint-deep); }
 .pn-tcheck.on::after { content: ''; position: absolute; left: 4.5px; top: 1px; width: 4px; height: 8px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(42deg); }
-/* #4084 세션 = 태스크 — 줄 끝 칩. 맡은 세션이 있으면(.on) 늘 보이고, 없으면 [세션 열기]는 줄에 손이 갈 때만 보인다
-   (터치 기기는 hover 가 없으므로 늘 보인다). 할 일 이름이 먼저라 칩은 절반을 넘지 않는다. */
-.pn-trow .n { flex: 1; min-width: 0; }
-.pn-tsess { flex: none; max-width: 45%; display: inline-flex; align-items: center; gap: 4px; margin-top: -1px; padding: 1px 7px; border: 1px solid var(--muted-3-line); border-radius: 999px; background: none; font: inherit; font-size: 11px; line-height: 16px; color: var(--muted-head); cursor: pointer; }
-.pn-tsess .ell { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pn-tsess:hover:not(:disabled) { border-color: var(--blue); color: var(--blue); }
-.pn-tsess:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-.pn-tsess:disabled { cursor: default; }
-.pn-tsess.on { border-color: transparent; background: var(--ok-bg); color: var(--mint-deep); }
-.pn-tsess.on:hover { border-color: var(--mint-deep); color: var(--mint-deep); }
-@media (hover: hover) {
-  .pn-tsess:not(.on):not(.busy) { opacity: 0; }
-  .pn-trow:hover .pn-tsess, .pn-tsess:focus-visible { opacity: 1; }
+
+/* ══ 태스크(#4084) — 보는 세션이 속한 프로젝트의 태스크 ═══════════════════════════════════
+   문법은 하나다: 줄을 누르면 그 줄의 속이 그 자리에서 펴지고, 쓰면 저절로 저장된다(본문·규칙 접이도, 태스크 줄도).
+   채운 파랑은 화면에 하나 — «이 세션의 태스크» 카드의 [끝냈다고 표시]. 상태는 색 면이 아니라 점·글자로 말한다. */
+.pn-tk { overflow: hidden; }
+.pn-tk .grow { flex: 1; }
+.pn-tk-head { flex: none; display: flex; flex-direction: column; gap: 7px; padding: 11px 12px 9px; }
+.pn-tk-head-row { display: flex; align-items: center; gap: 6px; color: var(--muted-head); }
+.pn-tk-name { flex: 1; min-width: 0; padding: 0; border: 0; background: none; font: inherit; font-size: 13.5px; font-weight: 800; letter-spacing: -.01em; color: var(--ink); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.pn-tk-name:hover { color: var(--blue); }
+.pn-tk-count { flex: none; }
+.pn-tk-bar { height: 3px; border-radius: 999px; background: var(--gray-bg); overflow: hidden; }
+.pn-tk-bar-fill { height: 100%; width: 0; background: var(--mint-deep); transition: width .25s ease; }
+
+.pn-tk-folds { flex: none; border-bottom: 1px solid var(--line-row); padding-bottom: 2px; }
+.pn-tk-fold { display: flex; align-items: center; gap: 7px; width: 100%; height: 30px; padding: 0 12px; border: 0; background: none; font: inherit; text-align: left; color: var(--ink); cursor: pointer; }
+.pn-tk-fold:hover { background: var(--bg-punch); }
+.pn-tk-fold-l { flex: none; font-size: 11.5px; font-weight: 700; color: var(--muted-head); }
+.pn-tk-fold-ex { flex: 1; font-size: 11.5px; color: var(--muted); }
+.pn-tk-chev { color: var(--muted-3); transition: transform .15s ease; }
+.pn-tk-foldwrap.open .pn-tk-chev, .pn-tk-gh.open .pn-tk-chev, .pn-tk-card.open .pn-tk-chev { transform: rotate(90deg); }
+.pn-tk-editor { margin: 2px 12px 8px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--surface); display: flex; flex-direction: column; overflow: hidden; }
+.pn-tk-editor:focus-within { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
+.pn-tk-ta { display: block; width: 100%; box-sizing: border-box; margin: 0; padding: 8px 10px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--surface); font: inherit; font-size: 12px; line-height: 1.6; color: var(--ink); resize: vertical; min-height: 64px; }
+.pn-tk-ta:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
+.pn-tk-editor .pn-tk-ta.big { height: 236px; min-height: 120px; max-height: 60vh; border: 0; border-radius: 0; background: none; }
+.pn-tk-editor .pn-tk-ta.big:focus { box-shadow: none; }
+.pn-tk-ta:disabled { color: var(--muted); }
+/* 발치는 좁으면 두 줄로 흐른다 — 충돌 안내(긴 문장) + 단추 둘이 한 줄에 눌려 글자가 세로로 꺾이지 않게. */
+.pn-tk-editor-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-height: 30px; padding: 3px 8px 3px 10px; border-top: 1px solid var(--line-row); }
+.pn-tk-editor-foot .pn-fine { white-space: nowrap; }
+.pn-tk-editor-acts { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.pn-tk-link { padding: 2px 4px; font-size: 11.5px; color: var(--blue); display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.pn-tk-link:disabled { color: var(--muted-3); cursor: default; }
+
+.pn-tk-list { flex: 1; min-height: 0; overflow: auto; padding: 0 0 8px; display: flex; flex-direction: column; }
+.pn-tk-card { flex: none; margin: 10px 10px 4px; padding: 11px 12px; border: 1px solid var(--line-note); border-radius: 10px; background: var(--bg-tint); display: flex; flex-direction: column; gap: 7px; }
+.pn-tk-card-h { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; color: var(--muted-head); }
+.pn-tk-card-st { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; color: var(--ink-sub); }
+.pn-tk-card-n { display: flex; align-items: flex-start; gap: 6px; width: 100%; padding: 0; border: 0; background: none; font: inherit; font-size: 14px; font-weight: 700; line-height: 1.35; color: var(--ink); text-align: left; cursor: pointer; }
+.pn-tk-card-n > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.pn-tk-card-n .pn-tk-chev { margin-top: 5px; }
+.pn-tk-card-n:hover { color: var(--blue); }
+.pn-tk-card-m { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--muted); }
+.pn-tk-card-m .sep { color: var(--muted-3-line); }
+.pn-tk-card-a { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+.pn-tk-card-a .pn-fine { line-height: 1.4; }
+.pn-tk-card .pn-tk-detail { padding: 2px 0 0; }
+
+.pn-tk-gh { flex: none; display: flex; align-items: center; gap: 6px; width: 100%; padding: 10px 12px 4px; border: 0; background: none; font: inherit; font-size: 11.5px; font-weight: 700; color: var(--muted-head); text-align: left; }
+.pn-tk-gh.fold { cursor: pointer; }
+.pn-tk-gh .n { color: var(--muted-3); font-weight: 600; }
+.pn-tk-row { flex: none; display: flex; align-items: center; gap: 9px; padding: 0 12px; min-height: 32px; }
+.pn-tk-row:hover, .pn-tk-row.open { background: var(--bg-punch); }
+.pn-tk-row.done .pn-tk-rname, .pn-tk-row.done .pn-tk-sub-n { color: var(--muted); text-decoration: line-through; }
+.pn-tk-rname { flex: 1; min-width: 0; display: flex; align-items: center; height: 32px; padding: 0; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--ink); text-align: left; cursor: pointer; }
+.pn-tk-row.open .pn-tk-rname { font-weight: 600; }
+.pn-tk-row.sub { padding: 0; min-height: 28px; }
+.pn-tk-row.sub:hover { background: none; }
+.pn-tk-sub-n { flex: 1; font-size: 12.5px; }
+/* 상태 글리프 — 할 일(점선 고리) · 진행 중(반 채움) · 완료(민트 채움 + 체크). 누르면 끝냄을 뒤집는다. */
+.pn-tk-st { flex: none; position: relative; width: 15px; height: 15px; padding: 0; border: 1.6px dashed var(--muted-3-line); border-radius: 50%; background: none; box-sizing: border-box; cursor: pointer; }
+.pn-tk-st:hover { border-color: var(--blue); }
+.pn-tk-st:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.pn-tk-st.doing { border: 1.6px solid var(--blue); background: linear-gradient(90deg, var(--blue) 50%, transparent 50%); }
+.pn-tk-st.done { border: 1.6px solid var(--mint-deep); background: var(--mint-deep); }
+.pn-tk-st.done::after { content: ''; position: absolute; left: 3.6px; top: .8px; width: 3.4px; height: 7px; border: solid var(--on-fill); border-width: 0 2px 2px 0; transform: rotate(42deg); }
+.pn-tk-st.static { width: 13px; height: 13px; cursor: default; pointer-events: none; }
+.pn-tk-st.static.done::after { left: 2.8px; top: .2px; height: 6px; }
+/* 줄 끝 칩 — 맡은 세션(.on, 상태 점 포함)이면 그 세션으로, 없으면 [세션 열기]. 이름이 먼저라 칩은 절반을 넘지 않는다. */
+.pn-tk-chip { flex: none; max-width: 45%; display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px 1px 7px; border: 1px solid var(--muted-3-line); border-radius: 999px; background: none; font: inherit; font-size: 11px; line-height: 16px; color: var(--muted-head); white-space: nowrap; cursor: pointer; }
+.pn-tk-chip:hover:not(:disabled) { border-color: var(--blue); color: var(--blue); }
+.pn-tk-chip:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.pn-tk-chip:disabled { cursor: default; }
+.pn-tk-chip.on { border-color: transparent; background: var(--ok-bg); color: var(--mint-deep); }
+.pn-tk-chip.on.past { background: var(--gray-bg); color: var(--muted-head); }
+.pn-tk-chip.on:hover { border-color: currentColor; color: var(--mint-deep); }
+.pn-tk-chip.on.past:hover { color: var(--blue); }
+
+.pn-tk-detail { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 4px 12px 12px 36px; background: var(--bg-punch); }
+.pn-tk-card .pn-tk-detail { background: none; }
+.pn-tk-ta-foot { min-height: 0; margin-top: -4px; }
+.pn-tk-ta-foot .pn-set-chip:empty { display: none; }
+.pn-tk-seg { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--gray-bg); }
+.pn-tk-card .pn-tk-seg, .pn-tk-row.open + .pn-tk-detail .pn-tk-seg { background: var(--bg); box-shadow: inset 0 0 0 1px var(--line-row); }
+.pn-tk-seg-b { flex: 1; height: 24px; padding: 0; border: 0; border-radius: 6px; background: none; font: inherit; font-size: 11.5px; color: var(--muted-head); cursor: pointer; }
+.pn-tk-seg-b:hover { color: var(--blue); }
+.pn-tk-seg-b.on { background: var(--bg-punch); color: var(--blue); font-weight: 700; cursor: default; }
+.pn-tk-sec { display: flex; flex-direction: column; }
+.pn-tk-sec-h { display: flex; align-items: center; gap: 6px; padding: 2px 0; font-size: 11.5px; font-weight: 700; color: var(--muted-head); }
+.pn-tk-sec-h .n { color: var(--muted-3); font-weight: 600; }
+.pn-tk-srow { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: 12.5px; }
+.pn-tk-srow .nm { flex: 1; }
+.pn-tk-srow .pn-fine { flex: none; }
+.pn-tk-link.add { align-self: flex-start; padding-left: 0; }
+.pn-tk-detail-foot { display: flex; align-items: center; gap: 8px; }
+
+.pn-tk-add { flex: none; display: flex; align-items: center; gap: 8px; margin: 6px 10px 10px; padding: 0 10px; height: 34px; border: 1px dashed var(--muted-3-line); border-radius: 8px; color: var(--muted-2); cursor: text; }
+.pn-tk-add:focus-within { border-style: solid; border-color: var(--blue); color: var(--blue); }
+/* 전역 input[type="text"](0,1,1) 가 테두리·바탕·안여백을 입힌다 — 점선 상자 안에 상자가 하나 더 서지 않게 (0,2,0) 으로 벗긴다. */
+.pn-tk-add .pn-tk-add-in { flex: 1; min-width: 0; width: auto; height: auto; padding: 0; border: 0; border-radius: 0; outline: 0; box-shadow: none; background: none; font: inherit; font-size: 12.5px; color: var(--ink); }
 }
 
 .pn-ov { overflow: hidden; }

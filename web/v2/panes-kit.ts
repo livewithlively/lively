@@ -102,6 +102,16 @@ export const FV_NOTE = 'lively_pn_files_note';    // '0' = 맨 위 안내를 접
 export type SortKey = 'name' | 'kind' | 'size' | 'date';
 export const ICON_STEPS = [64, 84, 110, 148, 196];
 export const SORT_LABEL: Record<SortKey, string> = { name: '이름', kind: '종류', size: '크기', date: '날짜' };
+// ── 세션 이름의 임시 자리 ─────────────────────────────────────────────────────────────
+//  새 세션을 막 열면 서버 이름이 오기 전까지 부를 이름이 없다 — 첫 지시(또는 그 세션이 맡은 태스크 이름)를 미리 넣어 둔다.
+//  그릇이 이 잎에 사는 이유(#4084): 세션을 여는 부품이 둘이다(panes-parts 의 새 세션 자리 · panes-tasks 의 [세션 열기]).
+//  한쪽 파일에 두면 다른 쪽이 그 파일을 실행시점에 import 해야 해 순환이 생긴다(check-imports 가 막는다).
+export const sessNameCache = new Map<string, string>();
+/** 새 세션을 막 열었을 때 — 첫 지시를 이름으로 미리 넣어 둔다(대화 꼬리를 다시 찾지 않게). */
+export function seedSessName(sid: string, text: string): void {
+  sessNameCache.set(sid, text.replace(/\s+/g, ' ').slice(0, 46));
+}
+
 export const lsGet = (k: string, d: string): string => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
 export const lsSet = (k: string, v: string): void => { try { localStorage.setItem(k, v); } catch { /* 사파리 사생활 모드 등 — 기억만 못 할 뿐 */ } };
 
