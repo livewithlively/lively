@@ -10,13 +10,14 @@
 //   P6 본문이 있으면 «## 태스크 본문» 아래에 싣는다
 //   P7 본문이 3000자를 넘으면 자르고 «task_detail_v6» 으로 전문을 보라고 말한다
 //   P8 프로젝트 문맥 절 — 태스크가 없으면 빈 문자열, 있으면 번호·이름·상태와 완료 방법(session_task done)
+//   P10 이름 다듬기 — 규칙 이름이 달고 오는 앞 목록기호·뒤 말줄임을 뗀다(숫자 목록은 건드리지 않는다)
 //   P9 이름 승계 판정 — «그때 우리가 넣은 이름 그대로»일 때만 바꾼다(사람이 손댔으면 물러난다 · 같은 이름이면 쓰지 않는다)
 //   W1 배선 — 태스크를 **만드는 자리**가 관문(session-launch)에 있고, 두 입구(중앙·노드)가 모두 그것을 부른다.
 //      이 줄이 왜 필요한가: 2026-09-20 이전엔 이 자리가 이름짓기(session_rename)에 있었고, 그건 «AI 가 불러 주면»
 //      이라 프로젝트 세션의 절반에만 태스크가 생겼다(실측 6개 중 3개). 호출이 조용히 빠지면 같은 고장이 되돌아온다.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { sessionTaskSpec, shouldRenameSessionTask, statusOnBind, taskKickoffPrompt, sessionTaskSection } from "./session-task.js";
+import { sessionTaskSpec, shouldRenameSessionTask, statusOnBind, taskKickoffPrompt, sessionTaskSection, tidyTaskName } from "./session-task.js";
 
 let pass = 0;
 const ok = (name: string): void => { pass++; console.log(`ok  ${name}`); };
@@ -95,6 +96,18 @@ ok("P4 이미 진행 중이면 쓰지 않고, 그 밖(완료 포함 — 다시 �
     assert.equal(shouldRenameSessionTask(cur, exp, nx), false, JSON.stringify([cur, exp, nx]));
   }
   ok("P9 이름 승계는 «직전 이름 그대로인 태스크» 에만 — 빈 값·동일 이름은 쓰지 않는다");
+}
+
+// P10 — 이름 다듬기
+{
+  assert.equal(tidyTaskName("- AI 세션 탭 = 전체 세션 풀스크린 조회"), "AI 세션 탭 = 전체 세션 풀스크린 조회");
+  assert.equal(tidyTaskName("우리 옛날에 회의해가지고 UI 개편 되게 많이 얘…"), "우리 옛날에 회의해가지고 UI 개편 되게 많이 얘");
+  assert.equal(tidyTaskName("사이드바 검색창 제거..."), "사이드바 검색창 제거");
+  assert.equal(tidyTaskName("2. 구현·PR — LVLY_GW_MODE"), "2. 구현·PR — LVLY_GW_MODE", "숫자 목록은 사람이 붙인 이름이다 — 건드리지 않는다");
+  assert.equal(tidyTaskName("  · 결제 백오프 "), "결제 백오프");
+  assert.equal(tidyTaskName("-"), "-", "기호 하나뿐이면 뗄 것이 없다(빈 이름을 만들지 않는다)");
+  assert.equal(sessionTaskSpec("- 사이드바 검색창 제거…", "box-1")?.name, "사이드바 검색창 제거");
+  ok("P10 규칙 이름의 앞 목록기호·뒤 말줄임을 뗀다(숫자 목록·기호 단독은 그대로)");
 }
 
 // W1 — 배선(소스 대조)
