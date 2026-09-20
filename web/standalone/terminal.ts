@@ -72,6 +72,49 @@ function linkTargetHere(uri: string): 'shell' | 'pane' | 'tab' {
   return linkOpenTarget(uri, { href: location.href, framed: window.parent !== window, desktop: inDesktopApp() });
 }
 
+// (순수 — 테스트 대상) 화면의 (row, col) 칸에 걸친 URL — **여러 줄로 쪼개진 긴 링크**를 한 덩이로 잇는다(#4083).
+//  rows[i] = i 번째 행을 **칸 정렬**로 편 글(넓은 글자의 뒤 칸은 '\0' — 글자 index = 칸 index), soft[i] = 그 행이 앞 행의
+//  터미널 자동 줄바꿈(xterm isWrapped) 연속인가, cols = 화면 폭.
+//  이음은 두 종류다:
+//  · soft — 셸처럼 폭을 넘겨 쓰면 터미널이 감싼다. 종전부터 이었다(isWrapped).
+//  · hard — ★ Claude Code 는 제가 줄을 끊는다(2.1.277 번들 실측: Ink 의 wrap-ansi `{trim:false, hard:true}`). 폭보다 긴 토큰은
+//    폭에서 잘려 다음 행 왼쪽 들여쓰기 뒤로 이어지고, 그 행은 isWrapped 가 아니다 — 종전 판정은 누른 행의 조각만 봐서 잘린
+//    주소를 열고 복사했다(원준님 2026-09-19 «화면이 작아서 두세 줄로 보이면 복사나 링크 클릭이 문제»).
+//    hard 이음 조건 셋 — 넷 다 맞아야 잇는다:
+//    ① 앞 행이 폭을 채웠다(끝 칸 −1 까지 — 오른쪽 여백 1칸 허용)  ② 앞 행 끝 덩어리와 뒤 행 첫 덩어리(들여쓰기 ≤ 8칸 뒤)가 둘 다
+//    URL 글자(ASCII)  ③ 그 둘을 이은 길이가 뒤 행의 글 폭(cols − 들여쓰기)보다 길다 — hard:true 는 **폭보다 긴 토큰만** 자른다.
+//    ③ 이 없으면 보통 줄바꿈이 우연히 폭을 꽉 채운 행(실측 흔하다)의 끝 URL 에 다음 행 첫 낱말이 붙는다.
+export function urlAtCell(rows: string[], soft: boolean[], row: number, col: number, cols: number): string | null {
+  const URLCH = /^[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+$/;
+  const trimEnd = (s: string): string => (s || '').replace(/ +$/, '');
+  const joinKind = (i: number): 'soft' | 'hard' | null => {   // i 행이 i-1 행에 이어지나
+    if (i <= 0 || i >= rows.length) return null;
+    if (soft[i]) return 'soft';
+    const a = trimEnd(rows[i - 1]);
+    if (a.length < cols - 1) return null;                                   // ①
+    const tail = /[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+$/.exec(a)?.[0] || '';
+    const m = /^( {0,8})(\S+)/.exec(rows[i] || '');
+    if (!tail || !m || !URLCH.test(m[2])) return null;                       // ②
+    return tail.length + m[2].length > cols - m[1].length ? 'hard' : null;   // ③
+  };
+  let top = row;
+  for (let g = 0; g < 12 && joinKind(top); g++) top--;
+  let text = '', at = -1;
+  for (let i = top; i < rows.length && i - top < 24; i++) {
+    const kind = i === top ? 'first' : joinKind(i);
+    if (!kind) break;
+    let r = trimEnd(rows[i]);
+    let cut = 0;
+    if (kind === 'hard') { cut = r.length - r.replace(/^ +/, '').length; r = r.slice(cut); }
+    if (i === row) { if (col < cut) return null; at = text.length + col - cut; }
+    // soft 로 이어지는 행은 폭까지 채운다(빈 칸도 그 줄의 글이다) — hard 조각은 사이에 빈칸 없이 붙는다.
+    text += joinKind(i + 1) === 'soft' ? r.padEnd(cols - cut) : r;
+  }
+  if (at < 0) return null;
+  const url = urlAtColumn(text.padEnd(at + 1), at);
+  return url ? url.replace(/\u0000/g, '') : null;
+}
+
 function openLinkFromTerminal(uri: string): void {
   try {
     const u = new URL(uri, location.href);
@@ -2977,19 +3020,30 @@ function linkAtPoint(host: HTMLElement, clientX: number, clientY: number): strin
   const row = Math.floor((clientY - r.top) / (r.height / term.rows));
   if (col < 0 || row < 0 || col >= term.cols || row >= term.rows) return null;
   const buf = term.buffer.active;
-  if (!buf.getLine(buf.viewportY + row)) return null;
-  // 긴 URL 은 다음 행으로 감싸인다 — 감싸인 이웃 행(isWrapped)을 이어 한 논리 줄로 보고, col 도 그만큼 민다.
-  let startY = buf.viewportY + row;
-  while (startY > 0 && buf.getLine(startY)?.isWrapped) startY--;
-  let text = '';
-  let colInLogical = col;
-  for (let y = startY; y < buf.length; y++) {
-    const l = buf.getLine(y);
-    if (!l || (y > startY && !l.isWrapped)) break;
-    if (y < buf.viewportY + row) colInLogical += term.cols;
-    text += l.translateToString(true).padEnd(term.cols);
+  const y = buf.viewportY + row;
+  if (!buf.getLine(y)) return null;
+  // 누른 행 위아래 12행을 칸 정렬로 편다 — 긴 URL 은 여러 행에 걸친다(이음 규칙은 urlAtCell 머리말).
+  const from = Math.max(0, y - 12), to = Math.min(buf.length - 1, y + 12);
+  const rows: string[] = [], soft: boolean[] = [];
+  for (let i = from; i <= to; i++) {
+    const l = buf.getLine(i);
+    rows.push(l ? cellRow(l, term.cols) : '');
+    soft.push(!!(l && l.isWrapped));
   }
-  return urlAtColumn(text, colInLogical);
+  return urlAtCell(rows, soft, y - from, col, term.cols);
+}
+// 버퍼 한 행 → 칸 정렬 글. translateToString 은 넓은 글자(한글)를 한 글자로 접어 **칸 index 와 글자 index 가 어긋난다** —
+//  종전엔 한글 뒤 URL 을 누르면 한글 수만큼 밀린 자리로 판정했다. 넓은 글자의 뒤 칸은 '\0', 여러 코드 단위 글자는 '\u0001'.
+export function cellRow(line: any, cols: number): string {
+  let s = '';
+  for (let x = 0; x < cols; x++) {
+    const c = line.getCell(x);
+    if (!c) break;
+    if (c.getWidth() === 0) { s += '\u0000'; continue; }
+    const ch = c.getChars();
+    s += !ch ? ' ' : ch.length === 1 ? ch : '\u0001';
+  }
+  return s.replace(/ +$/, '');
 }
 // (순수 — 테스트 대상) 우클릭 [복사]가 무엇을 잡나 + 링크 줄(#4083). sel = 웹(xterm) 선택 글 · appSel = 앱(Claude) 드래그
 //  선택을 복사할 판인가 · link = 커서 밑 링크('' = 없음).
