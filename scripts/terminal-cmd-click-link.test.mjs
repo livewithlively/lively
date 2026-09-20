@@ -10,8 +10,8 @@ import { importTerminalModule } from "./standalone-terminal-env.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = readFileSync(join(root, "web/standalone/terminal.ts"), "utf8");
-const { urlAtColumn, urlAtCell, cellRow, linkOpenTarget, ctxCopyPlan, shortLink } = await importTerminalModule();
-for (const f of [urlAtColumn, urlAtCell, cellRow, linkOpenTarget, ctxCopyPlan, shortLink]) assert.equal(typeof f, "function");
+const { urlAtColumn, urlAtCell, urlSpansAt, spanToRange, cellRow, linkOpenTarget, ctxCopyPlan, shortLink } = await importTerminalModule();
+for (const f of [urlAtColumn, urlAtCell, urlSpansAt, spanToRange, cellRow, linkOpenTarget, ctxCopyPlan, shortLink]) assert.equal(typeof f, "function");
 
 let pass = 0;
 const t = (n, fn) => { fn(); pass++; console.log(`ok  ${n}`); };
@@ -54,7 +54,7 @@ t("U7 스킴 없는 형태의 오탐 경계 — 경로 없는 점-이름·파일
 });
 t("W1 배선 — 판정은 mousedown 에서(press 가 pty 로 새면 TUI 확인창이 뜬다), down/up/click 캡처 셋이 한 판정을 공유", () => {
   assert.match(src, /pendingLink = wantsLink \? linkAtEvent\(ev\) : null/, "mousedown 에서 링크를 판정하지 않는다");
-  assert.match(src, /return urlAtCell\(rows, soft, y - from, col, term\.cols\);/, "판정이 urlAtCell(여러 행 잇기)을 안 쓴다");
+  assert.match(src, /return w \? urlAtCell\(w\.rows, w\.soft, w\.at, col, term\.cols\) : null;/, "판정이 urlAtCell(여러 행 잇기)을 안 쓴다");
   assert.match(src, /rows\.push\(l \? cellRow\(l, term\.cols\) : ''\);\s*soft\.push\(!!\(l && l\.isWrapped\)\);/, "행을 칸 정렬로 펴지 않거나 감싸인 행(isWrapped)을 안 넘긴다");
   // 캡처(true) 3종 — 버블 단계면 xterm 이 먼저 먹는다
   for (const evName of ["mousedown", "mouseup", "click"]) {
@@ -233,6 +233,64 @@ t("D14 cellRow — 넓은 글자 뒤 칸 '\\0' · 빈 칸 ' ' · 여러 코드 �
   assert.equal(cellRow(line, 99), "링\0a \u0001\0b  z");
 });
 
+// ── #4083 E. 호버 밑줄 범위(urlSpansAt · spanToRange) — 원준님 «여전히 밑줄 쳐지는 건 한 줄밖에 없는데?» ──
+//  xterm 규약은 vendored addon-web-links 0.11 의 computeLink 에서 읽었다: provideLinks(y) 의 y 는 **버퍼 절대 줄(1-기준)**,
+//  range.start.x = 0기준+1 · range.end.x = 0기준 배타끝(= 1기준 마지막 칸, 포함).
+t("E1 한 행 안의 URL — 범위가 그 글자만(앞말·뒷말 제외)", () => {
+  const row = "AAA https://a.io/x BBB";
+  assert.deepEqual(urlSpansAt([row], [false], 0, 80),
+    [{ url: "https://a.io/x", startRow: 0, startCol: 4, endRow: 0, endCol: 18 }]);
+});
+t("E2 ★ Claude 2행 쪼갬 — 어느 행에서 물어도 같은 한 범위(첫 행 시작 ~ 둘째 행 끝)", () => {
+  const rows = claudeWrap(GOV, 100);
+  const want = [{ url: GOV, startRow: 0, startCol: 2, endRow: 1, endCol: 2 + (GOV.length - 98) }];
+  assert.deepEqual(urlSpansAt(rows, NO(2), 0, 100), want, "첫 행에서 물었을 때");
+  assert.deepEqual(urlSpansAt(rows, NO(2), 1, 100), want, "둘째 행에서 물었을 때 — 여기서 빈손이면 둘째 줄엔 밑줄이 안 그어진다");
+});
+t("E3 ★ Claude 3행 — 가운데 행에서 물어도 첫 행 시작 ~ 셋째 행 끝", () => {
+  const rows = claudeWrap(GOV, 70);
+  assert.equal(rows.length, 3);
+  const sp = urlSpansAt(rows, NO(3), 1, 70);
+  assert.equal(sp.length, 1);
+  assert.deepEqual([sp[0].startRow, sp[0].startCol, sp[0].endRow, sp[0].endCol], [0, 2, 2, 2 + (GOV.length - 68 * 2)]);
+});
+t("E4 한 행에 URL 둘 — 범위 둘이 각각 제자리", () => {
+  const row = "https://a.io/1 사이 https://b.io/2";   // '사이' 는 한 글자씩(칸 정렬 아님) — 자리만 본다
+  const sp = urlSpansAt([row], [false], 0, 80);
+  assert.equal(sp.length, 2);
+  assert.deepEqual(sp.map((x) => [x.url, x.startCol, x.endCol]),
+    [["https://a.io/1", 0, 14], ["https://b.io/2", row.indexOf("https://b.io/2"), row.length]]);
+});
+t("E5 괄호·문장부호 꼬리는 밑줄에서 뺀다", () => {
+  const sp = urlSpansAt(["보세요: (https://a.io/x). 끝"], [false], 0, 80);
+  assert.equal(sp.length, 1);
+  assert.equal(sp[0].url, "https://a.io/x");
+  assert.deepEqual([sp[0].startCol, sp[0].endCol], [6, 20]);   // 이 픽스처는 칸 정렬이 아니다 — 한글도 한 자리로 센다
+});
+t("E6 셸 자동 줄바꿈(isWrapped) 2행도 한 범위로 이어진다", () => {
+  const U = "https://a.io/" + "x".repeat(30);
+  const rows = [U.slice(0, 20), U.slice(20, 40), U.slice(40)];
+  const sp = urlSpansAt(rows, [false, true, true], 1, 20);
+  assert.deepEqual(sp, [{ url: U, startRow: 0, startCol: 0, endRow: 2, endCol: 3 }]);
+});
+t("E7·E8 링크 없는 행은 빈 배열 · 이 행에 안 걸치는 링크는 그 행 결과에 없다", () => {
+  assert.deepEqual(urlSpansAt(["그냥 글 한 줄"], [false], 0, 80), []);
+  const rows = ["https://a.io/x", "다른 줄", "https://b.io/y"];
+  assert.deepEqual(urlSpansAt(rows, NO(3), 1, 80), []);
+  assert.deepEqual(urlSpansAt(rows, NO(3), 2, 80).map((x) => x.url), ["https://b.io/y"]);
+});
+t("E9 한글 뒤 URL — 범위가 칸 기준이다(글자 수가 아니라)", () => {
+  const row = "링\0크\0: https://a.io/x";   // '링'·'크' 가 2칸씩 → URL 은 6번 칸에서 시작
+  const sp = urlSpansAt([row], [false], 0, 80);
+  assert.deepEqual([sp[0].startCol, sp[0].endCol], [6, 20]);
+});
+t("E10 spanToRange — 창 시작 절대행 보정 · xterm 의 end.x 포함 규약", () => {
+  assert.deepEqual(spanToRange({ startRow: 0, startCol: 4, endRow: 0, endCol: 18 }, 0),
+    { start: { x: 5, y: 1 }, end: { x: 18, y: 1 } });
+  assert.deepEqual(spanToRange({ startRow: 1, startCol: 2, endRow: 2, endCol: 60 }, 1200),
+    { start: { x: 3, y: 1202 }, end: { x: 60, y: 1203 } });
+});
+
 // ── #4083 배선 — 위 판정들이 실제 경로에 물려 있나(관측 장치가 죽어 있으면 위 표는 통과하면서 아무것도 못 본다) ──
 t("W3 클릭 열기와 우클릭이 **같은** 커서 밑 링크 판정(linkAtPoint)을 쓴다", () => {
   assert.match(src, /const linkAtEvent = \(ev: MouseEvent\): string \| null => linkAtPoint\(host, ev\.clientX, ev\.clientY\);/);
@@ -242,6 +300,13 @@ t("W4 [복사]·[링크 복사]·[링크 열기] 가 plan 을 따른다 — 링�
   assert.match(src, /else if \(plan\.copy === 'link'\) copyText\(link, false, true\);/);
   assert.match(src, /\.\.\.\(plan\.linkRow \? \[\{ label: '링크 복사', hint: shortLink\(link\), run: \(\) => copyText\(link, false, true\) \}\] : \[\]\)/);
   assert.match(src, /\.\.\.\(url \? \[\{ label: '링크 열기', hint: openHint, run: \(\) => openLinkFromTerminal\(url\) \}\] : \[\]\)/);
+});
+t("W6 배선 — 호버 밑줄도 우리 판정(링크 제공자)이 긋고, 애드온보다 먼저 등록된다", () => {
+  assert.match(src, /try \{\s*term\.registerLinkProvider\(\{\s*provideLinks:/, "링크 제공자를 (조건 없이) 등록하지 않는다 — 애드온이 한 행씩만 긋는다");
+  assert.match(src, /range: spanToRange\(sp, w!\.from\), text: sp\.url,/, "범위를 spanToRange 로 안 만든다");
+  assert.ok(src.indexOf("term.registerLinkProvider({") < src.indexOf("new WebLinksAddon.WebLinksAddon"), "애드온이 먼저 등록되면 그쪽 링크가 이긴다");
+  assert.match(src, /const spans = w \? urlSpansAt\(w\.rows, w\.soft, w\.at, term\.cols\) : \[\];/, "제공자가 urlSpansAt 을 안 쓴다");
+  assert.match(src, /const w = readRows\(term\.buffer\.active\.viewportY \+ row\);/, "클릭 판정과 호버가 같은 창 읽기를 안 쓴다");
 });
 t("W5 여는 곳은 한 판정 — 열기(openLinkFromTerminal)가 linkOpenTarget 을 탄다 · 앱 판정은 부모 프레임의 다리까지 본다", () => {
   assert.match(src, /const where = linkTargetHere\(uri\);/);

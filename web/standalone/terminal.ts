@@ -26,19 +26,24 @@ declare const WebLinksAddon: any;
 //  Cmd/Ctrl+클릭 링크 열기(#1541)의 판정부: 마우스 트래킹이 켜진 pane(claude 등 TUI)에서는 xterm 이
 //  클릭을 앱으로 보내므로 web-links 애드온(맨클릭)이 못 받는다 — 우회는 Shift+클릭뿐인데 사람들의 손은
 //  iTerm·VSCode 습관(Cmd+클릭)이다. 그래서 DOM 레벨에서 좌표→셀→그 줄 텍스트로 URL 을 직접 찾는다.
-export function urlAtColumn(lineText: string, col: number): string | null {
+export function urlMatches(text: string): { start: number; end: number; url: string }[] {
   // 세 형태를 링크로 본다(실측 #1541: TUI 가 스킴 없이 `developer.apple.com/account/…` 를 찍는다 — 스킴만 보면 놓친다):
   //  ① https?:// 절대 URL  ② www. 시작  ③ 스킴 없는 host+경로(TLD 알파벳 2+ && `/` 경로 필수 — `package.json` 처럼
   //  경로 없는 점-이름을 오탐하지 않기 위해 ③ 은 경로가 있어야 한다). ②③ 은 열 때 https:// 를 붙인다.
-  const re = /(https?:\/\/[^\s"'<>\u3000]+|(?:www\.|(?:[a-z0-9][a-z0-9-]*\.)+[a-z]{2,}\/)[^\s"'<>\u3000]*)/gi;
-  for (let m = re.exec(lineText); m; m = re.exec(lineText)) {
-    if (col >= m.index && col < m.index + m[0].length) {
-      const raw = m[0].replace(/[.,;:!?)\]]+$/, "");   // 문장부호 꼬리 제거(문장 속 URL)
-      if (!raw) return null;
-      return /^https?:\/\//i.test(raw) ? raw : "https://" + raw;
-    }
+  //  범위 [start,end) 는 **화면에 보이는 글자**의 자리다 — 호버 밑줄이 여기까지 그어진다(#4083 링크 제공자).
+  const re = /(https?:\/\/[^\s"\'<>\u3000]+|(?:www\.|(?:[a-z0-9][a-z0-9-]*\.)+[a-z]{2,}\/)[^\s"\'<>\u3000]*)/gi;
+  const out: { start: number; end: number; url: string }[] = [];
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    const raw = m[0].replace(/[.,;:!?)\]]+$/, "");   // 문장부호 꼬리 제거(문장 속 URL)
+    if (!raw) continue;
+    const url = (/^https?:\/\//i.test(raw) ? raw : "https://" + raw).replace(/\u0000/g, '');   // 넓은 글자 뒤 칸 자리표 제거
+    out.push({ start: m.index, end: m.index + raw.length, url });
   }
-  return null;
+  return out;
+}
+export function urlAtColumn(lineText: string, col: number): string | null {
+  const m = urlMatches(lineText).find((x) => col >= x.start && col < x.end);
+  return m ? m.url : null;
 }
 
 // (순수 — 테스트 대상) 터미널 속 링크를 어디서 열지 — 'shell' 부모 셸 안 이동 · 'pane' 곁칸 웹 칸 · 'tab' 새 창(브라우저=새 탭).
@@ -84,7 +89,7 @@ function linkTargetHere(uri: string): 'shell' | 'pane' | 'tab' {
 //    ① 앞 행이 폭을 채웠다(끝 칸 −1 까지 — 오른쪽 여백 1칸 허용)  ② 앞 행 끝 덩어리와 뒤 행 첫 덩어리(들여쓰기 ≤ 8칸 뒤)가 둘 다
 //    URL 글자(ASCII)  ③ 그 둘을 이은 길이가 뒤 행의 글 폭(cols − 들여쓰기)보다 길다 — hard:true 는 **폭보다 긴 토큰만** 자른다.
 //    ③ 이 없으면 보통 줄바꿈이 우연히 폭을 꽉 채운 행(실측 흔하다)의 끝 URL 에 다음 행 첫 낱말이 붙는다.
-export function urlAtCell(rows: string[], soft: boolean[], row: number, col: number, cols: number): string | null {
+export function joinRows(rows: string[], soft: boolean[], row: number, cols: number): { text: string; segs: { row: number; at: number; cut: number; len: number }[] } {
   const URLCH = /^[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+$/;
   const trimEnd = (s: string): string => (s || '').replace(/ +$/, '');
   const joinKind = (i: number): 'soft' | 'hard' | null => {   // i 행이 i-1 행에 이어지나
@@ -99,20 +104,58 @@ export function urlAtCell(rows: string[], soft: boolean[], row: number, col: num
   };
   let top = row;
   for (let g = 0; g < 12 && joinKind(top); g++) top--;
-  let text = '', at = -1;
+  let text = '';
+  const segs: { row: number; at: number; cut: number; len: number }[] = [];
   for (let i = top; i < rows.length && i - top < 24; i++) {
     const kind = i === top ? 'first' : joinKind(i);
     if (!kind) break;
     let r = trimEnd(rows[i]);
     let cut = 0;
     if (kind === 'hard') { cut = r.length - r.replace(/^ +/, '').length; r = r.slice(cut); }
-    if (i === row) { if (col < cut) return null; at = text.length + col - cut; }
     // soft 로 이어지는 행은 폭까지 채운다(빈 칸도 그 줄의 글이다) — hard 조각은 사이에 빈칸 없이 붙는다.
-    text += joinKind(i + 1) === 'soft' ? r.padEnd(cols - cut) : r;
+    const piece = joinKind(i + 1) === 'soft' ? r.padEnd(cols - cut) : r;
+    segs.push({ row: i, at: text.length, cut, len: piece.length });
+    text += piece;
   }
-  if (at < 0) return null;
-  const url = urlAtColumn(text.padEnd(at + 1), at);
-  return url ? url.replace(/\u0000/g, '') : null;
+  return { text, segs };
+}
+
+// (순수 — 테스트 대상) 화면의 (row, col) 칸에 걸친 URL. 없으면 null.
+export function urlAtCell(rows: string[], soft: boolean[], row: number, col: number, cols: number): string | null {
+  const { text, segs } = joinRows(rows, soft, row, cols);
+  const seg = segs.find((g) => g.row === row);
+  if (!seg || col < seg.cut) return null;
+  const at = seg.at + col - seg.cut;
+  const m = urlMatches(text.padEnd(at + 1)).find((x) => at >= x.start && at < x.end);
+  return m ? m.url : null;
+}
+
+// (순수 — 테스트 대상) 그 행에 걸치는 링크들의 **범위** — 호버 밑줄용(#4083 원준님 «밑줄이 한 줄만 그어진다»).
+//  xterm 의 web-links 애드온은 한 행씩(그리고 isWrapped 만) 보므로 쪼개진 링크의 첫 조각에만 밑줄이 그어졌다.
+//  칸 범위는 [startCol, endCol) — 행이 다르면 여러 행에 걸친 한 링크다.
+export function urlSpansAt(rows: string[], soft: boolean[], row: number, cols: number): { url: string; startRow: number; startCol: number; endRow: number; endCol: number }[] {
+  const { text, segs } = joinRows(rows, soft, row, cols);
+  const back = (idx: number): { row: number; col: number } | null => {
+    const g = segs.find((x) => idx >= x.at && idx < x.at + x.len);
+    return g ? { row: g.row, col: idx - g.at + g.cut } : null;
+  };
+  const out: { url: string; startRow: number; startCol: number; endRow: number; endCol: number }[] = [];
+  for (const m of urlMatches(text)) {
+    const s = back(m.start), e = back(m.end - 1);
+    if (!s || !e) continue;
+    if (row < s.row || row > e.row) continue;            // 이 행에 안 걸치면 이 행의 링크가 아니다
+    out.push({ url: m.url, startRow: s.row, startCol: s.col, endRow: e.row, endCol: e.col + 1 });
+  }
+  return out;
+}
+
+// (순수 — 테스트 대상) 창 안 범위 → xterm 링크 범위. xterm 은 **버퍼 절대 줄(1-기준)** 과 **끝 칸 포함(1-기준)** 으로 받는다
+//  (vendored addon-web-links 0.11 의 computeLink 와 같은 규약: start {x: 0기준+1}, end {x: 0기준 끝(배타)} ).
+export function spanToRange(span: { startRow: number; startCol: number; endRow: number; endCol: number }, fromAbs: number): { start: { x: number; y: number }; end: { x: number; y: number } } {
+  return {
+    start: { x: span.startCol + 1, y: fromAbs + span.startRow + 1 },
+    end: { x: span.endCol, y: fromAbs + span.endRow + 1 },
+  };
 }
 
 function openLinkFromTerminal(uri: string): void {
@@ -2795,6 +2838,28 @@ export async function boot() {
   // 터미널 속 URL 을 클릭 가능하게(#1541) — 종전엔 애드온이 없어 하네스(claude)가 찍은 링크가 그냥 색칠된 글자였다
   //  (xterm 은 캔버스에 그려 DOM 앵커가 없다 — 사람은 "링크인데 안 눌린다"로 본다). 열기 규칙 openLinkFromTerminal.
   //  CDN 로드 실패 시 조용히 종전 동작(클릭 불가) — 링크는 편의지 전제가 아니다.
+  // ★ 호버 밑줄은 **우리 판정**으로 긋는다(#4083 원준님 «여전히 밑줄 쳐지는 건 한 줄밖에 없는데?»). 애드온의 제공자는 한 행씩,
+  //  그것도 터미널 자동 줄바꿈(isWrapped)만 이어 보므로, Claude 가 제 손으로 끊은 두세 줄짜리 링크는 **첫 조각에만** 밑줄이
+  //  그어졌다(클릭·복사는 캡처 경로라 이미 전체를 잡는데, 사람은 밑줄 그어진 데까지만 링크로 읽는다).
+  //  제공자는 애드온보다 **먼저** 등록한다 — xterm 은 앞선 제공자가 링크를 주면 뒤는 묻지 않는다.
+  //  xterm 규약: y 는 버퍼 절대 줄(1-기준) · 범위 end.x 는 **포함**(spanToRange 머리말).
+  try {
+    term.registerLinkProvider({
+      provideLinks: (y: number, cb: (links: any[] | undefined) => void): void => {
+        let links: any[] | undefined;
+        try {
+          const w = readRows(y - 1);
+          const spans = w ? urlSpansAt(w.rows, w.soft, w.at, term.cols) : [];
+          links = spans.map((sp) => ({
+            range: spanToRange(sp, w!.from), text: sp.url,
+            activate: (e: MouseEvent) => { e.preventDefault(); openLinkFromTerminal(sp.url); },
+          }));
+          if (!links.length) links = undefined;
+        } catch (_) { links = undefined; }   // 한 번의 실패가 호버를 영영 죽이지 않게
+        cb(links);
+      },
+    });
+  } catch (_) { /* 구 xterm(제공자 API 없음) — 아래 애드온이 종전대로 한 행씩 긋는다 */ }
   if (window.WebLinksAddon && window.WebLinksAddon.WebLinksAddon) {
     term.loadAddon(new WebLinksAddon.WebLinksAddon((e: MouseEvent, uri: string) => { e.preventDefault(); openLinkFromTerminal(uri); }));
   }
@@ -3000,19 +3065,24 @@ function linkAtPoint(host: HTMLElement, clientX: number, clientY: number): strin
   const col = Math.floor((clientX - r.left) / (r.width / term.cols));
   const row = Math.floor((clientY - r.top) / (r.height / term.rows));
   if (col < 0 || row < 0 || col >= term.cols || row >= term.rows) return null;
+  const w = readRows(term.buffer.active.viewportY + row);
+  return w ? urlAtCell(w.rows, w.soft, w.at, col, term.cols) : null;
+}
+// 버퍼의 absY 행 둘레(위아래 12행)를 칸 정렬로 편다 — 긴 URL 은 여러 행에 걸친다(이음 규칙은 joinRows 머리말).
+//  클릭 판정(linkAtPoint)과 호버 밑줄(링크 제공자)이 같은 창을 본다.
+function readRows(absY: number): { rows: string[]; soft: boolean[]; from: number; at: number } | null {
   const buf = term.buffer.active;
-  const y = buf.viewportY + row;
-  if (!buf.getLine(y)) return null;
-  // 누른 행 위아래 12행을 칸 정렬로 편다 — 긴 URL 은 여러 행에 걸친다(이음 규칙은 urlAtCell 머리말).
-  const from = Math.max(0, y - 12), to = Math.min(buf.length - 1, y + 12);
+  if (!buf.getLine(absY)) return null;
+  const from = Math.max(0, absY - 12), to = Math.min(buf.length - 1, absY + 12);
   const rows: string[] = [], soft: boolean[] = [];
   for (let i = from; i <= to; i++) {
     const l = buf.getLine(i);
     rows.push(l ? cellRow(l, term.cols) : '');
     soft.push(!!(l && l.isWrapped));
   }
-  return urlAtCell(rows, soft, y - from, col, term.cols);
+  return { rows, soft, from, at: absY - from };
 }
+
 // 버퍼 한 행 → 칸 정렬 글. translateToString 은 넓은 글자(한글)를 한 글자로 접어 **칸 index 와 글자 index 가 어긋난다** —
 //  종전엔 한글 뒤 URL 을 누르면 한글 수만큼 밀린 자리로 판정했다. 넓은 글자의 뒤 칸은 '\0', 여러 코드 단위 글자는 '\u0001'.
 export function cellRow(line: any, cols: number): string {
