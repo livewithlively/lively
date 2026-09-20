@@ -3,11 +3,18 @@
 //  신고: «여기 페이지에서 노션~클릭업 등 외부 앱들 연결이 2종류인데 연결 됐는지 여부를 어떻게 표시할지
 //   고민한 적 있지 않았나?» — 화면은 머리말에서 «연결이 두 가지» 라고 말해 놓고 카드는 한 축만 봤다.
 //
-//  사양(엣지 표 A1~D2)은 스크래치패드가 아니라 여기 단언 문구로 남는다. 화면이 지켜야 하는 약속 넷:
+//  2판 지시(원준 2026-09-20): «둘 중 하나만 연결된 상태의 «연결 중» 같은 중간 상태를 만들면 좋겠다.
+//   덜 완료된 느낌을 주고, 안에 들어가면 남은 하나를 [연결하기] / [연결하지 않음] 중에 고르게 하고,
+//   어느 쪽이든 정하면 밖에 «연결 완료»로 뜨게.»
+//
+//  사양(엣지 표 A1~D2)은 스크래치패드가 아니라 여기 단언 문구로 남는다. 화면이 지켜야 하는 약속 여섯:
 //   ① 두 축의 근거는 서로 다르다 — 한쪽으로 다른 쪽을 추정하지 않는다.
-//   ② «연결됨» 묶음은 **어느 한 축이라도** 켜진 앱이다(자격만 보면 자료를 가져오는 앱이 «연결 안 함» 칸에 선다).
+//   ② 하나도 안 켰으면 «연결할 수 있는 앱», **하나만 켜고 나머지를 안 정했으면 «연결 중»**, 남은 게 없으면 «연결 완료».
 //   ③ 자료 가져오기가 없는 앱은 «꺼짐» 이 아니라 «없어요» 다 — 켤 수도 없는 것을 껐다고 말하지 않는다.
-//   ④ 준비 중은 묶음에선 이기고, 카드의 두 축은 사실 그대로다(쓰던 연결을 없는 척하지 않는다).
+//      그리고 **없는 축은 «남은 것»이 아니다**(축 하나뿐인 앱이 영영 «연결 중»에 머물면 안 된다).
+//   ④ «안 쓴다»고 정한 축은 꺼진 것과 다른 말이다 — 정한 것은 미완이 아니므로 «연결 완료»로 간다.
+//   ⑤ 정한 것이 **사실을 이기지 못한다** — 실제로 켜져 있거나 준비 중이면 그 사실이 먼저다.
+//   ⑥ 준비 중은 묶음에선 이기고, 카드의 두 축은 사실 그대로다(쓰던 연결을 없는 척하지 않는다).
 import { strict as assert } from "node:assert";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,7 +24,7 @@ let pass = 0;
 const ok = (cond, what) => { assert.ok(cond, what); pass++; };
 const eq = (got, want, what) => { assert.deepEqual(got, want, what); pass++; };
 
-const { COLLECT_APPS, COLLECT_PRESET_APP, appAxes, collectTally, listBucket } =
+const { COLLECT_APPS, COLLECT_PRESET_APP, appAxes, collectTally, listBucket, pendingAxes, skipKey } =
   await import(join(root, "public/app/lib/connect-axes.js"));
 
 const on = (preset) => ({ preset_key: preset, enabled: true });
@@ -25,8 +32,9 @@ const off = (preset) => ({ preset_key: preset, enabled: false });
 const tallyOf = (...rows) => collectTally(rows);
 
 // 배선 — 관측 장치가 죽어 있으면 아래 단언은 통과하면서 아무것도 안 본다.
-ok(typeof collectTally === "function" && typeof appAxes === "function" && typeof listBucket === "function",
-  "W0 잣대 셋을 실제로 불러왔다");
+ok(typeof collectTally === "function" && typeof appAxes === "function" && typeof listBucket === "function"
+  && typeof pendingAxes === "function" && typeof skipKey === "function",
+  "W0 잣대 다섯을 실제로 불러왔다");
 ok(COLLECT_APPS.length >= 6 && Object.keys(COLLECT_PRESET_APP).length >= 8, "W1 표 둘이 비어 있지 않다");
 
 // ── A. 수집기 셈 (collectTally) ─────────────────────────────────────────────
@@ -80,16 +88,51 @@ ok(COLLECT_APPS.length >= 6 && Object.keys(COLLECT_PRESET_APP).length >= 8, "W1 
     "B10 준비 중이라도 이미 연결해 둔 사람에겐 켜진 그대로 보인다");
 }
 
-// ── C. 목록 묶음 (listBucket) ──────────────────────────────────────────────
+// ── C. 목록 묶음 (listBucket) — 네 갈래 ────────────────────────────────────
+//  ★ 중간 상태(#3778, 원준 2026-09-20): «수집기는 흔히 저절로 생기니 둘 중 하나만 켜진 상태가 흔하다.
+//   그 상황은 뭔가 덜 완료된 느낌을 줘야 하고, 안에서 나머지를 켜거나 «안 쓴다»고 정하면 밖이 «연결 완료»가 된다.»
 {
   const none = tallyOf();
-  eq(listBucket(appAxes("notion", "on", none), false), "on", "C1 자격만 켜져도 «연결된 앱»");
-  eq(listBucket(appAxes("notion", "off", tallyOf(on("notion"))), false), "on",
-    "★C2 자료 가져오기만 켜져도 «연결된 앱» — 종전엔 여기서 «연결할 수 있는 앱» 칸에 섰다");
-  eq(listBucket(appAxes("figma", "off", none), false), "off", "C3 둘 다 꺼짐이면 «연결할 수 있는 앱»");
-  eq(listBucket(appAxes("prometheus", "off", none), false), "off", "C4 축이 하나뿐인 앱도 판정은 같다");
+  const skip = (...ks) => new Set(ks);
+
+  eq(listBucket(appAxes("figma", "off", none), false), "off", "C1 둘 다 꺼짐이면 «연결할 수 있는 앱»");
+  eq(listBucket(appAxes("notion", "on", none), false), "half",
+    "★C2 자격만 켜졌고 자료 가져오기를 안 정했으면 «연결 중» — 종전엔 이게 «연결됨»과 한 칸이라 끝난 것처럼 보였다");
+  eq(listBucket(appAxes("notion", "off", tallyOf(on("notion"))), false), "half",
+    "★C3 자료 가져오기만 켜진 흔한 상태도 «연결 중» — 종전엔 «연결할 수 있는 앱» 칸에 섰다(반대말)");
+  eq(listBucket(appAxes("notion", "on", tallyOf(on("notion"))), false), "on", "C4 둘 다 켜면 «연결 완료»");
+  eq(listBucket(appAxes("prometheus", "on", none), false), "on",
+    "★C5 없는 축은 남은 것이 아니다 — 축이 하나뿐인 앱은 그 하나만 켜면 «연결 완료»");
+  eq(listBucket(appAxes("prometheus", "off", none), false), "off", "C6 그 앱도 하나도 안 켜면 «연결할 수 있는 앱»");
   eq(listBucket(appAxes("google", "on", tallyOf(on("gdrive"))), true), "soon",
-    "C5 준비 중은 묶음에서 연결 여부를 이긴다(#2243) — 그래도 카드의 두 축은 켜짐으로 남는다");
+    "C7 준비 중은 묶음에서 연결 여부를 이긴다(#2243) — 그래도 카드의 두 축은 켜짐으로 남는다");
+
+  // ★ «안 쓴다»고 **정하면** 끝난 것이다 — 켠 것과 같은 칸으로 간다.
+  eq(listBucket(appAxes("notion", "on", none, skip(skipKey("notion", "get"))), false), "on",
+    "★C8 «자료 가져오기는 안 쓸래요» 를 누르면 밖이 «연결 완료»가 된다(원준 지시의 핵심)");
+  eq(listBucket(appAxes("notion", "off", tallyOf(on("notion")), skip(skipKey("notion", "use"))), false), "on",
+    "C9 반대쪽을 정해도 같다");
+  eq(listBucket(appAxes("notion", "off", none, skip(skipKey("notion", "use"))), false), "off",
+    "★C10 켠 것이 하나도 없는데 한쪽만 «안 쓴다»면 그건 완료가 아니다 — 여전히 «연결할 수 있는 앱»");
+  eq(appAxes("notion", "off", none, skip(skipKey("notion", "use"))).use, "skip",
+    "C11 정한 축은 «꺼짐»이 아니라 «안 쓰기로 함»이다(화면이 다른 말을 해야 한다)");
+
+  // ⚠ 정한 것이 사실을 이기면 안 된다.
+  eq(appAxes("notion", "on", none, skip(skipKey("notion", "use"))).use, "on",
+    "★C12 실제로 켜져 있으면 «안 쓴다» 표시가 이기지 못한다(화면이 거짓말하지 않는다)");
+  eq(appAxes("notion", "off", tallyOf(on("notion")), skip(skipKey("notion", "get"))).get, "on",
+    "C13 수집기가 돌고 있으면 마찬가지");
+  eq(appAxes("google", "soon", none, skip(skipKey("google", "use"))).use, "soon",
+    "C14 준비 중도 «안 쓴다»가 못 이긴다(못 켜는 것을 사람이 정한 것으로 바꾸지 않는다)");
+  eq(appAxes("prometheus", "off", none, skip(skipKey("prometheus", "get"))).get, "none",
+    "C15 없는 축은 «안 쓴다»로도 안 바뀐다(정할 것이 없다)");
+
+  // 남은 것 열거 — 상세의 결정 줄이 이 목록으로 그려진다.
+  eq(pendingAxes(appAxes("notion", "on", none)), ["get"], "C16 남은 축을 이름으로 준다");
+  eq(pendingAxes(appAxes("notion", "off", none)), ["use", "get"], "C17 둘 다 안 정했으면 둘 다");
+  eq(pendingAxes(appAxes("notion", "on", none, skip(skipKey("notion", "get")))), [], "C18 정하면 남은 것이 없다");
+  eq(pendingAxes(appAxes("prometheus", "on", none)), [], "C19 없는 축은 남은 것에 안 들어간다");
+  eq(skipKey("notion", "get"), "notion:get", "C20 저장 키 모양");
 }
 
 // ── D. 표 둘의 정합 ────────────────────────────────────────────────────────

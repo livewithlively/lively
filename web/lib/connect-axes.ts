@@ -8,8 +8,21 @@
 //
 //  ⚠ 이 파일은 DOM 을 모른다 — 판정만 한다(그래서 scripts/connect-axes.test.mjs 가 표를 돈다).
 
-/** 한 축의 상태 — 켜짐 · 꺼짐 · 라이블리가 준비 중 · 이 앱엔 그 축이 아예 없음. */
-export type AxisState = 'on' | 'off' | 'soon' | 'none';
+/**
+ * 한 축의 상태.
+ *  · on   — 켜져 있다
+ *  · off  — 아직 안 켰고 **정하지도 않았다**(이 상태가 있으면 그 앱은 «연결 중»이다)
+ *  · skip — 이 사람이 «안 쓴다»고 **정했다**. 꺼진 것과 다른 말이다 — 정한 것은 미완이 아니다.
+ *  · soon — 라이블리가 아직 못 연다
+ *  · none — 이 앱엔 그 축이 아예 없다(끌 수 있는 것이 아니다)
+ */
+export type AxisState = 'on' | 'off' | 'skip' | 'soon' | 'none';
+
+/** 목록에서 이 앱이 어느 묶음에 서나. «half» = 한쪽만 켜고 나머지는 아직 안 정했다. */
+export type CardState = 'on' | 'half' | 'off' | 'soon';
+
+/** «안 쓴다»고 정한 축의 키 — `<앱키>:use` · `<앱키>:get`. */
+export function skipKey(app: string, axis: 'use' | 'get'): string { return `${app}:${axis}`; }
 
 /**
  * 수집기 preset → 외부 앱 키. **관문이 아니라 별명표다** — 여기 있는 것만 통과시키는 게 아니라, 이름이
@@ -65,6 +78,14 @@ export interface AppAxes {
   getOn: number;
 }
 
+/** 아직 «켤까 말까»가 남은 축 — 이게 있으면 카드가 «연결 중»이다(덜 끝난 느낌은 여기서 나온다). */
+export function pendingAxes(a: AppAxes): Array<'use' | 'get'> {
+  const out: Array<'use' | 'get'> = [];
+  if (a.use === 'off') out.push('use');
+  if (a.get === 'off') out.push('get');
+  return out;
+}
+
 /**
  * 앱 하나의 두 축.
  *  @param key   앱 키(LOGIN_SERVICES.key)
@@ -75,23 +96,32 @@ export interface AppAxes {
  *   «없는 앱만 빼기» 로 적으면 앱이 늘 때마다 조용히 «꺼짐» 으로 새서, 켤 수도 없는 축을 «꺼져 있다» 고
  *   말하게 된다(이 프로젝트가 세 번 밟은 그 모양 — 3778 본문 «열거의 방향»).
  */
-export function appAxes(key: string, use: AxisState, tally: Map<string, CollectTally>): AppAxes {
+export function appAxes(key: string, use: AxisState, tally: Map<string, CollectTally>,
+  skip?: ReadonlySet<string> | null): AppAxes {
   const t = tally.get(key);
   const has = COLLECT_APPS.includes(key);
   const getOn = t?.on ?? 0;
+  const declined = (axis: 'use' | 'get') => !!skip?.has(skipKey(key, axis));
+  //  ⚠ «안 쓴다»는 **켜져 있지 않을 때만** 뜻이 있다 — 실제로 도는 것을 «안 쓴다»고 칠하면 화면이 거짓말한다.
+  //   준비 중도 «안 쓴다»가 이길 수 없다(못 켜는 것을 사람이 정한 것으로 바꾸지 않는다).
+  const useSt: AxisState = use === 'on' || use === 'soon' ? use : declined('use') ? 'skip' : use;
   //  수집기가 실제로 돌고 있으면 «켜짐» 이 이긴다 — 명단에 없더라도 사실이 먼저다(표가 낡아도 거짓말하지 않는다).
-  const get: AxisState = getOn > 0 ? 'on' : has ? 'off' : 'none';
-  return { use, get, getOn };
+  const get: AxisState = getOn > 0 ? 'on' : !has ? 'none' : declined('get') ? 'skip' : 'off';
+  return { use: useSt, get, getOn };
 }
 
 /**
- * 목록에서 이 앱이 어느 묶음에 서나.
- *  ★ «연결됨» 은 **어느 한 축이라도 켜져 있으면** 이다 — 자격만 보면 자료를 가져오고 있는 앱이
- *   «연결할 수 있는 앱» 칸에 서서 카드가 제 상태와 반대말을 한다.
+ * 목록에서 이 앱이 어느 묶음에 서나 — 네 갈래.
+ *  ★ 하나도 안 켰으면 «연결할 수 있는 앱», **하나만 켰고 나머지를 아직 안 정했으면 «연결 중»**,
+ *   켠 것이 있고 남은 게 없으면 «연결 완료».
+ *  «연결 중»을 따로 세우는 이유(원준 2026-09-20): 수집기는 흔히 저절로 생기므로 «둘 중 하나만 켜진» 상태가
+ *   기본값처럼 흔한데, 종전엔 그게 «연결됨»과 한 칸에 섞여 **덜 끝난 것이 끝난 것처럼** 보였다. 끝내는 길은
+ *   둘이다 — 나머지를 켜거나, «안 쓴다»고 정하거나. 둘 다 «연결 완료»로 간다(정한 것은 미완이 아니다).
  *  ⚠ 준비 중이 연결 여부보다 앞선다 — 목록의 뜻이 «라이블리가 이걸 내밀고 있나» 이기 때문이다(#2243).
  *   그래도 카드는 제 두 축을 사실대로 말한다(뺏지 않는다).
  */
-export function listBucket(axes: AppAxes, soon: boolean): 'on' | 'off' | 'soon' {
+export function listBucket(axes: AppAxes, soon: boolean): CardState {
   if (soon) return 'soon';
-  return axes.use === 'on' || axes.get === 'on' ? 'on' : 'off';
+  if (axes.use !== 'on' && axes.get !== 'on') return 'off';
+  return pendingAxes(axes).length ? 'half' : 'on';
 }

@@ -19,7 +19,9 @@ import { svcTile } from '../svc-icons.js';
 import { CRED_KINDS, openGitCredentialManager, svcTokenForm } from '../admin-credentials.js';
 import { LOGIN_SERVICES, partition, slackChannelPolicyCard, type SvcView } from '../me-logins.js';
 //  #3778 — 목록 카드가 말하는 «두 축»의 잣대(순수). 화면은 그리기만 하고 판정은 저기서 한다(그래서 시험된다).
-import { appAxes, collectTally, listBucket, type AppAxes, type AxisState, type CollectTally } from '../lib/connect-axes.js';
+import { appAxes, collectTally, listBucket, pendingAxes, skipKey,
+  type AppAxes, type AxisState, type CardState, type CollectTally } from '../lib/connect-axes.js';
+import { shellPrefStore, shellPrefsTouch } from './shell-prefs.js';   // #2460 — «사람이 고른 것»의 정본은 서버다
 import { NOTION_PICK_TIP, notionCollectedLine, notionCollectedPages } from './notion-pick.js';   // #1968 — 노션 고르기 안내·모은 페이지 수(처음 설정과 한 벌)
 //  #2556 — 관리탭 [데이터 연결] 묶음을 여기로 걷어 왔다. 화면만 옮겼고 **패널은 그것 그대로 부른다**(사본 0):
 //   레포·DB 는 아래 [코드와 데이터] 두 화면이, 아웃바운드 둘은 노션·클릭업 **앱 상세의 [내보내기] 칸**이 편다.
@@ -56,6 +58,26 @@ async function loadCollect(): Promise<{ tally: Map<string, CollectTally>; ok: bo
   } catch (_) { return { tally: new Map(), ok: false }; }
 }
 
+// ══ «이 축은 안 쓴다» 는 결정 (#3778, 원준 2026-09-20) ═══════════════════════════
+//  수집기는 흔히 저절로 생기므로 «둘 중 하나만 켜진» 상태가 사실상 기본값이다. 그걸 «연결됨» 한 칸에
+//  섞어 두면 **덜 끝난 것이 끝난 것처럼** 보인다. 그래서 그 상태를 「연결 중」으로 따로 세우고, 끝내는
+//  길을 둘 준다 — 나머지를 켜거나, «안 쓴다»고 정하거나. 정한 것은 미완이 아니므로 둘 다 「연결 완료」다.
+//  ⚠ 이건 **정책이 아니라 표시**다 — «안 쓴다»가 서버의 무엇도 끄지 않는다(끄는 건 그 축의 스위치다).
+//   그래서 계정에 묶인 개인 결정으로 둔다(기기마다 다시 정하게 하면 그게 더 이상하다).
+const SKIP_STORE = shellPrefStore('lively_v2_connect_skip', 'list');
+function loadSkip(): Set<string> {
+  try { const a = JSON.parse(localStorage.getItem(SKIP_STORE) || '[]'); return new Set<string>(Array.isArray(a) ? a : []); }
+  catch (_) { return new Set<string>(); }
+}
+function saveSkip(s: Set<string>): void {
+  try { if (s.size) localStorage.setItem(SKIP_STORE, JSON.stringify([...s])); else localStorage.removeItem(SKIP_STORE); }
+  catch (_) { /* 못 남겨도 이번 화면은 된다 */ }
+  shellPrefsTouch(SKIP_STORE);   // 캐시는 즉시, 서버는 디바운스(#2460)
+}
+/** 축의 이름 — 목록 카드·상세·결정 줄이 **한 벌로** 쓴다. 한 사실을 세 자리가 다르게 부르면 안 된다. */
+const AXIS_LABEL: Record<'use' | 'get', string> = { use: '내 계정으로 직접 사용', get: '자료 가져오기' };
+
+
 //  ⚠ 표(LOGIN_SERVICES)만 뒤지면 안 된다 — 관리자가 등록한 커넥터는 서버에서 와서 v.all 에만 있다.
 const findSvc = (v: SvcView, key: string): Svc | undefined =>
   (v.all as Svc[]).find((s) => s.key === key) || LOGIN_SERVICES.find((s) => s.key === key);
@@ -85,7 +107,7 @@ function stateOf(v: SvcView, svc: Svc): State {
 //   안 함» 으로 서 있었다 — 상세가 #2202 B1 로 한 번 푼 모순(«연결 안 됨» + «2곳에서 모으는 중»)이 목록에
 //   그대로 남아 있었던 것이다. 이제 카드마다 상세와 **같은 이름의 두 줄**이 선다: 내 계정으로 직접 사용 ·
 //   자료 가져오기. 묶음 판정도 «어느 한 축이라도 켜졌나»로 바뀐다(판정은 lib/connect-axes.ts, 시험 있음).
-type ListState = 'on' | 'off' | 'soon';
+type ListState = CardState;
 
 /** 축 한 줄 — 왼쪽에 무엇을 하는 연결인지, 오른쪽에 점 + 상태말. 채운 컬러 알약을 쓰지 않는다(디자인시스템). */
 function axisRow(ic: string, label: string, st: AxisState, word: string): HTMLElement {
@@ -99,12 +121,12 @@ function axisRow(ic: string, label: string, st: AxisState, word: string): HTMLEl
 
 /** 카드 두 줄 — 이름은 상세(«연결 두 가지»)와 한 글자도 다르지 않게 둔다. 두 화면이 한 사실을 같은 말로 말해야 한다. */
 function axesBlock(a: AppAxes): HTMLElement {
-  const useWord = a.use === 'on' ? '켜짐' : a.use === 'soon' ? '준비 중' : '아직 꺼짐';
+  const useWord = a.use === 'on' ? '켜짐' : a.use === 'soon' ? '준비 중' : a.use === 'skip' ? '안 쓰기로 했어요' : '아직 안 정함';
   const getWord = a.get === 'on' ? (a.getOn > 1 ? `켜짐 · ${a.getOn}곳` : '켜짐')
-    : a.get === 'none' ? '이 앱엔 없어요' : a.get === 'soon' ? '준비 중' : '아직 꺼짐';
+    : a.get === 'none' ? '이 앱엔 없어요' : a.get === 'soon' ? '준비 중' : a.get === 'skip' ? '안 쓰기로 했어요' : '아직 안 정함';
   return el('div', { class: 'cn-axes' },
-    axisRow('zap', '내 계정으로 직접 사용', a.use, useWord),
-    axisRow('box', '자료 가져오기', a.get, getWord));
+    axisRow('zap', AXIS_LABEL.use, a.use, useWord),
+    axisRow('box', AXIS_LABEL.get, a.get, getWord));
 }
 
 /** 우리 자산(코드 저장소·데이터베이스) 타일 — 앱 타일과 같은 라운드 스퀘어에 우리 색. 글자 «{ }»·«DB» 를 쓰지 않는다. */
@@ -119,6 +141,7 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
   catch (e) { host.replaceChildren(el('div', { class: 'v2-center' }, errorNote(e, '연결 상태를 불러오지 못했습니다'))); return; }
   //  두 번째 축은 따로 읽는다 — 근거가 다르기 때문이다(자격은 내 것, 수집기는 워크스페이스 것). 못 읽어도 첫 축은 그린다.
   const { tally, ok: collectOk } = await loadCollect();
+  const skip = loadSkip();
   const soon = [...(v.soon as Svc[]), ...(v.blockedOAuth as Svc[])];
   const soonKeys = new Set(soon.map((s) => s.key));
   const reload = () => { void renderConnect(host); };
@@ -126,13 +149,15 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
   //  카드가 말할 두 축 — 자격 축은 **자격 원본**으로 본다(목록 배치로 물으면 준비 중이 연결을 덮는다, #2243 stateOf 주석).
   const axesOf = (svc: Svc): AppAxes => {
     const raw = stateOf(v, svc);
-    return appAxes(svc.key, raw === 'blocked' ? 'soon' : raw, tally);
+    return appAxes(svc.key, raw === 'blocked' ? 'soon' : raw, tally, skip);
   };
-  //  묶음 — 어느 한 축이라도 켜졌으면 «연결된 앱». 순서는 종전 그대로(연결됨 먼저 잡힌 것 → 켤 수 있는 것).
+  //  묶음 넷 — 연결 중(하나만 켜고 나머지를 안 정함) · 연결 완료 · 연결할 수 있음 · 준비 중.
+  //   순서는 종전 그대로(연결됨 먼저 잡힌 것 → 켤 수 있는 것)를 각 묶음 안에서 유지한다.
   const rest = [...(v.connected as Svc[]), ...(v.available as Svc[])];
   const bucketOf = (svc: Svc): ListState => listBucket(axesOf(svc), soonKeys.has(svc.key));
+  const halfList = rest.filter((s) => bucketOf(s) === 'half');
   const onList = rest.filter((s) => bucketOf(s) === 'on');
-  const offList = rest.filter((s) => bucketOf(s) !== 'on');
+  const offList = rest.filter((s) => bucketOf(s) === 'off');
 
   let q = '';
   const listHost = el('div', { class: 'cn-groups' });
@@ -143,7 +168,8 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
 
   // 요약 — «몇 개 켜져 있나 · 더 켤 수 있나 · 아직 못 켜는 게 있나». 준비 중은 있을 때만 센다(0 은 소음).
   const sum = el('div', { class: 'cn-sum' },
-    el('span', { class: 'cn-sum-i on' }, el('b', { text: String(onList.length) }), el('span', { text: '연결됨' })),
+    el('span', { class: 'cn-sum-i on' }, el('b', { text: String(onList.length) }), el('span', { text: '연결 완료' })),
+    ...(halfList.length ? [el('span', { class: 'cn-sum-i half' }, el('b', { text: String(halfList.length) }), el('span', { text: '연결 중' }))] : []),
     el('span', { class: 'cn-sum-i' }, el('b', { text: String(offList.length) }), el('span', { text: '연결할 수 있음' })),
     ...(soon.length ? [el('span', { class: 'cn-sum-i soon' }, el('b', { text: String(soon.length) }), el('span', { text: '준비 중' }))] : []));
 
@@ -173,14 +199,25 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
       svcTile(svc.key, svc.label, st !== 'soon'),
       el('div', { class: 'cn-card-tt' },
         el('div', { class: 'cn-card-nm' }, el('span', { text: svc.label }),
-          st === 'on' ? el('span', { class: 'cn-dot on', 'aria-label': '연결됨' }) : null),
+          st === 'on' ? el('span', { class: 'cn-dot on', 'aria-label': '연결 완료' })
+            : st === 'half' ? el('span', { class: 'cn-dot half', 'aria-label': '연결 중' }) : null),
         el('div', { class: 'cn-card-st', text: sub })));
     const blurb = el('p', { class: 'cn-card-bl', text: String((svc as any).short || svc.blurb || '') });
+    //  머리줄의 «어떻게 연결했나»는 자격 축의 이야기다 — 자료 가져오기만 켜진 앱에 «토큰으로 연결» 이라고 쓰면 거짓이다.
+    //   그 앱은 아직 «켜는 길»만 있으므로 켤 수 있는 카드와 같은 말을 적는다(축 줄이 사실을 말한다).
+    const howSub = a.use === 'on' ? connMeta(v, svc) : viaAccount(svc) ? '계정 로그인' : '토큰';
+    if (st === 'half') {
+      //  ★ 중간 상태 — 덜 끝난 느낌을 **발에서** 말한다. 갈 곳이 «관리»가 아니라 «이어서»다.
+      const pend = pendingAxes(a).map((k) => AXIS_LABEL[k]).join(' · ');
+      return el('a', { class: 'cn-card half', href, title: svc.label },
+        head(howSub), blurb, axesBlock(a),
+        el('div', { class: 'cn-card-ft' },
+          el('span', { class: 'cn-card-h cn-card-pend', text: `${pend} 이(가) 남았어요` }),
+          el('span', { class: 'cn-card-go', text: '이어서 ›' })));
+    }
     if (st === 'on') {
-      //  머리줄의 «어떻게 연결했나»는 자격 축의 이야기다 — 자료 가져오기만 켜진 앱에 «토큰으로 연결» 이라고 쓰면 거짓이다.
-      //   그 앱은 아직 «켜는 길»만 있으므로 켤 수 있는 카드와 같은 말을 적는다(축 줄이 사실을 말한다).
       return el('a', { class: 'cn-card', href, title: svc.label },
-        head(a.use === 'on' ? connMeta(v, svc) : viaAccount(svc) ? '계정 로그인' : '토큰'), blurb, axesBlock(a),
+        head(howSub), blurb, axesBlock(a),
         el('div', { class: 'cn-card-ft' }, el('span', { class: 'cn-card-go', text: '관리 ›' })));
     }
     if (st === 'soon') {
@@ -208,7 +245,9 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
 
   function paint(): void {
     const kids = [
-      group('연결된 앱', '두 가지 중 하나라도 켜 둔 앱이에요', onList, 'on'),
+      //  맨 위에 «아직 정할 게 남은 것» — 목록을 여는 사람이 가장 먼저 봐야 할 줄이다.
+      group('연결 중', '둘 중 하나만 켰어요 — 나머지를 켜거나, 안 쓸 거면 그렇게 정해 주세요', halfList, 'half'),
+      group('연결 완료', '이 앱에서 정할 것을 다 정했어요', onList, 'on'),
       group('연결할 수 있는 앱', '눌러서 바로 켤 수 있어요', offList, 'off'),
       group('준비하고 있어요', '라이블리가 준비를 마치면 여기서 바로 켤 수 있어요', soon, 'soon'),
     ].filter(Boolean) as HTMLElement[];
@@ -559,6 +598,35 @@ function quietCollectFace(stateText: string, note: string, onState: CollectState
   };
 }
 
+/**
+ * 「연결 중」을 끝내는 줄 (#3778, 원준 2026-09-20).
+ *  하나만 켜진 앱은 목록에서 «연결 중»으로 서고, 여기 들어오면 **끝내는 길 둘**을 그 자리에서 고른다 —
+ *   나머지를 켜거나(아래 스위치), «안 쓴다»고 정하거나(이 줄의 단추). 정하고 나면 목록이 «연결 완료»가 된다.
+ *  ⚠ «안 쓴다»는 **표시일 뿐 아무것도 끄지 않는다** — 그래서 되돌리는 단추를 늘 같은 자리에 둔다.
+ */
+function decideRows(label: string, a: AppAxes, skip: Set<string>, key: string, reload: () => void): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  const set = (axis: 'use' | 'get', on: boolean) => {
+    if (on) skip.add(skipKey(key, axis)); else skip.delete(skipKey(key, axis));
+    saveSkip(skip);
+    toast(on ? `${AXIS_LABEL[axis]}는 안 쓰는 것으로 정했어요 — 이 앱은 «연결 완료»로 표시됩니다`
+             : `${AXIS_LABEL[axis]}를 다시 «아직 안 정함»으로 되돌렸어요`);
+    reload();
+  };
+  for (const axis of pendingAxes(a)) {
+    out.push(el('div', { class: 'cn-decide' }, icon('zap'),
+      el('span', { class: 'm' }, ...uiText(`**${AXIS_LABEL[axis]}** 를 아직 안 정했어요 — 아래에서 켜면 연결이 완료돼요. 안 쓸 거면 그렇게 정해 두세요.`)),
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '안 쓸래요', onclick: () => set(axis, true) })));
+  }
+  for (const axis of ['use', 'get'] as const) {
+    if (a[axis] !== 'skip') continue;
+    out.push(el('div', { class: 'cn-decide done' }, icon('check'),
+      el('span', { class: 'm' }, ...uiText(`**${AXIS_LABEL[axis]}** 는 안 쓰기로 했어요 — ${label} 은(는) 목록에서 «연결 완료»로 보입니다. 켜 두진 않았어요.`)),
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '다시 정하기', onclick: () => set(axis, false) })));
+  }
+  return out;
+}
+
 //  이 앱에 대한 모든 것이 여기 있다 — 두 얼굴의 상태 · 범위 · 방식 · 해제.
 export async function renderConnectApp(host: HTMLElement, key: string): Promise<void> {
   //  먼저 읽고 나서 앱을 찾는다 — 이 키가 표에 없는 커넥터일 수 있고, 그건 서버 응답에만 있다.
@@ -570,6 +638,10 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   if (!svc) { host.replaceChildren(el('div', { class: 'v2-center' }, backLink(), el('p', { class: 'v2-empty', text: '그런 앱이 없어요.' }))); return; }
 
   const st = stateOf(v, svc);
+  //  #3778 — 상세도 목록과 **같은 잣대**로 두 축을 읽는다. 여기서 «하나 남았다»를 말하고 그 자리에서 끝낸다.
+  const { tally } = await loadCollect();
+  const skip = loadSkip();
+  const axes = appAxes(svc.key, st === 'blocked' ? 'soon' : st, tally, skip);
   const reload = () => { void renderConnectApp(host, key); };
   const oc = svc.oauth ? v.oauthMap.get(svc.oauth) : null;
   const cred = svc.token ? v.credMap.get(svc.token) : null;
@@ -757,6 +829,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
         el('p', { class: 'v2-desc', style: 'margin-top:4px', text: String((svc as any).blurb || '') }))),
     el('section', { class: 'cn-sect', id: 'cn-tool' },
       sectHead('1', `${svc.label} 연결 두 가지`, '따로 켜고 끕니다'),
+      ...decideRows(svc.label, axes, skip, svc.key, reload),
       el('div', { class: 'cn-actlist' }, readRow, collect.row)),
     el('section', { class: 'cn-sect', id: 'cn-collect-sect' },
       sectHead('2', '가져올 자료 정하기', '내 쓰임에 맞게 정합니다'),

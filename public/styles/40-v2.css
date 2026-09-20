@@ -961,6 +961,31 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .cn-card-asset .cn-card-st { color: var(--muted-2); }
 #v2-root .cn-asset-tile .v2-ic { width: 22px; height: 22px; }
 #v2-root .cn-git-ic .v2-ic { width: 19px; height: 19px; color: var(--muted); }
+
+/* ── #3778 중간 상태 «연결 중» — 둘 중 하나만 켜고 나머지를 아직 안 정한 앱 ───────────────────
+   수집기는 흔히 저절로 생기므로 이 상태가 사실상 기본값이다. 「연결됨」 한 칸에 섞어 두면 **덜 끝난 것이
+   끝난 것처럼** 보여서, 카드·요약·묶음 셋이 함께 «아직 하나 남았다»를 말한다. 끝내면(켜거나 «안 쓴다»고
+   정하거나) 그 표시가 사라지고 「연결 완료」로 간다 — 끝냈다는 느낌이 화면에 남는 것이 이 표시의 목적이다.
+   ⚠ 색은 경고가 아니라 «진행 중»이다 — 잘못된 게 아니라 아직 안 끝났을 뿐이다. */
+.cn-sum-i.half b { color: var(--warn-text); }
+.cn-dot.half { background: var(--warn-text); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--warn-text) 20%, transparent); }
+.cn-card.half { border-color: var(--warn-line); }
+.cn-card.half:hover { border-color: var(--warn-text); background: var(--warn-bg); }
+.cn-card-pend { color: var(--warn-text); font-weight: 600; }
+.cn-card.half .cn-card-go { color: var(--warn-text); font-weight: 700; }
+/*  «안 쓰기로 했다» — 꺼진 것과 다른 말이라 다른 모양이다. 점은 채우되 조용한 색(정해진 것은 미완이 아니다). */
+.cn-ax-skip .cn-ax-st { color: var(--muted-head); }
+.cn-ax-skip .cn-ax-dot { background: var(--muted-2); box-shadow: none; }
+
+/*  상세에서 «연결 중»을 끝내는 줄 — 켜거나, 안 쓴다고 정하거나. 정한 뒤엔 같은 자리에서 되돌린다. */
+.cn-decide { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; padding: 11px 14px; border-radius: 12px;
+  background: var(--warn-bg); border: 1px solid var(--warn-line); flex-wrap: wrap; }
+.cn-decide .m { flex: 1; min-width: 200px; font-size: 13px; line-height: 1.6; color: var(--warn-text); }
+.cn-decide .m b { font-weight: 800; }
+.cn-decide.done { background: var(--bg-tint); border-color: var(--line-net); }
+.cn-decide.done .m { color: var(--ink-sub); }
+#v2-root .cn-decide .v2-ic { width: 15px; height: 15px; flex: none; color: var(--warn-text); }
+#v2-root .cn-decide.done .v2-ic { color: var(--muted-2); }
 /* ── #2243 안 B «설정 패널» — 앱 상세: 왼쪽 목차 + 오른쪽 패널 셋. 모든 앱이 같은 틀 ── */
 .cn-settings { display: grid; grid-template-columns: 224px minmax(0, 1fr); gap: 28px; margin-top: 18px; align-items: start; }
 .cn-snav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 0; }
