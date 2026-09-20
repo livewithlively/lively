@@ -10,8 +10,13 @@
 //   P6 본문이 있으면 «## 태스크 본문» 아래에 싣는다
 //   P7 본문이 3000자를 넘으면 자르고 «task_detail_v6» 으로 전문을 보라고 말한다
 //   P8 프로젝트 문맥 절 — 태스크가 없으면 빈 문자열, 있으면 번호·이름·상태와 완료 방법(session_task done)
+//   P9 이름 승계 판정 — «그때 우리가 넣은 이름 그대로»일 때만 바꾼다(사람이 손댔으면 물러난다 · 같은 이름이면 쓰지 않는다)
+//   W1 배선 — 태스크를 **만드는 자리**가 관문(session-launch)에 있고, 두 입구(중앙·노드)가 모두 그것을 부른다.
+//      이 줄이 왜 필요한가: 2026-09-20 이전엔 이 자리가 이름짓기(session_rename)에 있었고, 그건 «AI 가 불러 주면»
+//      이라 프로젝트 세션의 절반에만 태스크가 생겼다(실측 6개 중 3개). 호출이 조용히 빠지면 같은 고장이 되돌아온다.
 import assert from "node:assert/strict";
-import { sessionTaskSpec, statusOnBind, taskKickoffPrompt, sessionTaskSection } from "./session-task.js";
+import { readFileSync } from "node:fs";
+import { sessionTaskSpec, shouldRenameSessionTask, statusOnBind, taskKickoffPrompt, sessionTaskSection } from "./session-task.js";
 
 let pass = 0;
 const ok = (name: string): void => { pass++; console.log(`ok  ${name}`); };
@@ -79,6 +84,31 @@ ok("P4 이미 진행 중이면 쓰지 않고, 그 밖(완료 포함 — 다시 �
   assert.match(s, /\[#12\] 세션=태스크 자동화 \(in_progress\)/);
   assert.match(s, /session_task \{status:"done"\}/);
   ok("P8 문맥 절 — 없으면 빈 문자열, 있으면 번호·이름·상태 + 완료 방법");
+}
+
+// P9 — 이름 승계
+{
+  assert.equal(shouldRenameSessionTask("사이드바 검색창 제거", "사이드바 검색창 제거", "검색창 제거"), true);
+  assert.equal(shouldRenameSessionTask("사람이 고친 이름", "사이드바 검색창 제거", "검색창 제거"), false, "사람이 손댄 태스크는 그대로 둔다");
+  assert.equal(shouldRenameSessionTask("검색창 제거", "검색창 제거", "검색창 제거"), false, "같은 이름이면 쓰지 않는다");
+  for (const [cur, exp, nx] of [["", "a", "b"], ["a", "", "b"], ["a", "b", ""], [null, null, "b"]] as Array<[string | null, string | null, string]>) {
+    assert.equal(shouldRenameSessionTask(cur, exp, nx), false, JSON.stringify([cur, exp, nx]));
+  }
+  ok("P9 이름 승계는 «직전 이름 그대로인 태스크» 에만 — 빈 값·동일 이름은 쓰지 않는다");
+}
+
+// W1 — 배선(소스 대조)
+{
+  const launch = readFileSync(new URL("../../src/terminal/session-launch.ts", import.meta.url), "utf8");
+  const calls = launch.match(/attachLaunchTask\(/g) || [];
+  assert.ok(calls.length >= 3, `관문이 태스크를 붙이는 호출이 사라졌다(정의 1 + 두 입구 2 = 3 이상, 지금 ${calls.length})`);
+  assert.match(launch, /ensureSessionTask\(\{ sessionId: session\.id, owner, name: label \}\)/, "세션 이름으로 만드는 자리가 없다");
+  assert.match(launch, /if \(!isWorkSession\(input\.kind\) \|\| input\.readOnly \|\| input\.incognito\) return;/, "기계 세션·읽기전용·인코그니토 가드가 없다");
+  assert.match(launch, /if \(!label \|\| label === session\.id\) return;/, "이름 없는 세션(첫 지시 없음) 가드가 없다");
+  const relabel = readFileSync(new URL("../../src/terminal/session-relabel.ts", import.meta.url), "utf8");
+  assert.ok(relabel.indexOf("const prevLabel") < relabel.indexOf("claimSessionLabel(id"), "직전 이름을 걸쇠 뒤에 읽으면 승계가 영영 안 된다");
+  assert.match(relabel, /renameSessionTaskForLabel\(\{ sessionId: id, owner: me, name: label, expectName: prevLabel \}\)/, "이름 승계 호출이 없다");
+  ok("W1 배선 — 관문의 두 입구가 태스크를 붙이고, 이름 승계는 직전 이름을 걸쇠 전에 읽는다");
 }
 
 console.log(`\n${pass} passed`);
