@@ -11,7 +11,7 @@
 //   써서 조직에 stdio 서버가 하나라도 생기면 config.toml **전체**가 로드 실패(= 코덱스 배선 통째 사망).
 //   그래서 ⑧ 은 "무엇이 있나"가 아니라 **"클로드에 있는 것이 코덱스에도 있나"** 로 쓴다 — claude 쪽에 이벤트를
 //   추가하면서 codex 를 안 챙기면 여기서 깨진다.
-import { mkdtempSync, rmSync, mkdirSync, cpSync, readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, cpSync, readFileSync, writeFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -24,6 +24,8 @@ const SANDBOX = mkdtempSync(join(tmpdir(), "codex-wiring-test-"));
 const BUNDLE = join(SANDBOX, "bundle");
 const HOME = join(SANDBOX, "home");
 const CODEX_CFG = join(HOME, ".codex", "config.toml");
+const LEGACY_HOOKS = join(HOME, ".codex", "hooks.json");
+const LEGACY_BACKUPS = join(HOME, ".lively", "backups");
 
 let pass = 0, fail = 0;
 const ok = (name) => { pass++; console.log(`ok  ${name}`); };
@@ -80,6 +82,15 @@ function runInstall() {
   return readFileSync(CODEX_CFG, "utf8");
 }
 const install = (opts) => { freshHome(opts); return runInstall(); };
+const writeLegacy = (value) => {
+  mkdirSync(dirname(LEGACY_HOOKS), { recursive: true });
+  writeFileSync(LEGACY_HOOKS, typeof value === "string" ? value : JSON.stringify(value, null, 2) + "\n");
+};
+const legacyBackups = () => existsSync(LEGACY_BACKUPS)
+  ? readdirSync(LEGACY_BACKUPS)
+    .filter((name) => /^hooks\.json\.codex\.(?:orig|bak)$/.test(name))
+    .map((name) => join(LEGACY_BACKUPS, name))
+  : [];
 
 // config.toml 의 훅 핸들러 파싱 — 한 벌은 `[[hooks.<E>]]`(+matcher) + `[[hooks.<E>.hooks]]`(+command) 두 테이블이라
 //  **command 를 든 쪽**(`.hooks`)에서 이벤트를 읽는다. 핸들러 없는 헤더 블록은 세지 않는다(엔트리 = 실제 실행 단위).
@@ -231,6 +242,103 @@ makeBundle({ autoApprove: [] });
   const n = (t.match(/approval_mode = "approve"/g) || []).length;
   const alive = /\[mcp_servers\.lively\]/.test(t) && hookEntries(t).length > 0;
   n === 0 && alive ? ok("⑭ auto-approve 빈 목록 → 승인 표시 0, 배선은 정상") : bad("⑭ 빈 auto-approve", `n=${n} alive=${alive}`);
+}
+
+// ── ⑰ retired ~/.codex/hooks.json 정리 ──────────────────────────────────────
+// 공개 설치기를 블랙박스로 호출한다. 이전 세대 run-custom 이 남으면 Codex 가 Claude 형식 raw text 를
+// hook JSON 으로 해석해 세션을 깨뜨리므로, config.toml 과 같은 설치 트랜잭션에서 정리되어야 한다.
+makeBundle();
+{
+  const original = {
+    version: 1,
+    hooks: {
+      UserPromptSubmit: [
+        { matcher: "*", hooks: [
+          { type: "command", command: "node ~/.lively/hooks/run-custom.mjs UserPromptSubmit" },
+          { type: "command", command: "node \"C:/Profiles/Jane Doe/.lively/hooks/run-custom.mjs\" UserPromptSubmit" },
+          { type: "command", command: "node ~/.lively/hooks/not-in-manifest.mjs UserPromptSubmit" },
+          { type: "command", command: "node ~/.lively/hooks/self-update.mjs" },
+          { type: "command", command: "node ~/.lively/hooks/harness-registry.mjs" },
+          { type: "future", command: "node ~/.lively/hooks/work-flag.mjs" },
+          { type: "command", command: "echo ~/.lively/hooks/work-flag.mjs" },
+          { type: "command", command: "node ~/.lively/hooks/work-flag.mjs && echo member-tail" },
+          { type: "command", command: "echo member-handler" },
+        ] },
+        { matcher: "managed-only", hooks: [{ type: "command", command: "node ~/.lively/hooks/work-flag.mjs" }] },
+        { matcher: "empty-user", hooks: [], metadata: { keep: true } },
+      ],
+      Stop: [{ matcher: "managed-only", hooks: [{ type: "command", command: "node ~/.lively/hooks/run-custom.mjs Stop" }] }],
+      FutureEvent: [{ matcher: "*", hooks: [{ type: "command", command: "echo future-user-handler" }] }],
+      EmptyEvent: [{ matcher: "empty-user", hooks: [], metadata: { keep: true } }],
+    },
+  };
+  freshHome(); writeLegacy(original);
+  const before = readFileSync(LEGACY_HOOKS, "utf8");
+  runInstall();
+  const after = JSON.parse(readFileSync(LEGACY_HOOKS, "utf8"));
+  const shared = after.hooks?.UserPromptSubmit?.find((g) => g.matcher === "*")?.hooks || [];
+  const sharedCommands = shared.map((h) => h.command);
+  const ownsGone = !sharedCommands.includes("node ~/.lively/hooks/run-custom.mjs UserPromptSubmit")
+    && !sharedCommands.includes('node "C:/Profiles/Jane Doe/.lively/hooks/run-custom.mjs" UserPromptSubmit');
+  const preserves = after.version === 1
+    && sharedCommands.includes("node ~/.lively/hooks/not-in-manifest.mjs UserPromptSubmit")
+    && sharedCommands.includes("node ~/.lively/hooks/self-update.mjs")
+    && sharedCommands.includes("node ~/.lively/hooks/harness-registry.mjs")
+    && shared.some((h) => h.type === "future" && h.command === "node ~/.lively/hooks/work-flag.mjs")
+    && sharedCommands.includes("echo ~/.lively/hooks/work-flag.mjs")
+    && sharedCommands.includes("node ~/.lively/hooks/work-flag.mjs && echo member-tail")
+    && sharedCommands.includes("echo member-handler")
+    && after.hooks?.FutureEvent?.[0]?.hooks?.[0]?.command === "echo future-user-handler";
+  const emptyUser = after.hooks?.UserPromptSubmit?.find((g) => g.matcher === "empty-user");
+  const pruned = after.hooks?.UserPromptSubmit?.length === 2
+    && emptyUser?.hooks?.length === 0 && emptyUser?.metadata?.keep === true
+    && after.hooks?.EmptyEvent?.[0]?.metadata?.keep === true
+    && !Object.hasOwn(after.hooks || {}, "Stop");
+  const backups = legacyBackups();
+  const backedUp = backups.length >= 2 && backups.every((p) => readFileSync(p, "utf8") === before);
+  ownsGone && preserves && pruned && backedUp
+    ? ok("⑰ legacy 혼합 그룹은 owned만 제거·빈 그룹/이벤트 정리·원본/latest 백업")
+    : bad("⑰ legacy hooks 정리", `owned=${ownsGone} preserves=${preserves} pruned=${pruned} userGroups=${after.hooks?.UserPromptSubmit?.length} stop=${Object.hasOwn(after.hooks || {}, "Stop")} backups=${backups.length}`);
+
+  const once = digest(LEGACY_HOOKS);
+  runInstall();
+  digest(LEGACY_HOOKS) === once
+    ? ok("⑰b legacy hooks 재설치 멱등(두 번째 실행은 파일 무변경)")
+    : bad("⑰b legacy hooks 멱등", "두 번째 실행이 정리된 hooks.json 을 다시 변경함");
+}
+
+// ── ⑱ legacy 파일을 읽을 수 없는 모양이면 건드리지 않고 새 배선은 계속 ────────
+makeBundle();
+for (const [label, contents] of [
+  ["부재", null],
+  ["malformed JSON", "{ broken"],
+  ["unrelated shape", JSON.stringify({ hooks: "not-an-event-map", version: 7 })],
+]) {
+  freshHome();
+  if (contents !== null) writeLegacy(contents);
+  const before = existsSync(LEGACY_HOOKS) ? readFileSync(LEGACY_HOOKS, "utf8") : null;
+  let installed = false;
+  try { runInstall(); installed = existsSync(CODEX_CFG) && /lively-managed/.test(readFileSync(CODEX_CFG, "utf8")); } catch { /* assertion below */ }
+  const unchanged = before === null ? !existsSync(LEGACY_HOOKS) : readFileSync(LEGACY_HOOKS, "utf8") === before;
+  installed && unchanged
+    ? ok(`⑱ legacy ${label} → 무변경, config.toml 배선 계속`)
+    : bad(`⑱ legacy ${label}`, `installed=${installed} unchanged=${unchanged}`);
+}
+
+// ── ⑲ 현재 config 충돌이면 legacy cleanup 은 절대 앞서지 않는다 ─────────────
+makeBundle();
+{
+  const conflictingConfig = '[mcp_servers.lively]\ncommand = "member-lively"\n';
+  const legacy = { hooks: { UserPromptSubmit: [{ matcher: "*", hooks: [{ type: "command", command: "node ~/.lively/hooks/run-custom.mjs UserPromptSubmit" }] }] } };
+  freshHome({ userConfig: conflictingConfig }); writeLegacy(legacy);
+  const legacyBefore = readFileSync(LEGACY_HOOKS, "utf8");
+  let exited = 0;
+  try { runInstall(); } catch { exited = 1; }
+  const configUnclaimed = readFileSync(CODEX_CFG, "utf8") === conflictingConfig;
+  const legacyUnchanged = readFileSync(LEGACY_HOOKS, "utf8") === legacyBefore;
+  exited === 0 && configUnclaimed && legacyUnchanged
+    ? ok("⑲ config 충돌 → 현재 배선 미회수 시 legacy hooks 보존")
+    : bad("⑲ config 충돌 순서", `exit=${exited} configUnclaimed=${configUnclaimed} legacyUnchanged=${legacyUnchanged}`);
 }
 
 // ── ⑩⑪ 비파괴 머지 + 재설치 멱등 ──────────────────────────────────────────

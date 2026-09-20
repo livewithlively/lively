@@ -41,6 +41,7 @@ const getOpt = (n) => { const i = args.indexOf(n); return i !== -1 ? args[i + 1]
 const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
 const CODEX = join(HOME, ".codex");
+const CODEX_HOOKS = join(CODEX, "hooks.json");
 // settings.json 위치: CLAUDE_CONFIG_DIR 있으면 그 dir(프로필별 계정 격리 — 멀티프로필 #346), 없으면 <HOME>/.claude(기본, 무변경).
 //  ~/.lively(컨텍스트·훅·토큰)는 HOME 기준 유지 = 프로필 간 공유(훅 command 는 런타임 $HOME/.lively 참조).
 //  계정별로 달라지는 건 settings(훅·권한)·MCP(.claude.json)·자격증명(.credentials.json)뿐 — 전부 CLAUDE_CONFIG_DIR 안.
@@ -713,6 +714,99 @@ function gatewayMcpUrl() {
   return /\/mcp$/.test(gwBase) ? gwBase : gwBase + "/mcp";
 }
 
+// Codex 훅 배선은 예전에 ~/.codex/hooks.json 에 썼고, 지금 정본은 config.toml 의
+// lively-managed 블록이다. Codex는 두 파일의 훅을 전부 실행하므로 옛 러너가 남아 있으면 이벤트가
+// 중복되고, --harness codex 없는 run-custom 은 UserPromptSubmit 에 Claude용 raw stdout 을 내보낸다.
+// config.toml 쓰기가 성공한 뒤에만 우리가 소유한 옛 핸들러를 회수한다.
+function migrateLegacyCodexHooksJson() {
+  if (!existsSync(CODEX_HOOKS)) return;
+  let doc;
+  try { doc = JSON.parse(readFileSync(CODEX_HOOKS, "utf8")); }
+  catch {
+    console.warn("  ⚠️ ~/.codex/hooks.json 이 유효한 JSON이 아님 — 옛 Lively 훅 회수 건너뜀(파일 무수정)");
+    return;
+  }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc) || !doc.hooks || typeof doc.hooks !== "object" || Array.isArray(doc.hooks)) return;
+
+  const legacyEvents = new Map([
+    ["session-preload.mjs", new Set(["SessionStart"])],
+    ["sync-harness-assets.mjs", new Set(["SessionStart"])],
+    ["work-flag.mjs", new Set(["SessionStart", "SessionEnd", "UserPromptSubmit", "PostToolUse", "PermissionRequest", "Stop"])],
+    ["stop-writeback-gate.mjs", new Set(["Stop"])],
+    ["run-custom.mjs", new Set([
+      "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse",
+      "Stop", "SubagentStop", "PreCompact", "PostCompact",
+    ])],
+  ]);
+  const commandTokens = (command) => {
+    const tokens = []; let token = "", quote = null, started = false;
+    for (const char of command) {
+      if (quote) {
+        if (char === quote) quote = null;
+        else token += char;
+        started = true;
+      } else if (char === '"' || char === "'") {
+        quote = char; started = true;
+      } else if (/\s/.test(char)) {
+        if (started) { tokens.push(token); token = ""; started = false; }
+      } else {
+        token += char; started = true;
+      }
+    }
+    if (quote) return null;
+    if (started) tokens.push(token);
+    return tokens;
+  };
+  const isOwned = (event, handler) => {
+    if (handler?.type !== "command" || typeof handler.command !== "string") return false;
+    const args = commandTokens(handler.command);
+    if (!args || args.length < 2) return false;
+    const executable = args[0].replace(/\\/g, "/");
+    const scriptPath = args[1].replace(/\\/g, "/");
+    const match = /(?:^|\/)\.lively\/hooks\/([^/]+\.mjs)$/.exec(scriptPath);
+    if (!/(?:^|\/)node(?:\.exe)?$/i.test(executable) || !match || !legacyEvents.get(match[1])?.has(event)) return false;
+    const tail = args.slice(2);
+    return match[1] === "run-custom.mjs"
+      ? (tail.length === 1 && tail[0] === event)
+        || (tail.length === 3 && tail[0] === event && tail[1] === "--harness" && tail[2] === "codex")
+      : tail.length === 0 || (tail.length === 2 && tail[0] === "--harness" && tail[1] === "codex");
+  };
+
+  let removed = 0;
+  for (const [event, groups] of Object.entries(doc.hooks)) {
+    if (!Array.isArray(groups)) continue;
+    const keptGroups = [];
+    for (const group of groups) {
+      if (!group || typeof group !== "object" || !Array.isArray(group.hooks)) { keptGroups.push(group); continue; }
+      let groupRemoved = 0;
+      const handlers = group.hooks.filter((handler) => {
+        if (!isOwned(event, handler)) return true;
+        groupRemoved++;
+        return false;
+      });
+      removed += groupRemoved;
+      if (!groupRemoved) keptGroups.push(group);
+      else if (handlers.length) keptGroups.push({ ...group, hooks: handlers });
+    }
+    if (keptGroups.length) doc.hooks[event] = keptGroups;
+    else delete doc.hooks[event];
+  }
+  if (!removed) return;
+
+  const backupDir = join(LIVELY, "backups"); mkdirSync(backupDir, { recursive: true });
+  try {
+    const orig = join(backupDir, "hooks.json.codex.orig");
+    if (!existsSync(orig)) copyFileSync(CODEX_HOOKS, orig);
+    copyFileSync(CODEX_HOOKS, join(backupDir, "hooks.json.codex.bak"));
+  } catch (e) {
+    console.error(`✗ ~/.codex/hooks.json 백업 실패 — 옛 Lively 훅 회수 중단: ${e.message}`);
+    return;
+  }
+  writeFileSync(CODEX_HOOKS, JSON.stringify(doc, null, 2) + "\n");
+  chmodSync(CODEX_HOOKS, 0o600);
+  console.log(`  ✓ ~/.codex/hooks.json 옛 Lively 훅 ${removed}개 회수(config.toml 정본으로 수렴 · 사용자 훅 보존)`);
+}
+
 function installCodex(ctx, mcpUrl) {
   mkdirSync(CODEX, { recursive: true });
   // (c) AGENTS.md — org-context 시드(설치-시 라이브 fetch 결과). 센티넬 블록으로 **비파괴 머지**(기존 지침 보존 + 백업).
@@ -761,6 +855,7 @@ function installCodex(ctx, mcpUrl) {
   writeFileSync(cfgPath, (ut ? ut + "\n\n" : "") + codexManagedBlock(mcpUrl) + "\n");
   chmodSync(cfgPath, 0o600);
   console.log(`  ✓ ~/.codex/config.toml (lively-managed 블록 ${had ? "교체" : "추가"} · 사용자 키 보존 · 토큰 리터럴 없음)`);
+  migrateLegacyCodexHooksJson();
   // LIVELY_TOKEN 셸 env 전달 — 없으면 새 셸 codex 의 lively MCP 가 401. 토큰 리터럴은 안 굽는다.
   wireCodexTokenEnv();
 }
