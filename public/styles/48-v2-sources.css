@@ -113,3 +113,7 @@
 .v2-srl-noiseln:hover { color: var(--ink-sub); background: var(--bg-tint); }
 .v2-srl-row.noise .t1, .v2-srl-row.noise .t2 { color: var(--muted-2); }
 .v2-srl-row.noise .t1 { font-weight: 500; }
+
+/* 휴지통으로(#3778) — 원문 머리의 문들 맨 끝. 파괴 동사는 코랄 글자(진입점)뿐 — 확정은 확인창이 한다(P1). */
+.v2-src-dacts .v2-srd-trash { margin-left: auto; color: var(--coral-text); }
+.v2-src-dacts .v2-srd-trash:hover { color: var(--coral); }

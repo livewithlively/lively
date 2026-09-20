@@ -160,14 +160,17 @@ export function filesPart(ctx: PartCtx): Part {
     if (!await confirmDialog({
       title: label + '를 삭제할까요?',
       message: hasDir ? '폴더는 안에 든 것까지 함께 지워집니다.' : '이 프로젝트의 세션들이 더는 이 자료를 참고하지 못하게 됩니다.',
+      //  #3778 파일 휴지통 — 자료로 등록된 파일은 서버가 지우지 않고 보관한다. 그 밖의 것(빈 폴더·코드 폴더)은 종전대로 바로 지워진다.
+      lines: ['자료로 등록된 파일은 [휴지통] ▸ [자료] 탭에서 되살릴 수 있어요. 그 밖의 파일(압축·영상 등 자료가 아닌 것)과 빈 폴더는 되살릴 수 없어요.'],
       confirmText: '삭제', danger: true,
     })) return;
-    let fail = 0;
+    let fail = 0, kept = 0;
     for (const f of list) {
-      try { await api(pUrl('/file?path=' + encodeURIComponent(f.path)), { method: 'DELETE' }); sel.delete(f.path); }
+      try { const r: any = await api(pUrl('/file?path=' + encodeURIComponent(f.path)), { method: 'DELETE' }); kept += Number(r?.trashed) || 0; sel.delete(f.path); }
       catch { fail++; }
     }
-    toast(fail ? `${list.length - fail}개 삭제 · ${fail}개 실패` : `${list.length}개를 삭제했어요`);
+    const done = list.length - fail;
+    toast((kept ? `${done}개를 지웠어요 — 자료 ${kept}건은 휴지통에서 되살릴 수 있어요` : `${done}개를 삭제했어요`) + (fail ? ` · ${fail}개 실패` : ''), fail > 0);
     sig = ''; await load();
   }
 
