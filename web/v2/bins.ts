@@ -11,7 +11,7 @@
 //   · 아카이브는 같은 표에서 동사만 다르다(보관 해제 · 휴지통으로). 종전 카드 깔림(#1851)을 걷어냈다.
 //  완전 삭제의 실제 삭제 범위는 #1850 P2~P4(session-actions·session-footprint-store) — 여기는 그 창을 부를 뿐이다.
 //  행 문법은 홈·확인할 것과 같은 토큰(v2-dot·bg-sel·line-row)만 쓴다 — 새 시각 언어를 만들지 않는다.
-import { api, el, relTime, renderMarkdown, sv, toast } from '../core.js';
+import { api, el, relTime, renderMarkdown, replaceKids, sv, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { fmtSize } from '../projects/files-format.js';
 import { confirmSessionPurge, confirmSessionPurgeLocal, confirmSessionPurgeMany, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped, eulReul } from '../session-actions.js';
@@ -92,8 +92,10 @@ const EXTRAS_TTL_MS = 60_000;
 function ensureExtras(repaint: () => void): void {
   if (extrasLoading || ((extras || extrasFailed) && Date.now() - extrasAt <= EXTRAS_TTL_MS)) return;
   extrasLoading = true;
+  //  ★ 받은 것을 그 종류로 **다시 거른다** — entity 필터를 모르는 옛 서버(배포가 도는 동안의 API · dev)는 그 인자를 말없이 무시하고
+  //   전부를 돌려준다. 안 거르면 세 번 받은 같은 목록이 합쳐져 줄이 세 벌씩 선다(프리뷰 실측 2026-09-20: 지식 43건이 129건으로).
   const list = (entity: string): Promise<DeletedEntry[]> =>
-    api('/api/ui/deleted?limit=500&entity=' + entity).then((d: any) => (Array.isArray(d?.entries) ? d.entries : []) as DeletedEntry[]);
+    api('/api/ui/deleted?limit=500&entity=' + entity).then((d: any) => ((Array.isArray(d?.entries) ? d.entries : []) as DeletedEntry[]).filter((e) => e.entity === entity));
   //  파일 자료 목록은 따로 실패할 수 있다(옛 서버·일시 오류) — 그 하나 때문에 지식·프로젝트 탭까지 비우지 않는다.
   //   대신 자료 탭이 «파일 자료는 확인하지 못했어요» 라고 말한다(빈 목록을 «없다» 로 단언하지 않는다).
   const fileList = api('/api/ui/source-trash').then((d: any) => { filesFailed = false; return (Array.isArray(d?.entries) ? d.entries : []) as TrashedFile[]; })
@@ -326,7 +328,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
   // ── 선택 줄 — 탭마다 제 동사 ──
   const paintBar = (): void => {
     const n = Array.from(ui.sel).filter((k) => (tab === 'sess' ? k.startsWith('s:') : tab === 'proj' ? k.startsWith('p:') || k.startsWith('project:') : tab === 'src' ? k.startsWith('f:') || k.startsWith('a:') : k.startsWith('knowledge:'))).length;
-    if (!n) { barEl.replaceChildren(); barEl.hidden = true; return; }
+    if (!n) { replaceKids(barEl); barEl.hidden = true; return; }
     barEl.hidden = false;
     const back = (): void => {
       if (tab === 'sess') void restoreItems(visSess.filter((s) => ui.sel.has('s:' + s.id)).map(sessItem));
@@ -345,7 +347,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
       } else if (tab === 'src') void purgeLoose(visSrc.filter((x) => ui.sel.has(x.key)).map(looseOfSrc), '자료', SRC_LOST);
       else void purgeLoose(visKnow.filter((d) => ui.sel.has('knowledge:' + d.key)).map(knowLoose), '지식', KNOW_LOST);
     };
-    barEl.replaceChildren(
+    replaceKids(barEl, 
       el('span', { class: 'n', text: `${n}개 선택` }),
       tx(T.back, '고른 것을 원래 자리로 되돌립니다', back),
       tx('완전 삭제', '고른 것을 되살릴 수 없게 지웁니다', gone, true),
@@ -354,9 +356,9 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
 
   // ── 탭 본문 ──
   const paintSess = (): void => {
-    if (!visSess.length) { body.replaceChildren(emptyNote('세션', '[지난 세션] 화면이나 사이드바 지난 세션 행의 휴지통 단추로 보낼 수 있어요.')); return; }
+    if (!visSess.length) { replaceKids(body, emptyNote('세션', '[지난 세션] 화면이나 사이드바 지난 세션 행의 휴지통 단추로 보낼 수 있어요.')); return; }
     const groups = groupByProject(visSess.slice(0, ui.shown), (s) => s.projectId, (pid) => projName(data, pid) || `#${pid}`);
-    body.replaceChildren(...groups.map((g) => el('section', { class: 'v2-trash-grp' },
+    replaceKids(body, ...groups.map((g) => el('section', { class: 'v2-trash-grp' },
       el('div', { class: 'gh' }, folderIcon(), el('b', { text: g.name }), el('span', { class: 'c', text: `${g.rows.length}개` }), el('span', { class: 'sp' }),
         tx('이 묶음 되돌리기', `「${g.name}」에 있던 ${g.rows.length}개를 지난 세션으로 되돌립니다`, () => void restoreItems(g.rows.map(sessItem)))),
       ...g.rows.map((s) => el('div', { class: 'v2-trash-row' }, pick('s:' + s.id, sessName(s)), sessIcon(),
@@ -370,11 +372,14 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
 
   const paintProj = (): void => {
     const kids: HTMLElement[] = [];
+    //  프로젝트는 **한 그릇 안의 줄**로 세운다 — 프로젝트마다 카드를 따로 세우면 123개가 6천 픽셀이 된다(8/27 에 같은 이유로 걷어낸 그 모양).
+    //   함께 들어간 세션은 그 줄 바로 아래에 편다.
+    const projRows: HTMLElement[] = [];
     for (const p of visProj.slice(0, ui.shown)) {
       const bundle = bundleOf(p);
       const open = bundleOpen(bundle.length, ui.projOpen.get(p.id));
       const it = projItem(p);
-      kids.push(el('section', { class: 'v2-trash-grp' },
+      projRows.push(
         el('div', { class: 'v2-trash-row p' }, pick('p:' + p.id, p.name),
           bundle.length ? el('button', { class: 'v2-bin-gt', type: 'button', 'aria-expanded': String(open), title: open ? '안의 세션 접기' : '안의 세션 펴기',
             onclick: () => { ui.projOpen.set(p.id, !open); renderTrash(host, data, hooks, aside); } }, el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' })) : null,
@@ -386,8 +391,9 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
           el('span', { class: 'w' }, whenCell(p.trashed_at))),
         open ? el('div', { class: 'v2-trash-kids' }, ...bundle.slice(0, 8).map((s) => el('a', { class: 'k', href: '#/s/' + encodeURIComponent(s.id), title: '세션 대화를 엽니다' },
           dot(s.stateKey), el('span', { class: 'kt', text: sessText(s, p.name).main || s.id }), el('span', { class: 'kv', text: s.stateLabel }))),
-          bundle.length > 8 ? el('p', { class: 'km', text: `외 ${bundle.length - 8}개 — 복원하면 전부 돌아와요.` }) : null) : null));
+          bundle.length > 8 ? el('p', { class: 'km', text: `외 ${bundle.length - 8}개 — 복원하면 전부 돌아와요.` }) : null) : null);
     }
+    if (projRows.length) kids.push(el('section', { class: 'v2-trash-grp' }, ...projRows.filter(Boolean) as HTMLElement[]));
     const m = more(visProj.length); if (m) kids.push(m);
     if (!visProj.length && !visOld.length) kids.push(extras || tps.length ? emptyNote('프로젝트', '사이드바 프로젝트 행 오른쪽 클릭 ▸ [휴지통으로 보내기]로 보낼 수 있어요.') : (waiting() as HTMLElement));
     // ── 옛 길로 지운 것 — 프로젝트 앱의 [삭제]는 아직 휴지통을 거치지 않고 바로 지운다. 남는 것은 이름·본문뿐이다. ──
@@ -403,14 +409,14 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
           el('span', { class: 'w' }, whenCell(d.at)))),
           visOld.length > ui.shown ? note(`외 ${visOld.length - ui.shown}개 — 위 [외 n개 더 보기]나 찾기로 좁혀 보세요.`) : null) : null));
     }
-    body.replaceChildren(...kids);
+    replaceKids(body, ...kids);
   };
 
   const paintSrc = (): void => {
-    const w = waiting(); if (w) { body.replaceChildren(w); return; }
+    const w = waiting(); if (w) { replaceKids(body, w); return; }
     const partial = filesFailed ? note('지운 파일 자료의 목록은 확인하지 못했어요 — 잠시 뒤 다시 열어 주세요.') : null;
-    if (!visSrc.length) { body.replaceChildren(...[partial, partial && !ui.q.trim() ? null : emptyNote('자료', '프로젝트의 자료 칸에서 파일을 지우면 여기로 와요.')].filter(Boolean) as HTMLElement[]); return; }
-    body.replaceChildren(...[partial].filter(Boolean) as HTMLElement[], el('div', { class: 'v2-trash-grid' }, ...visSrc.slice(0, ui.shown).map((x) => {
+    if (!visSrc.length) { replaceKids(body, ...[partial, partial && !ui.q.trim() ? null : emptyNote('자료', '프로젝트의 자료 칸에서 파일을 지우면 여기로 와요.')].filter(Boolean) as HTMLElement[]); return; }
+    replaceKids(body, ...[partial].filter(Boolean) as HTMLElement[], el('div', { class: 'v2-trash-grid' }, ...visSrc.slice(0, ui.shown).map((x) => {
       const where = x.origin === 'file' ? [x.projectId ? projName(data, x.projectId) : '', x.bytes ? fmtSize(x.bytes) : ''].filter(Boolean).join(' · ') : x.sub;
       const one = looseOfSrc(x);
       return el('article', { class: 'v2-trash-file' },
@@ -425,14 +431,14 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
   };
 
   const paintKnow = (): void => {
-    const w = waiting(); if (w) { body.replaceChildren(w); return; }
-    if (!visKnow.length) { body.replaceChildren(emptyNote('지식', 'WIKI 문서의 ⋯ ▸ [삭제]로 지운 지식이 여기로 와요.')); return; }
+    const w = waiting(); if (w) { replaceKids(body, w); return; }
+    if (!visKnow.length) { replaceKids(body, emptyNote('지식', 'WIKI 문서의 ⋯ ▸ [삭제]로 지운 지식이 여기로 와요.')); return; }
     if (!ui.know || !visKnow.some((d) => d.key === ui.know)) ui.know = visKnow[0].key;
     const cur = visKnow.find((d) => d.key === ui.know)!;
     const read = el('div', { class: 'v2-trash-read' });
     const paintRead = (): void => {
       const pv = previewCache.get('knowledge:' + cur.key);
-      read.replaceChildren(
+      replaceKids(read, 
         el('div', { class: 'hd' },
           cur.doc_type ? el('span', { class: 'cat', text: DOC_TYPE[cur.doc_type] || '지식' }) : null,
           el('span', { class: 'by', text: [cur.actor ? `버린 사람 ${cur.actor}` : '', `버린 때 ${when(cur.at)}`].filter(Boolean).join(' · ') }), el('span', { class: 'sp' }),
@@ -453,7 +459,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
         .catch(() => { previewCache.set('knowledge:' + k, null); })
         .finally(() => { if (ui.tab === 'know' && ui.know === k && host.contains(read)) paintRead(); });
     }
-    body.replaceChildren(el('div', { class: 'v2-trash-know' },
+    replaceKids(body, el('div', { class: 'v2-trash-know' },
       el('div', { class: 'v2-trash-klist' }, ...visKnow.slice(0, ui.shown).map((d) => el('div', { class: 'kr' + (d.key === cur.key ? ' on' : '') }, pick('knowledge:' + d.key, d.label),
         el('button', { class: 'kb', type: 'button', 'aria-current': d.key === cur.key ? 'true' : 'false', onclick: () => { ui.know = d.key; renderTrash(host, data, hooks, aside); } },
           el('span', { class: 't', text: d.label }), el('span', { class: 's', text: [DOC_TYPE[String(d.doc_type || '')] || '', d.actor || '', when(d.at)].filter(Boolean).join(' · ') })))),
@@ -470,7 +476,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
   };
 
   // ── 조립 ──
-  segEl.replaceChildren(...TRASH_TABS.map((t) => el('button', { class: 'v2-trash-segb' + (t.key === tab ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': String(t.key === tab),
+  replaceKids(segEl, ...TRASH_TABS.map((t) => el('button', { class: 'v2-trash-segb' + (t.key === tab ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': String(t.key === tab),
     onclick: () => { ui.tab = t.key; ui.shown = PAGE; try { localStorage.setItem(TAB_STORE, t.key); } catch { /* 기억 못 해도 화면은 선다 */ } renderTrash(host, data, hooks, aside); } },
     el('span', { text: t.label }), el('span', { class: 'n', text: (t.key === 'sess' || extras || (t.key === 'proj' && tps.length)) ? String(counts[t.key]) : '…' }))));
   emptyBtn.textContent = `${T.label} 비우기`;
@@ -480,7 +486,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
 
   const hadFocus = document.activeElement instanceof HTMLElement && document.activeElement.classList.contains('v2-bin-search');
   const scrollTop = host.scrollTop;
-  host.replaceChildren(el('div', { class: 'v2-center v2-binpage wide v2-trash' },
+  replaceKids(host, el('div', { class: 'v2-center v2-binpage wide v2-trash' },
     el('div', { class: 'v2-bin-top' },
       el('div', {},
         el('h1', { class: 'v2-title', text: '휴지통' }),
@@ -495,7 +501,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
       el('a', { class: 'btn-text', href: location.pathname + '?ui=classic#/trash', target: '_blank', rel: 'noopener', text: '열기 ↗' }))));
   if (tab === 'sess') paintSess(); else if (tab === 'proj') paintProj(); else if (tab === 'src') paintSrc(); else paintKnow();
   paintBar();
-  if (aside) aside.replaceChildren();   // 안 D 는 곁칸을 쓰지 않는다(main.ts titleFor noAside) — 옛 탭 복원이 곁칸을 물고 와도 비워 둔다
+  if (aside) replaceKids(aside);   // 안 D 는 곁칸을 쓰지 않는다(main.ts titleFor noAside) — 옛 탭 복원이 곁칸을 물고 와도 비워 둔다
   ensureExtras(() => { if (host.isConnected && host.querySelector('.v2-trash')) renderTrash(host, data, hooks, aside); });
   if (hadFocus) { search.focus(); const n = search.value.length; try { search.setSelectionRange(n, n); } catch { /* 일부 브라우저는 search 타입에 거부 */ } }
   if (scrollTop) host.scrollTop = scrollTop;

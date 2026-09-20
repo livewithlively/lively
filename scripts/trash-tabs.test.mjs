@@ -114,4 +114,9 @@ ok(/if \(ctx\?\.source === "mcp"\) throw new HttpError\(403, "프로젝트 완�
 const sa = read("web/session-actions.ts");
 ok(!/kept: \['작업 폴더의 파일·커밋은 그대로 남아요\.'\]/.test(sa) && /프로젝트 폴더\(안의 파일 포함\)까지 지워져요/.test(sa), "W13 ★프로젝트를 함께 지울 때 «작업 폴더는 남는다» 고 말하지 않는다 — 서버는 그 폴더를 지운다");
 
+//  ── 화면 실측(맥미니 헤드리스 크롬, 2026-09-20)에서 잡은 둘 ──
+const trashFn = bins.slice(bins.indexOf("export function renderTrash("), bins.indexOf("지난 세션 (#/archive)"));
+ok(trashFn.length > 1000 && !/\.replaceChildren\(/.test(trashFn) && /replaceKids\(read,/.test(trashFn), "W14 ★휴지통 화면은 replaceKids 로만 갈아 끼운다 — replaceChildren(null) 은 화면에 글자 «null» 을 찍는다(읽기 칸에서 실제로 찍혔다)");
+ok(/\.filter\(\(e\) => e\.entity === entity\)/.test(bins), "W15 ★받은 목록을 그 종류로 다시 거른다 — entity 필터를 모르는 옛 서버는 전부를 돌려줘 같은 줄이 세 벌씩 선다(실측: 지식 43 → 129)");
+
 console.log(`trash-tabs: ${pass} passed`);
