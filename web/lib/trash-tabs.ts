@@ -78,8 +78,9 @@ export function srcItems(deleted: ReadonlyArray<DeletedEntry>, files: ReadonlyAr
     const id = Number(d.key);
     if (!Number.isFinite(id) || id <= 0) continue;
     //  같은 자료가 두 출처에 다 있을 수는 없다(파일 보관은 행이 살아 있고, 감사 휴지통은 행이 없다) — 그래도 키가 달라 겹쳐도 안 터진다.
+    //  파일 자료는 종류(«파일») 대신 확장자를 적는다 — 격자에서 서로를 가르는 것은 확장자다(실측: 「파일」만 열한 장이 나란히 섰다).
     out.push({
-      key: 'a:' + id, origin: 'audit', id, title: d.label || `자료 #${id}`, badge: kindLabel(d.kind),
+      key: 'a:' + id, origin: 'audit', id, title: d.label || `자료 #${id}`, badge: d.kind === 'local_file' ? extLabel('', d.label) : kindLabel(d.kind),
       sub: kindLabel(d.kind), at: String(d.at || ''), projectId: null, bytes: 0, hasKnowledge: false,
     });
   }

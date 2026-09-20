@@ -32,3 +32,15 @@ export function previewOf(entity: string, key: string, before: Record<string, un
   };
 }
 
+// ── 수집해 온 자료(미러)인가 (#3778 2차) ─────────────────────────────────────────────────────────
+//  슬랙·깃허브·디스코드처럼 **원본이 밖에 있는** 자료의 삭제 스냅샷은 휴지통에 세우지 않는다:
+//   · 다음 수집 때 같은 외부 좌표로 다시 들어온다 — 되살리면 그 좌표 유니크에 부딪혀 실패한다(«이미 다시 들어와 있어요»).
+//   · 사람이 지우는 문도 없다(자료 앱은 남의 시스템에서 온 것에 [휴지통으로]를 세우지 않는다). 그러니 이 줄들은 거의 전부 일괄 정리의 흔적이다
+//     — 실측(lively-46e3, 2026-09-20): 8/31 하루에 지운 슬랙·깃허브·디스코드 자료 1,989건이 「자료 500」으로 서서 사람이 지운 파일 11건을 덮었다.
+//  휴지통에 설 자료 = 글로 적어 둔 것(외부 좌표 없음) + 내 컴퓨터·프로젝트의 파일(system='local').
+//  ⚠ trash-store.listDeleted 의 SQL 이 같은 판정을 한다 — 둘을 같이 고쳐라(상한은 거른 **뒤에** 걸려야 한다).
+export const TRASHABLE_SOURCE_SYSTEMS: readonly string[] = ["", "local"];
+export function isMirroredSourceSnapshot(before: Record<string, unknown> | null | undefined): boolean {
+  const sys = String((before ?? {}).external_system ?? "");
+  return !TRASHABLE_SOURCE_SYSTEMS.includes(sys);
+}

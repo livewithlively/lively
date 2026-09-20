@@ -68,6 +68,7 @@ const deletedList: Capability = {
     limit: z.number().int().min(1).max(500).optional(),
     offset: z.number().int().min(0).optional().describe("페이지 오프셋(기본 0) — 최신 삭제 N건 너머 옛 항목 순회(#709)"),
     entity: z.enum(ENTITIES).optional().describe("이 종류만(knowledge|project|category|source). 생략하면 전부"),
+    include_mirrors: z.boolean().optional().describe("수집해 온 자료(슬랙·깃허브 등 원본이 밖에 있는 것)의 삭제 스냅샷도 싣는다. 기본 false — 다시 수집되고 되살리면 충돌하는 줄이라 휴지통에 세우지 않는다"),
   },
   expose: {
     mcp: true,
@@ -76,10 +77,11 @@ const deletedList: Capability = {
         limit: req.query?.limit ? Number(req.query.limit) : undefined,
         offset: req.query?.offset ? Number(req.query.offset) : undefined,
         entity: req.query?.entity ? entityOf(req.query.entity) : undefined,
+        include_mirrors: String(req.query?.include_mirrors ?? "") === "1" || String(req.query?.include_mirrors ?? "") === "true" ? true : undefined,
       }) }],
   },
   handler: async (input: any, user: any, ctx: any) => {
-    const entries = await listDeleted(input.limit, input.offset, (input.entity as TrashEntity | undefined) ?? null);
+    const entries = await listDeleted(input.limit, input.offset, (input.entity as TrashEntity | undefined) ?? null, !!input.include_mirrors);
     // 휴지통 항목은 **삭제 시점의 전문 스냅샷**(before)을 그대로 들고 있다(#1291) — 잠긴 리스트의 프로젝트나
     //  대상 제한 지식이 여기로 새면, 지우기만 하면 누구나 읽을 수 있게 된다.
     //  스냅샷만으로 공개범위를 판정할 수 없는 항목(카테고리 등 컨테이너가 없는 것)은 **비특권에게 숨긴다** —
