@@ -4,8 +4,8 @@
 //  복원은 capability(content_restore)가 getDeleteSnapshot → 엔티티별 restore* 로 재적재한다.
 import { itemsPool } from "../db/client.js";
 import { q, one } from "../db/client.js";
-import { labelOf } from "./trash-shape.js";
-export { previewOf, PREVIEW_BODY_MAX, type DeletePreview } from "./trash-shape.js";
+import { labelOf, TRASHABLE_SOURCE_SYSTEMS } from "./trash-shape.js";
+export { previewOf, PREVIEW_BODY_MAX, isMirroredSourceSnapshot, type DeletePreview } from "./trash-shape.js";
 
 // 휴지통 대상 엔티티 — knowledge/project/category + source(#3778: 자료도 지우면 되살릴 문이 있어야 한다.
 //  deleteSource 는 처음부터 before 전문을 남겼는데 여기 목록에 없어서 «스냅샷은 있고 꺼낼 문은 없는» 상태였다).
@@ -32,7 +32,7 @@ export interface DeletedRow {
 }
 
 // 현재 삭제 상태인 항목 — 각 (entity, entity_key) 의 최신 감사행이 op='delete' 인 것만, 최신 삭제순.
-export async function listDeleted(limit = 200, offset = 0, entity?: TrashEntity | null): Promise<DeletedRow[]> {
+export async function listDeleted(limit = 200, offset = 0, entity?: TrashEntity | null, includeMirrors = false): Promise<DeletedRow[]> {
   //  entity 를 주면 그 종류만(#3778 네 탭 — 탭마다 제 목록을 제 상한으로 받는다. 한 목록 200건을 넷이 나눠 쓰면
   //   프로젝트·태스크 243건이 지식 43건을 화면 밖으로 밀어낸다: 실측 2026-09-20).
   const entities = entity && (TRASH_ENTITIES as readonly string[]).includes(entity) ? [entity] : (TRASH_ENTITIES as unknown as string[]);
@@ -49,10 +49,13 @@ export async function listDeleted(limit = 200, offset = 0, entity?: TrashEntity 
         -- #1850 P4: 완전 삭제(purge)된 항목은 스냅샷이 비어(before IS NULL) 복원할 것이 없다 — "(제목 없음)" 유령 행으로
         --  휴지통에 세우지 않는다. 일반 삭제는 before 에 전문이 있어 그대로 복원된다.
         AND latest.before IS NOT NULL
+        -- #3778 2차: 수집해 온 자료(원본이 밖에 있는 것)의 스냅샷은 세우지 않는다 — trash-shape.isMirroredSourceSnapshot 과 같은 판정.
+        --  SQL 에서 거르는 이유: 상한(LIMIT)이 거른 **뒤에** 걸려야 한다. 밖에서 거르면 일괄 정리 2천 건이 상한을 다 먹는다.
+        AND ($4::boolean OR latest.entity <> 'source' OR COALESCE(latest.before->>'external_system', '') = ANY($5))
       ORDER BY at DESC
       LIMIT $2 OFFSET $3`,   // #709 offset — 최신 삭제 N건 너머 옛 삭제 항목 복원 도달
     [entities, Math.min(Math.max(Number(limit) || 200, 1), 500),
-     Math.min(Math.max(Number(offset) || 0, 0), 1_000_000)]);
+     Math.min(Math.max(Number(offset) || 0, 0), 1_000_000), !!includeMirrors, TRASHABLE_SOURCE_SYSTEMS as unknown as string[]]);
   return rows.map((r: any) => ({
     entity: r.entity,
     key: r.entity_key,
