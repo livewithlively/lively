@@ -102,7 +102,6 @@
   .v2-title { font-size: 20px; }
   /* 한글 keep-all 은 폰 폭에선 한 어절이 줄을 통째로 밀어낸다 — 어절 안에서도 꺾이게. */
   .v2-desc, .v2-h1, .v2-title, .v2-frame-h .t { word-break: normal; overflow-wrap: anywhere; }
-  /* 홈 — 실행 줄의 칩은 줄바꿈하되 세로 구분선은 뗀다(줄 끝에 홀로 남던 그것). */
   /* 홈 — 가운데 정렬은 폰에서 위험하다: 내용이 화면보다 길면 flex 가운데 정렬은 위·아래로 똑같이 넘쳐 **위쪽은 스크롤로도 못 닿는다**
      (390×664 실측: 날짜 줄이 y=-12, 인사말이 검색 줄 밑 — 원준 2026-09-20 "위에 검색 바 때문에 잘려 보여"). 데스크톱의
      아래 여백 clamp(40px,14vh,130px) 도 폰에선 93px 을 그냥 먹었다. 위에서부터 쌓고, 넘치면 판(.v2-tabpane)이 굴린다. */
@@ -114,7 +113,8 @@
   .v2-launch, .v2-dest-grid + .v2-launch { margin-top: 8px; }
   .v2-launch-in { min-height: 50px; }
   /* 실행 줄(컴퓨터·제공자·모델·추론) — 폰에선 **가로로 미는 한 줄**. 종전엔 칩 넷이 [시키기] 옆 좁은 칸에서 한 줄씩 네 줄로
-     쌓여 카드가 128px 을 더 먹었고, 그만큼 아래 «최근에 연 앱» 이 탭 바에 걸렸다. 단추 줄은 그 아래 오른쪽 끝. */
+     쌓여 카드가 128px 을 더 먹었고, 그만큼 아래 «최근에 연 앱» 이 탭 바에 걸렸다. 단추 줄은 그 아래 오른쪽 끝.
+     칩 사이 세로 구분선(.v2-run-sep)은 한 줄이니 데스크톱처럼 그대로 보인다(줄바꿈하던 때는 줄 끝에 홀로 남아 뗐었다). */
   .v2-launch-row { flex-wrap: wrap; row-gap: 8px; }
   .v2-launch-ctl { flex: 0 0 100%; min-width: 0; }   /* 0 0 100% — 줄어들 수 있으면 단추 옆 160px 칸에 끼어 첫 칩부터 잘린다(실측) */
   .v2-run { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }

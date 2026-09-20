@@ -21,9 +21,10 @@
   @keyframes boot-bar { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
   .boot-cap { margin: 0; font-size: 13.5px; }
   /* 10초가 넘으면 그때 한 줄 — 모듈 로드가 죽어 이 판이 영영 서 있을 때 사람이 할 수 있는 일을 말한다. */
-  .boot-hint { margin: 0; font-size: 12.5px; color: var(--muted); opacity: 0; animation: boot-hint-in 300ms ease 10s forwards; }
-  @keyframes boot-hint-in { to { opacity: 1; } }
-  @media (prefers-reduced-motion: reduce) { .boot-bar::after { animation: none; width: 100%; opacity: .45; } }
+  /*  visibility 로 감춘다 — opacity 만 0 이면 보이지 않는데도 접근성 트리에는 남아, 정상 부팅 중인 스크린리더 사용자가 «새로고침» 을 듣는다. */
+  .boot-hint { margin: 0; font-size: 12.5px; color: var(--muted); opacity: 0; visibility: hidden; animation: boot-hint-in 300ms ease 10s forwards; }
+  @keyframes boot-hint-in { to { opacity: 1; visibility: visible; } }
+  @media (prefers-reduced-motion: reduce) { .boot-bar::after { animation: none; width: 100%; opacity: .45; } #boot-splash .pulse-dot { animation: none; } }
 </style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css">
 <!-- 스타일시트 — 옛 단일 public/styles.css(8,600줄)를 섹션 주석 경계에서 화면별로 분할한 것(#1313 R50).
