@@ -148,7 +148,7 @@ function renameEntry(id, rel, name, isDir, reload, base) {
     const nm = nameIn.value.trim();
     if (!nm || nm === name) { back.remove(); return; }
     saveBtn.disabled = true;
-    try { await api(B + id + '/rename', { method: 'POST', body: JSON.stringify({ path: rel, name: nm }) }); back.remove(); toast('이름을 변경했습니다'); reload(); }
+    try { await api(B + id + '/file/rename', { method: 'POST', body: JSON.stringify({ path: rel, name: nm }) }); back.remove(); toast('이름을 변경했습니다'); reload(); }
     catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
   };
   saveBtn.onclick = go;

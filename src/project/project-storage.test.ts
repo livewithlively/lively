@@ -657,7 +657,7 @@ test("W1·W2 파일 라우트는 전부 요청자 권한의 저장소(projStore)
   const routes = src("./project-routes.ts");
   for (const head of [
     "app.get(`${prefix}/:id/files`", "app.get(`${prefix}/:id/file`", "app.put(`${prefix}/:id/file`",
-    "app.post(`${prefix}/:id/folder`", "app.post(`${prefix}/:id/rename`", "app.post(`${prefix}/:id/move`",
+    "app.post(`${prefix}/:id/folder`", "app.post(`${prefix}/:id/file/rename`", "app.post(`${prefix}/:id/move`",
     "app.delete(`${prefix}/:id/file`", "app.get(`${prefix}/:id/shared/manifest`",
     "app.get(`${prefix}/:id/rules`", "app.post(`${prefix}/:id/rules`", "app.get(`${prefix}/:id/agents`",
   ]) {
@@ -705,7 +705,7 @@ test("W7 ★ 목록 라우트도 목록을 읽기 **전에** 멤버 모드 링�
   const list = body.indexOf("await store.list(abs)");
   assert.ok(jail > 0, "목록 라우트에 봉쇄가 없다 — 세션이 심은 링크로 폴더 밖 목록이 곁칸에 나간다");
   assert.ok(list > jail, "봉쇄가 목록을 읽은 뒤에 오면 소용없다");
-  for (const head of ["app.get(`${prefix}/:id/file`", "app.post(`${prefix}/:id/rename`", "app.post(`${prefix}/:id/move`", "app.delete(`${prefix}/:id/file`"]) {
+  for (const head of ["app.get(`${prefix}/:id/file`", "app.post(`${prefix}/:id/file/rename`", "app.post(`${prefix}/:id/move`", "app.delete(`${prefix}/:id/file`"]) {
     assert.match(routeBody(src("./project-routes.ts"), head), /await jailIfMember\(store, /, `${head} 에 봉쇄가 없다`);
   }
   for (const head of ["app.put(`${prefix}/:id/file`", "app.post(`${prefix}/:id/folder`"]) {
