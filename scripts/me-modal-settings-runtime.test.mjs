@@ -3,7 +3,11 @@
 //
 // 사양(신고 그대로):
 //  S1 알림 · 화면의 켜고 끄는 줄은 **체크박스가 아니라 스위치**다("체크박스 말고 이거 아이폰 토글처럼 좀 해봐").
-//  S2 스위치를 누르면 그 자리에서 저장되고, 알약이 꺼진 모습으로 바뀐다.
+//  S2 스위치를 누르면 그 자리에서 저장되고, 알약이 꺼진 모습으로 **보인다**(클래스가 아니라 색으로).
+//     ⚠ 이 줄이 이 테스트의 값어치다. 첫 실측에서 «클래스는 off 인데 색은 켜짐 그대로» 가 나왔는데,
+//     그건 CSS 가 죽어서가 아니라 `transition: background .15s` 가 가상시간에서 안 돌아 computed 가
+//     옛 값을 들고 있었던 것이다. 그래서 ⓐ 페이지에서 전환을 끄고 ⓑ **상태를 바꾸지 않는 한 쌍**
+//     (기본 켜짐인 줄 · 기본 꺼짐인 줄)으로도 잰다 — 타이밍이 끼어들 수 없는 측정이 하나는 있어야 한다.
 //  S3 알림 설명에서 비유를 걷었다("놓치면 AI 가 그대로 서 있게 됩니다" 같은 문장이 없다).
 //  S4 화면 ▸ AI 세션은 **두 줄 + 각 줄 밑 설명**이고, 둘을 되짚는 "첫째 칸 · 둘째 칸" 문단이 없다.
 //  S5 둘째 줄은 첫째에 딸려 있다 — 첫째를 끄면 잠긴다.
@@ -57,6 +61,13 @@ const ACCOUNTS = [
 
 const html = `<!doctype html><html lang="ko"><meta charset="utf-8">
 ${cssLinks}
+<style>
+/* ⚠ 전환을 끈다. .v2a-sw 는 transition: background .15s 를 갖는데, --headless=old 는 가상시간이라
+   애니메이션 프레임이 안 돌고 getComputedStyle 이 **바뀌기 전 값**을 그대로 돌려준다(실측 2026-09-20:
+   클래스는 off 인데 색은 켜짐 그대로 rgb(45,107,240) → «CSS 가 죽었다» 로 읽힐 뻔했다).
+   여기서 재려는 것은 «off 가 어떤 색인가» 이지 «몇 ms 만에 바뀌나» 가 아니다. */
+*, *::before, *::after { transition: none !important; animation: none !important; }
+</style>
 <body><pre id="out"></pre>
 <script>
 window.__posts = [];
@@ -111,8 +122,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     R.notifyText = visible().textContent;
     // 끄기 — 라벨을 누르면 체크박스가 바뀐다(진짜 입력이 살아 있다는 뜻이기도 하다)
     box0.click();
-    await sleep(60);
+    await sleep(200);
     R.afterOff = knob0.classList.contains('off');
+    R.knobOffCls = knob0.className;
     R.knobOffBg = cs(knob0, 'background-color');
     R.postedNotify = window.__posts.filter((p) => p.u.includes('notify-prefs')).length;
 
@@ -121,6 +133,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await sleep(60);
     const lrows = [...visible().querySelectorAll('.v2me-sw')];
     R.lookRows = lrows.length;
+    //  ★ 상태를 바꾸지 않고 재는 한 쌍 — 「AI 세션도 같은 테마로」는 기본 켜짐, 「이미 열려 있는 세션도」는
+    //   기본 꺼짐이라 두 알약이 **처음부터** 다른 상태로 나란히 선다. 전환·타이밍이 끼어들 여지가 없다.
+    R.lookOnBg = cs(lrows[0].querySelector('.v2a-sw'), 'background-color');
+    R.lookOffBg = cs(lrows[1].querySelector('.v2a-sw'), 'background-color');
+    R.mutedVar = getComputedStyle(document.documentElement).getPropertyValue('--muted').trim();
+    R.blueFillVar = getComputedStyle(document.documentElement).getPropertyValue('--blue-fill').trim();
+    R.offClass = lrows[1].querySelector('.v2a-sw').className;
     R.lookSub = lrows.length > 1 && lrows[1].classList.contains('v2me-sw-sub');
     R.lookSubIndent = lrows.length > 1 ? Math.round(lrows[1].getBoundingClientRect().left - lrows[0].getBoundingClientRect().left) : -1;
     R.lookText = visible().textContent;
@@ -199,8 +218,8 @@ ok(R.notifyKnobs === 3, "S1b 세 줄 모두 스위치 알약을 갖는다", Stri
 ok(Number(R.boxWidth) <= 1 && R.boxOpacity === "0", "S1c 네이티브 체크박스는 눈에 안 보인다(지우진 않았다)", `w=${R.boxWidth} op=${R.boxOpacity}`);
 ok(R.knobW === 38 && R.knobH === 22, "S1d 알약은 [AI 주입 문구] 탭과 같은 부품(38×22)", `${R.knobW}×${R.knobH}`);
 ok(/999|50%|11px/.test(R.knobRadius), "S1e 알약은 둥글다", R.knobRadius);
-ok(R.afterOff === true, "S2a 누르면 꺼진 모습으로 바뀐다");
-ok(R.knobOnBg !== R.knobOffBg, "S2b 켜짐·꺼짐의 색이 실제로 다르다", `${R.knobOnBg} → ${R.knobOffBg}`);
+ok(R.afterOff === true, "S2a 누르면 꺼진 모습으로 바뀐다", R.knobOffCls);
+ok(R.knobOnBg !== R.knobOffBg, "S2b 누른 뒤 색이 실제로 바뀐다", `${R.knobOnBg} → ${R.knobOffBg}`);
 ok(R.postedNotify === 1, "S2c 그 자리에서 한 번 저장한다", String(R.postedNotify));
 
 // S3 — 비유 제거
@@ -209,6 +228,11 @@ ok(!R.notifyText.includes("화면 밖에 띄우는"), "S3b 「화면 밖에 띄�
 ok(R.notifyText.includes("답하기 전까지 그 작업은 더 진행되지 않습니다"), "S3c 무슨 일이 벌어지는지 그대로 적는다");
 
 // S4 · S5 — 화면 ▸ AI 세션
+//  ★ 상태를 바꾸지 않고 재는 한 쌍 — «.off 규칙이 특이도에 져서 죽어 있지 않은가»를 여기서 닫는다(#830).
+ok(R.lookOnBg !== R.lookOffBg, "S2d 켜진 줄과 꺼진 줄의 알약 색이 다르다(상태 변화 없이)",
+  `on ${R.lookOnBg} · off ${R.lookOffBg} · --blue-fill ${R.blueFillVar} · --muted ${R.mutedVar} · cls "${R.offClass}"`);
+ok(R.lookOffBg === "rgb(87, 104, 137)", "S2e 꺼진 알약은 --muted 그대로다 — 무효 선언으로 투명해지지 않았다", R.lookOffBg);
+
 ok(R.lookRows === 2, "S4a AI 세션은 두 줄", String(R.lookRows));
 ok(!R.lookText.includes("첫째 칸") && !R.lookText.includes("둘째 칸"), "S4b 되짚는 문단이 없다");
 ok(R.lookText.includes("AI 세션도 같은 테마로"), "S4c 위 줄이 규칙을 말한다");
