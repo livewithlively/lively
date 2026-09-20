@@ -644,13 +644,16 @@ export async function updateProject(
   //  자동저장은 통째 교체라, 그 사이에 붙은 기록을 지운다. 그래서 화면이 «고치기 시작한 글»을 함께 보내면:
   //   · 지금 본문이 그 글로 **시작**한다(= 그 뒤에 꼬리만 붙었다) → 새 글 + 그 꼬리. 같으면 꼬리는 빈 문자열이다.
   //   · 아니다(앞·중간이 바뀌었다) → 아무것도 안 쓰고 충돌로 던진다(WHERE 가 행을 못 잡는다).
+  //   · ★기준이 **빈 글**이면 «시작한다» 가 늘 참이다(빈 문자열은 모든 글의 앞부분) — 그대로 두면 남이 그 사이 쓴 글에
+  //     내 글이 구분 없이 들러붙고(`World`+`Hello`) 성공으로 보고된다(격리 리뷰 2026-09-20). 빈 기준은 **지금도 비어
+  //     있을 때만** 통과시킨다 — 빈 본문에 누가 먼저 썼으면 그건 꼬리가 아니라 충돌이다.
   //  읽고-판정하고-쓰면 그 사이에 또 append 가 낀다 — 판정과 합치기를 **UPDATE 한 문장**에 둔다(append 와 같은 이유).
   let bodyGuard = "";
   if (patch.description !== undefined && patch.description_base !== undefined) {
     vals.push(patch.description ?? ""); const pn = `$${vals.length}`;
     vals.push(patch.description_base ?? ""); const pb = `$${vals.length}`;
     sets.push(`description = NULLIF(${pn} || substr(COALESCE(description,''), char_length(${pb}) + 1), '')`);
-    bodyGuard = ` AND left(COALESCE(description,''), char_length(${pb})) = ${pb}`;
+    bodyGuard = ` AND (CASE WHEN ${pb} = '' THEN COALESCE(description,'') = '' ELSE left(COALESCE(description,''), char_length(${pb})) = ${pb} END)`;
   }
   else if (patch.description !== undefined) set("description", patch.description);
   // append 모드 — 기존 본문 보존 후 끝에 이어붙인다. 읽고-쓰기 경합을 피하려 SQL 에서 원자적 concat:

@@ -126,6 +126,19 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
   eq(/if \(patch\.description_base !== undefined && patch\.description === undefined\)\s*\n\s*throw new HttpError\(400,/.test(cap), true,
     "W10(B12) 기준 글만 보내면(교체할 글 없이) 400 — 무엇을 합칠지 알 수 없다");
   eq(/if \("description_base" in b\) patch\.description_base = /.test(cap), true, "W11 REST 파서가 description_base 를 실어 보낸다(빠지면 가드가 조용히 꺼진다)");
+  // 격리 리뷰(2026-09-20) — 저장이 가는 도중에 글칸을 걷으면 그 저장의 실패(충돌)가 갈 곳이 없어 글이 사라졌다.
+  //  상태기계의 행위는 scripts/autosave.test.mjs 가 잰다. 여기선 **부르는 쪽이 그 결과를 실제로 쓰는지**만 본다.
+  eq(/await foldSaver\.flush\(\);[\s\S]{0,160}if \(foldSaver\.dirty\(\)\) \{[^\n]*return false; \}/.test(tk), true,
+    "W12 접이는 flush 뒤에도 못 남긴 글이 있으면 닫지 않는다(닫으면 그 글은 글칸과 함께 사라진다)");
+  eq(/if \(!\(await closeFold\(\)\)\) return;/.test(tk), true, "W13 다른 접이를 열 때도 같다 — 못 저장한 접이를 걷고 넘어가지 않는다");
+  eq(/if \(openFold && foldSaver\?\.dirty\(\)\) \{[\s\S]{0,200}keepUnsaved\(ctx\.id, openFold, ta\.value\)/.test(tk), true,
+    "W14 칸이 걷힐 때(탭 닫기·화면 떠남) 못 남긴 본문·규칙은 글칸 밖에 둔다");
+  const ps2 = read("web/v2/proj-settings.ts");
+  eq(/if \(descInflight\) await descInflight;/.test(ps2) && /if \(!desc\.isConnected\) \{[\s\S]{0,420}keepUnsaved\(id, 'body', md\)/.test(ps2), true,
+    "W15 프로젝트 설정도 같다 — flush 는 도는 저장을 기다리고, 창이 닫힌 뒤의 실패는 글을 글칸 밖에 남기고 토스트로 알린다");
+  const owners = ["web/v2/panes-tasks.ts", "web/v2/proj-settings.ts", "web/v2/unsaved-store.ts"].filter((f) => read(f).includes("'lively_v2_unsaved_text'"));
+  eq([owners, /deviceStore\('lively_v2_unsaved_text'\)/.test(read("web/v2/unsaved-store.ts"))], [["web/v2/unsaved-store.ts"], true],
+    "W16 못 남긴 글의 저장소 열쇠는 한 파일에서만, 워크스페이스로 갈리는 deviceStore 로 선언한다(글의 내용이 들어 있다)");
 }
 
 console.log(`\n${pass} passed`);
