@@ -44,9 +44,25 @@ export type SessionTaskStatus = "in_progress" | "done";
 
 const TASK_NAME_MAX = 200;   // task_create_v6 와 같은 상한
 
+/**
+ * 순수 — 세션 이름을 **태스크 이름으로** 다듬는다.
+ *
+ *  세션 이름은 첫 지시를 자른 것이라(sessionNameFromPrompt) 두 가지를 달고 온다: 앞의 목록기호(`- 사이드바 …`)와
+ *  뒤의 말줄임(`… 되게 많이 얘…`). 세션 목록에선 원문의 흔적이라 자연스럽지만, **보드에 서는 할 일 이름**으로는
+ *  군더더기다(실측 2026-09-20: 백필한 3778 태스크 셋 중 둘이 그 모양이었다). 숫자 목록(`2. 구현`)은 건드리지
+ *  않는다 — 사람이 그렇게 이름 붙인 태스크가 실제로 있고(핸드오버 관례), 지우면 뜻이 바뀐다.
+ */
+export function tidyTaskName(raw: string): string {
+  return String(raw ?? "").trim()
+    .replace(/^[-*·•]+\s+/, "")        // 앞 목록기호(숫자 목록은 제외)
+    .replace(/\s*(…|\.{3})$/, "")      // 뒤 말줄임(자름 표시)
+    .trim()
+    .slice(0, TASK_NAME_MAX);
+}
+
 /** 순수 — 세션 이름으로 만드는 태스크의 이름·본문. 이름이 비면 null(만들지 않는다). */
 export function sessionTaskSpec(labelRaw: string, sessionId: string): { name: string; description: string } | null {
-  const name = String(labelRaw ?? "").trim().slice(0, TASK_NAME_MAX);
+  const name = tidyTaskName(labelRaw);
   if (!name) return null;
   return {
     name,
@@ -126,7 +142,8 @@ export async function renameSessionTaskForLabel(args: {
   try {
     const task = await sessionTaskOf(args.sessionId, args.owner);
     if (!task || !shouldRenameSessionTask(task.name, args.expectName, args.name)) return null;
-    const name = String(args.name).trim().slice(0, TASK_NAME_MAX);
+    const name = tidyTaskName(args.name);
+    if (!name) return null;
     const after = await updateTask(task.id, { name }, { actor: args.owner, source: "web" });
     await ensureAgentsMd(task.project_id).catch(() => { /* 인덱스는 다음 갱신이 채운다 */ });
     return { ...task, name: after.name };
