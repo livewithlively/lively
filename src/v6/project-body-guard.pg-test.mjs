@@ -8,7 +8,7 @@
 //  배경: 곁칸 «태스크» 부품의 [본문] 접이는 일하는 세션 바로 옆에 떠 있다. 세션은 append_description 으로 본문 끝에
 //  기록을 붙이는데 사람의 자동저장은 통째 교체라, 가드가 없으면 그 사이에 붙은 기록이 조용히 사라진다.
 //
-//  사양·엣지 표: 스크래치패드 spec.md B1~B10 (B11·B12 의 REST 매핑은 scripts/task-pane.test.mjs 의 배선 단언).
+//  사양·엣지 표: 스크래치패드 spec.md B1~B10 + B4c·B4d(빈 기준 — 격리 리뷰가 잡은 구멍) (B11·B12 의 REST 매핑은 scripts/task-pane.test.mjs 의 배선 단언).
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const ps = await import(`${DIST}/v6/project-store.js`);
@@ -65,6 +65,20 @@ try {
     const id2 = await mk("가드 B4b", null);
     await ps.updateProject(id2, { description: "처음 쓴 글", description_base: null });
     chk("B4b 기준이 null 로 와도 빈 글과 같다", (await rowOf(id2)).description === "처음 쓴 글");
+  }
+
+  // ── B4c·B4d ★빈 기준인데 그 사이 누가 썼다 → 충돌(빈 문자열은 모든 글의 앞부분이라 «시작한다» 검사가 늘 참이다) ──
+  {
+    const id = await mk("가드 B4c", null);
+    await ps.updateProject(id, { description: "Hello" });                       // 남이 먼저 썼다(통째 저장)
+    const e = await caught(() => ps.updateProject(id, { description: "World", description_base: "" }));
+    chk("B4c 빈 글에서 시작했는데 그 사이 본문이 생겼으면 충돌이다 — 두 글을 구분 없이 붙이지 않는다(`WorldHello` 금지)",
+      e instanceof ps.ProjectBodyConflictError && (await rowOf(id)).description === "Hello", JSON.stringify({ e: String(e), row: await rowOf(id) }));
+    const id2 = await mk("가드 B4d", null);
+    await ps.updateProject(id2, { append_description: "세션의 첫 기록" });       // 빈 본문에 세션이 먼저 붙였다(구분자 없이 들어간다)
+    const e2 = await caught(() => ps.updateProject(id2, { description: "사람의 첫 글", description_base: null }));
+    chk("B4d 기준이 null 이어도 같다 — 빈 본문에 세션이 먼저 붙인 기록 앞에 내 글이 들러붙지 않는다",
+      e2 instanceof ps.ProjectBodyConflictError && (await rowOf(id2)).description === "세션의 첫 기록", JSON.stringify({ e: String(e2), row: await rowOf(id2) }));
   }
 
   // ── B5 다 지웠다 → NULL ──

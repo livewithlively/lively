@@ -22,6 +22,8 @@ import { spawnSession } from './quick-session.js';
 import { dotCls, type Sess } from './views.js';
 import type { Part, PartCtx } from './panes-parts.js';
 import { bodyExcerpt, doneOpenByDefault, groupTasks, isDoing, isDone, taskOfSession } from '../lib/task-pane.js';
+import { clearUnsaved, keepUnsaved, readUnsaved } from './unsaved-store.js';
+import { autoSaveCore, type FailVerdict } from '../lib/autosave.js';
 
 type TaskSess = { id: string; label: string | null };
 const taskSessions = (t: any): TaskSess[] => (Array.isArray(t && t.sessions) ? t.sessions : []);
@@ -32,58 +34,45 @@ const isTextField = (a: Element | null): boolean => !!a && (a.tagName === 'TEXTA
 const typingIn = (host: HTMLElement): boolean => isTextField(document.activeElement) && host.contains(document.activeElement);
 
 // ── 자동저장 글칸 — 본문·규칙·태스크 본문이 같은 것을 쓴다 ─────────────────────────────────────────
+//  상태기계는 lib/autosave(값으로 시험한다)에 있고, 여기는 그것을 글칸·칩·토스트에 묶는 껍데기다.
+//  ⚠ flush 는 **도는 저장이 실제로 끝날 때까지** 기다린다 — 부른 쪽은 그 뒤에 dirty() 를 보고 «정말 남겼나»를 안다.
 interface AutoSave { flush(): Promise<void>; dirty(): boolean; setSaved(v: string): void; destroy(): void }
 /** save 는 **서버에 실제로 남은 글**을 돌려준다(합쳐졌으면 보낸 것과 다르다). 던지면 실패 — 문구는 부른 쪽이 정한다. */
 function autoSave(ta: HTMLTextAreaElement, chip: HTMLElement, save: (text: string) => Promise<string>,
-  opts?: { savedText?: string; onSaved?: (v: string) => void; onFail?: (e: any) => boolean }): AutoSave {
-  let timer: number | null = null, saving = false, saved = ta.value, paused = false;
+  opts?: { savedText?: string; onSaved?: (v: string) => void; onFail?: (e: any, text: string) => FailVerdict }): AutoSave {
   const setChip = (t: string, warn?: boolean): void => { chip.textContent = t; chip.classList.toggle('warn', !!warn); };
-  const run = async (): Promise<void> => {
-    if (saving || paused) return;
-    const text = ta.value;
-    if (text === saved) { setChip(''); return; }
-    saving = true; setChip('저장 중…');
-    try {
-      const kept = await save(text);
-      saved = kept;
-      // 서버가 합친 글이 보낸 것과 다르면(세션이 그 사이 덧붙였다) 글칸을 그 글로 맞춘다 — 커서는 그 자리에 둔다.
-      //  ⚠ 저장하는 동안 더 친 글이 있으면 건드리지 않는다(그 글은 다음 저장이 새 기준 위에 얹는다).
-      if (kept !== text && ta.value === text) {
-        const s = ta.selectionStart, e = ta.selectionEnd;
-        ta.value = kept;
-        try { ta.setSelectionRange(s, e); } catch (_) { /* 포커스 없는 글칸 */ }
-      }
-      const okText = opts?.savedText || '저장했어요.';
-      setChip(okText);
-      window.setTimeout(() => { if (chip.textContent === okText) setChip(''); }, 2400);
-      opts?.onSaved?.(kept);
-    } catch (e: any) {
-      // onFail 이 true 를 돌려주면 «사람이 풀어야 하는 실패»다 — 같은 저장을 되풀이하지 않게 멈춘다(재개는 setSaved).
-      if (opts?.onFail?.(e)) paused = true;
-      else { setChip('저장하지 못했어요.', true); toast('저장하지 못했어요 — ' + (e?.message || e), true); }
-    }
-    saving = false;
-    if (!paused && ta.value !== saved) queue();
-  };
-  const queue = (): void => {
-    if (paused) return;
-    setChip('쓰는 중…');
-    if (timer !== null) window.clearTimeout(timer);
-    timer = window.setTimeout(() => { timer = null; void run(); }, SAVE_MS);
-  };
-  const flush = (): Promise<void> => {
-    if (timer !== null) { window.clearTimeout(timer); timer = null; }
-    return ta.value === saved ? Promise.resolve() : run();
-  };
-  const onInput = (): void => queue();
-  const onBlur = (): void => { void flush(); };
+  const okText = opts?.savedText || '저장했어요.';
+  let lastErr: any = null;
+  const core = autoSaveCore({
+    read: () => ta.value,
+    save,
+    // 서버가 합친 글이 보낸 것과 다르다(세션이 그 사이 덧붙였다) — 글칸이 보낸 그대로일 때만 맞추고 커서는 그 자리에 둔다.
+    adopt: (kept, sent) => {
+      if (ta.value !== sent) return;                       // 저장하는 동안 더 친 글이 있다 — 다음 저장이 새 기준 위에 얹는다
+      const s = ta.selectionStart, e = ta.selectionEnd;
+      ta.value = kept;
+      try { ta.setSelectionRange(s, e); } catch (_) { /* 포커스 없는 글칸 */ }
+    },
+    status: (st) => {
+      if (st === 'typing') setChip('쓰는 중…');
+      else if (st === 'saving') setChip('저장 중…');
+      else if (st === 'idle') setChip('');
+      else if (st === 'saved') { setChip(okText); window.setTimeout(() => { if (chip.textContent === okText) setChip(''); }, 2400); }
+      else { setChip('저장하지 못했어요.', true); toast('저장하지 못했어요 — ' + (lastErr?.message || lastErr), true); }
+    },
+    onSaved: opts?.onSaved,
+    onFail: (e, text) => { lastErr = e; return opts?.onFail?.(e, text); },
+    delayMs: SAVE_MS,
+    setTimer: (fn, ms) => window.setTimeout(fn, ms),
+    clearTimer: (h) => window.clearTimeout(h as number),
+  }, ta.value);
+  const onInput = (): void => core.input();
+  const onBlur = (): void => { void core.flush(); };
   ta.addEventListener('input', onInput);
   ta.addEventListener('blur', onBlur);
   return {
-    flush,
-    dirty: () => ta.value !== saved,
-    setSaved: (v: string) => { saved = v; paused = false; },
-    destroy: () => { if (timer !== null) window.clearTimeout(timer); ta.removeEventListener('input', onInput); ta.removeEventListener('blur', onBlur); },
+    flush: core.flush, dirty: core.dirty, setSaved: core.setSaved,
+    destroy: () => { core.destroy(); ta.removeEventListener('input', onInput); ta.removeEventListener('blur', onBlur); },
   };
 }
 
@@ -180,10 +169,24 @@ export function tasksPart(ctx: PartCtx): Part {
     set('rules', rulesText === null ? '' : (bodyExcerpt(rulesText) || '아직 적지 않았습니다'));
   }
 
-  async function closeFold(): Promise<void> {
-    if (!openFold) return;
+  let foldGen = 0;                        // 접이를 여닫을 때마다 오른다 — 늦게 돌아온 읽기가 새 접이를 건드리지 않게
+
+  /** 접이를 닫는다. **못 저장한 글이 있으면 닫지 않는다**(false) — 닫으면 그 글은 글칸과 함께 사라진다.
+   *  flush 가 도는 저장의 끝(충돌 포함)을 기다리므로, 여기서 dirty 면 «정말로 못 남긴 글이 있다» 는 뜻이다. */
+  async function closeFold(): Promise<boolean> {
+    if (!openFold) return true;
     const k = openFold;
-    await foldSaver?.flush();
+    if (foldSaver) {
+      await foldSaver.flush();
+      if (openFold !== k) return true;                     // 기다리는 사이 다른 길로 이미 닫혔다
+      if (foldSaver.dirty()) { toast('아직 저장하지 못한 글이 있어 접지 않았어요.', true); return false; }
+    }
+    dropFold(k);
+    return true;
+  }
+  /** 글칸을 걷는다(저장 여부를 묻지 않는다 — 물을 자리는 closeFold 다). */
+  function dropFold(k: 'body' | 'rules'): void {
+    foldGen++;
     foldSaver?.destroy(); foldSaver = null;
     openFold = '';
     const w = foldHost(k);
@@ -195,8 +198,9 @@ export function tasksPart(ctx: PartCtx): Part {
 
   async function toggleFold(k: 'body' | 'rules'): Promise<void> {
     if (openFold === k) { await closeFold(); return; }
-    await closeFold();
+    if (!(await closeFold())) return;                      // 다른 접이에 못 저장한 글이 있다 — 그쪽을 그대로 둔다
     openFold = k;
+    const gen = ++foldGen;
     const w = foldHost(k);
     w.classList.add('open');
     w.querySelector('.pn-tk-fold')?.setAttribute('aria-expanded', 'true');
@@ -214,14 +218,24 @@ export function tasksPart(ctx: PartCtx): Part {
     paintFoldRows();
     const count = (): void => { size.textContent = ta.value.length ? ta.value.length.toLocaleString('ko-KR') + '자' : ''; };
     ta.addEventListener('input', count);
+    const linkBtn = (text: string, run: () => void, title?: string): HTMLElement => el('button', { class: 'btn-text pn-tk-link', type: 'button', text, title, onclick: run });
+    const baseActs = (): HTMLElement[] => (k === 'body'
+      ? [linkBtn('크게 열기', () => { void closeFold().then((ok) => { if (ok) ctx.openSettings?.(); }); }, '프로젝트 상세에서 넓게 고칩니다')] : []);
+    /** 저장이 실패했는데 **글칸이 이미 걷혔다**(탭을 닫았다·화면을 떠났다) — 글을 글칸 밖에 남기고 알린다. */
+    const lostOffscreen = (text: string): boolean => {
+      if (ta.isConnected) return false;
+      const kept = keepUnsaved(ctx.id, k, text);
+      toast(kept ? `${k === 'body' ? '본문' : '규칙'}을 저장하지 못했어요 — 태스크 칸에서 [${k === 'body' ? '본문' : '규칙'}]을 다시 열면 쓰던 글을 되살릴 수 있어요.`
+        : '저장하지 못했어요 — 쓰던 글이 너무 길어 보관하지도 못했어요.', true);
+      return true;
+    };
 
     if (k === 'body') {
       // 펴는 순간의 **최신** 본문에서 시작한다 — 셸이 쥔 상세는 마운트 때 것이라, 그 위에서 고치면 그 사이 덧붙임을 지운다.
       try { const d = await api('/api/ui/v6/projects/' + ctx.id); if (d) { fresh = d; loadedAt = Date.now(); } } catch (_) { /* 쥔 것으로 시작 */ }
-      if (openFold !== 'body' || ctx.dead()) return;
+      if (gen !== foldGen || ctx.dead()) return;
       bodyBase = String(proj().description || '');
-      ta.value = bodyBase; ta.disabled = false; count();
-      acts.append(el('button', { class: 'btn-text pn-tk-link', type: 'button', text: '크게 열기', title: '프로젝트 상세에서 넓게 고칩니다', onclick: () => { void closeFold().then(() => ctx.openSettings?.()); } }));
+      ta.value = bodyBase;
       foldSaver = autoSave(ta, chip, async (text) => {
         const r = await api('/api/ui/v6/projects/' + ctx.id, { method: 'POST', body: JSON.stringify({ description: text || null, description_base: bodyBase }) });
         const kept = String(r?.project?.description || '');
@@ -229,37 +243,52 @@ export function tasksPart(ctx: PartCtx): Part {
         if (fresh?.project) fresh.project.description = kept;
         return kept;
       }, {
-        onSaved: () => { count(); ctx.onChanged?.(); },   // 서버가 꼬리를 합쳐 글이 늘었을 수 있다 — 글자 수도 따라간다
-        onFail: (e) => {
-          if (e?.status !== 409) return false;
+        onSaved: () => { clearUnsaved(ctx.id, 'body'); count(); ctx.onChanged?.(); },   // 서버가 꼬리를 합쳐 글이 늘었을 수 있다 — 글자 수도 따라간다
+        onFail: (e, text) => {
+          if (lostOffscreen(text)) return e?.status === 409 ? 'pause' : 'handled';
+          if (e?.status !== 409) return;
           // 꼬리가 아닌 곳이 다른 데서 바뀌었다 — 덮지 않는다. 최신을 불러오게 하고, 쓰던 글은 챙길 수 있게 한다.
           chip.textContent = '다른 곳에서 본문이 바뀌었어요.'; chip.classList.add('warn');
           size.textContent = '';                           // 좁은 발치 — 안내와 두 단추에 자리를 준다
           replaceKids(acts,
-            el('button', { class: 'btn-text pn-tk-link', type: 'button', text: '내 글 복사', onclick: () => void copyText(ta.value).then((ok) => { if (ok) toast('쓰던 글을 복사했어요.'); }) }),
-            el('button', { class: 'btn-text pn-tk-link', type: 'button', text: '최신 본문 불러오기', onclick: () => { void reopenFold('body'); } }));
-          return true;
+            linkBtn('내 글 복사', () => void copyText(ta.value).then((ok) => { if (ok) toast('쓰던 글을 복사했어요.'); })),
+            linkBtn('최신 본문 불러오기', () => { void reopenFold('body'); }, '쓰던 글을 버리고 지금 본문에서 다시 시작합니다'));
+          return 'pause';
         },
       });
     } else {
       try { const d = await api('/api/ui/v6/projects/' + ctx.id + '/rules'); rulesText = String((d && d.rules) || ''); } catch (_) { rulesText = rulesText ?? ''; }
-      if (openFold !== 'rules' || ctx.dead()) return;
-      ta.value = rulesText || ''; ta.disabled = false; count();
+      if (gen !== foldGen || ctx.dead()) return;
+      ta.value = rulesText || '';
       foldSaver = autoSave(ta, chip, async (text) => {
         await api('/api/ui/v6/projects/' + ctx.id + '/rules', { method: 'POST', body: JSON.stringify({ rules: text }) });
         rulesText = text;
         return text;
-      }, { savedText: '저장했어요 · 다음 세션부터 적용돼요.' });
+      }, {
+        savedText: '저장했어요 · 다음 세션부터 적용돼요.',
+        onSaved: () => clearUnsaved(ctx.id, 'rules'),
+        onFail: (_e, text) => (lostOffscreen(text) ? 'handled' : undefined),
+      });
     }
+    ta.disabled = false; count();
+    replaceKids(acts, baseActs());
+    // 지난번에 못 남긴 글이 있다(저장이 가는 도중에 칸을 떠났고 그 저장이 실패했다) — 덮어쓰지 않고 되살릴지 묻는다.
+    const lost = readUnsaved(ctx.id, k);
+    if (lost !== null && lost !== ta.value) {
+      chip.textContent = '지난번에 저장하지 못한 글이 있어요.'; chip.classList.add('warn');
+      size.textContent = '';
+      replaceKids(acts,
+        linkBtn('되살리기', () => { ta.value = lost; chip.classList.remove('warn'); replaceKids(acts, baseActs()); ta.dispatchEvent(new Event('input')); ta.focus(); }, '그 글을 이 칸에 다시 넣습니다 — 넣으면 저절로 저장돼요'),
+        linkBtn('버리기', () => { clearUnsaved(ctx.id, k); chip.textContent = ''; chip.classList.remove('warn'); count(); replaceKids(acts, baseActs()); }));
+    } else if (lost !== null) clearUnsaved(ctx.id, k);      // 이미 같은 글이 저장돼 있다
+    // 긴 본문은 맨 위에서 시작한다 — focus 는 커서를 끝에 두어 글칸이 맨 아래(가장 옛 기록 아래)로 내려가 버린다.
     ta.focus();
+    try { ta.setSelectionRange(0, 0); } catch (_) { /* noop */ }
+    ta.scrollTop = 0;
   }
   /** 접이를 최신 글로 다시 연다(충돌 뒤) — 쓰던 글은 버린다. 그래서 누르기 전에 [내 글 복사]를 같이 둔다. */
   async function reopenFold(k: 'body' | 'rules'): Promise<void> {
-    foldSaver?.destroy(); foldSaver = null;
-    const w = foldHost(k);
-    w.querySelector('.pn-tk-editor')?.remove();
-    w.classList.remove('open');
-    openFold = '';
+    dropFold(k);
     await toggleFold(k);
   }
 
@@ -503,7 +532,8 @@ export function tasksPart(ctx: PartCtx): Part {
   }
 
   root.append(head, folds, list, addBox);
-  const offSess = ctx.onSession(() => { openTask = 0; paintList(true); });   // 보는 세션이 바뀌었다 — 카드가 그 세션의 태스크로 선다
+  // 보는 세션이 바뀌었다 — 카드가 그 세션의 태스크로 선다. 펴 둔 줄은 toggleOpen 과 같은 순서로 닫는다(저장 먼저).
+  const offSess = ctx.onSession(() => { void (rowSaver ? rowSaver.flush() : Promise.resolve()).then(() => { openTask = 0; paintList(true); }); });
   paint();
   void load(true);
   // 규칙 줄에 비칠 한 줄 — 펴기 전에도 «적어 둔 것이 있나»는 보여야 한다.
@@ -512,6 +542,16 @@ export function tasksPart(ctx: PartCtx): Part {
   return {
     root,
     tick: () => { paint(); if (document.visibilityState !== 'hidden') void load(); },
-    destroy: () => { offSess(); void foldSaver?.flush(); void rowSaver?.flush(); foldSaver?.destroy(); rowSaver?.destroy(); },
+    destroy: () => {
+      offSess();
+      // 칸이 걷힌다 — 저장은 뒤에서 끝까지 가지만 결과를 보여 줄 화면이 없다. 못 남긴 본문·규칙은 **지금** 글칸 밖에 둔다
+      //  (성공하면 onSaved 가 지우고, 실패하면 다음에 접이를 열 때 되살릴 수 있다).
+      if (openFold && foldSaver?.dirty()) {
+        const ta = foldHost(openFold).querySelector('textarea') as HTMLTextAreaElement | null;
+        if (ta) keepUnsaved(ctx.id, openFold, ta.value);
+      }
+      const savers = [foldSaver, rowSaver].filter(Boolean) as AutoSave[];
+      for (const sv of savers) void sv.flush().finally(() => sv.destroy());
+    },
   };
 }
