@@ -119,4 +119,11 @@ const trashFn = bins.slice(bins.indexOf("export function renderTrash("), bins.in
 ok(trashFn.length > 1000 && !/\.replaceChildren\(/.test(trashFn) && /replaceKids\(read,/.test(trashFn), "W14 ★휴지통 화면은 replaceKids 로만 갈아 끼운다 — replaceChildren(null) 은 화면에 글자 «null» 을 찍는다(읽기 칸에서 실제로 찍혔다)");
 ok(/\.filter\(\(e\) => e\.entity === entity\)/.test(bins), "W15 ★받은 목록을 그 종류로 다시 거른다 — entity 필터를 모르는 옛 서버는 전부를 돌려줘 같은 줄이 세 벌씩 선다(실측: 지식 43 → 129)");
 
+//  ── 2차(라이브 실측 2026-09-20): 「자료 500」 — 8/31 일괄 정리된 수집 자료 1,989건이 사람이 지운 파일 11건을 덮었다 ──
+const store = read("src/v6/trash-store.ts");
+ok(/latest\.entity <> 'source' OR COALESCE\(latest\.before->>'external_system', ''\) = ANY\(\$5\)/.test(store) && /TRASHABLE_SOURCE_SYSTEMS as unknown as string\[\]\]/.test(store), "W16 ★수집해 온 자료는 목록 SQL 에서 거른다 — 상한이 거른 뒤에 걸린다(밖에서 거르면 일괄 정리분이 상한을 다 먹는다)");
+ok(store.indexOf("= ANY($5))") < store.indexOf("LIMIT $2 OFFSET $3"), "W16b 거르는 절이 LIMIT 앞에 있다");
+ok(/include_mirrors/.test(read("src/capabilities/trash.ts")), "W17 감사 용도로는 include_mirrors 로 전부 볼 수 있다(기본은 뺀다)");
+eq(srcItems([D("source", "7", "2026-09-13T06:15:00Z", { kind: "local_file", label: "7-frame-2000.png" }), D("source", "8", "2026-09-12T06:15:00Z", { kind: "local_file", label: "확장자없는파일" })], []).map((x) => x.badge), ["PNG", "FILE"], "E31 지운 파일 자료는 «파일» 이 아니라 확장자를 적는다(없으면 FILE)");
+
 console.log(`trash-tabs: ${pass} passed`);

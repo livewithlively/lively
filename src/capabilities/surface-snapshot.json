@@ -3614,7 +3614,7 @@
   "rest": [
    "GET /api/ui/deleted"
   ],
-  "input_hash": "51372502cd10597f"
+  "input_hash": "3e2c1f2be8ac68df"
  },
  {
   "name": "content_restore",
