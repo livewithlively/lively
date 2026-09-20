@@ -75,7 +75,7 @@ for (const [v, n] of [[null, "null"], [undefined, "undefined"], [[], "빈 배열
   const kids = SIDE.slice(SIDE.indexOf("function projListKids("), SIDE.indexOf("function projGrpCard("));
 
   //  ★ 카드는 «줄이 선 프로젝트» 에서만 온다. 목록에 없는 프로젝트를 카드로 끼워 넣지 않는다.
-  check(/const groups = projGroups\(rest, !!q\);/.test(kids),
+  check(/const groups = projGroups\(rest,/.test(kids),
     "B1 ★★ 홈 카드는 **줄이 선 프로젝트만** 세운다 — 카드 집합을 다른 데서 보태지 않는다",
     "projListKids 가 projGroups 밖에서 카드를 보태고 있다");
 
@@ -106,7 +106,7 @@ for (const [v, n] of [[null, "null"], [undefined, "undefined"], [[], "빈 배열
     "C1 ★★ «이미 섰나» 집합은 **목록 전체**(shown)에서 모은다 — rest 면 압정 행이 빠져 접힘에 두 번 선다",
     "projListKids 가 shown 을 훑지 않는다");
 
-  const passes = (kids.match(/projGrpCard\(g, o, !!q, standingSess\)/g) || []).length;
+  const passes = (kids.match(/projGrpCard\(g, o, [^,)]+, standingSess\)/g) || []).length;
   check(passes === 2,
     "C2 ★ 카드를 그리는 **두 자리**(「고정」 층 · 날짜 층) 모두에 그 집합을 넘긴다",
     `넘기는 자리 ${passes}곳 — 한 곳이라도 빠지면 그 층만 조용히 옛 동작으로 돌아간다`);
