@@ -27,7 +27,14 @@ import { isSelfNode } from "../node/registry.js";
 import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다)
 import { decorateNodeRows } from "../terminal/node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB)
 import { uploadError, nfcPath } from "../terminal/upload-file.js";
-import { ingestLocalUpload, supersedeLocalPath } from "../ingest/local-file.js";   // #1881 올린 파일 = 자료 1건
+import {
+  ingestLocalUpload,   // #1881 올린 파일 = 자료 1건
+  supersedeLocalPath, countActiveLocalUnder, stampTrashedLocalPath, newFileTrashStamp, heldPathOf,
+  getTrashedFile, reviveTrashedFile, fileTrashBatchRemaining, fileTrashBatchCleanup, FILE_TRASH_DIR,
+} from "../ingest/local-file.js";
+import { deleteSource, canSeeSource } from "../v6/source-store.js";
+import { purgeDeleted } from "../v6/trash-store.js";
+import { auditOrgContent } from "../v6/content-audit.js";
 import { taskForProjectSession, taskKickoffPrompt } from "../v6/session-task.js";   // #4084 — 태스크에서 연 세션
 
 const MAX_UPLOAD = 1024 * 1024 * 1024; // 1GB (#1870 — terminal-files 와 동일해야 한다. receiveUpload 스트리밍이라 RAM 무관)
@@ -317,15 +324,83 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   }));
 
   // 삭제 — 파일/폴더(폴더는 내용까지 재귀). 루트 자신은 거부(requireFile). path 필수.
+  //  #3778 파일 휴지통: **자료가 달린 경로**는 지우지 않고 `.lively/trash/<batch>/` 로 옮긴다(휴지통 「자료」 탭에서 되살린다).
+  //   자료가 하나도 없는 경로(코드 폴더·빈 폴더)는 종전대로 바로 지운다 — 세울 줄이 없는 것을 숨김 자리에 쌓지 않는다.
+  //   응답 trashed = 휴지통으로 간 자료 수(0 이면 바로 지워진 것) — 화면이 그 숫자로 «휴지통으로 보냈어요/삭제했어요» 를 가른다.
   app.delete(`${prefix}/:id/file`, auth, wrap(async (req, res) => {
     const { project, store, base } = await projStore(Number(req.params.id), req);
     const abs = resolveIn(base, req.query.path, true);
     await jailIfMember(store, abs);
+    const rel = path.relative(base, abs);
+    const root = { kind: "project" as const, id: project.id };
+    //  보관 자리 자체(.lively/…)를 지우라는 요청은 휴지통으로 돌리지 않는다 — 자기 안으로 옮기는 꼴이 된다.
+    const inHidden = rel.split(path.sep)[0] === ".lively";
+    const live = inHidden ? 0 : await countActiveLocalUnder(root, rel).catch(() => 0);
+    if (live > 0) {
+      const stamp = newFileTrashStamp(project.id, rel, viewerOf(userOf(req)));
+      const heldAbs = resolveIn(base, stamp.held_rel, true);
+      await store.mkdirp(path.dirname(heldAbs));
+      await store.move(abs, heldAbs);
+      //  도장은 옮긴 **뒤에** — 옮기기가 실패하면 자료는 그대로 active 다(화면과 디스크가 어긋나지 않는다).
+      //  ★ 도장이 실패하거나 0건이면(그새 자료가 사라진 경합) **옮긴 것을 되돌린다** — 도장 없는 보관 파일은 휴지통에 안 서서
+      //   «지운 것도 아니고 되살릴 수도 없는» 채로 숨는다(리뷰 지적 2026-09-20). 되돌린 뒤 0건이면 아래 종전 길(바로 삭제)로 간다.
+      let n = 0; let stampErr: unknown = null;
+      try { n = await stampTrashedLocalPath(root, rel, stamp); } catch (e) { stampErr = e; }
+      if (n > 0) { res.json({ ok: true, trashed: n, batch: stamp.batch }); return; }
+      await store.move(heldAbs, abs);
+      await store.remove(path.dirname(heldAbs)).catch(() => { /* 빈 묶음 폴더 — 비치명 */ });
+      if (stampErr) throw new HttpError(500, "휴지통으로 보내지 못했어요 — 파일은 그대로 있습니다. 잠시 뒤 다시 시도해 주세요");
+    }
     await store.remove(abs);
     // 자료 전파(#1881) — 그 경로(폴더면 하위 전부)의 자료를 superseded 로. 파생 지식은 그대로(지식은 사람 결정).
-    await supersedeLocalPath({ kind: "project", id: project.id }, path.relative(base, abs))
+    await supersedeLocalPath(root, rel)
       .catch((e) => console.warn(`[local-ingest] 삭제 전파 실패 ${abs}: ${(e as Error)?.message ?? e}`));
-    res.json({ ok: true });
+    res.json({ ok: true, trashed: 0 });
+  }));
+
+  // ── 파일 휴지통(#3778) — 되살리기 / 완전 삭제. 대상은 자료 id(휴지통 화면의 한 줄 = 자료 한 건). ──
+  //  둘 다 그 프로젝트의 파일 권한(projStore)과 자료 공개범위(canSeeSource)를 함께 지난다 — 안 보이는 자료는 되살릴 수도 지울 수도 없다.
+  const trashedFileOf = async (req: express.Request) => {
+    const { project, store, base } = await projStore(Number(req.params.id), req);
+    const sourceId = Number((req.body as { source_id?: unknown } | undefined)?.source_id);
+    if (!Number.isInteger(sourceId) || sourceId <= 0) throw new HttpError(400, "source_id 가 필요합니다");
+    const row = await getTrashedFile(sourceId);
+    if (!row || Number(row.stamp.project_id) !== project.id) throw new HttpError(404, "휴지통에 없는 자료예요");
+    if (!(await canSeeSource(sourceId, viewerOf(userOf(req))))) throw new HttpError(404, "휴지통에 없는 자료예요");
+    const heldAbs = resolveIn(base, heldPathOf(row.stamp, row.path), true);
+    await jailIfMember(store, heldAbs);
+    return { project, store, base, row, heldAbs };
+  };
+
+  app.post(`${prefix}/:id/file-trash/restore`, auth, wrap(async (req, res) => {
+    const { store, base, row, heldAbs } = await trashedFileOf(req);
+    const toAbs = await resolveInProject(store, row.path, true);
+    if (!(await store.stat(heldAbs))) throw new HttpError(410, "보관해 둔 파일이 없어요 — 프로젝트 폴더에서 직접 지워졌을 수 있습니다");
+    if (await store.stat(toAbs)) throw new HttpError(409, "원래 자리에 같은 이름의 파일이 이미 있어요 — 그 파일의 이름을 바꾼 뒤 다시 되돌려 주세요");
+    await store.mkdirp(path.dirname(toAbs));
+    await store.move(heldAbs, toAbs);
+    if (!store.osUser) await store.grantGroup(toAbs, "file");
+    await reviveTrashedFile(row.id);
+    //  보관 묶음 치우기 — **되살리기는 아무것도 없애지 않는다**: 파일 하나짜리 묶음일 때만(fileTrashBatchCleanup). 실패해도 되살리기는 끝났다.
+    if (fileTrashBatchCleanup("restore", row.stamp, row.path, await fileTrashBatchRemaining(row.stamp.batch).catch(() => 1)) === "remove") {
+      await store.remove(resolveIn(base, path.posix.join(FILE_TRASH_DIR, row.stamp.batch), true)).catch(() => { /* 비치명 */ });
+    }
+    res.json({ ok: true, restored: true, id: row.id, path: row.path });
+  }));
+
+  app.post(`${prefix}/:id/file-trash/purge`, auth, wrap(async (req, res) => {
+    const { store, base, row, heldAbs } = await trashedFileOf(req);
+    const ctx = { actor: viewerOf(userOf(req)), source: "web" };
+    await store.remove(heldAbs).catch(() => { /* 이미 없으면 지울 것이 없다 */ });
+    //  자료 행도 남기지 않는다 — 삭제(감사 before) → 그 스냅샷 본문 비우기 → «누가 언제 파기했다» 한 줄. 지식·프로젝트 파기와 같은 원칙(#1850).
+    await deleteSource(row.id, ctx);
+    const scrubbed = await purgeDeleted("source", String(row.id));
+    await auditOrgContent("source", String(row.id), "purge", null, { scrubbed_rows: scrubbed }, ctx);
+    //  마지막 자료까지 완전히 지웠으면 묶음째 치운다 — 같은 폴더에서 함께 지웠던 그 밖의 파일(자료 아닌 것)도 이때 사라진다(확인창이 말한다).
+    if (fileTrashBatchCleanup("purge", row.stamp, row.path, await fileTrashBatchRemaining(row.stamp.batch).catch(() => 1)) === "remove") {
+      await store.remove(resolveIn(base, path.posix.join(FILE_TRASH_DIR, row.stamp.batch), true)).catch(() => { /* 비치명 */ });
+    }
+    res.json({ ok: true, purged: true, id: row.id });
   }));
 
   // ── ①-b 공유 폴더 매니페스트 — 로컬 작업 PC 의 pull 동기화 기준(재귀 [{path,mtime,size}] + newest). 전원 접근(#452). ──

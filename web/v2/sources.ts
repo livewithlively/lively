@@ -13,6 +13,7 @@
 import { TOKEN_KEY, api, apiUrl, busy, el, errorNote, relTime, renderMarkdown, safeHref, state, toast } from '../core.js';
 import { buildFilePreview } from '../lib/file-preview.js';   // 미리보기 판정·렌더의 단일 소유(#/f·홈 모달과 같은 코드)
 import { authDownload, authUploadProgress } from '../projects/files-upload.js';
+import { confirmDialog } from '../ui-primitives.js';
 
 // ── 자료 한 건(목록용 얕은 행) ─────────────────────────────────────────────
 export interface SrcRow {
@@ -652,6 +653,36 @@ function readSheet(s: any, sel: SrcSel): HTMLElement {
       target: '_blank', rel: 'noopener' }, treeIcon('ext'), el('span', { text: sysLabel(sys) + '에서 열기' })));
   }
   if (derived.length) acts.append(el('span', { class: 'v2-srd-kchip', text: `지식 ${derived.length}건이 여기서 나왔어요` }));
+
+  //  휴지통으로(#3778) — 종전엔 자료 앱에 지우는 문이 아예 없었다(삭제 경로 점검 2026-09-20). 되살릴 수 있는 두 갈래에만 세운다:
+  //   · 글로 적어 둔 자료(외부 좌표 없음) → 자료 삭제(감사 스냅샷 → 휴지통 ▸ 자료 탭에서 되살림)
+  //   · 프로젝트 폴더의 파일 → 그 파일을 지운다(서버가 숨김 자리에 보관 → 같은 탭에서 파일째 되살림)
+  //   남의 시스템에서 온 것(슬랙·깃허브…)은 세우지 않는다 — 지워도 다음 수집 때 다시 들어온다. 지울 곳은 원본이다.
+  //   개인·공유 폴더의 파일도 아직 세우지 않는다 — 그 길(브라우즈 삭제)은 보관 없이 바로 지운다.
+  const projFile = /^project:(\d+)\/(.+)$/.exec(String(s.external_id || ''));
+  const authoredNote = !s.external_system && !isFile;
+  if (authoredNote || (isFile && projFile)) {
+    const toTrash = el('button', { class: 'btn-text v2-srd-trash', type: 'button', text: '휴지통으로',
+      title: '이 자료를 휴지통으로 보냅니다 — [휴지통] ▸ [자료] 탭에서 되살릴 수 있어요' }) as HTMLButtonElement;
+    toTrash.onclick = () => { void (async () => {
+      if (!await confirmDialog({
+        title: `「${String(s.title || s.name || '이 자료')}」를 휴지통으로 보낼까요?`,
+        message: '자료 목록과 AI 검색에서 빠집니다. [휴지통] ▸ [자료] 탭에서 되살릴 수 있어요.',
+        lines: [isFile ? '프로젝트 폴더의 파일도 함께 빠지고, 되살리면 원래 자리로 돌아옵니다.'
+          : (derived.length ? `이 자료에서 나온 지식 ${derived.length}건은 그대로 남지만, 출처 표시는 되살려도 돌아오지 않아요.` : '적어 둔 본문은 되살리면 그대로 돌아옵니다.')],
+        confirmText: '휴지통으로',
+      })) return;
+      toTrash.disabled = true;
+      try {
+        if (isFile && projFile) await api('/api/ui/v6/projects/' + projFile[1] + '/file?path=' + encodeURIComponent(projFile[2]), { method: 'DELETE' });
+        else await api('/api/ui/sources/' + encodeURIComponent(String(s.id)) + '/delete', { method: 'POST' });
+        toast('휴지통으로 보냈어요 — [휴지통] ▸ [자료] 탭에서 되살릴 수 있어요.');
+        toTrash.closest('.v2-srd-sheet')?.replaceChildren(el('p', { class: 'v2-src-empty', text: '휴지통으로 보낸 자료예요.' }));
+        if (view) void loadList(view, true);
+      } catch (e: any) { toTrash.disabled = false; toast('휴지통으로 보내지 못했어요 — ' + (e?.message || e), true); }
+    })(); };
+    acts.append(toTrash);
+  }
 
   const knBox = derived.length
     ? el('div', { class: 'v2-src-kn' },

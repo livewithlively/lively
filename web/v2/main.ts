@@ -927,7 +927,7 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   //  #2423 자료 앱 — 목록은 «자료», 자료 하나는 그 제목이 정본이라 데이터가 오면 힌트로 따라잡는다.
   if (p === 'sources') return { title: segs[1] ? (routeTitleHint.get(key) || '자료') : '자료', noAside: true };
   if (p === 'archive') return { title: '지난 세션', noAside: false };   // #1851 → #1850 안 A: 곁칸이 '안에 든 것'을 보여 준다
-  if (p === 'trash') return { title: '휴지통', noAside: false };
+  if (p === 'trash') return { title: '휴지통', noAside: true };   // #3778 안 D — 네 탭이 「안에 든 것」을 탭 안에서 말한다(곁칸 없음)
   if (p === 'connect') return { title: !segs[1] ? '외부 앱 연결' : segs[1] === '_git' ? '코드 저장소' : segs[1] === '_db' ? '데이터베이스' : '앱 연결', noAside: true };
   if (p === 'liv') return { title: '리브', noAside: true };
   if (p === 'welcome') return { title: '처음 설정', noAside: true };   // 온보딩(#1813) — 우패널 없이, 리브와 둘이서

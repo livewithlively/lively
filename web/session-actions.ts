@@ -425,8 +425,10 @@ function choiceOf(fp: Footprint | null, on: Set<string>): PurgeChoice {
   };
 }
 
+//  «만든 프로젝트 지우기» 를 체크하면 그 프로젝트의 폴더도 지워진다(묶음 힌트가 그렇게 말한다) — 그래서 이 줄은 «그 밖의» 를 붙여 말한다.
+const KEPT_FILES = '이 세션이 일하던 작업 폴더의 파일·커밋은 그대로 남아요(함께 지우기로 체크한 프로젝트의 폴더는 빼고요).';
 function keptLines(opts: { remoteNode?: string | null; live?: boolean }): string[] {
-  const kept = ['작업 폴더의 파일·커밋은 그대로 남아요.'];
+  const kept = [KEPT_FILES];
   if (opts.remoteNode) kept.push(`대화 파일이 다른 컴퓨터(${opts.remoteNode})에도 있다면 그건 여기서 지울 수 없어요.`);
   // 아직 도는 세션을 지우면 **이후 대화도 중앙에 안 올라간다**(재수집을 막는 장치라 그 세션 전체가 대상에서 빠진다).
   if (opts.live) kept.push('이 세션은 계속 쓸 수 있지만, 앞으로의 대화도 중앙 기록에 남지 않아요.');
@@ -462,12 +464,15 @@ export async function confirmSessionPurgeMany(opts: {
   const what = [pj.length ? `프로젝트 ${pj.length}개` : '', opts.sessions.length ? `세션 ${opts.sessions.length}개` : ''].filter(Boolean).join('와 ');
   const lines: string[] = [];
   if (withLog) lines.push(`세션 ${withLog}개는 중앙 대화 기록도 함께 지워져요.`);
-  if (pj.length) lines.push('프로젝트의 태스크·팀원·연결은 지워지고, 이름·본문만 WIKI 앱 휴지통(삭제됨)에 남아요.');
+  //  #3778 — 프로젝트 완전 삭제는 이제 이름·본문(감사 스냅샷)까지 비운다(project_purge_v6). 종전 문구 «이름·본문만 WIKI 휴지통에 남아요» 는 거짓이 된다.
+  if (pj.length) lines.push('프로젝트의 태스크·팀원·연결과 프로젝트 폴더(안의 파일 포함)까지 지워져요.');
   const on = await purgeDialog({
     title: opts.title,
     message: `${what || '고른 항목'}${iGa(what || '고른 항목')} 영영 사라지고, 되돌릴 수 없어요.`,
     lines,
-    groups, keep, kept: ['작업 폴더의 파일·커밋은 그대로 남아요.'],
+    //  ★ 발치 한 줄은 **실제로 남는 것**만 말한다(#1582). 종전엔 프로젝트를 함께 지울 때도 «작업 폴더의 파일·커밋은 그대로 남아요» 라고
+    //   했는데 서버는 그 프로젝트 폴더를 지운다(projects-v6 folder_deleted) — 잃는 쪽으로 틀린 약속이었다(삭제 경로 점검 2026-09-20).
+    groups, keep, kept: [pj.length ? '프로젝트에 속하지 않은 세션의 작업 폴더·파일·커밋은 그대로 남아요.' : KEPT_FILES],
   });
   if (!on) return null;
   const out = new Map<string, PurgeChoice>();

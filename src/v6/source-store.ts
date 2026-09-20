@@ -3,7 +3,7 @@
 //  증류물(지식)은 knowledge_source(knowledge-store.ts)로 인용 — 카파시 source→wiki citation 모델.
 import { itemsPool } from "../db/client.js";
 import { q, one } from "../db/client.js";
-import { auditOrgContent, type WriteCtx } from "./content-audit.js";
+import { auditOrgContent, type WriteCtx, restoreSnapshot } from "./content-audit.js";
 import { effectiveViewer, type Viewer } from "./visibility.js";
 import { axisOn } from "./visibility-axes.js";
 import { knowledgeVisWhere } from "./knowledge-store.js";
@@ -168,6 +168,22 @@ export async function listSources(f: SourceFilter = {}, viewer?: Viewer): Promis
      ORDER BY COALESCE(s.occurred_at, s.updated_at) DESC LIMIT ${limP} OFFSET ${offP}`, params);
 }
 
+// ── 휴지통의 파일 자료(#3778) — 파일을 지워 `.lively/trash` 로 옮겨 둔 자료들(ingest/local-file.ts 의 도장 fields.trash). ──
+//  프로젝트를 가로질러 한 번에 읽는다(휴지통 「자료」 탭). 본문은 안 싣는다 — 목록 규약 그대로. 뷰어 술어를 태워
+//  안 보이는 자료는 휴지통에서도 안 보인다.
+export async function listTrashedFileSources(viewer?: Viewer, limit = 500): Promise<Record<string, unknown>[]> {
+  const params: unknown[] = [];
+  const vis = await sourceVisWhere(viewer, params);
+  params.push(Math.min(Math.max(Number(limit) || 500, 1), 500));
+  return q(itemsPool,
+    `SELECT s.id, s.kind, s.title, s.name, s.updated_at, s.fields, s.visibility,
+            EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id) AS has_knowledge
+       FROM source s
+      WHERE s.lifecycle='superseded' AND s.fields ? 'trash' AND ${vis}
+      ORDER BY (s.fields->'trash'->>'at') DESC NULLS LAST
+      LIMIT $${params.length}`, params);
+}
+
 // #709 총계 — 같은 필터의 전체 자료 건수(페이징 메타 total/has_more 용). 목록과 같은 뷰어로 센다(has_more 정합).
 export async function countSources(f: SourceFilter = {}, viewer?: Viewer): Promise<number> {
   const { where, params } = sourceListFilter(f);
@@ -302,4 +318,18 @@ export async function deleteSource(id: number, ctx?: WriteCtx): Promise<SourceRo
   await itemsPool.query(`DELETE FROM source WHERE id=$1`, [id]);
   await auditSource(String(id), "delete", before, null, ctx);
   return before as SourceRow;
+}
+
+// 복원(#3778) — 마지막 delete 의 before 스냅샷(전문 1행)을 원래 id 로 재적재한다. knowledge/project/category 복원과 같은 골격.
+//  knowledge_source(인용)·source_member(공개범위 grant)는 삭제 때 CASCADE 됐으므로 돌아오지 않는다(자료 본체만) — 화면이 그 사실을 말한다.
+//  ⚠ 커넥터가 그새 같은 원본을 다시 들여왔으면(외부 좌표 유니크) 재적재가 충돌한다 — 그건 «이미 돌아와 있다»는 뜻이라 그대로 알린다.
+export async function restoreSource(before: Record<string, unknown>, ctx?: WriteCtx): Promise<SourceRow> {
+  let after: SourceRow;
+  try { after = await restoreSnapshot<SourceRow>("source", S_COLS, "id", before); }
+  catch (e) {
+    if ((e as { code?: string })?.code === "23505") throw new Error("같은 원본의 자료가 이미 다시 들어와 있어요 — 되살릴 필요가 없습니다");
+    throw e;
+  }
+  await auditSource(String(after.id), "restore", null, after, ctx);
+  return after;
 }

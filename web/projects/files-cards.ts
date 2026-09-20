@@ -158,8 +158,13 @@ function renameEntry(id, rel, name, isDir, reload, base) {
 // 파일/폴더 삭제(폴더는 내용까지). 확인 후.
 async function deleteEntry(id, rel, name, isDir, reload, base) {
   const B = base || '/api/ui/projects/';
-  if (!confirm((isDir ? '폴더' : '파일') + ' ‘' + name + '’을(를) 삭제할까요?' + (isDir ? '\n\n폴더 안 내용도 함께 삭제됩니다(되돌릴 수 없음).' : '\n\n되돌릴 수 없습니다.'))) return;
-  try { await api(B + id + '/file?path=' + encodeURIComponent(rel), { method: 'DELETE' }); toast('삭제했습니다'); reload(); }
+  //  #3778 파일 휴지통 — 자료로 등록된 파일은 서버가 지우지 않고 보관한다(휴지통 ▸ 자료 탭). «되돌릴 수 없음» 은 이제 절반만 참이다.
+  if (!confirm((isDir ? '폴더' : '파일') + ' ‘' + name + '’을(를) 삭제할까요?' + (isDir ? '\n\n폴더 안 내용도 함께 삭제됩니다.' : '')
+    + '\n\n자료로 등록된 파일은 휴지통 ▸ 자료 탭에서 되살릴 수 있어요. 그 밖의 파일(압축·영상 등 자료가 아닌 것)과 빈 폴더는 되살릴 수 없어요.')) return;
+  try {
+    const r = await api(B + id + '/file?path=' + encodeURIComponent(rel), { method: 'DELETE' });
+    toast(Number(r && r.trashed) > 0 ? '휴지통으로 보냈어요 — 휴지통 ▸ 자료 탭에서 되살릴 수 있어요' : '삭제했습니다'); reload();
+  }
   catch (e) { toast('실패 — ' + e.message, true); }
 }
 

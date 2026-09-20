@@ -5,7 +5,7 @@ import { z } from "zod";
 import { HttpError, clampPage } from "./rest-util.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
-import { listSources, countSources, getSource, upsertSource, deleteSource, listUndistilledSources, listSourceTree, canSeeSource } from "../v6/source-store.js";
+import { listSources, countSources, getSource, upsertSource, deleteSource, listUndistilledSources, listSourceTree, canSeeSource, listTrashedFileSources } from "../v6/source-store.js";
 import { linkKnowledgeSource, unlinkKnowledgeSource } from "../v6/knowledge-store.js";
 import { canSeeKnowledge, type Viewer } from "../v6/visibility.js";
 // #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 원문(body_md) 전체를 튕기지 않게 한다.
@@ -276,6 +276,37 @@ const sourceTree: Capability = {
 // ⚠ REST 순서: sourceUndistilled(/sources/undistilled)·sourceTree(/sources/tree) 는 sourceGet(/sources/:id) 보다
 //  **먼저** 마운트되어야 그 이름이 :id 로 먹히지 않는다(구체 경로 우선). sourceGet(/sources/:id)·sourceList(/sources) 는
 //  세그먼트 수로 구분. POST 들(/sources, /sources/:id/knowledge, /sources/:id/delete)도 상호 구분.
+// 휴지통의 파일 자료(#3778) — 프로젝트 파일을 지워 숨김 보관 자리로 옮겨 둔 자료들. 휴지통 「자료」 탭의 재료(화면 전용).
+//  ⚠ 경로를 /api/ui/sources/… 아래에 두지 않는다 — `/api/ui/sources/:id`(source_get)가 먼저 잡아 id='trash' 로 읽는다.
+//  되살리기·완전 삭제는 파일을 옮겨야 해서 프로젝트 라우트(POST /v6/projects/:id/file-trash/restore|purge)에 있다.
+const sourceTrashList: Capability = {
+  name: "source_trash_list",
+  title: "휴지통의 파일 자료",
+  description: "프로젝트 파일을 지워 휴지통으로 간 자료 목록(되살릴 수 있는 것). 본문은 싣지 않는다. 화면 전용.",
+  scope: "memory",
+  input: { limit: z.number().int().min(1).max(500).optional() },
+  expose: {
+    mcp: false,
+    rest: [{ method: "GET", paths: ["/api/ui/source-trash"],
+      parse: (req) => ({ limit: req.query?.limit ? Number(req.query.limit) : undefined }) }],
+  },
+  handler: async (input: { limit?: number }, _user: LivelyUser, ctx?: CapabilityCtx) => {
+    const rows = await listTrashedFileSources(ctx?.viewer, input.limit);
+    return {
+      entries: rows.map((r) => {
+        const f = (r.fields ?? {}) as Record<string, unknown>;
+        const t = (f.trash ?? {}) as Record<string, unknown>;
+        return {
+          id: Number(r.id), title: (r.title as string) || (r.name as string) || String(f.path ?? ""),
+          path: String(f.path ?? ""), ext: String(f.ext ?? ""), bytes: Number(f.bytes ?? 0) || 0,
+          project_id: Number(t.project_id ?? 0) || null, at: String(t.at ?? r.updated_at ?? ""), by: (t.by as string) ?? null,
+          has_knowledge: !!r.has_knowledge,
+        };
+      }),
+    };
+  },
+};
+
 export const sourceCapabilities: Capability[] = [
-  sourceList, sourceUndistilled, sourceTree, sourceGet, sourceSave, sourceLinkKnowledge, sourceDelete, sourceArtifact,
+  sourceList, sourceUndistilled, sourceTree, sourceGet, sourceSave, sourceLinkKnowledge, sourceDelete, sourceArtifact, sourceTrashList,
 ];
