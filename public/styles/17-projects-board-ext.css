@@ -48,6 +48,20 @@
 .pjv-sw { width: 26px; height: 26px; border-radius: 7px; border: 2px solid transparent; cursor: pointer; padding: 0; box-shadow: inset 0 0 0 1px rgba(var(--shadow-ink), .10); }
 .pjv-sw.on { border-color: var(--ink); }
 .pjv-sw-none { background: var(--bg-tint); color: var(--muted); font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+/* ── 연속 색 고르기(2026-09-20, 원준: "저거 말고도 연속적으로 원하는 색 다 할 수 있도록 좀 해줘") ──
+   12칸 표는 **지름길**로 남기고, 그 옆에 색상환 한 칸과 색 코드 칸을 둔다. 색상환은 네이티브
+   <input type="color"> 라 OS 의 스펙트럼·스포이드가 그대로 온다(우리가 그리면 그 둘을 잃는다).
+   .pjv-sw-host 는 display:contents — 프리셋만 다시 그려도 이 두 칸이 같은 줄에 그대로 남는다
+   (색상환이 열려 있는 동안 그 input 노드가 DOM 에서 빠지면 OS 창이 닫힌다). */
+.pjv-sw-host { display: contents; }
+.pjv-sw-pick { position: relative; overflow: hidden; display: inline-flex;
+  background: conic-gradient(from .25turn, #ef4444, #f59e0b, #22c55e, #06b6d4, #6c8cff, #a855f7, #ec4899, #ef4444); }
+/* 투명한 진짜 입력을 칸보다 크게 덮어 둔다 — 브라우저마다 다른 기본 테두리·여백을 화면 밖으로 밀어낸다. */
+.pjv-sw-pick input { position: absolute; top: -6px; left: -6px; width: calc(100% + 12px); height: calc(100% + 12px);
+  padding: 0; border: 0; background: none; opacity: 0; cursor: pointer; }
+.pjv-hex { width: 94px; height: 26px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--card); color: var(--ink); font-size: 12px; font-family: ui-monospace, Menlo, monospace; }
+.pjv-hex:focus { outline: none; border-color: var(--blue); }
 /* 그룹 기준 토글(리스트 ⇄ 상태) — 보드 헤더 (#280) */
 .pjv-groupseg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; flex: none; }
 .pjv-groupseg-btn { border: none; background: var(--bg); padding: 4px 12px; font-size: 12.5px; font-weight: 600; color: var(--muted); cursor: pointer; font-family: inherit; }

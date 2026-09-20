@@ -356,6 +356,9 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .aiacct:last-child { padding-bottom: 0; }
 .aiacct-txt { flex: 1; min-width: 0; }
 .aiacct-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 상태 배지 묶음(#4108) — 행이 자기 상태를 다시 그릴 수 있게 한 통에 담았다(프로브 답이 오면 여기만 갈린다).
+   «서버 공용» 꼬리표도 같은 통에 산다 — 종전처럼 이름 옆에 나란히 보이게 gap 은 머리줄과 같은 값. */
+.aiacct-badge { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .aiacct-name { font-size: 14.5px; font-weight: 700; color: var(--ink); }
 .aiacct-sub { margin-top: 3px; font-size: 12.5px; color: var(--muted-head); }
 .aiacct-act { flex: none; display: flex; gap: 8px; align-items: center; }

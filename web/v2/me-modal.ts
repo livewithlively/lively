@@ -175,7 +175,7 @@ export function openMeModal(opts: MeModalOpts = {}): void {
 
     const saved = (): void => { paintHead(); opts.onSaved?.(); };
     panes.set('profile', profilePane(data, saved));
-    panes.set('account', accountPane(data, logins));
+    const acc = accountPane(data, logins);  panes.set('account', acc.node); lazy.set('account', acc.init);
     panes.set('look', lookPane(close));
     panes.set('notify', notifyPane());
     const acct = aiAccountPane();  panes.set('aiacct', acct.node); lazy.set('aiacct', acct.init);
@@ -196,6 +196,34 @@ function pane(title: string, hint: string, ...kids: any[]): HTMLElement {
 }
 function saveRow(btn: HTMLElement, status: HTMLElement): HTMLElement {
   return el('div', { class: 'v2me-save' }, btn, status);
+}
+/**
+ * 켜고 끄는 한 줄 — [제목 · 설명 | 스위치]. **누르는 순간 저장한다**(저장 버튼 없음).
+ *
+ * 왜 체크박스가 아닌가(원준 2026-09-20: "체크박스 말고 이거 아이폰 토글처럼 좀 해봐"): 체크박스는
+ *  «폼을 채우고 나중에 제출한다» 는 뜻이고, 스위치는 «지금 켜고 끈다» 는 뜻이다. 이 줄들은 후자다.
+ *  부품은 이 창이 이미 쓰는 것을 그대로 쓴다(.v2a-sw — [AI 주입 문구] 탭의 그 스위치). 새 토글을
+ *  그리면 한 창 안에 스위치가 두 종류가 된다.
+ *  ⚠ 진짜 <input type="checkbox"> 는 남겨 두고 눈에서만 감춘다 — 스크린리더·키보드·`checked` 가
+ *   그 입력에 달려 있다. 보이는 알약은 표시일 뿐이라 상태를 들고 있지 않는다.
+ *
+ * opts.sub — 위 줄에 딸린 하위 항목(왼쪽에 들여쓰기 한 칸). 위가 꺼지면 같이 잠긴다.
+ */
+function switchRow(o: { label: string; desc?: string; on: boolean; sub?: boolean;
+  onchange: (on: boolean, box: HTMLInputElement) => void }): HTMLElement {
+  const box = el('input', { type: 'checkbox', class: 'v2me-sw-in' }) as HTMLInputElement;
+  box.checked = o.on;
+  const knob = el('span', { class: 'v2a-sw' + (o.on ? '' : ' off'), 'aria-hidden': 'true' });
+  box.addEventListener('change', () => { knob.classList.toggle('off', !box.checked); o.onchange(box.checked, box); });
+  const row = el('label', { class: 'v2me-sw' + (o.sub ? ' v2me-sw-sub' : '') }, box,
+    el('span', { class: 'v2me-sw-txt' },
+      el('span', { class: 'v2me-sw-l', text: o.label }),
+      o.desc ? el('span', { class: 'v2me-sw-d' }, ...uiText(o.desc)) : null),
+    knob);
+  //  화면이 되돌려야 할 때(서버 저장 실패)·잠가야 할 때 부른다 — 알약이 입력을 따라가게 한다.
+  (row as any).sync = (): void => { knob.classList.toggle('off', !box.checked); row.classList.toggle('ro', box.disabled); };
+  (row as any).box = box;
+  return row;
 }
 /**
  * 한 화면 안에서 **나란히 서는 덩어리** 하나 — [제목 · (상태) · 한 줄 설명 · 내용].
@@ -296,7 +324,7 @@ function onboardingCard(liv: any): HTMLElement {
   }
   return meSection({ title: '온보딩에서 알려주신 것',
     pill: el('span', { class: 'pill pill-ok', text: '반영 중' }),
-    desc: '리브와 이야기하며 알려주신 내용이에요. 따로 저장하지 않아도 내 AI 가 매 세션 시작할 때 아래 항목들과 함께 읽습니다. 고치려면 리브에게 말씀하세요.' },
+    desc: '리브와 이야기하며 알려주신 내용이에요.' },
   el('dl', { class: 'v2me-ob-l' }, ...rows.map((r) => el('div', { class: 'v2me-ob-r' },
     el('dt', { text: r.k }), el('dd', { text: r.v })))));
 }
@@ -363,7 +391,7 @@ function aiPane(data: any, liv: any): HTMLElement {
       field('개발 이해도', el('div', {}, devChips, devHint)),
       field('말투', toneChips),
       field('사용 언어 (AI 가 답하는 언어)', el('div', {}, langChips,
-        el('p', { class: 'prof-hint' }, ...uiText('고르거나 직접 적은 언어로 내 AI 가 답합니다. 비우면 조직 기본값(주로 한국어)을 따릅니다.')))),
+        el('p', { class: 'prof-hint' }, ...uiText('고르거나 직접 적은 언어로 내 AI 가 답합니다.')))),
       field('추가 메모', el('div', {}, memoTa,
         el('p', { class: 'prof-hint' }, ...uiText('비밀번호·API 키·개인키 같은 비밀값은 적지 마세요. 토큰으로 보이는 값이 들어 있으면 저장되지 않고 오류로 알려드립니다.')))),
       saveRow(btn, status)));
@@ -375,10 +403,13 @@ function aiPane(data: any, liv: any): HTMLElement {
 function aiAccountPane(): { node: HTMLElement; init: () => void } {
   const host = el('div');
   const node = pane('AI 계정 연결',
-    '내 AI 세션이 어떤 AI 로, 누구 계정으로 실행되는지 봅니다. 세션에서 로그인 오류가 나면 여기서 다시 로그인하세요.',
+    '내 AI 세션이 어떤 AI 로, 누구 계정으로 실행되는지 봅니다. [계정 바꾸기] 를 누르면 로그인을 처음부터 다시 합니다. 다른 계정으로 로그인하면 그 계정으로 바뀌고, 같은 계정으로 하면 인증만 새로 갱신됩니다.',
     host);
   node.classList.add('v2me-pane-wide');   // 계정 행은 [이름 · 배지 · 버튼] 한 줄이라 520px 에선 버튼이 접힌다
-  return { node, init: () => host.replaceChildren(myAiAccountsCard()) };
+  //  ⚠ bare — 이 창의 화면(pane)이 이미 [제목 · 한 줄 설명 · 테두리]를 갖고 있다. 여기에 카드를 그대로
+  //   들이면 **같은 머리가 두 겹**이 되고 설명이 두 번 적힌다(원준 2026-09-20: "여기 박스 안에 박스가
+  //   또있는데 좀 어색한데"). 클래식 화면은 카드가 자기 머리를 져야 하므로 그쪽은 종전대로다.
+  return { node, init: () => host.replaceChildren(myAiAccountsCard({ bare: true })) };
 }
 
 // ── 외부 서비스 — 이 창에서 **뺐다**(2026-09-03, 원준). ──────────────────────────────
@@ -420,15 +451,21 @@ function lookPane(close: () => void): HTMLElement {
       location.reload();
     } });
 
-  // 지금 열려 있는 탭까지 그 자리에서 바꿀지(#1683 후속2). 기본 꺼짐 — 세션 입력창에 하네스의 테마 명령을
-  //  넣는 일이라(사람이 쓰던 초안 뒤에 붙을 수 있다) 사람이 켜 둔 경우에만 한다.
-  const tabsCb = el('input', { type: 'checkbox', style: 'margin:0',
-    ...(applyToOpenTabs() ? { checked: '' } : {}),
-    onchange: (e: any) => setApplyToOpenTabs(!!e.target.checked) }) as HTMLInputElement;
+  // ── AI 세션 두 줄 — **위가 규칙이고 아래는 그 규칙을 지금 것에도 적용할지다**(원준 2026-09-20:
+  //  "이 부분 좀 이상하지 않음? 흐름이 이해가 안가"). 종전엔 나란한 체크박스 둘에, 그 둘을 «첫째 칸 ·
+  //  둘째 칸» 으로 되짚는 문단이 아래 붙어 있었다 — 읽는 사람이 줄과 문단을 눈으로 맞춰야 했고, 둘의
+  //  관계(하나가 다른 하나에 딸린 것)는 어디에도 안 적혀 있었다. 설명을 각 줄 밑으로 옮기고 아래 줄을
+  //  **하위 항목**으로 들여쓴다. 설명이 제 줄에 붙으면 되짚는 문단이 필요 없다.
+  const tabsRow = switchRow({
+    label: '이미 열려 있는 세션도 바로 바꾸기', sub: true, on: applyToOpenTabs(),
+    desc: '테마를 바꾸는 순간 지금 열려 있는 세션에도 바꾸라고 보냅니다. 되는 AI 와 안 되는 AI 가 있어서, 몇 개를 바꿨고 무엇이 안 됐는지 알려 드립니다.',
+    onchange: (on) => setApplyToOpenTabs(on) });
 
   // 테마를 바꾼 직후 — 켜져 있으면 열린 세션 탭에 밀고 결과를 그대로 알린다(조용한 실패 금지).
+  //  ⚠ 위 줄이 꺼져 있으면 밀지 않는다 — 「AI 세션도 같은 테마로」 를 끈 사람에게 열린 세션만 바꿔 주는 건
+  //   그 사람이 끈 것을 거스르는 일이다. 종전엔 이 게이트가 없어 «꺼짐 + 켜짐» 조합이 서로 반대로 굴었다.
   const pushThemeIfOn = async (): Promise<void> => {
-    if (!applyToOpenTabs()) return;
+    if (!harnessThemeSync() || !applyToOpenTabs()) return;
     try {
       const { v2OpenSessionIds } = await import('./main.js');
       const ids = v2OpenSessionIds();
@@ -439,26 +476,68 @@ function lookPane(close: () => void): HTMLElement {
   };
 
   // 'AI 세션도 이 테마로'(#1683 후속) — 터미널 **안에서 도는 하네스**까지 맞출지. 기본 켜짐.
-  //  화면(사이드바·터미널 칠)은 이 스위치와 무관하게 늘 위 테마를 따른다 — 스위치가 가리는 건 하네스 안쪽뿐이다.
-  const aiCb = el('input', { type: 'checkbox', style: 'margin:0',
-    ...(harnessThemeSync() ? { checked: '' } : {}),
-    onchange: (e: any) => setHarnessThemeSync(!!e.target.checked) }) as HTMLInputElement;
+  //  라이블리 화면은 이 스위치와 무관하게 늘 위 테마를 따른다 — 스위치가 가리는 건 AI 쪽 화면뿐이다.
+  const aiRow = switchRow({
+    label: 'AI 세션도 같은 테마로', on: harnessThemeSync(),
+    desc: '세션을 새로 열 때, 그 안에서 도는 AI(Claude Code 등)도 이 테마로 시작합니다. 끄면 AI 가 자기 설정에 저장해 둔 테마를 씁니다.',
+    onchange: (on) => { setHarnessThemeSync(on); syncAiRows(); } });
+  //  아래 줄은 위 줄에 딸려 있다 — 위가 꺼지면 할 일이 없으므로 같이 잠근다(꺼진 채로 남기지 않고 잠근다:
+  //  값은 그대로 두고 다시 켜면 되살아난다).
+  const syncAiRows = (): void => {
+    const off = !harnessThemeSync();
+    (tabsRow as any).box.disabled = off;
+    (tabsRow as any).sync();
+    tabsRow.title = off ? '「AI 세션도 같은 테마로」 를 켜면 쓸 수 있습니다' : '';
+  };
+  syncAiRows();
 
   return pane('화면', '이 브라우저에서 화면이 어떻게 보일지 정합니다. 기기마다 따로 기억되고 팀에는 영향이 없습니다.',
     field('테마', el('div', {}, seg,
       el('p', { class: 'prof-hint' }, ...uiText('시스템을 고르면 기기의 밝게·어둡게 설정을 그대로 따라갑니다.')))),
-    field('AI 세션', el('div', {},
-      el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer;' }, aiCb,
-        el('span', { style: 'font-size:13.5px' }, ...uiText('새로 여는 AI 세션도 이 테마로 띄웁니다.'))),
-      el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer; margin-top:6px;' }, tabsCb,
-        el('span', { style: 'font-size:13.5px' }, ...uiText('현재 열린 탭도 모두 함께 바꿉니다.'))),
-      el('p', { class: 'prof-hint' }, ...uiText('첫째 칸을 끄면 AI 하네스가 저마다 저장해 둔 테마를 그대로 씁니다. 둘째 칸을 켜면 지금 열려 있는 세션 탭의 하네스까지 그 자리에서 바꿉니다 — 하네스마다 지원 여부가 달라, 바꾼 개수와 못 바꾼 이유를 알려드려요.')))),
+    field('AI 세션', el('div', { class: 'v2me-sw-list' }, aiRow, tabsRow)),
     field('화면 모드', el('div', { class: 'v2me-inline' }, classicBtn,
       el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('지금은 새 화면입니다. 옛 화면으로 바꿔도 이 브라우저에서만 적용되고, 바꾼 직후 뜨는 「내 정보」 창에서 바로 돌아올 수 있어요.')))));
 }
 
+/**
+ * 「라이블리를 최신 상태로 유지하기」 한 줄 — [AI 주입 문구] 탭 발치에 있던 것을 여기로 옮겼다
+ *  (원준 2026-09-20: "이거 토글은 계정 관리 이쪽 탭에 있는게 맞을듯").
+ *  그 탭은 «AI 에게 무엇을 매번 읽힐까» 인데 이 스위치는 «라이블리 자체를 언제 새 판으로 바꿀까» 라
+ *  축이 달랐다 — 그 탭의 세 순간(시작·도중·끝) 어디에도 안 붙어 발치에 홀로 떠 있던 것이 그 지문이다.
+ * ⚠ 값은 **워크스페이스 전체**의 것이다(org_runtime_config.hooks.self_update). 이 창의 다른 줄들은
+ *  나 한 사람의 값이라, 그 차이를 설명 문장이 말한다. 관리자가 아니면 보이되 잠긴다(종전과 같은 규칙).
+ */
+function selfUpdateField(): { node: HTMLElement; init: () => void } {
+  const host = el('div');
+  const node = field('라이블리 버전', host);
+  return { node, init: () => {
+    host.replaceChildren(skeleton('설정을 불러오는 중'));
+    void api('/api/ui/org').then((d: any) => {
+      const rc = d && d.runtimeConfig;                 // 관리자만 non-null
+      const canEdit = !!(d && d.canEdit) && !!rc;
+      const hooks = (rc && rc.hooks) || {};
+      const row = switchRow({
+        label: '라이블리를 최신 상태로 유지하기', on: hooks.self_update !== false,
+        desc: '대화를 시작할 때 새 버전이 있는지 확인하고, 있으면 다음 대화부터 그 버전으로 엽니다. 이 설정은 워크스페이스 전체에 적용됩니다.',
+        onchange: (on, box) => {
+          box.disabled = true;
+          void api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ hooks: { ...hooks, self_update: on } }) })
+            .then(() => { hooks.self_update = on; toast(on ? '최신 상태로 유지합니다' : '자동 업데이트를 끕니다'); })
+            .catch((e: any) => { box.checked = !on; toast((e && e.message) || '저장하지 못했습니다', true); })
+            .finally(() => { box.disabled = false; (row as any).sync(); });
+        } });
+      if (!canEdit) {
+        (row as any).box.disabled = true;
+        (row as any).sync();
+        row.title = '관리자만 바꿀 수 있습니다';
+      }
+      host.replaceChildren(el('div', { class: 'v2me-sw-list' }, row));
+    }).catch((e) => host.replaceChildren(errorNote(e, '설정을 불러오지 못했습니다')));
+  } };
+}
+
 // ── ⑥ 계정 · 보안 — 어떻게 들어오는가. 프로필(누구로 보이는가)과 축이 달라 따로 둔다. ──
-function accountPane(data: any, logins: any): HTMLElement {
+function accountPane(data: any, logins: any): { node: HTMLElement; init: () => void } {
   const kids: any[] = [];
   if (data.email) {
     kids.push(field('비밀번호', el('div', { class: 'v2me-inline' },
@@ -480,15 +559,18 @@ function accountPane(data: any, logins: any): HTMLElement {
   //   실측에서 "계정·보안에 탈퇴가 없는데?"로 그대로 드러났다. 무엇을 뜻하는지는 서버가 판정해
   //   미리보기(plan.mode)로 알려 주므로, 화면은 **항상 문을 연다**. 자기가 어떤 배포인지 화면이
   //   먼저 알아맞히려 들면 그 판단이 서버와 갈리는 순간 사람이 빈손이 된다.
-  kids.push(el('div', { class: 'v2me-more-k', text: '계정 정리' }),
-    el('button', {
-      type: 'button', class: 'v2me-more', style: 'width:100%;text-align:left;background:none;border:0;cursor:pointer',
-      onclick: () => accountDeleteModal(),
-    },
-      el('span', { class: 'v2me-more-t', text: '회원 탈퇴' }),
-      el('span', { class: 'v2me-more-d', text: '더 이상 이곳에 들어오지 않습니다. 무엇이 지워지고 무엇이 남는지 먼저 보여 드립니다.' }),
-      ic(['M9 6l6 6-6 6'], 'v2me-more-ic')));
-  return pane('계정 · 보안', '내가 이 워크스페이스에 어떻게 들어오는지 정합니다.', ...kids);
+  //  ⚠ **비밀번호와 같은 얼굴로 선다**(원준 2026-09-20: "<비밀번호> 랑 <계정 관리> 는 같은 위계아니야?
+  //   왜 달라?"). 종전엔 이 줄만 [작은 회색 머리글 + 오른쪽 › 가 달린 전폭 행]이라, 같은 화면의 형제인데
+  //   «다른 화면으로 건너가는 링크»(moreLink·고급 설정)의 얼굴을 하고 있었다. 실제로는 건너가지 않고
+  //   이 자리에서 창이 뜨므로 그 얼굴이 사실과도 어긋났다. 셋 다 field 로 세운다.
+  kids.push(field('계정 정리', el('div', { class: 'v2me-inline' },
+    el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '회원 탈퇴', onclick: () => accountDeleteModal() }),
+    el('p', { class: 'prof-hint', style: 'margin:0' },
+      ...uiText('더 이상 이곳에 들어오지 않습니다. 무엇이 지워지고 무엇이 남는지 먼저 보여 드립니다.')))));
+  const upd = selfUpdateField();
+  kids.push(upd.node);
+  return { node: pane('계정 · 보안', '내가 이 워크스페이스에 어떻게 들어오는지, 그리고 라이블리를 언제 새 판으로 바꿀지 정합니다.', ...kids),
+    init: upd.init };
 }
 
 // ── ③ 화면 — 이 브라우저에서 내가 보는 모습. 서버에 저장되지 않는다(기기별 취향). ──
@@ -498,45 +580,43 @@ function accountPane(data: any, logins: any): HTMLElement {
 //  ⚠ 스위치는 **누르는 순간 저장한다**(저장 버튼 없음). 스위치를 내린 것 자체가 결정이라, 한 번 더 누르게
 //   하면 "껐는데 안 꺼졌다"가 난다. 텍스트를 고치는 [프로필]·[AI 개인화]가 저장 버튼을 쓰는 것과 다른
 //   이유이고, 그 구분은 일반적인 관례와 같다.
+//  ⚠ 문구 규약(원준 2026-09-20: "워딩이 왜이렇게 비유가 많고 이상하고 명확하지가 않냐"). 특히 «놓치면
+//   AI 가 그대로 서 있게 됩니다» 는 비유였고, 읽는 사람이 무슨 일이 벌어지는지 알 수 없었다.
+//   설명 한 줄은 **언제 이 알림이 오는가** 만 적는다 — 결과·감상·비유를 붙이지 않는다.
 const NOTIFY_ROWS: Array<{ key: string; label: string; desc: string }> = [
-  { key: 'session_waiting', label: 'AI 가 확인을 기다릴 때',
-    desc: '승인이나 선택을 물어놓고 멈춰 있을 때 알려 줍니다. 놓치면 AI 가 그대로 서 있게 됩니다.' },
-  { key: 'session_done', label: 'AI 가 작업을 마쳤을 때',
-    desc: '맡겨 둔 작업이 끝나는 순간 알려 줍니다. 세션을 여러 개 동시에 돌릴 때 가장 자주 받게 됩니다.' },
-  { key: 'person', label: '사람이 나를 부를 때',
-    desc: '댓글에서 나를 언급하거나, 내가 참여한 일에 댓글이 달리면 알려 줍니다.' },
+  { key: 'session_waiting', label: 'AI 가 나에게 물어볼 때',
+    desc: 'AI 가 승인이나 선택을 요청하고 내 답을 기다립니다. 답하기 전까지 그 작업은 더 진행되지 않습니다.' },
+  { key: 'session_done', label: 'AI 가 작업을 끝냈을 때',
+    desc: '내가 맡긴 작업이 끝났습니다.' },
+  { key: 'person', label: '누가 나를 언급했을 때',
+    desc: '댓글에서 누군가 나를 @ 로 부르거나, 내가 참여한 일에 새 댓글이 달렸습니다.' },
 ];
 
 function notifyPane(): HTMLElement {
   const status = el('span', { class: 'v2me-status' });
   const list = el('div', { class: 'v2me-sw-list' }, skeleton('알림 설정을 불러오는 중'));
   const body = pane('알림',
-    '라이블리 데스크톱 앱이 화면 밖에 띄우는 알림입니다. 여기서 정한 값은 **내가 쓰는 모든 컴퓨터에 함께** 적용됩니다.',
+    '라이블리 데스크톱 앱이 띄우는 알림입니다. 여기서 켠 것은 **내가 쓰는 모든 컴퓨터에 똑같이** 적용됩니다.',
     list,
     el('p', { class: 'prof-hint', style: 'margin-top:14px' },
-      ...uiText('알림은 데스크톱 앱이 띄웁니다 — 앱을 아직 안 쓰신다면 이 설정만으로는 알림이 오지 않습니다. 앱은 창을 닫아도 메뉴막대에 남아 있어, 라이블리를 보고 있지 않을 때도 알려 줍니다.')));
+      ...uiText('알림은 데스크톱 앱이 띄웁니다. 앱을 설치하지 않았다면 여기서 켜도 알림은 오지 않습니다. 앱은 창을 닫아도 꺼지지 않고 메뉴막대(윈도우는 작업 표시줄)에 남아 있습니다.')));
 
   const paint = (prefs: Record<string, boolean>): void => {
     list.replaceChildren(...NOTIFY_ROWS.map((r) => {
-      const box = el('input', { type: 'checkbox', class: 'v2me-sw-in' }) as HTMLInputElement;
-      box.checked = prefs[r.key] !== false;
-      box.addEventListener('change', () => {
-        const on = box.checked;
-        box.disabled = true;
-        status.textContent = '저장 중…';
-        void api('/api/ui/me/notify-prefs', { method: 'POST', body: JSON.stringify({ [r.key]: on }) })
-          .then(() => { status.textContent = on ? '켰습니다' : '껐습니다'; })
-          .catch((e: any) => {
-            box.checked = !on;                       // 서버가 못 받았으면 화면도 되돌린다(거짓 상태를 남기지 않는다)
-            status.textContent = '';
-            toast((e && e.message) || '저장하지 못했습니다', true);
-          })
-          .finally(() => { box.disabled = false; });
-      });
-      return el('label', { class: 'v2me-sw' }, box,
-        el('span', { class: 'v2me-sw-txt' },
-          el('span', { class: 'v2me-sw-l', text: r.label }),
-          el('span', { class: 'v2me-sw-d' }, ...uiText(r.desc))));
+      const row = switchRow({ label: r.label, desc: r.desc, on: prefs[r.key] !== false,
+        onchange: (on, box) => {
+          box.disabled = true;
+          status.textContent = '저장 중…';
+          void api('/api/ui/me/notify-prefs', { method: 'POST', body: JSON.stringify({ [r.key]: on }) })
+            .then(() => { status.textContent = on ? '켰습니다' : '껐습니다'; })
+            .catch((e: any) => {
+              box.checked = !on;                     // 서버가 못 받았으면 화면도 되돌린다(거짓 상태를 남기지 않는다)
+              status.textContent = '';
+              toast((e && e.message) || '저장하지 못했습니다', true);
+            })
+            .finally(() => { box.disabled = false; (row as any).sync(); });
+        } });
+      return row;
     }), status);
   };
 

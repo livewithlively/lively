@@ -24,6 +24,28 @@ function avatarColor(seed) {
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
   return 'hsl(' + h + ', 50%, 60%)';
 }
+// 배경이 밝으면 글자를 어둡게(2026-09-20) — 프로필에서 **아무 색이나** 고를 수 있게 되면서, 노랑처럼 밝은
+//  색을 고르면 기본 흰 글자(--on-fill)가 아예 안 보인다(#ffe08a 에서 1.3:1).
+//  ⚠ **이 규칙은 표의 12색에도 닿는다** — «표는 다 어두우니 안 닿는다» 가 아니다(그렇게 적었다가 실측에
+//   틀렸다). 흰 글자가 3:1 아래인 프리셋이 여섯이다: #22c55e 2.28 · #f59e0b 2.15 · #06b6d4 2.43 ·
+//   #0ea5e9 2.77 · #14b8a6 2.49 · #f97316 2.80. 그 여섯만 어두운 글자가 되고 대비가 5.6~7.3 으로 오른다.
+//   나머지 여섯(#6c8cff 3.07 · #ef4444 · #a855f7 · #ec4899 · #64748b · #8b5cf6)은 **그대로 흰 글자**다.
+//  경계를 «흰 글자와 어두운 글자의 대비가 같아지는 점»(L=0.2148)이 아니라 **«흰 글자가 3:1 아래로
+//   떨어지는 점»(L=0.30)에 둔 이유**: 앞쪽을 쓰면 흰 글자가 멀쩡한 파랑·보라까지 뒤집혀, 이미 그 색을
+//   쓰고 있는 사람의 얼굴이 이유 없이 바뀐다. 고치려는 것은 «안 보인다» 이지 «최대 대비» 가 아니다.
+//  ⚠ 이름에서 자동으로 뽑는 색(avatarColor 의 hsl)은 이 규칙 밖이다 — 그건 우리가 고르는 중간 톤이고,
+//   여기에 규칙을 걸면 전 구성원의 얼굴이 한꺼번에 바뀐다(이 변경의 범위가 아니다).
+//  빈 문자열을 돌려주면 스타일시트의 기본 글자색을 그대로 쓴다.
+function avatarInk(hex) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(hex || '')) return '';
+  const n = parseInt(String(hex).slice(1), 16);
+  const lin = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  });
+  const L = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+  return L > 0.30 ? '#15233b' : '';        // 1.05/(L+0.05) < 3 인 지점
+}
 // 원형 아바타 element. avatar(data URL)면 <img>, 없으면 색상+글자. cls 로 크기 변형(topbar-ava 등).
 //  opts.char/opts.color — 프로필 설정의 커스텀 글자·배경색(이미지 없을 때만). 없으면 이름 이니셜 + id 해시색 폴백.
 function profileAvatar(avatar, name, seed, cls?, opts?) {
@@ -32,7 +54,9 @@ function profileAvatar(avatar, name, seed, cls?, opts?) {
   else {
     const o = opts || {};
     const ch = o.char != null ? String(o.char).trim() : '';
-    wrap.style.background = (o.color && /^#[0-9a-fA-F]{6}$/.test(o.color)) ? o.color : avatarColor(seed || name);
+    const custom = (o.color && /^#[0-9a-fA-F]{6}$/.test(o.color)) ? o.color : '';
+    wrap.style.background = custom || avatarColor(seed || name);
+    wrap.style.color = avatarInk(custom);
     wrap.textContent = ch || initials(name);
   }
   return wrap;
@@ -57,10 +81,12 @@ function paintFace(wrap, id, name) {
   wrap.title = nm;
   // 얼굴 내용(텍스트·이미지)만 교체하고 뱃지 등 다른 자식(요소)은 보존 — self-heal 재칠 시 뱃지 안 지워지게.
   Array.from(wrap.childNodes).forEach((n: any) => { if (n.nodeType === 3 || (n.nodeType === 1 && n.tagName === 'IMG')) wrap.removeChild(n); });
-  if (m.avatar) { wrap.style.background = ''; wrap.insertBefore(el('img', { src: m.avatar, alt: '' }), wrap.firstChild); }
+  if (m.avatar) { wrap.style.background = ''; wrap.style.color = ''; wrap.insertBefore(el('img', { src: m.avatar, alt: '' }), wrap.firstChild); }
   else {
     const ch = m.avatar_char != null ? String(m.avatar_char).trim() : '';
-    wrap.style.background = (m.avatar_color && /^#[0-9a-fA-F]{6}$/.test(m.avatar_color)) ? m.avatar_color : avatarColor(id || nm);
+    const custom = (m.avatar_color && /^#[0-9a-fA-F]{6}$/.test(m.avatar_color)) ? m.avatar_color : '';
+    wrap.style.background = custom || avatarColor(id || nm);
+    wrap.style.color = avatarInk(custom);
     wrap.insertBefore(document.createTextNode(ch || initials(nm)), wrap.firstChild);
   }
 }
@@ -74,6 +100,7 @@ function personFace(id, cls, name?) {
 
 export {
   avatarColor,
+  avatarInk,
   initials,
   loadPeopleAvatars,
   personFace,

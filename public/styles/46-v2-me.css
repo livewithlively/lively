@@ -92,19 +92,33 @@
 .v2me-more-badge { flex: none; font-size: 10.5px; font-weight: 700; line-height: 1.5; padding: 0 6px; border-radius: 6px;
   border: 1px solid var(--line); color: var(--muted-head); background: var(--bg); }
 
-/* ── 알림(#1842) — 한 줄 = [체크박스 | 제목·설명]. **누르는 순간 저장된다**(저장 버튼 없음).
-   커스텀 토글을 만들지 않고 네이티브 체크박스를 쓴다 — 디자인 시스템이 부품 언어를 하나로 묶는다.
+/* ── 켜고 끄는 한 줄(#1842 · #4108) — [제목 · 설명 | 스위치]. **누르는 순간 저장된다**(저장 버튼 없음).
+   ⚠ 2026-09-20 원준: "체크박스 말고 이거 아이폰 토글처럼 좀 해봐". 체크박스는 «폼을 채우고 나중에
+   제출한다» 는 뜻이고 스위치는 «지금 켜고 끈다» 는 뜻인데, 이 줄들은 후자였다. 알약은 이 창이 이미 쓰는
+   .v2a-sw 를 그대로 쓴다 — 한 창 안에 스위치가 두 종류가 되지 않게(그 규칙 옆 주석도 같은 말을 한다).
+   ⚠ 진짜 <input type="checkbox"> 는 지우지 않고 **눈에서만 감춘다** — 스크린리더·키보드·checked 가
+   거기 달려 있다. 보이는 알약은 표시일 뿐 상태를 들고 있지 않는다(그래서 display:none 이 아니다).
    행 전체가 <label> 이라 설명 줄을 눌러도 켜지고 꺼진다(누를 수 있는 면이 넓어야 한다). */
 .v2me-sw-list { display: flex; flex-direction: column; gap: 10px; }
-.v2me-sw { display: flex; align-items: flex-start; gap: 11px; padding: 13px 14px; border: 1px solid var(--line);
-  border-radius: 11px; cursor: pointer; }
+.v2me-sw { display: flex; align-items: center; gap: 12px; padding: 13px 14px; border: 1px solid var(--line);
+  border-radius: 11px; cursor: pointer; position: relative; }
 .v2me-sw:hover { border-color: var(--blue); background: var(--bg-tint); }
 .v2me-sw:focus-within { border-color: var(--blue); }
-.v2me-sw-in { flex: none; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--blue); cursor: pointer; }
+.v2me-sw-in { position: absolute; width: 1px; height: 1px; margin: 0; padding: 0; opacity: 0; pointer-events: none; }
 .v2me-sw-in:disabled { cursor: default; opacity: .55; }
-.v2me-sw-txt { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.v2me-sw-txt { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
 .v2me-sw-l { font-size: 13.5px; font-weight: 700; color: var(--ink); }
 .v2me-sw-d { font-size: 12.5px; color: var(--ink-sub); line-height: 1.55; }
+/* 알약은 <span> 이라 크기를 받으려면 블록이어야 한다(.v2a-sw 는 <button> 을 전제로 쓰였다). */
+.v2me-sw .v2a-sw { display: block; }
+/* 키보드로 왔을 때 — 감춘 입력 대신 알약이 초점을 보인다. */
+.v2me-sw-in:focus-visible ~ .v2a-sw { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* 하위 항목 — 위 줄에 딸려 있다는 것을 들여쓰기로 말한다(설명을 되짚는 문단 대신). */
+.v2me-sw-sub { margin-left: 20px; }
+/* 잠긴 줄 — 위 줄이 꺼졌거나 관리자만 바꿀 수 있을 때. 값은 그대로 두고 손만 못 대게 한다. */
+.v2me-sw.ro { cursor: default; }
+.v2me-sw.ro:hover { border-color: var(--line); background: transparent; }
+.v2me-sw.ro .v2me-sw-txt { opacity: .6; }
 
 /* ── 좁은 화면 — 목록이 위로 눕는다(기능은 하나도 접지 않는다). ── */
 @media (max-width: 760px) {
