@@ -48,16 +48,27 @@ function aiAccountRow(a, mySessions, reload) {
   // ⚠ '연결됨'은 **자격이 저장돼 있다**는 뜻이지 '지금 쓸 수 있다'가 아니다(#1516). 만료·무효 토큰은 서버가
   //  알아낼 방법이 없다 — 파일 존재는 물론 `codex login status`·`codex doctor` 도 만료된 토큰을 정상으로
   //  보고한다(실측). 그래서 툴팁으로 그 한계를 말하고, 아래에서 **연결됨이어도 [다시 로그인]을 열어 둔다**.
-  const st = a.loggedIn === true
-    ? { text: '연결됨', cls: 'pill pill-ok', tip: (shared ? '이 서버 공용 계정으로 연결돼 있습니다' : '내 계정으로 연결돼 있습니다') + ' — ' + a.where + '. 저장된 자격이 있다는 뜻이며, 만료 여부까지는 서버가 알 수 없습니다 — 세션에서 로그인 오류가 나면 [다시 로그인] 을 누르세요.' }
-    : a.loggedIn === false
-      ? { text: '연결 안 됨', cls: 'pill', tip: '아직 로그인하지 않았습니다. [로그인] 을 누르면 이 AI 로 세션이 하나 열리고, 거기서 한 번만 로그인하면 됩니다.' }
-      //  ★ #2477 — «모름» 에도 두 종류가 있다. probe 하네스(agy)는 **아직 안 물어본 것**이지 못 잰 것이 아니다.
-      //   그 둘을 같은 문장으로 말하면 사람이 «이 서버가 고장났나» 로 읽는다.
-      : a.how === 'probe'
-        ? { text: '확인 필요', cls: 'pill', tip: a.label + ' 는 자격이 파일로 남지 않아, 목록을 열 때가 아니라 **물어봐야** 알 수 있습니다(그 CLI 에게 직접 묻습니다 — 몇 초 걸립니다). [확인] 을 누르면 지금 재 봅니다.' }
-        : { text: '확인 불가', cls: 'pill', tip: '이 서버가 로그인 여부를 확인하지 못했습니다(자격이 키체인에 있거나 접근할 수 없음). 세션이 잘 돌고 있으면 연결된 것입니다.' };
-  const badge = withTip(el('span', { class: st.cls, text: st.text }), st.tip);
+  //  ── 상태는 행이 들고 있는다(#4108) — probe 하네스는 열리자마자 **스스로** 물어보고 자기 배지를 고친다. ──
+  //   종전엔 사람이 [확인] 을 눌러야 «확인 필요» 가 풀렸다. 그건 화면이 모르는 것을 사람에게 대신 묻게 한
+  //   것이고(원준 2026-09-20: "안티그래비티는 연결전에 저 확인 버튼 왜 존재하는거야 이유가 있어?"),
+  //   누르기 전까지는 «연결 전» 인지 «연결됐는데 화면이 모르는» 것인지 구분도 안 됐다.
+  //   목록 조회(GET ai-accounts)에는 여전히 프로브를 태우지 않는다 — 4.3초짜리라 뜨거운 경로에 못 올린다.
+  //   그래서 «목록은 빨리 뜨고, 그 행만 뒤에서 채워진다».
+  let loggedIn: boolean | null = a.loggedIn;
+  let probing = false;
+  let probed = false;                       // 물어봤는데도 모름 = «확인 불가»(아직 안 물어본 것과 다르다)
+  const badge = el('span', { class: 'aiacct-badge' });
+  const act = el('div', { class: 'aiacct-act' });
+  const subEl = el('div', { class: 'aiacct-sub' });
+  const stateOf = () => probing
+    ? { text: '확인 중…', cls: 'pill', tip: a.label + ' 에게 지금 로그인 상태를 묻고 있습니다(몇 초 걸립니다).' }
+    : loggedIn === true
+      ? { text: '연결됨', cls: 'pill pill-ok', tip: (shared ? '이 서버 공용 계정으로 연결돼 있습니다' : '내 계정으로 연결돼 있습니다') + ' — ' + a.where + '. 저장된 자격이 있다는 뜻이며, 만료 여부까지는 서버가 알 수 없습니다 — 세션에서 로그인 오류가 나면 [계정 바꾸기] 를 누르고 같은 계정으로 다시 로그인하세요.' }
+      : loggedIn === false
+        ? { text: '연결 안 됨', cls: 'pill', tip: '아직 로그인하지 않았습니다. [로그인] 을 누르면 이 AI 로 세션이 하나 열리고, 거기서 한 번만 로그인하면 됩니다.' }
+        : { text: '확인 불가', cls: 'pill', tip: probed
+          ? a.label + ' 에게 물어봤지만 답을 받지 못했습니다. 세션이 잘 돌고 있으면 연결된 것입니다.'
+          : '이 서버가 로그인 여부를 확인하지 못했습니다(자격이 키체인에 있거나 접근할 수 없음). 세션이 잘 돌고 있으면 연결된 것입니다.' };
   //  ── 이 행 아래 펼쳐지는 로그인 자리(#2477) ────────────────────────────────────
   //   ⚠ 카드를 **지우는 경로를 두지 않는다.** 실측(2026-08-31): 조회가 30초 끊기자 탈출로가 카드를 덮어
   //    받은 주소와 사람이 치던 코드까지 지웠다. 여기서는 채우기만 하고, 실패·정체는 잔글씨로만 말한다.
@@ -199,35 +210,50 @@ function aiAccountRow(a, mySessions, reload) {
   // 부제는 **한 줄**만 — 지금 이 AI 로 도는 내 세션이 몇 개인지(이 화면에서 사람이 실제로 궁금해하는 것).
   //  공유 계정 같은 단서는 짧은 꼬리표로만 붙이고 사연은 툴팁에 둔다.
   const sub = live.length ? `내 세션 ${live.length}개가 이 AI로 실행 중` : '이 AI로 실행 중인 내 세션 없음';
-  return el('div', { class: 'aiacct' },
-    el('div', { class: 'aiacct-txt' },
-      el('div', { class: 'aiacct-head' },
-        el('span', { class: 'aiacct-name', text: a.label }), badge,
-        shared ? withTip(el('span', { class: 'pill', text: '서버 공용' }),
-          '이 AI 의 계정은 이 서버 전체가 함께 씁니다 — 내가 연결한 것이 아닐 수 있고, 로그아웃하면 다른 구성원 세션까지 끊기므로 잠가 두었습니다.') : null),
-      el('div', { class: 'aiacct-sub', text: sub })),
-    el('div', { class: 'aiacct-act' },
+
+  /** 이 행만 «지금 재 본다» — 자격이 파일로 안 남는 하네스(agy)는 CLI 에게 직접 물어야 안다. */
+  const probeNow = async (): Promise<void> => {
+    if (probing) return;
+    probing = true; paintState();
+    try {
+      const r: any = await api('/api/ui/me/ai-accounts/check', { method: 'POST', body: JSON.stringify({ harness: a.key }) });
+      //  ⚠ null 은 통과가 아니다 — «모름» 을 «연결됨» 으로 접지 않는다(이 화면의 교리).
+      loggedIn = r && (r.loggedIn === true || r.loggedIn === false) ? r.loggedIn : null;
+    } catch { loggedIn = null; }
+    probing = false; probed = true; paintState();
+  };
+
+  function paintState(): void {
+    const st = stateOf();
+    badge.replaceChildren(withTip(el('span', { class: st.cls, text: st.text }), st.tip),
+      shared ? withTip(el('span', { class: 'pill', text: '서버 공용' }),
+        '이 AI 의 계정은 이 서버 전체가 함께 씁니다 — 내가 연결한 것이 아닐 수 있고, 로그아웃하면 다른 구성원 세션까지 끊기므로 잠가 두었습니다.') : null);
+    subEl.textContent = sub;
+    act.replaceChildren(
       // 로그인 버튼은 **언제나 연다**(#1516). 종전엔 '연결 확정'이면 감췄는데, 판정이 자격 **파일 존재**만
       //  보므로 만료된 자격도 '연결됨'이 된다 → 세션이 인증 오류로 죽는 바로 그 상황에서 화면에 로그인
       //  진입점이 하나도 없었다(상민님 신고: "비개발자가 어떻게 로그인을 하라는건지도 알기 어렵다").
-      //  다시 로그인은 어떤 상태에서도 해가 없다 — 강조만 낮춘다(연결됨이면 ghost).
-      //  ★ probe 하네스(agy)는 «지금 재 보기» 를 준다 — 목록 조회에 4.3초짜리 프로브를 넣지 않는 대신,
-      //   사람이 궁금할 때 그 행만 묻는다(서버 교리와 같은 자리: 뜨거운 경로에 프로브를 올리지 않는다).
-      a.how === 'probe' ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '확인',
-        onclick: async (ev) => {
-          const b2 = ev.currentTarget as HTMLButtonElement; b2.disabled = true; const was = b2.textContent; b2.textContent = '확인 중…';
-          try {
-            const r: any = await api('/api/ui/me/ai-accounts/check', { method: 'POST', body: JSON.stringify({ harness: a.key }) });
-            //  ⚠ null 은 통과가 아니다 — «모름» 을 «연결됨» 으로 접지 않는다(이 화면의 교리).
-            toast(r && r.loggedIn === true ? a.label + ' 에 연결돼 있습니다.'
-              : r && r.loggedIn === false ? a.label + ' 에 아직 로그인하지 않았습니다.'
-              : a.label + ' 로그인 여부를 확인하지 못했습니다(그 자리에서 CLI 를 못 불렀습니다).');
-          } catch (e: any) { toast('확인하지 못했습니다 — ' + ((e && e.message) || e), true); }
-          b2.disabled = false; b2.textContent = was;
-        } }) : null,
-      el('button', { type: 'button', class: a.loggedIn === true ? 'btn btn-ghost btn-sm' : 'btn btn-primary btn-sm',
-        text: a.loggedIn === true ? '다시 로그인' : '로그인', onclick: openLogin }),
-      a.canLogout ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '로그아웃', onclick: logout }) : null),
+      //  ★ 이름은 «다시 로그인» 이 아니라 **[계정 바꾸기]** 다(원준 2026-09-20: "로그인 된 AI 계정 있는데
+      //   다시로그인? 이게 뭐하는버튼인지 모르겠음. 계정 변경하는건가?"). 이 버튼이 실제로 하는 일은
+      //   «로그인을 처음부터 다시 도는 것» 이고, 그 끝에 어떤 계정으로 들어가느냐가 그 AI 의 계정이 된다 —
+      //   즉 계정을 바꾸는 문이면서 만료된 인증을 새로 받는 문이다. 화면 머리말이 그 둘을 다 말한다.
+      el('button', { type: 'button', class: loggedIn === true ? 'btn btn-ghost btn-sm' : 'btn btn-primary btn-sm',
+        text: loggedIn === true ? '계정 바꾸기' : '로그인', onclick: openLogin }),
+      //  물어봤는데도 모를 때만 «다시 확인» 을 준다 — 평상시엔 화면이 알아서 물어보므로 버튼이 없다.
+      a.how === 'probe' && probed && loggedIn === null && !probing
+        ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '다시 확인', onclick: () => void probeNow() }) : null,
+      a.canLogout ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '로그아웃', onclick: logout }) : null);
+  }
+  paintState();
+  //  화면이 열리면 그 행만 뒤에서 물어본다(목록을 붙잡지 않는다).
+  if (a.how === 'probe' && a.loggedIn == null) void probeNow();
+
+  return el('div', { class: 'aiacct' },
+    el('div', { class: 'aiacct-txt' },
+      el('div', { class: 'aiacct-head' },
+        el('span', { class: 'aiacct-name', text: a.label }), badge),
+      subEl),
+    act,
     //  ⚠ **행에 붙인다.** 이걸 빠뜨리면 `panel.hidden=false` 가 아무 데도 안 보이고,
     //   `alive: () => document.body.contains(panel)` 이 늘 false 라 폴링도 즉시 죽는다 — 눌러도
     //   **아무 일도 안 일어난다**(오류도 없다). 실측(2026-09-01, 상민님 신고)으로 밟았다.
@@ -275,11 +301,17 @@ function headlessAuthWarn(creds: any, reload: () => void): HTMLElement | null {
       })));
 }
 
-function myAiAccountsCard() {
+/**
+ * @param opts.bare 카드 껍데기(테두리 · 제목 · 설명) 없이 **행만** 돌려준다.
+ *  새 셸의 내 프로필 창은 화면(pane)이 이미 제목과 한 줄 설명을 갖고 있어, 카드를 그대로 들이면
+ *  같은 머리가 두 겹이 된다(원준 2026-09-20: "여기 박스 안에 박스가 또있는데 좀 어색한데").
+ *  클래식 화면은 그 머리를 질 것이 카드뿐이라 종전대로 카드로 선다.
+ */
+function myAiAccountsCard(opts?: { bare?: boolean }) {
   const body = el('div');
   // 제목이 '내 AI 계정'이면 거짓말이 될 수 있다 — 구성원별 격리가 없는 서버에서는 아래 상태가 **서버 공용 계정**의
   //  것이고 내가 연결한 게 아니다(사용자 지적: "Codex는 내가 연결한 적 없"). 중립 제목 + 상황별 배너로 바로잡는다.
-  const card = el('div', { class: 'card' },
+  const card = opts && opts.bare ? body : el('div', { class: 'card' },
     cardHead('연결된 AI 계정', '내 AI 세션이 이 계정으로 실행됩니다. 계정이 구성원별로 갈리지 않는 서버에서는 \'서버 공용\' 표시가 붙습니다.'),
     body);
   const load = async () => {

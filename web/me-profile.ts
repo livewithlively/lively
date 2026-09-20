@@ -189,16 +189,43 @@ function avatarEditor(data, nameInput) {
   const charIn = el('input', { type: 'text', maxlength: '3', value: charState, placeholder: '글자', style: 'width:70px; text-align:center; font-weight:700;' });
   charIn.addEventListener('input', () => { charState = charIn.value; render(); });
   const AVA_COLORS = ['#6c8cff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899', '#64748b', '#0ea5e9', '#14b8a6', '#f97316', '#8b5cf6'];
-  const colorRow = el('div', { class: 'pjv-color-swatches' });
+  const isHex = (v: string) => /^#[0-9a-fA-F]{6}$/.test(v);
+  //  ── 색 고르기(원준 2026-09-20: "저거 말고도 연속적으로 원하는 색 다 할 수 있도록") ────────────
+  //   12칸 표는 **지름길**로 남기고, 그 옆에 색상환을 둔다. 네이티브 <input type="color"> 라 OS 의
+  //   스펙트럼·스포이드가 그대로 뜬다 — 우리가 색상환을 그리면 그 둘을 잃는다. 값은 서버가 이미 받는
+  //   #rrggbb 그대로라(members.ts upsertMember 가 같은 정규식으로 검증) 서버 변경이 없다.
+  //  ⚠ 프리셋만 다시 그린다(swHost) — 색상환이 열려 있는 동안 그 input 노드가 DOM 에서 빠지면
+  //   OS 창이 닫힌다. 그래서 색 고르개·hex 칸은 **다시 그리는 범위 밖**에 두고 값만 갈아끼운다.
+  const swHost = el('div', { class: 'pjv-sw-host' });
+  const pick = el('input', { type: 'color', value: isHex(colorState) ? colorState : '#6c8cff',
+    'aria-label': '배경색 직접 고르기' }) as HTMLInputElement;
+  const pickWrap = el('label', { class: 'pjv-sw pjv-sw-pick', title: '원하는 색 고르기' }, pick);
+  const hexIn = el('input', { type: 'text', class: 'pjv-hex', maxlength: '7', placeholder: '#RRGGBB',
+    spellcheck: 'false', autocomplete: 'off', 'aria-label': '배경색 코드' }) as HTMLInputElement;
+  const colorRow = el('div', { class: 'pjv-color-swatches' }, swHost, pickWrap, hexIn);
   const paintColors = () => {
     const auto = el('button', { type: 'button', class: 'pjv-sw pjv-sw-none' + (colorState ? '' : ' on'), title: '자동(이름 해시색)', text: 'A' });
     auto.onclick = () => { colorState = ''; paintColors(); render(); };
-    colorRow.replaceChildren(auto, ...AVA_COLORS.map((c) => {
+    swHost.replaceChildren(auto, ...AVA_COLORS.map((c) => {
       const sw = el('button', { type: 'button', class: 'pjv-sw' + (colorState === c ? ' on' : ''), style: 'background:' + c, title: c });
       sw.onclick = () => { colorState = c; paintColors(); render(); };
       return sw;
     }));
+    const custom = !!colorState && !AVA_COLORS.includes(colorState);
+    pickWrap.classList.toggle('on', custom);
+    pickWrap.style.background = custom ? colorState : '';
+    if (isHex(colorState)) pick.value = colorState;
+    //  치는 중에는 손대지 않는다 — 여섯 자리를 채우는 동안 커서가 튀면 칠 수가 없다.
+    if (document.activeElement !== hexIn) hexIn.value = custom ? colorState : '';
   };
+  pick.addEventListener('input', () => { colorState = pick.value.toLowerCase(); paintColors(); render(); });
+  hexIn.addEventListener('input', () => {
+    let v = hexIn.value.trim();
+    if (v && v[0] !== '#') { v = '#' + v; hexIn.value = v; }
+    //  여섯 자리가 다 찼을 때만 반영한다 — 한 글자 지울 때마다 아바타 색이 튀지 않게.
+    if (isHex(v)) { colorState = v.toLowerCase(); paintColors(); render(); }
+  });
+  hexIn.addEventListener('blur', () => { paintColors(); });   // 덜 친 값은 되돌린다
   paintColors(); render();
   const node = el('div', {},
     el('div', { class: 'prof-ava-row' }, preview,
@@ -206,7 +233,7 @@ function avatarEditor(data, nameInput) {
         el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('정사각형 이미지를 권장해요. 안 올리면 아래 글자·색(또는 이름 이니셜)으로 자동 생성됩니다.')))),
     el('div', { class: 'prof-ava-cc', style: 'margin-top:12px' },
       el('div', { style: 'display:flex; align-items:center; gap:12px; flex-wrap:wrap' }, charIn, colorRow),
-      el('p', { class: 'prof-hint', style: 'margin:6px 0 0' }, ...uiText('사진이 없을 때 아바타에 쓸 글자(비우면 이니셜)와 배경색이에요.'))));
+      el('p', { class: 'prof-hint', style: 'margin:6px 0 0' }, ...uiText('사진이 없을 때 아바타에 쓸 글자(비우면 이니셜)와 배경색이에요. A 는 이름에서 색을 자동으로 정하고, 색상환을 누르면 원하는 색을 그대로 고를 수 있어요.'))));
   const payload = () => {
     const out: any = { avatar_char: charState.trim() || null, avatar_color: colorState || null };
     if (avatarState !== undefined) out.avatar = avatarState;   // 미변경이면 아예 안 보낸다 → 서버 보존
@@ -372,18 +399,33 @@ function themePrefRow(): any {
       onclick: () => { setThemePref(k); paint(); } })));
   };
   paint();
+  //  ⚠ 설명은 **그 줄 바로 밑에** 붙인다(2026-09-20, 원준: "흐름이 이해가 안가"). 종전엔 칸 둘 아래에
+  //   그 둘을 «첫째 칸 · 둘째 칸» 으로 되짚는 문단이 있어, 읽는 사람이 줄과 문단을 눈으로 맞춰야 했다.
+  //   아래 칸은 위 칸에 딸린 것이므로 들여쓰고, 위가 꺼지면 같이 잠근다(새 셸 [화면] 탭과 같은 규칙).
   const cb = el('input', { type: 'checkbox', style: 'margin:0', ...(harnessThemeSync() ? { checked: '' } : {}),
-    onchange: (e: any) => setHarnessThemeSync(!!e.target.checked) }) as HTMLInputElement;
+    onchange: (e: any) => { setHarnessThemeSync(!!e.target.checked); syncSub(); } }) as HTMLInputElement;
   // 열린 탭 일괄 적용(#1683 후속2) — 클래식 셸엔 탭이 없어 **설정만 여기서** 하고, 실제 밀기는 새 셸이 한다.
   //  값을 브라우저에 함께 두므로 어느 화면에서 켜도 다른 화면이 그 뜻을 따른다.
   const tabsCb = el('input', { type: 'checkbox', style: 'margin:0', ...(applyToOpenTabs() ? { checked: '' } : {}),
     onchange: (e: any) => setApplyToOpenTabs(!!e.target.checked) }) as HTMLInputElement;
-  wrap.append(seg,
-    el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer;' }, cb,
-      el('span', { style: 'font-size:13px' }, ...uiText('새로 여는 AI 세션도 이 테마로 띄웁니다.'))),
+  const subRow = el('div', { style: 'margin-left:20px' },
     el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer;' }, tabsCb,
-      el('span', { style: 'font-size:13px' }, ...uiText('현재 열린 탭도 모두 함께 바꿉니다.'))),
-    el('p', { class: 'admin-hint', style: 'margin:0' },
-      ...uiText('첫째 칸을 끄면 각 AI 하네스가 저장해 둔 테마를 그대로 씁니다. 둘째 칸을 켜면 지금 열려 있는 세션 탭의 하네스까지 그 자리에서 바꿉니다 — 하네스마다 지원 여부가 달라, 바꾼 개수와 못 바꾼 이유를 알려드려요.')));
+      el('span', { style: 'font-size:13px' }, ...uiText('이미 열려 있는 세션도 바로 바꾸기'))),
+    el('p', { class: 'admin-hint', style: 'margin:2px 0 0 26px' },
+      ...uiText('테마를 바꾸는 순간 지금 열려 있는 세션에도 바꾸라고 보냅니다. 되는 AI 와 안 되는 AI 가 있어서, 몇 개를 바꿨고 무엇이 안 됐는지 알려 드립니다.')));
+  const syncSub = (): void => {
+    const off = !harnessThemeSync();
+    tabsCb.disabled = off;
+    subRow.style.opacity = off ? '.55' : '';
+    subRow.title = off ? '「AI 세션도 같은 테마로」 를 켜면 쓸 수 있습니다' : '';
+  };
+  syncSub();
+  wrap.append(seg,
+    el('div', {},
+      el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer;' }, cb,
+        el('span', { style: 'font-size:13px' }, ...uiText('AI 세션도 같은 테마로'))),
+      el('p', { class: 'admin-hint', style: 'margin:2px 0 0 26px' },
+        ...uiText('세션을 새로 열 때, 그 안에서 도는 AI(Claude Code 등)도 이 테마로 시작합니다. 끄면 AI 가 자기 설정에 저장해 둔 테마를 씁니다.'))),
+    subRow);
   return wrap;
 }

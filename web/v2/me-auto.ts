@@ -185,14 +185,12 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '문구 보기', onclick: () => viewNotice() })));
   bodies.set('c', cBody);
 
-  // ── 발치 — 순간에 매이지 않는 것 하나. ──
+  // ── 발치 ──
+  //  ⚠ 「라이블리를 최신 상태로 유지하기」는 여기 있다가 [계정 · 보안] 탭으로 옮겨 갔다(2026-09-20, 원준).
+  //   이 탭은 «AI 에게 무엇을 매번 읽힐까» 인데 그 스위치는 «라이블리 자체를 언제 새 판으로 바꿀까» 라
+  //   축이 달랐다 — 세 순간(시작·도중·끝) 어디에도 안 붙어 발치에 홀로 떠 있던 것이 그 지문이다.
+  //   값·API 는 그대로다(org_runtime_config.hooks.self_update) — 자리만 옮겼다.
   const foot = el('div', { class: 'v2a-foot' },
-    el('div', { class: 'v2a-mini' },
-      el('div', { class: 'v2a-mini-m' },
-        el('div', { class: 'v2a-mini-t' }, el('span', { text: '라이블리를 최신 상태로 유지하기' })),
-        el('div', { class: 'v2a-mini-s' }, ...uiText('대화를 시작할 때 새 버전이 있는지 확인하고 다음 대화부터 반영합니다.'))),
-      sw(() => on('self_update'),
-        (v) => saveRuntime({ hooks: { ...hooks, self_update: v } }, v ? '최신 상태로 유지합니다' : '자동 업데이트를 끕니다'))),
     el('div', { class: 'v2a-more' },
       el('button', { class: 'btn-text', type: 'button', text: '맥락 관리에서 더 자세히 보기 →',
         onclick: () => { deps.close(); location.hash = DEEP; } })));
