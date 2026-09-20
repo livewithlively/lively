@@ -39,7 +39,7 @@ import { sessionsOfTasks } from "../v6/session-task.js";
 import { purgeDeleted } from "../v6/trash-store.js";   // #3778 — 프로젝트 완전 삭제 = 감사 스냅샷 본문까지
 import { auditOrgContent } from "../v6/content-audit.js";
 import {
-  listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, claimProjectName, setProjectArchived, setProjectTrashed, getBoardFields,
+  listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, ProjectBodyConflictError, claimProjectName, setProjectArchived, setProjectTrashed, getBoardFields,
   upsertProjectFolderBinding, findProjectsByOriginKey,
   createTask, updateTaskStatus, updateTask, deleteTaskNode, reorderTasks, reorderProjects, rootProjectIdOfTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
   linkProjectCategory, unlinkProjectCategory, setProjectCategories, type CategoryApply,
@@ -673,6 +673,11 @@ const projectUpdateV6Input = {
   append_description: z.string().min(1).max(4000)
     .describe("본문(description) 끝에 이어붙일 텍스트. 원문을 보존한 채 빈 줄로 구분해 append 한다(전체 교체 없이 보강). description 과 동시 지정 불가.")
     .optional(),
+  // #4084 가드 저장 — 화면이 본문을 **고치기 시작한 글**. description 과 함께 보내면 그 뒤에 붙은 꼬리(세션의 append)를
+  //  살려 합치고, 꼬리가 아닌 곳이 바뀌었으면 409 로 거절한다. 안 보내면 종전대로 통째 교체.
+  description_base: z.string().nullable()
+    .describe("본문을 고치기 시작한 시점의 원문. description(전체 교체)과 함께 보내면 그 뒤 append 된 꼬리를 보존해 합치고, 그 밖의 변경이 있었으면 409. 웹 편집기용 — 보통 생략한다.")
+    .optional(),
   priority: z.enum(PRIORITIES).nullable().optional(),
   assignee: z.string().nullable().optional(),
   start_date: z.string().nullable().optional(),
@@ -700,6 +705,7 @@ const projectUpdateV6: Capability = {
         }
         if ("description" in b) patch.description = b.description == null ? null : String(b.description);
         if ("append_description" in b) patch.append_description = String(b.append_description ?? "");
+        if ("description_base" in b) patch.description_base = b.description_base == null ? null : String(b.description_base);
         if ("priority" in b) patch.priority = parsePriorityOrNull(b.priority);
         if ("assignee" in b) patch.assignee = parseAssigneeOrNull(b.assignee);
         if ("start_date" in b) patch.start_date = parseDateOrNull(b.start_date);
@@ -718,8 +724,18 @@ const projectUpdateV6: Capability = {
       throw new HttpError(400, "append_description 는 비울 수 없습니다");
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     // Δ 를 재려면 **바뀌기 전** 날짜가 필요하다 — updateProject 는 이전 행을 돌려주지 않는다(#1308).
+    // 기준 글은 교체와만 짝이다 — 혼자 오면 뜻이 없고(무엇을 합치나), append 와 오면 append 가 이미 충돌 없는 길이다.
+    if (patch.description_base !== undefined && patch.description === undefined)
+      throw new HttpError(400, "description_base 는 description(전체 교체)과 함께 보내야 합니다");
     const before = reschedule_dependents ? await getNodeRow(id) : null;
-    const project = await updateProject(id, patch, writeCtx);
+    let project;
+    try { project = await updateProject(id, patch, writeCtx); }
+    catch (e) {
+      // 덮지 않았다 — 화면이 최신 본문을 다시 불러 사람에게 묻는다(곁칸 태스크 부품 · 프로젝트 설정).
+      if (e instanceof ProjectBodyConflictError)
+        throw new HttpError(409, "본문이 다른 곳에서 바뀌었습니다 — 최신 본문을 불러와 다시 고쳐 주세요", { body: { conflict: "description" } });
+      throw e;
+    }
     const rescheduled = before ? await propagateReschedule(id, before, project, writeCtx) : [];
     await regenAgents(id);
     return { project, rescheduled };
