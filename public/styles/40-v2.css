@@ -933,6 +933,39 @@ input.v2-dest-in { height: auto; border: 0; outline: 0; background: transparent;
 .cn-pill-soon { flex: none; display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; line-height: 1.6; color: var(--muted-head); background: var(--bg-tint-2); border: 1px dashed var(--line-net-2); white-space: nowrap; }
 .cn-sum-i.soon b { color: var(--muted-head); }
 .cn-soon-note { font-size: 13px; color: var(--ink-sub); line-height: 1.6; max-width: 60ch; }
+
+/* ── #3778 «카드가 두 축을 말한다» — 내 계정으로 직접 사용 / 자료 가져오기 ─────────────────────
+   머리말은 «연결이 두 가지» 라고 하는데 카드는 한 축만 봤다. 상세(cn-act)와 **같은 이름·같은 아이콘**으로
+   목록에도 두 줄을 세운다 — 두 화면이 한 사실을 다르게 말하면 사람은 화면을 못 믿는다.
+   ⚠ 채운 컬러 알약을 쓰지 않는다(디자인시스템: 상태는 점 + 라벨). 켜짐만 민트 채움, 나머지는 빈 고리다. */
+.cn-axes { display: flex; flex-direction: column; gap: 5px; padding-top: 9px; border-top: 1px solid var(--line-row); }
+.cn-ax { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 12.5px; }
+.cn-ax-ic { flex: none; display: inline-flex; color: var(--muted-2); }
+.cn-ax-lb { flex: 1; min-width: 0; color: var(--muted-head); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cn-ax-st { flex: none; display: inline-flex; align-items: center; gap: 5px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+.cn-ax-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2); }
+/*  켜진 줄만 잉크와 채운 점으로 올라온다 — 이 카드에서 «지금 무엇이 도는가»가 그 한 줄이다. */
+.cn-ax-on .cn-ax-ic { color: var(--mint-deep); }
+.cn-ax-on .cn-ax-lb { color: var(--ink); font-weight: 600; }
+.cn-ax-on .cn-ax-st { color: var(--mint-deep); }
+.cn-ax-on .cn-ax-dot { background: var(--mint-deep); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--mint-deep) 22%, transparent); }
+/*  이 앱엔 그 축이 아예 없다 — 꺼진 것과 다른 말이라 점을 그리지 않는다(끌 수 있는 것이 아니다). */
+.cn-ax-none .cn-ax-lb, .cn-ax-none .cn-ax-st { color: var(--muted-2); font-weight: 600; }
+.cn-ax-soon .cn-ax-dot { box-shadow: inset 0 0 0 1.5px var(--muted-2); opacity: .7; }
+.cn-ax-load .cn-ax-lb { color: var(--muted-2); }
+/*  아이콘 크기 — #v2-root .v2-ic(16px)가 .cn-ax .v2-ic 보다 특이도가 높다. 줄을 더해 이긴다(값으로 고치고
+    셀렉터를 고쳐 쓰지 않는다 — check-css-drops 규율 #317). */
+#v2-root .cn-ax .v2-ic { width: 14px; height: 14px; }
+/*  발이 하나뿐인 카드(연결됨 «관리 ›» · 켤 수 있음 [연결])는 그 하나가 오른쪽에 선다 — 빈 칸을 DOM 에
+    만들어 자리를 맞추지 않는다(빈 노드는 나중에 «왜 있지?»가 된다). */
+.cn-card-ft > :only-child { margin-left: auto; }
+
+/* ── #3778 [코드와 데이터] 도 같은 카드다 — 종전엔 얇은 행 두 줄이라 위 진열대와 딴 화면처럼 보였다.
+   타일은 앱 로고 자리와 같은 라운드 스퀘어에 **우리 색**(브랜드가 아니므로 틴트가 아니라 punch). */
+.svc-tile.cn-asset-tile { background: var(--bg-punch); color: var(--blue); }
+.cn-card-asset .cn-card-st { color: var(--muted-2); }
+#v2-root .cn-asset-tile .v2-ic { width: 22px; height: 22px; }
+#v2-root .cn-git-ic .v2-ic { width: 19px; height: 19px; color: var(--muted); }
 /* ── #2243 안 B «설정 패널» — 앱 상세: 왼쪽 목차 + 오른쪽 패널 셋. 모든 앱이 같은 틀 ── */
 .cn-settings { display: grid; grid-template-columns: 224px minmax(0, 1fr); gap: 28px; margin-top: 18px; align-items: start; }
 .cn-snav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 0; }

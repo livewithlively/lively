@@ -18,6 +18,8 @@ import { confirmDialog, skeleton } from '../ui-primitives.js';
 import { svcTile } from '../svc-icons.js';
 import { CRED_KINDS, openGitCredentialManager, svcTokenForm } from '../admin-credentials.js';
 import { LOGIN_SERVICES, partition, slackChannelPolicyCard, type SvcView } from '../me-logins.js';
+//  #3778 — 목록 카드가 말하는 «두 축»의 잣대(순수). 화면은 그리기만 하고 판정은 저기서 한다(그래서 시험된다).
+import { appAxes, collectTally, listBucket, type AppAxes, type AxisState, type CollectTally } from '../lib/connect-axes.js';
 import { NOTION_PICK_TIP, notionCollectedLine, notionCollectedPages } from './notion-pick.js';   // #1968 — 노션 고르기 안내·모은 페이지 수(처음 설정과 한 벌)
 //  #2556 — 관리탭 [데이터 연결] 묶음을 여기로 걷어 왔다. 화면만 옮겼고 **패널은 그것 그대로 부른다**(사본 0):
 //   레포·DB 는 아래 [코드와 데이터] 두 화면이, 아웃바운드 둘은 노션·클릭업 **앱 상세의 [내보내기] 칸**이 편다.
@@ -38,6 +40,20 @@ async function load(): Promise<{ v: SvcView }> {
   const creds = await api('/api/ui/me/credentials');
   const oauth = await api('/api/ui/me/oauth/connectors').catch(() => ({ connectors: [] }));
   return { v: partition(oauth, creds) };
+}
+
+/**
+ * 두 번째 축 — «자료 가져오기»가 앱마다 켜져 있나 (#3778).
+ *  ⚠ 앱마다 `/api/ui/org/<app>/collect` 를 부르면 목록 한 장에 여덟 번 왕복이다. 목록은 수집기 레지스트리를
+ *   **한 번** 읽어 preset 으로 앱에 배분한다(그 창구는 인증만 있으면 읽힌다 — scope null).
+ *  못 읽어도 화면을 비우지 않는다: 빈 표면 카드가 «아직 꺼짐» 으로 떨어지는 대신, 아래 axesOf 가 그 사실을
+ *   숨기지 않도록 목록 머리에 한 줄을 띄운다(collectErr).
+ */
+async function loadCollect(): Promise<{ tally: Map<string, CollectTally>; ok: boolean }> {
+  try {
+    const r: any = await api('/api/ui/org/collectors');
+    return { tally: collectTally(r?.collectors), ok: true };
+  } catch (_) { return { tally: new Map(), ok: false }; }
 }
 
 //  ⚠ 표(LOGIN_SERVICES)만 뒤지면 안 된다 — 관리자가 등록한 커넥터는 서버에서 와서 v.all 에만 있다.
@@ -63,14 +79,60 @@ function stateOf(v: SvcView, svc: Svc): State {
 //   같은 판정(soon || blocked)을 쓴다. 그래서 요약 칩·구역·관리자 문구가 전부 사라졌다.
 //  «둘 다 비활성처럼 보이면 헷갈린다»를 이렇게 푼다 — 회색 로고의 뜻을 «준비 중» 하나로 좁히고, 켤 수 있는 앱은 제 색 로고에
 //   [연결] 버튼이 붙어 «누를 수 있다»가 보인다. 준비 중 카드는 점선 테두리·틴트 바탕에 갈 곳(버튼) 대신 «준비 중 + 이유».
+//
+//  ★ #3778(원준 2026-09-20) — **카드가 두 축을 말한다.** 머리말은 «앱마다 연결이 두 가지» 라고 하는데 카드는
+//   내 자격 하나만 보고 «아직 연결 안 함» 이라고 썼다. 그래서 자료를 이미 가져오고 있는 앱이 목록에선 «연결
+//   안 함» 으로 서 있었다 — 상세가 #2202 B1 로 한 번 푼 모순(«연결 안 됨» + «2곳에서 모으는 중»)이 목록에
+//   그대로 남아 있었던 것이다. 이제 카드마다 상세와 **같은 이름의 두 줄**이 선다: 내 계정으로 직접 사용 ·
+//   자료 가져오기. 묶음 판정도 «어느 한 축이라도 켜졌나»로 바뀐다(판정은 lib/connect-axes.ts, 시험 있음).
 type ListState = 'on' | 'off' | 'soon';
+
+/** 축 한 줄 — 왼쪽에 무엇을 하는 연결인지, 오른쪽에 점 + 상태말. 채운 컬러 알약을 쓰지 않는다(디자인시스템). */
+function axisRow(ic: string, label: string, st: AxisState, word: string): HTMLElement {
+  return el('div', { class: 'cn-ax cn-ax-' + st },
+    el('span', { class: 'cn-ax-ic', 'aria-hidden': 'true' }, icon(ic)),
+    el('span', { class: 'cn-ax-lb', text: label }),
+    el('span', { class: 'cn-ax-st' },
+      st === 'none' ? null : el('span', { class: 'cn-ax-dot', 'aria-hidden': 'true' }),
+      el('span', { text: word })));
+}
+
+/** 카드 두 줄 — 이름은 상세(«연결 두 가지»)와 한 글자도 다르지 않게 둔다. 두 화면이 한 사실을 같은 말로 말해야 한다. */
+function axesBlock(a: AppAxes): HTMLElement {
+  const useWord = a.use === 'on' ? '켜짐' : a.use === 'soon' ? '준비 중' : '아직 꺼짐';
+  const getWord = a.get === 'on' ? (a.getOn > 1 ? `켜짐 · ${a.getOn}곳` : '켜짐')
+    : a.get === 'none' ? '이 앱엔 없어요' : a.get === 'soon' ? '준비 중' : '아직 꺼짐';
+  return el('div', { class: 'cn-axes' },
+    axisRow('zap', '내 계정으로 직접 사용', a.use, useWord),
+    axisRow('box', '자료 가져오기', a.get, getWord));
+}
+
+/** 우리 자산(코드 저장소·데이터베이스) 타일 — 앱 타일과 같은 라운드 스퀘어에 우리 색. 글자 «{ }»·«DB» 를 쓰지 않는다. */
+function assetTile(ic: string): HTMLElement {
+  return el('span', { class: 'svc-tile cn-asset-tile', 'aria-hidden': 'true' }, icon(ic));
+}
+
 export async function renderConnect(host: HTMLElement): Promise<void> {
   host.replaceChildren(el('div', { class: 'v2-center' }, skeleton('연결 상태를 불러오는 중')));
   let v: SvcView;
   try { ({ v } = await load()); }
   catch (e) { host.replaceChildren(el('div', { class: 'v2-center' }, errorNote(e, '연결 상태를 불러오지 못했습니다'))); return; }
+  //  두 번째 축은 따로 읽는다 — 근거가 다르기 때문이다(자격은 내 것, 수집기는 워크스페이스 것). 못 읽어도 첫 축은 그린다.
+  const { tally, ok: collectOk } = await loadCollect();
   const soon = [...(v.soon as Svc[]), ...(v.blockedOAuth as Svc[])];
+  const soonKeys = new Set(soon.map((s) => s.key));
   const reload = () => { void renderConnect(host); };
+
+  //  카드가 말할 두 축 — 자격 축은 **자격 원본**으로 본다(목록 배치로 물으면 준비 중이 연결을 덮는다, #2243 stateOf 주석).
+  const axesOf = (svc: Svc): AppAxes => {
+    const raw = stateOf(v, svc);
+    return appAxes(svc.key, raw === 'blocked' ? 'soon' : raw, tally);
+  };
+  //  묶음 — 어느 한 축이라도 켜졌으면 «연결된 앱». 순서는 종전 그대로(연결됨 먼저 잡힌 것 → 켤 수 있는 것).
+  const rest = [...(v.connected as Svc[]), ...(v.available as Svc[])];
+  const bucketOf = (svc: Svc): ListState => listBucket(axesOf(svc), soonKeys.has(svc.key));
+  const onList = rest.filter((s) => bucketOf(s) === 'on');
+  const offList = rest.filter((s) => bucketOf(s) !== 'on');
 
   let q = '';
   const listHost = el('div', { class: 'cn-groups' });
@@ -81,8 +143,8 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
 
   // 요약 — «몇 개 켜져 있나 · 더 켤 수 있나 · 아직 못 켜는 게 있나». 준비 중은 있을 때만 센다(0 은 소음).
   const sum = el('div', { class: 'cn-sum' },
-    el('span', { class: 'cn-sum-i on' }, el('b', { text: String(v.connected.length) }), el('span', { text: '연결됨' })),
-    el('span', { class: 'cn-sum-i' }, el('b', { text: String(v.available.length) }), el('span', { text: '연결할 수 있음' })),
+    el('span', { class: 'cn-sum-i on' }, el('b', { text: String(onList.length) }), el('span', { text: '연결됨' })),
+    el('span', { class: 'cn-sum-i' }, el('b', { text: String(offList.length) }), el('span', { text: '연결할 수 있음' })),
     ...(soon.length ? [el('span', { class: 'cn-sum-i soon' }, el('b', { text: String(soon.length) }), el('span', { text: '준비 중' }))] : []));
 
   /** 지금 이 앱을 켜는 길 — 계정(조직이 등록한 OAuth 또는 전용 창구)이 있으면 그것, 아니면 토큰.
@@ -105,6 +167,7 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
 
   function card(svc: Svc, st: ListState): HTMLElement {
     const href = '#/connect/' + svc.key;
+    const a = axesOf(svc);
     const head = (sub: string) => el('div', { class: 'cn-card-hd' },
       //  회색 로고 = 준비 중뿐. 켤 수 있는 앱도 제 색이다(무엇인지 먼저 읽히고, 버튼이 «누를 수 있다»를 말한다).
       svcTile(svc.key, svc.label, st !== 'soon'),
@@ -114,19 +177,20 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
         el('div', { class: 'cn-card-st', text: sub })));
     const blurb = el('p', { class: 'cn-card-bl', text: String((svc as any).short || svc.blurb || '') });
     if (st === 'on') {
+      //  머리줄의 «어떻게 연결했나»는 자격 축의 이야기다 — 자료 가져오기만 켜진 앱에 «토큰으로 연결» 이라고 쓰면 거짓이다.
+      //   그 앱은 아직 «켜는 길»만 있으므로 켤 수 있는 카드와 같은 말을 적는다(축 줄이 사실을 말한다).
       return el('a', { class: 'cn-card', href, title: svc.label },
-        head(connMeta(v, svc)), blurb,
-        el('div', { class: 'cn-card-ft' }, el('span', { class: 'pill pill-state confirmed', text: '연결됨' }),
-          el('span', { class: 'cn-card-go', text: '관리 ›' })));
+        head(a.use === 'on' ? connMeta(v, svc) : viaAccount(svc) ? '계정 로그인' : '토큰'), blurb, axesBlock(a),
+        el('div', { class: 'cn-card-ft' }, el('span', { class: 'cn-card-go', text: '관리 ›' })));
     }
     if (st === 'soon') {
       //  준비 중인데 이미 연결해 둔 앱 — «준비 중»이라고 쓰던 연결을 없는 척하지 않는다(뺏지 않는다).
-      const on = (v as any).soonConnected?.has?.(svc.key);
+      const on = a.use === 'on' || a.get === 'on';
       return el('a', { class: 'cn-card soon' + (on ? ' soon-on' : ''), href, title: svc.label },
-        head(svc.oauth ? '계정 로그인' : '토큰'), blurb,
+        head(svc.oauth ? '계정 로그인' : '토큰'), blurb, axesBlock(a),
         el('div', { class: 'cn-card-ft' },
           el('span', { class: 'cn-pill-soon', text: '준비 중' }),
-          el('span', { class: 'cn-card-h', text: on ? '지금 연결돼 있어요 — 쓰던 연결은 그대로 돕니다'
+          el('span', { class: 'cn-card-h', text: on ? '쓰던 연결은 그대로 돕니다'
             : String((svc as any).soon || '준비를 마치면 여기서 바로 켤 수 있어요') })));
     }
     //  켤 수 있음 — 카드는 상세로, [연결]은 그 자리에서 바로 시작. 버튼은 <a> 안에 못 들어가므로 카드가 role=link 인 div 가 된다.
@@ -136,16 +200,16 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
       class: 'cn-card', role: 'link', tabindex: '0', title: svc.label, onclick: go,
       onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } },
     },
-      head(account ? '계정 로그인' : '토큰'), blurb,
-      el('div', { class: 'cn-card-ft' }, el('span', { class: 'cn-card-h', text: '아직 연결 안 함' }),
+      head(account ? '계정 로그인' : '토큰'), blurb, axesBlock(a),
+      el('div', { class: 'cn-card-ft' },
         el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '연결',
           onclick: (e: Event) => { e.stopPropagation(); if (account) void startOAuth(svc, reload); else openToken(svc, reload); } })));
   }
 
   function paint(): void {
     const kids = [
-      group('연결된 앱', '연결해 둔 앱이에요', v.connected, 'on'),
-      group('연결할 수 있는 앱', '눌러서 바로 켤 수 있어요', v.available, 'off'),
+      group('연결된 앱', '두 가지 중 하나라도 켜 둔 앱이에요', onList, 'on'),
+      group('연결할 수 있는 앱', '눌러서 바로 켤 수 있어요', offList, 'off'),
       group('준비하고 있어요', '라이블리가 준비를 마치면 여기서 바로 켤 수 있어요', soon, 'soon'),
     ].filter(Boolean) as HTMLElement[];
     if (!kids.length) kids.push(el('p', { class: 'v2-empty', text: `'${q}' 와(과) 맞는 앱이 없어요.` }));
@@ -153,28 +217,72 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
   }
   paint();
 
+  //  앱이 아니라 **우리 자산**을 잇는 자리(#2556) — 코드 저장소와 데이터베이스. 종전엔 관리탭 [데이터 연결]에
+  //   있었는데, 같은 '바깥과 잇기'를 두 군데서 하면 어디를 봐야 하는지 아무도 모른다. 앱 목록과 섞지 않고
+  //   그 아래 별도 묶음으로 둔다 — 성격이 다르다(앱은 남의 서비스, 이쪽은 우리 것).
+  //  #3778 — 그 «별도»가 행 두 줄이라 위쪽 카드와 딴 화면처럼 보였다. 카드로 맞추되 **축은 흉내 내지 않는다**:
+  //   우리 자산엔 «두 가지 연결»이 없으므로 그 자리엔 그 화면이 실제로 세는 것(등록 개수)을 적는다.
+  const gitCard = assetCard('_git', 'repo', '코드 저장소', '우리 저장소를 등록하고, 코드를 받아오고 올릴 때 쓰는 열쇠를 둡니다');
+  const dbCard = hasScope('admin')
+    ? assetCard('_db', 'db', '데이터베이스', 'AI가 조회할 수 있는 데이터베이스를 등록하고 어디까지 보여줄지 정합니다')
+    : null;
+
   host.replaceChildren(el('div', { class: 'v2-wide v2-connect' },
     el('h1', { class: 'v2-title', text: '외부 앱 연결' }),
     //  «팀에는 공유되지 않습니다»를 뺐다 — 자료 가져오기는 워크스페이스가 함께 보므로 그 문장이 틀려진다. 범위 이야기는 상세가 한다.
-    el('p', { class: 'v2-desc', text: '앱마다 연결이 두 가지예요 — AI가 내 계정으로 직접 쓰는 것(나만 봐요)과, 자료를 미리 가져와 자료함에 두는 것(워크스페이스가 함께 봐요). 앱을 눌러 각각 켭니다.' }),
+    el('p', { class: 'v2-desc', text: '앱마다 연결이 두 가지예요 — AI가 내 계정으로 직접 쓰는 것(나만 봐요)과, 자료를 미리 가져와 자료함에 두는 것(워크스페이스가 함께 봐요). 카드마다 둘을 따로 표시하고, 앱을 누르면 각각 켭니다.' }),
+    //  못 읽었으면 «꺼짐»으로 보이는 축이 생긴다 — 그 사실을 숨기지 않는다(거짓 «꺼짐»을 만들지 않는다).
+    ...(collectOk ? [] : [el('p', { class: 'v2-desc', style: 'color:var(--warn-text)', text: '자료 가져오기 상태를 불러오지 못했어요 — 아래 「자료 가져오기」 줄은 지금 정확하지 않을 수 있습니다.' })]),
     el('div', { class: 'cn-top' }, sum, search),
     listHost,
-    //  앱이 아니라 **우리 자산**을 잇는 자리(#2556) — 코드 저장소와 데이터베이스. 종전엔 관리탭 [데이터 연결]에
-    //   있었는데, 같은 '바깥과 잇기'를 두 군데서 하면 어디를 봐야 하는지 아무도 모른다. 앱 목록과 섞지 않고
-    //   그 아래 별도 묶음으로 둔다 — 성격이 다르다(앱은 남의 서비스, 이쪽은 우리 것).
     el('section', { class: 'cn-group cn-extra' },
       groupHead('코드와 데이터', null, '앱이 아니라 우리 코드 저장소와 데이터베이스를 잇습니다'),
-      dataRow('_git', '{ }', '코드 저장소', '우리 저장소를 등록하고, 코드를 받아오고 올릴 때 쓰는 열쇠를 둡니다'),
-      ...(hasScope('admin') ? [dataRow('_db', 'DB', '데이터베이스', 'AI가 조회할 수 있는 데이터베이스를 등록하고 어디까지 보여줄지 정합니다')] : []))));
+      el('div', { class: 'cn-cards' }, gitCard.node, ...(dbCard ? [dbCard.node] : [])))));
   window.setTimeout(() => search.focus(), 30);
+
+  //  개수는 화면이 선 뒤에 채운다 — 목록을 여는 속도가 관리 데이터 조회에 매달리면 안 된다(실패해도 카드는 산다).
+  void fillGitCounts(gitCard.stat);
+  if (dbCard) void fillDbCount(dbCard.stat);
 }
 
-/** [코드와 데이터] 묶음의 한 줄 — 앱 카드와 달리 로고가 없으므로 글자 아이콘을 쓴다(git 자격 행과 같은 모양). */
-function dataRow(page: string, ic: string, title: string, note: string): HTMLElement {
-  return el('a', { class: 'cn-row', href: '#/connect/' + page },
-    el('span', { class: 'cn-git-ic', 'aria-hidden': 'true', text: ic }),
-    el('div', { class: 'cn-row-main' }, el('div', { class: 't', text: title }), el('div', { class: 'm', text: note })),
-    el('span', { class: 'cn-row-go', 'aria-hidden': 'true', text: '›' }));
+/** [코드와 데이터] 카드 — 앱 카드와 **같은 껍데기**(타일·이름·설명·상태줄·발). 상태줄만 축 대신 «등록 개수»다. */
+function assetCard(page: string, ic: string, title: string, note: string): { node: HTMLElement; stat: HTMLElement } {
+  const stat = el('div', { class: 'cn-axes' }, el('div', { class: 'cn-ax cn-ax-load' },
+    el('span', { class: 'cn-ax-lb', text: '불러오는 중…' })));
+  const node = el('a', { class: 'cn-card cn-card-asset', href: '#/connect/' + page, title },
+    el('div', { class: 'cn-card-hd' }, assetTile(ic),
+      el('div', { class: 'cn-card-tt' },
+        el('div', { class: 'cn-card-nm' }, el('span', { text: title })),
+        el('div', { class: 'cn-card-st', text: '우리 것' }))),
+    el('p', { class: 'cn-card-bl', text: note }), stat,
+    el('div', { class: 'cn-card-ft' }, el('span', { class: 'cn-card-go', text: '관리 ›' })));
+  return { node, stat };
+}
+
+/** 상태줄 한 칸 — 앱 카드의 axisRow 와 같은 모양이라 두 묶음이 한 화면으로 읽힌다. */
+function statRow(ic: string, label: string, n: number | null, unit: string): HTMLElement {
+  const has = n != null && n > 0;
+  return el('div', { class: 'cn-ax cn-ax-' + (has ? 'on' : 'off') },
+    el('span', { class: 'cn-ax-ic', 'aria-hidden': 'true' }, icon(ic)),
+    el('span', { class: 'cn-ax-lb', text: label }),
+    el('span', { class: 'cn-ax-st' }, el('span', { class: 'cn-ax-dot', 'aria-hidden': 'true' }),
+      el('span', { text: n == null ? '알 수 없어요' : has ? `${n}${unit}` : '아직 없어요' })));
+}
+
+/** 코드 저장소 — 이 화면의 두 반쪽(등록된 저장소 · git 열쇠)을 그대로 센다. 둘 중 하나만 있으면 아직 못 가져온다. */
+async function fillGitCounts(stat: HTMLElement): Promise<void> {
+  const repos = await api('/api/ui/repos').then((r: any) => (Array.isArray(r?.repos) ? r.repos.length : null)).catch(() => null);
+  const keys = await api('/api/ui/me/git-credential').then((r: any) => (Array.isArray(r?.credentials) ? r.credentials.length : null)).catch(() => null);
+  stat.replaceChildren(statRow('repo', '등록된 저장소', repos, '개'), statRow('key', '내 git 열쇠', keys, '개'));
+}
+
+/** 데이터베이스 — 등록된 소스와, 그 중 몇 곳에 행 보안(RLS)이 걸려 있나. */
+async function fillDbCount(stat: HTMLElement): Promise<void> {
+  const r: any = await api('/api/ui/org/db-sources').catch(() => null);
+  const src: any[] | null = Array.isArray(r?.sources) ? r.sources : null;
+  stat.replaceChildren(
+    statRow('db', '등록된 데이터베이스', src ? src.length : null, '곳'),
+    statRow('shield', '행 보안(RLS) 켠 곳', src ? src.filter((s: any) => s?.rls).length : null, '곳'));
 }
 
 // ══ 코드와 데이터 (#/connect/_git · #/connect/_db) — #2556 ══════════════════════
@@ -197,7 +305,7 @@ async function adminData(): Promise<any> {
 /** git 열쇠 한 줄 — 누르면 자격 관리 창이 뜬다(내 것 · 게이트웨이 것, 창은 한 벌). */
 function keyRow(title: string, note: string, scope: 'me' | 'gateway'): HTMLElement {
   return el('button', { class: 'cn-row cn-row-btn', type: 'button', onclick: () => openGitCredentialManager(scope) },
-    el('span', { class: 'cn-git-ic', 'aria-hidden': 'true', text: '{ }' }),
+    el('span', { class: 'cn-git-ic', 'aria-hidden': 'true' }, icon('key')),
     el('div', { class: 'cn-row-main' }, el('div', { class: 't', text: title }), el('div', { class: 'm', text: note })),
     el('span', { class: 'cn-row-go', 'aria-hidden': 'true', text: '›' }));
 }
@@ -214,7 +322,7 @@ export async function renderConnectData(host: HTMLElement, page: string): Promis
   host.replaceChildren(el('div', { class: 'v2-wide v2-connect-app' },
     backLink(),
     el('div', { class: 'cn-head' },
-      el('span', { class: 'cn-git-ic', 'aria-hidden': 'true', text: git ? '{ }' : 'DB' }),
+      assetTile(git ? 'repo' : 'db'),
       el('div', { class: 'cn-head-tt' },
         el('h1', { class: 'v2-title', text: git ? '코드 저장소' : '데이터베이스' }),
         el('p', { class: 'v2-desc', style: 'margin-top:4px', text: git
@@ -289,6 +397,13 @@ const ICON_PATH: Record<string, string> = {
   pen: 'M4.5 19.5h4L20 8l-4-4L4.5 15.5z M14.5 5.5l4 4',
   usr: 'M12 4.4a3.6 3.6 0 1 1 0 7.2 3.6 3.6 0 0 1 0-7.2Z M4.5 20c0-3.8 3.4-6 7.5-6s7.5 2.2 7.5 6',
   team: 'M9 5.3a3.2 3.2 0 1 1 0 6.4 3.2 3.2 0 0 1 0-6.4Z M2.5 19.5c0-3.4 2.9-5.4 6.5-5.4s6.5 2 6.5 5.4 M16.5 6.6a3.2 3.2 0 0 1 0 6.3 M18 14.6c2.2.6 3.5 2.3 3.5 4.9',
+  //  #3778 — 우리 자산(코드 저장소·데이터베이스)의 마크. 종전엔 글자 «{ }»·«DB» 를 네모에 넣었는데, 그건
+  //   브랜드 로고가 줄지어 선 화면에서 «아직 안 만든 자리»로 읽혔다(원준 2026-09-20 «지금꺼 너무 구려»).
+  //   앱 로고처럼 **모양으로** 읽히는 마크로 바꾼다 — 갈래(코드)·원통(데이터)·열쇠(인증)는 그 뜻이 관습이다.
+  repo: 'M6.6 4.6v9.1 M6.6 15.1a2.6 2.6 0 1 1 0 5.2 2.6 2.6 0 0 1 0-5.2Z M17.4 3.6a2.6 2.6 0 1 1 0 5.2 2.6 2.6 0 0 1 0-5.2Z M17.4 8.8v.9a5.3 5.3 0 0 1-5.3 5.3H9.2',
+  db: 'M4.6 6.4c0-1.6 3.3-2.9 7.4-2.9s7.4 1.3 7.4 2.9-3.3 2.9-7.4 2.9-7.4-1.3-7.4-2.9Z M4.6 6.4v11.2c0 1.6 3.3 2.9 7.4 2.9s7.4-1.3 7.4-2.9V6.4 M4.6 12c0 1.6 3.3 2.9 7.4 2.9s7.4-1.3 7.4-2.9',
+  key: 'M14.8 4.2a5 5 0 1 1-3.6 8.5L4.5 19.4v2.1h2.1l1-1v-1.7h1.7l1-1v-1.7h1.7l1.2-1.2 M16.6 8.2h.01',
+  shield: 'M12 3.2l7 2.6v5.4c0 4.2-2.8 7.6-7 9.6-4.2-2-7-5.4-7-9.6V5.8z M9 12.2l2.1 2.1 4-4.2',
 };
 /**
  * 목적격 조사 — 앞 글자 받침으로 «을/를». 화면에 «저장소을(를)» 같은 자리가 남으면 사람이 «기계가 쓴 글»로 읽는다.
