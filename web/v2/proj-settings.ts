@@ -10,6 +10,7 @@
 //  어떤 칸만 버튼을 요구하면 규칙이 둘로 갈린다 — 사람은 버튼을 못 보고 창을 닫고, 쓴 글이 사라진다.
 import { api, el, toast } from '../core.js';
 import { clearUnsaved, keepUnsaved } from './unsaved-store.js';   // #4084 — 창이 닫힌 뒤 실패한 본문 저장의 글을 글칸 밖에
+import { autoSaveCore } from '../lib/autosave.js';
 import { pnIcon } from './panes-parts.js';
 import { confirmProjectArchive, confirmProjectTrash } from '../session-actions.js';   // #1851 — [보관] 확인창(사이드바 우클릭과 같은 문구)
 
@@ -84,58 +85,54 @@ export function openProjSettings(opts: ProjSettingsOpts): void {
   //  저장했다는 신호는 토스트가 아니라 칸 아래 작은 글씨다 — 타자를 칠 때마다 토스트가 뜨면 그게 방해가 된다.
   const descChip = el('span', { class: 'pn-set-chip' });
   const setChip = (t: string, warn?: boolean): void => { descChip.textContent = t; descChip.classList.toggle('warn', !!warn); };
-  let descTimer: number | null = null, descInflight: Promise<void> | null = null, descSaved = desc.value, descBlocked = false, descOk = true;
-  /** 한 번 저장한다. 이미 도는 중이면 **그 약속**을 돌려준다 — flushDesc 가 도는 저장의 끝을 실제로 기다리게(#4084 격리 리뷰). */
-  const saveDesc = (): Promise<void> => {
-    if (descInflight) return descInflight;
-    if (descBlocked || desc.value === descSaved) { if (!descBlocked) setChip(''); return Promise.resolve(); }
-    descInflight = saveDescOnce().finally(() => {
-      descInflight = null;
-      if (!descBlocked && descOk && desc.isConnected && desc.value !== descSaved) queueDesc();   // 저장하는 동안 더 친 글(성공했을 때만 — 실패를 되풀이하지 않는다)
-    });
-    return descInflight;
-  };
-  const saveDescOnce = async (): Promise<void> => {
-    const md = desc.value;
-    setChip('저장 중…');
-    try {
-      // #4084 가드 저장 — 고치기 시작한 글(descSaved)을 같이 보낸다. 그 사이 세션이 본문 끝에 덧붙인 기록은 서버가 살려
-      //  합쳐 돌려준다(통째 교체로 지우지 않는다). 꼬리가 아닌 곳이 바뀌었으면 409 — 아래 catch 가 덮지 않고 알린다.
-      const r = await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ description: md || null, description_base: descSaved }) });
+  // 상태기계는 공용(lib/autosave — 값으로 시험한다)을 쓴다. 종전엔 같은 것을 여기 손으로 한 벌 더 짜 두었고, 곁칸에서 고친
+  //  결함(도는 저장을 안 기다리는 flush · 실패한 글을 낡은 사본으로 남김)이 이쪽에 그대로 남았다(격리 리뷰 2026-09-20~21).
+  // #4084 가드 저장 — 고치기 시작한 글(descBase)을 같이 보낸다. 그 사이 세션이 본문 끝에 덧붙인 기록은 서버가 살려 합쳐
+  //  돌려준다(통째 교체로 지우지 않는다). 꼬리가 아닌 곳이 바뀌었으면 409 — 덮지 않고 알린다.
+  let descBase = desc.value, descErr: any = null;
+  let descStashed = false;                                   // 이 창이 보관소에 남긴 글이 있나(성공한 저장은 그것만 지운다)
+  const descCore = autoSaveCore({
+    read: () => desc.value,
+    save: async (md) => {
+      const r = await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ description: md || null, description_base: descBase }) });
       const kept = String(r?.project?.description ?? md);
-      if (kept !== md && desc.value === md) { const s0 = desc.selectionStart, e0 = desc.selectionEnd; desc.value = kept; try { desc.setSelectionRange(s0, e0); } catch (_) { /* 포커스 없음 */ } }
-      descSaved = kept; p.description = kept; descOk = true;
-      clearUnsaved(id, 'body');
-      setChip('저장했어요.');
-      window.setTimeout(() => { if (descChip.textContent === '저장했어요.') setChip(''); }, 1600);
-      opts.onChanged?.();
-    } catch (e: any) {
-      descOk = false;
-      if (e?.status === 409) descBlocked = true;   // 다른 곳에서 본문이 바뀌었다 — 같은 저장을 1.2초마다 되풀이하지 않는다
+      descBase = kept; p.description = kept;
+      return kept;
+    },
+    adopt: (kept, sent) => {
+      if (desc.value !== sent) return;                       // 저장하는 동안 더 친 글이 있다 — 다음 저장이 새 기준 위에 얹는다
+      const s0 = desc.selectionStart, e0 = desc.selectionEnd;
+      desc.value = kept;
+      try { desc.setSelectionRange(s0, e0); } catch (_) { /* 포커스 없음 */ }
+    },
+    status: (st) => {
+      if (st === 'typing') setChip('쓰는 중…');
+      else if (st === 'saving') setChip('저장 중…');
+      else if (st === 'idle') setChip('');
+      else if (st === 'saved') { setChip('저장했어요.'); window.setTimeout(() => { if (descChip.textContent === '저장했어요.') setChip(''); }, 1600); }
+      else { setChip('저장하지 못했어요.', true); toast('본문을 저장하지 못했어요 — ' + (descErr?.message || descErr), true); }
+    },
+    onSaved: () => { if (descStashed) { clearUnsaved(id, 'body'); descStashed = false; } opts.onChanged?.(); },
+    onFail: (e, live) => {
+      descErr = e;
       if (!desc.isConnected) {
-        // 창은 이미 닫혔다(닫기는 저장을 기다리지 않는다) — 안내할 칸이 없다. 글을 글칸 밖에 남기고 토스트로 알린다:
-        //  곁칸 태스크의 [본문]을 열면 그 글을 되살릴 수 있다. 칸 안 글씨로만 알리면 그 글은 조용히 사라진다.
-        const kept = keepUnsaved(id, 'body', md);
-        toast(kept ? '본문을 저장하지 못했어요 — 곁칸 태스크의 [본문]을 열면 쓰던 글을 되살릴 수 있어요.' : '본문을 저장하지 못했어요 — ' + (e?.message || e), true);
-      } else if (e?.status === 409) {
-        setChip('다른 곳에서 본문이 바뀌었어요 — 쓰던 글을 복사해 두고 이 창을 다시 열어 주세요.', true);
-      } else {
-        setChip('저장하지 못했어요.', true);
-        toast('본문을 저장하지 못했어요 — ' + (e?.message || e), true);
+        // 창은 이미 닫혔다(닫기는 저장을 기다리지 않는다) — 안내할 칸이 없다. **지금 글칸의 글**(live — 보낸 글이 아니다)을
+        //  글칸 밖에 남기고 토스트로 알린다: 곁칸 태스크의 [본문]을 열면 그 글을 꺼낼 수 있다.
+        descStashed = keepUnsaved(id, 'body', live);
+        toast(descStashed ? '본문을 저장하지 못했어요 — 곁칸 태스크의 [본문]을 열면 쓰던 글을 꺼낼 수 있어요.' : '본문을 저장하지 못했어요 — ' + ((e as any)?.message || e), true);
+        return (e as any)?.status === 409 ? 'pause' : 'handled';
       }
-    }
-  };
-  const queueDesc = (): void => {
-    if (descBlocked) return;                     // 충돌로 멈춘 뒤엔 «쓰는 중…» 으로 안내를 덮지 않는다
-    setChip('쓰는 중…');
-    if (descTimer !== null) window.clearTimeout(descTimer);
-    descTimer = window.setTimeout(() => { descTimer = null; void saveDesc(); }, 1200);
-  };
-  const flushDesc = async (): Promise<void> => {
-    if (descTimer !== null) { window.clearTimeout(descTimer); descTimer = null; }
-    if (descInflight) await descInflight;                                  // 도는 저장을 끝까지
-    if (!descBlocked && desc.value !== descSaved) await saveDesc();        // 그동안 더 친 글·아직 안 보낸 글을 한 번 더
-  };
+      if ((e as any)?.status !== 409) return;                // 일반 실패 — 상태 'failed' 가 칩·토스트로 알린다
+      // 다른 곳에서 본문이 바뀌었다 — 같은 저장을 1.2초마다 되풀이하지 않게 멈추고, 사람이 창을 다시 열어 최신에서 잇게 한다.
+      setChip('다른 곳에서 본문이 바뀌었어요 — 쓰던 글을 복사해 두고 이 창을 다시 열어 주세요.', true);
+      return 'pause';
+    },
+    delayMs: 1200,
+    setTimer: (fn, ms) => window.setTimeout(fn, ms),
+    clearTimer: (h) => window.clearTimeout(h as number),
+  }, desc.value);
+  const queueDesc = (): void => descCore.input();
+  const flushDesc = (): Promise<void> => descCore.flush();
   desc.addEventListener('input', queueDesc);
   desc.addEventListener('blur', () => { void flushDesc(); });
 

@@ -9,7 +9,7 @@
 //      이후 입력·flush 에도 더 안 보낸다 · A4 도는 동안 더 친 글은 flush 가 한 번 더 저장 · A5 일반 실패는 자동으로 되풀이 안 함
 //      (타이머 0) · flush 의 재시도는 한 번 · A6 destroy 뒤엔 새 타이머를 걸지 않는다 · A7 합쳐진 글(kept≠sent)은 adopt 로 넘기고
 //      그 글이 새 기준 · A8 바뀐 게 없으면 저장 안 함 · A9 setSaved 가 멈춤을 푼다 · A10 도는 중의 두 번째 저장 요청은 같은 약속
-//      (save 1회) · A11 'handled' 실패는 'failed' 상태를 내지 않는다(안내는 부른 쪽이 했다)
+//      (save 1회) · A11 'handled' 실패는 'failed' 상태를 내지 않는다(안내는 부른 쪽이 했다) · A12 ★실패 때 넘기는 글은 live(보낸 글 아님)
 //   U1 넣고 읽기 · U2 읽어도 안 지워짐 · U3 지우기 · U4 8개 넘으면 오래된 것부터 버림 · U5 한도(300,000자) 경계: 딱 맞으면 보관,
 //      1자 넘으면 **자르지 않고** 거절 · U6 깨진 JSON·배열은 빈 것으로 · U7 저장소가 던져도(용량) 죽지 않는다 · U8 없는 열쇠 지우기 = 무동작
 import { execFileSync } from "node:child_process";
@@ -140,6 +140,18 @@ const settled = async (p) => { let done = false; p.then(() => { done = true; });
   eq(st.saves.length, 1, "A10 도는 중의 두 번째 저장 요청은 같은 약속을 받는다(save 는 한 번)");
   st.saves[0].reject(new Error("x")); await tick();
   eq(st.states.includes("failed"), false, "A11 'handled' 로 받은 실패는 failed 상태를 내지 않는다(안내는 부른 쪽이 이미 했다)");
+}
+
+// ── A12 ★실패한 순간의 글(live) — 보낸 글(sent)이 아니다 ──
+{
+  const seen = [];
+  const { st, core, fire } = rig("원문", (e, live, sent) => { seen.push({ live, sent }); return "pause"; });
+  st.text = "Hello"; core.input(); fire(); await tick();      // "Hello" 를 보내는 중
+  st.text = "Hello World";                                     // 그 사이 더 쳤다
+  st.saves[0].reject({ status: 409 }); await tick();
+  eq(seen, [{ live: "Hello World", sent: "Hello" }],
+    "A12 ★실패를 받는 쪽엔 **지금 글칸의 글**이 간다 — 남길 글을 sent 로 잡으면 저장이 가는 동안 친 « World» 가 말없이 빠진다(격리 재리뷰)");
+  eq(core.dirty(), true, "A12b 그 글은 여전히 못 남긴 글이다");
 }
 
 // ── 못 저장한 글의 보관 ─────────────────────────────────────────────────────────────────

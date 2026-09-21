@@ -19,8 +19,10 @@ export interface AutoSaveIO {
   adopt?(kept: string, sent: string): void;
   status?(s: AutoSaveStatus): void;
   onSaved?(kept: string): void;
-  /** 'pause' = 사람이 풀어야 한다 · 'handled' = 안내는 내가 했다 · 없음 = 상태 'failed' 로 알린다. */
-  onFail?(e: unknown, text: string): FailVerdict;
+  /** 'pause' = 사람이 풀어야 한다 · 'handled' = 안내는 내가 했다 · 없음 = 상태 'failed' 로 알린다.
+   *  ★둘째 인자는 **실패한 그 순간 글칸에 있는 글(live)** 이다 — 보낸 글(sent)이 아니다. 저장이 가는 동안 사람은 더 친다.
+   *   실패한 글을 어딘가 남기려는 쪽이 sent 를 남기면 그 사이 친 글이 빠진다(격리 재리뷰 2026-09-21). 남길 것은 늘 live 다. */
+  onFail?(e: unknown, live: string, sent: string): FailVerdict;
   delayMs: number;
   setTimer(fn: () => void, ms: number): unknown;
   clearTimer(h: unknown): void;
@@ -45,7 +47,7 @@ export function autoSaveCore(io: AutoSaveIO, initial: string): AutoSaveCore {
       io.onSaved?.(kept);
     } catch (e) {
       lastOk = false;
-      const v = io.onFail?.(e, text);
+      const v = io.onFail?.(e, io.read(), text);
       if (v === 'pause') paused = true;
       else if (v !== 'handled') io.status?.('failed');
     }
