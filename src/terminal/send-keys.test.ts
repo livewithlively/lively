@@ -229,7 +229,7 @@ console.log(`\n${pass} passed`);
     await at("[#3773] 게이트웨이 sendKeysToSession 과 세션 호스트의 치기가 **같은 순서**로 tmux 를 부른다(확인 → 글자 → Enter)", async () => {
       await sendKeysToSession("box-yoon-1", "첫 줄\n둘째 줄");
       const gateway = fs.readFileSync(log, "utf8").trim().split("\n");
-      assert.deepEqual(gateway, ["has-session", "send-keys -l 첫 줄 둘째 줄", "send-keys Enter"]);
+      assert.deepEqual(gateway, ["has-session", "send-keys -l -- 첫 줄 둘째 줄", "send-keys Enter"]);
       const { runOutboxStep } = await import("./outbox-host-step.js");
       const host: string[] = [];
       await runOutboxStep({ step: "type", id: "box-yoon-1", text: "첫 줄\n둘째 줄" }, {
