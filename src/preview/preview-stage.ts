@@ -113,6 +113,14 @@ async function revParse(ref: string, cwd: string): Promise<string | null> {
   return r.ok && r.out ? r.out : null;
 }
 
+// base 의 끝 커밋 — base_ref 가 로컬 이름(`main`)이면 **원격 짝(origin/main)** 으로 잰다. 로컬 브랜치는 준비가 돌 때
+//  base 클론 갱신(ensureProvisionBase)으로만 앞으로 감기므로, 로컬 값으로 재면 준비가 안 도는 한 영영 «그대로» 다 —
+//  종전엔 5분마다 준비가 돌아서 드러나지 않던 자리. 원격 짝이 없는 로컬 전용 이름만 로컬 값으로 잰다.
+async function baseTip(ref: string, cwd: string): Promise<string | null> {
+  if (ref.startsWith("origin/")) return revParse(ref, cwd);
+  return (await revParse("origin/" + ref, cwd)) ?? revParse(ref, cwd);
+}
+
 async function readStageInputs(cwd: string, ref: string, branches: string[]): Promise<StageInputs> {
   const members: Array<[string, string | null]> = [];
   for (const raw of branches) {
@@ -121,7 +129,7 @@ async function readStageInputs(cwd: string, ref: string, branches: string[]): Pr
     const target = await memberTarget(br, cwd);
     members.push([br, target ? await revParse(target, cwd) : null]);
   }
-  return { ref, base: await revParse(ref, cwd), members };
+  return { ref, base: await baseTip(ref, cwd), members };
 }
 
 /**

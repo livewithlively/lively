@@ -349,10 +349,11 @@ export async function preparePreviewEnv(id: string): Promise<void> {
     await itemsPool.query(
       "UPDATE org_preview_env SET status='running', last_active_at=now(), updated_at=now() WHERE id=$1", [p.id]);
     // 자동 갱신이 «같은 입력이면 건너뛰기» 를 재는 근거 — **성공한** 준비만 적는다(#4119). 못 적으면 다음
-    //  점검이 «기록 없음» 으로 한 번 더 빌드할 뿐이다.
+    //  점검이 «기록 없음» 으로 다시 빌드한다 — 쓰기가 계속 실패하면(권한 등) 그 하나는 **점검마다** 빌드한다.
+    //  줄이 한 번에 하나로 묶어 멈춤까지는 안 가지만 낭비라, 매번 경고로 남겨 드러나게 한다.
     if (stageInputs) {
       await writeStageRecord(workdir, { ...stageInputs, build_cmd: profile?.build_cmd ?? null })
-        .catch((e) => logger.warn({ err: e, id: p.id }, "stage 준비 기록을 남기지 못했다 — 다음 점검에서 한 번 더 빌드한다"));
+        .catch((e) => logger.warn({ err: e, id: p.id, workdir }, "stage 준비 기록을 남기지 못했다 — 쓸 수 있을 때까지 점검마다 다시 빌드한다"));
     }
   } catch (e) {
     const msg = (e as Error)?.message ?? String(e);
