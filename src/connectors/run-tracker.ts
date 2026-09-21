@@ -11,6 +11,7 @@
 //   · (#3994 T3) 매니지드에선 수집을 게이트웨이 **밖** 일시 유닛(판)에서 돌린다 — run-unit.ts 머리말.
 //     그때 이 파일의 추적(trackRunChild)은 판 안 엔트리(job-entry)가 부르고, 게이트웨이는 기다리기·멈추기·치우기만 한다.
 import { spawn, execFile, type ChildProcess } from "node:child_process";
+import { buildChildEnv } from "./child-env.js";
 import { itemsPool, tenantBindingActive, tenantBindingSql, withTx } from "../db/client.js";
 import { logger } from "../log.js";
 import { HttpError } from "../http-error.js";
@@ -141,18 +142,14 @@ function ensureRunSchema(): Promise<void> {
  * 바인딩이 꺼진 자가호스팅 단일 워크스페이스에서는 **아무것도 더하지 않는다** — 자식이 종전 그대로
  *  스키마를 만들고(신규 DB 단독 CLI 경로) 전역 풀로 돈다.
  */
-function childEnv(system: string): NodeJS.ProcessEnv {
-  if (!tenantBindingActive()) return process.env;
-  const env: NodeJS.ProcessEnv = { ...process.env, LIVELY_SKIP_SCHEMA_INIT: "1" };
-  const id = String(tenantBindingSql()?.params?.[0] ?? "");
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
-    env.LIVELY_TENANT_BINDING = "rls";
-    env.LIVELY_TENANT_ID = id;
-  } else {
-    // 부모조차 걸 값이 없다 = 배선 버그다. 임의의 테넌트를 고르지 않는다(남의 자료에 쓰는 것보다 실패가 낫다) —
-    //  자식은 정책에서 곧바로 실패하고 그 오류가 run 로그에 남는다.
-    logger.warn({ system }, "수집 자식에 테넌트 바인딩을 넘기지 못했습니다 — 컨텍스트 밖에서 실행이 시작됐습니다");
-  }
+export function connectorChildEnv(system: string): NodeJS.ProcessEnv {
+  const { env, warn } = buildChildEnv(process.env, {
+    active: tenantBindingActive(),
+    tenantId: String(tenantBindingSql()?.params?.[0] ?? "") || null, // params[0] 은 unknown → 여기서 한 번만 정규화한다
+  });
+  // 부모조차 걸 값이 없다 = 배선 버그다. 임의의 테넌트를 고르지 않는다(남의 자료에 쓰는 것보다 실패가 낫다) —
+  //  자식은 정책에서 곧바로 실패하고 그 오류가 run 로그에 남는다.
+  if (warn) logger.warn({ system }, warn);
   return env;
 }
 
@@ -328,7 +325,7 @@ async function startRunInUnit(
     const runId = Number((seq.rows[0] as { id: string | number }).id);
     const job = { system, runId, collectorId: opts.collectorId ?? null, full: opts.full === true };
     const memMb = Number(process.env.LIVELY_GATEWAY_JOB_MEM_MB) > 0 ? Number(process.env.LIVELY_GATEWAY_JOB_MEM_MB) : null;
-    const launch = await u.launchRunUnit({ slug, codeRoot, job, env: u.jobEnvDoc(childEnv(system)), memMb });
+    const launch = await u.launchRunUnit({ slug, codeRoot, job, env: u.jobEnvDoc(connectorChildEnv(system)), memMb });
     const insert = async (status: "running" | "error", log: string): Promise<void> => {
       await client.query(
         `INSERT INTO connector_run(id, system, mode, trigger, started_by, collector_id, status, finished_at, log, log_total)
@@ -378,7 +375,7 @@ async function startRunAsChild(
   // 수집기 바인딩을 자식에게 넘긴다 — 자식은 이 id 로 config·커서 네임스페이스를 해소한다(config.bindCollector).
   if (opts.collectorId) args.push("--collector", String(opts.collectorId));
   if (opts.full) args.push("--full");
-  const child = spawn("node", args, { cwd: process.cwd(), env: childEnv(system), stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn("node", args, { cwd: process.cwd(), env: connectorChildEnv(system), stdio: ["ignore", "pipe", "pipe"] });
   liveRuns.set(runId, { child, canceled: false });
   if (child.pid) {
     await itemsPool.query(`UPDATE connector_run SET pid=$2 WHERE id=$1`, [runId, child.pid])

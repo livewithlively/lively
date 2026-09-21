@@ -83,7 +83,7 @@ test("[W4] ★ 게이트웨이 — 경로를 먼저 정하고, 판 경로는 락
   before(fail, "launchMayHaveStarted(", 'await insert("error"', "섰을 수 있는 판은 실패 행보다 먼저 멈추라고 전한다");
   assert.doesNotMatch(unit, /\bdefault:/, "응답 분류는 망라한다 — default 로 받으면 새 분류가 조용히 실패 길로 간다");
   assert.match(unit, /watchRunUnit\(runId, slug\)/, "판 실행의 done 은 감시");
-  assert.match(unit, /jobEnvDoc\(childEnv\(system\)\)/, "판 env = 자식 길 env 에서 뺀 것(같은 입력)");
+  assert.match(unit, /jobEnvDoc\(connectorChildEnv\(system\)\)/, "판 env = 자식 길 env 에서 뺀 것(같은 입력)");
 });
 
 test("[W5] 유령 정리 · 취소 · 부팅 입양 — pid 없는 행은 판으로 다룬다", () => {

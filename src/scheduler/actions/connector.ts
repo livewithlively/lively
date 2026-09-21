@@ -1,5 +1,6 @@
 // 크론 액션: 커넥터 sync/push·위키 push — R16 에서 scheduler runJob if-체인 본문을 원문 이동.
 import { itemsPool, q } from "../../db/client.js";
+import { connectorChildEnv, startConnectorRun, RunCapacityError } from "../../connectors/run-tracker.js";
 
 // sync 대상 커넥터 — 관리탭에서 켠 것(org_connector.enabled=true, #541) 우선.
 //  비었으면(마이그레이션 전) 기존 data_source.status='active' 로 폴백 — 하위호환 무중단.
@@ -43,7 +44,6 @@ async function resolveSyncTargets(params: Record<string, unknown>): Promise<Arra
 export async function runConnectorSync(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
   // #586 run-tracker 경유 — 실행이 connector_run 엔티티로 기록되고(상태·로그·통계) 웹에서 관찰 가능.
   //  크론은 완주를 기다려 잡 상태에 결과를 남긴다(타임아웃·중복 가드는 tracker 내부).
-  const { startConnectorRun, RunCapacityError } = await import("../../connectors/run-tracker.js");
   const targets = await resolveSyncTargets(params);
   const out: unknown[] = [];
   for (const t of targets) {
@@ -92,6 +92,8 @@ async function nudgeDistillNow(): Promise<void> {
 
 export async function runConnectorPush(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
   // 아웃바운드 — external_outbox(우리 편집) 드레인 → 외부 PM 미러. connector_sync 와 대칭(검증된 run-push CLI 서브프로세스).
+  //  🔴 자식 환경은 **인바운드와 같은 조립기**로 넘긴다(connectorChildEnv) — 종전엔 부모 환경을 그냥 상속시켜
+  //   테넌트 바인딩이 빠졌다. 왜 그게 치명인지는 connectors/child-env.ts 머리말이 정본이다.
   //  우리 DB=master 라 push 는 additive(외부 미러 생성/갱신) — 우리 데이터엔 무영향. params.system 없으면 active 전체.
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
@@ -101,7 +103,7 @@ export async function runConnectorPush(params: Record<string, unknown>): Promise
   for (const sys of systems) {
     try {
       const r = await execFileP("node", ["--env-file-if-exists=.env", "dist/connectors/run-push.js", sys],
-        { timeout: 300_000, maxBuffer: 16 * 1024 * 1024 });
+        { timeout: 300_000, maxBuffer: 16 * 1024 * 1024, env: connectorChildEnv(sys) });
       out.push({ system: sys, ok: true, tail: (r.stdout || "").trim().split("\n").slice(-1)[0] ?? "" });
     } catch (e) { out.push({ system: sys, ok: false, error: (e as Error)?.message ?? String(e) }); }
   }
@@ -119,7 +121,7 @@ export async function runWikiPush(): Promise<{ status: string; summary: unknown 
   const execFileP = promisify(execFile);
   try {
     const r = await execFileP("node", ["--env-file-if-exists=.env", "dist/connectors/run-wiki-push.js"],
-      { timeout: 300_000, maxBuffer: 16 * 1024 * 1024 });
+      { timeout: 300_000, maxBuffer: 16 * 1024 * 1024, env: connectorChildEnv("wiki") });
     return { status: "ok", summary: { tail: (r.stdout || "").trim().split("\n").slice(-1)[0] ?? "" } };
   } catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e) } }; }
 }
