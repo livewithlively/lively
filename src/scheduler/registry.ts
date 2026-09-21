@@ -78,10 +78,12 @@ export const CRON_ACTIONS: CronActionDef[] = [
     HEADLESS_HARNESS_PARAM, HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
   ], run: (p, job) => runMapHeadless(p, job.id, job.created_by ?? null) },
   // #982 미분류 지식 분류 — map_unmapped 의 지식판. 카테고리 0건 지식(노션 미러 등)을 상시세션에 주입해 분류. 인박스 있을 때만 주입.
-  { key: "classify_knowledge", label: "미분류 지식 LLM 분류 (세션 주입)", params: [{ name: "session", label: "타깃 상시 세션", kind: "session", hint: "‘상시 세션’ 탭에서 등록한 관리 세션(map_unmapped 와 공용 가능)." }], run: runClassifyKnowledgeInject },
+  //  #4194 — 사람에겐 «분류기» 가 아니라 증류기의 **카테고리 붙이기 레인**이다(증류 = 지식을 완성시킨다). 액션 키·잡 id 는
+  //   그대로 둔다 — 컨트롤플레인이 새 테넌트마다 이 키로 잡을 심고(lvly-cloud provisioner), 옛 이미지로 롤백해도 행이 유효해야 한다.
+  { key: "classify_knowledge", label: "증류 — 카테고리 붙이기 (세션 주입)", params: [{ name: "session", label: "타깃 상시 세션", kind: "session", hint: "‘상시 세션’ 탭에서 등록한 관리 세션(map_unmapped 와 공용 가능)." }], run: runClassifyKnowledgeInject },
   // #1061 classify_knowledge 의 헤드리스판 — 상시세션 관성(옛 should 로 판단 — classify-knowledge-stale-session-inertia)을 매 배치 fresh 컨텍스트로 근본 회피. 인박스 있을 때만 접수.
-  { key: "classify_knowledge_headless", label: "미분류 지식 LLM 분류 (헤드리스 — 매 배치 새 세션)", params: [
-    { name: "classifier", label: "분류기 (선택)", kind: "classifier", hint: "[맥락 관리 ▸ 분류기]에서 등록한 분류기. 비우면 **켜져 있는 분류기 전부**를 각각 접수(병렬). 분류기가 하나도 없으면 종전 전역 분류로 동작." },
+  { key: "classify_knowledge_headless", label: "증류 — 카테고리 붙이기 (헤드리스 — 매 배치 새 세션)", params: [
+    { name: "classifier", label: "카테고리 붙이기 증류기 (선택)", kind: "classifier", hint: "[맥락 관리 ▸ 증류기 ▸ 카테고리 붙이기]에서 만든 증류기. 비우면 **켜진 것 전부**를 각각 접수(병렬). 켜진 것이 하나도 없으면 미분류 지식 전부를 기본 기준 하나로 본다." },
     { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "헤드리스 실행 신원·과금 귀속(그 멤버의 클로드 로그인/프로필). 비우면 잡 생성자(created_by)." },
     { name: "prompt", label: "프롬프트 (선택 오버라이드)", kind: "textarea", hint: "비우면 기본 분류 프롬프트(관성 대응 — 매 배치 should 재조회·근거 인용 강제 포함). 인박스 비면 접수 안 함." },
     HEADLESS_HARNESS_PARAM, HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
@@ -94,15 +96,15 @@ export const CRON_ACTIONS: CronActionDef[] = [
   // 자료 distill(#541) — 미증류 source(slack/gmail 등 raw)를 상시세션 LLM 이 지식으로 자동증류. 미증류 자료 있을 때만 주입.
   //  #1289 증류기 연동: distiller 를 고르면 그 증류기의 스코프·기준·형식으로, 비우면 잔량 있는 최우선 증류기 하나를
   //  자동 선택(세션은 한 번에 한 작업이라 N개 동시 주입은 쌓이기만 한다). 증류기가 0개면 구 전역 동작으로 폴백.
-  { key: "distill_sources", label: "자료 distill (source→지식 자동증류)", params: [
+  { key: "distill_sources", label: "증류 — 자료 → 지식 (세션 주입)", params: [
     { name: "session", label: "타깃 상시 세션", kind: "session", hint: "distill 을 수행할 관리 세션 — 자료(source)를 읽어 지식으로 증류(knowledge_save+source_link)." },
-    { name: "distiller", label: "증류기 (선택)", kind: "distiller", hint: "[AI 맥락 ▸ 자료 증류기]에서 등록한 증류기. 비우면 잔량이 있는 최우선 증류기를 매 틱 하나씩 자동 선택." },
+    { name: "distiller", label: "자료 증류기 (선택)", kind: "distiller", hint: "[맥락 관리 ▸ 증류기]에서 만든 자료 → 지식 증류기. 비우면 잔량이 있는 최우선 증류기를 매 틱 하나씩 자동 선택." },
     { name: "prompt", label: "프롬프트 (선택 오버라이드)", kind: "textarea", hint: "비우면 증류기 설정(기준·형식)으로 조립된 프롬프트. 직접 쓰면 기준·형식 문구만 이걸로 갈리고, 대상 자료 지정(이 증류기 몫의 id 목록)은 서버가 앞에 유지한다 — 커스텀 프롬프트가 스코프 해제가 되지 않게." },
   ], run: runDistillInject },
   // #1289 distill_sources 의 헤드리스판 — 매 배치 새 claude -p(fresh 컨텍스트). 증류기별로 **각각** 접수해 병렬로 돈다
   //  (세션판과 달리 한 세션에 쌓이지 않는다). 프로젝트 #1289 의 기본 운전 모드.
-  { key: "distill_sources_headless", label: "자료 distill (헤드리스 — 증류기별 매 배치 새 세션)", params: [
-    { name: "distiller", label: "증류기 (선택)", kind: "distiller", hint: "비우면 **켜져 있는 증류기 전부**를 각각 접수(병렬). 하나만 고르면 그것만." },
+  { key: "distill_sources_headless", label: "증류 — 자료 → 지식 (헤드리스 — 증류기별 매 배치 새 세션)", params: [
+    { name: "distiller", label: "자료 증류기 (선택)", kind: "distiller", hint: "비우면 **켜진 자료 증류기 전부**를 각각 접수(병렬). 하나만 고르면 그것만." },
     { name: "node", label: "실행 노드 (선택)", kind: "text", hint: "비우면 스케줄러가 램 여유가 큰 노드를 고른다(중앙 후순위). 'central' = 게이트웨이 박스에서, 또는 특정 노드 id. 그 노드가 꺼져 있으면 배치가 큐에 대기한다." },
     { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "헤드리스 실행 신원·과금 귀속(그 멤버의 클로드 로그인/프로필). 비우면 증류기 설정값 → 잡 생성자(created_by)." },
     { name: "prompt", label: "프롬프트 (선택 오버라이드)", kind: "textarea", hint: "비우면 증류기 설정으로 조립. 직접 쓰면 기준·형식만 갈린다 — 대상 자료 지정(스코프)은 서버가 앞에 붙여 유지한다." },

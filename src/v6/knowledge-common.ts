@@ -6,6 +6,7 @@
 import { auditOrgContent, type WriteCtx } from "./content-audit.js";
 import { visibleListIds, effectiveViewer, type Viewer } from "./visibility.js";
 import { axisOn } from "./visibility-axes.js";
+import { itemsPool } from "../db/client.js";
 
 // 지식 1건의 가시성 술어(#1291) — 'k' 별칭 기준. 뷰어가 몇 번째 바인드 파라미터인지는 호출부가 정한다
 //  (번호를 고정하면 파라미터가 하나 늘어나는 순간 조용히 엉뚱한 값으로 판정하게 된다).
@@ -60,3 +61,20 @@ export const K_ICON_EXPR = `k.props_ui->>'icon' AS icon`;
 
 export const auditKnowledge = (name: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
   auditOrgContent("knowledge", name, op, before, after, ctx);
+
+/**
+ * 카테고리를 **잃은** 지식의 '봤다' 기록을 지운다(#4194) — 증류기의 카테고리 붙이기 레인이 그 지식을 다시 보게.
+ *  org_classifier_seen 은 «이 레인이 이미 판정했다» 는 뜻인데, 그 판정의 결과(카테고리)가 사라졌으면 기록은 거짓이 된다.
+ *  남겨 두면 그 레인은 영영 다시 안 보고, 사각지대로 세어져 «영영 못 받는다» 고 경보만 난다(#4194 적대검증).
+ *  카테고리를 잃는 길: 제안 반려(unlink) · 카테고리 삭제(FK CASCADE) · 휴지통 복원(링크 미복원).
+ *  ⚠ 아직 카테고리가 남은 지식은 건드리지 않는다(NOT EXISTS) · 실패는 삼킨다 — 재방문이 늦을 뿐, 저장을 깨면 안 된다.
+ */
+export async function forgetClassifierSeen(names: string[]): Promise<void> {
+  if (!names.length) return;
+  try {
+    await itemsPool.query(
+      `DELETE FROM org_classifier_seen s
+        WHERE s.knowledge_name = ANY($1::text[])
+          AND NOT EXISTS (SELECT 1 FROM knowledge_category kc WHERE kc.name = s.knowledge_name)`, [names]);
+  } catch { /* 구 스키마(테이블 없음)·일시 실패 — 다음 반려·삭제 때 다시 지운다 */ }
+}

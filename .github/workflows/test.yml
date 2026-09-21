@@ -159,6 +159,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/source-tree.pg-test.mjs
+      # ⑤-b2 증류기 «카테고리 붙이기» 레인(#4194, 저장소 org_classifier) — 사각지대를 **스코프**로 세는지(인박스로 세면 이미
+      #    본 지식까지 «영영 못 받는다» 로 센다) · 폐지된 재분류 모드 레인이 «일하는 레인» 으로 안 잡히는지 · 잔량이 상한 없이
+      #    세지는지 · 카테고리를 잃은 지식(반려·카테고리 삭제·휴지통 복원)의 '봤다' 기록이 지워지는지. 전부 SQL 조건이다.
+      - name: 증류기 카테고리 붙이기 레인 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/store/classifier-lanes.pg-test.mjs
       # ⑤-c 수집 판(#3994 T3) — 매니지드에서 수집을 게이트웨이 밖 일시 유닛으로 뺀 경로의 **run 행 상태 전이**.
       #    판 엔트리를 실제 프로세스로 띄우고(수집 자식까지 진짜 run-sync), 게이트웨이 경로는 가짜 op 소켓 앞에서 돌린다.
       #    «판 먼저·행 나중» · 자기 행을 본 뒤에만 수집 · 끝 기록은 running 행에만 · 취소는 행을 먼저 닫는다 ·

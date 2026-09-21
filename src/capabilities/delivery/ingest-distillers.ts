@@ -16,7 +16,32 @@ import {
 } from "../../org/distill/distiller.js";
 import { actorOf, restRead, restWork } from "./shared.js";
 import { ensureLocalFilesDistiller, LOCAL_DISTILLER_KEY } from "../../org/distill/local-preset.js";
+// #4194 — 증류기의 두 번째 레인(카테고리 붙이기). 목록만 여기서 함께 준다 — 쓰기는 org_distiller_category_*(delivery/classifiers.ts).
+import { assertLaneFields } from "../../org/distill/lanes.js";
+import { listClassifiers, getClassifier, classifierCoverage } from "../../org/store/classifiers.js";
 import { ensureFigmaCommentsDistiller, FIGMA_DISTILLER_KEY } from "../../org/distill/figma-preset.js";   // #1881 L3
+
+/**
+ * 자료 레인 op 에 **카테고리 붙이기 레인을 가리키는** id·key 가 왔나(#4194 적대검증) — 왔으면 이유와 맞는 도구를 대며 막는다.
+ *  두 레인은 저장소가 따로라 id·key 공간이 겹친다. knowledge_lanes[] 에서 복사한 id·key 로 이 op 를 부르면
+ *   · 그 id 의 자료 레인이 없으면 404 가 맞고(«없음» 만 말하면 에이전트가 이유를 모른다),
+ *   · key 가 카테고리 붙이기 레인에만 있으면 upsert 는 **스코프가 빈 새 자료 레인(= catch-all)** 을 만들어 버린다.
+ *  그래서 자료 레인에 없는데 카테고리 붙이기 레인에 있으면 그 사실을 말한다. 둘 다에 있으면 자료 레인이 맞다(이 op 는 자료 레인 전용).
+ */
+async function refuseCategoryLaneRef(input: Record<string, unknown>, sourceExists: boolean, op: string): Promise<void> {
+  if (sourceExists) return;
+  const ref = input.id !== undefined && input.id !== null && input.id !== "" ? Number(input.id) : String(input.key ?? "").trim();
+  if (!ref) return;
+  const lane = await getClassifier(ref).catch(() => null);
+  if (!lane) return;
+  throw new HttpError(op === "upsert" ? 400 : 404,
+    `'${String(ref)}' 는 자료 레인이 아니라 카테고리 붙이기 레인입니다 — org_distiller_category_${op} 를 쓰세요(두 레인은 id·key 공간이 따로입니다).`);
+}
+/** 자료 레인 op 에 카테고리 붙이기 전용 필드가 **REST 본문으로** 왔으면 400(MCP 는 스키마에 없는 키를 이미 떨궜다). */
+function refuseForeignFields(input: Record<string, unknown>): void {
+  try { assertLaneFields(input, "source"); }
+  catch (e) { throw new HttpError(400, (e as Error).message + " — 카테고리 붙이기 레인은 org_distiller_category_upsert 로 다룹니다."); }
+}
 
 export const ingestDistillersCapabilities: Capability[] = [
   // ── 인입 허용선 정책 (#638, #783) — 지식이 라이브에 박히기 전 게이트. 오너가 관리탭에서 조절(디폴트 auto=현행 무변). ──
@@ -101,25 +126,49 @@ export const ingestDistillersCapabilities: Capability[] = [
   //  계기: 고객사 A 실측에서 슬랙 10,900건 중 증류 13건(0.12%). 전역 인박스 하나로는 팀별 채널·기준·형식을 못 가른다.
   //  ⚠ 인입 허용선 정책(org_ingest_policy)과 직교 — 저건 만들어진 지식을 auto/confirm/drop 로 보내는 밸브,
   //   이건 무엇을 집어 어떻게 만드느냐는 생산 라인. 증류기 산출도 그 밸브를 그대로 탄다.
-  restWork("org_distiller_list", "자료 증류기 목록",
-    "등록된 자료 증류기 목록 + 커버리지(증류기별 잔량 · 어느 증류기에도 안 걸리는 사각지대 자료와 그 채널). " +
-    "배정 순서는 priority 내림차순 — 한 자료는 가장 앞선 증류기 하나에만 배정된다(중복 증류 방지). 증류기 0개면 구 전역 동작.",
+  //  #4194 — 증류기 = «지식을 완성시킨다». 레인 두 종류를 한 입구로 준다. distillers[] 는 **자료 레인만** 그대로 두고
+  //   (기존 소비자 — 화면·컨트롤플레인·스킬 — 가 그 배열을 자료 레인으로 읽는다) 카테고리 붙이기 레인은 knowledge_lanes[] 로
+  //   따로 싣는다. 한 배열에 섞으면 자료 필드(match_kinds·target_category…)를 가정하는 소비자가 조용히 틀린다.
+  restWork("org_distiller_list", "증류기 목록(자료 레인 · 카테고리 붙이기 레인)",
+    "증류기는 지식을 완성시킨다(완성 = 본문·유형·카테고리가 다 있는 상태). 레인이 두 종류다 — " +
+    "① 자료 레인 distillers[]: 수집된 자료를 읽어 남길 것만 지식으로 쓴다. " +
+    "② 카테고리 붙이기 레인 knowledge_lanes[]: 카테고리가 없는 지식(미분류 지식 — 노션 같은 지식 직행 수집·카테고리 삭제·휴지통 복원·제안 반려로 생긴다)을 읽고 카테고리를 제안한다 — 본문은 안 바꾼다. knowledge_lanes 가 null 이면 그 쪽을 못 읽은 것이다(0개와 다르다). " +
+    "각 항목의 input 이 종류(source|knowledge). 두 종류는 저장소가 따로라 id·key 공간이 겹친다(예: 둘 다 default) — 자료 레인은 org_distiller_upsert·remove·preview 로, 카테고리 붙이기 레인은 org_distiller_category_upsert·remove·preview 로 다룬다(섞어 부르면 400·404). " +
+    "coverage = 자료 레인 커버리지(레인별 잔량 · 어느 레인에도 안 걸리는 자료와 그 채널) + coverage.knowledge(미분류 지식 수 · 켜진 레인 어디에도 안 걸리는 수 · 레인별 잔량). " +
+    "배정은 종류마다 priority 내림차순 — 한 자료·지식은 가장 앞선 레인 하나에만 간다. 켜진 자료 레인이 없으면 전 자료 공통 기본 증류, 켜진 카테고리 붙이기 레인이 없으면 미분류 지식 전부를 기본 기준 하나로 본다. " +
+    "이미 붙은 카테고리가 틀린 것(재분류)은 증류기가 아니라 점검(관리기 «분류 어긋남 보정»)이 한다.",
     [{ method: "GET", paths: ["/api/ui/org/distillers"], parse: () => ({}) }],
     async () => {
-      const distillers = await listDistillers();
+      const [distillers, cov] = await Promise.all([listDistillers(), distillerCoverage()]);
+      //  ⚠ 카테고리 붙이기 쪽 실패가 자료 레인 목록까지 500 으로 만들지 않게 가둔다(#4194 적대검증) — 이 GET 은
+      //   컨트롤플레인의 memory 스코프 프로브이기도 해서(provisioner), 500 이면 멀쩡한 테넌트에 bootstrap 을 다시 돌린다.
+      //   못 읽었으면 null — 빈 배열([])과 구분해야 화면이 «레인 없음» 이라고 거짓말하지 않는다.
+      let knowledge_lanes: unknown[] | null = null;
+      let knowledge: Record<string, unknown> | null = null;
+      try {
+        const [lanes, kcov] = await Promise.all([listClassifiers(), classifierCoverage()]);
+        knowledge_lanes = lanes.map((c) => ({ ...c, input: "knowledge" }));
+        knowledge = { total_unclassified: kcov.total_unclassified, uncovered: kcov.uncovered, lanes: kcov.classifiers };
+      } catch { /* null 로 둔다 — 자료 레인 목록은 그대로 준다 */ }
       return {
-        distillers: distillers.map((d) => ({ ...d, scope_text: describeScope(d) })),
-        coverage: await distillerCoverage(),
+        distillers: distillers.map((d) => ({ ...d, input: "source", scope_text: describeScope(d) })),
+        knowledge_lanes,
+        coverage: { ...cov, knowledge },
       };
     }),
-  restWork("org_distiller_upsert", "자료 증류기 저장",
-    "자료 증류기 저장(id 또는 key 로 멱등 upsert). " +
+  restWork("org_distiller_upsert", "증류기 저장(자료 레인)",
+    "증류기의 **자료 레인** 저장 — 수집된 자료를 읽어 지식을 쓰는 레인(id 또는 key 로 멱등 upsert). 카테고리가 없는 지식에 카테고리를 붙이는 레인은 org_distiller_category_upsert 다" +
+    "(그 레인의 id·key 를 여기 주면 400 — 두 레인은 id·key 공간이 따로다). " +
     "스코프: match_kinds(slack·email…)·match_system·include/exclude_channels·include/exclude_authors·exclude_bots·min_chars·lookback_days. " +
     "기준: criteria_md(무엇을 지식화하나 — 팀마다 다른 자유서술). " +
     "형식: format_md(결과 문서 모양)·target_category(분류 고정)·default_type(page-type)·name_prefix·thread_aware(스레드를 한 지식으로). " +
     "실행: batch_size·mode(headless|session)·session_ref·harness(AI 제공자)·model·effort·requester. priority 높을수록 자료를 먼저 가져간다.",
     [{ method: "POST", paths: ["/api/ui/org/distillers"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
+      refuseForeignFields(input);
+      const existing = input.id !== undefined && input.id !== null && input.id !== ""
+        ? await getDistiller(Number(input.id)) : (input.key ? await getDistiller(String(input.key).trim()) : undefined);
+      await refuseCategoryLaneRef(input, !!existing, "upsert");
       const distiller = await upsertDistiller(input as DistillerUpsertInput, actorOf(user), "web");
       // 기준을 바꿔 **이미 보고 버린 자료를 다시 보고 싶을 때** — 판정 이력을 비운다.
       //  증류된 자료는 knowledge_source 가 계속 거르므로 중복 증류는 안 난다(되돌아오는 건 '버린 것'뿐).
@@ -162,10 +211,16 @@ export const ingestDistillersCapabilities: Capability[] = [
       note: z.string().nullable().optional(),
       reset_seen: z.boolean().optional().describe("판정 이력 초기화 — 이 증류기가 '보고 버린' 자료를 다시 인박스에 올린다(기준을 바꿔 재검토할 때). 이미 증류된 자료는 그대로 제외되므로 중복 증류는 없다."),
     }),
-  restWork("org_distiller_remove", "자료 증류기 삭제",
-    "자료 증류기 1개 삭제(id 또는 key). 이미 증류된 지식은 그대로 남는다(증류기는 생산 설비지 지식의 소유자가 아니다).",
+  restWork("org_distiller_remove", "증류기 삭제(자료 레인)",
+    "자료 레인 1개 삭제(id 또는 key). 이미 증류된 지식은 그대로 남는다(증류기는 생산 설비지 지식의 소유자가 아니다). " +
+    "카테고리 붙이기 레인은 org_distiller_category_remove 로 지운다 — 그 id·key 를 여기 주면 404(두 레인은 id·key 공간이 따로다).",
     [{ method: "POST", paths: ["/api/ui/org/distillers/remove"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
+      {
+        const exists = input.id !== undefined && input.id !== null && input.id !== ""
+          ? await getDistiller(Number(input.id)) : (input.key ? await getDistiller(String(input.key).trim()) : undefined);
+        await refuseCategoryLaneRef(input, !!exists, "remove");
+      }
       const ref = input.id !== undefined && input.id !== null ? Number(input.id) : String(input.key ?? "").trim();
       if (!ref) throw new HttpError(400, "id 또는 key 필요");
       await removeDistiller(ref, actorOf(user), "web");
@@ -174,7 +229,8 @@ export const ingestDistillersCapabilities: Capability[] = [
       id: z.number().int().positive().optional(),
       key: z.string().optional(),
     }),
-  restWork("org_distiller_preview", "자료 증류기 미리보기",
+  restWork("org_distiller_preview", "증류기 미리보기(자료 레인)",
+    "(자료 레인 전용 — 카테고리 붙이기 레인은 org_distiller_category_preview.) " +
     "이 증류기가 **지금 무엇을 집는지**를 저장·실행 전에 확인한다 — 배타 배정된 인박스 표본 + 남은 잔량 + 실제로 나갈 프롬프트 " +
     "+ 사전필터 효과(통과율과 **유실률**). 스코프 오타(채널명 하나 틀림)로 0건을 집는 사고를 켜기 전에 잡는 자리.\n" +
     "⚠ draft 를 주면 **저장하지 않고** 그 값으로 미리 본다 — 화면이 입력을 바꾸는 즉시 결과를 보여주기 위한 경로다. " +
@@ -189,7 +245,7 @@ export const ingestDistillersCapabilities: Capability[] = [
       const draft = (input.draft && typeof input.draft === "object" ? input.draft : null) as Record<string, unknown> | null;
       if (!ref && !draft) throw new HttpError(400, "key 또는 draft 필요");
       const saved = ref ? await getDistiller(ref) : undefined;
-      if (ref && !saved) throw new HttpError(404, `증류기 '${ref}' 없음`);
+      if (ref && !saved) { await refuseCategoryLaneRef({ key: ref }, false, "preview"); throw new HttpError(404, `증류기 '${ref}' 없음`); }
       const d = mergeDraftDistiller(saved, draft);
       const all = await listDistillers();
 
@@ -239,7 +295,7 @@ export const ingestDistillersCapabilities: Capability[] = [
       const ref = String(input.key ?? "").trim();
       if (!ref) throw new HttpError(400, "key 필요");
       const d = await getDistiller(ref);
-      if (!d) throw new HttpError(404, `증류기 '${ref}' 없음`);
+      if (!d) { await refuseCategoryLaneRef({ key: ref }, false, "preview"); throw new HttpError(404, `증류기 '${ref}' 없음`); }
       const cands = Array.isArray(input.candidates)
         ? (input.candidates as Array<{ label?: string; rules?: Record<string, unknown> }>)
             .filter((c) => c && typeof c === "object" && c.rules)

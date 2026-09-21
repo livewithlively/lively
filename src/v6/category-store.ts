@@ -10,6 +10,7 @@ import { auditOrgContent, restoreSnapshot, type WriteCtx } from "./content-audit
 import { embeddingInputText } from "./embedding-provider.js";
 import { markEmbeddingPending, CATEGORY_TARGET } from "./embedding-backfill.js";
 import { knowledgeVisWhere } from "./knowledge-store.js";
+import { forgetClassifierSeen } from "./knowledge-common.js";
 import { resolveGroupKey } from "./category-group-store.js";
 import type { Viewer } from "./visibility.js";
 
@@ -370,7 +371,11 @@ export async function setCategoryView(
 export async function deleteCategory(id: number, ctx?: WriteCtx): Promise<{ deleted: boolean; id: number }> {
   const before = await getCategory(id);
   if (!before) throw new Error(`카테고리 #${id} 없음`);
+  //  #4194 — 이 칸에 있던 지식은 CASCADE 로 카테고리를 잃는다. 지우기 전에 이름을 받아 두었다가 '봤다' 기록을 지운다
+  //   (카테고리 붙이기 레인이 그 지식을 다시 보게 — knowledge-common forgetClassifierSeen).
+  const orphaned = (await q(itemsPool, `SELECT name FROM knowledge_category WHERE category_id=$1`, [id])).map((r) => String(r.name));
   await itemsPool.query(`DELETE FROM category WHERE id=$1`, [id]); // FK CASCADE: 매핑·엣지·정션 동반 삭제
+  await forgetClassifierSeen(orphaned);
   await auditCategory(before.key, "delete", before, null, ctx);
   return { deleted: true, id };
 }

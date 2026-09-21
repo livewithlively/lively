@@ -39,20 +39,21 @@ const OWNERS: Record<string, CronOwner> = {
   },
   // 증류·분류·관리 — 단계 화면의 [언제 도나] 카드가 만들기·켜고끄기·주기·의뢰자를 함께 다룬다.
   distill_sources: {
-    label: '맥락 관리 ▸ 증류', href: '#/context/knowledge/distillers',
+    label: '맥락 관리 ▸ 증류기', href: '#/context/knowledge/distillers',
     why: '증류기 설정과 밀린 자료를 함께 보면서 주기·의뢰자를 정할 수 있습니다.',
   },
   distill_sources_headless: {
-    label: '맥락 관리 ▸ 증류', href: '#/context/knowledge/distillers',
+    label: '맥락 관리 ▸ 증류기', href: '#/context/knowledge/distillers',
     why: '증류기 설정과 밀린 자료를 함께 보면서 주기·의뢰자를 정할 수 있습니다.',
   },
+  //  #4194 — 옛 「분류기」 는 증류기의 카테고리 붙이기 레인이다. 그 절은 증류기 탭 아래에 있다.
   classify_knowledge: {
-    label: '맥락 관리 ▸ 분류', href: '#/context/topics/classifiers',
-    why: '분류기·분류축과 미분류 잔량을 함께 보면서 정할 수 있습니다.',
+    label: '맥락 관리 ▸ 증류기 ▸ 카테고리 붙이기', href: '#/context/distill',
+    why: '카테고리 붙이기 증류기와 미분류 지식 잔량을 함께 보면서 정할 수 있습니다.',
   },
   classify_knowledge_headless: {
-    label: '맥락 관리 ▸ 분류', href: '#/context/topics/classifiers',
-    why: '분류기·분류축과 미분류 잔량을 함께 보면서 정할 수 있습니다.',
+    label: '맥락 관리 ▸ 증류기 ▸ 카테고리 붙이기', href: '#/context/distill',
+    why: '카테고리 붙이기 증류기와 미분류 지식 잔량을 함께 보면서 정할 수 있습니다.',
   },
   run_managers: {
     label: '맥락 관리 ▸ 관리', href: '#/context/checks/managers',

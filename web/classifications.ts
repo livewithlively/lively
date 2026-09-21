@@ -145,7 +145,7 @@ async function classificationPanel(detail: HTMLElement): Promise<void> {
   };
 
   const card = el('div', { class: 'card' },
-    cardHead('분류 검토 대기', '분류기가 제안한 카테고리를 확정·재분류·반려합니다. 신뢰도 낮은순(가장 의심스러운 것 먼저)으로 정렬돼 있습니다.'),
+    cardHead('분류 검토 대기', '증류기(카테고리 붙이기)가 제안한 카테고리를 확정·재분류·반려합니다. 신뢰도 낮은순(가장 의심스러운 것 먼저)으로 정렬돼 있습니다.'),
     countEl,
     el('div', { class: 'rq-bar' }, chips, catSel,
       el('span', { class: 'rq-kbd' },
@@ -165,7 +165,7 @@ async function classificationPanel(detail: HTMLElement): Promise<void> {
 function renderList(vis: ClsItem[], paint: () => void, drop: (k: string) => void): any {
   const rows = el('div', { class: 'rq-rows' });
   if (!vis.length) {
-    rows.append(el('div', { class: 'rq-empty', text: '검토할 제안 분류가 없습니다 — 분류기가 제안한 것이 모두 처리됐습니다.' }));
+    rows.append(el('div', { class: 'rq-empty', text: '검토할 제안 분류가 없습니다 — 증류기가 제안한 것이 모두 처리됐습니다.' }));
     return rows;
   }
   vis.forEach((it, idx) => rows.append(renderRow(it, idx, paint, drop)));
@@ -189,7 +189,7 @@ function renderRow(it: ClsItem, idx: number, paint: () => void, drop: (k: string
   const level = it.confidence == null ? 'na' : it.confidence < 0.5 ? 'lo' : it.confidence >= 0.8 ? 'hi' : 'mid';
   const conf = el('span', {
     class: 'cls-conf ' + level, text: pct == null ? '—' : pct + '%',
-    title: pct == null ? '분류기 신뢰도 미측정' : '분류기 신뢰도 ' + pct + '%',
+    title: pct == null ? 'AI 신뢰도 미측정' : 'AI 신뢰도 ' + pct + '%',
   });
 
   // 제목 = 문서 상세 링크(행 펼침과 겹치지 않게 클릭 전파 차단).
@@ -227,7 +227,7 @@ function renderRow(it: ClsItem, idx: number, paint: () => void, drop: (k: string
     row.append(el('div', { class: 'rq-exp' },
       it.evidence
         ? el('p', { class: 'cls-ev-full', text: it.evidence })
-        : el('p', { class: 'cls-ev-full cls-ev-none', text: '분류기가 근거를 남기지 않았습니다.' })));
+        : el('p', { class: 'cls-ev-full cls-ev-none', text: 'AI 가 근거를 남기지 않았습니다.' })));
   } else if (it.evidence) {
     row.append(el('div', {
       class: 'cls-ev', title: '펼쳐서 전체 근거 보기',

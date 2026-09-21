@@ -393,8 +393,8 @@ export function headlessNotice(o: { harness: string; reason: "no_credential" | "
   return {
     title: "사람 없이 도는 작업이 멈췄어요",
     body: o.reason === "no_credential"
-      ? `증류·분류 같은 자동 작업을 내 ${name} 계정으로 돌려야 하는데, 연결된 자격이 없어 실행하지 못했어요. 내 AI 계정에서 [연결]을 누르면 다시 돕니다.`
-      : `증류·분류 같은 자동 작업이 내 ${name} 계정 인증에 실패해 멈췄어요${o.label ? `(${o.label})` : ""}. 내 AI 계정에서 다시 연결해 주세요.`,
+      ? `증류·점검 같은 자동 작업을 내 ${name} 계정으로 돌려야 하는데, 연결된 자격이 없어 실행하지 못했어요. 내 AI 계정에서 [연결]을 누르면 다시 돕니다.`
+      : `증류·점검 같은 자동 작업이 내 ${name} 계정 인증에 실패해 멈췄어요${o.label ? `(${o.label})` : ""}. 내 AI 계정에서 다시 연결해 주세요.`,
     href: HEADLESS_NOTICE_HREF,
     dedupe_key: `headless-cred:${o.harness}:${o.reason}`,
   };

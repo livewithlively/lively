@@ -373,7 +373,7 @@ function collectorEditor(c: any | null, presets: any[], reload: () => void, newP
   outSel.append(el('option', { value: 'both', text: '둘 다 — 원문을 남기면서 지식도' }));
   outSel.value = c?.output_mode ?? 'preset';
   const catIn = el('input', { type: 'text', class: 'cxc-in',
-    value: (c?.output_config?.target_category as string) ?? '', placeholder: '비우면 분류기가 정합니다' }) as HTMLInputElement;
+    value: (c?.output_config?.target_category as string) ?? '', placeholder: '비우면 증류기(카테고리 붙이기)가 정합니다' }) as HTMLInputElement;
   const catField = F('지식 분류 고정', '지식 직행일 때, 만들어진 지식을 항상 이 분류에 넣습니다.', catIn);
   const syncCatVis = () => { catField.hidden = outSel.value !== 'knowledge' && outSel.value !== 'both'; };
   outSel.addEventListener('change', syncCatVis); syncCatVis();

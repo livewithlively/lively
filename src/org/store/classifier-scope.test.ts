@@ -92,32 +92,33 @@ t("unmapped — 카테고리 0건만, 파라미터 없음", () => {
   assert.equal(p.length, 0);
 });
 
-t("low_confidence — 확신도 문턱이 파라미터로 들어간다", () => {
+// ══ #4194 — 재분류 모드는 폐지됐다 ══
+//  분류기(지금은 증류기의 «카테고리 붙이기» 레인)가 쓰는 쓰기 도구 knowledge_propose_category 는 카테고리 행이
+//  **하나라도 있으면 no-op** 이다(knowledge-store proposeKnowledgeCategory). 그런데 low_confidence 인박스는 정의상
+//  이미 proposed 행이 있는 지식만 집는다 — 그래서 이 모드는 LLM 을 부르고 '봤다' 만 찍을 뿐 아무것도 못 바꿨다.
+//  이미 붙은 카테고리를 고치는 일은 점검(관리기 «분류 어긋남 보정» move_category)이 한다.
+t("low_confidence — 인박스가 빈다(FALSE) · 파라미터를 받지 않는다", () => {
   const p: unknown[] = [];
   const sql = scopeWhere(mk({ target: "low_confidence", confidence_below: 0.5 }), p);
-  assert.ok(sql.includes("state='proposed'"));
-  assert.equal(p[0], 0.5);
+  assert.ok(/\bFALSE\b/.test(sql), "low_confidence 레인이 여전히 무언가를 집는다");
+  assert.ok(!sql.includes("state='proposed'"), "폐지된 재분류 조건이 남아 있다");
+  assert.equal(p.length, 0, "쓰지 않는 확신도 문턱이 파라미터로 들어갔다");
 });
 
-t("low_confidence 문턱 미지정이면 기본 0.8", () => {
-  const p: unknown[] = [];
-  scopeWhere(mk({ target: "low_confidence", confidence_below: null }), p);
-  assert.equal(p[0], 0.8);
-});
-
-t("both — 두 조건이 OR 로 묶인다(AND 면 사실상 0건)", () => {
+t("both — 미분류만 본다(재분류 절 없음)", () => {
   const p: unknown[] = [];
   const sql = scopeWhere(mk({ target: "both", confidence_below: 0.6 }), p);
   assert.ok(sql.includes("NOT EXISTS"), "미분류 조건이 빠졌다");
-  assert.ok(sql.includes("state='proposed'"), "낮은확신도 조건이 빠졌다");
-  // ⚠ `sql.includes(" OR ")` 로는 못 잡는다 — 낮은확신도 절 **안에** 이미 OR 이 있다
-  //  (`confidence IS NULL OR confidence < $n`). 그래서 **두 절을 잇는 연산자**를 정확히 본다.
-  //  AND 면 '카테고리가 없으면서 동시에 proposed 제안이 있는' 지식이라 논리적으로 0건이다 —
-  //  분류기는 멀쩡히 켜져 있는데 아무것도 안 집는 상태가 되고, 그건 화면에 '잔량 0'으로만 보인다.
-  const joiner = /\)\s*(OR|AND)\s*EXISTS \(SELECT 1 FROM knowledge_category kc WHERE kc\.name=k\.name\s*\n?\s*AND kc\.state='proposed'/.exec(sql);
-  assert.ok(joiner, "미분류 절과 낮은확신도 절의 결합 지점을 찾지 못했다(구조가 바뀌었으면 이 테스트를 고쳐라)");
-  assert.equal(joiner[1], "OR", "두 절이 AND 로 묶였다 — 그러면 매치가 0건이 된다");
-  assert.equal(p[0], 0.6);
+  assert.ok(!sql.includes("state='proposed'"), "폐지된 재분류 조건이 남아 있다");
+  assert.equal(p.length, 0);
+});
+
+t("앞선 low_confidence 레인은 뒤 레인을 가리지 않는다 [배타 배정]", () => {
+  //  배타 배정은 앞선 레인마다 NOT(그 스코프) 를 붙인다. 빈 인박스 레인의 스코프가 FALSE 를 AND 로 품으면
+  //  NOT(... AND FALSE) = TRUE 라 뒤 레인의 몫을 하나도 빼앗지 않는다. OR 로 묶이면 뒤 레인이 굶는다.
+  const sql = scopeWhere(mk({ target: "low_confidence" }), []);
+  const parts = sql.split(" AND ").map((s) => s.trim());
+  assert.ok(parts.includes("FALSE"), "FALSE 가 AND 로 묶인 독립 조건이 아니다 — 앞선 레인일 때 뒤 레인 몫을 건드릴 수 있다");
 });
 
 // ══ 항상 걸리는 기본 조건 ══
