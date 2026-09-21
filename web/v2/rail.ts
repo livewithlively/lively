@@ -30,6 +30,7 @@ import {
 import { aiLoginScopeHint } from './ai-login-scope.js';   // #2476 — «AI 로그인은 워크스페이스마다 따로» 를 말할지·무슨 말로 할지의 정본
 import { inboxSection, openMemberModal } from './ws-people.js';   // #1875 — 구성원 모달·나에게 온 초대
 import { openCurrentWsSettings } from './ws-settings.js';   // #2188 — 워크스페이스 설정 모달
+import { wsStatus } from '../lib/ws-status.js';   // #4122 — 행 상태(온라인·오프라인·만드는 중)의 정본
 
 export type RailSection = 'home' | 'inbox' | 'sess' | 'proj' | 'wiki';
 
@@ -225,7 +226,7 @@ export function stackTile(opts?: { small?: boolean; label?: boolean }): HTMLElem
   const kindText = w.kind === 'personal' ? '개인' : '팀';
   return el('button', {
     class: 'v2-rail-stack' + (opts && opts.small ? ' sm' : '') + (opts && opts.label ? ' v2-side-wsbtn' : ''), type: 'button', 'aria-haspopup': 'menu',
-    title: `${w.name} · ${kindText} 워크스페이스 — 누르면 전환`,
+    title: `${w.name} (${kindText} 워크스페이스). 누르면 워크스페이스 메뉴가 열립니다`,
     onclick: (e: Event) => { e.preventDefault(); if (popEl) closePopover(); else openPopover(e.currentTarget as HTMLElement); },
   },
     el('span', { class: 'v2-rail-stack-t' }, wsTile(w, 'v2-wscard-big')),
@@ -313,14 +314,14 @@ function openPopover(anchor: HTMLElement): void {
     //   행 전체는 전환, 아이콘만 모달 — 버튼 안 버튼을 피하려 div 로 감싼다.
     ...rows.map((w) => el('div', { class: 'v2-wspop-row' + (w.active ? ' cur' : '') },
       el('button', { class: 'v2-wspop-switch', type: 'button', role: 'menuitemradio', 'aria-checked': String(w.active),
-        title: w.active ? '지금 이 워크스페이스예요' : `${w.name} 워크스페이스로 전환`,
+        title: w.active ? '지금 이 워크스페이스예요' : (wsStatus(w.tenant_state)?.title || `${w.name} 워크스페이스로 전환`),
         onclick: () => { closePopover(); if (!w.active) switchWorkspace(w.slug, (w as any).enter_url); } },
         wsTile(w, 'v2-wscard-big'),
         //  #2188 — 매니지드에서 갓 만든 워크스페이스는 뜨는 데 시간이 걸린다(테넌트 프로비저닝).
         //   목록에는 **바로** 세우되 상태를 사실대로 말한다 — 안 그러면 눌렀을 때 빈 화면을 만난다.
-        tt(w.name, (w as any).tenant_state && (w as any).tenant_state !== 'running'
-          ? '준비 중이에요 — 곧 열립니다'
-          : w.kind === 'personal' ? '개인 워크스페이스' : '팀 워크스페이스')),
+        //  #4122(원준 2026-09-21) — 종전엔 running 이 아니면 전부 «준비 중이에요 — 곧 열립니다» 였는데 실제로는
+        //   셋 다 절전(stopped)이었다. 켜짐·꺼짐·만드는 중을 점 하나와 한 낱말로 가른다(판정은 lib/ws-status.ts).
+        wsRowText(w)),
       addPeopleBtn(w), exitBtn(w))),
     //  #1875 D5″ — 워크스페이스가 하나도 없을 때(매니지드에서 마지막 것을 지운 직후). 다른 줄을 그리면
     //   **누를 수 없는 것을 그리는 것**이라 거짓이다 — 할 일이 하나뿐이니 그 하나만 남긴다.
@@ -331,11 +332,13 @@ function openPopover(anchor: HTMLElement): void {
     //   둘 다 **지금 워크스페이스**만 다뤘고, 이제 행마다 ✕ 가 그 일을 한다(어느 워크스페이스인지가
     //   행에서 이미 보인다). 같은 일을 하는 문을 셋 두면 어느 것이 진짜인지가 사라진다 — 걷었다.
     //  추가 — 누르면 **바로 만드는 판**이 뜬다(종전엔 옛 메뉴 전체가 떴다 — "저 드롭다운으로 보내는 이유를 모르겠음").
-    row('plus', '워크스페이스 추가', registryActive() ? '혼자 시작합니다 — 사람을 부르면 팀이 됩니다' : '지금은 만들 수 없어요', () => openCreatePanel(anchor)),
+    //  #4122 — 부제가 «무엇이 만들어지고 어떻게 팀이 되나» 를 말한다(종전 «혼자 시작합니다 — 사람을 부르면 팀이 됩니다»).
+    //   두 줄이 되는 길이라 이 줄만 접히게 둔다(.wrap).
+    row('plus', '워크스페이스 추가', registryActive() ? '개인 워크스페이스를 만들어요. 사람을 초대하면 팀 워크스페이스가 됩니다.' : '지금은 만들 수 없어요', () => openCreatePanel(anchor), { subWrap: true }),
     //  #2188 설정(2026-08-31 장원준: "여기 밑에 설정 버튼 하나, 누르면 모달") — **모두에게** 보인다.
     //   종전 설정 판은 owner 에게만 열려 구성원·비admin 은 구성원 목록조차 볼 문이 없었다. 모달 안에서
     //   저마다 할 수 있는 만큼만 열린다(이름·아바타는 owner, 나머지는 열람).
-    row('gear', '워크스페이스 설정', '아바타 · 이름 · 구성원 · 기능 설정', () => openCurrentWsSettings(rows as never)),
+    row('gear', '워크스페이스 설정', '이름, 아바타, 구성원, 기능을 설정합니다', () => openCurrentWsSettings(rows as never)),
     //  「레일 숨기기」 행은 뺐다(원준 2026-08-26 "여기 있어야 할 이유가 없음") — 레일 여닫기는 창 맨 윗줄
     //   패널 단추와 ⌘⇧S 의 일이지 워크스페이스 메뉴의 일이 아니다.
     ) as HTMLElement;
@@ -344,10 +347,18 @@ function openPopover(anchor: HTMLElement): void {
 
 // ── 팝오버 부품 — 행·제목·구분선. 하위 판(구성원·설정·추가)도 같은 부품으로 그린다(문법이 하나여야 한 메뉴로 읽힌다). ──
 const hr = (): HTMLElement => el('div', { class: 'v2-wspop-hr', role: 'separator' });
-const tt = (b: string, sub: string): HTMLElement => el('span', { class: 'v2-wspop-tt' }, el('b', { text: b }), el('span', { text: sub }));
-function row(ic: string, label: string, sub: string, run: () => void, extra?: { cls?: string; tail?: HTMLElement | null }): HTMLElement {
+const tt = (b: string, sub: string, wrap?: boolean): HTMLElement =>
+  el('span', { class: 'v2-wspop-tt' }, el('b', { text: b }), el('span', wrap ? { class: 'wrap', text: sub } : { text: sub }));
+/** 워크스페이스 행의 이름 + 부제. 부제 = 종류(개인/팀) + 상태(온라인·오프라인·만드는 중 — 매니지드만). */
+function wsRowText(w: { name: string; kind: string; tenant_state?: string | null }): HTMLElement {
+  const st = wsStatus(w.tenant_state);
+  return el('span', { class: 'v2-wspop-tt' }, el('b', { text: w.name }),
+    el('span', {}, w.kind === 'personal' ? '개인 워크스페이스' : '팀 워크스페이스',
+      st ? el('i', { class: 'v2-wspop-st ' + st.tone, text: st.text }) : null));
+}
+function row(ic: string, label: string, sub: string, run: () => void, extra?: { cls?: string; tail?: HTMLElement | null; subWrap?: boolean }): HTMLElement {
   return el('button', { class: 'v2-wspop-row' + (extra?.cls ? ' ' + extra.cls : ''), type: 'button', role: 'menuitem', onclick: () => { closePopover(); run(); } },
-    el('span', { class: 'v2-wspop-ic' }, icon(ic)), tt(label, sub), extra?.tail || null);
+    el('span', { class: 'v2-wspop-ic' }, icon(ic)), tt(label, sub, extra?.subWrap), extra?.tail || null);
 }
 /** 하위 판 머리 — ‹ 로 메뉴로 돌아간다. 판이 바뀌어도 '같은 메뉴 안'이라는 감각이 남게. */
 function panelHead(title: string, anchor: HTMLElement): HTMLElement {
@@ -460,7 +471,7 @@ function paintLeave(box: HTMLElement, w: WsRow): void {
   const others = Math.max(0, (w.member_count ?? 2) - 1);
   exitForm(box, {
     lines: [`'${w.name}' 에서 나갈까요?`,
-      `나만 빠집니다 — 함께 쓰는 분 ${others}명과 올린 지식·프로젝트는 그대로 남아요.`,
+      `나만 빠집니다. 함께 쓰는 분 ${others}명과 올린 지식·프로젝트는 그대로 남아요.`,
       '다시 들어오려면 초대를 받아야 해요.'],
     go: '나가기', danger: true,
     run: async () => {
@@ -481,7 +492,7 @@ function paintTransfer(box: HTMLElement, w: WsRow): void {
   pick.append(el('option', { value: '', text: '불러오는 중…' }));
   exitForm(box, {
     lines: [`'${w.name}' 의 관리자가 나 하나예요.`,
-      '나가려면 관리자를 넘겨야 해요 — 넘기지 않으면 아무도 이 워크스페이스를 관리할 수 없게 되거든요.'],
+      '나가려면 관리자를 넘겨야 해요. 넘기지 않으면 아무도 이 워크스페이스를 관리할 수 없어요.'],
     extra: pick, go: '넘기고 나가기', danger: true,
     run: async () => {
       const to = pick.value;
@@ -498,7 +509,7 @@ function paintTransfer(box: HTMLElement, w: WsRow): void {
     const cand = ms.filter((m) => (typeof m.is_me === 'boolean' ? !m.is_me : m.member_id !== me));
     pick.replaceChildren(...(cand.length
       ? cand.map((m) => el('option', { value: m.member_id, text: personName(m as never) || m.display_name || m.email || m.member_id }))
-      : [el('option', { value: '', text: '넘길 분이 없어요 — 먼저 초대하세요' })]));
+      : [el('option', { value: '', text: '넘길 분이 없어요. 먼저 초대하세요' })]));
   }).catch(() => pick.replaceChildren(el('option', { value: '', text: '구성원을 불러오지 못했어요' })));
 }
 
@@ -547,8 +558,8 @@ function openCreatePanel(anchor: HTMLElement): void {
   const wsHint = aiLoginScopeHint(managedWorkspaces());
   pop.append(el('div', { class: 'v2-wspop-form' }, name, el('div', { class: 'v2-wspop-actions' }, go, note),
     hint(managedWorkspaces()
-      ? '혼자 시작합니다. 다른 사람에게 보이지 않고, 사람을 부르면 그때 팀이 됩니다. 만들면 준비되는 데 잠깐 걸려요.'
-      : '혼자 시작합니다. 관리자를 포함해 다른 사람에게 보이지 않고, 사람을 부르면 그때 팀이 됩니다.'),
+      ? '개인 워크스페이스로 만들어져 나만 봅니다. 사람을 초대하면 그때 팀 워크스페이스가 됩니다. 만든 뒤 여는 데 잠깐 걸려요.'
+      : '개인 워크스페이스로 만들어져 관리자를 포함해 다른 사람에게는 보이지 않아요. 사람을 초대하면 그때 팀 워크스페이스가 됩니다.'),
     ...(wsHint ? [hint(wsHint)] : [])));
   place(pop, anchor, !!anchor.closest('.v2-side'));
   window.setTimeout(() => name.focus(), 0);

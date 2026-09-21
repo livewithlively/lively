@@ -229,6 +229,15 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-wspop-tt { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
 .v2-wspop-tt b { font-size: 14px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .v2-wspop-tt span { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* #4122 — 부제가 두 줄이 되는 행(워크스페이스 추가)만 접힌다. 나머지 부제는 한 줄 말줄임 그대로. */
+.v2-wspop-tt span.wrap { white-space: normal; }
+/* #4122 — 워크스페이스 행 상태: 점 하나 + 한 낱말(온라인 · 오프라인 · 만드는 중). 글자는 부제와 같은 흐린 색으로 두고
+   점만 색을 진다 — 11.5px 초록 글자는 밝은 바탕에서 대비가 모자란다. 꺼짐은 속 빈 고리(켜짐의 채운 점과 모양으로도 갈린다). */
+.v2-wspop-st { font-style: normal; margin-left: 8px; white-space: nowrap; }
+.v2-wspop-st::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; vertical-align: 1px; }
+.v2-wspop-st.on::before { background: var(--mint); }
+.v2-wspop-st.wait::before { background: var(--blue); }
+.v2-wspop-st.off::before { box-shadow: inset 0 0 0 1.5px var(--muted-3); }
 .v2-wspop-hr { height: 1px; background: var(--line); margin: 4px 0; }
 .v2-wspop-ic { flex: none; width: 40px; height: 40px; border-radius: 11px; background: var(--bg-tint-2); color: var(--ink-sub); display: grid; place-items: center; }
 /* ⚠ 팝오버는 body 에 붙는다(사이드바 재렌더에 안 지워지게) — #v2-root 안의 `.v2-ic` 획 규칙이 닿지 않으므로 여기서 다시 준다. */
