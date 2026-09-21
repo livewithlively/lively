@@ -27,7 +27,7 @@
 //   B1 DELETE 라우트가 좌표를 세 출처로 되찾는다(요청 · desired-state · 레지스트리 스냅샷)
 //   B2 좌표 판정이 `sessionGone` 호출보다 **앞선다** — 로컬 tmux 를 먼저 묻는 구조로 못 돌아간다
 //   B3 좌표를 `req.query.node` **단독**으로 정하지 않는다(종전 화석)
-//   B4 대시보드 위젯 두 곳이 `?node=` 를 싣는다 — 좌표를 아는 쪽이 말해 준다(서버 되찾기와 이중 방어)
+//   B4 대시보드 위젯 두 곳이 좌표(node)를 싣는다 — 좌표를 아는 쪽이 말해 준다(서버 되찾기와 이중 방어). #3778 부터 DELETE 는 공용 한 자리
 //   B5 박스 세션에 붙은 «선언된 세션 호스트» 좌표를 접는다 — 그 좌표가 서면 중앙 세션이 404 로 안 지워진다(#3745)
 import { strict as assert } from "node:assert";
 import test from "node:test";
@@ -94,14 +94,20 @@ test("★★ B5 박스 세션에 붙은 «세션 호스트» 좌표를 접는다
 });
 
 test("★★ B4 대시보드 '내 AI 세션' 위젯이 좌표를 싣는다 — 그 목록엔 노드 세션이 병합돼 온다", () => {
+  //  #3778 — 두 위젯의 DELETE 는 공용 한 자리(session-actions retireSession)로 모였다: 도는 세션은 터미널만 내리고(reclaim=1)
+  //   멈춘 세션은 휴지통으로 간다. 좌표 계약은 그대로다 — ① 위젯은 **행을 통째로** 넘기고(행에 node 가 실려 있다)
+  //   ② 그 한 자리의 DELETE 가 좌표를 싣는다. 위젯이 제 DELETE 를 다시 쓰면(좌표를 빠뜨릴 자리가 또 생기면) 빨간불이다.
   for (const rel of ["web/dash/widget-sessions.ts", "web/dash/widget-sessions-popovers.ts"]) {
     const src = read(rel);
-    const lines = src.split("\n").filter((l) => l.includes("terminal/sessions/") && l.includes("method: 'DELETE'"));
-    assert.ok(lines.length > 0,
-      `${rel} 의 세션 DELETE 호출을 찾지 못했다 — 호출 모양이 바뀌었으면 이 시험을 먼저 고칠 것`);
-    for (const l of lines) {
-      assert.ok(l.includes("?node="),
-        `★${rel} 의 DELETE 가 좌표(?node=) 없이 나간다 — 그 컴퓨터의 세션이 안 죽는데 «종료했어요» 가 뜬다:\n    ${l.trim()}`);
-    }
+    assert.ok(/retireSessions?\((items|s)\)/.test(src),
+      `${rel} 이 세션을 공용 흐름(retireSession)에 **행째로** 넘기지 않는다 — 호출 모양이 바뀌었으면 이 시험을 먼저 고칠 것`);
+    const own = src.split("\n").filter((l) => l.includes("terminal/sessions/") && l.includes("method: 'DELETE'"));
+    assert.deepEqual(own, [], `★${rel} 이 세션 DELETE 를 직접 쏜다 — 좌표(node)를 빠뜨릴 자리가 다시 생겼다`);
+  }
+  const shared = read("web/session-actions.ts").split("\n").filter((l) => l.includes("terminal/sessions/") && l.includes("method: 'DELETE'"));
+  assert.ok(shared.length > 0, "session-actions 의 세션 DELETE 호출을 찾지 못했다 — 호출 모양이 바뀌었으면 이 시험을 먼저 고칠 것");
+  for (const l of shared) {
+    assert.ok(l.includes("&node=") || l.includes("?node="),
+      `★공용 DELETE 가 좌표(node) 없이 나간다 — 그 컴퓨터의 세션이 안 죽는데 «종료했어요» 가 뜬다:\n    ${l.trim()}`);
   }
 });

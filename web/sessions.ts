@@ -104,7 +104,8 @@ function sessionRowEl(s: SessRow, onGo?: () => void, onPurged?: () => void): any
   // 휴지통으로(#3778) — 내 기록일 때만 보인다. 종전엔 이 자리가 [완전 삭제]였다: 휴지통을 거치지 않고 대화 전문과 그 세션이 만든
   //  지식·자료까지 그 자리에서 영구히 지웠다. 완전 삭제는 휴지통 안에서만 — 거기서 무엇이 함께 지워지는지 고르고 지운다.
   const mine = !!s.owner && s.owner === meId();
-  const purge = el('button', { class: 'btn-text', style: 'color:var(--danger,#dc2626)', text: '휴지통으로',
+  //  위험 색을 쓰지 않는다 — 잃는 것이 없는 동작이다(표식만 붙는다). 빨강은 휴지통 안의 [완전 삭제] 몫이다(#1582).
+  const purge = el('button', { class: 'btn-text', text: '휴지통으로',
     title: '이 세션을 휴지통으로 보냅니다 — 휴지통에서 되돌릴 수 있고, 완전히 지우는 건 거기서만 합니다.' }) as HTMLButtonElement;
   purge.addEventListener('click', async () => {
     if (!await confirmSessionTrash({ title: `「${title}」${eulReul(title)} 휴지통으로 보낼까요?` })) return;
@@ -227,7 +228,7 @@ async function renderTranscriptPage(view: any, sel: { sid: string; node: string;
   // 휴지통으로(#3778 — 종전 [완전 삭제]) — 서버가 판정한 isOwner 일 때만 헤더에 단다. 이 화면은 공유 링크로도 열리므로
   //  '내가 로그인해 있다'가 '내 대화다'를 뜻하지 않는다(view_policy=attach 면 팀원의 대화도 여기서 열린다).
   if (data?.isOwner) {
-    const trashBtn = el('button', { class: 'btn btn-ghost btn-sm', style: 'color:var(--danger,#dc2626)', text: '휴지통으로' }) as HTMLButtonElement;
+    const trashBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '휴지통으로' }) as HTMLButtonElement;
     trashBtn.addEventListener('click', async () => {
       const name = document.getElementById('sess-title')?.textContent || shortId(sid);
       if (!await confirmSessionTrash({ title: `「${name}」${eulReul(name)} 휴지통으로 보낼까요?` })) return;
