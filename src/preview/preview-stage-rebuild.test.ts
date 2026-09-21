@@ -156,6 +156,16 @@ test("I1~I12 기록·지금 입력 — 실제 git", async (t) => {
       assert.deepEqual(r.members, [["local-only", git(base, "rev-parse", "origin/main")], ["project/1", git(base, "rev-parse", "origin/project/1")]]);
     });
 
+    await t.test("I13 base_ref 가 로컬 이름(main)이어도 원격이 움직이면 base-moved — 로컬 main 은 준비가 돌 때만 감긴다", async () => {
+      // 로컬 main 은 base 클론을 만든 순간의 커밋에 머물러 있다(이 시험은 로컬 main 을 한 번도 감지 않는다).
+      const rec0 = { ...await currentStageInputs(wt, "main", ["project/1"], new Set()), build_cmd: CMD };
+      commit("main moves again"); git(seed, "push", "origin", "main");
+      const now2 = await currentStageInputs(wt, "main", ["project/1"], new Set());
+      assert.notEqual(git(base, "rev-parse", "main"), git(base, "rev-parse", "origin/main"), "배선: 로컬 main 이 실제로 뒤처져 있어야 이 행이 의미가 있다");
+      assert.equal(now2.base, git(base, "rev-parse", "origin/main"));
+      assert.equal(stageRebuildVerdict(rec0, now2, CMD).reason, "base-moved");
+    });
+
     await t.test("I9 원격 받기에 실패해도 던지지 않고 옛 참조로 잰다 — 네트워크가 죽은 판에 다시 빌드하지 않는다", async () => {
       const inputs = await currentStageInputs(wt, "origin/main", ["project/1"], new Set());
       await writeStageRecord(wt, { ...inputs, build_cmd: CMD });
