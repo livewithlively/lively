@@ -16,7 +16,8 @@ import {
 } from "../v6/list-store.js";
 import { existingTeamIds } from "../v6/team-store.js";
 import { activeMemberIdsAmong } from "../org/store/members.js";
-import { projectIdsInList, deleteProject } from "../v6/project-store.js";
+import { projectIdsInList } from "../v6/project-store.js";
+import { trashProjectBundle } from "./projects-v6.js";   // #3778 — 리스트 cascade 도 프로젝트 하나를 버리는 것과 같은 길
 import { ensureAgentsMd } from "../v6/agents-md.js";
 // 리스트 카테고리 변경(#541 후속 F4) — 그 리스트 모든 프로젝트가 상속하므로 AGENTS.md 재생성. best-effort·비차단.
 const regenAgentsForList = async (listId: number) => {
@@ -194,13 +195,13 @@ const projectListUpdateV6: Capability = {
   },
 };
 
-// ── 리스트 삭제 — 기본은 소속 프로젝트 보존(list_id SET NULL → 미분류). cascade_projects=true 면 소속 프로젝트도 함께 삭제. ──
+// ── 리스트 삭제 — 기본은 소속 프로젝트 보존(list_id SET NULL → 미분류). cascade_projects=true 면 소속 프로젝트도 함께 휴지통으로(#3778). ──
 const projectListDeleteV6Input = { id: z.number().int().positive(), cascade_projects: z.boolean().optional() };
 type ProjectListDeleteV6Input = z.infer<z.ZodObject<typeof projectListDeleteV6Input>>;
 const projectListDeleteV6: Capability = {
   name: "project_list_delete_v6",
   title: "프로젝트 리스트 삭제(v6)",
-  description: "리스트를 삭제한다. 기본은 소속 프로젝트를 보존해 '미분류'로 이동(list_id 해제)하고 리스트 멤버 연결만 정리한다. cascade_projects=true 면 소속 프로젝트(그 하위 태스크·서브태스크 포함)도 함께 삭제한다(각각 감사 스냅샷 → 휴지통에서 복원 가능).",
+  description: "리스트를 삭제한다. 기본은 소속 프로젝트를 보존해 '미분류'로 이동(list_id 해제)하고 리스트 멤버 연결만 정리한다. cascade_projects=true 면 소속 프로젝트를 함께 **휴지통으로** 보낸다(프로젝트마다 내 세션이 함께 가고 휴지통에서 통째로 복원된다 — 남의 도는 세션이 있는 프로젝트는 건너뛰어 skipped_projects 로 알린다).",
   scope: "memory",
   input: projectListDeleteV6Input,
   expose: {
@@ -218,15 +219,23 @@ const projectListDeleteV6: Capability = {
     const before = await getProjectListRow(input.id);
     if (!before) throw new HttpError(404, `리스트 #${input.id} 없음`);
     const wctx = writeCtxOf(user, ctx);
-    // cascade — 리스트 삭제(list_id SET NULL)로 프로젝트가 미분류로 새기 전에, 소속 프로젝트를 먼저 삭제.
-    //  deleteProject 는 하위 태스크(parent_id CASCADE)까지 지우고 각 프로젝트마다 감사 스냅샷을 남겨 휴지통 복원이 된다.
+    // cascade — 리스트 삭제(list_id SET NULL)로 프로젝트가 미분류로 새기 전에, 소속 프로젝트를 먼저 **휴지통으로** 보낸다.
+    //  #3778: 종전엔 deleteProject(하드 삭제)였다 — 태스크·팀원·연결이 스냅샷 없이 사라지고 클릭업 원본까지 지워졌으며, 에이전트(MCP)도
+    //   이 한 번으로 리스트 전체를 지울 수 있었다. 이제 프로젝트 하나를 버리는 것과 같은 길(trashProjectBundle): 내 세션이 함께 가고,
+    //   휴지통에서 [복원]하면 통째로 돌아온다(리스트는 사라졌으므로 '미분류'로). 남의 도는 세션이 있는 프로젝트는 건너뛰고 알린다.
     let deletedProjects = 0;
+    const skippedProjects: Array<{ id: number; why: string }> = [];
     if (input.cascade_projects) {
+      const me = String(ctx?.actor ?? user?.userId ?? "");
+      if (!me) throw new HttpError(401, "로그인이 필요합니다");
       const pids = await projectIdsInList(input.id); // 보드 앵커(list_id NULL)는 애초에 제외됨.
-      for (const pid of pids) { await deleteProject(pid, wctx); deletedProjects++; }
+      for (const pid of pids) {
+        try { await trashProjectBundle(user, me, pid, { actor: wctx.actor ?? null, source: wctx.source ?? "web" }); deletedProjects++; }
+        catch (e) { skippedProjects.push({ id: pid, why: String((e as Error)?.message || e) }); }
+      }
     }
     const list = await deleteProjectList(input.id, wctx);
-    return { deleted: true, id: input.id, list, deleted_projects: deletedProjects, cascade: !!input.cascade_projects };
+    return { deleted: true, id: input.id, list, deleted_projects: deletedProjects, trashed_projects: deletedProjects, skipped_projects: skippedProjects, cascade: !!input.cascade_projects };
   },
 };
 

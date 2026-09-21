@@ -29,6 +29,8 @@ export interface DeletedEntry {
 export interface TrashedFile {
   id: number; title: string; path: string; ext: string; bytes: number;
   project_id: number | null; at: string; by: string | null; has_knowledge: boolean;
+  /** 어느 폴더에서 버렸나 — 'project'(옛 서버는 안 준다 = project) · 'personal' · 'shared'. 되살리기·완전 삭제의 길이 갈린다. */
+  root?: string | null;
 }
 
 // ── 날짜 묶음 — 오늘 · 어제 · 이번 주(7일) · 이전. 자정 기준(그 지역). ──────────────────────────────
@@ -60,7 +62,20 @@ export interface SrcItem {
   origin: 'file' | 'audit';
   id: number; title: string; badge: string; sub: string; at: string;
   projectId: number | null; bytes: number; hasKnowledge: boolean;
+  /** 파일 보관(origin 'file')일 때만 뜻이 있다 — 'project' | 'personal' | 'shared'. */
+  root: FileTrashRoot;
 }
+export type FileTrashRoot = 'project' | 'personal' | 'shared';
+/** 보관 파일의 폴더 — 모르는 값·빈 값은 'project'(옛 서버·옛 도장은 프로젝트 파일뿐이었다). */
+export const fileTrashRootOf = (raw: unknown): FileTrashRoot => (raw === 'personal' || raw === 'shared' ? raw : 'project');
+/** 그 폴더의 되살리기·완전 삭제 주소. 프로젝트 파일인데 프로젝트 번호를 모르면 null(부를 곳이 없다 — 지어내지 않는다). */
+export function fileTrashUrl(it: Pick<SrcItem, 'root' | 'projectId'>, op: 'restore' | 'purge'): string | null {
+  if (it.root === 'project') return it.projectId ? `/api/ui/v6/projects/${it.projectId}/file-trash/${op}` : null;
+  return `/api/ui/terminal/browse/trash/${op}`;
+}
+/** 썸네일 아래 한 줄 — 어느 폴더의 어디였나. */
+export const fileTrashWhere = (root: FileTrashRoot, path: string): string =>
+  (root === 'personal' ? '내 폴더 · ' : root === 'shared' ? '공유 폴더 · ' : '') + path;
 
 /** 자료 탭의 한 목록 — 두 출처를 버린 순서로 섞는다. 잠긴 줄(locked)은 뺀다(되살릴 수도 지울 수도 없는 줄은 세우지 않는다). */
 export function srcItems(deleted: ReadonlyArray<DeletedEntry>, files: ReadonlyArray<TrashedFile>): SrcItem[] {
@@ -70,7 +85,8 @@ export function srcItems(deleted: ReadonlyArray<DeletedEntry>, files: ReadonlyAr
     if (!Number.isFinite(id) || id <= 0) continue;
     out.push({
       key: 'f:' + id, origin: 'file', id, title: f.title || f.path || `자료 #${id}`, badge: extLabel(f.ext, f.path),
-      sub: f.path || '', at: String(f.at || ''), projectId: f.project_id ?? null, bytes: Number(f.bytes) || 0, hasKnowledge: !!f.has_knowledge,
+      sub: fileTrashWhere(fileTrashRootOf(f.root), f.path || ''), at: String(f.at || ''), projectId: f.project_id ?? null, bytes: Number(f.bytes) || 0, hasKnowledge: !!f.has_knowledge,
+      root: fileTrashRootOf(f.root),
     });
   }
   for (const d of deleted) {
@@ -81,7 +97,7 @@ export function srcItems(deleted: ReadonlyArray<DeletedEntry>, files: ReadonlyAr
     //  파일 자료는 종류(«파일») 대신 확장자를 적는다 — 격자에서 서로를 가르는 것은 확장자다(실측: 「파일」만 열한 장이 나란히 섰다).
     out.push({
       key: 'a:' + id, origin: 'audit', id, title: d.label || `자료 #${id}`, badge: d.kind === 'local_file' ? extLabel('', d.label) : kindLabel(d.kind),
-      sub: kindLabel(d.kind), at: String(d.at || ''), projectId: null, bytes: 0, hasKnowledge: false,
+      sub: kindLabel(d.kind), at: String(d.at || ''), projectId: null, bytes: 0, hasKnowledge: false, root: 'project',
     });
   }
   return out.sort((a, b) => b.at.localeCompare(a.at));
@@ -126,6 +142,28 @@ export function matchesQuery(q: string, ...hay: Array<string | null | undefined>
 }
 
 export interface TabCounts { sess: number; proj: number; src: number; know: number }
+
+// ── 사이드바 「휴지통 N」 — 네 탭의 합 ───────────────────────────────────────────────────────────
+//  화면이 이미 아는 절반(통째로 버린 프로젝트 + 따로 버린 내 세션)에 서버가 센 나머지(GET /api/ui/deleted/counts)를 더한다.
+//  ★ 배지의 모집단 = 탭 숫자의 모집단이어야 한다 — 휴지통 화면이 열려 있으면 그 화면이 제 목록으로 센 값(extraCountsOf)을 그대로 쓴다.
+export interface TrashExtraCounts { knowledge: number; project: number; source: number; files: number }
+
+/** 휴지통 화면의 목록에서 «나머지 절반» 을 센다 — 탭 숫자와 같은 잣대(잠긴 줄·깨진 id 는 안 센다). */
+export function extraCountsOf(deleted: ReadonlyArray<DeletedEntry>, files: ReadonlyArray<TrashedFile>): TrashExtraCounts {
+  const src = srcItems(deleted, files);
+  return {
+    knowledge: knowItems(deleted).length,
+    project: auditProjItems(deleted).length,
+    source: src.filter((x) => x.origin === 'audit').length,
+    files: src.filter((x) => x.origin === 'file').length,
+  };
+}
+
+/** 배지 숫자. extra 를 아직 못 받았으면(null) 아는 절반만 — 모르는 것을 0 이라 단언하지 않되, 배지를 비우지도 않는다. 음수·NaN 은 0. */
+export function trashBadgeN(base: number, extra: TrashExtraCounts | null | undefined): number {
+  const n = (v: unknown): number => { const x = Math.floor(Number(v)); return Number.isFinite(x) && x > 0 ? x : 0; };
+  return n(base) + (extra ? n(extra.knowledge) + n(extra.project) + n(extra.source) + n(extra.files) : 0);
+}
 
 /**
  * 처음 설 탭. 기억한 탭이 있으면 그 탭(비어 있어도 — 사람이 고른 자리다). 없으면 **무언가 든 첫 탭**, 다 비었으면 'sess'.

@@ -171,17 +171,37 @@ export async function listSources(f: SourceFilter = {}, viewer?: Viewer): Promis
 // ── 휴지통의 파일 자료(#3778) — 파일을 지워 `.lively/trash` 로 옮겨 둔 자료들(ingest/local-file.ts 의 도장 fields.trash). ──
 //  프로젝트를 가로질러 한 번에 읽는다(휴지통 「자료」 탭). 본문은 안 싣는다 — 목록 규약 그대로. 뷰어 술어를 태워
 //  안 보이는 자료는 휴지통에서도 안 보인다.
-export async function listTrashedFileSources(viewer?: Viewer, limit = 500): Promise<Record<string, unknown>[]> {
+//  ★ 남의 **개인 폴더**에서 버린 파일은 세우지 않는다(#3778 후속) — 자료 자체는 보일 수 있어도(«팀원 모두» 로 올린 것) 되살리기·완전 삭제는
+//   그 폴더 주인만 한다(브라우즈 라우트가 남에게는 404). 누를 수 없는 줄을 세우지 않는다. personalMember = 내 개인 루트의 주인 키
+//   (ingest/local-file personalRootMember) — 없으면 개인 폴더 것은 전부 뺀다. 옛 도장(root 없음 = 프로젝트 파일)은 그대로 선다.
+function trashedFileWhere(params: unknown[], personalMember?: string | null): string {
+  params.push(personalMember ? `personal:${personalMember}` : "");
+  return `s.lifecycle='superseded' AND s.fields ? 'trash'
+        AND (COALESCE(s.fields->'trash'->>'root', '') NOT LIKE 'personal:%' OR s.fields->'trash'->>'root' = $${params.length})`;
+}
+export async function listTrashedFileSources(viewer?: Viewer, limit = 500, personalMember?: string | null): Promise<Record<string, unknown>[]> {
   const params: unknown[] = [];
   const vis = await sourceVisWhere(viewer, params);
+  const where = trashedFileWhere(params, personalMember);
   params.push(Math.min(Math.max(Number(limit) || 500, 1), 500));
   return q(itemsPool,
     `SELECT s.id, s.kind, s.title, s.name, s.updated_at, s.fields, s.visibility,
             EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id) AS has_knowledge
        FROM source s
-      WHERE s.lifecycle='superseded' AND s.fields ? 'trash' AND ${vis}
+      WHERE ${where} AND ${vis}
       ORDER BY (s.fields->'trash'->>'at') DESC NULLS LAST
       LIMIT $${params.length}`, params);
+}
+
+/** 그 목록의 개수만(#3778 — 사이드바 「휴지통 N」). listTrashedFileSources 와 같은 술어·같은 뷰어·같은 상한. */
+export async function countTrashedFileSources(viewer?: Viewer, cap = 500, personalMember?: string | null): Promise<number> {
+  const params: unknown[] = [];
+  const vis = await sourceVisWhere(viewer, params);
+  const where = trashedFileWhere(params, personalMember);
+  params.push(Math.min(Math.max(Number(cap) || 500, 1), 500));
+  const row = await one(itemsPool,
+    `SELECT LEAST(count(*), $${params.length})::int AS n FROM source s WHERE ${where} AND ${vis}`, params);
+  return Number((row as { n?: number } | undefined)?.n ?? 0);
 }
 
 // #709 총계 — 같은 필터의 전체 자료 건수(페이징 메타 total/has_more 용). 목록과 같은 뷰어로 센다(has_more 정합).

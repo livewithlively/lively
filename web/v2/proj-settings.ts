@@ -12,7 +12,7 @@ import { api, el, toast } from '../core.js';
 import { clearUnsaved, keepUnsaved } from './unsaved-store.js';   // #4084 — 창이 닫힌 뒤 실패한 본문 저장의 글을 글칸 밖에
 import { autoSaveCore } from '../lib/autosave.js';
 import { pnIcon } from './panes-parts.js';
-import { confirmProjectArchive, confirmProjectTrash } from '../session-actions.js';   // #1851 — [보관] 확인창(사이드바 우클릭과 같은 문구)
+import { confirmProjectArchive, trashProjectFlow } from '../session-actions.js';   // #1851 — [보관] 확인창(사이드바 우클릭과 같은 문구)
 
 export interface ProjSettingsOpts {
   id: number;
@@ -203,21 +203,19 @@ export function openProjSettings(opts: ProjSettingsOpts): void {
   };
 
   // ── 삭제 = 휴지통으로(#1851, 원준 2026-08-24) — 창 맨 아래 '위험 구역'(설정 창의 관례). 프로젝트와 그 아래 내 세션이 한 묶음으로
-  //  휴지통에 간다(도는 세션은 멈춤). 세션 수는 셸 목록을 여기서 못 보니 확인창은 개수 대신 '함께 간다'만 말한다 — 사이드바 우클릭 경로가 개수를 안다.
+  //  휴지통에 간다(도는 세션은 멈춤). 함께 갈 세션 수·멈출 세션 수는 서버가 세어 준다(#3778 trash-preview) — 어느 입구든 같은 확인창.
   const trashBtn = el('button', { class: 'btn btn-danger btn-sm', type: 'button', text: '휴지통으로 보내기',
     title: '프로젝트와 그 안의 내 세션을 함께 휴지통으로 보냅니다 — 휴지통에서 복원할 수 있어요' }) as HTMLButtonElement;
   trashBtn.onclick = () => {
     void (async () => {
-      if (!await confirmProjectTrash({ name: String(p.name || ''), sessN: Number(p.session_count ?? p.my_session_count ?? 0) || 0, liveN: 0, othersLive: 0 })) return;
+      //  #3778 — 확인창의 숫자는 서버가 센다(trashProjectFlow → GET …/trash-preview). 종전엔 liveN:0·othersLive:0 을 박아 넣어
+      //   «돌고 있는 n개는 그 자리에서 멈춥니다» 도, «남의 세션이 돌고 있어 지금은 안 된다» 도 이 자리에선 절대 안 떴다.
       trashBtn.disabled = true;
-      try {
-        const res: any = await api('/api/ui/v6/projects/' + id + '/trash', { method: 'POST', body: JSON.stringify({ trashed: true }) });
-        const sk = Array.isArray(res?.sessions?.skipped) ? res.sessions.skipped : [];
-        toast('휴지통으로 보냈어요 — 휴지통에서 [복원]하면 세션까지 함께 돌아와요' + (sk.length ? ` (세션 ${sk.length}개는 건너뜀 — ${sk[0].why})` : ''));
-        opts.onChanged?.();
-        close();
-        location.hash = '#/trash';
-      } catch (e: any) { trashBtn.disabled = false; toast('휴지통으로 보내지 못했어요 — ' + (e?.message || e), true); }
+      const sent = await trashProjectFlow({ id: Number(id), name: String(p.name || '') });
+      if (!sent) { trashBtn.disabled = false; return; }
+      opts.onChanged?.();
+      close();
+      location.hash = '#/trash';
     })();
   };
 

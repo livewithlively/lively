@@ -19,7 +19,7 @@ import { dashSaveSessDensity, dashSaveSessFilter2, dashSaveSessOnlineOnly, dashS
 import { dashSessDead, dashSessState } from './status.js';
 import { dashPopover } from './chrome.js';
 // #1582 — 세션 종료·목록제거 확인창은 전 화면 공용 정의 하나만 쓴다.
-import { confirmSessionEnd, confirmSessionForget, endedToast } from '../session-actions.js';
+import { confirmSessionEnd, confirmSessionTrash, endedToast, eulReul, retireSession } from '../session-actions.js';
 import type { SessCtx } from './widget-sessions.js';
 
 // #1098 출처 버킷 — 모든 세션이 정확히 하나에 속한다(상호배타). 초대받은 남의 세션 / 내 프로젝트 세션 / 내 개인 세션.
@@ -211,23 +211,22 @@ function openSessMenu(anchor, s, onChange) {
   };
   if (s.owned) item('이름 수정', null, false, () => openSessRename(s, onChange));
   item('질문 보기', '이 세션에서 AI 에게 보낸 질문 전부(누가 보냈든) 모아보기', false, () => openSessPrompts(s));
-  // #1059 E — restorable(이미 꺼진) 세션은 '복원 목록에서 지우기'(desired-state 삭제), 라이브 세션은 '종료'(작업 끝내기).
   // #1582 — '삭제'라는 이름과 "되돌릴 수 없어요"를 걷어냈다: 이 동작은 작업 폴더·파일·대화록을 지우지 않는다.
   //  확인창은 전 화면 공용 정의(session-actions)를 쓴다 — 같은 동작이 화면마다 다른 말을 하면 한쪽이 거짓이 된다.
-  if (s.owned) item(s.restorable ? '복원 목록에서 지우기' : '종료',
-    s.restorable ? '이 세션을 더는 복원하지 않습니다(대화록은 남아요)' : '이 세션을 끝냅니다(작업 폴더·대화록은 남아요)', true, async () => {
-    const name = '‘' + (s.label || '(이름 없음)') + '’';
+  // #3778 — 어느 쪽도 그 자리에서 영영 지우지 않는다: 이미 꺼진 세션은 휴지통으로(되돌릴 수 있다), 도는 세션은 터미널만 내려
+  //  [복원]으로 남는다. 종전엔 둘 다 되살리기 좌표까지 바로 지웠다(휴지통을 안 거쳤다). 좌표(?node=, #2636)는 retireSession 이 싣는다.
+  if (s.owned) item(s.restorable ? '휴지통으로' : '종료',
+    s.restorable ? '휴지통에서 되돌릴 수 있어요 — 완전히 지우는 건 거기서만 합니다' : '이 세션을 끝냅니다(목록에 남아 [복원]으로 다시 열 수 있어요)', true, async () => {
+    const nm = s.label || '(이름 없음)';
     const ok = s.restorable
-      ? await confirmSessionForget({ title: name + ' 을(를) 복원 목록에서 지울까요?', sessions: [s] })
-      : await confirmSessionEnd({ title: name + ' 세션을 종료할까요?', sessions: [s] });
+      ? await confirmSessionTrash({ title: '「' + nm + '」' + eulReul(nm) + ' 휴지통으로 보낼까요?' })
+      : await confirmSessionEnd({ title: '‘' + nm + '’ 세션을 종료할까요?', sessions: [s] });
     if (!ok) return;
     try {
-      // #2636 — 노드 세션은 좌표(?node=)를 실어 그 노드로 릴레이한다(widget-sessions.ts sessKillSelected 와 같은 규약).
-      //  안 실으면 게이트웨이가 자기 tmux 로 생사를 판정해 «종료했다»면서 그 컴퓨터의 세션을 살려 둔다.
-      await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node?.id ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' });
-      toast(s.restorable ? '복원 목록에서 지웠어요' : await endedToast(1, [s]));
+      const how = await retireSession(s);
+      toast(how === 'trashed' ? '휴지통으로 보냈어요 — 휴지통에서 되돌릴 수 있어요' : await endedToast(1, [s]));
       onChange && onChange();
-    } catch (e: any) { toast((s.restorable ? '지우기' : '종료') + ' 실패 — ' + (e && e.message || e), true); }
+    } catch (e: any) { toast((s.restorable ? '휴지통으로 보내기' : '종료') + ' 실패 — ' + (e && e.message || e), true); }
   });
   close = dashPopover(anchor, panel);
 }

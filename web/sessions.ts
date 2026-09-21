@@ -3,7 +3,7 @@
 //  ⚠ 트랜스크립트 본문은 신뢰 불가 → el({text})(textContent) 또는 renderMarkdown(core, textContent 기반)로만 렌더(innerHTML 금지, XSS 방어).
 import { api, el, state, toast, renderMarkdown } from './core.js';
 // #1850 완전 삭제 — 확인창·실행·토스트는 session-actions 의 단일 정의를 쓴다(#1582 규약: 같은 동작은 한 정의).
-import { confirmSessionPurge, purgeSessionRecord, purgedToast } from './session-actions.js';
+import { confirmSessionTrash, eulReul, sessionTrashOp } from './session-actions.js';
 
 interface SessRow {
   node_id: string; session_id: string; harness: string | null; title: string | null;
@@ -64,7 +64,8 @@ async function renderList(view: any): Promise<void> {
 
 // 세션 목록을 컨테이너에 렌더 — 페이지네이션 + 빈 세션(0바이트) 방어적 제외. onGo: 행 진입 시 콜백(모달 닫기 등).
 export function renderSessionListInto(container: any, sessions: SessRow[], emptyMsg: string, onGo?: () => void): void {
-  const rows = (Array.isArray(sessions) ? sessions : []).filter((s) => (s.bytes || 0) > 0);
+  //  휴지통에 있는 세션은 뺀다(#3778) — 서버가 trashed_at 을 얹어 준다. 되돌리기·완전 삭제는 휴지통 화면의 몫이다.
+  const rows = (Array.isArray(sessions) ? sessions : []).filter((s) => (s.bytes || 0) > 0 && !(s as SessRow & { trashed_at?: string | null }).trashed_at);
   if (!rows.length) { container.replaceChildren(el('p', { class: 'admin-hint', text: emptyMsg })); return; }
   let page = 0;
   const listBox = el('div');
@@ -100,25 +101,22 @@ function sessionRowEl(s: SessRow, onGo?: () => void, onPurged?: () => void): any
   const meta = `${proj}${who} · 만든 ${fmtWhen(s.first_seen)} · 마지막 ${fmtWhen(s.last_seen)} · ${fmtBytes(s.bytes)}${s.harness ? ' · ' + s.harness : ''}`;
   const remember = () => { try { sessionStorage.setItem('sessReturn', location.hash || '#/sessions'); } catch { /* */ } if (onGo) onGo(); };
   const open = el('a', { class: 'btn btn-ghost btn-sm', href: link, text: '이어보기 →' });
-  // 완전 삭제(#1850) — 내 기록일 때만 보인다(서버도 소유자만 허용하지만, 누를 수 없는 버튼을 보이지 않는다).
+  // 휴지통으로(#3778) — 내 기록일 때만 보인다. 종전엔 이 자리가 [완전 삭제]였다: 휴지통을 거치지 않고 대화 전문과 그 세션이 만든
+  //  지식·자료까지 그 자리에서 영구히 지웠다. 완전 삭제는 휴지통 안에서만 — 거기서 무엇이 함께 지워지는지 고르고 지운다.
   const mine = !!s.owner && s.owner === meId();
-  const purge = el('button', { class: 'btn-text', style: 'color:var(--danger,#dc2626)', text: '완전 삭제',
-    title: '이 세션의 대화 전문을 중앙 기록에서 영구 삭제합니다(되돌릴 수 없음).' }) as HTMLButtonElement;
+  const purge = el('button', { class: 'btn-text', style: 'color:var(--danger,#dc2626)', text: '휴지통으로',
+    title: '이 세션을 휴지통으로 보냅니다 — 휴지통에서 되돌릴 수 있고, 완전히 지우는 건 거기서만 합니다.' }) as HTMLButtonElement;
   purge.addEventListener('click', async () => {
-    const choice = await confirmSessionPurge({
-      sid: s.session_id, node: s.node_id,
-      title: '이 세션 기록을 완전히 지울까요?',
-      lines: [`${title} · ${fmtBytes(s.bytes)}`],
-      remoteNode: s.node_id || null,
-    });
-    if (!choice) return;
-    purge.disabled = true; purge.textContent = '지우는 중…';
+    if (!await confirmSessionTrash({ title: `「${title}」${eulReul(title)} 휴지통으로 보낼까요?` })) return;
+    purge.disabled = true;
     try {
-      toast(purgedToast(await purgeSessionRecord(s.session_id, s.node_id, choice)));
+      const r = await sessionTrashOp('trash', [s.session_id]);
+      if (!r.done.length) { toast(r.skipped[0]?.why || '휴지통으로 보내지 못했습니다.'); purge.disabled = false; return; }
+      toast('휴지통으로 보냈어요 — 휴지통에서 되돌릴 수 있어요');
       if (onPurged) onPurged();
     } catch (e: any) {
-      toast(e?.message || '지우지 못했습니다.');
-      purge.disabled = false; purge.textContent = '완전 삭제';
+      toast(e?.message || '휴지통으로 보내지 못했습니다.');
+      purge.disabled = false;
     }
   });
   const titleLink = el('a', { href: link, style: 'font-weight:600;text-decoration:none;color:inherit', text: title });
@@ -226,28 +224,25 @@ async function renderTranscriptPage(view: any, sel: { sid: string; node: string;
   try { data = await api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/log?${qy}`); }
   catch (e: any) { convo.replaceChildren(el('p', { class: 'install-token-err', text: e?.message || '대화록을 불러오지 못했습니다(열람 권한이 없을 수 있습니다).' })); return; }
   const items: Item[] = Array.isArray(data?.items) ? data.items : [];
-  // 완전 삭제(#1850) — 서버가 판정한 isOwner 일 때만 헤더에 단다. 이 화면은 공유 링크로도 열리므로
+  // 휴지통으로(#3778 — 종전 [완전 삭제]) — 서버가 판정한 isOwner 일 때만 헤더에 단다. 이 화면은 공유 링크로도 열리므로
   //  '내가 로그인해 있다'가 '내 대화다'를 뜻하지 않는다(view_policy=attach 면 팀원의 대화도 여기서 열린다).
   if (data?.isOwner) {
-    const purgeBtn = el('button', { class: 'btn btn-ghost btn-sm', style: 'color:var(--danger,#dc2626)', text: '완전 삭제' }) as HTMLButtonElement;
-    purgeBtn.addEventListener('click', async () => {
-      const choice = await confirmSessionPurge({
-        sid, node,
-        title: '이 세션 기록을 완전히 지울까요?',
-        lines: [document.getElementById('sess-title')?.textContent || shortId(sid)],
-        remoteNode: node || null,
-      });
-      if (!choice) return;
-      purgeBtn.disabled = true; purgeBtn.textContent = '지우는 중…';
+    const trashBtn = el('button', { class: 'btn btn-ghost btn-sm', style: 'color:var(--danger,#dc2626)', text: '휴지통으로' }) as HTMLButtonElement;
+    trashBtn.addEventListener('click', async () => {
+      const name = document.getElementById('sess-title')?.textContent || shortId(sid);
+      if (!await confirmSessionTrash({ title: `「${name}」${eulReul(name)} 휴지통으로 보낼까요?` })) return;
+      trashBtn.disabled = true;
       try {
-        toast(purgedToast(await purgeSessionRecord(sid, node, choice)));
-        location.hash = '#/sessions';   // 지운 대화록에 머물러 있으면 화면이 사실과 어긋난다 — 목록으로 돌아간다.
+        const r = await sessionTrashOp('trash', [sid]);
+        if (!r.done.length) { toast(r.skipped[0]?.why || '휴지통으로 보내지 못했습니다.'); trashBtn.disabled = false; return; }
+        toast('휴지통으로 보냈어요 — 휴지통에서 되돌릴 수 있어요');
+        location.hash = '#/sessions';   // 휴지통으로 간 대화록에 머물러 있으면 화면이 사실과 어긋난다 — 목록으로 돌아간다.
       } catch (e: any) {
-        toast(e?.message || '지우지 못했습니다.');
-        purgeBtn.disabled = false; purgeBtn.textContent = '완전 삭제';
+        toast(e?.message || '휴지통으로 보내지 못했습니다.');
+        trashBtn.disabled = false;
       }
     });
-    copyBtn.parentElement?.insertBefore(purgeBtn, back);
+    copyBtn.parentElement?.insertBefore(trashBtn, back);
   }
   if (!items.length) { convo.replaceChildren(el('p', { class: 'admin-hint', text: '표시할 대화가 없습니다.' })); return; }
 

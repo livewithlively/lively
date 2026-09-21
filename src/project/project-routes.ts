@@ -17,7 +17,8 @@ import { canSeeProjectRow, effectiveViewer } from "../v6/visibility.js";
 import { viewerOf } from "../capabilities/principal.js";
 import { listSessions, listRestorableSessions, validateInvites, type CreateInput } from "../terminal/terminal-sessions.js";
 import { SESSION_STARTING_GRACE_MS } from "../terminal/sessions.js";   // #4065 — AI 세션 탭과 같은 창(배럴 비노출 — 모듈에서 직접)
-import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
+import { dropTrashedRows, mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
+import { trashMapFor } from "../sessions/session-trash.js";   // #3778 — 휴지통에 있는 세션은 이 목록에 서지 않는다
 import { ensureAgentsMd, readProjectAgentsMd } from "../v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
 import { startProjectProvision, projectProvisionStatus } from "./project-provision-jobs.js";
@@ -467,7 +468,10 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     await decorateNodeRows(restorable);
     // AI 세션 탭과 같은 규칙으로 이중표기를 접는다(#1716) — 게이트웨이와 노드가 같은 박스면 같은 tmux 세션이
     //  local·remote 양쪽에 잡힌다. 인자 순서 = 우선순위(로컬 라이브 > 노드 스냅샷 > 복원 가능).
-    res.json({ sessions: mergeSessionViews(local, remote, restorable) });
+    //  #3778 — 내가 휴지통으로 보낸 세션은 뺀다(이 목록은 휴지통을 그리지 않는다). 표식 조회가 죽어도 목록은 나간다(best-effort).
+    let rows = mergeSessionViews(local, remote, restorable);
+    try { rows = dropTrashedRows(rows, await trashMapFor(idOf(userOf(req)))); } catch { /* 표식 없이 나간다 */ }
+    res.json({ sessions: rows });
   }));
   app.post(`${prefix}/:id/sessions`, auth, wrap(async (req, res) => {
     const { project } = await projBase(Number(req.params.id), req);

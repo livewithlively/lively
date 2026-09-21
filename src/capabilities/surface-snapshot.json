@@ -383,7 +383,7 @@
   "rest": [
    "POST /api/ui/org/section/delete"
   ],
-  "input_hash": "8bdc87b5fb8dd436"
+  "input_hash": "084ed7ba69cd67ae"
  },
  {
   "name": "org_reorder_sections",
@@ -2947,6 +2947,16 @@
   "input_hash": "101095875948a369"
  },
  {
+  "name": "project_trash_preview_v6",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/projects/:id/trash-preview"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
   "name": "project_purge_v6",
   "scope": "memory",
   "mcp": true,
@@ -3625,6 +3635,16 @@
    "GET /api/ui/deleted"
   ],
   "input_hash": "3e2c1f2be8ac68df"
+ },
+ {
+  "name": "trash_counts",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/deleted/counts"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "content_restore",
