@@ -755,6 +755,15 @@ const projectRenameV6: Capability = {
     rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/rename"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
+        //  ⚠ **파일 이름 변경 요청을 프로젝트 개명으로 삼키지 않는다**(#4114). 자료 칸의 이름 바꾸기는
+        //   `{path, name}` 을 보내는데, 종전엔 그 요청이 이 경로로 들어와 파일이 아니라 **프로젝트 이름**을
+        //   고치려 들었다(파일 라우트가 같은 경로에 등록돼 있었고 express 는 먼저 등록된 이쪽만 불렀다).
+        //   경로는 `POST …/:id/file/rename` 으로 갈라 놨지만, **배포 전에 열려 있던 탭**은 낡은 주소로
+        //   계속 쏜다 — 그때 이름이 자동으로 붙은 프로젝트라면 사람 몰래 프로젝트가 개명된다.
+        //   그 한 줄이 여기서 끝난다: path 가 실려 오면 프로젝트 개명이 아니다.
+        if (typeof b.path === "string") {
+          throw new HttpError(400, "파일·폴더 이름 변경은 POST /api/ui/v6/projects/:id/file/rename 입니다(이 경로는 프로젝트 이름짓기 전용) — 화면을 새로고침해 주세요.");
+        }
         return { id: parseId(req.params?.id), name: String(b.name ?? "") };
       } }],
   },

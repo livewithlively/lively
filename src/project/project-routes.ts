@@ -260,7 +260,15 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   }));
 
   // 이름 변경 — 같은 폴더 안에서 이름만(파일·폴더 공통). body: { path, name }.
-  app.post(`${prefix}/:id/rename`, auth, wrap(async (req, res) => {
+  //  ⚠ 경로가 `/file/rename` 인 이유(#4114): 종전엔 `${prefix}/:id/rename` 이었는데, 그 경로를 **프로젝트
+  //   이름짓기 능력**(capabilities/projects-v6.ts project_rename_v6, REST `POST /api/ui/v6/projects/:id/rename`)이
+  //   이미 쓰고 있었다. 둘은 같은 자리를 놓고 다투고, express 는 먼저 등록된 쪽(web.ts 의 restMounts —
+  //   registerWebUi 가 이 함수보다 먼저 돈다)만 부른다. 그래서 자료 칸의 [새 폴더]·[이름 바꾸기]가
+  //   **파일이 아니라 프로젝트의 이름을 고치려 들었고**, 사람이 지은 이름은 덮지 않는 규약 덕에 겉으로는
+  //   «아무 일도 안 일어남»(200 {applied:false})으로 보였다 — 이름이 자동으로 붙은 프로젝트였다면 그 자리에서
+  //   **프로젝트 이름이 조용히 바뀐다**. 파일 이름은 파일 이름의 자리(`/file/…`)에서 바꾼다.
+  //   같은 종류의 충돌을 다시 만들지 않게 scripts/route-collision.test.mjs 가 전 경로를 훑는다.
+  app.post(`${prefix}/:id/file/rename`, auth, wrap(async (req, res) => {
     const { store, base } = await projStore(Number(req.params.id), req);
     const b = (req.body ?? {}) as Record<string, unknown>;
     const fromAbs = resolveIn(base, b.path, true);

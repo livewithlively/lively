@@ -495,7 +495,9 @@ export function filesPart(ctx: PartCtx): Part {
       const nm = inp.value.trim();
       if (!ok || !nm || nm === f.name) { render(); return; }
       if (/[/\\]/.test(nm) || nm.startsWith('.')) { toast('이름에 / \\ 는 쓸 수 없고 . 로 시작할 수 없어요.', true); render(); return; }
-      try { await api(pUrl('/rename'), { method: 'POST', body: JSON.stringify({ path: f.path, name: nm }) }); }
+      //  ⚠ 주소가 '/file/rename' 이다(#4114) — '/rename' 은 **프로젝트 이름짓기**의 자리라, 그리로 보내면
+      //   파일이 아니라 프로젝트 이름을 고치려 든다(서버 project-routes.ts 의 같은 번호 주석).
+      try { await api(pUrl('/file/rename'), { method: 'POST', body: JSON.stringify({ path: f.path, name: nm }) }); }
       catch (e: any) { toast('이름을 바꾸지 못했어요 — ' + (e?.message || e), true); render(); return; }
       sel.delete(f.path); sig = ''; await load();
     };
