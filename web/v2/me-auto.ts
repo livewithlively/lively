@@ -256,7 +256,8 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
   async function del(s: Sec): Promise<void> {
     const ok = await confirmDialog({
       title: '이 메모를 지울까요?',
-      message: '‘' + titleOf(s) + '’ 를 지우면 다음 대화부터 AI가 읽지 않습니다. 휴지통에서 되살릴 수 있습니다.',
+      //  #3778 — 이 말이 이제 참이다(서버가 지식과 같은 길로 지워 휴지통 ▸ 지식 탭에 선다).
+      message: '‘' + titleOf(s) + '’ 를 지우면 다음 대화부터 AI가 읽지 않습니다. 휴지통 ▸ 지식 탭에서 되살릴 수 있어요.',
       confirmText: '지우기', danger: true,
     });
     if (!ok) return;

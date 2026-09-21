@@ -35,3 +35,15 @@ export function mergeSessionViews<T extends { id: string; node?: unknown }>(...g
   }
   return out;
 }
+
+/**
+ * 휴지통 표식이 붙은 행을 목록에서 걷는다(#3778) — **휴지통을 그리지 않는 목록**용(프로젝트 상세의 세션 칸 · 대시보드 병합).
+ *  AI 세션 목록(terminal/routes.ts)은 표식을 행에 얹어 내보내지만(새 셸이 휴지통 화면에 그린다), 이 목록은 그릴 자리가 없다 —
+ *  그래서 종전엔 휴지통으로 보낸 세션이 프로젝트 상세에 그대로 서 있었다. 박스 id 와 대화 uuid 어느 이름으로든 표식이 있으면 그 세션이다.
+ *  표식의 모양(휴지통에 있음 · 완전 삭제됨)은 가리지 않는다 — 둘 다 이 목록에 설 이유가 없다.
+ */
+export function dropTrashedRows<T extends { id: string; claudeSessionId?: string | null }>(rows: T[], marks: ReadonlyMap<string, unknown>): T[] {
+  if (!marks.size) return rows;
+  return rows.filter((s) => !(marks.has(s.id) || (s.claudeSessionId ? marks.has(s.claudeSessionId) : false)));
+}
+

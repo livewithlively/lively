@@ -16,7 +16,7 @@
 // ⚠ 그래서 어느 쪽으로도 **단언하면 틀린다**: "되돌릴 수 없다"도 거짓이고, "대화록은 항상 남는다"도
 //  조직이 세션 공유를 안 켰거나 그 하네스가 캡처 대상이 아니면(관리탭 [세션 공유]의 하네스 목록 — 기본 claude·codex) 거짓이다. 확인창을 그리기
 //  직전에 서버에 정책을 물어(sessionLogPolicy) 그 조직·그 세션에서 참인 문장만 쓴다.
-import { api, el } from './core.js';
+import { api, el, toast } from './core.js';
 // ⚠ confirmDialog 는 **정의처(ui-primitives)에서 직접** 가져온다 — admin.ts 배럴을 거치면 이 leaf 가
 //  페이지 모듈을 역방향으로 끌어와 순환이 된다(admin-collector-presets.ts 와 같은 이유).
 import { confirmDialog } from './ui-primitives.js';
@@ -79,25 +79,10 @@ export async function confirmSessionEnd(opts: {
   return confirmDialog({
     title: opts.title, danger: true, confirmText: '종료', cancelText: '취소',
     message: '실행 중인 작업이 있으면 함께 중단됩니다.',
-    lines: opts.lines || [],
+    //  #3778 — 종료는 터미널만 내린다(retireSession). 세션은 목록에 「복원」으로 남는다 — 그 사실을 먼저 말한다.
+    lines: [...(opts.lines || []), '끝낸 세션은 목록에 남아 [복원]으로 대화를 이어서 다시 열 수 있어요.'],
     note: keepNote(fate, policy),
     // 기록이 실제로 남는 경우에만 증거를 건넨다 — 안 남는데 링크를 주면 빈 목록이 약속을 배신한다.
-    extra: fate === 'all' || fate === 'some' ? sessionLogLink() : null,
-  });
-}
-
-// ── 목록에서 지우기(restorable 세션) ── tmux 는 이미 죽었으니 끊을 작업이 없다. 지워지는 건 desired-state
-//  (그 세션의 폴더·설정·초대를 기억해 둔 카드)뿐이라, '종료'와는 잃는 것이 다르다 → 문구·버튼을 따로 둔다.
-export async function confirmSessionForget(opts: {
-  title: string; lines?: string[]; sessions?: Array<{ harness?: string }>;
-}): Promise<boolean> {
-  const policy = await sessionLogPolicy();
-  const fate = logFate(policy, harnessesOf(opts.sessions));
-  return confirmDialog({
-    title: opts.title, danger: true, confirmText: '지우기', cancelText: '취소',
-    message: '이 세션 카드가 목록에서 사라지고, [복원]으로는 다시 열 수 없어요.',
-    lines: opts.lines || [],
-    note: keepNote(fate, policy),
     extra: fate === 'all' || fate === 'some' ? sessionLogLink() : null,
   });
 }
@@ -167,6 +152,42 @@ export async function sessionTrashOp(op: 'trash' | 'untrash' | 'purge' | 'empty'
 /** 세션의 모든 이름 — 휴지통 표식은 두 이름에 다 붙어야 한다(views.ts mergeSessions 가 둘을 한 장으로 접는다). */
 export const sessionNames = (s: { id: string; logId?: string | null }): string[] => [s.id, ...(s.logId ? [s.logId] : [])];
 
+// ── 클래식 화면(AI 세션 탭 · 대시보드 「내 AI 세션」 · 프로젝트 상세)의 [종료]·[지우기] 한 곳(#3778) ──────────────────
+//  종전 다섯 자리는 DELETE …/sessions/:id 를 reclaim 없이 불렀다 = 되살리기 좌표(폴더·설정·대화 id)까지 그 자리에서 지웠다.
+//  새 화면은 같은 세션을 «지난 세션 → 휴지통 → 완전 삭제» 세 단으로 보내는데 클래식만 한 번에 끝까지 갔다(휴지통을 안 거친다).
+//   · 도는 세션 [종료]      = 터미널만 내린다(?reclaim=1) — 좌표가 남아 「복원」으로 다시 열 수 있다.
+//   · 이미 멈춘 세션 [지우기] = 휴지통으로 — 표식만 붙는다. 되돌리기도 완전 삭제도 휴지통 화면의 몫이다.
+export type RetireTarget = { id: string; logId?: string | null; restorable?: boolean; node?: { id?: string } | null };
+/** 그 세션을 제 상태에 맞는 길로 보낸다 — 어디로 갔는지를 돌려준다(토스트가 그 말을 한다). 실패는 던진다. */
+export async function retireSession(s: RetireTarget): Promise<'ended' | 'trashed'> {
+  if (s.restorable) {
+    const r = await sessionTrashOp('trash', sessionNames(s));
+    if (!r.done.length) throw new Error(r.skipped[0]?.why || '휴지통으로 보내지 못했어요');
+    return 'trashed';
+  }
+  const nd = s.node && s.node.id;
+  await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '?reclaim=1' + (nd ? '&node=' + encodeURIComponent(nd) : ''), { method: 'DELETE' });
+  return 'ended';
+}
+/** 여러 개 — 하나가 실패해도 나머지는 간다. 센 것만 돌려준다(문구는 부르는 쪽이 제 화면 말로 짠다). */
+export async function retireSessions(list: RetireTarget[]): Promise<{ ended: number; trashed: number; failed: number; why: string }> {
+  const out = { ended: 0, trashed: 0, failed: 0, why: '' };
+  const rs = await Promise.allSettled(list.map((s) => retireSession(s)));
+  for (const r of rs) {
+    if (r.status === 'fulfilled') out[r.value]++;
+    else { out.failed++; out.why = (r.reason && r.reason.message) || String(r.reason); }
+  }
+  return out;
+}
+/** 결과 한 줄 — 「3개 종료 · 2개 휴지통으로 · 1개 실패」. 하나도 못 했으면 이유를 말한다. */
+export function retiredToastText(r: { ended: number; trashed: number; failed: number; why: string }): string {
+  const parts = [r.ended ? `${r.ended}개 종료` : '', r.trashed ? `${r.trashed}개 휴지통으로` : '', r.failed ? `${r.failed}개 실패` : ''].filter(Boolean);
+  if (!r.ended && !r.trashed) return '하지 못했어요 — ' + (r.why || '알 수 없는 오류');
+  return parts.join(' · ') + (r.trashed ? ' — 휴지통에서 되돌릴 수 있어요' : '') + (r.failed && r.why ? ` (${r.why})` : '');
+}
+/** 휴지통에 있는 세션을 뺀 목록 — 클래식 목록은 휴지통을 그리지 않는다(서버가 trashedAt 을 얹어 준다). */
+export function notTrashed<T>(rows: T[]): T[] { return rows.filter((s) => !(s && (s as { trashedAt?: string | null }).trashedAt)); }
+
 // ── 프로젝트 아카이브(#1851) — 삭제가 아니라 '평소 화면에서 치우기'. 도는 세션이 있으면 멈춘다는 사실만 위험으로 말한다. ──
 export async function confirmProjectArchive(opts: { name: string; liveN: number }): Promise<boolean> {
   return confirmDialog({
@@ -196,15 +217,54 @@ export async function confirmProjectTrash(opts: { name: string; sessN: number; l
     note: '태스크·팀원·지식 연결은 그대로예요 — 지우는 것이 아닙니다.',
   });
 }
-// 휴지통 안의 프로젝트 [완전 삭제] — 프로젝트는 하드 삭제(태스크·팀원·연결까지 사라짐, 감사 스냅샷만 남음), 묶음 세션은 되살릴 수 없게.
-//  세션의 대화 기록·결과물 범위는 호출자가 confirmSessionPurgeMany 로 먼저 묻는다(기록 있는 세션이 있을 때).
-export async function confirmProjectPurge(opts: { name: string; sessN: number }): Promise<boolean> {
-  return confirmDialog({
-    title: `「${opts.name}」${eulReul(opts.name)} 완전히 지울까요?`, danger: true, confirmText: '완전 삭제', cancelText: '취소',
-    message: `프로젝트와 그 안의 태스크·팀원·연결이 지워지고, 함께 버린 세션 ${opts.sessN}개는 되살릴 수 없게 돼요.`,
-    lines: ['프로젝트 본체는 WIKI 앱 휴지통(삭제됨)에서 이름·본문만 되살릴 수 있지만, 태스크와 세션은 돌아오지 않아요.'],
-    note: '작업 폴더·파일·커밋은 그대로 남습니다.',
-  });
+// ── 프로젝트를 휴지통으로 — **어느 화면에서 누르든 같은 길**(#3778) ──────────────────────────────────────
+//  종전엔 새 셸 사이드바만 휴지통(되돌릴 수 있음)으로 보냈고, 프로젝트 앱의 [삭제] 다섯 자리(행 ⋯ · 일괄 · 설정 · 사이드바 「휴지통」 드롭 ·
+//  홈 위젯)는 `/delete`(하드 삭제 — 태스크·팀원·연결 소실, 클릭업 원본까지 삭제)를 불렀다. 같은 말 «삭제» 가 자리마다 다른 일을 했다.
+//  확인창의 숫자는 서버가 실제로 묶을 것과 같은 함수로 센 것을 받는다(GET …/trash-preview) — 못 받으면 숫자 없이 묻되, 도는 세션이
+//  멈출 수 있다는 사실은 말한다(모르는 것을 «없다» 로 단언하지 않는다).
+export interface ProjectTrashPreview { sessions: number; live_mine: number; live_others: number }
+export async function fetchProjectTrashPreview(id: number): Promise<ProjectTrashPreview | null> {
+  try {
+    const r: any = await api('/api/ui/v6/projects/' + id + '/trash-preview');
+    return { sessions: Number(r?.sessions) || 0, live_mine: Number(r?.live_mine) || 0, live_others: Number(r?.live_others) || 0 };
+  } catch { return null; }
+}
+/** 하나를 휴지통으로. 돌려주는 값 = 실제로 보냈나(취소·거절·실패면 false). 토스트는 여기서 띄운다. */
+export async function trashProjectFlow(p: { id: number; name: string }): Promise<boolean> {
+  const pv = await fetchProjectTrashPreview(p.id);
+  const ok = pv
+    ? await confirmProjectTrash({ name: p.name, sessN: pv.sessions, liveN: pv.live_mine, othersLive: pv.live_others })
+    : await confirmDialog({
+        title: `「${p.name}」${eulReul(p.name)} 휴지통으로 보낼까요?`, confirmText: '휴지통으로', cancelText: '취소',
+        message: '프로젝트와 그 안의 내 세션이 함께 휴지통으로 갑니다. 돌고 있는 내 세션이 있으면 그 자리에서 멈춥니다.',
+        lines: ['휴지통에서 [복원]하면 프로젝트와 세션이 함께 원래 자리로 돌아옵니다. 완전히 지우는 건 휴지통 안에서만 할 수 있어요.'],
+        note: '태스크·팀원·지식 연결은 그대로예요 — 지우는 것이 아닙니다.',
+      });
+  if (!ok || (pv && pv.live_others > 0)) return false;
+  try {
+    const res: any = await api('/api/ui/v6/projects/' + p.id + '/trash', { method: 'POST', body: JSON.stringify({ trashed: true }) });
+    const sk = Array.isArray(res?.sessions?.skipped) ? res.sessions.skipped : [];
+    toast('휴지통으로 보냈어요 — 휴지통에서 [복원]하면 세션까지 함께 돌아와요' + (sk.length ? ` (세션 ${sk.length}개는 건너뜀 — ${sk[0].why})` : ''));
+    return true;
+  } catch (e: any) { toast('휴지통으로 보내지 못했어요 — ' + (e?.message || e), true); return false; }
+}
+/** 여럿을 한 번에 — 확인은 한 번, 결과는 세어서 말한다. 돌려주는 값 = 보낸 개수. */
+export async function trashProjectsFlow(list: Array<{ id: number; name?: string }>): Promise<number> {
+  if (!list.length) return 0;
+  if (list.length === 1) return (await trashProjectFlow({ id: list[0].id, name: String(list[0].name || '#' + list[0].id) })) ? 1 : 0;
+  if (!await confirmDialog({
+    title: `프로젝트 ${list.length}개를 휴지통으로 보낼까요?`, confirmText: '휴지통으로', cancelText: '취소',
+    message: '프로젝트마다 그 안의 내 세션이 함께 휴지통으로 갑니다. 돌고 있는 내 세션은 그 자리에서 멈춥니다.',
+    lines: ['휴지통에서 [복원]하면 프로젝트와 세션이 함께 돌아옵니다. 다른 사람의 세션이 돌고 있는 프로젝트는 건너뜁니다.'],
+    note: '태스크·팀원·지식 연결은 그대로예요 — 지우는 것이 아닙니다.',
+  })) return 0;
+  let done = 0, failed = 0; let why = '';
+  for (const p of list) {
+    try { await api('/api/ui/v6/projects/' + p.id + '/trash', { method: 'POST', body: JSON.stringify({ trashed: true }) }); done++; }
+    catch (e: any) { failed++; why = e?.message || String(e); }
+  }
+  toast(done ? `프로젝트 ${done}개를 휴지통으로 보냈어요.` + (failed ? ` ${failed}개는 못 보냈어요 — ${why}` : '') : '휴지통으로 보내지 못했어요 — ' + why, failed > 0);
+  return done;
 }
 
 // ── 보관(reclaim=1) ── tmux 만 내리고 desired-state 는 남긴다. 잃는 것은 **돌던 실행뿐**이고,

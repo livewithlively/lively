@@ -511,6 +511,39 @@ async function myProjectSessionIds(user: LivelyUser, me: string, projectId: numb
   const ids = [...new Set([...liveMine.map((s) => s.id), ...pastMine.map((s) => s.id), ...logMine])];
   return { ids, liveMine: liveMine.length, liveOthers: liveOthers.length };
 }
+// 프로젝트 한 개를 통째로 휴지통에 — 세션 먼저(멈추고 묶음 표식) → 프로젝트. project_trash_v6 와 리스트 삭제의 «프로젝트도 함께»(lists-v6)가
+//  **같은 길**을 탄다(#3778: 종전 리스트 cascade 는 deleteProject 로 하드 삭제했다 — 태스크·팀원·연결이 사라지고 클릭업 원본까지 지워졌다).
+//  남의 도는 세션이 있으면 409 — 그 사람이 끝내야 한다. 세션 쪽이 일부 실패해도 프로젝트는 버린다(skipped 로 알린다).
+export async function trashProjectBundle(user: LivelyUser, me: string, id: number, writeCtx: { actor: string | null; source: string }) {
+  const { ids, liveOthers } = await myProjectSessionIds(user, me, id);
+  if (liveOthers > 0) throw new HttpError(409, `다른 사람의 세션 ${liveOthers}개가 이 프로젝트에서 돌고 있어요 — 그 세션이 끝난 뒤에 버릴 수 있습니다`);
+  const sessions = ids.length ? await applySessionTrashOp(user, me, "trash", ids, { projectId: id, stopLive: true }) : { done: [], skipped: [] };
+  const project = await setProjectTrashed(id, true, writeCtx);
+  return { project, sessions };
+}
+
+// 휴지통으로 보내기 전에 화면이 묻는 것(#3778) — «내 세션 몇 개가 함께 가고, 그중 몇이 멈추고, 남의 도는 세션이 있나».
+//  새 셸 사이드바는 제 세션 목록으로 세지만 프로젝트 앱·프로젝트 정보 창은 그 목록이 없어 확인창이 «도는 세션이 멈춘다» 를 말하지 못했다
+//  (proj-settings 가 liveN:0 을 박아 넣던 자리). 서버가 실제로 묶을 것과 **같은 함수**로 센다 — 확인창과 결과가 어긋날 수 없다.
+const projectTrashPreviewV6: Capability = {
+  name: "project_trash_preview_v6",
+  title: "프로젝트 휴지통 미리 세기(v6)",
+  description: "프로젝트를 휴지통으로 보내면 함께 갈 내 세션 수·그중 도는 수·남의 도는 세션 수. 화면 전용(확인창 재료).",
+  scope: "memory",
+  input: { id: z.number().int().positive() },
+  expose: {
+    mcp: false,
+    rest: [{ method: "GET", paths: ["/api/ui/v6/projects/:id/trash-preview"], parse: (req) => ({ id: parseId(req.params?.id) }) }],
+  },
+  handler: async (input: { id: number }, user: LivelyUser, ctx?: CapabilityCtx) => {
+    await assertProjectVisible(input.id, ctx);
+    const me = String(ctx?.actor ?? user?.userId ?? "");
+    if (!me) throw new HttpError(401, "로그인이 필요합니다");
+    const r = await myProjectSessionIds(user, me, input.id);
+    return { id: input.id, sessions: r.ids.length, live_mine: r.liveMine, live_others: r.liveOthers };
+  },
+};
+
 const projectTrashV6: Capability = {
   name: "project_trash_v6",
   title: "프로젝트 휴지통(v6)",
@@ -530,14 +563,7 @@ const projectTrashV6: Capability = {
     await assertProjectVisible(input.id, ctx);
     const me = String(ctx?.actor ?? user?.userId ?? "");
     if (!me) throw new HttpError(401, "로그인이 필요합니다");
-    if (input.trashed) {
-      const { ids, liveOthers } = await myProjectSessionIds(user, me, input.id);
-      if (liveOthers > 0) throw new HttpError(409, `다른 사람의 세션 ${liveOthers}개가 이 프로젝트에서 돌고 있어요 — 그 세션이 끝난 뒤에 버릴 수 있습니다`);
-      // 세션 먼저(멈추고 묶음 표식) → 프로젝트. 세션 쪽이 일부 실패해도 프로젝트는 버린다 — skipped 로 알린다.
-      const sessions = ids.length ? await applySessionTrashOp(user, me, "trash", ids, { projectId: input.id, stopLive: true }) : { done: [], skipped: [] };
-      const project = await setProjectTrashed(input.id, true, writeCtx);
-      return { project, sessions };
-    }
+    if (input.trashed) return trashProjectBundle(user, me, input.id, writeCtx);
     const bundle = await bundleTrashedIds(me, input.id);
     const sessions = bundle.length ? await applySessionTrashOp(user, me, "untrash", bundle) : { done: [], skipped: [] };
     const project = await setProjectTrashed(input.id, false, writeCtx);
@@ -1584,7 +1610,7 @@ export const projectV6Capabilities: Capability[] = [
   // ⚠ 검색(정적 경로)은 projectGetV6(/projects/:id) '앞에' — Express first-match 가 :id 로 삼키지 않게(#631).
   myTasksV6,   // #1232 정적 경로(/v6/my-tasks) — /projects/:id 계열과 세그먼트가 달라 무충돌이지만 순서 규칙대로 앞에
   projectTasksV6, // #1305 정적 경로(/v6/project-tasks) — 위와 같은 이유로 앞에
-  projectListV6, projectGrepV6, projectSearchV6, projectSimilarV6, projectGetV6, projectCreateV6, projectUpdateV6, projectRenameV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectArchiveV6, projectTrashV6, projectPurgeV6, projectSetMembersV6,
+  projectListV6, projectGrepV6, projectSearchV6, projectSimilarV6, projectGetV6, projectCreateV6, projectUpdateV6, projectRenameV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectArchiveV6, projectTrashV6, projectTrashPreviewV6, projectPurgeV6, projectSetMembersV6,
   projectMyStatusV6,
   projectLinkCategoryV6, projectLinkKnowledgeV6, projectLinkProjectV6, projectRecommendKnowledgeV6, knowledgeProjectsV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskReorderV6, projectReorderV6, taskDeleteV6, boardFieldsV6,
 ];

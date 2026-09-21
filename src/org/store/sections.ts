@@ -5,6 +5,7 @@ import { itemsPool } from "../../db/client.js";
 //  (#1256) 구 org_memory 읽기 경로가 사라져 listKnowledge 임포트도 함께 제거 — 남은 건 쓰기(upsertMemory→upsertK6)뿐.
 import {
   upsertKnowledge as upsertK6,
+  deleteKnowledge as deleteK6,
   type KnowledgeRow,
 } from "../../v6/knowledge-store.js";
 import { audit } from "./audit.js";
@@ -83,11 +84,16 @@ export async function updateSection(
   return after!;
 }
 
-// 섹션 삭제 — 행 제거(감사 스냅샷 before 보존, content_restore 복원가능). 섹션은 카테고리·프로젝트 링크가 없어 CASCADE 영향 없음.
+// 섹션 삭제 — **지식과 같은 길로 지운다**(#3778). 섹션의 실체는 knowledge 행(injection='always')이다.
+//  종전엔 행을 직접 지우고 감사를 entity='org_section' 으로만 남겼다 — 그런데 화면·설명은 «휴지통에서 복원 가능» 이라고 말했다.
+//  휴지통(deleted_list·content_restore)은 knowledge·project·category·source 만 읽으므로 그 말은 거짓이었다(섹션은 어디에도 안 섰다).
+//  deleteKnowledge 가 **행 전문**을 entity='knowledge' 스냅샷으로 남기므로 휴지통 ▸ 지식 탭에 서고, 되살리면 injection='always' 째로 돌아와
+//  다시 주입된다. org_section 축의 감사도 그대로 남긴다(섹션 이력·관리 ▸ 감사가 그 축을 읽는다).
+//  getSection 이 «항상-주입 · active» 를 확인해 주므로 일반 지식을 이 길로 지울 수는 없다(name 이 PK 라 같은 행이다).
 export async function deleteSection(section: string, actor?: string, source?: string): Promise<boolean> {
   const before = await getSection(section);
   if (!before) return false;
-  await itemsPool.query(`DELETE FROM knowledge WHERE name=$1 AND injection='always'`, [section]);
+  await deleteK6(section, { actor: actor ?? null, source });
   await audit("org_section", section, "delete", before, null, actor, source);
   return true;
 }

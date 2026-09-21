@@ -180,15 +180,15 @@ export const orgContentCapabilities: Capability[] = [
       body_md: z.string().optional().describe("섹션 본문(markdown) — 매 세션 전문이 주입되므로 32KiB 이하. ${team}/${categories}/${wiki} 치환됨"),
     }),
 
-  // ── 섹션 삭제 — 감사 스냅샷 보존(복원가능). 기본 문서(context-ontology-guide 등)도 삭제 가능 — UI 가 경고/확인. ──
+  // ── 섹션 삭제 — 지식과 같은 길로 지워 휴지통 ▸ 지식 탭에 선다(#3778 — 종전엔 «복원가능» 이라 말만 하고 휴지통에 안 섰다). ──
   restWork("org_delete_section", "조직 섹션 삭제",
-    "항상-주입 섹션을 삭제한다(감사 스냅샷으로 보존 — content_restore 복원가능).",
+    "항상-주입 섹션을 삭제한다. 휴지통(지식)에 남아 사람이 content_restore {entity:'knowledge', key:<섹션 키>} 로 되살릴 수 있다 — 되살리면 다시 주입된다.",
     [{ method: "POST", paths: ["/api/ui/org/section/delete"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const section = str(input.section, "section", 64);
       return { deleted: await deleteSection(section, actorOf(user), "web") };
     }, {
-      section: z.string().describe("삭제할 섹션 키 — 감사 스냅샷으로 보존돼 content_restore 로 복원 가능"),
+      section: z.string().describe("삭제할 섹션 키 — 휴지통(지식)에 남는다. 복원은 사람(웹)만"),
     }),
 
   // ── 섹션 주입 순서 — sort 일괄 설정(orderedNames 순서 = 조립 순서). ──

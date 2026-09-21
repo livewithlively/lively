@@ -24,7 +24,7 @@ import { dashSessRank, dashSessState } from './status.js';
 import { dashCtl, dashEmpty } from './chrome.js';
 import { openSessMenu, sessBaseSessions, sessFilterLabel, sessIsClosedProjSess, sessIsProjClosed, sessMatchSrc, sessMatchState, sessOpenFilterMenu, sessOpenPrefs } from './widget-sessions-popovers.js';
 // #1582 — 세션 종료 확인창은 전 화면 공용 정의 하나만 쓴다(문구가 화면마다 갈라지지 않게).
-import { confirmSessionEnd, endedToast } from '../session-actions.js';
+import { confirmSessionEnd, notTrashed, retireSessions, retiredToastText } from '../session-actions.js';
 import { confirmDialog } from '../ui-primitives.js';
 
 // 위젯 한 벌의 지역 상태 — 종전 fillSessions 클로저의 let/const 를 그대로 옮겨 담은 것(이름·의미 무변경).
@@ -108,19 +108,16 @@ async function sessKillSelected(ctx: SessCtx) {
   const items = ids.map((id) => ctx.sessions.find((s) => s.id === id)).filter(Boolean) as any[];
   // 이미 꺼진(restorable) 세션은 끊을 작업이 없다 — 섞여 있으면 '종료'라는 말이 그 카드엔 안 맞으므로 알려준다.
   const dead = items.filter((s) => s.restorable).length;
-  const lines = dead ? [dead + '개는 이미 꺼진 세션이라 목록에서만 지워집니다.'] : [];
+  const lines = dead ? [dead + '개는 이미 꺼진 세션이라 휴지통으로 갑니다 — 휴지통에서 되돌릴 수 있어요.'] : [];
   if (!await confirmSessionEnd({ title: ids.length + '개 세션을 종료할까요?', lines, sessions: items })) return;
-  let failed = 0;
   // #2636 — **노드 세션은 좌표(?node=)를 실어 보낸다.** 이 목록엔 노드 세션이 병합돼 오는데(터미널 세션 API),
   //  종전엔 id 만 보내 게이트웨이가 자기 tmux 로 생사를 판정했다 — 그 세션을 본 적 없는 tmux 라 언제나 「없다」가
   //  나와, 노드에 묻지도 않고 행만 지우고 «종료했어요» 로 끝났다(세션은 그 컴퓨터에 그대로 남는다).
   //  서버도 좌표를 되찾도록 고쳤지만(sessionRelayNodeId), 아는 쪽이 말해 주는 것이 먼저다 — 다른 화면과 같은 규약.
-  for (const id of ids) {
-    const nd = ctx.sessions.find((s) => s.id === id)?.node?.id;
-    try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(id) + (nd ? '?node=' + encodeURIComponent(nd) : ''), { method: 'DELETE' }); } catch { failed++; }
-  }
-  const done = ids.length - failed;
-  toast(failed ? (done + '개 종료 · ' + failed + '건 실패') : await endedToast(done, items), !!failed);
+  //  #3778 — 어느 쪽도 그 자리에서 영영 지우지 않는다(session-actions retireSessions): 도는 세션은 터미널만 내려 [복원]으로 남고,
+  //   이미 꺼진 세션은 휴지통으로 간다. 좌표(?node=)는 그 함수가 행에서 읽어 싣는다.
+  const r = await retireSessions(items);
+  toast(retiredToastText(r), r.failed > 0);
   ctx.selected.clear(); await ctx.reloadSessions();
 }
 const sessRestorableSelected = (ctx: SessCtx) => [...ctx.selected].map((id) => ctx.sessions.find((s) => s.id === id)).filter((s) => s && s.restorable);
@@ -327,7 +324,7 @@ function sessDraw(ctx: SessCtx) {
 
 // base 세션 + 프로젝트 세션 재병합(재렌더 없이 sessions 만 갱신).
 async function sessRefetch(ctx: SessCtx) {
-  const d = await api('/api/ui/terminal/sessions?includeProjects=owned'); ctx.sessions = (d && d.sessions) || []; // #1139 내 프로젝트 세션·복원 가능 포함
+  const d = await api('/api/ui/terminal/sessions?includeProjects=owned'); ctx.sessions = notTrashed<any>((d && d.sessions) || []); // #1139 내 프로젝트 세션·복원 가능 포함 · 휴지통은 뺀다(#3778)
   const withSess = (ctx.projects || []).filter((p) => Number(p.my_session_count) > 0);
   if (withSess.length) {
     const arrs = await Promise.all(withSess.map((p) => api('/api/ui/v6/projects/' + p.id + '/sessions').then((d2) => (d2 && d2.sessions) || []).catch(() => [])));
@@ -355,7 +352,7 @@ async function fillSessions(zone, onCount, projectsP?) {
     [sessions, cfg, projects, lists] = await Promise.all([
       // #1139 includeProjects=owned — '내가 만든' 프로젝트 세션까지 서버가 함께 준다(남의 것은 여전히 제외).
       //  아래 프로젝트별 병합만으로는 **세션이 전부 복원 가능(tmux 죽음)인 프로젝트가 통째로 빠져** 복원 가능 세션이 안 보였다.
-      api('/api/ui/terminal/sessions?includeProjects=owned').then((d) => (d && d.sessions) || []),
+      api('/api/ui/terminal/sessions?includeProjects=owned').then((d) => notTrashed<any>((d && d.sessions) || [])),   // 휴지통은 뺀다(#3778)
       api('/api/ui/terminal/config').catch(() => null), // 라벨 보강용 — 실패해도 폴백으로 진행
       (projectsP || Promise.resolve([])).catch(() => []),  // 프로젝트 세션의 프로젝트명 매핑용
       api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || []).catch(() => []), // 프로젝트 → 리스트(영역) 이름 매핑용

@@ -22,12 +22,19 @@ import { resolveSessionDir } from "../sessions/session-desired.js";
 import { memberLs, memberStat, memberMkdir, memberMv, memberRm, memberReadTo, memberPathProbe, type LsEntry } from "./terminal-member-fs.js";
 import { isConfined, probeLocal } from "./path-jail.js";   // #3668 T1 — 심링크를 해소한 뒤 접두를 본다
 import { receiveUpload, uploadError, nfcPath } from "./upload-file.js";
-import { ingestLocalUpload, supersedeLocalPath, localRootForBrowse, parseLocalExternalId, LOCAL_SYSTEM } from "../ingest/local-file.js";   // #1881 올린 파일 = 자료 1건 · #1631 자료 id 로 원본 열기
+import {
+  ingestLocalUpload, supersedeLocalPath, localRootForBrowse, parseLocalExternalId, LOCAL_SYSTEM,   // #1881 올린 파일 = 자료 1건 · #1631 자료 id 로 원본 열기
+  countActiveLocalUnder, stampTrashedLocalPath, getTrashedFile, reviveTrashedFile, fileTrashBatchRemaining,
+  newRootTrashStamp, trashStampRoot, heldPathOf, fileTrashBatchCleanup, normalizeLocalRel, localRootKey, FILE_TRASH_DIR,
+} from "../ingest/local-file.js";
 import { getSource } from "../v6/source-store.js";   // #1631 — 자료 원본 창구의 공개범위(자료 상세와 같은 판정)
+import { canSeeSource, deleteSource } from "../v6/source-store.js";   // #3778 — 파일 휴지통(개인·공유 폴더)의 공개범위·완전 삭제
+import { purgeDeleted } from "../v6/trash-store.js";
+import { auditOrgContent } from "../v6/content-audit.js";
 import { nodeCanAttach, nodeRpc, isSelfNode, isSessionHostNode } from "../node/registry.js";
 import { relayNodeId, sameTmuxCoordinate, isBoxSessionRow } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #3745/#3870 — 박스 세션엔 세션 호스트 좌표도 같은 tmux 다
 import { getSessionState } from "../sessions/session-state.js";
-import { folderVariants } from "../project/project-fs.js";
+import { folderVariants, grantSharedGroupWrite } from "../project/project-fs.js";
 import {
   sharedFolderGate, renameSharedFolderAclPrefix, restrictedProjectFolders, projectFolderOf,
   type SharedFolderGate,
@@ -260,17 +267,114 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     }
     res.json({ ok: true });
   }));
-  // 삭제(파일/폴더 재귀). 루트 자체는 거부.
+  // ── 파일 휴지통(#3778 후속 — 개인·공유 폴더) ──────────────────────────────────────────────────────────
+  //  프로젝트 파일 삭제(project-routes.ts DELETE :id/file)와 **같은 규칙**: 자료가 달린 경로는 지우지 않고 그 루트의 숨김 자리
+  //  (`.lively/trash/<batch>/`)로 옮기고 도장을 찍는다 → 휴지통 ▸ 자료 탭에서 되살린다. 자료가 하나도 없는 경로(압축·영상·빈 폴더)는
+  //  종전대로 바로 지운다. 목록(GET browse)은 점으로 시작하는 이름을 건너뛰므로 보관 자리는 화면에 서지 않는다.
+  //  격리 멤버면 그 uid 로, 아니면 게이트웨이 로컬 fs 로 — 이 파일의 다른 op 와 같은 한 쌍.
+  const fsExists = async (osUser: string | null, abs: string): Promise<boolean> =>
+    (osUser ? !!(await memberStat(osUser, abs)) : fs.existsSync(abs));
+  const fsMkdirp = async (osUser: string | null, abs: string): Promise<void> => {
+    if (osUser) await memberMkdir(osUser, abs); else await fsp.mkdir(abs, { recursive: true, mode: 0o700 });
+  };
+  const fsMove = async (osUser: string | null, from: string, to: string): Promise<void> => {
+    if (osUser) await memberMv(osUser, from, to); else await fsp.rename(from, to);
+  };
+  const fsRemove = async (osUser: string | null, abs: string): Promise<void> => {
+    if (osUser) await memberRm(osUser, abs); else await fsp.rm(abs, { recursive: true, force: true });
+  };
+  /** base 안의 상대경로 → 절대경로. 글자 판정(.. 탈출 거부)만 — 심링크 재판정은 부르는 쪽이 assertJailed 로 건다. */
+  const inBase = (base: string, rel: string): string => {
+    const abs = path.resolve(base, rel);
+    if (abs !== base && !abs.startsWith(base + path.sep)) throw new HttpError(400, "허용 경로를 벗어났습니다");
+    return abs;
+  };
+
+  // 삭제(파일/폴더 재귀). 루트 자체는 거부. 응답 trashed = 휴지통으로 간 자료 수(0 = 바로 지워진 것) — 화면이 그 숫자로 말을 가른다.
   app.delete("/api/ui/terminal/browse", auth, wrap(async (req, res) => {
     const { base, abs, osUser } = await resolveBrowse(req, true);
-    if (osUser) await memberRm(osUser, abs);
-    else await fsp.rm(abs, { recursive: true, force: true });
+    //  좌표는 **지우기 전에** 푼다 — 공유 루트 아래 project/<id>/… 는 프로젝트 좌표로 접힌다(같은 파일 = 같은 자료, 보관 자리도 그 프로젝트 폴더 안).
+    const loc = await localRootForBrowse(String(req.query.root ?? ""), userOf(req), base, abs).catch(() => null);
+    const rel = loc ? normalizeLocalRel(path.relative(loc.base, abs)) : "";
+    //  보관 자리 자체(.lively/…)를 지우라는 요청은 휴지통으로 돌리지 않는다 — 자기 안으로 옮기는 꼴이 된다.
+    const live = loc && rel && rel.split("/")[0] !== ".lively" ? await countActiveLocalUnder(loc.root, rel).catch(() => 0) : 0;
+    if (loc && live > 0) {
+      const stamp = newRootTrashStamp(loc.root, rel, viewerFor(req));
+      const heldAbs = inBase(loc.base, stamp.held_rel);
+      await fsMkdirp(osUser, path.dirname(heldAbs));
+      //  공유·프로젝트 자리의 보관 폴더는 **다른 사람도** 되살릴 수 있어야 한다 — 만든 폴더부터 루트 직전까지 그룹 rw(업로드와 같은 규칙).
+      //   개인 루트는 uid 로 격리된 자리라 절대 열지 않는다. 실패해도 삭제는 간다(그때는 지운 사람만 되살릴 수 있다).
+      if (loc.root.kind !== "personal") await grantSharedGroupWrite(path.dirname(heldAbs), loc.base, "dir").catch(() => { /* 비치명 */ });
+      await fsMove(osUser, abs, heldAbs);
+      //  도장은 옮긴 **뒤에**, 그리고 도장이 실패하거나 0건이면(그새 자료가 사라진 경합) **옮긴 것을 되돌린다** — 도장 없는 보관 파일은
+      //   휴지통에 안 서서 «지운 것도 아니고 되살릴 수도 없는» 채로 숨는다(프로젝트 라우트와 같은 규칙).
+      let n = 0; let stampErr: unknown = null;
+      try { n = await stampTrashedLocalPath(loc.root, rel, stamp); } catch (e) { stampErr = e; }
+      if (n > 0) { res.json({ ok: true, trashed: n, batch: stamp.batch }); return; }
+      await fsMove(osUser, heldAbs, abs);
+      await fsRemove(osUser, path.dirname(heldAbs)).catch(() => { /* 빈 묶음 폴더 — 비치명 */ });
+      if (stampErr) throw new HttpError(500, "휴지통으로 보내지 못했어요 — 파일은 그대로 있습니다. 잠시 뒤 다시 시도해 주세요");
+    }
+    await fsRemove(osUser, abs);
     // 자료 전파(#1881) — 그 경로(폴더면 하위 전부)의 자료를 superseded 로.
-    try {
-      const loc = await localRootForBrowse(String(req.query.root ?? ""), userOf(req), base, abs);
-      if (loc) await supersedeLocalPath(loc.root, path.relative(loc.base, abs));
-    } catch (e) { console.warn(`[local-ingest] 삭제 전파 실패 ${abs}: ${(e as Error)?.message ?? e}`); }
-    res.json({ ok: true });
+    try { if (loc) await supersedeLocalPath(loc.root, path.relative(loc.base, abs)); }
+    catch (e) { console.warn(`[local-ingest] 삭제 전파 실패 ${abs}: ${(e as Error)?.message ?? e}`); }
+    res.json({ ok: true, trashed: 0 });
+  }));
+
+  //  되살리기 / 완전 삭제 — 대상은 자료 id(휴지통 화면의 한 줄 = 자료 한 건). 좌표는 요청이 아니라 **도장**에서 푼다.
+  //   · 개인 폴더: 도장의 주인이 나일 때만(남의 개인 폴더는 없는 것과 같은 404).
+  //   · 공유 폴더: 폴더 공개범위 게이트(목록·삭제와 같은 것)를 원래 자리로 다시 지난다.
+  //   · 프로젝트 좌표로 접힌 것은 여기 대상이 아니다 — 프로젝트 라우트(file-trash/*)가 그 프로젝트의 파일 권한으로 다룬다.
+  //   둘 다 자료 공개범위(canSeeSource)도 함께 지난다 — 안 보이는 자료는 되살릴 수도 지울 수도 없다.
+  const trashedBrowseFile = async (req: express.Request) => {
+    const u = userOf(req);
+    const sourceId = Number((req.body as { source_id?: unknown } | undefined)?.source_id);
+    if (!Number.isInteger(sourceId) || sourceId <= 0) throw new HttpError(400, "source_id 가 필요합니다");
+    const gone = (): HttpError => new HttpError(404, "휴지통에 없는 자료예요");
+    const row = await getTrashedFile(sourceId);
+    const root = row ? trashStampRoot(row.stamp) : null;
+    if (!row || !root || root.kind === "project") throw gone();
+    const viewer = viewerFor(req);
+    if (!viewer || !(await canSeeSource(sourceId, viewer))) throw gone();
+    const rootKey = root.kind;   // 'personal' | 'shared' — 브라우즈의 root 와 같은 말
+    const { base, abs: toAbs } = await resolveRootPath(u, rootKey, row.path);
+    const mine = await localRootForBrowse(rootKey, u, base, base);
+    if (!mine || localRootKey(mine.root) !== localRootKey(root)) throw gone();   // 남의 개인 폴더
+    assertBrowseVisible(rootKey === SHARED_ROOT_KEY ? await sharedFolderGate(viewer) : null, base, toAbs);
+    const osUser = await userOsUser(u);
+    const heldAbs = inBase(base, heldPathOf(row.stamp, row.path));
+    await assertJailed(base, heldAbs, osUser);
+    return { base, toAbs, heldAbs, osUser, row };
+  };
+
+  app.post("/api/ui/terminal/browse/trash/restore", auth, wrap(async (req, res) => {
+    const { base, toAbs, heldAbs, osUser, row } = await trashedBrowseFile(req);
+    if (!(await fsExists(osUser, heldAbs))) throw new HttpError(410, "보관해 둔 파일이 없어요 — 폴더에서 직접 지워졌을 수 있습니다");
+    if (await fsExists(osUser, toAbs)) throw new HttpError(409, "원래 자리에 같은 이름의 파일이 이미 있어요 — 그 파일의 이름을 바꾼 뒤 다시 되돌려 주세요");
+    await fsMkdirp(osUser, path.dirname(toAbs));
+    await assertJailed(base, path.dirname(toAbs), osUser);   // 그새 부모가 링크로 바뀌었으면 밖으로 옮기지 않는다
+    await fsMove(osUser, heldAbs, toAbs);
+    await reviveTrashedFile(row.id);
+    //  보관 묶음 치우기 — **되살리기는 아무것도 없애지 않는다**: 파일 하나짜리 묶음일 때만(fileTrashBatchCleanup). 실패해도 되살리기는 끝났다.
+    if (fileTrashBatchCleanup("restore", row.stamp, row.path, await fileTrashBatchRemaining(row.stamp.batch).catch(() => 1)) === "remove") {
+      await fsRemove(osUser, inBase(base, path.posix.join(FILE_TRASH_DIR, row.stamp.batch))).catch(() => { /* 비치명 */ });
+    }
+    res.json({ ok: true, restored: true, id: row.id, path: row.path });
+  }));
+
+  app.post("/api/ui/terminal/browse/trash/purge", auth, wrap(async (req, res) => {
+    const { base, heldAbs, osUser, row } = await trashedBrowseFile(req);
+    const ctx = { actor: viewerFor(req), source: "web" };
+    await fsRemove(osUser, heldAbs).catch(() => { /* 이미 없으면 지울 것이 없다 */ });
+    //  자료 행도 남기지 않는다 — 삭제(감사 before) → 그 스냅샷 본문 비우기 → «누가 언제 파기했다» 한 줄(프로젝트 파일 파기와 같은 원칙, #1850).
+    await deleteSource(row.id, ctx);
+    const scrubbed = await purgeDeleted("source", String(row.id));
+    await auditOrgContent("source", String(row.id), "purge", null, { scrubbed_rows: scrubbed }, ctx);
+    if (fileTrashBatchCleanup("purge", row.stamp, row.path, await fileTrashBatchRemaining(row.stamp.batch).catch(() => 1)) === "remove") {
+      await fsRemove(osUser, inBase(base, path.posix.join(FILE_TRASH_DIR, row.stamp.batch))).catch(() => { /* 비치명 */ });
+    }
+    res.json({ ok: true, purged: true, id: row.id });
   }));
   // 미리보기/다운로드(?download=1). 격리 멤버면 그 uid 로 stat+cat.
   app.get("/api/ui/terminal/browse/file", auth, wrap(async (req, res) => {

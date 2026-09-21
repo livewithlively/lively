@@ -89,12 +89,15 @@ function pjvRenameTask(anchor, t, reload) {
 function pjvDeleteTask(t, reload) {
   const nm = t.name || t.title || '이 태스크';
   const nSub = (t.subtasks || []).length;
-  const msg = "'" + nm + "' 태스크를 삭제할까요?" + (nSub ? '\n\n하위 ' + nSub + '개도 함께 삭제됩니다.' : '') + '\n\n#/trash 에서 복원할 수 있습니다.';
+  //  #3778 — «복원할 수 있습니다» 만으로는 거짓에 가깝다: 돌아오는 것은 **이름과 본문뿐**이다(체크리스트·댓글·시간 기록·태그·연결은
+  //   지울 때 함께 사라지고 스냅샷이 없다). 무엇이 돌아오고 무엇이 안 돌아오는지를 그대로 말한다(#1582 — 잃는 것을 말한다).
+  const msg = "'" + nm + "' 태스크를 삭제할까요?" + (nSub ? '\n\n하위 ' + nSub + '개도 함께 삭제됩니다.' : '')
+    + '\n\n[휴지통] ▸ [프로젝트] 탭에서 이름과 본문은 되살릴 수 있어요.\n체크리스트·댓글·시간 기록·태그·연결은 함께 지워지고 돌아오지 않습니다.';
   if (!confirm(msg)) return;
   (async () => {
     try {
       await api('/api/ui/v6/tasks/' + t.id + '/delete', { method: 'POST', body: JSON.stringify({}) });
-      toast('삭제했습니다 — #/trash 에서 복원 가능');
+      toast('삭제했습니다 — 휴지통에서 이름·본문을 되살릴 수 있어요');
       pjvReloadKeepScroll(reload);  // 태스크 삭제 후 위로 튀지 않게 스크롤 보존(#459)
     } catch (e) { toast('삭제 실패 — ' + e.message, true); }
   })();

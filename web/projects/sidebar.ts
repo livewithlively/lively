@@ -308,7 +308,7 @@ function pjvFolderDropTarget(elm, targetListId, reload) {
 // 휴지통 드롭 타깃(#1020) — 사이드바에서 끌던 리스트·폴더·프로젝트를 이 항목 위에 놓으면 삭제(휴지통 이동)한다.
 //  드래그 종류가 둘로 갈린다: 리스트/폴더는 pjvSideDrag(kind), 프로젝트는 pjvFolderDrag(id). 어느 쪽이든 반응.
 //  삭제는 각자의 기존 확인 절차를 그대로 거친다 — 리스트=cascade 모달(pjvDeleteList), 폴더=confirm(pjvDeleteFolder),
-//  프로젝트=confirm(pjvProjDelete). 실수 드롭도 확인에서 막힌다. 놓을 수 있을 때만 빨강(파괴적) 하이라이트.
+//  프로젝트=휴지통 확인창(pjvProjDelete → trashProjectFlow, #3778 — 이름이 「휴지통」인 이 자리가 이제 실제로 휴지통으로 보낸다). 실수 드롭도 확인에서 막힌다.
 //  드롭 처리는 setTimeout 로 미뤄 dragend 가 먼저 드래그 스타일을 정리하게 한다(모달·confirm 뒤 잔상 방지).
 function pjvTrashDropTarget(elm, lists, folderList, reload) {
   const canDrop = () => pjvFolderDrag.id != null || pjvSideDrag.kind === 'list' || pjvSideDrag.kind === 'folder';
@@ -563,7 +563,7 @@ function pjvDeleteList(list, reload) {
     hint.textContent = count === 0
       ? '이 리스트에는 프로젝트가 없어요. 리스트만 삭제합니다.'
       : (cascade
-          ? '리스트와 그 안의 프로젝트 ' + count + '개를 모두 삭제해요. 휴지통(#/trash)에서 되살릴 수 있어요.'
+          ? '리스트를 삭제하고, 그 안의 프로젝트 ' + count + '개는 휴지통으로 보내요. 휴지통에서 [복원]하면 태스크·세션까지 그대로 돌아옵니다(리스트는 돌아오지 않아 ‘기타(미분류)’로).'
           : '리스트만 삭제하고, 프로젝트 ' + count + '개는 ‘기타(미분류)’로 옮겨 보존해요.');
   };
 
@@ -571,11 +571,11 @@ function pjvDeleteList(list, reload) {
   const sw = el('span', { class: 'pjv-switch', 'aria-hidden': 'true' }, el('span', { class: 'pjv-switch-knob' }));
   const toggleRow = el('div', { class: 'pjv-visrow', role: 'switch', tabindex: '0', 'aria-checked': 'false' },
     el('span', { class: 'pjv-visrow-txt' },
-      el('span', { class: 'pjv-visrow-title', text: '리스트 안의 프로젝트도 함께 삭제' }),
+      el('span', { class: 'pjv-visrow-title', text: '리스트 안의 프로젝트도 함께 휴지통으로' }),
       el('span', { class: 'pjv-visrow-hint', text: '끄면 프로젝트는 ‘기타(미분류)’로 옮겨져 보존돼요.' })),
     sw);
   const delBtn = el('button', { class: 'btn btn-danger' });
-  const updateBtn = () => { delBtn.textContent = (cascade && count > 0) ? '리스트·프로젝트 삭제' : '리스트 삭제'; };
+  const updateBtn = () => { delBtn.textContent = (cascade && count > 0) ? '리스트 삭제 · 프로젝트는 휴지통으로' : '리스트 삭제'; };
   const toggle = () => {
     cascade = !cascade;
     toggleRow.classList.toggle('on', cascade); sw.classList.toggle('on', cascade);
@@ -596,9 +596,13 @@ function pjvDeleteList(list, reload) {
     if (busy) return;
     busy = true; delBtn.disabled = true; cancelBtn.disabled = true;
     try {
-      await api('/api/ui/v6/project-lists/' + list.id + '/delete', { method: 'POST', body: JSON.stringify({ cascade_projects: cascade }) });
+      const res = await api('/api/ui/v6/project-lists/' + list.id + '/delete', { method: 'POST', body: JSON.stringify({ cascade_projects: cascade }) });
       back.remove();
-      toast((cascade && count > 0) ? '리스트와 프로젝트 ' + count + '개를 삭제했습니다' : '리스트를 삭제했습니다');
+      //  서버가 실제로 보낸 수와 건너뛴 수를 그대로 말한다(#3778) — 남의 도는 세션이 있는 프로젝트는 못 보내고 ‘기타(미분류)’에 남는다.
+      const sent = Number(res && res.trashed_projects) || 0; const skipped = Array.isArray(res && res.skipped_projects) ? res.skipped_projects.length : 0;
+      toast((cascade && count > 0)
+        ? '리스트를 삭제하고 프로젝트 ' + sent + '개를 휴지통으로 보냈습니다' + (skipped ? ' — ' + skipped + '개는 다른 사람의 세션이 돌고 있어 ‘기타(미분류)’에 남았어요' : '')
+        : '리스트를 삭제했습니다', skipped > 0);
       if (reload) reload();
     } catch (e) { toast('삭제 실패 — ' + e.message, true); busy = false; delBtn.disabled = false; cancelBtn.disabled = false; }
   };
