@@ -117,7 +117,7 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
   const tk = read("web/v2/panes-tasks.ts");
   eq(/description: text \|\| null, description_base: bodyBase/.test(tk), true, "W6 곁칸 본문 저장은 고치기 시작한 글을 함께 보낸다(세션의 덧붙임을 지우지 않게)");
   eq(/if \(typingIn\(list\)\) \{ listDirty = true; return; \}/.test(tk), true, "W7 글칸에 손이 가 있는 동안은 목록을 다시 그리지 않는다(8초 틱이 쓰던 글을 날리지 않게)");
-  eq(/description: md \|\| null, description_base: descSaved/.test(read("web/v2/proj-settings.ts")), true, "W8 프로젝트 설정의 본문 저장도 같은 가드를 탄다");
+  eq(/description: md \|\| null, description_base: descBase/.test(read("web/v2/proj-settings.ts")), true, "W8 프로젝트 설정의 본문 저장도 같은 가드를 탄다");
   // B11·B12 — 합치기·충돌의 **행위**는 실 SQL 로 잰다(src/v6/project-body-guard.pg-test.mjs). 여기선 REST 로 나가는 모양만 본다:
   //  화면은 상태코드로 가른다(409 = 덮지 않고 사람에게 묻는다). 500 으로 새면 «저장하지 못했어요» 만 뜨고 1.2초마다 되풀이한다.
   const cap = read("src/capabilities/projects-v6.ts");
@@ -134,8 +134,14 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
   eq(/if \(openFold && foldSaver\?\.dirty\(\)\) \{[\s\S]{0,200}keepUnsaved\(ctx\.id, openFold, ta\.value\)/.test(tk), true,
     "W14 칸이 걷힐 때(탭 닫기·화면 떠남) 못 남긴 본문·규칙은 글칸 밖에 둔다");
   const ps2 = read("web/v2/proj-settings.ts");
-  eq(/if \(descInflight\) await descInflight;/.test(ps2) && /if \(!desc\.isConnected\) \{[\s\S]{0,420}keepUnsaved\(id, 'body', md\)/.test(ps2), true,
-    "W15 프로젝트 설정도 같다 — flush 는 도는 저장을 기다리고, 창이 닫힌 뒤의 실패는 글을 글칸 밖에 남기고 토스트로 알린다");
+  eq([/const descCore = autoSaveCore\(/.test(ps2), /descInflight|descSaving/.test(ps2), /if \(!desc\.isConnected\) \{[\s\S]{0,420}keepUnsaved\(id, 'body', live\)/.test(ps2)], [true, false, true],
+    "W15 프로젝트 설정은 **공용 상태기계**를 쓴다(손으로 짠 둘째 벌이 남아 있지 않다) · 창이 닫힌 뒤의 실패는 live 글을 글칸 밖에 남긴다");
+  eq([/const kept = keepUnsaved\(ctx\.id, k, live\);/.test(tk), /keepUnsaved\([^)]*\b(text|sent|md)\)/.test(tk + ps2)], [true, false],
+    "W17 남기는 글은 늘 live 다 — 보낸 글(text·sent·md)을 보관소에 넣는 자리가 없다(저장 도중 친 글이 빠진다)");
+  eq(/if \(stashedByMe === 'body'\) \{ clearUnsaved\(ctx\.id, 'body'\)/.test(tk) && !/onSaved: \(\) => \{? ?clearUnsaved\(/.test(tk), true,
+    "W18 성공한 저장은 **이 편집이 남긴 글**만 지운다 — 지난번에 못 남긴 글(사람이 아직 안 꺼낸 것)을 말없이 지우지 않는다");
+  eq(/k === 'body'\s*\n\s*\? linkBtn\('내 글 복사'/.test(tk), true,
+    "W19 보관된 **본문**은 제자리에 되살리지 않고 복사만 한다 — 그때의 본문 전체라, 그 뒤 세션이 덧붙인 기록을 지운다");
   const owners = ["web/v2/panes-tasks.ts", "web/v2/proj-settings.ts", "web/v2/unsaved-store.ts"].filter((f) => read(f).includes("'lively_v2_unsaved_text'"));
   eq([owners, /deviceStore\('lively_v2_unsaved_text'\)/.test(read("web/v2/unsaved-store.ts"))], [["web/v2/unsaved-store.ts"], true],
     "W16 못 남긴 글의 저장소 열쇠는 한 파일에서만, 워크스페이스로 갈리는 deviceStore 로 선언한다(글의 내용이 들어 있다)");

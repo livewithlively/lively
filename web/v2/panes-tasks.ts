@@ -39,7 +39,7 @@ const typingIn = (host: HTMLElement): boolean => isTextField(document.activeElem
 interface AutoSave { flush(): Promise<void>; dirty(): boolean; setSaved(v: string): void; destroy(): void }
 /** save 는 **서버에 실제로 남은 글**을 돌려준다(합쳐졌으면 보낸 것과 다르다). 던지면 실패 — 문구는 부른 쪽이 정한다. */
 function autoSave(ta: HTMLTextAreaElement, chip: HTMLElement, save: (text: string) => Promise<string>,
-  opts?: { savedText?: string; onSaved?: (v: string) => void; onFail?: (e: any, text: string) => FailVerdict }): AutoSave {
+  opts?: { savedText?: string; onSaved?: (v: string) => void; onFail?: (e: any, live: string) => FailVerdict }): AutoSave {
   const setChip = (t: string, warn?: boolean): void => { chip.textContent = t; chip.classList.toggle('warn', !!warn); };
   const okText = opts?.savedText || '저장했어요.';
   let lastErr: any = null;
@@ -61,7 +61,7 @@ function autoSave(ta: HTMLTextAreaElement, chip: HTMLElement, save: (text: strin
       else { setChip('저장하지 못했어요.', true); toast('저장하지 못했어요 — ' + (lastErr?.message || lastErr), true); }
     },
     onSaved: opts?.onSaved,
-    onFail: (e, text) => { lastErr = e; return opts?.onFail?.(e, text); },
+    onFail: (e, live) => { lastErr = e; return opts?.onFail?.(e, live); },   // live = 지금 글칸의 글(보낸 글이 아니다)
     delayMs: SAVE_MS,
     setTimer: (fn, ms) => window.setTimeout(fn, ms),
     clearTimer: (h) => window.clearTimeout(h as number),
@@ -170,6 +170,9 @@ export function tasksPart(ctx: PartCtx): Part {
   }
 
   let foldGen = 0;                        // 접이를 여닫을 때마다 오른다 — 늦게 돌아온 읽기가 새 접이를 건드리지 않게
+  //  보관소에 **이 편집이 남긴 글**이 있나. 성공한 저장은 그 글만 지운다 — 지난번에 못 남긴 글(안내만 떠 있고 사람이 아직
+  //  꺼내지 않은 것)까지 지우면, 다른 글을 한 줄 고쳐 저장하는 순간 그 글이 말없이 사라진다(격리 재리뷰 2026-09-21).
+  let stashedByMe: '' | 'body' | 'rules' = '';
 
   /** 접이를 닫는다. **못 저장한 글이 있으면 닫지 않는다**(false) — 닫으면 그 글은 글칸과 함께 사라진다.
    *  flush 가 도는 저장의 끝(충돌 포함)을 기다리므로, 여기서 dirty 면 «정말로 못 남긴 글이 있다» 는 뜻이다. */
@@ -221,11 +224,14 @@ export function tasksPart(ctx: PartCtx): Part {
     const linkBtn = (text: string, run: () => void, title?: string): HTMLElement => el('button', { class: 'btn-text pn-tk-link', type: 'button', text, title, onclick: run });
     const baseActs = (): HTMLElement[] => (k === 'body'
       ? [linkBtn('크게 열기', () => { void closeFold().then((ok) => { if (ok) ctx.openSettings?.(); }); }, '프로젝트 상세에서 넓게 고칩니다')] : []);
-    /** 저장이 실패했는데 **글칸이 이미 걷혔다**(탭을 닫았다·화면을 떠났다) — 글을 글칸 밖에 남기고 알린다. */
-    const lostOffscreen = (text: string): boolean => {
+    /** 저장이 실패했는데 **글칸이 이미 걷혔다**(탭을 닫았다·화면을 떠났다) — 글을 글칸 밖에 남기고 알린다.
+     *  ★남기는 것은 **지금 글칸의 글(live)** 이다. 보낸 글을 남기면 저장이 가는 동안 더 친 글이 빠지고, destroy 가 방금
+     *   남겨 둔 온전한 글까지 그 낡은 글로 덮인다(격리 재리뷰 2026-09-21). */
+    const lostOffscreen = (live: string): boolean => {
       if (ta.isConnected) return false;
-      const kept = keepUnsaved(ctx.id, k, text);
-      toast(kept ? `${k === 'body' ? '본문' : '규칙'}을 저장하지 못했어요 — 태스크 칸에서 [${k === 'body' ? '본문' : '규칙'}]을 다시 열면 쓰던 글을 되살릴 수 있어요.`
+      const kept = keepUnsaved(ctx.id, k, live);
+      if (kept) stashedByMe = k;
+      toast(kept ? `${k === 'body' ? '본문' : '규칙'}을 저장하지 못했어요 — 태스크 칸에서 [${k === 'body' ? '본문' : '규칙'}]을 다시 열면 쓰던 글을 꺼낼 수 있어요.`
         : '저장하지 못했어요 — 쓰던 글이 너무 길어 보관하지도 못했어요.', true);
       return true;
     };
@@ -243,9 +249,9 @@ export function tasksPart(ctx: PartCtx): Part {
         if (fresh?.project) fresh.project.description = kept;
         return kept;
       }, {
-        onSaved: () => { clearUnsaved(ctx.id, 'body'); count(); ctx.onChanged?.(); },   // 서버가 꼬리를 합쳐 글이 늘었을 수 있다 — 글자 수도 따라간다
-        onFail: (e, text) => {
-          if (lostOffscreen(text)) return e?.status === 409 ? 'pause' : 'handled';
+        onSaved: () => { if (stashedByMe === 'body') { clearUnsaved(ctx.id, 'body'); stashedByMe = ''; } count(); ctx.onChanged?.(); },   // 서버가 꼬리를 합쳐 글이 늘었을 수 있다 — 글자 수도 따라간다
+        onFail: (e, live) => {
+          if (lostOffscreen(live)) return e?.status === 409 ? 'pause' : 'handled';
           if (e?.status !== 409) return;
           // 꼬리가 아닌 곳이 다른 데서 바뀌었다 — 덮지 않는다. 최신을 불러오게 하고, 쓰던 글은 챙길 수 있게 한다.
           chip.textContent = '다른 곳에서 본문이 바뀌었어요.'; chip.classList.add('warn');
@@ -266,8 +272,8 @@ export function tasksPart(ctx: PartCtx): Part {
         return text;
       }, {
         savedText: '저장했어요 · 다음 세션부터 적용돼요.',
-        onSaved: () => clearUnsaved(ctx.id, 'rules'),
-        onFail: (_e, text) => (lostOffscreen(text) ? 'handled' : undefined),
+        onSaved: () => { if (stashedByMe === 'rules') { clearUnsaved(ctx.id, 'rules'); stashedByMe = ''; } },
+        onFail: (_e, live) => (lostOffscreen(live) ? 'handled' : undefined),
       });
     }
     ta.disabled = false; count();
@@ -277,9 +283,15 @@ export function tasksPart(ctx: PartCtx): Part {
     if (lost !== null && lost !== ta.value) {
       chip.textContent = '지난번에 저장하지 못한 글이 있어요.'; chip.classList.add('warn');
       size.textContent = '';
+      const settle = (): void => { chip.textContent = ''; chip.classList.remove('warn'); count(); replaceKids(acts, baseActs()); };
+      // ★본문은 **통째로 되살리지 않는다** — 보관된 글은 «그때의 본문 전체»라, 그 뒤 세션이 덧붙인 기록을 모르는 글이다.
+      //  이 칸에 그대로 넣어 저장하면 가드(기준 = 지금 본문)를 그냥 지나 그 기록들을 지운다. 복사해 두고 필요한 데만 붙여 넣게 한다.
+      //  규칙은 사람만 쓰는 짧은 글이라 제자리에 되살려도 잃을 것이 없다.
       replaceKids(acts,
-        linkBtn('되살리기', () => { ta.value = lost; chip.classList.remove('warn'); replaceKids(acts, baseActs()); ta.dispatchEvent(new Event('input')); ta.focus(); }, '그 글을 이 칸에 다시 넣습니다 — 넣으면 저절로 저장돼요'),
-        linkBtn('버리기', () => { clearUnsaved(ctx.id, k); chip.textContent = ''; chip.classList.remove('warn'); count(); replaceKids(acts, baseActs()); }));
+        k === 'body'
+          ? linkBtn('내 글 복사', () => void copyText(lost).then((ok) => { if (ok) toast('그때 쓰던 글을 복사했어요 — 필요한 곳에 붙여 넣으세요.'); }), '그때 쓰던 본문 전체를 복사합니다(지금 본문은 그대로 둡니다)')
+          : linkBtn('되살리기', () => { ta.value = lost; stashedByMe = k; settle(); ta.dispatchEvent(new Event('input')); ta.focus(); }, '그 글을 이 칸에 다시 넣습니다 — 넣으면 저절로 저장돼요(저장되면 보관한 글은 지웁니다)'),
+        linkBtn('버리기', () => { clearUnsaved(ctx.id, k); settle(); }));
     } else if (lost !== null) clearUnsaved(ctx.id, k);      // 이미 같은 글이 저장돼 있다
     // 긴 본문은 맨 위에서 시작한다 — focus 는 커서를 끝에 두어 글칸이 맨 아래(가장 옛 기록 아래)로 내려가 버린다.
     ta.focus();
@@ -548,7 +560,7 @@ export function tasksPart(ctx: PartCtx): Part {
       //  (성공하면 onSaved 가 지우고, 실패하면 다음에 접이를 열 때 되살릴 수 있다).
       if (openFold && foldSaver?.dirty()) {
         const ta = foldHost(openFold).querySelector('textarea') as HTMLTextAreaElement | null;
-        if (ta) keepUnsaved(ctx.id, openFold, ta.value);
+        if (ta && keepUnsaved(ctx.id, openFold, ta.value)) stashedByMe = openFold;
       }
       const savers = [foldSaver, rowSaver].filter(Boolean) as AutoSave[];
       for (const sv of savers) void sv.flush().finally(() => sv.destroy());
