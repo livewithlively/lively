@@ -141,7 +141,7 @@ const CRED_KINDS: Array<{ kind: string; label: string; secretLabel: string; secr
   // #4012 T2 — codex 는 무인 토큰이 따로 없어 ChatGPT 로그인 파일(auth.json) 통째가 자격이다. 중앙 맥락 잡(증류·분류·관리)이
   //  이 파일로 내 ChatGPT 계정으로 돈다. 판 안에서 토큰이 갱신되면 저장본이 새것으로 바뀐다(같은 계정일 때만).
   { kind: 'codex_auth_json', label: 'Codex 헤드리스 로그인(auth.json)', secretLabel: 'auth.json 내용', secretPh: '{"tokens":{…},"last_refresh":"…"}', memberOnly: true,
-    help: '중앙에서 도는 맥락 잡(증류·분류·관리)이 이 파일로 내 ChatGPT 계정으로 codex 를 실행합니다(구독 과금). 판 안에서 토큰이 갱신되면 여기 저장된 값도 새것으로 바뀝니다.',
+    help: '중앙에서 도는 맥락 잡(증류·점검)이 이 파일로 내 ChatGPT 계정으로 codex 를 실행합니다(구독 과금). 판 안에서 토큰이 갱신되면 여기 저장된 값도 새것으로 바뀝니다.',
     steps: [
       '내 PC 터미널에서 **중앙용으로 따로** 로그인합니다: `mkdir -p ~/.codex-central && CODEX_HOME=~/.codex-central codex login` (Windows PowerShell: `mkdir $HOME\\.codex-central; $env:CODEX_HOME="$HOME\\.codex-central"; codex login`) — 평소 쓰는 로그인과 나눠야 한쪽의 토큰 갱신이 다른 쪽을 끊지 않습니다',
       '`cat ~/.codex-central/auth.json` 으로 나온 내용을 **통째로** 복사합니다(PowerShell: `Get-Content $HOME\\.codex-central\\auth.json`)',

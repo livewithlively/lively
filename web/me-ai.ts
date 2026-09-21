@@ -351,17 +351,17 @@ function runnerLine(st: any, reload: () => void): HTMLElement | null {
   const connected = ((st?.harnesses || []) as any[]).some((h) => h && h.connected);
   let text = '';
   let action: HTMLElement | null = null;
-  if (r.is_me) text = '이 워크스페이스의 증류·분류·관리는 내 계정으로 실행됩니다.';
-  else if (r.member) text = `이 워크스페이스의 증류·분류·관리는 ${r.name || r.member}님 계정으로 실행됩니다. 여기서 연결한 내 자격은 내 이름으로 도는 작업에만 쓰입니다.`;
-  else if (st.can_set_runner && r.source === 'db') text = '이 워크스페이스의 실행 멤버가 비어 있어요. 증류·분류·관리는 각 작업을 켠 사람 계정으로 실행됩니다.';
+  if (r.is_me) text = '이 워크스페이스의 증류·점검은 내 계정으로 실행됩니다.';
+  else if (r.member) text = `이 워크스페이스의 증류·점검은 ${r.name || r.member}님 계정으로 실행됩니다. 여기서 연결한 내 자격은 내 이름으로 도는 작업에만 쓰입니다.`;
+  else if (st.can_set_runner && r.source === 'db') text = '이 워크스페이스의 실행 멤버가 비어 있어요. 증류·점검은 각 작업을 켠 사람 계정으로 실행됩니다.';
   else if (st.can_set_runner && connected) {
-    text = '연결은 됐지만 이 워크스페이스의 실행 멤버가 아직 정해지지 않았어요. 정하면 증류·분류·관리가 내 계정으로 실행됩니다.';
+    text = '연결은 됐지만 이 워크스페이스의 실행 멤버가 아직 정해지지 않았어요. 정하면 증류·점검이 내 계정으로 실행됩니다.';
     const btn = el('button', { type: 'button', class: 'btn btn-primary btn-sm', text: '실행 멤버로 정하기' }) as HTMLButtonElement;
     btn.onclick = async () => {
       btn.disabled = true; btn.textContent = '정하는 중…';
       try {
         const out = await api('/api/ui/me/headless/runner', { method: 'POST', body: JSON.stringify({}) }) as any;
-        toast(out?.runner === 'filled' ? '이제 이 워크스페이스의 증류·분류·관리가 내 계정으로 실행됩니다.'
+        toast(out?.runner === 'filled' ? '이제 이 워크스페이스의 증류·점검이 내 계정으로 실행됩니다.'
           : out?.runner === 'cleared' ? '이 워크스페이스는 실행 멤버를 비워 두기로 정해져 있어요 — 바꾸려면 관리 설정에서 정해 주세요.'
             : '실행 멤버가 이미 정해져 있어요.');
         reload();
@@ -372,7 +372,7 @@ function runnerLine(st: any, reload: () => void): HTMLElement | null {
     };
     action = btn;
   }
-  else if (st.can_set_runner) text = '아직 실행 멤버가 정해지지 않았어요. 여기서 연결하면 이 워크스페이스의 증류·분류·관리가 내 계정으로 실행됩니다.';
+  else if (st.can_set_runner) text = '아직 실행 멤버가 정해지지 않았어요. 여기서 연결하면 이 워크스페이스의 증류·점검이 내 계정으로 실행됩니다.';
   else text = '이 워크스페이스의 실행 멤버는 관리자가 정합니다. 여기서 연결한 내 자격은 내 이름으로 도는 작업에만 쓰입니다.';
   if (!action) return el('p', { class: 'admin-hint', style: 'margin:6px 0 0', text });
   return el('div', { style: 'margin:6px 0 0; display:flex; align-items:center; gap:10px; flex-wrap:wrap' },
@@ -389,7 +389,7 @@ function headlessSection(st: any, reload: () => void): HTMLElement[] {
     el('div', { style: 'margin:22px 0 2px; display:flex; align-items:center; gap:8px; flex-wrap:wrap' },
       el('span', { class: 'aiacct-name', text: '사람 없이 도는 작업' }),
       anyFail ? el('span', { class: 'pill pill-warn', text: '확인 필요' }) : null),
-    el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: '증류·분류·관리처럼 내가 자리에 없어도 도는 작업은, 여기서 따로 연결한 계정으로 실행됩니다.' }),
+    el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: '증류·점검처럼 내가 자리에 없어도 도는 작업은, 여기서 따로 연결한 계정으로 실행됩니다.' }),
     ...(line ? [line] : []),
     ...rows.map((r) => headlessRow(r, reload)),
   ];

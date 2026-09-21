@@ -120,7 +120,7 @@ async function openCronForm(job, actions, reload, tz) {
   const paramInputs: Record<string, any> = {};
   let managedSessions: any[] | null = null;
   let distillers: any[] | null = null;   // #1289 증류기 피커 — 한 번만 받아 재사용(액션 전환 시 재요청 안 함)
-  let classifiers: any[] | null = null;  // #1419 T4 분류기 피커 — 같은 캐시 규칙
+  let classifiers: any[] | null = null;  // #1419 T4 → #4194 카테고리 붙이기 레인 피커(옛 분류기) — 같은 캐시 규칙
   let managers: any[] | null = null;     // #1419 T5 관리기 피커 — 같은 캐시 규칙
   async function renderParams() {
     const a = (actions || []).find((x) => x.key === actionSel.value);
@@ -136,9 +136,10 @@ async function openCronForm(job, actions, reload, tz) {
         for (const s of (managedSessions || [])) inp.append(el('option', { value: s.id, text: (s.label || s.id) + ' — ' + (s.account || '계정?') + (s.enabled ? '' : ' (꺼짐)') }));
         if (jp[p.name]) inp.value = jp[p.name];
       } else if (p.kind === 'distiller') {
-        // #1289 자료 증류기 피커 — [AI 맥락 ▸ 자료 증류기]에서 등록한 것. 비우면 액션이 스스로 고른다.
+        // #1289 자료 레인 피커 — [맥락 관리 ▸ 증류기]의 자료 레인. 비우면 액션이 스스로 고른다.
+        //  (#4194 — 같은 응답의 knowledge_lanes 는 카테고리 붙이기 레인이라 여기 싣지 않는다: 이 잡은 자료 레인만 돈다.)
         inp = el('select', { style: psInputStyle });
-        inp.append(el('option', { value: '', text: '(비움 — 켜진 증류기 전체)' }));
+        inp.append(el('option', { value: '', text: '(비움 — 켜진 자료 증류기 전체)' }));
         if (distillers == null) { try { const r = await api('/api/ui/org/distillers'); distillers = (r && r.distillers) || []; } catch { distillers = []; } }
         for (const d of (distillers || [])) inp.append(el('option', { value: d.key, text: (d.label || d.key) + (d.enabled ? '' : ' (꺼짐)') }));
         // 잡이 가리키던 증류기가 지워졌으면 조용히 '전체'로 바뀌지 않게 — 없어졌다고 말해 준다(저장 시 의도치 않은 확대 방지).
@@ -147,18 +148,20 @@ async function openCronForm(job, actions, reload, tz) {
         }
         if (jp[p.name]) inp.value = jp[p.name];
       } else if (p.kind === 'classifier') {
-        // #1419 T4 분류기 피커 — [맥락 관리 ▸ 분류기]에서 등록한 것. 증류기 피커와 같은 규칙.
+        // #1419 T4 → #4194 카테고리 붙이기 레인 피커 — [맥락 관리 ▸ 증류기 ▸ 카테고리 붙이기]의 레인(옛 「분류기」).
+        //  증류기와 같은 입구에서 knowledge_lanes 로 받는다. 파라미터 이름(classifier)은 기존 잡 행 호환 때문에 그대로다.
         inp = el('select', { style: psInputStyle });
-        inp.append(el('option', { value: '', text: '(비움 — 켜진 분류기 전체)' }));
+        inp.append(el('option', { value: '', text: '(비움 — 켜진 카테고리 붙이기 증류기 전체)' }));
+        //  호환 경로(/org/classifiers)에서 받는다 — 옛·새 코어 모두 같은 뜻이다(배포 중 새 화면 + 옛 게이트웨이 조합 대비).
         if (classifiers == null) { try { const r = await api('/api/ui/org/classifiers'); classifiers = (r && r.classifiers) || []; } catch { classifiers = []; } }
         for (const c of (classifiers || [])) inp.append(el('option', { value: c.key, text: (c.label || c.key) + (c.enabled ? '' : ' (꺼짐)') }));
-        // 지워진 분류기를 가리키던 잡이 조용히 '전체'로 확대되지 않게 — 없어졌다고 말해 준다.
+        // 지워진 레인을 가리키던 잡이 조용히 '전체'로 확대되지 않게 — 없어졌다고 말해 준다.
         if (jp[p.name] && !(classifiers || []).some((c) => c.key === jp[p.name])) {
           inp.append(el('option', { value: jp[p.name], text: jp[p.name] + ' (등록되지 않음 — 확인 필요)' }));
         }
         if (jp[p.name]) inp.value = jp[p.name];
       } else if (p.kind === 'manager') {
-        // #1419 T5 관리기 피커 — 증류기·분류기 피커와 같은 규칙.
+        // #1419 T5 관리기 피커 — 증류기 레인 피커와 같은 규칙.
         inp = el('select', { style: psInputStyle });
         inp.append(el('option', { value: '', text: '(비움 — 켜진 관리기 전체)' }));
         if (managers == null) { try { const r = await api('/api/ui/org/managers'); managers = (r && r.managers) || []; } catch { managers = []; } }

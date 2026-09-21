@@ -834,6 +834,9 @@ a.cxc-name:hover { color: var(--blue); }
 .dsl-stat.is-warn { background: var(--warn-bg); border-color: var(--warn-line); }
 .dsl-stat.is-warn .dsl-stat-n { color: var(--warn-ink); }
 .dsl-cards { display: grid; gap: 12px; }
+/* #4194 두 번째 레인 — 「카테고리 붙이기」 절(web/distill-fill.ts). 자료 레인 절과 선 하나로 가른다. 절 안의 카드 간격은
+   .ctx-row·.ctx-cov 등이 각자 가진 margin-top 을 그대로 쓴다(옛 분류기 패널과 같은 부품). */
+.dsl-fill { margin-top: 30px; padding-top: 22px; border-top: 1px solid var(--line); }
 .dsl-card { padding: 16px 18px 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--bg); transition: border-color 120ms ease; }
 .dsl-card:hover { border-color: var(--line-net-2); }
 .dsl-card.is-off { background: var(--bg-tint); }

@@ -1,6 +1,7 @@
 // 실행 계정 고르기·해소의 **배선 계약** (#4052) — 소스를 읽어 검사한다. 사양 엣지 표 B + 화면 배선.
 //
-//  화면 넷(증류기·분류기·관리기 설정 · 자동 실행 카드)과 액션 셋(증류·분류·관리)이 «누구 계정으로 도나» 를 나눠 갖는다.
+//  화면 넷(증류기 자료 레인·카테고리 붙이기 레인·관리기 설정 · 자동 실행 카드)과 액션 셋(증류·카테고리 붙이기·관리)이
+//   «누구 계정으로 도나» 를 나눠 갖는다(#4194 — 옛 분류기 화면 web/context-classify.ts 는 web/distill-fill.ts 가 됐다).
 //  하나라도 어긋나면 조용히 틀어진다 — 칸을 채웠는데 잡 계정이 이겨서 안 듣거나(B1), 칸에 구성원 id 를 치라고 하거나,
 //  카드가 서버와 다른 계정을 말하거나.
 import assert from 'node:assert/strict';
@@ -14,7 +15,7 @@ const code = (s) => s.split('\n').filter((l) => {
 }).join('\n');
 
 const DIST = code(read('../web/distillers.ts'));
-const CLS = code(read('../web/context-classify.ts'));
+const CLS = code(read('../web/distill-fill.ts'));
 const MGR = code(read('../web/context-manage.ts'));
 const CARD = code(read('../web/context-stage-job.ts'));
 const WIDGETS = code(read('../web/lib/widgets.ts'));
@@ -37,7 +38,7 @@ test('★ 증류기 설정 — 실행 계정은 이름으로 고르는 칸이고
   assert.ok(!/reqIn\b/.test(DIST), '옛 글자칸 변수가 남지 않는다');
 });
 
-test('★ 분류기 설정 — 같은 칸 · 이름은 «실행 계정»', () => {
+test('★ 카테고리 붙이기 레인 설정 — 같은 칸 · 이름은 «실행 계정»', () => {
   assert.match(CLS, /const reqPick = personSelect\(\{ value: c\?\.requester/, '고르기 칸');
   assert.match(CLS, /requester: reqPick\.value\(\) \|\| null,/, '저장 값');
   assert.match(CLS, /F\('실행 계정', [^\n]*, reqPick\.el\)/, '폼에 붙인다');

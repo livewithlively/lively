@@ -84,7 +84,7 @@ const ORG_CARDS: Record<string, { title: string; severity: "p0" | "p1"; prompt?:
   pipeline: {
     // 체크리스트의 how 가 "멈춘 단계: 증류 · 관리" 처럼 어디가 막혔는지까지 말해 준다.
     title: "맥락 파이프라인이 멈춰 있습니다.", severity: "p1",
-    prompt: "맥락 파이프라인에서 멈춘 단계를 찾아 실행 잡을 만들고 켜줘. 증류기·분류기가 없으면 먼저 설계해줘.",
+    prompt: "맥락 파이프라인에서 멈춘 단계를 찾아 실행 잡을 만들고 켜줘. 증류기(자료 레인·카테고리 붙이기 레인)가 없으면 먼저 설계해줘.",
   },
   embeddings: {
     title: "의미 검색이 꺼져 있습니다.", severity: "p1",

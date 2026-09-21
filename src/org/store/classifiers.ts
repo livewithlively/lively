@@ -1,10 +1,13 @@
 // org_classifier — 분류기 레지스트리 + **스코프된 인박스**(#1419 T4). 증류기(store/ingest.ts)의 분류판.
+//  #4194 — 사람·에이전트에겐 증류기의 **«카테고리 붙이기» 레인**이다(org/distill/lanes.ts). 이름(org_classifier·classifier*)은
+//   저장소·롤백·컨트롤플레인 호환 때문에 그대로 둔다 — 까닭은 org/schema/connectors-ingest.ts 의 테이블 주석.
 //
 //  이 파일의 어려운 부분은 CRUD 가 아니라 `classifierInbox` 다 — "이 분류기가 지금 맡은 지식은 무엇인가".
 //  배타 배정(한 지식은 가장 앞선 분류기 하나에만)을 SQL 한 번으로 풀어야 하고, 그게 아니면 분류기를 둘
 //  만드는 순간 둘이 같은 지식을 동시에 분류해 서로의 제안을 덮는다.
 import { itemsPool, q } from "../../db/client.js";
 import { audit } from "./audit.js";
+import { isActiveLane } from "../distill/lanes.js";
 
 export interface ClassifierRow {
   id: number; key: string; label: string | null; enabled: boolean; priority: number;
@@ -30,11 +33,13 @@ const COLS = `id, key, label, enabled, priority, target, confidence_below,
 /** 사람이 읽는 스코프 한 줄 — 목록에서 '이 분류기가 뭘 맡나'가 바로 보이게. */
 function scopeText(r: ClassifierRow): string {
   const bits: string[] = [];
-  bits.push(r.target === "unmapped" ? "미분류" : r.target === "low_confidence" ? "낮은 확신도 재분류" : "미분류 + 재분류");
+  //  #4194 — 재분류 모드는 폐지(scopeWhere 참조). low_confidence 레인은 아무것도 맡지 않는다는 사실을 그대로 말한다.
+  if (r.target === "low_confidence") return "맡는 지식 없음(폐지된 재분류 모드 — 재분류는 점검이 합니다)";
+  bits.push("미분류 지식");
   if (r.match_types?.length) bits.push(`유형 ${r.match_types.join("·")}`);
-  if (r.match_provenance) bits.push(r.match_provenance === "authored" ? "저작" : "미러");
+  if (r.match_provenance) bits.push(r.match_provenance === "authored" ? "직접 쓴 지식" : "수집해 바로 들어온 지식");
   if (r.match_systems?.length) bits.push(`출처 ${r.match_systems.join("·")}`);
-  if (r.candidate_categories?.length) bits.push(`후보 ${r.candidate_categories.length}개 축`);
+  if (r.candidate_categories?.length) bits.push(`후보 카테고리 ${r.candidate_categories.length}개`);
   if (r.lookback_days) bits.push(`최근 ${r.lookback_days}일`);
   return bits.join(" · ") || "전체";
 }
@@ -51,15 +56,15 @@ function scopeText(r: ClassifierRow): string {
 export function scopeWhere(r: ClassifierRow, params: unknown[]): string {
   const w: string[] = ["k.lifecycle='active'"];
 
-  // 대상 — 미분류(카테고리 행 0건) / 낮은 확신도 제안(재분류) / 둘 다.
+  // 대상 — 카테고리 행이 0건인 지식(미분류)만.
+  //  ⚠ #4194 — 재분류 모드(target=low_confidence · both 의 절반)는 폐지했다. 이 레인의 쓰기 도구
+  //   knowledge_propose_category 는 카테고리 행이 **하나라도 있으면 no-op** 인데, low_confidence 인박스는 정의상
+  //   이미 proposed 행이 있는 지식만 집는다 — LLM 을 부르고 '봤다' 만 찍을 뿐 아무것도 못 바꿨다.
+  //   이미 붙은 카테고리를 고치는 일은 점검(관리기 «분류 어긋남 보정» move_category)이 한다.
+  //   값은 DB CHECK 에 그대로 남긴다(옛 이미지로 롤백해도 행이 유효하다). low_confidence = 빈 인박스(FALSE 를 AND 로 —
+  //   앞선 레인으로서 NOT(...) 이 TRUE 가 돼 뒤 레인 몫을 빼앗지 않는다) · both = 미분류만.
   const unmapped = `NOT EXISTS (SELECT 1 FROM knowledge_category kc WHERE kc.name=k.name)`;
-  if (r.target === "unmapped") w.push(unmapped);
-  else {
-    params.push(r.confidence_below ?? 0.8);
-    const lowConf = `EXISTS (SELECT 1 FROM knowledge_category kc WHERE kc.name=k.name
-       AND kc.state='proposed' AND (kc.confidence IS NULL OR kc.confidence < $${params.length}))`;
-    w.push(r.target === "low_confidence" ? lowConf : `(${unmapped} OR ${lowConf})`);
-  }
+  w.push(r.target === "low_confidence" ? "FALSE" : unmapped);
 
   if (r.match_types?.length) { params.push(r.match_types); w.push(`k.type = ANY($${params.length}::text[])`); }
   if (r.match_provenance) { params.push(r.match_provenance); w.push(`k.provenance = $${params.length}`); }
@@ -88,70 +93,99 @@ export async function getClassifier(idOrKey: number | string): Promise<Classifie
 }
 
 /**
- * 이 분류기가 지금 맡은 지식 — **배타 배정**이 여기 들어 있다.
+ * 이 레인이 지금 맡은 지식의 WHERE 절 — **배타 배정**이 여기 들어 있다. 인박스(표본)와 잔량(COUNT)이 같은 조건을 쓴다.
  *
- *  한 지식은 스코프가 겹치는 분류기 중 **우선순위가 가장 높은 하나**에만 배정된다. 안 그러면 분류기를 둘
+ *  한 지식은 스코프가 겹치는 레인 중 **우선순위가 가장 높은 하나**에만 배정된다. 안 그러면 레인을 둘
  *  만드는 순간 둘이 같은 지식을 동시에 분류해 서로의 제안을 덮어쓴다(마지막에 쓴 쪽이 이긴다 — 비결정적).
- *  구현: 나보다 앞선(우선순위 높은) 켜진 분류기의 스코프에 걸리는 지식을 뺀다.
+ *  구현: 나보다 앞선(우선순위 높은) **일하는**(isActiveLane — 폐지 모드 제외) 레인의 스코프에 걸리는 지식을 뺀다.
  *
  *  ⚠ 이미 판정한 것(org_classifier_seen)도 뺀다 — 증류기 실측(#1289)에서 'skip 한 것이 매 배치 재등장'이
  *   진행을 0 으로 만들었다. 분류는 updated_at DESC 정렬이라 더 나쁘다(못 정한 것이 영원히 맨 앞).
+ *   (카테고리를 잃은 지식은 그 순간 '봤다' 기록이 지워진다 — v6/knowledge-store unlink·restore, category-store delete.)
  */
+async function inboxWhere(r: ClassifierRow): Promise<{ where: string; params: unknown[] }> {
+  const params: unknown[] = [];
+  const where = scopeWhere(r, params);
+  const ahead = (await q(itemsPool,
+    `SELECT ${COLS} FROM org_classifier
+      WHERE enabled=true AND target <> 'low_confidence' AND (priority > $1 OR (priority = $1 AND id < $2))
+      ORDER BY priority DESC, id`, [r.priority, r.id])) as ClassifierRow[];
+  const notClauses = ahead.map((a) => `NOT (${scopeWhere(a, params)})`);
+  params.push(r.id);
+  const seenP = `$${params.length}`;
+  return {
+    where: `${where}
+       ${notClauses.length ? `AND ${notClauses.join(" AND ")}` : ""}
+       AND NOT EXISTS (SELECT 1 FROM org_classifier_seen s WHERE s.classifier_id=${seenP} AND s.knowledge_name=k.name)`,
+    params,
+  };
+}
+
+/** 이 레인이 지금 맡은 지식 표본(배치·미리보기) — 최근 갱신순, 상한 500. */
 export async function classifierInbox(
   r: ClassifierRow, limit?: number,
 ): Promise<Array<{ name: string; title: string | null; type: string | null; provenance: string }>> {
-  const params: unknown[] = [];
-  const where = scopeWhere(r, params);
-
-  // 나보다 앞선 켜진 분류기들 — 그들의 스코프에 걸리면 내 몫이 아니다.
-  const ahead = (await q(itemsPool,
-    `SELECT ${COLS} FROM org_classifier
-      WHERE enabled=true AND (priority > $1 OR (priority = $1 AND id < $2))
-      ORDER BY priority DESC, id`, [r.priority, r.id])) as ClassifierRow[];
-  const notClauses = ahead.map((a) => `NOT (${scopeWhere(a, params)})`);
-
-  params.push(r.id);
-  const seenP = `$${params.length}`;
+  const { where, params } = await inboxWhere(r);
   params.push(Math.min(Math.max(1, limit ?? r.batch_size), 500));
-  const limP = `$${params.length}`;
-
   const rows = await q(itemsPool, `
     SELECT k.name, k.title, k.type, k.provenance
       FROM knowledge k
      WHERE ${where}
-       ${notClauses.length ? `AND ${notClauses.join(" AND ")}` : ""}
-       AND NOT EXISTS (SELECT 1 FROM org_classifier_seen s WHERE s.classifier_id=${seenP} AND s.knowledge_name=k.name)
      ORDER BY k.updated_at DESC
-     LIMIT ${limP}`, params);
+     LIMIT $${params.length}`, params);
   return rows.map((x) => ({
     name: x.name as string, title: (x.title ?? null) as string | null,
     type: (x.type ?? null) as string | null, provenance: x.provenance as string,
   }));
 }
 
-/** 커버리지 — 분류기별 잔량 + 어느 분류기에도 안 걸리는 사각지대. 화면 최상단(#1289 UX 계승). */
+/** 이 레인이 지금 맡은 지식 **수** — 인박스와 같은 조건을 상한 없이 센다(#4194 — 종전엔 표본 500 을 세어 500 에서 멈췄다). */
+export async function classifierBacklog(r: ClassifierRow): Promise<number> {
+  const { where, params } = await inboxWhere(r);
+  const rows = await q(itemsPool, `SELECT count(*)::int AS n FROM knowledge k WHERE ${where}`, params);
+  return Number((rows[0] as { n: number } | undefined)?.n ?? 0);
+}
+
+/**
+ * 어느 일하는 레인의 **스코프**에도 안 드는 미분류 지식을 세는 쿼리 — 일하는 레인이 없으면 null(= 0: 기본 기준 하나가 전부 받는다).
+ *  ⚠ 인박스(‘봤다’ 제외·상한)로 세면 안 된다 — 레인이 이미 보고 넘긴 지식까지 사각지대로 세어 «영영 못 받는다» 고 거짓 경보를 낸다(#4194 적대검증).
+ *  @internal 테스트 노출(classifier-scope.test.ts [U1]~[U3] — 순수 조립 · classifier-lanes.pg-test.mjs — 실DB 수).
+ */
+export function uncoveredQuery(active: ClassifierRow[]): { sql: string; params: unknown[] } | null {
+  if (!active.length) return null;
+  const params: unknown[] = [];
+  const nots = active.map((c) => `NOT (${scopeWhere(c, params)})`);
+  return {
+    sql: `SELECT count(*)::int AS n FROM knowledge k WHERE k.lifecycle='active'
+       AND NOT EXISTS (SELECT 1 FROM knowledge_category kc WHERE kc.name=k.name)
+       AND ${nots.join(" AND ")}`,
+    params,
+  };
+}
+
+/**
+ * 커버리지 — 레인별 잔량(아직 안 본 몫) · '봤다' 수 + 어느 일하는 레인에도 안 걸리는 사각지대. 화면 최상단(#1289 UX 계승).
+ *  classifiers[] 는 **일하는 레인만**(isActiveLane) — 꺼진 레인·폐지 모드 레인은 아무것도 맡지 않는다.
+ */
 export async function classifierCoverage(): Promise<{
   total_unclassified: number; uncovered: number;
   classifiers: Array<{ id: number; key: string; backlog: number; reviewed: number }>;
 }> {
   const all = await listClassifiers();
-  const on = all.filter((c) => c.enabled);
+  const on = all.filter(isActiveLane);
   const totalRow = await q(itemsPool,
     `SELECT count(*)::int AS n FROM knowledge k WHERE k.lifecycle='active'
        AND NOT EXISTS (SELECT 1 FROM knowledge_category kc WHERE kc.name=k.name)`);
   const total = Number((totalRow[0] as { n: number } | undefined)?.n ?? 0);
 
   const per: Array<{ id: number; key: string; backlog: number; reviewed: number }> = [];
-  const covered = new Set<string>();
   for (const c of on) {
-    // 잔량은 배치 상한과 무관한 '전체'를 세야 한다 — 상한으로 세면 500 에서 멈춰 "안 줄어든다"로 보인다.
-    const items = await classifierInbox(c, 500);
-    for (const it of items) covered.add(it.name);
     const rv = await q(itemsPool, `SELECT count(*)::int AS n FROM org_classifier_seen WHERE classifier_id=$1`, [c.id]);
-    per.push({ id: c.id, key: c.key, backlog: items.length, reviewed: Number((rv[0] as { n: number } | undefined)?.n ?? 0) });
+    per.push({ id: c.id, key: c.key, backlog: await classifierBacklog(c), reviewed: Number((rv[0] as { n: number } | undefined)?.n ?? 0) });
   }
-  // 사각지대 — 미분류인데 켜진 어느 분류기도 안 집는 것. 켜진 분류기가 0개면 전부가 사각지대다.
-  const uncovered = Math.max(0, total - covered.size);
+  //  사각지대 — 일하는 레인이 없으면 0(크론이 기본 기준 하나로 전부 본다 — classify.ts 레거시 경로). 있으면 스코프로 센다.
+  const uq = uncoveredQuery(on);
+  const uncovered = uq ? Number(((await q(itemsPool, uq.sql, uq.params))[0] as { n: number } | undefined)?.n ?? 0) : 0;
   return { total_unclassified: total, uncovered, classifiers: per };
 }
 
@@ -188,10 +222,10 @@ function toList(v: unknown): string[] | null {
 
 export async function upsertClassifier(input: ClassifierUpsertInput, actor?: string, source?: string): Promise<ClassifierRow> {
   const cur = input.id ? await getClassifier(input.id) : (input.key ? await getClassifier(input.key) : null);
-  if (input.id && !cur) throw new Error(`분류기를 찾을 수 없습니다: id=${input.id}`);
+  if (input.id && !cur) throw new Error(`카테고리 붙이기 레인을 찾을 수 없습니다: id=${input.id}`);
   const key = String(input.key ?? cur?.key ?? "").trim().toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
-  if (!key) throw new Error("분류기 식별자(key)가 필요합니다");
+  if (!key) throw new Error("카테고리 붙이기 레인 식별자(key)가 필요합니다");
 
   const pick = <T>(v: T | undefined, prev: T): T => (v === undefined ? prev : v);
   const row = {

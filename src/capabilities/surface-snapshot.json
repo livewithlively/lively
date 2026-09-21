@@ -783,7 +783,7 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "e4899b729f8f8961"
+  "input_hash": "5ddf229f460b06d8"
  },
  {
   "name": "org_context_job_runner_fill",
@@ -1248,9 +1248,9 @@
   "input_hash": "7d3b26cb0b2c2ce3"
  },
  {
-  "name": "org_classifier_list",
+  "name": "org_distiller_category_list",
   "scope": "memory",
-  "mcp": true,
+  "mcp": false,
   "mutates": false,
   "rest": [
    "GET /api/ui/org/classifiers"
@@ -1258,34 +1258,42 @@
   "input_hash": "6c9f16e97bc4049d"
  },
  {
-  "name": "org_classifier_upsert",
+  "name": "org_distiller_category_upsert",
   "scope": "memory",
   "mcp": true,
   "mutates": true,
   "rest": [
    "POST /api/ui/org/classifiers"
   ],
-  "input_hash": "08b00c5f32f85132"
+  "input_hash": "5ab4446c8bac7bc6"
  },
  {
-  "name": "org_classifier_preview",
+  "name": "org_distiller_category_preview",
   "scope": "memory",
   "mcp": true,
   "mutates": false,
   "rest": [
    "GET /api/ui/org/classifiers/preview"
   ],
-  "input_hash": "c5dbf18020496e89"
+  "input_hash": "a15dad16e11f968e"
  },
  {
-  "name": "org_classifier_remove",
+  "name": "org_distiller_category_remove",
   "scope": "memory",
   "mcp": true,
   "mutates": true,
   "rest": [
    "POST /api/ui/org/classifiers/remove"
   ],
-  "input_hash": "2aa5d51896628e35"
+  "input_hash": "589d046b4b89dee1"
+ },
+ {
+  "name": "org_classifier_list",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [],
+  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "org_manager_list",

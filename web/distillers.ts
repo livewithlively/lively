@@ -28,6 +28,7 @@ import { confirmDialog, skeleton } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
 import { isWholeDistillJob } from './lib/stage-job-pick.js';
 import { runConfig } from './context-run-config.js';    // #4008 제공자·모델·추론강도 공용 선택기
+import { renderFillLanes } from './distill-fill.js';    // #4194 두 번째 레인 — 카테고리 붙이기(옛 「분류기」)
 
 const PAGE_TYPES = ['', 'decision', 'concept', 'how-to', 'reference', 'research', 'entity'];
 const KINDS = ['slack', 'email', 'discord', 'transcript', 'minutes', 'notion_doc', 'clickup_doc', 'drive_file', 'local_file', 'other'];
@@ -80,20 +81,23 @@ export async function distillersPanel(detail, data) {
   const on = distillers.filter((d) => d.enabled).sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0));
   const off = distillers.filter((d) => !d.enabled);
 
+  //  #4194 — 증류기는 «지식을 완성시킨다». 두 종류가 한 화면에 선다: 이 절(자료 → 지식)과 아래 「카테고리 붙이기」 절
+  //   (미분류 지식 → 카테고리, web/distill-fill.ts — 옛 「분류기」). 제목 수는 두 종류를 합친 수다.
+  const fillN = Array.isArray(res.knowledge_lanes) ? res.knowledge_lanes.length : 0;
   body.append(el('div', { class: 'cxc-head' },
     el('div', { class: 'cxc-head-main' },
-      el('h3', { class: 'cxc-title' }, el('span', { text: '증류기' }), el('span', { class: 'cxc-title-n num', text: String(distillers.length) })),
-      el('p', { class: 'cxc-lead', text: '증류기는 쌓인 자료를 읽고, 남길 가치가 있는 것만 골라 지식으로 씁니다. 자료 하나는 증류기 하나만 읽습니다 — 위에서부터 조건에 맞는 첫 증류기가 읽고, 어느 것에도 맞지 않는 자료는 맨 아래 「안전망」이 읽습니다.' })),
-    el('div', { class: 'cxc-head-acts' }, el('a', { class: 'btn btn-primary', href: pageHref(NEW_KEY), text: '+ 증류기 만들기' }))));
+      el('h3', { class: 'cxc-title' }, el('span', { text: '증류기' }), el('span', { class: 'cxc-title-n num', text: String(distillers.length + fillN) })),
+      el('p', { class: 'cxc-lead', text: '증류기는 지식을 완성합니다. 쌓인 자료를 읽고 남길 가치가 있는 것만 지식으로 쓰는 「자료 → 지식」과, 미분류 지식에 알맞은 칸을 정하는 「카테고리 붙이기」(아래) 두 종류가 있습니다. 자료 하나는 증류기 하나만 읽습니다 — 위에서부터 조건에 맞는 첫 증류기가 읽고, 어느 것에도 맞지 않는 자료는 맨 아래 「안전망」이 읽습니다.' })),
+    el('div', { class: 'cxc-head-acts' }, el('a', { class: 'btn btn-primary', href: pageHref(NEW_KEY), text: '+ 자료 증류기 만들기' }))));
 
   body.append(statsStrip(coverage, on.length, distillers.length));
 
   if (!distillers.length) {
     body.append(el('div', { class: 'cxc-list' }, el('div', { class: 'cxc-empty' },
-      el('p', { class: 'cxc-empty-t', text: '아직 증류기가 없습니다' }),
+      el('p', { class: 'cxc-empty-t', text: '아직 자료 증류기가 없습니다' }),
       el('p', { class: 'cxc-empty-d', text: '증류기가 하나도 없으면 모든 자료를 한 가지 공통 기준으로 읽습니다. 팀이나 채널마다 남길 기준을 다르게 하려면 하나 만드세요.' }))));
   } else {
-    body.append(el('p', { class: 'cxc-sub cxc-group-t' }, el('span', { text: '돌고 있는 증류기' }), el('span', { class: 'cxc-title-n num', text: String(on.length) })));
+    body.append(el('p', { class: 'cxc-sub cxc-group-t' }, el('span', { text: '돌고 있는 자료 증류기' }), el('span', { class: 'cxc-title-n num', text: String(on.length) })));
     const cards = el('div', { class: 'dsl-cards' });
     if (!on.length) cards.append(el('div', { class: 'cxc-list' }, el('div', { class: 'cxc-empty' }, el('p', { class: 'cxc-empty-d', text: '켜진 증류기가 없습니다 — 아래에서 하나를 켜세요.' }))));
     for (const d of on) cards.append(distillerCard(d, stat(d.id), catName, rerender));
@@ -101,7 +105,7 @@ export async function distillersPanel(detail, data) {
 
     if (off.length) {
       const fold = el('details', { class: 'cxc-fold' },
-        el('summary', {}, el('span', { class: 'cxc-sub' }, el('span', { text: '꺼 둔 증류기' }), el('span', { class: 'cxc-title-n num', text: String(off.length) })),
+        el('summary', {}, el('span', { class: 'cxc-sub' }, el('span', { text: '꺼 둔 자료 증류기' }), el('span', { class: 'cxc-title-n num', text: String(off.length) })),
           el('span', { class: 'cxc-fold-d', text: '리브가 카테고리마다 미리 준비해 둔 것이 대부분입니다 — 그런 자료가 들어오기 시작하면 켜세요.' })));
       const offList = el('div', { class: 'cxc-list' });
       for (const d of off) offList.append(distillerRowCompact(d, stat(d.id), catName, rerender));
@@ -111,7 +115,11 @@ export async function distillersPanel(detail, data) {
   }
 
   body.append(await runJobCard(rerender));
+  //  두 번째 레인 — 카테고리 붙이기(#4194). 같은 응답(knowledge_lanes · coverage.knowledge)으로 그린다. 자기 절만 다시 그린다.
+  const fill = el('div', { class: 'dsl-fill' });
+  body.append(fill);
   detail.replaceChildren(body);
+  await renderFillLanes(fill, res);
 }
 
 /**
@@ -883,6 +891,7 @@ function editorPage(d, isNew: boolean): HTMLElement {
 async function runJobCard(rerender) {
   return stageJobCard({
     stage: '증류',
+    title: '자료 → 지식 자동 실행',   // #4194 — 같은 탭 아래 「카테고리 붙이기 자동 실행」 카드와 가른다
     actions: ['distill_sources_headless', 'distill_sources'],
     create: {
       id: 'distill-sources-headless', label: '자료 증류 (수집된 원본→지식, 헤드리스)',

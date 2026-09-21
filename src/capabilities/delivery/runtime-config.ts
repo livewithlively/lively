@@ -714,8 +714,8 @@ export const runtimeConfigCapabilities: Capability[] = [
         auth_fail_stop_cron: z.boolean().optional().describe("자격(인증) 실패를 감지하면 그 위탁을 낸 크론을 자동 정지할지(#1675 ③). 기본 켬. 끄면 알림만 가고 크론은 계속 돌아 같은 실패를 반복한다"),
       }).optional().describe("위탁 태스크 정책(#1101) — 무출력 stall 상한. 자격 부재로 claude -p 가 hang 하면 종전엔 timeout(1h)까지 무출력으로 매달렸다. 레포 준비가 느린 박스는 늘리고, 배치 드레인은 줄여 빨리 실패를 본다"),
       context_job_policy: z.object({
-        runner_member: z.string().nullable().optional().describe("맥락관리 잡(증류·분류·관리 등 LLM 잡)을 **이 멤버의 자격으로** 돌린다(#4012 T1). 멤버 id(또는 이메일). null=해제 → 종전 동작(잡 params.requester > created_by). 사람이 안 보는 자리에서 도는 잡의 과금·귀속이 «누가 마지막으로 그 잡을 저장했나» 로 정해지지 않게 하는 자리다. 레인·잡이 자기 requester 를 명시했으면 그쪽이 이긴다(더 구체적인 지정)"),
-      }).optional().describe("맥락관리 잡 실행 신원(#4012 T1 · #3994 D1) — 워크스페이스가 정한 멤버 한 명의 자격으로 증류·분류·관리를 돌린다. 그 멤버의 Claude/Codex 자격(claude_setup_token)이 등록돼 있어야 실제로 선다"),
+        runner_member: z.string().nullable().optional().describe("맥락관리 잡(증류 — 자료 → 지식·카테고리 붙이기 — 와 관리 등 LLM 잡)을 **이 멤버의 자격으로** 돌린다(#4012 T1). 멤버 id(또는 이메일). null=해제 → 종전 동작(잡 params.requester > created_by). 사람이 안 보는 자리에서 도는 잡의 과금·귀속이 «누가 마지막으로 그 잡을 저장했나» 로 정해지지 않게 하는 자리다. 레인·잡이 자기 requester 를 명시했으면 그쪽이 이긴다(더 구체적인 지정)"),
+      }).optional().describe("맥락관리 잡 실행 신원(#4012 T1 · #3994 D1) — 워크스페이스가 정한 멤버 한 명의 자격으로 증류·관리를 돌린다. 그 멤버의 Claude/Codex 자격(claude_setup_token)이 등록돼 있어야 실제로 선다"),
       // #1780 Stage B — 앱 worker 조직 예산. 각 값 0 = 무제한/감시 끔.
       //  상한은 WORKER_POLICY_MAX 를 그대로 쓴다(스키마·핸들러·store clamp 가 한 상수를 공유 — 드리프트 금지).
       worker_policy: z.object({
@@ -755,7 +755,7 @@ export const runtimeConfigCapabilities: Capability[] = [
   {
     name: "org_context_job_runner_fill",
     title: "기본 실행 멤버 채우기(비어 있을 때만)",
-    description: "맥락관리 잡(증류·분류·관리)의 워크스페이스 실행 멤버(context_job_policy.runner_member)가 **한 번도 정해진 적 없을 때만** " +
+    description: "맥락관리 잡(증류·관리)의 워크스페이스 실행 멤버(context_job_policy.runner_member)가 **한 번도 정해진 적 없을 때만** " +
       "이 구성원으로 채운다. 관리자가 비워 둔 것(명시적 null)·이미 정해진 것·env 시드는 건드리지 않는다. 활성 사람 구성원만 받는다.",
     scope: "admin",
     input: {

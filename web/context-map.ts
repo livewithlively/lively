@@ -106,7 +106,11 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
   const startDocs = secD && secD.sections ? Object.keys(secD.sections).length : null;
   const sessions: any[] = (sessD && sessD.sessions) || [];
   const busy = sessions.filter((s) => s && (s.agentState === 'busy' || s.agentState === 'waiting')).length;
-  const searchable = Math.max(0, Number(st.distill?.output || 0) - Number(st.classify?.backlog || 0));
+  //  #4194 — 미분류 지식은 소환되지 않는다. 그 수는 증류기의 카테고리 붙이기가 들고 있다(stages.distill.knowledge ·
+  //   배포 중 옛 게이트웨이면 옛 모양 stages.classify).
+  const fill = st.distill?.knowledge || st.classify || null;
+  const fillN = Number(fill?.backlog || 0);
+  const searchable = Math.max(0, Number(st.distill?.output || 0) - fillN);
 
   // ── 역 넷(장소 = 흰 카드) — 같은 해부 4칸: 문패(유리 아이콘 · 이름 · 수) / 정의 / 실물 / 발치 ──
   //  #3830(2026-09-10 원준): 장소 카드는 **그 장소로** 간다 — 외부 앱→[외부 앱 연결] · 자료→[자료] 앱 · 지식→레일 [위키] ·
@@ -152,10 +156,11 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
           el('b', { class: 'cxm-kn-t', text: k.title || k.name }),
           k.lifecycle === 'pending' ? el('span', { class: 'pill pill-warn', text: '승인 대기' }) : el('span', { class: 'cxm-kn-m', text: relTime(k.updated_at) })))
       : [el('span', { class: 'cxm-empty', text: '아직 지식이 없습니다' })]));
-  const classifyEvery = st.classify?.job?.any_enabled ? '자동 분류 ' + intervalText(st.classify.job.interval_sec) : '자동 분류 꺼짐';
+  //  발치 첫 칸 — 미분류 지식이 있으면 그 수(검색에 안 잡히는 것)를, 없으면 조용히 «모두 칸에 들어 있음».
+  const fillFoot = fillN ? '미분류 지식 ' + fmt(fillN) + '건' : '모두 카테고리에 들어 있음';
   const stKnow = station({ href: '#/knowledge', go: { section: 'wiki', route: '#/knowledge' }, icon: 'wiki', name: '지식', v: fmt(st.distill?.output), unit: '건',
-    def: '증류를 통과해 남은 것입니다. 카테고리 ' + fmt(st.classify?.categories) + '칸에 정리됩니다', x: knowX,
-    foot: classifyEvery + ' · 점검 발견 ' + fmt(findings), lv: lv.distill });
+    def: '증류를 통과해 남은 것입니다. 카테고리 ' + fmt(d?.taxonomy?.categories ?? st.classify?.categories) + '칸에 정리됩니다', x: knowX,
+    foot: fillFoot + ' · 점검 발견 ' + fmt(findings), lv: lv.distill });
 
   const aiX = el('span', { class: 'cxm-sess' },
     el('span', { class: 'cxm-sess-u', text: '지난 미팅 정리해줘' }),
@@ -199,7 +204,7 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
     el('span', { class: 'cxm-cell-s', text: '승인 ' + fmt(pending) + ' · 카테고리 제안 ' + fmt(proposed) + ' · 점검 발견 ' + fmt(findings) }),
     el('span', { class: 'btn btn-sm ' + (pending ? 'btn-primary' : 'btn-ghost'), text: '확인하러 가기' }));
   const jobsCell = el('div', { class: 'cxm-cell cxh-jobs' }, el('span', { class: 'cxh-jobs-t', text: '자동 실행' }),
-    jobChip('수집', st.collect?.job), jobChip('증류', st.distill?.job), jobChip('분류', st.classify?.job), jobChip('점검', st.manage?.job));
+    jobChip('수집', st.collect?.job), distillChip(st.distill?.job, fill?.job, fillN), jobChip('점검', st.manage?.job));
 
   box.replaceChildren(el('div', { class: 'cxm' },
     el('p', { class: 'cxm-cap' }, el('b', { text: '흐름 지도' }),
@@ -224,7 +229,20 @@ export async function renderContextMapScreen(box: HTMLElement): Promise<void> {
   await renderContextMap(box);
 }
 
-// 자동 실행 칩 — context-home(#1841)의 것을 그대로 승계(그 파일은 이 화면으로 대체됐다).
+/**
+ * 증류 칩 — 자료 → 지식 잡을 대표로 보이되, 카테고리 붙이기 잡이 꺼졌거나 없는데 **미분류 지식이 있으면** 그 사실을 덧붙인다(#4194).
+ *  칩을 따로 세우면 «수집 · 증류 · 분류 · 점검» 네 단계 줄이 되살아난다(적대검증) — 증류는 한 단계, 잡은 둘이다.
+ */
+function distillChip(job: any, fillJob: any, fillN: number): HTMLElement {
+  const chip = jobChip('증류', job);
+  if (fillN > 0 && (!fillJob || !fillJob.any_enabled)) {
+    chip.append(el('span', { class: 'cxh-job-x', text: ' · 카테고리 붙이기 ' + (!fillJob ? '미등록' : '꺼짐') }));
+    chip.title = '미분류 지식 ' + fmtNum(fillN) + '건 — 카테고리 붙이기 자동 실행이 ' + (!fillJob ? '없습니다' : '꺼져 있습니다');
+  }
+  return chip;
+}
+
+// 자동 실행 칩 — context-home(#1841)의 것을 그대로 승계(그 파일은 지웠다 — #4194).
 function jobChip(label: string, job: any): HTMLElement {
   const state = !job ? 'off' : (!job.any_enabled ? 'off' : 'on');
   const txt = !job ? '미등록' : (!job.any_enabled ? '꺼짐' : intervalText(job.interval_sec) + (job.last_run_at ? ' · ' + relTime(job.last_run_at) : ' · 미실행'));

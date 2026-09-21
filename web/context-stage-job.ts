@@ -1,4 +1,4 @@
-// context-stage-job.ts — 파이프라인 단계의 「자동 실행」 판(구 '언제 도나' 카드). 네 단계(수집·증류·분류·관리) 공용.
+// context-stage-job.ts — 파이프라인 단계의 「자동 실행」 판(구 '언제 도나' 카드). 수집·증류(자료 레인·카테고리 붙이기 레인)·관리 공용.
 //
 //  왜 한 곳으로 모았나(#1618): 단계마다 실행 제어의 수준이 제각각이었다 —
 //   · 수집: 수집기를 켜면 잡이 자동 생성·활성(syncCollectorJob). 사람이 잡을 의식할 일이 없다.
@@ -33,8 +33,10 @@ function statusWord(st: unknown): string {
 }
 
 export interface StageJobSpec {
-  /** 카드 문구에 그대로 박히는 단계 이름 — '증류'·'분류'·'관리'·'수집'. */
+  /** 카드 문구에 그대로 박히는 단계 이름 — '증류'·'카테고리 붙이기'·'관리'·'수집'. */
   stage: string;
+  /** 카드 제목(기본 «자동 실행»). 한 화면에 카드가 둘 설 때 가른다(#4194 — 증류기 탭: 자료 → 지식 · 카테고리 붙이기). */
+  title?: string;
   actions: string[];
   /**
    * action 만으로는 이 단계의 잡을 못 가릴 때의 추가 필터(id 기준).
@@ -123,7 +125,7 @@ export async function stageJobCard(spec: StageJobSpec, rerender: () => void): Pr
   const tile = el('span', { class: 'svc-tile cxc-tile cxc-tile-machine', 'aria-hidden': 'true' }, clockIcon());
   const card = el('section', { class: 'cxr', 'aria-label': `${spec.stage} 자동 실행` },
     el('div', { class: 'cxr-head' }, tile,
-      el('div', { class: 'cxr-main' }, el('div', { class: 'cxc-t' }, el('b', { class: 'cxr-t', text: '자동 실행' }), pill), line),
+      el('div', { class: 'cxr-main' }, el('div', { class: 'cxc-t' }, el('b', { class: 'cxr-t', text: spec.title || '자동 실행' }), pill), line),
       acts));
   const setState = (on: boolean, text: string) => {
     pill.hidden = false;
