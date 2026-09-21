@@ -710,7 +710,7 @@ const projectUpdateV6: Capability = {
     catch (e) {
       // 덮지 않았다 — 화면이 최신 본문을 다시 불러 사람에게 묻는다(곁칸 태스크 부품 · 프로젝트 설정).
       if (e instanceof ProjectBodyConflictError)
-        throw new HttpError(409, "본문이 다른 곳에서 바뀌었습니다 — 최신 본문을 불러와 다시 고쳐 주세요", { body: { conflict: "description" } });
+        throw new HttpError(409, "본문이 다른 곳에서 바뀌었습니다 — 최신 본문을 불러와 다시 고쳐 주세요");   // stage: HttpError 에 body(#3870)가 아직 없다 — 화면은 상태코드(409)로 가른다
       throw e;
     }
     const rescheduled = before ? await propagateReschedule(id, before, project, writeCtx) : [];
