@@ -3,7 +3,7 @@
 //  대화상자·로그인 화면) · 신뢰 대화상자는 세션 전용 폴더에서만 대신 누른다 · 비-Claude 는 하네스가 포그라운드가 된 뒤 정착 6s ·
 //  상한 초과면 포기 · 하단 14줄만 본다.
 import assert from "node:assert/strict";
-import { firstPromptStep, tailOf } from "./session-first-prompt.js";
+import { firstPromptStep, tailOf, FIRST_PROMPT_BOOT_MS, FIRST_PROMPT_HOLD_MS } from "./session-first-prompt.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -94,5 +94,50 @@ t("[AG1] Antigravity 신뢰 대화상자 + 세션 전용 폴더 → accept-trust
   assert.equal(firstPromptStep({ ...base, harness: "antigravity", paneCmd: "antigravity", pane: AG_TRUST, elapsedMs: 8000 }), "accept-trust"));
 t("[AG2] Antigravity 신뢰 대화상자 + 사람이 고른 폴더 → wait(6초가 지나도 대화상자에 텍스트를 밀어 넣지 않는다)", () =>
   assert.equal(firstPromptStep({ ...base, harness: "antigravity", paneCmd: "antigravity", pane: AG_TRUST, elapsedMs: 8000, trustOk: false }), "wait"));
+
+// ── 사람을 기다린다(#3870) ─────────────────────────────────────────────────────────────────────
+//  실측 2026-09-22(원준님 맥미니 노드, Claude Code 2.1.274): 새로 생긴 멤버 프로필에서 claude 는 첫 실행 안내를 띄운다.
+//  사람이 그걸 넘기는 데 90초가 넘게 걸렸고, 주입기는 90초에 포기해 홈 [시키기] 의 첫 지시가 통째로 사라졌다.
+//  이제 injectFirstPrompt 는 maxMs=FIRST_PROMPT_HOLD_MS · blindMaxMs=FIRST_PROMPT_BOOT_MS 로 판정한다.
+const ONBOARD_THEME = [   // 빈 CLAUDE_CONFIG_DIR 로 `claude --dangerously-skip-permissions …` 를 띄운 첫 화면(실측 캡처)
+  ".......█ █   █ █..........................░..........▒....",
+  " Let's get started.",
+  " Choose the text style that looks best with your terminal",
+  " To change this later, run /theme",
+  "   1. Auto (match terminal)",
+  "   2. Dark mode",
+  " ❯ 3. Light mode ✔",
+  "   4. Dark mode (colorblind-friendly)",
+  "   5. Light mode (colorblind-friendly)",
+  "  1  function greet() {",
+  "  2 -  console.log(\"Hello, World!\");",
+  "  2 +  console.log(\"Hello, Claude!\");",
+  "  3  }",
+  "  Syntax theme: GitHub (ctrl+t to disable)",
+].join("\n");
+const hold = { ...base, maxMs: FIRST_PROMPT_HOLD_MS, blindMaxMs: FIRST_PROMPT_BOOT_MS };
+t("[H1] 첫 실행 안내(글자 스타일 고르기)는 입력창이 아니다 → wait(대신 누르지도, 넣지도 않는다)", () =>
+  assert.equal(firstPromptStep({ ...hold, pane: ONBOARD_THEME }), "wait"));
+t("[H2] ★ 그 안내에 90초를 넘게 머물러도 포기하지 않는다 — 30분째에도 wait", () => {
+  assert.equal(firstPromptStep({ ...hold, pane: ONBOARD_THEME, elapsedMs: FIRST_PROMPT_BOOT_MS + 1 }), "wait");
+  assert.equal(firstPromptStep({ ...hold, pane: ONBOARD_THEME, elapsedMs: 30 * 60_000 }), "wait");
+  assert.equal(firstPromptStep({ ...hold, pane: LOGIN, elapsedMs: 30 * 60_000 }), "wait");
+});
+t("[H3] ★ 사람이 안내를 넘겨 입력창이 뜨면 그때 넣는다(몇 분 뒤라도)", () =>
+  assert.equal(firstPromptStep({ ...hold, pane: CLAUDE_READY, elapsedMs: 4 * 60_000 }), "send"));
+t("[H4] 사람을 기다리는 창도 끝은 있다 — 상한을 넘기면 give-up", () =>
+  assert.equal(firstPromptStep({ ...hold, pane: ONBOARD_THEME, elapsedMs: FIRST_PROMPT_HOLD_MS + 1 }), "give-up"));
+t("[H5] 입력창을 못 알아보는 하네스의 추정 전송은 부팅 창 안에서만 — 넘기면 종전대로 give-up", () => {
+  const blind = { ...hold, harness: "some-cli", paneCmd: "some-cli", pane: "" };
+  assert.equal(firstPromptStep({ ...blind, elapsedMs: 10_000 }), "send");
+  //  오래 지나 포그라운드가 셸이 아닌 것은 «하네스가 떴다» 가 아니라 사람이 셸에서 딴 프로그램을 켠 것일 수 있다.
+  assert.equal(firstPromptStep({ ...blind, elapsedMs: FIRST_PROMPT_BOOT_MS + 1 }), "give-up");
+});
+t("[H6] 하네스가 죽어 셸로 떨어져도(런처 폴백) claude 는 입력창이 다시 뜰 때까지 wait — 셸에 글자를 넣지 않는다", () =>
+  assert.equal(firstPromptStep({ ...hold, paneCmd: "zsh", pane: "────\nClaude Code — 예기치 않게 종료됐습니다.\n\n    claude\n\nlively@mac ~ %", elapsedMs: 5 * 60_000 }), "wait"));
+t("[H7] 창의 크기 — 부팅 창 90초 · 사람을 기다리는 창은 아웃박스(NOT_READY_TTL_MS)와 같은 2시간", () => {
+  assert.equal(FIRST_PROMPT_BOOT_MS, 90_000);
+  assert.equal(FIRST_PROMPT_HOLD_MS, 2 * 60 * 60_000);
+});
 
 console.log(`session-first-prompt: ${pass} passed`);

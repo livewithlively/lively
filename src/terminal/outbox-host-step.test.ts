@@ -65,20 +65,20 @@ test("★ P2 치기 — 세션 확인이 무응답(killed)이면 none/unknown �
 test("★ P3 치기 — 글자를 싣다 실패하면 partial/text 이고 Enter 는 누르지 않는다", async () => {
   const h = fakeHost({ fail: (a) => (isText(a) ? killedErr() : null) });
   assert.deepEqual(await runOutboxStep({ step: "type", id: ID, text: "안녕" }, h.deps), { ok: false, typed: "partial", at: "text" });
-  assert.deepEqual(h.events, ["has-session", "send-keys -l 안녕"], "반쪽이 남았을 수 있는 입력칸에 Enter 를 눌렀다");
+  assert.deepEqual(h.events, ["has-session", "send-keys -l -- 안녕"], "반쪽이 남았을 수 있는 입력칸에 Enter 를 눌렀다");
 });
 
 test("★ P4 치기 — Enter 가 실패하면 partial/enter", async () => {
   const h = fakeHost({ fail: (a) => (isKey("Enter")(a) ? killedErr() : null) });
   assert.deepEqual(await runOutboxStep({ step: "type", id: ID, text: "안녕" }, h.deps), { ok: false, typed: "partial", at: "enter" });
-  assert.deepEqual(h.events, ["has-session", "send-keys -l 안녕", `sleep ${injectFlushMs(2)}`, "send-keys Enter"]);
+  assert.deepEqual(h.events, ["has-session", "send-keys -l -- 안녕", `sleep ${injectFlushMs(2)}`, "send-keys Enter"]);
 });
 
 test("P4a 치기 — 전부 되면 full · 확인 → 평탄화한 한 줄 → flush 대기 → Enter 순서(send-keys 규약 그대로)", async () => {
   const h = fakeHost();
   assert.deepEqual(await runOutboxStep({ step: "type", id: ID, text: "첫 줄\n  둘째 줄" }, h.deps), { ok: true, typed: "full" });
   const oneLine = "첫 줄 둘째 줄";
-  assert.deepEqual(h.events, ["has-session", `send-keys -l ${oneLine}`, `sleep ${injectFlushMs(oneLine.length)}`, "send-keys Enter"]);
+  assert.deepEqual(h.events, ["has-session", `send-keys -l -- ${oneLine}`, `sleep ${injectFlushMs(oneLine.length)}`, "send-keys Enter"]);
 });
 
 test("★ P4b 확인을 지난 뒤의 실패는 «세션 없음» 모양이어도 partial — none 으로 내리면 받는 쪽이 다시 쳐서 두 번 간다", async () => {
@@ -103,7 +103,7 @@ test("P5a 치기 — 글이 없거나 문자열이 아니면(새 값이 빔) 거
 test("P5b 치기 — 한 글자(경계)도 full 이고 flush 는 send-keys 규약의 값을 쓴다", async () => {
   const h = fakeHost();
   assert.deepEqual(await runOutboxStep({ step: "type", id: ID, text: "x" }, h.deps), { ok: true, typed: "full" });
-  assert.deepEqual(h.events, ["has-session", "send-keys -l x", `sleep ${injectFlushMs(1)}`, "send-keys Enter"]);
+  assert.deepEqual(h.events, ["has-session", "send-keys -l -- x", `sleep ${injectFlushMs(1)}`, "send-keys Enter"]);
 });
 
 // ── 공통 거절 ───────────────────────────────────────────────────────────────

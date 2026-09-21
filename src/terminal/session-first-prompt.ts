@@ -39,6 +39,21 @@ const TRUST_DIALOG = /trust the (files|contents) (in|of) this (folder|directory|
 // 하네스가 아직 뜨는 중인데 화면에 아무 표식이 없을 때, 비-Claude 하네스에 쓰는 보수적 대기(입력창 문구를 모르는 하네스).
 const OTHER_HARNESS_SETTLE_MS = 6000;
 
+// ── 얼마나 기다리나(injectFirstPrompt) ─────────────────────────────────────────────────────────────
+//  부팅 창 — 이 안에서는 촘촘히(0.4s) 보고, 입력창을 **못 알아보는** 하네스의 추정 전송(아래 폴백)도 이 안에서만 한다.
+export const FIRST_PROMPT_BOOT_MS = 90_000;
+//  사람을 기다리는 창 — 입력창을 알아볼 수 있는 하네스는 이만큼 들고 있다가 뜨는 순간 넣는다.
+//  🔴 왜 90초가 아닌가(실측 2026-09-22, 원준님 맥미니 노드 box-wonjoon-jang-676fd1b9): 새로 생긴 멤버 프로필
+//   (CLAUDE_CONFIG_DIR 빈 폴더)에서 Claude Code 는 **첫 실행 안내**(글자 스타일 → 로그인 방법 → 로그인 → 보안 안내 →
+//   bypass 경고)를 차례로 띄우고 전부 사람 입력을 기다린다. 사람이 그걸 넘기는 데 90초가 넘게 걸렸고, 그 사이 이 함수가
+//   포기해 홈에서 [시키기]로 보낸 지시가 **통째로 사라졌다** — 사람에겐 «시켰는데 세션이 아무것도 안 한다» 로 보였다.
+//   게이트웨이 경로(아웃박스)는 같은 이유로 이미 2시간을 든다(session-outbox NOT_READY_TTL_MS, #2154) — 노드 경로만
+//   90초였다. 같은 교리를 쓴다: 지시를 들고 있는 목적이 바로 **사람이 화면을 넘기고 돌아올 때까지**다.
+//  ⚠ 이 창이 길어도 **입력창이 보이기 전에는 절대 안 넣는다**(firstPromptStep 이 그대로 지킨다) — 기다림만 길어진다.
+export const FIRST_PROMPT_HOLD_MS = 2 * 60 * 60_000;
+//  부팅 창을 넘긴 뒤의 폴 간격 — 사람이 화면을 넘기면 2초 안에 들어간다. 2시간 × 0.4s 폴은 tmux 를 괜히 두드린다.
+const HOLD_POLL_MS = 2_000;
+
 // 신뢰 대화상자의 **선택지 줄** — `❯ No, exit` · `  Yes, I trust this folder` · 구판 `❯ 1. Yes, …` 를 함께 잡는다.
 //  줄머리 앵커 + Yes/No 로 시작하는 것만 = 본문이 trust 를 언급하는 것만으로는 안 걸린다(TRUST_DIALOG 와 같은 교리).
 const TRUST_OPTION = /^[ \t]*([❯>])?[ \t]*(?:\d+[.)])?[ \t]*(Yes|No)\b(.*)$/i;
@@ -86,8 +101,13 @@ export function tailOf(pane: string, n = TAIL_LINES): string[] {
  *  - accept-trust: 신뢰 대화상자가 떠 있고 자동 수락이 허용된 자리(세션 전용 폴더) — Enter 로 기본 선택(Yes)을 고른다.
  *  - send: 입력창이 보인다(Claude) / 하네스가 포그라운드로 자리 잡고 충분히 지났다(그 밖의 하네스).
  *  - wait: 아직.
+ *
+ *  `blindMaxMs` — 입력창을 **못 알아보는** 하네스(맨 아래 폴백: 포그라운드·경과 시간으로 추정)에 넣어도 되는 상한.
+ *   이걸 넘기면 그 추정은 포기한다: 오래 지나서 포그라운드가 셸이 아닌 것은 «하네스가 떴다» 가 아니라 사람이 셸에서 딴
+ *   프로그램을 켠 것일 수 있다. 입력창을 **알아보는** 하네스(claude · screen 판정)는 maxMs 까지 기다린다. 생략하면 제한 없음
+ *   (아웃박스처럼 maxMs 가 원래 짧은 호출자).
  */
-export function firstPromptStep(i: { pane: string; harness: string; paneCmd: string; elapsedMs: number; maxMs: number; trustOk: boolean }): FirstPromptStep {
+export function firstPromptStep(i: { pane: string; harness: string; paneCmd: string; elapsedMs: number; maxMs: number; trustOk: boolean; blindMaxMs?: number }): FirstPromptStep {
   if (i.elapsedMs > i.maxMs) return "give-up";
   const tail = tailOf(i.pane);
   const tailText = tail.join("\n");
@@ -101,6 +121,7 @@ export function firstPromptStep(i: { pane: string; harness: string; paneCmd: str
   if (scr === "dialog") return "wait";                        // 신뢰 대화상자는 위에서 이미 갈랐다 — 그 밖의 대화상자는 대신 안 누른다
   if (i.harness === "claude") return tail.some((l) => INPUT_BOX.test(l)) ? "send" : "wait";
   // 그 밖의 하네스 — 입력창 문구를 모른다. 포그라운드가 셸이 아니게 된 뒤(하네스가 떴다) 조금 기다렸다 넣는다.
+  if (i.blindMaxMs !== undefined && i.elapsedMs > i.blindMaxMs) return "give-up";
   const fg = (i.paneCmd || "").trim();
   if (!fg || SHELL_CMDS.has(fg)) return "wait";
   return i.elapsedMs >= OTHER_HARNESS_SETTLE_MS ? "send" : "wait";
@@ -140,29 +161,40 @@ export async function acceptTrustDialog(id: string, pane: string, keys: TrustKey
 }
 
 /**
- * 첫 지시를 넣는다 — 입력창이 뜰 때까지 폴링(0.4s)하고, 신뢰 대화상자면 수락하고, 뜨면 넣는다.
- *  maxMs 를 넘기면 포기한다(warn). 세션이 그새 사라져도(사용자가 닫음) 조용히 끝난다.
+ * 첫 지시를 넣는다 — 입력창이 뜰 때까지 폴링하고, 신뢰 대화상자면 수락하고, 뜨면 넣는다.
+ *  부팅 창(FIRST_PROMPT_BOOT_MS) 안에서는 0.4s, 그 뒤로는 사람이 첫 실행 안내·로그인을 넘기길 기다리며 2s 로 본다.
+ *  maxMs(기본 FIRST_PROMPT_HOLD_MS)를 넘기면 포기한다(warn). 세션이 그새 사라져도(사용자가 닫음) 조용히 끝난다.
  *  ⚠ 자동 수락(trustOk)은 세션 전용 폴더에서만 참으로 넘긴다(파일 머리말).
  */
 export async function injectFirstPrompt(id: string, harness: string, text: string, opts?: { maxMs?: number; pollMs?: number; trustOk?: boolean }): Promise<boolean> {
-  const maxMs = opts?.maxMs ?? 90_000;
+  const maxMs = opts?.maxMs ?? FIRST_PROMPT_HOLD_MS;
   const pollMs = opts?.pollMs ?? 400;
   const trustOk = opts?.trustOk ?? false;
   const t0 = Date.now();
   let acceptedTrust = false;
+  let saidHolding = false;
+  let saidUnreadable = false;
   for (;;) {
     let seen: { pane: string; paneCmd: string };
     try { seen = await peek(id); }
     catch { return false; }                                  // 세션이 사라졌다(닫힘·죽음) — 넣을 곳이 없다
-    const step = firstPromptStep({ ...seen, harness, elapsedMs: Date.now() - t0, maxMs, trustOk });
-    if (step === "give-up") { console.warn(`[terminal] 첫 지시를 넣지 못했다(${id}) — ${Math.round(maxMs / 1000)}초 안에 입력창이 안 떴다(로그인·오류 화면일 수 있다).`); return false; }
+    const elapsedMs = Date.now() - t0;
+    const step = firstPromptStep({ ...seen, harness, elapsedMs, maxMs, trustOk, blindMaxMs: FIRST_PROMPT_BOOT_MS });
+    if (step === "give-up") { console.warn(`[terminal] 첫 지시를 넣지 못했다(${id}) — ${Math.round(elapsedMs / 1000)}초 동안 입력창이 안 떴다(로그인·오류 화면일 수 있다).`); return false; }
+    const booting = elapsedMs < FIRST_PROMPT_BOOT_MS;
+    if (!booting && !saidHolding) {
+      saidHolding = true;
+      console.warn(`[terminal] 첫 지시 대기 중(${id}) — ${Math.round(FIRST_PROMPT_BOOT_MS / 1000)}초 안에 입력창이 안 떴다. 첫 실행 안내·로그인이 끝나 입력창이 뜨면 넣는다(최대 ${Math.round(maxMs / 60_000)}분).`);
+    }
     if (step === "accept-trust" && !acceptedTrust) {
       //  ★ #3626 — **화면을 읽고** «Yes» 로 옮긴 뒤 Enter(acceptTrustDialog — 아웃박스와 같은 함수, #3949).
       //   기본 선택이 Yes 라는 전제는 틀렸다. 못 읽으면 **아무것도 안 누르고** 기다린다 — 잘못 누르면 하네스가 종료되고
       //   그 세션이 통째로 사라진다.
       if ((await acceptTrustDialog(id, seen.pane)) === "unreadable") {
-        console.warn(`[terminal] 신뢰 대화상자의 선택지를 못 읽었다(${id}) — 대신 누르지 않는다(사람이 답할 수 있게 남긴다).`);
-        await sleep(pollMs);
+        //  한 번만 말한다 — 이제 2시간을 기다리므로 폴마다 남기면 로그가 그 줄로 덮인다.
+        if (!saidUnreadable) console.warn(`[terminal] 신뢰 대화상자의 선택지를 못 읽었다(${id}) — 대신 누르지 않는다(사람이 답할 수 있게 남긴다).`);
+        saidUnreadable = true;
+        await sleep(booting ? pollMs : HOLD_POLL_MS);
         continue;
       }
       acceptedTrust = true;
@@ -173,6 +205,6 @@ export async function injectFirstPrompt(id: string, harness: string, text: strin
       await sendKeysToSession(id, text);
       return true;
     }
-    await sleep(pollMs);
+    await sleep(booting ? pollMs : HOLD_POLL_MS);
   }
 }
