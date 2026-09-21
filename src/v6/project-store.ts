@@ -614,11 +614,19 @@ export async function setProjectTrashed(id: number, trashed: boolean, ctx?: Writ
   return after;
 }
 
+/** 본문을 고치기 시작한 글(description_base)과 지금 DB 의 본문이 **꼬리 덧붙임 말고 다른 데서** 어긋났다(#4084).
+ *  덮어쓰면 남의 수정이 사라지므로 저장하지 않고 던진다 — 부른 쪽(capability)이 409 로 바꿔 화면이 사람에게 묻게 한다. */
+export class ProjectBodyConflictError extends Error {
+  constructor(id: number) { super(`프로젝트 #${id} 본문이 다른 곳에서 바뀌었습니다`); this.name = "ProjectBodyConflictError"; }
+}
+
 // 프로젝트 이름/설명 수정(level='project'). 주어진 키만 변경(부재=무변경, description null=해제).
 //  append_description: 전체 교체 대신 기존 본문 끝에 이어쓰기(원문 보존·보강). description 과 상호배타(capability 가 게이트).
+//  description_base(#4084): description(전체 교체)과 함께 오면 **가드 저장**이다 — 화면이 고치기 시작한 글을 같이 보내,
+//   그 사이 세션이 append 로 붙인 꼬리를 살려 합친다(아래 SQL). 꼬리가 아닌 곳이 바뀌었으면 ProjectBodyConflictError.
 export async function updateProject(
   id: number,
-  patch: Partial<{ name: string; description: string | null; append_description: string;
+  patch: Partial<{ name: string; description: string | null; append_description: string; description_base: string | null;
     priority: string | null; assignee: string | null; start_date: string | null; due_date: string | null }>,
   ctx?: WriteCtx,
 ): Promise<ProjectRow> {
@@ -632,7 +640,22 @@ export async function updateProject(
   //  그래서 출처를 human 으로 올린다(#2031). 그 뒤로는 자동 이름짓기가 이 프로젝트를 건드리지 않는다.
   //  기계의 임시 이름(rule)은 createProject 로, 에이전트의 자동 이름(agent)은 claimProjectName 으로 들어온다.
   if (patch.name !== undefined) { set("name", patch.name); set("name_source", "human"); }
-  if (patch.description !== undefined) set("description", patch.description);
+  // 가드 저장(#4084) — 곁칸 본문 편집은 **일하는 세션 옆에서** 돈다. 세션은 append 로 본문 끝에 기록을 붙이는데 사람의
+  //  자동저장은 통째 교체라, 그 사이에 붙은 기록을 지운다. 그래서 화면이 «고치기 시작한 글»을 함께 보내면:
+  //   · 지금 본문이 그 글로 **시작**한다(= 그 뒤에 꼬리만 붙었다) → 새 글 + 그 꼬리. 같으면 꼬리는 빈 문자열이다.
+  //   · 아니다(앞·중간이 바뀌었다) → 아무것도 안 쓰고 충돌로 던진다(WHERE 가 행을 못 잡는다).
+  //   · ★기준이 **빈 글**이면 «시작한다» 가 늘 참이다(빈 문자열은 모든 글의 앞부분) — 그대로 두면 남이 그 사이 쓴 글에
+  //     내 글이 구분 없이 들러붙고(`World`+`Hello`) 성공으로 보고된다(격리 리뷰 2026-09-20). 빈 기준은 **지금도 비어
+  //     있을 때만** 통과시킨다 — 빈 본문에 누가 먼저 썼으면 그건 꼬리가 아니라 충돌이다.
+  //  읽고-판정하고-쓰면 그 사이에 또 append 가 낀다 — 판정과 합치기를 **UPDATE 한 문장**에 둔다(append 와 같은 이유).
+  let bodyGuard = "";
+  if (patch.description !== undefined && patch.description_base !== undefined) {
+    vals.push(patch.description ?? ""); const pn = `$${vals.length}`;
+    vals.push(patch.description_base ?? ""); const pb = `$${vals.length}`;
+    sets.push(`description = NULLIF(${pn} || substr(COALESCE(description,''), char_length(${pb}) + 1), '')`);
+    bodyGuard = ` AND (CASE WHEN ${pb} = '' THEN COALESCE(description,'') = '' ELSE left(COALESCE(description,''), char_length(${pb})) = ${pb} END)`;
+  }
+  else if (patch.description !== undefined) set("description", patch.description);
   // append 모드 — 기존 본문 보존 후 끝에 이어붙인다. 읽고-쓰기 경합을 피하려 SQL 에서 원자적 concat:
   //  빈/NULL 본문이면 구분자 없이 그대로, 아니면 빈 줄(newline×2)로 문단 분리. description(교체)과는 상호배타(capability 게이트).
   else if (patch.append_description !== undefined) {
@@ -647,8 +670,10 @@ export async function updateProject(
   if (!sets.length) return before; // 패치 비어있음 — no-op
   sets.push("updated_at=now()");
   vals.push(id);
-  const after: ProjectRow = await one(itemsPool,
-    `UPDATE project SET ${sets.join(", ")} WHERE id=$${vals.length} AND level='project' RETURNING ${PROJECT_COLS}`, vals);
+  const after: ProjectRow | undefined = await one(itemsPool,
+    `UPDATE project SET ${sets.join(", ")} WHERE id=$${vals.length} AND level='project'${bodyGuard} RETURNING ${PROJECT_COLS}`, vals);
+  // 행은 있는데(before) UPDATE 가 못 잡았다 = 가드가 막았다. 같은 패치의 다른 키도 함께 안 쓰인다(반쪽 저장 없음).
+  if (!after) throw new ProjectBodyConflictError(id);
   await auditProject(String(id), "update", before, after, ctx);
   await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(name/desc/필드) — 드레인이 ClickUp PUT.
   // 이름/설명이 '실제로 바뀐' 경우에만 재임베딩 — 필드 존재(patch)가 아니라 before↔after 값 비교. no-op·미변경 저장,

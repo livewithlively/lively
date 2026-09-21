@@ -54,7 +54,10 @@ ok(/bindCtx\(box/.test(src["web/chat-view.ts"]) && /bindCtx\(ask/.test(src["web/
 
 // E3. 곁칸 부품 — 지식·할 일·보관·미리보기·앱·웹·뷰어.
 const P = src["web/v2/panes-parts.ts"];
-ok((P.match(/bindCtx\(/g) || []).length >= 6, "E3 곁칸 부품 bindCtx 6곳 이상(지식·할 일·미리보기·앱·웹·뷰어)");
+//  태스크(종전 «할 일») 부품은 제 파일로 나갔다(#4084 panes-tasks.ts) — 곁칸 부품 전체로 세되, 그 파일에도 메뉴가 붙어 있는지 따로 본다.
+const PT = src["web/v2/panes-tasks.ts"];
+ok(((P + PT).match(/bindCtx\(/g) || []).length >= 6, "E3 곁칸 부품 bindCtx 6곳 이상(지식·태스크·미리보기·앱·웹·뷰어)");
+ok(/bindCtx\(row, /.test(PT), "E3 태스크 줄에도 우클릭 메뉴가 붙는다(부품이 파일을 옮겨도 메뉴는 따라간다)");
 ok(/'pn-arow'[^\n]*'data-ctx':\s*'session'/.test(P), "E3 보관한 세션 행 = 세션 표");
 
 // E4. 배선은 bubble 단계 — 제 메뉴를 가진 자리(자료 칸·레일 독·곁칸 탭)가 먼저 받고 preventDefault 하면 비켜 준다.
