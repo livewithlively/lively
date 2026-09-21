@@ -59,10 +59,22 @@ export function clickUpUiCategory(type?: string | null): "active" | "done" | "cl
   return "active";
 }
 
-// 리스트의 유효 status set — override_statuses=true(또는 스페이스 set 부재) 면 리스트 고유, 아니면 스페이스 상속.
-//  #475 UI 계약 shape [{key,label,color,category}] 로 정규화(orderindex 순). key 충돌은 -2 접미(라벨 유일 전제 방어).
+// 리스트에 유효한 **원본** status set — override_statuses=true(또는 스페이스 set 부재)면 리스트 고유, 아니면 스페이스 상속.
+//  ⚠ 인바운드(effectiveStatusDefs)와 아웃바운드(push-status.ts)가 **같은 규칙**을 써야 한다 — 갈리면
+//   저장된 status_raw 키와 푸시 때 찾는 라벨이 서로 다른 상태셋에서 나와 매칭이 조용히 깨진다.
+export function effectiveStatusSource(list: ClickUpList | null | undefined, space?: ClickUpSpace | null): ClickUpStatus[] {
+  const listStatuses = list?.statuses ?? [];
+  const spaceStatuses = space?.statuses ?? [];
+  if (!list) return spaceStatuses;
+  const preferList = list.override_statuses || spaceStatuses.length === 0;
+  const first = preferList ? listStatuses : spaceStatuses;
+  const second = preferList ? spaceStatuses : listStatuses;
+  return first.length ? first : second;
+}
+
+// 위 원본 set 을 #475 UI 계약 shape [{key,label,color,category}] 로 정규화(orderindex 순). key 충돌은 -2 접미(라벨 유일 전제 방어).
 export function effectiveStatusDefs(list: ClickUpList, space?: ClickUpSpace | null): Array<{ key: string; label: string; color: string | null; category: string }> {
-  const src = (list.override_statuses || !(space?.statuses?.length) ? list.statuses : space?.statuses) ?? list.statuses ?? space?.statuses ?? [];
+  const src = effectiveStatusSource(list, space);
   // orderindex 정렬 — 비유한(누락·이상 문자열)은 배열 인덱스 폴백(응답 배열 순서 = ClickUp 표시 순서의 최선 근사).
   const oi = (s: ClickUpStatus, idx: number) => { const n = Number(s.orderindex); return Number.isFinite(n) ? n : idx; };
   const sorted = src.map((s, idx) => ({ s, k: oi(s, idx) })).sort((a, b) => a.k - b.k).map((x) => x.s);
