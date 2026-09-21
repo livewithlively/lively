@@ -600,8 +600,10 @@ function pjvDeleteList(list, reload) {
       back.remove();
       //  서버가 실제로 보낸 수와 건너뛴 수를 그대로 말한다(#3778) — 남의 도는 세션이 있는 프로젝트는 못 보내고 ‘기타(미분류)’에 남는다.
       const sent = Number(res && res.trashed_projects) || 0; const skipped = Array.isArray(res && res.skipped_projects) ? res.skipped_projects.length : 0;
+      //  이유는 서버가 말한 그대로 — 화면이 짐작해 적지 않는다(건너뛰는 것은 서버가 409 로 거절한 것뿐이다).
+      const skipWhy = String((skipped && res.skipped_projects[0] && res.skipped_projects[0].why) || '다른 사람의 세션이 돌고 있어요');
       toast((cascade && count > 0)
-        ? '리스트를 삭제하고 프로젝트 ' + sent + '개를 휴지통으로 보냈습니다' + (skipped ? ' — ' + skipped + '개는 다른 사람의 세션이 돌고 있어 ‘기타(미분류)’에 남았어요' : '')
+        ? '리스트를 삭제하고 프로젝트 ' + sent + '개를 휴지통으로 보냈습니다' + (skipped ? ' — ' + skipped + '개는 ‘기타(미분류)’에 남았어요(' + skipWhy + ')' : '')
         : '리스트를 삭제했습니다', skipped > 0);
       if (reload) reload();
     } catch (e) { toast('삭제 실패 — ' + e.message, true); busy = false; delBtn.disabled = false; cancelBtn.disabled = false; }

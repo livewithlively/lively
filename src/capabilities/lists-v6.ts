@@ -230,8 +230,14 @@ const projectListDeleteV6: Capability = {
       if (!me) throw new HttpError(401, "로그인이 필요합니다");
       const pids = await projectIdsInList(input.id); // 보드 앵커(list_id NULL)는 애초에 제외됨.
       for (const pid of pids) {
+        //  건너뛰는 것은 **예상한 거절 하나**(409 — 남의 도는 세션)뿐이다. 그 밖의 실패(DB·버그)를 같은 통에 담으면 화면이 «남의 세션 때문» 이라고
+        //   자신 있게 틀린 말을 하고, 리스트는 지워진 채 프로젝트가 말없이 '미분류'로 샌다(리뷰 지적 2026-09-21). 모르는 실패는 **리스트를 지우기 전에** 던진다 —
+        //   이미 보낸 프로젝트는 휴지통에 있어 되돌릴 수 있고, 리스트가 남아 있으니 그대로 다시 시도하면 된다.
         try { await trashProjectBundle(user, me, pid, { actor: wctx.actor ?? null, source: wctx.source ?? "web" }); deletedProjects++; }
-        catch (e) { skippedProjects.push({ id: pid, why: String((e as Error)?.message || e) }); }
+        catch (e) {
+          if (e instanceof HttpError && e.status === 409) skippedProjects.push({ id: pid, why: e.message });
+          else throw e;
+        }
       }
     }
     const list = await deleteProjectList(input.id, wctx);

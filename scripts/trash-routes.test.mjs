@@ -101,6 +101,9 @@ ok(webFiles.length > 200, "W0 웹 소스를 실제로 훑었다(경로가 죽으
   const lists = code(read("src/capabilities/lists-v6.ts"));
   ok(/trashProjectBundle\(/.test(lists) && !/\bdeleteProject\(/.test(lists), "W4 ★리스트를 «프로젝트도 함께» 지워도 프로젝트는 휴지통으로 — 하드 삭제를 부르지 않는다");
   ok(/trashed_projects/.test(lists) && /skipped_projects/.test(lists), "W4b 몇 개를 보냈고 몇 개를 건너뛰었는지 돌려준다(남의 도는 세션이 있는 프로젝트)");
+  ok(/e instanceof HttpError && e\.status === 409\) skippedProjects\.push/.test(lists) && /else throw e;/.test(lists), "W4c ★건너뛰는 것은 예상한 거절(409) 하나뿐 — 모르는 실패를 «남의 세션 때문» 으로 뭉개지 않고 리스트를 지우기 전에 던진다");
+  ok(lists.indexOf("else throw e;") < lists.indexOf("await deleteProjectList(input.id, wctx)"), "W4d 던지는 자리가 리스트 삭제보다 앞이다");
+  ok(/res\.skipped_projects\[0\]\.why/.test(read("web/projects/sidebar.ts")), "W4e 화면은 서버가 말한 이유를 그대로 적는다");
 }
 //  W5·W11 — 휴지통에 있는 세션은 클래식 목록에 서지 않는다.
 {
