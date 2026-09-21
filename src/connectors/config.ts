@@ -12,6 +12,7 @@
 //   · 모듈 레벨 캐시(system 별, 프로세스당 1회 로드) — clickup 처럼 매 요청마다 토큰을 읽어도 DB 부하 0.
 //     커넥터는 서브프로세스(run-sync/run-push)로 짧게 살다 죽으므로 stale 우려 없음.
 import { itemsPool } from "../db/client.js";
+import { logger } from "../log.js";
 import { isEncrypted, tryDecryptSecret } from "../org/credentials/secret-box.js";
 import { resolveSlackTokenSource, vaultReader } from "../org/credentials/slack-token-source.js";
 import { resolveNotionTokenSource, notionVaultReader } from "../org/credentials/notion-token-source.js";
@@ -429,6 +430,19 @@ export function resolveConnectorConfig(system: string): Promise<Record<string, s
   return p;
 }
 
+// 🔴 이 폴백을 **조용히** 하지 않는다. 폴백 자체는 옳다(테이블 부재 배포도 돌아야 한다). 문제는 침묵이었다 —
+//  테넌트 바인딩 누락으로 DB 가 42704 로 거부한 것이 「토큰 미설정」 에러로 표면화되어, 원인을 «토큰 문제» 로
+//  오진하게 만들었다(2026-09-21 실측: 아웃바운드 크론이 매 틱 죽는데 토큰은 멀쩡했다). 동작은 그대로 두고
+//  **왜 env 로 떨어졌는지**만 남긴다 — 설정 캐시 세대당 (system, 계층) 별 1회(resetConnectorConfigCache 가 함께 비운다).
+const _warnedConfigRead = new Set<string>();
+function warnConfigReadFailed(system: string, table: string, e: unknown, collectorId?: number): void {
+  const key = `${system}:${table}`;
+  if (_warnedConfigRead.has(key)) return;
+  _warnedConfigRead.add(key);
+  logger.warn({ system, table, collectorId, err: (e as Error)?.message ?? String(e) },
+    "커넥터 설정을 DB 에서 읽지 못해 다음 계층으로 폴백합니다 — 토큰이 비어 보이면 이 원인부터 보세요");
+}
+
 async function loadConnectorConfig(
   system: string, bound: CollectorBinding | null,
 ): Promise<Record<string, string | undefined>> {
@@ -447,7 +461,7 @@ async function loadConnectorConfig(
       const r = await itemsPool.query<{ config: Record<string, unknown> | null; secrets: Record<string, unknown> | null }>(
         `SELECT config, secrets FROM org_collector WHERE id=$1`, [bound.id]);
       if (r.rows[0]) { dbConfig = r.rows[0].config ?? {}; dbSecrets = r.rows[0].secrets ?? {}; }
-    } catch { /* 테이블 부재(마이그레이션 전) → 아래 레거시 경로로 */ }
+    } catch (e) { warnConfigReadFailed(system, "org_collector", e, bound.id); /* 테이블 부재(마이그레이션 전) → 아래 레거시 경로로 */ }
   }
   // ② 레거시 기본 인스턴스(org_connector) — **바인딩이 없을 때만** 본다.
   //  ⚠ 바인딩이 있으면 이 층을 건너뛴다. 안 그러면 새로 만든 수집기(아직 토큰 미입력)가 기존 기본 인스턴스의
@@ -461,7 +475,7 @@ async function loadConnectorConfig(
       const r = await itemsPool.query<{ config: Record<string, unknown> | null; secrets: Record<string, unknown> | null }>(
         `SELECT config, secrets FROM org_connector WHERE system=$1`, [system]);
       if (r.rows[0]) { legacyConfig = r.rows[0].config ?? {}; legacySecrets = r.rows[0].secrets ?? {}; }
-    } catch { /* 테이블 부재/DB 미연결 → 전량 env 폴백 */ }
+    } catch (e) { warnConfigReadFailed(system, "org_connector", e); /* 테이블 부재/DB 미연결 → 전량 env 폴백 */ }
   }
 
   for (const f of spec.fields) {
@@ -556,5 +570,6 @@ async function loadConnectorConfig(
 
 /** 테스트/재설정용 — 해소 캐시 무효화(관리탭에서 config 갱신 후 등). */
 export function resetConnectorConfigCache(): void {
+  _warnedConfigRead.clear(); // 캐시 세대가 바뀌면 warn 도 다시 한 번 낼 수 있어야 한다(재발 은폐 방지).
   _cache.clear();
 }
