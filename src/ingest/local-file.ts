@@ -26,7 +26,7 @@ import { resolveMemberOsUser } from "../terminal/terminal-isolation.js";
 import { ensureLocalFilesDistillerOnce } from "../org/distill/local-preset.js";   // #1881 L3 — 첫 업로드 때 증류기 프리셋(꺼진 채)
 import {
   LOCAL_SYSTEM, LOCAL_INSTANCE, type LocalRoot, type LocalIngestKind,
-  localExternalId, parseLocalExternalId, normalizeLocalRel, classifyLocalPath, localChannelOf, localFileUrl, localMimeOf,
+  localExternalId, parseLocalExternalId, normalizeLocalRel, classifyLocalPath, localChannelOf, localFileUrl, localMimeOf, personalRootMember,
   type FileTrashStamp,
   buildLocalBinaryStub, STUB_NOTE_VISION, stubNoteUnreadable, stubNoteExtractFailed, decodeLocalText, looksLikeText,
 } from "./local-file-core.js";
@@ -272,7 +272,7 @@ export async function fileTrashBatchRemaining(batch: string): Promise<number> {
 export async function localRootForBrowse(rootKey: string, user: LivelyUser, base: string, abs: string)
   : Promise<{ root: LocalRoot; base: string; folder?: string | null; channelFallback: string } | null> {
   if (rootKey === "personal") {
-    return { root: { kind: "personal", member: user.userId || user.email || userSlug(user) }, base, channelFallback: "uploads" };
+    return { root: { kind: "personal", member: personalRootMember(user) || userSlug(user) }, base, channelFallback: "uploads" };
   }
   if (rootKey === "shared") {
     const rel = relOf(base, abs);

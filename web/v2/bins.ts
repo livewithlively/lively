@@ -14,11 +14,12 @@
 import { api, el, relTime, renderMarkdown, replaceKids, sv, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { fmtSize } from '../projects/files-format.js';
-import { confirmSessionPurge, confirmSessionPurgeLocal, confirmSessionPurgeMany, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped, eulReul } from '../session-actions.js';
+import { confirmSessionPurge, confirmSessionPurgeLocal, confirmSessionPurgeMany, confirmSessionTrash, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped, trashProjectsFlow, eulReul } from '../session-actions.js';
 import { sessText } from './side.js';
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isTrashedProj, isTrashedSess, projName, type Proj, type Sess, type V2Data } from './views.js';
 import { listDismissedSessions, restoreDismissedSessions, type DismissedSession } from './app-instance.js';   // #3857 「치운 세션」
-import { TRASH_TABS, auditProjItems, bundleOpen, groupByProject, knowItems, levelLabel, matchesQuery, pickInitialTab, srcItems, type DeletedEntry, type SrcItem, type TabCounts, type TrashTab, type TrashedFile } from '../lib/trash-tabs.js';   // #3778 — 휴지통 네 탭의 잣대(순수)
+import { TRASH_TABS, auditProjItems, bundleOpen, extraCountsOf, fileTrashUrl, groupByProject, knowItems, levelLabel, matchesQuery, pickInitialTab, srcItems, type DeletedEntry, type SrcItem, type TabCounts, type TrashTab, type TrashedFile } from '../lib/trash-tabs.js';   // #3778 — 휴지통 네 탭의 잣대(순수)
+import { invalidateTrashCounts, setTrashCounts } from './trash-counts.js';   // 사이드바 「휴지통 N」과 같은 값(#3778)
 import { groupPastByProject, isDismissedSess, pastNames, PAST_PERIODS, selectPast, standsInPast, type PastPeriod, type PastScope, type PastSessLike } from '../lib/past-sess.js';   // #3778 — 「지난 세션」의 잣대(순수)
 
 export interface BinHooks { onChanged?: () => void }
@@ -101,7 +102,11 @@ function ensureExtras(repaint: () => void): void {
   const fileList = api('/api/ui/source-trash').then((d: any) => { filesFailed = false; return (Array.isArray(d?.entries) ? d.entries : []) as TrashedFile[]; })
     .catch(() => { filesFailed = true; return [] as TrashedFile[]; });
   void Promise.all([list('knowledge'), list('source'), list('project'), fileList])
-    .then(([k, s, p, f]) => { extras = { deleted: [...k, ...s, ...p], files: f }; extrasAt = Date.now(); extrasFailed = false; })
+    .then(([k, s, p, f]) => {
+      extras = { deleted: [...k, ...s, ...p], files: f }; extrasAt = Date.now(); extrasFailed = false;
+      //  사이드바 「휴지통 N」에 이 화면이 센 값을 그대로 준다 — 배지와 탭 숫자가 어긋나지 않는다. 파일 목록을 못 받았으면 주지 않는다(0 이라 단언하지 않는다).
+      if (!filesFailed) setTrashCounts(extraCountsOf(extras.deleted, extras.files));
+    })
     .catch(() => { extrasFailed = true; extrasAt = Date.now(); })
     .finally(() => { extrasLoading = false; repaint(); });
 }
@@ -131,7 +136,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
   const tab = ui.tab;
   const T = TRASH_TABS.find((t) => t.key === tab)!;
   const sessName = (s: Sess): string => sessText(s, projName(data, s.projectId)).main || s.label || s.id;
-  const refresh = (): void => { extrasAt = 0; hooks.onChanged?.(); };
+  const refresh = (): void => { extrasAt = 0; invalidateTrashCounts(); hooks.onChanged?.(); };
 
   type Item = { kind: 'project'; key: string; at: string; p: Proj; bundle: Sess[] } | { kind: 'session'; key: string; at: string; s: Sess };
 
@@ -244,6 +249,11 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
 
   // ── 되살리기 · 완전 삭제(지식 · 자료 · 옛 길로 지운 프로젝트) — 감사 스냅샷 휴지통과 파일 보관 두 출처를 한 모양으로. ──
   type Loose = { key: string; label: string; restore: () => Promise<unknown>; purge: () => Promise<unknown> };
+  const fileOp = (it: SrcItem, op: 'restore' | 'purge'): Promise<unknown> => {
+    const url = fileTrashUrl(it, op);
+    if (!url) return Promise.reject(new Error('이 파일이 있던 프로젝트를 알 수 없어요'));
+    return api(url, { method: 'POST', body: JSON.stringify({ source_id: it.id }) });
+  };
   const auditLoose = (entity: string, key: string, label: string): Loose => ({
     key: entity + ':' + key, label,
     restore: () => api('/api/ui/deleted/restore', { method: 'POST', body: JSON.stringify({ entity, key }) }),
@@ -251,8 +261,9 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
   });
   const looseOfSrc = (it: SrcItem): Loose => it.origin === 'audit' ? { ...auditLoose('source', String(it.id), it.title), key: it.key } : {
     key: it.key, label: it.title,
-    restore: () => api('/api/ui/v6/projects/' + it.projectId + '/file-trash/restore', { method: 'POST', body: JSON.stringify({ source_id: it.id }) }),
-    purge: () => api('/api/ui/v6/projects/' + it.projectId + '/file-trash/purge', { method: 'POST', body: JSON.stringify({ source_id: it.id }) }),
+    //  파일 보관은 폴더마다 길이 다르다(프로젝트 · 내 폴더 · 공유 폴더) — 주소는 잣대가 고른다(lib/trash-tabs fileTrashUrl).
+    restore: () => fileOp(it, 'restore'),
+    purge: () => fileOp(it, 'purge'),
   };
   const runLoose = async (list: Loose[], op: 'restore' | 'purge'): Promise<{ done: number; failed: number; why: string }> => {
     let done = 0, failed = 0; let why = '';
@@ -608,6 +619,8 @@ export function renderPast(host: HTMLElement, data: V2Data, hooks: BinHooks = {}
   const trashRows = (list: PastItem[]): Promise<void> => guard(async () => {
     const names = [...new Set(list.flatMap((it) => (it.s ? sessionNames(it.s) : [it.id])))];
     if (!names.length) return;
+    //  사이드바 휴지통 단추와 같은 확인창(#3778) — 종전엔 이 화면만 묻지 않고 보냈다. «다음부터 묻지 않기» 를 켠 사람에겐 어디서든 안 묻는다.
+    if (!await confirmSessionTrash({ title: list.length === 1 ? `「${list[0].name}」${eulReul(list[0].name)} 휴지통으로 보낼까요?` : `세션 ${list.length}개를 휴지통으로 보낼까요?`, n: list.length })) return;
     try {
       const out = await sessionTrashOp('trash', names);
       if (!out.done.length) { toast('휴지통으로 보내지 못했어요 — ' + (out.skipped[0]?.why || '처리된 세션이 없어요'), true); return; }
@@ -819,17 +832,12 @@ function archivedProjects(tblWrap: HTMLElement, barEl: HTMLElement, countEl: HTM
     toast((list.length === 1 ? `「${list[0].name}」 보관을 해제했어요 — 사이드바로 돌아왔어요.` : `프로젝트 ${done}개의 보관을 해제했어요.`) + (failed ? ` (${failed}개 실패 — ${why})` : ''), failed > 0);
     ui.sel.clear(); hooks.onChanged?.();
   });
-  // 휴지통으로 — 잃는 것이 없다(표식이 붙어 휴지통으로 갈 뿐, 복원 가능) → 확인창 없이 바로(#1582).
-  //  단 남의 도는 세션이 있으면 서버가 409 로 막는다 — 그 이유를 그대로 보여 준다.
+  // 휴지통으로 — 어느 화면이든 같은 길(session-actions.trashProjectsFlow, #3778).
+  //  종전엔 «잃는 것이 없다 → 확인창 없이 바로» 였는데 그 전제가 이 표에서는 틀렸다: 같은 줄이 「도는 중 n」을 보여 주고,
+  //   서버는 그 세션들을 **멈춘다**(stopLive). 멈추는 것은 잃는 것이다 — 확인창이 그 개수를 말하고 묻는다.
   const toTrash = (list: Proj[]): Promise<void> => guard(async () => {
-    let done = 0, failed = 0; let why = '';
-    for (const p of list) {
-      try { await api('/api/ui/v6/projects/' + p.id + '/trash', { method: 'POST', body: JSON.stringify({ trashed: true }) }); done++; }
-      catch (e: any) { failed++; why = e?.message || String(e); }
-    }
-    if (!done) { toast('휴지통으로 보내지 못했어요 — ' + (why || '처리된 프로젝트가 없어요'), true); return; }
-    toast((list.length === 1 ? `「${list[0].name}」${eulReul(list[0].name)}` : `프로젝트 ${done}개를`) + ' 휴지통으로 보냈어요 — 휴지통에서 되돌릴 수 있어요.' + (failed ? ` (${failed}개 실패 — ${why})` : ''), failed > 0);
-    ui.sel.clear(); hooks.onChanged?.();
+    const done = await trashProjectsFlow(list.map((p) => ({ id: p.id, name: p.name })));
+    if (done) { ui.sel.clear(); hooks.onChanged?.(); }
   });
 
   const visible = (): Proj[] => projs.slice().sort((a, b) => String(b.archived_at || '').localeCompare(String(a.archived_at || '')));

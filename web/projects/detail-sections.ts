@@ -7,6 +7,7 @@
 //   · 작업 타임라인(projectTimelineSection)
 //  ⚠ watchProvision 의 폴링 타이머는 이 모듈이 소유한다(노드가 DOM 에서 빠지면 스스로 멈춘다).
 import { api, busy, el, errorNote, toast } from '../core.js';
+import { trashProjectFlow } from '../session-actions.js';   // #3778 — 프로젝트 삭제 = 휴지통으로
 import { activityTimelineRow } from '../activity-view.js';
 import { overlayBox, skeletonRows } from '../learn.js';
 import { memberPicker } from './files.js';
@@ -86,21 +87,19 @@ function openProjectSettings(id, p, reload, meId, base) {
 
 // 삭제 블록 — 작성자 본인만 노출(서버도 403 재검증). 확인 후 삭제 → 팝업 닫고 목록으로.
 function projectDangerBlock(id, p, meId, back) {
-  // 삭제 전원 개방(#280) — 인증된 누구나(서버도 인증만 요구). 삭제는 #/trash 에서 복원 가능.
-  const delBtn = el('button', { class: 'btn btn-sm btn-danger', type: 'button', text: '프로젝트 삭제' });
+  // #3778 — 삭제 = 휴지통으로 보내기(새 셸 사이드바·프로젝트 정보 창과 같은 길). 태스크·팀원·연결은 그대로 남고 휴지통에서 통째로 복원된다.
+  //  종전엔 `/delete`(하드 삭제)였고 문구는 «영구 삭제·되돌릴 수 없음» 이었다.
+  const delBtn = el('button', { class: 'btn btn-sm btn-danger', type: 'button', text: '휴지통으로 보내기' });
   delBtn.onclick = async () => {
-    if (!confirm('프로젝트 ‘' + p.name + '’을(를) 삭제할까요?\n\n프로젝트와 그 작업(태스크·하위)이 함께 사라집니다(되돌릴 수 없음). 연결된 지식은 보존됩니다.')) return;
     delBtn.disabled = true;
-    try {
-      await api('/api/ui/v6/projects/' + id + '/delete', { method: 'POST' });
-      toast('프로젝트를 삭제했습니다');
-      back.remove();
-      location.hash = '#/projects2';
-    } catch (e) { toast('실패 — ' + e.message, true); delBtn.disabled = false; }
+    const sent = await trashProjectFlow({ id: Number(id), name: String(p.name || '') });
+    if (!sent) { delBtn.disabled = false; return; }
+    back.remove();
+    location.hash = '#/projects2';
   };
   return el('section', { class: 'ps-block' },
     el('h3', { class: 'ps-block-title', text: '프로젝트 삭제' }),
-    el('p', { class: 'ps-block-hint', text: '프로젝트와 그 안의 모든 태스크가 영구 삭제됩니다(되돌릴 수 없음). 연결된 지식은 보존돼요.' }),
+    el('p', { class: 'ps-block-hint', text: '프로젝트와 그 안의 내 세션이 함께 휴지통으로 갑니다. 휴지통에서 [복원]하면 태스크·팀원·연결까지 그대로 돌아오고, 완전히 지우는 건 휴지통 안에서만 할 수 있어요.' }),
     el('div', { class: 'ps-rules-actions' }, delBtn));
 }
 

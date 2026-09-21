@@ -9,6 +9,7 @@
 //    · pjvReorder._init — pjvReorderInit() 이 pointermove/pointerup 을 1회만
 //   따라서 플래그(pjvDrag·pjvReorder·pjvBulkBarEl)와 그 init 함수는 절대 갈라놓지 않는다.
 import { api, el, infoPop, personFace, state, sv, toast } from '../core.js';
+import { trashProjectsFlow } from '../session-actions.js';   // #3778 — 프로젝트 일괄 삭제 = 휴지통으로
 import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import { overlayBox } from '../learn.js';
 //  ⚠ 배럴(../projects.js) 경유 — copyText·openLocalWorkModal 의 소유는 projects/detail-sections.ts(R35) 지만
@@ -532,10 +533,16 @@ function pjvBulkDuplicate() {
   }
 }
 function pjvBulkDelete() {
-  const n = pjvSel.ids.size; const what = pjvSel.kind === 'task' ? '태스크' : '프로젝트';
-  if (!confirm(n + '개 ' + what + '를 삭제할까요?\n\n#/trash 에서 복원할 수 있습니다.')) return;
-  if (pjvSel.kind === 'task') pjvBulkApply((id) => api('/api/ui/v6/tasks/' + id + '/delete', { method: 'POST', body: JSON.stringify({}) }), '삭제됨');
-  else pjvBulkApply((id) => api('/api/ui/v6/projects/' + id + '/delete', { method: 'POST', body: JSON.stringify({}) }), '삭제됨');
+  const n = pjvSel.ids.size;
+  if (pjvSel.kind === 'task') {
+    //  태스크엔 아직 휴지통이 없다 — 지우면 [휴지통] ▸ [프로젝트] 탭 아래 «이름과 본문만 되살릴 수 있는 것» 에 선다. 그 사실을 그대로 말한다.
+    if (!confirm(n + '개 태스크를 삭제할까요?\n\n하위 태스크·체크리스트·댓글이 함께 사라집니다. 휴지통에서는 이름과 본문만 되살릴 수 있어요.')) return;
+    pjvBulkApply((id) => api('/api/ui/v6/tasks/' + id + '/delete', { method: 'POST', body: JSON.stringify({}) }), '삭제됨');
+    return;
+  }
+  //  프로젝트는 휴지통으로(#3778) — 확인 한 번, 되돌릴 수 있다. 끝나면 고른 것을 풀고 보드를 다시 그린다(pjvBulkApply 와 같은 뒷정리).
+  const list = pjvSelIds().map((id) => ({ id: Number(id) }));
+  void trashProjectsFlow(list).then((done) => { if (done) pjvSelReloadAfter(); });
 }
 // 일괄 '리스트로 이동'(프로젝트 전용) — 선택한 프로젝트들을 한 리스트(또는 미분류)로. 기존 49개 정리·대량 분류용.
 async function pjvBulkList(anchor) {

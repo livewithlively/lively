@@ -10,6 +10,7 @@ import { linkKnowledgeSource, unlinkKnowledgeSource } from "../v6/knowledge-stor
 import { canSeeKnowledge, type Viewer } from "../v6/visibility.js";
 // #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 원문(body_md) 전체를 튕기지 않게 한다.
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "./soft-cap.js";
+import { personalRootMember } from "../ingest/local-file-core.js";   // 순수 — 휴지통 목록의 «내 개인 폴더» 판정(#3778)
 
 // 공개범위(#1291) — 안 보이는 자료는 고칠 수도, 지울 수도, 원본을 받을 수도 없다. 문구는 없는 자료와 동일(존재 은닉).
 //  지식(assertKnowledgeWritable)과 같은 규율: id 를 아는 것만으로 비가시 본문을 덮어쓰거나 파일로 빼내지 못하게.
@@ -291,7 +292,7 @@ const sourceTrashList: Capability = {
       parse: (req) => ({ limit: req.query?.limit ? Number(req.query.limit) : undefined }) }],
   },
   handler: async (input: { limit?: number }, _user: LivelyUser, ctx?: CapabilityCtx) => {
-    const rows = await listTrashedFileSources(ctx?.viewer, input.limit);
+    const rows = await listTrashedFileSources(ctx?.viewer, input.limit, personalRootMember(_user));
     return {
       entries: rows.map((r) => {
         const f = (r.fields ?? {}) as Record<string, unknown>;
@@ -300,6 +301,8 @@ const sourceTrashList: Capability = {
           id: Number(r.id), title: (r.title as string) || (r.name as string) || String(f.path ?? ""),
           path: String(f.path ?? ""), ext: String(f.ext ?? ""), bytes: Number(f.bytes ?? 0) || 0,
           project_id: Number(t.project_id ?? 0) || null, at: String(t.at ?? r.updated_at ?? ""), by: (t.by as string) ?? null,
+          //  어느 폴더에서 버렸나 — 'personal'·'shared'·'project'(옛 도장은 project). 화면이 되살리기·완전 삭제를 그 폴더의 길로 부른다.
+          root: typeof t.root === "string" && t.root ? String(t.root).split(":")[0] : "project",
           has_knowledge: !!r.has_knowledge,
         };
       }),

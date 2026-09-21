@@ -41,6 +41,8 @@ import { orderCards, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from 
 import { migratePinKeys } from './pin-migrate.js';   // #2402 — 복원으로 id 가 바뀔 때 핀을 옮기는 규칙(순수·값검증)
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
 import { confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 휴지통·아카이브
+import { trashBadgeN } from '../lib/trash-tabs.js';
+import { trashExtraCounts, watchTrashCounts } from './trash-counts.js';
 import { ctxMenu } from './panes-kit.js';
 import { type CtxRow } from './ctx-menu.js';   // #3784 우클릭 메뉴 행 타입(엔진은 셸 배선이 띄운다)
 import { refreshStatusCount, switcherTop } from './switcher.js';   // #1875 — refreshStatusCount: 문패 배지는 인원 수에서 나온다
@@ -404,6 +406,7 @@ export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => strin
   render();
 }
 function redraw(): void { if (last) render(); }
+watchTrashCounts(redraw);   // 「휴지통 N」의 서버 몫이 도착·변경되면 다시 그린다(#3778)
 //  '내 마지막 말'이 도착했다 — 홈이면 목록만(검색칸은 살아 있는 IME 조합), 다른 구역은 그 구역을 다시 그린다.
 //  ⚠ 홈만 목록 갈아 끼우기로 끝내는 이유: 홈의 붓은 hooks.instances() 를 그때 다시 읽지만, 다른 구역의
 //   재료(sessAsInst)는 그 판에서 lastAsk 를 이미 읽어 굳힌 값이라 목록만 다시 그리면 새 말이 안 실린다.
@@ -1121,8 +1124,10 @@ function secFoot(...rows: Array<HTMLElement | null>): HTMLElement {
   const data = last ? last.data : null;
   const ak = last ? last.activeKey() : '';
   const me = meId();
-  const trashedN = data ? data.projects.filter((p) => isTrashedProj(p)).length
-    + data.sessions.filter((s) => isLooseTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length : 0;
+  //  휴지통 개수 = 네 탭의 합(#3778) — 화면이 아는 절반(통째로 버린 프로젝트 + 따로 버린 내 세션)에 서버가 센 나머지(자료·지식·
+  //   옛 길로 지운 프로젝트)를 더한다. 종전엔 앞 절반만 세어 지식만 든 휴지통이 «0» 으로 보였다.
+  const trashedN = data ? trashBadgeN(data.projects.filter((p) => isTrashedProj(p)).length
+    + data.sessions.filter((s) => isLooseTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length, trashExtraCounts()) : 0;
   const dock = (key: 'archive' | 'trash' | 'connect', label: string, n: number, title: string): HTMLElement =>
     el('a', { class: 'v2-dock-btn' + (ak === key ? ' on' : ''), href: '#/' + key, 'data-nav': key, title, 'aria-label': label + (n ? ` ${n}` : '') },
       icon(key === 'connect' ? 'link' : key, 'v2-dock-ic'),
@@ -1133,7 +1138,7 @@ function secFoot(...rows: Array<HTMLElement | null>): HTMLElement {
       //  ★ 「아카이브」였던 자리 — #3778(원준 2026-09-19)에서 이름도 내용도 「지난 세션」이 됐다. 보관한 프로젝트는
       //   그 화면 안의 칩 하나로 남는다. 숫자는 안 붙인다: 지난 세션은 늘 수백 건이라(실측 213) 숫자가 «할 일»로 읽힌다.
       dock('archive', '지난 세션', 0, '지난 세션 — 멈춘 세션과 목록에서 치운 세션. 프로젝트로 묶어 보고 그대로 이어서 열 수 있어요'),
-      dock('trash', '휴지통', trashedN, '휴지통 — 버린 프로젝트·세션을 되돌리거나 완전히 지웁니다'),
+      dock('trash', '휴지통', trashedN, '휴지통 — 버린 세션·프로젝트·자료·지식을 되돌리거나 완전히 지웁니다'),
       dock('connect', '외부 앱 연결', 0, '외부 앱 연결 — 슬랙·노션·드라이브 같은 바깥 서비스를 잇습니다')),
     //  레일을 숨겼으면 레일 발치의 [앱]·[나]가 여기로 내려온다(안 B).
     railIsHidden() ? footRow() : null);
@@ -2279,8 +2284,9 @@ function renderTree(rowsIn?: Row[]): void {
 function binRows(data: V2Data): HTMLElement[] {
   const me = meId();
   // 휴지통 개수 = 통째로 버린 프로젝트(각 1) + **따로** 버린 내 세션(묶음 세션은 프로젝트 안에 든 것이라 안 센다). 세션은 소유자 단위.
-  const trashedN = data.projects.filter((p) => isTrashedProj(p)).length
-    + data.sessions.filter((s) => isLooseTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length;
+  //  ＋ 서버가 센 나머지(자료·지식·옛 길로 지운 프로젝트, #3778) — 배지 = 휴지통 화면 네 탭의 합.
+  const trashedN = trashBadgeN(data.projects.filter((p) => isTrashedProj(p)).length
+    + data.sessions.filter((s) => isLooseTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length, trashExtraCounts());
   const ak = last ? last.activeKey() : '';
   const row = (key: 'archive' | 'trash', label: string, n: number, title: string): HTMLElement =>
     el('a', { class: 'v2-bin' + (ak === key ? ' on' : ''), href: '#/' + key, 'data-nav': key, title },
@@ -2289,7 +2295,7 @@ function binRows(data: V2Data): HTMLElement[] {
   return [
     //  숫자는 안 붙인다 — 지난 세션은 늘 수백 건이라(실측 213) 숫자가 «해야 할 일»로 읽힌다(#3778).
     row('archive', '지난 세션', 0, '지난 세션 — 멈춘 세션과 목록에서 치운 세션. 프로젝트로 묶어 보고 그대로 이어서 열 수 있어요'),
-    row('trash', '휴지통', trashedN, '휴지통 — 버린 프로젝트·세션을 되돌리거나 완전히 지웁니다'),
+    row('trash', '휴지통', trashedN, '휴지통 — 버린 세션·프로젝트·자료·지식을 되돌리거나 완전히 지웁니다'),
   ];
 }
 function binPinBtn(): HTMLElement {

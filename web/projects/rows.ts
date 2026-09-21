@@ -11,6 +11,7 @@
 //  ⚠ pjvOpenTaskModal 은 **배럴(../projects.js) 경유**로 받는다 — 기존 projects↔taskmodal 순환을 새 직접
 //   엣지(rows→taskmodal)로 늘리지 않기 위해서다(순환 축소는 R56 소관).
 import { api, busy, el, personFace, toast } from '../core.js';
+import { trashProjectFlow } from '../session-actions.js';   // #3778 — 프로젝트 삭제 = 휴지통으로(어느 화면이든 같은 길)
 import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import {
   openProjectSessionForm, pjvAddTask, pjvOpenTaskModal,
@@ -372,12 +373,10 @@ function pjvProjRename(anchor, p, reload) {
   };
   setTimeout(() => { input.focus(); input.select(); }, 0);
 }
+//  #3778 — 프로젝트 «삭제» 는 어느 자리에서든 **휴지통으로 보내기**다(session-actions.trashProjectFlow 한 길).
+//   종전엔 `/delete`(하드 삭제)라 태스크·팀원·연결이 사라지고 클릭업 원본까지 지워졌는데, 확인창은 «되돌릴 수 없음» 이라고만 했다.
 function pjvProjDelete(p, reload) {
-  if (!confirm('프로젝트 ‘' + p.name + '’을(를) 삭제할까요?\n\n프로젝트와 그 안의 작업(태스크·하위)이 함께 사라집니다(되돌릴 수 없음).')) return;
-  (async () => {
-    try { await api('/api/ui/v6/projects/' + p.id + '/delete', { method: 'POST' }); toast('프로젝트를 삭제했습니다'); reload(); }
-    catch (e) { toast('삭제 실패 — ' + e.message, true); }
-  })();
+  void trashProjectFlow({ id: Number(p.id), name: String(p.name || '') }).then((sent) => { if (sent) reload(); });
 }
 // 프로젝트 한 줄(태스크 행과 동형) — [캐럿자리][상태점/체크] 이름 | 담당자 | 마감일 | 우선순위 | 커스텀… | ⋯.
 // '내 세션' 셀(프로젝트 목록 전용) — 터미널 아이콘 클릭 → 이 프로젝트의 '내 세션' 목록 팝업 → 고르면 새 탭으로 입장.

@@ -12,6 +12,7 @@
 //    외부 폼(openProjectSessionForm·pjvOpenProjectModal·openListForm)에 콜백으로 넘어가므로 매번 새로 만들지 않는다.
 //  · 리스트별 필터는 **그룹 body 만** 다시 그린다(paint) — 위젯 전체 draw() 는 팝오버 앵커를 죽인다(#1236).
 import { api, el, errorNote, toast } from '../core.js';
+import { trashProjectFlow } from '../session-actions.js';   // #3778 — 프로젝트 삭제 = 휴지통으로
 import { skeleton } from '../learn.js';
 import { openProjectSessionForm, pjvOpenProjectModal } from '../projects.js';
 import { dashApplyListOrder, dashListFilter, dashListFilterOn, dashListFilterPreds, dashOvHidden, dashOvPinned, dashPrefsSync, dashProjFilterDefault, dashReorderList, dashSaveOvHidden, dashSaveOvPinned, dashTaskChip, dashTaskCountMode } from './prefs.js';
@@ -432,16 +433,15 @@ function dashRowTags(p) {
   return wrap;
 }
 
-// #req 프로젝트 행 '⋯' 관리 메뉴 — 삭제(POST /projects/:id/delete). onChanged=위젯 새로고침.
+// #req 프로젝트 행 '⋯' 관리 메뉴 — 삭제 = 휴지통으로(POST /projects/:id/trash, #3778). onChanged=위젯 새로고침.
 function openProjRowMenu(anchor, p, onChanged) {
   const panel = el('div', { class: 'dash-pop-panel' });
   let close = () => { /* 대체됨 */ };
-  const del = el('button', { class: 'dash-pop-opt danger', type: 'button' }, el('span', { class: 'dash-pop-name', text: '삭제' }));
+  const del = el('button', { class: 'dash-pop-opt danger', type: 'button' }, el('span', { class: 'dash-pop-name', text: '휴지통으로' }));
   del.onclick = async () => {
     close();
-    if (!confirm('프로젝트 ‘' + (p.name || '') + '’을(를) 삭제할까요?\n하위 태스크·세션 연결 포함 되돌릴 수 없어요.')) return;
-    try { await api('/api/ui/v6/projects/' + p.id + '/delete', { method: 'POST', body: '{}' }); toast('프로젝트를 삭제했어요'); onChanged && onChanged(); }
-    catch (e: any) { toast('삭제 실패 — ' + (e && e.message || e), true); }
+    //  #3778 — 삭제 = 휴지통으로(어느 화면이든 같은 길). 종전엔 하드 삭제 + «되돌릴 수 없어요».
+    if (await trashProjectFlow({ id: Number(p.id), name: String(p.name || '') })) onChanged && onChanged();
   };
   panel.append(del);
   close = dashPopover(anchor, panel);

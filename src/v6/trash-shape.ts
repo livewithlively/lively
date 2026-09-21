@@ -44,3 +44,11 @@ export function isMirroredSourceSnapshot(before: Record<string, unknown> | null 
   const sys = String((before ?? {}).external_system ?? "");
   return !TRASHABLE_SOURCE_SYSTEMS.includes(sys);
 }
+
+/**
+ * 완전 삭제(파기)가 비워야 하는 감사 축(#3778). 지식은 **두 축** — 항상-주입 섹션은 같은 문서가 entity='org_section' 으로도 감사된다
+ *  (섹션 편집·삭제, org/store/sections.ts). 한 축만 비우면 «완전히 지웠다» 는 문서의 본문이 다른 축에 그대로 남는다.
+ *  다른 종류는 제 축 하나 — 모르는 종류도 그 이름 그대로(넓히지 않는다: 남의 축을 비우는 쪽이 더 나쁘다).
+ */
+export const purgeAxesOf = (entity: string): string[] => (entity === "knowledge" ? ["knowledge", "org_section"] : [entity]);
+

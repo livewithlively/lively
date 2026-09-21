@@ -284,9 +284,17 @@ function dashFolderBrowser(root, startPath) {
     catch (e) { toast('이름 변경 실패 — ' + e.message, true); setBusy(false); }
   };
   const deleteItem = async (name, isDir) => {
-    if (!confirm((isDir ? '폴더' : '파일') + ' ‘' + name + '’' + (isDir ? ' 및 그 안의 모든 내용' : '') + '을(를) 삭제할까요? 되돌릴 수 없어요.')) return;
+    //  #3778 — 서버가 자료로 등록된 파일을 숨김 자리에 보관한다(휴지통 ▸ 자료 탭에서 되살린다). 그 밖(압축·영상·빈 폴더)은 종전대로
+    //   바로 지워진다 — 어느 쪽이 될지는 지워 봐야 알므로(응답 trashed) 확인창은 둘 다 말하고, 결과는 토스트가 사실대로 말한다.
+    if (!confirm((isDir ? '폴더' : '파일') + ' ‘' + name + '’' + (isDir ? ' 및 그 안의 모든 내용' : '') + '을(를) 삭제할까요?\n\n'
+      + '자료로 등록된 파일은 [휴지통] ▸ [자료] 탭에서 되살릴 수 있어요. 그 밖의 파일과 빈 폴더는 되살릴 수 없어요.')) return;
     setBusy(true);
-    try { await api('/api/ui/terminal/browse?' + qp(relOf(name)), { method: 'DELETE' }); await load(); }
+    try {
+      const r: any = await api('/api/ui/terminal/browse?' + qp(relOf(name)), { method: 'DELETE' });
+      const kept = Number(r && r.trashed) || 0;
+      toast(kept ? '휴지통으로 보냈어요 — [휴지통] ▸ [자료] 탭에서 되살릴 수 있어요' + (isDir ? ` (자료 ${kept}건)` : '') : '삭제했어요');
+      await load();
+    }
     catch (e) { toast('삭제 실패 — ' + e.message, true); setBusy(false); }
   };
   const download = (name) => authDownload('/api/ui/terminal/browse/file?download=1&' + qp(relOf(name)), name);

@@ -281,7 +281,8 @@ function injectionMap(detail, data) {
   }
   async function deleteSectionUi(s) {
     // #1245 — 가이드 행 삭제는 이제 무영향(본문은 코드 소유·행 무시)이라 특수 경고 불요. 가이드 행엔 삭제 버튼 자체를 안 그린다.
-    if (!confirm("'" + s.name + "' 섹션을 삭제할까요?\n\n매 세션 주입에서 사라집니다(휴지통에서 복원 가능).")) return;
+    //  #3778 — 이 말이 이제 참이다: 서버가 지식과 같은 길로 지워 휴지통 ▸ 지식 탭에 선다(종전엔 말만 하고 휴지통에 안 섰다).
+    if (!confirm("'" + s.name + "' 섹션을 삭제할까요?\n\n매 세션 주입에서 사라집니다. 휴지통 ▸ 지식 탭에서 되살릴 수 있어요(되살리면 다시 주입됩니다).")) return;
     try { await api('/api/ui/org/section/delete', { method: 'POST', body: JSON.stringify({ section: s.name }) }); toast('삭제됨'); await reloadSections(); }
     catch (e) { toast(e.message, true); }
   }
