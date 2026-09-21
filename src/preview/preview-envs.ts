@@ -10,8 +10,9 @@ import { itemsPool } from "../db/client.js";
 import { currentTenant, withTenant } from "../org/tenant-context.js";   // #1875 — 라우팅 조회의 primary 폴백
 import { SINGLE_TENANT_ID } from "../db/tenant-column.js";
 import { PRIMARY_SLUG } from "../org/tenancy/registry.js";
-import { ensureStageWorktree } from "./preview-stage.js";
+import { ensureStageWorktree, currentStageInputs, readStageRecord, writeStageRecord, stageRebuildVerdict, type StageInputs } from "./preview-stage.js";
 import { ensureProjectWorktree, ensureDeps, runBuild, buildFailureHint, installFailureHint, missingEntryAssets } from "./preview-prepare.js";
+import { createPrepareQueue, prepareConcurrencyFromEnv } from "./prepare-queue.js";
 // 공유 워크스페이스 루트 = project-fs 의 단일 정의(TERMINAL_ROOT_SHARED). 여기서 따로 계산하면 설치에 따라
 //  provision 이 만든 작업 폴더와 다른 자리를 가리켜 '방금 만든 워크트리를 못 찾는' 오진이 난다.
 import { PROJECT_SHARED_BASE as SHARED_BASE } from "../project/project-fs.js";
@@ -198,8 +199,42 @@ const staticReady = (workdir: string): { ok: boolean; missing: string[] } => {
   return { ok: missing.length === 0, missing };
 };
 
+// 준비(합치기·설치·빌드)는 줄을 선다 — 기본 한 번에 하나. 빌드가 게이트웨이와 같은 메모리 한도 안에서 돌아서다
+//  (이유·실측은 prepare-queue.ts 머리말, #4119).
+const prepareQueue = createPrepareQueue(prepareConcurrencyFromEnv(),
+  (id, e) => logger.warn({ err: e, id }, "미리보기 준비 실패(백그라운드)"));
+
+// 줄에 세운다 — 사람이 누른 것은 앞, 자동 갱신·멈춤 복구는 뒤. 이미 줄에 있거나 도는 중이면 false.
+function schedulePrepare(id: string, front: boolean): boolean {
+  return prepareQueue.schedule(id, () => runQueuedPrepare(id), { front });
+}
+
+// 차례가 온 준비. '준비 중' 표시와 멈춤 시계(last_active_at)는 **실제로 시작할 때** 찍는다 — 줄에서 기다리는
+//  동안 자동 갱신 대상은 직전 빌드를 계속 서빙하고(503 을 안 낸다), 사람이 누른 것은 ensure 가 이미 '준비 중'
+//  으로 바꿔 두었다. 기다리는 사이 사람이 멈췄으면 되살리지 않는다.
+async function runQueuedPrepare(id: string): Promise<void> {
+  const p = await getPreviewEnv(id);
+  if (!p || !p.enabled || p.status === "stopped") return;
+  await itemsPool.query(
+    "UPDATE org_preview_env SET status='preparing', last_error=NULL, last_active_at=now(), updated_at=now() WHERE id=$1", [id]);
+  await preparePreviewEnv(id);
+}
+
+// 자동 합치기 stage 를 다시 빌드할까 — 합칠 입력(base·작업 끝 커밋·빌드 명령)이 마지막 성공 때와 같으면
+//  아니다(#4119 · preview-stage.stageRebuildVerdict). 워크트리나 화면 파일이 없으면 잴 것 없이 다시 빌드한다.
+async function stageRefreshVerdict(p: PreviewEnv, fetched: Set<string>): Promise<{ rebuild: boolean; reason: string }> {
+  const wt = p.worktree_path;
+  if (!wt || !hasDir(wt)) return { rebuild: true, reason: "no-worktree" };
+  if (!staticReady(wt).ok) return { rebuild: true, reason: "not-ready" };
+  const current = await currentStageInputs(wt, p.base_ref, p.member_branches || [], fetched);
+  if (current.fetchError) logger.warn({ id: p.id, err: current.fetchError }, "미리보기 자동 갱신 — 원격을 받지 못해 옛 참조로 판정한다");
+  const [record, profile] = await Promise.all([readStageRecord(wt), resolveProfile(p)]);
+  return stageRebuildVerdict(record, current, profile?.build_cmd ?? null);
+}
+
 // 미리보기 띄우기 — 준비할 게 없으면 바로 '실행 중', 있으면 '준비 중'을 돌려주고 뒤에서 진행한다.
-export async function ensurePreviewEnv(p: PreviewEnv): Promise<{ id: string; status: string; url?: string; action: string; error?: string; port?: number }> {
+//  background(자동 갱신)면 줄 뒤에 세우기만 하고 상태는 그대로 둔다 — 차례가 올 때까지 직전 빌드를 서빙한다.
+export async function ensurePreviewEnv(p: PreviewEnv, opts: { background?: boolean } = {}): Promise<{ id: string; status: string; url?: string; action: string; error?: string; port?: number }> {
   if (!p.enabled) return { id: p.id, status: "stopped", action: "disabled" };
   const url = await previewUrl(p.id);
 
@@ -242,11 +277,15 @@ export async function ensurePreviewEnv(p: PreviewEnv): Promise<{ id: string; sta
     return { id: p.id, status: "running", url, action: "ready" };
   }
 
+  if (opts.background) {
+    const queued = schedulePrepare(p.id, false);
+    return { id: p.id, status: p.status, url, action: queued ? "queued" : "already-queued" };
+  }
   // last_active_at 도 함께 찍는다 — '준비가 멈췄나'를 재는 시계가 이 값이다. 안 찍으면 직전 사용 시각이
   //  그대로 남아, 시작하자마자 '15분 넘게 멈춤'으로 판정돼 reconcile 이 두 번째 준비를 건다.
   await itemsPool.query(
     "UPDATE org_preview_env SET status='preparing', last_error=NULL, last_active_at=now(), updated_at=now() WHERE id=$1", [p.id]);
-  void preparePreviewEnv(p.id).catch((e) => logger.warn({ err: e, id: p.id }, "미리보기 준비 실패(백그라운드)"));
+  schedulePrepare(p.id, true);
   return { id: p.id, status: "preparing", url, action: "preparing" };
 }
 
@@ -257,9 +296,11 @@ export async function preparePreviewEnv(id: string): Promise<void> {
   try {
     // 1) 볼 파일이 있는 폴더 확보
     let workdir: string;
+    let stageInputs: StageInputs | null = null;
     if (p.kind === "stage") {
       const r = await ensureStageWorktree(p.id, p.repo, p.base_ref || "origin/main", p.member_branches || []);
       workdir = r.worktree_path;
+      stageInputs = r.inputs;
       await itemsPool.query("UPDATE org_preview_env SET merge_status=$2::jsonb WHERE id=$1", [p.id, JSON.stringify(r.merge_status)]);
       // 실패는 **사유별로 다른 말**을 한다(#3778) — 사람이 할 일이 정반대다. 충돌이면 코드를 봐야 하고,
       //  그 밖의 실패면 그 브랜치를 base 에 리베이스하거나 서버 사정을 봐야 한다. 종전엔 둘 다 «서로 충돌» 이라
@@ -314,6 +355,12 @@ export async function preparePreviewEnv(id: string): Promise<void> {
     }
     await itemsPool.query(
       "UPDATE org_preview_env SET status='running', last_active_at=now(), updated_at=now() WHERE id=$1", [p.id]);
+    // 자동 갱신이 «같은 입력이면 건너뛰기» 를 재는 근거 — **성공한** 준비만 적는다(#4119). 못 적으면 다음
+    //  점검이 «기록 없음» 으로 한 번 더 빌드할 뿐이다.
+    if (stageInputs) {
+      await writeStageRecord(workdir, { ...stageInputs, build_cmd: profile?.build_cmd ?? null })
+        .catch((e) => logger.warn({ err: e, id: p.id }, "stage 준비 기록을 남기지 못했다 — 다음 점검에서 한 번 더 빌드한다"));
+    }
   } catch (e) {
     const msg = (e as Error)?.message ?? String(e);
     await setStatus(p.id, "error", msg.length > 300 ? msg.slice(0, 300) + "…" : msg);
@@ -330,12 +377,17 @@ export async function stopPreviewEnv(p: PreviewEnv): Promise<{ id: string; statu
 
 // 주기 점검(크론 preview_reconcile) — ① 오래 안 쓴 것 정리, ② 자동 합치기 갱신, ③ 죽은 전용 서버 되살리기,
 //  ④ 재시작 등으로 '준비 중'에 멈춘 것 복구. 정지된 건 자동으로 켜지 않는다(사람이 띄운 것만 유지).
+//  ② 는 **합칠 입력이 바뀐 것만** 줄 뒤에 세운다 — 종전엔 5분마다 전부를 한꺼번에 다시 빌드해 게이트웨이를
+//  멈춰 세웠다(#4119). 결과의 action 에 판정 사유(up-to-date · member-moved:<브랜치> …)가 실린다.
 export async function reconcilePreviewEnvs(): Promise<Array<{ id: string; status?: string; action?: string; error?: string }>> {
   const rows = await listPreviewEnvs();
   const out: Array<{ id: string; status?: string; action?: string; error?: string }> = [];
+  const fetched = new Set<string>(); // 이번 판에 이미 받아 온 저장소 — stage 들은 base 클론 하나를 같이 쓴다
   for (const p of rows) {
     if (p.status === "preparing") { // 준비 중인 채 오래 멈춰 있으면(프로세스 재시작 등) 되살린다
-      if (stuckSince(p) > PREPARE_STUCK_MS) { void preparePreviewEnv(p.id); out.push({ id: p.id, action: "re-preparing" }); }
+      if (stuckSince(p) > PREPARE_STUCK_MS) {
+        out.push({ id: p.id, action: schedulePrepare(p.id, false) ? "re-preparing" : "already-queued" });
+      }
       continue;
     }
     if (p.ttl_idle_sec > 0 && p.status === "running" && p.last_active_at) {
@@ -347,7 +399,13 @@ export async function reconcilePreviewEnvs(): Promise<Array<{ id: string; status
     }
     if (!p.enabled || p.status !== "running") continue;
     if (p.kind === "stage" && p.merge_trigger === "auto") {
-      try { out.push(await ensurePreviewEnv(p)); } catch (e) { out.push({ id: p.id, error: (e as Error)?.message ?? String(e) }); }
+      try {
+        const v = await stageRefreshVerdict(p, fetched);
+        if (!v.rebuild) { out.push({ id: p.id, status: p.status, action: v.reason }); continue; }
+        logger.info({ id: p.id, reason: v.reason }, "미리보기 자동 갱신 — 합칠 입력이 바뀌어 다시 빌드한다");
+        const r = await ensurePreviewEnv(p, { background: true });
+        out.push({ ...r, action: `${r.action}:${v.reason}` });
+      } catch (e) { out.push({ id: p.id, error: (e as Error)?.message ?? String(e) }); }
     } else if (p.kind !== "stage" && p.backing_mode === "throwaway") {
       const { isAlive } = await import("./preview-proc.js");
       if (!isAlive(p.id)) {
