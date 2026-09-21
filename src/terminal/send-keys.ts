@@ -4,7 +4,7 @@
 //  없었다. 노드 프로토콜에 send-keys 계열 op 가 아예 없었기 때문이다(#1664).
 //  여기로 빼면서 psmux(Windows 노드) 분기를 함께 넣는다 — 노드는 mac/linux(tmux)와 Windows(psmux) 둘 다다.
 //
-// 세 규약이 이 파일에 갇혀 있다. 하나라도 빠지면 주입이 **조용히** 반쪽이 된다:
+// 네 규약이 이 파일에 갇혀 있다. 하나라도 빠지면 주입이 **조용히** 반쪽이 된다:
 //  ① **단일 라인** — `send-keys -l` 에 개행이 섞이면 그 자리에서 조기 제출된다(프롬프트가 잘려 나간다).
 //     개행을 공백으로 평탄화해 한 단락 1회 제출로 만든다.
 //  ② **flush 지연** — TUI(Claude Code)가 긴 텍스트를 다 그리기 전에 Enter 가 도착하면 '입력창에 텍스트만
@@ -13,6 +13,7 @@
 //     3.3.8 에서 구현됐지만 이미 떠 있는 세션은 옛 서버로 돈다) `-l`(리터럴)은 검증된 적이 없다. 실측으로 통과가 확인된 형태는 코드포인트 토큰(`0xNN`)뿐이라
 //     terminal-pty 의 인코더를 그대로 재사용한다. Enter 도 키 이름이 아니라 `0x0d` 로 보낸다.
 //     (자세한 근거는 terminal-pty.ts 의 'psmux 입력 경로' 절.)
+//  ④ **tmux 도 청크** — 인자 하나가 16KiB 를 넘으면 tmux 가 명령을 통째로 거절한다(TMUX_LITERAL_CHUNK_BYTES).
 import { TMUX_BIN, harnessLiveThemeSteps, harnessLiveThemeSupported, type LiveThemeStep } from "./catalog.js";
 import { detectAwaiting, isSpinning } from "./phase.js";   // #1683 후속2 — 바쁜/모달 세션엔 키를 넣지 않는다
 import { tmux } from "./tmux-exec.js";
@@ -21,6 +22,28 @@ import { isPsmuxBin, inputToSendKeysArgv } from "./terminal-pty.js";
 // 텍스트가 pane 에 닿은 뒤 Enter 가 가도록 두는 창(규약 ②). 길이 비례이되 상·하한을 둔다 —
 //  짧은 프롬프트에 1.5s 를 쓰면 크론 주입이 느려지고, 긴 프롬프트에 500ms 는 모자란다.
 export const injectFlushMs = (len: number): number => Math.min(1500, Math.max(500, Math.round(len * 0.6)));
+
+// tmux `send-keys -l` 한 번에 싣는 상한(바이트). tmux 는 명령 하나를 **16KiB 메시지 한 통**에 실어 서버로 보내고,
+//  그보다 크면 `command too long` 으로 **통째로 거절**한다(실측 tmux 3.6a: 16,300바이트 통과 · 20,000바이트 거절).
+//  한글은 글자당 3바이트라 약 5,400자 — 음성 받아쓰기 지시는 이걸 쉽게 넘는다. 실측 2026-09-22(원준님, 맥미니 노드
+//  box-wonjoon-jang-3da5e47e): 홈에서 연 세션의 첫 지시가 이 거절로 **한 글자도 안 들어갔다**.
+//  그래서 여러 번에 나눠 싣는다 — pane 에 닿는 바이트는 한 번에 보낸 것과 같다. 상한의 절반을 쓰는 이유는 argv 의
+//  나머지(세션 id·플래그)와 메시지 머리도 같은 통에 들어가기 때문이다.
+export const TMUX_LITERAL_CHUNK_BYTES = 8 * 1024;
+
+/** 문자열을 UTF-8 바이트 상한으로 자른다(순수). ⚠ **코드포인트 경계에서만** 자른다 — tmux 가 인자를 UTF-8 로 풀어
+ *  키로 바꾸므로 글자 가운데를 자르면 깨진 글자가 된다. `for..of` 는 코드포인트 단위라 서로게이트 쌍도 안 가른다. */
+export function splitUtf8(text: string, maxBytes: number): string[] {
+  const out: string[] = [];
+  let cur = ""; let bytes = 0;
+  for (const ch of text) {
+    const b = Buffer.byteLength(ch, "utf8");
+    if (cur && bytes + b > maxBytes) { out.push(cur); cur = ""; bytes = 0; }
+    cur += ch; bytes += b;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
 
 export interface SendKeysPlan {
   /** 평탄화된 실제 주입 문자열(규약 ①). 빈 문자열이면 보낼 것이 없다. */
@@ -45,7 +68,12 @@ export function sendKeysPlan(id: string, text: string, bin: string): SendKeysPla
   if (isPsmuxBin(bin)) {
     return { oneLine, keys: oneLine ? inputToSendKeysArgv(id, oneLine) : [], enter: ["send-keys", "-t", id, "0x0d"] };
   }
-  return { oneLine, keys: oneLine ? [["send-keys", "-t", id, "-l", oneLine]] : [], enter: ["send-keys", "-t", id, "Enter"] };
+  //  `--` — 텍스트가 `-` 로 시작하면 tmux 가 그걸 **옵션으로 읽는다**(실측: `-foo` 는 `unknown flag -f` 로 거절,
+  //   `-R` 은 조용히 삼켜져 한 글자도 안 간다). 마크다운 목록(«- 이거 해 줘») 으로 시작하는 지시가 그렇게 사라지고,
+  //   청크로 자르면 경계마다 같은 일이 생길 수 있다. 매니지드 중계의 세션 해석(lvly-cloud sessionbroker)도 `--` 를
+  //   옵션 구간 끝으로 읽으므로 `-t` 지목은 그대로다.
+  const keys = oneLine ? splitUtf8(oneLine, TMUX_LITERAL_CHUNK_BYTES).map((part) => ["send-keys", "-t", id, "-l", "--", part]) : [];
+  return { oneLine, keys, enter: ["send-keys", "-t", id, "Enter"] };
 }
 
 /**

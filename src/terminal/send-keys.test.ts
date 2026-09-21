@@ -3,7 +3,7 @@
 //  프로세스를 띄우므로 여기서 안 잰다 — 계획을 순수하게 갈라 둔 이유가 **Windows 노드를 CI 에서 못 띄우기**
 //  때문이다. 그 표면 규칙을 mac 에서도 표로 못박는다.
 import assert from "node:assert/strict";
-import { sendKeysPlan, injectFlushMs } from "./send-keys.js";
+import { sendKeysPlan, injectFlushMs, splitUtf8, TMUX_LITERAL_CHUNK_BYTES } from "./send-keys.js";
 
 const TMUX = "/opt/homebrew/bin/tmux";
 const PSMUX = "C:\\Users\\y\\.lively\\bin\\psmux\\psmux.exe";
@@ -14,9 +14,9 @@ let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
 
 // ── 1. 일반 mux ──────────────────────────────────────────────────────────────
-t("[1] tmux — 텍스트는 리터럴 1회, 제출은 Enter 키", () => {
+t("[1] tmux — 텍스트는 리터럴 1회(옵션 끝 `--` 뒤), 제출은 Enter 키", () => {
   const p = sendKeysPlan("box-yoon-1", "안녕", TMUX);
-  assert.deepEqual(p.keys, [["send-keys", "-t", "box-yoon-1", "-l", "안녕"]]);
+  assert.deepEqual(p.keys, [["send-keys", "-t", "box-yoon-1", "-l", "--", "안녕"]]);
   assert.deepEqual(p.enter, ["send-keys", "-t", "box-yoon-1", "Enter"]);
 });
 
@@ -69,7 +69,7 @@ t("[7·경계] psmux — 정확히 상한이면 1묶음, +1이면 2묶음", () =
 t("[8] 개행은 공백으로 평탄화 — 안 하면 그 자리에서 조기 제출돼 프롬프트가 잘린다", () => {
   const p = sendKeysPlan("s", "첫 줄\n  둘째 줄\n\n셋째", TMUX);
   assert.equal(p.oneLine, "첫 줄 둘째 줄 셋째");
-  assert.ok(!p.keys[0][4].includes("\n"), "실제로 보내는 인자에 개행이 남아 있다");
+  assert.ok(!p.keys[0][5].includes("\n"), "실제로 보내는 인자에 개행이 남아 있다");
 });
 
 t("[9] 앞뒤 여백은 잘린다", () => {
@@ -91,7 +91,7 @@ t("[11] mux 메타문자는 별도 명령이 되지 않는다", () => {
   const evil = "; kill-server ; new-session -d";
   const tm = sendKeysPlan("s", evil, TMUX);
   assert.equal(tm.keys.length, 1, "인자가 쪼개져 여러 명령이 됐다");
-  assert.equal(tm.keys[0][4], evil, "리터럴 인자 하나로 머물러야 한다");
+  assert.equal(tm.keys[0][5], evil, "리터럴 인자 하나로 머물러야 한다");
   for (const tok of toks(sendKeysPlan("s", evil, PSMUX).keys[0])) assert.match(tok, /^0x[0-9a-f]+$/);
 });
 
@@ -121,9 +121,56 @@ t("[15] 세션 id 는 텍스트·제출 모든 argv 에 실린다", () => {
 t("[16] mux 경로를 모르면 일반 mux 취급 — Windows 전용 표면을 근거 없이 쓰지 않는다", () => {
   for (const bin of ["", "  ", "/usr/bin/tmux", "/opt/homebrew/bin/tmux-next"]) {
     const p = sendKeysPlan("s", "ls", bin);
-    assert.deepEqual(p.keys, [["send-keys", "-t", "s", "-l", "ls"]], `bin=${JSON.stringify(bin)}`);
+    assert.deepEqual(p.keys, [["send-keys", "-t", "s", "-l", "--", "ls"]], `bin=${JSON.stringify(bin)}`);
     assert.deepEqual(p.enter, ["send-keys", "-t", "s", "Enter"], `bin=${JSON.stringify(bin)}`);
   }
+});
+
+// ── 17~21. tmux 청크 · 옵션 끝(#3870) ──────────────────────────────────────────
+//  실측 2026-09-22(tmux 3.6a): 인자 하나가 16KiB 를 넘으면 `command too long` 으로 명령이 통째로 거절된다 —
+//  음성 받아쓰기 첫 지시(한글 수천 자)가 한 글자도 안 들어갔다(box-wonjoon-jang-3da5e47e).
+const bytes = (s: string): number => Buffer.byteLength(s, "utf8");
+t("[17] tmux — 긴 한글 지시는 여러 리터럴로 갈리고, 각 인자는 상한 이하 · 이어붙이면 원문 그대로", () => {
+  const text = "큰 데이터가 있단 말이야. 그치 아무래도 슬랙 수집기가 엄청 많이 돌잖아. ".repeat(400);   // ≈ 40KB
+  const p = sendKeysPlan("s", text, TMUX);
+  assert.ok(bytes(p.oneLine) > 16 * 1024, "시험 전제 — tmux 한 통을 넘는 길이여야 한다");
+  assert.ok(p.keys.length >= 3, `청크 수 ${p.keys.length}`);
+  for (const argv of p.keys) {
+    assert.deepEqual(argv.slice(0, 5), ["send-keys", "-t", "s", "-l", "--"], "묶음마다 대상 세션·리터럴·옵션 끝이 실려야 한다");
+    assert.equal(argv.length, 6);
+    assert.ok(bytes(argv[5]) <= TMUX_LITERAL_CHUNK_BYTES, `인자 ${bytes(argv[5])}B — 상한 초과`);
+  }
+  assert.equal(p.keys.map((a) => a[5]).join(""), p.oneLine, "순서·내용 보존");
+});
+t("[18] 코드포인트 경계에서만 자른다 — 한글(3B)·이모지(4B, 서로게이트 쌍)가 가운데서 안 잘린다", () => {
+  for (const unit of ["한", "🚀", "a한🚀"]) {
+    const parts = splitUtf8(unit.repeat(5000), 100);
+    for (const part of parts) {
+      assert.ok(bytes(part) <= 100);
+      assert.ok(!/[\uD800-\uDBFF]$/.test(part) && !/^[\uDC00-\uDFFF]/.test(part), "서로게이트 쌍이 갈렸다");
+      assert.equal(Buffer.from(part, "utf8").toString("utf8"), part, "UTF-8 왕복이 깨졌다");
+    }
+    assert.equal(parts.join(""), unit.repeat(5000));
+  }
+});
+t("[19·경계] splitUtf8 — 정확히 상한이면 1조각, +1바이트면 2조각, 빈 문자열은 0조각", () => {
+  assert.deepEqual(splitUtf8("a".repeat(10), 10), ["a".repeat(10)]);
+  assert.deepEqual(splitUtf8("a".repeat(11), 10), ["a".repeat(10), "a"]);
+  assert.deepEqual(splitUtf8("한한한", 9), ["한한한"]);
+  assert.deepEqual(splitUtf8("한한한", 8), ["한한", "한"]);
+  assert.deepEqual(splitUtf8("", 10), []);
+});
+t("[20] `-` 로 시작하는 지시(마크다운 목록 등)도 옵션이 아니라 글자로 간다 — `--` 뒤에 싣는다", () => {
+  //  실측: `send-keys -l '-foo'` 는 `unknown flag -f` 로 거절, `-R` 은 조용히 삼켜져 아무것도 안 간다.
+  for (const raw of ["- 이거 해 줘\n- 저거도", "-R", "--help"]) {
+    const argv = sendKeysPlan("s", raw, TMUX).keys[0];
+    assert.equal(argv[4], "--", `raw=${JSON.stringify(raw)}`);
+    assert.ok(argv[5].startsWith("-"), "텍스트는 `--` 다음 인자여야 한다");
+  }
+});
+t("[21] 짧은 지시는 여전히 한 번에 — 청크는 상한을 넘을 때만 생긴다", () => {
+  assert.equal(sendKeysPlan("s", "가".repeat(Math.floor(TMUX_LITERAL_CHUNK_BYTES / 3)), TMUX).keys.length, 1);
+  assert.equal(sendKeysPlan("s", "가".repeat(Math.floor(TMUX_LITERAL_CHUNK_BYTES / 3) + 1), TMUX).keys.length, 2);
 });
 
 console.log(`\n${pass} passed`);
