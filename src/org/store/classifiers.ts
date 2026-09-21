@@ -149,7 +149,7 @@ export async function classifierBacklog(r: ClassifierRow): Promise<number> {
 /**
  * 어느 일하는 레인의 **스코프**에도 안 드는 미분류 지식을 세는 쿼리 — 일하는 레인이 없으면 null(= 0: 기본 기준 하나가 전부 받는다).
  *  ⚠ 인박스(‘봤다’ 제외·상한)로 세면 안 된다 — 레인이 이미 보고 넘긴 지식까지 사각지대로 세어 «영영 못 받는다» 고 거짓 경보를 낸다(#4194 적대검증).
- *  @internal 테스트 노출(classifier-scope.test.ts).
+ *  @internal 테스트 노출(classifier-scope.test.ts [U1]~[U3] — 순수 조립 · classifier-lanes.pg-test.mjs — 실DB 수).
  */
 export function uncoveredQuery(active: ClassifierRow[]): { sql: string; params: unknown[] } | null {
   if (!active.length) return null;

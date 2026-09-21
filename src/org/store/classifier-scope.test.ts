@@ -6,7 +6,7 @@
 //  여기서 자리표시자 번호가 어긋나면 **쿼리는 성공하면서 엉뚱한 값으로 필터링된다** — 에러가 안 나므로
 //  "왜 저 분류기가 남의 지식을 가져갔지?"로만 드러나고, 그때는 이미 제안이 덮인 뒤다.
 import assert from "node:assert/strict";
-import { scopeWhere, type ClassifierRow } from "./classifiers.js";
+import { scopeWhere, uncoveredQuery, type ClassifierRow } from "./classifiers.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -142,6 +142,34 @@ t("빈 배열 축은 조건을 만들지 않는다(전체와 같다)", () => {
   const sql = scopeWhere(mk({ match_types: [], match_systems: [], exclude_names: [] }), p);
   assert.equal(p.length, 0);
   assert.deepEqual(placeholders(sql), []);
+});
+
+// ══ 사각지대(uncoveredQuery) — 레인 여럿의 스코프를 **한 params 배열**로 부정한다(#4194) ══
+//  사각지대 = 어느 일하는 레인의 스코프에도 안 드는 미분류 지식. 자리표시자가 어긋나면 에러 없이 엉뚱한 레인 값으로
+//  세어 «영영 못 받는다» 경보가 틀린다 — scopeWhere 와 같은 위험이라 같은 자리에서 잠근다.
+/** 레인 스코프를 부정한 조각 수 — 스코프 자체의 미분류 조건은 «NOT EXISTS (» 라 여기 안 잡힌다. */
+const negations = (sql: string): number => (sql.match(/NOT \(/g) ?? []).length;
+
+t("[U1] 일하는 레인이 없으면 쿼리가 없다 — 기본 기준 하나가 전부 받으므로 사각지대 0", () => {
+  assert.equal(uncoveredQuery([]), null);
+});
+
+t("[U2] 조건 없는 레인 하나 — 파라미터 0 · 그 스코프를 한 번 부정", () => {
+  const u = uncoveredQuery([mk()]);
+  assert.ok(u, "레인이 있는데 쿼리가 없다");
+  assert.equal(u.params.length, 0);
+  assert.deepEqual(placeholders(u.sql), []);
+  assert.equal(negations(u.sql), 1);
+});
+
+t("[U3] 같은 축을 쓰는 레인 둘 — $1·$2 가 각자 자기 레인 값을 가리킨다", () => {
+  const a = mk({ id: 1, key: "a", match_types: ["decision"] });
+  const b = mk({ id: 2, key: "b", match_types: ["how-to"] });
+  const u = uncoveredQuery([a, b]);
+  assert.ok(u, "레인이 있는데 쿼리가 없다");
+  assert.deepEqual(placeholders(u.sql), [1, 2], "레인마다 자리표시자를 새로 셌다 — 두 레인이 같은 값을 본다");
+  assert.deepEqual(u.params, [["decision"], ["how-to"]]);
+  assert.equal(negations(u.sql), 2, "레인마다 한 번씩 부정하지 않았다");
 });
 
 console.log(`\n${pass} passed`);

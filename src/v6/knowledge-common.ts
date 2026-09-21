@@ -67,7 +67,7 @@ export const auditKnowledge = (name: string, op: string, before: unknown, after:
  *  org_classifier_seen 은 «이 레인이 이미 판정했다» 는 뜻인데, 그 판정의 결과(카테고리)가 사라졌으면 기록은 거짓이 된다.
  *  남겨 두면 그 레인은 영영 다시 안 보고, 사각지대로 세어져 «영영 못 받는다» 고 경보만 난다(#4194 적대검증).
  *  카테고리를 잃는 길: 제안 반려(unlink) · 카테고리 삭제(FK CASCADE) · 휴지통 복원(링크 미복원).
- *  ⚠ 아직 카테고리가 남은 지식은 건드리지 않는다(NOT EXISTS) · 실패는 삼킨다 — 재방문이 늦을 뿐, 저장을 깨면 안 된다.
+ *  ⚠ 아직 카테고리가 남은 지식은 건드리지 않는다(NOT EXISTS) · 실패는 저장을 깨지 않는다(재방문이 늦을 뿐) — 로그만 남긴다.
  */
 export async function forgetClassifierSeen(names: string[]): Promise<void> {
   if (!names.length) return;
@@ -76,5 +76,10 @@ export async function forgetClassifierSeen(names: string[]): Promise<void> {
       `DELETE FROM org_classifier_seen s
         WHERE s.knowledge_name = ANY($1::text[])
           AND NOT EXISTS (SELECT 1 FROM knowledge_category kc WHERE kc.name = s.knowledge_name)`, [names]);
-  } catch { /* 구 스키마(테이블 없음)·일시 실패 — 다음 반려·삭제 때 다시 지운다 */ }
+  } catch (e) {
+    //  구 스키마(테이블 없음 — 42P01)는 조용히. 그 밖의 실패도 저장은 깨지 않지만(재방문이 늦을 뿐) 로그에는 남긴다 —
+    //   증상이 «그 레인이 이 지식을 영영 다시 안 본다» 뿐이라, 로그가 없으면 몇 주 뒤에야 드러난다(#4194 리뷰).
+    if ((e as { code?: string })?.code !== "42P01")
+      console.warn(`[classifier-seen] '봤다' 기록 정리 실패(${names.length}건 — 다음 반려·삭제 때 다시 지운다): ${(e as Error)?.message}`);
+  }
 }

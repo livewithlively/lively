@@ -85,7 +85,7 @@ const STAGES: CtxStage[] = [
   },
   {
     key: 'distill', label: '증류기',
-    hint: '지식을 완성하는 자동 규칙 — 자료를 읽어 지식으로 쓰고, 미분류 지식에는 카테고리를 채웁니다',
+    hint: '지식을 완성하는 자동 규칙 — 자료를 읽어 지식으로 쓰고, 미분류 지식에는 카테고리를 붙입니다',
     items: [{ key: 'distillers', label: '증류기', draw: (b) => distillScreen(b) }],
   },
   {

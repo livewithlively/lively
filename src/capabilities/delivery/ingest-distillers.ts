@@ -28,14 +28,18 @@ import { ensureFigmaCommentsDistiller, FIGMA_DISTILLER_KEY } from "../../org/dis
  *   · key 가 카테고리 붙이기 레인에만 있으면 upsert 는 **스코프가 빈 새 자료 레인(= catch-all)** 을 만들어 버린다.
  *  그래서 자료 레인에 없는데 카테고리 붙이기 레인에 있으면 그 사실을 말한다. 둘 다에 있으면 자료 레인이 맞다(이 op 는 자료 레인 전용).
  */
-async function refuseCategoryLaneRef(input: Record<string, unknown>, sourceExists: boolean, op: string): Promise<void> {
+async function refuseCategoryLaneRef(input: Record<string, unknown>, sourceExists: boolean, op: "upsert" | "remove" | "preview" | "tune"): Promise<void> {
   if (sourceExists) return;
   const ref = input.id !== undefined && input.id !== null && input.id !== "" ? Number(input.id) : String(input.key ?? "").trim();
   if (!ref) return;
   const lane = await getClassifier(ref).catch(() => null);
   if (!lane) return;
+  //  튜닝은 자료 레인의 사전 필터를 고르는 일이라 카테고리 붙이기엔 짝이 없다 — 없는 도구를 대지 않는다(#4194 리뷰).
+  const next = op === "tune"
+    ? "카테고리 붙이기엔 사전 필터가 없어 튜닝할 것이 없습니다(대상 미리보기는 org_distiller_category_preview)"
+    : `org_distiller_category_${op} 를 쓰세요`;
   throw new HttpError(op === "upsert" ? 400 : 404,
-    `'${String(ref)}' 는 자료 레인이 아니라 카테고리 붙이기 레인입니다 — org_distiller_category_${op} 를 쓰세요(두 레인은 id·key 공간이 따로입니다).`);
+    `'${String(ref)}' 는 자료 레인이 아니라 카테고리 붙이기 레인입니다 — ${next}(두 레인은 id·key 공간이 따로입니다).`);
 }
 /** 자료 레인 op 에 카테고리 붙이기 전용 필드가 **REST 본문으로** 왔으면 400(MCP 는 스키마에 없는 키를 이미 떨궜다). */
 function refuseForeignFields(input: Record<string, unknown>): void {
@@ -295,7 +299,7 @@ export const ingestDistillersCapabilities: Capability[] = [
       const ref = String(input.key ?? "").trim();
       if (!ref) throw new HttpError(400, "key 필요");
       const d = await getDistiller(ref);
-      if (!d) { await refuseCategoryLaneRef({ key: ref }, false, "preview"); throw new HttpError(404, `증류기 '${ref}' 없음`); }
+      if (!d) { await refuseCategoryLaneRef({ key: ref }, false, "tune"); throw new HttpError(404, `증류기 '${ref}' 없음`); }
       const cands = Array.isArray(input.candidates)
         ? (input.candidates as Array<{ label?: string; rules?: Record<string, unknown> }>)
             .filter((c) => c && typeof c === "object" && c.rules)
