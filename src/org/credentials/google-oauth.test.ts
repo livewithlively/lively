@@ -194,6 +194,11 @@ t("[18] slot: 토큰은 암호문 블롭에만 — 평문 meta 에 새지 않는
   assert.equal(blob.access_token, "AT");
   assert.equal(blob.refresh_token, "RT");
   assert.equal(blob.token_type, "bearer", "oauth-proxy-auth 가 Bearer 로 싣는 계약");
+  // #4211 — meta.expires_at 은 **초**(도구 갱신 판정의 단위), 블롭의 expires_at 은 ms(googleTokenExpired 의 단위).
+  const real = googleInstallToSlot({ access_token: "AT", refresh_token: "RT", expires_at: 1_790_000_000_123, scope: "s", email: null, sub: null });
+  assert.equal(real.meta.expires_at, 1_790_000_000, "meta 가 ms 면 도구 갱신이 영영 안 돈다");
+  assert.equal((JSON.parse(real.secret) as Record<string, unknown>).expires_at, 1_790_000_000_123, "블롭은 ms 그대로");
+  assert.equal(googleInstallToSlot({ access_token: "AT", refresh_token: "RT", expires_at: null, scope: "s", email: null, sub: null }).meta.expires_at, null);
 });
 
 t("[19] slot: 블롭 왕복 — 복원이 refresh_token·만료를 되살린다", () => {

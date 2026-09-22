@@ -14,6 +14,7 @@ import { decodeTokenBlob, encodeTokenBlob, tokenMeta, CLIENT_SCOPE, gatewaySsrfF
 import { getMemberSecret, setMemberSecret, resolveMemberSecret, type MemberSecretResolved, type ResolveOpts } from "./member-secret-store.js";
 import { presetOAuthTokenUrl } from "../delivery/mcp-server-presets.js";
 import { GOOGLE_KIND, GOOGLE_LEGACY_KINDS, GOOGLE_TOKEN_URL, googleUnifiedKindFor } from "./google-oauth.js";
+import { resolveGoogleOAuthClient, googleVaultReader } from "./google-token-source.js";
 import { LINEAR_APP_KIND, LINEAR_TOKEN_URL } from "./linear-oauth.js";
 import { GITHUB_APP_KIND, GITHUB_TOKEN_URL } from "./github-app.js";
 import { MICROSOFT_KIND, MICROSOFT_TOKEN_URL, resolveMicrosoftOAuthClient } from "./microsoft-oauth.js";
@@ -30,7 +31,10 @@ export const EXPIRY_SKEW_SEC = 60;
 export function isTokenExpired(meta: Record<string, unknown> | undefined, nowSec: number, skewSec = EXPIRY_SKEW_SEC): boolean {
   const raw = meta?.expires_at;
   if (typeof raw !== "number" || !Number.isFinite(raw)) return false;
-  return raw <= nowSec + skewSec;
+  //  ms 로 적힌 값도 받는다(#4211) — [Google 연결] 슬롯이 한동안 ms 를 적었다(google-oauth.googleInstallToSlot). 그 값을 초로 읽으면
+  //   «만료 아님»이 영원히 참이라 갱신을 한 번도 안 한다. 1e11 초는 서기 5138년이라, 그보다 크면 ms 가 틀림없다(이미 연결한 사람 무재연결 구제).
+  const sec = raw > 1e11 ? Math.floor(raw / 1000) : raw;
+  return sec <= nowSec + skewSec;
 }
 
 /**
@@ -133,6 +137,10 @@ async function vaultClient(authKind: string): Promise<OAuthClientInfo | null> {
  */
 async function defaultLoadClient(authKind: string): Promise<OAuthClientInfo | null> {
   if (authKind === MICROSOFT_KIND) return resolveMicrosoftOAuthClient(() => vaultClient(authKind));
+  //  [Google 연결](google_oauth) — 릴레이면 플랫폼 클라이언트(GOOGLE_OAUTH_CLIENT_*)가 먼저다(#4211). 종전엔 금고만 봐서 매니지드에선
+  //   «OAuth 클라이언트 정보가 없습니다» 로 1시간 뒤 구글 도구가 끊겼다(플랫폼 클라이언트는 수집기 해소에만 걸려 있었다).
+  //   구 kind(google_drive_oauth 등)는 그 kind 의 금고 client 로 발급된 토큰이라 종전대로 제 kind 를 본다.
+  if (authKind === GOOGLE_KIND) return resolveGoogleOAuthClient(googleVaultReader);
   return vaultClient(authKind);
 }
 
