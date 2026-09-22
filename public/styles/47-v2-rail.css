@@ -452,6 +452,18 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-ptl-lock { width: 12px; height: 12px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 2; stroke-linejoin: round; }
 .v2-ptl--none { color: var(--muted); }
 
+/* ── [AI 세션] 구역 — 프로젝트 리스트 + 가운데 전체 목록 (#4158, web/v2/side.ts renderSessions · bins.ts renderSessAll) ──
+   사이드바 줄은 [프로젝트] 구역의 리스트 줄(.v2-wcat.v2-ptl)을 그대로 입는다 — 다만 주소를 바꾸지 않는 **거르개**라 단추라서
+   단추 기본 모양만 걷는다. 가운데 표는 「지난 세션」 원장 표(.v2-bin-tbl, 40-v2.css) 그대로이고, 줄 전체가 누르는 자리다. */
+.v2-sproj { width: 100%; border: 0; background: none; font-family: inherit; text-align: left; cursor: pointer; }
+.v2-sproj:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.v2-bin-tbl.v2-sall tbody tr.v2-sall-row { cursor: pointer; }
+.v2-sall td.c-who { font-size: 13px; }
+.v2-sall td.c-kind .v2-dot { margin-right: 6px; }
+.v2-sall tr.dism td.c-name .t { color: var(--ink-sub); }
+.v2-sall-face { width: 18px; height: 18px; margin-right: 6px; border-radius: 50%; font-size: 9px; font-weight: 700; display: inline-grid; place-items: center; vertical-align: -4px; color: var(--on-fill); overflow: hidden; }
+.v2-sall-face img { width: 100%; height: 100%; object-fit: cover; }
+
 /* ── [위키] 구역 · 서가 (#2043 안 A, web/v2/side.ts renderWiki) ───────────────────────────
    위계를 글자 크기가 아니라 **면**으로 말한다: 뷰 줄(카드 밖) › 스페이스 카드 › 분류 행(이름+설명).
    ⚠ 개수는 어디서나 같은 알약(.v2-kpill) — 종전의 모노 연회색 숫자는 이름과 따로 놀았다. */

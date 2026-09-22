@@ -29,6 +29,7 @@
 //   캐시다(shell-prefs.ts). 선언 한 줄이 어느 쪽인지 말한다 — shellPrefStore = 계정 · deviceStore = 이 기기.
 import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { planWikiCards, type WikiCardPlan } from './wiki-cards.js';
+import type { SessProjPick } from '../lib/sess-all.js';   // #4158 — [AI 세션] 사이드바가 고르는 프로젝트(가운데 전체 목록이 그 값으로 거른다)
 import { splitFolderRows, foldCardRows } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsTouch } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버다(선언 한 줄이 그걸 말한다)
 import { confirmDialog } from '../ui-primitives.js';
@@ -326,6 +327,8 @@ export interface SideHooks {
   onPinChanged?: () => void;
   /** #2016 — 레일이 고른 구역(홈 · 확인할 것 · AI 세션 · 프로젝트 · 위키). 없으면 홈(종전 화면 그대로). */
   section?: () => RailSection;
+  /** #4158 — [AI 세션] 사이드바에서 프로젝트를 골랐다(sessProjFilter). 셸이 가운데 전체 목록을 그 값으로 다시 그린다 — 없으면 그리로 간다. */
+  onSessProject?: () => void;
   /** #2016 — 레일 여닫기. 슬랙처럼 **맨 윗줄 맨 왼쪽**(패널 아이콘)에 선다 — navHost 가 없는 브라우저에서만 여기 그린다
    *  (데스크톱은 창 맨 윗줄의 ☰ 자리가 이미 그 단추다). */
   onToggleRail?: () => void;
@@ -1010,7 +1013,7 @@ function render(): void {
   const sideRoot = last.host.closest('.v2-side');
   sideRoot?.classList.toggle('ws-personal', wsKind === 'personal');
   //  #2016 — **무엇을 그릴지는 레일이 고른 구역이 정한다.** 홈은 종전 화면(열린 앱 목록) 그대로이고,
-  //   나머지 셋은 그 구역의 렌즈다: AI 세션 = 세션 전체, 프로젝트 = 프로젝트 트리, 위키 = 분류.
+  //   나머지 셋은 그 구역의 렌즈다: AI 세션 = 프로젝트 리스트(가운데 전체 세션 목록의 거르개, #4158), 프로젝트 = 프로젝트 트리, 위키 = 분류.
   //   ⚠ 구역은 주소를 따라 저절로 바뀌지 않는다(rail.ts 머리말) — 목록에서 뭔가를 여는 순간
   //    사이드바가 갈아엎이면 방금 보던 목록이 사라진다.
   //  #2423 — 자료 앱이 활성인 동안 사이드바 칸은 자료의 것이다(앱 소유 사이드바). 구역이 아니라 주소로
@@ -1178,9 +1181,10 @@ function renderHomeApps(): void {
   bindSideKeys();
 }
 
-// ══ [AI 세션] 구역 (#2016) ═══════════════════════════════════════════════════
-//  홈이 '열린 것'이라면 여기는 **세션 전체**다 — 이 브라우저에서 안 열었어도 박스에서 돌면 여기 있다.
-//  행 생김새는 홈과 같은 문법(.v2-app-inst)이다: 구역이 바뀌었다고 시각 언어까지 바뀌면 같은 화면으로 안 읽힌다.
+// ══ [AI 세션] 구역 (#2016 → #4158) ═══════════════════════════════════════════
+//  홈이 '열린 것'이라면 이 구역은 **세션 전체**다 — 이 브라우저에서 안 열었어도 박스에서 돌면 여기 있다.
+//  ★ #4158(회의 #3977, 2026-09-14) — 그 전체 목록은 이제 **가운데 화면**(bins.ts renderSessAll)이 든다. 사이드바는
+//   프로젝트 리스트다(아래 renderSessions 머리말). 아래 sessAsInst 는 [확인할 것] 사이드바가 계속 쓴다.
 /**
  * 세션 하나를 목록의 공용 자료형(SideInstance)으로 옮긴다(#2033).
  *  ★ 이렇게 두면 [AI 세션]·[확인할 것]이 홈과 **같은 붓**(appRowEl · appListKids)을 쓴다 — 행 문법도,
@@ -1232,6 +1236,24 @@ function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
   };
 }
 
+/**
+ * [AI 세션] 사이드바 = **프로젝트 리스트** (#4158).
+ *
+ *  회의 #3977(2026-09-14) 결정 원문: «AI 세션 탭 = 전체 세션 풀스크린 조회. 중복 세션 사이드바 제거, 사이드바엔 프로젝트
+ *   리스트(클릭 → 그 안 세션 필터)». 종전 이 자리는 홈 사이드바와 **같은 세션 줄을 한 벌 더** 그렸다 — 같은 세션이 두 목록에서
+ *   다른 규칙(여긴 도는 것 + 지난 것 40, 홈은 보임 축)으로 서고, × 의 뜻도 둘이었다(여긴 휴지통·치움, 홈은 치움).
+ *   2026-09-21 원준 «결정은 했는데 매니지드에 아직 안 보인다» — 커밋이 없었다.
+ *  ⇒ 세션 줄은 가운데 전체 목록(bins.ts renderSessAll)이 **홈과 한 자**로 든다. 여기는 그 목록을 거르는 렌즈만 든다:
+ *   「전체」 · 세션이 있는 프로젝트 · 「프로젝트 없음」. 누르면 가운데가 그 프로젝트 세션만 보인다(셸 hooks.onSessProject).
+ *  ⚠ 줄의 재료·순서는 프로젝트 트리와 같은 buildRows(휴지통 제외 · 마지막 작업 시각 내림차순)다 — 정렬을 새로 만들지 않는다.
+ *  ⚠ 고른 프로젝트는 **기억하지 않는다**(페이지 수명 — stateFilter 와 같은 «잠깐 보는 렌즈»). 새로 열면 늘 「전체」다.
+ *  ⚠ 줄은 링크가 아니라 **단추**다 — 주소를 바꾸지 않는 거르개다(구역은 주소를 따라 저절로 바뀌지 않는다, rail.ts 머리말).
+ *   폰 서랍은 셸이 닫는다(main.ts showSessAll).
+ */
+let sessProj: SessProjPick = null;
+/** 지금 고른 프로젝트 — 셸이 가운데 전체 목록을 그릴 때 읽는다(main.ts paintSessAll). */
+export function sessProjFilter(): SessProjPick { return sessProj; }
+
 function renderSessions(): void {
   if (!last) return;
   const { host, data } = last;
@@ -1239,51 +1261,40 @@ function renderSessions(): void {
   const navHost = hooks.navHost?.() || null;
   if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
 
-  const all = data.sessions.filter((s) => !isTrashedSess(s));
-  const live = all.filter(isLive).sort(bySeen);
-  const past = all.filter(isPast).sort((a, b) => b.lastSeen - a.lastSeen);
-  const counts = new Map<string, number>();
-  for (const s of live) counts.set(s.stateKey, (counts.get(s.stateKey) || 0) + 1);
-  //  ★ 홈과 **같은 붓**을 쓴다(#2033) — 행 문법도 묶는 축 토글도 여기서 새로 만들지 않는다.
-  //   ⚠ 압정은 안 그린다: 여기는 **전수 명부**고 순서의 정본은 상태(bySeen)라, 고정은 그 순서를 흔든다
-  //    (프로젝트 트리도 프로젝트만 고정하지 세션은 안 한다).
-  //   ★ × 는 그린다(#3568). #2033 이 뺐던 근거 «치우면 찾을 곳이 없어진다» 는 **홈의 ×**(열린 목록에서
-  //    치우기)의 이야기다. 여기 × 의 뜻은 프로젝트 트리 행과 같은 **보관(지난 세션으로)** 이라 명부에서
-  //    사라지지 않는다 — 같은 목록의 [지난 세션] 으로 옮겨 갈 뿐이고 되돌릴 수 있다. 그게 없어서
-  //    이 구역에서는 도는 세션이 몇백 줄로 쌓여도 한 줄도 접을 수 없었다(상민님 2026-09-05
-  //    "너무 혼잡스러워 못 닫아서" · 그때 매니지드 실측: `/api/ui/terminal/sessions` 가 내 세션 721행을 냈고
-  //    그중 restorable 397 을 뺀 **324행이 «돌고 있는 것»으로** 섰다).
-  const rowOpts: RowOpts = { pin: false, close: true };
-  //  ★ 재료를 **함수로** 둔다(#2534) — 검색 한 글자마다 목록만 갈아 끼우기 위해서다(홈과 같은 방식).
-  //   종전엔 여기서 한 번 계산하고 전면 재렌더에 기댔는데, 그러면 매 글자마다 검색칸이 새로 나 포커스가 날아갔다.
-  const kids = (): HTMLElement[] => {
-    const liveShown = stateFilter ? live.filter((s) => s.stateKey === stateFilter) : live;
-    const pastShown = stateFilter ? [] : past;
-    const items = [
-      ...liveShown.map((s) => sessAsInst(s, false, `돌고 있는 것 · ${liveShown.length}`)),
-      ...pastShown.slice(0, 40).map((s) => sessAsInst(s, true, `지난 세션 · ${pastShown.length}`)),
-    ];
-    return appListKids(items, rowOpts, {
-      none: stateFilter ? '조건에 맞는 세션이 없어요.' : '지금 도는 세션이 없어요. 홈에서 무엇이든 시켜 보세요.' });
+  const rows = buildRows(data).filter((r) => !r.trashed && r.live.length + r.past.length > 0).sort((a, b) => b.lastWork - a.lastWork);
+  const idOf = (r: Row): number => (r.proj ? r.proj.id : 0);
+  //  고른 프로젝트가 목록에서 사라졌으면(그 세션을 전부 버렸다 등) 「전체」로 푼다 — 안 그러면 가운데가 비었는데 그 까닭이 화면에 없다.
+  //  ⚠ 셸이 다음 판(syncShell)에 가운데를 다시 그릴 때 이 값을 읽으므로 따로 알리지 않는다.
+  if (sessProj !== null && !rows.some((r) => idOf(r) === sessProj)) sessProj = null;
+  const total = data.sessions.filter((s) => !isTrashedSess(s)).length;
+  const pickRow = (pick: SessProjPick, ic: SVGElement, name: string, n: number, tip: string, extra = ''): HTMLElement => {
+    const on = sessProj === pick;
+    return el('button', { class: 'v2-wcat v2-ptl v2-sproj' + extra + (on ? ' on' : ''), type: 'button', title: tip, 'aria-pressed': String(on),
+      onclick: () => { sessProj = pick; redraw(); hooks.onSessProject?.(); } },
+      ic, el('span', { class: 'n', text: name }), el('span', { class: 'v2-cnt', text: String(n) }));
   };
-  listPaint = () => paintList(kids);
+  const loose = rows.find((r) => !r.proj);
+  const projRows = rows.filter((r) => r.proj);
+  const kids: HTMLElement[] = [
+    pickRow(null, icon('chat', 'v2-ptl-ic'), '전체', total, '모든 세션 — 가운데 목록의 거르개를 풉니다'),
+    ...(projRows.length ? [el('div', { class: 'v2-app-group', role: 'presentation', text: '프로젝트' })] : []),
+    ...projRows.map((r) => pickRow(r.proj!.id, glyph('folder', 'v2-ptl-ic'), r.proj!.name, r.live.length + r.past.length,
+      `${r.proj!.name} — 이 프로젝트의 세션만 가운데 목록에 보여요`)),
+    ...(loose ? [pickRow(0, glyph('inbox', 'v2-ptl-ic'), '프로젝트 없음', loose.live.length + loose.past.length,
+      '프로젝트에 안 붙은 세션만 가운데 목록에 보여요', ' v2-ptl--none')] : []),
+  ];
+  if (!total) kids.push(el('p', { class: 'v2-empty', text: '아직 세션이 없어요. 홈에서 무엇이든 시켜 보세요.' }));
   const keep = listBefore();
-  const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': 'AI 세션' }, ...kids());
+  const listEl = el('div', { class: 'v2-app-list v2-ptree', 'aria-label': 'AI 세션 — 프로젝트' }, ...kids);
   appListEl = listEl;
 
   host.replaceChildren(
     ...topBits(navEl, navHost),
     el('section', { class: 'v2-app-space', 'aria-label': 'AI 세션' },
-      secHead('AI 세션', live.length,
+      secHead('AI 세션', null,
         el('button', { class: 'v2-app-new', type: 'button', 'aria-label': '새 세션', title: '새 세션 — 홈에서 무엇이든 시키면 열려요',
           onclick: () => hooks.onNewTask?.() },
-          sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))),
-        //  묶는 축 토글 — 홈과 **같은 단추·같은 플래그**다(#2033). 묶는 축은 구역의 성질이 아니라
-        //   사람의 습관이라, 한 구역에서 바꾸면 다른 구역도 그렇게 열린다.
-        //  상태 거르기는 **[프로젝트] 구역과 같은 팝오버**다(#2033) — 구역마다 다른 방식을 두지 않는다.
-        //   ⚠ 범위(내 프로젝트만·완료 포함)는 끈다: 여기는 세션 목록이라 그 개념이 없다.
-        axisBtn(), filterBtn(stateFilter ? 1 : 0, live, 0, false)),
-      ...(stateFilter ? [filterSummary(1, false)] : []),
+          sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })))),
       listEl),
     secFoot(footLink('#/app/sessions', 'chat', '세션 이력')));
 
