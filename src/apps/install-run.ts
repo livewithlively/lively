@@ -3,7 +3,8 @@
 //  설치 시맨틱을 쓰도록 한 곳에 둔다(선례: seed 가 인라인하던 diff/runInstall 블록을 여기로 승격).
 import { getApp, listComponents, upsertUiAsset, pruneUiAssets, upsertRuntimeAsset, pruneRuntimeAssets } from "../org/store/apps.js";
 import type { LoadedApp } from "./loader.js";
-import { ensureAppTables } from "./store-schema.js";
+import { ensureAppTables, appSchemaFor } from "./store-schema.js";
+import { isBuiltinSource } from "./store-ddl.js";
 import { logger } from "../log.js";
 import type { WriteCtx } from "../org/store/audit.js";
 import { diffComponents, type AppComponentRef } from "./install-plan.js";
@@ -28,6 +29,15 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
   };
   const deps = makeDeployDeps(id, ctx);
 
+  // 앱 데이터 테이블(D6) — 스키마는 누가 구조의 주인인가로 가른다(store-ddl.appSchemaName, #4223).
+  const builtin = isBuiltinSource(source);
+  const schema = appSchemaFor(builtin);
+  const tableSpecs = loaded.manifest.data.tables.map((t) => ({ table: t.name, columns: t.columns }));
+  // ★ 사람이 요청한 설치는 테이블을 **먼저, 엄격하게** 만든다 — 실패면 아무것도 설치하지 않고 원인을 돌려준다.
+  //  종전엔 설치를 끝낸 뒤 경고만 남겨 «설치 성공, 데이터 층 없음» 이 됐다(매니지드 실측 2026-09-22).
+  //  (빈 테이블이 남는 쪽은 무해하다 — CREATE IF NOT EXISTS 라 다음 설치가 그대로 쓴다.)
+  if (!builtin) await ensureAppTables(id, tableSpecs, { schema, strict: true });
+
   let drop: AppComponentRef[] = [];
   if (existing) {
     const oldRefs: AppComponentRef[] = (await listComponents(id)).map((c) => ({ kind: c.kind, ref: c.ref, orig_name: c.orig_name ?? undefined }));
@@ -41,9 +51,12 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
   await persistUiAssets(loaded);
   await persistRuntimeAsset(loaded);
 
-  // 앱 데이터 테이블(app 스키마, D6) — 선언 테이블을 소유자 커넥션으로 생성(tenant_id+RLS 한 몸). best-effort per-table.
-  try { await ensureAppTables(id, loaded.manifest.data.tables.map((t) => ({ table: t.name, columns: t.columns }))); }
-  catch (err) { logger.warn({ err, id }, "앱 데이터 테이블 보장 실패(비치명 — 다음 설치/부팅이 재보장)"); }
+  // 기본 앱 시딩은 종전처럼 비치명 — 워크스페이스마다 주기적으로 돌고, 여기서 던지면 시딩 전체가 보상(롤백)된다.
+  //  빠진 테이블은 store_* 첫 호출의 지연 복구가 채운다(capabilities/app-store withTableRepair).
+  if (builtin) {
+    try { await ensureAppTables(id, tableSpecs, { schema }); }
+    catch (err) { logger.warn({ err, id }, "앱 데이터 테이블 보장 실패(비치명 — 첫 사용 때 지연 복구)"); }
+  }
 
   for (const c of drop) {
     try { await deps.reclaim(c); } catch { /* best-effort — 저널이 스위퍼를 부른다 */ }
