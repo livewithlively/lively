@@ -351,17 +351,14 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
  *  머리는 두 줄로 접는다(제목+동작 / 사실 줄) — 한 줄에 다 넣으면 제목이 두 글자로 남는다(실측 390px).
  *  대화는 여백을 좁히고 말풍선을 넓힌다. 홈 인디케이터 여백. 터미널·대화는 종전대로 스왑. 입력칸 16px 은 아래 (pointer: coarse). */
 @media (max-width: 760px) {
-  /* #4159 — 머리는 **한 줄**이다(원준·상민 2026-09-21 «모바일에서는 위가 화면의 거의 절반»). 종전엔 제목 / 사실(노드) /
-     동작 세 줄로 접혔다. 남기는 것 = 상태 점 · 제목(…로 줄어든다) · 얼굴 · 동작 단추. 하네스·모델·추론강도 선택기(.sc-run-top)와
-     노드 알약(.sc-meta)은 뺀다 — 둘 다 [⋯] 설정 창에 그대로 있다(openMore 가 선택기를 그 창으로 데려간다). */
-  .sc-head { flex-wrap: nowrap; gap: 6px; padding: 5px 8px 5px 12px; min-height: 0; }
-  .sc-head-l { flex: 1 1 auto; flex-wrap: nowrap; min-width: 0; }
+  .sc-head { flex-wrap: wrap; gap: 4px 8px; padding: 8px 12px 6px; min-height: 0; }
+  .sc-head-l { flex: 1 1 100%; flex-wrap: wrap; row-gap: 3px; }
   .sc-title { font-size: 15px; flex: 1 1 auto; max-width: 100%; }
-  .sc-titlebox { flex: 1 1 auto; max-width: 100%; min-width: 0; }   /* 28ch 바닥은 폰에서 넘치기만 한다 */
+  .sc-titlebox { flex: 1 1 auto; max-width: 100%; min-width: 0; }   /* 제목이 제 줄을 통째로 쓰므로 28ch 바닥이 필요 없다(폰에서 넘치기만 한다) */
   button.sc-title { font-size: 15px; max-width: 100%; }
   .sc-title-in { font-size: 16px; width: 100%; }
-  .sc-meta, .sc-head > .sc-run-top { display: none; }
-  .sc-head-r { flex: 0 0 auto; justify-content: flex-end; gap: 2px; }
+  .sc-meta { flex: 1 1 100%; overflow: hidden; }
+  .sc-head-r { flex: 1 1 100%; justify-content: flex-start; gap: 2px; margin-left: -6px; }
   .sc-act { font-size: 13px; padding: 7px 9px; min-height: 36px; }
   .sc-wait { flex-wrap: wrap; padding: 9px 12px; }
   .sc-wait-t { flex: 1 1 100%; }
