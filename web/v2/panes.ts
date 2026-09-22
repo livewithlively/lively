@@ -959,9 +959,6 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
           onclick: () => opts.onMoveSession!(sid) },
           icon('moveto', 'pn-i sm'), el('span', { class: 'pn-move-t', text: loose ? '프로젝트에 붙이기' : '세션 옮기기' }))
       : null;
-    //  #4159 — 세션을 보는 중이면 문패는 **이름표 한 줄**로 줄어든다(원준·상민 2026-09-21 «작업 화면 위가 너무 길다»).
-    //   폰(≤640)에선 문패를 아예 접는다(50-mobile.css). 세션이 없는 자리(새 세션·프로젝트 첫 화면)는 종전 크기 그대로다.
-    door.classList.toggle('in-sess', !!sid);
     door.replaceChildren(
       el('div', { class: 'pn-door-l' },
         // ⭐ 순서는 **이름 › 번호 › 상태**(원준 2026-09-03: "프로젝트 이름이 제일 왼쪽으로 가야 밸런스가 맞는다").
