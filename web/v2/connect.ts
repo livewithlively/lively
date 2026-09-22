@@ -1256,7 +1256,8 @@ function memberTokenCollectCard(key: string, onState: CollectState): CollectFace
     //   매니지드는 CP 릴레이가 앱을 쥐어 app_ready=true 라 이 칸이 안 보인다(셀프호스팅·dev 전용).
     const REG = APP_REG[key];
     //  #4211 — 매니지드는 앱을 CP 가 쥔다(준비는 라이블리의 일). 준비 전이면 등록 칸 대신 그 사실만 말한다.
-    if (REG && s.app_ready === false && s.managed === true) notes.push(`${key === 'outlook' ? 'Outlook' : 'Linear'} 연결은 라이블리가 준비하고 있어요 — 준비를 마치면 여기서 바로 켤 수 있습니다.`);
+    //   «켜면 … 화면이 열려요»(T.off)는 지운다 — 준비 전엔 열리지 않으니 두 문장이 서로를 부정한다(jsdom 실측).
+    if (REG && s.app_ready === false && s.managed === true) notes.splice(0, notes.length, `${key === 'outlook' ? 'Outlook' : 'Linear'} 연결은 라이블리가 준비하고 있어요 — 준비를 마치면 여기서 바로 켤 수 있습니다.`);
     else if (REG && s.app_ready === false) {
       const idIn = el('input', { type: 'text', class: 'cn-scope-in', placeholder: 'Client ID', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
       const secIn = el('input', { type: 'password', class: 'cn-scope-in', placeholder: 'Client Secret', autocomplete: 'new-password' }) as HTMLInputElement;
@@ -1273,8 +1274,8 @@ function memberTokenCollectCard(key: string, onState: CollectState): CollectFace
       notes.push(REG.help);
       extra.push(el('div', { class: 'cn-scope-row' }, el('span', { class: 'k', text: '앱 등록' }), idIn, secIn, reg));
     }
-    //  #4211 — Outlook 은 회사 계정이면 관리자 허용이 먼저다. 아직 내 연결이 없으면 켜기 전에 그 링크를 곁에 둔다.
-    if (key === 'outlook' && s.app_ready !== false && !s.me_connected) extra.unshift(outlookAdminConsentBox(s.admin_consent_url ?? null));
+    //  #4211 — Outlook 관리자 허용 링크는 ① «내 계정으로 직접 사용» 줄에 **한 번만** 둔다(연결은 하나라 안내도 하나 —
+    //   두 칸에 같은 상자를 두면 화면에 같은 말이 두 번 선다. jsdom 실측으로 잡았다).
     //  #2247 Linear — 토글이 곧 연결. 자격이 없으면 서버가 동의 URL 을 준다: 새 탭으로 열고, 돌아온 것(me_connected)이 보이면 다시 켠다.
     const consentThen = async (r: any): Promise<boolean> => {
       if (!(r && r.needs_connect && r.authorization_url)) return false;
