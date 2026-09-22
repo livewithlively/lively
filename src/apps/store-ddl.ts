@@ -50,6 +50,36 @@ export function physicalTableName(appId: string, table: string): string {
   return `${a}__${assertIdent("table", table)}`;
 }
 
+/**
+ * 앱 데이터 테이블이 사는 스키마(순수, #4223).
+ *  - 기본 앱(builtin — 코드가 구조의 주인, 여러 워크스페이스가 같은 구조) → 공유 `app` 스키마 + tenant_id 행 격리.
+ *  - 워크스페이스가 설치한 앱(빌더로 만든 앱 등 — 그 워크스페이스가 구조의 주인) → 멀티테넌트에서는 워크스페이스별
+ *    `app_<테넌트 id hex32>`. 같은 앱 id 를 다른 워크스페이스가 설치해도 물리 테이블이 섞이지 않고(컬럼이 달라도 된다),
+ *    제거가 그 워크스페이스 테이블만 지운다(종전엔 공유 테이블을 통째로 DROP — 남의 행까지 지웠다).
+ *  - 단일 테넌트(자가호스팅)·컨텍스트 없음 → 종전 그대로 `app`(기존 박스의 데이터 이행이 필요 없다).
+ */
+export const SHARED_APP_SCHEMA = "app";
+const SINGLE_TENANT = "00000000-0000-0000-0000-000000000000"; // db/tenant-column SINGLE_TENANT_ID 와 같은 값(이 파일은 순수 — import 하지 않는다)
+export function appSchemaName(opts: { builtin: boolean; tenantId: string | null | undefined }): string {
+  if (opts.builtin) return SHARED_APP_SCHEMA;
+  const t = String(opts.tenantId ?? "").trim().toLowerCase();
+  if (!t || t === SINGLE_TENANT) return SHARED_APP_SCHEMA;
+  const hex = t.replace(/-/g, "");
+  if (!/^[0-9a-f]{32}$/.test(hex)) throw new HttpError(500, `테넌트 id 형식이 아닙니다: ${opts.tenantId}`);
+  return `app_${hex}`;
+}
+
+/** 스키마까지 붙인 인용 relation 이름(순수) — `"<스키마>"."<appId>__<table>"`. */
+export function qualifiedAppTable(schema: string, appId: string, table: string): string {
+  if (!IDENT.test(schema)) throw new HttpError(500, `스키마 이름이 식별자 규칙에 맞지 않습니다: ${schema}`);
+  return `"${schema}"."${physicalTableName(appId, table)}"`;
+}
+
+/** 설치 출처가 기본 앱(코드 소유)인가 — org_app.source / 설치 호출의 source 둘 다 같은 모양({kind}). */
+export function isBuiltinSource(source: unknown): boolean {
+  return !!source && typeof source === "object" && (source as { kind?: unknown }).kind === "builtin";
+}
+
 export interface StoreColumn { name: string; type: string }
 
 /** 선언 컬럼 목록 → 컬럼 DDL 조각 배열(순수). 시스템 컬럼(tenant_id·id·created_at)은 호출부가 앞에 붙인다. */

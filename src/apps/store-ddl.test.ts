@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { resolveColumnType, assertIdent, physicalTableName, columnDefs } from "./store-ddl.js";
+import { resolveColumnType, assertIdent, physicalTableName, columnDefs, appSchemaName, qualifiedAppTable, isBuiltinSource } from "./store-ddl.js";
 
 // 「입력 × 기대」 엣지 표 — 선언형 DDL 의 방어(임의 타입·식별자·예약컬럼·앱 네임스페이스).
 
@@ -53,4 +53,44 @@ test("columnDefs — 조합 + 중복/빈/예약/불량타입 거부", () => {
   assert.throws(() => columnDefs([{ name: "a", type: "text" }, { name: "a", type: "int" }]), /중복 컬럼/);
   assert.throws(() => columnDefs([{ name: "tenant_id", type: "text" }]), /예약된 컬럼명/);
   assert.throws(() => columnDefs([{ name: "a", type: "nope" }]), /허용되지 않은 컬럼 타입/);
+});
+
+// #4223 — 테이블 자리: 구조의 주인이 누구냐로 가른다.
+test("appSchemaName — 기본 앱은 늘 공유 app(행 격리)", () => {
+  assert.equal(appSchemaName({ builtin: true, tenantId: "4d255364-7dbb-4c53-b210-1588ebde1820" }), "app");
+  assert.equal(appSchemaName({ builtin: true, tenantId: null }), "app");
+});
+
+test("appSchemaName — 워크스페이스가 설치한 앱은 멀티테넌트에서 워크스페이스별 스키마", () => {
+  assert.equal(appSchemaName({ builtin: false, tenantId: "4D255364-7DBB-4C53-B210-1588EBDE1820" }), "app_4d2553647dbb4c53b2101588ebde1820");
+  // 다른 워크스페이스는 다른 스키마 — 같은 앱 id 여도 물리 테이블이 섞이지 않는다.
+  assert.notEqual(
+    appSchemaName({ builtin: false, tenantId: "4d255364-7dbb-4c53-b210-1588ebde1820" }),
+    appSchemaName({ builtin: false, tenantId: "5d255364-7dbb-4c53-b210-1588ebde1820" }));
+});
+
+test("appSchemaName — 단일 테넌트·컨텍스트 없음은 종전 그대로 app(기존 박스 이행 불요)", () => {
+  assert.equal(appSchemaName({ builtin: false, tenantId: null }), "app");
+  assert.equal(appSchemaName({ builtin: false, tenantId: "" }), "app");
+  assert.equal(appSchemaName({ builtin: false, tenantId: "00000000-0000-0000-0000-000000000000" }), "app");
+});
+
+test("appSchemaName — uuid 가 아닌 테넌트 id 는 거부(식별자 주입 차단)", () => {
+  for (const bad of ["x; drop schema app", "4d255364", "zzzz5364-7dbb-4c53-b210-1588ebde1820"]) {
+    assert.throws(() => appSchemaName({ builtin: false, tenantId: bad }), /테넌트 id 형식/);
+  }
+});
+
+test("qualifiedAppTable — 스키마까지 인용, 불량 스키마 거부", () => {
+  assert.equal(qualifiedAppTable("app", "crm", "contacts"), '"app"."crm__contacts"');
+  assert.equal(qualifiedAppTable("app_4d2553647dbb4c53b2101588ebde1820", "crm", "contacts"),
+    '"app_4d2553647dbb4c53b2101588ebde1820"."crm__contacts"');
+  assert.throws(() => qualifiedAppTable('app"; drop', "crm", "contacts"), /스키마 이름/);
+});
+
+test("isBuiltinSource — {kind:'builtin'} 만 참", () => {
+  assert.equal(isBuiltinSource({ kind: "builtin" }), true);
+  for (const s of [{ kind: "git", url: "https://x" }, { kind: "path", path: "/x" }, null, undefined, "builtin", {}]) {
+    assert.equal(isBuiltinSource(s), false);
+  }
 });
