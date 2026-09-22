@@ -294,3 +294,109 @@ console.log(`\n${pass} passed`);
   assert.equal(clientKindFor("linear_app"), "linear_app");
   console.log("ok  github_pat 갱신 발급처·client kind 매핑");
 }
+
+// #4211 Outlook — Microsoft 토큰도 이 갱신 경로를 탄다(도구·수집이 같은 부품). spec B 표 P1~P4.
+//  P2 가 이 묶음의 핵심이다: setMemberSecret 은 meta 를 **병합하지 않고 바꾼다** — tokenMeta 만 넘기면 연결 때 적어 둔
+//  계정 표시(ms_email·account_type)가 첫 갱신(1시간 뒤)에 사라져, 화면이 «누구 계정으로 도는지»를 잃는다.
+{
+  const { oauthTokenUrlFor, refreshedMeta, resolveProxyBearer } = await import("./oauth-proxy-auth.js");
+  const { tokenMeta } = await import("./oauth-broker.js");
+  const { MICROSOFT_TOKEN_URL } = await import("./microsoft-oauth.js");
+
+  assert.equal(oauthTokenUrlFor("microsoft_oauth"), MICROSOFT_TOKEN_URL);
+  console.log("ok  P1 microsoft_oauth 갱신 발급처 = Microsoft /common 토큰 끝점");
+
+  const prev = { ms_email: "kim@contoso.com", account_type: "work", scope: "Mail.Read", expires_at: 1 };
+  const m = refreshedMeta(prev, { access_token: "A2", token_type: "Bearer", expires_in: 3600, scope: "Mail.Read Calendars.Read" });
+  assert.equal(m.ms_email, "kim@contoso.com", "갱신이 계정 표시를 지웠다");
+  assert.equal(m.account_type, "work");
+  assert.ok(typeof m.expires_at === "number" && (m.expires_at as number) > 1, "새 만료가 안 얹혔다 — 다음 호출이 또 갱신한다");
+  assert.equal(m.scope, "Mail.Read Calendars.Read", "새 범위가 이긴다");
+  console.log("ok  P2 갱신 저장은 이전 meta(계정 표시) 위에 새 만료·범위를 얹는다");
+
+  const tk = { access_token: "A", token_type: "Bearer", expires_in: 60 };
+  const bare = refreshedMeta(undefined, tk);
+  const tm = tokenMeta(tk);
+  assert.equal(bare.token_type, tm.token_type);
+  assert.deepEqual(Object.keys(bare).sort(), Object.keys(tm).sort(), "이전 meta 가 없으면 종전(tokenMeta 만)과 같아야 한다");
+  console.log("ok  P3 이전 meta 가 없으면 종전과 같다");
+
+  // P4 — 배선: 실제 갱신 경로가 이전 meta 를 저장에 넘기고, Microsoft 가 준 새 refresh_token 을 덮어쓴다.
+  const saved: Array<{ tokens: OAuthTokens; prevMeta?: Record<string, unknown> }> = [];
+  const resolved: MemberSecretResolved = {
+    owner: "member:kim", kind: "microsoft_oauth", scope_key: "",
+    secret: JSON.stringify({ access_token: "OLD", refresh_token: "R1", token_type: "Bearer" }),
+    meta: { expires_at: NOW - 5, ms_email: "kim@contoso.com" },
+  };
+  const got = await resolveProxyBearer(resolved, "microsoft_oauth", {
+    nowSec: () => NOW,
+    loadClient: async () => ({ client_id: "cid", client_secret: "sec" }),
+    postRefresh: async (url, form) => {
+      assert.equal(url, MICROSOFT_TOKEN_URL);
+      assert.equal(form.get("client_secret"), "sec", "웹 앱은 갱신에도 client_secret 이 필요하다");
+      return { status: 200, ok: true, text: JSON.stringify({ access_token: "NEW", refresh_token: "R2", expires_in: 3600, token_type: "Bearer" }) };
+    },
+    persist: async (_o, _k, _s, tokens, prevMeta) => { saved.push({ tokens, prevMeta }); },
+  });
+  assert.equal(got, "NEW");
+  assert.equal(saved.length, 1, "배선 — 갱신 결과를 저장하지 않았다");
+  assert.equal(saved[0].tokens.refresh_token, "R2", "Microsoft 가 준 새 refresh_token 을 버렸다 — 옛 것이 회수되면 끊긴다");
+  assert.equal(saved[0].prevMeta?.ms_email, "kim@contoso.com", "이전 meta 가 저장까지 안 왔다");
+  console.log("ok  P4 갱신 경로가 이전 meta 를 넘기고 새 refresh_token 을 저장한다");
+}
+
+// #4211 — [Google 연결](google_oauth) 도구 토큰이 **영영 갱신되지 않던 것**(재현: 2시간 전 발급 토큰 → refresh calls = 0).
+//  원인 둘: ① 슬롯 meta.expires_at 이 ms 라 초 단위 판정이 늘 «만료 아님» ② 갱신 클라이언트가 금고만 봐 매니지드(릴레이)엔 없다.
+{
+  const { isTokenExpired, resolveProxyBearer } = await import("./oauth-proxy-auth.js");
+  const { parseGoogleTokenResponse, googleInstallToSlot } = await import("./google-oauth.js");
+
+  const nowS = 1_790_000_000;
+  assert.equal(isTokenExpired({ expires_at: (nowS - 3600) * 1000 }, nowS), true, "ms 로 적힌 과거 시각을 «만료 아님»으로 봤다");
+  assert.equal(isTokenExpired({ expires_at: (nowS + 3600) * 1000 }, nowS), false, "ms 로 적힌 미래 시각을 만료로 봤다");
+  assert.equal(isTokenExpired({ expires_at: nowS + 3600 }, nowS), false, "초 단위 무회귀");
+  assert.equal(isTokenExpired({ expires_at: nowS - 1 }, nowS), true, "초 단위 무회귀");
+  console.log("ok  G1 만료 판정은 ms 로 적힌 값도 받는다(이미 연결한 사람 무재연결 구제)");
+
+  const issued = parseGoogleTokenResponse({ access_token: "ya29.OLD", refresh_token: "1//RT", expires_in: 3599, scope: "x" }, (nowS - 7200) * 1000);
+  const slot = googleInstallToSlot(issued);
+  assert.equal(slot.meta.expires_at, nowS - 7200 + 3599, "새 슬롯의 meta.expires_at 은 초여야 한다");
+  let calls = 0;
+  const bearer = await resolveProxyBearer({ owner: "member:x", kind: "google_oauth", scope_key: "", secret: slot.secret, meta: slot.meta }, "google_oauth", {
+    nowSec: () => nowS,
+    loadClient: async () => ({ client_id: "c", client_secret: "s" }),
+    postRefresh: async () => { calls++; return { status: 200, ok: true, text: JSON.stringify({ access_token: "ya29.NEW", expires_in: 3599 }) }; },
+    persist: async () => {},
+  });
+  assert.equal(calls, 1, "2시간 지난 [Google 연결] 토큰을 갱신하지 않았다 — 도구가 옛 토큰으로 401 을 맞는다");
+  assert.equal(bearer, "ya29.NEW");
+  console.log("ok  G2 ★ [Google 연결] 토큰은 1시간 뒤 실제로 갱신된다(재현 시나리오 그대로)");
+
+  // G3 — 릴레이(매니지드)면 갱신 클라이언트는 플랫폼 env 다. loadClient 를 주입하지 않고 기본 경로를 태운다(env 만 — DB 무접촉).
+  const keep = { ...process.env };
+  process.env.GOOGLE_OAUTH_RELAY_URL = "https://app.lvly.io/oauth/google/start";
+  process.env.GOOGLE_OAUTH_CLIENT_ID = "plat-google";
+  process.env.GOOGLE_OAUTH_CLIENT_SECRET = "plat-sec";
+  process.env.MICROSOFT_OAUTH_RELAY_URL = "https://app.lvly.io/oauth/microsoft/start";
+  process.env.MICROSOFT_OAUTH_CLIENT_ID = "plat-ms";
+  process.env.MICROSOFT_OAUTH_CLIENT_SECRET = "plat-ms-sec";
+  try {
+    const forms: Array<Record<string, string>> = [];
+    const expired = (kind: string): MemberSecretResolved => ({ owner: "member:x", kind, scope_key: "", secret: JSON.stringify({ access_token: "OLD", refresh_token: "RT", token_type: "Bearer" }), meta: { expires_at: nowS - 5 } });
+    const deps = {
+      nowSec: () => nowS,
+      postRefresh: async (_u: string, form: URLSearchParams) => { forms.push(Object.fromEntries(form)); return { status: 200, ok: true, text: JSON.stringify({ access_token: "NEW", expires_in: 3600 }) }; },
+      persist: async () => {},
+    };
+    await resolveProxyBearer(expired("google_oauth"), "google_oauth", deps);
+    await resolveProxyBearer(expired("microsoft_oauth"), "microsoft_oauth", deps);
+    assert.equal(forms[0]?.client_id, "plat-google", "매니지드 구글 토큰을 플랫폼 클라이언트로 갱신하지 않았다");
+    assert.equal(forms[0]?.client_secret, "plat-sec");
+    assert.equal(forms[1]?.client_id, "plat-ms", "매니지드 Microsoft 토큰을 플랫폼 앱으로 갱신하지 않았다");
+    console.log("ok  G3 릴레이(매니지드)면 구글·Microsoft 모두 플랫폼 클라이언트로 갱신한다(금고 무접촉)");
+  } finally {
+    for (const k of ["GOOGLE_OAUTH_RELAY_URL", "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "MICROSOFT_OAUTH_RELAY_URL", "MICROSOFT_OAUTH_CLIENT_ID", "MICROSOFT_OAUTH_CLIENT_SECRET"]) {
+      if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k];
+    }
+  }
+}

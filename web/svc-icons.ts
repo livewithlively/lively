@@ -20,6 +20,7 @@ const SVC_BRAND: Record<string, string> = {
   'google-gmail': '#EA4335',
   'google-drive': '#0F9D58',
   'google-calendar': '#4285F4',
+  outlook: '#0078D4', // #4211 Microsoft Outlook
   github: '#181717',
   gitlab: '#FC6D26',
   clickup: '#7B68EE',

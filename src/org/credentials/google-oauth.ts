@@ -374,7 +374,10 @@ export function googleInstallToSlot(i: GoogleInstall): { scopeKey: string; secre
     }),
     meta: {
       google_email: i.email, google_sub: i.sub, scope: i.scope,
-      expires_at: i.expires_at, via: "google_oauth_direct",
+      //  ★ meta.expires_at 은 **epoch 초**다(#4211) — 도구 갱신 판정(oauth-proxy-auth.isTokenExpired)이 초로 읽는다.
+      //   종전엔 ms(블롭과 같은 값)를 넣어 판정이 늘 «만료 아님»이었고, [Google 연결] 1시간 뒤 도구가 옛 토큰으로 401 을 맞았다.
+      //   블롭의 expires_at(ms)은 googleTokenExpired 가 읽으므로 그대로 둔다 — 단위가 둘인 것은 이 두 줄의 주석으로만 지킨다.
+      expires_at: i.expires_at ? Math.floor(i.expires_at / 1000) : null, via: "google_oauth_direct",
     },
   };
 }

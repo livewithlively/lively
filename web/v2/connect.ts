@@ -23,6 +23,7 @@ import { appAxes, collectTally, listBucket, pendingAxes, skipKey,
   type AppAxes, type AxisState, type CardState, type CollectTally } from '../lib/connect-axes.js';
 import { shellPrefStore, shellPrefsTouch } from './shell-prefs.js';   // #2460 — «사람이 고른 것»의 정본은 서버다
 import { NOTION_PICK_TIP, notionCollectedLine, notionCollectedPages } from './notion-pick.js';   // #1968 — 노션 고르기 안내·모은 페이지 수(처음 설정과 한 벌)
+import { outlookAdminConsentBox } from './outlook-admin.js';   // #4211 — 회사 계정 «관리자 허용» 안내(세 화면이 한 벌)
 //  #2556 — 관리탭 [데이터 연결] 묶음을 여기로 걷어 왔다. 화면만 옮겼고 **패널은 그것 그대로 부른다**(사본 0):
 //   레포·DB 는 아래 [코드와 데이터] 두 화면이, 아웃바운드 둘은 노션·클릭업 **앱 상세의 [내보내기] 칸**이 편다.
 //   그 패널들은 host 에 붙은 표식(markEmbedded)을 보고 자기 제목만 접는다 — 저장 경로·조회 경로는 한 벌.
@@ -423,9 +424,9 @@ function connMeta(v: SvcView, svc: Svc): string {
 type CollectState = (text: string, on: boolean) => void;
 const SCOPE_NOUN: Record<string, string> = {
   notion: '페이지', linear: '이슈', slack: '대화', google: 'Drive 파일과 캘린더 일정', github: '저장소', gitlab: '프로젝트',
-  clickup: '작업', figma: '파일', prometheus: '지표', 'claude-headless': '분류·크론 실행',
+  clickup: '작업', figma: '파일', prometheus: '지표', 'claude-headless': '분류·크론 실행', outlook: '메일과 일정',
 };
-const COLLECT_UNIT: Record<string, string> = { slack: '대화', notion: '페이지', google: '문서', figma: '파일의 코멘트', clickup: '작업', github: '저장소의 이슈·PR 대화', gitlab: '프로젝트의 이슈·MR 대화', linear: '이슈' };
+const COLLECT_UNIT: Record<string, string> = { slack: '대화', notion: '페이지', google: '문서', figma: '파일의 코멘트', clickup: '작업', github: '저장소의 이슈·PR 대화', gitlab: '프로젝트의 이슈·MR 대화', linear: '이슈', outlook: '메일' };
 const ICON_PATH: Record<string, string> = {
   zap: 'M13 2L4 14h7l-1 8 9-12h-7z',
   box: 'M3 5h18v4H3zM5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4',
@@ -547,7 +548,7 @@ function srow(k: string, v: string | Node[], acts: HTMLElement[] = [], cls = '')
  * 종전엔 스위치·«누가 봐요»가 카드마다 따로 있어 화면에 같은 말이 세 번 나왔다.
  */
 export interface CollectFace { box: HTMLElement; row: HTMLElement }
-function collectFace(onState: CollectState, teamSee = true, countKind = ''): CollectFace & { body: HTMLElement; set: (chk: HTMLInputElement, stateText: string, notes: string[], extra: HTMLElement[]) => void } {
+function collectFace(onState: CollectState, teamSee = true, countKind = '', countSystem = ''): CollectFace & { body: HTMLElement; set: (chk: HTMLInputElement, stateText: string, notes: string[], extra: HTMLElement[]) => void } {
   const rowHost = el('div');
   //  ★ ② 는 어떤 앱에서도 같은 «카드 + 라벨 열» 이어야 한다(#2243 최우선 요구). 어댑터가 무엇을 넣든
   //   이 틀 안에 들어간다 — 종전엔 노션·구글이 라벨 없이 체크박스만 떨궈 ①·③ 과 딴판이었다(원준 실측 2026-08-30).
@@ -569,7 +570,8 @@ function collectFace(onState: CollectState, teamSee = true, countKind = ''): Col
       onState(stateText, chk.checked);
       //  자료함에 실제로 몇 건 들어왔는지 — 목록 총계를 한 번 물어 줄 앞에 붙인다(본문은 안 받는다: limit=1).
       if (chk.checked && countKind) {
-        void api(`/api/ui/sources?kind=${encodeURIComponent(countKind)}&limit=1`)
+        //  #4211 — 같은 kind 를 두 앱이 나눠 쓰면(email = Gmail·Outlook) system 으로 좁힌다. 안 그러면 남의 앱 수를 제 것으로 말한다.
+        void api(`/api/ui/sources?kind=${encodeURIComponent(countKind)}${countSystem ? `&system=${encodeURIComponent(countSystem)}` : ''}&limit=1`)
           .then((r: any) => {
             const n = Number(r?.total);
             if (!Number.isFinite(n) || n <= 0) return;
@@ -703,7 +705,10 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
       else openToken(svc, reload);
     } else { sw.checked = true; void disconnect(); }
   };
-  const howNow = viaOAuth ? '계정 로그인으로 연결했어요' : viaToken ? '토큰으로 연결했어요' : '';
+  //  #4211 — Outlook 은 어느 계정(회사/개인)으로 붙었는지가 곧 «누구 메일인지»다. 서버가 connectors[].account 로 준다.
+  const acct = svc.key === 'outlook' && oc?.account?.email
+    ? ` · ${oc.account.email}${oc.account.type === 'work' ? '(회사 계정)' : oc.account.type === 'personal' ? '(개인 계정)' : ''}` : '';
+  const howNow = viaOAuth ? '계정 로그인으로 연결했어요' + acct : viaToken ? '토큰으로 연결했어요' : '';
   const usedAt = viaToken && cred?.last_used_at ? ` · ${relTime(cred.last_used_at)}에 마지막으로 썼어요`
     : viaToken && cred?.updated_at ? ` · ${relTime(cred.updated_at)}에 연결했어요` : '';
   const readDetail = st === 'on'
@@ -718,6 +723,9 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     if (viaToken) readActs.appendChild(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '토큰 교체', onclick: () => openToken(svc, reload) }));
     if (svc.key === 'slack') readActs.appendChild(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '대화별 허용 정하기', onclick: () => overlay('Slack 대화별 허용', slackChannelPolicyCard()) }));
     if (svc.key === 'github') readActs.appendChild(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '열린 저장소 보기', onclick: () => overlay('GitHub 열린 저장소', githubReposCard()) }));
+  } else if (svc.key === 'outlook' && st === 'off') {
+    //  #4211 — 연결 **전에** 관리자 링크를 곁에 둔다. 회사 계정은 Microsoft 화면에서 막히고 이 화면으로 안 돌아오는 일이 많다.
+    readActs.appendChild(el('div', { style: 'flex:1 1 100%' }, outlookAdminConsentBox(null)));
   } else if (spec && (spec.help || spec.docUrl) && !account) {
     readActs.appendChild(el('span', { class: 'h', style: 'margin-left:0', text: String(spec.help || '') }));
     if (spec.docUrl) readActs.appendChild(el('a', { class: 'btn btn-ghost btn-sm', href: spec.docUrl, target: '_blank', rel: 'noopener noreferrer', text: '발급 페이지 열기 ↗' }));
@@ -781,6 +789,8 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     : quietCollectFace('관리자만', '워크스페이스 관리자가 켤 수 있어요 — 노션에서 고른 페이지만 함께 보는 자료함으로 들어옵니다.', onCollect);
   else if (svc.key === 'google') collect = isAdmin ? googleTeamCollectCard(onCollect)
     : quietCollectFace('관리자만', '워크스페이스 관리자가 켤 수 있어요 — Drive 문서가 함께 보는 자료함으로 들어옵니다.', onCollect);
+  else if (svc.key === 'outlook') collect = isAdmin ? memberTokenCollectCard(svc.key, onCollect)
+    : quietCollectFace('권한 필요', '이 워크스페이스의 구성원이 켤 수 있어요 — 켜면 내 메일이 함께 보는 자료함으로 들어옵니다.', onCollect);
   else if (svc.key === 'linear') collect = isAdmin ? memberTokenCollectCard(svc.key, onCollect)
     : quietCollectFace('관리자만', '워크스페이스 관리자가 켤 수 있어요 — 켜면 이슈·댓글·문서가 함께 보는 자료함으로 들어옵니다.', onCollect);
   else if (svc.key === 'gitlab') collect = !isAdmin ? quietCollectFace('권한 필요', '이 워크스페이스의 구성원이 켤 수 있어요 — 켜면 고른 프로젝트의 이슈·MR 대화가 함께 보는 자료함으로 들어옵니다.', onCollect)
@@ -974,10 +984,25 @@ const MEMBER_COLLECT_TEXT: Record<string, { desc: string; on: string; off: strin
     on: '작업·댓글을 프로젝트 탭으로 가져오고 있어요.', off: '켜면 내 ClickUp 토큰으로 워크스페이스의 작업·댓글을 프로젝트 탭으로 가져옵니다.', where: '워크스페이스 함께 — 프로젝트 탭에서 같이 봐요' },
   linear: { desc: '워크스페이스의 이슈·댓글과 문서를 라이블리가 미리 읽어 자료함으로 가져와요. 팀으로 좁힐 수 있어요. 워크스페이스가 함께 봐요.',
     on: '이슈·댓글·문서를 가져오고 있어요.', off: '켜면 Linear 화면이 열려요. «허용» 한 번이면 연결과 가져오기가 함께 켜집니다.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
+  //  #4211 — Outlook 은 Linear 처럼 토글이 곧 연결이다(자격이 없으면 Microsoft 동의 화면이 열린다).
+  outlook: { desc: '내 메일(받은·보낸 편지함 등)을 라이블리가 미리 읽어 자료함으로 가져와요. 지운 편지함·정크·임시 보관함은 빼요. 워크스페이스가 함께 봐요.',
+    on: '내 메일을 가져오고 있어요.', off: '켜면 Microsoft 화면이 열려요. «허용» 한 번이면 연결과 가져오기가 함께 켜집니다.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
   gitlab: { desc: '내가 고른 프로젝트의 이슈·MR 대화와 릴리스 노트만 라이블리가 미리 읽어 자료함으로 가져와요. 워크스페이스가 함께 봐요.',
     on: '고른 프로젝트의 이슈·MR 대화를 가져오고 있어요.', off: '켜면 내 GitLab 개인 토큰으로 고른 프로젝트의 이슈·MR 대화를 읽어 옵니다.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
   github: { desc: '내가 고른 저장소의 이슈·PR 대화와 릴리스 노트만 라이블리가 미리 읽어 자료함으로 가져와요. 워크스페이스가 함께 봐요.',
     on: '고른 저장소의 이슈·PR 대화를 가져오고 있어요.', off: '켜면 내 GitHub 연결로 고른 저장소의 이슈·PR 대화를 읽어 옵니다. 연결 화면에서 고른 저장소가 기본 범위예요.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
+};
+/**
+ * 라이블리 소유 OAuth 앱 등록 칸(셀프호스팅·dev) — 앱마다 금고 kind 와 안내만 다르다(#2247 Linear · #4211 Outlook).
+ *  매니지드는 CP 가 앱을 쥐어(app_ready=true) 이 칸이 안 뜬다.
+ */
+const APP_REG: Record<string, { kind: string; label: string; help: string; done: string }> = {
+  linear: { kind: 'linear_app', label: 'Linear 라이블리 앱(OAuth 클라이언트)',
+    help: '라이블리 Linear 앱이 아직 등록되지 않았어요 — Linear ▸ Settings ▸ API ▸ OAuth Applications 에서 만든 앱의 Client ID 와 Client Secret 을 아래에 넣어 주세요(관리자 1회). 값은 금고로 바로 저장되고 다시 보이지 않습니다.',
+    done: 'Linear 앱을 등록했어요 — 이제 스위치를 켜면 Linear 화면이 열립니다' },
+  outlook: { kind: 'microsoft_oauth', label: 'Microsoft Entra 앱(OAuth 클라이언트)',
+    help: 'Outlook 연결용 Microsoft 앱이 아직 등록되지 않았어요 — Microsoft Entra 관리 센터 ▸ 앱 등록에서 «모든 조직 디렉터리 + 개인 Microsoft 계정» 앱을 만들고(리디렉션 URI: 이 워크스페이스 주소 + /oauth/callback), 애플리케이션(클라이언트) ID 와 클라이언트 암호 «값»을 아래에 넣어 주세요(관리자 1회). 값은 금고로 바로 저장되고 다시 보이지 않습니다.',
+    done: 'Microsoft 앱을 등록했어요 — 이제 [Outlook 연결]과 이 스위치가 Microsoft 화면을 엽니다' },
 };
 /** 범위 칸 — 앱마다 «무엇을 적는가»만 다르다. parse 가 입력 문자열을 서버 scope 로 바꾼다. */
 const SCOPE_FIELD: Record<string, { ph: string; keys: string[]; parse: (t: string) => Record<string, string>; missing: string; note: string }> = {
@@ -1087,11 +1112,14 @@ const COLLECT_KINDS: Record<string, { always: string; opts: Array<{ id: string; 
   linear: { always: '이슈·댓글', opts: [{ id: 'include_documents', label: 'Linear 문서' }] },
 };
 /** «언제부터» 를 지원하는 앱(커넥터가 backfill_since 를 since 하한으로 쓴다). */
-const HAS_BACKFILL = new Set(['github', 'gitlab', 'linear', 'slack']);
+const HAS_BACKFILL = new Set(['github', 'gitlab', 'linear', 'slack', 'outlook']);
 /** 자료함에 들어가는 kind — src/v6/mirror/mirror-source.ts 의 sourceKindOf 와 같은 표. ClickUp 은 프로젝트 미러라 없다. */
 export const COLLECT_KIND_OF: Record<string, string> = {
   github: 'github_issue', gitlab: 'gitlab_issue', linear: 'linear_issue', figma: 'figma_comment', slack: 'slack', notion: 'notion_doc',
+  outlook: 'email',
 };
+/** kind 를 다른 앱과 나눠 쓰는 앱의 system(#4211 — email 은 Gmail·Outlook 이 같이 쓴다). 자료 수를 셀 때 좁힌다. */
+const COLLECT_SYSTEM_OF: Record<string, string> = { outlook: 'outlook' };
 const SINCE_OPTS = [{ id: '30', label: '최근 30일' }, { id: '90', label: '90일' }, { id: '365', label: '1년' }, { id: '', label: '전부' }];
 const EVERY_OPTS = [{ id: '600', label: '10분' }, { id: '1800', label: '30분' }, { id: '3600', label: '1시간' }, { id: '10800', label: '3시간' }, { id: '86400', label: '하루 한 번' }];
 
@@ -1144,6 +1172,7 @@ function collectSettings(c: SettingsCtx): HTMLElement[] {
   } else {
     rows.push(setRow('무엇을', '', [el('span', { class: 'cn-set-hint', style: 'margin-top:0',
       text: c.key === 'figma' ? '고른 파일의 코멘트를 가져옵니다 — 이 앱은 종류를 나눠 고를 수 없어요.'
+        : c.key === 'outlook' ? '메일 본문과 보낸 사람·받는 사람을 가져옵니다 — 지운 편지함·정크·임시 보관함은 빼요.'
         : c.key === 'clickup' ? '작업·댓글·시간기록을 함께 가져옵니다 — 이 앱은 종류를 나눠 고를 수 없어요.'
         : '대화와 올린 파일 제목을 가져옵니다 — 이 앱은 종류를 나눠 고를 수 없어요.' })]));
   }
@@ -1179,7 +1208,7 @@ function collectSettings(c: SettingsCtx): HTMLElement[] {
 
 function memberTokenCollectCard(key: string, onState: CollectState): CollectFace {
   const T = MEMBER_COLLECT_TEXT[key];
-  const panel = collectFace(onState, T.where !== '나만 봐요', COLLECT_KIND_OF[key] ?? '');
+  const panel = collectFace(onState, T.where !== '나만 봐요', COLLECT_KIND_OF[key] ?? '', COLLECT_SYSTEM_OF[key] ?? '');
   const body = panel.body;
   const post = async (bodyObj: any): Promise<any> => api(`/api/ui/org/${key}/collect`, { method: 'POST', body: JSON.stringify(bodyObj) });
   const paint = async (): Promise<void> => {
@@ -1197,7 +1226,9 @@ function memberTokenCollectCard(key: string, onState: CollectState): CollectFace
         + (s.member_connected === false ? ' 그 토큰이 지워졌습니다 — 껐다 켜면 내 토큰으로 바뀝니다.' : ''));
     } else notes.push(T.off);
     //  #2243 — 범위는 목록에서 토글로 고른다(못 만들면 텍스트 칸으로 떨어진다).
-    const scopeNode = scopeChooser(key, (s.scope ?? {}) as Record<string, string>, !!s.enabled, async (sc) => {
+    //  #4211 Outlook 은 고를 범위가 없다(내 메일함 하나) — 목록을 물을 창구도 없으니 사실만 말한다.
+    const scopeNode = key === 'outlook' ? el('span', { class: 'cn-set-hint', style: 'margin-top:0', text: '연결한 내 메일함 전체예요 — 지운 편지함·정크·임시 보관함은 빼고 가져옵니다.' })
+      : scopeChooser(key, (s.scope ?? {}) as Record<string, string>, !!s.enabled, async (sc) => {
       try {
         const r: any = await post({ enabled: true, scope: sc });
         if (r && r.ok) toast(s.enabled ? '범위를 저장했어요' : '자료 가져오기를 켰어요 — 첫 수집은 잠시 뒤 시작됩니다');
@@ -1207,7 +1238,7 @@ function memberTokenCollectCard(key: string, onState: CollectState): CollectFace
     });
     //  #2243 3차 — «무엇을·얼마나 자주·언제부터» 는 켜기와 무관하게 저장된다(꺼져 있어도 미리 정해 둘 수 있다).
     const extra: HTMLElement[] = collectSettings({
-      key, s, scopeNode: setRow('어디서', SCOPE_NOUN[key] ? `가져올 ${SCOPE_NOUN[key]}` : '', [scopeNode]),
+      key, s, scopeNode: setRow('어디서', key === 'outlook' ? '가져올 메일' : SCOPE_NOUN[key] ? `가져올 ${SCOPE_NOUN[key]}` : '', [scopeNode]),
       since: String(s.scope?.backfill_since ?? ''),
       save: async (patch) => {
         try {
@@ -1220,9 +1251,14 @@ function memberTokenCollectCard(key: string, onState: CollectState): CollectFace
     });
     const SF = SCOPE_FIELD[key];
     if (s.needs_scope && SF && SF.note) notes.push(SF.note);
-    //  #2247 Linear — 라이블리 Linear OAuth 앱이 아직 등록되지 않았으면(app_ready=false) 관리자에게 등록 칸을 먼저 낸다.
-    //   값은 이 화면에서 금고(조직 슬롯 linear_app/oauth:client)로 바로 간다 — 채팅·문서에 붙여넣을 일이 없다.
-    if (key === 'linear' && s.app_ready === false) {
+    //  #2247 Linear · #4211 Outlook — 라이블리 소유 OAuth 앱이 아직 등록되지 않았으면(app_ready=false) 관리자에게 등록 칸을 먼저 낸다.
+    //   값은 이 화면에서 금고(조직 슬롯 <kind>/oauth:client)로 바로 간다 — 채팅·문서에 붙여넣을 일이 없다.
+    //   매니지드는 CP 릴레이가 앱을 쥐어 app_ready=true 라 이 칸이 안 보인다(셀프호스팅·dev 전용).
+    const REG = APP_REG[key];
+    //  #4211 — 매니지드는 앱을 CP 가 쥔다(준비는 라이블리의 일). 준비 전이면 등록 칸 대신 그 사실만 말한다.
+    //   «켜면 … 화면이 열려요»(T.off)는 지운다 — 준비 전엔 열리지 않으니 두 문장이 서로를 부정한다(jsdom 실측).
+    if (REG && s.app_ready === false && s.managed === true) notes.splice(0, notes.length, `${key === 'outlook' ? 'Outlook' : 'Linear'} 연결은 라이블리가 준비하고 있어요 — 준비를 마치면 여기서 바로 켤 수 있습니다.`);
+    else if (REG && s.app_ready === false) {
       const idIn = el('input', { type: 'text', class: 'cn-scope-in', placeholder: 'Client ID', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
       const secIn = el('input', { type: 'password', class: 'cn-scope-in', placeholder: 'Client Secret', autocomplete: 'new-password' }) as HTMLInputElement;
       const reg = el('button', { class: 'btn btn-sm', type: 'button', text: '앱 등록', onclick: async () => {
@@ -1230,14 +1266,16 @@ function memberTokenCollectCard(key: string, onState: CollectState): CollectFace
         if (!cid || !sec) { toast('Client ID 와 Client Secret 둘 다 넣어 주세요', true); (cid ? secIn : idIn).focus(); return; }
         reg.setAttribute('disabled', 'true');
         try {
-          await api('/api/ui/org/credential', { method: 'POST', body: JSON.stringify({ kind: 'linear_app', scope_key: 'oauth:client', label: 'Linear 라이블리 앱(OAuth 클라이언트)', secret: JSON.stringify({ client_id: cid, client_secret: sec }) }) });
-          secIn.value = ''; toast('Linear 앱을 등록했어요 — 이제 스위치를 켜면 Linear 화면이 열립니다');
+          await api('/api/ui/org/credential', { method: 'POST', body: JSON.stringify({ kind: REG.kind, scope_key: 'oauth:client', label: REG.label, secret: JSON.stringify({ client_id: cid, client_secret: sec }) }) });
+          secIn.value = ''; toast(REG.done);
         } catch (e: any) { toast((e && e.message) || '등록하지 못했습니다', true); }
         await paint();
       } });
-      notes.push('라이블리 Linear 앱이 아직 등록되지 않았어요 — Linear ▸ Settings ▸ API ▸ OAuth Applications 에서 만든 앱의 Client ID 와 Client Secret 을 아래에 넣어 주세요(관리자 1회). 값은 금고로 바로 저장되고 다시 보이지 않습니다.');
+      notes.push(REG.help);
       extra.push(el('div', { class: 'cn-scope-row' }, el('span', { class: 'k', text: '앱 등록' }), idIn, secIn, reg));
     }
+    //  #4211 — Outlook 관리자 허용 링크는 ① «내 계정으로 직접 사용» 줄에 **한 번만** 둔다(연결은 하나라 안내도 하나 —
+    //   두 칸에 같은 상자를 두면 화면에 같은 말이 두 번 선다. jsdom 실측으로 잡았다).
     //  #2247 Linear — 토글이 곧 연결. 자격이 없으면 서버가 동의 URL 을 준다: 새 탭으로 열고, 돌아온 것(me_connected)이 보이면 다시 켠다.
     const consentThen = async (r: any): Promise<boolean> => {
       if (!(r && r.needs_connect && r.authorization_url)) return false;
@@ -1267,8 +1305,8 @@ function memberTokenCollectCard(key: string, onState: CollectState): CollectFace
       } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
       await paint();
     };
-    if (key === 'linear' && s.app_ready === false) chk.disabled = true;   // 앱이 없으면 켤 수 없다 — 등록 칸이 먼저
-    panel.set(chk, chk.checked ? '켜짐' : (key === 'linear' && s.app_ready === false ? '앱 등록 필요' : (s.needs_scope && SF ? '범위 필요' : '꺼짐')), notes, extra);
+    if (REG && s.app_ready === false) chk.disabled = true;   // 앱이 없으면 켤 수 없다 — 등록 칸이 먼저
+    panel.set(chk, chk.checked ? '켜짐' : (REG && s.app_ready === false ? (s.managed === true ? '준비 중' : '앱 등록 필요') : (s.needs_scope && SF ? '범위 필요' : '꺼짐')), notes, extra);
   };
   void paint();
   return { box: panel.box, row: panel.row };

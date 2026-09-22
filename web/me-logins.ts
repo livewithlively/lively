@@ -48,6 +48,10 @@ const LOGIN_SERVICES: Array<{ key: string; label: string; icon: string; oauth?: 
   { key: 'google', label: 'Google', icon: '🔷', short: 'Drive 파일·Gmail 메일·캘린더 일정을 읽습니다.', oauth: 'google',
     soon: '구글 연결을 준비하고 있어요 — 준비를 마치면 여기서 바로 켤 수 있습니다.', soonUntilReady: true,
     blurb: 'AI가 내 Google 계정에 로그인해서 직접 Drive 파일·Gmail 메일·캘린더 일정을 읽을 수 있습니다.' },
+  //  #4211 — Outlook(Microsoft 365 회사 계정 · outlook.com 개인 계정). 서버 커넥터 이름은 'microsoft'(인증 축 — 구글의 'google' 과 같은 규약),
+  //   카드 이름은 사람이 아는 앱 이름 Outlook. 앱이 준비 안 된 게이트웨이에선 서버가 그 줄을 안 내려 «준비 중»으로 선다(blockedOAuth).
+  { key: 'outlook', label: 'Outlook', icon: '📧', short: '메일을 검색해 읽고 일정을 봅니다.', oauth: 'microsoft',
+    blurb: 'AI가 내 Outlook 계정(Microsoft 365 · outlook.com)으로 직접 메일을 검색해 읽고 캘린더 일정을 볼 수 있습니다. 보내거나 지우지는 않아요. 회사 계정은 회사 관리자가 한 번 허용해야 연결됩니다.' },
   { key: 'github', label: 'GitHub', icon: '🐙', short: '이슈·PR·커밋을 읽고, 이슈를 만들거나 댓글을 답니다.', token: 'github_pat', appConnect: 'github', blurb: 'AI가 내 GitHub 계정으로 이슈·PR·커밋을 읽고, 이슈를 만들거나 댓글을 답니다. [계정으로 연결]하면 그 화면에서 고른 저장소는 코드까지 가져올 수 있어요 — 토큰을 따로 만들 필요가 없습니다.' },
   { key: 'gitlab', label: 'GitLab', icon: '🦊', short: '이슈·MR·파이프라인·위키를 다룹니다.', oauth: 'gitlab', token: 'gitlab_pat', blurb: 'AI가 내 GitLab 계정으로 이슈·MR·파이프라인·위키를 다룹니다. [연결]은 AI 도구용 권한만 받습니다 — 저장소를 작업용으로 붙이는 것은 GitLab 정책상 별도 설정이 필요합니다.' },
   { key: 'clickup', label: 'ClickUp', icon: '🗂️', short: '작업을 확인합니다.', token: 'clickup_token', blurb: 'AI가 내 ClickUp 계정에 로그인해서 직접 작업을 확인할 수 있습니다.' },

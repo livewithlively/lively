@@ -158,4 +158,28 @@ t("R2 다른 커넥터에는 ready 를 싣지 않는다 — 구글 밖에서 그
   }
 });
 
+// ── #4211 Outlook — [Outlook 연결] 한 줄(server='microsoft'). 구글과 달리 **도구가 없어도** 앱이 준비됐으면 선다:
+//  도구는 첫 연결 때 심기 때문에(onMicrosoftInstalled), «도구가 있어야 창구가 선다»면 아무도 첫 연결을 못 한다(닭과 달걀).
+t("F1 도구도 없고 앱도 준비 안 됐으면 Outlook 줄이 없다 — 눌러도 안 되는 버튼을 내밀지 않는다", () => {
+  const r = foldOAuthConnectors([srv({ name: "notion" })], [], { microsoft: false });
+  assert.deepEqual(kinds(r), ["notion_oauth"]);
+  assert.deepEqual(kinds(foldOAuthConnectors([], [])), [], "기본값(인자 없음)도 없음");
+});
+
+t("F2 ★ 도구가 없어도 앱이 준비됐으면 Outlook 줄이 선다(server=microsoft, 쓰는 도구 없음)", () => {
+  const r = foldOAuthConnectors([], [], { microsoft: true });
+  assert.equal(r.connectors.length, 1);
+  assert.equal(r.connectors[0].server, "microsoft", "웹 카탈로그가 이 이름으로 찾는다(me-logins oauth:'microsoft')");
+  assert.equal(r.connectors[0].auth_kind, "microsoft_oauth");
+  assert.equal(r.connectors[0].auth_scope_key, "");
+  assert.deepEqual(r.connectors[0].used_by, []);
+});
+
+t("F3 도구가 있으면 줄이 서고 used_by 에 실린다 — 고아 자격으로 경고하지 않는다", () => {
+  const r = foldOAuthConnectors([], [tool("outlook_mail_search", "microsoft_oauth"), tool("outlook_calendar_events", "microsoft_oauth")]);
+  assert.deepEqual(kinds(r), ["microsoft_oauth"]);
+  assert.deepEqual(r.connectors[0].used_by, ["tool:outlook_mail_search", "tool:outlook_calendar_events"]);
+  assert.deepEqual(r.orphanKinds, [], "서버 행이 없다고 고아로 보고하면 운영 로그가 거짓 경보로 찬다");
+});
+
 console.log(`\noauth-connect: ${pass} passed`);
