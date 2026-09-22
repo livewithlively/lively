@@ -1420,8 +1420,9 @@ function googleTeamCollectCard(onState: CollectState): CollectFace {
     const anyOn = !!(drive.enabled || gmail.enabled);
 
     // 서비스 선택 — 체크박스가 곧 요청 scope 다(안 고른 건 동의도 안 받는다 = 최소 권한).
-    // ★ Gmail 은 1차 런칭 대상이 아니다(2026-08-26) — 서버가 offered:false 로 알려 준다. 칸을 아예 내밀지 않되,
+    // Gmail 을 팔지 않는 게이트웨이(옛 판·판매 목록 밖)는 서버가 offered:false 로 알려 준다. 칸을 아예 내밀지 않되,
     //  **이미 켜 둔 조직에는 상태만 보여 준다**(칸이 사라지면 "왜 아직 메일이 모이지?" 를 아무도 설명 못 한다).
+    //  #4211 — 지금 판은 Gmail 도 판다(2026-09-22). 이 갈래는 옛 게이트웨이·되돌림을 위해 남긴다.
     const gmailOffered = gmail.offered !== false;
     const gmailLegacy = !gmailOffered && !!gmail.enabled;
     const dChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
@@ -1495,7 +1496,8 @@ function googleTeamCollectCard(onState: CollectState): CollectFace {
         onclick: async () => {
           const add = widenTargets();
           if (add.length === 0) {
-            const rest = [!drive.scope_ok ? 'Google Drive 문서' : '', calOffered && !cal.scope_ok ? '캘린더 일정' : '']
+            const rest = [!drive.scope_ok ? 'Google Drive 문서' : '', gmailOffered && !gmail.scope_ok ? 'Gmail 메일' : '',
+              calOffered && !cal.scope_ok ? '캘린더 일정' : '']
               .filter(Boolean).join(' · ');
             toast(rest ? `위에서 ${rest} 을 체크한 뒤 눌러 주세요 — 지금은 넓힐 게 없어요` : '이미 다 허용돼 있어요', true);
             return;

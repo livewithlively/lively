@@ -608,7 +608,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
      "k": "메신저·메일·일정",
      "items": [
       { "id": "slack", "label": "Slack", "logo": "slack", "live": true },
-      { "id": "gmail", "label": "Gmail", "logo": "gmail", "soon": true },
+      { "id": "gmail", "label": "Gmail", "logo": "gmail", "live": true },
       { "id": "gcal", "label": "Google 캘린더", "logo": "googlecalendar", "soon": true }
      ]
     },
@@ -1119,10 +1119,33 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   }
   async function loadColl() {
     const out: any = {};
-    await Promise.all(Object.entries(COLLECT_FIRST).map(async ([id, svc]) => {
-      try { out[id] = await api(`/api/ui/org/${svc}/collect`); } catch (_) { out[id] = null; }
-    }));
+    await Promise.all([
+      ...Object.entries(COLLECT_FIRST).map(async ([id, svc]) => {
+        try { out[id] = await api(`/api/ui/org/${svc}/collect`); } catch (_) { out[id] = null; }
+      }),
+      loadGoogleColl(),
+    ]);
     COLL = out;
+  }
+  /* #4211 — 구글 두 칸(드라이브·Gmail)은 **연결 하나 · 서비스별 수집기**다. 개인 축(구글 연결됨)만 보면 드라이브만 켠
+   *  관리자에게 Gmail 카드가 «연결돼 있어요» 로 선다 — 메일은 한 통도 안 오는데. 그래서 관리자에겐 서비스별 수집기로
+   *  판정하고, 켤 때는 이미 켜 둔 서비스와 **합쳐** 보낸다(services 는 «켜 둘 전체 집합»이라 하나만 보내면 나머지가 꺼진다).
+   *  ⚠ COLLECT_FIRST 에 넣지 않는다 — 그 표는 범위 고르기 창·좁히기 흐름까지 태우는데 구글은 그 모양이 아니다. */
+  const GOOGLE_SVC = { gdrive: 'drive', gmail: 'gmail' };
+  let GCOLL: any = null;
+  async function loadGoogleColl() { try { GCOLL = await api('/api/ui/org/google/collect'); } catch (_) { GCOLL = null; } }
+  const googleCollectOn = (svc) => !!(GCOLL && (GCOLL.collectors || []).some((c) => c.service === svc && c.enabled));
+  const googleScopeOk = (svc) => !!(GCOLL && (GCOLL.collectors || []).some((c) => c.service === svc && c.scope_ok));
+  const googleWanted = (svc) => [...new Set([
+    ...((GCOLL && GCOLL.collectors) || []).filter((c) => c.enabled).map((c) => c.service), svc])];
+  /** 구글 수집 켜기 — 서버 답(ok · needs_connect+authorization_url · skipped)을 그대로 돌려준다. 던지지 않는다. */
+  async function startGoogleCollect(id) {
+    const svc = GOOGLE_SVC[id];
+    try {
+      const r: any = await api('/api/ui/org/google/collect', { method: 'POST', body: JSON.stringify({ enabled: true, services: googleWanted(svc) }) });
+      if (r && r.state) GCOLL = r.state;   // 서버가 켠 뒤의 상태를 같이 준다 — 다시 묻지 않고 판정한다
+      return r;
+    } catch (e) { return { ok: false, message: (e && e.message) || '' }; }
   }
   /** (#1631) 합류자의 팀 수집 읽기(한 번) — loadWelcome 이 합류자로 판정하자마자 건다. */
   let collP = null;
@@ -1190,6 +1213,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         if (id === 'figma' || id === 'clickup' || id === 'github' || id === 'gitlab' || id === 'linear') return c.enabled ? 'on' : 'off';
       }
       // 수집 상태를 못 읽었으면(구 이미지·권한) 개인 축 판정으로 떨어진다 — 화면을 비우지 않는다.
+    }
+    //  #4211 — 카탈로그가 «준비 중»(서버가 아직 못 연다)이면 잠근다. 종전엔 'off' 로 떨어져 눌러도 동의가 안 열리는
+    //   카드가 됐다(매니지드 구글). 이미 연결해 둔 사람의 것은 연결 사실 그대로 'on'.
+    if (CONN.soon && CONN.soon.some((s) => s.key === svc.key)) return CONN.soonConnected && CONN.soonConnected.has(svc.key) ? 'on' : 'blocked';
+    if (GOOGLE_SVC[id] && isAdmin() && !isJoin() && GCOLL) {
+      if (googleCollectOn(GOOGLE_SVC[id])) return 'on';
+      return !GCOLL.ready && !GCOLL.connected ? 'blocked' : 'off';
     }
     if (CONN.connected.some((s) => s.key === svc.key)) return 'on';
     if (CONN.blockedOAuth.some((s) => s.key === svc.key)) return 'blocked';
@@ -1319,6 +1349,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           catch (_) { /* 다음 폴링에 다시 */ } finally { busy = false; }
           if (done) return;
         }
+      }
+      //  #4211 구글 — 동의가 끝나 그 서비스 범위가 생겼으면 수집기를 켠다(동의만으로는 안 켜진다).
+      if (GOOGLE_SVC[id] && isAdmin() && !isJoin() && connState(id) !== 'on' && googleScopeOk(GOOGLE_SVC[id])) {
+        busy = true;
+        try { await startGoogleCollect(id); await loadConn(); } finally { busy = false; }
+        if (done) return;
       }
       if (connState(id) === 'on') { stop(); after(); }
     };
@@ -2057,6 +2093,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             try { await api('/api/ui/org/distillers/figma', { method: 'POST', body: JSON.stringify({}) }); } catch (_) { /* 비치명 */ }
           }
           const svc = COLLECT_OF[id]; if (!svc || !isAdmin()) return false;
+          //  #4211 — 구글은 서비스를 실어 보낸다(없으면 서버 기본 = 드라이브만이라 Gmail 을 골라도 드라이브가 켜진다).
+          if (GOOGLE_SVC[id]) { await startGoogleCollect(id); return googleCollectOn(GOOGLE_SVC[id]); }
           try {
             const r: any = await api(`/api/ui/org/${svc}/collect`, { method: 'POST', body: JSON.stringify({ enabled: true }) });
             return !(r && r.needs_connect === true);
@@ -2083,6 +2121,28 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               if (!url) { void fin('노션 화면을 열지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
               opened(); window.open(url, '_blank', 'noopener'); watchConnect(id, fin);
             } catch (e) { void fin((e && e.message) || '노션 연결을 시작하지 못했어요.'); }
+            return;
+          }
+          //  #4211 구글(드라이브·Gmail) — 관리자는 수집기 축: 켜기를 먼저 시도하고, 연결이 없으면 그 서비스 범위로 동의가 열린다.
+          //   연결은 있는데 그 서비스 범위가 없으면(드라이브만 허용한 사람이 Gmail 을 고름) 범위를 넓히는 동의를 연다.
+          //   관리자가 아니면(합류자 제외) 그 서비스 범위로 내 연결만 넓힌다 — AI 가 내 메일·파일을 읽는 개인 축.
+          if (GOOGLE_SVC[id]) {
+            const svc = GOOGLE_SVC[id];
+            const open = (url) => { opened(); window.open(url, '_blank', 'noopener'); watchConnect(id, fin); };
+            const widen = async () => {
+              try {
+                const w: any = await api('/api/ui/org/google/collect/connect', { method: 'POST', body: JSON.stringify({ services: [svc] }) });
+                if (w && w.authorization_url) { open(w.authorization_url); return; }
+                void fin('구글 화면을 열지 못했어요. 잠시 뒤 다시 눌러 주세요.');
+              } catch (e) { void fin((e && e.message) || '구글 연결을 시작하지 못했어요.'); }
+            };
+            if (!isAdmin() || isJoin()) { await widen(); return; }
+            const r: any = await startGoogleCollect(id);
+            await loadConn();
+            if (connState(id) === 'on') { void fin(); return; }
+            if (r && r.needs_connect && r.authorization_url) { open(r.authorization_url); return; }
+            if (r && r.ok !== false) { await widen(); return; }   // 연결은 있는데 이 서비스를 아직 허용하지 않았다(skipped: no_scope)
+            void fin((r && r.message) || `${srcLabel(id)} 가져오기를 켜지 못했어요. «외부 앱 연결»에서 다시 시도해 주세요.`);
             return;
           }
           if (id === 'linear') {
