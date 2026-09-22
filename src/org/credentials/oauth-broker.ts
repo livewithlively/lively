@@ -28,6 +28,11 @@ import {
 import { resolveGoogleOAuthClient, googleVaultReader } from "./google-token-source.js";
 import { isLinearAppServer, buildLinearAuthorizeUrl, exchangeLinearCode, parseLinearTokenResponse, LINEAR_APP_KIND, LINEAR_APP_SERVER } from "./linear-oauth.js";
 import { isGoogleServer, buildGoogleAuthorizeUrl, exchangeGoogleCode, parseGoogleTokenResponse, refreshGoogleToken, mergeGoogleTokens, googleInstallToSlot, googleInstallFromBlob, googleTokenExpired, googleScopeString, GOOGLE_KIND, GOOGLE_SERVER, GOOGLE_DEFAULT_SERVICES, type GoogleInstall, type GoogleService } from "./google-oauth.js";
+import {
+  isMicrosoftServer, buildMicrosoftAuthorizeUrl, buildMicrosoftAdminConsentUrl, exchangeMicrosoftCode, parseMicrosoftTokenResponse,
+  mergeMicrosoftTokens, microsoftInstallToSlot, microsoftInstallFromSlot, resolveMicrosoftOAuthClient, relayAdminConsentUrl,
+  classifyMicrosoftAuthError, microsoftAuthErrorText, MICROSOFT_KIND, MICROSOFT_SERVER, type MicrosoftInstall,
+} from "./microsoft-oauth.js";
 
 const STATE_KEY_ENV = "CONNECTOR_SECRET_KEY"; // 상태 서명키는 봉투암호화 키와 같은 마스터에서 도메인 분리 파생(신규 env 불요).
 const STATE_INFO = "lively-oauth-state-v1";
@@ -601,6 +606,115 @@ async function finishLinearAppConsent(p: StatePayload, code: string, actor?: str
   const tokens = await exchangeLinearCode({ clientId: client.client_id, clientSecret: client.client_secret, code, redirectUri: await callbackUrl(), fetchFn: await gatewaySsrfFetch() });
   await saveLinearAppInstall(p.m, tokens, actor);
 }
+// ── Microsoft 직결(#4211 Outlook) — 라이블리 소유 Entra 앱(멀티테넌트 + 개인 계정). 예약 서버명(microsoft)으로 콜백을 라우팅한다.
+//  규칙(인가 URL·교환·병합·슬롯·관리자 허용)은 microsoft-oauth.ts. 매니지드는 MICROSOFT_OAUTH_RELAY_URL 로 CP 가 교환한다(슬랙 T5 규약).
+/** 조직 Microsoft 앱 — 금고(gateway microsoft_oauth/oauth:client) 또는 플랫폼 env. 릴레이 모드면 플랫폼이 먼저(발급 앱으로만 갱신된다). */
+async function loadMicrosoftClient(): Promise<{ client_id: string; client_secret: string } | null> {
+  return resolveMicrosoftOAuthClient(() => loadOAuthClient(MICROSOFT_KIND));
+}
+/** 동의를 시작할 수 있는가 — 릴레이(CP 가 앱을 쥔다) 또는 이 게이트웨이가 앱을 안다. */
+export async function microsoftReady(): Promise<boolean> {
+  if (process.env.MICROSOFT_OAUTH_RELAY_URL?.trim()) return true;
+  return !!(await loadMicrosoftClient());
+}
+/**
+ * 연결 시작. 이미 토큰이 있어도 **항상 새 동의**를 연다([다시 연결]·계정 바꾸기가 정상 경로다 — 같은 슬롯을 덮어쓴다).
+ *  prompt=select_account 라 이미 허용한 사람은 계정만 고르고 곧장 돌아온다(동의 화면이 다시 뜨지 않는다).
+ */
+export async function startMicrosoftConsent(memberId: string): Promise<ConsentStart> {
+  const nonce = crypto.randomBytes(16).toString(B64);
+  const state = signState({ m: memberId, s: MICROSOFT_SERVER, k: "", n: nonce });
+  const relay = process.env.MICROSOFT_OAUTH_RELAY_URL?.trim();
+  if (relay) {
+    const gatewayUrl = (await getOrgProfile()).gateway_url ?? "";
+    return { authorized: false, state, authorizationUrl: relayStartUrl(relay, state, gatewayUrl) };
+  }
+  const client = await loadMicrosoftClient();
+  if (!client) {
+    throw new Error("Outlook 연결이 아직 준비되지 않았습니다 — 관리자가 Microsoft Entra 앱의 Client ID/Secret 을 조직 자격(kind microsoft_oauth, scope_key oauth:client)에 넣어야 합니다.");
+  }
+  return { authorized: false, state, authorizationUrl: buildMicrosoftAuthorizeUrl({ clientId: client.client_id, redirectUri: await callbackUrl(), state }) };
+}
+/**
+ * ★ 관리자에게 보낼 «조직 전체 허용» 링크. 회사 계정은 Mail.Read·Calendars.Read 를 **본인이 허용할 수 없어서**
+ *  (Microsoft 관리형 기본 동의 정책, 2025-11) 이 링크가 곧 «다음 한 걸음»이다. 연결을 누르기 **전부터** 화면에 둔다 —
+ *  Microsoft 는 «관리자 승인 필요» 화면에서 사람을 멈춰 세우고 우리 콜백으로 안 돌려보내는 경우가 많다.
+ *  · 매니지드: CP 의 고정 주소(`…/oauth/microsoft/admin-consent?gw=`) — 관리자는 라이블리 계정이 없어도 된다.
+ *  · 직결: Microsoft adminconsent URL 을 바로 만든다(돌아오는 곳은 이 게이트웨이 콜백 — index.ts 가 admin_consent 를 받는다).
+ *  null = 아직 앱이 없다(링크를 만들 수 없다).
+ */
+export async function microsoftAdminConsentLink(tenant?: string | null): Promise<string | null> {
+  const relay = process.env.MICROSOFT_OAUTH_RELAY_URL?.trim();
+  if (relay) {
+    const u = new URL(relayAdminConsentUrl(relay, (await getOrgProfile()).gateway_url ?? ""));
+    if (tenant) u.searchParams.set("tenant", tenant);
+    return u.toString();
+  }
+  const client = await loadMicrosoftClient();
+  if (!client) return null;
+  //  state 는 **서명하지 않는다** — 돌아오는 쪽이 아무것도 저장하지 않고 «허용됐습니다» 한 장만 보여 주기 때문이다(부작용 0).
+  //   관리자는 대개 이 워크스페이스 사람이 아니고, 링크는 며칠 뒤에 열릴 수도 있다(만료 state 로 막으면 안 된다).
+  return buildMicrosoftAdminConsentUrl({ clientId: client.client_id, redirectUri: await callbackUrl(), state: MICROSOFT_ADMIN_STATE, tenant: tenant ?? undefined });
+}
+/** 직결 관리자 허용의 state 표식 — 콜백이 «관리자 허용 복귀»를 알아본다(보안 경계 아님: 그 복귀는 아무것도 바꾸지 않는다). */
+export const MICROSOFT_ADMIN_STATE = "lively-microsoft-admin-consent";
+
+/**
+ * 콜백이 error 로 돌아왔을 때 **Microsoft 연결이면** 사람에게 할 말과 다음 한 걸음(관리자 링크)을 만든다. 아니면 null(종전 문구).
+ *  위조·만료 state 는 조용히 null — 그 경우엔 누구의 연결인지 모르니 특별한 안내를 할 근거가 없다.
+ */
+export async function describeMicrosoftConsentError(
+  stateToken: string | null | undefined, error: string | null | undefined, description: string | null | undefined,
+): Promise<{ text: string; adminLink: string | null } | null> {
+  let p: StatePayload;
+  try { p = verifyState(String(stateToken ?? "")); } catch { return null; }
+  if (!isMicrosoftServer(p.s)) return null;
+  const kind = classifyMicrosoftAuthError(error, description);
+  return {
+    text: microsoftAuthErrorText(kind, description),
+    adminLink: kind === "other" ? null : await microsoftAdminConsentLink().catch(() => null),
+  };
+}
+
+/**
+ * 연결이 저장된 직후 후처리 — **상위 계층이 꽂는다**(capabilities/outlook-connect.ts). 노션 onNotionInstalled 와 같은 이유:
+ *  저장은 자격 계층의 일이고 «그래서 도구를 심는다»는 전달 계층의 일이라, 직접 부르면 순환 import 가 된다.
+ *  ★ 도구(outlook_*)는 **첫 연결 때** 심는다 — 매니지드 CP 는 MCP 서버 행이 있는 묶음만 심어서(planPresetsToApply ⓑ)
+ *   Outlook 도구가 저절로 생기지 않는다. 연결 전에 심으면 아무도 못 쓰는 도구가 AI 목록에 뜨는 것이고.
+ */
+export type MicrosoftInstalledHook = (memberId: string) => Promise<void>;
+let microsoftInstalledHook: MicrosoftInstalledHook | null = null;
+export function onMicrosoftInstalled(fn: MicrosoftInstalledHook): void { microsoftInstalledHook = fn; }
+
+async function saveMicrosoftInstall(memberId: string, next: MicrosoftInstall, actor?: string): Promise<MicrosoftInstall> {
+  const owner = memberOwner(memberId);
+  const cur = await getMemberSecret(owner, MICROSOFT_KIND, "");
+  const merged = mergeMicrosoftTokens(microsoftInstallFromSlot(cur?.secret, cur?.meta), next);
+  const slot = microsoftInstallToSlot(merged);
+  await setMemberSecret(owner, MICROSOFT_KIND, slot.scopeKey, { secret: slot.secret, meta: slot.meta }, actor ?? "oauth");
+  // 후처리는 **연결 저장을 막지 않는다** — 도구 심기가 실패해도 토큰은 저장됐고, 다음 연결·관리자 적용으로 풀린다.
+  if (microsoftInstalledHook) {
+    await microsoftInstalledHook(memberId).catch((e) =>
+      logger.warn({ err: (e as Error)?.message }, "Outlook 연결 후 도구 준비 실패 — 연결은 저장됐습니다"));
+  }
+  return merged;
+}
+async function finishMicrosoftConsent(p: StatePayload, code: string, actor?: string): Promise<void> {
+  const client = await loadMicrosoftClient();
+  if (!client) throw new Error("Microsoft 앱이 없어 토큰을 교환할 수 없습니다(연결 도중 설정이 지워졌습니다).");
+  const install = await exchangeMicrosoftCode({
+    clientId: client.client_id, clientSecret: client.client_secret, code, redirectUri: await callbackUrl(), fetchFn: await gatewaySsrfFetch(),
+  });
+  await saveMicrosoftInstall(p.m, install, actor);
+}
+/** 릴레이 완료(#4211) — CP 가 Microsoft 와 교환한 토큰 응답 원문. state 검증·귀속·병합은 여기서(CP 는 통과만). */
+export async function completeMicrosoftInstall(stateToken: string, tokenResponse: unknown, actor?: string): Promise<{ ok: true; memberId: string; email: string | null; account_type: string | null }> {
+  const p = verifyState(stateToken);
+  if (!isMicrosoftServer(p.s)) throw new Error("이 state 는 Outlook 연결이 아닙니다");
+  const saved = await saveMicrosoftInstall(p.m, parseMicrosoftTokenResponse(tokenResponse), actor ?? "cp-relay");
+  return { ok: true, memberId: p.m, email: saved.email, account_type: (microsoftInstallToSlot(saved).meta.account_type as string | null) ?? null };
+}
+
 /**
  * 릴레이 완료(#2243 G) — CP 가 GitHub 과 교환한 토큰 응답 원문 + 설치 id. state 검증·귀속은 여기서.
  *
@@ -659,6 +773,7 @@ export async function completeSlackInstall(stateToken: string, access: unknown, 
 export async function startConsent(memberId: string, serverName: string, actor?: string): Promise<ConsentStart> {
   // #1881 G2 구글 직결 — MCP 서버 행이 없으므로 loadProxyServer 앞에서 갈라야 한다(노션 공개 통합과 같은 규약).
   if (isGoogleServer(serverName)) return startGoogleConsent(memberId, GOOGLE_DEFAULT_SERVICES, actor);
+  if (isMicrosoftServer(serverName)) return startMicrosoftConsent(memberId); // #4211 Outlook — 서버 행 없음(구글과 같은 규약)
   const srv = await loadProxyServer(serverName);
   const redirectUrl = await callbackUrl();
   if (isSlackOAuthKind(srv.authKind)) return startSlackConsent(memberId, serverName, srv, redirectUrl);
@@ -686,6 +801,10 @@ export async function finishConsent(
   }
   if (isLinearAppServer(p.s)) { // #2247 Linear 직결(라이블리 앱) — MCP 서버 행 없음, form 교환, PKCE 없음
     await finishLinearAppConsent(p, code, actor);
+    return { ok: true, memberId: p.m, serverName: p.s };
+  }
+  if (isMicrosoftServer(p.s)) { // #4211 Outlook 직결 — MCP 서버 행 없음, form 교환(client_secret), PKCE 없음
+    await finishMicrosoftConsent(p, code, actor);
     return { ok: true, memberId: p.m, serverName: p.s };
   }
   if (isGoogleServer(p.s)) { // #1881 G2 구글 직결 — MCP 서버 행 없음, form 교환 + PKCE
@@ -718,7 +837,7 @@ export async function finishConsent(
 export async function abandonConsent(stateToken: string): Promise<void> {
   let p: StatePayload;
   try { p = verifyState(stateToken); } catch { return; }
-  if (isNotionPublicServer(p.s) || isLinearAppServer(p.s)) return; // 노션 공개 통합·Linear 앱 — PKCE 슬롯이 없어 정리할 것도 없다
+  if (isNotionPublicServer(p.s) || isLinearAppServer(p.s) || isMicrosoftServer(p.s)) return; // 노션 공개 통합·Linear 앱·Microsoft — PKCE 슬롯이 없어 정리할 것도 없다
   if (isGoogleServer(p.s)) { // #1881 G2 구글 직결 — PKCE 를 쓰므로 취소 경로에서도 verifier 를 지운다
     await deleteMemberSecret(memberOwner(p.m), GOOGLE_KIND, PKCE_SCOPE).catch(() => { /* best-effort */ });
     return;

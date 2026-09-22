@@ -11,6 +11,7 @@ import { redactDeep } from "../org/ingest/redact.js";
 import { scrubPii } from "../org/ingest/pii-scrub.js";
 import { markExternalTool } from "../org/policies/tool-log.js";
 import { googleToolAuthHint } from "../org/credentials/google-oauth.js";
+import { microsoftToolAuthHint } from "../org/credentials/microsoft-oauth.js";
 import { resolveProxyBearer, resolveOAuthMemberSecret } from "../org/credentials/oauth-proxy-auth.js";
 import { channelSystemOf, channelPreCheck, channelPostFilter } from "../org/channels/channel-enforce.js";
 import { resolveUser, requireScope, type LivelyUser } from "../context.js";
@@ -79,22 +80,61 @@ export interface ProxyResult { status: number; body: string; truncated: boolean;
 //   ③ 치환 후 최종 URL 의 origin + 고정 prefix 를 템플릿과 대조 — ①② 를 빠져나간 무엇이 있어도 여기서 걸린다.
 const URL_PLACEHOLDER_RE = /\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
-/** 이 URL 이 경로 자리표시를 쓰는가(저장 검증·등록 경로가 묻는다). */
+/** 이 URL 이 자리표시를 쓰는가(저장 검증·등록 경로가 묻는다). 경로·쿼리 자리 모두. */
 export function urlTemplateKeys(rawUrl: string): string[] {
   return [...String(rawUrl ?? "").matchAll(URL_PLACEHOLDER_RE)].map((m) => m[1]);
 }
 
+/** 경로(`?` 앞) 자리표시만 — 이 자리는 **반드시** 채워져야 한다(assertHttpToolPreset 이 required 를 강제한다). */
+export function urlPathTemplateKeys(rawUrl: string): string[] {
+  const s = String(rawUrl ?? "");
+  const q = s.indexOf("?");
+  return urlTemplateKeys(q >= 0 ? s.slice(0, q) : s);
+}
+
+// ── 쿼리 값 자리표시(#4211) ──────────────────────────────────────────────────────────────────
+//  왜 필요한가: Microsoft Graph 는 쿼리 이름이 `$search`·`$filter`·`$top` 이다(v1.0 은 `$` 를 뗄 수 없다 — "always include $").
+//   그런데 도구 인자(속성) 이름엔 `$` 를 쓸 수 없다 — Claude API 는 속성 이름을 `^[a-zA-Z0-9_.-]{1,64}$` 로 제한하고, 한 도구라도
+//   어기면 요청이 통째로 거부된다(= 그 세션의 도구가 전부 사라진다). 매핑 계층도 없다(프리셋 머리말 ①). 그래서 관리자가 URL 에 `$search=%22{q}%22` 처럼
+//   **값 자리**를 뚫어 두면 인자가 그 값만 채우게 한다.
+//  규칙 셋:
+//   ① 값은 encodeURIComponent — `&`·`=`·`#`·`?`·`/` 가 전부 인코딩돼 **다른 쿼리를 보태거나 경로로 새지 못한다**.
+//      공백은 %20 이다(URLSearchParams 의 `+` 가 아니다 — Graph 는 RFC 3986 인코딩을 요구한다).
+//   ② 인자가 없으면 그 `이름=값` 쌍을 **통째로 뺀다**(쿼리 자리는 선택 인자다 — 필수 여부는 input_schema 가 정한다).
+//   ③ 쿼리 자리를 쓴 키는 소비된 것으로 친다 — 뒤에서 같은 이름으로 한 번 더 붙지 않는다.
+function fillQueryTemplate(query: string, args: Record<string, unknown>, consumed: Set<string>): string {
+  if (!query) return "";
+  const out: string[] = [];
+  for (const pair of query.replace(/^\?/, "").split("&")) {
+    const ks = urlTemplateKeys(pair);
+    if (ks.length === 0) { if (pair) out.push(pair); continue; }
+    for (const k of ks) consumed.add(k);
+    const ok = ks.every((k) => {
+      const v = args?.[k];
+      return (typeof v === "string" && v !== "") || (typeof v === "number" && Number.isFinite(v));
+    });
+    if (!ok) continue; // ② 없으면 쌍째 뺀다
+    out.push(pair.replace(URL_PLACEHOLDER_RE, (_m, key: string) => encodeURIComponent(String(args[key]))));
+  }
+  return out.length ? `?${out.join("&")}` : "";
+}
+
 /**
  * 템플릿 URL + 인자 → 최종 URL. 자리표시가 없으면 종전과 완전히 동일하게 동작한다(무회귀).
- *  consumed = 경로로 소비된 키 — 호출자는 이 키를 query/body 에 **다시 싣지 않는다**(중복 방지).
+ *  consumed = 템플릿이 소비한 키 — 호출자는 이 키를 query/body 에 **다시 싣지 않는다**(중복 방지).
+ *  경로 자리는 필수(없으면 던진다), 쿼리 값 자리는 선택(없으면 그 쌍을 뺀다 — fillQueryTemplate).
  */
 export function applyUrlTemplate(rawUrl: string, args: Record<string, unknown>): { url: URL; consumed: Set<string> } {
   const consumed = new Set<string>();
   const keys = urlTemplateKeys(rawUrl);
   if (keys.length === 0) return { url: new URL(rawUrl), consumed }; // 자리표시 없음 — 종전 경로
 
-  const fixedPrefix = rawUrl.slice(0, rawUrl.indexOf("{")); // 첫 자리표시 앞까지는 어떤 인자로도 바뀌지 않아야 한다
-  const filled = rawUrl.replace(URL_PLACEHOLDER_RE, (_m, key: string) => {
+  const qAt = rawUrl.indexOf("?");
+  const pathPart = qAt >= 0 ? rawUrl.slice(0, qAt) : rawUrl;
+  const queryPart = qAt >= 0 ? rawUrl.slice(qAt) : "";
+  const phAt = pathPart.indexOf("{");
+  const fixedPrefix = phAt >= 0 ? pathPart.slice(0, phAt) : pathPart; // 첫 경로 자리표시 앞까지는 어떤 인자로도 바뀌지 않아야 한다
+  const filledPath = pathPart.replace(URL_PLACEHOLDER_RE, (_m, key: string) => {
     const raw = args?.[key];
     if (raw === undefined || raw === null || (typeof raw !== "string" && typeof raw !== "number")) {
       throw new Error(`경로 인자 '${key}' 가 필요합니다`);
@@ -106,8 +146,8 @@ export function applyUrlTemplate(rawUrl: string, args: Record<string, unknown>):
     return encodeURIComponent(v);
   });
 
-  const url = new URL(filled);
-  const base = new URL(rawUrl.replace(URL_PLACEHOLDER_RE, "x")); // 템플릿의 origin(자리표시를 무해한 값으로 채워 파싱)
+  const url = new URL(filledPath + fillQueryTemplate(queryPart, args ?? {}, consumed));
+  const base = new URL(pathPart.replace(URL_PLACEHOLDER_RE, "x")); // 템플릿의 origin(자리표시를 무해한 값으로 채워 파싱)
   // ③ 최종 대조 — origin 이 그대로이고 고정 prefix 가 살아 있어야 한다(정규화로 경로가 깎이면 여기서 걸린다).
   if (url.origin !== base.origin) throw new Error("경로 인자가 대상 호스트를 바꾸려 했습니다");
   if (!`${url.origin}${url.pathname}`.startsWith(fixedPrefix)) throw new Error("경로 인자가 고정 경로를 벗어나려 했습니다");
@@ -193,7 +233,7 @@ export async function runHttpProxyTool(tool: OrgTool, args: Record<string, unkno
     if (!resolved || !resolved.secret) {
       // 구글은 붙여넣기 경로를 없앴으므로(#1881) 그쪽으로 안내하면 사람이 갈 곳이 없다 — 눌러야 할 버튼을 말해 준다.
       throw new Error(
-        googleToolAuthHint(tool.auth_kind, null) ??
+        googleToolAuthHint(tool.auth_kind, null) ?? microsoftToolAuthHint(tool.auth_kind, null) ??
         `자격 없음 — 이 툴은 '${tool.auth_kind}' 자격이 필요합니다. ` +
         (allowFallback ? "개인 자격을 '내 자격'(me_credential_set)에 등록하거나 관리자에게 통합 자격 설정을 요청하세요."
                        : "이 등급(L2/집행)은 개인 자격이 필수입니다 — '내 자격'(me_credential_set)에 등록하세요."),
@@ -202,7 +242,8 @@ export async function runHttpProxyTool(tool: OrgTool, args: Record<string, unkno
     // ⚠ 슬롯은 잡혔는데 그 동의에 이 서비스 범위가 없으면 호출해 봐야 상류 403 이다. 그 403 은 화면에
     //  "권한 없음"으로만 보여서 **무엇을 눌러야 하는지**가 안 나온다 — 여기서 미리 끊고 다음 행동을 말한다.
     //  범위를 모르면(meta.scope 없음) 막지 않는다: 모르는 것으로 사람을 막는 쪽이 더 비싸다.
-    const scopeHint = googleToolAuthHint(tool.auth_kind, String(resolved.meta?.scope ?? ""));
+    const scopeHint = googleToolAuthHint(tool.auth_kind, String(resolved.meta?.scope ?? ""))
+      ?? microsoftToolAuthHint(tool.auth_kind, String(resolved.meta?.scope ?? ""), tool.name);
     if (scopeHint) throw new Error(scopeHint);
     // OAuth 자격이면 묶음에서 access token 을 뽑고(만료면 갱신) 그것만 싣는다(#1654). 정적 토큰은 그대로 통과.
     // ⚠ tool.auth_kind 가 아니라 **실제로 잡힌 슬롯의 kind** 를 넘긴다 — 별칭으로 통합 슬롯이 잡혔는데

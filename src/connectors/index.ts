@@ -12,6 +12,7 @@ import { figmaConnector } from "./figma.js";
 import { githubConnector } from "./github.js";
 import { gitlabConnector } from "./gitlab.js";
 import { linearConnector } from "./linear.js";
+import { outlookConnector } from "./outlook.js";
 
 export const connectors: Record<string, Connector> = {
   slack: slackConnector,
@@ -26,4 +27,5 @@ export const connectors: Record<string, Connector> = {
   github: githubConnector,   // 이슈·PR 대화·릴리스 → source (#2247) — 범위는 저장소 목록([GitHub 연결]에서 고른 것이 기본)
   gitlab: gitlabConnector,   // 이슈·MR 대화·릴리스 → source (#2247) — 개인 토큰(read_api)만, 호스트 축(self-managed)
   linear: linearConnector,   // 이슈·댓글·문서 → source (#2247) — 라이블리 Linear 앱 토큰(linear_app), GraphQL
+  outlook: outlookConnector, // 메일 → source(email) (#4211) — [Outlook 연결](microsoft_oauth) 토큰, Graph v1.0
 };

@@ -14,7 +14,7 @@ import { tenantContextMiddleware } from "./org/tenant-middleware.js";
 import { outboxRequestSweepMiddleware } from "./sessions/outbox-request-sweep.js";
 import { lookupWorkspace, workspaceForSession } from "./org/tenancy/registry.js";
 import { setToolCandidates } from "./mcp/mcp-surface.js";
-import { finishConsent, abandonConsent } from "./org/credentials/oauth-broker.js";
+import { finishConsent, abandonConsent, describeMicrosoftConsentError, MICROSOFT_ADMIN_STATE } from "./org/credentials/oauth-broker.js";
 import { parseInstallCallback } from "./org/credentials/github-app.js";
 import { buildInstallBundle } from "./org/delivery/publish.js";
 import { domainmapWebhookRouter } from "./domainmap/webhook.js";
@@ -220,12 +220,23 @@ app.get("/install", auth, async (_req, res) => {
 //  보안은 서명된 state(HMAC·만료·멤버 귀속)가 담보한다 — 위조 불가 → 타인 vault 에 토큰 주입 불가. finishConsent 가 검증·교환·저장.
 //  #2232 — 성공 페이지는 **원래 탭이 곧바로 알게** 신호를 쏜다(BroadcastChannel 'lively-connect', 같은 출처의 온보딩·외부 앱 연결
 //   화면이 듣는다). 이 창은 [허용]을 누르느라 열린 새 탭이라 «이제 뭘 하지?» 가 되기 쉽다 — 돌아가라고 글로 말한다.
-const oauthPage = (msg: string, ok = false): string =>
-  `<!doctype html><meta charset="utf-8"><title>Lively 커넥터</title><body style="font-family:system-ui;max-width:34rem;margin:4rem auto;padding:0 1rem;line-height:1.6"><h2>Lively 커넥터</h2><p>${String(msg).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] as string))}</p>${ok ? '<p style="color:#666">처음 설정이나 [외부 앱 연결] 화면에서 시작하셨다면 이 창을 닫고 원래 탭으로 돌아가세요. 거기 화면이 «연결됨» 으로 저절로 바뀝니다.</p><script>try{var b=new BroadcastChannel("lively-connect");b.postMessage({ok:true});b.close()}catch(e){}</script>' : ''}</body>`;
+const escHtml = (s: string): string => String(s).replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c] as string));
+//  link — 사람이 **다음에 보낼 주소**(#4211 Outlook 관리자 허용 링크). 우리가 만든 https 주소만 오지만 그래도 이스케이프하고 https 만 받는다.
+const oauthPage = (msg: string, ok = false, link?: { label: string; href: string } | null): string =>
+  `<!doctype html><meta charset="utf-8"><title>Lively 커넥터</title><body style="font-family:system-ui;max-width:34rem;margin:4rem auto;padding:0 1rem;line-height:1.6"><h2>Lively 커넥터</h2><p>${escHtml(msg)}</p>${link && /^https:\/\//.test(link.href) ? `<p><b>${escHtml(link.label)}</b><br><a href="${escHtml(link.href)}" style="word-break:break-all">${escHtml(link.href)}</a></p>` : ''}${ok ? '<p style="color:#666">처음 설정이나 [외부 앱 연결] 화면에서 시작하셨다면 이 창을 닫고 원래 탭으로 돌아가세요. 거기 화면이 «연결됨» 으로 저절로 바뀝니다.</p><script>try{var b=new BroadcastChannel("lively-connect");b.postMessage({ok:true});b.close()}catch(e){}</script>' : ''}</body>`;
 app.get("/oauth/callback", async (req, res) => {
   const q = req.query as Record<string, string | undefined>;
+  //  #4211 — Microsoft «조직 전체 허용»(adminconsent)에서 돌아온 관리자. code 가 없고 아무것도 저장하지 않는다 —
+  //   허용은 Microsoft 쪽(그 회사 테넌트)에 기록됐고, 구성원은 이제 [Outlook 연결]에서 막히지 않는다.
+  if (q.admin_consent !== undefined || q.state === MICROSOFT_ADMIN_STATE) {
+    if (q.error) return res.status(400).send(oauthPage(`조직 전체 허용이 끝나지 않았습니다 — ${q.error}${/AADSTS\d+/.exec(String(q.error_description ?? ""))?.[0] ? ` (${/AADSTS\d+/.exec(String(q.error_description))![0]})` : ""}. 전역 관리자·클라우드 앱 관리자 계정으로 다시 열어 주세요.`));
+    return res.send(oauthPage("조직 전체 허용이 끝났습니다 — 이제 이 회사 사람들이 라이블리 [외부 앱 연결 ▸ Outlook]에서 [Outlook 연결]을 누르면 바로 연결됩니다. 이 창은 닫아도 됩니다."));
+  }
   if (q.error) {
+    //  Microsoft 연결이면 «관리자 허용이 먼저»인지 가려 **다음 한 걸음**(관리자에게 보낼 링크)을 함께 준다.
+    const ms = q.state ? await describeMicrosoftConsentError(String(q.state), q.error, q.error_description).catch(() => null) : null;
     if (q.state) await abandonConsent(String(q.state)).catch(() => { /* best-effort 정리 */ }); // 거부 시 임시 PKCE verifier 정리(리뷰 #1)
+    if (ms) return res.status(400).send(oauthPage(ms.text, false, ms.adminLink ? { label: "회사 관리자에게 보낼 «조직 전체 허용» 링크", href: ms.adminLink } : null));
     return res.status(400).send(oauthPage(`인증이 거부되었습니다: ${q.error}`));
   }
   if (!q.code || !q.state) return res.status(400).send(oauthPage("code 또는 state 가 없습니다."));

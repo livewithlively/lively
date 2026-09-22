@@ -8,6 +8,7 @@
 //  탭에 있으면 그 탭으로 간다(한 세션 = 한 탭). Alt+클릭 = 새 탭에서 열기.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
 import { renderOnboarding, onboardingDone, markWelcomeSeen } from './onboarding.js'; // #/welcome 처음 설정(#1813·#2171)
+import { outlookAdminConsentBox } from './outlook-admin.js';   // #4211 — 관리자 허용에 막힌 복귀 화면의 다음 한 걸음
 import { $view, api, el, state, takeShellSwitch, toast } from '../core.js';
 import { EMBEDDED } from './embed.js';   // #1898 — 끼워 넣은 판은 셸 전환 도장을 소비하지 않는다
 import { deviceStore, onShellPrefsAdopted, shellPrefStore, shellPrefsPush, shellPrefsSync } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버
@@ -242,13 +243,16 @@ const PROJ_TTL_MS = 5 * 60 * 1000;
 
 /** OAuth 릴레이에서 돌아온 탭 한 장(#2232) — 셸 없이, 코어 /oauth/callback 페이지와 **같은 생김새**(원준님: "이거 참고하면 될듯").
  *  결과 한 줄 + «이 창을 닫고 원래 탭으로» 한 마디뿐이다. 원래 탭은 신호(BroadcastChannel)로 이미 «연결됨» 으로 바뀌고 있다. */
-function renderRelayLanding(root: HTMLElement, l: { app: string; label: string; ok: boolean; err: string }): void {
+function renderRelayLanding(root: HTMLElement, l: { app: string; label: string; ok: boolean; err: string; admin?: boolean }): void {
   root.className = 'v2-relay-landing';
   root.replaceChildren(el('div', { class: 'v2-relay-page', role: 'status' },
     el('h2', { text: 'Lively 커넥터' }),
     el('p', { text: l.ok ? `연결이 완료되었습니다 — ${l.label}. 이 창을 닫아도 됩니다.` : `연결에 실패했습니다: ${l.err}` }),
+    //  #4211 — 회사 계정이 관리자 허용에 막혔다. «다시 시도»로는 영영 안 풀린다 — 관리자에게 보낼 링크가 곧 다음 한 걸음이다.
+    ...(l.admin && l.app === 'outlook' ? [outlookAdminConsentBox(null, { strong: true })] : []),
     el('p', { class: 'v2-relay-sub', text: l.ok
       ? '처음 설정이나 «외부 앱 연결» 화면에서 시작하셨다면 이 창을 닫고 원래 탭으로 돌아가세요. 거기 화면이 «연결됨» 으로 저절로 바뀝니다.'
+      : l.admin ? '관리자가 허용한 뒤 원래 탭의 «외부 앱 연결»에서 [Outlook 연결]을 한 번 더 누르세요.'
       : '원래 탭으로 돌아가 «외부 앱 연결»에서 다시 시도해 주세요.' })));
 }
 
@@ -271,8 +275,8 @@ export async function bootV2(): Promise<void> {
   {
     const q = new URLSearchParams(location.search);
     let seen = false;
-    let landing: { app: string; label: string; ok: boolean; err: string } | null = null;
-    for (const [app, label] of [['slack', 'Slack'], ['notion', '노션']] as const) {
+    let landing: { app: string; label: string; ok: boolean; err: string; admin?: boolean } | null = null;
+    for (const [app, label] of [['slack', 'Slack'], ['notion', '노션'], ['outlook', 'Outlook']] as const) {
       if (q.get(app) === 'ok') {
         seen = true; landing = { app, label, ok: true, err: '' };
         //  #2232 — 이 탭은 [허용]을 누르느라 열린 **새 탭**이다. 원래 탭(처음 설정·외부 앱 연결)이 곧바로 알게 신호를
@@ -281,8 +285,9 @@ export async function bootV2(): Promise<void> {
         try { const bc = new BroadcastChannel('lively-connect'); bc.postMessage({ app, ok: true }); bc.close(); } catch (_) { /* 미지원 */ }
       }
       const err = q.get(`${app}_error`);
-      if (err) { seen = true; landing = { app, label, ok: false, err }; }
-      q.delete(app); q.delete(`${app}_error`);
+      //  #4211 — CP 가 «회사 관리자 허용이 먼저»라고 가려 준 실패(outlook_admin=1). 복귀 화면이 다음 한 걸음(관리자 링크)을 보여 준다.
+      if (err) { seen = true; landing = { app, label, ok: false, err, admin: q.get(`${app}_admin`) === '1' }; }
+      q.delete(app); q.delete(`${app}_error`); q.delete(`${app}_admin`);
     }
     if (seen) { const rest = q.toString(); history.replaceState(null, '', location.pathname + (rest ? `?${rest}` : '') + location.hash); }
     //  #2232 — 돌아온 탭은 **셸을 통째로 띄우지 않는다.** «연결이 끝났어요 · 이 탭은 닫고 원래 탭으로» 한 장만 보인다

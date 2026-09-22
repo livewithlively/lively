@@ -10,7 +10,7 @@ import {
   HTTP_TOOL_PRESETS, assertHttpToolPreset, httpToolPresetToInput, httpToolPresetHosts,
   type HttpToolPresetGroup, type HttpToolPreset,
 } from "./http-tool-presets.js";
-import { urlTemplateKeys, buildProxyRequest } from "../../mcp/dynamic-tools.js";
+import { urlTemplateKeys, urlPathTemplateKeys, buildProxyRequest } from "../../mcp/dynamic-tools.js";
 import { channelToolKind } from "../channels/channel-guard.js";
 
 let pass = 0;
@@ -19,7 +19,7 @@ const all: Array<[HttpToolPresetGroup, HttpToolPreset]> = HTTP_TOOL_PRESETS.flat
 
 t("프리셋이 비어 있지 않다(배선 단언 — 비면 아래 순회가 통째로 vacuous)", () => {
   assert.ok(all.length >= 8, `도구가 너무 적다(${all.length})`);
-  assert.deepEqual(HTTP_TOOL_PRESETS.map((g) => g.key).sort(), ["figma", "github", "gitlab", "google-calendar", "google-drive", "google-gmail", "slack"]);
+  assert.deepEqual(HTTP_TOOL_PRESETS.map((g) => g.key).sort(), ["figma", "github", "gitlab", "google-calendar", "google-drive", "google-gmail", "outlook", "slack"]);
 });
 
 t("전 프리셋이 자기검증을 통과한다(스키마 위생·scope·https·호스트·경로 인자)", () => {
@@ -42,13 +42,14 @@ t("금고 슬롯이 A 어댑터와 같다 — 이미 연결한 멤버는 재로�
   //  재입력 없이 즉시 도구를 얻는 게 이 묶음의 목적이라서다(#1881 G4). 나중에 OAuth 가 붙어도 같은 슬롯에 토큰 묶음을
   //  저장하면 oauth-proxy-auth 가 묶음/정적을 알아서 가른다.
   // figma 는 OAuth 가 아니라 PAT 슬롯(figma_token)이다 — A 어댑터에 대응 서버가 없으므로(레인 C) 승계할 연결도 없다.
-  assert.deepEqual(kinds, ["figma_token", "github_pat", "gitlab_pat", "google_calendar_oauth", "google_drive_oauth", "google_gmail_oauth", "slack_oauth"]);
+  // microsoft_oauth(#4211) 는 A 어댑터가 없다 — 승계할 옛 연결이 없고 [Outlook 연결] 직결 슬롯 그대로다.
+  assert.deepEqual(kinds, ["figma_token", "github_pat", "gitlab_pat", "google_calendar_oauth", "google_drive_oauth", "google_gmail_oauth", "microsoft_oauth", "slack_oauth"]);
   for (const [g] of all) assert.equal(httpToolPresetToInput(g, g.tools[0]).auth_scope_key, "", "scope_key 가 다르면 다른 금고 행을 본다");
 });
 
 t("메일·드라이브는 PII 스크럽이 켜져 있다", () => {
   for (const [g, tool] of all) {
-    if (g.key === "google-drive" || g.key === "google-gmail") {
+    if (g.key === "google-drive" || g.key === "google-gmail" || g.key === "outlook") {
       assert.equal(tool.pii_scrub, true, `${tool.name} 의 pii_scrub 가 꺼져 있다 — 메일·드라이브는 PII 덩어리다`);
     }
   }
@@ -106,7 +107,8 @@ t("응답 크기 방어 — 목록 계열은 개수 상한이나 필드 제한�
       }
       // 상한을 뜻하는 파라미터 이름은 상류마다 다르다 — 구글 pageSize/maxResults·슬랙 limit/count·GitHub·GitLab per_page.
       //  가드가 보는 것은 '이름'이 아니라 '상한이 URL 에 박혀 있는가' 다.
-      const capped = ["pageSize", "maxResults", "fields", "limit", "count", "per_page"].some((k) => q.has(k));
+      //  Microsoft Graph 는 OData 이름 `$top`(#4211 Outlook).
+      const capped = ["pageSize", "maxResults", "fields", "limit", "count", "per_page", "$top"].some((k) => q.has(k));
       assert.ok(capped, `${tool.name} 에 개수·필드 상한이 없다`);
     }
   }
@@ -114,7 +116,7 @@ t("응답 크기 방어 — 목록 계열은 개수 상한이나 필드 제한�
 
 t("경로 자리표시가 있는 도구는 실제로 조립된다 — 인자를 주면 그 자리가 채워진다", () => {
   for (const [, tool] of all) {
-    const keys = urlTemplateKeys(tool.url);
+    const keys = urlPathTemplateKeys(tool.url); // 쿼리 값 자리(#4211)는 경로에 안 들어간다 — 아래 Outlook 행이 따로 본다
     if (keys.length === 0) continue;
     const args = Object.fromEntries(keys.map((k) => [k, "ID-1"]));
     const { url } = buildProxyRequest(tool.url, tool.method ?? "GET", args);
@@ -133,7 +135,7 @@ t("URL 기본값은 인자가 덮어쓴다 — 안 주면 기본값이 산다", 
 t("허용 호스트 목록 — 이게 url_allowlist 에 들어가야 도구가 동작한다", () => {
   //  ⚠ 이 목록이 늘면 **매니지드 신규 테넌트의 url_allowlist 에도 함께 들어가야 한다** — 도구를 심어도 allowlist 가
   //   비어 있으면 전부 차단된다(슬랙 T10 #1993 이 잡은 함정). 여기 배열이 그 사실을 눈에 띄게 만드는 자리다.
-  assert.deepEqual(httpToolPresetHosts(), ["api.figma.com", "api.github.com", "gitlab.com", "gmail.googleapis.com", "slack.com", "www.googleapis.com"]);
+  assert.deepEqual(httpToolPresetHosts(), ["api.figma.com", "api.github.com", "gitlab.com", "gmail.googleapis.com", "graph.microsoft.com", "slack.com", "www.googleapis.com"]);
 });
 
 t("자기검증이 실제로 잡는다 — 경로 인자가 required 가 아니면 거부", () => {
@@ -151,6 +153,54 @@ t("자기검증이 실제로 잡는다 — 경로 인자가 required 가 아니�
     name: "x", title: "x", description: "x", pii_scrub: true,
     url: "http://www.googleapis.com/x", input_schema: { type: "object", properties: {} },
   }), "http 를 통과시켰다");
+});
+
+// ── #4211 Outlook(Microsoft Graph) — spec D 표 R1~R3 ─────────────────────────────────────────────────
+const outlook = HTTP_TOOL_PRESETS.find((g) => g.key === "outlook")!;
+const byOutlook = new Map(outlook.tools.map((x) => [x.name, x] as const));
+
+t("R1 Outlook 묶음 — microsoft_oauth 슬롯·graph 호스트·전부 읽기(L0)·PII 스크럽", () => {
+  assert.equal(outlook.auth_kind, "microsoft_oauth", "[Outlook 연결]이 저장하는 슬롯과 같아야 연결 즉시 도구가 돈다");
+  assert.deepEqual(outlook.hosts, ["graph.microsoft.com"]);
+  for (const tool of outlook.tools) {
+    const row = httpToolPresetToInput(outlook, tool);
+    assert.equal(row.level, "L0", `${tool.name} — 동의 범위가 읽기뿐인데 쓰기 등급이면 거짓말이다`);
+    assert.equal(row.pii_scrub, true, `${tool.name} — 메일·일정은 PII 덩어리다`);
+    assert.ok(tool.name.startsWith("outlook_"));
+  }
+  assert.deepEqual([...byOutlook.keys()].sort(), ["outlook_calendar_events", "outlook_mail_folders", "outlook_mail_list", "outlook_mail_message", "outlook_mail_search", "outlook_mail_thread"]);
+});
+
+t("R2 ★ 모든 인자가 URL 자리표시다 — 남는 인자가 있으면 URLSearchParams 가 쿼리를 다시 써 공백이 + 가 된다", () => {
+  for (const tool of outlook.tools) {
+    const props = Object.keys((tool.input_schema.properties ?? {}) as object).sort();
+    assert.deepEqual([...urlTemplateKeys(tool.url)].sort(), props, `${tool.name}: 자리표시와 인자 목록이 다르다`);
+    for (const k of props) assert.ok(/^[A-Za-z0-9_.-]{1,64}$/.test(k), `${tool.name}.${k} — 도구 인자 이름 규칙 밖(한 도구라도 어기면 세션 도구 전체가 거부된다)`);
+  }
+});
+
+t("R3 조립 결과가 Graph 규칙에 맞는다 — $search 는 따옴표로 감싸고, 정렬은 같은 속성이 필터 앞에", () => {
+  const u = (name: string, args: Record<string, unknown>): URL => buildProxyRequest(byOutlook.get(name)!.url, "GET", args).url;
+  const s = u("outlook_mail_search", { q: "from:kim@contoso.com 견적" });
+  assert.equal(s.searchParams.get("$search"), '"from:kim@contoso.com 견적"');
+  assert.ok(!s.search.includes("+"), "공백이 + 로 나갔다");
+  assert.ok(Number(s.searchParams.get("$top")) <= 50);
+  assert.ok(!(s.searchParams.get("$select") ?? "").split(",").includes("body"), "목록에 본문을 실으면 256KiB 를 바로 넘는다");
+  const l = u("outlook_mail_list", { folder: "inbox" });
+  assert.equal(l.pathname, "/v1.0/me/mailFolders/inbox/messages");
+  assert.equal(l.searchParams.get("$orderby"), "receivedDateTime desc");
+  assert.equal(l.searchParams.get("$filter"), null, "$filter 없이 $orderby 만 — InefficientFilter 규칙 밖");
+  const th = u("outlook_mail_thread", { conversationId: "AAQkAGI2=" });
+  assert.equal(th.searchParams.get("$filter"), "conversationId eq 'AAQkAGI2='");
+  assert.equal(th.searchParams.get("$orderby"), null, "conversationId 필터에 receivedDateTime 정렬을 붙이면 Graph 가 InefficientFilter 로 거부한다");
+  const m = u("outlook_mail_message", { id: "AAk/+=" });
+  assert.equal(m.pathname, "/v1.0/me/messages/AAk%2F%2B%3D", "id 의 / 가 경로를 쪼개면 다른 리소스를 때린다");
+  assert.ok((m.searchParams.get("$select") ?? "").split(",").includes("body"));
+  const c = u("outlook_calendar_events", { startDateTime: "2026-09-22T00:00:00+09:00", endDateTime: "2026-09-29T00:00:00+09:00" });
+  assert.equal(c.pathname, "/v1.0/me/calendarView");
+  assert.equal(c.searchParams.get("startDateTime"), "2026-09-22T00:00:00+09:00");
+  assert.equal(c.searchParams.get("$orderby"), "start/dateTime");
+  assert.equal(u("outlook_mail_folders", {}).pathname, "/v1.0/me/mailFolders");
 });
 
 console.log(`\nhttp-tool-presets: ${pass} passed`);
