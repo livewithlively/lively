@@ -18,7 +18,7 @@ import { type ProjectNameSource } from "./project-name.js";
 // 쓰기 경로 임베딩 비동기화(#1053) — 저장/수정 시 인라인 임베딩 대신 pending 마킹 후 백그라운드 스윕에 위임(knowledge 와 동형).
 import { markEmbeddingPending, PROJECT_TARGET } from "./embedding-backfill.js";
 import {
-  type GrepPlan, parseGrep, grepWhere, idEquals, grepExec, grepSnippet, previewBody, RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
+  type GrepPlan, parseGrep, grepWhere, idEquals, exactFirst, grepExec, grepSnippet, previewBody, RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
 } from "./search-util.js";
 
 // 세션·폴더 바인딩(#1313 R21) — 구현은 project-session-store.ts 로 분리(터미널 척추가 PM 스토어 전체를 안 끌게).
@@ -1199,8 +1199,9 @@ export async function searchProjects(qstr: string, opts: ProjectSearchOpts = {})
   const { result: rows, plan } = await grepExec(qstr, async (p) => {
     const params: unknown[] = [];
     const where = projectGrepWhere(p, opts, params, visIds, qstr);
+    const first = exactFirst("p.id", qstr, "id", params);   // 번호의 주인이 LIMIT 에 잘리지 않게(exactFirst 주석)
     params.push(Math.min(opts.limit ?? 20, 100));
-    return q(itemsPool, `SELECT ${sel} FROM project p WHERE ${where} ORDER BY p.updated_at DESC LIMIT $${params.length}`, params);
+    return q(itemsPool, `SELECT ${sel} FROM project p WHERE ${where} ORDER BY ${first}p.updated_at DESC LIMIT $${params.length}`, params);
   });
   return rows.map((r) => {
     const base = toProjectRow(r);
@@ -1249,10 +1250,12 @@ async function rrfSearchProjects(qstr: string, qvec: number[], opts: ProjectSear
   params.push(HYBRID_CANDIDATES); const candP = `$${params.length}`;
   params.push(RRF_K); const kP = `$${params.length}`;
   params.push(limit); const limP = `$${params.length}`;
+  //  번호 지목이면 그 행을 후보 자르기 전·최종 정렬 모두에서 맨 앞에(exactFirst 주석 — 같은 이유로 RRF 합산에서도 밀린다).
+  const first = exactFirst("p.id", qstr, "id", params);
   const sql = `
     WITH lex AS (
-      SELECT p.id, row_number() OVER (ORDER BY p.updated_at DESC) AS rank
-      FROM project p WHERE ${lexWhere} ORDER BY p.updated_at DESC LIMIT ${candP}
+      SELECT p.id, row_number() OVER (ORDER BY ${first}p.updated_at DESC) AS rank
+      FROM project p WHERE ${lexWhere} ORDER BY ${first}p.updated_at DESC LIMIT ${candP}
     ),
     vec AS (
       SELECT p.id, row_number() OVER (ORDER BY p.embedding_vector <=> ${qp}) AS rank
@@ -1266,7 +1269,7 @@ async function rrfSearchProjects(qstr: string, qvec: number[], opts: ProjectSear
     SELECT ${sel}, f.score::float8 AS score
     FROM fused f JOIN project p ON p.id=f.id
     WHERE ${listIdPredicate(PROJECT_ROW_LIST_ID_SQL, visIds ?? null)}
-    ORDER BY f.score DESC LIMIT ${limP}`;
+    ORDER BY ${first}f.score DESC LIMIT ${limP}`;
   const rows = await q(itemsPool, sql, params);
   return rows.map((r) => {
     const base = toProjectRow(r);

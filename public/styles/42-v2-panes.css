@@ -115,6 +115,15 @@
 .pn-move:hover .pn-i { color: var(--blue); }
 .pn-move:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 @media (max-width: 600px) { .pn-move { padding: 0 6px; } .pn-move-t { display: none; } }
+/* #4159 — 세션을 보는 중의 문패 = 이름표 한 줄(panes.ts paintDoor 주석). 높이 ~58px → ~38px(세션 머리줄 .sc-head 와 같은 키).
+   제목은 링크 판 그대로 두고 글자만 꼬리표 옆 크기로 — 버튼도 한 치수 작게. */
+.pn-door.in-sess { padding: 4px 16px 4px 20px; min-height: 38px; box-sizing: border-box; }
+.pn-door.in-sess .pn-title { font-size: 14.5px; font-weight: 700; letter-spacing: -.01em; line-height: 1.3; }
+.pn-door.in-sess .pn-title-btn { padding: 1px 8px; gap: 6px; }
+.pn-door.in-sess .pn-title-ic { width: 14px; height: 14px; }
+.pn-door.in-sess .pn-door-l { align-items: center; gap: 8px; }
+.pn-door.in-sess .pn-door-btn { height: 26px; padding: 0 9px; font-size: 12.5px; }
+.pn-door.in-sess .pn-move { height: 22px; }
 .pn-title { margin: 0; min-width: 0; font-size: 25px; font-weight: 800; letter-spacing: -.022em; line-height: 1.22; }
 /* 제목이 다시 왼쪽 끝이다(원준 2026-09-03, 순서 = 이름 › 번호 › 상태) — 링크 판의 좌측 패딩 8px 만큼
    당겨 **글자**가 문패 왼쪽에 딱 맞게 선다(패딩까지 맞추면 글자가 8px 안쪽으로 들어가 보인다). */
@@ -535,6 +544,8 @@
   .pn-pane[data-zone="side"], .pn-body > .v2-split-x, .pn-side-reopen { display: none; }
   .pn-door { padding: 8px 14px; }
   .pn-title { font-size: 19px; }
+  .pn-door.in-sess { padding: 4px 12px 4px 14px; }
+  .pn-door.in-sess .pn-title { font-size: 14.5px; }
 }
 
 /* ── 보관한 세션(#1719 원준 2026-08-20) — 닫아 둔 세션을 되살리는 자리 ── */

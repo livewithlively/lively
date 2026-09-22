@@ -38,6 +38,28 @@ export function idEquals(col: string, q: string, params: unknown[]): string | nu
   return `${col} = $${params.length}`;
 }
 
+/**
+ * 정확일치를 **정렬 맨 앞**에 세우는 ORDER BY 머리(뒤에 콤마까지 붙여 준다) — 아니면 "".
+ *
+ * 왜 WHERE 에 얹는 것(idEquals)만으로 모자란가 — 렉시컬 채널은 `updated_at DESC LIMIT n` 으로 자른다.
+ * 번호가 맞은 행도 그 줄에 같이 서므로, 그 번호를 본문에 **인용한** 더 최근 행이 n 개를 넘으면 정작
+ * 그 번호의 주인이 잘려 나간다(실측 2026-09-22: `2600` 으로 찾으면 #2600 을 언급한 태스크 8건만 오고
+ * #2600 은 안 왔다). 지목한 것이 맞았으면 그건 검색이 아니라 호명이다 — 자르기 전에 맨 앞에 둔다.
+ * kind='id' 는 idEquals 와 같은 규약(정수 · `#` 벗김), kind='name' 은 한 토큰 그대로(소문자) 정확일치.
+ */
+export function exactFirst(col: string, q: string, kind: "id" | "name", params: unknown[]): string {
+  const t = String(q ?? "").trim();
+  if (!t || /\s/.test(t)) return "";
+  if (kind === "id") {
+    const probe: unknown[] = [];
+    if (!idEquals(col, t, probe)) return "";
+    params.push(probe[0]);
+  } else {
+    params.push(t.toLowerCase());
+  }
+  return `(${col} = $${params.length}) DESC NULLS LAST, `;
+}
+
 // cols 중 어느 하나에 매치(OR). regex 는 패턴 1개, tokens 는 토큰마다 (cols OR) 를 AND 로 묶는다. params 에 push 하고 WHERE 절 문자열 반환.
 export function grepWhere(cols: string[], plan: GrepPlan, params: unknown[]): string {
   const colsOr = (placeholder: string) => "(" + cols.map((c) => `${c} ${placeholder}`).join(" OR ") + ")";
