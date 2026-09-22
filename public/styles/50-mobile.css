@@ -162,6 +162,10 @@
   .pn-door-r .pn-door-btn > span { display: none; }   /* 글자는 툴팁으로 — 폰의 문패는 아이콘 둘이다 */
   .pn-door-r .pn-door-btn svg { width: 17px; height: 17px; }
   .pn-door-r .sw-btn { display: none; }
+  /* #4159 — 세션을 보는 중엔 문패를 접는다(원준·상민 2026-09-21 «모바일에서는 화면의 거의 절반» → «안 보이게»).
+     프로젝트는 [☰] 서랍의 목록이 말한다 — 프로젝트 화면은 카드의 [→], 세션 옮기기는 머리줄 [⋯ ▸ 이 세션], 같은 프로젝트의
+     새 세션은 세션 줄 메뉴에 그대로 있다. 세션이 없는 자리(새 세션·프로젝트 첫 화면)의 문패는 그대로 선다. */
+  .pn-door.in-sess { display: none; }
   /* 세션 머리줄·입력은 36-chat.css 의 ≤760 규칙이 맡는다. 대화 여백만 폰에 맞춘다. */
   .livc-list { padding: 12px 12px 8px; }
   .livc-desktop .livc-list { padding: 12px 12px 8px; }
