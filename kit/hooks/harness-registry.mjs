@@ -136,10 +136,26 @@ export const HARNESS = {
       shell: ["Bash"],
       read: ["Read", "Grep", "Glob"],
       skill: ["Skill"],
+      // 서브에이전트를 띄우는 툴 — 기록 fork 인정(#4217)의 matcher. Task 는 같은 툴의 옛 이름이다(2.1.278 -p 의 init
+      //  툴 목록에 Task 가 있고 호출은 Agent 로 온다 — 실측).
+      fork: ["Agent", "Task"],
       // MCP 툴 이름 조합 — matcher 를 문자열로 박지 말고 반드시 이걸로 만든다(하네스마다 형태가 다르다).
       mcp: (server, tool = "") => `mcp__${server}__${tool}`,
       mcpMatcher: (server) => `mcp__${server}__.*`,
     },
+    // 서브에이전트 띄우기 툴콜 → {label, agentId, async} (#4217). 실측(2.1.278, PostToolUse): tool_input.description 이
+    //  사람이 붙인 이름이고, 백그라운드로 뜨면 tool_response 가 곧바로 {isAsync:true, status:"async_launched", agentId} 다.
+    //  동기 실행은 끝난 뒤에야 PostToolUse 가 오므로(그땐 자식의 기록이 이미 끝났다) async 가 아니다.
+    //  응답에 두 필드가 다 없으면(모르는 형태) 입력으로 판단한다 — fork 는 항상 백그라운드다(Agent 툴 정의 원문).
+    forkLaunch: (input, response) => {
+      const r = response && typeof response === "object" ? response : {};
+      const known = "isAsync" in r || "status" in r;
+      const async = known ? (r.isAsync === true || r.status === "async_launched")
+        : (input?.subagent_type === "fork" || input?.run_in_background === true);
+      return { label: String(input?.description ?? ""), agentId: String(r.agentId ?? r.agent_id ?? ""), async };
+    },
+    // SubagentStop 페이로드의 자식 id(실측: agent_id — 위 agentId 와 같은 값).
+    subagentId: (payload) => String(payload?.agent_id ?? ""),
     mcp: { style: "claude-cli" },          // `claude mcp add --transport stdio …`
     autoApprove: { kind: "settings-allow", key: (server, tool) => `mcp__${server}__${tool}` },
     contextEnvelope: "raw",                // SessionStart raw stdout 이 곧 컨텍스트
@@ -175,9 +191,27 @@ export const HARNESS = {
       shell: ["Bash"],
       read: [],                            // 전용 툴 없음(셸로 한다)
       skill: [],                           // Skill 툴 없음 — 스킬은 프롬프트 인라인(#1475 §3 의 tracker 갭 원인)
+      // 서브에이전트 띄우기(#4217) — v1(multi_agent, 기본 켜짐)은 `spawn_agent` 로 정규화되고, v2(multi_agent_v2, 기본 꺼짐)는
+      //  namespace 를 구분자 없이 이어 `collaborationspawn_agent` 가 된다(codex-rs core/src/tools/mod.rs flat_tool_name ·
+      //  registry.rs:799-805 @rust-v0.154.0 — v2 이름은 코드 근거뿐, 실측 아님).
+      fork: ["spawn_agent", "collaborationspawn_agent"],
       mcp: (server, tool = "") => `mcp__${server}__${tool}`,
       mcpMatcher: (server) => `mcp__${server}__.*`,
     },
+    // 서브에이전트 띄우기 툴콜 → {label, agentId, async} (#4217, codex-rs @rust-v0.154.0 코드 근거):
+    //  · spawn 은 자식에 입력만 넣고 곧바로 돌아온다(core/src/agent/control/spawn.rs:772-806) → 항상 async.
+    //  · 이름표 자리 = `message`(v1·v2 공통 평문 과제) — `기록:` 머리를 여기 붙인다. v2 의 task_name 은 [a-z0-9_] 만 받아 못 쓴다.
+    //  · tool_response 는 객체가 아니라 **JSON 문자열**이다 — v1 `{"agent_id","nickname"}` · v2 `{"task_name",…}`(agent_id 없음).
+    //   v2 는 SubagentStop 의 agent_id(스레드 id)와 이을 값이 없어 표시가 TTL 로만 걷힌다(기본 꺼짐이라 감수).
+    forkLaunch: (input, response) => {
+      let r = response;
+      if (typeof r === "string") { try { r = JSON.parse(r); } catch { r = {}; } }
+      r = r && typeof r === "object" ? r : {};
+      return { label: String(input?.message ?? ""), agentId: String(r.agent_id ?? r.task_name ?? ""), async: true };
+    },
+    // SubagentStart/Stop 의 agent_id = 자식 스레드 id(hooks/src/schema.rs:606-622). 자식 턴이 정상 종료될 때 오고,
+    //  중단(abort)엔 안 온다(core/src/session/turn.rs:615-617) — 그 경우 표시는 게이트의 TTL 이 걷는다.
+    subagentId: (payload) => String(payload?.agent_id ?? ""),
     // ⚠ command 는 **문자열**, args 는 배열(0.142.0 실측). 배열을 넣으면 config.toml 전체가 로드 실패한다.
     mcp: { style: "toml-table", commandShape: "string+args" },
     autoApprove: { kind: "toml-approval", key: (_s, tool) => tool },
@@ -234,6 +268,7 @@ export const HARNESS = {
       shell: ["bash"],
       read: ["read", "grep", "glob"],
       skill: ["skill"],                    // Skill 툴이 있다 → codex 에서 못 열던 spec-blind tracker 가 여기선 산다
+      fork: [],                            // task 툴은 자식에게 프롬프트만 넘긴다(부모 이력 없음 — #4201 §2-3) → 기록 fork 대상 아님
       // ⚠ MCP 툴 이름이 `<server>_<tool>` 이다(실측: lively_whoami). `mcp__lively__.*` 는 절대 안 걸린다.
       mcp: (server, tool = "") => `${server}_${tool}`,
       mcpMatcher: (server) => `${server}_.*`,
@@ -299,6 +334,7 @@ export const HARNESS = {
       shell: ["run_command"],
       read: ["view_file", "grep_search", "list_dir"],
       skill: [],                           // 전용 Skill 툴 없음 — 스킬 본문은 view_file(IsSkillFile) 로 읽는다
+      fork: [],                            // invoke_subagent 는 설정 상속이지 대화 상속이 아니다(#4201 §2-4) → 기록 fork 대상 아님
       // ⚠ antigravity 의 MCP 호출은 이름이 전부 `call_mcp_tool` 이고 서버·툴은 args(ServerName/ToolName)에 온다
       //  — 이름 접두어 파싱이 원리적으로 불가하다. **어댑터(antigravity-adapter.mjs)가 args 를 읽어
       //  `mcp__<server>__<tool>`(claude 형)로 정규화한 뒤** 러너에 넘기므로, 표의 mcp 축은 claude 형이다.
@@ -370,6 +406,7 @@ export const HARNESS = {
       shell: ["run_terminal_command"],
       read: ["read_file", "grep", "list_dir"],
       skill: ["skill"],
+      fork: [],                            // spawn_subagent 자식은 자기 컨텍스트로 시작한다(#4201 §2-5) → 기록 fork 대상 아님
       // ⚠ MCP 툴명 = `<server>__<tool>` (mcp__ 접두 **없음** — 실측 lively__whoami). grok 훅 matcher 엔
       //  claude 형 `mcp__…` 재작성이 **없다**(permission rules 전용) — mcp__lively__.* 를 쓰면 영영 안 걸린다.
       mcp: (server, tool = "") => `${server}__${tool}`,
@@ -502,4 +539,42 @@ export function mcpToolName(id, server, full) {
   const prefix = harness(id).tools.mcp(server, "");
   const s = String(full || "");
   return s.startsWith(prefix) ? s.slice(prefix.length) : null;
+}
+
+// ── 기록 fork 인정 (#4217) ─────────────────────────────────────────────────
+// 종료 게이트(stop-writeback-gate)는 «기록이 없으면 세션당 1회 막는다». 그런데 기록을 부모 대화를 물려받은 fork 에
+//  백그라운드로 맡기면, fork 가 아직 쓰는 중에 메인이 턴을 끝내 게이트가 막고 → 메인이 같은 내용을 **중복 기록**한다
+//  (#4201 실측 07:02:06Z). fork 의 쓰기는 부모 세션 id 로 훅에 오므로(실측) 플래그 공유는 문제가 아니고 **순서**가 문제다.
+//  그래서 «기록 fork 가 떠 있다»를 게이트가 알아야 한다. 코딩용 fork 와 가르는 규약 = 사람이 붙이는 이름의 머리
+//  `기록:` (전각 콜론·앞 공백 허용). 기록 묶음 스킬(#4218)이 이 머리를 붙인다.
+export const RECORD_FORK_PREFIX = "기록:";
+export function isRecordForkLabel(label) {
+  return /^\s*기록\s*[:：]/.test(String(label ?? ""));
+}
+
+// 이 툴콜이 «기록 fork 를 백그라운드로 띄웠다»인가 — 맞으면 {agentId}(모르면 빈 문자열), 아니면 null.
+//  동기 실행(끝난 뒤에야 PostToolUse)·이름 없는 fork·fork 축이 빈 하네스는 전부 null 이다.
+export function recordForkLaunch(id, toolName, toolInput, toolResponse) {
+  const h = harness(id);
+  if (typeof h.forkLaunch !== "function" || !(h.tools.fork || []).includes(String(toolName || ""))) return null;
+  const f = h.forkLaunch(toolInput || {}, toolResponse);
+  if (!f || !f.async || !isRecordForkLabel(f.label)) return null;
+  return { agentId: f.agentId || "" };
+}
+
+// SubagentStop 페이로드에서 끝난 자식의 id — 하네스가 모르면 빈 문자열.
+export function subagentIdOf(id, payload) {
+  const h = harness(id);
+  return typeof h.subagentId === "function" ? h.subagentId(payload || {}) : "";
+}
+
+// 기록 fork 진행 중 표시 = **자식마다 파일 하나** `<sid>.writeback-pending.<자식 id>` (work-flag 가 세우고 걷고, 게이트가 읽는다).
+//  한 파일에 줄 목록으로 두면 기록 fork 둘을 한 메시지에서 병렬로 띄울 때 두 훅 프로세스의 «읽고-고쳐-쓰기»가 겹쳐 한쪽
+//  등록이 사라진다(리뷰 지적 — .blocked 를 O_EXCL 로 원자화한 것과 같은 부류). 파일 생성·삭제는 각각 호출 하나라 겹쳐도 안전하다.
+//  자식 id 는 파일 이름에 안전한 글자만 남긴다(codex v2 task_name 은 `/root/x` 처럼 `/` 를 품는다 — 경로 조작 차단).
+export const RECORD_PENDING_FLAG = "writeback-pending";
+export const recordPendingPrefix = (sid) => `${sid}.${RECORD_PENDING_FLAG}.`;   // 끝의 점이 경계 — s1 이 s10 의 표시를 줍지 않는다
+export function recordPendingFileName(sid, childId) {
+  const safe = String(childId || "unknown").replace(/[^A-Za-z0-9._-]/g, (c) => `%${c.codePointAt(0).toString(16)}`).slice(0, 120);
+  return recordPendingPrefix(sid) + safe;
 }
