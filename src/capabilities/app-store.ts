@@ -9,7 +9,9 @@ import type { Capability } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { itemsPool } from "../db/client.js";
 import { getApp } from "../org/store/apps.js";
-import { physicalTableName, assertIdent } from "../apps/store-ddl.js";
+import { qualifiedAppTable, assertIdent, isBuiltinSource, type StoreColumn } from "../apps/store-ddl.js";
+import { appSchemaFor, ensureAppTables } from "../apps/store-schema.js";
+import { logger } from "../log.js";
 
 const qi = (n: string): string => { if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(n)) throw new HttpError(400, `안전하지 않은 식별자: ${n}`); return `"${n}"`; };
 
@@ -20,11 +22,30 @@ function requireAppPrincipal(user: LivelyUser | undefined): string {
 }
 
 // 선언된 테이블만 — 매니페스트 data.tables 에 있는 이름이어야(오타·미생성 테이블 접근 차단).
-async function assertDeclaredTable(appId: string, table: string): Promise<void> {
+//  반환 = 이 요청(테넌트)에서 그 테이블의 인용 relation + 지연 복구에 쓸 선언 목록(#4223).
+interface AppTableTarget { rel: string; schema: string; tables: Array<{ table: string; columns: StoreColumn[] }> }
+async function resolveDeclaredTable(appId: string, table: string): Promise<AppTableTarget> {
   const app = await getApp(appId);
   if (!app) throw new HttpError(404, `앱 없음: ${appId}`);
-  const tables = ((app.manifest as { data?: { tables?: Array<{ name?: string }> } })?.data?.tables ?? []).map((t) => String(t.name));
-  if (!tables.includes(table)) throw new HttpError(404, `선언되지 않은 데이터 테이블: ${table}`);
+  const declared = ((app.manifest as { data?: { tables?: Array<{ name?: string; columns?: StoreColumn[] }> } })?.data?.tables ?? [])
+    .map((t) => ({ table: String(t.name), columns: (t.columns ?? []) as StoreColumn[] }));
+  if (!declared.some((t) => t.table === table)) throw new HttpError(404, `선언되지 않은 데이터 테이블: ${table}`);
+  const schema = appSchemaFor(isBuiltinSource(app.source));
+  return { rel: qualifiedAppTable(schema, appId, table), schema, tables: declared };
+}
+
+// 지연 복구(#4223) — 선언은 있는데 물리 테이블·스키마가 없으면(42P01 undefined_table · 3F000 invalid_schema_name)
+//  그 자리에서 만들고 한 번 재시도한다. 설치 때 DDL 이 실패했던 앱(매니지드의 기본 앱 전부가 그랬다)이 첫 사용에서 스스로 낫는다.
+//  만들기까지 실패하면 ensureAppTables(strict)가 원인을 담은 503 을 던진다 — 종전의 말없는 500 대신.
+async function withTableRepair<T>(appId: string, target: AppTableTarget, run: () => Promise<T>): Promise<T> {
+  try { return await run(); }
+  catch (e) {
+    const code = (e as { code?: unknown })?.code;
+    if (code !== "42P01" && code !== "3F000") throw e;
+    logger.warn({ appId, schema: target.schema, code }, "앱 데이터 테이블이 없어 만든 뒤 재시도합니다");
+    await ensureAppTables(appId, target.tables, { schema: target.schema, strict: true });
+    return run();
+  }
 }
 
 const storeInsert: Capability = {
@@ -37,16 +58,15 @@ const storeInsert: Capability = {
   handler: async (input: Record<string, unknown>, user) => {
     const appId = requireAppPrincipal(user);
     const table = String(input.table ?? "");
-    await assertDeclaredTable(appId, table);
+    const target = await resolveDeclaredTable(appId, table);
     const row = (input.row ?? {}) as Record<string, unknown>;
     const cols = Object.keys(row).map((c) => assertIdent("column", c));
     if (!cols.length) throw new HttpError(400, "삽입할 컬럼이 없습니다");
-    const phys = physicalTableName(appId, table);
     const params = cols.map((_, i) => `$${i + 1}`);
-    const r = await itemsPool.query(
-      `INSERT INTO app.${qi(phys)}(${cols.map(qi).join(",")}) VALUES(${params.join(",")}) RETURNING id`,
+    const r = await withTableRepair(appId, target, () => itemsPool.query(
+      `INSERT INTO ${target.rel}(${cols.map(qi).join(",")}) VALUES(${params.join(",")}) RETURNING id`,
       cols.map((c) => row[c]),
-    );
+    ));
     return { id: r.rows[0]?.id ?? null };
   },
 };
@@ -61,13 +81,13 @@ const storeQuery: Capability = {
   handler: async (input: Record<string, unknown>, user) => {
     const appId = requireAppPrincipal(user);
     const table = String(input.table ?? "");
-    await assertDeclaredTable(appId, table);
-    const phys = physicalTableName(appId, table);
+    const target = await resolveDeclaredTable(appId, table);
     const match = (input.match ?? {}) as Record<string, unknown>;
     const keys = Object.keys(match).map((k) => assertIdent("column", k));
     const where = keys.length ? " WHERE " + keys.map((k, i) => `${qi(k)}=$${i + 1}`).join(" AND ") : "";
     const limit = Math.max(1, Math.min(1000, Math.round(Number(input.limit) || 100)));
-    const r = await itemsPool.query(`SELECT * FROM app.${qi(phys)}${where} ORDER BY id DESC LIMIT ${limit}`, keys.map((k) => match[k]));
+    const r = await withTableRepair(appId, target, () =>
+      itemsPool.query(`SELECT * FROM ${target.rel}${where} ORDER BY id DESC LIMIT ${limit}`, keys.map((k) => match[k])));
     return { rows: r.rows };
   },
 };
@@ -82,18 +102,17 @@ const storeUpdate: Capability = {
   handler: async (input: Record<string, unknown>, user) => {
     const appId = requireAppPrincipal(user);
     const table = String(input.table ?? "");
-    await assertDeclaredTable(appId, table);
+    const target = await resolveDeclaredTable(appId, table);
     const set = (input.set ?? {}) as Record<string, unknown>;
     const match = (input.match ?? {}) as Record<string, unknown>;
     const setCols = Object.keys(set).map((c) => assertIdent("column", c));
     const matchKeys = Object.keys(match).map((k) => assertIdent("column", k));
     if (!setCols.length) throw new HttpError(400, "수정할 컬럼이 없습니다");
     if (!matchKeys.length) throw new HttpError(400, "match 가 필요합니다(전량 수정 방지)");
-    const phys = physicalTableName(appId, table);
     const params: unknown[] = [];
     const setSql = setCols.map((c) => { params.push(set[c]); return `${qi(c)}=$${params.length}`; }).join(",");
     const whereSql = matchKeys.map((k) => { params.push(match[k]); return `${qi(k)}=$${params.length}`; }).join(" AND ");
-    const r = await itemsPool.query(`UPDATE app.${qi(phys)} SET ${setSql} WHERE ${whereSql}`, params);
+    const r = await withTableRepair(appId, target, () => itemsPool.query(`UPDATE ${target.rel} SET ${setSql} WHERE ${whereSql}`, params));
     return { changed: r.rowCount ?? 0 };
   },
 };
@@ -108,13 +127,12 @@ const storeDelete: Capability = {
   handler: async (input: Record<string, unknown>, user) => {
     const appId = requireAppPrincipal(user);
     const table = String(input.table ?? "");
-    await assertDeclaredTable(appId, table);
+    const target = await resolveDeclaredTable(appId, table);
     const match = (input.match ?? {}) as Record<string, unknown>;
     const keys = Object.keys(match).map((k) => assertIdent("column", k));
     if (!keys.length) throw new HttpError(400, "match 가 필요합니다(전량 삭제 방지)");
-    const phys = physicalTableName(appId, table);
     const where = keys.map((k, i) => `${qi(k)}=$${i + 1}`).join(" AND ");
-    const r = await itemsPool.query(`DELETE FROM app.${qi(phys)} WHERE ${where}`, keys.map((k) => match[k]));
+    const r = await withTableRepair(appId, target, () => itemsPool.query(`DELETE FROM ${target.rel} WHERE ${where}`, keys.map((k) => match[k])));
     return { deleted: r.rowCount ?? 0 };
   },
 };
