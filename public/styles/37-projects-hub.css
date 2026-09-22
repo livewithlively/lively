@@ -2,10 +2,11 @@
    37-projects-hub.css — 프로젝트 상세 = 도구 위젯 허브 (#3916, 2026-09-14, 원준 결정)
 
    원안(안 5 「허브」)의 카드 문법(아이콘 타일 30 · 이름 · 수 · 열기 → · 바닥 줄)을 그대로 두고, 카드를 **위젯**으로 만든다.
-    · 격자 3열 × 260px 행(dense) — S 1×1 «한눈» · M 2×1 «목록» · L 2×2 «조작» · XL 3×1 «띠». 크기가 곧 뷰다.
-    · L·XL 은 기존 섹션 렌더러(태스크 표·세션·본문·폴더·지식 흐름·타임라인)를 카드 안에 그대로 앉힌다 — 카드 크롬만 벗긴다.
-    · 배치 편집(안 A): 손잡이(⋮⋮)·숨기기(×)·크기 단추 [S M L XL] · 「＋ 위젯」 슬롯 · 프리셋. 저장은 web/projects/detail-hub.ts.
-    · ≤900px: 한 열, L→M · XL→M 강등(격자 span 만 바뀌고 뷰는 JS 가 고른다).
+    · 격자 3열 × 260px 행(dense). 크기는 가로 --w(1~3) × 세로 --h(1~6) 칸을 자유롭게(#4164) — 크기가 곧 뷰다:
+      1×1 «한눈» · 1×N·2×1 «목록»(줄 수가 h 만큼) · 3×1 «띠» · 2×2 이상 «전체».
+    · «전체»·«띠» 는 기존 섹션 렌더러(태스크 표·세션·본문·폴더·지식 흐름·타임라인)를 카드 안에 그대로 앉힌다 — 카드 크롬만 벗긴다.
+    · 배치 편집(안 A): 손잡이(⋮⋮)·숨기기(×)·[w×h] 격자 고르기·오른쪽 아래 모서리 끌기 · 「＋ 위젯」 슬롯 · 프리셋. 저장은 web/projects/detail-hub.ts.
+    · ≤900px: 한 열 — --w·--h 를 버리고 내용 높이로 선다(뷰는 JS 가 고른다: «전체»·«띠» → «목록»).
    토큰만 쓴다(01-base/90-dark). 그림자는 떠 있는 것(끌리는 카드·프리셋 창)에만.
    ───────────────────────────────────────────────────────────────────────────── */
 
@@ -28,10 +29,7 @@
 /* ── 격자 ── */
 .pjh-grid { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: 260px; gap: 16px; grid-auto-flow: dense; margin-bottom: 24px; }
 .pjh-w { position: relative; display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 16px 18px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
-.pjh-w.s { grid-column: span 1; grid-row: span 1; }
-.pjh-w.m { grid-column: span 2; grid-row: span 1; }
-.pjh-w.l { grid-column: span 2; grid-row: span 2; }
-.pjh-w.xl { grid-column: span 3; grid-row: span 1; }
+.pjh-w { grid-column: span var(--w, 1); grid-row: span var(--h, 1); }
 .pjh-w:hover { border-color: var(--line-net); }
 
 /* 머리 */
@@ -87,6 +85,21 @@
 .pjh-row .pjv-flag-label { font-size: 12.5px; }
 .pjh-row-link { text-decoration: none; color: inherit; }
 .pjh-row-link:hover .pjh-row-n { color: var(--blue); }
+a.pjh-row-link.pjh-row-n:hover { color: var(--blue); }
+/* 태스크 줄 [작업 공간](#4165) — 줄에 올리면 오른쪽 끝에 뜬다(표의 호버 동작 .pjv-row-act 와 같은 결). 손가락 기기는 늘 보인다. */
+.pjh-go { flex: none; display: grid; place-items: center; width: 24px; height: 24px; margin: -3px -2px -3px 0; border: 0; border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; opacity: 0; transition: opacity 120ms ease; }
+.pjh-row:hover .pjh-go, .pjh-go:focus-visible { opacity: 1; }
+.pjh-go:hover { background: var(--bg-punch); color: var(--blue); }
+.pjh-go .pjh-ic { width: 15px; height: 15px; }
+@media (hover: none) { .pjh-go { opacity: 1; } }
+/* 목록이 넘칠 때 마지막 줄 «… N개 더» — 누르면 그 도구 전폭 */
+.pjh-more { flex: none; align-self: flex-start; border: 0; background: none; padding: 7px 2px; font: inherit; font-size: 12.5px; font-weight: 600; color: var(--muted-2); cursor: pointer; }
+.pjh-more:hover { color: var(--blue); }
+/* 폴더 1칸 폭 긴 목록 — 낱장 카드 대신 줄 */
+.pjh-file-row { cursor: pointer; }
+.pjh-file-row:hover .pjh-row-n { color: var(--blue); }
+.pjh-file-ic { flex: none; display: grid; place-items: center; width: 20px; height: 20px; }
+.pjh-file-ic .ft, .pjh-file-ic .ft-file, .pjh-file-ic .ft-folder, .pjh-file-ic .ft-img { width: 18px; height: 20px; }
 
 /* 세션 — 점 어휘(새 셸 .v2-dot 과 같은 셋: 도는 중 파랑 펄스 · 확인 앰버 · 끝남 민트 · 쉬는 중 빈 점) */
 .pjh-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted-3-line); }
@@ -219,11 +232,21 @@
 .pjh-edtools-sp { flex: 1; }
 .pjh-hide { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; }
 .pjh-hide:hover { background: var(--danger-bg); color: var(--coral-text); }
-.pjh-sizes { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: var(--bg); }
-.pjh-sizes button { border: 0; border-right: 1px solid var(--line); background: none; padding: 3px 8px; font: inherit; font-size: 11px; font-weight: 700; line-height: 1.4; color: var(--muted-2); cursor: pointer; }
-.pjh-sizes button:last-child { border-right: 0; }
-.pjh-sizes button:hover { background: var(--bg-tint); color: var(--ink); }
-.pjh-sizes button[aria-pressed="true"] { background: var(--bg-punch); color: var(--blue); }
+/* 크기 단추 [w×h] → 격자 고르기(표 삽입 격자 문법) */
+.pjh-szbtn { flex: none; min-width: 44px; height: 24px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); font: inherit; font-size: 11.5px; font-weight: 800; color: var(--blue); font-variant-numeric: tabular-nums; cursor: pointer; }
+.pjh-szbtn:hover { border-color: var(--blue); background: var(--bg-punch); }
+.pjh-szg-pop { padding: 10px; }
+.pjh-szg { display: grid; gap: 4px; width: 108px; }
+.pjh-szg button { height: 22px; border: 1px solid var(--line-net); border-radius: 4px; background: var(--bg); padding: 0; cursor: pointer; }
+.pjh-szg button.on { border-color: var(--blue); background: var(--bg-punch); }
+.pjh-szg-l { margin-top: 8px; font-size: 12px; font-weight: 700; color: var(--ink-sub); text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* 오른쪽 아래 모서리 끌기 — 칸 단위로 끊어 그 자리에서 크기가 바뀐다 */
+.pjh-rsz { position: absolute; right: 3px; bottom: 3px; width: 18px; height: 18px; border-radius: 5px; cursor: nwse-resize; touch-action: none;
+  background: linear-gradient(135deg, transparent 0 52%, var(--muted-2) 52% 60%, transparent 60% 70%, var(--muted-2) 70% 78%, transparent 78%); opacity: .7; }
+.pjh-rsz:hover { opacity: 1; background-color: var(--bg-tint-2); }
+.pjh-grid.edit .pjh-rsz { pointer-events: auto; }
+.pjh-w.resizing { outline: 2px solid var(--blue) !important; z-index: 2; }
+.pjh-rsz-tip { position: absolute; right: 26px; bottom: 6px; padding: 3px 8px; border-radius: 6px; background: var(--ink); color: var(--bg); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
 .pjh-slot { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; min-height: 56px; margin: 0 0 24px; padding: 8px 12px; border: 1.5px dashed var(--line-net-2); border-radius: 14px; font-size: 13px; font-weight: 600; color: var(--muted-2); }
 .pjh-slot .btn-sm { padding: 3px 10px; }
 
@@ -232,15 +255,14 @@
 .pjh-preset-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: 13px; text-align: left; color: var(--ink); cursor: pointer; }
 .pjh-preset-row:hover { background: var(--bg-tint-2); }
 .pjh-preset-row.on { background: var(--bg-sel); font-weight: 700; }
-.pjh-pm { display: grid; grid-template-columns: repeat(3, 1fr); grid-auto-rows: 8px; gap: 2px; width: 48px; flex: none; }
+.pjh-pm { display: grid; grid-template-columns: repeat(3, 1fr); grid-auto-rows: 8px; grid-auto-flow: dense; gap: 2px; width: 48px; flex: none; }
 .pjh-pm i { display: block; border-radius: 2px; background: var(--muted-3-line); }
 .pjh-pm i.a { background: var(--blue); opacity: .7; }
-.pjh-pm .c2 { grid-column: span 2; } .pjh-pm .c3 { grid-column: span 3; } .pjh-pm .r2 { grid-row: span 2; }
 
 /* ── 좁은 폭: 한 열 · 편집 숨김 ── */
 @media (max-width: 900px) {
   .pjh-grid { grid-template-columns: minmax(0, 1fr); grid-auto-rows: auto; }
-  .pjh-w, .pjh-w.s, .pjh-w.m, .pjh-w.l, .pjh-w.xl { grid-column: span 1; grid-row: span 1; min-height: 200px; }
+  .pjh-w { grid-column: span 1; grid-row: auto; min-height: 200px; }
   .pjh-fleet { grid-template-columns: minmax(0, 1fr); }
   .pjh-two { grid-template-columns: minmax(0, 1fr); }
   .pjh-edit-btn, .pjh-edbar { display: none; }
