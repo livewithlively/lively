@@ -4,7 +4,7 @@
 //  ⚠ 아래 셋은 모달 셸의 클로저 상태(dirty·closeModal·pasteCtx·bodyEditor)를 잡으므로 여기 남는다 —
 //   pjvtmDescription(bodyEditor 소유) · pjvtmSubtasks(드릴인) · pjvtmLinks(드릴인). 나머지 섹션은 순수 조립이라 적출됐다.
 import { api, el, errorNote, toast } from '../core.js';
-import { mountBodyEditor, pjvGridTemplate, pjvKeepScrollForNextRender, pjvPatchTask, pjvProjectModalOpen, pjvReloadKeepScroll, pjvRestoreScroll, pjvScrollTopNow, pjvSkipNextRouteRender, pjvStatusIconStd, pjvStatusMeta, pjvTaskRow, renderProjectV2Detail, uploadBodyFile } from '../projects.js';
+import { mountBodyEditor, pjvGoTaskWorkspace, pjvGridTemplate, pjvKeepScrollForNextRender, pjvPatchTask, pjvProjectModalOpen, pjvReloadKeepScroll, pjvRestoreScroll, pjvScrollTopNow, pjvSkipNextRouteRender, pjvStatusIconStd, pjvStatusMeta, pjvTaskRow, renderProjectV2Detail, uploadBodyFile } from '../projects.js';
 import { pjvFmtClock, pjvtmSafeUrl } from './util.js';
 import { pjvtmAssigneeField, pjvtmCustomFields, pjvtmDatesField, pjvtmFieldRow, pjvtmPriorityField, pjvtmStatusField, pjvtmTimeField } from './fields.js';
 import { pjvtmTagsField } from './tags.js';
@@ -238,6 +238,24 @@ function pjvOpenTaskModal(taskId, pageReload) {
     }
   }
 
+  // #4165 상단바 [세션으로 가기 / 세션 열기] — 태스크를 누르면 세션으로 곧장 넘어가지 않고 이 모달(본문)이 먼저 뜬다.
+  //  여기서 한 번 더 누르면 작업 공간으로 간다: 맡은 세션이 있으면 그 세션(최근 것), 없으면 이 태스크로 새 세션(첫 지시 = 이 본문).
+  //  하위 태스크엔 세션이 붙지 않는다(⋯ 메뉴와 같은 규칙). 모달부터 닫는다 — 액자 안(새 셸)이면 우리가 넣은 주소를 pop 하고
+  //  바깥 셸이 세션을 연다, 아니면 주소는 곧 세션으로 옮겨 가므로 'route' 로 닫는다(#810 닫기 계약).
+  function pjvtmWorkspaceBtn(d, t, closeModal, pageReload) {
+    if (!d.project || t.level === 'subtask') return null;
+    const sess = Array.isArray(t.sessions) ? t.sessions : [];
+    const b = el('button', { class: 'btn btn-sm btn-primary pjv-tm-ws', type: 'button',
+      title: sess.length ? '맡은 세션으로 가기' + (sess[0].label ? ` («${sess[0].label}»)` : '') : '이 태스크를 맡을 세션을 새로 엽니다 — 첫 지시는 이 본문',
+      text: (sess.length ? '세션으로 가기' : '세션 열기') + ' →' });
+    b.onclick = () => {
+      const inFrame = window.parent && window.parent !== window;
+      closeModal(inFrame ? 'user' : 'route');
+      pjvGoTaskWorkspace(d.project.id, t, pageReload);
+    };
+    return b;
+  }
+
   // ── 좌측(상세) ──
   function pjvtmMain(d, t, members, refresh, closeModal, pageReload) {
     const main = el('div', { class: 'pjv-tm-main' });
@@ -266,9 +284,11 @@ function pjvOpenTaskModal(taskId, pageReload) {
           text: d.parent.name,
           onclick: (e) => { e.preventDefault(); dirty = true; closeModal('swap'); pjvOpenTaskModal(d.parent.id, pageReload); } }) : null,
         d.parent ? el('span', { class: 'pjv-tm-crumb-sep', text: ' /' }) : null),
-      // ⚠ onclick: closeModal (참조) 로 넘기면 MouseEvent 가 첫 인자(mode)로 샌다 — 옛 skipReload 시절엔 truthy 라
-      //  ✕ 로 닫을 때 pageReload 가 조용히 스킵됐고(#810 에서 발견), 지금은 주소 복원이 깨진다. 반드시 감싸서 호출.
-      el('button', { class: 'pjv-tm-x', type: 'button', title: '닫기 (Esc)', text: '✕', onclick: () => closeModal() })));
+      el('span', { class: 'pjv-tm-top-r' },
+        pjvtmWorkspaceBtn(d, t, closeModal, pageReload),
+        // ⚠ onclick: closeModal (참조) 로 넘기면 MouseEvent 가 첫 인자(mode)로 샌다 — 옛 skipReload 시절엔 truthy 라
+        //  ✕ 로 닫을 때 pageReload 가 조용히 스킵됐고(#810 에서 발견), 지금은 주소 복원이 깨진다. 반드시 감싸서 호출.
+        el('button', { class: 'pjv-tm-x', type: 'button', title: '닫기 (Esc)', text: '✕', onclick: () => closeModal() }))));
 
     // 타입 pill + 하위수 + 원본 링크(#541) — 외부 이관 태스크(external_url)면 원 시스템으로 새 탭 점프.
     const subs = t.subtasks || [];

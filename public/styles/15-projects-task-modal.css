@@ -179,6 +179,9 @@ body.pjv-tm-open { overflow: hidden; }
 .pjv-tm-crumb-link:hover { color: var(--blue); }
 .pjv-tm-x { border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 16px; width: 30px; height: 30px; border-radius: 8px; flex: none; }
 .pjv-tm-x:hover { background: var(--bg-tint-2); color: var(--ink); }
+/* 상단바 오른쪽 = [세션으로 가기 →](#4165) + ✕ */
+.pjv-tm-top-r { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+.pjv-tm-ws { white-space: nowrap; }
 .pjv-tm-typebar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .pjv-tm-typepill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; font-size: 13px; font-weight: 700; color: var(--ink-sub); }
 .pjv-tm-typedot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--muted-3-line); }
