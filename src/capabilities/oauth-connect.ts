@@ -7,7 +7,7 @@ import { HttpError } from "./rest-util.js";
 import { secretsEnabled } from "../org/credentials/secret-box.js";
 import { getMcpServer, listMcpServers, listEnabledProxyTools } from "../org/store.js";
 import { deleteMemberSecret, memberOwner, listMemberSecretsPublic } from "../org/credentials/member-secret-store.js";
-import { startConsent } from "../org/credentials/oauth-broker.js";
+import { startConsent, googleReady } from "../org/credentials/oauth-broker.js";
 import { GOOGLE_KIND, GOOGLE_SERVER, GOOGLE_LEGACY_KINDS, isGoogleServer } from "../org/credentials/google-oauth.js";
 import { logger } from "../log.js";
 
@@ -163,11 +163,17 @@ const meOauthConnectors: Capability = {
     //  별칭 슬롯의 scope_key 는 그 kind 자신의 기본값("")이지 이 줄의 scope_key 가 아니다.
     const connected = (r: OAuthConnectorRow) =>
       hasSlot(r.auth_kind, r.auth_scope_key) || (r.alias_kinds ?? []).some((k) => hasSlot(k, ""));
+    //  #4211 — 구글은 «이 게이트웨이가 지금 동의를 시작할 수 있나»(ready)를 함께 내린다. 화면이 이걸로 «준비 중»을 가른다.
+    //   종전엔 화면에 «준비 중» 이 박혀 있어서, 릴레이·클라이언트가 갖춰져도 코드를 다시 배포해야 열렸다.
+    //   구글 줄에만 싣는다 — 다른 커넥터는 서버 행이 있다는 것 자체가 준비의 증거다.
+    const hasGoogle = rows.some((r) => isGoogleServer(r.server));
+    const gReady = hasGoogle ? await googleReady().catch(() => false) : false;
     return {
       connectors: rows.map((r) => ({
         server: r.server, // 웹이 이 값을 키로 매칭한다 — 어댑터를 바꿔도 이름이 같으면 화면·연결이 그대로다(무중단 승계)
         note: r.note, used_by: r.used_by,
         connected: connected(r),
+        ...(isGoogleServer(r.server) ? { ready: gReady } : {}),
       })),
     };
   },
