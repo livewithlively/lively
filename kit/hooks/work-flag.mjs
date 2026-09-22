@@ -11,6 +11,7 @@
 //  - Edit/Write 류 툴       → <session_id>.worked   (이 세션에서 의미있는 파일 작업을 했다)
 //  - lively MCP 쓰기 툴     → <session_id>.writeback (이미 컨텍스트 스토어에 기록했다)
 //  - lively MCP 아무 툴      → <session_id>.lively    (이 세션은 'lively work' 세션 — 자가 게이팅 신호, 읽기/쓰기 무관)
+//  - 기록 fork 백그라운드 띄움 → <session_id>.writeback-pending.<자식 id> (그 자식의 SubagentStop 이 걷는다, #4217)
 // stop-writeback-gate.mjs 가 이 플래그로 종료 시점에 1회 기록 너지를 결정한다(결정적, LLM 호출 0).
 //   .lively 는 게이트 자가 게이팅(등록 work-root 밖에서도 lively 세션이면 게이트 작동)에 쓰인다.
 // 게이트웨이 호출 없음(경로→도메인 lookup 엔드포인트 부재 — 스코프 fallback 조항대로 플래그만).
@@ -19,12 +20,12 @@
 // 페일오픈: 어떤 실패든 무출력 exit 0. 비활성화(incognito): LIVELY_OFF=1 (구 LIVELY_HOOKS_OFF — alias)
 // ⚠ argv 는 안 본다 — session-preload 가 자체설치 MCP 커버용 엔트리를 `work-flag.mjs --ext-pull` 로 배선하는데(#959),
 //  그 sentinel 인자는 settings 엔트리를 회수-교체하기 위한 **정체성 discriminator**일 뿐 이 스크립트는 무시한다(판정 동일).
-import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 // 툴 이름은 하네스마다 다르다(대소문자·MCP 접두어 형태까지) — 문자열을 여기 박으면 그 하네스에서 판정이
 //  **항상 false** 가 되어 세션 상태·기록 인정이 통째로 무음이 된다. 반드시 표에서 파생한다(#1519 §4).
-import { resolveHarness, allToolNames, mcpToolName, isForeignGrokInvocation, isShellEdit } from "./harness-registry.mjs";
+import { resolveHarness, allToolNames, mcpToolName, isForeignGrokInvocation, isShellEdit, recordForkLaunch, subagentIdOf, recordPendingFileName } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
 
 const fetch = (...args) => hostEffects.fetch(...args);
@@ -67,6 +68,9 @@ const WRITE_TOOLS_DEFAULT = [
   // 프로젝트·태스크(맥락의 변화)
   "project_create_v6", "project_set_status_v6", "project_link_knowledge_v6",
   "project_link_category_v6", "project_set_members_v6", "task_create_v6", "task_set_status_v6",
+  // 본문 보강·댓글(#4217) — 텍스트를 가장 많이 쓰는 쓰기 툴인데 빠져 있어서, 이것만 부르고 끝낸 세션이
+  //  «기록 없음»으로 막혔다(#4201 실측). 호출 수로도 knowledge_save 다음이다(project_update 275·task_update 210·task_comment 88).
+  "project_update_v6", "task_update_v6", "task_comment_v6",
   // 팀 공유 메모리
   "memory_save",
   // 외부 원본 회수(#906) — ext MCP 등으로 끌어온 자료를 SoT 에 남긴 것도 '기록함'이다. 이게 없으면
@@ -226,6 +230,25 @@ try {
     mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
     for (const flag of flags) writeFileSync(join(FLAG_DIR, `${sid}.${flag}`), "");
   }
+
+  // #4217 — 기록 fork 진행 중 표시(<sid>.writeback-pending.<자식 id>, 자식마다 파일 하나). 종료 게이트는 이게 있으면 막지 않는다.
+  //  왜: 기록을 fork 에 백그라운드로 맡기면 fork 가 쓰는 중에 메인이 턴을 끝내고, 게이트가 «기록 없음»으로 막아 메인이
+  //   같은 내용을 중복 기록했다(#4201 실측). fork 의 쓰기는 부모 세션 id 로 오니 .writeback 은 결국 서지만 **늦게** 선다.
+  //  세우기 = 기록 fork 를 백그라운드로 띄운 PostToolUse(이름 머리 `기록:` — harness-registry.recordForkLaunch).
+  //  걷기   = 그 자식의 SubagentStop. 기록 없이 끝났으면 다음 Stop 에서 게이트가 평소처럼 1회 넛지한다.
+  //  SubagentStop 이 영영 안 오는 경우(자식 중단 — codex 는 abort 에 SubagentStop 을 안 낸다)는 게이트가 mtime TTL 로 무시한다.
+  //  자식마다 파일인 이유는 recordPendingFileName 주석(병렬로 띄운 두 fork 의 등록이 서로를 덮지 않게).
+  try {
+    const fork = recordForkLaunch(HARNESS, tool, input?.tool_input, input?.tool_response);
+    if (fork) {
+      mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
+      const id = fork.agentId || String(input?.tool_use_id ?? "");
+      writeFileSync(join(FLAG_DIR, recordPendingFileName(sid, id)), "");   // 매번 쓴다 — mtime 이 TTL 의 기준이다
+    } else if (event === "SubagentStop") {
+      const id = subagentIdOf(HARNESS, input);
+      if (id) { try { unlinkSync(join(FLAG_DIR, recordPendingFileName(sid, id))); } catch { /* 기록 fork 가 아니었다 */ } }
+    }
+  } catch { /* fail-open — 표시를 못 남기면 게이트가 종전대로 동작할 뿐 */ }
 
   // #1059 정밀 복원 — 이 box 세션이 지금 도는 **claude 자신의 세션 UUID(sid)**를 게이트웨이에 보고한다. box-id(LIVELY_SESSION_ID)
   //  ≠ claude UUID 라, 복원(restore)이 정확히 이어받으려면(--resume <uuid>) 이 매핑이 필요하다(box-id 를 주면 "검색 결과 없음").

@@ -115,6 +115,15 @@ function userLevelHooksBlock() {
       //  비용: 툴 호출마다 훅 스폰 46ms. Bash 는 MCP 처럼 한 턴에 수백 번 불리지 않아 감당할 만하고, 네트워크 왕복은
       //  work-flag 자체의 60초 스로틀이 막는다(같은 상태 반복은 안 보낸다).
       { matcher: "Edit|Write|MultiEdit|NotebookEdit|Bash", hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
+      // #4217 기록 fork 진행 중 표시 — 서브에이전트를 띄운 툴콜(harness-registry claude.tools.fork). 이름 머리가 `기록:` 인
+      //  백그라운드 fork 면 work-flag 가 <sid>.writeback-pending 을 세우고, 종료 게이트는 그동안 막지 않는다.
+      //  ⚠ 기존 엔트리의 matcher 를 넓히지 않고 **새 엔트리**로 둔다 — matcher 를 바꾸면 구항목이 회수되지 않고 두 벌이 된다
+      //   (safeMergeUserSettings 주석). 새 (정체성, matcher) 쌍은 그냥 더해진다.
+      { matcher: "Agent|Task", hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
+    ],
+    // #4217 — 자식이 끝나면 그 자식의 기록 fork 표시를 걷는다(payload.agent_id). 기록 없이 끝났으면 다음 Stop 에서 게이트가 1회 넛지.
+    SubagentStop: [
+      { hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
     ],
     // #1221 세션 실행 단계 보고 — 턴 시작(UserPromptSubmit)·확인 필요(Notification)·턴 종료(Stop). 이 셋이 붙어야
     //  게이트웨이가 화면 스크래핑(스피너 유니코드·capture-pane 패턴)을 안 하고도 '작업 중/확인 필요/대기 중'을 안다.
@@ -628,6 +637,13 @@ function codexManagedBlock(mcpUrl) {
     // ── 커스텀 훅 런너 — 이벤트별 고정 엔트리 1개(훅 본문은 런너가 런타임에 fetch) ──
     ...CODEX_RUNNER_EVENTS.flatMap(([event, matcher, timeout]) =>
       cdxHook(event, codexRunnerCmd(event), timeout, matcher)),
+    // #4217 기록 fork 진행 중 표시 — spawn_agent(v1)·collaborationspawn_agent(v2) 로 `기록:` 머리 fork 를 띄우면 세우고,
+    //  그 자식의 SubagentStop 이 걷는다. 코덱스 Stop 엔 실행 중 작업 목록이 없어 이 표시가 게이트의 유일한 신호다.
+    //  ⚠ **맨 끝**에 둔다 — 코덱스 훅 신뢰 키가 `<config.toml>:<event>:<그룹 순번>:<핸들러 순번>` 이라(codex-rs
+    //   hooks/src/lib.rs:113-123) 기존 엔트리 사이에 끼우면 뒤 엔트리의 순번이 밀려 멤버가 이미 신뢰한 훅이 전부
+    //   «미신뢰»로 떨어지고 조용히 안 돈다. 끝에 붙이면 새 두 엔트리만 신뢰 검토 대상이 된다.
+    ...cdxHook("PostToolUse", wf, 5, "spawn_agent|collaborationspawn_agent"),
+    ...cdxHook("SubagentStop", wf, 5),
     CDX_END,
   ].join("\n");
 }

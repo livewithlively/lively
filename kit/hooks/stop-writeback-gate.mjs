@@ -12,13 +12,18 @@
 //   <sid>.writeback 존재         → exit 0 (이미 기록함)
 //   <sid>.worked 부재            → exit 0 (의미있는 작업 없음)
 //   <sid>.blocked 존재           → exit 0 (이미 1회 너지함 — 세션당 1회)
+//   기록 fork 진행 중(#4217)     → exit 0, .blocked 안 씀 (fork 가 곧 기록한다 — 막으면 메인이 중복 기록)
+//     판정: 하네스가 Stop 에 background_tasks 를 주면(claude 2.1.278 실측) 그게 정본 — 이름 머리 `기록:` 인 서브에이전트가
+//      아직 목록에 있나. 필드가 없으면(codex·구버전) <sid>.writeback-pending.<자식 id>(work-flag 가 띄울 때 세우고
+//      SubagentStop 이 걷는다) 중 PENDING_TTL_MS 안에 세워진 게 있나. fork 가 기록 없이 끝나면 다음 Stop 에서 아래 줄로
+//      평소처럼 1회 넛지한다.
 //   그 외                        → .blocked 를 O_EXCL 원자 생성(병렬 중복 등록 대비) + {"decision":"block",…} 출력, exit 0
 // 페일오픈: 어떤 실패든 무출력 exit 0. 비활성화(incognito): LIVELY_OFF=1 (구 LIVELY_HOOKS_OFF — alias)
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, statSync, readdirSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join, resolve, sep, delimiter } from "node:path";
 // harness-registry 는 훅과 같은 디렉터리로 설치된다(HOOK_SCRIPTS — sync-harness-assets 의 import 와 같은 계약).
-import { isForeignGrokInvocation } from "./harness-registry.mjs";
+import { isForeignGrokInvocation, isRecordForkLabel, recordPendingPrefix } from "./harness-registry.mjs";
 
 // grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 우리 훅을 그대로 실행한 사본이면
 //  비켜선다(정본은 grok-adapter 경유 — 사본이 돌면 종료 게이트가 camelCase 페이로드를 오파싱해 오판한다).
@@ -26,6 +31,30 @@ if (isForeignGrokInvocation()) process.exit(0);
 
 const SID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const FLAG_DIR = join(tmpdir(), "lively-hooks"); // 전 플랫폼 per-user tmp(work-flag.mjs 와 동일) — 공유 /tmp 미사용
+// 기록 fork 표시의 유효기간 — SubagentStop 이 영영 안 오는 경우(자식 비정상 종료)의 안전판. 기록 fork 는 실측 146초
+//  (#4201 §8), 본문 생성만 p90 90초·최대 400초라 20분이면 정상 fork 는 넉넉히 덮고, 죽은 표시가 넛지를 오래 막지 않는다.
+const PENDING_TTL_MS = 20 * 60_000;
+// background_tasks 의 끝난 상태값 — 스키마는 «진행 중(running/pending + 백그라운드로 돌린 것)»만 싣는다고 하지만 방어로 거른다.
+const DONE_STATUS = new Set(["completed", "complete", "done", "failed", "error", "killed", "stopped", "cancelled", "canceled", "interrupted"]);
+
+// 기록 fork 가 아직 도는 중인가(#4217). 하네스 정본(background_tasks)이 있으면 그것만 믿는다 — 표시 파일은 SubagentStop
+//  을 놓치면 남을 수 있지만 하네스 목록은 그 순간의 사실이다(fork 가 끝났는데 표시가 남아 넛지를 삼키는 걸 막는다).
+//  그래서 이 경로엔 TTL 이 없다 — 하네스가 «아직 돈다»고 하는 동안은 믿는다.
+//  type 은 허용목록 "subagent" 다. claude 2.1.278 의 Stop 스키마 원문: type = "Friendly task-type label (e.g. 'shell',
+//  'subagent', 'monitor', 'workflow')", agent_type 은 "Only present for 'subagent' tasks" — fork 도 서브에이전트다.
+function recordForkInFlight(input, sid) {
+  if (Array.isArray(input?.background_tasks)) {
+    return input.background_tasks.some((t) => t && typeof t === "object" && t.type === "subagent"
+      && isRecordForkLabel(t.description) && !DONE_STATUS.has(String(t.status ?? "").toLowerCase()));
+  }
+  const prefix = recordPendingPrefix(sid);
+  try {
+    return readdirSync(FLAG_DIR).some((f) => {
+      if (!f.startsWith(prefix)) return false;
+      try { return Date.now() - statSync(join(FLAG_DIR, f)).mtimeMs <= PENDING_TTL_MS; } catch { return false; }   // 방금 걷혔으면 없다
+    });
+  } catch { return false; }
+}
 
 // work-root 레지스트리 로드: ~/.lively/work-roots (줄 단위) + env LIVELY_WORK_ROOTS (path-delim 또는 ':').
 function loadWorkRoots() {
@@ -105,6 +134,8 @@ try {
   if (existsSync(flag("writeback"))) process.exit(0); // 이미 기록함
   if (!existsSync(flag("worked"))) process.exit(0);   // 의미있는 작업 없음
   if (existsSync(flag("blocked"))) process.exit(0);   // 이미 1회 너지함(순차 fast-path)
+  // 기록 fork 가 쓰는 중 — 통과하되 .blocked 는 남기지 않는다(fork 가 기록 없이 끝나면 다음 Stop 에서 1회 넛지).
+  if (recordForkInFlight(input, sid)) process.exit(0);
 
   mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
   // 세션당 1회 '원자적' 점유 — 같은 Stop 이벤트에 이 훅이 여러 settings(유저 ~/.claude + 프로젝트
