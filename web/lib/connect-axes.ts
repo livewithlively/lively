@@ -125,3 +125,16 @@ export function listBucket(axes: AppAxes, soon: boolean): CardState {
   if (axes.use !== 'on' && axes.get !== 'on') return 'off';
   return pendingAxes(axes).length ? 'half' : 'on';
 }
+
+/**
+ * 카탈로그의 «준비 중» 이 **지금도** 유효한가 (#4211).
+ *  · soon 이 없으면 준비 중이 아니다.
+ *  · soonUntilReady 인 앱은 서버가 그 커넥터 줄에 `ready: true` 를 실어 보낼 때만 준비 중을 걷는다.
+ *    ready 를 **모르면**(옛 게이트웨이·필드 없음) 표 그대로 둔다 — 모르는 것을 «열렸다» 로 읽으면 눌러도 안 되는 카드를 내민다.
+ *  종전엔 구글의 준비 중이 화면에 박혀 있어, 매니지드에 릴레이·클라이언트가 갖춰져도 **코드를 다시 배포해야** 열렸다.
+ */
+export function catalogSoon(svc: { soon?: string; soonUntilReady?: boolean }, connector: { ready?: unknown } | null | undefined): boolean {
+  if (!svc.soon) return false;
+  if (!svc.soonUntilReady) return true;
+  return !(connector && connector.ready === true);
+}

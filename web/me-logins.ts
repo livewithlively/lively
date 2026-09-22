@@ -17,6 +17,7 @@ import { confirmDialog, overlay, skeleton } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
 import { openGitCredentialManager, svcTokenForm } from './admin-credentials.js';
 import { svcTile } from './svc-icons.js';
+import { catalogSoon } from './lib/connect-axes.js';
 
 // ── 지원 서비스 표 ──
 //  blurb — '무엇을 허용하는 것인지'를 그대로 말한다(#1085). '나로서 …해요' 는 무슨 일이 벌어지는지 모호했다.
@@ -31,7 +32,9 @@ import { svcTile } from './svc-icons.js';
 //   "프로메테우스랑 클로드 헤드리스 실행 빼줘"). soon 과 다른 점: soon 은 «준비 중»으로 **보이고**, hidden 은 **안 보인다**.
 //   ⚠ 행을 지우지 않고 표식만 두는 이유 — 자격 종류(CRED_KINDS)·로고·상세 화면은 그대로라, 이미 토큰을 등록해 둔 사람은
 //    주소(#/connect/<key>)로 들어가 교체·해제할 수 있다(헤드리스 크론이 그 토큰으로 돈다 — 관리 창구를 없애면 안 된다).
-const LOGIN_SERVICES: Array<{ key: string; label: string; icon: string; oauth?: string; token?: string; appConnect?: string; blurb: string; short?: string; soon?: string; hidden?: string }> = [
+//  soonUntilReady — soon 을 **서버가 준비됐다고 말할 때까지만** 건다(#4211). 커넥터 줄의 ready=true 면 soon 을 걷는다.
+//   종전엔 구글의 «준비 중» 이 여기 박혀 있어서, 게이트웨이에 릴레이·클라이언트가 갖춰져도 **코드를 다시 배포해야** 열렸다.
+const LOGIN_SERVICES: Array<{ key: string; label: string; icon: string; oauth?: string; token?: string; appConnect?: string; blurb: string; short?: string; soon?: string; soonUntilReady?: boolean; hidden?: string }> = [
   { key: 'notion', label: 'Notion', icon: '📔', short: '문서를 읽고 작성합니다.', oauth: 'notion', blurb: 'AI가 내 Notion 계정에 로그인해서 직접 문서를 읽고 작성할 수 있습니다.' },
   { key: 'linear', label: 'Linear', icon: '📐', short: '이슈를 보고 만듭니다.', oauth: 'linear', blurb: 'AI가 내 Linear 계정에 로그인해서 직접 이슈를 보고 만들 수 있습니다.' },
   { key: 'slack', label: 'Slack', icon: '💬', short: '메시지를 검색하고 보냅니다.', oauth: 'slack', token: 'slack_user_token', blurb: 'AI가 내 Slack 계정에 로그인해서 직접 메시지를 검색하고 보낼 수 있습니다.' },
@@ -40,9 +43,11 @@ const LOGIN_SERVICES: Array<{ key: string; label: string; icon: string; oauth?: 
   //  #2243 — 구글은 «준비 중»으로 내린다(원준 2026-08-31). 매니지드에는 CP 릴레이가 없어 고객이 켤 수 없고,
   //   dev·셀프호스팅에서만 켜지는 반쪽이었다. 이미 연결해 둔 사람은 partition 이 connected 로 먼저 잡으므로
   //   «연결됨» 그대로 보인다 — 쓰던 것을 뺏지 않으면서 새로 권하지도 않는 자리다.
-  { key: 'google', label: 'Google', icon: '🔷', short: 'Drive 파일과 캘린더 일정을 읽습니다.', oauth: 'google',
-    soon: 'Drive·캘린더는 구글 심사가 끝나면 열려요 — 준비를 마치면 여기서 바로 켤 수 있습니다.',
-    blurb: 'AI가 내 Google 계정에 로그인해서 직접 Drive 파일과 캘린더 일정을 읽을 수 있습니다. (Gmail 은 구글 심사 범위라 준비 중입니다.)' },
+  //  #4211 — «준비 중» 은 이제 서버가 정한다(soonUntilReady). 매니지드에 구글 릴레이·데이터 클라이언트가 들어가면
+  //   코드 배포 없이 열린다. Gmail 도 다시 판다(윤상민 2026-09-22 «일단 100명한도로 gmail 붙이자»).
+  { key: 'google', label: 'Google', icon: '🔷', short: 'Drive 파일·Gmail 메일·캘린더 일정을 읽습니다.', oauth: 'google',
+    soon: '구글 연결을 준비하고 있어요 — 준비를 마치면 여기서 바로 켤 수 있습니다.', soonUntilReady: true,
+    blurb: 'AI가 내 Google 계정에 로그인해서 직접 Drive 파일·Gmail 메일·캘린더 일정을 읽을 수 있습니다.' },
   { key: 'github', label: 'GitHub', icon: '🐙', short: '이슈·PR·커밋을 읽고, 이슈를 만들거나 댓글을 답니다.', token: 'github_pat', appConnect: 'github', blurb: 'AI가 내 GitHub 계정으로 이슈·PR·커밋을 읽고, 이슈를 만들거나 댓글을 답니다. [계정으로 연결]하면 그 화면에서 고른 저장소는 코드까지 가져올 수 있어요 — 토큰을 따로 만들 필요가 없습니다.' },
   { key: 'gitlab', label: 'GitLab', icon: '🦊', short: '이슈·MR·파이프라인·위키를 다룹니다.', oauth: 'gitlab', token: 'gitlab_pat', blurb: 'AI가 내 GitLab 계정으로 이슈·MR·파이프라인·위키를 다룹니다. [연결]은 AI 도구용 권한만 받습니다 — 저장소를 작업용으로 붙이는 것은 GitLab 정책상 별도 설정이 필요합니다.' },
   { key: 'clickup', label: 'ClickUp', icon: '🗂️', short: '작업을 확인합니다.', token: 'clickup_token', blurb: 'AI가 내 ClickUp 계정에 로그인해서 직접 작업을 확인할 수 있습니다.' },
@@ -90,6 +95,8 @@ function partition(oauth: any, creds: any): SvcView {
   //  appConnect 는 조직 등록(oauthMap)이 아니라 앱 자격 유무가 관문이라 여기서는 '켤 수 있음'으로 둔다 —
   //   실제로 못 켜면 연결 시작이 409 와 함께 관리자가 할 일을 알려 준다(막다른 버튼으로 두지 않는다).
   const selfServe = (s: any) => !!((s.oauth && oauthMap.has(s.oauth)) || s.token || s.appConnect);
+  //  #4211 — soonUntilReady 인 앱은 서버가 ready=true 라고 말하면 준비 중이 아니다. ready 를 **모르면**(옛 게이트웨이) 표 그대로 둔다.
+  const isSoon = (s: any) => catalogSoon(s, s.oauth ? oauthMap.get(s.oauth) : null);
   const connected: any[] = [], available: any[] = [], blockedOAuth: any[] = [], soon: any[] = [];
   for (const s of LOGIN_SERVICES) {
     if (s.hidden) continue;   // 내려 둔 앱 — 연결돼 있어도 세지 않는다(요약칩 «연결됨»에도 안 들어간다). 상세는 주소로만.
@@ -97,7 +104,7 @@ function partition(oauth: any, creds: any): SvcView {
     //   종전엔 connected 가 먼저라, 이미 연결해 둔 사람에겐 준비 중 표시가 영영 안 보였다(구글 실측 2026-08-31).
     //   ⚠ 그렇다고 «연결 안 됨»이 되는 건 아니다 — 카드가 연결 사실을 그대로 말하고(아래 soonConnected),
     //   상세의 판정(stateOf)은 목록 배치가 아니라 **자격 원본**을 보므로 켜져 있으면 켜진 화면 그대로다.
-    if (s.soon) soon.push(s);
+    if (isSoon(s)) soon.push(s);
     else if (oauthOn(s) || tokenOn(s)) connected.push(s);
     else if (selfServe(s)) available.push(s);
     else blockedOAuth.push(s);   // OAuth 전용인데 조직 미등록 → 카드로 내밀면 눌러도 안 되는 버튼이 된다
