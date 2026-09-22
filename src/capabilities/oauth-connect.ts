@@ -7,8 +7,9 @@ import { HttpError } from "./rest-util.js";
 import { secretsEnabled } from "../org/credentials/secret-box.js";
 import { getMcpServer, listMcpServers, listEnabledProxyTools } from "../org/store.js";
 import { deleteMemberSecret, memberOwner, listMemberSecretsPublic } from "../org/credentials/member-secret-store.js";
-import { startConsent, googleReady } from "../org/credentials/oauth-broker.js";
+import { startConsent, googleReady, microsoftReady } from "../org/credentials/oauth-broker.js";
 import { GOOGLE_KIND, GOOGLE_SERVER, GOOGLE_LEGACY_KINDS, isGoogleServer } from "../org/credentials/google-oauth.js";
+import { MICROSOFT_KIND, MICROSOFT_SERVER, isMicrosoftServer } from "../org/credentials/microsoft-oauth.js";
 import { logger } from "../log.js";
 
 function s(v: unknown, max = 200): string {
@@ -21,6 +22,7 @@ async function requireOAuthServer(name: string): Promise<{ auth_kind: string; au
   // #1881 G2 구글 직결 — org_mcp_server 행이 **없다**(인증 앵커를 Developer Preview 엔드포인트에서 뗐다).
   //  여기서 갈라 주지 않으면 연결 버튼이 404 로 죽는다(매니지드 개인 테넌트가 정확히 그 상태였다 — T10 #1993).
   if (isGoogleServer(name)) return { auth_kind: GOOGLE_KIND, auth_scope_key: "" };
+  if (isMicrosoftServer(name)) return { auth_kind: MICROSOFT_KIND, auth_scope_key: "" }; // #4211 Outlook — 같은 규약(서버 행 없음)
   const srv = await getMcpServer(name);
   if (!srv || srv.mode !== "proxy") throw new HttpError(404, `proxy MCP 서버 없음: ${name}`);
   if (srv.auth_mode !== "oauth" || !srv.auth_kind) throw new HttpError(400, `'${name}' 은 OAuth 커넥터가 아닙니다(auth_mode=oauth 필요)`);
@@ -92,6 +94,8 @@ export interface ConnectorToolLike { name: string; auth_kind?: string | null }
 /** 접기 규칙(순수 — 테스트가 실물 로직을 본다). orphanKinds = 도구는 쓰는데 연결 창구가 없는 자격. */
 export function foldOAuthConnectors(
   servers: ConnectorServerLike[], tools: ConnectorToolLike[],
+  /** 서버 행 없이 서는 직결 창구 중, 도구가 아직 없어도 **이미 열 수 있는** 것(#4211 — 앱이 준비된 Microsoft). */
+  direct: { microsoft?: boolean } = {},
 ): { connectors: OAuthConnectorRow[]; orphanKinds: Array<{ auth_kind: string; tools: string[] }> } {
   const kindUsers = new Map<string, string[]>(); // auth_kind → 그 자격을 쓰는 http_proxy 도구 이름들
   for (const t of tools) {
@@ -130,6 +134,17 @@ export function foldOAuthConnectors(
       alias_kinds: [...GOOGLE_LEGACY_KINDS],
     });
   }
+  // ── #4211 Outlook — [Outlook 연결] 한 줄. 구글처럼 서버 행에 기대지 않는다(직결). 구글과 다른 점: 도구가 **없어도** 선다.
+  //  도구(outlook_*)는 첫 연결 때 심는다(oauth-broker onMicrosoftInstalled) — 매니지드 CP 는 서버 행이 있는 묶음만 심어서
+  //  도구가 저절로 생기지 않는다. 그러니 «도구가 있어야 창구가 선다»를 여기 걸면 **닭과 달걀**이 돼 아무도 못 연다.
+  //  대신 앱이 준비됐을 때(릴레이·클라이언트)만 세운다 — 못 여는 버튼을 내밀지 않는다.
+  const msTools = kindUsers.get(MICROSOFT_KIND) ?? [];
+  if (msTools.length > 0 || direct.microsoft) {
+    byKind.set(MICROSOFT_KIND, {
+      server: MICROSOFT_SERVER, auth_kind: MICROSOFT_KIND, auth_scope_key: "", note: null,
+      enabled: true, used_by: msTools.map((n) => `tool:${n}`),
+    });
+  }
   const orphanKinds = [...kindUsers.entries()]
     .filter(([kind]) => !byKind.has(kind) && !googleKinds.includes(kind))
     .map(([auth_kind, toolNames]) => ({ auth_kind, tools: toolNames }));
@@ -147,7 +162,9 @@ export function connectorReadyField(server: string, googleReadyNow: boolean): { 
 
 export async function resolveOAuthConnectors(): Promise<OAuthConnectorRow[]> {
   const [servers, tools] = await Promise.all([listMcpServers(), listEnabledProxyTools()]);
-  const { connectors, orphanKinds } = foldOAuthConnectors(servers, tools);
+  //  도구가 이미 있으면 준비 여부를 묻지 않는다(창구는 어차피 선다) — 목록 한 번에 금고 조회를 아낀다.
+  const msReady = tools.some((t) => t.auth_kind === MICROSOFT_KIND) ? true : await microsoftReady().catch(() => false);
+  const { connectors, orphanKinds } = foldOAuthConnectors(servers, tools, { microsoft: msReady });
   for (const o of orphanKinds) {
     // 도구는 이 자격을 요구하는데 연결을 개시할 창구가 없다 — 호출하면 '자격 없음'으로 죽고 사용자는 켤 방법이 없다.
     logger.warn(o, "이 자격을 쓰는 도구가 있는데 OAuth 연결 창구(프록시 MCP 서버 행)가 없습니다 — 구성원이 연결할 방법이 없습니다");
@@ -176,12 +193,18 @@ const meOauthConnectors: Capability = {
     //   종전엔 화면에 «준비 중» 이 박혀 있어서, 릴레이·클라이언트가 갖춰져도 코드를 다시 배포해야 열렸다.
     //   구글 줄에만 싣는다 — 다른 커넥터는 서버 행이 있다는 것 자체가 준비의 증거다.
     const gReady = rows.some((r) => isGoogleServer(r.server)) ? await googleReady().catch(() => false) : false;
+    //  #4211 — Outlook 줄은 «어느 계정으로 붙었나»(회사/개인)를 함께 싣는다. 회사 계정이면 화면이 관리자 허용 안내를 곁들인다.
+    const ms = rows.some((r) => isMicrosoftServer(r.server)) ? mine.find((c) => c.kind === MICROSOFT_KIND && c.scope_key === "" && c.has_secret) : undefined;
     return {
       connectors: rows.map((r) => ({
         server: r.server, // 웹이 이 값을 키로 매칭한다 — 어댑터를 바꿔도 이름이 같으면 화면·연결이 그대로다(무중단 승계)
         note: r.note, used_by: r.used_by,
         connected: connected(r),
         ...connectorReadyField(r.server, gReady),
+        ...(isMicrosoftServer(r.server) && ms ? { account: {
+          email: typeof ms.meta?.ms_email === "string" ? ms.meta.ms_email : null,
+          type: typeof ms.meta?.account_type === "string" ? ms.meta.account_type : null,
+        } } : {}),
       })),
     };
   },

@@ -378,7 +378,7 @@ export async function openIngestPolicyForm(pol: any, reload: () => void): Promis
   const catSel = sel([['', '모든 카테고리'], ...cats.map((c: any) => [c.key, String(c.name || c.key)] as [string, string])], (pol && pol.match_category) || '');
   const typeSel = sel([['', '모든 종류'], ...PAGE_TYPES.map((t) => [t, TYPE_LABEL[t] || t] as [string, string])], (pol && pol.match_type) || '');
   const provSel = sel([['', '모두'], ['authored', '직접 쓴 것 (AI·사람)'], ['observed', '외부 앱에서 가져온 자료']], (pol && pol.match_provenance) || '');
-  const sysSel = sel([['', '모든 앱'], ...['slack', 'notion', 'clickup', 'gmail', 'gdrive', 'discord'].map((s) => [s, s] as [string, string])], (pol && pol.match_system) || '');
+  const sysSel = sel([['', '모든 앱'], ...['slack', 'notion', 'clickup', 'gmail', 'outlook', 'gdrive', 'discord'].map((s) => [s, s] as [string, string])], (pol && pol.match_system) || '');
   const chanInp = el('input', { type: 'text', class: 'rq-sel', value: (pol && pol.match_channel) || '', placeholder: '특정 슬랙 채널·노션 폴더 id — 비우면 그 앱 전체' }) as HTMLInputElement;
   const sensSel = sel([['', '가리지 않음'], ['cooking', '아직 무르익는 중'], ['planning', '기획 단계'], ['unfinished', '끝나지 않은 이야기']], (pol && pol.match_sensitive) || '');
   const prioInp = el('input', { type: 'number', class: 'rq-sel', value: String((pol && pol.priority) || 0) }) as HTMLInputElement;

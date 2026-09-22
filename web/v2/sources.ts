@@ -32,7 +32,7 @@ export interface SrcTreeNode { system: string; container: string | null; n: numb
 /** 출처 이름 — external_system 은 기계 이름이라 그대로 보여 주지 않는다. 'authored' 는 사람이 직접 넣은 것. */
 const SYS_LABEL: Record<string, string> = {
   slack: '슬랙', discord: '디스코드', github: '깃허브', gitlab: '깃랩', linear: '리니어', figma: '피그마',
-  notion: '노션', clickup: '클릭업', gdrive: '구글드라이브', gmail: '지메일', local: '내 컴퓨터',
+  notion: '노션', clickup: '클릭업', gdrive: '구글드라이브', gmail: '지메일', outlook: '아웃룩', local: '내 컴퓨터',
   'domain-wiki': '도메인 위키', authored: '적어 둔 것',
 };
 const KIND_LABEL: Record<string, string> = {
@@ -44,7 +44,7 @@ const sysLabel = (s: string): string => SYS_LABEL[s] || s;
 const kindLabel = (k: string): string => KIND_LABEL[k] || k;
 
 /** 수집함 나무의 차례 — 대화가 위, 기록계가 아래. (내 자료는 나무 밖 첫 구역이라 local 은 여기 안 온다.) */
-const SYS_ORDER = ['slack', 'discord', 'authored', 'github', 'gitlab', 'linear', 'figma', 'notion', 'gdrive', 'gmail', 'clickup'];
+const SYS_ORDER = ['slack', 'discord', 'authored', 'github', 'gitlab', 'linear', 'figma', 'notion', 'gdrive', 'gmail', 'outlook', 'clickup'];
 const sysRank = (s: string): number => { const i = SYS_ORDER.indexOf(s); return i < 0 ? SYS_ORDER.length : i; };
 
 function bytesText(n: unknown): string {

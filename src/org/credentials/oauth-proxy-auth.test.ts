@@ -294,3 +294,53 @@ console.log(`\n${pass} passed`);
   assert.equal(clientKindFor("linear_app"), "linear_app");
   console.log("ok  github_pat 갱신 발급처·client kind 매핑");
 }
+
+// #4211 Outlook — Microsoft 토큰도 이 갱신 경로를 탄다(도구·수집이 같은 부품). spec B 표 P1~P4.
+//  P2 가 이 묶음의 핵심이다: setMemberSecret 은 meta 를 **병합하지 않고 바꾼다** — tokenMeta 만 넘기면 연결 때 적어 둔
+//  계정 표시(ms_email·account_type)가 첫 갱신(1시간 뒤)에 사라져, 화면이 «누구 계정으로 도는지»를 잃는다.
+{
+  const { oauthTokenUrlFor, refreshedMeta, resolveProxyBearer } = await import("./oauth-proxy-auth.js");
+  const { tokenMeta } = await import("./oauth-broker.js");
+  const { MICROSOFT_TOKEN_URL } = await import("./microsoft-oauth.js");
+
+  assert.equal(oauthTokenUrlFor("microsoft_oauth"), MICROSOFT_TOKEN_URL);
+  console.log("ok  P1 microsoft_oauth 갱신 발급처 = Microsoft /common 토큰 끝점");
+
+  const prev = { ms_email: "kim@contoso.com", account_type: "work", scope: "Mail.Read", expires_at: 1 };
+  const m = refreshedMeta(prev, { access_token: "A2", token_type: "Bearer", expires_in: 3600, scope: "Mail.Read Calendars.Read" });
+  assert.equal(m.ms_email, "kim@contoso.com", "갱신이 계정 표시를 지웠다");
+  assert.equal(m.account_type, "work");
+  assert.ok(typeof m.expires_at === "number" && (m.expires_at as number) > 1, "새 만료가 안 얹혔다 — 다음 호출이 또 갱신한다");
+  assert.equal(m.scope, "Mail.Read Calendars.Read", "새 범위가 이긴다");
+  console.log("ok  P2 갱신 저장은 이전 meta(계정 표시) 위에 새 만료·범위를 얹는다");
+
+  const tk = { access_token: "A", token_type: "Bearer", expires_in: 60 };
+  const bare = refreshedMeta(undefined, tk);
+  const tm = tokenMeta(tk);
+  assert.equal(bare.token_type, tm.token_type);
+  assert.deepEqual(Object.keys(bare).sort(), Object.keys(tm).sort(), "이전 meta 가 없으면 종전(tokenMeta 만)과 같아야 한다");
+  console.log("ok  P3 이전 meta 가 없으면 종전과 같다");
+
+  // P4 — 배선: 실제 갱신 경로가 이전 meta 를 저장에 넘기고, Microsoft 가 준 새 refresh_token 을 덮어쓴다.
+  const saved: Array<{ tokens: OAuthTokens; prevMeta?: Record<string, unknown> }> = [];
+  const resolved: MemberSecretResolved = {
+    owner: "member:kim", kind: "microsoft_oauth", scope_key: "",
+    secret: JSON.stringify({ access_token: "OLD", refresh_token: "R1", token_type: "Bearer" }),
+    meta: { expires_at: NOW - 5, ms_email: "kim@contoso.com" },
+  };
+  const got = await resolveProxyBearer(resolved, "microsoft_oauth", {
+    nowSec: () => NOW,
+    loadClient: async () => ({ client_id: "cid", client_secret: "sec" }),
+    postRefresh: async (url, form) => {
+      assert.equal(url, MICROSOFT_TOKEN_URL);
+      assert.equal(form.get("client_secret"), "sec", "웹 앱은 갱신에도 client_secret 이 필요하다");
+      return { status: 200, ok: true, text: JSON.stringify({ access_token: "NEW", refresh_token: "R2", expires_in: 3600, token_type: "Bearer" }) };
+    },
+    persist: async (_o, _k, _s, tokens, prevMeta) => { saved.push({ tokens, prevMeta }); },
+  });
+  assert.equal(got, "NEW");
+  assert.equal(saved.length, 1, "배선 — 갱신 결과를 저장하지 않았다");
+  assert.equal(saved[0].tokens.refresh_token, "R2", "Microsoft 가 준 새 refresh_token 을 버렸다 — 옛 것이 회수되면 끊긴다");
+  assert.equal(saved[0].prevMeta?.ms_email, "kim@contoso.com", "이전 meta 가 저장까지 안 왔다");
+  console.log("ok  P4 갱신 경로가 이전 meta 를 넘기고 새 refresh_token 을 저장한다");
+}

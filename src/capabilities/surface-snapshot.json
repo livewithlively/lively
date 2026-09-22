@@ -1714,7 +1714,7 @@
   "rest": [
    "POST /api/ui/org/http-tool-presets/apply"
   ],
-  "input_hash": "e2fcc3d7adb030c3"
+  "input_hash": "b4742b7345b7ff77"
  },
  {
   "name": "org_tool_remove",
@@ -4473,6 +4473,56 @@
    "GET /api/ui/org/:system/collect/options"
   ],
   "input_hash": "80d71c4c25c45131"
+ },
+ {
+  "name": "org_outlook_collect",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/outlook/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_outlook_collect_set",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/outlook/collect"
+  ],
+  "input_hash": "67241d38485effa1"
+ },
+ {
+  "name": "org_outlook_connect",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/outlook/connect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_outlook_admin_consent",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/outlook/admin-consent"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_outlook_oauth_complete",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/outlook/oauth-complete"
+  ],
+  "input_hash": "3d5e4b275497c027"
  },
  {
   "name": "org_google_collect",

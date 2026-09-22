@@ -16,6 +16,7 @@ import { presetOAuthTokenUrl } from "../delivery/mcp-server-presets.js";
 import { GOOGLE_KIND, GOOGLE_LEGACY_KINDS, GOOGLE_TOKEN_URL, googleUnifiedKindFor } from "./google-oauth.js";
 import { LINEAR_APP_KIND, LINEAR_TOKEN_URL } from "./linear-oauth.js";
 import { GITHUB_APP_KIND, GITHUB_TOKEN_URL } from "./github-app.js";
+import { MICROSOFT_KIND, MICROSOFT_TOKEN_URL, resolveMicrosoftOAuthClient } from "./microsoft-oauth.js";
 import { logger } from "../../log.js";
 
 /** 만료 여유(초) — 호출이 나가는 동안 만료돼 상류가 401 을 주는 것까지 막는다. */
@@ -53,7 +54,10 @@ export function mergeRefreshedTokens(prev: OAuthTokens, next: Partial<OAuthToken
  */
 /** [GitHub 연결]이 남기는 사용자 토큰 묶음의 슬롯 kind — 8시간 만료·refresh 회전(github-app.ts). 갱신 발급처와 client 는 GitHub App 의 것. */
 export const GITHUB_USER_TOKEN_KIND = "github_pat";
-const DIRECT_OAUTH_TOKEN_URLS: Record<string, string> = { [GOOGLE_KIND]: GOOGLE_TOKEN_URL, [LINEAR_APP_KIND]: LINEAR_TOKEN_URL, [GITHUB_USER_TOKEN_KIND]: GITHUB_TOKEN_URL };
+const DIRECT_OAUTH_TOKEN_URLS: Record<string, string> = {
+  [GOOGLE_KIND]: GOOGLE_TOKEN_URL, [LINEAR_APP_KIND]: LINEAR_TOKEN_URL, [GITHUB_USER_TOKEN_KIND]: GITHUB_TOKEN_URL,
+  [MICROSOFT_KIND]: MICROSOFT_TOKEN_URL, // #4211 — /common 끝점(회사·개인 계정 모두). 갱신마다 새 refresh_token 이 올 수 있다 → mergeRefreshedTokens 가 덮어쓴다
+};
 /** 갱신에 쓸 OAuth 클라이언트가 **다른 kind 의 슬롯**에 사는 경우 — github_pat 묶음은 GitHub App(github_app/oauth:client)이 발급한 것이라 그 client 로 갱신한다.
  *  ⚠ 이 표가 없으면 [GitHub 연결] 8시간 뒤 도구·수집기가 전부 «발급처를 모릅니다» 로 죽는다(2026-08-28 dev 실측, #2247 GitHub 수집기 첫 run). */
 export const CLIENT_KIND_FOR: Record<string, string> = { [GITHUB_USER_TOKEN_KIND]: GITHUB_APP_KIND };
@@ -109,16 +113,27 @@ export interface ProxyAuthDeps {
   tokenUrlOf?: (authKind: string) => string | undefined;
   loadClient?: (authKind: string) => Promise<OAuthClientInfo | null>;
   postRefresh?: (tokenUrl: string, form: URLSearchParams) => Promise<{ status: number; ok: boolean; text: string }>;
-  persist?: (owner: string, kind: string, scopeKey: string, tokens: OAuthTokens) => Promise<void>;
+  persist?: (owner: string, kind: string, scopeKey: string, tokens: OAuthTokens, prevMeta?: Record<string, unknown>) => Promise<void>;
 }
 
-async function defaultLoadClient(authKind: string): Promise<OAuthClientInfo | null> {
+async function vaultClient(authKind: string): Promise<OAuthClientInfo | null> {
   const r = await getMemberSecret("gateway", clientKindFor(authKind), CLIENT_SCOPE);
   if (!r?.secret) return null;
   try {
     const ci = JSON.parse(r.secret) as OAuthClientInfo;
     return typeof ci?.client_id === "string" && ci.client_id ? ci : null;
   } catch { return null; }
+}
+
+/**
+ * 갱신에 쓸 클라이언트. 대개 금고(gateway `<kind>/oauth:client`)지만 **플랫폼 소유 앱**으로 발급된 토큰은 다르다(#4211):
+ *  매니지드는 CP 릴레이가 동의·교환을 대신해 테넌트 금고에 클라이언트가 **없다** — 그 kind 는 공유 게이트웨이 env 의
+ *  플랫폼 클라이언트로 갱신해야 한다. 안 그러면 연결 1시간 뒤 «OAuth 클라이언트 정보가 없습니다» 로 도구가 전멸한다.
+ *  규칙(릴레이면 플랫폼 먼저 · 직결이면 금고 먼저)은 kind 별 해소기가 갖는다. 지금은 Microsoft 만 이 길을 탄다.
+ */
+async function defaultLoadClient(authKind: string): Promise<OAuthClientInfo | null> {
+  if (authKind === MICROSOFT_KIND) return resolveMicrosoftOAuthClient(() => vaultClient(authKind));
+  return vaultClient(authKind);
 }
 
 async function defaultPostRefresh(tokenUrl: string, form: URLSearchParams): Promise<{ status: number; ok: boolean; text: string }> {
@@ -131,8 +146,16 @@ async function defaultPostRefresh(tokenUrl: string, form: URLSearchParams): Prom
   return { status: res.status, ok: res.ok, text: await res.text().catch(() => "") };
 }
 
-async function defaultPersist(owner: string, kind: string, scopeKey: string, tokens: OAuthTokens): Promise<void> {
-  await setMemberSecret(owner, kind, scopeKey, { secret: encodeTokenBlob(tokens), meta: tokenMeta(tokens) }, "oauth-refresh");
+/**
+ * 갱신 결과를 금고에 되쓴다. meta 는 **이전 meta 위에** 새 만료·범위를 얹는다(#4211) — setMemberSecret 은 meta 를 병합하지
+ *  않고 통째로 바꾸므로, tokenMeta 만 넘기면 연결 때 적어 둔 표시 정보(어느 계정으로 붙었나·회사/개인)가 첫 갱신에 사라진다.
+ *  토큰은 meta 에 없으므로(평문 금지 규약) 이전 meta 를 물려도 새는 것은 없다.
+ */
+export function refreshedMeta(prevMeta: Record<string, unknown> | undefined, tokens: OAuthTokens): Record<string, unknown> {
+  return { ...(prevMeta ?? {}), ...tokenMeta(tokens) };
+}
+async function defaultPersist(owner: string, kind: string, scopeKey: string, tokens: OAuthTokens, prevMeta?: Record<string, unknown>): Promise<void> {
+  await setMemberSecret(owner, kind, scopeKey, { secret: encodeTokenBlob(tokens), meta: refreshedMeta(prevMeta, tokens) }, "oauth-refresh");
 }
 
 /**
@@ -166,7 +189,7 @@ async function refreshBlob(
 
   const merged = mergeRefreshedTokens(tokens, next);
   // 저장 실패는 호출을 막지 않는다 — 방금 받은 토큰은 유효하므로 이번 호출은 성공시키고, 다음 호출이 다시 갱신할 뿐이다.
-  await (deps.persist ?? defaultPersist)(resolved.owner, resolved.kind, resolved.scope_key, merged)
+  await (deps.persist ?? defaultPersist)(resolved.owner, resolved.kind, resolved.scope_key, merged, resolved.meta)
     .catch((err) => logger.warn({ err, kind: resolved.kind }, "갱신된 OAuth 토큰 저장 실패 — 이번 호출은 진행(다음 호출이 재갱신)"));
   return merged;
 }

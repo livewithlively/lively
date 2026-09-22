@@ -7,13 +7,17 @@ import { CLICKUP_TOKEN_KIND } from "../org/credentials/plain-token-source.js";
 import { GITHUB_TOKEN_KIND } from "../org/credentials/github-token-source.js";
 import { ensureGithubIssuesDistiller } from "../org/distill/github-preset.js";
 import { GITLAB_TOKEN_KIND, pickGitlabSlot } from "../org/credentials/gitlab-token-source.js";
-import { listMemberSecretsPublic, memberOwner } from "../org/credentials/member-secret-store.js";
+import { listMemberSecretsPublic, memberOwner, getMemberSecret } from "../org/credentials/member-secret-store.js";
 import { z } from "zod";
 import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { LINEAR_APP_KIND } from "../org/credentials/linear-oauth.js";
 import { startLinearAppConsent, completeLinearAppInstall, linearAppReady } from "../org/credentials/oauth-broker.js";
 import { collectScopeOptions, scopeOptionsSupported } from "../org/collect-scope-options.js";
+import { MICROSOFT_KIND } from "../org/credentials/microsoft-oauth.js";
+import { startMicrosoftConsent, completeMicrosoftInstall, microsoftReady, microsoftAdminConsentLink, onMicrosoftInstalled } from "../org/credentials/oauth-broker.js";
+import { ensureHttpToolPresetGroup } from "../org/delivery/http-tool-preset-apply.js";
+import { managedMode } from "../org/tenancy/state.js";
 
 /** 토글이 만드는 인스턴스 키 — 관리탭에서 손으로 만든 것('_' 등)과 겹치지 않게 고정 이름. */
 export const MEMBER_INSTANCE = "lively-member";
@@ -89,6 +93,97 @@ export const linearCollectCapabilities = makeMemberTokenCollect({
   onEnabled: async ({ actor, source }) => { await ensureGithubIssuesDistiller({ actor, source: "collect-toggle:" + source }); },
 });
 
+// ── Outlook(#4211) — [Outlook 연결] 한 번이 곧 계정 연결(Microsoft 365 회사 계정 · outlook.com 개인 계정). ──
+//  Linear 와 같은 모양(토글이 곧 연결 — 자격이 없으면 needs_connect + 동의 URL)이고, 다른 점은 하나: **회사 계정은 그 회사
+//  관리자가 먼저 허용해야 한다**(Microsoft 관리형 기본 동의 정책이 Mail.Read·Calendars.Read 의 사용자 동의를 막는다).
+//  그래서 상태에 «관리자에게 보낼 링크»를 늘 싣는다 — Microsoft 는 막힌 사람을 우리 콜백으로 돌려보내지 않는 일이 많아서,
+//  오류를 기다렸다가 안내하면 늦는다(그 사람은 Microsoft 화면에 갇혀 있다).
+export const outlookCollectCapabilities = makeMemberTokenCollect({
+  system: "outlook", preset: "outlook", instance: MEMBER_INSTANCE, credKind: MICROSOFT_KIND, appLabel: "Outlook",
+  label: "Outlook — 내 메일",
+  note: "[Outlook 자료 가져오기] 토글로 만들어진 수집기 — 켠 사람의 Outlook 연결로 메일을 모읍니다(#4211). 토큰 칸은 없습니다.",
+  connectHint: "[외부 앱 연결 ▸ Outlook]에서 [Outlook 연결]을 눌러 Microsoft 화면에서 [허용]하세요",
+  optionKeys: ["backfill_since"],
+  outcome: "켠 사람의 메일(받은·보낸 편지함 등, 지운 편지함·정크·임시 보관함 제외)이 자료함에 들어온다. 자격이 없으면 needs_connect 와 함께 Microsoft 동의 URL 을 준다(토글이 곧 연결).",
+  connectStart: async (actor) => { const c = await startMicrosoftConsent(actor); return { authorization_url: c.authorizationUrl ?? "" }; },
+  extraState: async () => {
+    const ready = await microsoftReady();
+    //  managed — 매니지드는 앱을 CP 가 쥔다. 준비 전이라도 구성원에게 «Entra 앱을 직접 등록하세요» 칸을 내밀면 안 된다
+    //   (그건 셀프호스팅 관리자의 일이다). 화면은 이 값으로 등록 칸 대신 «준비 중»을 말한다.
+    return { app_ready: ready, managed: managedMode(), admin_consent_url: ready ? await microsoftAdminConsentLink().catch(() => null) : null };
+  },
+});
+
+/** 켜진 연결의 계정 표시(회사/개인) — 관리자 허용 안내를 회사 계정에만 강하게 내밀기 위한 사실. 토큰은 읽지 않는다(meta 만). */
+async function outlookAccountOf(memberId: string): Promise<{ email: string | null; type: string | null; tenant_id: string | null } | null> {
+  const r = await getMemberSecret(memberOwner(memberId), MICROSOFT_KIND, "").catch(() => null);
+  if (!r?.secret) return null;
+  const m = r.meta ?? {};
+  const s = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+  return { email: s(m.ms_email), type: s(m.account_type), tenant_id: s(m.ms_tenant_id) };
+}
+
+const orgOutlookConnect: Capability = {
+  name: "org_outlook_connect", title: "Outlook 연결(Microsoft 동의) 시작",
+  description:
+    "Microsoft 동의를 시작한다(구성원) — 반환된 authorization_url 을 열어 [허용]하면 내 금고(microsoft_oauth)에 저장되고, Outlook 도구(outlook_*)가 " +
+    "이 워크스페이스에 준비된다. 회사 계정(Microsoft 365)은 그 회사 관리자가 먼저 «조직 전체 허용»을 해야 한다 — 그 링크는 admin_consent_url " +
+    "(org_outlook_admin_consent 와 같은 값)이다. 이미 연결돼 있어도 다시 동의할 수 있다(계정 바꾸기).",
+  scope: "memory", input: {},
+  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/org/outlook/connect"], parse: () => ({}) }] },
+  handler: async (_input, user) => {
+    if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
+    try {
+      const c = await startMicrosoftConsent(user.userId);
+      return {
+        ok: true, authorization_url: c.authorizationUrl, admin_consent_url: await microsoftAdminConsentLink().catch(() => null),
+        message: "이 URL 의 Microsoft 화면에서 [허용]하세요. «관리자 승인 필요»가 뜨면 admin_consent_url 을 회사 관리자에게 보내세요.",
+      };
+    } catch (err) { throw new HttpError(409, (err as Error).message); }
+  },
+};
+
+const orgOutlookAdminConsent: Capability = {
+  name: "org_outlook_admin_consent", title: "Outlook 관리자 허용 링크",
+  description:
+    "회사 관리자에게 보낼 «조직 전체 허용» 링크. 회사 Microsoft 365 계정은 Mail.Read·Calendars.Read 를 본인이 허용할 수 없어서(Microsoft 관리형 " +
+    "기본 동의 정책) 관리자가 이 링크를 한 번 열어 [수락]해야 구성원이 연결된다. 관리자는 라이블리 계정이 없어도 된다. " +
+    "개인 outlook.com 계정은 필요 없다. url=null 이면 아직 Microsoft 앱이 준비되지 않았다.",
+  scope: null, input: {},
+  expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/outlook/admin-consent"], parse: () => ({}) }] },
+  handler: async (_input, user) => {
+    if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
+    const account = await outlookAccountOf(user.userId);
+    //  이미 회사 계정으로 붙어 있으면 그 회사로 겨눈다(관리자가 다른 회사 계정으로 로그인해 엉뚱한 곳을 허용하는 일을 줄인다).
+    const tenant = account?.type === "work" ? account.tenant_id : null;
+    return { url: await microsoftAdminConsentLink(tenant).catch(() => null), ready: await microsoftReady().catch(() => false), account };
+  },
+};
+
+// 매니지드 릴레이 완료(#4211) — CP 가 admin 토큰으로 부른다. state 검증·저장은 브로커. 응답에 토큰 없음.
+const orgOutlookOauthComplete: Capability = {
+  name: "org_outlook_oauth_complete", title: "Outlook OAuth 릴레이 완료(CP 전용)",
+  description: "라이블리 컨트롤플레인이 Microsoft 와 교환한 토큰 응답을 이 게이트웨이의 서명 state 와 함께 넣는다. 연결자의 금고 슬롯(microsoft_oauth)에 저장한다. 사람이 직접 부를 일은 없다.",
+  scope: "admin",
+  input: { state: z.string().describe("이 게이트웨이가 발급한 서명 state"), token: z.record(z.unknown()).describe("Microsoft 토큰 엔드포인트 응답 JSON 원문") },
+  expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/org/outlook/oauth-complete"], parse: (req) => req.body ?? {} }] },
+  handler: async (input, user) => {
+    const i = (input ?? {}) as { state?: unknown; token?: unknown };
+    if (typeof i.state !== "string" || !i.state) throw new HttpError(400, "state 는 필수입니다");
+    if (!i.token || typeof i.token !== "object") throw new HttpError(400, "token(Microsoft 응답)은 필수입니다");
+    try {
+      const r = await completeMicrosoftInstall(i.state, i.token, user?.userId ?? "cp-relay");
+      return { ok: true, member: r.memberId, email: r.email, account_type: r.account_type };
+    } catch (err) { throw new HttpError(400, (err as Error).message); }
+  },
+};
+
+// 연결이 저장되면 Outlook 도구를 준비한다(빠진 것만 · 관리자가 꺼 둔 것은 그대로). 매니지드 CP 는 MCP 서버 행이 있는 묶음만
+//  심어서 Outlook 도구가 저절로 생기지 않는다 — 첫 연결이 곧 준비 시점이다(oauth-broker onMicrosoftInstalled 주석).
+onMicrosoftInstalled(async (memberId) => {
+  await ensureHttpToolPresetGroup("outlook", { actor: memberId, source: "outlook-connect" });
+});
+
 // Linear 동의 시작(재연결·토큰 교체) + 매니지드 릴레이 완료 — 노션·구글의 connect/oauth_complete 와 같은 모양.
 const orgLinearCollectConnect: Capability = {
   name: "org_linear_collect_connect", title: "Linear 연결(라이블리 앱 동의) 시작",
@@ -146,4 +241,5 @@ const orgCollectScopeOptions: Capability = {
   },
 };
 
-export const memberCollectAppCapabilities = [...figmaCollectCapabilities, ...clickupCollectCapabilities, ...githubCollectCapabilities, ...gitlabCollectCapabilities, ...linearCollectCapabilities, orgLinearCollectConnect, orgLinearOauthComplete, orgCollectScopeOptions];
+export const memberCollectAppCapabilities = [...figmaCollectCapabilities, ...clickupCollectCapabilities, ...githubCollectCapabilities, ...gitlabCollectCapabilities, ...linearCollectCapabilities, orgLinearCollectConnect, orgLinearOauthComplete, orgCollectScopeOptions,
+  ...outlookCollectCapabilities, orgOutlookConnect, orgOutlookAdminConsent, orgOutlookOauthComplete];
