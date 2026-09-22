@@ -2105,15 +2105,32 @@ function setupMobileDock(mainEl) {
   //  내려갔다 올라오면 못 쓴다). passive:false 를 명시해야 preventDefault 가 먹는다. 클릭은 키보드 접근(detail 0)만 처리.
   const tbtn = (label, title, act, onStart?) => {
     const b = el('button', { class: 'mkey', type: 'button', title: title || label, text: label });
-    b.addEventListener(onStart ? 'touchstart' : 'touchend', (e) => { e.preventDefault(); act(); }, { passive: false });
+    //  떼는 순간에 도는 단추는 **손가락이 움직였으면 누른 게 아니다** — 키 줄은 가로로 밀어 보는 줄이라, 미는 손가락이
+    //   단추 위에서 떨어지면 그 단추가 눌린 것으로 쳐졌다(#4160: 선택지 숫자가 밀다가 잘못 가면 «승인» 이 된다).
+    let sx = 0, sy = 0;
+    if (!onStart) b.addEventListener('touchstart', (e) => { const t = e.touches[0]; sx = t ? t.clientX : 0; sy = t ? t.clientY : 0; }, { passive: true });
+    b.addEventListener(onStart ? 'touchstart' : 'touchend', (e) => {
+      if (!onStart) { const t = e.changedTouches[0]; if (t && Math.hypot(t.clientX - sx, t.clientY - sy) > 10) return; }   // 민 것 — 브라우저 스크롤에 맡긴다
+      e.preventDefault(); act();
+    }, { passive: false });
     b.addEventListener('click', (e) => { if (e.detail === 0) act(); });
     return b;
   };
   const key = (label, seq, title?) => tbtn(label, title, () => { userTyped = true; sendInput(typeof seq === 'function' ? seq() : seq); }, true);
+  //  선택지 숫자는 **떼는 순간**에 보낸다(위 이동 판정을 탄다) — 다른 키처럼 닿는 순간 보내면 줄을 밀기만 해도 고른다.
+  const pick = (n) => tbtn(n, n + ' — 선택지 고르기(Enter 없이)', () => { userTyped = true; sendInput(n); });
+  //  #4160 — 폰에서 제일 자주 하는 일은 **AI 가 묻는 선택지에 답하기**다(«1. Yes / 2. … / 3. No»). 종전엔 숫자를 입력칸에
+  //   쓰고 [보내기]를 눌러야 했는데, 보내기는 숫자 뒤에 Enter 를 **하나 더** 붙인다 — 선택지는 숫자만으로 이미 골라지므로
+  //   그 Enter 가 다음 화면(대개 빈 입력칸)으로 새어 들어갔다. 숫자 셋은 **그 글자만** 보내는 단추로 앞에 둔다.
+  //   ⇧Tab(모드 바꾸기 — 계획 ↔ 자동 수락)은 폰 키보드에 없는 조합이라 단추가 유일한 길이다.
+  //   순서 = 자주 쓰는 것부터(키 줄은 가로로 넘치면 밀어서 본다 — 뒤쪽일수록 덜 보인다).
   const keys = el('div', { class: 'mkeys' },
-    key('Esc', '\x1b'), key('Tab', '\t'),
-    key('↑', () => arrowSeq('A')), key('↓', () => arrowSeq('B')), key('←', () => arrowSeq('D')), key('→', () => arrowSeq('C')),
-    key('^C', '\x03', 'Ctrl+C — 중단'), key('⏎', '\r', 'Enter 만 보내기'),
+    key('Esc', '\x1b'), key('⏎', '\r', 'Enter 만 보내기'),
+    pick('1'), pick('2'), pick('3'),
+    key('↑', () => arrowSeq('A')), key('↓', () => arrowSeq('B')),
+    key('⇧Tab', '\x1b[Z', 'Shift+Tab — 모드 바꾸기'), key('Tab', '\t'),
+    key('←', () => arrowSeq('D')), key('→', () => arrowSeq('C')),
+    key('^C', '\x03', 'Ctrl+C — 중단'),
     tbtn('⧉ 복사', '화면 글자 고르기·복사', openCopySheet),
     tbtn('⎘ 붙여넣기', '클립보드 내용을 입력칸에', mobilePasteIn));
   mcompEl = el('textarea', { class: 'mcomp', rows: '1', placeholder: '여기에 쓰고 보내기 — 꾹 눌러 복사·붙여넣기',
