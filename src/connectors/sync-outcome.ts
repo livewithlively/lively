@@ -5,6 +5,31 @@
 //  왜 순수로 빼나 — 이 둘은 «조용한 실패» 가 태어나는 자리다. 호출부에 인라인으로 있으면 조건이
 //  슬그머니 바뀌어도 아무도 모른다. 조건 조합을 표로 고정해 둔다(sync-outcome.test.ts).
 
+/**
+ * 자식 CLI(run-sync/run-push/run-wiki-push)의 진단 한 줄 — stdout 에서 뽑는다.
+ *
+ *  🔴 **실패 경로에서도 이걸 담아야 한다.** 커넥터 CLI 는 pino 로 **stdout** 에 찍고 실패 시 exit(1) 하므로
+ *   execFile 이 던지는 에러의 `message` 엔 stderr(비어 있다)만 실린다 → 잡 요약이
+ *   `Command failed: node … dist/connectors/run-push.js clickup` 한 줄로 끝나, 원인이 필요한 바로 그 순간에
+ *   진단이 사라진다(연속 실패로 크론이 자동 정지했을 때 관리 화면에 볼 것이 없었다).
+ *   execFile 에러 객체는 `stdout`/`stderr` 를 실어 주므로, 문자열이든 그 객체든 같은 방식으로 뽑는다.
+ *
+ *  마지막 줄은 «완료 요약»(건수)이라 실패했다는 사실만 말한다. **왜** 실패했는지는 그 앞의 warn/error 줄에만
+ *   있으므로(pino level 40=warn·50=error·60=fatal) 있으면 함께 담는다. pino 의 err 직렬화는 stack 을 통째로
+ *   싣기 때문에 그 줄엔 상한을 둔다 — 잡 요약 컬럼이 로그 저장소가 되지 않게.
+ */
+export function childTail(x: unknown): string {
+  const raw = typeof x === "string" ? x
+    : typeof (x as { stdout?: unknown } | null)?.stdout === "string" ? (x as { stdout: string }).stdout
+    : "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  const lines = trimmed.split("\n");
+  const last = lines[lines.length - 1]!;
+  const why = [...lines].reverse().find((l) => l !== last && /"level":\s*[456]\d/.test(l));
+  return why ? `${why.slice(0, 1000)} | ${last}` : last;
+}
+
 /** runConnectorSync 가 타깃마다 summary 에 넣는 항목의 관측 가능한 모양. */
 export interface SyncTargetOutcome {
   ok?: unknown;

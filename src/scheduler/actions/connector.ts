@@ -1,5 +1,6 @@
 // 크론 액션: 커넥터 sync/push·위키 push — R16 에서 scheduler runJob if-체인 본문을 원문 이동.
 import { itemsPool, q } from "../../db/client.js";
+import { childTail, syncBatchStatus } from "../../connectors/sync-outcome.js";
 
 // sync 대상 커넥터 — 관리탭에서 켠 것(org_connector.enabled=true, #541) 우선.
 //  비었으면(마이그레이션 전) 기존 data_source.status='active' 로 폴백 — 하위호환 무중단.
@@ -70,7 +71,6 @@ export async function runConnectorSync(params: Record<string, unknown>): Promise
   //  ★ 결과를 사실대로 적는다(#3994 T2-a) — 종전엔 타깃 실패를 summary 에 담고도 무조건 "ok" 였다.
   //   그 값이 org_cron.last_status 가 되고 연속실패 서킷브레이커는 status 로만 판정하므로 영원히
   //   트립하지 않았다. 15분마다 강제 종료되는 수집기가 무기한 초록불이던 자리(파이프라인 화면 포함).
-  const { syncBatchStatus } = await import("../../connectors/sync-outcome.js");
   return { status: syncBatchStatus(out), summary: { systems: out } };
 }
 
@@ -102,12 +102,12 @@ export async function runConnectorPush(params: Record<string, unknown>): Promise
     try {
       const r = await execFileP("node", ["--env-file-if-exists=.env", "dist/connectors/run-push.js", sys],
         { timeout: 300_000, maxBuffer: 16 * 1024 * 1024 });
-      out.push({ system: sys, ok: true, tail: (r.stdout || "").trim().split("\n").slice(-1)[0] ?? "" });
-    } catch (e) { out.push({ system: sys, ok: false, error: (e as Error)?.message ?? String(e) }); }
+      out.push({ system: sys, ok: true, tail: childTail(r.stdout) });
+      //  실패에도 tail 을 담는다 — message 만 담으면 `Command failed: …` 한 줄이라 원인이 사라진다(childTail 머리말).
+    } catch (e) { out.push({ system: sys, ok: false, error: (e as Error)?.message ?? String(e), tail: childTail(e) }); }
   }
   //  수집과 같은 규율(#3994 T2-a) — 아웃바운드 실패도 잡 상태에 올린다. 종전엔 여기도 무조건 "ok" 라
   //   push 가 매번 죽어도 크론은 정상으로 보였다(같은 병이 이 파일에 두 군데 있었다).
-  const { syncBatchStatus } = await import("../../connectors/sync-outcome.js");
   return { status: syncBatchStatus(out), summary: { systems: out } };
 }
 
@@ -120,6 +120,6 @@ export async function runWikiPush(): Promise<{ status: string; summary: unknown 
   try {
     const r = await execFileP("node", ["--env-file-if-exists=.env", "dist/connectors/run-wiki-push.js"],
       { timeout: 300_000, maxBuffer: 16 * 1024 * 1024 });
-    return { status: "ok", summary: { tail: (r.stdout || "").trim().split("\n").slice(-1)[0] ?? "" } };
-  } catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e) } }; }
+    return { status: "ok", summary: { tail: childTail(r.stdout) } };
+  } catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e), tail: childTail(e) } }; }
 }
