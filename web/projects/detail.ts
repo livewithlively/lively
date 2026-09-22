@@ -15,7 +15,7 @@ import { mountProjectHub } from './detail-hub.js';
 import { HUB_TOOLS, type HubTool } from './detail-hub-layout.js';
 import { pjvProjFactsStrip, pjvProjMetaPanel } from './detail-meta.js';
 import { openProjectSessionForm, openProjectSettings, projectFolderSection, projectTerminalSection, projectTimelineSection } from './detail-sections.js';
-import { pjvTasksSection } from './detail-tasks.js';
+import { pjvGoTaskWorkspace, pjvOpenTaskFromHub, pjvTasksSection } from './detail-tasks.js';
 import { pjvSelReset } from './selection.js';
 import { clearSortCtx, consumeKeepScroll, pjvRestoreScroll } from './state.js';
 import { pjvLoadStatusTemplates, pjvRegisterProjList, pjvSetStatusRegistry, pjvStatusReg } from './status.js';
@@ -326,6 +326,8 @@ async function renderProjectV2Detail(view, idStr) {
   view.replaceChildren(head, hubHost);
   mountProjectHub(hubHost, {
     id, p, members, reload, base: V6_BASE, inModal, focus, actionsHost: hubActions,
+    openTask: (tid) => pjvOpenTaskFromHub(tid, reload),          // #4165 줄 → 태스크 모달(본문 먼저)
+    goTask: (t) => pjvGoTaskWorkspace(id, t, reload),             // #4165 줄 호버 → 작업 공간(세션)
     sections: {
       tasks: () => pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []),
       sessions: () => projectTerminalSection(id, members, meId, V6_BASE, p.name, p),
@@ -353,5 +355,5 @@ export { _pjvPmOpen, pjvCloseProjectModalOnRoute, pjvOpenProjectModal, pjvProjec
 //   소유 모듈의 몽키패치 IIFE 2개가 런타임에 교체하는 바인딩이라 사본은 패치 이전 함수를 굳힌다.
 export { buildWysiwygToolbar, mdFromDom, mountBodyEditor, uploadBodyFile } from './detail-body.js';
 export { companyTimelineSection, copyText, openLocalWorkModal, openProjectSessionForm } from './detail-sections.js';
-export { pjvAddTask, pjvRowMore, pjvTaskRow } from './detail-tasks.js';
+export { pjvAddTask, pjvGoTaskWorkspace, pjvRowMore, pjvTaskRow } from './detail-tasks.js';
 export { openProjectPreviewModal } from './detail-preview.js';

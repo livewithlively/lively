@@ -25,7 +25,7 @@ import { pjvGroupCheck, pjvRowActions, pjvRowCheck, pjvRowGrip, pjvRowTagsEl, pj
 import { pjvClosedView, pjvReloadKeepScroll, pjvSubtaskMode } from './state.js';
 import { PJV_TASK_STATUS, pjvStatusIconStd, pjvStatusMeta } from './status.js';
 import { pjvAssigneeControl, pjvDueControl, pjvPatchTask, pjvPriorityControl, pjvSaveTask, pjvStatusControl } from './task-controls.js';
-import { pjvRenameTask, pjvRowMore, pjvShowInlineSubtask } from './detail-task-actions.js';
+import { pjvGoTaskWorkspace, pjvRenameTask, pjvRowMore, pjvShowInlineSubtask } from './detail-task-actions.js';
 
 // 태스크 섹션 — [태스크 N개][Closed 토글] 헤더 + 컬럼헤더 + 상태 그룹(할 일/진행 중/Closed). 클릭업식 리스트뷰.
 //  할 일·진행 중은 비어도 항상 표시(인라인 추가행). Closed(완료) 그룹은 기본 숨김 — 헤더의 Closed 토글로만 노출.
@@ -347,8 +347,12 @@ function pjvTaskRow(projectId, t, members, reload, depth, fields) {
 
   const moreBtn = pjvRowMore(projectId, t, depth, reload, (depth === 0 && t.level !== 'subtask') ? startAddSub : null);
 
-  // 제목 우측 호버 아이콘 3개(클릭업식) — 하위 추가(상위만)·태그 편집·이름 변경. startAddSub 정의 후 붙인다.
+  // 제목 우측 호버 아이콘(클릭업식) — 작업 공간(상위만, #4165)·하위 추가(상위만)·태그 편집·이름 변경. startAddSub 정의 후 붙인다.
+  //  제목을 누르면 태스크 모달(본문이 먼저)이고, 세션으로 곧장 가는 길은 이 단추다 — 맡은 세션이 있으면 그리로, 없으면 새로.
+  const sessOf = Array.isArray(t.sessions) ? t.sessions : [];
   titleCell.append(pjvRowActions([
+    (depth === 0 && t.level !== 'subtask') ? { title: sessOf.length ? '맡은 세션으로 가기' + (sessOf[0].label ? ` («${sessOf[0].label}»)` : '') : '이 태스크로 세션 열기',
+      icon: sessOf.length ? 'goto' : 'session', fn: () => pjvGoTaskWorkspace(projectId, t, reload) } : null,
     (t.level !== 'subtask') ? { title: '하위 태스크 추가', icon: 'add', fn: () => startAddSub() } : null,
     { title: '태그 편집', icon: 'tag', fn: (b) => pjvTagPopover(b, t, reload) },
     { title: '이름 변경', icon: 'rename', fn: (b) => pjvRenameTask(b, t, reload) },
@@ -437,5 +441,8 @@ function pjvTaskRow(projectId, t, members, reload, depth, fields) {
 
 
 // pjvTaskRow 는 위 IIFE 2개가 교체한 **현재 값**이 나간다 — 배럴(detail.ts→projects.ts)도 `export … from` 재수출로 받는다(값 복사 금지).
-export { pjvTaskRow, pjvTasksSection };
-export { pjvAddTask, pjvRowMore } from './detail-task-actions.js';
+// #4165 허브(detail-hub.ts)는 배럴을 못 물므로 태스크 모달 여는 문을 detail.ts 가 여기서 받아 넘긴다.
+function pjvOpenTaskFromHub(taskId, reload) { pjvOpenTaskModal(taskId, reload); }
+
+export { pjvOpenTaskFromHub, pjvTaskRow, pjvTasksSection };
+export { pjvAddTask, pjvGoTaskWorkspace, pjvRowMore } from './detail-task-actions.js';
