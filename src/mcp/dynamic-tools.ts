@@ -102,6 +102,16 @@ export function urlPathTemplateKeys(rawUrl: string): string[] {
 //      공백은 %20 이다(URLSearchParams 의 `+` 가 아니다 — Graph 는 RFC 3986 인코딩을 요구한다).
 //   ② 인자가 없으면 그 `이름=값` 쌍을 **통째로 뺀다**(쿼리 자리는 선택 인자다 — 필수 여부는 input_schema 가 정한다).
 //   ③ 쿼리 자리를 쓴 키는 소비된 것으로 친다 — 뒤에서 같은 이름으로 한 번 더 붙지 않는다.
+//   ④ 작은따옴표로 감싼 자리(`'{k}'` — OData 문자열 리터럴)는 값 안의 `'` 를 `''` 로 겹친다. encodeURIComponent 는 `'` 를
+//      그대로 두고, 인코딩해도(%27) 서버가 풀어 읽으므로 인코딩으로는 못 막는다 — 겹치지 않으면 `x' or …` 가 리터럴을 닫고
+//      필터 조건을 보탠다(리뷰 지적, #4211).
+/** 템플릿에서 이 자리가 작은따옴표 한 쌍 사이인가(`'{k}'` 또는 인코딩된 `%27{k}%27`). */
+function inQuotedLiteral(pair: string, at: number, len: number): boolean {
+  const before = pair.slice(0, at);
+  const after = pair.slice(at + len);
+  return /(?:'|%27)$/i.test(before) && /^(?:'|%27)/i.test(after);
+}
+
 function fillQueryTemplate(query: string, args: Record<string, unknown>, consumed: Set<string>): string {
   if (!query) return "";
   const out: string[] = [];
@@ -114,7 +124,10 @@ function fillQueryTemplate(query: string, args: Record<string, unknown>, consume
       return (typeof v === "string" && v !== "") || (typeof v === "number" && Number.isFinite(v));
     });
     if (!ok) continue; // ② 없으면 쌍째 뺀다
-    out.push(pair.replace(URL_PLACEHOLDER_RE, (_m, key: string) => encodeURIComponent(String(args[key]))));
+    out.push(pair.replace(URL_PLACEHOLDER_RE, (m: string, key: string, at: number) => {
+      const v = String(args[key]);
+      return encodeURIComponent(inQuotedLiteral(pair, at, m.length) ? v.replace(/'/g, "''") : v); // ④
+    }));
   }
   return out.length ? `?${out.join("&")}` : "";
 }

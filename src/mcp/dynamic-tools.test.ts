@@ -207,4 +207,17 @@ t("Q6 경로 자리 규칙은 그대로다 — 쿼리 자리 도입이 경로 �
   assert.equal(u.searchParams.get("$select"), "id,body", "템플릿의 고정 쿼리는 그대로");
 });
 
+t("Q7 작은따옴표로 감싼 자리는 값의 ' 를 겹친다 — OData 리터럴을 닫고 조건을 보태지 못한다", () => {
+  const evil = "x' or contains(subject,'secret";
+  for (const q of ["'", "%27"]) {
+    const u = new URL(finalUrl(`${MS}/me/messages?$filter=conversationId%20eq%20${q}{c}${q}&$top=25`, { c: evil }));
+    assert.equal(u.searchParams.get("$filter"), "conversationId eq 'x'' or contains(subject,''secret'", `${q}: 리터럴을 빠져나갔다 — ${u.search}`);
+    assert.equal(u.searchParams.get("$top"), "25");
+  }
+  // 따옴표 밖 자리는 값 그대로(겹치면 검색어가 바뀐다)
+  assert.equal(new URL(finalUrl(`${MS}/me/messages?$search=%22{q}%22`, { q: "it's" })).searchParams.get("$search"), '"it\'s"');
+  // 한쪽만 따옴표면 리터럴이 아니다
+  assert.equal(new URL(finalUrl(`${MS}/me/x?a='{q}`, { q: "o'k" })).searchParams.get("a"), "'o'k");
+});
+
 console.log(`\ndynamic-tools tests: ${pass} passed`);
