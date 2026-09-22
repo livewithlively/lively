@@ -19,13 +19,13 @@ import { livChatCleanup } from '../liv-chat.js';   // #4032 — 리브 칸 걷�
 import { CLASSIC_PAGES, appByKey, appFrame, nativeAppByRoute, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
 import { openProjPickModal, openProjPickPopover } from './proj-pick.js';   // 세션의 프로젝트 고르기 — 드롭다운·모달 두 그릇, 목록 한 벌
-import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, movePinnedSession, projLandingRoute, projectOrder, reloadSidePrefs, sessText, type SideInstance } from './side.js';
+import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, movePinnedSession, projLandingRoute, projectOrder, reloadSidePrefs, sessProjFilter, sessText, type SideInstance } from './side.js';
 import { dotCls, findSessIn, isMineSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type HomeDest, type Sess, type V2Data } from './views.js';
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
 import { keepObserved, type ObsMemory } from './obs-carry.js';
 import { PINNED_GROUP, PRIORITY_GROUP, QUIET_RANK, dayGroup, pruneHolds, stepRowHold, type RowHold } from './hold-rules.js';   // #3856 — 「지금 볼 것」 해제·카드 자리 규칙(순수)   // #2544 후속 — 중계가 «못 본» 판을 직전 관측으로 잇는다(순수)
-import { renderPast, renderTrash } from './bins.js';   // #1851 — 지난 세션(#/archive) · 휴지통(#/trash) 화면 · #3778 이름·주인공 교체
+import { renderPast, renderSessAll, renderTrash } from './bins.js';   // #1851 — 지난 세션(#/archive) · 휴지통(#/trash) 화면 · #3778 이름·주인공 교체 · #4158 [AI 세션] 전체 목록
 import { renderSourcesApp, renderSourceDetail } from './sources.js';   // #2423 자료 앱 — 열람실(사이드바 갈래는 side.ts)
 import { renderConnect, renderConnectApp, renderConnectData } from './connect.js';
 import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
@@ -51,7 +51,7 @@ import { instBrowserHost, rowStands, type InstFacts } from '../lib/row-stands.js
 import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { mountAppUiFrame } from './app-ui.js';
 import { cachedAppInstance, closeAppInstance, createAppInstance, dismissedSessionRefs, dismissSessions, ensureSessionAppInstance, ensureSingletonAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
-import { keptSessionRefs, planDismissMigration, sessRowVerdict, verdictStands, withoutSessionKeys } from './sess-visibility.js';   // #3855·#3857 — 세션 행이 서는 규칙(순수)
+import { keptSessionRefs, planDismissMigration, sessRowVerdict, verdictStands, withoutSessionKeys, type SessRowVerdict } from './sess-visibility.js';   // #3855·#3857 — 세션 행이 서는 규칙(순수)
 import { mountAppRuntimeView } from './app-runtime.js';
 import { activeNavKey } from './shell-surfaces.js';   // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
 import { startNotificationBanners } from './notifications.js';   // #1891 — 배너는 화면과 무관하게 뜬다
@@ -632,6 +632,7 @@ async function syncShell(): Promise<void> {
   if (atPage === 'inbox') renderInbox(at.center, data);   // 확인할 것 — 같은 결로 따라온다
   else if (atPage === 'archive') renderPast(at.center, data, binHooks, at.aside);   // 아카이브·휴지통도 같은 결(#1851 → #1850 안 A: 곁칸 포함)
   else if (atPage === 'trash') renderTrash(at.center, data, binHooks, at.aside);
+  else if (isSessAllRoute(at.route)) paintSessAll(at);   // #4158 [AI 세션] 전체 목록 — 상태 점·치움이 같은 결로 따라온다
   for (const t of tabsApi.tabs) {
     if (!t.chat) continue;
     //  #4032 — 리브 탭도 세션 대화창을 쥔다. 라우트에 세션 id 가 없으니 **붙어 있는 세션**(chat.id)으로 찾는다.
@@ -1385,11 +1386,19 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       }
       if (a) noteAppUse(a.key);   // 홈 한 줄이 읽는 '최근에 연 앱'(#1954)
       const rest = segs.slice(2).join('/');
+      //  #4158 — [AI 세션] = **전체 세션 목록**을 셸이 직접 그린다(회의 #3977 «AI 세션 탭 = 전체 세션 풀스크린 조회»).
+      //   종전엔 여기서 클래식 세션 관리를 액자에 실었다 — 홈과 다른 잣대로 목록을 세우고, 누르면 새 터미널 창을 열었다.
+      //   레일 착지(sectionRoute)와 런치패드 「AI 세션」이 같은 이 주소로 온다. 클래식 화면(만들기 폼·노드·일괄 종료)은
+      //   `#/terminal`(아래 CLASSIC_PAGES 갈래)로 그대로 열린다 — 목록 화면 발치의 링크가 그 문이다.
+      //  ⚠ 판정은 주소 키 하나(isSessAllRoute) — 8초 결(syncShell)이 같은 자로 이 화면을 다시 그린다.
       // 브라우저 앱(#1829)은 우리 화면이 아니라 남의 웹이다 — iframe(appFrame)이 아니라 서피스로 띄운다.
       //  ⚠ 주소는 **한 세그먼트에 encodeURIComponent 로** 싣는다(`#/app/web/https%3A%2F%2Fexample.com`).
       //   raw 로 넣으면 안 된다 — parseRoute 가 '/' 로 쪼갠 뒤 filter(Boolean) 로 빈 조각을 버려서
       //   `https://x` 의 `//` 가 `/` 하나로 뭉개진다(`https:/x` = 못 여는 주소).
-      if (a && a.kind === 'browser') {
+      if (isSessAllRoute(tab.route)) {
+        paintSessAll(tab);
+        markActive('app:terminal');
+      } else if (a && a.kind === 'browser') {
         let url = a.home || '';
         if (segs[2]) { try { url = decodeURIComponent(segs[2]); } catch { url = segs[2]; } }
         tab.center.replaceChildren(browserSurface({ url, title: a.title }));
@@ -1739,6 +1748,25 @@ function tabTargetAlive(route: string): boolean {
   return true;
 }
 
+/**
+ * 홈 목록의 **보임 축 재료**(#3855) — 내 active 세션 인스턴스(«목록에 둠») · 내가 치운 세션 · '오늘 일감' 의 시작.
+ *  인스턴스 정본을 아직 한 번도 못 받았으면 «목록에 둠» 도 «치움» 도 모른다 — 그 판엔 둘 다 비워 종전 규칙만 쓴다.
+ *  #4158 — 홈(sideInstances ①)과 [AI 세션] 전체 목록(paintSessAll)이 **이 한 자리**에서 재료를 받는다. 따로 모으면
+ *   한쪽만 고쳐질 때 두 화면이 같은 세션을 다르게 말한다(«홈엔 없는데 목록엔 홈에 있다고 나온다»).
+ */
+function homeVisFacts(now: number): { kept: Set<string>; gone: Set<string>; dayStart: number } {
+  const kept = instTruthSeen ? keptSessionRefs(appInstances) : new Set<string>();
+  const gone = instTruthSeen ? dismissedSess : new Set<string>();
+  //  ⚠ 달력 자정이 아니라 '오늘 일감의 시작'(lib/sess-fold workDayStart) — sideInstances ① 머리말.
+  const dayStart = workDayStart(now);
+  return { kept, gone, dayStart };
+}
+/** 내 세션 하나가 홈 목록에서 어디 있나 — **세션의 모든 이름으로**(박스 id · 대화 uuid · 되살리기 전 옛 박스 id) 잰다. */
+function homeRowVerdict(s: Sess, f: { kept: Set<string>; gone: Set<string>; dayStart: number }): SessRowVerdict {
+  const { kept, gone, dayStart } = f;
+  return sessRowVerdict({ ids: [s.id, s.logId || '', ...(s.altIds || [])], live: s.live && s.alive, lastSeen: s.lastSeen || 0, dayStart, kept, dismissed: gone });
+}
+
 function sideInstances(): SideInstance[] {
   const activeTab = tabsApi ? tabsApi.current() : null;
   const activeKey = activeTab ? sideRowKey(activeTab.route) : '';
@@ -1806,9 +1834,10 @@ function sideInstances(): SideInstance[] {
 
   //  #3855 — 세션 행의 보임 축 재료를 한 번 모은다(행마다 훑지 않게). 인스턴스 정본을 아직 한 번도 못 받았으면
   //   «목록에 둠» 도 «치움» 도 모른다 — 그 판엔 둘 다 비워 종전 규칙만 쓴다(모르는 것을 지어내지 않는다).
-  const kept = instTruthSeen ? keptSessionRefs(appInstances) : new Set<string>();
-  const gone = instTruthSeen ? dismissedSess : new Set<string>();
-  const dayStart = workDayStart(now);
+  //  #4158 — 모으기와 판정은 homeVisFacts · homeRowVerdict 한 자리다. [AI 세션] 전체 목록(bins.ts renderSessAll)이
+  //   «이 세션이 홈에 서 있나 · 치웠나» 를 **같은 함수**로 잰다(회의 #3977 «AI 세션 탭과 홈 사이드바는 한 로직으로»).
+  const facts = homeVisFacts(now);
+  const { kept, gone } = facts;
   for (const s of data.sessions) {                                   // ① 내 세션 — 목록에 둔 것 + 도는 것 + 오늘 쓴 것
     if (!s.owned || isTrashedSess(s)) continue;
     const liveNow = s.live && s.alive;
@@ -1823,7 +1852,7 @@ function sideInstances(): SideInstance[] {
     //  ★ #3855 — 위 규칙(도는 것 + 오늘 것)은 이제 **화면에서 한 번도 안 연 세션에만** 쓴다. 먼저 «내가 치웠나» 를 본다
     //   (sess-visibility.ts 머리말): 목록에 둔 세션은 회수로 멈췄어도·어제 것이어도 서고, 치운 세션은 상태가 바뀌어도
     //   안 선다. 종전엔 사람이 안 닫은 사실(org_app_instance active)이 서버에 있는데도 여기서 날짜로 잘려 아침마다 사라졌다.
-    if (!verdictStands(sessRowVerdict({ ids: [s.id, s.logId || '', ...(s.altIds || [])], live: liveNow, lastSeen: s.lastSeen || 0, dayStart, kept, dismissed: gone }))) continue;
+    if (!verdictStands(homeRowVerdict(s, facts))) continue;
     //  지난 세션엔 상태 점을 주지 않는다 — 점은 '지금 벌어지는 일'을 말하는 자리다(#1954 §4).
     //   구분은 영역이 아니라 행이 진다(past → .v2-app-inst--past, 원준 지시 2026-08-27).
     put('sess:' + s.id, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0,   // lastSeen 은 ms(views.ts)
@@ -2039,6 +2068,40 @@ function sectionRoute(sec: RailSection): string {
   //   주소로 착지시키는 이유: 이 사이드바의 그 줄도 눌린 것으로 서고(projScopeKey), 새로고침·북마크도 같은 자리로 돌아온다.
   return sec === 'inbox' ? '#/inbox' : sec === 'sess' ? '#/app/terminal' : sec === 'proj' ? projLandingRoute() : sec === 'wiki' ? '#/app/knowledge' : homeLandingRoute();
 }
+// ── [AI 세션] 구역의 가운데 = 전체 세션 목록 (#4158) ─────────────────────────────
+//  회의 #3977(2026-09-14) «AI 세션 탭 = 전체 세션 풀스크린 조회 · 사이드바엔 프로젝트 리스트(클릭 → 그 안 세션 필터)»
+//   · P1-4 «세션 클릭 시 홈으로 이동». 화면은 bins.ts renderSessAll, 거르개(프로젝트)는 side.ts renderSessions 가 쥔다.
+//  셸이 하는 일은 셋 — 홈과 **같은 재료·같은 판정**을 넘기고(homeVisFacts · homeRowVerdict), 여는 길·치우는 길을 홈 사이드바의
+//   그 함수(openSideRow · closeSideRow)로 잇고, 사이드바가 프로젝트를 고르면 그 화면을 다시 그린다(showSessAll).
+/** 이 탭이 [AI 세션] 전체 목록인가 — 주소 키 하나로(쿼리·뒤 세그먼트는 같은 화면이다). */
+const isSessAllRoute = (route: string): boolean => routeKey(route) === 'app:terminal';
+function paintSessAll(tab: ShellTab): void {
+  const facts = homeVisFacts(Date.now());
+  renderSessAll(tab.center, data, {
+    proj: sessProjFilter(),
+    //  홈 ① 이 세우는 것은 **내 세션**(s.owned)뿐이다 — 남의 세션엔 홈에서의 자리가 없으니 재지 않는다.
+    verdict: (s) => (s.owned && !isTrashedSess(s) ? homeRowVerdict(s, facts) : null),
+    //  ★ «세션 클릭 시 홈으로 이동» — 구역을 홈으로 옮기고(주소는 아래가 옮긴다), 여는 길은 홈 사이드바 행과 **같은 함수**다
+    //   (이미 열린 창이면 그 창으로 · 열람 도장 · 되읽기). 연 세션은 «목록에 둠» 이 되어 치웠던 것이어도 홈에 되돌아온다.
+    //   ⚠ 구역은 사람이 고를 때만 바뀐다(rail.ts 머리말) — 여기는 사람이 목록의 한 줄을 눌러 «홈에서 이어 하기» 를 고른 자리다.
+    onOpen: (s) => { setRailSection('home', { navigate: false }); openSideRow('sess:' + s.id, '#/s/' + encodeURIComponent(s.id)); },
+    //  치우기 = 홈의 × 와 같은 함수. 낙관 반영(dismissedSess)은 부르는 즉시 끝나 있으므로 바로 한 번, 서버 왕복 뒤 한 번 더 그린다.
+    onDismiss: (s) => { const done = closeSideRow('sess:' + s.id); repaintSessAll(); void done.then(repaintSessAll); },
+  });
+}
+function repaintSessAll(): void {
+  const at = tabsApi?.current();
+  if (at && isSessAllRoute(at.route)) paintSessAll(at);
+}
+/** 사이드바가 프로젝트를 골랐다 — 목록 창이 있으면 그 창을 그 값으로 다시, 없으면 그리로 간다(폰이면 서랍을 닫는다). */
+function showSessAll(): void {
+  mobile?.closeAll();
+  if (!tabsApi) return;
+  const hit = tabsApi.find(sectionRoute('sess'));
+  if (!hit) { location.hash = sectionRoute('sess'); return; }
+  if (tabsApi.current() !== hit) tabsApi.activate(hit);
+  paintSessAll(hit);
+}
 /** ☰ 의 뜻이 바뀌었다(사이드바 접기 → 레일 여닫기) — 툴팁·aria 도 그 뜻으로 맞춘다. */
 function syncRailBtn(): void {
   if (!mobile) return;
@@ -2085,6 +2148,7 @@ function drawSide(): void {
     onPinChanged: () => { orderPin.clear(); },   // 고정이 바뀌면 자물쇠를 푼다 — 새 묶음에서 자리를 다시 잡아야 한다
     //  #2016 — 사이드바가 무엇을 그릴지는 레일이 고른 구역이 정한다(홈 · AI 세션 · 프로젝트 · 위키).
     section: railSection,
+    onSessProject: showSessAll,   // #4158 — [AI 세션] 사이드바의 프로젝트 줄 → 가운데 전체 목록을 그 프로젝트로
     onToggleRail: () => { toggleRail(); syncRailBtn(); },
     railHidden: railIsHidden,
   });

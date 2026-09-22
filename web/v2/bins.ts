@@ -1,4 +1,5 @@
 // v2/bins.ts — 지난 세션(#/archive) · 휴지통(#/trash) 화면(#1851 → #1850 안 A, 원준 2026-08-27 "A안으로 가자").
+//  ★ #4158 — [AI 세션] 전체 목록(#/app/terminal, renderSessAll)도 여기 산다: 같은 원장 표 문법·같은 기간 고르개를 쓰는 셋째 표다.
 //  ⚠ 「아카이브」였던 자리는 #3778(원준 2026-09-19)에서 **「지난 세션」**이 됐다 — 주인공이 보관한 프로젝트에서
 //   세션으로 바뀌었고, 보관한 프로젝트는 같은 화면의 칩 하나로 남았다(renderPast 머리말).
 //
@@ -11,16 +12,18 @@
 //   · 아카이브는 같은 표에서 동사만 다르다(보관 해제 · 휴지통으로). 종전 카드 깔림(#1851)을 걷어냈다.
 //  완전 삭제의 실제 삭제 범위는 #1850 P2~P4(session-actions·session-footprint-store) — 여기는 그 창을 부를 뿐이다.
 //  행 문법은 홈·확인할 것과 같은 토큰(v2-dot·bg-sel·line-row)만 쓴다 — 새 시각 언어를 만들지 않는다.
-import { api, el, relTime, renderMarkdown, replaceKids, sv, toast } from '../core.js';
+import { api, el, personFace, relTime, renderMarkdown, replaceKids, sv, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { fmtSize } from '../projects/files-format.js';
 import { confirmSessionPurge, confirmSessionPurgeLocal, confirmSessionPurgeMany, confirmSessionTrash, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped, trashProjectsFlow, eulReul } from '../session-actions.js';
-import { sessText } from './side.js';
-import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isTrashedProj, isTrashedSess, projName, type Proj, type Sess, type V2Data } from './views.js';
+import { sessText, sidePeople } from './side.js';
+import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isTrashedProj, isTrashedSess, projName, type Proj, type Sess, type V2Data } from './views.js';
 import { listDismissedSessions, restoreDismissedSessions, type DismissedSession } from './app-instance.js';   // #3857 「치운 세션」
 import { TRASH_TABS, auditProjItems, bundleOpen, extraCountsOf, fileTrashUrl, groupByProject, knowItems, levelLabel, matchesQuery, pickInitialTab, srcItems, type DeletedEntry, type SrcItem, type TabCounts, type TrashTab, type TrashedFile } from '../lib/trash-tabs.js';   // #3778 — 휴지통 네 탭의 잣대(순수)
 import { invalidateTrashCounts, setTrashCounts } from './trash-counts.js';   // 사이드바 「휴지통 N」과 같은 값(#3778)
 import { groupPastByProject, isDismissedSess, pastNames, PAST_PERIODS, selectPast, standsInPast, type PastPeriod, type PastScope, type PastSessLike } from '../lib/past-sess.js';   // #3778 — 「지난 세션」의 잣대(순수)
+import { ownerCounts, selectAllSess, type SessProjPick } from '../lib/sess-all.js';   // #4158 — [AI 세션] 전체 목록의 잣대(순수)
+import { verdictStands, type SessRowVerdict } from './sess-visibility.js';   // #4158 — 홈 목록에서의 자리(판정은 셸이 홈과 같은 재료로 넘긴다)
 
 export interface BinHooks { onChanged?: () => void }
 
@@ -908,4 +911,136 @@ function archivedProjects(tblWrap: HTMLElement, barEl: HTMLElement, countEl: HTM
     el('a', { class: 'btn-text', href: '#/p/' + p.id, text: '프로젝트 열기 →' })));
   box.append(detail);
   aside.replaceChildren(box);
+}
+
+// ══════════════════════════════ AI 세션 전체 (#/app/terminal) ══════════════════════════════
+//  #4158 — 회의 #3977(2026-09-14) «AI 세션 탭 = 전체 세션 풀스크린 조회» · 액션 아이템 P1-4 «풀스크린 목록, 세션 클릭 시
+//   홈으로 이동, 날짜/사람 필터». 종전 이 자리(레일 [AI 세션]의 가운데)는 액자에 실은 클래식 세션 관리였고(자기 상태·휴지통
+//   잣대로 목록을 세우고 누르면 새 터미널 창을 열었다), 세션 줄은 사이드바가 홈과 같은 것을 한 벌 더 그렸다.
+//  ★ 이 표가 지키는 셋:
+//   ① **전부** 싣는다 — 도는 것·지난 것·남의 것(프로젝트 공개·초대). 휴지통 것만 뺀다(제 화면이 있다, #1851).
+//   ② 홈과 **한 자**다(회의 «AI 세션 탭과 홈 사이드바는 한 로직으로 통일. X = 치운 세션(언제든 다시 열기)»).
+//      행이 홈 목록에서 어디 있나(목록에 둠·치움)는 셸이 홈 사이드바와 **같은 함수**로 재어 넘기고(hooks.verdict ← main.ts
+//      homeRowVerdict), 치우기는 홈의 × 와 같은 함수로 간다(hooks.onDismiss ← closeSideRow). 치운 세션은 「치움」 꼬리표를 달고
+//      여기 그대로 서고, 누르면 다시 열린다 — 연 세션은 «목록에 둠» 이 되어 홈에 되돌아온다(sess-visibility 판정 ① 이 ② 보다 먼저).
+//   ③ 줄을 누르면 **홈에서** 연다 — 여는 길은 홈 사이드바 행과 같은 문(셸 openSideRow)이고, 구역도 홈으로 옮긴다.
+//  ⚠ 거르기 잣대는 lib/sess-all.ts(순수 — scripts/sess-all.test.mjs). 프로젝트는 사이드바가 고르고(side.ts renderSessions) 셸이 넘긴다.
+//  ⚠ 표 문법·기간 고르개는 「지난 세션」과 같다(PAST_PERIODS) — 새 시각 언어를 만들지 않는다.
+export interface SessAllHooks {
+  /** 사이드바가 고른 프로젝트 — null 전체 · 0 프로젝트 없음. */
+  proj: SessProjPick;
+  /** 홈 목록에서의 자리 — **내 세션만** 잰다(남의 것은 null: 치우기도 꼬리표도 없다 — 서버도 주인만 허용한다). */
+  verdict: (s: Sess) => SessRowVerdict | null;
+  /** 줄을 눌렀다 — 홈 사이드바 행과 같은 문으로, 홈에서 연다. */
+  onOpen: (s: Sess) => void;
+  /** 홈 목록에서 치우기 — 홈의 × 와 같은 함수(세션은 그대로 돈다). */
+  onDismiss: (s: Sess) => void;
+}
+
+/** 화면 상태 — 모듈 수준인 이유는 pastUi 와 같다(셸의 결이 render 를 통째로 다시 부른다). 기억하지 않는다(페이지 수명). */
+const allUi = { period: 'all' as PastPeriod, owner: '', shown: PAGE, proj: null as SessProjPick };
+
+export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHooks): void {
+  const ui = allUi;
+  if (ui.proj !== hooks.proj) { ui.proj = hooks.proj; ui.shown = PAGE; }   // 프로젝트를 바꿨으면 [더 보기]는 처음부터
+  const now = Date.now();
+  const people = sidePeople();
+  const repaint = (): void => renderSessAll(host, data, hooks);
+  const items = data.sessions.map((s) => ({
+    s, projectId: s.projectId, trashedAt: s.trashedAt || null, lastSeen: s.lastSeen,
+    owner: isMineSess(s) ? 'me' : String((s.raw && s.raw.owner) || ''),
+  }));
+  type Item = (typeof items)[number];
+  const ownerName = (k: string): string => (k === 'me' ? '나' : (people[k] && people[k].display_name) || k || '알 수 없음');
+  const q = { proj: ui.proj, period: ui.period, owner: ui.owner, now };
+  const inProj = selectAllSess(items, { ...q, period: 'all', owner: '' });
+  const vis = selectAllSess(items, q);
+  const projLabel = ui.proj === null ? '' : projName(data, ui.proj);
+
+  // ── 고르개 — 기간(「지난 세션」과 같은 표) · 사람 ──
+  const period = el('select', { class: 'v2-bin-pick', 'aria-label': '기간', 'data-pick': 'period',
+    onchange: (e: Event) => { ui.period = (e.target as HTMLSelectElement).value as PastPeriod; ui.shown = PAGE; repaint(); } },
+    ...PAST_PERIODS.map((p) => el('option', { value: p.key, text: p.label }))) as HTMLSelectElement;
+  period.value = ui.period;
+  const who = el('select', { class: 'v2-bin-pick', 'aria-label': '사람', 'data-pick': 'owner',
+    onchange: (e: Event) => { ui.owner = (e.target as HTMLSelectElement).value; ui.shown = PAGE; repaint(); } },
+    el('option', { value: '', text: '모든 사람' }),
+    ...ownerCounts(items, q).map((o) => el('option', { value: o.key, text: `${ownerName(o.key)} ${o.n}` }))) as HTMLSelectElement;
+  who.value = ui.owner;
+
+  const rowOf = (it: Item): HTMLElement => {
+    const s = it.s;
+    const v = hooks.verdict(s);
+    const name = sessText(s, projName(data, s.projectId)).main || s.label || s.id;
+    //  ⌘/Ctrl/Shift+클릭은 브라우저 몫으로 둔다(새 창·새 탭) — 셸 안 링크의 관례(main.ts bindAltOpen 머리말)와 같다.
+    const open = (ev: MouseEvent): void => {
+      if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
+      ev.preventDefault(); ev.stopPropagation(); hooks.onOpen(s);
+    };
+    const tr = el('tr', { class: 'v2-sall-row' + (v === 'dismissed' ? ' dism' : '') },
+      el('td', { class: 'c-name' }, sessIcon(),
+        el('a', { class: 't', href: '#/s/' + encodeURIComponent(s.id), text: name, title: '홈에서 이 세션을 엽니다 — 대화를 그대로 이어서 할 수 있어요', onclick: open }),
+        v === 'dismissed' ? el('span', { class: 'v2-bin-tag', text: '치움', title: '내가 홈 목록에서 치운 세션이에요 — 누르면 다시 열리고 홈 목록에 돌아와요' }) : null),
+      ui.proj === null ? el('td', { class: 'c-in' }, el('span', { text: projName(data, s.projectId) })) : null,
+      el('td', { class: 'c-who' },
+        it.owner && it.owner !== 'me' ? personFace(it.owner, 'v2-sall-face', ownerName(it.owner)) : null,
+        el('span', { text: ownerName(it.owner) })),
+      el('td', { class: 'c-kind' }, dot(s.stateKey), el('span', { text: s.stateLabel || '지난 세션' })),
+      el('td', { class: 'c-when' }, el('span', { class: 'm', text: whenMs(Number(s.lastSeen) || 0), title: s.lastSeen ? new Date(Number(s.lastSeen)).toLocaleString() : '' })),
+      //  치우기는 **홈 목록에 서 있는 내 세션**에만 — 안 서 있는 줄에서 «목록에서 치우기» 는 뜻이 없다(홈의 × 도 선 줄에만 있다).
+      el('td', { class: 'c-acts' }, v && verdictStands(v)
+        ? el('span', { class: 'acts' }, el('button', { class: 'btn-text', type: 'button', text: '홈에서 치우기',
+            title: '홈 목록에서 치웁니다 — 세션은 그대로 돌고, 여기엔 「치움」으로 남아요. 누르면 다시 열려요',
+            onclick: (ev: Event) => { ev.stopPropagation(); hooks.onDismiss(s); } }))
+        : null));
+    tr.addEventListener('click', (ev) => { if ((ev.target as HTMLElement).closest('button, a, input, select')) return; hooks.onOpen(s); });
+    return tr;
+  };
+
+  // ── 표 — 날짜 묶음(오늘·어제·이번 주·이전) 아래 최근 순 ──
+  const cols = ui.proj === null ? 6 : 5;
+  const bucket = new Map<Item, string>(vis.map((it) => [it, bucketOf(new Date(Number(it.lastSeen) || 0).toISOString())]));
+  const perBucket = new Map<string, number>();
+  for (const b of bucket.values()) perBucket.set(b, (perBucket.get(b) || 0) + 1);
+  const body = el('tbody', {});
+  let cur = '';
+  for (const it of vis.slice(0, ui.shown)) {
+    const b = bucket.get(it) || '이전';
+    if (b !== cur) {
+      cur = b;
+      body.append(el('tr', { class: 'g' }, el('td', { colspan: String(cols) }, el('b', { text: b }), el('span', { class: 'n', text: ` · ${perBucket.get(b) || 0}` }))));
+    }
+    body.append(rowOf(it));
+  }
+  const left = vis.length - Math.min(vis.length, ui.shown);
+  const empty = !inProj.length
+    ? (ui.proj === null ? '아직 세션이 없어요. 홈에서 무엇이든 시켜 보세요.' : '이 프로젝트엔 세션이 없어요.')
+    : '이 조건엔 세션이 없어요 — 기간이나 사람을 바꿔 보세요.';
+
+  const hadPick = document.activeElement instanceof HTMLElement && host.contains(document.activeElement) ? (document.activeElement.dataset.pick || '') : '';
+  const scrollTop = host.scrollTop;
+  replaceKids(host, el('div', { class: 'v2-center v2-binpage wide' },
+    el('div', { class: 'v2-bin-top' },
+      el('div', {},
+        el('h1', { class: 'v2-title', text: projLabel ? `AI 세션 · ${projLabel}` : 'AI 세션' }),
+        el('p', { class: 'v2-desc', text: projLabel
+          ? `「${projLabel}」 세션만 보고 있어요 — 왼쪽 「전체」를 누르면 전부 보여요. 줄을 누르면 홈에서 그 대화를 이어서 열어요.`
+          : '박스에서 도는 세션과 지난 세션, 함께 보는 남의 세션까지 전부예요. 줄을 누르면 홈에서 그 대화를 이어서 열어요.' }))),
+    el('section', { class: 'v2-bin-sec' },
+      el('div', { class: 'v2-bin-tools' }, period, who, el('span', { class: 'sp' }),
+        el('span', { class: 'v2-bin-count', text: vis.length === inProj.length ? `${vis.length}개` : `${vis.length}개 표시 · 전체 ${inProj.length}` })),
+      el('div', { class: 'v2-bin-tblwrap' },
+        el('table', { class: 'v2-bin-tbl v2-sall' },
+          el('thead', {}, el('tr', {},
+            el('th', { text: '세션' }), ui.proj === null ? el('th', { text: '프로젝트' }) : null,
+            el('th', { text: '사람' }), el('th', { text: '상태' }), el('th', { text: '마지막' }), el('th', {}))),
+          body),
+        left > 0 ? el('button', { class: 'btn-text v2-bin-more', type: 'button', text: `외 ${left}개 더 보기`, onclick: () => { ui.shown += PAGE; repaint(); } }) : null,
+        !vis.length ? el('p', { class: 'v2-bin-empty', text: empty }) : null)),
+    //  클래식 세션 관리(만들기 폼 · 노드 · 여러 개 한꺼번에 종료·복원)는 없애지 않았다 — 셸 안 `#/terminal` 로 그대로 열린다.
+    el('p', { class: 'v2-bin-fine', text: '새 세션 만들기 · 노드 연결 · 여러 세션 한꺼번에 종료·복원은 세션 관리 화면에서 해요.' },
+      el('a', { class: 'btn-text', href: '#/terminal', text: '세션 관리 열기 →' }))));
+  //  셸의 결(8초)이 통째로 다시 그려도 고르던 칸·보던 자리를 잃지 않게 — 「지난 세션」의 검색칸과 같은 규율.
+  if (hadPick) host.querySelector<HTMLElement>(`[data-pick="${hadPick}"]`)?.focus();
+  if (scrollTop) host.scrollTop = scrollTop;
 }
