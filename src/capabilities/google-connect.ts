@@ -169,9 +169,9 @@ export async function googleCollectState(memberId: string): Promise<GoogleCollec
   };
 }
 
-// enum 에서 gmail 을 지우지 않는다 — 이미 켜 둔 조직의 저장 요청이 zod 400 으로 튕기면 드라이브까지 못 고친다.
-//  거부는 스키마가 아니라 googleCollectAction 이 **사유와 함께** 한다(skipped).
-const SERVICES = z.array(z.enum(["drive", "gmail", "calendar"])).describe("모을 서비스. 비우면 드라이브만. ★Gmail 은 1차 런칭 대상이 아니라 넣어도 켜지지 않는다. calendar 는 수집기가 없어 동의 범위만 넓힌다(도구 전용).");
+// 판매 목록(GOOGLE_LAUNCH_SERVICES) 밖의 서비스가 생겨도 enum 에서 지우지 않는다 — 이미 켜 둔 조직의 저장 요청이
+//  zod 400 으로 튕기면 드라이브까지 못 고친다. 거부는 스키마가 아니라 googleCollectAction 이 **사유와 함께** 한다(skipped).
+const SERVICES = z.array(z.enum(["drive", "gmail", "calendar"])).describe("모을 서비스(켜 둘 전체 집합 — 빠진 것은 꺼진다). 비우면 드라이브만. Gmail 도 골라서 켤 수 있다(2026-09-22 — 구글 미검증 100명 한도 안). 동의하지 않은 범위는 켜지 않고 skipped 로 알린다. calendar 는 수집기가 없어 동의 범위만 넓힌다(도구 전용).");
 
 const orgGoogleCollect: Capability = {
   name: "org_google_collect", title: "구글 자료 가져오기 상태",

@@ -1142,6 +1142,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   /** 구글 수집 켜기 — 서버 답(ok · needs_connect+authorization_url · skipped)을 그대로 돌려준다. 던지지 않는다. */
   async function startGoogleCollect(id) {
     const svc = GOOGLE_SVC[id];
+    //  ★ 켜 둔 서비스를 모르면 보내지 않는다 — services 는 «켜 둘 전체 집합»이라, 상태를 못 읽은 채 [이 서비스] 하나만
+    //   보내면 이미 돌던 드라이브(또는 Gmail)가 꺼진다. 한 번 더 읽어 보고, 그래도 모르면 멈춘다.
+    if (!GCOLL) await loadGoogleColl();
+    if (!GCOLL) return { ok: false, message: '구글 연결 상태를 읽지 못했어요. 잠시 뒤 다시 눌러 주세요.' };
     try {
       const r: any = await api('/api/ui/org/google/collect', { method: 'POST', body: JSON.stringify({ enabled: true, services: googleWanted(svc) }) });
       if (r && r.state) GCOLL = r.state;   // 서버가 켠 뒤의 상태를 같이 준다 — 다시 묻지 않고 판정한다

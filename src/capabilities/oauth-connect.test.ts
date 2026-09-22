@@ -7,7 +7,7 @@
 //  회귀 대상 ③: **연결 창구 없는 자격을 조용히 넘기지 않는다**(M6) — 목록에 넣으면 눌러도 안 되는 버튼이 되고,
 //   그냥 빼면 왜 안 보이는지 아무도 모른다. 그래서 orphan 으로 보고한다.
 import assert from "node:assert/strict";
-import { foldOAuthConnectors, type ConnectorServerLike, type ConnectorToolLike } from "./oauth-connect.js";
+import { foldOAuthConnectors, connectorReadyField, type ConnectorServerLike, type ConnectorToolLike } from "./oauth-connect.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -142,6 +142,20 @@ t("N6 다른 커넥터는 접기의 영향을 받지 않는다(무회귀)", () =
   );
   assert.deepEqual(kinds(r), ["google_oauth", "slack_oauth"]);
   assert.equal(r.connectors.find((c) => c.auth_kind === "slack_oauth")?.alias_kinds, undefined);
+});
+
+// ── #4211 «준비 중» 을 서버가 걷는다 — 커넥터 줄의 ready ─────────────────────────
+//  화면(catalogSoon)은 구글 줄의 ready===true 일 때만 «준비 중» 을 걷는다. 그 입력을 만드는 쪽을 여기서 잠근다.
+t("R1 ★ 구글 줄에는 ready 가 실린다 — 참/거짓 그대로", () => {
+  assert.deepEqual(connectorReadyField("google", true), { ready: true });
+  assert.deepEqual(connectorReadyField("google", false), { ready: false }, "준비 안 됨도 «모름» 이 아니라 false 로 말한다");
+  assert.deepEqual(connectorReadyField("GOOGLE", true), { ready: true }, "구글 판정은 대소문자를 가리지 않는다(isGoogleServer)");
+});
+
+t("R2 다른 커넥터에는 ready 를 싣지 않는다 — 구글 밖에서 그 값의 뜻을 정한 적이 없다", () => {
+  for (const s of ["slack", "notion", "linear", "gitlab", "google-drive"]) {
+    assert.deepEqual(connectorReadyField(s, true), {}, s);
+  }
 });
 
 console.log(`\noauth-connect: ${pass} passed`);
