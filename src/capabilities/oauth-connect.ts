@@ -136,6 +136,15 @@ export function foldOAuthConnectors(
   return { connectors: [...byKind.values()], orphanKinds };
 }
 
+/**
+ * 커넥터 줄에 싣는 «지금 동의를 시작할 수 있나»(#4211) — **구글 줄에만** 싣는다(순수 — 테스트가 본다).
+ *  다른 커넥터는 서버 행이 있다는 것 자체가 준비의 증거라 싣지 않는다. 실어 버리면 화면(catalogSoon)이 그 값을 읽기 시작하는데,
+ *  구글 밖에서 그 값의 뜻을 정한 적이 없다.
+ */
+export function connectorReadyField(server: string, googleReadyNow: boolean): { ready?: boolean } {
+  return isGoogleServer(server) ? { ready: googleReadyNow === true } : {};
+}
+
 export async function resolveOAuthConnectors(): Promise<OAuthConnectorRow[]> {
   const [servers, tools] = await Promise.all([listMcpServers(), listEnabledProxyTools()]);
   const { connectors, orphanKinds } = foldOAuthConnectors(servers, tools);
@@ -166,14 +175,13 @@ const meOauthConnectors: Capability = {
     //  #4211 — 구글은 «이 게이트웨이가 지금 동의를 시작할 수 있나»(ready)를 함께 내린다. 화면이 이걸로 «준비 중»을 가른다.
     //   종전엔 화면에 «준비 중» 이 박혀 있어서, 릴레이·클라이언트가 갖춰져도 코드를 다시 배포해야 열렸다.
     //   구글 줄에만 싣는다 — 다른 커넥터는 서버 행이 있다는 것 자체가 준비의 증거다.
-    const hasGoogle = rows.some((r) => isGoogleServer(r.server));
-    const gReady = hasGoogle ? await googleReady().catch(() => false) : false;
+    const gReady = rows.some((r) => isGoogleServer(r.server)) ? await googleReady().catch(() => false) : false;
     return {
       connectors: rows.map((r) => ({
         server: r.server, // 웹이 이 값을 키로 매칭한다 — 어댑터를 바꿔도 이름이 같으면 화면·연결이 그대로다(무중단 승계)
         note: r.note, used_by: r.used_by,
         connected: connected(r),
-        ...(isGoogleServer(r.server) ? { ready: gReady } : {}),
+        ...connectorReadyField(r.server, gReady),
       })),
     };
   },

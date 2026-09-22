@@ -552,7 +552,9 @@ export async function completeGoogleInstall(stateToken: string, tokenResponse: u
 /**
  * 만료 갱신 — 유효하면 그대로, 만료면 갱신 후 **병합해서** 되쓴다.
  *  ⚠ 구글은 갱신 응답에 refresh_token 을 **안 준다** — mergeGoogleTokens 없이 저장하면 1시간 뒤 영구 실패한다(#1652).
- *  refresh_token 이나 client 가 없으면 null — 호출자가 "다시 연결" 실패 클래스로 안내한다(매니지드는 CP 갱신 프록시, G4).
+ *  refresh_token 이나 client 가 없으면 null — 호출자가 "다시 연결" 실패 클래스로 안내한다.
+ *  매니지드(릴레이 모드)의 client 는 게이트웨이 env 의 **플랫폼 클라이언트**다(google-token-source.ts envGoogleOAuthClient, #4211).
+ *   ⚠ 종전 이 자리엔 «매니지드는 CP 갱신 프록시(G4)» 라고 적혀 있었지만 그 프록시는 만들어진 적이 없다(2026-09-22 확인).
  */
 export async function ensureGoogleAccessToken(memberId: string, actor?: string): Promise<string | null> {
   const cur = await loadGoogleInstall(memberId);
