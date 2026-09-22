@@ -128,7 +128,16 @@ export const GOOGLE_SERVICE_SCOPES = {
 export type GoogleService = keyof typeof GOOGLE_SERVICE_SCOPES;
 
 /**
- * ★ **1차 런칭에서 파는 것**(윤상민 결정 2026-08-26: "1차 런칭에서 지메일 빼").
+ * ★ **지금 파는 것**. Gmail 을 다시 넣었다(윤상민 결정 2026-09-22: "일단 100명한도로 gmail 붙이자", #4211).
+ *
+ *  ▸ 다시 넣은 근거 — 아래 8/26 판단의 전제("Gmail 을 끼우면 100명 한도를 쓰지도 않는 권한으로 태운다")는
+ *   **한도가 범위 수가 아니라 사람 수로 센다**는 점에서 틀렸다. 수집용 drive(`drive.readonly`)도 제한범위라
+ *   구글을 연결하는 사람은 Gmail 이 있든 없든 한 칸씩 쓴다 — Gmail 을 넣어도 소모는 늘지 않는다.
+ *   남는 차이는 동의 화면에 «메일 읽기» 가 한 줄 더 뜨는 것뿐이다. 그래서 미검증 Production + 100명으로 함께 연다.
+ *   (지식 managed-gmail-outlook-connect-feasibility-4211 §3)
+ *  ▸ 그래도 **Gmail 은 기본값이 아니다**(GOOGLE_DEFAULT_SERVICES) — 사람이 고를 때만 요청한다(최소 권한).
+ *
+ *  ── 아래는 2026-08-26 판단(윤상민 "1차 런칭에서 지메일 빼") 원문. 비용 구조 설명은 여전히 맞다. ──
  *
  *  Gmail 을 뺀 이유는 취향이 아니라 **되돌릴 수 없는 비용** 때문이다. 본문을 읽는 Gmail 범위는 전부 제한범위이고
  *  비제한 대안이 없다 — 검증에 CASA(연 $540~1,800·초회 6~12주)가 붙고, 미검증으로 버티면 **프로젝트 수명 누적
@@ -143,7 +152,7 @@ export type GoogleService = keyof typeof GOOGLE_SERVICE_SCOPES;
  *   내리려면 `drive_file` 이어야 하는데, G6(#2075) 실측이 "폴더를 골라도 안의 파일은 안 준다"를 확정해서 폴더
  *   단위 수집이 성립하지 않는다. 그래서 1차는 **미검증 Production + 100명**으로 간다.
  */
-export const GOOGLE_LAUNCH_SERVICES: readonly GoogleService[] = ["drive", "drive_file", "calendar"];
+export const GOOGLE_LAUNCH_SERVICES: readonly GoogleService[] = ["drive", "drive_file", "gmail", "calendar"];
 
 /** 이 서비스를 지금 파는가. */
 export function isGoogleServiceOffered(s: string | null | undefined): boolean {

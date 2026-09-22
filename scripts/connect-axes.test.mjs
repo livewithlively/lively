@@ -24,7 +24,7 @@ let pass = 0;
 const ok = (cond, what) => { assert.ok(cond, what); pass++; };
 const eq = (got, want, what) => { assert.deepEqual(got, want, what); pass++; };
 
-const { COLLECT_APPS, COLLECT_PRESET_APP, appAxes, collectTally, listBucket, pendingAxes, skipKey } =
+const { COLLECT_APPS, COLLECT_PRESET_APP, appAxes, collectTally, listBucket, pendingAxes, skipKey, catalogSoon } =
   await import(join(root, "public/app/lib/connect-axes.js"));
 
 const on = (preset) => ({ preset_key: preset, enabled: true });
@@ -142,6 +142,19 @@ ok(COLLECT_APPS.length >= 6 && Object.keys(COLLECT_PRESET_APP).length >= 8, "W1 
       `D1 «자료 가져오기가 있다»고 적은 앱 ${app} 은 프리셋 표로도 닿는다(둘이 어긋나면 영영 «꺼짐»)`);
   }
   ok(!COLLECT_PRESET_APP["prometheus"], "D2 축이 없는 앱은 프리셋 표에도 없다");
+}
+
+// ── E. 카탈로그 «준비 중» 을 서버가 걷는다 (#4211) ─────────────────────────
+//  구글의 «준비 중» 이 화면에 박혀 있어서, 매니지드에 릴레이·클라이언트를 넣어도 코드 배포 전엔 못 열었다.
+{
+  const g = { soon: "구글 연결을 준비하고 있어요", soonUntilReady: true };
+  eq(catalogSoon(g, { ready: true }), false, "E1 ★ 서버가 ready=true 면 준비 중이 아니다(코드 배포 없이 열린다)");
+  eq(catalogSoon(g, { ready: false }), true, "E2 ready=false 면 준비 중 — 눌러도 안 되는 카드를 내밀지 않는다");
+  eq(catalogSoon(g, {}), true, "E3 ★ ready 를 모르면(옛 게이트웨이) 표 그대로 준비 중 — 모르는 것을 «열렸다» 로 읽지 않는다");
+  eq(catalogSoon(g, null), true, "E4 커넥터 줄이 없으면 준비 중");
+  eq(catalogSoon(g, { ready: "true" }), true, "E5 문자열 'true' 는 참이 아니다(엄격)");
+  eq(catalogSoon({ soon: "x" }, { ready: true }), true, "E6 soonUntilReady 가 아닌 앱은 서버가 뭐라 해도 표가 이긴다");
+  eq(catalogSoon({}, { ready: false }), false, "E7 soon 이 없으면 준비 중이 아니다");
 }
 
 console.log(`connect-axes: ${pass} checks passed`);

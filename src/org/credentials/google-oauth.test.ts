@@ -76,8 +76,11 @@ t("[6] scope: drive_file 은 비민감 범위만 — 제한범위(drive.readonly
   assert.ok(!s.includes(DRIVE_RO), "제한범위가 섞이면 '검증 0' 경로의 의미가 통째로 사라진다");
 });
 
-t("[7] scope: 빈 목록(경계)은 기본 3종으로 떨어진다 — 빈 scope 요청은 상류가 거부한다", () => {
-  assert.equal(googleScopeString([]), googleScopeString(["drive", "gmail", "calendar"]));
+t("[7] scope: 빈 목록(경계)은 기본값(GOOGLE_DEFAULT_SERVICES)으로 떨어진다 — 빈 scope 요청은 상류가 거부한다", () => {
+  // 종전 단언은 ["drive","gmail","calendar"] 와 같다고 적었는데, gmail 이 판매 목록 밖이라 걸러져서 우연히 같았을 뿐이다.
+  //  Gmail 을 다시 판 뒤(#4211)에는 그 우연이 깨진다 — 잠그려던 것은 «기본값으로 떨어진다» 이고 기본값엔 gmail 이 없다.
+  assert.equal(googleScopeString([]), googleScopeString(GOOGLE_DEFAULT_SERVICES));
+  assert.ok(!googleScopeString([]).includes("gmail"), "빈 입력이 Gmail 동의로 새면 안 고른 사람에게 «메일 읽기» 가 뜬다");
 });
 
 // ── 표 24~27 · 심사 등급(돈과 100명 한도가 갈리는 자리, 지식 §9) ─────────────────
@@ -102,8 +105,8 @@ t("[26] ★ 100명 한도: 비민감만 고르면 한 칸도 안 태운다 — �
   assert.equal(consumesUnverifiedUserCap(["drive_file", "gmail"]), true);
 });
 
-t("[27] tier: 빈 목록(경계)은 기본 3종과 같은 판정 — scope 규칙과 어긋나지 않는다", () => {
-  assert.equal(googleConsentTier([]), googleConsentTier(["drive", "gmail", "calendar"]));
+t("[27] tier: 빈 목록(경계)은 기본값과 같은 판정 — scope 규칙과 어긋나지 않는다", () => {
+  assert.equal(googleConsentTier([]), googleConsentTier(GOOGLE_DEFAULT_SERVICES));
   assert.equal(consumesUnverifiedUserCap([]), true);
 });
 
@@ -233,31 +236,32 @@ t("[23] isGoogleServer: 대소문자 무시, 유사 이름은 거부", () => {
   assert.equal(isGoogleServer(null), false);
 });
 
-// ── 표 24~32 · 1차 런칭 게이트: Gmail 제외 (상민님 결정 2026-08-26) ──────────
-//  게이트를 **어디에** 두느냐가 이 묶음의 전부다. 화면의 체크박스만 지우면
-//  startGoogleConsent 를 부르는 다른 경로(권한 넓히기·CP 릴레이·앞으로 생길 호출자)가 gmail 을
-//  실어 보낼 수 있고, 그 한 번이 **되돌릴 수 없는 100명 한도**를 한 칸 태운다.
-//  그래서 최종 방어선을 모든 동의 경로가 반드시 지나는 조립부(googleScopeString)에 둔다.
-t("[24] 런칭 목록에 gmail 이 없다 — 이 배열이 곧 '지금 파는 것'의 계약이다", () => {
-  assert.ok(!(GOOGLE_LAUNCH_SERVICES as readonly string[]).includes("gmail"));
+// ── 표 24~31 · 판매 범위: Gmail 을 다시 연다 (상민님 결정 2026-09-22, #4211) ──────────
+//  8/26 에 Gmail 을 뺐던 근거는 «끼우면 되돌릴 수 없는 100명 한도를 쓰지도 않는 권한으로 태운다» 였다.
+//  그런데 한도는 **범위 수가 아니라 사람 수**로 세고, 수집용 drive.readonly 도 제한범위라 이미 한도를 탄다.
+//  그래서 다시 연다 — 다만 **기본값은 여전히 Gmail 없음**이다(최소 권한: 고른 사람만 동의 화면에 뜬다).
+//  게이트의 자리(googleScopeString 이 판매 목록으로 거른다)는 그대로 두고, 목록이 바뀐 것을 이 표가 잠근다.
+t("[24] 판매 목록에 gmail 이 있다 — 이 배열이 곧 '지금 파는 것'의 계약이다", () => {
+  assert.ok((GOOGLE_LAUNCH_SERVICES as readonly string[]).includes("gmail"));
   assert.ok((GOOGLE_LAUNCH_SERVICES as readonly string[]).includes("drive"));
-  assert.equal(isGoogleServiceOffered("gmail"), false);
+  assert.equal(isGoogleServiceOffered("gmail"), true);
   assert.equal(isGoogleServiceOffered("drive"), true);
+  assert.equal(isGoogleServiceOffered("youtube"), false, "목록 밖은 여전히 판매하지 않는다");
 });
 
-t("[25] ★ scope 조립이 gmail 을 통째로 떨군다 — 태운 한도는 되돌릴 수 없다", () => {
+t("[25] ★ gmail 을 고르면 scope 에 gmail.readonly 가 실린다 — 빠지면 [켜기]가 no_scope 로 조용히 안 켜진다", () => {
   const sc = googleScopeString(["gmail"]);
-  assert.ok(!sc.includes("gmail"), `gmail 범위가 새면 100명 한도가 탄다: ${sc}`);
-  assert.ok(!sc.includes("mail.google.com"), "가장 넓은 Gmail 범위도 같이 막혀야 한다");
+  assert.ok(sc.includes(GMAIL_RO), `gmail 범위가 빠졌다: ${sc}`);
+  assert.ok(!sc.includes("mail.google.com"), "최소 권한 — 읽기 전용만 요청한다(전체 접근 범위 금지)");
 });
 
-t("[26] drive+gmail 을 주면 drive 는 살리고 gmail 만 뺀다 — 전량 거부가 아니다", () => {
+t("[26] drive+gmail 을 주면 둘 다 실린다", () => {
   const sc = googleScopeString(["drive", "gmail"]);
-  assert.ok(sc.includes(DRIVE_RO), "gmail 하나 때문에 드라이브까지 못 켜면 사람이 막힌다");
-  assert.ok(!sc.includes(GMAIL_RO));
+  assert.ok(sc.includes(DRIVE_RO));
+  assert.ok(sc.includes(GMAIL_RO));
 });
 
-t("[27] 빈 입력이 뒷문이 되지 않는다 — 기본값에도 gmail 이 없다", () => {
+t("[27] ★ 빈 입력·기본값에는 여전히 gmail 이 없다 — 안 고른 사람의 동의 화면에 «메일 읽기» 를 띄우지 않는다", () => {
   assert.ok(!(GOOGLE_DEFAULT_SERVICES as readonly string[]).includes("gmail"));
   assert.ok(!googleScopeString([]).includes("gmail"));
 });
@@ -268,26 +272,35 @@ t("[28] 무회귀: drive·calendar 는 그대로 실린다", () => {
   assert.ok(sc.includes(CAL_RO));
 });
 
-t("[29] googleOfferedServices 는 빈 배열을 그대로 돌려준다 — 호출자가 '줄 게 없다'를 구분해야 한다", () => {
-  assert.deepEqual(googleOfferedServices(["gmail"]), [], "여기서 기본으로 폴백하면 안 고른 범위를 몰래 요청하게 된다");
-  assert.deepEqual(googleOfferedServices(["drive", "gmail", "calendar"]), ["drive", "calendar"]);
+t("[29] googleOfferedServices 는 판매 목록만 남기고, 다 걸러지면 빈 배열을 그대로 돌려준다", () => {
+  assert.deepEqual(googleOfferedServices(["gmail"]), ["gmail"]);
+  assert.deepEqual(googleOfferedServices(["drive", "gmail", "calendar"]), ["drive", "gmail", "calendar"]);
+  assert.deepEqual(googleOfferedServices(["youtube" as never]), [], "여기서 기본으로 폴백하면 안 고른 범위를 몰래 요청하게 된다");
 });
 
-t("[30] 인가 URL 전문에 'gmail' 문자열이 없다 — 조립 경로가 늘어도 새지 않는 backstop", () => {
-  const u = buildGoogleAuthorizeUrl({
+t("[30] 인가 URL: gmail 은 고른 때만 실린다", () => {
+  const withG = buildGoogleAuthorizeUrl({
     clientId: "cid", redirectUri: "https://gw.example/oauth/callback", state: "st",
     scope: googleScopeString(["drive", "gmail", "calendar"]),
   });
-  assert.ok(!u.includes("gmail"), u);
+  assert.ok(withG.includes(encodeURIComponent(GMAIL_RO)) || withG.includes("gmail.readonly"), withG);
+  const without = buildGoogleAuthorizeUrl({
+    clientId: "cid", redirectUri: "https://gw.example/oauth/callback", state: "st",
+    scope: googleScopeString(GOOGLE_DEFAULT_SERVICES),
+  });
+  assert.ok(!without.includes("gmail"), without);
 });
 
-t("[31] ★ gmail 을 빼도 미검증 100명 한도는 남는다 — drive.readonly 가 제한범위다", () => {
-  // 이 행은 기능이 아니라 **런칭 판단의 근거**를 잠근다. false 로 보이는 순간
-  //  "이제 심사도 한도도 없다"는 잘못된 결론이 서고, 100명을 넘긴 뒤에야 발각된다.
-  assert.equal(consumesUnverifiedUserCap(GOOGLE_DEFAULT_SERVICES), true);
+t("[31] ★ 이 결정의 근거 — gmail 을 더해도 심사 등급·100명 한도 소모는 그대로다(drive.readonly 가 이미 제한범위)", () => {
+  // 이 행은 기능이 아니라 **판단의 근거**를 잠근다. drive 가 비제한으로 내려가면(drive_file) 이 등식이 깨지고,
+  //  그때는 Gmail 이 한도를 «새로» 태우게 되므로 이 결정을 다시 봐야 한다.
+  assert.equal(googleConsentTier(["drive", "gmail"]), googleConsentTier(["drive"]));
+  assert.equal(consumesUnverifiedUserCap(["drive", "gmail"]), consumesUnverifiedUserCap(GOOGLE_DEFAULT_SERVICES));
+  assert.equal(consumesUnverifiedUserCap(GOOGLE_DEFAULT_SERVICES), true, "기본(drive·calendar)도 한도를 탄다 — '제한 없음'으로 읽히면 안 된다");
   assert.equal(googleConsentTier(["drive"]), "restricted");
   assert.equal(googleConsentTier(["drive_file", "calendar"]), "sensitive", "정말 0으로 만들려면 drive_file 이어야 한다");
   assert.equal(googleConsentTier(["drive_file"]), "non_sensitive");
+  assert.equal(consumesUnverifiedUserCap(["drive_file", "gmail"]), true, "drive_file 로 내려가면 gmail 이 한도를 새로 태운다 — 그때 다시 볼 것");
 });
 
 // ── 표 32~38 · 구글 도구가 막혔을 때 "다음에 뭘 누를지" (2026-08-27 dev 실측) ───
@@ -326,10 +339,11 @@ t("[37] ★ 안내: 연결은 있는데 범위가 없으면 [권한 넓히기] �
   const h = googleToolAuthHint("google_calendar_oauth", `${DRIVE_RO} ${DRIVE_FILE}`) ?? "";
   assert.ok(h.includes("캘린더"), h);
   assert.ok(h.includes("권한 넓히기"), h);
-  // 런칭에서 뺀 서비스는 눌러 봐야 안 열린다 — 그걸 누르라고 하면 안 된다
+  // Gmail 도 이제 판매 대상이다(#4211) — 범위가 없으면 [권한 넓히기] 로 보낸다(«준비 중» 이 아니다)
   const g = googleToolAuthHint("google_gmail_oauth", DRIVE_RO) ?? "";
-  assert.ok(g.includes("준비 중"), g);
-  assert.ok(!g.includes("권한 넓히기"), g);
+  assert.ok(g.includes("Gmail"), g);
+  assert.ok(g.includes("권한 넓히기"), g);
+  assert.ok(!g.includes("준비 중"), `열린 서비스를 «준비 중» 이라고 하면 사람이 기다리기만 한다: ${g}`);
 });
 
 t("[38] 안내: 범위가 충분하거나·모르거나·구글이 아니면 막지 않는다", () => {
