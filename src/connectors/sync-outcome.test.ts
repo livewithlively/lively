@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { syncBatchStatus, orphanVerdict, childHeartbeatMs, unitRunAlive } from "./sync-outcome.js";
+import { syncBatchStatus, orphanVerdict, childHeartbeatMs, unitRunAlive, childTail } from "./sync-outcome.js";
 
 const r = (p: string): string => readFileSync(new URL(p, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 const CRON = r("../scheduler/actions/connector.ts");
@@ -109,4 +109,45 @@ test("표 D — 판정을 계산만 하고 안 쓰는 것을 막는다(배선)",
     "D3 무조건 error 로 닫는 옛 UPDATE 가 남아 있다");
   //  D4 부모가 자식에게 run 번호를 넘긴다 — 안 넘기면 D2 가 영원히 발동하지 않는다.
   assert.match(TRACKER, /"--run", String\(runId\)/, "D4 부모가 자식에게 run 번호를 안 넘긴다");
+});
+
+// ── childTail — 자식 CLI 의 진단 한 줄(성공·실패 공통) ──────────────────────
+//  잠그는 사고: 실패 요약이 `Command failed: …` 한 줄로 끝나 원인이 사라진다.
+//  커넥터 CLI 는 pino 로 stdout 에 찍고 exit(1) 하므로 **에러 객체의 stdout** 이 유일한 단서다.
+test("문자열 stdout 의 마지막 줄을 뽑는다", () => {
+  assert.equal(childTail("첫 줄\n{\"msg\":\"드레인 완료\"}"), '{"msg":"드레인 완료"}');
+});
+
+test("실패 시 넘어오는 execFile 에러 객체에서도 stdout 에서 뽑는다", () => {
+  const err = Object.assign(new Error("Command failed: node dist/connectors/run-push.js clickup\n"), {
+    stdout: '{"level":30,"msg":"시작"}\n{"level":40,"msg":"드레인 완료"}\n',
+    stderr: "",
+  });
+  assert.equal(childTail(err), '{"level":40,"msg":"드레인 완료"}');
+});
+
+//  마지막 줄은 건수만 말한다 — 「왜」는 그 앞 warn/error 줄에만 있다. 운영 화면에서 판정하려면 둘 다 필요하다.
+test("마지막 줄이 요약이면 그 앞의 warn/error 줄을 함께 담는다", () => {
+  const err = Object.assign(new Error("Command failed: …"), {
+    stdout: [
+      '{"level":30,"msg":"시작"}',
+      '{"level":40,"err":"400 ITEM_137","msg":"outbox 푸시 실패(다음 틱 재시도)"}',
+      '{"level":30,"pushed":0,"failed":4,"msg":"드레인 완료"}',
+    ].join("\n"),
+  });
+  assert.equal(childTail(err),
+    '{"level":40,"err":"400 ITEM_137","msg":"outbox 푸시 실패(다음 틱 재시도)"} | {"level":30,"pushed":0,"failed":4,"msg":"드레인 완료"}');
+});
+
+test("stdout 이 없거나(빈 문자열·undefined) 모양이 다르면 빈 문자열 — 던지지 않는다", () => {
+  assert.equal(childTail(""), "");
+  assert.equal(childTail(undefined), "");
+  assert.equal(childTail(null), "");
+  assert.equal(childTail(new Error("boom")), "");
+  assert.equal(childTail({ stdout: 42 }), "");
+});
+
+test("배선 — 실패 경로도 tail 을 담는다(성공 경로만 담으면 원인이 사라진다)", () => {
+  assert.match(CRON, /ok: false, error: .*tail: childTail\(e\)/, "connector_push 실패 요약에 tail 이 없다");
+  assert.ok(!/\.trim\(\)\.split\("\\n"\)\.slice\(-1\)/.test(CRON), "인라인 마지막줄 추출이 남아 있다 — childTail 로 통일");
 });
