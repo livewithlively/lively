@@ -1995,16 +1995,54 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-tidybar-k { flex: 1; min-width: 0; font-size: 12px; font-weight: 700; color: var(--ink-sub);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 
-/* 받은 알림(#1891) — 「확인할 것」 위 칸. 세션 줄(.v2-now-row)과 같은 골격을 쓰되 상태점만 다르다. */
+/* 받은 알림(#1891 → #4180) — 「확인할 것」의 행. 세션 줄(.v2-now-row)과 같은 골격에 **앞자리(누가·무엇이)** 가 붙는다:
+   사람 얼굴(댓글·언급) · 리브 L · 앱 종. 인스타그램 알림처럼 «누가 무엇을 했나» 가 한 줄에 읽혀야 들어갈 이유가 생긴다. */
 .v2-noti-sec { display: block; }
-.v2-noti-row .tw { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.v2-noti-row { align-items: center; }
+/*  ⚠ 세로 묶음은 **stretch** 여야 한다 — 바탕 규칙(.v2-now-row .tw)의 `align-items: baseline` 이 세로 방향에서도 살아남아
+    제목이 칸 너비를 무시하고 내용 너비(414px)로 서서 시각 위에 겹쳤다(프리뷰 실측 2026-09-23: .tw 244px · .t 414px).
+    본문(.p)도 바탕의 `max-width: 180px`(가로 묶음의 프로젝트명 칸)를 물려받아 반 줄에서 잘렸다 — 둘 다 여기서 푼다. */
+.v2-noti-row .tw { display: flex; flex-direction: column; align-items: stretch; min-width: 0; flex: 1; gap: 1px; }
+.v2-noti-row .t, .v2-noti-row .p { display: block; width: auto; max-width: none; flex: none; }
 .v2-noti-row .t { font-size: 13.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-noti-row .p { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-noti-row.unread .t { font-weight: 700; }
-/* 안 읽음 표식은 **점 하나**다 — 줄 전체를 물들이면 목록이 시끄러워지고, 읽은 줄이 바래 보인다. */
+/* 안 읽음 표식은 **점 하나**다 — 줄 전체를 물들이면 목록이 시끄러워지고, 읽은 줄이 바래 보인다. 오른쪽 끝(시각 뒤). */
 .v2-noti-dot { width: 7px; height: 7px; border-radius: 50%; background: transparent; flex: none; }
 .v2-noti-dot.on { background: var(--accent, #2563eb); }
 .v2-noti-row .st { font-size: 12px; color: var(--muted); flex: none; }
+/* 앞자리 — 28px 한 칸. 얼굴은 .pava(17-projects-board-ext)의 원형 그대로, 표식 둘은 같은 크기의 원. */
+.v2-noti-lead { flex: none; width: 28px; height: 28px; display: inline-grid; place-items: center; }
+.v2-noti-ava.pava { width: 28px; height: 28px; font-size: 11px; }
+.v2-noti-mark { width: 28px; height: 28px; border-radius: 50%; display: inline-grid; place-items: center; }
+.v2-noti-mark.liv { background: var(--bg-success); border: 1px solid var(--ok-line-2); color: var(--mint-deep); font-weight: 800; font-size: 11px; }
+.v2-noti-mark.app { background: var(--bg-tint); color: var(--muted-head); }
+.v2-noti-mark.sess { width: 8px; height: 8px; background: var(--warn-deep); }
+.v2-noti-mark-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ── 홈의 종(#4180) — 「확인할 것」의 입구. 레일 구역·사이드바 구획에서 홈 머리줄 오른쪽 끝으로(회의 2026-09-21). ──
+   숫자는 종전 레일 배지와 같은 앰버(사이드바 통틀어 앰버 숫자는 하나 — #1719 규칙을 자리만 옮겨 지킨다). */
+.v2-home-eyebrow .sp { flex: 1; }
+.v2-bell { position: relative; flex: none; width: 34px; height: 34px; display: inline-grid; place-items: center; margin: -8px 0;
+  border: 0; border-radius: 9px; background: none; color: var(--muted-head); cursor: pointer; }
+.v2-bell:hover, .v2-bell.on { background: var(--bg-tint-2); color: var(--ink); }
+.v2-bell:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-bell-ic { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.v2-bell-n { position: absolute; top: 1px; right: 1px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+  background: var(--warn-deep); color: var(--on-fill); font-size: 10px; font-weight: 800; display: inline-grid; place-items: center;
+  font-variant-numeric: tabular-nums; box-shadow: 0 0 0 2px var(--bg); pointer-events: none; }
+/* 종의 팝오버 — 슬랙·깃허브의 알림 드롭다운. **모달이 아니다**(바깥 클릭·Esc·이동으로 닫힌다). 워크스페이스 팝오버(.v2-wspop)와 같은 면. */
+.v2-noti-pop { position: fixed; z-index: 70; width: 400px; max-width: calc(100vw - 16px); max-height: min(70vh, 560px);
+  display: flex; flex-direction: column; padding: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(var(--shadow-ink), .18); overflow: hidden; }
+.v2-noti-pop-h { display: flex; align-items: center; gap: 8px; padding: 10px 12px 8px 14px; border-bottom: 1px solid var(--line-net); }
+.v2-noti-pop-h .v2-k { flex: 1; min-width: 0; }
+.v2-noti-pop-b { flex: 1; min-height: 0; overflow: auto; padding: 6px; display: flex; flex-direction: column; }
+.v2-noti-pop-b .v2-noti-row { padding: 8px; }
+.v2-noti-pop-empty { margin: 0; padding: 26px 14px; text-align: center; font-size: 13px; color: var(--muted); }
+.v2-noti-pop-f { border-top: 1px solid var(--line-net); padding: 8px 14px; }
+.v2-noti-pop-f a { font-size: 12.5px; font-weight: 600; color: var(--blue); text-decoration: none; }
+.v2-noti-pop-f a:hover { text-decoration: underline; }
 
 /* ══ #2033 — 홈 목록의 묶는 축(세션 ↔ 프로젝트) ═══════════════════════════════
    집합은 그대로, 묶는 축만 바꾼다. 행 문법(×·압정·상태 점)은 두 축에서 같은 것을 쓴다.       */

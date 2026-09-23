@@ -212,7 +212,10 @@ await t("★ N6 앱 토큰 알림은 서버 전용 칸을 넘기지 못한다 ·
   assert.ok(!/notifyMember\(\{[^}]*\.\.\.input/.test(cap), "입력을 통째로 펼치지 않는다");
   assert.match(cap, /title: input\.title, body: input\.body, href: input\.href, dedupe_key: input\.dedupe_key/);
   const n = code(src("../../apps/notify.ts"));
-  assert.match(n, /shouldSuppressDuplicate\(norm\.value\.dedupeKey, last, now, input\.cooldownMs\)/);
+  //  #4180 — 억제 판정은 두 발송 경로(앱·제품 자신)의 공통 꼬리(sendNormalized)로 옮겨 갔다. 서버 호출이 넘긴 간격이
+  //   그 꼬리까지 **끊기지 않고** 닿는지를 본다: notifyMember → sendNormalized(cooldownMs) → shouldSuppressDuplicate(…, o.cooldownMs).
+  assert.match(n, /return sendNormalized\(input\.appId, input\.memberId, norm\.value, \{[^}]*cooldownMs: input\.cooldownMs/);
+  assert.match(n, /shouldSuppressDuplicate\(v\.dedupeKey, last, now, o\.cooldownMs\)/);
 });
 
 await t("★ S(원자성) 실행 멤버 채우기는 한 문장 — 이 워크스페이스 행 · 키가 없을 때만 · env 시드가 있으면 안 함", () => {

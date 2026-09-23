@@ -3,7 +3,9 @@
 //  슬랙 데스크톱 좌측 탭 레일을 그대로 옮긴다(헬프센터 스크린샷 2장 + 원준님 스크린샷으로 대조):
 //   ⓪ 워크스페이스 — **타일 한 장 + 뒤에 겹친 타일**(스택). 누르면 슬랙과 같은 흰 팝오버:
 //      [아이콘 · 이름 · 부제] 목록(지금 것은 고리) · ＋ 워크스페이스 추가 · 「레일 숨기기/펼치기」(패널 아이콘).
-//   ① 구역 — 홈 · 확인할 것(배지) · AI 세션 · 프로젝트 · 위키 · 리브. 슬랙의 홈·DM·내 활동·나중에 자리.
+//   ① 구역 — 홈 · AI 세션 · 프로젝트 · 위키 · 리브. 슬랙의 홈·DM·나중에 자리.
+//      ⚠ [확인할 것] 구역은 걷었다(#4180, 회의 2026-09-21) — 사이드바와 겹치고 세션 알림만 쌓여 들어갈 이유가 없었다.
+//       이제 「확인할 것」의 입구는 **홈 머리줄의 종**(notify-bell.ts)이고, 화면은 #/inbox 그대로다.
 //      고른 구역이 곧 **사이드바의 내용**이다(side.ts). 리브만 구역이 아니라 '갈 곳'이다 — 리브 화면은
 //      대화 한 장이라 사이드바가 바뀔 이유가 없다(활성 표시는 주소로 판정).
 //   ② 최근 연 앱 — 헤어라인 아래. 맥 독의 '최근 사용' 구간. 5차: 꾹 눌러 위로 끌어 올리면 ①에 고정되고, ①은 끌어서 순서를 바꾼다.
@@ -32,11 +34,11 @@ import { inboxSection, openMemberModal } from './ws-people.js';   // #1875 — �
 import { openCurrentWsSettings } from './ws-settings.js';   // #2188 — 워크스페이스 설정 모달
 import { wsStatus } from '../lib/ws-status.js';   // #4122 — 행 상태(온라인·오프라인·만드는 중)의 정본
 
-export type RailSection = 'home' | 'inbox' | 'sess' | 'proj' | 'wiki';
+export type RailSection = 'home' | 'sess' | 'proj' | 'wiki';
 
 export interface RailHooks {
-  /** 배지·개수 — 확인할 것 · 작업 중 세션 · 진행 중 프로젝트. */
-  counts?: () => { inbox: number; busy: number; projects: number };
+  /** 개수 — 작업 중 세션 · 진행 중 프로젝트(구역 드롭다운의 부제). 알림 수는 레일이 아니라 홈의 종이 말한다(#4180). */
+  counts?: () => { busy: number; projects: number };
   /** 지금 열려 있는 앱 키 — 최근 앱 아이콘 아래 '실행 중' 점(맥 독). */
   openApps?: () => Set<string>;
   /** 지금 화면의 활성 키(main.ts activeKey) — 구역이 아닌 '갈 곳'(리브)의 활성 표시에 쓴다. */
@@ -53,7 +55,7 @@ export interface RailHooks {
 export interface SecDef { key: RailSection; label: string; tab: string | null; icon: string }
 const SECTIONS: SecDef[] = [
   { key: 'home', label: '홈', tab: null, icon: 'home' },
-  { key: 'inbox', label: '확인할 것', tab: null, icon: 'inbox' },
+  //  'inbox'(확인할 것)는 #4180 에서 뺐다 — 저장된 구역·순서에 남은 옛 키는 init()·normalizeOrder 가 조용히 떨어뜨린다.
   { key: 'sess', label: 'AI 세션', tab: 'terminal', icon: 'chat' },   // 말풍선 — 사이드바 세션 행과 같은 붓(원준 2026-08-26)
   { key: 'proj', label: '프로젝트', tab: 'projects2', icon: 'proj' },
   { key: 'wiki', label: '위키', tab: 'knowledge', icon: 'wiki' },
@@ -577,7 +579,7 @@ async function refreshSpaces(): Promise<void> {
 /** 레일을 숨겼을 때 사이드바 머리의 **구역 드롭다운**(안 B) — 메인 그룹 순서 그대로(구역 · 리브 · 고정한 앱) + 「레일 펼치기」. */
 export function openSectionMenu(anchor: HTMLElement): void {
   if (popEl) { closePopover(); return; }
-  const c = hooks.counts?.() || { inbox: 0, busy: 0, projects: 0 };
+  const c = hooks.counts?.() || { busy: 0, projects: 0 };
   const ak = hooks.activeKey?.() || '';
   const linkOn = LINKS.find((l) => l.key === ak) || null;
   const row = (key: string, label: string, ic: string, on: boolean, extra: HTMLElement | null, run: () => void): HTMLElement =>
@@ -588,8 +590,7 @@ export function openSectionMenu(anchor: HTMLElement): void {
     ...mainEntries().map((m) => {
       if (m.kind === 'sec') {
         const s = m.sec;
-        const extra = s.key === 'inbox' && c.inbox ? el('span', { class: 'v2-rail-bd', text: String(c.inbox) })
-          : s.key === 'sess' && c.busy ? el('span', { class: 'v2-secdd-m', text: `${c.busy} 작업 중` })
+        const extra = s.key === 'sess' && c.busy ? el('span', { class: 'v2-secdd-m', text: `${c.busy} 작업 중` })
           : s.key === 'proj' && c.projects ? el('span', { class: 'v2-secdd-m', text: String(c.projects) }) : null;
         return row(s.key, s.label, s.icon, !linkOn && section === s.key, extra, () => setRailSection(s.key, { navigate: true }));
       }
@@ -876,7 +877,6 @@ export function drawRail(): void {
   if (!host) return;
   init();
   if (drag && drag.lifted) return;   // 끌던 중엔 다시 그리지 않는다 — DOM 을 갈아엎으면 손에 든 것이 사라진다(endDrag 가 그린다)
-  const c = hooks.counts?.() || { inbox: 0, busy: 0, projects: 0 };
   const running = hooks.openApps?.() || new Set<string>();
   const ak = hooks.activeKey?.() || '';
   const linkOn = LINKS.find((l) => l.key === ak) || null;
@@ -914,11 +914,8 @@ export function drawRail(): void {
     let it: HTMLElement;
     if (m.kind === 'sec') {
       const s = m.sec; const on = !linkOn && section === s.key;
-      //  확인할 것 — 슬랙 '내 활동'의 그 배지. 아이콘 귀퉁이에 숫자.
-      const extra = s.key === 'inbox' && c.inbox
-        ? el('span', { class: 'v2-rail-bd', text: String(c.inbox), role: 'img', 'aria-label': `확인할 것 ${c.inbox}건` })
-        : null;
-      it = item(s.key, s.label, s.icon, on, extra, () => setRailSection(s.key, { navigate: true }));
+      //  구역 아이콘엔 배지가 없다 — 앰버 숫자 배지는 종전 [확인할 것] 하나였고, 그 자리는 홈의 종으로 갔다(#4180).
+      it = item(s.key, s.label, s.icon, on, null, () => setRailSection(s.key, { navigate: true }));
     } else {
       const l = m.link;
       it = item(l.key, l.label, l.icon, !!linkOn && linkOn.key === l.key, null, () => { location.hash = l.route; }, l.route);

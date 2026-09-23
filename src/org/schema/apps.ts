@@ -248,6 +248,15 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_notification_member_idx ON org_app_notification(member_id, created_at DESC);`);
   //  중복 억제는 (앱·멤버·key) 의 최근 1건만 본다 — 그 조회를 받치는 인덱스.
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_notification_dedupe_idx ON org_app_notification(app_id, member_id, dedupe_key, created_at DESC) WHERE dedupe_key IS NOT NULL;`);
+  //  #4180 — 알림의 **종류**(kind)와 **한 사람**(actor). 「확인할 것」은 종류로 가른다(notify-policy.inInbox):
+  //   세션 대기·완료(session)는 배너만 울리고 목록엔 서지 않는다(회의 2026-09-21: «하루에 세션을 수십 개 쓰면 모든 답이
+  //   쌓여 무의미»). comment·mention(사람이 나를 지목한 것)·liv(리브의 답)·app(앱이 보낸 것)이 목록에 선다.
+  //   actor 는 «누가 한 일인가»(구성원 id) — 화면이 얼굴·이름을 붙이는 재료. 앱 알림은 비어 있다.
+  await pool.query(`ALTER TABLE org_app_notification ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'app';`);
+  await pool.query(`ALTER TABLE org_app_notification ADD COLUMN IF NOT EXISTS actor TEXT;`);
+  //  옛 행 되분류 — 이 열이 생기기 전에 ai-session 스윕이 남긴 «답을 기다려요» 는 전부 세션 알림이다. 그대로 두면
+  //   열이 생긴 첫날 「확인할 것」에 옛 세션 알림 수십 건이 그대로 서 있다(이 프로젝트가 지우려는 바로 그 화면). 멱등.
+  await pool.query(`UPDATE org_app_notification SET kind='session' WHERE app_id='ai-session' AND kind='app';`);
 
   // ── 기존 테이블 앱 축(design D1) — 전부 ADD COLUMN IF NOT EXISTS(무회귀) ──
   //  auth_token.app_id — 앱 세션 토큰 귀속(NULL = 일반 토큰). 기능 롤백 런북이 `WHERE app_id IS NOT NULL` 로 일괄 revoke.

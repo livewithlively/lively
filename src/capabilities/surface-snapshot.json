@@ -4672,7 +4672,7 @@
   "rest": [
    "GET /api/ui/me/notifications"
   ],
-  "input_hash": "0e5d23d8a5038cf4"
+  "input_hash": "8b65652c9ce4fe0d"
  },
  {
   "name": "me_notifications_read",
@@ -4682,7 +4682,7 @@
   "rest": [
    "POST /api/ui/me/notifications/read"
   ],
-  "input_hash": "62ff2ece42e18912"
+  "input_hash": "c0922e821b084a79"
  },
  {
   "name": "me_slack_channels",

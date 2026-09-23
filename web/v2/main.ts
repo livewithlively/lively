@@ -54,7 +54,7 @@ import { cachedAppInstance, closeAppInstance, createAppInstance, dismissedSessio
 import { keptSessionRefs, planDismissMigration, sessRowVerdict, verdictStands, withoutSessionKeys, type SessRowVerdict } from './sess-visibility.js';   // #3855·#3857 — 세션 행이 서는 규칙(순수)
 import { mountAppRuntimeView } from './app-runtime.js';
 import { activeNavKey } from './shell-surfaces.js';   // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
-import { startNotificationBanners } from './notifications.js';   // #1891 — 배너는 화면과 무관하게 뜬다
+import { refreshUnread, startNotificationBanners, startUnreadWatch } from './notifications.js';   // #1891 — 배너는 화면과 무관하게 뜬다 · #4180 — 홈 종의 안 읽은 수 시계
 import { startLiveSync } from './live-sync.js';   // #2041 — 배너가 뜨는 그 순간 목록도 그 순간을 본다
 
 // 팝아웃 창(#1744) — 세션 화면 [⋯ ▸ 새 창]이 `?solo=1` 로 여는 같은 앱. **좌측(과 탭 줄)만 없다**:
@@ -299,6 +299,8 @@ export async function bootV2(): Promise<void> {
   //  데스크톱 앱 안에서는 스스로 물러난다 — 그 앱이 트레이에서 같은 사건을 이미 띄운다(#1842).
   //  #4054 — 배너 윗줄은 이 탭의 워크스페이스 이름(문패와 같은 값 — switcher.ws()).
   startNotificationBanners(undefined, () => workspaceInfo().name);
+  //  #4180 — 홈 종의 안 읽은 수. 종이 그려지든 말든 셸이 켜져 있는 동안 센다(홈으로 돌아온 순간 종이 «지금 값» 을 바로 받게).
+  startUnreadWatch();
   // 실험장(#1719 원준): 작업대 골격(rail-mode)은 그대로 두되 **좌측 사이드바는 늘 보인다**(원준 2026-08-20:
   //  "새로고침하다 보면 사라질 때가 있다 — 항상 표시하고, 없앨 수는 없게. 폭만 끌어 조절"). 그래서
   //  여닫는 길(알약·×·핀)을 전부 걷고 **폭 손잡이 하나**만 남긴다 — 사라지지 않으니 되찾는 길도 필요 없다.
@@ -605,7 +607,7 @@ export async function bootV2(): Promise<void> {
   //  데스크톱 앱의 배너는 그걸 5ms 만에 받는다 — 사이드바만 8초 폴링으로 뒤늦게 따라잡고 있었다.
   //  그래서 **같은 스트림에 셸도 붙는다**: 시점을 새로 정의하지 않고 이미 있는 시점에 얹는다.
   //  ⚠ 여기서 배너를 만들지는 않는다 — 그건 앱 한 곳의 일이다(v2/live-sync.ts 머리말 §①).
-  startLiveSync(() => refreshSideSoon());
+  startLiveSync(() => { refreshSideSoon(); refreshUnread(); });   // #4180 — 세션 전이 직후엔 리브의 답 알림이 남을 수 있다 → 종도 같은 순간을 본다
 
   // 방금 클래식에서 올라왔다면(#1898) 같은 성격의 창을 [화면] 자리에 다시 연다 — 왕복이 대칭이어야
   //  사람이 '내가 방금 누른 그 자리로 돌아왔다'고 읽는다. 도장은 1회용(lib/state takeShellSwitch).
@@ -629,8 +631,8 @@ async function syncShell(): Promise<void> {
   drawSide(); tabsApi.paint();
   const at = tabsApi.active();
   const atPage = parseRoute(at.route).segs[0];
-  if (atPage === 'inbox') renderInbox(at.center, data);   // 확인할 것 — 같은 결로 따라온다
-  else if (atPage === 'archive') renderPast(at.center, data, binHooks, at.aside);   // 아카이브·휴지통도 같은 결(#1851 → #1850 안 A: 곁칸 포함)
+  //  「확인할 것」은 이 틱에 안 그린다(#4180) — 세션 목록과 무관한 알림 이력이고, 그 화면은 종의 시계(onUnread)로 따라온다.
+  if (atPage === 'archive') renderPast(at.center, data, binHooks, at.aside);   // 아카이브·휴지통도 같은 결(#1851 → #1850 안 A: 곁칸 포함)
   else if (atPage === 'trash') renderTrash(at.center, data, binHooks, at.aside);
   else if (isSessAllRoute(at.route)) paintSessAll(at);   // #4158 [AI 세션] 전체 목록 — 상태 점·치움이 같은 결로 따라온다
   for (const t of tabsApi.tabs) {
@@ -1548,7 +1550,7 @@ function sideRowFace(route: string, draft?: string): Omit<SideInstance, 'id' | '
     //  둘째 줄 = 내가 마지막으로 시킨 말(#2016 6차, last-ask.ts) — 아직 모르면 null(행은 프로젝트명을 글자로 둔다).
     if (page === 's') { const s = findSess(decodeURIComponent(segs[1] || '')); if (s) ask = lastAsk(s); }
   }
-  else if (page === 'inbox') { icon = 'inbox'; meta = '답과 확인을 기다리는 작업'; }
+  else if (page === 'inbox') { icon = 'inbox'; meta = '댓글·언급 · 리브의 답 · 앱 알림'; }
   else if (page === 'sources') { icon = 'src'; meta = '모아 둔 원본 자료'; }
   else if (page === 'connect') { icon = 'link'; meta = '외부 앱 연결'; }
   //  치워 둔 곳(#1851)은 클래식 지식 앱으로 접히므로(CLASSIC_PAGES) 여기서 먼저 가른다 — 아니면 '지식 트리…'가 붙는다.
@@ -2029,14 +2031,13 @@ function openProjectPage(projectId: number): void {
 }
 
 // ── 레일(#2016)이 쓰는 값들 ──────────────────────────────────────────────────
-//  ⚠ 배지의 뜻은 사이드바와 **같은 셈**이어야 한다 — 레일이 4 라 하고 [확인할 것] 목록이 3 이면
-//   어느 쪽이 거짓말인지 화면이 말하지 못한다. inbox 는 side.ts render() 와 같은 식이다.
-function railCounts(): { inbox: number; busy: number; projects: number } {
+//  #4180 — 「확인할 것」 배지는 여기서 세지 않는다. 종전엔 내 세션의 waiting·done 을 세었는데, 세션 알림이 「확인할 것」에서
+//   빠지면서 그 숫자의 자리(레일 [확인할 것])도 사라졌다. 안 읽은 알림 수는 서버가 세고 홈의 종이 든다(notifications.ts).
+function railCounts(): { busy: number; projects: number } {
   const live = data.sessions.filter((s) => s.live && s.alive && !isTrashedSess(s));
-  const inbox = live.filter((s) => isMineSess(s) && (s.stateKey === 'waiting' || s.stateKey === 'done')).length;
   const busy = live.filter((s) => s.stateKey === 'busy').length;
   const projects = new Set(live.map((s) => s.projectId).filter((x): x is number => !!x)).size;
-  return { inbox, busy, projects };
+  return { busy, projects };
 }
 /** 최근 앱 아이콘 아래 '실행 중' 점 — 지금 창이 열려 있는 앱 키. */
 function openAppKeys(): Set<string> {
@@ -2066,7 +2067,7 @@ const homeLandingRoute = (): string => '#/';
 function sectionRoute(sec: RailSection): string {
   //  [프로젝트]는 구역 첫 화면이 **즐겨찾기 맨 위 리스트**다(#2061) — 전체 프로젝트 보드는 매일 여는 자리가 아니다.
   //   주소로 착지시키는 이유: 이 사이드바의 그 줄도 눌린 것으로 서고(projScopeKey), 새로고침·북마크도 같은 자리로 돌아온다.
-  return sec === 'inbox' ? '#/inbox' : sec === 'sess' ? '#/app/terminal' : sec === 'proj' ? projLandingRoute() : sec === 'wiki' ? '#/app/knowledge' : homeLandingRoute();
+  return sec === 'sess' ? '#/app/terminal' : sec === 'proj' ? projLandingRoute() : sec === 'wiki' ? '#/app/knowledge' : homeLandingRoute();
 }
 // ── [AI 세션] 구역의 가운데 = 전체 세션 목록 (#4158) ─────────────────────────────
 //  회의 #3977(2026-09-14) «AI 세션 탭 = 전체 세션 풀스크린 조회 · 사이드바엔 프로젝트 리스트(클릭 → 그 안 세션 필터)»
@@ -2112,7 +2113,7 @@ function syncRailBtn(): void {
 
 function drawSide(): void {
   drawRail();
-  mobile?.syncTabs(railCounts());   // 폰 아래 탭 바의 켜짐·배지도 레일과 같은 박자로(#4088)
+  mobile?.syncTabs();   // 폰 아래 탭 바의 켜짐도 레일과 같은 박자로(#4088)
   if (!sideEl) return;
   //  #2423 앱 소유 사이드바 — 자료 갈래는 side.ts render() 가 activeKey 로 직접 판정한다(구역들과 같은 틀).
   if (!sideTreeHost || !sideEl.contains(sideTreeHost)) {

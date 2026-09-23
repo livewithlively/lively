@@ -43,7 +43,7 @@ export const SHELL_SURFACES: Record<string, ShellSurface> = {
   // ── 앱화 대상 — 줄어들기만 한다 ──
   app: { kind: "todo", plan: "클래식 화면 iframe(#/app/<key>). APPS 표의 항목을 하나씩 builtin AppPackage(system.renderer)로 옮기고, 표가 비면 이 라우트도 없앤다." },
   sources: { kind: "app", appId: "sources", note: "자료(#2423) — 라이블리가 가진 원본을 출처별로 훑고 하나를 열어 원문을 본다. project=global·single 빌트인. 딥링크 #/sources 와 자료 하나 #/sources/<id> 가 정본이다." },
-  inbox: { kind: "app", appId: "inbox", note: "받은 알림 이력 + 지금 답을 기다리는 세션(#1891). project=global·single-instance 빌트인. 딥링크 #/inbox 를 정본으로 유지한다(세션의 #/s/ 와 같은 규칙)." },
+  inbox: { kind: "app", appId: "inbox", note: "받은 알림 이력(#1891 → #4180: 세션 대기·완료는 빠지고 댓글·언급·리브의 답·앱 알림만). 입구는 홈 머리줄의 종(notify-bell.ts). project=global·single-instance 빌트인. 딥링크 #/inbox 를 정본으로 유지한다(세션의 #/s/ 와 같은 규칙)." },
   liv: { kind: "todo", plan: "리브 — 대화하는 화면이라 가장 앱다운 축에 든다. session subject 를 갖는 builtin 후보." },
   archive: { kind: "todo", plan: "아카이브 — 콘텐츠 목록. trash 와 한 앱(보관함)으로 묶을지 둘로 둘지 이식 때 정한다." },
   trash: { kind: "todo", plan: "휴지통 — 위와 같음. ⚠ 클래식 표에도 'trash' 가 있어 라우터에서 이 분기가 먼저 서야 한다(WIKI 옛 휴지통과 다르다)." },
