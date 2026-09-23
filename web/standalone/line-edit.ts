@@ -166,6 +166,9 @@ export class UndoStack {
 //  글자·붙여넣기·↑ 이력 호출)을 알지만 위 합성 스택은 우리가 본 세 갈래뿐이라, 앱 것이 있으면 그것을 부른다.
 //  판은 pane 포그라운드 명령으로만 안다 — 네이티브 설치는 실행 파일 이름이 버전 문자열(`2.1.267`)이라 tmux 가 그걸 준다.
 //  확인이 안 되면(상태 미수신·매니지드 `docker`·npm 설치 `node`·셸) false → 어느 판에서도 도는 합성으로.
+//  ⚠ 다른 하네스는 이 자를 통과하지 않는다 — 그게 맞다(#4135 실측 2026-09-24, codex 0.153.4): codex 입력칸엔 되돌리기가
+//   없고 **Ctrl+Z 를 눌러도 아무 일도 안 난다**(프로세스도 안 멈춘다 — 클로드에서 났던 «되살릴 자리가 없다» 사고(#3861)가
+//   codex 엔 없다). 그래서 codex 세션은 여기서 false 로 떨어져 합성 되돌리기를 그대로 쓴다.
 const NATIVE_UNDO_MIN = [2, 1, 267];
 export function nativeUndoOk(cmd: string | null | undefined): boolean {
   const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(cmd || ''));

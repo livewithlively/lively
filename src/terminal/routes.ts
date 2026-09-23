@@ -58,7 +58,7 @@ import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
 import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor, setLastPrompt, lastPromptsFor, claimSessionLabel, updateSessionStateMeta } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑 · #2197 마지막 말
 import { cleanLastPrompt } from "./last-prompt.js";
-import { harnessIo } from "./harness-io/adapter.js";
+import { harnessIo, termUiWire, type TermUiWire } from "./harness-io/adapter.js";
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
 import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable, unknownStateMeta } from "./session-meta.js";  // #1820 죽은 세션 '복원 가능' 단일 판정 + #2111 생사 갈래 + #2108 확답 게이트
 import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js";   // #1851 — 세션 휴지통
@@ -596,6 +596,16 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       retentionDays: c.session_share.retention_days,   // 0 = 무제한
     });
   }));
+  //  #4135 — 터미널 화면이 이 세션을 **어떤 하네스의 화면으로** 다뤄야 하는지. 종전엔 그 사실이 화면 코드에
+  //   클로드 기준으로 박혀 있어, codex 세션에서 폰 선택지 단추가 아무것도 고르지 못하고 첫 지시가 부팅
+  //   대화상자에 먹혔다(실측 2026-09-24). 출처는 하네스 어댑터 한 곳이다(harness-io/term-ui.ts).
+  //  ⚠ 모르는 하네스면 **필드를 뺀다** — 화면은 모르면 특수동작을 하지 않는다(claude 로 추측하지 않는다).
+  const termFields = (harness: string | null | undefined): { harness?: string; harnessLabel?: string; termUi?: TermUiWire } => {
+    const a = harnessIo(harness);
+    //  harnessLabel 은 화면 **문구**용이다(«…에게 전달했어요»). 종전엔 그 자리에 '클로드' 가 박혀 있어서
+    //   codex 세션에서도 클로드라고 말했다 — 사람이 어느 AI 에게 보냈는지를 화면이 틀리게 말하면 안 된다.
+    return a ? { harness: a.key, harnessLabel: a.label, termUi: termUiWire(a.term) } : {};
+  };
   // 단일 세션의 현재 이름 — 단독 터미널 페이지가 id 로 조회(프로젝트 세션은 목록에서 빠져 ?label= 폴백만 됐던 문제 해결).
   //  접근통제: canAttach(소유자·초대된 멤버, 프로젝트 세션은 전원 #452) — 입장 가능한 사람만 이름을 읽는다.
   app.get("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
@@ -611,7 +621,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  잘못 내면 화면은 WS 도 안 붙이고 곧장 복원으로 간다 — 그래서 '모름'을 '죽음'으로 접으면 안 된다.
     if (nodeId) {
       const s = nodeSessionsFor(uid).find((x) => x.node?.id === nodeId && x.id === id);
-      if (s) { res.json({ id: s.id, label: s.label, projectId: s.projectId || 0 }); return; }
+      if (s) { res.json({ id: s.id, label: s.label, projectId: s.projectId || 0, ...termFields(s.harness) }); return; }
       // #1791 — 스냅샷에 없다 = 그 노드에서 죽었다(또는 노드가 스냅샷을 아직 안 올렸다). 아래 desired-state 경로로 떨어져
       //  '복원 가능'을 알린다(종전엔 여기서 403 — 노드 세션은 desired-state 가 없어 알릴 것이 없었다).
       // ⚠ #2108 — 괄호 안의 두 번째 경우가 실제로 났다. 상태 push 는 3초 주기라 **방금 만든 살아있는 세션**이
@@ -632,7 +642,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         alive = nodeSessionsFor(uid).find((x) => x.node?.id === nid && x.id === id);
         return !!alive;
       });
-      if (mode === "alive" && alive) { res.json({ id: alive.id, label: alive.label, projectId: alive.projectId || 0, node: nodeBadge }); return; }
+      if (mode === "alive" && alive) { res.json({ id: alive.id, label: alive.label, projectId: alive.projectId || 0, node: nodeBadge, ...termFields(alive.harness) }); return; }
       const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
       // #2231 — 이미 이어진 id 다. 되살리라고 하지 말고 **이어진 세션을 알려 준다**(화면이 그리로 옮긴다).
       if (dead.kind === "moved") { res.json({ id, movedTo: (await resolveSessionSuccessor(id).catch(() => null)) ?? dead.to, node: nodeBadge }); return; }
@@ -703,7 +713,10 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       st?.label ? Promise.resolve(st.label) : getSessionLabel(req.params.id),
       st?.project_id != null ? Promise.resolve(Number(st.project_id) || 0) : getSessionProject(req.params.id),
     ]);
-    res.json({ id: req.params.id, label, projectId });
+    //  #4135 — 화면 사실은 desired-state 의 하네스로 답한다. **tmux 에 따로 묻지 않는다** — 이 메타는 세션을 열 때마다
+    //   불리고 매니지드에선 show-options 하나가 중계 왕복 하나다(위 라벨 주석과 같은 이유). 행이 하네스를 모르면
+    //   필드가 빠지고, 화면은 종전(특수동작 없음) 그대로 움직인다.
+    res.json({ id: req.params.id, label, projectId, ...termFields(st?.harness) });
   }));
   // 이 세션에서 사용자가 클로드에게 보낸 질문(프롬프트)만 모아 시간순 반환(#745 카드 '내 질문' 팝아웃).
   //  접근통제: canAttach(입장 가능한 사람 = 대화도 볼 수 있음, 프로젝트 세션은 전원 #452). 대화 기록 = ~/.claude 트랜스크립트.

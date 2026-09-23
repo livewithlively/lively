@@ -34,6 +34,12 @@ const FIXTURES: Record<string, Partial<Record<"ready" | "busy" | "dialog" | "aut
     dialog: [
       "✨ Update available! 0.146.0 -> 0.147.0\n  Release notes: https://github.com/openai/codex/releases/latest\n› 1. Update now (runs `sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh |\n     CODEX_NON_INTERACTIVE=1 sh'`)\n  2. Skip\n  3. Skip until next version\n  Press enter to continue",
       "Do you trust the contents of this directory? Working with untrusted contents\n  comes with higher risk of prompt injection.\n› 1. Yes, continue\n  2. No, quit\n  Press enter to continue",
+      //  ★ 실측 2026-09-24(codex 0.153.4, `--ask-for-approval on-request`) — 승인 대화상자. 꼬리가 "continue" 가 아니라
+      //   "confirm or esc to cancel" 이라, 종전 정규식은 이 화면을 dialog 로 못 봤다(답을 기다리는 화면에 글자가 들어갔다).
+      "  Would you like to run the following command?\n\n  Environment: local\n\n  Reason: 빈 파일을 생성하도록 허용할까요?\n\n  $ touch /tmp/probe-approval-test\n\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again for commands that start with `touch` (p)\n  3. No, and tell Codex what to do differently (esc)\n\n  Press enter to confirm or esc to cancel",
+      //  ★ 실측 2026-09-24 — 훅 검토 대화상자. 부팅 길목에 **신뢰 폴더 다음으로** 뜬다(훅이 새로 생기거나 바뀌면).
+      //   이걸 통과하지 못하면 상태 보고·대화 id 매핑·이름짓기 훅이 전부 조용히 안 돈다.
+      "  Hooks need review\n  19 hooks are new or changed.\n  Hooks can run outside the sandbox after you trust them.\n\n› 1. Review hooks\n  2. Trust all and continue\n  3. Continue without trusting (hooks won't run)\n\n  Press enter to confirm or esc to go back",
     ],
   },
   grok: {   // 실측 2026-08-18 (box-yoon-bf4872dd — busy 중에도 입력박스·푸터가 그려진다)
@@ -104,6 +110,33 @@ t("[5] answer 선언 하네스는 모든 행동에 키를 답하고, caps.read/a
     assert.equal(chatIoCaps(a.key).answer, !!a.answer, `${a.key} caps.answer`);
     assert.equal(chatIoCaps(a.key).read, !!a.parse, `${a.key} caps.read`);
   }
+});
+
+// [표 5b] 터미널 화면 사실(#4135) — 웹 터미널이 이 값을 보고 키를 보내고 첫 지시를 넣는다.
+//  두 불변식만 지키면 «첫 지시가 대화상자에 먹히는» 사고가 안 난다:
+//   ① 그 하네스의 **모든 실측 대화상자**가 startDialogRe 에 걸린다(하나라도 새면 그 화면 위에서 Enter 를 친다).
+//   ② 그 하네스의 **준비 화면(ready)** 은 걸리지 않는다(멀쩡한 입력창을 대화상자로 보면 영영 안 보낸다).
+t("[5b] startDialogRe 는 자기 하네스의 실측 대화상자를 전부 잡고, 준비 화면은 안 잡는다", () => {
+  let checked = 0;
+  for (const [key, fx] of Object.entries(FIXTURES)) {
+    const re = harnessIo(key)?.term.startDialogRe;
+    if (!re) continue;                                    // 미실측 하네스 — 화면이 보수적으로 기다린다(있는 척 금지)
+    for (const pane of panes(fx.dialog)) { assert.ok(re.test(pane), `${key}: 대화상자를 못 잡는다 — ${pane.slice(0, 40)}…`); checked++; }
+    for (const pane of panes(fx.ready)) { assert.ok(!re.test(pane), `${key}: 준비 화면을 대화상자로 오판`); checked++; }
+    for (const pane of panes(fx.busy)) { assert.ok(!re.test(pane), `${key}: 작업 중 화면을 대화상자로 오판`); checked++; }
+  }
+  assert.ok(checked >= 6, `화면 사실 표가 비었다(배선 단언) — 검사 ${checked}건`);
+});
+
+// [표 5c] 실측한 것만 적는다 — claude·codex 는 직접 재어 값이 다르고(셋 다 반대), 나머지는 «모른다» 로 남아 있다.
+t("[5c] 화면 사실 표 — claude 와 codex 의 실측값", () => {
+  const claude = harnessIo("claude")!.term, codex = harnessIo("codex")!.term;
+  assert.equal(claude.appMouse, true);           // alt 화면 + 마우스 리포트 — ⌘C 다리의 전제(#972)
+  assert.equal(codex.appMouse, false);           // 실측 2026-09-24: alternate_on=0, mouse_any_flag=0
+  assert.equal(claude.choiceNeedsEnter, false);  // 숫자만으로 골라진다(#4160 폰 키 줄이 Enter 를 안 붙이는 근거)
+  assert.equal(codex.choiceNeedsEnter, true);    // 실측: '1' 만 보내면 커서도 안 움직인다
+  assert.equal(claude.pastePlaceholder, true);   // «[Pasted text +N lines]»
+  assert.equal(codex.pastePlaceholder, false);   // 그대로 펼쳐진다
 });
 
 // [표 6] pathFor 인젝션 방어 — convId 가 경로 조각이 될 수 있으면 만들지 않는다.

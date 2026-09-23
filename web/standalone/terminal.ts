@@ -210,6 +210,43 @@ const RESTORED = new URLSearchParams(location.search).get('restored') === '1';
 const EMBED = new URLSearchParams(location.search).get('embed') === '1';
 const nodeQ = (joiner) => (NODE_ID ? joiner + 'node=' + encodeURIComponent(NODE_ID) : '');
 
+// ── 이 세션 하네스의 «화면 사실» (#4135) ───────────────────────────────────────────────
+//  이 파일의 편의 기능들은 전부 «클로드 화면은 이렇게 생겼다» 는 실측 위에 서 있다 — 선택지는 숫자만으로 골라진다,
+//  여러 줄 붙여넣기는 «[Pasted text +N lines]» 로 접힌다, 부팅 대화상자는 이런 문구다… 그 사실이 여기 글자로
+//  박혀 있어서, codex 세션에서는 화면이 **조용히 틀린 짓**을 했다(실측 2026-09-24, codex 0.153.4):
+//   · 폰 키 줄의 선택지 숫자는 codex 에선 아무것도 고르지 않았다(Enter 가 있어야 골라진다).
+//   · 자동 전송은 codex 의 부팅 대화상자(신뢰·훅 검토·업데이트)를 못 알아봐 그 위에 첫 지시를 쏟았다.
+//  그래서 사실을 **서버에 묻는다** — 출처는 하네스 어댑터 한 곳이다(src/terminal/harness-io/term-ui.ts).
+//  ⚠ 기본값은 **종전 동작(클로드 기준)** 이다: 메타가 아직 안 왔거나 서버가 모르는 하네스면 지금까지 하던 대로 움직인다(무회귀).
+//  ⚠ 기본값에 기대 **키를 먼저 보내지 않는다** — 하네스에 따라 답이 반대인 자리(선택지 Enter)는 whenTermUi 로 기다린다.
+interface TermUiProfile { label: string; appMouse: boolean; choiceNeedsEnter: boolean; pastePlaceholder: boolean; startDialog: RegExp }
+const TERM_UI_FALLBACK: TermUiProfile = {
+  label: '클로드', appMouse: true, choiceNeedsEnter: false, pastePlaceholder: true,
+  startDialog: /trust (this|the) folder|Do you trust|Enter to confirm|❯\s*1\.\s|\bNo, exit\b|Bypass Permissions mode|accept the risk/i,
+};
+let TERM_UI: TermUiProfile = TERM_UI_FALLBACK;
+let termUiDone = false;
+const termUiWaiters: (() => void)[] = [];
+/** 메타 응답(서버)이 실어 준 화면 사실을 받는다. 못 받으면(구서버·모르는 하네스) 종전 기본값 그대로 간다. */
+function applyTermUi(meta) {
+  try {
+    const t = meta && meta.termUi;
+    if (t) {
+      TERM_UI = {
+        label: String(meta.harnessLabel || TERM_UI_FALLBACK.label),
+        appMouse: !!t.appMouse, choiceNeedsEnter: !!t.choiceNeedsEnter, pastePlaceholder: !!t.pastePlaceholder,
+        //  정규식은 source 만 온다(플래그는 여기서 'i' 로 고정) — 서버가 만든 글자를 그대로 컴파일한다.
+        //  못 읽는 글자가 오면(구·신 버전 엇갈림) 기본값을 쓴다 — 화면이 죽는 것보다 종전 동작이 낫다.
+        startDialog: t.startDialog ? new RegExp(t.startDialog, 'i') : TERM_UI_FALLBACK.startDialog,
+      };
+    }
+  } catch (_) { /* 종전 기본값 유지 */ }
+  termUiDone = true;
+  while (termUiWaiters.length) { const f = termUiWaiters.shift(); try { f && f(); } catch (_) { /* noop */ } }
+}
+/** 화면 사실이 정해진 뒤에 한다 — 하네스마다 답이 **반대**인 자리(선택지 Enter 유무)가 그 전에 움직이면 안 된다. */
+function whenTermUi(fn: () => void) { if (termUiDone) fn(); else termUiWaiters.push(fn); }
+
 // 모든 라틴 글꼴 뒤에 자체호스팅 'D2Coding'(public/fonts, OFL)을 한글 폴백으로 둔다 →
 // 어떤 글꼴을 골라도 한글은 D2Coding 으로 또렷하게 렌더된다(#279 한글 가독성). @font-face=terminal.html.
 const FONTS = [
@@ -1365,7 +1402,9 @@ function autosendReadScreen() {
 // 붙여넣은 프롬프트가 입력창에 안착했는지: 멀티라인은 '[Pasted text +N lines]'/'paste again to expand' placeholder 로 접히고,
 //  짧으면 본문 앞부분이 그대로 보인다(둘 중 하나면 안착으로 본다).
 function autosendLanded(screen) {
-  if (/\[Pasted text|paste again to expand|\+\s*\d+\s*lines?/i.test(screen)) return true;
+  //  접는 하네스에서만 표식을 믿는다 — codex 는 접지 않고 그대로 펼치므로(실측 2026-09-24) 이 정규식이 영영 안 맞고,
+  //   본문 대조만이 안착의 증거다. 반대로 접는 하네스(클로드)에서 본문 대조만 하면 접힌 화면을 «안 들어갔다» 로 본다.
+  if (TERM_UI.pastePlaceholder && /\[Pasted text|paste again to expand|\+\s*\d+\s*lines?/i.test(screen)) return true;
   const probe = AUTOSEND.replace(/\s+/g, ' ').trim().slice(0, 24);
   return probe.length >= 6 && screen.replace(/\s+/g, ' ').indexOf(probe) !== -1;
 }
@@ -1374,7 +1413,9 @@ function autosendLanded(screen) {
 //  ⚠ 정상 입력박스의 하단 표시 '⏵⏵ bypass permissions on' 은 다이얼로그가 아니다 — 'Bypass Permissions mode' 경고창(대문자·mode)
 //   과 구분해 오판(정상 박스를 다이얼로그로 보고 영영 대기)을 막는다. 차단 다이얼로그는 'Enter to confirm'·번호선택 메뉴가 특징.
 function autosendBlockingDialog(screen) {
-  return /trust (this|the) folder|Do you trust|Enter to confirm|❯\s*1\.\s|\bNo, exit\b|Bypass Permissions mode|accept the risk/i.test(screen);
+  //  #4135 — 문구는 하네스가 답한다(TERM_UI.startDialog). codex 는 부팅 길목에 대화상자가 셋이다(폴더 신뢰 · 훅 검토 ·
+  //   업데이트 알림) — 종전의 클로드 문구만 보던 판정은 그 셋을 전부 놓쳐서, 첫 지시가 대화상자 위에 쏟아졌다.
+  return TERM_UI.startDialog.test(screen);
 }
 // 붙여넣기 → readback 확인 → (확인 시)Enter, (미확인 시)재시도. 다이얼로그면 대기. 최후엔 다이얼로그 아닐 때만 1회 폴백 Enter.
 function autosendPasteTry(n) {
@@ -1385,7 +1426,7 @@ function autosendPasteTry(n) {
     if (autosendLanded(autosendReadScreen())) {
       autosendDone = true;
       try { sendInput('\r'); } catch (_) { /* noop */ }               // 안착 확인 후에만 제출.
-      try { toast(autosendIsWelcome ? '라이블리 사용법 안내를 시작했어요' : '선택한 태스크를 클로드에게 전달했어요'); } catch (_) { /* noop */ }
+      try { toast(autosendIsWelcome ? '라이블리 사용법 안내를 시작했어요' : '선택한 태스크를 ' + TERM_UI.label + '에게 전달했어요'); } catch (_) { /* noop */ }
     } else if (n < AUTOSEND_MAX_TRIES) {
       setTimeout(() => autosendPasteTry(n + 1), 800);                 // 아직 준비 전/씹힘 → 잠시 후 재시도.
     } else {
@@ -1403,7 +1444,9 @@ function scheduleAutosend() {
     if ((autosendLastOut && quiet >= 1600) || (autosendDeadline && Date.now() >= autosendDeadline)) {
       autosendDone = 'firing';                                        // 재진입 방지(문자열 sentinel), 안착 확인/폴백 시 true 로 확정.
       try { if (term) term.focus(); } catch (_) { /* noop */ }
-      autosendPasteTry(0);
+      //  #4135 — 하네스의 화면 사실(대화상자 문구·붙여넣기 표식)이 정해진 뒤에 쏜다. 기본값으로 먼저 쏘면 codex 세션에서
+      //   부팅 대화상자를 못 알아보고 그 위에 첫 지시를 쏟는다. 메타는 부팅 초반에 오고, 실패해도 기본값으로 정해진다.
+      whenTermUi(() => autosendPasteTry(0));
     } else { scheduleAutosend(); }
   }, 500);
 }
@@ -2118,7 +2161,13 @@ function setupMobileDock(mainEl) {
   };
   const key = (label, seq, title?) => tbtn(label, title, () => { userTyped = true; sendInput(typeof seq === 'function' ? seq() : seq); }, true);
   //  선택지 숫자는 **떼는 순간**에 보낸다(위 이동 판정을 탄다) — 다른 키처럼 닿는 순간 보내면 줄을 밀기만 해도 고른다.
-  const pick = (n) => tbtn(n, n + ' — 선택지 고르기(Enter 없이)', () => { userTyped = true; sendInput(n); });
+  //  #4135 — 하네스마다 답이 **반대**다: 클로드는 숫자만으로 골라지고(Enter 를 붙이면 그 Enter 가 다음 화면으로 샌다, #4160),
+  //   codex 는 숫자만 보내면 커서조차 안 움직인다(실측 2026-09-24) — Enter 까지 보내야 골라진다.
+  //   ⚠ 판단은 **누를 때** 한다: 이 줄은 화면이 뜨자마자 그려지는데 화면 사실(메타)은 조금 뒤에 온다.
+  const pick = (n) => tbtn(n, n + ' — 선택지 고르기', () => {
+    userTyped = true;
+    sendInput(TERM_UI.choiceNeedsEnter ? n + '\r' : n);
+  });
   //  #4160 — 폰에서 제일 자주 하는 일은 **AI 가 묻는 선택지에 답하기**다(«1. Yes / 2. … / 3. No»). 종전엔 숫자를 입력칸에
   //   쓰고 [보내기]를 눌러야 했는데, 보내기는 숫자 뒤에 Enter 를 **하나 더** 붙인다 — 선택지는 숫자만으로 이미 골라지므로
   //   그 Enter 가 다음 화면(대개 빈 입력칸)으로 새어 들어갔다. 숫자 셋은 **그 글자만** 보내는 단추로 앞에 둔다.
@@ -2730,6 +2779,9 @@ function setProjectLink(projectId) {
 async function loadSessionMeta() {
   let data = null;
   try { data = await api(sUrl('')); } catch (_) { /* 무시하고 폴백 */ }
+  //  #4135 — 이 세션을 «어느 하네스의 화면으로» 다룰지. 실패해도 **반드시** 정한다(기본값=종전 동작):
+  //   기다리는 자리(whenTermUi)가 영영 안 풀리면 첫 지시 자동 전송이 통째로 멈춘다.
+  applyTermUi(data);
   if (data && data.label) setTitle(data.label);
   else if (SESSION_LABEL) setTitle(SESSION_LABEL);
   if (data) setProjectLink(Number(data.projectId) || 0);
