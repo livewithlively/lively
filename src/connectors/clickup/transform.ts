@@ -59,17 +59,17 @@ export function clickUpUiCategory(type?: string | null): "active" | "done" | "cl
   return "active";
 }
 
-// 리스트에 유효한 **원본** status set — override_statuses=true(또는 스페이스 set 부재)면 리스트 고유, 아니면 스페이스 상속.
+// 리스트에 유효한 **원본** status set — ClickUp 이 리스트 응답에 싣는 statuses 가 이미 실효값이다(리스트 고유·**폴더**
+//  오버라이드·스페이스 상속을 ClickUp 이 풀어서 준다). 비어 있을 때(폴더 없는 리스트 등)만 스페이스로 폴백한다.
+//  ⚠ override_statuses 로 리스트/스페이스를 고르면 안 된다 — 그 플래그는 «리스트 자신이» 덮었는지만 말하고, 폴더가 덮은
+//   리스트(override=false)에서 스페이스 어휘를 골라 ClickUp 이 거부 → status 를 빼고 재시도 → 닫기가 조용히 유실된다
+//   (실측 2026-09-23: 폴더 override 리스트의 done 푸시가 스페이스 「완료」로 나가 거부됐다). 확인: GET /list/:id 의 statuses 와
+//   그 폴더(GET /folder/:id)·스페이스의 statuses 를 나란히 보면 된다.
 //  ⚠ 인바운드(effectiveStatusDefs)와 아웃바운드(push-status.ts)가 **같은 규칙**을 써야 한다 — 갈리면
 //   저장된 status_raw 키와 푸시 때 찾는 라벨이 서로 다른 상태셋에서 나와 매칭이 조용히 깨진다.
 export function effectiveStatusSource(list: ClickUpList | null | undefined, space?: ClickUpSpace | null): ClickUpStatus[] {
   const listStatuses = list?.statuses ?? [];
-  const spaceStatuses = space?.statuses ?? [];
-  if (!list) return spaceStatuses;
-  const preferList = list.override_statuses || spaceStatuses.length === 0;
-  const first = preferList ? listStatuses : spaceStatuses;
-  const second = preferList ? spaceStatuses : listStatuses;
-  return first.length ? first : second;
+  return listStatuses.length ? listStatuses : (space?.statuses ?? []);
 }
 
 // 위 원본 set 을 #475 UI 계약 shape [{key,label,color,category}] 로 정규화(orderindex 순). key 충돌은 -2 접미(라벨 유일 전제 방어).

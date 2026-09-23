@@ -1,24 +1,41 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { statusesForList, buildStatusMap, categoryOfStatusName, decidePushStatus } from "./push-status.js";
+import { effectiveStatusDefs } from "./transform.js";
 
 import type { ClickUpStatus, ClickUpList, ClickUpSpace } from "./types.js";
 
 // ── 행위 1 — statusesForList: 이 카드에 유효한 상태셋을 고른다 ─────────────
 
-test("override_statuses가 참이면 스페이스 상태셋이 있어도 리스트 고유 상태셋을 쓴다", () => {
+test("리스트 응답에 상태셋이 있으면 스페이스보다 우선한다(override_statuses=true)", () => {
   const list: ClickUpList = { id: "l1", override_statuses: true, statuses: [{ status: "리스트고유", type: "open" }] };
   const space: ClickUpSpace = { id: "s1", statuses: [{ status: "스페이스", type: "open" }] };
   assert.deepEqual(statusesForList(list, space), list.statuses);
 });
 
-test("override_statuses가 거짓이면 스페이스 상태셋을 상속한다", () => {
-  const list: ClickUpList = { id: "l1", override_statuses: false, statuses: [{ status: "리스트고유", type: "open" }] };
+// ClickUp 은 리스트 응답의 statuses 에 이미 실효 상태셋을 싣는다 — 폴더가 덮은 리스트는 override_statuses=false 인데도
+//  폴더 상태셋이 온다(실측 2026-09-23: 폴더 override=true → 그 리스트는 override=false 인데 statuses 가 폴더 셋이었다).
+test("override_statuses가 거짓이어도 리스트 응답에 상태셋이 있으면 그걸 쓴다(폴더 오버라이드 상속)", () => {
+  const list: ClickUpList = { id: "l1", override_statuses: false, statuses: [{ status: "Open", type: "open" }, { status: "completed", type: "done" }] };
+  const space: ClickUpSpace = { id: "s1", statuses: [{ status: "할일", type: "open" }, { status: "완료", type: "done" }] };
+  assert.deepEqual(statusesForList(list, space), list.statuses);
+  assert.equal(decidePushStatus({ ourCategory: "done", theirStatusRaw: "Open", statuses: statusesForList(list, space) }), "completed");
+});
+
+// 인바운드(설정 status_defs)도 같은 상태셋을 봐야 저장 키와 푸시 라벨이 맞는다.
+test("폴더 오버라이드 리스트 — 인바운드 status_defs 도 같은 상태셋에서 나온다", () => {
+  const list: ClickUpList = { id: "l1", override_statuses: false, statuses: [{ status: "Open", type: "open" }, { status: "completed", type: "done" }] };
+  const space: ClickUpSpace = { id: "s1", statuses: [{ status: "할일", type: "open" }, { status: "완료", type: "done" }] };
+  assert.deepEqual(effectiveStatusDefs(list, space).map((d) => d.label), ["Open", "completed"]);
+});
+
+test("리스트 응답에 상태셋이 없으면(폴더 없는 리스트) 스페이스 상태셋을 쓴다", () => {
+  const list: ClickUpList = { id: "l1", override_statuses: false, statuses: [] };
   const space: ClickUpSpace = { id: "s1", statuses: [{ status: "스페이스", type: "open" }] };
   assert.deepEqual(statusesForList(list, space), space.statuses);
 });
 
-test("스페이스 상태셋이 빈 배열이면 상속할 게 없어 리스트 상태셋으로 폴백한다", () => {
+test("스페이스 상태셋이 빈 배열이어도 리스트 상태셋을 쓴다", () => {
   const list: ClickUpList = { id: "l1", override_statuses: false, statuses: [{ status: "리스트고유", type: "open" }] };
   const space: ClickUpSpace = { id: "s1", statuses: [] };
   assert.deepEqual(statusesForList(list, space), list.statuses);
