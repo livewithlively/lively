@@ -4,7 +4,7 @@ import { strict as assert } from "node:assert";
 import test from "node:test";
 import { resetAwaitingState, sweepAwaitingNotifications } from "./awaiting-notifier.js";
 
-type Sent = { appId: unknown; memberId: string; title: string; href?: unknown; dedupe_key?: unknown };
+type Sent = { appId: unknown; memberId: string; title: string; href?: unknown; dedupe_key?: unknown; kind?: unknown };
 
 /** listSessionsRaw 스텁 — 필요한 필드만 채운다(스윕이 보는 것은 id·owner·label·awaiting 뿐). */
 const sessions = (rows: Array<{ id: string; owner?: string; awaiting?: boolean; label?: string }>) =>
@@ -38,6 +38,8 @@ test("전이한 세션만, 그 세션 주인에게, 그 세션으로 가는 링�
   assert.match(sent[0].title, /노션 수집/, "제목에 세션 이름이 들어간다");
   assert.equal(sent[0].href, "#/s/box-a", "누르면 그 세션으로 간다");
   assert.equal(sent[0].dedupe_key, "ai-session:awaiting:box-a");
+  //  #4180 — 세션 대기 알림은 배너 전용(「확인할 것」 목록엔 서지 않는다). 종류를 빼먹으면 'app' 으로 저장돼 목록에 다시 선다.
+  assert.equal(sent[0].kind, "session", "세션 대기 알림의 종류는 'session' 이어야 한다(회의 2026-09-21 — 확인할 것에서 뺀다)");
 });
 
 test("같은 대기가 이어지는 동안 스윕을 다시 돌려도 또 보내지 않는다", async () => {

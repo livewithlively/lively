@@ -40,7 +40,7 @@ for (const k of kinds) ok(registered.has(k), `E1b data-ctx="${k}" 를 받는 reg
 // E2. 여섯 화면 전부에 표가 달렸다.
 ok(/'data-ctx-surface':\s*'home'/.test(src["web/v2/views.ts"]), "E2 홈 — 표면");
 ok(/'data-ctx':\s*'app'/.test(src["web/v2/views.ts"]), "E2 홈 — 최근 앱 타일");
-ok(/'data-ctx-surface':\s*'inbox'/.test(src["web/v2/views.ts"]) && /'data-ctx':\s*'session'/.test(src["web/v2/views.ts"]), "E2 확인할 것 — 표면 + 세션 행");
+ok(/'data-ctx-surface':\s*'inbox'/.test(src["web/v2/views.ts"]), "E2 확인할 것 — 표면(세션 행은 #4180 에서 걷었다 — 알림 이력만 그린다)");
 ok(/'data-ctx':\s*'noti'/.test(src["web/v2/notifications.ts"]), "E2 확인할 것 — 알림 행");
 ok(/'data-ctx':\s*'session'/.test(src["web/session-chat.ts"]) && /head\.dataset\.sid = t\.id/.test(src["web/session-chat.ts"]), "E2 AI 세션 — 머리줄(대상이 바뀌면 sid 도 바뀐다)");
 ok(/door\.dataset\.ctx = 'project'/.test(src["web/v2/panes.ts"]) && /bindCtxSurface\(wrap/.test(src["web/v2/panes.ts"]), "E2 프로젝트 — 문패 + 곁칸 표면");

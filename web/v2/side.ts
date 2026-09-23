@@ -33,8 +33,8 @@ import type { SessProjPick } from '../lib/sess-all.js';   // #4158 — [AI 세�
 import { splitFolderRows, foldCardRows } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsTouch } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버다(선언 한 줄이 그걸 말한다)
 import { confirmDialog } from '../ui-primitives.js';
-import { SESS_STATES, isDotState, rowDotCls } from '../session-status.js';   // #3778 2판 — 목록 줄의 점은 «나를 기다리는 것» 셋만
-import { lastAsk, watchLastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'
+import { SESS_STATES, rowDotCls } from '../session-status.js';   // #3778 2판 — 목록 줄의 점은 «나를 기다리는 것» 셋만
+import { watchLastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { sourcesFindInput, sourcesFindShown, sourcesSideBody, sourcesSideCount, sourcesUploadPick, toggleSourcesFind } from './sources.js';   // #2423 자료 앱 사이드바 내용
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
@@ -325,7 +325,7 @@ export interface SideHooks {
   navHost?: () => HTMLElement | null;
   /** 앱 인스턴스 고정이 바뀌었다 — 목록을 다시 계산해야 한다(정렬은 main 이 안다). */
   onPinChanged?: () => void;
-  /** #2016 — 레일이 고른 구역(홈 · 확인할 것 · AI 세션 · 프로젝트 · 위키). 없으면 홈(종전 화면 그대로). */
+  /** #2016 — 레일이 고른 구역(홈 · AI 세션 · 프로젝트 · 위키). 없으면 홈(종전 화면 그대로). [확인할 것] 구역은 #4180 에서 걷었다. */
   section?: () => RailSection;
   /** #4158 — [AI 세션] 사이드바에서 프로젝트를 골랐다(sessProjFilter). 셸이 가운데 전체 목록을 그 값으로 다시 그린다 — 없으면 그리로 간다. */
   onSessProject?: () => void;
@@ -1026,7 +1026,6 @@ function render(): void {
   //  목록만 다시 그리는 붓은 **그 구역이 자기 것을 건다** — 여기서 먼저 비워, 붓이 없는 구역(트리·서가)에서
   //   앞 구역의 재료로 그리는 일이 없게 한다(#2534).
   listPaint = null;
-  if (sec === 'inbox') { renderInboxSide(); return; }
   if (sec === 'sess') { renderSessions(); return; }
   if (sec === 'proj') { renderProjects(); return; }
   if (sec === 'wiki') { renderWiki(); return; }
@@ -1054,13 +1053,11 @@ function wsHead(): HTMLElement {
   const ak = last ? last.activeKey() : '';
   //  구역 아닌 화면의 특례 — 리브('갈 곳')와 자료(앱, #2423). 여기 있는데 머리가 «홈»이면 거짓말이다.
   const cur = ak === 'liv' ? { label: '리브', icon: 'liv' } : ak === 'sources' ? { label: '자료', icon: 'src' } : sectionDef(sec);
-  const inboxN = last ? last.data.sessions.filter((s) => isLive(s) && isMine(s) && (s.stateKey === 'waiting' || s.stateKey === 'done')).length : 0;
   return el('div', { class: 'v2-side-wshd' },
     stackTile({ small: true, label: true }),
-    el('button', { class: 'v2-secdd', type: 'button', 'aria-haspopup': 'menu', title: '구역 바꾸기 — 홈 · 확인할 것 · AI 세션 · 프로젝트 · 위키 · 리브',
+    el('button', { class: 'v2-secdd', type: 'button', 'aria-haspopup': 'menu', title: '구역 바꾸기 — 홈 · AI 세션 · 프로젝트 · 위키 · 리브',
       onclick: (e: Event) => openSectionMenu(e.currentTarget as HTMLElement) },
       icon(cur.icon, 'v2-ic'), el('span', { class: 'v2-secdd-t', text: cur.label }),
-      sec === 'inbox' && ak !== 'liv' && inboxN ? el('span', { class: 'v2-rail-bd', text: String(inboxN) }) : null,
       el('span', { class: 'v2-ws-car', 'aria-hidden': 'true', text: '▾' })));
 }
 /** 사이드바 맨 위 — 뒤로·앞으로·검색 줄(데스크톱은 창 맨 윗줄로 간다) + 레일을 숨겼을 때의 머리 한 줄. */
@@ -1184,57 +1181,7 @@ function renderHomeApps(): void {
 // ══ [AI 세션] 구역 (#2016 → #4158) ═══════════════════════════════════════════
 //  홈이 '열린 것'이라면 이 구역은 **세션 전체**다 — 이 브라우저에서 안 열었어도 박스에서 돌면 여기 있다.
 //  ★ #4158(회의 #3977, 2026-09-14) — 그 전체 목록은 이제 **가운데 화면**(bins.ts renderSessAll)이 든다. 사이드바는
-//   프로젝트 리스트다(아래 renderSessions 머리말). 아래 sessAsInst 는 [확인할 것] 사이드바가 계속 쓴다.
-/**
- * 세션 하나를 목록의 공용 자료형(SideInstance)으로 옮긴다(#2033).
- *  ★ 이렇게 두면 [AI 세션]·[확인할 것]이 홈과 **같은 붓**(appRowEl · appListKids)을 쓴다 — 행 문법도,
- *   묶는 축 토글도, 뒤에 붙는 고침도 한 자리에서 온다. 종전엔 행 그리는 코드가 두 벌이라(sessInstRow)
- *   같은 목록인데 홈에만 있던 것이 조용히 생겼다: 남의 세션 주인 얼굴(#2026)이 여기 없었고, 행을 눌렀을 때
- *   홈은 탭을 재사용하는데 여기는 주소로 곧장 갈아탔다.
- */
-function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
-  const p = s.projectId ? last!.data.projects.find((x) => x.id === s.projectId) : null;
-  const t = sessText(s, p ? p.name : '');
-  const ak = last!.activeKey();
-  //  ★ 홈과 같은 자(#3778 2판) — 셋만 점이 된다. 종전엔 아홉 가지를 전부 넘겨, 색 규칙이 없는 상태가
-  //   `currentColor` 로 떨어져 **대기 중과 오프라인이 같은 글자색 점**이 됐다(의도한 회색이 아니었다).
-  const st = !pastRow && isDotState(s.stateKey) ? s.stateKey : '';
-  const ownerId = String((s.raw && s.raw.owner) || '');
-  return {
-    id: 'sess:' + s.id,
-    route: '#/s/' + encodeURIComponent(s.id),
-    title: t.main,
-    active: ak === 's:' + s.id || (!!s.logId && ak === 's:' + s.logId),
-    icon: 'chat',
-    meta: t.sub || when(s.lastSeen),
-    ask: lastAsk(s),   // 둘째 줄 = 내 마지막 말(#2016 6차) — 홈 행과 같은 붓(appRowEl)이 그린다
-    project: p ? { id: p.id, name: p.name } : null,
-    group,
-    status: st ? { key: st, label: stLabel(st) } : null,
-    //  ★ 끝난 세션이라는 사실을 **행에 실어 보낸다**(#3778). 이 함수는 그걸 이미 알고 있었는데(pastRow)
-    //   × 의 뜻과 상태 점을 끄는 데만 쓰고 넘기지 않아서, 홈에는 있는 두 가지가 이 구역엔 없었다:
-    //   흐린 톤(.v2-app-inst--past)과 카드 안 「지난 세션 n」 접힘. 같은 목록이 어디서 보느냐에 따라
-    //   다른 말을 하면 사람은 그걸 «없어졌다» 로 겪는다(이름 수정이 트리에만 있던 것과 같은 종류).
-    past: pastRow,
-    //  남의 세션이면 주인 얼굴 — 홈이 이미 하는 일이다(#2026). 이 구역은 남의 세션이 **더 많이** 서는 곳이라
-    //   여기 없던 게 더 이상했다.
-    owner: isMine(s) ? null : { id: ownerId, name: ownerName(s) },
-    at: s.lastSeen || 0,
-    //  × 의 뜻 — **어느 목록에서든 «치움»** 이다(#3857, 상민님 2026-09-10). 종전엔 이 구역의 × 가 «보관(지난 세션으로)»
-    //   = 실제로 박스를 내리는 회수였고, 홈의 × 는 목록에서 치우기라 **같은 글리프가 파괴력이 다른 두 뜻**이었다.
-    //   실행 축(회수)은 정책만 한다 — 사람이 누르는 단추는 보임 축(치움·휴지통)뿐이다(⏹ 불요).
-    //   지난 세션의 그 자리는 여전히 휴지통이다.
-    //  ⚠ 남의 세션엔 안 그린다(null) — 서버도 소유자만 허용하므로, 그리면 눌러 보고 실패하는 단추가 된다.
-    close: !isMine(s) ? null
-      : pastRow
-        ? { kind: 'trash' as const, label: `「${t.main}」 휴지통으로`,
-            title: '휴지통으로 보내기 — 목록에서 빠지고, 휴지통에서 되돌리거나 완전히 지울 수 있어요',
-            run: () => { void doTrash(s); } }
-        : { kind: 'x' as const, label: `「${t.main}」 목록에서 치우기`,
-            title: DISMISS_TIP,
-            run: () => { hooks.onCloseInstance?.('sess:' + s.id); } },
-  };
-}
+//   프로젝트 리스트다(아래 renderSessions 머리말). 세션→SideInstance 변환(sessAsInst)은 [확인할 것] 사이드바가 마지막 사용자였고 #4180 에서 그 구획과 함께 걷었다(main 판은 [AI 세션] 가운데 목록이 아직 쓴다).
 
 /**
  * [AI 세션] 사이드바 = **프로젝트 리스트** (#4158).
@@ -1302,38 +1249,10 @@ function renderSessions(): void {
   bindSideKeys();
 }
 
-// ══ [확인할 것] 구역 (#2016 2차) — 슬랙 '내 활동'의 자리. 답을 기다리는 것과 끝났는데 아직 안 본 것. ══
-function renderInboxSide(): void {
-  if (!last) return;
-  const { host, data } = last;
-  const navEl = navRow();
-  const navHost = hooks.navHost?.() || null;
-  if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
-  const live = data.sessions.filter((s) => isLive(s) && !isTrashedSess(s));
-  //  #1875 — 내 것만. 남의 프로젝트 세션이 답을 기다리는 것은 그 사람의 「확인할 것」이지 내 것이 아니다.
-  const waits = live.filter((s) => isMine(s) && s.stateKey === 'waiting').sort((a, b) => b.lastSeen - a.lastSeen);
-  const dones = live.filter((s) => isMine(s) && s.stateKey === 'done').sort((a, b) => b.lastSeen - a.lastSeen);
-  //  홈·[AI 세션]과 같은 붓(#2033). 여기도 전수가 아니라 **지금 나를 기다리는 것**만 모인 자리라
-  //   압정·× 는 안 그린다 — 확인하면 스스로 빠지는 목록이다.
-  const items = [
-    ...waits.map((s) => sessAsInst(s, false, `답 기다림 · ${waits.length}`)),
-    ...dones.map((s) => sessAsInst(s, false, `작업 완료 · ${dones.length}`)),
-  ];
-  const kids = (): HTMLElement[] => appListKids(items, { pin: false, close: false },
-    { none: '지금 확인할 것이 없어요. 답을 기다리거나 막 끝난 세션이 여기 모입니다.' });
-  listPaint = () => paintList(kids);
-  const keep = listBefore();
-  const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '확인할 것' }, ...kids());
-  appListEl = listEl;
-  host.replaceChildren(
-    ...topBits(navEl, navHost),
-    el('section', { class: 'v2-app-space', 'aria-label': '확인할 것' },
-      secHead('확인할 것', waits.length + dones.length,
-        el('a', { class: 'v2-app-open', href: '#/inbox', title: '받은 알림까지 한 화면에서', 'aria-label': '확인할 것 화면 열기' }, icon('inbox'))),
-      listEl),
-    secFoot());
-  listAfter(keep);
-}
+// ══ [확인할 것] 구역은 #4180 에서 걷었다 (회의 2026-09-21) ══════════════════════════════════════
+//  «사이드바 아래에 있으면 안 되고, 사이드바와 겹친다. 홈으로 옮기고, 종 아이콘+숫자만 보이다가 누르면 목록이 뜬다.»
+//  여기 있던 «답을 기다리는 세션 · 끝났는데 안 본 세션» 목록은 세션 알림을 「확인할 것」에서 빼기로 하면서 자리를 잃었다 —
+//  그 상태는 홈·[AI 세션] 목록의 상태점이 이미 말한다. 알림 이력은 홈 머리줄의 종(notify-bell.ts)과 #/inbox 가 든다.
 
 // ══ [프로젝트] 구역 (#2016) — #1883 이전의 프로젝트 트리를 그대로 되살린다. ══════
 //  트리 기계(renderTree·projRow·sessRow·binRows)는 지우지 않고 남아 있었다 — 새 구역은 그 자리를 되찾은 것이다.
@@ -1770,10 +1689,6 @@ function renderLegacy(): void {
   treeEl = el('div', { class: 'v2-tree', role: 'tree', 'aria-label': '프로젝트와 세션' });
   const doneCount = rows.filter((r) => r.done).length;
   const fltN = (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) + (showDone ? 1 : 0);
-  // 확인할 것 = 확인 필요(waiting) + 작업 완료 미열람 — **둘 다 내 것만**(#1875, 2026-08-27 원준).
-  //  종전엔 waiting 만 '보이는 것 전부'였다(프로젝트 세션은 팀 누구든 답할 수 있으니까) — 그 규칙이
-  //  동료의 대기를 내 배지 숫자로 올렸다. views.ts renderInbox 머리말에 뒤집은 이유가 적혀 있다.
-  const inboxN = data.sessions.filter((s) => isLive(s) && isMine(s) && (s.stateKey === 'waiting' || s.stateKey === 'done')).length;
   // ⚠ 바로 가기 칸은 **밖에서 잡아 두어야** 한다 — 아래 나눔선(navSplitter)이 이 칸의 높이를 조정한다.
   //  칸을 인라인으로 두면 손잡이가 가리킬 대상을 못 잡는다.
   const navEl = el('nav', { class: 'v2-fixed', 'aria-label': '바로 가기' },
@@ -1787,13 +1702,7 @@ function renderLegacy(): void {
         e.preventDefault();
         hooks.onNewTask();
       } }, glyph('home', 'v2-nav-ic'), el('span', { class: 'n', text: '새 작업' })),
-    // 확인할 것(#1719 사이드바 개편 안2) — 답을 기다리는 세션 + 끝났는데 아직 안 본 세션. **사이드바에서 유일하게
-    //  숫자 배지를 가진 행**이라 눈이 먼저 간다(슬랙 읽지 않음 문법). 우리 제품의 루프는 시키다→기다리다→확인이고,
-    //  그 병목(확인)이 상시 자리를 가져야 "세션은 받은 편지함"(셀프서브 설계)과 화면이 일치한다. 0건이어도 행은
-    //  남는다(자리가 사라지면 있다는 것 자체를 잊는다) — 배지만 조용히 사라진다.
-    el('a', { class: 'v2-nav' + (last.activeKey() === 'inbox' ? ' on' : ''), href: '#/inbox', 'data-nav': 'inbox',
-      title: '확인할 것 — 내 답·확인을 기다리는 세션' }, glyph('inbox', 'v2-nav-ic'), el('span', { class: 'n', text: '확인할 것' }),
-      inboxN ? el('span', { class: 'v2-nav-cnt', text: String(inboxN) }) : null),
+    //  [확인할 것] 행(#1719)은 #4180 에서 걷었다 — 그 자리는 홈 머리줄의 종(notify-bell.ts)이 맡는다.
     // 외부 앱 연결(#1719 원준) — "AI가 내 노션·슬랙을 쓸 수 있나"는 설정이 아니라 **능력**이다. 시키기 전에
     //  알아야 하고 안 되면 그 자리에서 켜야 해서, 관리탭 안쪽이 아니라 여기 상시 자리로 올렸다.
     el('a', { class: 'v2-nav' + (last.activeKey() === 'connect' ? ' on' : ''), href: '#/connect', 'data-nav': 'connect',

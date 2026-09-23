@@ -17,8 +17,13 @@
 //   E4 done · 남의 것             → 안 뜬다
 //   E5 owned 없음 + raw.owner==나  → 뜬다        (구 응답·노드 raw 폴백)
 //   E6 owned 없음 + owner 부재/타인 → 안 뜬다     (fail-closed)
-//   E7 배지 숫자 == 목록 길이       (자리 여섯이 같은 셈 — 레일·내비·railCounts·목록 2·렌즈 점)
-//   E8 waiting 을 「확인할 것」 뜻으로 세는 **새 자리**가 생겨도 규칙을 지난다
+//   E7 (#4180 이후) 「확인할 것」은 세션을 세지 않는다 — 옛 배지 셈(inboxN·railCounts.inbox)이 되살아나지 않는다
+//   E8 waiting 을 «나를 기다리는 것» 뜻으로 세는 **새 자리**가 생겨도 규칙을 지난다(홈 머리줄 «답 기다림» 등)
+//
+// ── #4180 (2026-09-21 회의) 뒤의 뜻 ──
+//  「확인할 것」에서 세션 대기·완료 줄을 걷었다 — 그 화면·사이드바 구획·레일 배지는 더 세션을 세지 않는다. 남는 것은
+//  술어 한 벌(isMineSess)과, 그 술어를 지나야 하는 자리(홈 머리줄 «답 기다림» · 세션 옮기기 canMoveSession). 알림 행의
+//  소유 격리는 서버가 진다(org/store/app-notifications 가 member_id 로 고정) — 그건 그 스토어의 시험이 맡는다.
 //
 // ── 왜 소스 구조 단언인가 ───────────────────────────────────────────────────
 //  web/ 는 dist 로 가지 않는다(web/tsconfig rootDir=web · 러너는 dist/**/*.test.js 만 수집). 그래서
@@ -75,32 +80,26 @@ test("★ E1~E6 소유 술어(isMineSess)가 엣지를 전수로 가른다", () 
 });
 
 const OWNS = /isMineSess\(|isMine\(/;
-const lineWith = (src: string, from: string, needle: string): string => {
-  const seg = src.slice(src.indexOf(from));
-  return seg.split("\n").find((l) => l.includes(needle)) ?? "";
-};
 
-test("★ E2 「확인할 것」 화면 목록이 소유 술어를 지난다 (web/v2/views.ts renderInbox)", () => {
-  for (const name of ["const waits =", "const dones ="]) {
-    assert.match(lineWith(VIEWS, "export function renderInbox", name), OWNS,
-      `「확인할 것」 화면의 ${name} 가 소유를 안 본다 — 남의 세션 줄에 [답하기] 가 선다`);
-  }
+test("★ E2 (#4180) 「확인할 것」 화면은 세션을 세우지 않는다 — 알림 이력만 그린다 (web/v2/views.ts renderInbox)", () => {
+  const body = VIEWS.slice(VIEWS.indexOf("export function renderInbox"), VIEWS.indexOf("export function projName"));
+  assert.ok(body.length > 0, "renderInbox 본문을 찾지 못했다");
+  assert.doesNotMatch(body, /stateKey === 'waiting'|stateKey === 'done'/,
+    "「확인할 것」 화면에 세션 대기·완료 줄이 되살아났다 — 회의(2026-09-21)에서 뺀 것이다");
+  assert.match(body, /loadNotifications\(\{[^}]*scope: 'inbox'/, "「확인할 것」 화면이 inbox 렌즈로 알림을 읽지 않는다");
 });
 
-test("★ E2 사이드바 「확인할 것」 목록이 소유 술어를 지난다 (web/v2/side.ts renderInboxSide)", () => {
-  for (const name of ["const waits =", "const dones ="]) {
-    assert.match(lineWith(SIDE, "function renderInboxSide", name), OWNS,
-      `사이드바 「확인할 것」 의 ${name} 가 소유를 안 본다`);
-  }
+test("★ E2 (#4180) 사이드바에 「확인할 것」 구획이 없다 (web/v2/side.ts)", () => {
+  assert.doesNotMatch(SIDE, /function renderInboxSide/, "사이드바 「확인할 것」 구획이 되살아났다 — 홈의 종이 그 자리다");
+  assert.doesNotMatch(SIDE, /'data-nav': 'inbox'/, "사이드바 고정 행 [확인할 것] 이 되살아났다");
 });
 
-test("★ E7 배지(레일·내비·railCounts)가 목록과 같은 셈이다", () => {
-  // 배지가 4 라 하고 목록이 3 이면 어느 쪽이 거짓말인지 화면이 말하지 못한다(main.ts railCounts 머리말).
+test("★ E7 (#4180) 「확인할 것」 배지를 세션으로 세는 자리가 없다 — 안 읽은 수는 서버가 센다", () => {
   for (const [rel, src] of [["web/v2/side.ts", SIDE], ["web/v2/main.ts", MAIN]] as const) {
     const badges = src.split("\n").filter((l) => /inboxN|const inbox =/.test(l) && /\.filter\(/.test(l));
-    assert.ok(badges.length > 0, `${rel} 에서 「확인할 것」 배지 셈을 찾지 못했다`);
-    for (const b of badges) assert.match(b, OWNS, `${rel} 의 「확인할 것」 배지가 소유를 안 본다: ${b.trim()}`);
+    assert.deepEqual(badges, [], `${rel} 에 세션을 세는 옛 「확인할 것」 배지 셈이 남아 있다`);
   }
+  assert.match(MAIN, /startUnreadWatch\(\)/, "홈 종의 안 읽은 수 시계(startUnreadWatch)가 셸 부팅에 없다");
 });
 
 test("★ E8 'waiting' 을 「확인할 것」 뜻으로 세는 자리는 전부 소유를 본다 (새 자리가 생겨도 잡힌다)", () => {
@@ -123,7 +122,12 @@ test("E9 소유 판정은 한 벌뿐이다 — side.ts 가 제 사본을 되살�
 });
 
 test("E10 사용설명서가 바뀐 규칙을 말한다 (화면과 문서가 갈리지 않게)", () => {
-  const row = DOCS.split("\n").find((l) => l.includes("**답을 기다려요**")) ?? "";
-  assert.doesNotMatch(row, /보이는 세션 전부/, "설명서가 아직 '보이는 세션 전부'라고 말한다 — 화면은 내 것만 센다");
-  assert.match(row, /내 세션만/, "설명서가 '내 세션만'을 말하지 않는다");
+  const doc = DOCS.slice(DOCS.indexOf('slug: "inbox"'), DOCS.indexOf('slug: "projects"'));
+  assert.ok(doc.length > 0, "설명서의 「확인할 것」 항목을 찾지 못했다");
+  assert.doesNotMatch(doc, /보이는 세션 전부/, "설명서가 아직 '보이는 세션 전부'라고 말한다");
+  //  #4180 — 설명서도 «세션은 여기 오지 않는다 · 종 · 댓글·언급·리브» 를 말해야 한다.
+  assert.match(doc, /세션이 답을 기다리거나 끝난 것은 여기 오지 않습니다/, "설명서가 세션 알림을 뺀 것을 말하지 않는다");
+  assert.match(doc, /종/, "설명서가 홈의 종을 말하지 않는다");
+  assert.match(doc, /댓글/, "설명서가 댓글 알림을 말하지 않는다");
+  assert.match(doc, /리브가 답했어요/, "설명서가 리브의 답 알림을 말하지 않는다");
 });

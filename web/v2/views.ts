@@ -2,7 +2,7 @@
 //  홈은 **입력창 하나**(claude.ai 홈처럼 — Enter 로 프로젝트 없는 세션이 열린다, v2/quick-session.ts)이고,
 //  프로젝트는 v2/panes.ts(칸 셸 — main.ts mountProjectShell 이 그걸 마운트한다), 세션은 그 세션 자체(대화창 — 라이브 또는 중앙 기록)를 실는다. 리브 대화는 #/liv 와 칸 「리브」(panes-parts.ts)에 있다.
 //  클래식 모듈을 **복제하지 않는다** — 대화·세션 목록·프로젝트 상세는 이미 있는 것을 가져다 붙인다.
-import { el, personName, relTime, state, sv, toast } from '../core.js';
+import { el, personName, state, sv, toast } from '../core.js';
 import { composerAttach } from './compose-attach.js';
 import { projMatches } from '../lib/proj-match.js';
 import { composerMention } from './compose-mention.js';
@@ -12,7 +12,8 @@ import { mountSessionChat, type SessionChatHandle, type SessionChatTarget } from
 import type { TrailWidget } from '../session-trail.js';
 import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen } from '../session-status.js';
 import { appGlassIcon, appHref, openLaunchpad, recentApps, soloSessionUrl, terminalUrl } from './apps.js';
-import { askNotificationPermission, loadNotifications, markNotificationsRead, notificationPermission, notificationRow, type NotificationFeed } from './notifications.js';   // #1891 받은 알림 이력
+import { askNotificationPermission, loadNotifications, markNotificationsRead, notificationPermission, notificationRow, onUnread, type NotificationFeed } from './notifications.js';   // #1891 받은 알림 이력 · #4180 종의 시계
+import { notifyBell } from './notify-bell.js';   // #4180 — 「확인할 것」의 입구는 홈 머리줄의 종
 
 export interface Proj {
   id: number; name: string; status?: string | null; status_category?: string | null; description?: string | null; list_id?: number | null; updated_at?: string | null;
@@ -64,7 +65,7 @@ export function dotCls(stateKey: string): string {
   if (stateKey === 'shell') return 'shell';
   return '';
 }
-const when = (ms: number) => (ms ? relTime(new Date(ms).toISOString()) : '');
+//  (세션 시각 서식 `when` 은 #4180 에서 걷었다 — 「확인할 것」이 세션 줄을 세우지 않는다. 알림 행의 시각은 notifications.ts 가 그린다.)
 
 // ── '지금 도는 세션' vs '지난 세션' — 화면 셋이 같은 술어를 쓴다(#1808) ───────────────
 //  · 도는 세션 = 박스가 tmux 에 살아 있는 것.
@@ -335,7 +336,9 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
         el('span', { text: `${d.getMonth() + 1}월 ${d.getDate()}일 ${KO_DAY[d.getDay()]}요일` }),
         // 세션이 하나도 안 돌면 그 말 자체를 안 한다 — '도는 세션 없음'은 정보가 아니라 빈자리 채우기다.
         busy ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'st busy' }, dot('busy'), `작업 중 ${busy}`)] : null,
-        waiting ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'st wait' }, dot('waiting'), `답 기다림 ${waiting}`)] : null),
+        waiting ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'st wait' }, dot('waiting'), `답 기다림 ${waiting}`)] : null,
+        //  #4180 — 「확인할 것」의 종(회의 2026-09-21: 레일에서 홈으로, 숫자만 보이다가 누르면 목록). 머리줄 오른쪽 끝 한 자리.
+        el('span', { class: 'sp' }), notifyBell()),
       el('h1', { class: 'v2-h1', text: `${tod}${name ? ', ' + name + '님' : ''}.` }),
       el('p', { class: 'v2-home-sub', text: '무엇을 할까요?' }),
       //  «어디에 열까»는 «무엇을 시킬까» 보다 **먼저** 정해지는 질문이라 위에 선다. 다만 얇고 조용하게 —
@@ -374,80 +377,67 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
 //  그 세 결은 다른 자리가 이미 맡고 있다 — 답 기다림·완료는 [확인할 것], 살아 있는 세션은 사이드바의 프로젝트 폴더,
 //  지난 세션은 그 폴더의 '지난 세션'과 AI 세션 앱. 홈에 네 번째 사본을 두지 않는다.
 
-// ── 확인할 것(#1719 사이드바 개편 안2) — 시키다→기다리다→**확인**의 병목을 한 화면에 모은다 ───────
-//  · 답을 기다려요: 승인·선택을 기다리는 세션(waiting) — **내 것만**(isMineSess).
-//    ★2026-08-27 뒤집힘(#1875, 원준). 종전 규칙은 "보이는 것 전부 — 프로젝트 세션은 팀 누구든 답할 수 있으니까"
-//     였다. 실제로 써 보니 그 이득보다 **내가 답할 수 없는 줄이 내 할 일로 서는** 비용이 컸다: 목록에는 동료의
-//     프로젝트 세션이 상시로 들어오고(#452 전원 공개), 배지 숫자가 남의 대기로 올라 내 것이 몇 건인지 알 수 없게
-//     된다. 신고: *"다른 사람이 만든 세션에서 그 사람이 확인할 것도 내가 확인할 것중에 하나로 뜬다."*
-//     동료 세션을 **보는** 길은 그대로다(사이드바·프로젝트 화면) — 「확인할 것」만 내 것으로 좁혔다.
-//  · 끝났어요: 시킨 작업이 끝났는데 아직 안 본 세션(stateKey 'done') — 내 것만(남의 완료를 내가 '확인'할 일은 없다).
-//    ↑ 이 구획은 처음부터 내 것만이었다. 두 구획의 규칙이 갈려 있던 것이 위 신고의 형태였다.
-//  행은 홈의 nowList 와 같은 문법(v2-now-row) — 새 시각 언어를 만들지 않는다. 들어가 보면(lastAttached 갱신) 목록에서 빠진다.
+// ── 확인할 것(#1719 → #4180) — 받은 알림의 이력 한 화면 ─────────────────────────────────
+//  #4180(회의 2026-09-21 상민·원준): 세션 대기·완료 줄은 여기서 걷었다 — «하루에 세션을 수십 개 쓰면 모든 답이 쌓여서 무의미하다».
+//   그 상태는 사이드바의 상태점과 배너가 이미 말한다. 남는 것은 **내용이 있는 알림** — 누가 «어디»에 댓글을 남겼다 ·
+//   나를 언급했다 · 리브가 답했다 · 앱이 보냈다(서버가 종류로 가르고 이 화면은 inbox 렌즈로 읽는다, notify-policy).
+//  입구는 홈 머리줄의 종(notify-bell.ts)이고 이 화면은 그 종의 «전체 보기» 다(폰에선 종이 곧 이 화면을 연다).
+//  #1875 의 소유 격리는 서버가 진다 — 알림 행은 처음부터 받는 사람(member_id) 것만 온다(org/store/app-notifications).
 /**
- * 「확인할 것」 = **받은 알림의 이력**(#1891) + 지금 내 답을 기다리는 세션.
- *
- * 종전엔 라이브 세션에서 파생만 했다 — 화면을 안 보고 있으면 지나갔고 이력이 없었다.
- * 이제 위쪽은 서버가 남긴 알림(앱이 보낸 것 전부), 아래쪽은 지금 상태다. 둘은 겹칠 수 있지만
- *  성격이 다르다: 알림은 **그때 무슨 일이 있었나**, 대기 세션은 **지금 무엇이 막혀 있나**.
+ * 「확인할 것」 = **받은 알림의 이력**(inbox 렌즈).
+ *  `_data` 는 받지만 쓰지 않는다 — 라우터(main.ts)가 다른 중앙 화면과 같은 모양으로 부른다.
  */
-export function renderInbox(host: HTMLElement, data: V2Data): void {
-  //  #1875 — 「확인할 것」은 **내 것만**. 남의 프로젝트 세션이 답을 기다리는 것까지 여기 세우면
-  //   내가 답할 수 없는 줄에 [답하기] 가 붙는다(원준 신고 2026-08-27). isMineSess 가 그 단일 술어다.
-  const waits = data.sessions.filter((s) => isLiveSess(s) && isMineSess(s) && s.stateKey === 'waiting').sort((a, b) => b.lastSeen - a.lastSeen);
-  const dones = data.sessions.filter((s) => isLiveSess(s) && isMineSess(s) && s.stateKey === 'done').sort((a, b) => b.lastSeen - a.lastSeen);
-  const rowOf = (s: Sess): HTMLElement => {
-    const pn = projName(data, s.projectId);
-    const title = sessDisplayName(s, pn);
-    return el('a', { class: 'v2-now-row' + (s.stateKey === 'waiting' ? ' wait' : ''), href: '#/s/' + encodeURIComponent(s.id), 'data-ctx': 'session', 'data-sid': s.id },
-      dot(s.stateKey),
-      el('span', { class: 'tw' }, el('span', { class: 't', text: title }), s.projectId && title !== pn ? el('span', { class: 'p', text: pn }) : null),
-      el('span', { class: 'st', text: when(s.lastSeen) }),
-      el('span', { class: 'go btn btn-sm', text: s.stateKey === 'waiting' ? '답하기' : '보기' }));
-  };
+export function renderInbox(host: HTMLElement, _data: V2Data): void {
   const notiHost = el('section', { class: 'v2-noti-sec' });
   const shell = el('div', { class: 'v2-center v2-inbox', 'data-ctx-surface': 'inbox' },
     el('h1', { class: 'v2-title', text: '확인할 것' }),
-    el('p', { class: 'v2-desc', text: '받은 알림과, 지금 내 답을 기다리는 세션이에요.' }),
-    notiHost,
-    (!waits.length && !dones.length)
-      ? el('div', { class: 'v2-inbox-empty' }, el('p', { class: 'h', text: '지금 확인할 것이 없어요.' }),
-          el('p', { class: 'sub', text: '세션이 답을 기다리거나 작업을 끝내면 여기에 모입니다.' }))
-      : el('div', { class: 'v2-now' },
-          waits.length ? el('section', { class: 'v2-now-wait' },
-            el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k wait', text: `답을 기다려요 · ${waits.length}` })),
-            ...waits.map(rowOf)) : null,
-          dones.length ? el('section', {},
-            el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `끝났어요 — 확인만 하면 돼요 · ${dones.length}` })),
-            ...dones.map(rowOf)) : null));
+    el('p', { class: 'v2-desc', text: '누가 댓글을 남겼거나 나를 언급했을 때, 리브가 답했을 때, 앱이 알림을 보냈을 때 여기에 모여요.' }),
+    notiHost);
   host.replaceChildren(shell);
   void paintNotifications(notiHost);
+  //  안 읽은 수가 바뀌면(새 알림·읽음) 이 화면도 따라 그린다 — 떠 있는 동안만(떠나면 스스로 뗀다).
+  //  ⚠ 구독 직후의 «지금 값» 호출은 동기다 — 그건 위에서 이미 그렸으니 건너뛴다.
+  let syncing = true;
+  const off = onUnread(() => {
+    if (syncing) return;
+    if (!notiHost.isConnected) { off(); return; }
+    void paintNotifications(notiHost);
+  });
+  syncing = false;
 }
 
-/** 알림 이력 칸 — 비동기라 화면을 먼저 세우고 도착하면 채운다(빈 목록이면 칸 자체를 비운다). */
+/** 알림 이력 칸 — 비동기라 화면을 먼저 세우고 도착하면 채운다. */
 async function paintNotifications(host: HTMLElement): Promise<void> {
   let feed: NotificationFeed;
-  try { feed = await loadNotifications({ limit: 100 }); }
-  catch { host.replaceChildren(); return; }   // 이력을 못 읽어도 아래 '대기 세션'은 그대로 쓸 수 있다
-  if (!feed.notifications.length) { host.replaceChildren(); return; }
+  try { feed = await loadNotifications({ limit: 100, scope: 'inbox' }); }
+  catch { host.replaceChildren(el('p', { class: 'v2-muted', text: '알림을 불러오지 못했어요. 잠시 뒤 다시 열어 주세요.' })); return; }
 
   // 배너는 셸이 전역으로 띄운다(startNotificationBanners) — 여기서 또 띄우면 이 화면을 열 때마다 두 번 뜬다.
 
-  const perm = notificationPermission();
+  //  ⚠ 권한은 사람이 누를 때만 묻는다 — 들어오자마자 뜨는 권한 창은 거의 거부당하고, 거부되면 다시 못 묻는다.
+  const permBtn = notificationPermission() === 'default'
+    ? el('button', { class: 'btn btn-sm', type: 'button', text: '알림 켜기', title: '브라우저 배너로도 받기',
+        onclick: (e: Event) => { void askNotificationPermission().then(() => { (e.target as HTMLElement)?.remove(); }); } })
+    : null;
+
+  if (!feed.notifications.length) {
+    host.replaceChildren(el('div', { class: 'v2-inbox-empty' },
+      el('p', { class: 'h', text: '받은 알림이 없어요.' }),
+      el('p', { class: 'sub', text: '댓글·언급, 리브의 답, 앱이 보낸 알림이 오면 여기에 쌓여요. 세션이 답을 기다리는 건 사이드바의 상태점과 배너가 알려 줘요.' }),
+      permBtn));
+    return;
+  }
+
   const head = el('div', { class: 'v2-now-h' },
     el('span', { class: 'v2-k', text: `받은 알림 · ${feed.notifications.length}${feed.unread ? ` (안 읽음 ${feed.unread})` : ''}` }),
-    //  ⚠ 권한은 사람이 누를 때만 묻는다 — 들어오자마자 뜨는 권한 창은 거의 거부당하고, 거부되면 다시 못 묻는다.
-    perm === 'default'
-      ? el('button', { class: 'btn btn-sm', type: 'button', text: '알림 켜기',
-          onclick: (e: Event) => { void askNotificationPermission().then(() => { (e.target as HTMLElement)?.remove(); }); } })
-      : null,
+    permBtn,
     feed.unread
       ? el('button', { class: 'btn btn-sm', type: 'button', text: '모두 읽음',
-          onclick: () => { void markNotificationsRead().then(() => paintNotifications(host)); } })
+          onclick: () => { void markNotificationsRead(undefined, 'inbox').then(() => paintNotifications(host)); } })
       : null);
 
   host.replaceChildren(el('div', { class: 'v2-now' },
-    el('section', {}, head, ...feed.notifications.map(notificationRow))));
+    el('section', {}, head, ...feed.notifications.map((n) => notificationRow(n)))));
 }
 
 export function projName(data: V2Data, id: number | null): string {

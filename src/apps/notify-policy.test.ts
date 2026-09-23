@@ -2,8 +2,8 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
-  NOTIFY_DEDUPE_COOLDOWN_MS, NOTIFY_TITLE_MAX,
-  decideNotifyAllowed, normalizeNotification, pickAwaitingTransitions, safeHref, shouldSuppressDuplicate,
+  INBOX_HIDDEN_KINDS, NOTIFY_DEDUPE_COOLDOWN_MS, NOTIFY_KINDS, NOTIFY_TITLE_MAX,
+  decideNotifyAllowed, inInbox, normalizeActor, normalizeKind, normalizeNotification, normalizeScope, pickAwaitingTransitions, safeHref, shouldSuppressDuplicate,
 } from "./notify-policy.js";
 
 const allow = (patch: Partial<Parameters<typeof decideNotifyAllowed>[0]> = {}) =>
@@ -203,4 +203,42 @@ test("N27 빌트인이어도 권한 선언이 없으면 거부한다 — 빌트�
   assert.equal(decideNotifyAllowed({
     appId: "browser", declaresNotifications: false, hasActiveGrant: true, isBuiltin: true,
   }), "notify-permission-missing");
+});
+
+// ── E. 종류(kind)와 렌즈(scope) — #4180 「확인할 것」에서 세션 알림을 뺀다 ──
+//  회의(2026-09-21): 세션 대기·완료 알림은 확인할 것에서 빼고, 댓글·언급·리브의 답·앱 알림만 남긴다. 배너는 전부 본다.
+
+test("K1 세션 알림만 「확인할 것」에서 빠진다 — 댓글·언급·리브·앱은 선다", () => {
+  assert.deepEqual([...INBOX_HIDDEN_KINDS], ["session"]);
+  assert.equal(inInbox("session"), false);
+  for (const k of ["app", "liv", "comment", "mention"]) assert.equal(inInbox(k), true, `${k} 가 확인할 것에서 빠진다`);
+});
+
+test("K2 모르는 종류는 'app' 으로 — 앱 토큰 경로가 종류를 못 정한다(서버 코드만 정한다)", () => {
+  assert.equal(normalizeKind("session"), "session");
+  assert.equal(normalizeKind("liv"), "liv");
+  assert.equal(normalizeKind("bogus"), "app");
+  assert.equal(normalizeKind(undefined), "app");
+  assert.equal(normalizeKind(42), "app");
+  for (const k of NOTIFY_KINDS) assert.equal(normalizeKind(k), k);
+});
+
+test("K3 모르는 렌즈는 좁은 쪽(inbox) — 넓은 렌즈(all)는 명시해야 한다", () => {
+  assert.equal(normalizeScope("all"), "all");
+  assert.equal(normalizeScope("inbox"), "inbox");
+  assert.equal(normalizeScope(undefined), "inbox");
+  assert.equal(normalizeScope("everything"), "inbox");
+});
+
+test("K4 모르는 종류를 «확인할 것에 보인다» 로 두면 새 종류가 조용히 숨지 않는다", () => {
+  //  기본이 «보인다» 여야 새로 생긴 종류(예: 앱이 정한 것)가 사람 눈에 먼저 닿는다 — 숨김은 목록에 적어야만 된다.
+  assert.equal(inInbox("something-new"), true);
+});
+
+test("K5 actor 다듬기 — 빈 값은 null, 길면 자른다", () => {
+  assert.equal(normalizeActor(""), null);
+  assert.equal(normalizeActor("   "), null);
+  assert.equal(normalizeActor(undefined), null);
+  assert.equal(normalizeActor(" jang "), "jang");
+  assert.equal(normalizeActor("x".repeat(200))?.length, 120);
 });
