@@ -43,19 +43,21 @@ const projPatch = (s: Record<string, any>) => ({
 });
 const isTaskLevel = (s: Record<string, any>) => s.level === "task" || s.level === "subtask";
 
+const UNDO_REASON = "라이블리에서 직전 변경을 실행 취소했습니다";
+
 const PROJECT_OPS: Record<string, Apply> = {
   set_status: async (r, d, ctx) => {
     const s = rec(d === "before" ? r.before : r.after);
     const id = Number(r.entity_key);
     // 되돌리기로 다시 닫히면 외부 PM 에 닫힘 근거 코멘트가 나간다 — 까닭이 비지 않게 적어 둔다.
-    const why = { ...ctx, reason: "라이블리에서 직전 상태 변경을 실행 취소했습니다" };
+    const why = { ...ctx, reason: UNDO_REASON };
     if (isTaskLevel(s)) await updateTaskStatus(id, String(s.status), why);
     else await updateProjectStatus(id, String(s.status), why, s.status_raw ?? null);
   },
   update: async (r, d, ctx) => {
     const s = rec(d === "before" ? r.before : r.after);
     const id = Number(r.entity_key);
-    if (isTaskLevel(s)) await updateTask(id, { ...projPatch(s), status: s.status }, ctx);
+    if (isTaskLevel(s)) await updateTask(id, { ...projPatch(s), status: s.status }, { ...ctx, reason: UNDO_REASON });
     else await updateProject(id, projPatch(s), ctx);
   },
   set_folder: async (r, d, ctx) => {

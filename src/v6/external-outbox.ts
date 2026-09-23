@@ -41,7 +41,6 @@ export function closeNoteOf(
   };
 }
 
-
 // 외부 푸시 아웃박스에 적재(best-effort — 적재 실패가 본 쓰기를 깨면 안 됨; 다음 편집/백필이 수렴).
 //  op='delete' 는 ext_id_snapshot(삭제 전 external_id)을 실어 행 삭제 후에도 외부 삭제 가능.
 export async function enqueueExternalPush(
