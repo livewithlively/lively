@@ -470,6 +470,10 @@ export interface SessionViewOpts {
   onRename?: (label: string) => Promise<void>;
   /** 상단바 [파일] — 그 탭의 우패널을 '타임라인 ↔ 파일 탐색기'로 갈아 끼운다(#1744). 켜진 뒤 상태를 돌려준다. */
   onToggleFiles?: () => boolean;
+  /** 머리줄 [자료](#4088 후속) — 칸 셸의 곁칸에서 자료 칸을 켠다(폰: 서랍). 팝아웃(우패널)엔 없다. */
+  onOpenFiles?: () => void;
+  /** [자료] 단추의 글자 — 프로젝트 없는 세션은 '세션 파일'. */
+  filesLabel?: string;
   /** 팝아웃 창(?solo=1) — 왼쪽 사이드바 없이 이 화면만 띄운 창(#1744). */
   solo?: boolean;
   /** [⋯ ▸ 이 세션 보관] — 세션 탭 줄 폐지(원준 2026-08-20)로 보관의 입구가 이 메뉴로 모였다. */
@@ -508,6 +512,8 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
     onRename: vopts.onRename,             // 제목 = 세션 이름(#1719) — 고치면 사이드바·목록이 그 이름으로 바뀐다
     onArchive: vopts.onArchive,
     onToggleFiles: vopts.onToggleFiles,   // 상단바 [파일] → 우패널 파일 탐색기(#1744)
+    onOpenFiles: vopts.onOpenFiles,       // 머리줄 [자료] → 곁칸 자료 칸(#4088 후속)
+    filesLabel: vopts.filesLabel,
     solo: vopts.solo,
     // ★ #1820 — 멈춘 내 세션은 **열면 바로 되살린다**. 위 주석의 '읽기전용 기록 + 버튼 한 번'은 화면이 어긋나던
     //  사고(#1808)의 처방이었는데, 그 처방이 "열어도 아무 일도 안 난다"를 기본 경험으로 만들었다(dev 실측:

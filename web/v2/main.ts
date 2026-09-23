@@ -192,6 +192,10 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
     // 문패 [세션 옮기기](#3778) — [⋯ ▸ 이 세션 ▸ 프로젝트] 와 같은 실행, 그릇만 모달. 조건도 같다(내 세션만).
     canMoveSession: (sid) => { const s = data.sessions.find((x) => x.id === sid); return !!s && isMineSess(s); },   // 창이 찾는 방식과 같게(정확히 그 id)
     onMoveSession: (sid) => openProjectMoveModal(sid, tab),
+    //  좁은 폭(≤900)의 곁칸 = 오른쪽 서랍(#4088). 셸이 곁칸에 무언가를 켜면 서랍을 열어 준다 — **보이는 탭일 때만**
+    //   (숨은 탭의 터미널이 보낸 미리보기 링크가 지금 보는 탭의 서랍을 열면 안 된다).
+    onOpenDrawer: () => { if (mobile && tabsApi?.current() === tab) { applyTabChrome(tab); mobile.openAside(); } },
+    onCloseDrawer: () => mobile?.closeAll(),
     // 서랍에서 세션을 갈아 끼웠다 — 셸은 살려 두고 **주소·탭 제목만** 그 세션 것으로(라우터를 다시 돌리지 않는다).
     onSessionPicked: (sid) => {
       // 세션을 고르면 그 세션 주소, 새 세션 자리로 돌아가면 **?new=1** 을 붙인 프로젝트 주소.
@@ -224,6 +228,9 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
     mountSession: (host, sid, o) => {
       const h = renderSession(host, data, sid, {
         trail: (o && o.trail) || null,
+        //  머리줄 [자료](#4088 후속) — 곁칸의 자료 칸을 켠다(폰: 서랍). 셸(panes.ts)이 준 배선을 그대로 넘긴다.
+        onOpenFiles: o && o.openFiles ? o.openFiles : undefined,
+        filesLabel: o && o.filesLabel ? o.filesLabel : undefined,
         onPickProject: (anchor) => openProjectPicker(anchor, sid, tab),
         onRename: (label) => renameSession(sid, label, tab),
         onArchive: () => void archiveSession(sid),
@@ -317,6 +324,8 @@ export async function bootV2(): Promise<void> {
   // 모바일 크롬(#1777) — 바는 그리드 맨 앞, 배경막은 맨 뒤. 데스크톱에선 둘 다 display:none 이라 그리드 열 순서에 안 낀다.
   if (!SOLO) {
     mobile = mountMobileChrome(root, sideEl!, asideEl!);
+    //  문턱(≤900)을 넘나들면 활성 탭의 서랍 단추를 다시 맞춘다 — 종전엔 활성화·마운트 때만 계산돼 창을 줄이면 단추가 없었다.
+    mobile.onChange(() => { const t = tabsApi?.current(); if (t) applyTabChrome(t); });
     root.prepend(mobile.bar);
     root.append(mobile.scrim);
     //  폰 아래 탭 바(#4088) — 맨 뒤(flex 열의 발치). 넓은 폭에선 CSS 가 숨긴다(50-mobile.css).
@@ -645,7 +654,9 @@ async function syncShell(): Promise<void> {
     //  '상단바만 남의 세션'인 화면을 다시 만든다(상민님 신고 2026-08-20).
     if (s && t.chat.id === s.id) { t.chat.update({ ...s, projectName: projName(data, s.projectId) });
       // 우측 '이 세션'도 — 프로젝트 드롭다운(#1749)은 body 팝오버라 우측을 되그려도 안 닫힌다.
-      drawAsideSession(t, s); }
+      //  ⚠ 칸 셸(프로젝트·세션 화면)은 우패널이 **없다**(mountProjectShell 이 비운다 — 맥락은 곁칸에 산다). 여기서 되그리면
+      //   빈 우패널에 타임라인이 다시 서고, 폰에선 그 판이 곁칸 서랍을 덮었다(2026-09-23 실측: 4초 뒤 서랍 위에 발자취).
+      if (!projViews.has(t)) drawAsideSession(t, s); }
   }
 }
 
@@ -1007,7 +1018,10 @@ function applyTabChrome(tab: ShellTab): void {
   //  #4088 — 칸 셸(세션·프로젝트)은 우패널 대신 **곁칸**을 가진다. 좁은 폭에선 그 곁칸이 접혀 있으니(42-v2-panes.css)
   //   이 단추가 그 곁칸을 서랍으로 연다(50-mobile.css `#v2-root.m-aside .pn-pane[data-zone="side"]`). 셸이 아직 안 섰으면
   //   mountProjectShell 끝에서 이 함수를 한 번 더 부른다.
-  if (mobile) mobile.setAside(!tab.noAside || guest || (mobile.isMobile() && !!tab.center.querySelector('.pn-pane[data-zone="side"]')));
+  const paneSide = tab.center.querySelector('.pn-pane[data-zone="side"]') as HTMLElement | null;
+  if (mobile) mobile.setAside(!tab.noAside || guest || (mobile.isMobile() && !!paneSide));
+  //  단추의 얼굴도 서랍의 정체를 따른다(#4088 후속): 칸 셸이면 폴더 아이콘·«자료·곁칸 열기», 그 밖은 타임라인. 초점도 그 곁칸으로.
+  if (mobile) { mobile.setAsideKind(paneSide ? 'panes' : 'timeline'); mobile.setAsideTarget(paneSide); }
   // 리브 페이지를 떠나면 그 폴링이 멈추게(liv.ts 는 body.dataset.route==='liv' 동안만 폴링).
   document.body.dataset.route = routeKey(tab.route) === 'raw:liv' || parseRoute(tab.route).segs[0] === 'liv' ? 'liv' : 'v2';
 }

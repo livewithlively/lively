@@ -131,6 +131,10 @@ export interface SessionChatOpts {
   onRename?: (label: string) => Promise<void>;
   /** 상단바 [파일] — 우패널을 '타임라인 ↔ 파일 탐색기'로 갈아 끼운다(#1744). 켜진 뒤 상태를 돌려준다. */
   onToggleFiles?: () => boolean;
+  /** 머리줄 [자료](#4088 후속, 2026-09-23) — 칸 셸의 곁칸에서 자료 칸(프로젝트 없는 세션은 세션 폴더 칸)을 켠다. 폰에선 그 서랍이 열린다. 없으면 단추도 없다. */
+  onOpenFiles?: () => void;
+  /** [자료] 단추의 글자 — 프로젝트 없는 세션은 '세션 파일'. */
+  filesLabel?: string;
   /** 팝아웃 창(?solo=1)이면 true — [새 창] 대신 [전체 화면으로]를 둔다(#1744). */
   solo?: boolean;
   /**
@@ -313,6 +317,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const on = opts.onToggleFiles ? opts.onToggleFiles() : false;
     filesBtn.classList.toggle('sc-act-on', on);
   } }) as HTMLButtonElement;
+  //  [자료](#4088 후속, 원준 2026-09-23: "터미널 세션하고 나서 자료같은거 생기면 그 터미널 세션에서 자료를 바로 보러가고 다운받거나
+  //   뷰어 할 수 있는게 있으면 좋겠는데") — 칸 셸의 머리줄에서 곁칸의 자료 칸을 켠다(폰: 오른쪽 서랍이 열린다). 종전엔 폰에서
+  //   자료로 가는 입구가 맨 윗줄의 [타임라인] 단추뿐이었고, 그 이름으론 아무도 자료를 거기서 찾지 않았다.
+  //   위 [파일](onToggleFiles)은 팝아웃(우패널) 것이라 둘이 같이 뜨지 않는다.
+  const filesGoBtn = el('button', { class: 'btn-text sc-act sc-act-files', type: 'button', title: '이 세션의 자료를 곁칸에서 봅니다 — 세션이 만든 파일을 보고 내려받아요',
+    onclick: () => { if (opts.onOpenFiles) opts.onOpenFiles(); } },
+    sv('svg', { viewBox: '0 0 24 24', class: 'sc-act-ic', 'aria-hidden': 'true' },
+      sv('path', { d: 'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z' })),
+    el('span', { text: opts.filesLabel || '자료' })) as HTMLButtonElement;
   const termStatusEl = el('span', { class: 'sc-termstat', hidden: true });
   // 런타임 신원 — 하네스 · 모델 · 추론강도 · 노드를 **한 덩어리**로 묶은 알약(#1719, 원준님 2026-08-21).
   //  종전엔 이 넷이 각각 다른 옷을 입고(하네스·모델은 mono, 상태·노드는 sans) 가운뎃점으로만 이어져
@@ -327,6 +340,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  붙이기·바꾸기·떼기(#1749)는 사라지지 않고 [⋯ ▸ 이 세션] 으로 내려간다 — 세션 이름 바꾸기와 같은 자리다.
   paintTitle();
   const headR = el('div', { class: 'sc-head-r' },
+    opts.onOpenFiles ? filesGoBtn : null,
     termStatusEl,
     opts.onToggleFiles ? filesBtn : null,
     [fixBtn, setBtn],   // 보이기는 setMode 가 정한다 — 늦게 붙는 터미널에도 자리가 남게 항상 DOM 에 둔다

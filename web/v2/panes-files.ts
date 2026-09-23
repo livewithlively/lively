@@ -9,7 +9,7 @@
 import { anchoredPopover, api, apiUrl, el, relTime, toast } from '../core.js';
 import { fmtSize } from '../projects/files.js';
 import { confirmDialog } from '../ui-primitives.js';
-import { upDirSupported, upDropZone, upFromInput, upSend, upToast, type UpItem } from '../projects/files-upload.js';
+import { authDownload, upDirSupported, upDropZone, upFromInput, upSend, upToast, type UpItem } from '../projects/files-upload.js';
 import { openInViewerPart, FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHINE_FILES, NOISE_RE, SORT_LABEL, TRASH_DIR, attachName, ctxMenu, folderIcon, freeName, kindOf, lsGet, lsSet, pnIcon, stamp, type FileItem, type SortKey } from './panes-kit.js';
 import { findMatcher } from '../lib/find.js';
 import { createPreviewKit } from './file-preview.js';
@@ -55,6 +55,8 @@ export function filesPart(ctx: PartCtx): Part {
   findIn.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Escape' && !composing) { e.stopPropagation(); findIn.value = ''; onFind(); } });
 
   const rel = (name: string): string => (cwd ? cwd + '/' + name : name);
+  //  손가락 기기(hover 없음 · coarse) — 판정은 **포인터**로, 폭으로 하지 않는다(iPad+트랙패드·미리보기 프레임은 마우스다).
+  const coarse = window.matchMedia('(hover: none) and (pointer: coarse)');
   const selItems = (): FileItem[] => ordered.filter((f) => sel.has(f.path));
 
   // ── 맨 위 안내 — 이 칸이 무엇인지 한 줄로. 접어 둘 수 있고, 그 선택은 기억한다. ──
@@ -324,7 +326,9 @@ export function filesPart(ctx: PartCtx): Part {
     files.forEach((f, i) => open(f, i > 0));
   }
   function download(f: FileItem): void {
-    window.open(apiUrl(pUrl('/file?path=' + encodeURIComponent(f.path) + '&download=1')), '_blank');
+    //  인증 fetch → blob(files-upload authDownload). 종전의 새 탭은 토큰을 못 실어 쿠키 세션이 없는 폰에서 로그인 화면이 떴고,
+    //   iOS 는 그 팝업 자체를 막는다(#4088 후속).
+    void authDownload(apiUrl(pUrl('/file?path=' + encodeURIComponent(f.path) + '&download=1')), f.name);
   }
 
   // 키보드 — 파인더처럼 ⌘A 전체선택 · Delete 삭제 · Esc 선택해제 · Enter 열기.
@@ -378,7 +382,7 @@ export function filesPart(ctx: PartCtx): Part {
   const marquee = el('div', { class: 'pn-fmarq', hidden: true });
   body.append(marquee);
   root.addEventListener('pointerdown', (e: PointerEvent) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || e.pointerType === 'touch') return;   // 손가락은 굴리는 것이다 — 사각형 선택이 스크롤과 싸운다
     const t = e.target as HTMLElement;
     if (t.closest('[data-fp], .pn-fhead, .pn-fnote, button, input, a')) return;
     const add = e.metaKey || e.ctrlKey || e.shiftKey;
@@ -536,11 +540,20 @@ export function filesPart(ctx: PartCtx): Part {
           ...(f.type === 'dir' ? [] : [el('span', { class: 'sep', text: '·' }), el('span', { text: fmtSize(f.size || 0) })])));
     const n = node as HTMLElement;
     if (editing) { n.classList.add('editing'); return n; }   // 이름을 고치는 중엔 고르기·열기·끌기가 다 쉰다
-    n.addEventListener('click', (e: MouseEvent) => { e.stopPropagation(); clickSelect(f, e); });
+    //  손가락(hover 없음·coarse)에는 **한 번 눌러 연다**(#4088 후속, 원준 2026-09-23) — 두 번 누르기는 폰에서 아무도 모르는
+    //   손짓이고, 고르기·범위 고르기는 마우스의 것이다. 보조키를 누른 채면(외장 키보드) 종전대로 고른다.
+    n.addEventListener('click', (e: MouseEvent) => {
+      e.stopPropagation();
+      if (coarse.matches && !e.metaKey && !e.ctrlKey && !e.shiftKey) { open(f); return; }
+      clickSelect(f, e);
+    });
     //  ⌘/Ctrl 을 누른 채면 **새 뷰어 탭**으로 — 브라우저에서 링크를 새 탭으로 여는 그 손짓 그대로(#762).
     n.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); open(f, e.metaKey || e.ctrlKey); });
     n.addEventListener('contextmenu', (e: MouseEvent) => menuFor(f, e));
     wireDrag(n, f);
+    //  [⋯] — 우클릭 메뉴의 손가락 입구(iOS 는 길게 눌러도 contextmenu 를 안 낸다). hover 가 있는 기기에선 CSS 가 숨긴다(50-mobile.css).
+    n.append(el('button', { class: 'pn-fmore', type: 'button', title: '더 보기', 'aria-label': f.name + ' 더 보기',
+      onclick: (e: MouseEvent) => { e.stopPropagation(); menuFor(f, e); } }, el('span', { 'aria-hidden': 'true', text: '⋯' })));
     return n;
   }
 
