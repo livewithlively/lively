@@ -1994,7 +1994,11 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
    사람 얼굴(댓글·언급) · 리브 L · 앱 종. 인스타그램 알림처럼 «누가 무엇을 했나» 가 한 줄에 읽혀야 들어갈 이유가 생긴다. */
 .v2-noti-sec { display: block; }
 .v2-noti-row { align-items: center; }
-.v2-noti-row .tw { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 1px; }
+/*  ⚠ 세로 묶음은 **stretch** 여야 한다 — 바탕 규칙(.v2-now-row .tw)의 `align-items: baseline` 이 세로 방향에서도 살아남아
+    제목이 칸 너비를 무시하고 내용 너비(414px)로 서서 시각 위에 겹쳤다(프리뷰 실측 2026-09-23: .tw 244px · .t 414px).
+    본문(.p)도 바탕의 `max-width: 180px`(가로 묶음의 프로젝트명 칸)를 물려받아 반 줄에서 잘렸다 — 둘 다 여기서 푼다. */
+.v2-noti-row .tw { display: flex; flex-direction: column; align-items: stretch; min-width: 0; flex: 1; gap: 1px; }
+.v2-noti-row .t, .v2-noti-row .p { display: block; width: auto; max-width: none; flex: none; }
 .v2-noti-row .t { font-size: 13.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-noti-row .p { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-noti-row.unread .t { font-weight: 700; }
