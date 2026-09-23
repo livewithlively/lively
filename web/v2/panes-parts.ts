@@ -1399,7 +1399,8 @@ function viewerPart(ctx: PartCtx): Part {
         unbridge();
         const f = htmlFrame(txt, base(p2), 'pn-ed-pv full') as HTMLIFrameElement;
         f.tabIndex = -1;
-        unbridge = attachFrameBridge(f, `${src ? 'sess:' + src.sid : ctx.id}:${p2}`);
+        //  이름 공간은 프로젝트·경로(frame-bridge 25c 가드) — 세션 폴더의 파일은 세션 id 로 갈라 다른 세션의 같은 경로와 안 섞인다.
+        unbridge = src ? attachFrameBridge(f, `sess:${src.sid}:${p2}`) : attachFrameBridge(f, `${ctx.id}:${p2}`);
         show(f, 'scale', () => PAGE_BASE);
       } else if (/\.(md|markdown)$/i.test(p2)) {
         //  글은 제 폭이 없다(칸에 맞춰 스스로 흐른다) — 맞춤 = 100%. 단추를 누르면 글자가 커진다.
