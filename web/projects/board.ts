@@ -1301,7 +1301,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     //  잎 앞의 구분자(/)는 잎 묶음에 둔다 — 데스크톱은 그대로 보이고, 폰은 제목 줄 맨 앞이라 감춘다.
     const pathNodes: any[] = [], leafNodes: any[] = [];
     items.forEach((it, i) => {
-      const bucket = (i && i === items.length - 1) ? leafNodes : pathNodes;
+      const bucket = (i === items.length - 1) ? leafNodes : pathNodes;   // 마지막이 잎 — 전체 보기(root 하나)면 root 가 곧 잎이다
       if (i) bucket.push(el('span', { class: 'pjv-crumb-sep', 'aria-hidden': 'true', text: '/' }));
       bucket.push(it);
     });
