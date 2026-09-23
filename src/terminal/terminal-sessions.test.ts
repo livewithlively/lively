@@ -11,7 +11,8 @@ import { join } from "node:path";
 import { detectAwaiting, modeEnvArgs, themeEnvArgs, normalizeTheme, harnessThemeArgv, harnessThemeEnvArgs, harnessFollowsTheme, harnessLiveThemeSteps, harnessLiveThemeSupported, canSeeSession, resolveAgentPhase, parseReportedPhase, isPhaseFresh, isActivityProgress, PHASE_TTL_SEC } from "./terminal-sessions.js";
 // 배럴(terminal-sessions.ts)엔 새 심볼을 늘리지 않는다 — 그 파일의 재수출 집합은 #1313 R15 분할의 계약이다.
 import { harnessLaunchArgv, harnessLoginArgv, harnessFailNotice, HARNESSES, RESUME_ID_RE } from "./catalog.js";
-import { SHELL_CMDS, isAgentOffline } from "./phase.js";  // E12 — 런처가 pane 포그라운드를 무엇으로 보이게 하는가(#1535)
+import { SHELL_CMDS, isAgentOffline } from "./phase.js";
+import { harnessIo } from "./harness-io/adapter.js";   // #4135 — 하네스가 답하는 화면 판정  // E12 — 런처가 pane 포그라운드를 무엇으로 보이게 하는가(#1535)
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -43,6 +44,30 @@ t("전사에 남은 사용자의 번호목록 메시지 → 대기 아님(#853 �
   ].join("\n");
   assert.equal(detectAwaiting(pane), false);
 });
+// #4135 — codex 화면은 문구도 커서도 다르다(실측 2026-09-24, 0.153.4). 하네스가 답하면 그 답이 정본이다.
+t("detectAwaiting — codex 대화상자 셋(훅 검토·업데이트·승인)은 하네스 판정으로 잡는다", () => {
+  const hooks = [
+    "  Hooks need review",
+    "  21 hooks are new or changed.",
+    "› 1. Review hooks",
+    "  2. Trust all and continue",
+    "  Press enter to confirm or esc to go back",
+  ].join("\n");
+  const approval = [
+    "  Would you like to run the following command?",
+    "  $ touch /tmp/x",
+    "› 1. Yes, proceed (y)",
+    "  Press enter to confirm or esc to cancel",
+  ].join("\n");
+  const ready = ["› Ask Codex to do anything", "  gpt-5.6-terra medium · ~/box/yoon"].join("\n");
+  const screen = harnessIo("codex")!.screen!;
+  //  종전 휴리스틱(claude·antigravity 문구)만으로는 훅 검토 화면을 못 잡았다 — 그래서 하네스 판정을 준다.
+  assert.equal(detectAwaiting(hooks), false, "종전 판정은 이 화면을 놓친다(이 단언이 근거다)");
+  assert.equal(detectAwaiting(hooks, screen), true);
+  assert.equal(detectAwaiting(approval, screen), true);
+  assert.equal(detectAwaiting(ready, screen), false);   // 입력칸이 떠 있으면 대기가 아니다
+});
+
 t("detectAwaiting — Antigravity 신뢰 대화상자('Do you trust'·'↑/↓ Navigate · enter Confirm')도 확인 필요다(실측 2026-08-18)", () => {
   const ag = [
     " Accessing workspace: /Users/lively/box/yoon/sessions/box-yoon-ca3037ee",
