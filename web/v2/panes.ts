@@ -45,7 +45,7 @@ import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
 import { loadThinTrail } from '../session-trail.js';
 import type { TlOut } from '../timeline.js';
-import { type V2Data } from './views.js';
+import { type Sess, type V2Data } from './views.js';
 import { icon } from './icons.js';
 import { doorProjectName } from '../lib/door-name.js';   // #2579 — 문패 이름은 셸 목록이 정본(판이 든 사본은 안 늙는다)
 
@@ -312,7 +312,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   // ── 산출물 열기(#1819 안 A) ─────────────────────────────────────────────────
   //  타임라인은 '무엇이 나왔나'만 안다. **어디로 여는지는 여기가 안다** — 세션 폴더·프로젝트 자료·곁칸을 아는 건 셸이다.
   //  ⚠ 도구가 준 경로는 절대·상대가 섞여 온다. 세션 폴더(row.dir) 기준으로 상대화해야 파일 API 가 연다.
-  const sessRow = (sid: string): any => opts.data().sessions.find((x) => x.id === sid) || null;
+  //  ⚠ any 로 두지 않는다 — 종전의 `row.dir`(목록 행에 없는 필드)이 any 라서 조용히 '' 로 컴파일됐다. Sess 면 없는 필드는 빌드가 막는다.
+  const sessRow = (sid: string): Sess | null => opts.data().sessions.find((x) => x.id === sid) ?? null;
   /** 주소가 기록 uuid 로 온 경우까지 받아 **박스 행**을 찾는다 — 문패의 얼굴·공유는 박스 id 를 축으로 돈다(#2116). */
   const boxRow = (sid: string | null): any => {
     if (!sid) return null;
@@ -324,8 +325,10 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const isAbs = (p: string): boolean => p.startsWith('/') || /^[A-Za-z]:\//.test(p);
   /** 세션 작업 폴더. ⚠ 목록 행(Sess)은 dir 을 안 옮겨 싣는다(views.ts mergeSessions) — 서버가 준 원본(raw)에만 있다.
    *  종전엔 `row.dir` 을 읽어 **늘 빈 문자열**이었고, 도구가 준 절대경로가 전부 «세션 폴더 밖» 으로 떨어졌다(2026-09-23 실측). */
-  const sessDir = (sid: string): string => { const r: any = sessRow(sid) || {}; return slash(String((r.raw && r.raw.dir) || r.dir || '')); };
+  const sessDir = (sid: string): string => slash(String(sessRow(sid)?.raw?.dir ?? ''));
   const sessNode = (sid: string): string | null => { const r = sessRow(sid); return r && r.node ? String(r.node) : null; };
+  /** 노드가 켜져 있나 — 원본 행의 node 는 {id,name,online} 이다(views.ts mergeSessions 주석). 모르면 켜진 것으로 본다. */
+  const nodeOnline = (sid: string): boolean => { const n = sessRow(sid)?.raw?.node; return !(n && typeof n === 'object' && n.online === false); };
   function relOf(sid: string, p: string): string | null {
     const raw = slash(String(p || ''));
     if (!raw) return null;
@@ -360,6 +363,10 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     if (!rel) { toast('이 파일은 세션 폴더 밖에 있어 여기서 열 수 없어요.', true); return; }
     //  산출물은 **뷰어 칸**에서 연다 — 자료 칸이 파일을 열 때와 같은 길(openViewerAt). 종전엔 ① window 에 신호를 뿌려
     //   아무 칸도 못 받았고(셸은 자기 곁칸에서만 듣는다) ② 그 밖은 새 탭에 날 주소를 열어 폰에선 로그인 창이 떴다(2026-09-23 실측).
+    //  노드 세션은 **노드의 파일을 직접** 읽는다(세션 출처) — 게이트웨이의 프로젝트 사본은 Stop 훅(project-push)이 밀어 올릴 때까지
+    //   늦고, 방금 나온 산출물은 꼭 그 사이에 있다. 노드가 꺼져 있으면(online:false) 그 사본이 유일한 길이라 아래 프로젝트 갈래로.
+    const node = sessNode(sid);
+    if (node && nodeOnline(sid)) { openViewerAt({ path: rel, sid, node }); return; }
     //  프로젝트 세션의 작업 폴더는 곧 프로젝트 폴더(또는 그 하위)다 — 그러면 프로젝트 자료로 연다(고치기·기억·살아 있는 미리보기가 산다).
     const off = id > 0 ? projectOffsetOfDir(sessDir(sid), id) : null;
     if (off !== null) { openViewerAt({ path: off ? off + '/' + rel : rel }); return; }
@@ -649,8 +656,10 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   }
   /** 그 칸을 펴고, 좁은 폭이면 **서랍도 연다** — 신호를 보냈는데 아무 일도 안 일어난 것처럼 보이면 안 된다(#4088 후속). */
   function revealZone(z: Zone): void {
+    //  좁은 폭에선 배치(lay)를 건드리지 않는다 — 켜진 탭은 서랍이 보여 주고(접힌 아래 칸도 서랍 안이다), 여기서 bottomOn:true 를
+    //   적으면 데스크톱에 돌아갔을 때 닫아 뒀던 아래 칸이 열려 있다(격리 리뷰 지적 — 이 파일 머리의 «배치는 안 건드린다» 약속).
+    if (narrow()) { if (z !== 'main') opts.onOpenDrawer?.(); return; }
     openZone(z);
-    if (narrow() && z !== 'main') opts.onOpenDrawer?.();
   }
   /** 그 종류의 탭을 **보이게** 한다 — 있으면 켜고(접힌 칸·서랍은 편다), 없으면 곁칸에 만든다. 세션 머리줄 [자료]가 부른다. */
   function showPart(type: PartType): void {
