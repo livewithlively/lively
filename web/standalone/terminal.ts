@@ -221,7 +221,9 @@ const nodeQ = (joiner) => (NODE_ID ? joiner + 'node=' + encodeURIComponent(NODE_
 //  ⚠ 기본값에 기대 **키를 먼저 보내지 않는다** — 하네스에 따라 답이 반대인 자리(선택지 Enter)는 whenTermUi 로 기다린다.
 interface TermUiProfile { label: string; appMouse: boolean; choiceNeedsEnter: boolean; pastePlaceholder: boolean; startDialog: RegExp }
 const TERM_UI_FALLBACK: TermUiProfile = {
-  label: '클로드', appMouse: true, choiceNeedsEnter: false, pastePlaceholder: true,
+  //  ⚠ 이름표의 기본값은 **'AI'** 다 — 서버가 이름을 안 주면(구서버·셸 세션) «클로드» 라고 단언하지 않는다.
+  //   나머지 기본값은 종전 동작(클로드 화면)이다(무회귀).
+  label: 'AI', appMouse: true, choiceNeedsEnter: false, pastePlaceholder: true,
   startDialog: /trust (this|the) folder|Do you trust|Enter to confirm|❯\s*1\.\s|\bNo, exit\b|Bypass Permissions mode|accept the risk/i,
 };
 let TERM_UI: TermUiProfile = TERM_UI_FALLBACK;
@@ -1473,7 +1475,9 @@ function showDropHint() {
   const ok = el('button', { class: 'hint-ok', text: '알겠어요' });
   const pop = el('div', { class: 'pop pop-hint' },
     el('h3', { text: '파일은 끌어다 놓으면 됩니다' }),
-    el('p', { class: 'hint-sub', text: '이미지·문서를 클로드에게 줄 때 경로를 직접 칠 필요가 없어요.' }),
+    //  #4135 — 이름은 이 세션의 하네스를 따른다(TERM_UI.label). 코덱스 세션에서 «클로드에게» 라고 말하면
+    //   사람이 어느 AI 에게 주는 건지 헷갈린다 — 화면이 사실이 아닌 것을 말하지 않는다.
+    el('p', { class: 'hint-sub', text: '이미지·문서를 ' + TERM_UI.label + '에게 줄 때 경로를 직접 칠 필요가 없어요.' }),
     el('div', { class: 'hint-steps' },
       step(1, '화면 아무 데나 끌어다 놓기', '캡처한 이미지는 ⌘V(Ctrl+V)로 붙여넣어도 됩니다'),
       step(2, uploadDestLabel() + '에 복사', 'uploads/ 폴더에 올라가 나중에도 다시 찾을 수 있어요'),

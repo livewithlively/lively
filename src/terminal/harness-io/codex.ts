@@ -139,6 +139,13 @@ export const codexIo: HarnessSessionAdapter = {
   // 실측 2026-08-18(box-yoon-355e7d10): 업데이트·신뢰 대화상자는 메뉴 꼬리가 공통("Press enter to continue"),
   // 작업 중엔 "• Working (2s • esc to interrupt)", 준비되면 컴포저 캐럿(›)이 placeholder 와 함께 뜬다.
   // ⚠ busy 중에도 컴포저(›)가 그려져 있다 — 판정 순서(dialog→busy→ready)가 곧 안전장치다.
+  //  ⚠ **훅 검토 대화상자는 우리가 대신 눌러 줄 수 없다** (2026-09-24 조사): codex 는 훅 신뢰를
+  //   `config.toml` 의 `[hooks.state."<source>:<event>:<i>:<j>"] trusted_hash` 에 적는데, **그 해시 규격이 공개돼
+  //   있지 않고 TUI 말고는 쓰는 경로가 없다**(업스트림 openai/codex #47283 «only the terminal TUI writes
+  //   trusted_hash» · #21615 «설치기가 신뢰를 요청할 supported 한 길을 달라» · #46210). 그래서 킷이 훅을 심을 때
+  //   신뢰까지 같이 적어 둘 수가 없다. 화면에서 «Trust all» 을 대신 누르는 것도 안 한다 — 그 한 번이 **레포에
+  //   딸려온 훅**(<repo>/.codex/hooks.json)까지 함께 신뢰하고, 그게 이 대화상자가 막으려는 바로 그 일이다.
+  //   지금 할 수 있는 것은 이 화면을 **대화상자로 정확히 알아보는 것**뿐이다(사람이 답할 때까지 글자를 안 넣는다).
   //  ★ 실측 보강 2026-09-24(codex 0.153.4, tmux 100x30 — 부팅부터 승인까지 직접 띄워 재었다):
   //   · 승인 대화상자 = "Would you like to run the following command?" + 번호 메뉴 + "Press enter to confirm or esc to cancel"
   //   · 훅 검토 대화상자 = "Hooks need review"(+ "Press t to trust all; enter to review hooks; esc to close")
