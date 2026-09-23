@@ -34,4 +34,14 @@ export const claudeIo: HarnessSessionAdapter = {
     if (/Enter to select|↑\/↓ to navigate|Esc to cancel/i.test(t)) return "dialog";
     return null;
   },
+  //  #4135 — 웹 터미널이 쓰는 화면 사실. 전부 이 레포가 이미 실측해 둔 것을 **한자리로 모은 것**이다:
+  //   · appMouse — Claude Code 는 alt 화면에서 마우스를 쥔다(그래서 ⌘C↔^C 다리와 ⌥드래그가 필요하다, #972 #1117).
+  //   · choiceNeedsEnter=false — 선택지는 숫자만으로 골라진다. 폰 키 줄이 Enter 를 **안 붙이는** 근거다(#4160).
+  //   · pastePlaceholder — 여러 줄은 «[Pasted text +N lines]» 로 접힌다(자동 전송의 안착 확인이 이 표식을 본다).
+  //   · startDialogRe — 신뢰 폴더·권한 경고. 정상 입력박스의 '⏵⏵ bypass permissions on' 과 구분하려고 대문자 'Bypass
+  //     Permissions mode' 를 본다(둘을 섞으면 멀쩡한 입력창을 대화상자로 보고 영영 기다린다 — terminal.ts 머리말).
+  term: {
+    appMouse: true, choiceNeedsEnter: false, pastePlaceholder: true,
+    startDialogRe: /trust (this|the) (folder|files)|Do you trust|Enter to confirm|❯\s*1\.\s|\bNo, exit\b|Bypass Permissions mode|accept the risk/i,
+  },
 };

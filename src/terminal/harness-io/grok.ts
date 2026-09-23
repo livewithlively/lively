@@ -16,6 +16,7 @@
 //  · 승인 UI 는 미실측 → answer=null(화면이 버튼을 안 그린다). 실측 후 채운다.
 import path from "node:path";
 import type { HarnessSessionAdapter } from "./adapter.js";
+import { TERM_UI_UNKNOWN } from "./term-ui.js";
 import { isoOf, parseJsonLines, type ChatBlock, type ChatLine, type ParseState } from "./chat-line.js";
 
 const asObj = (v: unknown): Record<string, any> | null => (v && typeof v === "object" && !Array.isArray(v)) ? v as Record<string, any> : null;
@@ -106,4 +107,5 @@ export const grokIo: HarnessSessionAdapter = {
     if (/Shift\+Tab:mode/.test(s)) return "ready";
     return null;
   },
+  term: TERM_UI_UNKNOWN,   // 화면 사실 미실측(#4135) — 부팅 대화상자·선택지 키를 아직 눈으로 안 봤다
 };

@@ -82,15 +82,38 @@ export const codexIo: HarnessSessionAdapter = {
   pathFor: null,   // 파일 이름에 시각이 들어 규약으로 못 만든다 — 훅 보고 경로만
   convIdOk: null,  // 대화 id 규약 미확정 — 판단 보류(보고를 종전대로 받는다)
   parse: parseCodex,
-  answer: null,    // 승인 UI 미실측(관리 세션은 auto-approve) — 있는 척하지 않는다
+  //  승인 키 — 실측 2026-09-24(codex 0.153.4, `--ask-for-approval on-request` 로 직접 띄워 재었다):
+  //   화면은 "Would you like to run the following command?" + "› 1. Yes, proceed (y) / 2. …(p) / 3. No, …(esc)" +
+  //   "Press enter to confirm or esc to cancel". 커서(›)가 **1번(승인)에 놓인 채로** 뜨므로 Enter=승인, Esc=거부다.
+  //   중단도 Esc("esc to interrupt" — busy 판정과 같은 문구).
+  //  ⚠ 한 글자 단축키(y/p)도 실제로 먹지만 쓰지 않는다 — 화면이 보낼 수 있는 키를 Enter·Esc 둘로 묶어 둔 것이
+  //   이 통로의 계약이고(send-keys.ts CHAT_KEYS), 'p'(= 앞으로 안 물어봄)는 사람이 직접 고를 일이지 화면이 대신 누를 것이 아니다.
+  answer: (action) => (action === "approve" ? "Enter" : "Escape"),
   // 실측 2026-08-18(box-yoon-355e7d10): 업데이트·신뢰 대화상자는 메뉴 꼬리가 공통("Press enter to continue"),
   // 작업 중엔 "• Working (2s • esc to interrupt)", 준비되면 컴포저 캐럿(›)이 placeholder 와 함께 뜬다.
   // ⚠ busy 중에도 컴포저(›)가 그려져 있다 — 판정 순서(dialog→busy→ready)가 곧 안전장치다.
+  //  ★ 실측 보강 2026-09-24(codex 0.153.4, tmux 100x30 — 부팅부터 승인까지 직접 띄워 재었다):
+  //   · 승인 대화상자 = "Would you like to run the following command?" + 번호 메뉴 + "Press enter to confirm or esc to cancel"
+  //   · 훅 검토 대화상자 = "Hooks need review"(+ "Press t to trust all; enter to review hooks; esc to close")
+  //   그래서 대화상자 꼬리를 "continue" 하나로 보지 않고 confirm·cancel·close 까지 본다 — 종전 정규식은 승인 화면을
+  //   dialog 로 못 봐서, 답을 기다리는 화면에 아웃박스가 글자를 넣을 수 있었다.
   screen: (tail) => {
     const s = tail.join("\n");
-    if (/press enter to continue/i.test(s)) return "dialog";
+    if (/press (enter|t) to (continue|confirm|review|trust)|esc to (cancel|close)|Would you like to run/i.test(s)) return "dialog";
     if (/esc to interrupt/i.test(s)) return "busy";
     if (/^\s*›/m.test(s)) return "ready";
     return null;   // 부팅·로그인 등 미실측 화면 — 보수적으로 기다린다
+  },
+  //  #4135 — 웹 터미널이 쓰는 화면 사실. **claude 와 셋 다 다르다**(실측 2026-09-24):
+  //   · appMouse=false — codex TUI 는 alt 화면도 마우스 리포트도 안 쓴다(tmux `alternate_on=0 mouse_any_flag=0`).
+  //     그래서 드래그·휠·복사가 **브라우저 기본으로 그냥 된다** — ⌘C 다리(#972)도, ⌥드래그 안내도 이 세션엔 필요 없다.
+  //   · choiceNeedsEnter=true — 선택지 위에서 '1' 만 보내면 커서조차 안 움직인다. Enter 까지 가야 골라진다
+  //     (claude 와 반대다 — 폰 키 줄이 이 값을 보고 Enter 를 붙인다).
+  //   · pastePlaceholder=false — 여러 줄 붙여넣기는 접히지 않고 입력칸에 그대로 펼쳐진다(«+N lines» 표식이 없다).
+  //   · startDialogRe — 부팅 길목에 대화상자가 **셋**이다: 폴더 신뢰 · 훅 검토 · 업데이트 알림. 셋 다 "Press enter to …"
+  //     꼬리를 달고 번호 메뉴('› 1. …')를 쓴다. 이 위에서 Enter 를 치면 그 Enter 를 대화상자가 먹는다.
+  term: {
+    appMouse: false, choiceNeedsEnter: true, pastePlaceholder: false,
+    startDialogRe: /Do you trust the contents|Hooks need review|Update available|Press enter to (continue|confirm)|›\s*1\.\s/i,
   },
 };
