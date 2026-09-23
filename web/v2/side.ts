@@ -325,7 +325,7 @@ export interface SideHooks {
   navHost?: () => HTMLElement | null;
   /** 앱 인스턴스 고정이 바뀌었다 — 목록을 다시 계산해야 한다(정렬은 main 이 안다). */
   onPinChanged?: () => void;
-  /** #2016 — 레일이 고른 구역(홈 · 확인할 것 · AI 세션 · 프로젝트 · 위키). 없으면 홈(종전 화면 그대로). */
+  /** #2016 — 레일이 고른 구역(홈 · AI 세션 · 프로젝트 · 위키). 없으면 홈(종전 화면 그대로). [확인할 것] 구역은 #4180 에서 걷었다. */
   section?: () => RailSection;
   /** #4158 — [AI 세션] 사이드바에서 프로젝트를 골랐다(sessProjFilter). 셸이 가운데 전체 목록을 그 값으로 다시 그린다 — 없으면 그리로 간다. */
   onSessProject?: () => void;
@@ -1070,7 +1070,6 @@ function render(): void {
   //  목록만 다시 그리는 붓은 **그 구역이 자기 것을 건다** — 여기서 먼저 비워, 붓이 없는 구역(트리·서가)에서
   //   앞 구역의 재료로 그리는 일이 없게 한다(#2534).
   listPaint = null;
-  if (sec === 'inbox') { renderInboxSide(); return; }
   if (sec === 'sess') { renderSessions(); return; }
   if (sec === 'proj') { renderProjects(); return; }
   if (sec === 'wiki') { renderWiki(); return; }
@@ -1095,13 +1094,11 @@ function wsHead(): HTMLElement {
   const ak = last ? last.activeKey() : '';
   //  구역 아닌 화면의 특례 — 리브('갈 곳')와 자료(앱, #2423). 여기 있는데 머리가 «홈»이면 거짓말이다.
   const cur = ak === 'liv' ? { label: '리브', icon: 'liv' } : ak === 'sources' ? { label: '자료', icon: 'src' } : sectionDef(sec);
-  const inboxN = last ? last.data.sessions.filter((s) => isLive(s) && isMine(s) && (s.stateKey === 'waiting' || s.stateKey === 'done')).length : 0;
   return el('div', { class: 'v2-side-wshd' },
     stackTile({ small: true, label: true }),
-    el('button', { class: 'v2-secdd', type: 'button', 'aria-haspopup': 'menu', title: '구역 바꾸기 — 홈 · 확인할 것 · AI 세션 · 프로젝트 · 위키 · 리브',
+    el('button', { class: 'v2-secdd', type: 'button', 'aria-haspopup': 'menu', title: '구역 바꾸기 — 홈 · AI 세션 · 프로젝트 · 위키 · 리브',
       onclick: (e: Event) => openSectionMenu(e.currentTarget as HTMLElement) },
       icon(cur.icon, 'v2-ic'), el('span', { class: 'v2-secdd-t', text: cur.label }),
-      sec === 'inbox' && ak !== 'liv' && inboxN ? el('span', { class: 'v2-rail-bd', text: String(inboxN) }) : null,
       el('span', { class: 'v2-ws-car', 'aria-hidden': 'true', text: '▾' })));
 }
 /** 사이드바 맨 위 — 뒤로·앞으로·검색 줄(데스크톱은 창 맨 윗줄로 간다) + 레일을 숨겼을 때의 머리 한 줄. */
@@ -1343,38 +1340,10 @@ function renderSessions(): void {
   bindSideKeys();
 }
 
-// ══ [확인할 것] 구역 (#2016 2차) — 슬랙 '내 활동'의 자리. 답을 기다리는 것과 끝났는데 아직 안 본 것. ══
-function renderInboxSide(): void {
-  if (!last) return;
-  const { host, data } = last;
-  const navEl = navRow();
-  const navHost = hooks.navHost?.() || null;
-  if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
-  const live = data.sessions.filter((s) => isLive(s) && !isTrashedSess(s));
-  //  #1875 — 내 것만. 남의 프로젝트 세션이 답을 기다리는 것은 그 사람의 「확인할 것」이지 내 것이 아니다.
-  const waits = live.filter((s) => isMine(s) && s.stateKey === 'waiting').sort((a, b) => b.lastSeen - a.lastSeen);
-  const dones = live.filter((s) => isMine(s) && s.stateKey === 'done').sort((a, b) => b.lastSeen - a.lastSeen);
-  //  홈·[AI 세션]과 같은 붓(#2033). 여기도 전수가 아니라 **지금 나를 기다리는 것**만 모인 자리라
-  //   압정·× 는 안 그린다 — 확인하면 스스로 빠지는 목록이다.
-  const items = [
-    ...waits.map((s) => sessAsInst(s, false, `답 기다림 · ${waits.length}`)),
-    ...dones.map((s) => sessAsInst(s, false, `작업 완료 · ${dones.length}`)),
-  ];
-  const kids = (): HTMLElement[] => appListKids(items, { pin: false, close: false },
-    { none: '지금 확인할 것이 없어요. 답을 기다리거나 막 끝난 세션이 여기 모입니다.' });
-  listPaint = () => paintList(kids);
-  const keep = listBefore();
-  const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '확인할 것' }, ...kids());
-  appListEl = listEl;
-  host.replaceChildren(
-    ...topBits(navEl, navHost),
-    el('section', { class: 'v2-app-space', 'aria-label': '확인할 것' },
-      secHead('확인할 것', waits.length + dones.length,
-        el('a', { class: 'v2-app-open', href: '#/inbox', title: '받은 알림까지 한 화면에서', 'aria-label': '확인할 것 화면 열기' }, icon('inbox'))),
-      listEl),
-    secFoot());
-  listAfter(keep);
-}
+// ══ [확인할 것] 구역은 #4180 에서 걷었다 (회의 2026-09-21) ══════════════════════════════════════
+//  «사이드바 아래에 있으면 안 되고, 사이드바와 겹친다. 홈으로 옮기고, 종 아이콘+숫자만 보이다가 누르면 목록이 뜬다.»
+//  여기 있던 «답을 기다리는 세션 · 끝났는데 안 본 세션» 목록은 세션 알림을 「확인할 것」에서 빼기로 하면서 자리를 잃었다 —
+//  그 상태는 홈·[AI 세션] 목록의 상태점이 이미 말한다. 알림 이력은 홈 머리줄의 종(notify-bell.ts)과 #/inbox 가 든다.
 
 // ══ [프로젝트] 구역 (#2016) · 폴더 · 리스트 하나로 고정 (#2043, 위 FOLD_CLOSED_STORE 머리말) ══════════
 //  프로젝트 › 세션 트리 기계(renderTree·projRow·sessRow·binRows)는 renderLegacy 가 아직 쓴다 — 이 구역만 안 부른다.
@@ -1751,10 +1720,6 @@ function renderLegacy(): void {
   treeEl = el('div', { class: 'v2-tree', role: 'tree', 'aria-label': '프로젝트와 세션' });
   const doneCount = rows.filter((r) => r.done).length;
   const fltN = (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) + (showDone ? 1 : 0);
-  // 확인할 것 = 확인 필요(waiting) + 작업 완료 미열람 — **둘 다 내 것만**(#1875, 2026-08-27 원준).
-  //  종전엔 waiting 만 '보이는 것 전부'였다(프로젝트 세션은 팀 누구든 답할 수 있으니까) — 그 규칙이
-  //  동료의 대기를 내 배지 숫자로 올렸다. views.ts renderInbox 머리말에 뒤집은 이유가 적혀 있다.
-  const inboxN = data.sessions.filter((s) => isLive(s) && isMine(s) && (s.stateKey === 'waiting' || s.stateKey === 'done')).length;
   // ⚠ 바로 가기 칸은 **밖에서 잡아 두어야** 한다 — 아래 나눔선(navSplitter)이 이 칸의 높이를 조정한다.
   //  칸을 인라인으로 두면 손잡이가 가리킬 대상을 못 잡는다.
   const navEl = el('nav', { class: 'v2-fixed', 'aria-label': '바로 가기' },
@@ -1768,13 +1733,7 @@ function renderLegacy(): void {
         e.preventDefault();
         hooks.onNewTask();
       } }, glyph('home', 'v2-nav-ic'), el('span', { class: 'n', text: '새 작업' })),
-    // 확인할 것(#1719 사이드바 개편 안2) — 답을 기다리는 세션 + 끝났는데 아직 안 본 세션. **사이드바에서 유일하게
-    //  숫자 배지를 가진 행**이라 눈이 먼저 간다(슬랙 읽지 않음 문법). 우리 제품의 루프는 시키다→기다리다→확인이고,
-    //  그 병목(확인)이 상시 자리를 가져야 "세션은 받은 편지함"(셀프서브 설계)과 화면이 일치한다. 0건이어도 행은
-    //  남는다(자리가 사라지면 있다는 것 자체를 잊는다) — 배지만 조용히 사라진다.
-    el('a', { class: 'v2-nav' + (last.activeKey() === 'inbox' ? ' on' : ''), href: '#/inbox', 'data-nav': 'inbox',
-      title: '확인할 것 — 내 답·확인을 기다리는 세션' }, glyph('inbox', 'v2-nav-ic'), el('span', { class: 'n', text: '확인할 것' }),
-      inboxN ? el('span', { class: 'v2-nav-cnt', text: String(inboxN) }) : null),
+    //  [확인할 것] 행(#1719)은 #4180 에서 걷었다 — 그 자리는 홈 머리줄의 종(notify-bell.ts)이 맡는다.
     // 외부 앱 연결(#1719 원준) — "AI가 내 노션·슬랙을 쓸 수 있나"는 설정이 아니라 **능력**이다. 시키기 전에
     //  알아야 하고 안 되면 그 자리에서 켜야 해서, 관리탭 안쪽이 아니라 여기 상시 자리로 올렸다.
     el('a', { class: 'v2-nav' + (last.activeKey() === 'connect' ? ' on' : ''), href: '#/connect', 'data-nav': 'connect',

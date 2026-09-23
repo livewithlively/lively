@@ -5,13 +5,20 @@ import { getActiveGrant, getApp } from "../org/store/apps.js";
 import * as store from "../org/store/app-notifications.js";
 import { parseAppManifest } from "./manifest.js";
 import {
-  decideNotifyAllowed, normalizeNotification, shouldSuppressDuplicate, type NotifyDenial,
+  decideNotifyAllowed, normalizeActor, normalizeKind, normalizeNotification, shouldSuppressDuplicate, type NotifyDenial, type NotifyKind,
 } from "./notify-policy.js";
 
 export type NotifyResult =
   | { ok: true; notification: store.AppNotificationRow }
   | { ok: true; suppressed: true }                 // 중복 억제 — 실패가 아니다
   | { ok: false; denial: NotifyDenial | "notify-app-inactive" };
+
+/**
+ * 제품 자신이 보내는 알림의 app_id(#4180) — 댓글·언급·리브의 답은 어느 앱의 일도 아니다.
+ *  실제 앱 행이 아니므로 앱 관문(활성·매니페스트·grant)을 지나지 않는다 — 그 관문이 막는 것은 **남의 앱**이 사용자
+ *  이름으로 배너를 띄우는 일이고, 여기는 서버 코드만 부른다(앱 토큰 경로 app_notify 는 notifyMember 만 탄다).
+ */
+export const SYSTEM_NOTIFY_APP = "lively";
 
 /**
  * 앱이 한 멤버에게 알림을 보낸다.
@@ -30,6 +37,13 @@ export async function notifyMember(input: {
    *  ⚠ **서버 코드만** 넘긴다 — 앱 토큰 경로(app_notify)는 이 값을 받지 않는다(앱이 억제를 풀 수 없게).
    */
   cooldownMs?: number;
+  /**
+   * 종류(#4180) — 「확인할 것」 렌즈가 이걸로 거른다. **서버 코드만** 넘긴다(앱 토큰 경로는 늘 'app'):
+   *  ai-session 스윕이 'session' 을 넘겨 대기 알림을 배너 전용으로 만든다. 모르는 값은 'app'.
+   */
+  kind?: NotifyKind;
+  /** 이 알림을 만든 사람(구성원 id) — 사람이 한 일(댓글·언급)에만. */
+  actor?: string | null;
 }): Promise<NotifyResult> {
   if (!input.appId) return { ok: false, denial: "notify-app-required" };
 
@@ -53,17 +67,47 @@ export async function notifyMember(input: {
   const norm = normalizeNotification(input);
   if (!norm.ok) return { ok: false, denial: norm.denial };
 
-  const now = input.now ?? Date.now();
-  if (norm.value.dedupeKey) {
-    const last = await store.lastSentAtMs(input.appId, input.memberId, norm.value.dedupeKey);
-    if (shouldSuppressDuplicate(norm.value.dedupeKey, last, now, input.cooldownMs)) return { ok: true, suppressed: true };
-  }
+  return sendNormalized(input.appId, input.memberId, norm.value, {
+    kind: normalizeKind(input.kind), actor: normalizeActor(input.actor), now: input.now, cooldownMs: input.cooldownMs,
+  });
+}
 
+/**
+ * 제품 자신이 한 사람에게 알림을 보낸다(#4180) — 댓글·언급(사람이 나를 지목한 것)·리브의 답.
+ *  앱 관문은 없지만 **정규화·href 검증·중복 억제**는 앱 알림과 같은 길을 지난다 — 배너·화면이 같은 모양을 받아야 한다.
+ *  종류는 필수다(app·session 은 여기로 못 온다 — 그건 앱과 스윕의 것이다).
+ */
+export async function notifySystem(input: {
+  kind: Exclude<NotifyKind, "app" | "session">;
+  memberId: string;
+  title?: unknown; body?: unknown; href?: unknown; dedupe_key?: unknown;
+  actor?: string | null;
+  now?: number;
+  cooldownMs?: number;
+}): Promise<NotifyResult> {
+  if (!input.memberId) return { ok: false, denial: "notify-app-required" };
+  const norm = normalizeNotification(input);
+  if (!norm.ok) return { ok: false, denial: norm.denial };
+  return sendNormalized(SYSTEM_NOTIFY_APP, input.memberId, norm.value, {
+    kind: input.kind, actor: normalizeActor(input.actor), now: input.now, cooldownMs: input.cooldownMs,
+  });
+}
+
+/** 두 발송 경로의 공통 꼬리 — 중복 억제 판정 뒤 저장. 여기가 유일한 INSERT 자리다. */
+async function sendNormalized(
+  appId: string, memberId: string,
+  v: { title: string; body: string | null; href: string | null; dedupeKey: string | null },
+  o: { kind: NotifyKind; actor: string | null; now?: number; cooldownMs?: number },
+): Promise<NotifyResult> {
+  const now = o.now ?? Date.now();
+  if (v.dedupeKey) {
+    const last = await store.lastSentAtMs(appId, memberId, v.dedupeKey);
+    if (shouldSuppressDuplicate(v.dedupeKey, last, now, o.cooldownMs)) return { ok: true, suppressed: true };
+  }
   return {
     ok: true,
     notification: await store.insertNotification({
-      appId: input.appId, memberId: input.memberId,
-      title: norm.value.title, body: norm.value.body, href: norm.value.href, dedupeKey: norm.value.dedupeKey,
+      appId, memberId, title: v.title, body: v.body, href: v.href, dedupeKey: v.dedupeKey, kind: o.kind, actor: o.actor,
     }),
   };
 }

@@ -1811,7 +1811,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
   //  이름은 지금 하는 일(pane 제목)이 있으면 그걸, 없으면 세션 라벨을 준다(앱이 다시 폴백한다).
   //  #4054 — 발행은 «어느 워크스페이스의 누구» 로 한다. 매니지드에서 다른 워크스페이스를 받는 앱이 있으면
   //   세션 주인의 계정 id 를 함께 싣는다(그 앱들은 구성원 아이디가 아니라 계정으로 맞춘다 — notify-scope.ts).
-  const notifyPhaseChange = async (id: string, owner: string, change: { prev: string | null; phase: string; at: number }, nameHint?: string): Promise<void> => {
+  const notifyPhaseChange = async (id: string, owner: string, change: { prev: string | null; phase: string; at: number }, nameHint?: string, facts?: { dir?: string | null }): Promise<void> => {
     try {
       const account = accountRoutesActive() ? await notifyAccountOf(owner) : null;
       // 노드 세션의 tmux 는 그 PC 에 있어 getSessionLabel(로컬 tmux)이 못 읽는다 → 호출자가 아는 이름을 준다.
@@ -1821,6 +1821,11 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
         key: sessionEventKey(id, change.phase, change.at), ts: change.at,
       });
     } catch (e) { logger.warn({ err: e, id }, "알림 전달 실패(비치명)"); }
+    //  #4180 — 리브의 답이면 「확인할 것」에도 남긴다(배너는 위 스트림이, 이력은 이것이). 판정·발췌는 그 모듈이 한다.
+    try {
+      const { maybeNotifyLivAnswer } = await import("../org/liv/answer-notify.js");
+      await maybeNotifyLivAnswer({ sessionId: id, owner, change, dir: facts?.dir ?? null, label: nameHint ?? null });
+    } catch (e) { logger.warn({ err: e, id }, "리브 답 알림 판정 실패(비치명)"); }
   };
 
   app.post("/api/ui/terminal/sessions/:id/active", auth, wrap(async (req, res) => {
@@ -1841,7 +1846,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       // #1842 — 단계가 **바뀐** 순간 그 자리에서 앱으로 민다. 폴링이 30초 뒤에 같은 사실을 다시 발견하는 대신,
       //  "AI 를 여러 개 돌리다 끝나는 것마다 바로 받는다"가 여기서 성립한다. 구독자가 없으면 아무 일도 안 한다.
       //  이름은 desired 행의 라벨을 준다 — 종전엔 전이마다 tmux 로 @box_label 을 다시 읽었다(같은 계수 1.1/분).
-      if (change) void notifyPhaseChange(id, me, change, st.label || undefined);   // 응답을 막지 않는다 — 훅은 핫패스다
+      if (change) void notifyPhaseChange(id, me, change, st.label || undefined, { dir: st.dir });   // 응답을 막지 않는다 — 훅은 핫패스다
       res.json({ ok: true });
       return;
     }

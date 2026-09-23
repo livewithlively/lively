@@ -8,6 +8,7 @@ import type { LivelyUser } from "../context.js";
 import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { notifyMember } from "../apps/notify.js";
+import { normalizeScope } from "../apps/notify-policy.js";
 import * as store from "../org/store/app-notifications.js";
 
 const actorOf = (user: LivelyUser): string => user?.userId || user?.email || "unknown";
@@ -54,29 +55,35 @@ const appNotify: Capability = {
 const listInput = {
   limit: z.number().int().optional().describe("최대 건수(기본 100, 최대 500)"),
   unread_only: z.boolean().optional().describe("안 읽은 것만"),
+  scope: z.enum(["inbox", "all"]).optional().describe(
+    "렌즈(#4180). inbox(기본) = 「확인할 것」 — 댓글·언급·리브의 답·앱 알림. all = 배너용 전부(세션 대기·완료 알림 포함)"),
 };
 
 const meNotifications: Capability = {
   name: "me_notifications",
   title: "내가 받은 알림",
-  description: "내 알림 이력(최신순)과 안 읽은 개수. 앱이 보낸 알림이 여기 쌓이고, inbox 앱이 이걸 그린다(#1891).",
+  description: "내 알림 이력(최신순)과 안 읽은 개수. 앱·사람·리브가 남긴 알림이 여기 쌓이고, 「확인할 것」이 이걸 그린다(#1891·#4180). "
+    + "기본 렌즈(inbox)는 세션 대기·완료 알림을 빼고 준다 — 그건 배너의 것이다(scope=all 로 받는다).",
   scope: null,
   input: listInput,
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/me/notifications"], parse: (req) => {
     const q = (req.query ?? {}) as Record<string, unknown>;
-    return { limit: q.limit ? Number(q.limit) : undefined, unread_only: q.unread_only === "true" };
+    return { limit: q.limit ? Number(q.limit) : undefined, unread_only: q.unread_only === "true", scope: normalizeScope(q.scope) };
   } }] },
   handler: async (input: z.infer<z.ZodObject<typeof listInput>>, user: LivelyUser) => {
     const me = actorOf(user);
+    const scope = normalizeScope(input.scope);
     return {
-      notifications: await store.listNotifications(me, { limit: input.limit, unreadOnly: input.unread_only }),
-      unread: await store.unreadCount(me),
+      notifications: await store.listNotifications(me, { limit: input.limit, unreadOnly: input.unread_only, scope }),
+      unread: await store.unreadCount(me, { scope }),
+      scope,
     };
   },
 };
 
 const readInput = {
-  ids: z.array(z.string()).optional().describe("읽음 처리할 알림 id. 생략하면 **안 읽은 것 전부**"),
+  ids: z.array(z.string()).optional().describe("읽음 처리할 알림 id. 생략하면 **안 읽은 것 전부**(그 렌즈 안에서)"),
+  scope: z.enum(["inbox", "all"]).optional().describe("ids 를 생략했을 때의 렌즈(기본 inbox — 「확인할 것」에 보이는 것만)"),
 };
 
 const meNotificationsRead: Capability = {
@@ -88,7 +95,7 @@ const meNotificationsRead: Capability = {
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/me/notifications/read"], parse: (req) => ({ ...((req.body ?? {}) as Record<string, unknown>) }) }] },
   handler: async (input: z.infer<z.ZodObject<typeof readInput>>, user: LivelyUser) => {
     const me = actorOf(user);
-    return { ok: true, marked: await store.markRead(me, input.ids) };
+    return { ok: true, marked: await store.markRead(me, input.ids, { scope: normalizeScope(input.scope) }) };
   },
 };
 
