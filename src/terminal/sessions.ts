@@ -873,13 +873,16 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //     그것도 없으면(hostProfile·MULTIPROFILE=0) 이 호스트의 홈.
     //   · antigravity — 설정 자리를 바꾸는 환경변수가 **없다**(#1689 실측). 늘 그 홈의 `.gemini` 다.
     const home = osUser ? `${MEMBER_HOME_BASE}/${osUser}` : (process.env.HOME || os.homedir());
+    //   · codex — CODEX_HOME 을 세션에 주입하지 않으므로(profiles.ts 머리말) 늘 그 홈의 `.codex/config.toml` 이다.
     const configFile = harness.key === "claude"
       ? path.join(
         osUser
           ? home
           : (process.env.LIVELY_MULTIPROFILE !== "0" && !input.hostProfile ? profileConfigDir(user) : home),
         ".claude.json")
-      : path.join(home, ".gemini", "antigravity-cli", "settings.json");
+      : harness.key === "codex"
+        ? path.join(home, ".codex", "config.toml")
+        : path.join(home, ".gemini", "antigravity-cli", "settings.json");
     //  ⚠ 부모 디렉터리를 먼저 만든다 — agy 를 한 번도 안 켠 홈엔 `.gemini/antigravity-cli/` 가 아예 없다.
     //   (claude 쪽은 이미 있는 자리라 no-op. 없으면 쓰기가 ENOENT 로 조용히 실패해 신뢰가 안 심긴다.)
     const io: TrustIo = osUser
