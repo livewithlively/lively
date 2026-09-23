@@ -80,7 +80,9 @@ function openPopover(anchor: HTMLButtonElement): void {
     try { feed = await loadNotifications({ limit: POP_LIMIT, scope: 'inbox' }); }
     catch { if (panel.isConnected) list.replaceChildren(el('p', { class: 'v2-noti-pop-empty', text: '알림을 불러오지 못했어요.' })); return; }
     if (!panel.isConnected) return;
-    head.replaceChildren(
+    //  ⚠ DOM 의 replaceChildren 은 null 을 «"null"» 글자로 그린다(el() 과 다르다) — 없는 단추는 목록에서 걸러 넘긴다.
+    //   (매니지드 실측 2026-09-23: 안 읽음 0 이면 머리에 «null» 이 찍혔다.)
+    const headKids: Array<HTMLElement | null> = [
       el('span', { class: 'v2-k', text: feed.unread ? `확인할 것 · 안 읽음 ${feed.unread}` : '확인할 것' }),
       //  ⚠ 권한은 사람이 누를 때만 묻는다(notifications.ts 머리말) — 여기 단추가 그 자리다.
       notificationPermission() === 'default'
@@ -90,7 +92,9 @@ function openPopover(anchor: HTMLButtonElement): void {
       feed.unread
         ? el('button', { class: 'btn btn-sm', type: 'button', text: '모두 읽음',
             onclick: () => { void markNotificationsRead(undefined, 'inbox').then(() => paint()); } })
-        : null);
+        : null,
+    ];
+    head.replaceChildren(...headKids.filter((k): k is HTMLElement => !!k));
     if (!feed.notifications.length) {
       list.replaceChildren(el('p', { class: 'v2-noti-pop-empty', text: '새 알림이 없어요. 댓글·언급, 리브의 답, 앱이 보낸 알림이 오면 여기에 모여요.' }));
       return;
