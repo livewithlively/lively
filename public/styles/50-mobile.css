@@ -228,7 +228,7 @@
   .pjv-crumb-leaf { display: flex; align-items: center; gap: 2px; min-width: 0; }
   .pjv-crumb-leaf:empty { display: none; }
   .pjv-crumb-leaf > .pjv-crumb-sep { display: none; }   /* 제목 줄 맨 앞의 «/» 는 없다 */
-  .pjv-crumb-leaf .pjv-crumb.is-leaf { flex: 1 1 auto; min-width: 0; max-width: none; padding: 2px 3px; font-size: 19px; letter-spacing: -.4px; }
+  .pjv-crumb-leaf > .pjv-crumb { flex: 1 1 auto; min-width: 0; max-width: none; padding: 2px 3px; font-size: 19px; font-weight: 800; letter-spacing: -.4px; color: var(--ink); }   /* 전체 보기의 root(«프로젝트»)도 잎이라 같은 제목 크기 */
   .pjv-crumb-leaf .pjv-crumb-label { white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.25; }
   .pjv-crumb-menu, .pjv-crumb-fav { width: 34px; height: 34px; }
   /* ② 뷰 탭 — 한 줄, 가로로 민다(줄바꿈으로 두 층이 되던 것). */
@@ -269,8 +269,13 @@
   .pjv-proj-card .pjv-proj-row::after { content: ''; order: 3; flex-basis: 100%; height: 0; }
   .pjv-proj-card .pjv-proj-row::before { content: ''; order: 4; flex: none; width: 18px; height: 0; }   /* 상태 점 폭(18) + 사이(7) 만큼 들여 메타를 제목 밑에 맞춘다 */
   .pjv-proj-card .pjv-proj-row .pjv-trow-subcount, .pjv-proj-card .pjv-proj-row .pjv-trow-tags,
-  .pjv-proj-card .pjv-proj-row > .pjv-tcell[data-col="due"], .pjv-proj-card .pjv-proj-row > .pjv-tcell[data-col="priority"] { display: inline-flex; align-items: center; order: 4 !important; flex: none; margin-top: 5px; overflow: visible; }
-  .pjv-proj-card .pjv-proj-row > .pjv-tcell:has(> .pjv-cell-btn.empty) { display: none; }
+  .pjv-proj-card .pjv-proj-row > .pjv-tcell[data-col="due"], .pjv-proj-card .pjv-proj-row > .pjv-tcell[data-col="priority"],
+  .pjv-proj-card .pjv-proj-row > .pjv-tcell[data-col="sess"] { display: inline-flex; align-items: center; order: 4 !important; flex: none; margin-top: 5px; overflow: visible; }
+  .pjv-proj-card .pjv-proj-row > .pjv-tcell:has(> .pjv-cell-btn.empty) { display: none; }   /* 마감·우선순위·내 세션이 비었으면 그 칸은 없다 */
+  /* 폰 행에 없는 열 — 시작·생성·갱신일(켜 두었어도)·커스텀 필드. 값은 프로젝트 화면에서 본다. 위 일반 규칙이 이미 숨기지만 열 순서 인라인 order 와 무관하게 못 박는다. */
+  .pjv-proj-card .pjv-proj-row > .pjv-tcell[data-col="start"], .pjv-proj-card .pjv-proj-row > .pjv-tcell[data-col="created"], .pjv-proj-card .pjv-proj-row > .pjv-tcell[data-col="updated"],
+  .pjv-proj-card .pjv-proj-row > .pjv-tcell.pjv-fcell { display: none !important; }
+  .pjv-proj-card .pjv-proj-row .pjv-sess-cell .pjv-cell-ico { width: 18px; height: 18px; }
   .pjv-proj-card .pjv-proj-row .pjv-cell-btn { width: auto; padding: 0; gap: 4px; font-size: 12.5px; }
   .pjv-proj-card .pjv-proj-row .pjv-due-text { font-size: 12.5px; }
   .pjv-proj-card .pjv-proj-row .pjv-flag-glyph { font-size: 13px; }
