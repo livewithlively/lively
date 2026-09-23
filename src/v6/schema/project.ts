@@ -152,6 +152,9 @@ export async function initV6ProjectCore(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS external_outbox_pending_idx ON external_outbox(system, created_at) WHERE done_at IS NULL;
   `);
 
+  // 닫힘 근거(close_note) — 열림→닫힘 전이 시 쓰는 쪽이 싣는 {category, reason, actor, source, at}. 드레인이 ClickUp 코멘트로 보낸다.
+  await pool.query(`ALTER TABLE external_outbox ADD COLUMN IF NOT EXISTS close_note JSONB;`);
+
   // ── 5f) external_base(2026-06-26, #177 #6d 3-way 머지) — 마지막 양측 합의값(공통조상) JSONB. ──
   //  {name, description, status_category}. 인바운드 머지의 base: INSERT=theirs, 아웃바운드 푸시 후=ours, 인바운드 머지 후=merged.
   //  merge3(base, ours, theirs): theirs==base→ours유지(외부불변), ours==base→theirs채택(우리불변), 양쪽변경→ours(우리 DB master 타이브레이크).

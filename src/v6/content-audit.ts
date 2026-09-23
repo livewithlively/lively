@@ -7,7 +7,8 @@ import { itemsPool } from "../db/client.js";
 import { one } from "../db/client.js";
 
 // 쓰기 호출 맥락 — actor(누가)·source(어느 채널). v6 스토어 공통(구 5곳 중복 정의 통합).
-export type WriteCtx = { actor?: string | null; source?: string };
+//  reason = 이 쓰기를 한 까닭(사람이 읽는 한 줄). 감사에는 싣지 않고, 외부 PM 으로 닫힘을 내보낼 때 코멘트 근거로 쓴다.
+export type WriteCtx = { actor?: string | null; source?: string; reason?: string | null };
 
 // 삭제 스냅샷(org_content_audit before)으로부터 행 재적재 — knowledge/category/project 복원 공통 골격.
 //  keyCol 로 존재검사(이미 있으면 거부=복원 대상 아님), cols 순서로 placeholder INSERT, RETURNING 으로 after 반환.

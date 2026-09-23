@@ -449,8 +449,16 @@ const projectCreateV6: Capability = {
   },
 };
 
+// 닫는 근거 — 완료/취소로 넘어가는 쓰기에서만 쓰인다(외부 PM 미러면 그 태스크에 코멘트로 남는다). 다른 전이에선 무시.
+const closeReason = z.string().max(1000).optional()
+  .describe("완료(done)·취소로 닫을 때 **왜 닫는지** 한두 문장(예: 'MR !123 머지·배포 확인'). ClickUp 에 미러된 항목이면 그 태스크에 코멘트로 남아 ClickUp 쪽 사람이 경위를 안다 — 닫을 땐 적어라.");
+const parseReason = (b: Record<string, unknown>): string | undefined => {
+  const r = b.reason == null ? "" : String(b.reason).trim();
+  return r ? r.slice(0, 1000) : undefined;
+};
+
 // status = CHECK 유효 네이티브 투영(todo|in_progress|done|active). status_raw = 리스트 커스텀 상태 키(개방 어휘, null=해제).
-const projectSetStatusV6Input = { id: z.number().int().positive(), status: z.enum(PROJECT_STATUSES), status_raw: z.string().max(120).nullable().optional() };
+const projectSetStatusV6Input = { id: z.number().int().positive(), status: z.enum(PROJECT_STATUSES), status_raw: z.string().max(120).nullable().optional(), reason: closeReason };
 type ProjectSetStatusV6Input = z.infer<z.ZodObject<typeof projectSetStatusV6Input>>;
 const projectSetStatusV6: Capability = {
   name: "project_set_status_v6",
@@ -465,11 +473,11 @@ const projectSetStatusV6: Capability = {
         const b = (req.body ?? {}) as Record<string, unknown>;
         const rawIn = b.status_raw;
         const status_raw = (rawIn == null || rawIn === "") ? null : String(rawIn).trim().slice(0, 120);
-        return { id: parseId(req.params?.id), status: parseProjectStatus(b.status), status_raw };
+        return { id: parseId(req.params?.id), status: parseProjectStatus(b.status), status_raw, reason: parseReason(b) };
       } }],
   },
   handler: async (input: ProjectSetStatusV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
-    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web", reason: input.reason ?? null };
     await assertProjectVisible(input.id, ctx);
     const project = await updateProjectStatus(input.id, input.status, writeCtx, input.status_raw ?? null);
     await regenAgents(input.id);
@@ -1200,7 +1208,7 @@ const taskCreateV6: Capability = {
   },
 };
 
-const taskSetStatusV6Input = { id: z.number().int().positive(), status: z.enum(STATUSES) };
+const taskSetStatusV6Input = { id: z.number().int().positive(), status: z.enum(STATUSES), reason: closeReason };
 type TaskSetStatusV6Input = z.infer<z.ZodObject<typeof taskSetStatusV6Input>>;
 const taskSetStatusV6: Capability = {
   name: "task_set_status_v6",
@@ -1213,12 +1221,12 @@ const taskSetStatusV6: Capability = {
     rest: [{ method: "POST", paths: ["/api/ui/v6/tasks/:id/status"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
-        return { id: parseId(req.params?.id), status: parseStatus(b.status) };
+        return { id: parseId(req.params?.id), status: parseStatus(b.status), reason: parseReason(b) };
       } }],
   },
   handler: async (input: TaskSetStatusV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
     await assertProjectVisible(input.id, ctx, "태스크");
-    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web", reason: input.reason ?? null };
     const task = await updateTaskStatus(input.id, input.status, writeCtx);
     const rootId = await rootProjectIdOfTaskNode(task);
     if (rootId) await regenAgents(rootId);  // 상태 변경 → AGENTS.md 태스크 인덱스 상태 갱신.
@@ -1246,6 +1254,7 @@ const taskUpdateV6Input = {
   due_date: z.string().nullable().optional(),
   // #1308 — 날짜가 움직였으면 depends_on 후행 체인도 같은 Δ 로 민다. 명시 opt-in(간트가 켠다).
   reschedule_dependents: z.boolean().optional(),
+  reason: closeReason,
 };
 type TaskUpdateV6Input = z.infer<z.ZodObject<typeof taskUpdateV6Input>>;
 const taskUpdateV6: Capability = {
@@ -1274,18 +1283,19 @@ const taskUpdateV6: Capability = {
         if ("start_date" in b) patch.start_date = parseDateOrNull(b.start_date);
         if ("due_date" in b) patch.due_date = parseDateOrNull(b.due_date);
         if (b.reschedule_dependents === true) patch.reschedule_dependents = true;
+        const reason = parseReason(b); if (reason) patch.reason = reason;
         return patch;
       } }],
   },
   handler: async (input: TaskUpdateV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
     await assertProjectVisible(input.id, ctx, "태스크");
-    const { id, reschedule_dependents, ...patch } = input;
+    const { id, reschedule_dependents, reason, ...patch } = input;
     // 본문은 교체(description)와 이어쓰기(append_description) 중 하나만 — 함께 오면 의도 모호(교체 후 append?)라 거부.
     if (patch.description !== undefined && patch.append_description !== undefined)
       throw new HttpError(400, "description(전체 교체)과 append_description(이어쓰기)은 함께 쓸 수 없습니다");
     if (patch.append_description !== undefined && !String(patch.append_description).trim())
       throw new HttpError(400, "append_description 는 비울 수 없습니다");
-    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web", reason: reason ?? null };
     // Δ 를 재려면 **바뀌기 전** 날짜가 필요하다 — updateTask 는 이전 행을 돌려주지 않는다(#1308).
     const before = reschedule_dependents ? await getNodeRow(id) : null;
     const task = await updateTask(id, patch, writeCtx);

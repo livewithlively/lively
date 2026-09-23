@@ -50,7 +50,7 @@ export interface RelabelResult {
 
 const TASK_HINT =
   "이 세션이 맡은 태스크입니다(프로젝트 보드에 보입니다). 요청받은 일을 끝내면(검증까지 마치고) " +
-  "`session_task {status:\"done\"}` 로 완료 처리하세요 — 같은 세션에서 후속 작업을 시작하면 `{status:\"in_progress\"}`.";
+  "`session_task {status:\"done\"}` 로 완료 처리하세요(`reason` 에 끝낸 내용 한 줄) — 같은 세션에서 후속 작업을 시작하면 `{status:\"in_progress\"}`.";
 
 /** 결과에 태스크를 얹는다 — 조회 실패는 조용히 무시(이름짓기는 실패를 만들지 않는다). */
 function withTask(r: RelabelResult, task: (SessionTask & { created: boolean }) | null): RelabelResult {

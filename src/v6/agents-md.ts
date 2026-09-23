@@ -38,7 +38,7 @@ const CLOSEOUT_SECTION = [
 const SESSION_TASK_RULE = [
   "## 세션 = 태스크",
   "이 프로젝트의 세션은 각자 **태스크 하나**를 맡는다 — 세션이 이름을 지으면 서버가 그 이름으로 만들고, 사람이 태스크에서 연 세션은 그 태스크를 맡는다.",
-  "내 세션의 태스크는 `session_task` 로 본다(번호 불필요). 요청받은 일을 끝내면(검증까지) `session_task {status:\"done\"}`, 같은 세션에서 후속 작업을 시작하면 `{status:\"in_progress\"}`.",
+  "내 세션의 태스크는 `session_task` 로 본다(번호 불필요). 요청받은 일을 끝내면(검증까지) `session_task {status:\"done\"}`(`reason` 에 끝낸 내용 한 줄 — ClickUp 미러면 코멘트로 남는다), 같은 세션에서 후속 작업을 시작하면 `{status:\"in_progress\"}`.",
 ].join("\n");
 
 // 코드 작업 진입 — 프로젝트 세션은 코드가 체크아웃되지 않은 폴더에서 뜬다(#918: 세션 생성이 워크트리를 만들지 않는다).

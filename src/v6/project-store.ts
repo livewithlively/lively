@@ -9,7 +9,7 @@ import { auditOrgContent, restoreSnapshot, type WriteCtx } from "./content-audit
 // 필요지식 추천(벡터검색 #172) — 카테고리 인지 유사 지식 회수. knowledge-store 는 project-store 를 import 안 함(무순환).
 import { findRecommendedKnowledge, type KnowledgeRecommendRow } from "./knowledge-store.js";
 // 아웃바운드 write-through(#177) — 로컬 편집을 외부 PM(ClickUp) 푸시 아웃박스에 적재. 커넥터는 project-store 우회라 루프 없음.
-import { enqueueExternalPush } from "./external-outbox.js";
+import { enqueueExternalPush, closeNoteOf } from "./external-outbox.js";
 // 프로젝트 검색(#631) — knowledge 와 동일 seam. 검색 경로의 쿼리 벡터 리터럴만 toVectorLiteral 로 만든다.
 import { toVectorLiteral } from "./embedding-provider.js";
 import { visibleListIds, listIdPredicate, type Viewer } from "./visibility.js";
@@ -582,7 +582,8 @@ export async function updateProjectStatus(id: number, status: string, ctx?: Writ
        completed_at=CASE WHEN $2='done' THEN now() ELSE NULL END, updated_at=now()
      WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status), statusRaw ?? null, rawGiven]);
   await auditProject(String(id), "set_status", before, after, ctx);
-  await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT.
+  // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT. 닫힘 전이면 근거 노트를 실어 코멘트로 남긴다.
+  await enqueueExternalPush(id, "upsert", ctx, null, closeNoteOf(before.status_category, after.status_category, ctx));
   return after;
 }
 
@@ -819,7 +820,8 @@ export async function updateTaskStatus(id: number, status: string, ctx?: WriteCt
     `UPDATE project SET status=$2, status_category=$3, completed_at=CASE WHEN $2='done' THEN now() ELSE NULL END, updated_at=now()
      WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status)]);
   await auditProject(String(id), "set_status", before, after, ctx);
-  await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT.
+  // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT. 닫힘 전이면 근거 노트를 실어 코멘트로 남긴다.
+  await enqueueExternalPush(id, "upsert", ctx, null, closeNoteOf(before.status_category, after.status_category, ctx));
   return after;
 }
 
@@ -903,7 +905,8 @@ export async function updateTask(
   // 단일 assignee 변경 시 task_assignee n:n 동기(전환기 가산 섀도 일관성).
   if (patch.assignee !== undefined) await syncTaskAssignees(id, patch.assignee ? [patch.assignee] : []);
   await auditProject(String(id), "update", before, after, ctx);
-  await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(name/desc/필드) — 드레인이 ClickUp PUT.
+  // 외부 푸시(name/desc/필드) — 드레인이 ClickUp PUT. 상태가 닫힘으로 넘어갔으면 근거 노트를 싣는다.
+  await enqueueExternalPush(id, "upsert", ctx, null, closeNoteOf(before.status_category, after.status_category, ctx));
   // 이름/설명이 '실제로 바뀐' 경우에만 재임베딩 — before↔after 값 비교(필드 존재가 아니라). 상태·담당자·기간 인라인
   //  편집이 잦아도(웹 blur 저장 등) 텍스트가 안 바뀌면 스킵 → 임베딩 부하 = 실제 텍스트 변경 수로 상한. #624/#631
   if (after.name !== before.name || (after.description ?? null) !== (before.description ?? null))
