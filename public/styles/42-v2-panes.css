@@ -24,6 +24,7 @@
 .pn-pane[data-zone="bottom"] { height: var(--pn-bottom-h); flex: none; border-top: 1px solid var(--line); }
 .pn-pane[data-zone="side"] { border-left: 1px solid var(--line); }
 .pn-pane[hidden] { display: none; }
+.pn-pane:focus { outline: none; }   /* 좁은 폭의 서랍으로 열릴 때 초점이 들어온다(tabindex -1) — 테두리는 안 그린다 */
 
 /* ── 탭 줄 — 얇게, 그러나 무엇이 켜졌는지는 분명하게(활성 탭 위 파란 마디) ──
    ★ 줄은 두 조각이다: **미끄러지는 탭 띠(.pn-tabs)** + **못 박은 손잡이(.pn-tabtail — 모두 보기·＋·접기)**.
@@ -340,6 +341,14 @@
 /* 목록 보기 — 파인더의 '목록'. 좁은 칸에선 종류 열이 먼저 접힌다. */
 .pn-flist { display: flex; flex-direction: column; gap: 1px; }
 .pn-frow2 { display: flex; align-items: center; gap: 8px; padding: 5px 7px; border: 1px solid transparent; border-radius: 7px; font-size: 12.5px; cursor: default; user-select: none; }
+/* 손가락 입구 [⋯](#4088 후속) — 우클릭 메뉴와 같은 것. hover 없는 기기에서만 보인다(50-mobile.css). 카드는 오른쪽 위, 줄은 맨 끝. */
+.pn-fcard, .pn-frow2 { position: relative; touch-action: manipulation; }
+.pn-fmore { display: none; position: absolute; top: 2px; right: 2px; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px;
+  background: var(--bg); color: var(--muted); font: inherit; font-size: 16px; line-height: 1; cursor: pointer; align-items: center; justify-content: center; }
+.pn-frow2 .pn-fmore { position: static; margin-left: auto; flex: none; }
+.pn-fmore:active { background: var(--bg-punch); color: var(--ink); }
+/* 세션 파일 칸(#4088 후속) — 우패널 탐색기(.v2-files)를 곁칸에 세운다. 머리줄은 타임라인 칸과 같은 트림. */
+.pn-sessfiles .v2-aside-h { padding: 9px 12px 8px; }
 .pn-frow2:hover { background: var(--bg-punch); }
 .pn-frow2.on { border-color: var(--blue); background: var(--bg-tint-2); }
 .pn-frow2.drop-in { border-color: var(--blue); background: var(--bg-punch); }

@@ -44,6 +44,12 @@ export interface MobileChrome {
   menuBtn: HTMLElement;
   /** 우측 서랍 여닫이([타임라인]) — 브라우저 셸은 이 단추도 창 맨 윗줄 오른쪽 끝으로 옮긴다(#4088). */
   asideBtn: HTMLElement;
+  /** 우측 서랍이 무엇인가 — 우패널(타임라인)인가, 칸 셸의 곁칸(자료·지식·타임라인)인가. 단추의 아이콘·이름이 따라 바뀐다(#4088 후속). */
+  setAsideKind(kind: 'timeline' | 'panes'): void;
+  /** 우측 서랍으로 열릴 **실제 판**(칸 셸의 곁칸) — 열 때 초점을 여기로 보낸다. null 이면 우패널(.v2-aside). */
+  setAsideTarget(target: HTMLElement | null): void;
+  /** 문턱(≤900)을 넘나들 때 — 셸이 활성 탭의 크롬(서랍 단추)을 다시 맞춘다. 돌려주는 함수로 뗀다. */
+  onChange(fn: () => void): () => void;
   /** 아래 탭 바의 켜짐을 지금 상태로 맞춘다 — 레일을 다시 그릴 때(main.ts drawSide) 함께 부른다. */
   syncTabs(): void;
   closeAll(): void;
@@ -67,8 +73,12 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   //  제목은 두지 않는다(#1954 3차 상민님) — 창 맨 윗줄은 폭이 넓든 좁든 **같은 것**이어야 한다.
   //  지금 무엇을 보고 있는지는 좌측 목록의 활성 행이 이미 말하고, 화면 제목은 본문 문패가 든다.
   const slot = el('div', { class: 'v2-mbar-slot' });
+  //  아이콘 둘 중 하나만 보인다(47-v2-rail.css): 우패널(타임라인) ↔ 칸 셸의 곁칸(폴더 — 자료가 그 서랍의 첫 탭이다, #4088 후속).
+  const tlIcon = mkIcon(['M12 4v16', 'M12 8h6', 'M12 14h6', 'M6 6h2', 'M6 12h2', 'M6 18h2']); tlIcon.classList.add('v2-mbar-ic--tl');
+  const pnIcon = mkIcon([ICONS.folder]); pnIcon.classList.add('v2-mbar-ic--pn');
   const asideBtn = el('button', { class: 'v2-mbar-btn v2-mbar-aside', type: 'button', 'aria-label': '타임라인 열기', 'aria-expanded': 'false', 'aria-controls': 'v2-aside', title: '이 화면의 타임라인' },
-    mkIcon(['M12 4v16', 'M12 8h6', 'M12 14h6', 'M6 6h2', 'M6 12h2', 'M6 18h2'])) as HTMLButtonElement;
+    tlIcon, pnIcon) as HTMLButtonElement;
+  let asideTarget: HTMLElement | null = null;
   const bar = el('div', { class: 'v2-mbar' }, menuBtn, slot, asideBtn) as HTMLElement;
   const scrim = el('div', { class: 'v2-scrim', hidden: true, 'aria-hidden': 'true' }) as HTMLElement;
   side.id = side.id || 'v2-side';
@@ -97,14 +107,14 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     open = null; sheetOpen = false; paint();
     //  [더보기] 판도 같은 규칙 — Esc 로 닫았으면 초점을 연 단추([더보기])로 돌려준다(판이 hidden 이 되면 초점이 body 로 떨어진다).
     if (!was) { if (wasSheet && returnFocus && moreBtn) moreBtn.focus({ preventScroll: true }); return; }
-    const panel = was === 'side' ? side : aside;
+    const panel = was === 'side' ? side : (asideTarget || aside);
     if (returnFocus) { (was === 'side' ? menuBtn : asideBtn).focus({ preventScroll: true }); }
     else if (panel.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
   };
   const openOne = (w: Which): void => {
     if (!isMobile()) return;
     open = w; sheetOpen = false; paint();
-    const panel = w === 'side' ? side : aside;
+    const panel = w === 'side' ? side : (asideTarget || aside);
     panel.focus({ preventScroll: true });
     // 사이드바 트리는 수백 행 — 지금 보는 행이 보이게 살짝 굴린다(열린 뒤라야 굴릴 스크롤 상자가 화면 안에 있다).
     if (w === 'side') { const on = side.querySelector<HTMLElement>('.v2-tree .on'); if (on) on.scrollIntoView({ block: 'center' }); }
@@ -210,7 +220,8 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     else if (strip.el.parentElement === slot) strip.restore();
   };
   // 창이 넓어지면(회전·리사이즈) 서랍 상태를 버린다 — 데스크톱 그리드에 m-side 가 남아 있으면 안 된다.
-  const onMq = (): void => { if (!mq.matches) closeAll(); placeStrip(); };
+  const changeFns = new Set<() => void>();
+  const onMq = (): void => { if (!mq.matches) closeAll(); placeStrip(); for (const fn of [...changeFns]) { try { fn(); } catch (_) { /* 한 구독이 넘어져도 나머지는 간다 */ } } };
   if (typeof mq.addEventListener === 'function') mq.addEventListener('change', onMq); else (mq as any).addListener(onMq);
   //  폰 문턱을 벗어나면 더보기 판도 접는다 — 탭 바가 사라지는데 판만 떠 있으면 닫을 길이 없다.
   const onPmq = (): void => { if (!pmq.matches && sheetOpen) closeAll(); };
@@ -224,6 +235,14 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
       if (!on && open === 'aside') closeAll();
     },
     openAside(): void { if (isMobile() && !asideBtn.hidden && open !== 'aside') openOne('aside'); },
+    setAsideKind(kind: 'timeline' | 'panes'): void {
+      const panes = kind === 'panes';
+      asideBtn.classList.toggle('is-panes', panes);
+      asideBtn.setAttribute('aria-label', panes ? '자료·곁칸 열기' : '타임라인 열기');
+      asideBtn.title = panes ? '이 세션의 자료·지식·타임라인' : '이 화면의 타임라인';
+    },
+    setAsideTarget(target: HTMLElement | null): void { asideTarget = target; },
+    onChange(fn: () => void): () => void { changeFns.add(fn); return () => { changeFns.delete(fn); }; },
     syncTabs(): void {
       //  구역 표가 바뀌었을 수 있다(navOn 토글) — 개수가 다르면 다시 짓는다.
       if (secBtns.size !== railSections().length) buildTabs(); else paintTabs();

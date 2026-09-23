@@ -288,6 +288,10 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 /* 데스크톱 창 맨 윗줄의 ☰ — 좁은 폭엔 ☰, 넓은 폭엔 패널 아이콘(둘 중 하나만). */
 .v2-mbar-menu .v2-mbar-ic--m { display: none; }
 @media (max-width: 900px) { .v2-mbar-menu .v2-mbar-ic--m { display: block; } .v2-mbar-menu .v2-mbar-ic--w { display: none; } }
+/* 우측 서랍 단추의 얼굴(#4088 후속) — 우패널(타임라인) ↔ 칸 셸의 곁칸(폴더: 자료가 그 서랍의 첫 탭이다). 둘 중 하나만. */
+.v2-mbar-aside .v2-mbar-ic--pn { display: none; }
+.v2-mbar-aside.is-panes .v2-mbar-ic--pn { display: block; }
+.v2-mbar-aside.is-panes .v2-mbar-ic--tl { display: none; }
 
 /* 사이드바 머리의 워크스페이스 이름 — 레일이 접혀 있을 때만(슬랙의 「HonestAI ▾」 자리). */
 .v2-side-wsn { flex: none; display: inline-flex; align-items: center; gap: 4px; max-width: 46%; margin-left: -4px; padding: 4px 6px; border: 1px solid transparent; border-radius: 7px; background: none; font: inherit; font-size: 14px; font-weight: 800; color: var(--ink); cursor: pointer; }

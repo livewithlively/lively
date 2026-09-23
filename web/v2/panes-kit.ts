@@ -246,8 +246,9 @@ export function rememberViewerPath(mem: string, slot: TabKey, path: string): voi
  *  ⚠ **어느 뷰어에 펼지는 셸이 정한다**(#762): 뷰어가 여럿 뜰 수 있게 되면서, 부르는 쪽이 고를 수 있는 것은
  *   «지금 보던 뷰어에» 인가 «새 탭에» 인가 둘뿐이다. 그 판정과 저장(rememberViewerPath)은 셸이 한다 —
  *   부르는 쪽은 탭이 몇 개인지도, 어느 것이 켜져 있는지도 모른다. */
-export function openInViewerPart(ctx: { id: number; paneRoot: () => HTMLElement }, path: string, opts?: { newTab?: boolean }): void {
+export function openInViewerPart(ctx: { id: number; paneRoot: () => HTMLElement }, path: string, opts?: { newTab?: boolean; sid?: string | null; node?: string | null }): void {
   const p = String(path || '');
   if (!p) return;
-  ctx.paneRoot().dispatchEvent(new CustomEvent(VIEWER_EVT, { detail: { id: ctx.id, path: p, newTab: !!opts?.newTab } }));
+  //  sid 가 실리면 **세션 작업 폴더의 파일**이다(#4088 후속) — 뷰어가 세션 파일 API 로 읽는다(보기·내려받기).
+  ctx.paneRoot().dispatchEvent(new CustomEvent(VIEWER_EVT, { detail: { id: ctx.id, path: p, newTab: !!opts?.newTab, sid: opts?.sid || null, node: opts?.node || null } }));
 }
