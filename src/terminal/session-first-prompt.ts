@@ -29,6 +29,8 @@ const INPUT_BOX = /\b(auto|manual|plan|accept edits|bypass permissions) mode on\
 //  · Claude Code(구): "Do you trust the files in this folder?"
 //  · Claude Code 2.1.245(현행, 실측 2026-08-25): "Quick safety check: Is this a project you created or one you trust?"
 //    + 선택지 "❯ 1. Yes, I trust this folder"
+//  · Codex 0.153.4(실측 2026-09-24): "Do you trust the contents of this directory?" + "› 1. Yes, continue / 2. No, quit"
+//    — 문안은 위 ①에 걸리지만 **커서 글자가 `›`** 라 선택지 판정(TRUST_OPTION)에 그 글자를 넣어야 눌러진다.
 //  · Antigravity: "Do you trust the contents of this project?" (실측 2026-08-18 — 종전 정규식이 못 잡아
 //    ⓐ 세션 전용 폴더인데 자동 수락이 안 됐고 ⓑ 6초 뒤 '하네스가 떴다'로 오판해 첫 지시를 대화상자에 밀어 넣었다).
 //  ⚠ 문구 하나만 알면 하네스가 문안을 바꾸는 순간 **첫 지시가 조용히 유실된다**(90초 give-up) — 실제로 그렇게 됐다
@@ -56,7 +58,9 @@ const HOLD_POLL_MS = 2_000;
 
 // 신뢰 대화상자의 **선택지 줄** — `❯ No, exit` · `  Yes, I trust this folder` · 구판 `❯ 1. Yes, …` 를 함께 잡는다.
 //  줄머리 앵커 + Yes/No 로 시작하는 것만 = 본문이 trust 를 언급하는 것만으로는 안 걸린다(TRUST_DIALOG 와 같은 교리).
-const TRUST_OPTION = /^[ \t]*([❯>])?[ \t]*(?:\d+[.)])?[ \t]*(Yes|No)\b(.*)$/i;
+//  ⚠ 커서 글자는 하네스마다 다르다 — claude `❯` · codex `›`(U+203A, 실측 2026-09-24) · 일부 판은 `>`.
+//   codex 를 안 넣었더니 선택지 두 줄을 읽고도 «커서를 못 찾았다»(null)로 떨어져, 신뢰 대화상자에서 아무것도 안 눌렀다.
+const TRUST_OPTION = /^[ \t]*([❯›>])?[ \t]*(?:\d+[.)])?[ \t]*(Yes|No)\b(.*)$/i;
 
 /**
  * 신뢰 대화상자에서 **«Yes» 까지 몇 칸 내려가야 하나** (순수) — 못 읽으면 `null`.

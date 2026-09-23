@@ -38,6 +38,26 @@ test("E2 구판 화면 — 커서가 이미 Yes 라 그대로 Enter", () => {
   assert.equal(trustAcceptDowns(V245), 0);
 });
 
+// codex 0.153.4 실측(2026-09-24, tmux 100x30 — 새 폴더에서 `codex` 를 직접 띄웠다). 커서 글자가 `›` 다.
+const CODEX = [
+  "> You are in /private/tmp/.../scratchpad/probe",
+  "Do you trust the contents of this directory? Working with untrusted contents comes with higher",
+  "risk of prompt injection. Trusting the directory allows project-local config, hooks, and exec",
+  "policies to load.",
+  "› 1. Yes, continue",
+  "  2. No, quit",
+  "Press enter to continue",
+];
+
+test("★ E2b codex 화면 — 커서(`›`)가 이미 Yes 라 그대로 Enter. 이 글자를 모르면 «커서를 못 찾았다»로 아무것도 안 눌렀다", () => {
+  assert.equal(trustAcceptDowns(CODEX), 0);
+});
+
+test("E2c codex — 커서가 «No, quit» 에 있으면 한 칸 내려가 Yes 를 고른다(판이 기본을 뒤집어도 안전)", () => {
+  assert.equal(trustAcceptDowns(["  1. Yes, continue", "› 2. No, quit"]), null, "Yes 가 커서보다 위면 모른다고 답한다");
+  assert.equal(trustAcceptDowns(["› 1. No, quit", "  2. Yes, continue"]), 1);
+});
+
 test("E3 선택지를 못 읽으면 null — 아무것도 누르지 않는다(잘못 누르는 것보다 안 누르는 게 낫다)", () => {
   assert.equal(trustAcceptDowns(["Quick safety check: Is this a project you created or one you trust?"]), null);
   assert.equal(trustAcceptDowns([]), null);

@@ -25,6 +25,7 @@ import { hereSlug, notifyAccountOf } from "../v6/notify-scope.js";
 import { roots, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, canAttach, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
 import { SESSION_STARTING_GRACE_MS } from "./sessions.js";   // #4065 — 갓 만든 세션을 «중단됨» 으로 내지 않는 창(배럴 비노출 — 모듈에서 직접)
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
+import { sessionPromptsFromTranscript } from "./session-prompts.js";   // #4135 — 💬 질문 목록의 비-claude 갈래
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";        //  하기 위한 파사드(chat-routes 대화창과 같은 관문)
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited, markSessionSuperseded, resolveSessionSuccessor, retiredSessionIds, conversationPeers, type SessionState } from "../sessions/session-state.js";   // #2231 — 복원된 옛 id 는 지우지 않고 이정표로 남긴다 · #3891 같은 대화를 도는 세션 후보
@@ -975,7 +976,13 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       res.setHeader("Cache-Control", "no-store"); res.json(out); return;
     }
     if (!(await canAttach(req.params.id, uid))) throw new HttpError(404, SESSION_NOT_FOUND);
-    const out = await sessionPrompts(await resolveSessionDir(req.params.id, () => sessionDir(req.params.id)));
+    //  #4135 — 기록의 자리는 하네스마다 다르다. claude 는 cwd 규약 폴더(그 폴더의 대화를 **전부** 합친다 — 압축 전
+    //   파일·프로필 여러 벌)라 종전 경로가 더 많이 찾고, 그 밖의 하네스는 규약이 없어 훅이 보고한 경로를 어댑터
+    //   파서로 읽는다. 종전엔 claude 경로 하나뿐이라 codex 세션의 💬 목록이 **언제나 비어 있었다**.
+    const st = await getSessionState(req.params.id).catch(() => undefined);
+    const out = (st?.harness && st.harness !== "claude")
+      ? await sessionPromptsFromTranscript(req.params.id)
+      : await sessionPrompts(await resolveSessionDir(req.params.id, () => sessionDir(req.params.id)));
     res.setHeader("Cache-Control", "no-store");
     res.json(out);
   }));
