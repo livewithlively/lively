@@ -844,7 +844,8 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const a = harnessIo(harness);
     //  harnessLabel 은 화면 **문구**용이다(«…에게 전달했어요»). 종전엔 그 자리에 '클로드' 가 박혀 있어서
     //   codex 세션에서도 클로드라고 말했다 — 사람이 어느 AI 에게 보냈는지를 화면이 틀리게 말하면 안 된다.
-    return a ? { harness: a.key, harnessLabel: a.label, termUi: termUiWire(a.term) } : {};
+    //  ⚠ 셸 세션엔 이름표를 싣지 않는다 — «이미지를 셸에게 줄 때» 같은 문장이 된다. 화면이 'AI' 로 말한다.
+    return a ? { harness: a.key, ...(a.key === "shell" ? {} : { harnessLabel: a.label }), termUi: termUiWire(a.term) } : {};
   };
   // 단일 세션의 현재 이름 — 단독 터미널 페이지가 id 로 조회(프로젝트 세션은 목록에서 빠져 ?label= 폴백만 됐던 문제 해결).
   //  접근통제: canAttach(소유자·초대된 멤버, 프로젝트 세션은 전원 #452) — 입장 가능한 사람만 이름을 읽는다.
