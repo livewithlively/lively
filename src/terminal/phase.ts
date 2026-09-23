@@ -1,6 +1,7 @@
 // 중앙 박스 — 에이전트 실행 단계(phase) 관측·판정. terminal-sessions.ts 분할(#1313 R15).
 //  두 출처가 있다: ① 하네스 훅 보고(#1221, @box_state — 주신호) ② 화면 스크래핑(스피너·capture-pane — 레거시 폴백).
 //  우선순위는 resolveAgentPhase(순수 함수)가 표로 못박는다. 활동 시각 기록(markSessionActive)도 여기(보고 수신자).
+import type { ScreenState } from "./harness-io/adapter.js";   // #4135 — 화면 판정은 하네스가 답한다(타입만: 순환 방지)
 import { touchSessionBusy } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
 import { tmux, tmuxQuiet, getOpt, setLastBusy, getPaneWait, setPaneWait } from "./tmux-exec.js";
 
@@ -77,20 +78,35 @@ const MENU_CURSOR = /^\s*[│┃|]?\s*❯\s*\d+[.)]\s/;           // 번호 선�
 //  Antigravity 는 힌트 문구가 다르다: "↑/↓ Navigate · enter Confirm"(신뢰 대화상자 실측 2026-08-18 — 종전 패턴이 못 잡아
 //  '확인 필요' 배지가 안 떴다). 커서도 '❯' 가 아니라 '>' 라 커서 패턴은 못 쓴다(셸 프롬프트와 구별 불가) — 힌트·문구로만.
 const MENU_HINT = /Enter to select|↑\/↓ to navigate|Esc to cancel|↑\/↓\s+Navigate|enter\s+Confirm/i;
+//  ⚠ main 이 먼저 더해 둔 두 문구(«Action required» · «Press enter to continue»)는 그대로 둔다 — codex 화면을
+//   휴리스틱으로도 조금 더 잡는다. 그 위에 **하네스가 답하는 길**을 얹는다(아래 screen).
 const APPROVE_PHRASE = /Do you want to |Do you trust |Would you like to proceed|Select (an|the) option|Choose an option|Action required|Press enter to continue/i;
-export function detectAwaiting(pane: string): boolean {
+/**
+ * @param screen 이 하네스가 선언한 화면 판정(#1719 계약 축 `HarnessSessionAdapter.screen`). 주면 **그것이 정본**이다.
+ *
+ *  ⚠ 아래 휴리스틱은 전부 **claude·antigravity 화면 문구**다(커서 `❯`, "Enter to select", "Do you want to …").
+ *   codex 는 커서가 `›` 이고 꼬리가 "Press enter to confirm or esc to go back" 이라 대화상자가 통째로 안 잡혔다 —
+ *   답을 기다리는 세션이 목록에서 «대기중» 으로 서고, 「지금 볼 것」 에도 안 올랐다(실측 2026-09-24, #4135).
+ *   문구를 하나씩 더하는 것으로는 판이 바뀔 때마다 또 깨진다(0.153.4 → 0.157.0 에서 신뢰 창이 다시 쓰였다).
+ *   그래서 하네스가 답할 수 있으면 **그 답을 쓴다**(codex 는 번호 메뉴 모양으로 대화상자를 잡는다).
+ *  ⚠ 함수를 **받는다**(하네스 키가 아니라) — 이 모듈은 send-keys 가 import 하고 어댑터 표는 send-keys 의 타입을
+ *   import 한다. 표를 여기서 직접 부르면 순환이 된다. 판정의 출처는 그대로 한 곳(어댑터)이다.
+ */
+export function detectAwaiting(pane: string, screen?: ((tail: string[]) => ScreenState | null) | null): boolean {
   const lines = pane.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim() !== "");
   const tail = lines.slice(-TAIL_LINES);
+  const declared = screen ? screen(tail) : null;
+  if (declared) return declared === "dialog";               // 하네스가 답했다 — 추측하지 않는다
   if (tail.some((l) => INPUT_BOX.test(l))) return false;    // 입력창이 떠 있다 = 모달 없음 = 대기 아님
   const tailText = tail.join("\n");
   return tail.some((l) => MENU_CURSOR.test(l)) || MENU_HINT.test(tailText) || APPROVE_PHRASE.test(tailText);
 }
-export async function paneAwaitingInput(sessionId: string): Promise<boolean> {
+export async function paneAwaitingInput(sessionId: string, screen?: ((tail: string[]) => ScreenState | null) | null): Promise<boolean> {
   const now = Date.now();
   const c = getPaneWait(sessionId);
   if (c && now - c.at < 2500) return c.waiting;
   let waiting = false;
-  try { waiting = detectAwaiting(await tmux(["capture-pane", "-t", sessionId, "-p"])); } catch { /* 무시 → idle 취급 */ }
+  try { waiting = detectAwaiting(await tmux(["capture-pane", "-t", sessionId, "-p"]), screen); } catch { /* 무시 → idle 취급 */ }
   setPaneWait(sessionId, { at: now, waiting });
   return waiting;
 }

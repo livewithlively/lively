@@ -45,6 +45,7 @@ import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWrit
 //   미리 발급·추출해 실어 보낸 것(input.appSession)을 쓰므로 이 경로에 오지 않는다.
 import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, paneLaunchArgv, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
+import { harnessIo } from "./harness-io/adapter.js";   // #4135 — 이 하네스의 화면 판정(확인 필요)
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
 import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
 import { sessionActivityTitle, paneAwaitingInput, resolveAgentPhase, observeAgentRun, harnessReportsBusy, parseReportedPhase } from "./phase.js";
@@ -394,7 +395,10 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
   //   폴링당 tmux 호출이 줄어든다(스크래핑 은퇴의 실질적 첫 단계).
   const waitingIds = new Set<string>();
   const needScrape = rows.filter((r) => !r.offline && !r.busy && r.reportedFresh?.phase !== "busy" && r.reportedFresh?.phase !== "waiting");
-  await Promise.all(needScrape.map(async (r) => { if (await paneAwaitingInput(r.name)) waitingIds.add(r.name); }));
+  //  #4135 — 화면 문구는 하네스마다 다르다. 그 하네스가 답할 수 있으면(어댑터 screen) 그 답을 쓰고, 못 하면
+  //   종전 휴리스틱(claude·antigravity 문구)으로 떨어진다. 종전엔 codex 의 훅 검토·업데이트 대화상자가 안 잡혀
+  //   «답을 기다리는 세션» 이 목록에서 대기중으로 섰다.
+  await Promise.all(needScrape.map(async (r) => { if (await paneAwaitingInput(r.name, harnessIo(r.harness)?.screen)) waitingIds.add(r.name); }));
   const sessions: SessionInfo[] = [];
   for (const r of rows) {
     const flags = r.flags as Record<string, string>;   // desired 해소 단계에서 이미 디코드됐다
