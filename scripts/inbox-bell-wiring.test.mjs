@@ -60,3 +60,8 @@ ok(/maybeNotifyLivAnswer\(/.test(ROUTES.slice(ROUTES.indexOf("const notifyPhaseC
 ok(/dir: st\.dir/.test(ROUTES), "④e 중앙 보고 경로는 작업 폴더를 넘긴다(리브 판정의 정본)");
 
 console.log(`\ninbox-bell-wiring: ${pass} passed`);
+
+// ⑤ replaceChildren 에 null 을 넘기면 «"null"» 글자가 그려진다(el() 과 다르다) — 매니지드 실측(2026-09-23)에서 안 읽음 0 일 때
+//    팝오버 머리에 «null» 이 찍혔다. 머리 단추 묶음은 걸러서(filter) 넘겨야 한다.
+ok(/head\.replaceChildren\(\.\.\.headKids\.filter\(/.test(BELL), "⑤ 종 팝오버 머리 — 없는 단추(null)를 걸러서 replaceChildren 에 넘긴다");
+console.log(`inbox-bell-wiring(+⑤): ${pass} passed`);
