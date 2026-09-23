@@ -141,7 +141,8 @@ test("배선 — web.ts 가 스트림에 실제 판정(resolveNotifyRoutes)을 �
 
 test("배선 — 훅 보고의 발행이 «워크스페이스 + 사람 + (있으면) 계정» 으로 나간다", () => {
   const src = readFileSync(new URL("../../src/terminal/routes.ts", import.meta.url), "utf8");
-  const body = /const notifyPhaseChange = async[\s\S]{0,900}?\n  \};/.exec(src)?.[0] ?? "";
+  //  #4180 — 이 함수가 리브 답 알림(maybeNotifyLivAnswer)까지 품어 900자를 넘었다. 창을 넓혀 함수 끝까지 본다.
+  const body = /const notifyPhaseChange = async[\s\S]{0,1800}?\n  \};/.exec(src)?.[0] ?? "";
   assert.ok(body, "notifyPhaseChange 를 못 찾았다");
   assert.match(body, /publishNotify\(\{ ws: hereSlug\(\), member: owner, account \}/, "발행 주소에 워크스페이스가 빠지면 다른 워크스페이스 스트림으로 샌다");
   assert.match(body, /accountRoutesActive\(\) \? await notifyAccountOf\(owner\) : null/, "계정 조회는 계정으로 받는 스트림이 있을 때만(핫패스)");
