@@ -11,7 +11,7 @@ import type { Part, PartCtx } from './panes-parts.js';
 
 export function sessFilesPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-sessfiles' });
-  let cur: { sid: string; h: FilesHandle } | null = null;
+  let cur: { sid: string; node: string | null; h: FilesHandle } | null = null;
   const empty = el('div', { class: 'pn-empty' },
     pnIcon('folder', 'pn-i big'),
     el('b', { text: '아직 보고 있는 세션이 없어요.' }),
@@ -23,16 +23,18 @@ export function sessFilesPart(ctx: PartCtx): Part {
   };
   function paint(): void {
     const sid = ctx.curSession();
-    if (cur && cur.sid === sid) return;                 // 같은 세션 — 8초 틱마다 다시 세우면 보던 폴더가 튄다
+    const node = sid ? nodeOf(sid) : null;
+    //  같은 세션·같은 노드 — 8초 틱마다 다시 세우면 보던 폴더가 튄다. 노드 좌표가 **늦게** 온 판(방금 만든 세션의 낙관 행,
+    //   main.ts onSessionCreated)은 node 가 null → 값으로 바뀌므로 그때 한 번 다시 세운다(안 그러면 게이트웨이 fs 를 뒤져 404).
+    if (cur && cur.sid === sid && cur.node === node) return;
     if (cur) { cur.h.destroy(); cur = null; }
     root.replaceChildren();
     if (!sid) { root.append(empty); return; }
-    const node = nodeOf(sid);
     const h = createSessionFiles(root, {
       sessionId: sid, node,
       onOpenFile: (rel) => { openInViewerPart(ctx, rel, { sid, node }); return true; },
     });
-    cur = { sid, h };
+    cur = { sid, node, h };
   }
   const off = ctx.onSession(() => paint());
   paint();

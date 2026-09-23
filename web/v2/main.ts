@@ -665,9 +665,8 @@ async function syncShell(): Promise<void> {
     //  '상단바만 남의 세션'인 화면을 다시 만든다(상민님 신고 2026-08-20).
     if (s && t.chat.id === s.id) { t.chat.update({ ...s, projectName: projName(data, s.projectId) });
       // 우측 '이 세션'도 — 프로젝트 드롭다운(#1749)은 body 팝오버라 우측을 되그려도 안 닫힌다.
-      //  ⚠ 칸 셸(프로젝트·세션 화면)은 우패널이 **없다**(mountProjectShell 이 비운다 — 맥락은 곁칸에 산다). 여기서 되그리면
-      //   빈 우패널에 타임라인이 다시 서고, 폰에선 그 판이 곁칸 서랍을 덮었다(2026-09-23 실측: 4초 뒤 서랍 위에 발자취).
-      if (!projViews.has(t)) drawAsideSession(t, s); }
+      //  (칸 셸 탭이면 drawAsideSession 이 스스로 물러난다 — 판정은 그 함수 한 자리.)
+      drawAsideSession(t, s); }
   }
 }
 
@@ -2302,6 +2301,10 @@ function toggleAsideFiles(tab: ShellTab, id: string): boolean {
   return !!host.__filesOn;
 }
 function drawAsideSession(tab: ShellTab, s: Sess | null): TimelineHandle | null {
+  //  ⚠ 칸 셸(프로젝트·세션 화면) 탭은 우패널이 **없다**(mountProjectShell 이 비운다 — 맥락은 곁칸에 산다). 여기서 되그리면
+  //   빈 우패널에 발자취가 다시 서고, 폰에선 그 판이 곁칸 서랍을 덮는다(2026-09-23 실측: 목록 갱신 4초 뒤 · 이름 바꾸기 ·
+  //   프로젝트 옮기기 세 길 모두). 판정은 부르는 쪽마다가 아니라 **여기 한 자리**에서 — 세 길이 같은 함수를 부른다(격리 리뷰 지적).
+  if (projViews.has(tab)) return null;
   const host = tab.aside as AsideHost;
   if (!s) { host.__trail = undefined; dropAsideFiles(host); dropAsideGuest(host); host.replaceChildren(el('p', { class: 'v2-empty', text: '세션 정보를 찾을 수 없어요.' })); return null; }
   const raw = s.raw || {};
