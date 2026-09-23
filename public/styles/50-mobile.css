@@ -238,5 +238,36 @@
   /* 로그인 문 — 카드 여백 */
   #gate { padding: 16px; }
   .gate-card { padding: 24px 20px; }
+
+  /* ── 8. 세션 → 자료 (#4088 후속, 2026-09-23) — 서랍 안의 곁칸을 손가락 크기로 ────────────── */
+  /* 탭 줄·손잡이 — 40px 줄, 단추는 36px 넓이(데스크톱 30px). */
+  .pn-tabbar { height: 41px; }
+  .pn-tab { height: 40px; font-size: 13.5px; }
+  .pn-tab-x { width: 28px; height: 40px; }
+  .pn-tab-add, .pn-pane-hide, .pn-tab-more { width: 36px; height: 40px; }
+  /* 자료 칸 머리 — 단추 36px, 크기 슬라이더는 뺀다(62px 슬라이더는 손가락으로 못 잡는다 — 보기·정렬은 남는다). */
+  .pn-fbtn { height: 36px; min-width: 36px; font-size: 13px; }
+  .pn-ftools .btn-text { min-height: 36px; }
+  .pn-fcrumb { padding: 6px 8px; font-size: 14px; max-width: 160px; }
+  .pn-fsize { display: none; }
+  .pn-ffind { height: 36px; font-size: 16px; }   /* 16px — iOS 가 입력칸에서 확대하지 않는 하한 */
+  /* 뷰어 막대 — [← 자료]·다시 불러오기·내려받기 36px. */
+  .pn-web-btn { height: 36px; min-width: 36px; }
+  .pn-web-btn.ic { width: 36px; }
+  .pn-ed-find { height: 36px; font-size: 16px; }
+  /* 타임라인 산출물 줄·세션 파일 줄 — 44px 손가락 줄. */
+  .tl-out { min-height: 44px; }
+  .fx-open { min-height: 44px; font-size: 14px; }
+  .fx-act { width: 36px; height: 36px; }
+  .fx-hbtn { min-height: 36px; min-width: 36px; }
+  /* 우클릭 메뉴(= [⋯]) 줄 */
+  .pn-ctx-i { padding: 10px 12px; font-size: 14px; }
+}
+
+/* ── hover 가 없는 기기(손가락) — 손을 얹어야 보이던 단추를 늘 보인다(#4088 후속). 폭이 아니라 포인터로 가른다. ── */
+@media (hover: none) {
+  .pn-fmore { display: inline-flex; }
+  .fx-acts { opacity: 1; }
+  .pn-arow-x { opacity: 1; }
 }
 @keyframes cxm-flow-v { from { background-position: 0 0; } to { background-position: 0 22px; } }
