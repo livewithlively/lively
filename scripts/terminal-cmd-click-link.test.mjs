@@ -171,6 +171,25 @@ t("D3 ★ Claude 3행(가운데 행 통째 URL) — 셋째 행을 눌러도 전�
   assert.equal(urlAtCell(rows, NO(7), 4, 5, 70), GOV);
   assert.equal(urlAtCell(rows, NO(7), 3, 40, 70), GOV);
 });
+// ★ #4135 — codex 도 **제 손으로** 줄을 끊는다(실측 2026-09-24, 0.153.4 · tmux 100칸):
+//   사람이 보낸 말의 에코는 들여쓰기 2칸으로 하드랩되고(capture-pane -J 로도 안 이어진다 = isWrapped 아님),
+//   어시스턴트 출력은 터미널 자동 줄바꿈(soft)이었다. 두 규칙이 그대로 통하는지 실측 모양으로 못박는다.
+t("D3b ★ codex 하드랩(들여쓰기 2 · 앞 행 폭 꽉) — 어느 행을 눌러도 전체 URL", () => {
+  const U = "https://developer.apple.com/documentation/xcode/configuring-the-build-settings-of-a-target/really-long-path-segment-for-wrap-test-0123456789abcdef";
+  const rows = claudeWrap(U, 100);   // codex 가 실제로 낸 모양과 같다(폭 100, 들여쓰기 2)
+  assert.equal(rows.length, 2);
+  assert.equal(urlAtCell(rows, NO(2), 0, 10, 100), U, "첫 행 조각만 열리면 잘린 주소를 연다");
+  assert.equal(urlAtCell(rows, NO(2), 1, 20, 100), U, "이어진 행에서도 전체 주소");
+});
+t("D3c ★ codex 어시스턴트 출력의 소프트랩(isWrapped) — 종전 규칙 그대로 이어진다", () => {
+  const U = "https://developer.apple.com/documentation/xcode/configuring-the-build-settings/really-long-path-0123456789abcdef";
+  const full = "• " + U;                       // 실측 모양: 어시스턴트 줄은 불릿 뒤에 그대로 이어진다
+  const rows = [full.slice(0, 100), full.slice(100)];
+  assert.ok(rows[1].length > 0, "시험 데이터가 폭을 안 넘는다(그러면 아무것도 안 잰다)");
+  assert.equal(urlAtCell(rows, [false, true], 1, 3, 100), U, "이어진 행에서도 전체 주소");
+  assert.equal(urlAtCell(rows, [false, true], 0, 10, 100), U, "첫 행에서도 전체 주소");
+});
+
 t("D4 괄호로 감싼 (https://…) 가 쪼개져도 괄호 뺀 URL", () => {
   const rows = claudeWrap("(" + GOV + ")", 90);
   assert.equal(urlAtCell(rows, NO(rows.length), rows.length - 1, 3, 90), GOV);

@@ -151,7 +151,8 @@ t("[E16] 다른 말이면 둘 다 보인다(접기는 «같은 글이 연달아 
 });
 
 t("[E17] 실측 rollout 파일 한 벌 — 사람이 친 말만 순서대로 나온다", () => {
-  const raw = readFileSync(new URL("../__fixtures__/codex-rollout-prompts.jsonl", import.meta.url), "utf8");
+  //  실측 원문은 src 에만 있다(빌드가 dist 로 안 옮긴다) — 다른 fixture 시험과 같은 규약으로 되짚는다.
+  const raw = readFileSync(new URL("../__fixtures__/codex-rollout-prompts.jsonl", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
   const { lines } = parseCodex(raw, {});
   const users = lines.filter((l) => l.type === "user").map((l) => String((l as ChatUserLine).message.content));
   //  이 파일엔 사람 말 3건 + AGENTS.md 주입 1건이 같은 채널(role=user)로 섞여 있다 — 주입만 빠진다.
