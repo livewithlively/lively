@@ -303,7 +303,7 @@ try {
   const outbox = src("v6/external-outbox.ts");
   assert.match(outbox, /close_note=COALESCE\(EXCLUDED\.close_note, external_outbox\.close_note\)/, "합쳐지는 후속 편집이 닫힘 노트를 지우면 안 된다");
   const push = src("connectors/clickup-push.ts");
-  assert.match(push, /SELECT id, entity_id, op, ext_id_snapshot, close_note FROM external_outbox/, "드레인이 close_note 를 읽지 않는다");
+  assert.match(push, /SELECT [^`]*\bclose_note\b[^`]*FROM external_outbox/, "드레인이 close_note 를 읽지 않는다");
   // 상태가 ClickUp 에 실제로 실렸을 때만(statusApplied) — 상태 없이 PUT 이 성공한 경우 «닫았다» 코멘트는 거짓이 된다.
   assert.match(push, /if \(ob\.close_note && statusApplied\) await postCloseComment\(p, p\.external_id, ob\.close_note\)/, "update 경로 코멘트가 상태 반영 여부를 안 본다");
   assert.match(push, /if \(ob\.close_note && statusApplied\) await postCloseComment\(p, ct\.id, ob\.close_note\)/, "create 경로 코멘트가 상태 반영 여부를 안 본다");
