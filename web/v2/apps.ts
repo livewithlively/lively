@@ -210,15 +210,20 @@ export function openLaunchpad(): void {
     if (first) { e.preventDefault(); first.click(); }
   });
   void listSessionApps().then((a) => { if (padEl) { sApps = a; draw(); } });
-  // 검색칸 하나만 띄운다(맥 스포트라이트) — 제목·설명 줄·닫기 버튼은 없앴다.
-  //  닫기는 Esc 와 배경 클릭이 이미 하고, 칸 오른쪽 esc 키캡이 그걸 알린다.
-  padEl = el('div', { class: 'v2-pad', role: 'dialog', 'aria-label': '앱 찾기', onclick: (e) => { if (e.target === padEl) closeLaunchpad(); } },
-    el('div', { class: 'v2-pad-field' },
-      sv('svg', { class: 'v2-pad-mag', viewBox: '0 0 24 24', 'aria-hidden': 'true' },
-        sv('circle', { cx: '11', cy: '11', r: '6.75' }),
-        sv('path', { d: 'M16.1 16.1 21 21' })),
-      input,
-      el('kbd', { class: 'v2-pad-esc', text: 'esc' })),
+  // 검색칸 하나만 띄운다(맥 스포트라이트) — 제목·설명 줄은 없앴다.
+  //  데스크톱의 닫기는 Esc 와 배경 클릭이고, 칸 오른쪽 esc 키캡이 그걸 알린다.
+  //  ⚠ 폰·태블릿엔 Esc 가 없고 격자가 화면을 거의 다 덮어 «배경» 을 누를 자리도 없다 — 나갈 길이 없었다(#4230).
+  //   그래서 칸 오른쪽에 [취소](아이폰 스포트라이트와 같은 자리)를 두고, 터치 화면에서만 세운다(40-v2.css).
+  //   격자의 빈칸(항목 사이·마지막 줄 뒤)을 누르는 것도 배경을 누른 것으로 친다.
+  padEl = el('div', { class: 'v2-pad', role: 'dialog', 'aria-label': '앱 찾기', onclick: (e) => { if (e.target === padEl || e.target === grid) closeLaunchpad(); } },
+    el('div', { class: 'v2-pad-top' },
+      el('div', { class: 'v2-pad-field' },
+        sv('svg', { class: 'v2-pad-mag', viewBox: '0 0 24 24', 'aria-hidden': 'true' },
+          sv('circle', { cx: '11', cy: '11', r: '6.75' }),
+          sv('path', { d: 'M16.1 16.1 21 21' })),
+        input,
+        el('kbd', { class: 'v2-pad-esc', text: 'esc' })),
+      el('button', { class: 'v2-pad-cancel', type: 'button', text: '취소', 'aria-label': '앱 찾기 닫기', onclick: () => closeLaunchpad() })),
     grid);
   document.body.append(padEl as HTMLElement); draw(); input.focus();
   document.addEventListener('keydown', padKey);
