@@ -170,7 +170,7 @@ assert.strictEqual(
   "reason 이 recentActivity 보다 우선",
 );
 
-// ── 처리자행: actorName 우선, note.actor 폴백, mcp 접미, 부재시 생략 ──
+// ── 처리자행: 표시 이름(actorName)만 쓴다 — 내부 member id(note.actor)는 외부로 안 나간다. mcp 접미, 부재시 생략 ──
 {
   const text = closeCommentText({ ...noteDoneBase, actor: "noteActor" }, { actorName: "optName" });
   assert.ok(text.includes("처리: optName"), "actorName 이 note.actor 보다 우선");
@@ -178,10 +178,10 @@ assert.strictEqual(
 }
 {
   const text = closeCommentText({ ...noteDoneBase, actor: "noteActor2" });
-  assert.ok(text.includes("처리: noteActor2"), "actorName 없으면 note.actor 사용");
+  assert.ok(!text.includes("noteActor2") && !text.includes("처리:"), "표시 이름이 없으면 member id 를 내보내지 않고 처리행을 뺀다");
 }
 {
-  const text = closeCommentText({ ...noteDoneBase, actor: "a", source: "mcp" });
+  const text = closeCommentText({ ...noteDoneBase, actor: "a", source: "mcp" }, { actorName: "a" });
   const line = text.split("\n").find((l) => l.startsWith("처리:"));
   assert.strictEqual(line, "처리: a (AI 에이전트)", "source=mcp 면 접미사 추가");
 }
@@ -191,7 +191,7 @@ assert.strictEqual(
   assert.strictEqual(line, "처리: optA (AI 에이전트)", "접미사는 note.source 기준, 이름은 actorName 기준");
 }
 {
-  const text = closeCommentText({ ...noteDoneBase, actor: "a", source: "web" });
+  const text = closeCommentText({ ...noteDoneBase, actor: "a", source: "web" }, { actorName: "a" });
   const line = text.split("\n").find((l) => l.startsWith("처리:"));
   assert.strictEqual(line, "처리: a", "source!==mcp 면 접미사 없음");
 }
@@ -219,11 +219,11 @@ assert.strictEqual(
   const note: CloseNote = {
     category: "done",
     reason: "정산 완료 확인함",
-    actor: "찰스",
+    actor: "member-id-1",
     source: "mcp",
     at: "2026-01-01T00:00:00.000Z",
   };
-  const text = closeCommentText(note, { deepLink: "http://host/#/k/foo" });
+  const text = closeCommentText(note, { actorName: "찰스", deepLink: "http://host/#/k/foo" });
   const expected = [
     "[라이블리] 이 작업을 완료 처리했습니다.",
     "근거: 정산 완료 확인함",
@@ -304,8 +304,11 @@ try {
   assert.match(outbox, /close_note=COALESCE\(EXCLUDED\.close_note, external_outbox\.close_note\)/, "합쳐지는 후속 편집이 닫힘 노트를 지우면 안 된다");
   const push = src("connectors/clickup-push.ts");
   assert.match(push, /SELECT id, entity_id, op, ext_id_snapshot, close_note FROM external_outbox/, "드레인이 close_note 를 읽지 않는다");
-  assert.match(push, /if \(ob\.close_note\) await postCloseComment\(p, p\.external_id, ob\.close_note\)/, "update 경로 코멘트 호출이 없다");
-  assert.match(push, /if \(ob\.close_note\) await postCloseComment\(p, ct\.id, ob\.close_note\)/, "create 경로 코멘트 호출이 없다");
+  // 상태가 ClickUp 에 실제로 실렸을 때만(statusApplied) — 상태 없이 PUT 이 성공한 경우 «닫았다» 코멘트는 거짓이 된다.
+  assert.match(push, /if \(ob\.close_note && statusApplied\) await postCloseComment\(p, p\.external_id, ob\.close_note\)/, "update 경로 코멘트가 상태 반영 여부를 안 본다");
+  assert.match(push, /if \(ob\.close_note && statusApplied\) await postCloseComment\(p, ct\.id, ob\.close_note\)/, "create 경로 코멘트가 상태 반영 여부를 안 본다");
+  assert.equal((push.match(/statusApplied: false/g) || []).length, 2, "status 를 빼고 재시도한 경로(create·update)는 statusApplied=false 여야 한다");
+  assert.equal((push.match(/statusApplied: body\.status != null/g) || []).length, 2, "status 를 안 실은 PUT(상태셋 미해소)은 statusApplied=false 여야 한다");
   assert.match(push, /if \(!p\.status_category \|\| !CLOSED_CATEGORIES\.has\(p\.status_category\)\) return;/, "드레인 전에 다시 연 항목에 코멘트하면 안 된다");
 }
 

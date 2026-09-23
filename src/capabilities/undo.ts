@@ -47,8 +47,10 @@ const PROJECT_OPS: Record<string, Apply> = {
   set_status: async (r, d, ctx) => {
     const s = rec(d === "before" ? r.before : r.after);
     const id = Number(r.entity_key);
-    if (isTaskLevel(s)) await updateTaskStatus(id, String(s.status), ctx);
-    else await updateProjectStatus(id, String(s.status), ctx, s.status_raw ?? null);
+    // 되돌리기로 다시 닫히면 외부 PM 에 닫힘 근거 코멘트가 나간다 — 까닭이 비지 않게 적어 둔다.
+    const why = { ...ctx, reason: "라이블리에서 직전 상태 변경을 실행 취소했습니다" };
+    if (isTaskLevel(s)) await updateTaskStatus(id, String(s.status), why);
+    else await updateProjectStatus(id, String(s.status), why, s.status_raw ?? null);
   },
   update: async (r, d, ctx) => {
     const s = rec(d === "before" ? r.before : r.after);

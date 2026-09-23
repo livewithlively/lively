@@ -9,8 +9,7 @@ import { auditOrgContent, restoreSnapshot, type WriteCtx } from "./content-audit
 // 필요지식 추천(벡터검색 #172) — 카테고리 인지 유사 지식 회수. knowledge-store 는 project-store 를 import 안 함(무순환).
 import { findRecommendedKnowledge, type KnowledgeRecommendRow } from "./knowledge-store.js";
 // 아웃바운드 write-through(#177) — 로컬 편집을 외부 PM(ClickUp) 푸시 아웃박스에 적재. 커넥터는 project-store 우회라 루프 없음.
-import { enqueueExternalPush } from "./external-outbox.js";
-import { closeNoteOf } from "../connectors/clickup/close-comment.js";
+import { enqueueExternalPush, closeNoteOf } from "./external-outbox.js";
 // 프로젝트 검색(#631) — knowledge 와 동일 seam. 검색 경로의 쿼리 벡터 리터럴만 toVectorLiteral 로 만든다.
 import { toVectorLiteral } from "./embedding-provider.js";
 import { visibleListIds, listIdPredicate, type Viewer } from "./visibility.js";

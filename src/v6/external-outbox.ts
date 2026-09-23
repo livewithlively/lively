@@ -6,9 +6,41 @@
 import { itemsPool } from "../db/client.js";
 import type { WriteCtx } from "./content-audit.js";
 import { logger } from "../log.js";
-import type { CloseNote } from "../connectors/clickup/close-comment.js";
 
 export type OutboxOp = "upsert" | "delete";
+
+// 닫힘 근거 노트 — 닫힘은 쓰는 순간에만 before→after 로 판정된다(드레인은 합쳐진 현재 행만 봐서 «방금 닫혔나»를 모른다).
+//  그래서 쓰는 쪽이 노트를 행에 싣고, 드레인이 외부 PM 에 상태를 반영한 뒤 코멘트로 보낸다.
+export const CLOSED_CATEGORIES: ReadonlySet<string> = new Set(["done", "canceled"]);
+const REASON_MAX = 1000;
+
+export interface CloseNote {
+  category: "done" | "canceled";
+  reason: string | null;
+  actor: string | null;
+  source: string | null;
+  at: string;
+}
+
+/** 열린 상태 → 닫힌 상태로 **넘어가는** 쓰기일 때만 노트를 만든다. 닫힌 것끼리의 이동(done↔canceled 포함)·재저장은 null. */
+export function closeNoteOf(
+  beforeCategory: string | null | undefined,
+  afterCategory: string | null | undefined,
+  ctx?: WriteCtx,
+  at: Date = new Date(),
+): CloseNote | null {
+  if (!afterCategory || !CLOSED_CATEGORIES.has(afterCategory)) return null;
+  if (beforeCategory && CLOSED_CATEGORIES.has(beforeCategory)) return null;
+  const reason = (ctx?.reason ?? "").trim();
+  return {
+    category: afterCategory as CloseNote["category"],
+    reason: reason ? reason.slice(0, REASON_MAX) : null,
+    actor: ctx?.actor ?? null,
+    source: ctx?.source ?? null,
+    at: at.toISOString(),
+  };
+}
+
 
 // 외부 푸시 아웃박스에 적재(best-effort — 적재 실패가 본 쓰기를 깨면 안 됨; 다음 편집/백필이 수렴).
 //  op='delete' 는 ext_id_snapshot(삭제 전 external_id)을 실어 행 삭제 후에도 외부 삭제 가능.
