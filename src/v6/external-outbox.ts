@@ -6,6 +6,7 @@
 import { itemsPool } from "../db/client.js";
 import type { WriteCtx } from "./content-audit.js";
 import { logger } from "../log.js";
+import type { CloseNote } from "../connectors/clickup/close-comment.js";
 
 export type OutboxOp = "upsert" | "delete";
 
@@ -16,17 +17,21 @@ export async function enqueueExternalPush(
   op: OutboxOp,
   ctx?: WriteCtx,
   extIdSnapshot?: string | null,
+  closeNote?: CloseNote | null,
 ): Promise<void> {
   if (ctx?.source === "connector") return; // 인바운드 미러 쓰기는 푸시 안 함(루프 차단).
   try {
     await itemsPool.query(
-      `INSERT INTO external_outbox(entity_id, system, op, ext_id_snapshot)
-       VALUES($1,'clickup',$2,$3)
+      // close_note 는 COALESCE — 닫은 뒤 이름만 고친 편집이 합쳐져도 닫힘 근거가 지워지지 않는다.
+      //  닫았다 다시 연 경우는 노트가 남지만 드레인이 현재 상태(닫힘인가)를 다시 보고 코멘트를 건너뛴다.
+      `INSERT INTO external_outbox(entity_id, system, op, ext_id_snapshot, close_note)
+       VALUES($1,'clickup',$2,$3,$4::jsonb)
        ON CONFLICT (tenant_id, system, entity_id) WHERE done_at IS NULL
        DO UPDATE SET op=EXCLUDED.op,
          ext_id_snapshot=COALESCE(EXCLUDED.ext_id_snapshot, external_outbox.ext_id_snapshot),
+         close_note=COALESCE(EXCLUDED.close_note, external_outbox.close_note),
          updated_at=now(), attempts=0, last_error=NULL`,
-      [entityId, op, extIdSnapshot ?? null],
+      [entityId, op, extIdSnapshot ?? null, closeNote ? JSON.stringify(closeNote) : null],
     );
   } catch (e) {
     logger.warn({ err: e, entityId, op }, "external_outbox enqueue 실패(무시 — 본 쓰기는 성공)");

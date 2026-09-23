@@ -2932,7 +2932,7 @@
   "rest": [
    "POST /api/ui/v6/projects/:id/status"
   ],
-  "input_hash": "27e5ef225edfec2d"
+  "input_hash": "270fe2e08338de6c"
  },
  {
   "name": "project_archive_v6",
@@ -3062,7 +3062,7 @@
   "rest": [
    "POST /api/ui/v6/tasks/:id/status"
   ],
-  "input_hash": "12fe6034a0f13338"
+  "input_hash": "3535aab13dd78b65"
  },
  {
   "name": "task_update_v6",
@@ -3072,7 +3072,7 @@
   "rest": [
    "POST /api/ui/v6/tasks/:id"
   ],
-  "input_hash": "c18c9554b868dc72"
+  "input_hash": "21f4ffa80774e0d1"
  },
  {
   "name": "task_reorder_v6",
@@ -3922,7 +3922,7 @@
   "rest": [
    "POST /api/ui/terminal/sessions/:id/task"
   ],
-  "input_hash": "f002ac84267737ac"
+  "input_hash": "2372c95e842abd74"
  },
  {
   "name": "preview_env_list",
