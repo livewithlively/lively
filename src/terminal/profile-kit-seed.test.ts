@@ -64,6 +64,7 @@ function fakeKit(mode: FakeMode, opts: { cliMissing?: boolean } = {}) {
   const calls: RunCall[] = [];
   const deps: ProfileSeedDeps = {
     cli,
+    retryAfterMs: 0,   // 사양 A2 의 «다음 호출이 다시 시도» 는 백오프 밖의 이야기 — 백오프 자체는 A3 가 따로 본다
     run: (cmd, args, env, timeoutMs) => {
       calls.push({ cmd, args, env, timeoutMs });
       if (mode.throwsSync) throw new Error("설치기 동기 예외");
@@ -309,4 +310,50 @@ test("A2-8 다른 dir 는 서로 묶이지 않는다 — 동시에 불려도 dir
   assert.equal(b.calls.length, 1, "b");
   assert.equal(a.calls[0]!.env.CLAUDE_CONFIG_DIR, a.profileDir);
   assert.equal(b.calls[0]!.env.CLAUDE_CONFIG_DIR, b.profileDir);
+});
+
+// ── A3 — 상한·백오프(리뷰 지적: 설치기가 매달리면 세션 생성이 같이 매달리고, 늘 실패하는 노드는 매 세션 상한까지 기다린다) ──
+test("A3-1 설치기가 상한 안에 안 끝나면 포기하고 false — run 이 영영 settle 하지 않아도 호출자는 상한(+여유) 안에 풀린다", async () => {
+  const k = fakeKit({ writes: "wired" });
+  k.deps.timeoutMs = 40;
+  k.deps.run = (cmd, args, env, timeoutMs) => { k.calls.push({ cmd, args, env, timeoutMs }); return new Promise<void>(() => { /* 영영 */ }); };
+  const t0 = Date.now();
+  assert.equal(await ensureProfileKitWired(k.profileDir, k.deps), false);
+  assert.ok(Date.now() - t0 < 5_000, `상한 안에 풀리지 않았다: ${Date.now() - t0}ms`);
+  assert.equal(k.calls[0]!.timeoutMs, 40, "run 에 넘기는 상한도 deps.timeoutMs 다");
+});
+
+test("A3-2 기본 run 은 매달린 자식을 상한에서 죽이고 거부한다(execFile 의 stdio-close 대기가 아니라 exit 기준)", async () => {
+  const run = defaultProfileSeedDeps().run;
+  const t0 = Date.now();
+  await assert.rejects(run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], process.env, 300));
+  assert.ok(Date.now() - t0 < 5_000, `죽이는 데 너무 오래 걸렸다: ${Date.now() - t0}ms`);
+  // 정상 종료는 resolve, 비정상 종료는 reject
+  await run(process.execPath, ["-e", "process.exit(0)"], process.env, 5_000);
+  await assert.rejects(run(process.execPath, ["-e", "process.exit(3)"], process.env, 5_000));
+});
+
+test("A3-3 실패는 retryAfterMs 동안 기억한다 — 그 안의 호출은 설치기 없이 false, 지나면 다시 시도한다", async () => {
+  const k = fakeKit({ throws: true, writes: "wired" });
+  k.deps.retryAfterMs = 150;
+  assert.equal(await ensureProfileKitWired(k.profileDir, k.deps), false);
+  assert.equal(k.calls.length, 1);
+  assert.equal(await ensureProfileKitWired(k.profileDir, k.deps), false, "백오프 안 — false");
+  assert.equal(k.calls.length, 1, "백오프 안인데 설치기를 또 돌렸다");
+  await new Promise((r) => setTimeout(r, 200));
+  k.mode.throws = false;
+  assert.equal(await ensureProfileKitWired(k.profileDir, k.deps), true, "백오프가 지나면 다시 시도해 성공");
+  assert.equal(k.calls.length, 2);
+  // 성공 뒤엔 기억이 지워진다 — 배선이 있으니 어차피 빠른 경로
+  assert.equal(await ensureProfileKitWired(k.profileDir, k.deps), true);
+  assert.equal(k.calls.length, 2);
+});
+
+test("A3-4 백오프 중이어도 이미 배선된 dir 은 true(빠른 경로가 먼저다)", async () => {
+  const k = fakeKit({ throws: true });
+  k.deps.retryAfterMs = 60_000;
+  assert.equal(await ensureProfileKitWired(k.profileDir, k.deps), false);
+  fs.writeFileSync(k.settingsPath, wiredSettings());   // 사람이 손으로 심었다
+  assert.equal(await ensureProfileKitWired(k.profileDir, k.deps), true);
+  assert.equal(k.calls.length, 1);
 });

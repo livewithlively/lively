@@ -565,7 +565,7 @@ export function filesPart(ctx: PartCtx): Part {
   //  그 사이 아이콘이 잠깐 섰다. 그런데 루트의 서명은 8초마다 바뀐다: 찾기 재료(loadAll)가 매 틱 부르는 매니페스트가
   //  AGENTS.md 를 다시 써서(project-routes ensureAgentsMd — 내용이 같아도 도장이 매번 새 값, 2026-09-25 실측 3회 연속)
   //  그 한 줄 때문에 카드 전부가 아이콘 → 그림으로 다시 떴다. 파일 하나가 바뀌면 **그 카드만** 바뀌어야 한다 —
-  //  카드를 «경로 · 종류 · 도장(mtime·size) · 빈 폴더 · 보기 · 이름 고치는 중 · 찾기 열» 열쇠로 붙잡아 두고, 열쇠가 같으면
+  //  카드를 «경로 · 종류 · 도장(mtime·size) · 빈 폴더 · 보기 · 이름 고치는 중 · 찾는 중이면 폴더 열(행이 폴더 이름을 보인다)» 열쇠로 붙잡아 두고, 열쇠가 같으면
   //  노드째 다시 쓴다(자리만 옮긴다 — 옮겨도 그림은 남고, 관찰자(file-preview seenPv)도 이미 채운 상자를 다시 받지 않는다).
   //  ⚠ 손잡이(click·dblclick·drag)는 만들 때의 FileItem 을 닫아 둔다 — 열쇠가 같으면 그 값들(path·type·mtime·size·empty)이
   //   전부 같으므로 옛 객체를 써도 결과가 같다. 열쇠에 없는 값을 손잡이가 읽게 되면 열쇠에도 넣어야 한다.
@@ -587,17 +587,24 @@ export function filesPart(ctx: PartCtx): Part {
         pnIcon(q ? 'search' : 'drop', 'pn-i big'),
         el('b', { text: q ? '찾는 자료가 없어요.' : cwd ? '이 폴더는 비어 있어요.' : '아직 자료가 없어요.' }),
         el('p', { class: 'pn-fine', text: q ? '이름 일부로 다시 찾아보세요 — 초성(ㅍㅌ)이나 띄어쓰기 없이도 찾습니다.' : '파일이나 폴더를 이 칸에 끌어다 놓거나, 그림을 복사해 ⌘V 로 붙여넣거나, [＋ 올리기]를 누르세요. 세션이 만든 결과물도 여기 쌓입니다.' })));
-      pv.reset();
+      pv.prune();
       paintSel();
       return;
     }
-    const cls = view === 'list' ? 'pn-flist' : 'pn-fgrid';
-    const host = grid && grid.isConnected && grid.className === cls ? grid : el('div', { class: cls }) as HTMLElement;
+    //  격자 자체는 보기(icon·list)마다 다른 요소다 — 무슨 보기로 만들었는지는 data-view 로 기억한다(클래스 비교가 아니다:
+    //  누가 격자에 클래스를 덧붙여도 격자째 새로 만들지 않게).
+    const host = grid && grid.isConnected && grid.dataset.view === view ? grid : el('div', { class: view === 'list' ? 'pn-flist' : 'pn-fgrid', 'data-view': view }) as HTMLElement;
     if (host !== grid) { grid = host; cards.clear(); }   // 보기가 바뀌었거나 빈 화면을 거쳤다 — 격자째 새로
-    host.replaceChildren(...reuseKeyed(cards, ordered, (f) => f.path, (f) => cardKey(f, q), itemNode));
-    body.replaceChildren(marquee, host);
-    pv.reset();     // 붙인 **뒤에** — 떨어져 나간 상자만 잊는다(살아남은 카드의 종이는 그대로 다시 잰다)
+    placeChildren(host, reuseKeyed(cards, ordered, (f) => f.path, (f) => cardKey(f, q), itemNode));
+    if (host.parentNode !== body) body.replaceChildren(marquee, host);   // 격자를 떼었다 붙이면 그 안의 프레임이 전부 다시 실린다
+    pv.prune();     // 붙인 **뒤에** — 떨어져 나간 상자만 잊는다(살아남은 카드의 종이는 그대로 다시 잰다)
     paintSel();
+  }
+  /** 자식을 `nodes` 순서로 맞추되 **제자리인 노드는 건드리지 않는다** — replaceChildren 은 재사용 노드까지 떼었다 붙여서
+   *  시안 미리보기(iframe)가 다시 실리고 이름 고치는 입력칸이 포커스를 잃는다(리뷰 지적). 자리가 다른 것만 옮기고 꼬리를 자른다. */
+  function placeChildren(host: HTMLElement, nodes: HTMLElement[]): void {
+    nodes.forEach((n, i) => { if (host.childNodes[i] !== n) host.insertBefore(n, host.childNodes[i] || null); });
+    while (host.childNodes.length > nodes.length) host.lastChild?.remove();
   }
 
   // 컴퓨터에서 끌어다 놓기 — 지금 보고 있는 폴더로 들어간다(내부 드래그는 types 에 Files 가 없어 안 걸린다).

@@ -1340,10 +1340,10 @@ function viewerPart(ctx: PartCtx): Part {
           el('span', { class: 'pn-fcol d', text: f.mtime ? relTime(new Date(f.mtime).toISOString()) : '' }));
       }));
     };
-    search.addEventListener('input', () => { q = search.value; draw(); });
+    search.addEventListener('input', () => { q = search.value; draw(); pv.prune(); });   // 찾을 때마다 행이 갈리므로 떨어진 상자를 그때그때 잊는다
     draw();
     showPlain(el('div', { class: 'pn-ed-pick2' }, search, rows), true);
-    pv.reset();   // 붙인 뒤에 — 떨어져 나간(옛 목록의) 상자만 잊는다(file-preview reset 주석)
+    pv.prune();   // 붙인 뒤에 — 옛 목록의 상자만 잊는다(file-preview prune 주석)
     window.setTimeout(() => { if (q) search.focus(); }, 0);
   }
 
