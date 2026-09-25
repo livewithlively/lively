@@ -1,52 +1,80 @@
-// codex 세션의 대화 런타임 선택 (#2055 P2-B) — **순수**(env 만 읽는다).
+// codex 세션의 대화 런타임 선택 (#2055 P2-B · 기본 뒤집기 #4135) — **순수**(env + 세션 표식만 읽는다).
 //
 //  ── 두 갈래 ──
-//   tmux(기본·종전)   pane 에서 codex TUI 가 돌고, 화면의 글자는 아웃박스 → send-keys 로 들어간다.
+//   tmux(기본)        pane 에서 codex TUI 가 돌고, 화면의 글자는 아웃박스 → send-keys 로 들어간다.
 //   app-server        pane 은 **셸**이고, 대화는 app-server(JSON-RPC)가 돈다. 글자 유실이 없고 승인을 우리가 받는다.
 //
-//  ── 왜 스위치인가 ──
-//  App Server 는 공식 문서가 *"experimental and aren't supported for production workloads"* 라고 못박은 표면이다.
-//  그래서 언제든 tmux 모드로 끌 수 있어야 한다. 다만 app-server 로 연 세션의 pane 은 셸이므로, 한 입력만
-//  send-keys로 폴백할 수는 없다 — 모드 전환은 다음 세션 생성부터 적용한다.
-//  켜는 값은 배포 env 하나다(`LIVELY_CODEX_CHAT=app-server`) — 조직 설정으로 올리는 건 실박스 검증 뒤에 한다.
+//  ── ★ 기본을 다시 tmux 로 (2026-09-25, 원준님 지시 · main 이 먼저 뒤집었고 여기서 **안전장치를 더한다**) ──
+//  2026-08-27 에 app-server 를 기본으로 삼았다(상민님 지시 — 글자 유실이 없고 승인을 화면이 받는다는 이점).
+//  그 결정을 되돌린다. 이유는 이점이 사라져서가 아니라 **사람이 만나는 화면이 갈렸기** 때문이다:
+//   · app-server 세션의 pane 은 셸이라, 터미널로 보면 codex 가 없다. 거기 친 말은 zsh 가 받는다
+//     (실측 2026-09-25 원준님: «터미널 뷰로 보고 명령을 쳐도 코덱스로 안 간다»).
+//   · 클로드 세션은 터미널에 TUI 가 있어 정반대로 움직인다 — 같은 제품 안에서 두 AI 가 서로 다른 물건이 됐다.
+//  그래서 codex 도 클로드와 **같은 상태**로 둔다: pane 에 TUI 가 뜨고, 터미널이 본자리다.
+//  켜는 길은 남긴다: `LIVELY_CODEX_CHAT=app-server`.
+//  ⚠ main 은 이 뒤집기를 **세션별 기록 없이** 먼저 넣었다(f99ed45f4 시점). 그 상태로 배포되면 이미 떠 있는
+//   app-server 세션(pane=셸)이 tmux 로 읽혀 사람의 프롬프트가 셸 명령으로 실행된다 — 아래 «세션마다 기록» 이
+//   그걸 막는 자리다(실측 근거는 #3982).
 //
-//  ── ★ 왜 pane 이 셸이어야 하나 ──
-//  codex 는 **스레드당 writer 를 하나만** 허용한다(실측: `thread-store conflict: … already has an active writer`).
-//  TUI 와 app-server 가 같은 대화를 동시에 쥘 수 없으므로, app-server 모드에서 pane 에 TUI 를 띄우면
-//  대화가 두 개로 갈린다(터미널에서 보는 것과 대화창에서 보는 것이 다른 대화가 된다). 그래서 pane 은 셸이다.
-//  사람이 TUI 로 이어가고 싶으면 대화창이 스레드를 놓아 주고(프로세스 종료) `codex resume <id>` 로 넘긴다.
+//  ── ★★ 왜 «세션마다 기록» 인가 (이 파일의 가장 중요한 불변식) ──
+//  이 값은 **그 세션의 pane 에 무엇이 떠 있나**를 말한다. 그런데 종전 판정은 배포 기본값만 봤다 — 즉 배포가
+//  바뀌는 순간 **이미 떠 있는 세션들의 판정까지 같이 뒤집혔다.** 그 상태에서 사람이 말을 걸면:
+//   app-server 로 뜬 세션(pane=셸)을 tmux 로 읽고 → send-keys → **사람의 프롬프트가 셸 명령으로 실행된다**(#3982).
+//  그래서 세션이 태어날 때 모드를 tmux 옵션 `@box_runtime` 에 박고(sessionMetaCmds), 읽는 자리는 전부 그 표식을
+//  본다. 표식이 없는 세션 = **이 변경 전에 태어난 세션** 이므로 그때의 기본(app-server)으로 읽는다.
+//  ⚠ 표식은 tmux 에만 있고 DB 에는 없다(#2439 와 같은 자리). 표식 되채우기(metaHealCmds)는 DB 로 하므로 이 값을
+//   되살리지 못한다 — 그 경우 legacy 로 읽혀 app-server 로 판정된다. 그때는 «대화창이 스레드를 잡으려다 부딪힌다»
+//   (보이는 실패)이지 «셸에 프롬프트가 실행된다»(조용한 사고)가 아니다 — 안전한 쪽으로 틀리게 두었다.
 
 export type CodexChatMode = "tmux" | "app-server";
 
+/** 세션 표식(`@box_runtime`)의 원시값 — 모르면 undefined(«이 변경 전에 태어난 세션»). */
+export type CodexModeStamp = string | null | undefined;
+
+/** 표식에 적는 값 — codex 세션만 쓴다(그 밖의 하네스는 "chat"|없음, #2439). */
+export const CODEX_STAMP_APP_SERVER = "app-server";
+export const CODEX_STAMP_TMUX = "terminal";
+
+const envMode = (env: NodeJS.ProcessEnv): string => String(env.LIVELY_CODEX_CHAT || "").trim().toLowerCase();
+
 /**
- * 이 배포의 기본 모드 — **codex 는 터미널(TUI)이 기본이다.**
- *
- *  ── 왜 기본을 뒤집었나 (2026-08-27, 상민님 지시) ──
- *  처음엔 opt-in 이었다. App Server 가 공식 문서상 experimental 인데다, 켜는 순간 pane 이 TUI 대신 셸로
- *  바뀌는 눈에 띄는 변화라 «조용한 전환» 을 피하고 싶었다. 그 판단을 뒤집은 근거는 둘이다:
- *   ① **실측이 쌓였다** — 매니지드 프로덕션에서 로컬·원격 노드 양쪽 배치로 왕복이 확인됐다(e2e 상시 검사).
- *   ② **경계가 배포마다 실제로 서게 됐다** — 마지막까지 비어 있던 자리가 격리 리눅스였는데, 거기서도
- *      포트를 버리고 0600 유닉스 소켓으로 바꿔 닫았다(codex-as-supervisor.ts). 그전까지는 «켤 때 동의를
- *      받는 노브» 로 막고 있었고, 그건 결함을 노브로 덮은 것이지 고친 게 아니었다.
- *
- *  app-server 를 쓰는 길은 남긴다: `LIVELY_CODEX_CHAT=app-server`. 하지만 홈에서 첫 지시를 보낼 때
- *  셸만 열리고 사람이 `codex`를 직접 입력해야 하는 흐름은 허용하지 않는다. 기본은 TUI 로 열어
- *  첫 지시 주입기(session-first-prompt)가 Codex 입력창을 기다렸다 전달한다.
+ * **새로 만드는** codex 세션의 모드. 기본은 tmux(터미널에 TUI) — 클로드와 같은 상태다.
+ *  `LIVELY_CODEX_CHAT=app-server` 로 종전 대화 런타임을 켤 수 있다(experimental 표면이라 길을 남긴다).
  */
-export function codexChatModeDefault(env: NodeJS.ProcessEnv = process.env): CodexChatMode {
-  return String(env.LIVELY_CODEX_CHAT || "").trim().toLowerCase() === "app-server" ? "app-server" : "tmux";
+export function codexChatModeForNew(env: NodeJS.ProcessEnv = process.env): CodexChatMode {
+  return envMode(env) === "app-server" ? "app-server" : "tmux";
+}
+
+/**
+ * **표식이 없는** 세션을 어떻게 읽나 — 그 세션이 태어난 때의 기본, 곧 이 변경 전의 기본값이다.
+ *  ⚠ 여기서 tmux 로 접으면 안 된다: 살아 있는 app-server 세션(pane=셸)에 send-keys 가 들어간다(#3982).
+ */
+function codexChatModeLegacy(env: NodeJS.ProcessEnv): CodexChatMode {
+  return envMode(env) === "tmux" ? "tmux" : "app-server";
 }
 
 /**
  * 이 세션이 어느 모드로 도나.
  *  · codex 가 아니면 언제나 tmux(다른 하네스는 이 경로를 안 탄다).
  *  · 로그인 전용 세션(loginFor)은 언제나 tmux — 그 세션의 일은 대화가 아니라 `codex login` 이다.
+ *  · 표식이 있으면 **그것이 정본**이다(태어날 때 정해진 값 — 배포 기본이 나중에 바뀌어도 안 흔들린다).
+ *  · 표식이 없으면 legacy(= app-server).
  */
 export function codexChatMode(
-  o: { harness: string; loginFor?: string | null },
+  o: { harness: string; loginFor?: string | null; stamp?: CodexModeStamp },
   env: NodeJS.ProcessEnv = process.env,
 ): CodexChatMode {
   if (String(o.harness || "") !== "codex") return "tmux";
   if (o.loginFor) return "tmux";
-  return codexChatModeDefault(env);
+  const stamp = String(o.stamp ?? "").trim().toLowerCase();
+  if (stamp === CODEX_STAMP_APP_SERVER) return "app-server";
+  if (stamp === CODEX_STAMP_TMUX) return "tmux";
+  //  "chat"(하네스 무관 대화 런타임, #2439)도 여기로 온다 — codex 축의 값이 아니므로 표식 없음과 같이 다룬다.
+  return codexChatModeLegacy(env);
+}
+
+/** 새 세션이 표식에 적을 값(codex 가 아니면 없음 — 그 자리는 #2439 의 "chat" 이 쓴다). */
+export function codexModeStampFor(harness: string, mode: CodexChatMode): string | undefined {
+  if (String(harness || "") !== "codex") return undefined;
+  return mode === "app-server" ? CODEX_STAMP_APP_SERVER : CODEX_STAMP_TMUX;
 }

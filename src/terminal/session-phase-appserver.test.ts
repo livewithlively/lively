@@ -36,10 +36,10 @@ function agentState(i: {
     : i.phase;
 }
 
-// app-server 는 선택 기능이다(codex-chat-mode.ts). 그래서 대조군은 «tmux를 명시»가 아니라 기본 env 이고,
-// app-server 군만 명시해야 한다 — 빈 env로 두면 TUI를 app-server로 오판하는 회귀를 잡지 못한다.
-const ON = { LIVELY_CODEX_CHAT: "app-server" } as NodeJS.ProcessEnv;
-const OFF = {} as NodeJS.ProcessEnv;  // 기본 = Codex TUI
+// ⚠ #4135 이후 **새 세션의 기본은 tmux** 다. 다만 이 표가 재는 것은 «이미 떠 있는 세션» 이고, 표식이 없는 세션은
+//  이 변경 전의 기본(app-server)으로 읽힌다(codex-chat-mode.ts) — 그래서 아래 ON/OFF 의 값은 그대로 유효하다.
+const ON = {} as NodeJS.ProcessEnv;                              // 기본 = app-server
+const OFF = { LIVELY_CODEX_CHAT: "tmux" } as NodeJS.ProcessEnv;  // 끈 배포(종전 판정)
 const base = { harness: "codex", offline: true, attached: 0, phase: "idle" as const, asPhase: null };
 
 t("★ A1 pane 이 셸이어도 '종료됨'이 아니다 — app-server 세션에선 그게 정상이다", () => {
@@ -102,12 +102,14 @@ t("★ B1 생성 응답도 목록과 **같은 곳**에서 대화 필드를 만�
   assert.ok(!/s\.chatMode = codexChatMode/.test(src), "목록이 헬퍼를 안 쓰고 따로 만들지 않는다");
 });
 
-t("★ B2 코덱스의 첫 화면은 항상 터미널이다 — app-server여도 TUI 자리를 먼저 보여 준다", () => {
+//  ★ #4135 로 이 표의 방향이 뒤집혔다. codex 의 기본이 터미널(TUI)로 돌아갔으므로, 모르는 세션은 **터미널**로 본다.
+//   틀리는 쪽(이 변경 전의 app-server 세션)은 행이 오는 즉시 대화로 돌아가고, 그 한 틱의 셸 화면에는
+//   «여기 친 말은 Codex 에게 가지 않습니다» 줄이 서 있다(그게 2026-08-28 에 반대로 두었던 이유를 메운다).
+t("★ B2 화면은 «모를 때» 를 **행이 실어 준 값으로만** 판정한다 — 하네스 이름으로 추측하지 않는다", () => {
   const src = readSrc("web/session-chat.ts");
-  const fn = src.slice(src.indexOf("const chatHome ="), src.indexOf("const chatHome =") + 700);
-  assert.match(fn, /!isCodex\(\)/, "코덱스는 대화가 아니라 터미널을 본자리로 둔다");
-  assert.match(fn, /const chatHome = \(\): boolean => !isCodex\(\)/,
-    "app-server 여부와 무관하게 코덱스는 자동 대화 전환하지 않는다");
+  const fn = src.slice(src.indexOf("const chatFirst ="), src.indexOf("const chatFirst =") + 1200);
+  assert.match(fn, /if \(m\) return m === 'app-server';/, "chatMode 가 있으면 그것이 정본이다");
+  assert.ok(!/harness \|\| ''\) === 'codex'/.test(fn), "하네스 이름으로 «대화창» 을 추측하지 않는다(기본이 뒤집혔다)");
 });
 
 t("B3 명시적으로 터미널을 고른 세션은 행이 갱신돼도 그 보기로 돌아온다", () => {

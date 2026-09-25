@@ -29,13 +29,19 @@ const INPUT_BOX = /\b(auto|manual|plan|accept edits|bypass permissions) mode on\
 //  · Claude Code(구): "Do you trust the files in this folder?"
 //  · Claude Code 2.1.245(현행, 실측 2026-08-25): "Quick safety check: Is this a project you created or one you trust?"
 //    + 선택지 "❯ 1. Yes, I trust this folder"
+//  · Codex 0.153.4(실측 2026-09-24): "Do you trust the contents of this directory?" + "› 1. Yes, continue / 2. No, quit"
+//    — 문안은 위 ①에 걸리지만 **커서 글자가 `›`** 라 선택지 판정(TRUST_OPTION)에 그 글자를 넣어야 눌러진다.
+//  · Codex 0.157.0(실측 2026-09-25 — 하루 만에 판이 바뀌었다): "Folder access … **Trust this folder?**" +
+//    "› 1. Trust and continue / 2. Back to Agent Command Center" + "enter continue · esc back".
+//    문구도 선택지 낱말도 통째로 바뀐다 — 그래서 **낱말 두 벌(Yes·Trust / No·Back)** 을 다 받는다. 판이 또 바뀌면
+//    선택지를 못 읽어 null 이 되고(아무것도 안 누름), 화면 판정(codex.screen)이 번호 메뉴 모양으로 대화상자를 잡는다.
 //  · Antigravity: "Do you trust the contents of this project?" (실측 2026-08-18 — 종전 정규식이 못 잡아
 //    ⓐ 세션 전용 폴더인데 자동 수락이 안 됐고 ⓑ 6초 뒤 '하네스가 떴다'로 오판해 첫 지시를 대화상자에 밀어 넣었다).
 //  ⚠ 문구 하나만 알면 하네스가 문안을 바꾸는 순간 **첫 지시가 조용히 유실된다**(90초 give-up) — 실제로 그렇게 됐다
 //   (2026-08-25 dev 노드 프로젝트 세션: 대화상자에서 멈춘 채 첫 지시가 통째로 사라졌다). 그래서 세 축으로 잡는다:
 //   ①구 claude 문안 ②"is this a project you created/trust" ③**선택지 줄** `[❯>] N. Yes, … trust …`(문안이 바뀌어도
 //   '기본 선택 Yes' 는 남는다). ③은 줄머리에 앵커돼 있어 본문이 trust 를 언급하는 것만으로는 안 걸린다(오탐 방지).
-const TRUST_DIALOG = /trust the (files|contents) (in|of) this (folder|directory|project)|is this a project you (created|trust)|(^|\n)[ \t]*[❯>]?[ \t]*\d*\.?[ \t]*Yes,[^\n]*\btrust\b/i;
+const TRUST_DIALOG = /trust the (files|contents) (in|of) this (folder|directory|project)|is this a project you (created|trust)|\bTrust this folder\b|(^|\n)[ \t]*[❯›>]?[ \t]*\d*[.)]?[ \t]*(Yes,[^\n]*\btrust\b|Trust and continue)/i;
 // 하네스가 아직 뜨는 중인데 화면에 아무 표식이 없을 때, 비-Claude 하네스에 쓰는 보수적 대기(입력창 문구를 모르는 하네스).
 const OTHER_HARNESS_SETTLE_MS = 6000;
 
@@ -56,7 +62,9 @@ const HOLD_POLL_MS = 2_000;
 
 // 신뢰 대화상자의 **선택지 줄** — `❯ No, exit` · `  Yes, I trust this folder` · 구판 `❯ 1. Yes, …` 를 함께 잡는다.
 //  줄머리 앵커 + Yes/No 로 시작하는 것만 = 본문이 trust 를 언급하는 것만으로는 안 걸린다(TRUST_DIALOG 와 같은 교리).
-const TRUST_OPTION = /^[ \t]*([❯>])?[ \t]*(?:\d+[.)])?[ \t]*(Yes|No)\b(.*)$/i;
+//  ⚠ 커서 글자는 하네스마다 다르다 — claude `❯` · codex `›`(U+203A, 실측 2026-09-24) · 일부 판은 `>`.
+//   codex 를 안 넣었더니 선택지 두 줄을 읽고도 «커서를 못 찾았다»(null)로 떨어져, 신뢰 대화상자에서 아무것도 안 눌렀다.
+const TRUST_OPTION = /^[ \t]*([❯›>])?[ \t]*(\d+[.)])?[ \t]*(Yes|No|Trust|Back)\b(.*)$/i;
 
 /**
  * 신뢰 대화상자에서 **«Yes» 까지 몇 칸 내려가야 하나** (순수) — 못 읽으면 `null`.
@@ -82,7 +90,16 @@ export function trustAcceptDowns(tail: string[]): number | null {
   for (const line of tail) {
     const m = TRUST_OPTION.exec(line);
     if (!m) continue;
-    opts.push({ cursor: !!m[1], yes: /^yes$/i.test(m[2]), text: line.trim() });
+    //  #4135 — 판마다 선택지 낱말이 다르다: claude·codex 0.153.4 는 «Yes/No», codex 0.157.0 은 «Trust and continue /
+    //   Back to …». 수락은 Yes·Trust, 거절은 No·Back 이다(실측 2026-09-24·25).
+    //  ⚠ 다만 Trust·Back 은 **본문에도 흔한 낱말**이다 — 0.157.0 의 설명문이 "Trust this folder? Codex can read…"
+    //   로 시작한다. 그 줄을 선택지로 세면 커서보다 위에 «수락» 이 하나 생겨 판정이 null 이 되고(실측: 이 시험이
+    //   빨간불이었다) 아무것도 못 누른다. 그래서 그 두 낱말은 **커서나 번호가 앞에 붙은 줄**에서만 선택지로 본다.
+    //   Yes·No 는 종전 그대로 둔다(본문이 그 낱말로 시작하는 일은 드물고, 번호 없는 실측 화면이 있다 — V263).
+    const marked = !!m[1] || !!m[2];
+    const word = m[3];
+    if (/^(trust|back)$/i.test(word) && !marked) continue;
+    opts.push({ cursor: !!m[1], yes: /^(yes|trust)$/i.test(word), text: line.trim() });
   }
   if (opts.length < 2) return null;                       // 선택지를 못 읽었다
   const cursor = opts.findIndex((o) => o.cursor);

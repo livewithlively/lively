@@ -1,6 +1,7 @@
 // codex rollout 파서 계약 (#1759) — 사양·엣지 표: 스크래치 spec.md "codex read 축"(실측 box-yoon-355e7d10 파일).
 //  줄 원문은 전부 실측 rollout 에서 딴 것(필드 축약만) — 지어내지 않는다.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { parseCodex } from "./codex.js";
 import type { ChatAssistantLine, ChatSystemLine, ChatUserLine } from "./chat-line.js";
 
@@ -113,6 +114,53 @@ t("E12 창 이어 읽기 — task_started 가 앞 창에 있어도 state 로 dur
   assert.equal(w1.lines.length, 0);
   const w2 = parseCodex(L({ timestamp: "2026-08-18T11:11:23.470Z", type: "event_msg", payload: { type: "task_complete" } }) + "\n", w1.state);
   assert.equal((w2.lines[0] as ChatSystemLine).durationMs, Date.parse("2026-08-18T11:11:23.470Z") - Date.parse("2026-08-18T11:10:58.598Z"));
+});
+
+// ── #4135 사람 발화 채널 (실측 2026-09-24, codex 0.153.4 · 0.149.1) ──────────────────────────
+//  줄 원문은 실제 rollout 에서 딴 것(필드 축약만). 이 표가 깨지면 codex 대화창에서 **사람이 친 말이 사라진다**.
+const RI_USER = (text: string, ts = "2026-09-24T01:29:25.402Z"): string =>
+  L({ timestamp: ts, type: "response_item", payload: { type: "message", id: "msg_1", role: "user", content: [{ type: "input_text", text }] } });
+const UM = (message: string, ts = "2026-09-24T01:29:25.457Z"): string =>
+  L({ timestamp: ts, type: "event_msg", payload: { type: "user_message", message } });
+
+t("[E13] 0.153.4 — 사람 말은 response_item(role=user) 에만 있다. 그걸 읽는다", () => {
+  const { lines } = parseCodex([RI_USER("1부터 20까지 천천히 세어줘")].join("\n"), {});
+  assert.equal(lines.length, 1);
+  assert.equal((lines[0] as ChatUserLine).message.content, "1부터 20까지 천천히 세어줘");
+});
+
+t("[E14] 주입문은 사람 말이 아니다 — AGENTS.md 지침·환경·플러그인 래퍼", () => {
+  const injected = [
+    "# AGENTS.md instructions\n\n<INSTRUCTIONS># 라이블리 컨텍스트…",
+    "<environment_context>\n  <current_date>2026-09-24</current_date>\n</environment_context>",
+    "<recommended_plugins> Here is a list…",
+  ];
+  const { lines } = parseCodex(injected.map((x) => RI_USER(x)).join("\n"), {});
+  assert.deepEqual(lines, []);
+});
+
+t("[E15] 옛 판(0.149.1)의 이중 기록 — RI 와 user_message 에 같은 말이 오면 한 번만 보인다", () => {
+  const { lines } = parseCodex([RI_USER("하이염"), UM("하이염")].join("\n"), {});
+  assert.equal(lines.length, 1, L(lines));
+  assert.equal((lines[0] as ChatUserLine).message.content, "하이염");
+});
+
+t("[E16] 다른 말이면 둘 다 보인다(접기는 «같은 글이 연달아 올 때» 뿐)", () => {
+  const { lines } = parseCodex([RI_USER("하이염"), UM("안녕")].join("\n"), {});
+  assert.equal(lines.length, 2);
+});
+
+t("[E17] 실측 rollout 파일 한 벌 — 사람이 친 말만 순서대로 나온다", () => {
+  //  실측 원문은 src 에만 있다(빌드가 dist 로 안 옮긴다) — 다른 fixture 시험과 같은 규약으로 되짚는다.
+  const raw = readFileSync(new URL("../__fixtures__/codex-rollout-prompts.jsonl", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+  const { lines } = parseCodex(raw, {});
+  const users = lines.filter((l) => l.type === "user").map((l) => String((l as ChatUserLine).message.content));
+  //  이 파일엔 사람 말 3건 + AGENTS.md 주입 1건이 같은 채널(role=user)로 섞여 있다 — 주입만 빠진다.
+  assert.equal(users.length, 3, L(users));
+  assert.equal(users[0], "aaa\nbbb");
+  assert.ok(users[1].startsWith("답 없이 이 주소만"), users[1]);
+  assert.equal(users[2], "1부터 20까지 천천히 세어줘");
+  assert.ok(!users.some((u) => u.includes("AGENTS.md instructions")), "주입문이 사람 말로 새어 나왔다");
 });
 
 console.log(`harness-io/codex: ${pass} passed`);

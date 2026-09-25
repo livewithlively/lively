@@ -8,7 +8,7 @@ import { SESSION_KIND_ENV } from "../sessions/session-kind.js";
 import fsp from "node:fs/promises";
 import crypto from "node:crypto";
 import type { LivelyUser } from "../context.js";
-import { codexChatMode } from "./codex-chat-mode.js";
+import { codexChatMode, codexChatModeForNew, codexModeStampFor } from "./codex-chat-mode.js";
 import { sessionRuntimeMode } from "./session-runtime-mode.js";   // #2439 — 대화 런타임 세션은 pane 이 셸이다
 import { rememberCodexThread } from "./codex-chat-thread.js";   // #2055 — 첫 지시도 대화 좌표를 남겨야 화면이 읽는다
 import { HttpError } from "../http-error.js";
@@ -45,6 +45,7 @@ import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWrit
 //   미리 발급·추출해 실어 보낸 것(input.appSession)을 쓰므로 이 경로에 오지 않는다.
 import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, paneLaunchArgv, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
+import { harnessIo } from "./harness-io/adapter.js";   // #4135 — 이 하네스의 화면 판정(확인 필요)
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
 import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
 import { sessionActivityTitle, paneAwaitingInput, resolveAgentPhase, observeAgentRun, harnessReportsBusy, parseReportedPhase } from "./phase.js";
@@ -315,6 +316,9 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       //   봐야 갈리지 않는다. ⚠ 행 **최상위**에 둔다 — tmuxDesired 안에 넣었더니 응답에 안 실려
       //   384행 중 0행만 값을 갖는 상태가 됐다(실측 2026-09-01).
       runtimeChoice: runtimeRaw === "chat" ? "chat" as const : runtimeRaw === "terminal" ? "terminal" as const : undefined,
+      //  #4135 — **원시값도 올린다.** codex 의 모드 표식("app-server"|"terminal")은 위 세 값으로 접히지 않는다.
+      //   접으면 그 세션이 어느 모드로 떴는지를 잃고, 배포 기본값으로 다시 추측하게 된다(그게 #3982 의 뿌리다).
+      runtimeRaw: runtimeRaw || "",
       tmuxDesired: {
         owner: owner || "",
         label: labelParts.join("\t") || null,
@@ -383,6 +387,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       //  #2439 — 이 세션이 어느 모드로 떴나. ⚠ 이 push 는 필드를 **하나씩 골라** 담는다 —
       //   위에서 만들어 둔 값이라도 여기 안 적으면 조용히 사라진다(실측: 386행 중 0행만 값을 가졌다).
       runtimeChoice: p.runtimeChoice,
+      runtimeRaw: p.runtimeRaw,
       owner: d.owner, owned, harness: d.harness, dir: d.dir ?? "", autoApprove: d.autoApprove,
       flags: d.flags, invites: d.invites, projectId: d.projectId ?? 0, appId: d.appId || undefined, label: d.label,
       managed: p.managed as string | null,
@@ -394,7 +399,10 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
   //   폴링당 tmux 호출이 줄어든다(스크래핑 은퇴의 실질적 첫 단계).
   const waitingIds = new Set<string>();
   const needScrape = rows.filter((r) => !r.offline && !r.busy && r.reportedFresh?.phase !== "busy" && r.reportedFresh?.phase !== "waiting");
-  await Promise.all(needScrape.map(async (r) => { if (await paneAwaitingInput(r.name)) waitingIds.add(r.name); }));
+  //  #4135 — 화면 문구는 하네스마다 다르다. 그 하네스가 답할 수 있으면(어댑터 screen) 그 답을 쓰고, 못 하면
+  //   종전 휴리스틱(claude·antigravity 문구)으로 떨어진다. 종전엔 codex 의 훅 검토·업데이트 대화상자가 안 잡혀
+  //   «답을 기다리는 세션» 이 목록에서 대기중으로 섰다.
+  await Promise.all(needScrape.map(async (r) => { if (await paneAwaitingInput(r.name, harnessIo(r.harness)?.screen)) waitingIds.add(r.name); }));
   const sessions: SessionInfo[] = [];
   for (const r of rows) {
     const flags = r.flags as Record<string, string>;   // desired 해소 단계에서 이미 디코드됐다
@@ -415,7 +423,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     //  화면은 입력칸 대신 '이어서 대화하기' 바를 띄웠다(=말을 걸 수 없다). 탭 유무(attached)도 무의미하다:
     //  이 세션의 기본 화면은 터미널이 아니라 대화창이라 아무도 pane 에 붙지 않는다.
     //  그래서 이 갈래만 **런타임에게 직접 묻는다** — 그게 그 세션의 AI 다. 실측 2026-08-26(사용자 신고).
-    const appServer = codexChatMode({ harness: r.harness }) === "app-server";
+    const appServer = codexChatMode({ harness: r.harness, stamp: r.runtimeRaw }) === "app-server";
     const asPhase = appServer ? codexChatPhase(r.name) : null;
     // #1221 — AI 실행 단계(busy·waiting·idle)는 이제 **한 곳에서** 판정한다(하네스 보고 우선, 화면 스크래핑 폴백).
     //  그 위의 세 갈래(셸 하네스 · AI 종료 · 탭 없음)는 실행 단계와 다른 축이라 종전 순서 그대로다.
@@ -658,7 +666,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  · 셸 하네스 — 그대로(감쌀 하네스가 없다).
   //  · codex app-server 모드(#2055) — pane 은 **셸**이다. 대화는 대화창(app-server)이 전담하고, TUI 를 띄우면
   //    스레드 writer 가 둘이 돼 대화가 갈린다(codex 는 스레드당 writer 를 하나만 허용한다 — 실측).
-  const chatMode = codexChatMode({ harness: harness.key, loginFor: input.loginFor });
+  //  #4135 — **새 세션의 기본은 tmux(터미널에 TUI)** 다. 여기서 정한 값을 아래 표식(@box_runtime)에 박고,
+  //   읽는 자리는 전부 그 표식을 본다 — 배포 기본이 나중에 또 바뀌어도 이미 떠 있는 세션의 판정이 안 흔들린다.
+  const chatMode = input.loginFor ? "tmux" as const : codexChatModeForNew();
   //  ★ #2439 — **대화 런타임 세션도 pane 은 셸이다.** 대화를 런타임이 쥐는데 TUI 까지 띄우면 한 대화에
   //   하네스가 둘 붙는다(실측 2026-09-01: 웹은 chat-runtime 으로 가는데 기록엔 TUI 줄이 함께 있었다).
   //   그때 사람이 보는 것은 «선택지가 대화창에 안 뜨고 시간만 올라가는» 화면이다.
@@ -910,13 +920,16 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //     그것도 없으면(hostProfile·MULTIPROFILE=0) 이 호스트의 홈.
     //   · antigravity — 설정 자리를 바꾸는 환경변수가 **없다**(#1689 실측). 늘 그 홈의 `.gemini` 다.
     const home = osUser ? `${MEMBER_HOME_BASE}/${osUser}` : (process.env.HOME || os.homedir());
+    //   · codex — CODEX_HOME 을 세션에 주입하지 않으므로(profiles.ts 머리말) 늘 그 홈의 `.codex/config.toml` 이다.
     const configFile = harness.key === "claude"
       ? path.join(
         osUser
           ? home
           : (process.env.LIVELY_MULTIPROFILE !== "0" && !input.hostProfile ? profileConfigDir(user) : home),
         ".claude.json")
-      : path.join(home, ".gemini", "antigravity-cli", "settings.json");
+      : harness.key === "codex"
+        ? path.join(home, ".codex", "config.toml")
+        : path.join(home, ".gemini", "antigravity-cli", "settings.json");
     //  ⚠ 부모 디렉터리를 먼저 만든다 — agy 를 한 번도 안 켠 홈엔 `.gemini/antigravity-cli/` 가 아예 없다.
     //   (claude 쪽은 이미 있는 자리라 no-op. 없으면 쓰기가 ENOENT 로 조용히 실패해 신뢰가 안 심긴다.)
     const io: TrustIo = osUser
@@ -953,7 +966,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  #3892 — 목록은 session-meta-heal.ts 한 벌이다(표식이 빈 세션을 되채우는 쪽과 같은 목록 — 한쪽에만 더하는 어긋남 차단).
   //   ⚠ 프로젝트 표식은 종전엔 @box_managed **뒤**에 박혔다. 둘은 서로를 안 읽는 독립 옵션이라 한 묶음에 넣었다(#3537).
   const meta = sessionMetaCmds(id, {
-    owner: ownerId(user), label, harness: harness.key, runtimeChat: chatRuntime, kind: input.kind,
+    owner: ownerId(user), label, harness: harness.key, kind: input.kind,
+    //  #2439 대화 런타임(하네스 무관) · #4135 codex 모드 — 한 표식(@box_runtime)의 값이 셋이다("chat"|"terminal"|"app-server").
+    runtime: chatRuntime ? "chat" : codexModeStampFor(harness.key, chatMode),
     dir: target, autoApprove: !!input.autoApprove, flags: appliedFlags, invites,
     appId: input.appId, projectId: input.projectId, projectSrc: input.projectSrc,
   });
@@ -1085,7 +1100,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: createdSec, attached: false, invites, flags: appliedFlags,
     ...(input.projectId ? { projectId: Number(input.projectId) } : {}),
     ...(input.appId ? { appId: String(input.appId) } : {}),
-    ...(chatRuntime ? { runtimeChoice: "chat" as const } : {}) };
+    ...(chatRuntime ? { runtimeChoice: "chat" as const } : {}),
+    //  #4135 — 방금 정한 codex 모드도 같이 돌려준다(목록 갱신 전에도 화면이 같은 답을 보게 한다).
+    ...(codexModeStampFor(harness.key, chatMode) ? { runtimeRaw: codexModeStampFor(harness.key, chatMode) } : {}) };
 }
 
 interface OwnerMeta { owner: string; invites: string[]; }
