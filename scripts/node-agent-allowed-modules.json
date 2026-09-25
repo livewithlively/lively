@@ -65,6 +65,8 @@
   "dist/terminal/catalog.js",
   "dist/terminal/codex-chat-mode.js",
   "dist/terminal/codex-chat-thread.js",
+  "dist/terminal/codex-hook-trust-apply.js",
+  "dist/terminal/codex-hook-trust.js",
   "dist/terminal/harness-io/adapter.js",
   "dist/terminal/harness-io/antigravity-stream.js",
   "dist/terminal/harness-io/antigravity.js",
