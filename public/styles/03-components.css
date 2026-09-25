@@ -336,7 +336,7 @@ a.wikicat-owner:hover { text-decoration: underline; }
    묶음이 0개인 평면 화면에도 서야 한다(그래야 마지막 묶음을 지운 뒤 되살릴 문이 남는다). */
 .wikicat-bundle-add { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; flex-wrap: wrap; }
 .wikicat-bundle-intro { margin: -2px 0 8px; }
-/* 행의 묶음 칸 — 오너 팀 셀렉트와 같은 문법(라벨은 작은 대문자 캡션, 값은 컴팩트 셀렉트). */
+/* 행의 묶음 칸 — 라벨은 작은 대문자 캡션, 값은 컴팩트 셀렉트. */
 /* max-width 를 두는 이유: 셀렉트는 기본적으로 옵션 글자 폭 아래로 안 줄어든다 — 묶음 이름이 길면
    390px 에서 행 밖으로 밀려 가로 스크롤이 생긴다. 칸을 감싸 캡을 씌우고 필요하면 두 줄로 흐르게 한다. */
 .wikicat-bundle-pick { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; flex-wrap: wrap; font-size: 12px; }

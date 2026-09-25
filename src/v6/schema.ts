@@ -23,7 +23,7 @@ import { initV6ProjectChat } from "./schema/project-chat.js";
 
 export async function initV6Schema(): Promise<string> {
   const pool = itemsPool;
-  await initV6CategoryTeam(pool); // §1~2: category·category_edge·category_repo + team·team_member·team_category
+  await initV6CategoryTeam(pool); // §1~2: category·category_edge·category_repo + team·team_member (team_category 는 #4233 폐기 · DROP)
   await initV6Knowledge(pool);    // §3~4: knowledge·revision(#783)·#335 시드·knowledge_category·publication·feed_target
   await initV6ProjectCore(pool);  // §5: project 본체 + 태스크 컬럼(§5b)·status 정규화(§5c)·assignee(§5d)·outbox(§5e)·백스톱(§5f~g)
   await initV6ProjectOrg(pool);   // §6~10: member·session(#905)·folder binding·list/folder/view + 정션·activity·레거시 ALTER

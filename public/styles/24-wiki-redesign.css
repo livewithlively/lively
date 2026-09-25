@@ -952,7 +952,7 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 .wk-rv-pill { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px;
   font-size: 11px; font-weight: 800; color: var(--warn-text); background: color-mix(in srgb, var(--warn) 14%, transparent); }
 
-/* 카테고리 탭 — 카테고리 한 줄(문서 수 · 검토 대기 · 소유 팀 · 최근 갱신). 옛 오로라 카드 격자를 대신한다. */
+/* 카테고리 탭 — 카테고리 한 줄(문서 수 · 검토 대기 · 최근 갱신). 옛 오로라 카드 격자를 대신한다. */
 .wk-tbody a.wk-catrow { display: grid; align-items: center; text-decoration: none; color: inherit; }   /* 링크 행 — 표의 다른 행과 같은 격자(앵커 기본 display 를 덮는다) */
 .wk-catrow .wk-ttitle { font-weight: 700; }
 .wk-catrow .kn-cat-star { color: #f0b429; font-size: 11px; flex: none; }

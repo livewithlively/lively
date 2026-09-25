@@ -2377,26 +2377,6 @@
   "input_hash": "ef68179e23272c44"
  },
  {
-  "name": "team_set_category",
-  "scope": "context",
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/teams/:id/categories"
-  ],
-  "input_hash": "a710cb1279b1d0cc"
- },
- {
-  "name": "category_set_owner",
-  "scope": "context",
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/categories/:id/owner"
-  ],
-  "input_hash": "92f43a6e7b930f71"
- },
- {
   "name": "knowledge_list",
   "scope": "memory",
   "mcp": true,

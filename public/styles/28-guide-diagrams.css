@@ -133,7 +133,7 @@
 .admin-col-center { display: flex; align-items: center; justify-content: center; min-height: 100%; }
 .admin-col-center > .admin-hint { color: var(--ink-sub); text-align: center; }
 
-/* fix: 42 카테고리 행 오너 팀 드롭다운을 행 오른쪽(수정·삭제 앞) 한 열로 정렬 — 행마다 제각각이던 시작 위치 통일 */
+/* fix: 42 행 끝 링크(.wikicat-owner)를 행 오른쪽 한 열로 정렬 — 행마다 제각각이던 시작 위치 통일 */
 .wikicat-owner { margin-left: auto; }
 
 /* fix: 49 세션 주입 섹션 행(inj-piece)의 ▲▼·편집·삭제 4버튼이 항상 한 줄 유지 — 대신 설명 컬럼(inj-piece-body, flex:1 min-width:0)이 줄바꿈 */

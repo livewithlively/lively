@@ -226,11 +226,8 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 .tree-subcount { font-weight: 600; color: var(--muted-2); letter-spacing: 0; }
 .tree-group-mine .tree-item { padding-left: 30px; } /* 하위그룹 항목 — 우리 팀 일반 항목(20px)보다 한 단계 더 */
 
-/* 분류체계 관리 — 카테고리별 오너 팀(드롭다운/표시) */
+/* 행 끝 링크(자동화 화면의 담당 링크 등). (#4233: 분류별 오너 팀 고르개와 그 이름표는 걷었다.) */
 .wikicat-owner { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
-.wikicat-owner-label { font-size: 10.5px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--muted-2); }
-.wikicat-owner-name { font-weight: 700; color: var(--blue); }
-.wikicat-owner-sel { font-size: 12px; padding: 2px 6px; border: 1px solid var(--line-net-2); border-radius: 6px; background: var(--bg-soft); color: var(--ink-sub); }
 
 /* 팀 관리 — 팀원 체크 + 역할 select */
 .team-members-wrap { display: flex; flex-direction: column; gap: 2px; max-height: 280px; overflow-y: auto; padding: 2px; }
