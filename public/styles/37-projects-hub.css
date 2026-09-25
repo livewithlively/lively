@@ -741,3 +741,8 @@ a.pjh-row-link.pjh-row-n:hover { color: var(--blue); }
 .pjh-fr-r { flex: none; font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
 .pjh-drop.wide { flex: none; min-height: 30px; }
 .pjh-fr-th .pjh-th.fd .ft-folder { width: 60%; }
+/* 폴더 1×1 — 시안 .short-rows: 줄 29px 한 줄(이름 · 크기), 타일 24px. 셋 + 끌어다 놓기가 146px 안에 든다. */
+.pjh-frl.short .pjh-fr { min-height: 29px; }
+.pjh-frl.short .pjh-fr-m { display: none; }
+.pjh-frl.short .pjh-fr-th { width: 24px; }
+.pjh-frl.short .pjh-fr-th .pjh-th { width: 24px; height: 24px; }

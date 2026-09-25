@@ -148,7 +148,7 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
     }
 
     if (w <= 1 && h <= 1) {
-      const list = el('div', { class: 'pjh-frl' });
+      const list = el('div', { class: 'pjh-frl short' });   // 시안 1×1: 한 줄짜리 줄 셋(이름 · 크기), 타일 24px
       for (const it of recentFiles(items, 3)) list.append(frow(it));
       body.append(list, el('div', { style: 'flex:1' }), dropBox(true), progBox);
       foot.append(footText(rootLabel), btn('폴더 열기', 'btn-ghost', open));
