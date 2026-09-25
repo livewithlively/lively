@@ -205,8 +205,8 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
 {
   const sc = read("web/session-chat.ts");
   ok(/class: 'sc-shellbar'/.test(sc), "㉚ 셸 pane 안내줄을 그린다");
-  ok(/function paintShellBar\(\)/.test(sc) && /const shellPane = chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode \|\| ''\) === 'chat'/.test(sc),
-    "㉛ ★ 판정은 «pane 이 셸인가» 두 갈래다(codex app-server · 대화 런타임) — 모르면 안 띄운다");
+  ok(/function paintShellBar\(\)/.test(sc) && /chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode \|\| ''\) === 'chat'/.test(sc),
+    "㉛ ★ 판정의 바탕은 «pane 이 셸인가» 두 갈래다(codex app-server · 대화 런타임) — 모르면 안 띄운다");
   ok((sc.match(/paintShellBar\(\);/g) || []).length >= 2,
     "㉜ ★ setMode 와 목록 갱신 **둘 다** 다시 그린다 — 행이 늦게 오는 세션(방금 만든 것)이 안내를 놓치면 안 된다");
   //  ★ #4135 — **프레임이 본 것이 목록을 이긴다.** 노드 스냅샷이 낡으면 목록은 «이 세션은 app-server» 라고
