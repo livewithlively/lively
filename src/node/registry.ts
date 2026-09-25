@@ -641,6 +641,16 @@ export function nodeSessionHarness(nodeId: string, sessionId: string): string {
   return states.get(keyOf(nodeId))?.sessions.find((s) => s.id === sessionId)?.harness || "";
 }
 
+// 노드 세션이 **어느 모드로 떴나**(스냅샷의 @box_runtime 원시값) — 모르면 undefined (#4135).
+//  왜 필요한가: codex 는 세션마다 모드가 다르다(app-server 면 pane 이 셸, tmux 면 TUI). 그 표식은 **그 노드의
+//  tmux** 에 있고 게이트웨이엔 없다. 배달이 배포 기본값으로 추측하면, 기본을 뒤집는 순간 이미 떠 있는 노드
+//  세션의 판정까지 뒤집혀 app-server 세션(pane=셸)에 PTY 입력이 들어간다 — 사람의 말이 셸 명령이 된다(#3982).
+//  ⚠ 옛 번들 노드의 행엔 이 값이 없다 → undefined. 그 노드가 만드는 세션도 app-server 라 그 답이 맞는다.
+export function nodeSessionRuntime(nodeId: string, sessionId: string): string | undefined {
+  const v = (states.get(keyOf(nodeId))?.sessions.find((s) => s.id === sessionId) as { runtimeRaw?: unknown } | undefined)?.runtimeRaw;
+  return typeof v === "string" && v ? v : undefined;
+}
+
 // 이 노드가 op 를 할 수 있나(#905 C4) — hello.caps 가 근거, 안 보낸 구 노드는 v1 기준선.
 //  provision-remote.ts(assertNodeUsable 의 requireProvision 게이트)가 배치 전 사전 조회로 쓴다 — 못 할 노드를
 //   미리 걸러 사람 말로 안내한다. 강제 게이트는 nodeRpc 가 이미 한다(여긴 사전 조회용).
