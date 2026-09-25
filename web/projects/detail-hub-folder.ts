@@ -67,7 +67,7 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
     upToast(r);
     refresh();
   }
-  const dropBox = (wide = false): HTMLElement => el('div', { class: 'pjh-drop' + (wide ? ' wide' : '') }, hubIcon('up', 14), el('span', { text: '끌어다 놓기' }));
+  const dropBox = (wide = false): HTMLElement => el('div', { class: 'pjh-drop' + (wide ? ' wide' : '') }, hubIcon('up', 14), el('span', { text: wide ? '파일을 여기에 끌어다 놓기' : '끌어다 놓기' }));
   const mkdirBtn = (): HTMLElement => {
     const b = btn('＋ 폴더', 'btn-ghost');
     b.onclick = (e) => {
@@ -102,10 +102,14 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
 
     const frow = (it: any): HTMLElement => {
       const rel = relOf(it.name);
+      const isDir = it.type === 'dir';
+      const right = el('span', { class: 'pjh-fr-r', text: isDir ? '' : fmtSize(it.size || 0) });
+      if (isDir) listDir(rel).then((its: any[]) => { right.textContent = String(its.filter((x) => x.type !== 'dir').length); });   // 시안: 폴더 줄 오른쪽은 파일 수
       return el('div', { class: 'pjh-fr' + (nav.picked === rel ? ' on' : ''), title: it.name, onclick: () => openItem(it, rel) },
         el('span', { class: 'pjh-fr-th' }, tile(it, rel)),
         el('span', { class: 'pjh-fr-b' }, el('span', { class: 'pjh-fr-n', text: it.name }),
-          el('span', { class: 'pjh-fr-m', text: [it.type === 'dir' ? '폴더' : fmtSize(it.size || 0), it.mtime ? relTime(new Date(it.mtime).toISOString()) : ''].filter(Boolean).join(' · ') })));
+          isDir ? null : el('span', { class: 'pjh-fr-m', text: it.mtime ? relTime(new Date(it.mtime).toISOString()) : '' })),
+        right);
     };
     const ext = (n: string): string => { const m = String(n).toLowerCase().match(/\.([a-z0-9]{1,5})$/); return m ? m[1].toUpperCase() : ''; };
     const isImg = (n: string): boolean => /\.(png|jpe?g|gif|webp|svg|bmp|avif|heic)$/i.test(String(n));

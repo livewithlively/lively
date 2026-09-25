@@ -737,3 +737,7 @@ a.pjh-row-link.pjh-row-n:hover { color: var(--blue); }
 /* 상태 원은 SVG(.pjv-status-ic) — 할 일의 점선(stroke-dasharray)을 실선으로, 선은 얇게(시안 1.6px) */
 .pjh-wb > .pjv-tasks-embedded svg.pjv-status-ic circle { stroke-dasharray: none; stroke-width: 1.9; }
 .pjh-wb > .pjv-tasks-embedded svg.pjv-status-ic.sm { width: 14px; height: 14px; }
+/* 폴더 줄(1칸 폭) — 시안: 폴더 줄은 오른쪽에 파일 수, 파일 줄은 크기 · 끌어다 놓기는 얇은 점선 한 줄(늘어나지 않는다) */
+.pjh-fr-r { flex: none; font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+.pjh-drop.wide { flex: none; min-height: 30px; }
+.pjh-fr-th .pjh-th.fd .ft-folder { width: 60%; }
