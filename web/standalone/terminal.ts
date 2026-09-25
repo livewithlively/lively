@@ -825,6 +825,11 @@ export function isMouseReport(d) { return /^\x1b\[(<[0-9;]+[Mm]|[0-9;]+M|M)/.tes
 export function applyPaneState(st) {
   if (!term || !st) return;
   lastKnownState = st;   // 소비되지 않는 사본 — forceRedraw 가 '캡처를 걸어도 되나'를 판단하는 근거
+  //  #4135 — **이 pane 에서 지금 무엇이 도는가**를 부모(세션 화면)에게 알린다. 목록 행의 모드 값은 낡을 수 있고
+  //   (노드 스냅샷이 옛 번들이면 «app-server» 라고 말한다), 그 값만 믿으면 멀쩡히 코덱스가 도는 터미널 위에
+  //   «여기 친 말은 Codex 에게 가지 않습니다» 라는 **거짓 경고**가 선다(원준님 실측 2026-09-25).
+  //   여기서 보는 것은 추측이 아니라 tmux 가 말한 포그라운드 명령이다 — 그것이 목록을 이긴다.
+  try { postPaneCmd(String(st.cmd || '')); } catch (_) { /* 부모가 없다(단독 탭) */ }
   pendingPaneState = st; // 바로 뒤따르는 백필의 커서 복원용
   lastStateAt = Date.now();
   // alt-screen 동기화 — 추측(옛 #252)이 아니라 tmux 실상태로. 앱 alt인데 클라 normal → 진입(#252 재접속 보정),
@@ -2863,6 +2868,15 @@ async function loadSessionMeta() {
 //  (프레임 안 로직을 세션 화면으로 복제하지 않는다 — 복제하면 두 벌이 갈린다).
 //  연결 상태는 반대 방향으로 흘려보낸다: statusEl 은 재연결·종료 등 여러 곳에서 바뀌므로 **값을 관측**한다
 //   (호출부마다 손으로 알리면 언젠가 한 군데를 빠뜨린다).
+//  #4135 — 프레임이 마지막으로 본 pane 포그라운드 명령. 부모에게 보내는 상태에 함께 실린다.
+let lastPaneCmd = '';
+let paneCmdPost: (() => void) | null = null;
+function postPaneCmd(cmd: string): void {
+  if (cmd === lastPaneCmd) return;   // 값이 바뀔 때만 — 상태 마커는 재접속마다 온다
+  lastPaneCmd = cmd;
+  if (paneCmdPost) paneCmdPost();
+}
+
 function setupEmbedBridge() {
   window.addEventListener('message', (ev: MessageEvent) => {
     if (ev.origin !== location.origin || ev.source !== window.parent) return;
@@ -2877,9 +2891,14 @@ function setupEmbedBridge() {
   const post = () => {
     try {
       window.parent.postMessage({ type: 'lively-term-status', text: statusEl.textContent || '',
-        cls: String(statusEl.className || '').replace('status', '').trim() }, location.origin);
+        cls: String(statusEl.className || '').replace('status', '').trim(),
+        //  #4135 — 지금 이 pane 에서 도는 것(빈 문자열 = 모름). 세션 화면이 «여기는 셸이다» 안내를 그릴지 말지를
+        //   목록 행이 아니라 **이 값**으로 정한다. 목록은 낡을 수 있고, 이건 tmux 가 방금 말한 사실이다.
+        //  판정도 여기서 한다(isShellCmd 는 이 파일의 지식이다) — 부모가 같은 목록을 다시 짓지 않게.
+        paneCmd: lastPaneCmd, paneShell: lastPaneCmd ? isShellCmd(lastPaneCmd) : null }, location.origin);
     } catch (_) { /* 부모가 없거나 닫혔다 */ }
   };
+  paneCmdPost = post;   // applyPaneState 가 값이 바뀔 때 다시 부른다
   try { new MutationObserver(post).observe(statusEl, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class'] }); } catch (_) { /* 미지원 — 첫 값만 */ }
   post();
 }
