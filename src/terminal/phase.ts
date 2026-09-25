@@ -77,7 +77,7 @@ const MENU_CURSOR = /^\s*[│┃|]?\s*❯\s*\d+[.)]\s/;           // 번호 선�
 //  Antigravity 는 힌트 문구가 다르다: "↑/↓ Navigate · enter Confirm"(신뢰 대화상자 실측 2026-08-18 — 종전 패턴이 못 잡아
 //  '확인 필요' 배지가 안 떴다). 커서도 '❯' 가 아니라 '>' 라 커서 패턴은 못 쓴다(셸 프롬프트와 구별 불가) — 힌트·문구로만.
 const MENU_HINT = /Enter to select|↑\/↓ to navigate|Esc to cancel|↑\/↓\s+Navigate|enter\s+Confirm/i;
-const APPROVE_PHRASE = /Do you want to |Do you trust |Would you like to proceed|Select (an|the) option|Choose an option/i;
+const APPROVE_PHRASE = /Do you want to |Do you trust |Would you like to proceed|Select (an|the) option|Choose an option|Action required|Press enter to continue/i;
 export function detectAwaiting(pane: string): boolean {
   const lines = pane.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim() !== "");
   const tail = lines.slice(-TAIL_LINES);

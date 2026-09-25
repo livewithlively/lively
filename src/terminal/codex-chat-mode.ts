@@ -19,7 +19,7 @@
 export type CodexChatMode = "tmux" | "app-server";
 
 /**
- * 이 배포의 기본 모드 — **codex 는 대화 UI(app-server)가 기본이다.**
+ * 이 배포의 기본 모드 — **codex 는 터미널(TUI)이 기본이다.**
  *
  *  ── 왜 기본을 뒤집었나 (2026-08-27, 상민님 지시) ──
  *  처음엔 opt-in 이었다. App Server 가 공식 문서상 experimental 인데다, 켜는 순간 pane 이 TUI 대신 셸로
@@ -29,11 +29,12 @@ export type CodexChatMode = "tmux" | "app-server";
  *      포트를 버리고 0600 유닉스 소켓으로 바꿔 닫았다(codex-as-supervisor.ts). 그전까지는 «켤 때 동의를
  *      받는 노브» 로 막고 있었고, 그건 결함을 노브로 덮은 것이지 고친 게 아니었다.
  *
- *  끄는 길은 남긴다: `LIVELY_CODEX_CHAT=tmux`. experimental 표면이라 언제든 되돌릴 수 있어야 한다는
- *  처음의 판단은 그대로 유효하다 — 바뀐 것은 **어느 쪽이 기본이냐** 뿐이다.
+ *  app-server 를 쓰는 길은 남긴다: `LIVELY_CODEX_CHAT=app-server`. 하지만 홈에서 첫 지시를 보낼 때
+ *  셸만 열리고 사람이 `codex`를 직접 입력해야 하는 흐름은 허용하지 않는다. 기본은 TUI 로 열어
+ *  첫 지시 주입기(session-first-prompt)가 Codex 입력창을 기다렸다 전달한다.
  */
 export function codexChatModeDefault(env: NodeJS.ProcessEnv = process.env): CodexChatMode {
-  return String(env.LIVELY_CODEX_CHAT || "").trim().toLowerCase() === "tmux" ? "tmux" : "app-server";
+  return String(env.LIVELY_CODEX_CHAT || "").trim().toLowerCase() === "app-server" ? "app-server" : "tmux";
 }
 
 /**
