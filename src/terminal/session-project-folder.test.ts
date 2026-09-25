@@ -1,7 +1,7 @@
 // 사양 기반 · fail-first(엣지 표 → 행마다 시험 하나). 사양: session-project-folder.ts 머리말.
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { answersFolder, contextNodeId, sessionDirFromRow } from "./session-project-folder.js";
+import { answersFolder, contextNodeId, legacyProjectToAdopt, sessionDirFromRow } from "./session-project-folder.js";
 
 const row = (o: Partial<{ node_id: string | null; dir: string | null; root_key: string | null; subpath: string | null }>) => o;
 
@@ -63,4 +63,21 @@ test("★★ [A1] 노드를 알거나 행이 폴더를 알면 답한다 — 세�
 test("★ [A2] 둘 다 모르면 침묵(중앙 세션 하위호환)", () => {
   assert.equal(answersFolder("", null), false);
   assert.equal(answersFolder("", ""), false);
+});
+
+// ── legacyProjectToAdopt: (사슬 적중, desired-state 행) × 적을 프로젝트 ────────────────
+test("★ [L1] 실행 id·대화 사슬의 마지막 소속이 먼저다 — 행의 project_id 와 달라도 사슬 값", () => {
+  assert.equal(legacyProjectToAdopt({ id: 77 }, { project_id: 4135, project_src: "v6" }), 77);
+});
+test("★★ [L2] 사슬에 없으면 desired-state 행의 project_id — 복원된 노드 세션(소속 행 없음)이 여기 걸린다", () => {
+  assert.equal(legacyProjectToAdopt(null, { project_id: 4135, project_src: "v6" }), 4135);
+  assert.equal(legacyProjectToAdopt(undefined, { project_id: 4135, project_src: null }), 4135);
+});
+test("★ [L3] 둘 다 없거나 못 쓰는 값이면 null — 행 없음 · project_id null/0/음수 · org 출처", () => {
+  assert.equal(legacyProjectToAdopt(null, undefined), null);
+  assert.equal(legacyProjectToAdopt(null, { project_id: null }), null);
+  assert.equal(legacyProjectToAdopt(null, { project_id: 0 }), null);
+  assert.equal(legacyProjectToAdopt(null, { project_id: -3 }), null);
+  assert.equal(legacyProjectToAdopt(null, { project_id: 12, project_src: "org" }), null);
+  assert.equal(legacyProjectToAdopt({ id: 0 }, { project_id: null }), null);
 });

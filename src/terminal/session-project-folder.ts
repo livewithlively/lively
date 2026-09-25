@@ -47,3 +47,17 @@ export function sessionDirFromRow(folder: string, row: SessionRowLike | null | u
 export function answersFolder(nodeId: string, sessionDir: string | null): boolean {
   return !!nodeId || !!sessionDir;
 }
+
+/** 구 바인딩 승계(adoptLegacyBinding)가 **어느 프로젝트를** execution_session 에 적을지 — 실행 id·대화 사슬의 마지막 소속이 먼저,
+ *  없으면 **desired-state 행의 project_id**(게이트웨이가 쓴 정본 — 복원처럼 소속 행을 못 쓴 채 뜬 세션이 여기 걸린다, #4135).
+ *  org 출처(project_src=org)는 DB 소속 표가 없는 옛 계열이라 적지 않는다. 0 이하·NaN 은 없음. */
+export function legacyProjectToAdopt(
+  chainHit: { id: number } | null | undefined,
+  state: { project_id?: number | null; project_src?: string | null } | null | undefined,
+): number | null {
+  if (chainHit && Number(chainHit.id) > 0) return Number(chainHit.id);
+  const pid = Number(state?.project_id ?? 0);
+  if (!(pid > 0)) return null;
+  if (String(state?.project_src ?? "") === "org") return null;
+  return pid;
+}

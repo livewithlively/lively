@@ -55,6 +55,7 @@ import { relayNodeId, sessionRelayNodeId, sameTmuxCoordinate, isBoxSessionRow } 
 import type { NodeOp } from "../node/protocol.js";
 import { normalizeTheme, harnessResumeCommand } from "./catalog.js"; // #1683 테마 값 정규화 · #4135 셸에서 대화를 이어 여는 한 줄(순수 — catalog 가 소유)
 import { getNode, listNodes } from "../node/store.js";
+import { bindNodeSessionProjectOrKill } from "../node/provision-remote.js";   // #4135 — 복원된 노드 세션도 소속을 DB 에 확정한다(생성 ⑦ 과 같다)
 import { nodeOfflineNote } from "../node/offline-note.js";   // #1849 — 오프라인 원인 추정 한 문장
 import { restoreProjectRef } from "./restore-project.js";
 import { getProjectRow } from "../v6/project-store.js";   // #2549 — 삭제된 프로젝트의 세션도 되살린다(행 유무만 묻는 가벼운 조회)
@@ -1702,6 +1703,15 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
         relayNodeOp<SessionInfo>(nodeId, op, { user: relayUser, input: { ...created, invites: [], hostProfile }, invites }));
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: owner }, id: session.id }));
       await registerSessionInstance(session.id, owner, { appId: input.appId, projectId: input.projectId, title: session.label });
+      // #4135 — 복원도 생성(launchSession ⑦)과 같은 뒷일: 프로젝트 소속을 DB(execution_session)에 확정한다. 종전엔 이 줄이 없어
+      //  복원된 노드 세션은 새 id 로 뜨고도 소속 행이 없었고, project-context 가 found:false 를 답했다(실측 2026-09-25
+      //  box-wonjoon-jang-7c1e885a) — AGENTS 주입·자료 동기화·세션=태스크가 로컬 마커 캐시 없인 전부 죽는다.
+      //  실패면 방금 만든 세션을 죽이고 503(생성과 같은 규율 — 소속을 삼키면 첫 훅이 미연결로 보고 프로젝트를 또 만든다).
+      if (input.projectId && input.projectSrc !== "org") {
+        await bindNodeSessionProjectOrKill({
+          nodeId, sessionId: session.id, requester: owner, harness: session.harness || input.harness, projectId: input.projectId,
+        });
+      }
       await mirrorNodeSession({ ...session, invites }, nodeId, input, owner);
       // #2122 ① — 승계를 **권위화**한다: 결과를 보고, 실패하면 옛 행을 지우지 않는다(아래). 노드 세션은 내구 맵에도
       //  쓴다 — 그 표는 INSERT ON CONFLICT 라 desired-state 행이 아직 없어도(미러 실패) 매핑이 남는다.

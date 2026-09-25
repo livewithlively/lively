@@ -27,7 +27,7 @@ import { canAttach } from "./terminal-sessions.js";
 import { isExternalExecutionSessionId } from "../org/auth/agent-identity.js";
 import { syncSessionAppInstanceProject } from "../org/store/app-instances.js";
 import { sessionTaskOf, sessionTaskSection } from "../v6/session-task.js";
-import { answersFolder, contextNodeId, sessionDirFromRow } from "./session-project-folder.js";   // #4135 — 노드·폴더는 세션 행이 안다
+import { answersFolder, contextNodeId, legacyProjectToAdopt, sessionDirFromRow } from "./session-project-folder.js";   // #4135 — 노드·폴더·소속은 세션 행이 안다
 
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 const SID_RE = /^[A-Za-z0-9._-]{1,128}$/;
@@ -148,9 +148,12 @@ async function adoptLegacyBinding(id: string, me: string): Promise<ExecutionSess
   // 실행 id 의 구 바인딩 → 없으면 **이 세션이 이어받은 대화**의 마지막 소속(#1867 이어받기 승계).
   //  이어받기는 실행 id 를 새로 발급하므로, 이 다리가 없으면 같은 대화가 매번 새 프로젝트를 만든다.
   const legacy = await latestProjectForSessionChain([id, state?.claude_session_id]).catch(() => null);
-  if (!legacy) return null;
+  //  #4135 — 사슬에 없으면 desired-state 행의 project_id(게이트웨이가 쓴 정본). 소속 행 없이 뜬 세션(복원 경로가 소속을 안 쓰던
+  //   시절의 세션 등)이 첫 조회에서 스스로 낫는다 — 없는 프로젝트면 FK 로 실패해 null(종전과 같음).
+  const projectId = legacyProjectToAdopt(legacy, state);
+  if (!projectId) return null;
   return await adoptLegacyExecutionSession({
-    id, owner: me, harness: state?.harness ?? null, nodeId: state?.node_id ?? null, projectId: legacy.id,
+    id, owner: me, harness: state?.harness ?? null, nodeId: state?.node_id ?? null, projectId,
   }).catch(() => null);
 }
 
