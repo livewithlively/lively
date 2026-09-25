@@ -233,18 +233,24 @@ export const slotStoreKey = (mem: string, slot: TabKey): string => (tabNum(slot)
 
 /** 어느 탭에 펴 둘지 셸이 정한 뒤, 그 탭의 열쇠에 적는다 — 새로 만들어진 뷰어는 신호를 이미 놓친 뒤라
  *  저장된 값에서 읽기 때문이다(웹 칸의 openInWebPart 와 같은 규칙). */
+//  끼워 넣은 판(EMBEDDED)의 «탭 → 파일» 은 저장소 대신 이 판 안에서만 기억한다 — 바깥 사람이 펴 둔 파일을 덮어쓰지 않으면서도
+//  «이미 떠 있는 탭 찾기»(#4135)가 거기서도 성립하게(안 그러면 같은 파일을 누를 때마다 새 탭이 쌓인다 — 리뷰 지적).
+const embeddedViewerPaths = new Map<string, string>();
 export function rememberViewerPath(mem: string, slot: TabKey, path: string): void {
-  if (EMBEDDED) return;                 // 끼워 넣은 판 — 바깥 사람이 펴 둔 파일을 덮어쓰지 않는다
+  const k = slotStoreKey(mem, slot);
+  if (EMBEDDED) { embeddedViewerPaths.set(k, String(path || '')); return; }
   try {
     const m = JSON.parse(localStorage.getItem(ED_PATH_KEY) || '{}') || {};
-    m[slotStoreKey(mem, slot)] = String(path || '');
+    m[k] = String(path || '');
     localStorage.setItem(ED_PATH_KEY, JSON.stringify(m));
   } catch (_) { /* 저장이 막혀도 알림으로 지금 떠 있는 칸은 바뀐다 */ }
 }
 
 /** 그 탭이 펴 두었던 파일 — 셸이 «이 파일이 이미 어느 뷰어에 떠 있나» 를 볼 때(#4135). 없으면 ''. */
 export function rememberedViewerPath(mem: string, slot: TabKey): string {
-  try { return String((JSON.parse(localStorage.getItem(ED_PATH_KEY) || '{}') || {})[slotStoreKey(mem, slot)] || ''); } catch (_) { return ''; }
+  const k = slotStoreKey(mem, slot);
+  if (EMBEDDED) return embeddedViewerPaths.get(k) || '';
+  try { return String((JSON.parse(localStorage.getItem(ED_PATH_KEY) || '{}') || {})[k] || ''); } catch (_) { return ''; }
 }
 
 /** 밖(자료 칸)에서 뷰어에 파일을 펴는 **유일한 통로** — 뷰어 칸이 없으면 셸(panes.ts)이 듣고 곁칸에 만든다.

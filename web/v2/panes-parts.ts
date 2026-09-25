@@ -1090,7 +1090,8 @@ function viewerPart(ctx: PartCtx): Part {
     };
   });
   //  살아 있는 미리보기(아래) — open() 이 읽으므로 **그보다 앞에** 선언한다(마운트 중 TDZ 사고의 재발 방지).
-  let shownStamp = '';          // 지금 그려 둔 파일의 도장(수정 시각:크기) — '' 이면 비교할 것이 없다(목록 화면·아직 여는 중)
+  let shownStamp = '';          // 지금 그려 둔 파일의 도장(수정 시각:크기) — '' 이면 비교할 것이 없다(빈 화면·아직 여는 중)
+  let opening = '';             // 지금 받는 중인 경로 — 같은 경로를 겹쳐 받지 않는다(#4135 리뷰: 갓 만든 뷰어는 기억으로 한 번, 셸 신호로 또 한 번 open 에 와서 두 번 받았다)
   let unbridge: () => void = () => {};   // #4075 — 지금 떠 있는 시안 프레임의 검토 다리를 떼는 손잡이(다른 파일을 펼 때 뗀다)
   let checking = false;
   //  ── 고치기 (#762, 원준 2026-09-05: "뷰어 안에서 편집 버튼 누르면 편집도 가능하게") ────────────
@@ -1318,6 +1319,8 @@ function viewerPart(ctx: PartCtx): Part {
   /** 못 읽었다 — 너무 커서(413)면 «내려받기» 를 준다(미리보기 상한은 두 API 가 같다). 없어진 파일(404)이면 기억을 지우고
    *  빈 화면으로(안 그러면 지운 파일의 «못 읽었어요» 가 그 탭에 영영 남는다). 그 밖은 한 줄로 끝. */
   function showFail(r: Response | null, p2: string): void {
+    if (path !== p2) return;   // 그 사이 다른 걸 골랐다 — 옛 요청의 실패로 지금 화면·기억을 지우지 않는다(리뷰 지적)
+    opening = '';              // 실패했으니 다시 누르면 다시 받는다
     if (r && r.status === 404 && !src) {
       remember(''); path = ''; shownStamp = '';
       paintBar(); paintEmpty();
@@ -1335,9 +1338,10 @@ function viewerPart(ctx: PartCtx): Part {
    *  `quiet` 면 «여는 중…» 을 안 띄운다 — 살아 있는 미리보기가 다시 펼 때 화면이 깜빡이지 않게(옛 그림이 새 그림이 올 때까지 남는다). */
   async function open(p2: string, fresh = false, quiet = false): Promise<void> {
     //  ⚠ **같은 파일을 다시 그리지 않는다** — 그리면 프레임이 새로 서서 PDF·시안이 맨 위로 튄다.
-    //   이 길로 오는 부름이 여럿이다(세션 알림·탭 전환·8초 틱). 진짜 다시 그릴 때(fresh)만 통과시킨다.
-    if (p2 && p2 === path && shown && !fresh && shownSrc === srcKey()) { paintBar(); return; }
-    path = p2;
+    //   이 길로 오는 부름이 여럿이다(세션 알림·탭 전환·기억·셸의 배달 신호). 진짜 다시 그릴 때(fresh)만 통과시킨다.
+    //   «받는 중»(opening)도 같은 파일이다 — 다 받기 전에 온 두 번째 부름이 fetch 를 한 번 더 띄우지 않게.
+    if (p2 && p2 === path && (shown || opening === p2) && !fresh && shownSrc === srcKey()) { paintBar(); return; }
+    path = p2; opening = p2;
     shownSrc = srcKey();
     if (!src) remember(p2);
     paintBar();
@@ -1412,9 +1416,13 @@ function viewerPart(ctx: PartCtx): Part {
     //   제 미리보기를 넣어 둔다). 같은 파일이 화면마다 다르게 열리지 않도록 판정·렌더는 lib/file-preview
     //   한 자리가 쥔다(#1436) — 이 칸도 그 자리에 붙는다.
     const { buildFilePreview } = await import('../lib/file-preview.js');
+    //  크기는 HEAD 로 묻는다(#4135 — 목록을 더는 받지 않으므로 list 는 비어 있다). 렌더러의 대용량 사전 차단(MEDIA_MAX)이 이 값을 본다.
+    //   세션 파일(src)엔 안 묻는다 — 그 API 는 HEAD 에 몸통까지 흘린다(출처 주석).
+    const head = src ? null : await fetch(fileUrl(p2), { method: 'HEAD', headers: authHeaders(), cache: 'no-store' }).catch(() => null);
+    if (path !== p2) return;
     const out = await buildFilePreview({
       name: base(p2),
-      size: list.find((f) => f.path === p2)?.size,
+      size: Number(head?.headers.get('x-file-size') || '') || list.find((f) => f.path === p2)?.size,
       fetchView: () => fetch(fileUrl(p2), fetchOpts),
       fetchDownload: () => fetch(fileUrl(p2) + '&download=1', fetchOpts),
       cls: { img: 'pn-ed-img', pdf: 'pn-ed-pv' },   // 크기 규칙만 이 칸 것으로 덮는다(fp-* 가 기본)
