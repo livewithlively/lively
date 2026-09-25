@@ -435,14 +435,6 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 
 /* ── [프로젝트] 구역 — 폴더 · 리스트 트리 (#2043, web/v2/side.ts renderProjects) ──────────────────── */
 .v2-ptree { display: flex; flex-direction: column; gap: 1px; }
-.v2-ptf { display: flex; align-items: center; gap: 2px; min-height: 30px; }
-.v2-ptf-a { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 5px 10px 5px 4px; border-radius: 8px; font-size: 13px; font-weight: 700; color: var(--ink-sub); text-decoration: none; }
-.v2-ptf-a:hover { background: var(--bg); color: var(--ink); }
-.v2-ptf.on .v2-ptf-a { background: var(--bg); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-net); }
-.v2-ptf-a .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.v2-ptf-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linejoin: round; }
-.v2-ptf-a:hover .v2-ptf-ic, .v2-ptf.on .v2-ptf-ic { stroke: var(--blue); }
-.v2-ptf .v2-car.open { transform: rotate(90deg); }
 .v2-ptl.on { background: var(--bg); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-net); }
 .v2-ptl-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .v2-ptl:hover .v2-ptl-ic, .v2-ptl.on .v2-ptl-ic { stroke: var(--blue); }
@@ -653,6 +645,14 @@ button.v2-kedit { border: 0; background: none; font-family: inherit; line-height
 .v2-pgroup a.n:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-radius: 4px; }
 .v2-pgroup.on a.n { color: var(--blue); }
 .v2-pcard > .v2-ksp-h.on { background: var(--bg-punch); box-shadow: inset 0 0 0 1px var(--line-net); }
+/* 하위 폴더 카드의 [폴더 보기] 링크 — 이 카드에서 폴더 보드로 가는 유일한 입구라 키보드 · 터치로도 닿아야 한다(리뷰 지적).
+   키보드: 카드 머리 안에 포커스가 오면 드러난다(Tab 이 접기 단추 → 링크로 이어진다). 터치: 늘 보이고, 수 옆에 선다. */
+.v2-pcard > .v2-ksp-h:focus-within .v2-ksp-edit { display: inline-grid; }
+.v2-pcard > .v2-ksp-h:focus-within > .v2-cnt { visibility: hidden; }
+@media (hover: none) {
+  .v2-pcard > .v2-ksp-h .v2-ksp-edit { display: inline-grid; position: static; margin: 0 0 0 2px; flex: none; }
+  .v2-pcard > .v2-ksp-h > .v2-cnt { visibility: visible; }
+}
 .v2-pfav .v2-ptl-ic { stroke: var(--muted-2); }
 .v2-pfav.on .v2-ptl-ic { stroke: var(--blue); }
 /* ── #3830 맥락 관리 — 이 앱에 있는 동안만 사이드바 열을 접는다 ──────────────────
