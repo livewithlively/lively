@@ -578,3 +578,29 @@ export function recordPendingFileName(sid, childId) {
   const safe = String(childId || "unknown").replace(/[^A-Za-z0-9._-]/g, (c) => `%${c.codePointAt(0).toString(16)}`).slice(0, 120);
   return recordPendingPrefix(sid) + safe;
 }
+
+// ── 세션 토큰 파일(#4135) — 이미 떠 있는 세션에 게이트웨이가 **나중에** 실어 준 세션 스코프 자격 ──────────────
+//  env(LIVELY_TOKEN·LIVELY_MCP_TOKEN)는 판을 띄울 때 한 번만 실린다. 그 뒤 게이트웨이가 그 세션 앞으로 자격을 굽거나 바꿔도 살아 있는
+//  프로세스의 env 는 못 바꾼다 — 그래서 **파일**이 하나 더 있다: `<HOME>/.lively/session-tokens/<세션id>.json` = { hook, mcp }.
+//  노드 에이전트가 게이트웨이의 sessionTokens op 를 받아 쓴다(terminal/session-token-file.ts — 자리 규칙이 **같아야** 한다).
+//  세션 id 는 그 판의 LIVELY_SESSION_ID 다. 훅은 매 호출 이 파일을 **먼저** 보고, 없으면 종전 순서(env → 공유 파일)로 떨어진다.
+//  파일이 env 보다 앞인 이유: env 는 띄울 때의 스냅샷이고 파일은 게이트웨이가 그 뒤에 정한 정본이다(회수·재발급 포함).
+//  사람이 연 셸(LIVELY_SESSION_ID 없음)엔 파일이 없다 — 종전과 글자 그대로 같다.
+//  ⚠ 런타임 의존 0 규율 — fs 는 호출부가 넘긴다(readFile(path) → 문자열, 없으면 던진다).
+const SESSION_ID_SAFE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+export function sessionTokenFile(HOME, env = process.env) {
+  const sid = String(env.LIVELY_SESSION_ID || "").trim();
+  if (!HOME || !sid || !SESSION_ID_SAFE_RE.test(sid)) return null;
+  return `${HOME}/.lively/session-tokens/${sid}.json`;
+}
+export function sessionTokenFromFile(kind, HOME, readFile, env = process.env) {
+  const file = sessionTokenFile(HOME, env);
+  if (!file) return "";
+  let raw;
+  try { raw = readFile(file); } catch { return ""; }
+  try {
+    const j = JSON.parse(String(raw || ""));
+    const v = j && typeof j === "object" ? j[kind] : "";
+    return typeof v === "string" ? v.trim() : "";
+  } catch { return ""; }
+}

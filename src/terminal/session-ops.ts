@@ -27,6 +27,7 @@ import { sendKeysToSession } from "./send-keys.js";
 import { injectFirstPrompt } from "./session-first-prompt.js";
 import { runOutboxStep } from "./outbox-host-step.js";
 import { applySessionProject } from "./session-project.js";
+import { writeSessionTokens, removeSessionTokens } from "./session-token-file.js";   // #4135 — 살아 있는 세션에 자격을 나중에 심는 길
 import type { LivelyUser } from "../context.js";
 
 /**
@@ -35,7 +36,7 @@ import type { LivelyUser } from "../context.js";
  */
 export const SESSION_OPS = [
   "list", "create", "createAppSession", "kill", "edit", "gone", "label",
-  "sendKeys", "setProject", "injectFirstPrompt", "markActive", "markSeen", "outboxStep",
+  "sendKeys", "setProject", "injectFirstPrompt", "markActive", "markSeen", "outboxStep", "sessionTokens",
 ] as const;
 
 export type SessionOp = (typeof SESSION_OPS)[number];
@@ -112,7 +113,22 @@ export async function runSessionOp(op: SessionOp, args: Record<string, unknown>)
       return session;
     }
 
-    case "kill": await killSession(user, String(args.id)); return { ok: true };
+    case "kill": {
+      await killSession(user, String(args.id));
+      await removeSessionTokens(String(args.id));   // #4135 — 나중에 심은 세션 토큰 파일도 함께(회수는 게이트웨이가)
+      return { ok: true };
+    }
+
+    // #4135 — 이미 떠 있는 세션에 게이트웨이가 **나중에** 구운 세션 스코프 자격(훅·MCP)을 파일로 심는다. env 는 판을 띄울 때만
+    //  실리므로 살아 있는 세션은 이 길뿐이다. 훅·MCP 프록시가 매 호출 이 파일을 먼저 본다(session-token-file 머리말).
+    //  게이트웨이가 주인·소유를 다 판정한 뒤 보낸다 — 여기는 형식만 보고 쓴다(F7). 둘 다 비면 파일을 지운다.
+    case "sessionTokens": {
+      const wrote = await writeSessionTokens(String(args.id), {
+        hook: typeof args.hookToken === "string" ? args.hookToken : null,
+        mcp: typeof args.mcpToken === "string" ? args.mcpToken : null,
+      });
+      return { ok: true, wrote };
+    }
 
     case "edit": {
       const patch = (args.patch ?? {}) as { label?: string };
