@@ -186,15 +186,14 @@ export function projectLines(rows: readonly AllSessLike[] | null | undefined): S
 }
 
 /** 사이드바 카드 — 기준의 묶음마다 한 장, 카드 안 줄은 projectLines. 묶지 않음이면 카드가 없다. 휴지통 것은 세지 않는다.
- *  ★ 카드 순서는 어느 기준이든 **가장 최근 활동 순**(원준 2026-09-25 — 위키 사이드바와 같은 «첫 화면에 다 들어오게» 규칙과 한 벌).
- *   같으면 세션 많은 순, 그다음 key 순. 본문 묶음 순서(groupAllSess)는 따로다 — 본문은 나 · 확인 필요를 먼저 세운다. */
+ *  ★ 카드 순서는 본문 묶음과 **같은 groupAllSess 순서** 그대로다(원준 2026-09-25 — 두 화면이 같은 순서를 말한다). 정렬을 따로 하지 않는다:
+ *   시간별 오늘 → 이전 · 리스트별 최근 순(리스트 없음 맨 끝) · 사람별 나 먼저, 나머지는 세션 많은 순 · 상태별 확인 필요 → 작업 완료 → 작업 중 → 대기 중 → … */
 export function sideCards(rows: readonly AllSessLike[] | null | undefined, by: SessGroupBy, now: number,
   stateRank: (key: string) => number = () => 99): SideCard[] {
   if (by === 'none') return [];
   const live = (rows || []).filter((s) => !s.trashedAt);
   return groupAllSess(live, by, now, stateRank)
-    .map((g) => ({ key: g.key, n: g.rows.length, top: Math.max(0, ...g.rows.map((s) => Number(s.lastSeen) || 0)), projects: projectLines(g.rows) }))
-    .sort((a, b) => b.top - a.top || b.n - a.n || a.key.localeCompare(b.key));
+    .map((g) => ({ key: g.key, n: g.rows.length, top: Math.max(0, ...g.rows.map((s) => Number(s.lastSeen) || 0)), projects: projectLines(g.rows) }));
 }
 
 /** 사이드바에 세울 카드 — 들어가는 만큼(fit 장)만 세우고 나머지는 한 줄(«리스트 N개 더»)로 접는다(원준 2026-09-25 «첫 화면은 스크롤 없이»).
