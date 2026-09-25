@@ -13,8 +13,11 @@ import { bodyCharCount, unreadComments } from './detail-hub-model.js';
 const readKey = (pid: number) => 'pjv_cmt_read_' + pid;
 const lastRead = (pid: number): number => { try { return Number(localStorage.getItem(readKey(pid))) || 0; } catch (_) { return 0; } };
 const markRead = (pid: number, comments: any[]): void => { try { const mx = Math.max(0, ...comments.map((c) => Number(c.id) || 0)); if (mx) localStorage.setItem(readKey(pid), String(mx)); } catch (_) { /* */ } };
-// 편집 중 상태 — 격자를 다시 그려도(다른 위젯의 설정 변경) 편집이 안 날아가게 프로젝트별로 기억한다.
-const EDITING = new Set<number>();
+// 편집 중 상태 — 격자를 다시 그려도(다른 위젯의 설정 변경 · 창 크기 변경) 편집이 안 날아가게 프로젝트별로 기억한다.
+//  ⚠ 에디터 **인스턴스**도 여기 산다(리뷰 지적 2026-09-25): 다시 그릴 때마다 새로 만들면 옛 에디터가 flush·destroy 없이 버려져
+//   document 리스너·툴바가 새고, 옛 자동저장 타이머가 나중에 낡은 본문을 덮어쓴다. 한 프로젝트에 에디터는 하나 — 다시 그리면 그 요소를 옮겨 앉힌다.
+type LiveEditor = { el: HTMLElement; flush: () => Promise<void>; destroy: () => void };
+const EDITING = new Map<number, LiveEditor | null>();   // 키 있음 = 편집 중, 값 = 살아 있는 에디터(아직 안 만들었으면 null)
 
 export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
   const { o, P, pid } = ctx;
@@ -31,14 +34,15 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
     else r.append(el('div', { class: 'pjh-stat', style: 'padding:4px 2px', text: '본문이 비어 있습니다 — 편집을 눌러 적으세요.' }));
     return r;
   };
-  let editor: { el: HTMLElement; flush: () => Promise<void>; destroy: () => void } | null = null;
+  let editor: LiveEditor | null = null;
   const editBtn = el('button', { class: 'pjh-sbtn ghost', type: 'button' }, hubIcon('pen', 12), '편집');
   const textHost = el('div', { class: 'pjh-body-col' });
   const contentHost = el('div', { class: 'pjh-body-content' });
   const paintText = () => {
     contentHost.replaceChildren();   // «갱신 · 편집» 줄(bh)은 남기고 본문만 바꾼다
     if (EDITING.has(pid) && o.bodyEditor) {
-      editor = o.bodyEditor();
+      editor = EDITING.get(pid) || o.bodyEditor();   // 살아 있는 인스턴스를 옮겨 앉힌다 — 새로 만들지 않는다
+      EDITING.set(pid, editor);
       contentHost.append(el('div', { class: 'pjh-edit-host' }, editor.el));
       editBtn.replaceChildren(hubIcon('check', 12), '완료');
     } else {
@@ -50,8 +54,12 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
   editBtn.onclick = async (e) => {
     e.stopPropagation();
     if (!o.bodyEditor) { open(); return; }
-    if (EDITING.has(pid)) { EDITING.delete(pid); if (editor) { try { await editor.flush(); } catch (_) { /* */ } editor.destroy(); } paintText(); }
-    else { EDITING.add(pid); paintText(); const ed = textHost.querySelector('[contenteditable]') as HTMLElement | null; if (ed) ed.focus(); }
+    if (EDITING.has(pid)) {
+      const live = EDITING.get(pid) || editor;
+      EDITING.delete(pid);
+      if (live) { try { await live.flush(); } catch (_) { /* 저장 실패는 에디터가 토스트로 이미 말했다 */ } live.destroy(); }
+      paintText();
+    } else { EDITING.set(pid, null); paintText(); const ed = textHost.querySelector('[contenteditable]') as HTMLElement | null; if (ed) ed.focus(); }
   };
   // «갱신 · 편집» 줄 — 1×1 은 바닥 단추가 그 역할(자리가 없다)
   const bh = (h >= 2 || w >= 2) ? el('div', { class: 'pjh-bh' }, el('span', { text: P.updated_at ? '갱신 ' + relTime(P.updated_at) : '' }), editBtn) : null;

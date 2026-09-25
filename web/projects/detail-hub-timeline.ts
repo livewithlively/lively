@@ -5,7 +5,7 @@
 //   2×2+ 7일 레인 + 아래 «그날 그 사람» 기록            3×2+  14일 레인 + 아래 기록 + 범례
 //  기록 줄을 누르면 전체 타임라인(열기). 사람 색은 아바타 해시색(core.avatarColor)과 같다.
 import { avatarColor, el, personFace } from '../core.js';
-import { type Fill, btn, emptyNote, footText, hubIcon } from './detail-hub-kit.js';
+import { type Fill, btn, emptyNote, footText } from './detail-hub-kit.js';
 import { type LaneDay, actWhen, countOn, countSince, dayKey, dotSize, feedDayLabel, laneCounts, laneDays, latestLane, rowsBudget } from './detail-hub-model.js';
 
 const TYPE_LABEL: Record<string, string> = { feature: '기능', fix: '수정', decision: '결정', docs: '문서', research: '리서치', review: '검토', chore: '운영', other: '기타' };
@@ -98,6 +98,5 @@ export const fillTimeline: Fill = (ctx, f, body, foot, sub) => {
       el('span', { class: 'pjh-legend-h', text: h <= 1 ? '점 크기 = 그날 건수 · 회색 열 = 주말 · 점에 올리면 누가·무슨 작업' : '점 크기 = 그날 건수 · 회색 열 = 주말 · 점을 누르면 그날 그 사람의 기록' }));
     body.append(el('div', { style: 'flex:1' }), legend);
     foot.append(footText(nDays + '일 · 이번 주 ' + week + '건'), btn('전체 보기', 'btn-ghost', open));
-    void hubIcon;
   });
 };

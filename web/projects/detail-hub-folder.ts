@@ -17,7 +17,9 @@ import { recentFiles, splitDirs } from './detail-hub-model.js';
 // 프로젝트별 «보고 있는 폴더»·«고른 파일» — 다시 그려도 남는다.
 const NAV: Map<number, { path: string; picked: string }> = new Map();
 const navOf = (pid: number) => { let n = NAV.get(pid); if (!n) { n = { path: '', picked: '' }; NAV.set(pid, n); } return n; };
-const DIR_CACHE: Map<string, Promise<any[]>> = new Map();
+// 하위 폴더 목록 캐시 — 같은 화면에서 필터·설정으로 다시 그릴 때 재요청을 막는다. 30초 뒤엔 다시 묻고, 실패는 캐시하지 않는다(리뷰 지적).
+const DIR_CACHE: Map<string, { at: number; p: Promise<any[]> }> = new Map();
+const DIR_TTL_MS = 30_000;
 
 export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
   const { o, P, pid } = ctx;
@@ -28,8 +30,12 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
   const listDir = (rel: string): Promise<any[]> => {
     if (!rel) return ctx.D.files();
     const key = pid + ':' + rel;
-    if (!DIR_CACHE.has(key)) DIR_CACHE.set(key, api(B + pid + '/files?path=' + encodeURIComponent(rel)).then((d: any) => (d && d.items) || []).catch(() => [] as any[]));
-    return DIR_CACHE.get(key)!;
+    const hit = DIR_CACHE.get(key);
+    if (hit && Date.now() - hit.at < DIR_TTL_MS) return hit.p;
+    const p = api(B + pid + '/files?path=' + encodeURIComponent(rel)).then((d: any) => (d && d.items) || [])
+      .catch(() => { DIR_CACHE.delete(key); return [] as any[]; });
+    DIR_CACHE.set(key, { at: Date.now(), p });
+    return p;
   };
   const refresh = () => { DIR_CACHE.clear(); ctx.D.invalidate('files'); ctx.refreshGrid(); };
   const relOf = (name: string): string => (nav.path ? nav.path + '/' : '') + name;

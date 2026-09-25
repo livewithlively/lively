@@ -9,7 +9,6 @@ import { type Fill, btn, emptyNote, footText, hubIcon } from './detail-hub-kit.j
 
 const knName = (k: any): string => String(k.name || k.knowledge_name || '');
 const KN_NEW_TAB = { target: '_blank', rel: 'noopener', title: '새 탭에서 지식 열기' };
-let seq = 0;
 
 export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
   const { o, P, pid } = ctx;
@@ -20,9 +19,11 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
   const open = () => ctx.openTool('knowledge');
   sub.textContent = '필요 ' + req.length + ' · 산출 ' + prod.length;
 
-  const link = async (name: string, relation: 'required' | 'produced' = 'required') => {
+  let seq = 0;   // 검색 경합 가드 — 이 위젯 인스턴스만의 것(다시 그려진 뒤의 옛 검색이 새 결과를 흔들지 않게)
+  const link = async (name: string, btn?: HTMLButtonElement | null, relation: 'required' | 'produced' = 'required') => {
+    if (btn) btn.disabled = true;
     try { await api(o.base + pid + '/knowledge', { method: 'POST', body: JSON.stringify({ name, relation }) }); toast(relation === 'required' ? '필요 지식으로 연결했습니다' : '산출 지식으로 연결했습니다'); o.reload(); }
-    catch (e: any) { toast('연결 실패 — ' + (e && e.message || e), true); }
+    catch (e: any) { toast('연결 실패 — ' + (e && e.message || e), true); if (btn) btn.disabled = false; }
   };
   const unlink = async (name: string, relation: string) => {
     try { await api(o.base + pid + '/knowledge', { method: 'POST', body: JSON.stringify({ name, relation, unlink: true }) }); toast('연결을 해제했습니다'); o.reload(); }
@@ -45,7 +46,7 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
     return el('div', { class: 'pjh-kr rec' }, hubIcon('doc', 13),
       el('a', { class: 'pjh-kr-t', href: '#/k/' + encodeURIComponent(name), ...KN_NEW_TAB, text: m.title || name }),
       pct > 0 ? el('span', { class: 'pjh-kn-pct', text: pct + '%' }) : null,
-      el('button', { class: 'pjh-kn-link', type: 'button', text: '연결', onclick: (e: Event) => { e.stopPropagation(); (e.currentTarget as HTMLButtonElement).disabled = true; link(name); } }));
+      el('button', { class: 'pjh-kn-link', type: 'button', text: '연결', onclick: (e: Event) => { e.stopPropagation(); link(name, e.currentTarget as HTMLButtonElement); } }));
   };
   // 카드(1×N · 흐름) — 제목 + 한 줄 요약(있으면)
   const kcard = (k: any, rel: 'required' | 'produced'): HTMLElement => {
@@ -81,7 +82,7 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
             el('div', { class: 'pjh-kr-b' }, el('a', { class: 'pjh-kr-t', href: '#/k/' + encodeURIComponent(name), ...KN_NEW_TAB, text: m.title || name }),
               m.snippet ? el('div', { class: 'pjh-kr-s', text: String(m.snippet).slice(0, 90) }) : null),
             linked.has(name) ? el('span', { class: 'pjh-kn-rel', text: '연결됨' })
-              : el('button', { class: 'pjh-kn-link', type: 'button', text: '필요로 연결', onclick: (e: Event) => { e.stopPropagation(); (e.currentTarget as HTMLButtonElement).disabled = true; link(name); } })));
+              : el('button', { class: 'pjh-kn-link', type: 'button', text: '필요로 연결', onclick: (e: Event) => { e.stopPropagation(); link(name, e.currentTarget as HTMLButtonElement); } })));
         }
       }, 280);
     });
