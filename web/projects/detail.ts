@@ -10,6 +10,7 @@
 //  이 파일은 상세 계열의 **입구**이기도 하다 — 배럴(projects.ts)은 여기 하나만 물고 형제 셋은 아래에서 중계한다.
 import { api, applyReveal, el, errorNote, personFace, state, toast } from '../core.js';
 import { skeleton } from '../learn.js';
+import { openProjectSessionsModal } from '../sessions.js';   // #4135 허브 세션 위젯 「세션 기록」(detail-terminal 과 같은 문)
 import { projectBodyCommentRow, projectBodySection, projectKnowledgeSection } from './detail-body.js';
 import { mountProjectHub } from './detail-hub.js';
 import { HUB_TOOLS, type HubTool } from './detail-hub-layout.js';
@@ -325,9 +326,13 @@ async function renderProjectV2Detail(view, idStr) {
   const hubHost = el('div', { class: 'pjh-host' });
   view.replaceChildren(head, hubHost);
   mountProjectHub(hubHost, {
-    id, p, members, reload, base: V6_BASE, inModal, focus, actionsHost: hubActions,
+    id, p, members, reload, base: V6_BASE, inModal, focus, actionsHost: hubActions, meId,
     openTask: (tid) => pjvOpenTaskFromHub(tid, reload),          // #4165 줄 → 태스크 모달(본문 먼저)
     goTask: (t) => pjvGoTaskWorkspace(id, t, reload),             // #4165 줄 호버 → 작업 공간(세션)
+    // #4135 5판 — 태스크 위젯은 프로젝트 탭 목록을 옵션(묶음·줄 수·열)과 함께 그대로 쓴다 · 세션 위젯의 「＋ 새 세션」「세션 기록」.
+    tasksList: (opts) => pjvTasksSection(id, p.tasks || [], members, reload, opts.fields ?? (p.fields || []), opts),
+    newSession: () => { void openProjectSessionForm(id, reload, V6_BASE, p.name); },
+    sessionLog: () => openProjectSessionsModal(id, p.name),
     sections: {
       tasks: () => pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []),
       sessions: () => projectTerminalSection(id, members, meId, V6_BASE, p.name, p),
