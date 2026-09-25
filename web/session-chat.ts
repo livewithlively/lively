@@ -20,6 +20,7 @@
 //   대화 uuid 를 추측하지 않는다(서버 원칙) — 매핑이 없으면 '기록 아직 없음'으로 말하고 터미널을 권한다.
 import { anchoredPopover, api, apiUrl, el, personFace, replaceKids, sv, toast, TOKEN_KEY } from './core.js';
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
+import { composerAttach } from './v2/compose-attach.js';
 import { CHAT_FONT_KEY, CHAT_FONT_LABELS, nextFontStep, parseFontStep } from './chat-font.js';
 import { toolLabel } from './session-tool-labels.js';
 // #1850 기록 완전 삭제 — 확인창·실행·토스트의 단일 정의(#1582 규약).
@@ -465,6 +466,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   };
   const isCodex = (): boolean => String(target.raw?.harness || '') === 'codex';
 
+  // 이 화면도 새 세션 입력창과 같은 첨부 통로를 쓴다. 파일을 붙여넣었을 때 경로 문자열만 보내고
+  // 바이트가 빠지지 않도록, 세션의 프로젝트 폴더 또는 개인 uploads/에 먼저 올린다.
+  const attachments = composerAttach({ projectId: () => Number(target.projectId) || 0 });
+
   // 대화창 ————
   const view: ChatView = createChatView(chatHost, {
     who: { me: '나', ai: 'AI' },
@@ -477,8 +482,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     sendWhileBusy: true,
     style: 'desktop',
     bar: { right: el('span', { class: 'dt-chips' }, chipMode) },
+    compose: { chips: attachments.chips, button: attachments.btn, fileInput: attachments.fileIn },
+    canSendEmpty: () => !!attachments.tail(),
     askHost: liveDock,                            // 승인(#2055) — 스크롤에 떠내려가지 않는 입력칸 바로 위
-    onSend: (text) => sendPrompt(text),
+    onSend: async (text) => {
+      if (attachments.busy()) { toast('파일을 올리는 중이에요 — 다 올라가면 보내주세요.'); return; }
+      const sent = await sendPrompt(text + attachments.tail());
+      if (sent) attachments.clear();
+    },
     // ★ 항상 준다 — **판단은 누를 때** 한다. 종전엔 여기서 한 번 정하고 끝이라, 화면을 열 때 아직 세션 행이
     //  안 와 있으면(방금 만든 세션) 멈춤 버튼과 Esc 가 **그 화면에서 영영 사라졌다**(실측 2026-08-26 사용자 신고).
     //  누를 자리가 없는 세션이면 stopTurn 이 그 자리에서 사실대로 말한다 — 죽은 버튼보다 낫다.
@@ -491,6 +502,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     view.input.value = opts.draft;
     view.input.dispatchEvent(new Event('input'));
   }
+  attachments.wirePaste(view.input);
+  attachments.wireDrop(view.root, view.root);
 
   /**
    * **대화창이 이 세션의 본자리인가** — 어느 탭으로 열지를 정한다.
@@ -1794,11 +1807,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   }
 
   // ── 보내기·키·이어받기 ──────────────────────────────────────────────────────────────
-  async function sendPrompt(text: string): Promise<void> {
+  async function sendPrompt(text: string): Promise<boolean> {
     //  ★ #2439 ②③ — 멈춘 세션에 말을 걸면 **그것이 켜는 신호**다. 세션이 뜨는 시점이 «열어볼 때» 가 아니라
     //   «말을 걸 때» 가 된다(윤상민: "실제 뜨는 시점은 프롬프트를 보낸 시점이면 좋겠는데").
-    if (!canType() && canRevive()) { await reviveWithPrompt(text); return; }
-    if (!canType()) { toast('끝난 세션이에요 — [이어서 대화하기]로 새 세션을 열어 보내세요.'); return; }
+    if (!canType() && canRevive()) { await reviveWithPrompt(text); return true; }
+    if (!canType()) { toast('끝난 세션이에요 — [이어서 대화하기]로 새 세션을 열어 보내세요.'); return false; }
     // 낙관적으로 그리고 **서버 큐에 넣는다**(#1753). 배달자가 입력창을 확인하고 넣고 에코로 delivered 를 확정한다 —
     //  로그인·대화상자에 멈춘 세션이어도 유실되지 않고, 새로고침해도 큐에서 되살아난다. 미제출 Enter 재시도도 배달자 몫.
     view.removeOpening(); view.list.querySelector('.sc-empty')?.remove();
@@ -1819,7 +1832,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (!caps().read) {   // 큐엔 들어갔지만(배달자가 전달) 답은 여기 안 온다(파서 전) — 도는 척 두지 않고 그 자리에 말한다
         const i = pending.indexOf(pd); if (i >= 0) pending.splice(i, 1);
         pd.state.textContent = ''; running = false; view.settle(pd.t); view.busy(false);
-        view.setNote('보냈어요 — 이 하네스의 답은 아직 여기 안 보여요. 터미널로 보세요.'); return;
+        view.setNote('보냈어요 — 이 하네스의 답은 아직 여기 안 보여요. 터미널로 보세요.'); return true;
       }
       // ⚠ 이 말은 **정말 다른 컴퓨터일 때만** 맞다. app-server 세션은 여기서 도는데 게이트웨이 박스가 노드로도
       //  등록돼 있으면 노드 좌표가 붙어(같은 함정) 방금 보낸 말이 "그 컴퓨터로 전달했어요"로 덮였다(실측).
@@ -1828,12 +1841,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (!src) src = target.node ? logSrc() : { kind: 'box', id: target.id };   // src 가 이미 정해졌으면 그대로(위 watch 주석)
       if (src) schedule();
       void syncOutbox();
+      return true;
     } catch (e: any) {
       const i = pending.indexOf(pd); if (i >= 0) pending.splice(i, 1);
       pd.state.remove(); running = false;
       view.settle(pd.t); view.busy(false);
       view.error(pd.t, `보내지 못했습니다. ${e?.message || ''}`);
       view.input.value = text;               // 친 글은 돌려준다
+      return false;
     }
   }
   /** 돌던 턴을 멈춘다. app-server 세션(#2055)은 tmux 키가 아니라 **그 런타임**에 직접 말한다 —
