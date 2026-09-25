@@ -242,7 +242,11 @@ export function runsPanel(data: RunsData | null, opts: { onFilter?: (f: RunFilte
   //  첫 그림 — 붙은 뒤에야 버튼 폭을 잰다(세그먼트 표시자).
   seg.querySelector('button[data-f="all"]')?.classList.add('is-on');
   paintSub(); paintFeed();
-  requestAnimationFrame(paintSeg);
+  requestAnimationFrame(() => {
+    paintSeg();
+    //  좁은 화면(폰)에선 시간 막대가 옆으로 밀린다 — 처음엔 «지금» 쪽을 보인다.
+    if (tl.scrollWidth > tl.clientWidth) tl.scrollLeft = tl.scrollWidth;
+  });
   const ro = new ResizeObserver(() => paintSeg()); ro.observe(seg);
   return { root, setFilter };
 }
