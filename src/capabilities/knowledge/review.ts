@@ -12,8 +12,6 @@ import type { LivelyUser } from "../../context.js";
 import {
   listRevisions, getRevision, approveRevision, rejectRevision, reviewQueueCounts, reviewQueueCountsByCategory,
 } from "../../v6/knowledge-revision-store.js";
-// #802 검토 대기 개인화 — '내 도메인' = 내 팀이 오너인 카테고리(me 의 team_owner_category_ids 와 같은 소스).
-import { memberCategories } from "../../v6/team-store.js";
 import { canSeeKnowledge } from "../../v6/visibility.js";
 import { assertKnowledgeWritable, filterVisibleByName } from "./shared.js";
 
@@ -107,28 +105,25 @@ export const knowledgeRevisionReview: Capability = {
 // ════════ #802 검토 큐 요약(카운트) — 검토 큐를 관리탭 밖으로 꺼내는 표면들의 공용 데이터원. ════════
 //  문제: 검토 큐가 관리탭 안에만 있어, 아무도 안 들어가면 에이전트가 쓴 지식이 승인 대기로 묻힌다
 //   (pending 은 검색·세션주입에서 빠져 있으므로 "기록했는데 아무도 못 쓰는" 상태).
-//  → 대시보드 '최신 알림'의 검토 대기 리마인더 + 관리탭 nav 배지 + 큐의 '내 도메인' 필터가 이걸 함께 먹는다.
+//  → 대시보드 '최신 알림'의 검토 대기 리마인더 + 관리탭 nav 배지가 이걸 함께 먹는다.
+//  (#4233: «내 도메인»(내 팀이 오너인 카테고리) 분리는 분류 담당 개념과 함께 걷었다.)
 //  scope='memory' — 검토 큐(knowledge_revisions)와 동일. 검토할 수 없는 사람에겐 애초에 알리지 않는다(403 → 표면 생략).
 
 export const reviewQueueSummary: Capability = {
   name: "review_queue_summary",
   title: "검토 큐 요약",
-  description: "검토 대기 건수 — 신규(pending 지식) + 수정(리비전). 전체와 '내 도메인'(내 팀이 오너인 카테고리)을 분리해 준다.",
+  description: "검토 대기 건수 — 신규(pending 지식) + 수정(리비전)과 카테고리별 건수.",
   scope: "memory",
   input: {},
   expose: {
     mcp: false,   // 검토는 사람이 웹에서 하는 일 — 에이전트 툴 표면을 늘리지 않는다(knowledge_revisions 와 동일 판단).
     rest: [{ method: "GET", paths: ["/api/ui/review-queue/summary"], parse: () => ({}) }],
   },
-  handler: async (_input: unknown, user: LivelyUser, ctx?: CapabilityCtx) => {
-    const memberId = String(user?.userId ?? "");
-    // 팀 미설정·스키마 초기 등으로 실패해도 카운트 자체는 살린다(개인화만 빠짐 — 전체 건수는 여전히 유효).
-    const cats = memberId ? await memberCategories(memberId).catch(() => []) : [];
-    const owner = cats.filter((c) => c.owner);
-    const counts = await reviewQueueCounts(owner.map((c) => c.category_id), ctx?.viewer ?? null);
+  handler: async (_input: unknown, _user: LivelyUser, ctx?: CapabilityCtx) => {
+    const counts = await reviewQueueCounts(ctx?.viewer ?? null);
     // #968 by_category — 검토 큐 사이드바(카테고리 트리) 배지용. 실패해도 총계는 살린다(추가 표면일 뿐).
     const by_category = await reviewQueueCountsByCategory().catch(() => [] as { key: string | null; n: number }[]);
-    return { ...counts, mine_category_keys: owner.map((c) => c.key), by_category };
+    return { ...counts, by_category };
   },
 };
 

@@ -221,25 +221,19 @@ async function writeRuntimeBundle(stageDir: string): Promise<void> {
 const strip = (md: string): string =>
   md.replace(/^<!--[\s\S]*?-->\s*/, "").replace(/^---[\s\S]*?---\s*/, "").trim();
 
-// 팀 층(team-scoped) — 보는 멤버의 소속 팀 + 소유/이해관계 카테고리를 요약하는 '우리 팀' 프리앰블 + mine id 집합.
-//  ★오너십 ≠ 접근권한: 우선순위 신호일 뿐 — 다른 팀 맥락도 아래 인덱스에서 전원 열람·검색('분절 없는 집중').
-//  memberId 없거나(정적/멤버무관) 팀 미소속이면 block="" → 출력 불변(정적↔라이브 일치 불변식 유지). fail-open(조회 실패=빈 블록).
-async function buildTeamBlock(memberId: string): Promise<{ block: string; mineIds: Set<number> }> {
+// 팀 층(team-scoped) — 보는 멤버의 소속 팀 이름을 적는 '우리 팀' 프리앰블.
+//  ⚠ #4233(원준 2026-09-25): 소유/이해관계 카테고리 줄과 ★ 안내는 분류 담당 개념과 함께 걷었다.
+//   ${team} 치환 자리는 **남긴다** — 기존 DB 의 org-defaults 섹션 본문에 문자 그대로 `${team}` 이 시드돼 있어(knowledge.ts
+//   마이그레이션), 치환을 없애면 그 문자가 모든 세션에 그대로 찍힌다. 이제 팀 이름 한 줄이거나 빈 글이다.
+//  memberId 없거나(정적/멤버무관) 팀 미소속이면 "" → 출력 불변(정적↔라이브 일치 불변식 유지). fail-open(조회 실패=빈 블록).
+async function buildTeamBlock(memberId: string): Promise<string> {
   try {
-    const { memberTeams, memberCategories } = await import("../../v6/team-store.js");
-    const [teams, cats] = await Promise.all([memberTeams(memberId), memberCategories(memberId)]);
-    const mineIds = new Set(cats.map((c) => Number(c.category_id)));
-    if (!teams.length) return { block: "", mineIds };
-    const fmt = (c: { name: string | null; key: string }): string => (c.name?.trim() || c.key);
-    const owned = cats.filter((c) => c.owner);
-    const stake = cats.filter((c) => !c.owner);
-    const lines = ["## 우리 팀", `- **팀:** ${teams.map((t) => t.name?.trim() || t.key).join(", ")}`];
-    if (owned.length) lines.push(`- **소유 카테고리:** ${owned.map(fmt).join(" · ")}`);
-    if (stake.length) lines.push(`- **이해관계 카테고리:** ${stake.map(fmt).join(" · ")}`);
-    lines.push("> 위 카테고리(★)의 지식·프로젝트·도메인맵을 먼저 본다 — 오너십은 우선순위일 뿐 접근제한이 아니다. 아래 인덱스의 다른 팀 맥락도 전원 열람·검색 가능('분절 없는 집중').");
-    return { block: lines.join("\n"), mineIds };
+    const { memberTeams } = await import("../../v6/team-store.js");
+    const teams = await memberTeams(memberId);
+    if (!teams.length) return "";
+    return ["## 우리 팀", `- **팀:** ${teams.map((t) => t.name?.trim() || t.key).join(", ")}`].join("\n");
   } catch {
-    return { block: "", mineIds: new Set() };
+    return "";
   }
 }
 
@@ -353,7 +347,7 @@ async function buildMemberBlocks(memberId: string): Promise<{ me: string; person
 export async function previewMemberContext(orgName: string, memberId?: string): Promise<string> {
   const header = `# ${orgName} 컨텍스트`;
   // 팀 층 — memberId(=org_member.id, bearer 토큰 principal) 있을 때만. 훅이 멤버 토큰으로 fetch 하므로 게이트웨이가 신원을 안다.
-  const team = memberId ? await buildTeamBlock(memberId) : { block: "", mineIds: new Set<number>() };
+  const team = memberId ? await buildTeamBlock(memberId) : "";
   const { listWikiPins, PUBLIC_VIEWER } = await import("../../v6/knowledge-store.js");
   const { categoryMapForIndex, wikiCategoryMap } = await import("./knowledge-index.js");
   // 공개범위(#1291) — **이 함수가 세션 첫머리 주입의 단일 소스**다(훅·웹 미리보기·정적 폴백이 전부 여기를 지난다).
@@ -363,10 +357,10 @@ export async function previewMemberContext(orgName: string, memberId?: string): 
   // ${wiki} 블록 소스 = 핀 전량(is_wiki 를 DB 에서 필터). 구 코드는 일반 목록 500건을 넘겨 buildWikiBlock 이
   //  메모리에서 골랐고, 활성 지식 500건 초과 조직에선 창 밖 핀이 매 세션 주입에서 조용히 빠졌다(#1247).
   const wikiPins = await listWikiPins(viewer);
-  // 카테고리 지도는 라이브 조회(domainmap+items 조인, non-stale). team.mineIds 주면 우리 팀 카테고리 상단 정렬+★(없으면 출력 불변).
-  const categoryMap = await categoryMapForIndex(viewer, team.mineIds.size ? team.mineIds : undefined);
+  // 카테고리 지도는 라이브 조회(domainmap+items 조인, non-stale).
+  const categoryMap = await categoryMapForIndex(viewer);
   // 항상-주입 섹션 전부를 sort 순으로 조립(injection='always' 행 = 섹션). 각 본문에 ${team}/${categories}/${wiki} 치환.
-  const sectionsText = await buildSectionBlocks({ team: team.block, categoryMap, wikiUnits: wikiPins, wikiCats: await wikiCategoryMap() });
+  const sectionsText = await buildSectionBlocks({ team, categoryMap, wikiUnits: wikiPins, wikiCats: await wikiCategoryMap() });
   // (2026-08-12) 온보딩 baseline 블록(#269) **폐지** — 셋업 체크리스트를 매 세션 컨텍스트 맨 앞에 붙이던
   //  자리다. 없앤 이유는 이 파일이 아니라 onboarding.ts 헤더에 적어 뒀다(요약: 체크리스트를 세션에 밀어
   //  넣으면 '영원히 미완 → 매 세션 잔소리'가 되고, 파이프라인처럼 정상 운영 중에도 미완일 수 있는 항목이

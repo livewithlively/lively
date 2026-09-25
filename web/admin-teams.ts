@@ -4,9 +4,8 @@ import { api, busy, cardHead, el, errorNote, state, toast, uiText } from './core
 import { field, skeleton } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
 
-// ── 팀 — 구성원을 팀(스쿼드)으로 묶고, 팀이 카테고리를 '소유'한다(표면화·주입의 '우리 팀' 기준). ──
-//  오너십 배정 자체는 [카테고리(분류 체계)] 화면(카테고리별 오너 드롭다운)에서. 여기선 팀 CRUD + 팀원(역할) + 소유 현황.
-//  ★오너십 = 우선순위이지 접근제한이 아니다. 편집은 context 스코프(canContext).
+// ── 팀 — 구성원을 팀(스쿼드)으로 묶는다. 여기선 팀 CRUD + 팀원(역할). 편집은 context 스코프(canContext).
+//  ⚠ #4233(원준 2026-09-25): 팀이 카테고리를 «소유»하던 개념(소유/이해관계 카테고리)은 폐기했다.
 const TEAM_ROLE_OPTS = [
   ['lead', '리드'], ['pm', 'PO/PM'], ['dev', '개발'], ['design', '디자인'], ['member', '멤버'],
 ];
@@ -29,7 +28,7 @@ async function teamsPanel(detail, data, opts: any = {}) {
     listCol.append(el('div', { class: 'mini-row' + (String(t.id) === String(sel) ? ' sel' : ''),
       onclick: () => { state.admin.teamSel = t.id; state.admin.teamEditing = false; teamsPanel(detail, data, opts); } },
       el('div', { class: 'mini-title', text: (t.name || t.key) }),
-      el('div', { class: 'mini-meta', text: (t.member_count || 0) + '명 · 카테고리 ' + (t.category_count || 0) + '개' })));
+      el('div', { class: 'mini-meta', text: (t.member_count || 0) + '명' })));
   }
   if (!teams.length) listCol.append(el('div', { class: 'mini-meta' }, ...uiText('아직 팀이 없습니다.')));
 
@@ -37,7 +36,7 @@ async function teamsPanel(detail, data, opts: any = {}) {
   // 팀이 하나도 없으면(첫 사용) 바로 생성 폼을 연다 — 빈 패널에서 '구성원이 안 보인다'는 혼선 제거(팀원 picker 가 폼 안에 있으므로).
   const wantCreate = sel === '__new__' || (sel == null && teams.length === 0 && canEdit);
   if (wantCreate && canEdit) {
-    teamForm(right, { key: '', name: '', description: '', body_md: '', lead_member_id: '', members: [], categories: [] }, data, detail, true);
+    teamForm(right, { key: '', name: '', description: '', body_md: '', lead_member_id: '', members: [] }, data, detail, true);
   } else if (sel != null && sel !== '__new__') {
     right.append(skeleton('팀 정보를 불러오는 중'));
     api('/api/ui/teams/' + sel).then((r) => {
@@ -56,9 +55,9 @@ async function teamsPanel(detail, data, opts: any = {}) {
   //  wikiCategoriesPanel 에 같은 함정이 주석으로 남아 있다). 배열로 모아 filter(Boolean) 한다.
   detail.replaceChildren(...[
     // 합친 화면(구성원·팀)의 가로탭 안에서는 제목을 다시 그리지 않는다 — 페이지 제목이 이미 위에 있다(#1085).
-    opts.embedded ? null : sectionHead('팀', '구성원을 팀으로 묶고, 팀이 맡는 카테고리를 정합니다. 팀이 맡은 카테고리는 팀원의 화면과 AI 세션에 먼저 나옵니다.', { key: 'team' }),
+    opts.embedded ? null : sectionHead('팀', '구성원을 팀으로 묶습니다.', { key: 'team' }),
     el('div', { class: 'card' },
-      cardHead('팀 목록과 담당 카테고리', '팀이 맡은 카테고리는 팀원의 화면과 AI 세션에 먼저 나옵니다.', null, newTeamBtn),
+      cardHead('팀 목록', '팀과 팀원(역할)을 관리합니다.', null, newTeamBtn),
       el('div', { class: 'admin-two admin-two-cols' }, listCol, right)),
   ].filter(Boolean));
 }
@@ -68,8 +67,6 @@ function teamView(root, team, data, detail) {
   const canEdit = state.admin.canContext;
   const roRow = (label, value) => field(label, el('div', { class: 'admin-ro', text: value || '—' }));
   const memberName = (id) => { const m = (data.members || []).find((x) => x.id === id); return m ? (m.display_name || m.id) : id; };
-  const owned = (team.categories || []).filter((c) => c.relation === 'owner');
-  const stake = (team.categories || []).filter((c) => c.relation !== 'owner');
   const kids: any[] = [
     el('div', { class: 'member-read-head' }, el('h3', { text: team.name || team.key }),
       team.state === 'archived' ? el('span', { class: 'pill', text: '보관됨' }) : null),
@@ -78,9 +75,7 @@ function teamView(root, team, data, detail) {
     roRow('리드', team.lead_member_id ? memberName(team.lead_member_id) : ''),
     field('팀원', el('div', { class: 'admin-ro admin-ro-pre', text:
       (team.members && team.members.length) ? team.members.map((m) => (m.display_name || m.member_id) + ' (' + (TEAM_ROLE_LABEL[m.role] || m.role) + ')').join('\n') : '—' })),
-    field('소유 카테고리', el('div', { class: 'admin-ro admin-ro-pre', text: owned.length ? owned.map((c) => (c.name || c.key)).join('\n') : '— ([카테고리(분류 체계)]에서 배정)' })),
   ];
-  if (stake.length) kids.push(field('이해관계 카테고리', el('div', { class: 'admin-ro admin-ro-pre', text: stake.map((c) => (c.name || c.key)).join('\n') })));
   if (team.body_md && team.body_md.trim()) kids.push(field('팀 charter (AI 세션 주입)', el('div', { class: 'admin-ro admin-ro-pre', text: team.body_md.trim() })));
   if (canEdit) kids.push(el('div', { class: 'admin-actions' },
     el('button', { class: 'btn btn-primary', text: '수정', onclick: () => { state.admin.teamEditing = true; teamsPanel(detail, data); } })));
@@ -132,7 +127,7 @@ function teamForm(root, team, data, detail, isNew) {
     el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => { state.admin.teamEditing = false; if (isNew) state.admin.teamSel = null; teamsPanel(detail, data); } }));
   if (!isNew) actions.append(el('button', { class: 'btn-text', text: '삭제',
     onclick: async () => {
-      if (!confirm("팀 '" + (team.name || team.key) + "'을(를) 삭제할까요? (카테고리 오너십이 해제됩니다 — 카테고리 자체는 남습니다)")) return;
+      if (!confirm("팀 '" + (team.name || team.key) + "'을(를) 삭제할까요? 팀원 연결이 함께 해제됩니다.")) return;
       try { await api('/api/ui/teams/' + team.id + '/delete', { method: 'POST' }); toast('삭제됨'); state.admin.teamSel = null; state.admin.teamEditing = false; teamsPanel(detail, data); }
       catch (e) { toast(e.message, true); }
     } }));
