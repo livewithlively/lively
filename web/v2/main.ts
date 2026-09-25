@@ -19,7 +19,7 @@ import { livChatCleanup } from '../liv-chat.js';   // #4032 — 리브 칸 걷�
 import { CLASSIC_PAGES, appByKey, appFrame, nativeAppByRoute, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
 import { openProjPickModal, openProjPickPopover } from './proj-pick.js';   // 세션의 프로젝트 고르기 — 드롭다운·모달 두 그릇, 목록 한 벌
-import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, movePinnedSession, projLandingRoute, projectOrder, reloadSidePrefs, sessProjFilter, sessText, type SideInstance } from './side.js';
+import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, movePinnedSession, projLandingRoute, projectOrder, reloadSidePrefs, sessText, type SideInstance } from './side.js';
 import { dotCls, findSessIn, isMineSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type HomeDest, type Sess, type V2Data } from './views.js';
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
@@ -2079,7 +2079,6 @@ const isSessAllRoute = (route: string): boolean => routeKey(route) === 'app:term
 function paintSessAll(tab: ShellTab): void {
   const facts = homeVisFacts(Date.now());
   renderSessAll(tab.center, data, {
-    proj: sessProjFilter(),
     //  홈 ① 이 세우는 것은 **내 세션**(s.owned)뿐이다 — 남의 세션엔 홈에서의 자리가 없으니 재지 않는다.
     verdict: (s) => (s.owned && !isTrashedSess(s) ? homeRowVerdict(s, facts) : null),
     //  ★ «세션 클릭 시 홈으로 이동» — 구역을 홈으로 옮기고(주소는 아래가 옮긴다), 여는 길은 홈 사이드바 행과 **같은 함수**다

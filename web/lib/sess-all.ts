@@ -27,6 +27,8 @@ export interface AllSessLike {
   owner: string;
   /** 상태 key(web/session-status.ts SESS_STATES) — 상태 거르개·상태 묶기·카드가 읽는다. */
   stateKey?: string;
+  /** #4233 2안 — 이 세션 프로젝트의 리스트 id(프로젝트 탭 트리). 없으면(리스트 없는 프로젝트 · 프로젝트 없는 세션) «리스트 없음». */
+  listId?: number | null;
 }
 
 export interface AllSessQuery {
@@ -37,6 +39,8 @@ export interface AllSessQuery {
   now: number;
   /** #4233 — '' 또는 없음 = 모든 상태 · 그 밖 = 그 상태 key 만(도구줄의 「확인 필요」·「작업 중」 칩). */
   state?: string;
+  /** #4233 2안 — 사이드바에서 고른 카드(그 기준의 묶음 key). null · 없음 = 거르지 않음. */
+  group?: { by: SessGroupBy; key: string } | null;
 }
 
 /** 이 세션이 고른 프로젝트에 드는가. ★ 0 은 «프로젝트 없음» 묶음이지 빈 값이 아니다(null 만 «전체»). */
@@ -45,14 +49,15 @@ export function inProjPick(projectId: number | null | undefined, pick: SessProjP
   return (Number(projectId) || 0) === pick;
 }
 
-/** 네 축(프로젝트 · 기간 · 사람 · 상태)으로 거르고 **최근 순**으로 — 목록은 원장이라 순서의 정본은 마지막 활동 시각이다. */
+/** 다섯 축(프로젝트 · 기간 · 사람 · 상태 · 사이드바 카드)으로 거르고 **최근 순**으로 — 목록은 원장이라 순서의 정본은 마지막 활동 시각이다. */
 export function selectAllSess<T extends AllSessLike>(rows: readonly T[] | null | undefined, q: AllSessQuery): T[] {
   return (rows || [])
     .filter((s) => !s.trashedAt
       && inProjPick(s.projectId, q.proj)
       && inPastPeriod(Number(s.lastSeen) || 0, q.now, q.period)
       && (!q.owner || s.owner === q.owner)
-      && (!q.state || s.stateKey === q.state))
+      && (!q.state || s.stateKey === q.state)
+      && (!q.group || sessGroupKey(s, q.group.by, q.now) === q.group.key))
     .sort((a, b) => (Number(b.lastSeen) || 0) - (Number(a.lastSeen) || 0));
 }
 
@@ -71,11 +76,13 @@ export function ownerCounts(rows: readonly AllSessLike[] | null | undefined, q: 
 
 // ── #4233 안 A — 묶기 · 「지금 볼 것」 카드 ─────────────────────────────────────────────
 
-/** 묶기 기준. 도구줄의 [묶기 · 날짜 ⌄] 드롭다운이 고른다(보기 탭을 더하지 않는다 — 원준 2026-09-25).
- *  'none' = 묶지 않음: 묶음 머리 없이 전부 최근 순 한 목록(원준 «안묶은 완전 raw 한 전체보기도»). */
-export type SessGroupBy = 'day' | 'project' | 'owner' | 'state' | 'none';
+/** 묶기 기준. #4233 2안(원준 2026-09-25 «2안이 좋아»): **사이드바 머리의 [시간별 ⌄] 드롭다운 하나**가 고른다. 본문 도구줄에는 없다.
+ *  'none' = 묶지 않음: 묶음 머리 없이 전부 최근 순 한 목록(원준 «안묶은 완전 raw 한 전체보기도»).
+ *  'project' 는 드롭다운에 없다 — 사이드바에서 카드를 고르면 본문이 그 아래 단계(프로젝트)로 묶을 때 쓴다(mainGroupBy). */
+export type SessGroupBy = 'day' | 'list' | 'owner' | 'state' | 'project' | 'none';
+/** 사이드바 드롭다운의 칸 — 순서 그대로 그린다. 'none' 은 구분선 아래. */
 export const SESS_GROUP_BYS: ReadonlyArray<{ key: SessGroupBy; label: string }> = [
-  { key: 'day', label: '날짜' }, { key: 'project', label: '프로젝트' }, { key: 'owner', label: '사람' }, { key: 'state', label: '상태' },
+  { key: 'day', label: '시간별' }, { key: 'list', label: '리스트별' }, { key: 'owner', label: '사람별' }, { key: 'state', label: '상태별' },
   { key: 'none', label: '묶지 않음' },
 ];
 
@@ -90,10 +97,20 @@ export function dayBucket(ms: number, now: number): string {
 
 export interface SessGroup<T> { key: string; rows: T[] }
 
+/** 이 세션이 그 기준에서 드는 묶음 key — 묶기(groupAllSess) · 사이드바 카드(sideCards) · 카드 거르기(selectAllSess group)가 같은 값을 쓴다. */
+export function sessGroupKey(s: AllSessLike, by: SessGroupBy, now: number): string {
+  if (by === 'day') return dayBucket(Number(s.lastSeen) || 0, now);
+  if (by === 'list') return String(Number(s.listId) || 0);
+  if (by === 'project') return String(Number(s.projectId) || 0);
+  if (by === 'owner') return String(s.owner || '');
+  if (by === 'state') return String(s.stateKey || '');
+  return '';
+}
+
 /**
  * 거른 목록을 묶는다. 묶음 안 순서는 들어온 순서(최근 순) 그대로다.
  *  · 날짜: 오늘 → 어제 → 이번 주 → 이전.
- *  · 프로젝트: 가장 최근 활동 순. «프로젝트 없음»(null · 0 은 한 묶음, key '0')은 늘 맨 끝.
+ *  · 프로젝트 · 리스트: 가장 최근 활동 순. «프로젝트 없음» · «리스트 없음»(null · 0 은 한 묶음, key '0')은 늘 맨 끝.
  *  · 사람: 나('me') 맨 앞, 나머지는 많은 순, 같으면 id 순(사람 고르개 ownerCounts 와 같은 순서).
  *  · 상태: stateRank 순(확인 필요 → 작업 완료 → 작업 중 → …). 순위를 모르는 상태는 맨 끝.
  *  · 묶지 않음: 묶음 하나(key '')에 전부, 들어온 순서 그대로. 행이 없으면 묶음도 없다.
@@ -101,10 +118,7 @@ export interface SessGroup<T> { key: string; rows: T[] }
 export function groupAllSess<T extends AllSessLike>(rows: readonly T[] | null | undefined, by: SessGroupBy, now: number,
   stateRank: (key: string) => number = () => 99): Array<SessGroup<T>> {
   if (by === 'none') { const all = [...(rows || [])]; return all.length ? [{ key: '', rows: all }] : []; }
-  const keyOf = (s: T): string => (by === 'day' ? dayBucket(Number(s.lastSeen) || 0, now)
-    : by === 'project' ? String(Number(s.projectId) || 0)
-    : by === 'owner' ? String(s.owner || '')
-    : String(s.stateKey || ''));
+  const keyOf = (s: T): string => sessGroupKey(s, by, now);
   const m = new Map<string, T[]>();
   for (const s of rows || []) { const k = keyOf(s); const a = m.get(k); if (a) a.push(s); else m.set(k, [s]); }
   const top = (g: SessGroup<T>): number => Math.max(...g.rows.map((s) => Number(s.lastSeen) || 0));
@@ -112,7 +126,7 @@ export function groupAllSess<T extends AllSessLike>(rows: readonly T[] | null | 
   const groups = [...m.entries()].map(([key, rs]) => ({ key, rows: rs }));
   const cmp: (a: SessGroup<T>, b: SessGroup<T>) => number = by === 'day'
     ? (a, b) => DAY_BUCKETS.indexOf(a.key as (typeof DAY_BUCKETS)[number]) - DAY_BUCKETS.indexOf(b.key as (typeof DAY_BUCKETS)[number])
-    : by === 'project' ? (a, b) => Number(a.key === '0') - Number(b.key === '0') || top(b) - top(a)
+    : by === 'project' || by === 'list' ? (a, b) => Number(a.key === '0') - Number(b.key === '0') || top(b) - top(a)
     : by === 'owner' ? (a, b) => Number(b.key === 'me') - Number(a.key === 'me') || b.rows.length - a.rows.length || a.key.localeCompare(b.key)
     : (a, b) => rank(a.key) - rank(b.key) || top(b) - top(a);
   return groups.sort(cmp);
@@ -132,4 +146,59 @@ export function pickNowCards<T extends AllSessLike>(rows: readonly T[] | null | 
       && (s.stateKey !== 'idle' || now - (Number(s.lastSeen) || 0) < NOW_IDLE_MS))
     .sort((a, b) => rank(a.stateKey) - rank(b.stateKey) || (Number(b.lastSeen) || 0) - (Number(a.lastSeen) || 0))
     .slice(0, Math.max(0, max));
+}
+
+// ── #4233 2안 — 사이드바가 묶기 기준과 거르기를 쥔다 ─────────────────────────────────────
+
+/** 사이드바에서 고른 것. by = 묶기 기준 · group = 고른 카드(그 기준의 묶음 key, null = 전체) · proj = 고른 줄(프로젝트 id, 0 = 프로젝트 없음, null = 카드 전체). */
+export interface SessScope { by: SessGroupBy; group: string | null; proj: SessProjPick }
+export const SESS_SCOPE0: SessScope = { by: 'day', group: null, proj: null };
+
+/** 기준을 바꾼다 — 다른 기준이면 고른 카드 · 줄을 푼다(다른 기준의 key 라 뜻이 없다). 같은 기준이면 그대로. */
+export function withGroupBy(sc: SessScope, by: SessGroupBy): SessScope {
+  return by === sc.by ? sc : { by, group: null, proj: null };
+}
+
+/** 본문이 묶는 기준 — 카드를 안 골랐으면 사이드바 기준, 카드를 골랐으면 그 아래 단계(프로젝트), 줄까지 골랐으면 시간. 묶지 않음은 늘 묶지 않음. */
+export function mainGroupBy(sc: SessScope): SessGroupBy {
+  if (sc.by === 'none') return 'none';
+  if (sc.group === null) return sc.by;
+  return sc.proj === null ? 'project' : 'day';
+}
+
+/** 카드 안 줄 한 개 — 그 묶음 × 그 프로젝트. */
+export interface SideCardProj { pid: number; n: number; top: number; wait: boolean }
+export interface SideCard { key: string; n: number; projects: SideCardProj[] }
+
+/** 세션들을 프로젝트 줄로 센다 — «프로젝트 없음»(0) 맨 앞, 나머지는 최근 활동 순, 같으면 id 순. 확인 필요 세션이 있으면 표식. 휴지통 것은 세지 않는다. */
+export function projectLines(rows: readonly AllSessLike[] | null | undefined): SideCardProj[] {
+  const m = new Map<number, SideCardProj>();
+  for (const s of rows || []) {
+    if (s.trashedAt) continue;
+    const pid = Number(s.projectId) || 0;
+    const e = m.get(pid) || { pid, n: 0, top: 0, wait: false };
+    e.n++;
+    e.top = Math.max(e.top, Number(s.lastSeen) || 0);
+    if (s.stateKey === 'waiting') e.wait = true;
+    m.set(pid, e);
+  }
+  return [...m.values()].sort((a, b) => Number(b.pid === 0) - Number(a.pid === 0) || b.top - a.top || a.pid - b.pid);
+}
+
+/** 사이드바 카드 — 기준의 묶음마다 한 장(순서는 groupAllSess 와 같다), 카드 안 줄은 projectLines. 묶지 않음이면 카드가 없다. 휴지통 것은 세지 않는다. */
+export function sideCards(rows: readonly AllSessLike[] | null | undefined, by: SessGroupBy, now: number,
+  stateRank: (key: string) => number = () => 99): SideCard[] {
+  if (by === 'none') return [];
+  const live = (rows || []).filter((s) => !s.trashedAt);
+  return groupAllSess(live, by, now, stateRank).map((g) => ({ key: g.key, n: g.rows.length, projects: projectLines(g.rows) }));
+}
+
+/** 고른 것이 아직 있나 — 고른 카드가 사라지면 전체로, 고른 줄이 그 카드에 없으면 줄만 푼다. 묶지 않음이면 줄(proj)을 lines 에서 찾는다. */
+export function settleScope(sc: SessScope, cards: readonly SideCard[], lines: readonly SideCardProj[] = []): SessScope {
+  if (sc.by === 'none') return sc.proj !== null && !lines.some((l) => l.pid === sc.proj) ? { ...sc, group: null, proj: null } : sc;
+  if (sc.group === null) return sc.proj === null ? sc : { ...sc, proj: null };
+  const card = cards.find((c) => c.key === sc.group);
+  if (!card) return { ...sc, group: null, proj: null };
+  if (sc.proj !== null && !card.projects.some((l) => l.pid === sc.proj)) return { ...sc, proj: null };
+  return sc;
 }

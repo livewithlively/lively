@@ -531,7 +531,6 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-sa-gh .hc { font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .v2-sa-gh.flat { margin-top: 4px; }
 .v2-sa-gh.flat > .hc:first-child { padding-left: 34px; }
-.v2-sa-tb .k { color: var(--muted); font-weight: 600; margin-right: -2px; }
 .v2-sa-row { height: 46px; border-bottom: 1px solid var(--line-row); cursor: pointer; }
 .v2-sa-row:hover { background: var(--bg-sel); }
 .v2-sa-row.on { background: var(--bg-punch); }
@@ -659,6 +658,15 @@ button.v2-kedit { border: 0; background: none; font-family: inherit; line-height
 .v2-pgroup a.n:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-radius: 4px; }
 .v2-pgroup.on a.n { color: var(--blue); }
 .v2-pcard > .v2-ksp-h.on { background: var(--bg-punch); box-shadow: inset 0 0 0 1px var(--line-net); }
+/* #4233 2안 — [AI 세션] 사이드바 머리의 묶기 드롭다운 단추(＋ 앞). 카드 · 줄은 위키 사이드바 부품(.v2-ksp · .v2-kcat · .v2-pg-past) 그대로. */
+.v2-sgb { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 7px 0 9px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--bg); font: inherit; font-size: 12px; font-weight: 700; color: var(--ink-sub); cursor: pointer; white-space: nowrap; }
+.v2-sgb:hover { border-color: var(--line-net); background: var(--bg-tint); }
+.v2-sgb:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-sgb-car { width: 12px; height: 12px; fill: none; stroke: var(--muted-2); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.v2-sgb + .v2-app-new { margin-left: 6px; }
+.v2-scard > .v2-ksp-h .v2-ksp-t { cursor: pointer; }
+.v2-sshelf .v2-kcat .v2-dot { margin-left: 6px; }
 .v2-pfav .v2-ptl-ic { stroke: var(--muted-2); }
 .v2-pfav.on .v2-ptl-ic { stroke: var(--blue); }
 /* ── #3830 맥락 관리 — 이 앱에 있는 동안만 사이드바 열을 접는다 ──────────────────

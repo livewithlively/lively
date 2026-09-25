@@ -22,7 +22,8 @@ import { listDismissedSessions, restoreDismissedSessions, type DismissedSession 
 import { TRASH_TABS, auditProjItems, bundleOpen, extraCountsOf, fileTrashUrl, groupByProject, knowItems, levelLabel, matchesQuery, pickInitialTab, srcItems, type DeletedEntry, type SrcItem, type TabCounts, type TrashTab, type TrashedFile } from '../lib/trash-tabs.js';   // #3778 — 휴지통 네 탭의 잣대(순수)
 import { invalidateTrashCounts, setTrashCounts } from './trash-counts.js';   // 사이드바 「휴지통 N」과 같은 값(#3778)
 import { groupPastByProject, isDismissedSess, pastNames, PAST_PERIODS, selectPast, standsInPast, type PastPeriod, type PastScope, type PastSessLike } from '../lib/past-sess.js';   // #3778 — 「지난 세션」의 잣대(순수)
-import { groupAllSess, ownerCounts, pickNowCards, selectAllSess, SESS_GROUP_BYS, type SessGroupBy, type SessProjPick } from '../lib/sess-all.js';   // #4158 — [AI 세션] 전체 목록의 잣대(순수) · #4233 묶기 · 카드
+import { groupAllSess, mainGroupBy, ownerCounts, pickNowCards, selectAllSess, SESS_GROUP_BYS } from '../lib/sess-all.js';   // #4158 — [AI 세션] 전체 목록의 잣대(순수) · #4233 묶기 · 카드
+import { sessGroupName, sessScope } from './sess-scope.js';   // #4233 2안 — 묶기 기준 · 고른 카드는 사이드바가 쥐고 여기선 읽기만
 import { SESS_STATES } from '../session-status.js';   // #4233 — 상태 묶기 · 카드의 순위
 import { showCtxMenu } from './ctx-menu.js';   // #4233 — 묶기 고르개 · 행 ⋯ 메뉴
 import { fetchTurns, type Turn } from './sess-tail.js';   // #4233 — 사이드 피크의 대화 꼬리(세션 카드와 같은 길)
@@ -933,10 +934,11 @@ function archivedProjects(tblWrap: HTMLElement, barEl: HTMLElement, countEl: HTM
 //   ② 홈과 **한 자**다 — 행이 홈 목록에서 어디 있나(목록에 둠·치움)는 셸이 홈 사이드바와 같은 함수로 재어 넘기고(hooks.verdict),
 //      치우기는 홈의 × 와 같은 함수로 간다(hooks.onDismiss). 치운 세션은 「치움」 꼬리표를 달고 그대로 선다.
 //   ③ 홈에서 여는 길은 홈 사이드바 행과 같은 문(hooks.onOpen ← 셸 openSideRow) 하나뿐이다.
-//  ⚠ 거르기 · 묶기 · 카드 잣대는 lib/sess-all.ts(순수 — scripts/sess-all.test.mjs). 프로젝트는 사이드바가 고르고(side.ts renderSessions) 셸이 넘긴다.
+//  ★ #4233 2안(원준 2026-09-25 «2안이 좋아»): 묶기 기준은 **사이드바 머리의 드롭다운**이 고른다(side.ts renderSessions).
+//   이 화면 도구줄에는 묶기 단추가 없다. 기준 · 고른 카드 · 고른 줄은 sess-scope.ts 한 자리에서 읽고, 본문 묶음은 mainGroupBy
+//   (카드를 안 골랐으면 그 기준, 카드를 골랐으면 프로젝트별, 줄까지 골랐으면 시간별). 빵부스러기가 «AI 세션 / 기준 / 고른 것» 을 적는다.
+//  ⚠ 거르기 · 묶기 · 카드 잣대는 lib/sess-all.ts(순수 — scripts/sess-all.test.mjs).
 export interface SessAllHooks {
-  /** 사이드바가 고른 프로젝트 — null 전체 · 0 프로젝트 없음. */
-  proj: SessProjPick;
   /** 홈 목록에서의 자리 — **내 세션만** 잰다(남의 것은 null: 치우기도 꼬리표도 없다 — 서버도 주인만 허용한다). */
   verdict: (s: Sess) => SessRowVerdict | null;
   /** 홈에서 연다 — 홈 사이드바 행과 같은 문. 피크의 [세션 열기] · 행 두 번 클릭 · 끝난 세션에 보내기가 부른다. */
@@ -949,8 +951,10 @@ export interface SessAllHooks {
 
 /** 화면 상태 — 모듈 수준인 이유는 pastUi 와 같다(셸의 결이 render 를 통째로 다시 부른다). 기억하지 않는다(페이지 수명). */
 const allUi = {
-  period: 'all' as PastPeriod, owner: '', state: '', by: 'day' as SessGroupBy, q: '', searching: false,
-  shown: PAGE, proj: null as SessProjPick,
+  period: 'all' as PastPeriod, owner: '', state: '', q: '', searching: false,
+  shown: PAGE,
+  /** 마지막으로 그린 사이드바 선택(기준 · 카드 · 줄) — 바뀌면 [더 보기]는 처음부터, 피크는 닫는다. */
+  scopeKey: '',
   /** 접은 묶음(`기준:key`) · 펼친 «이름 없는 세션» 줄(`기준:key`). */
   closed: new Set<string>(), openUntitled: new Set<string>(),
   /** 사이드 피크에 띄운 세션 id('' = 닫힘) · 세션별 입력 중인 글. */
@@ -980,7 +984,6 @@ function stateCell(s: Sess): HTMLElement {
   return el('span', { class: 'v2-sa-st quiet' }, dot(k), el('span', { text: label }));
 }
 const svgI = (d: string, cls = 'v2-sa-ic'): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, sv('path', { d }));
-const IC_LAYERS = 'M12 2 2.6 6.6a.7.7 0 0 0 0 1.26L12 12.4l9.4-4.54a.7.7 0 0 0 0-1.26z M2.5 16.5 12 21l9.5-4.5 M2.5 12 12 16.5 21.5 12';
 const IC_SEARCH = 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z M21 21l-4.3-4.3';
 const IC_CHEV = 'M6 9l6 6 6-6';
 const IC_UP = 'M18 15l-6-6-6 6';
@@ -991,14 +994,19 @@ const IC_PLUS = 'M12 5v14 M5 12h14';
 
 export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHooks): void {
   const ui = allUi;
-  if (ui.proj !== hooks.proj) { ui.proj = hooks.proj; ui.shown = PAGE; ui.peek = ''; }   // 프로젝트를 바꿨으면 [더 보기]는 처음부터 · 피크는 닫는다
+  const sc = sessScope();
+  const scKey = `${sc.by}|${sc.group ?? ''}|${sc.proj ?? ''}`;
+  if (ui.scopeKey !== scKey) { ui.scopeKey = scKey; ui.shown = PAGE; ui.peek = ''; }   // 사이드바에서 다른 걸 골랐으면 [더 보기]는 처음부터 · 피크는 닫는다
+  const mby = mainGroupBy(sc);
   const now = Date.now();
   const people = sidePeople();
   const repaint = (): void => renderSessAll(host, data, hooks);
+  const listOf = new Map(data.projects.map((p) => [p.id, p.list_id ?? null]));
   const items = data.sessions.map((s) => {
     const t = sessText(s, projName(data, s.projectId));
     return {
       s, projectId: s.projectId, trashedAt: s.trashedAt || null, lastSeen: s.lastSeen, stateKey: s.stateKey,
+      listId: s.projectId != null ? (listOf.get(s.projectId) ?? null) : null,
       owner: isMineSess(s) ? 'me' : String((s.raw && s.raw.owner) || ''),
       name: t.main || s.label || s.id, untitled: t.untitled,
     };
@@ -1006,28 +1014,20 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
   type Item = (typeof items)[number];
   const meId = String((state.me && state.me.userId) || '');
   const ownerName = (k: string): string => (k === 'me' ? '나' : (people[k] && people[k].display_name) || k || '알 수 없음');
-  const q = { proj: ui.proj, period: ui.period, owner: ui.owner, state: ui.state, now };
+  const q = { proj: sc.proj, group: sc.group !== null ? { by: sc.by, key: sc.group } : null, period: ui.period, owner: ui.owner, state: ui.state, now };
   const inProj = selectAllSess(items, { ...q, period: 'all', owner: '', state: '' });
   const needle = ui.q.trim().toLowerCase();
   const vis = selectAllSess(items, q).filter((it) => !needle
     || it.name.toLowerCase().includes(needle) || projName(data, it.projectId).toLowerCase().includes(needle));
-  const projLabel = ui.proj === null ? '' : projName(data, ui.proj) || '프로젝트 없음';
+  //  빵부스러기 — «AI 세션 / 기준 / 고른 것». 고른 것이 없으면 «전체».
+  const byLabel = (SESS_GROUP_BYS.find((b) => b.key === sc.by) || SESS_GROUP_BYS[0]).label;
+  const pickedProj = sc.proj === null ? '' : (projName(data, sc.proj) || '프로젝트 없음');
+  const crumbs = [sc.group !== null ? sessGroupName(sc.by, sc.group, data, ownerName) : '', pickedProj].filter(Boolean);
   const byState = (k: string): number => inProj.filter((it) => it.owner === 'me' && it.stateKey === k).length;
   const open = (s: Sess): void => hooks.onOpen(s);
   const openPeek = (id: string): void => { ui.peek = id; repaint(); };
 
-  // ── 2행 도구줄 — 묶기 · 기간 · 사람 · 상태 칩 · 찾기 · ＋ 새 세션 ──
-  const byLabel = (SESS_GROUP_BYS.find((b) => b.key === ui.by) || SESS_GROUP_BYS[0]).label;
-  const byBtn = el('button', { class: 'v2-sa-tb', type: 'button', 'data-pick': 'by', title: '묶는 기준을 고릅니다', 'aria-haspopup': 'menu',
-    onclick: (ev: MouseEvent) => {
-      const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
-      const row = (b: (typeof SESS_GROUP_BYS)[number]) => ({ label: b.label, checked: b.key === ui.by, run: () => { ui.by = b.key; ui.shown = PAGE; repaint(); } });
-      showCtxMenu(r.left, r.bottom + 4, [
-        ...SESS_GROUP_BYS.filter((b) => b.key !== 'none').map(row),
-        { label: '', sep: true },
-        ...SESS_GROUP_BYS.filter((b) => b.key === 'none').map(row),
-      ], { title: '묶기' });
-    } }, svgI(IC_LAYERS), el('span', { class: 'k', text: ui.by === 'none' ? '' : '묶기 · ' }), el('span', { text: byLabel }), svgI(IC_CHEV, 'v2-sa-ic sm'));
+  // ── 2행 도구줄 — 기간 · 사람 · 상태 칩 · 찾기 · ＋ 새 세션(묶기는 사이드바 머리의 드롭다운) ──
   const period = el('select', { class: 'v2-sa-pick', 'aria-label': '기간', 'data-pick': 'period',
     onchange: (e: Event) => { ui.period = (e.target as HTMLSelectElement).value as PastPeriod; ui.shown = PAGE; repaint(); } },
     ...PAST_PERIODS.map((p) => el('option', { value: p.key, text: p.label }))) as HTMLSelectElement;
@@ -1050,7 +1050,7 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
         oninput: (e: Event) => { ui.q = (e.target as HTMLInputElement).value; ui.shown = PAGE; repaint(); },
         onkeydown: (e: KeyboardEvent) => { if (e.key === 'Escape') { ui.q = ''; ui.searching = false; repaint(); } } })
     : el('button', { class: 'v2-sa-tb ic', type: 'button', 'aria-label': '찾기', title: '세션 찾기', onclick: () => { ui.searching = true; repaint(); host.querySelector<HTMLElement>('[data-pick="q"]')?.focus(); } }, svgI(IC_SEARCH));
-  const tools = el('div', { class: 'v2-sa-tools' }, byBtn, period, who,
+  const tools = el('div', { class: 'v2-sa-tools' }, period, who,
     chip('waiting', '확인 필요', 'warn'), chip('busy', '작업 중', 'blue'),
     el('span', { class: 'sp' }), search,
     hooks.onNew ? el('button', { class: 'v2-sa-new', type: 'button', title: '새 세션 — 홈에서 무엇이든 시키면 열려요', onclick: () => hooks.onNew?.() },
@@ -1074,14 +1074,11 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
     }))) : null;
 
   // ── 묶음별 목록 ──
-  const cols = ui.proj === null;
+  const cols = sc.proj === null;
   const headCols = (): HTMLElement[] => [
     ...(cols ? [el('span', { class: 'hc', text: '프로젝트' })] : []),
     el('span', { class: 'hc', text: '상태' }), el('span', { class: 'hc', text: '사람' }), el('span', { class: 'hc', text: 'AI' }), el('span', { class: 'hc', text: '시각' }), el('span', {})];
-  const groupLabel = (key: string, rows: Item[]): string => (ui.by === 'day' ? key
-    : ui.by === 'project' ? (key === '0' ? '프로젝트 없음' : projName(data, Number(key)) || `#${key}`)
-    : ui.by === 'owner' ? ownerName(key)
-    : (SESS_STATES[key] ? SESS_STATES[key].label : (rows[0] && rows[0].s.stateLabel) || '지난 세션'));
+  const groupLabel = (key: string): string => sessGroupName(mby, key, data, ownerName);
   const order: string[] = [];
   const rowOf = (it: Item): HTMLElement => {
     const s = it.s;
@@ -1121,18 +1118,18 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
   const list = el('div', { class: 'v2-sa-list', 'aria-label': 'AI 세션 목록' });
   let budget = ui.shown;
   //  묶지 않음 — 묶음 머리 없이 열 머리 한 줄, 이름 없는 세션도 접지 않고 전부 최근 순(«완전 raw 한 전체보기»).
-  if (ui.by === 'none' && vis.length) {
+  if (mby === 'none' && vis.length) {
     list.append(el('div', { class: 'v2-sa-gh flat' + (cols ? '' : ' np') }, el('span', { class: 'hc', text: '세션' }), ...headCols()));
     for (const it of vis) { if (budget-- <= 0) break; list.append(rowOf(it)); }
   }
-  for (const g of ui.by === 'none' ? [] : groupAllSess(vis, ui.by, now, stateRank)) {
+  for (const g of mby === 'none' ? [] : groupAllSess(vis, mby, now, stateRank)) {
     if (budget <= 0) break;
-    const gk = `${ui.by}:${g.key}`;
+    const gk = `${mby}:${g.key}`;
     const closed = ui.closed.has(gk);
     list.append(el('div', { class: 'v2-sa-gh' + (cols ? '' : ' np') },
       el('button', { class: 'l', type: 'button', 'aria-expanded': String(!closed), onclick: () => { if (closed) ui.closed.delete(gk); else ui.closed.add(gk); repaint(); } },
         el('span', { class: 'car' + (closed ? ' shut' : '') }, svgI(IC_CHEV, 'v2-sa-ic sm')),
-        el('span', { class: 'pill', text: groupLabel(g.key, g.rows) }), el('span', { class: 'n', text: String(g.rows.length) })),
+        el('span', { class: 'pill', text: groupLabel(g.key) }), el('span', { class: 'n', text: String(g.rows.length) })),
       ...headCols()));
     if (closed) continue;
     const named = g.rows.filter((it) => !it.untitled);
@@ -1150,7 +1147,7 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
   }
   const left = vis.length - Math.min(vis.length, ui.shown);
   const empty = !inProj.length
-    ? (ui.proj === null ? '아직 세션이 없어요. 홈에서 무엇이든 시켜 보세요.' : '이 프로젝트엔 세션이 없어요.')
+    ? (sc.group === null && sc.proj === null ? '아직 세션이 없어요. 홈에서 무엇이든 시켜 보세요.' : '고른 묶음에 세션이 없어요.')
     : '이 조건에 맞는 세션이 없어요. 기간 · 사람 · 상태를 바꿔 보세요.';
 
   // ── 사이드 피크 ──
@@ -1168,7 +1165,9 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
   replaceKids(host, el('div', { class: 'v2-sa' + (peekEl ? ' peeking' : '') },
     el('div', { class: 'v2-sa-top' },
       el('span', { class: 'crumb', text: 'AI 세션' }), el('span', { class: 'sl', text: '/' }),
-      el('b', { class: 'now', text: projLabel || '전체' }),
+      el('span', { class: 'crumb k', 'data-by': sc.by, text: byLabel }), el('span', { class: 'sl', text: '/' }),
+      ...crumbs.slice(0, -1).flatMap((c) => [el('span', { class: 'crumb', text: c }), el('span', { class: 'sl', text: '/' })]),
+      el('b', { class: 'now', text: crumbs.length ? crumbs[crumbs.length - 1] : '전체' }),
       el('span', { class: 'desc', text: vis.length === inProj.length ? `${inProj.length}개` : `${vis.length}개 표시 · 전체 ${inProj.length}` })),
     tools,
     el('div', { class: 'v2-sa-body' },
