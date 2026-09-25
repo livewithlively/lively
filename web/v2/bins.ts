@@ -27,7 +27,9 @@ import { SESS_STATES } from '../session-status.js';   // #4233 — 상태 묶기
 import { showCtxMenu } from './ctx-menu.js';   // #4233 — 묶기 고르개 · 행 ⋯ 메뉴
 import { fetchTurns, type Turn } from './sess-tail.js';   // #4233 — 사이드 피크의 대화 꼬리(세션 카드와 같은 길)
 import { lastAsk } from './last-ask.js';   // #4233 — 「지금 볼 것」 카드의 마지막 말
-import { rememberUnsentDraft } from './quick-session.js';   // #4233 — 끝난 세션에 보낸 글을 세션 화면 입력칸으로
+//  ⚠ stage 전용: 이 브랜치에는 #3891(rememberUnsentDraft · 세션 화면 draft)이 없다. main 에서는 quick-session.js 의 것을 쓴다.
+//   여기서는 글을 넘기지 못하고 세션 화면만 연다.
+const rememberUnsentDraft = (_sessionId: string, _text: string): void => { /* stage 에는 받는 쪽이 없다 */ };
 import { verdictStands, type SessRowVerdict } from './sess-visibility.js';   // #4158 — 홈 목록에서의 자리(판정은 셸이 홈과 같은 재료로 넘긴다)
 
 export interface BinHooks { onChanged?: () => void }
