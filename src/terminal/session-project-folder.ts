@@ -40,3 +40,10 @@ export function sessionDirFromRow(folder: string, row: SessionRowLike | null | u
   if (String(row.subpath ?? "").trim() !== f) return null;
   return dir;
 }
+
+/** 폴더·동기화 모드를 **답할 것인가** — 노드를 알거나(호출자·행), 행이 폴더를 알면 답한다. 둘 다 모르면 종전처럼 침묵(중앙 세션).
+ *  세션 호스트(sesshost)의 세션은 행에 node_id 가 없지만 dir 은 안다 — 그 훅도 이 답이 있어야 자료를 올린다(2026-09-25 실측:
+ *  `/work/shared/project/4135` 행의 node_id 가 비어 있었다). */
+export function answersFolder(nodeId: string, sessionDir: string | null): boolean {
+  return !!nodeId || !!sessionDir;
+}

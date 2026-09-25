@@ -1,7 +1,7 @@
 // 사양 기반 · fail-first(엣지 표 → 행마다 시험 하나). 사양: session-project-folder.ts 머리말.
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { contextNodeId, sessionDirFromRow } from "./session-project-folder.js";
+import { answersFolder, contextNodeId, sessionDirFromRow } from "./session-project-folder.js";
 
 const row = (o: Partial<{ node_id: string | null; dir: string | null; root_key: string | null; subpath: string | null }>) => o;
 
@@ -52,4 +52,15 @@ test("★ [F4] 행이 없거나 dir 이 비면 null · folder 가 비면 null", 
 });
 test("★ [F5] 공백은 걷고 비교한다 — subpath·dir 양끝 공백", () => {
   assert.equal(sessionDirFromRow(F, row({ dir: " /w/p ", root_key: "shared", subpath: " " + F + " " })), "/w/p");
+});
+
+// ── answersFolder: (노드, 행의 폴더) × 답하나 ─────────────────────────────────────
+test("★★ [A1] 노드를 알거나 행이 폴더를 알면 답한다 — 세션 호스트 세션은 node_id 없이 dir 만 안다", () => {
+  assert.equal(answersFolder("laibeulliui-macmini", null), true);
+  assert.equal(answersFolder("", "/work/shared/project/4135"), true);
+  assert.equal(answersFolder("laibeulliui-macmini", "/Users/lively/workspace/project/4135"), true);
+});
+test("★ [A2] 둘 다 모르면 침묵(중앙 세션 하위호환)", () => {
+  assert.equal(answersFolder("", null), false);
+  assert.equal(answersFolder("", ""), false);
 });
