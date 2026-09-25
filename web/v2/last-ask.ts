@@ -10,6 +10,7 @@
 //   lastPrompt 가 실리면 그것이 정본이고 아래 꼬리 조회는 **그 값이 없는 세션**(옛 훅·코덱스·기록 세션)의 폴백이다.
 import { deviceStore } from './shell-prefs.js';   // #2460 — 마지막 말 캐시는 이 기기의 것(정본은 서버 세션)
 import { fetchLastAsk } from './sess-tail.js';
+import { cleanAskText } from '../lib/ask-text.js';   // #4233 — 끼워 넣은 글 거르기 · 붙여 넣은 글 태그 줄이기(서버 칸과 꼬리 조회가 같은 식)
 import type { Sess } from './views.js';
 
 const TAIL = 48000;    // 꼬리 바이트 — 클로드 코드의 last-prompt 레코드는 턴마다 있어 보통 여기 든다(행 20개면 1MB 안쪽)
@@ -46,7 +47,10 @@ export function watchLastAsk(cb: () => void): void { ready = cb; }
 export function lastAsk(s: Sess): string | null {
   // #2197 — 서버 칸이 먼저다: 훅이 프롬프트를 친 **그 순간** 보고한 값(목록 API lastPrompt). 있으면 꼬리 조회를 아예 안 한다
   //  (행마다 48~240KB 를 받던 비용이 0, 노드 세션도 턴이 끝나기 전에 바뀐다). 없는 세션(옛 훅·코덱스·기록 세션)만 아래 폴백.
-  const served = s.raw && typeof s.raw.lastPrompt === 'string' ? shorten(s.raw.lastPrompt) : '';
+  //  #4233 — 서버 칸도 **사람이 친 말**만 싣는다. 하네스가 끼워 넣은 글(`<agent-message …>` 등)이면 없는 것으로 보고
+  //   아래 꼬리 조회로 넘어간다(꼬리 조회는 같은 식으로 거르고 그 앞의 사람 말을 찾는다).
+  const clean = s.raw && typeof s.raw.lastPrompt === 'string' ? cleanAskText(s.raw.lastPrompt) : null;
+  const served = clean ? shorten(clean) : '';
   if (served) return served;
   const hit = cache.get(s.id);
   const seen = Number(s.lastSeen || 0);
@@ -69,13 +73,14 @@ async function one(s: Sess): Promise<void> {
   //  ★ 빈손이면 **옛 글을 지킨다**(원준 2026-08-27 "실시간 반영이 안 된다" 조사) — 도구 출력이 긴 턴의 한중간엔
   //   내 말이 꼬리 240KB 밖에 있어 '읽었는데 없음'이 정상으로 나온다. 종전엔 그 null 로 캐시를 덮고 10분 홀드까지
   //   걸어, 잘 서 있던 줄이 턴 중간에 사라진 채 새 말도 10분간 안 물어봤다. 홀드는 '못 읽는' 세션만(hold).
-  const text = r.text ? shorten(r.text) : prev ? prev.text : null;
+  const sh = r.text ? shorten(r.text) : '';   // 끼워 넣은 글이면 빈 값 — 옛 글을 지킨다(아래와 같은 규율)
+  const text = sh || (prev ? prev.text : null);
   cache.set(s.id, { seen: Number(s.lastSeen || 0), text, at: Date.now(), hold: !r.ok });
   persist();
   if (!prev || prev.text !== text) notify();
 }
 /** 한 줄로 — 앞머리의 마크다운 기호·인용 부호를 걷고 MAX 자에서 자른다. */
 function shorten(t: string): string {
-  const x = t.replace(/\s+/g, ' ').replace(/^[\s>*#\-•·"'“]+/, '').trim();
+  const x = (cleanAskText(t) || '').replace(/\s+/g, ' ').replace(/^[\s>*#\-•·"'“]+/, '').trim();
   return x.length > MAX ? x.slice(0, MAX - 1).trimEnd() + '…' : x;
 }

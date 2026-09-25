@@ -675,3 +675,30 @@ button.v2-kedit { border: 0; background: none; font-family: inherit; line-height
   #v2-root.app-ctx > .v2-side,
   #v2-root.app-ctx > .v2-side + .v2-split-x { overflow: hidden; visibility: hidden; border-right: 0; }
 }
+
+/* ── #4233 홈 사이드바 «V1 안 1 · 고정 카드» (원준 2026-09-25) ──────────────────────────────
+   모든 세션 줄이 카드 안에 선다(두 축 모두). 고정한 세션은 「고정」 이름표 아래 머리 없는 카드에, 세션별 축의 날짜 묶음도
+   머리 없는 카드에(.v2-pg--rows). 간격은 한 벌이다: 이름표 위 16 · 이름표 밑 6 · 카드 사이 8 · 카드 안 한 줄 30 ·
+   두 줄(고정 · 세션별 축) 44 · 제목 13/600. 범위는 홈 목록(.v2-home-cards)뿐 — [AI 세션]·[확인할 것]의 같은 부품은 그대로다. */
+.v2-home-cards .v2-app-group { padding: 16px 8px 6px; }
+.v2-home-cards .v2-app-group:first-child { padding-top: 2px; }
+.v2-home-cards .v2-pg + .v2-pg, .v2-home-cards .v2-pg.open + .v2-pg, .v2-home-cards .v2-pg + .v2-pg.open { margin-top: 8px; }
+/* 접힌 카드도 카드다(검토판 1판 · 카드 머리 31) — 종전엔 접히면 테두리가 없어 카드 밖 줄처럼 읽혔다(원준이 짚은 그 어긋남). */
+.v2-home-cards .v2-pg { background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; }
+.v2-home-cards .v2-pg:not(.open) > .v2-pg-row { border-radius: 9px; }
+.v2-home-cards .v2-pg:not(.open) > .v2-pg-row:hover { background: var(--bg-tint); }
+.v2-home-cards .v2-app-inst--1 { grid-template-rows: minmax(24px, auto); }
+/* 기둥: 아이콘 28 · 제목 52(사이드바 왼쪽 끝에서). 카드 안이든 머리 없는 카드든 같은 자리 — 둘째 줄도 제목 기둥에 선다. */
+.v2-home-cards .v2-app-inst { padding-left: 8px; }
+.v2-home-cards .v2-app-inst-open { gap: 7px; }
+.v2-home-cards .v2-app-inst-ask, .v2-home-cards .v2-app-inst-pj { margin-left: 24px; }
+.v2-home-cards .v2-app-inst:not(.v2-app-inst--past) .v2-app-inst-title { font-size: 13px; font-weight: 600; }
+.v2-home-cards .v2-pg--rows .v2-app-inst:not(.v2-app-inst--1) { grid-template-rows: 22px 16px; row-gap: 0; padding: 3px 8px 3px 8px; }
+.v2-home-cards .v2-pg--rows .v2-app-inst--past .v2-app-inst-title { font-size: 13px; }
+.v2-home-cards .v2-pg--rows .v2-app-inst-close, .v2-home-cards .v2-pg--rows .v2-app-inst-pin { top: 3px; }
+.v2-home-cards .v2-pg--rows .v2-app-inst-ask, .v2-home-cards .v2-pg--rows .v2-app-inst-pj { line-height: 16px; }
+/* 「고정」 세션 카드의 둘째 줄 = 소속 프로젝트(카드 머리가 없으니 줄이 소속을 말한다). 마지막 말 줄과 같은 기둥에 선다. */
+.v2-app-inst-pj { grid-column: 1 / 3; grid-row: 2; min-width: 0; margin-left: 26px; align-self: center; display: flex; align-items: center; gap: 5px; }
+/* 세션별 축 둘째 줄 끝의 소속 — 마지막 말이 먼저 자리를 갖고, 좁으면 이쪽이 먼저 잘린다. */
+.v2-app-inst-askp { flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-2); }
+.v2-app-inst-askp::before { content: '·'; margin-right: 5px; }

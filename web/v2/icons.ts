@@ -87,6 +87,8 @@ export const ICONS: Record<string, string> = {
   minus: 'M5 12h14',
   play: 'M6 4l14 8-14 8z',
   stop: 'M6 6h12v12H6z',
+  //  #4233 — 홈 사이드바 «프로젝트로 묶기» 토글(원준 2026-09-25: 검토판 1판에 그린 것으로). 폴더 안 줄 둘 = 프로젝트 안에 세션이 선다.
+  folderRows: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M7 12h10 M7 15h6',
 };
 
 /** 선 아이콘 하나. 크기·색은 클래스가 정한다(기본 `v2-ic` = 16px, currentColor). */
