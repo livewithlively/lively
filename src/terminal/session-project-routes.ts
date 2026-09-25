@@ -27,6 +27,7 @@ import { canAttach } from "./terminal-sessions.js";
 import { isExternalExecutionSessionId } from "../org/auth/agent-identity.js";
 import { syncSessionAppInstanceProject } from "../org/store/app-instances.js";
 import { sessionTaskOf, sessionTaskSection } from "../v6/session-task.js";
+import { contextNodeId, folderAbsFromRow } from "./session-project-folder.js";   // #4135 — 노드·폴더는 세션 행이 안다
 
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 const SID_RE = /^[A-Za-z0-9._-]{1,128}$/;
@@ -179,7 +180,10 @@ export async function sessionProjectContext(
   if (!me) throw new HttpError(403, "사용자 신원이 없습니다");
   const known = knownRevisionRaw == null || knownRevisionRaw === "" ? -1 : Number(knownRevisionRaw);
   if (!Number.isSafeInteger(known) || known < -1) throw new HttpError(400, "knownRevision 형식 오류");
-  const nodeId = String(nodeIdRaw ?? "").trim().slice(0, 128);
+  //  #4135 — 호출자(훅)가 node 를 안 밝혀도 세션 행에서 읽는다: 노드 세션의 pane 엔 LIVELY_NODE_ID 가 없어서 여태 folder·sync 가
+  //   안 나갔고 자료 동기화가 조용히 죽어 있었다. 행 조회 실패는 «중앙 세션» 으로 본다(종전과 같음).
+  const row = await getSessionState(id).catch(() => undefined);
+  const nodeId = contextNodeId(nodeIdRaw, row);
   const current = (await executionSessionProject(id, me)) ?? (await adoptLegacyBinding(id, me));
   if (!current) return { found: false, changed: known !== 0, session_id: id, project_id: null, revision: 0, applied_revision: 0, binding_epoch: 0 };
   const base: SessionProjectContext = {
@@ -194,7 +198,9 @@ export async function sessionProjectContext(
     const res = await resolveNodeFolder(project.id, me, nodeId);
     base.folder = project.folder;
     base.sync = project.folder ? res.sync : "none";   // folder 가 비면 조립할 슬롯이 없다 → 동기화 대상 아님
-    base.folder_abs_path = res.abs_path;
+    //  명시 바인딩이 없으면 «세션이 그 프로젝트 폴더에서 돈다» 인 행의 dir — 훅이 제 env(TERMINAL_ROOT_SHARED)로
+    //  슬롯을 조립하지 않게(옛 루트가 env 에 남은 세션이 엉뚱한 폴더를 보던 것, #4135).
+    base.folder_abs_path = folderAbsFromRow(res.abs_path, project.folder, row);
   }
   if (!base.changed) return base;
   // 동기화 훅(content=0)은 폴더·모드만 필요하다 — AGENTS.md 는 최대 128KB 라 매 턴 실어 보내면 순수 낭비다.
