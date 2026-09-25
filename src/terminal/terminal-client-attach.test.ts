@@ -6,8 +6,9 @@
 //   A3 쓰던 글의 캐럿 자리에 끼운다 · A3b 선택 범위는 갈아 끼운다 · A4 바를 끈 폰은 종전대로 PTY 로 · A5 이미지 붙여넣기 → 같은 길 · A5b 글 붙여넣기는 안 가로챔 ·
 //   A6 HEIC 를 못 바꾸면 그대로 올린다 · A6b 바꿀 수 있으면 JPEG 로 · A7 데스크톱은 바가 없고 경로는 PTY 로(보존) · A8 단추가 선택기를 연다(값부터 비움) ·
 //   A9 여러 장은 순서대로 전부 · A10 취소는 요청 0건 · A11 새 헬퍼 부재(글 상자 없음 → PTY 폴백 · null/빈 목록/빈 항목 → 무해) ·
-//   A12 크기 문턱 정확히 → 안 묻고 올림 · A12b 문턱+1 «아니오» → 안 올림 · A12c «예» → 올림 · A12d 물을 장치 없음 → 올림.
-// fail-first: 고치기 전 산출 모듈(TERMJS_MOD=<HEAD 의 web/standalone 컴파일본>)로 돌리면 A1·A2·A3·A3b·A5·A6·A6b·A8·A9·A10·A11·A12 계열이 빨간불이다
+//   A12 크기 문턱 정확히 → 안 묻고 올림 · A12b 문턱+1 «아니오» → 안 올림 · A12c «예» → 올림 · A12d 물을 장치 없음 → 올림 ·
+//   A13 입력 바(#mdock)는 터미널 존(#panes)의 형제다 — 본체의 캡처 paste 경로(setupPaste)가 글 상자 붙여넣기를 함께 받지 않는 구조 근거(#1084).
+// fail-first: 고치기 전 산출 모듈(TERMJS_MOD=<HEAD 의 web/standalone 컴파일본>)로 돌리면 A1·A2·A3·A3b·A5·A5b·A6·A6b·A8·A9·A10·A11·A12 계열·A13 이 빨간불이다
 //  (setupMobileDock 미노출·첨부 단추 없음·경로가 PTY 로 감). A4·A7 은 종전 동작 보존 행이라 그때도 초록.
 // 실행: npm run build && node dist/terminal/terminal-client-attach.test.js
 import assert from "node:assert/strict";
@@ -369,6 +370,14 @@ t("A12d 문턱 초과인데 물을 장치(confirm)가 없으면 막지 않고 �
   pick(h, [img("big.mov", "video/quicktime", MB50 + 1)]);
   const puts = await waitPut(h);
   assert.equal(puts.length, 1);
+});
+t("A13 입력 바는 터미널 존(#panes)의 형제다 — 본체 캡처 paste 경로가 글 상자 붙여넣기를 함께 받지 않는 구조(#1084)", async () => {
+  const h = await makeCtx();
+  h.mod.setupMobileDock(h.main);
+  const dock = h.dock()!;
+  assert.equal(dock.parent, h.main, "입력 바는 #main 에 직접 붙는다");
+  assert.equal(h.zone.contains(dock), false, "터미널 존 안에 들어가면 setupPaste(캡처)가 글 상자 붙여넣기까지 받아 두 번 올린다");
+  assert.equal(h.zone.contains(h.composer()), false);
 });
 
 let failed = 0;

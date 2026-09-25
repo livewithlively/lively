@@ -2190,7 +2190,7 @@ export function setupMobileDock(mainEl) {
     key('^C', '\x03', 'Ctrl+C — 중단'),
     tbtn('⧉ 복사', '화면 글자 고르기·복사', openCopySheet),
     tbtn('⎘ 붙여넣기', '클립보드 내용을 입력칸에', mobilePasteIn));
-  mcompEl = el('textarea', { class: 'mcomp', rows: '1', placeholder: '여기에 쓰고 보내기 — 꾹 눌러 복사·붙여넣기',
+  mcompEl = el('textarea', { class: 'mcomp', rows: '1', placeholder: '여기에 쓰고 보내기',   // 긴 안내(꾹 눌러 복사·붙여넣기)는 사용법 안내로 — 폰 폭(안폭 ~230px)에선 두 줄로 접혀 잘렸다(#4229)
     autocapitalize: 'off', autocomplete: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'send', 'aria-label': '터미널에 보낼 글' });
   const sendBtn = tbtn('보내기', '보내기(Enter)', mobileSend);
   sendBtn.className = 'msend';
@@ -2210,6 +2210,8 @@ export function setupMobileDock(mainEl) {
   const attachBtn = el('button', { class: 'mattach', type: 'button', title: '사진·파일 첨부', 'aria-label': '사진·파일 첨부', text: '📎',
     onclick: () => { fileIn.value = ''; fileIn.click(); } });
   // 사진 앱에서 «복사»한 이미지를 글 상자에 붙여넣으면(iOS) 파일로 온다 — 같은 길로 올린다. 글 붙여넣기는 그대로 둔다.
+  //  #1084 «붙여넣기 실행 경로는 하나» 와 겹치지 않는다: 그 경로(setupPaste, #panes 캡처)는 터미널 본체의 붙여넣기이고, 이 리스너는
+  //  #panes 의 형제인 #mdock 안 일반 textarea 의 **파일 항목만** 받는다(글은 브라우저가 textarea 에 넣고 [보내기]가 sanitizePasteText 를 지난다).
   mcompEl.addEventListener('paste', (e) => {
     const dt = e.clipboardData; if (!dt) return;
     const fs = [...(dt.items || [])].filter((it) => it.kind === 'file').map((it) => it.getAsFile()).filter(Boolean);
@@ -2263,6 +2265,7 @@ async function prepareAttachment(file) {
     const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' } as any);
     const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
     c.getContext('2d').drawImage(bmp, 0, 0);
+    try { bmp.close(); } catch (_) { /* noop */ }   // 디코드된 비트맵은 그리고 나면 필요 없다 — GC 를 기다리지 않는다(리뷰)
     const blob: any = await new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('encode'))), 'image/jpeg', 0.9));
     return new File([blob], (file.name || 'photo').replace(HEIC_RE, '') + '.jpg', { type: 'image/jpeg' });
   } catch (_) {
@@ -2612,7 +2615,7 @@ function openHelp() {
       sec('파일·이미지 주기',
         tool('끌어다 놓기', '화면 아무 데나 놓으면 ' + uploadDestLabel() + '(uploads/)에 올라가고 그 경로가 입력창에 들어갑니다'),
         tool('붙여넣기', '캡처한 이미지는 ⌘V(Windows 는 Ctrl+V)로 바로 — 같은 방식으로 전달됩니다'),
-        tool('폰에서', '입력 바의 📎 단추로 사진·파일을 고르면 같은 방식으로 전달됩니다(사진 앱에서 복사한 이미지를 글 상자에 붙여넣어도 돼요)'),
+        tool('폰에서', '입력 바의 📎 단추로 사진·파일을 고르면 같은 방식으로 전달됩니다 — 글 상자는 꾹 눌러 복사·붙여넣기가 되고, 사진 앱에서 복사한 이미지를 붙여넣어도 돼요'),
         tool('보낼 때', '경로 뒤에 설명을 적고 Enter 를 눌러야 클로드가 읽습니다 (자동 전송 안 함)')),
       sec('문제가 생겼을 때',
         tool('입력 진단 복사', '입력이 이상할 때(키만 눌러도 같은 문자열이 들어가는 등) 아래 버튼으로 최근 입력 기록을 복사해 제보에 붙여 주세요 — 서버로는 전송되지 않아요'),
