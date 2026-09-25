@@ -59,7 +59,7 @@ import { restoreProjectRef } from "./restore-project.js";
 import { getProjectRow } from "../v6/project-store.js";   // #2549 — 삭제된 프로젝트의 세션도 되살린다(행 유무만 묻는 가벼운 조회)
 import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 하네스 가용성(미보고 → 기준선)
 import { nodeOpenTo, nodeHostProfile } from "../node/node-access.js";
-import { createShellProject, firstPromptProjectPlan } from "../project/first-prompt-project.js";
+import { createShellProject, firstPromptProjectPlan, launchOrDiscardShell, type ShellHandle } from "../project/first-prompt-project.js";
 import { relocateAttachmentsToProject } from "../project/attach-relocate.js";
 import { launchSession, sessionInputFromBody, relayNodeOp, requireCreatableNode, registerSessionInstance, recordSessionTenant, chatFieldsOf, themeOf, prepareRemoteAppSession } from "./session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
 import { registerNodeRoutes } from "../node/routes.js";
@@ -1293,9 +1293,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  종전엔 개인 루트에서 열고 훅이 뒤늦게 소속만 붙여, 그 세션의 파일·워크트리가 개인 루트에 흩어졌다.
     //  실패하면 그냥 종전 경로(개인 루트) — 세션 생성을 막지 않는다. 빈 세션·앱·로그인·읽기전용은 대상이 아니다(순수 판정).
     const shellSpec = firstPromptProjectPlan(input);
+    //  #4302 — 아래에서 만든 껍데기의 손잡이. 세션 띄우기가 실패하면 이걸로 프로젝트(와 옮긴 첨부)를 되돌린다.
+    let shell: ShellHandle | null = null;
     if (shellSpec) {
       const made = await createShellProject(shellSpec, idOf(userOf(req)));
       if (made) {
+        shell = { projectId: made.id, actor: idOf(userOf(req)) };
         input.projectId = made.id; input.projectSrc = "v6"; input.rootKey = "shared"; input.subpath = made.folder;
         // 첫 지시에 **명시 첨부**가 있었다면 그 파일을 이 프로젝트 폴더로 옮긴다(#3787).
         //  컴포저는 첨부 시점에 프로젝트가 없어서 개인 폴더로 올린다(프로젝트는 방금 위에서 생겼다) — 그대로 두면
@@ -1306,14 +1309,20 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
             prompt: input.initialPrompt, projectId: made.id, projectName: made.name, folder: made.folder, memberId: idOf(userOf(req)),
           });
           input.initialPrompt = moved.prompt;
+          shell.moves = moved.moves;
         }
       }
     }
     const nodeId = String(b.node ?? "").trim();
     res.setHeader("Cache-Control", "no-store");
-    //  노드 세션의 초대는 여기서 구성원 디렉터리로 검증해 '검증된 목록'만 넘긴다(노드는 DB 가 없어 스스로 검증 불가).
-    const invites = nodeId ? await validateInvites(b.invites, idOf(userOf(req))) : [];
-    res.json({ session: await launchSession(userOf(req), input, { nodeId, invites }) });
+    //  #4302 — 세션이 안 뜨면(디스크 가드 507 · 노드 거부 · 소속 기록 실패 …) 방금 만든 껍데기도 없앤다. 종전엔 남아서
+    //   같은 지시로 다시 누를 때마다 빈 프로젝트가 하나씩 쌓였다. 오류는 그대로 사람에게 간다.
+    const session = await launchOrDiscardShell(shell, async () => {
+      //  노드 세션의 초대는 여기서 구성원 디렉터리로 검증해 '검증된 목록'만 넘긴다(노드는 DB 가 없어 스스로 검증 불가).
+      const invites = nodeId ? await validateInvites(b.invites, idOf(userOf(req))) : [];
+      return launchSession(userOf(req), input, { nodeId, invites });
+    });
+    res.json({ session });
   }));
   // 실행 중 세션의 하네스·모델·추론강도를 한 번에 바꾸는 **겉보기 전환**.
   // CLI마다 런타임 설정 수단이 다르고(Codex는 /model 피커, Antigravity는 launch flag),

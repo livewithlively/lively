@@ -16,11 +16,13 @@
 //  ⚠ 이 파일의 판정 규칙(길이·접두)과 본문 형식은 **훅 `project-auto-bind` 와 같은 계약**이다(그쪽은 외부 하네스용
 //   폴백으로 남는다). 한쪽만 바꾸면 같은 지시가 입구에 따라 다른 프로젝트가 된다 — 바꾸려면 둘 다 바꾼다.
 import { isWorkSession } from "../sessions/session-kind.js";
-import { createProject } from "../v6/project-store.js";
+import { createProject, deleteProject, setProjectTrashed } from "../v6/project-store.js";
 import { getProjectRow } from "../v6/project-store.js";
 import { ensureAgentsMd } from "../v6/agents-md.js";
 import { claimProjectName } from "../v6/project-store.js";
-import { executionSessionProject } from "../v6/execution-session-store.js";
+import { countSessionsBoundToProject, executionSessionProject } from "../v6/execution-session-store.js";
+import { returnAttachmentsToPersonal, type RelocatedAttachment, type ReturnResult } from "./attach-relocate.js";
+import { logger } from "../log.js";
 // 임시 이름을 짓는 규칙(#2031) — 훅 project-auto-bind 와 같은 계약이라 한 곳(v6/project-name.ts)에 둔다.
 import { projectNameFromHuman, shellNameFromPrompt } from "../v6/project-name.js";
 
@@ -182,6 +184,84 @@ export async function createShellProject(
   } catch (e) {
     console.warn("[first-prompt-project] 첫 지시 프로젝트 선생성 실패 — 개인 루트에서 연다:", (e as Error)?.message ?? e);
     return null;
+  }
+}
+
+// ── 세션이 안 떴으면 껍데기도 없다 (#4302) ─────────────────────────────────────────
+//  위 createShellProject 는 세션을 띄우기 **전에** 프로젝트를 만든다(cwd 로 쓸 폴더가 먼저 있어야 한다). 그런데 그 뒤
+//   세션 띄우기가 실패하면(디스크 가드 507 · 노드 오프라인·거부 · 소속 기록 실패 …) 종전엔 아무도 그 프로젝트를 치우지
+//   않았다. 사람은 오류를 보고 같은 지시로 다시 누르고, 누를 때마다 같은 이름의 빈 프로젝트가 하나씩 쌓였다
+//   (2026-09-25 실측: 맥미니 디스크 96.3% 로 노드가 새 세션을 4번 거부 → #4274~#4277 네 개. 세션은 0개).
+//  원준님 결정(2026-09-25): «오류로 결국 세션이 형성이 안 됐으면 프로젝트가 이전에 생성됐더라도 없애야지».
+//  훅 경로(project-auto-bind)는 이미 같은 보상을 한다(바인딩 실패 → 방금 만든 프로젝트 삭제) — 이 입구만 빠져 있었다.
+
+/** 세션 띄우기가 실패한 뒤 껍데기를 어떻게 하나. */
+export type ShellDiscardVerdict = "delete" | "trash" | "keep";
+
+/**
+ * 순수 — 판정.
+ *  · 세션이 **이 프로젝트에 붙어 있다** → keep. 소속까지 쓴 뒤 뒷단계에서 실패한 것이라 세션은 살아 있을 수 있다 —
+ *    지우면 그 세션이 소속을 잃는다(FK 가 SET NULL 이라 DB 는 막아 주지 않는다). 붙은 세션을 셀 수 없을 때도 keep(모르면 안 지운다).
+ *  · 첨부를 다 돌려놓지 못했다 → trash. 그 파일이 이 폴더에만 있다 — 휴지통이면 프로젝트째 되살려 찾을 수 있다.
+ *  · 그 밖 → delete(감사 스냅샷이 남아 content_restore 로 되살릴 수 있다 — 훅 보상과 같은 자리).
+ */
+export function shellDiscardVerdict(o: { boundSessions: number | null; attachmentsLeft: number }): ShellDiscardVerdict {
+  if (o.boundSessions === null || o.boundSessions > 0) return "keep";
+  return o.attachmentsLeft > 0 ? "trash" : "delete";
+}
+
+export interface ShellHandle { projectId: number; actor: string; moves?: RelocatedAttachment[] }
+
+export interface DiscardDeps {
+  boundSessions(projectId: number): Promise<number>;
+  returnAttachments(moves: RelocatedAttachment[]): Promise<ReturnResult>;
+  deleteProject(projectId: number, actor: string): Promise<unknown>;
+  trashProject(projectId: number, actor: string): Promise<unknown>;
+}
+
+const discardDeps: DiscardDeps = {
+  boundSessions: countSessionsBoundToProject,
+  returnAttachments: (moves) => returnAttachmentsToPersonal(moves),
+  deleteProject: (id, actor) => deleteProject(id, { actor, source: "web" }),
+  trashProject: (id, actor) => setProjectTrashed(id, true, { actor, source: "web" }),
+};
+
+/** 세션이 안 뜬 껍데기를 치운다. 던지지 않는다 — 부른 쪽은 원래 오류를 그대로 사람에게 돌려줘야 한다. */
+export async function discardShellProject(
+  shell: ShellHandle, reason: string, deps: DiscardDeps = discardDeps,
+): Promise<ShellDiscardVerdict> {
+  try {
+    const bound = await deps.boundSessions(shell.projectId).catch(() => null);
+    if (bound === null || bound > 0) {
+      logger.warn({ projectId: shell.projectId, bound, reason }, "[first-prompt-project] 세션 띄우기 실패 — 세션이 이미 붙었거나 셀 수 없어 프로젝트를 남긴다");
+      return "keep";
+    }
+    const back = shell.moves?.length ? await deps.returnAttachments(shell.moves) : { returned: 0, failed: 0, left: [] };
+    const verdict = shellDiscardVerdict({ boundSessions: bound, attachmentsLeft: back.failed });
+    if (verdict === "delete") await deps.deleteProject(shell.projectId, shell.actor);
+    else await deps.trashProject(shell.projectId, shell.actor);
+    logger.info({ projectId: shell.projectId, verdict, returned: back.returned, left: back.left, reason },
+      "[first-prompt-project] 세션이 안 떠 첫 지시 프로젝트를 치웠다");
+    return verdict;
+  } catch (e) {
+    logger.warn({ projectId: shell.projectId, err: (e as Error)?.message ?? e, reason }, "[first-prompt-project] 껍데기 치우기 실패(비치명)");
+    return "keep";
+  }
+}
+
+/**
+ * 껍데기를 만든 **뒤의** 세션 띄우기 — 실패하면 껍데기를 치우고 **원래 오류를 그대로** 던진다.
+ *  shell 이 null(껍데기를 안 만든 요청)이면 그냥 launch 다.
+ */
+export async function launchOrDiscardShell<T>(
+  shell: ShellHandle | null, launch: () => Promise<T>,
+  discard: (shell: ShellHandle, reason: string) => Promise<unknown> = discardShellProject,
+): Promise<T> {
+  try {
+    return await launch();
+  } catch (e) {
+    if (shell) await discard(shell, (e as Error)?.message ?? String(e)).catch(() => { /* 원래 오류가 먼저다 */ });
+    throw e;
   }
 }
 
