@@ -2302,7 +2302,7 @@ function newProjRow(): HTMLElement {
           try {
             await api('/api/ui/v6/project-lists/' + made.id + '/folder', { method: 'POST', body: JSON.stringify({ folder_id: plan.moveTo }) });
             made.folder_id = plan.moveTo;
-          } catch (_) { toast('리스트는 만들었지만 폴더에 넣지 못했어요. 리스트 설정에서 폴더를 골라 주세요.'); }
+          } catch (_) { toast('리스트는 만들었지만 폴더에 넣지 못했어요. 리스트 설정에서 폴더를 골라 주세요.', true); }
         }
         if (last) {
           if (isList) { const ls = last.data.lists || (last.data.lists = []); if (!ls.some((l) => l.id === made.id)) ls.push(made); }
@@ -2320,8 +2320,10 @@ function newProjRow(): HTMLElement {
       redraw();
     } catch (err: any) {
       newSending = false;
-      line.classList.remove('sending');
       newErr = '만들지 못했어요 — ' + (err?.message || err);
+      //  기다리는 사이 셸이 다시 그려 이 줄이 새 줄로 바뀌었으면, 떨어진 옛 노드를 고치지 않고 새로 그린다(오류 글은 newErr 로 새 줄에 선다).
+      if (!inp.isConnected) { redraw(); return; }
+      line.classList.remove('sending');
       errEl.textContent = newErr; errEl.hidden = false;
       inp.focus();                          // 고쳐 쓸 수 있게 이름칸으로 손을 돌려준다(친 이름은 그대로 남는다)
     }
