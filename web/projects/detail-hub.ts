@@ -3,9 +3,8 @@
 //
 //  화면 = 속성 띠(detail-meta.ts pjvProjFactsStrip, detail.ts 가 세운다) 아래 **3열 격자**에 도구 위젯 여섯(태스크·세션·본문·
 //  공유 폴더·연결된 지식·작업 타임라인). 크기(가로 w × 세로 h, #4164)가 곧 뷰다.
-//  #4135 5판(2026-09-25 원준): 태스크·세션 위젯은 **모든 크기를 위젯 자신이 그린다**(detail-hub-tasks · detail-hub-sessions —
-//   프로젝트 탭 줄 그대로, 크기는 «어느 묶음을 몇 줄 어떤 열로» 만 바꾼다). 나머지 넷은 아직 종전 규칙(1×1 «한눈» · 목록 · «전체»·«띠»
-//   는 기존 섹션 카드)이다 — 다음 PR 에서 같은 방식으로 옮긴다.
+//  #4135 5판(2026-09-25 원준): 여섯 위젯 모두 **모든 크기를 위젯 자신이 그린다**(detail-hub-{tasks,sessions,body,knowledge,folder,timeline}
+//   — 크기는 «무엇을 몇 줄 어떤 열로» 만 바꾼다). 기존 섹션 카드는 «열기»(전폭)에서만 선다. hubView 는 편집 모드 크기 라벨에만 남는다.
 //  배치(순서·크기·숨김)는 detail-hub-layout.ts 가 저장한다(내 계정 전역 한 벌 · «이 프로젝트에서만» 토글). 편집 모드는 iOS 홈
 //  편집 문법 — 손잡이(⋮⋮)를 끌어 순서, 오른쪽 아래 모서리를 끌거나 [w×h] 격자에서 골라 크기, × 로 숨김, 「＋ 위젯」 슬롯으로 되살림.
 //
@@ -14,21 +13,20 @@
 //   여기서 import 하는 것은 리프뿐(core · files-icons · files-format · popover · status · detail-hub-layout · detail-hub-kit · 위젯 채움 모듈).
 //  ⚠ 열기(→ 도구 전폭)는 페이지에선 주소(#/projects2/p/:id/<도구>)로, 모달(.pjv-pm) 안에선 제자리 전환으로 — 모달은 자기 주소를
 //   소유하므로(#808) 해시를 바꾸면 라우터가 모달을 닫는다.
-import { api, el, personFace, relTime, toast } from '../core.js';
-import { fileThumb } from './files-icons.js';
-import { fmtSize } from './files-format.js';
+import { api, el } from '../core.js';
 import { pjvPopover } from './popover.js';
-import { pjvFmtDate } from './status.js';
 import {
   HUB_COLS, HUB_MAX_H, HUB_PRESETS, HUB_TOOL_LABEL, HUB_TOOLS, HUB_VIEW_LABEL, applyHubPreset, hideHubItem, hubListCap, hubView,
   loadHubLayout, matchHubPreset, moveHubItem, resetHubLayout, resizeHubItem, saveHubLayout, setHubScope, showHubItem,
-  type HubLayout, type HubTool, type HubView,
+  type HubLayout, type HubTool,
 } from './detail-hub-layout.js';
-import {
-  TOOL_TONE, type Fill, type HubCtx, type HubData, type HubOpts, big, btn, emptyNote, footText, hubIcon, lastHeading, moreNote, row, stat, stripMd,
-} from './detail-hub-kit.js';
+import { TOOL_TONE, type Fill, type HubCtx, type HubData, type HubOpts, btn, hubIcon } from './detail-hub-kit.js';
 import { fillTasks } from './detail-hub-tasks.js';
 import { fillSessions } from './detail-hub-sessions.js';
+import { fillBody } from './detail-hub-body.js';
+import { fillKnowledge } from './detail-hub-knowledge.js';
+import { fillFolder } from './detail-hub-folder.js';
+import { fillTimeline } from './detail-hub-timeline.js';
 
 export type { HubOpts, HubSectionFactory, HubTasksListOpts } from './detail-hub-kit.js';
 
@@ -36,8 +34,6 @@ export type { HubOpts, HubSectionFactory, HubTasksListOpts } from './detail-hub-
 export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
   const pid = o.id;
   const P = o.p || {};
-  const tasks: any[] = P.tasks || [];
-  const kn = P.knowledge || { required: [], produced: [] };
 
   // 데이터 — 위젯마다 따로 부르지 않고 허브가 한 번 받아 나눠 준다(같은 화면에서 같은 것을 두 번 묻지 않는다). invalidate 로 한 키만 다시.
   const lazyOf = <T,>(fn: () => Promise<T>): { get: () => Promise<T>; drop: () => void } => { let p: Promise<T> | null = null; return { get: () => (p ||= fn()), drop: () => { p = null; } }; };
@@ -46,7 +42,7 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
     files: lazyOf(() => api(o.base + pid + '/files?path=').then((d: any) => (d && d.items) || []).catch(() => [] as any[])),
     acts: lazyOf(() => api(o.base + pid + '/activity').then((d: any) => (d && d.activities) || []).catch(() => [] as any[])),
     comments: lazyOf(() => api('/api/ui/v6/projects/' + pid + '/comments').then((d: any) => ((d && d.feed) || []).filter((f: any) => f && f.kind === 'comment')).catch(() => [] as any[])),
-    recs: lazyOf(() => api('/api/ui/v6/projects/' + pid + '/recommend-knowledge?limit=2').then((d: any) => (d && d.entries) || []).catch(() => [] as any[])),
+    recs: lazyOf(() => api('/api/ui/v6/projects/' + pid + '/recommend-knowledge?limit=5').then((d: any) => (d && d.entries) || []).catch(() => [] as any[])),
   };
   const D: HubData = {
     sessions: () => L.sessions.get(), files: () => L.files.get(), acts: () => L.acts.get(), comments: () => L.comments.get(), recs: () => L.recs.get(),
@@ -71,8 +67,8 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
     refreshGrid: () => renderGrid(),
   };
 
-  // 5판 위젯(모든 크기를 스스로 그린다) — 나머지는 아래 FILL(한눈·목록) + embedSection(전체·띠).
-  const FILL5: Partial<Record<HubTool, Fill>> = { tasks: fillTasks, sessions: fillSessions };
+  // 5판 위젯 — 여섯 도구 모두 모든 크기를 스스로 그린다.
+  const FILL5: Record<HubTool, Fill> = { tasks: fillTasks, sessions: fillSessions, body: fillBody, knowledge: fillKnowledge, folder: fillFolder, timeline: fillTimeline };
 
   // ── 위젯 한 장 ── 격자 칸 수는 CSS 변수(--w·--h)로 — 좁은 폭(한 열)에선 CSS 가 그 변수를 버린다(37-projects-hub.css).
   function widget(tool: HubTool, w: number, h: number): HTMLElement {
@@ -89,183 +85,11 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
     const foot = el('div', { class: 'pjh-wf' });
     card.append(head, body, foot);
     const fit = { view, w: narrow ? 1 : w, h, cap: hubListCap(h) };
-    const f5 = FILL5[tool];
-    if (f5) {
-      ctx.narrow = narrow;
-      f5(ctx, fit, body, foot, sub, acts);
-    } else if (view === 'full' || view === 'band') {
-      embedSection(tool, body, foot, sub);
-    } else {
-      FILL[tool]!(fit, body, foot, sub);
-    }
+    ctx.narrow = narrow;
+    FILL5[tool](ctx, fit, body, foot, sub, acts);
     if (editing) decorateEdit(card, tool, w, h);
     return card;
   }
-
-  // «전체»·«띠» — 기존 섹션 카드를 그대로 앉힌다. 카드 크롬은 CSS(.pjh-wb > .card)가 벗기고, 머리의 동작 단추는 위젯 바닥 줄로 옮긴다.
-  function embedSection(tool: HubTool, body: HTMLElement, foot: HTMLElement, sub: HTMLElement): void {
-    const sec = o.sections[tool]();
-    body.append(sec);
-    const head = sec.querySelector(':scope > .card-head');
-    if (head) {
-      const left = head.querySelector('.pjv-tasks-head-left');
-      const moved: Element[] = [];
-      if (left) for (const kid of Array.from(left.children)) if (kid.tagName !== 'H2' && kid.tagName !== 'H3') moved.push(kid);
-      const actsBox = head.querySelector('.card-head-actions');
-      if (actsBox) for (const kid of Array.from(actsBox.children)) moved.push(kid);
-      const hint = head.querySelector('.pjk-head-hint');
-      if (hint) foot.append(el('span', { class: 'pjh-wf-txt', text: hint.textContent || '' }));
-      const box = el('span', { class: 'pjh-wf-acts', style: 'margin-left:auto;display:inline-flex;align-items:center;gap:6px;flex:none' });
-      for (const kid of moved) box.append(kid);
-      foot.append(box);
-    }
-    const txt = el('span', { class: 'pjh-wf-txt', text: subFor(tool) || FOOT_NOTE[tool] });
-    foot.prepend(txt);
-    sub.textContent = subFor(tool);
-    if (tool === 'folder') D.files().then((items: any[]) => { const dirs = items.filter((i) => i.type === 'dir').length; sub.textContent = items.length ? String(items.length - dirs) + (dirs ? ' · 폴더 ' + dirs : '') : ''; });
-    else if (tool === 'timeline') D.acts().then((acts: any[]) => { sub.textContent = acts.length ? String(acts.length) : ''; });
-  }
-  const FOOT_NOTE: Record<HubTool, string> = { tasks: '할 일', sessions: '세션', body: '본문 · 코멘트', folder: '루트', knowledge: '필요 → 산출', timeline: '이 프로젝트에 연결된 작업만' };
-  function subFor(tool: HubTool): string {
-    if (tool === 'tasks') { const t = tasks.length, d = tasks.filter((x) => x.status === 'done').length; return t ? d + ' / ' + t + ' 완료' : ''; }
-    if (tool === 'body') return P.updated_at ? '갱신 ' + relTime(P.updated_at) : '';
-    if (tool === 'knowledge') return '필요 ' + (kn.required || []).length + ' → 산출 ' + (kn.produced || []).length;
-    return '';
-  }
-
-  // ── «한눈»·«목록» 뷰(아직 5판으로 안 옮긴 도구: 본문·폴더·지식·타임라인) — f.cap = 세로 칸(h)이 담는 줄 수, f.w = 가로 칸(좁은 폭은 1). ──
-  type Fit = { view: HubView; w: number; h: number; cap: number };
-  type FillOld = (f: Fit, body: HTMLElement, foot: HTMLElement, sub: HTMLElement) => void;
-  const FILL: Partial<Record<HubTool, FillOld>> = {
-    body(f, body, foot, sub) {
-      const md = String(P.description || '');
-      sub.textContent = subFor('body');
-      const h = lastHeading(md);
-      const text = stripMd(md);
-      if (f.view === 'glance') {
-        body.append(el('div', { class: 'pjh-stat-t', text: h || text.slice(0, 80) || '본문이 비어 있습니다.' }));
-        body.append(stat((md.split('\n').filter((l) => /^#{1,6}\s+\S/.test(l)).length || 1) + '절' + (P.updated_at ? ' · 갱신 ' + relTime(P.updated_at) : '')));
-      } else {
-        // 세로로 길면 발췌도 그만큼 — 한 칸(260px)에 석 줄, 칸이 늘 때마다 아홉 줄씩.
-        const lines = f.h <= 1 ? 3 : f.h * 9;
-        body.append(el('div', { class: 'pjh-excerpt', style: '-webkit-line-clamp:' + lines }, h ? el('b', { text: h + ' — ' }) : null,
-          text.slice(0, 110 * lines) || '본문이 비어 있습니다. 열어서 적으세요.'));
-      }
-      const tail = el('div', { class: 'pjh-tail' });
-      body.append(tail);
-      const cnt = el('span', { class: 'pjh-wf-txt' }, hubIcon('comment', 13), '코멘트');
-      foot.append(cnt, btn('본문', 'btn-ghost', () => openTool('body')));
-      D.comments().then((cs: any[]) => {
-        cnt.append(' ' + cs.length);
-        const last = cs[cs.length - 1];
-        if (!last) return;
-        if (f.view === 'glance') tail.append(row(personFace(last.actor, 'pjv-ava', last.display_name), el('span', { class: 'pjh-row-n', style: 'font-weight:500;color:var(--ink-sub)', text: stripMd(last.body || '') })));
-        else tail.append(el('div', { class: 'pjh-cmt' }, personFace(last.actor, 'pjv-cmt-mini-ava', last.display_name),
-          el('div', { class: 'pjh-cmt-b' }, el('div', { class: 'pjh-cmt-h' }, el('b', { text: last.display_name || last.actor || '' }), el('span', { text: last.ts ? relTime(last.ts) : '' })),
-            el('div', { class: 'pjh-cmt-t', text: stripMd(last.body || '') }))));
-      });
-    },
-    folder(f, body, foot, sub) {
-      body.append(el('div', { class: 'pjh-stat', text: '파일을 불러오는 중' }));
-      D.files().then((items: any[]) => {
-        body.replaceChildren();
-        const files = items.filter((i) => i.type !== 'dir'), dirs = items.filter((i) => i.type === 'dir');
-        sub.textContent = items.length ? String(files.length) + (dirs.length ? ' · 폴더 ' + dirs.length : '') : '';
-        if (!items.length) {
-          body.append(emptyNote('아직 올린 파일이 없습니다. 열어서 끌어다 놓거나 업로드하세요.'));
-          foot.append(el('span', { class: 'pjh-wf-txt', text: '루트' }), btn('폴더', 'btn-ghost', () => openTool('folder')));
-          return;
-        }
-        const latest = [...files].sort((a, b) => (b.mtime || 0) - (a.mtime || 0))[0];
-        if (f.view === 'glance') {
-          body.append(big(files.length, '파일'));
-          if (latest) body.append(stat(el('b', { text: '최근 ' + (latest.mtime ? relTime(new Date(latest.mtime).toISOString()) : '') }), el('br'), latest.name + (latest.size != null ? ' · ' + fmtSize(latest.size) : '')));
-        } else if (f.w === 1) {
-          // 1칸 폭 긴 목록 — 낱장 카드 대신 줄(아이콘 · 이름 · 크기). 폴더 먼저.
-          for (const it of [...dirs, ...files].slice(0, f.cap)) {
-            body.append(el('div', { class: 'pjh-row pjh-file-row', title: it.name, onclick: () => openTool('folder') },
-              el('span', { class: 'pjh-file-ic' }, fileThumb(pid, it, it.name, o.base)),
-              el('span', { class: 'pjh-row-n', text: it.name }),
-              it.type === 'dir' ? null : el('span', { class: 'pjh-row-m', text: fmtSize(it.size || 0) })));
-          }
-        } else {
-          const grid = el('div', { class: 'pjh-files' });
-          for (const it of [...dirs, ...files].slice(0, 6)) {
-            grid.append(el('div', { class: 'proj-file-card', title: it.name, onclick: () => openTool('folder') },
-              el('div', { class: 'proj-file-card-ic' }, fileThumb(pid, it, it.name, o.base)),
-              el('div', { class: 'proj-file-card-nm', text: it.name }),
-              it.type === 'dir' ? null : el('div', { class: 'proj-file-sz', text: fmtSize(it.size || 0) })));
-          }
-          body.append(grid);
-        }
-        foot.append(el('span', { class: 'pjh-wf-txt', text: '루트' + (items.length > 6 ? ' · ' + items.length + '개' : '') }), btn('폴더', 'btn-ghost', () => openTool('folder')));
-      });
-    },
-    knowledge(f, body, foot, sub) {
-      const req: any[] = kn.required || [], prod: any[] = kn.produced || [];
-      sub.textContent = subFor('knowledge');
-      const recBox = el('div', {});
-      if (f.view === 'glance') {
-        body.append(el('div', { class: 'pjh-big' }, String(req.length), el('span', { class: 'pjh-arrow', text: '→' }), String(prod.length), el('small', { text: '필요 → 산출' })));
-        const st = stat('연결하면 AI 가 그 문서를 읽은 상태로 시작합니다');
-        body.append(st, recBox);
-        const first = prod[0] || req[0];
-        if (first) body.append(row(hubIcon('doc', 14), el('span', { class: 'pjh-row-n', style: 'font-weight:500;color:var(--ink-sub)', text: first.title || first.name }),
-          el('span', { class: 'pjh-kn-rel', text: prod[0] ? '산출' : '필요' })));
-        D.recs().then((rs: any[]) => { if (rs.length) st.replaceChildren(el('b', { text: '추천 ' + rs.length }), ' — 연결하면 AI 가 읽고 시작합니다'); });
-      } else {
-        for (const k of [...prod.map((k) => ({ ...k, rel: '산출' })), ...req.map((k) => ({ ...k, rel: '필요' }))].slice(0, Math.max(4, f.cap - 2))) {
-          body.append(row(hubIcon('doc', 14), el('a', { class: 'pjh-row-n pjh-row-link', href: '#/knowledge/' + encodeURIComponent(k.name), text: k.title || k.name }),
-            el('span', { class: 'pjh-kn-rel', text: k.rel })));
-        }
-        body.append(recBox);
-        D.recs().then((rs: any[]) => {
-          for (const r of rs) {
-            const link = el('button', { class: 'pjh-kn-link', type: 'button', text: '연결' });
-            link.onclick = async () => {
-              link.disabled = true;
-              try { await api('/api/ui/v6/projects/' + pid + '/knowledge', { method: 'POST', body: JSON.stringify({ name: r.name, relation: 'required' }) }); toast('필요 지식으로 연결했습니다'); o.reload(); }
-              catch (e: any) { toast('연결 실패 — ' + e.message, true); link.disabled = false; }
-            };
-            recBox.append(row(hubIcon('doc', 14), el('span', { class: 'pjh-row-n', style: 'font-weight:500;color:var(--ink-sub)', text: r.title || r.name }),
-              el('span', { class: 'pjh-kn-pct', text: r.similarity != null ? Math.round(r.similarity * 100) + '%' : '' }), link));
-          }
-          if (!prod.length && !req.length && !rs.length) body.append(emptyNote('연결된 지식이 없습니다. 열어서 ＋ 지식 연결로 시작하세요.'));
-        });
-      }
-      foot.append(el('span', { class: 'pjh-wf-txt', text: '필요 ' + req.length + ' · 산출 ' + prod.length }), btn('지식 연결', 'btn-ghost', () => openTool('knowledge')));
-    },
-    timeline(f, body, foot, sub) {
-      body.append(el('div', { class: 'pjh-stat', text: '기록을 불러오는 중' }));
-      D.acts().then((acts: any[]) => {
-        body.replaceChildren();
-        sub.textContent = acts.length ? String(acts.length) : '';
-        if (!acts.length) {
-          body.append(emptyNote('아직 이 프로젝트의 작업 기록이 없습니다.'));
-          foot.append(el('span', { class: 'pjh-wf-txt', text: '이 프로젝트에 연결된 작업만' }), btn('전체 보기', 'btn-ghost', () => openTool('timeline')));
-          return;
-        }
-        const when = (a: any) => a.committed_at || a.created_at || '';
-        if (f.view === 'glance') {
-          const a = acts[0];
-          body.append(big(acts.length, '기록'));
-          body.append(stat(el('b', { text: '마지막 ' + (when(a) ? relTime(when(a)) : '') }), el('br'), (a.summary || a.title || '') + (a.author_person ? ' · ' + memberName(a.author_person) : '')));
-        } else {
-          // 원장 행은 ≈46px — 한 칸엔 셋, 세로로 늘면 그만큼.
-          for (const a of acts.slice(0, f.h <= 1 ? 3 : Math.floor((f.h * 276 - 130) / 46))) {
-            const d = when(a) ? new Date(when(a)) : null;
-            body.append(el('a', { class: 'pjh-lg', href: '#', onclick: (e: Event) => { e.preventDefault(); openTool('timeline'); } },
-              el('span', { class: 'pjh-lg-t' }, d ? (d.getMonth() + 1) + '/' + d.getDate() : '', el('br'), d ? String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') : ''),
-              el('span', { class: 'pjh-lg-b' }, el('span', { class: 'pjh-lg-title', text: a.summary || a.title || '(제목 없음)' }),
-                el('span', { class: 'pjh-lg-meta', text: [a.type, memberName(a.author_person), a.author_agent].filter(Boolean).join(' · ') })),
-              el('span', { class: 'pjh-lg-r' }, hubIcon('chevr', 14))));
-          }
-        }
-        foot.append(el('span', { class: 'pjh-wf-txt', text: '이 프로젝트에 연결된 작업만' }), btn('전체 보기', 'btn-ghost', () => openTool('timeline')));
-      });
-    },
-  };
-  void moreNote; void footText; void pjvFmtDate;   // 아직 5판으로 안 옮긴 도구가 다음 PR 에서 쓴다 — 부품은 kit 에 있다
 
   // ── 편집 모드 크롬 ──
   const sizeText = (w: number, h: number): string => w + '×' + h + ' · ' + HUB_VIEW_LABEL[hubView(w, h)];

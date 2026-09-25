@@ -11,7 +11,8 @@
 import { api, applyReveal, el, errorNote, personFace, state, toast } from '../core.js';
 import { skeleton } from '../learn.js';
 import { openProjectSessionsModal } from '../sessions.js';   // #4135 허브 세션 위젯 「세션 기록」(detail-terminal 과 같은 문)
-import { projectBodyCommentRow, projectBodySection, projectKnowledgeSection } from './detail-body.js';
+import { mountBodyEditor, projectBodyCommentRow, projectBodySection, projectKnowledgeSection, uploadBodyFile } from './detail-body.js';
+import { openFileViewer } from './files-cards.js';   // #4135 허브 폴더 위젯 «열기» — 섹션과 같은 뷰어
 import { mountProjectHub } from './detail-hub.js';
 import { HUB_TOOLS, type HubTool } from './detail-hub-layout.js';
 import { pjvProjFactsStrip, pjvProjMetaPanel } from './detail-meta.js';
@@ -333,6 +334,15 @@ async function renderProjectV2Detail(view, idStr) {
     tasksList: (opts) => pjvTasksSection(id, p.tasks || [], members, reload, opts.fields ?? (p.fields || []), opts),
     newSession: () => { void openProjectSessionForm(id, reload, V6_BASE, p.name); },
     sessionLog: () => openProjectSessionsModal(id, p.name),
+    // 본문 위젯의 편집 = 섹션과 같은 블록 에디터(항시 자동저장) · 폴더 위젯의 열기 = 섹션과 같은 파일 뷰어 · 공유 링크 좌표 = 프로젝트 폴더.
+    bodyEditor: () => mountBodyEditor({
+      initial: p.description || '',
+      placeholder: '본문을 입력하세요.  ‘/’ 로 블록 삽입 · 이미지 붙여넣기/드롭 · 드래그로 정렬',
+      uploadFile: (file) => uploadBodyFile(id, '_attachments/project-' + id, file),
+      save: async (md) => { await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ description: md || null }) }); p.description = md; },
+    }),
+    openFile: (rel, name) => openFileViewer(id, rel, name, reload, V6_BASE, p.folder),
+    shareBase: p.folder,
     sections: {
       tasks: () => pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []),
       sessions: () => projectTerminalSection(id, members, meId, V6_BASE, p.name, p),

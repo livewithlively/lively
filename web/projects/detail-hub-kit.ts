@@ -33,6 +33,9 @@ export interface HubOpts {
   tasksList?: (opts: HubTasksListOpts) => HTMLElement;   // 프로젝트 탭 태스크 목록을 옵션으로(5판 «줄을 그대로 쓴다»)
   newSession?: () => void;                // 「＋ 새 세션」 — 프로젝트 세션 만들기 모달
   sessionLog?: () => void;                // 「세션 기록」 — 끝난 세션까지의 대화록 모달
+  bodyEditor?: () => { el: HTMLElement; flush: () => Promise<void>; destroy: () => void };   // 본문 블록 에디터(detail-body.mountBodyEditor)
+  openFile?: (rel: string, name: string) => void;   // 파일 뷰어(files-cards.openFileViewer)
+  shareBase?: string;                     // 공유 링크 좌표(project.folder) — 없으면 링크 단추를 안 그린다
 }
 
 /** 허브가 한 번 받아 위젯에 나눠 주는 데이터(같은 화면에서 같은 것을 두 번 묻지 않는다). invalidate 로 한 키를 다시 받게 한다. */
@@ -81,6 +84,12 @@ export const HUB_ICON: Record<string, string> = {
   term: '<rect x="2.5" y="4.5" width="19" height="15" rx="2.6"/><path d="M6.8 9.6l3 2.6-3 2.6"/><path d="M12.4 15h4.4"/>',
   termnew: '<rect x="1.5" y="4.5" width="16" height="14" rx="2.4"/><path d="M5.2 9.4l3 2.6-3 2.6"/><path d="M10.6 15.4h3.8"/><path d="M20.6 2.6v5"/><path d="M18.1 5.1h5"/>',
   link: '<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7L12.5 19.5"/>',
+  pen: '<path d="M4 20h4L18 10l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  send: '<path d="M4 12l16-8-6 16-2.5-6.5z"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+  up: '<path d="M12 19V5"/><path d="M6 11l6-6 6 6"/><path d="M5 20h14"/>',
+  dl: '<path d="M12 5v13"/><path d="M6 12l6 6 6-6"/><path d="M5 20h14"/>',
 };
 export const TOOL_TONE: Record<HubTool, string> = { tasks: 'amber', sessions: 'mint', body: '', folder: 'blue', knowledge: 'mint', timeline: '' };
 export function hubIcon(name: string, size = 14): SVGElement {

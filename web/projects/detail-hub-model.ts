@@ -76,10 +76,15 @@ export function dayStart(iso: string | null | undefined): number {
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
 }
 const DAY = 86400000;
-export const isOverdue = (t: TaskLike, nowMs: number): boolean => { const d = dayStart(t.due_date); return !isDone(t) && Number.isFinite(d) && d < dayStart(new Date(nowMs).toISOString().slice(0, 10)) ; };
+/** 오늘 0시(로컬) — ⚠ toISOString() 을 거치면 UTC 날짜가 되어 KST 새벽 0~9시에 «어제» 가 오늘로 잡힌다(리뷰 지적 2026-09-25). */
+export function todayStart(nowMs: number): number {
+  const n = new Date(nowMs);
+  return new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
+}
+export const isOverdue = (t: TaskLike, nowMs: number): boolean => { const d = dayStart(t.due_date); return !isDone(t) && Number.isFinite(d) && d < todayStart(nowMs); };
 /** 이번 주 마감 = 오늘부터 7일 안(마감 지난 것 포함 — «이번 주에 끝내야 할 것» 을 보는 자리다). 완료는 뺀다. */
 export function dueThisWeek(tasks: TaskLike[], nowMs: number): TaskLike[] {
-  const today = dayStart(new Date(nowMs).toISOString().slice(0, 10));
+  const today = todayStart(nowMs);
   return tasks.filter((t) => { if (isDone(t)) return false; const d = dayStart(t.due_date); return Number.isFinite(d) && d <= today + 7 * DAY; })
     .sort((a, b) => dayStart(a.due_date) - dayStart(b.due_date));
 }
@@ -119,13 +124,14 @@ export function tasksFootText(tasks: TaskLike[], w: number, h: number, shown: nu
 }
 
 // ── 세션 ─────────────────────────────────────────────────────────────────────
-export interface SessionLike { id: string; label?: string | null; owner?: string | null; created?: number | null; lastBusy?: number | null; lastAttached?: number | null; lastViewed?: number | null; agentState?: string | null; working?: boolean; awaiting?: boolean; attached?: boolean; restorable?: boolean; harness?: string | null; node?: { id?: string; name?: string; online?: boolean } | null }
+export interface SessionLike { id: string; label?: string | null; owner?: string | null; created?: number | null; lastActive?: number | null; lastBusy?: number | null; lastAttached?: number | null; lastViewed?: number | null; agentState?: string | null; working?: boolean; awaiting?: boolean; attached?: boolean; restorable?: boolean; harness?: string | null; node?: { id?: string; name?: string; online?: boolean } | null }
 export interface SessionGroupDef { key: string; label: string; sessions: SessionLike[] }
 
-/** 마지막 활동 시각(ms) — 바쁜 시각 > 붙은 시각 > 만든 시각. 초 단위(created)는 ms 로. */
+/** 마지막 활동 시각(ms) — 마지막 작업(서버 응답 `lastActive` — sessions.ts 가 lastBusy 를 그 이름으로 싣는다, web/session-status.ts SessLike 와 같다)
+ *  > 붙은 시각 > 본 시각 > 만든 시각. 초 단위(created)는 ms 로. */
 export function sessionLastActivity(s: SessionLike): number {
   const ms = (v: number | null | undefined): number => { const n = Number(v) || 0; return n && n < 1e12 ? n * 1000 : n; };
-  return Math.max(ms(s.lastBusy), ms(s.lastAttached), ms(s.lastViewed), ms(s.created));
+  return Math.max(ms(s.lastActive), ms(s.lastBusy), ms(s.lastAttached), ms(s.lastViewed), ms(s.created));
 }
 
 /** 세션이 맡은 태스크 — 프로젝트 상세의 tasks[].sessions 를 뒤집어 세션 id → 태스크. 한 세션은 태스크 하나(#4084). */
@@ -145,4 +151,74 @@ export function sessionGroupsFor(sessions: SessionLike[], w: number, h: number, 
 /** 정렬 — 순위(작을수록 먼저: 확인 필요 → 작업 완료 → 작업 중 → 대기 → …) 다음 마지막 활동 내림차순. rank 는 호출자(session-status.ts sessRank). */
 export function sortSessions<T extends SessionLike>(sessions: T[], rank: (s: T) => number): T[] {
   return [...sessions].sort((a, b) => (rank(a) - rank(b)) || (sessionLastActivity(b) - sessionLastActivity(a)));
+}
+
+// ── 본문·코멘트 ─────────────────────────────────────────────────────────────
+/** 안 읽은 코멘트 수 — 기기별 마지막 읽음 id(localStorage `pjv_cmt_read_<pid>`)보다 새 것, 내가 쓴 건 제외(detail-body 와 같은 규칙). */
+export function unreadComments(comments: Array<{ id?: number | string; actor?: string | null }>, lastReadId: number, meId: string): number {
+  return comments.filter((c) => (Number(c.id) || 0) > lastReadId && c.actor !== meId).length;
+}
+/** 본문 글자 수 — 마크다운 기호·공백을 걷은 뒤. */
+export function bodyCharCount(md: string): number {
+  return String(md || '').replace(/[#>*_`\[\]()]/g, '').replace(/\s+/g, '').length;
+}
+
+// ── 폴더 ────────────────────────────────────────────────────────────────────
+export interface FileLike { name: string; type?: string; size?: number; mtime?: number }
+export const splitDirs = (items: FileLike[]): { dirs: FileLike[]; files: FileLike[] } => ({ dirs: items.filter((i) => i.type === 'dir'), files: items.filter((i) => i.type !== 'dir') });
+/** 최근 순 파일 n개(폴더 제외, mtime 내림차순 — 같으면 이름순). */
+export function recentFiles(items: FileLike[], n: number): FileLike[] {
+  return splitDirs(items).files.slice().sort((a, b) => (Number(b.mtime) || 0) - (Number(a.mtime) || 0) || String(a.name).localeCompare(String(b.name))).slice(0, Math.max(0, n));
+}
+
+// ── 타임라인 레인 ──────────────────────────────────────────────────────────
+export interface ActLike { author_person?: string | null; committed_at?: string | null; created_at?: string | null }
+export const actWhen = (a: ActLike): number => { const t = Date.parse(String(a.committed_at || a.created_at || '')); return Number.isFinite(t) ? t : 0; };
+/** 로컬 날짜 키 YYYY-MM-DD. */
+export function dayKey(ms: number): string {
+  const d = new Date(ms);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+export interface LaneDay { key: string; label: string; weekend: boolean; today: boolean }
+/** 오늘을 끝으로 n일 — 라벨 «D»(달이 바뀌는 첫날은 «M/D»), 주말·오늘 표식. */
+export function laneDays(n: number, nowMs: number): LaneDay[] {
+  const out: LaneDay[] = [];
+  const today = new Date(nowMs); today.setHours(0, 0, 0, 0);
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(today.getTime() - i * DAY);
+    const first = i === n - 1 || d.getDate() === 1;
+    out.push({ key: dayKey(d.getTime()), label: first ? (d.getMonth() + 1) + '/' + d.getDate() : String(d.getDate()), weekend: d.getDay() === 0 || d.getDay() === 6, today: i === 0 });
+  }
+  return out;
+}
+/** 사람 × 날 건수 — 사람 순서는 첫 등장 순(호출자가 팀원 순으로 앞에 세울 수 있다). 기록 없는 사람은 없다. */
+export function laneCounts(acts: ActLike[], days: LaneDay[], order: string[] = []): Map<string, number[]> {
+  const idx = new Map(days.map((d, i) => [d.key, i]));
+  const m = new Map<string, number[]>();
+  for (const p of order) if (p) m.set(p, days.map(() => 0));
+  for (const a of acts) {
+    const p = String(a.author_person || '');
+    const when = actWhen(a); if (!p || !when) continue;
+    const i = idx.get(dayKey(when)); if (i == null) continue;
+    if (!m.has(p)) m.set(p, days.map(() => 0));
+    m.get(p)![i]++;
+  }
+  for (const [p, row] of [...m]) if (!row.some((n) => n > 0) && !order.includes(p)) m.delete(p);
+  return m;
+}
+/** 점 크기 단계 — 0 없음 · 1(1건) · 2(2~3) · 3(4~6) · 4(7+). */
+export const dotSize = (n: number): 0 | 1 | 2 | 3 | 4 => (n <= 0 ? 0 : n === 1 ? 1 : n <= 3 ? 2 : n <= 6 ? 3 : 4);
+/** 피드의 날 라벨 — 오늘 · 어제 · M/D. */
+export function feedDayLabel(ms: number, nowMs: number): string {
+  const k = dayKey(ms), t = dayKey(nowMs), y = dayKey(nowMs - DAY);
+  if (k === t) return '오늘'; if (k === y) return '어제';
+  const d = new Date(ms); return (d.getMonth() + 1) + '/' + d.getDate();
+}
+export const countOn = (acts: ActLike[], key: string): number => acts.filter((a) => actWhen(a) && dayKey(actWhen(a)) === key).length;
+export const countSince = (acts: ActLike[], fromMs: number): number => acts.filter((a) => actWhen(a) >= fromMs).length;
+/** 가장 최근 기록의 (사람, 날) — 2×2 이상 «자세히» 칸의 기본 선택. 없으면 null. */
+export function latestLane(acts: ActLike[]): { person: string; day: string } | null {
+  let best: ActLike | null = null;
+  for (const a of acts) if (a.author_person && actWhen(a) && (!best || actWhen(a) > actWhen(best))) best = a;
+  return best ? { person: String(best.author_person), day: dayKey(actWhen(best)) } : null;
 }
