@@ -112,6 +112,15 @@ t("Bash 승인 다이얼로그(Do you want to proceed?) → 대기", () => {
   assert.equal(detectAwaiting(pane), true);
 });
 
+t("Codex Action required 화면 → 대기", () => {
+  const pane = [
+    " Action required",
+    " Codex needs your decision before continuing.",
+    " Press enter to continue",
+  ].join("\n");
+  assert.equal(detectAwaiting(pane), true);
+});
+
 t("빈 pane → 대기 아님", () => {
   assert.equal(detectAwaiting(""), false);
 });
@@ -515,8 +524,10 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     const keys = HARNESSES.map((h) => h.key);
     ok2(keys.includes("opencode") && keys.includes("antigravity"), "E13a 배선된 4하네스가 모두 세션 선택지에 있다");
     const agy = HARNESSES.find((h) => h.key === "antigravity");
+    const codex = HARNESSES.find((h) => h.key === "codex");
     ok2(agy?.bin === "agy", "E13b antigravity 의 실행 파일은 agy(key 로 spawn 하면 ENOENT)");
     ok2(agy?.autoApproveFlag === "--dangerously-skip-permissions", "E13c 자동승인은 그 하네스가 실제로 받는 플래그");
+    ok2(codex?.autoApproveFlag === "--dangerously-bypass-approvals-and-sandbox", "E13c-b Codex 자동승인은 현재 CLI가 인식하는 완전 권한 플래그");
     ok2((agy?.flags.find((f) => f.name === "--effort")?.choices || []).join(",") === ",low,medium,high",
       "E13d agy 의 추론강도는 3단계 — 다른 하네스의 목록을 복사해 두면 고른 값이 거부된다");
     ok2(HARNESSES.find((h) => h.key === "opencode")?.autoApproveFlag === "--auto", "E13e opencode 자동승인은 --auto");

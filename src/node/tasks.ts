@@ -230,7 +230,7 @@ export const HEADLESS: Record<string, HeadlessSpec> = {
   },
   codex: {
     // exec = codex 의 헤드리스 서브커맨드. `--json` 이 진행 이벤트를 JSONL 로 뱉고, 프롬프트는 stdin 으로 받는다
-    //  ("instructions are read from stdin" — --help). 승인 우회는 세션의 --yolo 가 아니라 이 플래그다.
+    //  ("instructions are read from stdin" — --help). 승인 우회는 대화형 세션 플래그와 별개로 이 플래그다.
     run: (bin, f, p, bypass) => `${bin} exec --json${bypass} ${f} < "${p}"`,
     bypassFlag: "--dangerously-bypass-approvals-and-sandbox",
     extract: (j) => lastMatch(j, (ev) => {

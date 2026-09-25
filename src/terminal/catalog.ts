@@ -197,7 +197,9 @@ export const HARNESSES: Harness[] = [
   },
   {
     key: "codex", label: "Codex", bin: "codex", provider: { id: "openai", label: "OpenAI" },
-    autoApproveFlag: "--yolo",
+    // Codex CLI 0.154.0 --help 실측: 종전 --yolo 는 더 이상 인식하지 않는다.
+    // 이 플래그는 승인과 샌드박스를 함께 끄므로, 홈의 「자동 승인」을 켠 세션에만 붙인다.
+    autoApproveFlag: "--dangerously-bypass-approvals-and-sandbox",
     // 2026-08-24 Codex CLI 0.149.1 기준 현행 카탈로그. gpt-5.5를 기본 표기로 남기면
     // 새 세션 화면에서 5.6 계열을 애초에 고를 수 없어, 실제 설치본보다 UI가 뒤처진다.
     // default 의 뜻(#3778 개정) — 새 세션 화면이 **이 값을 골라 둔다**(그리고 그대로 넘긴다). 종전엔 표기용이라

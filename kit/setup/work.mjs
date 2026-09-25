@@ -382,15 +382,16 @@ if (failedRepos.length) {
 }
 
 // ── 5) 하네스 실행(프로젝트 폴더에서) ──
-// 하네스 인자 — 모델/자동승인(웹 터미널 카탈로그와 동일 규칙: claude=--dangerously-skip-permissions, codex=--yolo).
+// 하네스 인자 — 모델/자동승인(웹 터미널 카탈로그와 동일 규칙: claude=--dangerously-skip-permissions,
+// codex=--dangerously-bypass-approvals-and-sandbox).
 //  바이너리명은 하네스 id 와 다를 수 있다(antigravity → agy, #1689) — id 로 spawn 하면 ENOENT 다.
 const HARNESS_BIN = { claude: "claude", codex: "codex", opencode: "opencode", antigravity: "agy", grok: "grok" };
-// 자동승인 플래그도 **하네스마다 다르다**(#1711). 종전엔 `codex ? "--yolo" : "--dangerously-skip-permissions"` 라
+// 자동승인 플래그도 **하네스마다 다르다**(#1711).
 //  opencode 에 존재하지 않는 플래그를 줘, `lively run … --auto-approve` 가 그 하네스에서 조용히 어긋났다.
 //  ⚠ 값은 서버 카탈로그(src/terminal/catalog.ts HARNESSES)와 같아야 한다 — 웹에서 만든 명령과 로컬 실행이 갈리면
 //   같은 체크박스가 기계마다 다른 뜻이 된다. 표에 없는 하네스면 **아무 플래그도 주지 않는다**(추측 금지).
 //  grok 은 --always-approve(#1701 실측 — --yolo 는 별칭이지만 제품 표기가 always-approve 다).
-const HARNESS_AUTO = { claude: "--dangerously-skip-permissions", codex: "--yolo", opencode: "--auto", antigravity: "--dangerously-skip-permissions", grok: "--always-approve" };
+const HARNESS_AUTO = { claude: "--dangerously-skip-permissions", codex: "--dangerously-bypass-approvals-and-sandbox", opencode: "--auto", antigravity: "--dangerously-skip-permissions", grok: "--always-approve" };
 const hbin = HARNESS_BIN[harness] || harness;
 const hargs = [];
 if (args.model) hargs.push("--model", args.model);

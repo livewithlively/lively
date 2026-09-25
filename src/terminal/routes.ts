@@ -317,7 +317,7 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     res.json({
       roots: roots().map((r) => ({ key: r.key, label: r.label })),
       // bin·autoApproveFlag 를 함께 준다(#1695) — 프로젝트 화면의 '내 컴퓨터에서 작업'이 자동승인 설명에 **그 하네스의
-      //  실제 플래그**를 적기 위해서다. 종전엔 웹이 'claude --dangerously-skip-permissions / codex --yolo' 를 문장에
+      //  실제 플래그**를 적기 위해서다. 종전엔 웹이 'claude --dangerously-skip-permissions / codex --dangerously-bypass-approvals-and-sandbox' 를 문장에
       //  하드코딩해, 하네스가 늘 때마다 그 문장이 조용히 틀려졌다. 둘 다 우리 상수라 노출에 위험이 없다.
       // provider — 화면이 '어느 회사 모델로 열까'로 묻고 그 답이 곧 하네스가 된다(#1758, catalog.ts HarnessProvider).
       // runtime — 이미 떠 있는 세션에서 그 축을 바꿀 수 있나(슬래시 명령이 있는 하네스만). 화면이 컨트롤 노출을 이걸로 정한다.
