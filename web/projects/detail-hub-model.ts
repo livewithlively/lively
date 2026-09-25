@@ -183,9 +183,9 @@ export interface LaneDay { key: string; label: string; weekend: boolean; today: 
 /** 오늘을 끝으로 n일 — 라벨 «D»(달이 바뀌는 첫날은 «M/D»), 주말·오늘 표식. */
 export function laneDays(n: number, nowMs: number): LaneDay[] {
   const out: LaneDay[] = [];
-  const today = new Date(nowMs); today.setHours(0, 0, 0, 0);
+  const t = new Date(nowMs);
   for (let i = n - 1; i >= 0; i--) {
-    const d = new Date(today.getTime() - i * DAY);
+    const d = new Date(t.getFullYear(), t.getMonth(), t.getDate() - i);   // 달력 산술 — 서머타임 날에도 하루가 겹치거나 빠지지 않는다
     const first = i === n - 1 || d.getDate() === 1;
     out.push({ key: dayKey(d.getTime()), label: first ? (d.getMonth() + 1) + '/' + d.getDate() : String(d.getDate()), weekend: d.getDay() === 0 || d.getDay() === 6, today: i === 0 });
   }

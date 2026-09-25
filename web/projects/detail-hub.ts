@@ -16,7 +16,7 @@
 import { api, el } from '../core.js';
 import { pjvPopover } from './popover.js';
 import {
-  HUB_COLS, HUB_MAX_H, HUB_PRESETS, HUB_TOOL_LABEL, HUB_TOOLS, HUB_VIEW_LABEL, applyHubPreset, hideHubItem, hubListCap, hubView,
+  HUB_COLS, HUB_MAX_H, HUB_PRESETS, HUB_TOOL_LABEL, HUB_TOOLS, HUB_VIEW_LABEL, applyHubPreset, hideHubItem, hubView,
   loadHubLayout, matchHubPreset, moveHubItem, resetHubLayout, resizeHubItem, saveHubLayout, setHubScope, showHubItem,
   type HubLayout, type HubTool,
 } from './detail-hub-layout.js';
@@ -84,7 +84,7 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
     const body = el('div', { class: 'pjh-wb' });
     const foot = el('div', { class: 'pjh-wf' });
     card.append(head, body, foot);
-    const fit = { view, w: narrow ? 1 : w, h, cap: hubListCap(h) };
+    const fit = { view, w: narrow ? 1 : w, h };
     ctx.narrow = narrow;
     FILL5[tool](ctx, fit, body, foot, sub, acts);
     if (editing) decorateEdit(card, tool, w, h);
