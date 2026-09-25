@@ -283,7 +283,8 @@ const layout = (cards) => cards.map((c) => `${c.key}@${c.bucket}`);
   assert.match(main, /pruneHolds\(holds, rows\)/);
   assert.doesNotMatch(main, /rank: _rank/, "rank 를 벗기면 카드가 붙든 행의 순위를 못 본다");
   const side = read("web/v2/side.ts");
-  assert.match(side, /if \(!searching && \(hooks\.section\?\.\(\) \|\| 'home'\) === 'home'\) \{/, "카드 기억은 홈 구역·찾는 중 아님에서만 건드린다");
+  //  #4233 — 세션별 축의 「고정」 층이 고정한 프로젝트 카드만 따로 묶을 때는 hold=false 로 기억을 안 건드린다(일부만 들고 prune 하면 지워진다).
+  assert.match(side, /if \(hold && !searching && \(hooks\.section\?\.\(\) \|\| 'home'\) === 'home'\) \{/, "카드 기억은 홈 구역·찾는 중 아님에서만 건드린다(부분 묶음은 안 건드린다)");
   assert.match(side, /stepCardHold\(cardHolds\.get\(g\.key\), \{ bucket: g\.bucket, rank: g\.rank, at: g\.at, viewing: g\.active, pinned: g\.pinned \}\)/);
   assert.match(side, /ordered = orderCards\(groups, seq\)/);
   assert.match(side, /pruneHolds\(cardHolds, byKey\)/);

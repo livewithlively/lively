@@ -39,6 +39,7 @@ import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { sourcesFindInput, sourcesFindShown, sourcesSideBody, sourcesSideCount, sourcesUploadPick, toggleSourcesFind } from './sources.js';   // #2423 자료 앱 사이드바 내용
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { orderCards, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from './hold-rules.js';   // #3856 — 카드 자리 자물쇠(순수)
+import { pinnedFirst, splitHomePins, splitSessAxis } from '../lib/home-pins.js';   // #4233 — 「고정」 나누기(고정한 단위가 그대로 움직인다 · 순수)
 import { migratePinKeys } from './pin-migrate.js';   // #2402 — 복원으로 id 가 바뀔 때 핀을 옮기는 규칙(순수·값검증)
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
 import { confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 휴지통·아카이브
@@ -429,8 +430,8 @@ function togglePin(key: string): void {
   renderTree();
   //  ★ 같은 압정을 **목록의 프로젝트 카드**도 쓴다(#3778) — 트리에서 꽂든 카드에서 꽂든 한 프로젝트에 압정은 하나다.
   //   그러니 한쪽에서 누르면 다른 쪽도 같은 판에서 움직여야 한다(안 그리면 목록은 다음 폴링까지 옛 자리에 선다).
-  //   묶지 않은 축(세션 목록)은 이 핀과 무관하므로 붓을 대지 않는다.
-  if (groupProj) repaintList();
+  //  #4233 — 세션별 축도 이 핀을 쓴다(고정한 프로젝트는 두 축 모두 「고정」 층에 카드로 선다). 그래서 두 축 모두 다시 그린다.
+  repaintList();
 }
 
 let treeEl: HTMLElement | null = null;
@@ -533,9 +534,11 @@ function instanceIcon(inst: SideInstance): SVGElement {
  */
 /** 세션 행의 둘째 줄 — **내가 마지막으로 시킨 말**(#2016 6차, 원준: "밑에 2행은 내가 한 마지막 질문의 짧은 요약본으로").
  *  단추가 아니다(종전 폴더+프로젝트명은 누르면 프로젝트로 갔다) — 행 전체가 세션을 연다. 프로젝트는 툴팁에 남긴다. */
-function askLine(ask: string, projName: string): HTMLElement {
+function askLine(ask: string, projName: string, tail = false): HTMLElement {
   return el('span', { class: 'v2-app-inst-ask', title: (projName ? projName + '\n' : '') + '내가 마지막으로 한 말 — ' + ask },
-    glyph('ask', 'v2-app-inst-ask-ic'), el('span', { class: 'v2-app-inst-askt', text: ask })) as HTMLElement;
+    glyph('ask', 'v2-app-inst-ask-ic'), el('span', { class: 'v2-app-inst-askt', text: ask }),
+    //  #4233 — 세션별 축에는 카드 머리가 없어 소속이 안 보였다. 줄 끝에 흐리게 붙이고, 좁으면 먼저 잘린다(CSS).
+    tail && projName ? el('span', { class: 'v2-app-inst-askp', text: projName }) : null) as HTMLElement;
 }
 
 /** 열린 앱 한 줄. 목록을 그리는 두 자리(첫 렌더 · 검색 중 부분 갱신)가 같은 붓을 쓴다.
@@ -547,6 +550,10 @@ interface RowOpts {
   /** 압정·× 를 그리나. **목록의 성질**이 정한다(아래 renderSessions 머리말) — 행의 성질이 아니다. */
   pin?: boolean;
   close?: boolean;
+  /** #4233 — 둘째 줄을 **소속 프로젝트 이름**으로(「고정」 세션 카드 — 머리가 없으니 줄이 소속을 말한다). */
+  projLine?: boolean;
+  /** #4233 — 세션별 축 날짜 카드: 둘째 줄(마지막 말) 끝에 소속 프로젝트를 흐리게 붙인다(자리가 있을 때만 보인다). */
+  projTail?: boolean;
 }
 function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
   const one = !!o.one, canPin = o.pin !== false;
@@ -605,9 +612,12 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
     //   행 높이가 두 축에서 어긋난다. 소속은 머리글이, 시각·상태어는 툴팁이 말한다.
     //  둘째 줄 — 세션이면 **내 마지막 말**(#2016 6차, 아직 모르면 프로젝트명을 글자로), 그 밖의 앱은 종전대로 프로젝트 단추.
     one ? null
+      : o.projLine && inst.icon === 'chat'
+        ? el('span', { class: 'v2-app-inst-meta v2-app-inst-pj', title: (inst.project && !inst.project.self ? inst.project.name : '프로젝트 없음') },
+            glyph('folder', 'v2-app-inst-ask-ic'), el('span', { class: 'v2-app-inst-askt', text: (inst.project && !inst.project.self ? inst.project.name : '') || '프로젝트 없음' }))
       : inst.icon === 'chat'
         ? (inst.ask
-            ? askLine(inst.ask, inst.project && !inst.project.self ? inst.project.name : '')
+            ? askLine(inst.ask, inst.project && !inst.project.self ? inst.project.name : '', !!o.projTail)
             : el('span', { class: 'v2-app-inst-meta', text: (inst.project && !inst.project.self ? inst.project.name : '') || inst.meta || 'AI 세션' }))
         : inst.project && !inst.project.self
           ? el('button', { class: 'v2-app-inst-project', type: 'button',
@@ -665,7 +675,7 @@ const PINNED_BUCKET = '고정';
  *   한 방향 자물쇠를 준다(hold-rules stepCardHold). 줄 세우기(orderCards)의 키가 세션 축과 같은 층 → 순위 → 시각이라,
  *   자물쇠가 아무것도 안 붙든 판에서는 **정의상** 세션 축의 첫 행 순서와 같다 — 위 규율은 그대로 지켜진다.
  */
-function projGroups(rest: SideInstance[], searching: boolean): ProjGrp[] {
+function projGroups(rest: SideInstance[], searching: boolean, hold = true): ProjGrp[] {
   const groups: ProjGrp[] = [];
   const byKey = new Map<string, ProjGrp>();
   for (const r of rest) {
@@ -690,7 +700,9 @@ function projGroups(rest: SideInstance[], searching: boolean): ProjGrp[] {
   //   [AI 세션]·[확인할 것]의 행 묶음은 행 자물쇠를 안 거친 전수·대기 목록이고(sessAsInst), 찾는 중의 목록은
   //   걸러진 것이라 여기서 정리하면 **안 보이는 카드의 자리가 지워진다**. 그 판들은 종전대로 첫 행 순서다.
   let ordered = groups;
-  if (!searching && (hooks.section?.() || 'home') === 'home') {
+  //  #4233 — 세션별 축의 「고정」 층이 고정한 프로젝트 카드만 따로 묶을 때는(hold=false) 자리 기억을 안 건드린다 —
+  //   일부 카드만 들고 pruneHolds 를 부르면 프로젝트별 축 카드들의 자리가 지워진다.
+  if (hold && !searching && (hooks.section?.() || 'home') === 'home') {
     for (const g of groups) {
       const step = stepCardHold(cardHolds.get(g.key), { bucket: g.bucket, rank: g.rank, at: g.at, viewing: g.active, pinned: g.pinned });
       if (step.hold) cardHolds.set(g.key, step.hold); else cardHolds.delete(g.key);
@@ -843,11 +855,14 @@ function projListKids(shown: SideInstance[], o: RowOpts = {}): HTMLElement[] {
   const kids: HTMLElement[] = [];
   //  「고정」은 두 축 공통으로 맨 위다(#1954) — 압정한 행이 프로젝트 묶음 안에 갇히면 그 약속이 깨진다.
   //   여기 선 행은 소속을 말해 줄 머리글이 없으므로 **두 줄 그대로**(프로젝트 칩을 남긴다).
-  const pinnedRows = shown.filter((r) => r.pinned);
+  //  #4233 — 고정한 단위가 그대로 움직인다(lib/home-pins). 고정한 세션은 「고정」 세션 카드로, 고정한 프로젝트 안에서
+  //   또 고정한 세션은 그 프로젝트 카드 안 맨 위로(한 세션은 한 자리에만 선다).
+  const pins = splitHomePins(shown, projPinnedId);
+  const pinnedRows = pins.pinnedRows;
   //  ★ 프로젝트 **자신의 화면**은 카드 안 줄로 세우지 않는다(#3870, 원준 2026-09-13 "프로젝트 폴더 안에는 세션만 있어야지").
   //   카드 머리줄의 [→] 가 이미 그 화면으로 가는 문이다 — 잣대와 사유는 lib/sess-fold projCardRows 머리말.
   //   ⚠ 「고정」 층은 거르지 않는다(사람이 꽂은 자리다). 날짜 축(appListKids)도 거르지 않는다(카드도 [→] 도 없다).
-  const rest = projCardRows(shown.filter((r) => !r.pinned));
+  const rest = projCardRows(pins.rest);
   //  ★ «이미 줄로 섰나» 를 **목록 전체**로 묻는다(#3778 6판, 원준 2026-09-12 "x 누르면 어디로 가는 거야?").
   //   ⚠ 이 집합은 «어느 카드가 서나» 와 무관하다 — 카드는 종전처럼 **줄이 선 프로젝트만** 선다(7판에서 되돌렸다).
   //   카드 접힘에서 세션을 빼는 이유는 이것 하나다. 그 카드의 줄(`g.rows`)만 보면 두 군데가 새는데,
@@ -871,8 +886,9 @@ function projListKids(shown: SideInstance[], o: RowOpts = {}): HTMLElement[] {
     const label = (pinnedRows[0] && pinnedRows[0].group) || PINNED_BUCKET;
     kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: label }) as HTMLElement);
     lastBucket = label;
-    //  행이 먼저, 카드가 다음 — 낱개로 꽂은 것이 통째로 꽂은 것보다 좁고 급한 지목이다.
-    for (const r of pinnedRows) kids.push(appRowEl(r, o));
+    //  세션 카드가 먼저, 프로젝트 카드가 다음 — 낱개로 꽂은 것이 통째로 꽂은 것보다 좁고 급한 지목이다.
+    //  #4233 — 고정한 세션도 **카드 안**에 선다(원준 «V1 의 1안»: 사이드바의 모든 세션 줄이 카드 안에 선다).
+    if (pinnedRows.length) kids.push(pinCard(pinnedRows, o));
     for (const g of pinnedGrps) kids.push(projGrpCard(g, o, false, standingSess));
   }
   for (const g of groups) {
@@ -893,7 +909,10 @@ function projGrpCard(g: ProjGrp, o: RowOpts, searching = false, standingSess?: R
   //  ⚠ 카드 자체엔 고정 표식을 안 칠한다 — 「고정」 머리글과 파랗게 채워진 압정이 이미 말한다(트리의 .v2-pinb.on 과 같은 규율).
   //  ★ 카드 안에서 끝난 세션은 「지난 세션 n」 뒤로 접는다(#3778 안 C, 원준 2026-09-09) — 트리가 이미 쓰는 그 접힘이다.
   //   무엇이 접히고 무엇이 그대로 서는지의 잣대는 lib/sess-fold 에 있다(**끝난 것밖에 없으면 접지 않는다** 포함).
-  const fold = foldCardRows(g.rows, { searching, opened: pastSet.has(g.key) });
+  //  #4233 — 고정한 프로젝트 안에서 또 고정한 세션은 카드 안 **맨 위**에 서고, 「지난 세션」 뒤로 접히지 않는다
+  //   (사람이 꽂은 자리를 자동 규칙이 걷지 않는다 — #3870 · #3778 의 그 원칙).
+  const pinIn = pinnedFirst(g.rows).filter((r) => r.pinned);
+  const fold = foldCardRows(g.rows.filter((r) => !r.pinned), { searching, opened: pastSet.has(g.key) });
   const row = (r: SideInstance) => appRowEl(r, { ...o, one: true });
   //  ★ 접힘 안쪽은 **그 프로젝트의 지난 세션 전량**이다(#3778 4판, 원준 2026-09-12).
   //   종전엔 카드가 받는 재료 자체가 «오늘 것 + 내가 안 닫은 것» 이라, 어제 이전 세션은 접힘 **숫자에도**
@@ -918,12 +937,13 @@ function projGrpCard(g: ProjGrp, o: RowOpts, searching = false, standingSess?: R
   //   같은 규율을 카드 전체에 적용한 것이다. 줄이 안 선 프로젝트의 카드는 내용이 「지난 세션 n」 하나뿐이라,
   //   접어 두면 펴도 **뚜껑만 나오고** 세션을 보려면 한 번 더 눌러야 한다 — 「폴더를 펼쳐도 그 세션이 안
   //   보였다」(#762·#1808)로 이미 두 번 고친 그 증상이다.
-  const foldOpen = fold.open || !fold.now.length || (!!extra.total && pastSet.has(g.key));
+  const foldOpen = fold.open || (!fold.now.length && !pinIn.length) || (!!extra.total && pastSet.has(g.key));
   //  「외 n개」 — 상한을 넘는 만큼은 프로젝트 화면이 받는다(트리의 v2-ss-more 와 같은 규약).
   const over = extra.total - extra.rows.length;
   return el('div', { class: 'v2-pg' + (g.open ? ' open' : ''), 'data-anch': g.key },
     projGrpHead(g),
     g.open ? el('div', { class: 'v2-pg-list' },
+      ...pinIn.map(row),
       ...fold.now.map(row),
       folded.length ? cardPastHead(g.key, folded.length + Math.max(0, over), foldOpen) : null,
       ...(foldOpen ? folded.map(row) : []),
@@ -947,18 +967,59 @@ function cardPastHead(pk: string, n: number, open: boolean): HTMLElement {
     el('span', { class: 'n', text: '지난 세션' }), el('span', { class: 'v2-cnt', text: String(n) })) as HTMLElement;
 }
 
+/** #4233 — 압정 통(PIN_KEY)에 꽂힌 프로젝트인가. 「프로젝트 없음」(0)은 꽂을 수 없다. */
+const projPinnedId = (id: number): boolean => !!id && isPinned('p:' + id);
+
+/** #4233 — 「고정」 세션 카드. 머리 없이 줄만 든다(바로 위 「고정」 이름표가 말한다). 줄은 두 줄 — 둘째 줄이 소속 프로젝트. */
+function pinCard(rows: SideInstance[], o: RowOpts): HTMLElement {
+  return el('div', { class: 'v2-pg open v2-pg--rows v2-pg--pins', 'data-anch': 'pins:', 'aria-label': '고정한 세션' },
+    el('div', { class: 'v2-pg-list' }, ...rows.map((r) => appRowEl(r, { ...o, one: false, projLine: true })))) as HTMLElement;
+}
+
+/** #4233 — 세션별 축의 날짜 카드. 머리 없이 줄만 든다(바로 위 날짜 이름표가 말한다). 줄은 두 줄 — 마지막 말 + 소속. */
+function dayCard(group: string, rows: SideInstance[], o: RowOpts): HTMLElement {
+  return el('div', { class: 'v2-pg open v2-pg--rows', 'data-anch': 'day:' + group },
+    el('div', { class: 'v2-pg-list' }, ...rows.map((r) => appRowEl(r, { ...o, projTail: true })))) as HTMLElement;
+}
+
+/**
+ * #4233 — 세션별 축(묶지 않은 목록)의 줄 세우기. 프로젝트별 축과 **같은 「고정」 층**을 쓴다:
+ *  「고정」 이름표 → 고정한 세션 카드 → 고정한 프로젝트 카드(카드째). 그 아래는 시간축이 준 날짜 이름표마다 카드 한 장.
+ *  ⚠ 고정한 프로젝트 카드에는 그 프로젝트 **자신의 화면** 줄을 넣지 않는다(#3870 — 카드의 [→] 가 그 문이다).
+ *   그 줄은 날짜 카드에 그대로 남는다 — 세션별 축에서 그 줄을 걷으면 돌아갈 길이 없어진다(#3870 E9).
+ */
+function sessAxisKids(shown: SideInstance[], o: RowOpts): HTMLElement[] {
+  const kids: HTMLElement[] = [];
+  const cut = splitSessAxis(shown, projPinnedId);
+  const inCards = projCardRows(cut.pinnedProjRows);
+  const inCardIds = new Set(inCards.map((r) => r.id));
+  //  고정한 프로젝트의 자기 화면 줄 — 카드에는 안 넣는다. 사람이 그 줄을 꽂았으면 「고정」 세션 카드로, 아니면 날짜 카드로.
+  const selfRows = cut.pinnedProjRows.filter((r) => !inCardIds.has(r.id));
+  const pinRows = [...cut.pinnedRows, ...selfRows.filter((r) => r.pinned)];
+  const standingSess = new Set<string>();
+  for (const r of shown) if (r.id.startsWith('sess:')) standingSess.add(r.id.slice(5));
+  const pinGrps = projGroups(inCards, false, false);
+  if (pinRows.length || pinGrps.length) {
+    kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: PINNED_BUCKET }) as HTMLElement);
+    if (pinRows.length) kids.push(pinCard(pinRows, o));
+    for (const g of pinGrps) kids.push(projGrpCard(g, o, false, standingSess));
+  }
+  const back = new Set(selfRows.filter((r) => !r.pinned));
+  const flow = selfRows.length
+    ? splitSessAxis(shown.filter((r) => back.has(r) || (!cut.pinnedProjRows.includes(r) && !cut.pinnedRows.includes(r))), () => false).dated
+    : cut.dated;
+  for (const d of flow) {
+    if (d.group) kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: d.group }) as HTMLElement);
+    kids.push(dayCard(d.group, d.rows, o));
+  }
+  return kids;
+}
+
 /** 목록 안에 들어갈 것 전부 — 묶음 머리글 + 행, 하나도 없으면 빈 화면 한 장. */
 function appListKids(shown: SideInstance[], o: RowOpts = {}, empty?: { none: string }): HTMLElement[] {
-  const kids: HTMLElement[] = groupProj ? projListKids(shown, o) : [];
-  if (!groupProj) {
-    //  묶음 머리글은 **묶음이 바뀔 때만** 낀다 — 행마다 붙이면 목록이 아니라 표가 된다.
-    let lastGroup = '';
-    for (const inst of shown) {
-      const g = inst.group || '';
-      if (g && g !== lastGroup) { kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g }) as HTMLElement); lastGroup = g; }
-      kids.push(appRowEl(inst, o));
-    }
-  }
+  //  #4233 — 두 축 모두 **모든 줄이 카드 안**에 선다(원준 «V1 의 1안»). 세션별 축의 줄 세우기는 sessAxisKids.
+  //   묶음 머리글은 **묶음이 바뀔 때만** 낀다 — 행마다 붙이면 목록이 아니라 표가 된다.
+  const kids: HTMLElement[] = groupProj ? projListKids(shown, o) : sessAxisKids(shown, o);
   //  빈 화면은 **그린 것**으로 가른다(#3870) — 프로젝트 축은 프로젝트 화면 줄을 카드에 안 넣으므로(projCardRows),
   //   재료(shown)는 있는데 그릴 카드가 하나도 없을 수 있다. 재료로 가르면 그때 목록이 안내도 없이 텅 빈다.
   if (kids.length) return kids;
@@ -1189,7 +1250,7 @@ function renderHomeApps(): void {
   const kids = (): HTMLElement[] => appListKids(hooks.instances!());
   listPaint = () => paintList(kids);
   const keep = listBefore();
-  const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '열린 앱' }, ...kids());
+  const listEl = el('div', { class: 'v2-app-list v2-home-cards', role: 'list', 'aria-label': '열린 앱' }, ...kids());   // #4233 — 홈 목록의 카드 간격 한 벌(47-v2-rail.css)
   appListEl = listEl;
 
   //  데스크톱 앱이면 이 줄은 창 맨 윗줄로 간다(#1954 상민님: 상단 탭이 빠져 그 자리가 비었다).
@@ -2183,7 +2244,7 @@ function axisBtn(): HTMLElement {
     } },
     //  그림은 하나다 — 켜짐/꺼짐은 **채움**이 말한다(켜지면 파랑을 채운다). 두 얼굴로 바꾸면
     //   '지금 이 상태'인지 '누르면 이렇게 된다'인지가 애매해진다.
-    icon('group', 'v2-axisbtn-ic')) as HTMLElement;
+    icon('folderRows', 'v2-axisbtn-ic')) as HTMLElement;   // #4233 — 원준 «V1 에 그려준 게 더 맘에 든다»
 }
 
 // [필터] 버튼 + 팝오버 — 조작부는 여기 다 모인다. 목록 표면에는 필터가 없다(켜져 있으면 요약 한 줄만).
