@@ -16,6 +16,7 @@
 //   네트워크 I/O 없이 즉시 종료. 비활성화: LIVELY_OFF=1.
 import { readFileSync, writeFileSync, statSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
+import { sessionTokenFromFile } from "./harness-registry.mjs";   // #4135 — 세션 토큰 파일(같은 디렉터리 — 설치 시 평평하게 복사된다)
 import { join } from "node:path";
 // 네트워크는 HostEffects 경계를 통과한다(kit R5 격리 계약 — work-flag.mjs 와 동형). 직접 fetch 는 테스트 격리 린트가 막는다.
 import { hostEffects } from "./host-effects-port.mjs";
@@ -95,7 +96,8 @@ async function main() {
     const env = (process.env[envName] || "").trim();
     return (spawned ? (env || fileVal) : (fileVal || env)) || "";
   };
-  const token = pickCred("LIVELY_TOKEN", readCfg("token"));
+  //  #4135 — 세션 토큰 파일이 있으면 그것이 먼저다(게이트웨이가 이 세션 앞으로 나중에 실어 준 정본 — harness-registry sessionTokenFile 머리말).
+  const token = sessionTokenFromFile("hook", homedir(), (p) => readFileSync(p, "utf8")) || pickCred("LIVELY_TOKEN", readCfg("token"));
   const gw = (pickCred("LIVELY_GATEWAY_URL", readCfg("gateway-url")) || "http://localhost:8080").replace(/\/$/, "");
   if (!token) process.exit(0);
 

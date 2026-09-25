@@ -112,6 +112,7 @@
   "dist/terminal/session-project.js",
   "dist/terminal/session-runtime-mode.js",
   "dist/terminal/session-tmux.js",
+  "dist/terminal/session-token-file.js",
   "dist/terminal/session-unobserved.js",
   "dist/terminal/sessions.js",
   "dist/terminal/terminal-isolation.js",

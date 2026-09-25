@@ -69,7 +69,10 @@ if (WIN) {
   process.exit(fail ? 1 : 0);
 }
 
-const TOK = { env: "tok-from-env", file: "tok-from-file", plugin: "tok-from-plugin" };
+const TOK = { env: "tok-from-env", file: "tok-from-file", plugin: "tok-from-plugin", session: "tok-file-session" };
+// #4135 D — 세션 토큰 파일(`~/.lively/session-tokens/<LIVELY_SESSION_ID>.json`)의 내용. 훅은 `hook` 칸을 쓴다 — `mcp` 칸은
+//  MCP 프록시 몫이라 훅 요청에 나오면 안 된다(아래 판정이 Bearer 를 정확히 비교하므로 섞이면 드러난다).
+const SESSION_FILE_TOKENS = { hook: TOK.session, mcp: "tok-file-mcp" };
 
 // 엣지 표(사양) — 행마다: 입력 조합과, 규칙별 기대 { gw: 어느 스텁, tok: 어느 토큰 } (null = 요청 없음).
 //  box 전용 보고의 기대는 pane 규칙과 같되, 사람이 연 셸에선 null 이다.
@@ -96,6 +99,24 @@ const MODES = [
   //  pane 에서도 플러그인은 파일보다 앞이다(env 가 비었을 때) — M9 는 env 가 이겨 이 순서를 못 본다.
   { key: "M10 라이블리 pane · env 없음 · 플러그인 옵션", sid: "box-credtest-1", files: true, env: { tok: false, gw: false }, plugin: true,
     only: "session-preload.mjs", pane: { gw: "plugin", tok: "plugin" } },
+  // ── #4135 D5 — 세션 토큰 파일. 이미 떠 있는 노드 세션은 env 를 못 바꾸니 게이트웨이가 `~/.lively/session-tokens/<sid>.json` 으로
+  //  자격을 심는다. 라이블리가 띄운 pane 의 토큰 순서는 **세션 토큰 파일 → env → 공유 파일**. 주소는 파일에 없으니 종전대로(env).
+  //  사람이 연 셸(LIVELY_SESSION_ID 없음)은 그 파일이 있어도 종전 그대로. `sessionFile` = 파일 이름에 쓸 sid(env 의 sid 와 다를 수 있다).
+  //  rules: ["pane"] — self-update(어디서든 파일 = 키트 설치 몫)는 이 사양 밖이라 여기선 보지 않는다.
+  { key: "M11 라이블리 pane · 세션 토큰 파일 + env + 공유 파일", sid: "box-credtest-1", files: true, env: ENVF, sessionFile: "box-credtest-1",
+    rules: ["pane"], pane: { gw: "env", tok: "session" } },
+  { key: "M12 라이블리 pane · 세션 토큰 파일 · env 는 주소만", sid: "box-credtest-1", files: true, env: { tok: false, gw: true }, sessionFile: "box-credtest-1",
+    rules: ["pane"], pane: { gw: "env", tok: "session" } },
+  { key: "M13 라이블리 pane · 세션 토큰 파일만(env 토큰·공유 파일 없음)", sid: "box-credtest-1", files: false, env: { tok: false, gw: true },
+    sessionFile: "box-credtest-1", rules: ["pane"], pane: { gw: "env", tok: "session" } },
+  { key: "M14 셸 · 세션 토큰 파일 있음(LIVELY_SESSION_ID 없음)", sid: "", files: true, env: ENVF, sessionFile: "box-credtest-1",
+    pane: { gw: "file", tok: "file" }, file: { gw: "file", tok: "file" } },
+  { key: "M15 라이블리 pane · 다른 세션의 토큰 파일", sid: "box-credtest-1", files: true, env: ENVF, sessionFile: "box-credtest-2",
+    rules: ["pane"], pane: { gw: "env", tok: "env" } },
+  //  LIVELY_SESSION_ID 가 안전한 꼴(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)이 아니면 파일을 보지 않는다 — `../shared` 는
+  //   `~/.lively/shared.json` 을 가리키게 되는데, 그 자리에 파일을 심어 두고도 env 토큰이어야 한다.
+  { key: "M16 라이블리 pane · LIVELY_SESSION_ID 가 경로 탈출 꼴", sid: "../shared", files: true, env: ENVF, sessionFile: "../shared",
+    only: "session-preload.mjs", pane: { gw: "env", tok: "env" } },
 ];
 
 // 스텁 게이트웨이 — 받은 요청을 적고 404 로 답한다(훅은 전부 fail-open). 러너 훅 목록에만 본문 훅 하나를 준다:
@@ -143,6 +164,11 @@ async function runCase(mode, c) {
       writeFileSync(join(home, ".lively", "token"), TOK.file + "\n", { mode: 0o600 });
       writeFileSync(join(home, ".lively", "gateway-url"), urlOf(gws.file) + "\n");
     }
+    if (mode.sessionFile) {   // #4135 D — 게이트웨이가 심은 세션 토큰 파일(파일 이름의 sid 는 env 의 sid 와 다를 수 있다)
+      const dir = join(home, ".lively", "session-tokens");
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      writeFileSync(join(dir, `${mode.sessionFile}.json`), JSON.stringify(SESSION_FILE_TOKENS), { mode: 0o600 });
+    }
     const env = {
       ...process.env, ...sandboxEnv({ home, tmp }),
       LIVELY_HOME: home,
@@ -167,6 +193,7 @@ const jobs = [];
 for (const mode of MODES) {
   for (const c of HOOK_CASES) {
     if (mode.only && mode.only !== c.hook) continue;
+    if (mode.rules && !mode.rules.includes(c.rule)) continue;
     const spawned = !!mode.sid.trim();
     const want = c.boxOnly && !spawned ? null : mode[c.rule];
     jobs.push({ mode, c, want });

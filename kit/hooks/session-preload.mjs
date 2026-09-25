@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 //  ⚠ HARNESS 상수 자체는 **종전 계산식을 유지**한다(빈 문자열 가능): 이 값은 self-update 인자로도 넘어가는데,
 //   여기서 "claude" 로 기본값을 채우면 종전에 인자를 안 넘기던 경로가 넘기게 되어 동작이 바뀐다.
 //   표 조회(harness())가 알아서 claude 로 폴백하므로 분기 결과는 종전과 같다.
-import { harness, isForeignGrokInvocation } from "./harness-registry.mjs";
+import { harness, isForeignGrokInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
@@ -123,7 +123,8 @@ const pickCred = (envName, pluginKey, fileVal) => {
 };
 
 // OFF 면 토큰 파일도 안 읽는다(클린룸 유지 — 종전 최상단 exit 이 하던 일). !TOKEN 시 정적만 주입하는 처리는 main() 에서.
-const TOKEN = OFF ? "" : pickCred("LIVELY_TOKEN", "TOKEN", readLocal("token"));
+//  #4135 — 세션 토큰 파일이 있으면 그것이 먼저다(게이트웨이가 이 세션 앞으로 나중에 실어 준 정본 — harness-registry sessionTokenFile 머리말).
+const TOKEN = OFF ? "" : (sessionTokenFromFile("hook", homedir(), (p) => readFileSync(p, "utf8")) || pickCred("LIVELY_TOKEN", "TOKEN", readLocal("token")));
 
 const GW = (pickCred("LIVELY_GATEWAY_URL", "GATEWAY_URL", readLocal("gateway-url")) || "http://localhost:8080").replace(/\/$/, "");
 

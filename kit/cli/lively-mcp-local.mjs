@@ -83,8 +83,16 @@ const gateway = () => normGw(readLively("gateway-url") || process.env.LIVELY_GAT
 //   오독이다 — #2234 가 pane 에 심는 건 LIVELY_MCP_TOKEN 이고, pane 의 LIVELY_TOKEN 은 **훅 토큰**이다
 //   (#1719 후속, mintSessionHookToken: 세션 최소권한이라 admin·runtime 이 빠져 있다). MCP 가 그걸 집으면
 //   신원도 권한도 틀린다 — sessions.ts 의 두 `-e` 주입이 서로 다른 변수인 이유가 정확히 이것이다.
+//  #4135 — 세션 토큰 파일이 그 위다(lively-mcp-gateway.mjs 의 같은 자리 주석 — 살아 있는 세션에 게이트웨이가 나중에 실어 준 정본).
+const sessionFileToken = () => {
+  const sid = (process.env.LIVELY_SESSION_ID || "").trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(sid)) return "";
+  try { const j = JSON.parse(readFileSync(join(LIVELY, "session-tokens", `${sid}.json`), "utf8")); return typeof j?.mcp === "string" ? j.mcp.trim() : ""; }
+  catch { return ""; }
+};
 const token = () => (
-  (process.env.LIVELY_MCP_TOKEN || "").trim()
+  sessionFileToken()
+  || (process.env.LIVELY_MCP_TOKEN || "").trim()
   || readLively("token")
   || (process.env.LIVELY_TOKEN || "").trim()
 ).trim();

@@ -18,6 +18,7 @@ import { reconnectDelayMs } from "./reconnect-delay.js";   // #1865 — 재연�
 import {
   listSessionsRaw, killEmptyTmuxServer, sessionDir, sharedRoot,
 } from "../terminal/terminal-sessions.js";
+import { sweepSessionTokenFiles } from "../terminal/session-token-file.js";   // #4135 — 죽은 세션의 세션 토큰 파일 정리
 import { type AttachSocket } from "../terminal/terminal-pty.js";
 // #2600 T1 — 세션을 소유하는 살림과 세션 op 는 **코어 한 곳**이다. 이 파일에 남는 것은 WS 중계 전송뿐.
 import { SessionHost } from "../terminal/session-host.js";
@@ -461,6 +462,8 @@ function connect(): void {
       //  ⇒ 못 봤으면 **아무것도 올리지 않는다.** 스냅샷이 낡으면 게이트웨이가 스스로 소유를 되찾는다(fail-closed).
       //   이 레포가 반복해 못박은 «못 봤다 ≠ 없다» 교리(#835·#1251·#2154·#2544)의 이 자리 판이다.
       const [sessions, res] = await Promise.all([listSessionsRaw({ strict: true }), sampleResources(sharedRoot().base)]);
+      //  #4135 — 확답으로 얻은 목록이니 그 밖의 세션 토큰 파일(~/.lively/session-tokens)은 죽은 세션의 것이다 — 걷는다(best-effort).
+      void sweepSessionTokenFiles(new Set(sessions.map((s) => s.id))).catch(() => { /* 다음 판에 다시 */ });
       const sesKey = JSON.stringify(sessions);
       //  ★ 침묵하지 않는다 (#2600 T2 d6). 종전엔 «지난번과 같으면» 아무것도 안 보냈는데, 게이트웨이의 목록
       //   소유 판정은 **스냅샷의 나이**를 보므로(12초) 한가한 테넌트에서는 소유가 영영 안 넘어갔다. 실을 내용이

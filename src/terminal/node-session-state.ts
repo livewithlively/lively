@@ -15,6 +15,7 @@ import { upsertSessionState, insertDiscoveredSessionState, getSessionStates, cle
 import { liveNodes, onNodeSessions, onSelfNodeJudged, isSelfNode } from "../node/registry.js";
 import { selfNodeMessage } from "../node/self-node.js";
 import { listNodes } from "../node/store.js";
+import { createNodeSessionTokenBackfill } from "./node-session-token-backfill.js";   // #4135 — 토큰 없이 뜬 노드 세션에 자격을 나중에 심는다
 import { logger } from "../log.js";
 
 /**
@@ -105,7 +106,12 @@ export async function discoverNodeSessions(nodeId: string, sessions: SessionInfo
 
 /** 부팅 때 한 번 — 노드 상태 push 를 구독한다(registry 는 DB 를 모르므로 이쪽에서 건다). */
 export function armNodeSessionDiscovery(): void {
-  onNodeSessions((nodeId, sessions) => { void discoverNodeSessions(nodeId, sessions); });
+  // #4135 — 같은 스냅샷으로 «토큰 없는 살아 있는 세션» 도 본다(registry 의 구독자는 하나라 여기서 함께 부른다).
+  const backfill = createNodeSessionTokenBackfill();
+  onNodeSessions((nodeId, sessions) => {
+    void discoverNodeSessions(nodeId, sessions);
+    void backfill.run(nodeId, sessions).catch((e) => logger.warn({ err: e, node: nodeId }, "노드 세션 토큰 되채우기 실패(비치명)"));
+  });
   // #2592 — 판정이 **새로 설 때** 그 노드 이름으로 쌓인 거짓 좌표를 치운다. 부팅 훅이 아닌 이유: 판정은
   //  관측이라(같은 tmux 를 봐야 성립) 부팅 시점엔 아직 없다. 멱등이라 게이트웨이가 재배포될 때마다 다시 돌아도 무해.
   onSelfNodeJudged((nodeId) => cleanupSelfNodeRows(nodeId));
