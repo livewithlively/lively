@@ -213,6 +213,17 @@ if (lib) {
   const paint2 = code(cut(MAIN, "function paintSessAll(", "\nfunction repaintSessAll"));
   ok(/onNew: \(\) => \{ tabsApi\?\.add\('#\/'\); \}/.test(paint2) && /onNewTask: \(\) => \{ tabsApi\?\.add\('#\/'\); \}/.test(MAIN),
     "W1h [＋ 새 세션]은 사이드바 ＋ 와 같은 동작(홈 새 탭)");
+  //  W2 — 격리 리뷰 지적(막음 2건): 두 번 보내기 · 목록에 없는 세션에서 ↑ ↓.
+  const sendFn = cut(all2, "const send = async", "\n  };");
+  const beforeAwait = sendFn.split("await api(")[0] || "";
+  ok(/if \(!text \|\| !canSend \|\| peekSending\.has\(s\.id\)\) return;/.test(sendFn) && /peekSending\.add\(s\.id\)/.test(beforeAwait)
+    && /ta\.value = '';/.test(beforeAwait) && /sendBtn\.disabled = true;/.test(beforeAwait) && /finally \{\s*peekSending\.delete\(s\.id\);/.test(sendFn),
+    "W2a ★보내는 중에는 다시 보내지 않는다 — 칸을 비우고 버튼을 끈 뒤에 보내고, 끝나면 푼다");
+  ok(/ui\.drafts\.set\(s\.id, text\);\s*toast\(`보내지 못했어요/.test(sendFn), "W2b 보내기에 실패하면 쓴 글을 돌려준다");
+  const stepFn = cut(all2, "const step = (d: number): void => {", "\n  };");
+  const keysFn = cut(all2, "function bindPeekKeys(): void {");
+  ok(/const i = order\.indexOf\(s\.id\);\s*if \(i < 0\) return;/.test(stepFn) && /const i = nav\.order\.indexOf\(allUi\.peek\);\s*if \(i < 0\) return;/.test(keysFn),
+    "W2c ★피크한 세션이 목록에 없으면(접힌 묶음 · 카드) ↑ ↓ 는 아무 데로도 가지 않는다 — 첫 행으로 건너뛰지 않는다");
   const CSS = read("public/styles/47-v2-rail.css");
   ok(/\.v2-sa-peek \{[^}]*position: absolute;[^}]*width: min\(640px, 100%\)/.test(CSS) && /\.v2-sa-row \{ height: 46px;/.test(CSS),
     "W1i 사이드 피크 640px · 행 46px(위키 2판과 같은 치수)");
