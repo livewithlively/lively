@@ -168,6 +168,10 @@ if (lib) {
     const want = mix.map((r) => r.id).sort().join();
     ok(["day", "project", "owner", "state"].every((by) => flat(groupAllSess(mix, by, NOW, rank)) === want), "G7 ★묶기를 바꿔도 행 집합은 같다(묶기는 거르지 않는다)");
     ok(["day", "project", "owner", "state"].every((by) => groupAllSess([], by, NOW, rank).length === 0 && groupAllSess(null, by, NOW, rank).length === 0), "G8 행이 없거나 null 이면 빈 배열");
+    const none = groupAllSess(mix, "none", NOW, rank);
+    eq([none.length, none[0] && none[0].key, none[0] && none[0].rows.map((r) => r.id).join()], [1, "", mix.map((r) => r.id).join()],
+      "G10 ★묶지 않음 — 묶음 하나에 전부, 들어온 순서(최근 순) 그대로");
+    ok(groupAllSess([], "none", NOW, rank).length === 0 && groupAllSess(null, "none", NOW, rank).length === 0, "G11 묶지 않음 + 행 없음 — 묶음도 없다(빈 머리가 서지 않는다)");
     eq(groupAllSess([R("a", { lastSeen: at(0, 14) }), R("b", { lastSeen: at(0, 13) }), R("c", { lastSeen: at(0, 12) })], "project", NOW, rank)[0].rows.map((r) => r.id),
       ["a", "b", "c"], "G9 묶음 안 순서는 들어온 순서(최근 순) 그대로");
 
@@ -199,7 +203,7 @@ if (lib) {
 {
   //  W1 — 배선: 목록 · 피크 · 셸.
   const all2 = code(cut(BINS, "export function renderSessAll("));
-  ok(/groupAllSess\(vis, ui\.by, now, stateRank\)/.test(all2) && /SESS_GROUP_BYS\.map\(\(b\) => \(\{ label: b\.label, checked: b\.key === ui\.by/.test(all2),
+  ok(/groupAllSess\(vis, ui\.by, now, stateRank\)/.test(all2) && /const row = \(b: \(typeof SESS_GROUP_BYS\)\[number\]\) => \(\{ label: b\.label, checked: b\.key === ui\.by/.test(all2),
     "W1a ★묶기 고르개(날짜 · 프로젝트 · 사람 · 상태)가 목록을 그 기준으로 묶는다");
   ok(/chip\('waiting', '확인 필요'/.test(all2) && /chip\('busy', '작업 중'/.test(all2) && /state: ui\.state/.test(all2), "W1b 상태 칩이 상태 거르개를 건다");
   ok(/pickNowCards\(inProj, stateRank, 4, now\)/.test(all2) && /'지금 볼 것'/.test(all2), "W1c 「지금 볼 것」 카드 줄");
@@ -224,6 +228,13 @@ if (lib) {
   const keysFn = cut(all2, "function bindPeekKeys(): void {");
   ok(/const i = order\.indexOf\(s\.id\);\s*if \(i < 0\) return;/.test(stepFn) && /const i = nav\.order\.indexOf\(allUi\.peek\);\s*if \(i < 0\) return;/.test(keysFn),
     "W2c ★피크한 세션이 목록에 없으면(접힌 묶음 · 카드) ↑ ↓ 는 아무 데로도 가지 않는다 — 첫 행으로 건너뛰지 않는다");
+  //  W3 — 묶지 않음(원준 2026-09-25 «안묶은 완전 raw 한 전체보기도 · 드롭다운으로 오른쪽에서»).
+  ok(/SESS_GROUP_BYS\.filter\(\(b\) => b\.key !== 'none'\)\.map\(row\),\s*\{ label: '', sep: true \},\s*\.\.\.SESS_GROUP_BYS\.filter\(\(b\) => b\.key === 'none'\)\.map\(row\)/.test(all2),
+    "W3a 묶기 드롭다운에 「묶지 않음」이 구분선 아래에 있다");
+  const flat = cut(all2, "if (ui.by === 'none' && vis.length) {", "\n  for (const g of");
+  ok(flat.includes("for (const it of vis) { if (budget-- <= 0) break; list.append(rowOf(it)); }") && !/untitled|v2-sa-fold/.test(flat)
+    && /for \(const g of ui\.by === 'none' \? \[\] : groupAllSess\(vis, ui\.by, now, stateRank\)\)/.test(all2),
+    "W3b ★묶지 않음이면 묶음 머리 없이 전부 최근 순, 이름 없는 세션도 접지 않는다");
   const CSS = read("public/styles/47-v2-rail.css");
   ok(/\.v2-sa-peek \{[^}]*position: absolute;[^}]*width: min\(640px, 100%\)/.test(CSS) && /\.v2-sa-row \{ height: 46px;/.test(CSS),
     "W1i 사이드 피크 640px · 행 46px(위키 2판과 같은 치수)");

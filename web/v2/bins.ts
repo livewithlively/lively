@@ -1021,9 +1021,13 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
   const byBtn = el('button', { class: 'v2-sa-tb', type: 'button', 'data-pick': 'by', title: '묶는 기준을 고릅니다', 'aria-haspopup': 'menu',
     onclick: (ev: MouseEvent) => {
       const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
-      showCtxMenu(r.left, r.bottom + 4, SESS_GROUP_BYS.map((b) => ({ label: b.label, checked: b.key === ui.by,
-        run: () => { ui.by = b.key; ui.shown = PAGE; repaint(); } })), { title: '묶기' });
-    } }, svgI(IC_LAYERS), el('span', { text: byLabel }), svgI(IC_CHEV, 'v2-sa-ic sm'));
+      const row = (b: (typeof SESS_GROUP_BYS)[number]) => ({ label: b.label, checked: b.key === ui.by, run: () => { ui.by = b.key; ui.shown = PAGE; repaint(); } });
+      showCtxMenu(r.left, r.bottom + 4, [
+        ...SESS_GROUP_BYS.filter((b) => b.key !== 'none').map(row),
+        { label: '', sep: true },
+        ...SESS_GROUP_BYS.filter((b) => b.key === 'none').map(row),
+      ], { title: '묶기' });
+    } }, svgI(IC_LAYERS), el('span', { class: 'k', text: ui.by === 'none' ? '' : '묶기 · ' }), el('span', { text: byLabel }), svgI(IC_CHEV, 'v2-sa-ic sm'));
   const period = el('select', { class: 'v2-sa-pick', 'aria-label': '기간', 'data-pick': 'period',
     onchange: (e: Event) => { ui.period = (e.target as HTMLSelectElement).value as PastPeriod; ui.shown = PAGE; repaint(); } },
     ...PAST_PERIODS.map((p) => el('option', { value: p.key, text: p.label }))) as HTMLSelectElement;
@@ -1116,7 +1120,12 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
   };
   const list = el('div', { class: 'v2-sa-list', 'aria-label': 'AI 세션 목록' });
   let budget = ui.shown;
-  for (const g of groupAllSess(vis, ui.by, now, stateRank)) {
+  //  묶지 않음 — 묶음 머리 없이 열 머리 한 줄, 이름 없는 세션도 접지 않고 전부 최근 순(«완전 raw 한 전체보기»).
+  if (ui.by === 'none' && vis.length) {
+    list.append(el('div', { class: 'v2-sa-gh flat' + (cols ? '' : ' np') }, el('span', { class: 'hc', text: '세션' }), ...headCols()));
+    for (const it of vis) { if (budget-- <= 0) break; list.append(rowOf(it)); }
+  }
+  for (const g of ui.by === 'none' ? [] : groupAllSess(vis, ui.by, now, stateRank)) {
     if (budget <= 0) break;
     const gk = `${ui.by}:${g.key}`;
     const closed = ui.closed.has(gk);
