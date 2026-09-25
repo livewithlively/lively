@@ -147,7 +147,7 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
     if (h <= 1) {
       const n = w >= 3 ? 6 : 4;
       const grid = el('div', { class: 'pjh-fgrid', style: 'grid-template-columns:repeat(' + (n + 1) + ',1fr)' });
-      for (const it of [...cur.dirs, ...recentFiles(items, n)].slice(0, n)) grid.append(fcard(it));
+      for (const it of recentFiles(items, n)) grid.append(fcard(it));   // 낱장은 파일만 — 폴더는 나무(3칸)·[폴더 열기]
       grid.append(el('div', { class: 'pjh-fc drop' }, hubIcon('up', 16), el('span', { text: '끌어다 놓기' })));
       if (w >= 3) body.append(el('div', { class: 'pjh-two-f', style: 'grid-template-columns:150px minmax(0,1fr)' }, tree(), grid));
       else body.append(grid);
@@ -158,8 +158,8 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
     // 2×2 이상 — 나무 + 경로 줄 + 낱장 격자 (+ 3×2 옆 칸)
     const cols = w >= 3 ? 3 : 4;
     const grid = el('div', { class: 'pjh-fgrid tall', style: 'grid-template-columns:repeat(' + cols + ',1fr)' });
-    const capCards = cols * Math.max(1, Math.floor((h * 276 - 16 - 150) / 92));
-    for (const it of [...cur.dirs, ...recentFiles(items, capCards)].slice(0, capCards)) grid.append(fcard(it));
+    const capCards = cols * Math.max(1, Math.floor((h * 276 - 16 - 150) / 92)) - 1;   // 마지막 자리는 «끌어다 놓기» 카드
+    for (const it of recentFiles(items, capCards)) grid.append(fcard(it));   // 낱장은 파일만 — 폴더는 왼쪽 나무
     grid.append(el('div', { class: 'pjh-fc drop' }, hubIcon('up', 16), el('span', { text: '끌어다 놓기' })));
     const main = el('div', { class: 'pjh-fmain' }, crumb(), grid, progBox);
     const parts: HTMLElement[] = [tree(), main];

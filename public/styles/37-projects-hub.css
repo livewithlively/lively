@@ -513,3 +513,9 @@ a.pjh-row-link.pjh-row-n:hover { color: var(--blue); }
 .pjh-legend i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .pjh-legend-h { margin-left: auto; }
 @media (max-width: 900px) { .pjh-two-b, .pjh-two-k, .pjh-two-f, .pjh-kflow { grid-template-columns: minmax(0, 1fr); } .pjh-kmid, .pjh-tree { display: none; } }
+
+/* 캡처 실측 뒤 조정(2026-09-25): 타임라인 기록 줄을 한 단 촘촘하게(1×1 셋이 146px 안에) · 본문 내용 칸 */
+.pjh-ev { padding: 4px 2px; gap: 7px; }
+.pjh-ev-b { gap: 0; }
+.pjh-ev-m { font-size: 11px; }
+.pjh-body-content { display: flex; flex-direction: column; flex: 1; min-height: 0; }

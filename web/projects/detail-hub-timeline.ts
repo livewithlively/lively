@@ -47,7 +47,7 @@ export const fillTimeline: Fill = (ctx, f, body, foot, sub) => {
     }
     if (w <= 1) {
       // 피드 — 날로 묶어. 줄 하나 ≈ 44px.
-      const cap = Math.max(3, Math.floor((h * 276 - 16 - 114) / 44));
+      const cap = Math.max(3, Math.floor((h * 276 - 16 - 114 - 3 * 24) / 46));   // 줄 ≈46px · 날 머리 셋 몫을 뺀다
       let lastDay = '';
       for (const a of sorted.slice(0, cap)) {
         const d = feedDayLabel(actWhen(a), now);

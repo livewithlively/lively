@@ -34,15 +34,16 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
   let editor: { el: HTMLElement; flush: () => Promise<void>; destroy: () => void } | null = null;
   const editBtn = el('button', { class: 'pjh-sbtn ghost', type: 'button' }, hubIcon('pen', 12), '편집');
   const textHost = el('div', { class: 'pjh-body-col' });
+  const contentHost = el('div', { class: 'pjh-body-content' });
   const paintText = () => {
-    textHost.replaceChildren();
+    contentHost.replaceChildren();   // «갱신 · 편집» 줄(bh)은 남기고 본문만 바꾼다
     if (EDITING.has(pid) && o.bodyEditor) {
       editor = o.bodyEditor();
-      textHost.append(el('div', { class: 'pjh-edit-host' }, editor.el));
+      contentHost.append(el('div', { class: 'pjh-edit-host' }, editor.el));
       editBtn.replaceChildren(hubIcon('check', 12), '완료');
     } else {
       editor = null;
-      textHost.append(readBox());
+      contentHost.append(readBox());
       editBtn.replaceChildren(hubIcon('pen', 12), '편집');
     }
   };
@@ -55,6 +56,7 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
   // «갱신 · 편집» 줄 — 1×1 은 바닥 단추가 그 역할(자리가 없다)
   const bh = (h >= 2 || w >= 2) ? el('div', { class: 'pjh-bh' }, el('span', { text: P.updated_at ? '갱신 ' + relTime(P.updated_at) : '' }), editBtn) : null;
   if (bh) textHost.append(bh);
+  textHost.append(contentHost);
   paintText();
 
   // ── 코멘트 칸 ──
