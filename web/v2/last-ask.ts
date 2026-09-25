@@ -49,8 +49,8 @@ export function lastAsk(s: Sess): string | null {
   //  (행마다 48~240KB 를 받던 비용이 0, 노드 세션도 턴이 끝나기 전에 바뀐다). 없는 세션(옛 훅·코덱스·기록 세션)만 아래 폴백.
   //  #4233 — 서버 칸도 **사람이 친 말**만 싣는다. 하네스가 끼워 넣은 글(`<agent-message …>` 등)이면 없는 것으로 보고
   //   아래 꼬리 조회로 넘어간다(꼬리 조회는 같은 식으로 거르고 그 앞의 사람 말을 찾는다).
-  const clean = s.raw && typeof s.raw.lastPrompt === 'string' ? cleanAskText(s.raw.lastPrompt) : null;
-  const served = clean ? shorten(clean) : '';
+  //   shorten 이 cleanAskText 를 부른다(한 번만 거른다) — 끼운 글이면 빈 값이다.
+  const served = s.raw && typeof s.raw.lastPrompt === 'string' ? shorten(s.raw.lastPrompt) : '';
   if (served) return served;
   const hit = cache.get(s.id);
   const seen = Number(s.lastSeen || 0);

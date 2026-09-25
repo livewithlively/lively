@@ -33,7 +33,7 @@ try {
 ok(!!pins && !!ask, "V0 잣대가 잎 모듈(lib/home-pins · lib/ask-text)에 있다 — 화면 코드 안에 있으면 시험할 데가 없다");
 
 if (pins) {
-  const { splitHomePins, pinnedFirst, splitSessAxis } = pins;
+  const { splitHomePins, pinnedFirst, splitSessAxis, planSessAxis } = pins;
   const PINNED = new Set([7]);
   const isP = (id) => PINNED.has(id);
   const R = (id, o = {}) => ({ id, pinned: false, project: { id: 1 }, group: "오늘", ...o });
@@ -62,6 +62,22 @@ if (pins) {
   eq(splitSessAxis([R("a", { group: undefined })], isP).dated.map((d) => [d.group, ids(d.rows)]), [["", ["a"]]], "S3 묶음 이름이 없으면 이름 없는 구간 하나");
   const s4 = splitSessAxis(null, isP);
   ok(!s4.pinnedRows.length && !s4.pinnedProjRows.length && !s4.dated.length, "S4 행이 없으면 셋 다 빈 배열");
+
+  //  P — 세션별 축의 그림 설계(planSessAxis). 자기 화면 줄 = project.self(#3870).
+  const self = (r) => !!(r.project && r.project.self);
+  const plan = planSessAxis([R("a"), R("pg", { project: { id: 7, self: true }, group: "오늘" }), R("q", { project: { id: 7 } }),
+    R("b"), R("pin", { pinned: true, group: "고정" }), R("y", { group: "어제" })], isP, self);
+  eq([ids(plan.pinRows), ids(plan.cardRows), plan.dated.map((d) => [d.group, ids(d.rows)])],
+    [["pin"], ["q"], [["오늘", ["a", "pg", "b"]], ["어제", ["y"]]]],
+    "P1 ★고정한 프로젝트의 자기 화면 줄은 카드에 안 들어가고, 날짜 카드의 원래 자리로 돌아간다(세션별 축에서 걷지 않는다 · #3870 E9)");
+  const plan2 = planSessAxis([R("pg", { pinned: true, project: { id: 7, self: true }, group: "고정" }), R("q", { project: { id: 7 } })], isP, self);
+  eq([ids(plan2.pinRows), ids(plan2.cardRows), plan2.dated.length], [["pg"], ["q"], 0], "P2 사람이 꽂은 자기 화면 줄은 「고정」 세션 카드로(카드 안에는 안 넣는다)");
+  const plan3 = planSessAxis([R("a"), R("pg", { project: { id: 7, self: true } }), R("b", { group: "어제" }), R("c")], isP, self);
+  eq(plan3.dated.map((d) => [d.group, ids(d.rows)]), [["오늘", ["a", "pg"]], ["어제", ["b"]], ["오늘", ["c"]]], "P3 경계: 되돌린 뒤에도 떨어진 같은 이름은 두 구간(순서를 새로 짓지 않는다)");
+  const plan4 = planSessAxis([R("a"), R("q", { project: { id: 7 } })], isP, self);
+  eq([ids(plan4.cardRows), plan4.dated.map((d) => ids(d.rows))], [["q"], [["a"]]], "P4 자기 화면 줄이 없으면 나누기 그대로");
+  const plan5 = planSessAxis(null, isP, self);
+  ok(!plan5.pinRows.length && !plan5.cardRows.length && !plan5.dated.length, "P5 행이 없으면 셋 다 빈 배열");
 }
 
 if (ask) {
@@ -91,13 +107,18 @@ const al = cut(SIDE, "function appListKids(", "\n}\n");
 const sx = cut(SIDE, "function sessAxisKids(", "\n}\n");
 ok(/groupProj \? projListKids\(shown, o\) : sessAxisKids\(shown, o\)/.test(al) && /if \(kids\.length\) return kids;/.test(al),
   "W2a 세션별 축은 sessAxisKids 로 그린다 · 빈 화면은 그린 것으로 가른다(#3870 E2 그대로)");
-ok(/splitSessAxis\(shown, projPinnedId\)/.test(sx) && /text: PINNED_BUCKET/.test(sx) && /kids\.push\(pinCard\(pinRows, o\)\)/.test(sx)
-  && /projGroups\(inCards, false, false\)/.test(sx) && /projGrpCard\(g, o, false\)/.test(sx) && /kids\.push\(dayCard\(d\.group, d\.rows, o\)\)/.test(sx),
+//  ⚠ stage 전용: #3870 이 없어 자기 화면 줄 판정은 () => false 로 준다.
+ok(/const plan = planSessAxis\(shown, projPinnedId, \(\) => false\);/.test(sx) && /text: PINNED_BUCKET/.test(sx) && /kids\.push\(pinCard\(plan\.pinRows, o\)\)/.test(sx)
+  && /projGroups\(plan\.cardRows, false, false\)/.test(sx) && /projGrpCard\(g, o, false\)/.test(sx) && /kids\.push\(dayCard\(d\.group, d\.rows, o, i\)\)/.test(sx),
   "W2b ★세션별 축도 같은 「고정」 층(세션 카드 + 고정한 프로젝트 카드, 자리 기억은 안 건드림) · 나머지는 날짜 카드");
-ok(/const inCards = cut\.pinnedProjRows;/.test(sx), "W2c (stage) #3870 이 없는 브랜치 — 카드 재료를 그대로 쓴다");
+const dc = cut(SIDE, "function dayCard(", "\n}");
+ok(dc.length > 0 && !/projCardRows|filter\(/.test(dc) && /data-anch': `day:\$\{seq\}:\$\{group\}`/.test(dc),
+  "W2c 날짜 카드는 받은 줄을 거르지 않고 다 그린다 · 앵커에 구간 순번(같은 이름 두 구간이 겹치지 않게)");
 const LA = code(read("web/v2/last-ask.ts")), ST = code(read("web/v2/sess-tail.ts"));
-ok(/cleanAskText\(s\.raw\.lastPrompt\)/.test(LA) && /const INJ_RE = INJECTED_RE;/.test(ST),
-  "W3 ★서버 칸(lastPrompt)과 꼬리 조회가 같은 식(lib/ask-text)으로 끼운 글을 거른다");
+const lastAskFn = cut(LA, "export function lastAsk(", "\n}");
+ok(/shorten\(s\.raw\.lastPrompt\)/.test(lastAskFn) && !/cleanAskText/.test(lastAskFn) && /\(cleanAskText\(t\) \|\| ''\)/.test(cut(LA, "function shorten(", "\n}"))
+  && /const INJ_RE = INJECTED_RE;/.test(ST),
+  "W3 ★서버 칸(lastPrompt)과 꼬리 조회가 같은 식(lib/ask-text)으로 끼운 글을 거른다 · 서버 칸은 shorten 안에서 한 번만");
 const IC = read("web/v2/icons.ts"), CSS40 = read("public/styles/40-v2.css");
 ok(IC.includes("folderRows: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M7 12h10 M7 15h6'")
   && /icon\('folderRows', 'v2-axisbtn-ic'\)/.test(cut(SIDE, "function axisBtn(", "\n}\n"))

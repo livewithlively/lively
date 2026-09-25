@@ -41,7 +41,7 @@ import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { sourcesFindInput, sourcesFindShown, sourcesSideBody, sourcesSideCount, sourcesUploadPick, toggleSourcesFind } from './sources.js';   // #2423 자료 앱 사이드바 내용
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { orderCards, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from './hold-rules.js';   // #3856 — 카드 자리 자물쇠(순수)
-import { pinnedFirst, splitHomePins, splitSessAxis } from '../lib/home-pins.js';   // #4233 — 「고정」 나누기(고정한 단위가 그대로 움직인다 · 순수)
+import { pinnedFirst, planSessAxis, splitHomePins } from '../lib/home-pins.js';   // #4233 — 「고정」 나누기(고정한 단위가 그대로 움직인다 · 순수)
 import { migratePinKeys } from './pin-migrate.js';   // #2402 — 복원으로 id 가 바뀔 때 핀을 옮기는 규칙(순수·값검증)
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
 import { confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 휴지통·아카이브
@@ -899,9 +899,10 @@ function projGrpCard(g: ProjGrp, o: RowOpts, searching = false): HTMLElement {
   const pinIn = pinnedFirst(g.rows).filter((r) => r.pinned);
   const fold = foldCardRows(g.rows.filter((r) => !r.pinned), { searching, opened: pastSet.has(g.key) });
   const row = (r: SideInstance) => appRowEl(r, { ...o, one: true });
-  return el('div', { class: 'v2-pg' + (g.open ? ' open' : ''), 'data-anch': g.key },
+  //  #4233 — 카드 틀은 role=presentation(줄이 목록의 항목으로 남게).
+  return el('div', { class: 'v2-pg' + (g.open ? ' open' : ''), role: 'presentation', 'data-anch': g.key },
     projGrpHead(g),
-    g.open ? el('div', { class: 'v2-pg-list' },
+    g.open ? el('div', { class: 'v2-pg-list', role: 'presentation' },
       ...pinIn.map(row),
       ...fold.now.map(row),
       fold.folded.length ? cardPastHead(g.key, fold.folded.length, fold.open) : null,
@@ -929,14 +930,16 @@ const projPinnedId = (id: number): boolean => !!id && isPinned('p:' + id);
 
 /** #4233 — 「고정」 세션 카드. 머리 없이 줄만 든다(바로 위 「고정」 이름표가 말한다). 줄은 두 줄 — 둘째 줄이 소속 프로젝트. */
 function pinCard(rows: SideInstance[], o: RowOpts): HTMLElement {
-  return el('div', { class: 'v2-pg open v2-pg--rows v2-pg--pins', 'data-anch': 'pins:', 'aria-label': '고정한 세션' },
-    el('div', { class: 'v2-pg-list' }, ...rows.map((r) => appRowEl(r, { ...o, one: false, projLine: true })))) as HTMLElement;
+  return el('div', { class: 'v2-pg open v2-pg--rows v2-pg--pins', role: 'presentation', 'data-anch': 'pins:' },
+    el('div', { class: 'v2-pg-list', role: 'presentation' }, ...rows.map((r) => appRowEl(r, { ...o, one: false, projLine: true })))) as HTMLElement;
 }
 
 /** #4233 — 세션별 축의 날짜 카드. 머리 없이 줄만 든다(바로 위 날짜 이름표가 말한다). 줄은 두 줄 — 마지막 말 + 소속. */
-function dayCard(group: string, rows: SideInstance[], o: RowOpts): HTMLElement {
-  return el('div', { class: 'v2-pg open v2-pg--rows', 'data-anch': 'day:' + group },
-    el('div', { class: 'v2-pg-list' }, ...rows.map((r) => appRowEl(r, { ...o, projTail: true })))) as HTMLElement;
+//  앵커는 구간 순번을 붙인다 — 같은 묶음 이름이 떨어져 두 번 나올 수 있어(planSessAxis) 이름만으로는 겹친다.
+//  카드 틀은 role=presentation — 줄(listitem)이 목록(role=list)의 항목으로 남게 한다.
+function dayCard(group: string, rows: SideInstance[], o: RowOpts, seq = 0): HTMLElement {
+  return el('div', { class: 'v2-pg open v2-pg--rows', role: 'presentation', 'data-anch': `day:${seq}:${group}` },
+    el('div', { class: 'v2-pg-list', role: 'presentation' }, ...rows.map((r) => appRowEl(r, { ...o, projTail: true })))) as HTMLElement;
 }
 
 /**
@@ -947,27 +950,18 @@ function dayCard(group: string, rows: SideInstance[], o: RowOpts): HTMLElement {
  */
 function sessAxisKids(shown: SideInstance[], o: RowOpts): HTMLElement[] {
   const kids: HTMLElement[] = [];
-  const cut = splitSessAxis(shown, projPinnedId);
-  //  ⚠ stage 전용: 이 브랜치에는 #3870(projCardRows · 자기 화면 줄 거르기)이 없다 — 카드 재료를 그대로 쓴다.
-  const inCards = cut.pinnedProjRows;
-  const inCardIds = new Set(inCards.map((r) => r.id));
-  //  고정한 프로젝트의 자기 화면 줄 — 카드에는 안 넣는다. 사람이 그 줄을 꽂았으면 「고정」 세션 카드로, 아니면 날짜 카드로.
-  const selfRows = cut.pinnedProjRows.filter((r) => !inCardIds.has(r.id));
-  const pinRows = [...cut.pinnedRows, ...selfRows.filter((r) => r.pinned)];
-  const pinGrps = projGroups(inCards, false, false);
-  if (pinRows.length || pinGrps.length) {
+  //  나누기는 잎 모듈 한 자리(lib/home-pins planSessAxis). ⚠ stage 전용: 이 브랜치에는 #3870(자기 화면 줄 판정)이 없다 — 자기 화면 줄은 없는 것으로 준다.
+  const plan = planSessAxis(shown, projPinnedId, () => false);
+  const pinGrps = projGroups(plan.cardRows, false, false);
+  if (plan.pinRows.length || pinGrps.length) {
     kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: PINNED_BUCKET }) as HTMLElement);
-    if (pinRows.length) kids.push(pinCard(pinRows, o));
+    if (plan.pinRows.length) kids.push(pinCard(plan.pinRows, o));
     for (const g of pinGrps) kids.push(projGrpCard(g, o, false));
   }
-  const back = new Set(selfRows.filter((r) => !r.pinned));
-  const flow = selfRows.length
-    ? splitSessAxis(shown.filter((r) => back.has(r) || (!cut.pinnedProjRows.includes(r) && !cut.pinnedRows.includes(r))), () => false).dated
-    : cut.dated;
-  for (const d of flow) {
+  plan.dated.forEach((d, i) => {
     if (d.group) kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: d.group }) as HTMLElement);
-    kids.push(dayCard(d.group, d.rows, o));
-  }
+    kids.push(dayCard(d.group, d.rows, o, i));
+  });
   return kids;
 }
 
