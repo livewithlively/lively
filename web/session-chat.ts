@@ -544,7 +544,20 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   그 세션은 chatMode='tmux' 라 이 식만으로 터미널이 본자리가 된다 — 하네스 이름으로 덮을 이유가 없다.
   //   아직 app-server 로 떠 있는 옛 세션은 대화창이 본자리다(거기가 말 거는 유일한 자리다). 그 세션에서
   //   터미널을 열면 셸 안내줄이 사실을 말하고 [터미널로 넘기기] 를 준다.
-  const chatHome = (): boolean => chatFirst() || String(target.raw?.runtimeMode || '') === 'chat' || livKickoff() || livChat() || !!opts.chatHome;
+  /** 이 세션이 codex 인가 — 그 하네스는 **언제나 터미널이 본자리**다(아래 chatHome 머리말). */
+  const isCodex = (): boolean => String(target.raw?.harness || '') === 'codex';
+  //  ★★ codex 는 **무조건 터미널로 연다** (원준님 지시 2026-09-25, 두 번째: «기본으로 코덱스가 터미널에서
+  //   보여야 하는데 다시 대화뷰가 됐어»).
+  //   ── 내가 한 번 걷어냈다가 되돌린 줄이다. 걷어낸 이유는 «pane 이 셸인 app-server 세션을 터미널로 열면
+  //    거기 친 말이 zsh 로 간다» 였는데, 그 걱정은 **이미 다른 방법으로 메워져 있다**: 그 화면 맨 위에
+  //    «이 터미널은 셸이에요 — 여기 친 말은 Codex 에게 가지 않습니다» 줄과 [터미널로 넘기기] 단추가 선다
+  //    (paintShellBar). 막다른 길이 아니므로, 사람이 고른 기본값을 내 걱정으로 덮을 이유가 없다.
+  //   ── 새 세션은 이 줄이 없어도 터미널이다(chatMode='tmux'). 이 줄이 실제로 가르는 것은 **이 변경 전에
+  //    태어난 app-server 세션**이고, 그 세션에서도 사람은 터미널을 먼저 보길 원한다.
+  //   ⚠ 리브 세션(livKickoff·livChat)과 화면이 명시로 요청한 자리(opts.chatHome)는 그대로 대화가 본자리다 —
+  //    그건 codex 여부와 무관한 «이 화면은 대화로 쓰라» 는 요청이다.
+  const chatHome = (): boolean => livKickoff() || livChat() || !!opts.chatHome
+    || (!isCodex() && (chatFirst() || String(target.raw?.runtimeMode || '') === 'chat'));
 
   // 하네스·모델·추론강도 바꾸기 — 홈 입력창과 같은 서버 카탈로그를 쓴다(목록 두 벌 금지).
   // 런타임 명령이 확인된 축은 POST …/runtime, 나머지는 POST …/handoff 로 같은 작업 자리의 새 프로세스를 연다.
