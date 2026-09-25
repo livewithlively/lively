@@ -1,7 +1,7 @@
 // 사양 기반 · fail-first(엣지 표 → 행마다 시험 하나). 사양: session-project-folder.ts 머리말.
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { contextNodeId, folderAbsFromRow } from "./session-project-folder.js";
+import { contextNodeId, sessionDirFromRow } from "./session-project-folder.js";
 
 const row = (o: Partial<{ node_id: string | null; dir: string | null; root_key: string | null; subpath: string | null }>) => o;
 
@@ -30,30 +30,26 @@ test("★ [N5] 호출자 값이 문자열이 아니어도 던지지 않는다(�
   assert.doesNotThrow(() => contextNodeId({}, undefined));
 });
 
-// ── folderAbsFromRow: (명시 바인딩, folder, 행) × 기대 ─────────────────────────────
+// ── sessionDirFromRow: (folder, 행) × 기대 ────────────────────────────────────────
 const F = "project/4135";
-test("★ [F1] 명시 바인딩(lively init)이 있으면 그것 — 행이 무엇이든", () => {
-  assert.equal(folderAbsFromRow("/x/bind", F, row({ dir: "/y", root_key: "shared", subpath: F })), "/x/bind");
+test("★★ [F1] 행이 «공유 루트 아래 그 프로젝트 폴더» 에서 돌면 행의 dir", () => {
+  assert.equal(sessionDirFromRow(F, row({ dir: "/Users/lively/workspace/project/4135", root_key: "shared", subpath: F })), "/Users/lively/workspace/project/4135");
+  assert.equal(sessionDirFromRow(F, row({ dir: "/work/shared/project/4135", root_key: "shared", subpath: F })), "/work/shared/project/4135");
 });
-test("★★ [F2] 명시 바인딩이 없고 행이 «공유 루트 아래 그 프로젝트 폴더» 에서 돌면 행의 dir", () => {
-  assert.equal(folderAbsFromRow(null, F, row({ dir: "/Users/lively/workspace/project/4135", root_key: "shared", subpath: F })), "/Users/lively/workspace/project/4135");
-  assert.equal(folderAbsFromRow("", F, row({ dir: "/Users/lively/workspace/project/4135", root_key: "shared", subpath: F })), "/Users/lively/workspace/project/4135");
-  assert.equal(folderAbsFromRow(undefined, F, row({ dir: "/Users/lively/workspace/project/4135", root_key: "shared", subpath: F })), "/Users/lively/workspace/project/4135");
+test("★★ [F2] subpath 가 프로젝트 folder 와 다르면 null — 다른 폴더에서 도는 세션의 dir 을 프로젝트 폴더로 우기지 않는다", () => {
+  assert.equal(sessionDirFromRow(F, row({ dir: "/w/project/9999", root_key: "shared", subpath: "project/9999" })), null);
+  assert.equal(sessionDirFromRow(F, row({ dir: "/w/project/4135/sub", root_key: "shared", subpath: "project/4135/sub" })), null);
 });
-test("★★ [F3] subpath 가 프로젝트 folder 와 다르면 null — 다른 폴더에서 도는 세션의 dir 을 프로젝트 폴더로 우기지 않는다", () => {
-  assert.equal(folderAbsFromRow(null, F, row({ dir: "/w/project/9999", root_key: "shared", subpath: "project/9999" })), null);
-  assert.equal(folderAbsFromRow(null, F, row({ dir: "/w/project/4135/sub", root_key: "shared", subpath: "project/4135/sub" })), null);
+test("★ [F3] root_key 가 shared 가 아니면 null(개인 폴더·기록 세션 등)", () => {
+  assert.equal(sessionDirFromRow(F, row({ dir: "/w/project/4135", root_key: "personal", subpath: F })), null);
+  assert.equal(sessionDirFromRow(F, row({ dir: "/w/project/4135", root_key: null, subpath: F })), null);
 });
-test("★ [F4] root_key 가 shared 가 아니면 null(개인 폴더·기록 세션 등)", () => {
-  assert.equal(folderAbsFromRow(null, F, row({ dir: "/w/project/4135", root_key: "personal", subpath: F })), null);
-  assert.equal(folderAbsFromRow(null, F, row({ dir: "/w/project/4135", root_key: null, subpath: F })), null);
+test("★ [F4] 행이 없거나 dir 이 비면 null · folder 가 비면 null", () => {
+  assert.equal(sessionDirFromRow(F, undefined), null);
+  assert.equal(sessionDirFromRow(F, null), null);
+  assert.equal(sessionDirFromRow(F, row({ dir: "", root_key: "shared", subpath: F })), null);
+  assert.equal(sessionDirFromRow("", row({ dir: "/w", root_key: "shared", subpath: "" })), null);
 });
-test("★ [F5] 행이 없거나 dir 이 비면 null · folder 가 비면 null", () => {
-  assert.equal(folderAbsFromRow(null, F, undefined), null);
-  assert.equal(folderAbsFromRow(null, F, null), null);
-  assert.equal(folderAbsFromRow(null, F, row({ dir: "", root_key: "shared", subpath: F })), null);
-  assert.equal(folderAbsFromRow(null, "", row({ dir: "/w", root_key: "shared", subpath: "" })), null);
-});
-test("★ [F6] 공백은 걷고 비교한다 — subpath 양끝 공백 · 명시 바인딩 공백은 «없음»", () => {
-  assert.equal(folderAbsFromRow("   ", F, row({ dir: "/w/p", root_key: "shared", subpath: " " + F + " " })), "/w/p");
+test("★ [F5] 공백은 걷고 비교한다 — subpath·dir 양끝 공백", () => {
+  assert.equal(sessionDirFromRow(F, row({ dir: " /w/p ", root_key: "shared", subpath: " " + F + " " })), "/w/p");
 });
