@@ -29,6 +29,7 @@
 //   캐시다(shell-prefs.ts). 선언 한 줄이 어느 쪽인지 말한다 — shellPrefStore = 계정 · deviceStore = 이 기기.
 import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { planWikiCards, allocWikiRows } from './wiki-cards.js';
+import { planProjCards, type ProjCard } from './proj-cards.js';   // #4233 안 1 — [프로젝트] 사이드바 카드 계획(순수)
 import type { SessProjPick } from '../lib/sess-all.js';   // #4158 — [AI 세션] 사이드바가 고르는 프로젝트(가운데 전체 목록이 그 값으로 거른다)
 import { splitFolderRows, foldCardRows } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsTouch } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버다(선언 한 줄이 그걸 말한다)
@@ -1470,6 +1471,28 @@ function newMenuBtn(): HTMLElement {
   }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-add-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })));
 }
 
+//  #4233 안 1(원준 2026-09-25 «4. 안 1. 좋아.», 검토판 project/4233/projects-sidebar-review.html) — 구조(즐겨찾기 · 폴더 › 하위 폴더
+//   › 리스트)는 그대로 두고, 묶음을 보여 주는 방식만 위키 사이드바 배포본과 같게 했다:
+//   · 고정 줄(흰 바탕) = 즐겨찾기 리스트 + 「기타 (미분류)」. 종전엔 즐겨찾기가 트리 위 소제목 구역이라, 고른 리스트가 즐겨찾기 줄과
+//     트리 줄 **두 곳에서 함께 켜졌고**, 프로젝트 43% 가 든 「기타」는 트리 맨 끝이라 스크롤해야 보였다(검토판 진단).
+//   · 최상위 폴더 = 이름표 한 줄(+ [정리]), 하위 폴더 = 카드 한 장(.v2-ksp), 리스트 = 카드 안 줄(.v2-wcat.v2-ptl) — 들여쓰기 트리를 걷었다.
+//   · 열린 프로젝트가 0 인 리스트는 카드 끝 줄 «N개 더 · 빈 리스트 M» 으로 접고, 카드마다 보일 줄 수는 위키와 같은 줄 나누기(fitWikiList
+//     → wiki-cards.allocWikiRows)로 정한다 — 처음 들어오면 폴더 전부가 스크롤 없이 한 화면.
+//   · 카드 접힘은 종전 폴더 접힘과 같은 곳(FOLD_CLOSED_STORE — 계정에 저장, #1227)에 폴더 id 로 남는다.
+//  ⚠ stage 전용: 이 브랜치는 렌즈(진행 중 · 폴더 · 리스트)가 남아 있어 이 붓의 이름이 renderProjTree 다. main 에서는 renderProjects.
+//  판정은 web/v2/proj-cards.ts 한 벌(시험: src/v6/projects-sidebar-cards.test.ts). 여기는 그리기만 한다.
+const projMore = new Set<string>();   // 「N개 더」로 끝까지 편 카드 — 페이지 수명(위키 wikiMore 와 같은 규칙)
+let projResizeBound = false;
+function bindProjResize(): void {
+  if (projResizeBound) return;
+  projResizeBound = true;
+  let t = 0;
+  window.addEventListener('resize', () => {
+    window.clearTimeout(t);
+    t = window.setTimeout(() => { if (last && (hooks.section?.() || 'home') === 'proj') redraw(); }, 150);
+  });
+}
+
 function renderProjTree(): void {
   if (!last) return;
   const { host, data } = last;
@@ -1477,6 +1500,7 @@ function renderProjTree(): void {
   const navHost = hooks.navHost?.() || null;
   if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
   loadFavLists();
+  bindProjResize();
 
   const lists = (data.lists || []) as unknown as TreeList[];
   const folders = (data.folders || []) as unknown as TreeFolder[];
@@ -1487,75 +1511,102 @@ function renderProjTree(): void {
     if (isArchivedProj(p) || isTrashedProj(p) || p.status_category === 'done') continue;
     if (p.list_id) openByList.set(p.list_id, (openByList.get(p.list_id) || 0) + 1); else noneN++;
   }
-  // 아카이브 폴더(#1067 settings.kind='archive')와 그 아래는 이 트리에 없다 — 발치 도크 [아카이브]가 그 문이다.
-  const kids = new Map<number | null, TreeFolder[]>();
-  for (const f of folders) { const k = f.parent_id ?? null; const arr = kids.get(k) || []; arr.push(f); kids.set(k, arr); }
-  const archived = new Set<number>();
-  const markArchive = (f: TreeFolder): void => { archived.add(f.id); for (const c of kids.get(f.id) || []) markArchive(c); };
-  for (const f of folders) if (f.settings && f.settings.kind === 'archive') markArchive(f);
-  const listsIn = (folderId: number | null): TreeList[] => lists.filter((l) => (l.folder_id ?? null) === folderId);
-  const sel = projScopeKey();
-  const countUnder = (f: TreeFolder): number => listsIn(f.id).reduce((n, l) => n + (openByList.get(l.id) || 0), 0)
-    + (kids.get(f.id) || []).filter((c) => !archived.has(c.id)).reduce((n, c) => n + countUnder(c), 0);
+  //  아카이브 폴더(#1067 settings.kind='archive')와 그 아래는 이 사이드바에 없다 — 발치 도크 [아카이브]가 그 문이다(proj-cards 가 뺀다).
+  const plan = planProjCards({ lists, folders, openByList, noneN, favIds: favLists, sel: projScopeKey(), closed: foldClosed, more: projMore });
   const lockIc = (): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'v2-ptl-lock', 'aria-hidden': 'true' },
     sv('path', { d: 'M7 11V8a5 5 0 0 1 10 0v3' }), sv('rect', { x: '5', y: '11', width: '14', height: '10', rx: '2' }));
-  const listRow = (l: TreeList, depth: number): HTMLElement => {
-    const on = sel === 'L' + l.id;
+  const tip = (l: TreeList): string => l.name + (l.visibility === 'members' ? ' — 멤버만 보는 리스트' : '');
+  const cnt = (n: number): HTMLElement => el('span', { class: 'v2-cnt', text: String(n) });
+
+  // ── 고정 줄 — 즐겨찾기(★) · 기타 (미분류). 한 리스트는 한 줄에서만 켜진다(plan.onKey).
+  const favRow = (l: TreeList): HTMLElement => {
+    const on = plan.onKey === 'fav:' + l.id;
+    return el('a', { class: 'v2-wcat v2-ptl v2-kview v2-pfav' + (on ? ' on' : ''), href: '#/projects2/l/' + l.id, 'data-ctx': 'plist', 'data-lid': String(l.id), 'data-name': l.name,
+      title: tip(l) + ' — 즐겨찾기', ...(on ? { 'aria-current': 'true' } : {}) },
+      icon('star', 'v2-ptl-ic'), el('span', { class: 'n', text: l.name }), l.visibility === 'members' ? lockIc() : null, cnt(openByList.get(l.id) || 0));
+  };
+  const fixed: HTMLElement[] = plan.favs.map(favRow);
+  if (plan.noneN) {
+    const on = plan.onKey === 'none';
+    fixed.push(el('a', { class: 'v2-wcat v2-ptl v2-kview v2-ptl--none' + (on ? ' on' : ''), href: '#/projects2/none',
+      title: '기타 — 아직 리스트에 넣지 않은 프로젝트', ...(on ? { 'aria-current': 'true' } : {}) },
+      glyph('inbox', 'v2-ptl-ic'), el('span', { class: 'n', text: '기타 (미분류)' }), cnt(plan.noneN)));
+  }
+
+  // ── 카드 — 하위 폴더 · 리스트 모음. 줄 나누기는 위키와 같은 fitWikiList.
+  const listRow = (l: TreeList): HTMLElement => {
+    const on = plan.onKey === 'card:' + l.id;
     const emoji = l.settings && l.settings.icon ? String(l.settings.icon) : '';
-    return el('a', { class: 'v2-wcat v2-ptl' + (on ? ' on' : ''), href: '#/projects2/l/' + l.id, 'data-ctx': 'plist', 'data-lid': String(l.id), 'data-name': l.name, style: 'padding-left:' + (12 + depth * 14) + 'px',
-      title: l.name + (l.visibility === 'members' ? ' — 멤버만 보는 리스트' : ''), ...(on ? { 'aria-current': 'true' } : {}) },
+    const n = openByList.get(l.id) || 0;
+    return el('a', { class: 'v2-wcat v2-ptl v2-kcat' + (on ? ' on' : '') + (n ? '' : ' zero'), href: '#/projects2/l/' + l.id, 'data-ctx': 'plist', 'data-lid': String(l.id), 'data-name': l.name,
+      title: tip(l), ...(on ? { 'aria-current': 'true' } : {}) },
       emoji ? el('span', { class: 'v2-ptl-emoji', 'aria-hidden': 'true', text: emoji }) : icon('list', 'v2-ptl-ic'),
       el('span', { class: 'n', text: l.name }),
       l.visibility === 'members' ? lockIc() : null,
-      el('span', { class: 'v2-cnt', text: String(openByList.get(l.id) || 0) }));
+      cnt(n));
   };
-  const rows: HTMLElement[] = [];
-  const folderRows = (parent: number | null, depth: number): void => {
-    for (const f of (kids.get(parent) || [])) {
-      if (archived.has(f.id)) continue;
-      const open = !foldClosed.has(String(f.id));
-      const on = sel === 'F' + f.id;
-      const isSpace = !!(f.settings && f.settings.kind === 'space');
-      rows.push(el('div', { class: 'v2-ptf' + (on ? ' on' : ''), style: 'padding-left:' + (depth * 14) + 'px' },
-        el('button', { class: 'v2-car' + (open ? ' open' : ''), type: 'button', 'aria-label': open ? f.name + ' 접기' : f.name + ' 펼치기', 'aria-expanded': String(open), text: '›',
-          onclick: (e: Event) => {
-            e.preventDefault(); e.stopPropagation();
-            if (open) foldClosed.add(String(f.id)); else foldClosed.delete(String(f.id));
-            saveSet(FOLD_CLOSED_STORE, foldClosed); redraw();
-          } }),
-        el('a', { class: 'v2-ptf-a', href: '#/projects2/f/' + f.id, 'data-ctx': 'pfolder', 'data-fid': String(f.id), 'data-name': f.name, title: (isSpace ? '스페이스 ' : '폴더 ') + f.name + ' — 누르면 그 안의 리스트를 한 화면에 봅니다', ...(on ? { 'aria-current': 'true' } : {}) },
-          glyph(open ? 'folder-open' : 'folder', 'v2-ptf-ic'),
-          el('span', { class: 'n', text: f.name }),
-          el('span', { class: 'v2-cnt', text: String(countUnder(f)) }))));
-      if (!open) continue;
-      folderRows(f.id, depth + 1);
-      for (const l of listsIn(f.id)) rows.push(listRow(l, depth + 1));
-    }
+  const cards = plan.groups.flatMap((g) => g.cards);
+  const order = cards.filter((c) => c.open && !c.full).map((c) => c.key);
+  const sizes = Object.fromEntries(cards.map((c) => [c.key, c.rows.length]));
+  const forced = Object.fromEntries(cards.filter((c) => c.forced).map((c) => [c.key, c.forced]));
+  const moreRow = (c: ProjCard<TreeList>, hidden: number): HTMLElement | null => {
+    const e = c.empties.length;
+    const opened = projMore.has(c.key);
+    if (!opened && hidden <= 0 && !e) return null;
+    if (c.full && !opened) return null;   // 고른 빈 리스트 때문에 편 카드 — 사람이 편 게 아니라 «접기» 를 두지 않는다
+    const label = opened ? '접기' : hidden > 0 ? `${hidden}개 더${e ? ` · 빈 리스트 ${e}` : ''}` : `빈 리스트 ${e}`;
+    return el('button', { class: 'v2-pg-past' + (opened ? ' open' : ''), type: 'button', 'aria-expanded': String(opened),
+      title: opened ? '이 카드 접기 — 처음 화면으로' : '이 카드의 리스트 전부 보기',
+      onclick: (ev: Event) => { ev.preventDefault(); if (projMore.has(c.key)) projMore.delete(c.key); else projMore.add(c.key); redraw(); } },
+      el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }),
+      el('span', { class: 'n', text: label })) as HTMLElement;
   };
-  // ⭐ 즐겨찾기(#670) — 폴더 안이든 밖이든 맨 위 한자리로. 찾는 중엔 생략(찾기가 우선). 비어 있으면 구역 자체를 안 그린다.
-  const favs = favLists ? lists.filter((l) => favLists!.has(l.id)) : [];
-  if (favs.length) {
-    rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: '즐겨찾기' }));
-    for (const l of favs) rows.push(listRow(l, 0));
-  }
-  rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: '폴더 · 리스트' }));
-  const treeStart = rows.length;
-  folderRows(null, 0);
-  for (const l of listsIn(null)) rows.push(listRow(l, 0));
-  // 기타(미분류) — 리스트에 안 넣은 프로젝트. 클래식 패널의 그 줄(#475 __none__). 그런 프로젝트가 있을 때만 선다.
-  const noneLabel = '기타 (미분류)';
-  if (noneN) {
-    rows.push(el('a', { class: 'v2-wcat v2-ptl v2-ptl--none' + (sel === 'none' ? ' on' : ''), href: '#/projects2/none', style: 'padding-left:12px',
-      title: '기타 — 아직 리스트에 넣지 않은 프로젝트', ...(sel === 'none' ? { 'aria-current': 'true' } : {}) },
-      glyph('inbox', 'v2-ptl-ic'), el('span', { class: 'n', text: noneLabel }), el('span', { class: 'v2-cnt', text: String(noneN) })));
-  }
-  if (rows.length === treeStart) {
-    rows.push(el('p', { class: 'v2-empty', text: '아직 리스트가 없어요. 위 ＋ 에서 리스트를 만들면 여기 섭니다.' }));
-  }
-  const keep = listBefore();
-  const listEl = el('div', { class: 'v2-app-list v2-ptree', 'aria-label': '폴더 · 리스트' }, ...rows);
-  appListEl = listEl;
+  const card = (c: ProjCard<TreeList>, n: number): HTMLElement => {
+    const shown = c.full ? [...c.rows, ...c.empties] : c.rows.slice(0, n);
+    const kids: HTMLElement[] = shown.map(listRow);
+    const more = moreRow(c, c.full ? 0 : c.rows.length - shown.length);
+    if (more) kids.push(more);
+    if (!c.rows.length && !c.empties.length) kids.push(el('p', { class: 'v2-ksp-empty', text: '아직 이 폴더에 리스트가 없어요.' }));
+    const headOn = c.folderId != null && plan.onKey === 'folder:' + c.folderId;
+    return el('section', { class: 'v2-ksp v2-pcard' + (c.open ? ' open' : ''), 'aria-label': c.name, 'data-grp': c.key },
+      el('div', { class: 'v2-ksp-h' + (headOn ? ' on' : ''), ...(c.folderId != null ? { 'data-ctx': 'pfolder', 'data-fid': String(c.folderId), 'data-name': c.name } : {}) },
+        el('button', { class: 'v2-ksp-t', type: 'button', 'aria-expanded': String(c.open), title: c.open ? c.name + ' 접기' : c.name + ' 펼치기',
+          onclick: () => { if (foldClosed.has(c.key)) foldClosed.delete(c.key); else foldClosed.add(c.key); saveSet(FOLD_CLOSED_STORE, foldClosed); redraw(); } },
+          el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }),
+          c.folderId != null ? glyph(c.open ? 'folder-open' : 'folder', 'v2-ksp-ic') : icon('list', 'v2-ksp-ic'),
+          el('span', { class: 'n', text: c.name })),
+        cnt(c.count),
+        c.folderId != null ? el('a', { class: 'v2-ksp-edit', href: '#/projects2/f/' + c.folderId, 'aria-label': c.name + ' 폴더 보기',
+          title: '이 폴더의 리스트를 한 화면에 봅니다', ...(headOn ? { 'aria-current': 'true' } : {}) }, icon('open', 'v2-kedit-ic')) : null),
+      c.open ? el('div', { class: 'v2-ksp-b' }, ...kids) : null);
+  };
+  //  이름표 = 최상위 폴더. 이름을 누르면 그 폴더 보드, [정리]는 폴더 보기 · 새 리스트 · 새 폴더.
+  const label = (g: (typeof plan.groups)[number]): HTMLElement => {
+    const on = g.folderId != null && plan.onKey === 'folder:' + g.folderId;
+    return el('div', { class: 'v2-app-group v2-kgroup v2-pgroup' + (on ? ' on' : '') },
+      g.folderId != null
+        ? el('a', { class: 'n', href: '#/projects2/f/' + g.folderId, 'data-ctx': 'pfolder', 'data-fid': String(g.folderId), 'data-name': g.name,
+            title: g.name + ' — 누르면 그 안의 리스트를 한 화면에 봅니다', ...(on ? { 'aria-current': 'true' } : {}), text: g.name })
+        : el('span', { class: 'n', text: g.name }),
+      g.folderId != null ? el('button', { class: 'v2-kedit', type: 'button', title: '이 폴더 정리 — 폴더 보기 · 새 리스트 · 새 폴더', 'aria-haspopup': 'menu',
+        onclick: (ev: MouseEvent) => {
+          ev.preventDefault();
+          const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+          ctxMenu(r.left, r.bottom + 4, [
+            { label: '폴더 보기', run: () => { location.hash = '#/projects2/f/' + g.folderId; } },
+            { label: '새 리스트', run: () => openNew('list') },
+            { label: '새 폴더', run: () => openNew('folder') },
+          ]);
+        } }, icon('pen', 'v2-kedit-ic'), el('span', { text: '정리' })) : null);
+  };
+  const build = (alloc: Record<string, number>): HTMLElement[] => {
+    if (!plan.groups.length) return fixed.length ? [] : [el('p', { class: 'v2-empty', text: '아직 리스트가 없어요. 위 ＋ 에서 리스트를 만들면 여기 섭니다.' })];
+    return plan.groups.flatMap((g) => [label(g), ...g.cards.map((c) => card(c, alloc[c.key] ?? c.rows.length))]);
+  };
 
+  const keep = listBefore();
+  const listEl = el('div', { class: 'v2-app-list v2-kshelf v2-pshelf', 'aria-label': '폴더 · 리스트' });
+  appListEl = listEl;
 
   host.replaceChildren(
     ...topBits(navEl, navHost),
@@ -1563,9 +1614,11 @@ function renderProjTree(): void {
       secHead('프로젝트', null, newMenuBtn()),
       lensSwitch(),
       ...(newOpen ? [newProjRow()] : []),
+      fixed.length ? el('nav', { class: 'v2-kviews', 'aria-label': '즐겨찾기 · 기타' }, ...fixed) : null,
       listEl),
     secFoot());
 
+  fitWikiList(listEl, order, sizes, forced, build);
   listAfter(keep);
   bindSideKeys();
 }
