@@ -30,7 +30,7 @@
 import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { planWikiCards, allocWikiRows } from './wiki-cards.js';
 import { newItemPlan, newRowSlot, planProjCards, type ProjCard } from './proj-cards.js';   // #4233 안 1 — [프로젝트] 사이드바 카드 계획(순수)
-import { projectLines, SESS_GROUP_BYS, settleScope, sideCards, withGroupBy, type SessScope, type SideCardProj } from '../lib/sess-all.js';   // #4158 · #4233 2안 — [AI 세션] 사이드바 카드 · 묶기 기준(순수)
+import { hiddenCardsLabel, planSideCards, projectLines, SESS_GROUP_BYS, settleScope, sideCards, withGroupBy, type SessScope, type SideCardProj } from '../lib/sess-all.js';   // #4158 · #4233 2안 — [AI 세션] 사이드바 카드 · 묶기 기준(순수)
 import { sessGroupName, sessScope, setSessScope } from './sess-scope.js';   // #4233 2안 — 사이드바에서 고른 것의 한 자리(가운데 목록이 같은 값을 읽는다)
 import { splitFolderRows, foldCardRows } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsTouch } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버다(선언 한 줄이 그걸 말한다)
@@ -332,7 +332,7 @@ export interface SideHooks {
   /** #2016 — 레일이 고른 구역(홈 · 확인할 것 · AI 세션 · 프로젝트 · 위키). 없으면 홈(종전 화면 그대로). */
   section?: () => RailSection;
   /** #4158 · #4233 2안 — [AI 세션] 사이드바에서 묶기 기준 · 카드 · 줄을 골랐다(sess-scope.ts). 셸이 가운데 전체 목록을 그 값으로 다시 그린다 — 없으면 그리로 간다. */
-  onSessProject?: () => void;
+  onSessProject?: (opts?: { keepDrawer?: boolean }) => void;
   /** #2016 — 레일 여닫기. 슬랙처럼 **맨 윗줄 맨 왼쪽**(패널 아이콘)에 선다 — navHost 가 없는 브라우저에서만 여기 그린다
    *  (데스크톱은 창 맨 윗줄의 ☰ 자리가 이미 그 단추다). */
   onToggleRail?: () => void;
@@ -1316,6 +1316,8 @@ function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
  *   폰 서랍은 셸이 닫는다(main.ts showSessAll).
  */
 const sessMore = new Set<string>();
+/** 접힌 카드를 펼친 기준(«리스트 N개 더» 를 누른 기준) — 페이지 수명. */
+const sessCardsOpen = new Set<string>();
 let sessResizeBound = false;
 function bindSessResize(): void {
   if (sessResizeBound) return;
@@ -1356,7 +1358,8 @@ function renderSessions(): void {
   //  ⚠ 셸이 다음 판(syncShell)에 가운데를 다시 그릴 때 이 값을 읽으므로 따로 알리지 않는다.
   const settled = settleScope(sc, cards, lines);
   if (settled !== sc) { setSessScope(settled); sc = settled; }
-  const pick = (next: SessScope): void => { setSessScope(next); redraw(); hooks.onSessProject?.(); };
+  //  keepDrawer — 묶기 기준을 바꿀 때는 폰 서랍을 닫지 않는다(새 카드를 봐야 한다). 카드 · 줄을 고를 때만 닫고 목록을 보인다.
+  const pick = (next: SessScope, keepDrawer = false): void => { setSessScope(next); redraw(); hooks.onSessProject?.({ keepDrawer }); };
   const fmtN = (n: number): string => Number(n).toLocaleString('en-US');
   const byLabel = (SESS_GROUP_BYS.find((b) => b.key === sc.by) || SESS_GROUP_BYS[0]).label;
   const pname = (pid: number): string => (pid ? ((projOf.get(pid) || { name: '' }).name || `#${pid}`) : '프로젝트 없음');
@@ -1367,7 +1370,7 @@ function renderSessions(): void {
       const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
       const row = (b: (typeof SESS_GROUP_BYS)[number]): CtxRow => ({ label: b.label, checked: b.key === sc.by,
         hint: b.key === 'none' ? '' : `${sideCards(items, b.key, now, rankOf).length}묶음`,
-        run: () => pick(withGroupBy(sessScope(), b.key)) });
+        run: () => pick(withGroupBy(sessScope(), b.key), true) });
       ctxMenu(r.left, r.bottom + 4, [
         ...SESS_GROUP_BYS.filter((b) => b.key !== 'none').map(row),
         { label: '', sep: true },
@@ -1407,7 +1410,6 @@ function renderSessions(): void {
     ? [{ key: '', group: null as string | null, name: '', n: total, lines }]
     : cards.map((c) => ({ key: c.key, group: c.key as string | null, name: sessGroupName(sc.by, c.key, data, sessOwnerLabel), n: c.n, lines: c.projects }));
   const full = (k: string): boolean => sessMore.has(`${sc.by}:${k}`);
-  const order = plans.filter((x) => !full(x.key)).map((x) => x.key);
   const sizes = Object.fromEntries(plans.map((x) => [x.key, x.lines.length]));
   //  고른 줄은 늘 보인다(가려진 채로 «지금 여기» 가 안 보이면 안 된다).
   const forced: Record<string, number> = {};
@@ -1430,15 +1432,29 @@ function renderSessions(): void {
         el('span', { class: 'v2-cnt', text: fmtN(x.n) })),
       el('div', { class: 'v2-ksp-b' }, ...kids));
   };
-  const build = (alloc: Record<string, number>): HTMLElement[] => {
+  //  카드가 많으면(리스트별 13장 등) 들어가는 만큼만 세우고 나머지는 «리스트 N개 더» 한 줄로 접는다 — 첫 화면은 스크롤 없이
+  //   (원준 2026-09-25, 위키 사이드바와 같은 규칙). 몇 장이 들어가는지는 fitSessCards 가 재고, 무엇을 세울지는 lib planSideCards.
+  const cardsOpen = sessCardsOpen.has(sc.by);
+  const foldRow = (hidden: number): HTMLElement | null => {
+    if (sc.by === 'none' || (!cardsOpen && hidden <= 0)) return null;
+    return el('button', { class: 'v2-pg-past v2-scards-more' + (cardsOpen ? ' open' : ''), type: 'button', 'aria-expanded': String(cardsOpen),
+      title: cardsOpen ? '처음 화면으로 접습니다' : '접힌 카드를 모두 펼칩니다',
+      onclick: (ev: Event) => { ev.preventDefault(); if (sessCardsOpen.has(sc.by)) sessCardsOpen.delete(sc.by); else sessCardsOpen.add(sc.by); redraw(); } },
+      el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }),
+      el('span', { class: 'n', text: cardsOpen ? '접기' : hiddenCardsLabel(sc.by, hidden) })) as HTMLElement;
+  };
+  const planFor = (fit: number) => planSideCards(plans.map((x) => x.key), fit, sc.by === 'none' ? null : sc.group, cardsOpen || sc.by === 'none');
+  const build = (shownKeys: string[], hidden: number) => (alloc: Record<string, number>): HTMLElement[] => {
     if (!total) return [el('p', { class: 'v2-empty', text: '아직 세션이 없어요. 홈에서 무엇이든 시켜 보세요.' })];
+    const shownPlans = plans.filter((x) => shownKeys.includes(x.key));
     return [
       el('div', { class: 'v2-app-group v2-kgroup', role: 'presentation' },
         el('span', { class: 'n', text: sc.by === 'none' ? '프로젝트' : byLabel }),
         sc.by === 'list' ? el('a', { class: 'v2-kedit', href: projLandingRoute(), title: '리스트 정리 — 프로젝트 탭에서 리스트를 옮기고 고칩니다' },
           icon('pen', 'v2-kedit-ic'), el('span', { text: '정리' })) : null),
-      ...plans.map((x) => card(x, alloc[x.key] ?? x.lines.length)),
-    ];
+      ...shownPlans.map((x) => card(x, alloc[x.key] ?? x.lines.length)),
+      foldRow(hidden),
+    ].filter((n): n is HTMLElement => !!n);
   };
 
   const keep = listBefore();
@@ -1456,9 +1472,37 @@ function renderSessions(): void {
       listEl),
     secFoot(footLink('#/app/sessions', 'chat', '세션 이력')));
 
-  fitWikiList(listEl, order, sizes, forced, build);
+  fitSessCards(listEl, plans.length, (fit) => {
+    const p = planFor(fit);
+    return { order: p.shown.filter((k) => !full(k)), sizes, forced, build: build(p.shown, p.hidden) };
+  });
   listAfter(keep);
   bindSideKeys();
+}
+
+/** [AI 세션] 사이드바 — 들어가는 카드 장수를 재고(최소 줄 수로 그려 넘치지 않는 가장 큰 장수), 그 장수로 위키와 같은 줄 나누기(fitWikiList)를 한다.
+ *  칸 높이를 모르면(숨은 사이드바 · 폰 서랍이 닫힘) 전부 세운다 — 다음 그리기(창 크기 · 서랍 열기)가 다시 잰다. */
+function fitSessCards(listEl: HTMLElement, n: number, planAt: (fit: number) => { order: string[]; sizes: Record<string, number>; forced: Record<string, number>; build: (alloc: Record<string, number>) => HTMLElement[] }): void {
+  const H = listEl.clientHeight;
+  let fit = n;
+  if (H > 0 && n > 1) {
+    for (fit = n; fit > 1; fit--) {
+      const p = planAt(fit);
+      listEl.replaceChildren(...p.build(allocWikiRows({ sizes: p.sizes, order: p.order, budget: 0, forced: p.forced })));
+      if (listNaturalHeight(listEl) <= H) break;
+    }
+  }
+  const p = planAt(fit);
+  fitWikiList(listEl, p.order, p.sizes, p.forced, p.build);
+}
+
+/** 목록 칸 내용 자체의 높이 — scrollHeight 는 내용이 짧아도 칸 높이 밑으로 안 내려가서, 칸을 0 으로 눌러 잰다(fitWikiList 와 같은 방법). */
+function listNaturalHeight(listEl: HTMLElement): number {
+  const st = listEl.style; const f = st.flex; const h = st.height;
+  st.flex = 'none'; st.height = '0px';
+  const v = listEl.scrollHeight;
+  st.flex = f; st.height = h;
+  return v;
 }
 
 // ══ [확인할 것] 구역 (#2016 2차) — 슬랙 '내 활동'의 자리. 답을 기다리는 것과 끝났는데 아직 안 본 것. ══

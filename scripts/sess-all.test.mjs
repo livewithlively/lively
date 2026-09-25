@@ -82,7 +82,7 @@ ok(rs.length > 0 && !/sessAsInst\(/.test(rs) && !/appListKids\(/.test(rs),
 //  #4233 2안 — 사이드바는 거르개 자리 그대로(회의 #3977)이고, 줄은 기준의 묶음 카드 × 프로젝트다(재료 · 순서는 lib 의 sideCards · projectLines).
 ok(/const cards = sideCards\(items, sc\.by, now, rankOf\);/.test(rs) && /const lines = projectLines\(items\);/.test(rs) && /text: '전체'/.test(rs),
   "S2 줄은 「전체」 · 기준의 묶음 카드 · 카드 안 프로젝트 — 재료 · 순서는 lib(sideCards · projectLines) 한 벌");
-ok(/const pick = \(next: SessScope\): void => \{ setSessScope\(next\); redraw\(\); hooks\.onSessProject\?\.\(\); \};/.test(rs)
+ok(/const pick = \(next: SessScope, keepDrawer = false\): void => \{ setSessScope\(next\); redraw\(\); hooks\.onSessProject\?\.\(\{ keepDrawer \}\); \};/.test(rs)
   && /'aria-pressed': String\(on\)/.test(rs) && /\(on \? ' on' : ''\)/.test(rs) && /'aria-pressed': String\(headOn\)/.test(rs),
   "S3 줄 · 카드 머리를 누르면 거르개를 바꾸고 셸에 알린다 — 고른 줄 · 카드는 눈에 보이게(.on · aria-pressed)");
 const SCOPE = read("web/v2/sess-scope.ts");
@@ -210,7 +210,7 @@ if (lib) {
         R("u1", { owner: "u2", projectId: 7, lastSeen: at(0, 11) }), R("u2", { owner: "u2", projectId: 7, lastSeen: at(0, 7) }), R("tr", { owner: "me", projectId: 7, trashedAt: "2026-09-24T00:00:00Z" })];
       const cards = sideCards(sc1, "owner", NOW, rank);
       eq(cards.map((c) => [c.key, c.n, c.projects.map((l) => `${l.pid}:${l.n}${l.wait ? "!" : ""}`).join(",")]),
-        [["me", 3, "0:1,8:1!,7:1"], ["u2", 2, "7:2"]], "C5 ★사이드바 카드(사람별) — 카드 순서는 묶기와 같고, 줄은 프로젝트 없음 맨 앞 · 최근 순 · 수 · 확인 필요 표식");
+        [["u2", 2, "7:2"], ["me", 3, "0:1,8:1!,7:1"]], "C5 ★사이드바 카드(사람별) — 카드는 최근 활동 순(u2 11시 > 나 10시), 줄은 프로젝트 없음 맨 앞 · 최근 순 · 수 · 확인 필요 표식");
       ok(sideCards([], "day", NOW, rank).length === 0 && sideCards(null, "day", NOW, rank).length === 0, "C6 행이 없거나 null 이면 카드도 없다");
       ok(sideCards(sc1, "none", NOW, rank).length === 0, "C7 묶지 않음이면 카드가 없다");
       ok(!cards.some((c) => c.projects.some((l) => l.pid === 7 && c.key === "me" && l.n > 1)) && projectLines(sc1).find((l) => l.pid === 7).n === 3,
@@ -226,6 +226,28 @@ if (lib) {
       const keep = { by: "owner", group: "me", proj: 0 };
       ok(settleScope(keep, cards) === keep, "S9 경계 — 줄 0(프로젝트 없음)은 값이다. 카드에 있으면 그대로");
       eq(settleScope({ by: "none", group: null, proj: 99 }, [], projectLines(sc1)), { by: "none", group: null, proj: null }, "S10 묶지 않음 — 고른 프로젝트 줄이 없으면 푼다");
+      //  ── 첫 화면 맞춤(원준 2026-09-25 «첫 화면은 스크롤 없이») — 카드 순서 O · 접기 P · 글 H ──
+      const { planSideCards, hiddenCardsLabel } = lib;
+      ok(typeof planSideCards === "function" && typeof hiddenCardsLabel === "function", "P0 접기 잣대가 잎 모듈에 있다");
+      const st = [R("w", { stateKey: "waiting", lastSeen: at(2) }), R("b", { stateKey: "busy", lastSeen: at(0, 14) }), R("i", { stateKey: "idle", lastSeen: at(0, 9) })];
+      eq(sideCards(st, "state", NOW, rank).map((c) => c.key), ["busy", "idle", "waiting"], "O1 ★상태별 카드도 최근 활동 순(순위 순이 아니다)");
+      eq(sideCards(days, "day", NOW, rank).map((c) => c.key), ["오늘", "어제", "이번 주", "이전"], "O2 시간별은 최근 순이 곧 오늘 → 이전");
+      const tie = [R("b1", { listId: 4, lastSeen: at(0, 10) }), R("a1", { listId: 5, lastSeen: at(0, 10) }), R("a2", { listId: 5, lastSeen: at(0, 9) })];
+      eq(sideCards(tie, "list", NOW, rank).map((c) => c.key), ["5", "4"], "O3 경계 — 최근 활동이 같으면 세션 많은 카드 먼저(그다음 key 순)");
+      if (typeof planSideCards === "function") {
+        const K = ["a", "b", "c", "d", "e"];
+        eq(planSideCards(K, 3, null, false), { shown: ["a", "b", "c"], hidden: 2 }, "P1 들어가는 만큼(3장)만, 나머지 2장은 접는다");
+        eq(planSideCards(K, 3, "e", false), { shown: ["a", "b", "e"], hidden: 2 }, "P2 ★고른 카드가 접힐 자리면 마지막 자리를 내준다(순서 유지)");
+        eq(planSideCards(K, 3, "b", false), { shown: ["a", "b", "c"], hidden: 2 }, "P3 고른 카드가 이미 보이면 그대로");
+        eq(planSideCards(K, 3, null, true), { shown: K, hidden: 0 }, "P4 펼쳤으면 전부");
+        eq(planSideCards(K, 5, null, false), { shown: K, hidden: 0 }, "P5 경계 — 다 들어가면(fit = 장수) 접는 줄이 없다");
+        eq(planSideCards(K, 9, null, false), { shown: K, hidden: 0 }, "P5b fit 이 장수보다 커도 전부");
+        eq([planSideCards([], 3, null, false), planSideCards(null, 3, null, false)], [{ shown: [], hidden: 0 }, { shown: [], hidden: 0 }], "P6 카드가 없으면 빈 계획");
+        eq([planSideCards(K, 0, null, false), planSideCards(K, 0, "d", false)], [{ shown: ["a"], hidden: 4 }, { shown: ["d"], hidden: 4 }], "P7 경계 — fit 0 이어도 한 장(고른 카드가 있으면 그 카드)");
+        eq(planSideCards(K, 1, "zzz", false), { shown: ["a"], hidden: 4 }, "P8 고른 카드 key 가 목록에 없으면 무시");
+        eq([hiddenCardsLabel("list", 9), hiddenCardsLabel("owner", 2), hiddenCardsLabel("state", 3), hiddenCardsLabel("day", 1)],
+          ["리스트 9개 더", "사람 2명 더", "상태 3개 더", "날짜 1개 더"], "H1 접는 줄 글 — 사람은 «명», 그 밖은 «개»");
+      }
     }
     eq(pickNowCards([R("oldIdle", { stateKey: "idle", lastSeen: NOW - 24 * 3600_000 }), R("newIdle", { stateKey: "idle", lastSeen: NOW - 24 * 3600_000 + 60_000 }),
       R("oldWait", { stateKey: "waiting", lastSeen: at(10) })], rank, 4, NOW).map((r) => r.id), ["oldWait", "newIdle"],
@@ -271,7 +293,7 @@ if (lib) {
     "W2c ★피크한 세션이 목록에 없으면(접힌 묶음 · 카드) ↑ ↓ 는 아무 데로도 가지 않는다 — 첫 행으로 건너뛰지 않는다");
   //  W3 — 묶지 않음(원준 2026-09-25 «안묶은 완전 raw 한 전체보기도 · 드롭다운으로 오른쪽에서»).
   ok(/SESS_GROUP_BYS\.filter\(\(b\) => b\.key !== 'none'\)\.map\(row\),\s*\{ label: '', sep: true \},\s*\.\.\.SESS_GROUP_BYS\.filter\(\(b\) => b\.key === 'none'\)\.map\(row\)/.test(rs)
-    && /run: \(\) => pick\(withGroupBy\(sessScope\(\), b\.key\)\)/.test(rs),
+    && /run: \(\) => pick\(withGroupBy\(sessScope\(\), b\.key\), true\)/.test(rs),
     "W3a ★묶기 드롭다운은 사이드바 머리에 있다(시간별 · 리스트별 · 사람별 · 상태별, 구분선 아래 묶지 않음)");
   ok(!/SESS_GROUP_BYS\.filter/.test(all2) && !/'data-pick': 'by'/.test(all2) && !/showCtxMenu\([^\n]*title: '묶기'/.test(all2),
     "W3c ★본문 도구줄에는 묶기 단추가 없다(2안 — 기준은 사이드바 한 곳)");
@@ -281,9 +303,18 @@ if (lib) {
     "W3b ★묶지 않음이면 묶음 머리 없이 전부 최근 순, 이름 없는 세션도 접지 않는다");
   ok(/el\('span', \{ class: 'crumb k', 'data-by': sc\.by, text: byLabel \}\)/.test(all2) && /crumbs\.length \? crumbs\[crumbs\.length - 1\] : '전체'/.test(all2),
     "W4a 빵부스러기는 «AI 세션 / 기준 / 고른 것», 안 골랐으면 «전체»");
-  ok(/secHead\('AI 세션', total \|\| null, byBtn,/.test(rs) && /fitWikiList\(listEl, order, sizes, forced, build\);/.test(rs)
+  ok(/secHead\('AI 세션', total \|\| null, byBtn,/.test(rs) && /fitSessCards\(listEl, plans\.length,/.test(rs)
     && /class: 'v2-ksp v2-pcard v2-scard open'/.test(rs) && /v2-pg-past/.test(rs),
     "W4b 사이드바는 위키 사이드바 3판 부품(.v2-ksp 카드 · 「N개 더」 · 줄 나누기 fitWikiList), 드롭다운은 머리의 ＋ 앞");
+  ok(/fitSessCards\(listEl, plans\.length, \(fit\) => \{/.test(rs) && /const planFor = \(fit: number\) => planSideCards\(plans\.map\(\(x\) => x\.key\), fit, sc\.by === 'none' \? null : sc\.group,/.test(rs)
+    && /foldRow\(hidden\)/.test(rs) && /hiddenCardsLabel\(sc\.by, hidden\)/.test(rs) && /sessCardsOpen\.has\(sc\.by\)/.test(rs),
+    "W5a ★카드는 들어가는 만큼(fitSessCards · planSideCards), 나머지는 «리스트 N개 더» 한 줄 · 누르면 펼침/접기");
+  ok(/run: \(\) => pick\(withGroupBy\(sessScope\(\), b\.key\), true\) \}\);/.test(rs) && /hooks\.onSessProject\?\.\(\{ keepDrawer \}\)/.test(rs)
+    && /if \(!opts\?\.keepDrawer\) mobile\?\.closeAll\(\);/.test(MAIN),
+    "W5c 폰: 묶기 기준을 바꾸면 서랍을 열어 둔다(카드 · 줄을 고를 때만 닫는다)");
+  const fitFn = cut(SIDE, "function fitSessCards(", "\n}\n");
+  ok(/if \(listNaturalHeight\(listEl\) <= H\) break;/.test(fitFn) && /budget: 0/.test(fitFn) && /fitWikiList\(listEl, p\.order, p\.sizes, p\.forced, p\.build\)/.test(fitFn),
+    "W5b 장수는 최소 줄 수로 그려 넘치지 않는 가장 큰 값, 그 뒤 줄 나누기는 위키와 같은 fitWikiList");
   const ICONS_SRC = read("web/v2/icons.ts");
   const usedIc = [...(rs.match(/sc\.by === 'day' \? '([a-z]+)' : sc\.by === 'owner' \? '([a-z]+)' : '([a-z]+)'/) || []).slice(1)];
   ok(usedIc.length === 3 && usedIc.every((n) => new RegExp("\\n  " + n + ": '").test(ICONS_SRC)),

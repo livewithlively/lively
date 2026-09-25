@@ -2095,9 +2095,10 @@ function repaintSessAll(): void {
   const at = tabsApi?.current();
   if (at && isSessAllRoute(at.route)) paintSessAll(at);
 }
-/** 사이드바가 프로젝트를 골랐다 — 목록 창이 있으면 그 창을 그 값으로 다시, 없으면 그리로 간다(폰이면 서랍을 닫는다). */
-function showSessAll(): void {
-  mobile?.closeAll();
+/** 사이드바가 프로젝트를 골랐다 — 목록 창이 있으면 그 창을 그 값으로 다시, 없으면 그리로 간다(폰이면 서랍을 닫는다).
+ *  #4233 — 묶기 기준만 바꿨으면(keepDrawer) 서랍은 그대로 둔다. */
+function showSessAll(opts?: { keepDrawer?: boolean }): void {
+  if (!opts?.keepDrawer) mobile?.closeAll();
   if (!tabsApi) return;
   const hit = tabsApi.find(sectionRoute('sess'));
   if (!hit) { location.hash = sectionRoute('sess'); return; }
