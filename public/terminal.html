@@ -212,6 +212,11 @@
     -webkit-tap-highlight-color: transparent; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
   .mkey:active { background: var(--border); }
   .mrow { display: flex; gap: 8px; align-items: flex-end; }
+  /* #4229 사진·파일 첨부 — 글 상자 왼쪽, 키보드가 떠 있어도 늘 보이는 자리 */
+  .mattach { flex: none; width: 40px; height: 38px; padding: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--fg);
+    font: inherit; font-size: 19px; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+    -webkit-tap-highlight-color: transparent; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  .mattach:active { background: var(--border); }
   .mcomp { flex: 1; min-height: 38px; max-height: 112px; resize: none; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
     background: var(--bg); color: var(--fg); font: inherit; font-size: 16px; line-height: 1.4; }  /* 16px 미만이면 iOS 가 포커스 때 화면을 확대한다 */
   .mcomp:focus { outline: none; border-color: var(--accent); }
