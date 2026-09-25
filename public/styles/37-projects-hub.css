@@ -519,3 +519,225 @@ a.pjh-row-link.pjh-row-n:hover { color: var(--blue); }
 .pjh-ev-b { gap: 0; }
 .pjh-ev-m { font-size: 11px; }
 .pjh-body-content { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+/* ══ 5판 다듬기(2026-09-25 밤, 원준: «시안보다 훨씬 촌스럽고 여백이 없다») — 시안 hub-widgets-review.html 의 값을 그대로 옮긴다 ══ */
+/* ── 태스크: 프로젝트 탭 줄을 쓰되 **겉모습은 시안**(.tk) — 줄 30px · 이름 13px/600 · 상태 원 14px · 얼굴 18px · 묶음 머리는 알약 · 빈 칸은 비워 둔다 · 구분선·⊕·⋯ 없음 ── */
+.pjh-wb > .pjv-tasks-embedded .pjv-trow-wrap > .pjv-trow { min-height: 30px; padding: 0 2px; border-bottom: 0; border-top: 1px solid var(--line-row); border-radius: 6px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-body > .pjv-trow-wrap:first-child > .pjv-trow { border-top: 0; }
+.pjh-wb > .pjv-tasks-embedded .pjv-trow:hover { background: var(--bg-tint); }
+.pjh-wb > .pjv-tasks-embedded .pjv-trow-title-cell { gap: 8px; padding-left: 26px; position: relative; }
+.pjh-wb > .pjv-tasks-embedded .pjv-trow-title { font-size: 13px; font-weight: 600; }
+.pjh-wb > .pjv-tasks-embedded .pjv-trow-caret { display: none; }                 /* 하위는 이름 옆 «↳ N» 칩이 말한다 */
+.pjh-wb > .pjv-tasks-embedded .pjv-trow-caret.empty { display: none; }
+.pjh-wb > .pjv-tasks-embedded .pjv-row-check { position: absolute; left: 2px; top: 50%; margin-top: -8px; opacity: 0; }   /* 체크박스는 올릴 때만, 이름 왼쪽 자리 */
+.pjh-wb > .pjv-tasks-embedded .pjv-trow:hover .pjv-row-check, .pjh-wb > .pjv-tasks-embedded .pjv-row-check.on, .pjh-wb > .pjv-tasks-embedded .pjv-row-check[aria-checked="true"] { opacity: 1; }
+.pjh-wb > .pjv-tasks-embedded .pjv-row-grip { display: none; }
+.pjh-wb > .pjv-tasks-embedded .pjv-status-dot.sm { width: 14px; height: 14px; border-width: 1.6px; font-size: 0; }
+.pjh-wb > .pjv-tasks-embedded .pjv-status-dot.sm.inprog { background: linear-gradient(90deg, var(--blue) 50%, transparent 50%); }
+.pjh-wb > .pjv-tasks-embedded .pjv-status-dot.sm.todo { border-style: solid; border-color: var(--muted-3-line); }
+.pjh-wb > .pjv-tasks-embedded .pjv-trow-subcount { font-size: 11px; font-weight: 600; color: var(--muted-2); background: none; padding: 0; }
+.pjh-wb > .pjv-tasks-embedded .pjv-trow-tags .pjv-trow-tag { font-size: 11px; line-height: 16px; padding: 0 6px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-tcell { justify-content: flex-start; overflow: hidden; }
+.pjh-wb > .pjv-tasks-embedded .pjv-cell-btn { padding: 0 4px; height: 100%; font-size: 12px; color: var(--muted); }
+.pjh-wb > .pjv-tasks-embedded .pjv-cell-btn:hover { box-shadow: none; background: var(--bg-tint-2); border-radius: 5px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-cell-btn.empty { visibility: hidden; }            /* 시안: 빈 마감·우선순위 칸은 아무것도 없다 */
+.pjh-wb > .pjv-tasks-embedded .pjv-trow:hover .pjv-cell-btn.empty { visibility: visible; }
+.pjh-wb > .pjv-tasks-embedded .pjv-ava { width: 18px; height: 18px; font-size: 9px; font-weight: 800; }
+.pjh-wb > .pjv-tasks-embedded .pjv-asg-faces { gap: 2px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-asg-name { font-size: 12px; color: var(--ink-sub); }
+.pjh-wb > .pjv-tasks-embedded .pjv-due-text { font-size: 11.5px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pjh-wb > .pjv-tasks-embedded .pjv-due-text.overdue { color: var(--danger-ink); }
+.pjh-wb > .pjv-tasks-embedded .pjv-cell-ico { display: none; }                     /* 달력·깃발 자리표시 아이콘 없음 */
+.pjh-wb > .pjv-tasks-embedded .pjv-flag-glyph { font-size: 12px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-flag-label { font-size: 11.5px; font-weight: 700; }
+.pjh-wb > .pjv-tasks-embedded .pjv-trow-more { width: 22px; height: 22px; font-size: 15px; }
+/* 묶음 머리 — 상태 알약 + 수 + ▾, 열 이름은 11px 연하게, 구분선·⊕ 없음 */
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup { margin-top: 8px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup:first-child { margin-top: 0; }
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-head { padding: 0 2px 4px; min-height: 26px; border-bottom: 0; gap: 6px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-head .pjv-trow-title-cell { gap: 6px; padding-left: 26px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-head .pjv-status-dot { display: none; }
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-head .pjv-row-check { opacity: 0; }
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-head:hover .pjv-row-check { opacity: 1; }
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-label { display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: 5px; font-size: 11px; font-weight: 800; letter-spacing: 0; color: #fff; background: var(--muted-2); }
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-head.inprog .pjv-tgroup-label { background: var(--blue); }
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-head.done .pjv-tgroup-label { background: var(--mint-fill); }
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-count { font-size: 12px; font-weight: 600; color: var(--muted-2); }
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-caret { width: 14px; height: 14px; font-size: 9px; color: var(--muted-3); }
+.pjh-wb > .pjv-tasks-embedded .pjv-colhead { font-size: 11px; font-weight: 700; color: var(--muted-2); letter-spacing: 0; padding: 0 0 0 4px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-col-resize, .pjh-wb > .pjv-tasks-embedded .pjv-col-resize::after { display: none; }
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-head .pjv-tcell-add > * { display: none; }
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-body { padding-top: 0; }
+/* 「＋ 태스크」 — 시안: 30px · 13px · 연한 글 · 이름 시작선에 맞춰 */
+.pjh-wb > .pjv-tasks-embedded .pjv-addrow { padding: 0; }
+.pjh-wb > .pjv-tasks-embedded .pjv-addrow-trigger { min-height: 30px; padding: 0 8px 0 26px; font-size: 13px; font-weight: 600; color: var(--muted); gap: 6px; border-radius: 7px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-addrow-trigger:hover { background: var(--bg-tint); color: var(--ink-sub); }
+.pjh-wb > .pjv-tasks-embedded .pjv-addrow-plus { font-size: 14px; color: var(--muted-2); }
+.pjh-wb > .pjv-tasks-embedded .pjv-addrow.editing { min-height: 30px; background: var(--bg-tint); border-radius: 7px; padding: 0 2px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-addrow-input { font-size: 13px; padding: 5px 8px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-more-row { min-height: 26px; padding: 3px 8px 3px 26px; font-size: 12px; }
+/* 호버 동작(세션 열기 · ⋯) — 시안: 이름 칸 끝, 작은 알약. 프로젝트 탭의 그라데이션 덮개는 그대로(이름을 안 가린다) */
+.pjh-wb > .pjv-tasks-embedded .pjv-row-actions { gap: 2px; padding-left: 22px; margin-right: 6px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-row-act { width: 22px; height: 22px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-act-ic { width: 14px; height: 14px; }
+
+/* ── 세션: 줄 30px · 구분선은 줄 사이만 · 태스크 칩 회색 · 열은 11.5px 연하게 ── */
+.pjh-sr { min-height: 30px; border-top: 1px solid var(--line-row); font-size: 13px; }
+.pjh-sr:hover { background: var(--bg-tint); border-radius: 6px; }
+.pjh-sr:hover + .pjh-sr { border-top-color: transparent; }
+.pjh-sg { min-height: 24px; margin-top: 6px; font-size: 11.5px; letter-spacing: .3px; color: var(--muted); }
+.pjh-sg-l { color: var(--ink); font-weight: 700; padding-left: 0; }
+.pjh-sg .pjh-sr-c { font-size: 11px; font-weight: 700; color: var(--muted-2); }
+.pjh-sr-t { padding: 0 6px 0 0; }
+.pjh-sr-n { font-size: 13px; font-weight: 600; }
+.pjh-tb { background: var(--bg-tint-2); color: var(--ink-sub); height: 18px; font-size: 11px; }
+.pjh-sr-c { font-size: 11.5px; color: var(--muted); }
+.pjh-sbtn { height: 24px; font-size: 11.5px; border-radius: 7px; }
+.pjh-dot { width: 8px; height: 8px; }
+.pjh-dot.done { background: var(--mint); opacity: .55; }
+.pjh-now { border-radius: 10px; padding: 8px 10px; gap: 4px; background: var(--bg-tint); border-color: var(--line); }
+.pjh-now.wait { border-color: var(--warn); background: var(--warn-bg); }
+.pjh-now.live { border-color: var(--ok-line-2); background: var(--bg-success); }
+.pjh-now-t { font-size: 13px; }
+.pjh-now-l { font-size: 12.5px; line-height: 1.45; }
+
+/* ── 본문: 시안 .doc — 13.5px/1.65 · h1 17px · h2 13.5px 위 선 · 문단 색 ink-sub · 코멘트는 카드 없이 줄 사이 선 · 글쓰기 상자 bg-2 ── */
+.pjh-bh { min-height: 24px; font-size: 11.5px; color: var(--muted); }
+.pjh-bh .pjh-sbtn.ghost { height: 24px; padding: 0 8px; border-color: var(--line-net); font-size: 11.5px; }
+.pjh-read { font-size: 13.5px; line-height: 1.65; }
+.pjh-read > .md h1 { font-size: 17px; font-weight: 800; letter-spacing: -.3px; margin: 0 0 6px; }
+.pjh-read > .md h2 { font-size: 13.5px; font-weight: 800; margin: 12px 0 3px; padding-top: 8px; border-top: 1px solid var(--line-row); }
+.pjh-read > .md h2:first-child { margin-top: 0; padding-top: 0; border: 0; }
+.pjh-read > .md h3 { font-size: 13px; font-weight: 800; margin: 8px 0 2px; }
+.pjh-read > .md p { margin: 0 0 6px; color: var(--ink-sub); }
+.pjh-read > .md ul, .pjh-read > .md ol { margin: 0 0 6px; padding-left: 18px; color: var(--ink-sub); }
+.pjh-read > .md li { margin: 1px 0; }
+.pjh-read > .md blockquote { margin: 0 0 8px; padding: 8px 10px; border: 0; border-radius: 8px; background: var(--bg-tint); color: var(--ink-sub); font-size: 12.5px; }
+.pjh-read.cols2 > .md { column-gap: 28px; column-rule: 1px solid var(--line-row); }
+.pjh-read.cols2 > .md h1 { column-span: all; }
+.pjh-cmt-h { font-size: 12px; font-weight: 700; color: var(--muted); height: 24px; }
+.pjh-cm { padding: 0; border: 0; background: none; gap: 9px; }
+.pjh-cm + .pjh-cm { padding-top: 8px; border-top: 1px solid var(--line-row); margin-top: 2px; }
+.pjh-cm .pjv-ava { width: 20px; height: 20px; font-size: 9.5px; }
+.pjh-cm-h { font-size: 12.5px; }
+.pjh-cm-h span { font-size: 11.5px; }
+.pjh-cm-t { font-size: 12.5px; color: var(--ink-sub); }
+.pjh-composer { height: 34px; padding: 0 6px 0 10px; border: 1px solid var(--line-net); border-radius: 10px; background: var(--bg-tint); align-items: center; }
+.pjh-composer-in { border: 0; background: none; padding: 0; font-size: 12.5px; line-height: 1.4; }
+.pjh-composer-in:focus { outline: none; }
+.pjh-composer .pjh-sbtn { width: 24px; height: 24px; padding: 0; justify-content: center; }
+.pjh-cmt-col { padding-left: 14px; }
+
+/* ── 지식: 줄 30px · 카드(제목 12.5px/700 · 요약 11.5px · 날짜) · 검색 상자 bg-2 30px · 흐름 가운데는 검정 알약 + 양쪽 화살표 ── */
+.pjh-search { height: 30px; padding: 0 10px; border-color: var(--line-net); border-radius: 9px; background: var(--bg-tint); }
+.pjh-kr { min-height: 30px; padding: 0 2px; }
+.pjh-kr .pjh-ic { color: var(--muted-2); }
+.pjh-kr-t { font-size: 12.5px; }
+.pjh-kn-rel { font-size: 11px; font-weight: 700; color: var(--muted-2); background: none; padding: 0; }
+.pjh-kn-pct { font-size: 11px; font-weight: 700; color: var(--mint-deep); }
+.pjh-kn-link { font-size: 12px; font-weight: 700; padding: 2px 4px; }
+.pjh-kc { padding: 8px 10px; gap: 3px; border-radius: 9px; }
+.pjh-kc-h .pjh-kr-t { font-size: 12.5px; font-weight: 700; }
+.pjh-kc-s { font-size: 11.5px; line-height: 1.45; color: var(--muted); }
+.pjh-kc-d { font-size: 11px; color: var(--muted-2); }
+.pjh-kc.find { min-height: 44px; flex-direction: column; gap: 3px; font-size: 12px; font-weight: 600; color: var(--muted-2); border-color: var(--line-net); }
+.pjh-klabel { font-size: 11.5px; font-weight: 700; letter-spacing: .3px; color: var(--muted); flex: none; }
+.pjh-klabel .pjh-grp-n { margin-left: 2px; }
+.pjh-kflow { grid-template-columns: minmax(0, 1fr) 120px minmax(0, 1fr); align-items: start; }
+.pjh-kmid { align-self: center; gap: 6px; font-size: 11.5px; color: var(--muted); text-align: center; }
+.pjh-kpj { padding: 8px 10px; border: 0; border-radius: 10px; background: var(--ink); color: var(--bg); font-size: 12px; font-weight: 800; }
+.pjh-kpj-m { font-size: 11.5px; color: var(--muted); }
+.pjh-karrow svg { width: 36px; height: 14px; color: var(--muted-3); display: block; }
+.pjh-grp { min-height: 24px; font-size: 11.5px; font-weight: 700; letter-spacing: .3px; color: var(--muted); }
+.pjh-grp b { color: var(--ink); }
+.pjh-two-k { gap: 14px; }
+.pjh-kcol + .pjh-kcol { border-left: 1px solid var(--line-row); padding-left: 14px; }
+
+/* ── 폴더: 나무(28px 줄 · 켜진 줄 bg-2 · 파일 수 오른쪽) · 낱장 = 타일(4:3 · bg-2 · 확장자 배지 / 이미지 채움) + 이름 12px/600 + 메타 11px · 끌어다 놓기 점선 ── */
+.pjh-tree { gap: 1px; border-right: 0; padding-right: 0; }
+.pjh-tree-r { height: 28px; min-height: 28px; padding: 0 8px; border-radius: 7px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
+.pjh-tree-r .pjh-ic { color: var(--warn-deep); }
+.pjh-tree-r.sub { padding-left: 24px; }
+.pjh-tree-r.on { background: var(--bg-tint); color: var(--ink); }
+.pjh-tree-n { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pjh-tree-c { font-size: 11px; color: var(--muted-2); }
+.pjh-crumb { height: 26px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.pjh-crumb b { color: var(--ink); }
+.pjh-crumb .btn-sm { height: 24px; padding: 0 8px; font-size: 12px; }
+.pjh-fgrid { gap: 10px; }
+.pjh-fc { padding: 0; gap: 5px; align-items: stretch; border: 0; border-radius: 0; }
+.pjh-fc:hover { background: none; }
+.pjh-fc:hover .pjh-fc-n { color: var(--blue); }
+.pjh-fc.on { outline: none; }
+.pjh-fc.on .pjh-th { outline: 2px solid var(--blue); outline-offset: 2px; }
+.pjh-th { width: 100%; aspect-ratio: 4 / 3; display: grid; place-items: center; border-radius: 6px; overflow: hidden; background: var(--bg-tint); border: 1px solid var(--line-row); box-sizing: border-box; }
+.pjh-th.img { border: 0; }
+.pjh-th.img img, .pjh-th.img .ft-img { width: 100%; height: 100%; object-fit: cover; }
+.pjh-th.fd { background: var(--warn-bg); border: 0; }
+.pjh-th.fd .ft-folder { width: 50%; }
+.pjh-th-ext { font-family: ui-monospace, Menlo, monospace; font-size: 9px; font-weight: 800; letter-spacing: .3px; color: var(--muted); padding: 1px 4px; border-radius: 3px; background: var(--bg); border: 1px solid var(--line); }
+.pjh-fc-n { text-align: left; font-size: 12px; font-weight: 600; }
+.pjh-fc-m { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pjh-fc.drop { border: 1.5px dashed var(--line-net); border-radius: 9px; align-items: center; justify-content: center; color: var(--muted-2); font-size: 12px; font-weight: 600; gap: 4px; padding: 8px; }
+.pjh-fr { min-height: 34px; gap: 9px; padding: 0 2px; border-top: 1px solid var(--line-row); }
+.pjh-fr:first-child { border-top: 0; }
+.pjh-fr-th { flex: none; width: 28px; }
+.pjh-fr-th .pjh-th { width: 28px; height: 28px; aspect-ratio: auto; border-radius: 6px; }
+.pjh-fr-th .pjh-th-ext { font-size: 8px; padding: 0 3px; }
+.pjh-fr-b { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.pjh-fr-n { font-size: 12.5px; font-weight: 600; }
+.pjh-fr-m { font-size: 11px; color: var(--muted); }
+.pjh-drop { min-height: 30px; border: 1.5px dashed var(--line-net); border-radius: 9px; color: var(--muted-2); font-size: 12px; font-weight: 600; flex-direction: row; gap: 6px; padding: 0; }
+.pjh-prev-ic { height: auto; }
+.pjh-prev-ic .pjh-th { aspect-ratio: 16 / 10; border-radius: 9px; }
+
+/* ── 타임라인: 레인 62px 라벨 · 날 칸 34px(한 줄 높이는 26) · 주말 bg-2 · 오늘 칸 강조 · 점 8/12/16/20 · 기록 줄 시안 .ev ── */
+.pjh-lane-h, .pjh-lane-r { grid-template-columns: 62px repeat(var(--n, 7), minmax(0, 1fr)); }
+.pjh-lane-h { min-height: 20px; border-bottom: 0; font-size: 11px; font-weight: 700; color: var(--muted-2); }
+.pjh-lane-d { text-align: center; padding: 2px 0; border-left: 1px solid var(--line-row); }
+.pjh-lane-d:first-of-type { border-left: 0; }
+.pjh-lane-d.wk { background: var(--bg-tint); }
+.pjh-lane-d.today { background: var(--bg-tint-2); color: var(--ink); font-weight: 800; }
+.pjh-lane-r { min-height: 34px; border-bottom: 0; }
+.pjh-lane-lab { font-size: 12px; font-weight: 700; color: var(--ink-sub); padding-right: 4px; gap: 5px; }
+.pjh-lane-lab .pjv-ava { width: 18px; height: 18px; font-size: 8.5px; }
+.pjh-lane-c { height: 34px; border-left: 1px solid var(--line-row); border-top: 1px solid var(--line-row); }
+.pjh-lane-c.wk { background: var(--bg-tint); }
+.pjh-lane-c.today { background: var(--bg-tint-2); }
+.pjh-w[class*="pjh-w"] .pjh-lane.short .pjh-lane-c, .pjh-w[class*="pjh-w"] .pjh-lane.short .pjh-lane-r { height: 26px; min-height: 26px; }
+.pjh-lane-dot.s1 { width: 8px; height: 8px; } .pjh-lane-dot.s2 { width: 12px; height: 12px; } .pjh-lane-dot.s3 { width: 16px; height: 16px; } .pjh-lane-dot.s4 { width: 20px; height: 20px; }
+.pjh-lane-det { border-top: 1px solid var(--line-row); padding-top: 6px; margin-top: 6px; }
+.pjh-det-h { display: flex; align-items: center; gap: 8px; height: 24px; font-size: 12.5px; font-weight: 800; color: var(--ink); flex: none; }
+.pjh-det-h .pjv-ava { width: 18px; height: 18px; font-size: 8.5px; }
+.pjh-det-h span { color: var(--muted-2); font-weight: 600; }
+.pjh-ev { min-height: 30px; padding: 4px 2px; gap: 8px; border-top: 0; }
+.pjh-ev + .pjh-ev { border-top: 1px solid var(--line-row); }
+.pjh-ev-t { width: 38px; font-family: inherit; font-size: 11px; color: var(--muted-2); text-align: left; padding-top: 2px; }
+.pjh-ev .pjv-ava { width: 18px; height: 18px; }
+.pjh-ev-s { font-size: 12.5px; font-weight: 600; }
+.pjh-ev-m { font-size: 11px; color: var(--muted); gap: 5px; }
+.pjh-ev-ty { font-size: 10.5px; font-weight: 700; padding: 0 5px; border-radius: 4px; background: var(--bg-tint-2); color: var(--ink-sub); }
+.pjh-legend { font-size: 11.5px; color: var(--muted); gap: 10px; }
+.pjh-legend i { margin-right: 0; }
+.pjh-legend-h { color: var(--muted-2); }
+
+/* ── 공통: 도구 줄 칩은 시안 .sel(24px · 12px/700 · ▾) · 위젯 안 격자 여백 ── */
+.pjh-chip { height: 24px; padding: 0 8px; border-radius: 7px; border-color: var(--line); font-size: 12px; font-weight: 700; color: var(--muted); }
+.pjh-chip b { color: var(--ink); }
+.pjh-tools { gap: 6px; margin-bottom: 2px; }
+.pjh-wf { font-size: 12.5px; }
+.pjh-wf .btn-sm { height: 28px; padding: 0 10px; font-size: 12.5px; font-weight: 700; border-radius: 8px; }
+/* 다듬기 2차(캡처 확인) — 할 일 원은 실선 · 타임라인 이름 칸 92px · 1×1 시각 안 잘림 · 세션 카드 메타 줄임표 · 1×1 «더» 는 바닥만 */
+.pjh-wb > .pjv-tasks-embedded .pjv-status-dot.sm { border-style: solid; border-color: var(--muted-3-line); }
+.pjh-wb > .pjv-tasks-embedded .pjv-status-dot.sm.inprog, .pjh-wb > .pjv-tasks-embedded .pjv-status-dot.sm.done { border-color: currentColor; }
+.pjh-lane-h, .pjh-lane-r { grid-template-columns: 92px repeat(var(--n, 7), minmax(0, 1fr)); }
+.pjh-ev-t { width: auto; min-width: 38px; white-space: nowrap; }
+.pjh-now-m > span:not(:last-child) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjh-now-m > span:last-child { flex: none; }
+/* 상태 원은 SVG(.pjv-status-ic) — 할 일의 점선(stroke-dasharray)을 실선으로, 선은 얇게(시안 1.6px) */
+.pjh-wb > .pjv-tasks-embedded svg.pjv-status-ic circle { stroke-dasharray: none; stroke-width: 1.9; }
+.pjh-wb > .pjv-tasks-embedded svg.pjv-status-ic.sm { width: 14px; height: 14px; }
+/* 폴더 줄(1칸 폭) — 시안: 폴더 줄은 오른쪽에 파일 수, 파일 줄은 크기 · 끌어다 놓기는 얇은 점선 한 줄(늘어나지 않는다) */
+.pjh-fr-r { flex: none; font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+.pjh-drop.wide { flex: none; min-height: 30px; }
+.pjh-fr-th .pjh-th.fd .ft-folder { width: 60%; }

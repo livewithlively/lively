@@ -67,7 +67,7 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
     upToast(r);
     refresh();
   }
-  const dropBox = (wide = false): HTMLElement => el('div', { class: 'pjh-drop' + (wide ? ' wide' : '') }, hubIcon('up', 14), el('span', { text: '끌어다 놓기' }));
+  const dropBox = (wide = false): HTMLElement => el('div', { class: 'pjh-drop' + (wide ? ' wide' : '') }, hubIcon('up', 14), el('span', { text: wide ? '파일을 여기에 끌어다 놓기' : '끌어다 놓기' }));
   const mkdirBtn = (): HTMLElement => {
     const b = btn('＋ 폴더', 'btn-ghost');
     b.onclick = (e) => {
@@ -102,24 +102,38 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
 
     const frow = (it: any): HTMLElement => {
       const rel = relOf(it.name);
+      const isDir = it.type === 'dir';
+      const right = el('span', { class: 'pjh-fr-r', text: isDir ? '' : fmtSize(it.size || 0) });
+      if (isDir) listDir(rel).then((its: any[]) => { right.textContent = String(its.filter((x) => x.type !== 'dir').length); });   // 시안: 폴더 줄 오른쪽은 파일 수
       return el('div', { class: 'pjh-fr' + (nav.picked === rel ? ' on' : ''), title: it.name, onclick: () => openItem(it, rel) },
-        el('span', { class: 'pjh-file-ic' }, fileThumb(pid, it, rel, B)),
-        el('span', { class: 'pjh-fr-n', text: it.name }),
-        it.type === 'dir' ? el('span', { class: 'pjh-fr-m', text: '폴더' }) : el('span', { class: 'pjh-fr-m', text: fmtSize(it.size || 0) }),
-        it.mtime ? el('span', { class: 'pjh-fr-m', text: relTime(new Date(it.mtime).toISOString()) }) : null);
+        el('span', { class: 'pjh-fr-th' }, tile(it, rel)),
+        el('span', { class: 'pjh-fr-b' }, el('span', { class: 'pjh-fr-n', text: it.name }),
+          isDir ? null : el('span', { class: 'pjh-fr-m', text: it.mtime ? relTime(new Date(it.mtime).toISOString()) : '' })),
+        right);
+    };
+    const ext = (n: string): string => { const m = String(n).toLowerCase().match(/\.([a-z0-9]{1,5})$/); return m ? m[1].toUpperCase() : ''; };
+    const isImg = (n: string): boolean => /\.(png|jpe?g|gif|webp|svg|bmp|avif|heic)$/i.test(String(n));
+    const tile = (it: any, rel: string): HTMLElement => {
+      const t = el('div', { class: 'pjh-th' + (it.type === 'dir' ? ' fd' : isImg(it.name) ? ' img' : '') });
+      if (it.type === 'dir' || isImg(it.name)) t.append(fileThumb(pid, it, rel, B));
+      else t.append(el('span', { class: 'pjh-th-ext', text: ext(it.name) || 'FILE' }));
+      return t;
     };
     const fcard = (it: any): HTMLElement => {
       const rel = relOf(it.name);
       return el('div', { class: 'pjh-fc' + (nav.picked === rel ? ' on' : ''), title: it.name, onclick: () => openItem(it, rel) },
-        el('div', { class: 'pjh-fc-ic' }, fileThumb(pid, it, rel, B)),
-        el('div', { class: 'pjh-fc-n', text: it.name }));
+        tile(it, rel),
+        el('div', { class: 'pjh-fc-n', text: it.name }),
+        el('div', { class: 'pjh-fc-m', text: [it.type === 'dir' ? '폴더' : fmtSize(it.size || 0), it.mtime ? relTime(new Date(it.mtime).toISOString()) : ''].filter(Boolean).join(' · ') }));
     };
     const tree = (): HTMLElement => {
       const t = el('div', { class: 'pjh-tree' });
-      t.append(el('div', { class: 'pjh-tree-r' + (!nav.path ? ' on' : ''), onclick: () => { nav.path = ''; nav.picked = ''; ctx.refreshGrid(); } }, hubIcon('folder', 13), el('span', { text: '루트' }), el('span', { class: 'pjh-tree-c', text: String(root.files.length) })));
+      t.append(el('div', { class: 'pjh-tree-r' + (!nav.path ? ' on' : ''), onclick: () => { nav.path = ''; nav.picked = ''; ctx.refreshGrid(); } }, hubIcon('folder', 14), el('span', { class: 'pjh-tree-n', text: P.name || '루트' }), el('span', { class: 'pjh-tree-c', text: String(root.files.length) })));
       for (const d of root.dirs) {
         const on = nav.path === d.name || nav.path.startsWith(d.name + '/');
-        t.append(el('div', { class: 'pjh-tree-r sub' + (on ? ' on' : ''), onclick: () => { nav.path = d.name; nav.picked = ''; ctx.refreshGrid(); } }, hubIcon('folder', 13), el('span', { text: d.name })));
+        const cnt = el('span', { class: 'pjh-tree-c' });
+        listDir(d.name).then((its: any[]) => { cnt.textContent = String(its.filter((x) => x.type !== 'dir').length); });   // 파일 수 — 목록은 캐시(30초)
+        t.append(el('div', { class: 'pjh-tree-r sub' + (on ? ' on' : ''), onclick: () => { nav.path = d.name; nav.picked = ''; ctx.refreshGrid(); } }, hubIcon('folder', 14), el('span', { class: 'pjh-tree-n', text: d.name }), cnt));
       }
       return t;
     };
@@ -154,7 +168,7 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
       const n = w >= 3 ? 6 : 4;
       const grid = el('div', { class: 'pjh-fgrid', style: 'grid-template-columns:repeat(' + (n + 1) + ',1fr)' });
       for (const it of recentFiles(items, n)) grid.append(fcard(it));   // 낱장은 파일만 — 폴더는 나무(3칸)·[폴더 열기]
-      grid.append(el('div', { class: 'pjh-fc drop' }, hubIcon('up', 16), el('span', { text: '끌어다 놓기' })));
+      grid.append(el('div', { class: 'pjh-fc drop' }, hubIcon('up', 14), el('span', { text: '끌어다 놓기' })));
       if (w >= 3) body.append(el('div', { class: 'pjh-two-f', style: 'grid-template-columns:150px minmax(0,1fr)' }, tree(), grid));
       else body.append(grid);
       body.append(progBox);
@@ -164,9 +178,11 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
     // 2×2 이상 — 나무 + 경로 줄 + 낱장 격자 (+ 3×2 옆 칸)
     const cols = w >= 3 ? 3 : 4;
     const grid = el('div', { class: 'pjh-fgrid tall', style: 'grid-template-columns:repeat(' + cols + ',1fr)' });
-    const capCards = cols * Math.max(1, Math.floor((h * 276 - 16 - 150) / 92)) - 1;   // 마지막 자리는 «끌어다 놓기» 카드
+    // 낱장 한 줄 높이 ≈ 타일(4:3, 폭은 3칸 3열 ≈150px · 2칸 4열 ≈100px) + 이름·메타 44px. 몸통에서 경로 줄·여백 150px 을 뺀다. 마지막 자리는 «끌어다 놓기».
+    const cardPx = cols === 3 ? 160 : 124;
+    const capCards = cols * Math.max(1, Math.floor((h * 276 - 16 - 150) / cardPx)) - 1;
     for (const it of recentFiles(items, capCards)) grid.append(fcard(it));   // 낱장은 파일만 — 폴더는 왼쪽 나무
-    grid.append(el('div', { class: 'pjh-fc drop' }, hubIcon('up', 16), el('span', { text: '끌어다 놓기' })));
+    grid.append(el('div', { class: 'pjh-fc drop' }, hubIcon('up', 14), el('span', { text: '끌어다 놓기' })));
     const main = el('div', { class: 'pjh-fmain' }, crumb(), grid, progBox);
     const parts: HTMLElement[] = [tree(), main];
     let picked: any = null;
@@ -178,7 +194,7 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
       else {
         const rel = relOf(picked.name);
         side.append(el('div', { class: 'pjh-side-l', text: '고른 파일' }),
-          el('div', { class: 'pjh-prev-ic' }, fileThumb(pid, picked, rel, B)),
+          el('div', { class: 'pjh-prev-ic' }, tile(picked, rel)),
           el('div', { class: 'pjh-side-t' }, el('span', { class: 'pjh-sr-n', text: picked.name })),
           el('div', { class: 'pjh-kv' },
             el('b', { text: '크기' }), el('span', { text: fmtSize(picked.size || 0) }),

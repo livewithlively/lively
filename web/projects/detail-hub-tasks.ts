@@ -81,7 +81,8 @@ export const fillTasks: Fill = (ctx, f, body, foot, sub, acts) => {
     groups = groups.map((g) => ({ ...g, tasks: g.tasks.filter((t) => byAssignee(t) && byDue(t)) }));
   }
   const budget = rowsBudget(h, groups.length, toolsRow ? 30 : 0);
-  const caps = splitRows(groups.map((g) => g.tasks.length), budget);
+  const tiny = w <= 1 && h <= 1;   // 1×1 — «더» 줄을 안 그리고(바닥 줄이 말한다) 그 자리도 줄로 쓴다
+  const caps = tiny ? [Math.min(groups[0].tasks.length, budget)] : splitRows(groups.map((g) => g.tasks.length), budget);
   const cols = taskColsFor(w, pref);
   const shown = caps.reduce((a, c) => a + c, 0);
 
@@ -107,7 +108,7 @@ export const fillTasks: Fill = (ctx, f, body, foot, sub, acts) => {
 
   if (o.tasksList) {
     const sec = o.tasksList({
-      chrome: false, groups, cap: caps, onMore: open,
+      chrome: false, groups, cap: caps, onMore: open, noMore: tiny,
       rowOpts: { assigneeNames: w >= 3 },
       fields: w >= 3 && h >= 2 ? (P.fields || []) : [],   // 커스텀 필드 열은 3×2 이상에서만 — 좁은 폭에선 이름을 먹는다
     });

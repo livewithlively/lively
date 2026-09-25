@@ -4,7 +4,7 @@
 //   2×1 · 3×1  필요 | 산출 두 단(추천은 필요 밑 점선)   2×2+  흐름: 필요 → [프로젝트 · 세션 N · 태스크 N] → 산출
 //   3×2+ 흐름 + 오른쪽 검색 칸
 //  연결/해제는 프로젝트 지식 API(POST /v6/projects/:id/knowledge {name, relation[, unlink]}) — 섹션(detail-knowledge)과 같은 문.
-import { api, el, lifecycleDot, toast } from '../core.js';
+import { api, el, lifecycleDot, relTime, toast } from '../core.js';
 import { type Fill, btn, emptyNote, footText, hubIcon } from './detail-hub-kit.js';
 
 const knName = (k: any): string => String(k.name || k.knowledge_name || '');
@@ -51,10 +51,12 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
   // 카드(1×N · 흐름) — 제목 + 한 줄 요약(있으면)
   const kcard = (k: any, rel: 'required' | 'produced'): HTMLElement => {
     const name = knName(k);
+    const when = k.updated_at || k.created_at;
     return el('div', { class: 'pjh-kc' },
-      el('div', { class: 'pjh-kc-h' }, hubIcon('doc', 13), el('a', { class: 'pjh-kr-t', href: '#/k/' + encodeURIComponent(name), ...KN_NEW_TAB, text: k.title || name }),
+      el('div', { class: 'pjh-kc-h' }, el('a', { class: 'pjh-kr-t', href: '#/k/' + encodeURIComponent(name), ...KN_NEW_TAB, text: k.title || name }),
         el('button', { class: 'pjh-kr-x', type: 'button', title: '연결 해제', text: '✕', onclick: (e: Event) => { e.stopPropagation(); unlink(name, rel); } })),
-      k.summary ? el('div', { class: 'pjh-kc-s', text: String(k.summary).slice(0, 120) }) : null);
+      k.summary ? el('div', { class: 'pjh-kc-s', text: String(k.summary).slice(0, 120) }) : null,
+      when ? el('div', { class: 'pjh-kc-d', text: relTime(when) }) : null);
   };
   const grp = (label: string, n: number, hint?: string): HTMLElement => el('div', { class: 'pjh-grp' }, el('b', { text: label }), el('span', { class: 'pjh-grp-n', text: String(n) }), hint ? el('span', { class: 'pjh-grp-h', text: '· ' + hint }) : null);
 
@@ -101,7 +103,8 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
     for (const m of fresh) recHost.append(rrow(m));
   });
   const sidePane = w >= 3 && h >= 2;
-  if (!sidePane) body.append(searchBox());
+  const flowView = w >= 2 && h >= 2 && !sidePane;   // 2×2 — 위 검색 상자 대신 «필요 지식 찾기» 점선 카드(누르면 그 자리에 검색)
+  if (!sidePane && !flowView) body.append(searchBox());
   body.append(results, normal);
 
   if (w <= 1 && h <= 1) {
@@ -126,11 +129,15 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
     // 흐름 — 필요 → [프로젝트] → 산출
     const sessN = el('span', { text: '세션 …' });
     ctx.D.sessions().then((ss: any[]) => { sessN.textContent = '세션 ' + ss.length; });
-    const mid = el('div', { class: 'pjh-kmid' }, arrow(), el('div', { class: 'pjh-kpj' }, el('b', { text: P.name || '이 프로젝트' }), el('span', {}, sessN, ' · 태스크 ' + ((P.tasks || []).length))), arrow());
-    const findCard = el('button', { class: 'pjh-kc find', type: 'button' }, hubIcon('search', 13), '필요한 지식 찾기');
-    findCard.onclick = () => { const inp = (sidePane ? side : body).querySelector('.pjh-search-in') as HTMLInputElement | null; if (inp) inp.focus(); };
-    const left = el('div', { class: 'pjh-kside' }, el('div', { class: 'pjh-side-l', text: '필요 — 세션이 읽고 시작 ' + req.length }), ...req.map((k) => kcard(k, 'required')), findCard, recHost);
-    const right = el('div', { class: 'pjh-kside' }, el('div', { class: 'pjh-side-l', text: '산출 — 이 프로젝트가 만든 것 ' + prod.length }), ...prod.map((k) => kcard(k, 'produced')));
+    const mid = el('div', { class: 'pjh-kmid' }, arrow(), el('div', { class: 'pjh-kpj', text: P.name || '이 프로젝트' }), el('span', { class: 'pjh-kpj-m' }, sessN, ' · 태스크 ' + ((P.tasks || []).length)), arrow());
+    const findCard = el('button', { class: 'pjh-kc find', type: 'button' }, hubIcon('search', 13), '＋ 필요 지식 찾기');
+    findCard.onclick = () => {
+      let inp = body.querySelector('.pjh-search-in') as HTMLInputElement | null;
+      if (!inp) { body.prepend(searchBox()); inp = body.querySelector('.pjh-search-in') as HTMLInputElement | null; }
+      if (inp) inp.focus();
+    };
+    const left = el('div', { class: 'pjh-kside' }, el('div', { class: 'pjh-klabel' }, '필요 — 세션이 읽고 시작 ', el('span', { class: 'pjh-grp-n', text: String(req.length) })), ...req.map((k) => kcard(k, 'required')), findCard, recHost);
+    const right = el('div', { class: 'pjh-kside' }, el('div', { class: 'pjh-klabel' }, '산출 — 이 프로젝트가 만든 것 ', el('span', { class: 'pjh-grp-n', text: String(prod.length) })), ...prod.map((k) => kcard(k, 'produced')));
     if (!prod.length) right.append(el('div', { class: 'pjh-stat', text: '작업이 진행되면 여기에 쌓입니다.' }));
     normal.append(el('div', { class: 'pjh-kflow' }, left, mid, right));
     paintRecs(2);
@@ -147,4 +154,4 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
   }
   foot.append(footText('필요 ' + req.length + ' · 산출 ' + prod.length), btn('지식', 'btn-ghost', open));
 };
-const arrow = (): HTMLElement => el('span', { class: 'pjh-karrow' }, hubIcon('right', 16));
+const arrow = (): HTMLElement => { const a = el('span', { class: 'pjh-karrow' }); a.innerHTML = '<svg viewBox="0 0 34 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7h28"/><path d="M25 2l5 5-5 5"/></svg>'; return a; };
