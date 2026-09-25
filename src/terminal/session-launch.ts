@@ -21,10 +21,7 @@ import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import { isWorkSession, sessionKindFromRequest } from "../sessions/session-kind.js";
-import { createSession, killSession, normalizeCap, sessionPrefix, type CreateInput, type SessionInfo } from "./terminal-sessions.js";
-import { mintSessionHookToken, mintSessionMcpToken, revokeSessionHookToken } from "./profiles.js";
-import { relayCreateNodeSession, type NodeSessionCredsDeps } from "./session-creds.js";   // #4233 — 노드 세션의 세션 주인 신원 봉투
-import crypto from "node:crypto";
+import { createSession, killSession, normalizeCap, type CreateInput, type SessionInfo } from "./terminal-sessions.js";
 import { normalizeTheme } from "./catalog.js";
 import { autoTrustWorkspace } from "./session-create-guards.js";
 import { mirrorNodeSession } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
@@ -150,38 +147,6 @@ export async function relayNodeOp<T>(nodeId: string, op: NodeOp, args: Record<st
   }
 }
 
-// ── 노드 세션의 «그 세션 주인» 신원(#4233) — 왜·어떻게는 session-creds.ts 머리말 ─────────────────────────
-//  노드 세션을 만드는 입구(아래 launchSession · routes.ts 하네스 전환·복원)는 전부 createNodeSession 한 길로
-//   노드에 create 를 보낸다. 게이트웨이가 세션 id 를 정하고 그 id 이름표로 세션 주인 토큰을 구워 싣는다.
-export const nodeSessionCredsDeps: NodeSessionCredsDeps = {
-  //  노드의 sessions.ts 가 만들던 것과 **같은 모양**(주인 접두 + 8 hex). 노드는 접두가 이 주인 것일 때만 받는다 —
-  //   릴레이가 노드에 넘기는 user 가 { userId } 뿐이라 접두도 그 모양으로 계산한다(userSlug 는 userId 만 본다).
-  newId: (owner) => `${sessionPrefix({ userId: owner } as LivelyUser)}${crypto.randomBytes(4).toString("hex")}`,
-  mintHook: mintSessionHookToken,
-  mintMcp: mintSessionMcpToken,
-  revoke: revokeSessionHookToken,
-  relay: (nodeId, op, args) => relayNodeOp<SessionInfo>(nodeId, op as NodeOp, args),
-  warn: (msg, meta) => logger.warn(meta, msg),
-};
-
-/** 노드에 세션을 만든다(create 릴레이 + 세션 주인 신원 봉투). op 는 입구가 쓰던 값 그대로 받는다. */
-export function createNodeSession(
-  nodeId: string, op: NodeOp, ownerId: string, input: CreateInput, extra: { hostProfile: boolean; invites: string[] },
-): Promise<SessionInfo> {
-  return relayCreateNodeSession(nodeId, op, ownerId, input, extra, nodeSessionCredsDeps);
-}
-
-/** 노드 세션 되물림(생성 롤백 자리) — kill 릴레이 뒤 그 세션 id 이름표의 토큰을 회수한다(kill 이 실패해도 회수는 한다). */
-export async function killNodeSessionAndRevoke(nodeId: string, ownerId: string, id: string): Promise<void> {
-  try { await relayNodeOp(nodeId, "kill", { user: { userId: ownerId }, id }); }
-  finally { await revokeNodeSessionCreds(id); }
-}
-
-/** 노드 세션이 내려갔다 — 그 세션 주인 토큰을 회수한다(중앙 killSession 이 하던 일의 노드판). 실패는 로그만. */
-export async function revokeNodeSessionCreds(id: string): Promise<void> {
-  await revokeSessionHookToken(id).catch((e) => logger.warn({ err: e, id }, "노드 세션 신원 토큰 회수 실패(비치명)"));
-}
-
 // 노드 세션 생성 게이트(#869) — 노드 실재·활성·연결 + **소유 또는 관리자 지정 공유**(#1540, nodeOpenTo).
 //  초대는 호출자가 구성원 디렉터리로 검증해 노드엔 '검증된 목록'만 넘긴다(노드는 DB 가 없어 스스로 검증 불가 —
 //  F7 정책/실행 분리).
@@ -304,8 +269,7 @@ export type LaunchedSession = Omit<SessionInfo, "node"> & { node?: { id: string;
  *   ① 게이트(requireCreatableNode) ② hostProfile(#1541 — member 노드 && 생성자=주인이면 그 PC 의 네이티브 하네스 설정 그대로;
  *   조회 실패 = false, 주입 유지) ③ 앱 세션이면 토큰·자산 선계산(prepareRemoteAppSession) ④ 프로젝트 세션이면 첫 지시를
  *   create 에서 떼어 **DB 소속을 쓴 뒤** 넣는다(#1867 nodeProjectCreatePlan — 안 그러면 노드의 첫 훅이 아직 없는 소속을
- *   보고 또 프로젝트를 만든다; 소속 없는 세션은 종전대로 create 가 바로 넣는다) ⑤ relay create(createNodeSession — 게이트웨이가 정한
- *   세션 id + 세션 주인 신원 봉투, #4233) ⑥ 워크스페이스 맵·앱 인스턴스
+ *   보고 또 프로젝트를 만든다; 소속 없는 세션은 종전대로 create 가 바로 넣는다) ⑤ relay create ⑥ 워크스페이스 맵·앱 인스턴스
  *   ⑦ 프로젝트 소속 확정(bindNodeSessionProjectOrKill — 실패면 방금 만든 세션을 죽이고 503) ⑧ desired-state 미러(#1791 —
  *   정본은 게이트웨이가 쓴다, 노드엔 DB 가 없다. 죽어도 '복원 가능(그 노드)'로 남는 근거) ⑨ 보류한 첫 지시 주입(신뢰 대화상자
  *   자동 수락은 라이블리가 만든 자리에서만 — autoTrustWorkspace).
@@ -320,8 +284,8 @@ export async function launchSession(user: LivelyUser, input: CreateInput, opts: 
     const remoteInput = await prepareRemoteAppSession(input, me);
     const op: NodeOp = input.appId ? "createAppSession" : "create";
     const plan = nodeProjectCreatePlan(remoteInput, !!input.projectId && nodeSupports(nodeId, "injectFirstPrompt"));
-    const session = await createNodeSession(nodeId, op, me, plan.createInput, { hostProfile, invites: opts.invites });
-    await recordSessionTenant(session.id, () => killNodeSessionAndRevoke(nodeId, me, session.id));
+    const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: me }, input: { ...plan.createInput, invites: [], hostProfile }, invites: opts.invites });
+    await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
     await registerSessionInstance(session.id, me, { appId: input.appId, projectId: input.projectId, title: session.label });
     if (input.projectId && input.projectSrc !== "org") {
       await bindNodeSessionProjectOrKill({

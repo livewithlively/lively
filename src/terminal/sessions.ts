@@ -51,7 +51,6 @@ import { sessionActivityTitle, paneAwaitingInput, resolveAgentPhase, observeAgen
 import { sessionMetaCmds, sessionWindowCmds, metaHealCmds, needsMetaHeal, makeMetaHealGate } from "./session-meta-heal.js";   // #3892 — 표식 한 벌 + 표식 없는 세션 되채우기
 import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, mintSessionMcpToken, revokeSessionHookToken } from "./profiles.js";
 import { ensureMemberKitSeeded } from "./member-kit-seed.js";
-import { presetSessionId, sessionCredsEnvArgs } from "./session-creds.js";   // #4233 — 노드 세션의 세션 주인 신원 봉투
 import { logger } from "../log.js";
 import { canSeeSession } from "./write-cap.js";
 import { loadDesiredMap, loadDesiredOne, resolveDesired, resolveSessionDir } from "../sessions/session-desired.js";
@@ -534,9 +533,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   const osUser = await ensureMemberOsUser(user);
   //  ⚠ #3668 T2 — 멤버 홈 준비(키트 시딩·git 자격)는 **여기가 아니다.** 세션 컨테이너를 확보한 뒤에 돈다
   //   (prepareMemberHome 머리말 — 생성 순서 뒤집기). 종전엔 이 자리였다.
-  //  #4233 — 노드 세션이면 게이트웨이가 id 를 먼저 정해 보낸다(그 id 이름표로 세션 주인 토큰을 구웠다 — session-creds.ts).
-  //   주인 접두·형식이 맞을 때만 쓰고, 아니면 종전대로 여기서 만든다.
-  const id = presetSessionId(sessionPrefix(user), input.sessionCreds) ?? `${sessionPrefix(user)}${crypto.randomBytes(4).toString("hex")}`;
+  const id = `${sessionPrefix(user)}${crypto.randomBytes(4).toString("hex")}`;
   // cwd는 사용자가 고른 workspace 좌표 그대로다. 미지정이면 personal workspace 루트이며,
   // 세션 id 폴더나 프로젝트 표현 파일을 만들지 않는다.
   const rootKeyUsed = input.rootKey || "personal";
@@ -825,11 +822,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //  왜 여기만인지·왜 MCP 신원은 안 바뀌는지는 profiles.mintSessionHookToken 주석. 격리 경로는 멤버 홈의
     //  ~/.lively/token 이 이미 그 멤버 것이고 sudo env_reset 도 지나야 해서 넣지 않는다.
     //  best-effort — 못 구우면 종전대로 공유 토큰으로 떨어진다(무회귀).
-    //  #4233 — **노드에서는 여기서 못 굽는다**(DB 없음 — 발급이 조용히 실패해 공용 토큰으로 떨어지던 자리).
-    //   게이트웨이가 구워 보낸 봉투(input.sessionCreds)가 이 세션 것이면 그것을 싣고, 여기서 굽지 않는다.
-    const prepared = input.sessionCreds && input.sessionCreds.id === id ? input.sessionCreds : null;
-    const hookToken = prepared ? null : await mintSessionHookToken(ownerId(user), id).catch(() => null);
-    if (prepared) args.push(...sessionCredsEnvArgs(prepared, id));
+    const hookToken = await mintSessionHookToken(ownerId(user), id).catch(() => null);
     if (hookToken) args.push("-e", `LIVELY_TOKEN=${hookToken}`);
     // MCP 신원(#2234) — 훅과 **같은 이유, 다른 채널**이다. MCP 는 stdio 프록시로 붙고 그 프록시는 매 호출
     //  공유 `~/.lively/token`(= 키트를 깐 사람) 을 읽으므로, 이 pane 의 MCP 가 전부 남의 신원으로 나갔다.
@@ -837,7 +830,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //  #1979 세션 자동 이름짓기가 이 박스에서 구조적으로 불가능했다.
     //  ⚠ 훅 토큰과 **따로** 싣는다 — 권한 폭이 다르다(훅=세션 최소권한, MCP=그 멤버가 가진 만큼).
     //  ⚠ 값이 없으면(멤버 미상·scope 0) 아무것도 안 실어 종전 경로(공유 파일)로 떨어진다 — 무회귀.
-    const mcpToken = prepared ? null : await mintSessionMcpToken(ownerId(user), id).catch(() => null);
+    const mcpToken = await mintSessionMcpToken(ownerId(user), id).catch(() => null);
     if (mcpToken) args.push("-e", `LIVELY_MCP_TOKEN=${mcpToken}`);
     // #3982 — psmux는 `--`가 없으면 pane argv를 한 PowerShell 명령 문자열로 다시 합친다. 실행 경계를 명시해
     // 대화 안내·설정 같은 공백/따옴표가 셸 문법이나 사용자의 zsh/PowerShell 명령으로 재해석되지 않게 한다.

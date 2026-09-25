@@ -1,7 +1,6 @@
 // 중앙 박스 — 큐레이트 설정 카탈로그(허용 루트·하네스 플래그·세션 타입). terminal-sessions.ts 분할(#1313 R15).
 //  순수 상수·타입·무의존 순수함수만 둔다(다른 terminal 모듈이 전부 이 파일을 딛고 선다 — 역방향 import 금지).
 import type { SessionKind } from "../sessions/session-kind.js";
-import type { PreparedSessionCreds } from "./session-creds.js";
 import path from "node:path";
 import os from "node:os";
 
@@ -536,9 +535,6 @@ export interface CreateInput {
   appId?: string;
   // 게이트웨이가 정책·grant·DB를 확인해 준비한 원격 실행용 봉투. HTTP body에서는 받지 않고 내부 node relay만 사용한다.
   appSession?: PreparedAppSession;
-  // #4233 — 노드 세션의 «그 세션 주인» 신원 봉투(게이트웨이가 정한 세션 id + 훅·MCP 토큰). appSession 과 같은 규칙:
-  //  HTTP body 에서는 받지 않고 노드 릴레이로만 온다. 왜 필요한지는 session-creds.ts 머리말.
-  sessionCreds?: PreparedSessionCreds;
 }
 
 // ── 세션 런처(#1516) — 하네스가 죽어도 세션은 산다 ──
