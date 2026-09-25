@@ -29,7 +29,7 @@ function stub(o?: {
 
 test("노드 Codex App Server 입력은 chatSend만 쓰고 대화 좌표를 남긴다", async () => {
   const h = stub({ chat: { ok: true, convId: "codex-thread", steered: true } });
-  const r = await deliverPromptToNode({ harness: "codex", env: { LIVELY_CODEX_CHAT: "app-server" } }, h.deps);
+  const r = await deliverPromptToNode({ harness: "codex", stamp: "app-server", env: {} }, h.deps);
   assert.deepEqual(h.calls, ["chat"]);
   assert.deepEqual(h.remembered, ["codex-thread"]);
   assert.deepEqual(r, {
@@ -40,16 +40,25 @@ test("노드 Codex App Server 입력은 chatSend만 쓰고 대화 좌표를 남�
 test("노드 Codex App Server 대화 전송 실패는 PTY 셸 입력으로 폴백하지 않는다", async () => {
   const h = stub({ chat: { ok: false, error: "app-server 시작 실패" } });
   await assert.rejects(
-    () => deliverPromptToNode({ harness: "codex", env: { LIVELY_CODEX_CHAT: "app-server" } }, h.deps),
+    () => deliverPromptToNode({ harness: "codex", stamp: "app-server", env: {} }, h.deps),
     (e: unknown) => !!e && typeof e === "object" && (e as { status?: number }).status === 503,
   );
   assert.deepEqual(h.calls, ["chat"]);
 });
 
-test("노드 Codex 기본 TUI는 기존 PTY 입력을 쓴다", async () => {
+//  ★ #4135 — 노드 세션의 갈림은 **배포 기본이 아니라 그 세션의 표식**이 정한다. 표식은 그 노드의 tmux 에 있고
+//   게이트웨이는 스냅샷 행에서 읽어 넘긴다(registry.nodeSessionRuntime). 기본만 보면 기본을 뒤집는 순간
+//   이미 떠 있는 app-server 세션(pane=셸)에 PTY 입력이 들어간다 — 사람의 말이 셸 명령이 된다(#3982).
+test("노드 codex — terminal 표식(TUI로 뜬 새 세션)은 PTY 입력을 쓴다", async () => {
   const h = stub();
-  assert.deepEqual(await deliverPromptToNode({ harness: "codex", env: {} }, h.deps), { ok: true });
+  assert.deepEqual(await deliverPromptToNode({ harness: "codex", stamp: "terminal", env: {} }, h.deps), { ok: true });
   assert.deepEqual(h.calls, ["inject"]);
+});
+
+test("★ 노드 codex — 표식이 없는 세션(옛 번들 노드가 만든 app-server 세션)은 PTY 로 안 넣는다", async () => {
+  const h = stub({ chat: { ok: true, convId: "codex-thread" } });
+  await deliverPromptToNode({ harness: "codex", env: {} }, h.deps);
+  assert.deepEqual(h.calls, ["chat"], "표식이 없다고 TUI 로 보면 그 세션의 셸에 사람의 말이 찍힌다");
 });
 
 test("노드 대화 기능을 켜지 않은 다른 하네스는 기존 PTY 입력을 쓴다", async () => {
