@@ -13,7 +13,7 @@
 //   여기서 import 하는 것은 리프뿐(core · files-icons · files-format · popover · status · detail-hub-layout · detail-hub-kit · 위젯 채움 모듈).
 //  ⚠ 열기(→ 도구 전폭)는 페이지에선 주소(#/projects2/p/:id/<도구>)로, 모달(.pjv-pm) 안에선 제자리 전환으로 — 모달은 자기 주소를
 //   소유하므로(#808) 해시를 바꾸면 라우터가 모달을 닫는다.
-import { api, el } from '../core.js';
+import { api, el, loadPeopleAvatars, personDisplayName } from '../core.js';
 import { pjvPopover } from './popover.js';
 import {
   HUB_COLS, HUB_MAX_H, HUB_PRESETS, HUB_TOOL_LABEL, HUB_TOOLS, HUB_VIEW_LABEL, applyHubPreset, hideHubItem, hubView,
@@ -48,7 +48,9 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
     sessions: () => L.sessions.get(), files: () => L.files.get(), acts: () => L.acts.get(), comments: () => L.comments.get(), recs: () => L.recs.get(),
     invalidate: (key) => L[key].drop(),
   };
-  const memberName = (mid: string): string => { const m = (o.members || []).find((x) => x.member_id === mid); return (m && m.display_name) || mid || ''; };
+  // 사람 이름 — 프로젝트 구성원 → 조직 명부(avatar.ts 의 같은 맵) → id. 명부가 아직 안 왔으면 오는 대로 한 번 다시 그린다(id 로 선 첫 그림을 이름으로).
+  const memberName = (mid: string): string => { const m = (o.members || []).find((x) => x.member_id === mid); return (m && m.display_name) || personDisplayName(mid) || mid || ''; };
+  let namesPending = !personDisplayName(String(o.meId || ''));
 
   // 배치 상태
   let { layout, scope } = loadHubLayout(pid);
@@ -206,6 +208,7 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
   function renderGrid(): void {
     grid.classList.toggle('edit', editing);
     grid.replaceChildren(...layout.items.map((it) => widget(it.tool, it.w, it.h)));
+    if (namesPending) { namesPending = false; loadPeopleAvatars().then(() => { if (grid.isConnected && !focus) renderGrid(); }); }
   }
   function render(): void {
     host.replaceChildren();

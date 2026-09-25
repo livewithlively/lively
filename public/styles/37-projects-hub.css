@@ -778,3 +778,36 @@ a.pjh-row-link.pjh-row-n:hover { color: var(--blue); }
 .pjh-fr-r { flex: none; font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
 .pjh-drop.wide { flex: none; min-height: 30px; }
 .pjh-fr-th .pjh-th.fd .ft-folder { width: 60%; }
+/* 폴더 1×1 — 시안 .short-rows: 줄 29px 한 줄(이름 · 크기), 타일 24px. 셋 + 끌어다 놓기가 146px 안에 든다. */
+.pjh-frl.short .pjh-fr { min-height: 29px; }
+.pjh-frl.short .pjh-fr-m { display: none; }
+.pjh-frl.short .pjh-fr-th { width: 24px; }
+.pjh-frl.short .pjh-fr-th .pjh-th { width: 24px; height: 24px; }
+/* 본문 읽기 — 줄 높이 22px 고정(6줄·9줄 단위로 잘려 줄 중간이 안 끊긴다) · 한 줄 높이는 스크롤 없이 아래 페이드 · 두 줄 이상은 스크롤 + 페이드 */
+.pjh-read { line-height: 22px; position: relative; }
+.pjh-read > .md { line-height: 22px; }
+.pjh-read.clip { overflow: hidden; }
+.pjh-body-content { position: relative; }
+.pjh-body-content::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 28px; background: linear-gradient(to bottom, transparent, var(--bg)); pointer-events: none; }
+/* ── 고도화 2차(시안 대조 2026-09-25 밤) — 머리 «열기 →» 상시 · 바닥 단추는 글자 단추로 오른쪽에 모아 · 묶음 머리엔 알약만 · 본문 두 단은 차례로 · 끌어다 놓기 한 줄 · 세션 옆 칸 ── */
+.pjh-open { opacity: 1; }
+.pjh-wf > .btn, .pjh-wf .btn-sm { height: 26px; padding: 0 6px; border: 0; background: none; border-radius: 7px; color: var(--ink-sub); font-size: 12.5px; font-weight: 700; }
+.pjh-wf > .btn:hover, .pjh-wf .btn-sm:hover { background: var(--bg-tint); color: var(--ink); box-shadow: none; }
+.pjh-wf > .btn + .btn { margin-left: 0; }
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-head svg.pjv-status-ic { display: none; }
+.pjh-read.cols2 { display: flex; flex-direction: column; overflow: hidden; }
+.pjh-read.cols2 > .md { flex: 1; min-height: 0; column-fill: auto; }
+.pjh-drop, .pjh-drop.wide { display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 6px; min-height: 30px; flex: none; }
+.pjh-fc.drop { cursor: pointer; }
+.pjh-fc.drop:hover { border-color: var(--line-net); color: var(--ink-sub); }
+.pjh-stail { flex: none; max-height: 46%; }
+.pjh-side-acts { display: flex; gap: 6px; flex: none; margin-top: auto; }
+.pjh-side .pjh-stat { flex: none; }
+.pjh-side .pjh-kres { flex: none; }                                   /* 지식 3×2 옆 칸 — 안내 문장은 결과 바로 아래(빈 칸 끝이 아니라) */
+.pjh-read.cols2 > .md h1, .pjh-read.cols2 > .md h2, .pjh-read.cols2 > .md h3 { break-after: avoid-column; break-inside: avoid; }   /* 두 단: 머리말이 단 끝에 홀로 남지 않게 */
+.pjh-read.cols2 > .md blockquote { break-inside: avoid; }
+/* 좁은 폭(한 열) — 카드 높이는 격자와 같은 상한(--h 칸 수)까지만: 본문처럼 긴 내용은 안에서 스크롤한다(실측: 상한 없이는 본문 카드가 2만 px 로 늘어났다) */
+@media (max-width: 900px) {
+  .pjh-w { max-height: calc(var(--h, 1) * 276px - 16px); }
+}
+.pjh-krec-wait { font-size: 11.5px; color: var(--muted-3); padding: 4px 2px; }

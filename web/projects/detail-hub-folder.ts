@@ -147,11 +147,13 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
       return;
     }
 
+    // 끌어다 놓기 낱장(격자의 마지막 자리) — 누르면 업로드 고르기(바닥의 [업로드] 와 같은 문). 한 줄 높이의 바닥은 [폴더 열기] 만(시안).
+    const dropCard = (): HTMLElement => el('div', { class: 'pjh-fc drop', title: '파일을 끌어다 놓거나 눌러서 고르기', onclick: () => up.btn.click() }, hubIcon('up', 14), el('span', { text: '끌어다 놓기' }));
     if (w <= 1 && h <= 1) {
-      const list = el('div', { class: 'pjh-frl' });
+      const list = el('div', { class: 'pjh-frl' });   // 시안 1×1: 두 줄짜리 줄 셋(이름 / 시각 · 크기) 34px + 끌어다 놓기 한 줄 30px = 146px 안
       for (const it of recentFiles(items, 3)) list.append(frow(it));
-      body.append(list, el('div', { style: 'flex:1' }), dropBox(true), progBox);
-      foot.append(footText(rootLabel), btn('폴더 열기', 'btn-ghost', open));
+      body.append(list, dropBox(true), progBox);
+      foot.append(footText(rootLabel), up.fileIn, up.dirIn, btn('폴더 열기', 'btn-ghost', open));
       return;
     }
     if (w <= 1) {
@@ -160,7 +162,7 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
       if (cur.dirs.length) { list.append(el('div', { class: 'pjh-grp' }, el('b', { text: '폴더' }), el('span', { class: 'pjh-grp-n', text: String(cur.dirs.length) }))); for (const d of cur.dirs.slice(0, 4)) list.append(frow(d)); }
       list.append(el('div', { class: 'pjh-grp' }, el('b', { text: '최근' }), el('span', { class: 'pjh-grp-n', text: String(cur.files.length) })));
       for (const it of recentFiles(items, h >= 3 ? 9 : 5)) list.append(frow(it));
-      body.append(list, el('div', { style: 'flex:1' }), dropBox(true), progBox);
+      body.append(list, dropBox(true), progBox);   // 끌어다 놓기는 목록 바로 아래(바닥에 홀로 띄우지 않는다)
       foot.append(footText(rootLabel), up.btn, up.fileIn, up.dirIn, btn('폴더 열기', 'btn-ghost', open));
       return;
     }
@@ -168,11 +170,11 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
       const n = w >= 3 ? 6 : 4;
       const grid = el('div', { class: 'pjh-fgrid', style: 'grid-template-columns:repeat(' + (n + 1) + ',1fr)' });
       for (const it of recentFiles(items, n)) grid.append(fcard(it));   // 낱장은 파일만 — 폴더는 나무(3칸)·[폴더 열기]
-      grid.append(el('div', { class: 'pjh-fc drop' }, hubIcon('up', 14), el('span', { text: '끌어다 놓기' })));
+      grid.append(dropCard());
       if (w >= 3) body.append(el('div', { class: 'pjh-two-f', style: 'grid-template-columns:150px minmax(0,1fr)' }, tree(), grid));
       else body.append(grid);
       body.append(progBox);
-      foot.append(footText('최근 순 · ' + here), up.btn, up.fileIn, up.dirIn, btn('폴더 열기', 'btn-ghost', open));
+      foot.append(footText('최근 순 · ' + here), up.fileIn, up.dirIn, btn('폴더 열기', 'btn-ghost', open));
       return;
     }
     // 2×2 이상 — 나무 + 경로 줄 + 낱장 격자 (+ 3×2 옆 칸)
@@ -181,8 +183,11 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
     // 낱장 한 줄 높이 ≈ 타일(4:3, 폭은 3칸 3열 ≈150px · 2칸 4열 ≈100px) + 이름·메타 44px. 몸통에서 경로 줄·여백 150px 을 뺀다. 마지막 자리는 «끌어다 놓기».
     const cardPx = cols === 3 ? 160 : 124;
     const capCards = cols * Math.max(1, Math.floor((h * 276 - 16 - 150) / cardPx)) - 1;
-    for (const it of recentFiles(items, capCards)) grid.append(fcard(it));   // 낱장은 파일만 — 폴더는 왼쪽 나무
-    grid.append(el('div', { class: 'pjh-fc drop' }, hubIcon('up', 14), el('span', { text: '끌어다 놓기' })));
+    const shownCards = recentFiles(items, capCards);
+    // 옆 칸(3×2)이 있으면 아직 고른 게 없어도 첫 낱장을 골라 둔다 — 빈 «고른 파일» 칸 대신 미리보기가 선다(시안).
+    if (w >= 3 && !nav.picked && shownCards.length) nav.picked = relOf(shownCards[0].name);
+    for (const it of shownCards) grid.append(fcard(it));   // 낱장은 파일만 — 폴더는 왼쪽 나무
+    grid.append(dropCard());
     const main = el('div', { class: 'pjh-fmain' }, crumb(), grid, progBox);
     const parts: HTMLElement[] = [tree(), main];
     let picked: any = null;

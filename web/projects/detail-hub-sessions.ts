@@ -10,7 +10,7 @@
 import { api, el, personFace, relTime, toast } from '../core.js';
 import { pjvPopover } from './popover.js';
 import { type Fill, type SessView, btn, emptyNote, footText, hubIcon, lastLine, lastTurns, enterSession, sessDot, sessView } from './detail-hub-kit.js';
-import { type SessionGroupDef, rowsBudget, sessionGroupsFor, sessionLastActivity, sessionTaskIndex, sortSessions, splitRows } from './detail-hub-model.js';
+import { type SessionGroupDef, nodeLabel, rowsBudget, sessionGroupsFor, sessionLastActivity, sessionTaskIndex, sortSessions, splitRows } from './detail-hub-model.js';
 
 // 2칸 이상 도구 줄의 필터·묶기 — 페이지 안에서만 산다(프로젝트별).
 const TOOLS: Map<number, { group: 'task' | 'state'; state: string; person: string; picked: string }> = new Map();
@@ -99,13 +99,15 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
     // ── 1×1 — 지금 볼 세션 하나 + 한 줄 ──
     if (w <= 1 && h <= 1) {
       const first = ss[0], v = V(first);
-      const line = el('div', { class: 'pjh-now-l', text: v.live ? '마지막 줄을 읽는 중…' : (v.label) });
-      const meta = el('div', { class: 'pjh-now-m' }, hubIcon('monitor', 12), el('span', { text: (first.node ? (first.node.name || first.node.id) : '중앙') + ' · ' + v.label + (sessionLastActivity(first) ? ' · ' + relTime(new Date(sessionLastActivity(first)).toISOString()) : '') }),
+      // 마지막 줄 — 도는 세션의 마지막 AI 문장. 없으면 줄을 비운다(상태는 아래 메타 줄이 이미 말한다 — 같은 말을 두 번 쓰지 않는다).
+      const line = el('div', { class: 'pjh-now-l', text: v.live ? '마지막 줄을 읽는 중…' : '' });
+      line.hidden = !v.live;
+      const meta = el('div', { class: 'pjh-now-m' }, hubIcon('monitor', 12), el('span', { text: nodeLabel(first.node) + ' · ' + v.label + (sessionLastActivity(first) ? ' · ' + relTime(new Date(sessionLastActivity(first)).toISOString()) : '') }),
         el('span', { style: 'margin-left:auto' }, enterBtn(first)));
       body.append(el('div', { class: 'pjh-now' + (v.key === 'waiting' ? ' wait' : v.live ? ' live' : '') },
         el('div', { class: 'pjh-now-t' }, sessDot(v), el('span', { class: 'pjh-sr-n', text: first.label || first.id }), personFace(first.owner, 'pjv-ava', memberName(first.owner))),
         line, meta));
-      if (v.live) lastLine(first).then((t) => { line.textContent = t || v.label; });
+      if (v.live) lastLine(first).then((t) => { line.textContent = t; line.hidden = !t; });
       const second = ss[1];
       if (second) {
         const v2 = V(second);
@@ -127,11 +129,11 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
     const sidePane = w >= 3 && h >= 2;
     const budget = rowsBudget(h, groups.length, toolsRow ? 30 : 0);
     const caps = splitRows(groups.map((g) => g.sessions.length), budget);
-    // 열 — 1칸: 상태 · 2칸: 상태·사람 · 3칸: 상태·사람·마지막 활동(옆 칸이 있으면 활동은 뺀다 — 자리가 좁다)
+    // 열 — 1칸: 상태 · 2칸 한 줄 높이: 상태·사람 · 2×2 와 3칸: 상태·사람·마지막 활동(옆 칸이 있으면 활동은 뺀다 — 자리가 좁다). 시안 2×2 그대로.
     const colDefs: Array<{ key: string; label: string; px: number; cell: (s: any) => HTMLElement }> = [
       { key: 'state', label: '상태', px: 74, cell: stateCell },
       ...(w >= 2 ? [{ key: 'owner', label: '사람', px: 104, cell: ownerCell }] : []),
-      ...(w >= 3 && !sidePane ? [{ key: 'act', label: '마지막 활동', px: 92, cell: actCell }] : []),
+      ...((w >= 3 || (w >= 2 && h >= 2)) && !sidePane ? [{ key: 'act', label: '마지막 활동', px: 92, cell: actCell }] : []),
     ];
     const gridCols = 'minmax(0,1fr) ' + colDefs.map((c) => c.px + 'px').join(' ');
 
@@ -164,11 +166,11 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
         el('div', { class: 'pjh-side-t' }, sessDot(v), el('span', { class: 'pjh-sr-n', text: s.label || s.id })),
         el('div', { class: 'pjh-kv' },
           el('b', { text: '태스크' }), el('span', { text: t ? t.name : '없음' }),
-          el('b', { text: '사람' }), el('span', { text: memberName(s.owner) + ' · ' + (s.node ? (s.node.name || s.node.id) : '중앙') }),
+          el('b', { text: '사람' }), el('span', { text: memberName(s.owner) + ' · ' + nodeLabel(s.node) }),
           el('b', { text: '상태' }), el('span', { text: v.label + (sessionLastActivity(s) ? ' · ' + relTime(new Date(sessionLastActivity(s)).toISOString()) : '') })),
         el('div', { class: 'pjh-side-l', text: '마지막 줄' }),
         tail,
-        el('div', { style: 'display:flex;gap:6px;flex:none' }, enterBtn(s, v.key === 'waiting' ? '입장해서 답하기' : undefined), t ? null : attachBtn(s), logBtn()));
+        el('div', { class: 'pjh-side-acts' }, enterBtn(s, v.key === 'waiting' ? '입장해서 답하기' : undefined), t ? null : attachBtn(s), logBtn()));
       lastTurns(s, 4).then((turns) => {
         if (!turns.length) { tail.textContent = '읽을 대화가 없습니다.'; return; }
         tail.replaceChildren(...turns.map((x) => el('div', { class: 'pjh-stail-' + (x.who === 'ai' ? 'ai' : 'me'), text: (x.who === 'ai' ? '' : '› ') + x.text })));

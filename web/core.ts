@@ -104,7 +104,7 @@ export { uiKeyCls, uiText } from './lib/uitext.js';
 //  떠 있는 레이어(비모달) — 모달 다이얼로그는 web/ui-primitives.ts 소관.
 export { anchoredPopover, focusMovedIntoFrame, infoPop, toast, withTip } from './lib/overlay.js';
 //  아바타 단일 소스(#473) — 사람 얼굴은 전부 이 한 경로로.
-export { avatarColor, initials, loadPeopleAvatars, personFace, profileAvatar, setPersonAvatar } from './lib/avatar.js';
+export { avatarColor, initials, loadPeopleAvatars, personDisplayName, personFace, profileAvatar, setPersonAvatar } from './lib/avatar.js';
 export { personName, type NamedPerson } from './lib/person-name.js';   // 사람 이름 단일 판정(#1813)
 //  사람 한 명 고르기(#4052) — 이름으로 찾아 고르는 드롭다운(값은 구성원 id).
 export { loadPersonDirectory, personSelect, type PersonSelect } from './lib/person-select.js';

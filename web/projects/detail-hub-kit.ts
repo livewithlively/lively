@@ -17,6 +17,7 @@ export interface HubTasksListOpts {
   noMore?: boolean;
   rowOpts?: { assigneeNames?: boolean };
   fields?: any[];
+  members?: any[];   // 담당자 칸의 이름 — 프로젝트 구성원이 비어 있으면 허브가 명부로 채워 넘긴다
 }
 export interface HubOpts {
   id: number;
