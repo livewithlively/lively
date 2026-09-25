@@ -835,7 +835,13 @@ export function themeEnvArgs(theme: unknown): string[] {
 //
 // 하네스별 실측 (2026-08-20, 이 박스의 설치본 기준):
 //  · claude      — `--settings '{"theme":"dark"}'`  ★검증: 다크·라이트로 각각 띄워 pane ANSI 색이 갈리는 것 확인
-//  · codex       — `-c tui.theme=<이름>`             (`-c key=value` 오버라이드. 테마는 dark/light 가 아니라 **이름**)
+//  · codex       — `-c tui.theme=<이름>` + `FORCE_COLOR=1`
+//                  (`-c key=value` 오버라이드. 테마는 dark/light 가 아니라 **이름**). `/theme` 은 구문 강조만
+//                  바꾸고 입력칸 팔레트는 시작 때 감지한 터미널 배경에 묶인다. 터미널 화면을 실행 중 바꾸면
+//                  본문은 라이트인데 입력칸만 다크로 남아 글자가 안 보이는 Codex 회귀가 있다. 기본색 렌더링은
+//                  입력칸 배경을 터미널의 default/reset 색에 맡겨 xterm 의 현재 테마를 그대로 따른다.
+//                  근거: openai/codex#45163(시작 팔레트 캐시·우회), #14105(실행 중 테마 전환 재현),
+//                  #41242(Windows 라이트 테마 재현).
 //  · opencode    — `OPENCODE_CONFIG_CONTENT` env     (설정을 통째로 문자열로 받는다)
 //  · antigravity — 없음. 테마는 있으나(~/.gemini/antigravity-cli/settings.json 의 colorScheme) 실행 시점
 //                  주입 경로가 없다(플래그·env 스캔 음성). 위 원칙대로 손대지 않는다.
@@ -845,7 +851,10 @@ export function themeEnvArgs(theme: unknown): string[] {
 //  하네스가 목록을 바꾸면 여기만 손보면 된다.
 const HARNESS_THEME: Record<string, { argv?: (t: "dark" | "light") => string[]; env?: (t: "dark" | "light") => string[] }> = {
   claude: { argv: (t) => ["--settings", JSON.stringify({ theme: t })] },
-  codex: { argv: (t) => ["-c", `tui.theme=${t === "dark" ? "one-half-dark" : "one-half-light"}`] },
+  codex: {
+    argv: (t) => ["-c", `tui.theme=${t === "dark" ? "one-half-dark" : "one-half-light"}`],
+    env: () => ["FORCE_COLOR=1"],
+  },
   opencode: { env: (t) => [`OPENCODE_CONFIG_CONTENT=${JSON.stringify({ theme: t })}`] },
 };
 
@@ -941,8 +950,9 @@ export function harnessLiveThemeSteps(harnessKey: string, theme: unknown): LiveT
 /** 하네스 테마를 env 로 주는 경우의 tmux `-e` 인자. 지원 안 하면 빈 배열. */
 export function harnessThemeEnvArgs(harnessKey: string, theme: unknown, platform?: string): string[] {
   //  #3626 — 윈도우 노드(psmux)는 옵션 값의 따옴표를 벗긴다(tmux-exec.ts encodeOptJson 실측). JSON 인 이 값은
-  //   거기서 반드시 깨지므로 얹지 않는다(harnessSettingsArgv 와 같은 이유·같은 가드).
-  if (platform === "win32") return [];
+  //   거기서 반드시 깨지므로 opencode 에는 얹지 않는다. codex 의 FORCE_COLOR=1 은 따옴표 없는 단순 값이라
+  //   Windows에서도 안전하고, Windows 라이트 터미널에도 같은 입력칸 대비 회귀가 있어 보존한다.
+  if (platform === "win32" && harnessKey !== "codex") return [];
   const t = normalizeTheme(theme);
   const h = HARNESS_THEME[String(harnessKey || "")];
   if (!t || !h?.env) return [];
