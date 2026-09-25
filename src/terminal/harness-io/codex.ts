@@ -153,7 +153,12 @@ export const codexIo: HarnessSessionAdapter = {
   //   dialog 로 못 봐서, 답을 기다리는 화면에 아웃박스가 글자를 넣을 수 있었다.
   screen: (tail) => {
     const s = tail.join("\n");
-    if (/press (enter|t) to (continue|confirm|review|trust)|esc to (cancel|close)|Would you like to run/i.test(s)) return "dialog";
+    //  ★ **번호 메뉴가 곧 대화상자다.** 문구는 판마다 바뀌지만(0.153.4 «Do you trust the contents…» →
+    //   0.157.0 «Trust this folder?») 커서가 번호 앞에 서는 모양은 남는다. 컴포저는 번호 없이 `› ` 뿐이라 갈린다.
+    //   종전엔 꼬리 문구만 봤고, 0.157.0 의 신뢰 창("enter continue · esc back")이 그 목록에 없어 **ready 로 읽혔다**
+    //   — 그 화면에 첫 지시를 넣으면 대화상자가 삼킨다(실측 2026-09-25).
+    if (/^\s*[›❯>]\s*\d+[.)]/m.test(s)) return "dialog";
+    if (/press (enter|t) to (continue|confirm|review|trust)|esc to (cancel|close|go back)|enter continue|Would you like to run|Trust this folder|Hooks need review/i.test(s)) return "dialog";
     if (/esc to interrupt/i.test(s)) return "busy";
     if (/^\s*›/m.test(s)) return "ready";
     return null;   // 부팅·로그인 등 미실측 화면 — 보수적으로 기다린다
@@ -168,6 +173,7 @@ export const codexIo: HarnessSessionAdapter = {
   //     꼬리를 달고 번호 메뉴('› 1. …')를 쓴다. 이 위에서 Enter 를 치면 그 Enter 를 대화상자가 먹는다.
   term: {
     appMouse: false, choiceNeedsEnter: true, pastePlaceholder: false,
-    startDialogRe: /Do you trust the contents|Hooks need review|Update available|Press enter to (continue|confirm)|›\s*1\.\s/i,
+    //  판마다 문구가 바뀌므로(0.153.4 → 0.157.0 에서 신뢰 창이 통째로 다시 쓰였다) **번호 메뉴**를 첫 줄에 둔다.
+    startDialogRe: /›\s*\d+[.)]\s|Do you trust the contents|Trust this folder|Folder access|Hooks need review|Update available|Press enter to (continue|confirm)|enter continue/i,
   },
 };

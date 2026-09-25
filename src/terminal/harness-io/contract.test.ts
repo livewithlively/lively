@@ -29,7 +29,9 @@ const FIXTURES: Record<string, Partial<Record<"ready" | "busy" | "dialog" | "aut
     auth: " Welcome to the Antigravity CLI. You are currently not signed in.\n ⡿  Signing in...",
   },
   codex: {   // 실측 2026-08-18 (box-yoon-355e7d10 — 부팅 대화상자 2종→준비→실행)
-    ready: "│ model:     gpt-5.6-terra medium   /model to change │\n│ directory: ~/box/yoon                              │\n╰────╯\n  Tip: New Build faster with the Desktop app.\n› Explain this codebase\n  gpt-5.6-terra medium · ~/box/yoon",
+    ready: ["│ model:     gpt-5.6-terra medium   /model to change │\n│ directory: ~/box/yoon                              │\n╰────╯\n  Tip: New Build faster with the Desktop app.\n› Explain this codebase\n  gpt-5.6-terra medium · ~/box/yoon",
+      //  0.157.0 의 준비 화면 — 푸터가 늘었다(«← for agents · ? for shortcuts»). 번호 없는 `› ` 는 컴포저다.
+      "  Tip: Press ctrl+t to open the full transcript.\n› Ask Codex to do anything\n  GPT-5.6-Terra medium · /work/box-yoon-1\n  ← for agents · ? for shortcuts                    ⚠ 1 warning · f2 to view"],
     busy: "› 현재 폴더에서 ls -la 를 실행해서 보여줘\n• Working (2s • esc to interrupt)\n› Explain this codebase\n  gpt-5.6-terra medium · ~/box/yoon",
     dialog: [
       "✨ Update available! 0.146.0 -> 0.147.0\n  Release notes: https://github.com/openai/codex/releases/latest\n› 1. Update now (runs `sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh |\n     CODEX_NON_INTERACTIVE=1 sh'`)\n  2. Skip\n  3. Skip until next version\n  Press enter to continue",
@@ -37,6 +39,10 @@ const FIXTURES: Record<string, Partial<Record<"ready" | "busy" | "dialog" | "aut
       //  ★ 실측 2026-09-24(codex 0.153.4, `--ask-for-approval on-request`) — 승인 대화상자. 꼬리가 "continue" 가 아니라
       //   "confirm or esc to cancel" 이라, 종전 정규식은 이 화면을 dialog 로 못 봤다(답을 기다리는 화면에 글자가 들어갔다).
       "  Would you like to run the following command?\n\n  Environment: local\n\n  Reason: 빈 파일을 생성하도록 허용할까요?\n\n  $ touch /tmp/probe-approval-test\n\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again for commands that start with `touch` (p)\n  3. No, and tell Codex what to do differently (esc)\n\n  Press enter to confirm or esc to cancel",
+      //  ★ 실측 2026-09-25(codex **0.157.0** — 자동 업데이트로 판이 바뀌며 신뢰 창이 통째로 다시 쓰였다).
+      //   문구가 하나도 안 겹친다("Trust this folder?" · "enter continue · esc back") — 그래서 판정을 문구가 아니라
+      //   **번호 메뉴 모양**(`› 1.`)에 건다. 종전 규칙은 이 화면을 ready 로 읽어 첫 지시를 대화상자에 쏟았을 것이다.
+      "  Folder access\n  /work/box-yoon-1/\n\n  Trust this folder? Codex can read, edit, and run files here, subject to your permission\n  settings. Folder settings can run code automatically, even without a model request. Continue\n  only if you trust these files. Your trust decision will be saved.\n\n› 1. Trust and continue\n  2. Back to Agent Command Center\n\n  enter continue · esc back",
       //  ★ 실측 2026-09-24 — 훅 검토 대화상자. 부팅 길목에 **신뢰 폴더 다음으로** 뜬다(훅이 새로 생기거나 바뀌면).
       //   이걸 통과하지 못하면 상태 보고·대화 id 매핑·이름짓기 훅이 전부 조용히 안 돈다.
       "  Hooks need review\n  19 hooks are new or changed.\n  Hooks can run outside the sandbox after you trust them.\n\n› 1. Review hooks\n  2. Trust all and continue\n  3. Continue without trusting (hooks won't run)\n\n  Press enter to confirm or esc to go back",

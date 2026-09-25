@@ -117,8 +117,22 @@ export function stallAction(
  *  종전엔 수단이 하나뿐이라, app-server 폴백으로 큐에 들어온 지시가 **닿을 수 없는 곳으로 갔다.**
  */
 export type DeliveryTransport = "send-keys" | "codex-chat";
-export function deliveryTransport(harness: string, env: NodeJS.ProcessEnv = process.env): DeliveryTransport {
-  return codexChatMode({ harness }, env) === "app-server" ? "codex-chat" : "send-keys";
+/**
+ * @param stamp 그 세션의 모드 표식(@box_runtime 원시값) — #4135. **반드시 넘긴다.**
+ *  안 넘기면 배포 기본으로 추측하게 되고, 기본을 뒤집는 순간 이미 떠 있는 app-server 세션(pane=셸)의 지시가
+ *  send-keys 로 나가 **사람의 프롬프트가 셸 명령으로 실행된다**(#3982 — 이 함수가 생긴 이유의 반대편 사고).
+ */
+export function deliveryTransport(harness: string, stamp?: string, env: NodeJS.ProcessEnv = process.env): DeliveryTransport {
+  return codexChatMode({ harness, stamp }, env) === "app-server" ? "codex-chat" : "send-keys";
+}
+
+/** 그 세션의 모드 표식을 읽는다(#4135). 못 읽으면 undefined — codex 축이 «표식 없음» 규칙으로 읽는다. */
+async function sessionRuntimeStampSafe(sessionId: string): Promise<string | undefined> {
+  try {
+    const { getOpt } = await import("../terminal/tmux-exec.js");
+    const v = String((await getOpt(sessionId, "@box_runtime")) || "").trim();
+    return v || undefined;
+  } catch { return undefined; }
 }
 
 /** 못 닿는 동안의 재시도 간격 — 입력창 대기(초 단위)와 달리 **분 단위** 사건이다(노드 재기동·사람의 복원). */
@@ -339,7 +353,10 @@ async function deliverLoop(sessionId: string): Promise<void> {
     //  일반화: **경로가 갈리는 자리(분기·폴백·전송수단 선택)에는 갈린 결과를 남긴다.** 산출물이 '행위'인
     //   수정은 스스로를 증명하지 못해 사람이 재현해 줄 때까지 기다리는데, 이 한 줄이 그 성질을 바꾼다.
     //  볼륨: 사람이 친 프롬프트 단위라 핫패스가 아니다(control 포함해도 세션당 수십 건/일).
-    const transport = deliveryTransport(harness);
+    //  #4135 — 그 세션의 표식을 읽어 가른다(배포 기본이 아니라). 한 번의 tmux 옵션 조회이고, 이 아래는 어차피
+    //   화면을 읽고(capture-pane) 글자를 넣는 경로라 왕복 하나가 더 늘어도 성격이 바뀌지 않는다.
+    const stamp = await sessionRuntimeStampSafe(sessionId);
+    const transport = deliveryTransport(harness, stamp);
     logger.info({ sessionId, seq: row.seq, harness, transport }, "outbox: 전송수단");
     if (transport === "codex-chat") {
       if (await deliverViaCodexChat(sessionId, st, row, settleStall)) return;
