@@ -53,7 +53,7 @@ import type { NodeSessionInfo } from "../node/registry.js";
 import { reportSessionActivity } from "./session-activity-relay.js";   // #2600 T2 d6 — 하네스 활동 보고를 그 세션의 호스트에
 import { relayNodeId, sessionRelayNodeId, sameTmuxCoordinate, isBoxSessionRow } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #2636 — 화면이 안 준 좌표는 서버가 되찾는다 · #3745 — 박스 세션엔 세션 호스트 좌표도 같은 tmux 다
 import type { NodeOp } from "../node/protocol.js";
-import { normalizeTheme } from "./catalog.js"; // #1683 테마 값 정규화(순수 — catalog 가 소유)
+import { normalizeTheme, harnessResumeCommand } from "./catalog.js"; // #1683 테마 값 정규화 · #4135 셸에서 대화를 이어 여는 한 줄(순수 — catalog 가 소유)
 import { getNode, listNodes } from "../node/store.js";
 import { nodeOfflineNote } from "../node/offline-note.js";   // #1849 — 오프라인 원인 추정 한 문장
 import { restoreProjectRef } from "./restore-project.js";
@@ -1171,15 +1171,35 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   // 대화를 **터미널로 넘긴다**(#2055) — app-server 가 쥔 스레드를 놓아 주고, 사람이 pane 에서 이어가게 한다.
   //  왜 이 통로가 필요한가: codex 는 스레드당 writer 가 하나라, 우리 대화창이 쥔 대화는 pane 의 `codex resume` 이
   //  못 연다(active writer). 놓아 주는 유일한 방법이 **프로세스 종료**다(thread/unsubscribe 로는 안 풀린다 — 실측).
-  //  돌려주는 thread_id 로 화면이 `codex resume <id>` 를 안내하면 대화가 안 끊긴다.
+  //  ★ #4135 — 놓아 준 뒤 **그 명령을 우리가 친다.** 종전엔 화면이 «codex resume 01a0cf18… 으로 이어가세요» 라고
+  //   토스트만 띄웠는데, 거기 실린 id 는 **앞 8자로 잘린 값**이라 사람이 칠 수가 없었다 — 놓아 준 대화로 돌아갈
+  //   길이 화면에 없었다(원준님 실측 2026-09-25: «터미널 뷰로 보고 명령을 쳐도 코덱스로 안 간다» — pane 은 셸이다).
+  //   pane 이 셸인 것이 이 모드의 정상이므로(codexAppServerPaneArgv), 셸에 명령 한 줄을 넣는 것이 곧 «터미널로 넘기기» 다.
+  //  ⚠ 먼저 지우지 않는다(send-keys.ts 교리) — 사람이 쓰던 글이 있으면 우리 글자가 그 **뒤에** 붙어 명령이 실패할 뿐이다.
+  //   Enter 를 먼저 보내면 그 사람의 글이 명령으로 실행된다 — 그게 더 나쁘다.
+  //  ⚠ id 는 셸로 들어가는 글자다. 카탈로그의 자(RESUME_ID_RE)를 통과한 값만 친다(따옴표·세미콜론이 든 값은 안 친다).
   app.post("/api/ui/terminal/sessions/:id/codex-chat/release", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
     if (!(await canAttach(req.params.id, uid))) throw new HttpError(404, SESSION_NOT_FOUND);
     const { releaseCodexChat } = await import("./harness-io/codex-chat-runtime.js");
     const r = releaseCodexChat(req.params.id);
+    //  명령 모양·인젝션 경계의 출처는 카탈로그 한 곳이다(harnessResumeCommand) — 여기서 문자열을 짓지 않는다.
+    const cmd = harnessResumeCommand("codex", r?.threadId ?? "");
+    let launched = false;
+    if (cmd) {
+      try {
+        const { sendKeysToSession } = await import("./send-keys.js");
+        await sendKeysToSession(req.params.id, cmd);
+        launched = true;
+      } catch (e) {
+        //  비치명 — **놓아 준 것은 사실이다.** 못 친 이유(세션이 방금 죽음·중계 실패)는 화면이 명령 원문을
+        //   그대로 보여 주는 쪽으로 떨어진다(잘린 id 대신 칠 수 있는 한 줄).
+        logger.warn({ id: req.params.id, err: (e as Error)?.message }, "codex 대화 넘기기 — 명령을 pane 에 넣지 못했다");
+      }
+    }
     res.setHeader("Cache-Control", "no-store");
     // 런타임이 없으면(이미 넘겼거나 tmux 모드) 그것도 정상 응답이다 — 화면이 '넘길 게 없다'를 구분할 수 있게 released 로 알린다.
-    res.json({ ok: true, released: !!r, thread_id: r?.threadId ?? null });
+    res.json({ ok: true, released: !!r, thread_id: r?.threadId ?? null, launched, command: cmd });
   }));
 
   app.post("/api/ui/terminal/sessions/:id/prompt", auth, wrap(async (req, res) => {

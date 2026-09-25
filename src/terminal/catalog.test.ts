@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { HARNESSES, harnessSettingsArgv, harnessThemeArgv, harnessThemeEnvArgs, paneLaunchArgv, installTenantSlugResolver, roots, sharedRoot, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
+import { HARNESSES, harnessSettingsArgv, harnessThemeArgv, harnessThemeEnvArgs, paneLaunchArgv, installTenantSlugResolver, roots, sharedRoot, codexAppServerPaneArgv, chatRuntimePaneArgv , harnessResumeCommand } from "./catalog.js";
 
 test("Codex 현행 5.6 모델과 모델별 추론강도 차이를 카탈로그가 보존한다", () => {
   const c = HARNESSES.find((h) => h.key === "codex")!;
@@ -233,4 +233,22 @@ test("[#2439] 대화 런타임 세션의 pane 은 셸이고, 안내가 하네스
   const cx = codexAppServerPaneArgv("linux").at(-1) ?? "";
   assert.match(cx, /Codex/);
   assert.match(cx, /App Server/);
+});
+
+// ── #4135 셸에서 대화를 이어 여는 한 줄 — 대화를 터미널로 넘길 때 그 pane(셸)에 우리가 친다 ──
+//  종전엔 화면이 «codex resume 01a0cf18… 으로 이어가세요» 라고 **잘린 id** 를 토스트로 말해, 사람이 칠 수가 없었다.
+test("harnessResumeCommand — 표(resumeArgv)가 명령 모양을 소유한다", () => {
+  assert.equal(harnessResumeCommand("codex", "01a0cf18-7254-7cc1-b897-288b4c4cc9ac"), "codex resume 01a0cf18-7254-7cc1-b897-288b4c4cc9ac");
+  assert.equal(harnessResumeCommand("claude", "0199f0e1-1111-4222-8333-444455556666"), "claude --resume 0199f0e1-1111-4222-8333-444455556666");
+});
+
+test("★ harnessResumeCommand — 셸로 들어가는 글자다: 자를 못 통과한 id 는 **명령을 만들지 않는다**", () => {
+  for (const bad of ["x; rm -rf /", "a b", "'q'", "$(id)", "`id`", "", "../etc", "a".repeat(65)]) {
+    assert.equal(harnessResumeCommand("codex", bad), "", JSON.stringify(bad));
+  }
+});
+
+test("harnessResumeCommand — 이어받기를 모르는 하네스·모르는 키는 빈 문자열(있는 척 금지)", () => {
+  assert.equal(harnessResumeCommand("shell", "abc"), "");
+  assert.equal(harnessResumeCommand("없는하네스", "abc"), "");
 });

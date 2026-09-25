@@ -407,8 +407,17 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
 
   const chatHost = el('div', { class: 'sc-chat' });
   const termHost = el('div', { class: 'sc-term', hidden: true });
+  //  ★ #4135 — **이 터미널은 셸이다** 를 화면이 말한다. 대화 런타임 세션(codex app-server · claude chat)은 pane 에
+  //   TUI 가 없고(catalog.chatRuntimePaneArgv) 셸이 돈다. 그런데 [보기 ▸ 터미널로 보기] 는 화면만 바꾸므로,
+  //   사람이 거기 말을 치면 zsh 가 받는다 — «명령이 AI 에게 안 간다» 로 보이는 바로 그 자리다
+  //   (원준님 실측 2026-09-25). pane 첫 화면의 안내는 출력이 쌓이면 위로 밀려 사라지므로, 이 줄은 **머물러 있는다.**
+  //  ⚠ 막다른 안내를 만들지 않는다 — 넘길 수 있는 하네스(codex)면 그 단추를 여기 같이 둔다.
+  const shellBarText = el('span', { class: 'sc-shellbar-t' });
+  const shellBarBtn = el('button', { class: 'btn btn-sm', type: 'button', text: '터미널로 넘기기', onclick: () => void handoffToTerminal() });
+  const shellBar = el('div', { class: 'sc-shellbar', hidden: true }, shellBarText, shellBarBtn);
   const waitBar = el('div', { class: 'sc-wait', hidden: true });
   const wrap = el('div', { class: 'sc-wrap' }, head, waitBar, chatHost) as HTMLElement;
+  termHost.append(shellBar);
   wrap.append(termHost);
   host.replaceChildren(wrap);
 
@@ -798,6 +807,20 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let termFrame: HTMLIFrameElement | null = null;
   let mode: 'term' | 'chat' = 'chat';
   let modeChosen = false;              // 사람이 [보기] 메뉴에서 직접 골랐나 — 그 뒤엔 화면이 스스로 안 바꾼다
+  /** pane 이 셸인 세션에서만 «여기 친 말은 AI 에게 안 갑니다» 줄을 띄운다(#4135). 그 밖엔 늘 숨는다. */
+  function paintShellBar(): void {
+    //  pane 이 셸인 두 갈래: codex app-server(chatFirst) · 하네스 무관 대화 런타임(runtimeMode='chat').
+    //  ⚠ 판정은 **서버가 준 값**으로만 한다 — 모르면 안 띄운다(틀린 경고는 멀쩡한 터미널을 의심하게 만든다).
+    const shellPane = chatFirst() || String(target.raw?.runtimeMode || '') === 'chat';
+    const codex = String(target.raw?.harness || '') === 'codex';
+    shellBar.hidden = !(mode === 'term' && shellPane);
+    if (shellBar.hidden) return;
+    const who = codex ? 'Codex' : 'AI';
+    shellBarText.textContent = `이 터미널은 같은 작업 폴더의 셸이에요 — 여기 친 말은 ${who} 에게 가지 않습니다. 대화는 대화창에서 합니다.`;
+    //  넘기기는 codex 만 실측돼 있다(app-server 가 쥔 스레드를 놓는 통로). 그 밖엔 단추를 그리지 않는다 — 죽은 단추 금지.
+    shellBarBtn.hidden = !(codex && isBox() && target.owned && target.live);
+  }
+
   function setMode(m: 'term' | 'chat'): void {
     if (m === 'term' && !hasTerm()) m = 'chat';
     //  #3847 — 터미널을 **여는 쪽으로** 갈 때는 프레임 걸쇠를 푼다. 여기까지 온 것은 «지금 이 세션의 터미널을
@@ -819,6 +842,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       termHost.append(termFrame);
     }
     wrap.classList.toggle('sc-mode-term', m === 'term');
+    paintShellBar();
     termHost.hidden = m !== 'term';
     chatHost.hidden = m === 'term';
     chatBadge.hidden = m !== 'chat';
@@ -832,6 +856,30 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     fixPair.hidden = fixBtn.hidden && termStatusEl.hidden;
     paintRunHead();                                                   // 모델·추론강도도 마찬가지 — 터미널을 볼 때만 머리줄에 선다
     if (m === 'chat') { view.scrollToBottom(); view.input.focus(); pokePoll(); }   // 가려진 동안 느슨했던 폴을 그 자리에서 따라잡는다
+  }
+
+  /**
+   * 대화를 **터미널로 넘긴다** (#2055 · 고침 #4135).
+   *
+   *  ── 무엇이 막다른 길이었나 (원준님 실측 2026-09-25) ──
+   *  codex 세션의 기본은 대화창이고 그 pane 은 **셸**이다. 그런데 [보기 ▸ 터미널로 보기] 는 화면만 바꾸므로,
+   *  거기 친 말은 zsh 가 받는다 — 사람 눈엔 «명령이 코덱스로 안 간다» 로 보인다. 넘기는 길이 있긴 했는데
+   *  토스트가 «codex resume 01a0cf18… 으로 이어가세요» 라고 **잘린 id** 를 알려 줘서 칠 수가 없었다.
+   *  이제 서버가 놓아 준 뒤 그 명령을 pane 에 **직접 친다**(launched). 못 쳤으면 칠 수 있는 한 줄을 그대로 보여 준다.
+   */
+  async function handoffToTerminal(): Promise<void> {
+    try {
+      const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(target.id) + '/codex-chat/release', { method: 'POST' });
+      if (!r?.released) { toast('지금 대화창이 쥐고 있는 Codex 대화가 없습니다'); return; }
+      //  넘겼으면 **그 화면으로 데려간다** — 넘겨 놓고 대화창에 남겨 두면 사람이 어디로 가야 할지 모른다.
+      modeChosen = true; setMode('term');
+      toast(r.launched ? '터미널에서 이어집니다 — 이제 터미널에 친 말이 Codex 로 갑니다'
+        : '대화를 놓았습니다 — 터미널에서  ' + String(r.command || '') + '  를 실행하세요');
+      //  ⚠ 넘긴 뒤에는 **대화창이 그 대화를 쥐고 있지 않다.** 그런데 배달 판정은 아직 배포 기본값(app-server)을
+      //   보므로, 여기 입력칸에 쓰면 새 app-server 가 같은 스레드를 잡으려다 부딪힌다(codex 는 스레드당 writer 하나).
+      //   그 사실을 **적어 둔다** — 판정 자체를 세션 단위로 옮기는 일은 따로다(#4135 머리말).
+      view.setNote('이 대화는 이제 터미널이 이어갑니다 — 여기 말고 터미널에 쓰세요.');
+    } catch (e: any) { toast('넘기지 못했습니다 — ' + ((e && e.message) || e), true); }
   }
 
   /**
@@ -1065,14 +1113,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         toast(`글자 크기: ${CHAT_FONT_LABELS[fontStep]}`);
       }),
       isBox() && target.owned && target.live && String(target.raw?.harness || '') === 'codex'
-        ? row('대화를 터미널로 넘기기', '대화창이 쥔 Codex 대화를 놓아, 터미널에서 이어가게 합니다', '넘기기', async () => {
-            try {
-              const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(target.id) + '/codex-chat/release', { method: 'POST' });
-              toast(r?.released
-                ? '대화를 놓았습니다 — 터미널에서  codex resume ' + String(r.thread_id || '').slice(0, 8) + '…  으로 이어가세요'
-                : '지금 대화창이 쥐고 있는 Codex 대화가 없습니다');
-            } catch (e: any) { toast('넘기지 못했습니다 — ' + ((e && e.message) || e), true); }
-          }) : null,
+        ? row('대화를 터미널로 넘기기', '대화창이 쥔 Codex 대화를 놓고, 터미널에서 Codex 를 이어 띄웁니다', '넘기기', () => void handoffToTerminal()) : null,
     ] });
 
     // ── 터미널 ──
@@ -2234,6 +2275,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       head.dataset.sid = t.id;   // #3784 우클릭 메뉴가 읽는 세션 id — 겉(머리줄)이 다른 세션으로 바뀌면 같이 바뀐다
       if (!hcat && t.raw?.harness) { void runCatalog().then((hs) => { hcat = findHarness(hs, String(t.raw.harness)); paintRun(); }); }
       paintRun();                                 // 세션이 끝나면 드롭다운은 물러나고 사실 표시(칩)만 남는다
+      paintShellBar();                            // #4135 — 열 때는 행이 얇아 «pane 이 셸인가» 를 몰랐을 수 있다(방금 만든 세션)
       if (t.label && !/^box-|^[0-9a-f-]{20,}$/i.test(t.label)) titleText = t.label;
       paintTitle();                               // pane 이름은 턴마다 바뀌고, 살아있음·소유가 바뀌면 '고칠 수 있는 이름'인지도 바뀐다
       paintState();
