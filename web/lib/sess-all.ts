@@ -168,7 +168,7 @@ export function mainGroupBy(sc: SessScope): SessGroupBy {
 
 /** 카드 안 줄 한 개 — 그 묶음 × 그 프로젝트. */
 export interface SideCardProj { pid: number; n: number; top: number; wait: boolean }
-export interface SideCard { key: string; n: number; projects: SideCardProj[] }
+export interface SideCard { key: string; n: number; top: number; projects: SideCardProj[] }
 
 /** 세션들을 프로젝트 줄로 센다 — «프로젝트 없음»(0) 맨 앞, 나머지는 최근 활동 순, 같으면 id 순. 확인 필요 세션이 있으면 표식. 휴지통 것은 세지 않는다. */
 export function projectLines(rows: readonly AllSessLike[] | null | undefined): SideCardProj[] {
@@ -185,12 +185,38 @@ export function projectLines(rows: readonly AllSessLike[] | null | undefined): S
   return [...m.values()].sort((a, b) => Number(b.pid === 0) - Number(a.pid === 0) || b.top - a.top || a.pid - b.pid);
 }
 
-/** 사이드바 카드 — 기준의 묶음마다 한 장(순서는 groupAllSess 와 같다), 카드 안 줄은 projectLines. 묶지 않음이면 카드가 없다. 휴지통 것은 세지 않는다. */
+/** 사이드바 카드 — 기준의 묶음마다 한 장, 카드 안 줄은 projectLines. 묶지 않음이면 카드가 없다. 휴지통 것은 세지 않는다.
+ *  ★ 카드 순서는 어느 기준이든 **가장 최근 활동 순**(원준 2026-09-25 — 위키 사이드바와 같은 «첫 화면에 다 들어오게» 규칙과 한 벌).
+ *   같으면 세션 많은 순, 그다음 key 순. 본문 묶음 순서(groupAllSess)는 따로다 — 본문은 나 · 확인 필요를 먼저 세운다. */
 export function sideCards(rows: readonly AllSessLike[] | null | undefined, by: SessGroupBy, now: number,
   stateRank: (key: string) => number = () => 99): SideCard[] {
   if (by === 'none') return [];
   const live = (rows || []).filter((s) => !s.trashedAt);
-  return groupAllSess(live, by, now, stateRank).map((g) => ({ key: g.key, n: g.rows.length, projects: projectLines(g.rows) }));
+  return groupAllSess(live, by, now, stateRank)
+    .map((g) => ({ key: g.key, n: g.rows.length, top: Math.max(0, ...g.rows.map((s) => Number(s.lastSeen) || 0)), projects: projectLines(g.rows) }))
+    .sort((a, b) => b.top - a.top || b.n - a.n || a.key.localeCompare(b.key));
+}
+
+/** 사이드바에 세울 카드 — 들어가는 만큼(fit 장)만 세우고 나머지는 한 줄(«리스트 N개 더»)로 접는다(원준 2026-09-25 «첫 화면은 스크롤 없이»).
+ *  · 펼쳤으면(expanded) 전부.  · fit 이 0 이하여도 한 장은 세운다(카드가 하나도 없는 사이드바는 없다).
+ *  · 고른 카드(selected)는 늘 보인다 — 접힐 자리였으면 마지막 자리를 그 카드에 내준다(순서는 원래 순서 그대로).
+ *  · hidden 은 접힌 장수. 0 이면 접는 줄을 세우지 않는다. */
+export function planSideCards(keys: readonly string[] | null | undefined, fit: number, selected: string | null, expanded: boolean): { shown: string[]; hidden: number } {
+  const all = [...(keys || [])];
+  if (!all.length) return { shown: [], hidden: 0 };
+  if (expanded) return { shown: all, hidden: 0 };
+  const k = Math.max(1, Math.min(all.length, Math.floor(Number(fit) || 0)));
+  let pick = all.slice(0, k);
+  if (selected !== null && all.includes(selected) && !pick.includes(selected)) {
+    pick = [...pick.slice(0, k - 1), selected];   // 고른 카드는 보이는 카드들보다 늘 뒤라 끝에 붙여도 순서 그대로
+  }
+  return { shown: pick, hidden: all.length - pick.length };
+}
+
+/** 접는 줄의 글 — 사람은 «명», 그 밖은 «개». */
+export function hiddenCardsLabel(by: SessGroupBy, n: number): string {
+  const noun = by === 'list' ? '리스트' : by === 'owner' ? '사람' : by === 'state' ? '상태' : by === 'day' ? '날짜' : '묶음';
+  return `${noun} ${n}${by === 'owner' ? '명' : '개'} 더`;
 }
 
 /** 고른 것이 아직 있나 — 고른 카드가 사라지면 전체로, 고른 줄이 그 카드에 없으면 줄만 푼다. 묶지 않음이면 줄(proj)을 lines 에서 찾는다. */
