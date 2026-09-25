@@ -325,6 +325,7 @@
   .cxr-row-m { grid-template-columns: 40px 28px minmax(0, 1fr) 14px; row-gap: 3px; }
   .cxr-row-m .cxr-s { grid-column: 3 / 4; grid-row: 2; justify-content: flex-start; white-space: normal; flex-wrap: wrap; }
   .cxr-row-m .cxr-chev { grid-column: 4; grid-row: 1; }
+  .cxr-row-m .cxr-kt { display: none; }   /* 좁은 줄에선 이름이 먼저다 — 종류는 요약(새 자료 · 새 지식)이 말한다 */
   .cxr-xd { padding: 0 12px 12px; grid-template-columns: 1fr; }
   .cxm-cell-s { flex: 1 1 100%; white-space: normal; }
   /* 세션 이력 — 한 줄에 [제목·메타][완전 삭제][이어보기] 셋이 서던 것을 두 줄로. */
