@@ -284,6 +284,10 @@ if (lib) {
   ok(/secHead\('AI 세션', total \|\| null, byBtn,/.test(rs) && /fitWikiList\(listEl, order, sizes, forced, build\);/.test(rs)
     && /class: 'v2-ksp v2-pcard v2-scard open'/.test(rs) && /v2-pg-past/.test(rs),
     "W4b 사이드바는 위키 사이드바 3판 부품(.v2-ksp 카드 · 「N개 더」 · 줄 나누기 fitWikiList), 드롭다운은 머리의 ＋ 앞");
+  const ICONS_SRC = read("web/v2/icons.ts");
+  const usedIc = [...(rs.match(/sc\.by === 'day' \? '([a-z]+)' : sc\.by === 'owner' \? '([a-z]+)' : '([a-z]+)'/) || []).slice(1)];
+  ok(usedIc.length === 3 && usedIc.every((n) => new RegExp("\\n  " + n + ": '").test(ICONS_SRC)),
+    "W4c 카드 머리 아이콘(시간 · 사람 · 그 밖)이 전부 ICONS 에 있다 — 없는 이름은 격자 아이콘으로 조용히 떨어진다(리뷰 지적)");
   const CSS = read("public/styles/47-v2-rail.css");
   ok(/\.v2-sa-peek \{[^}]*position: absolute;[^}]*width: min\(640px, 100%\)/.test(CSS) && /\.v2-sa-row \{ height: 46px;/.test(CSS),
     "W1i 사이드 피크 640px · 행 46px(위키 2판과 같은 치수)");

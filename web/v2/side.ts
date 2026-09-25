@@ -1425,7 +1425,7 @@ function renderSessions(): void {
         el('button', { class: 'v2-ksp-t', type: 'button', 'aria-pressed': String(headOn), title: `${x.name} — 이 묶음 세션만 가운데 목록에 보여요`,
           onclick: () => pick({ by: sc.by, group: x.key, proj: null }) },
           el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' }),
-          icon(sc.by === 'day' ? 'clock' : sc.by === 'owner' ? 'person' : sc.by === 'list' ? 'list' : 'layers', 'v2-ksp-ic'),
+          icon(sc.by === 'day' ? 'clock' : sc.by === 'owner' ? 'person' : 'layers', 'v2-ksp-ic'),
           el('span', { class: 'n', text: x.name })),
         el('span', { class: 'v2-cnt', text: fmtN(x.n) })),
       el('div', { class: 'v2-ksp-b' }, ...kids));
