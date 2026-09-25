@@ -1341,9 +1341,9 @@ function viewerPart(ctx: PartCtx): Part {
       }));
     };
     search.addEventListener('input', () => { q = search.value; draw(); });
-    pv.reset();
     draw();
     showPlain(el('div', { class: 'pn-ed-pick2' }, search, rows), true);
+    pv.reset();   // 붙인 뒤에 — 떨어져 나간(옛 목록의) 상자만 잊는다(file-preview reset 주석)
     window.setTimeout(() => { if (q) search.focus(); }, 0);
   }
 

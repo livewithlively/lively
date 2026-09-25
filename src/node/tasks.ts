@@ -16,6 +16,7 @@ import {
   TMUX_BIN, PANE_LOCALE, HARNESSES, resolveRootPath, resolveProfileConfigDir, profileConfigDir, sessionPrefix, ensureMemberOsUser,
 } from "../terminal/terminal-sessions.js";
 import { wrapAsMember, isolationInfraReady, memberExecConfigured, fileOpsAtMemberBoundary } from "../terminal/terminal-isolation.js";
+import { ensureProfileKitWired } from "../terminal/profile-kit-seed.js";   // #4135 — 프로필 dir 은 mkdir 만으론 빈 껍데기다
 import { memberRm, memberWriteFile, memberNodeJson } from "../terminal/terminal-member-fs.js";   // 저장소 분리 배포의 작업 폴더 op(아래 TaskFs)
 import { envKeepPolicy } from "../terminal/session-env-contract.js";
 import { provisionTaskRepo, type RepoProvisionAuth } from "../project/project-provision.js";
@@ -534,6 +535,7 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
     if (isolationInfraReady() && process.env.LIVELY_MULTIPROFILE !== "0") {
       const profileDir = profileConfigDir(user);
       await fsp.mkdir(profileDir, { recursive: true, mode: 0o700 });
+      await ensureProfileKitWired(profileDir);   // #4135 — 빈 프로필이면 워커 세션도 훅(업싱크·단계 보고) 없이 돈다. sessions.ts 와 같은 자리.
       args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
     } else {
       const profileDir = await resolveProfileConfigDir(user);

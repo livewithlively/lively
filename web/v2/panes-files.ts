@@ -13,6 +13,7 @@ import { authDownload, upDirSupported, upDropZone, upFromInput, upSend, upToast,
 import { openInViewerPart, FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHINE_FILES, NOISE_RE, SORT_LABEL, TRASH_DIR, attachName, ctxMenu, folderIcon, freeName, kindOf, lsGet, lsSet, pnIcon, stamp, type FileItem, type SortKey } from './panes-kit.js';
 import { findMatcher } from '../lib/find.js';
 import { createPreviewKit } from './file-preview.js';
+import { reuseKeyed, type KeyedCard } from './keyed-cards.js';   // #4135 — 제자리 되그리기(바뀐 카드만 새로)
 import type { Part, PartCtx } from './panes-parts.js';
 
 export function filesPart(ctx: PartCtx): Part {
@@ -559,9 +560,21 @@ export function filesPart(ctx: PartCtx): Part {
     return n;
   }
 
+  //  ── 제자리 되그리기(#4135, 원준 2026-09-25: "미리보기가 몇 초마다 다시 불러와지는 게 보여서 계속 깜빡거린다") ──
+  //  종전엔 서명이 바뀌면 격자를 **통째로** 새로 만들었다 — 카드가 전부 새 노드라 미리보기(blob 받기)도 전부 다시 받았고,
+  //  그 사이 아이콘이 잠깐 섰다. 그런데 루트의 서명은 8초마다 바뀐다: 찾기 재료(loadAll)가 매 틱 부르는 매니페스트가
+  //  AGENTS.md 를 다시 써서(project-routes ensureAgentsMd — 내용이 같아도 도장이 매번 새 값, 2026-09-25 실측 3회 연속)
+  //  그 한 줄 때문에 카드 전부가 아이콘 → 그림으로 다시 떴다. 파일 하나가 바뀌면 **그 카드만** 바뀌어야 한다 —
+  //  카드를 «경로 · 종류 · 도장(mtime·size) · 빈 폴더 · 보기 · 이름 고치는 중 · 찾기 열» 열쇠로 붙잡아 두고, 열쇠가 같으면
+  //  노드째 다시 쓴다(자리만 옮긴다 — 옮겨도 그림은 남고, 관찰자(file-preview seenPv)도 이미 채운 상자를 다시 받지 않는다).
+  //  ⚠ 손잡이(click·dblclick·drag)는 만들 때의 FileItem 을 닫아 둔다 — 열쇠가 같으면 그 값들(path·type·mtime·size·empty)이
+  //   전부 같으므로 옛 객체를 써도 결과가 같다. 열쇠에 없는 값을 손잡이가 읽게 되면 열쇠에도 넣어야 한다.
+  const cards = new Map<string, KeyedCard<HTMLElement>>();
+  let grid: HTMLElement | null = null;
+  const cardKey = (f: FileItem, q: string): string =>
+    [f.path, f.type, f.mtime, f.size, f.empty ? 1 : 0, view, renameAt === f.path ? 'e' : '', q ? dirOf(f.path) : ''].join('\u0000');
   function render(): void {
     crumbBar();
-    pv.reset();
     const q = query.trim();
     if (q) {
       //  찾을 땐 이 프로젝트 자료 **전체**에서(폴더는 뺀다 — 찾는 것은 파일이다). 매니페스트가 이미 평평한 목록이다.
@@ -569,15 +582,21 @@ export function filesPart(ctx: PartCtx): Part {
       ordered = sortItems(allFiles.filter((f) => f.type !== 'dir' && m(f.name, f.path)));
     } else ordered = sortItems(items);
     if (!ordered.length) {
+      cards.clear(); grid = null;
       body.replaceChildren(marquee, el('div', { class: 'pn-empty' },
         pnIcon(q ? 'search' : 'drop', 'pn-i big'),
         el('b', { text: q ? '찾는 자료가 없어요.' : cwd ? '이 폴더는 비어 있어요.' : '아직 자료가 없어요.' }),
         el('p', { class: 'pn-fine', text: q ? '이름 일부로 다시 찾아보세요 — 초성(ㅍㅌ)이나 띄어쓰기 없이도 찾습니다.' : '파일이나 폴더를 이 칸에 끌어다 놓거나, 그림을 복사해 ⌘V 로 붙여넣거나, [＋ 올리기]를 누르세요. 세션이 만든 결과물도 여기 쌓입니다.' })));
+      pv.reset();
       paintSel();
       return;
     }
-    const wrap = el('div', { class: view === 'list' ? 'pn-flist' : 'pn-fgrid' }, ...ordered.map(itemNode));
-    body.replaceChildren(marquee, wrap);
+    const cls = view === 'list' ? 'pn-flist' : 'pn-fgrid';
+    const host = grid && grid.isConnected && grid.className === cls ? grid : el('div', { class: cls }) as HTMLElement;
+    if (host !== grid) { grid = host; cards.clear(); }   // 보기가 바뀌었거나 빈 화면을 거쳤다 — 격자째 새로
+    host.replaceChildren(...reuseKeyed(cards, ordered, (f) => f.path, (f) => cardKey(f, q), itemNode));
+    body.replaceChildren(marquee, host);
+    pv.reset();     // 붙인 **뒤에** — 떨어져 나간 상자만 잊는다(살아남은 카드의 종이는 그대로 다시 잰다)
     paintSel();
   }
 

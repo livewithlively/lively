@@ -51,6 +51,7 @@ import { sessionActivityTitle, paneAwaitingInput, resolveAgentPhase, observeAgen
 import { sessionMetaCmds, sessionWindowCmds, metaHealCmds, needsMetaHeal, makeMetaHealGate } from "./session-meta-heal.js";   // #3892 — 표식 한 벌 + 표식 없는 세션 되채우기
 import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, mintSessionMcpToken, revokeSessionHookToken } from "./profiles.js";
 import { ensureMemberKitSeeded } from "./member-kit-seed.js";
+import { ensureProfileKitWired } from "./profile-kit-seed.js";   // #4135 — 프로필 dir 은 mkdir 만으론 빈 껍데기다
 import { logger } from "../log.js";
 import { canSeeSession } from "./write-cap.js";
 import { loadDesiredMap, loadDesiredOne, resolveDesired, resolveSessionDir } from "../sessions/session-desired.js";
@@ -839,6 +840,11 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     if (process.env.LIVELY_MULTIPROFILE !== "0" && !input.hostProfile) {
       const profileDir = profileConfigDir(user);
       await fsp.mkdir(profileDir, { recursive: true, mode: 0o700 });
+      // 빈 프로필 방지(#4135) — 노드에는 provisionProfile(게이트웨이 관리자 버튼)이 없어 이 dir 이 훅·MCP 없이 **비어 있었고**,
+      //  CLAUDE_CONFIG_DIR 이 있으면 claude 는 홈의 settings.json 을 안 보므로 그 멤버의 모든 세션에서 훅이 통째로 안 돌았다
+      //  (세션 단계 보고·업싱크·AGENTS 주입 전부). 판을 띄우기 **전에** 배선을 보장한다 — 첫 턴부터 훅이 돌아야 한다.
+      //  best-effort(profile-kit-seed 머리말) — 못 심어도 세션은 종전대로 뜬다.
+      await ensureProfileKitWired(profileDir);
       args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
     }
     // 훅 신원(#1719 후속) — 이 pane 의 훅이 **그 세션 주인**으로 보고하게 한다(대화 uuid 매핑·활동/단계·정상종료).

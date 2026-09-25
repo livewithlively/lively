@@ -13,7 +13,7 @@ import { PV_PAGE_W, PV_MAX, PV_W, authHeaders } from './panes-kit.js';
 export interface PreviewKit {
   /** 이 상자에 미리보기를 채운다(보이면 자동으로 — 관찰자가 없으면 즉시 큐에). */
   watch: (box: HTMLElement, path: string, kind: string, size: number) => void;
-  /** 다시 그리기 전에 부른다 — 종이 자리를 다시 재는 목록을 비운다. */
+  /** 다시 그린 **뒤에** 부른다 — 떨어져 나간 상자의 종이 자리만 잊는다(살아남은 카드는 계속 다시 잰다). */
   reset: () => void;
   destroy: () => void;
 }
@@ -228,7 +228,9 @@ export function createPreviewKit(o: { fileUrl: (path: string) => string; dead: (
       if (io) io.observe(box);
       else { seenPv.add(box); queue.push(() => fillPreview(box, path, kind, size)); pump(); }
     },
-    reset: () => { fits.length = 0; },
+    //  떨어져 나간 상자만 잊는다 — 제자리 되그리기(panes-files render)로 살아남은 카드의 종이는 칸 폭이 바뀌면 계속 다시 재야 한다.
+    //  종전의 «통째로 비우기»는 카드가 늘 새 노드일 때만 맞았다. 그래서 다시 그린 **뒤에** 부른다(붙어 있나가 그때 정해진다).
+    reset: () => { for (let i = fits.length - 1; i >= 0; i--) if (!fits[i][0].isConnected) fits.splice(i, 1); },
     destroy: () => { io?.disconnect(); ro?.disconnect(); blobUrls.forEach((u) => URL.revokeObjectURL(u)); },
   };
 }
