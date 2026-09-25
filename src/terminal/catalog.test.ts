@@ -212,9 +212,10 @@ test("harnessSettingsArgv: win32 가 아니면 종전 그대로(무회귀)", () 
   assert.deepEqual(harnessSettingsArgv("claude", { theme: "dark", platform: "linux" }), harnessThemeArgv("claude", "dark"));
 });
 
-test("harnessThemeEnvArgs: win32 에서는 JSON env(opencode) 도 얹지 않는다 — psmux 가 따옴표를 벗긴다", () => {
+test("harnessThemeEnvArgs: win32 에서는 JSON env(opencode)만 빼고 단순 env(codex)는 보존한다", () => {
   assert.ok(harnessThemeEnvArgs("opencode", "dark").length > 0, "다른 표면에선 종전대로 나간다");
   assert.deepEqual(harnessThemeEnvArgs("opencode", "dark", "win32"), []);
+  assert.deepEqual(harnessThemeEnvArgs("codex", "light", "win32"), ["-e", "FORCE_COLOR=1"]);
 });
 
 // ── 대화 런타임 세션의 pane (#2439, 2026-09-01) ────────────────────────────────────

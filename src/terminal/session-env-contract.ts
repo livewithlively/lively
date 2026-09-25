@@ -15,7 +15,7 @@
 //   조용히 사라지던 변수가 **6부류**였다:
 //     ① LIVELY_SESSION_KIND — #2162 가 «훅이 읽는 유일한 종류 신호» 라고 못박은 값. 격리 세션에선
 //        훅이 다시 LIVELY_TASK_WS 스니핑으로 되돌아간다.
-//     ② COLORFGBG·LIVELY_THEME·OPENCODE_CONFIG_CONTENT — 격리 세션에서 테마(#1683)가 안 걸린다.
+//     ② COLORFGBG·LIVELY_THEME·FORCE_COLOR·OPENCODE_CONFIG_CONTENT — 격리 세션에서 테마(#1683)가 안 걸린다.
 //     ③ LVLY_TENANT_SLUG — pane 안의 훅이 워크스페이스 소속을 잃고 **primary 로 폴백**한다(#1437).
 //     ④ 공유 빌드 캐시 11+2종 — #813 T3 이 «격리로 갈린 홈들의 캐시 중복을 접는다» 고 한 바로 그
 //        표면에서만 안 걸렸다. 값이 경로(`/` 포함)라 sudo 의 env_check 로는 절대 안 넘어온다.
@@ -217,12 +217,13 @@ export const SESSION_ENV_GROUPS: readonly SessionEnvGroup[] = [
   },
   {
     title: "화면 테마",
-    names: ["COLORFGBG", "LIVELY_THEME", "OPENCODE_CONFIG_CONTENT"],
+    names: ["COLORFGBG", "LIVELY_THEME", "FORCE_COLOR", "OPENCODE_CONFIG_CONTENT"],
     keep: "keep",
     why:
       "#1683 — 터미널이 앱에게 배경색을 알려주는 표준 통로(COLORFGBG)와 우리 훅·스킬이 읽는 명시 값(LIVELY_THEME), " +
-      "그리고 실행 시점 테마 주입 수단이 env 뿐인 하네스(opencode 의 OPENCODE_CONFIG_CONTENT — 값은 " +
-      "`{\"theme\":\"dark|light\"}` JSON). 미보존이면 격리 세션에서만 테마가 안 걸린다. " +
+      "기본색 렌더링으로 실행 중 화면 전환을 따르게 하는 Codex의 FORCE_COLOR, 실행 시점 테마 주입 수단이 env 뿐인 " +
+      "하네스(opencode 의 OPENCODE_CONFIG_CONTENT — 값은 `{\"theme\":\"dark|light\"}` JSON). " +
+      "미보존이면 격리 세션에서만 테마가 안 걸린다. " +
       "⚠ 하네스 테마 표(catalog.ts HARNESS_THEME)에 env 방식 하네스를 더하면 여기 함께 더한다(시험이 강제).",
   },
   {

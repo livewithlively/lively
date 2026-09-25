@@ -166,15 +166,26 @@ t("harnessThemeArgv: codex 는 -c 로 tui.theme 을 덮는다 — 값이 dark/li
   assert.deepEqual(harnessThemeArgv("codex", "dark"), ["-c", "tui.theme=one-half-dark"]);
   assert.deepEqual(harnessThemeArgv("codex", "light"), ["-c", "tui.theme=one-half-light"]);
 });
+t("★ harnessThemeEnvArgs: codex 는 기본색 렌더링으로 입력칸이 실행 중 테마 전환을 따라간다", () => {
+  for (const theme of ["dark", "light"]) {
+    assert.deepEqual(harnessThemeEnvArgs("codex", theme), ["-e", "FORCE_COLOR=1"]);
+    assert.deepEqual(harnessThemeEnvArgs("codex", theme, "win32"), ["-e", "FORCE_COLOR=1"]);
+  }
+});
 t("harnessThemeEnvArgs: opencode 는 설정을 env 문자열로 받는다(tmux -e 쌍으로)", () => {
-  assert.deepEqual(harnessThemeEnvArgs("opencode", "dark"), ["-e", 'OPENCODE_CONFIG_CONTENT={"theme":"dark"}']);
+  for (const theme of ["dark", "light"] as const) {
+    assert.deepEqual(harnessThemeEnvArgs("opencode", theme), ["-e", `OPENCODE_CONFIG_CONTENT={"theme":"${theme}"}`]);
+    assert.deepEqual(harnessThemeEnvArgs("opencode", theme, "win32"), []);
+  }
 });
 t("★ 실행 시점 주입 경로가 없는 하네스는 **아무것도 안 한다** — 전역 설정을 대신 고치지 않는다", () => {
   // antigravity: 테마는 있으나(colorScheme) 플래그·env 가 없다. 비격리 박스에선 그 파일이 구성원 공유라
   //  대신 고치면 남의 화면까지 바뀐다. grok: 테마 기능 자체가 없다.
   for (const h of ["antigravity", "grok", "shell", "모르는하네스"]) {
-    assert.deepEqual(harnessThemeArgv(h, "dark"), [], `${h} 는 argv 를 얹지 않아야 한다`);
-    assert.deepEqual(harnessThemeEnvArgs(h, "dark"), [], `${h} 는 env 를 얹지 않아야 한다`);
+    for (const theme of ["dark", "light"] as const) {
+      assert.deepEqual(harnessThemeArgv(h, theme), [], `${h} 는 argv 를 얹지 않아야 한다`);
+      assert.deepEqual(harnessThemeEnvArgs(h, theme), [], `${h} 는 env 를 얹지 않아야 한다`);
+    }
     assert.equal(harnessFollowsTheme(h), false);
   }
 });
