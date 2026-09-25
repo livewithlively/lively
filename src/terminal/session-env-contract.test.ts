@@ -22,6 +22,7 @@ import {
 import { HARNESSES, modeEnvArgs, themeEnvArgs, harnessThemeEnvArgs } from "./catalog.js";
 import { safeCacheEnv, homeRelocateEnv } from "../ops/build-cache.js";
 import { SESSION_KIND_ENV } from "../sessions/session-kind.js";
+import { sessionCredsEnvArgs } from "./session-creds.js";
 
 // 실패 메시지에 항상 붙일 «다음 행동». 선언만 고치고 생성물을 안 돌리면 sudoers 가 그대로라 사고가 남는다.
 const REGEN = "→ src/terminal/session-env-contract.ts 에 선언한 뒤 `npm run gen:sudoers` 로 sudoers 를 재생성하라";
@@ -157,6 +158,11 @@ for (const h of HARNESSES) {
 assert.ok(harnessNames.size > 0,
   `어느 하네스도 테마 env 를 내지 않는다(훑은 하네스: ${fmt(HARNESSES.map((h) => h.key))}) — 하네스 테마 축이 헛돈다`);
 
+// ── 축 ①-d: 노드 세션 신원 봉투(#4233) — sessions.ts 가 `...sessionCredsEnvArgs(…)` 로 싣는다(리터럴 스캔에 안 걸린다) ──
+const credNames = new Set<string>(namesFromDashE(sessionCredsEnvArgs(
+  { id: "box-x-00000000", hookToken: "lvk_" + "a".repeat(32), mcpToken: "lvk_" + "b".repeat(32) }, "box-x-00000000")));
+assert.equal(credNames.size, 2, `sessionCredsEnvArgs 가 이름 ${credNames.size}개를 냈다(훅·MCP 둘 기대) — 봉투 축이 헛돈다: ${fmt(credNames)}`);
+
 // ── 축 ①-c: 공유 빌드 캐시 (Record 의 키가 곧 env 이름) ────────────────────────
 const cacheNames = new Set<string>([...Object.keys(safeCacheEnv("/tmp/x")), ...Object.keys(homeRelocateEnv("/tmp/x"))]);
 assert.ok(Object.keys(safeCacheEnv("/tmp/x")).length > 0, "safeCacheEnv 가 빈 객체다 — 캐시 축이 헛돈다");
@@ -225,6 +231,7 @@ addAxis("하네스 테마(순수함수)", harnessNames);
 addAxis("공유 빌드 캐시(값의 출처)", cacheNames);
 addAxis("주입 코드 스캔", scannedNames);
 addAxis("세션 종류 상수", [SESSION_KIND_ENV]);
+addAxis("노드 세션 신원 봉투(순수함수)", credNames);
 
 // ★ 배선 — 축을 다 합쳤는데도 수확이 초라하면 어딘가 헛돌고 있다.
 assert.ok(injected.size >= 15,

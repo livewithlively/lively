@@ -52,7 +52,8 @@ import { getProjectRow } from "../v6/project-store.js";   // #2549 — 삭제된
 import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 하네스 가용성(미보고 → 기준선)
 import { nodeOpenTo, nodeHostProfile } from "../node/node-access.js";
 import { createShellProject, firstPromptProjectPlan } from "../project/first-prompt-project.js";
-import { launchSession, sessionInputFromBody, relayNodeOp, requireCreatableNode, registerSessionInstance, recordSessionTenant, chatFieldsOf, themeOf, prepareRemoteAppSession } from "./session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
+import { launchSession, sessionInputFromBody, relayNodeOp, requireCreatableNode, registerSessionInstance, recordSessionTenant, chatFieldsOf, themeOf, prepareRemoteAppSession, createNodeSession, killNodeSessionAndRevoke, revokeNodeSessionCreds } from "./session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
+import { bindNodeSessionProjectOrKill } from "../node/provision-remote.js";   // #4233 — 전환·복원한 노드 세션의 소속 확정(launchSession 과 같은 규칙)
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
@@ -1079,9 +1080,16 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     if (nodeId) {
       await requireCreatableNode(me, nodeId);
       const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);
-      const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: me }, input: { ...input, invites: [], hostProfile }, invites: st.invites });
-      await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
+      //  #4233 — 세션 주인 신원 봉투를 싣는 한 길(createNodeSession). 종전 직접 릴레이는 봉투가 없어 전환된 세션이
+      //   공용 토큰(노드에 키트를 깐 사람)으로 서버에 물었다.
+      const session = await createNodeSession(nodeId, "create", me, input, { hostProfile, invites: st.invites });
+      await recordSessionTenant(session.id, () => killNodeSessionAndRevoke(nodeId, me, session.id));
       await registerSessionInstance(session.id, me, { appId: input.appId, projectId: input.projectId, title: session.label });
+      //  #4233 — 프로젝트 소속도 새 세션 id 로 확정한다(launchSession 노드 갈래와 같은 규칙). 종전엔 이 갈래만 빠져서
+      //   전환된 노드 세션이 execution_session 이 없는 채로 떠 «미연결» 로 보였다(중앙 갈래는 createSession 이 쓴다).
+      if (input.projectId && input.projectSrc !== "org") {
+        await bindNodeSessionProjectOrKill({ nodeId, sessionId: session.id, requester: me, harness: session.harness || input.harness, projectId: input.projectId });
+      }
       await mirrorNodeSession({ ...session, invites: st.invites }, nodeId, input, me);
       res.json({ ok: true, from: id, session: { ...session, node: { id: nodeId, online: true } } });
       return;
@@ -1208,10 +1216,14 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         if (!killed && !nodeOnline(nodeId)) {
           throw new HttpError(503, "그 컴퓨터(" + nodeId + ")가 지금 연결돼 있지 않아 이 세션을 멈출 수 없어요 — 켜지면 다시 시도해 주세요");
         }
+        //  #4233 — pane 이 내려갔으니 그 세션 주인 토큰을 거둔다(복원은 새 id 로 새로 굽는다). 중앙 killSession 과 같은 일.
+        await revokeNodeSessionCreds(id);
         res.json({ ok: true, reclaimed: true, killed });
         return;
       }
       await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "노드 세션 desired-state 삭제 실패(비치명)"));
+      //  #4233 — 세션 주인 토큰 회수(중앙 killSession 이 하던 일 — 이 경로는 그걸 안 거친다).
+      await revokeNodeSessionCreds(id);
       //  이 경로는 노드에 kill 을 **릴레이**하므로 게이트웨이 killSession 을 안 거친다 — 인스턴스는 여기서 닫는다(#1954 후속).
       await closeSessionAppInstances(id, "kill").catch((e) => logger.warn({ err: e, id }, "앱 인스턴스 닫기 실패(비치명)"));
       forgetTenantMap();
@@ -1355,9 +1367,15 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       const invites = Array.isArray(st.invites) ? st.invites : [];
       const remoteInput = await prepareRemoteAppSession(input, owner);
       const op: NodeOp = input.appId ? "createAppSession" : "create";
-      const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: owner }, input: { ...remoteInput, invites: [], hostProfile }, invites });
-      await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: owner }, id: session.id }));
+      //  #4233 — 세션 주인 신원 봉투를 싣는 한 길(createNodeSession) — 복원된 세션도 제 주인으로 서버에 묻는다.
+      const session = await createNodeSession(nodeId, op, owner, remoteInput, { hostProfile, invites });
+      await recordSessionTenant(session.id, () => killNodeSessionAndRevoke(nodeId, owner, session.id));
       await registerSessionInstance(session.id, owner, { appId: input.appId, projectId: input.projectId, title: session.label });
+      //  #4233 — 복원은 **새 세션 id** 다. 소속을 그 id 로 확정하지 않으면 대화 승계(adoptLegacyBinding)가 닿지 않는
+      //   경우(새 대화로 연 복원 등) «미연결» 로 뜬다. launchSession 노드 갈래와 같은 규칙.
+      if (input.projectId && input.projectSrc !== "org") {
+        await bindNodeSessionProjectOrKill({ nodeId, sessionId: session.id, requester: owner, harness: session.harness || input.harness, projectId: input.projectId });
+      }
       await mirrorNodeSession({ ...session, invites }, nodeId, input, owner);
       // #2122 ① — 승계를 **권위화**한다: 결과를 보고, 실패하면 옛 행을 지우지 않는다(아래). 노드 세션은 내구 맵에도
       //  쓴다 — 그 표는 INSERT ON CONFLICT 라 desired-state 행이 아직 없어도(미러 실패) 매핑이 남는다.
