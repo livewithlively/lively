@@ -1492,11 +1492,15 @@ async function dropFileToAgent(file) {
   } catch (e) { toast('업로드 실패 — ' + e.message, true); return; }
   // 절대경로엔 공백·한글이 흔해(프로젝트 폴더명) 작은따옴표로 감싼다(내부 ' 는 '\'' 로 이스케이프). 전송은 사용자가.
   const quoted = "'" + abs.replace(/'/g, "'\\''") + "'";
-  sendInput(' ' + quoted + ' '); // 경로를 입력창에 삽입(앞뒤 공백)
+  // ★ #4229 — 폰(모바일 입력 바가 켜진 상태)에선 경로를 PTY 가 아니라 **입력 바의 글 상자**에 넣는다. 폰의 글은 그 상자에서
+  //  완성해 [보내기]로 한 번에 나가므로, 경로만 터미널 줄에 먼저 꽂으면 사람이 쓰는 글과 경로가 두 자리로 갈린다(그리고
+  //  터미널 줄은 폰에서 읽기 전용이라 고칠 수도 없다). 데스크톱·바를 끈 폰은 종전대로 sendInput.
+  const toDock = insertIntoComposer(' ' + quoted + ' ');
+  if (!toDock) sendInput(' ' + quoted + ' '); // 경로를 입력창에 삽입(앞뒤 공백)
   // 알림은 파일명 기준으로 말한다(#1235) — 절대경로는 입력창에 이미 보이고, 사람이 자기가 넣은 걸 알아보는 단서는 이름이다.
   //  ⚠ 입력창 표시 자체를 파일명으로 바꿀 수는 없다: sendInput 은 PTY 로 바이트를 흘릴 뿐이고 그 줄을 그리는 건
   //   클로드 코드 TUI 라, 화면에 보이는 문자열이 곧 클로드가 받는 문자열이다(표시만 갈아끼울 층이 없다).
-  toast('첨부: ' + name + ' — 경로가 입력창에 들어갔어요(설명 적고 Enter)');
+  toast('첨부: ' + name + (toDock ? ' — 경로가 입력칸에 들어갔어요(설명 적고 보내기)' : ' — 경로가 입력창에 들어갔어요(설명 적고 Enter)'));
   if (explorerLoaded) loadDir(curDir);
 }
 // ── 입력줄 선택·되돌리기 (#3778) ──────────────────────────────────────────────────
@@ -2098,7 +2102,7 @@ function openCopySheet() {
   document.body.append(back);
   try { pre.scrollTop = pre.scrollHeight; } catch (_) { /* noop */ }
 }
-function setupMobileDock(mainEl) {
+export function setupMobileDock(mainEl) {
   if (!IS_MOBILE) return;
   document.body.classList.add('mobile');
   // 터치 버튼 공통 — touchstart/touchend 에서 preventDefault 해 **입력칸 포커스를 뺏지 않는다**(버튼 탭마다 키보드가
@@ -2144,7 +2148,22 @@ function setupMobileDock(mainEl) {
   });
   // 입력칸 포커스 때 iOS 가 페이지를 스크롤해 화면을 밀어 올린다 — 되돌린다(뷰포트 맞춤이 높이를 이미 키보드 위로 잡는다).
   mcompEl.addEventListener('focus', () => { setTimeout(() => { try { window.scrollTo(0, 0); } catch (_) { /* noop */ } }, 50); });
-  mdockEl = el('div', { id: 'mdock' }, keys, el('div', { class: 'mrow' }, mcompEl, sendBtn));
+  // ★ #4229 — 사진·파일 첨부. 폰엔 끌어놓기도 ⌘V 도 없어 이 단추가 유일한 길이다. 입력 바는 키보드 바로 위에 있으므로
+  //  글을 쓰다가 그대로 누른다. <input type=file> 은 iOS 에서 «사진 보관함·사진 찍기·파일 선택» 시트를 연다(accept 를
+  //  안 걸어 문서·PDF 도 된다). 다른 단추와 달리 touch 를 가로채지 않는다 — 선택기가 어차피 키보드를 내리고, 파일 선택기는
+  //  «사용자 제스처 안» 에서만 열리므로 브라우저가 가장 확실히 제스처로 치는 click 을 그대로 쓴다.
+  const fileIn: any = el('input', { type: 'file', multiple: '', hidden: '', tabindex: '-1', 'aria-hidden': 'true' });
+  fileIn.addEventListener('change', () => { const fs = [...(fileIn.files || [])]; fileIn.value = ''; if (fs.length) attachFilesToAgent(fs); });
+  const attachBtn = el('button', { class: 'mattach', type: 'button', title: '사진·파일 첨부', 'aria-label': '사진·파일 첨부', text: '📎',
+    onclick: () => { fileIn.value = ''; fileIn.click(); } });
+  // 사진 앱에서 «복사»한 이미지를 글 상자에 붙여넣으면(iOS) 파일로 온다 — 같은 길로 올린다. 글 붙여넣기는 그대로 둔다.
+  mcompEl.addEventListener('paste', (e) => {
+    const dt = e.clipboardData; if (!dt) return;
+    const fs = [...(dt.items || [])].filter((it) => it.kind === 'file').map((it) => it.getAsFile()).filter(Boolean);
+    if (!fs.length) return;
+    e.preventDefault(); attachFilesToAgent(fs);
+  });
+  mdockEl = el('div', { id: 'mdock' }, keys, el('div', { class: 'mrow' }, attachBtn, fileIn, mcompEl, sendBtn));
   mainEl.append(mdockEl);
   applyMobileDock();
 }
@@ -2156,6 +2175,47 @@ function mobilePasteIn() {
     mcompEl.value = v.slice(0, st) + t + v.slice(mcompEl.selectionEnd ?? v.length);
     mobileGrow(); mcompEl.focus();
   }).catch(() => toast('붙여넣기를 못 읽었어요 — 입력칸을 꾹 눌러 붙여넣으세요.', true));
+}
+// 입력 바의 글 상자에 글을 캐럿 자리에 끼워 넣는다(#4229 — 첨부 경로). 바가 없거나 꺼져 있으면 false(호출자가 PTY 로 보낸다).
+function insertIntoComposer(text) {
+  if (!mcompEl || !mobileDockOn()) return false;
+  const v = String(mcompEl.value || '');
+  const st = typeof mcompEl.selectionStart === 'number' ? mcompEl.selectionStart : v.length;
+  const en = typeof mcompEl.selectionEnd === 'number' ? Math.max(st, mcompEl.selectionEnd) : st;
+  mcompEl.value = v.slice(0, st) + text + v.slice(en);
+  try { mcompEl.selectionStart = mcompEl.selectionEnd = st + text.length; } catch (_) { /* noop */ }
+  mobileGrow();
+  try { mcompEl.focus(); } catch (_) { /* noop */ }
+  return true;
+}
+// 폰에서 고른 사진·파일을 하나씩 올린다(#4229). 끌어놓기와 같은 함수(dropFileToAgent)를 타므로 올라가는 자리(uploads/)·
+//  이름 규칙·경로 삽입이 데스크톱과 같다. 순서대로 — 동시에 올리면 겹치는 이름 판정(uniqueUploadName)이 서로를 못 본다.
+//  아주 큰 파일(폰이면 대개 동영상)은 한 번 묻는다 — 셀룰러로 몇 분이 걸리고 AI 가 읽지도 못한다.
+const ATTACH_ASK_BYTES = 50 * 1024 * 1024;
+export async function attachFilesToAgent(files) {
+  for (const f of [...(files || [])]) {
+    if (!f) continue;
+    if (f.size > ATTACH_ASK_BYTES && typeof confirm === 'function'
+      && !confirm((f.name || '파일') + ' 은 ' + Math.round(f.size / 1048576) + 'MB 예요. 올릴까요? (AI 는 사진·문서만 읽어요)')) continue;
+    await dropFileToAgent(await prepareAttachment(f));
+  }
+}
+// iOS 사진 보관함은 보통 JPEG 로 바꿔 주지만, 파일 앱에서 고르면 HEIC 가 그대로 온다 — AI 는 HEIC 를 못 읽는다.
+//  브라우저가 HEIC 를 그릴 수 있으면(사파리) 캔버스로 JPEG 로 바꾸고, 못 그리면 그대로 올리고 알린다(막지는 않는다).
+const HEIC_RE = /\.hei[cf]$/i;
+async function prepareAttachment(file) {
+  const heic = HEIC_RE.test(file.name || '') || /^image\/hei[cf]$/i.test(file.type || '');
+  if (!heic) return file;
+  try {
+    const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' } as any);
+    const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+    c.getContext('2d').drawImage(bmp, 0, 0);
+    const blob: any = await new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('encode'))), 'image/jpeg', 0.9));
+    return new File([blob], (file.name || 'photo').replace(HEIC_RE, '') + '.jpg', { type: 'image/jpeg' });
+  } catch (_) {
+    toast('HEIC 사진을 그대로 올려요 — AI 가 못 읽으면 사진 앱에서 JPEG 로 저장해 다시 올려 주세요', true);
+    return file;
+  }
 }
 function applyMobileDock() {
   const on = mobileDockOn();
@@ -2499,6 +2559,7 @@ function openHelp() {
       sec('파일·이미지 주기',
         tool('끌어다 놓기', '화면 아무 데나 놓으면 ' + uploadDestLabel() + '(uploads/)에 올라가고 그 경로가 입력창에 들어갑니다'),
         tool('붙여넣기', '캡처한 이미지는 ⌘V(Windows 는 Ctrl+V)로 바로 — 같은 방식으로 전달됩니다'),
+        tool('폰에서', '입력 바의 📎 단추로 사진·파일을 고르면 같은 방식으로 전달됩니다(사진 앱에서 복사한 이미지를 글 상자에 붙여넣어도 돼요)'),
         tool('보낼 때', '경로 뒤에 설명을 적고 Enter 를 눌러야 클로드가 읽습니다 (자동 전송 안 함)')),
       sec('문제가 생겼을 때',
         tool('입력 진단 복사', '입력이 이상할 때(키만 눌러도 같은 문자열이 들어가는 등) 아래 버튼으로 최근 입력 기록을 복사해 제보에 붙여 주세요 — 서버로는 전송되지 않아요'),
