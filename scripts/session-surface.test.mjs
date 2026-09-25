@@ -132,10 +132,11 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
   //   원인은 `chatFirst()` 가 두 뜻을 겸한 것 — «codex app-server 인가»(층을 붙일 근거)와
   //   «대화창이 본자리인가»(어느 탭으로 열지)를 한 함수가 답하고 있었다. chatMode 가 'tmux' 인
   //   claude 는 첫 뜻으로 거짓이라, 둘째 뜻까지 거짓이 되어 터미널이 기본이 됐다.
-  ok(/const isCodex = \(\): boolean => String\(target\.raw\?\.harness \|\| ''\) === 'codex';/.test(chat),
-    "㉚ 코덱스 여부를 하네스 행으로 판정한다");
-  ok(/const chatHome = \(\): boolean => !isCodex\(\) && \(chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode/.test(chat),
-    "㉚-b 코덱스는 앱 서버·대화 런타임 여부와 무관하게 터미널을 먼저 연다");
+  //  ★ #4135 — «코덱스는 무조건 터미널»(!isCodex())을 걷어냈다. 서버가 codex 를 tmux(TUI)로 띄우므로 그 세션은
+  //   chatMode='tmux' 라 이 식만으로 터미널이 본자리가 된다. 하네스 이름으로 덮으면 **화면만** 바뀌어,
+  //   pane 이 셸인 옛 app-server 세션에서 사람이 친 말이 zsh 로 간다(원준님 실측 2026-09-25).
+  ok(/const chatHome = \(\): boolean => chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode/.test(chat),
+    "㉚ ★ «대화창이 본자리인가» 는 세션의 모드가 정한다 — 하네스 이름으로 덮지 않는다");
   //  ⚠ 항이 **더 붙는 것**은 막지 않는다 — #3847 이 «서버가 관측 못 한 세션(observed:false)은 대화로 연다» 를
   //   더했다. 여기서 재는 것은 «첫 화면의 축이 chatHome() 인가» 다(chatFirst() 로 정하면 claude 가 터미널로 열린다).
   ok(/setMode\(chatHome\(\)[^;\n]{0,60}\? 'chat' : 'term'\)/.test(chat),

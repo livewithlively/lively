@@ -420,7 +420,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   2026-08-28 에 이 추정을 반대로 둔 이유(«빈 셸을 먼저 보여주는 쪽이 더 나쁘다»)가 그 줄로 메워졌다.
     return false;
   };
-  const isCodex = (): boolean => String(target.raw?.harness || '') === 'codex';
 
   // 대화창 ————
   const view: ChatView = createChatView(chatHost, {
@@ -466,7 +465,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const LIV_CHAT_LABEL = '리브 — 대화';
   const livKickoff = (): boolean => String(target.label || '') === LIV_KICKOFF_LABEL;
   const livChat = (): boolean => String(target.label || '') === LIV_CHAT_LABEL;
-  const chatHome = (): boolean => !isCodex() && (chatFirst() || String(target.raw?.runtimeMode || '') === 'chat' || livKickoff() || livChat() || !!opts.chatHome);
+  //  ★ #4135 — 종전엔 여기에 `!isCodex() &&` 가 붙어 «코덱스는 무조건 터미널» 이었다(stage cb42cf1da).
+  //   그 한 줄이 **화면만** 바꿨기 때문에, pane 이 셸인 app-server 세션에서 사람이 터미널에 친 말이 zsh 로 갔다
+  //   (원준님 실측 2026-09-25). 이제 서버가 codex 를 기본으로 tmux(TUI)로 띄우므로 그 세션은 chatMode='tmux' 라
+  //   이 식만으로 터미널이 본자리가 된다 — 하네스 이름으로 덮을 이유가 사라졌다.
+  //   아직 app-server 로 떠 있는 옛 세션은 대화창이 본자리다(거기가 말 거는 유일한 자리다). 그 세션에서 터미널을
+  //   열면 셸 안내줄이 사실을 말하고 [터미널로 넘기기] 를 준다.
+  const chatHome = (): boolean => chatFirst() || String(target.raw?.runtimeMode || '') === 'chat' || livKickoff() || livChat() || !!opts.chatHome;
 
   // 하네스·모델·추론강도 바꾸기 — 홈 입력창과 같은 서버 카탈로그를 쓴다(목록 두 벌 금지).
   // 런타임 명령이 확인된 축은 POST …/runtime, 나머지는 POST …/handoff 로 같은 작업 자리의 새 프로세스를 연다.

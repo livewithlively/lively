@@ -48,11 +48,10 @@ async function sessionRuntimeStamp(id: string): Promise<string | undefined> {
  *  ⚠ 옛 번들 노드의 행엔 이 값이 없다 → undefined → codex 축이 «이 변경 전 세션(app-server)» 으로 읽는다.
  *   그 노드가 실제로 만드는 세션도 app-server 이므로 그 답이 맞다(번들이 갱신되면 그때부터 표식이 붙는다).
  */
-async function nodeSessionStamp(sessionId: string): Promise<string | undefined> {
+async function nodeSessionStamp(nodeId: string, sessionId: string): Promise<string | undefined> {
   try {
-    const { nodeSessionsInScope } = await import("../node/registry.js");
-    const row = nodeSessionsInScope().find((s) => s.id === sessionId) as { runtimeRaw?: unknown } | undefined;
-    return typeof row?.runtimeRaw === "string" && row.runtimeRaw ? row.runtimeRaw : undefined;
+    const { nodeSessionRuntime } = await import("../node/registry.js");
+    return nodeSessionRuntime(nodeId, sessionId);
   } catch { return undefined; }
 }
 
@@ -240,7 +239,7 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: {
   // 노드(멤버 PC) 세션 — 대화 런타임과 PTY 중 어느 쪽인지 위 헬퍼 한 곳에서 가른다.
   const { nodeRpc } = await import("../node/registry.js");
   const { injectPrompt } = await import("../node/session-inject.js");
-  return deliverPromptToNode({ harness: harnessKey, stamp: await nodeSessionStamp(sessionId) }, {
+  return deliverPromptToNode({ harness: harnessKey, stamp: await nodeSessionStamp(nodeId, sessionId) }, {
     chatSend: () => nodeRpc(nodeId, "chatSend", { id: sessionId, text, harness: harnessKey }),
     inject: opts?.firstPromptTrustOk === undefined
       ? () => injectPrompt(sessionId, text)
