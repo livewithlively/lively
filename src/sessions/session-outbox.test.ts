@@ -110,17 +110,17 @@ t("[#2154 ②] 못 닿는 동안의 재시도는 분 단위로 벌어지고 5분
 //  쥘 수 없어 pane 을 셸로 둔다). 그래서 send-keys 는 **그 대화에 닿는 길이 아예 없다**: 준비 판정이 send 를
 //  주면 사람의 첫 문장이 셸에 타이핑되고(실측 2026-08-26, "첫 프롬프트도 씹히고"), 안 주면 TTL 까지 기다렸다
 //  버려진다. 어느 쪽이든 배달이 아니다 — 고치는 근거는 통계가 아니라 **구조**다.
-t("[#2169] codex(app-server 기본)는 프로토콜로 나른다 — 셸 pane 에 글자를 넣지 않는다", () => {
-  assert.equal(deliveryTransport("codex", {} as NodeJS.ProcessEnv), "codex-chat");
+t("[#2169] codex(TUI 기본)는 화면으로 나른다 — 실행 중인 pane 에 첫 글을 넣는다", () => {
+  assert.equal(deliveryTransport("codex", {} as NodeJS.ProcessEnv), "send-keys");
 });
 t("[#2169] 그 외 하네스는 종전대로 화면(send-keys) — 무회귀", () => {
   for (const h of ["claude", "opencode", "antigravity", "grok", "shell", ""]) {
     assert.equal(deliveryTransport(h, {} as NodeJS.ProcessEnv), "send-keys", h);
   }
 });
-t("[#2169] codex 를 tmux 모드로 되돌리면(LIVELY_CODEX_CHAT=tmux) 화면 경로로 돌아온다", () => {
-  assert.equal(deliveryTransport("codex", { LIVELY_CODEX_CHAT: "tmux" } as NodeJS.ProcessEnv), "send-keys");
-  // 되돌리는 길이 살아 있어야 한다 — app-server 는 공식 문서상 experimental 이다(codex-chat-mode 머리말).
+t("[#2169] codex app-server를 명시하면 프로토콜로 나른다 — 셸 pane 에 글자를 넣지 않는다", () => {
+  assert.equal(deliveryTransport("codex", { LIVELY_CODEX_CHAT: "app-server" } as NodeJS.ProcessEnv), "codex-chat");
+  // app-server 는 TUI 와 같은 대화를 함께 쥘 수 없으므로 이 전송 경로가 유일하다.
 });
 
 // dist 에서 도는 테스트라 소스는 **cwd 기준**으로 읽는다(이 레포 관용구 — housekeeping-tenancy.test.ts 와 같다).

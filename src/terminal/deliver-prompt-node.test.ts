@@ -29,7 +29,7 @@ function stub(o?: {
 
 test("노드 Codex App Server 입력은 chatSend만 쓰고 대화 좌표를 남긴다", async () => {
   const h = stub({ chat: { ok: true, convId: "codex-thread", steered: true } });
-  const r = await deliverPromptToNode({ harness: "codex", env: {} }, h.deps);
+  const r = await deliverPromptToNode({ harness: "codex", env: { LIVELY_CODEX_CHAT: "app-server" } }, h.deps);
   assert.deepEqual(h.calls, ["chat"]);
   assert.deepEqual(h.remembered, ["codex-thread"]);
   assert.deepEqual(r, {
@@ -40,15 +40,15 @@ test("노드 Codex App Server 입력은 chatSend만 쓰고 대화 좌표를 남�
 test("노드 Codex App Server 대화 전송 실패는 PTY 셸 입력으로 폴백하지 않는다", async () => {
   const h = stub({ chat: { ok: false, error: "app-server 시작 실패" } });
   await assert.rejects(
-    () => deliverPromptToNode({ harness: "codex", env: {} }, h.deps),
+    () => deliverPromptToNode({ harness: "codex", env: { LIVELY_CODEX_CHAT: "app-server" } }, h.deps),
     (e: unknown) => !!e && typeof e === "object" && (e as { status?: number }).status === 503,
   );
   assert.deepEqual(h.calls, ["chat"]);
 });
 
-test("노드 Codex가 명시적 tmux 모드면 기존 PTY 입력을 쓴다", async () => {
+test("노드 Codex 기본 TUI는 기존 PTY 입력을 쓴다", async () => {
   const h = stub();
-  assert.deepEqual(await deliverPromptToNode({ harness: "codex", env: { LIVELY_CODEX_CHAT: "tmux" } }, h.deps), { ok: true });
+  assert.deepEqual(await deliverPromptToNode({ harness: "codex", env: {} }, h.deps), { ok: true });
   assert.deepEqual(h.calls, ["inject"]);
 });
 

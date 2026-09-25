@@ -36,10 +36,10 @@ function agentState(i: {
     : i.phase;
 }
 
-// ⚠ 2026-08-27 부터 **기본이 app-server** 다(codex-chat-mode.ts). 그래서 대조군은 «env 없음» 이 아니라
-//  «끄는 값을 명시» 여야 한다 — 빈 env 로 두면 두 군이 같은 모드가 돼 이 표가 아무것도 안 지킨다.
-const ON = {} as NodeJS.ProcessEnv;                              // 기본 = app-server
-const OFF = { LIVELY_CODEX_CHAT: "tmux" } as NodeJS.ProcessEnv;  // 끈 배포(종전 판정)
+// app-server 는 선택 기능이다(codex-chat-mode.ts). 그래서 대조군은 «tmux를 명시»가 아니라 기본 env 이고,
+// app-server 군만 명시해야 한다 — 빈 env로 두면 TUI를 app-server로 오판하는 회귀를 잡지 못한다.
+const ON = { LIVELY_CODEX_CHAT: "app-server" } as NodeJS.ProcessEnv;
+const OFF = {} as NodeJS.ProcessEnv;  // 기본 = Codex TUI
 const base = { harness: "codex", offline: true, attached: 0, phase: "idle" as const, asPhase: null };
 
 t("★ A1 pane 이 셸이어도 '종료됨'이 아니다 — app-server 세션에선 그게 정상이다", () => {
@@ -48,7 +48,7 @@ t("★ A1 pane 이 셸이어도 '종료됨'이 아니다 — app-server 세션�
   assert.equal(agentState({ ...base }, OFF), "exited");
 });
 
-t("★ A2 탭을 안 보고 있어도 'offline' 이 아니다 — 이 세션의 기본 화면은 터미널이 아니다", () => {
+t("★ A2 탭을 안 보고 있어도 'offline' 이 아니다 — app-server 세션은 pane 상태와 무관하다", () => {
   assert.equal(agentState({ ...base, offline: false, attached: 0, asPhase: "idle" }, ON), "idle");
   assert.equal(agentState({ ...base, offline: false, attached: 0 }, OFF), "offline");
 });
@@ -102,15 +102,15 @@ t("★ B1 생성 응답도 목록과 **같은 곳**에서 대화 필드를 만�
   assert.ok(!/s\.chatMode = codexChatMode/.test(src), "목록이 헬퍼를 안 쓰고 따로 만들지 않는다");
 });
 
-t("★ B2 화면은 모를 때 터미널로 추정하지 않는다 — codex 는 이 배포의 기본이 app-server 다", () => {
+t("★ B2 코덱스의 첫 화면은 항상 터미널이다 — app-server여도 TUI 자리를 먼저 보여 준다", () => {
   const src = readSrc("web/session-chat.ts");
-  const fn = src.slice(src.indexOf("const chatFirst ="), src.indexOf("const chatFirst =") + 900);
-  assert.match(fn, /harness \|\| ''\) === 'codex'/, "chatMode 가 없으면 하네스로 판단한다");
-  assert.ok(!/^\s*const chatFirst = \(\): boolean => String\(target\.raw\?\.chatMode/m.test(src),
-    "종전의 «모르면 터미널» 한 줄이 남아 있지 않다");
+  const fn = src.slice(src.indexOf("const chatHome ="), src.indexOf("const chatHome =") + 700);
+  assert.match(fn, /!isCodex\(\)/, "코덱스는 대화가 아니라 터미널을 본자리로 둔다");
+  assert.match(fn, /const chatHome = \(\): boolean => !isCodex\(\)/,
+    "app-server 여부와 무관하게 코덱스는 자동 대화 전환하지 않는다");
 });
 
-t("B3 추정이 틀린 배포(tmux)에서는 행이 오는 즉시 터미널로 되돌린다 — 한 방향만 마감하면 반쪽이다", () => {
+t("B3 명시적으로 터미널을 고른 세션은 행이 갱신돼도 그 보기로 돌아온다", () => {
   const src = readSrc("web/session-chat.ts");
   //  ⚠ 2026-09-08 — 조건이 `opts.terminalSrc && isBox`(마운트 시점 값 둘)에서 `hasTerm()`(지금의 행)으로 바뀌었다.
   //   그 둘이 얼어 있으면 이 줄도 함께 막혀, 목록 한 틱의 «중단됨» blip 에 붙은 탭이 영영 대화창에 갇혔다.
