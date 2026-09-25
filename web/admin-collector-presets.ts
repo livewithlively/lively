@@ -73,7 +73,7 @@ export async function collectorPresetEditor(detail: HTMLElement, _data?: unknown
     add.addEventListener('click', () => { creating = true; editingKey = null; reload(); });
     body.append(el('div', { class: 'ctx-actions' }, add));
   } else {
-    body.append(el('p', { class: 'admin-hint', text: '※ 새 소스를 정의하고 고치는 일은 관리자만 할 수 있습니다 — 사내 API 주소·토큰과 서버에서 도는 코드를 다루기 때문입니다.' }));
+    body.append(el('p', { class: 'admin-hint', text: '※ 이 계정은 보기 전용이라 새 소스를 정의하거나 고칠 수 없습니다.' }));
   }
   detail.replaceChildren(head(), body);
 }

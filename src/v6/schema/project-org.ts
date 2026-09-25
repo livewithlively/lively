@@ -143,6 +143,11 @@ export async function initV6ProjectOrg(pool: Pool): Promise<void> {
     -- 서브에이전트 트리 캡처(#905 C1 슬⑥): 서브에이전트 세션은 parent_session_id=부모(주) 세션 id. 최상위(주) 세션은 NULL.
     --  목록(내 세션·프로젝트)엔 최상위만, 서브에이전트는 부모 대화록 아래에서만 보인다.
     ALTER TABLE session ADD COLUMN IF NOT EXISTS parent_session_id TEXT;
+    -- #4172 — 이 대화가 **작업 상자**(org_task — 증류·카테고리 붙이기·점검·위탁)에서 돌았나. 'task' 면 «내 세션 이력»에서 뺀다
+    --  (원준·상민 2026-09-21: "나 한 적도 없는 게 막 계속 나와" — 사람이 연 적 없는 자동 실행 세션). 'human' = 판정했고 사람 세션,
+    --  NULL = 아직 판정 전. 채우는 길 둘: 로그 업로드가 실행 id 를 org_task 와 맞대 보고 찍는다(앞으로) · 목록이 첫 청크의 cwd 로
+    --  옛 행을 한 번씩 판정한다(backfillSessionRunKind).
+    ALTER TABLE session ADD COLUMN IF NOT EXISTS run_kind TEXT;
     CREATE INDEX IF NOT EXISTS session_parent_idx ON session(parent_session_id) WHERE parent_session_id IS NOT NULL;
 
     -- ④ session_purged — 소유자가 **완전 삭제**한 세션의 묘비(#1850). 내용은 담지 않는다(그게 삭제의 목적이다).

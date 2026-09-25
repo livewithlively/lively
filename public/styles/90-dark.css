@@ -279,3 +279,9 @@
   :root:not([data-theme="light"]) .cxm-src-mk[data-svc="github"] svg path,
   :root:not([data-theme="light"]) .cxm-src-mk[data-svc="linear"] svg path { fill: var(--ink); }
 }
+/*  #4135 — 자동 실행 패널의 계열색은 dataviz 팔레트의 **다크 칸**(같은 색상, 다크 면에 맞춘 단계)으로. 짧은 막대(바뀐 것 없음)는
+    밝은 회색이면 다크에서 튀어서 한 단계 가라앉힌다. */
+:root[data-theme="dark"] .cxr { --run-c: #3987e5; --run-d: #d95926; --run-x: #e0605f; --run-z: #3a4660; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .cxr { --run-c: #3987e5; --run-d: #d95926; --run-x: #e0605f; --run-z: #3a4660; }
+}

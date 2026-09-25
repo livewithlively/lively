@@ -27,6 +27,7 @@ import { meProfileCapabilities, meSelfCapabilities } from "./delivery/me-self.js
 import { meAccountDeleteCapabilities } from "./delivery/me-account-delete.js";   // #1876 탈퇴를 앱 안에서
 import { gitCredentialCapabilities } from "./delivery/git-credentials.js";
 import { runtimeConfigCapabilities } from "./delivery/runtime-config.js";
+import { autoRunsCapabilities } from "./delivery/auto-runs.js";   // #4172 — 맥락 관리 ▸ 현황 「자동 실행」 패널
 import { boxStatusCapabilities } from "./delivery/box-status.js";
 import { workspaceCapabilities } from "./delivery/workspace.js";
 import { embeddingsCapabilities } from "./delivery/embeddings.js";
@@ -60,6 +61,7 @@ export const deliveryCapabilities: Capability[] = [
   ...tokenRevokeCapabilities,
   ...oauthClientCapabilities,   // #1473 T2 — OAuth 클라이언트 사전등록(static)·목록·해제
   ...runtimeConfigCapabilities,
+  ...autoRunsCapabilities,
   ...boxStatusCapabilities,
   ...workspaceCapabilities,
   ...embeddingsCapabilities,

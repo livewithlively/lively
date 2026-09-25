@@ -796,6 +796,36 @@
   "input_hash": "c8a393e3ff4dc512"
  },
  {
+  "name": "org_injection_update",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/injection-config"
+  ],
+  "input_hash": "4442a5a6f6164db4"
+ },
+ {
+  "name": "org_auto_runs",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/auto-runs"
+  ],
+  "input_hash": "b03aabec551abfe8"
+ },
+ {
+  "name": "org_auto_run_detail",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/auto-runs/:kind/:id"
+  ],
+  "input_hash": "c39cafbbee70b5de"
+ },
+ {
   "name": "org_alert_status",
   "scope": "memory",
   "mcp": true,
