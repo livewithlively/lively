@@ -91,12 +91,15 @@ if (typeof projCardRows !== "function") {
   const SIDE = readFileSync(path.join(root, "web/v2/side.ts"), "utf8");
   const kids = code(SIDE.slice(SIDE.indexOf("function projListKids("), SIDE.indexOf("function projGrpCard(")));
 
-  check(/const rest = projCardRows\(shown\.filter\(\(r\) => !r\.pinned\)\);/.test(kids),
+  //  #4233 — 「고정」 나누기를 잎 모듈(lib/home-pins splitHomePins)이 한다. rest 는 그 나머지이고, 여전히 projCardRows 를 지난다.
+  check(/const rest = projCardRows\(pins\.rest\);/.test(kids) && /const pins = splitHomePins\(shown, projPinnedId\);/.test(kids),
     "E1·B1 ★★ 프로젝트 축은 카드 재료(rest)를 projCardRows 로 거른 뒤 projGroups 에 넘긴다",
     "projListKids 의 rest 가 자기 화면 줄을 안 걷는다 — [→] 로 연 화면이 다시 제 폴더 안에 선다");
 
-  check(/const pinnedRows = shown\.filter\(\(r\) => r\.pinned\);/.test(kids),
-    "E8 ★ 「고정」 층은 거르지 않는다 — 사람이 꽂은 줄은 카드 밖에 서고, 자동 규칙이 걷지 않는다",
+  //  #4233 — 꽂은 줄은 이제 「고정」 세션 카드(pinCard) 안에 선다(원준 «V1 의 1안»: 모든 세션 줄이 카드 안에). 원칙은 그대로다:
+  //   자동 규칙(projCardRows)이 그 줄을 걷지 않는다.
+  check(/const pinnedRows = pins\.pinnedRows;/.test(kids) && !/projCardRows\(pinnedRows|projCardRows\(pins\.pinnedRows/.test(kids),
+    "E8 ★ 「고정」 층은 거르지 않는다 — 사람이 꽂은 줄은 「고정」 세션 카드에 서고, 자동 규칙이 걷지 않는다",
     "pinnedRows 가 걸러지고 있다");
 
   const at = SIDE.indexOf("function appListKids(");

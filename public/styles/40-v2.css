@@ -2067,7 +2067,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-axisbtn.on { color: var(--on-fill); background: var(--blue-fill); }
 .v2-axisbtn.on:hover { color: var(--on-fill); background: var(--blue-fill-deep); }
 .v2-axisbtn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-.v2-axisbtn-ic { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+/*  #4233 — 그림은 폴더 안 줄 둘(icons.ts folderRows). 검토판 1판과 같은 15px · 1.9 선. */
+.v2-axisbtn-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ★펼친 묶음 = 흰 카드 그릇 — 세션이 프로젝트의 **안**에 산다는 걸 면(面)이 말한다.
    들여쓰기+세로선만으로는 "목록 둘이 이웃한 그림"으로 읽혔다(상민님 2026-08-18 — 트리 .v2-pj.open 과 같은 처방).
