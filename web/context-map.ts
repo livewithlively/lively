@@ -242,7 +242,6 @@ export async function renderContextMapScreen(box: HTMLElement): Promise<void> {
   await renderContextMap(box);
 }
 
-}
 function intervalText(sec: any): string {
   const n = Number(sec) || 0;
   if (!n) return '';
