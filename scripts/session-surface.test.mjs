@@ -192,4 +192,27 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
     "㉙ ★ 정의된 적 없는 --surface-* 토큰을 안 쓴다 — #fff 폴백이 다크에서 흰 배경을 만든다");
 }
 
+// ── #4135 «이 터미널은 셸이다» 안내줄 + 터미널로 넘기기 배선 ────────────────────────────────
+//  실측 사고(원준님 2026-09-25): 새 codex 세션에서 [보기 ▸ 터미널로 보기] 를 누르고 명령을 쳤는데 Codex 로 가지
+//  않았다. 그 pane 은 **셸**이기 때문이다(대화 런타임 세션의 정상 모양). 화면이 그 사실을 말하지 않으면 사람은
+//  «터미널이 고장났다» 로 읽는다. 그래서 ① 그 줄을 그리나 ② 넘기는 단추가 실제로 배선됐나를 값으로 지킨다.
+{
+  const sc = read("web/session-chat.ts");
+  ok(/class: 'sc-shellbar'/.test(sc), "㉚ 셸 pane 안내줄을 그린다");
+  ok(/function paintShellBar\(\)/.test(sc) && /const shellPane = chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode \|\| ''\) === 'chat'/.test(sc),
+    "㉛ ★ 판정은 «pane 이 셸인가» 두 갈래다(codex app-server · 대화 런타임) — 모르면 안 띄운다");
+  ok((sc.match(/paintShellBar\(\);/g) || []).length >= 2,
+    "㉜ ★ setMode 와 목록 갱신 **둘 다** 다시 그린다 — 행이 늦게 오는 세션(방금 만든 것)이 안내를 놓치면 안 된다");
+  ok(/onclick: \(\) => void handoffToTerminal\(\)/.test(sc), "㉝ 안내줄의 단추가 넘기기에 배선돼 있다(죽은 단추 금지)");
+  ok(/async function handoffToTerminal/.test(sc) && /codex-chat\/release/.test(sc),
+    "㉞ 넘기기는 release 통로를 부른다");
+  ok(/setMode\('term'\);[\s\S]{0,120}toast\(r\.launched/.test(sc),
+    "㉟ ★ 넘긴 뒤 **그 화면으로 데려간다** — 넘겨 놓고 대화창에 남기면 사람이 갈 곳을 모른다");
+  ok(/String\(r\.command \|\| ''\)/.test(sc),
+    "㊱ ★ 명령을 못 쳤을 땐 **칠 수 있는 한 줄**을 보여 준다 — 종전엔 앞 8자로 잘린 id 라 칠 수가 없었다");
+  const css = read("public/styles/36-chat.css");
+  ok(/\.sc-shellbar \{/.test(css) && /\.sc-term \{ flex-direction: column/.test(css),
+    "㊲ 안내줄이 액자 위에 서도록 터미널 칸이 세로로 쌓인다");
+}
+
 console.log(`\n${pass}건 통과`);

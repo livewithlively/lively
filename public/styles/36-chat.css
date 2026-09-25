@@ -130,6 +130,13 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-term[hidden] { display: none; }
 .sc-wrap > .v2-split-y[hidden] { display: none; }
 .sc-term-frame { flex: 1; width: 100%; border: 0; background: var(--bg); }
+/* #4135 — pane 이 셸인 세션(대화 런타임·codex app-server)의 터미널 머리줄. pane 첫 화면의 안내는 출력이 쌓이면
+   위로 밀려 사라지므로, «여기 친 말은 AI 에게 안 갑니다» 는 **머물러 있어야** 한다. 그래서 액자 위 한 줄로 둔다. */
+.sc-term { flex-direction: column; }
+.sc-shellbar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--bg-note); flex: none; }
+.sc-shellbar[hidden] { display: none; }
+.sc-shellbar-t { font-size: 12.5px; color: var(--ink-sub); line-height: 1.5; flex: 1; min-width: 0; }
+.sc-shellbar .btn { flex: none; }
 /* 터미널 기본 모드(상민님 지시 2026-08-18) — 대화는 숨고 터미널이 본문을 다 차지한다. */
 .sc-mode-term .sc-term { flex: 1; height: auto; border-top: 0; }
 /* '베타' 뱃지 — 대화 인터페이스가 아직 다듬는 중임을 알리는 칩(버튼 안·제목 옆 공용). */

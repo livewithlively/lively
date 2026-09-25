@@ -677,6 +677,23 @@ export function paneLaunchArgv(argv: readonly string[], platform: string = proce
 //   들어가야 하는 인젝션 경계다(위 LAUNCH_SH 주석). 검증 없이 급조한 래퍼를 끼우는 것보다 안 감싸는 게 낫다.
 //   하네스 세션은 ConPTY 에 UTF-8 을 직접 쓰고 xterm.js 가 UTF-8 로 디코드한다. 빈 Windows pane은
 //   실행 정책에 막힌 PowerShell을 피하려고 cmd.exe를 raw argv로 직접 실행한다(#3982).
+/**
+ * 셸 pane 에서 **그 대화를 이어 여는 한 줄** (#4135) — 순수. 못 만들면 빈 문자열.
+ *
+ *  쓰는 자리: 대화를 터미널로 넘길 때(codex app-server 가 스레드를 놓은 직후). 그 pane 은 셸이라
+ *  argv 가 아니라 **사람이 치는 명령 한 줄**이 필요하다.
+ *
+ *  ⚠ 이 글자는 **셸로 들어간다.** id 는 `RESUME_ID_RE`(영숫자·`._-`, 64자)를 통과한 것만 쓴다 — 따옴표·세미콜론·
+ *   공백이 든 값은 명령을 조립하지 않고 빈 문자열을 낸다(그 경우 화면이 사람에게 수동 안내로 떨어진다).
+ *  ⚠ 명령 모양은 하네스 표(resumeArgv)가 소유한다 — 여기서 `codex resume` 를 손으로 적지 않는다(두 벌 금지).
+ */
+export function harnessResumeCommand(harnessKey: string, convId: string): string {
+  const h = HARNESSES.find((x) => x.key === harnessKey);
+  const id = String(convId || "");
+  if (!h?.resumeArgv || !RESUME_ID_RE.test(id)) return "";
+  return [h.bin || h.key, ...h.resumeArgv(id)].join(" ");
+}
+
 export function harnessLaunchArgv(harnessKey: string, cmd: string[], platform: string = process.platform): string[] {
   const argv = Array.isArray(cmd) ? cmd : [];
   // #3982 hammurabi 실측: Windows PowerShell 5.1은 CreateProcessW access denied였고, 명령 없는 pane도
