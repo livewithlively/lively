@@ -210,7 +210,7 @@ if (lib) {
         R("u1", { owner: "u2", projectId: 7, lastSeen: at(0, 11) }), R("u2", { owner: "u2", projectId: 7, lastSeen: at(0, 7) }), R("tr", { owner: "me", projectId: 7, trashedAt: "2026-09-24T00:00:00Z" })];
       const cards = sideCards(sc1, "owner", NOW, rank);
       eq(cards.map((c) => [c.key, c.n, c.projects.map((l) => `${l.pid}:${l.n}${l.wait ? "!" : ""}`).join(",")]),
-        [["u2", 2, "7:2"], ["me", 3, "0:1,8:1!,7:1"]], "C5 ★사이드바 카드(사람별) — 카드는 최근 활동 순(u2 11시 > 나 10시), 줄은 프로젝트 없음 맨 앞 · 최근 순 · 수 · 확인 필요 표식");
+        [["me", 3, "0:1,8:1!,7:1"], ["u2", 2, "7:2"]], "C5 ★사이드바 카드(사람별) — 나 먼저(u2 가 더 최근이어도), 줄은 프로젝트 없음 맨 앞 · 최근 순 · 수 · 확인 필요 표식");
       ok(sideCards([], "day", NOW, rank).length === 0 && sideCards(null, "day", NOW, rank).length === 0, "C6 행이 없거나 null 이면 카드도 없다");
       ok(sideCards(sc1, "none", NOW, rank).length === 0, "C7 묶지 않음이면 카드가 없다");
       ok(!cards.some((c) => c.projects.some((l) => l.pid === 7 && c.key === "me" && l.n > 1)) && projectLines(sc1).find((l) => l.pid === 7).n === 3,
@@ -230,10 +230,13 @@ if (lib) {
       const { planSideCards, hiddenCardsLabel } = lib;
       ok(typeof planSideCards === "function" && typeof hiddenCardsLabel === "function", "P0 접기 잣대가 잎 모듈에 있다");
       const st = [R("w", { stateKey: "waiting", lastSeen: at(2) }), R("b", { stateKey: "busy", lastSeen: at(0, 14) }), R("i", { stateKey: "idle", lastSeen: at(0, 9) })];
-      eq(sideCards(st, "state", NOW, rank).map((c) => c.key), ["busy", "idle", "waiting"], "O1 ★상태별 카드도 최근 활동 순(순위 순이 아니다)");
+      eq(sideCards(st, "state", NOW, rank).map((c) => c.key), ["waiting", "busy", "idle"], "O1 ★상태별 카드는 순위 순(확인 필요가 가장 오래돼도 맨 앞) — 본문과 같다");
       eq(sideCards(days, "day", NOW, rank).map((c) => c.key), ["오늘", "어제", "이번 주", "이전"], "O2 시간별은 최근 순이 곧 오늘 → 이전");
-      const tie = [R("b1", { listId: 4, lastSeen: at(0, 10) }), R("a1", { listId: 5, lastSeen: at(0, 10) }), R("a2", { listId: 5, lastSeen: at(0, 9) })];
-      eq(sideCards(tie, "list", NOW, rank).map((c) => c.key), ["5", "4"], "O3 경계 — 최근 활동이 같으면 세션 많은 카드 먼저(그다음 key 순)");
+      const lr = [R("n0", { listId: 0, lastSeen: at(0, 14) }), R("l4", { listId: 4, lastSeen: at(0, 9) }), R("l5", { listId: 5, lastSeen: at(0, 11) })];
+      eq(sideCards(lr, "list", NOW, rank).map((c) => c.key), ["5", "4", "0"], "O3 ★리스트별 카드는 최근 순, 리스트 없음은 가장 최근이어도 맨 끝 — 본문과 같다");
+      const mix2 = [...st, ...lr, R("u9", { owner: "u9", lastSeen: at(0, 15) }), R("y", { lastSeen: at(1, 10) }), R("o", { lastSeen: at(20), listId: 4 })];
+      ok(["day", "list", "owner", "state"].every((b) => sideCards(mix2, b, NOW, rank).map((c) => c.key).join() === groupAllSess(mix2, b, NOW, rank).map((g) => g.key).join()),
+        "O4 ★네 기준 모두 사이드바 카드 순서 = 본문 묶음 순서(groupAllSess)");
       if (typeof planSideCards === "function") {
         const K = ["a", "b", "c", "d", "e"];
         eq(planSideCards(K, 3, null, false), { shown: ["a", "b", "c"], hidden: 2 }, "P1 들어가는 만큼(3장)만, 나머지 2장은 접는다");
