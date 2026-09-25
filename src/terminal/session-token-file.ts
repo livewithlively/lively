@@ -9,6 +9,9 @@
 //  ── 누가 쓰나 ── 노드 에이전트가 게이트웨이의 `sessionTokens` op(session-ops.ts)를 받아 쓴다. 게이트웨이는 노드 스냅샷에서
 //  토큰 없는 살아 있는 세션을 보면 그 주인 앞으로 구워 보낸다(node-session-token-backfill.ts). kill 때 파일을 지운다.
 //  ── 노출면 ── env 주입과 같다(그 PC 사용자가 읽을 수 있다 — 0600). 공유 노드의 신뢰 전제는 node-session-preissue 머리말.
+//  ── HOME ── 노드 에이전트의 HOME(= 그 PC 에서 라이블리가 띄운 비격리 pane 의 HOME)이다. 격리 세션(멤버 홈)은 HOME 이 달라 이 파일을
+//  못 보지만 그쪽은 멤버 키트가 env 로 이미 실었다(무회귀). 훅 쪽 자리 규칙(harness-registry sessionTokenFile)과 같아야 한다 — id 검사만
+//  다르다: 여기는 박스 세션 id 형식(SESSION_ID_RE), 훅은 «경로에 안전한가»(어느 하네스든 LIVELY_SESSION_ID 를 그대로 받는다) — 둘 다 경로 조작을 막는다.
 //  ⚠ 노드 에이전트 번들에 실린다 — node 내장만 문다.
 import fsp from "node:fs/promises";
 import os from "node:os";
@@ -44,4 +47,20 @@ export async function removeSessionTokens(id: string, home?: string): Promise<vo
   const file = sessionTokenFilePath(id, home);
   if (!file) return;
   await fsp.rm(file, { force: true }).catch(() => { /* 비치명 */ });
+}
+
+/** 살아 있지 않은 세션의 파일을 걷는다 — 노드가 3초마다 자기 세션 목록을 확답으로 얻은 뒤 부른다(kill 을 안 거치고 끝난 세션의 파일이
+ *  디스크에 남지 않게 — 리뷰 지적). 세션 id 꼴이 아닌 이름은 건드리지 않는다. 돌려주는 값 = 지운 개수. 어떤 실패도 던지지 않는다. */
+export async function sweepSessionTokenFiles(liveIds: ReadonlySet<string>, home = process.env.LIVELY_HOME || os.homedir()): Promise<number> {
+  const dir = path.join(home, ".lively", "session-tokens");
+  let names: string[];
+  try { names = await fsp.readdir(dir); } catch { return 0; }
+  let removed = 0;
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const id = name.slice(0, -".json".length);
+    if (!SESSION_ID_RE.test(id) || liveIds.has(id)) continue;
+    try { await fsp.rm(path.join(dir, name), { force: true }); removed++; } catch { /* 다음 판에 다시 */ }
+  }
+  return removed;
 }

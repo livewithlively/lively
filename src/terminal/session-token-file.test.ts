@@ -1,4 +1,4 @@
-// #4135 — **세션 토큰 파일(`session-token-file.ts`)** 의 사양 시험 — 사양 D(파일 쪽 1–3)만 보고 쓴 블라인드 시험.
+// #4135 — **세션 토큰 파일(`session-token-file.ts`)** 의 사양 시험 — 사양 D(파일 쪽 1–3 · 노드 정리 19)만 보고 쓴 블라인드 시험.
 //
 // ── 무엇이 고장나 있었나 ─────────────────────────────────────────────────────
 // C(사전 발급)는 새로 뜨는 세션에만 닿는다. 이미 떠 있는 노드 세션은 토큰 없이 돌고 있고 살아 있는 프로세스의 env 는
@@ -12,13 +12,15 @@
 //     파일을 만들고(폴더는 없으면 만든다 · 파일 0600 · 폴더 0700) 내용은 JSON `{ hook, mcp, at }`(빈/공백 값은 null) 그리고 true.
 //     둘 다 비면 파일을 (있으면) 지우고 false. 같은 id 에 다시 쓰면 덮어쓴다. 폴더 안에 `.tmp` 임시 파일을 남기지 않는다.
 //  3. `removeSessionTokens(id, home)` — 파일을 지운다. 없어도, 형식 위반 id 여도 던지지 않는다.
+//  19. (노드 쪽) `sweepSessionTokenFiles(liveIds, home)` — 폴더 안의 `<id>.json` 가운데 id 가 세션 id 형식이면서 `liveIds` 에 없는 것을
+//      지우고 지운 개수를 돌려준다. 형식이 아닌 이름·`.json` 이 아닌 파일은 건드리지 않는다. 폴더가 없으면 0. 던지지 않는다.
 //  ⚠ 진짜 홈은 절대 건드리지 않는다 — 임시 dir 을 `home` 으로 **명시적으로** 넘기고, 그 안에서만 논다.
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { sessionTokenFilePath, writeSessionTokens, removeSessionTokens } from "./session-token-file.js";
+import { sessionTokenFilePath, writeSessionTokens, removeSessionTokens, sweepSessionTokenFiles } from "./session-token-file.js";
 import type { SessionTokens } from "./session-token-file.js";
 
 // ── 재료 ────────────────────────────────────────────────────────────────────
@@ -245,4 +247,85 @@ test("D3-4 쓰고 → 지우고 → 다시 쓰면 다시 생긴다(지우기가 
   assert.equal(readJson(fileOf(home, ID)).hook, "h2");
   assert.equal(modeOf(fileOf(home, ID)), 0o600);
   assert.equal(modeOf(dirOf(home)), 0o700);
+});
+
+// ═══ 19. sweepSessionTokenFiles — 노드 쪽 정리(죽은 세션의 파일을 걷는다) ══════
+/** 폴더에 정리 대상이 **아닌** 것들을 심는다 — 형식이 아닌 이름 · .json 이 아닌 파일 · 대문자 이름 · 16진수 7자리. 이름 목록을 돌려준다. */
+function plantBystanders(home: string): string[] {
+  fs.mkdirSync(dirOf(home), { recursive: true, mode: 0o700 });
+  const names = ["notes.json", "box-aaaa-bbbb-01234567.txt", "BOX-UPPER-0123ABCD.json", "box-x-0123abc.json"];
+  for (const n of names) fs.writeFileSync(path.join(dirOf(home), n), n.endsWith(".json") ? "{}\n" : "not json\n");
+  return names;
+}
+
+test("D19-1 liveIds 에 없는 세션 id 파일만 지우고 지운 개수를 돌려준다 — 살아 있는 id·형식 아닌 이름·.json 아닌 파일은 그대로", async () => {
+  const home = tmpHome();
+  const ID3 = "box-a-00000000";
+  const HAND = "box-hand-made-89abcdef";                 // 손으로 놓은, 형식에 맞는 id 파일(내용은 아무거나)
+  for (const id of [ID, ID2, ID3]) assert.equal(await writeSessionTokens(id, { hook: `h:${id}`, mcp: `m:${id}` }, home), true);
+  fs.writeFileSync(path.join(dirOf(home), `${HAND}.json`), "hand made — not even json\n");
+  const bystanders = plantBystanders(home);
+  const before = listing(home);
+  const n = await sweepSessionTokenFiles(new Set([ID, ID3, "box-not-on-disk-01234567"]), home);
+  assert.equal(n, 2, `지운 개수: ${n} (전 ${before.join(", ")} → 후 ${listing(home).join(", ")})`);   // ID2 · HAND
+  assert.deepEqual(listing(home), [`${ID}.json`, `${ID3}.json`, ...bystanders].sort(), "남은 목록");
+  assert.ok(!fs.existsSync(fileOf(home, ID2)), "죽은 ID2 의 파일이 남았다");
+  assert.ok(!fs.existsSync(path.join(dirOf(home), `${HAND}.json`)), "죽은 HAND 의 파일이 남았다");
+  assert.equal(readJson(fileOf(home, ID)).hook, `h:${ID}`, "살아 있는 파일의 내용이 바뀌었다");
+  assert.equal(modeOf(fileOf(home, ID)), 0o600);
+  // 한 번 더 — 지울 게 없으니 0
+  assert.equal(await sweepSessionTokenFiles(new Set([ID, ID3]), home), 0);
+  assert.deepEqual(listing(home), [`${ID}.json`, `${ID3}.json`, ...bystanders].sort());
+});
+
+test("D19-2 폴더가 없으면 0 이고 던지지 않는다 — .lively 조차 없어도 · 폴더만 있고 비어 있어도 0", async () => {
+  const home = tmpHome();
+  let n: number | undefined;
+  await assert.doesNotReject(async () => { n = await sweepSessionTokenFiles(new Set([ID]), home); }, ".lively 조차 없을 때");
+  assert.equal(n, 0);
+  await assert.doesNotReject(async () => { n = await sweepSessionTokenFiles(new Set<string>(), home); }, "빈 집합");
+  assert.equal(n, 0);
+  fs.mkdirSync(dirOf(home), { recursive: true });
+  assert.equal(await sweepSessionTokenFiles(new Set<string>(), home), 0, "빈 폴더");
+  assert.equal(await sweepSessionTokenFiles(new Set([ID, ID2]), home), 0, "빈 폴더 + liveIds");
+});
+
+test("D19-3 빈 집합이면 세션 id 파일을 전부 지운다 — 개수는 지운 파일 수, 형식 아닌 이름·.json 아닌 파일은 남는다", async () => {
+  const home = tmpHome();
+  const ids = [ID, ID2, "box-a-00000000", "box-a-b-c-d-ffffffff"];
+  for (const id of ids) assert.equal(await writeSessionTokens(id, { hook: "h", mcp: null }, home), true);
+  const bystanders = plantBystanders(home);
+  assert.equal(await sweepSessionTokenFiles(new Set<string>(), home), ids.length);
+  assert.deepEqual(listing(home), [...bystanders].sort(), "형식 아닌 이름·.json 아닌 파일까지 지웠거나 id 파일이 남았다");
+  assert.equal(await sweepSessionTokenFiles(new Set<string>(), home), 0, "두 번째는 지울 게 없다");
+});
+
+test("D19-4 전부 살아 있으면 0 — 아무것도 지우지 않는다 · liveIds 에 디스크에 없는 id·형식 아닌 값이 섞여도 무관", async () => {
+  const home = tmpHome();
+  for (const id of [ID, ID2]) assert.equal(await writeSessionTokens(id, { hook: `h:${id}`, mcp: `m:${id}` }, home), true);
+  const bystanders = plantBystanders(home);
+  assert.equal(await sweepSessionTokenFiles(new Set([ID, ID2, "box-ghost-00000000", "not-an-id"]), home), 0);
+  assert.deepEqual(listing(home), [`${ID}.json`, `${ID2}.json`, ...bystanders].sort());
+  assert.equal(readJson(fileOf(home, ID2)).mcp, `m:${ID2}`);
+});
+
+test("D19-5 정리 뒤에도 쓰기·읽기는 정상 — 걷힌 id 를 다시 쓰면 다시 생기고, 폴더 권한은 그대로 0700, .tmp 없음", async () => {
+  const home = tmpHome();
+  assert.equal(await writeSessionTokens(ID, { hook: "h", mcp: "m" }, home), true);
+  assert.equal(await sweepSessionTokenFiles(new Set<string>(), home), 1);
+  assert.ok(!fs.existsSync(fileOf(home, ID)));
+  assert.equal(await writeSessionTokens(ID, { hook: "h2", mcp: "m2" }, home), true);
+  assert.equal(readJson(fileOf(home, ID)).hook, "h2");
+  assert.equal(modeOf(dirOf(home)), 0o700);
+  assert.ok(!listing(home).some((f) => f.endsWith(".tmp")), `.tmp 가 남았다: ${listing(home).join(", ")}`);
+});
+
+test("D19-6 id 꼴 이름의 하위 폴더가 끼어 있어도 던지지 않는다 — 죽은 파일은 그대로 걷힌다", async () => {
+  const home = tmpHome();
+  assert.equal(await writeSessionTokens(ID, { hook: "h", mcp: "m" }, home), true);
+  fs.mkdirSync(path.join(dirOf(home), "box-zzz-sub-dir-01234567.json"));   // 정렬상 ID 파일 뒤에 온다
+  let n: number | undefined;
+  await assert.doesNotReject(async () => { n = await sweepSessionTokenFiles(new Set<string>(), home); });
+  assert.equal(typeof n, "number");
+  assert.ok(!fs.existsSync(fileOf(home, ID)), "죽은 ID 의 파일이 남았다");
 });
