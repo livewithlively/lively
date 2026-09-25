@@ -222,3 +222,21 @@ test("W3 하위 폴더 카드의 [폴더 보기] 링크는 키보드(포커스)�
   assert.match(CSS, /@media \(hover: none\) \{\s*\.v2-pcard > \.v2-ksp-h \.v2-ksp-edit \{ display: inline-grid;/);
   assert.doesNotMatch(CSS, /\.v2-ptf/, "쓰지 않는 옛 폴더 줄 규칙은 걷었다");
 });
+
+// ── PR #1093 격리 리뷰 후속(가벼운 지적) ──
+test("W4 폴더 옮기기가 실패하면 오류 표시를 단 토스트가 뜬다(삼키지 않는다)", () => {
+  const at = SIDE.indexOf("await api('/api/ui/v6/project-lists/' + made.id + '/folder'");
+  assert.ok(at > 0, "옮기기 요청이 있다");
+  const tail = SIDE.slice(at, at + 600);
+  assert.match(tail, /\} catch \(_\) \{ toast\('리스트는 만들었지만 폴더에 넣지 못했어요\.[^']*', true\); \}/);
+});
+
+test("W5 만들기 실패 때 이름칸이 이미 다시 그려졌으면(떨어진 노드) 고치지 않고 새로 그린다", () => {
+  const at = SIDE.indexOf("function newProjRow(): HTMLElement {");
+  const body = at >= 0 ? SIDE.slice(at, SIDE.indexOf("\n}\n", at)) : "";
+  const c = body.indexOf("} catch (err: any) {");
+  assert.ok(c > 0, "만들기 catch 가 있다");
+  const catchBody = body.slice(c, c + 700);
+  assert.match(catchBody, /newErr = '만들지 못했어요 — ' \+ \(err\?\.message \|\| err\);\s*(?:\/\/[^\n]*\n\s*)?if \(!inp\.isConnected\) \{ redraw\(\); return; \}/);
+  assert.ok(catchBody.indexOf("if (!inp.isConnected)") < catchBody.indexOf("line.classList.remove('sending')"), "떨어진 노드를 만지기 전에 가른다");
+});
