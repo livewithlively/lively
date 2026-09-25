@@ -535,6 +535,8 @@ function probeSelfNodes(): Promise<void> {
  *  (2026-09-03 dev 라이브 검증): 부팅 경로에서 `hydrateNodeStates` 가 **구독이 걸리기 전에** 판정을 내면
  *  그 판정은 sticky 라 두 번 다시 서지 않고, 정리는 영원히 안 돈다. hello 는 그 뒤 반드시 지나는 자리다.
  *  (정리 자체는 멱등이지만 10초마다 SQL·tmux 를 때릴 이유가 없어 프로세스당 한 번으로 접는다.)
+ *  #4135 이후 구독은 listen 직후(LISTEN_STEPS)에 걸려 hydrate 보다 늘 앞선다 — 그 순서 문제는 사라졌지만,
+ *  hello 자리는 **정리가 실패했을 때의 재시도**(selfNodeCleaned.delete)로 여전히 필요하다.
  *
  * 왜 «구독 시점에 이미 선 판정을 재생» 이 아닌가: 재생에는 그 노드의 **테넌트 컨텍스트**가 없다(연결만이
  *  들고 있다). 컨텍스트 없이 부르면 공유 게이트웨이에서 RLS 가 조용히 0행을 만든다 — 돌았는데 아무 일도
@@ -896,7 +898,7 @@ function onNodeControlMsg(c: NodeConn, m: NodeToGwMsg): void {
     if (isSelfNode(c.node.id)) {
       try { c.ws.send(JSON.stringify({ t: "helloOk", agentVerLatest: servedAgentVersion() } satisfies GwToNodeMsg)); } catch { /* noop */ }
       logger.warn({ node: c.node.id, agentVer: m.agentVer }, `노드 연결 거부 — ${selfNodeMessage(c.node.id)}`);
-      maybeCleanSelfNode(c);   // 부팅 판정(hydrate)이 구독보다 빨랐던 경우의 유일한 재시도 자리 — 위 머리말
+      maybeCleanSelfNode(c);   // 정리가 실패했던 경우의 재시도 자리(구독은 #4135 이후 늘 hydrate 보다 먼저 걸린다) — 위 머리말
       try { c.ws.close(CLOSE_SELF_NODE, SELF_NODE_REASON); } catch { /* noop */ }
       return;
     }

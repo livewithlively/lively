@@ -155,6 +155,18 @@ export const LISTEN_STEPS: BootStep[] = [
   //  않으므로 preview/routes.ts(라우트 핸들러)로는 원리적으로 못 받는다 → 프리뷰에서 웹터미널·노드 채널이
   //  **아무 응답 없이** 핸드셰이크 타임아웃 나던 자리. 위 두 핸들러 뒤에 둔다(shared-proxy 재-emit 이 그것들을 탄다).
   { name: "preview-ws", gate: "always", run: ({ server }) => setupPreviewWsUpgrade(server) },
+  // ── 순수 배선(동기·DB 무접근) 둘 — **여기(LISTEN_STEPS)여야 한다.** 종전엔 DB_BOOT_STEPS 끝에 있었는데, 그 체인은
+  //  요청별 테넌시(매니지드 중앙 게이트웨이)에서 **통째로 건너뛴다**(runBootHousekeeping · requestScopedTenancy 머리말).
+  //  그래서 매니지드에선 둘 다 한 번도 걸린 적이 없었다(#4135 실측 2026-09-25: lively-46e3 의 발견(discovered) 행이
+  //  9/1 이후 0건, 세션 토큰 되채우기도 0건 — 로그엔 «부팅 하우스키핑 건너뜀» 뿐). 둘 다 DB 를 안 만지고 컨텍스트도
+  //  구독자가 불릴 때(노드 연결·멤버 요청)의 것을 쓰므로, 체인 밖 동기 배선 자리가 정확히 맞다.
+  // 멤버 비활성 전이 훅(#1780 v2 §7-1, 설계 R2-O8) — 비활성/삭제되는 멤버의 앱 동의 회수 + 앱 세션 즉시 회수를
+  //  members.ts 의 단일 슬롯에 건다. 요청이 들어오기 전에 걸려야 한다.
+  { name: "member-deactivation-hook", gate: "always", run: () => { armMemberDeactivationHook(); } },
+  // #2022 — 노드 상태 push 구독. 처음 보는 세션의 행을 적어, 노드가 꺼져도 그 세션이 목록에서 사라지지 않게.
+  //  #4135 — 같은 구독이 «토큰 없는 살아 있는 노드 세션» 되채우기도 부른다. node-upgrade(노드 WS 수신) 뒤·동기라
+  //  첫 스냅샷이 오기 전에 반드시 걸린다.
+  { name: "node-session-discovery", gate: "always", run: () => { armNodeSessionDiscovery(); } },
 ];
 
 // #2578 — 이 스텝까지 끝나면 «스키마가 섰다»: 마이그레이션(schemas)·정책(self-rls)·등록부 활성화(재기동 판정)가
@@ -213,11 +225,7 @@ export const DB_BOOT_STEPS: BootStep[] = [
   { name: "app-worker-recovery", gate: "always", tenancy: "per-tenant", run: () => armWorkerRecovery()
       .then((r) => { if (r.central.restarted || r.central.failed || r.remote.some((x) => x.restarted || x.failed)) logger.info(r, "앱 worker 복구"); })
       .catch((err) => logger.warn({ err }, "앱 worker 복구 실패(비치명 — 인스턴스 조회/노드 재연결이 재시도)")) },
-  // 멤버 비활성 전이 훅(#1780 v2 §7-1, 설계 R2-O8) — 비활성/삭제되는 멤버의 앱 동의 회수 + 앱 세션 즉시 회수를
-  //  members.ts 의 단일 슬롯에 건다. 순수 배선(동기·DB 무접근)이라 어디 붙어도 되지만, 요청이 들어오기 전에 걸려야 한다.
-  { name: "member-deactivation-hook", gate: "always", run: () => { armMemberDeactivationHook(); } },
-  // #2022 — 노드 상태 push 구독. 처음 보는 세션의 행을 적어, 노드가 꺼져도 그 세션이 목록에서 사라지지 않게.
-  { name: "node-session-discovery", gate: "always", run: () => { armNodeSessionDiscovery(); } },
+  // (멤버 비활성 전이 훅 · 노드 세션 발견 구독은 LISTEN_STEPS 로 옮겼다 — 요청별 테넌시에서 이 체인이 안 돌아서. 위 주석.)
   // 구 마커 sync 백필(#905 P1-②) — 이 박스가 만든 프로젝트 폴더의 .lively/project.json 에 sync:"pull" 을 stamp.
   //  pull 훅이 '이 폴더에 서버 파일을 써도 되나'를 마커의 sync 로 판정하게 됐는데, sync 없는 구 마커의 폴백은
   //  ~/lively/projects/<id>(꼴 고정) 만 인정한다 — 박스 폴더는 folder 가 임의(예: 'project/관리탭 수정')라
