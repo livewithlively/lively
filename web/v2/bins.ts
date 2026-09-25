@@ -958,6 +958,8 @@ const allUi = {
 };
 /** 피크의 대화 꼬리 — 세션 id → 읽은 시점의 lastSeen · 턴. lastSeen 이 바뀌면(새 활동) 다시 읽는다. */
 const peekTail = new Map<string, { seen: number; turns: Turn[] | null; loading: boolean }>();
+/** 보내는 중인 세션 — 응답이 오기 전에 다시 보내지 않게(다시 그려도 남는다). */
+const peekSending = new Set<string>();
 const PEEK_TAIL = 240000;   // 도구 기록이 긴 세션은 사람 · AI 글이 수백 KB 뒤에 있다(last-ask TAIL_FAR 와 같은 값)
 const PEEK_TURNS = 16;
 /** 키보드(Esc · ↑ ↓)가 지금 그려진 목록을 알아야 한다 — 마지막으로 그린 화면의 순서와 다시 그리기. */
@@ -989,7 +991,7 @@ const IC_PLUS = 'M12 5v14 M5 12h14';
 
 export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHooks): void {
   const ui = allUi;
-  if (ui.proj !== hooks.proj) { ui.proj = hooks.proj; ui.shown = PAGE; }   // 프로젝트를 바꿨으면 [더 보기]는 처음부터
+  if (ui.proj !== hooks.proj) { ui.proj = hooks.proj; ui.shown = PAGE; ui.peek = ''; }   // 프로젝트를 바꿨으면 [더 보기]는 처음부터 · 피크는 닫는다
   const now = Date.now();
   const people = sidePeople();
   const repaint = (): void => renderSessAll(host, data, hooks);
@@ -1148,6 +1150,8 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
   const peekEl = peekIt ? renderPeek(peekIt.s, peekIt.untitled ? `이름 없는 세션 · ${harnessName(peekIt.s)}` : peekIt.name, data, hooks, repaint, ownerName(peekIt.owner)) : null;
 
   const hadPick = document.activeElement instanceof HTMLElement && host.contains(document.activeElement) ? (document.activeElement.dataset.pick || '') : '';
+  const act = document.activeElement;
+  const caret = hadPick && (act instanceof HTMLTextAreaElement || act instanceof HTMLInputElement) ? [act.selectionStart, act.selectionEnd] : null;
   const bodyOld = host.querySelector<HTMLElement>('.v2-sa-body');
   const scrollTop = bodyOld ? bodyOld.scrollTop : 0;
   const chatOld = host.querySelector<HTMLElement>('.v2-sa-chat');
@@ -1171,7 +1175,12 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
   if (hadPick) {
     const f = host.querySelector<HTMLElement>(`[data-pick="${hadPick}"]`);
     f?.focus();
-    if (f instanceof HTMLTextAreaElement || f instanceof HTMLInputElement) { const n = f.value.length; try { f.setSelectionRange(n, n); } catch (_) { /* search 입력은 선택 범위를 안 받는 브라우저가 있다 */ } }
+    if (f instanceof HTMLTextAreaElement || f instanceof HTMLInputElement) {
+      const n = f.value.length;
+      const a = caret && caret[0] != null ? Math.min(Number(caret[0]), n) : n;
+      const b = caret && caret[1] != null ? Math.min(Number(caret[1]), n) : n;
+      try { f.setSelectionRange(a, b); } catch (_) { /* search 입력은 선택 범위를 안 받는 브라우저가 있다 */ }
+    }
   }
   const bodyNew = host.querySelector<HTMLElement>('.v2-sa-body');
   if (bodyNew && scrollTop) bodyNew.scrollTop = scrollTop;
@@ -1199,6 +1208,7 @@ function renderPeek(s: Sess, name: string, data: V2Data, hooks: SessAllHooks, re
   const step = (d: number): void => {
     const order = peekNav ? peekNav.order : [];
     const i = order.indexOf(s.id);
+    if (i < 0) return;   // 카드에서 연 세션이 접힌 묶음 안에 있으면 목록에 없다. 첫 행으로 건너뛰지 않는다(리뷰 지적).
     const nx = order[i + d];
     if (nx) { ui.peek = nx; repaint(); }
   };
@@ -1219,20 +1229,30 @@ function renderPeek(s: Sess, name: string, data: V2Data, hooks: SessAllHooks, re
     disabled: canSend ? undefined : 'true',
     oninput: (e: Event) => { ui.drafts.set(s.id, (e.target as HTMLTextAreaElement).value); } }) as HTMLTextAreaElement;
   ta.value = ui.drafts.get(s.id) || '';
+  if (peekSending.has(s.id)) ta.disabled = true;
+  const sendBtn = el('button', { class: 'send', type: 'button', 'aria-label': live ? '보내기' : '세션 열어서 보내기',
+    disabled: canSend && !peekSending.has(s.id) ? undefined : 'true', onclick: () => void send() }, svgI(IC_SEND)) as HTMLButtonElement;
   const send = async (): Promise<void> => {
     const text = ta.value.trim();
-    if (!text || !canSend) return;
+    if (!text || !canSend || peekSending.has(s.id)) return;
     if (!live) { rememberUnsentDraft(s.id, text); ui.drafts.delete(s.id); hooks.onOpen(s); return; }
+    //  두 번 보내지 않는다(리뷰 지적). 보내기 전에 칸을 비우고 이 세션을 «보내는 중»으로 잡는다. 실패하면 글을 돌려준다.
+    peekSending.add(s.id); ui.drafts.delete(s.id); ta.value = ''; ta.disabled = true; sendBtn.disabled = true;
     try {
       await api(`/api/ui/terminal/sessions/${encodeURIComponent(s.id)}/prompt`, { method: 'POST', body: JSON.stringify({ text }) });
-      ui.drafts.delete(s.id);
       const t = peekTail.get(s.id);
       if (t && t.turns) t.turns = [...t.turns, { who: 'me' as const, text }].slice(-PEEK_TURNS);
       toast('보냈어요.');
       repaint();
       //  답은 세션이 턴을 마치면 기록에 오른다 — 조금 뒤 꼬리를 다시 읽는다(목록의 lastSeen 이 바뀌어도 다시 읽는다).
       setTimeout(() => { const t2 = peekTail.get(s.id); if (t2 && !t2.loading) { t2.seen = -1; if (ui.peek === s.id) repaint(); } }, 6000);
-    } catch (e: any) { toast(`보내지 못했어요. ${e?.message || ''}`); }
+    } catch (e: any) {
+      ui.drafts.set(s.id, text);
+      toast(`보내지 못했어요. ${e?.message || ''}`);
+    } finally {
+      peekSending.delete(s.id);
+      if (ui.peek === s.id) repaint();
+    }
   };
   ta.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); void send(); } });
   const model = String((s.raw && s.raw.flags && s.raw.flags['--model']) || '');
@@ -1257,8 +1277,7 @@ function renderPeek(s: Sess, name: string, data: V2Data, hooks: SessAllHooks, re
     el('div', { class: 'v2-sa-cmp' + (canSend ? '' : ' off') }, ta,
       el('div', { class: 'rw' },
         el('span', { class: 'hint', text: live ? '⌘Enter 보내기' : mine ? '세션 화면으로 넘어가요' : '' }),
-        el('button', { class: 'send', type: 'button', 'aria-label': live ? '보내기' : '세션 열어서 보내기', disabled: canSend ? undefined : 'true', onclick: () => void send() },
-          svgI(IC_SEND)))));
+        sendBtn)));
 }
 
 /** Esc 로 피크를 닫고, ↑ ↓ 로 옆 세션으로 — 목록이 화면에 보일 때만(다른 탭에 숨어 있으면 가만히 있는다). 입력칸 안에서는 쓰지 않는다. */
@@ -1269,13 +1288,11 @@ function bindPeekKeys(): void {
     const nav = peekNav;
     if (!nav || !allUi.peek || !nav.host.isConnected || !nav.host.offsetParent) return;
     const t = ev.target as HTMLElement | null;
-    if (ev.key === 'Escape') {
-      if (t && t.closest && t.closest('.pn-ctx')) return;
-      allUi.peek = ''; nav.repaint(); return;
-    }
-    if (t && t.closest && t.closest('textarea, input, select, [contenteditable="true"]')) return;
+    if (t && t.closest && t.closest('textarea, input, select, [contenteditable="true"], .pn-ctx')) return;
+    if (ev.key === 'Escape') { allUi.peek = ''; nav.repaint(); return; }
     if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
     const i = nav.order.indexOf(allUi.peek);
+    if (i < 0) return;
     const nx = nav.order[i + (ev.key === 'ArrowDown' ? 1 : -1)];
     if (nx) { ev.preventDefault(); allUi.peek = nx; nav.repaint(); }
   });
