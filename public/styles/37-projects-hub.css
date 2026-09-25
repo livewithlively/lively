@@ -769,3 +769,8 @@ a.pjh-row-link.pjh-row-n:hover { color: var(--blue); }
 .pjh-side .pjh-kres { flex: none; }                                   /* 지식 3×2 옆 칸 — 안내 문장은 결과 바로 아래(빈 칸 끝이 아니라) */
 .pjh-read.cols2 > .md h1, .pjh-read.cols2 > .md h2, .pjh-read.cols2 > .md h3 { break-after: avoid-column; break-inside: avoid; }   /* 두 단: 머리말이 단 끝에 홀로 남지 않게 */
 .pjh-read.cols2 > .md blockquote { break-inside: avoid; }
+/* 좁은 폭(한 열) — 카드 높이는 격자와 같은 상한(--h 칸 수)까지만: 본문처럼 긴 내용은 안에서 스크롤한다(실측: 상한 없이는 본문 카드가 2만 px 로 늘어났다) */
+@media (max-width: 900px) {
+  .pjh-w { max-height: calc(var(--h, 1) * 276px - 16px); }
+}
+.pjh-krec-wait { font-size: 11.5px; color: var(--muted-3); padding: 4px 2px; }

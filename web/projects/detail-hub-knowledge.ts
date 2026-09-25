@@ -98,6 +98,8 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
   // 빈 «필요» 의 문장 — 추천이 있으면 그걸 가리키고, 없으면 검색을 가리킨다(추천이 올 때 바꾼다).
   const emptyReq = el('div', { class: 'pjh-stat', text: '아직 없어요 — 위에서 찾아 연결하면 다음 세션부터 읽고 시작합니다.' });
   const footTxt = footText('필요 ' + req.length + ' · 산출 ' + prod.length);
+  // 추천은 의미검색이라 늦게 온다(실측 20~30초) — 그동안 «찾는 중» 한 줄을 두어 나중에 줄이 생기는 게 갑작스럽지 않게.
+  recHost.append(el('div', { class: 'pjh-stat pjh-krec-wait', text: '추천 지식을 찾는 중…' }));
   const paintRecs = (n: number, label = true) => ctx.D.recs().then((rs: any[]) => {
     const all = rs.filter((m) => !linked.has(knName(m)));
     const fresh = all.slice(0, n);
