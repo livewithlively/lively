@@ -317,7 +317,8 @@
   /* 자동 실행 패널(#4172) — 머리는 두 줄로, 줄은 요약을 아래로 내린다(시간 · 로고 · 이름 / 요약). */
   .cxr-head { gap: 10px; padding: 12px; }
   .cxr-sched { margin-left: 0; order: 3; width: 100%; flex-wrap: wrap; gap: 4px 12px; }
-  .cxr-tl { padding: 8px 12px 0; }
+  .cxr-tl { padding: 8px 12px 0; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .cxr-tl svg { min-width: 760px; }   /* 폰에서 막대를 줄이면 글자가 읽히지 않는다 — 옆으로 밀어 본다(처음엔 «지금» 쪽) */
   .cxr-legend { padding: 2px 12px 8px; }
   .cxr-legend .cxr-sp { display: none; }
   .cxr-feed { padding: 2px 4px 6px; }
