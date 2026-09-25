@@ -2088,6 +2088,8 @@ function paintSessAll(tab: ShellTab): void {
     onOpen: (s) => { setRailSection('home', { navigate: false }); openSideRow('sess:' + s.id, '#/s/' + encodeURIComponent(s.id)); },
     //  치우기 = 홈의 × 와 같은 함수. 낙관 반영(dismissedSess)은 부르는 즉시 끝나 있으므로 바로 한 번, 서버 왕복 뒤 한 번 더 그린다.
     onDismiss: (s) => { const done = closeSideRow('sess:' + s.id); repaintSessAll(); void done.then(repaintSessAll); },
+    //  #4233 — 도구줄 [＋ 새 세션] = 사이드바 머리 ＋ 와 같은 동작(onNewTask: 홈 새 탭).
+    onNew: () => { tabsApi?.add('#/'); },
   });
 }
 function repaintSessAll(): void {

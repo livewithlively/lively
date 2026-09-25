@@ -209,7 +209,7 @@ function restates(work: string, name: string): boolean {
  *  프로젝트 행이 이미 말하고 있다. 같은 제목이 한 화면에 대여섯 번 반복돼 목록이 통째로 안 읽히던 원인이라 지운다.
  *  대신 하네스가 pane 제목에 써 두는 '지금 하는 일'이 그 자리를 받는다 — 실제로 세션을 구분해 주던 건 그 줄이었다.
  *  이름이 따로 있는 세션(사람이 지은 것)만 두 줄이 된다. 원래 이름은 툴팁에 남는다(정보를 버리지는 않는다). */
-export function sessText(s: Sess, projName: string): { main: string; sub: string; named: boolean } {
+export function sessText(s: Sess, projName: string): { main: string; sub: string; named: boolean; untitled: boolean } {
   const label = String(s.label || '').trim();
   //  멈춘 세션엔 pane 제목이 없다(박스가 없으니 훔쳐볼 화면도 없다) — 그 자리를 **중앙 기록의 대화 제목**
   //  (= 그 세션에 처음 시킨 말)이 받는다. 없으면 종전대로 이름만 남는다.
@@ -222,10 +222,11 @@ export function sessText(s: Sess, projName: string): { main: string; sub: string
   const job = work && !HARNESS_TITLES.has(norm(work)) && !restates(work, name) ? work : '';
   //  named = 이 이름이 **그 세션의 이름**에서 나왔나(라벨). false 면 pane 제목·대화 제목을 빌려 온 것이라
   //   화면에 쓰기는 해도 **기억해 두지는 않는다**(main.ts rememberSessName · #2028 이 세운 규칙의 나머지 반쪽).
-  if (name && job) return { main: name, sub: job, named: true };
-  if (name || job) return { main: name || job, sub: '', named: !!name };
+  if (name && job) return { main: name, sub: job, named: true, untitled: false };
+  if (name || job) return { main: name || job, sub: '', named: !!name, untitled: false };
   const last = (isIdLabel(label) ? '' : label);
-  return { main: last || String((s.raw && s.raw.harness) || '') || '이름 없는 세션', sub: '', named: !!last };
+  //  untitled = 이름 · 작업 제목 · 대화 제목이 다 없어 하네스 이름이나 «이름 없는 세션»으로 떨어졌다(#4233 — [AI 세션] 목록이 묶음마다 한 줄로 접는다).
+  return { main: last || String((s.raw && s.raw.harness) || '') || '이름 없는 세션', sub: '', named: !!last, untitled: !last };
 }
 // ★내 세션인가 — 얼굴(남의 세션 표시)과 보관(×)이 **같은 판정**을 써야 한다(상민님 2026-08-19:
 //  "윤상민 아바타 같은 게 있는데 왜 있는지 모르겠고, 그것 때문인지 x 버튼이 보이질 않음").

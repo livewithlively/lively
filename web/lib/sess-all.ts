@@ -10,6 +10,8 @@
 //  ⚠ 홈 목록에서의 자리(목록에 둠·치움 — sess-visibility.ts)는 여기서 재지 않는다. 그 재료(내 인스턴스·치운 기록)는 셸만 들고 있어서,
 //   셸이 홈 사이드바와 **같은 함수**로 재어 행마다 넘긴다(main.ts homeRowVerdict). 여기서 따로 재면 판정이 두 벌이 된다.
 //  잎 모듈인 이유는 past-sess·sess-fold 와 같다 — 이 잣대가 화면 코드 안에 있으면 시험할 데가 없다(scripts/sess-all.test.mjs).
+//  ★ #4233 안 A(원준 2026-09-25 «안 A 좋아 · 매니지드까지»): 거르기에 상태 축을 더하고, **묶기**(날짜 · 프로젝트 · 사람 · 상태)와
+//   「지금 볼 것」 카드 고르기를 여기 둔다. 묶기는 보이는 세션을 바꾸지 않는다(거르기와 묶기는 다른 일이다).
 import { inPastPeriod, type PastPeriod } from './past-sess.js';
 
 /** 사이드바가 고른 프로젝트 — null = 전체 · 0 = 프로젝트 없음 · 그 밖 = 그 프로젝트 id. */
@@ -23,6 +25,8 @@ export interface AllSessLike {
   lastSeen?: number;
   /** 주인 — 내 세션이면 'me', 남의 세션이면 그 사람 id(모르면 ''). 부르는 쪽이 views.ts isMineSess 로 정한다. */
   owner: string;
+  /** 상태 key(web/session-status.ts SESS_STATES) — 상태 거르개·상태 묶기·카드가 읽는다. */
+  stateKey?: string;
 }
 
 export interface AllSessQuery {
@@ -31,6 +35,8 @@ export interface AllSessQuery {
   /** '' = 모든 사람 · 'me' = 나 · 그 밖 = 그 사람 id. */
   owner: string;
   now: number;
+  /** #4233 — '' 또는 없음 = 모든 상태 · 그 밖 = 그 상태 key 만(도구줄의 「확인 필요」·「작업 중」 칩). */
+  state?: string;
 }
 
 /** 이 세션이 고른 프로젝트에 드는가. ★ 0 은 «프로젝트 없음» 묶음이지 빈 값이 아니다(null 만 «전체»). */
@@ -39,13 +45,14 @@ export function inProjPick(projectId: number | null | undefined, pick: SessProjP
   return (Number(projectId) || 0) === pick;
 }
 
-/** 세 축으로 거르고 **최근 순**으로 — 목록은 원장이라 순서의 정본은 마지막 활동 시각이다. */
+/** 네 축(프로젝트 · 기간 · 사람 · 상태)으로 거르고 **최근 순**으로 — 목록은 원장이라 순서의 정본은 마지막 활동 시각이다. */
 export function selectAllSess<T extends AllSessLike>(rows: readonly T[] | null | undefined, q: AllSessQuery): T[] {
   return (rows || [])
     .filter((s) => !s.trashedAt
       && inProjPick(s.projectId, q.proj)
       && inPastPeriod(Number(s.lastSeen) || 0, q.now, q.period)
-      && (!q.owner || s.owner === q.owner))
+      && (!q.owner || s.owner === q.owner)
+      && (!q.state || s.stateKey === q.state))
     .sort((a, b) => (Number(b.lastSeen) || 0) - (Number(a.lastSeen) || 0));
 }
 
@@ -60,4 +67,65 @@ export function ownerCounts(rows: readonly AllSessLike[] | null | undefined, q: 
   return [...m.entries()]
     .map(([key, n]) => ({ key, n }))
     .sort((a, b) => Number(b.key === 'me') - Number(a.key === 'me') || b.n - a.n || a.key.localeCompare(b.key));
+}
+
+// ── #4233 안 A — 묶기 · 「지금 볼 것」 카드 ─────────────────────────────────────────────
+
+/** 묶기 기준. 도구줄의 [날짜 ⌄] 가 고른다(보기 탭을 더하지 않는다 — 원준 2026-09-25). */
+export type SessGroupBy = 'day' | 'project' | 'owner' | 'state';
+export const SESS_GROUP_BYS: ReadonlyArray<{ key: SessGroupBy; label: string }> = [
+  { key: 'day', label: '날짜' }, { key: 'project', label: '프로젝트' }, { key: 'owner', label: '사람' }, { key: 'state', label: '상태' },
+];
+
+/** 날짜 묶음 — 오늘 · 어제 · 이번 주(7일 안) · 이전. 경계는 이 기기의 자정이다(종전 bins.ts bucketOf 와 같은 자). */
+export const DAY_BUCKETS = ['오늘', '어제', '이번 주', '이전'] as const;
+export function dayBucket(ms: number, now: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '이전';
+  const day = (t: number): number => { const d = new Date(t); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
+  const diff = Math.round((day(now) - day(ms)) / 86_400_000);
+  return diff <= 0 ? '오늘' : diff === 1 ? '어제' : diff < 7 ? '이번 주' : '이전';
+}
+
+export interface SessGroup<T> { key: string; rows: T[] }
+
+/**
+ * 거른 목록을 묶는다. 묶음 안 순서는 들어온 순서(최근 순) 그대로다.
+ *  · 날짜: 오늘 → 어제 → 이번 주 → 이전.
+ *  · 프로젝트: 가장 최근 활동 순. «프로젝트 없음»(null · 0 은 한 묶음, key '0')은 늘 맨 끝.
+ *  · 사람: 나('me') 맨 앞, 나머지는 많은 순, 같으면 id 순(사람 고르개 ownerCounts 와 같은 순서).
+ *  · 상태: stateRank 순(확인 필요 → 작업 완료 → 작업 중 → …). 순위를 모르는 상태는 맨 끝.
+ */
+export function groupAllSess<T extends AllSessLike>(rows: readonly T[] | null | undefined, by: SessGroupBy, now: number,
+  stateRank: (key: string) => number = () => 99): Array<SessGroup<T>> {
+  const keyOf = (s: T): string => (by === 'day' ? dayBucket(Number(s.lastSeen) || 0, now)
+    : by === 'project' ? String(Number(s.projectId) || 0)
+    : by === 'owner' ? String(s.owner || '')
+    : String(s.stateKey || ''));
+  const m = new Map<string, T[]>();
+  for (const s of rows || []) { const k = keyOf(s); const a = m.get(k); if (a) a.push(s); else m.set(k, [s]); }
+  const top = (g: SessGroup<T>): number => Math.max(...g.rows.map((s) => Number(s.lastSeen) || 0));
+  const rank = (k: string): number => { const r = Number(stateRank(k)); return Number.isFinite(r) ? r : 99; };
+  const groups = [...m.entries()].map(([key, rs]) => ({ key, rows: rs }));
+  const cmp: (a: SessGroup<T>, b: SessGroup<T>) => number = by === 'day'
+    ? (a, b) => DAY_BUCKETS.indexOf(a.key as (typeof DAY_BUCKETS)[number]) - DAY_BUCKETS.indexOf(b.key as (typeof DAY_BUCKETS)[number])
+    : by === 'project' ? (a, b) => Number(a.key === '0') - Number(b.key === '0') || top(b) - top(a)
+    : by === 'owner' ? (a, b) => Number(b.key === 'me') - Number(a.key === 'me') || b.rows.length - a.rows.length || a.key.localeCompare(b.key)
+    : (a, b) => rank(a.key) - rank(b.key) || top(b) - top(a);
+  return groups.sort(cmp);
+}
+
+/** 「지금 볼 것」 카드에 서는 상태 — 확인 필요 · 작업 완료 · 작업 중 · 대기 중(세션 상태 순위 0~3). */
+export const NOW_CARD_STATES: readonly string[] = ['waiting', 'done', 'busy', 'idle'];
+
+/** 「대기 중」은 이 시간 안에 활동한 것만 카드에 선다 — 열흘 전에 열어 둔 채인 세션이 카드를 차지하지 않게(dev 실측 2026-09-25). */
+export const NOW_IDLE_MS = 24 * 60 * 60 * 1000;
+
+/** 「지금 볼 것」 카드 — **내 세션**만, 위 네 상태(대기 중은 24시간 안 활동만), 상태 순위 → 최근 순, 최대 max 장. 휴지통 것은 없다. */
+export function pickNowCards<T extends AllSessLike>(rows: readonly T[] | null | undefined, stateRank: (key: string) => number, max = 4, now = Date.now()): T[] {
+  const rank = (k: string | undefined): number => { const r = Number(stateRank(String(k || ''))); return Number.isFinite(r) ? r : 99; };
+  return (rows || [])
+    .filter((s) => s.owner === 'me' && !s.trashedAt && NOW_CARD_STATES.includes(String(s.stateKey || ''))
+      && (s.stateKey !== 'idle' || now - (Number(s.lastSeen) || 0) < NOW_IDLE_MS))
+    .sort((a, b) => rank(a.stateKey) - rank(b.stateKey) || (Number(b.lastSeen) || 0) - (Number(a.lastSeen) || 0))
+    .slice(0, Math.max(0, max));
 }
