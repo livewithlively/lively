@@ -169,5 +169,56 @@ test("W1 배선: renderProjects 가 카드 계획 · 줄 나누기 · 고정 줄
   assert.match(body, /class: 'v2-ksp v2-pcard'/);
   assert.match(body, /saveSet\(FOLD_CLOSED_STORE, foldClosed\)/);
   assert.doesNotMatch(body, /v2-ptf|padding-left:' \+/, "들여쓰기 트리(폴더 줄 · 깊이 들여쓰기)는 걷었다");
-  assert.match(SIDE, /import \{ planProjCards, type ProjCard \} from '\.\/proj-cards\.js';/);
+  assert.match(SIDE, /import \{ newItemPlan, newRowSlot, planProjCards, type ProjCard \} from '\.\/proj-cards\.js';/);
+});
+
+// ── 배포 뒤 격리 리뷰 지적(#4233): 폴더 안에 만들기 · 하위 폴더 링크 닿기 · 깊은 폴더 켜기 ──
+test("P16 셋째 층 이하 폴더를 고르면 그 폴더를 담은 카드 머리가 켜진다 · 둘째 층은 자기 카드 · 최상위는 이름표", async () => {
+  assert.equal((await plan({ sel: "F13" })).onKey, "folder:12");
+  assert.equal((await plan({ sel: "F12" })).onKey, "folder:12");
+  assert.equal((await plan({ sel: "F10" })).onKey, "folder:10");
+  assert.equal((await plan({ sel: "F999" })).onKey, "folder:999", "모르는 폴더는 그대로(켤 줄이 없을 뿐)");
+});
+
+test("N1 ★폴더 안에 새 폴더 — parent_id 를 보낸다 · 폴더가 없으면 종전 그대로 이름만", async () => {
+  const m = await load();
+  assert.deepEqual(m.newItemPlan("folder", "새것", 10), { path: "/api/ui/v6/project-folders", body: { name: "새것", parent_id: 10 }, moveTo: null });
+  assert.deepEqual(m.newItemPlan("folder", "새것", null), { path: "/api/ui/v6/project-folders", body: { name: "새것" }, moveTo: null });
+});
+
+test("N2 ★폴더 안에 새 리스트 — 만든 뒤 그 폴더로 옮긴다(moveTo) · 폴더가 없거나 0 이면 옮기지 않는다", async () => {
+  const m = await load();
+  assert.deepEqual(m.newItemPlan("list", "새 리스트", 12), { path: "/api/ui/v6/project-lists", body: { name: "새 리스트" }, moveTo: 12 });
+  assert.equal(m.newItemPlan("list", "x", null).moveTo, null);
+  assert.equal(m.newItemPlan("list", "x", 0).moveTo, null);
+  assert.equal(m.newItemPlan("list", "x", undefined).moveTo, null);
+  assert.deepEqual(m.newItemPlan("proj", "p", 12), { path: "/api/ui/v6/projects", body: { name: "p" }, moveTo: null });
+});
+
+test("N3 이름칸 자리 — 최상위 폴더면 이름표 아래, 하위 폴더면 그 카드 안, 모르거나 없으면 구역 맨 위", async () => {
+  const m = await load();
+  const p = await plan();
+  assert.deepEqual(m.newRowSlot(p.groups, 10), { at: "label", folderId: 10 });
+  assert.deepEqual(m.newRowSlot(p.groups, 12), { at: "card", key: "12" });
+  assert.deepEqual(m.newRowSlot(p.groups, 999), { at: "top" });
+  assert.deepEqual(m.newRowSlot(p.groups, null), { at: "top" });
+  assert.deepEqual(m.newRowSlot([], 10), { at: "top" });
+});
+
+test("W2 배선: [정리]의 새 리스트 · 새 폴더가 그 폴더 id 를 넘기고, 만들기가 newItemPlan 과 폴더 옮기기를 쓰며, 이름칸은 그 자리에 선다", () => {
+  assert.match(SIDE, /run: \(\) => openNew\('list', g\.folderId\)/);
+  assert.match(SIDE, /run: \(\) => openNew\('folder', g\.folderId\)/);
+  assert.match(SIDE, /function openNew\(kind: NewKind = 'proj', folderId: number \| null = null\): void \{ newKind = kind; newIn = folderId;/);
+  assert.match(SIDE, /const plan = newItemPlan\(newKind, name, newIn\);\s*const made = await api\(plan\.path, \{ method: 'POST', body: JSON\.stringify\(plan\.body\) \}\)/);
+  assert.match(SIDE, /if \(isList && plan\.moveTo != null\) \{\s*try \{\s*await api\('\/api\/ui\/v6\/project-lists\/' \+ made\.id \+ '\/folder', \{ method: 'POST', body: JSON\.stringify\(\{ folder_id: plan\.moveTo \}\) \}\);/);
+  assert.match(SIDE, /\.\.\.\(newOpen && slot\.at === 'top' \? \[newProjRow\(\)\] : \[\]\),/);
+  assert.match(SIDE, /newOpen && slot\.at === 'label' && slot\.folderId === g\.folderId \? \[newProjRow\(\)\]/);
+  assert.match(SIDE, /newOpen && slot\.at === 'card' && slot\.key === c\.key \? \[newProjRow\(\)\]/);
+});
+
+test("W3 하위 폴더 카드의 [폴더 보기] 링크는 키보드(포커스)와 터치로 닿는다", () => {
+  const CSS = readFileSync("public/styles/47-v2-rail.css", "utf8");
+  assert.match(CSS, /\.v2-pcard > \.v2-ksp-h:focus-within \.v2-ksp-edit \{ display: inline-grid; \}/);
+  assert.match(CSS, /@media \(hover: none\) \{\s*\.v2-pcard > \.v2-ksp-h \.v2-ksp-edit \{ display: inline-grid;/);
+  assert.doesNotMatch(CSS, /\.v2-ptf/, "쓰지 않는 옛 폴더 줄 규칙은 걷었다");
 });

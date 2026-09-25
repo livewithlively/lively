@@ -113,9 +113,49 @@ export function planProjCards<L extends ProjCardList>(input: {
   const loose = listsIn(null);
   if (loose.length) groups.push({ folderId: null, name: PROJ_LOOSE_GROUP, cards: [card(PROJ_ROOT_KEY, null, PROJ_LISTS_NAME, loose)] });
 
+  //  고른 폴더가 셋째 층 이하면 그 폴더를 담은 카드(최상위 폴더 바로 아래 폴더)의 머리를 켠다(리뷰 지적: 아무 줄도 안 켜졌다).
   const selFolder = /^F(\d+)$/.exec(input.sel);
+  const byId = new Map(folders.map((f) => [f.id, f]));
+  const cardFolderOf = (id: number): number => {
+    let f = byId.get(id);
+    for (let i = 0; f && f.parent_id != null && i < 64; i++) {
+      const up = byId.get(f.parent_id);
+      if (!up || up.parent_id == null) return f.id;   // f 의 부모가 최상위 폴더 → f 가 카드
+      f = up;
+    }
+    return id;
+  };
   const onKey = selId ? (selFav ? 'fav:' + selId : 'card:' + selId)
     : input.sel === 'none' ? 'none'
-    : selFolder ? 'folder:' + selFolder[1] : '';
+    : selFolder ? 'folder:' + cardFolderOf(Number(selFolder[1])) : '';
   return { favs, noneN: Math.max(0, input.noneN || 0), groups, onKey };
+}
+
+// ── 폴더 안에 새로 만들기(#4233 리뷰 지적) ──────────────────────────────────────────────
+//  이름표 [정리]의 «새 리스트 · 새 폴더» 는 **그 폴더 안에** 만든다. 종전엔 이름만 보내 폴더 밖에 생겼고, 이름칸도 구역 맨 위에 섰다.
+//  폴더: POST project-folders { name, parent_id }. 리스트: POST project-lists { name } 뒤 POST project-lists/<id>/folder { folder_id }
+//   (리스트 생성은 폴더를 받지 않는다 — 클래식 list-forms.ts 와 같은 두 걸음).
+
+export type ProjNewKind = 'proj' | 'list' | 'folder';
+export interface ProjNewPlan { path: string; body: Record<string, unknown>; moveTo: number | null }
+
+/** 만들기 요청. folderId 가 없으면(구역 ＋) 종전 그대로 폴더 밖. */
+export function newItemPlan(kind: ProjNewKind, name: string, folderId: number | null | undefined): ProjNewPlan {
+  const inFolder = typeof folderId === 'number' && folderId > 0 ? folderId : null;
+  if (kind === 'folder') return { path: '/api/ui/v6/project-folders', body: inFolder ? { name, parent_id: inFolder } : { name }, moveTo: null };
+  if (kind === 'list') return { path: '/api/ui/v6/project-lists', body: { name }, moveTo: inFolder };
+  return { path: '/api/ui/v6/projects', body: { name }, moveTo: null };
+}
+
+export type ProjNewSlot = { at: 'top' } | { at: 'label'; folderId: number } | { at: 'card'; key: string };
+
+/** 이름칸을 세울 자리 — 그 폴더의 이름표 바로 아래, 하위 폴더면 그 카드 안 맨 위. 못 찾으면(폴더가 사라짐 · 구역 ＋) 구역 맨 위. */
+export function newRowSlot<L>(groups: readonly ProjCardGroup<L>[], folderId: number | null | undefined): ProjNewSlot {
+  if (typeof folderId !== 'number' || folderId <= 0) return { at: 'top' };
+  for (const g of groups) {
+    if (g.folderId === folderId) return { at: 'label', folderId };
+    const c = g.cards.find((x) => x.folderId === folderId);
+    if (c) return { at: 'card', key: c.key };
+  }
+  return { at: 'top' };
 }

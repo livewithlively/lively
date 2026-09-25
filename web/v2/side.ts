@@ -29,7 +29,7 @@
 //   캐시다(shell-prefs.ts). 선언 한 줄이 어느 쪽인지 말한다 — shellPrefStore = 계정 · deviceStore = 이 기기.
 import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { planWikiCards, allocWikiRows } from './wiki-cards.js';
-import { planProjCards, type ProjCard } from './proj-cards.js';   // #4233 안 1 — [프로젝트] 사이드바 카드 계획(순수)
+import { newItemPlan, newRowSlot, planProjCards, type ProjCard } from './proj-cards.js';   // #4233 안 1 — [프로젝트] 사이드바 카드 계획(순수)
 import { projectLines, SESS_GROUP_BYS, settleScope, sideCards, withGroupBy, type SessScope, type SideCardProj } from '../lib/sess-all.js';   // #4158 · #4233 2안 — [AI 세션] 사이드바 카드 · 묶기 기준(순수)
 import { sessGroupName, sessScope, setSessScope } from './sess-scope.js';   // #4233 2안 — 사이드바에서 고른 것의 한 자리(가운데 목록이 같은 값을 읽는다)
 import { splitFolderRows, foldCardRows } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음
@@ -1720,7 +1720,7 @@ function renderProjTree(): void {
   };
   const card = (c: ProjCard<TreeList>, n: number): HTMLElement => {
     const shown = c.full ? [...c.rows, ...c.empties] : c.rows.slice(0, n);
-    const kids: HTMLElement[] = shown.map(listRow);
+    const kids: HTMLElement[] = [...(newOpen && slot.at === 'card' && slot.key === c.key ? [newProjRow()] : []), ...shown.map(listRow)];
     const more = moreRow(c, c.full ? 0 : c.rows.length - shown.length);
     if (more) kids.push(more);
     if (!c.rows.length && !c.empties.length) kids.push(el('p', { class: 'v2-ksp-empty', text: '아직 이 폴더에 리스트가 없어요.' }));
@@ -1751,17 +1751,25 @@ function renderProjTree(): void {
           const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
           ctxMenu(r.left, r.bottom + 4, [
             { label: '폴더 보기', run: () => { location.hash = '#/projects2/f/' + g.folderId; } },
-            { label: '새 리스트', run: () => openNew('list') },
-            { label: '새 폴더', run: () => openNew('folder') },
+            { label: '이 폴더에 새 리스트', run: () => openNew('list', g.folderId) },
+            { label: '이 폴더에 새 폴더', run: () => openNew('folder', g.folderId) },
           ]);
         } }, icon('pen', 'v2-kedit-ic'), el('span', { text: '정리' })) : null);
   };
+  //  이름칸 자리 — [정리]에서 연 것은 그 폴더 이름표 바로 아래(하위 폴더면 그 카드 안 맨 위), 구역 ＋ 는 종전대로 맨 위.
+  const slot = newOpen ? newRowSlot(plan.groups, newIn) : { at: 'top' as const };
   const build = (alloc: Record<string, number>): HTMLElement[] => {
     if (!plan.groups.length) return fixed.length ? [] : [el('p', { class: 'v2-empty', text: '아직 리스트가 없어요. 위 ＋ 에서 리스트를 만들면 여기 섭니다.' })];
-    return plan.groups.flatMap((g) => [label(g), ...g.cards.map((c) => card(c, alloc[c.key] ?? c.rows.length))]);
+    return plan.groups.flatMap((g) => [label(g),
+      ...(newOpen && slot.at === 'label' && slot.folderId === g.folderId ? [newProjRow()] : []),
+      ...g.cards.map((c) => card(c, alloc[c.key] ?? c.rows.length))]);
   };
 
   const keep = listBefore();
+  //  이름칸의 포커스 · 커서 — 20초 폴링이 다시 그려도 치던 이름을 이어 쓸 수 있게(renderTree 와 같은 처리).
+  const act = document.activeElement;
+  const newHad = act instanceof HTMLInputElement && act.classList.contains('v2-npj-in') && host.contains(act);
+  const newSel = newHad ? [(act as HTMLInputElement).selectionStart, (act as HTMLInputElement).selectionEnd] : null;
   const listEl = el('div', { class: 'v2-app-list v2-kshelf v2-pshelf', 'aria-label': '폴더 · 리스트' });
   appListEl = listEl;
 
@@ -1770,13 +1778,18 @@ function renderProjTree(): void {
     el('section', { class: 'v2-app-space', 'aria-label': '프로젝트' },
       secHead('프로젝트', null, newMenuBtn()),
       lensSwitch(),
-      ...(newOpen ? [newProjRow()] : []),
+      ...(newOpen && slot.at === 'top' ? [newProjRow()] : []),
       fixed.length ? el('nav', { class: 'v2-kviews', 'aria-label': '즐겨찾기 · 기타' }, ...fixed) : null,
       listEl),
     secFoot());
 
   fitWikiList(listEl, order, sizes, forced, build);
   listAfter(keep);
+  const npj = host.querySelector<HTMLInputElement>('.v2-npj-in');
+  if (npj) {
+    if (newHad) { npj.focus(); if (newSel && newSel[0] != null) npj.setSelectionRange(newSel[0], newSel[1]); }
+    else if (newFocusWanted) { newFocusWanted = false; npj.focus(); }
+  }
   bindSideKeys();
 }
 
@@ -2290,9 +2303,11 @@ let newDraft = '';            // 20초 폴링 재렌더가 치던 이름을 지�
 let newSending = false;
 let newErr = '';
 let newFocusWanted = false;
+/** 이름칸이 만들 자리 — 이름표 [정리]의 «새 리스트 · 새 폴더» 가 준 폴더 id. null = 구역 ＋(폴더 밖, 종전 그대로). */
+let newIn: number | null = null;
 
-function openNew(kind: NewKind = 'proj'): void { newKind = kind; newOpen = true; newFocusWanted = true; newErr = ''; redraw(); }
-function closeNew(): void { if (!newOpen) return; newOpen = false; newDraft = ''; newErr = ''; redraw(); }
+function openNew(kind: NewKind = 'proj', folderId: number | null = null): void { newKind = kind; newIn = folderId; newOpen = true; newFocusWanted = true; newErr = ''; redraw(); }
+function closeNew(): void { if (!newOpen) return; newOpen = false; newIn = null; newDraft = ''; newErr = ''; redraw(); }
 
 function newBtn(): HTMLElement {
   const b = el('button', {
@@ -2339,14 +2354,23 @@ function newProjRow(): HTMLElement {
       if (newKind === 'list' || newKind === 'folder') {
         // #2043 — 폴더 · 리스트 렌즈의 ＋. 만든 것을 목록에 **낙관적으로** 세운다(다음 폴링이 정본으로 덮는다 — 그때까지 이 줄이 선다).
         const isList = newKind === 'list';
-        const made = await api(isList ? '/api/ui/v6/project-lists' : '/api/ui/v6/project-folders', { method: 'POST', body: JSON.stringify({ name }) })
+        //  이름표 [정리]에서 열었으면 그 폴더 안에 만든다(newItemPlan — 폴더는 parent_id, 리스트는 만든 뒤 폴더로 옮긴다).
+        const plan = newItemPlan(newKind, name, newIn);
+        const made = await api(plan.path, { method: 'POST', body: JSON.stringify(plan.body) })
           .then((d: any) => (d && (isList ? d.list : d.folder)) || d);
         if (!made || !made.id) throw new Error(isList ? '생성 응답에 리스트가 없어요' : '생성 응답에 폴더가 없어요');
+        if (!isList && plan.body.parent_id != null && made.parent_id == null) made.parent_id = plan.body.parent_id;
+        if (isList && plan.moveTo != null) {
+          try {
+            await api('/api/ui/v6/project-lists/' + made.id + '/folder', { method: 'POST', body: JSON.stringify({ folder_id: plan.moveTo }) });
+            made.folder_id = plan.moveTo;
+          } catch (_) { toast('리스트는 만들었지만 폴더에 넣지 못했어요. 리스트 설정에서 폴더를 골라 주세요.'); }
+        }
         if (last) {
           if (isList) { const ls = last.data.lists || (last.data.lists = []); if (!ls.some((l) => l.id === made.id)) ls.push(made); }
           else { const fs = last.data.folders || (last.data.folders = []); if (!fs.some((f) => f.id === made.id)) fs.push(made); }
         }
-        newSending = false; newOpen = false; newDraft = ''; newErr = '';
+        newSending = false; newOpen = false; newIn = null; newDraft = ''; newErr = '';
         if (isList) location.hash = '#/projects2/l/' + made.id;   // 새 리스트의 보드로 — 빈 보드가 '만들어졌다'를 말한다
         redraw();
         return;
