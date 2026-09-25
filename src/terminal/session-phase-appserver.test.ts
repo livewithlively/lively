@@ -36,8 +36,8 @@ function agentState(i: {
     : i.phase;
 }
 
-// ⚠ 2026-08-27 부터 **기본이 app-server** 다(codex-chat-mode.ts). 그래서 대조군은 «env 없음» 이 아니라
-//  «끄는 값을 명시» 여야 한다 — 빈 env 로 두면 두 군이 같은 모드가 돼 이 표가 아무것도 안 지킨다.
+// ⚠ #4135 이후 **새 세션의 기본은 tmux** 다. 다만 이 표가 재는 것은 «이미 떠 있는 세션» 이고, 표식이 없는 세션은
+//  이 변경 전의 기본(app-server)으로 읽힌다(codex-chat-mode.ts) — 그래서 아래 ON/OFF 의 값은 그대로 유효하다.
 const ON = {} as NodeJS.ProcessEnv;                              // 기본 = app-server
 const OFF = { LIVELY_CODEX_CHAT: "tmux" } as NodeJS.ProcessEnv;  // 끈 배포(종전 판정)
 const base = { harness: "codex", offline: true, attached: 0, phase: "idle" as const, asPhase: null };
@@ -102,12 +102,14 @@ t("★ B1 생성 응답도 목록과 **같은 곳**에서 대화 필드를 만�
   assert.ok(!/s\.chatMode = codexChatMode/.test(src), "목록이 헬퍼를 안 쓰고 따로 만들지 않는다");
 });
 
-t("★ B2 화면은 모를 때 터미널로 추정하지 않는다 — codex 는 이 배포의 기본이 app-server 다", () => {
+//  ★ #4135 로 이 표의 방향이 뒤집혔다. codex 의 기본이 터미널(TUI)로 돌아갔으므로, 모르는 세션은 **터미널**로 본다.
+//   틀리는 쪽(이 변경 전의 app-server 세션)은 행이 오는 즉시 대화로 돌아가고, 그 한 틱의 셸 화면에는
+//   «여기 친 말은 Codex 에게 가지 않습니다» 줄이 서 있다(그게 2026-08-28 에 반대로 두었던 이유를 메운다).
+t("★ B2 화면은 «모를 때» 를 **행이 실어 준 값으로만** 판정한다 — 하네스 이름으로 추측하지 않는다", () => {
   const src = readSrc("web/session-chat.ts");
-  const fn = src.slice(src.indexOf("const chatFirst ="), src.indexOf("const chatFirst =") + 900);
-  assert.match(fn, /harness \|\| ''\) === 'codex'/, "chatMode 가 없으면 하네스로 판단한다");
-  assert.ok(!/^\s*const chatFirst = \(\): boolean => String\(target\.raw\?\.chatMode/m.test(src),
-    "종전의 «모르면 터미널» 한 줄이 남아 있지 않다");
+  const fn = src.slice(src.indexOf("const chatFirst ="), src.indexOf("const chatFirst =") + 1200);
+  assert.match(fn, /if \(m\) return m === 'app-server';/, "chatMode 가 있으면 그것이 정본이다");
+  assert.ok(!/harness \|\| ''\) === 'codex'/.test(fn), "하네스 이름으로 «대화창» 을 추측하지 않는다(기본이 뒤집혔다)");
 });
 
 t("B3 추정이 틀린 배포(tmux)에서는 행이 오는 즉시 터미널로 되돌린다 — 한 방향만 마감하면 반쪽이다", () => {

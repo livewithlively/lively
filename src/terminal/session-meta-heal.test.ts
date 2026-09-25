@@ -136,11 +136,11 @@ function legacyMeta(id: string, v: { owner: string; label: string; harness: stri
 test("M1 표식 목록은 종전 createSession 인라인 목록과 같다 — 선택 칸 전부 켬 / 전부 끔 / 출처 없음 (E10·E11)", () => {
   const full = { owner: "sangmin-yoon", label: "3749 진행해", harness: "claude", chatRuntime: true, kind: "human", target: "/work/shared/project/2600", autoApprove: true, appliedFlags: { "--model": "opus", "--effort": "max" }, invites: ["wonjoon-jang"], appId: "app-7", projectId: 2600, projectSrc: "org" };
   assert.deepEqual(
-    sessionMetaCmds(ID, { owner: full.owner, label: full.label, harness: full.harness, runtimeChat: full.chatRuntime, kind: full.kind, dir: full.target, autoApprove: full.autoApprove, flags: full.appliedFlags, invites: full.invites, appId: full.appId, projectId: full.projectId, projectSrc: full.projectSrc }),
+    sessionMetaCmds(ID, { owner: full.owner, label: full.label, harness: full.harness, runtime: full.chatRuntime ? "chat" : undefined, kind: full.kind, dir: full.target, autoApprove: full.autoApprove, flags: full.appliedFlags, invites: full.invites, appId: full.appId, projectId: full.projectId, projectSrc: full.projectSrc }),
     legacyMeta(ID, full));
   const bare = { owner: "u", label: ID, harness: "shell", chatRuntime: false, kind: "task", target: "/work/u", autoApprove: false, appliedFlags: {}, invites: [] };
   assert.deepEqual(
-    sessionMetaCmds(ID, { owner: bare.owner, label: bare.label, harness: bare.harness, runtimeChat: false, kind: bare.kind, dir: bare.target, autoApprove: false, flags: {}, invites: [] }),
+    sessionMetaCmds(ID, { owner: bare.owner, label: bare.label, harness: bare.harness, runtime: undefined, kind: bare.kind, dir: bare.target, autoApprove: false, flags: {}, invites: [] }),
     legacyMeta(ID, bare));
   const noSrc = { ...bare, harness: "claude", projectId: 5, projectSrc: null };
   assert.deepEqual(
@@ -155,7 +155,7 @@ test("M1 표식 목록은 종전 createSession 인라인 목록과 같다 — �
 
 test("M2 목록의 모든 명령이 같은 세션을 지목한다 — 묶어 보내도 각 묶음 첫 명령이 라우팅 키를 쥔다(#3668) (E12)", () => {
   const cmds = [
-    ...sessionMetaCmds(ID, { owner: "u", label: "l", harness: "claude", runtimeChat: true, kind: "human", dir: "/d", autoApprove: true, flags: { a: "b" }, invites: ["x"], appId: "a", projectId: 1 }),
+    ...sessionMetaCmds(ID, { owner: "u", label: "l", harness: "claude", runtime: "chat", kind: "human", dir: "/d", autoApprove: true, flags: { a: "b" }, invites: ["x"], appId: "a", projectId: 1 }),
     ...sessionWindowCmds(ID, { writeVis: "private", restrictRead: true }),
   ];
   for (const c of cmds) {

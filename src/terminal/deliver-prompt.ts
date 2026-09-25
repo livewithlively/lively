@@ -27,15 +27,32 @@ import { sessionDir, sessionGone, sessionOsUser } from "./terminal-sessions.js";
 import { getSessionState } from "../sessions/session-state.js";
 
 /**
- * 그 세션이 **어느 모드로 떴나**(tmux 옵션 `@box_runtime`) — #2439.
- *  ⚠ 모르면 undefined 다(«terminal» 이 아니다). 그래야 배포 기본이 그대로 적용된다 —
- *   여기서 임의로 접으면 기본을 켜 둔 배포에서 그 세션만 조용히 다르게 돈다.
+ * 그 세션이 **어느 모드로 떴나**(tmux 옵션 `@box_runtime`) — #2439 · #4135.
+ *  ⚠ 모르면 undefined 다(«terminal» 이 아니다). 그래야 각 축이 «표식 없음» 을 제 규칙으로 읽는다 —
+ *   하네스 무관 런타임은 배포 기본을, codex 는 이 변경 전 기본(app-server)을 따른다.
  */
-async function sessionRuntimeChoice(id: string): Promise<"chat" | "terminal" | undefined> {
+/**
+ * 그 세션의 모드 표식 **원시값** (#4135) — codex 축은 "app-server"|"terminal" 을 쓴다(위 세 값으로 접으면 잃는다).
+ *  ⚠ 모르면 undefined 다 — codex 판정이 «표식 없음 = 이 변경 전 세션(app-server)» 으로 읽는다(codex-chat-mode.ts).
+ */
+async function sessionRuntimeStamp(id: string): Promise<string | undefined> {
   try {
     const { getOpt } = await import("./tmux-exec.js");
     const v = String((await getOpt(id, "@box_runtime")) || "").trim();
-    return v === "chat" ? "chat" : v === "terminal" ? "terminal" : undefined;
+    return v || undefined;
+  } catch { return undefined; }
+}
+
+/**
+ * 노드 세션의 모드 표식 (#4135) — 그 노드가 올린 스냅샷 행에서 읽는다(왕복 없음, 메모리 레지스트리).
+ *  ⚠ 옛 번들 노드의 행엔 이 값이 없다 → undefined → codex 축이 «이 변경 전 세션(app-server)» 으로 읽는다.
+ *   그 노드가 실제로 만드는 세션도 app-server 이므로 그 답이 맞다(번들이 갱신되면 그때부터 표식이 붙는다).
+ */
+async function nodeSessionStamp(sessionId: string): Promise<string | undefined> {
+  try {
+    const { nodeSessionsInScope } = await import("../node/registry.js");
+    const row = nodeSessionsInScope().find((s) => s.id === sessionId) as { runtimeRaw?: unknown } | undefined;
+    return typeof row?.runtimeRaw === "string" && row.runtimeRaw ? row.runtimeRaw : undefined;
   } catch { return undefined; }
 }
 
@@ -71,9 +88,12 @@ function nodeDeliveryError(error: unknown): HttpError {
  * 실제 TUI 가 pane 을 쥔 하네스만 종전 send-keys 폴백을 허용한다.
  */
 export async function deliverPromptToNode(
-  o: { harness: string; env?: NodeJS.ProcessEnv }, deps: NodePromptDeps,
+  o: { harness: string; stamp?: string; env?: NodeJS.ProcessEnv }, deps: NodePromptDeps,
 ): Promise<DeliverResult> {
-  const codexAppServer = codexChatMode({ harness: o.harness }, o.env) === "app-server";
+  //  #4135 — 그 세션이 **어느 모드로 떴나**는 노드의 tmux 표식이 안다. 게이트웨이는 그 값을 스냅샷 행에서 읽어 넘긴다
+  //   (nodeSessionStamp). 안 넘기면 배포 기본으로 추측하게 되고, 기본을 뒤집는 순간 **이미 떠 있는 노드 세션**의
+  //   판정이 같이 뒤집혀 app-server 세션(pane=셸)에 PTY 입력이 들어간다(#3982 — 사람의 말이 셸 명령이 된다).
+  const codexAppServer = codexChatMode({ harness: o.harness, stamp: o.stamp }, o.env) === "app-server";
   const useChat = codexAppServer || chatOnNodeEnabled(o.env);
   if (useChat) {
     let failed: unknown = null;
@@ -125,7 +145,8 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: {
   //   가르면 게이트웨이 박스가 노드로도 등록된 배포에서 이 분기가 통째로 무시된다(#2055 실측 함정).
   //  ★ #2439 — 그 세션이 **어느 모드로 떴는지**를 본다(@box_runtime). 배포 기본만 보면 생성 당시의
   //   결정과 갈리고, 갈리면 pane 은 셸인데 대화는 아무도 안 받는 세션이 된다(2026-09-01 실측).
-  const runtimeChoice = await sessionRuntimeChoice(sessionId);
+  const runtimeStamp = nodeId ? undefined : await sessionRuntimeStamp(sessionId);
+  const runtimeChoice = runtimeStamp === "chat" ? "chat" as const : runtimeStamp === "terminal" ? "terminal" as const : undefined;
   if (sessionRuntimeMode({ harness: harnessKey, choice: runtimeChoice }) === "chat"
       && !(await sessionGone(sessionId))) {
     const { sendClaudeChat, ClaudeChatUnavailable } = await import("./harness-io/claude-chat-runtime.js");
@@ -183,7 +204,9 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: {
   //   그 박스의 **로컬 세션까지 노드 스냅샷에 잡혀**(applyLiveTheme 주석과 같은 함정) 아래 노드 릴레이로
   //   빠져 이 분기가 통째로 무시됐다 — 응답이 `{ok:true}` 한 줄로 와서 겉으론 성공처럼 보인다.
   //   그래서 '노드에 등록됐나'가 아니라 **'이 박스의 tmux 에 그 세션이 실제로 있나'** 로 가른다.
-  if (!nodeId && codexChatMode({ harness: harnessKey }) === "app-server"
+  //  #4135 — **그 세션의 표식**으로 가른다(배포 기본이 아니라). 배포 기본만 보면 기본을 뒤집는 순간 이미 떠 있는
+  //   세션의 판정까지 뒤집혀, app-server 세션(pane=셸)에 send-keys 가 들어간다 — 사람의 프롬프트가 셸 명령이 된다(#3982).
+  if (!nodeId && codexChatMode({ harness: harnessKey, stamp: runtimeStamp }) === "app-server"
       && !(await sessionGone(sessionId))) {
     //  아웃박스+send-keys 는 pane 화면을 읽어 타이밍을 맞추는 경로라, 로그인·대화상자에 걸리면 배달이 지연되거나
     //  조용히 사라진다. app-server 는 turn/start 의 **응답으로 성공/실패가 온다** — 애매함이 없다.
@@ -217,7 +240,7 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: {
   // 노드(멤버 PC) 세션 — 대화 런타임과 PTY 중 어느 쪽인지 위 헬퍼 한 곳에서 가른다.
   const { nodeRpc } = await import("../node/registry.js");
   const { injectPrompt } = await import("../node/session-inject.js");
-  return deliverPromptToNode({ harness: harnessKey }, {
+  return deliverPromptToNode({ harness: harnessKey, stamp: await nodeSessionStamp(sessionId) }, {
     chatSend: () => nodeRpc(nodeId, "chatSend", { id: sessionId, text, harness: harnessKey }),
     inject: opts?.firstPromptTrustOk === undefined
       ? () => injectPrompt(sessionId, text)

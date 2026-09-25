@@ -58,6 +58,26 @@ test("E2c codex — 커서가 «No, quit» 에 있으면 한 칸 내려가 Yes �
   assert.equal(trustAcceptDowns(["› 1. No, quit", "  2. Yes, continue"]), 1);
 });
 
+// codex 0.157.0 실측(2026-09-25 — 하루 만에 자동 업데이트되며 신뢰 창이 통째로 다시 쓰였다).
+//  낱말이 Yes/No 가 아니라 Trust/Back 이다. 이걸 모르면 «커서는 찾았는데 Yes 가 없다» 로 null 이 되어 아무것도 못 누른다.
+const CODEX_157 = [
+  "Folder access",
+  "/work/box-yoon-1/",
+  "Trust this folder? Codex can read, edit, and run files here, subject to your permission",
+  "settings. Folder settings can run code automatically, even without a model request.",
+  "› 1. Trust and continue",
+  "  2. Back to Agent Command Center",
+  "enter continue · esc back",
+];
+
+test("★ E2d codex 0.157.0 — 수락 낱말이 «Trust and continue» 다. 커서가 이미 거기 있으니 그대로 Enter", () => {
+  assert.equal(trustAcceptDowns(CODEX_157), 0);
+});
+
+test("E2e codex 0.157.0 — 커서가 «Back…» 에 있으면 한 칸 올라가야 하므로 null(위로는 안 간다)", () => {
+  assert.equal(trustAcceptDowns(["  1. Trust and continue", "› 2. Back to Agent Command Center"]), null);
+});
+
 test("E3 선택지를 못 읽으면 null — 아무것도 누르지 않는다(잘못 누르는 것보다 안 누르는 게 낫다)", () => {
   assert.equal(trustAcceptDowns(["Quick safety check: Is this a project you created or one you trust?"]), null);
   assert.equal(trustAcceptDowns([]), null);

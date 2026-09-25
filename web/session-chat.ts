@@ -414,7 +414,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const chatFirst = (): boolean => {
     const m = String(target.raw?.chatMode || '');
     if (m) return m === 'app-server';
-    return String(target.raw?.harness || '') === 'codex';
+    //  ★ #4135 — 추정을 **뒤집었다.** codex 의 기본이 터미널(TUI)로 돌아갔으므로(codex-chat-mode.ts), 모르는
+    //   세션은 터미널로 본다. 틀리는 경우(이 변경 전에 태어난 app-server 세션)는 행이 오는 즉시 대화로 돌아가고,
+    //   그 한 틱 동안 보이는 셸 화면에는 이제 «여기 친 말은 Codex 에게 가지 않습니다» 줄이 서 있다(paintShellBar).
+    //   2026-08-28 에 이 추정을 반대로 둔 이유(«빈 셸을 먼저 보여주는 쪽이 더 나쁘다»)가 그 줄로 메워졌다.
+    return false;
   };
   const isCodex = (): boolean => String(target.raw?.harness || '') === 'codex';
 

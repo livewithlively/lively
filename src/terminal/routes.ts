@@ -524,11 +524,14 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //   바구니가 답이다: local·localRestorable 은 이 박스, remote 만 다른 기계다.
     const tagChat = (rows: typeof local, _unused: boolean, localSet: Set<string>): void => {
       for (const s of rows) {
-        const rc = (s as { runtimeChoice?: unknown }).runtimeChoice;
+        const r = s as { runtimeChoice?: unknown; runtimeRaw?: unknown };
+        //  #4135 — 표식의 **원시값**을 넘긴다(codex 모드는 "app-server"|"terminal" 이라 세 값으로 접히지 않는다).
+        //   옛 스냅샷(그 필드가 없는 노드)은 runtimeChoice 로 떨어진다 — 무회귀.
+        const stamp = typeof r.runtimeRaw === "string" && r.runtimeRaw ? r.runtimeRaw
+          : r.runtimeChoice === "chat" ? "chat" : r.runtimeChoice === "terminal" ? "terminal" : undefined;
         //  이 박스에 그 tmux 가 있으면 런타임도 여기서 돈다 — 노드 좌표가 붙어 있어도 그렇다.
         const onNode = !localSet.has(s.id);
-        Object.assign(s, chatFieldsOf(s.harness, onNode,
-          rc === "chat" ? "chat" : rc === "terminal" ? "terminal" : undefined));
+        Object.assign(s, chatFieldsOf(s.harness, onNode, stamp));
       }
     };
     //  ⚠ **병합 뒤에** 붙인다. 게이트웨이와 노드 에이전트가 같은 박스에서 돌면 같은 세션이
