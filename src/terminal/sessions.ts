@@ -35,7 +35,8 @@ import { memberMkdir, memberWriteFile, memberShOut, execAt, type ExecAt } from "
 import os from "node:os";
 import path from "node:path";
 import { MEMBER_HOME_BASE } from "./terminal-transcript.js";
-import { ensureFolderTrusted, TRUST_PLANS, type TrustIo } from "./harness-trust.js";   // #1631·#2478 — 첫 실행 «폴더 신뢰» 물음이 첫 지시를 삼키던 것
+import { ensureFolderTrusted, TRUST_PLANS, type TrustIo } from "./harness-trust.js";
+import { ensureCodexHooksTrusted } from "./codex-hook-trust-apply.js";   // #4135 후속 — «Hooks need review» 를 미리 지운다   // #1631·#2478 — 첫 실행 «폴더 신뢰» 물음이 첫 지시를 삼키던 것
 import { autoTrustWorkspace } from "./session-create-guards.js";
 import { ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
 import { gatewayCapability } from "../sessions/gateway-capabilities.js";   // #2165 — DB 를 타는 자격 주입은 게이트웨이 능력이다
@@ -942,6 +943,24 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
         write: async (p, t) => { await fsp.mkdir(path.dirname(p), { recursive: true, mode: 0o700 }); await fsp.writeFile(p, t, { mode: 0o600 }); },
       };
     await ensureFolderTrusted(io, configFile, target, trustOk, harness.key);
+    //  ── codex «Hooks need review» 를 미리 지운다 (#4135 후속) ─────────────────────────────
+    //  codex 는 훅을 돌리기 전에 그 창으로 신뢰를 받는다. 우리 킷이 심은 훅 21개가 매번 «새 훅» 으로 잡혀
+    //   새 세션마다 그 창이 뜨고 **첫 지시가 그 뒤에서 멈췄다**(원준님 실측 2026-09-25). 그 상태에서는 상태
+    //   보고·대화 id 매핑·이름짓기 훅도 전부 안 돈다.
+    //  ⚠ 세션 안에서는 못 고친다 — 그 창을 통과하지 못하면 훅 자체가 안 돈다(닭과 달걀). 그래서 **여기서** 한다.
+    //  ⚠ 우리가 심은 훅만 신뢰한다(codex-hook-trust.isOurHook). 레포에 딸려온 훅까지 신뢰하면 그 창이 막으려는
+    //   일을 우리가 대신 하는 것이 된다. 해시는 codex 가 알려 준 값을 옮겨 적을 뿐이다(규격은 비공개).
+    if (harness.key === "codex") {
+      //  격리면 그 멤버로 중계해 돌리고, 아니면 이 호스트에서 그대로 돌린다(그 홈의 codex 가 답한다).
+      const sh = osUser
+        ? (cmd: string) => memberShOut(osUser, cmd)
+        : (cmd: string) => new Promise<string>((res) => {
+          void import("node:child_process").then(({ execFile }) => {
+            execFile("/bin/sh", ["-c", cmd], { timeout: 20_000, maxBuffer: 8 * 1024 * 1024 }, (_e, out) => res(String(out || "")));
+          });
+        });
+      await ensureCodexHooksTrusted({ io, configFile, codexHome: path.join(home, ".codex"), sh });
+    }
   }
   await tmuxQuiet(paneTerm);           // 전역 옵션 먼저(위 ⚠⚠ — 매니지드에선 설계상 거절된다. 세션 생성을 막지 않는다)
   try { await tmux(args); }            // 그다음 판 — 이것만 실패가 곧 «세션이 안 떴다» 다(두 왕복 — 위 ⚠ #3668)
