@@ -752,3 +752,17 @@ a.pjh-row-link.pjh-row-n:hover { color: var(--blue); }
 .pjh-read.clip { overflow: hidden; }
 .pjh-body-content { position: relative; }
 .pjh-body-content::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 28px; background: linear-gradient(to bottom, transparent, var(--bg)); pointer-events: none; }
+/* ── 고도화 2차(시안 대조 2026-09-25 밤) — 머리 «열기 →» 상시 · 바닥 단추는 글자 단추로 오른쪽에 모아 · 묶음 머리엔 알약만 · 본문 두 단은 차례로 · 끌어다 놓기 한 줄 · 세션 옆 칸 ── */
+.pjh-open { opacity: 1; }
+.pjh-wf > .btn, .pjh-wf .btn-sm { height: 26px; padding: 0 6px; border: 0; background: none; border-radius: 7px; color: var(--ink-sub); font-size: 12.5px; font-weight: 700; }
+.pjh-wf > .btn:hover, .pjh-wf .btn-sm:hover { background: var(--bg-tint); color: var(--ink); box-shadow: none; }
+.pjh-wf > .btn + .btn { margin-left: 0; }
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-head svg.pjv-status-ic { display: none; }
+.pjh-read.cols2 { display: flex; flex-direction: column; overflow: hidden; }
+.pjh-read.cols2 > .md { flex: 1; min-height: 0; column-fill: auto; }
+.pjh-drop, .pjh-drop.wide { display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 6px; min-height: 30px; flex: none; }
+.pjh-fc.drop { cursor: pointer; }
+.pjh-fc.drop:hover { border-color: var(--line-net); color: var(--ink-sub); }
+.pjh-stail { flex: none; max-height: 46%; }
+.pjh-side-acts { display: flex; gap: 6px; flex: none; margin-top: auto; }
+.pjh-side .pjh-stat { flex: none; }

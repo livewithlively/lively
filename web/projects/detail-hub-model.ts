@@ -139,6 +139,15 @@ export function sessionLastActivity(s: SessionLike): number {
   return Math.max(ms(s.lastActive), ms(s.lastBusy), ms(s.lastAttached), ms(s.lastViewed), ms(s.created));
 }
 
+/** 세션이 도는 자리의 짧은 이름 — 없으면 «중앙», 서버 세션 호스트(sesshost-…)는 «서버», 그 밖은 노드 이름(«.local» 은 뗀다). 긴 인스턴스 id 를 화면에 내지 않는다. */
+export function nodeLabel(node: { id?: string | null; name?: string | null } | null | undefined): string {
+  if (!node || (!node.id && !node.name)) return '중앙';
+  const id = String(node.id || '');
+  if (/^sesshost-/.test(id)) return '서버';
+  const nm = String(node.name || id).replace(/\.local$/i, '');
+  return nm || '중앙';
+}
+
 /** 세션이 맡은 태스크 — 프로젝트 상세의 tasks[].sessions 를 뒤집어 세션 id → 태스크. 한 세션은 태스크 하나(#4084). */
 export function sessionTaskIndex(tasks: Array<{ id: number | string; name?: string; sessions?: Array<{ id: string }> | null }>): Map<string, { id: number | string; name: string }> {
   const m = new Map<string, { id: number | string; name: string }>();
@@ -217,6 +226,13 @@ export function feedDayLabel(ms: number, nowMs: number): string {
   const k = dayKey(ms), t = dayKey(nowMs), y = dayKey(nowMs - DAY);
   if (k === t) return '오늘'; if (k === y) return '어제';
   const d = new Date(ms); return (d.getMonth() + 1) + '/' + d.getDate();
+}
+/** 피드의 날 머리 — 시안: «오늘 금 9/25» · «어제 목 9/24» · 그 전은 «9/23». */
+export function feedDayHead(ms: number, nowMs: number): string {
+  const l = feedDayLabel(ms, nowMs);
+  if (l !== '오늘' && l !== '어제') return l;
+  const d = new Date(ms);
+  return l + ' ' + ['일', '월', '화', '수', '목', '금', '토'][d.getDay()] + ' ' + (d.getMonth() + 1) + '/' + d.getDate();
 }
 export const countOn = (acts: ActLike[], key: string): number => acts.filter((a) => actWhen(a) && dayKey(actWhen(a)) === key).length;
 export const countSince = (acts: ActLike[], fromMs: number): number => acts.filter((a) => actWhen(a) >= fromMs).length;

@@ -84,8 +84,15 @@ export const fillTasks: Fill = (ctx, f, body, foot, sub, acts) => {
   const budget = rowsBudget(h, groups.length, toolsRow ? 30 : 0);
   const tiny = h <= 1;   // 한 줄 높이(1×1 · 2×1 · 3×1) — «더» 줄을 안 그리고(바닥 줄이 말한다) 그 자리도 줄로 쓴다
   const caps = tiny ? [Math.min(groups[0].tasks.length, budget)] : splitRows(groups.map((g) => g.tasks.length), budget);
-  const cols = taskColsFor(w, pref);
+  // 열 — 보이는 줄 가운데 값이 하나도 없는 열(마감일·우선순위)은 머리도 세우지 않는다(빈 열 머리가 덩그러니 남는다). 1칸 폭은 고른 열 그대로.
+  const listed = groups.flatMap((g, i) => g.tasks.slice(0, caps[i] ?? 0));
+  const hasVal = (k: TaskColKey) => k === 'assignee' || listed.some((t: any) => k === 'due' ? !!t.due_date : !!t.priority);
+  const cols = taskColsFor(w, pref).filter((k) => w <= 1 || hasVal(k));
   const shown = caps.reduce((a, c) => a + c, 0);
+  // 담당자 이름 — 프로젝트 구성원 목록에 없는 담당자는 명부 이름(ctx.memberName)으로 채워 넘긴다(아니면 줄에 id 가 선다).
+  const known = new Set((o.members || []).map((m) => String(m.member_id)));
+  const extraMembers = [...new Set(listed.flatMap((t) => assigneesOf(t)))].filter((id) => id && !known.has(id)).map((id) => ({ member_id: id, display_name: ctx.memberName(id) }));
+  const members = extraMembers.length ? [...(o.members || []), ...extraMembers] : undefined;
 
   if (toolsRow) {
     const chip = (k: string, v: string, onclick: (b: HTMLElement) => void) => {
@@ -109,7 +116,7 @@ export const fillTasks: Fill = (ctx, f, body, foot, sub, acts) => {
 
   if (o.tasksList) {
     const sec = o.tasksList({
-      chrome: false, groups, cap: caps, onMore: open, noMore: tiny,
+      chrome: false, groups, cap: caps, onMore: open, noMore: tiny, members,
       rowOpts: { assigneeNames: w >= 3 },
       fields: w >= 3 && h >= 2 ? (P.fields || []) : [],   // 커스텀 필드 열은 3×2 이상에서만 — 좁은 폭에선 이름을 먹는다
     });

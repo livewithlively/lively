@@ -331,7 +331,7 @@ async function renderProjectV2Detail(view, idStr) {
     openTask: (tid) => pjvOpenTaskFromHub(tid, reload),          // #4165 줄 → 태스크 모달(본문 먼저)
     goTask: (t) => pjvGoTaskWorkspace(id, t, reload),             // #4165 줄 호버 → 작업 공간(세션)
     // #4135 5판 — 태스크 위젯은 프로젝트 탭 목록을 옵션(묶음·줄 수·열)과 함께 그대로 쓴다 · 세션 위젯의 「＋ 새 세션」「세션 기록」.
-    tasksList: (opts) => pjvTasksSection(id, p.tasks || [], members, reload, opts.fields ?? (p.fields || []), opts),
+    tasksList: (opts) => pjvTasksSection(id, p.tasks || [], opts.members || members, reload, opts.fields ?? (p.fields || []), opts),
     newSession: () => { void openProjectSessionForm(id, reload, V6_BASE, p.name); },
     sessionLog: () => openProjectSessionsModal(id, p.name),
     // 본문 위젯의 편집 = 섹션과 같은 블록 에디터(항시 자동저장) · 폴더 위젯의 열기 = 섹션과 같은 파일 뷰어 · 공유 링크 좌표 = 프로젝트 폴더.

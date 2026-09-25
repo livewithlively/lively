@@ -130,3 +130,16 @@ test("#12 타임라인 레인 — n일 축(오늘이 끝 · 첫날과 1일은 M/
   assert.deepEqual(M.latestLane(acts), { person: "wj", day: "2026-09-25" });
   assert.equal(M.countOn(acts, "2026-09-25"), 2); assert.equal(M.countSince(acts, NOW - 86400e3 * 2), 3);
 });
+
+test("#13 노드 이름 — 없으면 «중앙», 세션 호스트(sesshost-…)는 «서버», 그 밖은 노드 이름에서 .local 을 뗀다", () => {
+  assert.equal(M.nodeLabel(null), "중앙");
+  assert.equal(M.nodeLabel({ id: "sesshost-lively-46e3-i-02addbf327f377c99", name: "sesshost-lively-46e3-i-02addbf327f377c99" }), "서버");
+  assert.equal(M.nodeLabel({ id: "laibeulliui-macmini", name: "laibeulliui-Macmini.local" }), "laibeulliui-Macmini");
+  assert.equal(M.nodeLabel({ id: "x" }), "x");
+});
+
+test("#14 피드 날 머리 — 오늘·어제는 요일과 날짜까지, 그 전은 M/D 만", () => {
+  assert.equal(M.feedDayHead(NOW - 60e3, NOW), "오늘 금 9/25");
+  assert.equal(M.feedDayHead(NOW - 86400e3, NOW), "어제 목 9/24");
+  assert.equal(M.feedDayHead(NOW - 86400e3 * 3, NOW), "9/22");
+});

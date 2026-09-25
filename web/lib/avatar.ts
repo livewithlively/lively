@@ -71,11 +71,18 @@ function personFace(id, cls, name?) {
   if (!_peopleAvatars[String(id)]) loadPeopleAvatars().then(() => paintFace(wrap, id, name));
   return wrap;
 }
+// 명부의 표시 이름(#4135 허브) — 프로젝트 구성원 목록이 비어 있을 때 세션 주인·담당자·기록 작성자를 id 대신 이름으로 부르기 위해.
+//  맵이 아직 안 왔으면 ''(호출자가 id 로 대신 쓰고, loadPeopleAvatars 뒤 다시 그린다).
+function personDisplayName(id: string): string {
+  const m = _peopleAvatars[String(id)];
+  return m && m.display_name ? String(m.display_name) : '';
+}
 
 export {
   avatarColor,
   initials,
   loadPeopleAvatars,
+  personDisplayName,
   personFace,
   profileAvatar,
   setPersonAvatar,

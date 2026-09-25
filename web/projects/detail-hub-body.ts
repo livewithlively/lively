@@ -113,7 +113,7 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
 
   // ── 바닥 ──
   if (w <= 1 && h <= 1) foot.append(cnt, editBtn, btn('열기', 'btn-ghost', open));
-  else if (withCol || withInline) foot.append(footText('본문 ' + bodyCharCount(md).toLocaleString() + '자'), btn(w >= 2 && h >= 2 ? '전폭으로' : '열기', 'btn-ghost', open));
+  else if (withCol || withInline) foot.append(footText('본문 ' + bodyCharCount(md).toLocaleString() + '자'), btn('열기', 'btn-ghost', open));   // 같은 뜻은 같은 말 — 어느 크기든 «열기»
   else foot.append(cnt, btn('열기', 'btn-ghost', open));
   void acts;
 };
