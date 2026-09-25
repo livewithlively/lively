@@ -1650,15 +1650,6 @@ const wikiMore = new Set<string>();
 /** 화면에 아직 안 붙어 잴 수 없을 때(좁은 화면 서랍이 닫혀 있는 등) 쓰는 줄 수 예산 — 1440×900 실측 한 화면치. */
 const WIKI_FALLBACK_ROWS = 13;
 
-/** 우리 팀이 맡은 분류 id — `/api/ui/me` 가 이미 싣고 있다(team_owner_category_ids). 없으면 빈 집합(표식만 안 붙는다). */
-function ownerCatIds(): Set<number> {
-  const raw = (state.me as any)?.team_owner_category_ids;
-  return new Set<number>(Array.isArray(raw) ? raw.map((x: unknown) => Number(x)).filter((n: number) => Number.isFinite(n)) : []);
-}
-function myTeamName(): string {
-  const t = (state.me as any)?.teams;
-  return Array.isArray(t) && t.length ? String(t[0].name || '우리 팀') : '우리 팀';
-}
 /** 지금 보고 있는 분류 — 주소에서 읽는다(`#/knowledge?category=N`, wiki.ts 가 지키는 URL 계약). */
 function wikiActiveCat(): number {
   const m = /[?&]category=(\d+)/.exec(location.hash);
@@ -1770,12 +1761,9 @@ function renderWiki(): void {
 
   const all = wikiCats || [];
   const total = all.reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
-  const own = ownerCatIds();
-  const teamName = myTeamName();
   const activeCat = wikiActiveCat();
-  // 순서 = 우리 팀이 맡은 것 먼저 → 문서 많은 것 먼저(종전 규칙 그대로 — 자리가 흔들리지 않는다).
-  const rank = (a: WikiCat, b: WikiCat): number =>
-    (Number(own.has(b.id)) - Number(own.has(a.id))) || ((Number(b.knowledge_count) || 0) - (Number(a.knowledge_count) || 0));
+  // 순서 = 문서 많은 것 먼저(#4233: «우리 팀이 맡은 것 먼저»는 분류 담당 개념과 함께 걷었다).
+  const rank = (a: WikiCat, b: WikiCat): number => (Number(b.knowledge_count) || 0) - (Number(a.knowledge_count) || 0);
   const fmtN = (n: number): string => Number(n).toLocaleString('en-US');
 
   const catRow = (c: WikiCat): HTMLElement => {
@@ -1786,7 +1774,6 @@ function renderWiki(): void {
       title: c.name + (c.description ? ' — ' + c.description : ''), ...(on ? { 'aria-current': 'true' } : {}) },
       icon('list', 'v2-ptl-ic'),
       el('span', { class: 'n', text: c.name }),
-      own.has(c.id) ? el('span', { class: 'v2-kown-w', title: teamName + '이 맡은 분류', 'aria-label': teamName + '이 맡은 분류' }, icon('person', 'v2-kown')) : null,
       el('span', { class: 'v2-cnt', text: fmtN(n) }));
   };
 

@@ -196,19 +196,16 @@ export async function pendingStagedRevisionId(name: string): Promise<number | nu
 // 검토 큐 카운트(#802) — 대시보드 알림·관리탭 nav 배지가 '몇 건인지'만 알기 위한 집계 1회.
 //  왜 필요한가: 검토 큐 화면은 pending 지식 500건 + 리비전 500건을 본문째 긁는다(diff·중복경고에 본문이 필요).
 //   숫자만 필요한 표면이 그걸 매번 긁으면 안 된다.
-//  mine = 내 팀이 '오너'인 도메인 — 하루 ~11건이면 "전부 검토"는 부담이라 자기 도메인이 검토의 첫 진입점이다(#783 §9).
-//   ownerCatIds 가 비면(팀·오너십 미설정) mine=0 — ANY(빈 배열)은 항상 false라 자연히 그렇게 된다.
+//  (#4233: «내 팀이 오너인 도메인» 집계 mine_* 는 분류 담당 개념과 함께 걷었다.)
 //  ⚠ 신규(new)는 검토 큐 목록(listKnowledge lifecycle='pending')과 **같은 집합**을 센다 — is_folder 를 빼지 않는다.
 //   게이트는 폴더를 안 태우므로(#783 §4) 실제로 폴더가 여기 낄 일은 없지만, 배지 N 과 큐 N 이 어긋나는 게 더 나쁘다.
 export interface ReviewQueueCounts {
   new: number; edit: number; total: number;
-  mine_new: number; mine_edit: number; mine_total: number;
 }
 // viewer(#1291) — 배지 숫자도 그 사람이 볼 수 있는 문서만 센다. 목록은 필터되는데 숫자만 전체면
 //  "3건 대기"인데 열면 1건인 상태가 되고, 그 차이 자체가 '안 보이는 문서가 2건 있다'는 신호가 된다.
-export async function reviewQueueCounts(ownerCatIds: number[] = [], viewer?: Viewer): Promise<ReviewQueueCounts> {
-  const ids = (ownerCatIds || []).map(Number).filter((n) => Number.isFinite(n));
-  const params: unknown[] = [ids];
+export async function reviewQueueCounts(viewer?: Viewer): Promise<ReviewQueueCounts> {
+  const params: unknown[] = [];
   const visK = await knowledgeVisWhere(viewer, params);            // knowledge k 기준
   //  ⚠ 생성된 SQL 을 정규식으로 재-alias 하지 마라 — 술어 안에 k. 로 시작하는 다른 alias 가 생기는 순간
   //   조용히 깨진다. alias 를 인자로 받아 술어가 직접 자기 이름을 쓰게 한다.
@@ -217,21 +214,10 @@ export async function reviewQueueCounts(ownerCatIds: number[] = [], viewer?: Vie
     SELECT
       (SELECT count(*)::int FROM knowledge k WHERE k.lifecycle='pending' AND ${visK}) AS n_new,
       (SELECT count(*)::int FROM knowledge_revision r
-        WHERE r.status='pending' AND EXISTS(SELECT 1 FROM knowledge kk WHERE kk.name=r.name AND ${visR})) AS n_edit,
-      (SELECT count(*)::int FROM knowledge k
-        WHERE k.lifecycle='pending' AND ${visK} AND EXISTS (
-          SELECT 1 FROM knowledge_category kc
-           WHERE kc.name=k.name AND kc.state <> 'rejected' AND kc.category_id = ANY($1::int[]))) AS n_new_mine,
-      (SELECT count(*)::int FROM knowledge_revision r
-        WHERE r.status='pending'
-          AND EXISTS(SELECT 1 FROM knowledge kk WHERE kk.name=r.name AND ${visR})
-          AND EXISTS (
-          SELECT 1 FROM knowledge_category kc
-           WHERE kc.name=r.name AND kc.state <> 'rejected' AND kc.category_id = ANY($1::int[]))) AS n_edit_mine`,
+        WHERE r.status='pending' AND EXISTS(SELECT 1 FROM knowledge kk WHERE kk.name=r.name AND ${visR})) AS n_edit`,
     params) as Record<string, unknown> | undefined;
   const nNew = Number(r?.n_new ?? 0), nEdit = Number(r?.n_edit ?? 0);
-  const mNew = Number(r?.n_new_mine ?? 0), mEdit = Number(r?.n_edit_mine ?? 0);
-  return { new: nNew, edit: nEdit, total: nNew + nEdit, mine_new: mNew, mine_edit: mEdit, mine_total: mNew + mEdit };
+  return { new: nNew, edit: nEdit, total: nNew + nEdit };
 }
 
 // #968 카테고리별 검토 대기 카운트 — 검토 큐 사이드바(카테고리 트리)의 배지용.

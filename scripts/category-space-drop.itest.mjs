@@ -94,7 +94,7 @@ try {
     assert.equal(after[brewing], "brewing", "충돌 없는 축은 그대로");
     assert.equal(after[dup], before[dup], "merged 행은 유니크 밖 — 이름을 바꾸지 않는다");
     assert.deepEqual(Object.keys(after).sort(), Object.keys(before).sort(),
-      "★ id 는 하나도 안 바뀐다 — knowledge_category·team_category·mapping·debt_finding 이 전부 id 로 매달려 있다");
+      "★ id 는 하나도 안 바뀐다 — knowledge_category·mapping·debt_finding 이 전부 id 로 매달려 있다");
     ok("⑤⑥ key 충돌을 가르되 **매핑은 무손실** — id 불변, merged 행 불변");
   }
 

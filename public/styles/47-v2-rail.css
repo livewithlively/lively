@@ -649,8 +649,6 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-kcat .n { flex: 0 1 auto; }
 .v2-kcat .v2-cnt { margin-left: auto; flex: none; }
 .v2-kcat.zero { color: var(--muted); }
-.v2-kown-w { display: inline-grid; place-items: center; flex: none; }
-.v2-kown { width: 12px; height: 12px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 /* 빈 묶음 한 줄 · «묶음을 정해 주세요» 카드는 이름을 한 단계 흐리게(#1631 그대로). */
 .v2-ksp-empty { margin: 0; padding: 4px 8px 6px; font-size: 11.5px; color: var(--muted); white-space: normal; }
 .v2-ksp-fix .v2-ksp-t .n { color: var(--muted); }

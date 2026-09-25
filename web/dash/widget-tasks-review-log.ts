@@ -13,7 +13,7 @@ import { activityDetailView, activityHasDetail } from '../activity-view.js';
 // 작업 로그 전체 보기 팝업 = 회사 활동 피드 재사용.
 import { companyTimelineSection, pjvOpenProjectModal } from '../projects.js';
 import { pjvOpenTaskModal } from '../taskmodal.js'; // #1232 '내 할 일' 행 클릭 = 태스크 모달(#810) — 대시보드를 떠나지 않는다
-import { dashLogType, dashRvwFilterDefault, dashSaveLogType, dashSaveRvwFilter, dashSaveTaskFilter, dashTaskFilterDefault } from './prefs.js';
+import { dashLogType, dashSaveLogType, dashSaveTaskFilter, dashTaskFilterDefault } from './prefs.js';
 import { dashTaskStatusControl } from './status.js';
 import { dashChips, dashChoicePopover, dashCtl, dashEmpty, dashPopover } from './chrome.js';
 
@@ -140,26 +140,23 @@ async function fillMyTasks(zone) {
 //  지금까지 이 큐는 관리 화면에 들어가야만 보였고 대시보드엔 알림 한 줄로만 스쳐 지나갔다.
 //  신규(lifecycle=pending 지식) + 수정(pending 리비전)을 한 목록으로 합쳐 최신순 — 검토 큐(#/knowledge/review)의 집합과 동일.
 async function fillReviewQueue(zone) {
-  let sum: any, pend: any[], revs: any[];
+  let pend: any[], revs: any[];
   try {
-    [sum, pend, revs] = await Promise.all([
-      api('/api/ui/review-queue/summary').catch(() => null),   // 실패해도 목록은 살린다(내 도메인 칩만 빠짐)
+    [pend, revs] = await Promise.all([
       api('/api/ui/knowledge?lifecycle=pending&light=1&limit=50&orderBy=updated_at').then((d) => (d && d.entries) || []),
       api('/api/ui/knowledge-revisions?status=pending&limit=50').then((d) => (d && d.entries) || []),
     ]);
   } catch (e) { zone.body.replaceChildren(errorNote(e, '검토 대기 목록을 불러오지 못했습니다')); return; }
-  // 내 도메인 = 내 팀이 오너인 카테고리(summary 가 계산해 준다). 없으면 그 칩 자체를 띄우지 않는다.
-  const mineKeys = new Set(((sum && sum.mine_category_keys) || []).map(String));
+  //  (#4233: «내 도메인»(내 팀이 오너인 카테고리) 칩과 기본 필터 설정은 분류 담당 개념과 함께 걷었다.)
   const items = [
     ...pend.map((k: any) => ({ kind: 'new', name: k.name, title: k.title || k.name, cat: k.category_key || null, catName: k.category_name || null, when: k.updated_at, who: k.updated_by || null })),
     ...revs.map((r: any) => ({ kind: 'edit', name: r.name, title: r.k_title || r.name, cat: r.category_key || null, catName: r.category_name || null, when: r.updated_at, who: r.agent || r.proposed_by || null })),
   ].sort((a, b) => String(b.when || '').localeCompare(String(a.when || '')));
-  let mode = mineKeys.size ? dashRvwFilterDefault() : 'all';
   const draw = () => {
-    const shown = mode === 'mine' ? items.filter((it) => it.cat && mineKeys.has(String(it.cat))) : items;
+    const shown = items;
     zone.countEl.textContent = String(items.length);
-    dashChips(zone.chipsEl, mineKeys.size ? [['all', '전체'], ['mine', '내 도메인']] : [], mode, (k) => { mode = k; draw(); });
-    if (!shown.length) { zone.body.replaceChildren(dashEmpty(mode === 'mine' ? '내 도메인에 검토 대기가 없어요.' : '검토 대기 중인 지식이 없어요.')); return; }
+    dashChips(zone.chipsEl, [], 'all', () => { /* 칩 없음 */ });
+    if (!shown.length) { zone.body.replaceChildren(dashEmpty('검토 대기 중인 지식이 없어요.')); return; }
     // 행 클릭 = 검토 큐(#/knowledge/review) — 승인/반려가 일어나는 곳. 지식 본문만 보고 싶으면 제목 옆 '열기'.
     zone.body.replaceChildren(...shown.map((it) => el('a', { class: 'dash-row dash-rvw', href: '#/knowledge/review', title: it.title },
       el('span', { class: 'dash-rvw-kind' + (it.kind === 'new' ? ' new' : ' edit'), text: it.kind === 'new' ? '신규' : '수정' }),
@@ -168,7 +165,6 @@ async function fillReviewQueue(zone) {
       el('span', { class: 'dash-rvw-when', text: it.when ? relTime(it.when) : '' }))));
   };
   dashCtl(zone, {
-    gear: { title: '검토 대기 설정', open: (a) => dashChoicePopover(a, '기본 필터', [['all', '전체'], ['mine', '내 도메인']], dashRvwFilterDefault(), (k) => { dashSaveRvwFilter(k); mode = mineKeys.size ? k : 'all'; draw(); }) },
     action: { href: '#/knowledge/review', title: '검토 큐 열기' },
   });
   draw();
