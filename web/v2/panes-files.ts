@@ -13,7 +13,7 @@ import { authDownload, upDirSupported, upDropZone, upFromInput, upSend, upToast,
 import { openInViewerPart, FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHINE_FILES, NOISE_RE, SORT_LABEL, TRASH_DIR, attachName, ctxMenu, folderIcon, freeName, kindOf, lsGet, lsSet, pnIcon, stamp, type FileItem, type SortKey } from './panes-kit.js';
 import { findMatcher } from '../lib/find.js';
 import { createPreviewKit } from './file-preview.js';
-import { reuseKeyed, type KeyedCard } from './keyed-cards.js';   // #4135 — 제자리 되그리기(바뀐 카드만 새로)
+import { placeChildren, reuseKeyed, type KeyedCard } from './keyed-cards.js';   // #4135 — 제자리 되그리기(바뀐 카드만 새로)
 import type { Part, PartCtx } from './panes-parts.js';
 
 export function filesPart(ctx: PartCtx): Part {
@@ -310,21 +310,18 @@ export function filesPart(ctx: PartCtx): Part {
     }
     paintSel();
   }
-  /** 파일을 편다. `newTab` 이면 **새 뷰어 탭**에 — 여러 개를 나란히 보려면 이 길이다(#762, 원준 2026-09-05:
-   *  "자료에 있는 파일 중에서 한 번에 하나만 열 수 있는게 이상해서"). */
-  function open(f: FileItem, newTab = false): void {
+  /** 파일을 편다 — **파일마다 뷰어 하나**(#4135, 원준 2026-09-25: "다른 거 한 번 클릭하면 이전 꺼 뷰어에서 보이던 거
+   *  없애고 새로 선택한 게 뜨는데 그러지 말고 새 창으로 뜨도록"). 이미 떠 있는 파일이면 그 뷰어로, 아니면 새 뷰어 —
+   *  그 판정은 셸이 한다(panes.ts openViewerAt). 뷰어 칸이 없으면 셸이 이 신호를 듣고 만든다. */
+  function open(f: FileItem): void {
     if (f.type === 'dir') { goto(f.path); return; }
-    // 파일을 누르면 **곁칸의 뷰어 탭**으로 편다 (#762, 원준 2026-09-04: "따로 뷰어 위젯을 띄우지 않더라도
-    //  곁칸에서 탭으로 뜨면 좋겠다"). 종전엔 화면 한가운데 모달이라 ① 그 파일을 보면서 세션을 볼 수 없었고
-    //  ② 뷰어 칸을 미리 넣어 둔 사람만 칸에서 볼 수 있었다. 칸이 없으면 셸이 이 신호를 듣고 만든다.
-    openInViewerPart(ctx, f.path, { newTab });
+    openInViewerPart(ctx, f.path);
   }
-  /** 고른 것 여럿을 편다 — **첫 장은 보던 뷰어에, 나머지는 각자 새 탭에**. 종전엔 전부 같은 칸에 밀어 넣어
-   *  마지막 하나만 남았다(「N개 열기」가 사실상 「마지막 것 열기」였다). 상한 8은 부르는 쪽이 이미 건다. */
+  /** 고른 것 여럿을 편다 — 각자 제 뷰어에. 상한 8은 부르는 쪽이 이미 건다. */
   function openMany(list: FileItem[]): void {
     const files = list.filter((x) => x.type !== 'dir');
     if (!files.length) { for (const d of list.slice(0, 1)) open(d); return; }   // 폴더만 골랐으면 첫 폴더로 들어간다
-    files.forEach((f, i) => open(f, i > 0));
+    files.forEach((f) => open(f));
   }
   function download(f: FileItem): void {
     //  인증 fetch → blob(files-upload authDownload). 종전의 새 탭은 토큰을 못 실어 쿠키 세션이 없는 폰에서 로그인 화면이 떴고,
@@ -350,11 +347,8 @@ export function filesPart(ctx: PartCtx): Part {
     const many = selItems();
     const rows: Array<{ label: string; run?: () => void; danger?: boolean; sep?: boolean; off?: boolean }> = [];
     if (f) {
+      //  「열기」 = 두 번 누르기와 같은 일 — 파일은 제 뷰어로(이미 떠 있으면 그 뷰어), 폴더는 들어간다.
       rows.push({ label: many.length > 1 ? `${many.length}개 나란히 열기` : (f.type === 'dir' ? '폴더 열기' : '열기'), run: () => openMany(many.slice(0, 8)) });
-      // 왼쪽 클릭과 같은 일 — 뷰어 칸이 없으면 셸이 곁칸에 만든다(종전엔 "먼저 [뷰어]를 넣어 주세요"로 돌려보냈다).
-      if (f.type !== 'dir') rows.push({ label: '뷰어에서 보기', run: () => open(f) });
-      //  새 탭 — 지금 보던 것을 **두고** 하나 더 편다(#762). ⌘/Ctrl+두 번 누르기와 같은 일.
-      if (f.type !== 'dir') rows.push({ label: '새 뷰어 탭에서 보기', run: () => open(f, true) });
       if (f.type !== 'dir') rows.push({ label: '내려받기', run: () => { for (const x of many) if (x.type !== 'dir') download(x); } });
       rows.push({ label: '이름 바꾸기', off: many.length !== 1, run: () => { renameAt = f.path; render(); } });
       if (cwd) rows.push({ label: '상위 폴더로 옮기기', run: () => void moveMany(many.map((x) => x.path), cwd.includes('/') ? cwd.slice(0, cwd.lastIndexOf('/')) : '') });
@@ -550,8 +544,8 @@ export function filesPart(ctx: PartCtx): Part {
       if (coarse.matches && !e.metaKey && !e.ctrlKey && !e.shiftKey) { open(f); return; }
       clickSelect(f, e);
     });
-    //  ⌘/Ctrl 을 누른 채면 **새 뷰어 탭**으로 — 브라우저에서 링크를 새 탭으로 여는 그 손짓 그대로(#762).
-    n.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); open(f, e.metaKey || e.ctrlKey); });
+    //  두 번 누르기 = 열기. 파일마다 뷰어가 하나라(#4135) 보조키로 «새 탭»을 고를 일이 없다.
+    n.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); open(f); });
     n.addEventListener('contextmenu', (e: MouseEvent) => menuFor(f, e));
     wireDrag(n, f);
     //  [⋯] — 우클릭 메뉴의 손가락 입구(iOS 는 길게 눌러도 contextmenu 를 안 낸다). hover 가 있는 기기에선 CSS 가 숨긴다(50-mobile.css).
@@ -600,13 +594,6 @@ export function filesPart(ctx: PartCtx): Part {
     pv.prune();     // 붙인 **뒤에** — 떨어져 나간 상자만 잊는다(살아남은 카드의 종이는 그대로 다시 잰다)
     paintSel();
   }
-  /** 자식을 `nodes` 순서로 맞추되 **제자리인 노드는 건드리지 않는다** — replaceChildren 은 재사용 노드까지 떼었다 붙여서
-   *  시안 미리보기(iframe)가 다시 실리고 이름 고치는 입력칸이 포커스를 잃는다(리뷰 지적). 자리가 다른 것만 옮기고 꼬리를 자른다. */
-  function placeChildren(host: HTMLElement, nodes: HTMLElement[]): void {
-    nodes.forEach((n, i) => { if (host.childNodes[i] !== n) host.insertBefore(n, host.childNodes[i] || null); });
-    while (host.childNodes.length > nodes.length) host.lastChild?.remove();
-  }
-
   // 컴퓨터에서 끌어다 놓기 — 지금 보고 있는 폴더로 들어간다(내부 드래그는 types 에 Files 가 없어 안 걸린다).
   upDropZone(root, root, (list, emptyDirs) => {
     void upload(list.map((u) => ({ file: u.file, rel: rel(u.rel) })), emptyDirs.map((d) => rel(d)));

@@ -116,6 +116,7 @@
   "dist/terminal/session-unobserved.js",
   "dist/terminal/sessions.js",
   "dist/terminal/terminal-isolation.js",
+  "dist/terminal/stream-text.js",
   "dist/terminal/terminal-member-fs.js",
   "dist/terminal/terminal-pty.js",
   "dist/terminal/terminal-sessions.js",

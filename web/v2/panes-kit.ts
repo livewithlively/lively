@@ -242,13 +242,18 @@ export function rememberViewerPath(mem: string, slot: TabKey, path: string): voi
   } catch (_) { /* 저장이 막혀도 알림으로 지금 떠 있는 칸은 바뀐다 */ }
 }
 
+/** 그 탭이 펴 두었던 파일 — 셸이 «이 파일이 이미 어느 뷰어에 떠 있나» 를 볼 때(#4135). 없으면 ''. */
+export function rememberedViewerPath(mem: string, slot: TabKey): string {
+  try { return String((JSON.parse(localStorage.getItem(ED_PATH_KEY) || '{}') || {})[slotStoreKey(mem, slot)] || ''); } catch (_) { return ''; }
+}
+
 /** 밖(자료 칸)에서 뷰어에 파일을 펴는 **유일한 통로** — 뷰어 칸이 없으면 셸(panes.ts)이 듣고 곁칸에 만든다.
- *  ⚠ **어느 뷰어에 펼지는 셸이 정한다**(#762): 뷰어가 여럿 뜰 수 있게 되면서, 부르는 쪽이 고를 수 있는 것은
- *   «지금 보던 뷰어에» 인가 «새 탭에» 인가 둘뿐이다. 그 판정과 저장(rememberViewerPath)은 셸이 한다 —
+ *  ⚠ **어느 뷰어에 펼지는 셸이 정한다**(#762 → #4135, 원준 2026-09-25): 파일마다 뷰어가 하나씩이다 — 그 파일이 이미
+ *   떠 있으면 그 탭으로, 아니면 새 탭. 먼저 열어 둔 파일의 뷰어는 그대로 남는다(종전엔 보던 뷰어가 갈아입었다).
  *   부르는 쪽은 탭이 몇 개인지도, 어느 것이 켜져 있는지도 모른다. */
-export function openInViewerPart(ctx: { id: number; paneRoot: () => HTMLElement }, path: string, opts?: { newTab?: boolean; sid?: string | null; node?: string | null }): void {
+export function openInViewerPart(ctx: { id: number; paneRoot: () => HTMLElement }, path: string, opts?: { sid?: string | null; node?: string | null }): void {
   const p = String(path || '');
   if (!p) return;
   //  sid 가 실리면 **세션 작업 폴더의 파일**이다(#4088 후속) — 뷰어가 세션 파일 API 로 읽는다(보기·내려받기).
-  ctx.paneRoot().dispatchEvent(new CustomEvent(VIEWER_EVT, { detail: { id: ctx.id, path: p, newTab: !!opts?.newTab, sid: opts?.sid || null, node: opts?.node || null } }));
+  ctx.paneRoot().dispatchEvent(new CustomEvent(VIEWER_EVT, { detail: { id: ctx.id, path: p, sid: opts?.sid || null, node: opts?.node || null } }));
 }

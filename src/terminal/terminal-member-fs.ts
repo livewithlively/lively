@@ -12,6 +12,7 @@ import { tenantSlug } from "./catalog.js";
 import { execTopology } from "../exec-topology.js";   // #2599 T2 — 중계 설정의 단일 출처
 import { PROBE_JS, type PathProbe } from "./path-jail.js";   // #3668 T1 — 경로 해소 한 줄(판정은 path-jail.confined)
 import { sessionSpawnArgv } from "./session-exec.js";   // #3668 T2 — 프로그램 실행 op 의 두 번째 자리(세션 컨테이너)
+import { collectText } from "./stream-text.js";   // #4135 — 조각을 모아 한 번에 UTF-8 로(경계에 걸린 한글이 깨지지 않게)
 
 // node one-liner(멤버 PATH 의 node 로 실행). argv[1]=대상 절대경로. 셸 미경유(argv) — 인젝션 없음.
 // 심링크(#1744): dirent 의 isDirectory() 는 링크에 대해 **항상 false** 라, 폴더를 가리키는 링크가 '파일'로 나왔다
@@ -109,10 +110,11 @@ function memberSpawn(at: ExecAt, argv: string[], stdio: Array<"ignore" | "pipe">
   return spawn(full[0], full.slice(1), { stdio });
 }
 // 자식 stderr 를 문자열로 수집(진단). 스트림 null 이면 no-op.
+//  ⚠ stdout·stderr 모두 **조각을 모았다가 한 번에** 푼다(stream-text) — 조각마다 글자로 바꾸면 64KB 경계에 걸린 한글이
+//   깨져 «같은 내용인데 다르다» 가 된다(#4135 — AGENTS.md 가 8초마다 다시 쓰이던 원인).
 function collectErr(c: ChildProcess): { get: () => string } {
-  let err = "";
-  c.stderr?.on("data", (d) => (err += d));
-  return { get: () => err.trim() };
+  const err = collectText(c.stderr);
+  return { get: () => err.get().trim() };
 }
 
 export interface LsEntry { name: string; type: "dir" | "file"; size: number; mtime: number; link?: boolean; linkTarget?: string; }
@@ -129,12 +131,11 @@ export function memberLs(osUser: string, absPath: string): Promise<LsEntry[]> {
   return new Promise((resolve, reject) => {
     const c = memberSpawn(osUser, ["node", "-e", LS_JS, absPath], ["ignore", "pipe", "pipe"]);
     const err = collectErr(c);
-    let out = "";
-    c.stdout?.on("data", (d) => (out += d));
+    const out = collectText(c.stdout);
     c.on("error", reject);
     c.on("close", (code) => {
       if (code !== 0) return reject(new Error(err.get() || `member ls exit ${code}`));
-      try { resolve(JSON.parse(out || "[]") as LsEntry[]); } catch (e) { reject(e as Error); }
+      try { resolve(JSON.parse(out.get() || "[]") as LsEntry[]); } catch (e) { reject(e as Error); }
     });
   });
 }
@@ -150,10 +151,9 @@ export function memberShOut(osUser: string, script: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const c = memberSpawn(osUser, ["sh", "-c", script], ["ignore", "pipe", "pipe"]);
     const err = collectErr(c);
-    let out = "";
-    c.stdout?.on("data", (d) => (out += d));
+    const out = collectText(c.stdout);
     c.on("error", reject);
-    c.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(err.get() || `member sh exit ${code}`))));
+    c.on("close", (code) => (code === 0 ? resolve(out.get()) : reject(new Error(err.get() || `member sh exit ${code}`))));
   });
 }
 
@@ -163,15 +163,14 @@ export function memberNodeJson<T>(osUser: string, js: string, input: unknown): P
   return new Promise((resolve, reject) => {
     const c = memberSpawn(osUser, ["node", "-e", js], ["pipe", "pipe", "pipe"]);
     const err = collectErr(c);
-    let out = "";
-    c.stdout?.on("data", (d) => (out += d));
+    const out = collectText(c.stdout);
     c.on("error", reject);
     if (!c.stdin) return reject(new Error("member node: no stdin"));
     c.stdin.on("error", reject);
     c.stdin.end(JSON.stringify(input));
     c.on("close", (code) => {
       if (code !== 0) return reject(new Error(err.get() || `member node exit ${code}`));
-      try { resolve(JSON.parse(out || "null") as T); } catch (e) { reject(e as Error); }
+      try { resolve(JSON.parse(out.get() || "null") as T); } catch (e) { reject(e as Error); }
     });
   });
 }
@@ -187,12 +186,11 @@ export function memberStat(osUser: string, absPath: string): Promise<{ size: num
   return new Promise((resolve, reject) => {
     const c = memberSpawn(osUser, ["node", "-e", STAT_JS, absPath], ["ignore", "pipe", "pipe"]);
     const err = collectErr(c);
-    let out = "";
-    c.stdout?.on("data", (d) => (out += d));
+    const out = collectText(c.stdout);
     c.on("error", reject);
     c.on("close", (code) => {
       if (code !== 0) return reject(new Error(err.get() || `member stat exit ${code}`));
-      try { resolve(JSON.parse(out || "null")); } catch (e) { reject(e as Error); }
+      try { resolve(JSON.parse(out.get() || "null")); } catch (e) { reject(e as Error); }
     });
   });
 }
@@ -204,12 +202,11 @@ export function memberPathProbe(osUser: string, base: string, target: string): P
   return new Promise((resolve, reject) => {
     const c = memberSpawn(osUser, ["node", "-e", PROBE_JS, base, target], ["ignore", "pipe", "pipe"]);
     const err = collectErr(c);
-    let out = "";
-    c.stdout?.on("data", (d) => (out += d));
+    const out = collectText(c.stdout);
     c.on("error", reject);
     c.on("close", (code) => {
       if (code !== 0) return reject(new Error(err.get() || `member realpath exit ${code}`));
-      try { resolve(JSON.parse(out || "null") as PathProbe); } catch (e) { reject(e as Error); }
+      try { resolve(JSON.parse(out.get() || "null") as PathProbe); } catch (e) { reject(e as Error); }
     });
   });
 }
