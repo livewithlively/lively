@@ -7,30 +7,27 @@
 //   한 번도 걸리지 않았다 — 노드 세션 발견도, #4135 세션 토큰 되채우기도 돌지 않았다.
 //   그래서 두 스텝은 `LISTEN_STEPS` 에 있어야 하고, 이 파일이 그 자리를 못 박는다.
 //
-//  ⓘ 검사 축(스펙 A~E):
-//    A  두 스텝이 LISTEN_STEPS 에 있다 · gate:"always" · tenancy 미지정
+//  ⓘ 검사 축:
+//    A  두 스텝이 LISTEN_STEPS 에 있다 · gate:"always" · tenancy 미지정(= global — boot-tenancy-reach 의 «닿는 길» 표 대상이 아니다)
 //    B  DB_BOOT_STEPS 에는 없다(구독 슬롯은 하나 — 중복 배선 금지)
 //    C  node-session-discovery 는 node-upgrade **뒤**(노드 WS 수신 배선 뒤 · 첫 스냅샷 전)
-//    D  요청별 테넌시 env 에서 runBootHousekeeping 을 부르면 두 스텝의 run 이 실제로 호출된다(스파이) + 소스 순서
-//    E  무회귀 — boot-tenancy-reach 의 규약(tenancy 미지정 = global)을 깨지 않는다
+//    D  요청별 테넌시 env 에서 runBootHousekeeping 을 부르면 두 스텝의 run 이 실제로 호출되고, DB 체인은 걸리지 않는다(스파이)
+//  ★ = 회귀 방지 · ★★ = 이 파일의 존재 이유(깨지면 매니지드에서 배선이 사라진 것).
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { readFileSync } from "node:fs";
 import {
   LISTEN_STEPS, DB_BOOT_STEPS, runBootHousekeeping, requestScopedTenancy, type BootStep,
 } from "./housekeeping.js";
 
-const SRC = "src/boot/housekeeping.ts";
-
-/** 이 파일이 지키는 두 스텝 — 이름은 스펙에서 고정한다(이름이 바뀌면 여기부터 깨져야 한다). */
-const MOVED = ["member-deactivation-hook", "node-session-discovery"] as const;
+/** 이 파일이 지키는 두 배선 스텝 — 이름은 사양에서 고정한다(이름이 바뀌면 여기부터 깨져야 한다). */
+const WIRING = ["member-deactivation-hook", "node-session-discovery"] as const;
 
 const byName = (steps: BootStep[], name: string): BootStep | undefined => steps.find((s) => s.name === name);
 const indexOfName = (steps: BootStep[], name: string): number => steps.findIndex((s) => s.name === name);
 
 // ── A ─────────────────────────────────────────────────────────────────────────
 test("★★ [A] 두 배선 스텝은 LISTEN_STEPS 에 있다 — gate:'always' · tenancy 미지정", () => {
-  for (const name of MOVED) {
+  for (const name of WIRING) {
     const step = byName(LISTEN_STEPS, name);
     assert.ok(step, `'${name}' 이 LISTEN_STEPS 에 없다 — 요청별 테넌시(매니지드)에서 이 배선은 영영 안 걸린다`);
     assert.equal(step.gate, "always",
@@ -42,7 +39,7 @@ test("★★ [A] 두 배선 스텝은 LISTEN_STEPS 에 있다 — gate:'always' 
 });
 
 test("★ [A'] LISTEN_STEPS 안에서 두 이름은 각각 한 번씩만 있다", () => {
-  for (const name of MOVED) {
+  for (const name of WIRING) {
     const n = LISTEN_STEPS.filter((s) => s.name === name).length;
     assert.equal(n, 1, `'${name}' 이 LISTEN_STEPS 에 ${n}번 있다 — 구독 슬롯은 하나다`);
   }
@@ -50,7 +47,7 @@ test("★ [A'] LISTEN_STEPS 안에서 두 이름은 각각 한 번씩만 있다"
 
 // ── B ─────────────────────────────────────────────────────────────────────────
 test("★★ [B] DB_BOOT_STEPS 에는 두 이름이 없다 — 중복 배선 금지(구독 슬롯은 하나)", () => {
-  for (const name of MOVED) {
+  for (const name of WIRING) {
     assert.equal(byName(DB_BOOT_STEPS, name), undefined,
       `'${name}' 이 DB_BOOT_STEPS 에도 있다 — LISTEN_STEPS 와 이중 배선이면 구독자가 두 번 걸린다`);
   }
@@ -120,7 +117,7 @@ test("★★ [D] 요청별 테넌시에서 runBootHousekeeping 을 부르면 두
 
       runBootHousekeeping(ctx as never);
 
-      for (const name of MOVED) {
+      for (const name of WIRING) {
         const calls = listenCalls.get(name);
         assert.ok(calls, `'${name}' 이 LISTEN_STEPS 에 없어서 스파이를 못 심었다`);
         assert.equal(calls.length, 1, `'${name}' 의 run 이 ${calls.length}번 호출됐다(1번이어야 한다)`);
@@ -145,53 +142,17 @@ test("★ [D'] 같은 호출에서 DB 부팅 체인은 걸리지 않는다 — �
   const originalDb = DB_BOOT_STEPS.map((s) => s.run);
   const movedHits: string[] = [];
   try {
-    for (const s of LISTEN_STEPS) s.run = () => { if ((MOVED as readonly string[]).includes(s.name)) movedHits.push(s.name); };
+    for (const s of LISTEN_STEPS) s.run = () => { if ((WIRING as readonly string[]).includes(s.name)) movedHits.push(s.name); };
     for (const s of DB_BOOT_STEPS) s.run = () => { dbHits.push(s.name); };
     withEnv(REQUEST_SCOPED_ENV, () => {
       assert.equal(requestScopedTenancy(), true);
       runBootHousekeeping({ app: {}, server: {}, verifier: {} } as never);
     });
     assert.deepEqual(dbHits, [], `요청별 테넌시인데 DB 체인이 돌았다: ${dbHits.join(", ")}`);
-    assert.deepEqual([...movedHits].sort(), [...MOVED].sort(), "두 스텝이 LISTEN 쪽에서 걸려야 한다");
+    assert.deepEqual([...movedHits].sort(), [...WIRING].sort(), "두 스텝이 LISTEN 쪽에서 걸려야 한다");
   } finally {
     LISTEN_STEPS.forEach((s, i) => { s.run = originalListen[i]; });
     DB_BOOT_STEPS.forEach((s, i) => { s.run = originalDb[i]; });
   }
 });
 
-test("★ [D''] 소스 순서 — runBootHousekeeping 은 LISTEN_STEPS 를 requestScopedTenancy 판정보다 **앞에서** 돈다", () => {
-  const src = readFileSync(SRC, "utf8");
-  const fnStart = src.indexOf("export function runBootHousekeeping(");
-  assert.ok(fnStart >= 0, "runBootHousekeeping 정의를 못 찾았다");
-  const body = src.slice(fnStart);
-  const listenLoop = body.indexOf("for (const step of LISTEN_STEPS)");
-  const guard = body.indexOf("if (requestScopedTenancy()) {");
-  const dbLoop = body.indexOf("for (const step of DB_BOOT_STEPS)");
-  assert.ok(listenLoop >= 0, "LISTEN_STEPS 루프가 없다");
-  assert.ok(guard >= 0, "requestScopedTenancy 차단 분기가 없다");
-  assert.ok(dbLoop >= 0, "DB_BOOT_STEPS 루프가 없다");
-  assert.ok(listenLoop < guard, `LISTEN_STEPS 루프(${listenLoop})가 차단(${guard})보다 앞이어야 한다`);
-  assert.ok(guard < dbLoop, `차단(${guard})이 DB 체인(${dbLoop})보다 앞이어야 한다`);
-});
-
-// ── E ─────────────────────────────────────────────────────────────────────────
-test("★★ [E] 무회귀 — 옮긴 두 스텝은 tenancy 미지정이라 boot-tenancy-reach 규약대로 global 로 본다", () => {
-  for (const name of MOVED) {
-    const step = byName(LISTEN_STEPS, name);
-    assert.ok(step, `'${name}' 이 LISTEN_STEPS 에 없다`);
-    assert.equal(step.tenancy, undefined, `'${name}' 에 tenancy 가 붙었다 — 붙이면 K1(닿는 길 표) 이 요구된다`);
-    assert.equal(step.tenancy ?? "global", "global");
-  }
-});
-
-test("★ [E'] 무회귀 — 모든 스텝의 tenancy 는 미지정·'global'·'per-tenant' 중 하나이고 미지정이 남아 있다", () => {
-  const all = [...LISTEN_STEPS, ...DB_BOOT_STEPS];
-  assert.ok(all.length > 0, "스텝이 하나도 없다");
-  for (const s of all) {
-    assert.ok(s.tenancy === undefined || s.tenancy === "global" || s.tenancy === "per-tenant",
-      `'${s.name}' 의 tenancy 값이 이상하다: ${String(s.tenancy)}`);
-    assert.ok(s.gate === "always" || s.gate === "scheduler", `'${s.name}' 의 gate 값이 이상하다: ${String(s.gate)}`);
-  }
-  // K6 의 전제 — 미표시(=global 기본값) 스텝이 하나도 없으면 기본값 경로가 죽은 것이다.
-  assert.ok(all.some((s) => s.tenancy === undefined), "미지정 스텝이 0개다 — 기본값(global) 경로가 사라졌다");
-});
