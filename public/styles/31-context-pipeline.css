@@ -605,6 +605,8 @@ a.ctx-preview-t:hover { color: var(--blue); }
       (점 = 무언가 바뀐 실행 · 짧은 막대 = 바뀐 것 없음 · ✕ = 실패), 아래엔 바뀐 실행만 모은다. 지도의 수집기·증류기 칩을 누르면
       화면을 옮기지 않고 이 패널이 그 기계로 걸러진다(원준: "밑에가 sorting 되거나 펼쳐지거나 … 예쁘고 유려한 느낌").
       계열색 둘은 dataviz 검증 팔레트(1·2번 칸 — 파랑·주황, 색각 이상 ΔE 24.7 통과)를 쓰고, 실패는 상태색 + ✕ 모양으로 가른다. ── */
+/*  말풍선(.cxr-tip)은 body 에 붙어 패널 밖이다 — 계열색 토큰을 함께 준다(안 주면 말풍선의 색 줄이 빈칸). */
+.cxr-tip { --run-c: #2a78d6; --run-d: #eb6834; }
 .cxr { --run-c: #2a78d6; --run-d: #eb6834; --run-x: #d03b3b; --run-z: #cfd6e1;
   margin-top: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
 .cxr-head { display: flex; align-items: center; gap: 18px; padding: 13px 18px; border-bottom: 1px solid var(--line-row); flex-wrap: wrap; }
