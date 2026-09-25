@@ -27,6 +27,7 @@ import { canAttach } from "./terminal-sessions.js";
 import { isExternalExecutionSessionId } from "../org/auth/agent-identity.js";
 import { syncSessionAppInstanceProject } from "../org/store/app-instances.js";
 import { sessionTaskOf, sessionTaskSection } from "../v6/session-task.js";
+import { answersFolder, contextNodeId, sessionDirFromRow } from "./session-project-folder.js";   // #4135 — 노드·폴더는 세션 행이 안다
 
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 const SID_RE = /^[A-Za-z0-9._-]{1,128}$/;
@@ -164,6 +165,9 @@ export interface SessionProjectContext {
   sync?: FolderSyncMode;
   /** 명시 바인딩(`lively init`)의 절대경로. null 이면 노드의 canonical 슬롯(`<shared root>/<folder>`)을 쓰라는 뜻. */
   folder_abs_path?: string | null;
+  /** 세션 행이 아는 «이 세션이 도는 프로젝트 폴더»(#4135) — 공유 루트 아래 project.folder 에서 도는 세션만. 명시 바인딩이
+   *  없을 때 훅이 env(TERMINAL_ROOT_SHARED)로 슬롯을 조립하는 대신 이 경로를 쓴다. 라이블리 소유 슬롯이라는 뜻은 그대로다. */
+  session_dir?: string | null;
   name?: string; content?: string;
 }
 
@@ -179,7 +183,6 @@ export async function sessionProjectContext(
   if (!me) throw new HttpError(403, "사용자 신원이 없습니다");
   const known = knownRevisionRaw == null || knownRevisionRaw === "" ? -1 : Number(knownRevisionRaw);
   if (!Number.isSafeInteger(known) || known < -1) throw new HttpError(400, "knownRevision 형식 오류");
-  const nodeId = String(nodeIdRaw ?? "").trim().slice(0, 128);
   const current = (await executionSessionProject(id, me)) ?? (await adoptLegacyBinding(id, me));
   if (!current) return { found: false, changed: known !== 0, session_id: id, project_id: null, revision: 0, applied_revision: 0, binding_epoch: 0 };
   const base: SessionProjectContext = {
@@ -189,12 +192,22 @@ export async function sessionProjectContext(
   if (current.project_id == null) return base;
   const project = await loadProject(current.project_id);
   if (!project) return { ...base, project_id: null };
-  // 폴더·동기화 — 노드를 밝힌 호출(동기화 훅)에만 답한다. 안 밝히면 종전 응답 그대로(하위호환).
-  if (nodeId) {
+  //  #4135 — 호출자(훅)가 node 를 안 밝혀도 세션 행에서 읽는다: 노드 세션의 pane 엔 LIVELY_NODE_ID 가 없어서 여태 folder·sync 가
+  //   안 나갔고 자료 동기화가 조용히 죽어 있었다. 행 조회 실패는 «중앙 세션» 으로 본다(종전과 같음). 행은 소속이 확인된
+  //   뒤에만 읽는다 — 이 함수는 매 턴 모든 세션이 부르므로 소속 없는 세션에 DB 왕복을 더하지 않는다.
+  const row = await getSessionState(id).catch(() => undefined);
+  const nodeId = contextNodeId(nodeIdRaw, row);
+  //  «세션이 그 프로젝트 폴더에서 돈다» 인 행의 dir — 훅이 제 env(TERMINAL_ROOT_SHARED)로 슬롯을 조립하지 않게
+  //  (옛 루트가 env 에 남은 세션이 엉뚱한 폴더를 보던 것, #4135). 별도 필드라 슬롯 판정(folder_abs_path)은 안 흔든다.
+  const sessionDir = sessionDirFromRow(project.folder, row);
+  // 폴더·동기화 — 노드를 알거나 행이 폴더를 알면 답한다(세션 호스트 세션은 node_id 없이 dir 만 안다). 둘 다 모르는
+  //  중앙 세션은 종전 응답 그대로(하위호환). 노드가 비면 명시 바인딩은 없다(resolveNodeFolder 가 슬롯 기본으로 답한다).
+  if (answersFolder(nodeId, sessionDir)) {
     const res = await resolveNodeFolder(project.id, me, nodeId);
     base.folder = project.folder;
     base.sync = project.folder ? res.sync : "none";   // folder 가 비면 조립할 슬롯이 없다 → 동기화 대상 아님
-    base.folder_abs_path = res.abs_path;
+    base.folder_abs_path = res.abs_path;              // 명시 바인딩(`lively init`)만 — 훅은 이 유무로 슬롯 여부를 가른다
+    base.session_dir = sessionDir;
   }
   if (!base.changed) return base;
   // 동기화 훅(content=0)은 폴더·모드만 필요하다 — AGENTS.md 는 최대 128KB 라 매 턴 실어 보내면 순수 낭비다.
