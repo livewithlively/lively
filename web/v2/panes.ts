@@ -30,7 +30,7 @@ import { makeSplitter } from './split.js';
 import { mountSideSwap, type SideSwapHandle } from './side-swap.js';   // 곁칸이 절반을 넘으면 자리를 바꾼다(#1819)
 import { MOBILE_MQ } from './mobile.js';   // 좁은 폭(≤900)의 접힌 배치 — side-swap 과 같은 문턱을 읽는다(#4088 후속)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
-import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, rememberViewerPath, slotStoreKey } from './panes-kit.js';
+import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, rememberViewerPath, rememberedViewerPath, slotStoreKey } from './panes-kit.js';
 import { bindCtxSurface } from './ctx-registry.js';   // #3784 곁칸 빈 자리 우클릭
 import { type CtxRow } from './ctx-menu.js';
 //  ★ 탭 = 부품의 **인스턴스**(#762) — 배치가 드는 것은 '종류'가 아니라 '탭 열쇠'다(lib/tab-key 머리말).
@@ -462,7 +462,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   bindCtxSurface(wrap, (hit, ev) => {
     const z = (ev.target.closest('.pn-pane') as HTMLElement | null)?.dataset.zone;
     const zone: Zone = z === 'bottom' && !narrow() ? 'bottom' : 'side';   // 가운데 칸(세션)에서 부르면 곁칸에 넣는다(좁은 폭엔 아래 칸이 없다)
-    const adds: CtxRow[] = PART_DEFS.filter((d) => d.type !== 'sessions').map((d) => ({
+    const adds: CtxRow[] = PART_DEFS.filter((d) => d.type !== 'sessions' && d.pickable !== false).map((d) => ({
       label: d.name, icon: d.type === 'files' || d.type === 'sessfiles' ? 'folder' : d.type === 'knowledge' ? 'doc' : d.type === 'web' ? 'web' : d.type === 'apps' ? 'apps' : d.type === 'liv' ? 'liv' : d.type === 'timeline' ? 'clock' : d.type === 'archive' ? 'archive' : d.type === 'editor' ? 'eye' : d.type === 'preview' ? 'window' : 'layers',
       hint: d.hint, run: () => { openZone(zone); addPart(zone, d.type); },
     }));
@@ -687,18 +687,29 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     for (const z of zones) { const k = lay[z].find((x) => tabBase(x) === type); if (k) return { zone: z, key: k }; }
     return null;
   }
-  // 자료 칸에서 파일을 누르면 뷰어 탭으로 (#762, 원준 2026-09-04) — 웹 칸과 같은 길이다.
-  //  ★ 뷰어는 여럿 뜰 수 있다(#762, 원준 2026-09-05). **어느 탭에 펼지는 여기서 정한다**: 기본은 보고 있던
-  //   뷰어에, `newTab` 이면 새 탭에. 정한 뒤 그 탭의 열쇠로 기억을 적고(새로 만들어지는 뷰어는 신호를 놓치므로)
-  //   slot 을 실어 알린다 — 그래야 뷰어 셋이 떠 있어도 엉뚱한 칸이 갈아입지 않는다.
-  //  sid 가 실리면 **세션 작업 폴더의 파일**이다(타임라인 산출물 · 세션 폴더 칸) — 뷰어가 세션 파일 API 로 읽는다(#4088 후속).
-  type ViewerOpen = { path?: string; newTab?: boolean; sid?: string | null; node?: string | null };
+  // 자료 칸에서 파일을 두 번 누르면 뷰어 탭으로 (#762, 원준 2026-09-04) — 웹 칸과 같은 길이다.
+  //  ★ **파일마다 뷰어 하나**(#4135, 원준 2026-09-25: "다른 거 한 번 클릭하면 이전 꺼 뷰어에서 보이던 거 없애고 새로 선택한
+  //   게 뜨는데 그러지 말고 새 창으로 뜨도록. 이전에 떠 있던 파일 뷰어 보존되게"). 그 파일이 **이미 떠 있는 탭**이 있으면
+  //   그 탭으로 가고, 없으면 새 탭을 만든다 — 보고 있던 뷰어는 절대 갈아입지 않는다. 뷰어는 [+] 목록에 없으므로
+  //   (PART_DEFS pickable:false) 이 길이 뷰어가 생기는 유일한 길이다.
+  //  ⚠ 옛 판에서 같은 파일을 두 탭에 펴 두었던 기억이 남아 있으면 첫 탭을 고른다(둘째는 그대로 — 사람이 닫는다).
+  //   파일 이름을 바꾸면 옛 이름을 기억한 탭은 404 를 받아 빈 화면으로 돌아가고(viewerPart showFail), 새 이름은 새 탭.
+  //  ⚠ «이미 떠 있나» 는 탭마다 적어 둔 기억(rememberedViewerPath)으로 본다 — 뷰어가 지금 무엇을 펴 놓았는지 셸이
+  //   달리 알 길이 없고, 그 기억은 뷰어가 열 때마다 제 열쇠로 적는다(panes-parts viewerPart remember).
+  //  sid 가 실리면 **세션 작업 폴더의 파일**이다(타임라인 산출물 · 세션 폴더 칸) — 기억하지 않으므로 늘 새 탭.
+  type ViewerOpen = { path?: string; sid?: string | null; node?: string | null };
+  function viewerTabs(): Array<{ zone: Zone; key: TabKey }> {
+    const out: Array<{ zone: Zone; key: TabKey }> = [];
+    for (const z of ['side', 'main', 'bottom'] as Zone[]) for (const k of lay[z]) if (tabBase(k) === 'editor') out.push({ zone: z, key: k });
+    return out;
+  }
   function openViewerAt(d: ViewerOpen | undefined): void {
-    const found = d?.newTab ? null : findTab('editor');
+    const path = String(d?.path || '');
+    const found = path && !d?.sid ? viewerTabs().find((t) => rememberedViewerPath(ctx.memKey(), t.key) === path) ?? null : null;
     //  새 탭은 **이미 뷰어가 사는 칸**에 나란히 세운다 — 아래 칸에 뷰어를 두고 쓰는 사람에게 곁칸이 튀어나오면
     //   그건 나란히 보기가 아니라 자리 뺏기다. 뷰어가 하나도 없으면 곁칸.
     const zone: Zone = found ? found.zone : (findTab('editor')?.zone ?? 'side');
-    //  ⚠ **열쇠를 먼저 잡고 기억을 적은 뒤에** 탭을 만든다 — 순서가 뒤면 갓 만들어진 뷰어가 빈 목록을
+    //  ⚠ **열쇠를 먼저 잡고 기억을 적은 뒤에** 탭을 만든다 — 순서가 뒤면 갓 만들어진 뷰어가 빈 화면을
     //   한 번 그렸다가 신호를 받고 다시 그린다(화면이 깜빡인다).
     const key = found ? found.key : nextTabKey('editor', allKeys());
     //  세션 폴더의 파일(sid)은 기억하지 않는다 — 다시 열 때 프로젝트 자료 경로로 읽혀 «못 읽었어요» 가 된다.
@@ -707,8 +718,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     revealZone(zone);
     activate(zone, key);
     paintAll();
-    //  이미 있던 칸은 이 신호로 갈아입는다(방금 만든 칸은 기억에서 이미 읽었다 — 두 번 열어도 같은 파일이라 무해).
-    if (d?.path) wrap.dispatchEvent(new CustomEvent(VIEWER_TO_EVT, { detail: { id, path: d.path, slot: key, sid: d.sid || null, node: d.node || null } }));
+    //  이미 있던 탭은 이 신호로 그 파일을 편다(같은 파일이라 다시 그리지 않는다 — viewerPart open 의 첫 줄).
+    if (path) wrap.dispatchEvent(new CustomEvent(VIEWER_TO_EVT, { detail: { id, path, slot: key, sid: d?.sid || null, node: d?.node || null } }));
   }
   const onOpenViewer = (e: Event): void => openViewerAt((e as CustomEvent).detail as ViewerOpen | undefined);
   wrap.addEventListener(VIEWER_EVT, onOpenViewer);
@@ -815,7 +826,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       ...(['side', 'bottom'] as Zone[]).filter(canGo).map((z) => ({
         label: `${label[z]}으로 보내기`, run: () => { openZone(z); moveTab(key, zone, z); },
       })),
-      ...(d.multi ? [{ sep: true, label: '' }, { label: `${d.name} 하나 더`, run: () => { addPart(zone, type); } }] : []),
+      ...(d.multi && d.pickable !== false ? [{ sep: true, label: '' }, { label: `${d.name} 하나 더`, run: () => { addPart(zone, type); } }] : []),
       { sep: true, label: '' },
       { label: '이 칸에서 빼기', danger: true, run: () => removeTab(zone, key) },
     ]);
@@ -852,7 +863,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     b.onclick = () => {
       //  ★ 이미 있어도 **multi 부품이면 하나 더** 낼 수 있다(#762) — 셸은 그 선언만 본다(부품 이름이 여기 안 박힌다).
       const has = (t: PartType): boolean => zoneTabs(zone).some((k) => tabBase(k) === t);
-      const rest = PART_DEFS.filter((d) => (d.multi || !has(d.type))
+      const rest = PART_DEFS.filter((d) => d.pickable !== false && (d.multi || !has(d.type))   // pickable:false(뷰어) — 파일에서만 열린다(#4135)
         && !(d.type === 'sessions' && zone !== 'main')     // 세션은 가운데 칸의 것 — 여기 넣으면 뺄 수가 없다(위 불변식)
         && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'liv')));   // 뷰어는 세션 폴더 파일도 열므로 남긴다
       const close = anchoredPopover(b, el('div', { class: 'pn-pop' },

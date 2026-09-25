@@ -27,3 +27,24 @@ export function reuseKeyed<T, N>(
   for (const id of cards.keys()) if (!keep.has(id)) cards.delete(id);
   return out;
 }
+
+/** placeChildren 이 보는 DOM 의 최소 모양 — 테스트가 가짜로 흉내 낸다. */
+export interface ChildHost<N> {
+  childNodes: ArrayLike<N>;
+  insertBefore(node: N, before: N | null): unknown;
+  removeChild(node: N): unknown;
+}
+
+/**
+ * 자식을 `nodes` 순서로 맞추되 **제자리인 노드는 건드리지 않는다** — replaceChildren 은 재사용 노드까지 떼었다 붙여서
+ *  시안 미리보기(iframe)가 다시 실리고 이름 고치는 입력칸이 포커스를 잃는다.
+ *  ★ 순서: ① 이번에 없는 노드를 **먼저** 뗀다 ② 그 다음 자리가 다른 것만 옮긴다. 종전엔 옛 노드를 둔 채 앞에서부터
+ *   insertBefore 를 했는데, 맨 앞 카드 하나가 새 노드로 갈리면(AGENTS.md — 8초마다 도장이 바뀌던 파일) 옛 노드가
+ *   그 자리에 남아 **그 뒤 카드 전부**가 한 칸씩 «자리가 다르다» 가 되어 떼었다 붙여졌다 — 그래서 시안 미리보기가
+ *   전부 다시 실렸다(#4135, 원준 2026-09-25 "hub-widgets-review.html 도 깜빡거려"). 뗀 뒤에 견주면 옮길 것이 없다.
+ */
+export function placeChildren<N>(host: ChildHost<N>, nodes: readonly N[]): void {
+  const keep = new Set<N>(nodes);
+  for (const c of Array.from(host.childNodes)) if (!keep.has(c)) host.removeChild(c);
+  nodes.forEach((n, i) => { if (host.childNodes[i] !== n) host.insertBefore(n, host.childNodes[i] ?? null); });
+}

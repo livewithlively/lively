@@ -21,8 +21,7 @@ import { normWebUrl } from './web-url.js';
 import { filesPart } from './panes-files.js';
 import { sessFilesPart } from './panes-sessfiles.js';   // #4088 후속 — 세션 작업 폴더 칸(프로젝트 없는 세션의 «자료»)
 import { tasksPart } from './panes-tasks.js';
-import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, authHeaders, kindOf, knTitle, openInViewerPart, pnIcon, pnNote, seedSessName, sessNameCache } from './panes-kit.js';
-import { createPreviewKit } from './file-preview.js';
+import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, authHeaders, kindOf, knTitle, pnIcon, pnNote, seedSessName, sessNameCache } from './panes-kit.js';
 import { htmlFrame } from '../lib/file-preview.js';        // #4075 — 시안(HTML)은 공용 렌더러의 격리 프레임으로(자르지 않고 스크립트 허용)
 import { attachFrameBridge } from '../lib/frame-bridge.js'; // #4075 — 격리 프레임 안 문서의 저장·복사·내려받기를 셸이 대신한다
 import type { TabKey } from '../lib/tab-key.js';
@@ -113,6 +112,9 @@ export interface PartDef {
   /** 이 칸에 **여럿** 띄울 수 있나(#762). 셸은 이 값만 보고 [+] 에 「하나 더」를 낸다 —
    *  부품 이름이 셸에 박히지 않게(뷰어만 예외로 두지 않으려고 만든 자리다). */
   multi?: boolean;
+  /** 사람이 고를 수 있나. `false` 면 [+] 고르기·「칸에 넣기」·「하나 더」에 **안 나온다**(#4135) — 다른 길(자료 칸에서 파일
+   *  두 번 누르기)로만 생기는 부품. 저장된 배치의 탭은 그대로 유효하다(parseLayout 은 PART_DEFS 전체를 본다). */
+  pickable?: boolean;
 }
 
 /** 칸에 넣을 수 있는 것들 — [+] 고르기 목록의 정본. */
@@ -130,7 +132,8 @@ export const PART_DEFS: PartDef[] = [
   { type: 'archive', name: '지난 세션', icon: 'box', hint: '박스가 멈춰 지금은 안 도는 세션입니다. 대화 그대로 다시 살릴 수 있어요.' },
   { type: 'web', name: '웹', icon: 'globe', multi: true, hint: '주소를 넣으면 이 칸에서 그 페이지를 봅니다. 문서·레퍼런스를 옆에 띄워 두세요.' },
   { type: 'preview', name: '미리보기', icon: 'globe', hint: '띄워 둔 화면 목록입니다. 누르면 웹 칸에 그 화면이 실립니다.' },
-  { type: 'editor', name: '뷰어', icon: 'eye', multi: true, hint: '자료의 파일을 골라 이 칸에서 봅니다 — 문서·그림·PDF·시안·영상. 여러 개를 띄워 나란히 볼 수 있어요.' },
+  // #4135(원준 2026-09-25) — 뷰어는 [+] 로 열지 않는다. 자료 칸에서 파일을 두 번 누르면 **파일마다** 뷰어가 하나씩 뜬다.
+  { type: 'editor', name: '뷰어', icon: 'eye', multi: true, pickable: false, hint: '자료 칸에서 파일을 두 번 누르면 여기에 열립니다 — 문서·그림·PDF·시안·영상. 파일마다 뷰어가 하나씩.' },
   { type: 'apps', name: '앱', icon: 'grid', hint: '설치된 앱을 고르면 각 앱이 상단의 자기 탭에서 열립니다.' },
 ];
 
@@ -1075,22 +1078,20 @@ function viewerPart(ctx: PartCtx): Part {
   };
   let list: FlatFile[] = [];
   let path = '';
-  // #3784 우클릭 — 새 뷰어 탭 · 경로/이름 복사(펴 놓은 것이 있을 때)
+  // #3784 우클릭 — 경로/이름 복사(펴 놓은 것이 있을 때). «새 뷰어 탭»은 뺐다 — 파일마다 뷰어가 하나다(#4135).
   bindCtx(root, () => {
     const name = path ? path.split('/').pop() || path : '';
     return {
       title: name || '뷰어', sub: path ? path : '펴 놓은 파일 없음',
       rows: [
-        { label: '새 뷰어 탭에서 보기', icon: 'columns', off: !path, run: () => openInViewerPart(ctx, path, { newTab: true, sid: src?.sid, node: src?.node }) },
-        { sep: true, label: '' },
         { label: '경로 복사', icon: 'copy', off: !path, run: () => void copyText(path).then((ok) => { if (ok) toast('경로를 복사했어요'); }) },
         { label: '파일 이름 복사', icon: 'copy', off: !path, run: () => void copyText(name).then((ok) => { if (ok) toast('복사했어요'); }) },
       ],
     };
   });
-  let q = '';
   //  살아 있는 미리보기(아래) — open() 이 읽으므로 **그보다 앞에** 선언한다(마운트 중 TDZ 사고의 재발 방지).
-  let shownStamp = '';          // 지금 그려 둔 파일의 도장(수정 시각:크기) — '' 이면 비교할 것이 없다(목록 화면·아직 여는 중)
+  let shownStamp = '';          // 지금 그려 둔 파일의 도장(수정 시각:크기) — '' 이면 비교할 것이 없다(빈 화면·아직 여는 중)
+  let opening = '';             // 지금 받는 중인 경로 — 같은 경로를 겹쳐 받지 않는다(#4135 리뷰: 갓 만든 뷰어는 기억으로 한 번, 셸 신호로 또 한 번 open 에 와서 두 번 받았다)
   let unbridge: () => void = () => {};   // #4075 — 지금 떠 있는 시안 프레임의 검토 다리를 떼는 손잡이(다른 파일을 펼 때 뗀다)
   let checking = false;
   //  ── 고치기 (#762, 원준 2026-09-05: "뷰어 안에서 편집 버튼 누르면 편집도 가능하게") ────────────
@@ -1117,9 +1118,6 @@ function viewerPart(ctx: PartCtx): Part {
   const fileUrl = (p2: string): string => (src
     ? apiUrl('/api/ui/terminal/sessions/' + encodeURIComponent(src.sid) + '/file?path=' + encodeURIComponent(p2) + (src.node ? '&node=' + encodeURIComponent(src.node) : ''))
     : apiUrl('/api/ui/v6/projects/' + ctx.id + '/file?path=' + encodeURIComponent(p2)));
-  //  목록에도 **미리보기**를 세운다(#762, 원준 2026-09-04 "뷰어도 미리보기 필요함") — 자료 칸과 같은 기계다.
-  //  아이콘만 스무 줄이면 "그 파일이 어느 거였는지" 를 이름으로만 골라야 한다(자료 칸을 격자로 바꾼 것과 같은 이유).
-  const pv = createPreviewKit({ fileUrl, dead: () => ctx.dead() });
   // 무엇을 열어 두었나도 **세션마다** 따로 — 자료(파일 자체)는 프로젝트 공용이지만, '내가 지금 뭘 펴 놨나'는 내 세션의 것이다.
   const remember = (p2: string): void => {
     if (EMBEDDED) return;   // 끼워 넣은 판 — 바깥 사람이 펴 둔 파일을 덮어쓰지 않는다
@@ -1156,7 +1154,8 @@ function viewerPart(ctx: PartCtx): Part {
     if (!items.length && !emptyDirs.length) return;
     if (!(ctx.id > 0)) { toast('이 화면은 프로젝트 폴더가 없어 파일을 둘 곳이 없어요.', true); return; }
     //  같은 이름이 이미 있으면 **묻고 나서** 덮는다 — 자료는 이 프로젝트의 모든 세션이 읽는 공용물이라
-    //  조용히 갈아 끼우면 남의 근거가 소리 없이 바뀐다.
+    //  조용히 갈아 끼우면 남의 근거가 소리 없이 바뀐다. 목록은 이때만 읽는다(#4135 — 뷰어는 목록을 그리지 않으므로 틱마다 안 받는다).
+    await loadList();
     const over = items.filter((u) => taken.has(u.rel));
     if (over.length && !(await confirmDialog({
       title: over.length === 1 ? `「${base(over[0].rel)}」를 덮어쓸까요?` : `이미 있는 자료 ${over.length}개를 덮어쓸까요?`,
@@ -1174,19 +1173,18 @@ function viewerPart(ctx: PartCtx): Part {
     if (ctx.dead()) return;
     upToast(r);
     await loadList();
-    // 올린 이유는 **보려고**다 — 방금 올라간 것 중 첫 파일을 그 자리에서 편다(여럿이면 목록 맨 위에 모여 있다).
+    // 올린 이유는 **보려고**다 — 방금 올라간 것 중 첫 파일을 그 자리에서 편다.
     const first = r.ok ? items.find((u) => list.some((f) => f.path === u.rel)) : null;
     if (first) { void go(first.rel); return; }
-    if (!path) paintPicker();
     paintBar();
   }
 
   function paintBar(): void {
     //  탭 이름은 **펴 둔 파일**이다(#762) — 뷰어가 둘 이상 뜨면 「뷰어」 「뷰어」 로는 어느 것이 무엇인지 모른다.
-    //   목록 화면(펴 둔 것 없음)이면 부품 기본 이름으로 돌아간다.
+    //   펴 둔 것이 없으면 부품 기본 이름으로 돌아간다.
     ctx.setTabTitle?.(path ? base(path) : null);
     if (!path) {
-      bar.replaceChildren(...(ctx.id > 0 ? [upBtn(true)] : []), el('span', { class: 'pn-fine', text: list.length ? list.length + '개 · 최근 먼저' : '' }));
+      bar.replaceChildren(el('span', { class: 'pn-fine', text: '펴 놓은 파일 없음' }), ...(ctx.id > 0 ? [upBtn(true)] : []));
       return;
     }
     //  고치는 중 — 막대도 그 일만 말한다(다시 불러오기·올리기·내려받기는 지금 할 일이 아니다).
@@ -1202,8 +1200,8 @@ function viewerPart(ctx: PartCtx): Part {
           onclick: () => { void save(); } }));
       return;
     }
+    //  «← 자료» 는 없다(#4135) — 이 칸은 목록을 그리지 않는다. 다른 파일은 자료 칸에서 두 번 눌러 제 뷰어로 연다.
     bar.replaceChildren(
-      el('button', { class: 'pn-web-btn', type: 'button', text: '← 자료', title: '파일 목록으로 돌아갑니다', onclick: () => void go('') }),
       el('b', { class: 'pn-ed-name ell', text: base(path), title: path }),
       //  고치기(#762, 원준 2026-09-05) — 브라우저가 고칠 수 있는 것(글·시안)에만 선다. 그림·PDF·영상엔 안 뜬다.
       ...(canEdit(path) ? [el('button', { class: 'pn-web-btn ic', type: 'button', title: '이 파일을 고칩니다 — 저장하면 자료의 원본이 바뀝니다',
@@ -1211,7 +1209,7 @@ function viewerPart(ctx: PartCtx): Part {
       //  새로고침(#762, 원준 2026-09-04) — 같은 파일을 **다시 받아** 편다(세션이 방금 고친 시안·PDF 를 그 자리에서 본다).
       //  배율은 그대로다(세션마다 기억하는 값이라 다시 펴도 안 바뀐다). 웹 칸의 ↺ 와 같은 아이콘·같은 자리.
       el('button', { class: 'pn-web-btn ic', type: 'button', title: '이 파일을 다시 불러옵니다', 'aria-label': '다시 불러오기',
-        onclick: () => { void loadList().then(() => open(path, true, true)); } }, pnIcon('undo', 'pn-i sm')),
+        onclick: () => { void open(path, true, true); } }, pnIcon('undo', 'pn-i sm')),
       ...(src || !(ctx.id > 0) ? [] : [upBtn(false)]),
       //  내려받기는 **인증 fetch → blob** 이다(files-upload authDownload). 종전의 `<a href>` 는 토큰을 못 실어 쿠키 세션이
       //   없는 폰(PWA·새 기기)에서 로그인 화면이 떴고, iOS 는 새 탭 팝업을 막는다.
@@ -1290,7 +1288,7 @@ function viewerPart(ctx: PartCtx): Part {
     }))) return false;
     ed = null;
     if (path) await open(path, true, true);   // 방금 쓴 것이 그려진다(도장도 여기서 새로 잡힌다)
-    else paintPicker();
+    else paintEmpty();
     paintBar();
     return true;
   }
@@ -1305,50 +1303,29 @@ function viewerPart(ctx: PartCtx): Part {
     await open(p2);
   }
 
-  /** 자료 목록 — 이 칸이 '무엇을 열까'를 묻는 화면. 검색 한 칸 + 행 목록(종류·크기·시각). */
-  function paintPicker(): void {
-    const search = el('input', {
-      class: 'pn-ed-find', type: 'search', value: q, placeholder: '자료 찾기 — 이름 일부', 'aria-label': '자료 찾기',
-    }) as HTMLInputElement;
-    // 다시 그리면 IME 조합이 끊긴다 — 목록만 갈아 끼운다.
-    const rows = el('div', { class: 'pn-flist' });
-    const draw = (): void => {
-      const needle = q.trim().toLowerCase();
-      const hit = list.filter((f) => !needle || f.path.toLowerCase().includes(needle));
-      if (!hit.length) {
-        const noProject = !(ctx.id > 0);
-        rows.replaceChildren(el('div', { class: 'pn-empty' },
-          pnIcon(list.length ? 'doc' : noProject ? 'folder' : 'up', 'pn-i big'),
-          el('b', { text: list.length ? '찾는 자료가 없어요.' : noProject ? '이 화면은 프로젝트 자료가 없어요.' : '아직 자료가 없어요.' }),
-          el('p', { class: 'pn-fine', text: list.length
-            ? '이름 일부로 다시 찾아보세요.'
-            : noProject ? '세션이 만든 파일은 [세션 파일] 칸이나 타임라인의 산출물에서 여세요 — 여기서 보고 내려받을 수 있어요.'
-            : '파일을 이 칸에 끌어다 놓거나 [올리기]를 누르세요 — 올린 파일은 자료에도 그대로 쌓입니다.' }),
-          ...(list.length || noProject ? [] : [upBtn(true)])));
-        return;
-      }
-      rows.replaceChildren(...hit.slice(0, 300).map((f) => {
-        const k = kindOf(f.path);
-        const ic = el('span', { class: 'pn-fic pv ' + k.kind, 'data-pv': f.path, 'data-pvk': k.kind, 'data-pvs': String(f.size || 0) },
-          pnIcon(k.kind === 'page' ? 'note' : k.kind === 'img' || k.kind === 'video' ? 'img' : 'doc', 'pn-i')) as HTMLElement;
-        if (k.kind !== 'file') pv.watch(ic, f.path, k.kind, f.size || 0);
-        return el('button', { class: 'pn-frow2 pv', type: 'button', title: f.path, onclick: () => void go(f.path) },
-          ic,
-          el('b', { class: 'pn-fname1', text: base(f.path) }),
-          el('span', { class: 'pn-fcol k', text: k.type }),
-          el('span', { class: 'pn-fcol s', text: fmtSize(f.size || 0) }),
-          el('span', { class: 'pn-fcol d', text: f.mtime ? relTime(new Date(f.mtime).toISOString()) : '' }));
-      }));
-    };
-    search.addEventListener('input', () => { q = search.value; draw(); pv.prune(); });   // 찾을 때마다 행이 갈리므로 떨어진 상자를 그때그때 잊는다
-    draw();
-    showPlain(el('div', { class: 'pn-ed-pick2' }, search, rows), true);
-    pv.prune();   // 붙인 뒤에 — 옛 목록의 상자만 잊는다(file-preview prune 주석)
-    window.setTimeout(() => { if (q) search.focus(); }, 0);
+  /** 펴 둔 것이 없을 때 — 안내 한 장. 이 칸은 **목록을 그리지 않는다**(#4135, 원준 2026-09-25: "뷰어에서 목록을 보는 게 아닌 게
+   *  좋겠음"): 종전의 목록은 8초마다 통째로 다시 그려져 미리보기가 계속 깜빡였고, 자료 칸이 이미 그 목록이다. */
+  function paintEmpty(): void {
+    const noProject = !(ctx.id > 0);
+    showPlain(el('div', { class: 'pn-empty' },
+      pnIcon('eye', 'pn-i big'),
+      el('b', { text: '자료 칸에서 파일을 두 번 누르면 여기에 열려요.' }),
+      el('p', { class: 'pn-fine', text: noProject
+        ? '세션이 만든 파일은 [세션 파일] 칸이나 타임라인의 산출물에서 여세요 — 여기서 보고 내려받을 수 있어요.'
+        : '파일마다 뷰어가 하나씩 뜨고, 먼저 연 것은 그대로 남아요. 컴퓨터의 파일을 바로 보려면 [올리기].' }),
+      ...(noProject ? [] : [upBtn(true)])));
   }
 
-  /** 못 읽었다 — 너무 커서(413)면 «내려받기» 를 준다(미리보기 상한은 두 API 가 같다). 그 밖은 한 줄로 끝. */
+  /** 못 읽었다 — 너무 커서(413)면 «내려받기» 를 준다(미리보기 상한은 두 API 가 같다). 없어진 파일(404)이면 기억을 지우고
+   *  빈 화면으로(안 그러면 지운 파일의 «못 읽었어요» 가 그 탭에 영영 남는다). 그 밖은 한 줄로 끝. */
   function showFail(r: Response | null, p2: string): void {
+    if (path !== p2) return;   // 그 사이 다른 걸 골랐다 — 옛 요청의 실패로 지금 화면·기억을 지우지 않는다(리뷰 지적)
+    opening = '';              // 실패했으니 다시 누르면 다시 받는다
+    if (r && r.status === 404 && !src) {
+      remember(''); path = ''; shownStamp = '';
+      paintBar(); paintEmpty();
+      return;
+    }
     if (r && r.status === 413) {
       showPlain(el('div', { class: 'pn-empty' }, pnIcon('drop', 'pn-i big'), el('b', { text: '미리보기엔 너무 큰 파일이에요.' }),
         el('p', { class: 'pn-fine', text: '내려받아서 보세요.' }),
@@ -1361,13 +1338,14 @@ function viewerPart(ctx: PartCtx): Part {
    *  `quiet` 면 «여는 중…» 을 안 띄운다 — 살아 있는 미리보기가 다시 펼 때 화면이 깜빡이지 않게(옛 그림이 새 그림이 올 때까지 남는다). */
   async function open(p2: string, fresh = false, quiet = false): Promise<void> {
     //  ⚠ **같은 파일을 다시 그리지 않는다** — 그리면 프레임이 새로 서서 PDF·시안이 맨 위로 튄다.
-    //   이 길로 오는 부름이 여럿이다(세션 알림·탭 전환·8초 틱). 진짜 다시 그릴 때(fresh)만 통과시킨다.
-    if (p2 && p2 === path && shown && !fresh && shownSrc === srcKey()) { paintBar(); return; }
-    path = p2;
+    //   이 길로 오는 부름이 여럿이다(세션 알림·탭 전환·기억·셸의 배달 신호). 진짜 다시 그릴 때(fresh)만 통과시킨다.
+    //   «받는 중»(opening)도 같은 파일이다 — 다 받기 전에 온 두 번째 부름이 fetch 를 한 번 더 띄우지 않게.
+    if (p2 && p2 === path && (shown || opening === p2) && !fresh && shownSrc === srcKey()) { paintBar(); return; }
+    path = p2; opening = p2;
     shownSrc = srcKey();
     if (!src) remember(p2);
     paintBar();
-    if (!p2) { shownStamp = ''; paintPicker(); return; }
+    if (!p2) { shownStamp = ''; paintEmpty(); return; }
     //  다시 펼 때 보던 자리를 지킨다 — 무대(그림·글)는 우리가 굴리므로 되돌릴 수 있다.
     //   프레임 안(PDF·시안)의 자리는 우리 것이 아니라 못 지킨다 → 그래서 아래 감시가 «다 쓴 뒤 한 번만» 편다.
     const keepTop = quiet && stage.scrollTop > 0 ? stage.scrollTop : 0;
@@ -1438,9 +1416,13 @@ function viewerPart(ctx: PartCtx): Part {
     //   제 미리보기를 넣어 둔다). 같은 파일이 화면마다 다르게 열리지 않도록 판정·렌더는 lib/file-preview
     //   한 자리가 쥔다(#1436) — 이 칸도 그 자리에 붙는다.
     const { buildFilePreview } = await import('../lib/file-preview.js');
+    //  크기는 HEAD 로 묻는다(#4135 — 목록을 더는 받지 않으므로 list 는 비어 있다). 렌더러의 대용량 사전 차단(MEDIA_MAX)이 이 값을 본다.
+    //   세션 파일(src)엔 안 묻는다 — 그 API 는 HEAD 에 몸통까지 흘린다(출처 주석).
+    const head = src ? null : await fetch(fileUrl(p2), { method: 'HEAD', headers: authHeaders(), cache: 'no-store' }).catch(() => null);
+    if (path !== p2) return;
     const out = await buildFilePreview({
       name: base(p2),
-      size: list.find((f) => f.path === p2)?.size,
+      size: Number(head?.headers.get('x-file-size') || '') || list.find((f) => f.path === p2)?.size,
       fetchView: () => fetch(fileUrl(p2), fetchOpts),
       fetchDownload: () => fetch(fileUrl(p2) + '&download=1', fetchOpts),
       cls: { img: 'pn-ed-img', pdf: 'pn-ed-pv' },   // 크기 규칙만 이 칸 것으로 덮는다(fp-* 가 기본)
@@ -1467,21 +1449,20 @@ function viewerPart(ctx: PartCtx): Part {
     //   slot 이 없는 옛 신호는 첫 뷰어가 받는다(그 판엔 뷰어가 하나뿐이었다).
     if (d.slot ? d.slot !== ctx.slot : ctx.slot !== 'editor') return;
     if (d.sid) { void go(d.path, { sid: String(d.sid), node: d.node ? String(d.node) : null }); return; }   // 세션 폴더의 파일
-    if (!list.some((f) => f.path === d.path)) void loadList();
     void go(d.path);
   };
   // ⚠ window 가 아니라 **이 곁칸**에서 듣는다 — 창에 달면 열려 있는 모든 세션 탭의 뷰어가 같이 갈아입는다.
   ctx.paneRoot().addEventListener(VIEWER_TO_EVT, onSend);
 
+  //  기억한 파일을 그대로 편다 — 그 사이 지워졌으면 open 이 404 를 받아 빈 화면으로 돌아간다(showFail).
   const openRemembered = (): void => {
     src = null;
-    const last = remembered();
-    void open(last && list.some((f) => f.path === last) ? last : '');
+    void open(remembered() || '');
   };
   //  ⚠ 세션이 안 바뀌었으면 아무것도 하지 않는다 — 알림이 같은 세션으로 다시 와도 파일을 다시 그리면 자리가 튄다.
   let lastSid = ctx.memKey();
-  //  ⚠ 목록이 오기 전에 신호로 이미 무언가를 폈으면(갓 만들어진 뷰어가 세션 파일을 받는 길) 기억으로 덮지 않는다.
-  void loadList().then(() => { if (!path && !src) openRemembered(); });
+  //  ⚠ 신호로 이미 무언가를 폈으면(갓 만들어진 뷰어가 세션 파일을 받는 길) 기억으로 덮지 않는다.
+  if (!path && !src) openRemembered();
   // 세션을 갈아 끼우면 그 세션이 펴 두었던 파일로 — 단 **고치는 중이면 건드리지 않는다**(저장 안 한 글을 뺏지 않는다).
   const offSess = ctx.onSession(() => {
     const k = ctx.memKey();
@@ -1526,17 +1507,10 @@ function viewerPart(ctx: PartCtx): Part {
 
   return {
     root,
-    tick: () => {
-      void loadList().then(() => {
-        if (!path) paintPicker();
-        paintBar();
-        //  옛 서버 폴백 — 매니페스트의 도장으로도 같은 판정을 한다(새 서버에선 HEAD 가 먼저 잡아 여기선 이미 같다).
-        //  ⚠ 자(floor)가 서버 헤더와 **같아야** 한다 — 다르면 아무 일 없이도 매 틱 «바뀌었다»가 된다(#762 실측).
-        const f = path ? list.find((x) => x.path === path) : null;
-        if (f) reopenIfChanged(f.mtime + ':' + f.size);
-      });
-    },
-    destroy: () => { offSess(); zoom.destroy(); pv.destroy(); window.clearInterval(watch); ctx.paneRoot().removeEventListener(VIEWER_TO_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
+    //  8초 틱에 할 일이 없다(#4135) — 목록을 안 그리고, 살아 있는 미리보기는 위 HEAD 감시(1.5초)가 맡는다. 종전엔 여기서
+    //  매니페스트를 받아 목록을 통째로 다시 그렸고(미리보기 전부 다시 받음), 그 요청이 서버의 AGENTS.md 재작성을 또 불렀다.
+    tick: () => { /* noop */ },
+    destroy: () => { offSess(); zoom.destroy(); window.clearInterval(watch); ctx.paneRoot().removeEventListener(VIEWER_TO_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
   };
 }
 
