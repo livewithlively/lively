@@ -36,7 +36,7 @@ import { deleteSource, canSeeSource } from "../v6/source-store.js";
 import { purgeDeleted } from "../v6/trash-store.js";
 import { auditOrgContent } from "../v6/content-audit.js";
 import { finishUpload } from "../ingest/upload-finish.js";   // #3787 D — 업로드 마무리는 브라우즈 라우트와 한 함수
-import { taskForProjectSession, taskKickoffPrompt } from "../v6/session-task.js";   // #4084 — 태스크에서 연 세션
+import { bindSessionTask, taskForProjectSession, taskKickoffPrompt } from "../v6/session-task.js";   // #4084 — 태스크에서 연 세션 · #4135 허브 「태스크에 붙이기」
 
 const MAX_UPLOAD = 1024 * 1024 * 1024; // 1GB (#1870 — terminal-files 와 동일해야 한다. receiveUpload 스트리밍이라 RAM 무관)
 const MAX_PREVIEW = 25 * 1024 * 1024; // 25MB — 이미지·PDF 인라인 미리보기 허용(텍스트는 클라가 별도 크기 가드)
@@ -519,6 +519,21 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const nodeId = String(b.node ?? "").trim();
     const invites = nodeId ? await validateInvites(b.invites, idOf(userOf(req))) : [];   // 실제 org 멤버만·요청자(owner) 제외·중복 제거
     res.json({ session: await launchSession(userOf(req), input, { nodeId, invites }) });
+  }));
+  // ── ②-a 세션을 태스크에 붙이기(#4135 허브 세션 위젯 「태스크에 붙이기」) — 이미 도는 세션에 이 프로젝트의 태스크를 잇는다.
+  //  잇기 규칙은 v6/session-task.ts bindSessionTask 그대로(세션 주인만 · 같은 프로젝트의 태스크만 · 잇는 순간 «진행 중»).
+  //  남의 세션·다른 프로젝트 태스크·없는 세션은 bindSessionTask 가 null 을 주고, 여기선 404 로 «못 이었다» 를 말한다.
+  app.post(`${prefix}/:id/sessions/:sid/task`, auth, wrap(async (req, res) => {
+    const { project } = await projBase(Number(req.params.id), req);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const taskIdRaw = Number(b.taskId ?? 0);
+    const task = Number.isInteger(taskIdRaw) && taskIdRaw > 0 ? await taskForProjectSession(project.id, taskIdRaw) : null;
+    if (!task) throw new HttpError(400, `태스크 #${b.taskId} 는 이 프로젝트의 태스크가 아닙니다`);
+    const sid = String(req.params.sid ?? "").trim();
+    const bound = await bindSessionTask({ sessionId: sid, owner: idOf(userOf(req)), taskId: task.id });
+    if (!bound) throw new HttpError(404, "이 세션에 태스크를 잇지 못했습니다 — 내 세션이 아니거나 이 프로젝트에 속하지 않습니다");
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, session_id: sid, task: bound });
   }));
 
   // ── ②-b 레포 provision — 입력 경로 확보(없으면 레지스트리 clone_url 로 clone) + 옵션 worktree(project/<id>/<repo>).

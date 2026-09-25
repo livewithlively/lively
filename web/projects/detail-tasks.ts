@@ -30,9 +30,20 @@ import { pjvGoTaskWorkspace, pjvRenameTask, pjvRowMore, pjvShowInlineSubtask } f
 // 태스크 섹션 — [태스크 N개][Closed 토글] 헤더 + 컬럼헤더 + 상태 그룹(할 일/진행 중/Closed). 클릭업식 리스트뷰.
 //  할 일·진행 중은 비어도 항상 표시(인라인 추가행). Closed(완료) 그룹은 기본 숨김 — 헤더의 Closed 토글로만 노출.
 //  fields = 커스텀 필드 정의(루트 프로젝트). 컬럼 헤더·각 행에 필드 셀을 끼우고 grid-template 을 동적으로.
-function pjvTasksSection(projectId, tasks, members, reload, fields) {
+//  opts(#4135 허브 위젯, 5판 시안 «프로젝트 탭 줄을 그대로 쓴다») — 같은 줄·같은 추가행을 위젯 크기에 맞춰 쓴다:
+//   chrome:false = card-head 없이(위젯 머리가 대신) · groups = 묶음을 호출자가 정한다({key,label,status,tasks,add}) — 없으면 상태 묶음
+//   cap[i] = i번째 묶음의 최대 줄 수(넘치면 «… N개 더» 줄 → onMore) · rowOpts = 줄 옵션(assigneeNames: 담당자 이름까지, 3칸 폭)
+interface PjvTasksSectionOpts {
+  chrome?: boolean;
+  groups?: Array<{ key: string; label: string; status: 'todo' | 'in_progress' | 'done'; tasks: any[]; add?: boolean }>;
+  cap?: number[];
+  onMore?: () => void;
+  rowOpts?: { assigneeNames?: boolean };
+}
+function pjvTasksSection(projectId, tasks, members, reload, fields, opts?: PjvTasksSectionOpts) {
   fields = fields || [];
-  const card = el('div', { class: 'card pjv-tasks-card', style: 'margin-bottom:18px' });
+  opts = opts || {};
+  const card = el('div', { class: 'card pjv-tasks-card' + (opts.chrome === false ? ' pjv-tasks-embedded' : ''), style: opts.chrome === false ? '' : 'margin-bottom:18px' });
   pjvInitNameResize(card, 'pjv:nameMin:task:' + projectId); // 이름칸 폭 드래그 저장/복원 — 프로젝트별(#483)
   pjvApplyHiddenCols(card, 'task'); // 숨긴 기본 컬럼 복원(#req)
   pjvApplyColWidths(card, 'task'); // 저장된 컬럼 폭 복원(#666)
@@ -54,6 +65,13 @@ function pjvTasksSection(projectId, tasks, members, reload, fields) {
         ' 를 눌러 이름을 적고 Enter — 첫 할 일을 추가하세요.'));
     }
     // 별도 컬럼헤더 행 없음 — 컬럼 라벨은 첫(맨 위) 그룹 헤더에 합친다(withCols).
+    if (opts.groups) {   // 호출자가 정한 묶음(허브 위젯) — 상태 버킷·Closed 토글과 무관하게 그대로 그린다
+      opts.groups.forEach((g, i) => {
+        body.append(pjvStatusGroup(projectId, g.key, g.tasks, members, reload, fields, i === 0,
+          { label: g.label, status: g.status, add: g.add !== false, cap: opts.cap ? opts.cap[i] : undefined, onMore: opts.onMore, rowOpts: opts.rowOpts }));
+      });
+      return;
+    }
     const buckets = { todo: [], in_progress: [], done: [] };
     const sep = pjvSubtaskMode.mode === 'separate';
     for (const t of tasks) {
@@ -92,10 +110,12 @@ function pjvTasksSection(projectId, tasks, members, reload, fields) {
   };
   syncSubBtn();
   subtaskBtn.onclick = (e) => { e.stopPropagation(); pjvSubtaskMenu(subtaskBtn, () => { syncSubBtn(); renderGroups(); }); };
-  card.append(el('div', { class: 'card-head' },
-    el('div', { class: 'pjv-tasks-head-left' }, el('h2', { text: '태스크' }), subtaskBtn),
-    el('div', { class: 'card-head-actions' },
-      closedBtn)));
+  if (opts.chrome !== false) {
+    card.append(el('div', { class: 'card-head' },
+      el('div', { class: 'pjv-tasks-head-left' }, el('h2', { text: '태스크' }), subtaskBtn),
+      el('div', { class: 'card-head-actions' },
+        closedBtn)));
+  }
   card.append(body);
   renderGroups();
   return card;
@@ -103,12 +123,19 @@ function pjvTasksSection(projectId, tasks, members, reload, fields) {
 
 // 상태 그룹 — head(캐럿·점·라벨·개수) + body(행들 + 인라인 추가행). 완료 그룹엔 추가행 없음.
 // withCols=true 면(첫 그룹) 별도 컬럼헤더 행 대신 이 그룹 헤더에 컬럼 라벨(담당자/마감일/우선순위+커스텀)을 합쳐 컬럼 위에 정렬한다.
-function pjvStatusGroup(projectId, key, list, members, reload, fields, withCols) {
-  const m = PJV_TASK_STATUS[key];
+//  gopts(#4135 허브) — label(묶음 이름) · status(추가행이 만들 상태 · 머리 점) · add(추가행 유무) · cap(최대 줄, 넘치면 «… N개 더» → onMore) · rowOpts.
+function pjvStatusGroup(projectId, key, list, members, reload, fields, withCols, gopts?: { label?: string; status?: string; add?: boolean; cap?: number; onMore?: () => void; rowOpts?: any }) {
+  const status = (gopts && gopts.status) || key;
+  const m = PJV_TASK_STATUS[status] || PJV_TASK_STATUS.todo;
   const body = el('div', { class: 'pjv-tgroup-body' });
-  for (const t of list) body.append(pjvTaskRow(projectId, t, members, reload, 0, fields));
+  const shown = gopts && gopts.cap != null ? list.slice(0, Math.max(0, gopts.cap)) : list;
+  for (const t of shown) body.append(pjvTaskRow(projectId, t, members, reload, 0, fields, gopts && gopts.rowOpts));
+  if (list.length > shown.length) {
+    body.append(el('button', { class: 'pjv-more-row', type: 'button', text: '… ' + (list.length - shown.length) + '개 더',
+      onclick: (e) => { e.stopPropagation(); if (gopts && gopts.onMore) gopts.onMore(); } }));
+  }
   const countEl = el('span', { class: 'pjv-tgroup-count', text: String(list.length) });
-  if (key !== 'done') body.append(pjvAddRow(projectId, key, members, reload, body, countEl, fields));
+  if (gopts ? gopts.add !== false : key !== 'done') body.append(pjvAddRow(projectId, status, members, reload, body, countEl, fields));
 
   // 태스크 상태 그룹 접힘도 새로고침에 유지(#req) — 프로젝트 스코프('p'+id 로 리스트 id 와 네임스페이스 분리). 기본 펼침.
   let gopen = pjvGrpOpenGet('p' + projectId, key);
@@ -119,8 +146,8 @@ function pjvStatusGroup(projectId, key, list, members, reload, fields, withCols)
     gcaret.setAttribute('aria-expanded', gopen ? 'true' : 'false'); body.hidden = !gopen;
     pjvGrpOpenSet('p' + projectId, key, gopen);
   };
-  const dot = pjvStatusIconStd(key, 'sm');
-  const labelEl = el('span', { class: 'pjv-tgroup-label', text: m.label });
+  const dot = pjvStatusIconStd(status, 'sm');
+  const labelEl = el('span', { class: 'pjv-tgroup-label', text: (gopts && gopts.label) || m.label });
 
   let head: any;
   if (withCols) {
@@ -263,7 +290,8 @@ function pjvAddRow(projectId, status, members, reload, body, countEl, fields) {
 }
 
 // 태스크 한 행 — [캐럿][상태점] 제목 [하위수] | 담당자 | 마감일 | 우선순위 | [⋯]. 하위는 중첩(상위만 하위 추가 가능).
-function pjvTaskRow(projectId, t, members, reload, depth, fields) {
+//  rowOpts(7번째, 가변인자 — 몽키패치 래퍼가 그대로 넘긴다): assigneeNames = 담당자 얼굴 옆에 이름까지(허브 3칸 폭, #4135).
+function pjvTaskRow(projectId, t, members, reload, depth, fields, rowOpts?: { assigneeNames?: boolean }) {
   depth = depth || 0;
   fields = fields || [];
   // 닫힌(완료) 하위는 Closed>하위태스크 토글 시에만 노출(클릭업 동형). separate 모드면 하위는 최상위 행으로 빠져 중첩 X.
@@ -296,7 +324,7 @@ function pjvTaskRow(projectId, t, members, reload, depth, fields) {
   const subBox = el('div', { class: 'pjv-trow-subs' });
   subBox.hidden = true;
   if (subs.length && depth < 4) {
-    for (const s of subs) subBox.append(pjvTaskRow(projectId, s, members, reload, depth + 1, fields));
+    for (const s of subs) subBox.append(pjvTaskRow(projectId, s, members, reload, depth + 1, fields, rowOpts));
     const toggle = () => {
       open = !open; caret.textContent = open ? '▾' : '▸';
       caret.setAttribute('aria-expanded', open ? 'true' : 'false'); subBox.hidden = !open;
@@ -360,7 +388,7 @@ function pjvTaskRow(projectId, t, members, reload, depth, fields) {
 
   const rowEl = el('div', { class: 'pjv-trow' },
     titleCell,
-    el('div', { class: 'pjv-tcell' }, pjvAssigneeControl(t, members, (p) => pjvSaveTask(t.id, p))),
+    el('div', { class: 'pjv-tcell' }, pjvAssigneeControl(t, members, (p) => pjvSaveTask(t.id, p), rowOpts && rowOpts.assigneeNames ? { names: true } : undefined)),
     el('div', { class: 'pjv-tcell' }, pjvDueControl(t, (p) => pjvPatchTask(t.id, p, reload))),
     el('div', { class: 'pjv-tcell' }, pjvPriorityControl(t, (p) => pjvPatchTask(t.id, p, reload))),
     ...fields.map((f) => el('div', { class: 'pjv-tcell pjv-fcell' }, pjvFieldControl(t, f, reload))),
