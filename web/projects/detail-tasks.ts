@@ -38,6 +38,7 @@ interface PjvTasksSectionOpts {
   groups?: Array<{ key: string; label: string; status: 'todo' | 'in_progress' | 'done'; tasks: any[]; add?: boolean }>;
   cap?: number[];
   onMore?: () => void;
+  noMore?: boolean;          // 넘쳐도 «… N개 더» 줄을 안 그린다(1×1 — 바닥 줄이 그 말을 한다)
   rowOpts?: { assigneeNames?: boolean };
 }
 function pjvTasksSection(projectId, tasks, members, reload, fields, opts?: PjvTasksSectionOpts) {
@@ -68,7 +69,7 @@ function pjvTasksSection(projectId, tasks, members, reload, fields, opts?: PjvTa
     if (opts.groups) {   // 호출자가 정한 묶음(허브 위젯) — 상태 버킷·Closed 토글과 무관하게 그대로 그린다
       opts.groups.forEach((g, i) => {
         body.append(pjvStatusGroup(projectId, g.key, g.tasks, members, reload, fields, i === 0,
-          { label: g.label, status: g.status, add: g.add !== false, cap: opts.cap ? opts.cap[i] : undefined, onMore: opts.onMore, rowOpts: opts.rowOpts }));
+          { label: g.label, status: g.status, add: g.add !== false, cap: opts.cap ? opts.cap[i] : undefined, onMore: opts.onMore, noMore: opts.noMore, rowOpts: opts.rowOpts }));
       });
       return;
     }
@@ -124,13 +125,13 @@ function pjvTasksSection(projectId, tasks, members, reload, fields, opts?: PjvTa
 // 상태 그룹 — head(캐럿·점·라벨·개수) + body(행들 + 인라인 추가행). 완료 그룹엔 추가행 없음.
 // withCols=true 면(첫 그룹) 별도 컬럼헤더 행 대신 이 그룹 헤더에 컬럼 라벨(담당자/마감일/우선순위+커스텀)을 합쳐 컬럼 위에 정렬한다.
 //  gopts(#4135 허브) — label(묶음 이름) · status(추가행이 만들 상태 · 머리 점) · add(추가행 유무) · cap(최대 줄, 넘치면 «… N개 더» → onMore) · rowOpts.
-function pjvStatusGroup(projectId, key, list, members, reload, fields, withCols, gopts?: { label?: string; status?: string; add?: boolean; cap?: number; onMore?: () => void; rowOpts?: any }) {
+function pjvStatusGroup(projectId, key, list, members, reload, fields, withCols, gopts?: { label?: string; status?: string; add?: boolean; cap?: number; onMore?: () => void; noMore?: boolean; rowOpts?: any }) {
   const status = (gopts && gopts.status) || key;
   const m = PJV_TASK_STATUS[status] || PJV_TASK_STATUS.todo;
   const body = el('div', { class: 'pjv-tgroup-body' });
   const shown = gopts && gopts.cap != null ? list.slice(0, Math.max(0, gopts.cap)) : list;
   for (const t of shown) body.append(pjvTaskRow(projectId, t, members, reload, 0, fields, gopts && gopts.rowOpts));
-  if (list.length > shown.length) {
+  if (list.length > shown.length && !(gopts && gopts.noMore)) {
     body.append(el('button', { class: 'pjv-more-row', type: 'button', text: '… ' + (list.length - shown.length) + '개 더',
       onclick: (e) => { e.stopPropagation(); if (gopts && gopts.onMore) gopts.onMore(); } }));
   }

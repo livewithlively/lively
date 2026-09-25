@@ -727,3 +727,10 @@ a.pjh-row-link.pjh-row-n:hover { color: var(--blue); }
 .pjh-tools { gap: 6px; margin-bottom: 2px; }
 .pjh-wf { font-size: 12.5px; }
 .pjh-wf .btn-sm { height: 28px; padding: 0 10px; font-size: 12.5px; font-weight: 700; border-radius: 8px; }
+/* 다듬기 2차(캡처 확인) — 할 일 원은 실선 · 타임라인 이름 칸 92px · 1×1 시각 안 잘림 · 세션 카드 메타 줄임표 · 1×1 «더» 는 바닥만 */
+.pjh-wb > .pjv-tasks-embedded .pjv-status-dot.sm { border-style: solid; border-color: var(--muted-3-line); }
+.pjh-wb > .pjv-tasks-embedded .pjv-status-dot.sm.inprog, .pjh-wb > .pjv-tasks-embedded .pjv-status-dot.sm.done { border-color: currentColor; }
+.pjh-lane-h, .pjh-lane-r { grid-template-columns: 92px repeat(var(--n, 7), minmax(0, 1fr)); }
+.pjh-ev-t { width: auto; min-width: 38px; white-space: nowrap; }
+.pjh-now-m > span:not(:last-child) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjh-now-m > span:last-child { flex: none; }

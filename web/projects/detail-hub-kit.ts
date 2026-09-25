@@ -14,6 +14,7 @@ export interface HubTasksListOpts {
   groups: Array<{ key: string; label: string; status: 'todo' | 'in_progress' | 'done'; tasks: any[]; add?: boolean }>;
   cap?: number[];
   onMore?: () => void;
+  noMore?: boolean;
   rowOpts?: { assigneeNames?: boolean };
   fields?: any[];
 }
