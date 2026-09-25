@@ -91,3 +91,36 @@ test("#9 세션 묶음 — 1×N 사용 중·최근 / 1행 한 묶음 / 2×2 이�
   assert.deepEqual(M.sessionGroupsFor(ss, 3, 1, live, has).map((g) => [g.label, g.sessions.length]), [["세션", 3]]);
   assert.deepEqual(M.sessionGroupsFor(ss, 2, 2, live, has).map((g) => [g.label, g.sessions.length]), [["태스크에 붙은 세션", 2], ["태스크 없는 세션", 1]]);
 });
+
+test("#10 본문·코멘트 — 안 읽은 수(내 것 제외) · 글자 수(기호·공백 제외)", () => {
+  assert.equal(M.unreadComments([{ id: 1, actor: "a" }, { id: 5, actor: "me" }, { id: 7, actor: "b" }], 3, "me"), 1);
+  assert.equal(M.unreadComments([], 0, "me"), 0);
+  assert.equal(M.bodyCharCount("# 제목\n\n본문 **굵게** [링크](x) `코드`"), "제목본문굵게링크x코드".length);
+});
+
+test("#11 폴더 — 최근 순 파일(폴더 제외 · mtime 내림 · 같으면 이름순)", () => {
+  const items = [{ name: "b", type: "file", mtime: 5 }, { name: "d", type: "dir", mtime: 9 }, { name: "a", type: "file", mtime: 5 }, { name: "c", type: "file", mtime: 7 }];
+  assert.deepEqual(M.recentFiles(items, 2).map((f) => f.name), ["c", "a"]);
+  assert.deepEqual(M.splitDirs(items).dirs.map((f) => f.name), ["d"]);
+});
+
+test("#12 타임라인 레인 — n일 축(오늘이 끝 · 첫날과 1일은 M/D · 주말·오늘 표식) · 사람×날 건수 · 점 단계", () => {
+  const days = M.laneDays(7, NOW);
+  assert.equal(days.length, 7); assert.equal(days[6].today, true); assert.equal(days[6].key, "2026-09-25");
+  assert.equal(days[0].label, "9/19"); assert.equal(days[1].label, "20");
+  assert.deepEqual(days.map((d) => d.weekend), [true, true, false, false, false, false, false], "9/19 토 · 9/20 일");
+  const acts = [
+    { author_person: "wj", committed_at: new Date(NOW - 3600e3).toISOString() },
+    { author_person: "wj", created_at: new Date(NOW - 86400e3).toISOString() },
+    { author_person: "sm", created_at: new Date(NOW - 86400e3 * 10).toISOString() },   // 축 밖
+    { author_person: "", created_at: new Date(NOW).toISOString() },                  // 사람 없음 → 무시
+  ];
+  const m = M.laneCounts(acts, days, ["sm", "wj"]);
+  assert.deepEqual([...m.keys()], ["sm", "wj"], "순서는 호출자가 준 대로, 기록 없는 사람도 order 에 있으면 남는다");
+  assert.deepEqual(m.get("wj"), [0, 0, 0, 0, 0, 1, 1]);
+  assert.deepEqual(M.laneCounts(acts, days).get("sm"), undefined, "order 없이 축 밖 기록만 있는 사람은 빠진다");
+  assert.deepEqual([0, 1, 2, 3, 4, 6, 7, 30].map(M.dotSize), [0, 1, 2, 2, 3, 3, 4, 4]);
+  assert.equal(M.feedDayLabel(NOW - 60e3, NOW), "오늘"); assert.equal(M.feedDayLabel(NOW - 86400e3, NOW), "어제"); assert.equal(M.feedDayLabel(NOW - 86400e3 * 3, NOW), "9/22");
+  assert.deepEqual(M.latestLane(acts), { person: "wj", day: "2026-09-25" });
+  assert.equal(M.countOn(acts, "2026-09-25"), 2); assert.equal(M.countSince(acts, NOW - 86400e3 * 2), 3);
+});
