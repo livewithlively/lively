@@ -71,10 +71,12 @@ export function ownerCounts(rows: readonly AllSessLike[] | null | undefined, q: 
 
 // ── #4233 안 A — 묶기 · 「지금 볼 것」 카드 ─────────────────────────────────────────────
 
-/** 묶기 기준. 도구줄의 [날짜 ⌄] 가 고른다(보기 탭을 더하지 않는다 — 원준 2026-09-25). */
-export type SessGroupBy = 'day' | 'project' | 'owner' | 'state';
+/** 묶기 기준. 도구줄의 [묶기 · 날짜 ⌄] 드롭다운이 고른다(보기 탭을 더하지 않는다 — 원준 2026-09-25).
+ *  'none' = 묶지 않음: 묶음 머리 없이 전부 최근 순 한 목록(원준 «안묶은 완전 raw 한 전체보기도»). */
+export type SessGroupBy = 'day' | 'project' | 'owner' | 'state' | 'none';
 export const SESS_GROUP_BYS: ReadonlyArray<{ key: SessGroupBy; label: string }> = [
   { key: 'day', label: '날짜' }, { key: 'project', label: '프로젝트' }, { key: 'owner', label: '사람' }, { key: 'state', label: '상태' },
+  { key: 'none', label: '묶지 않음' },
 ];
 
 /** 날짜 묶음 — 오늘 · 어제 · 이번 주(7일 안) · 이전. 경계는 이 기기의 자정이다(종전 bins.ts bucketOf 와 같은 자). */
@@ -94,9 +96,11 @@ export interface SessGroup<T> { key: string; rows: T[] }
  *  · 프로젝트: 가장 최근 활동 순. «프로젝트 없음»(null · 0 은 한 묶음, key '0')은 늘 맨 끝.
  *  · 사람: 나('me') 맨 앞, 나머지는 많은 순, 같으면 id 순(사람 고르개 ownerCounts 와 같은 순서).
  *  · 상태: stateRank 순(확인 필요 → 작업 완료 → 작업 중 → …). 순위를 모르는 상태는 맨 끝.
+ *  · 묶지 않음: 묶음 하나(key '')에 전부, 들어온 순서 그대로. 행이 없으면 묶음도 없다.
  */
 export function groupAllSess<T extends AllSessLike>(rows: readonly T[] | null | undefined, by: SessGroupBy, now: number,
   stateRank: (key: string) => number = () => 99): Array<SessGroup<T>> {
+  if (by === 'none') { const all = [...(rows || [])]; return all.length ? [{ key: '', rows: all }] : []; }
   const keyOf = (s: T): string => (by === 'day' ? dayBucket(Number(s.lastSeen) || 0, now)
     : by === 'project' ? String(Number(s.projectId) || 0)
     : by === 'owner' ? String(s.owner || '')
