@@ -399,19 +399,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let tasksDock: SessionTasksHandle | null = null;
   let fontStep = parseFontStep(localStorage.getItem(CHAT_FONT_KEY));   // 글자 크기(#2055) — 지난번에 고른 값
 
-  /** 이 세션은 대화창이 기본인가 — codex app-server 세션(pane 이 셸이라 터미널엔 말 걸 곳이 없다). */
-  // #2055 — 이 세션의 대화가 app-server 에서 도나(= 대화창이 본자리, pane 은 셸).
-  //  ⚠ **모를 때 터미널로 추정하지 않는다.** 서버가 chatMode 를 실어 주지만 직접 주소(#/s/<id>)로 연 첫 순간처럼
-  //   아직 행이 얇을 수 있다. 종전엔 그때 터미널로 열었다가 목록 갱신이 오면 대화로 되돌려서, 사람 눈에는
-  //   «터미널이 몇 초 뜨다가 대화창으로 넘어가는» 화면이 됐다(2026-08-28 상민님 신고).
-  //   codex 는 이 배포의 기본이 app-server 이므로(codex-chat-mode.ts), 모르면 codex 를 대화로 본다 —
-  //   틀렸다면(tmux 로 끈 배포) 행이 오는 즉시 아래 update() 가 터미널로 돌린다. 어느 쪽으로 틀려도 한 번만 바뀌는데,
-  //   **빈 셸을 먼저 보여주는 쪽이 사람에게 더 나쁘다**(말 걸 곳이 없는 화면이다).
+  /** 이 세션의 Codex 대화가 app-server에서 도나 — 실시간 층을 붙일 근거다. */
+  // #2055 — 이 세션의 대화가 app-server 에서 도는지 판정한다. 실시간 대화·승인 층은 이 값으로 붙고,
+  //  첫 화면은 아래 chatHome()이 별도로 정한다. 둘을 섞으면 코덱스의 앱 서버가 늦게 붙는 순간
+  //  사람이 고르지 않은 대화창 전환을 다시 만든다.
   const chatFirst = (): boolean => {
     const m = String(target.raw?.chatMode || '');
     if (m) return m === 'app-server';
     return String(target.raw?.harness || '') === 'codex';
   };
+  const isCodex = (): boolean => String(target.raw?.harness || '') === 'codex';
 
   // 대화창 ————
   const view: ChatView = createChatView(chatHost, {
@@ -443,7 +440,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    *   대화 런타임(#2439)을 켜서 작업·승인·슬래시가 다 오는데도 **claude 세션은 터미널로 열렸다**
    *   — chatMode 가 'tmux' 라 chatFirst() 가 거짓이었기 때문이다(2026-09-01 상민님 신고).
    *
-   *  판정: codex app-server 이거나, **서버가 이 세션을 chat 런타임으로 연다**(runtimeMode), 또는 **가입 온보딩의 리브 세션**이다.
+   *  판정: **코덱스는 터미널이 본자리**이고, 그 밖에는 서버가 이 세션을 chat 런타임으로 열었는지(runtimeMode),
+   *  또는 가입 온보딩의 리브 세션인지로 정한다. 코덱스의 app-server는 대화·승인 층을 제공하지만 첫 화면을 정하지 않는다.
    *  ⚠ 구 서버 행엔 runtimeMode 가 없다 → 종전 판정만 남는다(무회귀).
    *  (#1631, 원준 2026-09-14) «가입 온보딩 때 처음에 만들어 주는 세션은 대화로 보기 형식으로 기본» — 처음 설정이 끝나면 서버가 여는
    *   리브 킥오프 세션(src/org/liv/kickoff.ts LIV_SESSION_LABEL)은 터미널이 아니라 대화창으로 연다. 알아보는 자는 세션 이름이다
@@ -456,7 +454,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const LIV_CHAT_LABEL = '리브 — 대화';
   const livKickoff = (): boolean => String(target.label || '') === LIV_KICKOFF_LABEL;
   const livChat = (): boolean => String(target.label || '') === LIV_CHAT_LABEL;
-  const chatHome = (): boolean => chatFirst() || String(target.raw?.runtimeMode || '') === 'chat' || livKickoff() || livChat() || !!opts.chatHome;
+  const chatHome = (): boolean => !isCodex() && (chatFirst() || String(target.raw?.runtimeMode || '') === 'chat' || livKickoff() || livChat() || !!opts.chatHome);
 
   // 하네스·모델·추론강도 바꾸기 — 홈 입력창과 같은 서버 카탈로그를 쓴다(목록 두 벌 금지).
   // 런타임 명령이 확인된 축은 POST …/runtime, 나머지는 POST …/handoff 로 같은 작업 자리의 새 프로세스를 연다.
@@ -894,10 +892,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //   터미널은 셸을 쓰러 가는 곳이다. 같은 항목에 다른 뜻을 담으면서 같은 문구를 쓰면 사람이 헤맨다.
       rows.push(mode === 'term'
         ? row(chatFirst() ? '대화로 보기' : '대화로 보기 (베타)',
-          chatFirst() ? '이 세션은 대화창이 본자리예요 — Codex 와 여기서 주고받습니다' : '터미널 대신 대화창으로 — 표시가 어긋나면 터미널로 돌아오세요',
+          chatFirst() ? 'Codex 응답과 승인은 대화창에서도 확인할 수 있어요' : '터미널 대신 대화창으로 — 표시가 어긋나면 터미널로 돌아오세요',
           () => { modeChosen = true; setMode('chat'); })
         : row('터미널로 보기',
-          chatFirst() ? '같은 작업 폴더의 셸이에요 — 대화는 여기서 말고 대화창에서 합니다' : '승인 대화상자·로그인처럼 터미널이 맞는 순간이 있어요',
+          chatFirst() ? '같은 작업 폴더의 셸을 엽니다 — 대화창의 응답과 승인도 계속 확인할 수 있어요' : '승인 대화상자·로그인처럼 터미널이 맞는 순간이 있어요',
           () => { modeChosen = true; setMode('term'); }));
     }
     rows.push(row('목차', '이 세션에 보낸 질문 목록 — 누르면 그 자리로', () => openIndex()));
@@ -1979,10 +1977,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     }
   });
 
-  // 기본 화면(#2055) — **codex app-server 세션은 대화가 기본**이다. 그 세션의 pane 은 셸이라(대화는 대화창이
-  //  전담한다) 터미널로 열면 사람이 **말 걸 곳이 없는 화면**을 먼저 본다 — 실제로 그렇게 헤맸다.
-  //  나머지는 종전 그대로 터미널이 기본이다(2026-08-18 지시: 대화창이 미완성인 동안은 터미널이 정답).
-  //  판정 근거는 세션 행의 chatMode — 서버가 '이 세션의 대화는 app-server 가 돈다'고 알려 주는 값이다.
+  // 기본 화면 — 코덱스를 포함해 터미널이 기본이다. Codex app-server는 대화·승인 층을 계속 제공하되,
+  //  사용자가 보는 첫 화면을 대화로 강제하지 않는다. 나머지 대화 런타임·리브 세션의 예외는 chatHome()에 둔다.
   //  ★ #3847 — **«모른다» 는 세션은 터미널로 열지 않는다.** 매니지드 중계가 tmux 를 못 보면 서버는 DB desired
   //   행을 observed:false 로 내보낸다(#2544 — «죽었다» 가 아니라 «모른다»). 그 행엔 restorable 이 없어 이 화면은
   //   «살아 있다» 로 읽고 터미널을 얹었고, 프레임은 곧 «중단됨» 배너를 띄웠다 — 사람이 본 것은 그 배너뿐이었다.
@@ -2017,7 +2013,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       const hadLive = !!live;
       ensureLive();
       ensureTasksDock();   // 열 때는 행이 얇아 runtimeMode 를 몰랐을 수 있다(방금 만든 세션)
-      if (!hadLive && live && !modeChosen && mode === 'term') setMode('chat');
+      if (!hadLive && live && !modeChosen && mode === 'term' && chatHome()) setMode('chat');
       //  ★ #2439 — 열 때는 행이 얇아 runtimeMode 를 몰랐을 수 있다(방금 만든 세션). 그 값이 지금 왔고
       //   대화가 본자리라면 그때 대화로 옮긴다(사람이 직접 고른 뒤에는 건드리지 않는다).
       if (!modeChosen && mode === 'term' && chatHome()) setMode('chat');
