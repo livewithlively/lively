@@ -44,7 +44,7 @@ async function tmpPair(): Promise<{ dir: string; src: string; dest: string }> {
 function localDeps(log: string[], over: Partial<ReturnDeps> = {}): ReturnDeps {
   return {
     exists: async (abs) => !!(await fs.stat(abs).catch(() => null)),
-    rename: (a, b) => fs.rename(a, b),
+    link: (a, b) => fs.link(a, b),
     copyFile: (a, b) => fs.copyFile(a, b),
     unlink: (a) => fs.unlink(a),
     memberMv: async (u, a, b) => { log.push(`mv:${u}:${path.basename(path.dirname(a))}->${path.basename(path.dirname(b))}`); },
@@ -81,6 +81,17 @@ test("#4302 원래 자리에 그 사이 다른 파일이 생겼으면 덮지 않
   assert.equal(await fs.readFile(src, "utf8"), "NEW");
   assert.equal(await fs.readFile(dest, "utf8"), "OLD");
   assert.deepEqual(log, []);
+});
+
+test("#4302 검사 뒤 그 자리에 파일이 생겨도(경합) 덮지 않는다 — link 가 EEXIST 로 막는다", async () => {
+  const { src, dest } = await tmpPair();
+  await fs.writeFile(dest, "OLD");
+  //  exists 는 «비었다» 고 답했는데 옮기기 직전에 누가 같은 이름을 올렸다.
+  const deps = localDeps([], { exists: async () => { await fs.writeFile(src, "NEW"); return false; } });
+  const r = await returnAttachmentsToPersonal([mv({ srcAbs: src, destAbs: dest, how: "rename" })], deps);
+  assert.deepEqual(r, { returned: 0, failed: 1, left: ["personal:m1/uploads/a.png"] });
+  assert.equal(await fs.readFile(src, "utf8"), "NEW");
+  assert.equal(await fs.readFile(dest, "utf8"), "OLD");
 });
 
 test("#4302 copy 로 옮긴 첨부(원본이 남아 있다)는 사본만 걷는다", async () => {

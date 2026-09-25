@@ -160,29 +160,59 @@ export function shellProjectFromPrompt(promptRaw: string | null | undefined): Sh
   return { name, description, nameSource: "rule" };
 }
 
+/** createShellProject 가 부르는 저장소 — 테스트가 갈아 끼운다. */
+export interface ShellCreateDeps {
+  createProject(spec: ShellProjectSpec, actor: string): Promise<{ id: number }>;
+  ensureAgentsMd(id: number): Promise<unknown>;
+  getProjectRow(id: number): Promise<{ folder?: string | null; name?: string | null } | null | undefined>;
+  deleteProject(id: number, actor: string): Promise<unknown>;
+}
+
+const shellCreateDeps: ShellCreateDeps = {
+  // ⚠ dedupe:false — 이름이 임시값("새 작업")이라 서로 같아서, 켜 두면 30초 안에 연 두 세션이 **한 프로젝트를 공유**한다
+  //  (2026-08-25 dev 실측: 빈 세션과 슬래시 세션이 project/2009 를 함께 받았다). 세션마다 자기 작업면이어야 한다.
+  //  name_source(#2031) — 이름을 **누가 지었나**의 표시다. 'rule'(기계값)인 프로젝트만 그 세션이 첫 턴에
+  //  project_rename_v6 로 한 번 다듬을 수 있다. #3778 부터 사람이 새 작업 창에서 이름을 지으면 'human' 이
+  //  와서 그 걸쇠에 막힌다 — 그래서 여기서 못 박지 않고 **spec 이 들고 온 값을 그대로 쓴다**.
+  createProject: (spec, actor) => createProject(
+    { name: spec.name, description: spec.description, dedupe: false, name_source: spec.nameSource }, { actor, source: "web" }),
+  ensureAgentsMd,
+  getProjectRow,
+  deleteProject: (id, actor) => deleteProject(id, { actor, source: "web" }),
+};
+
 /**
  * 껍데기 프로젝트를 실제로 만들고 **cwd 로 쓸 canonical 폴더**까지 확보한다(폴더·AGENTS.md·folder 컬럼).
  *  실패는 null — 세션 생성 자체를 막지 않는다(종전대로 개인 루트에서 열리고, 훅이 다음 턴에 붙인다).
+ *  #4302 — 행을 만든 **뒤에** 폴더에서 실패하면 그 행을 지우고 null. 종전엔 null 만 돌려줘서 세션은 개인 루트에서
+ *   열리고(그 세션의 첫 훅이 프로젝트를 **또** 만든다) 폴더 없는 행이 그대로 남았다 — 세션이 이 프로젝트에 선 적이 없다.
  */
 export async function createShellProject(
-  spec: ShellProjectSpec, actor: string,
+  spec: ShellProjectSpec, actor: string, deps: ShellCreateDeps = shellCreateDeps,
 ): Promise<{ id: number; folder: string; name: string | null } | null> {
+  let createdId: number | null = null;
+  const undo = async (): Promise<void> => {
+    if (createdId === null) return;
+    await deps.deleteProject(createdId, actor)
+      .catch((e) => logger.warn({ projectId: createdId, err: (e as Error)?.message ?? e }, "[first-prompt-project] 반쯤 만든 껍데기 지우기 실패(비치명)"));
+  };
   try {
     // ⚠ dedupe:false — 이름이 임시값("새 작업")이라 서로 같아서, 켜 두면 30초 안에 연 두 세션이 **한 프로젝트를 공유**한다
     //  (2026-08-25 dev 실측: 빈 세션과 슬래시 세션이 project/2009 를 함께 받았다). 세션마다 자기 작업면이어야 한다.
     //  name_source(#2031) — 이름을 **누가 지었나**의 표시다. 'rule'(기계값)인 프로젝트만 그 세션이 첫 턴에
     //  project_rename_v6 로 한 번 다듬을 수 있다. #3778 부터 사람이 새 작업 창에서 이름을 지으면 'human' 이
     //  와서 그 걸쇠에 막힌다 — 그래서 여기서 못 박지 않고 **spec 이 들고 온 값을 그대로 쓴다**.
-    const project = await createProject(
-      { name: spec.name, description: spec.description, dedupe: false, name_source: spec.nameSource }, { actor, source: "web" });
+    const project = await deps.createProject(spec, actor);
+    createdId = project.id;
     // 폴더·AGENTS.md 확보 + project.folder 확정(resolveProjectBase) — 이게 있어야 cwd 로 쓸 수 있다.
-    await ensureAgentsMd(project.id);
-    const row = await getProjectRow(project.id);
+    await deps.ensureAgentsMd(project.id);
+    const row = await deps.getProjectRow(project.id);
     const folder = row?.folder ?? "";
-    if (!folder) return null;                                   // 폴더를 못 만들었으면 cwd 로 쓸 수 없다
+    if (!folder) { await undo(); return null; }                 // 폴더를 못 만들었으면 cwd 로 쓸 수 없다
     return { id: project.id, folder, name: row?.name ?? null };
   } catch (e) {
     console.warn("[first-prompt-project] 첫 지시 프로젝트 선생성 실패 — 개인 루트에서 연다:", (e as Error)?.message ?? e);
+    await undo();
     return null;
   }
 }

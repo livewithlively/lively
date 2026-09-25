@@ -207,7 +207,9 @@ export async function relocateAttachmentsToProject(o: {
 
 export interface ReturnDeps {
   exists(abs: string, osUser: string | null): Promise<boolean>;
-  rename(from: string, to: string): Promise<void>;
+  /** 같은 장치 안 **덮지 않는** 옮기기의 앞 절반 — 대상이 있으면 EEXIST 로 실패한다(rename 은 조용히 덮는다). */
+  link(from: string, to: string): Promise<void>;
+  /** 장치가 다를 때 — 역시 덮지 않는다(COPYFILE_EXCL). */
   copyFile(from: string, to: string): Promise<void>;
   unlink(abs: string): Promise<void>;
   memberMv(osUser: string, from: string, to: string): Promise<void>;
@@ -227,7 +229,7 @@ function defaultReturnDeps(): ReturnDeps {
   };
   return {
     exists: async (abs, osUser) => osUser ? !!(await memberStat(osUser, abs)) : !!(await fsp.stat(abs).catch(() => null)),
-    rename: (a, b) => fsp.rename(a, b),
+    link: (a, b) => fsp.link(a, b),
     copyFile: (a, b) => fsp.copyFile(a, b, fs.constants.COPYFILE_EXCL),
     unlink: (a) => fsp.unlink(a),
     memberMv,
@@ -259,9 +261,15 @@ export async function returnAttachmentsToPersonal(moves: RelocatedAttachment[], 
         await deps.memberWriteBack(m.osUser as string, m.destAbs, m.srcAbs);
         await deps.unlink(m.destAbs).catch(() => { /* 사본이 남을 뿐 */ });
       } else {
-        //  같은 장치면 rename 한 번. 장치가 다르면(copy 였는데 원본이 그새 사라졌다) 복사 뒤 사본을 걷는다.
-        try { await deps.rename(m.destAbs, m.srcAbs); }
-        catch { await deps.copyFile(m.destAbs, m.srcAbs); await deps.unlink(m.destAbs).catch(() => { /* 사본이 남을 뿐 */ }); }
+        //  rename 이 아니라 link → unlink — rename 은 그 사이 생긴 대상을 **조용히 덮는다**(위 exists 는 검사일 뿐 잠금이 아니다).
+        //   link 는 대상이 있으면 EEXIST 로 실패하므로 «덮지 않는다» 가 원자적으로 지켜진다. 장치가 다르면(EXDEV — copy 였는데
+        //   원본이 그새 사라졌다) COPYFILE_EXCL 복사로. 둘 다 실패하면 아래 catch 가 «못 돌려놓음» 으로 센다.
+        try { await deps.link(m.destAbs, m.srcAbs); }
+        catch (e) {
+          if ((e as NodeJS.ErrnoException)?.code === "EEXIST") throw e;
+          await deps.copyFile(m.destAbs, m.srcAbs);
+        }
+        await deps.unlink(m.destAbs).catch(() => { /* 링크·사본이 하나 더 남을 뿐 — 원래 자리는 섰다 */ });
       }
     } catch (e) {
       logger.warn({ err: e, from: m.from, to: m.to }, "[attach-relocate] 첨부 되돌리기 실패 — 프로젝트 폴더에 남는다");
@@ -270,6 +278,9 @@ export async function returnAttachmentsToPersonal(moves: RelocatedAttachment[], 
     }
     returned++;
     await deps.reactivate(m.from).catch((e) => logger.warn({ err: e, ref: m.from }, "[attach-relocate] 개인 좌표 자료 되살리기 실패(비치명)"));
+    //  프로젝트 좌표 내리기는 **기다리지 않는다** — 등록(ingest)이 큰 파일 본문 추출로 초 단위일 수 있고, 그동안 사람은
+    //   오류 응답을 기다린다. 그 사이 프로젝트 행이 먼저 지워져도 잃는 것은 없다: 파일은 이미 개인 자리로 돌아왔고,
+    //   남는 것은 지워진 프로젝트를 가리키는 자료 행 하나가 잠깐 active 인 것뿐이다(프로젝트가 없으니 어느 자료함에도 안 뜬다).
     void m.sync.done.then(() => deps.retire(m.to))
       .catch((e) => logger.warn({ err: e, ref: m.to }, "[attach-relocate] 프로젝트 좌표 자료 내리기 실패(비치명)"));
   }
