@@ -102,7 +102,7 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
       const line = el('div', { class: 'pjh-now-l', text: v.live ? '마지막 줄을 읽는 중…' : (v.label) });
       const meta = el('div', { class: 'pjh-now-m' }, hubIcon('monitor', 12), el('span', { text: (first.node ? (first.node.name || first.node.id) : '중앙') + ' · ' + v.label + (sessionLastActivity(first) ? ' · ' + relTime(new Date(sessionLastActivity(first)).toISOString()) : '') }),
         el('span', { style: 'margin-left:auto' }, enterBtn(first)));
-      body.append(el('div', { class: 'pjh-now' },
+      body.append(el('div', { class: 'pjh-now' + (v.key === 'waiting' ? ' wait' : v.live ? ' live' : '') },
         el('div', { class: 'pjh-now-t' }, sessDot(v), el('span', { class: 'pjh-sr-n', text: first.label || first.id }), personFace(first.owner, 'pjv-ava', memberName(first.owner))),
         line, meta));
       if (v.live) lastLine(first).then((t) => { line.textContent = t || v.label; });

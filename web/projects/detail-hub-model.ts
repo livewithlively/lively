@@ -186,8 +186,7 @@ export function laneDays(n: number, nowMs: number): LaneDay[] {
   const t = new Date(nowMs);
   for (let i = n - 1; i >= 0; i--) {
     const d = new Date(t.getFullYear(), t.getMonth(), t.getDate() - i);   // 달력 산술 — 서머타임 날에도 하루가 겹치거나 빠지지 않는다
-    const first = i === n - 1 || d.getDate() === 1;
-    out.push({ key: dayKey(d.getTime()), label: first ? (d.getMonth() + 1) + '/' + d.getDate() : String(d.getDate()), weekend: d.getDay() === 0 || d.getDay() === 6, today: i === 0 });
+    out.push({ key: dayKey(d.getTime()), label: i === 0 ? '오늘' : (d.getMonth() + 1) + '/' + d.getDate(), weekend: d.getDay() === 0 || d.getDay() === 6, today: i === 0 });
   }
   return out;
 }

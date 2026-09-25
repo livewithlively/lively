@@ -113,7 +113,7 @@ test("#11 폴더 — 최근 순 파일(폴더 제외 · mtime 내림 · 같으�
 test("#12 타임라인 레인 — n일 축(오늘이 끝 · 첫날과 1일은 M/D · 주말·오늘 표식) · 사람×날 건수 · 점 단계", () => {
   const days = M.laneDays(7, NOW);
   assert.equal(days.length, 7); assert.equal(days[6].today, true); assert.equal(days[6].key, "2026-09-25");
-  assert.equal(days[0].label, "9/19"); assert.equal(days[1].label, "20");
+  assert.equal(days[0].label, "9/19"); assert.equal(days[1].label, "9/20"); assert.equal(days[6].label, "오늘");
   assert.deepEqual(days.map((d) => d.weekend), [true, true, false, false, false, false, false], "9/19 토 · 9/20 일");
   const acts = [
     { author_person: "wj", committed_at: new Date(NOW - 3600e3).toISOString() },
