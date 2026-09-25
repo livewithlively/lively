@@ -648,6 +648,15 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 /* 빈 묶음 한 줄 · «묶음을 정해 주세요» 카드는 이름을 한 단계 흐리게(#1631 그대로). */
 .v2-ksp-empty { margin: 0; padding: 4px 8px 6px; font-size: 11.5px; color: var(--muted); white-space: normal; }
 .v2-ksp-fix .v2-ksp-t .n { color: var(--muted); }
+/* #4233 안 1 — [프로젝트] 사이드바를 위키와 같은 부품으로(고정 줄 · 이름표 · 카드). 이름표는 최상위 폴더라 누를 수 있다(그 폴더 보드). */
+button.v2-kedit { border: 0; background: none; font-family: inherit; line-height: inherit; cursor: pointer; }
+.v2-pgroup a.n { color: inherit; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-pgroup a.n:hover { color: var(--blue); }
+.v2-pgroup a.n:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-radius: 4px; }
+.v2-pgroup.on a.n { color: var(--blue); }
+.v2-pcard > .v2-ksp-h.on { background: var(--bg-punch); box-shadow: inset 0 0 0 1px var(--line-net); }
+.v2-pfav .v2-ptl-ic { stroke: var(--muted-2); }
+.v2-pfav.on .v2-ptl-ic { stroke: var(--blue); }
 /* ── #3830 맥락 관리 — 이 앱에 있는 동안만 사이드바 열을 접는다 ──────────────────
    원준 2026-09-09: *"맥락관리 앱으로 들어간 다음에도 사이드바가 보이는데 굳이 필요가 없을 것 같아 …
     대신 뒤로가기 앞으로가기 검색 창은 전체 가로 다 차지하게 맨 상단에(슬랙처럼)."*
