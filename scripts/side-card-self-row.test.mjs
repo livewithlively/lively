@@ -104,8 +104,15 @@ if (typeof projCardRows !== "function") {
 
   const at = SIDE.indexOf("function appListKids(");
   const list = at < 0 ? "" : code(SIDE.slice(at, SIDE.indexOf("\n}\n", at)));
+  //  #4233 — 날짜 축의 줄 세우기는 sessAxisKids · dayCard 로 옮겨 갔다(격리 리뷰: appListKids 만 보면 이 가드가 아무것도 안 본다).
+  //   날짜 카드(dayCard)는 받은 줄을 거르지 않고, projCardRows 는 sessAxisKids 안에서 **자기 화면 판정 한 번**에만 쓴다
+  //   (고정한 프로젝트 카드 재료를 가르는 데만 — 날짜 카드 재료는 lib/home-pins planSessAxis 가 되돌려 준다. 값 검증은 home-pins P1).
+  const sx = code(SIDE.slice(SIDE.indexOf("function sessAxisKids("), SIDE.indexOf("\n}\n", SIDE.indexOf("function sessAxisKids("))));
+  const dcAt = SIDE.indexOf("function dayCard(");
+  const dc = dcAt < 0 ? "" : code(SIDE.slice(dcAt, SIDE.indexOf("\n}\n", dcAt)));
 
-  check(list.length > 0 && !/projCardRows/.test(list),
+  check(list.length > 0 && !/projCardRows/.test(list) && dc.length > 0 && !/projCardRows|\.filter\(/.test(dc)
+    && sx.length > 0 && (sx.match(/projCardRows/g) || []).length === 1 && /planSessAxis\(shown, projPinnedId, \(r\) => projCardRows\(\[r\]\)\.length === 0\)/.test(sx),
     "E9 ★ 날짜 축(묶지 않은 목록)은 거르지 않는다 — 거기엔 카드도 [→] 도 없어 그 줄이 곧 그 화면으로 돌아가는 길이다",
     "appListKids 가 날짜 축에서도 걷고 있다");
 

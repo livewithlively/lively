@@ -64,3 +64,26 @@ export function splitSessAxis<T extends PinRowLike>(rows: readonly T[] | null | 
   }
   return { pinnedRows, pinnedProjRows, dated };
 }
+
+/**
+ * 세션별 축의 그림 설계 — 「고정」 층과 날짜 카드로 나눈다 (#4233 격리 리뷰: 이 맞춤이 화면 코드 안에 있어 시험이 비어 있었다).
+ *  · pinRows — 「고정」 세션 카드에 설 줄: 고정한 세션(고정한 프로젝트 밖) + 고정한 프로젝트의 **자기 화면** 줄 중 사람이 꽂은 것.
+ *  · cardRows — 고정한 프로젝트 카드에 들어갈 줄. 그 프로젝트 자기 화면 줄은 넣지 않는다(#3870 — 카드의 [→] 가 그 문이다).
+ *  · dated — 나머지 전부(고정 안 한 자기 화면 줄 포함)를 시간축 순서 그대로 묶음 이름의 이어진 구간마다. 자기 화면 줄은
+ *    **거르지 않는다** — 세션별 축에서 그 줄을 걷으면 그 화면으로 돌아갈 길이 없어진다(#3870 E9).
+ *  selfRow 는 «이 줄이 그 프로젝트 자신의 화면인가»(부르는 쪽이 sess-fold 의 잣대로 준다).
+ */
+export function planSessAxis<T extends PinRowLike>(rows: readonly T[] | null | undefined, isProjPinned: (id: number) => boolean, selfRow: (r: T) => boolean): {
+  pinRows: T[]; cardRows: T[]; dated: Array<{ group: string; rows: T[] }>;
+} {
+  const all = [...(rows || [])];
+  const cut = splitSessAxis(all, isProjPinned);
+  const cardRows = cut.pinnedProjRows.filter((r) => !selfRow(r));
+  const selfRows = cut.pinnedProjRows.filter((r) => selfRow(r));
+  const pinRows = [...cut.pinnedRows, ...selfRows.filter((r) => r.pinned)];
+  if (!selfRows.length) return { pinRows, cardRows, dated: cut.dated };
+  //  고정 안 한 자기 화면 줄은 시간축이 준 자리로 돌아간다 — 원래 순서를 지키려고 전체에서 다시 거른다.
+  const upTop = new Set<T>([...pinRows, ...cardRows]);
+  const back = all.filter((r) => !upTop.has(r));
+  return { pinRows, cardRows, dated: splitSessAxis(back, () => false).dated };
+}
