@@ -48,7 +48,7 @@ test("#5 마감 판정 — 이번 주 = 오늘부터 7일 안(지난 것 포함,
   assert.equal(M.overdueCount(ts, NOW), 1);
 });
 
-test("#6 크기별 묶음 — 1×1 내 것·열림 / 2×1 이번 주 마감 / 그 밖 진행 중·할 일(완료는 어디에도 없다)", () => {
+test("#6 크기별 묶음 — 1×1 내 것·열림 / 2×1 이번 주 마감 / 3×1 열림 한 묶음 / 그 밖 진행 중·할 일(완료는 어디에도 없다)", () => {
   const ts = [T(1, "in_progress", { assignee: "me" }), T(2, "todo", { assignee: "you" }), T(3, "todo", { assignee: "me", due_date: d(1) }), T(4, "done", { assignee: "me" })];
   const g11 = M.taskGroupsFor(ts, 1, 1, M.TASKS_PREF_DEFAULT, "me", NOW);
   assert.equal(g11.length, 1); assert.equal(g11[0].label, "내 것 · 열림"); assert.deepEqual(g11[0].tasks.map((t) => t.id), [1, 3]);
@@ -58,15 +58,18 @@ test("#6 크기별 묶음 — 1×1 내 것·열림 / 2×1 이번 주 마감 / �
   assert.equal(g21[0].label, "이번 주 마감"); assert.deepEqual(g21[0].tasks.map((t) => t.id), [3]);
   const g13 = M.taskGroupsFor(ts, 1, 3, M.TASKS_PREF_DEFAULT, "me", NOW);
   assert.deepEqual(g13.map((g) => g.label), ["진행 중", "할 일"]); assert.deepEqual(g13[1].tasks.map((t) => t.id), [2, 3]);
+  const g31 = M.taskGroupsFor(ts, 3, 1, M.TASKS_PREF_DEFAULT, "me", NOW);
+  assert.equal(g31.length, 1); assert.equal(g31[0].label, "열림"); assert.deepEqual(g31[0].tasks.map((t) => t.id), [1, 2, 3], "3×1 은 한 묶음, 진행 중 먼저");
   const gNone = M.taskGroupsFor(ts, 2, 2, { group: "none", filter: "mine", col: "assignee" }, "me", NOW);
   assert.equal(gNone.length, 1); assert.deepEqual(gNone[0].tasks.map((t) => t.id), [1, 3]);
-  for (const g of [...g11, ...g21, ...g13, ...gNone]) assert.ok(g.tasks.every((t) => t.status !== "done"), "완료는 안 그린다");
+  for (const g of [...g11, ...g21, ...g13, ...g31, ...gNone]) assert.ok(g.tasks.every((t) => t.status !== "done"), "완료는 안 그린다");
 });
 
 test("#7 바닥 줄 글 — 1×1 «… N개 더», 1×N 마감 지남·완료 접힘, 2×1 이번 주, 그 밖 열림·마감 지남", () => {
   const ts = [T(1, "todo", { due_date: d(-3) }), T(2, "todo"), T(3, "todo"), T(4, "done")];
   assert.equal(M.tasksFootText(ts, 1, 1, 2, NOW), "… 1개 더");
   assert.equal(M.tasksFootText(ts, 1, 1, 3, NOW), "열림 3");
+  assert.equal(M.tasksFootText(ts, 1, 1, 1, NOW, 18), "… 17개 더", "1×1 «더» 는 그 묶음(내 것·열림) 기준");
   assert.equal(M.tasksFootText(ts, 1, 3, 3, NOW), "마감 지남 1 · 완료 1 는 접힘");
   assert.equal(M.tasksFootText(ts, 2, 1, 1, NOW), "이번 주 마감 1 · 마감 지남 1");
   assert.equal(M.tasksFootText(ts, 3, 2, 3, NOW), "열림 3 · 마감 지남 1 · 완료 1 는 접힘");

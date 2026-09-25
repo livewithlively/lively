@@ -118,5 +118,5 @@ export const fillTasks: Fill = (ctx, f, body, foot, sub, acts) => {
     body.append(el('div', { class: 'pjh-stat', text: '태스크 목록을 그릴 수 없습니다(공장 없음).' }));
   }
 
-  foot.append(footText(tasksFootText(tasks, w, h, shown, now)), btn('태스크', 'btn-ghost', open));
+  foot.append(footText(tasksFootText(tasks, w, h, shown, now, groups.reduce((a, g) => a + g.tasks.length, 0))), btn('태스크', 'btn-ghost', open));
 };

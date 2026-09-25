@@ -35,11 +35,11 @@ export function taskColsFor(w: number, pref: TasksViewPref): TaskColKey[] {
   return [...TASK_COLS];
 }
 
-// ── 줄 예산 — 위젯 한 칸 260px(행 간격 16). 머리 30 · 바닥 34 · 안쪽 여백 28 · 간격 20 ≈ 112px 을 빼고, 묶음 하나에 머리 28 + 「＋ 태스크」 30.
-//  줄 하나 33px(허브 안 압축 — 프로젝트 탭 37px 보다 작다, 37-projects-hub.css). 최소 1줄.
-export const HUB_ROW_PX = 33;
-export const HUB_GROUP_PX = 28 + 30;
-export const HUB_CHROME_PX = 112;
+// ── 줄 예산 — 위젯 한 칸 260px(행 간격 16). 머리 30 · 바닥 34 · 안쪽 여백 28 · 간격 20 ≈ 114px(실측 1×1 몸통 146px)을 빼고,
+//  묶음 하나에 머리 24 + 「＋ 태스크」 28. 줄 하나 31px(허브 안 압축 — 프로젝트 탭 37px 보다 작다, 37-projects-hub.css). 최소 1줄.
+export const HUB_ROW_PX = 31;
+export const HUB_GROUP_PX = 24 + 28;
+export const HUB_CHROME_PX = 114;
 export function rowsBudget(h: number, groups: number, extraPx = 0): number {
   const total = Math.max(1, h) * 276 - 16 - HUB_CHROME_PX - Math.max(0, groups) * HUB_GROUP_PX - Math.max(0, extraPx);
   return Math.max(1, Math.floor(total / HUB_ROW_PX));
@@ -100,6 +100,8 @@ export function taskGroupsFor(tasks: TaskLike[], w: number, h: number, pref: Tas
   }
   if (h <= 1 && w === 2) return [{ key: 'week', label: '이번 주 마감', status: 'todo', tasks: dueThisWeek(tasks, nowMs), add: true }];
   const base = pref.filter === 'mine' && meId ? open.filter((t) => isMine(t, meId)) : open;
+  // 3×1 — 한 줄 높이엔 묶음 둘을 세울 자리가 없다: «열림» 한 묶음(진행 중 먼저).
+  if (h <= 1) return [{ key: 'open', label: '열림', status: 'todo', tasks: [...base.filter(isProg), ...base.filter((t) => !isProg(t))], add: true }];
   if (pref.group === 'none') return [{ key: 'open', label: '열림', status: 'todo', tasks: [...base.filter(isProg), ...base.filter((t) => !isProg(t))], add: true }];
   return [
     { key: 'in_progress', label: '진행 중', status: 'in_progress', tasks: base.filter(isProg), add: true },
@@ -107,10 +109,10 @@ export function taskGroupsFor(tasks: TaskLike[], w: number, h: number, pref: Tas
   ];
 }
 
-/** 바닥 줄 글 — 5판: 1×1 «… N개 더» · 1×N «마감 지남 N · 완료 N 는 접힘» · 2×1 «이번 주 마감 N · 마감 지남 N» · 그 밖 «열림 N · 마감 지남 N». */
-export function tasksFootText(tasks: TaskLike[], w: number, h: number, shown: number, nowMs: number): string {
+/** 바닥 줄 글 — 5판: 1×1 «… N개 더»(listed = 그 묶음의 전체 수, 없으면 열린 수) · 1×N «마감 지남 N · 완료 N 는 접힘» · 2×1 «이번 주 마감 N · 마감 지남 N» · 그 밖 «열림 N · 마감 지남 N». */
+export function tasksFootText(tasks: TaskLike[], w: number, h: number, shown: number, nowMs: number, listed?: number): string {
   const open = openTasks(tasks).length, done = tasks.length - open, over = overdueCount(tasks, nowMs);
-  if (w <= 1 && h <= 1) { const more = Math.max(0, open - shown); return more ? '… ' + more + '개 더' : '열림 ' + open; }
+  if (w <= 1 && h <= 1) { const total = listed == null ? open : listed; const more = Math.max(0, total - shown); return more ? '… ' + more + '개 더' : '열림 ' + total; }
   if (w <= 1) return '마감 지남 ' + over + ' · 완료 ' + done + ' 는 접힘';
   if (h <= 1 && w === 2) return '이번 주 마감 ' + dueThisWeek(tasks, nowMs).length + ' · 마감 지남 ' + over;
   return '열림 ' + open + ' · 마감 지남 ' + over + (done ? ' · 완료 ' + done + ' 는 접힘' : '');

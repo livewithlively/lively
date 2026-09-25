@@ -111,7 +111,7 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
         const v2 = V(second);
         body.append(el('div', { class: 'pjh-sr pjh-sr-one', style: 'grid-template-columns:minmax(0,1fr) auto' },
           el('div', { class: 'pjh-sr-t' }, sessDot(v2), el('span', { class: 'pjh-sr-n', text: second.label || second.id }), el('span', { class: 'pjh-sr-acts' }, enterBtn(second))),
-          el('span', { class: 'pjh-sr-c', text: v2.label + ' · ' + memberName(second.owner) })));
+          el('span', { class: 'pjh-sr-c' }, el('span', { text: v2.label }), personFace(second.owner, 'pjv-ava', memberName(second.owner)))));
       }
       foot.append(footText('세션 ' + ss.length + (noTask ? ' · 태스크 없는 세션 ' + noTask : '')), newBtn());
       return;
@@ -176,7 +176,7 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
     };
     const srow = (s: any): HTMLElement => {
       const v = V(s);
-      const r = el('div', { class: 'pjh-sr' + (sidePane && tools.picked === s.id ? ' on' : ''), style: 'grid-template-columns:' + gridCols },
+      const r = el('div', { class: 'pjh-sr' + (sidePane && tools.picked === s.id ? ' on' : ''), 'data-sid': String(s.id), style: 'grid-template-columns:' + gridCols },
         el('div', { class: 'pjh-sr-t' }, sessDot(v), el('span', { class: 'pjh-sr-n', text: s.label || s.id }), w >= 2 ? taskChip(s) : null,
           el('span', { class: 'pjh-sr-acts' }, enterBtn(s), hasTask(s) ? null : attachBtn(s))),
         ...colDefs.map((c) => c.cell(s)));
@@ -198,7 +198,7 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
       body.append(el('div', { class: 'pjh-two-s' }, list, side));
       const picked = ss.find((s) => s.id === tools.picked) || ss[0];
       tools.picked = picked.id;
-      list.querySelectorAll('.pjh-sr').forEach((x) => x.classList.remove('on'));
+      list.querySelectorAll('.pjh-sr').forEach((x) => x.classList.toggle('on', (x as HTMLElement).dataset.sid === String(picked.id)));
       paintSide(picked);
     } else {
       body.append(list);

@@ -366,3 +366,17 @@ a.pjh-row-link.pjh-row-n:hover { color: var(--blue); }
 .pjh-stail-me { color: var(--muted-2); }
 .pjh-stail-ai { color: var(--ink); }
 @media (max-width: 900px) { .pjh-two-s { grid-template-columns: minmax(0, 1fr); } .pjh-side { display: none; } }
+/* 캡처 실측 뒤 조정(2026-09-25): 줄 31px · 묶음 머리 24 · ＋ 태스크 28 — detail-hub-model 의 예산 상수와 같은 값. 숨긴 열(0폭)의 머리 여백 0. */
+.pjh-wb > .pjv-tasks-embedded .pjv-trow-wrap > .pjv-trow { min-height: 31px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-head { padding: 1px 2px 3px; min-height: 24px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-addrow-trigger { padding: 4px 6px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-colhead { padding-left: 0; }
+.pjh-wb > .pjv-tasks-embedded .pjv-thcol-name { padding-left: 4px; }
+.pjh-wb > .pjv-tasks-embedded .pjv-more-row { padding: 5px 8px 5px 30px; line-height: 18px; }
+/* 열 추가(⊕)는 3칸 폭에서만 — 좁은 폭에선 열이 하나뿐이라 뜻이 없다 */
+.pjh-w1 .pjv-tasks-embedded .pjv-tgroup-head .pjv-tcell-add > *, .pjh-w2 .pjv-tasks-embedded .pjv-tgroup-head .pjv-tcell-add > * { display: none; }
+/* 세션 줄 동작 단추 — 자리를 차지하지 않는다(display none), 올리면 이름 뒤에 선다(다른 열은 안 가린다 · 5판) */
+.pjh-sr-acts { display: none; opacity: 1; }
+.pjh-sr:hover .pjh-sr-acts, .pjh-sr.on .pjh-sr-acts, .pjh-sr-acts:focus-within { display: inline-flex; }
+@media (hover: none) { .pjh-sr-acts { display: inline-flex; } }
+.pjh-sr-n { min-width: 40px; }
