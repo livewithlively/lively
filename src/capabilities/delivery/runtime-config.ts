@@ -36,7 +36,7 @@ import {
 import { encryptSecret, secretsEnabled } from "../../org/credentials/secret-box.js";
 import { normalizeDomains, normalizeIssuer, oidcEnvSeed, type OidcSettings, type OidcSettingsPatch, type OidcSettingsPublic } from "../../auth/oidc-config.js";
 import { ee } from "../../enterprise/registry.js"; // #1601 — SSO 구현은 EE. 설정 표면은 코어에 남지만 '켜지나'는 EE 유무에 달렸다
-import { actorOf, restOnly, restRead, str } from "./shared.js";
+import { actorOf, restOnly, restRead, restWork, str } from "./shared.js";
 import { WORKER_POLICY_MAX, type WorkerPolicyPatch } from "../../apps/worker-policy.js";
 
 // #1520 — 관리탭에 돌려줄 OIDC 설정. 암호문(client_secret_enc)은 빼고 '설정됐나'만 준다.
@@ -714,4 +714,61 @@ export const runtimeConfigCapabilities: Capability[] = [
         trust_unverified_email: z.boolean().optional().describe("⚠ IdP 가 email_verified 를 아예 안 줄 때만 켠다 — 켜면 미검증 이메일로도 구성원에 매칭된다"),
       }).optional().describe("회사 계정(OIDC) 웹 로그인 설정(#1520) — DB 우선, 비면 .env(OIDC_*) 시드. 리디렉션 URI 는 <게이트웨이>/api/ui/auth/oidc/callback"),
     }),
+  // #4135 — **AI 전달(세션 주입) 설정만** 받는 구성원용 저장. 원준 2026-09-25: "워크스페이스 자체를 수정하는 기능(초대,
+  //  내보내기 등) 말고는 워크스페이스 안에서 모든 사람의 권한이 같음". 종전엔 주입 켜기·너지 문구·기록 인정 툴까지
+  //  org_runtime_update(admin) 한 op 에 보안 필드(허용 목록·OIDC·임베딩 자격)와 묶여 있어 구성원은 AI 전달을 못 고쳤다.
+  //  여기선 그 op 의 **검증을 그대로** 태우되 받는 키를 주입 축으로 좁힌다. 남겨 둔 관리자 몫 둘:
+  //   · hooks.self_update — 구성원 **컴퓨터의 키트**를 바꾸는 스위치(워크스페이스 밖에 닿는다, DANGEROUS_SCOPES 와 같은 근거)
+  //   · work_roots — 구성원 컴퓨터의 디렉터리 경로(비-admin 에겐 조회도 안 한다, 위 org_runtime_config 주석)
+  restWork("org_injection_update", "AI 전달(세션 주입) 설정 수정",
+    "세션 주입 시점 on/off(session_preload·work_flag·stop_writeback_gate)·제품 가이드 주입·세션 종료 너지 문구·기록 인정 툴(write_tools)·" +
+    "외부 인입 툴(pull_tools)을 저장한다. 워크스페이스 구성원 누구나. 키트 자동 업데이트(self_update)·work_roots·보안 필드는 org_runtime_update(관리자).",
+    [{ method: "POST", paths: ["/api/ui/org/injection-config"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      const src = (input ?? {}) as Record<string, unknown>;
+      const extra = Object.keys(src).filter((k) => !(INJECTION_KEYS as readonly string[]).includes(k));
+      if (extra.length) throw new HttpError(400, `이 저장은 AI 전달 설정만 받습니다 — ${extra.join(", ")} 는 org_runtime_update(관리자)`);
+      const cur = await getRuntimeConfig();
+      const out: Record<string, unknown> = {};
+      for (const k of INJECTION_KEYS) if (src[k] !== undefined) out[k] = src[k];
+      if (out.hooks !== undefined) {
+        const h = out.hooks;
+        if (typeof h !== "object" || h === null || Array.isArray(h)) throw new HttpError(400, "hooks 는 객체여야 합니다");
+        const hr = h as Record<string, unknown>;
+        //  화면은 hooks 를 통째로 보낸다(다른 시점 값 보존) — self_update 가 **지금 값 그대로면** 조용히 넘기고, 바꾸려 할 때만 막는다.
+        if ("self_update" in hr && Boolean(hr.self_update) !== (cur.hooks?.self_update !== false)) {
+          throw new HttpError(403, "키트 자동 업데이트(self_update)는 구성원 컴퓨터의 키트를 바꾸는 설정이라 관리자만 바꿉니다");
+        }
+        const merged: Record<string, boolean> = { ...(cur.hooks || {}) } as Record<string, boolean>;
+        for (const k of MEMBER_HOOK_KEYS) if (k in hr) merged[k] = Boolean(hr[k]);
+        out.hooks = merged;
+      }
+      const update = runtimeConfigCapabilities.find((c) => c.name === "org_runtime_update");
+      if (!update) throw new HttpError(500, "org_runtime_update 가 없습니다");
+      const r = await update.handler(out, user, ctx) as { runtimeConfig: Awaited<ReturnType<typeof getRuntimeConfig>> };
+      return { injection: injectionView(r.runtimeConfig) };
+    }, {
+      hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean() }).partial().optional().describe("세션 주입 시점 on/off"),
+      inject_ontology_guide: z.boolean().optional().describe("제품 가이드(라이블리 사용법) 주입 on/off"),
+      writeback_notice: z.string().nullable().optional().describe("세션 종료 너지 문구 — null/'' = 기본값"),
+      write_tools: z.array(z.string()).optional().describe("기록 인정 툴 이름(접두사 없이) — 비우면 기본 목록"),
+      pull_tools: z.array(z.string()).optional().describe("외부 인입으로 볼 MCP 툴 이름 prefix — 비우면 기능 끔"),
+    }),
 ];
+
+/** #4135 — 구성원이 고치는 AI 전달 축(org_injection_update 가 받는 키). */
+const INJECTION_KEYS = ["hooks", "inject_ontology_guide", "writeback_notice", "write_tools", "pull_tools"] as const;
+const MEMBER_HOOK_KEYS = ["session_preload", "work_flag", "stop_writeback_gate"] as const;
+
+/** AI 전달 화면이 구성원에게 보여 줄 주입 설정 — work_roots·보안 필드는 뺀 판(org_overview 의 injectionConfig 도 이 모양). */
+export function injectionView(c: Awaited<ReturnType<typeof getRuntimeConfig>>): {
+  hooks: Record<string, boolean>; inject_ontology_guide: boolean; writeback_notice: string | null; write_tools: string[]; pull_tools: string[];
+} {
+  return {
+    hooks: { ...(c.hooks || {}) } as Record<string, boolean>,
+    inject_ontology_guide: c.inject_ontology_guide !== false,
+    writeback_notice: c.writeback_notice ?? null,
+    write_tools: c.write_tools || [],
+    pull_tools: c.pull_tools || [],
+  };
+}

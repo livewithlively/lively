@@ -70,7 +70,7 @@ export async function renderCollectors(host: HTMLElement): Promise<void> {
       el('h3', { class: 'cxc-title' }, el('span', { text: '수집기' }), el('span', { class: 'cxc-title-n num', text: String(collectors.length) })),
       el('p', { class: 'cxc-lead' }, ...uiText(canEdit
         ? '외부 앱을 연결하면 리브가 수집기를 자동으로 만들어 둡니다. 직접 만드는 것은 토큰을 손으로 넣어 붙일 때뿐입니다.'
-        : '외부 앱을 연결하면 리브가 수집기를 자동으로 만들어 둡니다. 만들고 고치는 것은 관리자가 합니다 — 무엇이 언제 모이는지는 여기서 그대로 보입니다.'))));
+        : '외부 앱을 연결하면 리브가 수집기를 자동으로 만들어 둡니다 — 무엇이 언제 모이는지는 여기서 그대로 보입니다.'))));
   if (canEdit) {
     const add = el('button', { class: 'btn btn-primary', type: 'button', text: '+ 수집기 만들기' });
     add.addEventListener('click', () => { choosingPreset = true; creatingPreset = null; editingId = null; reload(); });
@@ -96,7 +96,7 @@ export async function renderCollectors(host: HTMLElement): Promise<void> {
       el('p', { class: 'cxc-empty-t', text: '아직 수집기가 없습니다' }),
       el('p', { class: 'cxc-empty-d', text: canEdit
         ? '[외부 앱 연결]에서 슬랙·노션 같은 앱을 연결하면 리브가 첫 수집기를 만들어 둡니다.'
-        : '외부 앱이 아직 연결되지 않았습니다. 연결은 관리자가 합니다 — 필요한 앱이 있으면 관리자에게 요청하세요.' }),
+        : '외부 앱이 아직 연결되지 않았습니다 — 외부 앱 연결에서 연결하면 수집기가 자동으로 생깁니다.' }),
       canEdit ? el('a', { class: 'btn btn-ghost btn-sm', href: '#/connect', text: '외부 앱 연결 열기 →' }) : null));
   }
   for (const c of collectors) {

@@ -13,7 +13,7 @@
 //   조직 '설정'이 아니라 상시 업무라, 주인을 관리탭에서 이 탭으로 옮겼다(#837 의 일원화 지점을 이동).
 //
 //  패턴 = Settings(목록 + 폼 모달). 컴포넌트는 wikicat-* 를 그대로 재사용한다(신규 CSS 최소).
-import { api, busy, el, errorNote, fmtNum, pageHead, toast, uiText, wsKey } from './core.js';
+import { api, el, errorNote, fmtNum, pageHead, toast, uiText, wsKey } from './core.js';
 import { skeleton } from './learn.js';
 import { confirmDialog, hasScope } from './admin.js';
 import { copyText } from './ui-primitives.js';
@@ -28,19 +28,8 @@ const TAXONOMY_PROMPT =
   "분류축을 제안해줘. 각 분류에는 범위·포함·경계가 드러나는 정의를 붙이고(정의는 필수야), " +
   "만들기 전에 목록을 보여주고 내 확인을 받아.";
 
-// 어긋남 판정 — 정의(should) 벡터에서 먼 소속 지식이 몇 건인가. 절대 기준이 없으니 보수적으로 잡는다
-//  (거짓 경보가 반복되면 배지 자체가 무시되고, 그러면 진짜 어긋남도 함께 묻힌다).
-const MISMATCH_WARN = 5;   // 이 이상이면 정의를 다시 볼 때가 됐다
-const MISMATCH_NOTE = 1;   // 한 건이라도 있으면 참고 표시
-
-// 'unmeasured' = 재지 못한 상태(정의 없음 · 임베딩 off · 백필 대기). **0 과 뭉개면 거짓 초록불이 된다.**
-function mismatchLevel(c: any): 'unmeasured' | 'none' | 'note' | 'warn' {
-  if (!c.mismatch_measurable || c.mismatch_count == null) return 'unmeasured';
-  const n = Number(c.mismatch_count);
-  if (n >= MISMATCH_WARN) return 'warn';
-  if (n >= MISMATCH_NOTE) return 'note';
-  return 'none';
-}
+// #4173(원준·상민 2026-09-21) — «분류 어긋남» 표시(요약 띠 · 줄마다 배지 · 어긋난 지식 펼치기)는 점검 결과라 걷었다.
+//  서버는 mismatch_count 를 여전히 준다(카테고리 API 계약 불변) — 제대로 만든 점검기(#4174)가 붙으면 그 자리에서 다시 보인다.
 
 /**
  * 분류축 목록 본문(#1419 T6) — 페이지 머리 없이 목록만 그린다.
@@ -88,19 +77,12 @@ async function renderCategoriesInner(view: any, withHead: boolean) {
 
   // ── 정의가 비었거나 내용과 어긋난 것을 상단에 모아 보여준다 — 이 탭이 존재하는 이유라 목록보다 먼저 온다. ──
   const noDef = cats.filter((c) => !(c.should || '').trim());
-  const mismatched = cats.filter((c) => (c.should || '').trim() && mismatchLevel(c) === 'warn');
   const summary = el('div', { class: 'wikicat-summary' });
-  if (noDef.length || mismatched.length) {
-    const bits: any[] = [];
-    if (noDef.length) bits.push(el('span', { class: 'pill pill-warn', text: `정의 없음 ${noDef.length}` }));
-    if (mismatched.length) bits.push(el('span', { class: 'pill pill-warn', text: `분류 어긋남 ${mismatched.length}` }));
-    summary.append(el('div', { class: 'wikicat-summary-row' }, ...bits,
-      el('span', { class: 'wikicat-summary-txt' },
-        ...uiText('정의(범위·규칙)가 비어 있거나, 담긴 지식이 다른 분류의 정의에 더 가깝습니다. 행을 눌러 무엇인지 보고 — 정의를 넓히거나, 그 지식을 옮기세요.'))));
-  } else if (cats.length) {
+  if (noDef.length) {
     summary.append(el('div', { class: 'wikicat-summary-row' },
-      el('span', { class: 'pill pill-ok', text: '정의와 내용 일치' }),
-      el('span', { class: 'wikicat-summary-txt', text: '모든 분류에 정의가 있고, 정의에서 크게 벗어난 지식도 없습니다.' })));
+      el('span', { class: 'pill pill-warn', text: `정의 없음 ${noDef.length}` }),
+      el('span', { class: 'wikicat-summary-txt' },
+        ...uiText('정의(범위·규칙)가 빈 분류가 있습니다 — 증류기가 칸을 고를 기준이 없으니 [수정]에서 채워 주세요.'))));
   }
 
   //  #1631: 종전엔 사업/제품/시스템 3묶음으로 갈라 그렸다(분류의 층). 그 축이 없어져 평면 한 묶음이 됐고,
@@ -116,7 +98,7 @@ async function renderCategoriesInner(view: any, withHead: boolean) {
   view.replaceChildren(...[
     head,
     canEdit ? null : el('p', { class: 'admin-hint' },
-      el('span', { class: 'pill', text: '읽기 전용' }), ' 편집은 context 권한이 필요합니다.'),
+      el('span', { class: 'pill', text: '읽기 전용' }), ' 이 계정은 보기 전용입니다.'),
     // 분류축이 **하나도** 없을 때만 착지점을 준다(#1618).
     cats.length === 0 ? emptyTaxonomyCard(canEdit) : null,
     summary,
@@ -143,7 +125,7 @@ function emptyTaxonomyCard(canEdit: boolean) {
       ...uiText('분류축은 지식과 프로젝트를 담는 갈래입니다. 갈래가 없으면 새로 들어오는 지식이 전부 「미분류」가 되고, 미분류 지식은 AI 가 검색해도 나오지 않습니다 — 쌓이기는 하는데 쓰이지 않습니다.')));
 
   if (!canEdit) {
-    card.append(el('p', { class: 'admin-hint', text: '분류축을 만들 권한이 없습니다 — 관리자에게 요청하세요.' }));
+    card.append(el('p', { class: 'admin-hint', text: '이 계정은 보기 전용이라 분류축을 만들 수 없습니다.' }));
     return card;
   }
 
@@ -482,27 +464,6 @@ function categoryRow(c: any, ctx: CatCtx) {
         el('span', { class: 'wikicat-should-label', text: '정의·범위·규칙' }),
         canEdit ? uiText('미설정 — 오른쪽 [수정]에서 입력할 수 있어요') : '미설정');
 
-  // 어긋남 배지 — 이 탭의 핵심 신호. 정의가 없으면 어긋남을 잴 대상이 없으니 생략(정의 없음이 더 강한 신호).
-  let mismatchEl: any = null;
-  if (should) {
-    const lv = mismatchLevel(c);
-    const n = Number(c.mismatch_count || 0);
-    if (lv === 'unmeasured') {
-      // 못 잰 것을 '이상 없음'으로 보이게 하지 않는다 — 거짓 초록불이 이 탭 전체의 신뢰를 깎는다.
-      mismatchEl = el('span', { class: 'wikicat-drift', title: '정의와 내용의 대조는 의미 검색(임베딩)이 켜져 있어야 합니다. 켜져 있다면 아직 계산 대기 중입니다.' },
-        el('span', { class: 'wikicat-drift-date', text: '대조 전' }));
-    } else if (lv === 'none') {
-      mismatchEl = el('span', { class: 'wikicat-drift', title: '이 분류의 지식이 모두 다른 어떤 분류의 정의보다 이 정의에 가깝습니다.' },
-        el('span', { class: 'wikicat-drift-date', text: '정의와 일치' }));
-    } else {
-      // 경보 색은 기존 .pill-warn 을 그대로 얹는다(새 색 리터럴을 만들지 않는다 — DS 컬러 예산).
-      mismatchEl = el('span', { class: 'wikicat-drift' + (lv === 'warn' ? ' pill pill-warn' : ''),
-        title: '이 분류의 정의보다 다른 분류의 정의에 더 가까운 지식입니다. 눌러서 무엇인지 보고 — 정의를 넓히거나 그 지식을 옮기세요.' },
-        el('span', { class: 'wikicat-drift-date', text: '다른 분류에 더 가까움' }),
-        el('span', { class: 'wikicat-drift-n', text: fmtNum(n) + '건' }));
-    }
-  }
-
   // 오너 팀 — 카테고리 소유(표면화·주입의 '우리 팀' 기준). 오너십=우선순위이지 접근제한이 아니다.
   let ownerEl: any = null;
   if (canEdit) {
@@ -560,7 +521,7 @@ function categoryRow(c: any, ctx: CatCtx) {
     c.cross_cutting ? el('span', { class: 'dm-tag', text: '횡단' }) : null,
     //  #1631: 비활성 축은 «치워 둔 것» 이라 분류 후보에서 빠진다 — 목록에는 남되 그 사실이 보여야 한다.
     inactive ? el('span', { class: 'pill', title: '치워 둔 축입니다 — 새 지식의 분류 후보에서 빠집니다(이미 든 지식은 그대로).', text: '비활성' }) : null,
-    mismatchEl, bundleEl, ownerEl, repoEl, shouldLine);
+    bundleEl, ownerEl, repoEl, shouldLine);
 
   const acts = canEdit ? el('div', { class: 'wikicat-row-acts' },
     el('button', { class: 'btn btn-ghost btn-sm', text: '수정',
@@ -574,43 +535,6 @@ function categoryRow(c: any, ctx: CatCtx) {
 
   const row = el('div', { class: 'wikicat-row' }, main, acts);
 
-  // 어긋난 게 있으면 행을 펼쳐 **무엇이** 어긋났는지 보여준다 — 숫자만으론 정의를 넓힐지 지식을 옮길지 못 정한다.
-  if (should && Number(c.mismatch_count || 0) > 0) {
-    const wrap = el('div', { class: 'wikicat-rowwrap' }, row);
-    const detail = el('div', { class: 'wikicat-mismatch', hidden: 'hidden' });
-    let loaded = false;
-    const toggle = el('button', { class: 'btn btn-ghost btn-sm wikicat-expand', type: 'button',
-      'aria-expanded': 'false', text: '어긋난 지식 보기' });
-    toggle.addEventListener('click', async () => {
-      const open = detail.hasAttribute('hidden');
-      if (!open) { detail.setAttribute('hidden', 'hidden'); toggle.setAttribute('aria-expanded', 'false'); toggle.textContent = '어긋난 지식 보기'; return; }
-      detail.removeAttribute('hidden'); toggle.setAttribute('aria-expanded', 'true'); toggle.textContent = '접기';
-      if (loaded) return;
-      busy(detail, el('div', { class: 'wikicat-mismatch-loading', text: '불러오는 중…' }));
-      try {
-        const r = await api('/api/ui/categories/' + c.id);
-        const items: any[] = (r && r.mismatches) || [];
-        loaded = true;
-        if (!items.length) { detail.replaceChildren(el('div', { class: 'wikicat-empty', text: '어긋난 지식이 없습니다.' })); return; }
-        const list = el('div', { class: 'wikicat-mismatch-list' });
-        for (const m of items) {
-          list.append(el('div', { class: 'wikicat-mismatch-row' },
-            el('a', { class: 'wikicat-mismatch-t', href: '#/k/' + encodeURIComponent(m.name), text: m.title || m.name }),
-            m.nearest_name ? el('span', { class: 'wikicat-mismatch-to', text: '→ ' + m.nearest_name }) : null,
-            el('span', { class: 'wikicat-mismatch-d', title: '이 분류의 정의보다 저 분류의 정의에 이만큼 더 가깝습니다', text: String(m.margin) })));
-        }
-        detail.replaceChildren(
-          el('p', { class: 'admin-hint', style: 'margin:0 0 8px' },
-            ...uiText('이 분류의 정의보다 다른 분류의 정의에 더 가까운 지식입니다. 정의가 이들을 품어야 하면 [수정]에서 정의를 넓히고, 아니면 화살표가 가리키는 분류로 옮기세요.')),
-          list);
-      } catch (e) {
-        detail.replaceChildren(errorNote(e, '어긋난 지식을 불러오지 못했습니다'));
-      }
-    });
-    (acts || main).append(toggle);
-    wrap.append(detail);
-    return wrap;
-  }
   return row;
 }
 

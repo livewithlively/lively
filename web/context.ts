@@ -24,7 +24,6 @@ import { stageHealthLevels } from './context-pipeline.js';
 import { inboxCount, renderContextInbox, renderContextMapScreen } from './context-map.js';   // #762 표지(흐름 지도) + 확인할 것
 import { renderCollectors } from './context-collectors.js';
 import { renderClassifiers } from './context-classify.js';
-import { renderManagers } from './context-manage.js';
 import { renderCategoryList } from './categories.js';
 import { distillerPage, distillersPanel } from './distillers.js';
 import { collectorPresetEditor } from './admin-collector-presets.js';  // 새 소스 만들기 — 수집기 화면의 하위 갈래
@@ -52,8 +51,6 @@ type CtxStage = {
   label: string;
   /** 이 탭이 무엇을 하는 자리인지 — **정의 한 줄**. 빵부스러기 옆에 그대로 선다(#762: 기계마다 정의 한 문장). */
   hint: string;
-  /** '보는 건 누구나, 고치는 건 관리자'인 탭 — 자물쇠 배지. */
-  adminEdit?: boolean;
   /** 탭 줄에 세우지 않는 스테이지(확인할 것 — 오른쪽 트레이가 대신 선다). */
   tray?: boolean;
   items: CtxItem[];
@@ -72,11 +69,11 @@ const STAGES: CtxStage[] = [
   },
   {
     key: 'inbox', label: '확인할 것', tray: true,
-    hint: '사람 손이 필요한 것 전부 — 승인 · 카테고리 제안 · 점검 발견',
+    hint: '사람 손이 필요한 것 전부 — 승인 · 카테고리 제안',
     items: [{ key: 'inbox', label: '확인할 것', draw: (b) => renderContextInbox(b) }],
   },
   {
-    key: 'sources', label: '수집기', adminEdit: true,
+    key: 'sources', label: '수집기',
     hint: '외부 앱의 내용을 자료함으로 가져오는 기계 — 무엇을, 얼마나 자주 가져올지 정합니다',
     items: [
       { key: 'collectors', label: '수집기', draw: (b) => sourcesScreen(b) },
@@ -96,11 +93,11 @@ const STAGES: CtxStage[] = [
   },
   {
     key: 'checks', label: '점검',
-    hint: '쌓인 지식이 낡거나 어긋나지 않았는지 검사하는 자동 규칙 — 찾아낸 것은 「확인할 것」으로',
-    items: [{ key: 'managers', label: '검사 규칙', draw: (b) => checksScreen(b) }],
+    hint: '라이블리에 쌓인 맥락이 낡지 않도록 AI가 알아서 관리하는 기능입니다.',
+    items: [{ key: 'managers', label: '점검', draw: (b) => checksScreen(b) }],
   },
   {
-    key: 'deliver', label: 'AI 전달', adminEdit: true,
+    key: 'deliver', label: 'AI 전달',
     hint: '지식이 실제로 AI 에 닿는 마지막 구간 — 세션 주입 · 검색 · 접근 권한',
     items: [{ key: 'injection', label: 'AI 전달', draw: (b) => deliverScreen(b) }],
   },
@@ -147,15 +144,13 @@ async function categoryScreen(b: HTMLElement): Promise<void> {
   ]);
 }
 
-/** 점검 — 검사 규칙(관리기)만. 찾아낸 것(발견)의 처리는 「확인할 것」이 맡는다(#762 큐 통합). */
+/** 점검 — #4173(원준·상민 2026-09-21): 지금 도는 점검기는 아직 미완성이라 규칙·결과(발견·확인 필요 수)를 **보이지 않는다**.
+ *  그래도 라이블리는 «관리해 주는 서비스» 라 탭 자리와 정의 한 줄(탭 hint)은 남긴다 — 제대로 만든 점검기가 붙을 자리(#4174).
+ *  규칙 목록(renderManagers)은 그 점검기가 생길 때 여기로 돌아온다. */
 async function checksScreen(b: HTMLElement): Promise<void> {
-  await stack(b, [
-    (h) => { h.replaceChildren(el('div', { class: 'card ctx-crosslink' },
-      el('b', { text: '점검이 찾아낸 것' }),
-      el('p', { class: 'admin-hint', text: '발견된 문제의 확인·처리는 「확인할 것」에서 합니다 — 승인·카테고리 제안과 한 자리입니다.' }),
-      el('a', { class: 'btn btn-ghost btn-sm', href: '#/context/inbox', text: '확인할 것 열기 →' }))); },
-    (h) => renderManagers(h),
-  ]);
+  b.replaceChildren(el('div', { class: 'card ctx-empty-slot' },
+    el('b', { text: '지금 켜진 점검이 없습니다' }),
+    el('p', { class: 'admin-hint', text: '지식이 낡거나 서로 어긋나는 것을 AI 가 스스로 찾아 고치는 점검이 이 자리에 하나씩 붙습니다.' })));
 }
 
 /** AI 전달 — 세션 주입 + (관리자) 의미 검색 · 공개 범위 · 자료를 볼 사람. 접근 권한을 한 자리에. */
@@ -247,12 +242,11 @@ function buildHeader(selStage: CtxStage): HTMLElement {
       class: 'pjv-vtab ctx-vtab' + (on ? ' active' : '') + (s.key === 'home' ? ' ctx-vtab-ov' : ''),
       href: '#/context/' + s.key,
       role: 'tab', 'aria-selected': String(on), 'data-stage': s.key,
-      title: s.hint + (s.adminEdit ? ' — 보는 것은 모든 구성원, 만들고 고치는 것은 관리자' : ''),
+      title: s.hint,
     },
       el('span', { class: 'ctx-vtab-label', text: s.label }),
       // 건강 점은 '지금 문제가 있는 탭'에만 붙는다(paintStageHealth 가 ok 면 지운다) — 늘 켜진 점은 신호가 아니라 장식이다.
-      HEALTH_TAB[s.key] ? el('span', { class: 'ctx-vtab-dot', 'aria-hidden': 'true' }) : null,
-      s.adminEdit ? el('span', { class: 'ctx-vtab-lock', 'aria-hidden': 'true', title: '관리자만 고칠 수 있습니다' }, ctxLockIcon()) : null);
+      HEALTH_TAB[s.key] ? el('span', { class: 'ctx-vtab-dot', 'aria-hidden': 'true' }) : null);
     tabs.append(tab);
   }
   // 확인할 것 트레이 — 탭 줄 오른쪽 끝. 배지는 paintStageHealth 가 채운다(사람 몫이 0이면 배지 없음).
@@ -260,16 +254,16 @@ function buildHeader(selStage: CtxStage): HTMLElement {
   tabs.append(el('a', {
     class: 'pjv-vtab ctx-vtab ctx-vtab-tray' + (selStage.key === 'inbox' ? ' active' : ''),
     href: '#/context/inbox', role: 'tab', 'aria-selected': String(selStage.key === 'inbox'),
-    title: '사람 손이 필요한 것 전부 — 승인 · 카테고리 제안 · 점검 발견',
+    title: '사람 손이 필요한 것 전부 — 승인 · 카테고리 제안',
   },
     el('span', { class: 'ctx-vtab-label', text: '확인할 것' }),
     el('b', { class: 'ctx-tray-n num', hidden: true })));
   return el('div', { class: 'pjv-board-header ctx-board-header' }, tabs);
 }
 
-/** 건강 점을 붙일 수 있는 탭 — 파이프라인 4단계에 대응하는 탭만(현황·AI 전달은 판정이 없다). */
-const HEALTH_TAB: Record<string, 'collect' | 'distill' | 'classify' | 'manage'> = {
-  sources: 'collect', distill: 'distill', category: 'classify', checks: 'manage',
+/** 건강 점을 붙일 수 있는 탭 — 파이프라인 단계에 대응하는 탭만(현황·AI 전달은 판정이 없다). 점검 탭은 #4173 으로 비웠다 — 점도 없다. */
+const HEALTH_TAB: Record<string, 'collect' | 'distill' | 'classify'> = {
+  sources: 'collect', distill: 'distill', category: 'classify',
 };
 
 /** 탭의 건강 점 + 트레이 배지 — 개요 지도와 같은 판정·같은 수(잣대가 둘이면 화면끼리 다른 말을 한다). */
@@ -295,11 +289,6 @@ async function paintStageHealth(view: HTMLElement): Promise<void> {
 function ctxAppIcon(): SVGElement {
   const n = sv('svg', { class: 'pjv-crumb-ic ctx-crumb-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
   n.append(sv('path', { d: 'M4 5h16l-6.2 7.2V18l-3.6 2v-7.8z' }));   // 깔때기 — 런치패드 유리 아이콘과 같은 형태(맥락 관리 = 수집·증류·분류)
-  return n;
-}
-function ctxLockIcon(): SVGElement {
-  const n = sv('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  n.append(sv('rect', { x: 5, y: 10.5, width: 14, height: 10, rx: 2 }), sv('path', { d: 'M8 10.5V8a4 4 0 0 1 8 0v2.5' }));
   return n;
 }
 

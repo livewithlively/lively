@@ -20,10 +20,10 @@
 import { api, el, fmtNum, relTime } from './core.js';
 import { skeleton } from './ui-primitives.js';
 import { stageHealthLevels } from './context-pipeline.js';
-import { renderFindings } from './context-manage.js';
 import { presetSvcKey, svcTile } from './svc-icons.js';
 import { svcLogo } from './svc-logos.js';
 import { appGlassIcon } from './v2/glass-icon.js';   // 리프 모듈(#3830) — 셸 레지스트리를 물지 않는다
+import { loadRuns, runsPanel, type RunFilter, type RunsData } from './context-runs.js';   // #4172 지도 아래 「자동 실행」
 import { icon as lineIcon } from './v2/icons.js';
 
 const fmt = (n: any) => (Number.isFinite(Number(n)) ? fmtNum(Number(n)) : '—');
@@ -58,12 +58,14 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
     return;
   }
   // 장식 데이터(실물 미니어처) — 실패해도 지도는 선다.
-  const [colD, treeD, knowD, secD, sessD] = await Promise.all([
+  let runsErr: string | null = null;
+  const [colD, treeD, knowD, secD, sessD, runsD] = await Promise.all([
     api('/api/ui/org/collectors').catch(() => null),
     api('/api/ui/sources/tree').catch(() => null),
     api('/api/ui/knowledge?' + new URLSearchParams({ limit: '3', orderBy: 'updated_at', light: '1', lifecycle: 'active,pending', injection: 'recalled' })).catch(() => null),
     api('/api/ui/org/sections').catch(() => null),
     api('/api/ui/terminal/sessions?includeProjects=1').catch(() => null),
+    loadRuns(d).catch((e) => { runsErr = (e as Error).message; return null as RunsData | null; }),
   ]);
   const st = (d && d.stages) || {};
   const gates = (d && d.gates) || {};
@@ -71,9 +73,6 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
 
   const backlog = Number(st.distill?.backlog || 0);
   const pending = Number(gates.knowledge_pending || 0);
-  const proposed = Number(gates.classification_proposed || 0);
-  const findings = Number(st.manage?.open?.total || 0);
-  const inboxN = pending + proposed + findings;
 
   // 외부 앱 — **실제로 연결된** 수집기의 서비스 종류만(#1631 원준 2026-09-15). 매니지드는 워크스페이스마다 노션·슬랙 등 수집기 **껍데기**를
   //  enabled:false 로 심어 두는데(자료 가져오기 토글을 껐거나 아직 안 켠 것), 종전엔 그 껍데기까지 세어 «연결도 안 한 슬랙» 이 제 색 아이콘으로 떴다.
@@ -155,7 +154,7 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
   const classifyEvery = st.classify?.job?.any_enabled ? '자동 분류 ' + intervalText(st.classify.job.interval_sec) : '자동 분류 꺼짐';
   const stKnow = station({ href: '#/knowledge', go: { section: 'wiki', route: '#/knowledge' }, icon: 'wiki', name: '지식', v: fmt(st.distill?.output), unit: '건',
     def: '증류를 통과해 남은 것입니다. 카테고리 ' + fmt(st.classify?.categories) + '칸에 정리됩니다', x: knowX,
-    foot: classifyEvery + ' · 점검 발견 ' + fmt(findings), lv: lv.distill });
+    foot: classifyEvery, lv: lv.distill });
 
   const aiX = el('span', { class: 'cxm-sess' },
     el('span', { class: 'cxm-sess-u', text: '지난 미팅 정리해줘' }),
@@ -166,21 +165,26 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
     foot: '검색 대상 ' + fmt(searchable) + '건' + (startDocs !== null ? ' · 항상 읽는 것 ' + fmt(startDocs) : '') });
 
   // ── 기계 셋(선로 위 어두운 칩) — 이름 · 수 · 상태 배지 · 살아 있는 점 + 주기 ──
-  const machine = (o: { href: string; name: string; s: string; pill: string; k: 'ok' | 'warn' | 'dn'; live: boolean; sched: string; extra?: HTMLElement | null }) =>
-    el('a', { class: 'cxm-mc', href: o.href },
+  //  #4135 2판(원준 2026-09-25): 수집기·증류기 칩은 **탭으로 가지 않고** 아래 「자동 실행」 패널을 그 기계로 거른다(filter 를 주면 버튼).
+  //   주입규칙은 거를 기록이 없어 종전처럼 그 탭으로 간다.
+  const machine = (o: { href: string; name: string; s: string; pill: string; k: 'ok' | 'warn' | 'dn'; live: boolean; sched: string; extra?: HTMLElement | null; filter?: 'c' | 'd' }) =>
+    el(o.filter ? 'button' : 'a', o.filter
+      ? { type: 'button', class: 'cxm-mc is-' + o.filter, 'aria-pressed': 'false', title: o.name + ' 기록을 아래에서 보기 — 한 번 더 누르면 전체' }
+      : { class: 'cxm-mc', href: o.href },
       el('span', { class: 'cxm-mc-n' }, lineIcon('gear', 'cxm-mc-ic'), el('span', { text: o.name })),
       el('span', { class: 'cxm-mc-s', text: o.s }),
       el('span', { class: 'cxm-mc-p is-' + o.k, text: o.pill }),
       el('span', { class: 'cxm-mc-e' }, el('i', { class: 'cxm-dot' + (o.live ? ' is-live' : ' is-off'), 'aria-hidden': 'true' }), el('span', { text: o.sched })),
-      o.extra || null);
+      o.extra || null,
+      o.filter ? el('span', { class: 'cxm-mc-hint', text: '누르면 아래에서' }) : null);
   const jobLine = (job: any) => !job ? '자동 실행 없음' : (!job.any_enabled ? '자동 실행 꺼짐' : intervalText(job.interval_sec) + (job.last_run_at ? ' · ' + relTime(job.last_run_at) : ' · 미실행'));
   const collectOn = Number(st.collect?.enabled || 0) > 0 && !!st.collect?.job?.any_enabled;
   const mcCollect = machine({ href: '#/context/sources', name: '수집기', s: fmt(st.collect?.configured) + ' · 켜짐 ' + fmt(st.collect?.enabled),
-    pill: collectOn ? '켜짐' : '꺼짐', k: collectOn ? 'ok' : 'dn', live: collectOn, sched: jobLine(st.collect?.job) });
+    pill: collectOn ? '켜짐' : '꺼짐', k: collectOn ? 'ok' : 'dn', live: collectOn, sched: jobLine(st.collect?.job), filter: 'c' });
   const distillOn = Number(st.distill?.enabled || 0) > 0 && !!st.distill?.job?.any_enabled;
   const mcDistill = machine({ href: '#/context/distill', name: '증류기', s: fmt(st.distill?.configured) + ' · 켜짐 ' + fmt(st.distill?.enabled),
     pill: pending ? '승인 ' + fmt(pending) + ' 대기' : (distillOn ? '켜짐' : '꺼짐'), k: pending ? 'warn' : (distillOn ? 'ok' : 'dn'), live: distillOn, sched: jobLine(st.distill?.job),
-    extra: blindEl });
+    extra: blindEl, filter: 'd' });
   const mcInject = machine({ href: '#/context/deliver', name: '주입규칙', s: (startDocs !== null ? '시작 문서 ' + fmt(startDocs) + ' · ' : '') + '검색', pill: '켜짐', k: 'ok', live: true, sched: '세션 시작마다' });
 
   // ── 관(선로) — 기계가 도는 구간만 흐른다 ──
@@ -190,22 +194,36 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
       lineIcon('chevR', 'cxm-arr'),
       el('span', { class: 'cxm-duct-c' }, mc));
 
+  const dCollect = duct(mcCollect, collectOn), dDistill = duct(mcDistill, distillOn), dInject = duct(mcInject, true);
+  //  거를 때 관계없는 칸을 흐리게(수집기 = 외부 앱 → 자료 구간 · 증류기 = 자료 → 지식 구간).
+  stExt.classList.add('is-dim-d'); dCollect.classList.add('is-dim-d');
+  dDistill.classList.add('is-dim-c'); stKnow.classList.add('is-dim-c');
+  dInject.classList.add('is-dim-c', 'is-dim-d'); stAI.classList.add('is-dim-c', 'is-dim-d');
   const lane = el('div', { class: 'cxm-floor' }, el('div', { class: 'cxm-lane' },
-    stExt, duct(mcCollect, collectOn), stRaw, duct(mcDistill, distillOn), stKnow, duct(mcInject, true), stAI));
+    stExt, dCollect, stRaw, dDistill, stKnow, dInject, stAI));
 
-  // ── 지도 아래 한 줄 — 같은 재질의 셀 둘: 확인할 것 요약 · 자동 실행 ──
-  const inboxCell = el('a', { class: 'cxm-cell cxm-cell-inbox', href: '#/context/inbox' },
-    el('b', { text: '확인할 것 ' + fmt(inboxN) + '건' }),
-    el('span', { class: 'cxm-cell-s', text: '승인 ' + fmt(pending) + ' · 카테고리 제안 ' + fmt(proposed) + ' · 점검 발견 ' + fmt(findings) }),
-    el('span', { class: 'btn btn-sm ' + (pending ? 'btn-primary' : 'btn-ghost'), text: '확인하러 가기' }));
-  const jobsCell = el('div', { class: 'cxm-cell cxh-jobs' }, el('span', { class: 'cxh-jobs-t', text: '자동 실행' }),
-    jobChip('수집', st.collect?.job), jobChip('증류', st.distill?.job), jobChip('분류', st.classify?.job), jobChip('점검', st.manage?.job));
+  // ── 지도 아래 — 「자동 실행」 패널(#4172 · #4135 2판 A안). 종전의 「확인할 것」 요약 칸은 오른쪽 위 트레이와 겹쳐 뺐다
+  //  (원준 2026-09-25: "우측 위에도 있는 것인데 있을 필요가 없다"). 증류 칩의 «카테고리 붙이기 꺼짐» 경고는 패널 머리 주기 옆에 남긴다.
+  const root = el('div', { class: 'cxm', 'data-f': 'all' });
+  const applyF = (f: RunFilter): void => {
+    root.setAttribute('data-f', f);
+    mcCollect.classList.toggle('is-sel', f === 'c'); mcCollect.setAttribute('aria-pressed', String(f === 'c'));
+    mcDistill.classList.toggle('is-sel', f === 'd'); mcDistill.setAttribute('aria-pressed', String(f === 'd'));
+  };
+  const panel = runsPanel(runsD, { onFilter: applyF, error: runsErr });
+  const pick = (f: 'c' | 'd') => (): void => {
+    const next: RunFilter = root.getAttribute('data-f') === f ? 'all' : f;
+    applyF(next); panel.setFilter(next);
+  };
+  mcCollect.addEventListener('click', pick('c'));
+  mcDistill.addEventListener('click', pick('d'));
 
-  box.replaceChildren(el('div', { class: 'cxm' },
+  root.append(
     el('p', { class: 'cxm-cap' }, el('b', { text: '흐름 지도' }),
-      el('span', { text: '자료가 지식이 되어 AI 에 닿기까지 — 흰 카드는 장소, 어두운 칩은 그 사이에서 도는 기계입니다. 선이 흐르면 그 기계가 돌고 있는 것이고, 누르면 그 화면이 열립니다' })),
+      el('span', { text: '자료가 지식이 되어 AI 에 닿기까지 — 흰 카드는 장소, 어두운 칩은 그 사이에서 도는 기계입니다. 선이 흐르면 그 기계가 돌고 있는 것이고, 기계를 누르면 아래에 그 기계의 기록이 나옵니다' })),
     lane,
-    el('div', { class: 'cxm-strip' }, inboxCell, jobsCell)));
+    panel.root);
+  box.replaceChildren(root);
 }
 
 let blindEl: HTMLElement | null = null;
@@ -224,12 +242,6 @@ export async function renderContextMapScreen(box: HTMLElement): Promise<void> {
   await renderContextMap(box);
 }
 
-// 자동 실행 칩 — context-home(#1841)의 것을 그대로 승계(그 파일은 이 화면으로 대체됐다).
-function jobChip(label: string, job: any): HTMLElement {
-  const state = !job ? 'off' : (!job.any_enabled ? 'off' : 'on');
-  const txt = !job ? '미등록' : (!job.any_enabled ? '꺼짐' : intervalText(job.interval_sec) + (job.last_run_at ? ' · ' + relTime(job.last_run_at) : ' · 미실행'));
-  return el('span', { class: 'cxh-job is-' + state },
-    el('i', { class: 'cxh-job-dot', 'aria-hidden': 'true' }), el('b', { text: label }), el('span', { text: txt }));
 }
 function intervalText(sec: any): string {
   const n = Number(sec) || 0;
@@ -240,8 +252,8 @@ function intervalText(sec: any): string {
 }
 
 // ── 확인할 것 — 사람 손이 필요한 것 전부, 큐 하나 ─────────────────────────────
-//  종전엔 세 곳이었다: 지식 검토(#/knowledge/review) · 카테고리 제안(#/knowledge/classifications) ·
-//  점검 발견(점검 ▸ 확인할 것). 처리 화면 자체는 그대로 두고(저장 경로 불변, #837), **입구를 하나로** 모은다.
+//  지식 검토(#/knowledge/review) · 카테고리 제안(#/knowledge/classifications) 두 입구를 하나로 모은다(#837 — 처리 화면·저장 경로는 그대로).
+//  점검 발견은 #4173 으로 뺐다(아래).
 export async function renderContextInbox(box: HTMLElement): Promise<void> {
   box.replaceChildren(skeleton('확인할 것을 세는 중'));
   let d: any = null;
@@ -261,21 +273,16 @@ export async function renderContextInbox(box: HTMLElement): Promise<void> {
   if (proposed) tops.push(card('note', '카테고리 제안 ' + fmtNum(proposed) + '건',
     'AI 가 카테고리를 제안했지만 확신이 낮아 사람 확인을 기다립니다.', '#/knowledge/classifications', '확인하기'));
   if (!tops.length) tops.push(el('div', { class: 'cxh-allok' },
-    el('b', { text: '승인·제안 대기가 없습니다' }), el('span', { text: '아래 점검 발견만 남았습니다.' })));
-
-  const findingsHost = el('div', {});
-  box.replaceChildren(el('div', { class: 'cxm-inbox' },
-    el('div', { class: 'cxh-todos' }, ...tops),
-    el('h2', { class: 'cxh-h', text: '점검이 찾아낸 것' }),
-    findingsHost));
-  try { await renderFindings(findingsHost); }
-  catch (e) { findingsHost.replaceChildren(el('p', { class: 'admin-hint', text: '발견을 불러오지 못했습니다 — ' + (e as Error).message })); }
+    el('b', { text: '확인할 것이 없습니다' }), el('span', { text: '승인·카테고리 제안 대기가 모두 비어 있습니다.' })));
+  //  #4173 — 「점검이 찾아낸 것」 절은 걷었다. 지금 점검기는 미완성이라 그 결과(발견 수백 건)가 사람을 시끄럽게만 했다.
+  //   제대로 만든 점검기가 붙으면(#4174) 필요한 것만 여기로 다시 올린다.
+  box.replaceChildren(el('div', { class: 'cxm-inbox' }, el('div', { class: 'cxh-todos' }, ...tops)));
 }
 
-/** 상단 트레이 배지 수 — 셸(context.ts)이 탭 줄 오른쪽 트레이에 붙인다. */
+/** 상단 트레이 배지 수 — 셸(context.ts)이 탭 줄 오른쪽 트레이에 붙인다. 점검 발견은 세지 않는다(#4173). */
 export function inboxCount(d: any): number {
-  const st = (d && d.stages) || {}; const g = (d && d.gates) || {};
-  return Number(g.knowledge_pending || 0) + Number(g.classification_proposed || 0) + Number(st.manage?.open?.total || 0);
+  const g = (d && d.gates) || {};
+  return Number(g.knowledge_pending || 0) + Number(g.classification_proposed || 0);
 }
 
 // ── 셸로 가는 길(#3830) ─────────────────────────────────────────────────────

@@ -314,6 +314,17 @@
   .cxm-empty { white-space: normal; }
   .cxm-cell, .cxm-cell-inbox { flex-wrap: wrap; }
   .cxm-cell-inbox > .btn { width: 100%; justify-content: center; }
+  /* 자동 실행 패널(#4172) — 머리는 두 줄로, 줄은 요약을 아래로 내린다(시간 · 로고 · 이름 / 요약). */
+  .cxr-head { gap: 10px; padding: 12px; }
+  .cxr-sched { margin-left: 0; order: 3; width: 100%; flex-wrap: wrap; gap: 4px 12px; }
+  .cxr-tl { padding: 8px 12px 0; }
+  .cxr-legend { padding: 2px 12px 8px; }
+  .cxr-legend .cxr-sp { display: none; }
+  .cxr-feed { padding: 2px 4px 6px; }
+  .cxr-row-m { grid-template-columns: 40px 28px minmax(0, 1fr) 14px; row-gap: 3px; }
+  .cxr-row-m .cxr-s { grid-column: 3 / 4; grid-row: 2; justify-content: flex-start; white-space: normal; flex-wrap: wrap; }
+  .cxr-row-m .cxr-chev { grid-column: 4; grid-row: 1; }
+  .cxr-xd { padding: 0 12px 12px; grid-template-columns: 1fr; }
   .cxm-cell-s { flex: 1 1 100%; white-space: normal; }
   /* 세션 이력 — 한 줄에 [제목·메타][완전 삭제][이어보기] 셋이 서던 것을 두 줄로. */
   .sess-row { flex-wrap: wrap !important; row-gap: 6px !important; }

@@ -292,8 +292,60 @@ export async function listSessionsForOwnerPage(owner: string, limit = 200, works
  *  owner(org_member)는 워크스페이스를 넘나드는 전역 신원이라(IDENTITY_GLOBAL_TABLES) owner 만으로는 개인
  *  워크스페이스에 박스 전체 세션 제목이 샌다 — 실측(#1875, 2026-08-27 장원준 신고: 개인 ws 사이드바에 팀 세션 제목).
  */
+// ── 자동 실행(작업 상자) 세션 가르기(#4172) ─────────────────────────────────────
+//  작업 상자(org_task)는 증류·카테고리 붙이기·점검·위탁이 AI 를 **사람 대신** 돌리는 자리다. 그 대화도 세션 기록 캡처 훅이
+//   요청자(레인의 실행 계정) 이름으로 올리므로, 그 사람의 «내 세션 이력» 에 사람이 연 적 없는 세션이 쌓였다.
+//  판정 근거는 둘 — ① 업로드가 싣는 실행 id(LIVELY_SESSION_ID = 작업 상자 id) 가 org_task.session_id 인가(앞으로 · 확실),
+//   ② 옛 행은 대화 첫 청크의 cwd 가 작업 폴더(`delegated/task-<id>` · 샌드박스 `/task/work`)인가(한 번만 보고 결과를 적는다).
+const TASK_CWD_RE = /\/delegated\/task-\d+|\/task\/work(?:\/|"|$)/;
+
+/** 업로드 쪽 — 실행 id 가 작업 상자면 이 대화를 'task' 로 찍는다(이미 찍혔으면 아무 일도 안 한다). */
+export async function stampTaskSession(nodeId: string, sessionId: string, executionId: string): Promise<void> {
+  if (!executionId) return;
+  await itemsPool.query(
+    `UPDATE session s SET run_kind='task'
+      WHERE s.node_id=$1 AND s.session_id=$2 AND s.run_kind IS DISTINCT FROM 'task'
+        AND EXISTS (SELECT 1 FROM org_task t WHERE t.session_id=$3)`,
+    [nodeId, sessionId, executionId]);
+}
+
+/** 대화 첫 조각의 cwd 가 작업 폴더인가 — 클로드(`"cwd":"…"`)·코덱스(session_meta.payload.cwd) 모두 같은 키를 쓴다. */
+export function isTaskTranscriptHead(head: string): boolean {
+  const m = head.slice(0, 64 * 1024).match(/"cwd"\s*:\s*"([^"]+)"/);
+  return !!m && TASK_CWD_RE.test(m[1] + '"');
+}
+
+/** 목록 쪽 — 이 소유자의 **아직 판정 안 된** 대화만 첫 청크를 풀어 한 번씩 판정해 적는다. 한 번의 조회 + 한 번의 갱신. */
+async function backfillSessionRunKind(owner: string): Promise<void> {
+  const r = await itemsPool.query(
+    `SELECT s.node_id, s.session_id, c.data, c.codec
+       FROM session s
+       JOIN session_log_chunk c ON c.node_id = s.node_id AND c.session_id = s.session_id AND c.at_offset = 0
+      WHERE s.owner = $1 AND s.run_kind IS NULL AND s.parent_session_id IS NULL
+      LIMIT 400`, [owner]);
+  if (!r.rows.length) return;
+  const task: string[][] = [], human: string[][] = [];
+  for (const row of r.rows as Array<{ node_id: string; session_id: string; data: Buffer; codec: string | null }>) {
+    let head = "";
+    try { head = decodeChunk(row.data, row.codec).subarray(0, 64 * 1024).toString("utf8"); } catch { head = ""; }
+    (isTaskTranscriptHead(head) ? task : human).push([row.node_id, row.session_id]);
+  }
+  const mark = async (rows: string[][], kind: string): Promise<void> => {
+    if (!rows.length) return;
+    await itemsPool.query(
+      `UPDATE session s SET run_kind=$1
+         FROM unnest($2::text[], $3::text[]) AS v(node_id, session_id)
+        WHERE s.node_id = v.node_id AND s.session_id = v.session_id AND s.run_kind IS NULL`,
+      [kind, rows.map((x) => x[0]), rows.map((x) => x[1])]);
+  };
+  await mark(task, "task");
+  await mark(human, "human");
+}
+
 export async function listSessionsForOwner(owner: string, limit = 200, workspaceId?: string | null): Promise<SessionListRow[]> {
   if (!owner) return [];
+  //  판정은 목록을 막지 않는다 — 실패하면 그 행은 다음에 다시 본다(NULL 로 남는다).
+  await backfillSessionRunKind(owner).catch((e) => { console.warn("[session-log] 자동 실행 세션 판정 실패:", (e as Error)?.message ?? e); });
   const params: unknown[] = [owner, clampSessionListLimit(limit)];
   let wsClause = "";
   if (workspaceId) {
@@ -316,7 +368,7 @@ export async function listSessionsForOwner(owner: string, limit = 200, workspace
                   WHERE sp.session_id = s.session_id ORDER BY sp.valid_from DESC LIMIT 1) last
            JOIN project p ON p.id = last.project_id
        ) proj ON true
-      WHERE s.owner = $1 AND l.bytes > 0 AND s.parent_session_id IS NULL ${wsClause}
+      WHERE s.owner = $1 AND l.bytes > 0 AND s.parent_session_id IS NULL AND s.run_kind IS DISTINCT FROM 'task' ${wsClause}
       ORDER BY s.last_seen DESC
       LIMIT $2`,
     params);
