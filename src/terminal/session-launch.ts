@@ -23,6 +23,7 @@ import { logger } from "../log.js";
 import { isWorkSession, sessionKindFromRequest } from "../sessions/session-kind.js";
 import { createSession, killSession, normalizeCap, type CreateInput, type SessionInfo } from "./terminal-sessions.js";
 import { normalizeTheme } from "./catalog.js";
+import { withPreissuedIdentity } from "./node-session-preissue.js";   // #4135 — 노드 세션의 id·훅·MCP 토큰은 relay 전에 게이트웨이가 굽는다
 import { autoTrustWorkspace } from "./session-create-guards.js";
 import { mirrorNodeSession } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
 import { chatIoCaps } from "./harness-io/adapter.js";           // #1746 — 하네스별 대화창 능력(읽기·승인)
@@ -284,7 +285,10 @@ export async function launchSession(user: LivelyUser, input: CreateInput, opts: 
     const remoteInput = await prepareRemoteAppSession(input, me);
     const op: NodeOp = input.appId ? "createAppSession" : "create";
     const plan = nodeProjectCreatePlan(remoteInput, !!input.projectId && nodeSupports(nodeId, "injectFirstPrompt"));
-    const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: me }, input: { ...plan.createInput, invites: [], hostProfile }, invites: opts.invites });
+    //  #4135 — 세션 id·훅·MCP 토큰은 게이트웨이가 여기서 굽는다(노드는 DB 가 없다). user 객체는 relay 에 싣는 것과 같아야 한다(접두어).
+    const relayUser = { userId: me } as LivelyUser;
+    const session = await withPreissuedIdentity(relayUser, plan.createInput, (created) =>
+      relayNodeOp<SessionInfo>(nodeId, op, { user: relayUser, input: { ...created, invites: [], hostProfile }, invites: opts.invites }));
     await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
     await registerSessionInstance(session.id, me, { appId: input.appId, projectId: input.projectId, title: session.label });
     if (input.projectId && input.projectSrc !== "org") {

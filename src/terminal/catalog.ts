@@ -500,6 +500,12 @@ export interface CreateInput {
   //  (실측: /mcp "No MCP servers configured"). 게이트웨이가 "member 노드 && 생성자=노드 주인"일 때만 켠다 —
   //  노드측은 값을 믿고 따르기만 한다(정책 판단은 게이트웨이, 노드는 기계적 실행 — agent runOp 전제 그대로).
   hostProfile?: boolean;
+  // #4135 — **게이트웨이가 미리 정한 세션 신원**(노드 세션 전용). createSession 은 노드에서 돌아 DB(토큰 민팅)를 못 쓴다 —
+  //  그래서 노드 세션의 훅·MCP 가 키트를 깐 사람의 공유 토큰으로 나갔고, 게이트웨이의 owner 게이트가 그 세션을 «남의 것» 으로
+  //  보아 프로젝트 문맥·업싱크·이름짓기가 전부 안 됐다(2026-09-25 맥미니 실측). 게이트웨이가 relay 전에 id 를 정하고 그 id 로
+  //  토큰을 구워 함께 보낸다(node-session-preissue.ts) — 노드는 접두어·형식이 맞으면 값을 믿고 그대로 싣는다(hostProfile 과 같은
+  //  규약: 정책은 게이트웨이, 노드는 기계적 실행). 중앙 경로엔 없다(createSession 이 스스로 굽는다). null 토큰 = 안 싣는다.
+  preissued?: { id: string; hookToken: string | null; mcpToken: string | null };
   // 이 세션을 만든 **상시세션(org_managed_session)의 id**. ensureManagedSession 만 넘긴다(사람·라우트 경로엔 없다).
   //  · #1059 E — 값이 있으면 desired-state DB 미러를 만들지 않는다(keep-alive 가 그 영속을 소유).
   //  · #2170 — 그 id 를 `@box_managed` 로 세션에 **박는다**. 정리기가 "내가 만든 세션"을 판정하는 유일한 근거다

@@ -49,8 +49,9 @@ import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 
 import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
 import { sessionActivityTitle, paneAwaitingInput, resolveAgentPhase, observeAgentRun, harnessReportsBusy, parseReportedPhase } from "./phase.js";
 import { sessionMetaCmds, sessionWindowCmds, metaHealCmds, needsMetaHeal, makeMetaHealGate } from "./session-meta-heal.js";   // #3892 — 표식 한 벌 + 표식 없는 세션 되채우기
-import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, mintSessionMcpToken, revokeSessionHookToken } from "./profiles.js";
+import { ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, mintSessionMcpToken, revokeSessionHookToken } from "./profiles.js";
 import { ensureMemberKitSeeded } from "./member-kit-seed.js";
+import { ensureProfileKitWired } from "./profile-kit-seed.js";   // #4135 — 프로필 dir 은 mkdir 만으론 빈 껍데기다
 import { logger } from "../log.js";
 import { canSeeSession } from "./write-cap.js";
 import { loadDesiredMap, loadDesiredOne, resolveDesired, resolveSessionDir } from "../sessions/session-desired.js";
@@ -58,7 +59,8 @@ import { shouldFallbackToDesired, unobservedSessionInfo } from "./session-unobse
 import { sessionNameFromPrompt } from "./session-name.js";
 import { type LabelSource, canRelabel } from "../sessions/session-label-source.js";   // #1979 — 세션 이름 걸쇠
 
-export const sessionPrefix = (u: LivelyUser): string => `box-${userSlug(u)}-`;
+import { sessionPrefix, acceptPreissuedId } from "./session-id.js";   // #4135 — id 모양은 리프 한 자리(게이트웨이 preissue 와 같은 규칙)
+export { sessionPrefix };
 const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — 게이트웨이가 헤더로 받은 세션도 같은 자로 잰다(#852)
 const SAFE_VALUE_RE = /^[A-Za-z0-9][A-Za-z0-9._\-:/]*$/;
 const cleanLabel = (s: string): string => (s || "").replace(/[\t\n\r]/g, " ").trim().slice(0, 80);
@@ -544,7 +546,11 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   const osUser = await ensureMemberOsUser(user);
   //  ⚠ #3668 T2 — 멤버 홈 준비(키트 시딩·git 자격)는 **여기가 아니다.** 세션 컨테이너를 확보한 뒤에 돈다
   //   (prepareMemberHome 머리말 — 생성 순서 뒤집기). 종전엔 이 자리였다.
-  const id = `${sessionPrefix(user)}${crypto.randomBytes(4).toString("hex")}`;
+  //  #4135 — 노드 세션은 게이트웨이가 id 를 미리 정해 보낸다(그 id 로 구운 훅·MCP 토큰과 한 벌). 받아 줄 수 없으면 종전대로 —
+  //   그때 게이트웨이는 응답 id 가 다른 것을 보고 구운 토큰을 거둔다(node-session-preissue withPreissuedIdentity). 왜 거절했는지는 여기서 남긴다.
+  const preId = acceptPreissuedId(user, input.preissued?.id);
+  if (input.preissued && !preId) logger.warn({ got: input.preissued.id, prefix: sessionPrefix(user) }, "preissued 세션 id 거절 — 접두어·형식 불일치, 스스로 만든다");
+  const id = preId ?? `${sessionPrefix(user)}${crypto.randomBytes(4).toString("hex")}`;
   // cwd는 사용자가 고른 workspace 좌표 그대로다. 미지정이면 personal workspace 루트이며,
   // 세션 id 폴더나 프로젝트 표현 파일을 만들지 않는다.
   const rootKeyUsed = input.rootKey || "personal";
@@ -839,13 +845,21 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     if (process.env.LIVELY_MULTIPROFILE !== "0" && !input.hostProfile) {
       const profileDir = profileConfigDir(user);
       await fsp.mkdir(profileDir, { recursive: true, mode: 0o700 });
+      // 빈 프로필 방지(#4135) — 노드에는 provisionProfile(게이트웨이 관리자 버튼)이 없어 이 dir 이 훅·MCP 없이 **비어 있었고**,
+      //  CLAUDE_CONFIG_DIR 이 있으면 claude 는 홈의 settings.json 을 안 보므로 그 멤버의 모든 세션에서 훅이 통째로 안 돌았다
+      //  (세션 단계 보고·업싱크·AGENTS 주입 전부). 판을 띄우기 **전에** 배선을 보장한다 — 첫 턴부터 훅이 돌아야 한다.
+      //  best-effort(profile-kit-seed 머리말) — 못 심어도 세션은 종전대로 뜬다.
+      await ensureProfileKitWired(profileDir);
       args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
     }
     // 훅 신원(#1719 후속) — 이 pane 의 훅이 **그 세션 주인**으로 보고하게 한다(대화 uuid 매핑·활동/단계·정상종료).
     //  왜 여기만인지·왜 MCP 신원은 안 바뀌는지는 profiles.mintSessionHookToken 주석. 격리 경로는 멤버 홈의
     //  ~/.lively/token 이 이미 그 멤버 것이고 sudo env_reset 도 지나야 해서 넣지 않는다.
     //  best-effort — 못 구우면 종전대로 공유 토큰으로 떨어진다(무회귀).
-    const hookToken = await mintSessionHookToken(ownerId(user), id).catch(() => null);
+    //  #4135 — 노드 세션은 여기가 노드라 굽지 못한다(DB 없음 → 늘 null 이었다). 게이트웨이가 relay 전에 이 id 로 구워 보낸 것
+    //   (input.preissued, id 가 위에서 받아 준 그것일 때만)을 그대로 싣는다. 중앙 경로는 종전대로 여기서 굽는다.
+    const pre = input.preissued && input.preissued.id === id ? input.preissued : null;
+    const hookToken = pre ? pre.hookToken : await mintSessionHookToken(ownerId(user), id).catch(() => null);
     if (hookToken) args.push("-e", `LIVELY_TOKEN=${hookToken}`);
     // MCP 신원(#2234) — 훅과 **같은 이유, 다른 채널**이다. MCP 는 stdio 프록시로 붙고 그 프록시는 매 호출
     //  공유 `~/.lively/token`(= 키트를 깐 사람) 을 읽으므로, 이 pane 의 MCP 가 전부 남의 신원으로 나갔다.
@@ -853,7 +867,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //  #1979 세션 자동 이름짓기가 이 박스에서 구조적으로 불가능했다.
     //  ⚠ 훅 토큰과 **따로** 싣는다 — 권한 폭이 다르다(훅=세션 최소권한, MCP=그 멤버가 가진 만큼).
     //  ⚠ 값이 없으면(멤버 미상·scope 0) 아무것도 안 실어 종전 경로(공유 파일)로 떨어진다 — 무회귀.
-    const mcpToken = await mintSessionMcpToken(ownerId(user), id).catch(() => null);
+    const mcpToken = pre ? pre.mcpToken : await mintSessionMcpToken(ownerId(user), id).catch(() => null);
     if (mcpToken) args.push("-e", `LIVELY_MCP_TOKEN=${mcpToken}`);
     // #3982 — psmux는 `--`가 없으면 pane argv를 한 PowerShell 명령 문자열로 다시 합친다. 실행 경계를 명시해
     // 대화 안내·설정 같은 공백/따옴표가 셸 문법이나 사용자의 zsh/PowerShell 명령으로 재해석되지 않게 한다.
