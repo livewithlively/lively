@@ -112,9 +112,9 @@ export interface PartDef {
   /** 이 칸에 **여럿** 띄울 수 있나(#762). 셸은 이 값만 보고 [+] 에 「하나 더」를 낸다 —
    *  부품 이름이 셸에 박히지 않게(뷰어만 예외로 두지 않으려고 만든 자리다). */
   multi?: boolean;
-  /** `false` 면 [+] 고르기·「칸에 넣기」·「하나 더」에 **안 나온다**(#4135) — 다른 길(자료 칸에서 파일 두 번 누르기)로만
-   *  생기는 부품. 저장된 배치의 탭은 그대로 유효하다(parseLayout 은 PART_DEFS 전체를 본다). */
-  picker?: boolean;
+  /** 사람이 고를 수 있나. `false` 면 [+] 고르기·「칸에 넣기」·「하나 더」에 **안 나온다**(#4135) — 다른 길(자료 칸에서 파일
+   *  두 번 누르기)로만 생기는 부품. 저장된 배치의 탭은 그대로 유효하다(parseLayout 은 PART_DEFS 전체를 본다). */
+  pickable?: boolean;
 }
 
 /** 칸에 넣을 수 있는 것들 — [+] 고르기 목록의 정본. */
@@ -133,7 +133,7 @@ export const PART_DEFS: PartDef[] = [
   { type: 'web', name: '웹', icon: 'globe', multi: true, hint: '주소를 넣으면 이 칸에서 그 페이지를 봅니다. 문서·레퍼런스를 옆에 띄워 두세요.' },
   { type: 'preview', name: '미리보기', icon: 'globe', hint: '띄워 둔 화면 목록입니다. 누르면 웹 칸에 그 화면이 실립니다.' },
   // #4135(원준 2026-09-25) — 뷰어는 [+] 로 열지 않는다. 자료 칸에서 파일을 두 번 누르면 **파일마다** 뷰어가 하나씩 뜬다.
-  { type: 'editor', name: '뷰어', icon: 'eye', multi: true, picker: false, hint: '자료 칸에서 파일을 두 번 누르면 여기에 열립니다 — 문서·그림·PDF·시안·영상. 파일마다 뷰어가 하나씩.' },
+  { type: 'editor', name: '뷰어', icon: 'eye', multi: true, pickable: false, hint: '자료 칸에서 파일을 두 번 누르면 여기에 열립니다 — 문서·그림·PDF·시안·영상. 파일마다 뷰어가 하나씩.' },
   { type: 'apps', name: '앱', icon: 'grid', hint: '설치된 앱을 고르면 각 앱이 상단의 자기 탭에서 열립니다.' },
 ];
 
