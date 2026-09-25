@@ -62,6 +62,17 @@ export async function executionSessionProject(id: string, owner: string): Promis
   return r.rows[0] ? row(r.rows[0]) : null;
 }
 
+/**
+ * 지금 이 프로젝트에 붙어 있는 실행 세션 수(소유자 무관) — #4302 껍데기 되돌리기의 «세션이 섰나» 판정.
+ *  FK 가 ON DELETE SET NULL 이라 DB 는 붙은 세션이 있어도 프로젝트 삭제를 막지 않는다. 그래서 지우기 전에 여기서 잰다.
+ */
+export async function countSessionsBoundToProject(projectId: number): Promise<number> {
+  if (onNode() || !(projectId > 0)) return 0;
+  const r = await itemsPool.query(
+    `SELECT count(*)::int AS n FROM execution_session WHERE desired_project_id=$1`, [projectId]);
+  return Number((r.rows[0] as { n?: number } | undefined)?.n ?? 0);
+}
+
 /** desired 소속과 시간구간을 원자적으로 갱신한다. 같은 값 재지정은 revision/epoch를 늘리지 않는다. */
 export async function setExecutionSessionProject(input: {
   id: string; owner: string; harness?: string | null; nodeId?: string | null; projectId: number | null;

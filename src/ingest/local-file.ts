@@ -210,6 +210,21 @@ export async function supersedeLocalPath(root: LocalRoot, rel: string): Promise<
   return r.rowCount ?? 0;
 }
 
+/**
+ * supersedeLocalPath 의 역 — **그 좌표 한 건만** 다시 살린다(#4302 첨부 되돌리기: 파일이 원래 자리로 돌아왔다).
+ *  하위 경로는 건드리지 않고, 휴지통 도장이 찍힌 행(사람이 지운 것)은 되살리지 않는다.
+ */
+export async function reactivateLocalPath(root: LocalRoot, rel: string): Promise<number> {
+  const key = localExternalId(root, rel);
+  const r = await itemsPool.query(
+    `UPDATE source SET lifecycle='active', updated_at=now()
+      WHERE external_system=$1 AND external_instance=$2 AND external_id=$3 AND lifecycle='superseded'
+        AND NOT (COALESCE(fields, '{}'::jsonb) ? 'trash')
+      RETURNING id`,
+    [LOCAL_SYSTEM, normalizeExternalInstance(LOCAL_INSTANCE), key]);
+  return r.rowCount ?? 0;
+}
+
 // ── 파일 휴지통(#3778) ─────────────────────────────────────────────────────────────────────────────
 //  원준 2026-09-20: 휴지통에 「자료」 탭 — «지운 자료도 되살릴 수 있어야 한다». 종전 파일 삭제는 디스크에서 바로 지웠고(rm),
 //  자료 행만 superseded 로 숨었다 — 되살릴 바이트가 없었다. 이제 **자료가 달린 경로**는 지우는 대신 프로젝트 폴더 안
