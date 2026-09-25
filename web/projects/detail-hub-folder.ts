@@ -174,7 +174,9 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
     // 2×2 이상 — 나무 + 경로 줄 + 낱장 격자 (+ 3×2 옆 칸)
     const cols = w >= 3 ? 3 : 4;
     const grid = el('div', { class: 'pjh-fgrid tall', style: 'grid-template-columns:repeat(' + cols + ',1fr)' });
-    const capCards = cols * Math.max(1, Math.floor((h * 276 - 16 - 150) / 92)) - 1;   // 마지막 자리는 «끌어다 놓기» 카드
+    // 낱장 한 줄 높이 ≈ 타일(4:3, 폭은 3칸 3열 ≈150px · 2칸 4열 ≈100px) + 이름·메타 44px. 몸통에서 경로 줄·여백 150px 을 뺀다. 마지막 자리는 «끌어다 놓기».
+    const cardPx = cols === 3 ? 160 : 124;
+    const capCards = cols * Math.max(1, Math.floor((h * 276 - 16 - 150) / cardPx)) - 1;
     for (const it of recentFiles(items, capCards)) grid.append(fcard(it));   // 낱장은 파일만 — 폴더는 왼쪽 나무
     grid.append(el('div', { class: 'pjh-fc drop' }, hubIcon('up', 14), el('span', { text: '끌어다 놓기' })));
     const main = el('div', { class: 'pjh-fmain' }, crumb(), grid, progBox);
