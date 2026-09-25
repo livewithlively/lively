@@ -29,7 +29,7 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
   // ── 본문(읽기) — 사용자의 마크다운 그대로. 넓으면 두 단. ──
   const twoCol = h <= 1 && w >= 2;
   const readBox = (): HTMLElement => {
-    const r = el('div', { class: 'pjh-read' + (twoCol ? ' cols2' : '') });
+    const r = el('div', { class: 'pjh-read' + (twoCol ? ' cols2' : '') + (h <= 1 ? ' clip' : '') });
     if (md.trim()) r.append(renderMarkdown(md));
     else r.append(el('div', { class: 'pjh-stat', style: 'padding:4px 2px', text: '본문이 비어 있습니다 — 편집을 눌러 적으세요.' }));
     return r;

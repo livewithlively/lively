@@ -103,8 +103,13 @@ export function taskGroupsFor(tasks: TaskLike[], w: number, h: number, pref: Tas
     const list = useMine ? mine : open;
     return [{ key: 'mine', label: useMine ? '내 것 · 열림' : '열림', status: 'todo', tasks: [...list.filter(isProg), ...list.filter((t) => !isProg(t))], add: true }];
   }
-  if (h <= 1 && w === 2) return [{ key: 'week', label: '이번 주 마감', status: 'todo', tasks: dueThisWeek(tasks, nowMs), add: true }];
   const base = pref.filter === 'mine' && meId ? open.filter((t) => isMine(t, meId)) : open;
+  if (h <= 1 && w === 2) {
+    const week = dueThisWeek(tasks, nowMs);
+    // 이번 주 마감이 없으면 빈 묶음 머리만 남기지 않는다 — «열림» 으로(바닥 줄이 «이번 주 마감 0» 을 말한다).
+    if (week.length) return [{ key: 'week', label: '이번 주 마감', status: 'todo', tasks: week, add: true }];
+    return [{ key: 'open', label: '열림', status: 'todo', tasks: [...base.filter(isProg), ...base.filter((t) => !isProg(t))], add: true }];
+  }
   // 3×1 — 한 줄 높이엔 묶음 둘을 세울 자리가 없다: «열림» 한 묶음(진행 중 먼저).
   if (h <= 1) return [{ key: 'open', label: '열림', status: 'todo', tasks: [...base.filter(isProg), ...base.filter((t) => !isProg(t))], add: true }];
   if (pref.group === 'none') return [{ key: 'open', label: '열림', status: 'todo', tasks: [...base.filter(isProg), ...base.filter((t) => !isProg(t))], add: true }];

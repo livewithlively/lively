@@ -49,7 +49,8 @@ export const fillTasks: Fill = (ctx, f, body, foot, sub, acts) => {
   const open = () => ctx.openTool('tasks');
 
   // 머리 부제 — 5판: 2×1 «마감: 이번 주» · 3×1 «상태: 열림» · 그 밖 «완료 / 전체».
-  sub.textContent = (h <= 1 && w === 2) ? '마감: 이번 주' : (h <= 1 && w >= 3) ? '상태: 열림' : (total ? done + ' / ' + total + ' 완료' : '');
+  const weekN = dueThisWeek(tasks, now).length;
+  sub.textContent = (h <= 1 && w === 2) ? (weekN ? '마감: 이번 주' : '상태: 열림') : (h <= 1 && w >= 3) ? '상태: 열림' : (total ? done + ' / ' + total + ' 완료' : '');
 
   // 「⚙ 보기」 — 1칸 폭에만(글자가 많아 산만하다는 5판 코멘트). 묶기 · 필터 · 오른쪽 열.
   if (w <= 1) {
@@ -81,7 +82,7 @@ export const fillTasks: Fill = (ctx, f, body, foot, sub, acts) => {
     groups = groups.map((g) => ({ ...g, tasks: g.tasks.filter((t) => byAssignee(t) && byDue(t)) }));
   }
   const budget = rowsBudget(h, groups.length, toolsRow ? 30 : 0);
-  const tiny = w <= 1 && h <= 1;   // 1×1 — «더» 줄을 안 그리고(바닥 줄이 말한다) 그 자리도 줄로 쓴다
+  const tiny = h <= 1;   // 한 줄 높이(1×1 · 2×1 · 3×1) — «더» 줄을 안 그리고(바닥 줄이 말한다) 그 자리도 줄로 쓴다
   const caps = tiny ? [Math.min(groups[0].tasks.length, budget)] : splitRows(groups.map((g) => g.tasks.length), budget);
   const cols = taskColsFor(w, pref);
   const shown = caps.reduce((a, c) => a + c, 0);

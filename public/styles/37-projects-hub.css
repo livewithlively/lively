@@ -746,3 +746,9 @@ a.pjh-row-link.pjh-row-n:hover { color: var(--blue); }
 .pjh-frl.short .pjh-fr-m { display: none; }
 .pjh-frl.short .pjh-fr-th { width: 24px; }
 .pjh-frl.short .pjh-fr-th .pjh-th { width: 24px; height: 24px; }
+/* 본문 읽기 — 줄 높이 22px 고정(6줄·9줄 단위로 잘려 줄 중간이 안 끊긴다) · 한 줄 높이는 스크롤 없이 아래 페이드 · 두 줄 이상은 스크롤 + 페이드 */
+.pjh-read { line-height: 22px; position: relative; }
+.pjh-read > .md { line-height: 22px; }
+.pjh-read.clip { overflow: hidden; }
+.pjh-body-content { position: relative; }
+.pjh-body-content::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 28px; background: linear-gradient(to bottom, transparent, var(--bg)); pointer-events: none; }
