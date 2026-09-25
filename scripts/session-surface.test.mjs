@@ -132,14 +132,18 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
   //   원인은 `chatFirst()` 가 두 뜻을 겸한 것 — «codex app-server 인가»(층을 붙일 근거)와
   //   «대화창이 본자리인가»(어느 탭으로 열지)를 한 함수가 답하고 있었다. chatMode 가 'tmux' 인
   //   claude 는 첫 뜻으로 거짓이라, 둘째 뜻까지 거짓이 되어 터미널이 기본이 됐다.
-  ok(/const chatHome = \(\): boolean => chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode/.test(chat),
-    "㉚ ★ «대화창이 본자리인가» 가 «codex 인가» 와 갈려 있다");
+  ok(/const isCodex = \(\): boolean => String\(target\.raw\?\.harness \|\| ''\) === 'codex';/.test(chat),
+    "㉚ 코덱스 여부를 하네스 행으로 판정한다");
+  ok(/const chatHome = \(\): boolean => !isCodex\(\) && \(chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode/.test(chat),
+    "㉚-b 코덱스는 앱 서버·대화 런타임 여부와 무관하게 터미널을 먼저 연다");
   //  ⚠ 항이 **더 붙는 것**은 막지 않는다 — #3847 이 «서버가 관측 못 한 세션(observed:false)은 대화로 연다» 를
   //   더했다. 여기서 재는 것은 «첫 화면의 축이 chatHome() 인가» 다(chatFirst() 로 정하면 claude 가 터미널로 열린다).
   ok(/setMode\(chatHome\(\)[^;\n]{0,60}\? 'chat' : 'term'\)/.test(chat),
     "㉛ ★ 첫 화면을 그 축으로 정한다 — chatFirst() 로 정하면 claude 가 터미널로 열린다");
   ok(/!modeChosen && [^;\n]{0,24}mode === 'chat' && !chatHome\(\)/.test(chat),
     "㉜ tmux 라고 되돌리는 분기가 대화 런타임 세션을 되돌리지 않는다(두 줄이 서로 밀치면 화면이 깜빡인다)");
+  ok(/if \(!hadLive && live && !modeChosen && mode === 'term' && chatHome\(\)\) setMode\('chat'\);/.test(chat),
+    "㉜-b 코덱스 실시간 층이 늦게 붙어도 터미널 기본 보기를 되돌리지 않는다");
 
   //  ★ 2026-09-01 신고: "클로드 왜 중간 대답은 표시 안되냐? 최종대답밖에 표시못함?"
   //   원인은 **대화 id 매핑**이었다. 화면이 대화 파일을 찾는 유일한 단서가 claude_session_id 인데
