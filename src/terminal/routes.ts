@@ -9,6 +9,8 @@ import crypto from "node:crypto";
 import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
+import { withPreissuedIdentity } from "./node-session-preissue.js";   // #4135 — 노드 세션의 id·훅·MCP 토큰은 relay 전에 게이트웨이가 굽는다
+import { revokeSessionHookToken } from "./profiles.js";               // #4135 — 노드 세션을 죽일 때 그 토큰(훅·MCP 둘 다)을 거둔다
 import { wrap, HttpError } from "../http/rest-util.js";
 import { aiLoginStep, isAiLoginHarness, parseAiLogin, type AiLoginHarness } from "./ai-login-flow.js";   // #2055 터미널 없는 AI 로그인
 import { cancelAiLogin, dropLoginSession, pasteAiLogin, readAiLogin, startAiLogin, touchHarnessSeat } from "./ai-login-run.js";
@@ -1340,7 +1342,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     if (nodeId) {
       await requireCreatableNode(me, nodeId);
       const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);
-      const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: me }, input: { ...input, invites: [], hostProfile }, invites: st.invites });
+      const relayUser = { userId: me } as LivelyUser;
+      const session = await withPreissuedIdentity(relayUser, input, (created) =>   // #4135 — id·훅·MCP 토큰은 게이트웨이가 굽는다
+        relayNodeOp<SessionInfo>(nodeId, "create", { user: relayUser, input: { ...created, invites: [], hostProfile }, invites: st.invites }));
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
       await registerSessionInstance(session.id, me, { appId: input.appId, projectId: input.projectId, title: session.label });
       await mirrorNodeSession({ ...session, invites: st.invites }, nodeId, input, me);
@@ -1459,6 +1463,10 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
           }
         }
       }
+      // #4135 — 게이트웨이가 relay 전에 구워 실어 준 이 세션의 훅·MCP 토큰(preissued)을 여기서 거둔다(revokeSessionHookToken 은
+      //  이름과 달리 훅·MCP 라벨 둘 다 본다) — 노드의 killSession 은 DB 가 없어 못 거둔다. 보관(reclaim)도 판은 내리므로 같이
+      //  거둔다(복원은 새로 굽는다). 거둔 개수 0 은 오류가 아니다(이 변경 전에 뜬 세션 = 실어 준 적 없음).
+      await revokeSessionHookToken(id).catch((e) => logger.warn({ err: e, id }, "노드 세션 훅·MCP 토큰 회수 실패(비치명)"));
       // 보관(reclaim=1)이면 **행을 남긴다** — tmux 만 내리고 좌표·대화 id 는 DB 에 그대로 두어 restorable 로 남는다.
       //  복원 경로(POST …/restore)가 st.node_id 를 보고 그 노드에 다시 create 를 릴레이하므로 노드 세션도 되살아난다.
       //  기본(완전 삭제)은 종전과 같다: 노드가 꺼져 있어 tmux 를 못 건드려도 사용자가 '복원 안 함'을 명시했으니 행은 지운다.
@@ -1636,7 +1644,9 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       const invites = Array.isArray(st.invites) ? st.invites : [];
       const remoteInput = await prepareRemoteAppSession(input, owner);
       const op: NodeOp = input.appId ? "createAppSession" : "create";
-      const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: owner }, input: { ...remoteInput, invites: [], hostProfile }, invites });
+      const relayUser = { userId: owner } as LivelyUser;
+      const session = await withPreissuedIdentity(relayUser, remoteInput, (created) =>   // #4135 — 복원도 새 id·토큰 한 벌로 뜬다
+        relayNodeOp<SessionInfo>(nodeId, op, { user: relayUser, input: { ...created, invites: [], hostProfile }, invites }));
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: owner }, id: session.id }));
       await registerSessionInstance(session.id, owner, { appId: input.appId, projectId: input.projectId, title: session.label });
       await mirrorNodeSession({ ...session, invites }, nodeId, input, owner);
