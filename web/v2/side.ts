@@ -1891,14 +1891,7 @@ function fitWikiList(listEl: HTMLElement, order: string[], sizes: Record<string,
   if (!order.length) { paint({}); return; }
   const H = listEl.clientHeight;
   if (H <= 0) { paint(allocWikiRows({ sizes, order, budget: WIKI_FALLBACK_ROWS, forced })); return; }
-  //  내용 자체의 높이 — scrollHeight 는 내용이 짧아도 칸 높이 밑으로 안 내려가서, 칸을 0 으로 눌러 잰다.
-  const natural = (): number => {
-    const st = listEl.style; const f = st.flex; const h = st.height;
-    st.flex = 'none'; st.height = '0px';
-    const v = listEl.scrollHeight;
-    st.flex = f; st.height = h;
-    return v;
-  };
+  const natural = (): number => listNaturalHeight(listEl);   // 내용 자체의 높이(칸을 0 으로 눌러 잰다) — [AI 세션] 카드 맞춤과 한 벌
   const minimum = allocWikiRows({ sizes, order, budget: 0, forced });
   const nMin = order.reduce((a, k) => a + minimum[k], 0);
   paint(Object.fromEntries(order.map((k) => [k, 0])));
