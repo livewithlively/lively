@@ -46,6 +46,11 @@ test("#5 마감 판정 — 이번 주 = 오늘부터 7일 안(지난 것 포함,
   const ts = [T(1, "todo", { due_date: d(-2) }), T(2, "todo", { due_date: d(3) }), T(3, "todo", { due_date: d(9) }), T(4, "done", { due_date: d(-1) }), T(5, "todo")];
   assert.deepEqual(M.dueThisWeek(ts, NOW).map((t) => t.id), [1, 2]);
   assert.equal(M.overdueCount(ts, NOW), 1);
+  // 새벽 03:00(로컬) — UTC 날짜로 «오늘» 을 잡으면 어제가 오늘이 된다(KST 00~09시). 어제 마감은 지난 것이다.
+  const dawn = new Date(2026, 8, 25, 3, 0, 0).getTime();
+  assert.equal(M.isOverdue({ id: 9, status: "todo", due_date: "2026-09-24" }, dawn), true, "새벽에도 어제 마감은 지남");
+  assert.equal(M.isOverdue({ id: 9, status: "todo", due_date: "2026-09-25" }, dawn), false, "오늘 마감은 아직");
+  assert.equal(M.todayStart(dawn), new Date(2026, 8, 25).getTime());
 });
 
 test("#6 크기별 묶음 — 1×1 내 것·열림 / 2×1 이번 주 마감 / 3×1 열림 한 묶음 / 그 밖 진행 중·할 일(완료는 어디에도 없다)", () => {
@@ -79,7 +84,8 @@ test("#8 세션 — 태스크 색인(세션 하나에 태스크 하나) · 마�
   const idx = M.sessionTaskIndex([{ id: 10, name: "A", sessions: [{ id: "s1" }, { id: "s2" }] }, { id: 11, name: "B", sessions: [{ id: "s1" }] }]);
   assert.deepEqual(idx.get("s1"), { id: 10, name: "A" }); assert.equal(idx.get("s3"), undefined);
   assert.equal(M.sessionLastActivity({ id: "x", created: 1790000000 }), 1790000000000);
-  assert.equal(M.sessionLastActivity({ id: "x", created: 1790000000, lastBusy: 1790000500000 }), 1790000500000);
+  assert.equal(M.sessionLastActivity({ id: "x", created: 1790000000, lastActive: 1790000500000 }), 1790000500000, "서버 응답의 마지막 작업 필드는 lastActive");
+  assert.equal(M.sessionLastActivity({ id: "x", created: 1790000000, lastActive: 1790000500000, lastAttached: 1790000900000 }), 1790000900000);
   const ss = [{ id: "a", created: 1 }, { id: "b", created: 3 }, { id: "c", created: 2 }];
   assert.deepEqual(M.sortSessions(ss, (s) => (s.id === "c" ? 0 : 1)).map((s) => s.id), ["c", "b", "a"]);
 });

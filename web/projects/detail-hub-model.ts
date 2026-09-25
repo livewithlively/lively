@@ -76,10 +76,15 @@ export function dayStart(iso: string | null | undefined): number {
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
 }
 const DAY = 86400000;
-export const isOverdue = (t: TaskLike, nowMs: number): boolean => { const d = dayStart(t.due_date); return !isDone(t) && Number.isFinite(d) && d < dayStart(new Date(nowMs).toISOString().slice(0, 10)) ; };
+/** 오늘 0시(로컬) — ⚠ toISOString() 을 거치면 UTC 날짜가 되어 KST 새벽 0~9시에 «어제» 가 오늘로 잡힌다(리뷰 지적 2026-09-25). */
+export function todayStart(nowMs: number): number {
+  const n = new Date(nowMs);
+  return new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
+}
+export const isOverdue = (t: TaskLike, nowMs: number): boolean => { const d = dayStart(t.due_date); return !isDone(t) && Number.isFinite(d) && d < todayStart(nowMs); };
 /** 이번 주 마감 = 오늘부터 7일 안(마감 지난 것 포함 — «이번 주에 끝내야 할 것» 을 보는 자리다). 완료는 뺀다. */
 export function dueThisWeek(tasks: TaskLike[], nowMs: number): TaskLike[] {
-  const today = dayStart(new Date(nowMs).toISOString().slice(0, 10));
+  const today = todayStart(nowMs);
   return tasks.filter((t) => { if (isDone(t)) return false; const d = dayStart(t.due_date); return Number.isFinite(d) && d <= today + 7 * DAY; })
     .sort((a, b) => dayStart(a.due_date) - dayStart(b.due_date));
 }
@@ -119,13 +124,14 @@ export function tasksFootText(tasks: TaskLike[], w: number, h: number, shown: nu
 }
 
 // ── 세션 ─────────────────────────────────────────────────────────────────────
-export interface SessionLike { id: string; label?: string | null; owner?: string | null; created?: number | null; lastBusy?: number | null; lastAttached?: number | null; lastViewed?: number | null; agentState?: string | null; working?: boolean; awaiting?: boolean; attached?: boolean; restorable?: boolean; harness?: string | null; node?: { id?: string; name?: string; online?: boolean } | null }
+export interface SessionLike { id: string; label?: string | null; owner?: string | null; created?: number | null; lastActive?: number | null; lastBusy?: number | null; lastAttached?: number | null; lastViewed?: number | null; agentState?: string | null; working?: boolean; awaiting?: boolean; attached?: boolean; restorable?: boolean; harness?: string | null; node?: { id?: string; name?: string; online?: boolean } | null }
 export interface SessionGroupDef { key: string; label: string; sessions: SessionLike[] }
 
-/** 마지막 활동 시각(ms) — 바쁜 시각 > 붙은 시각 > 만든 시각. 초 단위(created)는 ms 로. */
+/** 마지막 활동 시각(ms) — 마지막 작업(서버 응답 `lastActive` — sessions.ts 가 lastBusy 를 그 이름으로 싣는다, web/session-status.ts SessLike 와 같다)
+ *  > 붙은 시각 > 본 시각 > 만든 시각. 초 단위(created)는 ms 로. */
 export function sessionLastActivity(s: SessionLike): number {
   const ms = (v: number | null | undefined): number => { const n = Number(v) || 0; return n && n < 1e12 ? n * 1000 : n; };
-  return Math.max(ms(s.lastBusy), ms(s.lastAttached), ms(s.lastViewed), ms(s.created));
+  return Math.max(ms(s.lastActive), ms(s.lastBusy), ms(s.lastAttached), ms(s.lastViewed), ms(s.created));
 }
 
 /** 세션이 맡은 태스크 — 프로젝트 상세의 tasks[].sessions 를 뒤집어 세션 id → 태스크. 한 세션은 태스크 하나(#4084). */
