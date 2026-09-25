@@ -266,8 +266,9 @@ function timeline(runs: AutoRun[], from: number, to: number): SVGElement {
     const g: SVGElement = sv('g', { class: 't-g is-' + k });
     g.append(sv('text', { class: 't-lane', x: 0, y: y + 4 }, k === 'c' ? '수집' : '증류'),
       sv('line', { class: 't-base', x1: GUT - 6, x2: x(to), y1: y, y2: y }));
-    //  오래된 것부터 그려 최근 것이 위에 온다.
-    for (const r of runs.filter((q) => q.kind === k).slice().reverse()) {
+    //  겹칠 때 읽히는 순서로 쌓는다 — 바뀐 것 없음(짧은 막대) → 바뀐 실행(점) → 실패(✕). 같은 층에선 최근 것이 위.
+    const layer = (q: AutoRun): number => (!q.ok ? 2 : changed(q) ? 1 : 0);
+    for (const r of runs.filter((q) => q.kind === k).slice().reverse().sort((a, b) => layer(a) - layer(b))) {
       const cx = x(r.t);
       let mk: SVGElement;
       if (!r.ok) mk = sv('g', { class: 't-mk t-x' }, sv('circle', { cx, cy: y, r: 6.5 }), sv('path', { d: `M${cx - 2.6} ${y - 2.6}l5.2 5.2M${cx + 2.6} ${y - 2.6}l-5.2 5.2` }));
