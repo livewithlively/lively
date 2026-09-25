@@ -18,7 +18,7 @@ import { auditOrgContent } from "../v6/content-audit.js";
 import { sessionFootprint, purgeFootprint, type PurgeSelection } from "../v6/session-footprint-store.js";
 import { projectDirOnThisHost } from "../terminal/session-project.js";   // #1850 — 완전 삭제한 프로젝트의 폴더(첨부·자료 파일)
 import { rm as fsRm } from "node:fs/promises";   // #1850 P2 — 이 세션이 남긴 것   // #1850 — 삭제 '사실'만 남긴다(내용 없이)
-import { appendSessionLog, firstUserPromptTitle, sessionLogWatermark, sessionOwner, sessionRegistryOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwnerPage, listSessionsForProject, listSubagentsForSession, purgeSessionLog, isSessionPurged, type SessionListRow } from "../v6/session-log-store.js";
+import { appendSessionLog, stampTaskSession, firstUserPromptTitle, sessionLogWatermark, sessionOwner, sessionRegistryOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwnerPage, listSessionsForProject, listSubagentsForSession, purgeSessionLog, isSessionPurged, type SessionListRow } from "../v6/session-log-store.js";
 import { trashMapFor } from "./session-trash.js";   // #1851 — 내 세션 목록에 휴지통 표식
 import { sessionConvsFor, convsTakenByOtherSession } from "./session-state.js";   // #2233 — 한 박스가 갈아탄 대화 사슬
 import { currentTenant } from "../org/tenant-context.js";   // #1875 — 세션 목록 워크스페이스 격리
@@ -238,6 +238,8 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     // 같은 소유자의 다른 실행 id를 대입해 귀속을 바꾸지 못하게, 전송 주체 헤더와 query가 같은 경우만 DB 바인딩을 쓴다.
     const currentBinding = executionId && executionId === headerExecution
       ? await executionSessionProject(executionId, requester).catch(() => null) : null;
+    //  #4172 — 작업 상자(증류·카테고리 붙이기·점검·위탁)에서 돈 대화면 'task' 로 찍어 «내 세션 이력» 에서 뺀다. 비치명.
+    if (executionId && executionId === headerExecution) void stampTaskSession(nodeId, sessionId, executionId).catch(() => {});
     const claim = sessionLogProjectClaim(currentBinding, req.query.project !== undefined ? Number(req.query.project) : NaN);
     if (claim) {
       try {

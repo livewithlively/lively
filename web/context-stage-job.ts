@@ -16,10 +16,8 @@
 //   ③ **만들면 켠다.** 꺼진 채 만드는 건 ①이 경고하는 바로 그 상태를 손수 만드는 일이다. 끄고 싶으면
 //      같은 카드의 토글이 한 번에 끈다(만들 때 두 번 누르게 하는 것보다 끌 때 한 번 누르게 하는 게 낫다).
 //
-//  ⚠ 권한: cron 은 GET·POST 둘 다 admin scope(capabilities/cron.ts) — 게이트웨이 권한으로 도는 액션이라
-//   블래스트 반경이 멤버머신 훅과 다르다. 비-admin 은 상태 조회부터 막히므로 카드가 그 사실을 정직하게
-//   말하고 끝낸다(빈 카드·거짓 초록 금지). 단계 설정 자체는 비-admin 도 만질 수 있는 것이 있어(증류기는
-//   scope=memory) '기준은 세우는데 돌리지는 못하는' 비대칭이 남는다 — 서버 스코프 설계 몫으로 분리했다.
+//  권한: cron 은 #3872(대표 결정 2026-09-12)로 구성원 scope=memory 다 — 증류기 기준을 세우는 사람이 돌리기도 한다.
+//   조회가 실패하면 카드가 그 사실을 정직하게 말하고 끝낸다(빈 카드·거짓 초록 금지).
 import { api, el, loadPersonDirectory, personSelect, relTime, sv, toast } from './core.js';
 import { effectiveRunner, pickLabel, type PickPerson } from './lib/person-pick.js';
 import { pickStageJob, stageOffTargets } from './lib/stage-job-pick.js';
@@ -148,8 +146,8 @@ export async function stageJobCard(spec: StageJobSpec, rerender: () => void): Pr
   let jobs: any[] = [];
   try { const r = await api('/api/ui/cron'); jobs = (r && r.jobs) || []; }
   catch {
-    // 비-admin — 상태를 볼 수 없다. 조용히 비우면 '없음'으로 오독되므로 이유를 말한다.
-    line.textContent = `${spec.stage} 자동 실행 상태는 관리자만 볼 수 있습니다 — 돌고 있는지 확인이 필요하면 관리자에게 문의하세요.`;
+    // 못 읽었다 — 조용히 비우면 '없음'으로 오독되므로 사정을 말한다(cron 은 #3872 로 구성원 scope=memory — 권한 탓이 아니다).
+    line.textContent = `${spec.stage} 자동 실행 상태를 불러오지 못했습니다 — 잠시 뒤 다시 열어 보세요.`;
     return card;
   }
 

@@ -85,22 +85,27 @@ const subPieceRow = (token, label, sub, btn) => el('div', { class: 'inj-piece in
 //  allowlist(SSRF) 는 'AI 도구'·'DB 데이터소스' 화면 안(allowlistCard)으로, 임의 코드 훅은 '커스텀 훅'으로 분리.
 // ════════════════════════════════════════════════════════════════════
 function injectionMap(detail, data) {
-  const rc = data.runtimeConfig;                 // admin 만 non-null. 없으면 토글/편집 숨기고 딥링크+미리보기만.
-  const canEdit = !!data.canEdit && !!rc;
+  //  #4135(원준 2026-09-25) — 워크스페이스 안에서는 모두 같은 권한. 주입 설정은 구성원 누구나(org_injection_update · injectionConfig),
+  //   관리자 몫은 구성원 컴퓨터에 닿는 둘뿐이다: 키트 자동 업데이트(self_update) · work_roots(디렉터리 경로).
+  const isAdmin = !!data.canEdit;                // org_overview: canEdit = admin
+  const rc = data.runtimeConfig || data.injectionConfig;   // admin 은 전량, 구성원은 주입 축만. 둘 다 없으면 보기 전용.
+  const canEdit = !!(data.canManage ?? data.canEdit) && !!rc;
   const hooks = (rc && rc.hooks) || {};
   const orgHooks = data.orgHooks || [];
   const customFor = (ev) => orgHooks.filter((h) => h.event === ev);
 
   // 런타임 설정 부분 저장 — 서버가 patch 병합(제공 필드만 갱신)하므로 바뀐 것만 보낸다.
   async function saveRuntime(patch, okMsg?) {
-    const r = await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify(patch) });
+    //  관리자는 종전 그대로 runtime-config(전량). 구성원은 주입 축 전용 저장 — self_update 는 서버가 «지금 값 그대로» 일 때만 넘긴다.
+    const r = await api(isAdmin ? '/api/ui/org/runtime-config' : '/api/ui/org/injection-config', { method: 'POST', body: JSON.stringify(patch) });
     if (r && r.runtimeConfig) data.runtimeConfig = r.runtimeConfig;
+    if (r && r.injection) data.injectionConfig = r.injection;
     toast(okMsg || '저장됨 — 구성원 다음 세션부터 반영');
   }
 
   // 시점 ON/OFF — hooks JSON 전체를 보내 다른 시점 값 보존. label 을 주면 '주입' 외 토글(예: 자동 업데이트)에도 쓴다.
   function momentToggle(hookKey, label?, onMsg?, offMsg?) {
-    const chk = el('input', { type: 'checkbox' }); chk.checked = hooks[hookKey] !== false; chk.disabled = !canEdit;
+    const chk = el('input', { type: 'checkbox' }); chk.checked = hooks[hookKey] !== false; chk.disabled = !canEdit || (hookKey === 'self_update' && !isAdmin);
     chk.addEventListener('change', async () => {
       try {
         await saveRuntime({ hooks: { ...hooks, [hookKey]: chk.checked } }, chk.checked ? (onMsg || '주입 켜짐') : (offMsg || '주입 꺼짐'));
@@ -335,7 +340,7 @@ function injectionMap(detail, data) {
 
   const ptuBlock = momentBlock('작업 중 — PostToolUse', '도구 사용 후 라이블리 작업 세션인지 플래그를 남긴다(주입 없음 · 종료 너지 판정에 사용).',
     momentToggle('work_flag', ' 감지 켜기', '감지 켜짐', '감지 꺼짐'),
-    canEdit ? listEditor('work-roots — 이 폴더에서 켠 세션을 라이블리 작업으로 인식 (줄당 절대경로)', rc.work_roots, 'work_roots', '/Users/you/repo') : null,
+    canEdit && isAdmin ? listEditor('work-roots — 이 폴더에서 켠 세션을 라이블리 작업으로 인식 (줄당 절대경로)', rc.work_roots, 'work_roots', '/Users/you/repo') : null,
     canEdit ? listEditor('기록 인정 툴(write_tools) — 이 lively 툴을 사용한 세션에는 종료 너지를 보내지 않습니다 · 비우면 기본 목록 사용', rc.write_tools, 'write_tools', 'knowledge_save') : null,
     // #906 — write_tools 와 시맨틱이 반대(비우면 끔)라 라벨에 명시. 값이 곧 on/off + 범위다.
     pullToolsEditor(),
@@ -351,7 +356,8 @@ function injectionMap(detail, data) {
   const updBlock = momentBlock('키트 자동 업데이트 — SessionStart(백그라운드)',
     '구성원 컴퓨터의 라이블리 키트(훅 코드·연결 설정)를 게이트웨이 최신본과 동기화합니다. 세션 시작 시 버전만 비교하고, 다르면 백그라운드로 내려받아 재설치합니다 → 다음 세션부터 적용(현재 세션은 방해하지 않음). 회사 맥락·스킬은 이 토글과 무관하게 매 세션 자동으로 적용됩니다.',
     momentToggle('self_update', ' 자동 업데이트 켜기', '자동 업데이트 켜짐 — 구성원 다음 세션부터', '자동 업데이트 꺼짐 — 구성원이 직접 업데이트 명령을 실행해야 합니다'),
-    el('p', { class: 'admin-hint inj-sub' }, ...uiText('끄면 훅 코드·연결 설정 변경이 구성원에게 전달되지 않습니다(구성원이 [내 AI 세션 생성] 화면의 업데이트 명령을 직접 실행해야 함). 구성원 개인이 끄려면 환경변수 LIVELY_NO_AUTO_UPDATE=1 을 설정합니다.')));
+    el('p', { class: 'admin-hint inj-sub' }, ...uiText('끄면 훅 코드·연결 설정 변경이 구성원에게 전달되지 않습니다(구성원이 [내 AI 세션 생성] 화면의 업데이트 명령을 직접 실행해야 함). 구성원 개인이 끄려면 환경변수 LIVELY_NO_AUTO_UPDATE=1 을 설정합니다.')),
+    isAdmin ? null : el('p', { class: 'admin-hint inj-sub' }, ...uiText('이 스위치는 구성원 컴퓨터의 키트를 바꾸는 설정이라 관리자만 바꿉니다.')));
 
   // 기타 이벤트 — 위 3시점 외 커스텀 훅.
   const otherHooks = orgHooks.filter((h) => !HANDLED.includes(h.event));
@@ -371,7 +377,7 @@ function injectionMap(detail, data) {
   detail.replaceChildren(
     sectionHead('세션 주입', '이 조직의 AI가 매 세션을 시작할 때 무엇을 자동으로 읽는지 정합니다.'),
     el('div', { class: 'admin-stack' },
-      !rc ? el('p', { class: 'admin-hint' }, ...uiText('※ 주입 시점 ON/OFF·너지 편집은 관리자만 가능합니다. 아래는 보기 전용 + 편집 위치로의 이동만 동작합니다.')) : null,
+      !rc ? el('p', { class: 'admin-hint' }, ...uiText('※ 주입 설정을 불러오지 못해 보기 전용입니다. 아래는 편집 위치로의 이동만 동작합니다.')) : null,
       el('div', { class: 'inj-moments' }, ssBlock, ptuBlock, stopBlock, updBlock, otherBlock)));
 }
 

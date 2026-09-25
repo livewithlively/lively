@@ -183,7 +183,7 @@ export async function ingestPolicyPanel(detail, data): Promise<void> {
       el('h3', { class: 'cxc-title' }, el('span', { text: 'AI가 쓴 지식 확인' })),
       el('p', { class: 'cxc-lead', text: 'AI가 새로 쓰거나 고친 지식을 사람이 확인한 뒤에 쓰이게 할지 정합니다. 사람이 웹에서 직접 쓴 지식에는 걸리지 않습니다.' })),
     el('div', { class: 'cxc-head-acts' },
-      el('span', { class: 'cxc-ro', title: '조직 전체의 지식에 걸리는 설정이라 관리자만 바꿀 수 있습니다', text: canEdit ? '관리자 설정' : '읽기 전용 · 관리자만 바꿈' })));
+      el('span', { class: 'cxc-ro', title: '워크스페이스 전체의 지식에 걸리는 설정입니다', text: canEdit ? '팀 설정' : '읽기 전용' })));
   detail.replaceChildren(el('div', { class: 'cxc rvp' }, head, gateCard(preset, obs, reload, canEdit), rulesSection(rules, reload, canEdit, catName)));
 }
 

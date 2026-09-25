@@ -13,6 +13,7 @@ import { effectiveHooks, seedHookIds } from "../../org/delivery/seed-hook-lock.j
 import { envSourcesPayload, maskDbSource } from "./db-sources.js";
 import { membersPayload } from "./members.js";
 import { sectionsPayload } from "./org-content.js";
+import { injectionView } from "./runtime-config.js";
 import { restRead } from "./shared.js";
 
 // ── org_overview 와 메뉴 단위 툴이 **같은 모양**을 내도록 공유하는 조립기(#1169) ──
@@ -40,6 +41,8 @@ export const overviewCapabilities: Capability[] = [
       // admin 에겐 전체 token_hash 노출 — 회수 핸들로 필요. 해시는 비가역(평문 토큰 복원 불가)이라 안전.
       const tokens = isAdmin ? await listTokens() : [];
       const runtimeConfig = isAdmin ? await getRuntimeConfig() : null;
+      //  #4135 — AI 전달(세션 주입)은 구성원 누구나 고친다(org_injection_update). 그 화면이 쓸 주입 축만 — work_roots·보안 필드 없이.
+      const injectionConfig = canManageWorkspace(user) ? injectionView(runtimeConfig ?? await getRuntimeConfig()) : null;
       const mcpServers = isAdmin ? await listMcpServers() : [];
       const connectors = isAdmin ? await listConnectors() : [];
       const dbSources = isAdmin ? await listDbSources() : [];
@@ -57,7 +60,7 @@ export const overviewCapabilities: Capability[] = [
       //  #1247 과 같은 LIMIT-후-필터라 핀 목록으로 읽으면 조용히 잘렸다. 핀은 knowledge_list{is_wiki:true}.
       return {
         profile, sections: sectionMap, sectionDefaults, writebackNoticeDefault,
-        members: memberRows, tokens, runtimeConfig, mcpServers, connectors,
+        members: memberRows, tokens, runtimeConfig, injectionConfig, mcpServers, connectors,
         dbSources: dbSources.map(maskDbSource), envSources,
         orgHooks, lockedHookIds: isRuntime ? seedHookIds() : [], orgHarnessAssets, orgAssetPrefs, tools, builtins: isRuntime ? toolCandidates() : [], toolPolicy,
         meaning: MEANING, canEdit: isAdmin, canManage: canManageWorkspace(user), canRuntime: isRuntime,
