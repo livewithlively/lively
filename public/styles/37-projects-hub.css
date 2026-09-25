@@ -766,3 +766,6 @@ a.pjh-row-link.pjh-row-n:hover { color: var(--blue); }
 .pjh-stail { flex: none; max-height: 46%; }
 .pjh-side-acts { display: flex; gap: 6px; flex: none; margin-top: auto; }
 .pjh-side .pjh-stat { flex: none; }
+.pjh-side .pjh-kres { flex: none; }                                   /* 지식 3×2 옆 칸 — 안내 문장은 결과 바로 아래(빈 칸 끝이 아니라) */
+.pjh-read.cols2 > .md h1, .pjh-read.cols2 > .md h2, .pjh-read.cols2 > .md h3 { break-after: avoid-column; break-inside: avoid; }   /* 두 단: 머리말이 단 끝에 홀로 남지 않게 */
+.pjh-read.cols2 > .md blockquote { break-inside: avoid; }

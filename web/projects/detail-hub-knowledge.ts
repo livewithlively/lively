@@ -102,8 +102,8 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
     const all = rs.filter((m) => !linked.has(knName(m)));
     const fresh = all.slice(0, n);
     recHost.replaceChildren();
-    if (all.length) footTxt.textContent = '필요 ' + req.length + ' · 산출 ' + prod.length + ' · 추천 ' + all.length;
     if (!fresh.length) return;
+    footTxt.textContent = '필요 ' + req.length + ' · 산출 ' + prod.length + ' · 추천 ' + fresh.length;   // 바닥의 수 = 화면에 선 추천 줄 수(시안)
     emptyReq.textContent = '아직 없어요 — 아래 추천을 연결하거나 위에서 찾으세요.';
     if (label) recHost.append(el('div', { class: 'pjh-grp sub' }, el('b', { text: '추천' }), el('span', { class: 'pjh-grp-n', text: String(fresh.length) }), el('span', { class: 'pjh-grp-h', text: '· 연결하면 다음 세션부터 읽고 시작' })));
     for (const m of fresh) recHost.append(rrow(m));
