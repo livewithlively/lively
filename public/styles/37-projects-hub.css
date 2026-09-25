@@ -734,3 +734,6 @@ a.pjh-row-link.pjh-row-n:hover { color: var(--blue); }
 .pjh-ev-t { width: auto; min-width: 38px; white-space: nowrap; }
 .pjh-now-m > span:not(:last-child) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pjh-now-m > span:last-child { flex: none; }
+/* 상태 원은 SVG(.pjv-status-ic) — 할 일의 점선(stroke-dasharray)을 실선으로, 선은 얇게(시안 1.6px) */
+.pjh-wb > .pjv-tasks-embedded svg.pjv-status-ic circle { stroke-dasharray: none; stroke-width: 1.9; }
+.pjh-wb > .pjv-tasks-embedded svg.pjv-status-ic.sm { width: 14px; height: 14px; }
