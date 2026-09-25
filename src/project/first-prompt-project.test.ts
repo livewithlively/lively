@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   AUTO_CREATED_MARK, UNNAMED_PROJECT, firstPromptProjectPlan, humanShellProject, shellProjectFromPrompt, shouldRenameShellProject,
   discardShellProject, launchOrDiscardShell, shellDiscardVerdict, type DiscardDeps, type ShellHandle,
+  createShellProject, type ShellCreateDeps,
 } from "./first-prompt-project.js";
 
 // 28자를 넘지 않는 지시 — 이름이 그대로 이름이 되는(자르지 않는) 경로를 재려면 상한 안쪽이어야 한다(#2031).
@@ -255,4 +256,38 @@ test("#4302 붙은 세션을 셀 수 없으면 지우지 않는다(모르면 안
 test("#4302 지우기가 실패해도 던지지 않는다", async () => {
   const { deps } = fakeDeps({ deleteProject: async () => { throw new Error("DB 끊김"); } });
   assert.equal(await discardShellProject(SHELL, "507", deps), "keep");
+});
+
+function createDeps(over: Partial<ShellCreateDeps> = {}): { deps: ShellCreateDeps; deleted: number[] } {
+  const deleted: number[] = [];
+  const deps: ShellCreateDeps = {
+    createProject: async () => ({ id: 4305 }),
+    ensureAgentsMd: async () => undefined,
+    getProjectRow: async () => ({ folder: "project/4305", name: "새 작업" }),
+    deleteProject: async (id) => { deleted.push(id); },
+    ...over,
+  };
+  return { deps, deleted };
+}
+const SPEC = { name: "새 작업", description: AUTO_CREATED_MARK, nameSource: "rule" as const };
+
+test("#4302 껍데기 폴더까지 서면 그대로 돌려준다(지우지 않는다)", async () => {
+  const { deps, deleted } = createDeps();
+  assert.deepEqual(await createShellProject(SPEC, "m1", deps), { id: 4305, folder: "project/4305", name: "새 작업" });
+  assert.deepEqual(deleted, []);
+});
+
+test("#4302 행을 만든 뒤 폴더에서 실패하면 그 행을 지운다(세션은 이 프로젝트에 선 적이 없다)", async () => {
+  const a = createDeps({ ensureAgentsMd: async () => { throw new Error("EACCES"); } });
+  assert.equal(await createShellProject(SPEC, "m1", a.deps), null);
+  assert.deepEqual(a.deleted, [4305]);
+  const b = createDeps({ getProjectRow: async () => ({ folder: "" }) });
+  assert.equal(await createShellProject(SPEC, "m1", b.deps), null);
+  assert.deepEqual(b.deleted, [4305]);
+});
+
+test("#4302 행 만들기 자체가 실패하면 지울 것이 없다", async () => {
+  const { deps, deleted } = createDeps({ createProject: async () => { throw new Error("DB 끊김"); } });
+  assert.equal(await createShellProject(SPEC, "m1", deps), null);
+  assert.deepEqual(deleted, []);
 });
