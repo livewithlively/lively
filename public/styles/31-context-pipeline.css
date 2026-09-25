@@ -729,6 +729,8 @@ a.ctx-preview-t:hover { color: var(--blue); }
 .cxr-tip .m { margin-top: 2px; font-size: 12px; color: var(--muted); }
 /* 지도 쪽 — 기계 칩이 이 패널의 거름 스위치가 된다 */
 button.cxm-mc { border: 0; font: inherit; cursor: pointer; }
+/*  칩은 선로 위에 선다 — 폰(세로 선로)에서 선이 칩 한가운데를 가로질러 그려지고 탭을 가로채던 것. */
+.cxm-mc { position: relative; z-index: 1; }
 .cxm-mc.is-sel { box-shadow: 0 0 0 3px var(--bg-tint), 0 0 0 5px var(--sel-c, var(--blue)), 0 10px 24px rgba(var(--shadow-ink), .22); }
 .cxm-mc.is-c { --sel-c: #2a78d6; } .cxm-mc.is-d { --sel-c: #eb6834; }
 .cxm-mc-hint { font-size: 10.5px; font-weight: 600; color: rgba(255, 255, 255, .5); white-space: nowrap; transition: color .2s; }
