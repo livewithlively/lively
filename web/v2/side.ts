@@ -38,7 +38,8 @@ import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES, isDotState, rowDotCls } from '../session-status.js';   // #3778 2판 — 목록 줄의 점은 «나를 기다리는 것» 셋만
 import { lastAsk, watchLastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
-import { sourcesFindInput, sourcesFindShown, sourcesSideBody, sourcesSideCount, sourcesUploadPick, toggleSourcesFind } from './sources.js';   // #2423 자료 앱 사이드바 내용
+import { selKey as srcSelKey, sourcesFindInput, sourcesFindShown, sourcesHref, sourcesSideData, sourcesSideCount, sourcesUploadPick, toggleSourcesFind, uploaderLabel } from './sources.js';   // #2423 자료 앱 사이드바 재료(#4233 3판: 조립은 여기)
+import { isChatSys, sysLabel as srcSysLabel, type SrcSel } from './sources-plan.js';
 import { loadTaxonomy, openForm as openTaxForm, openGroupManager, taxonomyData } from './taxonomy.js';   // #4233 분류체계 앱 사이드바 재료
 import { catId as taxCatId, fixList as taxFixList, groupKeyOf as taxGroupKey, isArchived as taxArchived, isEmptyCat as taxEmpty, knowledgeOf as taxKnow } from '../lib/taxonomy-map.js';
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
@@ -1174,7 +1175,16 @@ function footLink(href: string, icon: Parameters<typeof glyph>[0], text: string,
     n != null ? el('span', { class: 'v2-cnt', text: String(n) }) : null);
 }
 
-// ══ [자료] 앱 사이드바 (#2423) — 구역 사이드바와 같은 틀, 내용만 자료 앱(sources.ts)의 것 ══════════════
+// ══ [자료] 앱 사이드바 (#2423 → #4233 3판): 구역 사이드바와 같은 틀, 재료는 자료 앱(sources.ts)의 것 ══════════════
+//  원준 2026-09-26: 들어온 길 셋으로 나눈다. 고정 줄 「모든 자료 N」 → 카드 셋(위키 사이드바 3판 부품 .v2-ksp · .v2-kcat · .v2-pg-past):
+//   「올린 자료」 사람 줄 · 「수집한 자료」 앱 줄(그 아래 자리 줄) · 「라이블리에서 만든 자료」 두 줄(AI가 만든 파일 · 직접 적은 글).
+//  줄 수는 위키와 같은 줄 나누기(fitWikiList): 사람 줄이 한 묶음, 앱마다 자리 줄이 한 묶음. 앱 줄과 만든 자료 두 줄은 늘 선다.
+//  카드 머리를 누르면 그 갈래 전체가 가운데 목록에 선다(AI 세션 사이드바의 카드 머리와 같은 쓰임). 켜진 줄 옮기기는 sources.ts paintSideActive.
+const srcMore = new Set<string>();
+const SRC_APP_IC: Record<string, string> = {
+  slack: 'chat', discord: 'chat', github: 'code', gitlab: 'code', linear: 'check', clickup: 'check', figma: 'pen',
+  notion: 'doc', gdrive: 'doc', 'domain-wiki': 'doc', gmail: 'mailopen', outlook: 'mailopen',
+};
 function renderSourcesSection(): void {
   if (!last) return;
   const { host } = last;
@@ -1190,17 +1200,114 @@ function renderSourcesSection(): void {
       onclick: () => { toggleSourcesFind(); redraw(); } },
       sv('svg', { viewBox: '0 0 24 24', class: 'v2-findbtn-ic', 'aria-hidden': 'true' },
         sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' }))));
+
+  const d = sourcesSideData(() => { if (last && last.activeKey() === 'sources') redraw(); });
+  const p = d.plan;
+  const fmtN = (n: number): string => Number(n).toLocaleString('en-US');
+  const isOn = (sel: SrcSel): boolean => d.cur === srcSelKey(sel);
+  const cnt = (n: number): HTMLElement => el('span', { class: 'v2-cnt', text: fmtN(n) });
+  const line = (sel: SrcSel, lead: Element, label: string, n: number, extra: string, tip: string): HTMLElement => {
+    const on = isOn(sel);
+    return el('a', { class: 'v2-wcat v2-ptl v2-kcat' + extra + (n ? '' : ' zero') + (on ? ' on' : ''), href: sourcesHref(sel), 'data-sel': srcSelKey(sel),
+      title: tip, ...(on ? { 'aria-current': 'page' } : {}) }, lead, el('span', { class: 'n', text: label }), cnt(n));
+  };
+  const moreRow = (key: string, hidden: number, full: boolean, what: string): HTMLElement | null => {
+    if (!full && hidden <= 0) return null;
+    return el('button', { class: 'v2-pg-past' + (full ? ' open' : ''), type: 'button', 'aria-expanded': String(full),
+      title: full ? '처음 화면으로 접습니다' : `${what} 전부 보기`,
+      onclick: (ev: Event) => { ev.preventDefault(); if (srcMore.has(key)) srcMore.delete(key); else srcMore.add(key); redraw(); } },
+      el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }),
+      el('span', { class: 'n', text: full ? '접기' : `${hidden}개 더` })) as HTMLElement;
+  };
+  const card = (key: string, sel: SrcSel, ic: string, name: string, n: number, tip: string, kids: HTMLElement[]): HTMLElement => {
+    const on = isOn(sel);
+    return el('section', { class: 'v2-ksp v2-pcard v2-scard v2-srccard open', 'aria-label': name, 'data-grp': key },
+      el('div', { class: 'v2-ksp-h' + (on ? ' on' : ''), 'data-sel': srcSelKey(sel) },
+        el('a', { class: 'v2-ksp-t', href: sourcesHref(sel), title: tip, ...(on ? { 'aria-current': 'page' } : {}) },
+          el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }), icon(ic, 'v2-ksp-ic'), el('span', { class: 'n', text: name })),
+        cnt(n)),
+      el('div', { class: 'v2-ksp-b' }, ...kids));
+  };
+
+  //  줄 나누기 재료: 묶음 키: 'up'(사람 줄) · 'app:<출처>'(그 앱의 자리 줄). 고른 줄은 접힌 자리에 있어도 보인다(forced).
+  const people = p ? p.uploaded.people : [];
+  const apps = p ? p.collected.apps : [];
+  const sizes: Record<string, number> = { up: people.length };
+  const forced: Record<string, number> = {};
+  for (const a of apps) sizes['app:' + a.system] = a.containers.length;
+  if (d.sel.group === 'uploaded' && d.sel.author) { const i = people.findIndex((u) => u.name === d.sel.author); if (i >= 0) forced.up = i + 1; }
+  if (d.sel.system && d.sel.container) {
+    const a = apps.find((x) => x.system === d.sel.system);
+    const i = a ? a.containers.findIndex((c) => c.name === d.sel.container) : -1;
+    if (a && i >= 0) forced['app:' + a.system] = i + 1;
+  }
+  const order = Object.keys(sizes).filter((k) => !srcMore.has(k));
+
+  const build = (alloc: Record<string, number>): HTMLElement[] => {
+    if (!p) return [el('p', { class: 'v2-empty', text: d.error ? '자료를 불러오지 못했어요. 잠시 뒤 다시 열어 주세요.' : '불러오는 중…' })];
+    //  ① 올린 자료: 사람 줄. 올린 사람이 기록되지 않은 파일은 누를 수 없는 끝 줄(「기록 없음」, 거르개가 빈 값을 못 받는다).
+    const upFull = srcMore.has('up');
+    const upShown = upFull ? people : people.slice(0, alloc.up ?? people.length);
+    const upKids: HTMLElement[] = upShown.map((u) => line({ group: 'uploaded', author: String(u.name) },
+      personFace(String(u.id || u.name), 'pava v2-ptl-ava', String(u.name)), uploaderLabel(String(u.name), u.id), u.n, ' v2-ss-who',
+      `${String(u.name)} 님이 올린 자료`));
+    const upHidden = people.length - upShown.length;
+    const upMore = moreRow('up', upHidden, upFull, '올린 사람');
+    if (upMore) upKids.push(upMore);
+    else if (p.uploaded.unnamed) upKids.push(el('span', { class: 'v2-wcat v2-ptl v2-kcat v2-ss-none', title: '올린 사람이 기록되지 않은 파일: 「올린 자료」에서 함께 보입니다' },
+      icon('person', 'v2-ptl-ic'), el('span', { class: 'n', text: '기록 없음' }), cnt(p.uploaded.unnamed)));
+    if (!p.uploaded.n) upKids.push(el('p', { class: 'v2-ksp-empty', text: '아직 올린 파일이 없어요. 머리의 ＋ 로 올리면 여기 모입니다.' }));
+
+    //  ② 수집한 자료: 앱 줄, 그 아래 자리 줄(채널 · 저장소).
+    const colKids: HTMLElement[] = [];
+    for (const a of apps) {
+      colKids.push(line({ system: a.system }, icon(SRC_APP_IC[a.system] || 'link', 'v2-ptl-ic'), srcSysLabel(a.system), a.n, ' v2-ss-app', `${srcSysLabel(a.system)}에서 가져온 자료`));
+      const key = 'app:' + a.system;
+      const full = srcMore.has(key);
+      const shown = full ? a.containers : a.containers.slice(0, alloc[key] ?? a.containers.length);
+      for (const c of shown) {
+        const label = (isChatSys(a.system) ? '#' : '') + c.name;
+        colKids.push(line({ system: a.system, container: c.name }, el('span', { class: 'v2-ss-kidpad', 'aria-hidden': 'true' }), label, c.n, ' v2-ss-kid', `${srcSysLabel(a.system)} · ${label}`));
+      }
+      const more = moreRow(key, a.containers.length - shown.length, full, srcSysLabel(a.system) + '의 자리');
+      if (more) { more.classList.add('v2-ss-kidmore'); colKids.push(more); }
+    }
+    if (!apps.length) colKids.push(el('p', { class: 'v2-ksp-empty', text: '연결한 앱에서 가져온 자료가 아직 없어요.' }));
+
+    //  ③ 라이블리에서 만든 자료: 두 줄.
+    const madeKids = [
+      line({ group: 'made_ai' }, icon('spark', 'v2-ptl-ic'), 'AI가 만든 파일', p.made.ai, '', 'AI 세션이 프로젝트 폴더에 쓴 파일'),
+      line({ group: 'made_note' }, icon('pen', 'v2-ptl-ic'), '직접 적은 글', p.made.note, '', '라이블리에 직접 적은 글(전사록 · 회의록 등)'),
+    ];
+    return [
+      card('up', { group: 'uploaded' }, 'upload', '올린 자료', p.uploaded.n, '올린 자료: 사람이 바깥에서 가져온 파일(자료 앱 · 세션 입력칸 · 프로젝트 폴더 · 태스크 첨부)', upKids),
+      card('col', { group: 'collected' }, 'inbox', '수집한 자료', p.collected.n, '수집한 자료: 연결한 앱(슬랙 · 디스코드 · 깃허브 …)에서 가져온 것', colKids),
+      card('made', { group: 'made' }, 'bolt', '라이블리에서 만든 자료', p.made.n, '라이블리에서 만든 자료: AI가 만든 파일과 직접 적은 글', madeKids),
+    ];
+  };
+
+  const allOn = isOn({});
+  const allRow = el('a', { class: 'v2-wcat v2-ptl v2-kview' + (allOn ? ' on' : ''), href: sourcesHref({}), 'data-sel': '', title: '모든 자료: 들어온 길과 상관없이 최근 순',
+    ...(allOn ? { 'aria-current': 'page' } : {}) },
+    icon('src', 'v2-ptl-ic'), el('span', { class: 'n', text: '모든 자료' }), p ? cnt(p.total) : null);
+  const keep = listBefore();
+  const listEl = el('div', { class: 'v2-app-list v2-kshelf', 'aria-label': '자료 갈래' });
+  appListEl = listEl;
   host.replaceChildren(
     ...topBits(navEl, navHost),
-    el('section', { class: 'v2-app-space', 'aria-label': '자료' },
+    el('section', { class: 'v2-app-space v2-srcside', 'aria-label': '자료' },
       secHead('자료', sourcesSideCount(),
         el('button', { class: 'v2-app-new', type: 'button', 'aria-label': '파일 올리기',
           title: '파일 올리기 — 올린 순간부터 AI 가 읽을 수 있어요', onclick: () => sourcesUploadPick() },
           sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))),
         findBtnEl),
       ...(findOn ? [el('div', { class: 'v2-find v2-find--apps' }, sourcesFindInput(() => redraw()))] : []),
-      sourcesSideBody(() => redraw())),
+      el('nav', { class: 'v2-kviews', 'aria-label': '모든 자료' }, allRow),
+      listEl),
     secFoot());
+  fitWikiList(listEl, order, sizes, forced, build);
+  listAfter(keep);
+  bindSideKeys();
 }
 
 // ══ [분류체계] 앱 사이드바 (#4233). 위키 사이드바 3판과 같은 부품(고정 두 줄 · 이름표 · 묶음 카드 · 높이에 맞춘 줄 나누기) ══

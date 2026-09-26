@@ -97,12 +97,18 @@ function personFace(id, cls, name?) {
   if (!_peopleAvatars[String(id)]) loadPeopleAvatars().then(() => paintFace(wrap, id, name));
   return wrap;
 }
+// 명부의 표시 이름(main #4135 허브와 같은 함수, stage 에 없어 #4233 자료 사이드바가 함께 싣는다). 맵이 아직 안 왔으면 ''.
+function personDisplayName(id: string): string {
+  const m = _peopleAvatars[String(id)];
+  return m && m.display_name ? String(m.display_name) : '';
+}
 
 export {
   avatarColor,
   avatarInk,
   initials,
   loadPeopleAvatars,
+  personDisplayName,
   personFace,
   profileAvatar,
   setPersonAvatar,

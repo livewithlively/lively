@@ -23,7 +23,8 @@ import { extractHwp } from "../connectors/hwp.js";   // #3778 — 한글 .hwp �
 import { memberReadRange, memberReadTo, memberStat } from "../terminal/terminal-member-fs.js";
 import { resolveRootPath, userSlug } from "../terminal/profiles.js";
 import { resolveMemberOsUser } from "../terminal/terminal-isolation.js";
-import { ensureLocalFilesDistillerOnce } from "../org/distill/local-preset.js";   // #1881 L3 — 첫 업로드 때 증류기 프리셋(꺼진 채)
+import { ensureLocalFilesDistillerOnce } from "../org/distill/local-preset.js";
+import { keepEntry, entryFields, type UploadEntry } from "./upload-entry.js";   // #4233: 들어온 길(올린 자료 · AI가 만든 파일)   // #1881 L3: 첫 업로드 때 증류기 프리셋(꺼진 채)
 import {
   LOCAL_SYSTEM, LOCAL_INSTANCE, type LocalRoot, type LocalIngestKind,
   localExternalId, parseLocalExternalId, normalizeLocalRel, classifyLocalPath, localChannelOf, localFileUrl, localMimeOf, personalRootMember,
@@ -50,6 +51,8 @@ export interface LocalUploadInput {
   uploader: { id: string | null; name?: string | null };
   /** 채널(최상위 폴더)이 없을 때의 채널명 — 프로젝트명·'uploads' 등 */
   channelFallback: string;
+  /** 들어온 길(#4233): 사람이 올렸나(upload) · AI 세션이 만들었나(generated). 판정은 ingest/upload-entry.ts. */
+  entry: UploadEntry;
 }
 export interface LocalIngestResult {
   ingested: boolean; kind: LocalIngestKind; reason?: string; source_id?: number; external_id?: string;
@@ -171,8 +174,21 @@ export async function ingestLocalUpload(u: LocalUploadInput): Promise<LocalInges
     updated_at: st.mtime ?? undefined,
     fields: { path: rel, root: u.root.kind, ext: c.ext, bytes: st.size, extracted: built.extracted, local_kind: built.kind, ...(built.reason ? { local_reason: built.reason } : {}) },
   };
+  //  프로젝트 이름(#4233): 자료 상세의 «올린 곳 · 만든 곳» 한 줄과 목록의 원천 칸이 읽는다. 폴더 이름(container_name)은
+  //   하위 폴더면 그 폴더라 프로젝트를 말하지 못한다. 못 읽으면 적지 않는다(화면이 «프로젝트 #id» 로 쓴다).
+  if (u.root.kind === "project") {
+    const pname = await getProjectRow(u.root.id).then((r) => r?.name ?? null).catch(() => null);
+    if (pname) item.fields = { ...item.fields, project_name: pname };
+  }
 
   const id = await withTx(async (client) => {
+    //  들어온 길은 처음 한 번 정해진다(#4233): 사람이 올린 파일을 AI 가 고쳐 다시 올려도 「올린 자료」에 남는다.
+    //   mirror 의 upsert 는 fields 를 통째로 바꾸므로 기존 값을 먼저 읽어 이어 준다.
+    const prev = await client.query(
+      `SELECT fields->>'entry' AS entry, fields->>'entry_session' AS entry_session FROM source
+        WHERE external_system=$1 AND external_instance=$2 AND external_id=$3`,
+      [LOCAL_SYSTEM, normalizeExternalInstance(LOCAL_INSTANCE), extId]);
+    item.fields = { ...item.fields, ...entryFields(keepEntry(prev.rows[0] as { entry?: unknown; entry_session?: unknown } | undefined, u.entry)) };
     await mirrorSourceV6(client, item, LOCAL_SYSTEM, extId);
     const r = await client.query(
       `SELECT id, lifecycle FROM source WHERE external_system=$1 AND external_instance=$2 AND external_id=$3`,

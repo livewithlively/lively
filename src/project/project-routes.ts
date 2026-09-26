@@ -6,6 +6,7 @@
 //  게이트: 인증된 멤버(auth) — 단일 조직 신뢰모델(터미널 browse/세션과 동일 수준). express.json 이후 마운트(업로드 raw 보존).
 //  prefix+deps 로 일반화 — org(/api/ui/projects, org_project) + v6(/api/ui/v6/projects, project) 양쪽 등록.
 import express from "express";
+import { uploadEntryOf } from "../ingest/upload-entry.js";   // #4233 들어온 길(up-sync 훅은 세션 헤더를 싣는다: AI 가 만든 파일)
 import path from "node:path";
 import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
@@ -248,7 +249,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     //  osUser 는 바이트가 놓인 자리의 것이다 — 멤버 저장소면 자료 등록도 그 경계로 읽어야 한다(#4064).
     const u = userOf(req);
     const ing = await ingestLocalUpload({ root: { kind: "project", id: project.id }, folder: project.folder, base, abs, osUser: store.osUser,
-      uploader: { id: viewerOf(u), name: u?.email ?? null }, channelFallback: project.name })
+      uploader: { id: viewerOf(u), name: u?.email ?? null }, channelFallback: project.name, entry: uploadEntryOf(req.headers) })
       .catch((e) => { console.warn(`[local-ingest] 자료 등록 실패 ${abs}: ${(e as Error)?.message ?? e}`); return null; });
     const st = await store.stat(abs).catch(() => null);
     // path(절대경로) — 올린 것을 **그 자리에서 AI 에게 넘기는** 화면이 쓴다(새 세션 창의 붙여넣기 첨부, #1819).

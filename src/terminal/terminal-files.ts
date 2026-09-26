@@ -9,6 +9,7 @@
 //  있었다. 여기에 경로 단위 공개범위(shared-folder-store)를 건다. 거부는 **404**(존재 은닉 — 403 은 "거기 뭔가 있다"를
 //  알려주는 오라클이다). 세션 스코프(`/sessions/:id/*`)는 이미 canAttach 로 닫혀 있으므로 중복해서 걸지 않는다.
 import express from "express";
+import { uploadEntryOf } from "../ingest/upload-entry.js";   // #4233 들어온 길(세션 헤더가 있으면 AI 가 만든 파일)
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -418,7 +419,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     try {
       const u = userOf(req);
       const loc = await localRootForBrowse(String(req.query.root ?? ""), u, base, abs);
-      if (loc) ing = await ingestLocalUpload({ ...loc, abs, osUser, uploader: { id: viewerFor(req), name: u?.email ?? null } });
+      if (loc) ing = await ingestLocalUpload({ ...loc, abs, osUser, uploader: { id: viewerFor(req), name: u?.email ?? null }, entry: uploadEntryOf(req.headers) });
     } catch (e) { console.warn(`[local-ingest] 자료 등록 실패 ${abs}: ${(e as Error)?.message ?? e}`); }
     // path = 절대경로(#1870) — 새 세션 컴포저가 개인 폴더(root=personal)에 올린 첨부를 첫 지시에 절대경로로 적는다
     //  (세션 cwd 는 세션 전용 폴더라 상대경로로는 못 찾는다 — 세션 라우트의 path 응답과 같은 이유).

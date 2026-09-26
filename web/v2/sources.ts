@@ -8,9 +8,18 @@
 //    파일은 공용 미리보기(lib/file-preview — 홈 모달·#/f 와 같은 코드)로 원문 그대로, 내려받기·폴더 문이 머리에 선다.
 //  · 분류·작동 방식은 v2 그대로다 — 출처 나무 · 출처마다 다른 목록 메타 · 민트 점(지식 연결) · 주소가 정본.
 //
+// 3판(#4233, 원준 2026-09-26 «세 가지로 나눠서 보여주면 제일 좋을 것 같기는 한데. 직관적으로 딱딱딱 나눠지니까»):
+//  · 사이드바는 **들어온 길** 셋으로 나눈다: 올린 자료(사람 줄) · 수집한 자료(앱 줄 → 자리 줄) · 라이블리에서 만든 자료(AI가 만든 파일 · 직접 적은 글).
+//    옛 네 줄(내가 올린 것 · 프로젝트에 올린 것 · 팀 전체 · 지식이 된 것)은 기준 셋을 섞어서 걷었다. 조립은 side.ts, 규칙은 sources-plan.ts.
+//  · 목록 줄마다 원천 칸(올린 사람 · AI 세션 · 앱과 자리), 원문에 «올린 곳 · 만든 곳 · 가져온 곳» 한 줄. 올린 자리는 묶음이 아니다.
+//
 // 주소: `#/sources?<선택>` = 그 자리의 목록(첫 줄이 자동으로 열린다) · `#/sources/<id>?<선택>` = 그 자료를 읽는 중.
 //  선택(query)이 함께 실려 채널 하나·자료 하나를 링크로 줄 수 있다(북마크·공유).
-import { TOKEN_KEY, api, apiUrl, busy, el, errorNote, relTime, renderMarkdown, safeHref, state, toast } from '../core.js';
+import { TOKEN_KEY, api, apiUrl, busy, el, errorNote, loadPeopleAvatars, personDisplayName, personFace, relTime, renderMarkdown, safeHref, state, toast } from '../core.js';
+import {
+  type SrcSel, type SourcesSidePlan, type PlanNode, type PlanUploader, SRC_GROUP_SELS, sysLabel, kindLabel, isChatSys,
+  planSourcesSide, normalizeSel, sideSel, showsUploaderFilter, crumbOf, emptyTextOf, originOf, placeLine, rowGroup,
+} from './sources-plan.js';   // #4233 들어온 길 규칙(순수)
 import { buildFilePreview } from '../lib/file-preview.js';   // 미리보기 판정·렌더의 단일 소유(#/f·홈 모달과 같은 코드)
 import { authDownload, authUploadProgress } from '../projects/files-upload.js';
 import { confirmDialog } from '../ui-primitives.js';
@@ -27,25 +36,8 @@ export interface SrcRow {
   reply_n?: number;     // fold 목록 전용 — 이 대화에 이어진 답글 수
   body_len?: number;    // fold 목록 전용 — 잡음(한 줄짜리) 판정용 본문 길이
 }
-export interface SrcTreeNode { system: string; container: string | null; n: number; linked: number; newest: string | null }
-
-/** 출처 이름 — external_system 은 기계 이름이라 그대로 보여 주지 않는다. 'authored' 는 사람이 직접 넣은 것. */
-const SYS_LABEL: Record<string, string> = {
-  slack: '슬랙', discord: '디스코드', github: '깃허브', gitlab: '깃랩', linear: '리니어', figma: '피그마',
-  notion: '노션', clickup: '클릭업', gdrive: '구글드라이브', gmail: '지메일', outlook: '아웃룩', local: '내 컴퓨터',
-  'domain-wiki': '도메인 위키', authored: '적어 둔 것',
-};
-const KIND_LABEL: Record<string, string> = {
-  transcript: '전사록', minutes: '회의록', email: '이메일', slack: '슬랙', discord: '디스코드',
-  notion_doc: '노션', clickup_doc: '클릭업', drive_file: '구글드라이브', local_file: '파일',
-  figma_comment: '피그마 코멘트', github_issue: '깃허브', gitlab_issue: '깃랩', linear_issue: '리니어', other: '기타',
-};
-const sysLabel = (s: string): string => SYS_LABEL[s] || s;
-const kindLabel = (k: string): string => KIND_LABEL[k] || k;
-
-/** 수집함 나무의 차례 — 대화가 위, 기록계가 아래. (내 자료는 나무 밖 첫 구역이라 local 은 여기 안 온다.) */
-const SYS_ORDER = ['slack', 'discord', 'authored', 'github', 'gitlab', 'linear', 'figma', 'notion', 'gdrive', 'gmail', 'outlook', 'clickup'];
-const sysRank = (s: string): number => { const i = SYS_ORDER.indexOf(s); return i < 0 ? SYS_ORDER.length : i; };
+export interface SrcTreeNode extends PlanNode { linked: number; newest: string | null }
+export type { SrcSel };
 
 function bytesText(n: unknown): string {
   const b = Number(n);
@@ -70,7 +62,6 @@ function readState(f: Record<string, any>): { text: string; why: string; tone: '
 }
 
 const authorOf = (r: SrcRow): string => String((r.fields || {}).author_name || '');
-const containerOf = (r: SrcRow): string => String((r.fields || {}).container_name || '');
 const isBot = (r: SrcRow): boolean => (r.fields || {}).author_is_bot === true;
 
 /** 사람 이름 — 업로드 자료의 author_name 은 이메일이라 앞부분만 쓴다(칸이 좁다). */
@@ -79,16 +70,18 @@ function shortPerson(s: string): string {
   const at = s.indexOf('@');
   return at > 0 ? s.slice(0, at) : s;
 }
+/** 올린 사람의 표시 이름: 명부(id → 이름)에 있으면 그 이름, 없으면 이메일 앞부분. */
+export function uploaderLabel(name: string, id?: string | null): string {
+  return (id && personDisplayName(id)) || shortPerson(name) || (id || '');
+}
 
-// ── 선택(나무에서 고른 자리) ────────────────────────────────────────────────
-export interface SrcSel { system?: string; container?: string; author?: string; root?: string; linked?: boolean; q?: string }
-
+// ── 선택(사이드바에서 고른 자리) ──────────────────────────────────────────────
 function selQuery(sel: SrcSel, extra?: Record<string, string>): string {
   const p = new URLSearchParams();
+  if (sel.group) p.set('group', sel.group);
   if (sel.system) p.set('system', sel.system);
   if (sel.container) p.set('container', sel.container);
   if (sel.author) p.set('author', sel.author);
-  if (sel.root) p.set('root', sel.root);
   if (sel.linked !== undefined) p.set('linked', String(sel.linked));
   if (sel.q) p.set('q', sel.q);
   for (const [k, v] of Object.entries(extra || {})) p.set(k, v);
@@ -99,19 +92,20 @@ export function sourcesHref(sel: SrcSel, id?: number | null): string {
   const qs = selQuery(sel);
   return '#/sources' + (id ? '/' + id : '') + (qs ? '?' + qs : '');
 }
+/** 옛 주소(system=local · root · system=authored)는 새 자리로 연다(sources-plan normalizeSel). */
 export function selFromParams(params: URLSearchParams): SrcSel {
-  const sel: SrcSel = {};
   const g = (k: string) => params.get(k) || undefined;
-  sel.system = g('system'); sel.container = g('container'); sel.author = g('author'); sel.q = g('q');
-  const rt = params.get('root');
-  if (rt === 'personal' || rt === 'project') sel.root = rt;
+  const grp = g('group');
   const l = params.get('linked');
-  if (l === 'true' || l === 'false') sel.linked = l === 'true';
-  return sel;
+  return normalizeSel({
+    group: grp && (SRC_GROUP_SELS as readonly string[]).includes(grp) ? grp as SrcSel['group'] : undefined,
+    system: g('system'), container: g('container'), author: g('author'), q: g('q'), root: g('root'),
+    linked: l === 'true' || l === 'false' ? l === 'true' : undefined,
+  });
 }
-const selKey = (sel: SrcSel): string => selQuery(sel);
+export const selKey = (sel: SrcSel): string => selQuery(sel);
 
-/** 나 자신 — 「내가 올린 것」이 쓰는 값. 업로드 자료의 author_name 은 이메일이다(ingest/local-file.ts). */
+/** 나 자신: 내 개인 폴더 파일인지(폴더 문) 가르는 값. 업로드 자료의 author_name 은 이메일이다(ingest/local-file.ts). */
 function myUploadName(): string | null {
   const me: any = state.me;
   return (me && (me.email || me.member_id)) ? String(me.email || me.member_id) : null;
@@ -234,15 +228,18 @@ function autoSelect(id: number): void {
 //  섰다가 반려됐다(원준 2026-09-01: "이것저것 다 깨져있고 잘려있고") — 패널 배경이 없고, 검색 입력이 그릇을
 //  넘치고, 레일을 숨긴 사람은 구역 이동 문이 통째로 사라졌다. 같은 틀을 쓰면 그 셋이 전부 공짜로 맞는다.
 // ════════════════════════════════════════════════════════════════════════
-let treeCache: { nodes: SrcTreeNode[]; at: number } | null = null;
-let sideCounts: { mine?: number; proj?: number } = {};
-let sideBodyEl: HTMLElement | null = null;
+interface SideCache { nodes: SrcTreeNode[]; uploaders: PlanUploader[]; plan: SourcesSidePlan; at: number }
+let treeCache: SideCache | null = null;
+let treeErr: unknown = null;
+let treeErrAt = 0;
+let treeLoading = false;
+let treeWait: Promise<void> = Promise.resolve();
+let sideRedraw: (() => void) | null = null;
 let srcFindOpen = false;
 
 /** 머리 숫자(자료 n건) — 나무 캐시에서. 아직 안 왔으면 null(secHead 가 숫자를 생략한다). */
 export function sourcesSideCount(): number | null {
-  if (!treeCache) return null;
-  return treeCache.nodes.reduce((a, n) => a + n.n, 0);
+  return treeCache ? treeCache.plan.total : null;
 }
 export function sourcesFindShown(): boolean { return srcFindOpen || !!(parseHash(location.hash)?.sel.q); }
 export function toggleSourcesFind(): void { srcFindOpen = !srcFindOpen; }
@@ -280,99 +277,53 @@ export function sourcesUploadPick(): void {
   fileIn.click();
 }
 
-/** 나무 몸통 — .v2-app-list(구역 목록과 같은 스크롤 그릇) 안에 내 자료·수집함이 선다.
- *  onCount: 총계가 **처음** 도착했을 때 한 번 — side.ts 가 머리 숫자를 다시 그린다(캐시 히트면 안 부른다). */
-export function sourcesSideBody(onCount: () => void): HTMLElement {
-  const box = el('div', { class: 'v2-app-list v2-ss', role: 'list', 'aria-label': '자료 출처' });
-  sideBodyEl = box;
-  const fresh = !treeCache;
-  void (async () => {
-    if (!treeCache) busy(box, el('div', { class: 'v2-src-skel' }));
-    let nodes: SrcTreeNode[] = [];
-    try { nodes = await fetchTree(); }
-    catch (e: any) { box.replaceChildren(errorNote(e, '출처를 불러오지 못했습니다')); return; }
-    if (!document.contains(box)) return;                  // 그 사이 다른 구역으로 갔다
-    fillSideBody(box, nodes);
-    if (fresh) onCount();
-  })();
-  return box;
+/** 사이드바 재료(#4233): 나무 · 올린 사람 · 그걸로 세운 카드 계획 + 지금 켜질 줄. 조립은 side.ts renderSourcesSection.
+ *  캐시가 없거나 1분이 지났으면 불러오고, 도착하면 redraw 를 한 번 부른다(분류체계 사이드바의 loadTaxonomy 와 같은 틀).
+ *  redraw 는 기억해 둔다: 올린 뒤 · 접힌 줄을 주소로 골랐을 때 사이드바를 다시 세우는 손잡이다. */
+export function sourcesSideData(redraw: () => void): { plan: SourcesSidePlan | null; error: unknown; cur: string; sel: SrcSel } {
+  sideRedraw = redraw;
+  loadSide();
+  const at = parseHash(location.hash);
+  const sel = at ? at.sel : {};
+  return { plan: treeCache ? treeCache.plan : null, error: treeCache ? null : treeErr, cur: selKey(sideSel(sel)), sel };
 }
 
-async function fetchTree(): Promise<SrcTreeNode[]> {
-  if (treeCache && Date.now() - treeCache.at < 60_000) return treeCache.nodes;
+/** 나무를 (다시) 불러온다: 없거나 1분이 지났을 때만. 도착하면 사이드바를 한 번 다시 세운다. 돌려주는 약속은 목록 머리(올린 사람)도 기다린다. */
+function loadSide(): Promise<void> {
+  //  실패하면 1분은 다시 묻지 않는다: 도착 때 부르는 redraw 가 다시 여기로 오므로, 안 막으면 실패가 끝없이 돈다.
+  if (treeLoading || (treeCache && Date.now() - treeCache.at < 60_000) || (treeErr && Date.now() - treeErrAt < 60_000)) return treeWait;
+  treeLoading = true;
+  //  얼굴 · 표시 이름(명부)도 함께 기다린다: 사람 줄이 이메일로 섰다가 이름으로 바뀌며 흔들리지 않게.
+  treeWait = Promise.all([fetchTree(), loadPeopleAvatars().catch(() => null)])
+    .then(() => { treeErr = null; })
+    .catch((e) => { treeErr = e; treeErrAt = Date.now(); })
+    .finally(() => { treeLoading = false; sideRedraw?.(); });
+  return treeWait;
+}
+
+async function fetchTree(): Promise<SideCache> {
   const r: any = await api('/api/ui/sources/tree');
-  treeCache = { nodes: (r && r.nodes) || [], at: Date.now() };
-  return treeCache.nodes;
+  const nodes: SrcTreeNode[] = (r && r.nodes) || [];
+  const uploaders: PlanUploader[] = (r && r.uploaders) || [];
+  treeCache = { nodes, uploaders, plan: planSourcesSide(nodes, uploaders), at: Date.now() };
+  return treeCache;
 }
 
-function fillSideBody(box: HTMLElement, nodes: SrcTreeNode[]): void {
-  const at = parseHash(location.hash);
-  const cur = at ? selKey(at.sel) : '';
-  const linked = nodes.reduce((a, n) => a + n.linked, 0);
-  const localN = nodes.filter((n) => n.system === 'local').reduce((a, n) => a + n.n, 0);
-  const mine = myUploadName();
-
-  const row = (o: { label: string; sel: SrcSel; n?: number | string; icon?: string; child?: boolean }): HTMLElement => {
-    const on = cur === selKey(o.sel);
-    return el('a', {
-      class: 'v2-ss-row' + (o.child ? ' child' : '') + (on ? ' on' : ''),
-      href: sourcesHref(o.sel), 'aria-current': on ? 'page' : null, 'data-sel': selKey(o.sel),
-    },
-      o.child || !o.icon ? null : el('span', { class: 'ic' }, treeIcon(o.icon)),
-      el('span', { class: 'nm', text: o.label, title: o.label }),
-      o.n === undefined ? null : el('span', { class: 'n', text: String(o.n) }));
-  };
-
-  const rows: (HTMLElement | null)[] = [];
-  rows.push(el('div', { class: 'v2-ss-sec', text: '내 자료' }));
-  const mineRow = mine ? row({ label: '내가 올린 것', sel: { system: 'local', author: mine }, icon: 'up',
-    n: sideCounts.mine !== undefined ? sideCounts.mine : undefined }) : null;
-  rows.push(mineRow);
-  const projRow = row({ label: '프로젝트에 올린 것', sel: { system: 'local', root: 'project' }, icon: 'folder',
-    n: sideCounts.proj !== undefined ? sideCounts.proj : undefined });
-  rows.push(projRow);
-  rows.push(row({ label: '팀 전체', sel: { system: 'local' }, icon: 'disk', n: localN }));
-  rows.push(row({ label: '지식이 된 것', sel: { linked: true }, icon: 'doc', n: linked }));
-
-  rows.push(el('div', { class: 'v2-ss-sec', text: '수집함' }));
-  const bySys = new Map<string, SrcTreeNode[]>();
-  for (const n of nodes) { if (n.system === 'local') continue; const a = bySys.get(n.system) || []; a.push(n); bySys.set(n.system, a); }
-  const systems = [...bySys.keys()].sort((a, b) => {
-    const ra = sysRank(a), rb = sysRank(b);
-    if (ra !== rb) return ra - rb;
-    return (bySys.get(b) || []).reduce((x, n) => x + n.n, 0) - (bySys.get(a) || []).reduce((x, n) => x + n.n, 0);
-  });
-  for (const sys of systems) {
-    const kids = (bySys.get(sys) || []).sort((a, b) => b.n - a.n);
-    const sum = kids.reduce((a, n) => a + n.n, 0);
-    rows.push(row({ label: sysLabel(sys), sel: { system: sys }, icon: sysIconKey(sys), n: sum }));
-    for (const k of kids) {
-      if (!k.container) continue;                         // 자리 이름 없는 자료는 출처 가지에서 함께 보인다
-      rows.push(row({ label: k.container, sel: { system: sys, container: k.container }, n: k.n, child: true }));
-    }
-  }
-  box.replaceChildren(...rows.filter(Boolean) as HTMLElement[]);
-
-  //  건수는 늦게 와도 된다 — 나무 집계는 출처 × 자리라 사람·root 축이 없어 이 두 줄만 따로 센다(total 만 쓰므로 limit=1).
-  const late = (r0: HTMLElement | null, sel: SrcSel, keep: (n: number) => void): void => {
-    if (!r0 || r0.querySelector('.n')) return;
-    void api('/api/ui/sources?' + selQuery(sel, { limit: '1', fold: 'true' }))
-      .then((r: any) => { const n = Number(r && r.total); if (Number.isFinite(n)) { keep(n); if (document.contains(r0)) r0.append(el('span', { class: 'n', text: String(n) })); } })
-      .catch(() => { /* 못 세도 줄은 선다 */ });
-  };
-  if (mine) late(mineRow, { system: 'local', author: mine }, (n) => { sideCounts.mine = n; });
-  late(projRow, { system: 'local', root: 'project' }, (n) => { sideCounts.proj = n; });
-}
-
-/** 주소만 바뀌었을 때 — 사이드바를 다시 만들지 않고 켜진 줄만 옮긴다. */
+/** 주소만 바뀌었을 때: 사이드바를 다시 만들지 않고 켜진 줄만 옮긴다. 고른 줄이 접힌 자리에 있으면 사이드바를 다시 세운다(forced). */
 function paintSideActive(): void {
-  if (!sideBodyEl || !document.contains(sideBodyEl)) return;
+  const box = document.querySelector<HTMLElement>('.v2-srcside');
   const at = parseHash(location.hash);
-  const cur = at ? selKey(at.sel) : '';
-  for (const r of sideBodyEl.querySelectorAll<HTMLElement>('.v2-ss-row')) {
-    const on = r.dataset.sel === cur;
-    r.classList.toggle('on', on);
-    if (on) r.setAttribute('aria-current', 'page'); else r.removeAttribute('aria-current');
+  const cur = at ? selKey(sideSel(at.sel)) : '';
+  if (box) {
+    let hit = false;
+    for (const r of box.querySelectorAll<HTMLElement>('[data-sel]')) {
+      const on = r.dataset.sel === cur;
+      hit = hit || on;
+      r.classList.toggle('on', on);
+      const link = r.matches('a') ? r : r.querySelector('a');
+      if (link) { if (on) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current'); }
+    }
+    if (!hit && at && (at.sel.container || at.sel.author)) sideRedraw?.();
   }
   const q = document.querySelector<HTMLInputElement>('input[data-src-q]');
   if (q && document.activeElement !== q) q.value = (at && at.sel.q) || '';
@@ -390,11 +341,7 @@ async function uploadFiles(files: File[]): Promise<void> {
   }
   if (!ok) return;
   toast(`${ok}개를 올렸습니다 — 올린 순간부터 AI 가 읽을 수 있어요.`);
-  treeCache = null; sideCounts = {};
-  if (sideBodyEl && document.contains(sideBodyEl)) {
-    const box = sideBodyEl;
-    void fetchTree().then((nodes) => { if (document.contains(box)) fillSideBody(box, nodes); }).catch(() => { /* 다음 그리기에 온다 */ });
-  }
+  void fetchTree().then(() => sideRedraw?.()).catch(() => { /* 다음 그리기에 온다 */ });
   if (view && mounted && document.contains(mounted)) { const k = view.key; view = null; drawFor(mounted, location.hash || '#/sources' + (k ? '?' + k : '')); }
 }
 
@@ -418,6 +365,7 @@ function treeIcon(key: string): SVGElement {
     down: 'M12 4v11M7 10.5l5 5 5-5M4.5 20h15',
     ext: 'M14 4h6v6M20 4 11 13M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6',
     dot: 'M12 6.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z',
+    spark: 'M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9zM18.5 16v4M16.5 18h4',
   };
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns, 'svg');
@@ -435,28 +383,45 @@ function treeIcon(key: string): SVGElement {
 // 목록(왼 칸) — 촘촘한 두 줄 행, 출처마다 다른 메타
 // ════════════════════════════════════════════════════════════════════════
 function listHead(sel: SrcSel): HTMLElement {
+  const crumb = el('div', { class: 'v2-srl-crumb' }, ...crumbParts(sel));
+  //  사람 이름은 명부 · 나무가 와야 안다: 아직이면 이메일 앞부분으로 섰다가 도착하면 이름으로 고친다.
+  if (sel.author && !treeCache) void loadSide().then(() => { if (document.contains(crumb)) crumb.replaceChildren(...crumbParts(sel)); });
   return el('div', { class: 'v2-srl-hd' },
-    el('div', { class: 'v2-srl-crumb' }, ...crumbParts(sel)),
+    crumb,
     el('span', { class: 'sp' }),
+    showsUploaderFilter(sel) ? uploaderPick(sel) : null,
     sel.linked === undefined
       ? el('a', { class: 'v2-src-chip', href: sourcesHref({ ...sel, linked: true }), text: '지식이 된 것만' })
       : el('a', { class: 'v2-src-chip on', href: sourcesHref({ ...sel, linked: undefined }), text: '지식이 된 것만' }));
 }
 
+/** 「올린 사람」 거르개(#4233): 모든 자료 · 올린 자료에서만 선다. 칸의 수는 그 사람이 올린 자료 수(나무의 uploaders).
+ *  나무가 아직 안 왔으면 고른 사람만 든 채로 서고, 도착하면 채운다. */
+function uploaderPick(sel: SrcSel): HTMLSelectElement {
+  const pick = el('select', { class: 'v2-src-who' + (sel.author ? ' on' : ''), 'aria-label': '올린 사람', title: '올린 사람으로 거릅니다',
+    onchange: () => { location.hash = sourcesHref({ ...sel, author: pick.value || undefined }); } }) as HTMLSelectElement;
+  const fill = (): void => {
+    const people = treeCache ? treeCache.plan.uploaded.people : [];
+    const opts = [el('option', { value: '', text: sel.author ? '올린 사람 모두' : '올린 사람' })];
+    for (const u of people) opts.push(el('option', { value: String(u.name), text: `${uploaderLabel(String(u.name), u.id)} ${u.n}` }));
+    if (sel.author && !people.some((u) => u.name === sel.author)) opts.push(el('option', { value: sel.author, text: uploaderLabel(sel.author) }));
+    pick.replaceChildren(...opts);
+    pick.value = sel.author || '';
+  };
+  fill();
+  if (!treeCache) void loadSide().then(() => { if (document.contains(pick)) fill(); });
+  return pick;
+}
+
 function crumbParts(sel: SrcSel): Node[] {
-  const b = (t: string) => el('b', { text: t });
-  const dim = (t: string) => el('span', { class: 'dim', text: t });
-  if (sel.q) return [dim('찾기'), el('span', { class: 'sep', text: '›' }), b(sel.q)];
-  if (sel.linked === true && !sel.system) return [b('지식이 된 것')];
-  if (sel.system === 'local') {
-    if (sel.author) return [dim('내 자료'), el('span', { class: 'sep', text: '›' }), b('내가 올린 것')];
-    if (sel.root === 'project') return [dim('내 자료'), el('span', { class: 'sep', text: '›' }), b('프로젝트에 올린 것')];
-    return [dim('내 자료'), el('span', { class: 'sep', text: '›' }), b('팀 전체')];
-  }
-  if (sel.system) {
-    return [dim(sysLabel(sel.system)), ...(sel.container ? [el('span', { class: 'sep', text: '›' }), b(sel.container)] : [b('')])];
-  }
-  return [b('모든 자료')];
+  const c = crumbOf(sel, (name) => {
+    const u = treeCache?.plan.uploaded.people.find((x) => x.name === name);
+    return uploaderLabel(name, u?.id);
+  });
+  const out: Node[] = [];
+  for (const d of c.dim) out.push(el('span', { class: 'dim', text: d }), el('span', { class: 'sep', text: '›' }));
+  out.push(el('b', { text: c.last }));
+  return out;
 }
 
 async function loadList(v: View, reset: boolean, offset = 0): Promise<void> {
@@ -514,33 +479,35 @@ function paintNoiseLine(v: View): void {
   v.listBox.append(btn);   // 늘 목록 맨 끝(새 행이 뒤에 붙어도 줄이 그 아래로 내려온다)
 }
 
-function emptyText(sel: SrcSel): string {
-  return sel.q ? '찾는 말이 든 자료가 없습니다.'
-    : sel.system === 'local' && sel.author ? '아직 올린 파일이 없습니다. 아래 [올리기]나 세션에 파일을 올리면 여기 모입니다.'
-    : sel.system === 'local' ? '아직 올린 파일이 없습니다. 프로젝트 폴더나 세션에 파일을 올리면 여기 모입니다.'
-    : '이 자리에는 아직 자료가 없습니다.';
-}
+const emptyText = emptyTextOf;
 
-/** 출처마다 다른 메타 한 줄 — v2 의 «출처마다 다른 열»이 열람실에선 둘째 줄이 된다. */
-function metaOf(sel: SrcSel, r: SrcRow): string {
+/** 둘째 줄: 원천 칸(누가 · 어디서)이 따로 서므로 여기엔 그 자료의 사실만: 크기 · 읽음 · 번호 · 글쓴이 · 답글 · 때. */
+function metaOf(_sel: SrcSel, r: SrcRow): string {
   const f = r.fields || {};
   const when = relTime(r.occurred_at || r.updated_at);
-  const who = shortPerson(authorOf(r)) + (isBot(r) ? ' · 봇' : '');
   const sys = r.external_system || 'authored';
   if (sys === 'local') {
     const rs = readState(f);
-    return [bytesText(f.bytes), rs.text, who, when].filter(Boolean).join(' · ');
+    return [bytesText(f.bytes), rs.text, when].filter(Boolean).join(' · ');
   }
+  //  바깥 자료의 글쓴이는 원천(앱 · 자리)과 다른 사실이라 둘째 줄에 남는다.
+  const who = shortPerson(authorOf(r)) + (isBot(r) ? ' · 봇' : '');
   if (sys === 'github' || sys === 'gitlab' || sys === 'linear') {
     const st = f.merged_at ? '머지됨' : String(f.state || '') === 'open' ? '열림' : String(f.state || '') === 'closed' ? '닫힘' : '';
     return [f.number ? '#' + f.number : '', st, who, when].filter(Boolean).join(' · ');
   }
-  if (sys === 'slack' || sys === 'discord') {
-    return [(!sel.container && containerOf(r)) ? '#' + containerOf(r) : '', who,
-      r.reply_n ? `답글 ${r.reply_n}` : '', when].filter(Boolean).join(' · ');
-  }
+  if (isChatSys(sys)) return [who, r.reply_n ? `답글 ${r.reply_n}` : '', when].filter(Boolean).join(' · ');
   if (sys === 'authored') return [kindLabel(r.kind), when].filter(Boolean).join(' · ');
-  return [sysLabel(sys) + (containerOf(r) ? ' · ' + containerOf(r) : ''), who, when].filter(Boolean).join(' · ');
+  return [who, when].filter(Boolean).join(' · ');
+}
+
+/** 원천 칸(#4233): 올린 파일은 사람(얼굴 + 이름), AI 파일은 «AI 세션 · 자리», 수집은 «앱 · 자리», 직접 적은 글은 종류. */
+function originCell(r: SrcRow): HTMLElement {
+  const o = originOf(r, (name, id) => uploaderLabel(name, id));
+  const f = r.fields || {};
+  const lead = o.kind === 'person' && o.id ? personFace(String(f.author_external_id || o.id), 'pava v2-srl-ava', String(f.author_name || ''))
+    : el('span', { class: 'v2-srl-sic' }, treeIcon(o.kind === 'ai' ? 'spark' : o.kind === 'note' ? 'note' : o.kind === 'app' ? sysIconKey(o.sys || '') : 'up'));
+  return el('span', { class: 'v2-srl-src ' + o.kind, title: o.text }, lead, el('span', { class: 't', text: o.text }));
 }
 
 function rowOf(r: SrcRow, sel: SrcSel): HTMLElement {
@@ -560,6 +527,7 @@ function rowOf(r: SrcRow, sel: SrcSel): HTMLElement {
         el('span', { class: 'ttl', text: r.title || `자료 #${r.id}`, title: r.title || '' }),
         priv ? lockGlyph() : null),
       el('s', { class: 't2', text: metaOf(sel, r) })),
+    originCell(r),
     el('span', { class: 'tick' + (r.has_knowledge ? ' on' : ''), title: r.has_knowledge ? '이 자료로 지식이 만들어졌습니다' : null }));
 }
 
@@ -624,13 +592,19 @@ function readSheet(s: any, sel: SrcSel): HTMLElement {
   const priv = s.visibility === 'members';
   const derived: any[] = s.knowledge || [];
 
+  //  누가: 올린 파일은 올린 사람, 바깥 자료는 글쓴이. AI 가 만든 파일은 사람을 적지 않는다(아래 «만든 곳» 한 줄이 말한다).
+  const grp = rowGroup(s);
+  const who = grp === 'uploaded' ? (authorOf(s as SrcRow) ? uploaderLabel(authorOf(s as SrcRow), f.author_external_id) + ' 님이 올렸습니다' : '')
+    : grp === 'collected' ? shortPerson(authorOf(s as SrcRow)) : '';
   const meta = el('div', { class: 'v2-src-dmeta' },
     el('span', { class: 'v2-src-badge', text: kindLabel(s.kind) }),
-    ...(chan ? [el('span', { class: 'mono', text: (isChat ? '#' : '') + chan })] : []),
+    ...(chan && !isFile ? [el('span', { class: 'mono', text: (isChat ? '#' : '') + chan })] : []),
     ...(isFile && f.bytes ? [el('span', { class: 'mono', text: bytesText(f.bytes) })] : []),
-    ...(authorOf(s as SrcRow) ? [el('span', { text: shortPerson(authorOf(s as SrcRow)) + (isFile ? ' 님이 올렸습니다' : '') })] : []),
+    ...(who ? [el('span', { text: who })] : []),
     el('span', { class: 'mono', text: absLike(s.occurred_at || s.updated_at) }),
     el('span', { class: 'vis' }, priv ? '지정된 사람만 봅니다' : '이 워크스페이스 사람 모두가 봅니다'));
+  //  들어온 자리 한 줄(#4233): 올린 곳 · 만든 곳 · 가져온 곳. 자리는 사이드바의 묶음이 아니라 이 자료의 사실이다.
+  const place = el('p', { class: 'v2-srd-place', text: placeLine(s) });
 
   //  문 — 파일이면 내려받기(browse API — #/f 와 같은 문)와 폴더, 남의 시스템이면 그 시스템으로.
   const acts = el('div', { class: 'v2-src-dacts' });
@@ -742,6 +716,7 @@ function readSheet(s: any, sel: SrcSel): HTMLElement {
   return el('div', { class: 'v2-srd-sheet' },
     el('h1', { class: 'v2-src-h1', text: s.title || `자료 #${s.id}` }),
     meta,
+    place,
     acts.childElementCount ? acts : null,
     bodyBox,
     knBox,
