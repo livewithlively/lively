@@ -253,13 +253,15 @@ export async function listSourceTree(viewer?: Viewer): Promise<SourceTreeNode[]>
 
 // ── 올린 사람(#4233): 「올린 자료」 카드의 사람 줄 · 목록 머리 「올린 사람」 거르개가 읽는 수. ──
 //  목록 거르개(author)와 같은 값(fields.author_name: 이메일)으로 센다. 같은 사람의 id(author_external_id)는 얼굴 · 표시 이름용.
+//  ⚠ id 는 가장 많이 쓰인 값(mode)이다. 한 이메일에 옛 id 가 섞여 있다(라이브 실측: sangmin-yoon 51 · yoon 8). max 로 고르면
+//   글자 순으로 옛 id(yoon)가 뽑혀 명부에서 이름을 못 찾고 이메일 앞부분이 선다.
 //  나무와 같은 술어(FOLD_REPLY · 뷰어)라 사람 줄의 수와 그 줄을 눌렀을 때의 목록 총계가 같다. 올린 자료는 파일뿐이라 적다.
 export interface SourceUploader { name: string | null; id: string | null; n: number }
 export async function listSourceUploaders(viewer?: Viewer): Promise<SourceUploader[]> {
   const params: unknown[] = [];
   const vis = await sourceVisWhere(viewer, params);
   const rows = await q(itemsPool,
-    `SELECT s.fields->>'author_name' AS name, max(s.fields->>'author_external_id') AS id, count(*)::int AS n
+    `SELECT s.fields->>'author_name' AS name, mode() WITHIN GROUP (ORDER BY s.fields->>'author_external_id') AS id, count(*)::int AS n
        FROM source s
       WHERE s.lifecycle='active' AND ${sourceGroupWhere("uploaded")} AND ${FOLD_REPLY} AND ${vis}
       GROUP BY 1
