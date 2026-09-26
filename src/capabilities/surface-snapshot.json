@@ -813,7 +813,17 @@
   "rest": [
    "GET /api/ui/org/auto-runs"
   ],
-  "input_hash": "b03aabec551abfe8"
+  "input_hash": "546f08f0a845351c"
+ },
+ {
+  "name": "org_auto_runs_daily",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/auto-runs/daily"
+  ],
+  "input_hash": "f1866c60b293ebc7"
  },
  {
   "name": "org_auto_run_detail",
