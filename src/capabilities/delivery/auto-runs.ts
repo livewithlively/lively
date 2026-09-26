@@ -243,8 +243,9 @@ type DayRow = { day: string; c: DayKind; d: DayKind };
 
 /**
  * 날짜별 합계 — 7일·30일 그래프와 목록 페이지의 요약줄(#4135 3판). 실행 수천 건을 다 내려보내지 않는다.
- *  수집은 SQL 로 바로 묶는다(실행 수 · 실패 = connector_run, 새로·바뀜 = org_content_audit — 실행 한 번 한 번과 맞대지 않고
- *  하루치를 통째로 센다, 합은 같다). 증류 배치는 하루 수십 건이라 줄 단위(distillRuns)를 받아 JS 에서 묶는다.
+ *  수집은 SQL 로 바로 묶는다(실행 수 · 실패 = connector_run, 새로·바뀜 = org_content_audit 중 **그 계열 수집 실행이 돌던 동안**
+ *  남은 것만 — 웹훅·백필처럼 실행 없이 들어온 것까지 세면 «실행 0회 · 새 자료 1,844» 처럼 줄과 합계가 어긋난다(매니지드 실측).
+ *  같은 계열 두 수집기가 겹쳐 돈 구간도 한 번만 센다). 증류 배치는 하루 수십 건이라 줄 단위(distillRuns)를 받아 JS 에서 묶는다.
  *  날짜 경계는 보는 사람의 시간대(tz) — 자정이 사람마다 다르다.
  */
 async function dailyRuns(since: Date, until: Date, tz: string): Promise<{ days: DayRow[]; machines: Array<{ id: string; kind: "c" | "d"; name: string; system: string | null }>; recent: AutoRunRow[] }> {
@@ -257,6 +258,9 @@ async function dailyRuns(since: Date, until: Date, tz: string): Promise<{ days: 
       `SELECT to_char((at AT TIME ZONE $3)::date, 'YYYY-MM-DD') AS day, op, count(*)::int AS n
          FROM org_content_audit
         WHERE actor LIKE 'connector:%' AND entity IN ('source','knowledge') AND op IN ('insert','update') AND at >= $1 AND at < $2
+          AND EXISTS (SELECT 1 FROM connector_run r
+                       WHERE r.system = substr(org_content_audit.actor, 11) AND r.started_at <= org_content_audit.at
+                         AND r.started_at > org_content_audit.at - interval '12 hours' AND COALESCE(r.finished_at, now()) >= org_content_audit.at)
         GROUP BY 1, 2`, [since, until, tz]),
     itemsPool.query(
       `SELECT DISTINCT r.collector_id, r.system, c.label, c.key
