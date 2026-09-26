@@ -244,7 +244,7 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     setAsideKind(kind: 'timeline' | 'panes'): void {
       const panes = kind === 'panes';
       asideBtn.classList.toggle('is-panes', panes);
-      asideBtn.setAttribute('aria-label', panes ? '자료·곁칸 열기' : '타임라인 열기');
+      asideBtn.setAttribute('aria-label', panes ? '자료·우측 사이드바 열기' : '타임라인 열기');
       asideBtn.title = panes ? '이 세션의 자료·지식·타임라인' : '이 화면의 타임라인';
     },
     setAsideTarget(target: HTMLElement | null): void { asideTarget = target; },

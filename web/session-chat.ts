@@ -321,7 +321,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   뷰어 할 수 있는게 있으면 좋겠는데") — 칸 셸의 머리줄에서 곁칸의 자료 칸을 켠다(폰: 오른쪽 서랍이 열린다). 종전엔 폰에서
   //   자료로 가는 입구가 맨 윗줄의 [타임라인] 단추뿐이었고, 그 이름으론 아무도 자료를 거기서 찾지 않았다.
   //   위 [파일](onToggleFiles)은 팝아웃(우패널) 것이라 둘이 같이 뜨지 않는다.
-  const filesGoBtn = el('button', { class: 'btn-text sc-act sc-act-files', type: 'button', title: '이 세션의 자료를 곁칸에서 봅니다 — 세션이 만든 파일을 보고 내려받아요',
+  const filesGoBtn = el('button', { class: 'btn-text sc-act sc-act-files', type: 'button', title: '이 세션의 자료를 우측 사이드바에서 봅니다. 세션이 만든 파일을 보고 내려받아요.',
     onclick: () => { if (opts.onOpenFiles) opts.onOpenFiles(); } },
     sv('svg', { viewBox: '0 0 24 24', class: 'sc-act-ic', 'aria-hidden': 'true' },
       sv('path', { d: 'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z' })),

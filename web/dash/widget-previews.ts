@@ -33,11 +33,11 @@ function ensureAside(): HTMLElement {
   asideTitle = el('b', { class: 'dash-aside-t', text: '미리보기' });
   asideOpenBtn = el('a', { class: 'dash-aside-btn', target: '_blank', rel: 'noopener', title: '새 탭에서 열기', text: '새 탭' }) as HTMLAnchorElement;
   const reload = el('button', { class: 'dash-aside-btn', type: 'button', title: '다시 불러오기', text: '새로고침' });
-  const close = el('button', { class: 'dash-aside-btn dash-aside-x', type: 'button', title: '닫기 (Esc)', 'aria-label': '곁칸 닫기', text: '✕' });
+  const close = el('button', { class: 'dash-aside-btn dash-aside-x', type: 'button', title: '닫기 (Esc)', 'aria-label': '우측 사이드바 닫기', text: '✕' });
   const grip = el('div', { class: 'dash-aside-grip', title: '드래그해서 폭 조절' });
   asideFrame = el('iframe', { class: 'dash-aside-frame', title: '미리보기 화면' }) as HTMLIFrameElement;
   // 지역 변수로 만들고 마지막에 모듈 변수에 넣는다 — 모듈 변수(null 허용)를 바로 쓰면 이 아래가 전부 null 검사에 걸린다.
-  const box: HTMLElement = el('aside', { class: 'dash-aside', 'aria-label': '미리보기 곁칸' },
+  const box: HTMLElement = el('aside', { class: 'dash-aside', 'aria-label': '미리보기 우측 사이드바' },
     grip,
     el('header', { class: 'dash-aside-h' }, asideTitle, el('span', { class: 'dash-aside-sp' }), asideOpenBtn, reload, close),
     asideFrame);
@@ -121,12 +121,12 @@ async function fillPreviews(zone: any) {
     for (const p of list) {
       const st = PREV_STATE[String(p.status)] || { t: String(p.status || ''), k: 'off' };
       const name = p.label || p.project_name || p.id;
-      const row = el('button', { class: 'dash-prev', type: 'button', title: '오른쪽 곁칸에서 열기' },
+      const row = el('button', { class: 'dash-prev', type: 'button', title: '우측 사이드바에서 열기' },
         el('span', { class: 'dash-prev-st dash-prev-st--' + st.k, title: st.t }),
         el('span', { class: 'dash-prev-b' },
           el('span', { class: 'dash-prev-t', text: name }),
           el('span', { class: 'dash-prev-m', text: [p.id, p.branch, p.last_active_at ? relTime(p.last_active_at) : ''].filter(Boolean).join(' · ') })),
-        el('span', { class: 'dash-prev-go', text: '곁칸에서 보기' }));
+        el('span', { class: 'dash-prev-go', text: '우측 사이드바에서 보기' }));
       row.addEventListener('click', () => {
         if (!p.url) return;
         openAside(p.url, name);
