@@ -2209,30 +2209,39 @@ function scheduleScan() { if (!scanTimer) scanTimer = setTimeout(scanScreen, 150
 //  모드 고르기 — 목록에서 고르면 그 방식이 될 때까지 Shift+Tab 을 보내며 **매번 화면으로 확인**한다.
 //   ⚠ 확인 없이 여러 번 보내지 않는다: 지금 방식을 못 읽거나, 한 번 눌렀는데 바뀐 게 안 보이거나, 한 바퀴를 다 돌아도
 //   못 찾으면 거기서 멈춘다(모르는 채로 계속 누르면 엉뚱한 방식에서 멈춘다).
+//   ⚠ 한 번에 하나만 돈다 — 바꾸는 동안(최대 6 × 450ms) 또 고르면 두 줄의 Shift+Tab 이 섞여 엉뚱한 방식에서 멈춘다. 그땐 누르지 않고 'busy'.
+let modeSwitching = false;
+const MODE_BUSY_MSG = '앞서 고른 방식으로 바꾸는 중이에요. 끝난 뒤 다시 골라 주세요.';
 export async function switchModeTo(target, deps?) {
-  const read = (deps && deps.read) || (() => detectMode(screenTail(8)));
-  const press = (deps && deps.press) || (() => { userTyped = true; sendInput('\x1b[Z'); });
-  const wait = (deps && deps.wait) || ((ms) => new Promise((r) => setTimeout(r, ms)));
-  let cur = read();
-  if (!cur) return 'unknown';
-  const seen = new Set([cur]);
-  for (let i = 0; i < 6; i++) {
-    if (cur === target) return 'ok';
-    press();
-    await wait(450);
-    const nx = read();
-    if (!nx || nx === cur) return 'stuck';
-    if (seen.has(nx)) return 'absent';
-    seen.add(nx); cur = nx;
-  }
-  return cur === target ? 'ok' : 'absent';
+  if (modeSwitching) return 'busy';
+  modeSwitching = true;
+  try {
+    const read = (deps && deps.read) || (() => detectMode(screenTail(8)));
+    const press = (deps && deps.press) || (() => { userTyped = true; sendInput('\x1b[Z'); });
+    const wait = (deps && deps.wait) || ((ms) => new Promise((r) => setTimeout(r, ms)));
+    let cur = read();
+    if (!cur) return 'unknown';
+    const seen = new Set([cur]);
+    for (let i = 0; i < 6; i++) {
+      if (cur === target) return 'ok';
+      press();
+      await wait(450);
+      const nx = read();
+      if (!nx || nx === cur) return 'stuck';
+      if (seen.has(nx)) return 'absent';
+      seen.add(nx); cur = nx;
+    }
+    return cur === target ? 'ok' : 'absent';
+  } finally { modeSwitching = false; }
 }
 function openModeSheet() {
+  if (modeSwitching) { toast(MODE_BUSY_MSG); return; }
   const cur = detectMode(screenTail(8));
   const pick = async (k) => {
     close();
     const r = await switchModeTo(k);
     if (r === 'ok') toast('일하는 방식: ' + modeName(k));
+    else if (r === 'busy') toast(MODE_BUSY_MSG);
     else if (r === 'unknown') toast('지금 방식을 읽지 못했어요. 화면 맨 아래 상태 줄이 보일 때 다시 해 주세요.', true);
     else if (r === 'stuck') toast('바뀐 것을 확인하지 못해 멈췄어요. 화면 맨 아래 상태 줄을 확인해 주세요.', true);
     else toast('이 세션에서는 «' + modeName(k) + '» 방식을 쓸 수 없어요.', true);
@@ -2366,6 +2375,8 @@ function insertIntoComposer(text) {
   mcompEl.value = v.slice(0, st) + text + v.slice(en);
   try { mcompEl.selectionStart = mcompEl.selectionEnd = st + text.length; } catch (_) { /* noop */ }
   mobileGrow();
+  //  값을 직접 넣으면 input 이벤트가 안 난다 — 쓰던 글 보관·보내기 단추 켜짐을 여기서 맞춘다(안 하면 첨부 직후 화면이 다시 뜰 때 경로가 사라진다).
+  saveDraft(); paintSend();
   try { mcompEl.focus(); } catch (_) { /* noop */ }
   return true;
 }
@@ -2660,17 +2671,37 @@ async function renderTextPreview(body, p, asMd) {
 // ── 폰 시트(#4229 후속, 원준 2026-09-26 «모바일에 맞게 다시 디자인·문구 수정») ──────────────────────────
 //  종전 설정 창·사용법 안내는 데스크톱 창을 폰에 그대로 띄웠다 — 폰 높이보다 커서 위(제목)·아래(닫기)가 잘렸고
 //  창 안이 밀리지 않아 닫기에 닿을 수 없었다. 폰에선 **아래에서 올라오는 시트**로: 머리(제목·완료)는 고정, 몸통만 밀린다.
+//  초점은 시트로 옮긴다 — 시트 뒤 터미널(xterm 글 상자)로 글쇠가 새지 않고, 글 상자에 있던 초점이 떠나 폰 자판도 내려간다
+//   (자판이 시트 아래쪽을 가리지 않는다). Esc 로 닫으면 연 자리로 초점을 돌려주고, 손가락으로 닫으면 돌려주지 않는다 —
+//   글 상자로 돌려주면 자판이 다시 튀어 오른다(v2/mobile.ts closeAll 과 같은 규칙). Tab 은 시트 안에서만 돈다.
+const MSHEET_FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
 function mSheet(title, body) {
+  const opener = document.activeElement as HTMLElement | null;
   const back = el('div', { class: 'msheet-back' });
-  const close = () => { back.remove(); document.removeEventListener('keydown', onKey); };
-  const onKey = (ev) => { if (ev.key === 'Escape') close(); };
-  back.append(el('div', { class: 'msheet', role: 'dialog', 'aria-label': title },
+  const close = (returnFocus = false) => {
+    back.remove(); document.removeEventListener('keydown', onKey);
+    if (returnFocus && opener && opener !== document.body && typeof opener.focus === 'function') {
+      try { opener.focus({ preventScroll: true }); } catch (_) { /* noop */ }
+    }
+  };
+  const sheet = el('div', { class: 'msheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': title, tabindex: '-1' },
     el('div', { class: 'msheet-head' }, el('h3', { text: title }),
-      el('button', { class: 'msheet-done', type: 'button', text: '완료', onclick: close })),
-    el('div', { class: 'msheet-body' }, ...body)));
+      el('button', { class: 'msheet-done', type: 'button', text: '완료', onclick: () => close() })),
+    el('div', { class: 'msheet-body' }, ...body));
+  const onKey = (ev) => {
+    if (ev.key === 'Escape') { close(true); return; }
+    if (ev.key !== 'Tab') return;
+    const f = [...sheet.querySelectorAll(MSHEET_FOCUSABLE)];
+    if (!f.length) return;
+    const a = document.activeElement;
+    const edge = ev.shiftKey ? (a === f[0] || !sheet.contains(a) || a === sheet) : (a === f[f.length - 1] || !sheet.contains(a));
+    if (edge) { ev.preventDefault(); (ev.shiftKey ? f[f.length - 1] : f[0]).focus(); }
+  };
+  back.append(sheet);
   back.addEventListener('click', (e) => { if (e.target === back) close(); });
   document.addEventListener('keydown', onKey);
   document.body.append(back);
+  try { sheet.focus({ preventScroll: true }); } catch (_) { /* noop */ }
   return close;
 }
 function applyPrefsNow(np, prevFamily) {

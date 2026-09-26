@@ -38,6 +38,8 @@ export interface MobileChrome {
   setAside(on: boolean): void;
   /** 우측 서랍을 연다 — 곁칸에 무언가를 실었을 때(미리보기). 데스크톱에선 상주 열이라 할 일이 없다. */
   openAside(): void;
+  /** 사이드바 서랍을 연다 — 폰 세션 화면은 맨 윗줄(☰)을 걷으므로 세션 머리줄의 ≡ 가 이걸 부른다(#4229 후속). */
+  openSide(): void;
   /** 사이드바 서랍 여닫이(☰) — 데스크톱 앱에선 이 단추가 창 맨 윗줄 맨 왼쪽으로 간다(#1954 3차). */
   menuBtn: HTMLElement;
   /** 우측 서랍 여닫이([타임라인]) — 브라우저 셸은 이 단추도 창 맨 윗줄 오른쪽 끝으로 옮긴다(#4088). */
@@ -241,6 +243,7 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
       if (!on && open === 'aside') closeAll();
     },
     openAside(): void { if (isMobile() && !asideBtn.hidden && open !== 'aside') openOne('aside'); },
+    openSide(): void { if (open !== 'side') openOne('side'); },
     setAsideKind(kind: 'timeline' | 'panes'): void {
       const panes = kind === 'panes';
       asideBtn.classList.toggle('is-panes', panes);

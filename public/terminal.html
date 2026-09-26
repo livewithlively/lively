@@ -220,13 +220,12 @@
   .mcomp { flex: 1; min-height: 38px; max-height: 112px; resize: none; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
     background: var(--bg); color: var(--fg); font: inherit; font-size: 16px; line-height: 1.4; }  /* 16px 미만이면 iOS 가 포커스 때 화면을 확대한다 */
   .mcomp:focus { outline: none; border-color: var(--accent); }
-  .msend { flex: none; height: 38px; padding: 0 14px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font: inherit; font-size: 14px; font-weight: 600;
-    -webkit-tap-highlight-color: transparent; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
-  .msend:active { filter: brightness(.92); }
   /* ── #4229 후속(원준 2026-09-26 코멘트) — 폰 입력 줄 다시 그리기 ── */
   /*  보내기 = 둥근 초록 ↑ 하나(자판의 리턴은 줄바꿈). 쓴 글이 없으면 흐리다. */
-  .msend { width: 38px; height: 38px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
-    background: color-mix(in srgb, var(--fg-dim) 35%, var(--bg)); color: #fff; }
+  .msend { flex: none; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+    background: color-mix(in srgb, var(--fg-dim) 35%, var(--bg)); color: #fff;
+    -webkit-tap-highlight-color: transparent; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  .msend:active { filter: brightness(.92); }
   .msend.on { background: var(--accent); }
   .msend-ic { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
   /*  첨부 = 동그라미 속 «+». 보내기 ↑ 와 같은 크기의 동그라미라 입력 줄 양 끝이 짝을 이룬다. */
