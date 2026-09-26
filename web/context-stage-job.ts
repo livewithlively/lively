@@ -109,7 +109,7 @@ export async function stageJobCard(spec: StageJobSpec, rerender: () => void): Pr
   const line = el('p', { class: 'cxr-line' });
   const acts = el('div', { class: 'cxr-acts' });
   const tile = el('span', { class: 'svc-tile cxc-tile cxc-tile-machine', 'aria-hidden': 'true' }, clockIcon());
-  const card = el('section', { class: 'cxr', 'aria-label': `${spec.stage} 자동 실행` },
+  const card = el('section', { class: 'cxr-job', 'aria-label': `${spec.stage} 자동 실행` },
     el('div', { class: 'cxr-head' }, tile,
       el('div', { class: 'cxr-main' }, el('div', { class: 'cxc-t' }, el('b', { class: 'cxr-t', text: '자동 실행' }), pill), line),
       acts));

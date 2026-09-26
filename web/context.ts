@@ -22,6 +22,7 @@ import { api, el, hasScope, sv } from './core.js';
 import { skeleton } from './ui-primitives.js';
 import { stageHealthLevels } from './context-pipeline.js';
 import { inboxCount, renderContextInbox, renderContextMapScreen } from './context-map.js';   // #762 표지(흐름 지도) + 확인할 것
+import { renderRunsPage } from './context-runs-page.js';   // #4135 3판 — 자동 실행 기록(현황의 「자세히 보기」)
 import { renderCollectors } from './context-collectors.js';
 import { openTaxonomyApp } from './taxonomy-link.js';   // #4233 카테고리 탭은 분류체계 앱으로 나갔다
 import { distillerPage, distillersPanel } from './distillers.js';
@@ -52,6 +53,8 @@ type CtxStage = {
   hint: string;
   /** 탭 줄에 세우지 않는 스테이지(확인할 것 — 오른쪽 트레이가 대신 선다). */
   tray?: boolean;
+  /** 탭 줄에 없는 하위 화면 — 들어오면 parent 탭이 켜진다(자동 실행 기록 → 현황, #4135). */
+  parent?: string;
   items: CtxItem[];
 };
 
@@ -65,6 +68,12 @@ const STAGES: CtxStage[] = [
     key: 'home', label: '현황',
     hint: '자료가 지식이 되어 AI 에 닿기까지 — 지금 어디가 막혔나',
     items: [{ key: 'home', label: '현황', draw: (b) => renderContextMapScreen(b) }],
+  },
+  {
+    //  #4135 3판 — 현황 아래 「자동 실행」 패널의 「자세히 보기 →」. 탭이 아니라 현황의 하위 화면(빵부스러기로 돌아간다).
+    key: 'runs', label: '자동 실행 기록', parent: 'home',
+    hint: '수집기·증류기가 자동으로 돈 기록 — 날짜·종류·기계·결과로 거르고, 줄을 누르면 오른쪽에서 봅니다',
+    items: [{ key: 'runs', label: '자동 실행 기록', draw: (b) => renderRunsPage(b) }],
   },
   {
     key: 'inbox', label: '확인할 것', tray: true,
@@ -197,7 +206,7 @@ export async function renderContext(view: HTMLElement, sub?: string | null, sub2
   //  정의 한 줄(#3830) — 머리에서 내려왔다. 현황은 지도가 자기 캡션을 갖고 있어 중복이라 뺀다.
   const body = el('div', { class: 'ctx-body' },
     //  현황·수집기·증류기는 화면이 자기 머리(제목 + 한 줄 설명)를 갖고 있어 정의 한 줄이 두 번 선다(#3830) — 거기선 뺀다.
-    ['home', 'sources', 'distill'].includes(stage.key) ? null : el('p', { class: 'ctx-hint', text: stage.hint }),
+    ['home', 'sources', 'distill', 'runs'].includes(stage.key) ? null : el('p', { class: 'ctx-hint', text: stage.hint }),
     host);
   view.replaceChildren(el('div', { class: 'pjv-board-wrap ctx-board-wrap' },
     el('div', { class: 'card pjv-listboard ctx-board' }, buildHeader(stage), body)));
@@ -225,8 +234,8 @@ function buildHeader(selStage: CtxStage): HTMLElement {
   const tabs = el('div', { class: 'pjv-vtabs ctx-vtabs', role: 'tablist', 'aria-label': '맥락 관리' });
   tabs.append(el('span', { class: 'ctx-hd-app' }, ctxAppIcon(), el('span', { text: '맥락 관리' })));
   for (const s of STAGES) {
-    if (s.tray) continue;   // 확인할 것 — 아래 트레이가 대신 선다
-    const on = s.key === selStage.key;
+    if (s.tray || s.parent) continue;   // 확인할 것 — 아래 트레이가 대신 선다 · 하위 화면은 탭이 아니다
+    const on = s.key === selStage.key || s.key === selStage.parent;
     const tab = el('a', {
       class: 'pjv-vtab ctx-vtab' + (on ? ' active' : '') + (s.key === 'home' ? ' ctx-vtab-ov' : ''),
       href: '#/context/' + s.key,
