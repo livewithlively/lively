@@ -59,6 +59,10 @@ export const FIRST_PROMPT_BOOT_MS = 90_000;
 export const FIRST_PROMPT_HOLD_MS = 2 * 60 * 60_000;
 //  부팅 창을 넘긴 뒤의 폴 간격 — 사람이 화면을 넘기면 2초 안에 들어간다. 2시간 × 0.4s 폴은 tmux 를 괜히 두드린다.
 const HOLD_POLL_MS = 2_000;
+// 새 세션을 만든 직후 tmux pane 이 아직 조회되지 않거나 capture-pane/display-message 중 하나가 순간 실패할 수 있다.
+// 첫 조회 실패를 곧바로 «세션이 사라졌다»로 해석하면, 게이트웨이가 이미 성공 응답을 준 첫 지시가 조용히 유실된다.
+// 연속 조회 실패만 이 창만큼 허용하고, 그 사이 한 번이라도 다시 읽히면 정상 판정 루프로 돌아간다.
+export const FIRST_PROMPT_PEEK_GRACE_MS = 15_000;
 
 // 신뢰 대화상자의 **선택지 줄** — `❯ No, exit` · `  Yes, I trust this folder` · 구판 `❯ 1. Yes, …` 를 함께 잡는다.
 //  줄머리 앵커 + Yes/No 로 시작하는 것만 = 본문이 trust 를 언급하는 것만으로는 안 걸린다(TRUST_DIALOG 와 같은 교리).
@@ -155,6 +159,15 @@ async function peek(id: string): Promise<{ pane: string; paneCmd: string }> {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/** 실행부 의존성 — 운영에서는 tmux/실제 시계를 쓰고, 시험에서는 시작 직후 pane 조회 실패를 재현한다. */
+export interface FirstPromptRuntime {
+  peek: (id: string) => Promise<{ pane: string; paneCmd: string }>;
+  sleep: (ms: number) => Promise<void>;
+  now: () => number;
+  send: (id: string, text: string) => Promise<void>;
+  trustKeys: TrustKeys;
+}
+
 /** 신뢰 대화상자에 보낼 키 — 시험은 tmux 없이 이걸 바꿔 끼운다. */
 export interface TrustKeys { down: (id: string, times: number) => Promise<void>; enter: (id: string) => Promise<void> }
 const TMUX_TRUST_KEYS: TrustKeys = { down: sendDownToSession, enter: (id) => sendKeyToSession(id, "Enter") };
@@ -183,18 +196,50 @@ export async function acceptTrustDialog(id: string, pane: string, keys: TrustKey
  *  ⚠ 자동 수락(trustOk)은 세션 전용 폴더에서만 참으로 넘긴다(파일 머리말).
  */
 export async function injectFirstPrompt(id: string, harness: string, text: string, opts?: { maxMs?: number; pollMs?: number; trustOk?: boolean }): Promise<boolean> {
+  return injectFirstPromptWithRuntime(id, harness, text, opts);
+}
+
+/** `injectFirstPrompt`의 실행부. runtime은 시작 직후 tmux 조회 실패까지 결정론적으로 시험하기 위한 경계다. */
+export async function injectFirstPromptWithRuntime(
+  id: string,
+  harness: string,
+  text: string,
+  opts?: { maxMs?: number; pollMs?: number; trustOk?: boolean; peekGraceMs?: number },
+  runtime: FirstPromptRuntime = {
+    peek,
+    sleep,
+    now: Date.now,
+    send: sendKeysToSession,
+    trustKeys: TMUX_TRUST_KEYS,
+  },
+): Promise<boolean> {
   const maxMs = opts?.maxMs ?? FIRST_PROMPT_HOLD_MS;
   const pollMs = opts?.pollMs ?? 400;
   const trustOk = opts?.trustOk ?? false;
-  const t0 = Date.now();
+  const peekGraceMs = opts?.peekGraceMs ?? FIRST_PROMPT_PEEK_GRACE_MS;
+  const t0 = runtime.now();
+  let peekFailureSince: number | null = null;
   let acceptedTrust = false;
   let saidHolding = false;
   let saidUnreadable = false;
   for (;;) {
     let seen: { pane: string; paneCmd: string };
-    try { seen = await peek(id); }
-    catch { return false; }                                  // 세션이 사라졌다(닫힘·죽음) — 넣을 곳이 없다
-    const elapsedMs = Date.now() - t0;
+    try {
+      seen = await runtime.peek(id);
+      peekFailureSince = null;
+    } catch {
+      const now = runtime.now();
+      peekFailureSince ??= now;
+      const missingMs = now - peekFailureSince;
+      // 정확히 경계인 순간에도 한 번 더 읽는다. pane 생성과 이 폴이 같은 시각에 맞물려 첫 지시를 버리지 않기 위해서다.
+      if (missingMs <= peekGraceMs) {
+        await runtime.sleep(pollMs);
+        continue;
+      }
+      console.warn(`[terminal] 첫 지시를 넣지 못했다(${id}) — 세션 화면을 ${Math.round(missingMs / 1000)}초 동안 읽지 못했다.`);
+      return false;
+    }
+    const elapsedMs = runtime.now() - t0;
     const step = firstPromptStep({ ...seen, harness, elapsedMs, maxMs, trustOk, blindMaxMs: FIRST_PROMPT_BOOT_MS });
     if (step === "give-up") { console.warn(`[terminal] 첫 지시를 넣지 못했다(${id}) — ${Math.round(elapsedMs / 1000)}초 동안 입력창이 안 떴다(로그인·오류 화면일 수 있다).`); return false; }
     const booting = elapsedMs < FIRST_PROMPT_BOOT_MS;
@@ -206,21 +251,21 @@ export async function injectFirstPrompt(id: string, harness: string, text: strin
       //  ★ #3626 — **화면을 읽고** «Yes» 로 옮긴 뒤 Enter(acceptTrustDialog — 아웃박스와 같은 함수, #3949).
       //   기본 선택이 Yes 라는 전제는 틀렸다. 못 읽으면 **아무것도 안 누르고** 기다린다 — 잘못 누르면 하네스가 종료되고
       //   그 세션이 통째로 사라진다.
-      if ((await acceptTrustDialog(id, seen.pane)) === "unreadable") {
+      if ((await acceptTrustDialog(id, seen.pane, runtime.trustKeys)) === "unreadable") {
         //  한 번만 말한다 — 이제 2시간을 기다리므로 폴마다 남기면 로그가 그 줄로 덮인다.
         if (!saidUnreadable) console.warn(`[terminal] 신뢰 대화상자의 선택지를 못 읽었다(${id}) — 대신 누르지 않는다(사람이 답할 수 있게 남긴다).`);
         saidUnreadable = true;
-        await sleep(booting ? pollMs : HOLD_POLL_MS);
+        await runtime.sleep(booting ? pollMs : HOLD_POLL_MS);
         continue;
       }
       acceptedTrust = true;
-      await sleep(pollMs);
+      await runtime.sleep(pollMs);
       continue;
     }
     if (step === "send") {
-      await sendKeysToSession(id, text);
+      await runtime.send(id, text);
       return true;
     }
-    await sleep(booting ? pollMs : HOLD_POLL_MS);
+    await runtime.sleep(booting ? pollMs : HOLD_POLL_MS);
   }
 }
