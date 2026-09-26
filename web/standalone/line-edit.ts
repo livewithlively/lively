@@ -19,6 +19,7 @@ export interface LineEditCtx {
   mac: boolean;      // ⌘ 계열을 쓸 자리인가(맥 관례)
   hasSel: boolean;   // 지금 선택이 서 있나(terminal.ts 가 커서·앵커로 매번 새로 잰다)
   select: boolean;   // 선택 흉내를 켜 두었나(터미널 설정 — vim 처럼 자기 키가 있는 앱을 위해 끌 수 있다)
+  inputActive?: boolean; // xterm 입력 커서가 실제로 포커스를 받았나(⌘A는 이때만 입력 선택)
 }
 
 export type Unit = 'char' | 'word' | 'line';
@@ -32,7 +33,9 @@ export type Act =
   | { k: 'del' }                                      // 선택을 지운다(키는 삼킨다)
   | { k: 'delThenPass' }                              // 선택을 지우고 그 키는 흘린다(글자로 갈아치우기)
   | { k: 'copy' }                                     // 선택을 클립보드로
-  | { k: 'undo' };
+  | { k: 'cut' }                                      // 선택을 복사한 뒤 지운다
+  | { k: 'selectInput' } | { k: 'selectAll' }        // ⌘A 첫 번=입력, 다음 번=터미널 전체
+  | { k: 'undo' } | { k: 'redo' };
 
 // 앱이 이미 아는 조작들의 바이트. 셸(readline)·Claude Code 가 같은 뜻으로 받는 것만 골랐다.
 export const SEQ = {
@@ -40,6 +43,7 @@ export const SEQ = {
   home: '\x01', end: '\x05',        // Ctrl+A / Ctrl+E — 줄 처음·끝
   killHead: '\x15', killTail: '\x0b', // Ctrl+U / Ctrl+K — 커서 앞·뒤 지우기(둘 다 kill-ring 에 들어간다)
   wordLeft: '\x1bb', wordRight: '\x1bf',
+  wordDelForward: '\x1bd',             // Meta+d — cursor~단어끝 삭제(readline/zsh)
   yank: '\x19',                      // Ctrl+Y — 마지막 kill 을 되붙인다(= 우리 되돌리기의 한 갈래)
   undo: '\x1f',                      // Ctrl+_ — readline·zsh 의 undo. Claude Code 는 2.1.267 부터(nativeUndoOk)
   back: '\x7f', del: '\x1b[3~',
@@ -72,18 +76,27 @@ export function decideKey(e: KeyLike, c: LineEditCtx): Act {
   //  맥은 ⌘Z 도, 그 밖에서는 Alt+Z 도 되돌리기다(Alt+Z 는 readline 기본 바인딩이 없어 잃는 것이 없다).
   //  ⚠ 입력줄 선택 설정(c.select)과 무관하다 — 그 설정을 끈다고 정지 위험이 되살아나면 안 된다.
   const isZ = lower === 'z' || e.keyCode === 90;
+  if (isZ && shift && ((ctrl && !alt && !meta) || (!ctrl && c.mac && meta && !alt))) return { k: 'redo' };
   if (isZ && !shift && ((ctrl && !alt && !meta) || (!ctrl && c.mac && meta && !alt) || (!ctrl && !c.mac && alt && !meta))) return { k: 'undo' };
 
   // ── ⌘ 계열 넷 ─────────────────────────────────────────────────────────────────
   //  앱(Claude Code)은 ⌘←/→/⌫/⌦ 를 다 구현해 뒀는데 **xterm 이 ⌘ 를 PTY 로 안 보내** 앱까지 닿지 않는다.
   //  그래서 같은 뜻의 조작으로 번역해 보낸다(Option+←/→ 를 \eb/\ef 로 번역해 온 것과 같은 방식).
   if (c.mac && meta && !ctrl && !alt) {
+    if (lower === 'a') return c.hasSel ? { k: 'selectAll' } : c.inputActive ? { k: 'selectInput' } : { k: 'pass' };
     if (key === 'ArrowLeft') return shift ? { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1 } : { k: 'send', seq: SEQ.home };
     if (key === 'ArrowRight') return shift ? { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1 } : { k: 'send', seq: SEQ.end };
+    if (key === 'ArrowUp') return shift ? { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1 } : { k: 'send', seq: SEQ.home };
+    if (key === 'ArrowDown') return shift ? { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1 } : { k: 'send', seq: SEQ.end };
     if (key === 'Backspace') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.killHead, kill: true };
     if (key === 'Delete') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.killTail, kill: true };
     if (lower === 'c' && c.hasSel) return { k: 'copy' }; // 우리 선택이 서 있으면 그것이 «복사»의 대상이다
+    if (lower === 'x' && c.hasSel) return { k: 'cut' };
   }
+
+  // macOS의 ⌥Fn+Delete는 key='Delete', altKey=true로 온다. Meta+d는 readline·zsh·두 하네스가
+  // 공통으로 쓰는 forward-kill-word라 별도 하네스 추측 없이 보낼 수 있다.
+  if (c.mac && alt && !ctrl && !meta && key === 'Delete') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.wordDelForward, kill: true };
 
   // ── 선택 확장 ─────────────────────────────────────────────────────────────────
   //  Shift+이동키. 보내는 바이트는 **선택 없는 평범한 이동과 똑같다** — 앱은 선택을 모르고, 넓어진 범위를
@@ -92,6 +105,8 @@ export function decideKey(e: KeyLike, c: LineEditCtx): Act {
     if (!alt && !meta) {
       if (key === 'ArrowLeft') return { k: 'extend', seq: SEQ.left, unit: 'char', dir: -1 };
       if (key === 'ArrowRight') return { k: 'extend', seq: SEQ.right, unit: 'char', dir: 1 };
+      if (key === 'ArrowUp') return { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1 };
+      if (key === 'ArrowDown') return { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1 };
       if (key === 'Home') return { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1 };
       if (key === 'End') return { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1 };
     }
@@ -124,40 +139,68 @@ export function decideKey(e: KeyLike, c: LineEditCtx): Act {
 //   yank  — 앱의 kill 명령(⌘⌫·⌘⌦·⌥⌫)으로 지운 것. 되돌리기는 앱의 Ctrl+Y 한 방이면 된다(글자를 우리가 몰라도 된다).
 //   text  — 우리가 지운 선택. 지울 때 화면에서 읽어 뒀으므로 그대로 다시 넣는다.
 //   typed — 방금 친 글자들. 그 수만큼 백스페이스.
-export type UndoEntry = { k: 'yank' } | { k: 'text'; text: string } | { k: 'typed'; n: number };
+export type UndoEntry = { k: 'yank' } | { k: 'text'; text: string } | { k: 'typed'; n: number; text?: string };
 
 const MAX_UNDO = 50;
 
 export class UndoStack {
   private items: UndoEntry[] = [];
+  private redos: UndoEntry[] = [];
   private typed = 0; // 아직 스택에 넣지 않은 «지금 치고 있는 런»
+  private typedText = ''; // 실제로 본 타이핑. 있어야 ⌘⇧Z가 같은 글자를 다시 넣을 수 있다.
 
   /** 타이핑 한 덩이를 센다. 되돌리기 단위를 «한 글자»가 아니라 «한 번에 친 만큼»으로 만든다. */
   type(n: number): void {
     if (!n) return;
     this.typed = Math.max(0, this.typed + n);
+    this.redos = [];
+  }
+
+  /** 실제 PTY로 나간 일반 텍스트를 기록한다. DEL은 현재 타이핑 런에서만 거둔다. */
+  typeText(d: string): void {
+    let changed = false;
+    for (const ch of d) {
+      if (ch === '\x7f') this.typedText = Array.from(this.typedText).slice(0, -1).join('');
+      else this.typedText += ch;
+      changed = true;
+    }
+    if (changed) { this.typed = Array.from(this.typedText).length; this.redos = []; }
   }
 
   /** 타이핑 런을 끊는다(이동키·Enter 등 — 여기까지가 한 번에 되돌아갈 덩이다). */
   breakRun(): void {
-    if (this.typed > 0) { this.items.push({ k: 'typed', n: this.typed }); this.trim(); }
+    if (this.typed > 0) { this.items.push(this.typedText ? { k: 'typed', n: this.typed, text: this.typedText } : { k: 'typed', n: this.typed }); this.trim(); }
     this.typed = 0;
+    this.typedText = '';
   }
 
-  push(e: UndoEntry): void { this.breakRun(); this.items.push(e); this.trim(); }
+  push(e: UndoEntry): void { this.breakRun(); this.items.push(e); this.redos = []; this.trim(); }
 
   /** 되돌릴 것 하나를 꺼낸다. 치던 런이 있으면 그것이 먼저다. */
   pop(): UndoEntry | null {
     this.breakRun();
-    return this.items.pop() || null;
+    const e = this.items.pop() || null;
+    if (e) { this.redos.push(e); this.trimRedos(); }
+    return e;
   }
 
+  /** 마지막 되돌리기를 다시 적용할 항목. 새 입력이 있으면 redo는 이미 비워진다. */
+  redo(): UndoEntry | null {
+    this.breakRun();
+    const e = this.redos.pop() || null;
+    if (e) { this.items.push(e); this.trim(); }
+    return e;
+  }
+
+  peekRedo(): UndoEntry | null { this.breakRun(); return this.redos[this.redos.length - 1] || null; }
+
   /** 보낸 뒤(Enter)에는 입력칸이 비므로 되돌릴 대상이 사라진다 — 남겨 두면 엉뚱한 자리에 옛 글이 들어간다. */
-  reset(): void { this.items = []; this.typed = 0; }
+  reset(): void { this.items = []; this.redos = []; this.typed = 0; this.typedText = ''; }
 
   get depth(): number { return this.items.length + (this.typed > 0 ? 1 : 0); }
 
   private trim(): void { while (this.items.length > MAX_UNDO) this.items.shift(); }
+  private trimRedos(): void { while (this.redos.length > MAX_UNDO) this.redos.shift(); }
 }
 
 // ── 앱 자체 되돌리기 (#3864) ────────────────────────────────────────────────────

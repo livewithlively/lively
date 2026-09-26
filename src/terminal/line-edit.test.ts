@@ -12,9 +12,9 @@ const MOD_URL = pathToFileURL(process.env.LINEEDIT_MOD || path.resolve(here, "..
 const mod: any = await import(MOD_URL);
 const { decideKey, UndoStack, countTyped, SEQ, nativeUndoOk } = mod;
 
-interface Ctx { mac: boolean; hasSel: boolean; select: boolean }
-const MAC: Ctx = { mac: true, hasSel: false, select: true };
-const SEL: Ctx = { mac: true, hasSel: true, select: true };
+interface Ctx { mac: boolean; hasSel: boolean; select: boolean; inputActive?: boolean }
+const MAC: Ctx = { mac: true, hasSel: false, select: true, inputActive: true };
+const SEL: Ctx = { mac: true, hasSel: true, select: true, inputActive: true };
 const k = (key: string, over: Record<string, unknown> = {}): any => ({ key, ...over });
 
 const tests: Array<[string, () => void]> = [];
@@ -41,6 +41,20 @@ t("A6 ⌘⌫ 인데 선택이 서 있으면 줄이 아니라 선택만 지운다
   assert.deepEqual(decideKey(k("Backspace", { metaKey: true }), SEL), { k: "del" });
   assert.deepEqual(decideKey(k("Delete", { metaKey: true }), SEL), { k: "del" });
 });
+t("A7 ⌘A 첫 번은 입력 전체 선택, 웹 선택이 있으면 두 번째는 터미널 전체 선택", () => {
+  assert.deepEqual(decideKey(k("a", { metaKey: true }), MAC), { k: "selectInput" });
+  assert.deepEqual(decideKey(k("a", { metaKey: true }), SEL), { k: "selectAll" });
+  assert.deepEqual(decideKey(k("a", { metaKey: true }), { ...MAC, inputActive: false }), { k: "pass" });
+});
+t("A8 ⌘↑/⌘↓는 입력의 처음·끝 이동, ⇧를 더하면 같은 경계까지 선택 확장", () => {
+  assert.deepEqual(decideKey(k("ArrowUp", { metaKey: true }), MAC), { k: "send", seq: SEQ.home });
+  assert.deepEqual(decideKey(k("ArrowDown", { metaKey: true }), MAC), { k: "send", seq: SEQ.end });
+  assert.deepEqual(decideKey(k("ArrowUp", { metaKey: true, shiftKey: true }), MAC), { k: "extend", seq: SEQ.home, unit: "line", dir: -1 });
+  assert.deepEqual(decideKey(k("ArrowDown", { metaKey: true, shiftKey: true }), MAC), { k: "extend", seq: SEQ.end, unit: "line", dir: 1 });
+});
+t("A9 ⌥Fn⌫는 커서 뒤 한 단어를 지운다", () => {
+  assert.deepEqual(decideKey(k("Delete", { altKey: true }), MAC), { k: "send", seq: SEQ.wordDelForward, kill: true });
+});
 
 // ── B. 선택 확장 (변이: select 조건 제거 → B5 red · unit 상수 바꾸기 → B1~B4 red) ──
 t("B1 Shift+← → 한 글자 확장 · 보내는 바이트는 평범한 ←", () => {
@@ -58,6 +72,10 @@ t("B4 ⌘Shift+←/→ · Shift+Home/End → 줄 확장", () => {
   assert.deepEqual(decideKey(k("ArrowRight", { shiftKey: true, metaKey: true }), MAC), { k: "extend", seq: SEQ.end, unit: "line", dir: 1 });
   assert.deepEqual(decideKey(k("Home", { shiftKey: true }), MAC), { k: "extend", seq: SEQ.home, unit: "line", dir: -1 });
   assert.deepEqual(decideKey(k("End", { shiftKey: true }), MAC), { k: "extend", seq: SEQ.end, unit: "line", dir: 1 });
+});
+t("B4b Shift+↑/↓는 현재 입력의 처음·끝까지 선택을 확장한다", () => {
+  assert.deepEqual(decideKey(k("ArrowUp", { shiftKey: true }), MAC), { k: "extend", seq: SEQ.home, unit: "line", dir: -1 });
+  assert.deepEqual(decideKey(k("ArrowDown", { shiftKey: true }), MAC), { k: "extend", seq: SEQ.end, unit: "line", dir: 1 });
 });
 t("B5 설정이 꺼져 있으면 아무것도 가로채지 않는다", () => {
   const off = { ...MAC, select: false };
@@ -89,6 +107,9 @@ t("C4 ★선택 + 조합 중 → 아무것도 지우지 않는다(음절이 깨�
 t("C5 선택 + ⌘C → 선택을 복사", () => {
   assert.deepEqual(decideKey(k("c", { metaKey: true }), SEL), { k: "copy" });
 });
+t("C5b 선택 + ⌘X → 복사 후 선택을 지운다", () => {
+  assert.deepEqual(decideKey(k("x", { metaKey: true }), SEL), { k: "cut" });
+});
 t("C6 ★선택 + Ctrl+C → 뺏지 않는다(터미널의 «중단»)", () => {
   assert.deepEqual(decideKey(k("c", { ctrlKey: true }), SEL), { k: "clear" });
 });
@@ -110,9 +131,9 @@ t("C7c 기능키·미디어키처럼 모르는 키는 선택을 건드리지 않
     assert.deepEqual(decideKey(k(key), SEL), { k: "pass" }, key);
   }
 });
-t("C7d Shift+화살표 위/아래는 앱이 무시하므로 선택도 그대로 둔다", () => {
-  assert.deepEqual(decideKey(k("ArrowUp", { shiftKey: true }), SEL), { k: "pass" });
-  assert.deepEqual(decideKey(k("ArrowDown", { shiftKey: true }), SEL), { k: "pass" });
+t("C7d Shift+화살표 위/아래는 입력 처음·끝까지 선택을 확장한다", () => {
+  assert.deepEqual(decideKey(k("ArrowUp", { shiftKey: true }), SEL), { k: "extend", seq: SEQ.home, unit: "line", dir: -1 });
+  assert.deepEqual(decideKey(k("ArrowDown", { shiftKey: true }), SEL), { k: "extend", seq: SEQ.end, unit: "line", dir: 1 });
 });
 t("C7e Ctrl/⌘ + 글자는 줄을 건드리는 명령이라 선택을 거둔다(^C 중단 · ⌘V 붙여넣기)", () => {
   assert.deepEqual(decideKey(k("c", { ctrlKey: true }), SEL), { k: "clear" });
@@ -142,9 +163,9 @@ t("D2b ★키 이름이 z 가 아니어도 keyCode 90 이면 Ctrl+Z 다 — xter
 t("D2c ★입력줄 선택을 꺼도 Ctrl+Z 는 되돌리기 — 그 설정이 정지 위험을 되살리면 안 된다", () => {
   assert.deepEqual(decideKey(k("z", { ctrlKey: true, keyCode: 90 }), { ...MAC, select: false }), { k: "undo" });
 });
-t("D5 Ctrl+Shift+Z 는 되돌리기가 아니다 — 흘린다(다시하기는 없다)", () => {
-  assert.deepEqual(decideKey(k("Z", { ctrlKey: true, shiftKey: true, keyCode: 90 }), MAC), { k: "pass" });
-  assert.deepEqual(decideKey(k("Z", { ctrlKey: true, shiftKey: true, keyCode: 90 }), { ...MAC, mac: false }), { k: "pass" });
+t("D5 Ctrl+Shift+Z 는 다시하기다", () => {
+  assert.deepEqual(decideKey(k("Z", { ctrlKey: true, shiftKey: true, keyCode: 90 }), MAC), { k: "redo" });
+  assert.deepEqual(decideKey(k("Z", { ctrlKey: true, shiftKey: true, keyCode: 90 }), { ...MAC, mac: false }), { k: "redo" });
 });
 t("D6 경계: 수정자 없는 z 와 맥 ⌥Z(Ω) 는 keyCode 90 이어도 되돌리기가 아니다", () => {
   assert.deepEqual(decideKey(k("z", { keyCode: 90 }), MAC), { k: "pass" });
@@ -154,8 +175,8 @@ t("D3 맥이 아니면 Alt+Z", () => {
   assert.deepEqual(decideKey(k("z", { altKey: true }), { ...MAC, mac: false }), { k: "undo" });
   assert.deepEqual(decideKey(k("z", { altKey: true }), MAC), { k: "pass" }); // 맥에서 ⌥Z 는 우리 것이 아니다
 });
-t("D4 ⌘⇧Z(다시하기)는 아직 없다 — 삼키지 않는다", () => {
-  assert.deepEqual(decideKey(k("z", { metaKey: true, shiftKey: true }), MAC), { k: "pass" });
+t("D4 ⌘⇧Z는 다시하기", () => {
+  assert.deepEqual(decideKey(k("z", { metaKey: true, shiftKey: true }), MAC), { k: "redo" });
 });
 
 // ── E. 되돌리기 스택 (변이: breakRun 의 typed 초기화 제거 → E2 red · reset 제거 → E5 red) ──
