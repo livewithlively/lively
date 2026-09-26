@@ -3,7 +3,7 @@
 //   코드 앵커(mapping/debt/엣지)를 가진 축을 종전엔 '도메인'이라 부르며 space='product' 로 갈랐는데, 앵커는
 //   **있으면 붙는 것**이지 축의 부류가 아니다 — 도메인맵은 이제 전 분류축을 그린다.
 //  감사는 org_content_audit(entity='category') — knowledge/domain 과 동일 append-only 패턴.
-import { itemsPool } from "../db/client.js";
+import { itemsPool, withTx, type Db } from "../db/client.js";
 import { HttpError } from "../http-error.js";
 import { q, one } from "../db/client.js";
 import { auditOrgContent, restoreSnapshot, type WriteCtx } from "./content-audit.js";
@@ -370,9 +370,10 @@ export async function setCategoryView(
  *   · 프로젝트 목록 = 이 분류를 단 목록 전부(그 목록의 프로젝트는 목록을 따라 분류를 잃는다, #541).
  *  거절 문구에는 수를 적지 않는다. 못 보는 문서의 수가 드러나면 안 된다(categorySel 머리말의 #1291 규칙). 무엇이 남았는지만 말한다.
  *  HttpError 로 던지는 이유는 assertDeprecatable 과 같다(평범한 Error 는 500 internal_error 로 뭉개진다).
+ *  검사와 지우기는 한 트랜잭션에서 분류 행을 잠근 채로 한다(deleteCategory). 따로 돌리면 그 사이에 붙은 매핑이 CASCADE 로 조용히 사라진다.
  */
-async function assertDeletable(id: number, name: string): Promise<void> {
-  const r: { k: number; l: number } | undefined = await one(itemsPool,
+async function assertDeletable(db: Db, id: number, name: string): Promise<void> {
+  const r: { k: number; l: number } | undefined = await one(db,
     `SELECT (SELECT count(*)::int FROM knowledge_category WHERE category_id=$1 AND state<>'rejected') AS k,
             (SELECT count(*)::int FROM project_list WHERE category_id=$1) AS l`, [id]);
   const k = r?.k ?? 0, l = r?.l ?? 0;
@@ -384,13 +385,22 @@ async function assertDeletable(id: number, name: string): Promise<void> {
 
 export async function deleteCategory(id: number, ctx?: WriteCtx): Promise<{ deleted: boolean; id: number }> {
   const before = await getCategory(id);
-  if (!before) throw new Error(`카테고리 #${id} 없음`);
-  await assertDeletable(id, String(before.name || before.key));
-  //  #4194. 지우면 매핑이 CASCADE 로 사라진다. #4233 부터는 위 검사 때문에 남는 매핑이 rejected 뿐이라 지식이 카테고리를 잃는
-  //   일은 없지만, 이름을 받아 두었다가 '봤다' 기록 정리를 부르는 자리는 그대로 둔다(forgetClassifierSeen 은 카테고리가 남은
-  //   지식의 기록은 안 지운다. classifier-lanes.pg-test ④-b).
-  const orphaned = (await q(itemsPool, `SELECT name FROM knowledge_category WHERE category_id=$1`, [id])).map((r) => String(r.name));
-  await itemsPool.query(`DELETE FROM category WHERE id=$1`, [id]); // FK CASCADE: 매핑·엣지·정션 동반 삭제
+  if (!before) throw new HttpError(404, `카테고리 #${id} 없음`);
+  //  검사와 지우기를 한 트랜잭션에 묶고 분류 행을 먼저 잠근다(FOR UPDATE). 매핑 · 목록을 이 분류에 붙이는 쓰기는 FK 검사로
+  //   같은 행에 FOR KEY SHARE 를 잡으므로, 잠금은 진행 중인 쓰기가 끝나길 기다리고 그 뒤의 쓰기는 이 트랜잭션이 끝날 때까지 막는다.
+  //   잠근 뒤의 검사는 새 스냅샷이라 방금 커밋된 매핑도 센다. 검사와 지우기를 따로 돌리면(또는 NOT EXISTS 를 붙인 DELETE 한 문장도)
+  //   그 사이에 커밋된 매핑이 CASCADE 로 조용히 사라진다(격리 리뷰 #1106).
+  const orphaned = await withTx(async (db) => {
+    const locked = await one(db, `SELECT id FROM category WHERE id=$1 FOR UPDATE`, [id]);
+    if (!locked) throw new HttpError(404, `카테고리 #${id} 없음`);
+    await assertDeletable(db, id, String(before.name || before.key));
+    //  #4194. 지우면 매핑이 CASCADE 로 사라진다. #4233 부터는 위 검사 때문에 남는 매핑이 rejected 뿐이라 지식이 카테고리를 잃는
+    //   일은 없지만, 이름을 받아 두었다가 '봤다' 기록 정리를 부르는 자리는 그대로 둔다(forgetClassifierSeen 은 카테고리가 남은
+    //   지식의 기록은 안 지운다. classifier-lanes.pg-test ④-b).
+    const names = (await q(db, `SELECT name FROM knowledge_category WHERE category_id=$1`, [id])).map((r) => String(r.name));
+    await db.query(`DELETE FROM category WHERE id=$1`, [id]); // FK CASCADE: 매핑·엣지·정션 동반 삭제
+    return names;
+  });
   await forgetClassifierSeen(orphaned);
   await auditCategory(before.key, "delete", before, null, ctx);
   return { deleted: true, id };
