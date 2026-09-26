@@ -149,6 +149,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/project-category-apply.pg-test.mjs
+      # ⑤-a2 분류 지우기는 비었을 때만(#4233 분류체계 앱). 화면의 수는 보는 사람의 공개범위로 센 수라, 서버가 공개범위와 상관없이
+      #    세어 거절해야 한다(못 보는 지식 · 구성원 전용 목록 포함). 핸들러를 부르고 read-back 한다.
+      - name: 분류 지우기 가드 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/category-delete-guard.pg-test.mjs
       # ⑤-b 자료 접기·지식 롤업(나무·목록·총계 공용 술어)의 의미와 모양 — 실패 양식이 크래시가 아니라
       #    «화면 숫자만 틀림» 또는 «결과는 같은데 수백 초»다. 접기 단위(대화 1건)·지식 롤업(답글→루트)·
       #    fail-open(부모 미수집)이 전부 SQL 조건이라 목으로는 검증 대상 자체가 빠지고, 느린 모양으로 되돌아가도
@@ -161,7 +168,7 @@ jobs:
         run: node src/v6/source-tree.pg-test.mjs
       # ⑤-b2 증류기 «카테고리 붙이기» 레인(#4194, 저장소 org_classifier) — 사각지대를 **스코프**로 세는지(인박스로 세면 이미
       #    본 지식까지 «영영 못 받는다» 로 센다) · 폐지된 재분류 모드 레인이 «일하는 레인» 으로 안 잡히는지 · 잔량이 상한 없이
-      #    세지는지 · 카테고리를 잃은 지식(반려·카테고리 삭제·휴지통 복원)의 '봤다' 기록이 지워지는지. 전부 SQL 조건이다.
+      #    세지는지 · 카테고리를 잃은 지식(반려·휴지통 복원)의 '봤다' 기록이 지워지는지(지식이 붙은 분류 삭제는 #4233 부터 409). 전부 SQL 조건이다.
       - name: 증류기 카테고리 붙이기 레인 PG 통합 테스트
         if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         env:
