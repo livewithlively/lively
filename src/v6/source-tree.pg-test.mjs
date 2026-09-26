@@ -164,22 +164,25 @@ try {
   const CH5 = "__srctree_grp__";
   await mkSource("L_up_old", null, { system: "local", fields: { container_name: CH5 } });   // 옛 행(entry 없음) → 올린 자료
   await mkSource("L_up", null, { system: "local", fields: { container_name: CH5, entry: "upload", author_name: "__l@x.io", author_external_id: "__l-x" } });
+  //  같은 사람의 옛 id 가 섞인 경우 — 올린 사람의 id 는 가장 많이 쓰인 값이다(글자 순 max 면 "__z" 가 뽑힌다).
+  await mkSource("L_up2", null, { system: "local", fields: { container_name: CH5, entry: "upload", author_name: "__l@x.io", author_external_id: "__l-x" } });
+  await mkSource("L_up3", null, { system: "local", fields: { container_name: CH5, author_name: "__l@x.io", author_external_id: "__z" } });
   await mkSource("L_ai", null, { system: "local", fields: { container_name: CH5, entry: "generated", entry_session: "box-l-00000000" } });
   await mkSource("L_note", null, { system: null, kind: `${SYS}_lkind`, fields: { container_name: CH5 } });
   tree = await listSourceTree();
   const lg = (g) => tree.filter((x) => x.container === CH5 && x.group === g).reduce((a, x) => a + x.n, 0);
-  chk("L. 파일은 entry 로 갈린다: 올린 자료 2(옛 행 포함) · AI가 만든 파일 1", lg("uploaded") === 2 && lg("made_ai") === 1,
-      `uploaded=${lg("uploaded")} made_ai=${lg("made_ai")} (기대 2 · 1)`);
+  chk("L. 파일은 entry 로 갈린다: 올린 자료 4(옛 행 포함) · AI가 만든 파일 1", lg("uploaded") === 4 && lg("made_ai") === 1,
+      `uploaded=${lg("uploaded")} made_ai=${lg("made_ai")} (기대 4 · 1)`);
   chk("L. 직접 적은 글은 made_note", lg("made_note") === 1, `made_note=${lg("made_note")}`);
   chk("L. 가지마다 갈래가 넷 중 하나", tree.every((x) => ["uploaded", "collected", "made_ai", "made_note"].includes(x.group)),
       JSON.stringify(tree.filter((x) => !["uploaded", "collected", "made_ai", "made_note"].includes(x.group)).slice(0, 3)));
   chk("L. 연결 앱 가지는 collected", branch(tree)?.group === "collected", `group=${branch(tree)?.group}`);
   const lc = (group) => countSources({ group, container: CH5, fold: true });
   const lcs = { uploaded: await lc("uploaded"), made_ai: await lc("made_ai"), made_note: await lc("made_note"), made: await lc("made"), collected: await lc("collected") };
-  chk("L. 목록 group 거르개 = 나무 수 · made = 둘의 합", lcs.uploaded === 2 && lcs.made_ai === 1 && lcs.made_note === 1 && lcs.made === 2 && lcs.collected === 0,
+  chk("L. 목록 group 거르개 = 나무 수 · made = 둘의 합", lcs.uploaded === 4 && lcs.made_ai === 1 && lcs.made_note === 1 && lcs.made === 2 && lcs.collected === 0,
       JSON.stringify(lcs));
   const lup = (await listSourceUploaders()).find((u) => u.name === "__l@x.io");
-  chk("L. 올린 사람 수와 id", lup?.n === 1 && lup?.id === "__l-x", JSON.stringify(lup));
+  chk("L. 올린 사람 수와 id(가장 많이 쓰인 id)", lup?.n === 3 && lup?.id === "__l-x", JSON.stringify(lup));
 
   // ── 케이스 P: 모양 가드 — 실제로 나가는 SQL 의 실행 계획에 «행마다 도는 SubPlan» 이 없다. ──
   //  종전 모양(`NOT (x IS NOT NULL AND EXISTS …)` · `EXISTS (… OR ks.source_id IN (상관 …))`)은 결과가 같아서 위 케이스로는
