@@ -153,9 +153,12 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
     if (w <= 1) {
       const list = el('div', { class: 'pjh-frl' });
       if (nav.path) list.append(el('div', { class: 'pjh-fr back', onclick: () => { nav.path = nav.path.split('/').slice(0, -1).join('/'); ctx.refreshGrid(); } }, hubIcon('left', 13), el('span', { class: 'pjh-fr-n', text: '위로' })));
-      if (cur.dirs.length) { list.append(el('div', { class: 'pjh-grp' }, el('b', { text: '폴더' }), el('span', { class: 'pjh-grp-n', text: String(cur.dirs.length) }))); for (const d of cur.dirs.slice(0, 4)) list.append(frow(d)); }
+      // 줄 수는 높이에서 — 몸통(칸 높이 − 크롬 122)에서 폴더 묶음(머리 28 + 줄 36)·최근 머리 28·끌어다 놓기 42 를 빼고 파일 줄 40px 로 나눈다.
+      const dirsShown = cur.dirs.slice(0, 4);
+      if (dirsShown.length) { list.append(el('div', { class: 'pjh-grp' }, el('b', { text: '폴더' }), el('span', { class: 'pjh-grp-n', text: String(cur.dirs.length) }))); for (const d of dirsShown) list.append(frow(d)); }
       list.append(el('div', { class: 'pjh-grp' }, el('b', { text: '최근' }), el('span', { class: 'pjh-grp-n', text: String(cur.files.length) })));
-      for (const it of recentFiles(items, h >= 3 ? 9 : 5)) list.append(frow(it));
+      const avail = h * 276 - 16 - 122 - (dirsShown.length ? 28 + 8 + dirsShown.length * 36 : 0) - 28 - 42 - (nav.path ? 40 : 0);
+      for (const it of recentFiles(items, Math.max(2, Math.floor(avail / 40)))) list.append(frow(it));
       body.append(list, dropBox(true), progBox);   // 끌어다 놓기는 목록 바로 아래(바닥에 홀로 띄우지 않는다)
       foot.append(footText(rootLabel), up.btn, up.fileIn, up.dirIn, btn('폴더 열기', 'btn-ghost', open));
       return;

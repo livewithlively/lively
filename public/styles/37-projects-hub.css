@@ -492,3 +492,19 @@
 .pjh-hidden-sec { display: none !important; }
 .pjh-slot.over { border-color: var(--blue); background: var(--bg-punch); }
 .pjh-w.dragging { opacity: .45; }
+/* ── 3차 보정(캡처 확인) — 폴더 줄 아이콘은 24px 안에 · 줄은 두 줄(이름/메타)이라 40px · 나무 줄은 줄어들지 않는다 · 지식 한 줄 높이 두 단은 촘촘하게 ── */
+.pjh-fr { min-height: 40px; }
+.pjh-frl.short .pjh-fr { min-height: 32px; }
+.pjh-fr-th .pjh-fc-ic { width: 24px; height: 24px; }
+.pjh-fr-th .pjh-fc-ic .ft, .pjh-fr-th .pjh-fc-ic .ft-file { width: 20px; height: 24px; }
+.pjh-fr-th .pjh-fc-ic .ft-folder { width: 24px; height: 20px; }
+.pjh-fr-th .pjh-fc-ic .ft-img { width: 24px; height: 24px; border-radius: 5px; }
+.pjh-prev-ic .pjh-fc-ic { height: 100%; width: 100%; }
+.pjh-prev-ic .pjh-fc-ic .ft, .pjh-prev-ic .pjh-fc-ic .ft-file { width: 60px; height: 72px; }
+.pjh-prev-ic .pjh-fc-ic .ft-folder { width: 80px; height: 66px; }
+.pjh-prev-ic .pjh-fc-ic .ft-img { width: 100%; height: 112px; border-radius: 12px; }
+.pjh-tree-r { flex: none; }
+.pjh-two-k .pjh-kcol { padding: 8px 12px 10px; }
+.pjh-two-k .pjh-grp { min-height: 24px; }
+.pjh-two-k .pjh-kr { min-height: 32px; }
+.pjh-two-k .pjh-stat { line-height: 1.45; }
