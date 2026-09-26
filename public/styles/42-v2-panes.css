@@ -814,3 +814,36 @@ webview.pn-webframe { display: flex; }
 .pn-fic.pv { width: 44px; height: 36px; flex: none; aspect-ratio: auto; border-radius: 6px; overflow: hidden; position: relative; }
 .pn-fic.pv .pn-i { width: 15px; height: 15px; }
 .pn-frow2.pv { align-items: center; gap: 10px; }
+
+/* ── 곁칸 «태스크» 3차(#4135, 2026-09-26) — 허브 태스크 위젯·프로젝트 탭과 같은 결: 줄 36 · 이름 13.5 · 묶음 머리 13/800 · 상태 원 16 실선 ·
+   «＋ 세션 열기» 칩은 줄마다 늘 서지 않고 올릴 때만(맡은 세션 칩 .on 은 상태를 나르므로 늘). ── */
+.pn-tk-head { padding: 12px 14px 10px; gap: 8px; }
+.pn-tk-name { font-size: 14px; }
+.pn-tk-count { font-size: 12.5px; }
+.pn-tk-fold { height: 34px; padding: 0 14px; gap: 8px; }
+.pn-tk-fold-l { font-size: 12.5px; }
+.pn-tk-fold-ex { font-size: 12.5px; }
+.pn-tk-card { margin: 10px 12px 4px; padding: 12px 14px; border-radius: 12px; gap: 8px; }
+.pn-tk-card-h { font-size: 12px; }
+.pn-tk-card-n { font-size: 14.5px; }
+.pn-tk-card-m, .pn-tk-card-a .pn-fine { font-size: 12.5px; }
+.pn-tk-gh { padding: 14px 14px 4px; font-size: 13px; font-weight: 800; letter-spacing: -.1px; color: var(--ink); }
+.pn-tk-gh .n { font-size: 12.5px; font-weight: 600; color: var(--muted-2); }
+.pn-tk-row { min-height: 36px; padding: 0 14px; gap: 10px; }
+.pn-tk-row + .pn-tk-row { border-top: 1px solid var(--line-row); }
+.pn-tk-row:hover, .pn-tk-row.open { background: var(--bg-tint); }
+.pn-tk-row:hover + .pn-tk-row, .pn-tk-row.open + .pn-tk-row { border-top-color: transparent; }
+.pn-tk-rname { height: 36px; font-size: 13.5px; }
+.pn-tk-sub-n { font-size: 13px; }
+.pn-tk-row.sub { min-height: 32px; }
+.pn-tk-st { width: 16px; height: 16px; border-style: solid; }
+.pn-tk-st.doing { border-style: solid; }
+.pn-tk-st.done::after { left: 4px; top: 1.2px; width: 3.6px; height: 7.5px; }
+.pn-tk-st.static { width: 14px; height: 14px; }
+.pn-tk-chip { font-size: 11.5px; line-height: 18px; padding: 1px 9px 1px 8px; }
+.pn-tk-chip:not(.on) { display: none; }
+.pn-tk-row:hover .pn-tk-chip, .pn-tk-row.open .pn-tk-chip, .pn-tk-row:focus-within .pn-tk-chip { display: inline-flex; }
+@media (hover: none) { .pn-tk-chip { display: inline-flex; } }
+.pn-tk-detail { padding: 6px 14px 14px 40px; }
+.pn-tk-add { margin: 10px 12px 12px; height: 36px; padding: 0 12px; border-radius: 10px; }
+.pn-tk-add .pn-tk-add-in { font-size: 13px; }
