@@ -858,6 +858,15 @@ t("L11 친 만큼 되돌린다(한글은 글자 수로)", async () => {
   h.term._keyHandler(h.kev({ key: "z", metaKey: true }));
   assert.equal(h.inputs().pop(), "\x7f\x7f");
 });
+t("L11b ⌘⇧Z는 웹이 되돌린 실제 텍스트를 다시 넣는다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  h.mod.handleTermData("안녕");
+  h.term._keyHandler(h.kev({ key: "z", metaKey: true }));
+  await sleep(1);
+  h.term._keyHandler(h.kev({ key: "z", metaKey: true, shiftKey: true }));
+  assert.deepEqual(h.inputs(), ["안녕", "\x7f\x7f", "안녕"]);
+});
 t("L12 설정을 끄면 Shift+← 를 가로채지 않는다(vim 처럼 제 기능이 있는 앱)", async () => {
   const h = await makeCtx({ mac: true, prefs: { lineSelect: false } });
   h.mod.setupClipboard();
