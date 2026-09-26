@@ -111,14 +111,8 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
           isDir ? null : el('span', { class: 'pjh-fr-m', text: it.mtime ? relTime(new Date(it.mtime).toISOString()) : '' })),
         right);
     };
-    const ext = (n: string): string => { const m = String(n).toLowerCase().match(/\.([a-z0-9]{1,5})$/); return m ? m[1].toUpperCase() : ''; };
-    const isImg = (n: string): boolean => /\.(png|jpe?g|gif|webp|svg|bmp|avif|heic)$/i.test(String(n));
-    const tile = (it: any, rel: string): HTMLElement => {
-      const t = el('div', { class: 'pjh-th' + (it.type === 'dir' ? ' fd' : isImg(it.name) ? ' img' : '') });
-      if (it.type === 'dir' || isImg(it.name)) t.append(fileThumb(pid, it, rel, B));
-      else t.append(el('span', { class: 'pjh-th-ext', text: ext(it.name) || 'FILE' }));
-      return t;
-    };
+    // 낱장 아이콘 — 프로젝트 탭 공유 폴더 섹션과 같은 그림(files-icons.fileThumb: 폴더 두 톤 · 문서 색 띠 · 사진 썸네일). 크기는 CSS(.pjh-fc-ic · .pjh-fr-th · .pjh-prev-ic).
+    const tile = (it: any, rel: string): HTMLElement => el('div', { class: 'pjh-fc-ic' }, fileThumb(pid, it, rel, B));
     const fcard = (it: any): HTMLElement => {
       const rel = relOf(it.name);
       return el('div', { class: 'pjh-fc' + (nav.picked === rel ? ' on' : ''), title: it.name, onclick: () => openItem(it, rel) },
@@ -150,7 +144,7 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
     // 끌어다 놓기 낱장(격자의 마지막 자리) — 누르면 업로드 고르기(바닥의 [업로드] 와 같은 문). 한 줄 높이의 바닥은 [폴더 열기] 만(시안).
     const dropCard = (): HTMLElement => el('div', { class: 'pjh-fc drop', title: '파일을 끌어다 놓거나 눌러서 고르기', onclick: () => up.btn.click() }, hubIcon('up', 14), el('span', { text: '끌어다 놓기' }));
     if (w <= 1 && h <= 1) {
-      const list = el('div', { class: 'pjh-frl' });   // 시안 1×1: 두 줄짜리 줄 셋(이름 / 시각 · 크기) 34px + 끌어다 놓기 한 줄 30px = 146px 안
+      const list = el('div', { class: 'pjh-frl short' });   // 1×1: 한 줄짜리 줄 셋(32px) + 끌어다 놓기 34px = 138px 안
       for (const it of recentFiles(items, 3)) list.append(frow(it));
       body.append(list, dropBox(true), progBox);
       foot.append(footText(rootLabel), up.fileIn, up.dirIn, btn('폴더 열기', 'btn-ghost', open));
@@ -159,9 +153,12 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
     if (w <= 1) {
       const list = el('div', { class: 'pjh-frl' });
       if (nav.path) list.append(el('div', { class: 'pjh-fr back', onclick: () => { nav.path = nav.path.split('/').slice(0, -1).join('/'); ctx.refreshGrid(); } }, hubIcon('left', 13), el('span', { class: 'pjh-fr-n', text: '위로' })));
-      if (cur.dirs.length) { list.append(el('div', { class: 'pjh-grp' }, el('b', { text: '폴더' }), el('span', { class: 'pjh-grp-n', text: String(cur.dirs.length) }))); for (const d of cur.dirs.slice(0, 4)) list.append(frow(d)); }
+      // 줄 수는 높이에서 — 몸통(칸 높이 − 크롬 122)에서 폴더 묶음(머리 28 + 줄 36)·최근 머리 28·끌어다 놓기 42 를 빼고 파일 줄 40px 로 나눈다.
+      const dirsShown = cur.dirs.slice(0, 4);
+      if (dirsShown.length) { list.append(el('div', { class: 'pjh-grp' }, el('b', { text: '폴더' }), el('span', { class: 'pjh-grp-n', text: String(cur.dirs.length) }))); for (const d of dirsShown) list.append(frow(d)); }
       list.append(el('div', { class: 'pjh-grp' }, el('b', { text: '최근' }), el('span', { class: 'pjh-grp-n', text: String(cur.files.length) })));
-      for (const it of recentFiles(items, h >= 3 ? 9 : 5)) list.append(frow(it));
+      const avail = h * 276 - 16 - 122 - (dirsShown.length ? 28 + 8 + dirsShown.length * 36 : 0) - 28 - 54 - (nav.path ? 40 : 0);
+      for (const it of recentFiles(items, Math.max(2, Math.floor(avail / 40)))) list.append(frow(it));
       body.append(list, dropBox(true), progBox);   // 끌어다 놓기는 목록 바로 아래(바닥에 홀로 띄우지 않는다)
       foot.append(footText(rootLabel), up.btn, up.fileIn, up.dirIn, btn('폴더 열기', 'btn-ghost', open));
       return;
@@ -180,9 +177,9 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
     // 2×2 이상 — 나무 + 경로 줄 + 낱장 격자 (+ 3×2 옆 칸)
     const cols = w >= 3 ? 3 : 4;
     const grid = el('div', { class: 'pjh-fgrid tall', style: 'grid-template-columns:repeat(' + cols + ',1fr)' });
-    // 낱장 한 줄 높이 ≈ 타일(4:3, 폭은 3칸 3열 ≈150px · 2칸 4열 ≈100px) + 이름·메타 44px. 몸통에서 경로 줄·여백 150px 을 뺀다. 마지막 자리는 «끌어다 놓기».
-    const cardPx = cols === 3 ? 160 : 124;
-    const capCards = cols * Math.max(1, Math.floor((h * 276 - 16 - 150) / cardPx)) - 1;
+    // 낱장 한 줄 높이 = 아이콘 56 + 이름·메타 38 + 안쪽 여백 18 + 격자 간격 8 = 120px. 몸통(칸 높이 − 크롬 122)에서 경로 줄 38px 을 뺀다. 마지막 자리는 «끌어다 놓기».
+    const cardPx = 120;
+    const capCards = cols * Math.max(1, Math.floor((h * 276 - 16 - 122 - 38) / cardPx)) - 1;
     const shownCards = recentFiles(items, capCards);
     // 옆 칸(3×2)이 있으면 아직 고른 게 없어도 첫 낱장을 골라 둔다 — 빈 «고른 파일» 칸 대신 미리보기가 선다(시안).
     if (w >= 3 && !nav.picked && shownCards.length) nav.picked = relOf(shownCards[0].name);

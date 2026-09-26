@@ -37,9 +37,9 @@ export function taskColsFor(w: number, pref: TasksViewPref): TaskColKey[] {
 
 // ── 줄 예산 — 위젯 한 칸 260px(행 간격 16). 머리 30 · 바닥 34 · 안쪽 여백 28 · 간격 20 ≈ 114px(실측 1×1 몸통 146px)을 빼고,
 //  묶음 하나에 머리 24 + 「＋ 태스크」 28. 줄 하나 31px(허브 안 압축 — 프로젝트 탭 37px 보다 작다, 37-projects-hub.css). 최소 1줄.
-export const HUB_ROW_PX = 31;
-export const HUB_GROUP_PX = 24 + 28;
-export const HUB_CHROME_PX = 114;
+export const HUB_ROW_PX = 36;
+export const HUB_GROUP_PX = 30 + 34;
+export const HUB_CHROME_PX = 122;
 export function rowsBudget(h: number, groups: number, extraPx = 0): number {
   const total = Math.max(1, h) * 276 - 16 - HUB_CHROME_PX - Math.max(0, groups) * HUB_GROUP_PX - Math.max(0, extraPx);
   return Math.max(1, Math.floor(total / HUB_ROW_PX));

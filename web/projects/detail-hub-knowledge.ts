@@ -121,17 +121,16 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
     if (!req.length && !prod.length) normal.append(emptyReq);   // 문장이 먼저, 추천 줄이 그 아래(1×N 과 같은 순서)
     normal.append(recHost); paintRecs(1, false);
   } else if (w <= 1) {
-    normal.append(grp('필요', req.length, '세션이 읽고 시작'));
-    for (const k of req) normal.append(kcard(k, 'required'));
-    if (!req.length) normal.append(emptyReq);
-    normal.append(recHost); paintRecs(2);
-    normal.append(grp('산출', prod.length, '이 프로젝트가 만든 것'));
-    for (const k of prod) normal.append(kcard(k, 'produced'));
-    if (!prod.length) normal.append(el('div', { class: 'pjh-stat', text: '작업이 진행되면 여기에 쌓입니다.' }));
+    // 1×N — 필요·산출을 프로젝트 탭 섹션과 같은 tint 카드 둘로(필요 파랑 · 산출 민트)
+    const reqBox = el('div', { class: 'pjh-kcol' }, grp('필요', req.length, '세션이 읽고 시작'), ...req.map((k) => kcard(k, 'required')), req.length ? null : emptyReq, recHost);
+    const prodBox = el('div', { class: 'pjh-kcol prod' }, grp('산출', prod.length, '이 프로젝트가 만든 것'), ...prod.map((k) => kcard(k, 'produced')),
+      prod.length ? null : el('div', { class: 'pjh-stat', text: '작업이 진행되면 여기에 쌓입니다.' }));
+    normal.append(reqBox, prodBox);
+    paintRecs(2);
   } else if (h <= 1) {
     const reqCol = el('div', { class: 'pjh-kcol' }, grp('필요', req.length, w >= 3 ? '세션이 읽고 시작' : undefined), ...req.map((k) => krow(k, 'required')),
       req.length ? null : emptyReq, recHost);
-    const prodCol = el('div', { class: 'pjh-kcol' }, grp('산출', prod.length, w >= 3 ? '이 프로젝트가 만든 것' : undefined), ...prod.map((k) => krow(k, 'produced')));
+    const prodCol = el('div', { class: 'pjh-kcol prod' }, grp('산출', prod.length, w >= 3 ? '이 프로젝트가 만든 것' : undefined), ...prod.map((k) => krow(k, 'produced')));
     if (!prod.length) prodCol.append(el('div', { class: 'pjh-stat', text: '작업이 진행되면 여기에 쌓입니다.' }));
     normal.append(el('div', { class: 'pjh-two-k', style: 'grid-template-columns:' + (w >= 3 ? '1.3fr 1fr' : '1fr 1fr') }, reqCol, prodCol));
     paintRecs(1, false);
@@ -149,7 +148,7 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
     if (!req.length) emptyReq.textContent = '아직 없어요 — 찾아서 연결하면 다음 세션부터 읽고 시작합니다.';
     const left = el('div', { class: 'pjh-kside' }, el('div', { class: 'pjh-klabel' }, '필요 — 세션이 읽고 시작 ', el('span', { class: 'pjh-grp-n', text: String(req.length) })), ...req.map((k) => kcard(k, 'required')),
       req.length ? null : emptyReq, findCard, recHost);
-    const right = el('div', { class: 'pjh-kside' }, el('div', { class: 'pjh-klabel' }, '산출 — 이 프로젝트가 만든 것 ', el('span', { class: 'pjh-grp-n', text: String(prod.length) })), ...prod.map((k) => kcard(k, 'produced')));
+    const right = el('div', { class: 'pjh-kside prod' }, el('div', { class: 'pjh-klabel' }, '산출 — 이 프로젝트가 만든 것 ', el('span', { class: 'pjh-grp-n', text: String(prod.length) })), ...prod.map((k) => kcard(k, 'produced')));
     if (!prod.length) right.append(el('div', { class: 'pjh-stat', text: '작업이 진행되면 여기에 쌓입니다.' }));
     normal.append(el('div', { class: 'pjh-kflow' }, left, mid, right));
     paintRecs(2);

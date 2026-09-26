@@ -75,7 +75,7 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
   // ── 위젯 한 장 ── 격자 칸 수는 CSS 변수(--w·--h)로 — 좁은 폭(한 열)에선 CSS 가 그 변수를 버린다(37-projects-hub.css).
   function widget(tool: HubTool, w: number, h: number): HTMLElement {
     const view = hubView(w, h, narrow);
-    const card = el('div', { class: 'pjh-w v-' + view + (w === 1 ? ' col' : '') + ' pjh-w' + (narrow ? 1 : w), 'data-tool': tool, style: '--w:' + w + ';--h:' + h });
+    const card = el('div', { class: 'pjh-w v-' + view + (w === 1 ? ' col' : '') + ' pjh-w' + (narrow ? 1 : w) + ' pjh-h' + h, 'data-tool': tool, style: '--w:' + w + ';--h:' + h });
     const sub = el('span', { class: 'pjh-wh-sub' });
     const acts = el('span', { class: 'pjh-wh-acts' });
     const openBtn = el('button', { class: 'pjh-open', type: 'button', title: HUB_TOOL_LABEL[tool] + ' 전폭으로 열기', onclick: () => openTool(tool) }, '열기 ', hubIcon('right', 13));
