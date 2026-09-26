@@ -8,7 +8,7 @@
 //   N4 정규식 · 식별자에 비슷한 글자가 있어도 문자열이 아니면 안 잡는다
 //   R1 web/ 의 .ts 전부에서 문자열에 «곁칸» 0건(있으면 파일:줄을 적어 실패)
 //   R2 앱 만들기 안내(scripts/create-lively-app.mjs)가 쓰는 README 글에도 0건
-//   R3 탭 메뉴 «…로 보내기» 는 받침에 맞는 조사를 쓴다(우측 사이드바로 · 아래 칸으로)
+//   R3 탭 메뉴 «…로 보내기» 는 받침에 맞는 조사를 쓴다(…사이드바로 · 아래 칸으로)
 //  ⚠ 문자열은 TypeScript 파서로 뽑는다. 줄 단위 정규식은 주석 안 따옴표·URL 의 // 에서 틀린다.
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -67,7 +67,8 @@ const tplHits = hits(tpl, "create-lively-app.ts");
 ok(tplHits.length === 0, "R2 앱 만들기 안내 README 에도 없다", tplHits.map(([l, s]) => `  scripts/create-lively-app.mjs:${l}  ${JSON.stringify(s.slice(0, 80))}`).join("\n"));
 
 const panes = stringsOf(readFileSync(join(root, "web/v2/panes.ts"), "utf8"), "panes.ts").map(([, s]) => s);
-ok(panes.includes("우측 사이드바로") && panes.includes("아래 칸으로") && !panes.includes("으로 보내기"),
+//  곁칸 쪽 조사(«…사이드바로») 는 자리에 따라 web/lib/side-label.ts 가 만든다. 그 값은 side-label.test.mjs L4 가 본다.
+ok(panes.includes("아래 칸으로") && !panes.includes("으로 보내기") && /side: sideLabels\(isLeft\(\)\)\.sendTo/.test(readFileSync(join(root, "web/v2/panes.ts"), "utf8")),
   "R3 탭 메뉴는 칸 이름마다 맞는 조사를 쓴다(«우측 사이드바으로» 가 나오지 않게)");
 
 console.log(`\n${pass} passed, ${fail} failed`);
