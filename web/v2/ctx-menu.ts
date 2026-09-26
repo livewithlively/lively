@@ -7,7 +7,11 @@
 //   · 하위 메뉴(sub) — 오른쪽에 펼친다. 화면 오른쪽 끝이면 왼쪽으로 뒤집는다.
 //   · 머리글(title) — 「무엇에 대한 메뉴인가」를 맨 위에 한 줄(세션 이름·파일 이름). 항목이 많아질수록 이게 있어야 읽힌다.
 //   · 아이콘·힌트(단축키)·체크 표시 — 있는 행만 그린다. 하나라도 아이콘이 있으면 열을 맞춘다.
-//   · 닫힘 — 밖 클릭·Esc·창 blur(iframe 이 포커스를 가져갈 때)·스크롤·크기 변경. 열려 있던 포커스는 돌려준다.
+//   · 닫힘 — 밖 클릭·Esc·창 blur(iframe 이 포커스를 가져갈 때)·**사람이 굴린** 스크롤(wheel·touchmove)·크기 변경. 열려 있던 포커스는 돌려준다.
+//     ⚠ `scroll` 이벤트로 닫지 않는다(#4351, 2026-09-26 실측): 곁칸 부품(태스크·사이드바 목록)은 8초 틱마다 목록을 통째로 다시 그리고
+//     `scrollTop` 을 되돌리는데, 그 되그림이 `scroll` 을 두 번 쏜다(비웠을 때 0 으로 → 되돌릴 때 원래 값). document capture 로 듣던
+//     메뉴는 그 순간 «아무도 안 건드렸는데» 닫혔다 — 목록이 스크롤돼 있을 때만 재현돼 «될 때 있고 안 될 때 있다» 로 보였다.
+//     사람의 스크롤은 wheel·touchmove 로 잡히고, 스크롤바 드래그는 pointerdown(away) 이 잡는다. 프로그램 스크롤은 메뉴를 못 닫는다.
 //  ⚠ 메뉴는 늘 하나만 산다 — 새로 띄우면 앞 것을 지운다. body 에 붙으므로 곁칸 격리(#1819)와 무관하다(값도 신호도 안 만진다).
 import { el } from '../lib/dom.js';
 import { icon as lineIcon } from './icons.js';
@@ -86,7 +90,8 @@ export function showCtxMenu(x: number, y: number, rows: CtxRow[], opts: CtxOpts 
     openRoot = null; openClose = null;
     document.removeEventListener('pointerdown', away, true);
     document.removeEventListener('keydown', onKey, true);
-    document.removeEventListener('scroll', onScroll, true);
+    document.removeEventListener('wheel', onScroll, true);
+    document.removeEventListener('touchmove', onScroll, true);
     window.removeEventListener('blur', onBlur);
     window.removeEventListener('resize', close);
     if (prevFocus && prevFocus.isConnected && document.activeElement === document.body) { try { prevFocus.focus({ preventScroll: true }); } catch (_) { /* noop */ } }
@@ -94,6 +99,7 @@ export function showCtxMenu(x: number, y: number, rows: CtxRow[], opts: CtxOpts 
   };
   const inMenus = (n: Node | null): boolean => !!n && (root.contains(n) || subs.some((s) => s.contains(n)));
   const away = (e: Event): void => { if (!inMenus(e.target as Node)) close(); };
+  // 사람이 굴릴 때만 — wheel·touchmove. `scroll` 은 프로그램 되그림(8초 틱)에도 나서 쓰지 않는다(머리말 ⚠).
   const onScroll = (e: Event): void => { if (!inMenus(e.target as Node)) close(); };
   const onBlur = (): void => { if (document.activeElement && document.activeElement.tagName === 'IFRAME') close(); };
 
@@ -202,7 +208,8 @@ export function showCtxMenu(x: number, y: number, rows: CtxRow[], opts: CtxOpts 
     if (openRoot !== root) return;
     document.addEventListener('pointerdown', away, true);
     document.addEventListener('keydown', onKey, true);
-    document.addEventListener('scroll', onScroll, true);
+    document.addEventListener('wheel', onScroll, { capture: true, passive: true });
+    document.addEventListener('touchmove', onScroll, { capture: true, passive: true });
     window.addEventListener('blur', onBlur);
     window.addEventListener('resize', close);
   }, 0);
