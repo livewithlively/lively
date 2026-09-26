@@ -4,9 +4,9 @@
 //   2×1  7일 레인(사람 × 날 · 점 크기 = 건수 · 회색 열 = 주말) + 범례      3×1  14일 레인
 //   2×2+ 7일 레인 + 아래 «그날 그 사람» 기록            3×2+  14일 레인 + 아래 기록 + 범례
 //  기록 줄을 누르면 전체 타임라인(열기). 사람 색은 아바타 해시색(core.avatarColor)과 같다.
-import { avatarColor, el, personFace } from '../core.js';
+import { avatarColor, el, personFace, relTime } from '../core.js';
 import { type Fill, btn, emptyNote, footText } from './detail-hub-kit.js';
-import { type LaneDay, actWhen, countOn, countSince, dayKey, dotSize, feedDayHead, feedDayLabel, laneCounts, laneDays, latestLane, rowsBudget } from './detail-hub-model.js';
+import { type LaneDay, actWhen, countOn, countSince, dayKey, dotSize, feedDayHead, feedDayLabel, laneCounts, laneDays, latestLane } from './detail-hub-model.js';
 
 const TYPE_LABEL: Record<string, string> = { feature: '기능', fix: '수정', decision: '결정', docs: '문서', research: '리서치', review: '검토', chore: '운영', other: '기타' };
 // 프로젝트별 «고른 (사람, 날)» — 다시 그려도 남는다.
@@ -32,18 +32,20 @@ export const fillTimeline: Fill = (ctx, f, body, foot, sub) => {
     }
     // 기록 한 줄 — 시각 · 얼굴 · 요약 / 종류 · 사람. 시안: 하네스 이름은 안 싣는다(줄마다 «claude-code» 가 반복되면 소음).
     //  mode 'recent' = 1×1(오늘이면 시각만, 아니면 어제·M/D) · 'day' = 사람이 정해진 «자세히» 칸(얼굴·사람 없이 종류만).
+    //  (3차) 프로젝트 탭 타임라인 섹션과 같은 결: 종류 점 · «종류 요약» / «사람 · 시각». 'recent' 는 «3시간 전», 'feed' 는 날 머리 아래라 «원준 · 20:01», 'day' 는 시각만.
     const ev = (a: any, mode: 'feed' | 'recent' | 'day' = 'feed'): HTMLElement => {
       const t = actWhen(a);
       const hm = t ? String(new Date(t).getHours()).padStart(2, '0') + ':' + String(new Date(t).getMinutes()).padStart(2, '0') : '';
-      const when = !t ? '' : mode === 'recent' ? (feedDayLabel(t, now) === '오늘' ? hm : feedDayLabel(t, now)) : hm;
-      const who = mode === 'day' ? '' : memberName(a.author_person);
+      const when = !t ? '' : mode === 'recent' ? relTime(new Date(t).toISOString()) : hm;
+      const who = mode === 'day' ? '' : (memberName(a.author_person) || 'AI');
+      const ty = TYPE_LABEL[a.type] || a.type || '';
       return el('div', { class: 'pjh-ev', onclick: open },
-        el('span', { class: 'pjh-ev-t', text: when }),
-        mode === 'day' ? null : a.author_person ? personFace(a.author_person, 'pjv-ava', memberName(a.author_person)) : el('span', { class: 'pjv-ava pjh-ev-agent', text: 'AI' }),
+        el('i', { class: 'pjh-ev-dot ' + String(a.type || ''), 'aria-hidden': 'true' }),
         el('div', { class: 'pjh-ev-b' },
-          el('div', { class: 'pjh-ev-s', text: a.summary || a.title || '(제목 없음)' }),
-          el('div', { class: 'pjh-ev-m' }, el('span', { class: 'pjh-ev-ty', text: TYPE_LABEL[a.type] || a.type || '' }), who ? el('span', { text: who }) : null)));
+          el('div', { class: 'pjh-ev-s' }, ty ? el('b', { class: 'pjh-ev-ty', text: ty }) : null, el('span', { text: a.summary || a.title || '(제목 없음)' })),
+          el('div', { class: 'pjh-ev-m', text: [who, when].filter(Boolean).join(' · ') })));
     };
+    const EV_PX = 56;   // 두 줄 기록 한 칸(위아래 8 + 줄 20 + 2 + 17 + 선 1)
 
     if (w <= 1 && h <= 1) {
       for (const a of sorted.slice(0, 3)) body.append(ev(a, 'recent'));
@@ -51,8 +53,8 @@ export const fillTimeline: Fill = (ctx, f, body, foot, sub) => {
       return;
     }
     if (w <= 1) {
-      // 피드 — 날로 묶어. 줄 하나 ≈ 44px.
-      const cap = Math.max(3, Math.floor((h * 276 - 16 - 114 - 3 * 24) / 46));   // 줄 ≈46px · 날 머리 셋 몫을 뺀다
+      // 피드 — 날로 묶어. 줄 하나 56px, 날 머리 셋 몫(28px)을 뺀다.
+      const cap = Math.max(3, Math.floor((h * 276 - 16 - 122 - 3 * 28) / EV_PX));
       let lastDay = '';
       for (const a of sorted.slice(0, cap)) {
         const d = feedDayLabel(actWhen(a), now);
@@ -95,8 +97,10 @@ export const fillTimeline: Fill = (ctx, f, body, foot, sub) => {
       const det = el('div', { class: 'pjh-lane-det' });
       const md = (() => { const d = new Date(pick.day + 'T12:00:00'); return (d.getMonth() + 1) + '/' + d.getDate(); })();
       det.append(el('div', { class: 'pjh-det-h' }, personFace(pick.person, 'pjv-ava', memberName(pick.person)), el('b', { text: memberName(pick.person) + ' · ' + dayLabel + (dayLabel === '오늘' || dayLabel === '어제' ? ' ' + md : '') }), el('span', { text: items.length + '건 — 점을 누르면 여기에' })));
-      const cap = Math.max(1, rowsBudget(h, 0, 30 * (people.length + 1) + 40) - 2);
-      for (const a of items.slice(0, Math.max(1, Math.floor(cap * 31 / 44)))) det.append(ev(a, 'day'));
+      // 남는 높이 = 몸통 − 레인(머리 22 + 사람 × 36) − 자세히 머리 28 − 범례 30 − 여백 24
+      const avail = h * 276 - 16 - 122 - (22 + 36 * people.length) - 28 - 30 - 24;
+      const cap = Math.max(1, Math.floor(avail / EV_PX));
+      for (const a of items.slice(0, cap)) det.append(ev(a, 'day'));
       if (!items.length) det.append(el('div', { class: 'pjh-stat', text: '이날 기록이 없습니다 — 점을 누르면 그날 그 사람의 기록이 여기 섭니다.' }));
       body.append(det);
     }
