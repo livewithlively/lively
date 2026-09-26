@@ -508,3 +508,11 @@
 .pjh-two-k .pjh-grp { min-height: 24px; }
 .pjh-two-k .pjh-kr { min-height: 32px; }
 .pjh-two-k .pjh-stat { line-height: 1.45; }
+/* 폴더 줄 아이콘은 28px(24 는 띠 글자가 안 읽힌다) · 한 줄 높이 카드(.pjh-h1)의 나무 줄은 26px */
+.pjh-fr-th { width: 28px; }
+.pjh-fr-th .pjh-fc-ic { width: 28px; height: 28px; }
+.pjh-fr-th .pjh-fc-ic .ft, .pjh-fr-th .pjh-fc-ic .ft-file { width: 24px; height: 28px; }
+.pjh-fr-th .pjh-fc-ic .ft-folder { width: 28px; height: 23px; }
+.pjh-fr-th .pjh-fc-ic .ft-img { width: 28px; height: 28px; border-radius: 6px; }
+.pjh-h1 .pjh-tree-r { height: 26px; font-size: 12.5px; }
+.pjh-h1 .pjh-tree { gap: 0; }
