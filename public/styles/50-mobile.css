@@ -23,7 +23,7 @@
      (.v2-aside — 칸 셸은 맥락을 곁칸에 두므로 늘 비어 있다)은 서랍으로 서지 않는다(안 그러면 빈 흰 판이 곁칸을 덮는다). */
   #v2-root.m-aside .v2-main .pn-pane[data-zone="side"] { display: flex; position: fixed; top: 0; right: 0; bottom: 0; z-index: 40;
     width: min(92vw, 420px); border-left: 1px solid var(--line); background: var(--bg); box-shadow: 0 0 0 1px var(--line), 0 18px 48px rgba(var(--shadow-ink), .24); }
-  .v2-aside:has(> .v2-aside-pane:not([hidden]):empty) { display: none !important; }   /* ⚠ 탭마다 판이 하나씩(tabs.ts) — 안 보이는 탭의 빈 판에 걸리지 않게 [hidden] 을 뺀다 */
+  .v2-aside:has(> .v2-aside-pane:not([hidden]):empty):not(:has(> .v2-guest)) { display: none !important; }   /* ⚠ 탭마다 판이 하나씩(tabs.ts) — 안 보이는 탭의 빈 판에 걸리지 않게 [hidden] 을 뺀다 · #4233 손님(기둥에 하나)이 떠 있으면 판이 비어도 선다 */
   /* 태블릿의 넓은 표(WIKI 목록·보드) — 카드 안에서 가로로 굴린다(액자 밖으로 새지 않게). */
   .wk-board { overflow-x: auto; }   /* 프로젝트 보드의 가로 스크롤 상자(.pjv-board-scroll)는 원래부터 auto 다 */
 }

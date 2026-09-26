@@ -20,6 +20,8 @@ export interface AsideGuest {
   title: string;
   /** 곁칸에 실을 주소(같은 오리진). */
   url: string;
+  /** 머리 왼쪽의 굵은 이름(없으면 «미리보기»). 위키 문서 고정(#4233)은 «문서». */
+  label?: string;
 }
 
 export const ASIDE_MSG = { ping: 'lively-aside-ping', pong: 'lively-aside-pong', open: 'lively-aside-open' } as const;

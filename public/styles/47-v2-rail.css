@@ -597,6 +597,71 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
   .v2-sa-peek { width: 100%; }
 }
 
+/* ── #4233 [위키] 본문 목록 — AI 세션 목록(.v2-sa)과 같은 부품, 열만 다르다(web/v2/wiki-main.ts) ─────────────────
+   원준 2026-09-26 «A를 뼈대로 · C의 새로 들어온 지식 카드 줄» · «2안 사이드 피크 + 우측 사이드바에 고정».
+   열: 제목 · 분류 · 유형 · 작성 · 시각 · ⋯ (46px 행). 덧창 본문은 기존 마크다운 렌더러(.md-rendered). */
+.v2-wk .v2-sa-gh, .v2-wk .v2-sa-row { grid-template-columns: minmax(0, 1fr) 190px 84px 48px 84px 32px; }
+.v2-wk a.crumb { text-decoration: none; }
+.v2-wk a.crumb:hover { color: var(--ink); }
+.v2-wk a.v2-sa-new, .v2-wk a.v2-sa-chip { text-decoration: none; }
+.v2-wk .v2-sa-tb.on { background: var(--bg-tint-2); color: var(--blue); }
+.v2-wk .v2-sa-tb.on .v2-sa-ic { color: var(--blue); }
+.v2-wk-row .c-name .v2-sa-ic { color: var(--muted-2); }
+.v2-wk-row .c-cat { display: flex; align-items: center; gap: 7px; min-width: 0; padding-right: 12px; font-size: 13px; color: var(--ink-sub); }
+.v2-wk-row .c-cat i, .v2-wk-card .k .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: color-mix(in srgb, var(--blue) 55%, var(--bg)); }
+.v2-wk-row .c-cat span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v2-wk-row .c-cat.none { color: var(--muted); }
+.v2-wk-row .c-cat.none i { background: var(--muted-3); }
+.v2-wk-row .c-type { font-size: 12.5px; color: var(--ink-sub); white-space: nowrap; }
+.v2-wk-row .c-type.none { color: var(--muted); }
+.v2-wk-row .c-who .m { font-size: 12px; color: var(--muted); }
+.v2-wk-card { min-height: 104px; }
+.v2-wk-card .k { font-size: 12px; font-weight: 700; color: var(--ink-sub); min-width: 0; }
+.v2-wk-card .k .cn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 덧창 — 머리 · 본문 · 발치 */
+.v2-wk-peek .ibt { text-decoration: none; }
+.v2-wk-peek a.ib { text-decoration: none; }
+.v2-wk-peek .ib:disabled { opacity: .35; cursor: default; background: none; }
+.v2-wk-rd { flex: 1; min-height: 0; overflow: auto; padding: 20px 28px 28px; }
+.v2-wk-rd h1 { margin: 0 0 10px; font-size: 22px; font-weight: 800; line-height: 1.35; color: var(--ink); overflow-wrap: anywhere; }
+.v2-wk-rd .dm { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.v2-wk-rd .dm .pill { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 999px; background: var(--bg-tint-2); font-size: 11.5px; font-weight: 700; color: var(--ink-sub); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v2-wk-sum { margin: 0 0 14px; padding: 10px 12px; border-radius: 10px; background: var(--gray-bg-2); font-size: 13px; line-height: 1.6; color: var(--ink-sub); }
+.v2-wk-md { font-size: 14px; line-height: 1.75; color: var(--ink); overflow-wrap: anywhere; }
+.v2-wk-md > :first-child { margin-top: 0; }
+.v2-wk-md table { display: block; overflow-x: auto; font-size: 12.5px; }
+.v2-wk-md pre { overflow-x: auto; }
+.v2-wk-md img { max-width: 100%; }
+.v2-wk-foot { flex: none; display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 20px; border-top: 1px solid var(--line-row); font-size: 12px; color: var(--muted); }
+.v2-wk-foot .sl { margin: 0 4px; color: var(--muted-3); }
+.v2-wk-kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 5px; border: 1px solid var(--line-net); background: var(--bg); font-size: 11px; font-weight: 700; color: var(--muted); }
+/* 폭은 창이 아니라 **본문 칸**을 잰다(@container) — 우측 사이드바에 문서를 고정하면 창은 그대로인데 본문만 좁아진다. */
+.v2-wk { container-type: inline-size; container-name: wkmain; }
+@container wkmain (max-width: 1080px) {
+  .v2-wk .v2-sa-gh, .v2-wk .v2-sa-row { grid-template-columns: minmax(0, 1fr) 150px 76px 44px 76px 32px; }
+}
+@container wkmain (max-width: 900px) {
+  .v2-wk .v2-sa-gh, .v2-wk .v2-sa-row { grid-template-columns: minmax(0, 1fr) 140px 76px 32px; }
+  .v2-wk .v2-sa-gh .h-type, .v2-wk .v2-sa-gh .h-who, .v2-wk-row .c-type, .v2-wk-row .c-who { display: none; }
+}
+@container wkmain (max-width: 620px) {
+  .v2-wk .v2-sa-top, .v2-wk .v2-sa-tools { padding: 0 12px; }
+  .v2-wk .v2-sa-top .desc { display: none; }
+  .v2-wk .v2-sa-tools { overflow-x: auto; }
+  .v2-wk .v2-sa-q { width: 150px; }
+  .v2-wk .v2-sa-new span { display: none; }
+  .v2-wk .v2-sa-new { padding: 0 10px; }
+  .v2-wk .v2-sa-now { padding: 12px 12px 2px; }
+  .v2-wk .v2-sa-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .v2-wk .v2-sa-cards > :nth-child(n + 3) { display: none; }
+  .v2-wk .v2-sa-list { padding: 0 8px; }
+  .v2-wk .v2-sa-gh, .v2-wk .v2-sa-row { grid-template-columns: minmax(0, 1fr) 64px 32px; column-gap: 8px; }
+  .v2-wk .v2-sa-gh .hc, .v2-wk-row .c-cat { display: none; }
+  .v2-wk-rd { padding: 16px 16px 24px; }
+  .v2-wk-peek .ibt span { display: none; }
+  .v2-wk-foot { display: none; }
+}
+
 /* ── [위키] 구역 — 구조만, 한 화면에 (#4233, web/v2/side.ts renderWiki) ───────────────────────────
    새 모양을 만들지 않는다 — 전부 다른 구역의 부품이다(원준 2026-09-25 "지금 디자인 시스템과 벗어나면 안 돼"):
    고정 두 줄 = AI 세션 「전체」 줄(.v2-wcat.v2-ptl) · 소제목 = .v2-app-group · 묶음 카드 = 홈 프로젝트 카드(.v2-pg)와 같은 모양
