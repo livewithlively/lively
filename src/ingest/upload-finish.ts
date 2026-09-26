@@ -15,6 +15,7 @@ import path from "node:path";
 import { localExternalId } from "./local-file-core.js";
 import type { LocalRoot } from "./local-file-core.js";
 import { ingestLocalUpload } from "./local-file.js";
+import type { UploadEntry } from "./upload-entry.js";
 import { grantSharedGroupWrite } from "../project/project-fs.js";
 import { memberStat } from "../terminal/terminal-member-fs.js";   // 격리 멤버(#524) 개인 폴더는 그 uid 로만 stat 된다
 import { logger } from "../log.js";
@@ -43,6 +44,8 @@ export async function finishUpload(o: {
   abs: string;
   osUser: string | null;
   uploader: { id: string | null; name: string | null };
+  /** 들어온 길(#4233): 입구가 요청 헤더로 정한다(uploadEntryOf). 사람이 올린 것 · AI 세션이 만든 것. */
+  entry: UploadEntry;
 }): Promise<UploadFinished> {
   const { coord, abs, osUser } = o;
   // ① 공유 그룹 rw — 게이트웨이(lively)가 쓴 644 파일을 격리 세션의 box_ 사용자가 고칠 수 있게(#1246).
@@ -56,7 +59,7 @@ export async function finishUpload(o: {
   if (coord) {
     ing = await ingestLocalUpload({
       root: coord.root, folder: coord.folder ?? null, base: coord.base, abs, osUser,
-      uploader: o.uploader, channelFallback: coord.channelFallback,
+      uploader: o.uploader, channelFallback: coord.channelFallback, entry: o.entry,
     }).catch((e) => { logger.warn({ err: e, abs }, "[local-ingest] 자료 등록 실패"); return null; });
   }
   // ③ 도장 — up-sync 훅이 **로컬 mtime 을 이 값으로 맞추고 원장 기준선으로 적어야** 다음 pull 이

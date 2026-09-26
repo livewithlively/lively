@@ -35,7 +35,8 @@ import {
 import { deleteSource, canSeeSource } from "../v6/source-store.js";
 import { purgeDeleted } from "../v6/trash-store.js";
 import { auditOrgContent } from "../v6/content-audit.js";
-import { finishUpload } from "../ingest/upload-finish.js";   // #3787 D — 업로드 마무리는 브라우즈 라우트와 한 함수
+import { finishUpload } from "../ingest/upload-finish.js";
+import { uploadEntryOf } from "../ingest/upload-entry.js";   // #4233: 들어온 길(up-sync 훅은 세션 헤더를 싣는다 → AI 가 만든 파일)   // #3787 D: 업로드 마무리는 브라우즈 라우트와 한 함수
 import { bindSessionTask, taskForProjectSession, taskKickoffPrompt } from "../v6/session-task.js";   // #4084 — 태스크에서 연 세션 · #4135 허브 「태스크에 붙이기」
 
 const MAX_UPLOAD = 1024 * 1024 * 1024; // 1GB (#1870 — terminal-files 와 동일해야 한다. receiveUpload 스트리밍이라 RAM 무관)
@@ -245,7 +246,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const u = userOf(req);
     res.json(await finishUpload({
       coord: { root: { kind: "project", id: project.id }, base, folder: project.folder, channelFallback: project.name },
-      abs, osUser: store.osUser, uploader: { id: viewerOf(u), name: u?.email ?? null },
+      abs, osUser: store.osUser, uploader: { id: viewerOf(u), name: u?.email ?? null }, entry: uploadEntryOf(req.headers),
     }));
   }));
 

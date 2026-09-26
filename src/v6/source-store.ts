@@ -7,6 +7,7 @@ import { auditOrgContent, type WriteCtx, restoreSnapshot } from "./content-audit
 import { effectiveViewer, type Viewer } from "./visibility.js";
 import { axisOn } from "./visibility-axes.js";
 import { knowledgeVisWhere } from "./knowledge-store.js";
+import { SOURCE_GROUP_CASE, sourceGroupWhere, type SourceGroup, type SourceGroupFilter } from "./source-group.js";   // #4233 들어온 길
 
 // 자료 1건의 가시성 술어(#1291) — 's' 별칭 기준. 지식(knowledgeVisSql)과 같은 모양이되 **컨테이너 참조 grant 가 없다**:
 //  자료는 프로젝트가 아니라 외부 원본(슬랙·노션·전사록)에서 들어오므로 리스트에 매달 자연스러운 좌표가 없다.
@@ -87,6 +88,8 @@ export interface SourceFilter {
   root?: string;        // 올린 자리(fields->>'root') — 'personal' 개인 폴더 · 'project' 프로젝트 폴더 (#2423)
   linked?: boolean;     // true=지식이 붙은 것만 / false=아직 안 붙은 것만
   fold?: boolean;       // 답글 접기(#2423 v3.1) — 부모가 수집돼 있는 답글을 목록에서 뺀다(자료의 단위 = 대화)
+  /** 들어온 길(#4233): 올린 자료 · 수집한 자료 · AI가 만든 파일 · 직접 적은 글, 'made' = 뒤의 둘. 판정은 source-group.ts. */
+  group?: SourceGroupFilter;
 }
 
 // ── 자료의 단위(#2423 v3.1) — 대화 출처는 낱메시지가 아니라 **대화**가 한 건이다 ──
@@ -134,6 +137,8 @@ function sourceListFilter(f: SourceFilter): { where: string; params: unknown[] }
   //  올린 자리(#2423 열람실) — 'personal'(개인 폴더) / 'project'(프로젝트 폴더). ingest/local-file 이 fields.root 에 적는다.
   if (f.root) { params.push(f.root); wh.push(`s.fields->>'root'=$${params.length}`); }
   if (f.author) { params.push(f.author); wh.push(`s.fields->>'author_name'=$${params.length}`); }
+  const grp = sourceGroupWhere(f.group);
+  if (grp) wh.push(grp);
   if (f.fold) wh.push(FOLD_REPLY);
   //  카테고리 축(#1631) — 자료를 «그 자료로 만든 지식의 분류» 로 좁힌다. 지식이 안 된 자료는 자연히 빠진다.
   if (f.categoryId != null) {
@@ -219,6 +224,7 @@ export async function countSources(f: SourceFilter = {}, viewer?: Viewer): Promi
 export interface SourceTreeNode {
   system: string;            // 'slack'·'github'·'local'… 또는 'authored'
   container: string | null;  // 채널·폴더·저장소 이름(없을 수 있다)
+  group: SourceGroup;        // 들어온 길(#4233): 같은 출처·자리라도 파일은 올린 것과 AI 가 만든 것으로 가지가 갈린다
   n: number;                 // 자료 수
   linked: number;            // 그중 지식이 붙은 것
   newest: string | null;     // 마지막으로 들어온 때
@@ -234,14 +240,32 @@ export async function listSourceTree(viewer?: Viewer): Promise<SourceTreeNode[]>
     //   행마다 source 를 다시 훑어 수백 초 → itemsPool 고갈 → 게이트웨이 전 API 가 굶었다). 두 상수 머리말의 ⚠ 를 지킨다.
     `SELECT COALESCE(s.external_system, 'authored') AS system,
             COALESCE(s.fields->>'container_name', CASE WHEN s.external_system IS NULL THEN s.kind ELSE NULL END) AS container,
+            ${SOURCE_GROUP_CASE} AS "group",
             count(*)::int AS n,
             count(*) FILTER (WHERE ${THREAD_KN})::int AS linked,
             max(COALESCE(s.occurred_at, s.updated_at)) AS newest
        FROM source s
       WHERE s.lifecycle='active' AND ${FOLD_REPLY} AND ${vis}
-      GROUP BY 1, 2
-      ORDER BY 3 DESC`, params);
+      GROUP BY 1, 2, 3
+      ORDER BY 4 DESC`, params);
   return rows as unknown as SourceTreeNode[];
+}
+
+// ── 올린 사람(#4233): 「올린 자료」 카드의 사람 줄 · 목록 머리 「올린 사람」 거르개가 읽는 수. ──
+//  목록 거르개(author)와 같은 값(fields.author_name: 이메일)으로 센다. 같은 사람의 id(author_external_id)는 얼굴 · 표시 이름용.
+//  나무와 같은 술어(FOLD_REPLY · 뷰어)라 사람 줄의 수와 그 줄을 눌렀을 때의 목록 총계가 같다. 올린 자료는 파일뿐이라 적다.
+export interface SourceUploader { name: string | null; id: string | null; n: number }
+export async function listSourceUploaders(viewer?: Viewer): Promise<SourceUploader[]> {
+  const params: unknown[] = [];
+  const vis = await sourceVisWhere(viewer, params);
+  const rows = await q(itemsPool,
+    `SELECT s.fields->>'author_name' AS name, max(s.fields->>'author_external_id') AS id, count(*)::int AS n
+       FROM source s
+      WHERE s.lifecycle='active' AND ${sourceGroupWhere("uploaded")} AND ${FOLD_REPLY} AND ${vis}
+      GROUP BY 1
+      ORDER BY 3 DESC, 1
+      LIMIT 200`, params);
+  return rows as unknown as SourceUploader[];
 }
 
 // distill 대상 — 아직 지식으로 증류되지 않은 자료(knowledge_source 링크가 하나도 없는 active source). 최근 발생순.
