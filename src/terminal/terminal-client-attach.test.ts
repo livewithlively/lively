@@ -98,6 +98,7 @@ interface Harness {
   composer: () => FakeNode | null;
   attachBtn: () => FakeNode | null;
   fileInput: () => FakeNode | null;
+  session: Record<string, string>;   // 탭 저장소(sessionStorage) — 쓰던 글 보관(#4229 후속)
 }
 
 interface CtxOpts {
@@ -121,6 +122,7 @@ async function makeCtx(opts: CtxOpts = {}): Promise<Harness> {
   def("removeEventListener", (type: string, fn: Listener) => { const a = winL.get(type) || []; const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); });
   def("document", {
     createElement: (tag: string) => new FakeNode(tag),
+    createElementNS: (_ns: string, tag: string) => new FakeNode(tag),   // 입력 줄의 선 아이콘(클립·보내기·모드) — #4229 후속
     createTextNode: (text: string) => ({ nodeType: 3, textContent: text, parent: null }),
     body,
     getElementById: () => null,
@@ -132,6 +134,8 @@ async function makeCtx(opts: CtxOpts = {}): Promise<Harness> {
   def("location", { search: "?session=t-4229" + (opts.mobile === false ? "" : "&mobile=1"), pathname: "/ui/terminal.html", protocol: "https:", host: "test" });
   const store: Record<string, string> = {};
   if (opts.prefs) store["lively_term_prefs"] = JSON.stringify(opts.prefs);
+  const session: Record<string, string> = {};
+  def("sessionStorage", { getItem: (k: string) => (k in session ? session[k] : null), setItem(k: string, v: string) { session[k] = String(v); }, removeItem(k: string) { delete session[k]; } });
   def("localStorage", { getItem: (k: string) => (k in store ? store[k] : null), setItem(k: string, v: string) { store[k] = v; }, removeItem(k: string) { delete store[k]; } });
   def("isSecureContext", true);
   def("WebSocket", class { /* not used */ });
@@ -164,7 +168,7 @@ async function makeCtx(opts: CtxOpts = {}): Promise<Harness> {
     explorerEl: new FakeNode("aside"),
   });
   return {
-    mod, main, zone, fetched, sent, asked,
+    mod, main, zone, fetched, sent, asked, session,
     toasts: () => body.children.filter((c: any) => c instanceof FakeNode && c.tag === "div").map((c: any) => c.textContent),
     dock: () => main.find((n) => n.attrs.id === "mdock"),
     composer: () => main.find((n) => n.tag === "textarea"),
@@ -237,6 +241,18 @@ t("A3 쓰던 글이 있으면 캐럿 자리에 끼운다 — 글은 지워지지
   assert.equal(c.value, "이 사진 봐줘 '/srv/box/work/uploads/a.png' ");
   assert.equal(c.selectionStart, c.value.length);
   assert.equal(c.selectionEnd, c.value.length);
+});
+t("A3c 끼운 경로도 쓰던 글로 남고 보내기 단추가 켜진다 — 첨부 직후 화면이 다시 떠도 경로가 안 사라진다(리뷰 후속)", async () => {
+  const h = await makeCtx();
+  h.mod.setupMobileDock(h.main);
+  const c = h.composer()!;
+  c.value = "이거"; c.selectionStart = c.selectionEnd = c.value.length;
+  pick(h, [img("IMG_0002.jpeg")]);
+  await waitPut(h);
+  assert.equal(h.session["lively:mdraft:t-4229"], "이거 '/srv/box/work/uploads/IMG_0002.jpeg' ", "글 상자 전체가 탭 저장소에 남는다");
+  const send = h.main.find((n) => /(^|\s)msend(\s|$)/.test(n.className));
+  assert.ok(send, "전제: 보내기 단추");
+  assert.ok(send!.cls.has("on"), "보내기 단추가 켜진다");
 });
 t("A3b 선택 범위가 있으면 그 범위를 경로로 갈아 끼운다(앞뒤 글 보존)", async () => {
   const h = await makeCtx();

@@ -220,9 +220,69 @@
   .mcomp { flex: 1; min-height: 38px; max-height: 112px; resize: none; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
     background: var(--bg); color: var(--fg); font: inherit; font-size: 16px; line-height: 1.4; }  /* 16px 미만이면 iOS 가 포커스 때 화면을 확대한다 */
   .mcomp:focus { outline: none; border-color: var(--accent); }
-  .msend { flex: none; height: 38px; padding: 0 14px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font: inherit; font-size: 14px; font-weight: 600;
+  /* ── #4229 후속(원준 2026-09-26 코멘트) — 폰 입력 줄 다시 그리기 ── */
+  /*  보내기 = 둥근 초록 ↑ 하나(자판의 리턴은 줄바꿈). 쓴 글이 없으면 흐리다. */
+  .msend { flex: none; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+    background: color-mix(in srgb, var(--fg-dim) 35%, var(--bg)); color: #fff;
     -webkit-tap-highlight-color: transparent; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
   .msend:active { filter: brightness(.92); }
+  .msend.on { background: var(--accent); }
+  .msend-ic { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+  /*  첨부 = 동그라미 속 «+». 보내기 ↑ 와 같은 크기의 동그라미라 입력 줄 양 끝이 짝을 이룬다. */
+  .mattach { width: 38px; height: 38px; padding: 0; border: 0; border-radius: 50%; background: color-mix(in srgb, var(--fg-dim) 16%, var(--bg)); color: var(--fg); }
+  .mattach-ic { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2.3; stroke-linecap: round; }
+  /*  모드 단추 = 작은 «모드» + 지금 방식 이름 + 아래 꺾쇠(고르는 칸). 글쇠와 같은 틀이다. */
+  .mkey-mode { display: inline-flex; align-items: center; gap: 5px; font-family: inherit; padding: 0 9px 0 11px; }
+  .mkey-l { font-size: 11.5px; color: var(--fg-dim); }
+  .mkey-t { font-size: 13.5px; font-weight: 700; }
+  .mkey-caret { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; opacity: .7; }
+  .mkeys[hidden] { display: none; }
+  /*  번호로 고르기 — AI 가 번호로 물을 때만 글쇠 줄 자리에 선다. 생김새는 글쇠 그대로(.mkey)이고 폭만 나눠 쓴다(원준 «디자인 언어가 달라져서»). */
+  .mpicks { display: flex; align-items: center; gap: 6px; }
+  .mpicks[hidden] { display: none; }
+  .mpicks-t { flex: none; font-size: 12px; color: var(--fg-dim); margin: 0 2px 0 4px; }
+  .mkey.mpick { flex: 1 1 0; min-width: 0; font-size: 15px; font-weight: 600; }
+  /*  일하는 방식 고르기(모드 시트) — 줄마다 이름 + 한 줄 설명, 지금 방식에 «지금». */
+  .mmode { display: flex; align-items: center; gap: 10px; width: 100%; padding: 12px 14px; border: 0; background: none; color: var(--fg); font: inherit; text-align: left; }
+  .mmode + .mmode { border-top: 1px solid var(--border); }
+  .mmode-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .mmode-t b { font-size: 15.5px; }
+  .mmode-t .d { font-size: 12.5px; color: var(--fg-dim); line-height: 1.45; }
+  .mmode.on { background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+  .mmode-now { flex: none; font-size: 12px; font-weight: 700; color: var(--accent); }
+  .mset-lead { font-size: 14px; margin: 6px 2px 0; line-height: 1.5; }
+  /* ── 폰 시트(설정·사용법) — 아래에서 올라오고, 머리는 고정, 몸통만 밀린다 ── */
+  .msheet-back { position: fixed; inset: 0; z-index: 80; background: rgba(0, 0, 0, .38); display: flex; align-items: flex-end; }
+  .msheet { width: 100%; max-height: calc(100% - 16px); display: flex; flex-direction: column; background: var(--bg); color: var(--fg);
+    border-radius: 16px 16px 0 0; box-shadow: 0 -6px 24px rgba(0, 0, 0, .18); padding-bottom: env(safe-area-inset-bottom); }
+  .msheet-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 12px 10px 18px; border-bottom: 1px solid var(--border); }
+  .msheet-head h3 { flex: 1; margin: 0; font-size: 17px; font-weight: 700; }
+  .msheet-done { border: 0; background: none; color: var(--accent); font: inherit; font-size: 16px; font-weight: 700; padding: 6px 8px; }
+  .msheet-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 8px 16px 20px; }
+  .mset-group { border: 1px solid var(--border); border-radius: 12px; margin: 10px 0; overflow: hidden; }
+  .mset-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; min-height: 52px; }
+  .mset-row + .mset-row { border-top: 1px solid var(--border); }
+  .mset-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .mset-t .n { font-size: 15.5px; }
+  .mset-t .d { font-size: 12.5px; color: var(--fg-dim); line-height: 1.45; }
+  .mset-sel { flex: none; max-width: 52%; font: inherit; font-size: 15px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg2); color: var(--fg); }
+  .mstep { flex: none; display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .mstep-b { width: 42px; height: 36px; border: 0; background: var(--bg2); color: var(--fg); font-size: 20px; line-height: 1; }
+  .mstep-v { min-width: 40px; text-align: center; font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .mswitch { -webkit-appearance: none; appearance: none; flex: none; width: 50px; height: 30px; border-radius: 15px; background: var(--border); position: relative; margin: 0; transition: background .15s; }
+  .mswitch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 26px; height: 26px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: transform .15s; }
+  .mswitch:checked { background: var(--accent); }
+  .mswitch:checked::after { transform: translateX(20px); }
+  .mset-note { font-size: 12.5px; color: var(--fg-dim); margin: 4px 2px 0; }
+  .mhelp-sec { padding: 12px 2px 4px; }
+  .mhelp-sec + .mhelp-sec { border-top: 1px solid var(--border); }
+  .mhelp-sec h4 { margin: 0 0 6px; font-size: 15px; font-weight: 700; }
+  .mhelp-p { margin: 4px 0; font-size: 14.5px; line-height: 1.55; }
+  .mhelp-key { display: flex; align-items: baseline; gap: 10px; padding: 5px 0; font-size: 14.5px; line-height: 1.5; }
+  .mhelp-key .kbd { flex: none; min-width: 64px; justify-content: center; font-size: 12.5px; }
+  .mhelp-key .d { flex: 1; min-width: 0; }
+  .mhelp-btn { margin: 8px 0 2px; padding: 9px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg2); color: var(--fg); font: inherit; font-size: 14px; }
+  .mhelp-fine { margin: 6px 0 0; font-size: 11.5px; color: var(--fg-dim); }
   body.mobile .toolbar { overflow-x: auto; scrollbar-width: none; flex-wrap: nowrap; }
   body.mobile .toolbar::-webkit-scrollbar { display: none; }
   body.mobile .toolbar .tbtn { flex: none; white-space: nowrap; }

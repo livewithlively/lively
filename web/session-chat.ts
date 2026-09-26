@@ -40,6 +40,7 @@ import { olderLoader, olderNext, olderRequest } from './lib/older-autoload.js'; 
 //  그 줄의 왼쪽은 프로젝트 이름이라 한 줄이 두 주체를 번갈아 말했다 — 「공유」가 프로젝트 공유로 읽혔다.
 //  세션은 이미 자기 머리줄을 갖고 있다(여기) — 이름·하네스·⋯ 가 다 여기 있으니 공유도 여기가 집이다.
 import { onViewers, viewersOf } from './v2/presence.js';
+import { PHONE_MQ } from './v2/mobile.js';   // 폰 문턱 하나(50-mobile.css 폰 블록과 같은 값) — ⋯ 의 폰 전용 줄을 가른다(#4229 후속)
 import { openSharePopover, shareSessOf } from './v2/share-session.js';
 
 
@@ -147,6 +148,8 @@ export interface SessionChatOpts {
   onOpenFiles?: () => void;
   /** [자료] 단추의 글자 — 프로젝트 없는 세션은 '세션 파일'. */
   filesLabel?: string;
+  /** 폰 머리줄의 ≡(#4229 후속) — 셸의 사이드바 서랍을 연다. 폰 세션 화면은 맨 윗줄(☰)을 걷으므로 이게 그 입구다. 없으면 단추도 없다. */
+  onOpenSidebar?: () => void;
   /** 팝아웃 창(?solo=1)이면 true — [새 창] 대신 [전체 화면으로]를 둔다(#1744). */
   solo?: boolean;
   /**
@@ -351,6 +354,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   // 살아 있지 않거나 남의 세션이면 읽기 전용으로 남고, 내가 만든 라이브 세션은 바로 아래 실행 설정 선택기가 대신한다.
   const runEl = el('span', { class: 'sc-run', hidden: true });
   const moreBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '⋯', title: '이 세션에 할 수 있는 것들', 'aria-label': '더 보기', onclick: () => openMore() }) as HTMLButtonElement;
+  //  #4229 후속(원준 2026-09-26) — 폰의 세션 화면은 맨 위 줄(≡·검색)을 걷고 터미널이 화면을 다 쓴다. 사이드바는 이 단추로 연다
+  //   (셸의 ☰ 과 같은 서랍 — 셸이 준 onOpenSidebar). 사이드바가 없는 화면(팝아웃·클래식)엔 단추가 없다. 데스크톱에선 CSS 가 숨긴다.
+  const openSidebar = opts.onOpenSidebar;
+  const sideBtn = openSidebar ? el('button', { class: 'sc-side', type: 'button', 'aria-label': '사이드바 열기', title: '사이드바 열기', onclick: () => openSidebar() },
+    sv('svg', { viewBox: '0 0 24 24', class: 'sc-side-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M4 7h16M4 12h16M4 17h16' }))) as HTMLButtonElement : null;
   // ★ 프로젝트 이름은 이 줄에 두지 않는다(원준님 2026-08-20) — 세션 이름을 걷어낸 것과 **같은 이유**다.
   //  그 이름은 화면에 이미 있다: 왼쪽 사이드바의 고정된 프로젝트 줄과 우패널 머리의 사실 줄(v2-sfacts). 머리줄에
   //  한 번 더 적으면 같은 말이 세 자리를 차지하고, 길면(실측: 40자 넘는 프로젝트명) 조작부까지 밀어냈다.
@@ -401,7 +409,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     el('div', { class: 'sc-head-l' },
       //  ★ 얼굴 스택은 **세션 이름 바로 오른쪽**이다(원준 2026-09-10) — «이 세션은 무엇이고 누가 보나»가
       //   한 덩어리로 읽힌다. 종전엔 오른쪽 조작부에 섞여 있어 조작 단추처럼 보였다.
-      dot, titleHost, facesEl, chatBadge,
+      sideBtn, dot, titleHost, facesEl, chatBadge,
       el('span', { class: 'sc-meta' }, runEl)),
     headR);
 
@@ -1010,11 +1018,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (m.canRestore && !canRevive() && !resumeAuto && visibleNow() && autoResumeAllowed()) { resumeAuto = true; view.setNote('세션을 이어서 여는 중…'); void resumeSession(null, { canRestore: true }); }
       return;
     }
+    //  폰 — 터미널의 글 상자에 쓰는 중이면 아래 탭 바를 걷는다(50-mobile.css .sc-kb). 이 화면이 사라지면 표시도 같이 사라진다.
+    if (m && m.type === 'lively-term-composer') { wrap.classList.toggle('sc-kb', !!m.focus); return; }
     if (!m || m.type !== 'lively-term-status') return;
     if (!termReady) { termReady = true; const q = termQueue; termQueue = []; for (const c of q) termSend(c); }
     termStatusEl.textContent = String(m.text || '');
     termStatusEl.className = 'sc-termstat' + (m.cls ? ' ' + String(m.cls).replace(/[^a-z]/g, '') : '');
     termStatusEl.hidden = termHost.hidden || !termStatusEl.textContent;
+    head.dataset.term = m.cls ? String(m.cls).replace(/[^a-z]/g, '') : 'wait';
     //  #4135 — 프레임이 «이 pane 에서 지금 무엇이 도는가» 를 함께 보낸다(tmux 가 말한 포그라운드 명령).
     //   목록 행의 모드 값은 낡을 수 있어서(노드 스냅샷이 옛 번들이면 app-server 라고 말한다) 셸 안내줄이
     //   멀쩡히 코덱스가 도는 터미널 위에 거짓 경고를 띄웠다(원준님 실측 2026-09-25). 이 값이 그걸 이긴다.
@@ -1150,9 +1161,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
 
     // ── 터미널 ──
     if (hasTerm()) secs.push({ key: 'term', label: '터미널', icon: ['M4 5.5h16v13H4z', 'M8 10l3 2.5-3 2.5', 'M13 15.5h4'], kids: [
-      row('화면 복구', '화면이 깨지거나 어긋났을 때 재연결로 복구합니다', '복구', () => termAct('reconnect')),
-      row('환경 설정', '글꼴·크기·테마·커서·스크롤 속도 — 이 터미널에만 적용돼요', '열기', () => termAct('settings')),
-      row('사용법 안내', '터미널·단축키 간단 사용법', '보기', () => termAct('help')),
+      row('화면 복구', (termStatusEl.textContent ? '지금 ' + termStatusEl.textContent + '. ' : '') + '화면이 깨지거나 어긋났을 때 다시 연결합니다', '복구', () => termAct('reconnect')),
+      //  폰은 터미널 쪽 창이 폰 전용 시트다(#4229 후속) — 이름과 설명을 그 시트에 맞춘다.
+      phoneNow()
+        ? row('터미널 설정', '글자 크기·글꼴·색·커서 모양', '열기', () => termAct('settings'))
+        : row('환경 설정', '글꼴·크기·테마·커서·스크롤 속도 — 이 터미널에만 적용돼요', '열기', () => termAct('settings')),
+      phoneNow()
+        ? row('폰에서 쓰는 법', '입력 줄·글쇠 줄·사진 올리기·번호로 고르기', '보기', () => termAct('help'))
+        : row('사용법 안내', '터미널·단축키 간단 사용법', '보기', () => termAct('help')),
     ] });
 
     // ── 사람 ──
@@ -2345,3 +2361,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     destroy() { destroyed = true; if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }
+
+
+/** 지금 폰 폭인가(≤640, 50-mobile.css 폰 블록과 같은 문턱) — ⋯ 설정 창의 터미널 줄 이름을 폰 시트에 맞춘다(#4229 후속). */
+function phoneNow(): boolean { try { return window.matchMedia(PHONE_MQ).matches; } catch { return false; } }

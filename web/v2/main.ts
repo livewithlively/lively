@@ -236,6 +236,8 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
         //  머리줄 [자료](#4088 후속) — 곁칸의 자료 칸을 켠다(폰: 서랍). 셸(panes.ts)이 준 배선을 그대로 넘긴다.
         onOpenFiles: o && o.openFiles ? o.openFiles : undefined,
         filesLabel: o && o.filesLabel ? o.filesLabel : undefined,
+        //  폰은 세션 화면에서 맨 윗줄(☰)을 걷는다 — 머리줄의 ≡ 가 사이드바 서랍을 연다(#4229 후속).
+        onOpenSidebar: () => mobile?.openSide(),
         onPickProject: (anchor) => openProjectPicker(anchor, sid, tab),
         onRename: (label) => renameSession(sid, label, tab),
         onArchive: () => void archiveSession(sid),
@@ -1260,6 +1262,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
           if (seq !== tab.seq || !h.isConnected) return null;
           const handle = renderSession(h, data, sid, {
             chatHome: true,
+            onOpenSidebar: () => mobile?.openSide(),   // 폰 머리줄 ≡(#4229 후속) — 리브 칸도 세션 화면이라 맨 윗줄이 걷힌다
             isVisible: () => tabsApi?.current() === tab && o.isVisible(),
             onResumed: o.onResumed,
           });
