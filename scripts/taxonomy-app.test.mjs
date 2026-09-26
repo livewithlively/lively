@@ -118,6 +118,9 @@ const IDX = read("public/index.html");
 ok(/49-v2-ctx\.css">\s*\n<link rel="stylesheet" href="\.\/styles\/49-v2-taxonomy\.css">/.test(IDX) && existsSync(join(root, "public/styles/49-v2-taxonomy.css")), "W1 앱 CSS 가 49-v2-ctx 뒤에 실린다");
 const APPJS = code(read("web/v2/taxonomy.ts"));
 ok(APPJS.length > 0 && !/merge|합치기/.test(APPJS), "W1 합치기(API 없음)는 단추도 없다");
+//  셸은 탭 키가 같은 주소끼리 다시 그리지 않는다. 앱 안 이동(지도 → 분류 → 손볼 것)은 앱이 듣고 같은 칸에 다시 그려야 한다(라이브 끝단 검증에서 찾은 것).
+ok(/addEventListener\('hashchange'/.test(APPJS) && /renderTaxonomyApp\(mounted\.host,/.test(APPJS) && /mounted = \{ host, hooks \}/.test(APPJS),
+  "W1 앱 안 이동을 앱이 스스로 다시 그린다(#/taxonomy ↔ ?view=fix ↔ /<id>)");
 ok(/canDeleteCat\(/.test(APPJS) && /\/delete'/.test(APPJS) && /state: 'deprecated'/.test(APPJS) && /group: g\.key/.test(APPJS) && /openCategoryForm\(/.test(APPJS),
   "W1 상세: 지우기(빈 분류만) · 치우기 · 묶음 옮기기 · 정의 고치기(폼)가 기존 API 로 간다");
 ok(/지식/.test(APPJS) && /'프로젝트'/.test(APPJS) && !/'지'|'프'/.test(APPJS), "W1 막대 이름표는 「지식」 「프로젝트」 온전한 말(지 · 프 줄임 없음)");
