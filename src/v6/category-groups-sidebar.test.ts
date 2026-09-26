@@ -164,7 +164,9 @@ test("A11 배선 — 가로 탭·«N개 더 보기» 캡이 사라지고, 고정
   assert.doesNotMatch(SIDE, /WIKI_CARD_MAX|wikiViewRow|'최근', '최근/, "옛 가로 뷰 줄·카드 캡이 남아 있다");
   assert.match(body, /fixRow\('#\/knowledge', 'wiki', '전체 문서'/, "고정 줄 「전체 문서」가 없다");
   assert.match(body, /fixRow\('#\/knowledge\?indexed=1', 'pin', '인덱스'/, "고정 줄 「인덱스」가 없다");
-  assert.equal((body.match(/href: '#\/categories'/g) ?? []).length, 2, "분류 편집 입구(소제목 [편집] · 묶음 ✎) 두 곳");
+  //  #4233(원준 2026-09-26) — 편집 입구의 목적지가 맥락 관리(#/categories)에서 「분류체계」 앱(#/taxonomy)으로 바뀌었다.
+  assert.equal((body.match(/href: '#\/taxonomy'/g) ?? []).length, 2, "분류 편집 입구(소제목 [편집] · 묶음 ✎) 두 곳");
+  assert.doesNotMatch(body, /#\/categories/, "맥락 관리의 옛 카테고리 주소로 보내지 않는다");
   const css = readFileSync("public/styles/47-v2-rail.css", "utf8");
   assert.match(css, /\.v2-ksp \{ flex: none;/, "묶음 카드가 목록 칸 안에서 눌리지 않게(flex: none) — 행이 반쯤 잘리던 원인");
 });

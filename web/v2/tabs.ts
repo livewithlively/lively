@@ -85,6 +85,8 @@ export function routeKey(route: string): string {
   //   전부 같은 화면이다. 여기서 안 접으면 채널을 옮길 때마다 탭이 새로 서고, 좌측 목록에도 「자료」가 여러 줄
   //   뜬다(인스턴스 줄기는 정본 주소 '#/sources' 로 서기 때문에 그것과도 안 만난다 — 실측으로 두 줄이었다).
   if (p === 'sources') return 'sources';
+  //  분류체계(#4233)도 한 창 안에서 돌아다니는 앱이다: 전체 지도 · 손볼 것 · 분류 하나가 전부 같은 창이다(자료와 같은 규칙).
+  if (p === 'taxonomy') return 'taxonomy';
   return 'raw:' + h;
 }
 
