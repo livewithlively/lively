@@ -40,6 +40,7 @@ import { olderLoader, olderNext, olderRequest } from './lib/older-autoload.js'; 
 //  그 줄의 왼쪽은 프로젝트 이름이라 한 줄이 두 주체를 번갈아 말했다 — 「공유」가 프로젝트 공유로 읽혔다.
 //  세션은 이미 자기 머리줄을 갖고 있다(여기) — 이름·하네스·⋯ 가 다 여기 있으니 공유도 여기가 집이다.
 import { onViewers, viewersOf } from './v2/presence.js';
+import { PHONE_MQ } from './v2/mobile.js';   // 폰 문턱 하나(50-mobile.css 폰 블록과 같은 값) — ⋯ 의 폰 전용 줄을 가른다(#4229 후속)
 import { openSharePopover, shareSessOf } from './v2/share-session.js';
 
 
@@ -147,6 +148,8 @@ export interface SessionChatOpts {
   onOpenFiles?: () => void;
   /** [자료] 단추의 글자 — 프로젝트 없는 세션은 '세션 파일'. */
   filesLabel?: string;
+  /** 폰 머리줄의 ≡(#4229 후속) — 셸의 사이드바 서랍을 연다. 폰 세션 화면은 맨 윗줄(☰)을 걷으므로 이게 그 입구다. 없으면 단추도 없다. */
+  onOpenSidebar?: () => void;
   /** 팝아웃 창(?solo=1)이면 true — [새 창] 대신 [전체 화면으로]를 둔다(#1744). */
   solo?: boolean;
   /**
@@ -352,10 +355,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const runEl = el('span', { class: 'sc-run', hidden: true });
   const moreBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '⋯', title: '이 세션에 할 수 있는 것들', 'aria-label': '더 보기', onclick: () => openMore() }) as HTMLButtonElement;
   //  #4229 후속(원준 2026-09-26) — 폰의 세션 화면은 맨 위 줄(≡·검색)을 걷고 터미널이 화면을 다 쓴다. 사이드바는 이 단추로 연다
-  //   (셸의 ☰ 과 같은 서랍 — 그 단추를 대신 누른다). 데스크톱에선 CSS 가 숨긴다.
-  const sideBtn = el('button', { class: 'sc-side', type: 'button', 'aria-label': '사이드바 열기', title: '사이드바 열기',
-    onclick: () => { (document.querySelector('.v2-mbar-menu') as HTMLElement | null)?.click(); } },
-    sv('svg', { viewBox: '0 0 24 24', class: 'sc-side-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M4 7h16M4 12h16M4 17h16' }))) as HTMLButtonElement;
+  //   (셸의 ☰ 과 같은 서랍 — 셸이 준 onOpenSidebar). 사이드바가 없는 화면(팝아웃·클래식)엔 단추가 없다. 데스크톱에선 CSS 가 숨긴다.
+  const openSidebar = opts.onOpenSidebar;
+  const sideBtn = openSidebar ? el('button', { class: 'sc-side', type: 'button', 'aria-label': '사이드바 열기', title: '사이드바 열기', onclick: () => openSidebar() },
+    sv('svg', { viewBox: '0 0 24 24', class: 'sc-side-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M4 7h16M4 12h16M4 17h16' }))) as HTMLButtonElement : null;
   // ★ 프로젝트 이름은 이 줄에 두지 않는다(원준님 2026-08-20) — 세션 이름을 걷어낸 것과 **같은 이유**다.
   //  그 이름은 화면에 이미 있다: 왼쪽 사이드바의 고정된 프로젝트 줄과 우패널 머리의 사실 줄(v2-sfacts). 머리줄에
   //  한 번 더 적으면 같은 말이 세 자리를 차지하고, 길면(실측: 40자 넘는 프로젝트명) 조작부까지 밀어냈다.
@@ -2361,4 +2364,4 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
 
 
 /** 지금 폰 폭인가(≤640, 50-mobile.css 폰 블록과 같은 문턱) — ⋯ 설정 창의 터미널 줄 이름을 폰 시트에 맞춘다(#4229 후속). */
-function phoneNow(): boolean { try { return window.matchMedia('(max-width: 640px)').matches; } catch { return false; } }
+function phoneNow(): boolean { try { return window.matchMedia(PHONE_MQ).matches; } catch { return false; } }

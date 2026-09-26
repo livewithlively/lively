@@ -64,7 +64,7 @@ class FakeNode {
   }
 }
 
-interface Harness { mod: any; main: FakeNode; sent: string[]; posted: any[]; session: Record<string, string> }
+interface Harness { mod: any; main: FakeNode; sent: string[]; posted: any[]; session: Record<string, string>; doc: any; fireDoc: (type: string, ev: any) => void }
 
 async function makeCtx(opts: { session?: Record<string, string>; parent?: boolean } = {}): Promise<Harness> {
   const g: any = globalThis;
@@ -77,14 +77,19 @@ async function makeCtx(opts: { session?: Record<string, string>; parent?: boolea
   def("parent", opts.parent === false ? g : { postMessage: (m: any, origin: string) => posted.push({ m, origin }) });
   def("addEventListener", () => { /* noop */ });
   def("removeEventListener", () => { /* noop */ });
-  def("document", {
+  const docL = new Map<string, Listener[]>();
+  const doc = {
     createElement: (tag: string) => new FakeNode(tag),
     createElementNS: (_ns: string, tag: string) => new FakeNode(tag),
     createTextNode: (text: string) => ({ nodeType: 3, textContent: text, parent: null }),
     body, getElementById: () => null, querySelector: () => null,
-    addEventListener() { /* noop */ }, removeEventListener() { /* noop */ },
+    addEventListener(type: string, fn: Listener) { const a = docL.get(type) || []; a.push(fn); docL.set(type, a); },
+    removeEventListener(type: string, fn: Listener) { const a = docL.get(type) || []; const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); },
+    activeElement: null as any,
     title: "", hidden: false,
-  });
+  };
+  def("document", doc);
+  const fireDoc = (type: string, ev: any): void => { for (const fn of [...(docL.get(type) || [])]) fn({ preventDefault() { /* noop */ }, ...ev }); };
   def("navigator", { platform: "iPhone", vendor: "Apple Computer, Inc.", userAgent: "Mozilla/5.0 (iPhone) Safari", userActivation: { isActive: false }, clipboard: {} });
   def("location", { search: "?session=t-4229&mobile=1", pathname: "/ui/terminal.html", protocol: "https:", host: "test", origin: "https://test" });
   const store: Record<string, string> = {};
@@ -106,7 +111,7 @@ async function makeCtx(opts: { session?: Record<string, string>; parent?: boolea
     term: { cols: 80, rows: 24, textarea: new FakeNode("textarea"), modes: {}, buffer: { active: { type: "normal", length: 0, baseY: 0, cursorX: 0, cursorY: 0, getLine: () => null } } },
     fit: null, panesEl: new FakeNode("div"), explorerEl: new FakeNode("aside"),
   });
-  return { mod, main, sent, posted, session };
+  return { mod, main, sent, posted, session, doc, fireDoc };
 }
 
 const dock = (h: Harness): FakeNode | null => h.main.find((n) => n.attrs.id === "mdock");
@@ -290,6 +295,39 @@ const fakeScreen = (seqModes: string[]) => {
   let i = 0; let presses = 0;
   return { presses: () => presses, deps: { read: () => seqModes[Math.min(i, seqModes.length - 1)], press: () => { presses++; i++; }, wait: async () => { /* noop */ } } };
 };
+const modeKey = (h: Harness): FakeNode => { const k = h.main.find((n) => n.cls.has("mkey-mode")); assert.ok(k, "전제: 모드 단추"); return k!; };
+const sheetOf = (h: Harness): FakeNode | null => h.doc.body.find((n: FakeNode) => n.attrs.role === "dialog");
+t("M11 폰 시트가 열리면 초점이 시트(대화상자)로 간다 · [완료](손가락)로 닫으면 연 자리로 초점을 돌려주지 않는다", async () => {
+  const h = await makeCtx();
+  h.mod.setupMobileDock(h.main);
+  const c = composer(h);
+  h.doc.activeElement = c;                       // 쓰던 중(자판이 떠 있다)에 모드 단추를 눌렀다
+  const before = c.focused;
+  press(modeKey(h));
+  const sh = sheetOf(h);
+  assert.ok(sh, "일하는 방식 시트가 떠야 한다");
+  assert.equal(sh!.attrs["aria-modal"], "true", "대화상자다(뒤는 못 만진다)");
+  assert.ok(sh!.focused >= 1, "초점이 시트로 간다(뒤 터미널로 글쇠가 새지 않는다)");
+  const done = sh!.find((n) => n.tag === "button" && n.textContent === "완료");
+  assert.ok(done, "전제: [완료]");
+  done!.click();
+  assert.equal(sheetOf(h), null, "닫힌다");
+  assert.equal(c.focused, before, "손가락으로 닫으면 글 상자로 초점을 돌려주지 않는다(자판이 다시 튀어 오르지 않게)");
+});
+t("M12 Esc 로 닫으면 연 자리(글 상자)로 초점을 돌려준다 · 닫힌 뒤의 Esc 는 아무 일도 안 한다", async () => {
+  const h = await makeCtx();
+  h.mod.setupMobileDock(h.main);
+  const c = composer(h);
+  h.doc.activeElement = c;
+  press(modeKey(h));
+  assert.ok(sheetOf(h), "전제: 시트가 떴다");
+  const before = c.focused;
+  h.fireDoc("keydown", { key: "Escape" });
+  assert.equal(sheetOf(h), null, "Esc 로 닫힌다");
+  assert.equal(c.focused, before + 1, "연 자리로 초점을 돌려준다");
+  h.fireDoc("keydown", { key: "Escape" });
+  assert.equal(c.focused, before + 1, "닫힌 뒤의 Esc 로는 초점이 또 움직이지 않는다(듣는 이를 뗐다)");
+});
 t("S1 지금 방식을 못 읽으면 아무것도 안 누른다 → unknown", async () => {
   const { mod } = await makeCtx();
   const f = fakeScreen([""]);
@@ -322,6 +360,34 @@ t("S5 한 바퀴 돌아 처음으로 오면(목표가 이 세션에 없음) 멈�
   const f = fakeScreen(["default", "acceptEdits", "plan", "default", "acceptEdits"]);
   assert.equal(await mod.switchModeTo("bypass", f.deps), "absent");
   assert.equal(f.presses(), 3, "처음 방식으로 돌아온 그 한 번까지만");
+});
+
+t("S6 바꾸는 중에 또 고르면 두 번째는 누르지 않고 busy · 앞의 것은 끝까지 가서 ok", async () => {
+  const { mod } = await makeCtx();
+  let i = 0; let presses = 0; let release: () => void = () => { /* 아래에서 채운다 */ };
+  const screen = ["default", "acceptEdits"];
+  const first = mod.switchModeTo("acceptEdits", {
+    read: () => screen[Math.min(i, screen.length - 1)], press: () => { presses++; i++; },
+    wait: () => new Promise<void>((r) => { release = r; }),
+  });
+  assert.equal(presses, 1, "전제: 앞의 것이 한 번 누르고 화면을 기다린다");
+  const second = fakeScreen(["default", "plan"]);
+  assert.equal(await mod.switchModeTo("plan", second.deps), "busy");
+  assert.equal(second.presses(), 0, "두 번째는 Shift+Tab 을 보내지 않는다");
+  release();
+  assert.equal(await first, "ok", "앞의 것은 끝까지 간다");
+  assert.equal(presses, 1);
+});
+t("S7 새 잠금의 풀림 — 앞의 바꾸기가 오류(throw)·stuck 으로 끝나도 다음 고르기는 막히지 않는다", async () => {
+  const { mod } = await makeCtx();
+  await assert.rejects(mod.switchModeTo("plan", { read: () => { throw new Error("화면 못 읽음"); }, press: () => { /* noop */ }, wait: async () => { /* noop */ } }));
+  const a = fakeScreen(["default", "acceptEdits"]);
+  assert.equal(await mod.switchModeTo("acceptEdits", a.deps), "ok", "오류 뒤에도 busy 가 아니다");
+  assert.equal(a.presses(), 1);
+  const b = fakeScreen(["default", "default"]);
+  assert.equal(await mod.switchModeTo("plan", b.deps), "stuck");
+  const c = fakeScreen(["default", "plan"]);
+  assert.equal(await mod.switchModeTo("plan", c.deps), "ok", "stuck 뒤에도 busy 가 아니다");
 });
 
 let failed = 0;
