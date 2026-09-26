@@ -25,7 +25,7 @@ const MEMBER_OPS = [
   // #4135(원준 2026-09-25) — AI 전달(세션 주입)도 구성원 몫. 보안 필드가 섞인 org_runtime_update 는 그대로 관리자(아래 INFRA_OPS).
   "org_injection_update",
   // #4172 — 맥락 관리 ▸ 현황 「자동 실행」 기록.
-  "org_auto_runs", "org_auto_run_detail",
+  "org_auto_runs", "org_auto_runs_daily", "org_auto_run_detail",
 ];
 // 사람을 들이고 빼고 권한을 바꾸는 것 — 관리자만.
 const ADMIN_OPS = [

@@ -23,7 +23,7 @@ import { stageHealthLevels } from './context-pipeline.js';
 import { presetSvcKey, svcTile } from './svc-icons.js';
 import { svcLogo } from './svc-logos.js';
 import { appGlassIcon } from './v2/glass-icon.js';   // 리프 모듈(#3830) — 셸 레지스트리를 물지 않는다
-import { loadRuns, runsPanel, type RunFilter, type RunsData } from './context-runs.js';   // #4172 지도 아래 「자동 실행」
+import { runsPanel, type RunFilter } from './context-runs.js';   // #4172 지도 아래 「자동 실행」(#4135 3판 — 날짜·기간·자세히 보기)
 import { icon as lineIcon } from './v2/icons.js';
 
 const fmt = (n: any) => (Number.isFinite(Number(n)) ? fmtNum(Number(n)) : '—');
@@ -58,14 +58,12 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
     return;
   }
   // 장식 데이터(실물 미니어처) — 실패해도 지도는 선다.
-  let runsErr: string | null = null;
-  const [colD, treeD, knowD, secD, sessD, runsD] = await Promise.all([
+  const [colD, treeD, knowD, secD, sessD] = await Promise.all([
     api('/api/ui/org/collectors').catch(() => null),
     api('/api/ui/sources/tree').catch(() => null),
     api('/api/ui/knowledge?' + new URLSearchParams({ limit: '3', orderBy: 'updated_at', light: '1', lifecycle: 'active,pending', injection: 'recalled' })).catch(() => null),
     api('/api/ui/org/sections').catch(() => null),
     api('/api/ui/terminal/sessions?includeProjects=1').catch(() => null),
-    loadRuns(d).catch((e) => { runsErr = (e as Error).message; return null as RunsData | null; }),
   ]);
   const st = (d && d.stages) || {};
   const gates = (d && d.gates) || {};
@@ -215,7 +213,7 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
     mcCollect.classList.toggle('is-sel', f === 'c'); mcCollect.setAttribute('aria-pressed', String(f === 'c'));
     mcDistill.classList.toggle('is-sel', f === 'd'); mcDistill.setAttribute('aria-pressed', String(f === 'd'));
   };
-  const panel = runsPanel(runsD, { onFilter: applyF, error: runsErr });
+  const panel = runsPanel(d, { onFilter: applyF });
   const pick = (f: 'c' | 'd') => (): void => {
     const next: RunFilter = root.getAttribute('data-f') === f ? 'all' : f;
     applyF(next); panel.setFilter(next);
