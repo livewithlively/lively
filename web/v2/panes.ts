@@ -557,7 +557,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     axis: 'x', key: 'panes_side', cssVar: '--pn-side-w', target: body, def: 340, min: 220,
     max: () => swap?.maxSideW() ?? 620,
     grow: () => (body.classList.contains('sw-left') ? 1 : -1),
-    label: '곁칸 너비',
+    label: '우측 사이드바 너비',
     onDrag: (px) => swap?.onDrag(px),
     //  놓는 순간 **이 세션의 폭**으로 적는다. makeSplitter 는 전역 키에도 그대로 남기는데(그건 '마지막으로 쓰던 값'),
     //  그게 다음에 처음 여는 세션이 물려받을 값이다 — 둘은 싸우지 않는다(읽을 때 세션 값이 먼저다).
@@ -589,7 +589,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   // 접힌 곁칸을 다시 펴는 손잡이 — 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 유일한 복구 통로가 됐다.
   //  격자 칸을 차지하지 않고 오른쪽 위에 떠 있는다(no-side 격자를 안 건드리기 위해).
   const sideReopen = el('button', {
-    class: 'pn-side-reopen', type: 'button', title: '곁칸을 폅니다 — 자료·지식이 여기 들어 있어요.', 'aria-label': '곁칸 펴기',
+    class: 'pn-side-reopen', type: 'button', title: '우측 사이드바를 폅니다. 자료·지식이 여기 들어 있어요.', 'aria-label': '우측 사이드바 펴기',
     onclick: () => { lay.sideOn = true; saveLayout(); saveView({ sideOn: true }); paintAll(); },
   }, pnIcon('chev', 'pn-i sm')) as HTMLElement;
   body.append(colMain, splitX, sidePane.root, sideReopen);
@@ -820,11 +820,11 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   function tabMenu(e: MouseEvent, zone: Zone, key: TabKey): void {
     const type = tabBase(key) as PartType;
     const d = partDef(type);
-    const label: Record<Zone, string> = { main: '가운데 칸', side: '곁칸', bottom: '아래 칸' };
+    const toZone: Record<Zone, string> = { main: '가운데 칸으로', side: '우측 사이드바로', bottom: '아래 칸으로' };   // 받침마다 조사가 다르다
     const canGo = (z: Zone): boolean => !narrow() && z !== zone && !(type === 'sessions' && z !== 'main') && z !== 'main';   // 좁은 폭엔 칸이 하나뿐
     ctxMenu(e.clientX, e.clientY, [
       ...(['side', 'bottom'] as Zone[]).filter(canGo).map((z) => ({
-        label: `${label[z]}으로 보내기`, run: () => { openZone(z); moveTab(key, zone, z); },
+        label: `${toZone[z]} 보내기`, run: () => { openZone(z); moveTab(key, zone, z); },
       })),
       ...(d.multi && d.pickable !== false ? [{ sep: true, label: '' }, { label: `${d.name} 하나 더`, run: () => { addPart(zone, type); } }] : []),
       { sep: true, label: '' },
@@ -915,7 +915,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const hideBtn = zone === 'side'
       //  좁은 폭에선 «곁칸 접기»가 아니라 **서랍 닫기**다 — 접기는 눌러도 보이는 게 안 변하는데 sideOn:false 만 저장돼 데스크톱 곁칸이 사라졌다.
       ? (n ? el('button', { class: 'pn-pane-hide', type: 'button', title: '서랍을 닫습니다', 'aria-label': '서랍 닫기', onclick: () => opts.onCloseDrawer?.() }, pnIcon('x', 'pn-i sm'))
-        : el('button', { class: 'pn-pane-hide', type: 'button', title: '곁칸을 접습니다', 'aria-label': '곁칸 접기', onclick: () => { lay.sideOn = false; saveLayout(); saveView({ sideOn: false }); paintAll(); } }, pnIcon('chev', 'pn-i sm')))
+        : el('button', { class: 'pn-pane-hide', type: 'button', title: '우측 사이드바를 접습니다', 'aria-label': '우측 사이드바 접기', onclick: () => { lay.sideOn = false; saveLayout(); saveView({ sideOn: false }); paintAll(); } }, pnIcon('chev', 'pn-i sm')))
       : zone === 'bottom'
         ? el('button', { class: 'pn-pane-hide', type: 'button', title: '아래 칸을 닫습니다', 'aria-label': '아래 칸 닫기', onclick: () => { lay.bottomOn = false; saveLayout(); saveView({ bottomOn: false }); paintAll(); } }, pnIcon('x', 'pn-i sm'))
         : null;

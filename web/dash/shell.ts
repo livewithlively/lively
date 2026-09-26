@@ -54,7 +54,7 @@ const DASH_WIDGETS = [
   { key: 'review', title: '검토 대기 지식', desc: '승인해야 검색·세션주입에 반영돼요', col: 3, row: 4, off: true },
   { key: 'task', title: '내 할 일', desc: '내가 담당인 태스크 — 마감 임박순', col: 5, row: 4, off: true },
   //   미리보기: 화면을 고치는 사람만 값이 찬다 — 기본 숨김, '대시보드 편집'에서 꺼내 쓴다.
-  { key: 'prev', title: '미리보기', desc: '띄워 둔 화면을 오른쪽 곁칸에서 바로', col: 4, row: 4, off: true },
+  { key: 'prev', title: '미리보기', desc: '띄워 둔 화면을 우측 사이드바에서 바로 봐요', col: 4, row: 4, off: true },
 ];
 const DASH_W: Record<string, any> = Object.fromEntries(DASH_WIDGETS.map((w) => [w.key, w]));
 // 기본 배치 = 1단계 프리셋 **그대로**(좌: 내 프로젝트+팀 공유 폴더 / 중: 최신 알림+내 AI 세션 / 우: 팀 작업 로그).

@@ -3362,7 +3362,7 @@ function wireTermCtxMenu(host: HTMLElement): void {
     const plan = ctxCopyPlan(sel, appSel, link);
     const canCopy = !!plan.copy;
     const url = plan.openUrl;
-    const openHint = { shell: '이 창', pane: '곁칸', tab: inDesktopApp() ? '새 창' : '새 탭' }[url ? linkTargetHere(url) : 'tab'];
+    const openHint = { shell: '이 창', pane: '우측 사이드바', tab: inDesktopApp() ? '새 창' : '새 탭' }[url ? linkTargetHere(url) : 'tab'];
     const secure = !!(navigator.clipboard && navigator.clipboard.readText && window.isSecureContext);
     const fs = Number(term.options.fontSize) || 14;
     const setFont = (n: number): void => {
