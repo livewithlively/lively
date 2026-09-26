@@ -169,7 +169,8 @@ export function peekBody(md: string | null | undefined, title: string | null | u
   return body.trim() ? { md: body, empty: false } : { md: '', empty: true };
 }
 
-/** [우측 사이드바에 고정]이 셸 오른쪽 칸에 싣는 손님. hash 는 문서 화면(#/k/<name>) — 화면이 embedUrl 로 감싼다. */
-export function pinGuest(name: string, title: string | null | undefined): { key: string; title: string; hash: string; label: string } {
-  return { key: 'kdoc:' + name, title: String(title || '').trim() || name, hash: 'k/' + encodeURIComponent(name), label: '문서' };
+/** [우측 사이드바에 고정]이 셸 오른쪽 칸에 싣는 손님. hash 는 문서 화면(#/k/<name>) — 화면이 embedUrl 로 감싼다.
+ *  sticky = 고정 문서(셸에 하나 · 화면을 옮겨도 · 탭을 닫아도 남는다, lib/aside-guests.ts). */
+export function pinGuest(name: string, title: string | null | undefined): { key: string; title: string; hash: string; label: string; sticky: true } {
+  return { key: 'kdoc:' + name, title: String(title || '').trim() || name, hash: 'k/' + encodeURIComponent(name), label: '문서', sticky: true };
 }

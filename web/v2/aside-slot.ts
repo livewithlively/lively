@@ -22,6 +22,9 @@ export interface AsideGuest {
   url: string;
   /** 머리 왼쪽의 굵은 이름(없으면 «미리보기»). 위키 문서 고정(#4233)은 «문서». */
   label?: string;
+  /** 고정 문서인가(#4233 위키 덧창의 [우측 사이드바에 고정]만). 고정 문서는 셸에 하나 — 화면을 옮겨도 · 탭을 닫아도 남는다.
+   *  없으면 미리보기 — 연 탭의 것이라 그 탭이 보일 때만 보이고 탭을 닫으면 걷힌다(lib/aside-guests.ts). */
+  sticky?: boolean;
 }
 
 export const ASIDE_MSG = { ping: 'lively-aside-ping', pong: 'lively-aside-pong', open: 'lively-aside-open' } as const;
