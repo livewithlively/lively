@@ -310,8 +310,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   // 겉에 둘 것 = **터미널을 보다가 손이 자주 가는 것**(화면 복구·환경 설정). 보기 전환·목차처럼 가끔 쓰는 것은 [⋯] 안으로
   //  내린다(상민님 2026-08-19). 종전엔 반대였다 — 화면이 깨졌을 때 복구가 메뉴 두 단계 뒤에 있었다.
   const chatBadge = el('span', { class: 'sc-beta', text: '베타', hidden: true, title: '대화 인터페이스는 베타예요 — 표시가 어긋나면 터미널로 보세요' });
-  const fixBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구합니다', onclick: () => termAct('reconnect') }) as HTMLButtonElement;
-  const setBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '환경 설정', title: '터미널 글꼴·크기·테마·커서·스크롤 속도', onclick: () => termAct('settings') }) as HTMLButtonElement;
+  const fixBtn = el('button', { class: 'btn-text sc-act sc-act-fix', type: 'button', text: '화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구합니다', onclick: () => termAct('reconnect') }) as HTMLButtonElement;
+  const setBtn = el('button', { class: 'btn-text sc-act sc-act-set', type: 'button', text: '환경 설정', title: '터미널 글꼴·크기·테마·커서·스크롤 속도', onclick: () => termAct('settings') }) as HTMLButtonElement;
   // 상단바 통합(#1744) — 터미널 페이지가 갖고 있던 것들이 이 줄로 온다: [파일](우패널 탐색기) · 연결 상태 · [⋯](터미널 조작).
   const filesBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '파일', title: '이 세션의 작업 폴더를 오른쪽 패널에서 봅니다(업로드·다운로드)', onclick: () => {
     const on = opts.onToggleFiles ? opts.onToggleFiles() : false;
@@ -334,6 +334,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   // 살아 있지 않거나 남의 세션이면 읽기 전용으로 남고, 내가 만든 라이브 세션은 바로 아래 실행 설정 선택기가 대신한다.
   const runEl = el('span', { class: 'sc-run', hidden: true });
   const moreBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '⋯', title: '이 세션에 할 수 있는 것들', 'aria-label': '더 보기', onclick: () => openMore() }) as HTMLButtonElement;
+  //  #4229 후속(원준 2026-09-26) — 폰의 세션 화면은 맨 위 줄(≡·검색)을 걷고 터미널이 화면을 다 쓴다. 사이드바는 이 단추로 연다
+  //   (셸의 ☰ 과 같은 서랍 — 그 단추를 대신 누른다). 데스크톱에선 CSS 가 숨긴다.
+  const sideBtn = el('button', { class: 'sc-side', type: 'button', 'aria-label': '사이드바 열기', title: '사이드바 열기',
+    onclick: () => { (document.querySelector('.v2-mbar-menu') as HTMLElement | null)?.click(); } },
+    sv('svg', { viewBox: '0 0 24 24', class: 'sc-side-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M4 7h16M4 12h16M4 17h16' }))) as HTMLButtonElement;
   // ★ 프로젝트 이름은 이 줄에 두지 않는다(원준님 2026-08-20) — 세션 이름을 걷어낸 것과 **같은 이유**다.
   //  그 이름은 화면에 이미 있다: 왼쪽 사이드바의 고정된 프로젝트 줄과 우패널 머리의 사실 줄(v2-sfacts). 머리줄에
   //  한 번 더 적으면 같은 말이 세 자리를 차지하고, 길면(실측: 40자 넘는 프로젝트명) 조작부까지 밀어냈다.
@@ -348,7 +353,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  #3784 — 머리줄 우클릭 = 이 세션의 메뉴(사이드바 행과 같은 것). 표만 단다 — 셸 배선이 읽는다.
   const head = el('div', { class: 'sc-head', 'data-ctx': 'session', 'data-sid': first.id },
     el('div', { class: 'sc-head-l' },
-      dot, titleHost, chatBadge,
+      sideBtn, dot, titleHost, chatBadge,
       el('span', { class: 'sc-meta' }, runEl)),
     headR);
 
@@ -911,11 +916,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (m.canRestore && !canRevive() && !resumeAuto && visibleNow() && autoResumeAllowed()) { resumeAuto = true; view.setNote('세션을 이어서 여는 중…'); void resumeSession(null, { canRestore: true }); }
       return;
     }
+    //  폰 — 터미널의 글 상자에 쓰는 중이면 아래 탭 바를 걷는다(50-mobile.css .sc-kb). 이 화면이 사라지면 표시도 같이 사라진다.
+    if (m && m.type === 'lively-term-composer') { wrap.classList.toggle('sc-kb', !!m.focus); return; }
     if (!m || m.type !== 'lively-term-status') return;
     if (!termReady) { termReady = true; const q = termQueue; termQueue = []; for (const c of q) termSend(c); }
     termStatusEl.textContent = String(m.text || '');
     termStatusEl.className = 'sc-termstat' + (m.cls ? ' ' + String(m.cls).replace(/[^a-z]/g, '') : '');
     termStatusEl.hidden = termHost.hidden || !termStatusEl.textContent;
+    head.dataset.term = m.cls ? String(m.cls).replace(/[^a-z]/g, '') : 'wait';
   };
   window.addEventListener('message', onTermMsg);
 
@@ -962,7 +970,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     }));
     if (hasTerm()) {
       rows.push(el('div', { class: 'sc-more-sec', text: '터미널' }));
-      rows.push(row('사용법 안내', '터미널·단축키 간단 사용법', () => termAct('help')));
+      //  폰은 머리줄에서 연결 상태·화면 복구·환경 설정을 뺐다(#4229 후속, 머리줄 = 떠 있는 단추 둘) — 여기서 연다. 이름은 폰 시트에 맞춘다.
+      if (phoneNow()) {
+        rows.push(row('화면 복구', (termStatusEl.textContent ? '지금 ' + termStatusEl.textContent + '. ' : '') + '화면이 깨지거나 어긋났을 때 다시 연결합니다', () => termAct('reconnect')));
+        rows.push(row('터미널 설정', '글자 크기·글꼴·색·커서 모양', () => termAct('settings')));
+        rows.push(row('폰에서 쓰는 법', '입력 줄·글쇠 줄·사진 올리기·번호로 고르기', () => termAct('help')));
+      } else rows.push(row('사용법 안내', '터미널·단축키 간단 사용법', () => termAct('help')));
     }
     rows.push(el('div', { class: 'sc-more-sec', text: '이 세션' }));
     // 이름은 상단바에 상시로 두지 않는다(위 제목 주석) — 고칠 일이 있을 때만 여기서 연다.
@@ -2083,3 +2096,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     destroy() { destroyed = true; if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }
+
+
+/** 지금 폰 폭인가(≤640, 50-mobile.css 폰 블록과 같은 문턱) — ⋯ 설정 창의 터미널 줄 이름을 폰 시트에 맞춘다(#4229 후속). */
+function phoneNow(): boolean { try { return window.matchMedia('(max-width: 640px)').matches; } catch { return false; } }

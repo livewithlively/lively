@@ -385,8 +385,53 @@
   .pn-ctx-i { padding: 10px 12px; font-size: 14px; }
 }
 
+/* ── 폰 세션 화면(#4229 후속, 원준 2026-09-26 코멘트) ────────────────────────────────────────────────
+   · 터미널에 들어왔다 = 거기서 일을 많이 하겠다는 뜻이다. 맨 위 줄(≡·검색·폴더)을 걷고 화면을 다 쓴다.
+   · 머리줄은 터미널 위에 **떠 있는 단추 둘**이다(원준이 1안·2안·3안 중 2안을 골랐다): 왼쪽 [≡ 세션 이름] · 오른쪽 [자료 ⋯].
+     ≡ 는 사이드바를 연다. 함께 보는 사람·연결 상태·화면 복구는 ⋯ 안으로. 연결이 이상할 때만 오른쪽 단추에 상태가 뜬다(data-term).
+   · 글 상자에 쓰는 동안 아래 탭 바를 걷는다(.sc-kb = 터미널 페이지가 postMessage 로 알려 준 글 상자 포커스, session-chat.ts). */
+.sc-side { display: none; }
+@media (max-width: 640px) {
+  #v2-root.has-topbar:has(.v2-main .sc-wrap) > .v2-topbar { display: none; }
+  #v2-root:has(.v2-main .sc-wrap) { --v2-tb-h: 0px; }
+  #v2-root:has(.v2-main .sc-wrap.sc-kb) > .v2-mtabs { display: none; }
+  .sc-wrap { position: relative; }
+  .sc-wrap > .sc-head { position: absolute; z-index: 6; top: 6px; left: 6px; right: 6px; padding: 0; min-height: 0; border: 0; background: none;
+    overflow: visible; pointer-events: none; justify-content: space-between; gap: 8px; flex-wrap: nowrap; }
+  .sc-wrap > .sc-head > .sc-head-l, .sc-wrap > .sc-head > .sc-head-r { pointer-events: auto; background: color-mix(in srgb, var(--bg) 88%, transparent);
+    -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border-radius: 999px; border: 1px solid var(--line); box-shadow: 0 2px 12px rgba(20, 33, 58, .16); }
+  .sc-wrap > .sc-head > .sc-head-l { flex: 0 1 auto; min-width: 0; gap: 4px; padding: 0 12px 0 0; }
+  .sc-wrap > .sc-head > .sc-head-r { flex: none; gap: 2px; padding: 1px 3px; }
+  /* 떠 있는 단추가 가리는 자리 — 이어서 여는 중 같은 안내 줄은 그 아래로 내린다. */
+  .sc-wrap > .sc-wait { margin-top: 56px; }
+  .sc-wrap .sc-titlebox { min-width: 0; flex: 0 1 auto; }
+  .sc-wrap button.sc-title, .sc-wrap .sc-title { font-size: 15.5px; }
+  .sc-wrap .sc-title-pen { display: none; }
+  /* 제목 단추의 음수 여백(데스크톱 손 올림 배경 맞춤)은 폰에서 뺀다 — 그 6px 때문에 제목 칸이 제 글자 폭보다 좁게 잡혀 «…» 로 잘렸다(실측). */
+  .sc-wrap button.sc-title { margin-left: 0; padding-left: 2px; padding-right: 2px; }
+  .sc-wrap .sc-faces, .sc-wrap .sc-meta, .sc-wrap .sc-run-top, .sc-wrap .sc-beta { display: none !important; }
+  .sc-wrap .sc-head .sc-pair { display: none; }
+  .sc-wrap .sc-head:is([data-term="wait"], [data-term="err"], [data-term="end"]) .sc-pair:not([hidden]) { display: inline-flex; }
+  /* stage 판: 연결 상태·화면 복구·환경 설정이 머리줄 오른쪽에 낱개로 있다(main 은 .sc-pair 한 덩어리) — 같은 규칙으로 가린다. */
+  .sc-wrap .sc-head .sc-termstat, .sc-wrap .sc-head .sc-act-fix, .sc-wrap .sc-head .sc-act-set { display: none; }
+  .sc-wrap .sc-head:is([data-term="wait"], [data-term="err"], [data-term="end"]) :is(.sc-termstat, .sc-act-fix):not([hidden]) { display: inline-flex; }
+  .sc-side { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; flex: none; border: 0; background: none; color: var(--ink); border-radius: 999px; }
+  .sc-side-ic { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; }
+  .sc-wrap .sc-head-r .sc-act { height: 36px; min-width: 40px; padding: 0 10px; font-size: 14.5px; }
+}
+
 /* ── hover 가 없는 기기(손가락) — 손을 얹어야 보이던 단추를 늘 보인다(#4088 후속). 폭이 아니라 포인터로 가른다. ── */
 @media (hover: none) {
+  /*  #4229 후속(원준 2026-09-26 «도트 위치 이상하지 않음? 모바일만 저럼?») — 터치 화면은 × 가 늘 떠 있는데, 오른쪽 끝 상태 점은
+      호버가 없으니 물러나지 않았다 → × 가 점 위에 겹쳐 앉았다(데스크톱은 손을 얹는 동안만 × 가 뜨고 그동안 점이 숨는다).
+      × 몫(오른쪽 5~27px)만큼 줄 안쪽을 비워 제목·점이 그 앞에서 끝나게 한다. 그래서 터치에선 점이 늘 보인다.
+      손가락 뒤에 남는 :hover 로 압정이 절대위치로 떠 점을 덮지 않게, 고정 안 된 압정은 터치에선 띄우지 않는다(고정은 길게 눌러 뜨는 메뉴의 «맨 위에 고정»). */
+  /*  ⚠ 한 줄 행(.v2-app-inst--1, 40-v2)·홈 카드 행(47-v2-rail)이 padding 을 다시 쓴다 — 이 파일이 맨 뒤에 실리므로 같은 셀렉터로 여기서 이긴다. */
+  .v2-app-inst, .v2-app-inst--1, .v2-home-cards .v2-pg--rows .v2-app-inst:not(.v2-app-inst--1) { padding-right: 32px; }
+  .v2-app-inst:hover .v2-app-inst-open, .v2-app-inst.on:not(:hover) .v2-app-inst-open,
+  .v2-app-inst:hover:has(.v2-app-inst-pin.on) .v2-app-inst-open { padding-right: 0; }
+  .v2-app-inst:hover .v2-app-inst-st, .v2-app-inst.on .v2-app-inst-st { visibility: visible; }
+  .v2-app-inst:hover .v2-app-inst-pin:not(.on) { display: none; }
   .pn-fmore { display: inline-flex; }
   .fx-acts { opacity: 1; }
   .pn-arow-x { opacity: 1; }
