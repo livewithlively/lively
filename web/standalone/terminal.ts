@@ -2156,22 +2156,142 @@ function arrowSeq(letter) {
   try { app = !!(term.modes && term.modes.applicationCursorKeysMode); } catch (_) { /* noop */ }
   return (app ? '\x1bO' : '\x1b[') + letter;
 }
+// ── 폰 입력 줄 (#4229 후속, 원준 2026-09-26 코멘트) ─────────────────────────────────────────────
+//  ① 보내기는 **입력 줄의 단추 하나**다. 종전엔 자판의 파란 ↑(enterkeyhint=send)도 보냈는데, 한글 마지막 글자가 조합 중이면
+//   첫 누름이 «확정»으로만 쓰여(isComposing) 두 번 눌러야 보내졌다. 끝 글자가 이미 확정이면 한 번에 가서, 같은 손짓이 때마다
+//   달랐다(원준: «어떨 땐 바로 입력까지 되고 어떨 땐 … 보내기까지 눌러야 했고»). 이제 자판의 리턴은 **줄바꿈**이다(카카오톡 기본값).
+//  ② 쓰던 글은 탭 저장소에 둔다 — 화면 복구·재연결로 이 페이지가 다시 뜨면 글 상자가 비어 «내용이 날아갔다».
+//  ③ 선택지 숫자는 **AI 가 번호로 물을 때만** 글쇠 줄 자리에 뜬다(평소엔 자리만 먹는다).
+//  ④ ⇧Tab 은 «모드» 단추다 — 지금 모드 이름을 화면 아래 상태 줄에서 읽어 단추에 적는다.
+let mdockComposing = false;
+let msendEl = null, mkeysEl = null, mpicksEl = null, mmodeT = null;
+const MDRAFT_KEY = 'lively:mdraft:' + SESSION_ID;
+function saveDraft() {
+  try { const v = mcompEl ? String(mcompEl.value || '') : ''; if (v) sessionStorage.setItem(MDRAFT_KEY, v); else sessionStorage.removeItem(MDRAFT_KEY); } catch (_) { /* 저장소가 막혀 있으면 보관만 못 한다 */ }
+}
+function paintSend() { if (msendEl && mcompEl) msendEl.classList.toggle('on', !!String(mcompEl.value || '').trim()); }
 function mobileSend() {
   if (!mcompEl) return;
   const t = String(mcompEl.value || '');
+  if (!t.trim()) { try { mcompEl.focus(); } catch (_) { /* noop */ } return; }   // 빈 글은 안 보낸다 — 빈 Enter 는 글쇠 줄의 ⏎
   userTyped = true;
-  if (t) {
-    // 여러 줄은 bracketed paste 로 감싸 앱이 '한 덩어리'로 받게(줄바꿈이 Enter 로 오해되지 않게), 한 줄은 그대로.
-    if (/\n/.test(t)) pasteText(t); else sendInput(sanitizePasteText(t));
-  }
+  // 여러 줄은 bracketed paste 로 감싸 앱이 '한 덩어리'로 받게(줄바꿈이 Enter 로 오해되지 않게), 한 줄은 그대로.
+  if (/\n/.test(t)) pasteText(t); else sendInput(sanitizePasteText(t));
   sendInput('\r');
-  mcompEl.value = ''; mobileGrow();
+  mcompEl.value = ''; mobileGrow(); saveDraft(); paintSend();
+  //  조합 중이던 글자가 비운 뒤에 되살아나지 않게 IME 를 끊는다(같은 손짓 안이라 자판은 그대로 남는다).
+  if (mdockComposing) { try { mcompEl.blur(); mcompEl.focus(); } catch (_) { /* noop */ } mdockComposing = false; }
   dlog('mdock', 'send len=' + t.length);
 }
 function mobileGrow() {
   if (!mcompEl) return;
   mcompEl.style.height = 'auto';
   mcompEl.style.height = Math.min(112, Math.max(38, mcompEl.scrollHeight)) + 'px';
+}
+// 선 아이콘 — 채움 없음, 24 뷰박스(셸 아이콘과 같은 붓).
+function mIcon(cls, paths, xform?) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const s = document.createElementNS(NS, 'svg');
+  s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('class', cls); s.setAttribute('aria-hidden', 'true');
+  for (const d of paths) { const p = document.createElementNS(NS, 'path'); p.setAttribute('d', d); if (xform) p.setAttribute('transform', xform); s.append(p); }
+  return s;
+}
+//  첨부 = «+» (원준 2026-09-26: «보통 그리고 그냥 + 버튼 아닌가?») — 메신저들의 그 자리 그 모양. 보내기 ↑ 와 같은 동그라미.
+const IC_PLUS = ['M12 6.5v11', 'M6.5 12h11'];
+const IC_SEND = ['M12 19V5.5', 'M6.5 11 12 5.5 17.5 11'];
+const IC_CARET = ['M7.5 10l4.5 4.5 4.5-4.5'];
+// ── 화면 읽기: 선택지가 떴나 · 지금 일하는 방식(모드)은 무엇인가 ──
+//  선택지 = 화면 아래쪽에 «❯ 1. …» 처럼 **고르는 표시(❯)가 붙은** 번호 목록이 1부터 이어진다(클로드의 승인 창·질문 창).
+//   고르는 표시가 없으면 AI 가 쓴 보통 번호 목록이라 선택지로 치지 않는다.
+export function detectChoiceCount(lines) {
+  const nums = new Set(); let cursor = false;
+  for (const s of lines) {
+    const m = /^\s*(?:[│┃|]\s*)?([❯›]\s*)?(\d{1,2})[.)]\s+\S/.exec(String(s || ''));
+    if (!m) continue;
+    nums.add(Number(m[2])); if (m[1]) cursor = true;
+  }
+  let n = 0; while (nums.has(n + 1)) n++;
+  return cursor && n >= 2 ? Math.min(n, 9) : 0;
+}
+//  클로드 코드의 권한 모드(Shift+Tab 으로 돈다). 이름은 **무엇을 묻고 무엇을 바로 하는가**로 짓는다 — 종전 «자동» 한 단어는
+//   원준이 «무슨 뜻인지 이해 안 감» 이라 했다. 판정은 화면 맨 아래 상태 줄의 글이다(기본 모드는 «? for shortcuts»).
+export const MODES = [
+  { key: 'default', name: '하나씩 묻기', desc: '파일을 고치거나 명령을 돌리기 전에 하나씩 묻습니다.', re: /\?\s*for shortcuts/i },
+  { key: 'acceptEdits', name: '수정 바로 적용', desc: '파일 수정은 묻지 않고 바로 하고, 명령은 묻습니다.', re: /\baccept edits on\b/i },
+  { key: 'plan', name: '계획만', desc: '파일을 고치지 않고 계획만 세워 보여 줍니다.', re: /\bplan mode on\b/i },
+  { key: 'auto', name: '자동 진행', desc: '위험하지 않은 일은 묻지 않고 알아서 진행합니다.', re: /\bauto mode on\b/i },
+  { key: 'bypass', name: '전부 허용', desc: '아무것도 묻지 않습니다. 이 방식을 켜 둔 세션에만 나옵니다.', re: /\bbypass permissions on\b/i },
+];
+export function detectMode(lines) {
+  const tail = lines.slice(-8).map((x) => String(x || ''));
+  for (let i = tail.length - 1; i >= 0; i--) for (const m of MODES) if (m.key !== 'default' && m.re.test(tail[i])) return m.key;
+  for (let i = tail.length - 1; i >= 0; i--) if (MODES[0].re.test(tail[i])) return 'default';
+  return '';
+}
+const modeName = (k) => { const m = MODES.find((x) => x.key === k); return m ? m.name : ''; };
+function screenTail(n) {
+  const out = [];
+  try { const b = term.buffer.active; const end = b.baseY + term.rows; for (let i = Math.max(0, end - n); i < end; i++) { const ln = b.getLine(i); out.push(ln ? ln.translateToString(true) : ''); } } catch (_) { /* noop */ }
+  return out;
+}
+let scanTimer = null, pickN = -1, mTouchBtn = null;
+function scanScreen() {
+  scanTimer = null;
+  if (!mdockEl || mdockEl.hidden) return;
+  const tail = screenTail(18);
+  const n = detectChoiceCount(tail);
+  if (n !== pickN && mpicksEl && mkeysEl && mTouchBtn) {
+    pickN = n;
+    const btns = [];
+    for (let i = 1; i <= n; i++) {
+      const b = mTouchBtn(String(i), i + '번 고르기', () => { userTyped = true; sendInput(TERM_UI.choiceNeedsEnter ? i + '\r' : String(i)); });
+      b.classList.add('mpick'); btns.push(b);
+    }
+    mpicksEl.replaceChildren(el('span', { class: 'mpicks-t', text: '번호로 고르기' }), ...btns);
+    mpicksEl.hidden = n === 0; mkeysEl.hidden = n > 0;
+  }
+  if (mmodeT) { const nm = modeName(detectMode(screenTail(8))) || '고르기'; if (mmodeT.textContent !== nm) mmodeT.textContent = nm; }
+}
+function scheduleScan() { if (!scanTimer) scanTimer = setTimeout(scanScreen, 150); }
+//  모드 고르기 — 목록에서 고르면 그 방식이 될 때까지 Shift+Tab 을 보내며 **매번 화면으로 확인**한다.
+//   ⚠ 확인 없이 여러 번 보내지 않는다: 지금 방식을 못 읽거나, 한 번 눌렀는데 바뀐 게 안 보이거나, 한 바퀴를 다 돌아도
+//   못 찾으면 거기서 멈춘다(모르는 채로 계속 누르면 엉뚱한 방식에서 멈춘다).
+export async function switchModeTo(target, deps?) {
+  const read = (deps && deps.read) || (() => detectMode(screenTail(8)));
+  const press = (deps && deps.press) || (() => { userTyped = true; sendInput('\x1b[Z'); });
+  const wait = (deps && deps.wait) || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  let cur = read();
+  if (!cur) return 'unknown';
+  const seen = new Set([cur]);
+  for (let i = 0; i < 6; i++) {
+    if (cur === target) return 'ok';
+    press();
+    await wait(450);
+    const nx = read();
+    if (!nx || nx === cur) return 'stuck';
+    if (seen.has(nx)) return 'absent';
+    seen.add(nx); cur = nx;
+  }
+  return cur === target ? 'ok' : 'absent';
+}
+function openModeSheet() {
+  const cur = detectMode(screenTail(8));
+  const pick = async (k) => {
+    close();
+    const r = await switchModeTo(k);
+    if (r === 'ok') toast('일하는 방식: ' + modeName(k));
+    else if (r === 'unknown') toast('지금 방식을 읽지 못했어요. 화면 맨 아래 상태 줄이 보일 때 다시 해 주세요.', true);
+    else if (r === 'stuck') toast('바뀐 것을 확인하지 못해 멈췄어요. 화면 맨 아래 상태 줄을 확인해 주세요.', true);
+    else toast('이 세션에서는 «' + modeName(k) + '» 방식을 쓸 수 없어요.', true);
+  };
+  const rows = MODES.map((m) => el('button', { class: 'mmode' + (m.key === cur ? ' on' : ''), type: 'button', onclick: () => { if (m.key !== cur) pick(m.key); else close(); } },
+    el('span', { class: 'mmode-t' }, el('b', { text: m.name }), el('span', { class: 'd', text: m.desc })),
+    m.key === cur ? el('span', { class: 'mmode-now', text: '지금' }) : null));
+  const close = mSheet('일하는 방식', [
+    el('p', { class: 'mset-lead', text: TERM_UI.label + '가 일할 때 무엇을 묻고 무엇을 바로 할지 고릅니다.' }),
+    el('div', { class: 'mset-group' }, ...rows),
+    el('p', { class: 'mset-note', text: '컴퓨터에서 Shift+Tab 으로 바꾸던 것과 같아요. 고르면 그 방식이 될 때까지 바꿔 줍니다.' }),
+  ]);
 }
 // 화면 글자를 '고를 수 있는 글'로 — 폰에선 xterm 캔버스 위 꾹 누르기가 안 먹으니, 최근 화면·스크롤백을 일반 텍스트로
 //  펼쳐 OS 선택(꾹 누르기)과 '전체 복사'를 준다.
@@ -2199,74 +2319,80 @@ function openCopySheet() {
 export function setupMobileDock(mainEl) {
   if (!IS_MOBILE) return;
   document.body.classList.add('mobile');
-  // 터치 버튼 공통 — touchstart/touchend 에서 preventDefault 해 **입력칸 포커스를 뺏지 않는다**(버튼 탭마다 키보드가
-  //  내려갔다 올라오면 못 쓴다). passive:false 를 명시해야 preventDefault 가 먹는다. 클릭은 키보드 접근(detail 0)만 처리.
-  const tbtn = (label, title, act, onStart?) => {
+  // 터치 단추 공통 — **떼는 순간**에 돌고, 손가락이 움직였으면(줄을 민 것) 누른 게 아니다.
+  //  ⚠ 종전엔 Esc·⏎·↑·↓·⇧Tab·Tab·←·→·^C 가 **닿는 순간**(touchstart) 보냈다 — 글쇠 줄을 밀어 보려고 손가락을 대기만 해도
+  //   그 키가 들어갔다(2026-09-26 실측: 줄을 밀다 ⇧Tab 이 들어가 세션 모드가 바뀌었다). 숫자만 #4160 에서 떼는 순간으로 바꿨었다.
+  //  touchend 에서 preventDefault 하면 뒤따르는 마우스·클릭이 안 생겨 **입력칸 포커스를 뺏지 않는다**(자판이 안 내려간다).
+  const tbtn = (label, title, act) => {
     const b = el('button', { class: 'mkey', type: 'button', title: title || label, text: label });
-    //  떼는 순간에 도는 단추는 **손가락이 움직였으면 누른 게 아니다** — 키 줄은 가로로 밀어 보는 줄이라, 미는 손가락이
-    //   단추 위에서 떨어지면 그 단추가 눌린 것으로 쳐졌다(#4160: 선택지 숫자가 밀다가 잘못 가면 «승인» 이 된다).
     let sx = 0, sy = 0;
-    if (!onStart) b.addEventListener('touchstart', (e) => { const t = e.touches[0]; sx = t ? t.clientX : 0; sy = t ? t.clientY : 0; }, { passive: true });
-    b.addEventListener(onStart ? 'touchstart' : 'touchend', (e) => {
-      if (!onStart) { const t = e.changedTouches[0]; if (t && Math.hypot(t.clientX - sx, t.clientY - sy) > 10) return; }   // 민 것 — 브라우저 스크롤에 맡긴다
+    b.addEventListener('touchstart', (e) => { const t = e.touches[0]; sx = t ? t.clientX : 0; sy = t ? t.clientY : 0; }, { passive: true });
+    b.addEventListener('touchend', (e) => {
+      const t = e.changedTouches[0]; if (t && Math.hypot(t.clientX - sx, t.clientY - sy) > 10) return;   // 민 것 — 브라우저 스크롤에 맡긴다
       e.preventDefault(); act();
     }, { passive: false });
     b.addEventListener('click', (e) => { if (e.detail === 0) act(); });
     return b;
   };
-  const key = (label, seq, title?) => tbtn(label, title, () => { userTyped = true; sendInput(typeof seq === 'function' ? seq() : seq); }, true);
-  //  선택지 숫자는 **떼는 순간**에 보낸다(위 이동 판정을 탄다) — 다른 키처럼 닿는 순간 보내면 줄을 밀기만 해도 고른다.
-  //  #4135 — 하네스마다 답이 **반대**다: 클로드는 숫자만으로 골라지고(Enter 를 붙이면 그 Enter 가 다음 화면으로 샌다, #4160),
-  //   codex 는 숫자만 보내면 커서조차 안 움직인다(실측 2026-09-24) — Enter 까지 보내야 골라진다.
-  //   ⚠ 판단은 **누를 때** 한다: 이 줄은 화면이 뜨자마자 그려지는데 화면 사실(메타)은 조금 뒤에 온다.
-  const pick = (n) => tbtn(n, n + ' — 선택지 고르기', () => {
-    userTyped = true;
-    sendInput(TERM_UI.choiceNeedsEnter ? n + '\r' : n);
-  });
-  //  #4160 — 폰에서 제일 자주 하는 일은 **AI 가 묻는 선택지에 답하기**다(«1. Yes / 2. … / 3. No»). 종전엔 숫자를 입력칸에
-  //   쓰고 [보내기]를 눌러야 했는데, 보내기는 숫자 뒤에 Enter 를 **하나 더** 붙인다 — 선택지는 숫자만으로 이미 골라지므로
-  //   그 Enter 가 다음 화면(대개 빈 입력칸)으로 새어 들어갔다. 숫자 셋은 **그 글자만** 보내는 단추로 앞에 둔다.
-  //   ⇧Tab(모드 바꾸기 — 계획 ↔ 자동 수락)은 폰 키보드에 없는 조합이라 단추가 유일한 길이다.
-  //   순서 = 자주 쓰는 것부터(키 줄은 가로로 넘치면 밀어서 본다 — 뒤쪽일수록 덜 보인다).
-  const keys = el('div', { class: 'mkeys' },
-    key('Esc', '\x1b'), key('⏎', '\r', 'Enter 만 보내기'),
-    pick('1'), pick('2'), pick('3'),
+  mTouchBtn = tbtn;
+  const key = (label, seq, title?) => tbtn(label, title, () => { userTyped = true; sendInput(typeof seq === 'function' ? seq() : seq); });
+  //  모드 단추 — 누를 때마다 다음 모드(⇧Tab). 이름은 화면 아래 상태 줄에서 읽어 적는다(scanScreen).
+  //  모드 단추 — 누르면 «일하는 방식» 목록이 뜬다(바로 Shift+Tab 을 보내지 않는다). 단추에는 지금 방식 이름이 보인다(scanScreen).
+  //   종전 도는 화살표는 «새로고침 같다»(원준) — 고르는 칸임을 말하는 아래 꺾쇠로 바꿨다.
+  const modeKey = tbtn('', '일하는 방식 고르기', openModeSheet);
+  mmodeT = el('b', { class: 'mkey-t', text: '고르기' });
+  modeKey.replaceChildren(el('span', { class: 'mkey-l', text: '모드' }), mmodeT, mIcon('mkey-caret', IC_CARET)); modeKey.classList.add('mkey-mode');
+  //  Tab 은 뺐다 — 글은 아래 글 상자에서 쓰므로 터미널 자동 완성(Tab)이 닿을 자리가 없다(원준 «왜 필요해?»).
+  //  ^C(Ctrl+C)도 뺐다(원준 2026-09-26 «그냥 필요 없을 듯, 빼 버리자») — AI 를 멈추는 건 Esc 이고, 클로드 코드는 Ctrl+C 를 두 번 받으면 꺼진다.
+  mkeysEl = el('div', { class: 'mkeys' },
+    key('Esc', '\x1b', 'Esc — AI 가 하던 일 멈추기'), key('⏎', '\r', 'Enter 만 보내기'),
     key('↑', () => arrowSeq('A')), key('↓', () => arrowSeq('B')),
-    key('⇧Tab', '\x1b[Z', 'Shift+Tab — 모드 바꾸기'), key('Tab', '\t'),
+    modeKey,
     key('←', () => arrowSeq('D')), key('→', () => arrowSeq('C')),
-    key('^C', '\x03', 'Ctrl+C — 중단'),
-    tbtn('⧉ 복사', '화면 글자 고르기·복사', openCopySheet),
-    tbtn('⎘ 붙여넣기', '클립보드 내용을 입력칸에', mobilePasteIn));
-  mcompEl = el('textarea', { class: 'mcomp', rows: '1', placeholder: '여기에 쓰고 보내기',   // 긴 안내(꾹 눌러 복사·붙여넣기)는 사용법 안내로 — 폰 폭(안폭 ~230px)에선 두 줄로 접혀 잘렸다(#4229)
-    autocapitalize: 'off', autocomplete: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'send', 'aria-label': '터미널에 보낼 글' });
-  const sendBtn = tbtn('보내기', '보내기(Enter)', mobileSend);
-  sendBtn.className = 'msend';
-  mcompEl.addEventListener('input', mobileGrow);
+    tbtn('복사', '화면 글자 고르기·복사', openCopySheet),
+    tbtn('붙여넣기', '클립보드 내용을 입력칸에', mobilePasteIn));
+  mpicksEl = el('div', { class: 'mpicks', hidden: '' });
+  mcompEl = el('textarea', { class: 'mcomp', rows: '1', placeholder: '여기에 쓰고 보내기',
+    autocapitalize: 'off', autocomplete: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'enter', 'aria-label': '터미널에 보낼 글' });
+  msendEl = tbtn('', '보내기', mobileSend);
+  msendEl.className = 'msend'; msendEl.setAttribute('aria-label', '보내기');
+  msendEl.append(mIcon('msend-ic', IC_SEND));
+  mcompEl.addEventListener('input', () => { mobileGrow(); saveDraft(); paintSend(); });
+  mcompEl.addEventListener('compositionstart', () => { mdockComposing = true; });
+  mcompEl.addEventListener('compositionend', () => { mdockComposing = false; });
+  //  자판의 리턴은 줄바꿈(브라우저 기본). 하드웨어 자판은 ⌘/Ctrl+Enter 로 보낸다.
   mcompEl.addEventListener('keydown', (e) => {
-    if (e.isComposing || e.keyCode === 229) return;                 // 한글 조합 중 Enter 는 확정이지 전송이 아니다
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); mobileSend(); }
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); mobileSend(); }
   });
   // 입력칸 포커스 때 iOS 가 페이지를 스크롤해 화면을 밀어 올린다 — 되돌린다(뷰포트 맞춤이 높이를 이미 키보드 위로 잡는다).
   mcompEl.addEventListener('focus', () => { setTimeout(() => { try { window.scrollTo(0, 0); } catch (_) { /* noop */ } }, 50); });
-  // ★ #4229 — 사진·파일 첨부. 폰엔 끌어놓기도 ⌘V 도 없어 이 단추가 유일한 길이다. 입력 바는 키보드 바로 위에 있으므로
-  //  글을 쓰다가 그대로 누른다. <input type=file> 은 iOS 에서 «사진 보관함·사진 찍기·파일 선택» 시트를 연다(accept 를
-  //  안 걸어 문서·PDF 도 된다). 다른 단추와 달리 touch 를 가로채지 않는다 — 선택기가 어차피 키보드를 내리고, 파일 선택기는
-  //  «사용자 제스처 안» 에서만 열리므로 브라우저가 가장 확실히 제스처로 치는 click 을 그대로 쓴다.
+  //  글 상자에 쓰는 중인지 세션 화면(부모)에 알린다 — 쓰는 동안 아래 탭 바를 걷는다(원준 2026-09-26). 자판 높이로 짐작하는
+  //   방법(visualViewport)은 머리줄을 아래에 둔 3안에서 켜지지 않았다(실측) — 글 상자의 포커스가 확실한 사실이다.
+  const tellShell = (on) => { try { if (window.parent !== window) window.parent.postMessage({ type: 'lively-term-composer', focus: !!on }, location.origin); } catch (_) { /* 부모가 없다 */ } };
+  mcompEl.addEventListener('focus', () => tellShell(true));
+  mcompEl.addEventListener('blur', () => tellShell(false));
+  // ★ #4229 — 사진·파일 첨부. 폰엔 끌어놓기도 ⌘V 도 없어 이 단추가 유일한 길이다. <input type=file> 은 iOS 에서
+  //  «사진 보관함·사진 찍기·파일 선택» 시트를 연다. 파일 선택기는 «사용자 제스처 안» 에서만 열리므로 click 을 그대로 쓴다.
   const fileIn: any = el('input', { type: 'file', multiple: '', hidden: '', tabindex: '-1', 'aria-hidden': 'true' });
   fileIn.addEventListener('change', () => { const fs = [...(fileIn.files || [])]; fileIn.value = ''; if (fs.length) attachFilesToAgent(fs); });
-  const attachBtn = el('button', { class: 'mattach', type: 'button', title: '사진·파일 첨부', 'aria-label': '사진·파일 첨부', text: '📎',
-    onclick: () => { fileIn.value = ''; fileIn.click(); } });
+  //  첨부 단추 = 동그라미 속 «+»(메신저들의 그 자리) — 클립 이모지는 폰마다 그림이 달라 어설펐다(원준 «밤티»).
+  const attachBtn = el('button', { class: 'mattach', type: 'button', title: '사진·파일 첨부', 'aria-label': '사진·파일 첨부',
+    onclick: () => { fileIn.value = ''; fileIn.click(); } }, mIcon('mattach-ic', IC_PLUS));
   // 사진 앱에서 «복사»한 이미지를 글 상자에 붙여넣으면(iOS) 파일로 온다 — 같은 길로 올린다. 글 붙여넣기는 그대로 둔다.
-  //  #1084 «붙여넣기 실행 경로는 하나» 와 겹치지 않는다: 그 경로(setupPaste, #panes 캡처)는 터미널 본체의 붙여넣기이고, 이 리스너는
-  //  #panes 의 형제인 #mdock 안 일반 textarea 의 **파일 항목만** 받는다(글은 브라우저가 textarea 에 넣고 [보내기]가 sanitizePasteText 를 지난다).
   mcompEl.addEventListener('paste', (e) => {
     const dt = e.clipboardData; if (!dt) return;
     const fs = [...(dt.items || [])].filter((it) => it.kind === 'file').map((it) => it.getAsFile()).filter(Boolean);
     if (!fs.length) return;
     e.preventDefault(); attachFilesToAgent(fs);
   });
-  mdockEl = el('div', { id: 'mdock' }, keys, el('div', { class: 'mrow' }, attachBtn, fileIn, mcompEl, sendBtn));
+  //  쓰던 글 되살리기(②).
+  try { const d = sessionStorage.getItem(MDRAFT_KEY); if (d) { mcompEl.value = d; } } catch (_) { /* noop */ }
+  mdockEl = el('div', { id: 'mdock' }, mkeysEl, mpicksEl, el('div', { class: 'mrow' }, attachBtn, fileIn, mcompEl, msendEl));
   mainEl.append(mdockEl);
+  mobileGrow(); paintSend();
+  try { term.onRender(scheduleScan); } catch (_) { /* noop */ }
+  try { if (term.onWriteParsed) term.onWriteParsed(scheduleScan); } catch (_) { /* noop */ }
   applyMobileDock();
 }
 function mobilePasteIn() {
@@ -2578,8 +2704,95 @@ async function renderTextPreview(body, p, asMd) {
   } catch (e) { body.replaceChildren(el('div', { class: 'gate-msg', text: '미리보기 실패: ' + e.message })); }
 }
 
+// ── 폰 시트(#4229 후속, 원준 2026-09-26 «모바일에 맞게 다시 디자인·문구 수정») ──────────────────────────
+//  종전 설정 창·사용법 안내는 데스크톱 창을 폰에 그대로 띄웠다 — 폰 높이보다 커서 위(제목)·아래(닫기)가 잘렸고
+//  창 안이 밀리지 않아 닫기에 닿을 수 없었다. 폰에선 **아래에서 올라오는 시트**로: 머리(제목·완료)는 고정, 몸통만 밀린다.
+function mSheet(title, body) {
+  const back = el('div', { class: 'msheet-back' });
+  const close = () => { back.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (ev) => { if (ev.key === 'Escape') close(); };
+  back.append(el('div', { class: 'msheet', role: 'dialog', 'aria-label': title },
+    el('div', { class: 'msheet-head' }, el('h3', { text: title }),
+      el('button', { class: 'msheet-done', type: 'button', text: '완료', onclick: close })),
+    el('div', { class: 'msheet-body' }, ...body)));
+  back.addEventListener('click', (e) => { if (e.target === back) close(); });
+  document.addEventListener('keydown', onKey);
+  document.body.append(back);
+  return close;
+}
+function applyPrefsNow(np, prevFamily) {
+  term.options.fontFamily = np.fontFamily; term.options.fontSize = np.fontSize; term.options.cursorStyle = np.cursorStyle;
+  term.options.theme = resolveTheme(np.theme);
+  scrollSpeed = np.scrollSpeed; padGain = np.padGain;
+  savePrefs(np); applyChrome(np.theme); doResize();
+  // 처음 고르는 글꼴은 아직 로드 전이라 같은 race 를 탄다 — 명시 로드 후 실제 준비 시점에 재측정.
+  if (np.fontFamily !== prevFamily) remeasureAfterFonts(np.fontFamily);
+}
+function openSettingsMobile() {
+  const np = { ...prefs() };
+  let fam = np.fontFamily;
+  const commit = () => { const prev = fam; fam = np.fontFamily; applyPrefsNow(np, prev); };
+  const row = (label, desc, ctl) => el('div', { class: 'mset-row' },
+    el('div', { class: 'mset-t' }, el('span', { class: 'n', text: label }), desc ? el('span', { class: 'd', text: desc }) : null), ctl);
+  //  글자 크기 — 숫자 칸은 누르면 자판이 올라와 설정 창을 덮는다. − 값 ＋ 로 바꾼다.
+  const sizeV = el('span', { class: 'mstep-v', text: String(np.fontSize) });
+  const step = (d) => { np.fontSize = Math.max(9, Math.min(30, (Number(np.fontSize) || 14) + d)); sizeV.textContent = String(np.fontSize); commit(); };
+  const sizeCtl = el('div', { class: 'mstep' },
+    el('button', { type: 'button', class: 'mstep-b', 'aria-label': '글자 작게', text: '−', onclick: () => step(-1) }), sizeV,
+    el('button', { type: 'button', class: 'mstep-b', 'aria-label': '글자 크게', text: '+', onclick: () => step(1) }));
+  const sel = (opts, cur, on) => { const s2 = el('select', { class: 'mset-sel' }, ...opts.map(([v, t]) => el('option', { value: v, selected: v === cur ? '' : null }, t))); s2.addEventListener('change', () => on(s2.value)); return s2; };
+  const fontSel = sel(FONTS.map((f) => [f.v, f.label]), np.fontFamily, (v) => { np.fontFamily = v; commit(); });
+  const themeSel = sel(Object.entries(THEMES).map(([k, v]) => [k, (v as any).name]), np.theme, (v) => { np.theme = v; commit(); });
+  const cursorSel = sel([['bar', '막대'], ['block', '네모'], ['underline', '밑줄']], np.cursorStyle, (v) => { np.cursorStyle = v; commit(); });
+  const dockSw = el('input', { type: 'checkbox', class: 'mswitch', role: 'switch', 'aria-label': '아래 입력 줄로 쓰기', checked: np.mobileDock !== false ? '' : null });
+  dockSw.addEventListener('change', () => { np.mobileDock = !!dockSw.checked; commit(); applyMobileDock(); });
+  mSheet('터미널 설정', [
+    el('div', { class: 'mset-group' },
+      row('글자 크기', null, sizeCtl),
+      row('글꼴', '영문 글꼴이에요. 한글은 늘 D2Coding 으로 보여요.', fontSel),
+      row('색', null, themeSel),
+      row('커서 모양', null, cursorSel)),
+    el('div', { class: 'mset-group' },
+      row('아래 입력 줄로 쓰기', '끄면 터미널 화면에 바로 칩니다. 한글이 깨질 수 있어요.', dockSw)),
+    el('p', { class: 'mset-note', text: '이 폰의 이 브라우저에만 저장돼요.' }),
+  ]);
+}
+// 폰에서 쓰는 법 — 폰 화면에 실제로 있는 것만 적는다(단축키 표는 컴퓨터용이라 폰에선 뺀다).
+function openHelpMobile() {
+  const ai = TERM_UI.label || 'AI';
+  const line = (t) => el('p', { class: 'mhelp-p', text: t });
+  const keyRow = (k, d) => el('div', { class: 'mhelp-key' }, el('span', { class: 'kbd', text: k }), el('span', { class: 'd', text: d }));
+  const sec = (title, ...kids) => el('section', { class: 'mhelp-sec' }, el('h4', { text: title }), ...kids);
+  mSheet('폰에서 쓰는 법', [
+    sec('쓰고 보내기',
+      line('아래 글 상자에 쓰고 초록 ↑ 단추를 누르면 ' + ai + '에게 보내집니다.'),
+      line('자판의 줄바꿈은 줄만 바꿔요. 보내지 않습니다.'),
+      line('쓰던 글은 화면이 다시 떠도 남아 있어요.')),
+    sec('사진·파일 주기',
+      line('글 상자 왼쪽 + 단추를 누르면 사진 보관함, 사진 찍기, 파일 선택이 뜹니다. 고른 파일이 올라가고 그 위치가 글 상자에 들어가요. 무엇을 할지 덧붙여 보내세요.'),
+      line('사진 앱에서 복사한 사진은 글 상자에 붙여넣어도 됩니다.')),
+    sec(ai + '가 번호로 물을 때',
+      line('번호를 고르는 질문이 뜨면 글쇠 줄이 번호 단추로 바뀝니다. 번호를 누르면 바로 골라져요.')),
+    sec('글쇠 줄',
+      keyRow('Esc', ai + '가 하던 일 멈추기'),
+      keyRow('⏎', '빈 Enter 보내기'),
+      keyRow('↑ ↓', '이전에 보낸 글 불러오기, 목록에서 위아래로'),
+      keyRow('모드', '일하는 방식(하나씩 묻기, 수정 바로 적용, 계획만, 자동 진행)을 고릅니다. 단추에 지금 방식이 보여요.'),
+      keyRow('← →', '커서 옮기기'),
+      keyRow('복사', '화면 글을 골라 복사'),
+      keyRow('붙여넣기', '복사해 둔 글을 글 상자에 넣기'),
+      line('글쇠 줄은 옆으로 밀면 뒤쪽 글쇠가 보여요. 미는 동안에는 눌리지 않습니다.')),
+    sec('화면이 이상할 때',
+      line('화면이 깨지거나 멈추면 머리줄 ⋯ 에서 터미널 탭의 화면 복구를 누르세요.'),
+      line('입력이 이상하면 아래 단추로 최근 입력 기록을 복사해 알려 주세요. 서버로는 보내지 않아요.'),
+      el('button', { class: 'mhelp-btn', type: 'button', text: '입력 진단 복사', onclick: () => copyText(diagText(), false, true) }),
+      el('p', { class: 'mhelp-fine', text: '빌드 ' + TERMJS_BUILD })),
+  ]);
+}
+
 // ── 보기 설정 ──
 function openSettings() {
+  if (IS_MOBILE) { openSettingsMobile(); return; }
   const p = prefs();
   const fontSel = el('select', {}, ...FONTS.map((f) => el('option', { value: f.v, selected: f.v === p.fontFamily ? '' : null }, f.label)));
   const sizeI = el('input', { type: 'number', min: '9', max: '30', value: String(p.fontSize) });
@@ -2622,6 +2835,7 @@ function openSettings() {
 
 // 사용법 안내 — 이 터미널이 실제로 지원하는 동작(코드 근거)만 담는다(추측 키 금지). 비개발자 온보딩용.
 function openHelp() {
+  if (IS_MOBILE) { openHelpMobile(); return; }
   const kb = (keys, desc) => el('div', { class: 'help-item' },
     el('span', { class: 'k' }, ...keys.map((t) => el('span', { class: 'kbd', text: t }))),
     el('span', { class: 'd', text: desc }));

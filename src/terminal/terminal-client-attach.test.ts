@@ -121,6 +121,7 @@ async function makeCtx(opts: CtxOpts = {}): Promise<Harness> {
   def("removeEventListener", (type: string, fn: Listener) => { const a = winL.get(type) || []; const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); });
   def("document", {
     createElement: (tag: string) => new FakeNode(tag),
+    createElementNS: (_ns: string, tag: string) => new FakeNode(tag),   // 입력 줄의 선 아이콘(클립·보내기·모드) — #4229 후속
     createTextNode: (text: string) => ({ nodeType: 3, textContent: text, parent: null }),
     body,
     getElementById: () => null,
