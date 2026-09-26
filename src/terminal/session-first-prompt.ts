@@ -17,7 +17,7 @@ import { harnessIo } from "./harness-io/adapter.js";
 import { tmux } from "./tmux-exec.js";
 import { sendKeysToSession, sendKeyToSession, sendDownToSession } from "./send-keys.js";
 
-export type FirstPromptStep = "wait" | "accept-trust" | "send" | "give-up";
+export type FirstPromptStep = "wait" | "accept-trust" | "dismiss-update" | "send" | "give-up";
 
 // 하단 라이브 UI 영역만 본다(phase.ts detectAwaiting 과 같은 이유 — 전사(과거 대화)가 위에 남아 있다).
 const TAIL_LINES = 14;
@@ -42,6 +42,22 @@ const INPUT_BOX = /\b(auto|manual|plan|accept edits|bypass permissions) mode on\
 //   ①구 claude 문안 ②"is this a project you created/trust" ③**선택지 줄** `[❯>] N. Yes, … trust …`(문안이 바뀌어도
 //   '기본 선택 Yes' 는 남는다). ③은 줄머리에 앵커돼 있어 본문이 trust 를 언급하는 것만으로는 안 걸린다(오탐 방지).
 const TRUST_DIALOG = /trust the (files|contents) (in|of) this (folder|directory|project)|is this a project you (created|trust)|\bTrust this folder\b|(^|\n)[ \t]*[❯›>]?[ \t]*\d*[.)]?[ \t]*(Yes,[^\n]*\btrust\b|Trust and continue)/i;
+// codex 시작 «업데이트 하시겠습니까» 창 — **Enter 를 절대 보내면 안 되는 창**(실측 2026-09-26, 매니지드 라이브 pane):
+//
+//      ✨ Update available! 0.149.1 -> 0.157.1
+//    › 1. Update now (runs `npm install -g @openai/codex`)
+//      2. Skip
+//      3. Skip until next version
+//      Press enter to continue
+//
+//  커서가 **1번**에 있다. Enter 면 `npm install -g` 가 돌고, 테넌트 이미지의 전역 prefix 는 root 소유라
+//  EACCES(exit 243)로 실패한 뒤 **codex 가 그대로 끝난다** → pane 이 셸이 되고 사람은 «내가 직접 codex 라고
+//  쳐야 실행된다» 를 본다. 실측으로 **Escape** 는 창만 닫고 codex 를 그대로 띄운다(입력칸 준비됨).
+//  ⚠ 창이 아예 안 뜨게 하는 것이 첫 겹이다(codex-update-check.ts — 설정 루트 키). 이 층은 그 키가 아직
+//   안 심긴 홈·사람이 되돌린 홈을 위한 **두 번째 겹**이다.
+//  ⚠ 판정은 **번호 선택지 줄**로만 한다(TRUST_DIALOG 와 같은 교리) — standalone 설치본은 같은 문안을
+//   «비차단 배너» 로만 띄우고 입력칸이 살아 있다(실측). 배너에 Escape 를 쏘면 사람이 치던 것이 지워질 수 있다.
+const UPDATE_OPTION = /^[ \t]*[❯›>]?[ \t]*\d+[.)][ \t]*(Update now|Skip until next version)\b/im;
 // 하네스가 아직 뜨는 중인데 화면에 아무 표식이 없을 때, 비-Claude 하네스에 쓰는 보수적 대기(입력창 문구를 모르는 하네스).
 const OTHER_HARNESS_SETTLE_MS = 6000;
 
@@ -132,6 +148,10 @@ export function firstPromptStep(i: { pane: string; harness: string; paneCmd: str
   if (i.elapsedMs > i.maxMs) return "give-up";
   const tail = tailOf(i.pane);
   const tailText = tail.join("\n");
+  //  ★ 업데이트 창을 **신뢰 대화상자보다 먼저** 본다 — codex 는 그 둘을 이 순서로 띄운다(실측). trustOk 와
+  //   무관하다: 여기서 하는 답은 «업데이트 안 함» 이고, 그건 사람의 보안 결정이 아니라 우리가 이미 내린 결정이다
+  //   (이미지의 계약은 «업데이트 = 이미지 재빌드» 다). 그리고 그 창을 그냥 두면 첫 지시가 영영 안 들어간다.
+  if (UPDATE_OPTION.test(tailText)) return "dismiss-update";
   if (TRUST_DIALOG.test(tailText)) return i.trustOk ? "accept-trust" : "wait";
   // 하네스가 화면 판정을 선언했으면(#1719 계약 축 screen) 그것이 정본이다 — 휴리스틱보다 먼저.
   //  auth(로그인·인증 검증)에 넣으면 거부돼 사라지고(antigravity 실측 — "아직 인증 확인중" 거부), dialog 에 넣으면
@@ -168,10 +188,37 @@ export interface FirstPromptRuntime {
   trustKeys: TrustKeys;
 }
 
-/** 신뢰 대화상자에 보낼 키 — 시험은 tmux 없이 이걸 바꿔 끼운다. */
-export interface TrustKeys { down: (id: string, times: number) => Promise<void>; enter: (id: string) => Promise<void> }
+/**
+ * 신뢰 대화상자에 보낼 키 — 시험은 tmux 없이 이걸 바꿔 끼운다.
+ *  `esc` 는 **없어도 된다**(#4135 후속) — 아웃박스의 원격 호스트 칸은 키 RPC 모양이 «내리기+Enter» 로 고정이고
+ *  (호스트 번들은 따로 갱신된다), 모르는 걸음을 보내면 그 칸이 통째로 게이트웨이로 강등된다. 없으면 종전대로
+ *  기다린다 — 그 세션은 codex 설정 층(codex-update-check.ts)이 애초에 그 창을 안 띄운다.
+ */
+export interface TrustKeys {
+  down: (id: string, times: number) => Promise<void>;
+  enter: (id: string) => Promise<void>;
+  esc?: (id: string) => Promise<void>;
+}
 /** 이 호스트의 tmux 로 누르는 키 — 아웃박스 실행 자리의 게이트웨이 칸도 같은 키를 쓴다(`sessions/outbox-exec`, #3773). */
-export const TMUX_TRUST_KEYS: TrustKeys = { down: sendDownToSession, enter: (id) => sendKeyToSession(id, "Enter") };
+export const TMUX_TRUST_KEYS: TrustKeys = {
+  down: sendDownToSession,
+  enter: (id) => sendKeyToSession(id, "Enter"),
+  esc: (id) => sendKeyToSession(id, "Escape"),
+};
+
+/** 업데이트 창을 닫을 때 Escape 를 보내는 횟수 상한 — 판이 바뀌어 안 닫히면 폴마다 쏘지 않는다(빈 입력칸 Escape 는 무해하지만 무의미하다). */
+export const UPDATE_ESC_MAX = 2;
+
+/**
+ * codex 시작 «업데이트» 창을 **Escape 로** 닫는다 (#4135 후속 · 실측 2026-09-26).
+ *  Enter 를 보내지 않는 이유는 UPDATE_OPTION 머리말에 있다(1번 = npm 설치 = 그 자리에서 codex 즉사).
+ * @returns `dismissed` — 키를 보냈다(결과는 다음 폴에서 화면으로 본다) · `unsupported` — 이 자리엔 Escape 걸음이 없다.
+ */
+export async function dismissUpdatePrompt(id: string, keys: TrustKeys = TMUX_TRUST_KEYS): Promise<"dismissed" | "unsupported"> {
+  if (!keys.esc) return "unsupported";
+  await keys.esc(id).catch(() => { /* 다음 폴에서 다시 본다 */ });
+  return "dismissed";
+}
 
 /**
  * 신뢰 대화상자를 **화면을 읽고** 수락한다 — «Yes» 까지 내린 뒤 Enter (#3626 · #3949).
@@ -221,6 +268,7 @@ export async function injectFirstPromptWithRuntime(
   const t0 = runtime.now();
   let peekFailureSince: number | null = null;
   let acceptedTrust = false;
+  let escPressed = 0;        // #4135 후속 — 업데이트 창에 보낸 Escape 횟수(UPDATE_ESC_MAX 까지)
   let saidHolding = false;
   let saidUnreadable = false;
   for (;;) {
@@ -247,6 +295,15 @@ export async function injectFirstPromptWithRuntime(
     if (!booting && !saidHolding) {
       saidHolding = true;
       console.warn(`[terminal] 첫 지시 대기 중(${id}) — ${Math.round(FIRST_PROMPT_BOOT_MS / 1000)}초 안에 입력창이 안 떴다. 첫 실행 안내·로그인이 끝나 입력창이 뜨면 넣는다(최대 ${Math.round(maxMs / 60_000)}분).`);
+    }
+    if (step === "dismiss-update" && escPressed < UPDATE_ESC_MAX) {
+      //  ★ #4135 후속 — 이 창엔 **Escape** 다(실측). Enter 면 «1. Update now» 가 골라지고 npm 설치가 실패해
+      //   codex 가 그 자리에서 끝난다. 상한을 두는 이유는 판이 바뀌어 안 닫힐 때 폴마다 쏘지 않기 위해서다.
+      escPressed++;
+      if (escPressed === 1) console.warn(`[terminal] codex 업데이트 창을 닫는다(${id}) — Escape(업데이트 안 함). 이미지 계약상 세션 안에서 업데이트하지 않는다.`);
+      await dismissUpdatePrompt(id, runtime.trustKeys);
+      await runtime.sleep(pollMs);
+      continue;
     }
     if (step === "accept-trust" && !acceptedTrust) {
       //  ★ #3626 — **화면을 읽고** «Yes» 로 옮긴 뒤 Enter(acceptTrustDialog — 아웃박스와 같은 함수, #3949).

@@ -39,7 +39,7 @@
 //  outbox-exec.ts(한 걸음 — 보기·누르기·치기 — 을 어디서 실행하나: 그 세션의 호스트 또는 게이트웨이, #3773).
 import path from "node:path";
 import { itemsPool } from "../db/client.js";
-import { firstPromptStep, acceptTrustDialog } from "../terminal/session-first-prompt.js";   // #3949 — 신뢰 대화상자는 읽고 누른다(첫 지시와 같은 함수)
+import { firstPromptStep, acceptTrustDialog, dismissUpdatePrompt, UPDATE_ESC_MAX } from "../terminal/session-first-prompt.js";   // #3949 — 신뢰 대화상자는 읽고 누른다(첫 지시와 같은 함수) · #4135 후속 — codex 업데이트 창은 Escape
 import { codexChatMode } from "../terminal/codex-chat-mode.js";
 import { harnessIo } from "../terminal/harness-io/adapter.js";
 import { locateTranscript, ownerHomes } from "../terminal/harness-io/locate.js";
@@ -498,12 +498,25 @@ export async function waitReady(
 ): Promise<ReadyVerdict> {
   const t0 = clock.now();
   let acceptedTrust = false;
+  let escPressed = 0;        // #4135 후속 — 업데이트 창에 보낸 Escape 횟수
   for (;;) {
     const seen = await exec.peek();
     if (!seen.ok) return seen.verdict;
     const step = firstPromptStep({ pane: seen.pane, paneCmd: seen.paneCmd, harness, elapsedMs: clock.now() - t0, maxMs: READY_WINDOW_MS, trustOk });
     if (step === "send") return "ready";
     if (step === "give-up") return "not-ready";
+    if (step === "dismiss-update" && escPressed < UPDATE_ESC_MAX) {
+      //  ★ #4135 후속 — codex 시작 «업데이트» 창은 **Escape** 로 닫는다(실측 2026-09-26). Enter 면 «1. Update now»
+      //   가 골라지고, 테넌트 이미지에선 `npm install -g` 가 EACCES 로 실패해 **codex 가 그 자리에서 끝난다**
+      //   (pane 이 셸이 되고 이 지시는 «준비 안 됨» 으로 떨어진다). 애초에 그 창이 안 뜨게 하는 것은 세션 만들 때
+      //   심는 설정 키다(terminal/codex-update-check.ts) — 이 층은 그 키가 없는 홈을 위한 두 번째 겹이다.
+      //  ⚠ 원격 호스트 칸엔 Escape 걸음이 없다(키 RPC 모양이 «내리기+Enter» 고정 — TrustKeys.esc 머리말).
+      //   그때는 `unsupported` 라 종전대로 기다린다(창이 남으면 NOT_READY_TTL 뒤 사람에게 남는다).
+      escPressed++;
+      await dismissUpdatePrompt(sessionId, exec.trustKeys());
+      await clock.sleep(READY_POLL_MS);
+      continue;
+    }
     if (step === "accept-trust" && !acceptedTrust) {
       //  #3949 — **화면을 읽고** «Yes» 로 옮긴 뒤 누른다(첫 지시와 같은 함수 — #3626). 종전엔 여기서 맹목 Enter 였고,
       //   현행 Claude Code 는 기본 선택이 «No, exit» 라 그 Enter 가 하네스를 끄고 이 지시를 «준비 안 됨» 으로 떨궜다.

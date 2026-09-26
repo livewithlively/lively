@@ -744,3 +744,20 @@ t("[#2439] runtimeChoice 가 tmux 옵션에서 rows.push 까지 이어진다", (
   assert.match(src, /\.\.\.\(r\.runtimeRaw \? \{ runtimeRaw: r\.runtimeRaw \} : \{\}\)/, "★★ 최종 행이 표식 원시값을 담는다(이게 없어서 판정이 배포 기본으로 되돌아갔다)");
   assert.match(src, /sessionMetaCmds\(id, \{[\s\S]*?runtime: chatRuntime \? "chat" : codexModeStampFor\(/, "생성이 두 축의 모드를 한 표식으로 남긴다");
 });
+
+// ── codex 시작 «Update available» 창을 **세션 만들 때** 없앤다 (#4135 후속, 실측 2026-09-26) ──────
+//  ⚠ 이 배선이 빠지면 증상이 조용하다: 세션은 뜨고, 목록은 정상이고, 사람만 «codex 를 직접 쳐야 실행된다» 를 본다
+//   (그 창에 Enter 가 들어가면 `npm install -g` 가 EACCES 로 실패해 codex 가 그 자리에서 끝난다 — 라이브 캡처).
+//   그래서 «폴더 신뢰 옆에서, 훅 신뢰보다 먼저» 라는 자리까지 함께 못박는다.
+t("[#4135] 세션 생성이 codex 업데이트 검사를 끈다(폴더 신뢰와 같은 seam · 훅 신뢰보다 먼저)", () => {
+  const here = new URL(".", import.meta.url).pathname.replace(/\/dist\//, "/src/");
+  const src = readFileSync(join(here, "sessions.ts"), "utf8");
+  assert.match(src, /await ensureCodexUpdateCheckOff\(io, configFile\);/, "★ 그 세션이 실제로 쓸 설정 파일에 심는다");
+  const off = src.indexOf("await ensureCodexUpdateCheckOff(");
+  const hooks = src.indexOf("await ensureCodexHooksTrusted(");
+  assert.ok(off > 0 && hooks > off, "업데이트 검사 끄기가 훅 신뢰(app-server 를 띄운다)보다 먼저다");
+  //  두 번째 겹 — 그 창이 이미 떠 있으면 Escape 로 닫는다(Enter 는 codex 를 죽인다).
+  const fp = readFileSync(join(here, "session-first-prompt.ts"), "utf8");
+  assert.match(fp, /Update now\|Skip until next version/, "판정은 번호 선택지 줄로만 한다(배너 문안이 아니다)");
+  assert.match(fp, /sendKeyToSession\(id, "Escape"\)/, "★ 닫는 키는 Escape 다");
+});
