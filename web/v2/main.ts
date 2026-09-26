@@ -16,7 +16,7 @@ import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡
 import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘 일감'을 자르는 자(달력 자정이 아니다)
 import { renderLiv } from '../liv.js';
 import { livChatCleanup } from '../liv-chat.js';   // #4032 — 리브 칸 걷기
-import { CLASSIC_PAGES, appByKey, appFrame, nativeAppByRoute, noteAppUse } from './apps.js';
+import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, nativeAppByRoute, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
 import { openProjPickModal, openProjPickPopover } from './proj-pick.js';   // 세션의 프로젝트 고르기 — 드롭다운·모달 두 그릇, 목록 한 벌
 import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, movePinnedSession, projLandingRoute, projectOrder, reloadSidePrefs, sessText, type SideInstance } from './side.js';
@@ -27,6 +27,7 @@ import { keepObserved, type ObsMemory } from './obs-carry.js';
 import { PINNED_GROUP, PRIORITY_GROUP, QUIET_RANK, pruneHolds, stepRowHold, type RowHold } from './hold-rules.js';   // #3856 — 「지금 볼 것」 해제·카드 자리 규칙(순수)   // #2544 후속 — 중계가 «못 본» 판을 직전 관측으로 잇는다(순수)
 import { renderPast, renderSessAll, renderTrash } from './bins.js';   // #1851 — 지난 세션(#/archive) · 휴지통(#/trash) 화면 · #3778 이름·주인공 교체 · #4158 [AI 세션] 전체 목록
 import { renderSourcesApp, renderSourceDetail } from './sources.js';   // #2423 자료 앱 — 열람실(사이드바 갈래는 side.ts)
+import { renderTaxonomyApp } from './taxonomy.js';   // #4233 분류체계 앱(사이드바 갈래는 side.ts renderTaxonomySection)
 import { renderConnect, renderConnectApp, renderConnectData } from './connect.js';
 import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
 import { setViewers } from './presence.js';   // #2116 — 열람 도장의 응답에 실려 오는 '지금 보고 있는 사람'
@@ -942,6 +943,7 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   if (p === 'inbox') return { title: '확인할 것', noAside: true };
   //  #2423 자료 앱 — 목록은 «자료», 자료 하나는 그 제목이 정본이라 데이터가 오면 힌트로 따라잡는다.
   if (p === 'sources') return { title: segs[1] ? (routeTitleHint.get(key) || '자료') : '자료', noAside: true };
+  if (p === 'taxonomy') return { title: '분류체계', noAside: true };
   if (p === 'archive') return { title: '지난 세션', noAside: false };   // #1851 → #1850 안 A: 곁칸이 '안에 든 것'을 보여 준다
   if (p === 'trash') return { title: '휴지통', noAside: true };   // #3778 안 D — 네 탭이 「안에 든 것」을 탭 안에서 말한다(곁칸 없음)
   if (p === 'connect') return { title: !segs[1] ? '외부 앱 연결' : segs[1] === '_git' ? '코드 저장소' : segs[1] === '_db' ? '데이터베이스' : '앱 연결', noAside: true };
@@ -1144,6 +1146,15 @@ async function renderRoute(tab: ShellTab): Promise<void> {
 
   // 활성 표시 키는 화면 대장(shell-surfaces)이 정한다 — 새 화면을 만들면 대장을 거치게 되고,
   //  그때 '이건 앱인가 OS 표면인가'를 반드시 고르게 된다(가드: scripts/shell-surface-registry.test.mjs).
+  //  #4233. 옛 주소(맥락 관리의 카테고리 탭 시절)는 새 앱의 정본 주소로 바로 넘긴다. native 앱 넘기기(아래 #/app/<key>)와 같은 규율:
+  //   replace 라 뒤로가기에 빈 칸을 남기지 않는다.
+  const aliasTo = aliasRoute(page, segs);
+  if (aliasTo) {
+    const to = aliasTo;
+    tab.route = to;
+    if (tabsApi?.current() === tab && location.hash !== to) { suppressHash++; location.replace(location.pathname + location.search + to); }
+    tabsApi?.routed(tab); void renderRoute(tab); return;
+  }
   markActive(activeNavKey(page, page === 's' ? decodeURIComponent(segs[1] || '') : segs[1]));
   try {
     if (page === '' || page === 'dashboard') {
@@ -1171,6 +1182,17 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       void ensureSingletonAppInstance('sources', '자료')
         .then((inst) => { if (inst && seq === tab.seq) setTabAppInstance(tab, inst.id, inst.app_id); })
         .catch(() => { /* 앱이 아직 안 깔린 게이트웨이 — 무회귀 */ });
+    } else if (page === 'taxonomy') {
+      // #4233 분류체계 앱. builtin(project=global·single). 자료와 같은 규칙: 주소가 정본, 인스턴스는 뒤에서 멱등 확보.
+      //  `#/taxonomy` = 전체 지도 · `#/taxonomy?view=fix` = 손볼 것 · `#/taxonomy/<id>` = 분류 하나.
+      markActive('taxonomy');
+      noteAppUse('taxonomy');
+      drawSide();              // 앱 소유 사이드바. 들어온 즉시 사이드바 칸이 분류체계의 것으로 바뀐다
+      tab.aside.replaceChildren();
+      renderTaxonomyApp(tab.center, segs[1] ? decodeURIComponent(segs[1]) : '', params, { projects: () => data.projects, redrawSide: () => drawSide() });
+      void ensureSingletonAppInstance('taxonomy', '분류체계')
+        .then((inst) => { if (inst && seq === tab.seq) setTabAppInstance(tab, inst.id, inst.app_id); })
+        .catch(() => { /* 앱이 아직 안 깔린 게이트웨이. 무회귀 */ });
     } else if (page === 'archive' || page === 'trash') {
       // 아카이브·휴지통(#1851) — 사이드바 발치의 두 행이 여는 화면. ⚠ 'trash' 는 클래식 표(CLASSIC_PAGES)에도 있어
       //  이 분기가 그보다 **앞에** 서야 한다(뒤에 두면 WIKI 앱 프레임의 옛 휴지통이 열린다 — 그쪽은 화면 안 링크로 간다).
@@ -1437,7 +1459,7 @@ function activeKey(): string {
  *  탭 크롬(applyTabChrome)은 그 탭의 주소로 물어야 한다: 부팅 중엔 tabsApi.current() 가 아직 그 탭이 아니다. */
 function activeKeyOf(route: string): string {
   const cur = parseRoute(route);
-  return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : cur.segs[0] === 'sources' ? 'sources' : cur.segs[0] === 'connect' ? 'connect' : cur.segs[0] === 'archive' ? 'archive' : cur.segs[0] === 'trash' ? 'trash' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
+  return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : cur.segs[0] === 'sources' ? 'sources' : cur.segs[0] === 'taxonomy' ? 'taxonomy' : cur.segs[0] === 'connect' ? 'connect' : cur.segs[0] === 'archive' ? 'archive' : cur.segs[0] === 'trash' ? 'trash' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
 }
 /** 사이드바를 접고 맨 윗줄을 창 전폭으로 펴는 화면(#3830). 늘리려면 그 화면이 **사이드바에서 아무것도 안 읽는지** 먼저 본다. */
 const CTX_FULL_WIDTH = new Set(['app:context']);
@@ -1539,6 +1561,7 @@ function sideRowFace(route: string, draft?: string): Omit<SideInstance, 'id' | '
   }
   else if (page === 'inbox') { icon = 'inbox'; meta = '답과 확인을 기다리는 작업'; }
   else if (page === 'sources') { icon = 'src'; meta = '모아 둔 원본 자료'; }
+  else if (page === 'taxonomy') { icon = 'tags'; meta = '분류와 묶음'; }
   else if (page === 'connect') { icon = 'link'; meta = '외부 앱 연결'; }
   //  치워 둔 곳(#1851)은 클래식 지식 앱으로 접히므로(CLASSIC_PAGES) 여기서 먼저 가른다 — 아니면 '지식 트리…'가 붙는다.
   else if (page === 'archive') { icon = 'archive'; meta = '멈춘 세션 · 치운 세션'; }
@@ -1727,7 +1750,7 @@ function pinnedAt(key: string, group: string, at: number): number {
  *  묶음: 사람이 볼 일 있는 것(작업 중·확인 필요·완료 미확인)이 맨 위, 나머지는 마지막 작업 날짜별로.
  */
 /** 정본 주소를 갖는 단일 인스턴스 빌트인 — 좌측 목록에서 인스턴스 행과 창 행이 한 줄로 접힌다(#2423). */
-const CANON_ROUTE_APP: Record<string, string> = { inbox: '#/inbox', sources: '#/sources' };
+const CANON_ROUTE_APP: Record<string, string> = { inbox: '#/inbox', sources: '#/sources', taxonomy: '#/taxonomy' };
 
 /**
  * ③(열린 창)이 세우려는 화면을 **서버가 아직 아는가** (#2460).

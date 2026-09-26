@@ -640,6 +640,11 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-kcat .n { flex: 0 1 auto; }
 .v2-kcat .v2-cnt { margin-left: auto; flex: none; }
 .v2-kcat.zero { color: var(--muted); }
+/* #4233 위키 분류 줄의 ✎ — 올리면 수 자리에 선다. 누르면 분류체계 앱에서 그 분류를 연다(side.ts renderWiki catRow). */
+.v2-kcat-edit { display: none; width: 22px; height: 22px; margin-left: auto; place-items: center; border-radius: 6px; color: var(--muted); flex: none; }
+.v2-kcat-edit:hover { color: var(--blue); background: var(--bg); }
+.v2-kcat:hover .v2-kcat-edit, .v2-kcat-edit:focus-visible { display: inline-grid; }
+.v2-kcat:hover .v2-cnt:has(+ .v2-kcat-edit) { display: none; }
 /* 빈 묶음 한 줄 · «묶음을 정해 주세요» 카드는 이름을 한 단계 흐리게(#1631 그대로). */
 .v2-ksp-empty { margin: 0; padding: 4px 8px 6px; font-size: 11.5px; color: var(--muted); white-space: normal; }
 .v2-ksp-fix .v2-ksp-t .n { color: var(--muted); }

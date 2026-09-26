@@ -23,8 +23,7 @@ import { skeleton } from './ui-primitives.js';
 import { stageHealthLevels } from './context-pipeline.js';
 import { inboxCount, renderContextInbox, renderContextMapScreen } from './context-map.js';   // #762 표지(흐름 지도) + 확인할 것
 import { renderCollectors } from './context-collectors.js';
-import { renderClassifiers } from './context-classify.js';
-import { renderCategoryList } from './categories.js';
+import { openTaxonomyApp } from './taxonomy-link.js';   // #4233 카테고리 탭은 분류체계 앱으로 나갔다
 import { distillerPage, distillersPanel } from './distillers.js';
 import { collectorPresetEditor } from './admin-collector-presets.js';  // 새 소스 만들기 — 수집기 화면의 하위 갈래
 import { sourceVisPolicyPanel } from './source-vis-policy.js';         // 자료 공개범위(#1291 v4) — AI 전달 ▸ 접근 권한에 함께 선다
@@ -86,11 +85,7 @@ const STAGES: CtxStage[] = [
     hint: '자료를 읽고 지식으로 정리하는 자동 규칙 — 채널·팀마다 기준을 다르게 여러 개',
     items: [{ key: 'distillers', label: '증류기', draw: (b) => distillScreen(b) }],
   },
-  {
-    key: 'category', label: '카테고리',
-    hint: '지식이 정리되는 칸 — 정의를 적어 두면 자동 분류가 그 기준으로 배정합니다',
-    items: [{ key: 'categories', label: '카테고리', draw: (b) => categoryScreen(b) }],
-  },
+  //  카테고리 탭은 #4233(원준 2026-09-26)에서 「분류체계」 앱으로 나갔다. 옛 주소는 renderContext 초입에서 그 앱으로 보낸다.
   {
     key: 'checks', label: '점검',
     hint: '라이블리에 쌓인 맥락이 낡지 않도록 AI가 알아서 관리하는 기능입니다.',
@@ -133,14 +128,6 @@ async function distillScreen(b: HTMLElement): Promise<void> {
   await stack(b, [
     async (h) => { await distillersPanel(h, data); },
     async (h) => { await ingestPolicyPanel(h, data); },
-  ]);
-}
-
-/** 카테고리 — 칸(정의·담당)과 그 칸을 채우는 기계(자동 분류)가 한 화면에. */
-async function categoryScreen(b: HTMLElement): Promise<void> {
-  await stack(b, [
-    (h) => renderCategoryList(h),
-    (h) => renderClassifiers(h),
   ]);
 }
 
@@ -188,6 +175,8 @@ export async function renderContext(view: HTMLElement, sub?: string | null, sub2
   // 증류기 설정(#/context/distill/<key>)은 **이 셸 밖**의 전용 페이지다(#1564).
   if (isDistillerDetailPath(sub, sub2)) { await distillerPage(view, String(sub2)); return; }
 
+  //  #4233. 카테고리 탭(과 그 옛 이름 topics · classify)은 분류체계 앱이 됐다. 셸 창을 그 앱으로 옮긴다(taxonomy-link.ts).
+  if (sub === 'category' || sub === 'topics' || sub === 'classify') { openTaxonomyApp(); return; }
   // 옛 주소(단계 이름)로 들어오면 새 자리로 조용히 옮긴다 — 북마크·문서·화면 안 링크 보존.
   if (sub && !STAGES.some((s) => s.key === sub) && LEGACY_STAGE[sub]) {
     const it = sub2 ? (LEGACY_ITEM[sub2] || sub2) : '';
@@ -261,9 +250,10 @@ function buildHeader(selStage: CtxStage): HTMLElement {
   return el('div', { class: 'pjv-board-header ctx-board-header' }, tabs);
 }
 
-/** 건강 점을 붙일 수 있는 탭 — 파이프라인 단계에 대응하는 탭만(현황·AI 전달은 판정이 없다). 점검 탭은 #4173 으로 비웠다 — 점도 없다. */
-const HEALTH_TAB: Record<string, 'collect' | 'distill' | 'classify'> = {
-  sources: 'collect', distill: 'distill', category: 'classify',
+/** 건강 점을 붙일 수 있는 탭 — 파이프라인 단계에 대응하는 탭만(현황·AI 전달은 판정이 없다). 점검 탭은 #4173 으로 비웠다 — 점도 없다.
+ *  카테고리 탭은 #4233 에서 분류체계 앱으로 나갔다. */
+const HEALTH_TAB: Record<string, 'collect' | 'distill'> = {
+  sources: 'collect', distill: 'distill',
 };
 
 /** 탭의 건강 점 + 트레이 배지 — 개요 지도와 같은 판정·같은 수(잣대가 둘이면 화면끼리 다른 말을 한다). */
