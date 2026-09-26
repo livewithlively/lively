@@ -328,7 +328,7 @@ function renderPeek(d: WkDoc, ui: View, order: string[], repaint: () => void): H
 /** [우측 사이드바에 고정] — 셸 오른쪽 칸에 문서 화면을 싣는다(탭을 옮겨 다녀도 × 로 닫을 때까지 남는다). 덧창은 닫는다. */
 function pinDoc(d: WkDoc, ui: View, repaint: () => void): void {
   const g = pinGuest(d.name, d.title);
-  if (!openInAside({ key: g.key, title: g.title, url: embedUrl(g.hash), label: g.label })) { location.hash = '#/' + g.hash; return; }
+  if (!openInAside({ key: g.key, title: g.title, url: embedUrl(g.hash), label: g.label, sticky: g.sticky })) { location.hash = '#/' + g.hash; return; }
   ui.peek = '';
   repaint();
 }

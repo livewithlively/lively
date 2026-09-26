@@ -708,9 +708,11 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 /* 곁칸의 손님 화면(#1719, 2026-08-20) — 미리보기 iframe(v2/aside-slot.ts). 손님이 떠 있는 동안 원래 칸
    (발자취·파일)은 hidden 으로 물러날 뿐 사라지지 않는다 — 닫으면 쌓아 둔 발자취가 그대로 돌아온다. */
 .v2-guest { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
-/* #4233 — 손님은 셸에 하나, 우패널 기둥에 탭 판들과 나란히 산다(판은 화면마다 비워진다 · 우측 사이드바에 고정한 문서는 화면을 옮겨도 남는다).
-   떠 있는 동안 판은 통째로 물러난다(v2/main.ts paintAsidePanes 가 has-guest 를 건다). */
+/* #4233 — 손님 화면은 우패널 기둥에 탭 판들과 나란히 산다(판은 화면마다 비워진다). 미리보기는 연 탭의 것, 우측 사이드바에 고정한
+   문서는 셸에 하나라 여럿이 있을 수 있고, 보이는 것은 지금 탭에 보일 하나뿐이다([hidden] — .v2-guest 가 display 를 가져 못박는다).
+   손님이 보이는 동안 판은 통째로 물러난다(v2/main.ts paintAsidePanes 가 has-guest 를 건다). */
 .v2-aside-pane.has-guest { display: none; }
+.v2-guest[hidden] { display: none; }
 /* 머리 왼쪽 이름(미리보기 · 문서)은 줄지 않는다 — 긴 제목에 밀려 글자가 한 자씩 세로로 쌓였다(#4233 실측). */
 .v2-guest-h > b { flex: none; white-space: nowrap; }
 /* 이름은 줄어드는 쪽 — [⟳ ↗ ×] 는 폭이 고정이라 잘리면 누를 것이 사라진다. */

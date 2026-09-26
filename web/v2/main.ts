@@ -2,7 +2,8 @@
 //  구조(마진 없는 풀스크린 · 전역 상단 탭 없음):
 //    좌 사이드바 — 새 작업 · **열린 앱 인스턴스**(세션·위키·프로젝트 등 동격) · 앱 도크 · 계정
 //    중앙        — 활성 앱 화면. web/v2/tabs.ts 의 DOM 유지 엔진이 화면별 상태를 보존하되 탭 줄은 그리지 않는다.
-//    우측        — 이 선택의 맥락(타임라인) — **탭마다 한 벌**(전환하면 그 탭의 우패널이 그대로 돌아온다)
+//    우측        — 이 선택의 맥락. 판(세션 발자취 · 파일 등)은 탭마다 한 벌(전환하면 그 탭의 판이 그대로 돌아온다).
+//                  그 옆의 손님 화면은 둘: 미리보기는 연 탭의 것, [우측 사이드바에 고정]한 문서는 셸에 하나(lib/aside-guests.ts).
 //  라우트: #/ #/dashboard → 홈 · #/liv · #/p/<id> · #/s/<sid> · #/app/<key>[/…] · 그 밖의 클래식 해시 → 같은 해시로 앱 프레임.
 //  탭 규칙(#1719 상민님 2026-08-18): 주소는 활성 탭의 라우트다. 링크는 활성 탭 안에서 이동하되, 같은 화면이 이미 다른
 //  탭에 있으면 그 탭으로 간다(한 세션 = 한 탭). Alt+클릭 = 새 탭에서 열기.
@@ -30,6 +31,7 @@ import { renderSourcesApp, renderSourceDetail } from './sources.js';   // #2423 
 import { renderTaxonomyApp } from './taxonomy.js';   // #4233 분류체계 앱(사이드바 갈래는 side.ts renderTaxonomySection)
 import { renderWikiMain } from './wiki-main.js';   // #4233 [위키] 본문 목록(사이드 피크 · 우측 사이드바에 고정)
 import { wikiScopeOf } from '../lib/wiki-list.js';
+import { EMPTY_BOOK, closeSlot, closeTabGuests, openGuest, shownSlot, type GuestBook } from '../lib/aside-guests.js';   // #4233 손님 화면 장부(미리보기 = 연 탭 · 고정 문서 = 셸에 하나)
 import { renderConnect, renderConnectApp, renderConnectData } from './connect.js';
 import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
 import { setViewers } from './presence.js';   // #2116 — 열람 도장의 응답에 실려 오는 '지금 보고 있는 사람'
@@ -414,6 +416,7 @@ export async function bootV2(): Promise<void> {
     },
     onClose: (tab) => {
       if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
+      dropTabGuest(tab);   // 그 탭이 연 미리보기는 탭과 함께 걷는다(고정 문서는 어느 탭의 것도 아니라 남는다)
       if (routeKey(tab.route) === 'liv') livChatCleanup();   // #4032 — 리브 탭을 닫으면 그 칸도 걷는다
       if (tab.appView) { tab.appView.destroy(); tab.appView = null; }
       // 탭 닫기 = AppWindow 연결 해제. AppInstance·세션·worker 생애주기는 별도라 여기서 종료 API를 부르지 않는다.
@@ -1020,10 +1023,12 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   return { title: '홈', noAside: true };
 }
 function applyTabChrome(tab: ShellTab): void {
-  //  손님(미리보기)이 실려 있으면 곁칸이 없던 화면에도 곁칸을 연다 — 닫으면 다시 사라진다.
-  const guest = !!asideGuest;
-  paintAsidePanes(tab.aside as AsideHost);   // #4233 손님은 셸에 하나 — 옮겨 온 탭의 판도 손님 뒤로 물러난다
-  root!.classList.toggle('no-aside', tab.noAside && !guest);
+  //  이 탭에 보일 손님(제 미리보기, 없으면 고정 문서 — 클래식 앱 액자 화면에서는 고정 문서가 물러난다)이 있으면
+  //   우패널이 없던 화면에도 우패널을 연다. 남의 탭 미리보기는 이 탭의 우패널을 열지 않는다(lib/aside-guests.ts shownSlot).
+  const shown = shownGuestSlot(tab);
+  for (const [s, r] of guestRoots) r.hidden = s !== shown;
+  paintAsidePanes(tab.aside as AsideHost);
+  root!.classList.toggle('no-aside', tab.noAside && !shown);
   //  ★ 맥락 관리(#3830, 원준 2026-09-09 "사이드바가 굳이 필요 없다 · 검색창은 전체 가로 다 차지하게 슬랙처럼") —
   //   이 앱에 있는 동안만 사이드바 열을 0 으로 접고, 맨 윗줄을 창 전폭으로 편다. 레일은 남는다(구역 전환은 레일 몫).
   //   ⚠ 접기는 **열 폭 0** 이다(47-v2-rail.css:326 rail-hidden 과 같은 규율) — display:none 으로 빼면 그리드 열이
@@ -1034,7 +1039,7 @@ function applyTabChrome(tab: ShellTab): void {
   //   이 단추가 그 곁칸을 서랍으로 연다(50-mobile.css `#v2-root.m-aside .pn-pane[data-zone="side"]`). 셸이 아직 안 섰으면
   //   mountProjectShell 끝에서 이 함수를 한 번 더 부른다.
   const paneSide = tab.center.querySelector('.pn-pane[data-zone="side"]') as HTMLElement | null;
-  if (mobile) mobile.setAside(!tab.noAside || guest || (mobile.isMobile() && !!paneSide));
+  if (mobile) mobile.setAside(!tab.noAside || !!shown || (mobile.isMobile() && !!paneSide));
   //  단추의 얼굴도 서랍의 정체를 따른다(#4088 후속): 칸 셸이면 폴더 아이콘·«자료·곁칸 열기», 그 밖은 타임라인. 초점도 그 곁칸으로.
   if (mobile) { mobile.setAsideKind(paneSide ? 'panes' : 'timeline'); mobile.setAsideTarget(paneSide); }
   // 리브 페이지를 떠나면 그 폴링이 멈추게(liv.ts 는 body.dataset.route==='liv' 동안만 폴링).
@@ -1165,6 +1170,7 @@ function homeDests(): HomeDest[] {
 
 async function renderRoute(tab: ShellTab): Promise<void> {
   const seq = ++tab.seq;
+  frameTabs.delete(tab);   // 클래식 앱 액자를 그리는 갈래가 다시 적는다(고정 문서가 물러나는 화면)
   if ((tab as any).ob) { (tab as any).ob.destroy(); (tab as any).ob = null; }   // 처음 설정 화면을 떠나면 읽기 타이머·사이드바 숨김을 푼다
   const { segs, raw, params } = parseRoute(tab.route);
   const page = segs[0] || '';
@@ -1455,6 +1461,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       } else {
       const hash = a ? a.route + (rest ? '/' + rest : '') : segs.slice(1).join('/');
       tab.center.replaceChildren(appFrame(hash, a ? a.title : segs[1]));
+      frameTabs.add(tab);
       markActive('app:' + (a ? a.key : ''));
       }
     } else if (CLASSIC_PAGES[page]) {
@@ -1469,6 +1476,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
         try { cur.contentWindow.location.hash = '#/' + raw; reused = true; } catch { reused = false; }
       }
       if (!reused) tab.center.replaceChildren(appFrame(raw, a ? a.title : page));
+      frameTabs.add(tab);
       markActive('app:' + (a ? a.key : ''));
     } else {
       renderHome(tab.center, data, homeDraft(tab), homeDests());
@@ -1477,6 +1485,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
   } catch (e: any) {
     tab.center.replaceChildren(el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '화면을 불러오지 못했습니다 — ' + (e && e.message ? e.message : e) })));
   }
+  if (tabsApi && tabsApi.active() === tab) applyTabChrome(tab);   // 액자 화면인지가 이제 정해졌다 — 고정 문서를 보일지 다시 맞춘다
   tabsApi?.routed(tab);
 }
 
@@ -2261,19 +2270,26 @@ function newSessionFor(projectId: number): void {
 //  탭마다 한 벌이므로 캐시도 탭의 aside 에 붙어 산다(전환해도 쌓인 것이 그대로).
 //  #1744 로 같은 자리에 **파일 탐색기**가 한 칸 더 산다(상단바 [파일]). 두 칸은 지워서 갈아 끼우지 않고 hidden 으로
 //  바꿔 낀다 — 발자취는 세션 화면이 대화를 읽으며 계속 밀어 넣는 곳이라, 지웠다 새로 만들면 쌓인 것이 사라진다.
-//  #1719(2026-08-20) 로 같은 자리에 **손님 화면**(미리보기 iframe)이 한 칸 더 산다 — v2/aside-slot.ts 참고.
-//   손님이 떠 있는 동안은 나머지 칸이 물러난다(지우지 않는다 — 닫으면 쌓아 둔 발자취가 그대로 돌아와야 한다).
+//  손님 화면(#1719 미리보기 · #4233 우측 사이드바에 고정)은 이 판 **옆**, 우패널 기둥(asideEl)에 산다 — 아래 guestBook.
 type AsideHost = HTMLElement & {
   __trail?: { id: string; w: TimelineHandle }; __files?: { id: string; h: FilesHandle }; __filesOn?: boolean;
 };
-/** 손님 화면 — **셸에 하나**(#4233 «우측 사이드바에 고정», 원준 «일하며 옆에 띄워 둘 문서»). 우패널 기둥(asideEl)에 탭 판들과 나란히 산다.
- *  종전엔 탭마다 그 탭의 판 안에 살았다. 그러면 ① 화면을 옮기면 사라진다 — 홈 · 세션은 셸이 새 탭으로 연다(navigate) ·
- *  ② 판을 비우는 갈래(renderRoute 의 aside.replaceChildren · 8초 결의 지난 세션 · 휴지통)가 손님까지 떼어 내고, iframe 은 떼는 순간
- *  처음부터 다시 읽힌다. 떼인 손님이 표식으로만 남아 빈 우패널을 열기도 했다. prevW = 손님을 위해 넓히기 전의 우패널 너비(닫으면 돌려준다). */
-let asideGuest: { key: string; root: HTMLElement; prevW?: string } | null = null;
+/** 손님 화면(같은 오리진 iframe, v2/aside-slot.ts). 무엇을 걷고 · 다시 쓰고 · 보일지는 장부(lib/aside-guests.ts)가 정한다:
+ *   · 미리보기(프로젝트 상세 · 관리탭 · 타임라인 산출물 링크) — 연 탭의 것. 그 탭이 보일 때만 보이고 탭을 닫으면 걷힌다.
+ *   · 고정 문서(위키 덧창의 [우측 사이드바에 고정]) — 셸에 하나. 화면을 옮겨도 · 탭을 닫아도 남고, 클래식 앱 액자 화면에서는 물러난다.
+ *  iframe 은 자리마다 하나, 판 옆에 둔다 — 판은 화면을 옮길 때마다 비워지는데(renderRoute 의 aside.replaceChildren · 8초 결의
+ *  지난 세션 · 휴지통), 판 안에 두면 함께 떨어져 나가고 iframe 은 떼는 순간 처음부터 다시 읽힌다.
+ *  #1109 는 손님을 셸에 **하나**로 두어 미리보기까지 탭을 닫아도 남고 남의 탭 우패널을 열었다(격리 리뷰 지적) — 그래서 둘로 가른다. */
+let guestBook: GuestBook = EMPTY_BOOK;
+const guestRoots = new Map<string, HTMLElement>();   // 자리(고정 문서 '*' · 미리보기는 주인 탭 id) → 그 손님 화면
+let guestPrevW: string | undefined;                 // 손님을 위해 넓히기 전의 우패널 너비 — 손님이 모두 걷히면 돌려준다
+/** 클래식 앱 액자(appFrame)를 그린 탭 — 고정 문서가 물러나는 화면. renderRoute 가 적는다. */
+const frameTabs = new WeakSet<ShellTab>();
+const shownGuestSlot = (tab: ShellTab | null): string | null => shownSlot(guestBook, tab ? { id: tab.id, frame: frameTabs.has(tab) } : null);
 function paintAsidePanes(host: AsideHost): void {
-  const g = !!asideGuest;
-  host.classList.toggle('has-guest', g);   // #4233 — 손님이 떠 있으면 판 전체(발자취 · 파일 · 지난 세션의 «안에 든 것» 등)가 물러난다
+  const owner = tabsApi ? tabsApi.tabs.find((t) => t.aside === host) || null : null;
+  const g = shownGuestSlot(owner) !== null;
+  host.classList.toggle('has-guest', g);   // 손님이 보이는 동안 판 전체(발자취 · 파일 · 지난 세션의 «안에 든 것» 등)가 물러난다 — 지우지 않는다
   if (host.__trail) host.__trail.w.root.hidden = g || !!host.__filesOn;
   if (host.__files) host.__files.h.root.hidden = g || !host.__filesOn;
 }
@@ -2288,44 +2304,61 @@ function widenAsideForGuest(): string | undefined {
   root.style.setProperty('--v2-aside-w', Math.round(want) + 'px');
   return prev;
 }
-function dropAsideGuest(): void {
-  if (!asideGuest) return;
-  const { root: gr, prevW } = asideGuest;
-  asideGuest = null;
-  gr.remove();
-  if (root && prevW !== undefined) {
-    if (prevW) root.style.setProperty('--v2-aside-w', prevW);
-    else root.style.removeProperty('--v2-aside-w');
-  }
+/** 한 자리의 손님 화면을 걷는다(장부는 부르는 쪽이 이미 고쳤다). 손님이 하나도 안 남으면 우패널 너비를 돌려준다. */
+function dropGuestRoot(slot: string): void {
+  const r = guestRoots.get(slot);
+  if (r) { r.remove(); guestRoots.delete(slot); }
+  if (guestRoots.size || !root || guestPrevW === undefined) return;
+  if (guestPrevW) root.style.setProperty('--v2-aside-w', guestPrevW);
+  else root.style.removeProperty('--v2-aside-w');
+  guestPrevW = undefined;
 }
-/** aside-slot 의 창구 구현 — 셸 우패널에 손님을 끼운다(forTab = 부탁한 프레임의 탭. 그 탭이 지금 보이는 탭이면 크롬을 맞춘다).
+/** 손님 머리의 × — 그 자리를 비우고 지금 탭의 크롬을 맞춘다(고정 문서 뒤에 있던 것이 있으면 그게 보인다). */
+function closeGuest(slot: string): void {
+  const r = closeSlot(guestBook, slot);
+  guestBook = r.book;
+  if (r.drop) dropGuestRoot(slot);
+  const t = tabsApi ? tabsApi.current() : null;
+  if (t) applyTabChrome(t);
+}
+/** 그 탭이 연 미리보기를 걷는다(탭을 닫을 때 · 팝아웃 세션 창이 우패널을 통째로 다시 세울 때). 고정 문서는 남는다. */
+function dropTabGuest(tab: ShellTab): void {
+  const r = closeTabGuests(guestBook, tab.id);
+  guestBook = r.book;
+  if (r.drop) dropGuestRoot(tab.id);
+}
+/** aside-slot 의 창구 구현 — 부탁한 탭(forTab = 부탁한 프레임의 탭)의 이름으로 손님을 장부에 적고 그 자리에 싣는다.
  *  ⚠ 앱 프레임 탭(noAside)이라고 돌려보내지 않는다 — 미리보기 버튼이 사는 관리탭·클래식 프로젝트 상세가 바로 그
- *   화면이라, 거기서 못 열면 이 기능은 아무 데서도 안 열린다. 손님이 있는 동안만 곁칸을 열어 준다(applyTabChrome). */
+ *   화면이라, 거기서 못 열면 이 기능은 아무 데서도 안 열린다. 제 손님이 있는 동안만 그 탭의 우패널을 열어 준다(applyTabChrome). */
 function openAsideGuest(g: AsideGuest, forTab?: ShellTab): boolean {
   const tab = forTab || (tabsApi ? tabsApi.active() : null);
   if (!tab || !asideEl) return false;
-  const host = tab.aside as AsideHost;
-  if (asideGuest && asideGuest.key === g.key) { paintAsidePanes(host); if (mobile) mobile.openAside(); return true; }   // 이미 그 손님 — 리로드하지 않는다
-  dropAsideGuest();
-  const frame = el('iframe', { class: 'v2-guest-frame', src: g.url, title: g.title,
-    allow: 'clipboard-read; clipboard-write' }) as HTMLIFrameElement;
-  const hbtn = (label: string, title: string, onclick: () => void): HTMLElement =>
-    el('button', { class: 'fx-hbtn', type: 'button', title, 'aria-label': title, text: label, onclick });
-  const guest = el('section', { class: 'v2-guest' },
-    el('div', { class: 'v2-aside-h v2-guest-h' },
-      el('b', { text: g.label || '미리보기' }),
-      el('span', { class: 'v2-guest-t', text: g.title, title: g.title }),
-      el('span', { class: 'v2-guest-acts' },
-        hbtn('⟳', '새로고침', () => { try { frame.contentWindow!.location.reload(); } catch { frame.src = g.url; } }),
-        el('a', { class: 'fx-hbtn', href: g.url, target: '_blank', rel: 'noopener', text: '↗', title: '새 창으로 열기', 'aria-label': '새 창으로 열기' }),
-        hbtn('×', '닫기', () => { dropAsideGuest(); const t = tabsApi ? tabsApi.current() : null; if (t) applyTabChrome(t); }))),
-    frame);
-  asideGuest = { key: g.key, root: guest };
-  asideEl.append(guest);   // 판(탭마다) 옆, 기둥에 하나 — 판을 비워도 · 탭을 옮겨도 그대로다
-  asideGuest.prevW = widenAsideForGuest();
-  paintAsidePanes(host);
-  if (tabsApi && tabsApi.active() === tab) applyTabChrome(tab);   // 곁칸이 없던 화면이면 이 순간 열린다
-  if (mobile) mobile.openAside();              // 모바일에선 곁칸이 서랍이다 — 열어 주지 않으면 아무 일도 안 일어난 것처럼 보인다
+  const r = openGuest(guestBook, { key: g.key, sticky: !!g.sticky, owner: tab.id });
+  guestBook = r.book;
+  if (!r.reuse) {   // 같은 자리에 같은 손님이면 다시 읽지 않는다
+    if (r.drop) dropGuestRoot(r.slot);
+    const frame = el('iframe', { class: 'v2-guest-frame', src: g.url, title: g.title,
+      allow: 'clipboard-read; clipboard-write' }) as HTMLIFrameElement;
+    const hbtn = (label: string, title: string, onclick: () => void): HTMLElement =>
+      el('button', { class: 'fx-hbtn', type: 'button', title, 'aria-label': title, text: label, onclick });
+    const guest = el('section', { class: 'v2-guest', 'data-slot': r.slot },
+      el('div', { class: 'v2-aside-h v2-guest-h' },
+        el('b', { text: g.label || '미리보기' }),
+        el('span', { class: 'v2-guest-t', text: g.title, title: g.title }),
+        el('span', { class: 'v2-guest-acts' },
+          hbtn('⟳', '새로고침', () => { try { frame.contentWindow!.location.reload(); } catch { frame.src = g.url; } }),
+          el('a', { class: 'fx-hbtn', href: g.url, target: '_blank', rel: 'noopener', text: '↗', title: '새 창으로 열기', 'aria-label': '새 창으로 열기' }),
+          hbtn('×', '닫기', () => closeGuest(r.slot)))),
+      frame);
+    guestRoots.set(r.slot, guest);
+    asideEl.append(guest);
+    const prev = widenAsideForGuest();
+    if (guestPrevW === undefined) guestPrevW = prev;
+  }
+  if (tabsApi && tabsApi.active() === tab) {
+    applyTabChrome(tab);   // 곁칸이 없던 화면이면 이 순간 열린다
+    if (mobile && shownGuestSlot(tab) === r.slot) mobile.openAside();   // 모바일에선 곁칸이 서랍이다 — 열어 주지 않으면 아무 일도 안 일어난 것처럼 보인다
+  }
   return true;
 }
 function dropAsideFiles(host: AsideHost): void {
@@ -2352,7 +2385,7 @@ function drawAsideSession(tab: ShellTab, s: Sess | null): TimelineHandle | null 
   //   프로젝트 옮기기 세 길 모두). 판정은 부르는 쪽마다가 아니라 **여기 한 자리**에서 — 세 길이 같은 함수를 부른다(격리 리뷰 지적).
   if (projViews.has(tab)) return null;
   const host = tab.aside as AsideHost;
-  if (!s) { host.__trail = undefined; dropAsideFiles(host); dropAsideGuest(); host.replaceChildren(el('p', { class: 'v2-empty', text: '세션 정보를 찾을 수 없어요.' })); return null; }
+  if (!s) { host.__trail = undefined; dropAsideFiles(host); dropTabGuest(tab); host.replaceChildren(el('p', { class: 'v2-empty', text: '세션 정보를 찾을 수 없어요.' })); return null; }
   const raw = s.raw || {};
   const factsEl = el('div', { class: 'v2-sfacts' },
     el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('span', { text: s.stateLabel }),
@@ -2361,7 +2394,7 @@ function drawAsideSession(tab: ShellTab, s: Sess | null): TimelineHandle | null 
     s.node ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(s.node) })] : null,
     !s.owned && (raw.owner_name || raw.owner) ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(raw.owner_name || raw.owner) })] : null);
   if (host.__trail && host.__trail.id === s.id && host.__trail.w.root.isConnected) { host.__trail.w.setMeta(factsEl); paintAsidePanes(host); return host.__trail.w; }
-  dropAsideGuest();              // 우패널을 통째로 다시 세운다 — 손님(미리보기)도 함께 물러난다(팝아웃 세션 창 — 셸 탭은 위에서 돌아갔다)
+  dropTabGuest(tab);             // 우패널을 통째로 다시 세운다 — 이 탭의 미리보기도 함께 물러난다(팝아웃 세션 창 · 셸 탭은 위에서 돌아갔다). 고정 문서는 남는다
   host.replaceChildren();
   dropAsideFiles(host);          // 다른 세션으로 옮겼다 — 파일 패널도 그 세션 것으로 새로 연다
   //  ⚠ #2233 — 여기(팝아웃 창의 우패널)는 종전에 '결과물 보기'라 **질문이 한 줄도 안 섰다**. 같은 세션을 셸에서 열면
