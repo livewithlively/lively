@@ -205,10 +205,22 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
 {
   const sc = read("web/session-chat.ts");
   ok(/class: 'sc-shellbar'/.test(sc), "㉚ 셸 pane 안내줄을 그린다");
-  ok(/function paintShellBar\(\)/.test(sc) && /const shellPane = chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode \|\| ''\) === 'chat'/.test(sc),
-    "㉛ ★ 판정은 «pane 이 셸인가» 두 갈래다(codex app-server · 대화 런타임) — 모르면 안 띄운다");
+  ok(/function paintShellBar\(\)/.test(sc) && /chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode \|\| ''\) === 'chat'/.test(sc),
+    "㉛ ★ 판정의 바탕은 «pane 이 셸인가» 두 갈래다(codex app-server · 대화 런타임) — 모르면 안 띄운다");
   ok((sc.match(/paintShellBar\(\);/g) || []).length >= 2,
     "㉜ ★ setMode 와 목록 갱신 **둘 다** 다시 그린다 — 행이 늦게 오는 세션(방금 만든 것)이 안내를 놓치면 안 된다");
+  //  ★ #4135 — **프레임이 본 것이 목록을 이긴다.** 노드 스냅샷이 낡으면 목록은 «이 세션은 app-server» 라고
+  //   말하는데, 그 값만 믿으면 멀쩡히 코덱스가 도는 터미널 위에 «여기 친 말은 Codex 에게 안 갑니다» 라는
+  //   거짓 경고가 선다(원준님 실측 2026-09-25: «이건 왜 뜨는거야? 밑에서 입력 잘만 되는데?»).
+  ok(/paneShell !== false && \(chatFirst\(\)/.test(sc),
+    "㉝-b ★ pane 에서 셸이 아닌 것이 돌고 있으면 안내줄을 띄우지 않는다(거부권)");
+  ok(/m\.paneShell === true \|\| m\.paneShell === false/.test(sc),
+    "㉝-c 프레임이 보낸 판정만 받는다 — «모름»(null·없음)으로 덮지 않는다");
+  const term = read("web/standalone/terminal.ts");
+  ok(/paneShell: lastPaneCmd \? isShellCmd\(lastPaneCmd\) : null/.test(term),
+    "㉝-d 판정은 프레임이 한다 — 목록 두 벌을 만들지 않는다");
+  ok(/postPaneCmd\(String\(st\.cmd \|\| ''\)\)/.test(term),
+    "㉝-e pane 상태가 올 때마다 알린다(재접속·앱 교체에도 따라간다)");
   ok(/onclick: \(\) => void handoffToTerminal\(\)/.test(sc), "㉝ 안내줄의 단추가 넘기기에 배선돼 있다(죽은 단추 금지)");
   ok(/async function handoffToTerminal/.test(sc) && /codex-chat\/release/.test(sc),
     "㉞ 넘기기는 release 통로를 부른다");
