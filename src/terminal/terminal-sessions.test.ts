@@ -736,6 +736,11 @@ t("[#2439] runtimeChoice 가 tmux 옵션에서 rows.push 까지 이어진다", (
   //   원시값을 그대로 올리고(runtimeRaw), 생성은 두 축의 값을 한 자리에서 정해 표식 목록에 넘긴다.
   //   원시값을 안 올리면 codex 모드가 세 낱말로 접혀 사라지고, 판정이 다시 «배포 기본 추측» 으로 돌아간다(#3982 의 뿌리).
   assert.match(src, /runtimeRaw: runtimeRaw \|\| ""/, "중간 객체가 표식 원시값을 그대로 올린다");
-  assert.match(src, /runtimeRaw: p\.runtimeRaw/, "★ rows.push 가 원시값도 담는다");
+  assert.match(src, /runtimeRaw: p\.runtimeRaw/, "★ 중간 객체가 원시값도 담는다");
+  //  ★★ #4135 — **최종 행까지** 와야 뜻이 있다. 중간 객체까지만 오면 화면·배달이 «표식 없음» 으로 읽어 배포
+  //   기본으로 되돌아간다(실측 2026-09-26: 터미널로 뜬 세션을 목록이 app-server 라고 말했다 — 노드 세션도 같은 코드).
+  //   그래서 «rows.push 가 담는다» 만 재던 이 표에 **sessions.push** 를 따로 세운다(다섯 자리 중 마지막 칸).
+  assert.match(src, /\.\.\.\(r\.runtimeChoice \? \{ runtimeChoice: r\.runtimeChoice \} : \{\}\)/, "★ 최종 행이 runtimeChoice 를 담는다");
+  assert.match(src, /\.\.\.\(r\.runtimeRaw \? \{ runtimeRaw: r\.runtimeRaw \} : \{\}\)/, "★★ 최종 행이 표식 원시값을 담는다(이게 없어서 판정이 배포 기본으로 되돌아갔다)");
   assert.match(src, /sessionMetaCmds\(id, \{[\s\S]*?runtime: chatRuntime \? "chat" : codexModeStampFor\(/, "생성이 두 축의 모드를 한 표식으로 남긴다");
 });
