@@ -125,6 +125,10 @@ ok(/canDeleteCat\(/.test(APPJS) && /\/delete'/.test(APPJS) && /state: 'deprecate
   "W1 상세: 지우기(빈 분류만) · 치우기 · 묶음 옮기기 · 정의 고치기(폼)가 기존 API 로 간다");
 ok(/지식/.test(APPJS) && /'프로젝트'/.test(APPJS) && !/'지'|'프'/.test(APPJS), "W1 막대 이름표는 「지식」 「프로젝트」 온전한 말(지 · 프 줄임 없음)");
 
+//  지우기는 서버가 비었을 때만 연다(#4233 리뷰: 화면의 수는 공개범위로 센 수). 거절하면 서버 문구를 그대로 띄운다.
+const delFn = cut(APPJS, "const del = async", "const tools = [");
+ok(/\/delete'/.test(delFn) && /catch \(e: any\) \{ toast\(\(e && e\.message\)/.test(delFn), "W1 지우기가 거절되면 서버 문구를 그대로 띄운다");
+
 // W2 — 맥락 관리에서 걷은 것 · 옛 주소 · 위키 편집 입구
 const CTX = code(read("web/context.ts"));
 ok(!/key: 'category'/.test(CTX) && !/renderCategoryList/.test(CTX) && !/categoryScreen/.test(CTX), "W2 맥락 관리에 카테고리 탭이 없다");

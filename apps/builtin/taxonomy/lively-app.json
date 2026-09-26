@@ -18,11 +18,15 @@
     "scopes": [],
     "tools": [
       "category_list",
-      "category_get",
+      "category_create",
       "category_update",
       "category_delete",
       "category_group_list",
-      "knowledge_list"
+      "category_group_upsert",
+      "category_group_remove",
+      "knowledge_list",
+      "project_list_index_v6",
+      "repo_list"
     ]
   }
 }

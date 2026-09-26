@@ -143,12 +143,14 @@ try {
     await forgetClassifierSeen([n("a-mapped")]);
     chk("④-b 카테고리가 남아 있으면 기록을 안 지운다", (await seenRows(laneA.id, n("a-mapped"))) === 1);
 
-    // (c) 카테고리 삭제(CASCADE)
+    // (c) 카테고리 삭제. #4233 부터 지식이 붙은 분류는 지울 수 없다(409, category-store assertDeletable).
+    //     그래서 지식이 삭제로 카테고리를 잃는 길 자체가 없다. 지식은 그 칸에 남고 '봤다' 기록도 그대로다.
     const cat2 = await mkCategory(n("cat2"));
     await ks.linkKnowledgeCategory(n("b1"), cat2, "confirmed");
     await cls.markClassifierSeen(laneA.id, [n("b1")], null);
-    await cs.deleteCategory(cat2, { actor: "test", source: "test" });
-    chk("④-c 카테고리 삭제로 그 칸의 지식이 카테고리를 잃으면 기록이 지워진다", (await seenRows(laneA.id, n("b1"))) === 0);
+    let delStatus = 0;
+    try { await cs.deleteCategory(cat2, { actor: "test", source: "test" }); } catch (e) { delStatus = e && e.status; }
+    chk("④-c 지식이 붙은 분류는 지울 수 없다(409) · 기록은 그대로", delStatus === 409 && (await seenRows(laneA.id, n("b1"))) === 1);
 
     // (d) 휴지통 복원 — 링크 없이 돌아온다
     await mkKnowledge(n("restore"), SYS_A);
