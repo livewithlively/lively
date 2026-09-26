@@ -364,6 +364,13 @@ export interface SessionInfo {
    *   대화는 아무도 안 받는 세션이 된다(2026-09-01 실측).
    */
   runtimeChoice?: "chat" | "terminal";
+  /**
+   * 그 표식의 **원시값**(@box_runtime: "chat"|"terminal"|"app-server") — #4135.
+   *  codex 모드는 위 두 낱말로 접히지 않으므로(그 세션이 app-server 로 떴는지를 말해야 한다) 원시값을 함께 싣는다.
+   *  ⚠ **목록 행에 실려야** 뜻이 있다. 중간 객체까지만 오면 화면·배달이 «표식 없음» 으로 읽어 배포 기본으로
+   *   되돌아간다 — 그게 실측된 사고다(2026-09-26: 터미널로 뜬 세션을 목록이 app-server 라고 말했다).
+   */
+  runtimeRaw?: string;
   id: string; label: string; harness: string; dir: string; autoApprove: boolean;
   owner: string; owned: boolean; created: number; attached: boolean;
   invites: string[]; // 초대된 멤버 id(@box_invites). 빈 배열 = 비공개(소유자만 보기·열기).
