@@ -48,18 +48,17 @@ async function renderCategoriesInner(view: any, withHead: boolean) {
   const canEdit = hasScope('context');
   view.replaceChildren(skeleton('분류체계를 불러오는 중'));
 
-  let cats: any[] = [], teams: any[] = [], repos: string[] = [], groups: CatGroup[] = [];
+  let cats: any[] = [], repos: string[] = [], groups: CatGroup[] = [];
   try {
-    const [catRes, teamRes, repoRes, grpRes] = await Promise.all([
+    const [catRes, repoRes, grpRes] = await Promise.all([
       api('/api/ui/categories'),
-      api('/api/ui/teams').then((d) => (d && d.teams) || []).catch(() => []),
       api('/api/ui/repos').then((d) => (d && d.repos) || []).catch(() => []),
       //  묶음(#1631) — 서버에 아직 없거나 실패하면 빈 배열이다(fetchCategoryGroups 는 throw 하지 않는다).
       //   즉 이 한 줄이 안 되더라도 분류 목록은 **종전 평면 그대로** 그려진다.
       fetchCategoryGroups(),
     ]);
     cats = (catRes && catRes.categories) || [];
-    teams = teamRes; repos = repoRes; groups = grpRes;
+    repos = repoRes; groups = grpRes;
   } catch (e) {
     view.replaceChildren(...[
       withHead ? pageHead('분류체계', null, [], '분류체계') : null,
@@ -87,7 +86,7 @@ async function renderCategoriesInner(view: any, withHead: boolean) {
 
   //  #1631: 종전엔 사업/제품/시스템 3묶음으로 갈라 그렸다(분류의 층). 그 축이 없어져 평면 한 묶음이 됐고,
   //   그 위에 **화면에서만 보이는 묶음**(category group)을 다시 올린다 — 표시의 층이라 분류·검색엔 안 낀다.
-  const ctx: CatCtx = { canEdit, teams, repos, reload, groups };
+  const ctx: CatCtx = { canEdit, repos, reload, groups };
   const list = el('div', { class: 'wikicat' });
   //  ★ 무회귀 보증: 묶음이 없으면(서버 미지원·빈 목록·조회 실패 — 셋 다 groups=[] 로 온다) **종전 평면 그대로**.
   //   판정 기준은 묶음 **하나**뿐이다 — 분류가 0개여도 묶음이 있으면 구획을 세운다. 방금 만든 묶음이
@@ -156,8 +155,8 @@ async function setCategoryState(c: any, state: string, reload: () => void) {
   } catch (e: any) { toast(e?.message || '실패', true); }
 }
 
-/** 목록 전체가 들고 다니는 것 — 권한·선택지(팀·레포·묶음)와 다시 그리기. */
-interface CatCtx { canEdit: boolean; teams: any[]; repos: string[]; reload: () => void; groups: CatGroup[] }
+/** 목록 전체가 들고 다니는 것 — 권한·선택지(레포·묶음)와 다시 그리기. (#4233: 오너 팀 선택지는 걷었다) */
+interface CatCtx { canEdit: boolean; repos: string[]; reload: () => void; groups: CatGroup[] }
 
 // 분류 만들기 버튼 — 구획마다 두면 «어느 묶음으로 들어가나» 를 버튼마다 다시 물어야 해서, 만들기는
 //  머리 한 자리에 두고 묶음은 폼 안에서 고르게 한다.
@@ -450,9 +449,9 @@ async function deleteBundle(g: CatGroup, shown: number, ctx: CatCtx) {
   } catch (e) { toast('실패 — ' + (e as Error).message, true); }
 }
 
-// 한 행 — 이름·키·오너 팀·묶음·정의 한 줄 + 표류 배지 + 연결 레포. 액션은 hover 시 진해진다(wikicat-row-acts).
+// 한 행 — 이름·키·묶음·정의 한 줄 + 표류 배지 + 연결 레포. 액션은 hover 시 진해진다(wikicat-row-acts).
 function categoryRow(c: any, ctx: CatCtx) {
-  const { canEdit, teams, repos, reload, groups } = ctx;
+  const { canEdit, repos, reload, groups } = ctx;
   const should = (c.should || '').trim();
   const inactive = (c.state ?? 'active') !== 'active';
 
@@ -463,30 +462,6 @@ function categoryRow(c: any, ctx: CatCtx) {
     : el('span', { class: 'wikicat-should wikicat-should-empty' },
         el('span', { class: 'wikicat-should-label', text: '정의·범위·규칙' }),
         canEdit ? uiText('미설정 — 오른쪽 [수정]에서 입력할 수 있어요') : '미설정');
-
-  // 오너 팀 — 카테고리 소유(표면화·주입의 '우리 팀' 기준). 오너십=우선순위이지 접근제한이 아니다.
-  let ownerEl: any = null;
-  if (canEdit) {
-    const ownerSel = el('select', { class: 'wikicat-owner-sel', 'aria-label': '오너 팀' },
-      el('option', { value: '', text: '— 오너 없음 —' }),
-      ...teams.map((t) => el('option', { value: String(t.id), text: t.name || t.key }))) as HTMLSelectElement;
-    ownerSel.value = c.owner_team_id ? String(c.owner_team_id) : '';
-    ownerSel.addEventListener('change', async () => {
-      const prev = c.owner_team_id ? String(c.owner_team_id) : '';
-      try {
-        await api('/api/ui/categories/' + c.id + '/owner', { method: 'POST',
-          body: JSON.stringify({ team_id: ownerSel.value ? Number(ownerSel.value) : null }) });
-        c.owner_team_id = ownerSel.value ? Number(ownerSel.value) : null;
-        toast('오너 팀을 변경했습니다');
-      } catch (e) { toast((e as Error).message, true); ownerSel.value = prev; }
-    });
-    ownerEl = el('span', { class: 'wikicat-owner' },
-      el('span', { class: 'wikicat-owner-label', text: '오너 팀' }), ownerSel);
-  } else if (c.owner_team_name) {
-    ownerEl = el('span', { class: 'wikicat-owner' },
-      el('span', { class: 'wikicat-owner-label', text: '오너 팀' }),
-      el('span', { class: 'wikicat-owner-name', text: c.owner_team_name }));
-  }
 
   // 묶음 고르기(#1631) — 고르면 곧바로 저장하고 목록을 다시 그린다(그 행이 고른 구획으로 옮겨진다).
   //  읽기 전용이거나 묶음이 없으면 칸 자체를 안 띄운다 — 그 화면엔 구획도 없으므로 물을 것이 없다.
@@ -521,7 +496,7 @@ function categoryRow(c: any, ctx: CatCtx) {
     c.cross_cutting ? el('span', { class: 'dm-tag', text: '횡단' }) : null,
     //  #1631: 비활성 축은 «치워 둔 것» 이라 분류 후보에서 빠진다 — 목록에는 남되 그 사실이 보여야 한다.
     inactive ? el('span', { class: 'pill', title: '치워 둔 축입니다 — 새 지식의 분류 후보에서 빠집니다(이미 든 지식은 그대로).', text: '비활성' }) : null,
-    bundleEl, ownerEl, repoEl, shouldLine);
+    bundleEl, repoEl, shouldLine);
 
   const acts = canEdit ? el('div', { class: 'wikicat-row-acts' },
     el('button', { class: 'btn btn-ghost btn-sm', text: '수정',
@@ -542,9 +517,11 @@ function categoryRow(c: any, ctx: CatCtx) {
 async function deleteCategory(c: any, reload: () => void) {
   const ok = await confirmDialog({
     title: `‘${c.name || c.key}’ 분류를 삭제할까요?`,
+    //  #4233. 서버가 비었을 때만 지운다(지식 매핑 · 프로젝트 목록이 있으면 409, 공개범위와 상관없이 센다). 거절 문구는 아래 실패 토스트가 그대로 띄운다.
     lines: [
-      '이 분류에 연결된 지식 매핑과 분류 간 연결이 함께 삭제됩니다.',
-      ...(Number(c.knowledge_count) > 0 ? [`현재 지식 ${fmtNum(c.knowledge_count)}건이 이 분류에 있습니다.`] : []),
+      '지식이나 프로젝트 목록이 붙어 있으면 지울 수 없습니다. 먼저 옮기거나, 분류 후보에서만 빼려면 치우기를 쓰세요.',
+      '분류 사이 연결은 함께 지워집니다.',
+      ...(Number(c.knowledge_count) > 0 ? [`지금 이 분류에 지식 ${fmtNum(c.knowledge_count)}건이 보입니다.`] : []),
     ],
     confirmText: '삭제', danger: true,
   });

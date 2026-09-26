@@ -3,7 +3,7 @@
 //   코드 앵커(mapping/debt/엣지)를 가진 축을 종전엔 '도메인'이라 부르며 space='product' 로 갈랐는데, 앵커는
 //   **있으면 붙는 것**이지 축의 부류가 아니다 — 도메인맵은 이제 전 분류축을 그린다.
 //  감사는 org_content_audit(entity='category') — knowledge/domain 과 동일 append-only 패턴.
-import { itemsPool } from "../db/client.js";
+import { itemsPool, withTx, type Db } from "../db/client.js";
 import { HttpError } from "../http-error.js";
 import { q, one } from "../db/client.js";
 import { auditOrgContent, restoreSnapshot, type WriteCtx } from "./content-audit.js";
@@ -29,8 +29,6 @@ export interface CategoryRow {
   // 화면에서만 보이는 묶음(#1631) — category_group.key. null = 어느 묶음에도 안 든다.
   group_key: string | null;
   created_at: string; updated_at: string;
-  // 오너 팀(team_category relation='owner') — listCategories 만 채운다(LEFT JOIN). 쓰기/감사 경로는 base 컬럼만.
-  owner_team_id?: number | null; owner_team_key?: string | null; owner_team_name?: string | null;
   // 이 카테고리에 매핑된 active 지식 수 — listCategories 만 채운다(WIKI 사이드바 개수 뱃지).
   knowledge_count?: number;
   // 정의-내용 불일치(#1153) — 이 분류의 **정의(should)** 벡터에서 먼 소속 지식 수. listCategories 만 채운다.
@@ -75,7 +73,7 @@ const mismatchMarginSql = (alias: string, own: string) =>
 // 판정에서 빼는 행 — 대문 문서·폴더는 목차·색인이라 어떤 정의에서도 구조적으로 멀다(거짓 양성 고정 발생원).
 const MISMATCH_EXCLUDE = `COALESCE(k.is_folder,false)=false AND k.name <> ('category-home-' || c.key)`;
 
-// 읽기 전용 SELECT(목록) — base 컬럼 + 오너 팀 조인 + 지식 수 + 정의-내용 불일치 + 명시 레포.
+// 읽기 전용 SELECT(목록) — base 컬럼 + 지식 수 + 정의-내용 불일치 + 명시 레포. (오너 팀 조인은 #4233 에서 걷었다.)
 //  쓰기 RETURNING/restoreSnapshot 은 CATEGORY_COLS(base)만 사용.
 //  knowledge_count(#req WIKI 사이드바 개수 뱃지) — 목록 화면(listKnowledge)과 동일 의미: active 지식 × rejected 아닌 매핑.
 //  mismatch_count(#1153) — 정의 벡터에서 코사인 거리가 임계를 넘는 소속 지식 수(아래 MISMATCH_DISTANCE).
@@ -86,7 +84,6 @@ const MISMATCH_EXCLUDE = `COALESCE(k.is_folder,false)=false AND k.name <> ('cate
 //   vis 는 knowledgeVisWhere 규약대로 별칭 k 기준 — 아래 서브쿼리들이 전부 knowledge 를 k 로 조인하는 이유다.
 const categorySel = (vis: string) =>
   `${CATEGORY_COLS.split(",").map((c) => "c." + c.trim()).join(", ")},
-   tco.team_id AS owner_team_id, tot.key AS owner_team_key, tot.name AS owner_team_name,
    (SELECT COUNT(*)::int FROM knowledge_category kc JOIN knowledge k ON k.name=kc.name AND k.lifecycle='active'
     WHERE kc.category_id=c.id AND kc.state<>'rejected' AND ${vis}) AS knowledge_count,
    (c.embedding_vector IS NOT NULL) AS mismatch_measurable,
@@ -102,9 +99,6 @@ const categorySel = (vis: string) =>
     WHERE kc.category_id=c.id AND kc.state='proposed' AND ${vis}) AS proposed_count,
    COALESCE((SELECT ARRAY_AGG(cr.repo ORDER BY cr.sort, cr.repo) FROM category_repo cr
     WHERE cr.category_id=c.id), ARRAY[]::TEXT[]) AS repos`;
-const CATEGORY_OWNER_JOIN =
-  `LEFT JOIN team_category tco ON tco.category_id=c.id AND tco.relation='owner'
-   LEFT JOIN team tot ON tot.id=tco.team_id`;
 
 export interface CategoryEdgeRow {
   id: number; from_category_id: number; to_category_id: number;
@@ -123,7 +117,7 @@ export async function listCategories(viewer?: Viewer): Promise<CategoryRow[]> {
   const params: unknown[] = [];
   const sel = categorySel(await knowledgeVisWhere(viewer, params));
   return q(itemsPool,
-    `SELECT ${sel} FROM category c ${CATEGORY_OWNER_JOIN}
+    `SELECT ${sel} FROM category c
      WHERE c.state<>'merged' ORDER BY c.cross_cutting DESC, c.name NULLS LAST, c.key`, params);
 }
 
@@ -368,13 +362,45 @@ export async function setCategoryView(
   return row;
 }
 
+/**
+ * 지우기는 비었을 때만(#4233 분류체계 앱). 화면은 «지식과 프로젝트 목록이 없을 때만» 이라고 약속하는데, 화면의 수는
+ *  보는 사람의 공개범위로 센 수다(못 보는 지식 · 구성원만 보는 목록은 0 으로 보인다). 그래서 이 검사는 **공개범위와 상관없이** 센다.
+ *   · 지식 = rejected 가 아닌 매핑 전부(생애 상태와 무관: 검토 대기 · 보관 지식도 지우면 이 분류를 잃는다).
+ *     rejected 매핑은 «이 분류가 아니다» 라는 판정이라 세지 않는다.
+ *   · 프로젝트 목록 = 이 분류를 단 목록 전부(그 목록의 프로젝트는 목록을 따라 분류를 잃는다, #541).
+ *  거절 문구에는 수를 적지 않는다. 못 보는 문서의 수가 드러나면 안 된다(categorySel 머리말의 #1291 규칙). 무엇이 남았는지만 말한다.
+ *  HttpError 로 던지는 이유는 assertDeprecatable 과 같다(평범한 Error 는 500 internal_error 로 뭉개진다).
+ *  검사와 지우기는 한 트랜잭션에서 분류 행을 잠근 채로 한다(deleteCategory). 따로 돌리면 그 사이에 붙은 매핑이 CASCADE 로 조용히 사라진다.
+ */
+async function assertDeletable(db: Db, id: number, name: string): Promise<void> {
+  const r: { k: number; l: number } | undefined = await one(db,
+    `SELECT (SELECT count(*)::int FROM knowledge_category WHERE category_id=$1 AND state<>'rejected') AS k,
+            (SELECT count(*)::int FROM project_list WHERE category_id=$1) AS l`, [id]);
+  const k = r?.k ?? 0, l = r?.l ?? 0;
+  if (!k && !l) return;
+  const left = [k ? '지식' : '', l ? '프로젝트 목록' : ''].filter(Boolean).join('과 ');
+  throw new HttpError(409, `'${name}' 분류에 ${left}이 남아 있어 지울 수 없습니다(검토 대기 · 보관 지식과 내가 볼 수 없는 것도 셉니다). `
+    + '지식은 다른 분류로 옮기고 프로젝트 목록은 분류를 바꾼 뒤 지우세요. 분류 후보에서만 빼려면 치우기를 쓰세요.');
+}
+
 export async function deleteCategory(id: number, ctx?: WriteCtx): Promise<{ deleted: boolean; id: number }> {
   const before = await getCategory(id);
-  if (!before) throw new Error(`카테고리 #${id} 없음`);
-  //  #4194 — 이 칸에 있던 지식은 CASCADE 로 카테고리를 잃는다. 지우기 전에 이름을 받아 두었다가 '봤다' 기록을 지운다
-  //   (카테고리 붙이기 레인이 그 지식을 다시 보게 — knowledge-common forgetClassifierSeen).
-  const orphaned = (await q(itemsPool, `SELECT name FROM knowledge_category WHERE category_id=$1`, [id])).map((r) => String(r.name));
-  await itemsPool.query(`DELETE FROM category WHERE id=$1`, [id]); // FK CASCADE: 매핑·엣지·정션 동반 삭제
+  if (!before) throw new HttpError(404, `카테고리 #${id} 없음`);
+  //  검사와 지우기를 한 트랜잭션에 묶고 분류 행을 먼저 잠근다(FOR UPDATE). 매핑 · 목록을 이 분류에 붙이는 쓰기는 FK 검사로
+  //   같은 행에 FOR KEY SHARE 를 잡으므로, 잠금은 진행 중인 쓰기가 끝나길 기다리고 그 뒤의 쓰기는 이 트랜잭션이 끝날 때까지 막는다.
+  //   잠근 뒤의 검사는 새 스냅샷이라 방금 커밋된 매핑도 센다. 검사와 지우기를 따로 돌리면(또는 NOT EXISTS 를 붙인 DELETE 한 문장도)
+  //   그 사이에 커밋된 매핑이 CASCADE 로 조용히 사라진다(격리 리뷰 #1106).
+  const orphaned = await withTx(async (db) => {
+    const locked = await one(db, `SELECT id FROM category WHERE id=$1 FOR UPDATE`, [id]);
+    if (!locked) throw new HttpError(404, `카테고리 #${id} 없음`);
+    await assertDeletable(db, id, String(before.name || before.key));
+    //  #4194. 지우면 매핑이 CASCADE 로 사라진다. #4233 부터는 위 검사 때문에 남는 매핑이 rejected 뿐이라 지식이 카테고리를 잃는
+    //   일은 없지만, 이름을 받아 두었다가 '봤다' 기록 정리를 부르는 자리는 그대로 둔다(forgetClassifierSeen 은 카테고리가 남은
+    //   지식의 기록은 안 지운다. classifier-lanes.pg-test ④-b).
+    const names = (await q(db, `SELECT name FROM knowledge_category WHERE category_id=$1`, [id])).map((r) => String(r.name));
+    await db.query(`DELETE FROM category WHERE id=$1`, [id]); // FK CASCADE: 매핑·엣지·정션 동반 삭제
+    return names;
+  });
   await forgetClassifierSeen(orphaned);
   await auditCategory(before.key, "delete", before, null, ctx);
   return { deleted: true, id };

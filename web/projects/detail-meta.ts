@@ -402,6 +402,11 @@ function pjvProjEdgePicker(anchor, p, dir, reload) {
 
 // ── 속성 띠(#3916 허브) — 2열 표 대신 **칩 한 줄**. 같은 컨트롤(상태·리스트·팀원·기간·우선순위·태그·선행/후속)을 그대로 쓰고,
 //  이모지 글리프(🗂👤🗓⚑🏷) 대신 선 아이콘. 빈 값은 점선 칩으로(첫 화면의 절반이 빈칸을 «보여주던» 것을 걷는다).
+//  #4135(원준 2026-09-25 "아이콘 위치 다 깨져 있어 · 칩 제대로 예쁘게") — 칩은 한 벌이 한 물건이다: 값이 있든 없든 높이 30 · 아이콘 15 · 글자 13.
+//   빈 칩은 아이콘 + 이름표만 보이고 안쪽 컨트롤은 칩 전체를 덮는 투명한 누름 자리다(37-projects-hub.css .pjh-fact.empty) — 컨트롤의 자기
+//   자리표시(사람+ 아이콘·깃발·«Start → Due»·«＋ 선행»)를 이름표 옆에 또 그리지 않는다. 우선순위는 칩의 선 깃발이 값의 색을 입는다(pr-*).
+//   ⚠ 띠에 pjv-tm-fields·pjv-proj-meta 를 얹지 않는다 — 그 둘은 옛 2열 표(pjvProjMetaPanel)의 규칙(min-height·padding-left·margin-top)이라
+//    칩 높이를 28~36 으로 제각각 튀게 했다. 칩 안 컨트롤의 크롬은 .pjh-fact 아래에서 따로 걷는다.
 const FACT_GLYPH: Record<string, string> = {
   list: '<path d="M3 6.7C3 5.8 3.72 5.1 4.6 5.1h3.55c.46 0 .9.22 1.18.58l.86 1.1h8.2c.88 0 1.6.72 1.6 1.6v8.42c0 .88-.72 1.6-1.6 1.6H4.6C3.72 18.9 3 18.2 3 17.3V6.7z"/>',
   user: '<circle cx="12" cy="8" r="3.6"/><path d="M5 20a7 7 0 0 1 14 0"/>',
@@ -423,17 +428,18 @@ function pjvProjFactsStrip(p, members, reload) {
   const tagsCtl = pjvProjTagsField(p, reload);
   const tagsEmpty = tagsCtl.querySelector('.pjv-tm-valbtn.empty');
   if (tagsEmpty) tagsEmpty.textContent = '＋';
-  const chip = (glyph: string | null, label: string | null, control, empty = false) =>
-    el('div', { class: 'pjh-fact' + (empty ? ' empty' : '') }, glyph ? factGlyph(glyph) : null, label ? el('span', { class: 'pjh-fact-k', text: label }) : null, control);
-  return el('div', { class: 'pjh-facts pjv-tm-fields pjv-proj-meta', style: 'display:flex;grid-template-columns:none;padding:0;border:0' },
+  const chip = (glyph: string | null, label: string | null, control, empty = false, extra = '') =>
+    el('div', { class: 'pjh-fact' + (empty ? ' empty' : '') + (extra ? ' ' + extra : '') }, glyph ? factGlyph(glyph) : null, label ? el('span', { class: 'pjh-fact-k', text: label }) : null, control);
+  const has = (a: unknown[] | undefined) => !!(a && a.length);
+  return el('div', { class: 'pjh-facts' },
     chip(null, null, pjvProjStatusPill(p, reload)),
-    chip('list', null, pjvProjListField(p, reload), p.list_id == null),
-    chip('user', (members || []).length ? null : '팀원', pjvProjTeamControl(members, (ids) => pjvSaveProjMembers(p.id, ids)), !(members || []).length),
-    chip('cal', null, pjvProjDatesField(p, reload), !p.start_date && !p.due_date),
-    chip('flag', p.priority ? null : '우선순위', pjvPriorityControl(p, (patch) => projPatch(p.id, patch, reload)), !p.priority),
-    chip('tag', (p.tags || []).length ? null : '태그', tagsCtl, !(p.tags || []).length),
-    chip('left', (edges.outgoing || []).length ? '선행' : null, pjvProjEdgesField(p, reload, 'out'), !(edges.outgoing || []).length),
-    chip('right', (edges.incoming || []).length ? '후속' : null, pjvProjEdgesField(p, reload, 'in'), !(edges.incoming || []).length),
+    chip('list', p.list_id == null ? '리스트' : null, pjvProjListField(p, reload), p.list_id == null),
+    chip('user', has(members) ? null : '팀원', pjvProjTeamControl(members, (ids) => pjvSaveProjMembers(p.id, ids)), !has(members)),
+    chip('cal', p.start_date || p.due_date ? null : '기간', pjvProjDatesField(p, reload), !p.start_date && !p.due_date),
+    chip('flag', p.priority ? null : '우선순위', pjvPriorityControl(p, (patch) => projPatch(p.id, patch, reload)), !p.priority, p.priority ? 'pr-' + p.priority : ''),
+    chip('tag', has(p.tags) ? null : '태그', tagsCtl, !has(p.tags)),
+    chip('left', '선행', pjvProjEdgesField(p, reload, 'out'), !has(edges.outgoing)),
+    chip('right', '후속', pjvProjEdgesField(p, reload, 'in'), !has(edges.incoming)),
     ...((p.fields || []).filter((f) => f && (p.field_values || {})[String(f.id)] !== undefined)
       .map((f) => chip(null, f.name, pjvFieldControl(p, f, () => pjvReloadKeepScroll(reload))))),
     ...(p.external_url ? [chip(null, null, el('a', { class: 'pjv-proj-extlink', target: '_blank', rel: 'noopener noreferrer',

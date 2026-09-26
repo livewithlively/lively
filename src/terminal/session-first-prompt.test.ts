@@ -3,7 +3,15 @@
 //  대화상자·로그인 화면) · 신뢰 대화상자는 세션 전용 폴더에서만 대신 누른다 · 비-Claude 는 하네스가 포그라운드가 된 뒤 정착 6s ·
 //  상한 초과면 포기 · 하단 14줄만 본다.
 import assert from "node:assert/strict";
-import { firstPromptStep, tailOf, FIRST_PROMPT_BOOT_MS, FIRST_PROMPT_HOLD_MS } from "./session-first-prompt.js";
+import {
+  firstPromptStep,
+  injectFirstPromptWithRuntime,
+  tailOf,
+  FIRST_PROMPT_BOOT_MS,
+  FIRST_PROMPT_HOLD_MS,
+  FIRST_PROMPT_PEEK_GRACE_MS,
+  type FirstPromptRuntime,
+} from "./session-first-prompt.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -15,6 +23,12 @@ const CLAUDE_READY = [
   "  ⏵⏵ auto mode on (shift+tab to cycle) · ? for shortcuts",
 ].join("\n");
 const CLAUDE_BOOT = "\n\n   Loading…\n";
+const CODEX_READY = [
+  "╭────────────────────────────────────────────────╮",
+  "│ >_ OpenAI Codex                                │",
+  "╰────────────────────────────────────────────────╯",
+  "› Ask Codex to do anything",
+].join("\n");
 const TRUST = [
   " Do you trust the files in this folder?",
   " /home/box_yoon/box/sessions/box-yoon-1",
@@ -140,4 +154,79 @@ t("[H7] 창의 크기 — 부팅 창 90초 · 사람을 기다리는 창은 아�
   assert.equal(FIRST_PROMPT_HOLD_MS, 2 * 60 * 60_000);
 });
 
-console.log(`session-first-prompt: ${pass} passed`);
+// ── 시작 직후 pane 조회 실패(#4135) ────────────────────────────────────────────────────────────────
+//  실제 장애는 세션 생성 직후 첫 capture-pane/display-message 실패를 «세션이 사라짐»으로 단정해 첫 지시가 버려진 것이다.
+//  가짜 시계·화면으로 재시도 경계와 정확히 한 번 전송을 실행부 수준에서 잠근다.
+type PeekResult = { pane: string; paneCmd: string } | "missing";
+async function runInjection(results: PeekResult[], over?: { pollMs?: number; peekGraceMs?: number }) {
+  let now = 0;
+  let reads = 0;
+  const sent: Array<{ id: string; text: string }> = [];
+  const runtime: FirstPromptRuntime = {
+    peek: async () => {
+      const result = results[Math.min(reads++, results.length - 1)];
+      if (result === "missing") throw new Error("pane not ready");
+      return result;
+    },
+    sleep: async (ms) => { now += ms; },
+    now: () => now,
+    send: async (id, text) => { sent.push({ id, text }); },
+    trustKeys: { down: async () => {}, enter: async () => {} },
+  };
+  const ok = await injectFirstPromptWithRuntime(
+    "box-test",
+    "codex",
+    "원래 첫 지시",
+    { maxMs: 100_000, pollMs: over?.pollMs ?? 5, peekGraceMs: over?.peekGraceMs ?? 15 },
+    runtime,
+  );
+  return { ok, reads, sent, now };
+}
+
+let asyncPass = 0;
+const ta = async (name: string, fn: () => Promise<void>): Promise<void> => { await fn(); asyncPass++; console.log(`ok  ${name}`); };
+
+await ta("[P1] 첫 화면 조회만 실패하고 입력창이 뜨면 첫 지시를 정확히 한 번 보낸다", async () => {
+  const got = await runInjection(["missing", { pane: CODEX_READY, paneCmd: "codex" }]);
+  assert.equal(got.ok, true);
+  assert.deepEqual(got.sent, [{ id: "box-test", text: "원래 첫 지시" }]);
+});
+await ta("[P2] 유예 시간 안에서 여러 번 조회가 실패해도 계속 들고 있다", async () => {
+  const got = await runInjection(["missing", "missing", "missing", { pane: CODEX_READY, paneCmd: "codex" }]);
+  assert.equal(got.ok, true);
+  assert.equal(got.reads, 4);
+  assert.equal(got.sent.length, 1);
+});
+await ta("[P3] 정확히 유예 경계인 실패에서도 한 번 더 읽어 전송한다", async () => {
+  const got = await runInjection([
+    "missing", "missing", "missing", "missing",
+    { pane: CODEX_READY, paneCmd: "codex" },
+  ]);
+  assert.equal(got.now, 20);
+  assert.equal(got.ok, true);
+  assert.equal(got.sent.length, 1);
+});
+await ta("[P4] 유예 시간을 넘도록 연속 실패하면 전송하지 않고 실패를 돌려준다", async () => {
+  const got = await runInjection(["missing"]);
+  assert.equal(got.ok, false);
+  assert.equal(got.now, 20);
+  assert.equal(got.sent.length, 0);
+});
+await ta("[P5] 화면이 즉시 준비됐으면 종전처럼 한 번만 전송한다", async () => {
+  const got = await runInjection([{ pane: CODEX_READY, paneCmd: "codex" }]);
+  assert.equal(got.ok, true);
+  assert.equal(got.reads, 1);
+  assert.equal(got.sent.length, 1);
+});
+await ta("[P6] 화면은 읽히지만 아직 준비되지 않았으면 기존 판정대로 기다린다", async () => {
+  const got = await runInjection([
+    { pane: CLAUDE_BOOT, paneCmd: "codex" },
+    { pane: CODEX_READY, paneCmd: "codex" },
+  ]);
+  assert.equal(got.ok, true);
+  assert.equal(got.reads, 2);
+  assert.equal(got.sent.length, 1);
+});
+t("[P7] 운영 기본 조회 유예는 15초다", () => assert.equal(FIRST_PROMPT_PEEK_GRACE_MS, 15_000));
+
+console.log(`session-first-prompt: ${pass + asyncPass} passed`);

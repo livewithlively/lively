@@ -119,7 +119,7 @@ export function openProjSettings(opts: ProjSettingsOpts): void {
         // 창은 이미 닫혔다(닫기는 저장을 기다리지 않는다) — 안내할 칸이 없다. **지금 글칸의 글**(live — 보낸 글이 아니다)을
         //  글칸 밖에 남기고 토스트로 알린다: 곁칸 태스크의 [본문]을 열면 그 글을 꺼낼 수 있다.
         descStashed = keepUnsaved(id, 'body', live);
-        toast(descStashed ? '본문을 저장하지 못했어요 — 곁칸 태스크의 [본문]을 열면 쓰던 글을 꺼낼 수 있어요.' : '본문을 저장하지 못했어요 — ' + ((e as any)?.message || e), true);
+        toast(descStashed ? '본문을 저장하지 못했어요. 우측 사이드바 태스크의 [본문]을 열면 쓰던 글을 꺼낼 수 있어요.' : '본문을 저장하지 못했어요: ' + ((e as any)?.message || e), true);
         return (e as any)?.status === 409 ? 'pause' : 'handled';
       }
       if ((e as any)?.status !== 409) return;                // 일반 실패 — 상태 'failed' 가 칩·토스트로 알린다

@@ -326,7 +326,7 @@ function injectionMap(detail, data) {
       canEdit ? el('div', { class: 'admin-actions inj-add' }, el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 새 섹션 추가', onclick: () => openSectionEditor('', { isNew: true }) })) : el('span', {}),
       el('div', { class: 'inj-subpieces' },
         el('div', { class: 'admin-hint inj-sub' }, ...uiText('└ 각 섹션 본문의 ${ } 자리에 매 세션 실제 데이터로 자동 채워짐(편집 불가):')),
-        subPieceRow('${team}', '우리 팀', '보는 구성원의 팀·소유 카테고리 프리앰블 — 자동', null),
+        subPieceRow('${team}', '우리 팀', '보는 구성원이 속한 팀 이름 — 자동', null),
         subPieceRow('${categories}', '카테고리 지도', '전 카테고리(주제) 목록 — 자동', null),
         subPieceRow('${wiki}', 'WIKI 인덱스 핀', '핀(is_wiki)한 지식의 제목·소환키만(본문 제외) — 자동', jump('WIKI 인덱스 →', '#/knowledge?indexed=1'))));
   }

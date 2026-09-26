@@ -12,19 +12,56 @@
 
 /* ── 머리: 뒤로 줄은 기존(.proj-detail-back) · 제목(h1) 아래 «속성 띠» — 2열 표 대신 칩 한 줄 ── */
 .pjh-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 18px; }
-.pjh-fact { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 6px 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; }
-.pjh-fact > svg.pjh-ic { color: var(--muted-2); }
-.pjh-fact-k { font-size: 12px; font-weight: 600; color: var(--muted-2); }
-/* 칩 안에 기존 컨트롤(상태 알약·리스트·팀원·기간·우선순위·태그·선행/후속)이 그대로 앉는다 — 그 컨트롤의 자체 테두리는 걷는다. */
-.pjh-fact .pjv-tm-statuspill { border: 0; padding: 0 2px; letter-spacing: .2px; }
-.pjh-fact .pjv-tm-valbtn, .pjh-fact .pjv-tm-datebtn { padding: 2px 4px; font-size: 13px; }
-.pjh-fact .pjv-tm-dates { gap: 2px; }
-.pjh-fact .pjv-tm-tags { gap: 4px; }
-.pjh-fact .pjv-proj-edges { display: inline-flex; align-items: center; gap: 4px; }
-.pjh-fact .pjv-edge-add { border: 0; padding: 0 4px; }
+/* 칩 한 벌은 한 물건이다(#4135) — 값이 있든 없든 높이 30 · 아이콘 15 · 글자 13/600. 안에 앉는 컨트롤(상태 알약·리스트·팀원·기간·우선순위·태그·
+   선행/후속)은 표·모달용 크롬(테두리·패딩·글자 크기·너비 100%·최소 높이)을 달고 와서 칩 높이를 28~36 으로 튀게 했다 → 여기서 전부 걷는다. */
+.pjh-fact { position: relative; display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 9px 0 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 13px; font-weight: 600; line-height: 1; color: var(--ink); white-space: nowrap; }
+.pjh-fact:hover { border-color: var(--line-net); }
+.pjh-fact > svg.pjh-ic { width: 15px; height: 15px; color: var(--muted-2); }
+.pjh-fact-k { font-size: 12.5px; font-weight: 600; color: var(--muted-2); }
+/* 전역 `.empty svg { display:block; margin:0 auto 14px }`(03-components) 가 빈 칩의 선 아이콘·컨트롤 아이콘에 새어 아이콘이 위로 붙던 것 — 칩 안 svg 는 제자리. */
+.pjh-fact svg, .pjh-fact.empty svg, .pjh-fact .pjv-cell-ico { display: inline-block; margin: 0; }
+/* 안쪽 컨트롤 — 크롬을 걷고 칩 글자에 맞춘다 */
+.pjh-fact .pjv-cell-btn { width: auto; height: auto; min-height: 0; justify-content: flex-start; gap: 6px; padding: 0 2px; border-radius: 6px; font-size: 13px; font-weight: 600; color: var(--ink); box-shadow: none; }
+.pjh-fact .pjv-cell-btn:hover { background: var(--bg-tint-2); box-shadow: none; }
+.pjh-fact .pjv-tm-statuspill { min-height: 0; border: 0; background: transparent; padding: 0 2px; font-size: 13px; font-weight: 700; letter-spacing: 0; }
+.pjh-fact .pjv-tm-statuspill:hover { background: var(--bg-tint-2); }
+.pjh-fact .pjv-tm-dates { gap: 3px; }
+.pjh-fact .pjv-tm-datebtn { min-height: 0; padding: 0 2px; font-size: 13px; font-weight: 600; }
+.pjh-fact .pjv-tm-datearrow { font-size: 11px; }
+.pjh-fact .pjv-asg-faces { gap: 0; }
+.pjh-fact .pjv-ava { width: 20px; height: 20px; font-size: 9.5px; box-shadow: 0 0 0 2px var(--bg); }
+.pjh-fact .pjv-asg-faces .pjv-ava + .pjv-ava { margin-left: -6px; }
+.pjh-fact .pjv-asg-mname { font-weight: 600; }
+.pjh-fact .pjv-list-dot.sm { width: 8px; height: 8px; }
+/* 우선순위 — 값의 이모지 깃발(⚑)은 숨기고 칩의 선 깃발이 그 색을 입는다(깃발이 둘 서던 것). 색은 표의 .pjv-flag 와 같은 토큰. */
+.pjh-fact .pjv-flag-glyph { display: none; }
+.pjh-fact .pjv-flag-label { font-size: 13px; font-weight: 600; }
+.pjh-fact.pr-urgent > svg.pjh-ic { color: var(--coral-text); }
+.pjh-fact.pr-high > svg.pjh-ic { color: var(--warn-deep); }
+.pjh-fact.pr-normal > svg.pjh-ic { color: var(--blue); }
+.pjh-fact.pr-low > svg.pjh-ic { color: var(--muted-2); }
+.pjh-fact .pjv-tm-tags { gap: 4px; min-height: 0; }
+.pjh-fact .pjv-tm-tag { font-size: 12px; padding: 1px 3px 1px 7px; border-radius: 5px; }
+.pjh-fact .pjv-tm-valbtn { min-height: 0; padding: 0 4px; font-size: 13px; font-weight: 600; color: var(--muted-2); }
+.pjh-fact .pjv-proj-edges { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 3px; min-height: 0; padding: 0; }
+.pjh-fact .pjv-edge-chip { background: transparent; border: 0; padding: 0; gap: 1px; }
+.pjh-fact .pjv-edge-chip-link { max-width: 220px; font-size: 13px; font-weight: 600; color: var(--ink); }
+.pjh-fact .pjv-edge-chip-x { padding: 2px 3px; font-size: 10px; color: var(--muted-3); }
+.pjh-fact .pjv-edge-chip-x:hover { color: var(--ink); background: var(--bg-sel); }
+.pjh-fact .pjv-edge-add { min-height: 0; border: 0; background: transparent; padding: 0 3px; font-size: 13px; font-weight: 600; color: var(--muted-2); }
+.pjh-fact .pjv-edge-add:hover { color: var(--blue); background: var(--bg-tint-2); }
 .pjh-fact .pjv-tm-field-val { min-width: 0; }
-.pjh-fact.empty { border-style: dashed; }
-.pjh-fact.empty .pjh-fact-k { color: var(--muted-3); }
+/* 빈 칩 — 점선 테두리에 아이콘 + 이름표만. 안쪽 컨트롤(리스트·팀원·우선순위 단추 · 기간 단추 · 태그/선행/후속의 ＋)은 자기 자리표시를 그리지 않고
+   칩 전체를 덮는 투명한 누름 자리가 된다 — 이름표가 이미 그 말을 하고, 아이콘이 둘 나란히 서던 것(팀원 옆 사람+, 우선순위 옆 깃발)을 걷는다.
+   기간은 시작일 단추 하나만 남긴다(고르면 칩이 값으로 다시 그려져 마감이 눌린다). */
+.pjh-fact.empty { border-style: dashed; cursor: pointer; }
+.pjh-fact.empty:hover { border-style: solid; border-color: var(--line-net-2); background: var(--bg-tint); }
+.pjh-fact.empty .pjh-fact-k { color: var(--muted-2); }
+.pjh-fact.empty .pjv-cell-btn.empty, .pjh-fact.empty .pjv-tm-dates, .pjh-fact.empty .pjv-tm-tags, .pjh-fact.empty .pjv-proj-edges {
+  position: absolute; inset: 0; width: auto; height: auto; margin: 0; padding: 0; border-radius: inherit; opacity: 0; }
+.pjh-fact.empty .pjv-tm-dates > .pjv-tm-datearrow, .pjh-fact.empty .pjv-tm-dates > .pjv-tm-datebtn:last-child { display: none; }
+.pjh-fact.empty .pjv-tm-datebtn, .pjh-fact.empty .pjv-tm-valbtn, .pjh-fact.empty .pjv-edge-add { flex: 1; width: 100%; height: 100%; }
+.pjh-fact.empty:has(:focus-visible) { outline: 2px solid var(--blue); outline-offset: 1px; }
 
 
 /* ══ 위젯(#4135 3차, 2026-09-26) — 한 벌의 규칙. 기준은 프로젝트 탭 «열기» 본문 섹션의 결(13-projects.css · 14-files-upload.css):

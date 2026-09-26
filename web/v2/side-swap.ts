@@ -13,7 +13,7 @@
 //
 //  ── 자연스럽게 만드는 세 가지 ──
 //   ① **놓는 순간에만** 판정한다 — 끌던 중에 좌우가 바뀌면 손잡이가 손 밑에서 뒤집혀(끄는 방향과 반대로
-//      자란다) 어지럽다. 끄는 동안엔 "놓으면 곁칸이 왼쪽으로 갑니다"만 띄운다.
+//      자란다) 어지럽다. 끄는 동안엔 "놓으면 이 칸이 왼쪽으로 갑니다"만 띄운다.
 //   ② 되돌아오는 문턱을 넘어가는 문턱보다 낮게 둔다(52% / 46%) — 같은 값이면 경계에서 손이 떨릴 때마다
 //      화면이 깜빡인다.
 //   ③ 자리는 **미끄러져** 바뀐다(FLIP) — 격자를 바꾸면 브라우저는 즉시 점프시키는데, 점프는 무슨 일이
@@ -25,6 +25,7 @@
 import { anchoredPopover, el, toast } from '../core.js';
 import { MOBILE_MQ } from './mobile.js';   // 좁은 폭 문턱(900) — 셸과 같은 값 하나만 둔다
 import { overlay } from '../ui-primitives.js';
+import { swapCopy } from '../lib/side-label.js';   // 칸 이름은 지금 선 쪽을 따른다(왼쪽에 선 칸을 «우측» 이라 부르지 않게)
 
 const KEY_OFF = 'lively_v2_side_swap_off';       // '1' = 자리 고정(자동 자리바꿈 끔)
 const KEY_INTRO = 'lively_v2_side_swap_intro';   // '1' = 첫 안내를 다시 보지 않음
@@ -158,7 +159,7 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
     const r = ratio(px);
     const will = r >= TH.on ? true : r <= TH.off ? false : swapped;
     if (will === swapped) { hideHint(); return; }
-    hint.textContent = (will ? '놓으면 곁칸이 왼쪽으로 갑니다' : '놓으면 곁칸이 다시 오른쪽으로 갑니다')
+    hint.textContent = (will ? '놓으면 이 칸이 왼쪽으로 갑니다' : '놓으면 이 칸이 다시 오른쪽으로 갑니다')
       + '  ·  ' + Math.round(r * 100) + '%';
     hint.hidden = false;
   }
@@ -171,9 +172,8 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
     else onEnd(curSideW());
     paint();
     if (opts?.quiet) return;
-    toast(on
-      ? '곁칸이 절반을 넘으면 자리를 바꿉니다.'
-      : '곁칸 자리를 고정했어요 — 곁칸은 늘 오른쪽에 있습니다.');
+    //  글은 바뀐 **뒤**의 자리로 고른다. 켜는 순간 폭이 이미 절반을 넘었으면 onEnd 가 칸을 왼쪽으로 옮긴 뒤다.
+    toast(swapCopy(on, swapped).toast);
   }
 
   // ── 처음 자리가 바뀌는 순간의 안내 ──────────────────────────────────────────
@@ -187,10 +187,10 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
       el('div', { class: 'sw-intro' },
         el('div', { class: 'sw-intro-fig' }, figure()),
         el('p', { class: 'sw-intro-p' },
-          el('b', { text: '곁칸을 화면 절반보다 크게 키우셨어요.' }),
+          el('b', { text: '사이드바를 화면 절반보다 크게 키우셨어요.' }),
           el('span', { text: ' 그건 보통 “이제 이걸 메인으로 본다”는 뜻입니다 — 장표나 자료를 펴 놓고, 그걸 보면서 옆에서 바로 고치는 식으로요.' })),
         el('p', { class: 'sw-intro-p' },
-          el('span', { text: '작업마다 메인으로 쓰는 화면이 다릅니다. 그래서 크게 키운 칸을 가운데로 옮기고 세션을 오른쪽으로 보냈어요. 곁칸을 절반 아래로 줄이면 원래 자리로 돌아갑니다.' })),
+          el('span', { text: '작업마다 메인으로 쓰는 화면이 다릅니다. 그래서 크게 키운 칸을 가운데로 옮기고 세션을 오른쪽으로 보냈어요. 왼쪽으로 옮긴 칸을 절반 아래로 줄이면 원래 자리(오른쪽)로 돌아갑니다.' })),
         el('p', { class: 'sw-intro-p muted' },
           el('span', { text: '자리가 바뀌는 게 불편하시면 고정해 두실 수 있어요. 화면 위쪽 프로젝트 이름 옆의 ' }),
           el('b', { text: '⇄' }),
@@ -215,9 +215,9 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
   function figure(): HTMLElement {
     const pane = (cls: string, label: string) => el('div', { class: 'sw-fig-pane ' + cls }, el('span', { text: label }));
     return el('div', { class: 'sw-fig' },
-      el('div', { class: 'sw-fig-box' }, pane('sess', '세션'), pane('side big', '곁칸')),
+      el('div', { class: 'sw-fig-box' }, pane('sess', '세션'), pane('side big', '사이드바')),
       el('div', { class: 'sw-fig-arrow', 'aria-hidden': 'true' }, el('span', { text: '→' })),
-      el('div', { class: 'sw-fig-box' }, pane('side big', '곁칸'), pane('sess', '세션'))) as HTMLElement;
+      el('div', { class: 'sw-fig-box' }, pane('side big', '사이드바'), pane('sess', '세션'))) as HTMLElement;
   }
 
   // ── 문패 버튼 — 켜짐/꺼짐을 보여 주고 그 자리에서 바꾼다 ────────────────────
@@ -226,21 +226,22 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
 
   function paintBtn(): void {
     const on = swapEnabled();
+    //  paint() 가 자리를 바꿀 때마다(양쪽 모두) 이 붓을 부른다. 글은 켜짐과 **지금 선 쪽** 둘 다로 고른다.
+    const c = swapCopy(on, swapped);
     btn.classList.toggle('on', on);
-    btn.title = on
-      ? '곁칸을 절반보다 크게 키우면 곁칸이 왼쪽으로, 세션이 오른쪽으로 자리를 바꿉니다 — 눌러서 고정할 수 있어요.'
-      : '곁칸 자리를 고정해 두었습니다 — 눌러서 다시 켤 수 있어요.';
-    btn.setAttribute('aria-label', on ? '곁칸 자리바꿈 켜짐' : '곁칸 자리 고정됨');
+    btn.title = c.btnTitle;
+    btn.setAttribute('aria-label', c.btnAria);
   }
 
   function openPop(): void {
     const on = swapEnabled();
+    const c = swapCopy(on, swapped);
     const panel = el('div', { class: 'sw-pop' },
-      el('div', { class: 'sw-pop-h' }, el('b', { text: '곁칸이 절반을 넘으면' })),
-      el('p', { class: 'sw-pop-sub', text: '메인으로 보는 칸이 가운데로 오도록 곁칸과 세션이 자리를 바꿉니다.' }),
+      el('div', { class: 'sw-pop-h' }, el('b', { text: c.popHead })),
+      el('p', { class: 'sw-pop-sub', text: c.popSub }),
       el('div', { class: 'sw-pop-opts' },
         opt('자리를 바꾼다', '지금 크게 본 것이 가운데에 옵니다. (기본)', on, () => { setEnabled(true); close(); }),
-        opt('자리를 고정한다', '종전처럼 곁칸이 늘 오른쪽에 있습니다.', !on, () => { setEnabled(false); close(); })),
+        opt('자리를 고정한다', c.popFixedDesc, !on, () => { setEnabled(false); close(); })),
       el('button', {
         class: 'btn-text sw-pop-help', type: 'button',
         onclick: () => { write(KEY_INTRO, false); close(); showIntroOnce(); },

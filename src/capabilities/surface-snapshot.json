@@ -813,7 +813,17 @@
   "rest": [
    "GET /api/ui/org/auto-runs"
   ],
-  "input_hash": "b03aabec551abfe8"
+  "input_hash": "546f08f0a845351c"
+ },
+ {
+  "name": "org_auto_runs_daily",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/auto-runs/daily"
+  ],
+  "input_hash": "f1866c60b293ebc7"
  },
  {
   "name": "org_auto_run_detail",
@@ -2377,26 +2387,6 @@
   "input_hash": "ef68179e23272c44"
  },
  {
-  "name": "team_set_category",
-  "scope": "context",
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/teams/:id/categories"
-  ],
-  "input_hash": "a710cb1279b1d0cc"
- },
- {
-  "name": "category_set_owner",
-  "scope": "context",
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/categories/:id/owner"
-  ],
-  "input_hash": "92f43a6e7b930f71"
- },
- {
   "name": "knowledge_list",
   "scope": "memory",
   "mcp": true,
@@ -2714,7 +2704,7 @@
   "rest": [
    "GET /api/ui/sources"
   ],
-  "input_hash": "e59688fdc0bc2f6e"
+  "input_hash": "ec3a078cc89fd5e2"
  },
  {
   "name": "source_undistilled",

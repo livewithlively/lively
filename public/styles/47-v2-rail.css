@@ -435,14 +435,6 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 
 /* ── [프로젝트] 구역 — 폴더 · 리스트 트리 (#2043, web/v2/side.ts renderProjects) ──────────────────── */
 .v2-ptree { display: flex; flex-direction: column; gap: 1px; }
-.v2-ptf { display: flex; align-items: center; gap: 2px; min-height: 30px; }
-.v2-ptf-a { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 5px 10px 5px 4px; border-radius: 8px; font-size: 13px; font-weight: 700; color: var(--ink-sub); text-decoration: none; }
-.v2-ptf-a:hover { background: var(--bg); color: var(--ink); }
-.v2-ptf.on .v2-ptf-a { background: var(--bg); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-net); }
-.v2-ptf-a .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.v2-ptf-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linejoin: round; }
-.v2-ptf-a:hover .v2-ptf-ic, .v2-ptf.on .v2-ptf-ic { stroke: var(--blue); }
-.v2-ptf .v2-car.open { transform: rotate(90deg); }
 .v2-ptl.on { background: var(--bg); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-net); }
 .v2-ptl-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .v2-ptl:hover .v2-ptl-ic, .v2-ptl.on .v2-ptl-ic { stroke: var(--blue); }
@@ -525,7 +517,6 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-sa-gh .hc { font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .v2-sa-gh.flat { margin-top: 4px; }
 .v2-sa-gh.flat > .hc:first-child { padding-left: 34px; }
-.v2-sa-tb .k { color: var(--muted); font-weight: 600; margin-right: -2px; }
 .v2-sa-row { height: 46px; border-bottom: 1px solid var(--line-row); cursor: pointer; }
 .v2-sa-row:hover { background: var(--bg-sel); }
 .v2-sa-row.on { background: var(--bg-punch); }
@@ -600,6 +591,71 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
   .v2-sa-peek { width: 100%; }
 }
 
+/* ── #4233 [위키] 본문 목록 — AI 세션 목록(.v2-sa)과 같은 부품, 열만 다르다(web/v2/wiki-main.ts) ─────────────────
+   원준 2026-09-26 «A를 뼈대로 · C의 새로 들어온 지식 카드 줄» · «2안 사이드 피크 + 우측 사이드바에 고정».
+   열: 제목 · 분류 · 유형 · 작성 · 시각 · ⋯ (46px 행). 덧창 본문은 기존 마크다운 렌더러(.md-rendered). */
+.v2-wk .v2-sa-gh, .v2-wk .v2-sa-row { grid-template-columns: minmax(0, 1fr) 190px 84px 48px 84px 32px; }
+.v2-wk a.crumb { text-decoration: none; }
+.v2-wk a.crumb:hover { color: var(--ink); }
+.v2-wk a.v2-sa-new, .v2-wk a.v2-sa-chip { text-decoration: none; }
+.v2-wk .v2-sa-tb.on { background: var(--bg-tint-2); color: var(--blue); }
+.v2-wk .v2-sa-tb.on .v2-sa-ic { color: var(--blue); }
+.v2-wk-row .c-name .v2-sa-ic { color: var(--muted-2); }
+.v2-wk-row .c-cat { display: flex; align-items: center; gap: 7px; min-width: 0; padding-right: 12px; font-size: 13px; color: var(--ink-sub); }
+.v2-wk-row .c-cat i, .v2-wk-card .k .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: color-mix(in srgb, var(--blue) 55%, var(--bg)); }
+.v2-wk-row .c-cat span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v2-wk-row .c-cat.none { color: var(--muted); }
+.v2-wk-row .c-cat.none i { background: var(--muted-3); }
+.v2-wk-row .c-type { font-size: 12.5px; color: var(--ink-sub); white-space: nowrap; }
+.v2-wk-row .c-type.none { color: var(--muted); }
+.v2-wk-row .c-who .m { font-size: 12px; color: var(--muted); }
+.v2-wk-card { min-height: 104px; }
+.v2-wk-card .k { font-size: 12px; font-weight: 700; color: var(--ink-sub); min-width: 0; }
+.v2-wk-card .k .cn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 덧창 — 머리 · 본문 · 발치 */
+.v2-wk-peek .ibt { text-decoration: none; }
+.v2-wk-peek a.ib { text-decoration: none; }
+.v2-wk-peek .ib:disabled { opacity: .35; cursor: default; background: none; }
+.v2-wk-rd { flex: 1; min-height: 0; overflow: auto; padding: 20px 28px 28px; }
+.v2-wk-rd h1 { margin: 0 0 10px; font-size: 22px; font-weight: 800; line-height: 1.35; color: var(--ink); overflow-wrap: anywhere; }
+.v2-wk-rd .dm { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.v2-wk-rd .dm .pill { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 999px; background: var(--bg-tint-2); font-size: 11.5px; font-weight: 700; color: var(--ink-sub); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v2-wk-sum { margin: 0 0 14px; padding: 10px 12px; border-radius: 10px; background: var(--gray-bg-2); font-size: 13px; line-height: 1.6; color: var(--ink-sub); }
+.v2-wk-md { font-size: 14px; line-height: 1.75; color: var(--ink); overflow-wrap: anywhere; }
+.v2-wk-md > :first-child { margin-top: 0; }
+.v2-wk-md table { display: block; overflow-x: auto; font-size: 12.5px; }
+.v2-wk-md pre { overflow-x: auto; }
+.v2-wk-md img { max-width: 100%; }
+.v2-wk-foot { flex: none; display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 20px; border-top: 1px solid var(--line-row); font-size: 12px; color: var(--muted); }
+.v2-wk-foot .sl { margin: 0 4px; color: var(--muted-3); }
+.v2-wk-kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 5px; border: 1px solid var(--line-net); background: var(--bg); font-size: 11px; font-weight: 700; color: var(--muted); }
+/* 폭은 창이 아니라 **본문 칸**을 잰다(@container) — 우측 사이드바에 문서를 고정하면 창은 그대로인데 본문만 좁아진다. */
+.v2-wk { container-type: inline-size; container-name: wkmain; }
+@container wkmain (max-width: 1080px) {
+  .v2-wk .v2-sa-gh, .v2-wk .v2-sa-row { grid-template-columns: minmax(0, 1fr) 150px 76px 44px 76px 32px; }
+}
+@container wkmain (max-width: 900px) {
+  .v2-wk .v2-sa-gh, .v2-wk .v2-sa-row { grid-template-columns: minmax(0, 1fr) 140px 76px 32px; }
+  .v2-wk .v2-sa-gh .h-type, .v2-wk .v2-sa-gh .h-who, .v2-wk-row .c-type, .v2-wk-row .c-who { display: none; }
+}
+@container wkmain (max-width: 620px) {
+  .v2-wk .v2-sa-top, .v2-wk .v2-sa-tools { padding: 0 12px; }
+  .v2-wk .v2-sa-top .desc { display: none; }
+  .v2-wk .v2-sa-tools { overflow-x: auto; }
+  .v2-wk .v2-sa-q { width: 150px; }
+  .v2-wk .v2-sa-new span { display: none; }
+  .v2-wk .v2-sa-new { padding: 0 10px; }
+  .v2-wk .v2-sa-now { padding: 12px 12px 2px; }
+  .v2-wk .v2-sa-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .v2-wk .v2-sa-cards > :nth-child(n + 3) { display: none; }
+  .v2-wk .v2-sa-list { padding: 0 8px; }
+  .v2-wk .v2-sa-gh, .v2-wk .v2-sa-row { grid-template-columns: minmax(0, 1fr) 64px 32px; column-gap: 8px; }
+  .v2-wk .v2-sa-gh .hc, .v2-wk-row .c-cat { display: none; }
+  .v2-wk-rd { padding: 16px 16px 24px; }
+  .v2-wk-peek .ibt span { display: none; }
+  .v2-wk-foot { display: none; }
+}
+
 /* ── [위키] 구역 — 구조만, 한 화면에 (#4233, web/v2/side.ts renderWiki) ───────────────────────────
    새 모양을 만들지 않는다 — 전부 다른 구역의 부품이다(원준 2026-09-25 "지금 디자인 시스템과 벗어나면 안 돼"):
    고정 두 줄 = AI 세션 「전체」 줄(.v2-wcat.v2-ptl) · 소제목 = .v2-app-group · 묶음 카드 = 홈 프로젝트 카드(.v2-pg)와 같은 모양
@@ -643,8 +699,11 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-kcat .n { flex: 0 1 auto; }
 .v2-kcat .v2-cnt { margin-left: auto; flex: none; }
 .v2-kcat.zero { color: var(--muted); }
-.v2-kown-w { display: inline-grid; place-items: center; flex: none; }
-.v2-kown { width: 12px; height: 12px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+/* #4233 위키 분류 줄의 ✎ — 올리면 수 자리에 선다. 누르면 분류체계 앱에서 그 분류를 연다(side.ts renderWiki catRow). */
+.v2-kcat-edit { display: none; width: 22px; height: 22px; margin-left: auto; place-items: center; border-radius: 6px; color: var(--muted); flex: none; }
+.v2-kcat-edit:hover { color: var(--blue); background: var(--bg); }
+.v2-kcat:hover .v2-kcat-edit, .v2-kcat-edit:focus-visible { display: inline-grid; }
+.v2-kcat:hover .v2-cnt:has(+ .v2-kcat-edit) { display: none; }
 /* 빈 묶음 한 줄 · «묶음을 정해 주세요» 카드는 이름을 한 단계 흐리게(#1631 그대로). */
 .v2-ksp-empty { margin: 0; padding: 4px 8px 6px; font-size: 11.5px; color: var(--muted); white-space: normal; }
 .v2-ksp-fix .v2-ksp-t .n { color: var(--muted); }
@@ -655,6 +714,23 @@ button.v2-kedit { border: 0; background: none; font-family: inherit; line-height
 .v2-pgroup a.n:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-radius: 4px; }
 .v2-pgroup.on a.n { color: var(--blue); }
 .v2-pcard > .v2-ksp-h.on { background: var(--bg-punch); box-shadow: inset 0 0 0 1px var(--line-net); }
+/* 하위 폴더 카드의 [폴더 보기] 링크 — 이 카드에서 폴더 보드로 가는 유일한 입구라 키보드 · 터치로도 닿아야 한다(리뷰 지적).
+   키보드: 카드 머리 안에 포커스가 오면 드러난다(Tab 이 접기 단추 → 링크로 이어진다). 터치: 늘 보이고, 수 옆에 선다. */
+.v2-pcard > .v2-ksp-h:focus-within .v2-ksp-edit { display: inline-grid; }
+.v2-pcard > .v2-ksp-h:focus-within > .v2-cnt { visibility: hidden; }
+@media (hover: none) {
+  .v2-pcard > .v2-ksp-h .v2-ksp-edit { display: inline-grid; position: static; margin: 0 0 0 2px; flex: none; }
+  .v2-pcard > .v2-ksp-h > .v2-cnt { visibility: visible; }
+}
+/* #4233 2안 — [AI 세션] 사이드바 머리의 묶기 드롭다운 단추(＋ 앞). 카드 · 줄은 위키 사이드바 부품(.v2-ksp · .v2-kcat · .v2-pg-past) 그대로. */
+.v2-sgb { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 7px 0 9px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--bg); font: inherit; font-size: 12px; font-weight: 700; color: var(--ink-sub); cursor: pointer; white-space: nowrap; }
+.v2-sgb:hover { border-color: var(--line-net); background: var(--bg-tint); }
+.v2-sgb:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-sgb-car { width: 12px; height: 12px; fill: none; stroke: var(--muted-2); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.v2-sgb + .v2-app-new { margin-left: 6px; }
+.v2-scard > .v2-ksp-h .v2-ksp-t { cursor: pointer; }
+.v2-sshelf .v2-kcat .v2-dot { margin-left: 6px; }
 .v2-pfav .v2-ptl-ic { stroke: var(--muted-2); }
 .v2-pfav.on .v2-ptl-ic { stroke: var(--blue); }
 /* ── #3830 맥락 관리 — 이 앱에 있는 동안만 사이드바 열을 접는다 ──────────────────
@@ -671,3 +747,30 @@ button.v2-kedit { border: 0; background: none; font-family: inherit; line-height
   #v2-root.app-ctx > .v2-side,
   #v2-root.app-ctx > .v2-side + .v2-split-x { overflow: hidden; visibility: hidden; border-right: 0; }
 }
+
+/* ── #4233 홈 사이드바 «V1 안 1 · 고정 카드» (원준 2026-09-25) ──────────────────────────────
+   모든 세션 줄이 카드 안에 선다(두 축 모두). 고정한 세션은 「고정」 이름표 아래 머리 없는 카드에, 세션별 축의 날짜 묶음도
+   머리 없는 카드에(.v2-pg--rows). 간격은 한 벌이다: 이름표 위 16 · 이름표 밑 6 · 카드 사이 8 · 카드 안 한 줄 30 ·
+   두 줄(고정 · 세션별 축) 44 · 제목 13/600. 범위는 홈 목록(.v2-home-cards)뿐 — [AI 세션]·[확인할 것]의 같은 부품은 그대로다. */
+.v2-home-cards .v2-app-group { padding: 16px 8px 6px; }
+.v2-home-cards .v2-app-group:first-child { padding-top: 2px; }
+.v2-home-cards .v2-pg + .v2-pg, .v2-home-cards .v2-pg.open + .v2-pg, .v2-home-cards .v2-pg + .v2-pg.open { margin-top: 8px; }
+/* 접힌 카드도 카드다(검토판 1판 · 카드 머리 31) — 종전엔 접히면 테두리가 없어 카드 밖 줄처럼 읽혔다(원준이 짚은 그 어긋남). */
+.v2-home-cards .v2-pg { background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; }
+.v2-home-cards .v2-pg:not(.open) > .v2-pg-row { border-radius: 9px; }
+.v2-home-cards .v2-pg:not(.open) > .v2-pg-row:hover { background: var(--bg-tint); }
+.v2-home-cards .v2-app-inst--1 { grid-template-rows: minmax(24px, auto); }
+/* 기둥: 아이콘 28 · 제목 52(사이드바 왼쪽 끝에서). 카드 안이든 머리 없는 카드든 같은 자리 — 둘째 줄도 제목 기둥에 선다. */
+.v2-home-cards .v2-app-inst { padding-left: 8px; }
+.v2-home-cards .v2-app-inst-open { gap: 7px; }
+.v2-home-cards .v2-app-inst-ask, .v2-home-cards .v2-app-inst-pj { margin-left: 24px; }
+.v2-home-cards .v2-app-inst:not(.v2-app-inst--past) .v2-app-inst-title { font-size: 13px; font-weight: 600; }
+.v2-home-cards .v2-pg--rows .v2-app-inst:not(.v2-app-inst--1) { grid-template-rows: 22px 16px; row-gap: 0; padding: 3px 8px 3px 8px; }
+.v2-home-cards .v2-pg--rows .v2-app-inst--past .v2-app-inst-title { font-size: 13px; }
+.v2-home-cards .v2-pg--rows .v2-app-inst-close, .v2-home-cards .v2-pg--rows .v2-app-inst-pin { top: 3px; }
+.v2-home-cards .v2-pg--rows .v2-app-inst-ask, .v2-home-cards .v2-pg--rows .v2-app-inst-pj { line-height: 16px; }
+/* 「고정」 세션 카드의 둘째 줄 = 소속 프로젝트(카드 머리가 없으니 줄이 소속을 말한다). 마지막 말 줄과 같은 기둥에 선다. */
+.v2-app-inst-pj { grid-column: 1 / 3; grid-row: 2; min-width: 0; margin-left: 26px; align-self: center; display: flex; align-items: center; gap: 5px; }
+/* 세션별 축 둘째 줄 끝의 소속 — 마지막 말이 먼저 자리를 갖고, 좁으면 이쪽이 먼저 잘린다. */
+.v2-app-inst-askp { flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-2); }
+.v2-app-inst-askp::before { content: '·'; margin-right: 5px; }

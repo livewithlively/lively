@@ -825,6 +825,11 @@ export function isMouseReport(d) { return /^\x1b\[(<[0-9;]+[Mm]|[0-9;]+M|M)/.tes
 export function applyPaneState(st) {
   if (!term || !st) return;
   lastKnownState = st;   // 소비되지 않는 사본 — forceRedraw 가 '캡처를 걸어도 되나'를 판단하는 근거
+  //  #4135 — **이 pane 에서 지금 무엇이 도는가**를 부모(세션 화면)에게 알린다. 목록 행의 모드 값은 낡을 수 있고
+  //   (노드 스냅샷이 옛 번들이면 «app-server» 라고 말한다), 그 값만 믿으면 멀쩡히 코덱스가 도는 터미널 위에
+  //   «여기 친 말은 Codex 에게 가지 않습니다» 라는 **거짓 경고**가 선다(원준님 실측 2026-09-25).
+  //   여기서 보는 것은 추측이 아니라 tmux 가 말한 포그라운드 명령이다 — 그것이 목록을 이긴다.
+  try { postPaneCmd(String(st.cmd || '')); } catch (_) { /* 부모가 없다(단독 탭) */ }
   pendingPaneState = st; // 바로 뒤따르는 백필의 커서 복원용
   lastStateAt = Date.now();
   // alt-screen 동기화 — 추측(옛 #252)이 아니라 tmux 실상태로. 앱 alt인데 클라 normal → 진입(#252 재접속 보정),
@@ -1287,7 +1292,7 @@ export function handleTermData(d) {
   //  Enter(\r)는 «보냈다» = 입력칸이 비었다는 뜻이라 스택을 통째로 비운다(안 비우면 새 프롬프트에 옛 글이 들어간다).
   if (!undoBusy) {
     if (d === '\r') undoStack.reset();
-    else { const n = countTyped(d); if (n === null) undoStack.breakRun(); else undoStack.type(n); }
+    else { const n = countTyped(d); if (n === null) undoStack.breakRun(); else undoStack.typeText(d); }
   }
   trackAppMouse(d);       // 앱 드래그 선택 관측(#1117 버그C — Cmd+C 브리지 발동 조건, 일반 타이핑 시 해제)
   spamGuard(d);           // 동일 청크 반복 전송 감지 → textarea 자가치유 + 진단(#1117 버그A 안전망)
@@ -1362,9 +1367,14 @@ export function pasteText(t) {
   t = sanitizePasteText(t);
   if (!t) return;
   dlog('paste', 'len=' + t.length + (/\n/.test(t) ? ' multiline' : ''));
+  if (/\n/.test(t)) {
+    pastedTextNo++;
+    toast('[붙여넣은 텍스트 #' + pastedTextNo + ' +' + (t.split('\n').length - 1) + '줄]');
+  }
   if (/\n/.test(t)) sendInput('\x1b[200~' + t + '\x1b[201~');
   else sendInput(t);
 }
+let pastedTextNo = 0;
 // 자동 전송 — 프로젝트 '클로드로 실행'이 만든 세션이면, 부팅이 끝나 클로드가 입력을 받을 때 프롬프트를 1회 주입.
 //  ?autosend=1 + localStorage 핸드오프(같은 브라우저). 재연결엔 재전송 안 함(autosendDone).
 //  ⚠ 트리거는 '출력 1.6s 침묵/12s 하드캡'으로 '시작'하되, 그것만 믿고 blind Enter 하지 않는다 — 인증 MCP·SessionStart 훅이
@@ -1564,6 +1574,7 @@ let selAnchor: { x: number; y: number; row: string } | null = null;
 let selEl: any = null;
 const undoStack = new UndoStack();
 let undoBusy = false; // 되돌리기가 스스로 만든 입력을 다시 기록하지 않게
+let inputSelectArmed = false; // 빈 입력에서도 두 번째 ⌘A는 터미널 전체 선택으로 승격한다.
 
 function bufRowText(y: number): string {
   try { const ln = term.buffer.active.getLine(y); return ln ? ln.translateToString(true) : ''; } catch (_) { return ''; }
@@ -1600,6 +1611,7 @@ function selText(r: { y: number; x0: number; x1: number }): { text: string; char
 function clearSel(why?: string): void {
   if (selAnchor && why) dlog('sel-off', why);
   selAnchor = null;
+  inputSelectArmed = false;
   if (selEl) { try { selEl.remove(); } catch (_) { /* noop */ } selEl = null; }
 }
 /** 선택을 화면에 칠한다. 앱이 다시 그릴 때마다(onRender) 좌표로 새로 계산하므로 어긋나지 않는다. */
@@ -1656,6 +1668,21 @@ function extendSel(seq: string): void {
   }
   sendInput(seq);
 }
+function isTerminalInputFocused(): boolean {
+  try { return !!term && (document.activeElement === term.textarea || !!(term.element && term.element.contains(document.activeElement))); } catch (_) { return false; }
+}
+/** ⌘A 첫 번: 앱이 아는 Home/End로 현재 입력줄만 선택한다. 출력·대화 이력은 절대 포함하지 않는다. */
+function selectCurrentInput(): void {
+  clearSel('select-input');
+  inputSelectArmed = true;
+  sendInput(SEQ.home);
+  // Home의 결과는 PTY 왕복 뒤 xterm 버퍼에 반영된다. 그 실제 커서 자리를 앵커로 삼아 End까지 넓힌다.
+  setTimeout(() => { if (inputSelectArmed && isTerminalInputFocused()) extendSel(SEQ.end); }, 45);
+}
+function selectWholeTerminal(): void {
+  clearSel('select-all');
+  try { term.selectAll(); } catch (_) { /* noop */ }
+}
 function doUndo(): void {
   // 앱이 되돌리기를 스스로 가진 판이면 앱의 것을 부르고 합성은 보내지 않는다(#3864 — 둘 다 보내면 두 번 되돌아간다).
   //  판은 가장 최근에 받은 pane 상태의 포그라운드 명령으로 판정한다(nativeUndoOk). 모르면 아래 합성.
@@ -1676,10 +1703,26 @@ function doUndo(): void {
   } finally { setTimeout(() => { undoBusy = false; }, 0); }
   dlog('undo', e.k + (e.k === 'typed' ? ' n=' + e.n : ''));
 }
+function doRedo(): void {
+  // Claude의 네이티브 undo는 그 앱의 자체 이력을 쓰므로 웹이 안전하게 역연산할 근거가 없다.
+  // Codex와 구 Claude의 웹 합성 경로는 아래에서 실제 텍스트를 재적용한다.
+  if (nativeUndoOk(lastKnownState ? lastKnownState.cmd : '')) { toast('이 버전의 Claude 입력창은 다시하기를 제공하지 않아요', true); return; }
+  const next = undoStack.peekRedo();
+  if (!next) { toast('다시할 것이 없어요'); return; }
+  if (next.k === 'yank' || (next.k === 'typed' && !next.text)) { toast('이 삭제는 안전하게 다시할 수 없어요', true); return; }
+  const e = undoStack.redo();
+  if (!e) return;
+  undoBusy = true;
+  try {
+    if (e.k === 'typed') sendInput(e.text || '');
+    else if (e.k === 'text') sendInput(SEQ.back.repeat(Array.from(e.text).length));
+  } finally { setTimeout(() => { undoBusy = false; }, 0); }
+  dlog('redo', e.k + (e.k === 'typed' ? ' n=' + e.n : ''));
+}
 /** 이 키를 line-edit 규칙으로 처리했으면 true(= keydown 을 여기서 끝낸다). */
 function handleLineEditKey(e: any): boolean {
   const p = prefs();
-  const act = decideKey(e, { mac: IS_MAC, hasSel: !!selRange(), select: p.lineSelect !== false });
+  const act = decideKey(e, { mac: IS_MAC, hasSel: !!selRange() || inputSelectArmed, select: p.lineSelect !== false, inputActive: isTerminalInputFocused() });
   if (act.k === 'pass') return false;
   if (act.k === 'clear') { clearSel('key:' + (e.key || '?')); return false; }
   if (act.k === 'delThenPass') {
@@ -1691,7 +1734,11 @@ function handleLineEditKey(e: any): boolean {
   }
   e.preventDefault(); // #633 계열: return false 는 xterm 자체 처리만 막고 브라우저 기본동작은 안 막는다
   if (act.k === 'undo') { doUndo(); return true; }
+  if (act.k === 'redo') { doRedo(); return true; }
   if (act.k === 'copy') { copySel(); return true; }
+  if (act.k === 'cut') { copySel(); deleteSel(); return true; }
+  if (act.k === 'selectInput') { selectCurrentInput(); return true; }
+  if (act.k === 'selectAll') { selectWholeTerminal(); return true; }
   if (act.k === 'del') { deleteSel(); return true; }
   if (act.k === 'send') {
     clearSel('send');
@@ -2863,6 +2910,15 @@ async function loadSessionMeta() {
 //  (프레임 안 로직을 세션 화면으로 복제하지 않는다 — 복제하면 두 벌이 갈린다).
 //  연결 상태는 반대 방향으로 흘려보낸다: statusEl 은 재연결·종료 등 여러 곳에서 바뀌므로 **값을 관측**한다
 //   (호출부마다 손으로 알리면 언젠가 한 군데를 빠뜨린다).
+//  #4135 — 프레임이 마지막으로 본 pane 포그라운드 명령. 부모에게 보내는 상태에 함께 실린다.
+let lastPaneCmd = '';
+let paneCmdPost: (() => void) | null = null;
+function postPaneCmd(cmd: string): void {
+  if (cmd === lastPaneCmd) return;   // 값이 바뀔 때만 — 상태 마커는 재접속마다 온다
+  lastPaneCmd = cmd;
+  if (paneCmdPost) paneCmdPost();
+}
+
 function setupEmbedBridge() {
   window.addEventListener('message', (ev: MessageEvent) => {
     if (ev.origin !== location.origin || ev.source !== window.parent) return;
@@ -2877,9 +2933,14 @@ function setupEmbedBridge() {
   const post = () => {
     try {
       window.parent.postMessage({ type: 'lively-term-status', text: statusEl.textContent || '',
-        cls: String(statusEl.className || '').replace('status', '').trim() }, location.origin);
+        cls: String(statusEl.className || '').replace('status', '').trim(),
+        //  #4135 — 지금 이 pane 에서 도는 것(빈 문자열 = 모름). 세션 화면이 «여기는 셸이다» 안내를 그릴지 말지를
+        //   목록 행이 아니라 **이 값**으로 정한다. 목록은 낡을 수 있고, 이건 tmux 가 방금 말한 사실이다.
+        //  판정도 여기서 한다(isShellCmd 는 이 파일의 지식이다) — 부모가 같은 목록을 다시 짓지 않게.
+        paneCmd: lastPaneCmd, paneShell: lastPaneCmd ? isShellCmd(lastPaneCmd) : null }, location.origin);
     } catch (_) { /* 부모가 없거나 닫혔다 */ }
   };
+  paneCmdPost = post;   // applyPaneState 가 값이 바뀔 때 다시 부른다
   try { new MutationObserver(post).observe(statusEl, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class'] }); } catch (_) { /* 미지원 — 첫 값만 */ }
   post();
 }
@@ -3301,7 +3362,9 @@ function wireTermCtxMenu(host: HTMLElement): void {
     const plan = ctxCopyPlan(sel, appSel, link);
     const canCopy = !!plan.copy;
     const url = plan.openUrl;
-    const openHint = { shell: '이 창', pane: '곁칸', tab: inDesktopApp() ? '새 창' : '새 탭' }[url ? linkTargetHere(url) : 'tab'];
+    //  'pane' 은 셸의 [웹] 탭으로 간다. 그 탭은 곁칸(자리바꿈으로 왼쪽에 설 수 있다) · 가운데 · 아래 칸 어디에도 있을 수 있고
+    //   이 번들(셸 밖 iframe)은 그 자리를 모른다. 그래서 자리를 말하지 않고 탭 이름으로 적는다(#4233).
+    const openHint = { shell: '이 창', pane: '웹 탭', tab: inDesktopApp() ? '새 창' : '새 탭' }[url ? linkTargetHere(url) : 'tab'];
     const secure = !!(navigator.clipboard && navigator.clipboard.readText && window.isSecureContext);
     const fs = Number(term.options.fontSize) || 14;
     const setFont = (n: number): void => {
@@ -3740,4 +3803,3 @@ function toggleExplorer() {
   if (explorerEl.classList.contains('open') && !explorerLoaded) { explorerLoaded = true; loadDir(''); }
   setTimeout(doResize, 180); // 폭 변화 후 재맞춤(트랜지션 ~140ms)
 }
-

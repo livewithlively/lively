@@ -4,7 +4,7 @@
 //  왜: ① 위키가 살아 있음이 첫 화면에서 보인다(AI 가 세션에서 남긴 지식을 바로 검토·정정) ② 카테고리를 몰라도 시작된다
 //   ③ 좌측 셸 사이드바 옆에 위키 사이드바가 또 서던 이중 내비를 걷어낸다.
 //  표면은 프로젝트 표 문법(wiki-table) 그대로 — 머리 3층 · 같은 행 · 같은 크롬.
-import { api, busy, el, errorNote, relTime, state, toast } from './core.js';
+import { api, busy, el, errorNote, relTime, toast } from './core.js';
 import { confirmDialog, skeletonRows } from './ui-primitives.js';
 import { KN_TYPE_LABEL, isCategoryHomeDoc } from './wiki-data.js';
 import { wkDayLabel, wkEmpty } from './wiki-ui.js';
@@ -27,10 +27,6 @@ export function knFindCatIn(cats: any[], val: string) {
   const v = String(val || '');
   for (const c of (cats || [])) if (String(c.id) === v || c.key === v) return c;
   return null;
-}
-function myCatIds(): Set<string> {
-  const ids = (state.me && (state.me as any).team_category_ids) || [];
-  return new Set((ids as any[]).map((x) => String(x)));
 }
 
 // ── 카테고리 칩 — 행에서 그 카테고리로 가는 링크. ──
@@ -146,27 +142,23 @@ export async function renderRecentSurface(box: HTMLElement, ctx: any) {
   void paintReviewLane(reviewBox, cats, ctx);   // 뒤따라 채운다 — 검토 조회가 첫 화면을 붙잡지 않게
 }
 
-// ── [검토할 것](안 5) — 내 카테고리에 걸린 지식·수정 제안. 없으면 아예 안 그린다. ──
+// ── [검토할 것](안 5) — 검토 대기 지식·수정 제안. 없으면 아예 안 그린다. (#4233: «내 카테고리만» 거르기는 분류 담당 개념과 함께 걷었다) ──
 //  줄에서 바로 승인·반려한다(검토 대기 화면까지 안 들어가도 되게). 반려는 되돌리기 어려워 확인창을 거친다.
 async function paintReviewLane(host: HTMLElement, cats: any[], ctx: any) {
-  let pending: any[] = [], revs: any[] = [], mine: string[] = [];
+  let pending: any[] = [], revs: any[] = [];
   try {
-    [pending, revs, mine] = await Promise.all([
+    [pending, revs] = await Promise.all([
       api('/api/ui/knowledge?lifecycle=pending&orderBy=updated_at&limit=50').then((d: any) => (d && d.entries) || []).catch(() => []),
       api('/api/ui/knowledge-revisions?status=pending&limit=50').then((d: any) => (d && d.entries) || []).catch(() => []),
-      api('/api/ui/review-queue/summary').then((s: any) => (s && s.mine_category_keys) || []).catch(() => []),
     ]);
   } catch { return; }
   if (!host.isConnected) return;
-  const mineSet = new Set(mine.map((x) => String(x)));
-  const catKeyOf = (e: any) => { const c = e.category_id != null ? knFindCatIn(cats, String(e.category_id)) : null; return (c && c.key) || ''; };
   type Item = { kind: 'new' | 'rev'; e: any; id?: number; title: string; why: string };
   const all: Item[] = [
     ...pending.map((k: any): Item => ({ kind: 'new', e: k, title: k.title || k.name, why: '새 지식 · ' + (k.confidence === 'human' ? '사람' : 'AI') + ' 가 남김' })),
     ...revs.map((v: any): Item => ({ kind: 'rev', e: { ...(v.knowledge || {}), name: v.name, title: v.title || v.name, category_name: v.category_name, category_id: v.category_id, type: v.type, updated_at: v.created_at || v.updated_at }, id: v.id, title: v.title || v.name, why: '수정 제안' })),
   ];
-  const mineOnly = mineSet.size ? all.filter((it) => mineSet.has(catKeyOf(it.e))) : all;
-  const items = (mineOnly.length ? mineOnly : []).slice(0, 5);
+  const items = all.slice(0, 5);
   if (!items.length) return;
 
   const cols = [
@@ -206,14 +198,14 @@ async function paintReviewLane(host: HTMLElement, cats: any[], ctx: any) {
   const head = el('div', { class: 'pjv-tgroup-head wk-tgroup-head wk-rv-head' },
     el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }),
     el('span', { class: 'pjv-tgroup-label', text: '검토할 것' }),
-    el('span', { class: 'pjv-tgroup-count', text: String(mineOnly.length) }),
-    el('span', { class: 'wk-rv-hint', text: mineSet.size ? '내 카테고리에 걸린 지식·수정 제안' : '승인해야 검색·주입에 반영됩니다' }),
+    el('span', { class: 'pjv-tgroup-count', text: String(all.length) }),
+    el('span', { class: 'wk-rv-hint', text: '승인해야 검색·주입에 반영됩니다' }),
     el('a', { class: 'wk-rv-all', href: '#/knowledge/review', text: '전체 ' + all.length + ' →' }));
   host.replaceChildren(el('div', { class: 'pjv-tgroup wk-tgroup wk-rv-group' }, head, body));
 }
 
 // ════════════════════════════════════════════
-// 카테고리 탭 — 스페이스 그룹 + 카테고리 한 줄(문서 수 · 검토 대기 · 소유 팀 · 최근 갱신).
+// 카테고리 탭 — 스페이스 그룹 + 카테고리 한 줄(문서 수 · 검토 대기 · 최근 갱신). (#4233: 소유 팀 칸은 걷었다)
 //  옛 첫 화면(오로라 카드 격자)을 대신한다 — 같은 정보를 표로, 더 정확히.
 // ════════════════════════════════════════════
 export async function renderCatsSurface(box: HTMLElement, ctx: any) {
@@ -225,7 +217,6 @@ export async function renderCatsSurface(box: HTMLElement, ctx: any) {
   } catch (e) { box.replaceChildren(errorNote(e, '카테고리를 불러오지 못했습니다')); return; }
   const byCat = new Map<string, number>();
   for (const row of ((review && review.by_category) || [])) if (row && row.key) byCat.set(String(row.key), Number(row.n) || 0);
-  const mine = myCatIds();
 
   const header = wkBoardHeader({
     crumbs: [{ label: 'WIKI' }],
@@ -239,19 +230,17 @@ export async function renderCatsSurface(box: HTMLElement, ctx: any) {
     ],
   });
   const body = el('div', { class: 'wk-board-body' });
-  const track = 'minmax(var(--pjv-name-min, 260px), 1fr) 92px 104px 150px 100px 34px';
+  const track = 'minmax(var(--pjv-name-min, 260px), 1fr) 92px 104px 100px 34px';
   const rowOf = (c: any) => {
     const n = Number(c.knowledge_count);
     const pend = byCat.get(String(c.key)) || 0;
     const row = el('a', { class: 'pjv-trow pjv-proj-row wk-trow wk-catrow', href: '#/knowledge?category=' + encodeURIComponent(c.id) },
       el('div', { class: 'pjv-trow-title-cell' },
         el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }),
-        mine.has(String(c.id)) ? el('span', { class: 'kn-cat-star', title: '내 소유 카테고리', 'aria-hidden': 'true', text: '★' }) : null,
         el('span', { class: 'pjv-trow-title wk-ttitle', text: c.name || c.key }),
         c.hint ? el('span', { class: 'wk-tsnip', title: c.hint, text: c.hint }) : null),
       el('div', { class: 'pjv-tcell wk-tcell', 'data-col': 'n' }, el('span', { class: 'pjv-fval', text: Number.isFinite(n) ? String(n) : '—' })),
       el('div', { class: 'pjv-tcell wk-tcell', 'data-col': 'rv' }, pend ? el('span', { class: 'wk-rv-pill', title: '검토 대기 — 승인해야 검색·주입에 반영됩니다', text: String(pend) }) : el('span', { class: 'pjv-fval', text: '—' })),
-      el('div', { class: 'pjv-tcell wk-tcell wk-col-left', 'data-col': 'own' }, el('span', { class: 'pjv-fval', text: c.owner_team_name || '—' })),
       el('div', { class: 'pjv-tcell wk-tcell', 'data-col': 'up' }, el('span', { class: 'pjv-fval', text: c.updated_at ? relTime(c.updated_at) : '' })),
       el('div', { class: 'pjv-tcell pjv-tcell-add' }, el('span', { class: 'wk-catrow-go', 'aria-hidden': 'true', text: '›' })));
     row.style.gridTemplateColumns = track;
@@ -269,8 +258,8 @@ export async function renderCatsSurface(box: HTMLElement, ctx: any) {
     const grpBody = el('div', { class: 'pjv-tgroup-body wk-tbody' },
       el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols pjv-list-colhead wk-colhead' },
         el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-list-colhead-name', text: '카테고리' })),
-        ...[['n', '문서'], ['rv', '검토 대기'], ['own', '소유 팀'], ['up', '정의 갱신']].map(([k, label]) =>
-          el('div', { class: 'pjv-tcell pjv-colhead pjv-stdcol' + (k === 'own' ? ' wk-col-left' : ''), 'data-col': k }, el('span', { class: 'pjv-thcol-name', text: label }))),
+        ...[['n', '문서'], ['rv', '검토 대기'], ['up', '정의 갱신']].map(([k, label]) =>
+          el('div', { class: 'pjv-tcell pjv-colhead pjv-stdcol', 'data-col': k }, el('span', { class: 'pjv-thcol-name', text: label }))),
         el('div', { class: 'pjv-tcell pjv-tcell-add' }, el('span', {}))),
       ...ordered.map(rowOf));
     (grpBody.firstChild as HTMLElement).style.gridTemplateColumns = track;

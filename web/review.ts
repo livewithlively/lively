@@ -17,8 +17,6 @@ import { overlayBox, skeleton } from './learn.js';
 const GATE_PRESET = 'agent-knowledge';
 // 도메인 필터의 '미분류' 센티넬 — 빈 문자열은 '모든 도메인'(전체) 값이라 겹친다.
 const CAT_NONE = '__none__';
-// #802 '내 도메인'(내 팀이 오너인 카테고리 전체) 센티넬 — 단일 카테고리 key 가 아니라 집합이라 별도 값이 필요하다.
-const CAT_MINE = '__mine__';
 
 // 신규 저장 시 동작 — 「제목 — 뜻」. 고르기 카드·규칙 줄·규칙 폼이 같은 표를 쓴다(#3830: 사람 말로).
 const CREATE_ACTS: [string, string][] = [
@@ -455,10 +453,6 @@ export async function reviewQueuePanel(detail, data?): Promise<void> {
   }
   let obs: any = null;
   try { obs = await api('/api/ui/org/ingest-observability?days=30'); } catch { obs = null; }
-  // #802 '내 도메인' = 내 팀이 오너인 카테고리 집합(서버가 판정 — me.team_owner_category_ids 와 같은 소스).
-  //  실패하면 그 필터 옵션만 빠진다(큐 자체는 그대로).
-  let mineCats: string[] = [];
-  try { const s = await api('/api/ui/review-queue/summary'); mineCats = (s && s.mine_category_keys) || []; } catch { mineCats = []; }
   let gateOn: boolean | null = null;   // admin 만 조회 가능 — 아니면 null(배너 생략)
   //  #4018: 스위치는 프리셋 행만 반영하지만 게이트는 전체 규칙을 평가한다 — 손으로 만든 confirm 세부 규칙이
   //   켜져 있으면 스위치가 꺼져 있어도 「곧바로 쓰인다」는 거짓이다. 그땐 그 문장을 띄우지 않는다.
@@ -492,11 +486,9 @@ export async function reviewQueuePanel(detail, data?): Promise<void> {
   const listBox = el('div', {});
   const bulkBox = el('div', {});
 
-  const mineSet = new Set(mineCats);
   // 필터 적용 후 화면에 실제 보이는 것들(키보드 커서·일괄 승인의 대상).
   const catMatch = (i: QItem): boolean => {
     if (!rqUi.cat) return true;                          // 모든 도메인
-    if (rqUi.cat === CAT_MINE) return mineSet.has(i.cat); // 내 도메인(내 팀 소유 카테고리 집합)
     if (rqUi.cat === CAT_NONE) return !i.cat;            // 미분류
     return i.cat === rqUi.cat;
   };
@@ -542,11 +534,9 @@ export async function reviewQueuePanel(detail, data?): Promise<void> {
   for (const it of items) { const ck = it.cat || CAT_NONE; if (!catMap.has(ck)) catMap.set(ck, it.catName); }
   const catSel = el('select', { class: 'rq-sel', style: 'width:auto;min-width:150px' }) as HTMLSelectElement;
   catSel.append(el('option', { value: '', text: '모든 도메인' }));
-  // #802 '내 도메인' — 자기 도메인만 훑고 나가는 게 가장 빠른 검토다(#783 설계원칙). 대기 건이 있을 때만 띄운다.
-  const nMine = items.filter((i) => mineSet.has(i.cat)).length;
-  if (nMine) catSel.append(el('option', { value: CAT_MINE, text: `내 도메인 (${nMine})` }));
   for (const [k, n] of catMap) catSel.append(el('option', { value: k, text: n }));
-  if (rqUi.cat === CAT_MINE && !nMine) rqUi.cat = '';   // 내 도메인 건을 다 처리했으면 전체로 되돌림(빈 화면 방지)
+  //  #4233 — 팀 담당 분류로 거르는 필터(값 '__mine__')를 걷었다. 이전 값이 남아 있으면 전체로 되돌린다.
+  if (rqUi.cat === '__mine__') rqUi.cat = '';
   catSel.value = rqUi.cat;
   catSel.onchange = () => { rqUi.cat = catSel.value; rqUi.cur = 0; paint(); };
 

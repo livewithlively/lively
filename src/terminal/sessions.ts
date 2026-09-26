@@ -442,6 +442,13 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       projectId: r.projectId || 0, appId: r.appId || undefined,
       managed: (r.managed as string | null) || undefined,   // #2170 — 상시세션 정리기의 '내 것' 판정 근거
       agentState: state,
+      //  ★ #4135 — **표식을 최종 행까지 싣는다.** 종전엔 중간 객체(rows)까지만 왔고, 화면·배달이 보는 이 행에는
+      //   없었다. 그래서 «표식 없음» 으로 읽혀 배포 기본(app-server)으로 되돌아갔고, 터미널(TUI)로 뜬 세션을
+      //   목록이 app-server 라고 말했다 — 노드 세션도 같은 코드라 같은 증상이었다(실측 2026-09-26 원준님:
+      //   «이건 왜 뜨는거야? 밑에서 입력 잘만 되는데?» — 셸 안내줄이 멀쩡한 코덱스 터미널 위에 섰다).
+      //  ⚠ 값이 없으면 키를 **빼서** 보낸다(빈 문자열을 싣지 않는다) — 받는 쪽은 «없음» 과 «빈 값» 을 같이 다룬다.
+      ...(r.runtimeChoice ? { runtimeChoice: r.runtimeChoice } : {}),
+      ...(r.runtimeRaw ? { runtimeRaw: r.runtimeRaw } : {}),
       // 회수(F)가 보는 두 신호는 **접속과 무관**해야 하고(탭=온라인 규칙이 busy·waiting 을 offline 으로 덮으므로),
       //  두 출처를 **합집합**으로 본다 — 죽이면 되돌릴 수 없는 판정이라 과보호가 옳은 실패 방향이다.
       // app-server 세션의 '일하는 중'은 pane 스피너가 아니라 **턴이 도나**다(pane 은 셸이라 스피너가 없다).

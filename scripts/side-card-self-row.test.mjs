@@ -91,18 +91,28 @@ if (typeof projCardRows !== "function") {
   const SIDE = readFileSync(path.join(root, "web/v2/side.ts"), "utf8");
   const kids = code(SIDE.slice(SIDE.indexOf("function projListKids("), SIDE.indexOf("function projGrpCard(")));
 
-  check(/const rest = projCardRows\(shown\.filter\(\(r\) => !r\.pinned\)\);/.test(kids),
+  //  #4233 — 「고정」 나누기를 잎 모듈(lib/home-pins splitHomePins)이 한다. rest 는 그 나머지이고, 여전히 projCardRows 를 지난다.
+  check(/const rest = projCardRows\(pins\.rest\);/.test(kids) && /const pins = splitHomePins\(shown, projPinnedId\);/.test(kids),
     "E1·B1 ★★ 프로젝트 축은 카드 재료(rest)를 projCardRows 로 거른 뒤 projGroups 에 넘긴다",
     "projListKids 의 rest 가 자기 화면 줄을 안 걷는다 — [→] 로 연 화면이 다시 제 폴더 안에 선다");
 
-  check(/const pinnedRows = shown\.filter\(\(r\) => r\.pinned\);/.test(kids),
-    "E8 ★ 「고정」 층은 거르지 않는다 — 사람이 꽂은 줄은 카드 밖에 서고, 자동 규칙이 걷지 않는다",
+  //  #4233 — 꽂은 줄은 이제 「고정」 세션 카드(pinCard) 안에 선다(원준 «V1 의 1안»: 모든 세션 줄이 카드 안에). 원칙은 그대로다:
+  //   자동 규칙(projCardRows)이 그 줄을 걷지 않는다.
+  check(/const pinnedRows = pins\.pinnedRows;/.test(kids) && !/projCardRows\(pinnedRows|projCardRows\(pins\.pinnedRows/.test(kids),
+    "E8 ★ 「고정」 층은 거르지 않는다 — 사람이 꽂은 줄은 「고정」 세션 카드에 서고, 자동 규칙이 걷지 않는다",
     "pinnedRows 가 걸러지고 있다");
 
   const at = SIDE.indexOf("function appListKids(");
   const list = at < 0 ? "" : code(SIDE.slice(at, SIDE.indexOf("\n}\n", at)));
+  //  #4233 — 날짜 축의 줄 세우기는 sessAxisKids · dayCard 로 옮겨 갔다(격리 리뷰: appListKids 만 보면 이 가드가 아무것도 안 본다).
+  //   날짜 카드(dayCard)는 받은 줄을 거르지 않고, projCardRows 는 sessAxisKids 안에서 **자기 화면 판정 한 번**에만 쓴다
+  //   (고정한 프로젝트 카드 재료를 가르는 데만 — 날짜 카드 재료는 lib/home-pins planSessAxis 가 되돌려 준다. 값 검증은 home-pins P1).
+  const sx = code(SIDE.slice(SIDE.indexOf("function sessAxisKids("), SIDE.indexOf("\n}\n", SIDE.indexOf("function sessAxisKids("))));
+  const dcAt = SIDE.indexOf("function dayCard(");
+  const dc = dcAt < 0 ? "" : code(SIDE.slice(dcAt, SIDE.indexOf("\n}\n", dcAt)));
 
-  check(list.length > 0 && !/projCardRows/.test(list),
+  check(list.length > 0 && !/projCardRows/.test(list) && dc.length > 0 && !/projCardRows|\.filter\(/.test(dc)
+    && sx.length > 0 && (sx.match(/projCardRows/g) || []).length === 1 && /planSessAxis\(shown, projPinnedId, \(r\) => projCardRows\(\[r\]\)\.length === 0\)/.test(sx),
     "E9 ★ 날짜 축(묶지 않은 목록)은 거르지 않는다 — 거기엔 카드도 [→] 도 없어 그 줄이 곧 그 화면으로 돌아가는 길이다",
     "appListKids 가 날짜 축에서도 걷고 있다");
 

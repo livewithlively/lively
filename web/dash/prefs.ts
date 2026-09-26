@@ -290,10 +290,7 @@ const DASH_TASK_FILTER_KEY = 'dash_task_filter_v1';
 function dashTaskFilterDefault() { try { return localStorage.getItem(DASH_TASK_FILTER_KEY) === 'soon' ? 'soon' : 'all'; } catch { return 'all'; } }
 function dashSaveTaskFilter(v) { try { if (v === 'soon') localStorage.setItem(DASH_TASK_FILTER_KEY, 'soon'); else localStorage.removeItem(DASH_TASK_FILTER_KEY); } catch { /* 무시 */ } }
 
-// ── ⑦ 검토 대기 지식 기본 필터(기기별) — all(전체) | mine(내 도메인). 내 도메인이 없으면 위젯이 all 로 고정한다. ──
-const DASH_RVW_FILTER_KEY = 'dash_review_filter_v1';
-function dashRvwFilterDefault() { try { return localStorage.getItem(DASH_RVW_FILTER_KEY) === 'mine' ? 'mine' : 'all'; } catch { return 'all'; } }
-function dashSaveRvwFilter(v) { try { if (v === 'mine') localStorage.setItem(DASH_RVW_FILTER_KEY, 'mine'); else localStorage.removeItem(DASH_RVW_FILTER_KEY); } catch { /* 무시 */ } }
+// (⑦ 검토 대기 지식 기본 필터 all|mine 은 #4233 에서 «내 도메인» 과 함께 걷었다.)
 
 export {
   DASH_NOTIF_PREF_KEY,
@@ -369,7 +366,4 @@ export {
   DASH_TASK_FILTER_KEY,
   dashTaskFilterDefault,
   dashSaveTaskFilter,
-  DASH_RVW_FILTER_KEY,
-  dashRvwFilterDefault,
-  dashSaveRvwFilter,
 };

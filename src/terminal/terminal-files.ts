@@ -27,7 +27,8 @@ import {
   countActiveLocalUnder, stampTrashedLocalPath, getTrashedFile, reviveTrashedFile, fileTrashBatchRemaining,
   newRootTrashStamp, trashStampRoot, heldPathOf, fileTrashBatchCleanup, normalizeLocalRel, localRootKey, FILE_TRASH_DIR,
 } from "../ingest/local-file.js";
-import { finishUpload, type UploadCoord } from "../ingest/upload-finish.js";   // #3787 D — 업로드 마무리(그룹 rw·자료·좌표·도장)는 한 자리
+import { finishUpload, type UploadCoord } from "../ingest/upload-finish.js";
+import { uploadEntryOf } from "../ingest/upload-entry.js";   // #4233: 들어온 길(세션 헤더가 있으면 AI 가 만든 파일)   // #3787 D: 업로드 마무리(그룹 rw·자료·좌표·도장)는 한 자리
 import { projectOffsetOfSessionDir, projectRelForUpload } from "./node-upload-coord.js";   // #3787 — 노드 세션 업로드의 게이트웨이 좌표
 import { executionSessionProject } from "../v6/execution-session-store.js";
 import { getProjectRow } from "../v6/project-store.js";
@@ -466,7 +467,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     //  종전엔 여기와 project-routes 가 각자 마무리를 적어, 한쪽엔 그룹 rw 가 없고 다른 쪽엔 skipped 가 없었다.
     const coord = await localRootForBrowse(String(req.query.root ?? ""), u, base, abs)
       .catch((e) => { console.warn(`[local-ingest] 좌표 해석 실패 ${abs}: ${(e as Error)?.message ?? e}`); return null; });
-    res.json(await finishUpload({ coord, abs, osUser, uploader: { id: viewerFor(req), name: u?.email ?? null } }));
+    res.json(await finishUpload({ coord, abs, osUser, uploader: { id: viewerFor(req), name: u?.email ?? null }, entry: uploadEntryOf(req.headers) }));
   }));
 
   // 디렉터리 목록(숨김 제외). 격리 세션(#524)은 멤버 uid 로(게이트웨이가 700 홈 못 읽으므로).
@@ -584,7 +585,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
         if (absGw === gw.base || !absGw.startsWith(gw.base + path.sep)) throw new HttpError(400, "허용 경로를 벗어났습니다");
         if (!(await gw.store.confined(absGw))) throw new HttpError(400, "허용 경로를 벗어났습니다");   // 링크 해소 뒤 재판정(#3668 T1)
         await gw.store.writeBuffer(absGw, bodyBuf);
-        const fin = await finishUpload({ coord: gw.coord, abs: absGw, osUser: gw.store.osUser, uploader: { id: viewerFor(req), name: userOf(req)?.email ?? null } });
+        const fin = await finishUpload({ coord: gw.coord, abs: absGw, osUser: gw.store.osUser, uploader: { id: viewerFor(req), name: userOf(req)?.email ?? null }, entry: uploadEntryOf(req.headers) });
         // path 는 **노드에서의 절대경로**로 답한다 — 드롭 UI 가 이 값을 입력창에 꽂고, 그 안의 에이전트는 노드에 산다.
         //  (아직 안 내려왔을 수 있지만 그게 맞는 경로다. 없으면 주입 훅이 «이 컴퓨터에 없습니다» 로 크게 말한다.)
         res.json({ ...fin, path: gw.nodeAbs, delivery: "pull" }); return;
@@ -608,7 +609,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     //  좌표를 못 잡으면(루트 밖) 종전 그대로 경로만 — 지어내지 않는다.
     const u = userOf(req);
     const coord = await sessionUploadCoord(u, abs);
-    res.json({ ...await finishUpload({ coord, abs, osUser, uploader: { id: viewerFor(req), name: u?.email ?? null } }), path: abs });
+    res.json({ ...await finishUpload({ coord, abs, osUser, uploader: { id: viewerFor(req), name: u?.email ?? null }, entry: uploadEntryOf(req.headers) }), path: abs });
     // path = 세션 작업폴더 기준 절대경로(드롭 업로드가 입력창에 꽂아 cwd 무관하게 찾게) — finishUpload 와 같은 값이지만 계약으로 못 박는다.
   }));
 }

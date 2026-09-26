@@ -338,7 +338,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   뷰어 할 수 있는게 있으면 좋겠는데") — 칸 셸의 머리줄에서 곁칸의 자료 칸을 켠다(폰: 오른쪽 서랍이 열린다). 종전엔 폰에서
   //   자료로 가는 입구가 맨 윗줄의 [타임라인] 단추뿐이었고, 그 이름으론 아무도 자료를 거기서 찾지 않았다.
   //   위 [파일](onToggleFiles)은 팝아웃(우패널) 것이라 둘이 같이 뜨지 않는다.
-  const filesGoBtn = el('button', { class: 'btn-text sc-act sc-act-files', type: 'button', title: '이 세션의 자료를 곁칸에서 봅니다 — 세션이 만든 파일을 보고 내려받아요',
+  const filesGoBtn = el('button', { class: 'btn-text sc-act sc-act-files', type: 'button', title: '이 세션의 자료를 우측 사이드바에서 봅니다. 세션이 만든 파일을 보고 내려받아요.',
     onclick: () => { if (opts.onOpenFiles) opts.onOpenFiles(); } },
     sv('svg', { viewBox: '0 0 24 24', class: 'sc-act-ic', 'aria-hidden': 'true' },
       sv('path', { d: 'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z' })),
@@ -833,7 +833,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   function paintShellBar(): void {
     //  pane 이 셸인 두 갈래: codex app-server(chatFirst) · 하네스 무관 대화 런타임(runtimeMode='chat').
     //  ⚠ 판정은 **서버가 준 값**으로만 한다 — 모르면 안 띄운다(틀린 경고는 멀쩡한 터미널을 의심하게 만든다).
-    const shellPane = chatFirst() || String(target.raw?.runtimeMode || '') === 'chat';
+    //  ★ 프레임이 **직접 본 것**이 목록을 이긴다 — pane 에서 셸이 아닌 것이 돌고 있으면(codex TUI 등) 이 안내는
+    //   거짓이다. 그 값이 없을 때만(단독 탭·아직 안 옴) 목록의 모드 값으로 판단한다.
+    //   ⚠ 반대 방향으론 안 쓴다: 셸이 돌고 있다고 해서 «대화창이 본자리» 인 것은 아니다(그건 모드가 정한다).
+    const shellPane = paneShell !== false && (chatFirst() || String(target.raw?.runtimeMode || '') === 'chat');
     const codex = String(target.raw?.harness || '') === 'codex';
     shellBar.hidden = !(mode === 'term' && shellPane);
     if (shellBar.hidden) return;
@@ -934,6 +937,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  '연결 중…/연결됨'이 이 한 줄에 뜬다. 오리진·출처(source)를 둘 다 확인한다.
   const TERM_MSG = 'lively-term';
   let termReady = false;                       // 프레임이 첫 신호(상태)를 보냈나 — 그 전에 보낸 명령은 사라진다
+  //  #4135 — 프레임이 본 pane 의 정체(true=셸 · false=셸 아님 · null=모름). 셸 안내줄의 **거부권**이다.
+  let paneShell: boolean | null = null;
   let termQueue: string[] = [];
   let resumeAuto = false;                      // #1820 — 자동 복원을 이미 걸었나(한 화면에서 한 번만)
   // ── 자동복원 연쇄 상한 (#1820 후속 · 실측 2026-08-25 매니지드) ──────────────────────────────
@@ -1010,6 +1015,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     termStatusEl.textContent = String(m.text || '');
     termStatusEl.className = 'sc-termstat' + (m.cls ? ' ' + String(m.cls).replace(/[^a-z]/g, '') : '');
     termStatusEl.hidden = termHost.hidden || !termStatusEl.textContent;
+    //  #4135 — 프레임이 «이 pane 에서 지금 무엇이 도는가» 를 함께 보낸다(tmux 가 말한 포그라운드 명령).
+    //   목록 행의 모드 값은 낡을 수 있어서(노드 스냅샷이 옛 번들이면 app-server 라고 말한다) 셸 안내줄이
+    //   멀쩡히 코덱스가 도는 터미널 위에 거짓 경고를 띄웠다(원준님 실측 2026-09-25). 이 값이 그걸 이긴다.
+    //  paneShell: true=셸 · false=셸이 아닌 것(코덱스 TUI 등) · null/없음=모름. 판정은 프레임이 한다(그쪽 지식이다).
+    if (m.paneShell === true || m.paneShell === false) { paneShell = m.paneShell; paintShellBar(); }
   };
   window.addEventListener('message', onTermMsg);
 

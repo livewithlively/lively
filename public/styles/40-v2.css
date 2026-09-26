@@ -708,6 +708,13 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 /* 곁칸의 손님 화면(#1719, 2026-08-20) — 미리보기 iframe(v2/aside-slot.ts). 손님이 떠 있는 동안 원래 칸
    (발자취·파일)은 hidden 으로 물러날 뿐 사라지지 않는다 — 닫으면 쌓아 둔 발자취가 그대로 돌아온다. */
 .v2-guest { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
+/* #4233 — 손님 화면은 우패널 기둥에 탭 판들과 나란히 산다(판은 화면마다 비워진다). 미리보기는 연 탭의 것, 우측 사이드바에 고정한
+   문서는 셸에 하나라 여럿이 있을 수 있고, 보이는 것은 지금 탭에 보일 하나뿐이다([hidden] — .v2-guest 가 display 를 가져 못박는다).
+   손님이 보이는 동안 판은 통째로 물러난다(v2/main.ts paintAsidePanes 가 has-guest 를 건다). */
+.v2-aside-pane.has-guest { display: none; }
+.v2-guest[hidden] { display: none; }
+/* 머리 왼쪽 이름(미리보기 · 문서)은 줄지 않는다 — 긴 제목에 밀려 글자가 한 자씩 세로로 쌓였다(#4233 실측). */
+.v2-guest-h > b { flex: none; white-space: nowrap; }
 /* 이름은 줄어드는 쪽 — [⟳ ↗ ×] 는 폭이 고정이라 잘리면 누를 것이 사라진다. */
 .v2-guest-h .v2-guest-t { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 12px; color: var(--muted); }
@@ -2067,7 +2074,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-axisbtn.on { color: var(--on-fill); background: var(--blue-fill); }
 .v2-axisbtn.on:hover { color: var(--on-fill); background: var(--blue-fill-deep); }
 .v2-axisbtn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-.v2-axisbtn-ic { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+/*  #4233 — 그림은 폴더 안 줄 둘(icons.ts folderRows). 검토판 1판과 같은 15px · 1.9 선. */
+.v2-axisbtn-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ★펼친 묶음 = 흰 카드 그릇 — 세션이 프로젝트의 **안**에 산다는 걸 면(面)이 말한다.
    들여쓰기+세로선만으로는 "목록 둘이 이웃한 그림"으로 읽혔다(상민님 2026-08-18 — 트리 .v2-pj.open 과 같은 처방).
