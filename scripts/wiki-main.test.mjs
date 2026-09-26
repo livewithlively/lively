@@ -110,7 +110,7 @@ if (lib) {
   eq(peekBody("# 다른 것\n본문", "제목"), { md: "# 다른 것\n본문", empty: false }, "B2 다른 H1 은 둔다");
 
   // P — 우측 사이드바에 고정(손님)
-  eq(pinGuest("a b/한글", ""), { key: "kdoc:a b/한글", title: "a b/한글", hash: "k/" + encodeURIComponent("a b/한글"), label: "문서" }, "P1 key · 주소 인코딩 · 제목 없으면 이름");
+  eq(pinGuest("a b/한글", ""), { key: "kdoc:a b/한글", title: "a b/한글", hash: "k/" + encodeURIComponent("a b/한글"), label: "문서", sticky: true }, "P1 key · 주소 인코딩 · 제목 없으면 이름 · 고정 문서");
   eq(pinGuest("x", "제목").title, "제목", "P1 제목이 있으면 제목");
 }
 
@@ -130,12 +130,10 @@ ok(/renderWikiMain\(tab\.center,/.test(mainSrc), "S1 셸이 위키 목록을 그
 
 const oag = cut(mainSrc, "function openAsideGuest(", "\nfunction ");
 ok(/g\.label \|\| '미리보기'/.test(oag), "P2 손님 머리 이름을 부르는 쪽이 정한다(문서 · 미리보기)");
-ok(/let asideGuest: \{/.test(mainSrc) && !/__guest\?:/.test(mainSrc), "P2 손님은 셸에 하나 — 탭마다(판 안) 두면 셸이 새 탭으로 여는 화면(홈 · 세션)에서 사라진다");
-ok(/asideGuest && asideGuest\.key === g\.key/.test(oag), "P2 같은 손님을 다시 부르면 다시 읽지 않는다");
+//  손님의 수명(고정 문서 = 셸에 하나 · 미리보기 = 연 탭)은 scripts/aside-guests.test.mjs 가 값과 배선으로 본다.
+ok(/if \(!r\.reuse\)/.test(oag), "P2 같은 손님을 다시 부르면 다시 읽지 않는다");
 ok(/label\?: string/.test(slot), "P2 AsideGuest 에 label 이 있다");
 ok(/asideEl\.append\(guest\)/.test(oag) && !/host\.append\(guest\)/.test(oag), "P2 손님은 우패널 기둥에 판들과 나란히 — 화면마다 판을 비워도 떨어지지 않는다(iframe 을 다시 읽지 않는다)");
-ok(/const guest = !!asideGuest;/.test(cut(mainSrc, "function applyTabChrome(", "\n}")), "P2 어느 탭(화면)으로 옮겨도 손님이 있으면 우패널이 선다");
-ok(!/dropAsideGuest/.test(cut(mainSrc, "onClose: (tab) =>", "\n    },")), "P2 탭(화면)을 닫아도 고정한 문서는 남는다");
 
 const pin = cut(wk, "function pinDoc(", "\n}");
 ok(/openInAside\(/.test(pin) && /pinGuest\(/.test(pin), "P2 [우측 사이드바에 고정] = pinGuest 로 오른쪽 칸 손님을 연다");
