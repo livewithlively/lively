@@ -21,8 +21,8 @@
 import { api, el, hasScope, sv } from './core.js';
 import { skeleton } from './ui-primitives.js';
 import { stageHealthDetails } from './context-pipeline.js';
-import { inboxCount, renderContextInbox, renderContextMapScreen } from './context-map.js';
-import { renderRunsPage } from './context-runs-page.js';   // #4135 3판 — 자동 실행 기록(현황의 「자세히 보기」)   // #762 표지(흐름 지도) + 확인할 것
+import { inboxCount, renderContextInbox, renderContextMapScreen } from './context-map.js';   // #762 표지(흐름 지도) + 확인할 것
+import { renderRunsPage } from './context-runs-page.js';   // #4135 3판 — 자동 실행 기록(현황의 「자세히 보기」)
 import { renderCollectors } from './context-collectors.js';
 import { renderCategoryList } from './categories.js';
 import { distillerPage, distillersPanel } from './distillers.js';
