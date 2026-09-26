@@ -361,9 +361,30 @@ export async function setCategoryView(
   return row;
 }
 
+/**
+ * 지우기는 비었을 때만(#4233 분류체계 앱). 화면은 «지식과 프로젝트 목록이 없을 때만» 이라고 약속하는데, 화면의 수는
+ *  보는 사람의 공개범위로 센 수다(못 보는 지식 · 구성원만 보는 목록은 0 으로 보인다). 그래서 이 검사는 **공개범위와 상관없이** 센다.
+ *   · 지식 = rejected 가 아닌 매핑 전부(생애 상태와 무관: 검토 대기 · 보관 지식도 지우면 이 분류를 잃는다).
+ *     rejected 매핑은 «이 분류가 아니다» 라는 판정이라 세지 않는다.
+ *   · 프로젝트 목록 = 이 분류를 단 목록 전부(그 목록의 프로젝트는 목록을 따라 분류를 잃는다, #541).
+ *  거절 문구에는 수를 적지 않는다. 못 보는 문서의 수가 드러나면 안 된다(categorySel 머리말의 #1291 규칙). 무엇이 남았는지만 말한다.
+ *  HttpError 로 던지는 이유는 assertDeprecatable 과 같다(평범한 Error 는 500 internal_error 로 뭉개진다).
+ */
+async function assertDeletable(id: number, name: string): Promise<void> {
+  const r: { k: number; l: number } | undefined = await one(itemsPool,
+    `SELECT (SELECT count(*)::int FROM knowledge_category WHERE category_id=$1 AND state<>'rejected') AS k,
+            (SELECT count(*)::int FROM project_list WHERE category_id=$1) AS l`, [id]);
+  const k = r?.k ?? 0, l = r?.l ?? 0;
+  if (!k && !l) return;
+  const left = [k ? '지식' : '', l ? '프로젝트 목록' : ''].filter(Boolean).join('과 ');
+  throw new HttpError(409, `'${name}' 분류에 ${left}이 남아 있어 지울 수 없습니다(검토 대기 · 보관 지식과 내가 볼 수 없는 것도 셉니다). `
+    + '지식은 다른 분류로 옮기고 프로젝트 목록은 분류를 바꾼 뒤 지우세요. 분류 후보에서만 빼려면 치우기를 쓰세요.');
+}
+
 export async function deleteCategory(id: number, ctx?: WriteCtx): Promise<{ deleted: boolean; id: number }> {
   const before = await getCategory(id);
   if (!before) throw new Error(`카테고리 #${id} 없음`);
+  await assertDeletable(id, String(before.name || before.key));
   await itemsPool.query(`DELETE FROM category WHERE id=$1`, [id]); // FK CASCADE: 매핑·엣지·정션 동반 삭제
   await auditCategory(before.key, "delete", before, null, ctx);
   return { deleted: true, id };

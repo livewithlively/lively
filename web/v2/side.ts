@@ -1962,8 +1962,8 @@ function renderProjTree(): void {
 //   묶음 카드 = 홈 프로젝트 카드(.v2-pg)와 같은 모양(접히면 한 줄, 펴면 흰 카드) · 분류 행 = 프로젝트 트리 리스트 행 ·
 //   「N개 더」 = 홈 카드의 「지난 세션」 줄(.v2-pg-past). 원준: "지금 디자인 시스템과 벗어나면 안 돼."
 //  ⚠ 이모지는 쓰지 않는다 — 아이콘은 icons.ts 한 벌(#2043 원준 지시). 「담당」은 알약 대신 이름 뒤 사람 아이콘(person).
-//  분류 편집: 「분류」 소제목의 [편집] · 묶음 머리 호버 ✎ — 지금은 분류체계 화면(#/categories)으로 간다. 편집 모달은
-//   안쪽을 원준님과 같이 정하기로 했다(검토판 보드 4). 모달이 서면 두 입구의 목적지만 바꾼다.
+//  분류 편집(#4233): 「분류」 소제목의 [편집] · 묶음 머리 호버 ✎ 는 분류체계 앱(#/taxonomy)으로, 분류 줄에 올리면 뜨는 ✎ 는
+//   그 분류(#/taxonomy/<id>)로 간다. 맥락 관리의 카테고리 탭(#/categories)은 걷었다.
 interface WikiCat { id: number; name: string; key: string; description?: string | null; knowledge_count?: number; group?: string | null }
 let wikiCats: WikiCat[] | null = null;
 let wikiLoading = false;

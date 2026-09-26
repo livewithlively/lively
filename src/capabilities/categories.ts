@@ -256,7 +256,8 @@ const categoryDelete: Capability = {
   name: "category_delete",
   title: "카테고리 삭제",
   description:
-    "카테고리를 삭제한다(매핑·엣지·정션 cascade). 감사 스냅샷으로 보존되어 content_restore 로 본체 복원 가능(연결은 복원 안 됨). " +
+    "카테고리를 삭제한다. 지식 매핑(rejected 제외)이나 이 카테고리를 단 프로젝트 목록이 하나라도 있으면 409 로 거절한다(공개범위와 상관없이 센다, #4233). " +
+    "엣지·정션은 cascade. 감사 스냅샷으로 보존되어 content_restore 로 본체 복원 가능(연결은 복원 안 됨). " +
     "⚠ 사람(웹)만 — 에이전트(MCP)는 403(비가역). 가역적 숨김은 비활성(deprecate) 으로.",
   scope: "context",
   input: categoryDeleteInput,

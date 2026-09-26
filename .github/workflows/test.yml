@@ -125,6 +125,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/project-body-guard.pg-test.mjs
+      # ⑤-a2 분류 지우기는 비었을 때만(#4233 분류체계 앱). 화면의 수는 보는 사람의 공개범위로 센 수라, 서버가 공개범위와 상관없이
+      #    세어 거절해야 한다(못 보는 지식 · 구성원 전용 목록 포함). 핸들러를 부르고 read-back 한다.
+      - name: 분류 지우기 가드 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/category-delete-guard.pg-test.mjs
       # ④-e 자료 접기·지식 롤업(나무·목록·총계 공용 술어)의 의미와 모양 — 실패 양식이 크래시가 아니라
       #    «화면 숫자만 틀림» 또는 «결과는 같은데 수백 초»다. 접기 단위(대화 1건)·지식 롤업(답글→루트)·
       #    fail-open(부모 미수집)이 전부 SQL 조건이라 목으로는 검증 대상 자체가 빠지고, 느린 모양으로 되돌아가도

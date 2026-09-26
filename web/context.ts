@@ -163,7 +163,8 @@ async function deliverScreen(b: HTMLElement): Promise<void> {
 
 /** 옛 주소 → 새 자리. 북마크·문서·화면 안 링크가 살아 있어야 한다(#1841 방식 승계). */
 const LEGACY_STAGE: Record<string, string> = {
-  overview: 'home', collect: 'sources', knowledge: 'distill', topics: 'category', classify: 'category', manage: 'checks',
+  //  topics · classify(옛 카테고리 단계 이름)는 여기 없다. #4233 에서 분류체계 앱이 됐고 renderContext 초입이 그리로 보낸다.
+  overview: 'home', collect: 'sources', knowledge: 'distill', manage: 'checks',
 };
 const LEGACY_ITEM: Record<string, string> = {
   overview: 'home', 'ingest-policy': 'distillers', classifiers: 'categories', findings: 'inbox',

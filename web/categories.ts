@@ -517,9 +517,11 @@ function categoryRow(c: any, ctx: CatCtx) {
 async function deleteCategory(c: any, reload: () => void) {
   const ok = await confirmDialog({
     title: `‘${c.name || c.key}’ 분류를 삭제할까요?`,
+    //  #4233. 서버가 비었을 때만 지운다(지식 매핑 · 프로젝트 목록이 있으면 409, 공개범위와 상관없이 센다). 거절 문구는 아래 실패 토스트가 그대로 띄운다.
     lines: [
-      '이 분류에 연결된 지식 매핑과 분류 간 연결이 함께 삭제됩니다.',
-      ...(Number(c.knowledge_count) > 0 ? [`현재 지식 ${fmtNum(c.knowledge_count)}건이 이 분류에 있습니다.`] : []),
+      '지식이나 프로젝트 목록이 붙어 있으면 지울 수 없습니다. 먼저 옮기거나, 분류 후보에서만 빼려면 치우기를 쓰세요.',
+      '분류 사이 연결은 함께 지워집니다.',
+      ...(Number(c.knowledge_count) > 0 ? [`지금 이 분류에 지식 ${fmtNum(c.knowledge_count)}건이 보입니다.`] : []),
     ],
     confirmText: '삭제', danger: true,
   });
