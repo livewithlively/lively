@@ -154,6 +154,39 @@ t("[H7] 창의 크기 — 부팅 창 90초 · 사람을 기다리는 창은 아�
   assert.equal(FIRST_PROMPT_HOLD_MS, 2 * 60 * 60_000);
 });
 
+// ── codex 시작 «Update available» 창 (#4135 후속, 실측 2026-09-26 매니지드 라이브 pane) ─────────────
+//  ★ 지키는 것: 이 창엔 **Enter 를 절대 보내지 않는다.** 커서가 «1. Update now» 에 있고, 그 항목은
+//   `npm install -g @openai/codex` 를 돌린다 — 이미지의 전역 prefix 는 root 소유라 EACCES 로 실패하고
+//   **codex 가 그대로 끝난다**(pane 이 셸이 된다). 실측으로 Escape 는 창만 닫고 codex 를 살려 둔다.
+const CODEX_UPDATE = [   // 라이브 캡처 그대로(0.149.1 · npm 전역 설치)
+  "  ✨ Update available! 0.149.1 -> 0.157.1",
+  "  Release notes: https://github.com/openai/codex/releases/latest",
+  "› 1. Update now (runs `npm install -g @openai/codex`)",
+  "  2. Skip",
+  "  3. Skip until next version",
+  "  Press enter to continue",
+].join("\n");
+//  standalone 설치본의 **비차단 배너**(실측 0.149.1·0.157.1 로컬) — 선택지가 없고 입력칸이 살아 있다.
+const CODEX_UPDATE_BANNER = [
+  "╭─────────────────────────────────────────────────╮",
+  "│ ✨ Update available! 0.149.1 -> 0.157.1         │",
+  "│ Run npm install -g @openai/codex to update.     │",
+  "╰─────────────────────────────────────────────────╯",
+  "› Ask Codex to do anything",
+  "  ? for shortcuts",
+].join("\n");
+const codexBase = { ...base, harness: "codex", paneCmd: "codex", elapsedMs: 8000 };
+t("[U1] ★ 번호 선택지가 있는 업데이트 창 → dismiss-update(Escape — Enter 는 codex 를 죽인다)", () =>
+  assert.equal(firstPromptStep({ ...codexBase, pane: CODEX_UPDATE }), "dismiss-update"));
+t("[U2] 비차단 배너는 그 창이 아니다 — 입력칸이 살아 있으므로 종전 판정(send)", () =>
+  assert.equal(firstPromptStep({ ...codexBase, pane: CODEX_UPDATE_BANNER }), "send"));
+t("[U3] 업데이트 창이 신뢰 대화상자보다 먼저다(실측 순서) — 둘이 같이 보이면 업데이트를 먼저 닫는다", () =>
+  assert.equal(firstPromptStep({ ...codexBase, pane: `${CODEX_UPDATE}\n${TRUST}` }), "dismiss-update"));
+t("[U4] 본문에 «Update available» 만 있을 뿐인 화면엔 아무 키도 안 보낸다(TRUST_DIALOG 와 같은 교리)", () =>
+  assert.equal(firstPromptStep({ ...codexBase, pane: "  Update available! 0.149.1 -> 0.157.1\n› Ask Codex to do anything\n  ? for shortcuts" }), "send"));
+t("[U5] 사람이 고른 폴더에서도 닫는다 — 이 창은 보안 결정이 아니라 «업데이트 안 함»(보수적 답)이다", () =>
+  assert.equal(firstPromptStep({ ...codexBase, pane: CODEX_UPDATE, trustOk: false }), "dismiss-update"));
+
 // ── 시작 직후 pane 조회 실패(#4135) ────────────────────────────────────────────────────────────────
 //  실제 장애는 세션 생성 직후 첫 capture-pane/display-message 실패를 «세션이 사라짐»으로 단정해 첫 지시가 버려진 것이다.
 //  가짜 시계·화면으로 재시도 경계와 정확히 한 번 전송을 실행부 수준에서 잠근다.
@@ -162,6 +195,7 @@ async function runInjection(results: PeekResult[], over?: { pollMs?: number; pee
   let now = 0;
   let reads = 0;
   const sent: Array<{ id: string; text: string }> = [];
+  const keys: string[] = [];   // #4135 후속 — **어떤 키**가 갔는지 본다(업데이트 창에 Enter 가 가면 codex 가 죽는다)
   const runtime: FirstPromptRuntime = {
     peek: async () => {
       const result = results[Math.min(reads++, results.length - 1)];
@@ -171,7 +205,11 @@ async function runInjection(results: PeekResult[], over?: { pollMs?: number; pee
     sleep: async (ms) => { now += ms; },
     now: () => now,
     send: async (id, text) => { sent.push({ id, text }); },
-    trustKeys: { down: async () => {}, enter: async () => {} },
+    trustKeys: {
+      down: async () => { keys.push("down"); },
+      enter: async () => { keys.push("enter"); },
+      esc: async () => { keys.push("esc"); },
+    },
   };
   const ok = await injectFirstPromptWithRuntime(
     "box-test",
@@ -180,7 +218,7 @@ async function runInjection(results: PeekResult[], over?: { pollMs?: number; pee
     { maxMs: 100_000, pollMs: over?.pollMs ?? 5, peekGraceMs: over?.peekGraceMs ?? 15 },
     runtime,
   );
-  return { ok, reads, sent, now };
+  return { ok, reads, sent, now, keys };
 }
 
 let asyncPass = 0;
@@ -226,6 +264,20 @@ await ta("[P6] 화면은 읽히지만 아직 준비되지 않았으면 기존 �
   assert.equal(got.ok, true);
   assert.equal(got.reads, 2);
   assert.equal(got.sent.length, 1);
+});
+await ta("[U6] ★ 실행부 — 업데이트 창엔 **Escape 만** 가고(Enter 금지), 창이 닫히면 첫 지시가 한 번 간다", async () => {
+  const got = await runInjection([
+    { pane: CODEX_UPDATE, paneCmd: "codex" },
+    { pane: CODEX_READY, paneCmd: "codex" },
+  ]);
+  assert.equal(got.ok, true);
+  assert.deepEqual(got.keys, ["esc"], "Escape 하나뿐 — enter 가 섞이면 npm 설치가 돌아 codex 가 죽는다");
+  assert.equal(got.sent.length, 1);
+});
+await ta("[U7] 창이 안 닫히면 Escape 를 상한(2)까지만 보낸다 — 폴마다 쏘지 않는다", async () => {
+  const got = await runInjection([{ pane: CODEX_UPDATE, paneCmd: "codex" }], { pollMs: 5, peekGraceMs: 15 });
+  assert.equal(got.ok, false);                       // 끝내 입력칸이 안 떴다 → 사람에게 남긴다
+  assert.deepEqual(got.keys, ["esc", "esc"]);
 });
 t("[P7] 운영 기본 조회 유예는 15초다", () => assert.equal(FIRST_PROMPT_PEEK_GRACE_MS, 15_000));
 

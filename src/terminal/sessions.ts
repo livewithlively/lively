@@ -36,6 +36,7 @@ import os from "node:os";
 import path from "node:path";
 import { MEMBER_HOME_BASE } from "./terminal-transcript.js";
 import { ensureFolderTrusted, TRUST_PLANS, type TrustIo } from "./harness-trust.js";
+import { ensureCodexUpdateCheckOff } from "./codex-update-check.js";   // #4135 후속 — 시작 «Update available» 창이 codex 를 죽이던 것
 import { ensureCodexHooksTrusted } from "./codex-hook-trust-apply.js";   // #4135 후속 — «Hooks need review» 를 미리 지운다   // #1631·#2478 — 첫 실행 «폴더 신뢰» 물음이 첫 지시를 삼키던 것
 import { autoTrustWorkspace } from "./session-create-guards.js";
 import { ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
@@ -958,6 +959,14 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //  ⚠ 우리가 심은 훅만 신뢰한다(codex-hook-trust.isOurHook). 레포에 딸려온 훅까지 신뢰하면 그 창이 막으려는
     //   일을 우리가 대신 하는 것이 된다. 해시는 codex 가 알려 준 값을 옮겨 적을 뿐이다(규격은 비공개).
     if (harness.key === "codex") {
+      //  ── codex 시작 «Update available» 창을 미리 없앤다 (#4135 후속) ──────────────────────
+      //  이미지의 codex 는 npm 전역 설치라 시작할 때 «업데이트 하시겠습니까» 를 **대화형**으로 묻는다. 커서가
+      //   «1. Update now» 에 있고 그 항목은 `npm install -g` 를 돌린다 — 전역 prefix 가 root 소유라 EACCES 로
+      //   실패하고 **codex 가 그 자리에서 끝난다**(pane 이 셸이 되고, 사람은 «내가 직접 codex 라고 쳐야 실행된다»
+      //   를 본다 — 원준님 실측 2026-09-26, 라이브 캡처). 안 눌러도 창이 남아 첫 지시가 영영 안 들어간다.
+      //  ⚠ 폴더 신뢰(trustOk)와 **무관하게** 심는다 — 여기서 정하는 것은 «이 세션에서 업데이트하지 않는다» 이고,
+      //   그건 이미지의 계약(업데이트 = 이미지 재빌드)이라 사람의 폴더 선택과 다른 축이다.
+      await ensureCodexUpdateCheckOff(io, configFile);
       //  격리면 그 멤버로 중계해 돌리고, 아니면 이 호스트에서 그대로 돌린다(그 홈의 codex 가 답한다).
       const sh = osUser
         ? (cmd: string) => memberShOut(osUser, cmd)
