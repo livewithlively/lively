@@ -94,7 +94,7 @@
 .pjh-wf-txt { display: inline-flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pjh-wf .pjh-ic { color: var(--muted-2); }
 .pjh-wf > .btn { margin-left: auto; flex: none; }
-.pjh-wf > .btn + .btn { margin-left: 0; }
+.pjh-wf > .btn ~ .btn { margin-left: 0; }   /* 사이에 숨은 input(업로드 고르기)이 있어도 단추들은 오른쪽에 붙는다 */
 .pjh-wf > .btn, .pjh-wf .btn-sm { height: 26px; padding: 0 8px; border: 0; background: none; border-radius: 7px; color: var(--ink-sub); font-size: 12.5px; font-weight: 700; box-shadow: none; }
 .pjh-wf > .btn:hover, .pjh-wf .btn-sm:hover { background: var(--bg-punch); color: var(--blue); box-shadow: none; }
 .pjh-wf > .btn.btn-ghost > .pjh-ic { width: 13px; height: 13px; }
