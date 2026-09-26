@@ -23,6 +23,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { localExternalId, parseLocalExternalId, type LocalRoot } from "../ingest/local-file-core.js";
 import { resolveLocalFile, ingestLocalUpload, supersedeLocalPath, reactivateLocalPath } from "../ingest/local-file.js";
+import { PERSON_UPLOAD } from "../ingest/upload-entry.js";   // #4233: 세션 입력칸에 사람이 붙인 파일은 「올린 자료」
 import { projectStorage, type ProjectStorage } from "./project-storage.js";   // #4064 — 옮겨 갈 자리·실행 주체
 import { memberReadTo, memberRm, memberMv, memberStat, memberWriteFrom } from "../terminal/terminal-member-fs.js";   // 격리 멤버(#524) 개인 폴더는 그 uid 로만 읽힌다
 import { logger } from "../log.js";
@@ -114,6 +115,8 @@ export function trackRelocationSync(
  */
 export async function relocateAttachmentsToProject(o: {
   prompt: string; projectId: number; projectName?: string | null; folder: string; memberId: string;
+  /** 올린 사람 이름(이메일): 옮긴 자료의 원천 칸이 사람을 말하게(#4233). 없으면 비운다(종전). */
+  memberName?: string | null;
 }): Promise<RelocateResult> {
   const refs = refsInPrompt(o.prompt);
   if (!refs.length || !o.folder) return { prompt: o.prompt, moved: 0, failed: 0, moves: [] };
@@ -179,7 +182,7 @@ export async function relocateAttachmentsToProject(o: {
       const sync = trackRelocationSync(
         () => ingestLocalUpload({
           root: { kind: "project", id: o.projectId }, folder: o.folder, base, abs: dest, osUser: store.osUser,
-          uploader: { id: o.memberId, name: null }, channelFallback: "uploads",
+          uploader: { id: o.memberId, name: o.memberName ?? null }, channelFallback: "uploads", entry: PERSON_UPLOAD,
         }),
         () => supersedeLocalPath(p.root, p.rel),
         (e) => logger.warn({ err: e, ref }, "[attach-relocate] 자료 등록·정리 실패 — 파일 이동은 이미 끝났다"),
