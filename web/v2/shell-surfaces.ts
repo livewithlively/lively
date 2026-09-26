@@ -42,6 +42,7 @@ export const SHELL_SURFACES: Record<string, ShellSurface> = {
 
   // ── 앱화 대상 — 줄어들기만 한다 ──
   app: { kind: "todo", plan: "클래식 화면 iframe(#/app/<key>). APPS 표의 항목을 하나씩 builtin AppPackage(system.renderer)로 옮기고, 표가 비면 이 라우트도 없앤다." },
+  taxonomy: { kind: "app", appId: "taxonomy", note: "분류체계(#4233). 맥락 관리의 카테고리 탭을 앱으로 뺐다. 전체 지도(묶음 칸 · 분류마다 지식 수와 프로젝트 수) · 손볼 것 · 분류 상세(연결 그림 + 지식 · 프로젝트 목록). project=global·single 빌트인. 딥링크 #/taxonomy 와 분류 하나 #/taxonomy/<id> 가 정본이다." },
   sources: { kind: "app", appId: "sources", note: "자료(#2423) — 라이블리가 가진 원본을 출처별로 훑고 하나를 열어 원문을 본다. project=global·single 빌트인. 딥링크 #/sources 와 자료 하나 #/sources/<id> 가 정본이다." },
   inbox: { kind: "app", appId: "inbox", note: "받은 알림 이력(#1891 → #4180: 세션 대기·완료는 빠지고 댓글·언급·리브의 답·앱 알림만). 입구는 홈 머리줄의 종(notify-bell.ts). project=global·single-instance 빌트인. 딥링크 #/inbox 를 정본으로 유지한다(세션의 #/s/ 와 같은 규칙)." },
   liv: { kind: "todo", plan: "리브 — 대화하는 화면이라 가장 앱다운 축에 든다. session subject 를 갖는 builtin 후보." },
@@ -68,5 +69,5 @@ export function activeNavKey(page: string, id?: string): string {
   const s = SHELL_SURFACES[page];
   if (!s) return "";
   // OS 표면·앱화 대상 중 사이드바 도크에 자리가 있는 것만 활성 표시를 갖는다.
-  return ["inbox", "sources", "connect", "archive", "trash", "liv"].includes(page) ? page : "";
+  return ["inbox", "sources", "taxonomy", "connect", "archive", "trash", "liv"].includes(page) ? page : "";
 }

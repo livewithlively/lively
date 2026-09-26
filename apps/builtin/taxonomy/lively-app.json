@@ -1,0 +1,28 @@
+{
+  "$schema": "https://dev.lvly.io/ui/lively-app.schema.json",
+  "id": "taxonomy",
+  "title": "분류체계",
+  "version": "0.1.0",
+  "publisher": {
+    "name": "Lively"
+  },
+  "instances": {
+    "project": "global",
+    "multiplicity": "single"
+  },
+  "system": {
+    "renderer": "taxonomy",
+    "route": "#/taxonomy"
+  },
+  "permissions": {
+    "scopes": [],
+    "tools": [
+      "category_list",
+      "category_get",
+      "category_update",
+      "category_delete",
+      "category_group_list",
+      "knowledge_list"
+    ]
+  }
+}

@@ -27,7 +27,7 @@
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다.
 //  ⚠ #2460 — 그중 **사람이 고른 것**(고정·접힘·묶는 축)은 서버가 정본이고 브라우저는 첫 페인트용
 //   캐시다(shell-prefs.ts). 선언 한 줄이 어느 쪽인지 말한다 — shellPrefStore = 계정 · deviceStore = 이 기기.
-import { api, el, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
+import { api, el, hasScope, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { planWikiCards, allocWikiRows } from './wiki-cards.js';
 import { newItemPlan, newRowSlot, planProjCards, type ProjCard } from './proj-cards.js';   // #4233 안 1 — [프로젝트] 사이드바 카드 계획(순수)
 import { hiddenCardsLabel, planSideCards, projectLines, SESS_GROUP_BYS, settleScope, sideCards, withGroupBy, type SessScope, type SideCardProj } from '../lib/sess-all.js';   // #4158 · #4233 2안 — [AI 세션] 사이드바 카드 · 묶기 기준(순수)
@@ -39,6 +39,8 @@ import { SESS_STATES, isDotState, rowDotCls } from '../session-status.js';   // 
 import { lastAsk, watchLastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { sourcesFindInput, sourcesFindShown, sourcesSideBody, sourcesSideCount, sourcesUploadPick, toggleSourcesFind } from './sources.js';   // #2423 자료 앱 사이드바 내용
+import { loadTaxonomy, openForm as openTaxForm, openGroupManager, taxonomyData } from './taxonomy.js';   // #4233 분류체계 앱 사이드바 재료
+import { catId as taxCatId, fixList as taxFixList, groupKeyOf as taxGroupKey, isArchived as taxArchived, isEmptyCat as taxEmpty, knowledgeOf as taxKnow } from '../lib/taxonomy-map.js';
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { orderCards, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from './hold-rules.js';   // #3856 — 카드 자리 자물쇠(순수)
 import { pinnedFirst, planSessAxis, splitHomePins } from '../lib/home-pins.js';   // #4233 — 「고정」 나누기(고정한 단위가 그대로 움직인다 · 순수)
@@ -343,7 +345,7 @@ export interface SideInstance {
   id: string;
   title: string;
   active: boolean;
-  icon: 'home' | 'chat' | 'inbox' | 'link' | 'archive' | 'trash' | 'liv' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'web' | 'sess' | 'term' | 'src' | 'app';
+  icon: 'home' | 'chat' | 'inbox' | 'link' | 'archive' | 'trash' | 'liv' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'web' | 'sess' | 'term' | 'src' | 'tags' | 'app';
   state?: string;
   meta?: string;
   /** 소속 프로젝트 — 이름 하나만. 스페이스 › 리스트 계층은 좁은 줄에서 읽히지 않아 걷었다(#1954). self=이 화면이 그 프로젝트다. */
@@ -526,7 +528,7 @@ function instanceIcon(inst: SideInstance): SVGElement {
   if (inst.icon === 'link') return glyph('link', cls);
   if (inst.icon === 'archive' || inst.icon === 'trash') return glyph(inst.icon, cls);
   const k = inst.icon === 'app' ? 'proj' : inst.icon;
-  return appIcon(k as 'term' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web' | 'src', cls);
+  return appIcon(k as 'term' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web' | 'src' | 'tags', cls);
 }
 
 
@@ -1124,6 +1126,8 @@ function render(): void {
   //   보던 구역이 그대로 돌아온다. 조립은 아래 renderSourcesSection — 구역들과 같은 틀(topBits·secHead·secFoot)이라
   //   레일을 숨겨도 문패·구역 이동·발치 도크가 똑같이 선다.
   if (last.activeKey() === 'sources') { sideRoot?.setAttribute('data-sec', 'sources'); renderSourcesSection(); return; }
+  //  #4233 분류체계 앱도 앱 소유 사이드바다(자료와 같은 판정 · 같은 틀).
+  if (last.activeKey() === 'taxonomy') { sideRoot?.setAttribute('data-sec', 'taxonomy'); renderTaxonomySection(); return; }
   const sec: RailSection = hooks.section?.() || 'home';
   sideRoot?.setAttribute('data-sec', sec);
   //  목록만 다시 그리는 붓은 **그 구역이 자기 것을 건다** — 여기서 먼저 비워, 붓이 없는 구역(트리·서가)에서
@@ -1152,7 +1156,7 @@ function wsHead(): HTMLElement {
   const sec = hooks.section?.() || 'home';
   const ak = last ? last.activeKey() : '';
   //  구역 아닌 화면의 특례 — 리브('갈 곳')와 자료(앱, #2423). 여기 있는데 머리가 «홈»이면 거짓말이다.
-  const cur = ak === 'liv' ? { label: '리브', icon: 'liv' } : ak === 'sources' ? { label: '자료', icon: 'src' } : sectionDef(sec);
+  const cur = ak === 'liv' ? { label: '리브', icon: 'liv' } : ak === 'sources' ? { label: '자료', icon: 'src' } : ak === 'taxonomy' ? { label: '분류체계', icon: 'tags' } : sectionDef(sec);
   return el('div', { class: 'v2-side-wshd' },
     stackTile({ small: true, label: true }),
     el('button', { class: 'v2-secdd', type: 'button', 'aria-haspopup': 'menu', title: '구역 바꾸기 — 홈 · AI 세션 · 프로젝트 · 위키 · 리브',
@@ -1237,6 +1241,120 @@ function renderSourcesSection(): void {
       ...(findOn ? [el('div', { class: 'v2-find v2-find--apps' }, sourcesFindInput(() => redraw()))] : []),
       sourcesSideBody(() => redraw())),
     secFoot());
+}
+
+// ══ [분류체계] 앱 사이드바 (#4233). 위키 사이드바 3판과 같은 부품(고정 두 줄 · 이름표 · 묶음 카드 · 높이에 맞춘 줄 나누기) ══
+//  고정 두 줄 = 「전체 지도 N」(쓰는 중인 분류 수) · 「손볼 것 N」(정의 없음 · 빈 분류 · 제안 대기인 분류 수).
+//  묶음 카드의 줄 = 빈 분류가 아닌 분류(지식 많은 순, 수는 지식 수). 빈 분류는 「N개 더 · 빈 분류 M」 줄 안으로 접힌다.
+//  재료는 taxonomy.ts 가 쥔다(앱 화면과 같은 캐시). 팀 · 담당 개념은 없다(#4233 에서 걷었다).
+const taxClosed = new Set<string>();
+const taxMore = new Set<string>();
+/** 지금 보는 것. 주소에서 읽는다(`#/taxonomy` · `?view=fix` · `/<id>`). */
+function taxActive(): { view: 'map' | 'fix' | 'cat'; id: number } {
+  const h = location.hash.replace(/^#\/?/, '');
+  const [path, q] = h.split('?');
+  const segs = path.split('/').filter(Boolean);
+  if (segs[0] !== 'taxonomy') return { view: 'map', id: 0 };
+  if (segs[1]) return { view: 'cat', id: Number(decodeURIComponent(segs[1])) || 0 };
+  return { view: /(^|&)view=fix(&|$)/.test(q || '') ? 'fix' : 'map', id: 0 };
+}
+function renderTaxonomySection(): void {
+  if (!last) return;
+  const { host } = last;
+  const navEl = navRow();
+  const navHost = hooks.navHost?.() || null;
+  if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
+  loadTaxonomy(() => { if (last && last.activeKey() === 'taxonomy') redraw(); });
+  bindWikiResize();
+  const d = taxonomyData();
+  const at = taxActive();
+  const edit = hasScope('context');
+  const fmtN = (n: number): string => Number(n).toLocaleString('en-US');
+  const active = d ? d.cats.filter((c) => !taxArchived(c)) : [];
+  const fixN = d ? taxFixList(d.cats, d.counts).length : null;
+  const reload = (): void => { loadTaxonomy(() => { if (last && last.activeKey() === 'taxonomy') redraw(); }, true); };
+
+  //  묶음(sort 순) + 모르는 묶음 · 묶음 없음은 맨 끝 한 카드(그런 분류가 있을 때만). 전체 지도(planTaxMap)와 같은 규칙.
+  const groups = d ? [...d.groups].sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0)) : [];
+  const known = new Set(groups.map((g) => g.key));
+  const cards = groups.map((g) => ({ key: g.key, name: g.name, hint: String(g.hint || '') }));
+  if (active.some((c) => !known.has(taxGroupKey(c)))) cards.push({ key: '', name: '묶음 없음', hint: '' });
+  const rank = (a: { name: string }, b: { name: string }, ka: number, kb: number): number => kb - ka || a.name.localeCompare(b.name, 'ko');
+  const parts = cards.map((g) => {
+    const inG = active.filter((c) => (g.key ? taxGroupKey(c) === g.key : !known.has(taxGroupKey(c))));
+    const rows = inG.filter((c) => !taxEmpty(c, d!.counts)).sort((a, b) => rank(a, b, taxKnow(a), taxKnow(b)));
+    const empties = inG.filter((c) => taxEmpty(c, d!.counts)).sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+    const full = taxMore.has(g.key) || empties.some((c) => taxCatId(c) === at.id);
+    const idx = rows.findIndex((c) => taxCatId(c) === at.id);
+    const open = !taxClosed.has(g.key) || rows.some((c) => taxCatId(c) === at.id) || empties.some((c) => taxCatId(c) === at.id);
+    return { g, rows, empties, full, open, forced: idx >= 0 ? idx + 1 : 0, sum: inG.reduce((a, c) => a + taxKnow(c), 0) };
+  });
+  const order = parts.filter((x) => x.open && !x.full).map((x) => x.g.key);
+  const sizes = Object.fromEntries(parts.map((x) => [x.g.key, x.rows.length]));
+  const forced = Object.fromEntries(parts.filter((x) => x.forced).map((x) => [x.g.key, x.forced]));
+
+  const catRow = (c: (typeof active)[number]): HTMLElement => {
+    const on = at.view === 'cat' && at.id === taxCatId(c);
+    const n = taxKnow(c);
+    return el('a', { class: 'v2-wcat v2-ptl v2-kcat' + (on ? ' on' : '') + (n ? '' : ' zero'), href: '#/taxonomy/' + encodeURIComponent(String(taxCatId(c))),
+      title: c.name, ...(on ? { 'aria-current': 'true' } : {}) },
+      icon('list', 'v2-ptl-ic'), el('span', { class: 'n', text: c.name }), el('span', { class: 'v2-cnt', text: fmtN(n) }));
+  };
+  const moreRow = (x: (typeof parts)[number], hidden: number): HTMLElement | null => {
+    const e = x.empties.length;
+    if (!x.full && hidden <= 0 && !e) return null;
+    const label = x.full ? '접기' : hidden > 0 ? `${hidden}개 더${e ? ` · 빈 분류 ${e}` : ''}` : `빈 분류 ${e}`;
+    return el('button', { class: 'v2-pg-past' + (x.full ? ' open' : ''), type: 'button', 'aria-expanded': String(x.full),
+      title: x.full ? '이 묶음 접기' : '이 묶음의 분류 전부 보기',
+      onclick: (ev: Event) => { ev.preventDefault(); if (taxMore.has(x.g.key)) taxMore.delete(x.g.key); else taxMore.add(x.g.key); redraw(); } },
+      el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }), el('span', { class: 'n', text: label })) as HTMLElement;
+  };
+  const card = (x: (typeof parts)[number], n: number): HTMLElement => {
+    const shown = x.full ? [...x.rows, ...x.empties] : x.rows.slice(0, n);
+    const kids: HTMLElement[] = shown.map(catRow);
+    const more = moreRow(x, x.full ? 0 : x.rows.length - shown.length);
+    if (more) kids.push(more);
+    if (!x.rows.length && !x.empties.length) kids.push(el('p', { class: 'v2-ksp-empty', text: '아직 이 묶음에 든 분류가 없어요.' }));
+    return el('section', { class: 'v2-ksp' + (x.open ? ' open' : ''), 'aria-label': x.g.name, 'data-grp': x.g.key },
+      el('div', { class: 'v2-ksp-h' },
+        el('button', { class: 'v2-ksp-t', type: 'button', 'aria-expanded': String(x.open), title: x.g.hint || x.g.name,
+          onclick: () => { if (taxClosed.has(x.g.key)) taxClosed.delete(x.g.key); else taxClosed.add(x.g.key); redraw(); } },
+          el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }), icon('layers', 'v2-ksp-ic'), el('span', { class: 'n', text: x.g.name })),
+        el('span', { class: 'v2-cnt', text: fmtN(x.sum) })),
+      x.open ? el('div', { class: 'v2-ksp-b' }, ...kids) : null);
+  };
+  const build = (alloc: Record<string, number>): HTMLElement[] => {
+    if (!d) return [el('p', { class: 'v2-empty', text: '불러오는 중…' })];
+    if (!d.cats.length) return [el('p', { class: 'v2-empty', text: '아직 분류가 없어요.' })];
+    return [
+      el('div', { class: 'v2-app-group v2-kgroup', role: 'presentation' },
+        el('span', { class: 'n', text: '묶음' }),
+        edit ? el('button', { class: 'v2-kedit', type: 'button', title: '묶음 이름 · 순서 · 새 묶음 · 지우기', onclick: () => openGroupManager(reload) },
+          icon('pen', 'v2-kedit-ic'), el('span', { text: '정리' })) : null),
+      ...parts.map((x) => card(x, alloc[x.g.key] ?? x.rows.length)),
+    ];
+  };
+  const keep = listBefore();
+  const listEl = el('div', { class: 'v2-app-list v2-kshelf', 'aria-label': '묶음' });
+  appListEl = listEl;
+  const fixRow = (href: string, ic: string, label: string, n: number | null, on: boolean, tip: string): HTMLElement =>
+    el('a', { class: 'v2-wcat v2-ptl v2-kview' + (on ? ' on' : ''), href, title: tip, ...(on ? { 'aria-current': 'true' } : {}) },
+      icon(ic, 'v2-ptl-ic'), el('span', { class: 'n', text: label }), n != null ? el('span', { class: 'v2-cnt', text: fmtN(n) }) : null);
+  host.replaceChildren(
+    ...topBits(navEl, navHost),
+    el('section', { class: 'v2-app-space', 'aria-label': '분류체계' },
+      secHead('분류체계', d ? active.length : null,
+        edit ? el('button', { class: 'v2-app-new', type: 'button', 'aria-label': '새 분류', title: '새 분류를 만듭니다',
+          onclick: () => void openTaxForm(null, reload) },
+          sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))) : null),
+      el('nav', { class: 'v2-kviews', 'aria-label': '분류 모아 보기' },
+        fixRow('#/taxonomy', 'chart', '전체 지도', d ? active.length : null, at.view === 'map', '전체 지도: 묶음마다 분류와 지식 수 · 프로젝트 수'),
+        fixRow('#/taxonomy?view=fix', 'alert', '손볼 것', fixN, at.view === 'fix', '손볼 것: 정의 없음 · 빈 분류 · 제안 대기')),
+      listEl),
+    secFoot());
+  fitWikiList(listEl, order, sizes, forced, build);
+  listAfter(keep);
+  bindSideKeys();
 }
 
 function renderHomeApps(): void {
@@ -1870,7 +1988,7 @@ function bindWikiResize(): void {
   let t = 0;
   window.addEventListener('resize', () => {
     window.clearTimeout(t);
-    t = window.setTimeout(() => { if (last && (hooks.section?.() || 'home') === 'wiki') redraw(); }, 150);
+    t = window.setTimeout(() => { if (last && ((hooks.section?.() || 'home') === 'wiki' || last.activeKey() === 'taxonomy')) redraw(); }, 150);
   });
 }
 
@@ -1929,7 +2047,12 @@ function renderWiki(): void {
       title: c.name + (c.description ? ' — ' + c.description : ''), ...(on ? { 'aria-current': 'true' } : {}) },
       icon('list', 'v2-ptl-ic'),
       el('span', { class: 'n', text: c.name }),
-      el('span', { class: 'v2-cnt', text: fmtN(n) }));
+      el('span', { class: 'v2-cnt', text: fmtN(n) }),
+      //  #4233. 줄에 올리면 ✎: 분류체계 앱에서 이 분류를 연다. 줄 자체가 링크라 안에 링크를 또 두지 않고 누름만 받는다.
+      el('span', { class: 'v2-kcat-edit', role: 'button', tabindex: '0', 'aria-label': c.name + ' 분류 고치기', title: '분류체계 앱에서 이 분류를 엽니다',
+        onclick: (ev: MouseEvent) => { ev.preventDefault(); ev.stopPropagation(); location.hash = '#/taxonomy/' + encodeURIComponent(String(c.id)); },
+        onkeydown: (ev: KeyboardEvent) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); location.hash = '#/taxonomy/' + encodeURIComponent(String(c.id)); } } },
+        icon('pen', 'v2-kedit-ic')));
   };
 
   //  카드 계획은 순수 함수 한 벌(web/v2/wiki-cards.ts) — 여기선 그대로 그리기만 한다(#1631).
@@ -1975,7 +2098,7 @@ function renderWiki(): void {
           icon('layers', 'v2-ksp-ic'),
           el('span', { class: 'n', text: head.name })),
         el('span', { class: 'v2-cnt', text: fmtN(sum) }),
-        el('a', { class: 'v2-ksp-edit', href: '#/categories', 'aria-label': head.name + ' 묶음 편집', title: '이 묶음 편집 — 분류를 옮기고 고칩니다' }, icon('pen', 'v2-kedit-ic'))),
+        el('a', { class: 'v2-ksp-edit', href: '#/taxonomy', 'aria-label': head.name + ' 묶음 편집', title: '분류체계 앱에서 이 묶음의 분류를 고칩니다' }, icon('pen', 'v2-kedit-ic'))),
       p.open ? el('div', { class: 'v2-ksp-b' }, ...kids) : null);
   };
   const build = (alloc: Record<string, number>): HTMLElement[] => {
@@ -1983,7 +2106,7 @@ function renderWiki(): void {
     return [
       el('div', { class: 'v2-app-group v2-kgroup', role: 'presentation' },
         el('span', { class: 'n', text: '분류' }),
-        el('a', { class: 'v2-kedit', href: '#/categories', title: '분류 구성 편집 — 묶음·분류를 옮기고 고칩니다' }, icon('pen', 'v2-kedit-ic'), el('span', { text: '편집' }))),
+        el('a', { class: 'v2-kedit', href: '#/taxonomy', title: '분류체계 앱에서 묶음과 분류를 고칩니다' }, icon('pen', 'v2-kedit-ic'), el('span', { text: '편집' }))),
       ...parts.map((x) => card(x, alloc[x.p.key] ?? x.rows.length)),
     ];
   };

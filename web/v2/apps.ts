@@ -17,7 +17,7 @@ export interface AppDef {
   desc: string;       // 한 줄
   route: string;      // 클래식 해시(#/ 뒤) — iframe 에 실릴 경로
   tab: string | null; // navOn 게이팅에 쓸 클래식 탭 키(없으면 항상 노출)
-  icon: 'home' | 'term' | 'chat' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web' | 'src';
+  icon: 'home' | 'term' | 'chat' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web' | 'src' | 'tags';
   // 무엇으로 그리는가. 없으면 'classic'(같은 index.html 을 ?embed=1 로 iframe).
   //  'browser' = 브라우저 서피스(#1829) — 우리 화면이 아니라 **남의 웹**이라 iframe 이 아니라 `<webview>` 로 띄운다
   //   (사이트가 X-Frame-Options 로 프레임 삽입을 막기 때문 — web/v2/browser-surface.ts 머리말).
@@ -42,6 +42,9 @@ export const APPS: AppDef[] = [
   //   ⚠ 레일에 못 박지 않는다(원준 2026-08-31): "맥락관리·사용가이드 저 위계로 앱에서만 보이고, 눌러서 최근에
   //   나오다가, 원하면 독에 고정". 그래서 문은 런치패드 하나이고, 열면 ② 최근 연 앱에 서고, 거기서 고정한다.
   { key: 'sources', title: '자료', desc: '출처별 원본 — 대화 · 파일 · 이슈 · 적어 둔 것', route: 'sources', tab: null, icon: 'src', kind: 'native' },
+  //  분류체계(#4233). 맥락 관리의 카테고리 탭을 앱으로 뺐다(원준 2026-09-26). 분류는 위키만의 것이 아니라 지식과 프로젝트가
+  //   함께 붙는 축이라, 위키 · 프로젝트 · 맥락 관리 어느 한 화면 안에 두지 않는다. 자료처럼 셸이 직접 그리는 native 앱이다.
+  { key: 'taxonomy', title: '분류체계', desc: '분류와 묶음 · 분류마다 붙은 지식과 프로젝트 · 정의 고치기', route: 'taxonomy', tab: null, icon: 'tags', kind: 'native' },
   { key: 'context', title: '맥락 관리', desc: '우리 AI 가 아는 것과 그것을 만드는 기계들 — 수집기 · 증류기 · 카테고리 · 점검 · AI 전달', route: 'context', tab: 'context', icon: 'ctx' },
   { key: 'sessions', title: '세션 이력', desc: '중앙에 기록된 내 세션 대화 이어보기', route: 'sessions', tab: 'terminal', icon: 'sess' },
   // 설정 — 앱 목록에서 **뺐다**(#2199, 원준 2026-08-27 "앱에 설정을 없애고 … 모달 사이드바에 고급설정 하나 만들어서").
@@ -56,7 +59,7 @@ export const APPS: AppDef[] = [
 export const CLASSIC_PAGES: Record<string, string> = {
   dashboard: 'dashboard', terminal: 'terminal', projects2: 'projects2', projects: 'projects2',
   knowledge: 'knowledge', k: 'knowledge', 'k-edit': 'knowledge', trash: 'knowledge',
-  context: 'context', domainmap: 'context', categories: 'context',
+  context: 'context',
   system: 'system', learn: 'learn', start: 'learn', onboarding: 'learn', install: 'learn',
   sessions: 'sessions', activate: 'system', f: 'knowledge',
 };
@@ -134,8 +137,17 @@ export function soloSessionUrl(id: string): string {
 const ICON_PATHS: Record<AppDef['icon'], string> = {
   //  #2016 — 선 아이콘은 icons.ts 한 벌이다. 홈(클래식)은 옛 대시보드라 위젯 판 넷, 설정은 이빨 있는 톱니.
   home: ICONS.dashboard, term: ICONS.term, chat: ICONS.chat, proj: ICONS.proj, wiki: ICONS.wiki, ctx: ICONS.ctx,
-  sys: ICONS.sys, learn: ICONS.learn, liv: ICONS.liv, sess: ICONS.sess, web: ICONS.web, src: ICONS.src,
+  sys: ICONS.sys, learn: ICONS.learn, liv: ICONS.liv, sess: ICONS.sess, web: ICONS.web, src: ICONS.src, tags: ICONS.tags,
 };
+/** 옛 주소 → 새 셸의 정본 주소(#4233). 분류체계는 맥락 관리의 탭(`#/categories` · 그 전의 `#/domainmap`)이었다가 앱이 됐다.
+ *  클래식 액자로 싣지 않고 셸이 바로 넘긴다(액자를 싣고 그 안에서 다시 넘기면 한 박자 빈 화면이 선다). */
+export const ROUTE_ALIAS: Record<string, string> = { categories: '#/taxonomy', domainmap: '#/taxonomy' };
+/** 옛 주소면 새 주소, 아니면 null. `#/categories/<id>`(분류 하나)는 그 분류로 가고, 다른 옛 주소의 뒤 칸은 새 앱에 뜻이 없어 버린다. */
+export function aliasRoute(page: string, segs: string[]): string | null {
+  const to = ROUTE_ALIAS[page];
+  if (!to) return null;
+  return to + (page === 'categories' && segs[1] ? '/' + encodeURIComponent(decodeURIComponent(segs[1])) : '');
+}
 export function appIcon(icon: AppDef['icon'], cls?: string): SVGElement {
   const svgNs = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(svgNs, 'svg');

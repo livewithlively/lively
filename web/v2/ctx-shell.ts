@@ -137,7 +137,8 @@ export function mountCtxShell(h: CtxShellHooks): void {
   registerCtx('wikicat', (hit) => {
     const id = String(hit.data.cat || '');
     const href = '#/knowledge?category=' + encodeURIComponent(id);
-    return { rows: [...openRows(href), { label: '이 분류에 새 문서', icon: 'plus', run: () => h.openRoute('#/knowledge/new?category=' + encodeURIComponent(id)) }, { sep: true, label: '' }, copyRow('링크 복사', absUrl(href), '링크를 복사했어요')], title: String(hit.data.name || '분류') };
+    return { rows: [...openRows(href), { label: '이 분류에 새 문서', icon: 'plus', run: () => h.openRoute('#/knowledge/new?category=' + encodeURIComponent(id)) },
+      { label: '분류체계에서 열기', icon: 'tags', run: () => h.openRoute('#/taxonomy/' + encodeURIComponent(id)) }, { sep: true, label: '' }, copyRow('링크 복사', absUrl(href), '링크를 복사했어요')], title: String(hit.data.name || '분류') };
   });
   registerCtx('plist', (hit) => {
     const href = '#/projects2/l/' + String(hit.data.lid || '');
