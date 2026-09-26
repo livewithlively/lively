@@ -123,8 +123,24 @@ export async function openForm(c: TaxCategory | null, reload: () => void): Promi
 
 // ══════════════════════════════ 화면 ══════════════════════════════
 
+//  앱 안 이동(전체 지도 · 손볼 것 · 분류 하나 사이)은 이 앱이 스스로 듣는다. 셸은 탭 키가 같은 주소끼리는 다시 그리지 않는다
+//   (main.ts onHash: routeKey 가 같으면 주소만 갱신, tabs.ts 가 #/taxonomy… 를 한 탭 키로 접는다). 자료 앱(sources.ts)과 같은 규칙이다.
+let mounted: { host: HTMLElement; hooks: TaxonomyHooks } | null = null;
+let lastDrawn = '';
+window.addEventListener('hashchange', () => {
+  if (!mounted || !mounted.host.isConnected) { mounted = null; return; }
+  const h = location.hash;
+  if (h === lastDrawn || !/^#\/taxonomy(\/|\?|$)/.test(h)) return;
+  const q = h.indexOf('?');
+  const segs = (q >= 0 ? h.slice(2, q) : h.slice(2)).split('/').filter(Boolean);
+  renderTaxonomyApp(mounted.host, segs[1] ? decodeURIComponent(segs[1]) : '', new URLSearchParams(q >= 0 ? h.slice(q + 1) : ''), mounted.hooks);
+  mounted.hooks.redrawSide();   // 사이드바의 «지금 보는 것» 표시(고정 줄 · 분류 줄)를 따라 옮긴다
+});
+
 /** 셸 라우터가 부른다(main.ts). sub = 주소 둘째 칸(분류 id), params = 쿼리. */
 export function renderTaxonomyApp(host: HTMLElement, sub: string, params: URLSearchParams, hooks: TaxonomyHooks): void {
+  mounted = { host, hooks };
+  lastDrawn = location.hash;
   //  화면 번호: 앱 안에서 주소를 옮기면(지도 → 분류 → 다른 분류) 이 함수가 같은 칸에 다시 불린다. 앞 화면이 기다리던
   //   응답이 늦게 와서 새 화면을 덮지 않게, 그린 뒤에도 «지금도 내 화면인가» 를 이 번호로 묻는다.
   const seq = String((Number(host.dataset.txSeq) || 0) + 1);
