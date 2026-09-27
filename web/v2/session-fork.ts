@@ -20,6 +20,15 @@ export function forkableHarness(h: unknown): boolean {
 
 export interface ForkTarget { id: string; name: string }
 
+/** 실패를 사람 말로 — 서버의 거절 문장은 그대로, 요청이 서버에 닿지도 못한 경우(브라우저의 영문 오류)는 우리 말로 바꾼다. */
+export function failText(e: unknown): string {
+  const m = String((e && (e as { message?: unknown }).message) || e || '').trim();
+  if (!m || /failed to fetch|networkerror|load failed|network request failed/i.test(m)) {
+    return '서버에 닿지 못했습니다. 연결을 확인하고 다시 시도해 주세요.';
+  }
+  return m;
+}
+
 /** 확인 창을 연다. 복제가 끝나면 onOpen(새 세션 id) — 어디에 열지는 부르는 쪽(탭 규칙을 아는 셸)이 정한다. */
 export function openForkPopover(anchor: HTMLElement, t: ForkTarget, onOpen: (newId: string) => void): void {
   let busy = false;
@@ -56,7 +65,7 @@ export function openForkPopover(anchor: HTMLElement, t: ForkTarget, onOpen: (new
       onOpen(id);
     } catch (e: any) {
       //  서버의 거절 문장(누구 세션인지 · 아직 대화가 없는지 · 그 컴퓨터가 꺼져 있는지)을 그대로 보여 준다 — 창은 닫지 않는다.
-      note.textContent = String((e && e.message) || e || '복제하지 못했습니다.');
+      note.textContent = failText(e);
       note.classList.add('bad'); note.hidden = false;
       busy = false; go.disabled = false; cancel.disabled = false;
       goText.textContent = '다시 시도';

@@ -123,8 +123,10 @@
    (.pn-move 의 왼쪽 여백 4px + 줄 간격 7px 가 두 번 들어가면 두 단추가 남남처럼 떨어진다). */
 .pn-fork + .pn-move { margin-left: -1px; }
 /* 확인 창 — anchoredPopover 는 자리만 잡는다(배경·테두리·그림자는 패널이 갖는다, 45-v2-side-swap.css .sw-pop 과 같은 규약). */
-.fk-pop { width: 320px; padding: 14px 14px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
-  box-shadow: 0 12px 32px rgba(var(--shadow-ink), .16); }
+.fk-pop { width: 340px; padding: 16px 16px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(var(--shadow-ink), .16);
+  /* 한글은 낱말 단위로 줄을 바꾼다 — 글자 단위면 «만듭니/다.» 처럼 끝 글자 하나가 다음 줄로 떨어진다(스테이지 실측). */
+  word-break: keep-all; overflow-wrap: anywhere; }
 .fk-h b { font-size: 14px; color: var(--ink); }
 .fk-name { margin: 2px 0 0; font-size: 12.5px; color: var(--ink-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fk-sub { margin: 10px 0 0; font-size: 13px; line-height: 1.55; color: var(--ink); }
@@ -139,7 +141,7 @@
 .fk-go { gap: 6px; }
 .fk-go .pn-i { color: currentColor; }
 .fk-go[disabled], .fk-act .btn[disabled] { opacity: .6; cursor: default; }
-@media (max-width: 600px) { .fk-pop { width: min(320px, calc(100vw - 24px)); } }
+@media (max-width: 600px) { .fk-pop { width: min(340px, calc(100vw - 24px)); } }
 .pn-title { margin: 0; min-width: 0; font-size: 25px; font-weight: 800; letter-spacing: -.022em; line-height: 1.22; }
 /* 제목이 다시 왼쪽 끝이다(원준 2026-09-03, 순서 = 이름 › 번호 › 상태) — 링크 판의 좌측 패딩 8px 만큼
    당겨 **글자**가 문패 왼쪽에 딱 맞게 선다(패딩까지 맞추면 글자가 8px 안쪽으로 들어가 보인다). */

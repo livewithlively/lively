@@ -2,7 +2,7 @@
 //  프로젝트 리스트/폴더 · 홈/확인할 것/셸 표면 · 어디서나 붙는 공통 행(선택한 글·링크·그림·이 화면 주소).
 //  화면(views·side·panes)은 표(data-ctx)만 달고, 여기가 그 표를 읽어 행을 만든다. 조작의 실체는 각자 사는 곳에 둔다 —
 //  세션·프로젝트 조작은 side.ts(sessionCtxRows·projectCtxRows), 항해는 main.ts 가 hooks 로 준다.
-import { toast } from '../core.js';
+import { state, toast } from '../core.js';
 import { copyText, type CtxRow } from './ctx-menu.js';
 import { registerCtx, registerCtxCommon, registerCtxSurface, type CtxEvent, type CtxHit } from './ctx-registry.js';
 import { isInstancePinned, projectCtxRows, sessText, sessionCtxRows, sideInstanceById, toggleInstancePin } from './side.js';
@@ -49,7 +49,13 @@ function openRows(href: string, o: { label?: string } = {}): CtxRow[] {
  *  ⚠ 화면의 판정은 단추를 달지 말지일 뿐이다 — 최종 판정은 서버가 한다(session-fork.forkRefusal).
  */
 export function canForkSess(s: Sess): boolean {
-  return isMineSess(s) && isLiveSess(s) && forkableHarness(s.raw && s.raw.harness);
+  //  ⚠ «내 세션» 을 [세션 옮기기] 보다 **좁게** 본다: 만든 사람이 적혀 있으면 그 값이 나와 같을 때만.
+  //   `owned` 는 관리 권한이 있는 사람에게도 참이라(스테이지 실측 — 다른 사람 세션에도 단추가 섰다), 그대로 쓰면
+  //   누르면 반드시 거절되는 단추가 선다. 복제는 대화 기록을 읽어야 해서 만든 사람 본인만 된다.
+  const me = String((state.me && (state.me as { userId?: string }).userId) || '');
+  const owner = String((s.raw && s.raw.owner) || '');
+  const mine = owner && me ? owner === me : isMineSess(s);
+  return mine && isLiveSess(s) && forkableHarness(s.raw && s.raw.harness);
 }
 
 // ── 세션 ───────────────────────────────────────────────────────────────────
