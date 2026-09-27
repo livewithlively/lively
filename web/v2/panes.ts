@@ -564,6 +564,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   let swap: SideSwapHandle | null = null;
   //  세션 카드(#3870). 손잡이를 상한 너머로 끈 거리는 split 이 onOver 로 알리고, 놓을 때 카드가 먼저 받는다.
   let card: SideCardHandle | null = null;
+  //  카드가 되기 전 사이드바가 어느 쪽에 있었나. 돌아왔을 때 자리가 달라졌으면 자리바꿈 안내를 한 번 띄운다.
+  let leftBeforeCard = true;
   //  곁칸이 지금 왼쪽에 서 있나(side-swap 이 격자에 sw-left 를 건다). 칸 이름을 부르는 글은 전부 이것으로 고른다.
   const isLeft = (): boolean => body.classList.contains('sw-left');
   let sideHide: HTMLElement | null = null;   // 곁칸 머리의 접기 단추(paintPane 이 새로 만들 때마다 바꿔 든다)
@@ -601,6 +603,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //   적어 둔 자리가 있으면 그대로, 없으면(그 세션에서 자리가 바뀐 적이 없으면) 폭으로 판정한다.
     swap?.restore(w, typeof v.sideLeft === 'boolean' ? v.sideLeft : undefined);
     //  세션 카드도 이 세션의 것이다(#3870). 자리 · 크기는 브라우저 하나에 하나(사람마다), 카드인지 아닌지는 세션마다.
+    //  되살린 카드는 «카드가 되기 전 자리» 를 모른다. 앞 세션의 값이 남아 자리바꿈 안내가 엉뚱하게 뜨지 않게 안내 없음으로 둔다.
+    leftBeforeCard = true;
     card?.restore(v.card === true);
   }
   colMain.append(mainPane.root, splitY, bottomPane.root);
@@ -616,15 +620,18 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  칸 이름도 그 자리로 다시 적는다(양쪽 모두): 경계 손잡이 · 펴기 손잡이 · 접기 단추.
     onChange: (v) => { saveView({ sideLeft: v }); paintSideLabels(v); },
     holdSwap: () => !!card?.active() });
-  //  카드가 되기 전 사이드바가 어느 쪽에 있었나. 돌아왔을 때 자리가 달라졌으면 자리바꿈 안내를 한 번 띄운다.
-  let leftBeforeCard = false;
   card = mountSideCard({ body, colMain, sidePane: sidePane.root, sideOn: () => lay.sideOn,
-    setSideW: (px, persist) => { body.style.setProperty('--pn-side-w', Math.round(px) + 'px'); if (persist) saveView({ sideW: Math.round(px) }); },
-    onChange: (v) => saveView({ card: v }),
-    //  카드가 된 뒤 자리를 조용히 정한다. 사이드바가 절반을 넘었으므로 자리바꿈이 켜져 있으면 세션이 돌아올 자리는 오른쪽이다.
-    //  미끄러짐도 안내도 없다(사이드바가 화면을 다 차지해 자리가 바뀌는 것이 보이지 않는다).
-    onEntered: (px) => { leftBeforeCard = !!swap?.swapped(); swap?.restore(px); },
-    onLeft: () => { if (swap?.swapped() && !leftBeforeCard) swap.introOnce(); } });
+    setSideW: (px, persist) => {
+      if (!(px > 0 && px < 100000)) return;        // 격자 폭을 못 잰 값은 받지 않는다
+      body.style.setProperty('--pn-side-w', Math.round(px) + 'px');
+      if (persist) saveView({ sideW: Math.round(px) });
+    },
+    //  카드가 되는 순간의 자리를 적어 둔다(바로 뒤 settle 이 자리를 정하기 전이다).
+    onChange: (v) => { if (v) leftBeforeCard = !!swap?.swapped(); saveView({ card: v }); },
+    //  사이드바가 상한 폭일 때의 자리를 조용히 정한다. 절반을 넘으므로 자리바꿈이 켜져 있으면 세션이 설 자리는 오른쪽이다.
+    //  미끄러짐도 안내도 없다(그 순간 사이드바가 세션 열을 덮고 있어 자리가 바뀌는 것이 보이지 않는다).
+    settle: (px) => swap?.restore(px),
+    onLeft: () => { if (swap?.swapped() && !leftBeforeCard) swap.introOnce(); leftBeforeCard = true; } });
 
   /** 곁칸을 부르는 글을 지금 선 쪽에 맞춘다. 탭 메뉴는 열 때마다 isLeft() 로 새로 고른다. */
   function paintSideLabels(left: boolean = isLeft()): void {

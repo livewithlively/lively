@@ -25,6 +25,10 @@
 //   W5 side-card.ts: 세션 열을 옮겨 붙이지 않는다(append · prepend · insertBefore 로 colMain 을 옮기지 않는다)
 //   W6 CSS: 카드 규칙은 넓은 폭(min-width: 901px) 안에 있다. 카드 상태의 세션 열은 grid-column 을 auto 로 되돌린다
 //   W7 화면 글에 «곁칸» 이 없다(#4233 이름 규칙)
+//   K7 격자가 카드 최소 크기보다 작으면 카드도 격자 안으로 줄인다
+//   W9 side-card: 움직이던 함수는 기다린 뒤마다 자기 판(gen)이 살아 있는지 본다. restore · destroy 가 판을 올린다
+//   W10 side-card: 격자 폭을 못 재면(0) 사이드바 폭을 적지 않는다
+//   W11 side-swap: 서는 순간에는 자리를 판정하지 않는다(전역 키의 폭으로 판정해 지금 연 세션에 적던 결함)
 //   W8 CSS: 자리바꿈 상태에서 사이드바를 접으면 세션이 격자 전체를 쓴다(sw-left.no-side 가 sw-left 뒤에 있다)
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -92,6 +96,8 @@ if (lib) {
   ok(shrink2.w === CARD_MIN.w && shrink2.h === CARD_MIN.h, "K5b 오른쪽 아래로 줄여도 최소 크기", JSON.stringify(shrink2));
   const onlyE = resizeCard(mid, "e", 50, 999, ...B);
   ok(onlyE.w === 470 && onlyE.h === 400, "K5c 가장자리 하나는 한 방향만 바꾼다", JSON.stringify(onlyE));
+  const small = clampCard({ w: 420, h: 560, r: 24, b: 24 }, 261, 200);
+  ok(small.w === 261 - 16 && small.h === 200 - 16 && small.r === 8 && small.b === 8, "K7 좁은 격자(261×200)에서는 카드가 격자 안으로 준다", JSON.stringify(small));
   const mv = moveCard(base, -300, -200, ...B);
   ok(mv.w === 420 && mv.h === 560 && mv.r === 324 && mv.b === 224, "K6a 옮기면 크기는 그대로", JSON.stringify(mv));
   ok(inside(moveCard(base, -5000, -5000, ...B)) && inside(moveCard(base, 5000, 5000, ...B)), "K6b 격자 밖으로 못 나간다");
@@ -125,6 +131,20 @@ const rule = css.slice(cmRule, css.indexOf("}", cmRule));
 ok(/grid-column:\s*auto/.test(rule) && /grid-row:\s*auto/.test(rule) && /position:\s*absolute/.test(rule), "W6b CSS: 카드 상태의 세션 열은 칸 지정을 auto 로 되돌린다", rule.slice(0, 160));
 const texts = [...strings(cardSrc, "side-card.ts")];
 ok(texts.length > 5 && texts.every((t) => !t.includes("곁칸")), "W7 화면 글에 «곁칸» 이 없다", texts.filter((t) => t.includes("곁칸")).join(" | "));
+
+const fnBody = (name) => { const a = cardCode.indexOf("async function " + name + "("); if (a < 0) return ""; const b = cardCode.indexOf("\n  }\n", a); return cardCode.slice(a, b); };
+for (const fn of ["cancel", "enter", "leave"]) {
+  const b = fnBody(fn);
+  const awaits = (b.match(/await /g) || []).length, checks = (b.match(/if \(!alive\(\)\) return;/g) || []).length;
+  ok(/const g = \+\+gen/.test(b) && awaits >= 1 && checks >= 1 && /tween\([^;]*alive\)/.test(b), `W9 side-card ${fn}: 판을 잡고, 기다린 뒤 살아 있는지 본다`, `await ${awaits} · 확인 ${checks}`);
+}
+const halt = cardCode.slice(cardCode.indexOf("function halt("), cardCode.indexOf("function restore("));
+ok(/gen\+\+/.test(halt) && /stopDrag\?\.\(\)/.test(halt) && /function restore\(v: boolean\): void \{\s*halt\(\);/.test(cardCode) && /destroy: \(\) => \{\s*halt\(\);/.test(cardCode), "W9 side-card: restore · destroy 가 움직임과 끌기를 끝낸다");
+ok(/const capNow = \(\): number \| null => \(bw\(\) > 0 \? sideCap\(bw\(\)\) : null\)/.test(cardCode) && !/setSideW\(sideCap\(/.test(cardCode), "W10 side-card: 격자 폭을 못 재면 사이드바 폭을 적지 않는다");
+
+const tail = swap.slice(swap.indexOf("const onResize"), swap.indexOf("return {", swap.indexOf("const onResize")));
+const topLevel = tail.split("\n").filter((l) => /^  [a-zA-Z]/.test(l));           // mountSideSwap 몸통의 바로 아래 줄(들여쓰기 2칸)
+ok(topLevel.length > 0 && !topLevel.some((l) => /^  onEnd\(/.test(l)), "W11 side-swap: 서는 순간 onEnd 를 부르지 않는다", topLevel.filter((l) => /onEnd/.test(l)).join(" | "));
 
 const swl = css.indexOf(".pn-body.sw-left {"), nos = css.indexOf(".pn-body.sw-left.no-side {"), nosCol = css.indexOf(".pn-body.sw-left.no-side > .pn-col {");
 ok(swl >= 0 && nos > swl && nosCol > nos && /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*0\s*0/.test(css.slice(nos, css.indexOf("}", nos))) && /grid-column:\s*1\b/.test(css.slice(nosCol, css.indexOf("}", nosCol))),
