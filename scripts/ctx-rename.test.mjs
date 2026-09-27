@@ -28,6 +28,13 @@
 //   C4 도움말 피처 카드가 «**제목**: 설명» 의 쌍점을 구분자로 걷는다
 //   D1 도움말: context 쪽의 제목이 새 이름이고, 본문이 탭 다섯 개를 새 이름으로 적는다
 //   D2 도움말 어디에도 옛 탭 자리 표기(«▸ 전달» · «▸ 증류 ▸» · «▸ 수집]» · «▸ 가져오는 곳»)가 없다
+//   H1 화면 제목(h3.cxc-title)이 탭 이름과 같다: 수집기 설정 화면은 CTX_TAB.sources, 증류기 설정 화면은 CTX_TAB.distill 을 읽는다
+//   H2 어느 화면 제목도 옛 탭 이름(현황 · 수집기 · 증류기 · 점검 · AI 전달)을 글자로 적지 않는다(수집 · 증류의 화면 파일 전부)
+//   H3 제목 옆 수는 무엇의 수인지 적는다(«수집기 8개»). 제목이 «… 설정» 이라 수만 있으면 무엇을 센 것인지 모른다
+//   H4 제목이 없는 화면(점검 설정 · AI 주입 설정)은 탭 설명 한 줄이 제목 자리에 선다. 그 글에 긴 줄표가 없다
+//   P1 다른 화면의 안내문이 탭 이름을 두 번 잇달아 적지 않는다(자리 표기 바로 뒤에 같은 탭 이름이 또 나오지 않는다)
+//   P2 화면 고르기 설명 두 줄(새 화면 · 클래식)에 긴 줄표가 없다
+//   P3 화면 글이 탭을 옛 이름 칩([점검] · [수집기] · [증류기] · [현황] · [AI 전달])으로 가리키지 않는다
 //  ⚠ 문자열은 TypeScript 파서로 뽑는다. 줄 단위 정규식은 주석 안 따옴표에서 틀린다.
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -65,6 +72,15 @@ ok(hits("const a = `맥락 관리`; const b = `${x}맥락 관리${y}맥락 관�
 ok(hits(`export const CTX_OLD_NAMES = ['맥락 관리', '맥락관리']; const t = '맥락 관리';`, "x.ts", ["CTX_OLD_NAMES"]).length === 1, "N4 옛 이름 검색어 표만 예외이고 같은 파일의 다른 문자열은 잡는다");
 
 // ── 잎 모듈을 그 자리에서 transpile 해 값으로 부른다 ─────────────────────────────
+function walkTs(dir) {
+  const out = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) { if (e.name !== "node_modules") out.push(...walkTs(p)); }
+    else if (/\.tsx?$/.test(e.name) && !/\.d\.ts$/.test(e.name)) out.push(p);
+  }
+  return out;
+}
 const tmp = mkdtempSync(join(tmpdir(), "ctx-rename-"));
 async function load(rel) {
   const src = read(rel);
@@ -156,6 +172,79 @@ const appsSrc = read("web/v2/apps.ts"), omniSrc = read("web/v2/omni.ts"), ctxSrc
 {
   const html = read("public/index.html").replace(/<!--[\s\S]*?-->/g, "");
   ok(/<a href="#\/context" data-tab="context">수집 · 증류<\/a>/.test(html) && !OLD.test(html), "W4 클래식 상단 탭의 글이 새 이름이다");
+}
+
+// ── H. 화면 제목 = 탭 이름 ─────────────────────────────────────────────────────
+/** 소스에서 h3.cxc-title 마다 [제목 식(첫 span 의 text), 수 식(.cxc-title-n 의 text)] 을 뽑는다. */
+function titlesOf(src, name) {
+  const sf = ts.createSourceFile(name, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const out = [];
+  const prop = (obj, k) => obj && ts.isObjectLiteralExpression(obj) ? obj.properties.find((p) => ts.isPropertyAssignment(p) && p.name.getText(sf).replace(/['"]/g, "") === k)?.initializer : undefined;
+  const isEl = (n, tag) => ts.isCallExpression(n) && n.expression.getText(sf) === "el" && n.arguments[0] && ts.isStringLiteral(n.arguments[0]) && n.arguments[0].text === tag;
+  const cls = (n) => { const c = prop(n.arguments[1], "class"); return c && ts.isStringLiteral(c) ? c.text : ""; };
+  const visit = (n) => {
+    if (isEl(n, "h3") && /\bcxc-title\b/.test(cls(n))) {
+      const spans = n.arguments.slice(2).filter((a) => isEl(a, "span"));
+      const title = spans.find((a) => !/cxc-title-n/.test(cls(a))), count = spans.find((a) => /cxc-title-n/.test(cls(a)));
+      const t = title && prop(title.arguments[1], "text"), c = count && prop(count.arguments[1], "text");
+      out.push({ line: sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1, title: t ? t.getText(sf) : "", literal: t && ts.isStringLiteral(t) ? t.text : null, count: c ? c.getText(sf) : "" });
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+{
+  const col = titlesOf(read("web/context-collectors.ts"), "context-collectors.ts"), dis = titlesOf(read("web/distillers.ts"), "distillers.ts");
+  ok(col.length === 1 && col[0].title === "CTX_TAB.sources" && dis.length === 1 && dis[0].title === "CTX_TAB.distill",
+    "H1 수집기 설정 · 증류기 설정 화면 제목이 탭 이름을 읽는다", `수집기 화면: ${col.map((t) => t.title).join(", ")} / 증류기 화면: ${dis.map((t) => t.title).join(", ")}`);
+  const OLD_TABS = ["현황", "수집기", "증류기", "점검", "AI 전달"];
+  const bad = [];
+  for (const f of readdirSync(join(root, "web")).filter((n) => /^(context.*|distill.*|admin-injection|review)\.ts$/.test(n))) {
+    for (const t of titlesOf(read("web/" + f), f)) if (t.literal != null && OLD_TABS.includes(t.literal.trim())) bad.push(`  web/${f}:${t.line}  ${JSON.stringify(t.literal)}`);
+  }
+  ok(bad.length === 0, "H2 어느 화면 제목도 옛 탭 이름을 글자로 적지 않는다", bad.join("\n"));
+  ok(/수집기 /.test(col[0]?.count || "") && /개/.test(col[0]?.count || "") && /증류기 /.test(dis[0]?.count || "") && /개/.test(dis[0]?.count || ""),
+    "H3 제목 옆 수는 무엇의 수인지 적는다", `수집기 화면: ${col[0]?.count} / 증류기 화면: ${dis[0]?.count}`);
+  //  탭 설명(STAGES 의 hint) 가운데 화면에 서는 둘. 파서로 key 와 hint 를 짝지어 읽는다.
+  const sf = ts.createSourceFile("context.ts", ctxSrc, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const hints = {};
+  const visit = (n) => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === "STAGES" && n.initializer && ts.isArrayLiteralExpression(n.initializer)) {
+      for (const e of n.initializer.elements) {
+        if (!ts.isObjectLiteralExpression(e)) continue;
+        const get = (k) => e.properties.find((p) => ts.isPropertyAssignment(p) && p.name.getText(sf) === k)?.initializer;
+        const key = get("key"), hint = get("hint");
+        if (key && ts.isStringLiteral(key) && hint && ts.isStringLiteral(hint)) hints[key.text] = hint.text;
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  const shown = ["checks", "deliver"].map((k) => [k, hints[k] || ""]);
+  ok(shown.every(([, h]) => h.length > 10 && !h.includes("—")), "H4 제목 자리에 서는 탭 설명(점검 설정 · AI 주입 설정)에 긴 줄표가 없다", shown.map(([k, h]) => `  ${k}: ${h}`).join("\n"));
+}
+
+// ── P. 안내문 ────────────────────────────────────────────────────────────────
+{
+  const TABS = ["실시간 현황", "수집기 설정", "증류기 설정", "점검 설정", "AI 주입 설정"];
+  //  자리 표기(ctxPath · ctxTrail)를 쓰는 파일의 문자열에 탭 이름이 글자로 또 있으면, 표기 바로 뒤에 같은 말이 되풀이된다.
+  const dup = [];
+  for (const f of walkTs(join(root, "web"))) {
+    const src = readFileSync(f, "utf8");
+    if (!/ctxPath\(|ctxTrail\(/.test(src) || /lib\/ctx-names\.ts$/.test(f) || /docs-content\.ts$/.test(f)) continue;
+    for (const [line, str] of stringsOf(src, f)) if (TABS.some((t) => str.includes(t))) dup.push(`  ${relative(root, f)}:${line}  ${JSON.stringify(str.slice(0, 80))}`);
+  }
+  ok(dup.length === 0, "P1 자리 표기 뒤에 같은 탭 이름을 또 적지 않는다", dup.join("\n"));
+  const mode = stringsOf(read("web/admin-ui-mode.ts"), "admin-ui-mode.ts").filter(([, str]) => /^새 화면 \(기본\)|^클래식[:：—\s]+상단 탭/.test(str) || /^클래식 — /.test(str));
+  ok(mode.length >= 2 && mode.every(([, str]) => !str.includes("—")), "P2 화면 고르기 설명 두 줄에 긴 줄표가 없다", mode.map(([l, str]) => `  ${l}: ${str}`).join("\n"));
+  const chips = [];
+  for (const f of walkTs(join(root, "web"))) {
+    const src = readFileSync(f, "utf8");
+    if (!/\[(점검|수집기|증류기|현황|AI 전달)\]/.test(src)) continue;
+    for (const [line, str] of stringsOf(src, f)) if (/\[(점검|수집기|증류기|현황|AI 전달)\]/.test(str)) chips.push(`  ${relative(root, f)}:${line}  ${JSON.stringify(str.slice(-70))}`);
+  }
+  ok(chips.length === 0, "P3 화면 글이 탭을 옛 이름 칩으로 가리키지 않는다", chips.join("\n"));
 }
 
 // ── R. 저장소 ────────────────────────────────────────────────────────────────

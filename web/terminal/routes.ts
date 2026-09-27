@@ -2,6 +2,7 @@
 //  소비자: web/main.ts(라우팅) · 대시보드(따라하기 투어) — 전부 배럴 terminal.ts 를 거친다.
 //  import 방향: terminal/ 4모듈을 **위에서 아래로만** 본다(아래 모듈은 이 파일을 import 하지 않는다 — 폼의 목록 재렌더는 아래 훅 등록으로 해소).
 import { api, el, errorNote, initDragRangeSelect, state, sv, toast } from '../core.js';
+import { ICONS } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { pjvTbIcon, pjvTabIcon } from '../projects/icons.js';   // #1841 프로젝트 표와 같은 툴바·탭 아이콘(리프 모듈)
 import { pjvPopover } from '../projects/popover.js';
 import { openMySessionsModal } from '../sessions.js';   // #905 C1 — 터미널 탭 '내 세션 기록' 버튼→모달
@@ -358,7 +359,7 @@ async function renderTerminal(view) {
 // 툴바·빵부스러기용 선 아이콘(프로젝트 아이콘 팩에 없는 둘) — 같은 광학 상자(24 · stroke 1.6 · round).
 function tsessHistoryIcon() {
   const n = sv('svg', { class: 'pjv-tb-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  n.append(sv('path', { d: 'M3.5 12a8.5 8.5 0 1 0 2.6-6.1' }), sv('path', { d: 'M3.5 4.5v4.2h4.2' }), sv('path', { d: 'M12 8v4.4l3 1.8' }));
+  n.append(sv('path', { d: ICONS.sess }));   // #4233: 앱 「세션 이력」과 같은 그림(겹친 말풍선 둘)
   return n;
 }
 function tsessNodeIcon(cls?) {

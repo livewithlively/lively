@@ -7,7 +7,7 @@
 //  위젯의 기록 줄을 누르면 모달(열기). 사람 색은 아바타 해시색(core.avatarColor)과 같다.
 import { avatarColor, el, personFace, relTime } from '../core.js';
 import { pjvPopover } from './popover.js';
-import { type Fill, btn, emptyNote, footText, hubIcon } from './detail-hub-kit.js';
+import { type CtxRow, type Fill, SEP, btn, copyRow, emptyNote, footText, hubCtx, hubIcon, openRouteRow } from './detail-hub-kit.js';
 import { type LaneDay, actWhen, countOn, countSince, dayKey, dotSize, feedDayHead, feedDayLabel, laneCounts, laneDays, latestLane } from './detail-hub-model.js';
 
 const TYPE_LABEL: Record<string, string> = { feature: '기능', fix: '수정', decision: '결정', docs: '문서', research: '리서치', review: '검토', chore: '운영', other: '기타' };
@@ -48,12 +48,25 @@ export const fillTimeline: Fill = (ctx, f, body, foot, sub) => {
       const when = !t ? '' : mode === 'recent' ? relTime(new Date(t).toISOString()) : hmOf(t);
       const who = mode === 'day' ? '' : (memberName(a.author_person) || 'AI');
       const ty = TYPE_LABEL[a.type] || a.type || '';
-      return el('div', { class: 'pjh-ev' + (on ? ' on' : ''), onclick: onPick },
+      return hubCtx(el('div', { class: 'pjh-ev' + (on ? ' on' : ''), onclick: onPick },
         el('i', { class: 'pjh-ev-dot ' + String(a.type || ''), 'aria-hidden': 'true' }),
         el('div', { class: 'pjh-ev-b' },
           el('div', { class: 'pjh-ev-s' }, ty ? el('b', { class: 'pjh-ev-ty', text: ty }) : null, el('span', { text: a.summary || a.title || '(제목 없음)' })),
-          el('div', { class: 'pjh-ev-m', text: [who, when].filter(Boolean).join(' · ') })));
+          el('div', { class: 'pjh-ev-m', text: [who, when].filter(Boolean).join(' · ') }))) as HTMLElement,
+      String(a.summary || a.title || '기록'), '작업 기록' + (ty ? ' · ' + ty : ''), () => actRows(a));
     };
+    //  우클릭 — 기록 한 줄: 자세히(모달에서 이 기록) · 그 세션 · 바깥 링크 · 복사.
+    const actRows = (a: any): Array<CtxRow | null> => [
+      { label: '자세히 보기', icon: 'open', run: () => { toolsOf(pid).sel = String(a.id); PICK.set(pid, null); if (modal) ctx.refreshGrid(); else open(); } },
+      a.session_id ? openRouteRow('이 작업을 한 세션 열기', '#/s/' + encodeURIComponent(String(a.session_id)), 'term') : null,
+      a.external_url ? { label: '바깥 링크 열기', icon: 'open', run: () => { window.open(String(a.external_url), '_blank', 'noopener'); } } : null,
+      SEP,
+      copyRow('요약 복사', String(a.summary || a.title || '')),
+      a.title && a.title !== a.summary ? copyRow('제목 복사', String(a.title)) : null,
+      a.body ? copyRow('메모 복사', String(a.body)) : null,
+      a.commit_sha ? copyRow('커밋 복사', String(a.commit_sha)) : null,
+      a.session_id ? copyRow('세션 id 복사', String(a.session_id)) : null,
+    ];
 
     if (!modal && w <= 1 && h <= 1) {
       for (const a of sorted.slice(0, 3)) body.append(ev(a, 'recent'));

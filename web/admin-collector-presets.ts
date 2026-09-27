@@ -215,7 +215,7 @@ function presetForm(p: any | null, builtin: any[], reload: () => void) {
   const whItemsIn = el('input', { type: 'text', style: S, value: cfg.itemsPath ?? '', placeholder: '$.events — 비우면 본문 전체가 항목 1건' }) as HTMLInputElement;
   const webhookBox = el('div', {},
     el('p', { class: 'admin-hint ctx-field-hint' },
-      ...uiText('저장하고 수집기를 만들면 받을 주소가 생깁니다. ' + ctxPath('sources') + '의 그 수집기 설정에서 주소를 확인해 보내는 쪽에 등록하세요.')),
+      ...uiText('저장하고 수집기를 만들면 받을 주소가 생깁니다. ' + ctxPath('sources') + '에서 그 수집기를 열어 주소를 확인하고 보내는 쪽에 등록하세요.')),
     F('서명 검증', '보내는 쪽과 공유 비밀을 나눠 갖고 서명을 확인합니다. 끄면 주소만 알면 누구나 우리 저장소에 넣을 수 있습니다.', sigKindSel),
     F('서명 헤더 이름', '보내는 쪽 문서에 적혀 있습니다.', sigHeaderIn),
     F('서명 접두어', 'sha256= 처럼 값 앞에 붙는 것이 있으면 적으세요.', sigPrefixIn),

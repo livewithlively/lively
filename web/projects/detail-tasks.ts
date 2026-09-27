@@ -300,7 +300,7 @@ function pjvTaskRow(projectId, t, members, reload, depth, fields, rowOpts?: { as
   const subsVisible = pjvClosedView.subtasks ? allSubs : allSubs.filter((s) => s.status !== 'done');
   const subs = pjvSubtaskMode.mode === 'separate' ? [] : subsVisible;
   const isDone = t.status === 'done';
-  const wrap = el('div', { class: 'pjv-trow-wrap', 'data-task-id': t.id, 'data-task-name': t.name || t.title || '', 'data-task-level': t.level || 'task' });
+  const wrap = el('div', { class: 'pjv-trow-wrap', 'data-task-id': t.id, 'data-task-name': t.name || t.title || '', 'data-task-level': t.level || 'task', 'data-ctx': 'ptask' });   // data-ctx: 우클릭 메뉴 표(#3784 — 보드 줄 rows.ts 와 같은 표. 허브·프로젝트 탭의 태스크 줄에는 빠져 있었다, #4135)
 
   let open = false;
   const caret = subs.length

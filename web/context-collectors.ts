@@ -22,6 +22,7 @@ import { confirmDialog } from './admin.js';
 import { overlay } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
 import { presetSvcKey, svcTile } from './svc-icons.js';
+import { CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
 let editingId: number | null = null;
 let creatingPreset: string | null = null;   // 프리셋을 고른 뒤 생성 폼
@@ -67,10 +68,11 @@ export async function renderCollectors(host: HTMLElement): Promise<void> {
   // ── 머리 — 「수집기 n개」 + 만들기. 설명은 한 줄: 대부분은 리브가 만들어 두고, 직접 만드는 건 토큰을 손으로 넣을 때다. ──
   const head = el('div', { class: 'cxc-head' },
     el('div', { class: 'cxc-head-main' },
-      el('h3', { class: 'cxc-title' }, el('span', { text: '수집기' }), el('span', { class: 'cxc-title-n num', text: String(collectors.length) })),
+      //  #4233. 제목은 탭 이름과 같다(탭 「수집기 설정」). 제목이 «… 설정» 이라 옆의 수는 무엇을 센 것인지 적는다.
+      el('h3', { class: 'cxc-title' }, el('span', { text: CTX_TAB.sources }), el('span', { class: 'cxc-title-n num', text: '수집기 ' + collectors.length + '개' })),
       el('p', { class: 'cxc-lead' }, ...uiText(canEdit
         ? '외부 앱을 연결하면 리브가 수집기를 자동으로 만들어 둡니다. 직접 만드는 것은 토큰을 손으로 넣어 붙일 때뿐입니다.'
-        : '외부 앱을 연결하면 리브가 수집기를 자동으로 만들어 둡니다 — 무엇이 언제 모이는지는 여기서 그대로 보입니다.'))));
+        : '외부 앱을 연결하면 리브가 수집기를 자동으로 만들어 둡니다. 무엇이 언제 모이는지 여기서 봅니다.'))));
   if (canEdit) {
     const add = el('button', { class: 'btn btn-primary', type: 'button', text: '+ 수집기 만들기' });
     add.addEventListener('click', () => { choosingPreset = true; creatingPreset = null; editingId = null; reload(); });

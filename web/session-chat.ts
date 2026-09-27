@@ -19,6 +19,7 @@
 //  ── 안 하는 것 ──
 //   대화 uuid 를 추측하지 않는다(서버 원칙) — 매핑이 없으면 '기록 아직 없음'으로 말하고 터미널을 권한다.
 import { anchoredPopover, api, apiUrl, el, personFace, replaceKids, sv, toast, TOKEN_KEY } from './core.js';
+import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
 import { composerAttach } from './v2/compose-attach.js';
 import { CHAT_FONT_KEY, CHAT_FONT_LABELS, nextFontStep, parseFontStep } from './chat-font.js';
@@ -1189,7 +1190,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       target.owned && !(target.live && target.alive)
         ? row('휴지통으로 보내기', '목록에서 빠지고 휴지통으로 가요 — 휴지통에서 되돌릴 수 있고, 완전히 지우는 건 거기서만 해요', '휴지통으로', () => void trashThis(), true) : null,
     ];
-    if (tidy.some(Boolean)) secs.push({ key: 'tidy', label: '정리', icon: ['M4 7h16', 'M9 7V4h6v3', 'M6 7l1 13h10l1-13'], kids: tidy, danger: true });
+    if (tidy.some(Boolean)) secs.push({ key: 'tidy', label: '정리', icon: [ICONS.trash], kids: tidy, danger: true });
 
     // ── 셸 ──
     const navEl = el('nav', { class: 'v2me-nav', 'aria-label': '설정 항목' });

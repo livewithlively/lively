@@ -6,7 +6,7 @@
 //   모달 위: 필요 → 산출 두 단(카드 · 요약 끝까지 · 넘치면 단 안에서 스크롤) / 아래 전폭: 찾기 + 추천(제목이 길어 전폭 줄이라야 한두 줄에 선다)
 //  연결/해제는 프로젝트 지식 API(POST /v6/projects/:id/knowledge {name, relation[, unlink]}) — 섹션(detail-knowledge)과 같은 문.
 import { api, el, lifecycleDot, relTime, toast } from '../core.js';
-import { type Fill, btn, footText, hubIcon } from './detail-hub-kit.js';
+import { type CtxRow, type Fill, SEP, absUrl, btn, copyRow, footText, hubCtx, hubIcon, openRouteRow } from './detail-hub-kit.js';
 import { searchSnippet } from './detail-hub-model.js';
 
 const knName = (k: any): string => String(k.name || k.knowledge_name || '');
@@ -31,34 +31,53 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
     try { await api(o.base + pid + '/knowledge', { method: 'POST', body: JSON.stringify({ name, relation, unlink: true }) }); toast('연결을 해제했습니다'); o.reload(); }
     catch (e: any) { toast('해제 실패 — ' + (e && e.message || e), true); }
   };
+  //  우클릭 — 연결된 것(필요·산출)은 «연결 해제», 추천·검색 결과는 «필요로 연결». 열기·살짝 보기·복사는 위키 목록의 메뉴와 같은 말.
+  const knRows = (k: any, state: 'required' | 'produced' | 'rec', host: HTMLElement): Array<CtxRow | null> => {
+    const name = knName(k); const title = String(k.title || name);
+    const href = '#/k/' + encodeURIComponent(name);
+    return [
+      openRouteRow('새 탭에서 열기', href),
+      { label: '살짝 보기', icon: 'eye', hint: '이 화면 위에', run: () => { void import('../wiki-doc.js').then((m: any) => m.openWikiPeek(name, { originEl: host })).catch(() => toast('살짝 보기를 열지 못했습니다', true)); } },
+      SEP,
+      state === 'rec' ? { label: '필요 지식으로 연결', icon: 'link', run: () => { void link(name, null, 'required'); } } : null,
+      state === 'rec' ? { label: '산출 지식으로 연결', icon: 'link', run: () => { void link(name, null, 'produced'); } } : null,
+      state !== 'rec' ? { label: '연결 해제', icon: 'x', danger: true, run: () => { void unlink(name, state); } } : null,
+      SEP,
+      copyRow('제목 복사', title),
+      copyRow('지식 이름 복사', name),
+      copyRow('링크 복사', absUrl(href), '링크를 복사했어요', 'link'),
+    ];
+  };
+  const withMenu = <T extends HTMLElement>(node: T, k: any, state: 'required' | 'produced' | 'rec'): T =>
+    hubCtx(node, String(k.title || knName(k)), state === 'required' ? '필요 지식' : state === 'produced' ? '산출 지식' : '지식', () => knRows(k, linked.has(knName(k)) && state === 'rec' ? 'required' : state, node));
   // 한 줄 — 제목(새 탭) · 상태 점 · 관계 칩 · 호버 ✕
   const krow = (k: any, rel: 'required' | 'produced'): HTMLElement => {
     const name = knName(k);
-    const r = el('div', { class: 'pjh-kr' }, hubIcon('doc', 13),
+    const r = withMenu(el('div', { class: 'pjh-kr' }, hubIcon('doc', 13),
       el('a', { class: 'pjh-kr-t', href: '#/k/' + encodeURIComponent(name), ...KN_NEW_TAB, text: k.title || name }),
       (k.lifecycle && k.lifecycle !== 'active') ? lifecycleDot(k.lifecycle) : null,
       el('span', { class: 'pjh-kn-rel', text: rel === 'required' ? '필요' : '산출' }),
-      el('button', { class: 'pjh-kr-x', type: 'button', title: '연결 해제', text: '✕', onclick: (e: Event) => { e.stopPropagation(); unlink(name, rel); } }));
+      el('button', { class: 'pjh-kr-x', type: 'button', title: '연결 해제', text: '✕', onclick: (e: Event) => { e.stopPropagation(); unlink(name, rel); } })) as HTMLElement, k, rel);
     return r;
   };
   // 추천 줄 — 점선, [연결]
   const rrow = (m: any): HTMLElement => {
     const name = knName(m);
     const pct = Math.round((Number(m.similarity) || 0) * 100);
-    return el('div', { class: 'pjh-kr rec' }, hubIcon('doc', 13),
+    return withMenu(el('div', { class: 'pjh-kr rec' }, hubIcon('doc', 13),
       el('a', { class: 'pjh-kr-t', href: '#/k/' + encodeURIComponent(name), ...KN_NEW_TAB, text: m.title || name }),
       pct > 0 ? el('span', { class: 'pjh-kn-pct', text: pct + '%' }) : null,
-      el('button', { class: 'pjh-kn-link', type: 'button', text: '연결', onclick: (e: Event) => { e.stopPropagation(); link(name, e.currentTarget as HTMLButtonElement); } }));
+      el('button', { class: 'pjh-kn-link', type: 'button', text: '연결', onclick: (e: Event) => { e.stopPropagation(); link(name, e.currentTarget as HTMLButtonElement); } })) as HTMLElement, m, 'rec');
   };
   // 카드(1×N · 흐름) — 제목 + 한 줄 요약(있으면)
   const kcard = (k: any, rel: 'required' | 'produced'): HTMLElement => {
     const name = knName(k);
     const when = k.updated_at || k.created_at;
-    return el('div', { class: 'pjh-kc' },
+    return withMenu(el('div', { class: 'pjh-kc' },
       el('div', { class: 'pjh-kc-h' }, el('a', { class: 'pjh-kr-t', href: '#/k/' + encodeURIComponent(name), ...KN_NEW_TAB, text: k.title || name }),
         el('button', { class: 'pjh-kr-x', type: 'button', title: '연결 해제', text: '✕', onclick: (e: Event) => { e.stopPropagation(); unlink(name, rel); } })),
       k.summary ? el('div', { class: 'pjh-kc-s', text: String(k.summary).slice(0, 120) }) : null,
-      when ? el('div', { class: 'pjh-kc-d', text: relTime(when) }) : null);
+      when ? el('div', { class: 'pjh-kc-d', text: relTime(when) }) : null) as HTMLElement, k, rel);
   };
   const grp = (label: string, n: number, hint?: string): HTMLElement => el('div', { class: 'pjh-grp' }, el('b', { text: label }), el('span', { class: 'pjh-grp-n', text: String(n) }), hint ? el('span', { class: 'pjh-grp-h', text: '· ' + hint }) : null);
 
@@ -84,11 +103,11 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
         if (!ms.length) results.append(el('div', { class: 'pjh-stat', text: '찾는 지식이 없습니다 — 열어서 직접 작성할 수 있습니다.' }));
         for (const m of ms) {
           const name = knName(m);
-          results.append(el('div', { class: 'pjh-kr' }, hubIcon('doc', 13),
+          results.append(withMenu(el('div', { class: 'pjh-kr' }, hubIcon('doc', 13),
             el('div', { class: 'pjh-kr-b' }, el('a', { class: 'pjh-kr-t', href: '#/k/' + encodeURIComponent(name), ...KN_NEW_TAB, text: m.title || name }),
               m.snippet ? el('div', { class: 'pjh-kr-s', text: searchSnippet(m.snippet, f.modal ? 220 : 90) }) : null),
             linked.has(name) ? el('span', { class: 'pjh-kn-rel', text: '연결됨' })
-              : el('button', { class: 'pjh-kn-link', type: 'button', text: '필요로 연결', onclick: (e: Event) => { e.stopPropagation(); link(name, e.currentTarget as HTMLButtonElement); } })));
+              : el('button', { class: 'pjh-kn-link', type: 'button', text: '필요로 연결', onclick: (e: Event) => { e.stopPropagation(); link(name, e.currentTarget as HTMLButtonElement); } })) as HTMLElement, m, 'rec'));
         }
       }, 280);
     });

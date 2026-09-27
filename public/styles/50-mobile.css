@@ -71,7 +71,7 @@
   .v2-mtab.on { color: var(--blue); }
   .v2-mtab-icw { position: relative; display: inline-flex; width: 28px; height: 26px; align-items: center; justify-content: center; border-radius: 9px; }
   .v2-mtab.on .v2-mtab-icw { background: var(--bg-sel); }
-  .v2-mtab-ic { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .v2-mtab-ic { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
   .v2-mtab-t { font-size: 10.5px; font-weight: 700; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   /* 배지 — 레일의 그것(.v2-rail-bd)과 같은 붓. */
   .v2-mtab-bd { position: absolute; top: -4px; right: -8px; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px;
@@ -91,7 +91,7 @@
   .v2-msheet-row:active { background: var(--bg-tint); }
   .v2-msheet-row .v2-mtab-ic { width: 22px; height: 22px; color: var(--ink-sub); }
   .v2-msheet-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .v2-msheet-go { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .v2-msheet-go { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
   /* 판이 열리면 배경막이 탭 바 아래로 깔린다(탭 바·판은 39 위). 배경막은 맨 윗줄을 덮지 않는다 — ☰·검색·[타임라인] 은
      서랍이 열린 동안에도 제 색으로 보이고 같은 단추가 닫는다. */
   #v2-root.m-sheet .v2-scrim { display: block; }
