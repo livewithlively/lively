@@ -13,7 +13,7 @@ export function sessFilesPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-sessfiles' });
   let cur: { sid: string; node: string | null; h: FilesHandle } | null = null;
   const empty = el('div', { class: 'pn-empty' },
-    pnIcon('folder', 'pn-i big'),
+    pnIcon('sessfiles', 'pn-i big'),
     el('b', { text: '아직 보고 있는 세션이 없어요.' }),
     el('p', { class: 'pn-fine', text: '세션을 하나 열면 그 세션의 작업 폴더가 여기 보여요.' }));
   //  노드 세션은 `node=` 를 실어야 그 노드의 파일이다(files.ts nodeQ) — 목록 행의 node 는 이미 id 문자열이다(views.ts mergeSessions).
