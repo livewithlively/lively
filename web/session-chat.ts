@@ -20,6 +20,7 @@
 //   대화 uuid 를 추측하지 않는다(서버 원칙) — 매핑이 없으면 '기록 아직 없음'으로 말하고 터미널을 권한다.
 import { api, apiUrl, TOKEN_KEY, anchoredPopover, el, replaceKids, sv, toast } from './core.js';
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
+import { registerSessionInput } from './v2/sess-input.js';   // #4135 곁칸이 이 세션 입력칸에 글을 넣는 다리
 import { CHAT_FONT_KEY, CHAT_FONT_LABELS, nextFontStep, parseFontStep } from './chat-font.js';
 import { toolLabel } from './session-tool-labels.js';
 // #1850 기록 완전 삭제 — 확인창·실행·토스트의 단일 정의(#1582 규약).
@@ -842,13 +843,28 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     view.setNote(canRevive() ? '멈춰 있는 세션이에요 — 아래에 말을 걸면 이어서 열립니다.' : '멈춰 있는 세션이에요 — 대화 기록만 남아 있어요.');
   }
 
+  // ── 곁칸 → 이 세션 입력칸(#4135 «프로젝트» 앱의 [본문 넣기]) — **넣기만 하고 보내지 않는다**(사람이 읽고 보낸다).
+  //  지금 보이는 쪽의 입력칸에 넣는다: 터미널이면 붙여넣기(여러 줄은 bracketed paste — 줄바꿈이 전송이 되지 않게),
+  //  대화창이면 그 글칸 끝에. 터미널 프레임이 아직 안 떴으면 뜰 때까지 담아 둔다(termQueue).
+  const offSessInput = registerSessionInput(() => [target.id, target.logId, target.raw?.claudeSessionId, ...((target as any).altIds || [])], (text) => {
+    if (mode === 'term' && hasTerm()) {
+      if (termReady) termSend('paste', text); else termQueue.push({ cmd: 'paste', text });
+      return true;
+    }
+    const cur = view.input.value;
+    view.input.value = cur.trim() ? cur.replace(/\s+$/, '') + '\n\n' + text : text;
+    view.input.dispatchEvent(new Event('input'));
+    try { view.input.focus(); view.input.setSelectionRange(view.input.value.length, view.input.value.length); } catch { /* 가려진 입력칸 */ }
+    return true;
+  });
+
   // ── 터미널 프레임과의 다리(#1744) ────────────────────────────────────────────────────────
   //  상단바를 합쳤으므로 '터미널이 하던 일'을 여기서 눌러 저기서 실행한다. 같은 오리진 프레임이라 postMessage 한 줄이면
   //  된다(프레임 안 코드를 여기로 복제하지 않는다 — 복제하면 두 벌이 갈린다). 프레임은 연결 상태도 되돌려 보내
   //  '연결 중…/연결됨'이 이 한 줄에 뜬다. 오리진·출처(source)를 둘 다 확인한다.
   const TERM_MSG = 'lively-term';
   let termReady = false;                       // 프레임이 첫 신호(상태)를 보냈나 — 그 전에 보낸 명령은 사라진다
-  let termQueue: string[] = [];
+  let termQueue: Array<{ cmd: string; text?: string }> = [];
   let resumeAuto = false;                      // #1820 — 자동 복원을 이미 걸었나(한 화면에서 한 번만)
   // ── 자동복원 연쇄 상한 (#1820 후속 · 실측 2026-08-25 매니지드) ──────────────────────────────
   // 위 resumeAuto 는 **화면 단위** 가드다. 그런데 자동복원은 성공하면 새 세션 id 로 주소를 옮기고, 그러면
@@ -885,15 +901,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
 
   /** 지금 이 화면이 보이나 — **자동** 복원의 전제(opts.isVisible 주석). 사람이 버튼을 누른 복원은 이걸 안 본다. */
   const visibleNow = (): boolean => !opts.isVisible || opts.isVisible();
-  function termSend(cmd: string): void {
+  function termSend(cmd: string, text?: string): void {
     if (!termFrame || !termFrame.contentWindow) return;
-    try { termFrame.contentWindow.postMessage({ type: TERM_MSG, cmd }, location.origin); } catch { /* 프레임이 닫혔다 */ }
+    try { termFrame.contentWindow.postMessage({ type: TERM_MSG, cmd, ...(text != null ? { text } : {}) }, location.origin); } catch { /* 프레임이 닫혔다 */ }
   }
   /** 터미널이 있어야 하는 동작 — 닫혀 있으면 먼저 연다(막다른 버튼 금지). 아직 안 뜬 프레임이면 뜰 때까지 담아 둔다. */
   function termAct(cmd: string): void {
     if (!hasTerm()) { toast('이 세션에는 터미널이 없어요.'); return; }
     if (mode !== 'term') setMode('term');
-    if (termReady) termSend(cmd); else termQueue.push(cmd);
+    if (termReady) termSend(cmd); else termQueue.push({ cmd });
   }
   const onTermMsg = (ev: MessageEvent): void => {
     if (ev.origin !== location.origin || !termFrame || ev.source !== termFrame.contentWindow) return;
@@ -922,7 +938,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  폰 — 터미널의 글 상자에 쓰는 중이면 아래 탭 바를 걷는다(50-mobile.css .sc-kb). 이 화면이 사라지면 표시도 같이 사라진다.
     if (m && m.type === 'lively-term-composer') { wrap.classList.toggle('sc-kb', !!m.focus); return; }
     if (!m || m.type !== 'lively-term-status') return;
-    if (!termReady) { termReady = true; const q = termQueue; termQueue = []; for (const c of q) termSend(c); }
+    if (!termReady) { termReady = true; const q = termQueue; termQueue = []; for (const c of q) termSend(c.cmd, c.text); }
     termStatusEl.textContent = String(m.text || '');
     termStatusEl.className = 'sc-termstat' + (m.cls ? ' ' + String(m.cls).replace(/[^a-z]/g, '') : '');
     termStatusEl.hidden = termHost.hidden || !termStatusEl.textContent;
@@ -2098,7 +2114,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         else if (src && src.kind === 'log' && isBox() && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; if (pollTimer) clearTimeout(pollTimer); schedule(); }
       }
     },
-    destroy() { destroyed = true; if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
+    destroy() { destroyed = true; offSessInput(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }
 

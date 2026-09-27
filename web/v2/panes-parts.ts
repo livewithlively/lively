@@ -28,6 +28,7 @@ import type { TabKey } from '../lib/tab-key.js';
 import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
 import { composerAttach } from './compose-attach.js';
 import { composerMention } from './compose-mention.js';
+import { composerTasks } from './compose-tasks.js';   // #4135 [담기]한 태스크 = 글칸의 번호 배지
 import { createRunPicker } from './run-picker.js';
 import { spawnSession } from './quick-session.js';
 import { rememberCreated } from './created-cache.js';   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
@@ -124,7 +125,8 @@ export const PART_DEFS: PartDef[] = [
   { type: 'sessfiles', name: '세션 파일', icon: 'sessfiles', hint: '지금 보는 세션의 작업 폴더입니다 — 세션이 만든 파일을 보고 내려받아요.' },
   { type: 'knowledge', name: '지식', icon: 'wiki', hint: '세션들이 쓰고 고치는 글입니다. 워크스페이스 전체가 함께 봐요.' },
   // #4084 — 종전 «할 일». 종류 이름(type)은 그대로 둔다 — 저장된 배치가 이 이름으로 탭을 기억한다.
-  { type: 'tasks', name: '태스크', icon: 'task', hint: '보고 있는 세션이 속한 프로젝트의 태스크입니다. 세션을 바꾸면 따라 바뀝니다.' },
+  //  #4135(원준 2026-09-27) — «태스크» → «프로젝트»: 본문을 늘 펼쳐 읽고, 이 세션의 태스크를 순서대로 둔다. 그림은 폴더 안의 태스크.
+  { type: 'tasks', name: '프로젝트', icon: 'projtask', hint: '보고 있는 세션의 프로젝트 — 본문과, 이 세션이 할 태스크(순서대로), 나머지 태스크가 어느 세션에서 도는지.' },
   { type: 'timeline', name: '타임라인', icon: 'timeline', hint: '이 프로젝트에 남은 활동 기록입니다.' },
   { type: 'liv', name: '리브', icon: 'liv', hint: '이 프로젝트를 아는 리브와 대화합니다.' },
   // 이름을 '보관함'이 아니라 **보관한 세션**으로 둔다(원준 2026-08-20) — 무엇을 보관하는지가 이름에서 바로 읽혀야 한다.
@@ -225,7 +227,7 @@ function sessionsPart(ctx: PartCtx): Part {
   // 제공자·모델·추론강도·실행 노드 — 홈과 같은 부품이고 **같은 기억**을 쓴다(여기서 고른 값이 다음 기본이 된다).
   //  새 세션 자리를 처음 그릴 때만 만든다(서버 /terminal/config 를 한 번 부른다 — 세션을 보고 있을 뿐인 칸이 부를 이유가 없다).
   let runPicker: ReturnType<typeof createRunPicker> | null = null;
-  const idle = (): void => { send.disabled = false; ta.disabled = false; runPicker?.disable(false); send.replaceChildren(el('span', { text: '시키기' })); };
+  const idle = (): void => { send.disabled = false; ta.disabled = false; runPicker?.disable(false); send.replaceChildren(el('span', { text: sendLabel() })); };
   const grow = (): void => { ta.style.height = 'auto'; ta.style.height = Math.min(220, ta.scrollHeight) + 'px'; };
   ta.addEventListener('input', grow);
   ta.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -242,6 +244,20 @@ function sessionsPart(ctx: PartCtx): Part {
   // 초대(#3778 @이름) — 홈과 같은 부품(v2/compose-mention.ts). 같은 이유로 입력칸엔 여기 한 번만 건다.
   const mention = composerMention();
   mention.wire(ta);
+  // #4135 — 곁칸 «프로젝트» 앱에서 [담기]한 태스크(또는 여기서 `#` 로 부른 것)가 배지로 선다. 번호 = 이 세션이 할 순서.
+  //  담은 게 있으면 지시를 비워도 보낼 수 있다(1번부터 진행). 프로젝트 없는 새 세션 자리엔 태스크가 없다.
+  const projTasks = (): any[] => { const d = ctx.detail(); const t = d && d.project && d.project.tasks; return Array.isArray(t) ? t : []; };
+  const PH_PLAIN = ta.placeholder;
+  const PH_TASKS = '덧붙일 말이 있으면 적으세요 — 비워 두고 시키면 1번부터 진행해요.\n#태스크 · @이름 을 적어 더할 수 있어요';
+  const sendLabel = (): string => { const n = tasksPick ? tasksPick.ids().length : 0; return n ? `시키기 · 태스크 ${n}개` : '시키기'; };
+  const tasksPick = ctx.id > 0 ? composerTasks({
+    root: () => ctx.paneRoot(), tasks: projTasks,
+    onChange: (ids) => {
+      ta.placeholder = ids.length ? PH_TASKS : PH_PLAIN;
+      if (!sending) send.replaceChildren(el('span', { text: sendLabel() }));
+    },
+  }) : null;
+  tasksPick?.wire(ta);
 
   function newPane(): HTMLElement {
     if (!runPicker) runPicker = createRunPicker();
@@ -249,7 +265,7 @@ function sessionsPart(ctx: PartCtx): Part {
       el('div', { class: 'pn-launch' },
         el('h1', { class: 'v2-h1', text: '무엇을 할까요?' }),
         el('p', { class: 'v2-home-sub', text: ctx.id > 0 ? '새 세션이 열려요.' : '프로젝트 없이 새 세션이 열려요.' }),
-        el('div', { class: 'v2-launch' }, ta, att.chips, mention.chips, mention.menu,
+        el('div', { class: 'v2-launch' }, ta, ...(tasksPick ? [tasksPick.chips, tasksPick.menu] : []), att.chips, mention.chips, mention.menu,
           // 줄 구성은 홈(views.ts)과 같다 — 왼쪽 '무엇으로 열까'(AI·모델·추론), 오른쪽 '행동([⚙]·[＋]·[시키기])'.
           el('div', { class: 'v2-launch-row' },
             el('div', { class: 'v2-launch-ctl' }, runPicker.el),
@@ -310,7 +326,8 @@ function sessionsPart(ctx: PartCtx): Part {
 
   async function spawn(): Promise<void> {
     const text = ta.value.trim();
-    if (!text || sending) return;
+    const taskIds = tasksPick ? tasksPick.ids() : [];
+    if ((!text && !taskIds.length) || sending) return;
     // 올리는 중 전송 금지 — 막지 않으면 아직 안 올라간 파일이 지시에서 **조용히** 빠진다(큰 파일에서 실제로 나는 순서).
     if (att.busy()) { toast('파일을 올리는 중이에요 — 다 올라가면 보내주세요.'); return; }
     sending = true; send.disabled = true; ta.disabled = true; runPicker?.disable(true);
@@ -321,10 +338,11 @@ function sessionsPart(ctx: PartCtx): Part {
     const prompt = text + mention.tail() + att.tail();
     // resolve() — value() 가 아니다(#3833): 노드 축을 다시 읽고 정한다(홈과 같은 규칙).
     const run = runPicker ? await runPicker.resolve() : null;
-    const made = await spawnSession(prompt, { projectId: ctx.id > 0 ? ctx.id : null, projectName: projectName(), run, invites: mention.invites() });
+    const made = await spawnSession(prompt.trim(), { projectId: ctx.id > 0 ? ctx.id : null, projectName: projectName(), run, invites: mention.invites(), ...(taskIds.length ? { taskIds } : {}) });
     sending = false; idle();
     if (!made) { ta.focus(); return; }
-    seedSessName(made.id, text);
+    seedSessName(made.id, taskIds.length ? String(projTasks().find((t) => Number(t.id) === taskIds[0])?.name || text) : text);
+    tasksPick?.clear();
     // 목록에 **지금** 끼워 넣는다 — 20초 폴링을 기다리면 그 사이 세션 화면이 빈 채로 있는다.
     ctx.onSessionCreated?.(made.session);
     ta.value = ''; ta.style.height = 'auto';

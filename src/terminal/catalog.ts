@@ -529,6 +529,8 @@ export interface CreateInput {
   //  라우트가 확인한다). 관문(launchSession)이 프로젝트 소속을 쓴 **뒤에** execution_session.task_id 로 잇는다 —
   //  그래서 이 세션은 이름을 지어도 새 태스크를 만들지 않는다(v6/session-task.ts). 노드는 이 값을 쓰지 않는다(DB 없음).
   taskId?: number;
+  // #4135 — 태스크 여러 개를 순서대로 맡겨 연 세션(taskId = 그 1번). 관문이 taskId 를 이은 뒤 이 순서를 목록에 싣는다.
+  taskIds?: number[];
   // #1780 D4 — 이 세션을 **앱으로** 띄운다. 설정 시 createSession 이 grant 검사 → 앱 토큰 발급 →
   //  cwd와 분리된 private app runtime home에 토큰·앱 하네스 자산을 물질화하고
   //  pane env LIVELY_HOME=<private session_home>·LIVELY_APP_ID=<id> 를 주입한다. session_home은 cwd와 분리된다.
