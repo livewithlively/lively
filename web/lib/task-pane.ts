@@ -94,3 +94,82 @@ export function seedTasksTab(store: any): { store: any; changed: boolean; added:
   st.seeded = { ...(st.seeded || {}), tasks: 1 };
   return { store: st, changed: true, added };
 }
+
+// ── 곁칸 «프로젝트» 앱(#4135) ─────────────────────────────────────────────────────────────
+//  종전 «태스크» 부품을 고친 것이다(원준 2026-09-27): 본문은 늘 펼쳐 읽고 · «이 세션의 태스크»는 1. 2. 3. 순서 목록 ·
+//  나머지는 «외부 태스크» 한 목록 · 새 세션 자리(?new=1)에선 프로젝트 태스크 전체에서 [담기]. 여기는 그 판정들이다.
+
+/** 태스크 줄의 세션 한 장 — 서버 sessionsOfTasks(#4135)가 순서까지 싣는다. 옛 서버는 order/count/current 가 없다. */
+export interface TaskSessRef extends TaskSessLike { owner?: string; order?: number; count?: number; current?: boolean }
+
+/** 본문 읽기 모드는 맨 앞의 **자동 안내 인용**(`> 새 작업 창에서 … 만든 프로젝트입니다` · `> ⚙ …자동으로 만든 태스크`)을
+ *  건너뛴다(원준 2026-09-27 «이거 하나도 안 중요하고 본문부터 보이게»). 인용·빈 줄이 아닌 첫 줄부터. 고치기 모드는 원문 그대로. */
+export function stripLeadNotice(md: string | null | undefined): string {
+  const lines = String(md || '').split('\n');
+  let i = 0;
+  while (i < lines.length && (/^\s*>/.test(lines[i]) || !lines[i].trim())) i++;
+  return lines.slice(i).join('\n');
+}
+
+/** 이 세션의 태스크 — **순서대로**. 세션 이름 여럿 중 하나라도 맞는 ref 를 모아 order 로 줄 세운다.
+ *  옛 서버(order 없음)는 taskOfSession 한 개로 물러난다 — 곁칸이 서버보다 먼저 배포돼도 비지 않게. */
+export function sessionTaskOrder<T extends TaskLike>(tasks: T[], sessionIds: Array<string | null | undefined>): T[] {
+  const ids = new Set(sessionIds.filter((x): x is string => !!x));
+  if (!ids.size) return [];
+  const hits: Array<{ t: T; order: number }> = [];
+  let ordered = false;
+  for (const t of tasks) {
+    const ref = ((t.sessions || []) as TaskSessRef[]).find((s) => ids.has(String(s.id)));
+    if (!ref) continue;
+    if (typeof ref.order === 'number') ordered = true;
+    hits.push({ t, order: typeof ref.order === 'number' ? ref.order : 1e9 });
+  }
+  if (!ordered) { const one = taskOfSession(tasks, [...ids]); return one ? [one] : []; }
+  return hits.sort((a, b) => a.order - b.order || a.t.id - b.t.id).map((h) => h.t);
+}
+
+/** 프로젝트의 세션에 번호를 준다 — **만든 순서**(이른 것이 1). 곁칸 배지의 «세션 2»가 이 번호다. 모르는 시각(0)은 뒤로. */
+export function sessionNumbers(sessions: Array<{ id: string; createdAt?: number; altIds?: string[]; logId?: string | null }>): Map<string, number> {
+  const out = new Map<string, number>();
+  const sorted = [...sessions].sort((a, b) => ((a.createdAt || Infinity) - (b.createdAt || Infinity)) || String(a.id).localeCompare(String(b.id)));
+  sorted.forEach((s, i) => { for (const k of [s.id, s.logId, ...(s.altIds || [])]) if (k) out.set(String(k), i + 1); });
+  return out;
+}
+
+/** 세션 번호 → 배지 색. 같은 세션은 어느 줄에서나 같은 색이다. */
+export const SESSION_COLORS = ['#2263EF', '#0FA37E', '#7C5CE0', '#C77D14', '#D1476B', '#1B8FB5', '#6B7F1E', '#A0522D'];
+export const sessionColor = (n: number): string => SESSION_COLORS[((Math.max(1, n) - 1) % SESSION_COLORS.length)];
+
+/** «외부 태스크»(이 세션에 없는 것)의 줄 순서 — 돌고 있는 세션이 맡은 것 → 진행 중 → 할 일, 완료는 따로(접는다).
+ *  같은 무리 안에서는 보드 순서(들어온 순서)를 지킨다. busy 는 «그 태스크의 세션이 지금 일하는 중인가». */
+export function externalTasks<T extends TaskLike>(tasks: T[], excludeIds: Set<number>, busy: (t: T) => boolean): { open: T[]; done: T[] } {
+  const rest = tasks.filter((t) => !excludeIds.has(t.id));
+  const rank = (t: T): number => (busy(t) ? 0 : isDoing(t) ? 1 : 2);
+  const open = rest.filter((t) => !isDone(t)).map((t, i) => ({ t, i })).sort((a, b) => rank(a.t) - rank(b.t) || a.i - b.i).map((x) => x.t);
+  return { open, done: rest.filter((t) => isDone(t)) };
+}
+
+/** 순서 목록에서 하나를 옮긴다(끌기 · 번호 메뉴). to 는 **옮긴 뒤의 자리**(0부터). 범위 밖이면 끝으로 붙인다. */
+export function moveInOrder<T>(list: T[], from: number, to: number): T[] {
+  const out = list.slice();
+  if (from < 0 || from >= out.length) return out;
+  const [x] = out.splice(from, 1);
+  const at = Math.max(0, Math.min(to, out.length));
+  out.splice(at, 0, x);
+  return out;
+}
+
+/** 글칸의 `#태스크` 부르기 — 커서 앞의 `#` 토큰(앞은 줄 처음·빈칸, 안에 빈칸 없음). 없으면 null. `@이름`(mention-text)과 같은 문법. */
+export function hashQuery(text: string, caret: number): { start: number; q: string } | null {
+  const upto = String(text || '').slice(0, Math.max(0, caret));
+  const m = /(^|\s)#([^\s#]*)$/.exec(upto);
+  if (!m) return null;
+  return { start: upto.length - m[2].length - 1, q: m[2] };
+}
+
+/** `#` 로 태스크 고르기 — 이름·번호에 글자가 들어 있는 것, 안 끝난 것 먼저. 이미 고른 것은 뺀다. */
+export function hashMatches<T extends TaskLike>(tasks: T[], q: string, exclude: Set<number>, limit = 6): T[] {
+  const s = String(q || '').trim().toLowerCase().replace(/^#/, '');
+  const hit = tasks.filter((t) => !exclude.has(t.id) && (!s || String(t.name || '').toLowerCase().includes(s) || String(t.id).startsWith(s)));
+  return hit.sort((a, b) => Number(isDone(a)) - Number(isDone(b))).slice(0, limit);
+}

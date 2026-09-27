@@ -38,7 +38,7 @@ import { nodeOfflineNote } from "../node/offline-note.js";      // #1849 — 오
 import { translateNodeRpcError } from "../node/rpc-error.js";
 import { bindNodeSessionProjectOrKill, nodeProjectCreatePlan } from "../node/provision-remote.js";
 import { createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
-import { bindSessionTask, ensureSessionTask } from "../v6/session-task.js";   // #4084 세션 = 태스크
+import { bindSessionTask, ensureSessionTask, setSessionTaskOrder } from "../v6/session-task.js";   // #4084 세션 = 태스크
 import { currentTenant } from "../org/tenant-context.js";
 import { PRIMARY_TENANT_ID, setSessionWorkspace } from "../org/tenancy/registry.js";   // #1750 후속 — 세션→워크스페이스 정본
 import { mintAppToken } from "../apps/principal.js";
@@ -239,7 +239,14 @@ async function attachLaunchTask(session: { id: string; label?: string | null }, 
   if (taskId > 0) {
     const bound = await bindSessionTask({ sessionId: session.id, owner, taskId })
       .catch((e) => { logger.warn({ sessionId: session.id, taskId, err: (e as Error)?.message }, "세션 태스크 잇기 실패(비치명)"); return null; });
-    if (!bound) logger.warn({ sessionId: session.id, taskId }, "세션 태스크를 잇지 못했다 — 이름을 지을 때 새 태스크가 생긴다");
+    if (!bound) { logger.warn({ sessionId: session.id, taskId }, "세션 태스크를 잇지 못했다 — 이름을 지을 때 새 태스크가 생긴다"); return; }
+    // #4135 — 여러 개를 순서대로 맡겼다. 1번은 방금 이었다(지금 하는 것) — 나머지는 순서 목록으로.
+    const ids = Array.isArray(input.taskIds) ? input.taskIds.map(Number).filter((n) => n > 0) : [];
+    if (ids.length > 1) {
+      const set = await setSessionTaskOrder({ sessionId: session.id, owner, taskIds: ids })
+        .catch((e) => { logger.warn({ sessionId: session.id, err: (e as Error)?.message }, "세션 태스크 순서 싣기 실패(비치명)"); return null; });
+      if (!set) logger.warn({ sessionId: session.id, ids }, "세션 태스크 순서를 싣지 못했다 — 1번만 이어졌다");
+    }
     return;
   }
   // 사람의 작업 세션만(#2162) · 조직에 아무것도 안 남기는 세션은 제외(읽기전용·인코그니토 — 훅도 안 도는 자리다).

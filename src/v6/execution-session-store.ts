@@ -104,6 +104,8 @@ export async function setExecutionSessionProject(input: {
         `UPDATE execution_session SET desired_project_id=$3, desired_revision=$4, binding_epoch=$5, task_id=NULL,
            last_seen=now(), updated_at=now() WHERE id=$1 AND owner=$2`,
         [input.id, input.owner, next.project_id, next.desired_revision, next.binding_epoch]);
+      // 순서 목록(#4135)도 옛 프로젝트의 것이다 — task_id 와 같이 푼다(남기면 새 프로젝트 곁칸에 남의 태스크가 선다).
+      await client.query(`DELETE FROM execution_session_task WHERE session_id=$1`, [input.id]);
       await client.query(
         `INSERT INTO session_project(session_id, project_id, binding_epoch) VALUES($1,$2,$3)
          ON CONFLICT (tenant_id, session_id, valid_from) DO NOTHING`,

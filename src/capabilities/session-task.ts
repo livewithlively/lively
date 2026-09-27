@@ -16,7 +16,7 @@ import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http/rest-util.js";
 import { getSessionState } from "../sessions/session-state.js";
-import { ensureSessionTask, sessionTaskOf, setSessionTaskStatus, type SessionTask } from "../v6/session-task.js";
+import { ensureSessionTask, sessionTaskList, sessionTaskOf, setSessionTaskStatus, type SessionTask } from "../v6/session-task.js";
 
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 
@@ -33,6 +33,10 @@ export interface SessionTaskResult {
   task: (SessionTask & { created?: boolean }) | null;
   /** task 가 null 인 이유(모델이 헛돌지 않게 한 줄로). */
   reason?: "no-project" | "no-name";
+  /** #4135 — 끝냈더니(done) 이 세션의 순서 목록에서 넘어간 다음 태스크. 없으면 null(다 끝났다) · 목록이 하나면 생략. */
+  next?: SessionTask | null;
+  /** #4135 — 이 세션이 순서대로 맡은 태스크(둘 이상일 때만). */
+  order?: Array<{ id: number; name: string; status: string; current: boolean }>;
 }
 
 const sessionTask: Capability = {
@@ -42,6 +46,7 @@ const sessionTask: Capability = {
     "이 세션이 맡은 태스크를 조회하거나 상태를 바꾼다 — 프로젝트 안의 세션은 태스크 하나를 맡는다(세션이 이름을 지을 때 서버가 " +
     "만들거나, 사람이 태스크에서 세션을 열면 그 태스크). session_id 생략 시 **이 요청을 보낸 세션 자신**이라 태스크 번호를 " +
     "몰라도 된다. 요청받은 일을 끝내면(검증까지) `{status:\"done\"}`, 같은 세션에서 후속 작업을 시작하면 `{status:\"in_progress\"}`. " +
+    "사람이 이 세션에 태스크를 **여러 개 순서대로** 맡겼으면 done 이 다음 태스크로 넘기고 응답의 next 로 알려 준다 — 그 본문을 task_detail_v6 로 읽고 이어서 진행한다. " +
     "맡은 태스크가 없으면 이 세션 이름으로 만든다. REST 등가: POST /api/ui/terminal/sessions/:id/task {status?}.",
   scope: "memory",
   input: sessionTaskInput,
@@ -69,11 +74,13 @@ const sessionTask: Capability = {
       task = await ensureSessionTask({ sessionId: sid, owner: me, name: label });
       if (!task) return { ok: true, task: null, reason: "no-project" };
     }
+    let next: SessionTask | null | undefined;
     if (input.status) {
       const after = await setSessionTaskStatus({ sessionId: sid, owner: me, status: input.status });
-      if (after) task = { ...task, status: after.status };
+      if (after) { task = { ...task, status: after.status }; next = after.next; }
     }
-    return { ok: true, task };
+    const order = await sessionTaskList(sid, me).catch(() => []);
+    return { ok: true, task, ...(order.length > 1 ? { order, ...(next !== undefined ? { next } : {}) } : {}) };
   },
 };
 
