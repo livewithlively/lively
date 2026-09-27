@@ -135,7 +135,7 @@ if (uitext && typeof uitext.uiKeyCls === "function") {
   ok(L12.length === 12 && L13.length === 13 && !solid("수집 · 증류 ▸ 증류기 설정 ▸ 카테고리 붙이기") && solid(L12) && !solid(L13), "C2 12자를 넘는 공백 있는 라벨은 흐른다(경계: 12자 한 덩어리 · 13자 흐름)", [solid(L12), solid(L13)].join(","));
   ok(solid("연결·데이터·자료함·설정값모음") && solid("저장"), "C3 공백 없는 라벨은 길어도 한 덩어리다");
 }
-ok(/replace\(\/\^\\s\*\[—–:-\]\\s\*\//.test(read("web/learn.ts")), "C4 도움말 피처 카드가 쌍점도 구분자로 걷는다");
+ok(/replace\(\/\^\\s\*\[—–:-\]\\s\*\//.test(read("web/guide/render.ts")), "C4 도움말의 «**이름**: 설명» 목록이 쌍점도 구분자로 걷는다(#4179 에서 web/guide/render.ts 로 옮겼다)");
 
 // ── W. 배선(소스) ─────────────────────────────────────────────────────────────
 const appsSrc = read("web/v2/apps.ts"), omniSrc = read("web/v2/omni.ts"), ctxSrc = read("web/context.ts");
