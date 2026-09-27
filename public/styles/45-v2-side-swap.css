@@ -29,9 +29,12 @@
 .sw-hint[hidden] { display: none; }
 
 /* ── 문패 버튼 ── */
-.sw-btn { padding: 0 8px; }
+/* 문패의 옆 단추([＋ 세션]·[프로젝트 상세])와 **같은 높이**로 선다(#4135, 원준 2026-09-27: «지혼자 사이즈가 옆이랑 달라서 어색하다»).
+   종전엔 위아래 여백이 0 이라 글리프 높이만큼만 섰다(≈17px — 옆은 27px). 높이를 숫자로 적지 않고 그 줄에 맞춰 늘인다 —
+   옆 단추의 글자 크기·여백이 바뀌어도 따라간다. 폭은 높이와 같게(정사각). */
+.sw-btn { align-self: stretch; aspect-ratio: 1 / 1; min-width: 0; padding: 0; }
 .sw-btn[hidden] { display: none; }
-.sw-btn-i { font-size: 14px; line-height: 1; color: var(--muted-2); }
+.sw-btn-i { font-size: 15px; line-height: 1; color: var(--muted-2); }
 .sw-btn.on .sw-btn-i { color: var(--blue); }
 
 /* ── 켜고 끄는 팝오버 ──
