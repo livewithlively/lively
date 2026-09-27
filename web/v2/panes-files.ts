@@ -36,6 +36,8 @@ export interface FilesHooks {
   rootLabel?: string;
 }
 export type FilesCtx = Pick<PartCtx, 'id' | 'dead'> & { paneRoot?: PartCtx['paneRoot'] } & FilesHooks;
+/** 곁칸 안에 선 것인가 — 그때만 곁칸 뷰어로 보낸다(밖에 선 자리는 openFile 고리를 준다). */
+const hasPane = (c: FilesCtx): c is FilesCtx & { paneRoot: PartCtx['paneRoot'] } => typeof c.paneRoot === 'function';
 
 export function filesPart(ctx: FilesCtx): Part {
   const root = el('div', { class: 'pn-part pn-files', tabindex: '0' }) as HTMLElement;
@@ -264,18 +266,25 @@ export function filesPart(ctx: FilesCtx): Part {
   document.addEventListener('paste', onPaste, true);
 
   // ── 목록 읽기·정렬 ───────────────────────────────────────────────────────
-  async function fetchDir(): Promise<FileItem[]> {
-    const d: any = await api(pUrl('/files?path=' + encodeURIComponent(cwd))).catch(() => null);
-    const raw: any[] = (d && d.items) || [];
+  //  ⚠ 돌려주는 null 은 «이번 답은 쓰지 않는다» 이다(#4135):
+  //   · 못 받았다(망·서버) — 종전엔 빈 목록으로 그려 «아직 자료가 없어요» 가 떴다. 자료가 사라진 게 아니라 못 읽은 것이므로 앞의 목록을 둔다.
+  //   · 받는 사이 다른 폴더로 옮겼다 — 늦게 온 답을 지금 폴더의 것으로 그리면 경로가 어긋난다(미리보기가 없는 주소를 찾아 404).
+  async function fetchDir(): Promise<FileItem[] | null> {
+    const dir = cwd;
+    const at = (name: string): string => (dir ? dir + '/' + name : name);
+    const d: any = await api(pUrl('/files?path=' + encodeURIComponent(dir))).catch(() => null);
+    if (dir !== cwd) return null;
+    if (!d || !Array.isArray(d.items)) return loadedOnce ? null : [];
+    const raw: any[] = d.items;
     return raw
       .filter((it) => {
         const nm = String(it.name);
         if (it.repo) return false;      // provision 된 레포/워크트리 — 코드는 git 이 소유한다(매니페스트도 같은 규칙으로 뺀다)
-        if (nm === TRASH_DIR && !cwd) return false;
+        if (nm === TRASH_DIR && !dir) return false;
         if (MACHINE_FILES.has(nm)) return false;
         return !NOISE_RE.test('/' + nm + '/');
       })
-      .map((it) => ({ name: String(it.name), path: rel(String(it.name)), type: it.type === 'dir' ? 'dir' : 'file', size: Number(it.size || 0), mtime: Number(it.mtime || 0), empty: !!it.empty } as FileItem));
+      .map((it) => ({ name: String(it.name), path: at(String(it.name)), type: it.type === 'dir' ? 'dir' : 'file', size: Number(it.size || 0), mtime: Number(it.mtime || 0), empty: !!it.empty } as FileItem));
   }
   function sortItems(list: FileItem[]): FileItem[] {
     const dir = sortAsc ? 1 : -1;
@@ -301,7 +310,7 @@ export function filesPart(ctx: FilesCtx): Part {
     if (!(ctx.id > 0)) { body.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:18px', text: '이 화면은 프로젝트 폴더가 없어 자료를 둘 수 없어요.' })); return; }
     void loadAll();                              // 찾기 재료는 곁길로 — 목록 그리기를 기다리게 하지 않는다
     const got = await fetchDir();
-    if (ctx.dead() || !root.isConnected) return;
+    if (ctx.dead() || !root.isConnected || !got) return;
     const s2 = cwd + '|' + got.map((f) => f.path + f.mtime + f.size).join('|');
     if (s2 === sig) return;
     const changed = loadedOnce && lastDir === cwd;   // 같은 폴더의 목록이 달라졌다 — 폴더를 옮긴 것은 변화가 아니다
@@ -342,7 +351,7 @@ export function filesPart(ctx: FilesCtx): Part {
   function open(f: FileItem): void {
     if (f.type === 'dir') { goto(f.path); return; }
     if (ctx.openFile) { ctx.openFile(f); return; }
-    if (ctx.paneRoot) openInViewerPart({ id: ctx.id, paneRoot: ctx.paneRoot }, f.path);
+    if (hasPane(ctx)) openInViewerPart(ctx, f.path);
   }
   /** 고른 것 여럿을 편다 — 각자 제 뷰어에. 상한 8은 부르는 쪽이 이미 건다. */
   function openMany(list: FileItem[]): void {
