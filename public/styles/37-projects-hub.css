@@ -846,9 +846,9 @@ button.pjh-rail-r:hover { background: var(--bg-tint); color: var(--ink); }
 .pjh-wk-m { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; }
 .pjh-wk-m > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pjh-wk-who { flex: none; font-weight: 600; color: var(--ink-sub); }
-.pjh-wk-k { display: inline-flex; align-items: center; gap: 5px; flex: 0 1 auto; }
+.pjh-wk-k { display: inline-flex; align-items: center; gap: 5px; flex: none; max-width: 60%; }
 .pjh-wk-sep { flex: none; color: var(--muted-3); }
-.pjh-wk-m .pjh-tb { flex: 0 1 auto; min-width: 40px; max-width: 58%; }
+.pjh-wk-m .pjh-tb { flex: 0 1 auto; min-width: 0; max-width: none; }
 .pjh-ev-dot.sm { width: 6px; height: 6px; margin-top: 0; flex: none; }
 /* 1×1 — 최근 작업 넷(한 줄씩) */
 .pjh-wlist { display: flex; flex-direction: column; gap: 1px; min-height: 0; overflow: hidden; }

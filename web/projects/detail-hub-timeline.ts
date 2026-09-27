@@ -173,7 +173,8 @@ export const fillTimeline: Fill = (ctx, f, body, foot, sub) => {
       const who = memberName(a.author_person) || '—';
       const sbtn = (label: string, icon: string, fn: () => void, ghost = true): HTMLElement =>
         el('button', { class: 'pjh-sbtn' + (ghost ? ' ghost' : ''), type: 'button', onclick: fn }, hubIcon(icon, 12), label) as HTMLElement;
-      side.replaceChildren(
+      //  ⚠ replaceChildren 은 null 을 «null» 글자로 앉힌다 — 없는 조각은 걸러서 넘긴다.
+      const kids: any[] = [
         el('div', { class: 'pjh-side-l', text: '고른 작업' }),
         el('div', { class: 'pjh-wd-who' }, a.author_person ? personFace(a.author_person, 'pjv-ava', who) : null,
           el('b', { text: who }), el('span', { text: full })),
@@ -195,7 +196,9 @@ export const fillTimeline: Fill = (ctx, f, body, foot, sub) => {
           : [el('div', { class: 'pjh-rail-fine', text: '이 작업에 이어진 지식이 없습니다.' })]),
         (a.session_id || task) ? el('div', { class: 'pjh-side-acts pjh-fside-acts' },
           a.session_id ? sbtn('세션 열기', 'term', () => { location.hash = '#/s/' + encodeURIComponent(String(a.session_id)); }, false) : null,
-          task ? sbtn('태스크 열기', 'tasks', () => openTask(task)) : null) : null);
+          task ? sbtn('태스크 열기', 'tasks', () => openTask(task)) : null) : null,
+      ];
+      side.replaceChildren(...kids.filter(Boolean));
       hubCtx(side, sp.text || String(a.title || '작업'), who + ' · ' + (sp.kind || TYPE_LABEL[a.type] || '작업'), () => actRows(a));
     };
     /** 옆 칸이 있는 자리의 «고르기» — 다시 그리지 않고 그 줄만 켜고 옆 칸만 바꾼다. */
