@@ -981,6 +981,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       } else rows.push(row('사용법 안내', '터미널·단축키 간단 사용법', () => termAct('help')));
     }
     rows.push(el('div', { class: 'sc-more-sec', text: '이 세션' }));
+    //  세션 카드(#3870) 상태에서는 머리줄이 좁아 [자료] 단추를 숨긴다(45-v2-side-swap.css). 같은 입구를 여기 둔다.
+    if (opts.onOpenFiles && wrap.closest('.pn-body.cm')) rows.push(row(opts.filesLabel || '자료', '이 세션의 자료를 사이드바에서 봅니다', () => opts.onOpenFiles!()));
     // 이름은 상단바에 상시로 두지 않는다(위 제목 주석) — 고칠 일이 있을 때만 여기서 연다.
     if (canRename()) rows.push(row('세션 이름 바꾸기', idLabel(titleText) ? '아직 이름이 없어요' : titleText, () => startRename()));
     // 프로젝트도 이름과 같은 이유로 머리줄에서 내려왔다 — 이름은 사이드바·우패널에 이미 있고, 여기는 '바꿀 때' 오는 자리다.
