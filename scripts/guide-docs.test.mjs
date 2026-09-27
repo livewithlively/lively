@@ -35,6 +35,21 @@
 //   R3 찾기: 빈 검색어 · 공백뿐인 검색어 · 없는 말은 결과가 없다
 //   R4 찾기: 낱말 둘은 둘 다 든 곳만 맞는다
 //   R5 찾기: 결과 수 상한을 지킨다(상한 3 · 1 · 0)
+//  앱 안 이동과 화면 폭(2026-09-28. 첫 판은 문서 목록을 눌러도 주소만 바뀌고 본문이 그대로였다):
+//   Q1 '#/learn' · '#/learn?x=1' 은 첫 화면이다
+//   Q2 앞머리만 같은 주소('#/learnx' · '#/learning/docs/wiki')와 빈 주소는 가이드 주소가 아니다
+//   Q3 '#/learn/docs/wiki?h=list' 는 문서 wiki 의 절 list 다
+//   G1 가이드가 선 칸에서 주소가 다른 문서로 바뀌면 그 문서를 그린다(제목 · 목록 표시)
+//   G2 같은 주소를 다시 알리면 그리지 않는다(셸이 이미 그린 주소)
+//   G3 가이드 밖 주소면 그리지 않는다
+//   G4 칸에 다른 화면이 선 뒤에는 가이드 주소가 와도 그 화면을 덮지 않는다
+//   G5 칸이 화면에서 떨어졌으면 그리지 않는다
+//   G6 옛 둘러보기 주소는 그리지 않고 클래식 주소로 넘긴다
+//   G7 가이드를 한 번도 열지 않았으면(mounted 가 비어 있다) 던지지 않고 아무것도 하지 않는다
+//   G8 같은 문서의 다른 절이면 문서를 다시 그리지 않는다
+//   G9 hashchange 듣개가 등록돼 있고 location.hash 를 읽어 그린다
+//   V1 본문 칸에 폭 상한(px)이 없다
+//   V2 목차 없는 화면은 목차 칸을 두지 않는다
 //  ⚠ 원고와 모듈을 그 자리에서 transpile 해 값으로 부른다. 화면을 그리는 import 는 빈 모듈로 바꿔 싣는다(순수 함수만 부른다).
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -215,6 +230,149 @@ const secsOf = (p) => render.splitGuideSections(bodyOf(p)).filter((s) => s.title
   ok(q("WIKI").length > 0 && q("wiki").length === q("WIKI").length, "R6 대소문자를 가리지 않는다");
   const plain = search.plainOf("앞 {{ic:home}} 글 [단추] 「이름」\n{{fig:loop}}\n| 가 | 나 |\n|---|---|\n[문서](#/learn/docs/wiki) 끝");
   ok(!/[{}[\]「」|#]/.test(plain) && plain.includes("단추") && plain.includes("문서") && !plain.includes("learn") && !plain.includes("loop"), "R7 찾기용 글에서 표기를 걷는다", plain);
+}
+
+// ── Q · G. 앱 안 이동 ─────────────────────────────────────────────────────────
+//  화면을 그리는 함수를 실제로 부른다. 브라우저가 없으므로 요소 흉내(FakeEl)를 세우고, 그려진 나무에서 제목과 목록 표시를 읽는다.
+//  글자(로그)가 아니라 그려진 결과로 단언한다: 제목 요소의 글 · 켜진 목록 줄 · location.replace 가 받은 주소 · 덮이지 않은 남의 화면.
+{
+  ok(typeof app.guideWhereOfHash === "function" && typeof app.guideOnHash === "function", "G0 앱 안 이동 잣대를 읽었다");
+  const w = (h) => app.guideWhereOfHash(h);
+  ok(w("#/learn") && w("#/learn").slug === "" && w("#/learn?x=1") && w("#/learn?x=1").slug === "", "Q1 '#/learn' · '#/learn?x=1' 은 첫 화면이다");
+  ok(w("#/learnx") === null && w("#/learning/docs/wiki") === null && w("") === null && w("#/") === null && w("#/taxonomy") === null, "Q2 앞머리만 같은 주소와 빈 주소는 가이드 주소가 아니다");
+  const q3 = w("#/learn/docs/wiki?h=list");
+  ok(q3 && q3.slug === "wiki" && q3.anchor === "list", "Q3 문서와 절을 주소에서 푼다", JSON.stringify(q3));
+
+  // 요소 흉내. 앱이 쓰는 것만 있다.
+  class FakeEl {
+    constructor(tag) { this.tagName = String(tag).toUpperCase(); this.attrs = {}; this.kids = []; this.parent = null; this.cls = new Set(); this.text = ""; this.listeners = {}; this.scrollTop = 0; this.offsetTop = 0; this.clientHeight = 0; this.hidden = false; this.value = ""; this.root = false;
+      const self = this;
+      this.classList = { add: (...c) => c.forEach((x) => self.cls.add(x)), remove: (...c) => c.forEach((x) => self.cls.delete(x)), contains: (c) => self.cls.has(c),
+        toggle: (c, on) => { const want = on === undefined ? !self.cls.has(c) : !!on; if (want) self.cls.add(c); else self.cls.delete(c); return want; } };
+      this.dataset = new Proxy({}, { get: (_, k) => self.attrs["data-" + String(k)], set: (_, k, v) => { self.attrs["data-" + String(k)] = String(v); return true; } });
+    }
+    get isConnected() { let e = this; while (e.parent) e = e.parent; return e.root === true; }
+    get textContent() { return this.text + this.kids.map((k) => k.textContent).join(""); }
+    get firstElementChild() { return this.kids[0] || null; }
+    get children() { return this.kids; }
+    addEventListener(t, f) { (this.listeners[t] ||= []).push(f); }
+    removeEventListener() {}
+    append(...ks) { for (const k of ks.flat(9)) { if (k == null || k === false) continue; const n = k instanceof FakeEl ? k : Object.assign(new FakeEl("#text"), { text: String(k) }); if (n.parent) n.parent.kids = n.parent.kids.filter((x) => x !== n); n.parent = this; this.kids.push(n); } }
+    replaceChildren(...ks) { for (const k of this.kids) k.parent = null; this.kids = []; this.append(...ks); }
+    contains(n) { for (let e = n; e; e = e.parent) if (e === this) return true; return false; }
+    closest() { return null; }
+    getBoundingClientRect() { return { top: 0, left: 0, width: 0, height: 0 }; }
+    scrollIntoView() { this.scrolledTo = (this.scrolledTo || 0) + 1; }
+    blur() {} focus() {}
+    matches(sel) { const m = /^([a-z0-9]*)((?:[.#][\w-]+|\[[\w-]+\])*)$/i.exec(sel); if (!m) return false;
+      if (m[1] && this.tagName !== m[1].toUpperCase()) return false;
+      for (const t of m[2].match(/[.#][\w-]+|\[[\w-]+\]/g) || []) {
+        if (t[0] === "." && !this.cls.has(t.slice(1))) return false;
+        if (t[0] === "#" && this.attrs.id !== t.slice(1)) return false;
+        if (t[0] === "[" && !(t.slice(1, -1) in this.attrs)) return false;
+      }
+      return true; }
+    querySelectorAll(sel) { const out = []; const walk = (e) => { for (const k of e.kids) { if (k.tagName !== "#TEXT" && k.matches(sel)) out.push(k); walk(k); } }; walk(this); return out; }
+    querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+  }
+  const fel = (tag, attrs, ...kids) => { const e = new FakeEl(tag); for (const [k, v] of Object.entries(attrs || {})) { if (v == null || v === false) continue; if (k === "class") String(v).split(/\s+/).filter(Boolean).forEach((c) => e.cls.add(c)); else if (k === "text") e.text = String(v); else if (k === "hidden") e.hidden = !!v; else e.attrs[k] = String(v); } e.append(...kids); return e; };
+  globalThis.__guideFake = {
+    el: fel,
+    replaceKids: (host, ...kids) => host.replaceChildren(...kids),
+    guideIcon: () => fel("svg", { class: "ic" }),
+    //  본문 그리기는 흉내다. 절 둘을 돌려준다(목차 · 절로 가기가 읽는다).
+    renderGuideDoc: () => ({ body: fel("div", { class: "gd-doc" }, fel("h2", { id: "gd-a", class: "gd-h2", text: "가" }), fel("h2", { id: "gd-b", class: "gd-h2", text: "나" })), secs: [{ id: "a", title: "가" }, { id: "b", title: "나" }] }),
+  };
+  writeFileSync(join(tmp, "fakedom.js"), "const f = globalThis.__guideFake;\nexport const el = f.el, replaceKids = f.replaceKids, guideIcon = f.guideIcon, renderGuideDoc = f.renderGuideDoc;\n");
+  const winListeners = {};
+  const replaced = [];
+  globalThis.window = { addEventListener: (t, f) => { (winListeners[t] ||= []).push(f); } };
+  globalThis.location = { hash: "#/", pathname: "/ui/", search: "", replace: (u) => { replaced.push(u); } };
+  globalThis.document = { addEventListener() {}, removeEventListener() {} };
+  globalThis.requestAnimationFrame = (f) => { f(); return 1; };
+  globalThis.cancelAnimationFrame = () => {};
+  const fakeImports = (src) => src
+    .replace(/from '\.\.\/core\.js'/g, "from '../fakedom.js'").replace(/from '\.\/icon\.js'/g, "from '../fakedom.js'")
+    .replace(/import \{ renderGuideDoc, type GuideSec \} from '\.\/render\.js';/, "import { renderGuideDoc } from '../fakedom.js';\nimport type { GuideSec } from './render.js';");
+  const liveFile = emit("web/guide/app.ts", fakeImports).replace(/app\.js$/, "app-live.js");
+  writeFileSync(liveFile, readFileSync(join(tmp, "guide/app.js"), "utf8"));
+  emit("web/guide/app.ts", stubImports);   // 앞 시험이 읽은 app.js 를 제 모양으로 되돌린다
+  const live = await load(liveFile);
+  ok(!!live && !live.__error && typeof live.renderGuideApp === "function", "G0 화면 그리기를 요소 흉내 위에서 읽었다", live && live.__error ? live.__error : "");
+  if (live && !live.__error) {
+    const h1 = (host) => (host.querySelector(".gd-h1") || { textContent: "" }).textContent;
+    const navOn = (host) => host.querySelectorAll(".gd-nav-a").filter((a) => a.cls.has("on")).map((a) => a.textContent).join("|") || (host.querySelector(".gd-nav-home.on") ? "첫 화면" : "");
+    const go = (hash) => { globalThis.location.hash = hash; return live.guideOnHash(hash); };
+    const title = (slug) => bySlug.get(slug).title;
+
+    // G7: 아직 한 번도 열지 않았다
+    let threw = false, r7 = null;
+    try { r7 = go("#/learn/docs/wiki"); } catch { threw = true; }
+    ok(!threw && r7 === false, "G7 가이드를 한 번도 열지 않았으면 던지지 않고 아무것도 하지 않는다");
+
+    const page = Object.assign(new FakeEl("body"), { root: true });
+    const host = fel("div", { class: "v2-tabpane" });
+    page.append(host);
+    globalThis.location.hash = "#/learn";
+    live.renderGuideApp(host, { slug: "", anchor: "" }, { shell: true });
+    ok(h1(host) === "사용 가이드" && navOn(host) === "첫 화면", "G0 첫 화면을 그렸다(시험의 출발점)", h1(host) + " / " + navOn(host));
+
+    const r1 = go("#/learn/docs/wiki");
+    ok(r1 === true && h1(host) === title("wiki") && navOn(host) === title("wiki"), "G1 주소가 다른 문서로 바뀌면 그 문서를 그린다(제목 · 목록 표시)", `${r1} / ${h1(host)} / ${navOn(host)}`);
+
+    const r2 = go("#/learn/docs/wiki");
+    ok(r2 === false && h1(host) === title("wiki"), "G2 같은 주소를 다시 알리면 그리지 않는다");
+
+    const r3 = go("#/taxonomy");
+    ok(r3 === false && h1(host) === title("wiki"), "G3 가이드 밖 주소면 그리지 않는다");
+
+    const h1El = host.querySelector(".gd-h1");
+    const r8 = go("#/learn/docs/wiki?h=b");
+    const target = host.querySelector("#gd-b");
+    ok(r8 === true && host.querySelector(".gd-h1") === h1El && target && target.scrolledTo >= 1, "G8 같은 문서의 다른 절이면 문서를 다시 그리지 않고 그 절로 간다");
+
+    const before = replaced.length;
+    const r6 = go("#/learn/tour");
+    ok(r6 === false && replaced.length === before + 1 && /#\/start\/tour$/.test(replaced[replaced.length - 1]) && h1(host) === title("wiki"), "G6 옛 둘러보기 주소는 그리지 않고 클래식 주소로 넘긴다", JSON.stringify(replaced));
+
+    // G9: 듣개가 실제로 달려 있고 location.hash 를 읽는다
+    const hs = winListeners.hashchange || [];
+    globalThis.location.hash = "#/learn/docs/sources";
+    for (const f of hs) f();
+    ok(hs.length === 1 && h1(host) === title("sources"), "G9 hashchange 듣개가 등록돼 있고 location.hash 를 읽어 그린다", `${hs.length} / ${h1(host)}`);
+
+    // G4: 같은 칸에 다른 화면이 섰다
+    const other = fel("div", { class: "v2-tx", text: "남의 화면" });
+    host.replaceChildren(other);
+    const r4 = go("#/learn/docs/apps");
+    ok(r4 === false && host.kids.length === 1 && host.kids[0] === other, "G4 칸에 다른 화면이 선 뒤에는 가이드 주소가 와도 그 화면을 덮지 않는다");
+
+    // 셸이 그 칸에 가이드를 다시 그리면 다시 듣는다
+    globalThis.location.hash = "#/learn/docs/apps";
+    live.renderGuideApp(host, { slug: "apps", anchor: "" }, { shell: true });
+    ok(go("#/learn/docs/liv") === true && h1(host) === title("liv"), "G4 셸이 그 칸에 가이드를 다시 그린 뒤에는 다시 듣는다");
+
+    // G5: 칸이 화면에서 떨어졌다
+    page.replaceChildren();
+    const r5 = go("#/learn/docs/wiki");
+    page.append(host);
+    const r5b = go("#/learn/docs/tasks");
+    ok(r5 === false && r5b === false && h1(host) === title("liv"), "G5 칸이 화면에서 떨어졌으면 그리지 않고, 셸이 다시 그리기 전까지 듣지 않는다", `${r5} ${r5b} ${h1(host)}`);
+  }
+  delete globalThis.window; delete globalThis.location; delete globalThis.document; delete globalThis.requestAnimationFrame; delete globalThis.cancelAnimationFrame; delete globalThis.__guideFake;
+}
+
+// ── V. 화면 폭 ───────────────────────────────────────────────────────────────
+{
+  const css = read("public/styles/52-guide.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1].trim(), body: m[2] }));
+  const article = rules.filter((r) => r.sel.split(",").some((x) => /(^|\s)\.gd-article$/.test(x.trim())));
+  const valueOf = (body, prop) => { const m = new RegExp("(?:^|;|\\s)" + prop + "\\s*:\\s*([^;]+)").exec(body); return m ? m[1].trim() : ""; };
+  const capped = article.filter((r) => { const mw = valueOf(r.body, "max-width"); return (mw && mw !== "none") || /^0\s+auto$/.test(valueOf(r.body, "margin")); });
+  ok(article.length > 0 && capped.length === 0, "V1 본문 칸에 폭 상한이 없고 가운데에 세우지 않는다", capped.map((r) => r.sel + " {" + r.body + "}").join("\n"));
+  const noToc = /\.gd\.no-toc \.gd-cols\s*\{[^}]*grid-template-columns:\s*248px minmax\(0, 1fr\)\s*;?\s*\}/.test(css) && /\.gd\.no-toc \.gd-toc\s*\{[^}]*display:\s*none/.test(css);
+  const appSrc = read("web/guide/app.ts");
+  ok(noToc && /classList\.add\('is-home', 'no-toc'\)/.test(appSrc) && /classList\.toggle\('no-toc', doc\.secs\.length <= 1\)/.test(appSrc), "V2 목차 없는 화면(첫 화면 · 절 1개 이하)은 목차 칸을 두지 않는다");
 }
 
 rmSync(tmp, { recursive: true, force: true });
