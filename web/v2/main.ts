@@ -48,6 +48,8 @@ import { drawRail, mountRail, railIsHidden, railSection, reloadRailPrefs, resetR
 import { lastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'   // #2016 — 좌측 끝 레일(구역 + 워크스페이스 + 최근 앱), 보임/숨김
 import { ASIDE_MSG, setAsideGuestOpener, type AsideGuest } from './aside-slot.js';
 import { takeCreated } from './created-cache.js';
+import { canForkSess } from './ctx-shell.js';   // #4135 — 세션 복제 가능 판정(우클릭 메뉴와 한 벌)
+import { openForkPopover } from './session-fork.js';
 import { openMeModal } from './me-modal.js';   // #1898 — 클래식에서 올라온 부팅이 [화면] 자리를 되연다
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';
 import { mountCtxMenus } from './ctx-registry.js';   // #3784 우클릭 메뉴 배선(표 data-ctx 를 읽는다)
@@ -197,6 +199,9 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
     // 문패 [세션 옮기기](#3778) — [⋯ ▸ 이 세션 ▸ 프로젝트] 와 같은 실행, 그릇만 모달. 조건도 같다(내 세션만).
     canMoveSession: (sid) => { const s = data.sessions.find((x) => x.id === sid); return !!s && isMineSess(s); },   // 창이 찾는 방식과 같게(정확히 그 id)
     onMoveSession: (sid) => openProjectMoveModal(sid, tab),
+    // 문패 [세션 복제](#4135) — 내 세션 · 살아 있음 · 복제 수단이 있는 AI 에만. 같은 판정을 세션 우클릭 메뉴(ctx-shell)가 쓴다.
+    canForkSession: (sid) => { const s = data.sessions.find((x) => x.id === sid); return !!s && canForkSess(s); },
+    onForkSession: (sid, anchor) => forkSession(anchor, sid),
     //  좁은 폭(≤900)의 곁칸 = 오른쪽 서랍(#4088). 셸이 곁칸에 무언가를 켜면 서랍을 열어 준다 — **보이는 탭일 때만**
     //   (숨은 탭의 터미널이 보낸 미리보기 링크가 지금 보는 탭의 서랍을 열면 안 된다).
     onOpenDrawer: () => { if (mobile && tabsApi?.current() === tab) { applyTabChrome(tab); mobile.openAside(); } },
@@ -584,6 +589,7 @@ export async function bootV2(): Promise<void> {
     newTask: (seed) => { const t = tabsApi?.add('#/'); if (t && seed) { t.draft = seed; tabsApi?.save(); void renderRoute(t); } },
     refresh: () => v2Refresh(),
     pickProject: (anchor, sid) => { const t = tabsApi?.current(); if (t) openProjectPicker(anchor, sid, t); },
+    forkSession: (anchor, sid) => forkSession(anchor, sid),
     closeInstance: (id) => { void closeSideRow(id); },
     activateInstance: (id, route) => openSideRow(id, route),
     currentRoute: () => tabsApi?.current()?.route || location.hash,
@@ -2515,6 +2521,17 @@ function openProjectPicker(anchor: HTMLElement, sessionId: string, tab: ShellTab
   const s = data.sessions.find((x) => x.id === sessionId);
   if (!s) return;
   openProjPickPopover(anchor, { rows: projectOrder(data), currentId: s.projectId ? Number(s.projectId) : null, onPick: (pid) => setSessionProject(sessionId, pid, tab) });
+}
+/** 세션 복제(#4135) — 확인 창을 열고, 끝나면 복제본을 **새 탭**에 연다(원래 세션의 탭은 그대로 둔다). */
+function forkSession(anchor: HTMLElement, sessionId: string): void {
+  const s = data.sessions.find((x) => x.id === sessionId);
+  if (!s || !canForkSess(s)) return;
+  const name = sessText(s, projName(data, s.projectId)).main || s.label || s.id;
+  openForkPopover(anchor, { id: s.id, name }, (newId) => {
+    const href = '#/s/' + encodeURIComponent(newId);
+    if (tabsApi) tabsApi.add(href); else location.hash = href;
+    void loadData().then(() => { drawSide(); tabsApi?.paint(); });
+  });
 }
 function openProjectMoveModal(sessionId: string, tab: ShellTab): void {
   const s = data.sessions.find((x) => x.id === sessionId);

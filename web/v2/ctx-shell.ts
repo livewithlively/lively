@@ -2,11 +2,12 @@
 //  프로젝트 리스트/폴더 · 홈/확인할 것/셸 표면 · 어디서나 붙는 공통 행(선택한 글·링크·그림·이 화면 주소).
 //  화면(views·side·panes)은 표(data-ctx)만 달고, 여기가 그 표를 읽어 행을 만든다. 조작의 실체는 각자 사는 곳에 둔다 —
 //  세션·프로젝트 조작은 side.ts(sessionCtxRows·projectCtxRows), 항해는 main.ts 가 hooks 로 준다.
-import { toast } from '../core.js';
+import { state, toast } from '../core.js';
 import { copyText, type CtxRow } from './ctx-menu.js';
 import { registerCtx, registerCtxCommon, registerCtxSurface, type CtxEvent, type CtxHit } from './ctx-registry.js';
 import { isInstancePinned, projectCtxRows, sessText, sessionCtxRows, sideInstanceById, toggleInstancePin } from './side.js';
 import { findSessIn, isLiveSess, isMineSess, projName, type Proj, type Sess, type V2Data } from './views.js';
+import { forkableHarness } from './session-fork.js';
 import { SESS_STATES } from '../session-status.js';
 import { omniOpen } from './omni.js';
 import { appByKey, appHref, openLaunchpad, soloSessionUrl } from './apps.js';
@@ -21,6 +22,8 @@ export interface CtxShellHooks {
   newTask(seed?: string): void;
   refresh(): void;
   pickProject(anchor: HTMLElement, sessionId: string): void;
+  /** 세션 복제(#4135) — 그 세션의 대화를 아는 새 세션을 하나 더. 확인 창은 anchor 옆에 선다. */
+  forkSession(anchor: HTMLElement, sessionId: string): void;
   closeInstance(id: string): void;
   activateInstance(id: string, route?: string): void;
   /** 지금 활성 탭의 주소(같은 화면이면 「열기」를 안 띄운다). */
@@ -40,6 +43,23 @@ function openRows(href: string, o: { label?: string } = {}): CtxRow[] {
   return rows;
 }
 
+/**
+ * 이 세션을 복제할 수 있나(#4135) — 문패 단추와 우클릭 메뉴가 **같은 이 판정**을 쓴다.
+ *  내 세션(대화 기록이 만든 사람 자리에 있다) · 살아 있음(지난 세션은 「이어서 열기」 가 먼저다) · 복제 수단이 있는 AI.
+ *  ⚠ 화면의 판정은 단추를 달지 말지일 뿐이다 — 최종 판정은 서버가 한다(session-fork.forkRefusal).
+ */
+export function canForkSess(s: Sess): boolean {
+  //  ⚠ «내 세션» 을 [세션 옮기기] 보다 **좁게** 본다: 만든 사람이 적혀 있으면 그 값이 나와 같을 때만.
+  //   `owned` 는 관리 권한이 있는 사람에게도 참이라(스테이지 실측 — 다른 사람 세션에도 단추가 섰다), 그대로 쓰면
+  //   누르면 반드시 거절되는 단추가 선다. 복제는 대화 기록을 읽어야 해서 만든 사람 본인만 된다.
+  const me = String((state.me && (state.me as { userId?: string }).userId) || '');
+  const owner = String((s.raw && s.raw.owner) || '');
+  const mine = owner && me ? owner === me : isMineSess(s);
+  //  앱으로 연 세션은 서버가 거절한다 — 누르면 반드시 실패하는 단추를 세우지 않는다.
+  const app = !!(s.raw && (s.raw.appId || s.raw.app_id));
+  return mine && !app && isLiveSess(s) && forkableHarness(s.raw && s.raw.harness);
+}
+
 // ── 세션 ───────────────────────────────────────────────────────────────────
 function sessionMenu(s: Sess | undefined, sid: string, hit: CtxHit): { rows: CtxRow[]; title?: string; sub?: string } {
   const href = '#/s/' + encodeURIComponent(sid);
@@ -54,6 +74,7 @@ function sessionMenu(s: Sess | undefined, sid: string, hit: CtxHit): { rows: Ctx
     { sep: true, label: '' },
     ...sessionCtxRows(s, { nameEl: hit.el.classList.contains('v2-ss-row') ? hit.el.querySelector<HTMLElement>('.t') : null, projectName: pn }),
   ];
+  if (canForkSess(s)) rows.push({ label: '세션 복제', icon: 'copy', hint: '대화를 아는 새 세션', run: () => hooks?.forkSession(hit.el, s.id) });
   if (isMineSess(s)) rows.push({ label: s.projectId ? '프로젝트 바꾸기·떼기' : '프로젝트 연결', icon: 'moveto', hint: s.projectId ? pn : undefined, run: () => hooks?.pickProject(hit.el, s.id) });
   const share = shareSessOf(s);
   if (share) rows.push({ label: '공유…', icon: 'share', run: () => openSharePopover(hit.el, share) });

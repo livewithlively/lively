@@ -635,7 +635,12 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //   (#1059 사용자 신고) — 그 경우엔 resumePick(피커·최근 대화)으로 폴백한다.
     //  ⚠ 종전엔 이 두 분기가 `harness.key === "claude"` 로 잠겨 있어, **claude 아닌 세션은 복원해도 늘 새 대화**로
     //   시작했다(2026-08-14 상민님 신고 — antigravity 세션을 /exit 로 닫고 '이어서 열기' 해도 대화가 없다).
-    if (input.resume) {
+    //  #4135 세션 복제 — fork 가 있으면 이어받기보다 앞선다. 그 하네스가 복제 수단을 갖고 있을 때만(Harness.forkArgv).
+    if (input.fork) {
+      if (!RESUME_ID_RE.test(input.fork)) throw new HttpError(400, "복제할 대화 id 형식이 잘못되었습니다");
+      if (!harness.forkArgv) throw new HttpError(409, `${harness.label} 세션은 아직 복제할 수 없습니다`);
+      cmd.push(...harness.forkArgv(input.fork));
+    } else if (input.resume) {
       if (!RESUME_ID_RE.test(input.resume)) throw new HttpError(400, "resume 세션 id 형식이 잘못되었습니다");
       cmd.push(...(harness.resumeArgv?.(input.resume) ?? []));
     } else if (input.resumePick) {
@@ -677,13 +682,15 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //    스레드 writer 가 둘이 돼 대화가 갈린다(codex 는 스레드당 writer 를 하나만 허용한다 — 실측).
   //  #4135 — **새 세션의 기본은 tmux(터미널에 TUI)** 다. 여기서 정한 값을 아래 표식(@box_runtime)에 박고,
   //   읽는 자리는 전부 그 표식을 본다 — 배포 기본이 나중에 또 바뀌어도 이미 떠 있는 세션의 판정이 안 흔들린다.
-  const chatMode = input.loginFor ? "tmux" as const : codexChatModeForNew();
+  //  #4135 세션 복제 — 복제본은 **언제나 터미널에 TUI** 로 뜬다. 복제는 하네스의 argv(`--fork-session` · `codex fork`)로만
+  //   일어나는데, app-server·대화 런타임 모드는 pane 이 셸이라 그 argv 가 실행되지 않는다(= 복제가 안 된 빈 세션이 뜬다).
+  const chatMode = (input.loginFor || input.fork) ? "tmux" as const : codexChatModeForNew();
   //  ★ #2439 — **대화 런타임 세션도 pane 은 셸이다.** 대화를 런타임이 쥐는데 TUI 까지 띄우면 한 대화에
   //   하네스가 둘 붙는다(실측 2026-09-01: 웹은 chat-runtime 으로 가는데 기록엔 TUI 줄이 함께 있었다).
   //   그때 사람이 보는 것은 «선택지가 대화창에 안 뜨고 시간만 올라가는» 화면이다.
   //  ⚠ 이 판정은 codexChatMode 와 **따로** 둔다: 저건 codex 전용 축이고 이건 하네스 무관이다.
   //   둘을 한 값으로 접으면 codex 의 안내 문구가 다른 하네스에도 나간다.
-  const chatRuntime = !input.loginFor && sessionRuntimeMode({ harness: harness.key, loginFor: input.loginFor, choice: input.runtime }) === "chat";
+  const chatRuntime = !input.loginFor && !input.fork && sessionRuntimeMode({ harness: harness.key, loginFor: input.loginFor, choice: input.runtime }) === "chat";
   const launch = input.loginFor
     ? (harnessLoginArgv(input.loginFor) ?? cmd)
     : chatMode === "app-server"
