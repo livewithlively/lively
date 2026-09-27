@@ -17,7 +17,7 @@ import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡
 import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘 일감'을 자르는 자(달력 자정이 아니다)
 import { renderLiv } from '../liv.js';
 import { livChatCleanup } from '../liv-chat.js';   // #4032 — 리브 칸 걷기
-import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, nativeAppByRoute, noteAppUse } from './apps.js';
+import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
 import { openProjPickModal, openProjPickPopover } from './proj-pick.js';   // 세션의 프로젝트 고르기 — 드롭다운·모달 두 그릇, 목록 한 벌
 import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, movePinnedSession, projLandingRoute, projectOrder, reloadSidePrefs, sessText, type SideInstance } from './side.js';
@@ -389,7 +389,6 @@ export async function bootV2(): Promise<void> {
     mountRail(railEl!, {
       counts: railCounts,
       activeKey: () => activeKey(),
-      openApps: openAppKeys,
       onSection: (sec, o) => {
         drawSide();
         if (o.navigate) location.hash = sectionRoute(sec);
@@ -2085,17 +2084,6 @@ function railCounts(): { inbox: number; busy: number; projects: number } {
   const busy = live.filter((s) => s.stateKey === 'busy').length;
   const projects = new Set(live.map((s) => s.projectId).filter((x): x is number => !!x)).size;
   return { inbox, busy, projects };
-}
-/** 최근 앱 아이콘 아래 '실행 중' 점 — 지금 창이 열려 있는 앱 키. */
-function openAppKeys(): Set<string> {
-  const out = new Set<string>();
-  for (const tab of (tabsApi ? tabsApi.tabs : [])) {
-    const seg = parseRoute(tab.route).segs;
-    if (seg[0] === 'app' && seg[1]) out.add(seg[1]);
-    else if (seg[0] && nativeAppByRoute(seg[0])) out.add(seg[0]);   // native 앱(#/sources) — 액자가 아니라 셸이 직접 그린다
-    else if (seg[0] && CLASSIC_PAGES[seg[0]]) out.add(CLASSIC_PAGES[seg[0]]);
-  }
-  return out;
 }
 // ── [홈] 구역은 **두고 간 자리**를 기억한다 (#2061) ────────────────────────────
 //  홈에서 세션을 열어 여러 번 시키다가 [위키] 로 갔다 돌아오면 **빈 '새 작업'** 이 떴다. 그 세션은 죽지 않았다 —

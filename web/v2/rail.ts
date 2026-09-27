@@ -32,14 +32,13 @@ import { aiLoginScopeHint } from './ai-login-scope.js';   // #2476 — «AI 로�
 import { inboxSection, openMemberModal } from './ws-people.js';   // #1875 — 구성원 모달·나에게 온 초대
 import { openCurrentWsSettings } from './ws-settings.js';   // #2188 — 워크스페이스 설정 모달
 import { wsStatus } from '../lib/ws-status.js';   // #4122 — 행 상태(온라인·오프라인·만드는 중)의 정본
+import { railLitKey } from '../lib/rail-lit.js';   // #3870 — 레일은 한 칸만 켠다(앱 화면에선 구역이 꺼진다)
 
 export type RailSection = 'home' | 'inbox' | 'sess' | 'proj' | 'wiki';
 
 export interface RailHooks {
   /** 배지·개수 — 확인할 것 · 작업 중 세션 · 진행 중 프로젝트. */
   counts?: () => { inbox: number; busy: number; projects: number };
-  /** 지금 열려 있는 앱 키 — 최근 앱 아이콘 아래 '실행 중' 점(맥 독). */
-  openApps?: () => Set<string>;
   /** 지금 화면의 활성 키(main.ts activeKey) — 구역이 아닌 '갈 곳'(리브)의 활성 표시에 쓴다. */
   activeKey?: () => string;
   /** 구역이 바뀌었다 — 사이드바를 다시 그리고 그 구역의 첫 화면으로 간다. */
@@ -213,6 +212,11 @@ function recentForRail(n: number): AppDef[] {
   for (const k of keys) { if (pick.length >= n) break; take(APPS.find((a) => a.key === k)); }
   for (const a of APPS) { if (pick.length >= n) break; take(a); }
   return pick.slice(0, n);
+}
+/** 지금 켜질 칸 하나(#3870) — 앱 화면이면 기억한 구역은 꺼진다. 레일과 구역 드롭다운이 같은 잣대를 쓴다. */
+function litKey(): string {
+  return railLitKey(hooks.activeKey?.() || '', section, LINKS.map((l) => l.key),
+    APPS.filter((a) => !a.hidden && !SEC_APP_KEYS.has(a.key)).map((a) => a.key));
 }
 
 // ── 워크스페이스 — 스택 타일 + 슬랙식 팝오버 ─────────────────────────────────
@@ -579,8 +583,7 @@ async function refreshSpaces(): Promise<void> {
 export function openSectionMenu(anchor: HTMLElement): void {
   if (popEl) { closePopover(); return; }
   const c = hooks.counts?.() || { inbox: 0, busy: 0, projects: 0 };
-  const ak = hooks.activeKey?.() || '';
-  const linkOn = LINKS.find((l) => l.key === ak) || null;
+  const lit = litKey();
   const row = (key: string, label: string, ic: string, on: boolean, extra: HTMLElement | null, run: () => void): HTMLElement =>
     el('button', { class: 'v2-secdd-row' + (on ? ' on' : ''), type: 'button', role: 'menuitemradio', 'aria-checked': String(on),
       onclick: () => { closePopover(); run(); } },
@@ -592,11 +595,11 @@ export function openSectionMenu(anchor: HTMLElement): void {
         const extra = s.key === 'inbox' && c.inbox ? el('span', { class: 'v2-rail-bd', text: String(c.inbox) })
           : s.key === 'sess' && c.busy ? el('span', { class: 'v2-secdd-m', text: `${c.busy} 작업 중` })
           : s.key === 'proj' && c.projects ? el('span', { class: 'v2-secdd-m', text: String(c.projects) }) : null;
-        return row(s.key, s.label, s.icon, !linkOn && section === s.key, extra, () => setRailSection(s.key, { navigate: true }));
+        return row(s.key, s.label, s.icon, lit === s.key, extra, () => setRailSection(s.key, { navigate: true }));
       }
-      if (m.kind === 'link') { const l = m.link; return row(l.key, l.label, l.icon, !!linkOn && linkOn.key === l.key, null, () => { location.hash = l.route; }); }
+      if (m.kind === 'link') { const l = m.link; return row(l.key, l.label, l.icon, lit === l.key, null, () => { location.hash = l.route; }); }
       const a = m.app;   // 독에 고정한 앱 — 레일이 숨어도 여기서 간다
-      return row(a.key, a.title, appGlyphName(a.icon), ak === a.key || ak === 'app:' + a.key, null, () => { location.hash = appHref(a); });
+      return row(a.key, a.title, appGlyphName(a.icon), lit === a.key, null, () => { location.hash = appHref(a); });
     }),
     el('div', { class: 'v2-wspop-hr', role: 'separator' }),
     row('rail', '레일 펼치기', 'panel', false, el('kbd', { class: 'v2-wspop-k', text: '⌘⇧S' }), () => toggleRail())) as HTMLElement;
@@ -878,9 +881,9 @@ export function drawRail(): void {
   init();
   if (drag && drag.lifted) return;   // 끌던 중엔 다시 그리지 않는다 — DOM 을 갈아엎으면 손에 든 것이 사라진다(endDrag 가 그린다)
   const c = hooks.counts?.() || { inbox: 0, busy: 0, projects: 0 };
-  const running = hooks.openApps?.() || new Set<string>();
-  const ak = hooks.activeKey?.() || '';
-  const linkOn = LINKS.find((l) => l.key === ak) || null;
+  //  켜지는 칸은 **하나**다(#3870) — 앱 화면으로 가도 구역은 기억에 남지만(사이드바가 그 구역을 계속 그린다) 켜지진 않는다.
+  //   종전엔 구역을 기억(section)만 보고 켜서, 홈에서 분류체계를 열면 홈과 분류체계가 함께 켜져 보였다.
+  const lit = litKey();
   host.classList.add('closed');   // 격자는 늘 '아이콘 위 · 이름 아래' 하나다(232px 펼침 모드 폐기)
   document.getElementById('v2-root')?.classList.toggle('rail-hidden', hidden);
 
@@ -895,12 +898,12 @@ export function drawRail(): void {
       onclick: (e: Event) => { if (!href) e.preventDefault(); onclick(); },
     }, icon(ic, 'v2-rail-ic'), el('span', { class: 'v2-rail-t', text: label }), extra);
   const appItem = (a: AppDef, kind: 'pin' | 'recent'): HTMLElement => {
-    //  독에 고정한 앱도 **지금 그 화면이면 켜져 보인다** — 구역·리브와 같은 규칙(activeKey).
+    //  독에 고정한 앱도 **지금 그 화면이면 켜져 보인다** — 구역·리브와 같은 잣대(litKey).
     //   안 그러면 자료를 고정해 놓고 그 안에 들어가 있어도 레일만 아무 데도 안 가리킨다.
-    const on = ak === a.key || ak === 'app:' + a.key;
-    const it = item(a.key, a.title, appGlyphName(a.icon), on,   // #4233: 앱 화면과 같은 그림(홈(클래식) = 판 넷)
-      running.has(a.key) ? el('span', { class: 'v2-rail-run', role: 'img', 'aria-label': '실행 중' }) : null,
-      () => { /* href 가 간다 */ }, appHref(a));
+    //  ⚠ 맥 독의 '실행 중' 점은 걷었다(#3870) — 새 셸은 탭 줄을 안 그려서(main.ts TABS_OFF) 그 점은 사람에게 보이지도
+    //   닫히지도 않는 숨은 탭을 가리켰다. 한 번 연 앱마다 점이 붙어 «왜 있냐» 는 물음만 남겼다.
+    const it = item(a.key, a.title, appGlyphName(a.icon), lit === a.key,   // #4233: 앱 화면과 같은 그림(홈(클래식) = 판 넷)
+      null, () => { /* href 가 간다 */ }, appHref(a));
     it.classList.add(kind === 'pin' ? 'pinned' : 'recent');
     it.dataset.app = a.key; it.dataset.kind = kind;
     it.title = a.title + (kind === 'pin' ? ' — 독에 고정됨 · 꾹 눌러 끌면 순서, 레일 밖으로 끌어내면 빼기' : ' — 최근에 연 앱 · 꾹 눌러 위로 끌어 올리면 고정');
@@ -914,7 +917,7 @@ export function drawRail(): void {
     if (m.kind === 'app') return appItem(m.app, 'pin');
     let it: HTMLElement;
     if (m.kind === 'sec') {
-      const s = m.sec; const on = !linkOn && section === s.key;
+      const s = m.sec; const on = lit === s.key;
       //  확인할 것 — 슬랙 '내 활동'의 그 배지. 아이콘 귀퉁이에 숫자.
       const extra = s.key === 'inbox' && c.inbox
         ? el('span', { class: 'v2-rail-bd', text: String(c.inbox), role: 'img', 'aria-label': `확인할 것 ${c.inbox}건` })
@@ -922,7 +925,7 @@ export function drawRail(): void {
       it = item(s.key, s.label, s.icon, on, extra, () => setRailSection(s.key, { navigate: true }));
     } else {
       const l = m.link;
-      it = item(l.key, l.label, l.icon, !!linkOn && linkOn.key === l.key, null, () => { location.hash = l.route; }, l.route);
+      it = item(l.key, l.label, l.icon, lit === l.key, null, () => { location.hash = l.route; }, l.route);
     }
     it.dataset.kind = 'sec';
     wireDrag(it, m.key, 'sec');

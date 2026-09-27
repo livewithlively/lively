@@ -256,8 +256,6 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-rail-m { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 /* 확인할 것 배지 — 슬랙 '내 활동'의 그 배지. 사이드바 통틀어 앰버 숫자는 이 하나뿐(#1719 규칙). */
 .v2-rail-bd { flex: none; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px; background: var(--warn-deep); color: var(--on-fill); font-size: 10.5px; font-weight: 800; display: inline-grid; place-items: center; font-variant-numeric: tabular-nums; }
-/* 최근 앱의 '실행 중' — 맥 독의 그 점. 무채색(무엇인지만 말하고 상태는 사이드바가 말한다). */
-.v2-rail-run { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--muted-head); }
 
 .v2-rail.closed .v2-rail-it { flex-direction: column; gap: 3px; width: calc(100% - 12px); margin: 2px 6px; padding: 6px 2px 5px; }
 .v2-rail.closed .v2-rail-t { width: 100%; flex: none; font-size: 11.5px; font-weight: 700; color: var(--ink-sub); text-align: center; }
@@ -265,7 +263,6 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-rail.closed .v2-rail-ic { width: 24px; height: 24px; }
 .v2-rail.closed .v2-rail-m { display: none; }
 .v2-rail.closed .v2-rail-it.on::before { display: none; }
-.v2-rail.closed .v2-rail-run { position: absolute; left: 50%; bottom: 2px; margin-left: -2.5px; }
 /* 접혀도 배지는 남는다 — 아이콘 오른쪽 위 귀퉁이(슬랙의 종 위 숫자). */
 .v2-rail.closed .v2-rail-bd { position: absolute; top: 3px; right: 11px; min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; box-shadow: 0 0 0 2px var(--canvas); }
 .v2-rail.closed .v2-rail-it.on .v2-rail-bd { box-shadow: 0 0 0 2px var(--bg); }
