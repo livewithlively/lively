@@ -14,9 +14,30 @@ import { openInViewerPart, FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHI
 import { findMatcher } from '../lib/find.js';
 import { createPreviewKit } from './file-preview.js';
 import { placeChildren, reuseKeyed, type KeyedCard } from './keyed-cards.js';   // #4135 — 제자리 되그리기(바뀐 카드만 새로)
+import type { CtxRow } from './ctx-menu.js';
 import type { Part, PartCtx } from './panes-parts.js';
 
-export function filesPart(ctx: PartCtx): Part {
+/** 곁칸 밖에서 이 부품을 쓰는 자리(프로젝트 화면의 공유 폴더 모달, #4135)가 거는 고리 — 전부 선택 사항이라 곁칸(PartCtx)은 그대로 들어온다.
+ *  같은 폴더를 보여 주는 화면이 둘이면 그림도 몸짓도 같아야 한다(원준 2026-09-27: «곁칸이랑 같은 디자인으로») — 그래서 베끼지 않고 이 부품을 그대로 세운다. */
+export interface FilesHooks {
+  /** 처음 열 폴더(프로젝트 루트 기준 상대경로). */
+  startDir?: string;
+  /** 파일 열기를 가로챈다 — 없으면 곁칸 뷰어로 보낸다(openInViewerPart). */
+  openFile?: (f: FileItem) => void;
+  /** 폴더 · 목록 · 고른 것이 바뀔 때마다(그린 뒤). 옆에 «고른 파일» 칸을 세우는 자리가 쓴다. */
+  onState?: (s: { cwd: string; items: FileItem[]; selected: FileItem[] }) => void;
+  /** 목록이 실제로 달라졌다(올리기 · 삭제 · 이동 · 이름) — 밖의 캐시를 버릴 때. */
+  onFiles?: () => void;
+  /** 항목 우클릭 메뉴에 더할 행(「열기」 묶음 바로 아래). */
+  extraRows?: (f: FileItem, many: FileItem[]) => CtxRow[];
+  /** 맨 위 안내 줄을 세우지 않는다(이미 같은 말을 하는 자리). */
+  noNote?: boolean;
+  /** 경로 줄 첫 조각의 이름(기본 «자료»). */
+  rootLabel?: string;
+}
+export type FilesCtx = Pick<PartCtx, 'id' | 'dead'> & { paneRoot?: PartCtx['paneRoot'] } & FilesHooks;
+
+export function filesPart(ctx: FilesCtx): Part {
   const root = el('div', { class: 'pn-part pn-files', tabindex: '0' }) as HTMLElement;
   const body = el('div', { class: 'pn-fbody' });          // 격자 또는 목록이 사는 자리(스크롤 주체)
   const crumbs = el('div', { class: 'pn-fcrumbs' });
@@ -24,7 +45,7 @@ export function filesPart(ctx: PartCtx): Part {
   let sig = '';
 
   // ── 상태 ──
-  let cwd = '';                                 // 지금 보는 폴더(프로젝트 루트 기준 상대경로)
+  let cwd = String(ctx.startDir || '').replace(/^\/+|\/+$/g, '');   // 지금 보는 폴더(프로젝트 루트 기준 상대경로)
   let items: FileItem[] = [];                   // 지금 폴더의 것들(받은 그대로)
   //  찾기용 **평평한 전체 목록**(매니페스트) — 폴더를 열어 보지 않고도 이름으로 닿을 수 있어야 찾기다.
   //  ⚠ 목록 화면의 정본은 items 다. 이건 찾는 중에만 쓴다(전체를 늘 그리면 폴더 구조가 뜻을 잃는다).
@@ -67,7 +88,7 @@ export function filesPart(ctx: PartCtx): Part {
     pnIcon('spark', 'pn-i sm'),
     el('p', { text: '여기 있는 자료는 이 프로젝트의 모든 세션이 자동으로 참고합니다. 관련 자료를 넉넉히 올려 둘수록 답이 좋아져요.' }),
     el('button', { class: 'pn-fnote-x', type: 'button', title: '안내 접기', 'aria-label': '안내 접기', text: '✕', onclick: () => { lsSet(FV_NOTE, '0'); noteEl.hidden = true; } }));
-  noteEl.hidden = lsGet(FV_NOTE, '1') === '0';
+  noteEl.hidden = !!ctx.noNote || lsGet(FV_NOTE, '1') === '0';
 
   // ── 올리기 — 파일 **또는 폴더** (#1819 원준) ─────────────────────────────────
   //  끌어다 놓는 길은 처음부터 폴더를 받았는데(upDropZone → 하위 구조 그대로), 버튼 길만 파일 전용이었다.
@@ -275,6 +296,7 @@ export function filesPart(ctx: PartCtx): Part {
       .filter((f) => !f.path.startsWith(TRASH_DIR + '/') && !NOISE_RE.test('/' + f.path) && !MACHINE_FILES.has(f.name));
   }
 
+  let loadedOnce = false, lastDir = '';
   async function load(): Promise<void> {
     if (!(ctx.id > 0)) { body.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:18px', text: '이 화면은 프로젝트 폴더가 없어 자료를 둘 수 없어요.' })); return; }
     void loadAll();                              // 찾기 재료는 곁길로 — 목록 그리기를 기다리게 하지 않는다
@@ -282,8 +304,11 @@ export function filesPart(ctx: PartCtx): Part {
     if (ctx.dead() || !root.isConnected) return;
     const s2 = cwd + '|' + got.map((f) => f.path + f.mtime + f.size).join('|');
     if (s2 === sig) return;
+    const changed = loadedOnce && lastDir === cwd;   // 같은 폴더의 목록이 달라졌다 — 폴더를 옮긴 것은 변화가 아니다
+    loadedOnce = true; lastDir = cwd;
     sig = s2;
     items = got;
+    if (changed && ctx.onFiles) { try { ctx.onFiles(); } catch (_) { /* 밖의 고리가 던져도 목록은 선다 */ } }
     for (const p of [...sel]) if (!got.some((f) => f.path === p)) sel.delete(p);   // 사라진 것은 선택도 놓는다
     render();
   }
@@ -296,6 +321,7 @@ export function filesPart(ctx: PartCtx): Part {
     }
     count.textContent = sel.size ? `${sel.size}개 선택` : (ordered.length ? `${ordered.length}개` : '');
     count.classList.toggle('sel', sel.size > 0);
+    if (ctx.onState) { try { ctx.onState({ cwd, items, selected: selItems() }); } catch (_) { /* 밖의 고리가 던져도 고르기는 된다 */ } }
   }
   function clickSelect(f: FileItem, e: MouseEvent): void {
     const multi = e.metaKey || e.ctrlKey;
@@ -315,7 +341,8 @@ export function filesPart(ctx: PartCtx): Part {
    *  그 판정은 셸이 한다(panes.ts openViewerAt). 뷰어 칸이 없으면 셸이 이 신호를 듣고 만든다. */
   function open(f: FileItem): void {
     if (f.type === 'dir') { goto(f.path); return; }
-    openInViewerPart(ctx, f.path);
+    if (ctx.openFile) { ctx.openFile(f); return; }
+    if (ctx.paneRoot) openInViewerPart({ id: ctx.id, paneRoot: ctx.paneRoot }, f.path);
   }
   /** 고른 것 여럿을 편다 — 각자 제 뷰어에. 상한 8은 부르는 쪽이 이미 건다. */
   function openMany(list: FileItem[]): void {
@@ -345,11 +372,12 @@ export function filesPart(ctx: PartCtx): Part {
     e.preventDefault(); e.stopPropagation();
     if (f && !sel.has(f.path)) { sel.clear(); sel.add(f.path); anchorPath = f.path; paintSel(); }
     const many = selItems();
-    const rows: Array<{ label: string; run?: () => void; danger?: boolean; sep?: boolean; off?: boolean }> = [];
+    const rows: CtxRow[] = [];
     if (f) {
       //  「열기」 = 두 번 누르기와 같은 일 — 파일은 제 뷰어로(이미 떠 있으면 그 뷰어), 폴더는 들어간다.
       rows.push({ label: many.length > 1 ? `${many.length}개 나란히 열기` : (f.type === 'dir' ? '폴더 열기' : '열기'), run: () => openMany(many.slice(0, 8)) });
       if (f.type !== 'dir') rows.push({ label: '내려받기', run: () => { for (const x of many) if (x.type !== 'dir') download(x); } });
+      if (ctx.extraRows) { try { rows.push(...ctx.extraRows(f, many)); } catch (_) { /* 덧붙는 행이 없어도 메뉴는 선다 */ } }
       rows.push({ label: '이름 바꾸기', off: many.length !== 1, run: () => { renameAt = f.path; render(); } });
       if (cwd) rows.push({ label: '상위 폴더로 옮기기', run: () => void moveMany(many.map((x) => x.path), cwd.includes('/') ? cwd.slice(0, cwd.lastIndexOf('/')) : '') });
       rows.push({ sep: true, label: '' });
@@ -468,7 +496,7 @@ export function filesPart(ctx: PartCtx): Part {
   function crumbBar(): void {
     const segs = cwd ? cwd.split('/') : [];
     const kids: HTMLElement[] = [];
-    const rootBtn = el('button', { class: 'pn-fcrumb' + (segs.length ? '' : ' on'), type: 'button', text: '자료', title: '맨 위 폴더', onclick: () => goto('') }) as HTMLElement;
+    const rootBtn = el('button', { class: 'pn-fcrumb' + (segs.length ? '' : ' on'), type: 'button', text: ctx.rootLabel || '자료', title: '맨 위 폴더', onclick: () => goto('') }) as HTMLElement;
     wireCrumbDrop(rootBtn, '');
     kids.push(rootBtn);
     let acc = '';
