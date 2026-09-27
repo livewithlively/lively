@@ -10,7 +10,7 @@
 import { api, el, personFace, relTime, toast } from '../core.js';
 import { pjvPopover } from './popover.js';
 import { type Fill, type SessView, btn, emptyNote, footText, hubIcon, lastLine, lastTurns, enterSession, sessDot, sessView } from './detail-hub-kit.js';
-import { type SessionGroupDef, nodeLabel, rowsBudget, sessionGroupsFor, sessionLastActivity, sessionTaskIndex, sortSessions, splitRows } from './detail-hub-model.js';
+import { type SessionGroupDef, nodeLabel, sessionGroupsFor, sessionLastActivity, sessionTaskIndex, sortSessions } from './detail-hub-model.js';
 
 // 2칸 이상 도구 줄의 필터·묶기 — 페이지 안에서만 산다(프로젝트별).
 const TOOLS: Map<number, { group: 'task' | 'state'; state: string; person: string; picked: string }> = new Map();
@@ -22,6 +22,8 @@ const stateMatch = (v: SessView, filter: string): boolean => !filter ? true : fi
 export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
   const { o, P, pid } = ctx;
   const w = f.w, h = f.h;
+  const modal = !!f.modal;   // 모달 — 모든 세션 · 두 줄짜리 줄(이름 / 도는 자리 · 태스크) + 상태·사람·마지막 활동 열 · 넓은 옆 칸(마지막 열 턴 · 세션 id · 만든 때)
+  const phone = modal && ctx.narrow;   // 좁은 화면의 모달 — 열은 상태 · 얼굴 둘(나머지는 줄 둘째 줄과 아래 «고른 세션»)
   const tools = toolsOf(pid);
   const taskIdx = sessionTaskIndex(P.tasks || []);
   const hasTask = (s: any) => taskIdx.has(String(s.id));
@@ -92,7 +94,7 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
       b.onclick = (e) => { e.stopPropagation(); enterSession(s); };
       return b;
     };
-    const ownerCell = (s: any): HTMLElement => el('span', { class: 'pjh-sr-c' }, personFace(s.owner, 'pjv-ava', memberName(s.owner)), el('span', { class: 'pjh-sr-cn', text: memberName(s.owner) }));
+    const ownerCell = (s: any): HTMLElement => el('span', { class: 'pjh-sr-c', title: memberName(s.owner) }, personFace(s.owner, 'pjv-ava', memberName(s.owner)), phone ? null : el('span', { class: 'pjh-sr-cn', text: memberName(s.owner) }));
     const stateCell = (s: any): HTMLElement => el('span', { class: 'pjh-sr-c', text: V(s).label });
     const actCell = (s: any): HTMLElement => { const at = sessionLastActivity(s); return el('span', { class: 'pjh-sr-c', text: at ? relTime(new Date(at).toISOString()) : '' }); };
 
@@ -120,20 +122,24 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
     }
 
     // ── 목록(2칸 이상은 도구 줄) ──
-    let groups: SessionGroupDef[] = sessionGroupsFor(ss, w, h, (s) => V(s).live, hasTask);
-    const toolsRow = w >= 2 && h >= 2;
+    let groups: SessionGroupDef[] = sessionGroupsFor(ss, w, modal ? 3 : h, (s) => V(s).live, hasTask);
+    const toolsRow = modal || (w >= 2 && h >= 2);
     if (toolsRow) {
       if (tools.group === 'state') groups = [{ key: 'live', label: '사용 중', sessions: ss.filter((s) => V(s).live) }, { key: 'recent', label: '최근', sessions: ss.filter((s) => !V(s).live) }];
       groups = groups.map((g) => ({ ...g, sessions: g.sessions.filter((s) => stateMatch(V(s), tools.state) && (!tools.person || (tools.person === 'me' ? s.owner === ctx.meId : s.owner === tools.person))) }));
     }
-    const sidePane = w >= 3 && h >= 2;
-    const budget = rowsBudget(h, groups.length, toolsRow ? 30 : 0);
-    const caps = splitRows(groups.map((g) => g.sessions.length), budget);
-    // 열 — 1칸: 상태 · 2칸 한 줄 높이: 상태·사람 · 2×2 와 3칸: 상태·사람·마지막 활동(옆 칸이 있으면 활동은 뺀다 — 자리가 좁다). 시안 2×2 그대로.
-    const colDefs: Array<{ key: string; label: string; px: number; cell: (s: any) => HTMLElement }> = [
-      { key: 'state', label: '상태', px: 74, cell: stateCell },
-      ...(w >= 2 ? [{ key: 'owner', label: '사람', px: 104, cell: ownerCell }] : []),
-      ...((w >= 3 || (w >= 2 && h >= 2)) && !sidePane ? [{ key: 'act', label: '마지막 활동', px: 92, cell: actCell }] : []),
+    const sidePane = modal || (w >= 3 && h >= 2);
+    // 줄 수를 자르지 않는다(2026-09-27) — 넘치면 목록 안에서 스크롤.
+    const caps = groups.map((g) => g.sessions.length);
+    // 열 — 1칸: 상태 · 2칸 한 줄 높이: 상태·사람 · 2×2 와 3칸: 상태·사람·마지막 활동(옆 칸이 있으면 활동은 뺀다 — 자리가 좁다)
+    //  모달: 상태·사람·마지막 활동. «도는 자리» 와 태스크는 이름 아래 둘째 줄로 — 이름 열을 열 넷이 눌러 이름이 잘리던 것(실측 106px)을 푼다.
+    const colDefs: Array<{ key: string; label: string; px: number; cell: (s: any) => HTMLElement }> = phone ? [
+      { key: 'state', label: '상태', px: 68, cell: stateCell },
+      { key: 'owner', label: '', px: 28, cell: ownerCell },
+    ] : [
+      { key: 'state', label: '상태', px: modal ? 84 : 74, cell: stateCell },
+      ...(w >= 2 ? [{ key: 'owner', label: '사람', px: modal ? 104 : 104, cell: ownerCell }] : []),
+      ...(modal || ((w >= 3 || (w >= 2 && h >= 2)) && !sidePane) ? [{ key: 'act', label: '마지막 활동', px: modal ? 88 : 100, cell: actCell }] : []),
     ];
     const gridCols = 'minmax(0,1fr) ' + colDefs.map((c) => c.px + 'px').join(' ');
 
@@ -155,32 +161,43 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
         chip('사람', !tools.person ? '전체' : tools.person === 'me' ? '나' : memberName(tools.person), (b) => menuOf(b, people, tools.person, (v) => { tools.person = v; ctx.refreshGrid(); }))));
     }
 
-    const list = el('div', { class: 'pjh-slist' });
+    const list = el('div', { class: 'pjh-slist', 'data-mscroll': 'sess' });
     let side: HTMLElement | null = null;
     const paintSide = (s: any) => {
       if (!side) return;
       const v = V(s); const t = taskIdx.get(String(s.id));
       const tail = el('div', { class: 'pjh-stail', text: v.live ? '마지막 줄을 읽는 중…' : '기록을 읽는 중…' });
+      const made = Number(s.created) ? new Date(Number(s.created) < 1e12 ? Number(s.created) * 1000 : Number(s.created)) : null;
       side.replaceChildren(
         el('div', { class: 'pjh-side-l', text: '고른 세션' }),
         el('div', { class: 'pjh-side-t' }, sessDot(v), el('span', { class: 'pjh-sr-n', text: s.label || s.id })),
         el('div', { class: 'pjh-kv' },
           el('b', { text: '태스크' }), el('span', { text: t ? t.name : '없음' }),
-          el('b', { text: '사람' }), el('span', { text: memberName(s.owner) + ' · ' + nodeLabel(s.node) }),
-          el('b', { text: '상태' }), el('span', { text: v.label + (sessionLastActivity(s) ? ' · ' + relTime(new Date(sessionLastActivity(s)).toISOString()) : '') })),
-        el('div', { class: 'pjh-side-l', text: '마지막 줄' }),
+          el('b', { text: '사람' }), el('span', { text: memberName(s.owner) + (modal ? '' : ' · ' + nodeLabel(s.node)) }),
+          ...(modal ? [el('b', { text: '도는 자리' }), el('span', { text: nodeLabel(s.node) + (s.node && s.node.online === false ? ' · 꺼져 있음' : '') })] : []),
+          el('b', { text: '상태' }), el('span', { text: v.label + (sessionLastActivity(s) ? ' · ' + relTime(new Date(sessionLastActivity(s)).toISOString()) : '') }),
+          ...(modal && made ? [el('b', { text: '만든 때' }), el('span', { text: relTime(made.toISOString()) })] : []),
+          ...(modal && s.harness ? [el('b', { text: 'AI' }), el('span', { text: String(s.harness) })] : []),
+          ...(modal ? [el('b', { text: '세션 id' }), el('span', { class: 'pjh-mono', text: String(s.id) })] : [])),
+        el('div', { class: 'pjh-side-l', text: modal ? '마지막 대화' : '마지막 줄' }),
         tail,
         el('div', { class: 'pjh-side-acts' }, enterBtn(s, v.key === 'waiting' ? '입장해서 답하기' : undefined), t ? null : attachBtn(s), logBtn()));
-      lastTurns(s, 4).then((turns) => {
+      lastTurns(s, modal ? 10 : 4).then((turns) => {
         if (!turns.length) { tail.textContent = '읽을 대화가 없습니다.'; return; }
         tail.replaceChildren(...turns.map((x) => el('div', { class: 'pjh-stail-' + (x.who === 'ai' ? 'ai' : 'me'), text: (x.who === 'ai' ? '' : '› ') + x.text })));
       });
     };
     const srow = (s: any): HTMLElement => {
       const v = V(s);
-      const r = el('div', { class: 'pjh-sr' + (sidePane && tools.picked === s.id ? ' on' : ''), 'data-sid': String(s.id), style: 'grid-template-columns:' + gridCols },
-        el('div', { class: 'pjh-sr-t' }, sessDot(v), el('span', { class: 'pjh-sr-n', text: s.label || s.id }), w >= 2 ? taskChip(s) : null,
-          el('span', { class: 'pjh-sr-acts' }, enterBtn(s), hasTask(s) ? null : attachBtn(s))),
+      // 모달 — 줄이 둘: 이름(올리면 [입장]) / 도는 자리 · 태스크. «태스크에 붙이기» 는 옆 칸에 있다(줄에 또 두지 않는다).
+      const nameCell = modal
+        ? el('div', { class: 'pjh-sr-t two' },
+          el('div', { class: 'pjh-sr-l1' }, sessDot(v), el('span', { class: 'pjh-sr-n', text: s.label || s.id }), el('span', { class: 'pjh-sr-acts' }, enterBtn(s))),
+          el('div', { class: 'pjh-sr-l2' }, el('span', { class: 'pjh-sr-node', title: '도는 자리 — ' + (s.node ? String(s.node.name || s.node.id || '') : '중앙') }, hubIcon('monitor', 12), el('span', { text: nodeLabel(s.node) })), taskChip(s)))
+        : el('div', { class: 'pjh-sr-t' }, sessDot(v), el('span', { class: 'pjh-sr-n', text: s.label || s.id }), w >= 2 ? taskChip(s) : null,
+          el('span', { class: 'pjh-sr-acts' }, enterBtn(s), hasTask(s) ? null : attachBtn(s)));
+      const r = el('div', { class: 'pjh-sr' + (modal ? ' two' : '') + (sidePane && tools.picked === s.id ? ' on' : ''), 'data-sid': String(s.id), style: 'grid-template-columns:' + gridCols },
+        nameCell,
         ...colDefs.map((c) => c.cell(s)));
       if (sidePane) r.onclick = () => { tools.picked = s.id; list.querySelectorAll('.pjh-sr.on').forEach((x) => x.classList.remove('on')); r.classList.add('on'); paintSide(s); };
       return r;
@@ -197,7 +214,7 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
 
     if (sidePane) {
       side = el('div', { class: 'pjh-side' });
-      body.append(el('div', { class: 'pjh-two-s' }, list, side));
+      body.append(el('div', { class: 'pjh-two-s', style: modal ? 'grid-template-columns:minmax(0,1fr) 340px' : '' }, list, side));
       const picked = ss.find((s) => s.id === tools.picked) || ss[0];
       tools.picked = picked.id;
       list.querySelectorAll('.pjh-sr').forEach((x) => x.classList.toggle('on', (x as HTMLElement).dataset.sid === String(picked.id)));
@@ -206,7 +223,8 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
       body.append(list);
     }
     // 목록 줄의 «마지막 줄» 은 안 싣는다(5판 — 줄이 좁다). 사용 중 세션의 상태 열이 그 역할이다.
-    const footTxt = (w >= 2 ? '사용 중 ' + live.length + ' · 최근 ' + (ss.length - live.length) : '세션 ' + ss.length) + (noTask ? ' · 태스크 없는 세션 ' + noTask : '');
+    const footTxt = phone ? '사용 중 ' + live.length + ' · 최근 ' + (ss.length - live.length)
+      : (w >= 2 ? '사용 중 ' + live.length + ' · 최근 ' + (ss.length - live.length) : '세션 ' + ss.length) + (noTask ? ' · 태스크 없는 세션 ' + noTask : '');
     foot.append(footText(footTxt), newBtn());
     if (w >= 2) foot.append(logBtn());
   });

@@ -275,3 +275,22 @@ export function splitBodyNotes(md: string): { notes: BodyNote[]; rest: string } 
   if (!notes.length) return { notes, rest: src.replace(/^\s*\n/, '').replace(/\s+$/, '') };
   return { notes, rest: lines.slice(i).join('\n').trim() };
 }
+
+/** 지식 검색 미리보기 — 서버가 준 매치 줄(«L12: …» 줄 번호 · 마크다운 기호 · [[위키 링크]] · 줄 사이 «⋯»)을 읽는 글 한 덩이로 다듬고 n 자에서 끊는다. */
+export function searchSnippet(raw: unknown, n: number): string {
+  const t = String(raw ?? '')
+    .replace(/(^|\s)L\d+:\s*/g, '$1')
+    .replace(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/(^|\s)#{1,6}(?=\s|$)/g, '$1')
+    .replace(/(^|\s)[-*>]\s+/g, '$1')
+    .replace(/[*_`]+/g, '')
+    .replace(/\[\[|\]\]/g, '')
+    .replace(/\s*[⋯…]+\s*/g, ' … ')
+    .replace(/\s+/g, ' ')
+    .replace(/(?:… )+…/g, '…')
+    .trim()
+    .replace(/^(?:…\s*)+|(?:\s*…)+$/g, '')
+    .trim();
+  return t.length > n ? t.slice(0, n).trimEnd() + '…' : t;
+}

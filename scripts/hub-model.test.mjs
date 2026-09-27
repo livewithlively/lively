@@ -153,3 +153,14 @@ test("#15 본문 안내문 들어내기 — 서버가 쓴 첫 인용(자동 생�
   assert.equal(c.notes[0].kind, "auto-first"); assert.equal(c.rest, "## 첫 지시(원문)\n\nx");
   const d = M.splitBodyNotes("> 그냥 인용문\n\n본문"); assert.equal(d.notes.length, 0); assert.equal(d.rest, "> 그냥 인용문\n\n본문");
 });
+
+test("#16 검색 미리보기 다듬기 — 줄 번호(L12:) · 제목 기호 · 굵게·코드 기호 · [[위키 링크]] 를 걷고 줄 사이는 « … » 하나로, n 자에서 끊는다", () => {
+  const raw = "L1: # 대시보드(#/dashboard) '대시보드 편집' — 위젯 피커 ⋯ L3: …d-home-cockpit-617]] 1단계(3열 고정 프리셋)가 **2단계** 로 [[dashboard-layout-swap]] ⋯ L6: ##";
+  const t = M.searchSnippet(raw, 400);
+  assert.ok(!/L\d+:/.test(t), t); assert.ok(!t.includes("]]"), t); assert.ok(!t.includes("… …"), t);
+  assert.ok(!t.includes("**"), t); assert.ok(!t.includes("[["), t); assert.ok(!/(^|\s)#{1,6}(\s|$)/.test(t), t);
+  assert.ok(t.startsWith("대시보드(#/dashboard)"), t); assert.ok(t.includes(" … "), t); assert.ok(!t.endsWith("…"), t);
+  assert.equal(M.searchSnippet("L5: - **프로젝트 상세** `openFolderGrid` 모달", 100), "프로젝트 상세 openFolderGrid 모달");
+  assert.equal(M.searchSnippet("가나다라마바사", 4), "가나다라…");
+  assert.equal(M.searchSnippet(null, 10), "");
+});

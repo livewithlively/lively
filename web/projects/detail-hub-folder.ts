@@ -15,8 +15,9 @@ import { type Fill, btn, emptyNote, footText, hubIcon } from './detail-hub-kit.j
 import { recentFiles, splitDirs } from './detail-hub-model.js';
 
 // 프로젝트별 «보고 있는 폴더»·«고른 파일» — 다시 그려도 남는다.
-const NAV: Map<number, { path: string; picked: string }> = new Map();
-const navOf = (pid: number) => { let n = NAV.get(pid); if (!n) { n = { path: '', picked: '' }; NAV.set(pid, n); } return n; };
+type Nav = { path: string; picked: string; sort: 'recent' | 'name' | 'size' };
+const NAV: Map<number, Nav> = new Map();
+const navOf = (pid: number): Nav => { let n = NAV.get(pid); if (!n) { n = { path: '', picked: '', sort: 'recent' }; NAV.set(pid, n); } return n; };
 // 하위 폴더 목록 캐시 — 같은 화면에서 필터·설정으로 다시 그릴 때 재요청을 막는다. 30초 뒤엔 다시 묻고, 실패는 캐시하지 않는다(리뷰 지적).
 const DIR_CACHE: Map<string, { at: number; p: Promise<any[]> }> = new Map();
 const DIR_TTL_MS = 30_000;
@@ -24,6 +25,7 @@ const DIR_TTL_MS = 30_000;
 export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
   const { o, P, pid } = ctx;
   const w = f.w, h = f.h;
+  const modal = !!f.modal;   // 모달 — 이 폴더의 모든 것(하위 폴더도 낱장으로) · 정렬 · 경로 줄 · 넓은 미리보기 칸(종류·경로까지)
   const nav = navOf(pid);
   const B = o.base;
   const open = () => ctx.openTool('folder');
@@ -125,7 +127,12 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
       return el('div', { class: 'pjh-fc' + (nav.picked === rel ? ' on' : ''), title: it.name, onclick: () => openItem(it, rel) },
         tile(it, rel),
         el('div', { class: 'pjh-fc-n', text: it.name }),
-        el('div', { class: 'pjh-fc-m', text: [it.type === 'dir' ? '폴더' : fmtSize(it.size || 0), it.mtime ? relTime(new Date(it.mtime).toISOString()) : ''].filter(Boolean).join(' · ') }));
+        (() => {
+          const when = it.mtime ? relTime(new Date(it.mtime).toISOString()) : '';
+          const m = el('div', { class: 'pjh-fc-m', text: [it.type === 'dir' ? '폴더' : fmtSize(it.size || 0), when].filter(Boolean).join(' · ') });
+          if (it.type === 'dir') listDir(rel).then((its: any[]) => { m.textContent = ['폴더 · ' + its.length + '개', when].filter(Boolean).join(' · '); });   // 하위 폴더 낱장(모달) — 안에 든 수
+          return m;
+        })());
     };
     const tree = (): HTMLElement => {
       const t = el('div', { class: 'pjh-tree' });
@@ -161,11 +168,11 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
       const list = el('div', { class: 'pjh-frl' });
       if (nav.path) list.append(el('div', { class: 'pjh-fr back', onclick: () => { nav.path = nav.path.split('/').slice(0, -1).join('/'); ctx.refreshGrid(); } }, hubIcon('left', 13), el('span', { class: 'pjh-fr-n', text: '위로' })));
       // 줄 수는 높이에서 — 몸통(칸 높이 − 크롬 122)에서 폴더 묶음(머리 28 + 줄 36)·최근 머리 28·끌어다 놓기 42 를 빼고 파일 줄 40px 로 나눈다.
-      const dirsShown = cur.dirs.slice(0, 4);
+      const dirsShown = cur.dirs;   // 자르지 않는다 — 넘치면 목록 안에서 스크롤(2026-09-27)
       if (dirsShown.length) { list.append(el('div', { class: 'pjh-grp' }, el('b', { text: '폴더' }), el('span', { class: 'pjh-grp-n', text: String(cur.dirs.length) }))); for (const d of dirsShown) list.append(frow(d)); }
       list.append(el('div', { class: 'pjh-grp' }, el('b', { text: '최근' }), el('span', { class: 'pjh-grp-n', text: String(cur.files.length) })));
-      const avail = h * 276 - 16 - 122 - (dirsShown.length ? 28 + 8 + dirsShown.length * 36 : 0) - 28 - 54 - (nav.path ? 40 : 0);
-      for (const it of recentFiles(items, Math.max(2, Math.floor(avail / 40)))) list.append(frow(it));
+      for (const it of recentFiles(items, 9999)) list.append(frow(it));
+      list.setAttribute('data-mscroll', 'frl');
       body.append(list, dropBox(true), progBox);   // 끌어다 놓기는 목록 바로 아래(바닥에 홀로 띄우지 않는다)
       foot.append(footText(rootLabel), up.btn, up.fileIn, up.dirIn, btn('폴더 열기', 'btn-ghost', open));
       return;
@@ -182,18 +189,31 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
       return;
     }
     // 2×2 이상 — 나무 + 경로 줄 + 낱장 격자 (+ 3×2 옆 칸)
-    const cols = w >= 3 ? 3 : 4;
-    const grid = el('div', { class: 'pjh-fgrid tall', style: 'grid-template-columns:repeat(' + cols + ',1fr)' });
+    const cols = modal ? (ctx.narrow ? 3 : 5) : w >= 3 ? 3 : 4;
+    const grid = el('div', { class: 'pjh-fgrid tall', style: 'grid-template-columns:repeat(' + cols + ',1fr)', 'data-mscroll': 'files' });
     // 낱장 한 줄 높이 = 4:3 타일(3칸 3열 ≈150px 폭 → 112 · 2칸 4열 ≈120px 폭 → 90) + 이름·메타 39 + 간격 10. 몸통(칸 높이 − 크롬 122)에서 경로 줄 38px 을 뺀다. 마지막 자리는 «끌어다 놓기».
-    const cardPx = cols === 3 ? 164 : 142;
-    const capCards = cols * Math.max(1, Math.floor((h * 276 - 16 - 122 - 38) / cardPx)) - 1;
-    const shownCards = recentFiles(items, capCards);
+    //  ★ 자르지 않는다(2026-09-27) — 전부 세우고 격자 안에서 스크롤. 모달은 하위 폴더도 낱장으로 앞에 세우고 고른 기준으로 정렬한다.
+    const when = (it: any): number => { const t = new Date(it.mtime || 0).getTime(); return Number.isFinite(t) ? t : 0; };
+    const sortedFiles = cur.files.slice().sort((a: any, b: any) => nav.sort === 'name' ? String(a.name).localeCompare(String(b.name), 'ko') : nav.sort === 'size' ? (Number(b.size) || 0) - (Number(a.size) || 0) : when(b) - when(a));
+    const shownCards: any[] = modal ? [...cur.dirs, ...sortedFiles] : recentFiles(items, 9999);
     // 옆 칸(3×2)이 있으면 아직 고른 게 없어도 첫 낱장을 골라 둔다 — 빈 «고른 파일» 칸 대신 미리보기가 선다(시안).
-    if (w >= 3 && !nav.picked && shownCards.length) nav.picked = relOf(shownCards[0].name);
+    const firstFile = shownCards.find((it: any) => it.type !== 'dir');
+    if (w >= 3 && !nav.picked && firstFile) nav.picked = relOf(firstFile.name);
     for (const it of shownCards) grid.append(fcard(it));   // 낱장은 파일만 — 폴더는 왼쪽 나무
     grid.append(dropCard());
-    const main = el('div', { class: 'pjh-fmain' }, crumb(), grid, progBox);
-    const parts: HTMLElement[] = [tree(), main];
+    // 모달의 경로 줄 — 프로젝트 › 폴더 › … 를 눌러 올라가고, 오른쪽에 정렬 · ＋ 폴더 · 업로드
+    const crumbM = (): HTMLElement => {
+      const segs = nav.path ? nav.path.split('/') : [];
+      const go = (p: string) => { nav.path = p; nav.picked = ''; ctx.refreshGrid(); };
+      const c = el('div', { class: 'pjh-crumb' }, el('button', { class: 'pjh-crumb-b' + (segs.length ? '' : ' on'), type: 'button', text: P.name || '프로젝트', onclick: () => go('') }));
+      segs.forEach((sg, i) => c.append(hubIcon('chevr', 11), el('button', { class: 'pjh-crumb-b' + (i === segs.length - 1 ? ' on' : ''), type: 'button', text: sg, onclick: () => go(segs.slice(0, i + 1).join('/')) })));
+      const sortSeg = el('span', { class: 'pjh-seg' }, ...([['recent', '최근'], ['name', '이름'], ['size', '크기']] as Array<[Nav['sort'], string]>).map(([k, l]) =>
+        el('button', { type: 'button', class: nav.sort === k ? 'on' : '', text: l, onclick: () => { nav.sort = k; ctx.refreshGrid(); } })));
+      c.append(el('span', { class: 'pjh-crumb-sp' }, el('span', { class: 'pjh-crumb-k', text: '정렬' }), sortSeg, mkdirBtn(), up.btn, up.fileIn, up.dirIn));
+      return c;
+    };
+    const main = el('div', { class: 'pjh-fmain' }, modal ? crumbM() : crumb(), grid, progBox);
+    const parts: HTMLElement[] = modal ? [main] : [tree(), main];   // 모달: 나무 없이 — 폴더는 낱장으로 앞에 서고 경로 줄로 오르내린다(목록 폭을 나무에 내주지 않는다)
     let picked: any = null;
     if (w >= 3) {
       const pr = nav.picked ? items.find((it: any) => relOf(it.name) === nav.picked) : null;
@@ -208,7 +228,8 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
           el('div', { class: 'pjh-kv' },
             el('b', { text: '크기' }), el('span', { text: fmtSize(picked.size || 0) }),
             el('b', { text: '수정' }), el('span', { text: picked.mtime ? relTime(new Date(picked.mtime).toISOString()) : '' }),
-            el('b', { text: '위치' }), el('span', { text: here })),
+            el('b', { text: '위치' }), el('span', { text: here }),
+            ...(modal ? [el('b', { text: '종류' }), el('span', { text: picked.type === 'dir' ? '폴더' : (ext(picked.name) || '파일') }), el('b', { text: '경로' }), el('span', { class: 'pjh-mono', text: rel })] : [])),
           el('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' },
             el('button', { class: 'pjh-sbtn', type: 'button', onclick: () => { if (o.openFile) o.openFile(rel, picked.name); else open(); } }, hubIcon('doc', 12), '열기'),
             el('button', { class: 'pjh-sbtn ghost', type: 'button', onclick: () => authDownload(B + pid + '/file?path=' + encodeURIComponent(rel), picked.name) }, hubIcon('dl', 12), '내려받기'),
@@ -216,7 +237,10 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
       }
       parts.push(side);
     }
-    body.append(el('div', { class: 'pjh-two-f', style: 'grid-template-columns:170px minmax(0,1fr)' + (w >= 3 ? ' 300px' : '') }, ...parts));
-    foot.append(footText(rootLabel + (picked ? ' · 고른 것: ' + picked.name : '')), btn('폴더 열기', 'btn-ghost', open));
+    body.append(el('div', { class: 'pjh-two-f', style: 'grid-template-columns:' + (modal ? 'minmax(0,1fr) 300px' : '170px minmax(0,1fr)' + (w >= 3 ? ' 300px' : '')) }, ...parts));
+    // 모달 바닥 — 지금 선 폴더의 수(루트면 루트의 수 한 번만). 좁은 화면은 수만.
+    const hereTxt = (nav.path ? '«' + here + '» ' : '루트 · ') + '파일 ' + cur.files.length + ' · 폴더 ' + cur.dirs.length + (nav.path ? ' — 프로젝트 전체 파일 ' + root.files.length : '');
+    foot.append(footText(modal ? hereTxt + (picked && !ctx.narrow ? ' · 고른 것: ' + picked.name : '') : rootLabel + (picked ? ' · 고른 것: ' + picked.name : '')));
+    if (!modal) foot.append(btn('폴더 열기', 'btn-ghost', open));
   });
 };

@@ -41,10 +41,11 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
     return row;
   };
 
-  // ── 본문(읽기) — 사용자의 마크다운 그대로. 넓으면 두 단. ──
-  const twoCol = h <= 1 && w >= 2;
+  // ── 본문(읽기) — 사용자의 마크다운 그대로. 넓으면 두 단. 모달은 끝까지 읽는 한 단(읽기 폭 760) + 코멘트 전부. ──
+  const modal = !!f.modal;
+  const twoCol = !modal && h <= 1 && w >= 2;
   const readBox = (): HTMLElement => {
-    const r = el('div', { class: 'pjh-read' + (twoCol ? ' cols2' : '') + (h <= 1 ? ' clip' : '') });
+    const r = el('div', { class: 'pjh-read' + (twoCol ? ' cols2' : '') + (!modal && h <= 1 ? ' clip' : '') + (modal ? ' full' : ''), 'data-mscroll': 'body' });
     if (md.trim()) r.append(renderMarkdown(md));
     else r.append(el('div', { class: 'pjh-stat', style: 'padding:4px 2px', text: '본문이 비어 있습니다 — 편집을 눌러 적으세요.' }));
     return r;
@@ -77,7 +78,7 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
     } else { EDITING.set(pid, null); paintText(); const ed = textHost.querySelector('[contenteditable]') as HTMLElement | null; if (ed) ed.focus(); }
   };
   // «갱신 · 안내 칩 · 편집» 줄 — 1×1 은 바닥 단추가 그 역할(자리가 없다). 안내 칩은 1×1 이면 본문 위 한 줄.
-  const bh = (h >= 2 || w >= 2) ? el('div', { class: 'pjh-bh' }, el('span', { class: 'pjh-bh-l' }, el('span', { text: P.updated_at ? '갱신 ' + relTime(P.updated_at) : '' }), notesRow()), editBtn) : null;
+  const bh = (h >= 2 || w >= 2) ? el('div', { class: 'pjh-bh' }, el('span', { class: 'pjh-bh-l' }, f.modal ? null : el('span', { text: P.updated_at ? '갱신 ' + relTime(P.updated_at) : '' }), notesRow()), editBtn) : null;   // 모달은 머리에 «갱신» 이 이미 있다
   if (bh) textHost.append(bh); else { const nr = notesRow(); if (nr) textHost.append(nr); }
   textHost.append(contentHost);
   paintText();
@@ -107,7 +108,7 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
     return el('div', { class: 'pjh-composer' }, ta, send);
   };
 
-  if (withCol) body.append(el('div', { class: 'pjh-two-b', style: 'grid-template-columns:minmax(0,1fr) ' + (w >= 3 ? 250 : 220) + 'px' }, textHost, cmtHost));
+  if (withCol) body.append(el('div', { class: 'pjh-two-b', style: 'grid-template-columns:minmax(0,1fr) ' + (modal ? 340 : w >= 3 ? 250 : 220) + 'px' }, textHost, cmtHost));
   else { body.append(textHost); if (withInline) body.append(cmtHost); }
 
   ctx.D.comments().then((cs: any[]) => {
@@ -117,8 +118,8 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
     if (!withCol && !withInline) return;
     const newest = cs.slice().reverse();
     cmtHost.append(el('div', { class: 'pjh-cmt-h' }, hubIcon('comment', 13), el('b', { text: '코멘트 ' + cs.length }), unread ? el('span', { text: '· 새 ' + unread }) : null));
-    const list = el('div', { class: 'pjh-cmt-list' });
-    const n = withInline ? 2 : (h <= 1 ? 2 : h * 3);
+    const list = el('div', { class: 'pjh-cmt-list', 'data-mscroll': 'cmt' });
+    const n = modal ? newest.length : withInline ? 2 : (h <= 1 ? 2 : h * 3);
     for (const c of newest.slice(0, n)) list.append(cmtCard(c, withInline));
     if (!cs.length) list.append(el('div', { class: 'pjh-stat', text: '아직 코멘트가 없어요.' }));
     cmtHost.append(list);
@@ -127,7 +128,8 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
   });
 
   // ── 바닥 ──
-  if (w <= 1 && h <= 1) foot.append(cnt, editBtn, btn('열기', 'btn-ghost', open));
+  if (modal) foot.append(footText('본문 ' + bodyCharCount(md).toLocaleString() + '자'), cnt);
+  else if (w <= 1 && h <= 1) foot.append(cnt, editBtn, btn('열기', 'btn-ghost', open));
   else if (withCol || withInline) foot.append(footText('본문 ' + bodyCharCount(md).toLocaleString() + '자'), btn('열기', 'btn-ghost', open));   // 같은 뜻은 같은 말 — 어느 크기든 «열기»
   else foot.append(cnt, btn('열기', 'btn-ghost', open));
   void acts;

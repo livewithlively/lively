@@ -152,59 +152,59 @@
 .pjh-sbtn.ghost:hover { background: var(--bg-tint); color: var(--ink); }
 
 /* ── 태스크(detail-tasks 의 줄을 위젯 안에서) — 프로젝트 탭과 같은 문법: 묶음 머리 글자 13.5/800 + 상태 원 · 줄 36 · 이름 14 · 얼굴 20 · 줄 사이 line-row ── */
-.pjh-wb > .pjv-tasks-embedded { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; margin: 0; padding: 0; border: 0; background: transparent; }
-.pjh-wb > .pjv-tasks-embedded .pjv-tasks-body { flex: 1; min-height: 0; overflow: hidden; }
-.pjh-wb > .pjv-tasks-embedded .pjv-empty-hint { display: none; }
-.pjh-wb > .pjv-tasks-embedded .pjv-tgroup { margin-top: 10px; }
-.pjh-wb > .pjv-tasks-embedded .pjv-tgroup:first-child { margin-top: 0; }
-.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-head { padding: 0 2px 4px; min-height: 30px; border-bottom: 0; gap: 6px; }
-.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-head .pjv-trow-title-cell { gap: 7px; padding-left: 26px; position: relative; }
-.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-head .pjv-row-check { position: absolute; left: 2px; top: 50%; margin-top: -8px; opacity: 0; }
-.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-head:hover .pjv-row-check { opacity: 1; }
-.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-label { font-size: 13.5px; font-weight: 800; letter-spacing: -.1px; color: var(--ink); }
-.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-count { font-size: 12.5px; font-weight: 600; color: var(--muted-2); }
-.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-caret { width: 16px; height: 16px; font-size: 9px; color: var(--muted-3); }
-.pjh-wb > .pjv-tasks-embedded .pjv-colhead { font-size: 12px; font-weight: 600; color: var(--muted-2); letter-spacing: .1px; padding: 0 0 0 4px; }
-.pjh-wb > .pjv-tasks-embedded .pjv-thcol-menu, .pjh-wb > .pjv-tasks-embedded .pjv-col-resize, .pjh-wb > .pjv-tasks-embedded .pjv-col-resize::after, .pjh-wb > .pjv-tasks-embedded .pjv-tgroup-head .pjv-tcell-add > * { display: none; }
-.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-body { padding-top: 0; }
-.pjh-wb > .pjv-tasks-embedded .pjv-trow-wrap > .pjv-trow { min-height: 36px; padding: 0 4px; border-bottom: 0; border-top: 1px solid var(--line-row); border-radius: 8px; }
-.pjh-wb > .pjv-tasks-embedded .pjv-tgroup-body > .pjv-trow-wrap:first-child > .pjv-trow { border-top: 0; }
-.pjh-wb > .pjv-tasks-embedded .pjv-trow:hover { background: var(--bg-tint); }
-.pjh-wb > .pjv-tasks-embedded .pjv-trow-title-cell { gap: 9px; padding-left: 26px; position: relative; }
-.pjh-wb > .pjv-tasks-embedded .pjv-trow-title { font-size: 14px; font-weight: 500; color: var(--ink); }
-.pjh-wb > .pjv-tasks-embedded .pjv-trow-caret, .pjh-wb > .pjv-tasks-embedded .pjv-trow-caret.empty, .pjh-wb > .pjv-tasks-embedded .pjv-row-grip, .pjh-wb > .pjv-tasks-embedded .pjv-cell-ico { display: none; }
-.pjh-wb > .pjv-tasks-embedded .pjv-row-check { position: absolute; left: 2px; top: 50%; margin-top: -8px; opacity: 0; }
-.pjh-wb > .pjv-tasks-embedded .pjv-trow:hover .pjv-row-check, .pjh-wb > .pjv-tasks-embedded .pjv-row-check.on, .pjh-wb > .pjv-tasks-embedded .pjv-row-check[aria-checked="true"] { opacity: 1; }
-.pjh-wb > .pjv-tasks-embedded svg.pjv-status-ic.sm { width: 16px; height: 16px; }
-.pjh-wb > .pjv-tasks-embedded svg.pjv-status-ic circle { stroke-dasharray: none; stroke-width: 1.8; }
-.pjh-wb > .pjv-tasks-embedded .pjv-status-dot.sm { width: 16px; height: 16px; border-width: 1.6px; font-size: 0; border-style: solid; border-color: var(--muted-3-line); }
-.pjh-wb > .pjv-tasks-embedded .pjv-status-dot.sm.inprog { background: linear-gradient(90deg, var(--blue) 50%, transparent 50%); border-color: currentColor; }
-.pjh-wb > .pjv-tasks-embedded .pjv-status-dot.sm.done { border-color: currentColor; }
-.pjh-wb > .pjv-tasks-embedded .pjv-trow-subcount { font-size: 11.5px; font-weight: 600; color: var(--muted-2); background: none; padding: 0; }
-.pjh-wb > .pjv-tasks-embedded .pjv-trow-tags .pjv-trow-tag { font-size: 11.5px; line-height: 18px; padding: 0 7px; }
-.pjh-wb > .pjv-tasks-embedded .pjv-tcell { justify-content: flex-start; overflow: hidden; }
-.pjh-wb > .pjv-tasks-embedded .pjv-cell-btn { padding: 0 4px; height: 100%; font-size: 12.5px; color: var(--muted); }
-.pjh-wb > .pjv-tasks-embedded .pjv-cell-btn:hover { box-shadow: none; background: var(--bg-tint-2); border-radius: 6px; }
-.pjh-wb > .pjv-tasks-embedded .pjv-cell-btn.empty { visibility: hidden; }
-.pjh-wb > .pjv-tasks-embedded .pjv-trow:hover .pjv-cell-btn.empty { visibility: visible; }
-.pjh-wb > .pjv-tasks-embedded .pjv-ava { width: 20px; height: 20px; font-size: 9.5px; font-weight: 700; }
-.pjh-wb > .pjv-tasks-embedded .pjv-asg-faces { gap: 2px; }
-.pjh-wb > .pjv-tasks-embedded .pjv-asg-name { margin-left: 5px; font-size: 12.5px; color: var(--ink-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pjh-wb > .pjv-tasks-embedded .pjv-due-text { font-size: 12.5px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
-.pjh-wb > .pjv-tasks-embedded .pjv-due-text.overdue { color: var(--danger-ink); }
-.pjh-wb > .pjv-tasks-embedded .pjv-flag-glyph { font-size: 12.5px; }
-.pjh-wb > .pjv-tasks-embedded .pjv-flag-label { font-size: 12px; font-weight: 700; }
-.pjh-wb > .pjv-tasks-embedded .pjv-trow-more { width: 24px; height: 24px; font-size: 15px; }
-.pjh-wb > .pjv-tasks-embedded .pjv-row-actions { gap: 2px; padding-left: 22px; margin-right: 6px; }
-.pjh-wb > .pjv-tasks-embedded .pjv-row-act { width: 24px; height: 24px; }
-.pjh-wb > .pjv-tasks-embedded .pjv-act-ic { width: 14px; height: 14px; }
-.pjh-wb > .pjv-tasks-embedded .pjv-addrow { padding: 0; }
-.pjh-wb > .pjv-tasks-embedded .pjv-addrow-trigger { min-height: 34px; padding: 0 8px 0 26px; font-size: 13.5px; font-weight: 500; color: var(--muted); gap: 7px; border-radius: 8px; }
-.pjh-wb > .pjv-tasks-embedded .pjv-addrow-trigger:hover { background: var(--bg-tint); color: var(--ink-sub); }
-.pjh-wb > .pjv-tasks-embedded .pjv-addrow-plus { font-size: 15px; color: var(--muted-2); }
-.pjh-wb > .pjv-tasks-embedded .pjv-addrow.editing, .pjh-wb > .pjv-tasks-embedded .pjv-tasks-card .pjv-addrow.editing { min-height: 36px; background: var(--bg-tint); border-radius: 8px; padding: 0 4px; }
-.pjh-wb > .pjv-tasks-embedded .pjv-addrow-input { font-size: 14px; padding: 6px 8px; }
-.pjh-wb > .pjv-tasks-embedded .pjv-more-row { min-height: 30px; padding: 0 8px 0 26px; font-size: 12.5px; }
+.pjh-w .pjv-tasks-embedded { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; margin: 0; padding: 0; border: 0; background: transparent; }
+.pjh-w .pjv-tasks-embedded .pjv-tasks-body { flex: 1; min-height: 0; overflow: hidden; }
+.pjh-w .pjv-tasks-embedded .pjv-empty-hint { display: none; }
+.pjh-w .pjv-tasks-embedded .pjv-tgroup { margin-top: 10px; }
+.pjh-w .pjv-tasks-embedded .pjv-tgroup:first-child { margin-top: 0; }
+.pjh-w .pjv-tasks-embedded .pjv-tgroup-head { padding: 0 2px 4px; min-height: 30px; border-bottom: 0; gap: 6px; }
+.pjh-w .pjv-tasks-embedded .pjv-tgroup-head .pjv-trow-title-cell { gap: 7px; padding-left: 26px; position: relative; }
+.pjh-w .pjv-tasks-embedded .pjv-tgroup-head .pjv-row-check { position: absolute; left: 2px; top: 50%; margin-top: -8px; opacity: 0; }
+.pjh-w .pjv-tasks-embedded .pjv-tgroup-head:hover .pjv-row-check { opacity: 1; }
+.pjh-w .pjv-tasks-embedded .pjv-tgroup-label { font-size: 13.5px; font-weight: 800; letter-spacing: -.1px; color: var(--ink); }
+.pjh-w .pjv-tasks-embedded .pjv-tgroup-count { font-size: 12.5px; font-weight: 600; color: var(--muted-2); }
+.pjh-w .pjv-tasks-embedded .pjv-tgroup-caret { width: 16px; height: 16px; font-size: 9px; color: var(--muted-3); }
+.pjh-w .pjv-tasks-embedded .pjv-colhead { font-size: 12px; font-weight: 600; color: var(--muted-2); letter-spacing: .1px; padding: 0 0 0 4px; }
+.pjh-w .pjv-tasks-embedded .pjv-thcol-menu, .pjh-w .pjv-tasks-embedded .pjv-col-resize, .pjh-w .pjv-tasks-embedded .pjv-col-resize::after, .pjh-w .pjv-tasks-embedded .pjv-tgroup-head .pjv-tcell-add > * { display: none; }
+.pjh-w .pjv-tasks-embedded .pjv-tgroup-body { padding-top: 0; }
+.pjh-w .pjv-tasks-embedded .pjv-trow-wrap > .pjv-trow { min-height: 36px; padding: 0 4px; border-bottom: 0; border-top: 1px solid var(--line-row); border-radius: 8px; }
+.pjh-w .pjv-tasks-embedded .pjv-tgroup-body > .pjv-trow-wrap:first-child > .pjv-trow { border-top: 0; }
+.pjh-w .pjv-tasks-embedded .pjv-trow:hover { background: var(--bg-tint); }
+.pjh-w .pjv-tasks-embedded .pjv-trow-title-cell { gap: 9px; padding-left: 26px; position: relative; }
+.pjh-w .pjv-tasks-embedded .pjv-trow-title { font-size: 14px; font-weight: 500; color: var(--ink); }
+.pjh-w .pjv-tasks-embedded .pjv-trow-caret, .pjh-w .pjv-tasks-embedded .pjv-trow-caret.empty, .pjh-w .pjv-tasks-embedded .pjv-row-grip, .pjh-w .pjv-tasks-embedded .pjv-cell-ico { display: none; }
+.pjh-w .pjv-tasks-embedded .pjv-row-check { position: absolute; left: 2px; top: 50%; margin-top: -8px; opacity: 0; }
+.pjh-w .pjv-tasks-embedded .pjv-trow:hover .pjv-row-check, .pjh-w .pjv-tasks-embedded .pjv-row-check.on, .pjh-w .pjv-tasks-embedded .pjv-row-check[aria-checked="true"] { opacity: 1; }
+.pjh-w .pjv-tasks-embedded svg.pjv-status-ic.sm { width: 16px; height: 16px; }
+.pjh-w .pjv-tasks-embedded svg.pjv-status-ic circle { stroke-dasharray: none; stroke-width: 1.8; }
+.pjh-w .pjv-tasks-embedded .pjv-status-dot.sm { width: 16px; height: 16px; border-width: 1.6px; font-size: 0; border-style: solid; border-color: var(--muted-3-line); }
+.pjh-w .pjv-tasks-embedded .pjv-status-dot.sm.inprog { background: linear-gradient(90deg, var(--blue) 50%, transparent 50%); border-color: currentColor; }
+.pjh-w .pjv-tasks-embedded .pjv-status-dot.sm.done { border-color: currentColor; }
+.pjh-w .pjv-tasks-embedded .pjv-trow-subcount { font-size: 11.5px; font-weight: 600; color: var(--muted-2); background: none; padding: 0; }
+.pjh-w .pjv-tasks-embedded .pjv-trow-tags .pjv-trow-tag { font-size: 11.5px; line-height: 18px; padding: 0 7px; }
+.pjh-w .pjv-tasks-embedded .pjv-tcell { justify-content: flex-start; overflow: hidden; }
+.pjh-w .pjv-tasks-embedded .pjv-cell-btn { padding: 0 4px; height: 100%; font-size: 12.5px; color: var(--muted); }
+.pjh-w .pjv-tasks-embedded .pjv-cell-btn:hover { box-shadow: none; background: var(--bg-tint-2); border-radius: 6px; }
+.pjh-w .pjv-tasks-embedded .pjv-cell-btn.empty { visibility: hidden; }
+.pjh-w .pjv-tasks-embedded .pjv-trow:hover .pjv-cell-btn.empty { visibility: visible; }
+.pjh-w .pjv-tasks-embedded .pjv-ava { width: 20px; height: 20px; font-size: 9.5px; font-weight: 700; }
+.pjh-w .pjv-tasks-embedded .pjv-asg-faces { gap: 2px; }
+.pjh-w .pjv-tasks-embedded .pjv-asg-name { margin-left: 5px; font-size: 12.5px; color: var(--ink-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjh-w .pjv-tasks-embedded .pjv-due-text { font-size: 12.5px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pjh-w .pjv-tasks-embedded .pjv-due-text.overdue { color: var(--danger-ink); }
+.pjh-w .pjv-tasks-embedded .pjv-flag-glyph { font-size: 12.5px; }
+.pjh-w .pjv-tasks-embedded .pjv-flag-label { font-size: 12px; font-weight: 700; }
+.pjh-w .pjv-tasks-embedded .pjv-trow-more { width: 24px; height: 24px; font-size: 15px; }
+.pjh-w .pjv-tasks-embedded .pjv-row-actions { gap: 2px; padding-left: 22px; margin-right: 6px; }
+.pjh-w .pjv-tasks-embedded .pjv-row-act { width: 24px; height: 24px; }
+.pjh-w .pjv-tasks-embedded .pjv-act-ic { width: 14px; height: 14px; }
+.pjh-w .pjv-tasks-embedded .pjv-addrow { padding: 0; }
+.pjh-w .pjv-tasks-embedded .pjv-addrow-trigger { min-height: 34px; padding: 0 8px 0 26px; font-size: 13.5px; font-weight: 500; color: var(--muted); gap: 7px; border-radius: 8px; }
+.pjh-w .pjv-tasks-embedded .pjv-addrow-trigger:hover { background: var(--bg-tint); color: var(--ink-sub); }
+.pjh-w .pjv-tasks-embedded .pjv-addrow-plus { font-size: 15px; color: var(--muted-2); }
+.pjh-w .pjv-tasks-embedded .pjv-addrow.editing, .pjh-w .pjv-tasks-embedded .pjv-tasks-card .pjv-addrow.editing { min-height: 36px; background: var(--bg-tint); border-radius: 8px; padding: 0 4px; }
+.pjh-w .pjv-tasks-embedded .pjv-addrow-input { font-size: 14px; padding: 6px 8px; }
+.pjh-w .pjv-tasks-embedded .pjv-more-row { min-height: 30px; padding: 0 8px 0 26px; font-size: 12.5px; }
 
 /* ── 세션 — 줄 36 · 이름 14/600 · 태스크 칩 · 열은 12.5 muted · 1×1 «지금» 카드 · 3×2 옆 칸 ── */
 .pjh-slist { display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1; }
@@ -556,3 +556,182 @@
 .pjh-notes[data-tip]:not([data-tip=""])::after { opacity: 1; }
 .pjh-bh-l { display: inline-flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .pjh-w1 .pjh-notes::after { max-width: 236px; }   /* 1칸 폭 카드 안에서 툴팁이 오른쪽 가장자리에 잘리지 않게 */
+
+/* ══ 목록은 자르지 않는다 — 위젯 안에서 스크롤(#4135, 2026-09-27 원준). 얇은 스크롤 막대. ══ */
+.pjh-w .pjv-tasks-embedded .pjv-tasks-body, .pjh-mmain > .pjv-tasks-embedded .pjv-tasks-body { overflow-y: auto; overflow-x: hidden; }
+.pjh-slist, .pjh-feed, .pjh-lane-det, .pjh-cmt-list { overflow-y: auto; overflow-x: hidden; }
+.pjh-frl { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; }
+.pjh-frl.short { flex: none; overflow: hidden; }
+.pjh-fgrid.tall { overflow-y: auto; overflow-x: hidden; padding: 2px; margin: -2px; }
+.pjh-feed { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.pjh-w :is(.pjv-tasks-body, .pjh-slist, .pjh-feed, .pjh-lane-det, .pjh-cmt-list, .pjh-frl, .pjh-fgrid, .pjh-read, .pjh-rail, .pjh-side, .pjh-kside) { scrollbar-width: thin; scrollbar-color: var(--line-net) transparent; }
+.pjh-ev.on { background: var(--bg-sel); box-shadow: inset 2px 0 0 var(--blue); }
+
+/* ══ 「열기」 = 모달(화면을 옮기지 않는다). 넓은 자리 — 도구마다 전체 뷰: 가렸던 열·메타·전체 목록을 다 드러낸다. ══ */
+.pjh-mback { position: fixed; inset: 0; z-index: 210; display: flex; align-items: center; justify-content: center; padding: 4vh 24px; background: rgba(var(--shadow-ink), .5); }
+.pjh-w.pjh-modal { width: min(1320px, 96vw); height: min(90vh, 960px); max-height: none; padding: 20px 24px 16px; gap: 14px; border-radius: 16px; border-color: var(--line-net); box-shadow: 0 24px 70px rgba(20, 35, 59, .30); grid-column: auto; grid-row: auto; }
+.pjh-mh { height: 32px; }
+.pjh-mh .pjh-wh-ic { width: 32px; height: 32px; border-radius: 9px; }
+.pjh-mh .pjh-wh-name { font-size: 17px; letter-spacing: -.3px; }
+.pjh-mh .pjh-wh-sub { font-size: 13px; }
+.pjh-mx { flex: none; display: grid; place-items: center; width: 32px; height: 32px; margin-left: 2px; border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer; }
+.pjh-mx:hover { background: var(--bg-tint-2); color: var(--ink); }
+.pjh-mb { gap: 12px; }
+.pjh-mf { padding-top: 12px; }
+.pjh-mtwo { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 22px; flex: 1; min-height: 0; }
+.pjh-mtwo > * { min-height: 0; min-width: 0; }
+.pjh-mmain { display: flex; flex-direction: column; min-height: 0; }
+.pjh-mmain > .pjv-tasks-embedded { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; margin: 0; padding: 0; border: 0; background: transparent; }
+.pjh-mmain > .pjv-tasks-embedded .pjv-tasks-body { flex: 1; min-height: 0; }
+.pjh-mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11.5px; word-break: break-all; color: var(--muted); }
+.pjh-chip.on { background: var(--bg-punch); border-color: var(--line-net); color: var(--blue); }
+.pjh-chip.on b { color: var(--blue); }
+.pjh-tools-find { flex: 0 1 260px; height: 28px; margin-left: 4px; }
+.pjh-tools-find .pjh-search-in { height: 26px; }
+.pjh-tools-n { margin-left: auto; font-size: 12.5px; color: var(--muted-2); }
+/* 옆 레일(태스크 «한눈에») */
+.pjh-rail { display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow-y: auto; border-left: 1px solid var(--line-row); padding-left: 22px; }
+.pjh-rail-sec { display: flex; flex-direction: column; gap: 2px; flex: none; }
+.pjh-rail-h { font-size: 12px; font-weight: 700; letter-spacing: .2px; color: var(--muted-2); margin-bottom: 4px; }
+.pjh-rail-prog { display: flex; align-items: center; gap: 14px; padding: 4px 0 8px; }
+.pjh-rail-big { font-size: 24px; font-weight: 800; letter-spacing: -.6px; color: var(--ink); line-height: 1.2; }
+.pjh-rail-big small { font-size: 13px; font-weight: 600; letter-spacing: 0; color: var(--muted-2); }
+.pjh-rail-fine { font-size: 12.5px; color: var(--muted-2); line-height: 1.5; }
+.pjh-rail-r { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 0 8px; margin: 0 -8px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: 13.5px; color: var(--ink-sub); text-align: left; box-sizing: content-box; }
+button.pjh-rail-r { cursor: pointer; }
+button.pjh-rail-r:hover { background: var(--bg-tint); color: var(--ink); }
+.pjh-rail-r.on { background: var(--bg-sel); color: var(--ink); box-shadow: inset 2px 0 0 var(--blue); }
+.pjh-rail-r b { margin-left: auto; font-size: 13px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+.pjh-rail-r.danger b { color: var(--danger-ink); }
+.pjh-rail-k { display: inline-flex; align-items: center; gap: 7px; min-width: 0; overflow: hidden; }
+.pjh-rail-k .pjh-ic { color: var(--muted-2); flex: none; }
+.pjh-rail-tn { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjh-rail-who { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+.pjh-rail-who .pjv-ava { width: 20px; height: 20px; font-size: 9.5px; flex: none; }
+/* 모달 안 — 넓으니 풀어 놓는다 */
+.pjh-modal .pjh-two-s, .pjh-modal .pjh-two-b, .pjh-modal .pjh-two-f { gap: 22px; }
+.pjh-modal .pjh-side, .pjh-modal .pjh-cmt-col { padding-left: 22px; overflow-y: auto; }
+.pjh-modal .pjh-stail { max-height: none; flex: 0 1 auto; overflow: visible; }
+.pjh-modal .pjh-kv { gap: 6px 14px; font-size: 13px; }
+.pjh-modal .pjh-read.full { font-size: 15px; line-height: 27px; padding-right: 10px; }
+.pjh-modal .pjh-read.full > .md { max-width: 760px; line-height: 27px; }
+.pjh-modal .pjh-read.full > .md h1 { font-size: 22px; } .pjh-modal .pjh-read.full > .md h2 { font-size: 17px; margin-top: 20px; } .pjh-modal .pjh-read.full > .md h3 { font-size: 15.5px; }
+.pjh-modal .pjh-read.full > .md p, .pjh-modal .pjh-read.full > .md ul, .pjh-modal .pjh-read.full > .md ol { margin-bottom: 12px; }
+.pjh-modal .pjh-cm-t, .pjh-modal .pjh-kc-s { display: block; -webkit-line-clamp: unset; overflow: visible; }
+.pjh-modal .pjh-kside { overflow-y: auto; padding: 14px 16px 16px; gap: 8px; }
+.pjh-modal .pjh-kc { padding: 12px 14px; }
+.pjh-modal .pjh-kflow { grid-template-columns: minmax(0, 1fr) 128px minmax(0, 1fr); }
+.pjh-modal .pjh-tree-r { height: 32px; font-size: 13.5px; }
+.pjh-modal .pjh-fgrid { gap: 14px; }
+.pjh-modal .pjh-lane-h, .pjh-modal .pjh-lane-r { grid-template-columns: 120px repeat(var(--n, 30), minmax(0, 1fr)); }
+.pjh-modal .pjh-lane-d { font-size: 11px; }
+.pjh-crumb-b { border: 0; background: none; padding: 2px 6px; margin: 0 -2px; border-radius: 6px; font: inherit; font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.pjh-crumb-b:hover { background: var(--bg-tint); color: var(--ink); }
+.pjh-crumb-b.on { color: var(--ink); font-weight: 700; }
+.pjh-crumb-k { font-size: 12px; color: var(--muted-2); align-self: center; }
+.pjh-tl-h { display: flex; align-items: center; gap: 7px; flex: none; }
+.pjh-tl-h .pjh-ev-dot { margin-top: 0; }
+.pjh-tl-t { font-size: 16px; font-weight: 800; letter-spacing: -.2px; line-height: 1.4; color: var(--ink); flex: none; overflow-wrap: anywhere; }
+.pjh-tl-s { font-size: 13.5px; line-height: 1.55; color: var(--ink-sub); flex: none; }
+@media (max-width: 900px) {
+  .pjh-mback { padding: 0; }
+  .pjh-w.pjh-modal { width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; padding: 16px 16px 12px; }
+  .pjh-mtwo { grid-template-columns: minmax(0, 1fr) !important; }
+  .pjh-rail { border-left: 0; padding-left: 0; border-top: 1px solid var(--line-row); padding-top: 14px; }
+  .pjh-modal .pjh-mb { overflow-y: auto; }
+  .pjh-modal .pjh-two-s, .pjh-modal .pjh-two-b, .pjh-modal .pjh-two-f, .pjh-modal .pjh-kflow { grid-template-columns: minmax(0, 1fr) !important; flex: none; }
+  .pjh-modal .pjh-side, .pjh-modal .pjh-cmt-col { display: flex; border-left: 0; padding-left: 0; border-top: 1px solid var(--line-row); padding-top: 14px; overflow: visible; }
+  .pjh-modal .pjh-mtwo { flex: none; }
+  .pjh-modal .pjh-tree { display: flex; flex-direction: row; flex-wrap: wrap; }
+}
+/* 모달 폭은 화면 틀(≈1000px) 안 — 목록이 주인이다: 태스크 요약은 위 띠로, 폴더는 나무 없이, 지식 가운데는 화살표만 */
+.pjh-sum { display: flex; align-items: stretch; gap: 10px; flex: none; flex-wrap: wrap; }
+.pjh-sum-g { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px; border-radius: 12px; background: var(--bg-tint); border: 1px solid var(--line-net); min-width: 0; }
+.pjh-sum-g.prog { flex-direction: row; align-items: center; gap: 12px; }
+.pjh-sum-g .pjh-rail-h { margin-bottom: 0; }
+.pjh-sum-big { font-size: 20px; font-weight: 800; letter-spacing: -.5px; line-height: 1.2; color: var(--ink); }
+.pjh-sum-big small { font-size: 12.5px; font-weight: 600; letter-spacing: 0; color: var(--muted-2); }
+.pjh-sum-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pjh-sum-c { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); cursor: pointer; white-space: nowrap; }
+.pjh-sum-c:hover { border-color: var(--line-net); color: var(--ink); }
+.pjh-sum-c b { font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
+.pjh-sum-c.on { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.pjh-sum-c.on b { color: var(--bg); }
+.pjh-sum-c.danger b { color: var(--danger-ink); }
+.pjh-sum-c.on.danger b { color: var(--bg); }
+.pjh-sum-c .pjv-ava { width: 18px; height: 18px; font-size: 9px; }
+.pjh-sum-k { display: inline-flex; align-items: center; gap: 6px; }
+.pjh-crumb { flex-wrap: nowrap; min-width: 0; }
+.pjh-crumb-sp { flex: none; align-items: center; }
+.pjh-seg button { white-space: nowrap; }
+.pjh-modal .pjh-kflow { grid-template-columns: minmax(0, 1fr) 44px minmax(0, 1fr); gap: 8px; }
+.pjh-modal .pjh-kmid .pjh-kpj, .pjh-modal .pjh-kmid .pjh-kpj-m, .pjh-modal .pjh-kmid .pjh-karrow + .pjh-kpj ~ .pjh-karrow { display: none; }
+.pjh-modal .pjh-kc-h .pjh-kr-t, .pjh-modal .pjh-side .pjh-kr .pjh-kr-t { white-space: normal; overflow: visible; line-height: 1.4; }
+.pjh-modal .pjh-side .pjh-kr { min-height: 40px; padding: 6px; align-items: flex-start; }
+.pjh-modal .pjh-side .pjh-kr > .pjh-ic { margin-top: 3px; }
+.pjh-modal .pjh-klabel { flex-wrap: wrap; }
+
+/* ══ 모달 2차 보정(캡처 확인, 2026-09-27) ══ */
+/* 세션 — 줄이 둘(이름 / 도는 자리 · 태스크): 이름 열이 넓게 선다. 고른 줄의 [입장] 은 옆 칸에 있으니 줄에는 올렸을 때만. */
+.pjh-sr.two { min-height: 54px; }
+.pjh-sr-t.two { flex-direction: column; align-items: stretch; justify-content: center; gap: 1px; padding: 7px 10px 7px 8px; }
+.pjh-sr-l1 { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 24px; }
+.pjh-sr-l1 .pjh-sr-n { min-width: 0; }
+.pjh-sr-l2 { display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: 16px; font-size: 12.5px; color: var(--muted); }
+.pjh-sr-node { display: inline-flex; align-items: center; gap: 5px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pjh-sr-node > span { overflow: hidden; text-overflow: ellipsis; }
+.pjh-sr-node .pjh-ic { flex: none; color: var(--muted-2); }
+.pjh-sr-l2 .pjh-tb { max-width: 60%; }
+.pjh-modal .pjh-sr.on:not(:hover) .pjh-sr-acts { display: none; }
+.pjh-modal .pjh-sg { min-height: 30px; }
+.pjh-modal .pjh-sg-l { white-space: nowrap; padding-left: 8px; }
+/* 지식 — 위: 필요 → 산출(내용만큼, 넘치면 단 안에서 스크롤) / 아래 전폭: 찾기 + 추천 */
+.pjh-kmodal { display: flex; flex-direction: column; gap: 18px; flex: 1; min-height: 0; }
+.pjh-kmodal > .pjh-kn-normal { flex: none; overflow: visible; }
+.pjh-kmodal .pjh-kflow { flex: none; }
+.pjh-kmodal .pjh-kflow > .pjh-kside { min-height: 148px; max-height: 42vh; }
+.pjh-kfind { display: flex; flex-direction: column; gap: 8px; flex: 1 1 0; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 16px 2px 2px; border-top: 1px solid var(--line-row); scrollbar-width: thin; scrollbar-color: var(--line-net) transparent; }
+.pjh-kfind > * { flex: none; }
+.pjh-kfind-h { display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 13px; color: var(--muted-2); }
+.pjh-kfind-h b { flex: none; font-size: 14px; font-weight: 800; letter-spacing: -.1px; color: var(--ink); }
+.pjh-kfind-h span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjh-kfind .pjh-search { height: 38px; }
+.pjh-kfind .pjh-search .pjh-search-in { font-size: 14px; }
+.pjh-kfind .pjh-kres, .pjh-kfind .pjh-krec { flex: none; overflow: visible; display: flex; flex-direction: column; gap: 0; }
+.pjh-kfind .pjh-kres[hidden], .pjh-kfind .pjh-krec[hidden] { display: none; }
+.pjh-kfind .pjh-kr { min-height: 44px; padding: 8px 10px; gap: 10px; align-items: flex-start; font-size: 14px; }
+.pjh-kfind .pjh-kr > .pjh-ic { margin-top: 3px; flex: none; }
+.pjh-kfind .pjh-kr .pjh-kr-t { white-space: normal; overflow: visible; line-height: 1.45; overflow-wrap: anywhere; }
+.pjh-kfind .pjh-kr .pjh-kr-s { white-space: normal; font-size: 12.5px; line-height: 1.5; margin-top: 2px; color: var(--muted); }
+.pjh-kfind .pjh-kn-pct { margin-top: 2px; font-size: 12.5px; }
+.pjh-kfind .pjh-kn-link, .pjh-kfind .pjh-kn-rel { margin-top: -1px; white-space: nowrap; }
+.pjh-kfind .pjh-kn-link { padding: 4px 10px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--bg); }
+.pjh-kfind .pjh-kn-link:hover { border-color: var(--blue); background: var(--bg-punch); }
+/* 폴더 — 모달 낱장 이름은 두 줄까지(넓으니 자르지 않는다) */
+.pjh-modal .pjh-fc-n { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.35; overflow-wrap: anywhere; }
+/* 좁은 화면의 모달 — 요약 띠는 한 줄(옆으로 민다) · 레인 이름 칸은 얼굴+짧은 이름 · 지식은 위아래로 흐른다 */
+@media (max-width: 900px) {
+  .pjh-modal .pjh-sum { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .pjh-modal .pjh-sum::-webkit-scrollbar { display: none; }
+  .pjh-modal .pjh-sum-g { flex: none; }
+  .pjh-modal .pjh-sum-row { flex-wrap: nowrap; }
+  .pjh-modal .pjh-tools { flex-wrap: wrap; }
+  .pjh-modal .pjh-tools-find { flex: 1 1 100%; margin-left: 0; }
+  .pjh-modal .pjh-lane-h, .pjh-modal .pjh-lane-r { grid-template-columns: 84px repeat(var(--n, 14), minmax(0, 1fr)); }
+  .pjh-modal .pjh-lane-d { font-size: 10.5px; white-space: nowrap; }
+  .pjh-modal .pjh-legend-h { margin-left: 0; }
+  .pjh-kmodal { flex: none; }
+  .pjh-kmodal .pjh-kflow > .pjh-kside { max-height: none; min-height: 0; }
+  .pjh-kfind { flex: none; overflow: visible; }
+  .pjh-kfind-h { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .pjh-kfind-h span { white-space: normal; }
+  .pjh-modal .pjh-slist { flex: none; overflow: visible; }
+  .pjh-modal .pjh-mb { overflow-x: hidden; }
+  /* 셸이 화면 틀 오른쪽 위에 얹는 «새 탭에서 열기»(.v2-frame-pop) 와 닫기 단추가 붙지 않게 머리를 안으로 들인다 */
+  .pjh-modal .pjh-mh { padding-right: 28px; }
+  /* 손가락 화면 — 올려야 나오는 고르기 칸 자리(26px)를 비워 두지 않는다 */
+  .pjh-modal .pjv-tasks-embedded .pjv-trow-title-cell, .pjh-modal .pjv-tasks-embedded .pjv-tgroup-head .pjv-trow-title-cell { padding-left: 2px; }
+  .pjh-modal .pjv-tasks-embedded .pjv-row-check { display: none; }
+  .pjh-modal .pjv-tasks-embedded .pjv-addrow-trigger { padding-left: 4px; }
+}
+.pjh-kfind .pjh-kr .pjh-kr-s { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
