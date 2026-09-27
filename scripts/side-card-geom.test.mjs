@@ -196,7 +196,9 @@ ok(rsz.length > 0 && !/setProperty\(SIDE_VAR/.test(swap.slice(swap.indexOf("expo
 ok(/window\.setTimeout\(/.test(rsz) && /RESIZE_SETTLE_MS/.test(rsz) && /body\.clientWidth !== w/.test(rsz), "W14b side-swap: 격자 폭이 멈춘 뒤에 자리를 판정한다");
 const av = panes.slice(panes.indexOf("function applyView("), panes.indexOf("colMain.append(mainPane.root"));
 ok(av.length > 0 && !/maxSideW\(\)/.test(av), "W14c panes applyView: 상한으로 깎지 않는다");
-ok(/const base = clamp\(current\(\), o\.min, Math\.max\(o\.min, maxOf\(\)\)\)/.test(split), "W15 split: 끌기 시작 폭을 상한 안으로");
+ok(/const shown = \(\): number => clamp\(current\(\), o\.min, Math\.max\(o\.min, maxOf\(\)\)\)/.test(split) && /const base = shown\(\);/.test(split), "W15a split: 끌기 시작 폭을 상한 안으로");
+const kd = split.slice(split.indexOf("addEventListener('keydown'"));
+ok(/apply\(shown\(\) - step \* growOf\(\), true\)/.test(kd) && /apply\(shown\(\) \+ step \* growOf\(\), true\)/.test(kd) && !/apply\(current\(\) [-+]/.test(kd), "W15b split: 글쇠 조정도 보이는 폭에서 시작한다");
 
 const swl = css.indexOf(".pn-body.sw-left {"), nos = css.indexOf(".pn-body.sw-left.no-side {"), nosCol = css.indexOf(".pn-body.sw-left.no-side > .pn-col {");
 ok(swl >= 0 && nos > swl && nosCol > nos && /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*0\s*0/.test(css.slice(nos, css.indexOf("}", nos))) && /grid-column:\s*1\b/.test(css.slice(nosCol, css.indexOf("}", nosCol))),
