@@ -132,20 +132,49 @@ export function groupAllSess<T extends AllSessLike>(rows: readonly T[] | null | 
   return groups.sort(cmp);
 }
 
-/** 「지금 볼 것」 카드에 서는 상태 — 확인 필요 · 작업 완료 · 작업 중 · 대기 중(세션 상태 순위 0~3). */
-export const NOW_CARD_STATES: readonly string[] = ['waiting', 'done', 'busy', 'idle'];
+// ── #4233 3판 — 열 머리로 고르는 정렬(원준 2026-09-27 «클릭업 참고해서 구현») ───────────────
+//  ★ 규칙: **묶는 기준은 건드리지 않는다.** 클릭업 리스트 뷰와 같게 묶음의 순서·구성은 그대로 두고
+//   **묶음 안에서만** 줄을 다시 세운다. 그래서 «시간별로 묶은 채 이름순으로 보기» 가 된다.
+//  고른 것이 없으면(null) 종전 그대로 최근 활동 순이다.
 
-/** 「대기 중」은 이 시간 안에 활동한 것만 카드에 선다 — 열흘 전에 열어 둔 채인 세션이 카드를 차지하지 않게(dev 실측 2026-09-25). */
-export const NOW_IDLE_MS = 24 * 60 * 60 * 1000;
+/** 정렬할 수 있는 열 — 표의 열과 1:1(마지막 ⋯ 열은 없다). */
+export type SessSortKey = 'name' | 'proj' | 'state' | 'owner' | 'made' | 'seen';
+export interface SessSort { key: SessSortKey; dir: 'asc' | 'desc' }
 
-/** 「지금 볼 것」 카드 — **내 세션**만, 위 네 상태(대기 중은 24시간 안 활동만), 상태 순위 → 최근 순, 최대 max 장. 휴지통 것은 없다. */
-export function pickNowCards<T extends AllSessLike>(rows: readonly T[] | null | undefined, stateRank: (key: string) => number, max = 4, now = Date.now()): T[] {
-  const rank = (k: string | undefined): number => { const r = Number(stateRank(String(k || ''))); return Number.isFinite(r) ? r : 99; };
-  return (rows || [])
-    .filter((s) => s.owner === 'me' && !s.trashedAt && NOW_CARD_STATES.includes(String(s.stateKey || ''))
-      && (s.stateKey !== 'idle' || now - (Number(s.lastSeen) || 0) < NOW_IDLE_MS))
-    .sort((a, b) => rank(a.stateKey) - rank(b.stateKey) || (Number(b.lastSeen) || 0) - (Number(a.lastSeen) || 0))
-    .slice(0, Math.max(0, max));
+/** 열 머리를 누를 때마다 오름차순 → 내림차순 → 기본(해제). 다른 열을 누르면 그 열의 오름차순부터. */
+export function nextSessSort(cur: SessSort | null, key: SessSortKey): SessSort | null {
+  if (!cur || cur.key !== key) return { key, dir: 'asc' };
+  return cur.dir === 'asc' ? { key, dir: 'desc' } : null;
+}
+
+/** 한 줄에서 정렬이 읽는 값. 화면 쪽이 채운다(이름·프로젝트명·사람 이름은 표에 그려진 그 글자여야 한다). */
+export interface SessSortFields { name: string; proj: string; owner: string; rank: number; made: number; seen: number }
+
+/**
+ * 묶음 안 줄 정렬. 값이 같으면 **최근 활동 순**으로 되돌아간다(기본 순서가 tie-break).
+ * ⚠ 모르는 시각(0)은 오름·내림 어느 쪽이든 **맨 뒤**로 보낸다 — 「생성 시각」을 모르는 옛 기록이
+ *  오름차순 맨 앞을 차지하면 표가 빈 칸으로 시작한다.
+ */
+export function sortAllSess<T>(rows: readonly T[] | null | undefined, sort: SessSort | null, fields: (r: T) => SessSortFields): T[] {
+  const all = [...(rows || [])];
+  if (!sort) return all;
+  const dir = sort.dir === 'asc' ? 1 : -1;
+  const ko = (a: string, b: string): number => String(a || '').localeCompare(String(b || ''), 'ko');
+  const time = (v: number): number => (Number(v) > 0 ? Number(v) : (sort.dir === 'asc' ? Number.MAX_SAFE_INTEGER : -1));
+  //  ⚠ `Number(v) || 99` 로 쓰면 **0 등(확인 필요)이 99 로 떨어진다** — 0 은 없는 값이 아니라 맨 앞 순위다.
+  const num = (v: number): number => (Number.isFinite(Number(v)) ? Number(v) : 99);
+  return all.sort((a, b) => {
+    const x = fields(a); const y = fields(b);
+    const tie = (Number(y.seen) || 0) - (Number(x.seen) || 0);
+    switch (sort.key) {
+      case 'name': return dir * ko(x.name, y.name) || tie;
+      case 'proj': return dir * ko(x.proj, y.proj) || tie;
+      case 'owner': return dir * ko(x.owner, y.owner) || tie;
+      case 'state': return dir * (num(x.rank) - num(y.rank)) || tie;
+      case 'made': return dir * (time(x.made) - time(y.made)) || tie;
+      default: return dir * (time(x.seen) - time(y.seen)) || tie;
+    }
+  });
 }
 
 // ── #4233 2안 — 사이드바가 묶기 기준과 거르기를 쥔다 ─────────────────────────────────────

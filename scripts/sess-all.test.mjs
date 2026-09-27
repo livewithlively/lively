@@ -139,9 +139,9 @@ ok(/hooks\.onOpen\(s\)/.test(all) && !/window\.open|openSessionWindow|terminalUr
 // ───────────────────────── #4233 안 A — 묶기 · 상태 거르개 · 「지금 볼 것」 카드 · 이름 없는 세션 · 배선 ─────────────────────────
 //  사양: 원준 2026-09-25 «안 A 좋아 · 매니지드까지» + «날짜 말고 사람으로 묶거나 다른 옵션들로도». 엣지 표 G1–G9 · F1–F3 · C1–C3 · U1–U2 · W1 한 행에 단언 하나 이상.
 if (lib) {
-  const { groupAllSess, pickNowCards, dayBucket, selectAllSess, ownerCounts } = lib;
-  ok(typeof groupAllSess === "function" && typeof pickNowCards === "function" && typeof dayBucket === "function", "A0 묶기 · 카드 잣대가 잎 모듈에 있다");
-  if (typeof groupAllSess === "function" && typeof pickNowCards === "function" && typeof dayBucket === "function") {
+  const { groupAllSess, dayBucket, selectAllSess, ownerCounts, sortAllSess, nextSessSort } = lib;
+  ok(typeof groupAllSess === "function" && typeof sortAllSess === "function" && typeof dayBucket === "function", "A0 묶기 · 정렬 잣대가 잎 모듈에 있다");
+  if (typeof groupAllSess === "function" && typeof sortAllSess === "function" && typeof dayBucket === "function") {
     const NOW = new Date(2026, 8, 25, 15, 0, 0).getTime();
     const at = (d, h = 12, m = 0, sec = 0) => new Date(2026, 8, 25 - d, h, m, sec).getTime();
     const R = (id, o = {}) => ({ id, projectId: 1, trashedAt: null, lastSeen: at(0), owner: "me", stateKey: "idle", ...o });
@@ -184,12 +184,25 @@ if (lib) {
     eq(selectAllSess(fr, Q({ state: "waiting", owner: "me" })).map((r) => r.id), ["mw"], "F2 상태 거르개와 사람 거르개는 AND");
     eq(ownerCounts(fr, Q({ state: "waiting" })), [{ key: "me", n: 1 }, { key: "u2", n: 1 }], "F3 사람 칸 숫자는 상태 거르개가 걸린 채로 센다(고른 뒤 줄 수와 같다)");
 
-    const c1 = [R("theirs", { owner: "u2", stateKey: "waiting" }), R("past", { stateKey: "restorable" }), R("trash", { stateKey: "waiting", trashedAt: "2026-09-24T00:00:00Z" })];
-    eq(pickNowCards(c1, rank, 4, NOW), [], "C1 카드에 남의 세션 · 지난 세션 · 휴지통 세션은 없다");
-    const c2 = [R("i1", { stateKey: "idle", lastSeen: at(0, 14) }), R("b1", { stateKey: "busy", lastSeen: at(0, 10) }), R("w1", { stateKey: "waiting", lastSeen: at(0, 9) }),
-      R("b2", { stateKey: "busy", lastSeen: at(0, 13) }), R("d1", { stateKey: "done", lastSeen: at(0, 8) }), R("i2", { stateKey: "idle", lastSeen: at(0, 12) })];
-    eq(pickNowCards(c2, rank, 4, NOW).map((r) => r.id), ["w1", "d1", "b2", "b1"], "C2 ★내 세션 넷 — 확인 필요 → 작업 완료 → 작업 중(최근 순), 최대 4장");
-    ok(pickNowCards([], rank, 4, NOW).length === 0 && pickNowCards(null, rank, 4, NOW).length === 0, "C3 행이 없으면 카드도 없다");
+    //  ── #4233 3판 — 열 머리 정렬(원준 2026-09-27 «클릭업 참고»). 묶는 기준은 그대로, 묶음 안 줄만 다시 센다. ──
+    const F = (r) => ({ name: r.name || r.id, proj: r.projName || "", owner: r.owner, rank: rank(r.stateKey), made: r.made || 0, seen: Number(r.lastSeen) || 0 });
+    const sr = [
+      { id: "b", name: "나무", projName: "가", owner: "me", stateKey: "busy", lastSeen: at(0, 9), made: 300 },
+      { id: "a", name: "가지", projName: "다", owner: "u2", stateKey: "waiting", lastSeen: at(0, 11), made: 100 },
+      { id: "c", name: "다리", projName: "나", owner: "me", stateKey: "done", lastSeen: at(0, 10), made: 0 },
+    ];
+    eq(sortAllSess(sr, null, F).map((r) => r.id), ["b", "a", "c"], "S1 고른 정렬이 없으면 넘어온 순서 그대로(기본은 최근 활동 순)");
+    eq(sortAllSess(sr, { key: "name", dir: "asc" }, F).map((r) => r.id), ["a", "b", "c"], "S2 이름 오름차순(가지 · 나무 · 다리)");
+    eq(sortAllSess(sr, { key: "name", dir: "desc" }, F).map((r) => r.id), ["c", "b", "a"], "S3 이름 내림차순");
+    eq(sortAllSess(sr, { key: "proj", dir: "asc" }, F).map((r) => r.id), ["b", "c", "a"], "S4 프로젝트 이름순 — 표에 그려진 그 글자로 센다");
+    eq(sortAllSess(sr, { key: "state", dir: "asc" }, F).map((r) => r.id), ["a", "c", "b"], "S5 ★상태는 상태 순위로(확인 필요 0 → 작업 완료 1 → 작업 중 2) — 0 을 «없는 값» 으로 떨구지 않는다");
+    eq(sortAllSess(sr, { key: "made", dir: "asc" }, F).map((r) => r.id), ["a", "b", "c"], "S6 ★생성 시각 오름차순 — 모르는 시각(0)은 맨 뒤");
+    eq(sortAllSess(sr, { key: "made", dir: "desc" }, F).map((r) => r.id), ["b", "a", "c"], "S7 ★내림차순에서도 모르는 시각은 맨 뒤");
+    eq(sortAllSess(sr, { key: "seen", dir: "asc" }, F).map((r) => r.id), ["b", "c", "a"], "S8 마지막 활동 오름차순");
+    eq([nextSessSort(null, "name"), nextSessSort({ key: "name", dir: "asc" }, "name"), nextSessSort({ key: "name", dir: "desc" }, "name"), nextSessSort({ key: "name", dir: "desc" }, "seen")],
+      [{ key: "name", dir: "asc" }, { key: "name", dir: "desc" }, null, { key: "seen", dir: "asc" }],
+      "S9 ★머리를 누를 때마다 오름 → 내림 → 기본, 다른 열은 그 열 오름차순부터");
+    eq(sortAllSess(null, { key: "name", dir: "asc" }, F), [], "S10 줄이 없으면 빈 목록");
     //  ── #4233 2안 — 리스트 묶기 · 카드 거르기 · 사이드바 카드 · 본문 기준 · 고른 것 풀기(엣지 표 L · K · F · C · M · S) ──
     const { sessGroupKey, sideCards, projectLines, mainGroupBy, withGroupBy, settleScope } = lib;
     ok([sessGroupKey, sideCards, projectLines, mainGroupBy, withGroupBy, settleScope].every((f) => typeof f === "function"), "B0 2안 잣대가 잎 모듈에 있다");
@@ -252,9 +265,6 @@ if (lib) {
           ["리스트 9개 더", "사람 2명 더", "상태 3개 더", "날짜 1개 더"], "H1 접는 줄 글 — 사람은 «명», 그 밖은 «개»");
       }
     }
-    eq(pickNowCards([R("oldIdle", { stateKey: "idle", lastSeen: NOW - 24 * 3600_000 }), R("newIdle", { stateKey: "idle", lastSeen: NOW - 24 * 3600_000 + 60_000 }),
-      R("oldWait", { stateKey: "waiting", lastSeen: at(10) })], rank, 4, NOW).map((r) => r.id), ["oldWait", "newIdle"],
-      "C4 경계 — 대기 중은 24시간 안 활동만(정확히 24시간 전은 빠진다), 확인 필요는 오래돼도 선다");
   }
 }
 {
@@ -272,28 +282,30 @@ if (lib) {
     && /group: sc\.group !== null \? \{ by: sc\.by, key: sc\.group \} : null/.test(all2),
     "W1a ★본문은 사이드바가 고른 기준 · 카드로 거르고 묶는다(mainGroupBy)");
   ok(/chip\('waiting', '확인 필요'/.test(all2) && /chip\('busy', '작업 중'/.test(all2) && /state: ui\.state/.test(all2), "W1b 상태 칩이 상태 거르개를 건다");
-  ok(/pickNowCards\(inProj, stateRank, 4, now\)/.test(all2) && /'지금 볼 것'/.test(all2), "W1c 「지금 볼 것」 카드 줄");
-  ok(/const unnamed = g\.rows\.filter\(\(it\) => it\.untitled\)/.test(all2) && /이름 없는 세션 \$\{unnamed\.length\}개/.test(all2), "W1d 이름 없는 세션은 묶음마다 한 줄로 접힌다");
-  ok(/row\.addEventListener\('click'[^\n]*openPeek\(s\.id\)/.test(all2) && /row\.addEventListener\('dblclick'[^\n]*open\(s\)/.test(all2),
-    "W1e ★행 클릭은 사이드 피크, 두 번 클릭은 홈에서 열기(hooks.onOpen)");
-  ok(/\/api\/ui\/terminal\/sessions\/\$\{encodeURIComponent\(s\.id\)\}\/prompt/.test(all2) && /if \(!live\) \{ rememberUnsentDraft\(s\.id, text\);[^\n]*hooks\.onOpen\(s\); return; \}/.test(all2),
-    "W1f 피크 보내기 — 도는 세션은 세션 화면과 같은 /prompt, 끝난 세션은 글을 세션 화면 입력칸으로 넘기고 연다");
-  ok(/fetchTurns\(s, PEEK_TAIL\)/.test(all2) && /onclick: \(\) => hooks\.onOpen\(s\) \}, svgI\(IC_OPEN\), el\('span', \{ text: '세션 열기' \}\)/.test(all2),
-    "W1g 피크는 대화 꼬리(sess-tail)를 읽고, [세션 열기]는 홈의 문(hooks.onOpen)으로 간다");
+  //  ★ #4233 3판(원준 2026-09-27) — 「지금 볼 것」 카드 줄은 걷었다(이 탭의 취지는 실행 상태가 아니라 «기존 세션을 찾고 그리로 가는 것»).
+  ok(!/pickNowCards/.test(BINS) && !/'지금 볼 것'/.test(BINS) && !/v2-sess-card/.test(BINS), "W1c ★「지금 볼 것」 카드 줄은 없다");
+  ok(/const unnamed = rows\.filter\(\(it\) => it\.untitled\)/.test(all2) && /이름 없는 세션 \$\{unnamed\.length\}개/.test(all2), "W1d 이름 없는 세션은 묶음마다 한 줄로 접힌다");
+  //  ★ #4233(원준 2026-09-26 «사이드 피크 개념 그냥 없애자») — 한 번 누르면 곧바로 그 세션을 홈에서 연다.
+  ok(/row\.addEventListener\('click'[^\n]*open\(s\);/.test(all2) && !/openPeek/.test(all2) && !/addEventListener\('dblclick'/.test(all2),
+    "W1e ★행을 한 번 누르면 홈에서 그 세션을 연다(hooks.onOpen) — 사이드 피크는 없다");
+  ok(!/renderPeek/.test(BINS.slice(BINS.indexOf("export function renderSessAll("))) && !/peek: ''/.test(all2) && !/v2-sa-peek/.test(all2),
+    "W1f ★[AI 세션] 목록에 피크 코드가 남아 있지 않다(상태 · 조립 · 보내기 전부)");
+  ok(/ui\.sort = nextSessSort\(ui\.sort, key\)/.test(all2) && /const ordered = \(rs: readonly Item\[\]\): Item\[\] => sortAllSess\(rs, ui\.sort, sortFields\)/.test(all2)
+    && /const rows = ordered\(g\.rows\);/.test(all2) && !/sortAllSess\(vis/.test(all2),
+    "W1g ★열 머리 정렬은 묶음 안에서만 — 묶는 기준(시간별 · 리스트별 …)을 건드리지 않는다");
   const paint2 = code(cut(MAIN, "function paintSessAll(", "\nfunction repaintSessAll"));
   ok(/onNew: \(\) => \{ tabsApi\?\.add\('#\/'\); \}/.test(paint2) && /onNewTask: \(\) => \{ tabsApi\?\.add\('#\/'\); \}/.test(MAIN),
     "W1h [＋ 새 세션]은 사이드바 ＋ 와 같은 동작(홈 새 탭)");
-  //  W2 — 격리 리뷰 지적(막음 2건): 두 번 보내기 · 목록에 없는 세션에서 ↑ ↓.
-  const sendFn = cut(all2, "const send = async", "\n  };");
-  const beforeAwait = sendFn.split("await api(")[0] || "";
-  ok(/if \(!text \|\| !canSend \|\| peekSending\.has\(s\.id\)\) return;/.test(sendFn) && /peekSending\.add\(s\.id\)/.test(beforeAwait)
-    && /ta\.value = '';/.test(beforeAwait) && /sendBtn\.disabled = true;/.test(beforeAwait) && /finally \{\s*peekSending\.delete\(s\.id\);/.test(sendFn),
-    "W2a ★보내는 중에는 다시 보내지 않는다 — 칸을 비우고 버튼을 끈 뒤에 보내고, 끝나면 푼다");
-  ok(/ui\.drafts\.set\(s\.id, text\);\s*toast\(`보내지 못했어요/.test(sendFn), "W2b 보내기에 실패하면 쓴 글을 돌려준다");
-  const stepFn = cut(all2, "const step = (d: number): void => {", "\n  };");
-  const keysFn = cut(all2, "function bindPeekKeys(): void {");
-  ok(/const i = order\.indexOf\(s\.id\);\s*if \(i < 0\) return;/.test(stepFn) && /const i = nav\.order\.indexOf\(allUi\.peek\);\s*if \(i < 0\) return;/.test(keysFn),
-    "W2c ★피크한 세션이 목록에 없으면(접힌 묶음 · 카드) ↑ ↓ 는 아무 데로도 가지 않는다 — 첫 행으로 건너뛰지 않는다");
+  //  W2 — #4233(원준 2026-09-26) 열 구성과 머리줄. 열 이름은 표 맨 위 한 줄뿐이고 붙어 있다(클릭업 리스트 뷰).
+  ok(/class: 'v2-sa-head'/.test(all2) && /if \(vis\.length\) list\.append\(tableHead\(\)\);/.test(all2)
+    && /class: 'v2-sa-gh plain'/.test(all2) && !/\.\.\.headCols\(\)/.test(all2),
+    "W2a ★열 이름은 표 맨 위 한 줄뿐 — 묶음 머리줄은 이름과 개수만 든다");
+  ok(/hc\('made', '생성 시각'\)/.test(all2) && /hc\('seen', '마지막 활동'\)/.test(all2) && !/text: 'AI' \}/.test(all2) && /class: 'c-made' \}, madeCell\(Number\(s\.createdAt\)/.test(all2),
+    "W2b ★「AI」 열은 없고 시각은 둘로 갈린다 — 생성 시각(절대) · 마지막 활동(상대)");
+  const VIEWS = read("web/v2/views.ts");
+  ok(/createdAt: msOf\(r\.created\)/.test(VIEWS) && /createdAt: r\.first_seen \? new Date\(r\.first_seen\)\.getTime\(\) : 0/.test(VIEWS)
+    && /if \(firstMs && \(!owner\.createdAt \|\| firstMs < owner\.createdAt\)\) owner\.createdAt = firstMs;/.test(VIEWS),
+    "W2c ★만든 때 — 박스는 created, 기록은 first_seen, 둘 다 있으면 이른 쪽(되살린 박스는 대화가 먼저다)");
   //  W3 — 묶지 않음(원준 2026-09-25 «안묶은 완전 raw 한 전체보기도 · 드롭다운으로 오른쪽에서»).
   ok(/SESS_GROUP_BYS\.filter\(\(b\) => b\.key !== 'none'\)\.map\(row\),\s*\{ label: '', sep: true \},\s*\.\.\.SESS_GROUP_BYS\.filter\(\(b\) => b\.key === 'none'\)\.map\(row\)/.test(rs)
     && /run: \(\) => pick\(withGroupBy\(sessScope\(\), b\.key\), true\)/.test(rs),
@@ -301,7 +313,7 @@ if (lib) {
   ok(!/SESS_GROUP_BYS\.filter/.test(all2) && !/'data-pick': 'by'/.test(all2) && !/showCtxMenu\([^\n]*title: '묶기'/.test(all2),
     "W3c ★본문 도구줄에는 묶기 단추가 없다(2안 — 기준은 사이드바 한 곳)");
   const flat = cut(all2, "if (mby === 'none' && vis.length) {", "\n  for (const g of");
-  ok(flat.includes("for (const it of vis) { if (budget-- <= 0) break; list.append(rowOf(it)); }") && !/untitled|v2-sa-fold/.test(flat)
+  ok(flat.includes("for (const it of ordered(vis)) { if (budget-- <= 0) break; list.append(rowOf(it)); }") && !/untitled|v2-sa-fold/.test(flat)
     && /for \(const g of mby === 'none' \? \[\] : groupAllSess\(vis, mby, now, stateRank\)\)/.test(all2),
     "W3b ★묶지 않음이면 묶음 머리 없이 전부 최근 순, 이름 없는 세션도 접지 않는다");
   ok(/el\('span', \{ class: 'crumb k', 'data-by': sc\.by, text: byLabel \}\)/.test(all2) && /crumbs\.length \? crumbs\[crumbs\.length - 1\] : '전체'/.test(all2),
@@ -324,7 +336,7 @@ if (lib) {
     "W4c 카드 머리 아이콘(시간 · 사람 · 그 밖)이 전부 ICONS 에 있다 — 없는 이름은 격자 아이콘으로 조용히 떨어진다(리뷰 지적)");
   const CSS = read("public/styles/47-v2-rail.css");
   ok(/\.v2-sa-peek \{[^}]*position: absolute;[^}]*width: min\(640px, 100%\)/.test(CSS) && /\.v2-sa-row \{ height: 46px;/.test(CSS),
-    "W1i 사이드 피크 640px · 행 46px(위키 2판과 같은 치수)");
+    "W1i 덧창 640px(위키 2판) · 행 46px");
 }
 console.log(`\n#4158 [AI 세션] 프로젝트 리스트 · 전체 목록: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
 process.exit(fail ? 1 : 0);
