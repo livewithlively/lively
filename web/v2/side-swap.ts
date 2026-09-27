@@ -31,7 +31,6 @@ import { swapCopy } from '../lib/side-label.js';   // 칸 이름은 지금 선 �
 
 const KEY_OFF = 'lively_v2_side_swap_off';       // '1' = 자리 고정(자동 자리바꿈 끔)
 const KEY_INTRO = 'lively_v2_side_swap_intro';   // '1' = 첫 안내를 다시 보지 않음
-const SPLIT_KEY = 'panes_side';                  // panes.ts 의 곁칸 경계 키와 같은 것
 const SIDE_VAR = '--pn-side-w';
 const DEF_SIDE_W = 340;
 
@@ -120,16 +119,15 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
     const w = body.clientWidth || window.innerWidth;
     return w > 0 ? px / w : 0;
   };
-  const curSideW = (): number => {
+  /** 적어 둔 폭(--pn-side-w). 보이는 폭은 이것과 상한 가운데 작은 쪽이다(42-v2-panes.css --pn-side-fit). */
+  const storedSideW = (): number => {
     const raw = getComputedStyle(body).getPropertyValue(SIDE_VAR).trim();
     const n = parseFloat(raw);
     return Number.isFinite(n) ? n : DEF_SIDE_W;
   };
-  const setSideW = (px: number): void => {
-    const v = Math.round(px);
-    body.style.setProperty(SIDE_VAR, v + 'px');
-    try { localStorage.setItem('lively_v2_split_' + SPLIT_KEY, String(v)); } catch (_) { /* noop */ }
-  };
+  const capNow = (): number => maxSideWidth(body.clientWidth);
+  /** 지금 **보이는** 사이드바 폭. 자리 판정은 보이는 폭으로 한다. */
+  const curSideW = (): number => Math.min(storedSideW(), capNow());
 
   function paint(): void {
     body.classList.toggle('sw-left', swapped);
@@ -156,7 +154,9 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
     if (!swapEnabled()) { setSwapped(false, false); return; }
     //  보여 줄 자리는 lib/side-swap-judge.ts placeOnRestore 가 정한다. 적어 둔 «왼쪽» 이 지금 폭과 안 맞으면(46% 이하)
     //  오른쪽으로 **보여 주기만** 하고 적어 둔 값은 건드리지 않는다. 넓은 창에서 바꾼 자리를 좁은 창이 지우지 않게.
-    const want = placeOnRestore({ enabled: true, remembered, ratio: ratio(px), measurable: body.clientWidth > 0, cur: swapped });
+    //  px 는 적어 둔 폭이다. 판정은 **보이는 폭**(상한에 걸린 폭)으로 한다.
+    const shownW = body.clientWidth > 0 ? Math.min(px, capNow()) : px;
+    const want = placeOnRestore({ enabled: true, remembered, ratio: ratio(shownW), measurable: body.clientWidth > 0, cur: swapped });
     const keepStored = typeof remembered === 'boolean' && want !== remembered;
     setSwapped(want, false, !keepStored);
   }
@@ -272,36 +272,40 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
 
   // 격자 폭이 바뀌면(창 크기 · 왼쪽 사이드바 폭) 문턱(비율)도 상한도 다시 잰다.
   //  ⚠ 창의 resize 만 들으면 왼쪽 사이드바를 넓혔을 때를 놓친다. 격자 자체를 본다.
-  const capNow = (): number => maxSideWidth(body.clientWidth);
+  //  ⚠ 여기서 폭을 깎지 않는다. 상한은 그리는 쪽(CSS --pn-side-fit)이 맞춘다. 화면을 여는 도중 격자 폭은 잠깐 좁아졌다
+  //   넓어진다(왼쪽 사이드바가 제 폭을 찾는 동안). 그 순간의 상한으로 폭을 깎으면 622px 로 적어 둔 사이드바가 581px 로
+  //   열렸다(2026-09-27 매니지드 실측, 열 때마다 값이 달랐다).
   const onResize = (): void => {
     if (dead || !(body.clientWidth > 0)) return;
-    const w = curSideW(), m = capNow();
-    if (w > m) setSideW(m);
     if (h.holdSwap?.()) return;          // 세션 카드 상태에서는 자리를 다시 판정하지 않는다(돌아올 자리를 지킨다)
     onEnd(curSideW());
   };
+  //  격자 폭이 바뀌면(창 크기 · 왼쪽 사이드바 폭) 자리를 다시 판정한다. 폭이 **멈춘 뒤에** 한 번만 한다. 움직이는 도중의
+  //  폭으로 판정하면 그 순간의 자리가 이 세션의 자리로 적힌다.
   let ro: ResizeObserver | null = null;
   let roW = body.clientWidth;
-  if (typeof ResizeObserver === 'function') {
-    ro = new ResizeObserver(() => {
-      const w = body.clientWidth;
-      if (w === roW) return;
-      const first = roW === 0;
-      roW = w;
-      //  처음 잰 폭(마운트 때는 격자가 아직 화면에 없어 0 이었다)에서는 상한만 맞춘다. 자리는 셸이 되살린 것을 지킨다.
-      //  하나만 바로잡는다: 사이드바가 돌아올 문턱(46%)보다 좁은데 왼쪽에 서 있으면 오른쪽으로 **보여 준다**(적지 않는다).
-      //  restore 가 격자 폭을 못 잰 채 불렸을 때의 같은 판정이다(placeOnRestore).
-      if (first) {
-        if (dead || !(w > 0)) return;
-        if (curSideW() > capNow()) setSideW(capNow());
-        if (swapped && !h.holdSwap?.() && ratio(curSideW()) <= TH.off) setSwapped(false, false, false);
-        return;
-      }
+  let roT = 0;
+  const RESIZE_SETTLE_MS = 250;
+  const onBodyW = (): void => {
+    const w = body.clientWidth;
+    if (w === roW) return;
+    const first = roW === 0;
+    roW = w;
+    window.clearTimeout(roT);
+    if (dead || !(w > 0)) return;
+    roT = window.setTimeout(() => {
+      if (dead || body.clientWidth !== w) return;
+      //  처음 잰 폭(마운트 때는 격자가 화면에 없어 0 이었다)에서는 셸이 되살린 자리를 지킨다. 하나만 바로잡는다:
+      //  사이드바가 돌아올 문턱(46%)보다 좁은데 왼쪽에 서 있으면 오른쪽으로 **보여 준다**(적지 않는다, placeOnRestore 와 같은 판정).
+      if (first) { if (swapped && !h.holdSwap?.() && ratio(curSideW()) <= TH.off) setSwapped(false, false, false); return; }
       onResize();
-    });
+    }, RESIZE_SETTLE_MS);
+  };
+  if (typeof ResizeObserver === 'function') {
+    ro = new ResizeObserver(onBodyW);
     ro.observe(body);
   } else {
-    window.addEventListener('resize', onResize);
+    window.addEventListener('resize', onBodyW);
   }
 
   paint();
@@ -322,7 +326,8 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
     destroy: () => {
       dead = true;
       ro?.disconnect();
-      window.removeEventListener('resize', onResize);
+      window.clearTimeout(roT);
+      window.removeEventListener('resize', onBodyW);
       body.classList.remove('sw-left');
     },
   };

@@ -592,7 +592,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
    *   (makeSplitter 가 끌 때마다 그 키에 남기는 것은 막지 않는다. 아무도 안 읽으므로 화면에 영향이 없다.) */
   function applyView(): void {
     const v = loose ? {} : (readViews()[actKey()] || {});
-    const w = Math.max(220, Math.min(swap?.maxSideW() ?? 620, Number(v.sideW) || 340));
+    //  상한으로 깎지 않는다(#3870). 상한은 그릴 때 CSS 가 맞춘다(--pn-side-fit). 여기서 깎으면 화면을 여는 도중의
+    //  좁은 격자 폭이 이 세션의 폭을 줄인다. 말이 안 되는 값(옛 결함이 적은 아주 큰 수)만 거른다.
+    const w = Math.max(220, Math.min(4000, Number(v.sideW) || 340));
     const h = Math.max(120, Math.min(560, Number(v.bottomH) || 240));
     body.style.setProperty('--pn-side-w', w + 'px');
     colMain.style.setProperty('--pn-bottom-h', h + 'px');
