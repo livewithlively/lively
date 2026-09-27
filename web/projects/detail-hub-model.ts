@@ -185,7 +185,9 @@ export function recentFiles(items: FileLike[], n: number): FileLike[] {
   return splitDirs(items).files.slice().sort((a, b) => (Number(b.mtime) || 0) - (Number(a.mtime) || 0) || String(a.name).localeCompare(String(b.name))).slice(0, Math.max(0, n));
 }
 
-// ── 타임라인 레인 ──────────────────────────────────────────────────────────
+// ── 타임라인 — «누가 어떤 작업을 하는가» ─────────────────────────────────────────────
+//  ⚠ 건수·빈도를 그리는 셈(사람 × 날 건수, 점 크기 단계)은 여기서 걷었다(원준 2026-09-27: «점 크기는 누가 더 많이 했는지
+//   비교하는 용도밖에 안 된다»). 이 위젯의 단위는 «사람 + 그 사람이 한 작업의 내용» 이다 — 셈이 아니라 나열과 자리 나눔만 한다.
 export interface ActLike { author_person?: string | null; committed_at?: string | null; created_at?: string | null }
 export const actWhen = (a: ActLike): number => { const t = Date.parse(String(a.committed_at || a.created_at || '')); return Number.isFinite(t) ? t : 0; };
 /** 로컬 날짜 키 YYYY-MM-DD. */
@@ -193,34 +195,7 @@ export function dayKey(ms: number): string {
   const d = new Date(ms);
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
-export interface LaneDay { key: string; label: string; weekend: boolean; today: boolean }
-/** 오늘을 끝으로 n일 — 라벨 «D»(달이 바뀌는 첫날은 «M/D»), 주말·오늘 표식. */
-export function laneDays(n: number, nowMs: number): LaneDay[] {
-  const out: LaneDay[] = [];
-  const t = new Date(nowMs);
-  for (let i = n - 1; i >= 0; i--) {
-    const d = new Date(t.getFullYear(), t.getMonth(), t.getDate() - i);   // 달력 산술 — 서머타임 날에도 하루가 겹치거나 빠지지 않는다
-    out.push({ key: dayKey(d.getTime()), label: i === 0 ? '오늘' : (d.getMonth() + 1) + '/' + d.getDate(), weekend: d.getDay() === 0 || d.getDay() === 6, today: i === 0 });
-  }
-  return out;
-}
-/** 사람 × 날 건수 — 사람 순서는 첫 등장 순(호출자가 팀원 순으로 앞에 세울 수 있다). 기록 없는 사람은 없다. */
-export function laneCounts(acts: ActLike[], days: LaneDay[], order: string[] = []): Map<string, number[]> {
-  const idx = new Map(days.map((d, i) => [d.key, i]));
-  const m = new Map<string, number[]>();
-  for (const p of order) if (p) m.set(p, days.map(() => 0));
-  for (const a of acts) {
-    const p = String(a.author_person || '');
-    const when = actWhen(a); if (!p || !when) continue;
-    const i = idx.get(dayKey(when)); if (i == null) continue;
-    if (!m.has(p)) m.set(p, days.map(() => 0));
-    m.get(p)![i]++;
-  }
-  for (const [p, row] of [...m]) if (!row.some((n) => n > 0) && !order.includes(p)) m.delete(p);
-  return m;
-}
-/** 점 크기 단계 — 0 없음 · 1(1건) · 2(2~3) · 3(4~6) · 4(7+). */
-export const dotSize = (n: number): 0 | 1 | 2 | 3 | 4 => (n <= 0 ? 0 : n === 1 ? 1 : n <= 3 ? 2 : n <= 6 ? 3 : 4);
+const WEEKDAY = ['일', '월', '화', '수', '목', '금', '토'];
 /** 피드의 날 라벨 — 오늘 · 어제 · M/D. */
 export function feedDayLabel(ms: number, nowMs: number): string {
   const k = dayKey(ms), t = dayKey(nowMs), y = dayKey(nowMs - DAY);
@@ -232,15 +207,77 @@ export function feedDayHead(ms: number, nowMs: number): string {
   const l = feedDayLabel(ms, nowMs);
   if (l !== '오늘' && l !== '어제') return l;
   const d = new Date(ms);
-  return l + ' ' + ['일', '월', '화', '수', '목', '금', '토'][d.getDay()] + ' ' + (d.getMonth() + 1) + '/' + d.getDate();
+  return l + ' ' + WEEKDAY[d.getDay()] + ' ' + (d.getMonth() + 1) + '/' + d.getDate();
 }
-export const countOn = (acts: ActLike[], key: string): number => acts.filter((a) => actWhen(a) && dayKey(actWhen(a)) === key).length;
-export const countSince = (acts: ActLike[], fromMs: number): number => acts.filter((a) => actWhen(a) >= fromMs).length;
-/** 가장 최근 기록의 (사람, 날) — 2×2 이상 «자세히» 칸의 기본 선택. 없으면 null. */
-export function latestLane(acts: ActLike[]): { person: string; day: string } | null {
-  let best: ActLike | null = null;
-  for (const a of acts) if (a.author_person && actWhen(a) && (!best || actWhen(a) > actWhen(best))) best = a;
-  return best ? { person: String(best.author_person), day: dayKey(actWhen(best)) } : null;
+/** 날 칸(판의 왼쪽 축) — 큰 글 «오늘 · 어제 · 9/25», 작은 글 «일 9/27»(오늘·어제) 또는 요일. */
+export function dayParts(ms: number, nowMs: number): { main: string; sub: string } {
+  const main = feedDayLabel(ms, nowMs);
+  const d = new Date(ms);
+  const wd = WEEKDAY[d.getDay()];
+  return { main, sub: main === '오늘' || main === '어제' ? wd + ' ' + (d.getMonth() + 1) + '/' + d.getDate() : wd };
+}
+/** 짧은 때 — 오늘이면 «14:05», 어제면 «어제 14:05», 그 전은 «9/25». 날 머리 없이 서는 줄(사람별 최근)에서 쓴다. */
+export function whenShort(ms: number, nowMs: number): string {
+  if (!ms) return '';
+  const d = new Date(ms);
+  const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  const l = feedDayLabel(ms, nowMs);
+  return l === '오늘' ? hm : l === '어제' ? '어제 ' + hm : l;
+}
+/** 요약 «중분류 - 내용»(activity_log 의 규약)을 가른다 — 줄의 큰 글은 내용, 중분류는 작은 글. 가를 수 없으면 kind = ''. */
+export function splitSummary(raw: unknown): { kind: string; text: string } {
+  const s = String(raw ?? '').replace(/\s+/g, ' ').trim();
+  const m = s.match(/^(.{1,24}?)\s[-–—]\s(.+)$/);
+  if (!m || !m[2].trim()) return { kind: '', text: s };
+  return { kind: m[1].trim(), text: m[2].trim() };
+}
+/** 기록이 있는 사람들 — **가장 최근에 일한 사람부터**(많이 한 순이 아니다). 사람 없는 기록은 뺀다. */
+export function peopleByRecency(acts: ActLike[]): string[] {
+  const last = new Map<string, number>();
+  for (const a of acts) {
+    const p = String(a.author_person || ''); const t = actWhen(a);
+    if (!p || !t) continue;
+    if (!last.has(p) || t > last.get(p)!) last.set(p, t);
+  }
+  return [...last.entries()].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0])).map((e) => e[0]);
+}
+export interface BoardCol { key: string; ids: string[] }
+/** 판의 열 — 사람마다 한 열. 사람이 열 수보다 많으면 마지막 열은 «그 밖»(key 'others')으로 나머지를 모은다. */
+export function boardCols(people: string[], maxCols: number): BoardCol[] {
+  const n = Math.max(1, Math.floor(maxCols));
+  if (people.length <= n) return people.map((p) => ({ key: p, ids: [p] }));
+  return [...people.slice(0, n - 1).map((p) => ({ key: p, ids: [p] })), { key: 'others', ids: people.slice(n - 1) }];
+}
+export interface BoardDay<T> { key: string; at: number; cells: T[][] }
+/** 날 × 열 — **기록이 있는 날만**, 최근 날부터. 칸 안은 최근 것부터. 어느 열에도 안 드는 기록(사람 없음)은 빠진다. */
+export function boardDays<T extends ActLike>(acts: T[], cols: BoardCol[]): Array<BoardDay<T>> {
+  const colOf = new Map<string, number>();
+  cols.forEach((c, i) => { for (const id of c.ids) colOf.set(id, i); });
+  const days = new Map<string, BoardDay<T>>();
+  for (const a of acts.slice().sort((x, y) => actWhen(y) - actWhen(x))) {
+    const t = actWhen(a); const ci = colOf.get(String(a.author_person || ''));
+    if (!t || ci == null) continue;
+    const k = dayKey(t);
+    let d = days.get(k);
+    if (!d) { d = { key: k, at: t, cells: cols.map(() => [] as T[]) }; days.set(k, d); }
+    d.cells[ci].push(a);
+  }
+  return [...days.values()].sort((x, y) => (x.key < y.key ? 1 : x.key > y.key ? -1 : 0));
+}
+/** 사람별 최근 n개 — 한 줄 높이 위젯(2×1 · 3×1)의 열. */
+export function recentByCol<T extends ActLike>(acts: T[], cols: BoardCol[], n: number): T[][] {
+  const sorted = acts.slice().sort((x, y) => actWhen(y) - actWhen(x));
+  return cols.map((c) => sorted.filter((a) => c.ids.includes(String(a.author_person || '')) && actWhen(a)).slice(0, Math.max(0, n)));
+}
+/** 판에 세울 열 수 — 열 하나가 글을 읽을 만한 폭(최소 colMin)을 가져야 한다. 1~4. */
+export const boardMaxCols = (boardWidth: number, gutter = 64, colMin = 236): number =>
+  Math.max(1, Math.min(4, Math.floor((Math.max(0, boardWidth) - gutter) / colMin)));
+/** 태스크 색인 — id → 태스크(하위까지). 기록의 project_id 가 이 프로젝트가 아니면 그 태스크의 일이다. */
+export function taskIndex(tasks: any[]): Map<number, any> {
+  const m = new Map<number, any>();
+  const walk = (ts: any[]): void => { for (const t of ts || []) { if (t && t.id != null) m.set(Number(t.id), t); if (t && Array.isArray(t.subtasks)) walk(t.subtasks); } };
+  walk(tasks || []);
+  return m;
 }
 
 // ── 본문 안내문 ───────────────────────────────────────────────────────────────
