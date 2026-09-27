@@ -372,11 +372,14 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
       const ok = answer(String(args.id ?? ""), String(args.askId ?? ""), args.value);
       return { ok, stale: !ok };
     }
-    // app-server의 실제 답은 이 노드의 Codex rollout에 남는다. 게이트웨이가 보관한 threadId만 받고
-    // CODEX_HOME 아래에서 제한 청크를 돌려준다 — 사용자 입력 경로나 셸은 이 표면에 없다(#3982).
+    // 실제 답은 이 노드의 하네스 대화 파일에 남는다. 게이트웨이가 보관한 threadId만 받고, session id를
+    // 이 노드의 tmux 메타와 다시 결합해 제한 청크를 돌려준다 — 사용자 입력 경로나 셸은 이 표면에 없다(#3982·#3870).
     case "chatTranscript": {
-      const { readLocalRolloutChunk } = await import("../terminal/harness-io/codex-app-server-daemon.js");
-      return readLocalRolloutChunk(
+      const id = String(args.id ?? "");
+      const session = (await listSessionsRaw({ strict: true })).find((s) => s.id === id);
+      const { readLocalSessionTranscriptChunk } = await import("./local-chat-transcript.js");
+      return readLocalSessionTranscriptChunk(
+        session,
         String(args.threadId ?? ""),
         Number(args.offset) || 0,
         Number(args.len) || 0,

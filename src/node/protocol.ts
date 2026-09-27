@@ -155,7 +155,7 @@ const NODE_OPS_V1 = ["list", "create", "kill", "edit", "gone", "label", "runTask
 //   준비 판정은 게이트웨이가 이 걸음이 돌려준 화면으로 하고, 그 세션의 호스트는 실행만 한다(terminal/outbox-host-step 머리말).
 //   sendKeys 와 달리 실패도 **값으로** 답한다 — «한 글자도 안 쳤다» 가 오류 문자열로 뭉개지면 게이트웨이가 다시 쳐도 되는지 모른다.
 //   선언하지 않은 호스트엔 보내지 않는다(nodeRpc 관문 · sessionHostFor 의 unsupported) — 그 세션은 게이트웨이 경로에 남는다.
-//  chatTranscript = app-server가 노드 CODEX_HOME에 남긴 rollout을 제한 바이트 청크로 읽는다(#3982).
+//  chatTranscript = 노드 하네스가 로컬에 남긴 대화 기록을 제한 바이트 청크로 읽는다(#3982·#3870).
 //   임의 경로를 받지 않고 threadId만 받으며, 게이트웨이가 세션 매핑·인가·공통 ChatLine 파싱을 맡는다.
 //  sessionTokens(#4135) = 이미 떠 있는 세션에 게이트웨이가 나중에 구운 훅·MCP 토큰을 파일로 심는다(session-ops → session-token-file).
 //   선언하지 않은 노드(옛 번들)엔 보내지 않는다 — 그 노드의 살아 있는 세션은 번들이 갱신될 때까지 종전 신원으로 남는다.
