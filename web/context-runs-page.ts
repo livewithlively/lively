@@ -11,6 +11,7 @@ import {
   DAY, KEEP_DAYS, addDays, calendarPop, changed, fetchDaily, fetchDay, fetchDetail, hhmm, kindTag, md, mdw, menuPop, parseYmd,
   dayOf, relDay, runSummary, runTile, today0, ymd,
 } from './context-runs.js';
+import { CTX_APP_NAME, CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
 type Result = 'all' | 'changed' | 'fail';
 const CHUNK = 3;
@@ -40,8 +41,8 @@ export async function renderRunsPage(host: HTMLElement): Promise<void> {
 
   // ── 뼈대 ──
   const crumb: HTMLElement = el('nav', { class: 'cxrp-crumb', 'aria-label': '위치' },
-    el('a', { href: '#/context/home', text: '맥락 관리' }), el('i', { text: '/' }),
-    el('a', { href: '#/context/home', text: '현황' }), el('i', { text: '/' }), el('b', { text: '자동 실행 기록' }));
+    el('a', { href: '#/context/home', text: CTX_APP_NAME }), el('i', { text: '/' }),
+    el('a', { href: '#/context/home', text: CTX_TAB.home }), el('i', { text: '/' }), el('b', { text: CTX_TAB.runs }));
   const dd = (label: string): { btn: HTMLButtonElement; v: HTMLElement } => {
     const v: HTMLElement = el('span', { class: 'v' });
     const btn: HTMLButtonElement = el('button', { type: 'button', class: 'cxrp-dd', 'aria-haspopup': 'listbox' }, label + ' ', v, el('span', { class: 'cv', 'aria-hidden': 'true', text: '⌄' }));

@@ -10,6 +10,8 @@ import { ICONS } from './icons.js';
 import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import { listSessionApps, openAppSession, type SessionApp } from './app-session.js';
 import { openInstalledApp } from './app-instance.js';
+import { CTX_APP_NAME, CTX_OLD_NAMES } from '../lib/ctx-names.js';   // #4233 앱 이름은 한 곳에서
+import { appMatches, appRank } from '../lib/app-match.js';
 
 export interface AppDef {
   key: string;        // 안정 키(= 클래식 data-tab 슬러그 또는 페이지 이름)
@@ -30,6 +32,8 @@ export interface AppDef {
   //  문이 다른 곳에 있는 앱이다(설정 = [나] 창 ▸ [고급 설정], v2/me-modal.ts). 표에서 지우지 않는 이유: 라우터·탭 제목·
   //  액자 판정(appByKey)이 이 줄을 읽고, shell-surfaces CLASSIC_BACKLOG(앱화 대장)와 같은 집합이어야 한다.
   hidden?: boolean;
+  /** 화면에 안 보이는 검색어(#4233). 이름을 바꾼 앱이 옛 이름으로도 찾히게 한다(lib/app-match.ts). */
+  aka?: readonly string[];
 }
 
 // 표 한 줄 = 앱 하나. 순서 = 런치패드 순서. 클래식 탭 순서(홈·AI세션·프로젝트·WIKI·맥락관리·설정·가이드)를 따른다.
@@ -45,7 +49,8 @@ export const APPS: AppDef[] = [
   //  분류체계(#4233). 맥락 관리의 카테고리 탭을 앱으로 뺐다(원준 2026-09-26). 분류는 위키만의 것이 아니라 지식과 프로젝트가
   //   함께 붙는 축이라, 위키 · 프로젝트 · 맥락 관리 어느 한 화면 안에 두지 않는다. 자료처럼 셸이 직접 그리는 native 앱이다.
   { key: 'taxonomy', title: '분류체계', desc: '분류와 묶음 · 분류마다 붙은 지식과 프로젝트 · 정의 고치기', route: 'taxonomy', tab: null, icon: 'tags', kind: 'native' },
-  { key: 'context', title: '맥락 관리', desc: '우리 AI 가 아는 것과 그것을 만드는 기계들 — 수집기 · 증류기 · 카테고리 · 점검 · AI 전달', route: 'context', tab: 'context', icon: 'ctx' },
+  //  #4233(원준 2026-09-27). 이름을 「맥락 관리」에서 바꿨다. 옛 이름은 검색어(aka)로만 남아 앱 찾기 · 통합검색이 옛 이름으로도 찾는다.
+  { key: 'context', title: CTX_APP_NAME, desc: '여러 원천에서 맥락이 수집되고 증류되는 것을 실시간으로 보고 설정합니다', route: 'context', tab: 'context', icon: 'ctx', aka: CTX_OLD_NAMES },
   { key: 'sessions', title: '세션 이력', desc: '중앙에 기록된 내 세션 대화 이어보기', route: 'sessions', tab: 'terminal', icon: 'sess' },
   // 설정 — 앱 목록에서 **뺐다**(#2199, 원준 2026-08-27 "앱에 설정을 없애고 … 모달 사이드바에 고급설정 하나 만들어서").
   //  설정은 할 일이 있는 화면이 아니라 환경을 손보는 자리라, 문은 [나] 창 ▸ [고급 설정] 하나다(같은 문이 둘이면 어느 쪽이
@@ -183,8 +188,9 @@ export function openLaunchpad(): void {
     // 이름에 맞은 것이 설명에만 맞은 것보다 앞에 온다 — Enter 가 맨 앞을 여니 순서가 곧 정답이어야 한다.
     //  ('프' 를 치면 설명에 '프로젝트'가 든 홈이 아니라 프로젝트 앱이 먼저다.) sort 는 안정 정렬이라 동점은 원래 차례.
     const rank = (t: string) => { const i = t.toLowerCase().indexOf(q); return i === 0 ? 0 : i > 0 ? 1 : 2; };
-    const screen = apps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.desc.toLowerCase().includes(q))
-      .sort((a, b) => rank(a.title) - rank(b.title)).map((a) =>
+    //  화면 앱은 이름 · 설명 · 옛 이름(aka)으로 거른다(#4233). 통합검색(omni.ts)과 같은 잣대다.
+    const screen = apps.filter((a) => appMatches(a, q))
+      .sort((a, b) => appRank(a, q) - appRank(b, q)).map((a) =>
       el('a', { class: 'v2-pad-item', role: 'listitem', href: appHref(a), title: a.desc, onclick: () => closeLaunchpad() },
         el('span', { class: 'v2-pad-ico' }, appGlassIcon(a.icon)),
         el('b', { text: a.title })));

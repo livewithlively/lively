@@ -22,13 +22,10 @@ import { listDismissedSessions, restoreDismissedSessions, type DismissedSession 
 import { TRASH_TABS, auditProjItems, bundleOpen, extraCountsOf, fileTrashUrl, groupByProject, knowItems, levelLabel, matchesQuery, pickInitialTab, srcItems, type DeletedEntry, type SrcItem, type TabCounts, type TrashTab, type TrashedFile } from '../lib/trash-tabs.js';   // #3778 — 휴지통 네 탭의 잣대(순수)
 import { invalidateTrashCounts, setTrashCounts } from './trash-counts.js';   // 사이드바 「휴지통 N」과 같은 값(#3778)
 import { groupPastByProject, isDismissedSess, pastNames, PAST_PERIODS, selectPast, standsInPast, type PastPeriod, type PastScope, type PastSessLike } from '../lib/past-sess.js';   // #3778 — 「지난 세션」의 잣대(순수)
-import { groupAllSess, mainGroupBy, ownerCounts, pickNowCards, selectAllSess, SESS_GROUP_BYS } from '../lib/sess-all.js';   // #4158 — [AI 세션] 전체 목록의 잣대(순수) · #4233 묶기 · 카드
+import { groupAllSess, mainGroupBy, nextSessSort, ownerCounts, selectAllSess, SESS_GROUP_BYS, sortAllSess, type SessSort, type SessSortKey } from '../lib/sess-all.js';   // #4158 — [AI 세션] 전체 목록의 잣대(순수) · #4233 묶기 · 열 머리 정렬
 import { sessGroupName, sessScope } from './sess-scope.js';   // #4233 2안 — 묶기 기준 · 고른 카드는 사이드바가 쥐고 여기선 읽기만
 import { SESS_STATES } from '../session-status.js';   // #4233 — 상태 묶기 · 카드의 순위
 import { showCtxMenu } from './ctx-menu.js';   // #4233 — 묶기 고르개 · 행 ⋯ 메뉴
-import { fetchTurns, type Turn } from './sess-tail.js';   // #4233 — 사이드 피크의 대화 꼬리(세션 카드와 같은 길)
-import { lastAsk } from './last-ask.js';   // #4233 — 「지금 볼 것」 카드의 마지막 말
-import { rememberUnsentDraft } from './quick-session.js';   // #4233 — 끝난 세션에 보낸 글을 세션 화면 입력칸으로
 import { verdictStands, type SessRowVerdict } from './sess-visibility.js';   // #4158 — 홈 목록에서의 자리(판정은 셸이 홈과 같은 재료로 넘긴다)
 
 export interface BinHooks { onChanged?: () => void }
@@ -951,22 +948,13 @@ export interface SessAllHooks {
 const allUi = {
   period: 'all' as PastPeriod, owner: '', state: '', q: '', searching: false,
   shown: PAGE,
-  /** 마지막으로 그린 사이드바 선택(기준 · 카드 · 줄) — 바뀌면 [더 보기]는 처음부터, 피크는 닫는다. */
+  /** 마지막으로 그린 사이드바 선택(기준 · 카드 · 줄) — 바뀌면 [더 보기]는 처음부터. */
   scopeKey: '',
   /** 접은 묶음(`기준:key`) · 펼친 «이름 없는 세션» 줄(`기준:key`). */
   closed: new Set<string>(), openUntitled: new Set<string>(),
-  /** 사이드 피크에 띄운 세션 id('' = 닫힘) · 세션별 입력 중인 글. */
-  peek: '', drafts: new Map<string, string>(),
+  /** 열 머리로 고른 정렬(null = 기본, 최근 활동 순). 묶는 기준과 따로 논다 — 묶음 안 줄 순서만 바꾼다. */
+  sort: null as SessSort | null,
 };
-/** 피크의 대화 꼬리 — 세션 id → 읽은 시점의 lastSeen · 턴. lastSeen 이 바뀌면(새 활동) 다시 읽는다. */
-const peekTail = new Map<string, { seen: number; turns: Turn[] | null; loading: boolean }>();
-/** 보내는 중인 세션 — 응답이 오기 전에 다시 보내지 않게(다시 그려도 남는다). */
-const peekSending = new Set<string>();
-const PEEK_TAIL = 240000;   // 도구 기록이 긴 세션은 사람 · AI 글이 수백 KB 뒤에 있다(last-ask TAIL_FAR 와 같은 값)
-const PEEK_TURNS = 16;
-/** 키보드(Esc · ↑ ↓)가 지금 그려진 목록을 알아야 한다 — 마지막으로 그린 화면의 순서와 다시 그리기. */
-let peekNav: { host: HTMLElement; order: string[]; repaint: () => void } | null = null;
-let peekKeysBound = false;
 
 const HARNESS_NAME: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', grok: 'Grok', opencode: 'OpenCode', antigravity: 'Antigravity', shell: '셸' };
 const harnessName = (s: Sess): string => {
@@ -981,12 +969,21 @@ function stateCell(s: Sess): HTMLElement {
   if (k === 'waiting' || k === 'done' || k === 'busy') return el('span', { class: 'v2-sa-st ' + dotCls(k) }, dot(k), el('span', { text: label }));
   return el('span', { class: 'v2-sa-st quiet' }, dot(k), el('span', { text: label }));
 }
+/** 「만든 때」 칸 — 오늘 것은 시:분, 그 밖은 월/일 시:분. **마지막 활동(상대 표기)과 눈으로 갈리게** 절대 시각으로 적는다
+ *  (#4233, 원준 2026-09-26 «기존의 시각은 구분되게 이름 변경»). 모르면 빈 칸으로 둔다 — 「방금」 으로 꾸미지 않는다. */
+function madeCell(ms: number): HTMLElement {
+  if (!ms || !Number.isFinite(ms)) return el('span', { class: 'm none', text: '' });
+  const d = new Date(ms);
+  const p2 = (n: number): string => String(n).padStart(2, '0');
+  const hm = `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  const today = new Date();
+  const sameDay = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
+  return el('span', { class: 'm', text: sameDay ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`, title: d.toLocaleString() });
+}
 const svgI = (d: string, cls = 'v2-sa-ic'): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, sv('path', { d }));
 const IC_SEARCH = 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z M21 21l-4.3-4.3';
 const IC_CHEV = 'M6 9l6 6 6-6';
 const IC_UP = 'M18 15l-6-6-6 6';
-const IC_OPEN = 'M14 4h6v6 M20 4l-9 9 M19 14v6H4V5h6';
-const IC_SEND = 'M5 12h14 M13 6l6 6-6 6';
 const IC_MORE = 'M5 12h.01 M12 12h.01 M19 12h.01';
 const IC_PLUS = 'M12 5v14 M5 12h14';
 
@@ -994,7 +991,7 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
   const ui = allUi;
   const sc = sessScope();
   const scKey = `${sc.by}|${sc.group ?? ''}|${sc.proj ?? ''}`;
-  if (ui.scopeKey !== scKey) { ui.scopeKey = scKey; ui.shown = PAGE; ui.peek = ''; }   // 사이드바에서 다른 걸 골랐으면 [더 보기]는 처음부터 · 피크는 닫는다
+  if (ui.scopeKey !== scKey) { ui.scopeKey = scKey; ui.shown = PAGE; }   // 사이드바에서 다른 걸 골랐으면 [더 보기]는 처음부터
   const mby = mainGroupBy(sc);
   const now = Date.now();
   const people = sidePeople();
@@ -1023,7 +1020,6 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
   const crumbs = [sc.group !== null ? sessGroupName(sc.by, sc.group, data, ownerName) : '', pickedProj].filter(Boolean);
   const byState = (k: string): number => inProj.filter((it) => it.owner === 'me' && it.stateKey === k).length;
   const open = (s: Sess): void => hooks.onOpen(s);
-  const openPeek = (id: string): void => { ui.peek = id; repaint(); };
 
   // ── 2행 도구줄 — 기간 · 사람 · 상태 칩 · 찾기 · ＋ 새 세션(묶기는 사이드바 머리의 드롭다운) ──
   const period = el('select', { class: 'v2-sa-pick', 'aria-label': '기간', 'data-pick': 'period',
@@ -1054,38 +1050,40 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
     hooks.onNew ? el('button', { class: 'v2-sa-new', type: 'button', title: '새 세션 — 홈에서 무엇이든 시키면 열려요', onclick: () => hooks.onNew?.() },
       svgI(IC_PLUS), el('span', { text: '새 세션' })) : null);
 
-  // ── 「지금 볼 것」 카드 ──
-  const cards = pickNowCards(inProj, stateRank, 4, now);
-  const nowSec = cards.length ? el('section', { class: 'v2-sa-now', 'aria-label': '지금 볼 것' },
-    el('div', { class: 'v2-sa-now-h' }, el('b', { text: '지금 볼 것' }),
-      el('span', { class: 'c', text: `확인 필요 ${byState('waiting')} · 작업 중 ${byState('busy')}` })),
-    el('div', { class: 'v2-sa-cards' }, ...cards.map((it) => {
-      const s = it.s;
-      const ask = lastAsk(s);
-      const said = ask && !ask.startsWith('<') ? ask : '';
-      return el('button', { class: 'v2-sa-card' + (ui.peek === s.id ? ' on' : ''), type: 'button', 'data-sid': s.id,
-        onclick: () => openPeek(s.id), ondblclick: () => open(s) },
-        el('div', { class: 'k' }, stateCell(s), el('span', { class: 'sp' }), el('span', { class: 'm', text: whenMs(Number(s.lastSeen) || 0) })),
-        el('div', { class: 't', text: it.untitled ? `이름 없는 세션 · ${harnessName(s)}` : it.name }),
-        said ? el('div', { class: 'ask' }, el('b', { text: '마지막 말' }), el('span', { text: ' ' + said })) : null,
-        el('div', { class: 'p', text: projName(data, s.projectId) || '프로젝트 없음' }));
-    }))) : null;
+  //  「지금 볼 것」 카드 줄은 걷었다(원준 2026-09-27): «AI 세션의 목표는 기존에 만들었던 세션들에 대한 정보를 얻거나
+  //   거기로 가는 것이 우선인데, 실행 상태별로 보여주는 것은 이 탭의 취지와 안 맞는다». 상태로 좁히는 길은
+  //   도구줄의 상태 칩(확인 필요 · 작업 중)에 남아 있다.
 
   // ── 묶음별 목록 ──
   const cols = sc.proj === null;
-  const headCols = (): HTMLElement[] => [
-    ...(cols ? [el('span', { class: 'hc', text: '프로젝트' })] : []),
-    el('span', { class: 'hc', text: '상태' }), el('span', { class: 'hc', text: '사람' }), el('span', { class: 'hc', text: 'AI' }), el('span', { class: 'hc', text: '시각' }), el('span', {})];
+  //  열 머리는 **표 맨 위 한 줄**뿐이다(#4233, 원준 2026-09-26 «리스트별로 묶으면 묶음마다 열 제목이 화면 절반»).
+  //   종전엔 묶음 머리줄마다 열 이름을 되풀이했다. 클릭업 리스트 뷰와 같게 머리를 하나만 두고 **붙여 둔다**(sticky) —
+  //   그래서 «맨 위만 두고 지우면 이상하다» 가 안 된다. 묶음 머리줄은 이름과 개수만 든다.
+  //  「AI」 열은 걷었다(원준 «AI 는 일반적으로 하나만 쓴다»). 시각은 둘로 갈랐다 — 만든 때(절대) · 마지막 활동(상대).
+  //  ★ 열 머리를 누르면 그 열로 정렬한다(원준 2026-09-27 «클릭업 참고»). 오름차순 → 내림차순 → 기본.
+  //   ⚠ 묶는 기준(시간별 · 리스트별 …)은 **건드리지 않는다** — 묶음의 순서·구성은 그대로 두고 묶음 안 줄만 다시 센다.
+  const hc = (key: SessSortKey, label: string): HTMLElement => {
+    const on = ui.sort && ui.sort.key === key ? ui.sort : null;
+    return el('button', { class: 'hc' + (on ? ' on' : ''), type: 'button',
+      'aria-sort': on ? (on.dir === 'asc' ? 'ascending' : 'descending') : 'none',
+      title: on ? (on.dir === 'asc' ? `${label} 오름차순 — 다시 누르면 내림차순` : `${label} 내림차순 — 다시 누르면 기본 순서로`) : `${label} 순으로 묶음 안 줄을 정렬합니다`,
+      onclick: () => { ui.sort = nextSessSort(ui.sort, key); ui.shown = PAGE; repaint(); } },
+      el('span', { text: label }),
+      on ? svgI(on.dir === 'asc' ? IC_UP : IC_CHEV, 'v2-sa-ic sm') : null);
+  };
+  const tableHead = (): HTMLElement => el('div', { class: 'v2-sa-head' + (cols ? '' : ' np') },
+    hc('name', '세션'),
+    ...(cols ? [hc('proj', '프로젝트')] : []),
+    hc('state', '상태'), hc('owner', '사람'),
+    hc('made', '생성 시각'), hc('seen', '마지막 활동'), el('span', {}));
   const groupLabel = (key: string): string => sessGroupName(mby, key, data, ownerName);
-  const order: string[] = [];
   const rowOf = (it: Item): HTMLElement => {
     const s = it.s;
     const v = hooks.verdict(s);
-    order.push(s.id);
     //  ⌘/Ctrl/Shift+클릭은 브라우저 몫으로 둔다(새 창·새 탭) — 셸 안 링크의 관례(main.ts bindAltOpen 머리말)와 같다.
     const nameClick = (ev: MouseEvent): void => {
       if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
-      ev.preventDefault(); ev.stopPropagation(); openPeek(s.id);
+      ev.preventDefault(); ev.stopPropagation(); open(s);
     };
     const more = el('button', { class: 'v2-sa-more', type: 'button', 'aria-label': '더 보기', title: '열기 · 홈에서 치우기',
       onclick: (ev: MouseEvent) => {
@@ -1097,7 +1095,7 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
           ...(v && verdictStands(v) ? [{ label: '홈에서 치우기', hint: '세션은 그대로 돌아요', run: () => hooks.onDismiss(s) }] : []),
         ], { title: it.untitled ? '이름 없는 세션' : it.name });
       } }, svgI(IC_MORE));
-    const row = el('div', { class: 'v2-sa-row' + (cols ? '' : ' np') + (ui.peek === s.id ? ' on' : '') + (v === 'dismissed' ? ' dism' : ''),
+    const row = el('div', { class: 'v2-sa-row' + (cols ? '' : ' np') + (v === 'dismissed' ? ' dism' : ''),
       role: 'button', tabindex: '0', 'data-sid': s.id },
       el('div', { class: 'c-name' }, sessIcon(),
         el('a', { class: 't' + (it.untitled ? ' un' : ''), href: '#/s/' + encodeURIComponent(s.id), text: it.untitled ? `이름 없는 세션 · ${harnessName(s)}` : it.name, onclick: nameClick }),
@@ -1105,33 +1103,37 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
       cols ? el('div', { class: 'c-proj' + (s.projectId ? '' : ' none') }, s.projectId ? folderIcon() : null, el('span', { text: projName(data, s.projectId) || '프로젝트 없음' })) : null,
       el('div', { class: 'c-kind' }, stateCell(s)),
       el('div', { class: 'c-who' }, personFace(it.owner === 'me' ? meId : it.owner, 'v2-sall-face', ownerName(it.owner))),
-      el('div', { class: 'c-ai', text: harnessName(s) }),
+      el('div', { class: 'c-made' }, madeCell(Number(s.createdAt) || 0)),
       el('div', { class: 'c-when' }, el('span', { class: 'm', text: whenMs(Number(s.lastSeen) || 0), title: s.lastSeen ? new Date(Number(s.lastSeen)).toLocaleString() : '' })),
       el('div', { class: 'c-acts' }, more));
-    row.addEventListener('click', (ev) => { if ((ev.target as HTMLElement).closest('button, a, input, select')) return; openPeek(s.id); });
-    row.addEventListener('dblclick', (ev) => { if ((ev.target as HTMLElement).closest('button, input, select')) return; open(s); });
-    row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && ev.target === row) { ev.preventDefault(); openPeek(s.id); } });
+    //  #4233(원준 2026-09-26 «사이드 피크 개념 그냥 없애자») — 한 번 누르면 바로 그 세션을 홈에서 연다.
+    row.addEventListener('click', (ev) => { if ((ev.target as HTMLElement).closest('button, a, input, select')) return; open(s); });
+    row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && ev.target === row) { ev.preventDefault(); open(s); } });
     return row;
   };
   const list = el('div', { class: 'v2-sa-list', 'aria-label': 'AI 세션 목록' });
+  //  정렬이 읽는 값 — 표에 그려진 그 글자여야 사람이 «이 열 기준» 을 눈으로 확인할 수 있다.
+  const sortFields = (it: Item) => ({ name: it.name, proj: projName(data, it.projectId) || '', owner: ownerName(it.owner),
+    rank: stateRank(String(it.stateKey || '')), made: Number(it.s.createdAt) || 0, seen: Number(it.lastSeen) || 0 });
+  const ordered = (rs: readonly Item[]): Item[] => sortAllSess(rs, ui.sort, sortFields);
   let budget = ui.shown;
   //  묶지 않음 — 묶음 머리 없이 열 머리 한 줄, 이름 없는 세션도 접지 않고 전부 최근 순(«완전 raw 한 전체보기»).
+  if (vis.length) list.append(tableHead());
   if (mby === 'none' && vis.length) {
-    list.append(el('div', { class: 'v2-sa-gh flat' + (cols ? '' : ' np') }, el('span', { class: 'hc', text: '세션' }), ...headCols()));
-    for (const it of vis) { if (budget-- <= 0) break; list.append(rowOf(it)); }
+    for (const it of ordered(vis)) { if (budget-- <= 0) break; list.append(rowOf(it)); }
   }
   for (const g of mby === 'none' ? [] : groupAllSess(vis, mby, now, stateRank)) {
     if (budget <= 0) break;
     const gk = `${mby}:${g.key}`;
     const closed = ui.closed.has(gk);
-    list.append(el('div', { class: 'v2-sa-gh' + (cols ? '' : ' np') },
+    list.append(el('div', { class: 'v2-sa-gh plain' },
       el('button', { class: 'l', type: 'button', 'aria-expanded': String(!closed), onclick: () => { if (closed) ui.closed.delete(gk); else ui.closed.add(gk); repaint(); } },
         el('span', { class: 'car' + (closed ? ' shut' : '') }, svgI(IC_CHEV, 'v2-sa-ic sm')),
-        el('span', { class: 'pill', text: groupLabel(g.key) }), el('span', { class: 'n', text: String(g.rows.length) })),
-      ...headCols()));
+        el('span', { class: 'pill', text: groupLabel(g.key) }), el('span', { class: 'n', text: String(g.rows.length) }))));
     if (closed) continue;
-    const named = g.rows.filter((it) => !it.untitled);
-    const unnamed = g.rows.filter((it) => it.untitled);
+    const rows = ordered(g.rows);
+    const named = rows.filter((it) => !it.untitled);
+    const unnamed = rows.filter((it) => it.untitled);
     for (const it of named) { if (budget-- <= 0) break; list.append(rowOf(it)); }
     if (unnamed.length && budget > 0) {
       const uOpen = ui.openUntitled.has(gk);
@@ -1148,19 +1150,12 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
     ? (sc.group === null && sc.proj === null ? '아직 세션이 없어요. 홈에서 무엇이든 시켜 보세요.' : '고른 묶음에 세션이 없어요.')
     : '이 조건에 맞는 세션이 없어요. 기간 · 사람 · 상태를 바꿔 보세요.';
 
-  // ── 사이드 피크 ──
-  const peekIt = ui.peek ? items.find((it) => it.s.id === ui.peek && !it.trashedAt) : undefined;
-  if (ui.peek && !peekIt) ui.peek = '';
-  const peekEl = peekIt ? renderPeek(peekIt.s, peekIt.untitled ? `이름 없는 세션 · ${harnessName(peekIt.s)}` : peekIt.name, data, hooks, repaint, ownerName(peekIt.owner)) : null;
-
   const hadPick = document.activeElement instanceof HTMLElement && host.contains(document.activeElement) ? (document.activeElement.dataset.pick || '') : '';
   const act = document.activeElement;
   const caret = hadPick && (act instanceof HTMLTextAreaElement || act instanceof HTMLInputElement) ? [act.selectionStart, act.selectionEnd] : null;
   const bodyOld = host.querySelector<HTMLElement>('.v2-sa-body');
   const scrollTop = bodyOld ? bodyOld.scrollTop : 0;
-  const chatOld = host.querySelector<HTMLElement>('.v2-sa-chat');
-  const chatKeep = chatOld && chatOld.dataset.sid === ui.peek && chatOld.scrollHeight - chatOld.scrollTop - chatOld.clientHeight > 24 ? chatOld.scrollTop : -1;
-  replaceKids(host, el('div', { class: 'v2-sa' + (peekEl ? ' peeking' : '') },
+  replaceKids(host, el('div', { class: 'v2-sa' },
     el('div', { class: 'v2-sa-top' },
       el('span', { class: 'crumb', text: 'AI 세션' }), el('span', { class: 'sl', text: '/' }),
       el('span', { class: 'crumb k', 'data-by': sc.by, text: byLabel }), el('span', { class: 'sl', text: '/' }),
@@ -1169,14 +1164,12 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
       el('span', { class: 'desc', text: vis.length === inProj.length ? `${inProj.length}개` : `${vis.length}개 표시 · 전체 ${inProj.length}` })),
     tools,
     el('div', { class: 'v2-sa-body' },
-      nowSec,
       list,
       left > 0 ? el('button', { class: 'btn-text v2-bin-more', type: 'button', text: `외 ${left}개 더 보기`, onclick: () => { ui.shown += PAGE; repaint(); } }) : null,
       !vis.length ? el('p', { class: 'v2-bin-empty', text: empty }) : null,
       //  클래식 세션 관리(만들기 폼 · 노드 · 여러 개 한꺼번에 종료·복원)는 없애지 않았다 — 셸 안 `#/terminal` 로 그대로 열린다.
       el('p', { class: 'v2-bin-fine', text: '새 세션 만들기 · 노드 연결 · 여러 세션 한꺼번에 종료·복원은 세션 관리 화면에서 해요.' },
-        el('a', { class: 'btn-text', href: '#/terminal', text: '세션 관리 열기 →' }))),
-    peekEl));
+        el('a', { class: 'btn-text', href: '#/terminal', text: '세션 관리 열기 →' })))));
   //  셸의 결(8초)이 통째로 다시 그려도 고르던 칸 · 보던 자리 · 입력 중인 글을 잃지 않게 — 「지난 세션」의 검색칸과 같은 규율.
   if (hadPick) {
     const f = host.querySelector<HTMLElement>(`[data-pick="${hadPick}"]`);
@@ -1190,116 +1183,4 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
   }
   const bodyNew = host.querySelector<HTMLElement>('.v2-sa-body');
   if (bodyNew && scrollTop) bodyNew.scrollTop = scrollTop;
-  const chatNew = host.querySelector<HTMLElement>('.v2-sa-chat');
-  if (chatNew) chatNew.scrollTop = chatKeep >= 0 ? chatKeep : chatNew.scrollHeight;
-  peekNav = { host, order, repaint };
-  bindPeekKeys();
-}
-
-/** 사이드 피크 — 대화 끝부분 + 입력칸. 도는 세션은 여기서 바로 보내고(/prompt — 세션 화면과 같은 통로), 끝난 세션은 글을 담아 세션 화면으로 넘긴다. */
-function renderPeek(s: Sess, name: string, data: V2Data, hooks: SessAllHooks, repaint: () => void, owner: string): HTMLElement {
-  const ui = allUi;
-  const seen = Number(s.lastSeen) || 0;
-  const tail = peekTail.get(s.id);
-  if (!tail || (tail.seen !== seen && !tail.loading)) {
-    const next = { seen, turns: tail ? tail.turns : null, loading: true };
-    peekTail.set(s.id, next);
-    void fetchTurns(s, PEEK_TAIL).then((turns) => { next.turns = turns.slice(-PEEK_TURNS); }, () => { next.turns = next.turns || []; })
-      .finally(() => { next.loading = false; if (ui.peek === s.id) repaint(); });
-  }
-  const cur = peekTail.get(s.id)!;
-  const live = isLiveSess(s);
-  const mine = isMineSess(s);
-  const close = (): void => { ui.peek = ''; repaint(); };
-  const step = (d: number): void => {
-    const order = peekNav ? peekNav.order : [];
-    const i = order.indexOf(s.id);
-    if (i < 0) return;   // 카드에서 연 세션이 접힌 묶음 안에 있으면 목록에 없다. 첫 행으로 건너뛰지 않는다(리뷰 지적).
-    const nx = order[i + d];
-    if (nx) { ui.peek = nx; repaint(); }
-  };
-  const turns = cur.turns;
-  const chat = el('div', { class: 'v2-sa-chat', 'data-sid': s.id },
-    ...(turns === null ? [el('p', { class: 'v2-sa-note', text: '대화를 불러오는 중…' })]
-      : !turns.length ? [el('p', { class: 'v2-sa-note', text: '읽을 대화가 아직 없어요. 세션 화면에서 전체 기록을 볼 수 있어요.' })]
-      : turns.map((t) => (t.who === 'me'
-        ? el('div', { class: 'v2-sa-turn me' }, el('span', { class: 'av', text: owner === '나' ? '나' : owner.slice(0, 1) }),
-            el('div', { class: 'bx' }, el('div', { class: 'who', text: owner }), el('div', { class: 'tx', text: t.text })))
-        : el('div', { class: 'v2-sa-turn ai' }, el('span', { class: 'av', text: 'AI' }),
-            el('div', { class: 'bx' }, el('div', { class: 'who', text: harnessName(s) || 'AI' }), el('div', { class: 'md-rendered tx' }, renderMarkdown(t.text))))))));
-  //  보내기 — 도는 세션: 세션 화면(session-chat sendPrompt)과 같은 서버 큐(/prompt). 끝난 내 세션: 글을 세션 화면 입력칸으로 넘기고 연다
-  //   (그 화면이 «말을 거는 것» 으로 되살린다, #2439). 끝난 남의 세션: 보낼 수 없다(되살리기는 주인만).
-  const canSend = live || mine;
-  const ta = el('textarea', { class: 'v2-sa-ta', rows: '2', 'data-pick': 'peek', 'aria-label': '메시지',
-    placeholder: live ? '메시지 입력' : mine ? '끝난 세션이에요. 보내면 세션 화면에서 이 글로 이어서 시작해요.' : '다른 사람의 끝난 세션에는 보낼 수 없어요.',
-    disabled: canSend ? undefined : 'true',
-    oninput: (e: Event) => { ui.drafts.set(s.id, (e.target as HTMLTextAreaElement).value); } }) as HTMLTextAreaElement;
-  ta.value = ui.drafts.get(s.id) || '';
-  if (peekSending.has(s.id)) ta.disabled = true;
-  const sendBtn = el('button', { class: 'send', type: 'button', 'aria-label': live ? '보내기' : '세션 열어서 보내기',
-    disabled: canSend && !peekSending.has(s.id) ? undefined : 'true', onclick: () => void send() }, svgI(IC_SEND)) as HTMLButtonElement;
-  const send = async (): Promise<void> => {
-    const text = ta.value.trim();
-    if (!text || !canSend || peekSending.has(s.id)) return;
-    if (!live) { rememberUnsentDraft(s.id, text); ui.drafts.delete(s.id); hooks.onOpen(s); return; }
-    //  두 번 보내지 않는다(리뷰 지적). 보내기 전에 칸을 비우고 이 세션을 «보내는 중»으로 잡는다. 실패하면 글을 돌려준다.
-    peekSending.add(s.id); ui.drafts.delete(s.id); ta.value = ''; ta.disabled = true; sendBtn.disabled = true;
-    try {
-      await api(`/api/ui/terminal/sessions/${encodeURIComponent(s.id)}/prompt`, { method: 'POST', body: JSON.stringify({ text }) });
-      const t = peekTail.get(s.id);
-      if (t && t.turns) t.turns = [...t.turns, { who: 'me' as const, text }].slice(-PEEK_TURNS);
-      toast('보냈어요.');
-      repaint();
-      //  답은 세션이 턴을 마치면 기록에 오른다 — 조금 뒤 꼬리를 다시 읽는다(목록의 lastSeen 이 바뀌어도 다시 읽는다).
-      setTimeout(() => { const t2 = peekTail.get(s.id); if (t2 && !t2.loading) { t2.seen = -1; if (ui.peek === s.id) repaint(); } }, 6000);
-    } catch (e: any) {
-      ui.drafts.set(s.id, text);
-      toast(`보내지 못했어요. ${e?.message || ''}`);
-    } finally {
-      peekSending.delete(s.id);
-      if (ui.peek === s.id) repaint();
-    }
-  };
-  ta.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); void send(); } });
-  const model = String((s.raw && s.raw.flags && s.raw.flags['--model']) || '');
-  return el('aside', { class: 'v2-sa-peek', 'aria-label': `${name} 대화` },
-    el('div', { class: 'v2-sa-ph' },
-      el('span', { class: 'cr', text: `${projName(data, s.projectId) || '프로젝트 없음'} › 세션` }), el('span', { class: 'sp' }),
-      el('button', { class: 'ib', type: 'button', 'aria-label': '이전 세션', title: '이전 세션 (↑)', onclick: () => step(-1) }, svgI(IC_UP)),
-      el('button', { class: 'ib', type: 'button', 'aria-label': '다음 세션', title: '다음 세션 (↓)', onclick: () => step(1) }, svgI(IC_CHEV)),
-      el('button', { class: 'ibt', type: 'button', title: '홈에서 이 세션을 엽니다', onclick: () => hooks.onOpen(s) }, svgI(IC_OPEN), el('span', { text: '세션 열기' })),
-      el('button', { class: 'ib', type: 'button', 'aria-label': '닫기', title: '닫기 (Esc)', onclick: close }, el('span', { text: '✕' }))),
-    el('div', { class: 'v2-sa-ptop' },
-      el('h2', { text: name }),
-      el('div', { class: 'chips' }, stateCell(s),
-        el('span', { class: 'pill', text: projName(data, s.projectId) || '프로젝트 없음' }),
-        harnessName(s) ? el('span', { class: 'pill', text: model ? `${harnessName(s)} · ${model}` : harnessName(s) }) : null,
-        el('span', { class: 'pill', text: owner }),
-        el('span', { class: 'pill', text: whenMs(seen) })),
-      s.stateKey === 'waiting' ? el('div', { class: 'v2-sa-ban' },
-        el('span', { class: 'msg' }, el('b', { text: '확인 필요.' }), el('span', { text: ' 세션이 승인이나 선택을 기다리고 있어요.' })),
-        el('button', { class: 'ibt', type: 'button', onclick: () => hooks.onOpen(s) }, el('span', { text: '세션 열어서 답하기' }))) : null),
-    chat,
-    el('div', { class: 'v2-sa-cmp' + (canSend ? '' : ' off') }, ta,
-      el('div', { class: 'rw' },
-        el('span', { class: 'hint', text: live ? '⌘Enter 보내기' : mine ? '세션 화면으로 넘어가요' : '' }),
-        sendBtn)));
-}
-
-/** Esc 로 피크를 닫고, ↑ ↓ 로 옆 세션으로 — 목록이 화면에 보일 때만(다른 탭에 숨어 있으면 가만히 있는다). 입력칸 안에서는 쓰지 않는다. */
-function bindPeekKeys(): void {
-  if (peekKeysBound) return;
-  peekKeysBound = true;
-  document.addEventListener('keydown', (ev) => {
-    const nav = peekNav;
-    if (!nav || !allUi.peek || !nav.host.isConnected || !nav.host.offsetParent) return;
-    const t = ev.target as HTMLElement | null;
-    if (t && t.closest && t.closest('textarea, input, select, [contenteditable="true"], .pn-ctx')) return;
-    if (ev.key === 'Escape') { allUi.peek = ''; nav.repaint(); return; }
-    if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
-    const i = nav.order.indexOf(allUi.peek);
-    if (i < 0) return;
-    const nx = nav.order[i + (ev.key === 'ArrowDown' ? 1 : -1)];
-    if (nx) { ev.preventDefault(); allUi.peek = nx; nav.repaint(); }
-  });
 }

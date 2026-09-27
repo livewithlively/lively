@@ -31,6 +31,9 @@ export interface ProjFolder { id: number; name: string; parent_id?: number | nul
 export interface Sess {
   id: string; label: string; projectId: number | null; node: string | null;
   live: boolean; alive: boolean; owned: boolean; stateKey: string; stateLabel: string; lastSeen: number; raw: any;
+  /** 만든 때(ms) — 박스는 `created`(초), 기록만 남은 것은 `first_seen`. 둘 다 있으면 이른 쪽(되살린 박스는 대화가 먼저다).
+   *  [AI 세션] 목록의 「만든 때」 열이 읽는다(#4233, 원준 2026-09-26 «생성시각도 하나 열로»). 0 = 모른다. */
+  createdAt?: number;
   // 중앙 기록 좌표(대화 uuid) — 라이브 행에 접힌 기록(mergeSessions). 기록만 있는 행은 id 자체가 uuid 라 비어 있다.
   logId?: string | null; logNode?: string | null;
   // 접힌 기록의 **대화 제목**(= 그 세션에 처음 시킨 말). 멈춘 세션은 pane 제목(raw.title)이 비어 있어 이름 자리가
@@ -525,6 +528,13 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
 // ── 데이터 정규화 — 라이브(terminal/sessions) + 기록(v6/sessions) 를 한 목록으로 ─────────
 //  같은 세션이 두 목록에 있으면 한 장으로: 라이브 행의 claudeSessionId(박스가 도는 대화 uuid) == 기록 행의 session_id 면
 //  기록 행을 라이브 행에 접는다(logId·logNode). 종전엔 '박스 1장 + 그 대화의 기록 1장'이 나란히 떠 같은 세션이 둘로 보였다.
+/** 초·밀리초가 섞여 오는 시각 값을 ms 로 — 자릿수로 가른다(lastSeen 이 쓰는 그 자와 같다). */
+const msOf = (v: any): number => {
+  const n = Number(v || 0);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return String(Math.floor(n)).length > 11 ? n : n * 1000;
+};
+
 export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
   const now = Date.now();
   const out = new Map<string, Sess>();
@@ -542,6 +552,7 @@ export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
       //   (직전 관측이 있으면 여기 오기 전에 main.ts keepObserved 가 그 값으로 이어 준다 — 그때는 이 갈래에 안 온다.)
       live: true, alive: r.observed === false ? false : !sessIsDead(r, now), owned: !!r.owned, stateKey: k, stateLabel: sessLabel(r, now),
       lastSeen: Number(r.lastActive || r.created || 0) * (String(r.lastActive || r.created || 0).length > 11 ? 1 : 1000) || 0, raw: r,
+      createdAt: msOf(r.created), 
       trashedAt: r.trashedAt ? String(r.trashedAt) : null,   // #1851 — 서버가 내 휴지통 표식을 행에 얹는다
       trashedWith: r.trashedWith != null ? Number(r.trashedWith) : null,
     };
@@ -554,6 +565,9 @@ export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
     const owner = byUuid.get(id);
     if (owner) {                                   // 라이브(또는 복원 가능) 박스가 이 대화를 돌린다 — 그 카드에 접는다
       owner.logId = id; owner.logNode = r.node_id || '';
+      //  되살린 박스는 `created` 가 **다시 연 시각**이라 대화가 시작된 때보다 늦다 — 이른 쪽이 「만든 때」다.
+      const firstMs = r.first_seen ? new Date(r.first_seen).getTime() : 0;
+      if (firstMs && (!owner.createdAt || firstMs < owner.createdAt)) owner.createdAt = firstMs;
       if (r.title) owner.logTitle = String(r.title);   // 이름 자리의 폴백(위 logTitle 주석)
       if (!owner.projectId && r.project_id != null) owner.projectId = Number(r.project_id);
       if (!owner.trashedAt && r.trashed_at) { owner.trashedAt = String(r.trashed_at); owner.trashedWith = r.trashed_with != null ? Number(r.trashed_with) : null; }   // 두 이름 중 한쪽에만 표식이 있어도 그 세션은 휴지통
@@ -567,6 +581,7 @@ export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
       id, label: String(r.name || r.title || id), logTitle: r.title ? String(r.title) : undefined,
       projectId: r.project_id != null ? Number(r.project_id) : null, node: r.node_id || null,
       live: false, alive: false, owned: true, stateKey: 'log', stateLabel: '기록', lastSeen: r.last_seen ? new Date(r.last_seen).getTime() : 0, raw: r,
+      createdAt: r.first_seen ? new Date(r.first_seen).getTime() : 0,
       trashedAt: r.trashed_at ? String(r.trashed_at) : null,
       trashedWith: r.trashed_with != null ? Number(r.trashed_with) : null,
     });
