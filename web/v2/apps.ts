@@ -39,7 +39,7 @@ export interface AppDef {
 // 표 한 줄 = 앱 하나. 순서 = 런치패드 순서. 클래식 탭 순서(홈·AI세션·프로젝트·WIKI·맥락관리·설정·가이드)를 따른다.
 export const APPS: AppDef[] = [
   { key: 'dashboard', title: '홈(클래식)', desc: '옛 대시보드 — 내 프로젝트·알림·세션·팀 로그 위젯', route: 'dashboard', tab: 'dashboard', icon: 'home' },
-  { key: 'terminal', title: 'AI 세션', desc: '박스에서 도는 AI 세션 전체 · 새 세션 만들기', route: 'terminal', tab: 'terminal', icon: 'chat' },   // 말풍선 — 사이드바 세션 행과 같은 붓(원준 2026-08-26 "터미널 아이콘 말고 말풍선으로 통일")
+  { key: 'terminal', title: '세션 목록', desc: '지금까지 만든 세션 전체 · 묶기 · 정렬 · 찾기', route: 'terminal', tab: 'terminal', icon: 'chat' },   // 말풍선 — 사이드바 세션 행과 같은 붓(원준 2026-08-26 "터미널 아이콘 말고 말풍선으로 통일")
   { key: 'projects2', title: '프로젝트', desc: '보드 · 리스트 · 타임라인 · 태스크', route: 'projects2', tab: 'projects2', icon: 'proj' },
   { key: 'knowledge', title: 'WIKI', desc: '지식 트리 · 문서 · 검토 큐', route: 'knowledge', tab: 'knowledge', icon: 'wiki' },
   //  자료(#2423) — 새 셸이 직접 그리는 첫 native 앱. 위키 옆에 둔다(지식의 원본이 자료다).

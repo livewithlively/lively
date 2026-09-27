@@ -318,7 +318,7 @@ if (lib) {
     "W3b ★묶지 않음이면 묶음 머리 없이 전부 최근 순, 이름 없는 세션도 접지 않는다");
   ok(/el\('span', \{ class: 'crumb k', 'data-by': sc\.by, text: byLabel \}\)/.test(all2) && /crumbs\.length \? crumbs\[crumbs\.length - 1\] : '전체'/.test(all2),
     "W4a 빵부스러기는 «AI 세션 / 기준 / 고른 것», 안 골랐으면 «전체»");
-  ok(/secHead\('AI 세션', total \|\| null, byBtn,/.test(rs) && /fitSessCards\(listEl, plans\.length,/.test(rs)
+  ok(/secHead\('세션 목록', total \|\| null, byBtn,/.test(rs) && /fitSessCards\(listEl, plans\.length,/.test(rs)
     && /class: 'v2-ksp v2-pcard v2-scard open'/.test(rs) && /v2-pg-past/.test(rs),
     "W4b 사이드바는 위키 사이드바 3판 부품(.v2-ksp 카드 · 「N개 더」 · 줄 나누기 fitWikiList), 드롭다운은 머리의 ＋ 앞");
   ok(/fitSessCards\(listEl, plans\.length, \(fit\) => \{/.test(rs) && /const planFor = \(fit: number\) => planSideCards\(plans\.map\(\(x\) => x\.key\), fit, sc\.by === 'none' \? null : sc\.group,/.test(rs)
