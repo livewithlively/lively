@@ -115,6 +115,8 @@ export function createNodeSessionTokenBackfill(deps: BackfillDeps = defaultBackf
   //   그 세션들이 10분을 기다렸다).
   const seenTok = new Map<string, boolean | undefined>();
   const lastNote = new Map<string, number>();            // nodeId → 마지막으로 판 요약을 적은 시각(노드당 1분에 한 줄)
+  const lastNoteSig = new Map<string, string>();         // nodeId → 마지막으로 적은 요약의 내용(같은 말은 NOTE_REPEAT_MS 에 한 번)
+  const NOTE_REPEAT_MS = 10 * 60_000;
   let runSeq = 0;                                         // 판 번호 — 버려진 판(stale)이 뒤늦게 굽거나 심지 않게 가른다
   const runOf = new Map<string, number>();                // nodeId → 지금 유효한 판 번호
   const key = (nodeId: string, id: string): string => `${nodeId}|${id}`;
@@ -130,9 +132,15 @@ export function createNodeSessionTokenBackfill(deps: BackfillDeps = defaultBackf
    */
   function note(nodeId: string, sessions: SessionInfo[], stage: string, extra?: Record<string, unknown>): void {
     const lost = sessions.filter((s) => s && s.hasSessionToken === false).length;
-    if (!lost) return;
+    if (!lost) { lastNoteSig.delete(nodeId); return; }
     const now = deps.now();
-    if (now - (lastNote.get(nodeId) ?? -Infinity) <= 60_000) return;
+    const since = now - (lastNote.get(nodeId) ?? -Infinity);
+    if (since <= 60_000) return;
+    //  같은 말은 10분에 한 번만 — 박동마다 구독자가 불리므로(registry.replaySnapshotOnBeat), 심을 수 없는 세션(그 컴퓨터에서 사람이 직접
+    //   띄워 게이트웨이 기록에 주인이 없는 것)이 있는 노드는 같은 요약을 끝없이 적게 된다.
+    const sig = JSON.stringify([stage, sessions.length, lost, extra ?? null]);
+    if (lastNoteSig.get(nodeId) === sig && since <= NOTE_REPEAT_MS) return;
+    lastNoteSig.set(nodeId, sig);
     lastNote.set(nodeId, now);
     logger.info({ node: nodeId, stage, live: sessions.length, no_token: lost, ...extra },
       "세션 신원 되채우기 — «없다» 고 보고된 세션이 있는데 이번 판에 심지 못했다");
@@ -145,7 +153,7 @@ export function createNodeSessionTokenBackfill(deps: BackfillDeps = defaultBackf
     if (started !== undefined) {
       const age = deps.now() - started;
       //  이 노드의 앞 판이 아직 도는 중 — 이번 스냅샷은 건너뛴다(다음 판이 따라잡는다).
-      if (age < inflightMax) { note(nodeId, sessions, "inflight", { inflight_ms: age }); return out; }
+      if (age < inflightMax) { note(nodeId, sessions, "inflight"); return out; }
       logger.warn({ node: nodeId, inflight_ms: age }, "세션 신원 되채우기 — 앞 판이 끝나지 않는다. 그 판을 버리고 새 판을 돈다");
     }
     const seq = ++runSeq;

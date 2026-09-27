@@ -789,6 +789,28 @@ function applyBeat(c: NodeConn): void {
   const prev = states.get(k);
   if (!beatRefreshes(prev)) return;
   states.set(k, { ...prev!, ts: Date.now() });
+  replaySnapshotOnBeat(c.node.id, k, prev!.sessions);
+}
+
+/**
+ * 박동에도 스냅샷 구독자를 부른다 — 노드마다 `BEAT_REPLAY_MS` 에 한 번 (#4135, 2026-09-28).
+ *
+ * 왜: 노드는 세션 목록이 **바뀔 때만** 전체 상태를 보내고 그 밖에는 박동만 보낸다. 구독자(세션 신원 되채우기)의 «10분 뒤 다시 판정» ·
+ *  «실패 뒤 다시 시도» 는 다음 전체 상태가 와야 돌았다 — 목록이 안 바뀌는 컴퓨터에서는 그 «다음» 이 오지 않는다.
+ *  매니지드 실측: 게이트웨이가 다시 뜬 뒤 공용 맥미니의 세션 12개가 신원 없이 37분을 돌았다. 누군가 세션에 붙어 목록이 바뀐 뒤에야 심겼다.
+ * 구독자는 기억(이미 본 세션 · 방금 판정한 세션)으로 거르므로 바뀐 것이 없는 판은 DB 도 노드 RPC 도 부르지 않는다.
+ * 판정(probeSelfNodes)을 기다린 뒤에 부르는 순서는 applyState 와 같다.
+ */
+const BEAT_REPLAY_MS = 30_000;
+const beatReplayAt = new Map<string, number>();
+function replaySnapshotOnBeat(nodeId: string, k: string, sessions: SessionInfo[]): void {
+  if (!nodeSessionsHandler) return;
+  const now = Date.now();
+  if (now - (beatReplayAt.get(k) ?? 0) < BEAT_REPLAY_MS) return;
+  beatReplayAt.set(k, now);
+  void probeSelfNodes().then(() => {
+    if (nodeSessionsHandler) { try { void nodeSessionsHandler(nodeId, sessions); } catch { /* 구독자 사고가 박동을 막지 않는다 */ } }
+  });
 }
 
 function applyState(c: NodeConn, sessions: SessionInfo[], res?: NodeResources | null): NodeState {
@@ -807,6 +829,7 @@ function applyState(c: NodeConn, sessions: SessionInfo[], res?: NodeResources | 
     sessionHost: declaredSessionHost(c.node) || prev?.sessionHost === true,
   };
   states.set(k, st);
+  beatReplayAt.set(k, st.ts);   // 전체 상태가 구독자를 부른다 — 박동의 되부르기는 여기서부터 다시 센다
   // #2022 — 처음 보는 세션이 있으면 그 자리에서 기억한다(구독자가 판단·기록, 여기선 알리기만).
   //  best-effort: 실패해도 스냅샷 반영은 그대로 간다(이 함수는 라이브 목록의 정본을 세우는 자리다).
   //  ★ #2592 — **판정(probeSelfNodes)이 끝난 뒤에** 부른다. 종전엔 둘을 나란히 띄웠는데, 판정은 tmux 왕복이라
