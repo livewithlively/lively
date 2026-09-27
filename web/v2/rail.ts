@@ -34,7 +34,7 @@ import { aiLoginScopeHint } from './ai-login-scope.js';   // #2476 — «AI 로�
 import { inboxSection, openMemberModal } from './ws-people.js';   // #1875 — 구성원 모달·나에게 온 초대
 import { openCurrentWsSettings } from './ws-settings.js';   // #2188 — 워크스페이스 설정 모달
 import { wsStatus } from '../lib/ws-status.js';   // #4122 — 행 상태(온라인·오프라인·만드는 중)의 정본
-import { railLitKey } from '../lib/rail-lit.js';   // #3870 — 레일은 한 칸만 켠다(앱 화면에선 구역이 꺼진다)
+import { railLitKey, railRecentKeys } from '../lib/rail-lit.js';   // #3870 — 레일은 한 칸만 켠다(앱 화면에선 구역이 꺼진다) · 최근 칸은 누른다고 섞이지 않는다
 
 export type RailSection = 'home' | 'sess' | 'proj' | 'wiki';
 
@@ -205,15 +205,10 @@ function recentForRail(n: number): AppDef[] {
   //   읽어야 한다. 사본을 두면 워크스페이스 접미사가 한쪽에만 붙어 레일만 남의 워크스페이스 기록을 본다(#1875).
   try { const v = JSON.parse(localStorage.getItem(RECENT_STORE_KEY) || '[]'); if (Array.isArray(v)) keys = v.filter((x) => typeof x === 'string'); }
   catch (_) { /* 기록이 없으면 표 순서로 채운다 */ }
-  const pick: AppDef[] = [];
-  const take = (a: AppDef | undefined): void => {
-    if (!a || a.hidden || SEC_APP_KEYS.has(a.key) || order.includes(a.key) || pick.some((p) => p.key === a.key)) return;   // hidden(#2199): 문이 다른 곳에 있는 앱
-    if (a.tab && !navOn(a.tab)) return;
-    pick.push(a);
-  };
-  for (const k of keys) { if (pick.length >= n) break; take(APPS.find((a) => a.key === k)); }
-  for (const a of APPS) { if (pick.length >= n) break; take(a); }
-  return pick.slice(0, n);
+  //  hidden(#2199): 문이 다른 곳에 있는 앱 · 구역과 같은 문 · 이미 메인에 고정한 앱 · 꺼진 앱은 설 수 없다.
+  const eligible = APPS.filter((a) => !a.hidden && !SEC_APP_KEYS.has(a.key) && !order.includes(a.key) && (!a.tab || navOn(a.tab)));
+  //  칸 순서는 연 순서가 아니라 앱 표 순서다(#3870) — 누를 때마다 칸이 섞이면 방금 누른 자리에 딴 앱이 선다.
+  return railRecentKeys(keys, eligible.map((a) => a.key), n).map((k) => eligible.find((a) => a.key === k) as AppDef);
 }
 /** 지금 켜질 칸 하나(#3870) — 앱 화면이면 기억한 구역은 꺼진다. 레일과 구역 드롭다운이 같은 잣대를 쓴다. */
 function litKey(): string {
@@ -869,11 +864,42 @@ function swallowClick(): void {
 }
 
 // ── 그리기 ───────────────────────────────────────────────────────────────────
+//  ── 누르는 동안엔 다시 그리지 않는다(#3870) ──
+//  사이드바 폴링(8초)·실시간 스트림이 drawSide → drawRail 로 레일을 통째 갈아 끼운다. 누른 칸(mousedown)과 뗀 칸(mouseup)이
+//   서로 다른 요소가 되면 브라우저는 click 을 아무 데도 보내지 않는다 — 눌렀는데 아무 데도 안 간다.
+//   매니지드 실측: 최근 칸 40번 누름 중 1번이 그렇게 사라졌다(누르는 120ms 사이에 한 번 다시 그려짐).
+//  그래서 누르는 동안 온 그리기는 미뤘다가, 손을 뗀 **다음 틱**(click 이 이미 간 뒤)에 한 번 그린다.
+//  ⚠ pointerup 안에서 바로 그리면 안 된다 — click 은 pointerup 뒤에 오므로 그때 갈아 끼우면 똑같이 사라진다.
+let pressing = false;
+let drawOwed = false;
+let pressGuard: number | null = null;
+function releasePress(): void {
+  if (!pressing) return;
+  pressing = false;
+  if (pressGuard) { window.clearTimeout(pressGuard); pressGuard = null; }
+  if (drawOwed) { drawOwed = false; window.setTimeout(drawRail, 0); }
+}
+function onHostPress(e: PointerEvent): void {
+  if (!e.isPrimary) return;
+  pressing = true;
+  //  떼는 신호를 못 받는 드문 길(창 밖에서 떼기 등)에서 레일이 멈춰 서지 않게 — 오래 누르면 끌기(lift)라 그쪽 가드가 맡는다.
+  if (pressGuard) window.clearTimeout(pressGuard);
+  pressGuard = window.setTimeout(releasePress, 3000);
+}
+
 export function mountRail(el0: HTMLElement, h?: RailHooks): void {
   init();
   registerWorkspaceMenu(openWorkspacePopover);   // #1875 — 메뉴는 하나: 옛 스위처 메뉴는 레일이 있으면 닿지 않는다
+  if (host !== el0) {
+    host?.removeEventListener('pointerdown', onHostPress, true);
+    el0.addEventListener('pointerdown', onHostPress, true);
+  }
   host = el0;
   hooks = h || hooks;
+  window.removeEventListener('pointerup', releasePress, true);
+  window.removeEventListener('pointercancel', releasePress, true);
+  window.addEventListener('pointerup', releasePress, true);
+  window.addEventListener('pointercancel', releasePress, true);
   drawRail();
 }
 
@@ -881,6 +907,7 @@ export function drawRail(): void {
   if (!host) return;
   init();
   if (drag && drag.lifted) return;   // 끌던 중엔 다시 그리지 않는다 — DOM 을 갈아엎으면 손에 든 것이 사라진다(endDrag 가 그린다)
+  if (pressing) { drawOwed = true; return; }   // 누르는 중 — 갈아 끼우면 click 이 사라진다(위 releasePress 가 뗀 뒤 그린다)
   //  켜지는 칸은 **하나**다(#3870) — 앱 화면으로 가도 구역은 기억에 남지만(사이드바가 그 구역을 계속 그린다) 켜지진 않는다.
   //   종전엔 구역을 기억(section)만 보고 켜서, 홈에서 분류체계를 열면 홈과 분류체계가 함께 켜져 보였다.
   const lit = litKey();
