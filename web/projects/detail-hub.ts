@@ -107,7 +107,8 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
     const back = el('div', { class: 'pjh-mback' }, box);
     back.addEventListener('mousedown', (e: MouseEvent) => { if (e.target === back) closeToolModal(); });
     //  Esc — 위에 뜬 것(태스크 모달 · 팝오버)이 있으면 그쪽 몫이다.
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !document.querySelector('.pjv-tm-back, .pjv-menu')) closeToolModal(); };
+    //   · 이미 누가 그 Esc 를 썼으면(자료 부품의 «고르기 풀기» 등) 닫지 않는다 · 파일 뷰어(.ov-back)·우클릭 메뉴가 떠 있으면 그쪽 먼저.
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !e.defaultPrevented && !document.querySelector('.pjv-tm-back, .pjv-menu, .ov-back, .pn-ctx')) closeToolModal(); };
     const onHash = (): void => closeToolModal();
     document.addEventListener('keydown', onKey);
     window.addEventListener('hashchange', onHash);
