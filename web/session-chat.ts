@@ -1126,6 +1126,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         try { await navigator.clipboard.writeText(location.href); toast('링크를 복사했습니다.'); }
         catch { window.prompt('이 링크를 복사하세요:', location.href); }
       }),
+      //  세션 카드(#3870) 상태에서는 머리줄이 좁아 [자료] 단추를 숨긴다(45-v2-side-swap.css). 같은 입구를 여기 둔다.
+      opts.onOpenFiles && wrap.closest('.pn-body.cm')
+        ? row(opts.filesLabel || '자료', '이 세션의 자료를 사이드바에서 봅니다', '열기', () => opts.onOpenFiles!()) : null,
       opts.openHref ? row(opts.solo ? '전체 화면으로 열기' : '새 창으로 열기',
         opts.solo ? '사이드바까지 있는 라이블리 화면' : '이 세션만 담은 창(대화 + 발자취)', '열기 ↗',
         () => { window.open(opts.openHref!, '_blank', 'noopener'); }) : null,

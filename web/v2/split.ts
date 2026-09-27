@@ -23,6 +23,9 @@ export interface SplitOpts {
   onDrag?: (px: number) => void;
   /** 놓았을 때(키보드 조정·더블클릭 포함) — 자리바꿈 판정은 **놓는 순간에만** 한다(끌던 중에 바뀌면 손잡이가 손 밑에서 뒤집힌다). */
   onEnd?: (px: number) => void;
+  /** 끄는 중 상한을 넘긴 거리(px, 0 이상). 칸 크기는 상한에서 멈추지만 손은 더 갈 수 있다(#3870 세션 카드 전환 구간).
+   *  마우스로 끌 때만 부른다. 키보드 조정과 더블클릭은 상한을 넘지 않는다. onDrag 보다 먼저 부른다. */
+  onOver?: (overPx: number) => void;
 }
 
 const clamp = (v: number, a: number, b: number): number => Math.max(a, Math.min(b, v));
@@ -72,7 +75,9 @@ export function makeSplitter(o: SplitOpts): HTMLElement {
     h.setPointerCapture(e.pointerId);
     const move = (ev: PointerEvent): void => {
       const d = (o.axis === 'x' ? ev.clientX : ev.clientY) - start;
-      apply(base + d * growOf(), false);
+      const want = base + d * growOf();
+      apply(want, false);
+      o.onOver?.(Math.max(0, want - Math.max(o.min, maxOf())));
       o.onDrag?.(current());
     };
     const up = (): void => {
