@@ -22,11 +22,10 @@ import { listDismissedSessions, restoreDismissedSessions, type DismissedSession 
 import { TRASH_TABS, auditProjItems, bundleOpen, extraCountsOf, fileTrashUrl, groupByProject, knowItems, levelLabel, matchesQuery, pickInitialTab, srcItems, type DeletedEntry, type SrcItem, type TabCounts, type TrashTab, type TrashedFile } from '../lib/trash-tabs.js';   // #3778 — 휴지통 네 탭의 잣대(순수)
 import { invalidateTrashCounts, setTrashCounts } from './trash-counts.js';   // 사이드바 「휴지통 N」과 같은 값(#3778)
 import { groupPastByProject, isDismissedSess, pastNames, PAST_PERIODS, selectPast, standsInPast, type PastPeriod, type PastScope, type PastSessLike } from '../lib/past-sess.js';   // #3778 — 「지난 세션」의 잣대(순수)
-import { groupAllSess, mainGroupBy, ownerCounts, pickNowCards, selectAllSess, SESS_GROUP_BYS } from '../lib/sess-all.js';   // #4158 — [AI 세션] 전체 목록의 잣대(순수) · #4233 묶기 · 카드
+import { groupAllSess, mainGroupBy, nextSessSort, ownerCounts, selectAllSess, SESS_GROUP_BYS, sortAllSess, type SessSort, type SessSortKey } from '../lib/sess-all.js';   // #4158 — [AI 세션] 전체 목록의 잣대(순수) · #4233 묶기 · 열 머리 정렬
 import { sessGroupName, sessScope } from './sess-scope.js';   // #4233 2안 — 묶기 기준 · 고른 카드는 사이드바가 쥐고 여기선 읽기만
 import { SESS_STATES } from '../session-status.js';   // #4233 — 상태 묶기 · 카드의 순위
 import { showCtxMenu } from './ctx-menu.js';   // #4233 — 묶기 고르개 · 행 ⋯ 메뉴
-import { lastAsk } from './last-ask.js';   // #4233 — 「지금 볼 것」 카드의 마지막 말
 import { verdictStands, type SessRowVerdict } from './sess-visibility.js';   // #4158 — 홈 목록에서의 자리(판정은 셸이 홈과 같은 재료로 넘긴다)
 
 export interface BinHooks { onChanged?: () => void }
@@ -953,6 +952,8 @@ const allUi = {
   scopeKey: '',
   /** 접은 묶음(`기준:key`) · 펼친 «이름 없는 세션» 줄(`기준:key`). */
   closed: new Set<string>(), openUntitled: new Set<string>(),
+  /** 열 머리로 고른 정렬(null = 기본, 최근 활동 순). 묶는 기준과 따로 논다 — 묶음 안 줄 순서만 바꾼다. */
+  sort: null as SessSort | null,
 };
 
 const HARNESS_NAME: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', grok: 'Grok', opencode: 'OpenCode', antigravity: 'Antigravity', shell: '셸' };
@@ -982,6 +983,7 @@ function madeCell(ms: number): HTMLElement {
 const svgI = (d: string, cls = 'v2-sa-ic'): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, sv('path', { d }));
 const IC_SEARCH = 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z M21 21l-4.3-4.3';
 const IC_CHEV = 'M6 9l6 6 6-6';
+const IC_UP = 'M18 15l-6-6-6 6';
 const IC_MORE = 'M5 12h.01 M12 12h.01 M19 12h.01';
 const IC_PLUS = 'M12 5v14 M5 12h14';
 
@@ -1048,26 +1050,9 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
     hooks.onNew ? el('button', { class: 'v2-sa-new', type: 'button', title: '새 세션 — 홈에서 무엇이든 시키면 열려요', onclick: () => hooks.onNew?.() },
       svgI(IC_PLUS), el('span', { text: '새 세션' })) : null);
 
-  // ── 「지금 볼 것」 카드 ──
-  const cards = pickNowCards(inProj, stateRank, 4, now);
-  const nowSec = cards.length ? el('section', { class: 'v2-sa-now', 'aria-label': '지금 볼 것' },
-    el('div', { class: 'v2-sa-now-h' }, el('b', { text: '지금 볼 것' }),
-      el('span', { class: 'c', text: `확인 필요 ${byState('waiting')} · 작업 중 ${byState('busy')}` })),
-    el('div', { class: 'v2-sa-cards v2-sess-cards' }, ...cards.map((it) => {
-      const s = it.s;
-      const ask = lastAsk(s);
-      const said = ask && !ask.startsWith('<') ? ask : '';
-      const name = it.untitled ? `이름 없는 세션 · ${harnessName(s)}` : it.name;
-      const pn = projName(data, s.projectId) || '프로젝트 없음';
-      //  #4233(원준 2026-09-26) — 카드는 넉 줄만 든다: 상태와 시각 · 이름 한 줄 · 프로젝트 · 마지막 말 두 줄.
-      //   종전엔 이름도 두 줄로 접혀 한 장에 «…» 이 셋씩 떴다. 라벨(「마지막 말」)은 왼쪽 선으로 대신한다.
-      return el('button', { class: 'v2-sa-card v2-sess-card ' + (dotCls(s.stateKey) || 'plain'), type: 'button', 'data-sid': s.id,
-        title: `${name} · ${pn}`, onclick: () => open(s) },
-        el('div', { class: 'k' }, stateCell(s), el('span', { class: 'sp' }), el('span', { class: 'm', text: whenMs(Number(s.lastSeen) || 0) })),
-        el('div', { class: 't', text: name }),
-        el('div', { class: 'p' }, s.projectId ? folderIcon() : null, el('span', { text: pn })),
-        said ? el('p', { class: 'ask', text: said }) : null);
-    }))) : null;
+  //  「지금 볼 것」 카드 줄은 걷었다(원준 2026-09-27): «AI 세션의 목표는 기존에 만들었던 세션들에 대한 정보를 얻거나
+  //   거기로 가는 것이 우선인데, 실행 상태별로 보여주는 것은 이 탭의 취지와 안 맞는다». 상태로 좁히는 길은
+  //   도구줄의 상태 칩(확인 필요 · 작업 중)에 남아 있다.
 
   // ── 묶음별 목록 ──
   const cols = sc.proj === null;
@@ -1075,11 +1060,22 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
   //   종전엔 묶음 머리줄마다 열 이름을 되풀이했다. 클릭업 리스트 뷰와 같게 머리를 하나만 두고 **붙여 둔다**(sticky) —
   //   그래서 «맨 위만 두고 지우면 이상하다» 가 안 된다. 묶음 머리줄은 이름과 개수만 든다.
   //  「AI」 열은 걷었다(원준 «AI 는 일반적으로 하나만 쓴다»). 시각은 둘로 갈랐다 — 만든 때(절대) · 마지막 활동(상대).
+  //  ★ 열 머리를 누르면 그 열로 정렬한다(원준 2026-09-27 «클릭업 참고»). 오름차순 → 내림차순 → 기본.
+  //   ⚠ 묶는 기준(시간별 · 리스트별 …)은 **건드리지 않는다** — 묶음의 순서·구성은 그대로 두고 묶음 안 줄만 다시 센다.
+  const hc = (key: SessSortKey, label: string): HTMLElement => {
+    const on = ui.sort && ui.sort.key === key ? ui.sort : null;
+    return el('button', { class: 'hc' + (on ? ' on' : ''), type: 'button',
+      'aria-sort': on ? (on.dir === 'asc' ? 'ascending' : 'descending') : 'none',
+      title: on ? (on.dir === 'asc' ? `${label} 오름차순 — 다시 누르면 내림차순` : `${label} 내림차순 — 다시 누르면 기본 순서로`) : `${label} 순으로 묶음 안 줄을 정렬합니다`,
+      onclick: () => { ui.sort = nextSessSort(ui.sort, key); ui.shown = PAGE; repaint(); } },
+      el('span', { text: label }),
+      on ? svgI(on.dir === 'asc' ? IC_UP : IC_CHEV, 'v2-sa-ic sm') : null);
+  };
   const tableHead = (): HTMLElement => el('div', { class: 'v2-sa-head' + (cols ? '' : ' np') },
-    el('span', { class: 'hc', text: '세션' }),
-    ...(cols ? [el('span', { class: 'hc', text: '프로젝트' })] : []),
-    el('span', { class: 'hc', text: '상태' }), el('span', { class: 'hc', text: '사람' }),
-    el('span', { class: 'hc', text: '만든 때' }), el('span', { class: 'hc', text: '마지막 활동' }), el('span', {}));
+    hc('name', '세션'),
+    ...(cols ? [hc('proj', '프로젝트')] : []),
+    hc('state', '상태'), hc('owner', '사람'),
+    hc('made', '생성 시각'), hc('seen', '마지막 활동'), el('span', {}));
   const groupLabel = (key: string): string => sessGroupName(mby, key, data, ownerName);
   const rowOf = (it: Item): HTMLElement => {
     const s = it.s;
@@ -1116,11 +1112,15 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
     return row;
   };
   const list = el('div', { class: 'v2-sa-list', 'aria-label': 'AI 세션 목록' });
+  //  정렬이 읽는 값 — 표에 그려진 그 글자여야 사람이 «이 열 기준» 을 눈으로 확인할 수 있다.
+  const sortFields = (it: Item) => ({ name: it.name, proj: projName(data, it.projectId) || '', owner: ownerName(it.owner),
+    rank: stateRank(String(it.stateKey || '')), made: Number(it.s.createdAt) || 0, seen: Number(it.lastSeen) || 0 });
+  const ordered = (rs: readonly Item[]): Item[] => sortAllSess(rs, ui.sort, sortFields);
   let budget = ui.shown;
   //  묶지 않음 — 묶음 머리 없이 열 머리 한 줄, 이름 없는 세션도 접지 않고 전부 최근 순(«완전 raw 한 전체보기»).
   if (vis.length) list.append(tableHead());
   if (mby === 'none' && vis.length) {
-    for (const it of vis) { if (budget-- <= 0) break; list.append(rowOf(it)); }
+    for (const it of ordered(vis)) { if (budget-- <= 0) break; list.append(rowOf(it)); }
   }
   for (const g of mby === 'none' ? [] : groupAllSess(vis, mby, now, stateRank)) {
     if (budget <= 0) break;
@@ -1131,8 +1131,9 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
         el('span', { class: 'car' + (closed ? ' shut' : '') }, svgI(IC_CHEV, 'v2-sa-ic sm')),
         el('span', { class: 'pill', text: groupLabel(g.key) }), el('span', { class: 'n', text: String(g.rows.length) }))));
     if (closed) continue;
-    const named = g.rows.filter((it) => !it.untitled);
-    const unnamed = g.rows.filter((it) => it.untitled);
+    const rows = ordered(g.rows);
+    const named = rows.filter((it) => !it.untitled);
+    const unnamed = rows.filter((it) => it.untitled);
     for (const it of named) { if (budget-- <= 0) break; list.append(rowOf(it)); }
     if (unnamed.length && budget > 0) {
       const uOpen = ui.openUntitled.has(gk);
@@ -1163,7 +1164,6 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
       el('span', { class: 'desc', text: vis.length === inProj.length ? `${inProj.length}개` : `${vis.length}개 표시 · 전체 ${inProj.length}` })),
     tools,
     el('div', { class: 'v2-sa-body' },
-      nowSec,
       list,
       left > 0 ? el('button', { class: 'btn-text v2-bin-more', type: 'button', text: `외 ${left}개 더 보기`, onclick: () => { ui.shown += PAGE; repaint(); } }) : null,
       !vis.length ? el('p', { class: 'v2-bin-empty', text: empty }) : null,

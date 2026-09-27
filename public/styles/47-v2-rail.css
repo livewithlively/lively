@@ -499,25 +499,6 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-sa-card .ask b { font-weight: 700; color: var(--ink-sub); }
 .v2-sa-card .p { margin-top: auto; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* #4233(원준 2026-09-26 «너무 안 예뻐 … …이 너무 많고 글만 많아») — [AI 세션]의 「지금 볼 것」 카드만 다른 붓을 쓴다.
-   한 장은 넉 줄이다: 상태와 시각 / 이름 한 줄 / 프로젝트 / 마지막 말 두 줄. 종전엔 이름까지 두 줄로 접혀
-   한 장에 «…» 이 셋씩 떴다. 그림을 더 넣지 않고 왼쪽 3px 선 하나가 상태를 말한다.
-   ⚠ 위키의 「새로 들어온 지식」 카드는 같은 .v2-sa-card 를 쓴다 — 그래서 여기는 .v2-sess-card 로만 건다. */
-.v2-sess-cards { grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 12px; }
-.v2-sess-card { position: relative; gap: 7px; min-height: 126px; padding: 14px 16px 15px; border-radius: 12px; overflow: hidden; transition: border-color .14s, box-shadow .14s, transform .14s; }
-.v2-sess-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--line-net); }
-.v2-sess-card.busy::before { background: var(--blue); }
-.v2-sess-card.wait::before { background: var(--warn); }
-.v2-sess-card.done::before { background: var(--ok); }
-.v2-sess-card:hover { border-color: color-mix(in srgb, var(--blue) 34%, var(--line-net)); box-shadow: 0 6px 16px color-mix(in srgb, var(--shadow-ink) 8%, transparent); transform: translateY(-1px); }
-.v2-sess-card:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.v2-sess-card .m { white-space: nowrap; }
-.v2-sess-card .t { font-size: 15px; line-height: 1.4; color: var(--ink); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.v2-sess-card .p { display: flex; align-items: center; gap: 6px; margin-top: 0; min-width: 0; white-space: normal; }
-.v2-sess-card .p span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.v2-sess-card .p .v2-bin-fold { flex: none; color: var(--muted-2); }
-.v2-sess-card .ask { margin: 2px 0 0; padding-left: 9px; border-left: 2px solid var(--line-net); color: var(--ink-sub); }
-
 .v2-sa-st { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
 .v2-sa-st.busy { background: var(--bg-tint-2); color: var(--blue); }
 .v2-sa-st.wait { background: var(--warn-bg); color: var(--warn-ink); box-shadow: inset 0 0 0 1px var(--warn-line); }
@@ -531,7 +512,14 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
    묶음마다 되풀이하면 리스트별 묶기에서 화면 절반이 열 제목이 된다. */
 .v2-sa-head { position: sticky; top: 0; z-index: 3; height: 34px; background: var(--bg); border-bottom: 1px solid var(--line); }
 .v2-sa-head .hc { font-size: 12px; font-weight: 700; color: var(--muted); }
+/* 열 머리는 누르면 그 열로 정렬한다(#4233 3판, 클릭업 리스트 뷰). 화살표가 지금 방향을 말한다. */
+.v2-sa-head button.hc { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 6px; margin-left: -6px; border: 0; border-radius: 7px; background: none; font: inherit; font-size: 12px; font-weight: 700; color: var(--muted); cursor: pointer; text-align: left; min-width: 0; }
+.v2-sa-head button.hc > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v2-sa-head button.hc:hover { background: var(--bg-tint-2); color: var(--ink-sub); }
+.v2-sa-head button.hc.on { color: var(--blue); }
+.v2-sa-head button.hc.on .v2-sa-ic { color: var(--blue); }
 .v2-sa-head .hc:first-child { padding-left: 34px; }
+.v2-sa-head button.hc:first-child { padding-left: 34px; margin-left: 0; }
 /* 묶음 머리줄 — 이름과 개수만. 열 격자를 쓰지 않는다. */
 .v2-sa-gh.plain { display: flex; height: 40px; margin-top: 14px; }
 .v2-sa-gh { height: 44px; margin-top: 10px; border-bottom: 1px solid var(--line-row); }
