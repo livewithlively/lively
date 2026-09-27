@@ -382,8 +382,7 @@ function projectKnowledgeCard() {
 // 탭/단계 아이콘 — feather 스타일 라인 아이콘(taskmodal 의 sv 패턴 재사용). 무채 스트로크, currentColor 상속.
 const GUIDE_ICONS = {
   external: [['path', { d: 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6' }], ['polyline', { points: '15 3 21 3 21 9' }], ['line', { x1: 10, y1: 14, x2: 21, y2: 3 }]],
-  //  #4233: 집 · 책 · 물음표는 레일 · 앱 화면과 같은 그림(lib/icon-paths.ts). 물음표는 이 화면 머리(「사용 가이드」)가 쓴다.
-  home: [['path', { d: ICONS.home }]],
+  //  #4233: 책 · 물음표는 레일 · 앱 화면과 같은 그림(lib/icon-paths.ts). 물음표는 이 화면 머리(「사용 가이드」)가 쓴다.
   help: [['path', { d: ICONS.learn }]],
   'play-circle': [['circle', { cx: 12, cy: 12, r: 10 }], ['polygon', { points: '10 8 16 12 10 16 10 8' }]],
   terminal: [['polyline', { points: '4 17 10 11 4 5' }], ['line', { x1: 12, y1: 19, x2: 20, y2: 19 }]],

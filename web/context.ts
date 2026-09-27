@@ -293,8 +293,8 @@ async function paintStageHealth(view: HTMLElement): Promise<void> {
 }
 
 function ctxAppIcon(): SVGElement {
-  const n = sv('svg', { class: 'pjv-crumb-ic ctx-crumb-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  n.append(sv('path', { d: ICONS.ctx }));   // #4233: 레일 · 앱 화면과 같은 그림(왼쪽 세 선이 오른쪽 한 선으로 모인다)
+  const n = sv('svg', { class: 'pjv-crumb-ic ctx-crumb-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('path', { d: ICONS.ctx }));   // #4233: 레일 · 앱 화면과 같은 그림(왼쪽 세 선이 오른쪽 한 선으로 모인다). 획은 CSS(.ctx-crumb-ic)가 토큰으로 정한다
   return n;
 }
 

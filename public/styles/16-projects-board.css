@@ -193,7 +193,9 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 .inj-piece-body { flex: 1 1 auto; min-width: 0; }
 .inj-piece-label { font-weight: 600; color: var(--ink); }
 .inj-custom { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
-.inj-custom-row { display: flex; align-items: baseline; gap: 8px; padding: 4px 8px; border-left: 2px solid var(--line-net); }
+.inj-custom-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; padding: 4px 8px; border-left: 2px solid var(--line-net); min-width: 0; }
+/* 훅의 matcher 는 띄어쓰기 없는 긴 글(Task|Agent|Read|…)이다. 칸 안에서 줄을 바꾸지 않으면 좁은 화면이 가로로 넘친다(#4233). */
+.inj-custom-row .mini-meta { min-width: 0; overflow-wrap: anywhere; }
 .inj-preview { margin-top: 8px; }
 
 /* ════ 팀 기능(2026-06-26) — 사이드바 공간 통합(우리 팀 접이식) + 분류체계 오너 + 팀 관리 ════ */
