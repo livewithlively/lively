@@ -55,6 +55,7 @@ import { type CtxRow } from './ctx-menu.js';   // #3784 우클릭 메뉴 행 타
 import { refreshStatusCount, switcherTop } from './switcher.js';   // #1875 — refreshStatusCount: 문패 배지는 인원 수에서 나온다
 import { openSectionMenu, railIsHidden, sectionDef, stackTile, type RailSection } from './rail.js';   // #2016 — 무엇을 그릴지는 레일이 고른 구역이 정한다
 import { ICONS, icon } from './icons.js';   // #2016 — 선 아이콘 한 벌
+import { iconPath } from '../lib/icon-paths.js';
 import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
 
@@ -498,8 +499,9 @@ const PIN_BODY = 'M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 
 
 function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'ask' | 'home' | 'inbox' | 'link' | 'archive' | 'trash' | 'sess', cls: string): SVGElement {
   //  #4233: 그림은 lib/icon-paths.ts 한 벌에서만 온다. 여기 있던 예비 표는 걷었다(표에 없으면 다른 모양이 나오던 길).
+  //   표에 없는 이름은 icon() 과 같이 「앱」 그림으로 떨어진다(d 가 빈 path 를 그리지 않는다).
   //   열린 폴더는 접힌 폴더와 같은 자리(x 3~21 · y 5~20)를 쓰고 왼쪽 세로선까지 그린다. 16px 에서 납작하게 잘려 보이지 않는다.
-  return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, sv('path', { d: ICONS[kind] }));
+  return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, sv('path', { d: iconPath(kind) }));
 }
 
 let appListEl: HTMLElement | null = null;

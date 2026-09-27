@@ -348,7 +348,7 @@ a.ctx-preview-t:hover { color: var(--blue); }
 .ctx-board .ctx-body { max-width: none; padding: 6px 0 28px; }
 .ctx-board .ctx-body > .section-head:first-child { margin-top: 8px; }
 .ctx-crumb-leaf { display: inline-flex; align-items: center; gap: 7px; }
-.ctx-crumb-ic { width: 17px; height: 17px; color: var(--ink-sub); flex: none; }
+.ctx-crumb-ic { width: 17px; height: 17px; color: var(--ink-sub); flex: none; stroke-width: var(--ic-stroke); }
 .ctx-crumb-sub { font-size: 12.5px; color: var(--muted); margin-left: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .ctx-vtabs { gap: 0; }
@@ -524,6 +524,8 @@ a.ctx-preview-t:hover { color: var(--blue); }
 .cxm-svts { display: grid; grid-template-columns: repeat(3, 30px); gap: 8px; justify-content: center; align-content: center; height: 100%; }
 .cxm-svts .svc-tile { width: 30px; height: 30px; border-radius: 9px; }
 .cxm-svts .svc-tile svg { width: 18px; height: 18px; }
+/* 빈 글이 든 칸은 격자를 푼다(#4233). 세 칸 격자(30px)에 글을 넣으면 한 칸에 갇혀 한 낱말씩 줄이 바뀐다. */
+.cxm-svts:has(.cxm-empty) { display: flex; align-items: center; justify-content: center; padding: 0 6px; }
 /* 실물 ② 자료 — 출처별 원문 수(자료 앱 나무와 같은 숫자). */
 .cxm-srcs { display: flex; flex-direction: column; gap: 4px; justify-content: center; height: 100%; }
 .cxm-src-row { display: flex; align-items: center; gap: 7px; height: 22px; padding: 0 6px; min-width: 0;

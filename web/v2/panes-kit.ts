@@ -5,7 +5,7 @@ import { showCtxMenu, type CtxOpts, type CtxRow } from './ctx-menu.js';   // #37
 import { TOKEN_KEY, el, sv } from '../core.js';
 import { EMBEDDED } from './embed.js';
 import { tabNum, type TabKey } from '../lib/tab-key.js';
-import { ICONS } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
+import { iconPath } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 
 // ── 아이콘(스트로크 SVG) ──────────────────────────────────────────────────────
 //  #4233: 그림은 lib/icon-paths.ts 한 벌에서 온다. 여기 있던 표는 그리로 옮겼다(같은 뜻이 두 모양으로 갈리지 않게).
@@ -17,9 +17,9 @@ const PN_NAME: Record<string, string> = {
   spark: 'pn-spark', doc: 'pn-doc', clock: 'pn-clock', gear: 'pn-gear', share: 'pn-share',
 };
 /** 우측 사이드바가 부르는 이름 → 그림 표(ICONS)의 이름. 시험이 이 함수로 이름이 표에 있는지 본다. */
-export const pnIconName = (name: string): string => PN_NAME[name] || name;
+export const pnIconName = (name: string): string => (Object.prototype.hasOwnProperty.call(PN_NAME, name) ? PN_NAME[name] : name);
 export function pnIcon(name: string, cls = 'pn-i'): SVGElement {
-  return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, sv('path', { d: ICONS[pnIconName(name)] || ICONS['pn-doc'] }));
+  return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, sv('path', { d: iconPath(pnIconName(name), 'pn-doc') }));
 }
 
 

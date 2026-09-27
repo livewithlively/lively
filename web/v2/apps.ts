@@ -163,7 +163,7 @@ export function appIcon(icon: AppDef['icon'], cls?: string): SVGElement {
 
 // ── 런치패드 아이콘 — 유리 (#1841) ── 정의는 ./glass-icon.ts(리프)로 옮겼다(#3830, 맥락 관리 표지가 같은 문패를 쓴다).
 //  여기서는 받아서 다시 내보낸다 — appGlassIcon 을 이 파일에서 import 하던 자리(views.ts)가 그대로 살아 있다.
-import { appGlassIcon } from './glass-icon.js';
+import { appGlassIcon, builtinAppIcon } from './glass-icon.js';
 export { appGlassIcon };
 
 // ── 런치패드 오버레이 ──
@@ -171,10 +171,7 @@ export { appGlassIcon };
 //   · 화면 앱(APPS 표) 클릭 = #/app/<key> 로 이동(가운데 iframe).
 //   · 설치된 세션 앱(org_app, #1780) 클릭 = openAppSession → 앱 세션을 열고 그 대화 화면으로. 동의(grant)가 없으면
 //     그때 동의 창이 뜬다. 세션 앱은 비동기로 불러와(listSessionApps) 도착하면 격자에 덧그린다(없으면 화면앱만 보인다).
-//  설치된 앱(org_app) 중 **우리가 만든 빌트인**은 제 아이콘을 갖는다 — 남의 앱만 종류(앱/세션 앱)로 뭉뚱그린다.
-//   이 표가 없으면 빌트인들이 런치패드에서 전부 같은 그림으로 서서 어느 것이 무엇인지 못 고른다.
-//   (자료는 이제 APPS 표의 native 앱이라 이 길로 오지 않는다 — 위 session 필터가 뺀다.)
-const BUILTIN_ICON: Record<string, AppDef['icon']> = { browser: 'web' };
+//  설치된 앱(org_app) 중 **우리가 만든 빌트인**은 제 아이콘을 갖는다(glass-icon.ts builtinAppIcon). 남의 앱만 종류(앱/세션 앱)로 뭉뚱그린다.
 
 let padEl: HTMLElement | null = null;
 export function openLaunchpad(): void {
@@ -212,7 +209,7 @@ export function openLaunchpad(): void {
           if (a.system?.route) { location.hash = a.system.route; return; }
           if (hasUi || a.system) void openInstalledApp(a); else void openAppSession(a.id, { title: a.title });
         } },
-        el('span', { class: 'v2-pad-ico' }, appGlassIcon(BUILTIN_ICON[a.id] || (hasUi ? 'liv' : 'term'))),
+        el('span', { class: 'v2-pad-ico' }, appGlassIcon(builtinAppIcon(a.id, hasUi))),
         el('b', { text: a.title }),
         el('span', { class: 'v2-pad-badge', text: isScreen ? '앱' : '세션 앱' }));
     });

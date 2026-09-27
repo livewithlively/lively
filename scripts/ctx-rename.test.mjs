@@ -248,15 +248,6 @@ function titlesOf(src, name) {
 }
 
 // ── R. 저장소 ────────────────────────────────────────────────────────────────
-function walk(dir) {
-  const out = [];
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const p = join(dir, e.name);
-    if (e.isDirectory()) { if (e.name !== "node_modules") out.push(...walk(p)); }
-    else if (/\.tsx?$/.test(e.name) && !/\.d\.ts$/.test(e.name)) out.push(p);
-  }
-  return out;
-}
 const listOf = (files) => {
   const found = [];
   for (const f of files) {
@@ -266,7 +257,7 @@ const listOf = (files) => {
   }
   return found;
 };
-const webFiles = walk(join(root, "web"));
+const webFiles = walkTs(join(root, "web"));
 ok(webFiles.length > 50, `R0 web/ 의 소스를 찾았다(${webFiles.length}개)`);
 const webFound = listOf(webFiles);
 ok(webFound.length === 0, `R1 web/ 화면 글에 옛 이름 0건(지금 ${webFound.length}건)`, webFound.join("\n"));
