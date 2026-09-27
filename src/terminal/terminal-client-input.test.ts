@@ -311,10 +311,23 @@ t("B1 앱 드래그 관측 후 Cmd+C → ^C 정확히 1회", async () => {
   assert.equal(h.term._keyHandler(h.kev({ key: "c", metaKey: true })), false);
   assert.equal(cnt03(h), 1);
 });
+t("B1b Windows 앱 드래그 관측 후 Ctrl+C → Cmd+C와 같은 안전 복사 브리지", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard(); h.term.modes.mouseTrackingMode = "any";
+  drag(h);
+  assert.equal(h.term._keyHandler(h.kev({ key: "c", ctrlKey: true })), false);
+  assert.equal(cnt03(h), 1);
+});
 t("B2 관측 없음 + Cmd+C → ^C 0건(앱 종료 사고 차단)", async () => {
   const h = await makeCtx();
   h.mod.setupClipboard(); h.term.modes.mouseTrackingMode = "any";
   assert.equal(h.term._keyHandler(h.kev({ key: "c", metaKey: true })), false);
+  assert.equal(cnt03(h), 0);
+});
+t("B2b Windows 관측 없음 + Ctrl+C는 중단 키로 그대로 둔다", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard(); h.term.modes.mouseTrackingMode = "any";
+  assert.equal(h.term._keyHandler(h.kev({ key: "c", ctrlKey: true })), true);
   assert.equal(cnt03(h), 0);
 });
 t("B3 드래그 후 일반 타이핑 → 관측 해제 → ^C 0건", async () => {
@@ -597,7 +610,7 @@ t("O1 OSC52 수신(비사파리) → 비동기 쓰기에 그 텍스트", async (
   assert.deepEqual(h.writeTexts, ["복사텍스트"]);
 });
 t("O2 사파리: 복사 의도 제스처의 사전 커밋이 OSC52 로 resolve, 직접 쓰기 없음", async () => {
-  const h = await makeCtx({ safari: true, writeTextOk: false });
+  const h = await makeCtx({ safari: true, mac: true, writeTextOk: false });
   h.mod.setupClipboard(); h.mod.setupOscClipboard();
   h.term.modes.mouseTrackingMode = "any";
   drag(h);
