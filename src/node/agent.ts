@@ -18,7 +18,8 @@ import { reconnectDelayMs } from "./reconnect-delay.js";   // #1865 — 재연�
 import {
   listSessionsRaw, killEmptyTmuxServer, sessionDir, sharedRoot,
 } from "../terminal/terminal-sessions.js";
-import { sweepSessionTokenFiles } from "../terminal/session-token-file.js";   // #4135 — 죽은 세션의 세션 토큰 파일 정리
+import { sweepSessionTokenFiles, sessionTokenFileIds, envCarriesSessionToken, sessionTokenPresence } from "../terminal/session-token-file.js";   // #4135 — 죽은 세션의 세션 토큰 파일 정리 · 세션별 신원 보유 보고
+import { tmux } from "../terminal/tmux-exec.js";   // #4135 — pane env 에 세션 신원이 실려 떴는지(세션당 한 번)
 import { type AttachSocket } from "../terminal/terminal-pty.js";
 // #2600 T1 — 세션을 소유하는 살림과 세션 op 는 **코어 한 곳**이다. 이 파일에 남는 것은 WS 중계 전송뿐.
 import { SessionHost } from "../terminal/session-host.js";
@@ -439,6 +440,10 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
 }
 
 let attempt = 0;
+
+/** 세션 id → pane env 에 세션 신원이 실려 떴나(#4135). 세션 수명 동안 안 바뀌므로 한 번만 묻는다. 재연결해도 유지한다. */
+const envTokenKnown = new Map<string, boolean>();
+const ENV_PROBE_PER_TICK = 6;
 function connect(): void {
   const url = nodeWsUrl(GW_URL);
   const ws = new WebSocket(url, { headers: { Authorization: `Bearer ${TOKEN}` }, handshakeTimeout: 10_000 });
@@ -453,6 +458,29 @@ function connect(): void {
   ws.on("ping", () => { lastBeat = Date.now(); });
   ws.on("pong", () => { lastBeat = Date.now(); });
 
+  // ── 세션별 신원 보유(#4135, 2026-09-28) ──────────────────────────────────────
+  //  파일은 매 판 readdir 한 번. pane env 는 세션이 뜰 때 정해져 안 바뀌므로 **세션당 한 번만** 묻고 기억한다
+  //  (3초마다 세션 수만큼 tmux 를 부르지 않는다 — 한 판에 새로 묻는 것은 ENV_PROBE_PER_TICK 개까지).
+  //  못 물었으면(tmux 실패) 기억하지 않는다 = 그 세션은 «모름» 으로 올라가고 다음 판에 다시 묻는다.
+  const withTokenPresence = async <T extends { id: string }>(list: T[]): Promise<Array<T & { hasSessionToken?: boolean }>> => {
+    const files = await sessionTokenFileIds().catch(() => new Set<string>());
+    const live = new Set(list.map((x) => x.id));
+    for (const id of [...envTokenKnown.keys()]) if (!live.has(id)) envTokenKnown.delete(id);
+    let probes = 0;
+    const out: Array<T & { hasSessionToken?: boolean }> = [];
+    for (const row of list) {
+      let env = envTokenKnown.get(row.id);
+      if (env === undefined && !files.has(row.id) && probes < ENV_PROBE_PER_TICK) {
+        probes++;
+        try { env = envCarriesSessionToken(await tmux(["show-environment", "-t", row.id])); envTokenKnown.set(row.id, env); }
+        catch { env = undefined; }
+      }
+      const has = sessionTokenPresence(files.has(row.id), env);
+      out.push(has === undefined ? row : { ...row, hasSessionToken: has });
+    }
+    return out;
+  };
+
   const pushState = async (force = false): Promise<void> => {
     if (ws.readyState !== WebSocket.OPEN) return;
     try {
@@ -464,9 +492,12 @@ function connect(): void {
       //   서버 부재(«확답으로 없음»)는 strict 여도 빈 배열이라, 세션이 정말 0개인 노드는 종전 그대로다.
       //  ⇒ 못 봤으면 **아무것도 올리지 않는다.** 스냅샷이 낡으면 게이트웨이가 스스로 소유를 되찾는다(fail-closed).
       //   이 레포가 반복해 못박은 «못 봤다 ≠ 없다» 교리(#835·#1251·#2154·#2544)의 이 자리 판이다.
-      const [sessions, res] = await Promise.all([listSessionsRaw({ strict: true }), sampleResources(sharedRoot().base)]);
-      //  #4135 — 확답으로 얻은 목록이니 그 밖의 세션 토큰 파일(~/.lively/session-tokens)은 죽은 세션의 것이다 — 걷는다(best-effort).
-      void sweepSessionTokenFiles(new Set(sessions.map((s) => s.id))).catch(() => { /* 다음 판에 다시 */ });
+      const [rawSessions, res] = await Promise.all([listSessionsRaw({ strict: true }), sampleResources(sharedRoot().base)]);
+      //  #4135 — 목록 밖의 세션 토큰 파일(~/.lively/session-tokens)은 죽은 세션의 것이다 — 걷는다(best-effort).
+      //   ⚠ 빈 목록으로는 걷지 않는다(sweepSessionTokenFiles 머리말 — tmux 가 잠깐 못 받은 판에 전부 지워졌다).
+      void sweepSessionTokenFiles(new Set(rawSessions.map((s) => s.id))).catch(() => { /* 다음 판에 다시 */ });
+      //  #4135 — 세션마다 «세션 신원을 갖고 있나» 를 실어 올린다. 게이트웨이는 이 값으로만 «발급은 했는데 거기엔 없다» 를 안다.
+      const sessions = await withTokenPresence(rawSessions);
       const sesKey = JSON.stringify(sessions);
       //  ★ 침묵하지 않는다 (#2600 T2 d6). 종전엔 «지난번과 같으면» 아무것도 안 보냈는데, 게이트웨이의 목록
       //   소유 판정은 **스냅샷의 나이**를 보므로(12초) 한가한 테넌트에서는 소유가 영영 안 넘어갔다. 실을 내용이

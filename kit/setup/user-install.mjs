@@ -567,6 +567,21 @@ function codexAutoApproveLines(includeLocal = true) {
 //  ⚠ env.LIVELY_HARNESS=codex 가 **필수**다 — 프록시의 x-lively-harness 기본값이 "claude-code" 라(UA 가 프록시
 //   것이 되므로 명시 stamp 가 유일한 신호) 이걸 빼면 게이트웨이가 코덱스 세션을 claude 로 집계한다(#182 작업자 축).
 //  프록시 파일이 없거나(구버전 번들·CLI 미설치) 롤백 스위치(~/.lively/mcp-transport=http)면 종전 http 직결로 떨어진다.
+//  ★ env_vars — **codex 는 MCP 서버에 제 환경을 물려주지 않는다**(#4135, 2026-09-28 실측 · codex-cli 0.157.1).
+//   위 ①③ 은 «프록시가 상속한 env 를 읽는다» 를 전제했는데, 그 전제가 codex 에서는 거짓이었다: 도는 프록시의 환경에
+//   LIVELY_SESSION_ID 도 LIVELY_MCP_TOKEN 도 없었다(같은 기계의 claude 자식에는 있다). 그래서 codex 세션의 MCP 는
+//   세션 신원이 있든 없든 **그 컴퓨터에 깔린 로그인**으로 나가고 x-lively-session 도 못 실었다 — 공용 컴퓨터에서 다른 사람이
+//   연 codex 세션의 기록이 컴퓨터를 등록한 사람 이름으로 남았다(프로젝트 4135 작업 기록 #2827).
+//   `env_vars` 는 «부모 환경에서 이 이름들만 넘겨라» 는 codex 설정이다. 넘기는 것은 이름뿐이라 설정 파일에 값이 남지 않는다.
+//   · LIVELY_SESSION_ID — 어느 세션에서 온 요청인가(x-lively-session) · 세션 신원 파일을 찾는 열쇠
+//   · LIVELY_MCP_TOKEN — 세션을 연 사람 앞으로 발급된 MCP 신원
+//   · LIVELY_MODE — 읽기전용/인코그니토(x-lively-mode) · LIVELY_HOME·LIVELY_APP_ID — 앱 세션의 제 자리
+//   ⚠ LIVELY_TOKEN 은 넘기지 않는다 — pane 의 그 값은 훅 토큰(세션 최소권한)이라 MCP 가 집으면 권한이 틀린다(lively-mcp-local 머리말).
+//   ⚠ codex 의 공용 백그라운드 서버(app-server)가 띄운 MCP 는 세션의 자식이 아니라 이 길로도 세션 환경이 닿지 않는다 —
+//     그쪽은 남은 구멍이다(세션마다 도는 TUI 의 MCP 는 닿는다).
+const CODEX_MCP_ENV_VARS = ["LIVELY_SESSION_ID", "LIVELY_MCP_TOKEN", "LIVELY_MODE", "LIVELY_HOME", "LIVELY_APP_ID"];
+const codexEnvVarsLine = () => `env_vars = ${JSON.stringify(CODEX_MCP_ENV_VARS)}`;
+
 function codexLivelyServerLines(mcpUrl) {
   const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
   const proxy = join(LIVELY, "lib", "lively-mcp-gateway.mjs");
@@ -576,7 +591,8 @@ function codexLivelyServerLines(mcpUrl) {
     return [
       "[mcp_servers.lively]",
       `command = ${JSON.stringify(fwd(shim))}`,
-      'args = ["mcp"]', "",
+      'args = ["mcp"]',
+      codexEnvVarsLine(), "",
       "[mcp_servers.lively.env]",
       'LIVELY_HARNESS = "codex"', "",
     ];
@@ -603,7 +619,8 @@ function codexLocalServerLines() {
   return [
     "[mcp_servers.lively-local]",
     `command = ${JSON.stringify(fwd(shim))}`,
-    'args = ["mcp-local"]', "",
+    'args = ["mcp-local"]',
+    codexEnvVarsLine(), "",   // 로컬 조작 MCP 도 게이트웨이를 부른다(레포 주소 조회 등) — 같은 신원으로 나가야 한다
   ];
 }
 
