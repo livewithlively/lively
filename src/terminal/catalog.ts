@@ -373,6 +373,13 @@ export function automationFlags(
 
 export interface SessionInfo {
   /**
+   * 이 세션이 **세션 신원(훅·MCP 토큰)을 갖고 있나** — 노드가 자기 자리에서 보고 올린다(#4135, 2026-09-28).
+   *  true = 신원 파일이 있거나 pane env 에 실려 떴다 · false = 둘 다 없다(확답) · 없음 = 모른다(옛 번들 · 아직 못 물어봄).
+   *  게이트웨이의 되채우기가 읽는다: «발급한 적은 있는데 그 컴퓨터에는 없다» 를 이 값으로만 알 수 있다
+   *  (node-session-token-backfill.ts — 종전엔 발급 여부만 봐서, 파일이 사라진 세션에 다시 보내지 않았다).
+   */
+  hasSessionToken?: boolean;
+  /**
    * 이 세션이 **어느 모드로 떴나**(#2439) — 없으면 배포 기본을 따른다.
    *  ⚠ 화면(runtimeMode)과 배달(deliver-prompt)이 **같은 값**을 봐야 한다. 갈리면 pane 은 셸인데
    *   대화는 아무도 안 받는 세션이 된다(2026-09-01 실측).

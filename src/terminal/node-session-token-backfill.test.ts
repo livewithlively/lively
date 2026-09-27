@@ -34,7 +34,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  BACKFILL_RETRY_AFTER_MS, BACKFILL_HAVE_RETRY_MS, BACKFILL_RECHECK_MS, createNodeSessionTokenBackfill,
+  BACKFILL_RETRY_AFTER_MS, BACKFILL_HAVE_RETRY_MS, BACKFILL_RECHECK_MS, BACKFILL_REISSUE_RETRY_MS, createNodeSessionTokenBackfill,
 } from "./node-session-token-backfill.js";
 import type { BackfillDeps } from "./node-session-token-backfill.js";
 import type { SessionInfo } from "./catalog.js";
@@ -62,6 +62,9 @@ const ZERO = { minted: 0, skipped: 0, revoked: 0, failed: 0 };
 /** 가짜 스냅샷 항목 — 노드가 보고한 것. `owner` 는 **노드의 주장**이라 사양상 아무 영향이 없어야 한다. */
 const sess = (id: string, owner = OWNER): SessionInfo =>
   ({ id, owner, label: "t", harness: "claude" } as unknown as SessionInfo);
+/** 노드가 «이 세션엔 세션 신원이 있다/없다» 를 함께 보고한 항목(D19 — 2026-09-28). */
+const sessTok = (id: string, has: boolean | undefined, owner = OWNER): SessionInfo =>
+  ({ id, owner, label: "t", harness: "claude", ...(has === undefined ? {} : { hasSessionToken: has }) } as unknown as SessionInfo);
 
 type MintMode = "ok" | "null" | "hookOnly" | "mcpOnly" | "reject" | "throwSync";
 type PushMode = "ok" | "reject" | "throwSync";
@@ -1072,4 +1075,87 @@ test("D18-5 백오프(13)는 recheckMs 와 무관하다 — recheckMs 가 지나
   k.reset(); k.clock += 50_001;
   assert.deepEqual(await bf.run(NODE, [sess(A)]), { ...ZERO, minted: 1 });
   assertOwnersAsked(k, [A]);
+});
+
+// ── D19 (2026-09-28) — 발급한 적이 있어도, 그 컴퓨터에 없다고 노드가 확답하면 다시 굽는다 ─────────────────────
+//  배경: 공용 맥미니의 원준 세션 10개 — 토큰은 DB 에 살아 있는데(haveTokens 에 있다) 노드의 신원 파일이 사라져 있었다.
+//   종전 규칙 11 은 «haveTokens 에 있으면 건너뛴다» 뿐이라 그 세션들은 영영 그 컴퓨터에 깔린 로그인으로 기록을 남겼다.
+//  19-1. haveTokens 에 있고 `hasSessionToken === false` 이고 `deps.canReissue(nodeId)` 가 true 면 다시 굽는다(mint → push, minted+1).
+//  19-2. `hasSessionToken` 이 true 이거나 **없으면**(옛 번들 · 아직 못 물어봄) 종전대로 건너뛴다.
+//  19-3. `canReissue` 가 false 이거나 **주어지지 않으면** 종전대로 건너뛴다(세션 호스트 노드 · 옛 호출부).
+//  19-4. 주인은 이때도 verifiedOwners 에서만 온다 — 확인이 안 되면 굽지 않는다.
+//  19-5. 다시 구운 뒤에는 기억한다 — 노드가 다음 판에도 false 라고 해도 recheckMs 안에는 또 굽지 않는다(굽고 죽이는 고리를 만들지 않는다).
+test("D19-1 발급은 돼 있는데 노드가 «없다» 고 확답하면 다시 굽는다 — mint(확인된 주인) → push, minted+1", async () => {
+  const k = fakeDeps({ have: [A] });
+  k.deps.canReissue = () => true;
+  const bf = createNodeSessionTokenBackfill(k.deps);
+  const r = await bf.run(NODE, [sessTok(A, false, IMPOSTOR)]);
+  assert.deepEqual(r, { minted: 1, skipped: 0, revoked: 0, failed: 0 });
+  assert.deepEqual(k.calls.mint, [{ owner: OWNER, id: A }], "주인은 게이트웨이 기록의 값이다(노드가 붙인 이름이 아니다)");
+  assert.deepEqual(k.calls.push.map((c) => [c.nodeId, c.id]), [[NODE, A]]);
+});
+
+test("D19-2 노드가 «있다» 고 하거나 아무 말도 없으면 종전대로 건너뛴다 — mint·push 0", async () => {
+  for (const has of [true, undefined] as const) {
+    const k = fakeDeps({ have: [A] });
+    k.deps.canReissue = () => true;
+    const r = await createNodeSessionTokenBackfill(k.deps).run(NODE, [sessTok(A, has)]);
+    assert.deepEqual(r, { minted: 0, skipped: 1, revoked: 0, failed: 0 }, `hasSessionToken=${String(has)}`);
+    assert.equal(k.calls.mint.length, 0);
+    assert.equal(k.calls.push.length, 0);
+  }
+});
+
+test("D19-3 canReissue 가 false 이거나 없으면 다시 굽지 않는다 — 세션 호스트 노드의 살아 있는 env 토큰을 죽이지 않는다", async () => {
+  for (const can of [false, undefined] as const) {
+    const k = fakeDeps({ have: [A] });
+    if (can !== undefined) k.deps.canReissue = () => can;
+    const r = await createNodeSessionTokenBackfill(k.deps).run(NODE, [sessTok(A, false)]);
+    assert.deepEqual(r, { minted: 0, skipped: 1, revoked: 0, failed: 0 }, `canReissue=${String(can)}`);
+    assert.equal(k.calls.mint.length, 0);
+  }
+});
+
+test("D19-4 다시 구울 때도 주인은 게이트웨이 기록에서만 — 확인이 안 되는 세션은 굽지 않는다", async () => {
+  const k = fakeDeps({ have: [A], unverified: [A] });
+  k.deps.canReissue = () => true;
+  const r = await createNodeSessionTokenBackfill(k.deps).run(NODE, [sessTok(A, false, IMPOSTOR)]);
+  assert.deepEqual(r, { minted: 0, skipped: 1, revoked: 0, failed: 0 });
+  assert.equal(k.calls.mint.length, 0);
+});
+
+test("D19-5 다시 구운 뒤에는 기억한다 — 노드가 다음 판에도 «없다» 고 해도 recheckMs 안에는 또 굽지 않는다", async () => {
+  const k = fakeDeps({ have: [A], recheckMs: 10_000 });
+  k.deps.canReissue = () => true;
+  const bf = createNodeSessionTokenBackfill(k.deps);
+  await bf.run(NODE, [sessTok(A, false)]);
+  k.reset();
+  k.clock += 3_000;
+  const r2 = await bf.run(NODE, [sessTok(A, false)]);
+  assert.deepEqual(r2, { minted: 0, skipped: 0, revoked: 0, failed: 0 });
+  assert.equal(k.calls.mint.length, 0, "3초 뒤 같은 말에는 굽지 않는다");
+  k.clock += 10_001;
+  const r3 = await bf.run(NODE, [sessTok(A, false)]);
+  assert.equal(r3.minted, 1, "recheckMs 가 지나고도 없다고 하면 다시 굽는다");
+});
+
+test("D19-6 다시 굽다가 심기가 실패하면 — 구운 것을 거두고(failed+1) 보통의 백오프보다 일찍 다시 해 본다", async () => {
+  //  다시 굽는 순간 옛 토큰은 죽는다. 심기까지 실패하면 그 세션은 신원이 없다 — 10분을 그렇게 두지 않는다.
+  assert.ok(BACKFILL_REISSUE_RETRY_MS < BACKFILL_RETRY_AFTER_MS);
+  const k = fakeDeps({ have: [A], retryAfterMs: 600_000 });
+  k.deps.canReissue = () => true;
+  k.deps.reissueRetryMs = 60_000;
+  k.pushMode.set(A, "reject");
+  const bf = createNodeSessionTokenBackfill(k.deps);
+  const r1 = await bf.run(NODE, [sessTok(A, false)]);
+  assert.deepEqual(r1, { minted: 0, skipped: 0, revoked: 0, failed: 1 });
+  assert.deepEqual(k.calls.revoke, [A], "심지 못한 토큰은 거둔다");
+  k.reset(); k.clock += 30_000;
+  const r2 = await bf.run(NODE, [sessTok(A, false)]);
+  assert.deepEqual(r2, { minted: 0, skipped: 0, revoked: 0, failed: 0 });
+  assert.equal(k.calls.mint.length, 0, "30초 뒤에는 아직 쉰다");
+  k.reset(); k.clock += 31_000; k.pushMode.set(A, "ok");
+  k.have.delete(A);   // 거둔 뒤라 살아 있는 토큰이 없다
+  const r3 = await bf.run(NODE, [sessTok(A, false)]);
+  assert.equal(r3.minted, 1, "61초 뒤에는 다시 굽는다(보통의 백오프 10분을 기다리지 않는다)");
 });

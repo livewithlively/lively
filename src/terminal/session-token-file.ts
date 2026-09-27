@@ -52,6 +52,12 @@ export async function removeSessionTokens(id: string, home?: string): Promise<vo
 /** 살아 있지 않은 세션의 파일을 걷는다 — 노드가 3초마다 자기 세션 목록을 확답으로 얻은 뒤 부른다(kill 을 안 거치고 끝난 세션의 파일이
  *  디스크에 남지 않게 — 리뷰 지적). 세션 id 꼴이 아닌 이름은 건드리지 않는다. 돌려주는 값 = 지운 개수. 어떤 실패도 던지지 않는다. */
 export async function sweepSessionTokenFiles(liveIds: ReadonlySet<string>, home = process.env.LIVELY_HOME || os.homedir()): Promise<number> {
+  //  ★ **빈 목록으로는 아무것도 걷지 않는다** (#4135, 2026-09-28). «살아 있는 세션이 하나도 없다» 는 답은 tmux 가 잠깐 연결을
+  //   못 받았을 때도 나온다(`isNoTmuxServer` 는 `error connecting` 도 서버 부재로 읽는다). 그 한 판에 신원 파일이 **전부** 지워지면
+  //   게이트웨이는 «이미 실어 줬다» 고 알고 있어 다시 보내지 않았고, 그 세션들은 그 컴퓨터에 깔린 로그인으로 기록을 남겼다
+  //   (실측: 맥미니의 원준 세션 10개 · 2026-09-25 21:41~21:51 사이 소실 · 21:52~54 에 list-sessions 실패 4건).
+  //   세션이 정말 0개라면 남은 파일은 죽은 세션의 것이고, 그 토큰은 게이트웨이가 거둔다 — 파일이 남아도 쓸 수 없다.
+  if (!liveIds.size) return 0;
   const dir = path.join(home, ".lively", "session-tokens");
   let names: string[];
   try { names = await fsp.readdir(dir); } catch { return 0; }
@@ -63,4 +69,31 @@ export async function sweepSessionTokenFiles(liveIds: ReadonlySet<string>, home 
     try { await fsp.rm(path.join(dir, name), { force: true }); removed++; } catch { /* 다음 판에 다시 */ }
   }
   return removed;
+}
+
+/** 신원 파일이 있는 세션 id 들 — readdir 한 번. 폴더가 없거나 못 읽으면 빈 집합(= «파일 없음» 이지 «모름» 이 아니다: 폴더는 첫 쓰기 때 생긴다). */
+export async function sessionTokenFileIds(home = process.env.LIVELY_HOME || os.homedir()): Promise<Set<string>> {
+  const out = new Set<string>();
+  let names: string[];
+  try { names = await fsp.readdir(path.join(home, ".lively", "session-tokens")); } catch { return out; }
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const id = name.slice(0, -".json".length);
+    if (SESSION_ID_RE.test(id)) out.add(id);
+  }
+  return out;
+}
+
+/** pane env 출력(`tmux show-environment -t <id>`)에 세션 신원이 실려 있나 — 훅 토큰이든 MCP 토큰이든 하나라도. 순수. */
+export function envCarriesSessionToken(showEnvironmentOut: string): boolean {
+  return /^LIVELY_(?:MCP_)?TOKEN=\S/m.test(String(showEnvironmentOut || ""));
+}
+
+/**
+ * 세션 하나가 **세션 신원을 갖고 있나** — 파일이 있거나 pane env 에 실려 떴거나. 순수.
+ *  env 를 아직 못 물어본 세션은 `undefined`(모름) — 게이트웨이는 «모름» 에 다시 굽지 않는다(없다는 확답에만).
+ */
+export function sessionTokenPresence(hasFile: boolean, envKnown: boolean | undefined): boolean | undefined {
+  if (hasFile || envKnown === true) return true;
+  return envKnown === false ? false : undefined;
 }

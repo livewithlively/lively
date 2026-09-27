@@ -9,6 +9,7 @@ import { viewerOf } from "./principal.js";
 import { assertRequestEnumParity } from "../http/rest-util.js";
 import { requireAppTool, requireAppToolMcp, appMcpHidden } from "../apps/principal.js";
 import { agentFromExtra, sessionFromExtra, readOnlyFromExtra } from "../org/auth/agent-identity.js";
+import { requireSessionWriter } from "../sessions/session-identity-guard.js";   // #4135 — 남의 세션에서 다른 사람 로그인으로 쓰는 것을 멈춘다
 import { contextCapabilities, repoBranchCapabilities } from "./context.js";
 import { deliveryCapabilities } from "./delivery.js";
 import { domainmapCurationCapabilities } from "./domainmap-curation.js";
@@ -254,6 +255,10 @@ export function registerMcpCapabilities(
         const agent = agentFromExtra(extra) ?? undefined;
         // 작업이 이뤄진 터미널 세션 — 같은 원리로 접속 헤더(x-lively-session)에서(#852). 세션 밖이면 undefined.
         const session = sessionFromExtra(extra) ?? undefined;
+        // #4135 — 기록의 주인은 **세션을 연 사람**이다(원준 2026-09-28). 이 요청이 말한 세션의 주인과 토큰의 사람이 다르면
+        //  쓰는 도구는 거절한다 — 공용 컴퓨터에 깔린 로그인으로 남의 세션의 기록이 남던 것(session-identity-guard 머리말).
+        //  읽기전용 판정과 같은 집합(isReadOnlyBlocked)이라 «무엇이 쓰기인가» 가 두 벌이 되지 않는다.
+        if (session && isReadOnlyBlocked(cap)) await requireSessionWriter(u.userId, session);
         return json(await cap.handler(args, u, { source: "mcp", actor: u.userId, agent, session, readOnly: readOnlyFromExtra(extra), viewer: viewerOf(u) }));
       },
     );

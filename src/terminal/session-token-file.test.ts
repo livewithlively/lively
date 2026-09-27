@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { sessionTokenFilePath, writeSessionTokens, removeSessionTokens, sweepSessionTokenFiles } from "./session-token-file.js";
+import { sessionTokenFilePath, writeSessionTokens, removeSessionTokens, sweepSessionTokenFiles, sessionTokenFileIds, envCarriesSessionToken, sessionTokenPresence } from "./session-token-file.js";
 import type { SessionTokens } from "./session-token-file.js";
 
 // ── 재료 ────────────────────────────────────────────────────────────────────
@@ -290,14 +290,19 @@ test("D19-2 폴더가 없으면 0 이고 던지지 않는다 — .lively 조차 
   assert.equal(await sweepSessionTokenFiles(new Set([ID, ID2]), home), 0, "빈 폴더 + liveIds");
 });
 
-test("D19-3 빈 집합이면 세션 id 파일을 전부 지운다 — 개수는 지운 파일 수, 형식 아닌 이름·.json 아닌 파일은 남는다", async () => {
+test("D19-3 ★ 빈 집합이면 **아무것도 지우지 않는다** — tmux 가 잠깐 못 받은 판에 신원 파일이 전부 지워지던 것(2026-09-25 실측)", async () => {
+  //  종전 사양은 «빈 집합 = 전부 지운다» 였다. 그런데 «살아 있는 세션 0개» 는 tmux 가 연결을 잠깐 못 받았을 때도 나오는 답이고
+  //   (`isNoTmuxServer` 는 `error connecting` 도 서버 부재로 읽는다), 그 한 판에 살아 있는 세션의 신원 파일이 전부 지워졌다.
+  //   게이트웨이는 «이미 실어 줬다» 고 알고 있어 다시 보내지 않았고, 그 세션들은 그 컴퓨터에 깔린 로그인으로 기록을 남겼다.
   const home = tmpHome();
   const ids = [ID, ID2, "box-a-00000000", "box-a-b-c-d-ffffffff"];
   for (const id of ids) assert.equal(await writeSessionTokens(id, { hook: "h", mcp: null }, home), true);
   const bystanders = plantBystanders(home);
-  assert.equal(await sweepSessionTokenFiles(new Set<string>(), home), ids.length);
-  assert.deepEqual(listing(home), [...bystanders].sort(), "형식 아닌 이름·.json 아닌 파일까지 지웠거나 id 파일이 남았다");
-  assert.equal(await sweepSessionTokenFiles(new Set<string>(), home), 0, "두 번째는 지울 게 없다");
+  assert.equal(await sweepSessionTokenFiles(new Set<string>(), home), 0);
+  assert.deepEqual(listing(home), [...ids.map((id) => `${id}.json`), ...bystanders].sort(), "빈 목록으로 파일을 지웠다");
+  //  살아 있는 세션이 하나라도 확인된 판에서는 종전대로 나머지를 걷는다.
+  assert.equal(await sweepSessionTokenFiles(new Set([ID]), home), ids.length - 1);
+  assert.deepEqual(listing(home), [`${ID}.json`, ...bystanders].sort());
 });
 
 test("D19-4 전부 살아 있으면 0 — 아무것도 지우지 않는다 · liveIds 에 디스크에 없는 id·형식 아닌 값이 섞여도 무관", async () => {
@@ -312,7 +317,7 @@ test("D19-4 전부 살아 있으면 0 — 아무것도 지우지 않는다 · li
 test("D19-5 정리 뒤에도 쓰기·읽기는 정상 — 걷힌 id 를 다시 쓰면 다시 생기고, 폴더 권한은 그대로 0700, .tmp 없음", async () => {
   const home = tmpHome();
   assert.equal(await writeSessionTokens(ID, { hook: "h", mcp: "m" }, home), true);
-  assert.equal(await sweepSessionTokenFiles(new Set<string>(), home), 1);
+  assert.equal(await sweepSessionTokenFiles(new Set([ID2]), home), 1);   // 살아 있는 것은 ID2 뿐 — ID 는 죽었다
   assert.ok(!fs.existsSync(fileOf(home, ID)));
   assert.equal(await writeSessionTokens(ID, { hook: "h2", mcp: "m2" }, home), true);
   assert.equal(readJson(fileOf(home, ID)).hook, "h2");
@@ -325,7 +330,32 @@ test("D19-6 id 꼴 이름의 하위 폴더가 끼어 있어도 던지지 않는�
   assert.equal(await writeSessionTokens(ID, { hook: "h", mcp: "m" }, home), true);
   fs.mkdirSync(path.join(dirOf(home), "box-zzz-sub-dir-01234567.json"));   // 정렬상 ID 파일 뒤에 온다
   let n: number | undefined;
-  await assert.doesNotReject(async () => { n = await sweepSessionTokenFiles(new Set<string>(), home); });
+  await assert.doesNotReject(async () => { n = await sweepSessionTokenFiles(new Set([ID2]), home); });
   assert.equal(typeof n, "number");
   assert.ok(!fs.existsSync(fileOf(home, ID)), "죽은 ID 의 파일이 남았다");
+});
+
+// ── D20 (2026-09-28) — 세션별 신원 보유(노드가 게이트웨이에 올리는 값) ─────────────────────────────────────
+test("D20-1 sessionTokenFileIds — 신원 파일이 있는 세션 id 만(형식 아닌 이름·.json 아닌 파일 제외) · 폴더가 없으면 빈 집합", async () => {
+  const home = tmpHome();
+  assert.deepEqual([...(await sessionTokenFileIds(home))], []);
+  for (const id of [ID, ID2]) assert.equal(await writeSessionTokens(id, { hook: "h", mcp: "m" }, home), true);
+  plantBystanders(home);
+  assert.deepEqual([...(await sessionTokenFileIds(home))].sort(), [ID, ID2].sort());
+});
+
+test("D20-2 envCarriesSessionToken — pane env 에 훅·MCP 토큰 중 하나라도 실려 있으면 참 · 빈 값·다른 변수는 거짓", () => {
+  assert.equal(envCarriesSessionToken("LANG=en_US.UTF-8\nLIVELY_TOKEN=lvk_abc\nLIVELY_SESSION_ID=box-a-00000000\n"), true);
+  assert.equal(envCarriesSessionToken("LIVELY_MCP_TOKEN=lvk_abc\n"), true);
+  assert.equal(envCarriesSessionToken("LIVELY_SESSION_ID=box-a-00000000\nLIVELY_THEME=light\n"), false);
+  assert.equal(envCarriesSessionToken("LIVELY_TOKEN=\n-LIVELY_MCP_TOKEN\nXLIVELY_TOKEN=abc\n"), false, "빈 값 · 지워진 표시(-NAME) · 다른 이름");
+  assert.equal(envCarriesSessionToken(""), false);
+});
+
+test("D20-3 sessionTokenPresence — 파일이나 env 가 있으면 true · 둘 다 없다는 확답이면 false · env 를 못 물었으면 모름(undefined)", () => {
+  assert.equal(sessionTokenPresence(true, undefined), true);
+  assert.equal(sessionTokenPresence(true, false), true);
+  assert.equal(sessionTokenPresence(false, true), true);
+  assert.equal(sessionTokenPresence(false, false), false);
+  assert.equal(sessionTokenPresence(false, undefined), undefined, "모르는 것을 «없다» 로 올리면 게이트웨이가 살아 있는 토큰을 죽이고 다시 굽는다");
 });
