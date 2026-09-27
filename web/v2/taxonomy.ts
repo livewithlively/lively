@@ -6,7 +6,8 @@
 //   분류를 고칠 자리를 못 찾는다. 그래서 자료(#2423)처럼 셸이 직접 그리는 native 앱으로 두고, 각 화면에서 이리로 온다.
 //
 //  화면 셋(주소가 정본):
-//   · `#/taxonomy`            전체 지도: 묶음마다 한 칸, 분류마다 막대 둘(「지식 N」 「프로젝트 N」), 빈 분류는 접는다.
+//   · `#/taxonomy`            전체 지도: 묶음마다 가로 레인, 분류마다 한 줄(막대 둘 「지식」 「프로젝트」), 빈 분류는 접는다.
+//                             [구조 편집]을 켜면 묶음 · 분류를 이 화면에서 고친다(#4135 — 아래 renderMap 머리말).
 //   · `#/taxonomy?view=fix`   손볼 것: 정의 없음 · 빈 분류 · 제안 대기.
 //   · `#/taxonomy/<id>`       분류 상세 3안(원준 2026-09-26 «3안이 좋아 가자»): 가운데 분류, 왼쪽 지식 유형, 오른쪽 프로젝트
 //                             목록을 선으로 잇고 선마다 수를 적은 연결 그림 + 그 아래 지식 목록 · 프로젝트 목록.
@@ -22,14 +23,14 @@ import { icon } from './icons.js';
 import { showCtxMenu } from './ctx-menu.js';
 import type { Proj } from './views.js';
 import {
-  FIX_REASONS, barPct, canDeleteCat, catId, countsByCategory, fixList, groupKeyOf, isArchived, isEmptyCat, knowledgeOf, planTaxMap, typeCounts,
+  FIX_REASONS, NO_GROUP, barPct, canDeleteCat, catId, countsByCategory, fixList, groupKeyOf, isArchived, isEmptyCat, knowledgeOf, planTaxMap, typeCounts,
   type TaxCat, type TaxCount, type TaxGroup, type TaxList,
 } from '../lib/taxonomy-map.js';
 import { createCachedLoader } from '../lib/tax-loader.js';
 
 export interface TaxCategory extends TaxCat {
   id: number | string; name: string; key?: string | null; description?: string | null; should?: string | null; origin?: string | null;
-  updated_at?: string | null; repos?: string[] | null;
+  updated_at?: string | null; repos?: string[] | null; cross_cutting?: boolean | null;
 }
 export interface TaxonomyData { cats: TaxCategory[]; groups: TaxGroup[]; lists: TaxList[]; counts: Map<number, TaxCount> }
 export interface TaxonomyHooks {
@@ -146,6 +147,7 @@ export function renderTaxonomyApp(host: HTMLElement, sub: string, params: URLSea
         el('p', { class: 'v2-tx-note', text: err ? '분류체계를 불러오지 못했습니다. ' + err : '불러오는 중…' })));
       return;
     }
+    host.dataset.txView = sub ? 'detail' : params.get('view') === 'fix' ? 'fix' : 'map';
     if (sub) renderDetail(host, d, Number(sub), hooks, reload, live);
     else if (params.get('view') === 'fix') renderFix(host, d, reload);
     else renderMap(host, d, reload);
@@ -155,52 +157,346 @@ export function renderTaxonomyApp(host: HTMLElement, sub: string, params: URLSea
   loadTaxonomy(() => { paint(); hooks.redrawSide(); });
 }
 
-// ── 전체 지도 ──
-const mapOpen = new Set<string>();   // 펼친 접힌 줄(`empty:<묶음>` · `arch:<묶음>`). 페이지 수명
+// ── 전체 지도: 묶음마다 가로 한 줄(레인), 분류는 촘촘한 줄(#4135, 원준 2026-09-27 «3안으로 가자») ──
+//  옛 판은 묶음마다 세로 칸이라 분류 26개 묶음만 밑으로 길게 늘어졌다(«밸런스가 엉망»). 이제 묶음은 가로 레인이고,
+//   분류 한 줄(이름 · 지식 막대 · 프로젝트 막대)이 1~3단으로 흐른다. 단마다 네 줄까지 보이고 나머지는 [N개 더 보기].
+//   빈 분류 · 치운 분류는 레인 끝 접힌 칩. 막대 잣대는 옛 지도와 같다(쓰는 분류 전체의 최댓값).
+//  [구조 편집]을 켜면 이 화면에서 고친다(«겉에서도 가능하게»): 묶음 이름 · 한 줄 뜻 · 순서 · 지우기 · 이 묶음에 분류,
+//   분류는 끌어 다른 레인에 놓거나 눌러 레인 밑 서랍에서 이름 · 묶음 · 정의 · 설명 · 연결 레포 · 횡단 · 확인 후 반영 · 치우기 · 지우기.
+//  전부 기존 API 다. 확인 후 반영 = 인입 정책 규칙 {match_category: <key>, match_actor_kind: 'ai', action: 'confirm'} 하나.
+//  검토판(이 화면의 정본 그림): 프로젝트 #4135 taxonomy-lanes-3-plans.html 의 C-3.
+const MAP_ROWS = 4;          // 단마다 보이는 줄
+const MAP_COL_MIN = 380;     // 단 최소 폭(px). 이름이 잘리지 않을 만큼
+const MAP_LEFT = 220;        // 왼쪽 칸 200 + 사이 20. 단 수는 «화면 폭 − 220» 으로 센다(검토판과 같은 잣대 — 본문 여백은 빼지 않는다)
+const map = {
+  edit: false,
+  sel: null as number | 'new' | null,   // 서랍이 연 분류('new' = 새 분류)
+  newGroup: '',                          // 새 분류가 들어갈 묶음
+  confirm: null as string | null,        // 지우기를 묻는 묶음
+  open: new Set<string>(),               // [N개 더 보기]를 편 레인
+  xOpen: new Set<string>(),              // 편 칩 줄(`e:<묶음>` 빈 분류 · `a:<묶음>` 치운 분류)
+};
+interface Policy {
+  id: number | string; enabled?: boolean | null; action?: string | null; match_category?: string | null;
+  match_system?: string | null; match_channel?: string | null; match_provenance?: string | null; match_sensitive?: string | null;
+  match_agent?: string | null; match_type?: string | null;
+}
+//  서랍이 쓰는 곁재료: 고를 레포 · 인입 정책(확인 후 반영). 지도에 처음 올 때 한 번 받고, 고친 뒤 다시 받는다.
+let side: { repos: string[]; policies: Policy[]; canPolicy: boolean } | null = null;
+let sideAt = 0;
+function loadSide(force: boolean, then: () => void): void {
+  if (!force && side && Date.now() - sideAt < STALE_MS) return;
+  sideAt = Date.now();
+  void Promise.all([
+    api('/api/ui/repos').then((r: any) => ((r && r.repos) || []).map((x: any) => String(typeof x === 'string' ? x : (x && x.name) || '')).filter(Boolean)).catch(() => [] as string[]),
+    api('/api/ui/org/ingest-policy').catch(() => ({ policies: [], canEdit: false })),
+  ]).then(([repos, p]: any[]) => { side = { repos, policies: (p && p.policies) || [], canPolicy: !!(p && p.canEdit) }; then(); });
+}
+/** 이 분류의 «확인 후 반영» 규칙 — 분류 하나만 거는(다른 조건 없는) 켜진 confirm 규칙. */
+const reviewRule = (key: string): Policy | undefined => (side?.policies || []).find((p) => p.enabled !== false && p.action === 'confirm'
+  && String(p.match_category || '') === key && !p.match_system && !p.match_channel && !p.match_provenance && !p.match_sensitive && !p.match_agent && !p.match_type);
+
+let mapPaint: (() => void) | null = null;
+const mapRO = new WeakMap<HTMLElement, { ro: ResizeObserver; cols: number }>();
+document.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Escape' || !mapPaint || document.querySelector('.ov-confirm')) return;
+  if (map.sel !== null || map.confirm) { map.sel = null; map.confirm = null; mapPaint(); }
+});
+const slugKey = (): string => 'c-' + Math.random().toString(16).slice(2, 12).padEnd(10, '0');
+
 function renderMap(host: HTMLElement, d: TaxonomyData, reload: () => void): void {
+  host.dataset.txView = 'map';
+  const edit = map.edit && canEdit();
+  const repaint = (): void => { if (host.isConnected && host.dataset.txView === 'map') renderMap(host, d, reload); };
+  mapPaint = repaint;
+  if (!side) loadSide(false, repaint);
   const active = d.cats.filter((c) => !isArchived(c));
-  const cols = planTaxMap(d.cats, d.groups, d.counts);
+  const lanes = planTaxMap(d.cats, d.groups, d.counts);
+  const projOf = (c: TaxCategory): number => (d.counts.get(catId(c)) || { projects: 0 }).projects;
   const maxK = Math.max(0, ...active.map(knowledgeOf));
-  const maxP = Math.max(0, ...active.map((c) => (d.counts.get(catId(c)) || { projects: 0 }).projects));
+  const maxP = Math.max(0, ...active.map(projOf));
   const totalK = active.reduce((a, c) => a + knowledgeOf(c), 0);
   const totalP = [...d.counts.values()].reduce((a, x) => a + x.projects, 0);
-  const bar = (cls: string, label: string, v: number, max: number): HTMLElement =>
-    el('span', { class: 'v2-tx-bar ' + cls },
-      el('span', { class: 'v2-tx-bl', text: label }),
+  const w = host.clientWidth || 1100;
+  const rightW = w >= 760 ? w - MAP_LEFT : w;
+  const cols = Math.max(1, Math.min(3, Math.floor((rightW + 24) / (MAP_COL_MIN + 24))));
+  //  폭이 바뀌어 단 수가 달라질 때만 다시 그린다(서랍에서 치던 글자를 지우지 않게 단 수가 같으면 그대로 둔다).
+  let hold = mapRO.get(host);
+  if (!hold && typeof ResizeObserver !== 'undefined') {
+    const h = { cols, ro: new ResizeObserver(() => {
+      if (!host.isConnected || host.dataset.txView !== 'map') return;
+      const ww = host.clientWidth || 1100; const rw = ww >= 760 ? ww - MAP_LEFT : ww;
+      const n = Math.max(1, Math.min(3, Math.floor((rw + 24) / (MAP_COL_MIN + 24))));
+      if (n !== h.cols && mapPaint) mapPaint();
+    }) };
+    h.ro.observe(host); mapRO.set(host, h); hold = h;
+  }
+  if (hold) hold.cols = cols;
+
+  const act = async (fn: () => Promise<unknown>, ok: string, after?: () => void): Promise<boolean> => {
+    try { await fn(); toast(ok); after?.(); reload(); return true; } catch (e: any) { toast((e && e.message) || '실패했습니다', true); return false; }
+  };
+  const post = (url: string, body: unknown): Promise<unknown> => api(url, { method: 'POST', body: JSON.stringify(body) });
+  const groupsSorted = [...d.groups].sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0));
+
+  // ── 한 줄: 이름 · 지식 막대 · 프로젝트 막대 ──
+  const mb = (cls: string, v: number, max: number): HTMLElement =>
+    el('span', { class: 'v2-tx-mb ' + cls },
       el('span', { class: 'v2-tx-btr' }, el('span', { class: 'v2-tx-bfl', style: `width:${barPct(v, max)}%` })),
       el('span', { class: 'v2-tx-bv', text: fmt(v) }));
-  const row = (c: TaxCategory, k: number, p: number): HTMLElement =>
-    el('a', { class: 'v2-tx-mrow', href: catHref(c), title: c.description || c.name },
-      el('span', { class: 'nm', text: c.name }),
-      el('span', { class: 'v2-tx-bars' }, bar('k', '지식', k, maxK), bar('p', '프로젝트', p, maxP)));
-  const fold = (key: string, label: string, list: TaxCategory[]): HTMLElement[] => {
-    if (!list.length) return [];
-    const open = mapOpen.has(key);
-    const btn = el('button', { class: 'v2-tx-fold' + (open ? ' open' : ''), type: 'button', 'aria-expanded': String(open),
-      onclick: () => { if (open) mapOpen.delete(key); else mapOpen.add(key); renderMap(host, d, reload); } },
-      el('span', { class: 'car', text: '›' }), el('span', { text: `${label} ${list.length}` }));
-    return [btn, ...(open ? list.map((c) => row(c, knowledgeOf(c), (d.counts.get(catId(c)) || { projects: 0 }).projects)) : [])];
+  const badges = (c: TaxCategory): HTMLElement[] => [
+    c.cross_cutting ? el('span', { class: 'v2-tx-bdg', text: '횡단' }) : null,
+    c.key && reviewRule(String(c.key)) ? el('span', { class: 'v2-tx-bdg warn', text: '확인 후 반영' }) : null,
+    isArchived(c) ? el('span', { class: 'v2-tx-bdg off', text: '치움' }) : null,
+    !String(c.should || '').trim() ? el('span', { class: 'v2-tx-bdg warn', text: '정의 없음' }) : null,
+  ].filter(Boolean) as HTMLElement[];
+  const openCat = (id: number): void => { map.sel = map.sel === id ? null : id; repaint(); scrollDrawer(); };
+  const dragAttrs = (id: number): Record<string, unknown> => (edit ? {
+    draggable: 'true',
+    ondragstart: (ev: DragEvent) => { try { ev.dataTransfer?.setData('text/x-lively-cat', String(id)); ev.dataTransfer!.effectAllowed = 'move'; } catch { /* 끌기 미지원 */ } },
+  } : {});
+  const row = (c: TaxCategory): HTMLElement => {
+    const id = catId(c);
+    const kids = [el('span', { class: 't' }, el('span', { class: 'tn', text: c.name }), ...badges(c)), mb('k', knowledgeOf(c), maxK), mb('p', projOf(c), maxP)];
+    return edit
+      ? el('button', { class: 'v2-tx-row' + (map.sel === id ? ' sel' : '') + (isArchived(c) ? ' dim' : ''), type: 'button', title: c.name, onclick: () => openCat(id), ...dragAttrs(id) }, ...kids)
+      : el('a', { class: 'v2-tx-row' + (isArchived(c) ? ' dim' : ''), href: catHref(c), title: c.description || c.name }, ...kids);
   };
-  const colEls = cols.map((col) => el('section', { class: 'v2-tx-col', 'aria-label': col.name },
-    el('div', { class: 'v2-tx-colh' }, el('span', { class: 'v2-tx-pill', text: col.name }),
-      el('span', { class: 'n', text: String(col.rows.length + col.empty.length + col.archived.length) })),
-    col.hint ? el('p', { class: 'v2-tx-colhint', text: col.hint }) : null,
-    ...col.rows.map((r) => row(r.cat as TaxCategory, r.knowledge, r.projects)),
-    ...fold('empty:' + col.key, '빈 분류', col.empty as TaxCategory[]),
-    ...fold('arch:' + col.key, '치운 분류', col.archived as TaxCategory[]),
-    !col.rows.length && !col.empty.length && !col.archived.length ? el('p', { class: 'v2-tx-note', text: '이 묶음에 든 분류가 없어요.' }) : null));
-  replaceKids(host, el('div', { class: 'v2-tx' },
+  const chip = (c: TaxCategory): HTMLElement => {
+    const id = catId(c);
+    return edit
+      ? el('button', { class: 'v2-tx-ech' + (map.sel === id ? ' sel' : ''), type: 'button', text: c.name, onclick: () => openCat(id), ...dragAttrs(id) })
+      : el('a', { class: 'v2-tx-ech', href: catHref(c), text: c.name });
+  };
+
+  // ── 레인 오른쪽: 줄 흐름 + 더 보기 + 접힌 칩 ──
+  const laneRight = (key: string, rows: Array<{ cat: TaxCategory }>, empty: TaxCategory[], archived: TaxCategory[]): HTMLElement => {
+    const full = rows.map((r) => r.cat);
+    const cap = cols * MAP_ROWS;
+    const open = map.open.has(key);
+    const shown = open || full.length <= cap ? full : full.slice(0, cap);
+    const per = Math.ceil(shown.length / cols) || 1;
+    const colEls: HTMLElement[] = [];
+    for (let i = 0; i < cols; i++) {
+      const part = shown.slice(i * per, (i + 1) * per);
+      if (!part.length) continue;
+      colEls.push(el('div', { class: 'v2-tx-rcol' },
+        el('div', { class: 'v2-tx-rows-h' }, el('span', { text: '분류' }), el('span', { text: '지식' }), el('span', { text: '프로젝트' })),
+        ...part.map(row)));
+    }
+    const chips: HTMLElement[] = [];
+    const fold = (kind: string, label: string, list: TaxCategory[]): void => {
+      if (!list.length) return;
+      const k = kind + ':' + key; const on = map.xOpen.has(k);
+      chips.push(el('button', { class: 'v2-tx-xbtn', type: 'button', 'aria-expanded': String(on),
+        onclick: () => { if (on) map.xOpen.delete(k); else map.xOpen.add(k); repaint(); } }, `${on ? '▾' : '›'} ${label} ${list.length}`));
+      if (on) chips.push(...list.map(chip));
+    };
+    fold('e', '빈 분류', empty);
+    fold('a', '치운 분류', archived);
+    return el('div', { class: 'v2-tx-lane-r' },
+      full.length ? el('div', { class: 'v2-tx-rgrid', style: `grid-template-columns:repeat(${cols},minmax(0,1fr))` }, ...colEls)
+        : el('p', { class: 'v2-tx-note v2-tx-lane-none', text: '지식이나 프로젝트가 붙은 분류가 아직 없습니다.' }),
+      full.length > cap ? el('button', { class: 'v2-tx-moreln', type: 'button',
+        onclick: () => { if (open) map.open.delete(key); else map.open.add(key); repaint(); } }, open ? '접기' : `${full.length - cap}개 더 보기 ›`) : null,
+      chips.length ? el('div', { class: 'v2-tx-extras' }, ...chips) : null);
+  };
+
+  // ── 레인 왼쪽: 묶음 이름 · 뜻 · 합계 (+ 편집) ──
+  const saveGroup = (key: string, patch: { name?: string; hint?: string }): void => {
+    const g = d.groups.find((x) => x.key === key); if (!g) return;
+    const name = patch.name ?? g.name; const hint = patch.hint ?? String(g.hint || '');
+    if (name === g.name && hint === String(g.hint || '')) return;
+    if (!name.trim()) { repaint(); return; }
+    void act(() => post('/api/ui/category-groups', { key, name, hint }), patch.name !== undefined ? '묶음 이름을 바꿨습니다' : '한 줄 뜻을 고쳤습니다');
+  };
+  const inlineIn = (cls: string, value: string, label: string, placeholder: string, commit: (v: string) => void): HTMLInputElement => {
+    const inp = el('input', { class: 'v2-tx-inl ' + cls, type: 'text', value, maxlength: cls === 'nm' ? '80' : '300', 'aria-label': label, placeholder }) as HTMLInputElement;
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); inp.blur(); } });
+    inp.addEventListener('blur', () => { const v = inp.value.trim(); if (v !== value) commit(v); });
+    return inp;
+  };
+  const moveGroup = (key: string, dir: number): void => {
+    const gs = [...groupsSorted]; const i = gs.findIndex((g) => g.key === key); const j = i + dir;
+    if (i < 0 || j < 0 || j >= gs.length) return;
+    [gs[i], gs[j]] = [gs[j], gs[i]];
+    void act(() => Promise.all(gs.map((g, n) => (Number(g.sort) === n ? null
+      : post('/api/ui/category-groups', { key: g.key, name: g.name, sort: n })))), '순서를 바꿨습니다');
+  };
+  const laneLeft = (col: { key: string; name: string; hint: string; rows: Array<{ cat: TaxCategory; knowledge: number; projects: number }>; empty: TaxCategory[]; archived: TaxCategory[] }, gi: number): HTMLElement => {
+    const n = col.rows.length + col.empty.length + col.archived.length;
+    const tk = col.rows.reduce((a, r) => a + r.knowledge, 0);
+    const tp = col.rows.reduce((a, r) => a + r.projects, 0);
+    const real = col.key !== NO_GROUP;
+    const head = edit && real
+      ? [inlineIn('nm', col.name, '묶음 이름', '묶음 이름', (v) => saveGroup(col.key, { name: v })),
+         inlineIn('ht', col.hint, '묶음 한 줄 뜻', '한 줄 뜻', (v) => saveGroup(col.key, { hint: v }))]
+      : [el('b', { class: 'nm', text: col.name }), col.hint ? el('span', { class: 'ht', text: col.hint }) : null];
+    const ctl = edit && real ? el('div', { class: 'ctl' },
+      el('button', { class: 'v2-tx-ib', type: 'button', 'aria-label': '위로', disabled: gi === 0, onclick: () => moveGroup(col.key, -1) }, '▲'),
+      el('button', { class: 'v2-tx-ib', type: 'button', 'aria-label': '아래로', disabled: gi === groupsSorted.length - 1, onclick: () => moveGroup(col.key, 1) }, '▼'),
+      el('button', { class: 'v2-tx-ib', type: 'button', onclick: () => { map.sel = 'new'; map.newGroup = col.key; repaint(); scrollDrawer(); } }, '＋ 분류'),
+      el('button', { class: 'v2-tx-ib dan', type: 'button', onclick: () => { map.confirm = col.key; repaint(); } }, '지우기')) : null;
+    return el('div', { class: 'v2-tx-lane-l' }, ...head,
+      el('div', { class: 'tot' }, '분류 ', el('b', { text: fmt(n) }), ' · 지식 ', el('b', { text: fmt(tk) }), ' · 프로젝트 ', el('b', { text: fmt(tp) })),
+      ctl, map.confirm === col.key && real ? groupConfirm(col.key, n) : null);
+  };
+  const groupConfirm = (key: string, n: number): HTMLElement => {
+    const g = d.groups.find((x) => x.key === key)!;
+    const others = groupsSorted.filter((x) => x.key !== key);
+    const cancel = el('button', { class: 'v2-tx-btn', type: 'button', text: n && !others.length ? '닫기' : '취소', onclick: () => { map.confirm = null; repaint(); } });
+    if (n && !others.length) return el('div', { class: 'v2-tx-confirm' }, el('span', { text: '옮길 다른 묶음이 없습니다. 새 묶음을 먼저 만드세요.' }), cancel);
+    const sel = n ? el('select', { 'aria-label': '옮길 묶음' }, ...others.map((x) => el('option', { value: x.key, text: x.name }))) as HTMLSelectElement : null;
+    return el('div', { class: 'v2-tx-confirm' },
+      el('b', { text: `「${g.name}」을 지울까요?` }),
+      ...(sel ? [el('span', { text: `분류 ${n}개를` }), sel, el('span', { text: '로 옮깁니다.' })] : [el('span', { text: '든 분류가 없습니다.' })]),
+      el('button', { class: 'v2-tx-btn dan', type: 'button', text: '지우기', onclick: () => void act(
+        () => post('/api/ui/category-groups/' + encodeURIComponent(key) + '/delete', sel ? { reassign_to: sel.value } : {}), '묶음을 지웠습니다', () => { map.confirm = null; }) }),
+      cancel);
+  };
+
+  // ── 설정 서랍(레인 밑) ──
+  const drawer = (c: TaxCategory | null, groupKey: string): HTMLElement => {
+    const isNew = !c;
+    const id = c ? catId(c) : 0;
+    const key = c ? String(c.key || '') : '';
+    const f = (lab: string, forId: string, input: HTMLElement, sub?: string | null, cls = ''): HTMLElement =>
+      el('div', { class: cls || null }, el('label', { class: 'l', for: forId, text: lab }), input, sub ? el('div', { class: 'sub', text: sub }) : null);
+    const nameIn = el('input', { id: 'txd-nm', type: 'text', maxlength: '200', value: c ? c.name : '', placeholder: '분류 이름' }) as HTMLInputElement;
+    const keyIn = isNew ? el('input', { id: 'txd-key', type: 'text', maxlength: '64', placeholder: '비우면 자동(소문자 영문 · 숫자 · -)' }) as HTMLInputElement : null;
+    const grpSel = el('select', { id: 'txd-gp' },
+      ...(groupsSorted.some((g) => g.key === groupKey) ? [] : [el('option', { value: '', text: '— 묶음 없음 —' })]),
+      ...groupsSorted.map((g) => el('option', { value: g.key, text: g.name }))) as HTMLSelectElement;
+    grpSel.value = groupsSorted.some((g) => g.key === groupKey) ? groupKey : '';
+    const shouldIn = el('textarea', { id: 'txd-sh', rows: '6', maxlength: '8000', placeholder: '이 분류가 무엇을 담고, 무엇은 옆 분류로 가는지' }) as HTMLTextAreaElement;
+    shouldIn.value = c ? String(c.should || '') : '';
+    const count = el('div', { class: 'sub', text: `증류기가 이 글로 판정합니다 · 400~600자 권장 · 지금 ${shouldIn.value.length}자` });
+    shouldIn.addEventListener('input', () => { count.textContent = `증류기가 이 글로 판정합니다 · 400~600자 권장 · 지금 ${shouldIn.value.length}자`; });
+    const descIn = el('input', { id: 'txd-ds', type: 'text', maxlength: '2000', value: c ? String(c.description || '') : '', placeholder: '목록에 보일 짧은 설명' }) as HTMLInputElement;
+    const linked = new Set((c && Array.isArray(c.repos) ? c.repos : []) as string[]);
+    const repoNames = [...new Set([...(side?.repos || []), ...linked])];
+    const repoBoxes = repoNames.map((r) => { const cb = el('input', { type: 'checkbox', value: r, checked: linked.has(r) }) as HTMLInputElement; return { r, cb }; });
+    const crossIn = el('input', { type: 'checkbox', checked: !!(c && c.cross_cutting) }) as HTMLInputElement;
+    const rule = key ? reviewRule(key) : undefined;
+    const reviewIn = el('input', { type: 'checkbox', checked: !!rule, disabled: !!side && !side.canPolicy }) as HTMLInputElement;
+    const deletable = c ? canDeleteCat(c, d.counts) : false;
+    const archived = c ? isArchived(c) : false;
+
+    const save = async (btn: HTMLButtonElement): Promise<void> => {
+      const name = nameIn.value.trim();
+      if (!name) { nameIn.focus(); toast('이름을 입력하세요', true); return; }
+      btn.disabled = true;
+      try {
+        let cid = id; let ckey = key;
+        const group = grpSel.value || null;
+        if (isNew) {
+          const k = (keyIn!.value.trim().toLowerCase()) || slugKey();
+          const r: any = await post('/api/ui/categories', { key: k, name, should: shouldIn.value.trim(), description: descIn.value.trim() || undefined,
+            cross_cutting: crossIn.checked || undefined, group });
+          cid = Number(r && r.category && r.category.id); ckey = String((r && r.category && r.category.key) || k);
+        } else {
+          await post('/api/ui/categories/' + cid, { name, should: shouldIn.value.trim() || undefined, description: descIn.value.trim(),
+            cross_cutting: crossIn.checked, group });
+        }
+        const picked = repoBoxes.filter((x) => x.cb.checked).map((x) => x.r);
+        if (cid && (picked.length !== linked.size || picked.some((r) => !linked.has(r)))) await post('/api/ui/categories/' + cid + '/repos', { repos: picked });
+        if (side?.canPolicy && reviewIn.checked !== !!rule) {
+          if (reviewIn.checked) await post('/api/ui/org/ingest-policy', { match_category: ckey, match_actor_kind: 'ai', action: 'confirm', action_update: 'auto', enabled: true,
+            note: '분류체계 앱 — 이 분류는 AI 가 만든 지식을 사람이 확인한 뒤 반영' });
+          else if (rule) await post('/api/ui/org/ingest-policy/remove', { id: Number(rule.id) });
+          loadSide(true, repaint);
+        }
+        toast(isNew ? '분류를 만들었습니다' : '저장했습니다');
+        if (isNew && cid) map.sel = cid;
+        reload();
+      } catch (e: any) { toast((e && e.message) || '저장하지 못했습니다', true); btn.disabled = false; }
+    };
+    const saveBtn = el('button', { class: 'v2-tx-btn pri', type: 'button', text: isNew ? '만들기' : '저장', onclick: (ev: MouseEvent) => void save(ev.currentTarget as HTMLButtonElement) }) as HTMLButtonElement;
+    const del = async (): Promise<void> => {
+      if (!c) return;
+      if (!await confirmDialog({ title: `「${c.name}」 분류를 지울까요?`, lines: ['이 분류와 분류 사이 연결이 함께 지워집니다. 되돌릴 수 없습니다.'], confirmText: '지우기', danger: true })) return;
+      try { await api('/api/ui/categories/' + id + '/delete', { method: 'POST' }); toast('지웠습니다'); map.sel = null; reload(); }
+      catch (e: any) { toast((e && e.message) || '실패했습니다', true); }
+    };
+    setTimeout(() => { if (isNew && nameIn.isConnected && !nameIn.value) nameIn.focus(); }, 0);
+    return el('div', { class: 'v2-tx-drawer', 'data-drawer': isNew ? 'new' : String(id) },
+      el('div', { class: 'v2-tx-drawer-h' }, el('b', { text: c ? c.name : '새 분류' }),
+        c ? el('span', { class: 'm' }, `지식 ${fmt(knowledgeOf(c))} · 프로젝트 ${fmt(projOf(c))} · 키 `, el('span', { class: 'ky', text: key })) : el('span', { class: 'm', text: '정의는 40자 이상 적어 주세요' })),
+      el('div', { class: 'v2-tx-fm' },
+        f('이름', 'txd-nm', nameIn),
+        isNew ? f('키', 'txd-key', keyIn!, '만든 뒤에는 못 바꿉니다') : f('묶음', 'txd-gp', grpSel),
+        el('div', { class: 'def' }, el('label', { class: 'l', for: 'txd-sh', text: '정의 (무엇을 담고, 무엇은 옆 분류로 가나)' }), shouldIn, count),
+        isNew ? f('묶음', 'txd-gp', grpSel) : f('설명 한 줄', 'txd-ds', descIn),
+        isNew ? f('설명 한 줄', 'txd-ds', descIn) : el('div', {}, el('span', { class: 'l', text: '연결 레포' }),
+          repoBoxes.length ? el('div', { class: 'repos' }, ...repoBoxes.map((x) => el('label', {}, x.cb, el('span', { text: x.r }))))
+            : el('div', { class: 'sub', text: side ? '등록된 레포가 없습니다' : '불러오는 중…' })),
+        el('label', { class: 'v2-tx-tg' }, crossIn, el('div', {}, el('b', { text: '횡단 분류' }), el('span', { text: '여러 분류에 걸친 규약 (개발 규약 · 디자인 시스템처럼)' }))),
+        el('label', { class: 'v2-tx-tg' + (reviewIn.disabled ? ' off' : '') }, reviewIn, el('div', {}, el('b', { text: '사람이 확인한 뒤 반영' }),
+          el('span', { text: reviewIn.disabled ? '관리자만 바꿀 수 있습니다' : '켜면 AI가 이 분류에 만든 지식은 확인 전까지 주입되지 않습니다' }))),
+        el('div', { class: 'acts span' }, saveBtn,
+          el('button', { class: 'v2-tx-btn', type: 'button', text: '닫기', onclick: () => { map.sel = null; repaint(); } }),
+          el('span', { class: 'sp' }),
+          c ? el('button', { class: 'v2-tx-btn', type: 'button', text: archived ? '되살리기' : '치우기',
+            onclick: () => void act(() => post('/api/ui/categories/' + id, { state: archived ? 'active' : 'deprecated' }), archived ? '되살렸습니다' : '치웠습니다. 분류 후보에서 빠집니다',
+              () => { if (!archived) map.xOpen.add('a:' + groupKeyOf(c)); }) }) : null,
+          c ? el('button', { class: 'v2-tx-btn dan', type: 'button', text: '지우기', disabled: !deletable,
+            title: deletable ? null : '지식과 프로젝트 목록이 없을 때만 지울 수 있습니다', onclick: () => void del() }) : null)));
+  };
+  const scrollDrawer = (): void => { requestAnimationFrame(() => { const dr = host.querySelector('.v2-tx-drawer'); if (dr) (dr as HTMLElement).scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }); };
+
+  // ── 레인 ──
+  const selCat = typeof map.sel === 'number' ? d.cats.find((x) => catId(x) === map.sel) || null : null;
+  if (typeof map.sel === 'number' && !selCat) map.sel = null;
+  const laneEls = lanes.map((col, gi) => {
+    const lane = el('div', { class: 'v2-tx-lane', 'data-lane': col.key },
+      laneLeft(col as any, gi),
+      laneRight(col.key, col.rows as any, col.empty as TaxCategory[], col.archived as TaxCategory[]),
+      edit && selCat && groupKeyOf(selCat) === col.key ? drawer(selCat, col.key) : null,
+      edit && map.sel === 'new' && (map.newGroup || (lanes[0] && lanes[0].key)) === col.key ? drawer(null, col.key) : null);
+    if (edit) {
+      lane.addEventListener('dragover', (ev) => {
+        if (!ev.dataTransfer || ![...ev.dataTransfer.types].includes('text/x-lively-cat')) return;
+        ev.preventDefault(); host.querySelectorAll('.v2-tx-lane.drop').forEach((x) => { if (x !== lane) x.classList.remove('drop'); }); lane.classList.add('drop');
+      });
+      lane.addEventListener('dragleave', (ev) => { if (!lane.contains(ev.relatedTarget as Node)) lane.classList.remove('drop'); });
+      lane.addEventListener('drop', (ev) => {
+        lane.classList.remove('drop');
+        const id = Number(ev.dataTransfer?.getData('text/x-lively-cat')); if (!id) return;
+        ev.preventDefault();
+        const c = d.cats.find((x) => catId(x) === id); if (!c || groupKeyOf(c) === col.key) return;
+        const g = d.groups.find((x) => x.key === col.key);
+        void act(() => post('/api/ui/categories/' + id, { group: col.key || null }), `「${g ? g.name : '묶음 없음'}」 묶음으로 옮겼습니다`);
+      });
+    }
+    return lane;
+  });
+
+  const addGroup = (): void => {
+    const n = d.groups.length + 1;
+    const sort = d.groups.reduce((m, g) => Math.max(m, Number(g.sort) || 0), -1) + 1;
+    void act(() => post('/api/ui/category-groups', { name: '새 묶음 ' + n, sort }), '묶음을 만들었습니다');
+  };
+  const modeBtn = canEdit() ? el('button', { class: 'v2-tx-cmode', type: 'button', 'aria-pressed': String(edit),
+    onclick: () => { map.edit = !map.edit; if (!map.edit) { map.sel = null; map.confirm = null; } repaint(); } },
+    el('span', { class: 'sw' }), el('span', { text: '구조 편집' })) : null;
+  const newBtn = canEdit() ? el('button', { class: 'v2-tx-new', type: 'button', title: '새 분류를 만듭니다',
+    onclick: () => { map.edit = true; map.sel = 'new'; map.newGroup = (lanes[0] && lanes[0].key) || ''; repaint(); scrollDrawer(); } },
+    icon('plus', 'v2-tx-ic'), el('span', { text: '새 분류' })) : null;
+
+  replaceKids(host, el('div', { class: 'v2-tx' + (edit ? ' editing' : '') },
     ...head([{ t: '분류체계', href: '#/taxonomy' }, { t: '전체 지도' }],
       `분류 ${active.length} · 지식 ${fmt(totalK)} · 프로젝트 ${fmt(totalP)}`,
       [el('span', { class: 'v2-tx-legend' },
-        el('span', {}, el('i', { class: 'k' }), el('span', { text: '지식: 이 분류에 붙은 지식 수' })),
-        el('span', {}, el('i', { class: 'p' }), el('span', { text: '프로젝트: 이 분류의 프로젝트 목록에 든 프로젝트 수' }))),
-       el('span', { class: 'sp' }), newCatBtn(reload)]),
+        el('span', {}, el('i', { class: 'k' }), el('span', { text: '지식' })),
+        el('span', {}, el('i', { class: 'p' }), el('span', { text: '프로젝트' }))),
+       el('span', { class: 'sp' }), modeBtn, newBtn]),
     el('div', { class: 'v2-tx-body' },
       !d.cats.length ? el('div', { class: 'v2-tx-empty' },
         el('b', { text: '아직 분류가 없어요' }),
         el('p', { text: '분류는 지식과 프로젝트가 붙는 칸입니다. 분류마다 정의를 적어 두면 증류기가 그 기준으로 지식을 보냅니다.' })) : null,
-      el('div', { class: 'v2-tx-map' }, ...colEls))));
+      edit ? el('p', { class: 'v2-tx-edit-hint', text: '구조 편집 중 · 묶음 이름과 뜻은 왼쪽 칸에서 바로 고치고, 분류는 끌어서 다른 묶음에 놓거나 눌러서 설정을 엽니다.' }) : null,
+      el('div', { class: 'v2-tx-lanes' }, ...laneEls),
+      edit ? el('div', { class: 'v2-tx-addg' }, el('button', { class: 'v2-tx-btn', type: 'button', text: '＋ 묶음 추가', onclick: addGroup })) : null)));
 }
 
 // ── 손볼 것 ──
