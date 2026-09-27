@@ -29,10 +29,15 @@
 .sw-hint[hidden] { display: none; }
 
 /* ── 문패 버튼 ── */
-/* 문패의 옆 단추([＋ 세션]·[프로젝트 상세])와 **같은 높이**로 선다(#4135, 원준 2026-09-27: «지혼자 사이즈가 옆이랑 달라서 어색하다»).
-   종전엔 위아래 여백이 0 이라 글리프 높이만큼만 섰다(≈17px — 옆은 27px). 높이를 숫자로 적지 않고 그 줄에 맞춰 늘인다 —
-   옆 단추의 글자 크기·여백이 바뀌어도 따라간다. 폭은 높이와 같게(정사각). */
-.sw-btn { align-self: stretch; aspect-ratio: 1 / 1; min-width: 0; padding: 0; }
+/* 문패의 옆 단추([＋ 세션]·[프로젝트 상세])와 **같은 높이 · 같은 테두리**로 선다(#4135, 원준 2026-09-27: «지혼자 사이즈가 옆이랑 달라서 어색하다»).
+   종전엔 위아래 여백이 0 이라 글리프 높이만큼만 섰다(≈17px — 옆은 27px).
+   · 높이: 그 줄에 맞춰 늘인다(align-self: stretch) — 옆 단추의 글자 크기·여백이 바뀌어도 따라간다.
+   · 폭: 높이와 같게(정사각). 높이 = 한 줄(1lh) + 위아래 여백 10 + 테두리 2 이므로 폭도 같은 식으로 적는다.
+     ⚠ aspect-ratio 로는 안 된다 — flex 줄에서 늘어난 높이는 폭을 정한 **뒤에** 나와서, 폭이 글리프 폭(15px)으로 남는다(실측). */
+.sw-btn { align-self: stretch; box-sizing: border-box; width: 27px; width: calc(1lh + 12px); min-width: 0; padding: 0; justify-content: center; }
+.pn-door-r .sw-btn { border-color: var(--line-net); }
+.pn-door-r .sw-btn:hover { border-color: var(--blue); background: var(--bg-tint); }
+.pn-door-r .sw-btn:hover .sw-btn-i { color: var(--blue); }
 .sw-btn[hidden] { display: none; }
 .sw-btn-i { font-size: 15px; line-height: 1; color: var(--muted-2); }
 .sw-btn.on .sw-btn-i { color: var(--blue); }
