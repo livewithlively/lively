@@ -70,7 +70,9 @@ export function makeSplitter(o: SplitOpts): HTMLElement {
     if (e.button !== 0) return;
     e.preventDefault();
     const start = o.axis === 'x' ? e.clientX : e.clientY;
-    const base = current();
+    //  적어 둔 폭이 지금 상한보다 클 수 있다(좁은 창에서 다시 열었다, #3870). 보이는 폭에서 끌기 시작한다.
+    //  안 그러면 그 차이만큼 끌 때까지 손잡이가 손을 따라오지 않는다.
+    const base = clamp(current(), o.min, Math.max(o.min, maxOf()));
     h.classList.add('on'); document.body.classList.add('v2-splitting-' + o.axis);
     h.setPointerCapture(e.pointerId);
     const move = (ev: PointerEvent): void => {

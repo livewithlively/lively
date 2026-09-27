@@ -6,7 +6,7 @@
    ───────────────────────────────────────────────────────────────────────────── */
 
 /* ── 자리바꿈 — 곁칸이 왼쪽, 세션이 오른쪽 ── */
-.pn-body.sw-left { grid-template-columns: var(--pn-side-w) 6px minmax(0, 1fr); }
+.pn-body.sw-left { grid-template-columns: var(--pn-side-fit) 6px minmax(0, 1fr); }
 .pn-body.sw-left > .pn-col { grid-column: 3; grid-row: 1; }
 .pn-body.sw-left > .v2-split-x { grid-column: 2; grid-row: 1; }
 .pn-body.sw-left > .pn-pane[data-zone="side"] { grid-column: 1; grid-row: 1; border-left: 0; border-right: 1px solid var(--line); }
