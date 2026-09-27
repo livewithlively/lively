@@ -37,6 +37,9 @@
 //   J6 되살릴 때: 적어 둔 «왼쪽» + 문턱 사이(46~52%)나 그 위 → 적어 둔 대로
 //   J7 되살릴 때: 적어 둔 «오른쪽» 은 폭이 넓어도 그대로(한 방향만 바로잡는다)
 //   W12 side-swap: 되살릴 때 바로잡은 자리를 세션에 적지 않는다(넓은 창에서 바꾼 자리를 좁은 창이 지우지 않게)
+//   W13 상한은 그릴 때 맞춘다: 격자 열이 --pn-side-fit(적어 둔 폭과 상한 가운데 작은 쪽)을 쓰고, 식이 sideCap 과 같다
+//   W14 side-swap · panes: 격자 폭이 바뀌어도 적어 둔 폭(--pn-side-w)을 깎지 않는다. 자리 판정은 폭이 멈춘 뒤에 한다
+//   W15 split: 끌기 시작 폭을 상한 안으로 맞춘다
 //   W8 CSS: 자리바꿈 상태에서 사이드바를 접으면 세션이 격자 전체를 쓴다(sw-left.no-side 가 sw-left 뒤에 있다)
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -183,6 +186,19 @@ const rst = swap.slice(swap.indexOf("function restore("), swap.indexOf("function
 ok(/placeOnRestore\(/.test(rst) && /setSwapped\(want, false, !keepStored\)/.test(rst) && !/h\.onChange/.test(rst), "W12a side-swap restore: 바로잡은 자리는 적지 않는다(persist 끔)");
 const setSw = swap.slice(swap.indexOf("function setSwapped("), swap.indexOf("function restore("));
 ok(/if \(persist\) h\.onChange\?\.\(v\); else h\.onPlace\?\.\(v\);/.test(setSw), "W12b side-swap setSwapped: persist 가 거짓이면 onChange 를 부르지 않는다");
+
+const base42 = read("public/styles/42-v2-panes.css");
+const fit = (base42.match(/--pn-side-fit:\s*([^;]+);/) || [])[1] || "";
+ok(/^min\(var\(--pn-side-w\),\s*max\(220px,\s*calc\(100% - 366px\)\)\)$/.test(fit.trim()) && lib && lib.SESS_MIN + lib.SPLIT_W === 366 && lib.SIDE_MIN === 220, "W13a CSS 의 상한 식이 sideCap 과 같다(220 · 366)", fit);
+ok(/\.pn-body \{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 6px var\(--pn-side-fit\)/.test(base42) && /\.pn-body\.sw-left \{\s*grid-template-columns:\s*var\(--pn-side-fit\) 6px minmax\(0, 1fr\)/.test(css), "W13b 격자 열(평소 · 자리바꿈)이 --pn-side-fit 을 쓴다");
+const rsz = swap.slice(swap.indexOf("const onResize"), swap.indexOf("return {", swap.indexOf("const onResize")));
+ok(rsz.length > 0 && !/setProperty\(SIDE_VAR/.test(swap.slice(swap.indexOf("export function mountSideSwap"))) && !/setSideW\(/.test(rsz), "W14a side-swap: 폭 변수를 적지 않는다(깎지 않는다)");
+ok(/window\.setTimeout\(/.test(rsz) && /RESIZE_SETTLE_MS/.test(rsz) && /body\.clientWidth !== w/.test(rsz), "W14b side-swap: 격자 폭이 멈춘 뒤에 자리를 판정한다");
+const av = panes.slice(panes.indexOf("function applyView("), panes.indexOf("colMain.append(mainPane.root"));
+ok(av.length > 0 && !/maxSideW\(\)/.test(av), "W14c panes applyView: 상한으로 깎지 않는다");
+ok(/const shown = \(\): number => clamp\(current\(\), o\.min, Math\.max\(o\.min, maxOf\(\)\)\)/.test(split) && /const base = shown\(\);/.test(split), "W15a split: 끌기 시작 폭을 상한 안으로");
+const kd = split.slice(split.indexOf("addEventListener('keydown'"));
+ok(/apply\(shown\(\) - step \* growOf\(\), true\)/.test(kd) && /apply\(shown\(\) \+ step \* growOf\(\), true\)/.test(kd) && !/apply\(current\(\) [-+]/.test(kd), "W15b split: 글쇠 조정도 보이는 폭에서 시작한다");
 
 const swl = css.indexOf(".pn-body.sw-left {"), nos = css.indexOf(".pn-body.sw-left.no-side {"), nosCol = css.indexOf(".pn-body.sw-left.no-side > .pn-col {");
 ok(swl >= 0 && nos > swl && nosCol > nos && /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*0\s*0/.test(css.slice(nos, css.indexOf("}", nos))) && /grid-column:\s*1\b/.test(css.slice(nosCol, css.indexOf("}", nosCol))),
