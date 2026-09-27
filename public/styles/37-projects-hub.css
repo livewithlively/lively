@@ -555,3 +555,4 @@
 .pjh-notes::after { content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 5; width: max-content; max-width: min(340px, 80vw); padding: 8px 11px; border-radius: 8px; background: var(--ink); color: var(--bg); font-size: 12px; font-weight: 500; line-height: 1.5; white-space: pre-line; opacity: 0; pointer-events: none; transition: opacity 120ms ease; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); }
 .pjh-notes[data-tip]:not([data-tip=""])::after { opacity: 1; }
 .pjh-bh-l { display: inline-flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.pjh-w1 .pjh-notes::after { max-width: 236px; }   /* 1칸 폭 카드 안에서 툴팁이 오른쪽 가장자리에 잘리지 않게 */
