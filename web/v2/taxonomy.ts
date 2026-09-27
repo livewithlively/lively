@@ -25,6 +25,7 @@ import {
   FIX_REASONS, barPct, canDeleteCat, catId, countsByCategory, fixList, groupKeyOf, isArchived, isEmptyCat, knowledgeOf, planTaxMap, typeCounts,
   type TaxCat, type TaxCount, type TaxGroup, type TaxList,
 } from '../lib/taxonomy-map.js';
+import { createCachedLoader } from '../lib/tax-loader.js';
 
 export interface TaxCategory extends TaxCat {
   id: number | string; name: string; key?: string | null; description?: string | null; should?: string | null; origin?: string | null;
@@ -39,34 +40,24 @@ export interface TaxonomyHooks {
 }
 
 // ── 재료. 분류 · 묶음 · 프로젝트 목록. 앱 수명 캐시(들어올 때 30초보다 오래됐으면 다시 받는다) ──
-let data: TaxonomyData | null = null;
-let loadedAt = 0;
-let loading: Promise<void> | null = null;
-let loadErr = '';
-const waiters = new Set<() => void>();
+//  언제 받고 누구를 부르나는 lib/tax-loader.ts 가 정한다: 콜백은 새 재료가 도착했을 때만 부른다(신선한 캐시에서 곧바로 부르면
+//   그릴 때마다 loadTaxonomy 를 부르는 사이드바가 스스로를 끝없이 다시 그린다 — #3870 «분류체계만 들어가면 렉»).
 const STALE_MS = 30_000;
+const store = createCachedLoader<TaxonomyData>(() => Promise.all([
+  api('/api/ui/categories'),
+  api('/api/ui/category-groups').catch(() => ({ groups: [] })),
+  api('/api/ui/v6/project-lists').catch(() => ({ lists: [] })),
+]).then(([c, g, l]: any[]) => {
+  const lists = ((l && l.lists) || []) as TaxList[];
+  return { cats: ((c && c.categories) || []) as TaxCategory[], groups: ((g && g.groups) || []) as TaxGroup[], lists, counts: countsByCategory(lists) };
+}), STALE_MS);
 
 /** 지금 가진 재료(없으면 null). 사이드바가 읽는다. */
-export function taxonomyData(): TaxonomyData | null { return data; }
-export function taxonomyError(): string { return loadErr; }
+export function taxonomyData(): TaxonomyData | null { return store.data(); }
+export function taxonomyError(): string { return store.error(); }
 
-/** 재료를 받는다(이미 받는 중이면 끝날 때 cb). force 면 캐시를 버린다. */
-export function loadTaxonomy(cb?: () => void, force = false): void {
-  if (cb) waiters.add(cb);
-  if (loading) return;
-  if (data && !force && Date.now() - loadedAt < STALE_MS) { flush(); return; }
-  loading = Promise.all([
-    api('/api/ui/categories'),
-    api('/api/ui/category-groups').catch(() => ({ groups: [] })),
-    api('/api/ui/v6/project-lists').catch(() => ({ lists: [] })),
-  ]).then(([c, g, l]: any[]) => {
-    const lists = ((l && l.lists) || []) as TaxList[];
-    data = { cats: ((c && c.categories) || []) as TaxCategory[], groups: ((g && g.groups) || []) as TaxGroup[], lists, counts: countsByCategory(lists) };
-    loadedAt = Date.now(); loadErr = '';
-  }).catch((e: any) => { loadErr = (e && e.message) || '불러오지 못했습니다'; })
-    .finally(() => { loading = null; flush(); });
-}
-function flush(): void { const cbs = [...waiters]; waiters.clear(); for (const f of cbs) { try { f(); } catch (_) { /* 한 화면의 실패가 다른 화면을 막지 않는다 */ } } }
+/** 재료를 받는다. cb 는 받기가 끝났을 때만(이미 받는 중이면 그 끝에) 부른다 — 신선하면 부르지 않는다. force 면 캐시를 버린다. */
+export function loadTaxonomy(cb?: () => void, force = false): void { store.load(cb, force); }
 
 /** 이 분류의 지식(가벼운 행, 최근 순). 상세가 연결 그림 왼쪽(유형별 수)과 지식 목록에 쓴다. */
 interface KnowRow { name: string; title?: string | null; type?: string | null; updated_at?: string | null }
@@ -118,7 +109,7 @@ export async function openForm(c: TaxCategory | null, reload: () => void): Promi
     import('../category-form.js'),
     api('/api/ui/repos').then((d: any) => (d && d.repos) || []).catch(() => []),
   ]);
-  mod.openCategoryForm(c, reload, { repos, groups: (data && data.groups) || [] });
+  mod.openCategoryForm(c, reload, { repos, groups: store.data()?.groups || [] });
 }
 
 // ══════════════════════════════ 화면 ══════════════════════════════
@@ -148,10 +139,11 @@ export function renderTaxonomyApp(host: HTMLElement, sub: string, params: URLSea
   const live = (): boolean => host.isConnected && host.dataset.txSeq === seq;
   const paint = (): void => {
     if (!live()) return;
-    const d = data;
+    const d = store.data();
     if (!d) {
+      const err = store.error();
       replaceKids(host, el('div', { class: 'v2-tx' }, ...head([{ t: '분류체계' }], '', []),
-        el('p', { class: 'v2-tx-note', text: loadErr ? '분류체계를 불러오지 못했습니다. ' + loadErr : '불러오는 중…' })));
+        el('p', { class: 'v2-tx-note', text: err ? '분류체계를 불러오지 못했습니다. ' + err : '불러오는 중…' })));
       return;
     }
     if (sub) renderDetail(host, d, Number(sub), hooks, reload, live);
@@ -412,7 +404,7 @@ function drawDiagram(c: TaxCategory, tcs: Array<[string, number]> | null, kTotal
 //  사이드바 「묶음」 이름표의 [정리]가 연다. 이름 바꾸기 · 순서 · 새 묶음 · 지우기(든 분류는 다른 묶음으로 옮긴 뒤).
 //  API 는 맥락 관리가 쓰던 그대로다(category-groups: {name,sort} 만들기 · {key,name} 이름 · {key,name,sort} 순서 · /delete {reassign_to}).
 export function openGroupManager(onDone: () => void): void {
-  const d = data;
+  const d = store.data();
   if (!d) return;
   if (!canEdit()) { toast('묶음을 정리할 권한이 없습니다', true); return; }
   const groups = [...d.groups].sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0));
