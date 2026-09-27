@@ -103,7 +103,7 @@ const STAGES: CtxStage[] = [
   },
   {
     key: 'deliver', label: CTX_TAB.deliver,
-    hint: '지식이 실제로 AI 에 닿는 마지막 구간 — 세션 주입 · 검색 · 접근 권한',
+    hint: '지식을 AI 세션에 넣는 방법을 정합니다. 세션 주입, 의미 검색, 접근 권한을 설정합니다.',
     items: [{ key: 'injection', label: CTX_TAB.deliver, draw: (b) => deliverScreen(b) }],
   },
 ];

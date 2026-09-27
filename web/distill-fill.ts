@@ -17,6 +17,7 @@ import { api, busy, cardHead, el, fmtNum, personSelect, relTime, toast, uiText }
 import { confirmDialog } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
 import { runConfig } from './context-run-config.js';    // #4008 제공자·모델·추론강도 공용 선택기
+import { CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
 /** 이 증류기 종류의 이름 — 화면 문구가 전부 이 한 곳을 쓴다. */
 export const FILL_LANE = '카테고리 붙이기';
@@ -59,7 +60,7 @@ export async function renderFillLanes(host: HTMLElement, res?: any): Promise<voi
       el('h3', { class: 'cxc-title' }, el('span', { text: FILL_LANE }), el('span', { class: 'cxc-title-n num', text: String(list.length) })),
       el('p', { class: 'cxc-lead' }, ...uiText(
         '노션처럼 지식으로 바로 들어온 문서나, 카테고리를 지워 칸을 잃은 지식은 카테고리가 없습니다(미분류 지식). 이 증류기가 내용을 읽고 알맞은 카테고리를 붙입니다 — 본문은 바꾸지 않습니다. ' +
-        '출처·팀마다 기준을 다르게 하려면 여러 개 만드세요. 한 지식은 우선순위가 가장 높은 것 하나만 맡습니다. 이미 붙은 카테고리가 틀린 것은 여기가 아니라 [점검]이 찾아냅니다.')))));
+        '출처·팀마다 기준을 다르게 하려면 여러 개 만드세요. 한 지식은 우선순위가 가장 높은 것 하나만 맡습니다. 이미 붙은 카테고리가 틀린 것은 「' + CTX_TAB.checks + '」 탭의 점검이 찾아냅니다.')))));
 
   // 현황 — 사각지대를 목록보다 먼저(자료 레인 절과 같은 순서).
   const covCard = el('div', { class: 'card ctx-cov' }, cardHead('미분류 지식'));
@@ -216,7 +217,7 @@ function editor(c: any | null, reload: () => void) {
 
   card.append(
     el('div', { class: 'ctx-row-head' }, el('span', { class: 'ctx-row-title', text: isNew ? '새 증류기 — ' + FILL_LANE : `설정 — ${c.label || c.key}` })),
-    retired(c) ? el('p', { class: 'admin-hint ctx-warn-line', text: '이 증류기는 없어진 «확신 낮은 분류 재검토» 모드라 지금 아무 지식도 맡지 않습니다. 저장하면 미분류 지식을 맡도록 바뀝니다 — 이미 붙은 카테고리가 틀린 것은 [점검]이 찾거나 사람이 옮깁니다.' }) : null,
+    retired(c) ? el('p', { class: 'admin-hint ctx-warn-line', text: '이 증류기는 없어진 «확신 낮은 분류 재검토» 모드라 지금 아무 지식도 맡지 않습니다. 저장하면 미분류 지식을 맡도록 바뀝니다. 이미 붙은 카테고리가 틀린 것은 「' + CTX_TAB.checks + '」 탭의 점검이 찾거나 사람이 옮깁니다.' }) : null,
     F('식별자', isNew ? '영문·숫자 슬러그. 만든 뒤에는 바꾸지 않습니다.' : '만든 뒤에는 바꾸지 않습니다.', keyIn),
     F('이름', '목록에 보일 이름입니다.', labelIn),
     F('우선순위', '높을수록 지식을 먼저 가져갑니다. 낮은 값 + 넓은 범위 = 나머지를 받는 기본 증류기.', prioIn),
