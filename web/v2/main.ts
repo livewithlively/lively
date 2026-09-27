@@ -29,6 +29,7 @@ import { PINNED_GROUP, PRIORITY_GROUP, QUIET_RANK, dayGroup, pruneHolds, stepRow
 import { renderPast, renderSessAll, renderTrash } from './bins.js';   // #1851 — 지난 세션(#/archive) · 휴지통(#/trash) 화면 · #3778 이름·주인공 교체 · #4158 [AI 세션] 전체 목록
 import { renderSourcesApp, renderSourceDetail } from './sources.js';   // #2423 자료 앱 — 열람실(사이드바 갈래는 side.ts)
 import { renderTaxonomyApp } from './taxonomy.js';   // #4233 분류체계 앱(사이드바 갈래는 side.ts renderTaxonomySection)
+import { guideTabTitle, parseGuideRoute, renderGuideApp } from '../guide/app.js';   // #4179 사용 가이드 앱(셸이 직접 그린다)
 import { renderWikiMain } from './wiki-main.js';   // #4233 [위키] 본문 목록(사이드 피크 · 우측 사이드바에 고정)
 import { wikiScopeOf } from '../lib/wiki-list.js';
 import { EMPTY_BOOK, closeSlot, closeTabGuests, openGuest, shownSlot, type GuestBook } from '../lib/aside-guests.js';   // #4233 손님 화면 장부(미리보기 = 연 탭 · 고정 문서 = 셸에 하나)
@@ -961,6 +962,8 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   //  #2423 자료 앱 — 목록은 «자료», 자료 하나는 그 제목이 정본이라 데이터가 오면 힌트로 따라잡는다.
   if (p === 'sources') return { title: segs[1] ? (routeTitleHint.get(key) || '자료') : '자료', noAside: true };
   if (p === 'taxonomy') return { title: '분류체계', noAside: true };
+  //  #4179 사용 가이드. 문서를 보고 있으면 그 문서의 제목이 이름이다(홈 목록에서 무엇을 읽던 창인지 보인다).
+  if (p === 'learn') return { title: guideTabTitle(parseGuideRoute(segs, parseRoute(route).params)), noAside: true };
   if (p === 'archive') return { title: '지난 세션', noAside: false };   // #1851 → #1850 안 A: 곁칸이 '안에 든 것'을 보여 준다
   if (p === 'trash') return { title: '휴지통', noAside: true };   // #3778 안 D — 네 탭이 「안에 든 것」을 탭 안에서 말한다(곁칸 없음)
   if (p === 'connect') return { title: !segs[1] ? '외부 앱 연결' : segs[1] === '_git' ? '코드 저장소' : segs[1] === '_db' ? '데이터베이스' : '앱 연결', noAside: true };
@@ -1229,6 +1232,23 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       void ensureSingletonAppInstance('taxonomy', '분류체계')
         .then((inst) => { if (inst && seq === tab.seq) setTabAppInstance(tab, inst.id, inst.app_id); })
         .catch(() => { /* 앱이 아직 안 깔린 게이트웨이. 무회귀 */ });
+    } else if (page === 'learn') {
+      // #4179 사용 가이드 앱. 셸이 직접 그린다(종전엔 클래식 화면을 액자에 실었다). 주소가 정본이다:
+      //  `#/learn` = 첫 화면 · `#/learn/docs/<문서>` = 문서 한 장 · `?h=<절>` = 그 문서의 절.
+      //  옛 주소(#/learn/tour · #/learn/install)는 클래식 화면으로 넘긴다. 그 화면은 아래 CLASSIC_PAGES 갈래가 연다.
+      const where = parseGuideRoute(segs, params);
+      if (where.redirect) {
+        tab.route = where.redirect;
+        if (tabsApi?.current() === tab && location.hash !== where.redirect) { suppressHash++; location.replace(location.pathname + location.search + where.redirect); }
+        tabsApi?.routed(tab); void renderRoute(tab); return;
+      }
+      markActive('learn');
+      noteAppUse('learn');
+      tab.aside.replaceChildren();
+      renderGuideApp(tab.center, where, { shell: true });
+      void ensureSingletonAppInstance('learn', '사용 가이드')
+        .then((inst) => { if (inst && seq === tab.seq) setTabAppInstance(tab, inst.id, inst.app_id); })
+        .catch(() => { /* 앱이 아직 안 깔린 게이트웨이. 화면은 그대로 선다 */ });
     } else if (page === 'archive' || page === 'trash') {
       // 아카이브·휴지통(#1851) — 사이드바 발치의 두 행이 여는 화면. ⚠ 'trash' 는 클래식 표(CLASSIC_PAGES)에도 있어
       //  이 분기가 그보다 **앞에** 서야 한다(뒤에 두면 WIKI 앱 프레임의 옛 휴지통이 열린다 — 그쪽은 화면 안 링크로 간다).
@@ -1508,10 +1528,10 @@ function activeKey(): string {
  *  탭 크롬(applyTabChrome)은 그 탭의 주소로 물어야 한다: 부팅 중엔 tabsApi.current() 가 아직 그 탭이 아니다. */
 function activeKeyOf(route: string): string {
   const cur = parseRoute(route);
-  return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : cur.segs[0] === 'sources' ? 'sources' : cur.segs[0] === 'taxonomy' ? 'taxonomy' : cur.segs[0] === 'connect' ? 'connect' : cur.segs[0] === 'archive' ? 'archive' : cur.segs[0] === 'trash' ? 'trash' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
+  return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : cur.segs[0] === 'sources' ? 'sources' : cur.segs[0] === 'taxonomy' ? 'taxonomy' : cur.segs[0] === 'learn' ? 'learn' : cur.segs[0] === 'connect' ? 'connect' : cur.segs[0] === 'archive' ? 'archive' : cur.segs[0] === 'trash' ? 'trash' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
 }
 /** 사이드바를 접고 맨 윗줄을 창 전폭으로 펴는 화면(#3830). 늘리려면 그 화면이 **사이드바에서 아무것도 안 읽는지** 먼저 본다. */
-const CTX_FULL_WIDTH = new Set(['app:context']);
+const CTX_FULL_WIDTH = new Set(['app:context', 'learn']);   // 'learn' = 사용 가이드(#4179). 제 문서 목록을 스스로 그리므로 셸 사이드바를 읽지 않는다
 // ── 좌측 사이드바는 **늘 있다**(원준 2026-08-20) ──────────────────────────────────
 //  이력: 3차(2026-08-19)에 좌측 열을 걷고 떠다니는 알약으로 여닫게 했는데, 그 알약이 ⓐ 자리를 가리고
 //  ⓑ 새로고침·상태에 따라 목록이 사라져 "왜 없어졌나"를 매번 되찾아야 했다(원준 신고). 목록은 셸의 뼈대다 —
@@ -1611,6 +1631,7 @@ function sideRowFace(route: string, draft?: string): Omit<SideInstance, 'id' | '
   else if (page === 'inbox') { icon = 'inbox'; meta = '댓글·언급 · 리브의 답 · 앱 알림'; }
   else if (page === 'sources') { icon = 'src'; meta = '모아 둔 원본 자료'; }
   else if (page === 'taxonomy') { icon = 'tags'; meta = '분류와 묶음'; }
+  else if (page === 'learn') { icon = 'learn'; meta = '화면별 사용법'; }
   else if (page === 'connect') { icon = 'link'; meta = '외부 앱 연결'; }
   //  치워 둔 곳(#1851)은 클래식 지식 앱으로 접히므로(CLASSIC_PAGES) 여기서 먼저 가른다 — 아니면 '지식 트리…'가 붙는다.
   else if (page === 'archive') { icon = 'archive'; meta = '멈춘 세션 · 치운 세션'; }
@@ -1787,7 +1808,7 @@ function pinnedAt(key: string, group: string, at: number): number {
  *  묶음: 사람이 볼 일 있는 것(작업 중·확인 필요·완료 미확인)이 맨 위, 나머지는 마지막 작업 날짜별로.
  */
 /** 정본 주소를 갖는 단일 인스턴스 빌트인 — 좌측 목록에서 인스턴스 행과 창 행이 한 줄로 접힌다(#2423). */
-const CANON_ROUTE_APP: Record<string, string> = { inbox: '#/inbox', sources: '#/sources', taxonomy: '#/taxonomy' };
+const CANON_ROUTE_APP: Record<string, string> = { inbox: '#/inbox', sources: '#/sources', taxonomy: '#/taxonomy', learn: '#/learn' };
 
 /**
  * ③(열린 창)이 세우려는 화면을 **서버가 아직 아는가** (#2460).

@@ -1,12 +1,13 @@
-// learn.ts — 안내·문서 표면(#/learn 계열)의 소유 모듈 + 옛 UI 프리미티브 재수출 배럴.
-//  화면: 가이드 히어로·메뉴 한눈에 보기(#/learn, #/learn/menu) · 사용설명서 문서 사이트 셸(#/learn/docs — 원고는
-//   docs-content.ts) · 둘러보기 랜딩(#/learn/tour) · 설치 모달(renderInstall·openInstallModal) · 온보딩 진행(#/onboarding).
+// learn.ts — 클래식 안내 표면의 소유 모듈 + 옛 UI 프리미티브 재수출 배럴.
+//  ★ 「사용 가이드」 본체는 여기 없다(#4179, 2026-09-27). 가이드는 새 셸이 직접 그리는 앱이 됐다: 화면 web/guide/app.ts ·
+//   본문 web/guide/render.ts · 도식 web/guide/figures.ts · 원고 web/docs-content.ts.
+//  이 파일에 남은 화면: 클래식 「시작하기」가 쓰는 문서 셸(docsShell — start.ts) · 둘러보기 랜딩(#/start/tour) ·
+//   설치 모달(renderInstall · openInstallModal) · 온보딩 진행(#/onboarding).
 //  소비자: main.ts(라우팅) · 설치/온보딩 안내를 여는 start.ts·admin 계열.
 //  ⚠ 재수출(하위호환): skeleton·skeletonRows·overlayBox 는 **이 파일 소유가 아니다** — ui-primitives.ts 가 소유하고
 //   여기서 그대로 재수출할 뿐이다(#1313 R27). 18개 파일이 옛 경로 './learn.js' 로 가져가고 있어 남겨 뒀다.
 //   새 소비자는 ui-primitives.ts 에서 직접 받아라 — 이 배럴 몫은 줄어드는 방향으로만 간다.
-import { api, el, errorNote, navOn, pageHead, renderMarkdown, state, sv } from './core.js';
-import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
+import { api, el, errorNote, navOn, pageHead, state } from './core.js';
 // 관리탭 조각 4개를 **실체 모듈에서 직접** 받는다(#1313 R40). 종전엔 넷 다 './admin.js' 배럴 경유였고,
 //  admin.ts 가 review/visibility-axes 를 import 하는 한 그 배럴이 learn 으로 되돌아오는 순환 4건을 만들었다
 //  (check-imports 의 ALLOWED_CYCLES 에 'R37/R40 이 나가면 사라진다'로 예약돼 있던 바로 그것).
@@ -17,395 +18,30 @@ import { loadAdmin } from './admin-rerender.js';
 //  가져갔다(admin 과는 상호 import = 순환). 지금은 ui-primitives 소유이고 아래 export 로 그대로 재수출한다.
 import { copyButton, overlayBox, skeleton, skeletonRows } from './ui-primitives.js';
 import { isGuideTourDone, isSectionDone, startGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 크로스탭 스포트라이트 투어
-import { DOC_PAGES } from './docs-content.js'; // 사용설명서 원고(#780) — Claude Code docs 형식
-import { CTX_APP_NAME } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
+import { guideIcon } from './guide/icon.js';   // 그림은 표(lib/icon-paths.ts) 한 벌을 읽는다
 
-// 안내(#/learn) — 지식유형/수집 ground-truth(GET /api/ui/learn = kind_registry + data_source) 렌더.
-//  비개발자 대상: V4 본질 종류 4종(R·K·H·W) 중심 + 통합 예정 legacy 종류는 graceful 표시 + 데이터소스별 수집방식. 읽기 전용.
-//  V4: 종류(kind)·주제(카테고리)·출처(provenance)는 별개 축 — 종류는 본질, 주제는 분류축, 출처는 채널 사실.
-//  non-stale: 서버가 DB 를 그대로 반환하므로 정의를 DB 에서 고치면 이 화면도 즉시 반영(런북과 동일 데이터).
-//  §0.5 절제: 무채색 카드 + 작은 상태 점만, 채운 배지 금지. 자유텍스트는 안전 마크다운 렌더 재사용.
-// ════════════════════════════════════════════
-// 가이드(#/learn) — 비개발자가 이 서비스 '전체'와 '각 메뉴'를 한 번에 이해하도록 재구성(2026-06-30).
-//  두 기둥: ① 히어로 = 서비스를 관통하는 한 문장 + 작동 3단계 ② 메뉴 한눈에 보기 = 탭별 친절 설명.
-//  보조: 처음이라면(순서 경로) + WIKI 에 쌓이는 '지식 한 덩어리'(R·K·H·W) 예시. 정적 — API 불필요.
-// ── 사용 가이드(#1841 재설정) — 프로젝트·AI 세션·WIKI·맥락 관리와 같은 머리 3층 안에 문서를 싣는다. ──
-//  ① 빵부스러기(사용 가이드 + 한 줄) ② 뷰 탭 = 문서 묶음(시작하기 · 매일 쓰는 것 · 연결하기 · 팀 운영 · 레퍼런스)
-//  ③ 툴바 = 그 묶음의 문서 알약. 좌측 사이드바(.docs-side)는 이 화면에서 더 쓰지 않는다(관리탭·증류기가 그 CSS 를 쓰므로 규칙은 남긴다).
-//  원고는 docs-content.ts(DOC_PAGES) — 2026-08-24 v2 셸 기준으로 처음부터 다시 썼다(옛 원고는 폐기, 원준 지시).
-//  active 키: DOC_PAGES slug | 'start' | 'start-project' | 'tour' | 'install'(start.ts·둘러보기가 같은 셸을 쓴다).
-interface GuideNavItem { key: string; label: string; href: string }
-interface GuideNavGroup { key: string; group: string; hint: string; items: GuideNavItem[] }
-const GUIDE_NAV: GuideNavGroup[] = [
-  { key: 'begin', group: '시작하기', hint: '처음 10분 — 무엇이고, 어떻게 첫 일을 시키나', items: [
-    { key: 'overview', label: '라이블리란', href: '#/learn' },
-    { key: 'first-run', label: '첫 작업 시키기', href: '#/learn/docs/first-run' },
-    { key: 'screen-map', label: '화면 한눈에', href: '#/learn/docs/screen-map' },
-    { key: 'start', label: '설치·설정 체크', href: '#/start' },
-  ] },
-  { key: 'daily', group: '매일 쓰는 것', hint: '일을 시키고, 답하고, 결과를 정리하는 네 화면', items: [
-    { key: 'sessions', label: '새 작업과 세션', href: '#/learn/docs/sessions' },
-    { key: 'inbox', label: '확인할 것', href: '#/learn/docs/inbox' },
-    { key: 'projects', label: '프로젝트', href: '#/learn/docs/projects' },
-    { key: 'wiki', label: 'WIKI', href: '#/learn/docs/wiki' },
-    { key: 'search', label: '검색', href: '#/learn/docs/search' },
-  ] },
-  { key: 'connect', group: '연결하기', hint: 'AI 가 내 계정·내 컴퓨터로 일하게 만드는 법', items: [
-    { key: 'connect', label: '외부 앱 연결', href: '#/learn/docs/connect' },
-    { key: 'nodes', label: '내 컴퓨터 연결', href: '#/learn/docs/nodes' },
-    { key: 'liv', label: '리브', href: '#/learn/docs/liv' },
-  ] },
-  { key: 'team', group: '팀 운영', hint: '관리자·팀장이 맥락과 설정을 돌보는 곳', items: [
-    { key: 'context', label: CTX_APP_NAME, href: '#/learn/docs/context' },
-    { key: 'settings', label: '설정', href: '#/learn/docs/settings' },
-  ] },
-  { key: 'ref', group: '레퍼런스', hint: '찾아볼 때', items: [
-    { key: 'states', label: '상태와 표시', href: '#/learn/docs/states' },
-    { key: 'commands', label: '명령어·단축키', href: '#/learn/docs/commands' },
-    { key: 'glossary', label: '용어집', href: '#/learn/docs/glossary' },
-  ] },
-];
-// start.ts·둘러보기가 쓰는 키를 묶음에 붙인다(탭 강조·알약 표시용). 'tour'·'install' 은 알약엔 없고 탭만 시작하기로 켠다.
-const GUIDE_KEY_GROUP: Record<string, string> = { 'start-project': 'begin', tour: 'begin', install: 'begin' };
-function guideGroupOf(active: string): GuideNavGroup {
-  const direct = GUIDE_NAV.find((g) => g.items.some((i) => i.key === active));
-  if (direct) return direct;
-  const k = GUIDE_KEY_GROUP[active];
-  return GUIDE_NAV.find((g) => g.key === k) || GUIDE_NAV[0];
+// ── 클래식 문서 셸의 머리. 「사용 가이드」로 돌아가는 길 하나만 둔다(문서 목록은 가이드 앱이 그린다). ──
+function legacyHeader(): HTMLElement {
+  return el('div', { class: 'pjv-board-header lg-board-header' },
+    el('div', { class: 'pjv-crumbbar' },
+      el('nav', { class: 'pjv-crumbs', 'aria-label': '현재 위치' },
+        el('a', { class: 'pjv-crumb is-leaf lg-crumb-leaf', href: '#/learn' }, guideIcon('learn', 'pjv-crumb-ic lg-crumb-ic'), el('span', { class: 'pjv-crumb-label', text: '사용 가이드' })),
+        el('span', { class: 'lg-crumb-sub', text: '시작하기' }))));
 }
 
-/** 머리 3층(프로젝트 탭 동형) — 빵부스러기 › 묶음 탭 › 문서 알약. */
-function guideHeader(active: string): HTMLElement {
-  const grp = guideGroupOf(active);
-  const crumbBar = el('div', { class: 'pjv-crumbbar' },
-    el('nav', { class: 'pjv-crumbs', 'aria-label': '현재 위치' },
-      el('span', { class: 'pjv-crumb is-leaf lg-crumb-leaf' }, tabIcon('help', 'pjv-crumb-ic lg-crumb-ic'), el('span', { class: 'pjv-crumb-label', text: '사용 가이드' })),
-      el('span', { class: 'lg-crumb-sub', text: grp.hint })));
-  const tabs = el('div', { class: 'pjv-vtabs lg-vtabs', role: 'tablist', 'aria-label': '문서 묶음' });
-  for (const g of GUIDE_NAV) {
-    const on = g.key === grp.key;
-    tabs.append(el('a', { class: 'pjv-vtab lg-vtab' + (on ? ' active' : ''), href: g.items[0].href, role: 'tab', 'aria-selected': String(on) },
-      el('span', { class: 'lg-vtab-label', text: g.group })));
-  }
-  const left = el('div', { class: 'pjv-tasks-head-left' });
-  for (const it of grp.items) {
-    const on = it.key === active;
-    left.append(el('a', { class: 'pjv-tb-btn pjv-tb-pill lg-pill' + (on ? ' active' : ''), href: it.href, 'aria-current': on ? 'page' : null },
-      el('span', { class: 'pjv-view-btn-label', text: it.label })));
-  }
-  const right = el('div', { class: 'card-head-actions' },
-    el('a', { class: 'pjv-tb-btn lg-tb-open', href: location.href.split('#')[0] + (location.hash || '#/learn'), target: '_blank', rel: 'noopener', title: '새 브라우저 탭에서 열기' }, tabIcon('external', 'pjv-tb-ic')));
-  return el('div', { class: 'pjv-board-header lg-board-header' }, crumbBar, tabs, el('div', { class: 'card-head pjv-board-toolbar' }, left, right));
-}
-
-// 문서 셸 — 머리 3층 + 본문. 모든 사용 가이드 화면(문서·시작하기·둘러보기·온보딩)이 이 셸 안에서 렌더된다.
-//  export: #/start(start.ts)도 이 셸을 쓴다 — 시그니처(view, active, ...content)는 그대로.
-export function docsShell(view, active, ...content) {
+// 문서 셸 — 머리 + 본문. 클래식 「시작하기」(start.ts) · 둘러보기 · 설치 화면이 이 셸 안에서 렌더된다.
+//  export: 시그니처(view, active, ...content)는 그대로다. active 는 옛 문서 목록의 강조 키였고 지금은 쓰지 않는다.
+export function docsShell(view, _active, ...content) {
   const article = el('article', { class: 'docs-body lg-article' }, ...content);
-  wireGuideLinks(article);   // #780 원고 링크 동작: 같은 페이지=부드러운 스크롤 / 다른 카테고리·탭·외부=새 브라우저 탭
   view.replaceChildren(el('div', { class: 'pjv-board-wrap lg-wrap' },
-    el('div', { class: 'card pjv-listboard lg-board' }, guideHeader(String(active || 'overview')), el('div', { class: 'lg-body' }, article))));
+    el('div', { class: 'card pjv-listboard lg-board' }, legacyHeader(), el('div', { class: 'lg-body' }, article))));
   document.getElementById('view')!.focus?.();
   try { view.scrollTop = 0; window.scrollTo({ top: 0 }); } catch { /* noop */ }
 }
 
-// 해시 라우트를 페이지 키/쿼리/프래그먼트로 분해. '#/learn/docs/wiki?focus=required' → {page:'/learn/docs/wiki', query:'focus=required', frag:''}
-function guideRouteKey(hash: string) {
-  let h = String(hash || '');
-  const hi = h.indexOf('#'); if (hi >= 0) h = h.slice(hi + 1);       // 선두 '#' 제거
-  let frag = ''; const fi = h.indexOf('#'); if (fi >= 0) { frag = h.slice(fi + 1); h = h.slice(0, fi); } // 2차 #앵커
-  let query = ''; const qi = h.indexOf('?'); if (qi >= 0) { query = h.slice(qi + 1); h = h.slice(0, qi); }
-  return { page: h.replace(/\/+$/, ''), query, frag };
-}
-
-// 원고(프로즈) 안의 링크 동작(#780) — 목적지가 지금 이 페이지면 부드럽게 스크롤, 다른 세부 카테고리·다른 탭·외부면 새 브라우저 탭.
-//  사이드바(.docs-side)와 #/start 의 인터랙티브 카드는 건드리지 않는다: 렌더된 원고(.docs-md/.docs-lead) 안의 링크만 가로챈다.
-//  ⌘/ctrl/⇧/가운데클릭·자체 preventDefault 한 링크는 그대로 둔다(네이티브 새 탭·전용 핸들러 보존).
-function wireGuideLinks(article: any) {
-  article.addEventListener('click', (ev: any) => {
-    if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
-    const a = (ev.target as Element)?.closest?.('a[href]') as HTMLAnchorElement | null;
-    if (!a || !a.closest('.docs-md, .docs-lead')) return;   // 렌더된 원고 안의 링크만
-    const href = a.getAttribute('href') || '';
-    if (!href || href === '#') return;
-    if (href.startsWith('#')) {
-      const tgt = guideRouteKey(href), cur = guideRouteKey(location.hash);
-      if (tgt.page && tgt.page === cur.page) {              // ── 같은 페이지 → 부드러운 스크롤
-        ev.preventDefault();
-        let to: any = tgt.frag ? document.getElementById(tgt.frag) : null;
-        if (!to && /(^|&)focus=required(&|$)/.test(tgt.query)) to = document.getElementById('learn-required');
-        if (to) {
-          to.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          to.style.transition = 'box-shadow .3s ease';      // 도착 지점 살짝 강조(#317 focus 하이라이트와 동일)
-          to.style.boxShadow = '0 0 0 2px var(--blue)';
-          setTimeout(() => { to.style.boxShadow = ''; }, 1200);
-        } else {
-          article.scrollIntoView({ behavior: 'smooth', block: 'start' }); // 앵커 없는 자기 링크 → 맨 위로
-        }
-        return;
-      }
-      ev.preventDefault();                                   // ── 다른 세부 카테고리·다른 탭 → 새 브라우저 탭
-      window.open(location.href.split('#')[0] + href, '_blank', 'noopener');
-    } else if (/^https?:\/\//i.test(href)) {                 // ── 외부 링크 → 새 브라우저 탭
-      ev.preventDefault();
-      window.open(href, '_blank', 'noopener');
-    }
-  });
-}
-// 페이지 아이브로 — 묶음 이름을 제목 위에 얹는다(start.ts 가 같은 함수를 쓴다).
-export function docsEyebrow(key) {
-  const g = guideGroupOf(String(key || ''));
-  return el('div', { class: 'docs-eyebrow', text: g.group });
-}
-
-// ── 원고(md) → 가이드 카드의 연속(#780 디자인 통일). ────────────────────────────────────────
-//  문서가 히어로·WIKI 설명 카드와 '같이 만든 물건'으로 보이려면, 흘러가는 마크다운이 아니라 제품의 카드 문법이어야 한다:
-//  ## 섹션 하나 = .card 하나(card-head h2 + guide-lead + 구조화된 본문). 첫 H2 앞 도입부는 카드 밖 리드(히어로 리드).
-//  카피는 손대지 않는다 — 같은 문장을 제품의 시각 언어(피처 카드·번호 단계·이동 카드)로 다시 조판할 뿐이다.
-function docsBody(md: string, ...lead: any[]) {
-  const secs: { title: string | null; lines: string[] }[] = [{ title: null, lines: [] }];
-  let fence = false, depth = 0;
-  for (const line of String(md || '').split('\n')) {
-    if (/^(```|~~~)/.test(line)) fence = !fence;
-    else if (!fence && /^:::\s*[a-zA-Z_-]/.test(line)) depth++;
-    else if (!fence && line.trim() === ':::') depth = Math.max(0, depth - 1);
-    const h2 = !fence && !depth && /^##\s+(.+)$/.exec(line);
-    if (h2) { secs.push({ title: h2[1].trim(), lines: [] }); continue; }
-    secs[secs.length - 1].lines.push(line);
-  }
-  const cards = el('div', { class: 'guide-cards' }, ...lead.filter(Boolean)); // 히어로 등 앞머리 카드도 같은 흐름(간격 통일)
-  for (const s of secs) {
-    const body = s.lines.join('\n').trim();
-    if (!body) continue;
-    if (s.title && /^다음\s*단계/.test(s.title)) continue;  // #req 각 페이지 끝 '다음 단계' 링크 묶음은 렌더 제외 — 사이드바와 중복되는 군더더기 내비
-    if (!s.title) {
-      // 도입부 — 문단·인용까지만 카드 밖 리드. 표·목록·코드 같은 '내용'이 시작되면 그 아래는 제목 없는 카드로
-      //  감싼다(용어집처럼 본문이 통째로 표인 문서가 카드 밖으로 새는 것 방지).
-      const at = s.lines.findIndex((l) => /^\s*(\||[-*+]\s|\d+\.\s|```|~~~|:::)/.test(l));
-      const lead = (at < 0 ? s.lines : s.lines.slice(0, at)).join('\n').trim();
-      const rest = at < 0 ? '' : s.lines.slice(at).join('\n').trim();
-      if (lead) cards.append(el('div', { class: 'md-rendered docs-lead' }, renderMarkdown(lead, { uiChips: true })));
-      if (rest) cards.append(el('div', { class: 'card docs-card' },
-        el('div', { class: 'md-rendered docs-md' }, docsDecorate(renderMarkdown(rest, { uiChips: true })))));
-      continue;
-    }
-    cards.append(el('div', { class: 'card docs-card' },
-      el('div', { class: 'card-head' }, el('h2', { text: s.title })),
-      el('div', { class: 'md-rendered docs-md' }, docsDecorate(renderMarkdown(body, { uiChips: true })))));
-  }
-  return cards;
-}
-
-// 렌더된 마크다운을 제품 시각 언어로 승격 — 문장은 그대로, 조판만 바꾼다.
-//  ① 첫 문단 = 리드(guide-lead) ② '**굵은 제목** — 설명' 목록 = 피처 카드 그리드(kn-axis-opt 문법)
-//  ③ 링크로 시작하는 목록('다음 단계') = 이동 카드 그리드(tabguide-card 문법) ④ 번호 목록 = 번호 단계(guide-path 문법)
-function docsDecorate(root: any) {
-  const lead = root.querySelector(':scope > .md-p');
-  if (lead) lead.classList.add('guide-lead');
-
-  // 코드블록에 [복사] — 이 문서들의 코드블록은 '읽는 예시'가 아니라 **그대로 가져가 쓰는 것**이다
-  //  (설치 한 줄 · 배선 점검 프롬프트 60줄). 드래그 선택은 긴 블록에서 특히 불편하고 앞뒤가 잘리기 쉽다.
-  //  copyButton 은 비보안 origin(http://localhost)에서도 execCommand 폴백으로 동작한다(ui-primitives).
-  for (const pre of Array.from(root.querySelectorAll('pre.md-pre')) as any[]) {
-    const text = String(pre.textContent || '');
-    if (!text.trim() || !pre.parentNode) continue;
-    const wrap = el('div', { class: 'md-pre-copy' });
-    pre.parentNode.insertBefore(wrap, pre);
-    wrap.append(copyButton(() => text, '복사'), pre);
-  }
-
-  for (const ul of Array.from(root.querySelectorAll('ul.md-list')) as any[]) {
-    const lis = Array.from(ul.children) as any[];
-    if (!lis.length) continue;
-    const first = (li: any) => li.firstElementChild && li.firstElementChild === li.firstChild ? li.firstElementChild.tagName : '';
-    const strip = (box: any) => {
-      const n = box.firstChild;
-      //  #4233. 쌍점도 구분자로 받는다(«**제목**: 설명»). 긴 줄표 없이도 피처 카드를 쓸 수 있게.
-      if (n && n.nodeType === 3) n.textContent = String(n.textContent).replace(/^\s*[—–:-]\s*/, '');
-    };
-    // ② 피처 카드 — 모든 항목이 굵은 제목으로 시작할 때
-    if (lis.every((li) => first(li) === 'STRONG')) {
-      const grid = el('div', { class: 'docs-featgrid' });
-      for (const li of lis) {
-        // 제목의 인라인 노드를 그대로 옮긴다(텍스트만 뽑지 않는다) — '**[화면](#/system/…)**' 처럼
-        //  굵은 제목 안에 링크가 든 원고(관리 문서의 '전체 지도')에서 링크가 통째로 버려지던 것 방지.
-        const t = el('div', { class: 'docs-feat-t' });
-        const strong = li.firstElementChild;
-        while (strong.firstChild) t.append(strong.firstChild);
-        strong.remove();
-        const d = el('div', { class: 'docs-feat-d' });
-        while (li.firstChild) d.append(li.firstChild);
-        strip(d);
-        grid.append(el('div', { class: 'docs-feat' }, t, d));
-      }
-      ul.replaceWith(grid);
-      continue;
-    }
-    // ③ 이동 카드 — 모든 항목이 링크로 시작할 때(문서 끝 '다음 단계')
-    if (lis.every((li) => first(li) === 'A')) {
-      const grid = el('div', { class: 'docs-linkgrid' });
-      for (const li of lis) {
-        const a = li.firstElementChild;
-        const card = el('a', { class: 'docs-linkcard', href: a.getAttribute('href') || '#' });
-        card.append(el('span', { class: 'docs-linkcard-t' },
-          el('span', { text: a.textContent }), el('span', { class: 'docs-linkcard-arrow', 'aria-hidden': 'true', text: '→' })));
-        a.remove();
-        const d = el('span', { class: 'docs-linkcard-d' });
-        while (li.firstChild) d.append(li.firstChild);
-        strip(d);
-        if (d.textContent.trim()) card.append(d);
-        grid.append(card);
-      }
-      ul.replaceWith(grid);
-    }
-  }
-  // ⑤ 표 — 가로 스크롤 래퍼로 감싼다(좁은 화면에서 카드를 밀지 않게). 폭·정렬은 CSS(.docs-tablewrap).
-  for (const t of Array.from(root.querySelectorAll('table.md-table')) as any[]) {
-    const wrap = el('div', { class: 'docs-tablewrap' });
-    t.replaceWith(wrap);
-    wrap.append(t);
-  }
-  // ④ 번호 단계 — 순서 목록을 제품의 번호 뱃지 줄(guide-path)로
-  for (const ol of Array.from(root.querySelectorAll('ol.md-list')) as any[]) {
-    const steps = el('div', { class: 'docs-steps' });
-    Array.from(ol.children).forEach((li: any, i: number) => {
-      const body = el('div', { class: 'docs-step-body' });
-      while (li.firstChild) body.append(li.firstChild);
-      steps.append(el('div', { class: 'docs-step' },
-        el('span', { class: 'docs-step-num', 'aria-hidden': 'true', text: String(i + 1) }), body));
-    });
-    ol.replaceWith(steps);
-  }
-  return root;
-}
-
-// md 문서 페이지 한 장 — slug 로 원고를 찾아 렌더. wiki 페이지엔 기존 인터랙티브 카드 2장을 이어 붙인다(내용 보존).
-//  머리(아이브로+제목)는 원고의 첫 # 제목을 승격해 그린다 — 문구는 원고 그대로, 표현만 히어로 문법.
-async function renderLearnDocs(view, slug) {
-  // 옛 slug 보존 — 링크가 밖에 박혀 있을 수 있다(홈 칩·WIKI 부제·지식 본문). 새 문서로 보낸다.
-  const LEGACY: Record<string, string> = { plan: '', domainmap: 'context', home: 'sessions', terminal: 'sessions', admin: 'settings', cli: 'commands', 'how-it-works': '' };
-  if (slug in LEGACY) { location.replace(LEGACY[slug] ? '#/learn/docs/' + LEGACY[slug] : '#/learn'); return; }
-  const page = DOC_PAGES.find((p) => p.slug === slug);
-  if (!page) { location.replace('#/learn'); return; }
-  const h1 = /^#\s+(.+)\r?\n/.exec(page.md);
-  const md = h1 ? page.md.slice(h1[0].length) : page.md;
-  const body: any[] = [
-    docsEyebrow(slug),
-    el('h1', { class: 'docs-title', text: (h1 ? h1[1] : page.title).trim() }),
-    docsBody(md),
-  ];
-  if (slug === 'wiki') {
-    body.push(el('div', { class: 'guide-cards', style: 'margin-top:18px' }, projectKnowledgeCard()));   // #/learn/docs/wiki?focus=required 대상(프로젝트 '연결된 지식' 부제 링크)
-  }
-  docsShell(view, slug, ...body);
-  // 프로젝트 '연결된 지식' 부제의 [자세히]로 들어오면 해당 카드로 스크롤 + 잠깐 강조(#317).
-  if (slug === 'wiki' && /[?&]focus=required(?:&|$)/.test(location.hash)) {
-    requestAnimationFrame(() => {
-      const card = document.getElementById('learn-required');
-      if (!card) return;
-      card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      card.style.transition = 'box-shadow .3s ease';
-      card.style.boxShadow = '0 0 0 2px var(--blue)';
-      setTimeout(() => { card.style.boxShadow = ''; }, 1500);
-    });
-  }
-}
-
-// #/learn — 문서 홈 = '라이블리 개요'. 히어로(서비스 정의+작동 3단계)를 원고 위에 얹는다(구 가이드 랜딩 보존).
-async function renderLearn(view) {
-  // 구 딥링크 #/learn?focus=required(#317) — 필요지식 카드는 WIKI 문서 페이지로 이사했다.
-  if (/[?&]focus=required(?:&|$)/.test(location.hash)) { location.replace('#/learn/docs/wiki?focus=required'); return; }
-  const page = DOC_PAGES.find((p) => p.slug === 'overview');
-  const md = page ? page.md.replace(/^#\s+.+\r?\n/, '') : '';   // 원고의 H1 은 docs-title 이 대신한다(다른 문서와 같은 규칙)
-  docsShell(view, 'overview',
-    docsEyebrow('overview'),
-    el('h1', { class: 'docs-title', text: page ? page.title : '라이블리란' }),
-    docsBody(md, heroCard())); // 히어로 = 같은 카드 흐름의 첫 장(간격 통일)
-}
-
-// ── 히어로 — 이 서비스가 통째로 뭔지(한 문장) + 하루의 순환 4단계. 개요 문서의 첫 카드. ──
-//  #1841: 모노캡 아이브로('LIVELY CONTEXT') 폐지 — 장식이지 정보가 아니었다. 제목·리드·순환·핵심 한 줄만.
-function heroCard() {
-  return el('div', { class: 'card guide-hero lg-hero' },
-    el('h2', { class: 'guide-hero-title' },
-      '회사가 쓰는 AI 를 위한 ', el('span', { class: 'accent', text: '공용 맥락 저장소' }), '.'),
-    el('p', { class: 'guide-hero-lead', text: 'AI 는 세상 지식은 많지만 우리 회사가 무슨 일을 하는지, 어떤 규칙이 있는지, 지금 무엇이 진행 중인지는 모릅니다. 라이블리는 그 배경을 한곳에 모아 두고 구성원이 AI 를 켤 때마다 자동으로 건네줍니다 — 그래서 누가 켜든 회사를 이미 아는 상태에서 일이 시작됩니다.' }),
-    el('div', { class: 'guide-cycle' },
-      el('div', { class: 'guide-flow' },
-        flowStep('layers', '모아두기', '규칙·지식·진행 상황이 WIKI 와 프로젝트에 쌓입니다.'),
-        flowArrow(),
-        flowStep('send', '자동 전달', '세션을 켜면 그 내용이 AI 에게 먼저 들어갑니다.'),
-        flowArrow(),
-        flowStep('zap', '바로 일 시작', '배경 설명 없이 한 줄만 시키면 됩니다.'),
-        flowArrow(),
-        flowStep('save', '다시 쌓기', '결정·결과를 AI 가 지식으로 남깁니다.')),
-      el('div', { class: 'guide-loop' },
-        el('span', { class: 'guide-loop-label' },
-          el('span', { class: 'guide-loop-key', 'aria-hidden': 'true', text: '↻' }),
-          el('b', { text: '남긴 지식은 다시 모아두기로' }),
-          el('span', { class: 'guide-loop-sub', text: '쓸수록 AI 가 받는 맥락이 정확해집니다' })))),
-    el('div', { class: 'guide-remember' },
-      el('span', { class: 'guide-remember-key', text: '핵심 한 줄' }),
-      el('p', { text: '어디서 켜든 같습니다 — 라이블리 웹이든 내 터미널이든, 같은 회사 맥락이 들어갑니다.' })));
-}
-
-// 작동 3단계 — 아이콘 + 제목 + 한 줄.
-function flowStep(icon, title, desc) {
-  return el('div', { class: 'guide-flow-step' },
-    el('span', { class: 'guide-flow-icon' }, tabIcon(icon)),
-    el('div', { class: 'guide-flow-title', text: title }),
-    el('p', { class: 'guide-flow-desc', text: desc }));
-}
-function flowArrow() { return el('div', { class: 'guide-flow-arrow', 'aria-hidden': 'true', text: '→' }); }
-
-// ── 그 지식을 [프로젝트]에 '필요지식'으로 연결하면? — 맥락의 기록(WIKI) → 맥락의 변화(프로젝트) 다리. 비개발자용(#317). ──
-//  새 CSS 없이 hero 의 guide-flow + guide-remember 패턴 재사용(같은 '3단계' 시각 언어로 통일).
-function projectKnowledgeCard() {
-  return el('div', { class: 'card', id: 'learn-required' },
-    el('div', { class: 'card-head' }, el('h2', { text: '프로젝트에 ‘필요지식’을 연결하면 뭐가 좋나요' })),
-    el('p', { class: 'guide-lead', text: 'WIKI에 쌓인 지식은 [프로젝트]에서 ‘필요지식’으로 연결할 수 있어요. 어떤 일을 시작하기 전에 “이건 먼저 알아야 한다”는 지식을 골라 붙여두면, 그 프로젝트를 맡는 AI가 그 내용을 검색으로 찾을 필요 없이 처음부터 아는 상태로 일을 시작합니다.' }),
-    el('div', { class: 'guide-flow' },
-      flowStep('book-open', '지식 고르기', '관련된 결정·규칙·자료를 그 프로젝트의 ‘필요지식’으로 연결해요.'),
-      flowArrow(),
-      flowStep('send', '자동으로 전달', '그 프로젝트를 맡은 AI에게 그 지식이 처음부터 함께 전달돼요.'),
-      flowArrow(),
-      flowStep('zap', '헤매지 않고 시작', '배경을 다시 묻거나 모른 채 추측하지 않고, 팀의 결정대로 정확히 일해요.')),
-    el('div', { class: 'guide-remember' },
-      el('span', { class: 'guide-remember-key', text: '왜 좋나' }),
-      el('p', { text: '필요지식을 붙여두면 AI가 ‘회사를 아는 채로’를 넘어 ‘이 프로젝트를 아는 채로’ 시작합니다 — 같은 배경을 반복해 설명하지 않아도 돼요.' })),
-    el('p', { class: 'admin-hint', style: 'margin-top:12px' }, '‘필요’는 시작 전에 참고할 지식, ‘산출’은 그 프로젝트가 일하며 새로 만들어 낸 지식이에요. 산출은 처음엔 비어 있는 게 정상 — 일이 진행되며 쌓여요.'),
-    el('p', { class: 'admin-hint', style: 'margin-top:6px' }, '프로젝트를 열고 ‘지식 흐름’에서 ',
-      el('b', { text: '[✨ 지식 찾기]' }), '를 누르면 관련 지식을 추천해 줘요. ',
-      el('a', { href: '#/projects2', text: '[프로젝트] 탭' }), '에서 직접 해볼 수 있어요.'));
-}
-
-// 탭/단계 아이콘 — feather 스타일 라인 아이콘(taskmodal 의 sv 패턴 재사용). 무채 스트로크, currentColor 상속.
-const GUIDE_ICONS = {
-  external: [['path', { d: 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6' }], ['polyline', { points: '15 3 21 3 21 9' }], ['line', { x1: 10, y1: 14, x2: 21, y2: 3 }]],
-  //  #4233: 책 · 물음표는 레일 · 앱 화면과 같은 그림(lib/icon-paths.ts). 물음표는 이 화면 머리(「사용 가이드」)가 쓴다.
-  help: [['path', { d: ICONS.learn }]],
-  'play-circle': [['circle', { cx: 12, cy: 12, r: 10 }], ['polygon', { points: '10 8 16 12 10 16 10 8' }]],
-  terminal: [['polyline', { points: '4 17 10 11 4 5' }], ['line', { x1: 12, y1: 19, x2: 20, y2: 19 }]],
-  trello: [['rect', { x: 3, y: 3, width: 18, height: 18, rx: 2, ry: 2 }], ['line', { x1: 9, y1: 8, x2: 9, y2: 16 }], ['line', { x1: 15, y1: 8, x2: 15, y2: 11 }]],
-  'share-2': [['circle', { cx: 18, cy: 5, r: 3 }], ['circle', { cx: 6, cy: 12, r: 3 }], ['circle', { cx: 18, cy: 19, r: 3 }],
-    ['line', { x1: 8.59, y1: 13.51, x2: 15.42, y2: 17.49 }], ['line', { x1: 15.41, y1: 6.51, x2: 8.59, y2: 10.49 }]],
-  'book-open': [['path', { d: ICONS.wiki }]],
-  sliders: [['line', { x1: 4, y1: 21, x2: 4, y2: 14 }], ['line', { x1: 4, y1: 10, x2: 4, y2: 3 }], ['line', { x1: 12, y1: 21, x2: 12, y2: 12 }],
-    ['line', { x1: 12, y1: 8, x2: 12, y2: 3 }], ['line', { x1: 20, y1: 21, x2: 20, y2: 16 }], ['line', { x1: 20, y1: 12, x2: 20, y2: 3 }],
-    ['line', { x1: 1, y1: 14, x2: 7, y2: 14 }], ['line', { x1: 9, y1: 8, x2: 15, y2: 8 }], ['line', { x1: 17, y1: 16, x2: 23, y2: 16 }]],
-  compass: [['circle', { cx: 12, cy: 12, r: 10 }], ['polygon', { points: '16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76' }]],
-  layers: [['polygon', { points: '12 2 2 7 12 12 22 7 12 2' }], ['polyline', { points: '2 17 12 22 22 17' }], ['polyline', { points: '2 12 12 17 22 12' }]],
-  send: [['line', { x1: 22, y1: 2, x2: 11, y2: 13 }], ['polygon', { points: '22 2 15 22 11 13 2 9 22 2' }]],
-  zap: [['polygon', { points: '13 2 3 14 12 14 11 22 21 10 12 10 13 2' }]],
-  // '다시 쌓기'(#780 순환 4단계) — 일한 결과를 지식으로 남겨 되돌려 놓는다(feather save).
-  save: [['path', { d: 'M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z' }],
-    ['polyline', { points: '17 21 17 13 7 13 7 21' }], ['polyline', { points: '7 3 7 8 15 8' }]],
-};
-function tabIcon(name, cls?: string) {
-  const svg = sv('svg', { class: cls || null, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7,
-    'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  for (const [t, a] of (GUIDE_ICONS[name] || [])) svg.append(sv(t, a));
-  return svg;
+// 페이지 아이브로 — 제목 위에 얹는 한 줄(start.ts 가 같은 함수를 쓴다).
+export function docsEyebrow(_key) {
+  return el('div', { class: 'docs-eyebrow', text: '시작하기' });
 }
 
 // ── Lively 둘러보기(#/learn/tour, #761) — 실제 화면 위 스포트라이트 투어의 랜딩. ──
@@ -838,8 +474,6 @@ export {
   openInstallModal,
   overlayBox,
   renderInstall,
-  renderLearn,
-  renderLearnDocs,
   renderLearnTour,
   renderOnboarding,
   skeleton,

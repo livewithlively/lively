@@ -122,11 +122,13 @@ test("E9 소유 판정은 한 벌뿐이다 — side.ts 가 제 사본을 되살�
 });
 
 test("E10 사용설명서가 바뀐 규칙을 말한다 (화면과 문서가 갈리지 않게)", () => {
-  const doc = DOCS.slice(DOCS.indexOf('slug: "inbox"'), DOCS.indexOf('slug: "projects"'));
+  //  원고의 따옴표 모양(홑·겹)에 매이지 않는다(#4179 에서 원고를 다시 썼다).
+  const at = (slug: string): number => DOCS.search(new RegExp(`slug: ['"]${slug}['"]`));
+  const doc = at("inbox") < 0 ? "" : DOCS.slice(at("inbox"), at("projects"));
   assert.ok(doc.length > 0, "설명서의 「확인할 것」 항목을 찾지 못했다");
   assert.doesNotMatch(doc, /보이는 세션 전부/, "설명서가 아직 '보이는 세션 전부'라고 말한다");
   //  #4180 — 설명서도 «세션은 여기 오지 않는다 · 종 · 댓글·언급·리브» 를 말해야 한다.
-  assert.match(doc, /세션이 답을 기다리거나 끝난 것은 여기 오지 않습니다/, "설명서가 세션 알림을 뺀 것을 말하지 않는다");
+  assert.match(doc, /세션이 답을 기다리거나 끝난 것은 (여기|「확인할 것」에) 오지 않습니다/, "설명서가 세션 알림을 뺀 것을 말하지 않는다");
   assert.match(doc, /종/, "설명서가 홈의 종을 말하지 않는다");
   assert.match(doc, /댓글/, "설명서가 댓글 알림을 말하지 않는다");
   assert.match(doc, /리브가 답했어요/, "설명서가 리브의 답 알림을 말하지 않는다");
