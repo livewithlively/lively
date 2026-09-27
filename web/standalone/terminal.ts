@@ -1683,6 +1683,82 @@ function selectWholeTerminal(): void {
   clearSel('select-all');
   try { term.selectAll(); } catch (_) { /* noop */ }
 }
+
+// 일반 마우스 드래그도 **현재 입력줄에서 시작했을 때만** Shift+방향키 선택과 같은 경로로 만든다.
+// 출력·메뉴 영역의 드래그는 Claude/Codex가 자기 방식으로 관리하므로 건드리지 않는다. 입력줄은 현재 커서 행이라는
+// 검증 가능한 경계가 있어, 그 안에서만 웹이 커서를 옮기고 selAnchor를 세워 복사·잘라내기·되돌리기를 공유할 수 있다.
+function wireInputMouseSelect(host: HTMLElement): void {
+  type Drag = { y: number; targetX: number; active: boolean; ready: boolean; timer: any; moving: boolean };
+  let drag: Drag | null = null;
+  const point = (e: MouseEvent): { x: number; y: number } | null => {
+    try {
+      const scr = term.element && term.element.querySelector('.xterm-screen');
+      if (!scr) return null;
+      const r = scr.getBoundingClientRect();
+      if (e.clientX < r.left || e.clientX >= r.right || e.clientY < r.top || e.clientY >= r.bottom) return null;
+      const b = term.buffer.active;
+      return { x: Math.max(0, Math.min(term.cols - 1, Math.floor((e.clientX - r.left) / (r.width / term.cols)))),
+        y: b.baseY + Math.max(0, Math.min(term.rows - 1, Math.floor((e.clientY - r.top) / (r.height / term.rows)))) };
+    } catch (_) { return null; }
+  };
+  const moveToTarget = (): void => {
+    if (!drag || !drag.ready || drag.moving) return;
+    let b: any;
+    try { b = term.buffer.active; } catch (_) { return; }
+    const y = b.baseY + b.cursorY;
+    if (y !== drag.y) { clearSel('mouse-row-changed'); drag = null; return; }
+    const dx = drag.targetX - b.cursorX;
+    if (!dx) { drawSel(); return; }
+    drag.moving = true;
+    sendInput((dx < 0 ? SEQ.left : SEQ.right).repeat(Math.min(Math.abs(dx), term.cols)));
+    // PTY 왕복 뒤 실제 커서에서 다음 이동량을 다시 계산한다. 마우스 이동 이벤트마다 같은 바이트를 중복 전송하지 않는다.
+    setTimeout(() => { if (drag) { drag.moving = false; moveToTarget(); } }, 18);
+  };
+  host.addEventListener('mousedown', (e: MouseEvent) => {
+    if (e.button !== 0 || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+    const p = point(e);
+    if (!p) return;
+    let b: any;
+    try { b = term.buffer.active; } catch (_) { return; }
+    const currentY = b.baseY + b.cursorY;
+    if (p.y !== currentY) return; // 출력은 기존 앱/브라우저 드래그를 보존한다.
+    e.preventDefault(); e.stopPropagation();
+    clearSel('mouse-input-start');
+    drag = { y: p.y, targetX: p.x, active: true, ready: false, timer: null, moving: false };
+    const start = drag;
+    const dx = p.x - b.cursorX;
+    if (dx) sendInput((dx < 0 ? SEQ.left : SEQ.right).repeat(Math.min(Math.abs(dx), term.cols)));
+    // 눌렀던 지점으로 앱 커서가 실제 이동한 뒤 앵커를 세운다. 추측 좌표로 자르면 안 된다.
+    start.timer = setTimeout(() => {
+      if (drag !== start || !start.active) return;
+      try {
+        const now = term.buffer.active;
+        const y = now.baseY + now.cursorY;
+        if (y !== start.y) { drag = null; return; }
+        selAnchor = { x: now.cursorX, y, row: bufRowText(y) };
+        start.ready = true;
+        dlog('mouse-input-select', 'x=' + now.cursorX + ' y=' + y);
+        moveToTarget();
+      } catch (_) { drag = null; }
+    }, 45);
+  }, true);
+  document.addEventListener('mousemove', (e: MouseEvent) => {
+    if (!drag || !drag.active) return;
+    const p = point(e);
+    if (!p || p.y !== drag.y) return;
+    e.preventDefault();
+    drag.targetX = p.x;
+    moveToTarget();
+  }, true);
+  document.addEventListener('mouseup', (e: MouseEvent) => {
+    if (!drag || e.button !== 0) return;
+    const p = point(e);
+    if (p && p.y === drag.y) { drag.targetX = p.x; moveToTarget(); }
+    drag.active = false;
+    if (!drag.ready) { clearTimeout(drag.timer); clearSel('mouse-input-click'); }
+    drag = null;
+  }, true);
+}
 function doUndo(): void {
   // 앱이 되돌리기를 스스로 가진 판이면 앱의 것을 부르고 합성은 보내지 않는다(#3864 — 둘 다 보내면 두 번 되돌아간다).
   //  판은 가장 최근에 받은 pane 상태의 포그라운드 명령으로 판정한다(nativeUndoOk). 모르면 아래 합성.
@@ -3318,7 +3394,7 @@ export async function boot() {
   // 입력줄 선택 표시(#3778) — 앱이 다시 그릴 때마다 좌표로 새로 계산한다(우리가 위치를 «기억» 하지 않으므로 어긋나지 않는다).
   try { term.onRender(drawSel); } catch (_) { /* noop */ }
   try { term.onScroll(drawSel); } catch (_) { /* noop */ }
-  try { host.addEventListener('mousedown', () => clearSel('mouse'), true); } catch (_) { /* noop */ }
+  try { wireInputMouseSelect(host); } catch (_) { /* noop */ }
   // 휠 폴백 래치 끊기(#1943 후속 — wheelResyncAction 머리말). 관측만 하고 이벤트는 건드리지 않는다(passive).
   //  xterm 의 휠 처리보다 먼저 보도록 capture 로 단다 — 판정은 이 시점의 버퍼·모드로 한다.
   let lastWheelProbeAt = 0;
