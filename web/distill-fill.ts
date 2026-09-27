@@ -158,7 +158,8 @@ function editor(c: any | null, reload: () => void) {
   });
   cancelBtn.addEventListener('click', () => { reload(); });
 
-  card.append(
+  //  ⚠ 빈 자리(null)를 그대로 붙이면 화면에 «null» 글자가 찍힌다(Element.append 는 null 을 글자로 바꾼다) — 거른 뒤 붙인다.
+  const parts: (Node | null | undefined)[] = [
     el('div', { class: 'ctx-row-head' }, el('span', { class: 'ctx-row-title', text: isNew ? '새 증류기 — ' + FILL_LANE : `설정 — ${c.label || c.key}` })),
     retired(c) ? el('p', { class: 'admin-hint ctx-warn-line', text: '이 증류기는 없어진 «확신 낮은 분류 재검토» 모드라 지금 아무 지식도 맡지 않습니다. 저장하면 미분류 지식을 맡도록 바뀝니다. 이미 붙은 카테고리가 틀린 것은 「' + CTX_TAB.checks + '」 탭의 점검이 찾거나 사람이 옮깁니다.' }) : null,
     F('식별자', isNew ? '영문·숫자 슬러그. 만든 뒤에는 바꾸지 않습니다.' : '만든 뒤에는 바꾸지 않습니다.', keyIn),
@@ -176,7 +177,8 @@ function editor(c: any | null, reload: () => void) {
     run.hint,
     el('label', { class: 'admin-check' }, resetChk, ' 이미 본 지식을 다시 보기 — 기준을 바꿨을 때 켜세요'),
     el('label', { class: 'admin-check' }, enabledChk, ' 이 증류기 사용'),
-    el('div', { class: 'ctx-actions' }, saveBtn, cancelBtn, prevBtn, delBtn));
+    el('div', { class: 'ctx-actions' }, saveBtn, cancelBtn, prevBtn, delBtn)];
+  card.append(...parts.filter((n): n is Node => !!n));
   return card;
 }
 
