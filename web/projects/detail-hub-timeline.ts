@@ -212,7 +212,8 @@ export const fillTimeline: Fill = (ctx, f, body, foot, sub) => {
 
     // ══ 위젯 ══
     if (!modal) {
-      const footAll = () => foot.append(footText('기록 ' + sorted.length + '건 · ' + lastTxt), btn('전체 보기', 'btn-ghost', open));
+      //  «마지막 …» 은 머리에 이미 있다 — 바닥은 무엇의 기록인지만 말한다.
+      const footAll = () => foot.append(footText(w <= 1 ? '기록 ' + sorted.length + '건' : '기록 ' + sorted.length + '건 · 이 프로젝트와 그 태스크의 작업'), btn('전체 보기', 'btn-ghost', open));
       if (w <= 1 && h <= 1) {
         const list = el('div', { class: 'pjh-wlist' });
         for (const a of sorted.slice(0, 4)) list.append(work(a, { face: true, lines: 1, when: 'short', pick: pickInModal }));
@@ -284,7 +285,7 @@ export const fillTimeline: Fill = (ctx, f, body, foot, sub) => {
     wrap.append(el('div', { class: 'pjh-mmain' }, main), side);
     body.append(toolsRow, wrap);
     paintSide(side, sel);
-    foot.append(footText(phone ? '작업 ' + items.length + '건 · ' + lastTxt
-      : (filtered ? '거른 작업 ' + items.length + '건 / 전체 ' + sorted.length + '건' : '작업 ' + sorted.length + '건') + ' · ' + lastTxt + ' — 이 프로젝트와 그 태스크의 작업'));
+    foot.append(footText(phone ? (filtered ? '거른 작업 ' + items.length + '건 / 전체 ' + sorted.length + '건' : '작업 ' + sorted.length + '건')
+      : (filtered ? '거른 작업 ' + items.length + '건 / 전체 ' + sorted.length + '건' : '작업 ' + sorted.length + '건') + ' · 이 프로젝트와 그 태스크의 작업 — 줄을 누르면 오른쪽에 속이 섭니다'));
   });
 };
