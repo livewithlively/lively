@@ -227,7 +227,8 @@ export function tasksPart(ctx: PartCtx): Part {
     if (!force && sig === bodySig) return;
     bodySig = sig;
     const shown = stripLeadNotice(md);
-    const rd = el('div', { class: 'pj-rd md-rendered' + (bodyMore ? '' : ' pj-prd') },
+    //  접힌 글은 앞부분만(흐려지며 끝남), 편 글은 **제 안에서 스크롤**한다 — 곁칸 전체를 밀어 내리지 않고, 접기 단추가 늘 머리에 남게(원준 2026-09-27).
+    const rd = el('div', { class: 'pj-rd md-rendered' + (bodyMore ? ' pj-rdopen' : ' pj-prd') },
       shown.trim() ? renderMarkdown(shown.length > BODY_READ_MAX ? shown.slice(0, BODY_READ_MAX) + '\n\n…(길어서 여기까지 — [크게 보기]나 프로젝트 창에서 전문)' : shown)
         : el('p', { class: 'pj-empty', text: '아직 적지 않았어요 — 눌러서 이 프로젝트가 무엇인지 적어 두면 세션도 그걸 읽고 일합니다.' }));
     const box = el('div', {
@@ -240,18 +241,16 @@ export function tasksPart(ctx: PartCtx): Part {
       onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' && e.target === e.currentTarget) { e.preventDefault(); void startBodyEdit(); } },
     },
       el('div', { class: 'pj-bh' }, el('span', { class: 'pj-bl', text: '본문' }),
-        el('span', { class: 'pn-fine', text: md.length ? `${md.length.toLocaleString('ko-KR')}자 · 누르면 고치기` : '누르면 고치기' }),
+        el('span', { class: 'pn-fine', text: md.length ? `${md.length.toLocaleString('ko-KR')}자` : '비어 있음' }),
         el('span', { class: 'grow' }),
         iconBtn('copy', '본문 전체 복사', copyBody),
-        iconBtn('expand', '본문만 크게 보기', bigBody),
-        iconBtn('ext', '프로젝트 창으로', openProjectWindow)),
+        //  «창에 띄워 읽기» 는 글자까지 단다 — 화살표 아이콘만 두면 전체 화면으로 읽혀 창이 뜬다는 느낌이 안 든다(원준 2026-09-27).
+        el('button', { class: 'pj-popb', type: 'button', title: '본문만 창에 띄워 읽습니다', onclick: (e: Event) => { e.stopPropagation(); bigBody(); } },
+          pnIcon('window', 'pn-i xs'), el('span', { text: '띄워 읽기' })),
+        shown.trim() ? el('button', { class: 'pj-ib pj-foldb', type: 'button', title: bodyMore ? '접기' : '펼치기', 'aria-label': bodyMore ? '본문 접기' : '본문 펼치기', 'aria-expanded': String(bodyMore),
+          onclick: (e: Event) => { e.stopPropagation(); bodyMore = !bodyMore; paintBody(true); } }, pnIcon(bodyMore ? 'up' : 'chevD', 'pn-i sm')) : null),
       rd);
-    const kids: HTMLElement[] = [box];
-    if (shown.trim()) {
-      kids.push(el('button', { class: 'pj-more-b', type: 'button', onclick: () => { bodyMore = !bodyMore; paintBody(true); } },
-        pnIcon(bodyMore ? 'up' : 'chevD', 'pn-i xs'), el('span', { text: bodyMore ? '접기' : '더 보기' })));
-    }
-    replaceKids(bodyBox, ...kids);
+    replaceKids(bodyBox, box);
   }
 
   /** 본문 고치기 — 종전 [본문] 접이와 같은 편집칸(가드 저장·충돌 안내·못 남긴 글 보관). 칸을 떠나면 읽기로 돌아간다. */
@@ -342,9 +341,10 @@ export function tasksPart(ctx: PartCtx): Part {
   });
 
   // ── 목록 ──
+  const top = el('div', { class: 'pj-top' });
   const list = el('div', { class: 'pn-tk-list pj-scroll' });
-  list.addEventListener('focusout', () => {
-    window.setTimeout(() => { if (listDirty && !typingIn(list)) paintList(); }, 0);
+  for (const host of [top, list]) host.addEventListener('focusout', () => {
+    window.setTimeout(() => { if (listDirty && !typingIn(list) && !typingIn(top)) paintList(); }, 0);
   });
 
   const goSession = (sid: string): void => requestOpenRoute('#/s/' + encodeURIComponent(sid));
@@ -624,15 +624,15 @@ export function tasksPart(ctx: PartCtx): Part {
       .sort((a, b) => Number(isDone(a)) - Number(isDone(b))).slice(0, 7);
     slotSel = Math.min(slotSel, Math.max(0, cands.length - 1));
     const pick = (t: any): void => { slotOpen = false; void putOrder([...myOrder(), Number(t.id)], '이 세션에 넣었어요.'); };
-    inp.addEventListener('input', () => { slotQ = inp.value; slotSel = 0; paintList(true); const n2 = ((list as HTMLElement).querySelector('.pj-slot-q') as HTMLInputElement | null); n2?.focus(); n2?.setSelectionRange(n2.value.length, n2.value.length); });
+    inp.addEventListener('input', () => { slotQ = inp.value; slotSel = 0; paintList(true); const n2 = ((top as HTMLElement).querySelector('.pj-slot-q') as HTMLInputElement | null); n2?.focus(); n2?.setSelectionRange(n2.value.length, n2.value.length); });
     inp.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.isComposing) return;
-      if (e.key === 'ArrowDown') { slotSel = Math.min(slotSel + 1, cands.length - 1); e.preventDefault(); paintList(true); ((list as HTMLElement).querySelector('.pj-slot-q') as HTMLInputElement | null)?.focus(); }
-      else if (e.key === 'ArrowUp') { slotSel = Math.max(slotSel - 1, 0); e.preventDefault(); paintList(true); ((list as HTMLElement).querySelector('.pj-slot-q') as HTMLInputElement | null)?.focus(); }
+      if (e.key === 'ArrowDown') { slotSel = Math.min(slotSel + 1, cands.length - 1); e.preventDefault(); paintList(true); ((top as HTMLElement).querySelector('.pj-slot-q') as HTMLInputElement | null)?.focus(); }
+      else if (e.key === 'ArrowUp') { slotSel = Math.max(slotSel - 1, 0); e.preventDefault(); paintList(true); ((top as HTMLElement).querySelector('.pj-slot-q') as HTMLInputElement | null)?.focus(); }
       else if (e.key === 'Enter') { e.preventDefault(); if (cands[slotSel]) pick(cands[slotSel]); }
       else if (e.key === 'Escape') { e.preventDefault(); slotOpen = false; paintList(true); }
     });
-    inp.addEventListener('blur', () => window.setTimeout(() => { if (slotOpen && !list.contains(document.activeElement)) { slotOpen = false; paintList(true); } }, 150));
+    inp.addEventListener('blur', () => window.setTimeout(() => { if (slotOpen && !top.contains(document.activeElement)) { slotOpen = false; paintList(true); } }, 150));
     window.setTimeout(() => { if (inp.isConnected && document.activeElement !== inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); } }, 0);
     const dd = el('div', { class: 'pj-dd', role: 'listbox' },
       cands.length ? null : el('div', { class: 'pj-dd-h', text: '맞는 태스크가 없어요' }),
@@ -697,20 +697,22 @@ export function tasksPart(ctx: PartCtx): Part {
       all.map((t) => t.id + (t.status_category || '') + (t.name || '') + String(t.description || '').length + sessSig(t)
         + (Array.isArray(t.subtasks) ? t.subtasks.map((s: any) => s.id + (s.status_category || '')).join('.') : '')).join('|')].join('§');
     if (!force && sig === listSig) return;
-    if (typingIn(list) && !list.querySelector('.pj-slot-q:focus')) { listDirty = true; return; }
+    if ((typingIn(list) || typingIn(top)) && !top.querySelector('.pj-slot-q:focus')) { listDirty = true; return; }
     listSig = sig; listDirty = false;
     if (openTask && !all.some((t) => Number(t.id) === openTask)) { openTask = 0; editTask = 0; }
 
-    const kids: HTMLElement[] = [bodyBox];
+    //  위(머리·본문·이 세션의 태스크·목록 머리)는 서 있고, **스크롤은 아래 목록 안에서만**(원준 2026-09-27).
+    const tops: HTMLElement[] = [bodyBox];
+    const kids: HTMLElement[] = [];
     if (!all.length) {
-      kids.push(el('div', { class: 'pn-empty' }, pnIcon('projtask', 'pn-i big'),
+      tops.push(el('div', { class: 'pn-empty' }, pnIcon('projtask', 'pn-i big'),
         el('b', { text: '태스크가 아직 없어요.' }),
         el('p', { class: 'pn-fine', text: '이 프로젝트에서 세션을 열면 그 세션의 태스크가 저절로 생깁니다. 아래에서 직접 더해도 돼요.' })));
     } else if (newMode) {
       const ext = externalTasks(all, new Set(), busyOf);
       const tag = picks.length ? el('span', { class: 'pj-picked-n', text: `${picks.length}개 담음 · 순서는 글칸에서` }) : null;
-      kids.push(groupHead('이 프로젝트의 태스크', ext.open.length + ext.done.length, tag));
-      if (!picks.length) kids.push(el('p', { class: 'pj-hint', text: '[담기]로 새 세션이 맡을 태스크를 고르세요 — 가운데 글칸에 번호 배지로 들어가고, 그 순서대로 진행해요.' }));
+      tops.push(groupHead('이 프로젝트의 태스크', ext.open.length + ext.done.length, tag));
+      if (!picks.length) tops.push(el('p', { class: 'pj-hint', text: '[담기]로 새 세션이 맡을 태스크를 고르세요 — 가운데 글칸에 번호 배지로 들어가고, 그 순서대로 진행해요.' }));
       kids.push(...ext.open.flatMap((t) => extRow(t, 'new', picks.indexOf(Number(t.id)) + 1)));
       if (ext.done.length) {
         kids.push(groupHead('완료', ext.done.length, null, { open: doneOpen, toggle: () => { lsSet(DONE_OPEN_KEY, doneOpen ? '0' : '1'); paintList(true); } }));
@@ -723,18 +725,19 @@ export function tasksPart(ctx: PartCtx): Part {
       const meTag = n0 ? el('span', { class: 'pj-sb me', style: '--sc:' + sessionColor(n0), title: '지금 보는 세션' }, el('span', { class: 'pj-sbn', text: '세션 ' + n0 }), el('span', { class: 'pj-ord', text: ' · 이 세션' })) : null;
       sec.append(groupHead('이 세션의 태스크', mine.length, meTag), ...mine.flatMap((t, i) => tsRow(t, i, mine.length)), ...slotOf(mine.length));
       wireTsDrop(sec);
-      kids.push(sec);
+      tops.push(sec);
       const ext = externalTasks(all, new Set(order), busyOf);
-      kids.push(groupHead('외부 태스크', ext.open.length, el('span', { class: 'pj-fine', text: '이 세션에 없는 것' })));
+      tops.push(groupHead('외부 태스크', ext.open.length, el('span', { class: 'pj-fine', text: '이 세션에 없는 것' })));
       kids.push(...ext.open.flatMap((t) => extRow(t, 'ext', 0)));
       if (ext.done.length) {
         kids.push(groupHead('완료', ext.done.length, null, { open: doneOpen, toggle: () => { lsSet(DONE_OPEN_KEY, doneOpen ? '0' : '1'); paintList(true); } }));
         if (doneOpen) kids.push(...ext.done.flatMap((t) => extRow(t, 'ext', 0)));
       }
     }
-    const top = list.scrollTop;
+    const st = list.scrollTop, st2 = top.scrollTop;
+    replaceKids(top, ...tops);
     replaceKids(list, ...kids);
-    list.scrollTop = top;
+    list.scrollTop = st; top.scrollTop = st2;
   }
 
   // ── 빠른 추가 ──
@@ -758,7 +761,7 @@ export function tasksPart(ctx: PartCtx): Part {
     paintList();
   }
 
-  root.append(head, list, addBox);
+  root.append(head, top, list, addBox);
   // 보는 세션이 바뀌었다 — «이 세션의 태스크»가 그 세션의 것으로 선다. 펴 둔 줄은 저장 먼저.
   const offSess = ctx.onSession(() => {
     void (rowSaver ? rowSaver.flush() : Promise.resolve()).then(() => { openTask = 0; editTask = 0; slotOpen = false; localOrder = null; paintList(true); });
