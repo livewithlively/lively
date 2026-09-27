@@ -3179,6 +3179,8 @@ function setupEmbedBridge() {
     else if (m.cmd === 'help') openHelp();
     else if (m.cmd === 'prompts') openMyPrompts();
     else if (m.cmd === 'focus') { try { term.focus(); } catch (_) { /* 아직 안 떴다 */ } }
+    //  #4135 곁칸 «프로젝트» 앱의 [본문 넣기] — 입력칸에 **붙여넣기만** 한다(Enter 없음). 여러 줄은 pasteText 가 bracketed paste 로 감싼다.
+    else if (m.cmd === 'paste' && typeof m.text === 'string') { pasteText(m.text); try { term.focus(); } catch (_) { /* 아직 안 떴다 */ } }
   });
   const post = () => {
     try {

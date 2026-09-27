@@ -78,6 +78,16 @@ export async function initV6ProjectOrg(pool: Pool): Promise<void> {
     --  사람이 태스크에서 세션을 열면 그 태스크가 처음부터 박힌다(v6/session-task.ts). 태스크가 지워지면 연결만 풀린다.
     ALTER TABLE execution_session ADD COLUMN IF NOT EXISTS task_id INT REFERENCES project(id) ON DELETE SET NULL;
     CREATE INDEX IF NOT EXISTS execution_session_task_idx ON execution_session(task_id) WHERE task_id IS NOT NULL;
+    -- #4135 — 한 세션이 태스크 **여러 개를 순서대로** 맡는다(곁칸 «프로젝트» 앱의 «이 세션의 태스크» 1. 2. 3.).
+    --  task_id 는 그대로 «지금 하는 것» 한 칸이고, 이 표는 그 세션의 **순서 목록**이다(task_id 도 목록 안에 있다).
+    --  행이 없는 세션은 종전 그대로 task_id 하나가 곧 목록이다 — 옛 세션은 이관 없이 같은 뜻으로 읽힌다.
+    CREATE TABLE IF NOT EXISTS execution_session_task(
+      session_id TEXT NOT NULL,
+      task_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      pos INT NOT NULL,
+      added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (session_id, task_id));
+    CREATE INDEX IF NOT EXISTS execution_session_task_task_idx ON execution_session_task(task_id);
 
     -- 프로젝트 물리삭제도 실행 세션에는 명시 detach 전환이다. FK SET NULL만 두면 revision/epoch가 안 올라
     -- 이미 주입된 AGENTS 맥락이 영구 잔류한다. BEFORE trigger가 null 이력까지 남긴 뒤 FK가 no-op이 되게 한다.
