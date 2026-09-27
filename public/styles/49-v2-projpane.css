@@ -3,14 +3,19 @@
    외부 태스크는 세션 배지(같은 세션 = 같은 색) · 새 세션 자리에선 [담기] → 가운데 글칸의 번호 배지(compose-tasks.ts). */
 
 /* 본문 · 목록이 한 스크롤 안에 선다(종전엔 접이 줄이 스크롤 밖에 있었다). */
-.pn-tk.pj .pj-scroll { padding-top: 2px; }
 .pn-tk.pj .pj-scroll > * { flex: none; }
+/* 위는 서 있고 스크롤은 아래 목록 안에서만(원준 2026-09-27) — 머리·본문·이 세션의 태스크·목록 머리가 .pj-top. */
+.pj-top { flex: none; display: flex; flex-direction: column; padding-top: 2px; border-bottom: 1px solid var(--line-row); }
+/* 이 세션의 태스크가 아주 길 때만 그 칸이 제 안에서 스크롤한다 — 위가 아래 목록을 밀어내지 않게. */
+.pj-tssec { max-height: 34vh; overflow: auto; overscroll-behavior: contain; }
+.pj-top > * { flex: none; }
 .pj-bodywrap { display: flex; flex-direction: column; }
-.pj-body { margin: 2px 12px 2px; border: 1px solid var(--line-row); border-radius: 10px; background: var(--bg-tint); padding: 8px 12px 8px; cursor: text; }
+.pj-body { margin: 2px 12px 6px; border: 1px solid var(--line-row); border-radius: 10px; background: var(--surface); padding: 8px 12px 8px; cursor: text; }
 .pj-body:hover { border-color: var(--line-note); }
 .pj-body:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 .pj-bh { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-.pj-bl { font-size: 12.5px; font-weight: 800; color: var(--ink); }
+.pj-bl { font-size: 12.5px; font-weight: 800; color: var(--ink); white-space: nowrap; }
+.pj-bh .pn-fine { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .pj-bh .pj-ib { width: 22px; height: 22px; }
 .pj-rd { font-size: 12.5px; line-height: 1.6; color: var(--ink-sub); overflow-wrap: anywhere; }
 .pj-rd h1, .pj-rd h2, .pj-rd h3, .pj-rd h4 { font-size: 12.5px; font-weight: 800; color: var(--ink); margin: 8px 0 2px; line-height: 1.4; }
@@ -23,8 +28,11 @@
 .pj-rd table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: 11.5px; }
 .pj-rd img { max-width: 100%; }
 .pj-rd > :first-child { margin-top: 0; }
+.pj-rdopen { max-height: 30vh; overflow: auto; overscroll-behavior: contain; padding-right: 4px; }
 .pj-prd { max-height: 136px; overflow: hidden; -webkit-mask-image: linear-gradient(#000 62%, transparent); mask-image: linear-gradient(#000 62%, transparent); }
 .pj-empty { margin: 0; color: var(--muted-2); font-size: 12px; }
+.pj-popb { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px 0 6px; border: 1px solid var(--line-net); border-radius: 6px; background: var(--surface); color: var(--ink-sub); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.pj-popb:hover { border-color: var(--blue); color: var(--blue); }
 .pj-more-b { align-self: flex-start; margin: 0 12px 4px 14px; border: 0; background: none; color: var(--blue); font: inherit; font-size: 12px; font-weight: 700; padding: 2px 0; cursor: pointer; display: inline-flex; gap: 4px; align-items: center; }
 .pj-body.edit { background: none; border: 0; padding: 0; cursor: auto; }
 .pj-body.edit .pn-tk-editor { margin: 0; }
