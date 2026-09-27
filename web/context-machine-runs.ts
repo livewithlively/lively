@@ -9,7 +9,7 @@
 //   목록이 일정 높이 안에서 굴러간다.
 import { api, el } from './core.js';
 import { type AutoRun, addDays, hhmm, mdw, relDay, dayOf, toRun, today0, ymd } from './context-runs.js';
-import { type MachineSum, failCause, groupRuns, isChanged, runsOf, summarize, whenLabel } from './lib/machine-runs.js';
+import { type MachineSum, failCause, groupRuns, isChanged, lastOutcome, runsOf, summarize, whenLabel } from './lib/machine-runs.js';
 
 export type RunsByMachine = Map<string, AutoRun[]>;
 
@@ -33,8 +33,9 @@ const b = (v: number, cls = ''): HTMLElement => el('b', { class: 'num' + (cls ? 
 
 /** 수집기 행 둘째 줄의 마지막 자리 — «마지막 15:30 · 새 자료 3 · 바뀐 자료 1». 기록이 없으면 null(부르는 쪽이 옛 문구를 쓴다). */
 export function collectorLast(runs: AutoRun[]): HTMLElement | null {
-  const last = runs[0];
-  if (!last || !last.ok) return null;
+  const o = lastOutcome(runs), last = o.run;
+  if (o.kind === 'running') return el('span', { class: 'cxc-last', text: '지금 수집하는 중' });
+  if (o.kind !== 'done' || !last) return null;
   return el('span', { class: 'cxc-last' }, '마지막 ' + whenLabel(last.t, Date.now()) + ' · 새 자료 ', b(last.n), ' · 바뀐 자료 ', b(last.mo, 'is-u'));
 }
 
@@ -61,14 +62,15 @@ function whenFull(t: number): string { const d = new Date(t); return (d.getMonth
 
 function runRow(r: AutoRun, kind: 'c' | 'd', onPick: (r: AutoRun) => void): HTMLElement {
   const dur = r.dur == null ? '' : r.dur >= 60 ? Math.round(r.dur / 60) + '분' : Math.max(1, Math.round(r.dur)) + '초';
-  const res = !r.ok ? el('span', { class: 'r bad', text: '실패' }) : isChanged(r) ? el('span', { class: 'r ok', text: '성공' }) : el('span', { class: 'r z', text: '변화 없음' });
+  const res = r.running ? el('span', { class: 'r z', text: '진행 중' }) : !r.ok ? el('span', { class: 'r bad', text: '실패' }) : isChanged(r) ? el('span', { class: 'r ok', text: '성공' }) : el('span', { class: 'r z', text: '변화 없음' });
   let what: HTMLElement;
-  if (!r.ok) what = el('span', { class: 'w', text: failCause(r.err) });
+  if (r.running) what = el('span', { class: 'w' });
+  else if (!r.ok) what = el('span', { class: 'w', text: failCause(r.err) });
   else if (!isChanged(r)) what = el('span', { class: 'w' });
   else if (kind === 'c') what = el('span', { class: 'w' }, '새 자료 ', b(r.n), ' · 바뀐 자료 ', b(r.mo, 'is-u'));
   else if (r.lane === 'category') what = el('span', { class: 'w' }, '읽은 지식 ' + (r.read ?? 0) + ' → 카테고리 붙임 ', b(r.mo, 'is-u'));
   else what = el('span', { class: 'w' }, '읽은 자료 ' + (r.read ?? 0) + ' → 새 지식 ', b(r.n), ' · 고친 지식 ', b(r.mo, 'is-u'));
-  const row = el('button', { class: 'cmr-row' + (r.ok && !isChanged(r) ? ' is-z' : ''), type: 'button', title: '자동 실행 기록에서 이 실행 보기' },
+  const row = el('button', { class: 'cmr-row' + (r.running || (r.ok && !isChanged(r)) ? ' is-z' : ''), type: 'button', title: '자동 실행 기록에서 이 실행 보기' },
     el('span', { class: 't num', text: hhmm(r.t) }), res, what, el('span', { class: 'd num', text: dur }));
   row.addEventListener('click', () => onPick(r));
   return row;

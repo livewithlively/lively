@@ -142,6 +142,8 @@ function editor(c: any | null, reload: () => void) {
     } catch (e) { toast('실패 — ' + (e as Error).message, true); saveBtn.disabled = false; }
   });
   const cancelBtn = el('button', { class: 'btn-text', text: '닫기' });
+  const prevBtn = isNew ? null : el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '맡은 지식 보기' });
+  if (prevBtn) prevBtn.addEventListener('click', () => { void openPreview(c); });
   //  삭제 — 목록 카드에는 [스위치][설정]만 두고, 지우는 단추는 설정 안에 둔다(자료 증류기와 같은 자리).
   const delBtn = isNew ? null : el('button', { class: 'btn-text btn-text-danger', type: 'button', text: '이 증류기 삭제' });
   if (delBtn) delBtn.addEventListener('click', async () => {
@@ -174,6 +176,30 @@ function editor(c: any | null, reload: () => void) {
     run.hint,
     el('label', { class: 'admin-check' }, resetChk, ' 이미 본 지식을 다시 보기 — 기준을 바꿨을 때 켜세요'),
     el('label', { class: 'admin-check' }, enabledChk, ' 이 증류기 사용'),
-    el('div', { class: 'ctx-actions' }, saveBtn, cancelBtn, delBtn));
+    el('div', { class: 'ctx-actions' }, saveBtn, cancelBtn, prevBtn, delBtn));
   return card;
+}
+
+/** 맡은 지식 보기 — 이 증류기가 지금 맡은 미분류 지식의 표본(편집기의 단추가 연다). */
+async function openPreview(c: any) {
+  const { overlay } = await import('./ui-primitives.js');
+  const box = el('div', {}, el('p', { class: 'admin-hint', text: '확인 중…' }));
+  overlay(`맡은 지식 — ${c.label || c.key}`, box);
+  try {
+    const r = await api('/api/ui/org/classifiers/preview?' + new URLSearchParams({ key: c.key, limit: '20' }));
+    const sample: any[] = r.sample || [];
+    if (!sample.length) {
+      box.replaceChildren(el('p', { class: 'admin-hint', text: retired(c)
+        ? '이 증류기는 없어진 재검토 모드라 아무 지식도 맡지 않습니다 — 설정을 열어 저장하면 미분류 지식을 맡습니다.'
+        : '지금 맡은 지식이 0건입니다 — 범위가 좁거나, 우선순위가 높은 증류기가 먼저 가져갔거나, 이미 본 것들입니다(설정에서 “다시 보기”를 켜면 되돌릴 수 있습니다).' }));
+      return;
+    }
+    const list = el('div', { class: 'ctx-preview-list' });
+    for (const s of sample) {
+      list.append(el('div', { class: 'ctx-preview-row' },
+        el('a', { class: 'ctx-preview-t', href: '#/k/' + encodeURIComponent(s.name), text: s.title || s.name }),
+        el('div', { class: 'ctx-preview-m', text: [s.type, s.provenance === 'observed' ? '바로 들어온 문서' : '직접 쓴 문서'].filter(Boolean).join(' · ') })));
+    }
+    box.replaceChildren(el('p', { class: 'admin-hint', text: `지금 맡은 지식 ${fmtNum(r.backlog)}건 중 ${sample.length}건입니다.` }), list);
+  } catch (e) { box.replaceChildren(el('p', { class: 'admin-hint', text: '실패: ' + (e as Error).message })); }
 }

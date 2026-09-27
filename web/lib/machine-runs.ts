@@ -19,6 +19,8 @@ export interface RunLike {
   mo: number;
   /** 읽은 것(증류만). 수집은 값이 없다. */
   read?: number | null;
+  /** 아직 도는 중 — 결과가 아직 없다. */
+  running?: boolean;
 }
 
 export interface RunSum { runs: number; failed: number; n: number; mo: number; read: number; changed: number }
@@ -45,6 +47,18 @@ export function runsOf<R extends RunLike>(map: Map<string, R[]> | null | undefin
   return (map && map.get(machineKey(kind, machineId))) || [];
 }
 
+/**
+ * 마지막 실행을 어떻게 말할까 — 도는 중이면 결과를 말하지 않는다(끝나지 않은 실행의 숫자는 결과가 아니다).
+ *  none 기록 없음 · running 도는 중 · failed 실패 · done 끝남.
+ */
+export function lastOutcome<R extends RunLike>(runs: readonly R[] | null | undefined): { kind: 'none' | 'running' | 'failed' | 'done'; run: R | null } {
+  let last: R | null = null;
+  for (const r of runs || []) if (r && Number.isFinite(r.t) && (!last || r.t > last.t)) last = r;
+  if (!last) return { kind: 'none', run: null };
+  if (last.running) return { kind: 'running', run: last };
+  return { kind: last.ok ? 'done' : 'failed', run: last };
+}
+
 /** 변화 있는 실행 — 실패했거나, 새로 생긴 것과 바뀐 것이 하나라도 있다. */
 export const isChanged = (r: RunLike): boolean => !r.ok || (Number(r.n) || 0) + (Number(r.mo) || 0) > 0;
 
@@ -69,6 +83,7 @@ export function summarize<R extends RunLike>(runs: readonly R[] | null | undefin
   for (const r of runs || []) {
     if (!r || !Number.isFinite(r.t)) continue;
     if (!out.last || r.t > out.last.t) out.last = r;
+    if (r.running) continue;   // 도는 중인 실행은 아직 합계에 넣지 않는다(끝나면 든다)
     if (r.t >= t0) add(out.today, r);
     else if (r.t >= y0) add(out.yesterday, r);
   }

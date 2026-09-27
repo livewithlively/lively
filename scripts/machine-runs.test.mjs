@@ -15,7 +15,7 @@ let lib = null;
 try { lib = await import(pathToFileURL(join(root, "public/app/lib/machine-runs.js")).href); } catch (e) { console.error(String(e)); }
 ok(!!lib, "W0 잎 모듈(lib/machine-runs)이 빌드돼 있다");
 if (lib) {
-  const { groupRuns, runsOf, summarize, isChanged, whenLabel, failCause } = lib;
+  const { groupRuns, runsOf, summarize, isChanged, whenLabel, failCause, lastOutcome } = lib;
   const at = (y, mo, d, h = 0, mi = 0, s = 0, ms = 0) => new Date(y, mo - 1, d, h, mi, s, ms).getTime();
   const NOW = at(2026, 9, 27, 16, 0);
   const run = (o) => ({ kind: "c", machineId: "5", ok: true, err: null, n: 0, mo: 0, read: null, ...o });
@@ -68,6 +68,15 @@ if (lib) {
   // E10 새 헬퍼 — 기록이 없는 기계 · 묶음 자체가 없음
   eq([runsOf(g2, "c", "999"), runsOf(null, "c", "5"), runsOf(undefined, "d", "5")], [[], [], []], "E10 없는 기계 · 없는 묶음은 빈 목록");
 
+  // E12 도는 중인 실행 — 결과로 말하지 않고 합계에도 아직 넣지 않는다
+  const r12 = [run({ t: at(2026, 9, 27, 15, 50), running: true, n: 7 }), run({ t: at(2026, 9, 27, 15, 30), n: 3, mo: 1 })];
+  eq(lastOutcome(r12).kind, "running", "E12 가장 최근이 도는 중이면 «도는 중»");
+  const s12 = summarize(r12, NOW).today;
+  eq([s12.runs, s12.n, s12.mo], [1, 3, 1], "E12 도는 중인 실행의 숫자는 합계에 안 든다");
+  // E13 마지막 실행을 어떻게 말할까 — 없음 · 끝남 · 실패
+  eq([lastOutcome([]).kind, lastOutcome(null).kind, lastOutcome([run({ t: 5 })]).kind, lastOutcome([run({ t: 5 }), run({ t: 9, ok: false })]).kind],
+    ["none", "none", "done", "failed"], "E13 없음 · 없음 · 끝남 · 실패(뒤섞인 순서에서도 가장 최근 것)");
+
   // E11 그제 실행만
   const s11 = summarize([run({ t: at(2026, 9, 25, 23, 59), n: 4 })], NOW);
   eq([s11.today.runs, s11.yesterday.runs, !!s11.last], [0, 0, true], "E11 오늘 0 · 어제 0 · 마지막 실행은 그 줄");
@@ -83,7 +92,9 @@ ok(/machineRuns\(runsBy, 'c', c\.id\)/.test(COL), "W2 수집기 행이 자기 �
 ok(/machineRuns\(runs, 'd', 'src:' \+ d\.id\)/.test(DIS) && /machineRuns\(runs, 'd', 'cat:' \+ c\.id\)/.test(DIS), "W3 증류기 카드는 자료 · 카테고리 기계를 가른다");
 ok(/\.\.\.\(c\.enabled \? \[sync\] : \[\]\)/.test(COL), "W4 [지금 수집] 은 켜진 수집기에만 선다");
 ok(!/수집 기록/.test(COL.replace(/title: '[^']*'/g, "")) || !/openRuns\(/.test(COL), "W5 [설정] 안의 [수집 기록] 이 없다");
-ok(/groupRuns<AutoRun>/.test(MR) && /summarize\(runs, Date\.now\(\)\)/.test(MR), "W6 화면 조각이 잎 모듈의 계산을 쓴다");
+ok(/groupRuns<AutoRun>/.test(MR) && /summarize\(runs, Date\.now\(\)\)/.test(MR) && /lastOutcome\(runs\)/.test(MR), "W6 화면 조각이 잎 모듈의 계산을 쓴다");
+ok(/dirtyGuard = pageDirty;/.test(DIS) && /if \(mCat\.r\.checked\) \{ \(catHost\.querySelector/.test(DIS), "W7 설정 페이지의 이탈 가드와 저장 단축키가 «카테고리만» 모드를 가른다");
+ok(/맡은 지식 보기/.test(code(read("web/distill-fill.ts"))) && /openPreview\(c\)/.test(code(read("web/distill-fill.ts"))), "W8 카테고리 증류기의 «맡은 지식 보기» 가 남아 있다");
 
 console.log(`\n${pass} pass · ${fail} fail`);
 process.exit(fail ? 1 : 0);

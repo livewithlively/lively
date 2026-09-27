@@ -924,8 +924,12 @@ function editorPage(d, isNew: boolean): HTMLElement {
 
   // ── 머리 ──────────────────────────────────────────────────────────────────
   const { nav: crumbNav, back } = crumb();
+  //  «카테고리만 붙입니다» 모드에서는 바깥(자료) 폼이 아니라 그 편집기를 본다 — 안 그러면 거기 쓴 글을 확인 없이 잃고,
+  //   ⌘/Ctrl+S 가 빈 자료 증류기를 만들어 버린다(리뷰 지적).
+  let catTouched = false;
+  const pageDirty = (): boolean => (mCat.r.checked ? catTouched : isDirty());
   back.addEventListener('click', (ev) => {
-    if (!isDirty()) return;   // 기본 동작(해시 이동)
+    if (!pageDirty()) return;   // 기본 동작(해시 이동)
     ev.preventDefault();
     void (async () => {
       const go = await confirmDialog({
@@ -966,15 +970,21 @@ function editorPage(d, isNew: boolean): HTMLElement {
   page.append(crumbNav, head, el('div', { class: 'dst-grid dst-grid-2' }, form, reflect));
 
   // 입력 변경 → 디바운스 → 반사판 갱신. 타이핑마다 서버를 때리지 않는다.
-  const onEdit = () => { touched = true; paintDirty(); clearTimeout(timer); timer = setTimeout(refresh, 600); };
+  const onEdit = (ev?: Event) => {
+    if (mCat.r.checked) { if (ev && catHost.contains(ev.target as Node)) catTouched = true; return; }   // 자료 폼의 미리보기 · dirty 는 건드리지 않는다
+    touched = true; paintDirty(); clearTimeout(timer); timer = setTimeout(refresh, 600);
+  };
   page.addEventListener('input', onEdit);
   page.addEventListener('change', onEdit);
   // ⌘/Ctrl+S — ⑤ 지시문은 조각이 5개라 폼이 길다. 저장하려고 머리까지 스크롤해 올라가지 않아도 되게.
   page.addEventListener('keydown', (ev: KeyboardEvent) => {
-    if ((ev.metaKey || ev.ctrlKey) && (ev.key === 's' || ev.key === 'S')) { ev.preventDefault(); void save(); }
+    if (!((ev.metaKey || ev.ctrlKey) && (ev.key === 's' || ev.key === 'S'))) return;
+    ev.preventDefault();
+    if (mCat.r.checked) { (catHost.querySelector('.ctx-actions .btn-primary') as HTMLButtonElement | null)?.click(); return; }   // 그 편집기의 저장
+    void save();
   });
 
-  dirtyGuard = isDirty;
+  dirtyGuard = pageDirty;
   markClean();      // 방금 그린 값이 곧 저장된 값이다(조각이 실리면 paint 가 기준선을 한 번 더 잡는다)
   void refresh();   // 페이지를 열면 바로 지금 상태를 보여준다(버튼을 누르게 하지 않는다)
   return page;

@@ -22,6 +22,8 @@ export interface AutoRun {
   key: string; id: number; kind: RunKind; machineId: string; name: string;
   svc: string | null; glyph: string; t: number; ok: boolean; err: string | null;
   n: number; mo: number; read: number | null; dur: number | null; lane: 'source' | 'category' | null;
+  /** 아직 도는 중(#4135) — ok 는 «실패가 아니다» 라는 뜻이라 도는 중도 참이다. 결과를 말하는 자리는 이걸로 가른다. */
+  running?: boolean;
 }
 type KindAgg = { runs: number; failed: number; inserted: number; updated: number; read: number };
 export interface DayAgg { day: number; c: KindAgg; d: KindAgg }
@@ -58,6 +60,7 @@ export function toRun(x: any): AutoRun {
     t: Date.parse(x.started_at), ok: x.status !== 'error' && x.status !== 'canceled', err: x.error || null,
     n: Number(x.inserted || 0), mo: Number(x.updated || 0), read: x.read == null ? null : Number(x.read),
     dur: x.duration_sec == null ? null : Number(x.duration_sec), lane: x.lane || null,
+    running: x.status === 'running',
   };
 }
 /** 하루치 줄(0시~다음 0시). */
