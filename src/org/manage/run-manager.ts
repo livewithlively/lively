@@ -75,7 +75,7 @@ export async function runManager(
     const cands = all.filter((c) => c.repos.length > 0);
     if (!cands.length) {
       const why = all.length
-        ? `정의는 있으나 레포가 연결된 도메인이 없음(${all.length}개 후보 중 0개) — [맥락 관리 ▸ 분류 ▸ 분류축]에서 레포를 지정하세요`
+        ? `정의는 있으나 레포가 연결된 도메인이 없음(${all.length}개 후보 중 0개). 「분류체계」 앱에서 분류에 레포를 지정하세요`
         : "정의(should)와 코드가 함께 있는 도메인 없음";
       await recordManagerRun(m.id, "ok", { candidates: 0, note: why });
       return { ...base, candidates: 0, skipped: why };

@@ -27,6 +27,7 @@ import { icon as lineIcon } from './v2/icons.js';
 import { confirmDialog, skeleton } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
 import { runConfig } from './context-run-config.js';    // #4008 제공자·모델·추론강도 공용 선택기
+import { CTX_APP_NAME, CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
 const PAGE_TYPES = ['', 'decision', 'concept', 'how-to', 'reference', 'research', 'entity'];
 const KINDS = ['slack', 'email', 'discord', 'transcript', 'minutes', 'notion_doc', 'clickup_doc', 'drive_file', 'local_file', 'other'];
@@ -349,7 +350,7 @@ function crumb(): { nav: HTMLElement; back: HTMLElement } {
     back,
     nav: el('nav', { class: 'dst-crumb', 'aria-label': '위치' }, back,
       el('span', { class: 'dst-crumb-sep', text: '·', 'aria-hidden': 'true' }),
-      el('span', { text: '맥락 관리 › 증류' })),
+      el('span', { text: CTX_APP_NAME + ' › ' + CTX_TAB.distill })),
   };
 }
 

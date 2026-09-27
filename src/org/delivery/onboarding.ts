@@ -85,7 +85,7 @@ export function onboardingItems(f: OnboardingFacts): OnboardingItem[] {
 
   return [
     { key: "identity", label: "회사·페르소나·업무규칙", done: f.identityEdited,
-      how: "맥락 관리 ▸ 전달 ▸ 세션 주입 — 매 세션 항상 주입되는 조직 정체성", href: "#/context/deliver/injection" },
+      how: "[수집 · 증류 ▸ AI 주입 설정 ▸ 세션 주입]에서 고칩니다. 매 세션 항상 주입되는 조직 정체성입니다.", href: "#/context/deliver/injection" },
     { key: "categories", label: "분류축(카테고리)", done: categoriesDone, count: f.categories,
       how: categoriesHow, href: "#/context/classify/categories" },
     // ⚠ 시드 지식(updated_by='system')은 세지 않는다 — 신규 워크스페이스에 런북 3건이 자동으로 깔려서,

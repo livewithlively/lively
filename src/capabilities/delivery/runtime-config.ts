@@ -617,7 +617,7 @@ export const runtimeConfigCapabilities: Capability[] = [
       inject_ontology_guide: z.boolean().optional().describe("#1245 온톨로지 가이드(제품 소유 섹션) 주입 on/off — 본문은 코드 단일 출처라 편집 불가, 주입 여부만 제어"),
       // ── 매니지드 표면 노브(#1454 S2~S5) — 기본값 = 기존 동작 불변. 셀프호스트는 안 건드리면 무변화. ──
       ui_nav: z.object({ tabs: z.record(z.boolean()).optional().describe("탭 슬러그(data-tab) → 노출 여부. **명시적 false 만** 숨김") })
-        .optional().describe("S2 상단 탭 게이팅 — {} = 전부 노출(현행). 예 {tabs:{context:false}} = 맥락 관리 탭 숨김"),
+        .optional().describe("S2 상단 탭 게이팅. {} = 전부 노출(현행). 예 {tabs:{context:false}} = 「수집 · 증류」 탭 숨김"),
       announcement: z.object({
         text: z.string().describe("배너 문구(필수, 500자 이하)"),
         href: z.string().nullable().optional().describe("자세히 링크 — http(s):// 또는 상대경로(/·#)"),

@@ -58,7 +58,7 @@ export const CRON_ACTIONS: CronActionDef[] = [
   // #1419 T5 관리기 — 쌓인 지식을 계속 옳게 유지(분류 어긋남·아웃데이티드·모순·지식↔코드).
   //  결정적 종류(어긋남·아웃데이티드)는 이 틱 안에서 끝나고(LLM 비용 0), 판단이 필요한 종류만 배치로 나간다.
   { key: "run_managers", label: "관리기 실행 (지식 유지보수 — 어긋남·아웃데이티드·모순·코드괴리)", params: [
-    { name: "manager", label: "관리기 (선택)", kind: "manager", hint: "[맥락 관리 ▸ 관리기]에서 등록한 관리기. 비우면 **켜진 관리기 전부**를 순서대로 실행." },
+    { name: "manager", label: "관리기 (선택)", kind: "manager", hint: "[수집 · 증류 ▸ 점검 설정]에서 등록한 관리기. 비우면 **켜진 관리기 전부**를 순서대로 실행." },
     { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "모순·코드괴리 판정에만 필요(그 멤버의 AI 계정으로 실행·과금). 어긋남·아웃데이티드만 쓰면 비워도 된다." },
     HEADLESS_HARNESS_PARAM, HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
   ], run: (p, job) => runManagers(p, job.id, job.created_by ?? null) },
@@ -81,7 +81,7 @@ export const CRON_ACTIONS: CronActionDef[] = [
   { key: "classify_knowledge", label: "미분류 지식 LLM 분류 (세션 주입)", params: [{ name: "session", label: "타깃 상시 세션", kind: "session", hint: "‘상시 세션’ 탭에서 등록한 관리 세션(map_unmapped 와 공용 가능)." }], run: runClassifyKnowledgeInject },
   // #1061 classify_knowledge 의 헤드리스판 — 상시세션 관성(옛 should 로 판단 — classify-knowledge-stale-session-inertia)을 매 배치 fresh 컨텍스트로 근본 회피. 인박스 있을 때만 접수.
   { key: "classify_knowledge_headless", label: "미분류 지식 LLM 분류 (헤드리스 — 매 배치 새 세션)", params: [
-    { name: "classifier", label: "분류기 (선택)", kind: "classifier", hint: "[맥락 관리 ▸ 분류기]에서 등록한 분류기. 비우면 **켜져 있는 분류기 전부**를 각각 접수(병렬). 분류기가 하나도 없으면 종전 전역 분류로 동작." },
+    { name: "classifier", label: "분류기 (선택)", kind: "classifier", hint: "[수집 · 증류]에서 등록한 분류기. 비우면 **켜져 있는 분류기 전부**를 각각 접수(병렬). 분류기가 하나도 없으면 종전 전역 분류로 동작." },
     { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "헤드리스 실행 신원·과금 귀속(그 멤버의 클로드 로그인/프로필). 비우면 잡 생성자(created_by)." },
     { name: "prompt", label: "프롬프트 (선택 오버라이드)", kind: "textarea", hint: "비우면 기본 분류 프롬프트(관성 대응 — 매 배치 should 재조회·근거 인용 강제 포함). 인박스 비면 접수 안 함." },
     HEADLESS_HARNESS_PARAM, HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,

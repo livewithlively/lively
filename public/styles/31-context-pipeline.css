@@ -393,7 +393,13 @@ a.ctx-preview-t:hover { color: var(--blue); }
 .ctx-board .ctxp-stage:hover .ctxp-step { border-color: var(--ink-sub); color: var(--ink); }
 
 @media (max-width: 960px) { .ctx-crumb-sub { display: none; } }
-@media (max-width: 720px) { .ctx-vtab-label { font-size: 13px; } .ctx-vtab { padding: 9px 7px 10px; } }
+/* #4233 탭 이름이 길어졌다(「수집기 설정」 …). 좁은 폭에서 「확인할 것」이 둘째 줄로 내려가지 않게 조이는 폭을 720 → 760 으로 올리고,
+   700 아래로는 한 줄로 두고 가로로 민다(640 아래의 50-mobile.css 와 같은 방식). */
+@media (max-width: 760px) { .ctx-vtab-label { font-size: 13px; } .ctx-vtab { padding: 9px 7px 10px; } }
+@media (max-width: 700px) {
+  .ctx-board .ctx-vtabs { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .ctx-board .ctx-vtabs::-webkit-scrollbar { display: none; }
+}
 
 /* ══ #1841 — 맥락 관리 첫 화면(현황). 지표가 아니라 '아는 것 + 할 일'을 말한다 ══ */
 .cxh { display: flex; flex-direction: column; gap: 30px; max-width: 1080px; padding: 6px 0 40px; }
@@ -926,7 +932,7 @@ a.cxr-row .cxr-t { white-space: nowrap; }
 .ctx-board .ctx-vtabs { align-items: center; }
 /* 정의 한 줄이 머리에서 화면 안으로 내려온 자리(현황은 지도 캡션이 대신한다). */
 .ctx-hint { margin: 0 0 14px; font-size: 13px; color: var(--muted); word-break: keep-all; }
-@media (max-width: 720px) { .ctx-hd-app { font-size: 14px; padding-right: 10px; } }
+@media (max-width: 760px) { .ctx-hd-app { font-size: 14px; padding-right: 10px; } }
 .cxm-src-gl { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ══ 수집기 화면(#3830 비개발자 개편) — 접두 cxc- ══════════════════════════════════════

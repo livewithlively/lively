@@ -4,6 +4,7 @@ import { api, busy, cardHead, el, errorNote, memberCombo, relTime, toast, withTi
 import { overlayBox, skeleton } from './ui-primitives.js';
 import { psBlock, psInputStyle } from './admin-widgets.js';
 import { cronOwner } from './cron-owner.js';   // 잡 → 전용 화면 매핑(#1618 후속, 단일 출처)
+import { ctxPath } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
 // ── 스케줄러(자동화) — org_cron 잡 관리(admin). is 신선화·미매핑 LLM 분류(세션 주입)·sync 를 주기 실행. ──
 //  map_unmapped 잡은 '타깃 LLM 세션'(상시 시드 세션)을 골라 거기에 분류 태스크를 주입한다(팀플랜 과금 — headless 토큰 아님).
@@ -46,8 +47,8 @@ async function cronPanel(detail, data) {
       el('span', { class: 'wikicat-name', text: j.label || j.id }),
       autoSys ? withTip(el('span', { class: 'pill', text: '자동' }),
         autoSys === '수집기'
-          ? '[맥락 관리 ▸ 수집]에서 수집기를 켜서 자동 등록된 잡입니다. 싱크를 멈추려면 이 잡이 아니라 수집기를 끄세요.'
-          : autoSys + ' 커넥터를 켜서 자동 등록된 구 방식 잡입니다. 지금은 [맥락 관리 ▸ 수집]의 수집기가 이 일을 합니다.') : null,
+          ? ctxPath('sources') + '에서 수집기를 켜서 자동 등록된 잡입니다. 싱크를 멈추려면 수집기를 끄세요. 이 잡만 지우면 수집기가 켜져 있는 동안 다시 생깁니다.'
+          : autoSys + ' 커넥터를 켜서 자동 등록된 구 방식 잡입니다. 지금은 ' + ctxPath('sources') + '의 수집기가 이 일을 합니다.') : null,
       el('span', { class: 'wikicat-key mono', text: j.action + sess }),
       owner
         ? withTip(owner.href
@@ -229,7 +230,7 @@ async function cronToggle(job, reload) {
 //  그 사이엔 "커넥터는 켜져 있는데 싱크는 안 도는" 상태가 된다. 그러니 지우지 말고 커넥터를 끄라고 말해 준다.
 async function cronDelete(id, reload, autoSys?) {
   const warn = autoSys
-    ? '⚠ 이 잡은 [맥락 관리 ▸ 가져오는 곳 ▸ ' + autoSys + ']이(가) 자동으로 만든 것입니다.\n\n지워도 그 커넥터를 다시 켜면 되살아나고, '
+    ? '⚠ 이 잡은 ' + ctxPath('sources', autoSys) + '이(가) 자동으로 만든 것입니다.\n\n지워도 그 커넥터를 다시 켜면 되살아나고, '
       + '그때까지는 커넥터만 켜져 있고 싱크는 안 도는 상태가 됩니다.\n싱크를 멈추려면 이 잡이 아니라 **커넥터를 끄세요**.\n\n그래도 삭제할까요?'
     : '스케줄 잡 ‘' + id + '’을(를) 삭제할까요?';
   if (!confirm(warn)) return;

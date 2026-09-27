@@ -14,6 +14,8 @@
 //  ⚠ 새 액션을 CRON_ACTION_ALLOWLIST 에 추가할 때 주인 화면이 있으면 여기도 한 줄 늘린다. 없으면 그냥 둔다 —
 //   **주인이 없는 것을 억지로 만들지 마라.** 그 잡은 스케줄 표가 곧 주인이다.
 
+import { ctxTrail } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
+
 export interface CronOwner {
   /** 사람이 읽는 자리 이름 — 화면 라벨 그대로(내부 키·액션명 금지). */
   label: string;
@@ -30,32 +32,32 @@ const OWNERS: Record<string, CronOwner> = {
   //  ⚠ 단 그 짝은 **현행 수집기 잡(`collector-<id>`)에만** 성립한다 — 구 커넥터 축(`sync-<시스템>`)은
   //   수집기가 아니라 org_connector 가 소유하므로 같은 문장을 붙이면 거짓말이 된다(아래 cronOwner 가 가른다).
   connector_sync: {
-    label: '맥락 관리 ▸ 수집', href: '#/context/sources/collectors',
+    label: ctxTrail('sources'), href: '#/context/sources/collectors',
     why: '수집기를 켜고 끄면 이 잡도 함께 맞춰집니다. 여기서 잡만 끄면 수집기는 켜진 채 싱크만 멈춥니다.',
   },
   connector_push: {
-    label: '맥락 관리 ▸ 수집', href: '#/context/sources/collectors',
+    label: ctxTrail('sources'), href: '#/context/sources/collectors',
     why: '우리 편집을 외부로 되돌려 보내는 잡입니다 — 대상 수집기와 함께 보는 편이 낫습니다.',
   },
   // 증류·분류·관리 — 단계 화면의 [언제 도나] 카드가 만들기·켜고끄기·주기·의뢰자를 함께 다룬다.
   distill_sources: {
-    label: '맥락 관리 ▸ 증류', href: '#/context/knowledge/distillers',
+    label: ctxTrail('distill'), href: '#/context/knowledge/distillers',
     why: '증류기 설정과 밀린 자료를 함께 보면서 주기·의뢰자를 정할 수 있습니다.',
   },
   distill_sources_headless: {
-    label: '맥락 관리 ▸ 증류', href: '#/context/knowledge/distillers',
+    label: ctxTrail('distill'), href: '#/context/knowledge/distillers',
     why: '증류기 설정과 밀린 자료를 함께 보면서 주기·의뢰자를 정할 수 있습니다.',
   },
   classify_knowledge: {
-    label: '맥락 관리 ▸ 분류', href: '#/context/topics/classifiers',
+    label: ctxTrail(undefined, '분류'), href: '#/context/topics/classifiers',
     why: '분류기·분류축과 미분류 잔량을 함께 보면서 정할 수 있습니다.',
   },
   classify_knowledge_headless: {
-    label: '맥락 관리 ▸ 분류', href: '#/context/topics/classifiers',
+    label: ctxTrail(undefined, '분류'), href: '#/context/topics/classifiers',
     why: '분류기·분류축과 미분류 잔량을 함께 보면서 정할 수 있습니다.',
   },
   run_managers: {
-    label: '맥락 관리 ▸ 관리', href: '#/context/checks/managers',
+    label: ctxTrail('checks'), href: '#/context/checks/managers',
     why: '어떤 관리기가 켜져 있는지, 무엇이 발견됐는지와 함께 볼 수 있습니다.',
   },
   // 위키 아웃바운드 — 지식이 외부(노션 피드)로 나가는 경로. 발행 게이트(카테고리 매핑)가 그 화면에 있다.

@@ -22,6 +22,7 @@ import { aiLoginScopeNote } from './ai-login-scope.js';   // #2476 — 그 안�
 import { LOGIN_SERVICES, partition } from '../me-logins.js';
 import { NOTION_PICK_TIP, notionCollectedPages, notionCollectedLine } from './notion-pick.js';   // #1968 — 노션 고르기 안내·모은 페이지 수(외부 앱 연결과 한 벌)
 import { CRED_KINDS } from '../admin-credentials.js';
+import { ctxPath } from '../lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 export const OB_DONE_KEY = 'lively_ob_done';
 /** 빠른 로컬 캐시 — 첫 그림에서 화면이 깜빡이지 않게 쓴다. **정본은 서버**(아래 fetchOnboardingDone). */
 export function onboardingDone(): boolean { try { return localStorage.getItem(OB_DONE_KEY) === '1'; } catch (_) { return false; } }
@@ -3059,7 +3060,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     const more = fails.length > 3 ? ` 외 ${fails.length - 3}건` : '';
     const why = failWhy(fails);
     S.notes.push(`파일 <b>${fails.length}건</b>(${names}${more})은 자료로 넣지 못했어요${why}.`
-      + ` 그 파일들은 [맥락 관리]에서 다시 올리시면 됩니다.`);
+      + ` 그 파일들은 ${ctxPath()}에서 다시 올리시면 됩니다.`);
     save();
   }
 
@@ -3100,7 +3101,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       if (Date.now() - readStarted > READ_MAX_MS) {
         const left = Math.max(0, target() - S.read.done);
         finish(); noteFail();
-        if (left) { S.notes.push(`자료 <b>${left}건</b>은 아직 정리에 안 들어왔어요 — 그 파일들은 [맥락 관리]에서 다시 올리시면 됩니다.`); save(); }
+        if (left) { S.notes.push(`자료 <b>${left}건</b>은 아직 정리에 안 들어왔어요. 그 파일들은 ${ctxPath()}에서 다시 올리시면 됩니다.`); save(); }
       }
     }, 1500);
   }

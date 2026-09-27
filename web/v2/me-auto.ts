@@ -19,6 +19,7 @@
 //   ⚠ 말끝은 '합니다'로 통일하고, 대시(—)로 설명을 덧붙이지 않는다(원준: AI가 쓴 티가 난다). 두 문장으로 끊는다.
 import { api, busy, el, errorNote, renderMarkdown, toast, uiText } from '../core.js';
 import { confirmDialog, overlay, skeleton } from '../ui-primitives.js';
+import { ctxPath } from '../lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
 const GUIDE = 'context-ontology-guide';
 /** 맥락 관리의 같은 화면 — '더 자세히'는 여기로 보낸다(입구가 둘이어도 집은 하나다). */
@@ -192,7 +193,7 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
   //   값·API 는 그대로다(org_runtime_config.hooks.self_update) — 자리만 옮겼다.
   const foot = el('div', { class: 'v2a-foot' },
     el('div', { class: 'v2a-more' },
-      el('button', { class: 'btn-text', type: 'button', text: '맥락 관리에서 더 자세히 보기 →',
+      el('button', { class: 'btn-text', type: 'button', text: ctxPath('deliver') + '에서 더 자세히 보기 →',
         onclick: () => { deps.close(); location.hash = DEEP; } })));
 
   //  범위 한 줄 — **인원 수를 세지 않는다**. 멤버 명부에는 봇·연동 계정·테스트 계정이 섞여 있어
@@ -303,10 +304,10 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
   function viewNotice(): void {
     const text = (rc && rc.writeback_notice) || data.writebackNoticeDefault || '';
     overlay('알려줄 때 쓰는 문구', el('div', { class: 'v2a-read' },
-      el('p', { class: 'v2a-fh' }, ...uiText('대화를 끝낼 때 AI에게 이 문장이 한 번 전달됩니다. 문구는 맥락 관리 화면에서 고칩니다.')),
+      el('p', { class: 'v2a-fh' }, ...uiText('대화를 끝낼 때 AI에게 이 문장이 한 번 전달됩니다. 문구는 ' + ctxPath('deliver') + '에서 고칩니다.')),
       el('div', { class: 'v2a-notice', text }),
       el('div', { class: 'v2a-editor-a' },
-        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '맥락 관리에서 고치기 →',
+        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: ctxPath('deliver') + '에서 고치기 →',
           onclick: () => { deps.close(); location.hash = DEEP; } }))));
   }
 
@@ -347,7 +348,7 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
       el('div', { class: 'v2a-dev-b' },
         el('label', { class: 'v2a-f' }, el('span', { class: 'v2a-fl', text: '이 폴더에서 연 대화만 ‘일’로 셈하기' }), roots),
         el('label', { class: 'v2a-f' }, el('span', { class: 'v2a-fl', text: '외부에서 가져온 내용 감지 (툴 이름 앞부분)' }), pull),
-        el('p', { class: 'v2a-fh' }, ...uiText('직접 만든 자동 동작 ' + ((data.orgHooks || []).length) + '개는 맥락 관리 화면에서 관리합니다.')),
+        el('p', { class: 'v2a-fh' }, ...uiText('직접 만든 자동 동작 ' + ((data.orgHooks || []).length) + '개는 ' + ctxPath('deliver') + '에서 관리합니다.')),
         canEdit ? el('div', { class: 'v2a-editor-a' }, save) : null));
     return d;
   }
