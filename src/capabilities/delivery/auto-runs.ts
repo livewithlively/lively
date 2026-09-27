@@ -12,6 +12,7 @@
 //     카테고리 붙이기 레인은 org_classifier_seen × knowledge_category(mapped_by='llm').
 //  목록(org_auto_runs)은 **수치만** 준다 — 제목을 싣지 않으니 가시성 판정이 필요 없다(org_connector_runs 가 이미 주는 수준).
 //  제목은 한 건을 펼칠 때(org_auto_run_detail) 자료·지식 가시성 술어를 **그대로** 태워서만 준다(#1291 — 잠긴 것은 세지도 않는다).
+import { failReason } from "../../org/store/run-fail-reason.js";
 import type { Capability } from "../types.js";
 import { z } from "zod";
 import { HttpError } from "../rest-util.js";
@@ -57,13 +58,6 @@ function tzOf(v: unknown): string {
   try { new Intl.DateTimeFormat("en-CA", { timeZone: t }); return t; } catch { return "UTC"; }
 }
 
-/** 실패한 수집 실행의 사정 — 로그 마지막 줄(사람이 읽을 한 줄). */
-function lastLine(log: string | null): string | null {
-  const lines = String(log || "").split("\n").map((l) => l.trim()).filter(Boolean);
-  const l = lines.length ? lines[lines.length - 1] : "";
-  return l ? l.slice(0, 300) : null;
-}
-
 async function collectorRuns(since: Date, until: Date, limit = MAX_COLLECT): Promise<AutoRunRow[]> {
   const r = await itemsPool.query(
     `WITH r AS (
@@ -84,7 +78,7 @@ async function collectorRuns(since: Date, until: Date, limit = MAX_COLLECT): Pro
     machine_id: x.collector_id ? String(x.collector_id) : "sys:" + x.system,
     name: String(x.label || x.ckey || x.system), system: String(x.system), lane: null,
     started_at: new Date(x.started_at).toISOString(), finished_at: x.finished_at ? new Date(x.finished_at).toISOString() : null,
-    status: String(x.status), error: x.status === "error" || x.status === "canceled" ? (x.status === "canceled" ? "중지됨" : lastLine(x.log_tail) || "실패") : null,
+    status: String(x.status), error: x.status === "error" || x.status === "canceled" ? (x.status === "canceled" ? "중지됨" : failReason(x.log_tail) || "실패") : null,
     inserted: Number(x.inserted || 0), updated: Number(x.updated || 0), read: null,
     duration_sec: durSec(x.started_at, x.finished_at),
   }));

@@ -6,6 +6,7 @@
 //
 //  ⚠ org_connector 와의 관계 — 지우지 않고 **폴백원으로 남긴다**. 마이그레이션이 그 행을 여기로 복사하되
 //   원본을 삭제하지 않으므로, 롤백(구 코드 배포)해도 종전 그대로 동작한다. 이 되돌릴 수 있음이 무중단의 실체다.
+import { failReason } from "./run-fail-reason.js";
 import { itemsPool } from "../../db/client.js";
 import { CONNECTOR_SPECS, type ConnectorField } from "../../connectors/config.js";
 import { encryptSecret, secretsEnabled } from "../credentials/secret-box.js";
@@ -37,7 +38,8 @@ export interface CollectorView {
   /** 자동 싱크 잡 상태(org_cron). */
   sync_job: { enabled: boolean; interval_sec: number } | null;
   /** 최근 실행(connector_run) 요약 — 목록에서 '도는지'가 바로 보이게. */
-  last_run: { id: number; status: string; mode: string; started_at: string; finished_at: string | null } | null;
+  /** error — 실패했을 때 사람이 읽을 사정 한 줄(#4135 · 목록의 둘째 줄이 원인을 바로 말한다). 성공이면 null. */
+  last_run: { id: number; status: string; mode: string; started_at: string; finished_at: string | null; error?: string | null } | null;
 }
 
 /** 수집기의 자동 싱크 크론 잡 id — 인스턴스마다 하나. 구 `sync-<system>` 과 네임스페이스가 갈린다. */
@@ -73,13 +75,15 @@ export async function listCollectors(): Promise<CollectorView[]> {
   const lastRuns = new Map<number, CollectorView["last_run"]>();
   try {
     const rr = await itemsPool.query(
-      `SELECT DISTINCT ON (collector_id) collector_id, id, status, mode, started_at, finished_at
+      `SELECT DISTINCT ON (collector_id) collector_id, id, status, mode, started_at, finished_at,
+              CASE WHEN status = 'error' THEN right(log, 2000) END AS log_tail
          FROM connector_run WHERE collector_id IS NOT NULL
         ORDER BY collector_id, started_at DESC`);
     for (const row of rr.rows as Array<Record<string, unknown>>) {
       lastRuns.set(Number(row.collector_id), {
         id: Number(row.id), status: String(row.status), mode: String(row.mode),
         started_at: String(row.started_at), finished_at: row.finished_at ? String(row.finished_at) : null,
+        error: String(row.status) === "error" ? (failReason(row.log_tail as string | null) || null) : null,
       });
     }
   } catch { /* connector_run 미생성(한 번도 안 돈 배포) — 무시 */ }

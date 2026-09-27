@@ -182,7 +182,38 @@ export async function ingestPolicyPanel(detail, data): Promise<void> {
       el('p', { class: 'cxc-lead', text: 'AI가 새로 쓰거나 고친 지식을 사람이 확인한 뒤에 쓰이게 할지 정합니다. 사람이 웹에서 직접 쓴 지식에는 걸리지 않습니다.' })),
     el('div', { class: 'cxc-head-acts' },
       el('span', { class: 'cxc-ro', title: '워크스페이스 전체의 지식에 걸리는 설정입니다', text: canEdit ? '팀 설정' : '읽기 전용' })));
+  //  꺼져 있으면 스위치 한 줄만 선다(#4135 · 9/22 회의 ④ «우리 같은 팀은 꺼야 돼»). 종전엔 꺼져 있어도 제목 · 대기 배너 ·
+  //   누를 수 없는 고르기 카드 여섯이 화면 한 장을 차지했다. 켜면 종전 판(방식 고르기)이 펼쳐진다.
+  //   세부 규칙은 이 스위치와 따로 걸리는 것이라, 있을 때는 접힌 「고급 설정」을 그대로 둔다.
+  if (!(preset && preset.enabled)) {
+    detail.replaceChildren(el('div', { class: 'cxc rvp is-one' }, gateOne(preset, reload, canEdit), rules.length ? rulesSection(rules, reload, canEdit, catName) : null));
+    return;
+  }
   detail.replaceChildren(el('div', { class: 'cxc rvp' }, head, gateCard(preset, obs, reload, canEdit), rulesSection(rules, reload, canEdit, catName)));
+}
+
+// 꺼져 있을 때의 한 줄 — 무엇이 일어나고 있는지 한 문장 + 스위치.
+function gateOne(preset: any, reload: () => void, canEdit: boolean) {
+  const createAct = (preset && preset.action) || 'confirm';
+  const updateAct = (preset && preset.action_update) || 'review';
+  const row = el('div', { class: 'rvp-one' },
+    el('span', { class: 'svc-tile cxc-tile cxc-tile-machine', 'aria-hidden': 'true' }, shieldIcon()),
+    el('div', { class: 'rvp-one-x' },
+      el('div', { class: 'rvp-one-t' }, el('b', { text: 'AI가 쓴 지식을 사람이 확인한 뒤에 쓰기' }),
+        el('span', { class: 'cxc-state' }, el('span', { class: 'cxc-state-dot', 'aria-hidden': 'true' }), el('span', { text: '꺼짐' }))),
+      el('p', { class: 'rvp-one-d', text: canEdit
+        ? '지금은 AI가 쓴 지식이 확인 없이 곧바로 검색과 AI 세션에 쓰입니다. 켜면 확인 방식(새 지식 / 고칠 때)을 고릅니다.'
+        : '지금은 AI가 쓴 지식이 확인 없이 곧바로 검색과 AI 세션에 쓰입니다.' })));
+  if (canEdit) {
+    const sw = el('input', { type: 'checkbox', class: 'cxc-sw', role: 'switch', 'aria-label': '사람이 확인한 뒤에 쓰기' }) as HTMLInputElement;
+    sw.addEventListener('change', () => {
+      sw.disabled = true;
+      void gateSave({ enabled: true, action: createAct, action_update: updateAct }, reload, '켰습니다 — AI가 쓴 지식은 확인한 뒤에 쓰입니다',
+        () => { sw.checked = false; sw.disabled = false; });
+    });
+    row.append(el('span', { class: 'rvp-one-sp' }), sw);
+  }
+  return row;
 }
 
 // 「사람이 확인한 뒤에 쓰기」 카드 — 스위치 + (켜져 있으면) 새 지식/고칠 때 고르기 카드.
