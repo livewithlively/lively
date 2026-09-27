@@ -123,11 +123,17 @@ window.addEventListener('hashchange', () => {
   if (!mounted || !mounted.host.isConnected) { mounted = null; return; }
   const h = location.hash;
   if (h === lastDrawn || !/^#\/taxonomy(\/|\?|$)/.test(h)) return;
+  if (!ownsHost(mounted.host)) return;   // 그 칸에 다른 화면이 서 있으면 셸에 맡긴다(덮지 않는다)
   const q = h.indexOf('?');
   const segs = (q >= 0 ? h.slice(2, q) : h.slice(2)).split('/').filter(Boolean);
   renderTaxonomyApp(mounted.host, segs[1] ? decodeURIComponent(segs[1]) : '', new URLSearchParams(q >= 0 ? h.slice(q + 1) : ''), mounted.hooks);
   mounted.hooks.redrawSide();   // 사이드바의 «지금 보는 것» 표시(고정 줄 · 분류 줄)를 따라 옮긴다
 });
+
+/** 이 칸에 지금 분류체계가 서 있나. 이 앱의 화면은 늘 칸의 바로 아래에 `.v2-tx` 하나로 선다. */
+export function ownsHost(host: HTMLElement): boolean {
+  return host.isConnected && !!host.querySelector(':scope > .v2-tx');
+}
 
 /** 셸 라우터가 부른다(main.ts). sub = 주소 둘째 칸(분류 id), params = 쿼리. */
 export function renderTaxonomyApp(host: HTMLElement, sub: string, params: URLSearchParams, hooks: TaxonomyHooks): void {
@@ -137,9 +143,13 @@ export function renderTaxonomyApp(host: HTMLElement, sub: string, params: URLSea
   //   응답이 늦게 와서 새 화면을 덮지 않게, 그린 뒤에도 «지금도 내 화면인가» 를 이 번호로 묻는다.
   const seq = String((Number(host.dataset.txSeq) || 0) + 1);
   host.dataset.txSeq = seq;
-  const live = (): boolean => host.isConnected && host.dataset.txSeq === seq;
+  //  한 번 그린 뒤에는 «이 칸이 아직 내 것인가» 도 묻는다. 셸은 같은 칸에 다른 화면(사용 가이드 · 수집 · 증류 …)을 그린다.
+  //   그 뒤에 늦게 온 응답이 그 화면을 덮으면 안 된다(#4179, 2026-09-28: 분류체계 → 사용 가이드로 가면 0.3초 뒤 지도가 다시 덮었다).
+  let painted = false;
+  const live = (): boolean => host.isConnected && host.dataset.txSeq === seq && (!painted || ownsHost(host));
   const paint = (): void => {
     if (!live()) return;
+    painted = true;
     const d = store.data();
     if (!d) {
       const err = store.error();
@@ -207,7 +217,7 @@ const slugKey = (): string => 'c-' + Math.random().toString(16).slice(2, 12).pad
 function renderMap(host: HTMLElement, d: TaxonomyData, reload: () => void): void {
   host.dataset.txView = 'map';
   const edit = map.edit && canEdit();
-  const repaint = (): void => { if (host.isConnected && host.dataset.txView === 'map') renderMap(host, d, reload); };
+  const repaint = (): void => { if (ownsHost(host) && host.dataset.txView === 'map') renderMap(host, d, reload); };
   mapPaint = repaint;
   if (!side) loadSide(false, repaint);
   const active = d.cats.filter((c) => !isArchived(c));
@@ -224,7 +234,8 @@ function renderMap(host: HTMLElement, d: TaxonomyData, reload: () => void): void
   let hold = mapRO.get(host);
   if (!hold && typeof ResizeObserver !== 'undefined') {
     const h = { cols, ro: new ResizeObserver(() => {
-      if (!host.isConnected || host.dataset.txView !== 'map') return;
+      //  칸이 다른 화면의 것이 됐으면 폭이 바뀌어도 그리지 않는다(사이드바를 접는 화면으로 가면 칸 폭이 바뀐다).
+      if (!ownsHost(host) || host.dataset.txView !== 'map') return;
       const ww = host.clientWidth || 1100; const rw = ww >= 760 ? ww - MAP_LEFT : ww;
       const n = Math.max(1, Math.min(3, Math.floor((rw + 24) / (MAP_COL_MIN + 24))));
       if (n !== h.cols && mapPaint) mapPaint();

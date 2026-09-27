@@ -60,8 +60,46 @@ interface GuideView {
 }
 const views = new WeakMap<HTMLElement, GuideView>();
 
+/** 주소(#/learn…)를 풀어 어느 문서의 어느 절인지 정한다. 가이드의 주소가 아니면 null. */
+export function guideWhereOfHash(hash: string): GuideWhere | null {
+  const h = String(hash || '');
+  if (!/^#\/learn(\/|\?|$)/.test(h)) return null;
+  const q = h.indexOf('?');
+  const segs = (q >= 0 ? h.slice(2, q) : h.slice(2)).split('/').filter(Boolean);
+  return parseGuideRoute(segs, new URLSearchParams(q >= 0 ? h.slice(q + 1) : ''));
+}
+
+// ── 앱 안 이동 ──────────────────────────────────────────────────────────────
+//  문서 사이를 오가는 것은 이 앱이 스스로 듣는다. 셸은 탭 키가 같은 주소끼리는 다시 그리지 않는다
+//   (v2/main.ts onHash: routeKey 가 같으면 주소만 갱신, tabs.ts 가 #/learn… 을 한 탭 키로 접는다). 자료 · 분류체계 앱과 같은 규칙이다.
+//  ★ 이 듣개가 없던 첫 판(2026-09-27)은 문서 목록을 눌러도 주소만 바뀌고 본문이 그대로였다. 주소로 직접 연 화면만 찍어 보고 내보낸 탓이다.
+//  ⚠ 그 칸이 **아직 가이드의 것일 때만** 그린다. 같은 칸에 다른 화면(세션 · 프로젝트 · 다른 앱)이 선 뒤에 가이드 주소가 오면
+//   그 화면을 덮지 않고 셸에 맡긴다. 셸이 새 탭을 열지 그 탭에 그릴지는 셸이 정한다.
+let mounted: { host: HTMLElement; env: GuideEnv } | null = null;
+let lastDrawn = '';
+/** 이 칸에 지금 가이드가 서 있나. */
+function ownsHost(host: HTMLElement): boolean {
+  const v = views.get(host);
+  return !!v && host.isConnected && host.contains(v.root);
+}
+/** 주소가 바뀌었을 때 가이드가 할 일을 한다. 그렸으면 true. (hashchange 가 부른다. 시험도 이 함수를 부른다) */
+export function guideOnHash(hash: string): boolean {
+  if (!mounted) return false;
+  if (!mounted.host.isConnected) { mounted = null; return false; }
+  if (hash === lastDrawn) return false;               // 셸(또는 클래식 라우터)이 이미 그린 주소다
+  const where = guideWhereOfHash(hash);
+  if (!where) return false;                          // 가이드를 떠나는 이동은 셸이 그린다
+  if (!ownsHost(mounted.host)) return false;         // 그 칸은 이제 다른 화면의 것이다
+  if (where.redirect) { location.replace(location.pathname + location.search + where.redirect); return false; }
+  renderGuideApp(mounted.host, where, mounted.env);
+  return true;
+}
+if (typeof window !== 'undefined') window.addEventListener('hashchange', () => { guideOnHash(location.hash); });
+
 /** 가이드를 그린다. 같은 호스트에 이미 서 있으면 본문과 표시만 바꾼다. */
 export function renderGuideApp(host: HTMLElement, where: GuideWhere, env: GuideEnv): void {
+  mounted = { host, env };
+  lastDrawn = typeof location !== 'undefined' ? location.hash : '';
   let v = views.get(host) || null;
   if (!v || !host.contains(v.root) || v.env.shell !== env.shell) {
     v = build(env);
@@ -137,7 +175,7 @@ function paintPage(v: GuideView, slug: string): void {
     el('a', { class: 'gd-crumb', href: guideHref('') }, guideIcon('learn', 'gd-crumb-ic'), el('span', { text: GUIDE_TITLE })),
     group ? [el('span', { class: 'gd-sl', text: '/' }), el('span', { class: 'gd-crumb is-mid', text: group.title })] : null,
     page ? [el('span', { class: 'gd-sl', text: '/' }), el('span', { class: 'gd-now', text: page.title })] : null);
-  if (!page) { v.secs = []; replaceKids(v.main, homeArticle()); replaceKids(v.toc); v.root.classList.add('is-home'); return; }
+  if (!page) { v.secs = []; replaceKids(v.main, homeArticle()); replaceKids(v.toc); v.root.classList.add('is-home', 'no-toc'); return; }
   v.root.classList.remove('is-home');
   const md = page.md.replace(/^#\s+[^\n]*\n/, '');
   const doc = renderGuideDoc(md, { shell: v.env.shell });
@@ -158,6 +196,7 @@ function paintPage(v: GuideView, slug: string): void {
     doc.secs.length > 1 ? el('div', { class: 'gd-toc-in' },
       el('p', { class: 'gd-toc-t', text: '이 문서에서' }),
       ...doc.secs.map((s) => el('a', { class: 'gd-toc-a', href: guideHref(page.slug, s.id), 'data-sec': s.id }, s.title))) : null);
+  v.root.classList.toggle('no-toc', doc.secs.length <= 1);
   v.stopSpy = spy(v);
 }
 
