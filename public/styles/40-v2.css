@@ -19,6 +19,12 @@ body.embed .kn-side { top: 0; max-height: 100vh; padding-top: 14px; }
 .v2-frame-pop { position: absolute; top: 6px; right: 10px; z-index: 2; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--muted-2); text-decoration: none; font-size: 13px; background: var(--bg); opacity: .7; }
 .v2-frame-pop:hover { color: var(--ink); background: var(--bg-tint-2); opacity: 1; }
 body.embed .liv-head { display: none; } /* 리브 페이지도 임베드되면 '← 라이블리'가 이중이 된다 */
+/* #4233 액자 걷기(원준 2026-09-27 «그것도 액자 걷어») — 셸에 실린 클래식 위키 보조 화면(검토 대기 · 분류 검토 · 휴지통 · 분류 페이지)도
+   본문이 판에 바로 깔린다. 셸 위키 목록 · 프로젝트 · 자료 앱과 같은 문법: 라운딩 카드는 «내용 한 건»에만 쓰고, 화면 전체를 감싸지 않는다.
+   분류 페이지 안의 문서 묶음(.wk-board-inline)은 «내용 한 건»이라 그대로 둔다. 검토 대기 패널이 목록 전체를 한 번 더 싸던 카드도 같이 걷는다. */
+body.embed .card.pjv-listboard.wk-board:not(.wk-board-inline) { border: 0; border-radius: 0; background: none; padding: 0; }
+body.embed .wk-board:not(.wk-board-inline) > .wk-board-body > div > .card { border: 0; border-radius: 0; background: none; padding: 0; }
+body.embed .wk-board:not(.wk-board-inline) > .wk-board-body { padding-top: 14px; }   /* 카드 패딩이 주던 탭 줄 아래 숨 */
 
 /* ── 새 셸 켜짐: 클래식 크롬 숨김, 뿌리 전체 화면 ── */
 body[data-ui="v2"] { height: 100vh; overflow: hidden; margin: 0; }
