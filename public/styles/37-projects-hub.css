@@ -826,3 +826,82 @@ button.pjh-rail-r:hover { background: var(--bg-tint); color: var(--ink); }
 }
 /* 올리는 중이 아닐 땐 진행 줄 자리가 간격을 먹지 않는다(1×1 몸통이 9px 넘치던 것) */
 .pjh-prog:empty { display: none; }
+
+/* ══ 작업 타임라인 — 전면 재구성(#4135, 2026-09-27 원준: «점 크기는 누가 더 많이 했는지 비교하는 용도밖에 안 된다 — 누가 어떤 작업을
+   하는지 보는 역할이어야지»). 단위는 «사람 + 그 사람이 한 작업의 내용». 양을 그리는 것(점 크기·막대)은 없다. ══ */
+/* 작업 한 줄 — 앞: 얼굴(사람이 섞인 자리) 또는 종류 점 · 큰 글: 내용 · 오른쪽: 때 · 작은 글: 이름 · 중분류 · 태스크 */
+.pjh-wk { display: flex; align-items: flex-start; gap: 9px; min-width: 0; padding: 7px 8px; border-radius: 8px; cursor: pointer; outline: 0; }
+.pjh-wk:hover { background: var(--bg-tint); }
+.pjh-wk:focus-visible { box-shadow: inset 0 0 0 2px var(--blue); }
+.pjh-wk.on { background: var(--bg-sel); box-shadow: inset 2px 0 0 var(--blue); }
+.pjh-wk > .pjh-ev-dot { margin-top: 7px; }
+.pjh-wk > .pjv-ava { flex: none; width: 20px; height: 20px; font-size: 9.5px; margin-top: 1px; }
+.pjh-wk-b { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.pjh-wk-t { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.pjh-wk-x { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 500; line-height: 1.45; color: var(--ink); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pjh-wk.one .pjh-wk-x { display: block; white-space: nowrap; text-overflow: ellipsis; }
+.pjh-wk.on .pjh-wk-x { font-weight: 600; }
+.pjh-wk-w { flex: none; font-size: 12px; color: var(--muted-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pjh-wk-m { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+.pjh-wk-m > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pjh-wk-who { flex: none; font-weight: 600; color: var(--ink-sub); }
+.pjh-wk-k { display: inline-flex; align-items: center; gap: 5px; flex: none; max-width: 60%; }
+.pjh-wk-sep { flex: none; color: var(--muted-3); }
+.pjh-wk-m .pjh-tb { flex: 0 1 auto; min-width: 0; max-width: none; }
+.pjh-ev-dot.sm { width: 6px; height: 6px; margin-top: 0; flex: none; }
+/* 1×1 — 최근 작업 넷(한 줄씩) */
+.pjh-wlist { display: flex; flex-direction: column; gap: 1px; min-height: 0; overflow: hidden; }
+.pjh-wlist .pjh-wk { padding: 6px 6px; }
+/* 흐름(1×N · 모달 시간순) — 날 머리 아래 두 줄짜리 줄 */
+.pjh-wfeed { gap: 1px; }
+.pjh-wfeed .pjh-grp { margin-top: 10px; padding-left: 6px; }
+.pjh-wfeed .pjh-grp:first-child { margin-top: 0; }
+/* 사람 머리 — 얼굴 · 이름 · 마지막으로 일한 때 */
+.pjh-bd-p { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 8px; font-size: 13.5px; font-weight: 700; letter-spacing: -.1px; color: var(--ink); white-space: nowrap; }
+.pjh-bd-p .pjv-ava { flex: none; width: 22px; height: 22px; font-size: 10px; }
+.pjh-bd-pn { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pjh-bd-p small { flex: none; font-size: 12px; font-weight: 500; letter-spacing: 0; color: var(--muted-2); }
+.pjh-bd-faces { display: inline-flex; flex: none; }
+.pjh-bd-faces .pjv-ava + .pjv-ava { margin-left: -6px; box-shadow: 0 0 0 2px var(--bg); }
+/* 날 × 사람 판 — 왼쪽 축(64px)은 날, 열은 사람. 줄 사이 선은 날 사이에만. */
+.pjh-bd { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; scrollbar-width: thin; scrollbar-color: var(--line-net) transparent; }
+.pjh-bd-h, .pjh-bd-r { display: grid; column-gap: 8px; flex: none; }
+.pjh-bd-h { position: sticky; top: 0; z-index: 2; align-items: center; min-height: 38px; padding-bottom: 6px; background: var(--bg); border-bottom: 1px solid var(--line-row); }
+.pjh-bd-r { padding: 8px 0; border-top: 1px solid var(--line-row); }
+.pjh-bd-h + .pjh-bd-r { border-top: 0; }
+.pjh-bd-d { position: sticky; top: 46px; align-self: start; display: flex; flex-direction: column; gap: 1px; padding: 7px 0 0 4px; }
+.pjh-bd-d b { font-size: 13px; font-weight: 800; letter-spacing: -.1px; color: var(--ink); }
+.pjh-bd-d span { font-size: 11.5px; color: var(--muted-2); white-space: nowrap; }
+.pjh-bd-r.today .pjh-bd-d b { color: var(--blue); }
+.pjh-bd-c { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+/* 사람별 최근(2×1 · 3×1) — 사람마다 한 열, 그 사람의 최근 작업 셋 */
+.pjh-pl { flex: 1; min-height: 0; display: grid; column-gap: 0; overflow: hidden; }
+.pjh-pl-c { min-width: 0; display: flex; flex-direction: column; gap: 1px; padding: 0 12px; }
+.pjh-pl-c:first-child { padding-left: 0; }
+.pjh-pl-c:last-child { padding-right: 0; }
+.pjh-pl-c + .pjh-pl-c { border-left: 1px solid var(--line-row); }
+.pjh-pl .pjh-bd-p { min-height: 28px; padding: 0 6px; margin-bottom: 3px; }
+.pjh-pl .pjh-wk { padding: 6px 6px; }
+/* 고른 작업의 속 */
+.pjh-wside { overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--line-net) transparent; }
+.pjh-wd-who { flex: none; display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; color: var(--muted); }
+.pjh-wd-who .pjv-ava { flex: none; width: 24px; height: 24px; font-size: 10.5px; }
+.pjh-wd-who b { flex: none; font-size: 14px; font-weight: 700; color: var(--ink); }
+.pjh-wd-who span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--muted-2); }
+.pjh-wd-kind { font-size: 12.5px; color: var(--muted); }
+.pjh-wd-body { flex: none; max-height: none; overflow: visible; white-space: pre-wrap; font-size: 13px; line-height: 1.6; }
+.pjh-wside .pjh-kv .pjh-tb { justify-self: start; max-width: 100%; }
+.pjh-wside .pjh-kr .pjh-kr-t { white-space: normal; overflow: visible; line-height: 1.4; }
+.pjh-wside .pjh-kr { min-height: 36px; padding: 6px; align-items: flex-start; }
+.pjh-wside .pjh-kr > .pjh-ic { margin-top: 3px; }
+.pjh-w:not(.pjh-modal) .pjh-wside { padding-left: 16px; }
+/* 모달 — 판 | 옆 칸 */
+.pjh-wtwo { grid-template-columns: minmax(0, 1fr) clamp(320px, 36%, 440px); }
+.pjh-tools-r { margin-left: auto; }
+.pjh-modal .pjh-bd-h { min-height: 42px; }
+.pjh-modal .pjh-bd-d { top: 50px; }
+.pjh-modal .pjh-wk { padding: 8px 10px; }
+@media (max-width: 900px) {
+  .pjh-modal .pjh-wtwo .pjh-wfeed { flex: none; overflow: visible; }
+}

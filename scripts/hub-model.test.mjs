@@ -110,25 +110,44 @@ test("#11 폴더 — 최근 순 파일(폴더 제외 · mtime 내림 · 같으�
   assert.deepEqual(M.splitDirs(items).dirs.map((f) => f.name), ["d"]);
 });
 
-test("#12 타임라인 레인 — n일 축(오늘이 끝 · 첫날과 1일은 M/D · 주말·오늘 표식) · 사람×날 건수 · 점 단계", () => {
-  const days = M.laneDays(7, NOW);
-  assert.equal(days.length, 7); assert.equal(days[6].today, true); assert.equal(days[6].key, "2026-09-25");
-  assert.equal(days[0].label, "9/19"); assert.equal(days[1].label, "9/20"); assert.equal(days[6].label, "오늘");
-  assert.deepEqual(days.map((d) => d.weekend), [true, true, false, false, false, false, false], "9/19 토 · 9/20 일");
+test("#12 타임라인 — 요약 가르기 · 최근에 일한 사람부터 · 날 × 사람 판(기록 있는 날만) · «그 밖» 열 · 짧은 때", () => {
+  assert.deepEqual(M.splitSummary("웹 페이지 수정 - 허브 공유 폴더를 곁칸과 같게"), { kind: "웹 페이지 수정", text: "허브 공유 폴더를 곁칸과 같게" });
+  assert.deepEqual(M.splitSummary("배포 - A - B"), { kind: "배포", text: "A - B" }, "첫 구분자에서만 가른다");
+  assert.deepEqual(M.splitSummary("구분자 없는 요약"), { kind: "", text: "구분자 없는 요약" });
+  assert.deepEqual(M.splitSummary("이 앞머리는 스물네 자를 훌쩍 넘어가서 중분류로 보기 어렵다 - 내용").kind, "", "앞머리가 길면 가르지 않는다");
+  assert.deepEqual(M.splitSummary(null), { kind: "", text: "" });
+  const at = (h) => new Date(NOW - h * 3600e3).toISOString();
   const acts = [
-    { author_person: "wj", committed_at: new Date(NOW - 3600e3).toISOString() },
-    { author_person: "wj", created_at: new Date(NOW - 86400e3).toISOString() },
-    { author_person: "sm", created_at: new Date(NOW - 86400e3 * 10).toISOString() },   // 축 밖
-    { author_person: "", created_at: new Date(NOW).toISOString() },                  // 사람 없음 → 무시
+    { id: 1, author_person: "wj", created_at: at(1) },        // 오늘
+    { id: 2, author_person: "sm", created_at: at(3) },        // 오늘
+    { id: 3, author_person: "sm", created_at: at(4) },        // 오늘
+    { id: 4, author_person: "sm", created_at: at(5) },        // 오늘
+    { id: 5, author_person: "wj", committed_at: at(26) },     // 어제
+    { id: 6, author_person: "kk", created_at: at(24 * 3 + 1) }, // 9/22
+    { id: 7, author_person: "", created_at: at(2) },          // 사람 없음 → 빠진다
+    { id: 8, author_person: "wj", created_at: "" },           // 때 없음 → 빠진다
   ];
-  const m = M.laneCounts(acts, days, ["sm", "wj"]);
-  assert.deepEqual([...m.keys()], ["sm", "wj"], "순서는 호출자가 준 대로, 기록 없는 사람도 order 에 있으면 남는다");
-  assert.deepEqual(m.get("wj"), [0, 0, 0, 0, 0, 1, 1]);
-  assert.deepEqual(M.laneCounts(acts, days).get("sm"), undefined, "order 없이 축 밖 기록만 있는 사람은 빠진다");
-  assert.deepEqual([0, 1, 2, 3, 4, 6, 7, 30].map(M.dotSize), [0, 1, 2, 2, 3, 3, 4, 4]);
+  assert.deepEqual(M.peopleByRecency(acts), ["wj", "sm", "kk"], "많이 한 순(sm 3건)이 아니라 가장 최근에 일한 순");
+  assert.deepEqual(M.boardCols(["wj", "sm", "kk"], 3), [{ key: "wj", ids: ["wj"] }, { key: "sm", ids: ["sm"] }, { key: "kk", ids: ["kk"] }]);
+  assert.deepEqual(M.boardCols(["wj", "sm", "kk"], 2), [{ key: "wj", ids: ["wj"] }, { key: "others", ids: ["sm", "kk"] }], "열이 모자라면 마지막 열이 나머지를 모은다");
+  assert.deepEqual(M.boardCols(["wj", "sm"], 0), [{ key: "others", ids: ["wj", "sm"] }], "열은 최소 하나");
+  const days = M.boardDays(acts, M.boardCols(["wj", "sm", "kk"], 3));
+  assert.deepEqual(days.map((d) => d.key), ["2026-09-25", "2026-09-24", "2026-09-22"], "기록 있는 날만 · 최근 날부터(9/23 은 없다)");
+  assert.deepEqual(days[0].cells.map((c) => c.map((a) => a.id)), [[1], [2, 3, 4], []]);
+  assert.deepEqual(days[1].cells.map((c) => c.map((a) => a.id)), [[5], [], []]);
+  assert.deepEqual(days[2].cells.map((c) => c.map((a) => a.id)), [[], [], [6]]);
+  assert.deepEqual(M.recentByCol(acts, M.boardCols(["wj", "sm", "kk"], 2), 2).map((c) => c.map((a) => a.id)), [[1, 5], [2, 3]], "열마다 최근 둘 — «그 밖» 열은 그 사람들을 합쳐서");
+  assert.deepEqual(M.dayParts(NOW - 3600e3, NOW), { main: "오늘", sub: "금 9/25" });
+  assert.deepEqual(M.dayParts(NOW - 86400e3, NOW), { main: "어제", sub: "목 9/24" });
+  assert.deepEqual(M.dayParts(NOW - 86400e3 * 3, NOW), { main: "9/22", sub: "화" });
+  assert.equal(M.whenShort(new Date(2026, 8, 25, 9, 5).getTime(), NOW), "09:05");
+  assert.equal(M.whenShort(new Date(2026, 8, 24, 18, 50).getTime(), NOW), "어제 18:50");
+  assert.equal(M.whenShort(new Date(2026, 8, 20, 18, 50).getTime(), NOW), "9/20");
+  assert.equal(M.whenShort(0, NOW), "");
+  assert.deepEqual([200, 536, 617, 850, 2000].map((w) => M.boardMaxCols(w)), [1, 2, 2, 3, 4], "열 폭 236 이상 · 1~4열");
   assert.equal(M.feedDayLabel(NOW - 60e3, NOW), "오늘"); assert.equal(M.feedDayLabel(NOW - 86400e3, NOW), "어제"); assert.equal(M.feedDayLabel(NOW - 86400e3 * 3, NOW), "9/22");
-  assert.deepEqual(M.latestLane(acts), { person: "wj", day: "2026-09-25" });
-  assert.equal(M.countOn(acts, "2026-09-25"), 2); assert.equal(M.countSince(acts, NOW - 86400e3 * 2), 3);
+  const ti = M.taskIndex([{ id: 10, name: "a", subtasks: [{ id: 11, name: "a-1", subtasks: [{ id: 12, name: "a-1-1" }] }] }, { id: 20, name: "b" }]);
+  assert.deepEqual([...ti.keys()], [10, 11, 12, 20]); assert.equal(ti.get(12).name, "a-1-1");
 });
 
 test("#13 노드 이름 — 없으면 «중앙», 세션 호스트(sesshost-…)는 «서버», 그 밖은 노드 이름에서 .local 을 뗀다", () => {
