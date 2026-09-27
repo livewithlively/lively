@@ -112,8 +112,9 @@ const taxSide = code(cut(SIDE, "function renderTaxonomySection(", "\nfunction re
 ok(/'전체 지도'/.test(taxSide) && /'손볼 것'/.test(taxSide) && /'묶음'/.test(taxSide) && /'정리'/.test(taxSide) && /fitWikiList\(/.test(taxSide) && /빈 분류/.test(taxSide),
   "W1 사이드바: 고정 두 줄 · 「묶음」 이름표와 [정리] · 높이에 맞춘 줄 나누기 · 빈 분류 접기");
 ok(taxSide.length > 0 && !/team|담당/.test(taxSide), "W1 사이드바에 팀 · 담당이 없다");
-ok(/tags:\s*\{[\s\S]*?frost:[\s\S]*?color:/.test(read("web/v2/glass-icon.ts")), "W1 유리 아이콘 표에 tags");
-ok(/^\s*tags:\s*'M/m.test(read("web/v2/icons.ts")), "W1 선 아이콘 표에 tags");
+//  #4233(2026-09-27): 앱 아이콘은 타일 + 선 아이콘이 됐고, 선 아이콘 표는 lib/icon-paths.ts 한 벌로 옮겼다.
+ok(/APP_ICON_NAMES\s*=\s*\[[^\]]*'tags'/.test(read("web/v2/glass-icon.ts")) && /--gi-c-tags\s*:/.test(read("public/styles/01-base.css")), "W1 앱 아이콘에 tags(이름 · 색 토큰)");
+ok(/^\s*tags:\s*'M/m.test(read("web/lib/icon-paths.ts")), "W1 선 아이콘 표에 tags");
 const IDX = read("public/index.html");
 ok(/49-v2-ctx\.css">\s*\n<link rel="stylesheet" href="\.\/styles\/49-v2-taxonomy\.css">/.test(IDX) && existsSync(join(root, "public/styles/49-v2-taxonomy.css")), "W1 앱 CSS 가 49-v2-ctx 뒤에 실린다");
 const APPJS = code(read("web/v2/taxonomy.ts"));

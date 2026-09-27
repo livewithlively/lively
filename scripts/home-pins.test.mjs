@@ -118,7 +118,7 @@ const lastAskFn = cut(LA, "export function lastAsk(", "\n}");
 ok(/shorten\(s\.raw\.lastPrompt\)/.test(lastAskFn) && !/cleanAskText/.test(lastAskFn) && /\(cleanAskText\(t\) \|\| ''\)/.test(cut(LA, "function shorten(", "\n}"))
   && /const INJ_RE = INJECTED_RE;/.test(ST),
   "W3 ★서버 칸(lastPrompt)과 꼬리 조회가 같은 식(lib/ask-text)으로 끼운 글을 거른다 · 서버 칸은 shorten 안에서 한 번만");
-const IC = read("web/v2/icons.ts"), CSS40 = read("public/styles/40-v2.css");
+const IC = read("web/lib/icon-paths.ts"), CSS40 = read("public/styles/40-v2.css");
 ok(IC.includes("folderRows: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M7 12h10 M7 15h6'")
   && /icon\('folderRows', 'v2-axisbtn-ic'\)/.test(cut(SIDE, "function axisBtn(", "\n}\n"))
   && /\.v2-axisbtn-ic \{ width: 15px; height: 15px;[^}]*stroke-width: 1\.9;/.test(CSS40),

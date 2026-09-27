@@ -98,7 +98,7 @@
     창 줄로 오면서 그 규칙 밖으로 나가, 넓은 폭에서 아이콘이 stroke:none·fill:black 이 되어 안 보였다(#1954 3차 실측).
     여기서 폭과 무관하게 다시 준다. */
 #v2-root.has-topbar > .v2-topbar > .v2-mbar-menu .v2-mbar-ic {
-  width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+  width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round;
 }
 /* 모바일 바는 [타임라인] 하나만 남는다 — 그 버튼이 숨으면 바 자체가 설 이유가 없다. */
 #v2-root.has-topbar > .v2-mbar:not(:has(.v2-mbar-btn:not([hidden]))) { display: none; }
@@ -175,13 +175,13 @@
   border: 0; border-radius: 8px; background: none; color: var(--muted-head); cursor: pointer; }
 .v2-navb:hover:not(:disabled) { background: var(--bg); color: var(--ink); }
 .v2-navb:disabled { color: var(--muted-2); cursor: default; }
-.v2-navb-ic { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.v2-navb-ic { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 /* 검색은 **칸처럼 생긴 버튼**이다 — 진짜 입력칸을 두면 사이드바 20초 재렌더가 입력·한글 조합을 끊는다. */
 .v2-omnib { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; height: 28px; margin-left: 6px; padding: 0 8px 0 10px;
   border: 1px solid var(--line-net); border-radius: 8px; background: var(--bg);
   font: inherit; font-size: 12.5px; color: var(--muted); cursor: pointer; text-align: left; }
 .v2-omnib:hover { border-color: var(--blue); color: var(--ink-sub); }
-.v2-omnib-ic { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+.v2-omnib-ic { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; }
 .v2-omnib-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-omnib-k { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; letter-spacing: .02em;
   padding: 1px 5px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted-2); background: var(--canvas); }
@@ -202,7 +202,7 @@
   background: var(--bg); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
   box-shadow: 0 24px 64px rgba(16, 32, 64, .26), 0 3px 10px rgba(16, 32, 64, .10); }
 .v2-omni-top { display: flex; align-items: center; gap: 9px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
-.v2-omni-lens { width: 18px; height: 18px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.v2-omni-lens { width: 18px; height: 18px; flex: none; fill: none; stroke: var(--muted); stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 .v2-omni-in { flex: 1; min-width: 0; border: 0; background: none; font: inherit; font-size: 16px; color: var(--ink); }
 .v2-omni-in:focus { outline: none; }
 .v2-omni-esc { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; padding: 2px 6px;
@@ -219,7 +219,7 @@
     꺼져 있을 때가 기본이라 점선 테두리로 '아직 안 켠 것'임을 말한다(꺼진 주 축 칩과 헷갈리지 않게). */
 .v2-omni-chipsep { width: 1px; align-self: stretch; margin: 2px 3px; background: var(--line, #E6ECF5); }
 .v2-omni-chip.aux:not(.on) { border-style: dashed; }
-.v2-omni-chip-ic { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.v2-omni-chip-ic { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 .v2-omni-list { flex: 1; min-height: 0; overflow: auto; padding: 6px; }
 .v2-omni-gh { padding: 8px 8px 4px; font-size: 10.5px; font-weight: 800; letter-spacing: .06em; color: var(--muted); }
 .v2-omni-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 9px; cursor: pointer; }
@@ -227,7 +227,7 @@
 .v2-omni-ic { display: inline-grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 7px;
   background: var(--canvas); color: var(--muted-head); }
 .v2-omni-row.on .v2-omni-ic { background: var(--bg); color: var(--blue); }
-.v2-omni-kic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.v2-omni-kic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 .v2-omni-tt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .v2-omni-t { font-size: 13.5px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-omni-s { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

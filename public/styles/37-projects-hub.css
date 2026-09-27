@@ -99,7 +99,7 @@
 .pjh-wf > .btn:hover, .pjh-wf .btn-sm:hover { background: var(--bg-punch); color: var(--blue); box-shadow: none; }
 .pjh-wf > .btn.btn-ghost > .pjh-ic { width: 13px; height: 13px; }
 .pjh-wf .pjh-sbtn { height: 26px; }
-.pjh-ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.pjh-ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; flex: none; }
 
 /* 공용 글 — 한 문장 안내(빈 상태) · 묶음 머리 · «… N개 더» · 세션 점 */
 .pjh-stat { font-size: 13px; line-height: 1.55; color: var(--ink-sub); }

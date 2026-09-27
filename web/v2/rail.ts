@@ -23,6 +23,7 @@ import { el, focusMovedIntoFrame, navOn, personName, profileAvatar, state, toast
 import { deviceStore, shellPrefStore, shellPrefsPush } from './shell-prefs.js';   // #2460 — 레일 순서는 계정, 접힘은 이 기기
 import { APPS, appHref, openLaunchpad, RECENT_STORE_KEY, type AppDef } from './apps.js';
 import { icon } from './icons.js';
+import { appGlyphName } from '../lib/icon-paths.js';
 import { openMeModal } from './me-modal.js';
 import { ctxMenu } from './panes-kit.js';   // 우클릭 메뉴 — 곁칸·프로젝트 행과 같은 부품
 import {
@@ -596,7 +597,7 @@ export function openSectionMenu(anchor: HTMLElement): void {
       }
       if (m.kind === 'link') { const l = m.link; return row(l.key, l.label, l.icon, !!linkOn && linkOn.key === l.key, null, () => { location.hash = l.route; }); }
       const a = m.app;   // 독에 고정한 앱 — 레일이 숨어도 여기서 간다
-      return row(a.key, a.title, a.icon, ak === a.key || ak === 'app:' + a.key, null, () => { location.hash = appHref(a); });
+      return row(a.key, a.title, appGlyphName(a.icon), ak === a.key || ak === 'app:' + a.key, null, () => { location.hash = appHref(a); });
     }),
     el('div', { class: 'v2-wspop-hr', role: 'separator' }),
     row('rail', '레일 펼치기', 'panel', false, el('kbd', { class: 'v2-wspop-k', text: '⌘⇧S' }), () => toggleRail())) as HTMLElement;
@@ -897,7 +898,7 @@ export function drawRail(): void {
     //  독에 고정한 앱도 **지금 그 화면이면 켜져 보인다** — 구역·리브와 같은 규칙(activeKey).
     //   안 그러면 자료를 고정해 놓고 그 안에 들어가 있어도 레일만 아무 데도 안 가리킨다.
     const on = ak === a.key || ak === 'app:' + a.key;
-    const it = item(a.key, a.title, a.icon, on,
+    const it = item(a.key, a.title, appGlyphName(a.icon), on,   // #4233: 앱 화면과 같은 그림(홈(클래식) = 판 넷)
       running.has(a.key) ? el('span', { class: 'v2-rail-run', role: 'img', 'aria-label': '실행 중' }) : null,
       () => { /* href 가 간다 */ }, appHref(a));
     it.classList.add(kind === 'pin' ? 'pinned' : 'recent');
