@@ -444,6 +444,7 @@ let attempt = 0;
 /** 세션 id → pane env 에 세션 신원이 실려 떴나(#4135). 세션 수명 동안 안 바뀌므로 한 번만 묻는다. 재연결해도 유지한다. */
 const envTokenKnown = new Map<string, boolean>();
 const ENV_PROBE_PER_TICK = 6;
+let envProbing = false;   // pane env 를 묻는 판이 돌고 있나 — 겹치는 판은 새로 묻지 않는다
 function connect(): void {
   const url = nodeWsUrl(GW_URL);
   const ws = new WebSocket(url, { headers: { Authorization: `Bearer ${TOKEN}` }, handshakeTimeout: 10_000 });
@@ -466,18 +467,24 @@ function connect(): void {
     const files = await sessionTokenFileIds().catch(() => new Set<string>());
     const live = new Set(list.map((x) => x.id));
     for (const id of [...envTokenKnown.keys()]) if (!live.has(id)) envTokenKnown.delete(id);
+    //  ⚠ 상태 push 는 3초마다 **앞 판이 끝났든 말든** 불린다. 묻는 일(tmux)이 느려지면(중계 끊김 — 한 번에 최대 22초) 판마다
+    //   새 물음이 앞 판 위에 쌓인다(리뷰 지적). 묻는 중이면 이번 판은 새로 묻지 않고 아는 것만 싣는다.
+    const mayProbe = !envProbing;
+    if (mayProbe) envProbing = true;
     let probes = 0;
     const out: Array<T & { hasSessionToken?: boolean }> = [];
-    for (const row of list) {
-      let env = envTokenKnown.get(row.id);
-      if (env === undefined && !files.has(row.id) && probes < ENV_PROBE_PER_TICK) {
-        probes++;
-        try { env = envCarriesSessionToken(await tmux(["show-environment", "-t", row.id])); envTokenKnown.set(row.id, env); }
-        catch { env = undefined; }
+    try {
+      for (const row of list) {
+        let env = envTokenKnown.get(row.id);
+        if (env === undefined && mayProbe && !files.has(row.id) && probes < ENV_PROBE_PER_TICK) {
+          probes++;
+          try { env = envCarriesSessionToken(await tmux(["show-environment", "-t", row.id])); envTokenKnown.set(row.id, env); }
+          catch { env = undefined; }
+        }
+        const has = sessionTokenPresence(files.has(row.id), env);
+        out.push(has === undefined ? row : { ...row, hasSessionToken: has });
       }
-      const has = sessionTokenPresence(files.has(row.id), env);
-      out.push(has === undefined ? row : { ...row, hasSessionToken: has });
-    }
+    } finally { if (mayProbe) envProbing = false; }
     return out;
   };
 

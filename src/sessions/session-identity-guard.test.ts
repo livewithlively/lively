@@ -1,6 +1,9 @@
 // 세션 신원 어긋남 막기(#4135, 2026-09-28) — 판정 표와 거절 동작.
 import { strict as assert } from "node:assert";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { mismatchMessage, requireSessionWriter, resetSessionIdentityGuardCache, sessionOwnerMismatch, type GuardRow } from "./session-identity-guard.js";
 
 const row = (over: Partial<GuardRow> = {}): GuardRow => ({ owner: "wonjoon-jang", invites: [], discovered: false, kind: "human", ...over });
@@ -64,4 +67,25 @@ test("G5 기억 — 몇 초 안의 같은 세션은 다시 읽지 않고, 지나
   t += 6_000;
   await assert.rejects(() => requireSessionWriter("sangmin-yoon", SID, deps));
   assert.equal(loads, 2);
+});
+
+// 판정이 옳아도 **불리지 않으면** 아무것도 막지 못한다. 두 어댑터의 부르는 자리를 글자로 못 박는다(리뷰 지적):
+//  쓰는 도구에만 · 세션을 말한 요청에만 · 핸들러보다 앞에서.
+test("G6 부르는 자리 — MCP 어댑터와 REST 어댑터가 둘 다, 핸들러 앞에서, 쓰는 도구에만 건다", () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const read = (rel: string): string => {
+    const hit = [path.join(here, "..", rel), path.join(here, "..", "..", "src", rel)].find((p) => fs.existsSync(p));
+    assert.ok(hit, `${rel} 원문을 찾지 못했다`);
+    return fs.readFileSync(hit!, "utf8");
+  };
+  const mcp = read("capabilities/index.ts");
+  const iGuard = mcp.indexOf("if (session && isReadOnlyBlocked(cap)) await requireSessionWriter(u.userId, session);");
+  const iHandler = mcp.indexOf("return json(await cap.handler(");
+  assert.ok(iGuard > 0, "MCP 어댑터에 판정 호출이 없다");
+  assert.ok(iHandler > iGuard, "MCP 어댑터: 판정이 핸들러보다 앞이어야 한다");
+  const rest = read("web.ts");
+  const rGuard = rest.indexOf("if (claimed && isReadOnlyBlocked(cap)) await requireSessionWriter(user.userId, claimed);");
+  const rHandler = rest.indexOf("res.json(await cap.handler(input, user, {");
+  assert.ok(rGuard > 0, "REST 어댑터에 판정 호출이 없다");
+  assert.ok(rHandler > rGuard, "REST 어댑터: 판정이 핸들러보다 앞이어야 한다");
 });

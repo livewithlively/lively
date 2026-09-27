@@ -44,6 +44,11 @@ export const BACKFILL_HAVE_RETRY_MS = 60_000;
 /** «확인했다» 는 기억의 수명 — 지나면 다시 판정한다(리뷰 지적: relay 가 타임아웃으로 실패해 게이트웨이가 토큰을 거뒀는데 노드는 세션을
  *  띄운 경우, 스냅샷이 먼저 와 «실어 줬다» 로 기억되면 그 세션은 영영 죽은 env 토큰으로 남는다. 재판정이 그것을 다시 심는다). */
 export const BACKFILL_RECHECK_MS = 10 * 60_000;
+/** «다시 굽기» 가 심는 데 실패했을 때 다시 해 보는 간격 — 보통의 실패(10분)보다 짧다(리뷰 지적).
+ *  다시 굽는 순간 옛 토큰은 죽는다(mint 가 같은 라벨의 옛 것을 거둔다). 노드의 «없다» 가 틀린 말이었다면(살아 있는 env 토큰이
+ *  있었는데 못 본 경우) 그 세션은 심기가 성공할 때까지 신원이 없다 — 그 사이 쓰기는 session-identity-guard 가 막으므로 틀린 이름이
+ *  남지는 않지만, 10분을 그렇게 두지 않는다. */
+export const BACKFILL_REISSUE_RETRY_MS = 60_000;
 
 /** 바깥 의존(테스트 주입용) — 판정·순서는 이 모듈이, DB·노드 RPC 는 이들이. */
 export interface BackfillDeps {
@@ -64,6 +69,7 @@ export interface BackfillDeps {
   retryAfterMs?: number;
   haveRetryMs?: number;
   recheckMs?: number;
+  reissueRetryMs?: number;
 }
 export function defaultBackfillDeps(): BackfillDeps {
   return {
@@ -167,7 +173,8 @@ export function createNodeSessionTokenBackfill(deps: BackfillDeps = defaultBackf
         //  다시 구운 것도 결과에서는 minted 로 센다(결과 모양은 그대로 둔다) — 구분은 이 로그 한 줄이 한다.
         if (lost) { logger.info({ node: nodeId, id: s.id, owner }, "세션 신원을 다시 실었다 — 발급은 돼 있었는데 그 컴퓨터에 없었다(#4135)"); }
       } catch (e) {
-        failedAt.set(k, now); out.failed++;
+        //  다시 굽던 중이면 백오프를 줄인다(BACKFILL_REISSUE_RETRY_MS 머리말) — 실패 시각을 앞당겨 적어 retryAfter 가 그만큼 일찍 찬다.
+        failedAt.set(k, lost ? now - Math.max(0, retryAfter - (deps.reissueRetryMs ?? BACKFILL_REISSUE_RETRY_MS)) : now); out.failed++;
         try { await deps.revoke(s.id); } catch { /* 회수 실패는 다음 민팅이 옛 라벨을 죽인다 */ }
         logger.warn({ node: nodeId, id: s.id, err: (e as Error)?.message || String(e) }, "노드에 세션 토큰을 못 심었다 — 거두고 잠시 뒤 다시");
       }

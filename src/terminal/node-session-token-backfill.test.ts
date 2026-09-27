@@ -34,7 +34,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  BACKFILL_RETRY_AFTER_MS, BACKFILL_HAVE_RETRY_MS, BACKFILL_RECHECK_MS, createNodeSessionTokenBackfill,
+  BACKFILL_RETRY_AFTER_MS, BACKFILL_HAVE_RETRY_MS, BACKFILL_RECHECK_MS, BACKFILL_REISSUE_RETRY_MS, createNodeSessionTokenBackfill,
 } from "./node-session-token-backfill.js";
 import type { BackfillDeps } from "./node-session-token-backfill.js";
 import type { SessionInfo } from "./catalog.js";
@@ -1137,4 +1137,25 @@ test("D19-5 다시 구운 뒤에는 기억한다 — 노드가 다음 판에도 
   k.clock += 10_001;
   const r3 = await bf.run(NODE, [sessTok(A, false)]);
   assert.equal(r3.minted, 1, "recheckMs 가 지나고도 없다고 하면 다시 굽는다");
+});
+
+test("D19-6 다시 굽다가 심기가 실패하면 — 구운 것을 거두고(failed+1) 보통의 백오프보다 일찍 다시 해 본다", async () => {
+  //  다시 굽는 순간 옛 토큰은 죽는다. 심기까지 실패하면 그 세션은 신원이 없다 — 10분을 그렇게 두지 않는다.
+  assert.ok(BACKFILL_REISSUE_RETRY_MS < BACKFILL_RETRY_AFTER_MS);
+  const k = fakeDeps({ have: [A], retryAfterMs: 600_000 });
+  k.deps.canReissue = () => true;
+  k.deps.reissueRetryMs = 60_000;
+  k.pushMode.set(A, "reject");
+  const bf = createNodeSessionTokenBackfill(k.deps);
+  const r1 = await bf.run(NODE, [sessTok(A, false)]);
+  assert.deepEqual(r1, { minted: 0, skipped: 0, revoked: 0, failed: 1 });
+  assert.deepEqual(k.calls.revoke, [A], "심지 못한 토큰은 거둔다");
+  k.reset(); k.clock += 30_000;
+  const r2 = await bf.run(NODE, [sessTok(A, false)]);
+  assert.deepEqual(r2, { minted: 0, skipped: 0, revoked: 0, failed: 0 });
+  assert.equal(k.calls.mint.length, 0, "30초 뒤에는 아직 쉰다");
+  k.reset(); k.clock += 31_000; k.pushMode.set(A, "ok");
+  k.have.delete(A);   // 거둔 뒤라 살아 있는 토큰이 없다
+  const r3 = await bf.run(NODE, [sessTok(A, false)]);
+  assert.equal(r3.minted, 1, "61초 뒤에는 다시 굽는다(보통의 백오프 10분을 기다리지 않는다)");
 });
