@@ -1159,3 +1159,69 @@ test("D19-6 다시 굽다가 심기가 실패하면 — 구운 것을 거두고(
   const r3 = await bf.run(NODE, [sessTok(A, false)]);
   assert.equal(r3.minted, 1, "61초 뒤에는 다시 굽는다(보통의 백오프 10분을 기다리지 않는다)");
 });
+
+test("D19-7 노드가 말이 없다가(기억됨) «없다» 고 말을 바꾸면 recheckMs 를 기다리지 않고 바로 다시 굽는다", async () => {
+  //  새 번들로 갈아탄 노드의 첫 판에는 아직 못 물어본 세션이 많다 — 말이 없어 건너뛰고 기억된다. 몇 초 뒤 «없다» 가 온다.
+  const k = fakeDeps({ have: [A], recheckMs: 600_000 });
+  k.deps.canReissue = () => true;
+  const bf = createNodeSessionTokenBackfill(k.deps);
+  const r1 = await bf.run(NODE, [sessTok(A, undefined)]);
+  assert.deepEqual(r1, { minted: 0, skipped: 1, revoked: 0, failed: 0 });
+  k.reset(); k.clock += 3_000;
+  const r2 = await bf.run(NODE, [sessTok(A, false)]);
+  assert.deepEqual(r2, { minted: 1, skipped: 0, revoked: 0, failed: 0 }, "3초 뒤 «없다» — 10분을 기다리지 않는다");
+  k.reset(); k.clock += 3_000;
+  const r3 = await bf.run(NODE, [sessTok(A, false)]);
+  assert.deepEqual(r3, { minted: 0, skipped: 0, revoked: 0, failed: 0 }, "같은 말을 되풀이해도 또 굽지는 않는다");
+  assert.equal(k.calls.mint.length, 0);
+});
+
+test("D19-8 심어 준 신원이 그 컴퓨터에서 사라지면(있다 → 없다) recheckMs 를 기다리지 않고 다시 굽는다", async () => {
+  const k = fakeDeps({ have: [A], recheckMs: 600_000 });
+  k.deps.canReissue = () => true;
+  const bf = createNodeSessionTokenBackfill(k.deps);
+  const r1 = await bf.run(NODE, [sessTok(A, true)]);
+  assert.deepEqual(r1, { minted: 0, skipped: 1, revoked: 0, failed: 0 }, "있다고 했다 — 건너뛰고 기억한다");
+  k.reset(); k.clock += 3_000;
+  const r2 = await bf.run(NODE, [sessTok(A, true)]);
+  assert.deepEqual(r2, { minted: 0, skipped: 0, revoked: 0, failed: 0 });
+  assert.equal(k.calls.haveTokens, 0, "기억하는 동안은 표를 다시 읽지 않는다");
+  k.reset(); k.clock += 3_000;
+  const r3 = await bf.run(NODE, [sessTok(A, false)]);
+  assert.deepEqual(r3, { minted: 1, skipped: 0, revoked: 0, failed: 0 }, "없다고 말을 바꿨다 — 바로 다시 굽는다");
+  assert.deepEqual(k.calls.push.map((p) => p.id), [A]);
+});
+
+test("D19-9 앞 판이 끝나지 않으면 inflightMaxMs 까지만 건너뛰고, 그 뒤에는 그 판을 버리고 새 판이 굽는다 — 버려진 판은 뒤늦게 굽지 않는다", async () => {
+  const k = fakeDeps({ have: [A], recheckMs: 600_000 });
+  k.deps.canReissue = () => true;
+  k.deps.inflightMaxMs = 180_000;
+  //  첫 판의 표 읽기는 시험이 풀어 줄 때까지 끝나지 않는다.
+  const real = k.deps.haveTokens;
+  let release: (v: Set<string>) => void = () => {};
+  let hung = 0;
+  k.deps.haveTokens = () => {
+    if (hung++ === 0) return new Promise<Set<string>>((res) => { release = res; });
+    return real();
+  };
+  const bf = createNodeSessionTokenBackfill(k.deps);
+  const first = bf.run(NODE, [sessTok(A, false)]);            // 안 끝나는 판
+  await Promise.resolve();
+  k.clock += 10_000;
+  const r2 = await bf.run(NODE, [sessTok(A, false)]);
+  assert.deepEqual(r2, { minted: 0, skipped: 0, revoked: 0, failed: 0 }, "10초 — 앞 판이 도는 중이라 건너뛴다");
+  assert.equal(k.calls.mint.length, 0);
+  k.clock += 171_000;                                          // 합 181초 — 상한을 넘겼다
+  const r3 = await bf.run(NODE, [sessTok(A, false)]);
+  assert.deepEqual(r3, { minted: 1, skipped: 0, revoked: 0, failed: 0 }, "상한 뒤 — 새 판이 굽는다");
+  assert.equal(k.calls.mint.length, 1);
+  release(new Set([A]));                                       // 버려진 판이 뒤늦게 깨어난다
+  const r1 = await first;
+  assert.deepEqual(r1, { minted: 0, skipped: 0, revoked: 0, failed: 0 }, "버려진 판은 굽지 않는다");
+  assert.equal(k.calls.mint.length, 1, "민팅은 새 판의 한 번뿐이다");
+  assert.equal(k.calls.push.length, 1);
+  //  새 판이 끝났으니 다음 판은 건너뛰지 않는다(버려진 판이 끝나면서 새 판의 표시를 지우지 않았는지 — 여기선 이미 끝난 뒤라 비어 있어야 한다).
+  k.reset(); k.clock += 3_000;
+  const r4 = await bf.run(NODE, [sessTok(A, false), sessTok(B, false)]);
+  assert.equal(r4.minted, 1, "새로 뜬 세션 B 는 바로 굽는다");
+});

@@ -108,7 +108,15 @@ export async function discoverNodeSessions(nodeId: string, sessions: SessionInfo
 export function armNodeSessionDiscovery(): void {
   // #4135 — 같은 스냅샷으로 «토큰 없는 살아 있는 세션» 도 본다(registry 의 구독자는 하나라 여기서 함께 부른다).
   const backfill = createNodeSessionTokenBackfill();
+  //  이 구독이 **실제로 불리는지** 를 로그로 남긴다 — 노드마다 부팅 뒤 첫 호출 한 번(2026-09-28: 매니지드에서 되채우기가 조용히
+  //   안 도는데, 구독이 안 불리는 것인지 불려서 건너뛰는 것인지 가를 기록이 없었다).
+  const firstCall = new Set<string>();
   onNodeSessions((nodeId, sessions) => {
+    if (!firstCall.has(nodeId)) {
+      firstCall.add(nodeId);
+      logger.info({ node: nodeId, sessions: sessions.length, no_token: sessions.filter((x) => x?.hasSessionToken === false).length },
+        "노드 세션 스냅샷 구독 — 부팅 뒤 첫 호출");
+    }
     void discoverNodeSessions(nodeId, sessions);
     void backfill.run(nodeId, sessions).catch((e) => logger.warn({ err: e, node: nodeId }, "노드 세션 토큰 되채우기 실패(비치명)"));
   });

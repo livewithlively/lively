@@ -773,6 +773,9 @@ function applyBeat(c: NodeConn): void {
   states.set(k, { ...prev!, ts: Date.now() });
 }
 
+/** 스냅샷 구독자를 부르기 전에 셀프 노드 판정을 기다리는 상한(applyState 머리말). */
+const SELF_PROBE_WAIT_CAP_MS = 8_000;
+
 function applyState(c: NodeConn, sessions: SessionInfo[], res?: NodeResources | null): NodeState {
   const nodeId = c.node.id;
   const k = keyOf(nodeId, c.tenant);
@@ -795,9 +798,21 @@ function applyState(c: NodeConn, sessions: SessionInfo[], res?: NodeResources | 
   //   늘 늦게 끝나서 **셀프 노드의 첫 스냅샷이 판정 전에 DB 로 들어갔다**(dev 실측 org_session_state 의 셀프
   //   discovered 행 286개의 출처 중 하나가 이 순서다 — 게이트웨이가 재배포될 때마다 그 창이 다시 열린다).
   //   판정은 후보가 없거나 스로틀이면 즉시 완결하므로(probeSelfNodes 반환값의 계약) 정상 경로의 비용은 0 이다.
-  void probeSelfNodes().then(() => {   // #2108 — 이 노드가 게이트웨이 자신인가(스로틀·비치명, 위 주석)
+  //  ⚠ 판정을 **기다리되 끝없이 기다리지는 않는다** (#4135, 2026-09-28). 판정은 tmux 왕복이고 그 약속은 프로세스에 하나라
+  //   (selfProbing), 한 번 안 끝나면 그 뒤의 모든 스냅샷이 같은 약속에 매달려 구독자(발견 기록·세션 신원 되채우기)가 영영 안 불린다.
+  //   상한을 넘기면 판정 없이 부른다 — 셀프 노드의 스냅샷이 그 틈에 한 번 들어갈 수 있지만(#2592 의 정리가 뒤에서 치운다),
+  //   구독자가 통째로 멈추는 것보다 낫다.
+  const call = (): void => {
     if (nodeSessionsHandler) { try { void nodeSessionsHandler(nodeId, sessions); } catch { /* 구독자 사고가 스냅샷을 막지 않는다 */ } }
-  });
+  };
+  let called = false;
+  const once = (): void => { if (called) return; called = true; clearTimeout(waitCap); call(); };
+  const waitCap = setTimeout(() => {
+    if (!called) logger.warn({ node: nodeId, waited_ms: SELF_PROBE_WAIT_CAP_MS }, "셀프 노드 판정이 안 끝난다 — 기다리지 않고 구독자를 부른다");
+    once();
+  }, SELF_PROBE_WAIT_CAP_MS);
+  waitCap.unref?.();
+  void probeSelfNodes().then(once, once);   // #2108 — 이 노드가 게이트웨이 자신인가(스로틀·비치명, 위 주석)
   // 정본(org_node_state)으로 흘려보낸다(#1834) — 이 게이트웨이가 재배포로 죽어도 다음 부팅이 여기서 목록을 되찾는다.
   //  세션 목록이 바뀌었을 때 즉시, 그대로면 최소 간격마다(node-state-store.shouldPersist). 비치명 —
   //  실패하면 기억을 지워 다음 보고(3초 뒤)가 곧바로 다시 시도한다.
