@@ -1145,7 +1145,7 @@ function wsHead(): HTMLElement {
   const cur = ak === 'liv' ? { label: '리브', icon: 'liv' } : ak === 'sources' ? { label: '자료', icon: 'src' } : ak === 'taxonomy' ? { label: '분류체계', icon: 'tags' } : sectionDef(sec);
   return el('div', { class: 'v2-side-wshd' },
     stackTile({ small: true, label: true }),
-    el('button', { class: 'v2-secdd', type: 'button', 'aria-haspopup': 'menu', title: '구역 바꾸기 — 홈 · AI 세션 · 프로젝트 · 위키 · 리브',
+    el('button', { class: 'v2-secdd', type: 'button', 'aria-haspopup': 'menu', title: '구역 바꾸기 — 홈 · 세션 목록 · 프로젝트 · 위키 · 리브',
       onclick: (e: Event) => openSectionMenu(e.currentTarget as HTMLElement) },
       icon(cur.icon, 'v2-ic'), el('span', { class: 'v2-secdd-t', text: cur.label }),
       el('span', { class: 'v2-ws-car', 'aria-hidden': 'true', text: '▾' })));
@@ -1702,13 +1702,13 @@ function renderSessions(): void {
   };
 
   const keep = listBefore();
-  const listEl = el('div', { class: 'v2-app-list v2-kshelf v2-sshelf', 'aria-label': 'AI 세션 ' + byLabel });
+  const listEl = el('div', { class: 'v2-app-list v2-kshelf v2-sshelf', 'aria-label': '세션 목록 ' + byLabel });
   appListEl = listEl;
 
   host.replaceChildren(
     ...topBits(navEl, navHost),
-    el('section', { class: 'v2-app-space', 'aria-label': 'AI 세션' },
-      secHead('AI 세션', total || null, byBtn,
+    el('section', { class: 'v2-app-space', 'aria-label': '세션 목록' },
+      secHead('세션 목록', total || null, byBtn,
         el('button', { class: 'v2-app-new', type: 'button', 'aria-label': '새 세션', title: '새 세션 — 홈에서 무엇이든 시키면 열려요',
           onclick: () => hooks.onNewTask?.() },
           sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })))),

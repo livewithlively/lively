@@ -1562,7 +1562,7 @@ function appsPart(ctx: PartCtx): Part {
         el('span', { class: 'pn-fine', text: hasUi ? '앱 탭' : '앱 세션 탭' }));
       // #3784 우클릭 — 열기(앱 화면 / 앱 세션) · 이름 복사
       bindCtx(tile, () => ({
-        title: a.title, sub: hasUi ? '앱 화면' : 'AI 세션 앱',
+        title: a.title, sub: hasUi ? '앱 화면' : '세션 목록',
         rows: [
           hasUi ? { label: '앱 화면 열기', icon: 'open', run: () => void openInstalledApp(a, projectId) } : { label: '앱 세션 열기', icon: 'chat', run: () => void openAppSession(a.id, { title: a.title, projectId }) },
           { sep: true, label: '' },

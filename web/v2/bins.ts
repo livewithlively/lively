@@ -1111,7 +1111,7 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
     row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && ev.target === row) { ev.preventDefault(); open(s); } });
     return row;
   };
-  const list = el('div', { class: 'v2-sa-list', 'aria-label': 'AI 세션 목록' });
+  const list = el('div', { class: 'v2-sa-list', 'aria-label': '세션 목록' });
   //  정렬이 읽는 값 — 표에 그려진 그 글자여야 사람이 «이 열 기준» 을 눈으로 확인할 수 있다.
   const sortFields = (it: Item) => ({ name: it.name, proj: projName(data, it.projectId) || '', owner: ownerName(it.owner),
     rank: stateRank(String(it.stateKey || '')), made: Number(it.s.createdAt) || 0, seen: Number(it.lastSeen) || 0 });
@@ -1157,7 +1157,7 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
   const scrollTop = bodyOld ? bodyOld.scrollTop : 0;
   replaceKids(host, el('div', { class: 'v2-sa' },
     el('div', { class: 'v2-sa-top' },
-      el('span', { class: 'crumb', text: 'AI 세션' }), el('span', { class: 'sl', text: '/' }),
+      el('span', { class: 'crumb', text: '세션 목록' }), el('span', { class: 'sl', text: '/' }),
       el('span', { class: 'crumb k', 'data-by': sc.by, text: byLabel }), el('span', { class: 'sl', text: '/' }),
       ...crumbs.slice(0, -1).flatMap((c) => [el('span', { class: 'crumb', text: c }), el('span', { class: 'sl', text: '/' })]),
       el('b', { class: 'now', text: crumbs.length ? crumbs[crumbs.length - 1] : '전체' }),

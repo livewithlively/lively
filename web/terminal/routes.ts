@@ -345,8 +345,8 @@ async function renderTerminal(view) {
   // ── 머리 3층(#1841, 프로젝트 탭 pjv-board-header 동형) — ① 빵부스러기(앱 이름) ② 뷰 탭 ③ 툴바. 그 아래 표 하나.
   const crumbBar = el('div', { class: 'pjv-crumbbar' },
     el('nav', { class: 'pjv-crumbs', 'aria-label': '현재 위치' },
-      el('span', { class: 'pjv-crumb is-leaf tsess-crumb' }, tsessNodeIcon('pjv-crumb-ic'), el('span', { class: 'pjv-crumb-label', text: 'AI 세션' })),
-      el('span', { class: 'tsess-crumb-sub', text: '박스와 노드에서 도는 AI 세션 전체' })));
+      el('span', { class: 'pjv-crumb is-leaf tsess-crumb' }, tsessNodeIcon('pjv-crumb-ic'), el('span', { class: 'pjv-crumb-label', text: '세션 관리' })),
+      el('span', { class: 'tsess-crumb-sub', text: '새 세션 만들기 · 노드 연결 · 여러 세션 한꺼번에 종료·복원' })));
   const viewTabs = el('div', { class: 'pjv-vtabs', role: 'tablist', 'aria-label': '뷰' },
     el('button', { class: 'pjv-vtab active', type: 'button', role: 'tab', 'aria-selected': 'true' }, pjvTabIcon('list'), el('span', { text: '리스트' })));
   const headerStack = el('div', { class: 'pjv-board-header' }, crumbBar, viewTabs, toolbar);
