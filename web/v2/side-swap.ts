@@ -150,7 +150,15 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
   function restore(px: number, remembered?: boolean): void {
     hideHint();
     if (!swapEnabled()) { setSwapped(false, false); return; }
-    if (typeof remembered === 'boolean') { setSwapped(remembered, false); return; }
+    if (typeof remembered === 'boolean') {
+      //  적어 둔 «왼쪽» 을 믿되, 격자 폭을 잴 수 있고 사이드바가 돌아올 문턱(46%)보다 좁으면 오른쪽이다(#3870).
+      //  종전 결함(서는 순간 전역 폭으로 판정)이 사이드바를 키운 적 없는 세션에 «왼쪽» 을 적어 두었다. 그 값을 여기서 고친다.
+      //  문턱 사이(46~52%)와 그 위는 적어 둔 대로다.
+      const healed = remembered && body.clientWidth > 0 && ratio(px) <= TH.off ? false : remembered;
+      setSwapped(healed, false);
+      if (healed !== remembered) h.onChange?.(healed);
+      return;
+    }
     const r = ratio(px);
     setSwapped(r >= TH.on ? true : r <= TH.off ? false : swapped, false);
   }
@@ -284,7 +292,14 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
       const first = roW === 0;
       roW = w;
       //  처음 잰 폭(마운트 때는 격자가 아직 화면에 없어 0 이었다)에서는 상한만 맞춘다. 자리는 셸이 되살린 것을 지킨다.
-      if (first) { if (!dead && w > 0 && curSideW() > capNow()) setSideW(capNow()); return; }
+      //  하나만 바로잡는다: 사이드바가 돌아올 문턱(46%)보다 좁은데 왼쪽에 서 있으면 오른쪽으로 되돌린다. 아래 ⚠ 의 결함이
+      //  세션에 적어 둔 «왼쪽» 을 고친다(그 세션은 사이드바를 키운 적이 없다).
+      if (first) {
+        if (dead || !(w > 0)) return;
+        if (curSideW() > capNow()) setSideW(capNow());
+        if (swapped && !h.holdSwap?.() && ratio(curSideW()) <= TH.off) setSwapped(false, false);
+        return;
+      }
       onResize();
     });
     ro.observe(body);
@@ -293,7 +308,11 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
   }
 
   paint();
-  onEnd(curSideW());   // 새로고침해도 넓혀 둔 폭 그대로 자리가 유지되게
+  //  ⚠ 여기서 자리를 판정하지 않는다(#3870). 종전엔 서는 순간 `onEnd(지금 폭)` 을 불렀는데, 그때의 폭은 이 세션의 폭이
+  //   아니라 손잡이가 전역 키에서 읽은 «마지막으로 끌던 폭» 이다. 앞 세션에서 사이드바를 절반 넘게 키웠으면 그 폭으로
+  //   «왼쪽» 이 판정되고 onChange 가 그것을 **지금 연 세션의 자리로 적었다**. 바로 뒤 셸의 restore 는 방금 적힌 «왼쪽» 을
+  //   믿어, 손댄 적 없는 세션이 340px 사이드바를 왼쪽에 둔 채 열렸다(2026-09-27 매니지드 실측).
+  //   자리는 셸이 이 세션의 폭을 입힌 뒤 restore 로 정한다(panes.ts applyView).
 
   return {
     maxSideW: capNow,

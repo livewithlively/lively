@@ -56,10 +56,11 @@ export const shouldCommit = (p: number): boolean => p > COMMIT;
 
 /** 카드를 격자 안에 넣는다. 크기를 먼저 맞추고 자리를 맞춘다. */
 export function clampCard(c: CardRect, bodyW: number, bodyH: number): CardRect {
-  const maxW = Math.max(CARD_MIN.w, Math.round(bodyW) - CARD_PAD * 2);
-  const maxH = Math.max(CARD_MIN.h, Math.round(bodyH) - CARD_PAD * 2);
-  const w = clamp(Math.round(num(c.w, CARD_DEF.w)), CARD_MIN.w, maxW);
-  const h = clamp(Math.round(num(c.h, CARD_DEF.h)), CARD_MIN.h, maxH);
+  //  격자가 카드 최소 크기보다 작으면(왼쪽 사이드바를 아주 넓게 편 좁은 창) 최소 크기를 고집하지 않는다. 격자 안에 넣는 것이 먼저다.
+  const maxW = Math.max(1, Math.round(bodyW) - CARD_PAD * 2);
+  const maxH = Math.max(1, Math.round(bodyH) - CARD_PAD * 2);
+  const w = clamp(Math.round(num(c.w, CARD_DEF.w)), Math.min(CARD_MIN.w, maxW), maxW);
+  const h = clamp(Math.round(num(c.h, CARD_DEF.h)), Math.min(CARD_MIN.h, maxH), maxH);
   const r = clamp(Math.round(num(c.r, CARD_DEF.r)), CARD_PAD, Math.round(bodyW) - w - CARD_PAD);
   const b = clamp(Math.round(num(c.b, CARD_DEF.b)), CARD_PAD, Math.round(bodyH) - h - CARD_PAD);
   return { w, h, r, b };

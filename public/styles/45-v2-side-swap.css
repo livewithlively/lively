@@ -148,6 +148,7 @@
   .cm-grip-ne { top: 0; right: 0; width: 14px; height: 14px; cursor: nesw-resize; }
   .cm-grip-sw { bottom: 0; left: 0; width: 14px; height: 14px; cursor: nesw-resize; }
   .cm-grip:hover { background: color-mix(in srgb, var(--blue) 22%, transparent); }
+  .cm-grip:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; border-radius: 14px 0 0 0; background: color-mix(in srgb, var(--blue) 22%, transparent); }
 
   /* 카드가 뷰어 오른쪽 아래의 배율 단추를 가린다(2026-09-27 실측). 카드 상태에서는 배율 단추를 왼쪽 아래에 둔다. */
   .pn-body.cm > .pn-pane[data-zone="side"] .pn-zoom { right: auto; left: 12px; }
