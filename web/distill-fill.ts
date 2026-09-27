@@ -1,4 +1,5 @@
-// distill-fill.ts — 증류기의 「카테고리 붙이기」(#4194). [맥락 관리 ▸ 증류기] 화면 아래 절.
+// distill-fill.ts — 증류기의 「카테고리 붙이기」(#4194). [수집 · 증류 ▸ 증류기 설정] 화면.
+//  #4135(9/22 회의 ③): 따로 절을 두지 않는다 — 증류기는 목록의 카드(web/distillers.ts), 여기엔 편집기와 접힌 자동 실행만 남았다.
 //
 //  증류기는 «지식을 완성시킨다»(완성 = 본문·유형·카테고리가 다 있는 상태). 두 종류가 한 탭에 선다:
 //   · 자료 → 지식(web/distillers.ts 위 절) — 쌓인 자료를 읽어 남길 것만 지식으로 쓴다.
@@ -13,11 +14,11 @@
 //   공존한다 — /org/distillers 에 {input:'knowledge'} 를 보내면 옛 코어는 input 을 모른 채 **자료 증류기**를 끄거나 지운다.
 //   이 경로는 옛·새 코어 모두에서 같은 뜻이다. 목록만 증류기 목록 응답(knowledge_lanes)을 쓰고, 그게 없으면(옛 코어)
 //   같은 경로의 GET 으로 떨어진다.
-import { api, busy, cardHead, el, fmtNum, personSelect, relTime, toast, uiText } from './core.js';
+import { api, el, fmtNum, personSelect, toast, uiText } from './core.js';
 import { confirmDialog } from './ui-primitives.js';
+import { CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
 import { runConfig } from './context-run-config.js';    // #4008 제공자·모델·추론강도 공용 선택기
-import { CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
 /** 이 증류기 종류의 이름 — 화면 문구가 전부 이 한 곳을 쓴다. */
 export const FILL_LANE = '카테고리 붙이기';
@@ -32,68 +33,31 @@ async function loadLanes(res?: any): Promise<{ list: any[]; cov: KnowledgeCovera
   return { list: (r && r.classifiers) || [], cov: { total_unclassified: Number(c.total_unclassified || 0), uncovered: Number(c.uncovered || 0), lanes: c.classifiers || [] } };
 }
 
-let editingKey: string | null = null;
-let creating = false;
-
 type KnowledgeCoverage = { total_unclassified: number; uncovered: number; lanes: Array<{ id: number; key: string; backlog: number; reviewed: number }> };
 
 /**
- * 절 하나를 host 에 그린다. res 는 /api/ui/org/distillers 응답(증류기 화면이 이미 받아 둔 것) — 없거나 그 안에
- *  knowledge_lanes 가 없으면(옛 코어·그 부분 실패) 호환 경로(/api/ui/org/classifiers)에서 받는다(loadLanes).
- *  ⚠ 증류기 목록 응답의 distillers[] 는 **자료 → 지식만**이다(기존 소비자 무변경). 이 종류는 knowledge_lanes[] 로 따로 온다.
+ * 「카테고리 붙이기 자동 실행」 — 증류기 목록 맨 아래의 **접힌 한 줄**(#4135).
+ *  9/22 회의 ③ «분류 현황 · 분류기 만들기 · 자동 실행 다 필요 없다» 에 따라 절(제목 · 미분류 지식 카드 · 만들기 단추)을 없앴다.
+ *  증류기는 목록의 카드로 서고(web/distillers.ts fillLaneCard), 만들기는 설정 페이지 3단계 «이 증류기가 하는 일»이 맡는다.
+ *  자동 실행만은 남긴다 — 켜진 증류기가 없어도 이 잡은 기본 기준 하나로 돌고 있어서, 끄거나 주기를 바꿀 자리가 화면에 있어야 한다.
+ *  res 는 /api/ui/org/distillers 응답 — 그 안에 knowledge_lanes 가 없으면(옛 코어 · 그 부분 실패) 호환 경로에서 받는다(loadLanes).
  */
-export async function renderFillLanes(host: HTMLElement, res?: any): Promise<void> {
-  if (!res) busy(host, el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: FILL_LANE + ' 증류기를 불러오는 중…' })));
-  let list: any[]; let cov: KnowledgeCoverage;
-  try { ({ list, cov } = await loadLanes(res)); }
-  catch (e) {
-    host.replaceChildren(el('div', { class: 'card' },
-      el('p', { class: 'admin-hint', text: FILL_LANE + ' 증류기를 불러오지 못했습니다 — ' + (e as Error).message })));
-    return;
-  }
-  const stat = (id: number) => cov.lanes.find((x) => x.id === id) || ({} as any);
-  const reload = () => { void renderFillLanes(host); };
-
+export async function renderFillJob(host: HTMLElement, res: any, reload: () => void): Promise<void> {
+  let list: any[] = []; let cov: KnowledgeCoverage = { total_unclassified: 0, uncovered: 0, lanes: [] };
+  try { ({ list, cov } = await loadLanes(res)); } catch { /* 현황 없이 자동 실행만 보인다 */ }
+  const fold = el('details', { class: 'cxc-fold dfl-job' },
+    el('summary', {},
+      el('span', { class: 'cxc-sub' }, el('span', { text: FILL_LANE + ' 자동 실행' })),
+      el('span', { class: 'cxc-fold-d', text: '카테고리가 없는 지식 ' + fmtNum(cov.total_unclassified) + '건 · '
+        + (list.some(working) ? '켜진 증류기 ' + list.filter(working).length + '개가 맡습니다' : '기본 기준 하나로 카테고리를 붙입니다') })));
   const body = el('div', { class: 'dfl' });
-  body.append(el('div', { class: 'cxc-head' },
-    el('div', { class: 'cxc-head-main' },
-      el('h3', { class: 'cxc-title' }, el('span', { text: FILL_LANE }), el('span', { class: 'cxc-title-n num', text: String(list.length) })),
-      el('p', { class: 'cxc-lead' }, ...uiText(
-        '노션처럼 지식으로 바로 들어온 문서나, 카테고리를 지워 칸을 잃은 지식은 카테고리가 없습니다(미분류 지식). 이 증류기가 내용을 읽고 알맞은 카테고리를 붙입니다 — 본문은 바꾸지 않습니다. ' +
-        '출처·팀마다 기준을 다르게 하려면 여러 개 만드세요. 한 지식은 우선순위가 가장 높은 것 하나만 맡습니다. 이미 붙은 카테고리가 틀린 것은 「' + CTX_TAB.checks + '」 탭의 점검이 찾아냅니다.')))));
-
-  // 현황 — 사각지대를 목록보다 먼저(자료 레인 절과 같은 순서).
-  const covCard = el('div', { class: 'card ctx-cov' }, cardHead('미분류 지식'));
-  covCard.append(el('div', { class: 'ctx-cov-row' },
-    el('span', { class: 'ctx-tag', text: '미분류 지식 ' + fmtNum(cov.total_unclassified) }),
-    el('span', { class: 'ctx-tag', text: `켜진 증류기 ${list.filter(working).length}/${list.length}` }),
-    //  «어느 증류기도 안 맡는 지식» 은 켜진 증류기가 있을 때만 뜻이 있다 — 없으면 기본 기준 하나가 전부 본다(서버도 0 을 준다).
-    list.some(working) ? el('span', { class: 'ctx-tag' + (cov.uncovered ? ' ctx-tag-warn' : ''), text: '어느 증류기도 안 맡는 지식 ' + fmtNum(cov.uncovered) }) : null));
   if (cov.uncovered > 0 && list.some(working)) {
-    covCard.append(el('p', { class: 'admin-hint ctx-warn-line' },
-      ...uiText(`켜진 증류기 어디에도 안 걸리는 지식이 ${fmtNum(cov.uncovered)}건 있습니다. 이대로 두면 카테고리가 영영 안 붙어 검색에 안 잡힙니다 — 우선순위를 낮춘 넓은 증류기를 하나 만들어 나머지를 받게 하세요.`)));
+    body.append(el('p', { class: 'admin-hint ctx-warn-line' },
+      ...uiText(`켜진 증류기 어디에도 안 걸리는 지식이 ${fmtNum(cov.uncovered)}건 있습니다. 이대로 두면 카테고리가 영영 안 붙어 검색에 안 잡힙니다 — 우선순위를 낮춘 넓은 증류기를 하나 두세요.`)));
   }
-  body.append(covCard);
-
-  if (!list.some(working) && !creating) {
-    // ⚠ '없습니다'로 끝내면 **아무 일도 안 일어난다**로 읽힌다 — 실제로는 기본 기준 하나로 돌고 있다(어니스트 실박스 오독).
-    //  켜 둔 것이 하나도 없을 때(전부 꺼짐·폐지 모드)도 같다 — 크론은 그때도 기본 기준으로 돈다(classify.ts 레거시 경로).
-    body.append(el('div', { class: 'card ctx-empty' },
-      el('p', { class: 'ctx-empty-t', text: (list.length ? '켜 둔 증류기 없음' : '증류기 없음') + ' — 기본 기준 하나로 카테고리를 붙이고 있습니다' }),
-      el('p', { class: 'admin-hint', text: '미분류 지식 전부를 한 기준으로 봅니다. 출처·팀마다 기준을 나누고 대상·모델·주기를 따로 주려면 증류기를 만들거나 켜세요. 아예 멈추려면 아래 자동 실행을 끄세요.' })));
-  }
-
-  for (const c of list) body.append(editingKey === c.key ? editor(c, reload) : summary(c, stat(c.id), reload));
-
-  if (creating) body.append(editor(null, reload));
-  else {
-    const add = el('button', { class: 'btn btn-primary', text: '+ ' + FILL_LANE + ' 증류기 만들기' });
-    add.addEventListener('click', () => { creating = true; editingKey = null; reload(); });
-    body.append(el('div', { class: 'ctx-actions' }, add));
-  }
-  host.replaceChildren(body);
-  // '언제 도나' — 설정(레인)과 실행(잡)은 별개 축이라 둘 다 안 보이면 "설정했는데 왜 안 되지"의 답이 화면에 없다.
-  //  host 를 이미 교체한 뒤 비동기로 붙인다 — 크론 조회(권한 없으면 403)가 이 절 전체를 막지 않게.
+  fold.append(body);
+  host.replaceChildren(fold);
+  // '언제 도나' — 설정(증류기)과 실행(잡)은 별개 축이라 둘 다 안 보이면 "설정했는데 왜 안 되지"의 답이 화면에 없다.
   //  ⚠ create 명세(id·action·주기)는 src/org/pipeline/default-jobs.ts 의 기본 잡과 **같아야 한다**(default-jobs.test C5 가 잰다).
   body.append(await stageJobCard({
     stage: FILL_LANE,
@@ -118,47 +82,12 @@ export async function renderFillLanes(host: HTMLElement, res?: any): Promise<voi
 
 /** 폐지된 재분류 모드(target=low_confidence)인가 — 아무 지식도 맡지 않는다(서버 scopeWhere · lanes.ts isActiveLane). */
 const retired = (c: any) => !!c && c.target === 'low_confidence';
+/** 목록(web/distillers.ts)이 같은 판정을 쓴다(#4135). */
+export const fillLaneRetired = retired;
+/** 편집기 — 증류기 목록의 카드 아래와 설정 페이지(«카테고리만 붙입니다»)가 같이 쓴다(#4135). done 은 저장·닫기 뒤 할 일. */
+export function fillLaneEditor(c: any | null, done: () => void): HTMLElement { return editor(c, done); }
 /** 실제로 일하나 — 켜져 있고 폐지 모드가 아니다(서버 isActiveLane 과 같은 판정). */
 const working = (c: any) => !!c && c.enabled === true && !retired(c);
-
-function summary(c: any, st: any, reload: () => void) {
-  const card = el('div', { class: 'card ctx-row' });
-  card.append(el('div', { class: 'ctx-row-head' },
-    el('span', { class: 'ctx-row-title', text: c.label || c.key }),
-    el('span', { class: 'ctx-state' },
-      el('span', { class: 'ctxp-dot ' + (c.enabled ? 'ctxp-dot-ok' : 'ctxp-dot-off'), 'aria-hidden': 'true' }),
-      el('span', { text: c.enabled ? '켜짐' : '꺼짐' })),
-    el('span', { class: 'ctx-tag', text: '우선순위 ' + c.priority }),
-    el('span', { class: 'ctx-tag' + (retired(c) ? ' ctx-tag-warn' : ''), text: retired(c) ? '맡는 지식 없음' : '맡은 지식 ' + fmtNum(st.backlog ?? 0) })));
-  card.append(el('div', { class: 'ctx-row-meta', text: c.scope_text || '미분류 지식 전체' }));
-  card.append(el('div', { class: 'ctx-row-meta',
-    text: c.last_run_at ? `마지막 실행 ${relTime(c.last_run_at)} · ${c.last_status || ''}` : '아직 실행된 적 없음' }));
-
-  const acts = el('div', { class: 'ctx-row-acts' });
-  const toggle = el('button', { class: 'btn btn-ghost btn-sm', text: c.enabled ? '끄기' : '켜기' });
-  toggle.addEventListener('click', async () => {
-    try { await api('/api/ui/org/classifiers', { method: 'POST', body: JSON.stringify({ id: c.id, enabled: !c.enabled }) }); toast('저장했습니다'); reload(); }
-    catch (e) { toast((e as Error).message, true); }
-  });
-  const edit = el('button', { class: 'btn btn-ghost btn-sm', text: '설정 열기' });
-  edit.addEventListener('click', () => { editingKey = c.key; creating = false; reload(); });
-  const prev = el('button', { class: 'btn btn-ghost btn-sm', text: '맡은 지식 보기' });
-  prev.addEventListener('click', () => openPreview(c));
-  const del = el('button', { class: 'btn-text btn-text-danger', text: '삭제' });
-  del.addEventListener('click', async () => {
-    const ok = await confirmDialog({
-      title: `증류기 ‘${c.label || c.key}’ 를 삭제할까요?`,
-      lines: ['이미 붙은 카테고리와 제안은 그대로 남습니다. 이 증류기가 맡던 지식은 다른 증류기로 넘어가고, 켜진 것이 하나도 안 남으면 기본 기준 하나가 봅니다.'],
-      confirmText: '삭제', danger: true,
-    });
-    if (!ok) return;
-    try { await api('/api/ui/org/classifiers/remove', { method: 'POST', body: JSON.stringify({ id: c.id }) }); toast('삭제했습니다'); reload(); }
-    catch (e) { toast((e as Error).message, true); }
-  });
-  acts.append(toggle, prev, edit, del);
-  card.append(acts);
-  return card;
-}
 
 function editor(c: any | null, reload: () => void) {
   const isNew = !c;
@@ -209,11 +138,23 @@ function editor(c: any | null, reload: () => void) {
         reset_seen: resetChk.checked,
       }) });
       toast(isNew ? '증류기를 만들었습니다' : '저장했습니다');
-      editingKey = null; creating = false; reload();
+      reload();
     } catch (e) { toast('실패 — ' + (e as Error).message, true); saveBtn.disabled = false; }
   });
   const cancelBtn = el('button', { class: 'btn-text', text: '닫기' });
-  cancelBtn.addEventListener('click', () => { editingKey = null; creating = false; reload(); });
+  //  삭제 — 목록 카드에는 [스위치][설정]만 두고, 지우는 단추는 설정 안에 둔다(자료 증류기와 같은 자리).
+  const delBtn = isNew ? null : el('button', { class: 'btn-text btn-text-danger', type: 'button', text: '이 증류기 삭제' });
+  if (delBtn) delBtn.addEventListener('click', async () => {
+    const ok = await confirmDialog({
+      title: `증류기 ‘${c.label || c.key}’ 를 삭제할까요?`,
+      lines: ['이미 붙은 카테고리와 제안은 그대로 남습니다. 이 증류기가 맡던 지식은 다른 증류기로 넘어가고, 켜진 것이 하나도 안 남으면 기본 기준 하나가 봅니다.'],
+      confirmText: '삭제', danger: true,
+    });
+    if (!ok) return;
+    try { await api('/api/ui/org/classifiers/remove', { method: 'POST', body: JSON.stringify({ id: c.id }) }); toast('삭제했습니다'); reload(); }
+    catch (e) { toast((e as Error).message, true); }
+  });
+  cancelBtn.addEventListener('click', () => { reload(); });
 
   card.append(
     el('div', { class: 'ctx-row-head' }, el('span', { class: 'ctx-row-title', text: isNew ? '새 증류기 — ' + FILL_LANE : `설정 — ${c.label || c.key}` })),
@@ -233,29 +174,6 @@ function editor(c: any | null, reload: () => void) {
     run.hint,
     el('label', { class: 'admin-check' }, resetChk, ' 이미 본 지식을 다시 보기 — 기준을 바꿨을 때 켜세요'),
     el('label', { class: 'admin-check' }, enabledChk, ' 이 증류기 사용'),
-    el('div', { class: 'ctx-actions' }, saveBtn, cancelBtn));
+    el('div', { class: 'ctx-actions' }, saveBtn, cancelBtn, delBtn));
   return card;
-}
-
-async function openPreview(c: any) {
-  const { overlay } = await import('./ui-primitives.js');
-  const box = el('div', {}, el('p', { class: 'admin-hint', text: '확인 중…' }));
-  overlay(`맡은 지식 — ${c.label || c.key}`, box);
-  try {
-    const r = await api('/api/ui/org/classifiers/preview?' + new URLSearchParams({ key: c.key, limit: '20' }));
-    const sample: any[] = r.sample || [];
-    if (!sample.length) {
-      box.replaceChildren(el('p', { class: 'admin-hint', text: retired(c)
-        ? '이 증류기는 없어진 재검토 모드라 아무 지식도 맡지 않습니다 — 설정을 열어 저장하면 미분류 지식을 맡습니다.'
-        : '지금 맡은 지식이 0건입니다 — 범위가 좁거나, 우선순위가 높은 증류기가 먼저 가져갔거나, 이미 본 것들입니다(설정에서 “다시 보기”를 켜면 되돌릴 수 있습니다).' }));
-      return;
-    }
-    const list = el('div', { class: 'ctx-preview-list' });
-    for (const s of sample) {
-      list.append(el('div', { class: 'ctx-preview-row' },
-        el('a', { class: 'ctx-preview-t', href: '#/k/' + encodeURIComponent(s.name), text: s.title || s.name }),
-        el('div', { class: 'ctx-preview-m', text: [s.type, s.provenance === 'observed' ? '바로 들어온 문서' : '직접 쓴 문서'].filter(Boolean).join(' · ') })));
-    }
-    box.replaceChildren(el('p', { class: 'admin-hint', text: `지금 맡은 지식 ${fmtNum(r.backlog)}건 중 ${sample.length}건입니다.` }), list);
-  } catch (e) { box.replaceChildren(el('p', { class: 'admin-hint', text: '실패: ' + (e as Error).message })); }
 }
