@@ -20,6 +20,7 @@
 //  이 파일은 셸(web/v2)의 일부라 브라우저에서 연 웹 UI 와 데스크톱 앱이 같은 코드를 쓴다. 데스크톱 전용 통로 없음.
 import { api, el, sv } from '../core.js';
 import { appHref, visibleApps } from './apps.js';
+import { appMatches } from '../lib/app-match.js';   // #4233 옛 이름으로도 찾는다(런치패드와 같은 잣대)
 import { sessText } from './side.js';
 import { projName, type Sess, type V2Data } from './views.js';
 
@@ -465,7 +466,7 @@ export function omniOpen(seed?: string): void {
     // 프로젝트 — 서버 의미검색이 오기 전에 이름 매칭만 먼저(첫 글자에 화면이 비어 있지 않게). 서버 응답이 오면 덮인다.
     const proj: Hit[] = d.projects.filter((p) => String(p.name || '').toLowerCase().includes(nq)).slice(0, 6)
       .map((p) => ({ kind: 'proj' as const, key: 'p:' + p.id, title: p.name, sub: oneLine(String(p.description || '')), href: '#/p/' + p.id }));
-    const apps: Hit[] = visibleApps().filter((a) => (a.title + ' ' + a.desc).toLowerCase().includes(nq)).slice(0, 4)
+    const apps: Hit[] = visibleApps().filter((a) => appMatches(a, nq)).slice(0, 4)
       .map((a) => ({ kind: 'app' as const, key: 'a:' + a.key, title: a.title, sub: a.desc, href: appHref(a) }));
     //  꺼진 종류는 애초에 담지 않는다 — 화면에서 거르는 게 아니라 **아예 찾지 않는다**(칩이 곧 검색 범위다).
     buckets.set('local', [...sess, ...proj, ...apps].filter((h) => kindOn(h.kind)));

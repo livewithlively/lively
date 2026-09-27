@@ -33,6 +33,7 @@ import { injectionMap } from './admin-injection.js';                   // 세션
 import { embeddingsEditor } from './admin-embeddings.js';              // 의미 검색 — 임베딩 provider·백필(기본 off)
 import { visibilityAxesPanel } from './visibility-axes.js';            // 공개범위 — 유형별 축 on/off
 import { loadAdmin } from './admin-rerender.js';
+import { CTX_APP_NAME, CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
 /** 관리탭 패널이 요구하는 admin 데이터 — 없으면 빈 객체(패널이 자기 API 로 그린다). */
 async function adminData(): Promise<any> {
@@ -65,23 +66,23 @@ type CtxStage = {
  */
 const STAGES: CtxStage[] = [
   {
-    key: 'home', label: '현황',
+    key: 'home', label: CTX_TAB.home,
     hint: '자료가 지식이 되어 AI 에 닿기까지 — 지금 어디가 막혔나',
-    items: [{ key: 'home', label: '현황', draw: (b) => renderContextMapScreen(b) }],
+    items: [{ key: 'home', label: CTX_TAB.home, draw: (b) => renderContextMapScreen(b) }],
   },
   {
     //  #4135 3판 — 현황 아래 「자동 실행」 패널의 「자세히 보기 →」. 탭이 아니라 현황의 하위 화면(빵부스러기로 돌아간다).
-    key: 'runs', label: '자동 실행 기록', parent: 'home',
+    key: 'runs', label: CTX_TAB.runs, parent: 'home',
     hint: '수집기·증류기가 자동으로 돈 기록 — 날짜·종류·기계·결과로 거르고, 줄을 누르면 오른쪽에서 봅니다',
-    items: [{ key: 'runs', label: '자동 실행 기록', draw: (b) => renderRunsPage(b) }],
+    items: [{ key: 'runs', label: CTX_TAB.runs, draw: (b) => renderRunsPage(b) }],
   },
   {
-    key: 'inbox', label: '확인할 것', tray: true,
+    key: 'inbox', label: CTX_TAB.inbox, tray: true,
     hint: '사람 손이 필요한 것 전부 — 승인 · 카테고리 제안',
-    items: [{ key: 'inbox', label: '확인할 것', draw: (b) => renderContextInbox(b) }],
+    items: [{ key: 'inbox', label: CTX_TAB.inbox, draw: (b) => renderContextInbox(b) }],
   },
   {
-    key: 'sources', label: '수집기',
+    key: 'sources', label: CTX_TAB.sources,
     hint: '외부 앱의 내용을 자료함으로 가져오는 기계 — 무엇을, 얼마나 자주 가져올지 정합니다',
     items: [
       { key: 'collectors', label: '수집기', draw: (b) => sourcesScreen(b) },
@@ -90,20 +91,20 @@ const STAGES: CtxStage[] = [
     ],
   },
   {
-    key: 'distill', label: '증류기',
+    key: 'distill', label: CTX_TAB.distill,
     hint: '지식을 완성하는 자동 규칙 — 자료를 읽어 지식으로 쓰고, 미분류 지식에는 카테고리를 붙입니다',
     items: [{ key: 'distillers', label: '증류기', draw: (b) => distillScreen(b) }],
   },
   //  카테고리 탭은 #4233(원준 2026-09-26)에서 「분류체계」 앱으로 나갔다. 옛 주소는 renderContext 초입에서 그 앱으로 보낸다.
   {
-    key: 'checks', label: '점검',
+    key: 'checks', label: CTX_TAB.checks,
     hint: '라이블리에 쌓인 맥락이 낡지 않도록 AI가 알아서 관리하는 기능입니다.',
-    items: [{ key: 'managers', label: '점검', draw: (b) => checksScreen(b) }],
+    items: [{ key: 'managers', label: CTX_TAB.checks, draw: (b) => checksScreen(b) }],
   },
   {
-    key: 'deliver', label: 'AI 전달',
+    key: 'deliver', label: CTX_TAB.deliver,
     hint: '지식이 실제로 AI 에 닿는 마지막 구간 — 세션 주입 · 검색 · 접근 권한',
-    items: [{ key: 'injection', label: 'AI 전달', draw: (b) => deliverScreen(b) }],
+    items: [{ key: 'injection', label: CTX_TAB.deliver, draw: (b) => deliverScreen(b) }],
   },
 ];
 
@@ -126,7 +127,7 @@ async function sourcesScreen(b: HTMLElement): Promise<void> {
 /** 새 소스 만들기(수집 방식 프리셋) — 수집기 화면의 하위 갈래. 돌아갈 길을 화면이 준다. */
 async function presetsScreen(b: HTMLElement): Promise<void> {
   await stack(b, [
-    (h) => { h.replaceChildren(el('p', { class: 'admin-hint' }, el('a', { href: '#/context/sources', text: '‹ 수집기로' }))); },
+    (h) => { h.replaceChildren(el('p', { class: 'admin-hint' }, el('a', { href: '#/context/sources', text: '‹ ' + CTX_TAB.sources + '으로' }))); },
     (h) => collectorPresetEditor(h),
   ]);
 }
@@ -235,8 +236,8 @@ function buildHeader(selStage: CtxStage): HTMLElement {
   //   있어서 좀 갑갑해보이니까 위치 너가 적당히 잘 조절해봐."* 실측으로 지도가 y=156 에서야 시작하고 있었다.
   //   앱 이름은 탭 줄 왼쪽 문패로 들어가고(세로 구분선 하나), 탭이 그 오른쪽에 잇는다. 정의 한 줄(hint)은
   //   화면 안 캡션으로 내려간다 — 현황은 지도 캡션이 그 일을 이미 하고, 나머지 탭은 아래 renderContext 가 붙인다.
-  const tabs = el('div', { class: 'pjv-vtabs ctx-vtabs', role: 'tablist', 'aria-label': '맥락 관리' });
-  tabs.append(el('span', { class: 'ctx-hd-app' }, ctxAppIcon(), el('span', { text: '맥락 관리' })));
+  const tabs = el('div', { class: 'pjv-vtabs ctx-vtabs', role: 'tablist', 'aria-label': CTX_APP_NAME });
+  tabs.append(el('span', { class: 'ctx-hd-app' }, ctxAppIcon(), el('span', { text: CTX_APP_NAME })));
   for (const s of STAGES) {
     if (s.tray || s.parent) continue;   // 확인할 것 — 아래 트레이가 대신 선다 · 하위 화면은 탭이 아니다
     const on = s.key === selStage.key || s.key === selStage.parent;
@@ -258,7 +259,7 @@ function buildHeader(selStage: CtxStage): HTMLElement {
     href: '#/context/inbox', role: 'tab', 'aria-selected': String(selStage.key === 'inbox'),
     title: '사람 손이 필요한 것 전부 — 승인 · 카테고리 제안',
   },
-    el('span', { class: 'ctx-vtab-label', text: '확인할 것' }),
+    el('span', { class: 'ctx-vtab-label', text: CTX_TAB.inbox }),
     el('b', { class: 'ctx-tray-n num', hidden: true })));
   return el('div', { class: 'pjv-board-header ctx-board-header' }, tabs);
 }
