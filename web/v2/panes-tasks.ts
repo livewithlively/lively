@@ -337,7 +337,8 @@ export function tasksPart(ctx: PartCtx): Part {
   async function reopenBody(): Promise<void> { dropBodyEdit(); await startBodyEdit(); }
   bodyBox.addEventListener('focusout', () => {
     // 칸 밖으로 손이 나갔다 — 저장이 끝나면 읽기로(글칸 안의 단추로 옮겨 가는 중이면 그대로).
-    window.setTimeout(() => { if (bodyEdit && !bodyBox.contains(document.activeElement)) void stopBodyEdit(); }, 0);
+    //  ⚠ 편집칸이 **준비된 뒤에만**(bodySaver 가 섰다) — 여는 동안 눌렀던 읽기 칸이 걷히며 나는 focusout 에 막 연 편집을 닫지 않게.
+    window.setTimeout(() => { if (bodyEdit && bodySaver && !bodyBox.contains(document.activeElement)) void stopBodyEdit(); }, 0);
   });
 
   // ── 목록 ──
