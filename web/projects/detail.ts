@@ -14,6 +14,7 @@ import { openProjectSessionsModal } from '../sessions.js';   // #4135 허브 세
 import { mountBodyEditor, projectBodyCommentRow, projectBodySection, projectKnowledgeSection, uploadBodyFile } from './detail-body.js';
 import { openFileViewer } from './files-cards.js';   // #4135 허브 폴더 위젯 «열기» — 섹션과 같은 뷰어
 import { mountProjectHub } from './detail-hub.js';
+import { hubIcon } from './detail-hub-kit.js';
 import { HUB_TOOLS, type HubTool } from './detail-hub-layout.js';
 import { pjvProjFactsStrip, pjvProjMetaPanel } from './detail-meta.js';
 import { openProjectSessionForm, openProjectSettings, projectFolderSection, projectTerminalSection, projectTimelineSection } from './detail-sections.js';
@@ -307,9 +308,20 @@ async function renderProjectV2Detail(view, idStr) {
     inp.addEventListener('blur', () => done(true));
   };
   titleEl.onclick = editTitle;
-  // 뒤로 줄 오른쪽 = [배치 편집](허브가 채운다) + [⚙ 프로젝트 세부 설정] — '← 프로젝트'와 같은 높이(#1233).
+  // 뒤로 줄 오른쪽 = [＋ 세션] + [배치 편집](허브가 채운다) + [⚙ 프로젝트 세부 설정] — '← 프로젝트'와 같은 높이(#1233).
+  //  [＋ 세션](#4135, 원준 2026-09-27: «프로젝트 탭 안에도 세션을 새로 만드는 버튼이 있어야») — 세션 화면 문패의 [＋ 세션] 과
+  //   **같은 단추·같은 일**이다: 이 프로젝트의 새 세션 자리(#/p/<id>?new=1)를 연다. 이 화면은 셸의 액자 안이라 셸에 한 줄
+  //   올려 보내고(탭을 만들거나 이미 있으면 그 탭으로), 액자 밖(단독 페이지)이면 주소를 바꾼다.
   const hubActions = el('span', { class: 'pjh-actions', style: 'display:inline-flex;align-items:center;gap:8px' });
-  backRow.append(el('div', { class: 'proj-detail-actions' }, hubActions, settingsBtn));
+  const newSessBtn = el('button', { class: 'btn btn-primary btn-sm proj-detail-newsess', type: 'button', title: '이 프로젝트에서 새 세션을 엽니다',
+    onclick: () => {
+      const href = '#/p/' + id + '?new=1';
+      if (window.parent && window.parent !== window) {
+        try { window.parent.postMessage({ type: 'lively:open-route', href }, location.origin); return; } catch (_) { /* 아래로 */ }
+      }
+      location.hash = href;
+    } }, hubIcon('plus', 14), el('span', { text: '세션' }));
+  backRow.append(el('div', { class: 'proj-detail-actions' }, newSessBtn, hubActions, settingsBtn));
   head.append(el('div', { class: 'proj-detail-titlebar' },
     // 상태 배지(타이틀 오른쪽) 제거 — 아래 메타행의 상태 필드(클릭해 변경)와 중복이라 그쪽만 남긴다.
     el('div', { class: 'proj-detail-titlebox' }, titleEl)));

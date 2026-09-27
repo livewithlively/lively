@@ -905,3 +905,8 @@ button.pjh-rail-r:hover { background: var(--bg-tint); color: var(--ink); }
 @media (max-width: 900px) {
   .pjh-modal .pjh-wtwo .pjh-wfeed { flex: none; overflow: visible; }
 }
+
+/* ── 프로젝트 상세 머리의 [＋ 세션](#4135) — 세션 화면 문패의 [＋ 세션] 과 같은 단추(크기·채움·그림자) ── */
+.proj-detail-newsess { gap: 6px; box-shadow: 0 1px 2px rgba(45,107,240,.30), 0 2px 8px rgba(45,107,240,.16); }
+.proj-detail-newsess:hover { box-shadow: 0 1px 2px rgba(45,107,240,.34), 0 4px 12px rgba(45,107,240,.22); }
+.proj-detail-newsess .pjh-ic { width: 15px; height: 15px; }
