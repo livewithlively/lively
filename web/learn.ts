@@ -6,6 +6,7 @@
 //   여기서 그대로 재수출할 뿐이다(#1313 R27). 18개 파일이 옛 경로 './learn.js' 로 가져가고 있어 남겨 뒀다.
 //   새 소비자는 ui-primitives.ts 에서 직접 받아라 — 이 배럴 몫은 줄어드는 방향으로만 간다.
 import { api, el, errorNote, navOn, pageHead, renderMarkdown, state, sv } from './core.js';
+import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 // 관리탭 조각 4개를 **실체 모듈에서 직접** 받는다(#1313 R40). 종전엔 넷 다 './admin.js' 배럴 경유였고,
 //  admin.ts 가 review/visibility-axes 를 import 하는 한 그 배럴이 learn 으로 되돌아오는 순환 4건을 만들었다
 //  (check-imports 의 ALLOWED_CYCLES 에 'R37/R40 이 나가면 사라진다'로 예약돼 있던 바로 그것).
@@ -78,7 +79,7 @@ function guideHeader(active: string): HTMLElement {
   const grp = guideGroupOf(active);
   const crumbBar = el('div', { class: 'pjv-crumbbar' },
     el('nav', { class: 'pjv-crumbs', 'aria-label': '현재 위치' },
-      el('span', { class: 'pjv-crumb is-leaf lg-crumb-leaf' }, tabIcon('book-open', 'pjv-crumb-ic lg-crumb-ic'), el('span', { class: 'pjv-crumb-label', text: '사용 가이드' })),
+      el('span', { class: 'pjv-crumb is-leaf lg-crumb-leaf' }, tabIcon('help', 'pjv-crumb-ic lg-crumb-ic'), el('span', { class: 'pjv-crumb-label', text: '사용 가이드' })),
       el('span', { class: 'lg-crumb-sub', text: grp.hint })));
   const tabs = el('div', { class: 'pjv-vtabs lg-vtabs', role: 'tablist', 'aria-label': '문서 묶음' });
   for (const g of GUIDE_NAV) {
@@ -381,13 +382,15 @@ function projectKnowledgeCard() {
 // 탭/단계 아이콘 — feather 스타일 라인 아이콘(taskmodal 의 sv 패턴 재사용). 무채 스트로크, currentColor 상속.
 const GUIDE_ICONS = {
   external: [['path', { d: 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6' }], ['polyline', { points: '15 3 21 3 21 9' }], ['line', { x1: 10, y1: 14, x2: 21, y2: 3 }]],
-  home: [['path', { d: 'M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' }], ['polyline', { points: '9 22 9 12 15 12 15 22' }]],
+  //  #4233: 집 · 책 · 물음표는 레일 · 앱 화면과 같은 그림(lib/icon-paths.ts). 물음표는 이 화면 머리(「사용 가이드」)가 쓴다.
+  home: [['path', { d: ICONS.home }]],
+  help: [['path', { d: ICONS.learn }]],
   'play-circle': [['circle', { cx: 12, cy: 12, r: 10 }], ['polygon', { points: '10 8 16 12 10 16 10 8' }]],
   terminal: [['polyline', { points: '4 17 10 11 4 5' }], ['line', { x1: 12, y1: 19, x2: 20, y2: 19 }]],
   trello: [['rect', { x: 3, y: 3, width: 18, height: 18, rx: 2, ry: 2 }], ['line', { x1: 9, y1: 8, x2: 9, y2: 16 }], ['line', { x1: 15, y1: 8, x2: 15, y2: 11 }]],
   'share-2': [['circle', { cx: 18, cy: 5, r: 3 }], ['circle', { cx: 6, cy: 12, r: 3 }], ['circle', { cx: 18, cy: 19, r: 3 }],
     ['line', { x1: 8.59, y1: 13.51, x2: 15.42, y2: 17.49 }], ['line', { x1: 15.41, y1: 6.51, x2: 8.59, y2: 10.49 }]],
-  'book-open': [['path', { d: 'M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z' }], ['path', { d: 'M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z' }]],
+  'book-open': [['path', { d: ICONS.wiki }]],
   sliders: [['line', { x1: 4, y1: 21, x2: 4, y2: 14 }], ['line', { x1: 4, y1: 10, x2: 4, y2: 3 }], ['line', { x1: 12, y1: 21, x2: 12, y2: 12 }],
     ['line', { x1: 12, y1: 8, x2: 12, y2: 3 }], ['line', { x1: 20, y1: 21, x2: 20, y2: 16 }], ['line', { x1: 20, y1: 12, x2: 20, y2: 3 }],
     ['line', { x1: 1, y1: 14, x2: 7, y2: 14 }], ['line', { x1: 9, y1: 8, x2: 15, y2: 8 }], ['line', { x1: 17, y1: 16, x2: 23, y2: 16 }]],

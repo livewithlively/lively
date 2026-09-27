@@ -594,7 +594,7 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
       onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); if (act) act.run(); else hooks.onCloseInstance?.(inst.id); } },
       act && act.kind === 'trash'
         ? sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' },
-            sv('path', { d: 'M4 7h16' }), sv('path', { d: 'M9 7V4h6v3' }), sv('path', { d: 'M6 7l1 13h10l1-13' }))
+            sv('path', { d: ICONS.trash }))
         : sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))),
     //  ⚠ 한 줄 모드(#2033)에서는 둘째 줄을 **만들지 않는다** — 숨기기(display:none)로 두면 빈 그리드 행이 남아
     //   행 높이가 두 축에서 어긋난다. 소속은 머리글이, 시각·상태어는 툴팁이 말한다.
@@ -3112,7 +3112,7 @@ function trashBtn(s: Sess): HTMLElement {
     class: 'v2-ss-x v2-ss-trash', type: 'button', 'aria-label': s.label + ' 휴지통으로',
     title: '휴지통으로 보내기 — 목록에서 빠지고, 휴지통에서 되돌리거나 완전히 지울 수 있어요',
   }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-ss-x-ic', 'aria-hidden': 'true' },
-    sv('path', { d: 'M4 7h16' }), sv('path', { d: 'M9 7V4h6v3' }), sv('path', { d: 'M6 7l1 13h10l1-13' })));
+    sv('path', { d: ICONS.trash })));
   btn.addEventListener('click', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); void doTrash(s); });
   return btn;
 }
