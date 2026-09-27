@@ -95,6 +95,13 @@ ok(!/수집 기록/.test(COL.replace(/title: '[^']*'/g, "")) || !/openRuns\(/.te
 ok(/groupRuns<AutoRun>/.test(MR) && /summarize\(runs, Date\.now\(\)\)/.test(MR) && /lastOutcome\(runs\)/.test(MR), "W6 화면 조각이 잎 모듈의 계산을 쓴다");
 ok(/dirtyGuard = pageDirty;/.test(DIS) && /if \(mCat\.r\.checked\) \{ \(catHost\.querySelector/.test(DIS), "W7 설정 페이지의 이탈 가드와 저장 단축키가 «카테고리만» 모드를 가른다");
 ok(/맡은 지식 보기/.test(code(read("web/distill-fill.ts"))) && /openPreview\(c\)/.test(code(read("web/distill-fill.ts"))), "W8 카테고리 증류기의 «맡은 지식 보기» 가 남아 있다");
+// W9 편집기는 빈 자리를 거른 뒤 붙인다 — 안 거르면 제목 아래에 «null» 글자가 찍힌다(2026-09-27 매니지드 사진에서 찾음)
+{
+  const FILL = code(read("web/distill-fill.ts"));
+  const ed = FILL.slice(FILL.indexOf("function editor("), FILL.indexOf("async function openPreview("));
+  ok(ed.length > 3000, "W9 편집기 소스를 실제로 읽었다");
+  ok(!/card\.append\(\s*el\(/.test(ed) && /card\.append\(\.\.\.parts\.filter\(/.test(ed), "W9 카테고리 증류기 편집기가 빈 자리(null)를 거르고 붙인다");
+}
 
 console.log(`\n${pass} pass · ${fail} fail`);
 process.exit(fail ? 1 : 0);
