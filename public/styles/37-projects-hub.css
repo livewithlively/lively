@@ -711,7 +711,7 @@ button.pjh-rail-r:hover { background: var(--bg-tint); color: var(--ink); }
 .pjh-modal .pjh-fc-n { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.35; overflow-wrap: anywhere; }
 /* 좁은 화면의 모달 — 요약 띠는 한 줄(옆으로 민다) · 레인 이름 칸은 얼굴+짧은 이름 · 지식은 위아래로 흐른다 */
 @media (max-width: 900px) {
-  .pjh-modal .pjh-sum { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 16px; }
+  .pjh-modal .pjh-sum { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
   .pjh-modal .pjh-sum::-webkit-scrollbar { display: none; }
   .pjh-modal .pjh-sum-g { flex: none; }
   .pjh-modal .pjh-sum-row { flex-wrap: nowrap; }
@@ -726,4 +726,12 @@ button.pjh-rail-r:hover { background: var(--bg-tint); color: var(--ink); }
   .pjh-kfind-h { flex-direction: column; align-items: flex-start; gap: 2px; }
   .pjh-kfind-h span { white-space: normal; }
   .pjh-modal .pjh-slist { flex: none; overflow: visible; }
+  .pjh-modal .pjh-mb { overflow-x: hidden; }
+  /* 셸이 화면 틀 오른쪽 위에 얹는 «새 탭에서 열기»(.v2-frame-pop) 와 닫기 단추가 붙지 않게 머리를 안으로 들인다 */
+  .pjh-modal .pjh-mh { padding-right: 28px; }
+  /* 손가락 화면 — 올려야 나오는 고르기 칸 자리(26px)를 비워 두지 않는다 */
+  .pjh-modal .pjv-tasks-embedded .pjv-trow-title-cell, .pjh-modal .pjv-tasks-embedded .pjv-tgroup-head .pjv-trow-title-cell { padding-left: 2px; }
+  .pjh-modal .pjv-tasks-embedded .pjv-row-check { display: none; }
+  .pjh-modal .pjv-tasks-embedded .pjv-addrow-trigger { padding-left: 4px; }
 }
+.pjh-kfind .pjh-kr .pjh-kr-s { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

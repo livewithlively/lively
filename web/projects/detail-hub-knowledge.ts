@@ -7,6 +7,7 @@
 //  연결/해제는 프로젝트 지식 API(POST /v6/projects/:id/knowledge {name, relation[, unlink]}) — 섹션(detail-knowledge)과 같은 문.
 import { api, el, lifecycleDot, relTime, toast } from '../core.js';
 import { type Fill, btn, footText, hubIcon } from './detail-hub-kit.js';
+import { searchSnippet } from './detail-hub-model.js';
 
 const knName = (k: any): string => String(k.name || k.knowledge_name || '');
 const KN_NEW_TAB = { target: '_blank', rel: 'noopener', title: '새 탭에서 지식 열기' };
@@ -85,7 +86,7 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
           const name = knName(m);
           results.append(el('div', { class: 'pjh-kr' }, hubIcon('doc', 13),
             el('div', { class: 'pjh-kr-b' }, el('a', { class: 'pjh-kr-t', href: '#/k/' + encodeURIComponent(name), ...KN_NEW_TAB, text: m.title || name }),
-              m.snippet ? el('div', { class: 'pjh-kr-s', text: String(m.snippet).slice(0, f.modal ? 240 : 90) }) : null),
+              m.snippet ? el('div', { class: 'pjh-kr-s', text: searchSnippet(m.snippet, f.modal ? 220 : 90) }) : null),
             linked.has(name) ? el('span', { class: 'pjh-kn-rel', text: '연결됨' })
               : el('button', { class: 'pjh-kn-link', type: 'button', text: '필요로 연결', onclick: (e: Event) => { e.stopPropagation(); link(name, e.currentTarget as HTMLButtonElement); } })));
         }
