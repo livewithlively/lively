@@ -462,8 +462,16 @@ export function forgetNode(nodeId: string): void {
 const selfNodes = new Set<string>();          // states 와 같은 스코프 키
 
 const SELF_PROBE_MS = 30_000;
+/**
+ * 판정 한 판이 목록 조회를 기다리는 상한 (#4135, 2026-09-28). 넘기면 그 판은 «판정 불가» 로 완결한다(tmux 를 못 본 것과 같은 갈래).
+ *  왜: 판정의 약속은 프로세스에 하나(`selfProbing`)이고 applyState 는 그 약속이 끝난 뒤에야 스냅샷 구독자(발견 기록 · 세션 신원
+ *  되채우기)를 부른다. 목록 조회가 한 번 안 끝나면 그 뒤의 **모든 노드의 모든 스냅샷**이 같은 약속에 매달려 구독자가 재시작 전까지
+ *  안 불린다. 판정은 양성일 때만 표시하므로 상한으로 끊어도 거짓 판정은 생기지 않는다 — 다음 판(SELF_PROBE_MS 뒤)이 다시 본다.
+ */
+const SELF_PROBE_CAP_MS = 8_000;
 let selfProbeAt = 0;
 let selfProbing: Promise<void> | null = null;
+const SELF_PROBE_TIMEOUT = "self-probe-timeout";
 /** 지금 states 에 있는 것들을 판정 후보 형태로 — 순수 판정(hasSelfProbeCandidate)이 쓸 최소 형태만 넘긴다. */
 function* selfProbeCandidates(): Generator<{ key: string; sessionCount: number; declared: boolean }> {
   //  `declared` 를 함께 넘긴다 — 선언된 세션 호스트는 후보가 아니다(면제가 tmux 를 묻기 **전에** 성립해야 한다).
@@ -493,7 +501,12 @@ function probeSelfNodes(): Promise<void> {
       //   ⚠ 이 판정을 `selfNodePossible()` 로 건너뛰지 않는다: 매니지드에서도 실제로 잡았다(2026-09-10 06:52Z, 선언이
       //    거둬졌는데 아직 붙어 있던 세션 호스트 둘). 종전엔 멤버 PC 가 영원히 후보라 30초마다 전 세션을 capture-pane 까지
       //    훑었다(2026-09-11 실측 분당 34 — 그 테넌트 tmux 호출의 절반).
-      const mine = new Set((await listCentralSessions({ strict: true })).map((s) => s.id));
+      let cap: ReturnType<typeof setTimeout> | undefined;
+      const listed = await Promise.race([
+        listCentralSessions({ strict: true }),
+        new Promise<never>((_, rej) => { cap = setTimeout(() => rej(new Error(SELF_PROBE_TIMEOUT)), SELF_PROBE_CAP_MS); cap.unref?.(); }),
+      ]).finally(() => clearTimeout(cap));
+      const mine = new Set(listed.map((s) => s.id));
       for (const [k, st] of states) {
         // #2600 T2 — **선언된 세션 호스트는 면제한다.** 그 노드는 게이트웨이와 같은 tmux 를 보는 것이
         //  정상이다(매니지드 세션 호스트는 같은 브로커 소켓으로 그 tmux 에 닿는다 — 그게 존재 이유다).
@@ -521,7 +534,12 @@ function probeSelfNodes(): Promise<void> {
         if (c) maybeCleanSelfNode(c);
         dropSelfNodeConn(k);
       }
-    } catch { /* tmux 를 못 봤다 = 판정 불가. 양성일 때만 표시하므로 조용히 넘어간다 */ }
+    } catch (e) {
+      //  tmux 를 못 봤다 = 판정 불가. 양성일 때만 표시하므로 조용히 넘어간다 — 단 **상한을 넘긴 판**은 적는다(구독자가 그만큼 늦게 불렸다).
+      if ((e as Error)?.message === SELF_PROBE_TIMEOUT) {
+        logger.warn({ waited_ms: SELF_PROBE_CAP_MS }, "셀프 노드 판정 — 세션 목록 조회가 상한 안에 끝나지 않았다. 이번 판은 판정 불가로 닫는다");
+      }
+    }
     finally { selfProbing = null; }
   })();
   selfProbing = run;
@@ -773,9 +791,6 @@ function applyBeat(c: NodeConn): void {
   states.set(k, { ...prev!, ts: Date.now() });
 }
 
-/** 스냅샷 구독자를 부르기 전에 셀프 노드 판정을 기다리는 상한(applyState 머리말). */
-const SELF_PROBE_WAIT_CAP_MS = 8_000;
-
 function applyState(c: NodeConn, sessions: SessionInfo[], res?: NodeResources | null): NodeState {
   const nodeId = c.node.id;
   const k = keyOf(nodeId, c.tenant);
@@ -798,21 +813,10 @@ function applyState(c: NodeConn, sessions: SessionInfo[], res?: NodeResources | 
   //   늘 늦게 끝나서 **셀프 노드의 첫 스냅샷이 판정 전에 DB 로 들어갔다**(dev 실측 org_session_state 의 셀프
   //   discovered 행 286개의 출처 중 하나가 이 순서다 — 게이트웨이가 재배포될 때마다 그 창이 다시 열린다).
   //   판정은 후보가 없거나 스로틀이면 즉시 완결하므로(probeSelfNodes 반환값의 계약) 정상 경로의 비용은 0 이다.
-  //  ⚠ 판정을 **기다리되 끝없이 기다리지는 않는다** (#4135, 2026-09-28). 판정은 tmux 왕복이고 그 약속은 프로세스에 하나라
-  //   (selfProbing), 한 번 안 끝나면 그 뒤의 모든 스냅샷이 같은 약속에 매달려 구독자(발견 기록·세션 신원 되채우기)가 영영 안 불린다.
-  //   상한을 넘기면 판정 없이 부른다 — 셀프 노드의 스냅샷이 그 틈에 한 번 들어갈 수 있지만(#2592 의 정리가 뒤에서 치운다),
-  //   구독자가 통째로 멈추는 것보다 낫다.
-  const call = (): void => {
+  //  판정이 **끝나지 않는** 일은 없다 — probeSelfNodes 가 목록 조회에 상한(SELF_PROBE_CAP_MS)을 두고, 넘기면 «판정 불가» 로 완결한다.
+  void probeSelfNodes().then(() => {   // #2108 — 이 노드가 게이트웨이 자신인가(스로틀·비치명, 위 주석)
     if (nodeSessionsHandler) { try { void nodeSessionsHandler(nodeId, sessions); } catch { /* 구독자 사고가 스냅샷을 막지 않는다 */ } }
-  };
-  let called = false;
-  const once = (): void => { if (called) return; called = true; clearTimeout(waitCap); call(); };
-  const waitCap = setTimeout(() => {
-    if (!called) logger.warn({ node: nodeId, waited_ms: SELF_PROBE_WAIT_CAP_MS }, "셀프 노드 판정이 안 끝난다 — 기다리지 않고 구독자를 부른다");
-    once();
-  }, SELF_PROBE_WAIT_CAP_MS);
-  waitCap.unref?.();
-  void probeSelfNodes().then(once, once);   // #2108 — 이 노드가 게이트웨이 자신인가(스로틀·비치명, 위 주석)
+  });
   // 정본(org_node_state)으로 흘려보낸다(#1834) — 이 게이트웨이가 재배포로 죽어도 다음 부팅이 여기서 목록을 되찾는다.
   //  세션 목록이 바뀌었을 때 즉시, 그대로면 최소 간격마다(node-state-store.shouldPersist). 비치명 —
   //  실패하면 기억을 지워 다음 보고(3초 뒤)가 곧바로 다시 시도한다.
