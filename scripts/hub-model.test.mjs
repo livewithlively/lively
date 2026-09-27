@@ -143,3 +143,13 @@ test("#14 피드 날 머리 — 오늘·어제는 요일과 날짜까지, 그 �
   assert.equal(M.feedDayHead(NOW - 86400e3, NOW), "어제 목 9/24");
   assert.equal(M.feedDayHead(NOW - 86400e3 * 3, NOW), "9/22");
 });
+
+test("#15 본문 안내문 들어내기 — 서버가 쓴 첫 인용(자동 생성·사람이 만듦)은 칩이 되고 본문에서 빠진다 · 임시 이름 안내는 뒤 두 문단까지 · 마커 주석 제거", () => {
+  const a = M.splitBodyNotes("> 새 작업 창에서 **사람이 이름을 지어** 만든 프로젝트입니다 — 이 세션의 작업 폴더가 이 프로젝트 폴더입니다.\n\n## 첫 지시(원문)\n\n본문");
+  assert.equal(a.notes.length, 1); assert.equal(a.notes[0].kind, "named"); assert.ok(!a.notes[0].text.includes("**")); assert.equal(a.rest, "## 첫 지시(원문)\n\n본문");
+  const b = M.splitBodyNotes("> ⚙ 세션을 열 때 **자동 생성**된 프로젝트입니다 — 첫 지시가 없어 이름이 임시값입니다.\n\n이 세션의 작업 폴더가 이 프로젝트 폴더이고, 여기서 남기는 지식이 귀속됩니다.\n무엇을 하는 일인지 정해지면 제목·본문·분류를 보강하세요.\n\n<!-- lively:auto-created-from-first-prompt -->");
+  assert.equal(b.notes.length, 1); assert.equal(b.notes[0].kind, "auto-empty"); assert.ok(b.notes[0].text.includes("작업 폴더")); assert.equal(b.rest, "");
+  const c = M.splitBodyNotes("> ⚙ 세션의 첫 지시에서 **자동 생성**된 프로젝트입니다 — 제목·본문·분류는 작업이 구체화되면 보강됩니다.\n\n## 첫 지시(원문)\n\nx");
+  assert.equal(c.notes[0].kind, "auto-first"); assert.equal(c.rest, "## 첫 지시(원문)\n\nx");
+  const d = M.splitBodyNotes("> 그냥 인용문\n\n본문"); assert.equal(d.notes.length, 0); assert.equal(d.rest, "> 그냥 인용문\n\n본문");
+});
