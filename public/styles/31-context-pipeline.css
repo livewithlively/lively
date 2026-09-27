@@ -387,6 +387,9 @@ a.ctx-preview-t:hover { color: var(--blue); }
 .ctx-tb-link:hover { text-decoration: underline; }
 /* 툴바가 없는 개요에서 탭 줄과 본문 사이 숨 */
 .ctx-board .ctx-vtabs + .ctx-body { padding-top: 18px; }
+/* #4135 — 위 규칙은 탭 줄이 머리(.ctx-board-header) 안으로 들어간 뒤로 걸리지 않아, 제목과 단추가 탭 줄 밑 6px 에 붙어 있었다
+ *  (원준 2026-09-27 «상단 구분선과 너무 다닥다닥»). 머리 다음의 본문에 건다. */
+.ctx-board .ctx-board-header + .ctx-body { padding-top: 22px; }
 
 /* 개요 다이어그램의 번호 원을 탭의 번호 원과 같은 꼴로 — 한 화면에 번호 원이 두 꼴이면 둘 중 하나는 장식으로 보인다. */
 .ctx-board .ctxp-step { width: 19px; height: 19px; box-sizing: border-box; border: 1.5px solid var(--line-net-2); background: none; color: var(--ink-sub); font-size: 11px; font-weight: 800; }
@@ -942,7 +945,7 @@ a.cxr-row .cxr-t { white-space: nowrap; }
  *  카드 한 장이 따로 떠 있어 "카드 하나하나가 수집기라는 느낌이 안 든다"(원준 2026-09-10)는 지적을 받았다.
  *  행 문법: [서비스 로고 36] [이름 + 상태점] / [「Notion 수집기」 · 리브가 만듦 · 주기 · 마지막 수집] … [스위치][지금 수집][설정]
  *  편집은 행 아래로 펼쳐진다(모달 아님 — 다른 수집기 상태를 보면서 만진다). 색은 상태점·경고·리브 표식 셋뿐. */
-.cxc { max-width: 1160px; }
+.cxc { max-width: none; }   /* #4135 — 1160 상한을 풀었다(원준 2026-09-26 «탭 내부를 풀스크린으로 쓰고 있지도 않다»). 본문은 탭 줄과 같은 폭이다 */
 .cxc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin: 0 0 14px; }
 .cxc-head-main { min-width: 0; }
 .cxc-title { display: flex; align-items: baseline; gap: 7px; margin: 0 0 4px; font-size: 16px; font-weight: 800; color: var(--ink); letter-spacing: -0.2px; }
@@ -1212,3 +1215,63 @@ a.cxc-name:hover { color: var(--blue); }
 .cxc-pchip-x:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 .cxc-pick-acts { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .cxc-pick-why { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--warn-ink); word-break: keep-all; }
+
+/* ══ #4135 — 수집기 행 · 증류기 카드 안의 «최근 실행»(9/22 회의 ①②③④ · 원준 2026-09-27 코멘트) — 접두 cmr- ══
+ *  행의 둘째 줄이 마지막 실행의 결과를 말하고, [기록]을 누르면 행 아래에 실행 목록이 펼쳐진다. 목록은 접지 않고
+ *  일정 높이 안에서 굴러간다. 실패는 셋째 줄로 빼지 않고 둘째 줄 안에 선다. */
+.cxc-last { color: var(--ink); font-weight: 700; }
+.cxc-last b { color: var(--blue); }
+.cxc-last b.is-u { color: var(--mint-deep); }
+.cxc-last .is-fail { color: var(--coral-text); }
+.cxc-hist-b { display: inline-flex; align-items: center; gap: 3px; }
+.cxc-chev { width: 11px; height: 11px; flex: none; }
+.cxc-iss-in { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 4px 0 7px; border-radius: 6px; background: var(--warn-bg);
+  border: 1px solid var(--warn-line); color: var(--warn-ink); font-size: 12px; font-weight: 700; white-space: nowrap; }
+.cxc-iss-in .cxc-ic { width: 13px; height: 13px; flex: none; color: var(--warn-deep); }
+.cxc-iss-in .btn-text { font-size: 12px; font-weight: 800; color: var(--blue); padding: 0 4px; margin-left: 2px; text-decoration: none; }
+.cmr { flex-basis: 100%; margin: 10px 0 2px 50px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-tint); overflow: hidden; }
+.cmr-h { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12px; font-weight: 700; color: var(--ink-sub); border-bottom: 1px solid var(--line-row); }
+.cmr-h .sp, .cmr-foot .sp { flex: 1; }
+.cmr-h a, .cmr-foot a { color: var(--blue); text-decoration: none; font-weight: 700; }
+.cmr-list { max-height: 232px; overflow-y: auto; overscroll-behavior: contain; background: var(--bg); scrollbar-width: thin; scrollbar-color: var(--muted-3-line) transparent; }
+.cmr-list::-webkit-scrollbar { width: 8px; }
+.cmr-list::-webkit-scrollbar-thumb { background: var(--muted-3-line); border-radius: 4px; }
+.cmr-row { display: grid; grid-template-columns: 56px 74px 1fr auto; gap: 10px; align-items: center; width: 100%; padding: 7px 12px; border: 0;
+  border-bottom: 1px solid var(--line-row); background: var(--bg); font: inherit; font-size: 12.5px; color: var(--ink); text-align: left; cursor: pointer; }
+.cmr-row:last-child { border-bottom: 0; }
+.cmr-row:hover { background: var(--bg-tint); }
+.cmr-row .t { color: var(--muted); font-variant-numeric: tabular-nums; }
+.cmr-row.is-z .t { color: var(--muted-3); }
+.cmr-row .r { font-weight: 700; }
+.cmr-row .r.ok { color: var(--ok); }
+.cmr-row .r.bad { color: var(--coral-text); }
+.cmr-row .r.z { color: var(--muted-3); font-weight: 600; }
+.cmr-row .w b { color: var(--blue); }
+.cmr-row .w b.is-u { color: var(--mint-deep); }
+.cmr-row .d { color: var(--muted); font-size: 12px; }
+.cmr-day { padding: 6px 12px; font-size: 11.5px; font-weight: 800; color: var(--muted-2); background: var(--bg-tint); border-bottom: 1px solid var(--line-row); }
+.cmr-empty { margin: 0; padding: 14px 12px; font-size: 12.5px; color: var(--muted); }
+.cmr-foot { display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line-row); }
+.cmr-only { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; color: var(--ink-sub); cursor: pointer; }
+/* 증류기 카드 발치의 «최근 실행» 한 줄 */
+.dsl-runs { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 12px 0 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); font-size: 12.5px; }
+.dsl-runs .k { font-weight: 800; color: var(--muted-2); font-size: 11.5px; letter-spacing: .02em; margin-right: 2px; }
+.dsl-runs .run { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); }
+.dsl-runs .run .t { color: var(--muted); font-variant-numeric: tabular-nums; }
+.dsl-runs .run b { color: var(--purple); }
+.dsl-runs .run b.is-u { color: var(--blue); }
+.dsl-runs .run.bad { border-color: var(--danger-line); color: var(--coral-text); }
+.dsl-runs .z { color: var(--muted); }
+.dsl-runs a { margin-left: auto; color: var(--blue); font-weight: 700; text-decoration: none; }
+/* 카테고리만 붙이는 증류기 — 같은 카드, 배지 하나 */
+.cxc-tag.is-mode { background: color-mix(in srgb, var(--purple) 14%, var(--bg)); color: var(--purple-text); border-color: color-mix(in srgb, var(--purple) 30%, var(--bg)); }
+.dfl-job { margin-top: 14px; }
+.dfl-job > summary { margin-bottom: 0; }
+.dfl-job[open] > summary { margin-bottom: 8px; }
+/* 「사람이 확인한 뒤에 쓰기」 — 꺼져 있을 때의 한 줄 */
+.rvp.is-one { margin-top: 14px; padding-top: 0; border-top: 0; }
+.rvp-one { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); }
+.rvp-one-x { min-width: 0; }
+.rvp-one-t { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.rvp-one-d { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
+.rvp-one-sp { flex: 1; }

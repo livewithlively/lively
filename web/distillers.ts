@@ -28,6 +28,7 @@ import { icon as lineIcon } from './v2/icons.js';
 import { confirmDialog, skeleton } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
 import { runConfig } from './context-run-config.js';    // #4008 제공자·모델·추론강도 공용 선택기
+import { type RunsByMachine, distillerToday, fetchRecentRuns, machineRuns, machineSum, recentLine } from './context-machine-runs.js';   // #4135 카드 안의 최근 실행
 import { CTX_APP_NAME, CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
 const PAGE_TYPES = ['', 'decision', 'concept', 'how-to', 'reference', 'research', 'entity'];
@@ -67,8 +68,8 @@ export async function distillersPanel(detail, data) {
   //   돌고 있는 증류기는 흐름 카드, 꺼 둔 증류기는 접힌 목록의 얇은 행. 카테고리는 key 가 아니라 이름으로 보인다.
   busy(detail, el('div', { class: 'card' }, skeleton('증류기 불러오는 중')));
 
-  let res; let catRes: any = null;
-  try { [res, catRes] = await Promise.all([api('/api/ui/org/distillers'), api('/api/ui/categories').catch(() => null)]); }
+  let res; let catRes: any = null; let runs: RunsByMachine = new Map();
+  try { [res, catRes, runs] = await Promise.all([api('/api/ui/org/distillers'), api('/api/ui/categories').catch(() => null), fetchRecentRuns()]); }
   catch (e) { detail.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '불러오지 못했습니다 — ' + e.message }))); return; }
   const catName = categoryNames(catRes);
 
@@ -98,7 +99,7 @@ export async function distillersPanel(detail, data) {
     body.append(el('p', { class: 'cxc-sub cxc-group-t' }, el('span', { text: '돌고 있는 증류기' }), el('span', { class: 'cxc-title-n num', text: String(on.length) })));
     const cards = el('div', { class: 'dsl-cards' });
     if (!on.length) cards.append(el('div', { class: 'cxc-list' }, el('div', { class: 'cxc-empty' }, el('p', { class: 'cxc-empty-d', text: '켜진 증류기가 없습니다 — 아래에서 하나를 켜세요.' }))));
-    for (const d of on) cards.append(distillerCard(d, stat(d.id), catName, rerender));
+    for (const d of on) cards.append(distillerCard(d, stat(d.id), catName, rerender, machineRuns(runs, 'd', 'src:' + d.id)));
     body.append(cards);
 
     if (off.length) {
@@ -202,7 +203,7 @@ function criteriaExcerpt(md: string | null | undefined): string {
 const listOf = (x): string[] => Array.isArray(x) ? x.filter(Boolean).map(String) : String(x || '').split('\n').map((s) => s.trim()).filter(Boolean);
 
 // ── 흐름 카드 — [읽는 곳] ══▶ [남길 기준] ══▶ [지식이 가는 곳] ──
-function distillerCard(d, st, catName, rerender) {
+function distillerCard(d, st, catName, rerender, runs: import('./context-runs.js').AutoRun[] = []) {
   const liv = isLivMadeDistiller(d);
   const catchAll = Number(d.priority) <= -100 || /catch-all$/.test(String(d.key || ''));
   const card = el('article', { class: 'dsl-card' + (d.enabled ? '' : ' is-off') });
@@ -218,7 +219,8 @@ function distillerCard(d, st, catName, rerender) {
       el('span', { class: 'cxc-kind', text: kindText(d) + ' 증류기' }),
       liv ? el('span', { class: 'cxc-liv', title: '리브가 미리 준비해 둔 증류기입니다' }, livIcon(), el('span', { text: '리브가 만듦' })) : el('span', { class: 'cxc-who', text: '직접 만듦' }),
       el('span', { class: 'cxc-sep', 'aria-hidden': 'true', text: '·' }),
-      el('span', { text: d.last_run_at ? `마지막 실행 ${relTime(d.last_run_at)}` + (d.last_status && d.last_status !== 'ok' ? ' · 실패' : '') : '아직 실행한 적 없음' })));
+      //  오늘 돈 적이 있으면 그 결과를 말한다(#4135 회의 ②) — 「마지막 실행 n일 전」만으로는 무엇을 했는지 모른다.
+      distillerToday(machineSum(runs)) || el('span', { text: d.last_run_at ? `마지막 실행 ${relTime(d.last_run_at)}` + (d.last_status && d.last_status !== 'ok' ? ' · 실패' : '') : '아직 실행한 적 없음' })));
   const acts = el('div', { class: 'cxc-acts' });
   const sw = el('input', { type: 'checkbox', class: 'cxc-sw', role: 'switch', 'aria-label': `${d.label || d.key} 켜기` }) as HTMLInputElement;
   sw.checked = !!d.enabled;
@@ -263,6 +265,8 @@ function distillerCard(d, st, catName, rerender) {
     station('읽는 곳', readChips, readFoot), wire(),
     station('남길 기준', critBody, critFoot), wire(),
     station('지식이 가는 곳', destBody, destBits.join(' · '))));
+  const recent = recentLine('src:' + d.id, runs);
+  if (recent) card.append(recent);
   return card;
 }
 
