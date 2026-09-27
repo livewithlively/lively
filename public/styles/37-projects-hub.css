@@ -824,3 +824,5 @@ button.pjh-rail-r:hover { background: var(--bg-tint); color: var(--ink); }
   .pjh-modal .pjh-fside { padding-left: 0; overflow: visible; }
   .pjh-modal .pjh-fside .pjh-fprev { flex: none; height: 260px; }
 }
+/* 올리는 중이 아닐 땐 진행 줄 자리가 간격을 먹지 않는다(1×1 몸통이 9px 넘치던 것) */
+.pjh-prog:empty { display: none; }
