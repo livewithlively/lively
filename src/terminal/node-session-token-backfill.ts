@@ -49,6 +49,10 @@ export const BACKFILL_RECHECK_MS = 10 * 60_000;
  *  있었는데 못 본 경우) 그 세션은 심기가 성공할 때까지 신원이 없다 — 그 사이 쓰기는 session-identity-guard 가 막으므로 틀린 이름이
  *  남지는 않지만, 10분을 그렇게 두지 않는다. */
 export const BACKFILL_REISSUE_RETRY_MS = 60_000;
+/** 한 판이 이보다 오래 돌면 **끝나지 않는 판**으로 본다 — 기다리지 않고 새 판을 돈다(2026-09-28).
+ *  한 판의 정상 상한은 세션 수 × (민팅 + 노드 RPC 상한)이라 분 단위를 넘지 않는다. 종전엔 앞 판이 도는 동안 뒤 판을 **무기한**
+ *  건너뛰어서, 앞 판의 DB·RPC 약속 하나가 안 끝나면 그 노드의 되채우기가 재시작 전까지 멈췄다. */
+export const BACKFILL_INFLIGHT_MAX_MS = 3 * 60_000;
 
 /** 바깥 의존(테스트 주입용) — 판정·순서는 이 모듈이, DB·노드 RPC 는 이들이. */
 export interface BackfillDeps {
@@ -70,6 +74,7 @@ export interface BackfillDeps {
   haveRetryMs?: number;
   recheckMs?: number;
   reissueRetryMs?: number;
+  inflightMaxMs?: number;
 }
 export function defaultBackfillDeps(): BackfillDeps {
   return {
@@ -101,22 +106,56 @@ export function createNodeSessionTokenBackfill(deps: BackfillDeps = defaultBackf
   const minted = new Map<string, Set<string>>();          // nodeId → 여기서 심은 세션 id 들(사라지면 거둔다)
   const lastSeen = new Map<string, Set<string>>();        // nodeId → 직전 스냅샷의 세션 id 들(사라진 것의 기억을 지운다)
   const haveFailedAt = new Map<string, number>();         // nodeId → haveTokens 실패 시각(표 전체 읽기 백오프)
-  const inflight = new Set<string>();                     // 처리 중인 노드 — 겹치면(첫 배포 때 세션 N 개 × DB·RPC) 같은 세션을 두 번 굽는다(리뷰 지적)
+  //  처리 중인 노드 → 그 판이 시작한 시각. 겹치면(첫 배포 때 세션 N 개 × DB·RPC) 같은 세션을 두 번 굽는다(리뷰 지적) — 그래서
+  //   앞 판이 도는 동안 뒤 판은 건너뛴다. 단 BACKFILL_INFLIGHT_MAX_MS 를 넘긴 앞 판은 버린다(그 판은 아래 stale() 로 스스로 멈춘다).
+  const inflight = new Map<string, number>();
+  //  «확인했다» 고 기억할 때 그 세션이 신원을 갖고 있다고 했나(true) · 없다고 했나(false) · 말이 없었나(undefined).
+  //   노드가 **그 뒤에** «없다» 고 말을 바꾸면 recheckMs 를 기다리지 않고 바로 다시 판정한다 — 새 번들로 갈아탄 노드는 첫 판에는
+  //   아직 못 물어본 세션이 많아 말이 없고(그래서 건너뛰고 기억된다), 몇 초 뒤에야 «없다» 고 한다(2026-09-28 매니지드 실측:
+  //   그 세션들이 10분을 기다렸다).
+  const seenTok = new Map<string, boolean | undefined>();
+  const lastNote = new Map<string, number>();            // nodeId → 마지막으로 판 요약을 적은 시각(노드당 1분에 한 줄)
+  let runSeq = 0;                                         // 판 번호 — 버려진 판(stale)이 뒤늦게 굽거나 심지 않게 가른다
+  const runOf = new Map<string, number>();                // nodeId → 지금 유효한 판 번호
   const key = (nodeId: string, id: string): string => `${nodeId}|${id}`;
   const retryAfter = deps.retryAfterMs ?? BACKFILL_RETRY_AFTER_MS;
   const haveRetry = deps.haveRetryMs ?? BACKFILL_HAVE_RETRY_MS;
   const recheck = deps.recheckMs ?? BACKFILL_RECHECK_MS;
+  const inflightMax = deps.inflightMaxMs ?? BACKFILL_INFLIGHT_MAX_MS;
+
+  /**
+   * «신원이 없다» 고 보고된 세션이 있는데 이번 판이 **아무것도 심지 않고 끝났을 때** 그 자리(stage)를 적는다 — 노드당 1분에 한 줄.
+   *  2026-09-28 매니지드 실측: 다시 굽기가 안 도는데 기록이 한 줄도 없어, 조용히 끝나는 여러 갈래 가운데 어디서 멈췄는지 가릴 수 없었다.
+   *  ⚠ 세션 id·주인·토큰은 싣지 않는다 — 개수와 단계 이름만.
+   */
+  function note(nodeId: string, sessions: SessionInfo[], stage: string, extra?: Record<string, unknown>): void {
+    const lost = sessions.filter((s) => s && s.hasSessionToken === false).length;
+    if (!lost) return;
+    const now = deps.now();
+    if (now - (lastNote.get(nodeId) ?? -Infinity) <= 60_000) return;
+    lastNote.set(nodeId, now);
+    logger.info({ node: nodeId, stage, live: sessions.length, no_token: lost, ...extra },
+      "세션 신원 되채우기 — «없다» 고 보고된 세션이 있는데 이번 판에 심지 못했다");
+  }
 
   async function run(nodeId: string, sessions: SessionInfo[]): Promise<BackfillResult> {
     const out: BackfillResult = { minted: 0, skipped: 0, revoked: 0, failed: 0 };
-    if (deps.isSelf(nodeId)) return out;
-    if (inflight.has(nodeId)) return out;                  // 이 노드의 앞 판이 아직 도는 중 — 이번 스냅샷은 건너뛴다(다음 판이 따라잡는다)
-    inflight.add(nodeId);
-    try { return await runOnce(nodeId, sessions, out); }
-    finally { inflight.delete(nodeId); }
+    if (deps.isSelf(nodeId)) { note(nodeId, sessions, "self-node"); return out; }
+    const started = inflight.get(nodeId);
+    if (started !== undefined) {
+      const age = deps.now() - started;
+      //  이 노드의 앞 판이 아직 도는 중 — 이번 스냅샷은 건너뛴다(다음 판이 따라잡는다).
+      if (age < inflightMax) { note(nodeId, sessions, "inflight", { inflight_ms: age }); return out; }
+      logger.warn({ node: nodeId, inflight_ms: age }, "세션 신원 되채우기 — 앞 판이 끝나지 않는다. 그 판을 버리고 새 판을 돈다");
+    }
+    const seq = ++runSeq;
+    runOf.set(nodeId, seq);
+    inflight.set(nodeId, deps.now());
+    try { return await runOnce(nodeId, sessions, out, () => runOf.get(nodeId) !== seq); }
+    finally { if (runOf.get(nodeId) === seq) inflight.delete(nodeId); }
   }
 
-  async function runOnce(nodeId: string, sessions: SessionInfo[], out: BackfillResult): Promise<BackfillResult> {
+  async function runOnce(nodeId: string, sessions: SessionInfo[], out: BackfillResult, stale: () => boolean): Promise<BackfillResult> {
     const live = sessions.filter((s) => s && typeof s.id === "string" && SESSION_ID_RE.test(s.id));
     const liveIds = new Set(live.map((s) => s.id));
     // ① 사라진 세션 — 여기서 심은 것은 거두고, 어느 쪽이든 기억은 지운다(같은 id 가 다시 뜨면 다시 판정).
@@ -130,21 +169,33 @@ export function createNodeSessionTokenBackfill(deps: BackfillDeps = defaultBackf
       }
     }
     const prev = lastSeen.get(nodeId);
-    if (prev) for (const id of prev) if (!liveIds.has(id)) { doneAt.delete(key(nodeId, id)); failedAt.delete(key(nodeId, id)); }
+    if (prev) for (const id of prev) if (!liveIds.has(id)) { doneAt.delete(key(nodeId, id)); failedAt.delete(key(nodeId, id)); seenTok.delete(key(nodeId, id)); }
     lastSeen.set(nodeId, liveIds);
     // ② 아직 못 하는 노드 — 기억하지 않는다(번들이 갱신되면 다음 판에 심는다).
-    if (!deps.supports(nodeId)) return out;
+    if (!deps.supports(nodeId)) { note(nodeId, live, "unsupported-op"); return out; }
     const now = deps.now();
     const cands = live.filter((s) => {
       const k = key(nodeId, s.id);
       const d = doneAt.get(k);
-      if (d !== undefined && now - d < recheck) return false;   // 확인한 지 얼마 안 됐다 — 수명이 지나면 다시 판정한다
+      //  노드가 «없다» 고 **새로** 말했다(기억할 때는 그 말이 아니었다) — 기억을 접고 지금 다시 판정한다.
+      const turnedLost = s.hasSessionToken === false && seenTok.has(k) && seenTok.get(k) !== false;
+      if (d !== undefined && now - d < recheck && !turnedLost) return false;   // 확인한 지 얼마 안 됐다 — 수명이 지나면 다시 판정한다
       const f = failedAt.get(k);
       return !(f !== undefined && now - f < retryAfter);
     });
-    if (!cands.length) return out;
+    //  노드가 이번에 한 말을 **모든** 세션에 대해 적어 둔다(후보가 아니어도) — «있다 → 없다» 로 바뀌는 순간(심어 준 파일이 그 컴퓨터에서
+    //   사라진 때)도 다음 판이 바로 알아본다.
+    for (const s of live) seenTok.set(key(nodeId, s.id), s.hasSessionToken);
+    if (!cands.length) {
+      const lost = live.filter((s) => s.hasSessionToken === false);
+      note(nodeId, live, "no-candidates", {
+        remembered: lost.filter((s) => doneAt.has(key(nodeId, s.id))).length,
+        backoff: lost.filter((s) => failedAt.has(key(nodeId, s.id))).length,
+      });
+      return out;
+    }
     const hf = haveFailedAt.get(nodeId);
-    if (hf !== undefined && now - hf < haveRetry) return out;     // 표 전체 읽기가 방금 실패했다 — 잠시 쉰다
+    if (hf !== undefined && now - hf < haveRetry) { note(nodeId, live, "lookup-backoff"); return out; }   // 표 전체 읽기가 방금 실패했다 — 잠시 쉰다
     let have: Set<string>;
     try { have = await deps.haveTokens(); haveFailedAt.delete(nodeId); }
     catch (e) { haveFailedAt.set(nodeId, now); logger.warn({ node: nodeId, err: (e as Error)?.message || String(e) }, "세션 토큰 목록 조회 실패 — 잠시 뒤 다시"); return out; }
@@ -152,7 +203,9 @@ export function createNodeSessionTokenBackfill(deps: BackfillDeps = defaultBackf
     let owners: Map<string, string>;
     try { owners = await deps.verifiedOwners(nodeId, cands.map((s) => s.id)); }
     catch (e) { haveFailedAt.set(nodeId, now); logger.warn({ node: nodeId, err: (e as Error)?.message || String(e) }, "세션 주인 조회 실패 — 잠시 뒤 다시"); return out; }
+    if (stale()) return out;                               // 이 판은 버려졌다(BACKFILL_INFLIGHT_MAX_MS) — 새 판이 맡는다
     for (const s of cands) {
+      if (stale()) return out;
       const k = key(nodeId, s.id);
       //  실어 준 적 있는 세션(preissue 또는 앞 판의 되채우기) — env 나 파일에 이미 있다. 재판정 때도 토큰이 살아 있으면 그대로.
       //  ★ 단, 노드가 «이 세션엔 신원이 없다» 고 확답하면 다시 굽는다(머리말 ★ 2026-09-28).
@@ -180,6 +233,14 @@ export function createNodeSessionTokenBackfill(deps: BackfillDeps = defaultBackf
       }
     }
     if (out.minted) logger.info({ node: nodeId, ...out }, "살아 있는 노드 세션에 세션 토큰을 심었다(#4135 되채우기)");
+    //  판 요약 — «신원 없다» 고 보고된 세션이 있는데 아무것도 못 심은 판은 그 이유가 로그에 있어야 한다(2026-09-28: 매니지드에서
+    //   다시 굽기가 안 도는데 로그가 한 줄도 없어 어디서 멈췄는지 알 수 없었다). 노드당 1분에 한 줄.
+    if (!out.minted) {
+      note(nodeId, live, "judged", {
+        cands: cands.length, have: cands.filter((s) => have.has(s.id)).length, owners: owners.size,
+        can_reissue: deps.canReissue?.(nodeId) === true, ...out,
+      });
+    }
     return out;
   }
 
