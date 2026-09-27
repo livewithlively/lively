@@ -735,3 +735,94 @@ button.pjh-rail-r:hover { background: var(--bg-tint); color: var(--ink); }
   .pjh-modal .pjv-tasks-embedded .pjv-addrow-trigger { padding-left: 4px; }
 }
 .pjh-kfind .pjh-kr .pjh-kr-s { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* ══ 공유 폴더 = 곁칸 «자료» 와 한 벌(#4135, 2026-09-27 원준: «미리보기가 하나도 안 뜬다 · 곁칸이랑 같은 디자인으로») ══
+   그림(.pn-fic · .pn-fcard · .pn-folder)은 42-v2-panes.css 의 것을 그대로 쓴다. 여기는 허브에 앉히는 자리와 크기만. */
+/* 위젯 낱장 — 곁칸 카드 그대로, 위젯에선 한 번 눌러 연다 */
+.pjh-fcard { cursor: pointer; min-width: 0; }
+.pjh-fcard .pn-fname { width: 100%; font-size: 12.5px; }
+.pjh-fcard .pn-fmeta { font-size: 11.5px; }
+.pjh-fgrid.auto { grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 6px; }
+.pjh-fgrid.tall { padding: 1px; margin: -1px; }
+.pjh-fgrid .pjh-fc.drop { align-self: start; aspect-ratio: 1 / .82; margin: 8px 5px 0; }
+/* 한 줄 높이(2×1 · 3×1) — 몸통이 138px 라 미리보기 높이를 정해 두고 이름은 한 줄 */
+.pjh-h1 .pjh-fgrid { gap: 4px; }
+.pjh-h1 .pjh-fcard { padding: 5px 4px 4px; gap: 4px; }
+.pjh-h1 .pjh-fcard .pn-fic { aspect-ratio: auto; height: 74px; }
+.pjh-h1 .pjh-fcard .pn-fname { -webkit-line-clamp: 1; word-break: break-all; }
+.pjh-h1 .pjh-fgrid .pjh-fc.drop { aspect-ratio: auto; height: 74px; margin: 5px 4px 0; }
+/* 줄 — 미리보기 44×36(곁칸 뷰어 목록과 같은 크기). 1×1 은 줄이 낮아 20px 아이콘 */
+.pjh-fr { min-height: 46px; }
+.pjh-fr-th { width: 44px; display: flex; align-items: center; justify-content: center; }
+.pjh-fr-th .pn-fic.dir.pv { border: 0; background: none; }
+.pjh-frl.short .pjh-fr { min-height: 32px; }
+.pjh-frl.short .pjh-fr-th { width: 20px; }
+.pjh-tree-r .pn-fic.dir.sm { flex: none; }
+/* 경로 줄 — 여러 단계 들어가도 넘치지 않는다: 조각이 줄어들고, 오른쪽 단추는 제 폭을 지킨다 */
+.pjh-crumb { overflow: hidden; }
+.pjh-crumb-b { flex: 0 1 auto; min-width: 28px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjh-crumb > .pjh-ic { flex: none; }
+.pjh-fmain { overflow: hidden; }
+/* 옆 칸 «고른 것» — 위젯(3×2)과 모달이 같이 쓴다 */
+.pjh-fside { overflow-y: auto; overflow-x: hidden; gap: 10px; }
+.pjh-fside-n { flex: none; font-size: 14.5px; font-weight: 700; letter-spacing: -.1px; line-height: 1.4; color: var(--ink); overflow-wrap: anywhere; }
+.pjh-fside-acts { margin-top: 2px; flex-wrap: wrap; }
+.pjh-fside-acts:empty { display: none; }
+.pjh-fside-tip { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 10px; background: var(--bg-tint); font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.pjh-fside-tip b { color: var(--ink-sub); font-weight: 700; }
+.pjh-fside-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; border: 1px solid var(--line-row); border-radius: 10px; padding: 4px 8px; }
+.pjh-fside-li { display: flex; align-items: center; gap: 8px; min-height: 30px; font-size: 13px; border-top: 1px solid var(--line-row); }
+.pjh-fside-li:first-child { border-top: 0; }
+.pjh-fside-lin { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--ink); }
+.pjh-fside-lis { flex: none; font-size: 12px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+/* 내용 미리보기 — 같은 렌더러(lib/file-preview)의 결과를 이 칸 크기로 */
+.pjh-fprev { position: relative; flex: 1 1 200px; min-height: 180px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); scrollbar-width: thin; scrollbar-color: var(--line-net) transparent; }
+.pjh-fprev.dir { flex: none; min-height: 0; height: 148px; display: grid; place-items: center; border: 0; background: var(--bg-tint); overflow: hidden; }
+.pjh-fprev.dir .pn-folder { width: 104px; }
+.pjh-fprev.page { overflow: hidden; background: #fff; }
+.pjh-fprev-page { position: absolute; left: 0; top: 0; border: 0; background: #fff; transform-origin: top left; pointer-events: none; }
+.pjh-fprev-msg { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 176px; height: 100%; box-sizing: border-box; padding: 16px; text-align: center; font-size: 12.5px; line-height: 1.5; color: var(--muted-2); }
+.pjh-fprev-tools { position: sticky; top: 0; z-index: 1; display: flex; justify-content: flex-end; gap: 6px; padding: 6px 8px; background: var(--surface); border-bottom: 1px solid var(--line-row); }
+.pjh-fprev-body { padding: 12px 14px; box-sizing: border-box; min-height: 100%; }
+.pjh-fprev .fp-code { border: 0; border-radius: 0; background: none; padding: 0; font-size: 12px; line-height: 1.6; overflow: visible; max-height: none; white-space: pre-wrap; word-break: break-word; }
+.pjh-fprev .fp-code:not(.is-code) { font-size: 13px; line-height: 1.7; }
+.pjh-fprev .fp-md { font-size: 13.5px; line-height: 1.7; max-height: none; overflow: visible; }
+.pjh-fprev .fp-md h1 { font-size: 18px; } .pjh-fprev .fp-md h2 { font-size: 15.5px; } .pjh-fprev .fp-md h3 { font-size: 14px; }
+.pjh-fprev .fp-doc { font-size: 13px; line-height: 1.7; }
+.pjh-fprev .fp-img, .pjh-fprev .fp-video { max-width: 100%; max-height: none; height: auto; border-radius: 6px; }
+.pjh-fprev .fp-msg { padding: 28px 12px; font-size: 12.5px; }
+.pjh-fprev.k-img .pjh-fprev-body { display: grid; place-items: center; background: var(--bg-tint); }
+.pjh-fprev.k-pdf { overflow: hidden; }
+.pjh-fprev.k-pdf .pjh-fprev-body { padding: 0; height: 100%; }
+.pjh-fprev.k-pdf .fp-pdf, .pjh-fprev.k-pdf iframe { width: 100%; height: 100%; min-height: 0; border: 0; border-radius: 0; display: block; }
+.pjh-fprev .fp-tablewrap { max-height: none; }
+/* 위젯(3×2) 옆 칸은 낮다 — 미리보기 · 이름 · 종류·크기·수정 · 단추까지. 위치·경로는 모달에서 */
+.pjh-w:not(.pjh-modal) .pjh-fside { padding-left: 16px; }
+.pjh-w:not(.pjh-modal) .pjh-fside .pjh-kv > :nth-child(n+7) { display: none; }
+.pjh-w:not(.pjh-modal) .pjh-fside .pjh-fprev { min-height: 150px; }
+.pjh-w:not(.pjh-modal) .pjh-fside .pjh-fprev.dir { height: 110px; }
+.pjh-w:not(.pjh-modal) .pjh-fside .pjh-fside-tip { display: none; }
+/* 모달 — 왼쪽: 곁칸 «자료» 부품 그대로(테두리 안) · 오른쪽: 고른 것 */
+.pjh-fm { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 34%, 440px); gap: 20px; flex: 1; min-height: 0; }
+.pjh-fm > * { min-width: 0; min-height: 0; }
+.pjh-fm-main { display: flex; flex-direction: column; border: 1px solid var(--line-net); border-radius: 12px; overflow: hidden; background: var(--bg); }
+.pjh-fm-main > .pn-part { flex: 1; min-height: 0; }
+.pjh-modal .pjh-fside { padding-left: 20px; }
+.pjh-modal .pn-fhead { padding: 12px 14px 8px; gap: 8px; }
+.pjh-modal .pn-fcrumb { font-size: 13px; max-width: 180px; }
+.pjh-modal .pn-fbody { padding: 4px 14px 18px; }
+.pjh-modal .pn-fname { font-size: 12.5px; }
+.pjh-modal .pn-fmeta { font-size: 11.5px; }
+.pjh-modal .pn-fnote { margin: 12px 14px 0; }
+.pjh-modal .pn-fnote p { font-size: 12.5px; }
+.pjh-modal .pn-frow2 { font-size: 13.5px; padding: 7px 9px; }
+.pjh-modal .pn-fcol { font-size: 12px; }
+.pjh-modal .pn-fcol.k { width: 56px; } .pjh-modal .pn-fcol.s { width: 70px; } .pjh-modal .pn-fcol.d { width: 78px; }
+@media (max-width: 900px) {
+  .pjh-fm { grid-template-columns: minmax(0, 1fr); flex: none; gap: 14px; }
+  .pjh-fm-main { height: 62vh; min-height: 320px; }
+  .pjh-modal .pjh-fside { padding-left: 0; overflow: visible; }
+  .pjh-modal .pjh-fside .pjh-fprev { flex: none; height: 260px; }
+}
+/* 올리는 중이 아닐 땐 진행 줄 자리가 간격을 먹지 않는다(1×1 몸통이 9px 넘치던 것) */
+.pjh-prog:empty { display: none; }

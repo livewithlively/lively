@@ -20,7 +20,7 @@ import {
   loadHubLayout, matchHubPreset, moveHubItem, resetHubLayout, resizeHubItem, saveHubLayout, setHubScope, showHubItem,
   type HubLayout, type HubTool,
 } from './detail-hub-layout.js';
-import { TOOL_TONE, type Fill, type HubCtx, type HubData, type HubOpts, btn, hubIcon } from './detail-hub-kit.js';
+import { SEP, TOOL_TONE, type Fill, type HubCtx, type HubData, type HubOpts, btn, hubCtxSurface, hubIcon } from './detail-hub-kit.js';
 import { fillTasks } from './detail-hub-tasks.js';
 import { fillSessions } from './detail-hub-sessions.js';
 import { fillBody } from './detail-hub-body.js';
@@ -107,13 +107,15 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
     const back = el('div', { class: 'pjh-mback' }, box);
     back.addEventListener('mousedown', (e: MouseEvent) => { if (e.target === back) closeToolModal(); });
     //  Esc — 위에 뜬 것(태스크 모달 · 팝오버)이 있으면 그쪽 몫이다.
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !document.querySelector('.pjv-tm-back, .pjv-menu')) closeToolModal(); };
+    //   · 이미 누가 그 Esc 를 썼으면(자료 부품의 «고르기 풀기» 등) 닫지 않는다 · 파일 뷰어(.ov-back)·우클릭 메뉴가 떠 있으면 그쪽 먼저.
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !e.defaultPrevented && !document.querySelector('.pjv-tm-back, .pjv-menu, .ov-back, .pn-ctx')) closeToolModal(); };
     const onHash = (): void => closeToolModal();
     document.addEventListener('keydown', onKey);
     window.addEventListener('hashchange', onHash);
     modalOff = () => { document.removeEventListener('keydown', onKey); window.removeEventListener('hashchange', onHash); };
     modalEl = back;
     document.body.append(back);
+    hubCtxSurface(box, () => [{ label: '닫기', icon: 'x', hint: 'Esc', run: () => closeToolModal() }], HUB_TOOL_LABEL[tool]);
     const mctx: HubCtx = { ...ctx, narrow: mq.matches, refreshGrid: () => renderModal(tool), openTool: (t) => { if (!t) closeToolModal(); else if (t !== tool) openToolModal(t); } };
     FILL5[tool](mctx, { view: 'full', w: 3, h: 3, modal: true }, body, foot, sub, acts);
     const restore = (): void => {
@@ -141,6 +143,13 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
     card.append(head, body, foot);
     const fit = { view, w: narrow ? 1 : w, h };
     ctx.narrow = narrow;
+    //  빈 자리 우클릭 — 어느 위젯이든 «크게 열기 · 배치 편집 · 숨기기». 도구가 제 빈 자리 메뉴를 가지면(폴더·본문) 그쪽이 덮어 건다.
+    hubCtxSurface(card, () => [
+      { label: '크게 열기', icon: 'window', run: () => openTool(tool) },
+      SEP,
+      narrow ? null : { label: editing ? '배치 편집 끝내기' : '배치 편집', icon: 'apps', run: () => { editing = !editing; render(); } },
+      narrow ? null : { label: '이 위젯 숨기기', icon: 'x', run: () => commit(hideHubItem(layout, tool)) },
+    ], HUB_TOOL_LABEL[tool]);
     FILL5[tool](ctx, fit, body, foot, sub, acts);
     if (editing) decorateEdit(card, tool, w, h);
     return card;

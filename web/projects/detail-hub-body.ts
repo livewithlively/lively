@@ -7,7 +7,7 @@
 //  편집 = 블록 에디터(detail-body.mountBodyEditor, 항시 자동저장)를 그 자리에 앉힌다. 문장에 붙는 코멘트(시안 3×2 여백 메모)는 서버에
 //  문장 좌표가 없어 아직 못 한다 — 코멘트 칸으로 대신한다(후속).
 import { api, el, personFace, relTime, renderMarkdown, toast } from '../core.js';
-import { type Fill, btn, footText, hubIcon, stripMd } from './detail-hub-kit.js';
+import { type Fill, SEP, btn, copyRow, footText, hubCtx, hubCtxSurface, hubIcon, stripMd } from './detail-hub-kit.js';
 import { bodyCharCount, splitBodyNotes, unreadComments } from './detail-hub-model.js';
 
 const readKey = (pid: number) => 'pjv_cmt_read_' + pid;
@@ -77,6 +77,13 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
       paintText();
     } else { EDITING.set(pid, null); paintText(); const ed = textHost.querySelector('[contenteditable]') as HTMLElement | null; if (ed) ed.focus(); }
   };
+  //  빈 자리 우클릭 — 편집 · 본문 복사(마크다운 원문) · 크게 열기. 편집 중 글 위에서는 브라우저 메뉴가 뜬다(붙여넣기·맞춤법).
+  hubCtxSurface((body.closest('.pjh-w') || body) as HTMLElement, () => [
+    { label: EDITING.has(pid) ? '편집 끝내기' : '편집', icon: 'pen', run: () => editBtn.click() },
+    md.trim() ? copyRow('본문 복사', md, '본문을 복사했어요') : null,
+    SEP,
+    f.modal ? { label: '닫기', icon: 'x', hint: 'Esc', run: () => ctx.openTool(null) } : { label: '크게 열기', icon: 'window', run: open },
+  ], '본문');
   // «갱신 · 안내 칩 · 편집» 줄 — 1×1 은 바닥 단추가 그 역할(자리가 없다). 안내 칩은 1×1 이면 본문 위 한 줄.
   const bh = (h >= 2 || w >= 2) ? el('div', { class: 'pjh-bh' }, el('span', { class: 'pjh-bh-l' }, f.modal ? null : el('span', { text: P.updated_at ? '갱신 ' + relTime(P.updated_at) : '' }), notesRow()), editBtn) : null;   // 모달은 머리에 «갱신» 이 이미 있다
   if (bh) textHost.append(bh); else { const nr = notesRow(); if (nr) textHost.append(nr); }
@@ -88,11 +95,12 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
   const withInline = w <= 1 && h >= 3;
   const cmtHost = el('div', { class: 'pjh-cmt-col' });
   const cnt = el('span', { class: 'pjh-wf-txt' }, hubIcon('comment', 13), '코멘트');
-  const cmtCard = (c: any, compact = false): HTMLElement => el('div', { class: 'pjh-cm' + (compact ? ' compact' : '') },
+  const cmtCard = (c: any, compact = false): HTMLElement => hubCtx(el('div', { class: 'pjh-cm' + (compact ? ' compact' : '') },
     personFace(c.actor, 'pjv-ava', c.display_name || ctx.memberName(c.actor)),
     el('div', { class: 'pjh-cm-b' },
       el('div', { class: 'pjh-cm-h' }, el('b', { text: c.display_name || ctx.memberName(c.actor) || '' }), el('span', { text: c.ts ? relTime(c.ts) : '' })),
-      el('div', { class: 'pjh-cm-t', text: stripMd(c.body || '') })));
+      el('div', { class: 'pjh-cm-t', text: stripMd(c.body || '') }))) as HTMLElement,
+  String(c.display_name || ctx.memberName(c.actor) || '코멘트'), '코멘트' + (c.ts ? ' · ' + relTime(c.ts) : ''), () => [copyRow('코멘트 복사', String(c.body || ''))]);
   const composer = (): HTMLElement => {
     const ta = el('textarea', { class: 'pjh-composer-in', rows: '1', placeholder: '코멘트 남기기…' }) as HTMLTextAreaElement;
     const send = el('button', { class: 'pjh-sbtn', type: 'button', title: '보내기 (⌘Enter)' }, hubIcon('send', 12));

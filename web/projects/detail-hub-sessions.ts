@@ -9,7 +9,7 @@
 //  «태스크에 붙이기» = POST /v6/projects/:id/sessions/:sid/task {taskId}(세션 = 태스크 #4084 의 잇기 규칙 그대로).
 import { api, el, personFace, relTime, toast } from '../core.js';
 import { pjvPopover } from './popover.js';
-import { type Fill, type SessView, btn, emptyNote, footText, hubIcon, lastLine, lastTurns, enterSession, sessDot, sessView } from './detail-hub-kit.js';
+import { type CtxRow, type Fill, type SessView, SEP, absUrl, btn, copyRow, emptyNote, footText, hubCtx, hubIcon, lastLine, lastTurns, enterSession, openRouteRow, sessDot, sessView } from './detail-hub-kit.js';
 import { type SessionGroupDef, nodeLabel, sessionGroupsFor, sessionLastActivity, sessionTaskIndex, sortSessions } from './detail-hub-model.js';
 
 // 2칸 이상 도구 줄의 필터·묶기 — 페이지 안에서만 산다(프로젝트별).
@@ -57,6 +57,32 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
       c.onclick = (e) => { e.stopPropagation(); if (o.openTask) o.openTask(Number(t.id)); else location.hash = '#/projects2/t/' + t.id; };
       return c;
     };
+    const attachTo = async (s: any, t: any): Promise<void> => {
+      try {
+        await api(o.base + pid + '/sessions/' + encodeURIComponent(s.id) + '/task', { method: 'POST', body: JSON.stringify({ taskId: t.id }) });
+        toast('«' + (t.name || t.id) + '» 에 붙였습니다 — 태스크가 진행 중이 됩니다');
+        o.reload();
+      } catch (err: any) { toast('붙이지 못했습니다 — ' + (err && err.message || err), true); }
+    };
+    //  우클릭 — 줄 · «지금» 카드 · 옆 칸이 같은 행을 쓴다. 「태스크에 붙이기」 는 하위 메뉴로 열린 태스크를 편다.
+    const sessRows = (s: any): Array<CtxRow | null> => {
+      const v = V(s); const t = taskIdx.get(String(s.id));
+      const href = '#/s/' + encodeURIComponent(String(s.id));
+      return [
+        { label: v.live ? '입장' : '열기', icon: 'term', run: () => enterSession(s) },
+        openRouteRow('새 탭에서 열기', href),
+        SEP,
+        t ? { label: '태스크 열기', icon: 'doc', hint: String(t.name || '').slice(0, 18), run: () => { if (o.openTask) o.openTask(Number(t.id)); else location.hash = '#/projects2/t/' + t.id; } } : null,
+        !t && openTasks.length ? { label: '태스크에 붙이기', icon: 'link', sub: openTasks.slice(0, 14).map((x) => ({ label: String(x.name || ('#' + x.id)).slice(0, 44), run: () => { void attachTo(s, x); } })) } : null,
+        !t && !openTasks.length ? { label: '태스크에 붙이기', icon: 'link', off: true, hint: '열린 태스크 없음' } : null,
+        { label: '세션 기록', icon: 'clock', run: () => { if (o.sessionLog) o.sessionLog(); else ctx.openTool('sessions'); } },
+        SEP,
+        copyRow('세션 이름 복사', String(s.label || s.id)),
+        copyRow('세션 id 복사', String(s.id)),
+        copyRow('링크 복사', absUrl(href), '링크를 복사했어요', 'link'),
+      ];
+    };
+    const withMenu = <T extends HTMLElement>(node: T, s: any): T => hubCtx(node, String(s.label || s.id), '세션 · ' + V(s).label, () => sessRows(s));
     const attachBtn = (s: any): HTMLElement => {
       const b = el('button', { class: 'pjh-sbtn ghost', type: 'button', title: '이 세션을 이 프로젝트의 태스크에 잇는다(세션 = 태스크)' }, hubIcon('link', 12), '태스크에 붙이기');
       b.onclick = (e) => {
@@ -106,16 +132,16 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
       line.hidden = !v.live;
       const meta = el('div', { class: 'pjh-now-m' }, hubIcon('monitor', 12), el('span', { text: nodeLabel(first.node) + ' · ' + v.label + (sessionLastActivity(first) ? ' · ' + relTime(new Date(sessionLastActivity(first)).toISOString()) : '') }),
         el('span', { style: 'margin-left:auto' }, enterBtn(first)));
-      body.append(el('div', { class: 'pjh-now' + (v.key === 'waiting' ? ' wait' : v.live ? ' live' : '') },
+      body.append(withMenu(el('div', { class: 'pjh-now' + (v.key === 'waiting' ? ' wait' : v.live ? ' live' : '') },
         el('div', { class: 'pjh-now-t' }, sessDot(v), el('span', { class: 'pjh-sr-n', text: first.label || first.id }), personFace(first.owner, 'pjv-ava', memberName(first.owner))),
-        line, meta));
+        line, meta) as HTMLElement, first));
       if (v.live) lastLine(first).then((t) => { line.textContent = t; line.hidden = !t; });
       const second = ss[1];
       if (second) {
         const v2 = V(second);
-        body.append(el('div', { class: 'pjh-sr pjh-sr-one', style: 'grid-template-columns:minmax(0,1fr) auto' },
+        body.append(withMenu(el('div', { class: 'pjh-sr pjh-sr-one', style: 'grid-template-columns:minmax(0,1fr) auto' },
           el('div', { class: 'pjh-sr-t' }, sessDot(v2), el('span', { class: 'pjh-sr-n', text: second.label || second.id }), el('span', { class: 'pjh-sr-acts' }, enterBtn(second))),
-          el('span', { class: 'pjh-sr-c' }, el('span', { text: v2.label }), personFace(second.owner, 'pjv-ava', memberName(second.owner)))));
+          el('span', { class: 'pjh-sr-c' }, el('span', { text: v2.label }), personFace(second.owner, 'pjv-ava', memberName(second.owner)))) as HTMLElement, second));
       }
       foot.append(footText('세션 ' + ss.length + (noTask ? ' · 태스크 없는 세션 ' + noTask : '')), newBtn());
       return;
@@ -165,6 +191,7 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
     let side: HTMLElement | null = null;
     const paintSide = (s: any) => {
       if (!side) return;
+      withMenu(side, s);
       const v = V(s); const t = taskIdx.get(String(s.id));
       const tail = el('div', { class: 'pjh-stail', text: v.live ? '마지막 줄을 읽는 중…' : '기록을 읽는 중…' });
       const made = Number(s.created) ? new Date(Number(s.created) < 1e12 ? Number(s.created) * 1000 : Number(s.created)) : null;
@@ -200,7 +227,7 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
         nameCell,
         ...colDefs.map((c) => c.cell(s)));
       if (sidePane) r.onclick = () => { tools.picked = s.id; list.querySelectorAll('.pjh-sr.on').forEach((x) => x.classList.remove('on')); r.classList.add('on'); paintSide(s); };
-      return r;
+      return withMenu(r as HTMLElement, s);
     };
     groups.forEach((g, i) => {
       const cap = caps[i];

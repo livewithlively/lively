@@ -1,8 +1,10 @@
 // projects/detail-hub-kit.ts — 프로젝트 허브 위젯들이 같이 쓰는 **부품과 계약**(#3916·#4164·#4135).
 //  detail-hub.ts(격자·편집 모드)와 위젯 채움 모듈(detail-hub-tasks·detail-hub-sessions …)이 여기서 같은 아이콘·단추·줄·세션 상태를 받는다.
 //  ⚠ 리프만 문다(core · lib/session-open · v2/sess-tail · session-status · popover · detail-hub-layout 타입). 섹션 모듈은 detail.ts 가 공장(HubOpts)으로 넘긴다.
-import { el, sv } from '../core.js';
+import { el, sv, toast } from '../core.js';
 import { openSessionWindow } from '../lib/session-open.js';
+import { copyText, type CtxRow } from '../v2/ctx-menu.js';
+import { bindCtx, bindCtxSurface, requestOpenRoute } from '../v2/ctx-registry.js';
 import { fetchTurns } from '../v2/sess-tail.js';
 import { SESS_STATES, rowDotCls, sessRank, sessStateKey } from '../session-status.js';
 import type { HubTool, HubView } from './detail-hub-layout.js';
@@ -162,3 +164,34 @@ export async function lastTurns(s: any, n = 4): Promise<Array<{ who: string; tex
     return turns.filter((t) => t.text.trim().length > 0).slice(-n).map((t) => ({ who: t.who, text: t.text.trim().replace(/[ \t]+/g, ' ').slice(0, 400) }));
   } catch (_) { return []; }
 }
+
+// ── 우클릭(#4135, 원준 2026-09-27: «마우스 우측도 전체 다 대응되게») ──────────────────────────
+//  허브의 줄·낱장·빈 자리는 전부 우클릭 메뉴를 갖는다. 배선은 앱 공용(v2/ctx-registry — 클래식 화면은 classic-ctx 가 body 에 건다):
+//  요소에 제공자를 묶어 두면(bindCtx) 뿌리가 눌린 자리에서 위로 올라가며 찾는다. 행은 **누를 때** 만든다(그 사이 바뀐 값을 읽게).
+export type { CtxRow };
+type RowsOf = () => Array<CtxRow | null | false | undefined>;
+const clean = (rows: RowsOf): CtxRow[] => {
+  const out: CtxRow[] = [];
+  for (const r of rows()) { if (!r) continue; if (r.sep && (!out.length || out[out.length - 1].sep)) continue; out.push(r); }   // 구분선이 맨 앞·연달아 서지 않게
+  while (out.length && out[out.length - 1].sep) out.pop();
+  return out;
+};
+/** 줄·낱장 하나에 메뉴를 건다. title = 메뉴 머리(그 항목의 이름), sub = 종류. */
+export function hubCtx<T extends HTMLElement>(node: T, title: string, sub: string, rows: RowsOf): T {
+  bindCtx(node, () => ({ title, sub, rows: clean(rows) }));
+  return node;
+}
+/** 빈 자리(위젯 카드 · 모달 몸통)의 메뉴. */
+export function hubCtxSurface<T extends HTMLElement>(node: T, rows: RowsOf, title?: string): T {
+  bindCtxSurface(node, () => ({ title, rows: clean(rows) }));
+  return node;
+}
+export const SEP: CtxRow = { sep: true, label: '' };
+export const copyRow = (label: string, text: string, done = '복사했어요', icon = 'copy'): CtxRow =>
+  ({ label, icon, run: () => { void copyText(text).then((ok) => { if (ok) toast(done); }); } });
+/** 복사해 줄 주소 — 액자(embed=1) 안에서도 셸 주소로(그 표식을 뗀다). */
+export const absUrl = (href: string): string => {
+  try { const u = new URL(href, location.href); u.searchParams.delete('embed'); return u.toString(); } catch (_) { return href; }
+};
+/** 셸 탭으로 연다(액자 안이면 부모 창에 부탁한다 — ctx-registry.requestOpenRoute). */
+export const openRouteRow = (label: string, href: string, icon = 'columns', hint = '셸 탭'): CtxRow => ({ label, icon, hint, run: () => requestOpenRoute(href, true) });
