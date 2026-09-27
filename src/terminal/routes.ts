@@ -75,7 +75,7 @@ import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable, unknownStateM
 import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js";   // #1851 — 세션 휴지통
 import { trashMapFor } from "../sessions/session-trash.js";                        // #1851 — 목록 행에 휴지통 표식
 import { sessionHandoffInput } from "./session-handoff.js";
-import { forkInheritsTask, forkRefusal, sessionForkInput } from "./session-fork.js";   // #4135 — 세션 복제(이 대화를 아는 새 세션)
+import { forkCheckFromNodeStat, forkInheritsTask, forkRefusal, sessionForkInput, shouldAskNodeForTranscript } from "./session-fork.js";   // #4135 — 세션 복제(이 대화를 아는 새 세션)
 import { sessionTaskOf } from "../v6/session-task.js";   // #4135 — 복제본이 물려받을 태스크
 import { resumePlan, resumedKind, type ResumeCheck } from "./resume-plan.js";   // #3870 — 이어받기 인자 결정(순수·엣지 표 시험)
 import { claudeProjectsDirExact } from "./terminal-transcript.js";   // #3870 — 규약으로 폴더를 정확히 짚을 수 있나
@@ -1438,9 +1438,18 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  원래 세션이 **지금 도는** 하네스 대화 id — 복원과 같은 세 출처(행 · 노드 내구 맵 · 저장된 대화 파일 경로, #2122).
     const durable = st && nodeId && !st.claude_session_id ? ((await nodeSessionMapFor([id]).catch(() => null))?.get(id) ?? null) : null;
     const convId = st ? (st.claude_session_id || durable?.conv_uuid || convIdFromTranscriptPath(st.harness, st.transcript_path) || null) : null;
-    const check: ResumeCheck = st && st.owner === me && convId ? await resumeTranscriptCheck(id, st, convId, nodeId || null) : "unknown";
+    let check: ResumeCheck = st && st.owner === me && convId ? await resumeTranscriptCheck(id, st, convId, nodeId || null) : "unknown";
+    //  원래 세션이 그 노드에 지금 살아 있나 — 스냅샷이 근거다.
+    const sourceLive = !!nodeId && nodeOfSession(id) === nodeId;
+    //  사람 PC 노드 — 게이트웨이는 그 파일을 못 본다. 살아 있는 세션이면 노드에 직접 묻는다(shouldAskNodeForTranscript 머리말).
+    if (st && shouldAskNodeForTranscript({
+      check, harness: st.harness, nodeId, convId, dirExact: !!st.dir && claudeProjectsDirExact(st.dir),
+      sourceLive, nodeCanStat: !!nodeId && nodeSupports(nodeId, "chatTranscript"),
+    })) {
+      check = forkCheckFromNodeStat(await nodeRpc(nodeId, "chatTranscript", { id, threadId: convId, offset: 0, len: 0 }).catch(() => null));
+    }
     const no = forkRefusal({
-      st, me, convId, check, nodeId,
+      st, me, convId, check, nodeId, sourceLive,
       nodeOnline: nodeId ? nodeOnline(nodeId) : false,
       nodeCanFork: nodeId ? nodeSupports(nodeId, "forkSession") : false,
     });

@@ -8,7 +8,7 @@ import { SESSION_OPS } from "./session-ops.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { FORK_LABEL_MAX, forkInheritsTask, forkLabel, forkRefusal, forkSupported, sessionForkInput, type ForkFacts } from "./session-fork.js";
+import { FORK_LABEL_MAX, forkCheckFromNodeStat, forkInheritsTask, forkLabel, forkRefusal, forkSupported, sessionForkInput, shouldAskNodeForTranscript, type ForkFacts } from "./session-fork.js";
 
 const CONV = "0199b1a2-1f3e-7c44-9c2a-3b0f5d6e7a8b";
 const st = (over: Partial<SessionState> = {}): SessionState => ({
@@ -117,4 +117,51 @@ test("F8 createSession — fork 는 이어받기보다 앞서고, pane 이 셸�
   assert.ok(src.slice(iFork, iResume).includes("harness.forkArgv(input.fork)"), "fork 분기가 하네스의 복제 argv 를 싣는다");
   assert.ok(/const chatMode = \(input\.loginFor \|\| input\.fork\) \? "tmux"/.test(src), "fork 면 codex 도 터미널 TUI 로 뜬다");
   assert.ok(/const chatRuntime = !input\.loginFor && !input\.fork && /.test(src), "fork 면 대화 런타임으로 가지 않는다");
+});
+
+// ── 2026-09-28 매니지드 실측: 사람 PC 노드의 Claude Code 세션은 말을 주고받기 전에도 복제가 받아들여졌고,
+//    복제본은 «No conversation found with session ID» 로 끝난 채 열렸다. 노드에 직접 물어 거절한다.
+test("F9 노드에 물을 때 — 게이트웨이가 못 본 · 살아 있는 · claude 세션만", () => {
+  const ask = (over: Partial<Parameters<typeof shouldAskNodeForTranscript>[0]> = {}): boolean => shouldAskNodeForTranscript({
+    check: "unknown", harness: "claude", nodeId: "mac", convId: CONV, dirExact: true, sourceLive: true, nodeCanStat: true, ...over,
+  });
+  assert.equal(ask(), true);
+  assert.equal(ask({ harness: null }), true, "하네스가 비어 있으면 claude 다(기본값)");
+  assert.equal(ask({ check: "present" }), false, "게이트웨이가 이미 확답을 냈다");
+  assert.equal(ask({ check: "absent" }), false);
+  assert.equal(ask({ nodeId: "" }), false, "박스 세션 — 물을 노드가 없다");
+  assert.equal(ask({ convId: null }), false, "대화 id 가 없으면 앞의 판정이 거절한다");
+  assert.equal(ask({ harness: "codex" }), false, "Codex 는 말하기 전에는 대화 id 가 없다 — 물을 일이 없다");
+  assert.equal(ask({ dirExact: false }), false, "규약으로 폴더를 못 짚으면 노드의 빈손도 «없다» 가 아니다");
+  assert.equal(ask({ sourceLive: false }), false, "노드는 제 tmux 에 있는 세션의 파일만 찾는다");
+  assert.equal(ask({ nodeCanStat: false }), false, "옛 번들 — 종전대로 확인 없이 띄운다");
+});
+
+test("F10 노드의 답 → 세 값 — 모양이 어긋난 답은 «못 봤다» 다", () => {
+  assert.equal(forkCheckFromNodeStat({ found: true, size: 1200, offset: 0, data: "", eof: false }), "present");
+  assert.equal(forkCheckFromNodeStat({ found: false, size: 0, offset: 0, data: "", eof: true }), "absent");
+  assert.equal(forkCheckFromNodeStat({ found: true, size: 0 }), "absent", "0바이트 파일은 하네스가 못 읽는다");
+  for (const bad of [null, undefined, "", 0, [], { size: 10 }, { found: "yes", size: 10 }, { found: true }, { found: true, size: -1 }, { found: true, size: "x" }]) {
+    assert.equal(forkCheckFromNodeStat(bad), "unknown", JSON.stringify(bad) ?? String(bad));
+  }
+});
+
+test("F11 대화 파일이 없을 때의 말 — 살아 있는 세션이면 «아직 말을 안 했다», 아니면 «기록이 없다»", () => {
+  assert.match(forkRefusal(facts({ check: "absent", sourceLive: true }))?.message || "", /아직 복제할 대화가 없습니다/);
+  assert.match(forkRefusal(facts({ check: "absent", sourceLive: false }))?.message || "", /대화 기록을 찾지 못했습니다/);
+  assert.match(forkRefusal(facts({ check: "absent" }))?.message || "", /대화 기록을 찾지 못했습니다/, "모르면 종전 말 그대로");
+  assert.equal(forkRefusal(facts({ check: "absent", sourceLive: true }))?.status, 409);
+  // 남의 세션이면 그 말이 먼저다
+  assert.equal(forkRefusal(facts({ me: "yoon", check: "absent", sourceLive: true }))?.status, 403);
+});
+
+test("F12 라우트 — 노드에 묻는 자리는 판정(shouldAskNodeForTranscript)을 지나고, 답은 forkCheckFromNodeStat 로 읽는다", () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const src = fs.readFileSync(path.join(here, "../../src/terminal/routes.ts"), "utf8");
+  const i = src.indexOf('app.post("/api/ui/terminal/sessions/:id/fork"');
+  assert.ok(i > 0);
+  const body = src.slice(i, src.indexOf("res.json({ ok: true, from: id, session })", i));
+  assert.match(body, /shouldAskNodeForTranscript\(\{[\s\S]*?\}\)\)\s*\{\s*check = forkCheckFromNodeStat\(await nodeRpc\(nodeId, "chatTranscript", \{ id, threadId: convId, offset: 0, len: 0 \}\)\.catch\(\(\) => null\)\)/);
+  assert.ok(body.indexOf("forkCheckFromNodeStat(") < body.indexOf("const no = forkRefusal("), "묻기가 거절 판정보다 앞이다");
+  assert.match(body, /forkRefusal\(\{[\s\S]*?sourceLive/);
 });

@@ -57,9 +57,43 @@ export interface ForkFacts {
   nodeOnline: boolean;
   /** 그 노드가 `forkSession` op 를 선언했나(nodeId 가 있을 때만 본다). */
   nodeCanFork: boolean;
+  /** 원래 세션이 지금 살아 있나 — 대화 파일이 없는 이유를 가른다(살아 있으면 «아직 말을 안 했다», 아니면 «기록이 없다»). 생략 = 모른다. */
+  sourceLive?: boolean;
 }
 
 export interface ForkRefusal { status: number; message: string }
+
+const NO_TALK_YET = "이 세션에는 아직 복제할 대화가 없습니다 — 한 번이라도 말을 주고받은 뒤에 복제할 수 있어요.";
+
+/**
+ * 대화 파일이 그 컴퓨터에 있는지 **노드에 직접 물을까** (2026-09-28 매니지드 실측).
+ *  게이트웨이는 사람 PC 노드의 파일을 못 본다(`unknown`). 그대로 띄우면 말을 주고받기 전의 Claude Code 세션도 복제가 받아들여지고,
+ *  복제본은 «No conversation found with session ID» 로 끝난 채 열린다. 원래 세션이 그 노드에 살아 있으면 노드가 확답을 줄 수 있다.
+ *  · claude 만 — Codex 는 말을 주고받기 전에는 대화 id 자체가 없어 앞의 판정이 이미 거절한다(실측).
+ *  · 작업 폴더를 규약으로 정확히 못 짚으면(dirExact=false) 묻지 않는다 — 노드도 같은 규약으로 찾으므로 빈손이 «없다» 가 아니다.
+ *  · 살아 있지 않은 세션은 묻지 않는다 — 노드는 제 tmux 에 있는 세션의 파일만 찾아 준다.
+ */
+export function shouldAskNodeForTranscript(f: {
+  check: ResumeCheck; harness: string | null | undefined; nodeId: string; convId: string | null | undefined;
+  dirExact: boolean; sourceLive: boolean; nodeCanStat: boolean;
+}): boolean {
+  return f.check === "unknown" && !!f.nodeId && !!String(f.convId ?? "").trim()
+    && String(f.harness || "claude") === "claude" && f.dirExact && f.sourceLive && f.nodeCanStat;
+}
+
+/**
+ * 노드가 돌려준 대화 파일 크기 조회(`chatTranscript` · len=0)의 답 → 세 값.
+ *  모양이 어긋난 답·빈 답은 «못 봤다» 다 — «없다» 로 읽으면 멀쩡한 대화를 두고 복제를 거절한다.
+ */
+export function forkCheckFromNodeStat(raw: unknown): ResumeCheck {
+  if (!raw || typeof raw !== "object") return "unknown";
+  const o = raw as Record<string, unknown>;
+  if (typeof o.found !== "boolean") return "unknown";
+  if (!o.found) return "absent";
+  const size = Number(o.size);
+  if (!Number.isFinite(size) || size < 0) return "unknown";
+  return size > 0 ? "present" : "absent";          // 0바이트 파일은 없는 것으로 본다(하네스가 못 읽는다)
+}
 
 /**
  * 복제를 거절해야 하면 그 이유, 아니면 null.
@@ -76,10 +110,13 @@ export function forkRefusal(f: ForkFacts): ForkRefusal | null {
     return { status: 409, message: `${harness?.label || st.harness || "이 AI"} 세션은 아직 복제할 수 없습니다 — 지금은 Claude Code 와 Codex 세션만 됩니다.` };
   }
   const conv = String(f.convId ?? "").trim();
-  if (!conv || !RESUME_ID_RE.test(conv)) {
-    return { status: 409, message: "이 세션에는 아직 복제할 대화가 없습니다 — 한 번이라도 말을 주고받은 뒤에 복제할 수 있어요." };
+  if (!conv || !RESUME_ID_RE.test(conv)) return { status: 409, message: NO_TALK_YET };
+  if (f.check === "absent") {
+    //  살아 있는 세션인데 대화 파일이 없다 = 하네스가 대화 id 는 받았지만 아직 한 줄도 적지 않았다(Claude Code 는 첫 말을 받아야 파일을 만든다).
+    return f.sourceLive
+      ? { status: 409, message: NO_TALK_YET }
+      : { status: 409, message: "복제할 대화 기록을 찾지 못했습니다 — 세션이 있던 컴퓨터에 그 기록이 남아 있지 않습니다." };
   }
-  if (f.check === "absent") return { status: 409, message: "복제할 대화 기록을 찾지 못했습니다 — 세션이 있던 컴퓨터에 그 기록이 남아 있지 않습니다." };
   if (f.nodeId) {
     if (!f.nodeOnline) return { status: 409, message: "그 세션이 있는 컴퓨터가 지금 연결돼 있지 않아 복제할 수 없습니다 — 컴퓨터가 켜지면 다시 시도하세요." };
     //  op 를 선언하지 않은 노드에 create 로 보내면 fork 를 모르는 번들이 **빈 새 대화**를 연다(node/protocol.ts 머리말).
