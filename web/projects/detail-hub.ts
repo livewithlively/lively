@@ -114,7 +114,7 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
     modalOff = () => { document.removeEventListener('keydown', onKey); window.removeEventListener('hashchange', onHash); };
     modalEl = back;
     document.body.append(back);
-    const mctx: HubCtx = { ...ctx, narrow: false, refreshGrid: () => renderModal(tool), openTool: (t) => { if (!t) closeToolModal(); else if (t !== tool) openToolModal(t); } };
+    const mctx: HubCtx = { ...ctx, narrow: mq.matches, refreshGrid: () => renderModal(tool), openTool: (t) => { if (!t) closeToolModal(); else if (t !== tool) openToolModal(t); } };
     FILL5[tool](mctx, { view: 'full', w: 3, h: 3, modal: true }, body, foot, sub, acts);
     const restore = (): void => {
       if (modalEl !== back) return;

@@ -127,7 +127,12 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
       return el('div', { class: 'pjh-fc' + (nav.picked === rel ? ' on' : ''), title: it.name, onclick: () => openItem(it, rel) },
         tile(it, rel),
         el('div', { class: 'pjh-fc-n', text: it.name }),
-        el('div', { class: 'pjh-fc-m', text: [it.type === 'dir' ? '폴더' : fmtSize(it.size || 0), it.mtime ? relTime(new Date(it.mtime).toISOString()) : ''].filter(Boolean).join(' · ') }));
+        (() => {
+          const when = it.mtime ? relTime(new Date(it.mtime).toISOString()) : '';
+          const m = el('div', { class: 'pjh-fc-m', text: [it.type === 'dir' ? '폴더' : fmtSize(it.size || 0), when].filter(Boolean).join(' · ') });
+          if (it.type === 'dir') listDir(rel).then((its: any[]) => { m.textContent = ['폴더 · ' + its.length + '개', when].filter(Boolean).join(' · '); });   // 하위 폴더 낱장(모달) — 안에 든 수
+          return m;
+        })());
     };
     const tree = (): HTMLElement => {
       const t = el('div', { class: 'pjh-tree' });
@@ -184,7 +189,7 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
       return;
     }
     // 2×2 이상 — 나무 + 경로 줄 + 낱장 격자 (+ 3×2 옆 칸)
-    const cols = modal ? 5 : w >= 3 ? 3 : 4;
+    const cols = modal ? (ctx.narrow ? 3 : 5) : w >= 3 ? 3 : 4;
     const grid = el('div', { class: 'pjh-fgrid tall', style: 'grid-template-columns:repeat(' + cols + ',1fr)', 'data-mscroll': 'files' });
     // 낱장 한 줄 높이 = 4:3 타일(3칸 3열 ≈150px 폭 → 112 · 2칸 4열 ≈120px 폭 → 90) + 이름·메타 39 + 간격 10. 몸통(칸 높이 − 크롬 122)에서 경로 줄 38px 을 뺀다. 마지막 자리는 «끌어다 놓기».
     //  ★ 자르지 않는다(2026-09-27) — 전부 세우고 격자 안에서 스크롤. 모달은 하위 폴더도 낱장으로 앞에 세우고 고른 기준으로 정렬한다.
@@ -208,7 +213,7 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
       return c;
     };
     const main = el('div', { class: 'pjh-fmain' }, modal ? crumbM() : crumb(), grid, progBox);
-    const parts: HTMLElement[] = [tree(), main];
+    const parts: HTMLElement[] = modal ? [main] : [tree(), main];   // 모달: 나무 없이 — 폴더는 낱장으로 앞에 서고 경로 줄로 오르내린다(목록 폭을 나무에 내주지 않는다)
     let picked: any = null;
     if (w >= 3) {
       const pr = nav.picked ? items.find((it: any) => relOf(it.name) === nav.picked) : null;
@@ -232,7 +237,7 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
       }
       parts.push(side);
     }
-    body.append(el('div', { class: 'pjh-two-f', style: 'grid-template-columns:' + (modal ? '220px minmax(0,1fr) 380px' : '170px minmax(0,1fr)' + (w >= 3 ? ' 300px' : '')) }, ...parts));
+    body.append(el('div', { class: 'pjh-two-f', style: 'grid-template-columns:' + (modal ? 'minmax(0,1fr) 300px' : '170px minmax(0,1fr)' + (w >= 3 ? ' 300px' : '')) }, ...parts));
     foot.append(footText(rootLabel + (modal ? ' · 이 폴더 파일 ' + cur.files.length + ' · 폴더 ' + cur.dirs.length : '') + (picked ? ' · 고른 것: ' + picked.name : '')));
     if (!modal) foot.append(btn('폴더 열기', 'btn-ghost', open));
   });

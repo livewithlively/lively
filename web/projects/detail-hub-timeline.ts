@@ -182,7 +182,7 @@ export const fillTimeline: Fill = (ctx, f, body, foot, sub) => {
           : [el('div', { class: 'pjh-rail-fine', text: '이 기록에 이어진 지식이 없습니다.' })]));
     }
     body.append(legend('점 크기 = 그날 건수 · 옅은 열 = 주말 · 점을 누르면 아래가 그날 그 사람의 기록으로 좁혀집니다'), toolsRow,
-      el('div', { class: 'pjh-mtwo', style: 'grid-template-columns:minmax(0,1fr) 420px' }, el('div', { class: 'pjh-mmain' }, listBox), side));
+      el('div', { class: 'pjh-mtwo', style: 'grid-template-columns:minmax(0,1fr) 380px' }, el('div', { class: 'pjh-mmain' }, listBox), side));
     foot.append(footText(nDays + '일 레인 · 전체 ' + sorted.length + '건 · 이번 주 ' + week + '건 · 오늘 ' + today + '건 — 이 프로젝트에 연결된 작업만'));
   });
 };

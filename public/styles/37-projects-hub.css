@@ -644,3 +644,29 @@ button.pjh-rail-r:hover { background: var(--bg-tint); color: var(--ink); }
   .pjh-modal .pjh-mtwo { flex: none; }
   .pjh-modal .pjh-tree { display: flex; flex-direction: row; flex-wrap: wrap; }
 }
+/* 모달 폭은 화면 틀(≈1000px) 안 — 목록이 주인이다: 태스크 요약은 위 띠로, 폴더는 나무 없이, 지식 가운데는 화살표만 */
+.pjh-sum { display: flex; align-items: stretch; gap: 10px; flex: none; flex-wrap: wrap; }
+.pjh-sum-g { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px; border-radius: 12px; background: var(--bg-tint); border: 1px solid var(--line-net); min-width: 0; }
+.pjh-sum-g.prog { flex-direction: row; align-items: center; gap: 12px; }
+.pjh-sum-g .pjh-rail-h { margin-bottom: 0; }
+.pjh-sum-big { font-size: 20px; font-weight: 800; letter-spacing: -.5px; line-height: 1.2; color: var(--ink); }
+.pjh-sum-big small { font-size: 12.5px; font-weight: 600; letter-spacing: 0; color: var(--muted-2); }
+.pjh-sum-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pjh-sum-c { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); cursor: pointer; white-space: nowrap; }
+.pjh-sum-c:hover { border-color: var(--line-net); color: var(--ink); }
+.pjh-sum-c b { font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
+.pjh-sum-c.on { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.pjh-sum-c.on b { color: var(--bg); }
+.pjh-sum-c.danger b { color: var(--danger-ink); }
+.pjh-sum-c.on.danger b { color: var(--bg); }
+.pjh-sum-c .pjv-ava { width: 18px; height: 18px; font-size: 9px; }
+.pjh-sum-k { display: inline-flex; align-items: center; gap: 6px; }
+.pjh-crumb { flex-wrap: nowrap; min-width: 0; }
+.pjh-crumb-sp { flex: none; align-items: center; }
+.pjh-seg button { white-space: nowrap; }
+.pjh-modal .pjh-kflow { grid-template-columns: minmax(0, 1fr) 44px minmax(0, 1fr); gap: 8px; }
+.pjh-modal .pjh-kmid .pjh-kpj, .pjh-modal .pjh-kmid .pjh-kpj-m, .pjh-modal .pjh-kmid .pjh-karrow + .pjh-kpj ~ .pjh-karrow { display: none; }
+.pjh-modal .pjh-kc-h .pjh-kr-t, .pjh-modal .pjh-side .pjh-kr .pjh-kr-t { white-space: normal; overflow: visible; line-height: 1.4; }
+.pjh-modal .pjh-side .pjh-kr { min-height: 40px; padding: 6px; align-items: flex-start; }
+.pjh-modal .pjh-side .pjh-kr > .pjh-ic { margin-top: 3px; }
+.pjh-modal .pjh-klabel { flex-wrap: wrap; }

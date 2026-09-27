@@ -205,7 +205,7 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
 
     if (sidePane) {
       side = el('div', { class: 'pjh-side' });
-      body.append(el('div', { class: 'pjh-two-s', style: modal ? 'grid-template-columns:minmax(0,1fr) 420px' : '' }, list, side));
+      body.append(el('div', { class: 'pjh-two-s', style: modal ? 'grid-template-columns:minmax(0,1fr) 360px' : '' }, list, side));
       const picked = ss.find((s) => s.id === tools.picked) || ss[0];
       tools.picked = picked.id;
       list.querySelectorAll('.pjh-sr').forEach((x) => x.classList.toggle('on', (x as HTMLElement).dataset.sid === String(picked.id)));

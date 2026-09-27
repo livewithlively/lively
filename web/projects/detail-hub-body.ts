@@ -108,7 +108,7 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
     return el('div', { class: 'pjh-composer' }, ta, send);
   };
 
-  if (withCol) body.append(el('div', { class: 'pjh-two-b', style: 'grid-template-columns:minmax(0,1fr) ' + (modal ? 400 : w >= 3 ? 250 : 220) + 'px' }, textHost, cmtHost));
+  if (withCol) body.append(el('div', { class: 'pjh-two-b', style: 'grid-template-columns:minmax(0,1fr) ' + (modal ? 340 : w >= 3 ? 250 : 220) + 'px' }, textHost, cmtHost));
   else { body.append(textHost); if (withInline) body.append(cmtHost); }
 
   ctx.D.comments().then((cs: any[]) => {

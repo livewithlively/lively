@@ -160,7 +160,7 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
     side.append(el('div', { class: 'pjh-side-l', text: '필요 지식 찾기' }), searchBox('찾을 말을 치세요…'), results);
     results.hidden = false;
     // 옆 칸에선 결과가 옆 칸에 서고 흐름은 그대로 남는다
-    const wrap = el('div', { class: 'pjh-two-s', style: 'grid-template-columns:minmax(0,1fr) ' + (modal ? 400 : 320) + 'px' });
+    const wrap = el('div', { class: 'pjh-two-s', style: 'grid-template-columns:minmax(0,1fr) ' + (modal ? 330 : 320) + 'px' });
     body.replaceChildren(wrap); wrap.append(normal, side);
     normal.hidden = false;
     side.append(el('div', { class: 'pjh-stat', text: '찾을 말을 치면 뜻이 가까운 지식이 여기 섭니다. 연결하면 다음 세션부터 AI 가 그 문서를 읽고 시작합니다.' }));   // 결과 바로 아래(빈 칸 끝에 홀로 두지 않는다)
