@@ -21,6 +21,7 @@ import { copyText, openLocalWorkModal } from '../projects.js';
 import { PJV_TAG_NONE } from '../taskmodal/tags.js';
 import { avatarColor } from './files.js';
 import { pjvIcon } from './icons.js';
+import { ICONS } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { pjvPopover } from './popover.js';
 import { pjvFolderDrag, pjvLocalSortOverride, pjvSortCtx } from './state.js';
 import { PJV_PRIORITY, PJV_PRIORITY_ORDER, pjvStatusIconStd } from './status.js';
@@ -116,7 +117,7 @@ function pjvBulkIcon(kind) {
   if (kind === 'status') return svg(sv('circle', { cx: '12', cy: '12', r: '8.2' }), sv('path', { d: 'M8.5 12.2l2.4 2.4 4.6-5' }));
   if (kind === 'tag') return svg(sv('path', { d: 'M4 4h7l9 9-7 7-9-9z' }), sv('circle', { cx: '8.2', cy: '8.2', r: '1.3' }));
   if (kind === 'dup') return svg(sv('rect', { x: '8', y: '8', width: '12', height: '12', rx: '2' }), sv('path', { d: 'M4 16V5a1 1 0 0 1 1-1h11' }));
-  if (kind === 'trash') return svg(sv('path', { d: 'M5 7h14M10 7V5.5h4V7M6.5 7l1 12.5h9l1-12.5' }));
+  if (kind === 'trash') return svg(sv('path', { d: ICONS.trash }));   // #4233: 사이드바 휴지통과 같은 그림
   if (kind === 'list') return svg(sv('path', { d: 'M8 6h12M8 12h12M8 18h12' }), sv('circle', { cx: '4', cy: '6', r: '1.2' }), sv('circle', { cx: '4', cy: '12', r: '1.2' }), sv('circle', { cx: '4', cy: '18', r: '1.2' }));
   if (kind === 'run') return svg(sv('path', { d: 'M8 5.4v13.2l11-6.6z', fill: 'currentColor', stroke: 'currentColor', 'stroke-width': '1.6', 'stroke-linejoin': 'round' }));
   if (kind === 'settings') return svg(sv('path', { d: 'M4 8h9M17 8h3M4 16h3M11 16h9' }), sv('circle', { cx: '15', cy: '8', r: '2.2' }), sv('circle', { cx: '9', cy: '16', r: '2.2' }));

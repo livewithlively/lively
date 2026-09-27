@@ -19,6 +19,7 @@
 //  ── 데스크톱/웹 공용 ──
 //  이 파일은 셸(web/v2)의 일부라 브라우저에서 연 웹 UI 와 데스크톱 앱이 같은 코드를 쓴다. 데스크톱 전용 통로 없음.
 import { api, el, sv } from '../core.js';
+import { ICONS } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { appHref, visibleApps } from './apps.js';
 import { appMatches } from '../lib/app-match.js';   // #4233 옛 이름으로도 찾는다(런치패드와 같은 잣대)
 import { sessText } from './side.js';
@@ -54,13 +55,13 @@ const GROUPS: Array<{ kind: Kind; label: string }> = [
   { kind: 'app', label: '화면' },
 ];
 const KIND_LABEL: Record<Kind, string> = { proj: '프로젝트', know: '지식', src: '자료', sess: '세션', hist: '세션 이력', app: '화면' };
-// 아이콘은 셸의 붓 그대로(24 뷰박스·현재색 스트로크) — 사이드바·탭과 같은 모양이라 종류가 눈에 먼저 든다.
+// 아이콘은 사이드바 · 레일과 같은 그림이다(#4233, lib/icon-paths.ts 한 벌). 「화면」만 여기서 그린다(그 표에 없는 뜻).
 const KIND_PATH: Record<Kind, string[]> = {
-  proj: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
-  know: ['M4 5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2zM8 7h8M8 11h6'],
-  src: ['M6 3h8l4 4v14H6z', 'M14 3v4h4', 'M9 12h6M9 16h4'],
-  sess: ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z'],
-  hist: ['M12 7v5l3 2', 'M3.5 12a8.5 8.5 0 1 0 2.6-6.1M3 4v4h4'],
+  proj: [ICONS.folder],
+  know: [ICONS.wiki],
+  src: [ICONS.src],
+  sess: [ICONS.chat],
+  hist: [ICONS.sess],
   app: ['M4 5h16v12H4z', 'M4 9h16'],
 };
 const icon = (k: Kind, cls: string): SVGElement =>

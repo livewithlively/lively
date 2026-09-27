@@ -15,7 +15,13 @@
 //   G4 앱 표(APPS)의 icon 이 전부 appIcon 의 표와 앱 아이콘 이름에 있다
 //   G5 우클릭 메뉴 줄의 icon: '이름' 이 전부 표에 있다
 //   G6 그림 표가 한 곳뿐이다(panes-kit · connect · side 에 path 표가 없다)
-//   G6 「맥락 관리」 화면 머리 · 사이드바 「세션 이력」 줄도 표의 그림을 쓴다
+//   G6 사이드바 「세션 이력」 줄도 표의 그림을 쓴다
+//   H1 앱 화면 머리: 「수집 · 증류」 머리는 표의 ctx 를 획 1.7 로, 「사용 가이드」 머리는 표의 learn 을 그린다
+//   H2 통합검색의 종류 아이콘(프로젝트 · 지식 · 자료 · 세션 · 세션 이력)이 표의 그림이다
+//   H3 종(알림): [나] 창의 「알림」 · 태스크 창의 활동 구독이 표의 bell 이다
+//   H4 휴지통: 사이드바의 휴지통 단추 둘 · 세션 설정 창 「정리」 · 프로젝트 · 대시보드의 휴지통이 표의 trash 다
+//   H5 증류기 카드의 「모든 자료」 그림 · 클래식 AI 세션의 「세션 기록」 단추 · 가이드의 집과 책이 표의 그림이다
+//   H6 손으로 그린 옛 그림(집 · 깔때기 · 상자 · 휴지통 · 가로 고리 · 종 · 책 · 태그 묶음)이 web/ 에 남아 있지 않다
 //   G7 새 값 비었음: 표에 없는 이름을 icon() 이 받으면 「앱」 그림으로 떨어진다(던지지 않는다). 빈 문자열도 같다
 //   P1 앱 아이콘: 타일 하나 + 그 앱의 선 그림 + 그 앱의 색 토큰
 //   P2 앱 아이콘: 앱 이름 → 선 그림 이름(홈(클래식) = dashboard, 설정 = gear, 나머지는 같은 이름)
@@ -181,8 +187,6 @@ ok(miss5.length === 0, "G5 우클릭 메뉴 줄의 icon 이 전부 표에 있다
 
 const SIDE = srcOf["web/v2/side.ts"] || "", CONNECT = srcOf["web/v2/connect.ts"] || "";
 {
-  const C = srcOf["web/context.ts"] || "", f = C.slice(C.indexOf("function ctxAppIcon("));
-  ok(/d: ICONS\.ctx/.test(f.slice(0, f.indexOf("\n}\n"))), "G6 「맥락 관리」 화면 머리의 그림이 표의 ctx 다(제 path 를 따로 그리지 않는다)");
   ok(/footLink\('#\/app\/sessions', 'sess',/.test(SIDE), "G6 사이드바 「세션 이력」 줄이 세션 이력 앱과 같은 그림(sess)을 쓴다");
 }
 ok(!/const ICON_PATHS\b/.test(KIT) && /from '\.\.\/lib\/icon-paths\.js'/.test(KIT), "G6 우측 사이드바(panes-kit)에 제 그림 표가 없고 한 벌을 읽는다");
@@ -190,6 +194,44 @@ ok(!/const ICON_PATH\b/.test(CONNECT) && /from '\.\.\/lib\/icon-paths\.js'/.test
 {
   const a = SIDE.indexOf("function glyph("), g = a >= 0 ? SIDE.slice(a, SIDE.indexOf("\n}\n", a)) : "";
   ok(!!g && !/\bD\[kind\]|const D:/.test(g) && /ICONS\[kind\]/.test(g), "G6 사이드바 glyph() 에 예비 표가 없다");
+}
+
+// ── H. 손으로 그린 사본 ──
+{
+  const fn = (src, name) => { const i = src.indexOf("function " + name + "("); return i < 0 ? "" : src.slice(i, src.indexOf("\n}\n", i)); };
+  const C = srcOf["web/context.ts"] || "", LEARN = srcOf["web/learn.ts"] || "";
+  const hd = fn(C, "ctxAppIcon");
+  ok(/d: ICONS\.ctx\b/.test(hd) && /'stroke-width': 1\.7\b/.test(hd), "H1 「수집 · 증류」 화면 머리: 표의 ctx · 획 1.7");
+  ok(/tabIcon\('help', 'pjv-crumb-ic lg-crumb-ic'\)/.test(LEARN) && /\bhelp: \[\['path', \{ d: ICONS\.learn \}\]\]/.test(LEARN), "H1 「사용 가이드」 화면 머리: 표의 learn");
+  const OMNI = srcOf["web/v2/omni.ts"] || "", kp = OMNI.slice(OMNI.indexOf("const KIND_PATH"), OMNI.indexOf("};", OMNI.indexOf("const KIND_PATH")));
+  const want = { proj: "folder", know: "wiki", src: "src", sess: "chat", hist: "sess" };
+  for (const [k, n] of Object.entries(want)) ok(new RegExp("\\b" + k + ": \\[ICONS\\." + n + "\\]").test(kp), `H2 통합검색 ${k} = 표의 ${n}`);
+  ok(/key: 'notify', label: '알림', icon: \[ICONS\.bell\]/.test(srcOf["web/v2/me-modal.ts"] || ""), "H3 [나] 창 「알림」 = 표의 bell");
+  ok(/PJV_TM_ICONS\.bell = \{ p: \[\['path', \{ d: ICONS\.bell \}\]\] \}/.test(srcOf["web/taskmodal/composer.ts"] || ""), "H3 태스크 창 활동 구독 = 표의 bell");
+  ok(((srcOf["web/v2/side.ts"] || "").match(/sv\('path', \{ d: ICONS\.trash \}\)/g) || []).length >= 2, "H4 사이드바의 휴지통 단추 둘 = 표의 trash");
+  // 「정리」 절은 그 창이 있는 가지에만 있다. 있으면 표의 그림이어야 한다.
+  { const SC = srcOf["web/session-chat.ts"] || ""; ok(!/key: 'tidy'/.test(SC) || /key: 'tidy', label: '정리', icon: \[ICONS\.trash\]/.test(SC), "H4 세션 설정 창 「정리」가 있으면 표의 trash"); }
+  ok(((srcOf["web/projects/icons.ts"] || "").match(/d: ICONS\.trash\b/g) || []).length >= 2 && /d: ICONS\.trash\b/.test(srcOf["web/projects/selection.ts"] || "") && /d: ICONS\.trash\b/.test(srcOf["web/dash/icons.ts"] || ""), "H4 프로젝트(셋) · 대시보드의 휴지통 = 표의 trash");
+  ok(/d: ICONS\.ctx\b/.test(fn(srcOf["web/distillers.ts"] || "", "allSourcesIcon")) && !/funnelIcon/.test(srcOf["web/distillers.ts"] || ""), "H5 증류기 카드의 「모든 자료」 그림 = 표의 ctx");
+  ok(/d: ICONS\.sess\b/.test(fn(srcOf["web/terminal/routes.ts"] || "", "tsessHistoryIcon")), "H5 클래식 AI 세션의 「세션 기록」 단추 = 표의 sess");
+  ok(/\bhome: \[\['path', \{ d: ICONS\.home \}\]\]/.test(LEARN) && /'book-open': \[\['path', \{ d: ICONS\.wiki \}\]\]/.test(LEARN), "H5 가이드의 집 · 책 = 표의 home · wiki");
+  // 옛 그림의 조각. 그림 표 밖에 남아 있으면 그 자리는 옛 그림을 그린다.
+  const OLD = {
+    "집": [/M15 21v-8a1/, /M3\.5 11\.2 12 4\.5/, /M4 11l8-7 8 7/, /M3 9l9-7 9 7v11/],
+    "깔때기": [/l-6\.2 7\.2V18/, /M22 3H2l8 9\.46/],
+    "상자": [/M3 6h18v4H3z/, /M3 3h18a1 1 0 0 1 1 1v3a1 1/],
+    "휴지통": [/M9 7V4h6v3/, /M6 7l1 13h10l1-13/, /M19 6v14a2 2 0 0 1-2 2H7/, /M6\.4 6\.6l\.83 12\.5/, /M6 7l1 12a2 2 0 0 0 2 2h6/, /M6\.5 7l1 12\.5h9l1-12\.5/],
+    "가로 고리": [/M9 17H7A5 5 0 0 1 7 7h2/, /M10\.5 13\.5a4 4 0 0 0 5\.7 0/],
+    "종": [/M6 8a6 6 0 0 1 12 0c0 7/, /M18 8a6 6 0 0 0-12 0c0 7/, /M12 4\.2a5 5 0 0 0-5 5v3\.1/],
+    "책": [/M12 7v14 M3 18a1 1/, /M2 3h6a4 4 0 0 1 4 4v14/, /M4 5a2 2 0 0 1 2-2h12v16H6/],
+    "태그 묶음": [/M9\.586 5\.586A2 2/],
+  };
+  const left = [];
+  for (const [f, src] of Object.entries(srcOf)) {
+    if (f === "web/lib/icon-paths.ts") continue;
+    for (const [name, pats] of Object.entries(OLD)) if (pats.some((re) => re.test(src))) left.push(`${name} ${f}`);
+  }
+  ok(left.length === 0, "H6 손으로 그린 옛 그림이 web/ 에 남아 있지 않다", left.join(" | "));
 }
 
 // ── G7 · P. icon() 과 앱 아이콘을 값으로 부른다 ──

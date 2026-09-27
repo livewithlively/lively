@@ -2,6 +2,7 @@
 //  프로젝트 화면의 라인 아이콘 팩(태그 · 셀 · 하위태스크 · 사이드바/툴바 · 뷰 탭 · 커스텀 필드).
 //  전부 순수 함수(입력 → 새 SVG 노드) — 상태도 리스너도 없다. 톤 규약은 아래 '툴바 아이콘' 주석 참고.
 import { sv } from '../core.js';
+import { ICONS } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 
 function pjvTagGearIcon() {
   const n = sv('svg', { class: 'pjv-tm-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
@@ -11,7 +12,7 @@ function pjvTagGearIcon() {
 }
 function pjvTagTrashIcon() {
   const n = sv('svg', { class: 'pjv-tm-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  n.append(sv('polyline', { points: '4 7 20 7' }), sv('path', { d: 'M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2' }), sv('path', { d: 'M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12' }));
+  n.append(sv('path', { d: ICONS.trash }));   // #4233: 사이드바 휴지통과 같은 그림
   return n;
 }
 function pjvTagNoneIcon() {
@@ -172,8 +173,7 @@ function pjvTbIcon(kind, cls?) {
   }
   if (kind === 'plus') { n.append(sv('path', { d: 'M12 5v14M5 12h14' })); return n; }
   if (kind === 'trash') {
-    n.append(sv('path', { d: 'M4 6.6h16' }), sv('path', { d: 'M9.6 6.6V5c0-.83.67-1.5 1.5-1.5h1.8c.83 0 1.5.67 1.5 1.5v1.6' }),
-      sv('path', { d: 'M6.4 6.6l.83 12.5A1.5 1.5 0 0 0 8.72 20.5h6.56a1.5 1.5 0 0 0 1.5-1.4L17.6 6.6' }));
+    n.append(sv('path', { d: ICONS.trash }));   // #4233: 사이드바 휴지통과 같은 그림
     return n;
   }
   if (kind === 'x') { n.append(sv('path', { d: 'M6.5 6.5l11 11M17.5 6.5l-11 11' })); return n; }

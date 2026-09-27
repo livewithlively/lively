@@ -22,6 +22,7 @@
 //   · **반사판은 늘 곁에** — 설정을 만지는 내내 "지금 이게 무엇을 집는가"가 오른쪽에 붙어 있다.
 import { api, busy, el, relTime, replaceKids, sv, toast } from './core.js';
 import { svcTile } from './svc-icons.js';
+import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { svcLogo } from './svc-logos.js';
 import { icon as lineIcon } from './v2/icons.js';
 import { confirmDialog, skeleton } from './ui-primitives.js';
@@ -164,11 +165,11 @@ function kindText(d): string {
   const names = ks.map((k) => KIND_LABEL[k] || k);
   return names.length <= 2 ? names.join('·') : names.slice(0, 2).join('·') + ' 외 ' + (names.length - 2);
 }
-/** 카드 머리의 얼굴 — 종류 로고를 겹쳐 쌓는다(최대 3). 종류가 없으면(모든 자료) 깔때기 하나. */
+/** 카드 머리의 얼굴 — 종류 로고를 겹쳐 쌓는다(최대 3). 종류가 없으면(모든 자료) 앱 「수집 · 증류」의 그림 하나. */
 function faceStack(d): HTMLElement {
   const ks: string[] = Array.isArray(d.match_kinds) ? d.match_kinds.filter(Boolean) : [];
   const wrap = el('span', { class: 'dsl-faces', 'aria-hidden': 'true' });
-  if (!ks.length) { wrap.append(el('span', { class: 'svc-tile cxc-tile cxc-tile-machine' }, funnelIcon())); return wrap; }
+  if (!ks.length) { wrap.append(el('span', { class: 'svc-tile cxc-tile cxc-tile-machine' }, allSourcesIcon())); return wrap; }
   for (const k of ks.slice(0, 3)) wrap.append(kindFace(k));
   if (ks.length > 3) wrap.append(el('span', { class: 'dsl-faces-n', text: '+' + (ks.length - 3) }));
   return wrap;
@@ -295,9 +296,10 @@ function distillerRowCompact(d, st, catName, rerender) {
   return row;
 }
 
-function funnelIcon(): SVGElement {
+/** 「모든 자료」를 받는 증류기의 그림. 앱 「수집 · 증류」와 같은 그림이다(#4233: 왼쪽 세 선이 오른쪽 한 선으로 모인다). */
+function allSourcesIcon(): SVGElement {
   const n = sv('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  n.append(sv('path', { d: 'M4 5h16l-6.2 7.2V18l-3.6 2v-7.8z' }));
+  n.append(sv('path', { d: ICONS.ctx }));
   return n;
 }
 function arrowIcon(): SVGElement {

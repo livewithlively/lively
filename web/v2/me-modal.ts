@@ -28,6 +28,7 @@
 //   ai-accounts·sessions 까지 부르면 안 볼 수도 있는 화면 때문에 창이 늦게 뜨고, 그러면 '잠깐 들르는 창'이
 //   아니게 된다.
 import { api, el, errorNote, logout, markShellSwitch, personName, profileAvatar, setUiModeOverride, state, sv, toast, uiText } from '../core.js';
+import { ICONS } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { field, skeleton } from '../ui-primitives.js';
 import {
   PROF_DEV, PROF_LANG, PROF_TONE, applyMyProfileSaved, avatarEditor, changePasswordModal, companyLoginRow, parseMyProfile, profChips,
@@ -66,7 +67,7 @@ const SECS: Sec[] = [
   { key: 'account', label: '계정 · 보안', icon: ['M12 3.4 19 6v5.6c0 4.2-2.9 7.4-7 9-4.1-1.6-7-4.8-7-9V6z', 'M9.3 12.1l1.9 1.9 3.5-3.6'] },
   { key: 'look', label: '화면', icon: ['M4 5.5h16v10H4z', 'M9 19.5h6', 'M12 15.5v4'] },
   // 종 — 나를 부르는 법(#1842). 화면(위)이 '내가 무엇을 보나'면, 이건 '내가 무엇을 언제 받나'다.
-  { key: 'notify', label: '알림', icon: ['M12 4.2a5 5 0 0 0-5 5v3.1l-1.5 2.7h13L17 12.3V9.2a5 5 0 0 0-5-5z', 'M10.1 18a1.95 1.95 0 0 0 3.8 0'] },
+  { key: 'notify', label: '알림', icon: [ICONS.bell] },   // #4233: 홈의 알림과 같은 그림
   // 열쇠 — 이 화면이 하는 일은 '로그인' 하나다(상태 확인 + 다시 로그인). 위 방패(계정 · 보안)와 겹치지 않는 붓.
   { key: 'aiacct', label: 'AI 계정 연결', icon: ['M16 4.9a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2', 'M13.5 11 5 19.5', 'M7 17.5l2 2', 'M9.5 15l2 2'] },
   { key: 'ai', label: 'AI 개인화', icon: ['M12 3.4l1.9 5.7 5.7 1.9-5.7 1.9L12 18.6l-1.9-5.7-5.7-1.9 5.7-1.9z', 'M18.5 16.5l.7 2.1 2.1.7-2.1.7-.7 2.1-.7-2.1-2.1-.7 2.1-.7z'] },
