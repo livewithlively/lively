@@ -7,15 +7,23 @@
 //   여기가 그쪽을 물면 그 전부가 따라온다. 무는 것은 그림 표(잎 모듈) 하나뿐이다.
 //  ⚠ 색은 CSS 토큰이다(--gi-c-<이름>, 01-base.css · 90-dark.css). 타일 위에서 3:1 이상이 되게 맞춘 값이고
 //   테마마다 다르다. 타일 색 · 테두리도 토큰(--gi-tile · --gi-tile-line)이다.
-import { ICONS, appGlyphName } from '../lib/icon-paths.js';
+import { appGlyphName, iconPath } from '../lib/icon-paths.js';
 
 /** 색 토큰이 있는 이름. 모르는 이름은 apps 로 그린다. */
-export const APP_ICON_NAMES = ['home', 'term', 'chat', 'proj', 'wiki', 'src', 'tags', 'ctx', 'sess', 'sys', 'web', 'learn', 'liv', 'apps'] as const;
+export const APP_ICON_NAMES = ['home', 'term', 'chat', 'proj', 'wiki', 'src', 'tags', 'ctx', 'sess', 'sys', 'web', 'learn', 'liv', 'apps', 'bell'] as const;
 
 /** 앱 아이콘의 선 그림(path d). 시험과 그리는 쪽이 함께 쓴다. */
 export function appGlyphPath(icon: string): string {
   const name = (APP_ICON_NAMES as readonly string[]).includes(icon) ? icon : 'apps';
-  return ICONS[appGlyphName(name)] || ICONS.apps;
+  return iconPath(appGlyphName(name));
+}
+
+/** 설치한 앱(org_app) 가운데 **우리가 만든 것**의 그림. 남이 만든 앱과 그림을 정하지 않은 빌트인은 여기 없다.
+ *  확인할 것 = 종(홈 머리의 알림과 같은 그림) · 웹 브라우저 = 지구본. 자료 · 분류체계는 앱 표(APPS)의 앱이라 이 길로 오지 않는다. */
+const BUILTIN_APP_ICON: Record<string, string> = { browser: 'web', inbox: 'bell' };
+/** 설치한 앱 하나의 앱 아이콘 이름. 정한 그림이 없으면 기본 그림: 화면이 있는 앱은 liv, 세션 앱은 term. */
+export function builtinAppIcon(id: string, hasUi: boolean): string {
+  return Object.prototype.hasOwnProperty.call(BUILTIN_APP_ICON, id) ? BUILTIN_APP_ICON[id] : (hasUi ? 'liv' : 'term');
 }
 
 /** 앱 아이콘 SVG 의 속(문자열). 64 뷰박스: 타일(모서리 반지름 = 한 변의 26%) + 가운데 선 아이콘(24 격자를 1.44배). */

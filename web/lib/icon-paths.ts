@@ -146,6 +146,11 @@ export const ICONS: Record<string, string> = {
   'cn-shield': 'M12 3.2l7 2.6v5.4c0 4.2-2.8 7.6-7 9.6-4.2-2-7-5.4-7-9.6V5.8z M9 12.2l2.1 2.1 4-4.2',
 };
 
+/** 이름으로 그림을 찾는다. 표에 없는 이름이면 예비 그림(기본 「앱」)을 준다.
+ *  표의 열쇠만 본다: `constructor` 같은 이름은 객체에 늘 있는 값이라 `ICONS[name] || …` 로는 걸러지지 않는다. */
+export const iconPath = (name: string, fallback = 'apps'): string =>
+  (Object.prototype.hasOwnProperty.call(ICONS, name) ? ICONS[name] : ICONS[fallback]);
+
 /** 앱 표(v2/apps.ts APPS)의 icon 이름 → 이 표의 이름. 「홈(클래식)」의 icon 은 home 이지만 그림은 판 넷(dashboard)이다.
  *  레일 · 앱 화면 · 구역 메뉴가 같은 앱을 같은 그림으로 그리게 이 함수 하나를 지난다. */
 const APP_GLYPH: Record<string, string> = { home: 'dashboard', sys: 'gear' };

@@ -16,13 +16,12 @@
 //   G5 우클릭 메뉴 줄의 icon: '이름' 이 전부 표에 있다
 //   G6 그림 표가 한 곳뿐이다(panes-kit · connect · side 에 path 표가 없다)
 //   G6 사이드바 「세션 이력」 줄도 표의 그림을 쓴다
-//   H1 앱 화면 머리: 「수집 · 증류」 머리는 표의 ctx 를 획 1.7 로, 「사용 가이드」 머리는 표의 learn 을 그린다
+//   H1 앱 화면 머리: 「수집 · 증류」 머리는 표의 ctx 를 그리고 획은 토큰(--ic-stroke)을 읽는다. 「사용 가이드」 머리는 표의 learn 을 그린다
 //   H2 통합검색의 종류 아이콘(프로젝트 · 지식 · 자료 · 세션 · 세션 이력)이 표의 그림이다
 //   H3 종(알림): [나] 창의 「알림」 · 태스크 창의 활동 구독이 표의 bell 이다
 //   H4 휴지통: 사이드바의 휴지통 단추 둘 · 세션 설정 창 「정리」 · 프로젝트 · 대시보드의 휴지통이 표의 trash 다
 //   H5 증류기 카드의 「모든 자료」 그림 · 클래식 AI 세션의 「세션 기록」 단추 · 가이드의 집과 책이 표의 그림이다
 //   H6 손으로 그린 옛 그림(집 · 깔때기 · 상자 · 휴지통 · 가로 고리 · 종 · 책 · 태그 묶음)이 web/ 에 남아 있지 않다
-//   G7 새 값 비었음: 표에 없는 이름을 icon() 이 받으면 「앱」 그림으로 떨어진다(던지지 않는다). 빈 문자열도 같다
 //   P1 앱 아이콘: 타일 하나 + 그 앱의 선 그림 + 그 앱의 색 토큰
 //   P2 앱 아이콘: 앱 이름 → 선 그림 이름(홈(클래식) = dashboard, 설정 = gear, 나머지는 같은 이름)
 //   P3 앱 아이콘: 모르는 이름 · 빈 이름은 apps 로 떨어진다(던지지 않는다)
@@ -30,6 +29,13 @@
 //   P5 색 토큰: 이름 14개가 라이트(01-base) · 다크(90-dark 두 블록)에 전부 있다
 //   P6 대비(경계 3:1): 색 선이 타일 위에서 3:1 이상이다. 라이트는 앱 화면의 타일과 흰 종이 위의 타일, 다크는 앱 화면의 타일과 어두운 종이 위의 타일
 //   P7 다크에서 뒤 화면이 흰색일 때(문서 미리보기)에도 3:1 이상이다
+//   B1 설치한 앱 가운데 우리가 만든 것: 확인할 것(inbox) = 종(bell) · 웹 브라우저(browser) = 지구본(web)
+//   B2 그 밖의 앱(남이 만든 앱 · 그림을 정하지 않은 빌트인)은 기본 그림: 화면이 있으면 liv, 없으면 term
+//   B3 새 값 비었음: 앱 id 가 비었거나 표의 열쇠가 아닌 이름(constructor)이어도 기본 그림이다(던지지 않는다)
+//   F1 사이드바 glyph() · 외부 앱 연결 icon() · icon(): 표에 없는 이름이면 「앱」 그림을 그린다(d 가 빈 path 를 그리지 않는다)
+//   F2 표에 있는 이름은 그 그림을 그린다(예비 그림이 제 그림을 덮지 않는다)
+//   L1 표지 카드의 빈 글: 칸이 세 칸 격자(30px)여도 빈 글은 한 줄 폭을 다 쓴다(모든 폭). 글에 긴 줄표가 없다
+//   L2 「AI 주입 설정」의 커스텀 훅 줄: 띄어쓰기 없는 긴 글도 칸 안에서 줄을 바꾼다(390 에서 가로로 넘치지 않는다)
 //   S1 획: --ic-stroke 가 1.7 이고, 아이콘 클래스(.v2-ic · .v2-rail-ic · .pn-i · .v2-mtab-ic · .v2-ptl-ic · .v2-dock-ic · .v2-gi-glyph)가 그 토큰을 읽는다
 //   S2 획: 아이콘 클래스에 1.8 · 1.7 을 숫자로 적은 자리가 없다(그래프 선 · 상태 고리 둘은 아이콘이 아니라 뺀다)
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -193,7 +199,7 @@ ok(!/const ICON_PATHS\b/.test(KIT) && /from '\.\.\/lib\/icon-paths\.js'/.test(KI
 ok(!/const ICON_PATH\b/.test(CONNECT) && /from '\.\.\/lib\/icon-paths\.js'/.test(CONNECT), "G6 외부 앱 연결(connect)에 제 그림 표가 없고 한 벌을 읽는다");
 {
   const a = SIDE.indexOf("function glyph("), g = a >= 0 ? SIDE.slice(a, SIDE.indexOf("\n}\n", a)) : "";
-  ok(!!g && !/\bD\[kind\]|const D:/.test(g) && /ICONS\[kind\]/.test(g), "G6 사이드바 glyph() 에 예비 표가 없다");
+  ok(!!g && !/\bD\[kind\]|const D:/.test(g) && /iconPath\(kind\)/.test(g), "G6 사이드바 glyph() 에 제 표가 없다(표에 없는 이름은 F1 이 본다)");
 }
 
 // ── H. 손으로 그린 사본 ──
@@ -201,7 +207,8 @@ ok(!/const ICON_PATH\b/.test(CONNECT) && /from '\.\.\/lib\/icon-paths\.js'/.test
   const fn = (src, name) => { const i = src.indexOf("function " + name + "("); return i < 0 ? "" : src.slice(i, src.indexOf("\n}\n", i)); };
   const C = srcOf["web/context.ts"] || "", LEARN = srcOf["web/learn.ts"] || "";
   const hd = fn(C, "ctxAppIcon");
-  ok(/d: ICONS\.ctx\b/.test(hd) && /'stroke-width': 1\.7\b/.test(hd), "H1 「수집 · 증류」 화면 머리: 표의 ctx · 획 1.7");
+  ok(/d: ICONS\.ctx\b/.test(hd), "H1 「수집 · 증류」 화면 머리: 표의 ctx");
+  ok(!!hd && !/stroke-width/.test(hd) && /\.ctx-crumb-ic \{[^}]*stroke-width: var\(--ic-stroke\)/.test(read("public/styles/31-context-pipeline.css").replace(/\/\*[\s\S]*?\*\//g, "")), "H1 그 머리의 획은 숫자로 적지 않고 토큰을 읽는다");
   ok(/tabIcon\('help', 'pjv-crumb-ic lg-crumb-ic'\)/.test(LEARN) && /\bhelp: \[\['path', \{ d: ICONS\.learn \}\]\]/.test(LEARN), "H1 「사용 가이드」 화면 머리: 표의 learn");
   const OMNI = srcOf["web/v2/omni.ts"] || "", kp = OMNI.slice(OMNI.indexOf("const KIND_PATH"), OMNI.indexOf("};", OMNI.indexOf("const KIND_PATH")));
   const want = { proj: "folder", know: "wiki", src: "src", sess: "chat", hist: "sess" };
@@ -214,7 +221,15 @@ ok(!/const ICON_PATH\b/.test(CONNECT) && /from '\.\.\/lib\/icon-paths\.js'/.test
   ok(((srcOf["web/projects/icons.ts"] || "").match(/d: ICONS\.trash\b/g) || []).length >= 2 && /d: ICONS\.trash\b/.test(srcOf["web/projects/selection.ts"] || "") && /d: ICONS\.trash\b/.test(srcOf["web/dash/icons.ts"] || ""), "H4 프로젝트(셋) · 대시보드의 휴지통 = 표의 trash");
   ok(/d: ICONS\.ctx\b/.test(fn(srcOf["web/distillers.ts"] || "", "allSourcesIcon")) && !/funnelIcon/.test(srcOf["web/distillers.ts"] || ""), "H5 증류기 카드의 「모든 자료」 그림 = 표의 ctx");
   ok(/d: ICONS\.sess\b/.test(fn(srcOf["web/terminal/routes.ts"] || "", "tsessHistoryIcon")), "H5 클래식 AI 세션의 「세션 기록」 단추 = 표의 sess");
-  ok(/\bhome: \[\['path', \{ d: ICONS\.home \}\]\]/.test(LEARN) && /'book-open': \[\['path', \{ d: ICONS\.wiki \}\]\]/.test(LEARN), "H5 가이드의 집 · 책 = 표의 home · wiki");
+  ok(/'book-open': \[\['path', \{ d: ICONS\.wiki \}\]\]/.test(LEARN), "H5 가이드의 책 = 표의 wiki");
+  {
+    // 가이드가 부르는 이름은 전부 제 표에 있고, 아무도 안 부르는 집(home)은 표에 없다
+    const gi = LEARN.slice(LEARN.indexOf("const GUIDE_ICONS"), LEARN.indexOf("\n};", LEARN.indexOf("const GUIDE_ICONS")));
+    const keys = [...gi.matchAll(/^  '?([a-z0-9-]+)'?: \[/gm)].map((m) => m[1]);
+    const called = [...namesCalled(LEARN, ["tabIcon", "flowStep"])];
+    ok(called.length >= 6 && called.every((n) => keys.includes(n)), "H5 가이드가 부르는 아이콘 이름이 전부 제 표에 있다", called.filter((n) => !keys.includes(n)).join(","));
+    ok(!keys.includes("home"), "H5 아무도 부르지 않는 집(home)은 가이드 표에 없다");
+  }
   // 옛 그림의 조각. 그림 표 밖에 남아 있으면 그 자리는 옛 그림을 그린다.
   const OLD = {
     "집": [/M15 21v-8a1/, /M3\.5 11\.2 12 4\.5/, /M4 11l8-7 8 7/, /M3 9l9-7 9 7v11/],
@@ -234,7 +249,7 @@ ok(!/const ICON_PATH\b/.test(CONNECT) && /from '\.\.\/lib\/icon-paths\.js'/.test
   ok(left.length === 0, "H6 손으로 그린 옛 그림이 web/ 에 남아 있지 않다", left.join(" | "));
 }
 
-// ── G7 · P. icon() 과 앱 아이콘을 값으로 부른다 ──
+// ── P. 앱 아이콘을 값으로 부른다 ──
 const fakeDoc = () => {
   const mk = (tag) => ({ tag, attrs: {}, kids: [], innerHTML: "", setAttribute(k, v) { this.attrs[k] = String(v); }, append(...k) { this.kids.push(...k); } });
   return { createElementNS: (_ns, tag) => mk(tag) };
@@ -245,22 +260,70 @@ if (GLASS_SRC && PATHS_SRC) {
   const paths = await load(transpile(PATHS_SRC)).catch(() => null);
   if (paths) {
     globalThis.__ICONS = paths.ICONS;
-    globalThis.__appGlyphName = paths.appGlyphName;
-    const js = transpile(GLASS_SRC).replace(/import \{[^}]*\} from '[^']*icon-paths\.js';/, "const ICONS = globalThis.__ICONS, appGlyphName = globalThis.__appGlyphName;");
+    globalThis.__appGlyphName = paths.appGlyphName; globalThis.__iconPath = paths.iconPath;
+    const js = transpile(GLASS_SRC).replace(/import \{[^}]*\} from '[^']*icon-paths\.js';/, "const ICONS = globalThis.__ICONS, appGlyphName = globalThis.__appGlyphName, iconPath = globalThis.__iconPath;");
     glass = await load(js).catch(() => null);
   }
 } else if (GLASS_SRC) {
   glass = await load(transpile(GLASS_SRC)).catch(() => null);
 }
-{
-  const IC_SRC = srcOf["web/v2/icons.ts"] || "";
-  const m = IC_SRC.match(/d: (ICONS\[name\] \|\| ICONS\.apps)/);
-  ok(!!m && !!ICONS.apps, "G7 표에 없는 이름 · 빈 이름은 「앱」 그림으로 떨어진다(던지지 않는다)");
-}
 ok(!!glass && typeof glass.appGlassIcon === "function" && typeof glass.appGlassMarkup === "function", "P0 앱 아이콘 모듈이 값으로 읽힌다(appGlassIcon · appGlassMarkup)");
 const markup = (n) => { try { return glass && glass.appGlassMarkup ? glass.appGlassMarkup(n) : ""; } catch { return "!throw"; } };
 const GLYPH_OF = { home: "dashboard", sys: "gear" };
-const NAMES = ["home", "term", "chat", "proj", "wiki", "src", "tags", "ctx", "sess", "sys", "web", "learn", "liv", "apps"];
+// ── B. 설치한 앱의 그림 ──
+{
+  const f = glass && glass.builtinAppIcon;
+  const call = (id, ui) => { try { return f ? f(id, ui) : "!none"; } catch { return "!throw"; } };
+  ok(call("inbox", false) === "bell" && call("inbox", true) === "bell", "B1 확인할 것(inbox) = bell", call("inbox", false));
+  ok(call("browser", false) === "web", "B1 웹 브라우저(browser) = web", call("browser", false));
+  ok(call("hello", true) === "liv" && call("some-third-party", false) === "term", "B2 그 밖의 앱은 기본 그림(화면이 있으면 liv, 없으면 term)", call("hello", true) + "," + call("some-third-party", false));
+  for (const bad of ["", "constructor", "__proto__", "toString"]) ok(call(bad, false) === "term" && call(bad, true) === "liv", `B3 앱 id ${JSON.stringify(bad)} 는 기본 그림`, call(bad, false));
+  ok(/appGlassIcon\(builtinAppIcon\(a\.id, hasUi\)\)/.test(srcOf["web/v2/apps.ts"] || "") && !/const BUILTIN_ICON\b/.test(srcOf["web/v2/apps.ts"] || ""), "B1 앱 화면이 그 함수로 그림을 고른다(apps.ts 에 제 표가 없다)");
+}
+// ── F. 표에 없는 이름 ──
+{
+  const fakeSv = (tag, attrs, ...kids) => ({ tag, attrs: attrs || {}, kids });
+  //  그리는 함수들은 표의 iconPath 로 그림을 찾는다. 그 함수를 표 모듈에서 값으로 받아 넣어 준다(없으면 옛 코드다).
+  const pathsMod = PATHS_SRC ? await load(transpile(PATHS_SRC)).catch(() => null) : null;
+  const iconPathFn = pathsMod && pathsMod.iconPath;
+  ok(typeof iconPathFn === "function" && iconPathFn("wiki") === ICONS.wiki && iconPathFn("nope") === ICONS.apps && iconPathFn("constructor") === ICONS.apps && iconPathFn("nope", "pn-doc") === ICONS["pn-doc"], "F0 표의 iconPath: 있는 이름은 그 그림, 없는 이름은 예비 그림");
+  const dOf = (n) => (n && n.kids && n.kids[0] && n.kids[0].attrs ? n.kids[0].attrs.d : undefined);
+  const evalFn = (src, from, to, name) => {
+    const i = src.indexOf(from); if (i < 0) return null;
+    const j = src.indexOf(to, i); if (j < 0) return null;
+    try { return new Function("sv", "ICONS", "iconPath", transpile(src.slice(i, j + to.length)) + "\nreturn " + name + ";")(fakeSv, ICONS, iconPathFn); } catch { return null; }
+  };
+  const cases = [
+    ["사이드바 glyph()", evalFn(srcOf["web/v2/side.ts"] || "", "function glyph(", "\n}\n", "glyph"), "archive", ICONS.archive],
+    ["외부 앱 연결 icon()", evalFn(srcOf["web/v2/connect.ts"] || "", "const icon = (k: string): SVGElement =>", ";\n", "icon"), "key", ICONS["cn-key"]],
+    ["icon()", evalFn((srcOf["web/v2/icons.ts"] || "").replace("export function icon(", "function icon("), "function icon(", "\n}\n", "icon"), "wiki", ICONS.wiki],
+  ];
+  for (const [label, fn, known, want] of cases) {
+    ok(typeof fn === "function", `F0 ${label} 를 값으로 부를 수 있다`);
+    if (typeof fn !== "function") continue;
+    for (const bad of ["nope", "", "constructor"]) { let d = "!throw"; try { d = dOf(fn(bad, "c")); } catch { /* 빨간불 */ } ok(!!ICONS.apps && d === ICONS.apps, `F1 ${label}: 표에 없는 이름 ${JSON.stringify(bad)} 는 「앱」 그림`, String(d).slice(0, 30)); }
+    ok(dOf(fn(known, "c")) === want, `F2 ${label}: 표에 있는 이름(${known})은 그 그림`);
+  }
+}
+// ── L. 넘침 · 줄 바꿈(글과 CSS 규칙으로 본다. 실제 줄 수 · 넘침 폭은 브라우저로 따로 쟀다) ──
+{
+  const noC = (f) => read("public/styles/" + f).replace(/\/\*[\s\S]*?\*\//g, "");
+  const top = (css) => { let d = 0, out = ""; for (const ch of css) { if (ch === "{") d++; if (d <= 1) out += ch; if (ch === "}") d--; } return out; };   // @media 안은 뺀다
+  const CTX = noC("31-context-pipeline.css");
+  ok(/\.cxm-svts:has\(\.cxm-empty\) \{[^}]*display: flex/.test(top(CTX).replace(/@media[^{]*\{[^}]*\}/g, "")), "L1 빈 글이 든 칸은 격자가 아니라 한 줄 폭을 다 쓴다(모든 폭)");
+  const MAP = srcOf["web/context-map.ts"] || "";
+  const empties = [...MAP.matchAll(/class: 'cxm-empty', text: '([^']*)'/g)].map((m) => m[1]);
+  ok(empties.length >= 3 && empties.every((t) => !t.includes("\u2014")), "L1 표지 카드의 빈 글에 긴 줄표가 없다", empties.filter((t) => t.includes("\u2014")).join(" | "));
+  const BOARD = noC("16-projects-board.css");
+  ok(/\.inj-custom-row \.mini-meta \{[^}]*min-width: 0[^}]*overflow-wrap: anywhere/.test(BOARD), "L2 커스텀 훅 줄의 설명 글이 칸 안에서 줄을 바꾼다");
+}
+// ── T. 시험 도구 ──
+{
+  const T = read("scripts/ctx-rename.test.mjs");
+  const defs = [...T.matchAll(/^function (walk\w*)\(/gm)].map((m) => m[1]);
+  ok(defs.length === 1, "T1 ctx-rename 시험의 파일 훑기 도구가 하나다", defs.join(","));
+}
+const NAMES = ["home", "term", "chat", "proj", "wiki", "src", "tags", "ctx", "sess", "sys", "web", "learn", "liv", "apps", "bell"];
 for (const n of NAMES) {
   const mk = markup(n), d = ICONS[GLYPH_OF[n] || n];
   ok(!!d && mk.includes(`d="${d}"`) && mk.includes(`var(--gi-c-${n})`) && (mk.match(/class="v2-gi-tile"/g) || []).length === 1, `P1 · P2 앱 아이콘 ${n}: 타일 하나 + 그 선 그림 + 그 색 토큰`);

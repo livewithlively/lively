@@ -16,7 +16,7 @@
 import { api, el, errorNote, hasScope, relTime, state, sv, toast, uiText } from '../core.js';
 import { confirmDialog, skeleton } from '../ui-primitives.js';
 import { svcTile } from '../svc-icons.js';
-import { ICONS } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
+import { iconPath } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { CRED_KINDS, openGitCredentialManager, svcTokenForm } from '../admin-credentials.js';
 import { LOGIN_SERVICES, partition, slackChannelPolicyCard, type SvcView } from '../me-logins.js';
 //  #3778 — 목록 카드가 말하는 «두 축»의 잣대(순수). 화면은 그리기만 하고 판정은 저기서 한다(그래서 시험된다).
@@ -438,7 +438,7 @@ export function eulReul(word: string): string {
   if (!(c >= 0xAC00 && c <= 0xD7A3)) return '를';
   return (c - 0xAC00) % 28 ? '을' : '를';
 }
-const icon = (k: string): SVGElement => sv('svg', { class: 'v2-ic', viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: ICONS['cn-' + k] })) as SVGElement;
+const icon = (k: string): SVGElement => sv('svg', { class: 'v2-ic', viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: iconPath('cn-' + k) })) as SVGElement;
 
 /** 설정 줄 — «라벨 | 값 | 동작». 값은 문자열(uiText)이나 노드. */
 // ══ #2243 3차 «다듬은 안 B» — 상세 화면 부품 ═══════════════════════════════════════════════

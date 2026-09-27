@@ -314,7 +314,6 @@
   .cxm-wire.is-still { background: repeating-linear-gradient(180deg, var(--line-net-2) 0 8px, transparent 8px 14px); }
   .cxm-wire.is-flow::after { background: repeating-linear-gradient(180deg, var(--mint) 0 10px, transparent 10px 22px); animation: cxm-flow-v 1.8s linear infinite; }
   .cxm-arr { right: auto; left: calc(50% - 6.5px); top: auto; bottom: -3px; transform: rotate(90deg); }
-  .cxm-svts:has(.cxm-empty) { display: flex; align-items: center; justify-content: center; }
   .cxm-empty { white-space: normal; }
   .cxm-cell, .cxm-cell-inbox { flex-wrap: wrap; }
   .cxm-cell-inbox > .btn { width: 100%; justify-content: center; }

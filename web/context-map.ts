@@ -126,7 +126,7 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
   const extX = el('span', { class: 'cxm-svts' },
     ...(svcs.length
       ? svcs.slice(0, 6).map(([svc, v]) => { const t = svcTile(svc, v.label, true); t.title = v.label + (v.n > 1 ? ' · 수집기 ' + v.n : ''); return t; })
-      : [el('span', { class: 'cxm-empty', text: '연결된 앱이 없습니다 — 눌러서 연결' })]));
+      : [el('span', { class: 'cxm-empty', text: '연결된 앱이 없습니다. 눌러서 연결하세요' })]));
   const extFoot = collectors.length
     ? '수집 연결 ' + fmt(collectors.length) + '개' + svcs.filter(([, v]) => v.n > 1).slice(0, 2).map(([, v]) => ' · ' + v.label + ' ' + v.n).join('')
     : '외부 서비스를 연결하면 그 내용이 자료로 들어옵니다';
