@@ -19,6 +19,7 @@
   "dist/node/chat-on-node.js",
   "dist/node/keep-awake.js",
   "dist/node/link-liveness.js",
+  "dist/node/local-chat-transcript.js",
   "dist/node/protocol.js",
   "dist/node/reconnect-delay.js",
   "dist/node/rpc-error.js",
