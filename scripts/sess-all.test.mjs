@@ -274,26 +274,26 @@ if (lib) {
   ok(/chip\('waiting', '확인 필요'/.test(all2) && /chip\('busy', '작업 중'/.test(all2) && /state: ui\.state/.test(all2), "W1b 상태 칩이 상태 거르개를 건다");
   ok(/pickNowCards\(inProj, stateRank, 4, now\)/.test(all2) && /'지금 볼 것'/.test(all2), "W1c 「지금 볼 것」 카드 줄");
   ok(/const unnamed = g\.rows\.filter\(\(it\) => it\.untitled\)/.test(all2) && /이름 없는 세션 \$\{unnamed\.length\}개/.test(all2), "W1d 이름 없는 세션은 묶음마다 한 줄로 접힌다");
-  ok(/row\.addEventListener\('click'[^\n]*openPeek\(s\.id\)/.test(all2) && /row\.addEventListener\('dblclick'[^\n]*open\(s\)/.test(all2),
-    "W1e ★행 클릭은 사이드 피크, 두 번 클릭은 홈에서 열기(hooks.onOpen)");
-  ok(/\/api\/ui\/terminal\/sessions\/\$\{encodeURIComponent\(s\.id\)\}\/prompt/.test(all2) && /if \(!live\) \{ rememberUnsentDraft\(s\.id, text\);[^\n]*hooks\.onOpen\(s\); return; \}/.test(all2),
-    "W1f 피크 보내기 — 도는 세션은 세션 화면과 같은 /prompt, 끝난 세션은 글을 세션 화면 입력칸으로 넘기고 연다");
-  ok(/fetchTurns\(s, PEEK_TAIL\)/.test(all2) && /onclick: \(\) => hooks\.onOpen\(s\) \}, svgI\(IC_OPEN\), el\('span', \{ text: '세션 열기' \}\)/.test(all2),
-    "W1g 피크는 대화 꼬리(sess-tail)를 읽고, [세션 열기]는 홈의 문(hooks.onOpen)으로 간다");
+  //  ★ #4233(원준 2026-09-26 «사이드 피크 개념 그냥 없애자») — 한 번 누르면 곧바로 그 세션을 홈에서 연다.
+  ok(/row\.addEventListener\('click'[^\n]*open\(s\);/.test(all2) && !/openPeek/.test(all2) && !/addEventListener\('dblclick'/.test(all2),
+    "W1e ★행을 한 번 누르면 홈에서 그 세션을 연다(hooks.onOpen) — 사이드 피크는 없다");
+  ok(!/renderPeek/.test(BINS.slice(BINS.indexOf("export function renderSessAll("))) && !/peek: ''/.test(all2) && !/v2-sa-peek/.test(all2),
+    "W1f ★[AI 세션] 목록에 피크 코드가 남아 있지 않다(상태 · 조립 · 보내기 전부)");
+  ok(/onclick: \(\) => open\(s\) \},/.test(all2) && /class: 'v2-sa-card v2-sess-card '/.test(all2),
+    "W1g 「지금 볼 것」 카드도 한 번 누르면 그 세션을 연다");
   const paint2 = code(cut(MAIN, "function paintSessAll(", "\nfunction repaintSessAll"));
   ok(/onNew: \(\) => \{ tabsApi\?\.add\('#\/'\); \}/.test(paint2) && /onNewTask: \(\) => \{ tabsApi\?\.add\('#\/'\); \}/.test(MAIN),
     "W1h [＋ 새 세션]은 사이드바 ＋ 와 같은 동작(홈 새 탭)");
-  //  W2 — 격리 리뷰 지적(막음 2건): 두 번 보내기 · 목록에 없는 세션에서 ↑ ↓.
-  const sendFn = cut(all2, "const send = async", "\n  };");
-  const beforeAwait = sendFn.split("await api(")[0] || "";
-  ok(/if \(!text \|\| !canSend \|\| peekSending\.has\(s\.id\)\) return;/.test(sendFn) && /peekSending\.add\(s\.id\)/.test(beforeAwait)
-    && /ta\.value = '';/.test(beforeAwait) && /sendBtn\.disabled = true;/.test(beforeAwait) && /finally \{\s*peekSending\.delete\(s\.id\);/.test(sendFn),
-    "W2a ★보내는 중에는 다시 보내지 않는다 — 칸을 비우고 버튼을 끈 뒤에 보내고, 끝나면 푼다");
-  ok(/ui\.drafts\.set\(s\.id, text\);\s*toast\(`보내지 못했어요/.test(sendFn), "W2b 보내기에 실패하면 쓴 글을 돌려준다");
-  const stepFn = cut(all2, "const step = (d: number): void => {", "\n  };");
-  const keysFn = cut(all2, "function bindPeekKeys(): void {");
-  ok(/const i = order\.indexOf\(s\.id\);\s*if \(i < 0\) return;/.test(stepFn) && /const i = nav\.order\.indexOf\(allUi\.peek\);\s*if \(i < 0\) return;/.test(keysFn),
-    "W2c ★피크한 세션이 목록에 없으면(접힌 묶음 · 카드) ↑ ↓ 는 아무 데로도 가지 않는다 — 첫 행으로 건너뛰지 않는다");
+  //  W2 — #4233(원준 2026-09-26) 열 구성과 머리줄. 열 이름은 표 맨 위 한 줄뿐이고 붙어 있다(클릭업 리스트 뷰).
+  ok(/class: 'v2-sa-head'/.test(all2) && /if \(vis\.length\) list\.append\(tableHead\(\)\);/.test(all2)
+    && /class: 'v2-sa-gh plain'/.test(all2) && !/\.\.\.headCols\(\)/.test(all2),
+    "W2a ★열 이름은 표 맨 위 한 줄뿐 — 묶음 머리줄은 이름과 개수만 든다");
+  ok(/text: '만든 때'/.test(all2) && /text: '마지막 활동'/.test(all2) && !/text: 'AI' \}/.test(all2) && /class: 'c-made' \}, madeCell\(Number\(s\.createdAt\)/.test(all2),
+    "W2b ★「AI」 열은 없고 시각은 둘로 갈린다 — 만든 때(절대) · 마지막 활동(상대)");
+  const VIEWS = read("web/v2/views.ts");
+  ok(/createdAt: msOf\(r\.created\)/.test(VIEWS) && /createdAt: r\.first_seen \? new Date\(r\.first_seen\)\.getTime\(\) : 0/.test(VIEWS)
+    && /if \(firstMs && \(!owner\.createdAt \|\| firstMs < owner\.createdAt\)\) owner\.createdAt = firstMs;/.test(VIEWS),
+    "W2c ★만든 때 — 박스는 created, 기록은 first_seen, 둘 다 있으면 이른 쪽(되살린 박스는 대화가 먼저다)");
   //  W3 — 묶지 않음(원준 2026-09-25 «안묶은 완전 raw 한 전체보기도 · 드롭다운으로 오른쪽에서»).
   ok(/SESS_GROUP_BYS\.filter\(\(b\) => b\.key !== 'none'\)\.map\(row\),\s*\{ label: '', sep: true \},\s*\.\.\.SESS_GROUP_BYS\.filter\(\(b\) => b\.key === 'none'\)\.map\(row\)/.test(rs)
     && /run: \(\) => pick\(withGroupBy\(sessScope\(\), b\.key\), true\)/.test(rs),
@@ -324,7 +324,7 @@ if (lib) {
     "W4c 카드 머리 아이콘(시간 · 사람 · 그 밖)이 전부 ICONS 에 있다 — 없는 이름은 격자 아이콘으로 조용히 떨어진다(리뷰 지적)");
   const CSS = read("public/styles/47-v2-rail.css");
   ok(/\.v2-sa-peek \{[^}]*position: absolute;[^}]*width: min\(640px, 100%\)/.test(CSS) && /\.v2-sa-row \{ height: 46px;/.test(CSS),
-    "W1i 사이드 피크 640px · 행 46px(위키 2판과 같은 치수)");
+    "W1i 덧창 640px(위키 2판) · 행 46px");
 }
 console.log(`\n#4158 [AI 세션] 프로젝트 리스트 · 전체 목록: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
 process.exit(fail ? 1 : 0);
