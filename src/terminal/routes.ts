@@ -75,6 +75,7 @@ import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable, unknownStateM
 import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js";   // #1851 — 세션 휴지통
 import { trashMapFor } from "../sessions/session-trash.js";                        // #1851 — 목록 행에 휴지통 표식
 import { sessionHandoffInput } from "./session-handoff.js";
+import { forkRefusal, sessionForkInput } from "./session-fork.js";   // #4135 — 세션 복제(이 대화를 아는 새 세션)
 import { resumePlan, resumedKind, type ResumeCheck } from "./resume-plan.js";   // #3870 — 이어받기 인자 결정(순수·엣지 표 시험)
 import { claudeProjectsDirExact } from "./terminal-transcript.js";   // #3870 — 규약으로 폴더를 정확히 짚을 수 있나
 
@@ -1409,6 +1410,41 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const session = await createSession(userOf(req), input);
     await recordSessionTenant(session.id, () => killSession(userOf(req), session.id, {}));
     await registerSessionInstance(session.id, idOf(userOf(req)), { appId: input.appId, projectId: input.projectId, title: session.label });
+    res.json({ ok: true, from: id, session });
+  }));
+  // 세션 복제(#4135, 원준 2026-09-27) — **이 세션의 대화를 아는 새 세션**을 하나 더 만든다. 원래 세션은 건드리지 않는다.
+  //  하네스의 복제 수단으로 연다(claude `--fork-session` · codex `fork` — catalog Harness.forkArgv): 새 대화 id 가 생기고
+  //  원래 대화 파일에는 한 줄도 안 쓰인다. 그래서 원래 세션이 일하는 중에도 눌러도 된다.
+  //  판정(누가·무엇을·어디서 복제할 수 있나)은 순수 함수 session-fork.forkRefusal 이 하고, 여기는 재료만 모은다.
+  //  띄우는 길은 새 세션과 **같은 관문**(launchSession)이다 — 소속 기록·프로젝트 확정·태스크·미러·토큰이 한 벌로 따라온다.
+  app.post("/api/ui/terminal/sessions/:id/fork", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const id = String(req.params.id || "");
+    const me = idOf(userOf(req));
+    const st = await getSessionState(id);
+    //  세션이 있는 자리 — handoff 와 같은 판정(셀프 좌표·세션 호스트 좌표는 저쪽 기계가 아니다, #2592 · #2600 T2 d6).
+    const nodeId = st ? (relayNodeId(st.node_id, isSelfNode) || (await remoteNodeOfSession(id, sessionGone)) || "") : "";
+    //  원래 세션이 **지금 도는** 하네스 대화 id — 복원과 같은 세 출처(행 · 노드 내구 맵 · 저장된 대화 파일 경로, #2122).
+    const durable = st && nodeId && !st.claude_session_id ? ((await nodeSessionMapFor([id]).catch(() => null))?.get(id) ?? null) : null;
+    const convId = st ? (st.claude_session_id || durable?.conv_uuid || convIdFromTranscriptPath(st.harness, st.transcript_path) || null) : null;
+    const check: ResumeCheck = st && st.owner === me && convId ? await resumeTranscriptCheck(id, st, convId, nodeId || null) : "unknown";
+    const no = forkRefusal({
+      st, me, convId, check, nodeId,
+      nodeOnline: nodeId ? nodeOnline(nodeId) : false,
+      nodeCanFork: nodeId ? nodeSupports(nodeId, "forkSession") : false,
+    });
+    if (no) {
+      //  4xx 는 wrap() 이 로그를 안 남긴다 — 「복제가 안 된다」 신고를 되짚을 흔적을 여기서 남긴다.
+      logger.info({ id, requester: me, node: nodeId || null, status: no.status, why: no.message }, "세션 복제 거절");
+      throw new HttpError(no.status, no.message);
+    }
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const input = sessionForkInput(st!, String(convId));
+    input.theme = themeOf(req, b);
+    //  노드 세션의 초대는 구성원 디렉터리로 다시 걸러 넘긴다(노드는 DB 가 없다 — 새 세션과 같은 규율).
+    const invites = nodeId ? await validateInvites(st!.invites, me) : [];
+    const session = await launchSession(userOf(req), input, { nodeId, invites, ...(nodeId ? { nodeOp: "forkSession" as const } : {}) });
+    logger.info({ from: id, to: session.id, harness: input.harness, node: nodeId || null }, "세션 복제");
     res.json({ ok: true, from: id, session });
   }));
   // 세션 수정 — 이름·초대 멤버 변경. 소유자만(서버가 강제 — 노드 세션은 노드측 assertManage 가 같은 규칙으로 강제).

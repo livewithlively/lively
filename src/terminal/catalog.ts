@@ -156,6 +156,18 @@ export interface Harness {
   //  ⚠ 종전엔 이 로직이 sessions.ts 에 `harness.key === "claude"` 로 박혀 있어, **claude 아닌 세션은 복원해도
   //   늘 새 대화로 시작**했다(2026-08-14 상민님 신고: antigravity 세션을 /exit 로 닫고 이어 열면 대화가 없다).
   resumeArgv?: (id?: string) => string[];
+  // 복제(#4135, 원준 2026-09-27) — **그 대화를 아는 새 대화**로 여는 argv 조각. 이어받기(resumeArgv)와 다른 점은 하나다:
+  //  하네스가 **새 대화 id** 를 만들고 원래 대화 파일에는 한 줄도 쓰지 않는다. 그래서 원래 세션이 살아서 일하는 중에도
+  //  안전하다(같은 대화 파일에 하네스가 둘 붙지 않는다 — #3891 이 막으려던 바로 그 상태).
+  //  실측 2026-09-27(이 표를 채우기 전에 두 CLI 를 실제로 돌렸다):
+  //   · claude 2.1.283 `--resume <uuid> --fork-session` — 새 session_id 가 나오고, 원래 jsonl 의 줄 수·md5 가 그대로였다.
+  //     새 대화는 원래 대화의 낱말을 기억했다.
+  //   · codex-cli 0.157.1 **서브커맨드** `fork <id>` — `codex fork [OPTIONS] [SESSION_ID] [PROMPT]`. resume 과 같은
+  //     옵션(-m·-c·--dangerously-bypass-approvals-and-sandbox)을 받는다(--help 확인).
+  //  ⚠ 반환 argv 는 resumeArgv 처럼 bin **바로 뒤**에 붙는다(codex 는 서브커맨드라 그 위치가 계약이다).
+  //  ⚠ **실증한 하네스에만 둔다.** 없는 하네스는 복제를 거절한다(라우트가 409) — 없는 플래그를 지어내 넘기면 하네스가
+  //   뜨자마자 죽거나, 더 나쁘게는 플래그를 무시하고 **같은 대화를 그대로 이어** 원래 세션과 한 파일을 같이 쓴다.
+  forkArgv?: (id: string) => string[];
   // 이미 떠 있는 세션의 모델·추론강도를 바꾸는 **타이핑 한 줄**(#1758 세션 대화창). 세션은 이미 argv 로 떴으므로
   //  플래그로는 못 바꾼다 — 사람이 터미널에서 치는 것과 같은 슬래시 명령을 주입하는 수밖에 없다(POST …/runtime).
   //  ⚠ **인자를 받는 명령이 실증된 하네스에만 둔다.** codex 의 `/models`·opencode 의 `/model` 은 고르는 팝업이라
@@ -191,6 +203,7 @@ export const HARNESSES: Harness[] = [
     //  #1516 당시 사실이었지만 지금은 낡았다 — 온보딩에서 TUI 를 거치게 하면 한 단계가 공짜로 늘어난다.
     loginSteps: ["터미널에  claude auth login  을 입력합니다", "열리는 창에서 Anthropic 계정으로 로그인합니다"],
     resumeArgv: (id) => (id ? ["--resume", id] : ["--resume"]),   // 인자 없는 --resume = 이 폴더의 대화 피커
+    forkArgv: (id) => ["--resume", id, "--fork-session"],   // 새 대화 id 로 갈라 연다(원래 대화 파일은 그대로)
     // 실측(claude 2.1.234 번들): `/model <별칭|풀네임>` · `/effort <low|medium|high|xhigh|max|auto>` 둘 다 인자를 받는
     //  local 커맨드(effort 는 supportsNonInteractive) — 입력창에 한 줄로 쳐서 그 자리에서 바뀐다.
     runtimeCmd: { model: (v) => `/model ${v}`, effort: (v) => `/effort ${v}` },
@@ -226,6 +239,7 @@ export const HARNESSES: Harness[] = [
     loginSteps: ["터미널에  codex login  을 입력합니다", "열리는 창에서 ChatGPT 계정으로 로그인합니다",
       "창이 안 열리면  codex login --device-auth  로 주소와 일회용 코드를 받습니다"],
     resumeArgv: (id) => (id ? ["resume", id] : ["resume", "--last"]),   // 피커는 대화형이라 무인 복원엔 --last
+    forkArgv: (id) => ["fork", id],   // 서브커맨드 — 그 대화를 새 대화로 갈라 연다
   },
   {
     // #1519 로 배선(훅·MCP·자산)은 이미 붙어 있는데 **웹 세션 카탈로그에만** 빠져 있던 자리(#1695).
@@ -524,6 +538,12 @@ export interface CreateInput {
   managed?: string;
   // #1059 — claude UUID 를 모를 때 인자 없는 --resume 로 후보 picker 를 띄운다(restorable 복원. resume 과 배타 — resume 우선).
   resumePick?: boolean;
+  // #4135 세션 복제 — **이 대화를 아는 새 대화**로 연다(값 = 원래 세션의 하네스 대화 id). resume·resumePick 과 배타(fork 우선).
+  //  원래 대화는 건드리지 않는다 — 하네스가 새 대화 id 를 만든다(Harness.forkArgv 머리말). 그래서 carryConv 도 싣지 않는다:
+  //  새 세션은 원래 대화를 «도는» 세션이 아니다(실으면 #3891 의 이어 붙이기 판정이 복제본을 원래 세션으로 착각한다).
+  //  ⚠ 이 필드는 노드에 `create` 가 아니라 **`forkSession` op** 로만 실어 보낸다(session-fork.ts · node/protocol.ts) —
+  //   이 필드를 모르는 옛 노드 번들이 `create` 로 받으면 조용히 무시하고 **빈 새 대화**를 열기 때문이다.
+  fork?: string;
   // #3891 — **복원 전용**: 이 세션이 이어받는 대화. desired 행이 서는 **그 순간** 함께 적는다(createSession).
   //  복원 요청은 판(하네스)이 뜬 뒤 뒷정리 전에 끊길 수 있다(롤 SIGTERM 실측) — 그때도 이 세션이 태어날 때부터
   //  «그 대화를 도는 세션» 으로 찾아져야 다시 부른 복원이 새로 만들지 않고 이리로 잇는다(routes.ts restore · restore-adopt.ts).

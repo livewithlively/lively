@@ -268,6 +268,11 @@ export interface LaunchOpts {
    *  중앙 세션은 쓰지 않는다 — createSession 이 input.invites 를 스스로 검증한다.
    */
   invites: string[];
+  /**
+   * 노드 갈래에서 create 대신 보낼 op(#4135 세션 복제 = "forkSession"). 없으면 종전대로 create / createAppSession.
+   *  ⚠ 호출자가 **그 노드가 이 op 를 선언했는지 먼저 확인**한다(session-fork.forkRefusal) — 여기는 보내기만 한다.
+   */
+  nodeOp?: NodeOp;
 }
 
 /** 생성 응답의 세션 한 장 — 노드 세션이면 그 좌표(node)가 붙는다. */
@@ -295,7 +300,7 @@ export async function launchSession(user: LivelyUser, input: CreateInput, opts: 
     await requireCreatableNode(me, nodeId);
     const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);
     const remoteInput = await prepareRemoteAppSession(input, me);
-    const op: NodeOp = input.appId ? "createAppSession" : "create";
+    const op: NodeOp = opts.nodeOp ?? (input.appId ? "createAppSession" : "create");
     const plan = nodeProjectCreatePlan(remoteInput, !!input.projectId && nodeSupports(nodeId, "injectFirstPrompt"));
     //  #4135 — 세션 id·훅·MCP 토큰은 게이트웨이가 여기서 굽는다(노드는 DB 가 없다). user 객체는 relay 에 싣는 것과 같아야 한다(접두어).
     const relayUser = { userId: me } as LivelyUser;

@@ -7,6 +7,7 @@ import { copyText, type CtxRow } from './ctx-menu.js';
 import { registerCtx, registerCtxCommon, registerCtxSurface, type CtxEvent, type CtxHit } from './ctx-registry.js';
 import { isInstancePinned, projectCtxRows, sessText, sessionCtxRows, sideInstanceById, toggleInstancePin } from './side.js';
 import { findSessIn, isLiveSess, isMineSess, projName, type Proj, type Sess, type V2Data } from './views.js';
+import { forkableHarness } from './session-fork.js';
 import { SESS_STATES } from '../session-status.js';
 import { omniOpen } from './omni.js';
 import { appByKey, appHref, openLaunchpad, soloSessionUrl } from './apps.js';
@@ -21,6 +22,8 @@ export interface CtxShellHooks {
   newTask(seed?: string): void;
   refresh(): void;
   pickProject(anchor: HTMLElement, sessionId: string): void;
+  /** 세션 복제(#4135) — 그 세션의 대화를 아는 새 세션을 하나 더. 확인 창은 anchor 옆에 선다. */
+  forkSession(anchor: HTMLElement, sessionId: string): void;
   closeInstance(id: string): void;
   activateInstance(id: string, route?: string): void;
   /** 지금 활성 탭의 주소(같은 화면이면 「열기」를 안 띄운다). */
@@ -40,6 +43,15 @@ function openRows(href: string, o: { label?: string } = {}): CtxRow[] {
   return rows;
 }
 
+/**
+ * 이 세션을 복제할 수 있나(#4135) — 문패 단추와 우클릭 메뉴가 **같은 이 판정**을 쓴다.
+ *  내 세션(대화 기록이 만든 사람 자리에 있다) · 살아 있음(지난 세션은 「이어서 열기」 가 먼저다) · 복제 수단이 있는 AI.
+ *  ⚠ 화면의 판정은 단추를 달지 말지일 뿐이다 — 최종 판정은 서버가 한다(session-fork.forkRefusal).
+ */
+export function canForkSess(s: Sess): boolean {
+  return isMineSess(s) && isLiveSess(s) && forkableHarness(s.raw && s.raw.harness);
+}
+
 // ── 세션 ───────────────────────────────────────────────────────────────────
 function sessionMenu(s: Sess | undefined, sid: string, hit: CtxHit): { rows: CtxRow[]; title?: string; sub?: string } {
   const href = '#/s/' + encodeURIComponent(sid);
@@ -54,6 +66,7 @@ function sessionMenu(s: Sess | undefined, sid: string, hit: CtxHit): { rows: Ctx
     { sep: true, label: '' },
     ...sessionCtxRows(s, { nameEl: hit.el.classList.contains('v2-ss-row') ? hit.el.querySelector<HTMLElement>('.t') : null, projectName: pn }),
   ];
+  if (canForkSess(s)) rows.push({ label: '세션 복제', icon: 'copy', hint: '대화를 아는 새 세션', run: () => hooks?.forkSession(hit.el, s.id) });
   if (isMineSess(s)) rows.push({ label: s.projectId ? '프로젝트 바꾸기·떼기' : '프로젝트 연결', icon: 'moveto', hint: s.projectId ? pn : undefined, run: () => hooks?.pickProject(hit.el, s.id) });
   const share = shareSessOf(s);
   if (share) rows.push({ label: '공유…', icon: 'share', run: () => openSharePopover(hit.el, share) });

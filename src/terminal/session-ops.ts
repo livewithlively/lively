@@ -36,7 +36,7 @@ import type { LivelyUser } from "../context.js";
  */
 export const SESSION_OPS = [
   "list", "create", "createAppSession", "kill", "edit", "gone", "label",
-  "sendKeys", "setProject", "injectFirstPrompt", "markActive", "markSeen", "outboxStep", "sessionTokens",
+  "sendKeys", "setProject", "injectFirstPrompt", "markActive", "markSeen", "outboxStep", "sessionTokens", "forkSession",
 ] as const;
 
 export type SessionOp = (typeof SESSION_OPS)[number];
@@ -103,8 +103,15 @@ export async function runSessionOp(op: SessionOp, args: Record<string, unknown>)
     //  ⚠ 거절·실패도 **값으로** 돌려준다 — 위 `sendKeys` 처럼 던지면 «한 글자도 안 쳤다» 가 오류 문자열로 뭉개진다.
     case "outboxStep": return runOutboxStep(args);
 
+    // #4135 세션 복제 — 하는 일은 create 와 같다(createSession 이 input.fork 를 보고 하네스의 복제 argv 로 띄운다).
+    //  op 가 따로인 이유는 node/protocol.ts 머리말. 여기서는 **fork 가 빠진 봉투를 거절**한다 — 빠진 채 create 로 흘러가면
+    //  «복제» 라는 이름으로 빈 새 대화가 뜬다(그게 이 op 를 따로 둔 이유 그 자체다).
+    case "forkSession":
     case "create":
     case "createAppSession": {
+      if (op === "forkSession" && !String((args.input as CreateInput | undefined)?.fork ?? "").trim()) {
+        throw new Error("세션 복제: 복제할 대화 id 가 없습니다");
+      }
       const session = await createSession(user, args.input as CreateInput);
       // 초대는 게이트웨이가 구성원 디렉터리로 검증해 넘긴다 — 세션 호스트엔 DB 가 없어
       //  createSession 내부 검증이 빈 배열이 된다.

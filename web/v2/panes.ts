@@ -70,6 +70,10 @@ export interface PanesOpts {
   onMoveSession?: (sid: string) => void;
   /** 그 세션을 옮길 수 있나 — 내 세션만(남의 세션은 [⋯] 에도 이 줄이 없다). 없으면 단추를 안 단다. */
   canMoveSession?: (sid: string) => boolean;
+  /** 문패 [세션 복제](#4135) — 지금 보는 세션의 대화를 아는 새 세션을 하나 더 만든다. 확인 창·실행은 main.ts 가 쥔다(anchor = 누른 단추). */
+  onForkSession?: (sid: string, anchor: HTMLElement) => void;
+  /** 그 세션을 복제할 수 있나 — 내 세션 · 살아 있음 · 복제 수단이 있는 AI. 없으면 단추를 안 단다. */
+  canForkSession?: (sid: string) => boolean;
   /** 좁은 폭(≤900)에서 곁칸을 **서랍으로 연다/닫는다** — 셸(main.ts)의 모바일 크롬이 맡는다(#4088 후속, 2026-09-23).
    *  파일을 열었는데 서랍이 닫혀 있으면 «눌렀는데 아무 일도 없다» 가 된다 — 곁칸에 무언가를 켤 때마다 부른다. */
   onOpenDrawer?: () => void;
@@ -1063,6 +1067,15 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
           onclick: () => opts.onMoveSession!(sid) },
           icon('moveto', 'pn-i sm'), el('span', { class: 'pn-move-t', text: loose ? '프로젝트에 붙이기' : '세션 옮기기' }))
       : null;
+    // ── [세션 복제] (#4135, 원준 2026-09-27: «세션 옮기기 버튼 … 비슷한 느낌으로, 이 세션 내용을 아는 새로운 세션») ──
+    //  [세션 옮기기] 와 같은 꼴·같은 자리 규칙(내 세션에만). 옮기기보다 **앞**에 선다 — 둘 다 «이 세션» 에 하는 일이고,
+    //  하나 더 만드는 일이 자리를 바꾸는 일보다 먼저 읽히는 편이 순서에 맞다(만든 뒤에 옮긴다).
+    const fork = sid && opts.onForkSession && opts.canForkSession?.(sid)
+      ? el('button', { class: 'pn-move pn-fork', type: 'button', 'aria-label': '이 세션을 복제하기',
+          title: '지금까지의 대화를 아는 새 세션을 하나 더 만듭니다. 이 세션은 그대로 남습니다.',
+          onclick: (e: MouseEvent) => opts.onForkSession!(sid, e.currentTarget as HTMLElement) },
+          icon('copy', 'pn-i sm'), el('span', { class: 'pn-move-t', text: '세션 복제' }))
+      : null;
     // 세션을 보는 중인지 표시한다. 데스크톱 문패 크기는 프로젝트 화면과 같고, 폰에서만 이 표식으로 문패를 접는다(50-mobile.css).
     door.classList.toggle('in-sess', !!sid);
     door.replaceChildren(
@@ -1076,7 +1089,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
           loose ? el('span', { text: '아직 어느 프로젝트에도 붙지 않았어요.' }) : el('span', { class: 'mono', text: '#' + p.id }),
           loose ? null : el('span', { class: 'sep', text: '·' }),
           loose ? null : el('span', { class: 'pn-state ' + st.c, text: st.t }),
-          move)),
+          fork, move)),
       el('div', { class: 'pn-door-r' },
         // ⭐ #3778 — 얼굴 줄과 [공유] 는 여기 없다. **세션의 머리줄**(session-chat.ts sc-head)로 내려갔다.
         //  이 줄의 왼쪽은 프로젝트 이름인데 그 둘만 세션에 작용해서, 한 줄이 «프로젝트 → 세션 → 프로젝트» 로
