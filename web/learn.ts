@@ -17,6 +17,7 @@ import { loadAdmin } from './admin-rerender.js';
 import { copyButton, overlayBox, skeleton, skeletonRows } from './ui-primitives.js';
 import { isGuideTourDone, isSectionDone, startGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 크로스탭 스포트라이트 투어
 import { DOC_PAGES } from './docs-content.js'; // 사용설명서 원고(#780) — Claude Code docs 형식
+import { CTX_APP_NAME } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
 // 안내(#/learn) — 지식유형/수집 ground-truth(GET /api/ui/learn = kind_registry + data_source) 렌더.
 //  비개발자 대상: V4 본질 종류 4종(R·K·H·W) 중심 + 통합 예정 legacy 종류는 graceful 표시 + 데이터소스별 수집방식. 읽기 전용.
@@ -54,7 +55,7 @@ const GUIDE_NAV: GuideNavGroup[] = [
     { key: 'liv', label: '리브', href: '#/learn/docs/liv' },
   ] },
   { key: 'team', group: '팀 운영', hint: '관리자·팀장이 맥락과 설정을 돌보는 곳', items: [
-    { key: 'context', label: '맥락 관리', href: '#/learn/docs/context' },
+    { key: 'context', label: CTX_APP_NAME, href: '#/learn/docs/context' },
     { key: 'settings', label: '설정', href: '#/learn/docs/settings' },
   ] },
   { key: 'ref', group: '레퍼런스', hint: '찾아볼 때', items: [
@@ -218,7 +219,8 @@ function docsDecorate(root: any) {
     const first = (li: any) => li.firstElementChild && li.firstElementChild === li.firstChild ? li.firstElementChild.tagName : '';
     const strip = (box: any) => {
       const n = box.firstChild;
-      if (n && n.nodeType === 3) n.textContent = String(n.textContent).replace(/^\s*[—–-]\s*/, '');
+      //  #4233. 쌍점도 구분자로 받는다(«**제목**: 설명»). 긴 줄표 없이도 피처 카드를 쓸 수 있게.
+      if (n && n.nodeType === 3) n.textContent = String(n.textContent).replace(/^\s*[—–:-]\s*/, '');
     };
     // ② 피처 카드 — 모든 항목이 굵은 제목으로 시작할 때
     if (lis.every((li) => first(li) === 'STRONG')) {

@@ -6,6 +6,7 @@
 //   (feed-targets 는 전용 GET /api/ui/feed-targets 로 자체 조회 — /api/ui/org 페이로드를 오염시키지 않는다).
 import { api, busy, cardHead, el, toast, uiText } from './core.js';
 import { embeddedHost, sectionHead } from './admin-widgets.js';
+import { ctxPath } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
 // #976 위키 아웃바운드(피드) 패널 — 정본 지식 → 노션 등 '지식 피드' DB 카드 투영. 커넥터(인바운드)의 역방향.
 //  피드 목적지(feed_target) 목록 + 카테고리 N:M 매핑(발행 게이트) + all_categories + 새 피드 부트스트랩/등록.
@@ -184,7 +185,7 @@ async function projectOutboundEditor(detail, data) {
   body.append(table);
   body.append(el('p', { class: 'admin-hint', style: 'margin-top:10px' }, ...uiText(embeddedHost(detail)
     ? '반대 방향(ClickUp의 것을 우리 자료함으로 가져오기)은 위 [가져올 자료 정하기]에 있습니다. 여기서는 내보내기를 켜고 끄기만 합니다.'
-    : '반대 방향(외부의 것을 우리 자료함으로 가져오기)과 토큰·리스트 설정은 [맥락 관리 ▸ 수집]에 있습니다. 여기서는 내보내기를 켜고 끄기만 합니다.')));
+    : '반대 방향(외부의 것을 우리 자료함으로 가져오기)과 토큰·리스트 설정은 ' + ctxPath('sources') + '에 있습니다. 여기서는 내보내기를 켜고 끄기만 합니다.')));
 
   detail.replaceChildren(...head(), el('div', { class: 'card' }, cardHead('내보내는 항목'), body));
 }

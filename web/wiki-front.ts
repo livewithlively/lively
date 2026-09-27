@@ -265,6 +265,6 @@ export async function renderCatsSurface(box: HTMLElement, ctx: any) {
     (grpBody.firstChild as HTMLElement).style.gridTemplateColumns = track;
     if (total) body.append(el('div', { class: 'pjv-tgroup wk-tgroup' }, head, grpBody));
   }
-  if (!total) body.append(wkEmpty('아직 카테고리가 없어요 — [맥락 관리 ▸ 분류 ▸ 분류축]에서 만듭니다.'));
+  if (!total) body.append(wkEmpty('아직 카테고리가 없어요. 「분류체계」 앱에서 만듭니다.'));
   box.replaceChildren(el('div', { class: 'wk-home wk-board-pad' }, el('div', { class: 'card pjv-listboard wk-board' }, header, body)));
 }

@@ -58,7 +58,7 @@ export const CRON_ACTIONS: CronActionDef[] = [
   // #1419 T5 관리기 — 쌓인 지식을 계속 옳게 유지(분류 어긋남·아웃데이티드·모순·지식↔코드).
   //  결정적 종류(어긋남·아웃데이티드)는 이 틱 안에서 끝나고(LLM 비용 0), 판단이 필요한 종류만 배치로 나간다.
   { key: "run_managers", label: "관리기 실행 (지식 유지보수 — 어긋남·아웃데이티드·모순·코드괴리)", params: [
-    { name: "manager", label: "관리기 (선택)", kind: "manager", hint: "[맥락 관리 ▸ 관리기]에서 등록한 관리기. 비우면 **켜진 관리기 전부**를 순서대로 실행." },
+    { name: "manager", label: "관리기 (선택)", kind: "manager", hint: "[수집 · 증류 ▸ 점검 설정]에서 등록한 관리기. 비우면 **켜진 관리기 전부**를 순서대로 실행." },
     { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "모순·코드괴리 판정에만 필요(그 멤버의 AI 계정으로 실행·과금). 어긋남·아웃데이티드만 쓰면 비워도 된다." },
     HEADLESS_HARNESS_PARAM, HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
   ], run: (p, job) => runManagers(p, job.id, job.created_by ?? null) },
@@ -83,7 +83,7 @@ export const CRON_ACTIONS: CronActionDef[] = [
   { key: "classify_knowledge", label: "증류 — 카테고리 붙이기 (세션 주입)", params: [{ name: "session", label: "타깃 상시 세션", kind: "session", hint: "‘상시 세션’ 탭에서 등록한 관리 세션(map_unmapped 와 공용 가능)." }], run: runClassifyKnowledgeInject },
   // #1061 classify_knowledge 의 헤드리스판 — 상시세션 관성(옛 should 로 판단 — classify-knowledge-stale-session-inertia)을 매 배치 fresh 컨텍스트로 근본 회피. 인박스 있을 때만 접수.
   { key: "classify_knowledge_headless", label: "증류 — 카테고리 붙이기 (헤드리스 — 매 배치 새 세션)", params: [
-    { name: "classifier", label: "카테고리 붙이기 증류기 (선택)", kind: "classifier", hint: "[맥락 관리 ▸ 증류기 ▸ 카테고리 붙이기]에서 만든 증류기. 비우면 **켜진 것 전부**를 각각 접수(병렬). 켜진 것이 하나도 없으면 미분류 지식 전부를 기본 기준 하나로 본다." },
+    { name: "classifier", label: "카테고리 붙이기 증류기 (선택)", kind: "classifier", hint: "[수집 · 증류 ▸ 증류기 설정 ▸ 카테고리 붙이기]에서 만든 증류기. 비우면 **켜진 것 전부**를 각각 접수(병렬). 켜진 것이 하나도 없으면 미분류 지식 전부를 기본 기준 하나로 본다." },
     { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "헤드리스 실행 신원·과금 귀속(그 멤버의 클로드 로그인/프로필). 비우면 잡 생성자(created_by)." },
     { name: "prompt", label: "프롬프트 (선택 오버라이드)", kind: "textarea", hint: "비우면 기본 분류 프롬프트(관성 대응 — 매 배치 should 재조회·근거 인용 강제 포함). 인박스 비면 접수 안 함." },
     HEADLESS_HARNESS_PARAM, HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
@@ -98,7 +98,7 @@ export const CRON_ACTIONS: CronActionDef[] = [
   //  자동 선택(세션은 한 번에 한 작업이라 N개 동시 주입은 쌓이기만 한다). 증류기가 0개면 구 전역 동작으로 폴백.
   { key: "distill_sources", label: "증류 — 자료 → 지식 (세션 주입)", params: [
     { name: "session", label: "타깃 상시 세션", kind: "session", hint: "distill 을 수행할 관리 세션 — 자료(source)를 읽어 지식으로 증류(knowledge_save+source_link)." },
-    { name: "distiller", label: "자료 증류기 (선택)", kind: "distiller", hint: "[맥락 관리 ▸ 증류기]에서 만든 자료 → 지식 증류기. 비우면 잔량이 있는 최우선 증류기를 매 틱 하나씩 자동 선택." },
+    { name: "distiller", label: "자료 증류기 (선택)", kind: "distiller", hint: "[수집 · 증류 ▸ 증류기 설정]에서 만든 자료 → 지식 증류기. 비우면 잔량이 있는 최우선 증류기를 매 틱 하나씩 자동 선택." },
     { name: "prompt", label: "프롬프트 (선택 오버라이드)", kind: "textarea", hint: "비우면 증류기 설정(기준·형식)으로 조립된 프롬프트. 직접 쓰면 기준·형식 문구만 이걸로 갈리고, 대상 자료 지정(이 증류기 몫의 id 목록)은 서버가 앞에 유지한다 — 커스텀 프롬프트가 스코프 해제가 되지 않게." },
   ], run: runDistillInject },
   // #1289 distill_sources 의 헤드리스판 — 매 배치 새 claude -p(fresh 컨텍스트). 증류기별로 **각각** 접수해 병렬로 돈다

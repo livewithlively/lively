@@ -13,9 +13,13 @@ import type { Capability } from "../types.js";
 import { computePipelineOverview } from "../../org/store/pipeline.js";
 import { restWork } from "./shared.js";
 
+//  #4233(원준 2026-09-27). 화면 이름이 「수집 · 증류」로 바뀌었다. 사람은 한동안 옛 이름으로 말하므로 AI 가 읽는 설명에 옛 이름을 한 번 적는다.
+//   옛 이름을 적는 자리는 이 상수 하나다(scripts/ctx-rename.test.mjs R2 가 다른 문자열의 옛 이름을 막는다).
+const CTX_OLD_NAMES = ["맥락 관리"];
+
 export const pipelineCapabilities: Capability[] = [
   restWork("org_pipeline_overview", "맥락 파이프라인 현황",
-    "수집 → 증류 → 관리 세 단계의 처리량·잔량·막힘과 카테고리 기준표를 한 번에 반환한다. 맥락 관리 탭이 읽는다. " +
+    `수집 → 증류 → 관리 세 단계의 처리량·잔량·막힘과 카테고리 기준표를 한 번에 반환한다. 「수집 · 증류」 앱(옛 이름 「${CTX_OLD_NAMES[0]}」)의 「실시간 현황」이 읽는다. ` +
     "각 단계는 { 설정된 것 수 · 켜진 것 수 · 산출물 수 · 잔량(아직 다음 단계로 못 간 것) · 자동 실행 잡 }. " +
     "증류는 지식을 완성시킨다 — stages.distill 은 자료 → 지식(자료 레인), stages.distill.knowledge 는 카테고리 붙이기 " +
     "(카테고리가 없는 미분류 지식에 카테고리를 붙이는 레인 — 옛 이름 «분류기»). taxonomy = 카테고리 칸 수·정의 빈 칸 수(기준표 — 단계 아님). " +

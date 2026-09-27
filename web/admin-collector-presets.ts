@@ -13,6 +13,7 @@ import { api, busy, cardHead, el, toast, uiText } from './core.js';
 //  admin → admin-shell → 이 패널로 순환이 생긴다(셸이 이 패널을 등록하므로). 셸↔패널 순환 절단 규칙과 같은 이유.
 import { confirmDialog } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
+import { ctxPath } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
 let editingKey: string | null = null;
 let creating = false;
@@ -48,7 +49,7 @@ export async function collectorPresetEditor(detail: HTMLElement, _data?: unknown
 
   const body = el('div', {});
   body.append(el('p', { class: 'admin-hint' },
-    ...uiText('라이블리가 기본으로 아는 도구(슬랙·노션 등) 외에, 사내 API·공개 피드·웹훅을 코드 없이 붙일 수 있습니다. 여기서 만든 방식은 [맥락 관리 ▸ 가져오는 곳]에서 가져오기를 만들 때 고를 수 있게 됩니다.')));
+    ...uiText('라이블리가 기본으로 아는 도구(슬랙·노션 등) 외에, 사내 API·공개 피드·웹훅을 코드 없이 붙일 수 있습니다. 여기서 만든 방식은 ' + ctxPath('sources') + '에서 수집기를 만들 때 고를 수 있게 됩니다.')));
 
   // 기본 제공은 목록만(읽기 전용) — 무엇이 이미 있는지 알아야 중복을 안 만든다.
   const bcard = el('div', { class: 'card' }, cardHead('기본 제공', '코드에 내장된 방식입니다. 수정·삭제할 수 없고, 변형이 필요하면 아래에서 복제하세요.'));
@@ -80,7 +81,7 @@ export async function collectorPresetEditor(detail: HTMLElement, _data?: unknown
 
 function head() {
   return sectionHead('수집 방식',
-    '기본 제공에 없는 소스를 코드 없이 붙입니다. 여기서 정의한 방식으로 [맥락 관리 ▸ 가져오는 곳]에서 가져오기를 만듭니다.');
+    '기본 제공에 없는 소스를 코드 없이 붙입니다. 여기서 정의한 방식으로 ' + ctxPath('sources') + '에서 수집기를 만듭니다.');
 }
 
 function presetSummary(p: any, used: number, reload: () => void, canEdit = true) {
@@ -214,7 +215,7 @@ function presetForm(p: any | null, builtin: any[], reload: () => void) {
   const whItemsIn = el('input', { type: 'text', style: S, value: cfg.itemsPath ?? '', placeholder: '$.events — 비우면 본문 전체가 항목 1건' }) as HTMLInputElement;
   const webhookBox = el('div', {},
     el('p', { class: 'admin-hint ctx-field-hint' },
-      ...uiText('저장하고 가져오기를 만들면 받을 주소가 생깁니다 — [맥락 관리 ▸ 가져오는 곳]의 그 가져오기 설정에서 확인해 보내는 쪽에 등록하세요.')),
+      ...uiText('저장하고 수집기를 만들면 받을 주소가 생깁니다. ' + ctxPath('sources') + '의 그 수집기 설정에서 주소를 확인해 보내는 쪽에 등록하세요.')),
     F('서명 검증', '보내는 쪽과 공유 비밀을 나눠 갖고 서명을 확인합니다. 끄면 주소만 알면 누구나 우리 저장소에 넣을 수 있습니다.', sigKindSel),
     F('서명 헤더 이름', '보내는 쪽 문서에 적혀 있습니다.', sigHeaderIn),
     F('서명 접두어', 'sha256= 처럼 값 앞에 붙는 것이 있으면 적으세요.', sigPrefixIn),
@@ -323,7 +324,7 @@ function presetForm(p: any | null, builtin: any[], reload: () => void) {
         parser_script: driver === 'clone' ? null : (parserIn.value.trim() || null),
         enabled: enabledChk.checked,
       }) });
-      toast(isNew ? '가져오는 방식을 만들었습니다 — [맥락 관리 ▸ 가져오는 곳]에서 가져오기를 만들 수 있습니다' : '저장했습니다');
+      toast(isNew ? '가져오는 방식을 만들었습니다. ' + ctxPath('sources') + '에서 수집기를 만들 수 있습니다' : '저장했습니다');
       editingKey = null; creating = false; reload();
     } catch (e) { toast('실패 — ' + (e as Error).message, true); saveBtn.disabled = false; }
   });
