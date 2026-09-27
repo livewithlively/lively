@@ -55,7 +55,9 @@ export function canForkSess(s: Sess): boolean {
   const me = String((state.me && (state.me as { userId?: string }).userId) || '');
   const owner = String((s.raw && s.raw.owner) || '');
   const mine = owner && me ? owner === me : isMineSess(s);
-  return mine && isLiveSess(s) && forkableHarness(s.raw && s.raw.harness);
+  //  앱으로 연 세션은 서버가 거절한다 — 누르면 반드시 실패하는 단추를 세우지 않는다.
+  const app = !!(s.raw && (s.raw.appId || s.raw.app_id));
+  return mine && !app && isLiveSess(s) && forkableHarness(s.raw && s.raw.harness);
 }
 
 // ── 세션 ───────────────────────────────────────────────────────────────────

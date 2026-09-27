@@ -5,7 +5,10 @@ import type { SessionState } from "../sessions/session-state.js";
 import { HARNESSES } from "./catalog.js";
 import { NODE_OPS, NODE_BASELINE_OPS } from "../node/protocol.js";
 import { SESSION_OPS } from "./session-ops.js";
-import { FORK_LABEL_MAX, forkLabel, forkRefusal, forkSupported, sessionForkInput, type ForkFacts } from "./session-fork.js";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { FORK_LABEL_MAX, forkInheritsTask, forkLabel, forkRefusal, forkSupported, sessionForkInput, type ForkFacts } from "./session-fork.js";
 
 const CONV = "0199b1a2-1f3e-7c44-9c2a-3b0f5d6e7a8b";
 const st = (over: Partial<SessionState> = {}): SessionState => ({
@@ -89,4 +92,29 @@ test("F6 노드 세션 — 꺼져 있거나 op 를 선언하지 않았으면 보
   assert.equal(forkRefusal(facts({ nodeId: "mac", nodeOnline: true, nodeCanFork: true })), null);
   // 남의 세션이면 노드 사정보다 그 말이 먼저다(고칠 수 없는 것부터)
   assert.equal(forkRefusal(facts({ me: "yoon", nodeId: "mac", nodeOnline: false }))?.status, 403);
+});
+
+test("F7 태스크 — 같은 프로젝트의 진행 중 태스크만 물려받는다(끝난 일을 복제로 다시 열지 않는다)", () => {
+  assert.equal(forkInheritsTask({ id: 4159, status: "in_progress", project_id: 4135 }, 4135), true);
+  assert.equal(forkInheritsTask({ id: 4159, status: "done", project_id: 4135 }, 4135), false);
+  assert.equal(forkInheritsTask({ id: 4159, status: "todo", project_id: 4135 }, 4135), false);
+  assert.equal(forkInheritsTask({ id: 4159, status: "in_progress", project_id: 9999 }, 4135), false, "다른 프로젝트의 태스크");
+  assert.equal(forkInheritsTask(null, 4135), false);
+  assert.equal(forkInheritsTask({ id: 4159, status: "in_progress", project_id: 4135 }, undefined), false);
+});
+
+// createSession 은 tmux 를 실제로 띄우는 함수라 여기서 부르지 않는다(실측은 PR 본문 — 두 하네스로 끝까지 돌렸다).
+//  대신 **이 기능이 조용히 죽는 두 자리**를 글자로 못 박는다(리뷰 지적): ① fork 가 이어받기보다 앞서 argv 에 실리는가
+//  ② fork 면 pane 이 셸인 모드(app-server · 대화 런타임)로 안 가는가 — 가면 argv 가 만들어지고도 실행되지 않는다.
+test("F8 createSession — fork 는 이어받기보다 앞서고, pane 이 셸인 모드로 가지 않는다", () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const file = [path.join(here, "sessions.ts"), path.join(here, "..", "..", "src", "terminal", "sessions.ts")].find((p) => fs.existsSync(p));
+  assert.ok(file, "sessions.ts 원문을 찾지 못했다");
+  const src = fs.readFileSync(file!, "utf8");
+  const iFork = src.indexOf("if (input.fork) {");
+  const iResume = src.indexOf("} else if (input.resume) {");
+  assert.ok(iFork > 0 && iResume > iFork, "fork 분기가 resume 분기 앞에 있어야 한다");
+  assert.ok(src.slice(iFork, iResume).includes("harness.forkArgv(input.fork)"), "fork 분기가 하네스의 복제 argv 를 싣는다");
+  assert.ok(/const chatMode = \(input\.loginFor \|\| input\.fork\) \? "tmux"/.test(src), "fork 면 codex 도 터미널 TUI 로 뜬다");
+  assert.ok(/const chatRuntime = !input\.loginFor && !input\.fork && /.test(src), "fork 면 대화 런타임으로 가지 않는다");
 });

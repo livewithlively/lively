@@ -89,6 +89,15 @@ export function forkRefusal(f: ForkFacts): ForkRefusal | null {
 }
 
 /**
+ * 복제본이 원래 세션의 태스크를 물려받나 — 같은 프로젝트의 **진행 중** 태스크일 때만.
+ *  끝난(또는 아직 시작 안 한) 태스크는 물려주지 않는다: 세션에 태스크를 잇는 순간 상태가 「진행 중」 으로 바뀌므로,
+ *  복제했다는 이유만으로 끝난 일이 다시 열리면 안 된다.
+ */
+export function forkInheritsTask(task: { id: number; status: string; project_id: number } | null | undefined, projectId: number | null | undefined): boolean {
+  return !!task && Number(task.id) > 0 && Number(task.project_id) === Number(projectId) && String(task.status) === "in_progress";
+}
+
+/**
  * 복제본의 생성 입력 — 원래 세션의 작업 자리·프로젝트·AI·모델·권한을 그대로 물려받고 `fork` 만 얹는다.
  *  ⚠ 첫 지시(initialPrompt)는 없다: 복제본은 원래 대화를 이미 알고, 사람의 다음 말을 기다리는 상태로 뜬다.
  *  ⚠ carryConv 도 없다(CreateInput.fork 머리말 — 복제본은 원래 대화를 «도는» 세션이 아니다).
