@@ -22,7 +22,8 @@ const stateMatch = (v: SessView, filter: string): boolean => !filter ? true : fi
 export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
   const { o, P, pid } = ctx;
   const w = f.w, h = f.h;
-  const modal = !!f.modal;   // 모달 — 모든 세션 · 모든 열(노드·마지막 활동까지) · 넓은 옆 칸(마지막 열 턴 · 세션 id · 만든 때)
+  const modal = !!f.modal;   // 모달 — 모든 세션 · 두 줄짜리 줄(이름 / 도는 자리 · 태스크) + 상태·사람·마지막 활동 열 · 넓은 옆 칸(마지막 열 턴 · 세션 id · 만든 때)
+  const phone = modal && ctx.narrow;   // 좁은 화면의 모달 — 열은 상태 · 얼굴 둘(나머지는 줄 둘째 줄과 아래 «고른 세션»)
   const tools = toolsOf(pid);
   const taskIdx = sessionTaskIndex(P.tasks || []);
   const hasTask = (s: any) => taskIdx.has(String(s.id));
@@ -93,10 +94,9 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
       b.onclick = (e) => { e.stopPropagation(); enterSession(s); };
       return b;
     };
-    const ownerCell = (s: any): HTMLElement => el('span', { class: 'pjh-sr-c' }, personFace(s.owner, 'pjv-ava', memberName(s.owner)), el('span', { class: 'pjh-sr-cn', text: memberName(s.owner) }));
+    const ownerCell = (s: any): HTMLElement => el('span', { class: 'pjh-sr-c', title: memberName(s.owner) }, personFace(s.owner, 'pjv-ava', memberName(s.owner)), phone ? null : el('span', { class: 'pjh-sr-cn', text: memberName(s.owner) }));
     const stateCell = (s: any): HTMLElement => el('span', { class: 'pjh-sr-c', text: V(s).label });
     const actCell = (s: any): HTMLElement => { const at = sessionLastActivity(s); return el('span', { class: 'pjh-sr-c', text: at ? relTime(new Date(at).toISOString()) : '' }); };
-    const nodeCell = (s: any): HTMLElement => el('span', { class: 'pjh-sr-c', title: s.node ? String(s.node.name || s.node.id || '') : '중앙' }, hubIcon('monitor', 12), el('span', { class: 'pjh-sr-cn', text: nodeLabel(s.node) }));
 
     // ── 1×1 — 지금 볼 세션 하나 + 한 줄 ──
     if (w <= 1 && h <= 1) {
@@ -131,12 +131,15 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
     const sidePane = modal || (w >= 3 && h >= 2);
     // 줄 수를 자르지 않는다(2026-09-27) — 넘치면 목록 안에서 스크롤.
     const caps = groups.map((g) => g.sessions.length);
-    // 열 — 1칸: 상태 · 2칸 한 줄 높이: 상태·사람 · 2×2 와 3칸: 상태·사람·마지막 활동(옆 칸이 있으면 활동은 뺀다 — 자리가 좁다) · 모달: 상태·사람·노드·마지막 활동.
-    const colDefs: Array<{ key: string; label: string; px: number; cell: (s: any) => HTMLElement }> = [
-      { key: 'state', label: '상태', px: modal ? 88 : 74, cell: stateCell },
-      ...(w >= 2 ? [{ key: 'owner', label: '사람', px: modal ? 120 : 104, cell: ownerCell }] : []),
-      ...(modal ? [{ key: 'node', label: '도는 자리', px: 150, cell: nodeCell }] : []),
-      ...(modal || ((w >= 3 || (w >= 2 && h >= 2)) && !sidePane) ? [{ key: 'act', label: '마지막 활동', px: 100, cell: actCell }] : []),
+    // 열 — 1칸: 상태 · 2칸 한 줄 높이: 상태·사람 · 2×2 와 3칸: 상태·사람·마지막 활동(옆 칸이 있으면 활동은 뺀다 — 자리가 좁다)
+    //  모달: 상태·사람·마지막 활동. «도는 자리» 와 태스크는 이름 아래 둘째 줄로 — 이름 열을 열 넷이 눌러 이름이 잘리던 것(실측 106px)을 푼다.
+    const colDefs: Array<{ key: string; label: string; px: number; cell: (s: any) => HTMLElement }> = phone ? [
+      { key: 'state', label: '상태', px: 68, cell: stateCell },
+      { key: 'owner', label: '', px: 28, cell: ownerCell },
+    ] : [
+      { key: 'state', label: '상태', px: modal ? 84 : 74, cell: stateCell },
+      ...(w >= 2 ? [{ key: 'owner', label: '사람', px: modal ? 104 : 104, cell: ownerCell }] : []),
+      ...(modal || ((w >= 3 || (w >= 2 && h >= 2)) && !sidePane) ? [{ key: 'act', label: '마지막 활동', px: modal ? 88 : 100, cell: actCell }] : []),
     ];
     const gridCols = 'minmax(0,1fr) ' + colDefs.map((c) => c.px + 'px').join(' ');
 
@@ -186,9 +189,15 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
     };
     const srow = (s: any): HTMLElement => {
       const v = V(s);
-      const r = el('div', { class: 'pjh-sr' + (sidePane && tools.picked === s.id ? ' on' : ''), 'data-sid': String(s.id), style: 'grid-template-columns:' + gridCols },
-        el('div', { class: 'pjh-sr-t' }, sessDot(v), el('span', { class: 'pjh-sr-n', text: s.label || s.id }), w >= 2 ? taskChip(s) : null,
-          el('span', { class: 'pjh-sr-acts' }, enterBtn(s), hasTask(s) ? null : attachBtn(s))),
+      // 모달 — 줄이 둘: 이름(올리면 [입장]) / 도는 자리 · 태스크. «태스크에 붙이기» 는 옆 칸에 있다(줄에 또 두지 않는다).
+      const nameCell = modal
+        ? el('div', { class: 'pjh-sr-t two' },
+          el('div', { class: 'pjh-sr-l1' }, sessDot(v), el('span', { class: 'pjh-sr-n', text: s.label || s.id }), el('span', { class: 'pjh-sr-acts' }, enterBtn(s))),
+          el('div', { class: 'pjh-sr-l2' }, el('span', { class: 'pjh-sr-node', title: '도는 자리 — ' + (s.node ? String(s.node.name || s.node.id || '') : '중앙') }, hubIcon('monitor', 12), el('span', { text: nodeLabel(s.node) })), taskChip(s)))
+        : el('div', { class: 'pjh-sr-t' }, sessDot(v), el('span', { class: 'pjh-sr-n', text: s.label || s.id }), w >= 2 ? taskChip(s) : null,
+          el('span', { class: 'pjh-sr-acts' }, enterBtn(s), hasTask(s) ? null : attachBtn(s)));
+      const r = el('div', { class: 'pjh-sr' + (modal ? ' two' : '') + (sidePane && tools.picked === s.id ? ' on' : ''), 'data-sid': String(s.id), style: 'grid-template-columns:' + gridCols },
+        nameCell,
         ...colDefs.map((c) => c.cell(s)));
       if (sidePane) r.onclick = () => { tools.picked = s.id; list.querySelectorAll('.pjh-sr.on').forEach((x) => x.classList.remove('on')); r.classList.add('on'); paintSide(s); };
       return r;
@@ -205,7 +214,7 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
 
     if (sidePane) {
       side = el('div', { class: 'pjh-side' });
-      body.append(el('div', { class: 'pjh-two-s', style: modal ? 'grid-template-columns:minmax(0,1fr) 360px' : '' }, list, side));
+      body.append(el('div', { class: 'pjh-two-s', style: modal ? 'grid-template-columns:minmax(0,1fr) 340px' : '' }, list, side));
       const picked = ss.find((s) => s.id === tools.picked) || ss[0];
       tools.picked = picked.id;
       list.querySelectorAll('.pjh-sr').forEach((x) => x.classList.toggle('on', (x as HTMLElement).dataset.sid === String(picked.id)));
@@ -214,7 +223,8 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
       body.append(list);
     }
     // 목록 줄의 «마지막 줄» 은 안 싣는다(5판 — 줄이 좁다). 사용 중 세션의 상태 열이 그 역할이다.
-    const footTxt = (w >= 2 ? '사용 중 ' + live.length + ' · 최근 ' + (ss.length - live.length) : '세션 ' + ss.length) + (noTask ? ' · 태스크 없는 세션 ' + noTask : '');
+    const footTxt = phone ? '사용 중 ' + live.length + ' · 최근 ' + (ss.length - live.length)
+      : (w >= 2 ? '사용 중 ' + live.length + ' · 최근 ' + (ss.length - live.length) : '세션 ' + ss.length) + (noTask ? ' · 태스크 없는 세션 ' + noTask : '');
     foot.append(footText(footTxt), newBtn());
     if (w >= 2) foot.append(logBtn());
   });

@@ -23,6 +23,7 @@ export const fillTimeline: Fill = (ctx, f, body, foot, sub) => {
   const { o, pid } = ctx;
   const w = f.w, h = f.h;
   const modal = !!f.modal;
+  const phone = modal && ctx.narrow;   // 좁은 화면의 모달 — 레인은 14일 · 날짜는 하루 걸러(오늘부터 거꾸로)
   const now = Date.now();
   const open = () => ctx.openTool('timeline');
   const memberName = ctx.memberName;
@@ -77,7 +78,7 @@ export const fillTimeline: Fill = (ctx, f, body, foot, sub) => {
     }
 
     // ── 레인 — 사람 × 날 ──
-    const nDays = modal ? 30 : w >= 3 ? 14 : 7;
+    const nDays = phone ? 14 : modal ? 30 : w >= 3 ? 14 : 7;
     const days: LaneDay[] = laneDays(nDays, now);
     const order = [...(o.members || []).map((m) => String(m.member_id)), ...sorted.map((a) => String(a.author_person || ''))].filter((x, i, arr) => x && arr.indexOf(x) === i);
     const counts = laneCounts(sorted, days, []);
@@ -85,7 +86,7 @@ export const fillTimeline: Fill = (ctx, f, body, foot, sub) => {
     // 위젯은 가장 최근 (사람, 날)을 기본으로 고른다. 모달은 고르기 전엔 전부를 보인다(점을 눌러야 좁힌다).
     const pick = PICK.has(pid) ? PICK.get(pid)! : (modal ? null : latestLane(sorted));
     const lane = el('div', { class: 'pjh-lane' + (!modal && h <= 1 ? ' short' : ''), style: '--n:' + nDays });
-    lane.append(el('div', { class: 'pjh-lane-h' }, el('span', { class: 'pjh-lane-lab' }), ...days.map((d) => el('span', { class: 'pjh-lane-d' + (d.weekend ? ' wk' : '') + (d.today ? ' today' : ''), text: d.label }))));
+    lane.append(el('div', { class: 'pjh-lane-h' }, el('span', { class: 'pjh-lane-lab' }), ...days.map((d, i) => el('span', { class: 'pjh-lane-d' + (d.weekend ? ' wk' : '') + (d.today ? ' today' : ''), text: phone && (nDays - 1 - i) % 2 ? '' : d.label }))));
     for (const p of people) {
       const row = counts.get(p)!;
       lane.append(el('div', { class: 'pjh-lane-r' },
@@ -181,8 +182,8 @@ export const fillTimeline: Fill = (ctx, f, body, foot, sub) => {
           el('span', { class: 'pjh-kn-rel', text: REL_LABEL[r.relation] || r.relation || '' })))
           : [el('div', { class: 'pjh-rail-fine', text: '이 기록에 이어진 지식이 없습니다.' })]));
     }
-    body.append(legend('점 크기 = 그날 건수 · 옅은 열 = 주말 · 점을 누르면 아래가 그날 그 사람의 기록으로 좁혀집니다'), toolsRow,
+    body.append(legend(phone ? '점을 누르면 그날 그 사람의 기록만' : '점 크기 = 그날 건수 · 옅은 열 = 주말 · 점을 누르면 아래가 그날 그 사람의 기록으로 좁혀집니다'), toolsRow,
       el('div', { class: 'pjh-mtwo', style: 'grid-template-columns:minmax(0,1fr) 380px' }, el('div', { class: 'pjh-mmain' }, listBox), side));
-    foot.append(footText(nDays + '일 레인 · 전체 ' + sorted.length + '건 · 이번 주 ' + week + '건 · 오늘 ' + today + '건 — 이 프로젝트에 연결된 작업만'));
+    foot.append(footText(phone ? '전체 ' + sorted.length + '건 · 이번 주 ' + week + ' · 오늘 ' + today : nDays + '일 레인 · 전체 ' + sorted.length + '건 · 이번 주 ' + week + '건 · 오늘 ' + today + '건 — 이 프로젝트에 연결된 작업만'));
   });
 };

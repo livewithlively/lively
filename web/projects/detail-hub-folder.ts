@@ -238,7 +238,9 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
       parts.push(side);
     }
     body.append(el('div', { class: 'pjh-two-f', style: 'grid-template-columns:' + (modal ? 'minmax(0,1fr) 300px' : '170px minmax(0,1fr)' + (w >= 3 ? ' 300px' : '')) }, ...parts));
-    foot.append(footText(rootLabel + (modal ? ' · 이 폴더 파일 ' + cur.files.length + ' · 폴더 ' + cur.dirs.length : '') + (picked ? ' · 고른 것: ' + picked.name : '')));
+    // 모달 바닥 — 지금 선 폴더의 수(루트면 루트의 수 한 번만). 좁은 화면은 수만.
+    const hereTxt = (nav.path ? '«' + here + '» ' : '루트 · ') + '파일 ' + cur.files.length + ' · 폴더 ' + cur.dirs.length + (nav.path ? ' — 프로젝트 전체 파일 ' + root.files.length : '');
+    foot.append(footText(modal ? hereTxt + (picked && !ctx.narrow ? ' · 고른 것: ' + picked.name : '') : rootLabel + (picked ? ' · 고른 것: ' + picked.name : '')));
     if (!modal) foot.append(btn('폴더 열기', 'btn-ghost', open));
   });
 };

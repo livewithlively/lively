@@ -670,3 +670,60 @@ button.pjh-rail-r:hover { background: var(--bg-tint); color: var(--ink); }
 .pjh-modal .pjh-side .pjh-kr { min-height: 40px; padding: 6px; align-items: flex-start; }
 .pjh-modal .pjh-side .pjh-kr > .pjh-ic { margin-top: 3px; }
 .pjh-modal .pjh-klabel { flex-wrap: wrap; }
+
+/* ══ 모달 2차 보정(캡처 확인, 2026-09-27) ══ */
+/* 세션 — 줄이 둘(이름 / 도는 자리 · 태스크): 이름 열이 넓게 선다. 고른 줄의 [입장] 은 옆 칸에 있으니 줄에는 올렸을 때만. */
+.pjh-sr.two { min-height: 54px; }
+.pjh-sr-t.two { flex-direction: column; align-items: stretch; justify-content: center; gap: 1px; padding: 7px 10px 7px 8px; }
+.pjh-sr-l1 { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 24px; }
+.pjh-sr-l1 .pjh-sr-n { min-width: 0; }
+.pjh-sr-l2 { display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: 16px; font-size: 12.5px; color: var(--muted); }
+.pjh-sr-node { display: inline-flex; align-items: center; gap: 5px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pjh-sr-node > span { overflow: hidden; text-overflow: ellipsis; }
+.pjh-sr-node .pjh-ic { flex: none; color: var(--muted-2); }
+.pjh-sr-l2 .pjh-tb { max-width: 60%; }
+.pjh-modal .pjh-sr.on:not(:hover) .pjh-sr-acts { display: none; }
+.pjh-modal .pjh-sg { min-height: 30px; }
+.pjh-modal .pjh-sg-l { white-space: nowrap; padding-left: 8px; }
+/* 지식 — 위: 필요 → 산출(내용만큼, 넘치면 단 안에서 스크롤) / 아래 전폭: 찾기 + 추천 */
+.pjh-kmodal { display: flex; flex-direction: column; gap: 18px; flex: 1; min-height: 0; }
+.pjh-kmodal > .pjh-kn-normal { flex: none; overflow: visible; }
+.pjh-kmodal .pjh-kflow { flex: none; }
+.pjh-kmodal .pjh-kflow > .pjh-kside { min-height: 148px; max-height: 42vh; }
+.pjh-kfind { display: flex; flex-direction: column; gap: 8px; flex: 1 1 0; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 16px 2px 2px; border-top: 1px solid var(--line-row); scrollbar-width: thin; scrollbar-color: var(--line-net) transparent; }
+.pjh-kfind > * { flex: none; }
+.pjh-kfind-h { display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 13px; color: var(--muted-2); }
+.pjh-kfind-h b { flex: none; font-size: 14px; font-weight: 800; letter-spacing: -.1px; color: var(--ink); }
+.pjh-kfind-h span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjh-kfind .pjh-search { height: 38px; }
+.pjh-kfind .pjh-search .pjh-search-in { font-size: 14px; }
+.pjh-kfind .pjh-kres, .pjh-kfind .pjh-krec { flex: none; overflow: visible; display: flex; flex-direction: column; gap: 0; }
+.pjh-kfind .pjh-kres[hidden], .pjh-kfind .pjh-krec[hidden] { display: none; }
+.pjh-kfind .pjh-kr { min-height: 44px; padding: 8px 10px; gap: 10px; align-items: flex-start; font-size: 14px; }
+.pjh-kfind .pjh-kr > .pjh-ic { margin-top: 3px; flex: none; }
+.pjh-kfind .pjh-kr .pjh-kr-t { white-space: normal; overflow: visible; line-height: 1.45; overflow-wrap: anywhere; }
+.pjh-kfind .pjh-kr .pjh-kr-s { white-space: normal; font-size: 12.5px; line-height: 1.5; margin-top: 2px; color: var(--muted); }
+.pjh-kfind .pjh-kn-pct { margin-top: 2px; font-size: 12.5px; }
+.pjh-kfind .pjh-kn-link, .pjh-kfind .pjh-kn-rel { margin-top: -1px; white-space: nowrap; }
+.pjh-kfind .pjh-kn-link { padding: 4px 10px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--bg); }
+.pjh-kfind .pjh-kn-link:hover { border-color: var(--blue); background: var(--bg-punch); }
+/* 폴더 — 모달 낱장 이름은 두 줄까지(넓으니 자르지 않는다) */
+.pjh-modal .pjh-fc-n { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.35; overflow-wrap: anywhere; }
+/* 좁은 화면의 모달 — 요약 띠는 한 줄(옆으로 민다) · 레인 이름 칸은 얼굴+짧은 이름 · 지식은 위아래로 흐른다 */
+@media (max-width: 900px) {
+  .pjh-modal .pjh-sum { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 16px; }
+  .pjh-modal .pjh-sum::-webkit-scrollbar { display: none; }
+  .pjh-modal .pjh-sum-g { flex: none; }
+  .pjh-modal .pjh-sum-row { flex-wrap: nowrap; }
+  .pjh-modal .pjh-tools { flex-wrap: wrap; }
+  .pjh-modal .pjh-tools-find { flex: 1 1 100%; margin-left: 0; }
+  .pjh-modal .pjh-lane-h, .pjh-modal .pjh-lane-r { grid-template-columns: 84px repeat(var(--n, 14), minmax(0, 1fr)); }
+  .pjh-modal .pjh-lane-d { font-size: 10.5px; white-space: nowrap; }
+  .pjh-modal .pjh-legend-h { margin-left: 0; }
+  .pjh-kmodal { flex: none; }
+  .pjh-kmodal .pjh-kflow > .pjh-kside { max-height: none; min-height: 0; }
+  .pjh-kfind { flex: none; overflow: visible; }
+  .pjh-kfind-h { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .pjh-kfind-h span { white-space: normal; }
+  .pjh-modal .pjh-slist { flex: none; overflow: visible; }
+}

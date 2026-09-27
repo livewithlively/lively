@@ -78,7 +78,7 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
     } else { EDITING.set(pid, null); paintText(); const ed = textHost.querySelector('[contenteditable]') as HTMLElement | null; if (ed) ed.focus(); }
   };
   // «갱신 · 안내 칩 · 편집» 줄 — 1×1 은 바닥 단추가 그 역할(자리가 없다). 안내 칩은 1×1 이면 본문 위 한 줄.
-  const bh = (h >= 2 || w >= 2) ? el('div', { class: 'pjh-bh' }, el('span', { class: 'pjh-bh-l' }, el('span', { text: P.updated_at ? '갱신 ' + relTime(P.updated_at) : '' }), notesRow()), editBtn) : null;
+  const bh = (h >= 2 || w >= 2) ? el('div', { class: 'pjh-bh' }, el('span', { class: 'pjh-bh-l' }, f.modal ? null : el('span', { text: P.updated_at ? '갱신 ' + relTime(P.updated_at) : '' }), notesRow()), editBtn) : null;   // 모달은 머리에 «갱신» 이 이미 있다
   if (bh) textHost.append(bh); else { const nr = notesRow(); if (nr) textHost.append(nr); }
   textHost.append(contentHost);
   paintText();

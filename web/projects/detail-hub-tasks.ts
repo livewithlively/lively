@@ -185,5 +185,6 @@ export const fillTasks: Fill = (ctx, f, body, foot, sub, acts) => {
     el('div', { class: 'pjh-sum-g' }, el('div', { class: 'pjh-rail-h', text: '세션' }), el('div', { class: 'pjh-sum-row' },
       sumChip(el('span', { class: 'pjh-rail-who' }, hubIcon('term', 12), '붙은 태스크'), withSess.length, tools.sess, () => { tools.sess = !tools.sess; ctx.refreshGrid(); }))));
   body.append(strip, el('div', { class: 'pjh-mmain' }, listEl));
-  foot.append(footText('보이는 줄 ' + shown + ' · 열림 ' + openList.length + ' · 마감 지남 ' + over + ' · 완료 ' + done + (tools.done ? '' : ' 는 접힘') + ' — 줄을 누르면 태스크가 열립니다'));
+  foot.append(footText(phone ? '보이는 줄 ' + shown + ' · 열림 ' + openList.length + ' · 완료 ' + done + (tools.done ? '' : ' 접힘')
+    : '보이는 줄 ' + shown + ' · 열림 ' + openList.length + ' · 마감 지남 ' + over + ' · 완료 ' + done + (tools.done ? '' : ' 는 접힘') + ' — 줄을 누르면 태스크가 열립니다'));
 };

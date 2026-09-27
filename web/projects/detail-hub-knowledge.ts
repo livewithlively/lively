@@ -3,6 +3,7 @@
 //   1×1  필요·산출 줄 + 추천 하나           1×N  «필요 — 세션이 읽고 시작» 카드 · 추천 · «산출 — 이 프로젝트가 만든 것»
 //   2×1 · 3×1  필요 | 산출 두 단(추천은 필요 밑 점선)   2×2+  흐름: 필요 → [프로젝트 · 세션 N · 태스크 N] → 산출
 //   3×2+ 흐름 + 오른쪽 검색 칸
+//   모달 위: 필요 → 산출 두 단(카드 · 요약 끝까지 · 넘치면 단 안에서 스크롤) / 아래 전폭: 찾기 + 추천(제목이 길어 전폭 줄이라야 한두 줄에 선다)
 //  연결/해제는 프로젝트 지식 API(POST /v6/projects/:id/knowledge {name, relation[, unlink]}) — 섹션(detail-knowledge)과 같은 문.
 import { api, el, lifecycleDot, relTime, toast } from '../core.js';
 import { type Fill, btn, footText, hubIcon } from './detail-hub-kit.js';
@@ -62,6 +63,7 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
 
   // ── 검색 — 지식의 입구. 치면 본문이 결과로 바뀌고, 지우면 돌아온다. ──
   const results = el('div', { class: 'pjh-kres' });
+  let swap: HTMLElement | null = null;   // 검색 결과가 설 때 자리를 내주는 것 — 위젯: 본문 · 옆 칸(3×2): 안내문 · 모달: 추천. 흐름(필요 → 산출)은 남는다.
   const searchBox = (placeholder = '필요한 지식 찾기 — 의미로 찾습니다…'): HTMLElement => {
     const inp = el('input', { type: 'search', class: 'pjh-search-in', placeholder }) as HTMLInputElement;
     let t: any = null;
@@ -69,9 +71,10 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
       clearTimeout(t);
       const q = inp.value.trim();
       t = setTimeout(async () => {
-        if (!q) { results.replaceChildren(); results.hidden = true; normal.hidden = false; return; }
+        const sw = swap || normal;
+        if (!q) { results.replaceChildren(); results.hidden = true; sw.hidden = false; return; }
         const my = ++seq;
-        results.hidden = false; normal.hidden = true;
+        results.hidden = false; sw.hidden = true;
         results.replaceChildren(el('div', { class: 'pjh-stat', text: '찾는 중…' }));
         let ms: any[] = [];
         try { ms = await api('/api/ui/knowledge/semantic?q=' + encodeURIComponent(q) + '&limit=8').then((d: any) => (d && d.entries) || []); } catch (_) { ms = []; }
@@ -82,7 +85,7 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
           const name = knName(m);
           results.append(el('div', { class: 'pjh-kr' }, hubIcon('doc', 13),
             el('div', { class: 'pjh-kr-b' }, el('a', { class: 'pjh-kr-t', href: '#/k/' + encodeURIComponent(name), ...KN_NEW_TAB, text: m.title || name }),
-              m.snippet ? el('div', { class: 'pjh-kr-s', text: String(m.snippet).slice(0, 90) }) : null),
+              m.snippet ? el('div', { class: 'pjh-kr-s', text: String(m.snippet).slice(0, f.modal ? 240 : 90) }) : null),
             linked.has(name) ? el('span', { class: 'pjh-kn-rel', text: '연결됨' })
               : el('button', { class: 'pjh-kn-link', type: 'button', text: '필요로 연결', onclick: (e: Event) => { e.stopPropagation(); link(name, e.currentTarget as HTMLButtonElement); } })));
         }
@@ -111,9 +114,9 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
     for (const m of fresh) recHost.append(rrow(m));
   });
   const modal = !!f.modal;   // 모달 — 흐름(필요 → 프로젝트 → 산출)은 카드 요약을 끝까지, 옆 칸은 찾기 + 추천 전부
-  const sidePane = modal || (w >= 3 && h >= 2);
-  const flowView = w >= 2 && h >= 2 && !sidePane;   // 2×2 — 위 검색 상자 대신 «필요 지식 찾기» 점선 카드(누르면 그 자리에 검색)
-  if (!sidePane && !flowView) body.append(searchBox());
+  const sidePane = !modal && w >= 3 && h >= 2;
+  const flowView = w >= 2 && h >= 2 && !sidePane && !modal;   // 2×2 — 위 검색 상자 대신 «필요 지식 찾기» 점선 카드(누르면 그 자리에 검색)
+  if (!sidePane && !flowView && !modal) body.append(searchBox());
   body.append(results, normal);
 
   if (w <= 1 && h <= 1) {
@@ -160,11 +163,20 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
     side.append(el('div', { class: 'pjh-side-l', text: '필요 지식 찾기' }), searchBox('찾을 말을 치세요…'), results);
     results.hidden = false;
     // 옆 칸에선 결과가 옆 칸에 서고 흐름은 그대로 남는다
-    const wrap = el('div', { class: 'pjh-two-s', style: 'grid-template-columns:minmax(0,1fr) ' + (modal ? 330 : 320) + 'px' });
+    const wrap = el('div', { class: 'pjh-two-s', style: 'grid-template-columns:minmax(0,1fr) 320px' });
     body.replaceChildren(wrap); wrap.append(normal, side);
     normal.hidden = false;
-    side.append(el('div', { class: 'pjh-stat', text: '찾을 말을 치면 뜻이 가까운 지식이 여기 섭니다. 연결하면 다음 세션부터 AI 가 그 문서를 읽고 시작합니다.' }));   // 결과 바로 아래(빈 칸 끝에 홀로 두지 않는다)
-    if (modal) side.append(recHost);
+    const hint = el('div', { class: 'pjh-stat', text: '찾을 말을 치면 뜻이 가까운 지식이 여기 섭니다. 연결하면 다음 세션부터 AI 가 그 문서를 읽고 시작합니다.' });   // 결과 바로 아래(빈 칸 끝에 홀로 두지 않는다)
+    side.append(hint);
+    swap = hint;
+  }
+  if (modal) {
+    // 아래 전폭 — 찾기 + 추천. 치면 추천 자리에 결과가 서고, 지우면 추천이 돌아온다. 위 흐름은 그대로.
+    const find = el('div', { class: 'pjh-kfind', 'data-mscroll': 'kfind' },
+      el('div', { class: 'pjh-kfind-h' }, el('b', { text: '필요 지식 찾기' }), el('span', { text: '뜻이 가까운 지식을 찾습니다 — 연결하면 다음 세션부터 AI 가 그 문서를 읽고 시작합니다' })),
+      searchBox('찾을 말을 치세요…'), results, recHost);
+    swap = recHost;
+    body.replaceChildren(el('div', { class: 'pjh-kmodal' }, normal, find));
   }
   foot.append(footTxt);
   if (!modal) foot.append(btn('지식', 'btn-ghost', open));
