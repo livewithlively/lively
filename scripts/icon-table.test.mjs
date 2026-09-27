@@ -209,7 +209,10 @@ ok(!/const ICON_PATH\b/.test(CONNECT) && /from '\.\.\/lib\/icon-paths\.js'/.test
   const hd = fn(C, "ctxAppIcon");
   ok(/d: ICONS\.ctx\b/.test(hd), "H1 「수집 · 증류」 화면 머리: 표의 ctx");
   ok(!!hd && !/stroke-width/.test(hd) && /\.ctx-crumb-ic \{[^}]*stroke-width: var\(--ic-stroke\)/.test(read("public/styles/31-context-pipeline.css").replace(/\/\*[\s\S]*?\*\//g, "")), "H1 그 머리의 획은 숫자로 적지 않고 토큰을 읽는다");
-  ok(/tabIcon\('help', 'pjv-crumb-ic lg-crumb-ic'\)/.test(LEARN) && /\bhelp: \[\['path', \{ d: ICONS\.learn \}\]\]/.test(LEARN), "H1 「사용 가이드」 화면 머리: 표의 learn");
+  //  #4179 사용 가이드는 셸이 직접 그리는 앱이 됐다(web/guide/). 가이드는 제 그림 표를 갖지 않고 guideIcon(이름)으로 표를 읽는다.
+  const GUIDE_APP = srcOf["web/guide/app.ts"] || "", GUIDE_ICON = srcOf["web/guide/icon.ts"] || "";
+  ok(/guideIcon\('learn', 'gd-crumb-ic'\)/.test(GUIDE_APP) && /d: iconPath\(name\)/.test(GUIDE_ICON) && /guideIcon\('learn', 'pjv-crumb-ic lg-crumb-ic'\)/.test(LEARN),
+    "H1 「사용 가이드」 화면 머리(앱 · 클래식 문서 셸): 표의 learn");
   const OMNI = srcOf["web/v2/omni.ts"] || "", kp = OMNI.slice(OMNI.indexOf("const KIND_PATH"), OMNI.indexOf("};", OMNI.indexOf("const KIND_PATH")));
   const want = { proj: "folder", know: "wiki", src: "src", sess: "chat", hist: "sess" };
   for (const [k, n] of Object.entries(want)) ok(new RegExp("\\b" + k + ": \\[ICONS\\." + n + "\\]").test(kp), `H2 통합검색 ${k} = 표의 ${n}`);
@@ -221,14 +224,17 @@ ok(!/const ICON_PATH\b/.test(CONNECT) && /from '\.\.\/lib\/icon-paths\.js'/.test
   ok(((srcOf["web/projects/icons.ts"] || "").match(/d: ICONS\.trash\b/g) || []).length >= 2 && /d: ICONS\.trash\b/.test(srcOf["web/projects/selection.ts"] || "") && /d: ICONS\.trash\b/.test(srcOf["web/dash/icons.ts"] || ""), "H4 프로젝트(셋) · 대시보드의 휴지통 = 표의 trash");
   ok(/d: ICONS\.ctx\b/.test(fn(srcOf["web/distillers.ts"] || "", "allSourcesIcon")) && !/funnelIcon/.test(srcOf["web/distillers.ts"] || ""), "H5 증류기 카드의 「모든 자료」 그림 = 표의 ctx");
   ok(/d: ICONS\.sess\b/.test(fn(srcOf["web/terminal/routes.ts"] || "", "tsessHistoryIcon")), "H5 클래식 AI 세션의 「세션 기록」 단추 = 표의 sess");
-  ok(/'book-open': \[\['path', \{ d: ICONS\.wiki \}\]\]/.test(LEARN), "H5 가이드의 책 = 표의 wiki");
   {
-    // 가이드가 부르는 이름은 전부 제 표에 있고, 아무도 안 부르는 집(home)은 표에 없다
-    const gi = LEARN.slice(LEARN.indexOf("const GUIDE_ICONS"), LEARN.indexOf("\n};", LEARN.indexOf("const GUIDE_ICONS")));
-    const keys = [...gi.matchAll(/^  '?([a-z0-9-]+)'?: \[/gm)].map((m) => m[1]);
-    const called = [...namesCalled(LEARN, ["tabIcon", "flowStep"])];
-    ok(called.length >= 6 && called.every((n) => keys.includes(n)), "H5 가이드가 부르는 아이콘 이름이 전부 제 표에 있다", called.filter((n) => !keys.includes(n)).join(","));
-    ok(!keys.includes("home"), "H5 아무도 부르지 않는 집(home)은 가이드 표에 없다");
+    // 가이드(앱 · 도식 · 본문 · 클래식 문서 셸)에 제 그림 표가 없고, 부르는 이름은 전부 한 벌의 표에 있다
+    const guideSrcs = Object.entries(srcOf).filter(([f]) => f.startsWith("web/guide/") || f === "web/learn.ts");
+    ok(guideSrcs.length >= 5 && guideSrcs.every(([, src]) => !/const GUIDE_ICONS\b/.test(src) && !/\bd: ['"]M\d/.test(src)), "H5 가이드에 손으로 그린 그림 표가 없다",
+      guideSrcs.filter(([, src]) => /const GUIDE_ICONS\b/.test(src) || /\bd: ['"]M\d/.test(src)).map(([f]) => f).join(","));
+    const called = [...new Set(guideSrcs.flatMap(([, src]) => [...namesCalled(src, ["guideIcon"])]))];
+    ok(called.length >= 10 && called.every((n) => n in ICONS), "H5 가이드가 부르는 아이콘 이름이 전부 표에 있다", called.filter((n) => !(n in ICONS)).join(","));
+    //  원고의 {{ic:이름}} 도 같은 표를 읽는다. 표에 없는 이름은 다른 그림으로 나온다.
+    const DOCS = srcOf["web/docs-content.ts"] || "";
+    const inDocs = [...new Set([...DOCS.matchAll(/\{\{ic:([a-z0-9-]+)\}\}/gi)].map((m) => m[1]))];
+    ok(inDocs.length >= 5 && inDocs.every((n) => n in ICONS), "H5 가이드 원고의 {{ic:이름}} 이 전부 표에 있다", inDocs.filter((n) => !(n in ICONS)).join(","));
   }
   // 옛 그림의 조각. 그림 표 밖에 남아 있으면 그 자리는 옛 그림을 그린다.
   const OLD = {

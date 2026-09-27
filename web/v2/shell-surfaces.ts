@@ -44,6 +44,7 @@ export const SHELL_SURFACES: Record<string, ShellSurface> = {
   app: { kind: "todo", plan: "클래식 화면 iframe(#/app/<key>). APPS 표의 항목을 하나씩 builtin AppPackage(system.renderer)로 옮기고, 표가 비면 이 라우트도 없앤다." },
   taxonomy: { kind: "app", appId: "taxonomy", note: "분류체계(#4233). 옛 카테고리 탭을 앱으로 뺐다. 전체 지도(묶음 칸 · 분류마다 지식 수와 프로젝트 수) · 손볼 것 · 분류 상세(연결 그림 + 지식 · 프로젝트 목록). project=global·single 빌트인. 딥링크 #/taxonomy 와 분류 하나 #/taxonomy/<id> 가 정본이다." },
   sources: { kind: "app", appId: "sources", note: "자료(#2423) — 라이블리가 가진 원본을 출처별로 훑고 하나를 열어 원문을 본다. project=global·single 빌트인. 딥링크 #/sources 와 자료 하나 #/sources/<id> 가 정본이다." },
+  learn: { kind: "app", appId: "learn", note: "사용 가이드(#4179). 클래식 액자에서 셸이 직접 그리는 화면으로 옮겼다. 첫 화면 #/learn · 문서 #/learn/docs/<문서> · 절 ?h=<절>. project=global·single 빌트인. 원고는 web/docs-content.ts, 화면은 web/guide/." },
   inbox: { kind: "app", appId: "inbox", note: "받은 알림 이력 + 지금 답을 기다리는 세션(#1891). project=global·single-instance 빌트인. 딥링크 #/inbox 를 정본으로 유지한다(세션의 #/s/ 와 같은 규칙)." },
   liv: { kind: "todo", plan: "리브 — 대화하는 화면이라 가장 앱다운 축에 든다. session subject 를 갖는 builtin 후보." },
   archive: { kind: "todo", plan: "아카이브 — 콘텐츠 목록. trash 와 한 앱(보관함)으로 묶을지 둘로 둘지 이식 때 정한다." },
@@ -59,7 +60,7 @@ export const SHELL_SURFACES: Record<string, ShellSurface> = {
  */
 export const CLASSIC_BACKLOG = [
   // 'web' 은 browser builtin 앱으로 옮겨 여기서 빠졌다(2026-08-25) — 백로그가 줄어든 첫 항목.
-  "dashboard", "terminal", "projects2", "knowledge", "context", "sessions", "system", "learn",
+  "dashboard", "terminal", "projects2", "knowledge", "context", "sessions", "system",   // 'learn' 은 native 앱으로 옮겨 빠졌다(#4179, 2026-09-27)
 ] as const;
 
 /** 이 화면이 사이드바에서 어떤 키로 활성 표시되나 — 없으면 활성 표시를 하지 않는다. */
@@ -69,5 +70,5 @@ export function activeNavKey(page: string, id?: string): string {
   const s = SHELL_SURFACES[page];
   if (!s) return "";
   // OS 표면·앱화 대상 중 사이드바 도크에 자리가 있는 것만 활성 표시를 갖는다.
-  return ["inbox", "sources", "taxonomy", "connect", "archive", "trash", "liv"].includes(page) ? page : "";
+  return ["inbox", "sources", "taxonomy", "learn", "connect", "archive", "trash", "liv"].includes(page) ? page : "";
 }

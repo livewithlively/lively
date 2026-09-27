@@ -88,6 +88,8 @@ export function routeKey(route: string): string {
   if (p === 'sources') return 'sources';
   //  분류체계(#4233)도 한 창 안에서 돌아다니는 앱이다: 전체 지도 · 손볼 것 · 분류 하나가 전부 같은 창이다(자료와 같은 규칙).
   if (p === 'taxonomy') return 'taxonomy';
+  //  사용 가이드(#4179)도 한 창 안에서 문서를 오가는 앱이다. 문서마다 창이 새로 서지 않게 접는다.
+  if (p === 'learn') return 'learn';
   return 'raw:' + h;
 }
 

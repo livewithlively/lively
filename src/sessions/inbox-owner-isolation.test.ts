@@ -123,7 +123,9 @@ test("E9 소유 판정은 한 벌뿐이다 — side.ts 가 제 사본을 되살�
 });
 
 test("E10 사용설명서가 바뀐 규칙을 말한다 (화면과 문서가 갈리지 않게)", () => {
-  const row = DOCS.split("\n").find((l) => l.includes("**답을 기다려요**")) ?? "";
-  assert.doesNotMatch(row, /보이는 세션 전부/, "설명서가 아직 '보이는 세션 전부'라고 말한다 — 화면은 내 것만 센다");
-  assert.match(row, /내 세션만/, "설명서가 '내 세션만'을 말하지 않는다");
+  //  원고의 따옴표 모양(홑·겹)에 매이지 않는다(#4179 에서 원고를 다시 썼다).
+  const at = (slug: string): number => DOCS.search(new RegExp(`slug: ['"]${slug}['"]`));
+  const doc = at("inbox") < 0 ? "" : DOCS.slice(at("inbox"), at("projects"));
+  assert.ok(doc.length > 0, "설명서의 「확인할 것」 항목을 찾지 못했다");
+  assert.doesNotMatch(doc, /보이는 세션 전부/, "설명서가 아직 '보이는 세션 전부'라고 말한다");
 });
