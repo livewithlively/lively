@@ -136,7 +136,7 @@
 .pn-title-btn .pn-title-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
   padding: .08em .12em; margin: -.08em -.12em; }
 /* 프로젝트 아이콘 — 이 굵은 글자가 세션 이름이 아니라 **프로젝트 이름**임을 말한다. 글자보다 조용하게. */
-.pn-title-ic { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.7;
+.pn-title-ic { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: var(--ic-stroke);
   stroke-linecap: round; stroke-linejoin: round; }
 .pn-title-btn:hover { background: var(--bg-punch); box-shadow: inset 0 0 0 1px var(--line-net); }
 .pn-title-btn:hover .pn-title-ic { stroke: var(--blue); }
@@ -150,7 +150,7 @@
 .pn-title:hover .pn-title-penbtn, .pn-title-penbtn:focus-visible { opacity: 1; }
 .pn-title-penbtn:hover { background: var(--bg-tint); }
 .pn-title-penbtn:hover .pn-title-pen { stroke: var(--blue); }
-.pn-title-pen { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8;
+.pn-title-pen { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted); stroke-width: var(--ic-stroke);
   stroke-linecap: round; stroke-linejoin: round; }
 .pn-title-in { font: inherit; width: min(46ch, 46vw); margin-left: -8px; padding: 2px 8px;
   border: 1px solid var(--blue); border-radius: 9px; background: var(--bg); color: var(--ink); }
@@ -171,7 +171,7 @@
 .pn-face-more { background: var(--bg-tint); color: var(--muted); letter-spacing: -.02em; }
 
 /* ── 아이콘·잔글씨 ── */
-.pn-i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.pn-i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .pn-i.sm { width: 13px; height: 13px; }
 .pn-i.xs { width: 11px; height: 11px; }
 .pn-i.big { width: 26px; height: 26px; stroke-width: 1.5; color: var(--muted-3); }

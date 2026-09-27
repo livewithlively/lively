@@ -67,7 +67,7 @@
 .v2-wspop-add { flex: none; width: 34px; height: 34px; margin: 0 4px 0 2px; display: inline-grid; place-items: center; border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer; }
 .v2-wspop-add:hover { background: var(--bg-punch); color: var(--blue); }
 .v2-wspop-add:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
-.v2-wspop-add .v2-ic { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.v2-wspop-add .v2-ic { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 /* 부제 행(구성원·설정·추가)은 여전히 button.v2-wspop-row 를 쓰는 곳(row())이 있으므로 그 규격은 그대로 둔다. */
 button.v2-wspop-row { padding: 8px; gap: 12px; }
 
@@ -82,7 +82,7 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2mem-h-sub { font-size: 12.5px; color: var(--muted-head); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2mem-x { flex: none; width: 30px; height: 30px; border: 0; border-radius: 8px; background: none; color: var(--muted); display: inline-grid; place-items: center; cursor: pointer; }
 .v2mem-x:hover { background: var(--bg-punch); color: var(--ink); }
-.v2mem-x-ic { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.v2mem-x-ic { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; }
 .v2mem-b { flex: 1; min-height: 0; overflow: auto; padding: 14px 20px 18px; display: flex; flex-direction: column; gap: 2px; }
 .v2mem-err { margin: 0; font-size: 13px; color: var(--coral-text); }
 .v2mem-note { margin: 10px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
@@ -191,7 +191,7 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2wss-swatch.on { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink); }
 .v2wss-swatch:disabled { opacity: .45; cursor: default; }
 .v2wss-swatch--none { display: inline-grid; place-items: center; background: var(--bg-punch); color: var(--muted); }
-.v2wss-swatch--none .v2-ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.v2wss-swatch--none .v2-ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); }
 .v2wss-swatch--pick { background: none; border: 1px dashed var(--line); border-radius: 8px; inline-size: 26px; block-size: 26px; padding: 1px; }
 /* 사람이 정한 얼굴 타일 — 색은 인라인(style)로, 글자는 여기 규격으로. round 아바타와 달리 각(워크스페이스)이다. */
 .v2-wsface-set { display: inline-grid; place-items: center; font-weight: 700; }
@@ -241,7 +241,7 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-wspop-hr { height: 1px; background: var(--line); margin: 4px 0; }
 .v2-wspop-ic { flex: none; width: 40px; height: 40px; border-radius: 11px; background: var(--bg-tint-2); color: var(--ink-sub); display: grid; place-items: center; }
 /* ⚠ 팝오버는 body 에 붙는다(사이드바 재렌더에 안 지워지게) — #v2-root 안의 `.v2-ic` 획 규칙이 닿지 않으므로 여기서 다시 준다. */
-.v2-wspop-ic .v2-ic { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.v2-wspop-ic .v2-ic { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 .v2-wspop-k { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; color: var(--muted); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
 
 /* ── ① 구역 · ② 최근 앱 · ③ 발치 — 항목 한 붓 ─────────────────────────────── */
@@ -250,7 +250,7 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-rail-it:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
 .v2-rail-it.on { background: var(--bg); box-shadow: inset 0 0 0 1px var(--line-net); }
 .v2-rail-it.on::before { content: ''; position: absolute; left: -8px; top: 8px; bottom: 8px; width: 3px; border-radius: 999px; background: var(--blue); }
-.v2-rail-ic { width: 18px; height: 18px; flex: none; fill: none; stroke: var(--muted-head); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.v2-rail-ic { width: 18px; height: 18px; flex: none; fill: none; stroke: var(--muted-head); stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 .v2-rail-it:hover .v2-rail-ic, .v2-rail-it.on .v2-rail-ic { stroke: var(--blue); }
 .v2-rail-t { flex: 1; min-width: 0; font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .v2-rail-m { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -365,7 +365,7 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-secdd-menu { position: fixed; z-index: 70; min-width: 224px; padding: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 30px rgba(var(--shadow-ink), .14); display: flex; flex-direction: column; gap: 1px; }
 .v2-secdd-row { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 8px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: 13px; font-weight: 600; color: var(--ink-sub); text-align: left; cursor: pointer; }
 .v2-secdd-row:hover, .v2-secdd-row.on { background: var(--bg-tint); color: var(--ink); }
-.v2-secdd-row .v2-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; color: var(--muted-head); }
+.v2-secdd-row .v2-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; color: var(--muted-head); }
 .v2-secdd-row.on .v2-ic { color: var(--blue); }
 .v2-secdd-row .v2-secdd-t { flex: 1; min-width: 0; }
 .v2-secdd-m { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -442,7 +442,7 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-lens-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn-deep); flex: none; }
 .v2-ptree { display: flex; flex-direction: column; gap: 1px; }
 .v2-ptl.on { background: var(--bg); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-net); }
-.v2-ptl-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.v2-ptl-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 .v2-ptl:hover .v2-ptl-ic, .v2-ptl.on .v2-ptl-ic { stroke: var(--blue); }
 .v2-ptl-emoji { width: 16px; text-align: center; font-size: 13px; flex: none; }
 .v2-ptl-lock { width: 12px; height: 12px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 2; stroke-linejoin: round; }
@@ -470,7 +470,7 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-sa-top .desc { margin-left: 10px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
 .v2-sa-tools { flex: none; height: 56px; display: flex; align-items: center; gap: 6px; padding: 0 20px; border-bottom: 1px solid var(--line); min-width: 0; }
 .v2-sa-tools .sp { flex: 1; }
-.v2-sa-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.v2-sa-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 .v2-sa-ic.sm { width: 14px; height: 14px; stroke-width: 2; }
 .v2-sa-tb { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: 13px; font-weight: 700; color: var(--ink-sub); cursor: pointer; white-space: nowrap; }
 .v2-sa-tb .v2-sa-ic { color: var(--muted-2); }
@@ -688,7 +688,7 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-ksp-t { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
 .v2-ksp-t:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 6px; }
 .v2-ksp-t .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 700; line-height: 1.5; }
-.v2-ksp-ic { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.v2-ksp-ic { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 .v2-ksp-h:hover .v2-ksp-ic { stroke: var(--blue); }
 .v2-ksp-h .v2-car { transition: transform .15s ease; }
 .v2-ksp.open > .v2-ksp-h .v2-car { transform: rotate(90deg); }

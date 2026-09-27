@@ -34,6 +34,7 @@ import { injectionMap } from './admin-injection.js';                   // 세션
 import { embeddingsEditor } from './admin-embeddings.js';              // 의미 검색 — 임베딩 provider·백필(기본 off)
 import { visibilityAxesPanel } from './visibility-axes.js';            // 공개범위 — 유형별 축 on/off
 import { loadAdmin } from './admin-rerender.js';
+import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 
 /** 관리탭 패널이 요구하는 admin 데이터 — 없으면 빈 객체(패널이 자기 API 로 그린다). */
 async function adminData(): Promise<any> {
@@ -288,8 +289,8 @@ async function paintStageHealth(view: HTMLElement): Promise<void> {
 }
 
 function ctxAppIcon(): SVGElement {
-  const n = sv('svg', { class: 'pjv-crumb-ic ctx-crumb-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  n.append(sv('path', { d: 'M4 5h16l-6.2 7.2V18l-3.6 2v-7.8z' }));   // 깔때기 — 런치패드 유리 아이콘과 같은 형태(맥락 관리 = 수집·증류·분류)
+  const n = sv('svg', { class: 'pjv-crumb-ic ctx-crumb-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('path', { d: ICONS.ctx }));   // #4233: 레일 · 앱 화면과 같은 그림(왼쪽 세 선이 오른쪽 한 선으로 모인다)
   return n;
 }
 

@@ -91,7 +91,7 @@
 .pjh-wf > .btn { margin-left: auto; flex: none; }
 .pjh-wf-txt { display: inline-flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pjh-wf .pjh-ic { color: var(--muted-2); }
-.pjh-ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.pjh-ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; flex: none; }
 
 /* S «한눈» — 수 하나 + 상태 한 줄 */
 .pjh-big { display: flex; align-items: baseline; gap: 2px; font-size: 26px; font-weight: 800; letter-spacing: -.9px; line-height: 1.1; color: var(--ink); font-variant-numeric: tabular-nums; }

@@ -17,7 +17,7 @@
 .pn-ctx-i .pn-ctx-chev { flex: none; margin-left: 6px; margin-right: -3px; color: var(--muted-3); display: inline-flex; }
 .pn-ctx-i.checked .pn-ctx-ic { color: var(--brand, var(--ink)); }
 /* 메뉴가 #v2-root 밖(body)에 뜨므로 선 아이콘 획 규칙을 여기서 다시 준다(#2016 §8 팝오버와 같은 함정 — 안 주면 검은 채움). */
-.pn-ctx-svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.pn-ctx-svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 .pn-ctx-i.danger:focus { background: var(--danger-bg); }
 @media (max-width: 900px) {
   .pn-ctx { min-width: 220px; }

@@ -667,7 +667,7 @@ a.ctx-preview-t:hover { color: var(--blue); }
 .cxr-tile { position: relative; box-sizing: border-box; width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface);
   display: inline-flex; align-items: center; justify-content: center; flex: none; }
 .cxr-tile svg { width: 17px; height: 17px; display: block; }
-.cxr-tile .cxr-gl { width: 16px; height: 16px; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.cxr-tile .cxr-gl { width: 16px; height: 16px; fill: none; stroke: var(--muted); stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 .cxr-tile .cxr-badge { position: absolute; right: -5px; bottom: -5px; width: 16px; height: 16px; border-radius: 5px; border: 1px solid var(--line);
   background: var(--surface); display: inline-flex; align-items: center; justify-content: center; }
 .cxr-tile .cxr-badge svg { width: 10px; height: 10px; }
@@ -1111,7 +1111,7 @@ a.cxc-name:hover { color: var(--blue); }
 .dsl-faces .svc-tile + .svc-tile, .dsl-faces .svc-tile + .dsl-faces-n { margin-left: -9px; }
 .dsl-faces-n { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 10px; background: var(--bg-tint-2); box-shadow: 0 0 0 2px var(--bg); font-size: 11px; font-weight: 800; color: var(--muted-head); }
 .dsl-card.is-off .dsl-faces .svc-tile, .dsl-card.is-off .dsl-faces-n, .cxc-row.is-off .dsl-faces .svc-tile { box-shadow: 0 0 0 2px var(--bg-tint); }
-.cxc-tile-ic { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.cxc-tile-ic { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 /* 흐름 — 역 셋 + 선로 둘. */
 .dsl-flow { display: grid; grid-template-columns: minmax(0, 1.15fr) 34px minmax(0, 1.35fr) 34px minmax(0, 0.9fr); align-items: stretch; margin-top: 14px; }
 .dsl-st { display: flex; flex-direction: column; min-height: 108px; padding: 10px 12px 9px; border: 1px solid var(--line-net); border-radius: 12px; background: var(--surface); min-width: 0; }

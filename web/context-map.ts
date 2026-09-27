@@ -9,7 +9,7 @@
 //   잘 드러나게 고도화 … 사이즈감·덩어리감·진행되는 느낌은 좋은데 산만하다 … 슬랙이랑 노션 아이콘은 어디 갔어".
 //   · **장소 넷과 기계 셋을 재질로 가른다** — 장소(외부 앱·자료·지식·AI 세션)는 흰 카드, 기계(수집기·증류기·주입규칙)는
 //     선로 위 어두운 칩(--chip-dark). 종전엔 수집기가 역(장소)이어서 사용자 모델과 어긋났다.
-//   · **역마다 유리 앱 아이콘 문패** — 런치패드·홈과 같은 그림(appGlassIcon)이라 "이 역이 곧 그 앱"으로 읽힌다.
+//   · **역마다 앱 아이콘 문패** — 런치패드·홈과 같은 그림(appGlassIcon: 타일 + 선 아이콘, #4233)이라 "이 역이 곧 그 앱"으로 읽힌다.
 //   · **외부 앱의 실물은 공식 서비스 로고**(svc-icons svcTile) — 글자 한 자(#·N·G)로 흉내내지 않는다.
 //   · **자료의 실물은 출처별 원문 수**(자료 앱 나무와 같은 숫자) — 종이 더미 그림은 장식이었다.
 //   · **선로는 기계가 도는 구간만 흐른다**(CSS 파선 이동) — 진행감이 사실에만 붙는다. 꺼진 구간은 멎어 있다.
@@ -105,7 +105,7 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
   const busy = sessions.filter((s) => s && (s.agentState === 'busy' || s.agentState === 'waiting')).length;
   const searchable = Math.max(0, Number(st.distill?.output || 0) - Number(st.classify?.backlog || 0));
 
-  // ── 역 넷(장소 = 흰 카드) — 같은 해부 4칸: 문패(유리 아이콘 · 이름 · 수) / 정의 / 실물 / 발치 ──
+  // ── 역 넷(장소 = 흰 카드) — 같은 해부 4칸: 문패(앱 아이콘 · 이름 · 수) / 정의 / 실물 / 발치 ──
   //  #3830(2026-09-10 원준): 장소 카드는 **그 장소로** 간다 — 외부 앱→[외부 앱 연결] · 자료→[자료] 앱 · 지식→레일 [위키] ·
   //   AI 세션→레일 [AI 세션]. 이 화면은 새 셸의 액자(iframe) 안에서 살므로 셸에 한 줄 올려 보낸다(goShell). 기계 셋은 이 앱 안의 탭.
   const station = (o: { href: string; go?: ShellDest; icon: string; name: string; v: string; unit: string; def: string; x: HTMLElement; foot: string; lv?: string }) =>

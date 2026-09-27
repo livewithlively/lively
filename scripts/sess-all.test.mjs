@@ -318,7 +318,7 @@ if (lib) {
   const fitFn = cut(SIDE, "function fitSessCards(", "\n}\n");
   ok(/if \(listNaturalHeight\(listEl\) <= H\) break;/.test(fitFn) && /budget: 0/.test(fitFn) && /fitWikiList\(listEl, p\.order, p\.sizes, p\.forced, p\.build\)/.test(fitFn),
     "W5b 장수는 최소 줄 수로 그려 넘치지 않는 가장 큰 값, 그 뒤 줄 나누기는 위키와 같은 fitWikiList");
-  const ICONS_SRC = read("web/v2/icons.ts");
+  const ICONS_SRC = read("web/lib/icon-paths.ts");   // #4233: 그림 표는 lib/icon-paths.ts 한 벌
   const usedIc = [...(rs.match(/sc\.by === 'day' \? '([a-z]+)' : sc\.by === 'owner' \? '([a-z]+)' : '([a-z]+)'/) || []).slice(1)];
   ok(usedIc.length === 3 && usedIc.every((n) => new RegExp("\\n  " + n + ": '").test(ICONS_SRC)),
     "W4c 카드 머리 아이콘(시간 · 사람 · 그 밖)이 전부 ICONS 에 있다 — 없는 이름은 격자 아이콘으로 조용히 떨어진다(리뷰 지적)");
