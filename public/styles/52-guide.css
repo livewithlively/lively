@@ -54,7 +54,9 @@ a.gd-crumb:hover { color: var(--ink); text-decoration: none; }
 .gd-scrim { display: none; }
 
 /* 본문 */
-.gd-article { max-width: 800px; margin: 0 auto; padding: 36px 44px 96px; }
+/*  본문은 받은 칸을 다 쓴다. 폭 상한을 두고 가운데에 세우면 넓은 화면에서 좌우가 크게 빈다(원준 2026-09-28 «풀스크린 아니라 좌우 여백 엄청 큰데»).
+    글 · 표 · 상자 · 단계가 같은 오른쪽 끝에 선다. 도식만 제 크기에서 멈춘다(아래 .gd-fig). */
+.gd-article { max-width: none; margin: 0; padding: 32px 40px 96px; }
 .gd-eyebrow { margin: 0 0 8px; font-size: 13px; font-weight: 700; color: var(--blue); }
 .gd-h1 { margin: 0; font-size: 30px; line-height: 1.3; font-weight: 800; letter-spacing: -.02em; color: var(--ink); word-break: keep-all; }
 .gd-lead { margin: 12px 0 0; font-size: 16px; line-height: 1.75; color: var(--ink-sub); word-break: keep-all; }
@@ -144,7 +146,7 @@ a.gd-crumb:hover { color: var(--ink); text-decoration: none; }
 .gd-path-b { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .gd-path-b b { font-size: 15px; font-weight: 800; }
 .gd-path-b span { font-size: 13px; line-height: 1.6; color: var(--ink-sub); word-break: keep-all; }
-.gd-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 28px; }
+.gd-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; margin-top: 28px; }
 .gd-gcard { padding: 18px 18px 14px; border: 1px solid var(--line); border-radius: 14px; min-width: 0; }
 .gd-gcard-t { display: flex; align-items: center; gap: 9px; margin: 0; font-size: 16px; font-weight: 800; color: var(--ink); }
 .gd-gcard-ic { width: 18px; height: 18px; flex: none; fill: none; stroke: var(--blue); stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
@@ -154,7 +156,8 @@ a.gd-crumb:hover { color: var(--ink); text-decoration: none; }
 .gd-gcard-l a:hover { background: var(--bg-tint-2); color: var(--blue); text-decoration: none; }
 
 /* ── 도식 ─────────────────────────────────────────────────────────────── */
-.gd-fig { margin: 18px 0 24px; }
+/*  도식은 제 크기까지만 커진다. 칸을 다 채우면 상자 사이가 벌어져 읽기 어렵다. */
+.gd-fig { margin: 18px 0 24px; max-width: 1040px; }
 .gd-fig-canvas { padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: var(--gray-bg-2); overflow: hidden; }
 .gd-fig-cap { margin-top: 8px; font-size: 12.5px; line-height: 1.6; color: var(--muted); word-break: keep-all; }
 .gd-node { min-width: 0; padding: 14px; border: 1px solid var(--line-net); border-radius: 12px; background: var(--surface); }
@@ -289,6 +292,11 @@ a.gd-crumb:hover { color: var(--ink); text-decoration: none; }
 .gd.gd-flowmode .gd-main { overflow: visible; }
 
 /* ── 좁은 칸 ── */
+/*  목차가 없는 화면(첫 화면 · 절이 하나뿐인 문서)은 목차 칸을 두지 않는다. 빈 칸이 오른쪽 여백으로 남는다. */
+@container gd (min-width: 1121px) {
+  .gd.no-toc .gd-cols { grid-template-columns: 248px minmax(0, 1fr); }
+  .gd.no-toc .gd-toc { display: none; }
+}
 @container gd (max-width: 1120px) {
   .gd-cols { grid-template-columns: 236px minmax(0, 1fr); }
   .gd-toc { display: none; }

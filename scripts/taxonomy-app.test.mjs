@@ -147,5 +147,29 @@ ok(/v2-ksp-edit', href: '#\/taxonomy'/.test(wikiSide) && /v2-kedit', href: '#\/t
 ok(/v2-kcat-edit'[\s\S]{0,400}'#\/taxonomy\/' \+ encodeURIComponent\(String\(c\.id\)\)/.test(wikiSide), "W2 위키 분류 줄의 ✎ 는 그 분류를 앱에서 연다");
 ok(/openTaxonomyApp\(cat && cat\.id\)/.test(read("web/wiki-category.ts")), "W2 위키 분류 화면의 정의 편집은 그 분류를 앱에서 연다");
 
+// W3 — 칸의 주인(#4179, 2026-09-28). 셸은 같은 칸에 다른 화면을 그린다. 그 뒤에 늦게 온 응답 · 폭 변화 · 주소 변화가 그 화면을 덮으면 안 된다.
+//  실측: 폭 1100 에서 분류체계 → 사용 가이드로 가면 0.3초 뒤 지도가 가이드를 덮었다(사이드바가 접히며 칸 폭이 바뀌어 단 수가 달라졌다).
+{
+  const TX = read("web/v2/taxonomy.ts");
+  const fn = cut(TX, "export function ownsHost(", "\n}");
+  let ownsHost = null;
+  try { ownsHost = new Function("return (" + fn.replace(/^export function ownsHost\(host: HTMLElement\): boolean/, "function (host)") + "\n})")(); } catch { /* 아래 T0 가 빨간불 */ }
+  ok(typeof ownsHost === "function", "T0 칸의 주인을 묻는 잣대(ownsHost)가 있다");
+  if (ownsHost) {
+    const hostOf = (connected, kids) => ({ isConnected: connected, querySelector: (sel) => (sel === ":scope > .v2-tx" && kids.includes("v2-tx") ? {} : null) });
+    ok(ownsHost(hostOf(true, ["v2-tx"])) === true, "T1 칸의 바로 아래에 제 화면이 있으면 주인이다");
+    ok(ownsHost(hostOf(true, ["gd"])) === false && ownsHost(hostOf(true, [])) === false, "T1 칸에 다른 화면이 섰거나 비었으면 주인이 아니다");
+    ok(ownsHost(hostOf(false, ["v2-tx"])) === false, "T2 칸이 화면에서 떨어졌으면 주인이 아니다");
+  }
+  const APP3 = code(TX);
+  ok(/const live = \(\): boolean => host\.isConnected && host\.dataset\.txSeq === seq && \(!painted \|\| ownsHost\(host\)\);/.test(APP3) && /if \(!live\(\)\) return;\s*painted = true;/.test(APP3),
+    "T3 늦게 온 응답은 한 번 그린 뒤부터 칸의 주인을 묻는다");
+  const ro = cut(APP3, "new ResizeObserver(", "}) };");
+  ok(/if \(!ownsHost\(host\) \|\| host\.dataset\.txView !== 'map'\) return;/.test(ro), "T3 폭 변화는 칸의 주인일 때만 다시 그린다");
+  ok(/const repaint = \(\): void => \{ if \(ownsHost\(host\) && host\.dataset\.txView === 'map'\) renderMap\(/.test(APP3), "T3 지도 다시 그리기는 칸의 주인일 때만 한다");
+  const hc = cut(APP3, "window.addEventListener('hashchange'", "\n});");
+  ok(/if \(!ownsHost\(mounted\.host\)\) return;/.test(hc), "T3 주소 변화는 칸의 주인일 때만 스스로 그린다(아니면 셸에 맡긴다)");
+}
+
 console.log(`\n#4233 분류체계 앱: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
 process.exit(fail ? 1 : 0);
