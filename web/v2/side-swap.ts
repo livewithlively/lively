@@ -26,6 +26,7 @@ import { anchoredPopover, el, toast } from '../core.js';
 import { MOBILE_MQ } from './mobile.js';   // 좁은 폭 문턱(900) — 셸과 같은 값 하나만 둔다
 import { overlay } from '../ui-primitives.js';
 import { sideCap } from '../lib/side-card-geom.js';
+import { SWAP_TH, judgeSwap, placeOnRestore } from '../lib/side-swap-judge.js';
 import { swapCopy } from '../lib/side-label.js';   // 칸 이름은 지금 선 쪽을 따른다(왼쪽에 선 칸을 «우측» 이라 부르지 않게)
 
 const KEY_OFF = 'lively_v2_side_swap_off';       // '1' = 자리 고정(자동 자리바꿈 끔)
@@ -34,8 +35,8 @@ const SPLIT_KEY = 'panes_side';                  // panes.ts 의 곁칸 경계 �
 const SIDE_VAR = '--pn-side-w';
 const DEF_SIDE_W = 340;
 
-/** 넘어갈 때와 돌아올 때의 문턱(히스테리시스) — 경계에서 깜빡이지 않게. */
-const TH = { on: 0.52, off: 0.46 };
+/** 넘어갈 때와 돌아올 때의 문턱(히스테리시스) — 경계에서 깜빡이지 않게. 값과 판정은 lib/side-swap-judge.ts 에 있다. */
+const TH = SWAP_TH;
 
 /** 사이드바 상한. **격자 폭**에서 세션 최소 폭(360px)과 손잡이를 뺀 값이다(lib/side-card-geom.ts sideCap).
  *  종전엔 창 폭의 88% 였다. 격자는 레일과 왼쪽 사이드바를 뺀 폭이라 그 상한이 격자를 넘었고, 끝까지 끌면 세션 열이
@@ -62,6 +63,8 @@ export interface SideSwapHost {
   onChange?: (swapped: boolean) => void;
   /** 참이면 격자 폭이 바뀌어도 자리를 다시 판정하지 않는다(세션 카드 상태, #3870). */
   holdSwap?: () => boolean;
+  /** 자리가 달라져 보일 때마다. 적지는 않는다. 칸 이름을 부르는 글을 지금 선 쪽에 맞추는 데 쓴다. */
+  onPlace?: (swapped: boolean) => void;
 }
 
 export interface SideSwapHandle {
@@ -134,11 +137,12 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
     paintBtn();
   }
 
-  function setSwapped(v: boolean, animate = true): void {
+  /** persist 가 거짓이면 보여 주기만 하고 이 세션의 자리로 적지 않는다(onChange 를 부르지 않는다). */
+  function setSwapped(v: boolean, animate = true, persist = true): void {
     if (swapped === v) return;
     swapped = v;
     if (animate) slide([colMain, sidePane], paint); else paint();
-    h.onChange?.(v);
+    if (persist) h.onChange?.(v); else h.onPlace?.(v);
   }
 
   // ── 세션에 들어올 때 (#762, 원준 2026-09-04 "나갔다 들어오더라도 위치 기억되게") ────────────
@@ -150,25 +154,18 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
   function restore(px: number, remembered?: boolean): void {
     hideHint();
     if (!swapEnabled()) { setSwapped(false, false); return; }
-    if (typeof remembered === 'boolean') {
-      //  적어 둔 «왼쪽» 을 믿되, 격자 폭을 잴 수 있고 사이드바가 돌아올 문턱(46%)보다 좁으면 오른쪽이다(#3870).
-      //  종전 결함(서는 순간 전역 폭으로 판정)이 사이드바를 키운 적 없는 세션에 «왼쪽» 을 적어 두었다. 그 값을 여기서 고친다.
-      //  문턱 사이(46~52%)와 그 위는 적어 둔 대로다.
-      const healed = remembered && body.clientWidth > 0 && ratio(px) <= TH.off ? false : remembered;
-      setSwapped(healed, false);
-      if (healed !== remembered) h.onChange?.(healed);
-      return;
-    }
-    const r = ratio(px);
-    setSwapped(r >= TH.on ? true : r <= TH.off ? false : swapped, false);
+    //  보여 줄 자리는 lib/side-swap-judge.ts placeOnRestore 가 정한다. 적어 둔 «왼쪽» 이 지금 폭과 안 맞으면(46% 이하)
+    //  오른쪽으로 **보여 주기만** 하고 적어 둔 값은 건드리지 않는다. 넓은 창에서 바꾼 자리를 좁은 창이 지우지 않게.
+    const want = placeOnRestore({ enabled: true, remembered, ratio: ratio(px), measurable: body.clientWidth > 0, cur: swapped });
+    const keepStored = typeof remembered === 'boolean' && want !== remembered;
+    setSwapped(want, false, !keepStored);
   }
 
   // ── 판정 — **놓는 순간에만** ────────────────────────────────────────────────
   function onEnd(px: number): void {
     hideHint();
     if (!swapEnabled()) { setSwapped(false); return; }
-    const r = ratio(px);
-    const want = r >= TH.on ? true : r <= TH.off ? false : swapped;
+    const want = judgeSwap(ratio(px), swapped);
     if (want === swapped) return;
     setSwapped(want);
     if (want) showIntroOnce();
@@ -177,7 +174,7 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
   function onDrag(px: number): void {
     if (!swapEnabled()) { hideHint(); return; }
     const r = ratio(px);
-    const will = r >= TH.on ? true : r <= TH.off ? false : swapped;
+    const will = judgeSwap(r, swapped);
     if (will === swapped) { hideHint(); return; }
     hint.textContent = (will ? '놓으면 이 칸이 왼쪽으로 갑니다' : '놓으면 이 칸이 다시 오른쪽으로 갑니다')
       + '  ·  ' + Math.round(r * 100) + '%';
@@ -292,12 +289,12 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
       const first = roW === 0;
       roW = w;
       //  처음 잰 폭(마운트 때는 격자가 아직 화면에 없어 0 이었다)에서는 상한만 맞춘다. 자리는 셸이 되살린 것을 지킨다.
-      //  하나만 바로잡는다: 사이드바가 돌아올 문턱(46%)보다 좁은데 왼쪽에 서 있으면 오른쪽으로 되돌린다. 아래 ⚠ 의 결함이
-      //  세션에 적어 둔 «왼쪽» 을 고친다(그 세션은 사이드바를 키운 적이 없다).
+      //  하나만 바로잡는다: 사이드바가 돌아올 문턱(46%)보다 좁은데 왼쪽에 서 있으면 오른쪽으로 **보여 준다**(적지 않는다).
+      //  restore 가 격자 폭을 못 잰 채 불렸을 때의 같은 판정이다(placeOnRestore).
       if (first) {
         if (dead || !(w > 0)) return;
         if (curSideW() > capNow()) setSideW(capNow());
-        if (swapped && !h.holdSwap?.() && ratio(curSideW()) <= TH.off) setSwapped(false, false);
+        if (swapped && !h.holdSwap?.() && ratio(curSideW()) <= TH.off) setSwapped(false, false, false);
         return;
       }
       onResize();

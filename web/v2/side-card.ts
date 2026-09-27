@@ -365,6 +365,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     destroy: () => {
       halt();
       dead = true;
+      on = false;
       ro?.disconnect();
       colMain.removeEventListener('pointerdown', onHeadDown);
       colMain.removeEventListener('dblclick', onHeadDbl);

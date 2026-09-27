@@ -29,6 +29,14 @@
 //   W9 side-card: 움직이던 함수는 기다린 뒤마다 자기 판(gen)이 살아 있는지 본다. restore · destroy 가 판을 올린다
 //   W10 side-card: 격자 폭을 못 재면(0) 사이드바 폭을 적지 않는다
 //   W11 side-swap: 서는 순간에는 자리를 판정하지 않는다(전역 키의 폭으로 판정해 지금 연 세션에 적던 결함)
+//   J1 놓을 때의 자리: 52% 이상 왼쪽 · 46% 이하 오른쪽 · 그 사이는 지금 자리
+//   J2 되살릴 때: 자리바꿈이 꺼져 있으면 늘 오른쪽
+//   J3 되살릴 때: 적어 둔 자리가 없으면 폭으로 판정한다
+//   J4 되살릴 때: 적어 둔 «왼쪽» + 격자 폭을 잴 수 있음 + 46% 이하 → 오른쪽으로 보여 준다(340px 사이드바가 왼쪽에 서던 결함)
+//   J5 되살릴 때: 적어 둔 «왼쪽» + 격자 폭을 못 잼 → 적어 둔 대로(어림값으로 뒤집지 않는다)
+//   J6 되살릴 때: 적어 둔 «왼쪽» + 문턱 사이(46~52%)나 그 위 → 적어 둔 대로
+//   J7 되살릴 때: 적어 둔 «오른쪽» 은 폭이 넓어도 그대로(한 방향만 바로잡는다)
+//   W12 side-swap: 되살릴 때 바로잡은 자리를 세션에 적지 않는다(넓은 창에서 바꾼 자리를 좁은 창이 지우지 않게)
 //   W8 CSS: 자리바꿈 상태에서 사이드바를 접으면 세션이 격자 전체를 쓴다(sw-left.no-side 가 sw-left 뒤에 있다)
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -110,6 +118,31 @@ if (lib) {
   ok(parseCard(JSON.stringify({ fold: "yes" })).fold === false, "S1d 접힘은 true 일 때만");
 }
 
+// ── 자리바꿈 판정(web/lib/side-swap-judge.ts) ──
+let jud = null;
+const judSrc = read("web/lib/side-swap-judge.ts");
+if (judSrc) {
+  const js = ts.transpileModule(judSrc, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  jud = await import(`data:text/javascript;base64,${Buffer.from(js).toString("base64")}`);
+}
+ok(!!jud, "J0 자리바꿈 판정이 잎 모듈(web/lib/side-swap-judge.ts)에 있다");
+if (jud) {
+  const { judgeSwap, placeOnRestore, SWAP_TH } = jud;
+  ok(SWAP_TH.on === 0.52 && SWAP_TH.off === 0.46, "J1a 문턱 52% · 46%");
+  ok(judgeSwap(0.52, false) === true && judgeSwap(0.6, false) === true && judgeSwap(0.46, true) === false && judgeSwap(0.3, true) === false, "J1b 52% 이상 왼쪽 · 46% 이하 오른쪽");
+  ok(judgeSwap(0.5, false) === false && judgeSwap(0.5, true) === true && judgeSwap(0.47, true) === true && judgeSwap(0.519, false) === false, "J1c 그 사이는 지금 자리");
+  ok(judgeSwap(NaN, true) === true && judgeSwap(NaN, false) === false, "J1d 비율을 못 세면 지금 자리");
+  const P = (o) => placeOnRestore({ enabled: true, remembered: undefined, ratio: 0.3, measurable: true, cur: false, ...o });
+  ok(P({ enabled: false, remembered: true, ratio: 0.9 }) === false && P({ enabled: false, remembered: undefined, ratio: 0.9, cur: true }) === false, "J2 자리바꿈이 꺼져 있으면 늘 오른쪽");
+  ok(P({ ratio: 0.6 }) === true && P({ ratio: 0.3, cur: true }) === false && P({ ratio: 0.5, cur: true }) === true, "J3 적어 둔 자리가 없으면 폭으로 판정");
+  ok(P({ remembered: true, ratio: 340 / 1042 }) === false && P({ remembered: true, ratio: 0.46 }) === false, "J4 적어 둔 «왼쪽» 이어도 46% 이하면 오른쪽으로 보여 준다", String(P({ remembered: true, ratio: 340 / 1042 })));
+  ok(P({ remembered: true, ratio: 0.2, measurable: false }) === true, "J5 격자 폭을 못 재면 적어 둔 대로");
+  ok(P({ remembered: true, ratio: 0.47 }) === true && P({ remembered: true, ratio: 0.5 }) === true && P({ remembered: true, ratio: 0.65 }) === true, "J6 문턱 사이와 그 위는 적어 둔 대로");
+  ok(P({ remembered: false, ratio: 0.8 }) === false && P({ remembered: false, ratio: 0.2 }) === false, "J7 적어 둔 «오른쪽» 은 그대로");
+  // 리뷰가 든 경우: 넓은 창(격자 1600)에서 900px 로 자리를 바꾼 세션을 좁은 격자(600)에서 다시 연다 → 보이기는 오른쪽
+  ok(P({ remembered: true, ratio: 234 / 600 }) === false && P({ remembered: true, ratio: 900 / 1600 }) === true, "J8 좁은 창에서는 오른쪽, 다시 넓히면 적어 둔 왼쪽");
+}
+
 // ── 배선 ──
 const swap = code(read("web/v2/side-swap.ts"));
 const cap = swap.slice(swap.indexOf("export const maxSideWidth"), swap.indexOf("export const maxSideWidth") + 200);
@@ -145,6 +178,11 @@ ok(/const capNow = \(\): number \| null => \(bw\(\) > 0 \? sideCap\(bw\(\)\) : n
 const tail = swap.slice(swap.indexOf("const onResize"), swap.indexOf("return {", swap.indexOf("const onResize")));
 const topLevel = tail.split("\n").filter((l) => /^  [a-zA-Z]/.test(l));           // mountSideSwap 몸통의 바로 아래 줄(들여쓰기 2칸)
 ok(topLevel.length > 0 && !topLevel.some((l) => /^  onEnd\(/.test(l)), "W11 side-swap: 서는 순간 onEnd 를 부르지 않는다", topLevel.filter((l) => /onEnd/.test(l)).join(" | "));
+
+const rst = swap.slice(swap.indexOf("function restore("), swap.indexOf("function onEnd("));
+ok(/placeOnRestore\(/.test(rst) && /setSwapped\(want, false, !keepStored\)/.test(rst) && !/h\.onChange/.test(rst), "W12a side-swap restore: 바로잡은 자리는 적지 않는다(persist 끔)");
+const setSw = swap.slice(swap.indexOf("function setSwapped("), swap.indexOf("function restore("));
+ok(/if \(persist\) h\.onChange\?\.\(v\); else h\.onPlace\?\.\(v\);/.test(setSw), "W12b side-swap setSwapped: persist 가 거짓이면 onChange 를 부르지 않는다");
 
 const swl = css.indexOf(".pn-body.sw-left {"), nos = css.indexOf(".pn-body.sw-left.no-side {"), nosCol = css.indexOf(".pn-body.sw-left.no-side > .pn-col {");
 ok(swl >= 0 && nos > swl && nosCol > nos && /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*0\s*0/.test(css.slice(nos, css.indexOf("}", nos))) && /grid-column:\s*1\b/.test(css.slice(nosCol, css.indexOf("}", nosCol))),
