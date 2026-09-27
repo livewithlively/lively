@@ -141,7 +141,7 @@ const NODE_OPS_V1 = ["list", "create", "kill", "edit", "gone", "label", "runTask
 //   이 op 로 노드가 자기 자리에서 런타임을 돌리고, 그 사건을 chatEvent 로 게이트웨이에 올린다.
 //  chatAnswer = 그 런타임에 걸린 물음(승인·선택지)에 사람의 답을 돌려준다. chatSend 의 짝이다.
 //   ⚠ 둘이 갈리면 «카드는 뜨는데 눌러도 아무 데도 안 가는» 상태가 된다 — 같이 선언한다.
-//  chatTranscript = app-server가 노드 CODEX_HOME에 남긴 rollout을 제한 바이트 청크로 읽는다(#3982).
+//  chatTranscript = 노드 하네스가 로컬에 남긴 대화 기록을 제한 바이트 청크로 읽는다(#3982·#3870).
 //   임의 경로를 받지 않고 threadId만 받으며, 게이트웨이가 세션 매핑·인가·공통 ChatLine 파싱을 맡는다.
 const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "markSeen", "sendKeys", "setProject", "createAppSession", "stageWorkerChunk", "startWorker", "workerStatus", "stopWorker", "injectFirstPrompt", "chatSend", "chatAnswer", "chatTranscript"] as const;
 

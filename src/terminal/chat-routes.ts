@@ -25,8 +25,9 @@
 //  세션 상세(GET …/sessions/:id)의 restorable 규칙과 같다 — 소유자·admin, 프로젝트 세션이면 전원(#452).
 //
 //  ── 안 하는 것 ──
-//  · 노드(멤버 PC) Codex 세션은 gateway가 보관한 thread id로 노드의 rollout을 제한 청크로 읽는다(#3982).
-//    app-server 턴에는 Stop 훅이 돌지 않아 중앙 기록이 비므로, 그 폴백만으로는 Windows·macOS 모두 답이 사라진다.
+//  · 노드(멤버 PC) 세션은 gateway가 보관한 thread id로 노드의 하네스 기록을 제한 청크로 읽는다(#3982·#3870).
+//    Codex app-server 턴에는 Stop 훅이 돌지 않고, Claude도 노드 파일이 중앙에 없는 동안엔 중앙 기록이 빌 수 있어
+//    그 폴백만으로는 Windows·macOS 모두 답과 런타임 모델·추론강도가 사라진다.
 //  · 대화 id 를 **추측하지 않는다**(sessions.ts restore 원칙) — work-flag 훅이 보고한 매핑이 없으면 404.
 //
 //  ── 파일이 어디 있나(#1437 ②) ──
@@ -39,7 +40,7 @@ import { wrap, HttpError } from "../http/rest-util.js";
 import { canAttach, sessionGone } from "./terminal-sessions.js";
 import { getSessionState, sessionConvsFor, dirSharedWithOtherSession, convsTakenByOtherSession, nodeSessionMapFor } from "../sessions/session-state.js";
 import { isChatKey, sendKeyToSession, type ChatKey } from "./send-keys.js";
-import { nodeOfSession, nodeCanAttach, nodeSupports, nodeRpc } from "../node/registry.js";
+import { nodeOfSession, nodeCanAttach, nodeSupports, nodeRpc, nodeSessionHarness } from "../node/registry.js";
 import { markSessionSeen } from "./phase.js";
 import { markViewing, viewersOf } from "./session-presence.js";   // #2116 — "지금 보고 있는 사람"(구글 문서식 얼굴 줄)
 import { listMembers } from "../org/store.js";
@@ -50,7 +51,7 @@ import { parseWindow } from "./harness-io/parse-cache.js";
 import { toNdjson, THIN_MAX_BYTES, THIN_CHAIN_MAX_BYTES } from "./harness-io/chat-line.js";
 import { resolveConvChain, readThinChain, convUuidsInDir } from "./harness-io/conv-chain.js";
 import { harnessOf, resolveTranscript } from "./transcript-locate.js";   // #3699 — «어느 파일인가» 는 한 벌
-import { readNodeCodexTranscript } from "./node-chat-transcript.js";
+import { readNodeTranscript } from "./node-chat-transcript.js";
 
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
@@ -118,16 +119,17 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     const want = String(req.query.uuid ?? "").trim();
     if (want && !/^[A-Za-z0-9._-]{1,128}$/.test(want)) throw new HttpError(400, "uuid 형식 오류");
     if (nodeId) {
-      // 구 노드에는 새 op를 보내지 않는다. 기존 409 폴백을 유지하고, 최신 노드만 영속 rollout을 직접 읽는다.
+      // 구 노드에는 새 op를 보내지 않는다. 기존 409 폴백을 유지하고, 최신 노드만 하네스의 영속 기록을 직접 읽는다.
       if (!nodeSupports(nodeId, "chatTranscript")) throw new HttpError(409, "node");
       const mapped = (await nodeSessionMapFor([id])).get(id);
       if (!mapped || mapped.node_id !== nodeId) throw new HttpError(404, "이 노드 세션의 대화 id를 아직 모릅니다(첫 대화가 오가면 생깁니다).");
       // ?uuid는 압축 전 대화를 읽는 표면이다. 원격 노드는 현재 매핑만 서버가 소유하므로 다른 id를 임의로 넘기지 않는다.
       if (want && want !== mapped.conv_uuid) throw new HttpError(404, "요청한 원격 대화 기록을 찾지 못했습니다.");
-      const got = await readNodeCodexTranscript({
+      const got = await readNodeTranscript({
         nodeId,
         sessionId: id,
         threadId: mapped.conv_uuid,
+        harness: nodeSessionHarness(nodeId, id),
         query: req.query as Record<string, unknown>,
         rpc: (node, op, args) => nodeRpc(node, op, args),
       });
@@ -137,7 +139,7 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
       res.setHeader("X-Log-From", String(got.from));
       res.setHeader("X-Log-To", String(got.to));
       res.setHeader("X-Session-Uuid", got.uuid);
-      res.setHeader("X-Harness", "codex");
+      res.setHeader("X-Harness", got.harness);
       res.end(got.ndjson);
       return;
     }
