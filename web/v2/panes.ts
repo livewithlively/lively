@@ -28,6 +28,7 @@ import { deviceStore } from './shell-prefs.js';   // #2460 — 곁칸 배치는 
 import { canOpenInAside, openInAside } from './aside-slot.js';
 import { makeSplitter } from './split.js';
 import { mountSideSwap, type SideSwapHandle } from './side-swap.js';   // 곁칸이 절반을 넘으면 자리를 바꾼다(#1819)
+import { mountSideCard, type SideCardHandle } from './side-card.js';   // #3870: 사이드바가 화면을 다 차지하면 세션이 카드가 된다
 import { sideLabels } from '../lib/side-label.js';   // 곁칸의 화면 이름. 자리바꿈으로 왼쪽에 서면 «우측» 이라 부르지 않는다(#4233)
 import { MOBILE_MQ } from './mobile.js';   // 좁은 폭(≤900)의 접힌 배치 — side-swap 과 같은 문턱을 읽는다(#4088 후속)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
@@ -271,7 +272,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //   '마지막으로 쓰던 값'을 물려주면 방금 스쳐 본 세션의 폭이 다음 세션으로 새어 나가 독립이 깨진다.
   //   #1719 가 걱정한 '설정할 게 많다'는 **기본값이 늘 쓸 만한 자리**(곁칸 340)라는 것으로 답한다.
   const VIEW_KEY = 'pn_view_by_sess';
-  type View = { sideW?: number; bottomH?: number; sideOn?: boolean; bottomOn?: boolean; sideLeft?: boolean };   // sideLeft = 곁칸이 왼쪽(자리바꿈, #762)
+  type View = { sideW?: number; bottomH?: number; sideOn?: boolean; bottomOn?: boolean; sideLeft?: boolean; card?: boolean };   // sideLeft = 곁칸이 왼쪽(자리바꿈, #762) · card = 세션이 카드(#3870)
   function readViews(): Record<string, View> {
     try { const m = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}'); return m && typeof m === 'object' ? m as Record<string, View> : {}; }
     catch (_) { return {}; }
@@ -554,6 +555,10 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   // 세로 경계(가운데|곁칸) · 가로 경계(가운데|아래 칸) — 폭·높이는 split.ts 가 기억한다.
   // 곁칸 경계 — 상한·부호를 side-swap 이 정한다(#1819). 곁칸이 왼쪽으로 가면 같은 손잡이의 부호가 반대가 된다.
   let swap: SideSwapHandle | null = null;
+  //  세션 카드(#3870). 손잡이를 상한 너머로 끈 거리는 split 이 onOver 로 알리고, 놓을 때 카드가 먼저 받는다.
+  let card: SideCardHandle | null = null;
+  //  카드가 되기 전 사이드바가 어느 쪽에 있었나. 돌아왔을 때 자리가 달라졌으면 자리바꿈 안내를 한 번 띄운다.
+  let leftBeforeCard = true;
   //  곁칸이 지금 왼쪽에 서 있나(side-swap 이 격자에 sw-left 를 건다). 칸 이름을 부르는 글은 전부 이것으로 고른다.
   const isLeft = (): boolean => body.classList.contains('sw-left');
   let sideHide: HTMLElement | null = null;   // 곁칸 머리의 접기 단추(paintPane 이 새로 만들 때마다 바꿔 든다)
@@ -562,10 +567,12 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     max: () => swap?.maxSideW() ?? 620,
     grow: () => (body.classList.contains('sw-left') ? 1 : -1),
     label: sideLabels(false).width,
-    onDrag: (px) => swap?.onDrag(px),
+    onOver: (over) => { card?.onOver(over); if (over > 0) swap?.quiet(); },
+    onDrag: (px) => { if (!body.classList.contains('cm-over')) swap?.onDrag(px); },
     //  놓는 순간 **이 세션의 폭**으로 적는다. makeSplitter 는 전역 키에도 그대로 남기는데(그건 '마지막으로 쓰던 값'),
     //  그게 다음에 처음 여는 세션이 물려받을 값이다 — 둘은 싸우지 않는다(읽을 때 세션 값이 먼저다).
-    onEnd: (px) => { swap?.onEnd(px); saveView({ sideW: Math.round(px) }); },
+    //  카드 전환 구간에서 놓았으면 카드가 받는다. 그때는 자리바꿈을 판정하지 않는다(자리는 카드가 된 뒤 조용히 정한다).
+    onEnd: (px) => { if (card?.onRelease()) return; swap?.onEnd(px); saveView({ sideW: Math.round(px) }); },
   });
   const splitY = makeSplitter({ axis: 'y', key: 'panes_bottom', cssVar: '--pn-bottom-h', target: colMain, def: 240, min: 120, max: 560, grow: -1, label: '아래 칸 높이',
     onEnd: (px) => saveView({ bottomH: Math.round(px) }) });
@@ -588,6 +595,10 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     // ★ 자리(곁칸이 왼쪽인가)도 폭을 입힌 **뒤에** 되살린다(#762) — 폭보다 먼저 판정하면 늘 기본 폭으로 «안 바꿈»이 된다.
     //   적어 둔 자리가 있으면 그대로, 없으면(그 세션에서 자리가 바뀐 적이 없으면) 폭으로 판정한다.
     swap?.restore(w, typeof v.sideLeft === 'boolean' ? v.sideLeft : undefined);
+    //  세션 카드도 이 세션의 것이다(#3870). 자리 · 크기는 브라우저 하나에 하나(사람마다), 카드인지 아닌지는 세션마다.
+    //  되살린 카드는 «카드가 되기 전 자리» 를 모른다. 앞 세션의 값이 남아 자리바꿈 안내가 엉뚱하게 뜨지 않게 안내 없음으로 둔다.
+    leftBeforeCard = true;
+    card?.restore(v.card === true);
   }
   colMain.append(mainPane.root, splitY, bottomPane.root);
   // 접힌 곁칸을 다시 펴는 손잡이 — 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 유일한 복구 통로가 됐다.
@@ -600,7 +611,22 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   swap = mountSideSwap({ body, colMain, sidePane: sidePane.root, sideOn: () => lay.sideOn,
     //  자리가 바뀌면 **이 세션의 것**으로 적는다 — 폭·접힘과 같은 표에(나갔다 들어와도 그 자리, 원준 2026-09-04).
     //  칸 이름도 그 자리로 다시 적는다(양쪽 모두): 경계 손잡이 · 펴기 손잡이 · 접기 단추.
-    onChange: (v) => { saveView({ sideLeft: v }); paintSideLabels(v); } });
+    onChange: (v) => { saveView({ sideLeft: v }); paintSideLabels(v); },
+    //  적지 않고 보여 주기만 한 자리(적어 둔 «왼쪽» 이 지금 폭과 안 맞을 때). 글만 맞춘다.
+    onPlace: (v) => paintSideLabels(v),
+    holdSwap: () => !!card?.active() });
+  card = mountSideCard({ body, colMain, sidePane: sidePane.root, sideOn: () => lay.sideOn,
+    setSideW: (px, persist) => {
+      if (!(px > 0 && px < 100000)) return;        // 격자 폭을 못 잰 값은 받지 않는다
+      body.style.setProperty('--pn-side-w', Math.round(px) + 'px');
+      if (persist) saveView({ sideW: Math.round(px) });
+    },
+    //  카드가 되는 순간의 자리를 적어 둔다(바로 뒤 settle 이 자리를 정하기 전이다).
+    onChange: (v) => { if (v) leftBeforeCard = !!swap?.swapped(); saveView({ card: v }); },
+    //  사이드바가 상한 폭일 때의 자리를 조용히 정한다. 절반을 넘으므로 자리바꿈이 켜져 있으면 세션이 설 자리는 오른쪽이다.
+    //  미끄러짐도 안내도 없다(그 순간 사이드바가 세션 열을 덮고 있어 자리가 바뀌는 것이 보이지 않는다).
+    settle: (px) => swap?.restore(px),
+    onLeft: () => { if (swap?.swapped() && !leftBeforeCard) swap.introOnce(); leftBeforeCard = true; } });
 
   /** 곁칸을 부르는 글을 지금 선 쪽에 맞춘다. 탭 메뉴는 열 때마다 isLeft() 로 새로 고른다. */
   function paintSideLabels(left: boolean = isLeft()): void {
@@ -1007,6 +1033,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     splitY.hidden = n || !lay.bottomOn;
     paintPane('main'); paintPane('side'); paintPane('bottom');
     swap?.sync();
+    card?.sync();
     paintSideLabels();
     paintDoor();
   }
@@ -1208,6 +1235,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       dead = true;
       window.removeEventListener('pn:sessions-view', onViewChanged);
       window.clearInterval(timer);
+      card?.destroy();
       swap?.destroy();
       for (const ro of ros) ro.disconnect();
       ros.length = 0;
