@@ -111,8 +111,15 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
           isDir ? null : el('span', { class: 'pjh-fr-m', text: it.mtime ? relTime(new Date(it.mtime).toISOString()) : '' })),
         right);
     };
-    // 낱장 아이콘 — 프로젝트 탭 공유 폴더 섹션과 같은 그림(files-icons.fileThumb: 폴더 두 톤 · 문서 색 띠 · 사진 썸네일). 크기는 CSS(.pjh-fc-ic · .pjh-fr-th · .pjh-prev-ic).
-    const tile = (it: any, rel: string): HTMLElement => el('div', { class: 'pjh-fc-ic' }, fileThumb(pid, it, rel, B));
+    // 낱장 타일 — 시안(hub-widgets-review.html .th) 그대로: 4:3 tint 타일 + 확장자 알약 / 사진은 채움 / 폴더는 앰버 타일(원준: 큰 문서 아이콘은 «더럽게 보인다»).
+    const ext = (n: string): string => { const m = String(n).toLowerCase().match(/\.([a-z0-9]{1,5})$/); return m ? m[1].toUpperCase() : ''; };
+    const isImg = (n: string): boolean => /\.(png|jpe?g|gif|webp|svg|bmp|avif|heic)$/i.test(String(n));
+    const tile = (it: any, rel: string): HTMLElement => {
+      const t = el('div', { class: 'pjh-th' + (it.type === 'dir' ? ' fd' : isImg(it.name) ? ' img' : '') });
+      if (it.type === 'dir' || isImg(it.name)) t.append(fileThumb(pid, it, rel, B));
+      else t.append(el('span', { class: 'pjh-th-ext', text: ext(it.name) || 'FILE' }));
+      return t;
+    };
     const fcard = (it: any): HTMLElement => {
       const rel = relOf(it.name);
       return el('div', { class: 'pjh-fc' + (nav.picked === rel ? ' on' : ''), title: it.name, onclick: () => openItem(it, rel) },
@@ -177,8 +184,8 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
     // 2×2 이상 — 나무 + 경로 줄 + 낱장 격자 (+ 3×2 옆 칸)
     const cols = w >= 3 ? 3 : 4;
     const grid = el('div', { class: 'pjh-fgrid tall', style: 'grid-template-columns:repeat(' + cols + ',1fr)' });
-    // 낱장 한 줄 높이 = 아이콘 56 + 이름·메타 38 + 안쪽 여백 18 + 격자 간격 8 = 120px. 몸통(칸 높이 − 크롬 122)에서 경로 줄 38px 을 뺀다. 마지막 자리는 «끌어다 놓기».
-    const cardPx = 120;
+    // 낱장 한 줄 높이 = 4:3 타일(3칸 3열 ≈150px 폭 → 112 · 2칸 4열 ≈120px 폭 → 90) + 이름·메타 39 + 간격 10. 몸통(칸 높이 − 크롬 122)에서 경로 줄 38px 을 뺀다. 마지막 자리는 «끌어다 놓기».
+    const cardPx = cols === 3 ? 164 : 142;
     const capCards = cols * Math.max(1, Math.floor((h * 276 - 16 - 122 - 38) / cardPx)) - 1;
     const shownCards = recentFiles(items, capCards);
     // 옆 칸(3×2)이 있으면 아직 고른 게 없어도 첫 낱장을 골라 둔다 — 빈 «고른 파일» 칸 대신 미리보기가 선다(시안).

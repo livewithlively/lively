@@ -8,7 +8,7 @@
 //  문장 좌표가 없어 아직 못 한다 — 코멘트 칸으로 대신한다(후속).
 import { api, el, personFace, relTime, renderMarkdown, toast } from '../core.js';
 import { type Fill, btn, footText, hubIcon, stripMd } from './detail-hub-kit.js';
-import { bodyCharCount, unreadComments } from './detail-hub-model.js';
+import { bodyCharCount, splitBodyNotes, unreadComments } from './detail-hub-model.js';
 
 const readKey = (pid: number) => 'pjv_cmt_read_' + pid;
 const lastRead = (pid: number): number => { try { return Number(localStorage.getItem(readKey(pid))) || 0; } catch (_) { return 0; } };
@@ -22,9 +22,24 @@ const EDITING = new Map<number, LiveEditor | null>();   // 키 있음 = 편집 �
 export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
   const { o, P, pid } = ctx;
   const w = f.w, h = f.h;
-  const md = String(P.description || '');
+  const mdAll = String(P.description || '');
+  // 서버가 맨 앞 인용으로 쓴 «어떻게 만들어진 프로젝트인가» 안내문은 본문에서 들어내 칩으로(올리면 원문) — 본문 자리를 안 먹는다.
+  const { notes, rest: md } = splitBodyNotes(mdAll);
   const open = () => ctx.openTool('body');
   sub.textContent = P.updated_at ? '갱신 ' + relTime(P.updated_at) : '';
+  const notesRow = (): HTMLElement | null => {
+    if (!notes.length) return null;
+    const row = el('div', { class: 'pjh-notes' });
+    for (const n of notes) {
+      const chip = el('span', { class: 'pjh-note ' + n.kind, tabindex: '0', role: 'note', 'aria-label': n.text }, hubIcon(n.kind === 'named' ? 'pen' : 'gear', 11), n.label);
+      chip.addEventListener('mouseenter', () => row.setAttribute('data-tip', n.text));
+      chip.addEventListener('focus', () => row.setAttribute('data-tip', n.text));
+      chip.addEventListener('mouseleave', () => row.removeAttribute('data-tip'));
+      chip.addEventListener('blur', () => row.removeAttribute('data-tip'));
+      row.append(chip);
+    }
+    return row;
+  };
 
   // ── 본문(읽기) — 사용자의 마크다운 그대로. 넓으면 두 단. ──
   const twoCol = h <= 1 && w >= 2;
@@ -61,9 +76,9 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
       paintText();
     } else { EDITING.set(pid, null); paintText(); const ed = textHost.querySelector('[contenteditable]') as HTMLElement | null; if (ed) ed.focus(); }
   };
-  // «갱신 · 편집» 줄 — 1×1 은 바닥 단추가 그 역할(자리가 없다)
-  const bh = (h >= 2 || w >= 2) ? el('div', { class: 'pjh-bh' }, el('span', { text: P.updated_at ? '갱신 ' + relTime(P.updated_at) : '' }), editBtn) : null;
-  if (bh) textHost.append(bh);
+  // «갱신 · 안내 칩 · 편집» 줄 — 1×1 은 바닥 단추가 그 역할(자리가 없다). 안내 칩은 1×1 이면 본문 위 한 줄.
+  const bh = (h >= 2 || w >= 2) ? el('div', { class: 'pjh-bh' }, el('span', { class: 'pjh-bh-l' }, el('span', { text: P.updated_at ? '갱신 ' + relTime(P.updated_at) : '' }), notesRow()), editBtn) : null;
+  if (bh) textHost.append(bh); else { const nr = notesRow(); if (nr) textHost.append(nr); }
   textHost.append(contentHost);
   paintText();
 

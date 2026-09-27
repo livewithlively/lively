@@ -242,3 +242,36 @@ export function latestLane(acts: ActLike[]): { person: string; day: string } | n
   for (const a of acts) if (a.author_person && actWhen(a) && (!best || actWhen(a) > actWhen(best))) best = a;
   return best ? { person: String(best.author_person), day: dayKey(actWhen(best)) } : null;
 }
+
+// ── 본문 안내문 ───────────────────────────────────────────────────────────────
+/** 서버(src/project/first-prompt-project.ts)가 본문 맨 앞 인용으로 쓰는 «어떻게 만들어진 프로젝트인가» 안내문. 본문 위젯은 이를 들어내 칩으로 보인다(원준 2026-09-27: 자리를 너무 먹는다). */
+export interface BodyNote { kind: 'named' | 'auto-first' | 'auto-empty'; label: string; text: string }
+const NOTE_KINDS: Array<{ kind: BodyNote['kind']; label: string; re: RegExp }> = [
+  { kind: 'named', label: '직접 만든 프로젝트', re: /사람이 이름을 지어/ },
+  { kind: 'auto-first', label: '첫 지시로 자동 생성', re: /첫 지시에서[^\n]*자동 생성/ },
+  { kind: 'auto-empty', label: '자동 생성 · 임시 이름', re: /세션을 열 때[^\n]*자동 생성/ },
+];
+/** 본문 맨 앞의 안내 인용(연속된 것 전부)을 떼어 낸다. 임시 이름 안내는 뒤따르는 설명 두 문단(작업 폴더 귀속 · 보강 안내)도 같은 안내문이다. 마커 주석은 어디 있든 지운다. */
+export function splitBodyNotes(md: string): { notes: BodyNote[]; rest: string } {
+  const src = String(md || '').replace(/<!--\s*lively:auto-created-from-first-prompt\s*-->/g, '');
+  const lines = src.split('\n');
+  const notes: BodyNote[] = [];
+  let i = 0;
+  const skipBlank = () => { while (i < lines.length && !lines[i].trim()) i++; };
+  skipBlank();
+  while (i < lines.length && /^>\s?/.test(lines[i])) {
+    const plain = lines[i].replace(/^>\s?/, '').replace(/\*\*/g, '').trim();
+    const k = NOTE_KINDS.find((x) => x.re.test(plain));
+    if (!k) break;
+    i++;
+    let text = plain;
+    if (k.kind === 'auto-empty') {
+      skipBlank();
+      while (i < lines.length && /^(이 세션의 작업 폴더가|무엇을 하는 일인지)/.test(lines[i].trim())) { text += '\n' + lines[i].trim(); i++; }
+    }
+    notes.push({ kind: k.kind, label: k.label, text });
+    skipBlank();
+  }
+  if (!notes.length) return { notes, rest: src.replace(/^\s*\n/, '').replace(/\s+$/, '') };
+  return { notes, rest: lines.slice(i).join('\n').trim() };
+}
