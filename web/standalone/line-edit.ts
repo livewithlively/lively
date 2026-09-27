@@ -43,6 +43,7 @@ export const SEQ = {
   home: '\x01', end: '\x05',        // Ctrl+A / Ctrl+E — 줄 처음·끝
   killHead: '\x15', killTail: '\x0b', // Ctrl+U / Ctrl+K — 커서 앞·뒤 지우기(둘 다 kill-ring 에 들어간다)
   wordLeft: '\x1bb', wordRight: '\x1bf',
+  wordDelBack: '\x17',                 // Ctrl+W — cursor 앞 단어 삭제(readline/zsh)
   wordDelForward: '\x1bd',             // Meta+d — cursor~단어끝 삭제(readline/zsh)
   yank: '\x19',                      // Ctrl+Y — 마지막 kill 을 되붙인다(= 우리 되돌리기의 한 갈래)
   undo: '\x1f',                      // Ctrl+_ — readline·zsh 의 undo. Claude Code 는 2.1.267 부터(nativeUndoOk)
@@ -79,17 +80,28 @@ export function decideKey(e: KeyLike, c: LineEditCtx): Act {
   if (isZ && shift && ((ctrl && !alt && !meta) || (!ctrl && c.mac && meta && !alt))) return { k: 'redo' };
   if (isZ && !shift && ((ctrl && !alt && !meta) || (!ctrl && c.mac && meta && !alt) || (!ctrl && !c.mac && alt && !meta))) return { k: 'undo' };
 
-  // ── ⌘ 계열 넷 ─────────────────────────────────────────────────────────────────
+  // ── 주 단축키(맥 ⌘ / Windows Ctrl) ───────────────────────────────────────────
   //  앱(Claude Code)은 ⌘←/→/⌫/⌦ 를 다 구현해 뒀는데 **xterm 이 ⌘ 를 PTY 로 안 보내** 앱까지 닿지 않는다.
   //  그래서 같은 뜻의 조작으로 번역해 보낸다(Option+←/→ 를 \eb/\ef 로 번역해 온 것과 같은 방식).
-  if (c.mac && meta && !ctrl && !alt) {
+  const primary = !alt && (c.mac ? meta && !ctrl : ctrl && !meta);
+  if (primary) {
     if (lower === 'a') return c.hasSel ? { k: 'selectAll' } : c.inputActive ? { k: 'selectInput' } : { k: 'pass' };
-    if (key === 'ArrowLeft') return shift ? { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1 } : { k: 'send', seq: SEQ.home };
-    if (key === 'ArrowRight') return shift ? { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1 } : { k: 'send', seq: SEQ.end };
-    if (key === 'ArrowUp') return shift ? { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1 } : { k: 'send', seq: SEQ.home };
-    if (key === 'ArrowDown') return shift ? { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1 } : { k: 'send', seq: SEQ.end };
-    if (key === 'Backspace') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.killHead, kill: true };
-    if (key === 'Delete') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.killTail, kill: true };
+    if (c.mac) {
+      if (key === 'ArrowLeft') return shift ? { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1 } : { k: 'send', seq: SEQ.home };
+      if (key === 'ArrowRight') return shift ? { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1 } : { k: 'send', seq: SEQ.end };
+      if (key === 'ArrowUp') return shift ? { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1 } : { k: 'send', seq: SEQ.home };
+      if (key === 'ArrowDown') return shift ? { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1 } : { k: 'send', seq: SEQ.end };
+      if (key === 'Backspace') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.killHead, kill: true };
+      if (key === 'Delete') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.killTail, kill: true };
+    } else {
+      // Windows 관례: Ctrl+←/→ = 단어, Ctrl+Home/End = 입력줄 경계, Ctrl+⌫/Delete = 단어 삭제.
+      if (key === 'ArrowLeft') return shift ? { k: 'extend', seq: SEQ.wordLeft, unit: 'word', dir: -1 } : { k: 'send', seq: SEQ.wordLeft };
+      if (key === 'ArrowRight') return shift ? { k: 'extend', seq: SEQ.wordRight, unit: 'word', dir: 1 } : { k: 'send', seq: SEQ.wordRight };
+      if (key === 'Home') return shift ? { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1 } : { k: 'send', seq: SEQ.home };
+      if (key === 'End') return shift ? { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1 } : { k: 'send', seq: SEQ.end };
+      if (key === 'Backspace') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.wordDelBack, kill: true };
+      if (key === 'Delete') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.wordDelForward, kill: true };
+    }
     if (lower === 'c' && c.hasSel) return { k: 'copy' }; // 우리 선택이 서 있으면 그것이 «복사»의 대상이다
     if (lower === 'x' && c.hasSel) return { k: 'cut' };
   }

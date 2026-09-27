@@ -1833,8 +1833,13 @@ export function setupClipboard() {
       //  [#1117 버그C] 단, '무조건 브리지'는 사고를 냈다 — 선택이 없을 때 Cmd+C 를 누르면 앱엔 취소(^C)라서,
       //  두 번 누르면 Claude 가 종료됐다(복사하려다 앱을 죽임). 그래서 '앱 화면에서 드래그 선택이 실제로 관측된
       //  경우'(appDragSelect — onData 로 나가는 SGR 마우스 리포트를 trackAppMouse 가 추적)에만 브리지하고,
-      //  아니면 아무 것도 보내지 않고 안내만 띄운다. Ctrl+C 는 게이팅하지 않는다(중단 기능이 본래 의미).
-      if (e.metaKey && !e.ctrlKey) {
+      //  아니면 아무 것도 보내지 않고 안내만 띄운다. Windows Ctrl+C도 관측된 선택일 때만 같은 브리지를 쓴다.
+      const macCopy = e.metaKey && !e.ctrlKey;
+      // Windows의 Ctrl+C는 선택이 없으면 본래의 중단 키다. 단, 앱이 관리하는 마우스 선택을 방금 관측했을
+      // 때만 macOS의 Cmd+C와 같은 복사 브리지로 소비한다. 이 조건이 없으면 Ctrl+C를 복사로 오인해 앱을
+      // 취소·종료시키거나, 반대로 선택 없는 중단을 막게 된다.
+      const windowsObservedCopy = !IS_MAC && e.ctrlKey && !e.metaKey && mouseOn && appDragSelect;
+      if (macCopy || windowsObservedCopy) {
         if (mouseOn) {
           // ⚠ 관측은 '1회용'이다(#1117 후속, 사파리 실기기 사고): 앱(CC)은 복사 후·출력 후 선택을 스스로 잃는데
           //  우리는 그걸 볼 수 없다. 관측을 소비하지 않으면 Cmd+C 연타의 2번째부터가 선택 없는 ^C(= 취소,

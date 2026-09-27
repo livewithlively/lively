@@ -15,6 +15,8 @@ const { decideKey, UndoStack, countTyped, SEQ, nativeUndoOk } = mod;
 interface Ctx { mac: boolean; hasSel: boolean; select: boolean; inputActive?: boolean }
 const MAC: Ctx = { mac: true, hasSel: false, select: true, inputActive: true };
 const SEL: Ctx = { mac: true, hasSel: true, select: true, inputActive: true };
+const WIN: Ctx = { mac: false, hasSel: false, select: true, inputActive: true };
+const WINSEL: Ctx = { mac: false, hasSel: true, select: true, inputActive: true };
 const k = (key: string, over: Record<string, unknown> = {}): any => ({ key, ...over });
 
 const tests: Array<[string, () => void]> = [];
@@ -55,6 +57,26 @@ t("A8 ⌘↑/⌘↓는 입력의 처음·끝 이동, ⇧를 더하면 같은 경
 t("A9 ⌥Fn⌫는 커서 뒤 한 단어를 지운다", () => {
   assert.deepEqual(decideKey(k("Delete", { altKey: true }), MAC), { k: "send", seq: SEQ.wordDelForward, kill: true });
 });
+t("A10 Windows Ctrl+A도 첫 번은 입력 전체 선택, 다음 번은 터미널 전체 선택", () => {
+  assert.deepEqual(decideKey(k("a", { ctrlKey: true }), WIN), { k: "selectInput" });
+  assert.deepEqual(decideKey(k("a", { ctrlKey: true }), WINSEL), { k: "selectAll" });
+});
+t("A11 Windows Ctrl+Home/End와 Ctrl+Shift+Home/End는 입력 경계 이동·선택이다", () => {
+  assert.deepEqual(decideKey(k("Home", { ctrlKey: true }), WIN), { k: "send", seq: SEQ.home });
+  assert.deepEqual(decideKey(k("End", { ctrlKey: true }), WIN), { k: "send", seq: SEQ.end });
+  assert.deepEqual(decideKey(k("Home", { ctrlKey: true, shiftKey: true }), WIN), { k: "extend", seq: SEQ.home, unit: "line", dir: -1 });
+  assert.deepEqual(decideKey(k("End", { ctrlKey: true, shiftKey: true }), WIN), { k: "extend", seq: SEQ.end, unit: "line", dir: 1 });
+});
+t("A12 Windows Ctrl+좌우·Ctrl+Shift+좌우는 단어 이동·선택이다", () => {
+  assert.deepEqual(decideKey(k("ArrowLeft", { ctrlKey: true }), WIN), { k: "send", seq: SEQ.wordLeft });
+  assert.deepEqual(decideKey(k("ArrowRight", { ctrlKey: true }), WIN), { k: "send", seq: SEQ.wordRight });
+  assert.deepEqual(decideKey(k("ArrowLeft", { ctrlKey: true, shiftKey: true }), WIN), { k: "extend", seq: SEQ.wordLeft, unit: "word", dir: -1 });
+  assert.deepEqual(decideKey(k("ArrowRight", { ctrlKey: true, shiftKey: true }), WIN), { k: "extend", seq: SEQ.wordRight, unit: "word", dir: 1 });
+});
+t("A13 Windows Ctrl+⌫·Ctrl+Delete는 앞·뒤 한 단어를 지운다", () => {
+  assert.deepEqual(decideKey(k("Backspace", { ctrlKey: true }), WIN), { k: "send", seq: SEQ.wordDelBack, kill: true });
+  assert.deepEqual(decideKey(k("Delete", { ctrlKey: true }), WIN), { k: "send", seq: SEQ.wordDelForward, kill: true });
+});
 
 // ── B. 선택 확장 (변이: select 조건 제거 → B5 red · unit 상수 바꾸기 → B1~B4 red) ──
 t("B1 Shift+← → 한 글자 확장 · 보내는 바이트는 평범한 ←", () => {
@@ -83,7 +105,7 @@ t("B5 설정이 꺼져 있으면 아무것도 가로채지 않는다", () => {
   assert.deepEqual(decideKey(k("ArrowRight", { shiftKey: true, altKey: true }), off), { k: "pass" });
   assert.deepEqual(decideKey(k("Home", { shiftKey: true }), off), { k: "pass" });
 });
-t("B6 Ctrl+Shift+← 는 터미널 제 기능 — 손대지 않는다", () => {
+t("B6 맥 Ctrl+Shift+← 는 터미널 제 기능 — 손대지 않는다", () => {
   assert.deepEqual(decideKey(k("ArrowLeft", { shiftKey: true, ctrlKey: true }), MAC), { k: "pass" });
 });
 
@@ -110,8 +132,9 @@ t("C5 선택 + ⌘C → 선택을 복사", () => {
 t("C5b 선택 + ⌘X → 복사 후 선택을 지운다", () => {
   assert.deepEqual(decideKey(k("x", { metaKey: true }), SEL), { k: "cut" });
 });
-t("C6 ★선택 + Ctrl+C → 뺏지 않는다(터미널의 «중단»)", () => {
-  assert.deepEqual(decideKey(k("c", { ctrlKey: true }), SEL), { k: "clear" });
+t("C6 Windows 선택 + Ctrl+C/Ctrl+X → 복사·잘라내기", () => {
+  assert.deepEqual(decideKey(k("c", { ctrlKey: true }), WINSEL), { k: "copy" });
+  assert.deepEqual(decideKey(k("x", { ctrlKey: true }), WINSEL), { k: "cut" });
 });
 t("C7 캐럿이 선택 밖으로 가거나 줄이 끝나는 키만 거둔다", () => {
   for (const key of ["Enter", "Escape", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown", "Tab"]) {
@@ -135,7 +158,7 @@ t("C7d Shift+화살표 위/아래는 입력 처음·끝까지 선택을 확장�
   assert.deepEqual(decideKey(k("ArrowUp", { shiftKey: true }), SEL), { k: "extend", seq: SEQ.home, unit: "line", dir: -1 });
   assert.deepEqual(decideKey(k("ArrowDown", { shiftKey: true }), SEL), { k: "extend", seq: SEQ.end, unit: "line", dir: 1 });
 });
-t("C7e Ctrl/⌘ + 글자는 줄을 건드리는 명령이라 선택을 거둔다(^C 중단 · ⌘V 붙여넣기)", () => {
+t("C7e 선택이 없거나 처리 대상이 아닌 Ctrl/⌘ + 글자는 줄을 건드리는 명령이라 선택을 거둔다(^C 중단 · ⌘V 붙여넣기)", () => {
   assert.deepEqual(decideKey(k("c", { ctrlKey: true }), SEL), { k: "clear" });
   assert.deepEqual(decideKey(k("u", { ctrlKey: true }), SEL), { k: "clear" });
   assert.deepEqual(decideKey(k("v", { metaKey: true }), SEL), { k: "clear" });
