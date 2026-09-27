@@ -619,6 +619,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  자리가 바뀌면 **이 세션의 것**으로 적는다 — 폭·접힘과 같은 표에(나갔다 들어와도 그 자리, 원준 2026-09-04).
     //  칸 이름도 그 자리로 다시 적는다(양쪽 모두): 경계 손잡이 · 펴기 손잡이 · 접기 단추.
     onChange: (v) => { saveView({ sideLeft: v }); paintSideLabels(v); },
+    //  적지 않고 보여 주기만 한 자리(적어 둔 «왼쪽» 이 지금 폭과 안 맞을 때). 글만 맞춘다.
+    onPlace: (v) => paintSideLabels(v),
     holdSwap: () => !!card?.active() });
   card = mountSideCard({ body, colMain, sidePane: sidePane.root, sideOn: () => lay.sideOn,
     setSideW: (px, persist) => {
