@@ -60,7 +60,8 @@ export interface HubCtx {
   memberName: (mid: string) => string;
   refreshGrid: () => void;      // 위젯 하나가 상태를 바꾼 뒤 격자를 다시 그린다(설정 변경 · 붙이기 뒤)
 }
-export type Fit = { view: HubView; w: number; h: number };   // 줄 수는 위젯이 모델(rowsBudget)로 스스로 정한다
+/** 위젯 자리. modal = 「열기」 모달(넓다 — 도구마다 가장 맞는 전체 뷰: 가렸던 열·메타·전체 목록을 다 드러낸다). 목록은 자르지 않고 그 안에서 스크롤한다. */
+export type Fit = { view: HubView; w: number; h: number; modal?: boolean };
 export type Fill = (ctx: HubCtx, f: Fit, body: HTMLElement, foot: HTMLElement, sub: HTMLElement, acts: HTMLElement) => void;
 
 // ── 아이콘 — 24 그리드 · 획 1.7(projects/icons.ts 톤) ─────────────────────────

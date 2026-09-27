@@ -30,6 +30,16 @@ import { fillTimeline } from './detail-hub-timeline.js';
 
 export type { HubOpts, HubSectionFactory, HubTasksListOpts } from './detail-hub-kit.js';
 
+// ── 도구 모달(#4135, 2026-09-27 원준: «열기는 모달로 통일 — 프로젝트 창에서 나가지지 않게») ─────────────────────
+//  한 번에 하나. 상세가 다시 그려져도(o.reload → 허브 재마운트) 열어 둔 도구를 되살린다 — 그래서 상태가 모듈에 산다.
+const OPEN_MODAL: Map<number, HubTool> = new Map();
+let modalEl: HTMLElement | null = null;
+let modalOff: (() => void) | null = null;
+function dropModal(): void {
+  if (modalOff) { modalOff(); modalOff = null; }
+  if (modalEl) { modalEl.remove(); modalEl = null; }
+}
+
 // ══ 허브 ══════════════════════════════════════════════════════════════════════
 export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
   const pid = o.id;
@@ -60,9 +70,11 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
   let narrow = mq.matches;
 
   const commit = (next: HubLayout): void => { layout = next; saveHubLayout(pid, layout, scope); renderGrid(); };
-  const openTool = (tool: HubTool | null): void => {
-    if (o.inModal) { focus = tool; render(); return; }
-    location.hash = '#/projects2/p/' + pid + (tool ? '/' + tool : '');
+  // 열기 = 모달(화면을 옮기지 않는다). 주소로 들어온 전폭 보기(o.focus — 옛 링크)에서 허브로 돌아가는 길만 leaveFocus 가 맡는다.
+  const openTool = (tool: HubTool | null): void => { if (tool) openToolModal(tool); else closeToolModal(); };
+  const leaveFocus = (): void => {
+    if (o.inModal) { focus = null; render(); return; }
+    location.hash = '#/projects2/p/' + pid;
   };
   const ctx: HubCtx = {
     pid, P, o, D, meId: String(o.meId || ''), narrow, openTool, memberName,
@@ -72,13 +84,54 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
   // 5판 위젯 — 여섯 도구 모두 모든 크기를 스스로 그린다.
   const FILL5: Record<HubTool, Fill> = { tasks: fillTasks, sessions: fillSessions, body: fillBody, knowledge: fillKnowledge, folder: fillFolder, timeline: fillTimeline };
 
+  // ── 도구 모달 — 같은 채움 함수가 Fit.modal 로 «전체 뷰» 를 그린다. 다시 그릴 때 스크롤 자리([data-mscroll])를 되살린다. ──
+  function closeToolModal(): void {
+    const had = OPEN_MODAL.has(pid) || !!modalEl;
+    OPEN_MODAL.delete(pid);
+    dropModal();
+    if (had && grid.isConnected && !focus) renderGrid();   // 모달에서 바꾼 것(필터·고른 것·본문)을 뒤 격자에도
+  }
+  function renderModal(tool: HubTool): void {
+    const keep: Record<string, number> = {};
+    if (modalEl) modalEl.querySelectorAll('[data-mscroll]').forEach((n) => { keep[(n as HTMLElement).dataset.mscroll || ''] = (n as HTMLElement).scrollTop; });
+    dropModal();
+    const sub = el('span', { class: 'pjh-wh-sub' });
+    const acts = el('span', { class: 'pjh-wh-acts' });
+    const x = el('button', { class: 'pjh-mx', type: 'button', title: '닫기 (Esc)', 'aria-label': '닫기', onclick: () => closeToolModal() }, hubIcon('x', 16));
+    const head = el('div', { class: 'pjh-wh pjh-mh' },
+      el('span', { class: 'pjh-wh-ic ' + TOOL_TONE[tool] }, hubIcon(tool, 16)),
+      el('span', { class: 'pjh-wh-name', text: HUB_TOOL_LABEL[tool] }), sub, acts, x);
+    const body = el('div', { class: 'pjh-wb pjh-mb' });
+    const foot = el('div', { class: 'pjh-wf pjh-mf' });
+    const box = el('div', { class: 'pjh-w pjh-modal pjh-w3 pjh-m-' + tool, 'data-tool': tool, role: 'dialog', 'aria-modal': 'true', 'aria-label': HUB_TOOL_LABEL[tool] }, head, body, foot);
+    const back = el('div', { class: 'pjh-mback' }, box);
+    back.addEventListener('mousedown', (e: MouseEvent) => { if (e.target === back) closeToolModal(); });
+    //  Esc — 위에 뜬 것(태스크 모달 · 팝오버)이 있으면 그쪽 몫이다.
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !document.querySelector('.pjv-tm-back, .pjv-menu')) closeToolModal(); };
+    const onHash = (): void => closeToolModal();
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('hashchange', onHash);
+    modalOff = () => { document.removeEventListener('keydown', onKey); window.removeEventListener('hashchange', onHash); };
+    modalEl = back;
+    document.body.append(back);
+    const mctx: HubCtx = { ...ctx, narrow: false, refreshGrid: () => renderModal(tool), openTool: (t) => { if (!t) closeToolModal(); else if (t !== tool) openToolModal(t); } };
+    FILL5[tool](mctx, { view: 'full', w: 3, h: 3, modal: true }, body, foot, sub, acts);
+    const restore = (): void => {
+      if (modalEl !== back) return;
+      back.querySelectorAll('[data-mscroll]').forEach((n) => { const k = (n as HTMLElement).dataset.mscroll || ''; if (keep[k]) (n as HTMLElement).scrollTop = keep[k]; });
+    };
+    requestAnimationFrame(() => requestAnimationFrame(restore));
+    setTimeout(restore, 160);   // 채움이 약속(세션·파일·기록) 뒤에 서는 도구
+  }
+  function openToolModal(tool: HubTool): void { OPEN_MODAL.set(pid, tool); renderModal(tool); }
+
   // ── 위젯 한 장 ── 격자 칸 수는 CSS 변수(--w·--h)로 — 좁은 폭(한 열)에선 CSS 가 그 변수를 버린다(37-projects-hub.css).
   function widget(tool: HubTool, w: number, h: number): HTMLElement {
     const view = hubView(w, h, narrow);
     const card = el('div', { class: 'pjh-w v-' + view + (w === 1 ? ' col' : '') + ' pjh-w' + (narrow ? 1 : w) + ' pjh-h' + h, 'data-tool': tool, style: '--w:' + w + ';--h:' + h });
     const sub = el('span', { class: 'pjh-wh-sub' });
     const acts = el('span', { class: 'pjh-wh-acts' });
-    const openBtn = el('button', { class: 'pjh-open', type: 'button', title: HUB_TOOL_LABEL[tool] + ' 전폭으로 열기', onclick: () => openTool(tool) }, '열기 ', hubIcon('right', 13));
+    const openBtn = el('button', { class: 'pjh-open', type: 'button', title: HUB_TOOL_LABEL[tool] + ' 크게 열기(이 화면 위에 창으로)', 'aria-haspopup': 'dialog', onclick: () => openTool(tool) }, '열기 ', hubIcon('right', 13));
     acts.append(openBtn);
     const head = el('div', { class: 'pjh-wh' },
       el('span', { class: 'pjh-wh-ic ' + TOOL_TONE[tool] }, hubIcon(tool, 16)),
@@ -214,7 +267,7 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
     host.replaceChildren();
     if (focus) {
       const tool = focus;
-      host.append(el('div', { class: 'pjh-focus-bar' }, btn('허브', 'btn-ghost', () => openTool(null)), el('b', { text: HUB_TOOL_LABEL[tool] }),
+      host.append(el('div', { class: 'pjh-focus-bar' }, btn('허브', 'btn-ghost', () => leaveFocus()), el('b', { text: HUB_TOOL_LABEL[tool] }),
         el('span', { class: 'muted', style: 'font-size:12.5px;color:var(--muted-2)', text: '전폭 보기 — 가장 큰 위젯의 확장' })));
       host.append(el('div', { class: 'pjh-focus' }, o.sections[tool]()));
       if (o.actionsHost) o.actionsHost.replaceChildren();
@@ -230,4 +283,7 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
   const onMq = (): void => { const n = mq.matches; if (n !== narrow) { narrow = n; renderGrid(); } };
   try { mq.addEventListener('change', onMq); } catch (_) { /* 옛 사파리 */ }
   render();
+  // 열어 둔 도구 모달 — 상세가 다시 그려져(o.reload) 여기로 돌아왔으면 새 자료로 다시 세운다. 다른 프로젝트의 것은 걷는다.
+  const reopen = OPEN_MODAL.get(pid);
+  if (reopen && !focus) renderModal(reopen); else if (modalEl) dropModal();
 }

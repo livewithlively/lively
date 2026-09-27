@@ -110,7 +110,8 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
     if (label) recHost.append(el('div', { class: 'pjh-grp sub' }, el('b', { text: '추천' }), el('span', { class: 'pjh-grp-n', text: String(fresh.length) }), el('span', { class: 'pjh-grp-h', text: '· 연결하면 다음 세션부터 읽고 시작' })));
     for (const m of fresh) recHost.append(rrow(m));
   });
-  const sidePane = w >= 3 && h >= 2;
+  const modal = !!f.modal;   // 모달 — 흐름(필요 → 프로젝트 → 산출)은 카드 요약을 끝까지, 옆 칸은 찾기 + 추천 전부
+  const sidePane = modal || (w >= 3 && h >= 2);
   const flowView = w >= 2 && h >= 2 && !sidePane;   // 2×2 — 위 검색 상자 대신 «필요 지식 찾기» 점선 카드(누르면 그 자리에 검색)
   if (!sidePane && !flowView) body.append(searchBox());
   body.append(results, normal);
@@ -146,23 +147,26 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
       if (inp) inp.focus();
     };
     if (!req.length) emptyReq.textContent = '아직 없어요 — 찾아서 연결하면 다음 세션부터 읽고 시작합니다.';
-    const left = el('div', { class: 'pjh-kside' }, el('div', { class: 'pjh-klabel' }, '필요 — 세션이 읽고 시작 ', el('span', { class: 'pjh-grp-n', text: String(req.length) })), ...req.map((k) => kcard(k, 'required')),
-      req.length ? null : emptyReq, findCard, recHost);
-    const right = el('div', { class: 'pjh-kside prod' }, el('div', { class: 'pjh-klabel' }, '산출 — 이 프로젝트가 만든 것 ', el('span', { class: 'pjh-grp-n', text: String(prod.length) })), ...prod.map((k) => kcard(k, 'produced')));
+    // 모달: 추천은 옆 칸(찾기 아래)에 전부 — 왼쪽 «필요» 는 연결된 것만 크게. 「＋ 필요 지식 찾기」 는 옆 칸 검색으로 간다.
+    const left = el('div', { class: 'pjh-kside', 'data-mscroll': 'kreq' }, el('div', { class: 'pjh-klabel' }, '필요 — 세션이 읽고 시작 ', el('span', { class: 'pjh-grp-n', text: String(req.length) })), ...req.map((k) => kcard(k, 'required')),
+      req.length ? null : emptyReq, findCard, modal ? null : recHost);
+    const right = el('div', { class: 'pjh-kside prod', 'data-mscroll': 'kprod' }, el('div', { class: 'pjh-klabel' }, '산출 — 이 프로젝트가 만든 것 ', el('span', { class: 'pjh-grp-n', text: String(prod.length) })), ...prod.map((k) => kcard(k, 'produced')));
     if (!prod.length) right.append(el('div', { class: 'pjh-stat', text: '작업이 진행되면 여기에 쌓입니다.' }));
     normal.append(el('div', { class: 'pjh-kflow' }, left, mid, right));
-    paintRecs(2);
+    paintRecs(modal ? 5 : 2);
   }
-  const side = el('div', { class: 'pjh-side' });
+  const side = el('div', { class: 'pjh-side', 'data-mscroll': 'kside' });
   if (sidePane) {
     side.append(el('div', { class: 'pjh-side-l', text: '필요 지식 찾기' }), searchBox('찾을 말을 치세요…'), results);
     results.hidden = false;
     // 옆 칸에선 결과가 옆 칸에 서고 흐름은 그대로 남는다
-    const wrap = el('div', { class: 'pjh-two-s', style: 'grid-template-columns:minmax(0,1fr) 320px' });
+    const wrap = el('div', { class: 'pjh-two-s', style: 'grid-template-columns:minmax(0,1fr) ' + (modal ? 400 : 320) + 'px' });
     body.replaceChildren(wrap); wrap.append(normal, side);
     normal.hidden = false;
     side.append(el('div', { class: 'pjh-stat', text: '찾을 말을 치면 뜻이 가까운 지식이 여기 섭니다. 연결하면 다음 세션부터 AI 가 그 문서를 읽고 시작합니다.' }));   // 결과 바로 아래(빈 칸 끝에 홀로 두지 않는다)
+    if (modal) side.append(recHost);
   }
-  foot.append(footTxt, btn('지식', 'btn-ghost', open));
+  foot.append(footTxt);
+  if (!modal) foot.append(btn('지식', 'btn-ghost', open));
 };
 const arrow = (): HTMLElement => { const a = el('span', { class: 'pjh-karrow' }); a.innerHTML = '<svg viewBox="0 0 34 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7h28"/><path d="M25 2l5 5-5 5"/></svg>'; return a; };
