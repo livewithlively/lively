@@ -396,23 +396,6 @@ export function tasksPart(ctx: PartCtx): Part {
     return btn;
   }
 
-  /** 세션 배지 — 같은 세션은 어느 줄에서나 같은 색. 누르면 그 세션으로. */
-  function sessBadge(ref: TaskSessRef, s: Sess | null): HTMLElement | null {
-    const n = nums().get(String(ref.id)) || (s ? nums().get(s.id) : 0) || 0;
-    if (!n) return null;
-    const name = String(ref.label || s?.label || '').trim() || '세션';
-    const nth = ref.count && ref.count > 1 && ref.order ? ` · ${ref.order}번째` : '';
-    return el('button', {
-      class: 'pj-sb', type: 'button', style: '--sc:' + sessionColor(n),
-      title: `세션 ${n} «${name}»으로 갑니다` + (s ? ` — ${s.stateLabel}` : '') + (nth ? `\n그 세션이 할 태스크 ${ref.count}개 가운데 ${ref.order}번째` : ''),
-      onclick: (e: Event) => { e.stopPropagation(); goSession(s?.id || String(ref.id)); },
-    }, el('span', { class: 'pj-sbn', text: '세션 ' + n }), nth ? el('span', { class: 'pj-ord', text: nth }) : null);
-  }
-  function liveOf(s: Sess | null): HTMLElement | null {
-    if (!s) return null;
-    return el('span', { class: 'pj-live', title: s.stateLabel }, el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('span', { text: s.stateLabel }));
-  }
-
   // ── 순서(«이 세션의 태스크») ──
   const myOrder = (): number[] => (localOrder ? localOrder.slice() : sessionTaskOrder(tasks(), myIds()).map((t) => Number(t.id)));
   async function putOrder(ids: number[], msg?: string): Promise<boolean> {
@@ -527,16 +510,25 @@ export function tasksPart(ctx: PartCtx): Part {
     class: 'pn-tk-rname', type: 'button', 'aria-expanded': String(open), title: String(t.name || '') + '\n누르면 본문을 펼칩니다', onclick: () => toggleOpen(t),
   }, el('span', { class: 'ell', text: t.name || '이름 없는 태스크' }));
 
-  /** 다른 세션 배지·상태 한 줄 — 세션이 없으면 «세션 없음». */
-  function sessMeta(t: any): HTMLElement[] {
-    const mine = new Set(myIds());
-    const out: HTMLElement[] = [];
-    const refs = refsOf(t).filter((r) => !mine.has(String(r.id)));
+  // ── 줄 모양(2안, 원준 2026-09-27 «목록이 두 줄이라 답답하다» → 3안 중 2안) ──────────────────────────────
+  //  첫 줄은 **이름만**(오른쪽 알약 단추를 빼서 폭을 다 쓴다 → 한 줄에 든다). 둘째 줄 왼쪽에 세션·상태·#번호, 오른쪽 끝에
+  //  동작을 **파란 글자**로(«세션으로 →» · «이 세션에 넣기 +» · «입력칸에 넣기»). ⋯ 는 마우스를 올린 줄에만.
+  const textAct = (text: string, title: string, run: () => void, strong?: boolean): HTMLElement =>
+    el('button', { class: 'pp-act' + (strong ? ' on' : ''), type: 'button', title, onclick: (e: Event) => { e.stopPropagation(); run(); } }, el('span', { text }));
+  const l1 = (t: any, open: boolean, more: HTMLElement): HTMLElement => {
+    const nb = nameBtnOf(t, open); nb.classList.add('pp-name');
+    more.classList.add('pp-more');
+    return el('div', { class: 'pp-l1' }, glyph(t), nb, more);
+  };
+  /** 둘째 줄 왼쪽 — 이 태스크를 맡은 **다른** 세션(색 · 번호 · 상태). 없으면 «세션 없음». */
+  function sessInfo(t: any): HTMLElement {
     const o = otherSessOf(t);
-    for (const r of refs.slice(0, 2)) { const b = sessBadge(r, sessOf(String(r.id))); if (b) out.push(b); }
-    if (o) { const lv = liveOf(o.s); if (lv) out.push(lv); }
-    if (!out.length) out.push(el('span', { class: 'pj-fine', text: '세션 없음' }));
-    return out;
+    if (!o) return el('span', { class: 'pp-mute', text: '세션 없음' });
+    const n = nums().get(String(o.ref.id)) || nums().get(o.s.id) || 0;
+    const name = String(o.ref.label || o.s.label || '').trim() || '세션';
+    return el('button', { class: 'pp-s', type: 'button', style: n ? '--sc:' + sessionColor(n) : '',
+      title: `«${name}» 세션으로 갑니다 — ${o.s.stateLabel}`, onclick: (e: Event) => { e.stopPropagation(); goSession(o.s.id); } },
+    el('span', { class: 'v2-dot ' + dotCls(o.s.stateKey), 'aria-hidden': 'true' }), el('span', { text: (n ? `세션 ${n}` : name) + ' · ' + o.s.stateLabel }));
   }
 
   // ── «이 세션의 태스크» 줄 ──
@@ -545,28 +537,26 @@ export function tasksPart(ctx: PartCtx): Part {
     const open = openTask === tid;
     const ids = myOrder();
     const firstOpen = ids.map(byId).find((x) => x && !isDone(x));
-    const now = firstOpen && Number(firstOpen.id) === tid;
-    const row = el('div', { class: 'pn-tk-row pj-row pj-ts' + (isDone(t) ? ' done' : '') + (open ? ' open' : ''), draggable: 'true', 'data-i': String(i) },
-      el('span', { class: 'pj-grip', title: '끌어서 순서 바꾸기', 'aria-hidden': 'true' }, pnIcon('grip', 'pn-i xs')),
-      el('span', { class: 'pj-num', text: (i + 1) + '.' }),
-      glyph(t),
-      el('div', { class: 'pj-main' }, nameBtnOf(t, open),
-        el('div', { class: 'pj-meta' }, el('span', { class: 'pj-id', text: '#' + tid }),
-          now ? el('span', { class: 'pj-now', text: '지금 하는 일' })
-            : el('span', { class: 'pj-fine', text: isDone(t) ? '끝냄' : '앞의 것이 끝나면 이어서' }))),
-      el('div', { class: 'pj-acts' }, actChip('put', t),
-        moreBtn(() => [
-          { label: '위로', icon: 'up', off: i === 0, run: () => void putOrder(moveInOrder(ids, i, i - 1)) },
-          { label: '아래로', icon: 'chevD', off: i >= n - 1, run: () => void putOrder(moveInOrder(ids, i, i + 1)) },
-          { label: '1번으로', icon: 'up', off: i === 0, run: () => void putOrder(moveInOrder(ids, i, 0)) },
-          { sep: true, label: '' },
-          { label: '본문 넣기', icon: 'insert', hint: '입력칸에만', run: () => putPrompt(t) },
-          { label: '본문 복사', icon: 'copy', run: () => copyTaskBody(t) },
-          boardRow,
-          copyName(t),
-          { sep: true, label: '' },
-          { label: '이 세션에서 빼기', icon: 'x', danger: true, run: () => void putOrder(ids.filter((x) => x !== tid), '이 세션에서 뺐어요 — 태스크는 그대로 있어요.') },
-        ], String(t.name || '태스크'))));
+    const now = !!firstOpen && Number(firstOpen.id) === tid;
+    const more = moreBtn(() => [
+      { label: '위로', icon: 'up', off: i === 0, run: () => void putOrder(moveInOrder(ids, i, i - 1)) },
+      { label: '아래로', icon: 'chevD', off: i >= n - 1, run: () => void putOrder(moveInOrder(ids, i, i + 1)) },
+      { label: '1번으로', icon: 'up', off: i === 0, run: () => void putOrder(moveInOrder(ids, i, 0)) },
+      { sep: true, label: '' },
+      { label: '입력칸에 넣기', icon: 'insert', hint: '보내지 않음', run: () => putPrompt(t) },
+      { label: '본문 복사', icon: 'copy', run: () => copyTaskBody(t) },
+      boardRow,
+      copyName(t),
+      { sep: true, label: '' },
+      { label: '이 세션에서 빼기', icon: 'x', danger: true, run: () => void putOrder(ids.filter((x) => x !== tid), '이 세션에서 뺐어요 — 태스크는 그대로 있어요.') },
+    ], String(t.name || '태스크'));
+    const row = el('div', { class: 'pp-row pj-ts' + (now ? ' now' : '') + (isDone(t) ? ' done' : '') + (open ? ' open' : ''), draggable: 'true', 'data-i': String(i) },
+      el('span', { class: 'pp-num', text: String(i + 1), title: '끌어서 순서 바꾸기 · ⋯ 에서 위로·아래로' }),
+      el('div', { class: 'pp-main' }, l1(t, open, more),
+        el('div', { class: 'pp-meta' },
+          el('span', { class: now ? 'pp-now' : 'pp-mute', text: now ? '지금 하는 일' : isDone(t) ? '끝냄' : '다음 차례' }),
+          el('span', { class: 'pp-id', text: '#' + tid }), el('span', { class: 'grow' }),
+          textAct('입력칸에 넣기', '태스크 이름과 본문을 지금 세션의 입력칸에 넣습니다(보내지는 않습니다)', () => putPrompt(t)))));
     row.addEventListener('dragstart', (e: DragEvent) => {
       dragFrom = i; row.classList.add('pj-lift');
       e.dataTransfer?.setData(TASK_DRAG_TYPE, String(tid));
@@ -574,7 +564,7 @@ export function tasksPart(ctx: PartCtx): Part {
     });
     row.addEventListener('dragend', () => { dragFrom = -1; row.classList.remove('pj-lift'); insline.remove(); });
     bindCtx(row, () => ({ title: String(t.name || '태스크'), sub: `이 세션 ${i + 1}번 · ${statusText(t)}`,
-      rows: [{ label: '본문 넣기', icon: 'insert', run: () => putPrompt(t) }, { label: '본문 복사', icon: 'copy', run: () => copyTaskBody(t) }, boardRow, copyName(t)] }));
+      rows: [{ label: '입력칸에 넣기', icon: 'insert', run: () => putPrompt(t) }, { label: '본문 복사', icon: 'copy', run: () => copyTaskBody(t) }, boardRow, copyName(t)] }));
     return open ? [row, detailOf(t, actChip('put', t))] : [row];
   }
 
@@ -613,9 +603,9 @@ export function tasksPart(ctx: PartCtx): Part {
   function slotOf(n: number): HTMLElement[] {
     const ids = new Set(myOrder());
     if (!slotOpen) {
-      return [el('button', { class: 'pj-slot', type: 'button', title: '이 세션이 이어서 할 태스크를 찾아 넣습니다 — 아래 목록에서 끌어 와도 돼요',
+      return [el('button', { class: 'pp-slot', type: 'button', title: '이 세션이 이어서 할 태스크를 찾아 넣습니다 — 아래 목록에서 끌어 와도 돼요',
         onclick: () => { slotOpen = true; slotQ = ''; slotSel = 0; paintList(true); } },
-      el('span', { class: 'pj-num', text: (n + 1) + '.' }), pnIcon('search', 'pn-i sm'),
+      el('span', { class: 'pp-num ghost', text: String(n + 1) }), pnIcon('search', 'pn-i xs'),
       el('span', { class: 'pj-slot-in pj-ph', text: n ? '다음 태스크 찾기 · 아래에서 끌어 오기' : '이 세션이 할 태스크 찾기 · 아래에서 끌어 오기' }))];
     }
     const inp = el('input', { class: 'pj-slot-q', type: 'text', placeholder: '태스크 이름이나 #번호', value: slotQ, 'aria-label': '넣을 태스크 찾기' }) as HTMLInputElement;
@@ -650,8 +640,11 @@ export function tasksPart(ctx: PartCtx): Part {
     const open = openTask === tid;
     const o = otherSessOf(t);
     let act: HTMLElement;
-    if (mode === 'new') act = pickN ? actChip('picked', t, { n: pickN }) : o ? actChip('go', t, { s: o.s }) : actChip('pick', t);
-    else act = o ? actChip('go', t, { s: o.s }) : actChip('take', t);
+    if (opening === tid) act = el('span', { class: 'pp-act', text: '여는 중…' });
+    else if (mode === 'new' && pickN) act = textAct(`✓ 담김 ${pickN}`, '담았어요 — 누르면 뺍니다. 순서는 가운데 글칸의 번호로 바꿔요', () => toggleTaskPick(picksRoot(), tid), true);
+    else if (o) act = textAct('세션으로 →', `이 태스크를 맡은 세션 «${o.s.label}»으로 갑니다 — ${o.s.stateLabel}`, () => goSession(o.s.id));
+    else if (mode === 'new') act = textAct('담기 +', '새 세션이 맡을 태스크로 담습니다 — 가운데 글칸에 번호 배지로 들어가요. 여러 개 담으면 그 순서대로 진행해요', () => toggleTaskPick(picksRoot(), tid));
+    else act = textAct('이 세션에 넣기 +', '이 세션의 다음 번호로 넣고, 태스크 이름과 본문을 입력칸에 넣습니다(보내지는 않습니다)', () => void takeIntoThis(t));
     const rows = (): CtxRow[] => [
       ...(o ? [{ label: '맡은 세션으로 가기', icon: 'chat', run: () => goSession(o.s.id) }] : []),
       ...(mode === 'new'
@@ -663,11 +656,9 @@ export function tasksPart(ctx: PartCtx): Part {
       boardRow,
       copyName(t),
     ];
-    const row = el('div', { class: 'pn-tk-row pj-row' + (mode === 'new' ? ' pj-new' : ' pj-ext') + (isDone(t) ? ' done' : '') + (open ? ' open' : '') + (pickN ? ' pj-picked' : ''), draggable: 'true' },
-      glyph(t),
-      el('div', { class: 'pj-main' }, nameBtnOf(t, open),
-        el('div', { class: 'pj-meta' }, ...sessMeta(t), el('span', { class: 'pj-id', text: '#' + tid }))),
-      el('div', { class: 'pj-acts' }, act, moreBtn(rows, String(t.name || '태스크'))));
+    const row = el('div', { class: 'pp-row' + (mode === 'new' ? ' pj-new' : ' pj-ext') + (isDone(t) ? ' done' : '') + (open ? ' open' : '') + (pickN ? ' pj-picked' : ''), draggable: 'true' },
+      el('div', { class: 'pp-main' }, l1(t, open, moreBtn(rows, String(t.name || '태스크'))),
+        el('div', { class: 'pp-meta' }, sessInfo(t), el('span', { class: 'pp-id', text: '#' + tid }), el('span', { class: 'grow' }), act)));
     row.addEventListener('dragstart', (e: DragEvent) => {
       e.dataTransfer?.setData(TASK_DRAG_TYPE, String(tid));
       if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copyMove';
@@ -727,7 +718,7 @@ export function tasksPart(ctx: PartCtx): Part {
       wireTsDrop(sec);
       tops.push(sec);
       const ext = externalTasks(all, new Set(order), busyOf);
-      tops.push(groupHead('외부 태스크', ext.open.length, el('span', { class: 'pj-fine', text: '이 세션에 없는 것' })));
+      tops.push(groupHead('외부 태스크', ext.open.length));
       kids.push(...ext.open.flatMap((t) => extRow(t, 'ext', 0)));
       if (ext.done.length) {
         kids.push(groupHead('완료', ext.done.length, null, { open: doneOpen, toggle: () => { lsSet(DONE_OPEN_KEY, doneOpen ? '0' : '1'); paintList(true); } }));

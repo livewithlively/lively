@@ -205,7 +205,7 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
   eq(/sessions\/\$\{encodeURIComponent\(sid\)\}\/tasks`, \{ method: 'PUT', body: JSON\.stringify\(\{ taskIds: ids \}\) \}/.test(tk), true, "K4 순서 바꾸기·넣기·빼기는 모두 PUT 한 길(목록을 통째로)");
   eq(/putIntoSession\(myIds\(\), text\)/.test(tk) && /registerSessionInput\(/.test(read("web/session-chat.ts")) && /m\.cmd === 'paste' && typeof m\.text === 'string'\) \{ pasteText\(m\.text\)/.test(read("web/standalone/terminal.ts")), true,
     "K5 [본문 넣기] → 세션 화면의 입력칸(터미널이면 붙여넣기) — 보내지 않는다");
-  eq(/else act = o \? actChip\('go', t, \{ s: o\.s \}\) : actChip\('take', t\);/.test(tk), true, "K6 세션이 있으면(멈춤 포함) [세션으로], 없을 때만 [이 세션에 넣기]");
+  eq(/else if \(o\) act = textAct\('세션으로 →'/.test(tk) && /else act = textAct\('이 세션에 넣기 \+'/.test(tk), true, "K6 세션이 있으면(멈춤 포함) [세션으로], 없을 때만 [이 세션에 넣기]");
   eq([/pn-tk-st/.test(ct.slice(ct.indexOf("function paint()"), ct.indexOf("function dropIndex"))), /TASK_DRAG_TYPE/.test(tk)], [false, true],
     "K7 글칸 배지엔 상태 아이콘이 없다(원준 2026-09-27) · 곁칸 줄을 끌어 글칸 배지 줄에 놓을 수 있다");
   eq([/root\.append\(head, top, list, addBox\);/.test(tk), /replaceKids\(top, \.\.\.tops\);/.test(tk), /tops\.push\(sec\);/.test(tk), /tops\.push\(groupHead\('외부 태스크'/.test(tk)], [true, true, true, true],

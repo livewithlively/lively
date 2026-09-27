@@ -133,3 +133,53 @@ body.pj-lock { overflow: hidden; }
 /* `#` 목록의 고른 줄(파랑 채움) — 번호·상태 원도 흰 글자로 */
 .pj-hmenu .v2-mention-row.is-sel .n b { color: inherit; }
 .pj-hmenu .v2-mention-row.is-sel .pn-tk-st { border-color: currentColor; }
+
+/* ══ 줄 모양 2안(원준 2026-09-27 «목록이 두 줄이라 답답하다» → 3안 중 2안) ══════════════════════════════
+   첫 줄은 이름만(한 줄, 폭을 다 쓴다) · 둘째 줄 왼쪽에 세션·상태·#번호, 오른쪽 끝에 파란 글자 동작 · ⋯ 는 올린 줄에만.
+   이 세션의 태스크는 번호 동그라미(끌어서 순서), 지금 하는 일은 채운 파랑. 시안 project-pane-list-3-plans.html 2안과 같은 값. */
+.pp-row { flex: none; display: flex; gap: 8px; padding: 8px 10px 8px 14px; border-bottom: 1px solid color-mix(in srgb, var(--line-row) 60%, transparent); }
+.pp-row:hover, .pp-row.open { background: var(--bg-punch); }
+.pp-row.pj-picked { background: var(--bg-tint); }
+.pp-row.pj-lift { opacity: .35; }
+.pp-num { width: 18px; height: 18px; border-radius: 99px; display: grid; place-items: center; font-size: 10.5px; font-weight: 800; color: var(--muted-head); box-shadow: inset 0 0 0 1.5px var(--line-net); flex: none; cursor: grab; }
+.pp-num.ghost { box-shadow: none; border: 1.5px dashed var(--muted-3-line); color: var(--muted-3); box-sizing: border-box; cursor: inherit; }
+.pp-row.now .pp-num { background: var(--blue-fill); color: var(--on-fill); box-shadow: none; }
+.pp-main { flex: 1; min-width: 0; }
+.pp-l1 { display: flex; align-items: center; gap: 7px; }
+.pp-l1 .pn-tk-rname.pp-name { flex: 1; min-width: 0; height: auto; font-size: 13px; line-height: 1.4; color: var(--ink); }
+.pp-l1 .pn-tk-rname.pp-name .ell { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pj-ts .pp-name { font-weight: 600; }
+.pp-row.open .pp-name { font-weight: 700; }
+.pp-row.done .pp-name { color: var(--muted); text-decoration: line-through; font-weight: 400; }
+.pp-l1 .pj-ib.pp-more { width: 20px; height: 20px; visibility: hidden; }
+.pp-row:hover .pp-more, .pp-row.open .pp-more, .pp-more:focus-visible { visibility: visible; }
+.pp-meta { display: flex; align-items: center; gap: 6px; margin: 3px 0 0 22px; font-size: 11px; color: var(--muted-2); white-space: nowrap; min-width: 0; }
+.pp-meta > * { flex: none; }
+.pp-meta .grow { flex: 1; }
+.pp-s { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 62%; padding: 0; border: 0; background: none; font: inherit; font-size: 11px; font-weight: 700; color: var(--sc, var(--muted-head)); cursor: pointer; flex: 0 1 auto; }
+.pp-s > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.pp-s:hover { text-decoration: underline; }
+.pp-s .v2-dot { width: 6px; height: 6px; }
+.pp-mute { color: var(--muted-2); }
+.pp-now { color: var(--blue); font-weight: 700; }
+.pp-id { font-family: ui-monospace, Menlo, monospace; color: var(--muted-3); }
+.pp-act { padding: 0; border: 0; background: none; font: inherit; font-size: 11px; font-weight: 600; color: var(--blue); opacity: .55; cursor: pointer; white-space: nowrap; }
+.pp-row:hover .pp-act, .pp-act:focus-visible { opacity: .85; }
+.pp-act:hover { opacity: 1; text-decoration: underline; }
+.pp-act.on { opacity: 1; font-weight: 800; }
+.pp-slot { display: flex; align-items: center; gap: 8px; margin: 6px 12px 2px 14px; padding: 6px 0; border: 0; background: none; font: inherit; font-size: 12px; color: var(--muted-2); cursor: text; text-align: left; }
+.pp-slot:hover { color: var(--blue); }
+.pp-slot:hover .pp-num.ghost { border-color: var(--blue); color: var(--blue); }
+.pn-tk.pj .pj-tssec { padding-bottom: 8px; }
+/* 시안(2안)과 사진 대조로 맞춘 값 — 42-v2-panes.css 의 «태스크 3차» 덮어쓰기(줄 36 · 머리 13/800 · 실선 원)가 이 앱에서는 시안과 다르다. */
+.pn-tk.pj .pn-tk-head { padding: 11px 12px 9px; gap: 7px; }
+.pn-tk.pj .pn-tk-name { font-size: 13.5px; }
+.pn-tk.pj .pn-tk-count { font-size: 11.5px; }
+.pn-tk.pj .pn-tk-gh { padding: 12px 12px 4px; font-size: 11.5px; font-weight: 700; letter-spacing: 0; color: var(--muted-head); }
+.pn-tk.pj .pn-tk-gh .n { font-size: inherit; font-weight: 600; color: var(--muted-3); }
+.pn-tk.pj .pn-tk-st { width: 15px; height: 15px; border-style: dashed; }
+.pn-tk.pj .pn-tk-st.doing, .pn-tk.pj .pn-tk-st.done { border-style: solid; }
+.pn-tk.pj .pn-tk-st.done::after { left: 3.6px; top: .8px; width: 3.4px; height: 7px; }
+.pn-tk.pj .pj-prd { max-height: 66px; }
+.pn-tk.pj .pj-top { border-bottom: 0; }
+.pn-tk.pj .pj-tssec { border-bottom: 1px solid var(--line-row); }
