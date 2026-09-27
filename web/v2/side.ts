@@ -32,7 +32,7 @@ import { planWikiCards, allocWikiRows } from './wiki-cards.js';
 import { newItemPlan, newRowSlot, planProjCards, type ProjCard } from './proj-cards.js';   // #4233 안 1 — [프로젝트] 사이드바 카드 계획(순수)
 import { hiddenCardsLabel, planSideCards, projectLines, SESS_GROUP_BYS, settleScope, sideCards, withGroupBy, type SessScope, type SideCardProj } from '../lib/sess-all.js';   // #4158 · #4233 2안 — [AI 세션] 사이드바 카드 · 묶기 기준(순수)
 import { sessGroupName, sessScope, setSessScope } from './sess-scope.js';   // #4233 2안 — 사이드바에서 고른 것의 한 자리(가운데 목록이 같은 값을 읽는다)
-import { splitFolderRows, foldCardRows, projectPastRows, projCardRows, type PastRowLike } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음 · #3870 — 카드에 자기 화면 줄을 안 넣는다
+import { splitFolderRows, foldCardRows, projectPastRows, projCardRows, cardOpenVerdict, type PastRowLike } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음 · #3870 — 카드에 자기 화면 줄을 안 넣는다
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsTouch } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버다(선언 한 줄이 그걸 말한다)
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES, isDotState, rowDotCls } from '../session-status.js';   // #3778 2판 — 목록 줄의 점은 «나를 기다리는 것» 셋만
@@ -97,6 +97,9 @@ let grpClosed = new Set<string>();
 let grpOpened = new Set<string>();
 //  자동 판정이 이미 펴 둔 카드 — **페이지 수명만**(사람의 결정은 위 두 벌이 브라우저·서버에 남긴다).
 const grpAuto = new Set<string>();
+//  끝난 세션만 든 카드를 사람이 이 페이지에서 폈나(true)·접었나(false) — **페이지 수명만**(#3870, lib/sess-fold cardOpenVerdict).
+//   그 카드는 기본이 접힘이라, 편 것을 브라우저에 남기면 «한 번 편 카드가 영영 펴져 흐린 줄을 늘어놓는» 신고가 되돌아온다.
+const pastPeek = new Map<string, boolean>();
 //  카드 자리 자물쇠(#3856) — 카드 키('p:<id>') → 그 카드가 선 묶음·순위·들어온 시각. **페이지 수명만**
 //   (main.ts 의 행 holds·orderPin 과 같다 — 새로 열면 사실대로 다시 잡는다).
 const cardHolds = new Map<string, CardHold>();
@@ -709,18 +712,22 @@ function projGroups(rest: SideInstance[], searching: boolean, hold = true): Proj
   for (const k of [...grpAuto]) if (!byKey.has(k)) grpAuto.delete(k);
   for (const g of groups) {
     //  펼침 — 사람의 결정이 언제나 이긴다. 그 위의 자동 판정 둘은 **한 번만** 말한다(위 grpAuto 머리말).
-    if (searching) { g.open = true; continue; }                    // 찾으려고 건 렌즈를 묶음이 가리면 안 된다(#1719)
     //  ★ 선택으로 펴진 카드는 **사람이 접을 때까지** 펴져 있다 — 트리와 같은 규율(원준 2026-08-24
     //   "프로젝트 누르면 자동으로 열렸다가 다른 프로젝트 누르면 다시 사라지는데 너무 불편함", renderTree 참조).
-    //   종전엔 `|| g.active` 로만 펴서 **선택이 옮겨 가는 순간 앞 카드가 접혔다** — 같은 화면의 두 목록이
-    //   같은 몸짓에 정반대로 움직이던 자리다.
-    if (g.active && !grpClosed.has(g.key) && !grpOpened.has(g.key)) { grpOpened.add(g.key); saveSet(GRPOPENED_STORE, grpOpened); }
-    if (grpClosed.has(g.key)) g.open = false;                      // 사람이 접었다 — 확인 필요가 생겨도 시스템이 안 뒤집는다
-    else if (grpOpened.has(g.key) || grpAuto.has(g.key)) g.open = true;
     //  확인 필요·완료가 있으면 펴 주되 **그 사실을 걸쇠에 남긴다** — 확인하고 나면 상태가 꺼지는데,
     //   그때 카드까지 도로 접히면 방금 읽던 자리가 눈앞에서 사라진다.
-    else if (g.rows.some((r) => !!r.status && !!OPENS[r.status.key])) { grpAuto.add(g.key); g.open = true; }
-    else g.open = false;
+    //  ★ 끝난 세션만 든 카드는 **접힌 채 이름만**(#3870, 원준 2026-09-27) — 위 기억들을 안 본다. 잣대·사유는
+    //   lib/sess-fold cardOpenVerdict 머리말. 도는 세션이 생기면 엿보기(pastPeek)를 비워, 다시 끝났을 때 또 접힌다.
+    const allPast = !g.live && g.past > 0;
+    if (!allPast) pastPeek.delete(g.key);
+    const v = cardOpenVerdict({
+      searching, allPast, peek: pastPeek.get(g.key),
+      closed: grpClosed.has(g.key), opened: grpOpened.has(g.key), auto: grpAuto.has(g.key), active: g.active,
+      asks: g.rows.some((r) => !!r.status && !!OPENS[r.status.key]),
+    });
+    if (v.remember === 'opened') { grpOpened.add(g.key); saveSet(GRPOPENED_STORE, grpOpened); }
+    if (v.remember === 'auto') grpAuto.add(g.key);
+    g.open = v.open;
   }
   return ordered;
 }
@@ -770,7 +777,7 @@ function projGrpHead(g: ProjGrp): HTMLElement {
       title: g.name + (g.id ? `\n#${g.id} · 세션 ${headN}` : `\n프로젝트에 붙지 않은 세션과 화면 ${headN}`),
       //  ⚠ **두 번째 클릭은 삼킨다** — 더블클릭은 «이름 고치기»(아래 dblclick)라, 접기가 두 번 일어나면 사람이 고른
       //   접힘 상태가 편집 도중에 뒤집힌다. 첫 클릭의 접기는 그대로 둔다(단일 클릭 문법은 안 건드린다 — #2579 와 같은 처방).
-      onclick: (e: MouseEvent) => { if (e.detail >= 2) return; toggleGrp(g.key, g.open); } },
+      onclick: (e: MouseEvent) => { if (e.detail >= 2) return; toggleGrp(g.key, g.open, allPast); } },
       el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }),
       glyph(g.open ? 'folder-open' : 'folder', 'v2-pg-ic'),
       el('span', { class: 'n', text: g.name }),
@@ -797,7 +804,7 @@ function projGrpHead(g: ProjGrp): HTMLElement {
     //  첫 클릭이 뒤집어 놓은 접힘을 **되돌린 뒤** 편집칸을 연다 — 이름을 고치려던 몸짓이 접힘까지 바꾸면 안 된다.
     //   toggleGrp 이 repaintList 로 이 줄을 다시 그리므로, 잡아 둔 노드가 아니라 앵커로 다시 찾는다
     //   (트리의 beginRenameProject 가 같은 사유로 같은 일을 한다).
-    toggleGrp(g.key, !g.open);
+    toggleGrp(g.key, !g.open, allPast);
     beginRenameProjGrp(g);
   });
   return head;
@@ -832,7 +839,9 @@ function beginRenameProjGrp(g: ProjGrp): void {
 }
 
 /** 사람이 묶음을 접거나 폈다. 사람의 결정은 브라우저에 남고, 그 뒤로 자동 판정이 이 묶음을 안 뒤집는다. */
-function toggleGrp(key: string, wasOpen: boolean): void {
+function toggleGrp(key: string, wasOpen: boolean, allPast = false): void {
+  //  끝난 세션만 든 카드는 이 페이지 동안만 편다·접는다 — 기억(grpClosed·grpOpened)을 안 건드린다(pastPeek 머리말).
+  if (allPast) { pastPeek.set(key, !wasOpen); repaintList(); return; }
   if (wasOpen) { grpClosed.add(key); grpOpened.delete(key); grpAuto.delete(key); }
   else { grpOpened.add(key); grpClosed.delete(key); }
   saveSet(GRPCLOSED_STORE, grpClosed);
