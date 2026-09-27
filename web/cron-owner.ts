@@ -42,11 +42,11 @@ const OWNERS: Record<string, CronOwner> = {
   // 증류·분류·관리 — 단계 화면의 [언제 도나] 카드가 만들기·켜고끄기·주기·의뢰자를 함께 다룬다.
   distill_sources: {
     label: ctxTrail('distill'), href: '#/context/knowledge/distillers',
-    why: '증류기 설정과 밀린 자료를 함께 보면서 주기·의뢰자를 정할 수 있습니다.',
+    why: '증류기마다 정한 기준과 밀린 자료를 함께 보면서 주기·의뢰자를 정할 수 있습니다.',
   },
   distill_sources_headless: {
     label: ctxTrail('distill'), href: '#/context/knowledge/distillers',
-    why: '증류기 설정과 밀린 자료를 함께 보면서 주기·의뢰자를 정할 수 있습니다.',
+    why: '증류기마다 정한 기준과 밀린 자료를 함께 보면서 주기·의뢰자를 정할 수 있습니다.',
   },
   classify_knowledge: {
     label: ctxTrail(undefined, '분류'), href: '#/context/topics/classifiers',

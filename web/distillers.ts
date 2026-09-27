@@ -83,8 +83,9 @@ export async function distillersPanel(detail, data) {
 
   body.append(el('div', { class: 'cxc-head' },
     el('div', { class: 'cxc-head-main' },
-      el('h3', { class: 'cxc-title' }, el('span', { text: '증류기' }), el('span', { class: 'cxc-title-n num', text: String(distillers.length) })),
-      el('p', { class: 'cxc-lead', text: '증류기는 쌓인 자료를 읽고, 남길 가치가 있는 것만 골라 지식으로 씁니다. 자료 하나는 증류기 하나만 읽습니다 — 위에서부터 조건에 맞는 첫 증류기가 읽고, 어느 것에도 맞지 않는 자료는 맨 아래 「안전망」이 읽습니다.' })),
+      //  #4233. 제목은 탭 이름과 같다(탭 「증류기 설정」). 제목이 «… 설정» 이라 옆의 수는 무엇을 센 것인지 적는다.
+      el('h3', { class: 'cxc-title' }, el('span', { text: CTX_TAB.distill }), el('span', { class: 'cxc-title-n num', text: '증류기 ' + distillers.length + '개' })),
+      el('p', { class: 'cxc-lead', text: '증류기는 쌓인 자료를 읽고, 남길 가치가 있는 것만 골라 지식으로 씁니다. 자료 하나는 증류기 하나만 읽습니다. 위에서부터 조건에 맞는 첫 증류기가 읽고, 어느 것에도 맞지 않는 자료는 맨 아래 「안전망」이 읽습니다.' })),
     el('div', { class: 'cxc-head-acts' }, el('a', { class: 'btn btn-primary', href: pageHref(NEW_KEY), text: '+ 증류기 만들기' }))));
 
   body.append(statsStrip(coverage, on.length, distillers.length));
