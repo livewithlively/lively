@@ -47,7 +47,7 @@ await t("★ K34 새 홈 — 자격 폴더 0700 · 파일 0600 · 내용 그대�
   const home = freshHome();
   const r = run(home, [{ path: ".claude/.credentials.json", content: CREDS }]);
   assert.equal(r.status, 0, r.err);
-  assert.deepEqual(r.out, { ok: true, merged: false });
+  assert.deepEqual(r.out, { ok: true, merged: false, codexPolicy: "not-requested" });
   const f = path.join(home, ".claude", ".credentials.json");
   assert.equal(fs.readFileSync(f, "utf8"), CREDS);
   assert.equal(mode(f), 0o600);
@@ -77,7 +77,7 @@ await t("★ K34 oauthAccount 병합 — 다른 키와 파일 권한은 그대�
   const account = { emailAddress: "new@example.com", organizationUuid: "org-9" };
   const r = run(home, [{ path: ".claude/.credentials.json", content: CREDS }], account);
   assert.equal(r.status, 0, r.err);
-  assert.deepEqual(r.out, { ok: true, merged: true });
+  assert.deepEqual(r.out, { ok: true, merged: true, codexPolicy: "not-requested" });
   const got = JSON.parse(fs.readFileSync(cj, "utf8"));
   assert.deepEqual(got, { numStartups: 7, projects: { "/w": { hasTrustDialogAccepted: true } }, oauthAccount: account });
   assert.equal(mode(cj), 0o640, "사람의 설정 파일 권한을 바꾸지 않는다");
@@ -88,7 +88,7 @@ await t("K34 .claude.json 이 없으면 계정 칸만 가진 0600 파일을 만�
   const home = freshHome();
   const r = run(home, [{ path: ".claude/.credentials.json", content: CREDS }], { emailAddress: "a@b" });
   assert.equal(r.status, 0, r.err);
-  assert.deepEqual(r.out, { ok: true, merged: true });
+  assert.deepEqual(r.out, { ok: true, merged: true, codexPolicy: "not-requested" });
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, ".claude.json"), "utf8")), { oauthAccount: { emailAddress: "a@b" } });
   assert.equal(mode(path.join(home, ".claude.json")), 0o600);
 });
@@ -106,7 +106,7 @@ await t("★ K34 .claude.json 이 링크·JSON 아님·배열이면 건드리지
     const before = kind === "dir" ? "" : fs.readFileSync(cj, "utf8");
     const r = run(home, [{ path: ".claude/.credentials.json", content: CREDS }], { emailAddress: "x@y" });
     assert.equal(r.status, 0, `${kind}: ${r.err}`);
-    assert.deepEqual(r.out, { ok: true, merged: false }, kind);
+    assert.deepEqual(r.out, { ok: true, merged: false, codexPolicy: "not-requested" }, kind);
     assert.equal(fs.readFileSync(outside, "utf8"), "{\"victim\":true}", `${kind}: 링크 너머를 쓰지 않는다`);
     if (kind !== "dir") assert.equal(fs.readFileSync(cj, "utf8"), before, kind);
     if (kind === "link") assert.ok(fs.lstatSync(cj).isSymbolicLink(), "링크를 바꿔치기하지도 않는다");
@@ -165,7 +165,7 @@ await t("★ K38 새 멤버 — 홈이 아직 없으면 0700 으로 만든다(�
   const home = path.join(homes, "box_newbie");
   const r = run(home, [{ path: ".claude/.credentials.json", content: CREDS }], { emailAddress: "n@b" });
   assert.equal(r.status, 0, r.err);
-  assert.deepEqual(r.out, { ok: true, merged: true });
+  assert.deepEqual(r.out, { ok: true, merged: true, codexPolicy: "not-requested" });
   assert.equal(mode(home), 0o700, "브로커가 만드는 홈과 같은 모양");
   assert.equal(fs.readFileSync(path.join(home, ".claude", ".credentials.json"), "utf8"), CREDS);
   assert.equal(mode(path.join(home, ".claude", ".credentials.json")), 0o600);
