@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { sandboxEnv } from '../testlib/os-sandbox.mjs';
 
@@ -13,7 +14,7 @@ import {
   inspectCodexAuthText,
 } from './codex-account-gate.mjs';
 
-const modulePath = new URL('./codex-account-gate.mjs', import.meta.url).pathname;
+const modulePath = fileURLToPath(new URL('./codex-account-gate.mjs', import.meta.url));
 const work = mkdtempSync(join(tmpdir(), 'codex-account-gate-test-'));
 
 function allowed(result) {
