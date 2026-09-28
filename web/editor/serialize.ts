@@ -6,17 +6,33 @@ import { LISTY } from './model.js';
 // ════════════════════════════════════════════
 // §2 블록 → markdown 직렬화 — 왕복 보존이 목표(리스트 마커 '-'·번호 재부여 정도의 정규화만).
 // ════════════════════════════════════════════
-// 평문 텍스트 노드 이스케이프 — 다음 로드에서 인라인 마크로 오파싱될 문자만 최소로(모두 renderInline 이스케이프 목록 내).
-//  ZWSP(U+200B)는 인라인 변환의 캐럿 패딩(마크 지속 차단) 잔재 — 직렬화에서 제거.
-function escInline(s: string): string {
-  return String(s)
-    .replace(/\u200B/g, '')
+// [[위키링크]] 문법 — 서버 src/v6/wikilink.ts RE_WIKI 와 **같은 식**이어야 한다(왕복 골든이 source 일치를 검사).
+//  renderInline 은 [[…]] 를 링크로 만들지 않으니 에디터 안에선 평문 텍스트로 산다. 그 평문의 '[' 까지 이스케이프하면
+//  저장본이 \[\[…]] 가 되어 서버가 위키링크로 못 센다 — 웹에서 한 번 고치면 문서의 자동 연결이 전부 끊겼다(#4419).
+const RE_WIKI = /\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g;
+
+function escText(s: string): string {
+  return s
     .replace(/\\/g, '\\\\')
     .replace(/`/g, '\\`')
     .replace(/\*/g, '\\*')
     .replace(/~~/g, '\\~~')
     .replace(/\+\+/g, '\\++')
     .replace(/\[/g, '\\[');
+}
+// 평문 텍스트 이스케이프 — 다음 로드에서 인라인 마크로 오파싱될 문자만 최소로(모두 renderInline 이스케이프 목록 내).
+//  위키링크 토큰은 겉 괄호 '[[' ']]' 만 원형으로 두고 안쪽은 같은 규칙으로 이스케이프한다
+//  (문서 이름·제목엔 이스케이프 대상 문자가 없어 실제로는 토큰 전체가 원형 그대로 나간다).
+//  ZWSP(U+200B)는 인라인 변환의 캐럿 패딩(마크 지속 차단) 잔재 — 직렬화에서 제거(위키링크 판정 전에).
+function escInline(s: string): string {
+  const t = String(s).replace(/\u200B/g, '');
+  let out = '';
+  let last = 0;
+  for (const m of t.matchAll(RE_WIKI)) {
+    out += escText(t.slice(last, m.index)) + '[[' + escText(m[0].slice(2, -2)) + ']]';
+    last = (m.index as number) + m[0].length;
+  }
+  return out + escText(t.slice(last));
 }
 // 문단 줄이 블록 문법으로 재파싱되지 않게 줄머리만 이스케이프.
 function escLineStart(l: string): string {
@@ -30,11 +46,16 @@ function escLineStart(l: string): string {
 }
 
 // 인라인 DOM → markdown. renderInline 의 역함수(strong/em/del/u/mark/code/a/img/br).
+//  이웃한 텍스트 노드는 이어 붙인 뒤 한 번에 이스케이프한다 — 편집하면 텍스트 노드가 쪼개지는데('[[' | 'name]]'),
+//  노드별로 보면 경계에 걸친 위키링크·'~~'·'++' 를 못 알아본다.
 function inlineDomToMd(node: any): string {
   let out = '';
+  let text = '';
+  const flush = () => { if (text) { out += escInline(text); text = ''; } };
   for (const c of node.childNodes) {
-    if (c.nodeType === 3) { out += escInline(c.textContent); continue; }
+    if (c.nodeType === 3) { text += c.textContent; continue; }
     if (c.nodeType !== 1) continue;
+    flush();
     const tag = c.tagName;
     if (tag === 'BR') { out += '\n'; continue; }
     if (tag === 'IMG') {
@@ -53,6 +74,7 @@ function inlineDomToMd(node: any): string {
     else if (tag === 'MARK') out += '==' + inner + '==';
     else out += inner;   // span 등 미지 요소는 투명(내용만)
   }
+  flush();
   return out;
 }
 
@@ -147,4 +169,4 @@ function blocksToMd(blocks: any[]): string {
   return chunks.filter((c) => c !== '').join('\n\n');
 }
 
-export { escInline, escLineStart, inlineDomToMd, blocksToMd };
+export { RE_WIKI, escInline, escLineStart, inlineDomToMd, blocksToMd };
