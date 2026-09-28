@@ -10,7 +10,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { nextStallStreak, outboxPhaseOf, outboxAlertFor, tickOnce, stopOutboxWatch, STALL_TICKS } from "./outbox-watch.js";
+import { nextStallState, outboxPhaseOf, outboxAlertFor, tickOnce, stopOutboxWatch, STALL_TICKS } from "./outbox-watch.js";
+import type { Observation } from "./outbox-watch.js";
 import type { BoxAlert } from "./box-watch.js";
 import { childDrainSummary } from "../connectors/sync-outcome.js";
 
@@ -21,29 +22,33 @@ const DRAIN = r("../connectors/clickup-push.ts");
 
 test("표 — 예산을 다 쓰고도 안 줄면 센다", () => {
   //  첫 관측: 예산을 다 썼다는 것만으로는 정체가 아니다(비교할 이전이 없다) — 세기 시작만 한다.
-  assert.equal(nextStallStreak(null, { remaining: 500, budgetStopped: true }), 1, "첫 예산 소진을 안 세고 있다");
+  assert.equal(nextStallState(null, { remaining: 500, budgetStopped: true, lastRunAt: "c" }).streak, 1, "첫 예산 소진을 안 세고 있다");
   //  전진했다 — 예산을 다 썼어도 큐가 줄면 정체가 아니다(정상 배압).
-  assert.equal(nextStallStreak({ streak: 4, remaining: 500 }, { remaining: 420, budgetStopped: true }), 0,
+  assert.equal(nextStallState({ streak: 4, remaining: 500, lastRunAt: "p" }, { remaining: 420, budgetStopped: true, lastRunAt: "c" }).streak, 0,
     "큐가 줄었는데 정체로 세고 있다 — 백로그 소화 중에 알림이 나간다");
   //  제자리
-  assert.equal(nextStallStreak({ streak: 1, remaining: 500 }, { remaining: 500, budgetStopped: true }), 2);
+  assert.equal(nextStallState({ streak: 1, remaining: 500, lastRunAt: "p" }, { remaining: 500, budgetStopped: true, lastRunAt: "c" }).streak, 2);
   //  늘었다 — 유입이 처리보다 빠른 것도 큐가 안 빠지는 것이다.
-  assert.equal(nextStallStreak({ streak: 1, remaining: 500 }, { remaining: 540, budgetStopped: true }), 2);
+  assert.equal(nextStallState({ streak: 1, remaining: 500, lastRunAt: "p" }, { remaining: 540, budgetStopped: true, lastRunAt: "c" }).streak, 2);
 });
 
 test("표 — 예산을 안 썼으면 정체가 아니다(설계된 잔여와 정체를 가르는 축)", () => {
   //  ★ 이 줄이 이 감시의 전제 — 예산을 안 쓰고 끝났다 = 큐를 끝까지 훑었다 = 남은 건 처리 불가능한 것.
-  assert.equal(nextStallStreak({ streak: 9, remaining: 4 }, { remaining: 4, budgetStopped: false }), 0,
+  assert.equal(nextStallState({ streak: 9, remaining: 4, lastRunAt: "p" }, { remaining: 4, budgetStopped: false, lastRunAt: "c" }).streak, 0,
     "부모 미푸시 defer 같은 상시 잔여를 정체로 세고 있다 — 영구 오탐이 된다");
-  assert.equal(nextStallStreak(null, { remaining: 4, budgetStopped: false }), 0);
+  assert.equal(nextStallState(null, { remaining: 4, budgetStopped: false, lastRunAt: "c" }).streak, 0);
   //  남은 게 없으면 예산 소진 여부와 무관하게 정체가 아니다(마지막 행 직후 경계에서 나올 수 있는 모양).
-  assert.equal(nextStallStreak({ streak: 2, remaining: 0 }, { remaining: 0, budgetStopped: true }), 0,
+  assert.equal(nextStallState({ streak: 2, remaining: 0, lastRunAt: "p" }, { remaining: 0, budgetStopped: true, lastRunAt: "c" }).streak, 0,
     "빈 큐를 정체로 보고 있다");
   //  🔴 드레인이 잔여를 못 셌을 때(-1)는 **중립이다 — 0 으로 되돌리면 「해소」로 승격된다**(clickup-push.countPending).
   //   종전 이 표는 0 을 기대해 그 버그를 잠그고 있었다: 정체 중 count 가 한 번 실패하면 거짓 해소 알림이 나간다.
-  assert.equal(nextStallStreak({ streak: 2, remaining: 500 }, { remaining: -1, budgetStopped: true }), 2,
+  assert.equal(nextStallState({ streak: 2, remaining: 500, lastRunAt: "p" }, { remaining: -1, budgetStopped: true, lastRunAt: "c" }).streak, 2,
     "못 센 값(-1)에 카운터를 되돌린다 — 거짓 해소 알림이 나간다");
-  assert.equal(nextStallStreak(null, { remaining: -1, budgetStopped: true }), 0, "이전이 없으면 0 에서 시작한다");
+  assert.equal(nextStallState(null, { remaining: -1, budgetStopped: true, lastRunAt: "c" }).streak, 0, "이전이 없으면 0 에서 시작한다");
+  //  🔴 baseline 도 유지해야 한다 — -1 을 저장하면 다음 전진 판정이 `400 < -1` 이라 영영 거짓이 되어,
+  //   큐가 실제로 줄고 있는데도 제자리로 세어 같은 거짓 경보가 순서만 바꿔 되살아난다.
+  assert.equal(nextStallState({ streak: 2, remaining: 500, lastRunAt: "p" }, { remaining: -1, budgetStopped: true, lastRunAt: "c" }).remaining, 500,
+    "못 센 값을 baseline 으로 저장한다 — 이후 전진이 영영 감지되지 않는다");
 });
 
 test("표 — 상한에 닿아야 정체로 판정한다(한 번의 예산 소진은 정상이다)", () => {
@@ -112,17 +117,17 @@ test("배선 — 감시가 기동 단계에 scheduler 게이트로 등록돼 있
 // ── 상태기계(tickOnce) — 순수 함수가 맞아도 상태 보관이 틀리면 결과는 같다 ──
 //  cron-watch.test.ts 의 관례를 그대로 따른다. 실제로 -1 버그는 순수 함수 단위에선 «의도대로» 보이고
 //  이 조합에서만 드러났다.
-const alertsOf = (): { sent: BoxAlert[]; deps: (o: unknown, accept?: boolean) => Parameters<typeof tickOnce>[0] } => {
+const alertsOf = (): { sent: BoxAlert[]; deps: (o: Observation, accept?: boolean) => Parameters<typeof tickOnce>[0] } => {
   const sent: BoxAlert[] = [];
   return {
     sent,
     deps: (o, accept = true) => ({
-      observe: async () => o as never,
+      observe: async () => o,
       send: async (a) => { sent.push(a); return accept; },
     }),
   };
 };
-const stall = (remaining: number, at: string) => ({ remaining, budgetStopped: true, lastRunAt: at });
+const stall = (remaining: number, at: string): Observation => ({ remaining, budgetStopped: true, lastRunAt: at });
 
 test("상태기계 — 예산 소진이 상한만큼 이어지면 한 번 알리고, 이어지는 동안은 조용하다", async () => {
   stopOutboxWatch();
@@ -155,6 +160,19 @@ test("상태기계 — 못 센 값(-1)이 끼어도 거짓 해소를 내지 않�
   assert.equal(sent.length, 1, "집계 실패 한 번에 「정체 해소 … -1건」을 보냈다");
   await tickOnce(deps(stall(500, "b2")));
   assert.equal(sent.length, 1, "중립 뒤 같은 정체인데 다시 알린다");
+});
+
+test("상태기계 — 집계 실패 뒤 큐가 줄면 조용해야 한다(재게이트가 프로브로 재현한 순서)", async () => {
+  stopOutboxWatch();
+  const { sent, deps } = alertsOf();
+  //  500,500 으로 세다가 한 번 못 세고(-1), 그 뒤 실제로 줄어드는(400→300) 시퀀스.
+  //  baseline 에 -1 이 저장되면 400 이 «전진» 으로 안 읽혀 warn+ok 쌍이 나갔다.
+  await tickOnce(deps(stall(500, "r1")));
+  await tickOnce(deps(stall(500, "r2")));
+  await tickOnce(deps({ remaining: -1, budgetStopped: true, lastRunAt: "r3" }));
+  await tickOnce(deps(stall(400, "r4")));
+  await tickOnce(deps(stall(300, "r5")));
+  assert.equal(sent.length, 0, "큐가 줄고 있는데 정체·해소 알림이 나갔다");
 });
 
 test("상태기계 — 못 보낸 문제의 복구는 보내지 않는다", async () => {
