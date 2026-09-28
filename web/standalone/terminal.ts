@@ -10,6 +10,11 @@
 import { el, renderMarkdown } from './md.js';
 import { liteMenu } from './ctx-lite.js';   // #3784 터미널 우클릭 메뉴(의존 0 — 이 번들은 셸 밖에서 뜬다)
 import { decideKey, UndoStack, countTyped, SEQ, nativeUndoOk } from './line-edit.js'; // #3778 입력줄 선택·되돌리기(순수 판정) · #3864 앱 되돌리기 판 판정
+import {                                  // #4406 Claude Code 입력칸 선택 — 범위는 웹, 지우기는 앱(순수 판정)
+  findBox, move, rangeCells, cellsToRange, selText as appSelText, dragSeq, clickSeq, pressPlan, highlightMatches, scanHighlight,
+  boxFingerprint, cmpPos as asCmp, lineEnd, decideAppSelKey, isTypingKey, versionAtLeast, APP_SELECT_MIN, // asCmp — #1155 의 cmpPos({x,y})와 다른 자리 모양({row,col})
+} from './app-select.js';
+import type { Screen as AsScreen, Box as AsBox, Pos as AsPos, Motion as AsMotion } from './app-select.js';
 
 // xterm.js 는 CDN 클래식 스크립트로 먼저 로드된다(terminal.html) — 번들 대상이 아니라 전역으로 온다.
 declare const Terminal: any;
@@ -1175,11 +1180,15 @@ function trackAppMouse(d) {
     const isUp = m[4] === 'm';
     if (b >= 64) continue;                                    // 휠 — 선택과 무관
     if (b >= 32) { if (!isUp && (b & 3) !== 3 && dragPress) dragMoved = true; continue; } // 눌린 채 이동(호버 3 제외)
-    if (!isUp) { dragPress = m[2] + ',' + m[3]; dragMoved = false; }
-    else {
+    if (!isUp) {
+      dragPress = m[2] + ',' + m[3]; dragMoved = false;
+      lastPress = { row: Number(m[3]) - 1, col: Number(m[2]) - 1, at: Date.now() }; // #4406 앱이 본 누름 — 합성 누름이 더블클릭으로 안 읽히게
+    } else {
       const pos = m[2] + ',' + m[3];
       const now = Date.now();
       if (dragPress && (dragMoved || dragPress !== pos)) {     // ① 드래그 — 연타 이력과는 무관한 새 선택
+        const [pc, pr] = dragPress.split(',').map(Number);   // #4406 사람이 끈 방향 — Shift+화살표가 이어받을 때 앵커 쪽
+        lastUserDrag = { press: { row: pr - 1, col: pc - 1 }, release: { row: Number(m[3]) - 1, col: Number(m[2]) - 1 }, at: now };
         appDragSelect = true; clickRun = 0; clickAt = 0; clickPos = '';
       } else {                                                 // ② 제자리 클릭 — 연타면 앱이 단어·줄을 선택한다
         clickRun = (clickPos === pos && now - clickAt <= MULTI_CLICK_MS) ? clickRun + 1 : 1;
@@ -1275,7 +1284,7 @@ const scheduleMouseFrame = (typeof requestAnimationFrame === 'function')
 export function flushMouseReports(): void {
   if (!mouseReportBuf) return;
   const d = mouseReportBuf; mouseReportBuf = ''; mouseFlushArmed = false;
-  if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } }
+  emitInput(d); // #4406 — 합성 선택 op 와 섞이지 않게 같은 문으로
   // 드리프트 가드(#1302) — 리포트가 '실제로 나가는' 이 순간에만, 마지막 상태동기가 낡았을 때만 물어본다.
   if (Date.now() - lastStateAt > 8000 && Date.now() - lastMouseProbeAt > 8000) {
     lastMouseProbeAt = Date.now();
@@ -1307,7 +1316,7 @@ export function handleTermData(d) {
   }
   // 비-마우스 입력 — 버퍼된 마우스를 먼저 비워 순서를 지키고(마우스→키), 즉시 보낸다(에코 지연 0).
   flushMouseReports();
-  if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } }
+  emitInput(d); // #4406 — 선택을 지우는 중에 친 글자는 ⌫ 뒤로(순서 보존)
 }
 // 복사 경로는 셋 — ① 선택 후 Ctrl/Cmd+C (setupClipboard) ② '복사' 류 버튼 클릭 ③ 앱(Claude Code)의 OSC52 복사 신호.
 //  · [#972] copy-on-select(드래그 놓는 즉시 자동복사, #252)는 되살리지 않는다 — 미세한 클릭드래그(4px)에도
@@ -1327,7 +1336,11 @@ export function setupOscClipboard() {
         if (b64 && b64 !== '?') {
           let text = '';
           try { text = decodeURIComponent(escape(atob(b64))); } catch (_) { try { text = atob(b64); } catch (__) { text = ''; } }
-          if (text) {
+          if (text && Date.now() < swallowOscUntil) {
+            // #4406 — 우리가 지우려고 세운 합성 선택에 앱이 붙이는 자동복사. 선택만으로 클립보드를 덮지 않는다(잘라내기는 우리가 쓴다).
+            swallowOscUntil = 0;
+            dlog('osc52', 'swallow synth len=' + text.length);
+          } else if (text) {
             dlog('osc52', 'len=' + text.length);
             lastOsc52At = Date.now();
             cancelBridgeMissHint(); // 앱 복사 신호 도착 — 브리지는 성공했다(안내 취소·이미 뜬 안내는 철회, 성공은 무음)
@@ -1343,7 +1356,7 @@ export function setupOscClipboard() {
   } catch (_) { /* noop */ }
 }
 // 입력(키스트로크/시퀀스)을 PTY 로 전송 — onData 와 동일 경로(터미널로 흘러 안에서 도는 프로그램이 받음).
-function sendInput(d) { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } } }
+function sendInput(d) { emitInput(d); } // #4406 — 선택 지우기(op)가 도는 동안은 줄 선다(emitInput)
 // 붙여넣기 위생(#1117 버그B) — 클립보드가 어디서 왔든(타 터미널 화면·웹페이지·앱) '보이는 텍스트'만 넣는다.
 //  · CR/CRLF/유니코드 줄구분자(U+2028/29) → \n 정규화 — 터미널에서 \r 은 Enter 로 해석돼 의도치 않은 '제출'이 된다.
 //  · ESC 시퀀스(CSI/OSC/DCS/…)·C0 제어문자(탭·개행 제외)·C1 제거 — ① 화면캡처 유래 제어 바이트(커서이동·삭제·색)가
@@ -1852,7 +1865,310 @@ function selectWholeTerminal(): void {
 //   «다» 까지 끌어 두면 커서가 19↔23 칸을 끝없이 오갔다 — 원준님 신고 «이상한 곳이 선택되고 계속 바뀐다» 그대로다.
 //   가로챈 누름은 앱에 닿지 않아 입력칸 클릭·끌기·선택 지우기까지 함께 죽었다. 되살리려면 먼저 이 머리말의 실측을 이겨야 한다.
 export function wireInputLineMouse(host: HTMLElement): void {
-  host.addEventListener('mousedown', () => clearSel('mouse'), true);
+  host.addEventListener('mousedown', () => { clearSel('mouse'); clearAppSel('mouse'); }, true);
+}
+
+// ── Claude Code 입력칸 선택 (#4406 후속) ────────────────────────────────────────────
+//  원준님 2026-09-28: «⌘↓·↑↓ 로 윗줄 아랫줄까지 선택이 안 되고 ⌘X 가 여전히 안 된다». #3778 의 합성 선택은 줄을 못 넘는다
+//  (글자 수를 화면에서 셀 수 없어서 — app-select.ts 머리말). Claude Code 는 **자기 화면 선택을 지우는 법**을 스스로 안다.
+//  그래서 이 판에서는 — ① 선택하는 동안은 앱에 아무것도 안 보내고 웹이 글자 단위로 범위를 정해 칠한다(끌 때 튀던 d39e1ba4 의
+//  «방향키로 앱 커서 끌기» 가 없다) ② 지우기·잘라내기·덮어쓰기 순간에만 합성 끌기로 그 범위를 앱에 선택시키고, **앱이 정확히
+//  그 칸들을 칠한 것을 화면에서 확인한 뒤** Backspace 한 번 ③ 확인이 안 되면 지우지 않는다. 그동안 친 글자는 줄 세웠다가 뒤에 보낸다.
+//  적용: 서버가 appMouse(Claude Code)라 답했고 · 마우스 보고가 켜져 있고(전체화면) · 커서가 입력칸 안일 때. 그 밖은 #3778 그대로.
+type AppSel = { a: AsPos; f: AsPos; goal: number | null; fp: string; top: number };
+let asel: AppSel | null = null;
+let aselEls: HTMLElement[] = [];
+let lastPress: { row: number; col: number; at: number } | null = null; // 앱이 본 마지막 누름(사람·합성) — 더블클릭 오인 방지
+let lastUserDrag: { press: AsPos; release: AsPos; at: number } | null = null; // 사람이 끈 방향 — 이어받을 때 앵커 쪽
+let opBusy = false;              // 합성 선택 → 확인 → ⌫ 가 도는 중 — 그동안 나가는 입력은 줄 세운다(순서 보존)
+const opQueue: string[] = [];
+let swallowOscUntil = 0;         // 합성 선택에 앱이 붙이는 자동복사(OSC52)는 클립보드에 안 쓴다(선택만으로 클립보드를 덮지 않는다)
+
+function appSelActive(): boolean {
+  try {
+    if (prefs().lineSelect === false) return false;
+    if (!TERM_UI.appMouse) return false;
+    const m = term.modes && term.modes.mouseTrackingMode;
+    if (!m || m === 'none') return false;
+    if (term.buffer.active.type !== 'alternate') return false;
+    // 판을 알 때(네이티브 설치 = 실행 파일 이름이 판)는 실측한 판 이상만. 모르면(매니지드 box-spawn·node) 켠다.
+    const cmd = lastKnownState ? String(lastKnownState.cmd || '') : '';
+    if (/^\d+\.\d+\.\d+$/.test(cmd) && !versionAtLeast(cmd, APP_SELECT_MIN)) return false;
+    return true;
+  } catch (_) { return false; }
+}
+/** 지금 화면(앱의 활성 페이지)을 순수 모듈이 읽는 모양으로. 행 = 화면 행(SGR 좌표와 같은 축). */
+function termScreen(): AsScreen | null {
+  let b: any;
+  try { b = term.buffer.active; } catch (_) { return null; }
+  const cols = term.cols, rows = term.rows, base = b.baseY, cache = new Map<number, any[]>();
+  return {
+    cols, rows,
+    row(r: number) {
+      if (r < 0 || r >= rows) return null;
+      const hit = cache.get(r);
+      if (hit) return hit;
+      const line = b.getLine(base + r);
+      if (!line) return null;
+      const out: any[] = [];
+      let c: any;
+      for (let x = 0; x < cols; x++) {
+        c = line.getCell(x, c);
+        if (!c) { out.push({ ch: ' ', w: 1, bg: false, dim: false }); continue; }
+        out.push({ ch: c.getChars() || ' ', w: c.getWidth(), bg: !c.isBgDefault() || !!c.isInverse(), dim: !!c.isDim() });
+      }
+      cache.set(r, out);
+      return out;
+    },
+  };
+}
+function aselGeom(): { s: AsScreen; b: AsBox; caret: AsPos } | null {
+  if (!appSelActive()) return null;
+  const s = termScreen();
+  if (!s) return null;
+  const buf = term.buffer.active;
+  const caret = { row: buf.cursorY, col: buf.cursorX };
+  const b = findBox(s, caret);
+  return b ? { s, b, caret } : null;
+}
+/** 세워 둔 선택을 지금 화면 좌표로. 입력칸 글자가 바뀌었으면(앱이 다시 그렸다) 낡은 선택이다 — 거둔다. */
+function aselNow(g: { s: AsScreen; b: AsBox }): { a: AsPos; f: AsPos } | null {
+  if (!asel) return null;
+  if (boxFingerprint(g.s, g.b) !== asel.fp) { clearAppSel('stale'); return null; }
+  const d = g.b.top - asel.top;
+  return { a: { row: asel.a.row + d, col: asel.a.col }, f: { row: asel.f.row + d, col: asel.f.col } };
+}
+function clearAppSel(why?: string): void {
+  if (asel && why) dlog('asel-off', why);
+  asel = null;
+  drawAppSel();
+}
+/** 칠하기 — #3778 과 같은 반투명 파랑(.term-sel). 줄을 넘는 선택은 그 줄 끝 한 칸을 더 칠해 «줄바꿈도 들었다» 를 보인다. */
+function drawAppSel(): void {
+  const g = asel ? aselGeom() : null;
+  const r = g ? aselNow(g) : null;
+  const segs: { row: number; x0: number; x1: number }[] = [];
+  if (g && r && asCmp(r.a, r.f) !== 0) {
+    const s = asCmp(r.a, r.f) < 0 ? r.a : r.f, e = asCmp(r.a, r.f) < 0 ? r.f : r.a;
+    for (let row = s.row; row <= e.row; row++) {
+      const x0 = row === s.row ? s.col : g.b.start;
+      const x1 = row === e.row ? e.col : Math.min(g.s.cols, lineEnd(g.s, g.b, row, g.caret) + 1);
+      if (x1 > x0) segs.push({ row, x0, x1 });
+    }
+  }
+  let scr: any = null;
+  try { scr = (term.element && term.element.querySelector('.xterm-screen')) || null; } catch (_) { /* noop */ }
+  while (aselEls.length > segs.length) { const d = aselEls.pop(); try { d && d.remove(); } catch (_) { /* noop */ } }
+  if (!scr || !segs.length) return;
+  const rect = scr.getBoundingClientRect(), cw = rect.width / term.cols, ch = rect.height / term.rows;
+  let view = 0;
+  try { view = term.buffer.active.baseY - term.buffer.active.viewportY; } catch (_) { /* noop */ }
+  segs.forEach((sg, i) => {
+    let d = aselEls[i];
+    if (!d) { d = el('div', { class: 'term-sel' }); scr.appendChild(d); aselEls[i] = d; }
+    d.style.left = (sg.x0 * cw) + 'px';
+    d.style.top = ((sg.row + view) * ch) + 'px';
+    d.style.width = ((sg.x1 - sg.x0) * cw) + 'px';
+    d.style.height = ch + 'px';
+  });
+}
+/** 모든 PTY 입력의 한 문 — op 가 도는 동안은 줄 세운다(⌫ 보다 먼저 친 글자가 나가면 엉뚱한 자리에 들어간다). */
+function emitInput(d: string): void {
+  if (opBusy) { opQueue.push(d); return; }
+  rawInput(d);
+}
+function rawInput(d: string): void { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } } }
+let opWatchdog: any = null;
+/** op 시작 — 입력을 줄 세운다. 어떤 이유로든 끝이 안 불리면 3초 뒤 스스로 푼다(입력이 영영 막히면 그게 가장 큰 사고다). */
+function beginOp(): void {
+  opBusy = true;
+  clearTimeout(opWatchdog);
+  opWatchdog = setTimeout(() => { if (opBusy) { dlog('asel-op', 'watchdog'); endOp(); } }, 3000);
+}
+function endOp(): void {
+  clearTimeout(opWatchdog); opWatchdog = null;
+  opBusy = false;
+  while (opQueue.length && !opBusy) rawInput(opQueue.shift() as string);
+}
+/** 합성 누름을 보낸다 — 더블클릭 판정 창을 피해 기다린 뒤(pressPlan), 그 사이 입력칸이 바뀌었으면 그만둔다. */
+function sendPress(seq: (press: 'first' | 'last') => string, first: AsPos, lastCell: AsPos, fp: string, then: (ok: boolean) => void): void {
+  const plan = pressPlan(lastPress, first, lastCell, Date.now());
+  const go = (): void => {
+    const g = aselGeom();
+    if (!g || boxFingerprint(g.s, g.b) !== fp) { then(false); return; }
+    const p = plan.press === 'first' ? first : lastCell;
+    rawInput(seq(plan.press));
+    lastPress = { row: p.row, col: p.col, at: Date.now() };
+    then(true);
+  };
+  if (plan.wait > 0) setTimeout(go, plan.wait); else go();
+}
+/** 앱이 우리 범위를 칠했는지 화면에서 확인한다(최대 ~0.9초 — 매니지드 왕복 중앙값 30ms, 최대 64ms 실측의 넉넉한 배수). */
+function waitHighlight(first: AsPos, lastCell: AsPos, top: number, done: (ok: boolean) => void): void {
+  const until = Date.now() + 900;
+  const tick = (): void => {
+    let lit = false;
+    try { const g = aselGeom(); lit = !!(g && g.b.top === top && highlightMatches(g.s, g.b, first, lastCell)); } catch (_) { /* 아래 시간 끝 */ }
+    if (lit) { done(true); return; }
+    if (Date.now() > until) { done(false); return; }
+    setTimeout(tick, 16);
+  };
+  tick();
+}
+/**
+ * 지우기·잘라내기·덮어쓰기 — 합성 끌기로 앱에 선택시키고, 앱이 그 칸들을 칠한 걸 확인한 뒤 ⌫ 하나.
+ *  from/to 는 캐럿 자리(칸 사이). 이미 앱이 그 범위를 칠해 둔 경우(마우스 선택 이어받기)엔 끌기를 건너뛴다.
+ */
+function runAppSelOp(kind: 'del' | 'cut' | 'replace', from: AsPos, to: AsPos, g: { s: AsScreen; b: AsBox; caret: AsPos }, alreadyLit = false): void {
+  const cells = rangeCells(from, to);
+  if (!cells) { clearAppSel('empty'); return; }
+  const text = appSelText(g.s, g.b, asCmp(from, to) < 0 ? from : to, asCmp(from, to) < 0 ? to : from, g.caret);
+  if (kind === 'cut') copyText(text, false, true); // 제스처 안(키 입력) — 사파리도 동기 복사가 된다
+  const fp = boxFingerprint(g.s, g.b), top = g.b.top;
+  clearAppSel(kind);
+  beginOp();
+  const finish = (ok: boolean): void => {
+    if (ok) {
+      rawInput('\x7f');                       // 앱: 선택한 채 Backspace = 그 범위를 입력칸에서 지운다(tryDelete)
+      undoStack.push({ k: 'text', text });    // 합성 되돌리기(판을 모를 때)는 이 글자를 제자리에 다시 넣는다
+      dlog('asel-' + kind, 'chars=' + Array.from(text).length);
+      endOp();
+      return;
+    }
+    // 앱이 다른 곳을 칠했거나 안 칠했다 — 지우지 않는다. 앱에 남은(어긋난) 선택은 캐럿 클릭으로 거둔다:
+    //  남겨 두면 사람이 이어 누르는 Backspace 가 앱에서 **그 어긋난 범위**를 지운다.
+    dlog('asel-abort', kind);
+    toast(kind === 'cut' ? '선택이 화면과 맞지 않아 지우지는 않았어요 — 클립보드엔 복사됐어요' : '선택이 화면과 맞지 않아 지우지 않았어요 — 다시 선택해 주세요', true);
+    const g2 = aselGeom();
+    if (g2 && !alreadyLit) sendPress(() => clickSeq(g2.caret), g2.caret, g2.caret, boxFingerprint(g2.s, g2.b), () => endOp());
+    else endOp();
+  };
+  if (alreadyLit) { finish(true); return; }
+  sendPress((press) => { swallowOscUntil = Date.now() + 1500; return dragSeq(cells.first, cells.last, press, g.s.cols); },
+    cells.first, cells.last, fp, (sent) => { if (!sent) { finish(false); return; } waitHighlight(cells.first, cells.last, top, finish); });
+}
+/** 캐럿을 p 로(합성 클릭) — 앱은 입력칸 클릭을 «그 글자 앞으로» 받는다(글자 폭 인지). 이미 거기면 보내지 않는다. */
+function moveCaretTo(p: AsPos, g: { s: AsScreen; b: AsBox; caret: AsPos }): void {
+  clearAppSel('caret');
+  if (p.row === g.caret.row && p.col === g.caret.col) return;
+  beginOp();
+  sendPress(() => clickSeq(p), p, p, boxFingerprint(g.s, g.b), () => endOp());
+}
+/** 사람이 끌어 둔 앱 선택(입력칸 안)을 이어받는다 — 앵커는 사람이 누른 쪽. 앱의 칠함은 캐럿 클릭으로 거둔다(두 겹 방지). */
+function adoptAppHighlight(g: { s: AsScreen; b: AsBox; caret: AsPos }): { a: AsPos; f: AsPos } | null {
+  const h = scanHighlight(g.s, g.b);
+  if (!h) return null;
+  const r = cellsToRange(g.s, h.first, h.last);
+  const pressedLast = !!(lastUserDrag && Date.now() - lastUserDrag.at < 120000
+    && lastUserDrag.press.row === h.last.row && Math.abs(lastUserDrag.press.col - h.last.col) <= 1);
+  return pressedLast ? { a: r.to, f: r.from } : { a: r.from, f: r.to };
+}
+/** 키 하나를 이 판의 규칙으로 처리했으면 true(= keydown 끝). 덮어쓰기는 지우기를 걸고 false(= 글자는 흘러가 줄 선다). */
+function handleAppSelKey(e: any): boolean {
+  if (selBusy) return false; // #1155 가 여러 행 선택을 지우려고 커서를 걷는 중 — 그쪽 보호(키 삼킴)에 맡긴다
+  if (!appSelActive()) { if (asel) clearAppSel('inactive'); return false; }
+  // 화면은 필요할 때만 읽는다 — 선택이 없으면 판정에 필요 없고, 타이핑 한 글자마다 입력칸을 훑을 이유가 없다.
+  let g = asel ? aselGeom() : null;
+  const cur = g ? aselNow(g) : null;
+  const hasSel = !!(cur && asCmp(cur.a, cur.f) !== 0);
+  const act = decideAppSelKey(e, { mac: IS_MAC, hasSel });
+  if (act.k === 'pass') {
+    // 마우스로 끌어 둔 입력칸 선택(앱 선택) 위에 글자를 치면 갈아치운다 — 앱은 선택을 거두고 캐럿 자리에 넣기만 한다.
+    //  앱 선택을 관측했을 때(appDragSelect)만 화면을 읽는다 — 평소 타이핑엔 비용이 없다.
+    if (!hasSel && appDragSelect && !opBusy && isTypingKey(e)) {
+      const g2 = aselGeom();
+      const h = g2 ? scanHighlight(g2.s, g2.b) : null;
+      if (g2 && h) { const r = cellsToRange(g2.s, h.first, h.last); runAppSelOp('replace', r.from, r.to, g2, true); }
+    }
+    return false;
+  }
+  // 앞 op(합성 끌기 → 확인 → ⌫)가 도는 중이면 선택을 바꾸는 키는 받지 않는다 — 두 번째 합성 누름이 첫 op 의 칠함 위에서
+  //  시작되면 확인이 엇갈린다(격리 리뷰 지적). 글자는 위에서 이미 흘러 줄 선다(op 뒤에 나간다).
+  if (opBusy && act.k !== 'clear' && act.k !== 'replace') { e.preventDefault(); return true; }
+  if (!g) g = aselGeom();
+  if (!g) { if (asel) clearAppSel('no-box'); return false; } // 입력칸이 아니다(목록·대화상자) — 종전 그대로
+  if (act.k === 'clear') { clearAppSel('key:' + (e.key || '?')); return false; }
+  if (act.k === 'replace') {
+    // 지우기를 걸고 키는 흘린다 — 그 키가 낼 글자(IME 음절 포함)는 op 가 끝날 때까지 줄 선다. preventDefault 금지(#1300 계열).
+    if (cur) runAppSelOp('replace', cur.a, cur.f, g);
+    return false;
+  }
+  e.preventDefault(); // #633 계열: return false 는 xterm 자체 처리만 막는다 — 브라우저 기본동작도 막는다
+  if (act.k === 'extend') {
+    let base = cur;
+    if (!base) {
+      const adopted = adoptAppHighlight(g);
+      if (adopted) {
+        base = adopted;
+        beginOp(); // 앱의 칠함을 거두는 클릭 — 그동안 친 것은 뒤로
+        sendPress(() => clickSeq(g.caret), g.caret, g.caret, boxFingerprint(g.s, g.b), () => endOp());
+      } else {
+        const c = { row: g.caret.row, col: g.caret.col };
+        base = { a: c, f: c };
+      }
+    }
+    const mv = move(g.s, g.b, base.f, act.m as AsMotion, asel ? asel.goal : null, g.caret);
+    asel = { a: base.a, f: mv.pos, goal: mv.goal, fp: boxFingerprint(g.s, g.b), top: g.b.top };
+    dlog('asel', act.m + ' a=' + base.a.row + ':' + base.a.col + ' f=' + mv.pos.row + ':' + mv.pos.col);
+    drawAppSel();
+    return true;
+  }
+  if (act.k === 'caret') {
+    const t = move(g.s, g.b, g.caret, act.m, null, g.caret).pos;
+    moveCaretTo(t, g);
+    return true;
+  }
+  if (act.k === 'collapse' && cur) {
+    const s = asCmp(cur.a, cur.f) < 0 ? cur.a : cur.f, en = asCmp(cur.a, cur.f) < 0 ? cur.f : cur.a;
+    moveCaretTo(act.to === 'start' ? s : en, g);
+    return true;
+  }
+  if (act.k === 'selectInput') {
+    const a = move(g.s, g.b, g.caret, 'inputStart', null, g.caret).pos, f = move(g.s, g.b, g.caret, 'inputEnd', null, g.caret).pos;
+    asel = { a, f, goal: null, fp: boxFingerprint(g.s, g.b), top: g.b.top };
+    drawAppSel();
+    return true;
+  }
+  if (act.k === 'selectTerminal') { clearAppSel('select-all'); selectWholeTerminal(); return true; }
+  if (act.k === 'copy' && cur) {
+    const s = asCmp(cur.a, cur.f) < 0 ? cur.a : cur.f, en = asCmp(cur.a, cur.f) < 0 ? cur.f : cur.a;
+    copyText(appSelText(g.s, g.b, s, en, g.caret), false, true);
+    return true;
+  }
+  if (act.k === 'del' && cur) { runAppSelOp('del', cur.a, cur.f, g); return true; }
+  if (act.k === 'cut') {
+    if (cur && hasSel) { runAppSelOp('cut', cur.a, cur.f, g); return true; }
+    // 우리 선택이 없으면 앱이 칠해 둔 선택(마우스)을 자른다 — 이미 칠해져 있으니 끌기 없이 ⌫ 만.
+    const h = scanHighlight(g.s, g.b);
+    if (h) { const r = cellsToRange(g.s, h.first, h.last); runAppSelOp('cut', r.from, r.to, g, true); return true; }
+    if (appDragSelect) { toast('입력칸 안의 글자만 잘라낼 수 있어요 — 대화 글은 ⌘C 로 복사하세요', true); return true; }
+    return false; // 자를 게 없다 — 키는 종전대로(Windows Ctrl+X 는 앱의 단축키일 수 있다)
+  }
+  return false;
+}
+/**
+ * 선택 표시·마우스 배선 한 벌 — boot() 와 런타임 시험(scripts/term-input-select-runtime.test.mjs)이 **같은 함수**를 건다.
+ *  입력줄 선택 표시(#3778)는 앱이 다시 그릴 때마다 좌표로 새로 계산한다(우리가 위치를 «기억» 하지 않으므로 어긋나지 않는다).
+ */
+export function wireInputSelection(host: HTMLElement): void {
+  try { term.onRender(drawSel); } catch (_) { /* noop */ }
+  try { term.onScroll(drawSel); } catch (_) { /* noop */ }
+  try { term.onRender(drawAppSel); } catch (_) { /* noop */ }
+  try { term.onScroll(drawAppSel); } catch (_) { /* noop */ }
+  wireInputLineMouse(host);
+}
+/** 사람이 붙여넣을 때 선택이 서 있으면 먼저 지운다(편집기 관례 — 붙여넣기는 선택을 갈아치운다). */
+function pasteReplacingSel(t: string): void {
+  if (t && !opBusy && (asel || appDragSelect)) {
+    const g = aselGeom();
+    const cur = g && asel ? aselNow(g) : null;
+    if (g && cur && asCmp(cur.a, cur.f) !== 0) runAppSelOp('replace', cur.a, cur.f, g);
+    else if (g && appDragSelect) { // 마우스로 끌어 둔 입력칸 선택 — ⌘X 와 같은 길(앱 칠함을 읽어 그대로 ⌫)
+      const h = scanHighlight(g.s, g.b);
+      if (h) { const r = cellsToRange(g.s, h.first, h.last); runAppSelOp('replace', r.from, r.to, g, true); }
+    }
+  }
+  pasteText(t);
 }
 function doUndo(): void {
   // 앱이 되돌리기를 스스로 가진 판이면 앱의 것을 부르고 합성은 보내지 않는다(#3864 — 둘 다 보내면 두 번 되돌아간다).
@@ -1892,6 +2208,8 @@ function doRedo(): void {
 }
 /** 이 키를 line-edit 규칙으로 처리했으면 true(= keydown 을 여기서 끝낸다). */
 function handleLineEditKey(e: any): boolean {
+  // #4406 — Claude Code 입력칸(앱이 선택을 그리는 화면)이면 그 판의 규칙이 먼저다. 아니면 아래 #3778 그대로.
+  if (handleAppSelKey(e)) return true;
   const p = prefs();
   // 여러 행 선택을 지우려고 앱 커서를 걷는 동안(walkDeleteSel)엔 키를 받지 않는다 — 걷는 중 친 글자는 중간 자리에 박힌다.
   if (selBusy) { e.preventDefault(); return true; }
@@ -1988,7 +2306,7 @@ export function setupClipboard() {
       //  보내면 음절보다 앞서 커서가 움직여 '야바보'가 되므로, setTimeout(0)로 미뤄 '음절 → 단어이동' 순서를 맞춘다.
       if (e.isComposing) return false; // ① 조합 중 keydown: IME 자연확정 방해 금지(아무 동작 안 함)
       const dSeq = wordSeq;            // ② 비조합 keydown: 단어이동을 한 틱 미뤄(비동기 음절 전송 뒤로) 보냄
-      setTimeout(() => { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: dSeq })); } catch (_) { /* noop */ } } }, 0);
+      setTimeout(() => emitInput(dSeq), 0);
       return false;
     }
     // Alt/Option + Backspace = 커서 앞 '단어' 삭제(^W). Windows 크롬은 Ctrl+W 를 '탭 닫기'로 가로채 단어삭제로
@@ -1996,7 +2314,7 @@ export function setupClipboard() {
     //  셸·Claude 입력 모두 backward-kill-word 로 동작(Mac 은 Option+Backspace).
     if (e.altKey && !e.ctrlKey && !e.metaKey && e.key === 'Backspace') {
       e.preventDefault(); // #633: 같은 이유 — Alt+Backspace 브라우저 기본 'textarea 단어삭제'가 IME 상태를 깨뜨린다(우리 ^W 는 그대로 전송).
-      if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: '\x17' })); } catch (_) { /* noop */ } }
+      emitInput('\x17');
       return false;
     }
     const mod = e.ctrlKey || e.metaKey;
@@ -2124,9 +2442,9 @@ function schedulePasteFallback() {
       for (const it of its) {
         const t = (it.types || []).find((x) => x.startsWith('image/'));
         if (t) await dropFileToAgent(new File([await it.getType(t)], 'pasted.' + (t.split('/')[1] || 'png'), { type: t }));
-        else if (!textDone && (it.types || []).includes('text/plain')) { textDone = true; pasteText(await (await it.getType('text/plain')).text()); }
+        else if (!textDone && (it.types || []).includes('text/plain')) { textDone = true; pasteReplacingSel(await (await it.getType('text/plain')).text()); }
       }
-    }).catch(() => navigator.clipboard.readText().then((t) => pasteText(t)).catch(() => { /* noop */ }));
+    }).catch(() => navigator.clipboard.readText().then((t) => pasteReplacingSel(t)).catch(() => { /* noop */ }));
   }, 60);
 }
 // 붙여넣기(이미지·텍스트)를 네이티브 paste 이벤트로 처리 — 보안 컨텍스트 불문·권한 프롬프트 없이 동작(GitHub·Slack 방식).
@@ -2145,7 +2463,7 @@ export function setupPaste() {
       return;
     }
     const text = dt.getData('text/plain') || dt.getData('text') || '';
-    if (text) { e.preventDefault(); e.stopImmediatePropagation(); cancelPasteFallback(); dlog('paste-src', 'native'); pasteText(text); }
+    if (text) { e.preventDefault(); e.stopImmediatePropagation(); cancelPasteFallback(); dlog('paste-src', 'native'); pasteReplacingSel(text); }
   }, true);
 }
 
@@ -3497,10 +3815,7 @@ export async function boot() {
   }
   term.open(host);
   wireTermCtxMenu(host);   // #3784 — 우클릭 메뉴(복사·붙여넣기·전체 선택·주소 열기·화면 지우기·글자 크기·설정)
-  // 입력줄 선택 표시(#3778) — 앱이 다시 그릴 때마다 좌표로 새로 계산한다(우리가 위치를 «기억» 하지 않으므로 어긋나지 않는다).
-  try { term.onRender(drawSel); } catch (_) { /* noop */ }
-  try { term.onScroll(drawSel); } catch (_) { /* noop */ }
-  try { wireInputLineMouse(host); } catch (_) { /* noop */ }
+  try { wireInputSelection(host); } catch (_) { /* noop */ } // 입력줄 선택 표시(#3778) · 입력칸 선택(#4406) · 마우스
   // 휠 폴백 래치 끊기(#1943 후속 — wheelResyncAction 머리말). 관측만 하고 이벤트는 건드리지 않는다(passive).
   //  xterm 의 휠 처리보다 먼저 보도록 capture 로 단다 — 판정은 이 시점의 버퍼·모드로 한다.
   let lastWheelProbeAt = 0;
@@ -3818,7 +4133,7 @@ function wireTermCtxMenu(host: HTMLElement): void {
       ...(plan.linkRow ? [{ label: '링크 복사', hint: shortLink(link), run: () => copyText(link, false, true) }] : []),
       ...(url ? [{ label: '링크 열기', hint: openHint, run: () => openLinkFromTerminal(url) }] : []),
       { label: '붙여넣기', hint: '⌘V', off: !secure, run: () => {
-        navigator.clipboard.readText().then((t) => { if (t) pasteText(t); }).catch(() => toast('붙여넣기를 못 읽었어요 — ⌘V 로 붙여넣어 주세요.', true));
+        navigator.clipboard.readText().then((t) => { if (t) pasteReplacingSel(t); }).catch(() => toast('붙여넣기를 못 읽었어요 — ⌘V 로 붙여넣어 주세요.', true));
       } },
       { label: '전체 선택', hint: '⌘A', run: () => { try { term.selectAll(); } catch (_) { /* noop */ } } },
       { sep: true, label: '' },
