@@ -201,6 +201,23 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/project/project-storage-ownership.pg-test.mjs
+      # ⑤-f 앱 데이터 테이블(#4223·#4224) — 목으로는 못 보는 것: **자격(role)·RLS·카탈로그**. 매니지드와 같은 role 구조
+      #    (런타임 role 은 DDL 불가 · 앱 DDL role 만 스키마 생성)를 실제로 세워, 워크스페이스별 스키마 · 행 격리 · 칸 추가
+      #    (ADD COLUMN) · 매니페스트에서 빠진 테이블 정리(빈 것은 DROP, 데이터가 있으면 보관 스키마로) · 하이픈 id · 퓨즈를
+      #    되읽어 판정한다. 앱 데이터 층은 매니지드에서 한 번도 돈 적이 없던 채로 «설치 성공» 이었다 — 그 조용함을 여기서 막는다.
+      - name: 앱 데이터 테이블(DDL 자격·RLS·칸 추가·정리) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/store-schema.pg-test.mjs
+      # ⑤-g 앱 설치 끝단(#4224) — 설치 능력 핸들러를 inline 파일 묶음으로 부르고 store_* 로 읽고 쓴다(initAllSchemas 를 적용한
+      #    전용 DB). 칸 추가 · 빠진 테이블 보관/삭제 · 설치한 사람 알림 · 퓨즈 409 · 하이픈 id · 제거까지. 단일 테넌트라 앱 DDL 이
+      #    itemsPool 분기(자가호스팅 모양)로 돈다 — 위 ⑤-f 는 전용 DDL 연결 분기만 탄다. 둘이 합쳐야 두 분기가 다 실측된다.
+      - name: 앱 inline 설치 끝단 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-install-inline.pg-test.mjs
       # ⑥ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.

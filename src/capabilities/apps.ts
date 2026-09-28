@@ -1,5 +1,5 @@
 // 앱 레지스트리 capability (#1780, design D2) — 조회 + 멤버 grant + enabled 토글 + 설치/제거(관리자).
-//  설치/제거(org_app_install/remove)는 패키지 소스(git·로컬 경로)를 스테이지 디렉터리로 추출한 뒤
+//  설치/제거(org_app_install/remove)는 패키지 소스(git·로컬 경로·inline 파일 묶음)를 스테이지 디렉터리로 추출한 뒤
 //   loader→installLoadedApp(builtin 시더와 공용 코어)로 저널드 전개한다. 업로드(tar)는 후속(멀티파트 라우트 선행).
 //  경로 prefix = /api/ui/apps.
 import { z } from "zod";
@@ -145,9 +145,17 @@ const appRevoke: Capability = {
 const appInstall: Capability = {
   name: "org_app_install",
   title: "앱 설치·업데이트",
-  description: "패키지 소스에서 앱을 설치(같은 id 면 업데이트)한다. source.kind='git'(https:// url·선택 ref) 또는 'path'(게이트웨이 로컬 경로). 저널드 2-phase — 실패 시 역순 보상. 관리자.",
+  description: "패키지 소스에서 앱을 설치(같은 id 면 업데이트)한다. source.kind='git'(https:// url·선택 ref) · 'path'(게이트웨이 로컬 경로) · " +
+    "'inline'(files=[{path, content, encoding?:'utf8'|'base64'}] — 세션이 만든 파일 묶음을 그대로 올린다. lively-app.json 필수 · 최대 200개·8MB, " +
+    "MCP 로는 요청 1MB 안). 매니지드에선 게이트웨이가 세션 폴더를 못 읽으므로 path 대신 inline 을 쓴다. " +
+    "데이터 테이블: 새 칸은 ADD COLUMN(칸 삭제·타입 변경은 안 함 — 응답 tables.type_mismatches) · 매니페스트에서 빠진 테이블은 비었으면 삭제, " +
+    "데이터가 있으면 보관 스키마로 옮기고 설치한 사람에게 알림(tables.archived) · 워크스페이스 앱 테이블이 500개를 넘게 되면 거절(409). " +
+    "저널드 2-phase — 실패 시 역순 보상. 관리자.",
   scope: "admin",
-  input: { source: z.object({ kind: z.enum(["git", "path"]), url: z.string().optional(), ref: z.string().optional(), path: z.string().optional() }) },
+  input: { source: z.object({
+    kind: z.enum(["git", "path", "inline"]), url: z.string().optional(), ref: z.string().optional(), path: z.string().optional(),
+    files: z.array(z.object({ path: z.string(), content: z.string(), encoding: z.enum(["utf8", "base64"]).optional() })).optional(),
+  }) },
   expose: {
     mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/apps/install"], parse: (req) => ({ source: (req.body as Record<string, unknown>)?.source }) }],
@@ -165,7 +173,7 @@ const appInstall: Capability = {
       const workerRestart = !outcome.created && previousHash !== loaded.contentHash
         ? await restartWorkersForApp(outcome.id) : null;
       const app = await store.getApp(outcome.id);
-      return { app, created: outcome.created, components: outcome.components, worker_restart: workerRestart };
+      return { app, created: outcome.created, components: outcome.components, tables: outcome.tables ?? null, worker_restart: workerRestart };
     } finally {
       await staged.cleanup();
     }
