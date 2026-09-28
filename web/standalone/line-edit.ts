@@ -29,7 +29,7 @@ export type Act =
   | { k: 'pass' }                                     // 손대지 않는다(종전 그대로 흘린다)
   | { k: 'clear' }                                    // 선택만 거두고 키는 그대로 흘린다
   | { k: 'send'; seq: string; kill?: boolean }        // 이 바이트를 보내고 키는 삼킨다. kill=앱 kill-ring 에 들어감
-  | { k: 'extend'; seq: string; unit: Unit; dir: Dir } // 앵커를 세우고(없으면) 이 바이트로 커서를 옮겨 선택을 넓힌다
+  | { k: 'extend'; seq: string; unit: Unit; dir: Dir; cross?: boolean } // 앵커를 세우고(없으면) 이 바이트로 커서를 옮겨 선택을 넓힌다. cross=행 머리·끝이면 윗·아랫줄로 넘어간다(Shift+↑/↓)
   | { k: 'del' }                                      // 선택을 지운다(키는 삼킨다)
   | { k: 'delThenPass' }                              // 선택을 지우고 그 키는 흘린다(글자로 갈아치우기)
   | { k: 'copy' }                                     // 선택을 클립보드로
@@ -117,8 +117,9 @@ export function decideKey(e: KeyLike, c: LineEditCtx): Act {
     if (!alt && !meta) {
       if (key === 'ArrowLeft') return { k: 'extend', seq: SEQ.left, unit: 'char', dir: -1 };
       if (key === 'ArrowRight') return { k: 'extend', seq: SEQ.right, unit: 'char', dir: 1 };
-      if (key === 'ArrowUp') return { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1 };
-      if (key === 'ArrowDown') return { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1 };
+      // ↑/↓ 는 여러 줄 입력에서 한 줄씩 더 넓혀 간다(cross — 이미 줄 머리·끝이면 윗·아랫줄로, #3870). Home/End 는 그 줄 안에서만.
+      if (key === 'ArrowUp') return { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1, cross: true };
+      if (key === 'ArrowDown') return { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1, cross: true };
       if (key === 'Home') return { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1 };
       if (key === 'End') return { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1 };
     }
