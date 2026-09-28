@@ -160,8 +160,8 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
         v ? '사용 설명서를 함께 주입합니다.' : '사용 설명서를 주입하지 않습니다. AI가 라이블리 사용 방법을 알 수 없게 됩니다.'))));
   }
   aBody.append(el('div', { class: 'v2a-acts' },
-    canEdit ? el('button', { class: 'btn btn-sm', type: 'button', text: '＋ 주입 문구 추가', onclick: () => openEditor(null) }) : null,
-    el('button', { class: 'btn btn-sm', type: 'button', text: 'AI에 주입되는 전체 내용 보기', onclick: () => viewPreview() })));
+    canEdit ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 주입 문구 추가', onclick: () => openEditor(null) }) : null,
+    el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: 'AI에 주입되는 전체 내용 보기', onclick: () => viewPreview() })));
   bodies.set('a', aBody);
 
   // ── ② 일하는 동안 ──
@@ -213,7 +213,7 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
   function memoBlock(s: Sec, i: number): HTMLElement {
     const acts = el('div', { class: 'v2a-memo-a' });
     if (canEdit) {
-      acts.append(el('button', { class: 'btn btn-sm', type: 'button', text: '수정', onclick: () => openEditor(s) }));
+      acts.append(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '수정', onclick: () => openEditor(s) }));
       if (mine.length > 1) {
         acts.append(
           el('button', { class: 'v2a-ico', type: 'button', title: '위로', text: '▲',
@@ -335,7 +335,7 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
       value: (rc && rc.work_roots) || '' }) as HTMLInputElement;
     const pull = el('input', { type: 'text', class: 'v2a-in', placeholder: 'mcp__lively__ext__',
       value: ((rc && rc.pull_tools) || []).join(', ') }) as HTMLInputElement;
-    const save = el('button', { class: 'btn btn-sm', type: 'button', text: '저장' }) as HTMLButtonElement;
+    const save = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '저장' }) as HTMLButtonElement;
     save.addEventListener('click', async () => {
       save.disabled = true;
       try {

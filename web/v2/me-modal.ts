@@ -467,7 +467,7 @@ function accountPane(data: any, logins: any): HTMLElement {
   //  이메일(로그인 아이디)은 [프로필]에서 옮겨 왔다(원준 2026-09-28) — '어떻게 들어오나'의 일부다.
   if (data.email) {
     kids.push(field('이메일', el('div', {},
-      el('div', { class: 'admin-ro', text: data.email }),
+      el('div', { class: 'v2me-ro', text: data.email }),
       el('p', { class: 'prof-hint' }, ...uiText('로그인 아이디입니다. 변경하려면 워크스페이스 관리자에게 요청하세요.')))));
     kids.push(field('비밀번호', el('div', { class: 'v2me-inline' },
       el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }),
@@ -491,7 +491,7 @@ function accountPane(data: any, logins: any): HTMLElement {
   //   먼저 알아맞히려 들면 그 판단이 서버와 갈리는 순간 사람이 빈손이 된다.
   kids.push(el('div', { class: 'v2me-more-k', text: '계정 삭제' }),
     el('button', {
-      type: 'button', class: 'v2me-more', style: 'width:100%;text-align:left;cursor:pointer',
+      type: 'button', class: 'v2me-more', style: 'width:100%;text-align:left;cursor:pointer;background:none;font:inherit',
       onclick: () => accountDeleteModal(),
     },
       el('span', { class: 'v2me-more-t', text: '회원 탈퇴' }),

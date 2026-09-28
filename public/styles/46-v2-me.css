@@ -319,3 +319,29 @@
   .v2me-prow { grid-template-columns: 1fr 1fr; }
   .v2me-pid { grid-column: 1 / -1; }
 }
+
+/* ── 비교판(profile-modal-compare.html)과 사진 대조 뒤 맞춘 것(2026-09-28) ── */
+.v2me-cont .field input[type="text"], .v2me-cont .field textarea { padding: 8px 10px; border-radius: 8px; font-size: 13.5px; }
+.v2me-ro { font-size: 13.5px; color: var(--ink-sub); padding: 8px 10px; background: var(--bg-tint); border-radius: 8px; }
+.v2me .prof-ava-actions .btn-text { color: var(--blue); }
+.v2me .prof-ava-cc .pjv-sw { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--line-net); }
+.v2me .prof-ava-cc .pjv-sw.on { box-shadow: 0 0 0 2px var(--blue); border-color: var(--surface); }
+.v2me .prof-ava-cc .pjv-sw-none { font-size: 11px; font-weight: 800; }
+.v2me-cbl { font-weight: 400; }
+.v2me-sub { border-left-color: var(--line-net); }
+/* 알림 줄 — 상자 대신 구분선(비교판 모양). */
+.v2me-sw-list { gap: 0; }
+.v2me-sw { border: 0; border-bottom: 1px solid var(--line-row); border-radius: 0; padding: 12px 0; }
+.v2me-sw:first-child { padding-top: 4px; }
+.v2me-sw:hover { background: none; }
+.v2me-sw:focus-within { border-color: var(--line-row); }
+/* AI 계정 표 · 상태 배지 — 선이 있는 배지. */
+.v2me-pgrid .pill { border: 1px solid var(--line); background: var(--bg-tint); color: var(--muted-head); font-size: 11.5px; padding: 2px 9px; border-radius: 999px; }
+.v2me-pgrid .pill.pill-ok { background: var(--ok-bg); color: var(--ok-ink); border-color: var(--ok-line); }
+.v2me-pgrid .pill.pill-warn { background: var(--warn-bg); color: var(--warn-ink); border-color: transparent; }
+.v2me-pgrid .pill.pill-na { background: transparent; border-style: dashed; border-color: var(--line-net); color: var(--muted); }
+/* AI 개인화 칩 — 고른 칩은 연한 파랑 + 파란 테두리. */
+.v2me .prof-chip { padding: 5px 11px; font-size: 12.5px; border-radius: 999px; }
+.v2me .prof-chip.on { background: var(--bg-punch); border-color: var(--blue); color: var(--blue); }
+/* AI 주입 문구 — 삭제는 빨간 글자. */
+.v2a-del { color: var(--danger, #C0342B); }
