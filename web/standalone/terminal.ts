@@ -1550,7 +1550,7 @@ async function dropFileToAgent(file) {
   toast('첨부: ' + name + (toDock ? ' — 경로가 입력칸에 들어갔어요(설명 적고 보내기)' : ' — 경로가 입력창에 들어갔어요(설명 적고 Enter)'));
   if (explorerLoaded) loadDir(curDir);
 }
-// ── 입력줄 선택·되돌리기 (#3778) ──────────────────────────────────────────────────
+// ── 입력줄 선택·되돌리기 (#3778 · 여러 줄 #3870) ────────────────────────────────────────
 //  앱에 없는 두 기능을 «앱이 이미 아는 조작»만으로 합성한다. 판정 규칙은 line-edit.ts(순수), 여기서는
 //  좌표를 읽고 화면을 칠하고 바이트를 보낸다.
 //
@@ -1558,83 +1558,228 @@ async function dropFileToAgent(file) {
 //   커서는 앱이 그린 결과(xterm 버퍼)라 추측이 아니고, 앵커는 우리가 세웠다. 그 사이 글자 수를 화면에서 세어
 //   그만큼 백스페이스를 보내면 «선택을 지웠다»가 된다. 앱은 선택을 몰라도 결과가 정확히 같다.
 //
-//  ⚠ 한 줄 안에서만 선택한다. 줄이 접혀 다음 행으로 넘어가면 그 사이에 입력칸 테두리(│)가 끼어 «글자 수»를
-//   화면에서 정확히 셀 수 없다 — 잘못 세면 사람 글자를 더 지운다. 그래서 행이 바뀌면 선택을 거둔다(안전 우선).
-let selAnchor: { x: number; y: number; row: string } | null = null;
-let selEl: any = null;
+//  ★ 여러 행에 걸친 선택(#3870, 2026-09-28) — 종전엔 «행이 바뀌면 선택을 거둔다» 였다. 그래서 긴 입력이 접혔거나
+//   Shift+Enter 로 줄을 나눈 입력에서 Shift+↑ 를 누르면 커서만 윗줄로 가고 선택은 조용히 사라져 ⌘X 가 아무것도
+//   안 했다(원준님 신고 — Codex 세션). 행이 바뀌어도 선택은 유지하되, **행 경계에 숨은 글자 수는 화면으로 확정할 수
+//   없다**(Codex 0.157.1·Claude Code 2.1.283 실측: 공백에서 접힌 경계엔 공백 1글자가 숨고, 단어 중간에서 끊긴 경계 —
+//   한글은 대부분 이쪽 — 엔 0글자, 줄바꿈 경계엔 1글자). 그래서 여러 행 선택을 지울 때는 **앱 커서를 방향키로 반대 끝까지
+//   실제로 걸어 가며 글자 수를 잰 뒤**에 지운다(walkCursor). 방향키 수는 화면으로 센 «하한» 이라 넘치지 않고,
+//   닿지 못하면 아무것도 지우지 않는다. 한 행 안의 선택은 종전 그대로 바로 지운다(화면 셈이 정확하다).
+let selAnchor: { x: number; y: number; snap: Map<number, string> } | null = null;
+let selEls: any[] = [];
+let selBusy: { y: number; x0: number; y1: number; x1: number; curAtEnd: boolean } | null = null; // 걷는 중 — 그동안 선택 모양은 이것으로 고정
 const undoStack = new UndoStack();
 let undoBusy = false; // 되돌리기가 스스로 만든 입력을 다시 기록하지 않게
+const SEL_MAX_ROWS = 40;      // 이보다 멀리 벌어진 선택은 입력칸이 아니다(스크롤백까지 번진 것) — 선택 없음으로 본다
+const PROMPT_GLYPH = /^[›❯>]$/; // Codex «›» · Claude Code «❯» · 셸류 «>» — 입력의 첫 행 머리
+
+type SelRange = { y: number; x0: number; y1: number; x1: number; curAtEnd: boolean };
+type Pos = { x: number; y: number };
 
 function bufRowText(y: number): string {
   try { const ln = term.buffer.active.getLine(y); return ln ? ln.translateToString(true) : ''; } catch (_) { return ''; }
 }
-/** 지금 선택 범위. 앵커가 없거나·행이 바뀌었거나·비었으면 null(= 선택 없음). */
-function selRange(): { y: number; x0: number; x1: number; curAtEnd: boolean } | null {
-  if (!selAnchor) return null;
-  let b: any;
-  try { b = term.buffer.active; } catch (_) { return null; }
-  const cy = b.baseY + b.cursorY, cx = b.cursorX;
-  if (cy !== selAnchor.y) return null;
-  const x0 = Math.min(selAnchor.x, cx), x1 = Math.max(selAnchor.x, cx);
-  if (x0 >= x1) return null;
-  return { y: cy, x0, x1, curAtEnd: cx >= selAnchor.x };
-}
-/** 선택 구간의 글자(셀이 아니라 **글자** — 한글·이모지는 두 칸을 먹으므로 칸 수로 세면 두 배가 된다). */
-function selText(r: { y: number; x0: number; x1: number }): { text: string; chars: number } {
-  let text = '', chars = 0;
+function cellAt(y: number, x: number): { ch: string; w: number } | null {
   try {
-    const ln = term.buffer.active.getLine(r.y);
-    if (!ln) return { text, chars };
-    const cell = ln.getCell ? ln.getCell(0) : null;
-    for (let x = r.x0; x < r.x1; x++) {
-      const c = ln.getCell(x, cell || undefined);
-      if (!c) continue;
-      if (c.getWidth() === 0) continue; // 넓은 글자의 뒤칸 — 글자가 아니다
-      text += c.getChars() || ' ';
-      chars++;
-    }
-  } catch (_) { /* noop */ }
+    const ln = term.buffer.active.getLine(y);
+    const c = ln && ln.getCell(x);
+    return c ? { ch: c.getChars() || '', w: c.getWidth() } : null;
+  } catch (_) { return null; }
+}
+const blankCh = (c: { ch: string } | null): boolean => !c || c.ch === '' || c.ch === ' ';
+/** 행의 내용 끝(마지막으로 글자가 그려진 칸 다음). 빈 행이면 0. */
+function rowEnd(y: number): number {
+  for (let x = (term.cols || 0) - 1; x >= 0; x--) { const c = cellAt(y, x); if (c && c.w > 0 && !blankCh(c)) return x + c.w; }
+  return 0;
+}
+/** 입력 글자가 시작하는 칸 — 첫 행은 «› »/«❯ », 이어지는 행은 두 칸 들여쓰기(두 앱 공통 실측). 머리가 없으면(셸) 0. */
+function rowTextStart(y: number): number {
+  const c0 = cellAt(y, 0), c1 = cellAt(y, 1);
+  return ((blankCh(c0) || (c0 && PROMPT_GLYPH.test(c0.ch))) && blankCh(c1)) ? 2 : 0;
+}
+function isPromptRow(y: number): boolean { const c0 = cellAt(y, 0); return !!(c0 && PROMPT_GLYPH.test(c0.ch)); }
+function cursorPos(): Pos | null {
+  try { const b = term.buffer.active; return { x: b.cursorX, y: b.baseY + b.cursorY }; } catch (_) { return null; }
+}
+const cmpPos = (a: Pos, b: Pos): number => (a.y - b.y) || (a.x - b.x);
+/** 지금 선택 범위(시작 ≤ 끝, 읽는 순서). 앵커가 없거나·비었거나·너무 멀면 null(= 선택 없음). */
+function selRange(): SelRange | null {
+  if (selBusy) return selBusy;
+  if (!selAnchor) return null;
+  const c = cursorPos();
+  if (!c) return null;
+  const a = { x: selAnchor.x, y: selAnchor.y };
+  const d = cmpPos(a, c);
+  if (!d || Math.abs(c.y - a.y) > SEL_MAX_ROWS) return null;
+  const [s, e] = d < 0 ? [a, c] : [c, a];
+  return { y: s.y, x0: s.x, y1: e.y, x1: e.x, curAtEnd: d < 0 };
+}
+/** 선택이 걸친 행마다 [x0, x1) — 첫 행은 시작점부터 내용 끝, 가운데 행은 글자 시작부터 끝, 마지막 행은 글자 시작부터 끝점. */
+function selSegments(r: SelRange): { y: number; x0: number; x1: number }[] {
+  if (r.y === r.y1) return [{ y: r.y, x0: r.x0, x1: r.x1 }];
+  const out = [{ y: r.y, x0: r.x0, x1: Math.max(r.x0, rowEnd(r.y)) }];
+  for (let y = r.y + 1; y < r.y1; y++) { const s = rowTextStart(y); out.push({ y, x0: s, x1: Math.max(s, rowEnd(y)) }); }
+  out.push({ y: r.y1, x0: Math.min(rowTextStart(r.y1), r.x1), x1: r.x1 });
+  return out;
+}
+/** 한 행 [x0, x1) 의 글자(셀이 아니라 **글자** — 한글·이모지는 두 칸을 먹으므로 칸 수로 세면 두 배가 된다). */
+function rowSpanText(y: number, x0: number, x1: number): { text: string; chars: number } {
+  let text = '', chars = 0;
+  for (let x = x0; x < x1; x++) {
+    const c = cellAt(y, x);
+    if (!c) continue;
+    if (c.w === 0) continue; // 넓은 글자의 뒤칸 — 글자가 아니다
+    text += c.ch || ' ';
+    chars++;
+  }
   return { text, chars };
+}
+/**
+ * 두 행 사이에 숨은 글자의 **추정**(복사할 글자에만 쓴다 — 지울 글자 수는 walkCursor 가 앱에서 잰다).
+ *  다음 행 첫 낱말이 윗행 남은 자리에 들어갔을 것 같으면 앱이 접은 게 아니라 사람이 줄을 나눈 것(\n).
+ *  윗행이 오른끝까지 찼으면: 한글·한자 사이는 음절 사이에서 끊긴 것('' — 두 앱 모두 한글 낱말을 중간에서 끊는다),
+ *  그 밖엔 윗행에 공백이 있으면 공백에서 접힌 것(' '), 없으면 한 행보다 긴 낱말이 끊긴 것(''). 나머지는 공백에서 접힌 것.
+ */
+const CJK = /[\u1100-\u11ff\u3040-\u30ff\u3130-\u318f\u3400-\u9fff\uac00-\ud7af\uf900-\ufaff]/;
+function rowJoin(y: number): string {
+  const end = rowEnd(y), limit = (term.cols || 80) - 1;
+  const s = rowTextStart(y + 1);
+  let w = 0;
+  for (let x = s; x < (term.cols || 80); x++) { const c = cellAt(y + 1, x); if (!c || blankCh(c)) break; w += c.w || 0; }
+  if (end + 1 + w <= limit) return '\n';
+  if (end < limit - 1) return ' ';
+  let last = '';
+  for (let x = end - 1; x >= 0 && !last; x--) { const c = cellAt(y, x); if (c && c.w > 0) last = c.ch; }
+  const first = (cellAt(y + 1, s) || { ch: '' }).ch;
+  if (CJK.test(last) && CJK.test(first)) return '';
+  for (let x = rowTextStart(y); x < end; x++) { const c = cellAt(y, x); if (c && c.w > 0 && blankCh(c)) return ' '; }
+  return '';
+}
+/** 선택 구간의 글자와, 화면으로 확실히 센 글자 수(여러 행이면 행 경계의 숨은 글자를 뺀 하한). */
+function selText(r: SelRange): { text: string; chars: number } {
+  let text = '', chars = 0;
+  const segs = selSegments(r);
+  segs.forEach((s, i) => {
+    if (i > 0) text += rowJoin(segs[i - 1].y);
+    const t = rowSpanText(s.y, s.x0, s.x1);
+    text += t.text; chars += t.chars;
+  });
+  return { text, chars };
+}
+/** 두 자리 사이 글자 수의 **하한** — 행 경계에 숨은 글자는 0 으로 친다(그래서 이만큼 움직여도 결코 넘치지 않는다). */
+function charsLowerBound(p: Pos, q: Pos): number {
+  return selText({ y: p.y, x0: p.x, y1: q.y, x1: q.x, curAtEnd: true }).chars;
 }
 // why 는 진단에만 쓴다 — «선택이 왜 사라졌나» 는 눈으로 못 보는 축이라, 사라진 이유를 남겨야 신고를 받고 바로 짚는다.
 function clearSel(why?: string): void {
+  if (selBusy) return; // 걷는 중엔 거두지 않는다 — 끝나면 스스로 거둔다
   if (selAnchor && why) dlog('sel-off', why);
   selAnchor = null;
-  if (selEl) { try { selEl.remove(); } catch (_) { /* noop */ } selEl = null; }
+  removeSelEls();
+}
+function removeSelEls(): void {
+  for (const n of selEls) { try { n.remove(); } catch (_) { /* noop */ } }
+  selEls = [];
 }
 /** 선택을 화면에 칠한다. 앱이 다시 그릴 때마다(onRender) 좌표로 새로 계산하므로 어긋나지 않는다. */
 function drawSel(): void {
   const r = selRange();
   let scr: any = null;
   try { scr = (term.element && term.element.querySelector('.xterm-screen')) || null; } catch (_) { /* noop */ }
-  if (!r || !scr) { if (selEl) { try { selEl.remove(); } catch (_) { /* noop */ } selEl = null; } return; }
-  let rowInView = -1;
-  try { rowInView = r.y - term.buffer.active.baseY; } catch (_) { /* noop */ }
-  if (rowInView < 0 || rowInView >= term.rows) { if (selEl) { try { selEl.remove(); } catch (_) { /* noop */ } selEl = null; } return; }
+  if (!r || !scr) { removeSelEls(); return; }
+  let baseY = 0;
+  try { baseY = term.buffer.active.baseY; } catch (_) { /* noop */ }
   const rect = scr.getBoundingClientRect();
   const cw = rect.width / term.cols, ch = rect.height / term.rows;
-  if (!selEl) { selEl = el('div', { class: 'term-sel' }); scr.appendChild(selEl); }
-  selEl.style.left = (r.x0 * cw) + 'px';
-  selEl.style.top = (rowInView * ch) + 'px';
-  selEl.style.width = ((r.x1 - r.x0) * cw) + 'px';
-  selEl.style.height = ch + 'px';
+  const segs = selSegments(r).filter((s) => s.y - baseY >= 0 && s.y - baseY < term.rows && s.x1 > s.x0);
+  while (selEls.length > segs.length) { try { selEls.pop().remove(); } catch (_) { /* noop */ } }
+  segs.forEach((s, i) => {
+    if (!selEls[i]) { selEls[i] = el('div', { class: 'term-sel' }); scr.appendChild(selEls[i]); }
+    const n = selEls[i];
+    n.style.left = (s.x0 * cw) + 'px';
+    n.style.top = ((s.y - baseY) * ch) + 'px';
+    n.style.width = ((s.x1 - s.x0) * cw) + 'px';
+    n.style.height = ch + 'px';
+  });
+}
+/** 선택을 시작한 뒤 그 행들의 내용이 바뀌었나 — 바뀌었다면(앱이 다시 그렸거나 화면이 밀렸다) 좌표를 믿을 수 없다. */
+function selStale(r: SelRange): boolean {
+  if (!selAnchor) return false;
+  for (let y = r.y; y <= r.y1; y++) {
+    const was = selAnchor.snap.get(y);
+    if (was !== undefined && bufRowText(y) !== was) return true;
+  }
+  return false;
 }
 /**
  * 선택을 지운다. 커서가 오른끝이면 백스페이스, 왼끝이면 앞으로 지우기 — 둘 다 앱이 이미 아는 조작이다.
- * 지운 글자는 되돌리기 스택에 넣는다(우리가 지웠으니 무엇을 지웠는지 정확히 안다).
+ * 지운 글자는 되돌리기 스택에 넣는다(우리가 지웠으니 무엇을 지웠는지 안다).
+ * 여러 행이면 walkDeleteSel 이 앱 커서로 글자 수를 잰 뒤 지운다(비동기) — 반환값 true 는 «맡았다» 는 뜻이다.
  */
-function deleteSel(): boolean {
+function deleteSel(then?: string): boolean {
   const r = selRange();
   if (!r) { clearSel('empty'); return false; }
-  // 안전장치 — 선택을 시작한 뒤 그 줄의 내용이 바뀌었다면(앱이 다시 그렸거나 화면이 밀렸다) 좌표를 믿을 수 없다.
-  if (selAnchor && bufRowText(r.y) !== selAnchor.row) { clearSel('stale-row'); toast('화면이 바뀌어 선택을 취소했어요', true); return false; }
+  if (selStale(r)) { clearSel('stale-row'); toast('화면이 바뀌어 선택을 취소했어요', true); return false; }
   const { text, chars } = selText(r);
+  if (r.y !== r.y1) { void walkDeleteSel(r, text, then); return true; }
   if (!chars) { clearSel('no-chars'); return false; }
-  sendInput((r.curAtEnd ? SEQ.back : SEQ.del).repeat(chars));
+  sendInput((r.curAtEnd ? SEQ.back : SEQ.del).repeat(chars) + (then || ''));
   undoStack.push({ k: 'text', text });
   dlog('sel-del', 'chars=' + chars);
   clearSel('deleted');
   return true;
+}
+/** 커서가 멈출 때까지 기다린다 — 움직였다가 잠잠해지면 true, 끝내 안 움직이면 false. 추측 타이머로 다시 보내지 않는다(#4406 교훈). */
+function cursorSettle(from: Pos, maxMs = 1500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    let last = from, still = 0, moved = false;
+    const tick = () => {
+      const c = cursorPos();
+      if (c && cmpPos(c, last)) { last = c; still = 0; moved = moved || !!cmpPos(c, from); }
+      else still++;
+      if (moved && still >= 3) return resolve(true);
+      if (Date.now() - t0 > maxMs) return resolve(moved);
+      setTimeout(tick, 16);
+    };
+    setTimeout(tick, 16);
+  });
+}
+/**
+ * 앱 커서를 목표 자리까지 방향키로 걸어 가고, 실제로 보낸 방향키의 순합(= 앱 글자 수, 부호는 방향)을 돌려준다.
+ *  한 번에 «화면으로 센 하한» 만큼만 보내고 앱이 그린 커서를 다시 읽는다 — 행 경계의 숨은 글자는 다음 걸음이 채운다.
+ *  하한이라 목표를 넘지 않으므로 입력의 처음·끝에서 방향키가 헛돌 일이 없다. 닿지 못하면 null(아무것도 지우지 않는다).
+ */
+async function walkCursor(target: Pos): Promise<number | null> {
+  let net = 0;
+  for (let round = 0; round < 24; round++) {
+    const c = cursorPos();
+    if (!c) return null;
+    const d = cmpPos(c, target);
+    if (!d) return net;
+    const n = Math.max(1, d < 0 ? charsLowerBound(c, target) : charsLowerBound(target, c));
+    sendInput((d < 0 ? SEQ.right : SEQ.left).repeat(n));
+    net += d < 0 ? n : -n;
+    if (!(await cursorSettle(c))) { dlog('sel-walk', 'stuck net=' + net); return null; }
+  }
+  return null;
+}
+async function walkDeleteSel(r: SelRange, text: string, then?: string): Promise<void> {
+  selBusy = r;
+  const target = r.curAtEnd ? { x: r.x0, y: r.y } : { x: r.x1, y: r.y1 };
+  let net: number | null = null;
+  try { net = await walkCursor(target); } finally { selBusy = null; }
+  if (net === null || !net) {
+    clearSel('walk-fail');
+    toast('선택한 범위를 확인하지 못해 지우지 않았어요', true);
+    return;
+  }
+  // 걸어 온 쪽의 반대로 지운다 — 오른끝에서 왼끝으로 왔으면 앞으로 지우기, 왼끝에서 왔으면 백스페이스.
+  sendInput((net < 0 ? SEQ.del : SEQ.back).repeat(Math.abs(net)) + (then || ''));
+  undoStack.push({ k: 'text', text });
+  dlog('sel-del', 'chars=' + Math.abs(net) + ' rows=' + (r.y1 - r.y + 1));
+  clearSel('deleted');
+  drawSel();
 }
 function copySel(): boolean {
   const r = selRange();
@@ -1644,16 +1789,25 @@ function copySel(): boolean {
   copyText(text, false, true);
   return true;
 }
-/** 선택 확장 — 앵커가 없으면 지금 자리에 세우고, 평범한 이동 바이트를 보낸다(칠하기는 onRender 가 한다). */
-function extendSel(seq: string): void {
+/**
+ * 선택 확장 — 앵커가 없으면 지금 자리에 세우고, 평범한 이동 바이트를 보낸다(칠하기는 onRender 가 한다).
+ *  cross(Shift+↑/↓): 이미 행 머리(끝)에 있으면 윗(아랫)줄로 넘어간다. Ctrl+A 만으로는 Codex 는 윗줄로 가고 Claude Code 는
+ *  제자리라(2026-09-28 두 앱 실측) ← 를 먼저 보내 두 앱이 같은 자리에 서게 한다. 입력 첫 행 머리에선 ← 를 보내지 않는다
+ *  (빈 입력의 ← 는 두 앱 모두 «에이전트 보기» 다).
+ */
+function extendSel(seq: string, cross?: number): void {
+  const c = cursorPos();
+  if (!c) return;
   if (!selAnchor) {
-    try {
-      const b = term.buffer.active;
-      const y = b.baseY + b.cursorY;
-      selAnchor = { x: b.cursorX, y, row: bufRowText(y) };
-      dlog('sel-on', 'x=' + selAnchor.x + ' y=' + y);
-    } catch (_) { return; }
+    const snap = new Map<number, string>();
+    let top = 0;
+    try { top = term.buffer.active.baseY; } catch (_) { /* noop */ }
+    for (let y = Math.max(top, c.y - SEL_MAX_ROWS); y <= c.y + SEL_MAX_ROWS && y < top + term.rows; y++) snap.set(y, bufRowText(y));
+    selAnchor = { x: c.x, y: c.y, snap };
+    dlog('sel-on', 'x=' + c.x + ' y=' + c.y);
   }
+  if (cross && cross < 0 && c.x <= rowTextStart(c.y) && !isPromptRow(c.y)) seq = SEQ.left + seq;
+  else if (cross && cross > 0 && c.x >= rowEnd(c.y) && rowEnd(c.y + 1) > 2 && blankCh(cellAt(c.y + 1, 0)) && blankCh(cellAt(c.y + 1, 1))) seq = SEQ.right + seq;
   sendInput(seq);
 }
 function doUndo(): void {
@@ -1679,10 +1833,21 @@ function doUndo(): void {
 /** 이 키를 line-edit 규칙으로 처리했으면 true(= keydown 을 여기서 끝낸다). */
 function handleLineEditKey(e: any): boolean {
   const p = prefs();
+  // 여러 행 선택을 지우려고 앱 커서를 걷는 동안(walkDeleteSel)엔 키를 받지 않는다 — 걷는 중 친 글자는 중간 자리에 박힌다.
+  if (selBusy) { e.preventDefault(); return true; }
   const act = decideKey(e, { mac: IS_MAC, hasSel: !!selRange(), select: p.lineSelect !== false });
   if (act.k === 'pass') return false;
   if (act.k === 'clear') { clearSel('key:' + (e.key || '?')); return false; }
   if (act.k === 'delThenPass') {
+    const r = selRange();
+    if (r && r.y !== r.y1) {
+      // 여러 행 선택은 지우기가 비동기(앱 커서로 글자 수를 잰다)라 그 키를 먼저 흘리면 글자가 걷는 길 중간에 박힌다.
+      //  보통 글자는 삼켜 두었다가 지운 뒤에 보낸다. 조합(IME) 시작 키는 삼킬 수 없어(#1300) 선택만 거둔다.
+      if (e.keyCode === 229 || Array.from(e.key || '').length !== 1) { clearSel('ime-multirow'); return false; }
+      e.preventDefault();
+      deleteSel(e.key);
+      return true;
+    }
     // 선택을 먼저 지우고 그 키는 **그대로 흘린다**. 같은 소켓으로 순서대로 나가므로 «지우기 → 새 글자» 순서가 지켜진다.
     //  ⚠ 여기서는 preventDefault 를 하지 않는다 — 이 경로엔 IME 조합 시작(keyCode 229)이 섞여 있고, 그걸 막으면
     //   한글이 아예 안 써진다(#1300 계열). 아래 «삼키는» 갈래에서만 막는다.
@@ -1699,7 +1864,7 @@ function handleLineEditKey(e: any): boolean {
     sendInput(act.seq);
     return true;
   }
-  if (act.k === 'extend') { extendSel(act.seq); return true; }
+  if (act.k === 'extend') { extendSel(act.seq, act.cross ? act.dir : 0); return true; }
   return false;
 }
 

@@ -923,6 +923,169 @@ t("L18 ★앱 되돌리기 뒤 판 확인이 끊겨(재연결 등) 합성으로 
   assert.deepEqual(h.inputs(), ["ab", "\x1f"], "합성 백스페이스가 나가면 «ab» 앞에 있던 글자를 지운다");
 });
 
+// ── #3870 여러 행에 걸친 입력줄 선택 — 접힌 긴 입력·Shift+Enter 줄 나눔 (사양 M1~M8) ──────────────────────────
+//  신고(원준님, Codex 세션): «Shift+↑ · ⌘X 가 제대로 안 된다». 실측: 입력이 두 행 이상이면 Shift+↑ 가 커서를 윗행으로
+//  옮기는 순간 선택이 조용히 사라지고 ⌘X 는 아무것도 보내지 않았다(종전 «한 행 안에서만» 규칙).
+//  행 경계에 숨은 글자 수는 앱마다·경계마다 다르다(Codex 0.157.1·Claude Code 2.1.283 실측 — 공백에서 접힌 경계 1 ·
+//  단어 중간에서 끊긴 경계 0 · 줄바꿈 1). 그래서 가짜 앱은 **그 세 경계를 실제로 그린다** — 화면만 보고 글자 수를 세는
+//  구현은 여기서 틀린다.
+//
+//  가짜 앱 = 입력칸 한 개. 첫 행 «› », 이어지는 행 두 칸 들여쓰기, 글자는 2..(cols-2) 칸. 공백에서 접으면 그 공백은
+//  안 그린다. 낱말이 한 행보다 길면(또는 한글이 이어 붙으면) 칸이 모자란 자리에서 끊는다. 받는 바이트: ←/→ · Ctrl+A/E
+//  (줄 머리에서 Ctrl+A 는 제자리 — Claude Code 쪽 동작) · ⌫ · Delete · 보통 글자.
+type FakeApp = { text: string; pos: number; frozen: boolean };
+const fakeApp = (h: Harness, text: string, cols = 40): FakeApp => {
+  const app: FakeApp = { text, pos: Array.from(text).length, frozen: false };
+  h.term.cols = cols; h.term.rows = 12;
+  const limit = cols - 1;                        // 글자 칸은 [2, limit) — 마지막 한 칸은 커서 자리(Codex 실측과 같다)
+  const render = (): void => {
+    const chars = Array.from(app.text);
+    const rows: Array<Array<{ ch: string; w: number; i: number }>> = [[]];
+    const at: Array<[number, number]> = [];      // 글자 i 앞 자리의 (x, 행)
+    let x = 2;
+    const newRow = (): void => { rows.push([]); x = 2; };
+    for (let i = 0; i < chars.length; i++) {
+      const ch = chars[i];
+      if (ch === "\n") { at[i] = [x, rows.length - 1]; newRow(); continue; }
+      const w = WIDE(ch) ? 2 : 1;
+      if (ch === " ") {
+        // 다음 낱말이 이 행에 안 들어가면 여기서 접는다 — 공백은 그리지 않는다(숨은 글자 1)
+        let j = i + 1, ww = 0;
+        while (j < chars.length && chars[j] !== " " && chars[j] !== "\n") { ww += WIDE(chars[j]) ? 2 : 1; j++; }
+        if (x + 1 + ww > limit && ww <= limit - 2 && !/[가-힣]/.test(chars[i + 1] || "")) { at[i] = [x, rows.length - 1]; newRow(); continue; }
+      }
+      if (x + w > limit) newRow();                 // 칸이 모자라 끊는다(숨은 글자 0)
+      at[i] = [x, rows.length - 1];
+      rows[rows.length - 1].push({ ch, w, i }); x += w;
+    }
+    at[chars.length] = x >= limit ? [2, rows.length] : [x, rows.length - 1];
+    if (x >= limit) rows.push([]);
+    const lines = rows.map((r, y) => {
+      const cells: Array<{ chars: string; width: number }> = [{ chars: y === 0 ? "›" : " ", width: 1 }, { chars: " ", width: 1 }];
+      for (const c of r) { cells.push({ chars: c.ch, width: c.w }); if (c.w === 2) cells.push({ chars: "", width: 0 }); }
+      const str = cells.map((c) => c.chars).join("");
+      return { translateToString: () => str.replace(/\s+$/, ""), getCell: (cx: number) => (cells[cx] ? { getChars: () => cells[cx].chars, getWidth: () => cells[cx].width } : null) };
+    });
+    const [cx, cy] = at[app.pos];
+    h.term.buffer.active = { type: "normal", length: lines.length, baseY: 0, cursorX: cx, cursorY: cy, getLine: (y: number) => lines[y] || null };
+  };
+  const lineStart = (p: number): number => { const c = Array.from(app.text); while (p > 0 && c[p - 1] !== "\n") p--; return p; };
+  const lineEnd = (p: number): number => { const c = Array.from(app.text); while (p < c.length && c[p] !== "\n") p++; return p; };
+  const feed = (d: string): void => {
+    if (app.frozen) return;
+    let rest = d;
+    while (rest) {
+      const c = Array.from(app.text);
+      const m = /^(\x1b\[D|\x1b\[C|\x1b\[3~|\x01|\x05|\x7f)/.exec(rest);
+      const tok = m ? m[1] : Array.from(rest)[0];
+      rest = rest.slice(tok.length);
+      if (tok === "\x1b[D") app.pos = Math.max(0, app.pos - 1);
+      else if (tok === "\x1b[C") app.pos = Math.min(c.length, app.pos + 1);
+      else if (tok === "\x01") app.pos = lineStart(app.pos);
+      else if (tok === "\x05") app.pos = lineEnd(app.pos);
+      else if (tok === "\x7f") { if (app.pos > 0) { c.splice(app.pos - 1, 1); app.pos--; app.text = c.join(""); } }
+      else if (tok === "\x1b[3~") { c.splice(app.pos, 1); app.text = c.join(""); }
+      else if (tok >= " ") { c.splice(app.pos, 0, tok); app.pos++; app.text = c.join(""); }
+    }
+    render();
+  };
+  const push = h.sent.push.bind(h.sent);
+  h.sent.push = (...xs: string[]): number => { for (const s of xs) { try { const m = JSON.parse(s); if (m.t === "i") feed(m.d); } catch { /* noop */ } } return push(...xs); };
+  render();
+  return app;
+};
+// 앱 커서를 p 로 옮겨 둔다(장면 준비 — 웹을 거치지 않는 앱 안 이동)
+const placeAt = (h: Harness, app: FakeApp, p: number): void => { app.pos = p; h.sent.push(JSON.stringify({ t: "i", d: "" })); h.sent.length = 0; };
+const key = (h: Harness, k: string, mods: Record<string, unknown> = {}): unknown => h.term._keyHandler(h.kev({ key: k, ...mods }));
+const settle = (): Promise<void> => sleep(400);   // 여러 행 지우기는 앱 커서를 걸어 본 뒤라 비동기다
+
+t("M1 ★Shift+Enter 로 나눈 두 줄: Shift+↑ 두 번 → ⌘X 로 두 줄이 다 잘리고 클립보드엔 줄바꿈까지", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  const app = fakeApp(h, "첫줄 입니다\n둘째 줄");
+  key(h, "ArrowUp", { shiftKey: true });          // 둘째 줄 머리
+  key(h, "ArrowUp", { shiftKey: true });          // 첫 줄 머리(줄을 넘는다)
+  assert.equal(app.pos, 0, "커서가 입력 맨 앞까지 올라갔다");
+  key(h, "c", { metaKey: true }); key(h, "Backspace");   // stage 판엔 ⌘X 가 없다(main a2a08c8c) — 같은 뜻의 복사+지우기
+  await settle();
+  assert.equal(app.text, "", "두 줄이 모두 잘렸다");
+  assert.equal(h.execData.pop(), "첫줄 입니다\n둘째 줄", "클립보드엔 줄바꿈 그대로");
+});
+t("M2 ★공백에서 접힌 긴 입력(숨은 공백 1): Shift+↑ → ⌘X 로 전부 — 한 글자도 남거나 더 지우지 않는다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  const text = "aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeee";
+  const app = fakeApp(h, "앞글 " + text);
+  const r0 = h.term.buffer.active.cursorY;
+  assert.ok(r0 >= 1, "장면 전제: 입력이 두 행 이상으로 접혔다");
+  for (let i = 0; i < Array.from(text).length; i++) key(h, "ArrowLeft", { shiftKey: true });
+  assert.notEqual(h.term.buffer.active.cursorY, r0, "선택이 행을 넘었다");
+  key(h, "c", { metaKey: true }); key(h, "Backspace");   // stage 판엔 ⌘X 가 없다(main a2a08c8c) — 같은 뜻의 복사+지우기
+  await settle();
+  assert.equal(app.text, "앞글 ", "선택한 글자만 정확히 잘렸다");
+  assert.equal(h.execData.pop(), text, "접힌 자리의 공백까지 복사된다");
+});
+t("M3 ★한글이 칸이 모자라 끊긴 입력(숨은 글자 0): 중간부터 Shift+↑ 로 잡아 ⌫ — 뒤 글자는 그대로", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  const app = fakeApp(h, "가나다라마바사아자차카타파하가나다라마바사아자차");  // 24글자 = 48칸 → 두 행
+  assert.ok(h.term.buffer.active.cursorY >= 1, "장면 전제: 접혔다");
+  placeAt(h, app, 22);                              // 끝에서 두 글자 앞
+  key(h, "ArrowUp", { shiftKey: true });
+  assert.equal(app.pos, 0);
+  key(h, "Backspace");
+  await settle();
+  assert.equal(app.text, "자차", "끝 두 글자만 남는다(하나라도 더 지우면 «차» 만 남거나 빈다)");
+});
+t("M4 커서가 선택의 오른끝(Shift+→ 로 행을 넘어 잡음)이어도 정확히 — 앵커 앞 글자는 살아 있다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  const app = fakeApp(h, "keep this; aaaaaaaaaa bbbbbbbbbb cccccccccc dddd");
+  placeAt(h, app, 11);
+  for (let i = 11; i < Array.from(app.text).length; i++) key(h, "ArrowRight", { shiftKey: true });
+  assert.ok(h.term.buffer.active.cursorY >= 1, "장면 전제: 선택이 행을 넘었다");
+  key(h, "Delete");
+  await settle();
+  assert.equal(app.text, "keep this; ", "앵커 앞은 그대로");
+});
+t("M5 여러 행 선택 위에 글자를 치면 지운 뒤 그 글자 — 걷는 길 중간에 박히지 않는다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  const app = fakeApp(h, "one\ntwo");
+  key(h, "ArrowUp", { shiftKey: true }); key(h, "ArrowUp", { shiftKey: true });
+  assert.equal(key(h, "Z"), false, "키는 삼킨다(지운 뒤 우리가 보낸다)");
+  await settle();
+  assert.equal(app.text, "Z");
+});
+t("M6 ★앱 커서가 안 움직이면(목록이 떠 있는 등) 아무것도 지우지 않는다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  const app = fakeApp(h, "one\ntwo");
+  key(h, "ArrowUp", { shiftKey: true }); key(h, "ArrowUp", { shiftKey: true });
+  app.frozen = true;
+  key(h, "Backspace");
+  await sleep(1800);
+  assert.ok(!h.inputs().some((d) => d.includes("\x7f") || d.includes("\x1b[3~")), "지우기 바이트 0");
+  assert.equal(app.text, "one\ntwo");
+});
+t("M7 입력 첫 행 머리에서 Shift+↑ 는 ← 를 보내지 않는다(빈 입력의 ← = 에이전트 보기)", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  fakeApp(h, "one\ntwo");
+  key(h, "ArrowUp", { shiftKey: true }); key(h, "ArrowUp", { shiftKey: true }); key(h, "ArrowUp", { shiftKey: true });
+  assert.deepEqual(h.inputs(), ["\x01", "\x1b[D\x01", "\x01"]);
+});
+t("M8 Shift+↓ 는 줄 끝에서 아랫줄 끝으로 넘어간다 · Shift+End 는 넘지 않는다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  const app = fakeApp(h, "one\ntwo");
+  placeAt(h, app, 0);
+  key(h, "End", { shiftKey: true }); key(h, "End", { shiftKey: true });
+  assert.equal(app.pos, 3, "Shift+End 는 그 줄 끝에 머문다");
+  key(h, "ArrowDown", { shiftKey: true });
+  assert.equal(app.pos, 7, "Shift+↓ 는 아랫줄 끝까지");
+});
+
 async function main(): Promise<void> {
   let pass = 0; const fails: Array<[string, unknown]> = [];
   for (const [name, fn] of tests) {
