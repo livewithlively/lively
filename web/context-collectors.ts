@@ -23,6 +23,8 @@ import { overlay } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
 import { presetSvcKey, svcTile } from './svc-icons.js';
 import { CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
+import { LIV_ROW, livIcon, livMark, livSum, madeBy } from './liv-mark.js';   // #4135 «리브가 세팅한 것» 공통 표시
+import { countLiv } from './lib/liv-mark.js';
 import { type RunsByMachine, collectorLast, fetchRecentRuns, historyBox, issueInline, machineRuns } from './context-machine-runs.js';   // #4135 행 안의 최근 실행
 
 let editingId: number | null = null;
@@ -74,7 +76,9 @@ export async function renderCollectors(host: HTMLElement): Promise<void> {
   const head = el('div', { class: 'cxc-head' },
     el('div', { class: 'cxc-head-main' },
       //  #4233. 제목은 탭 이름과 같다(탭 「수집기 설정」). 제목이 «… 설정» 이라 옆의 수는 무엇을 센 것인지 적는다.
-      el('h3', { class: 'cxc-title' }, el('span', { text: CTX_TAB.sources }), el('span', { class: 'cxc-title-n num', text: '수집기 ' + collectors.length + '개' })),
+      //  그 옆의 요약 — 이 가운데 몇 개를 리브가 세팅했나(리브 표시 1안).
+      el('h3', { class: 'cxc-title' }, el('span', { text: CTX_TAB.sources }), el('span', { class: 'cxc-title-n num', text: '수집기 ' + collectors.length + '개' }),
+        livSum(collectors.length, countLiv(collectors, isLivMade))),
       el('p', { class: 'cxc-lead' }, ...uiText(canEdit
         ? '외부 앱을 연결하면 리브가 수집기를 자동으로 만들어 둡니다. 직접 만드는 것은 토큰을 손으로 넣어 붙일 때뿐입니다.'
         : '외부 앱을 연결하면 리브가 수집기를 자동으로 만들어 둡니다. 무엇이 언제 모이는지 여기서 봅니다.'))));
@@ -159,11 +163,11 @@ async function localRow() {
       folders ? el('div', { class: 'cxc-m', text: folders }) : null));
 }
 
-// ── 수집기 행 — 이름·상태 한 줄 + 「Notion 수집기 · 리브가 만듦 · 10분마다 · 마지막 수집」 한 줄. 편집 중이면 아래로 펼쳐진다. ──
+// ── 수집기 행 — 이름·상태 한 줄 + 「Notion 수집기 · 리브가 세팅 · 10분마다 · 마지막 수집」 한 줄. 편집 중이면 아래로 펼쳐진다. ──
 function collectorRow(c: any, presets: any[], reload: () => void, canEdit: boolean, runsBy: RunsByMachine) {
-  const row = el('div', { class: 'cxc-row' + (c.enabled ? '' : ' is-off') + (editingId === c.id ? ' is-editing' : '') });
-  const runs = machineRuns(runsBy, 'c', c.id);
   const liv = isLivMade(c);
+  const row = el('div', { class: 'cxc-row' + (liv ? ' ' + LIV_ROW : '') + (c.enabled ? '' : ' is-off') + (editingId === c.id ? ' is-editing' : '') });
+  const runs = machineRuns(runsBy, 'c', c.id);
   const svc = presetSvcKey(c.preset_key);
   const tile = svcTile(svc, c.preset_label || c.preset_key, true);
   tile.classList.add('cxc-tile');
@@ -187,9 +191,7 @@ function collectorRow(c: any, presets: any[], reload: () => void, canEdit: boole
   } else lastSlot = collectorLast(runs) || lastRunText(c);
 
   // 정체 줄 — 이것이 무엇인지: 「Notion 수집기」 + 누가 만들었나 + 주기 + 마지막 수집.
-  const who = liv
-    ? el('span', { class: 'cxc-liv', title: '외부 앱을 연결할 때 리브가 자동으로 만들었습니다' }, livIcon(), el('span', { text: '리브가 만듦' }))
-    : el('span', { class: 'cxc-who', text: '직접 만듦' });
+  const who = madeBy(liv, '외부 앱을 연결할 때 리브가 자동으로 만들었습니다');
   const meta = el('div', { class: 'cxc-m' },
     el('span', { class: 'cxc-kind', text: `${c.preset_label || c.preset_key} 수집기` }),
     who,
@@ -404,10 +406,11 @@ function collectorEditor(c: any | null, presets: any[], reload: () => void, newP
 
   // ── 머리 — 무엇의 설정인가 + (리브가 만든 것이면) 어디서 왔는지. ──
   box.append(el('div', { class: 'cxc-ed-head' },
-    el('b', { class: 'cxc-ed-t', text: isNew ? `새 수집기 — ${preset.label}` : '수집기 설정' })));
+    el('span', { class: 'cxc-ed-tt' }, el('b', { class: 'cxc-ed-t', text: isNew ? `새 수집기 — ${preset.label}` : '수집기 설정' }),
+      liv ? livMark('외부 앱을 연결할 때 리브가 자동으로 만들었습니다') : null)));
   if (liv) {
     box.append(el('div', { class: 'cxc-note' },
-      livIcon(),
+      livIcon('cxc-ic'),
       el('div', {},
         el('p', {}, ...uiText(`리브가 [외부 앱 연결 ▸ ${preset.label}]에서 연결할 때 자동으로 만든 수집기입니다. 계정과 토큰은 그 연결을 그대로 쓰므로 여기서 넣을 것이 없습니다.`)),
         el('a', { class: 'btn btn-ghost btn-sm', href: connectHref(c.preset_key), text: '연결 관리 →' }))));
@@ -512,11 +515,6 @@ function collectorEditor(c: any | null, presets: any[], reload: () => void, newP
 }
 
 // ── 아이콘 — 선 글리프(Feather 계열, DS §6.7). ──
-function livIcon(): SVGElement {
-  const n = sv('svg', { class: 'cxc-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  n.append(sv('circle', { cx: 12, cy: 12, r: 9 }), sv('circle', { cx: 12, cy: 12, r: 2.5 }));   // 리브 앱 아이콘과 같은 형태(v2/icons liv)
-  return n;
-}
 function chevIcon(up: boolean): SVGElement {
   const n = sv('svg', { class: 'cxc-chev', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
   n.append(sv('path', { d: up ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6' }));

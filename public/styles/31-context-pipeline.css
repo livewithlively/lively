@@ -962,6 +962,8 @@ a.cxr-row .cxr-t { white-space: nowrap; }
 .cxc-row:first-child { border-top: 0; }
 .cxc-row:hover { background: var(--bg-tint); }
 .cxc-row.is-editing { background: var(--bg-tint); }
+/* 리브가 세팅한 행 — 올리거나 편집 중이어도 리브 바탕이 남는다(03-components .liv-row). */
+.cxc-row.liv-row, .cxc-row.liv-row:hover, .cxc-row.liv-row.is-editing { background: var(--liv-bg); }
 .cxc-row-local { background: var(--bg-tint); }
 .cxc-row-local:hover { background: var(--bg-tint); }
 .cxc-tile.svc-tile { width: 36px; height: 36px; border-radius: 10px; margin-top: 1px; }
@@ -980,10 +982,7 @@ a.cxr-row .cxr-t { white-space: nowrap; }
 .cxc-kind { font-weight: 600; color: var(--ink-sub); }
 .cxc-sep { color: var(--muted-3); }
 .cxc-who { color: var(--muted); }
-/* 리브가 만든 수집기 — 틴트 + 진한 잉크(채운 컬러 필 금지, DS §6.3). 리브의 민트 한 방울. */
-.cxc-liv { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px 0 6px; border-radius: 999px;
-  background: var(--bg-success); border: 1px solid var(--ok-line-2); color: var(--ok-ink); font-size: 11.5px; font-weight: 700; white-space: nowrap; }
-.cxc-liv .cxc-ic { width: 12px; height: 12px; color: var(--mint-deep); }
+/* 리브가 세팅한 것의 이름표 · 바탕은 공통 부품이다 — 03-components.css 의 .liv-mark · .liv-row · .liv-card (web/liv-mark.ts). */
 .cxc-ic { width: 14px; height: 14px; flex: none; }
 /* 문제 줄 — 문제일 때만 선다. 경고 사중주(bg/line/ink). */
 .cxc-issue { display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; padding: 4px 10px; border-radius: 8px;
@@ -1009,6 +1008,7 @@ a.cxr-row .cxr-t { white-space: nowrap; }
 .cxc-editor { flex: 1 1 100%; margin: 6px 0 2px; padding: 18px 20px 16px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); }
 .cxc-ed-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .cxc-ed-t { font-size: 15px; font-weight: 800; color: var(--ink); }
+.cxc-ed-tt { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* 리브 안내 — 정보 배너 사중주. */
 .cxc-note { display: flex; gap: 10px; align-items: flex-start; margin: 0 0 16px; padding: 12px 14px; border-radius: 12px;
   background: var(--bg-note); border: 1px solid var(--line-note); color: var(--ink-note); font-size: 13px; line-height: 1.55; }
@@ -1111,6 +1111,7 @@ a.cxc-name:hover { color: var(--blue); }
 .dsl-card { padding: 16px 18px 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--bg); transition: border-color 120ms ease; }
 .dsl-card:hover { border-color: var(--line-net-2); }
 .dsl-card.is-off { background: var(--bg-tint); }
+.dsl-card.liv-card, .dsl-card.liv-card.is-off { background: var(--liv-bg); }
 .dsl-head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 .dsl-head .cxc-main { flex: 1 1 260px; }
 .dsl-faces { display: inline-flex; align-items: center; flex: none; margin-top: 1px; }

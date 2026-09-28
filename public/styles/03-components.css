@@ -516,3 +516,18 @@ a.wikicat-owner:hover { text-decoration: underline; }
 .psel-opt.is-active { background: var(--bg-sel); }
 .psel-me { color: var(--muted-2); font-weight: 400; }
 .psel-sub { flex: none; font-size: 12px; color: var(--muted-2); }
+
+/* ── 리브가 세팅한 것 — 서비스 공통 표시(#4135 코멘트 4 · 리브 표시 1안, 원준 2026-09-28). 부품: web/liv-mark.ts ──
+   규칙 하나: 사람이 손대지 않았는데 리브가 만들어 둔 것에는 어디서나 같은 표시를 쓴다.
+   행 · 카드 = 옅은 초록 바탕 + 왼쪽 띠, 이름표 = 채운 초록, 목록 머리 = 몇 개 중 몇 개.
+   ⚠ 채운 이름표는 디자인 가이드 «채운 컬러 필 금지»의 예외다. 리브 표시에만 쓴다(종전의 틴트 배지는 «너무 약함»).
+   화면이 제 바탕을 따로 칠하는 자리(행의 hover 등)는 그 화면의 CSS 가 --liv-bg 를 다시 입힌다. */
+.liv-row { --liv-bg: linear-gradient(90deg, var(--liv-tint) 0, var(--liv-tint-2) 34%, var(--bg) 72%); background: var(--liv-bg); box-shadow: inset 4px 0 0 var(--mint); }
+.liv-card { --liv-bg: linear-gradient(180deg, var(--liv-tint) 0, var(--bg) 96px); background: var(--liv-bg); box-shadow: inset 4px 0 0 var(--mint); }
+.liv-mark { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 9px 0 3px; border-radius: 999px;
+  background: var(--liv-fill); color: var(--on-fill); font-size: 11.5px; font-weight: 800; white-space: nowrap; }
+.liv-mark .liv-ic { width: 14px; height: 14px; padding: 1.5px; border-radius: 99px; background: var(--on-fill); color: var(--liv-fill); flex: none; }
+.liv-sum { display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; height: 24px; padding: 0 10px 0 5px; border-radius: 999px;
+  background: var(--liv-sum-bg); color: var(--liv-sum-ink); font-size: 12px; font-weight: 600; letter-spacing: 0; white-space: nowrap; }
+.liv-sum .liv-ic { width: 16px; height: 16px; padding: 2px; border-radius: 99px; background: var(--liv-fill); color: var(--on-fill); flex: none; }
+.liv-sum b { font-weight: 800; }
