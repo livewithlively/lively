@@ -78,5 +78,18 @@ check(/addEventListener\('pointerdown', onHostPress, true\)/.test(mount)
 check(/setTimeout\(releasePress,/.test(fnBody("onHostPress")),
   "W5 떼는 신호를 놓쳐도 레일이 멈춰 서지 않는다(안전 시한)");
 
+// ───────────────────────── C. 자료 화면이 늦게 온 목록으로 **떠난 뒤의** 주소를 덮어쓰지 않는다
+//  자료(#/sources) → 곧바로 사용 가이드를 누르면, 목록이 늦게 와서 첫 줄을 열며 주소를 #/sources/<id> 로 바꿔 썼다 —
+//  화면은 사용 가이드인데 주소는 자료라 새로고침·뒤로가기가 자료로 떨어졌다.
+{
+  const src = code(readFileSync(path.join(root, "web/v2/sources.ts"), "utf8"));
+  const i = src.indexOf("function autoSelect(");
+  const body = i < 0 ? "" : src.slice(i, src.indexOf("\n}\n", i));
+  const guard = body.indexOf("if (parseHash(location.hash))");
+  const rewrite = body.indexOf("history.replaceState(");
+  check(guard >= 0 && rewrite > guard && /if \(parseHash\(location\.hash\)\)\s*\{[^}]*history\.replaceState\(/.test(body),
+    "S1 ★★ 자료 화면의 자동 첫 줄은 **아직 자료 주소일 때만** 주소를 바꿔 쓴다");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

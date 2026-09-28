@@ -214,11 +214,16 @@ function setSelected(id: number | null): void {
 }
 
 /** 첫 줄 자동 열기 — 열람실은 원문이 항상 열려 있는 방이다. 주소는 조용히 맞춘다(뒤로가기 더미를 안 만든다). */
+//  ⚠ 주소는 **아직 자료 화면에 있을 때만** 맞춘다(#3870). 목록은 비동기로 오는데, 그 사이 사람이 레일에서 딴 곳(사용 가이드 등)을
+//   눌렀으면 탭이 이 화면을 뒤에 살려 둔 채 주소만 옮겨 간 뒤다. 거기서 replaceState 하면 화면은 사용 가이드인데 주소는 자료가 되어
+//   새로고침·뒤로가기가 자료로 떨어진다(매니지드 실측: 자료 → 사용 가이드를 이어 누르면 주소가 #/sources/<id> 로 끝났다).
 function autoSelect(id: number): void {
   if (!view || view.selId) return;
   view.selId = id;
-  lastDrawn = sourcesHref(view.sel, id);
-  history.replaceState(null, '', location.pathname + location.search + lastDrawn);
+  if (parseHash(location.hash)) {
+    lastDrawn = sourcesHref(view.sel, id);
+    history.replaceState(null, '', location.pathname + location.search + lastDrawn);
+  }
   setSelected(id);
 }
 
