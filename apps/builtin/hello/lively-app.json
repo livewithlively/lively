@@ -1,9 +1,17 @@
 {
   "id": "hello",
   "title": "안녕 앱",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": { "name": "Lively" },
   "harness": { "plugin": "./" },
-  "permissions": { "scopes": ["memory"], "tools": ["knowledge_search", "knowledge_get"] },
+  "permissions": {
+    "scopes": ["memory"],
+    "tools": ["knowledge_search", "knowledge_get", "store_insert", "store_query", "store_update", "store_delete", "store_tables"]
+  },
+  "data": {
+    "tables": [
+      { "name": "notes", "columns": [{ "name": "text", "type": "text" }, { "name": "author", "type": "text" }] }
+    ]
+  },
   "ui": { "pages": [{ "key": "main", "title": "안녕", "entry": "ui/index.html", "display": ["inline", "fullscreen"] }] }
 }

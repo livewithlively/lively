@@ -81,3 +81,13 @@ test("선언 빈 앱에 tool 요청 → 거부", () => {
   const m = mani({});
   assert.throws(() => resolveGrant(m, { tools: ["knowledge_get"] }), /앱 선언/);
 });
+
+// #4225 — 옛 동의(앱이 갱신돼 새 도구를 얻었다)면 «다시 동의» 로 풀리고, 선언 밖이면 다시 동의해도 안 풀린다.
+test("needsRegrant — 선언엔 있고 동의엔 없음 → 참 · 동의에 있음 → 거짓 · 선언 밖 → 거짓 · 글롭 선언도 본다", async () => {
+  const { needsRegrant } = await import("./grant.js");
+  assert.equal(needsRegrant(["knowledge_get"], ["knowledge_get", "store_query"], "store_query"), true);
+  assert.equal(needsRegrant(["knowledge_get", "store_query"], ["knowledge_get", "store_query"], "store_query"), false);
+  assert.equal(needsRegrant(["knowledge_get"], ["knowledge_get"], "store_query"), false);
+  assert.equal(needsRegrant([], ["store_*"], "store_delete"), true);
+  assert.equal(needsRegrant(["store_*"], ["store_*"], "store_delete"), false);
+});
