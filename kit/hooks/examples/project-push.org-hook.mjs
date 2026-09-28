@@ -405,7 +405,18 @@ async function localFiles(base) {
     }
     if (f.size === s.size && f.mtime <= s.mtime) continue;           // 로컬이 서버와 같거나 더 옛것 → 할 일 없음
     // 여기부터 로컬이 서버와 다르다. 서버가 우리 기준선 이후로 바뀌었으면 **남이 고친 것**이다.
-    if (s.mtime > lastPull) { conflicts.push({ path: f.path, why: "서버도 우리가 마지막으로 받은 뒤에 바뀜(남의 작업일 수 있음)", server_mtime: s.mtime, local_mtime: f.mtime, last_pull: lastPull }); continue; }
+    //  ★ 기준선은 둘이다 (#4135, 2026-09-28).
+    //   ① 원장의 그 파일 항목 — «마지막으로 양쪽이 일치한 서버 버전»(받았거나 · **우리가 올렸거나**, 위 ⑧ 이 적는다).
+    //      서버 사본이 지금도 그 (mtime,size) 그대로면 그 뒤로 아무도 안 고쳤다 → 로컬 수정분을 올려도 남의 작업이 안 사라진다.
+    //   ② 워터마크(last_pull) — 원장에 항목이 없는 파일의 근거(종전 규칙 그대로).
+    //  종전엔 ②만 봤다. 그러면 **우리가 올린 파일**은 서버 mtime(= 우리가 올린 시각)이 last_pull 보다 늘 뒤라, 그 파일을 한 번 더
+    //  고치면 «남이 고쳤을 수 있음» 으로 보고 영영 안 올렸다. pull 은 로컬이 기준선과 다른 파일이 있으면 수렴을 못 해 last_pull 을
+    //  못 올리고, push 는 last_pull 이 낮아 못 올리는 맞물림이라 스스로 풀리지도 않았다.
+    //  (실측: 프로젝트 4135 — 마커에 last_pull 없음 · 시안 HTML 의 첫 판만 올라가 있고 고친 판 셋이 하루 동안 충돌로 남음.
+    //   사람은 자료 칸에서 깨진 첫 판을 봤다.)
+    const held = ledger[key];
+    const serverIsBaseline = !!held && typeof held.mtime === "number" && held.mtime === s.mtime && held.size === s.size;
+    if (!serverIsBaseline && s.mtime > lastPull) { conflicts.push({ path: f.path, why: "서버도 우리가 마지막으로 받은 뒤에 바뀜(남의 작업일 수 있음)", server_mtime: s.mtime, local_mtime: f.mtime, last_pull: lastPull }); continue; }
     push.push(f);                                                    // 로컬만 바뀜 → 안전하게 올린다
   }
 
