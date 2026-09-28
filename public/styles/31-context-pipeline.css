@@ -943,12 +943,14 @@ a.cxr-row .cxr-t { white-space: nowrap; }
 /* ══ 수집기 화면(#3830 비개발자 개편) — 접두 cxc- ══════════════════════════════════════
  *  목록은 **한 상자 안의 행**(DS §6.6 리스트 상자: radius 16 · 행 사이 --line-row · hover 틴트). 종전엔 수집기마다
  *  카드 한 장이 따로 떠 있어 "카드 하나하나가 수집기라는 느낌이 안 든다"(원준 2026-09-10)는 지적을 받았다.
- *  행 문법: [서비스 로고 36] [이름 + 상태점] / [「Notion 수집기」 · 리브가 만듦 · 주기 · 마지막 수집] … [스위치][지금 수집][설정]
+ *  행 문법: [서비스 로고 36] [이름 + 상태점] / [「Notion 수집기」 · 리브가 세팅 · 주기 · 마지막 수집] … [스위치][지금 수집][설정]
  *  편집은 행 아래로 펼쳐진다(모달 아님 — 다른 수집기 상태를 보면서 만진다). 색은 상태점·경고·리브 표식 셋뿐. */
 .cxc { max-width: none; }   /* #4135 — 1160 상한을 풀었다(원준 2026-09-26 «탭 내부를 풀스크린으로 쓰고 있지도 않다»). 본문은 탭 줄과 같은 폭이다 */
 .cxc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin: 0 0 14px; }
 .cxc-head-main { min-width: 0; }
-.cxc-title { display: flex; align-items: baseline; gap: 7px; margin: 0 0 4px; font-size: 16px; font-weight: 800; color: var(--ink); letter-spacing: -0.2px; }
+/* 제목 줄은 좁으면 접힌다 — 머리 요약(.liv-sum)이 붙으면서 폰 폭에서 제목 글자가 한 자씩 꺾였다. 낱말은 안 꺾고 덩어리째 다음 줄로 간다. */
+.cxc-title > span { white-space: nowrap; }
+.cxc-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 7px; margin: 0 0 4px; font-size: 16px; font-weight: 800; color: var(--ink); letter-spacing: -0.2px; }
 .cxc-title-n { font-size: 13px; font-weight: 700; color: var(--muted-head); font-variant-numeric: tabular-nums; }
 .cxc-lead { margin: 0; font-size: 13px; color: var(--ink-sub); line-height: 1.55; word-break: keep-all; }
 .cxc-head-acts { flex: none; display: flex; align-items: center; gap: 8px; padding-top: 2px; }

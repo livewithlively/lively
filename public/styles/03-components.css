@@ -531,3 +531,4 @@ a.wikicat-owner:hover { text-decoration: underline; }
   background: var(--liv-sum-bg); color: var(--liv-sum-ink); font-size: 12px; font-weight: 600; letter-spacing: 0; white-space: nowrap; }
 .liv-sum .liv-ic { width: 16px; height: 16px; padding: 2px; border-radius: 99px; background: var(--liv-fill); color: var(--on-fill); flex: none; }
 .liv-sum b { font-weight: 800; }
+@media (max-width: 640px) { .liv-sum { margin-left: 0; } }   /* 좁은 화면에서는 다음 줄로 접히므로 왼쪽을 제목에 맞춘다 */

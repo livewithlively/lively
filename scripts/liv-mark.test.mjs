@@ -59,8 +59,9 @@ const BASE = css(read("public/styles/01-base.css")), DARK = css(read("public/sty
 ok(/\.liv-row \{[^}]*--liv-bg:[^}]*inset 4px 0 0 var\(--mint\)/.test(C03) && /\.liv-card \{[^}]*--liv-bg:[^}]*inset 4px 0 0 var\(--mint\)/.test(C03), "W6 행 · 카드 = 바탕 + 왼쪽 띠");
 ok(/\.liv-mark \{[^}]*background: var\(--liv-fill\)[^}]*color: var\(--on-fill\)/.test(C03), "W6 이름표 = 채운 초록 위 흰 글자");
 ok(/\.cxc-row\.liv-row:hover[^{]*\{[^}]*background: var\(--liv-bg\)/.test(C31) && /\.cxc-row\.liv-row\.is-editing[^{]*\{[^}]*background: var\(--liv-bg\)/.test(C31), "W7 올리거나 편집 중이어도 리브 바탕이 남는다");
-ok(C31.indexOf(".cxc-row.liv-row:hover") > C31.indexOf(".cxc-row:hover {"), "W7 그 규칙이 행의 hover 규칙 뒤에 선다(같은 무게라 뒤가 이긴다)");
+ok(C31.indexOf(".cxc-row.liv-row:hover") > C31.indexOf(".cxc-row:hover {") && C31.indexOf(".cxc-row.liv-row.is-editing") > C31.indexOf(".cxc-row.is-editing {"), "W7 그 규칙이 행의 hover · 편집 중 규칙 뒤에 선다(편집 중 규칙과는 무게가 같아 뒤가 이긴다)");
 ok(!/\.cxc-liv\b/.test(C31), "W8 종전 배지의 스타일이 남아 있지 않다");
+ok(/\.cxc-title \{[^}]*flex-wrap: wrap/.test(C31) && /\.cxc-title > span \{[^}]*white-space: nowrap/.test(C31), "W10 제목 줄은 좁으면 덩어리째 접힌다(글자가 한 자씩 꺾이지 않는다)");
 const tokens = ["--liv-tint", "--liv-tint-2", "--liv-sum-bg", "--liv-sum-ink"];
 ok(tokens.every((t) => new RegExp(t + ":\\s*#").test(BASE)) && /--liv-fill:\s*#/.test(BASE), "W9 색은 토큰이다");
 ok(tokens.every((t) => (DARK.match(new RegExp(t + ":", "g")) || []).length === 2), "W9 어두운 테마에도 값이 있다(두 블록 모두)");
