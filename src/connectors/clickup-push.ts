@@ -15,6 +15,7 @@ import { createListFor } from "./clickup/push-target.js";
 import type { ClickUpStatus, ClickUpList, ClickUpSpace } from "./clickup/types.js";
 import { resolveConnectorConfig } from "./config.js";
 import { logger } from "../log.js";
+import { drainBudgetExceeded } from "./push-budget.js";
 import { hiddenProjects } from "../v6/visibility.js";
 import { PUBLIC_VIEWER } from "../v6/visibility.js";
 
@@ -117,7 +118,8 @@ export async function pushLinkedUpsert(o: { update: () => Promise<unknown>; deta
 // skipped ≠ deferred — deferred 는 '다음 틱에 다시 시도'(아웃박스 행 유지), skipped 는 '반출 대상이 아니라 닫았다'(행 소비).
 //  종전엔 둘을 deferred 로 합산해, 운영자가 큰 deferred 를 보고 일시적 지연으로 오독하면 이번 사고(영구 미반출)를
 //  못 알아본다. 두 숫자를 갈라야 '왜 큐가 안 빠지나'를 로그만으로 판정할 수 있다. detached = 저쪽 태스크가 지워져 연결을 끊었다(행 소비).
-export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: number; deferred: number; skipped: number; failed: number; deleted: number; detached: number; scanned: number }> {
+export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: number; deferred: number; skipped: number; failed: number; deleted: number; detached: number; scanned: number; budgetStopped: boolean }> {
+  const startedAt = Date.now();
   const team = await getTeam();
   const teamId = team.id;
   const containerId = ((await resolveConnectorConfig("clickup")).container_list_id ?? "").trim() || "";
@@ -171,6 +173,7 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
       ORDER BY o.created_at LIMIT $1`, [opts?.limit ?? 200, containerId !== ""]);
 
   let pushed = 0, deferred = 0, failed = 0, deleted = 0, skipped = 0, detached = 0;
+  let budgetStopped = false;
   const markDone = (obid: number) => itemsPool.query(`UPDATE external_outbox SET done_at=now(), updated_at=now() WHERE id=$1`, [obid]);
   const markErr = (obid: number, msg: string) => itemsPool.query(`UPDATE external_outbox SET attempts=attempts+1, last_error=$2, updated_at=now() WHERE id=$1`, [obid, msg.slice(0, 500)]);
 
@@ -183,6 +186,13 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
   const isRestrictedForPublish = (projectId: number): boolean => restrictedIds.has(projectId);
 
   for (const ob of rows) {
+    // 시간예산 — 남은 행은 손대지 않고 나간다(pending 그대로 → 다음 틱이 이어받는다). 왜 자발 종료여야
+    //  하는지, 예산이 왜 자식 타임아웃보다 작아야 하는지는 push-budget.ts 머리말이 정본이다.
+    if (drainBudgetExceeded(startedAt, Date.now())) {
+      budgetStopped = true;
+      logger.warn({ pushed, scanned: rows.length }, "드레인 시간예산 소진 — 남은 행은 다음 틱에 이어간다");
+      break;
+    }
     try {
       if (ob.op === "delete") {
         if (ob.ext_id_snapshot) {
@@ -307,6 +317,6 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
       logger.warn({ err: e, outbox: ob.id, entity: ob.entity_id }, "outbox 푸시 실패(다음 틱 재시도)");
     }
   }
-  logger.info({ pushed, deferred, skipped, failed, deleted, detached, scanned: rows.length }, "clickup outbox 드레인 완료");
-  return { pushed, deferred, skipped, failed, deleted, detached, scanned: rows.length };
+  logger.info({ pushed, deferred, skipped, failed, deleted, detached, scanned: rows.length, budgetStopped }, "clickup outbox 드레인 완료");
+  return { pushed, deferred, skipped, failed, deleted, detached, scanned: rows.length, budgetStopped };
 }

@@ -2,6 +2,7 @@
 import { itemsPool, q } from "../../db/client.js";
 import { childTail, syncBatchStatus } from "../../connectors/sync-outcome.js";
 import { connectorChildEnv, startConnectorRun, RunCapacityError } from "../../connectors/run-tracker.js";
+import { PUSH_CHILD_TIMEOUT_MS } from "../../connectors/push-budget.js";
 
 // sync 대상 커넥터 — 관리탭에서 켠 것(org_connector.enabled=true, #541) 우선.
 //  비었으면(마이그레이션 전) 기존 data_source.status='active' 로 폴백 — 하위호환 무중단.
@@ -103,7 +104,7 @@ export async function runConnectorPush(params: Record<string, unknown>): Promise
   for (const sys of systems) {
     try {
       const r = await execFileP("node", ["--env-file-if-exists=.env", "dist/connectors/run-push.js", sys],
-        { timeout: 300_000, maxBuffer: 16 * 1024 * 1024, env: connectorChildEnv(sys) });
+        { timeout: PUSH_CHILD_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, env: connectorChildEnv(sys) });
       out.push({ system: sys, ok: true, tail: childTail(r.stdout) });
       //  실패에도 tail 을 담는다 — message 만 담으면 `Command failed: …` 한 줄이라 원인이 사라진다(childTail 머리말).
     } catch (e) { out.push({ system: sys, ok: false, error: (e as Error)?.message ?? String(e), tail: childTail(e) }); }
@@ -121,7 +122,7 @@ export async function runWikiPush(): Promise<{ status: string; summary: unknown 
   const execFileP = promisify(execFile);
   try {
     const r = await execFileP("node", ["--env-file-if-exists=.env", "dist/connectors/run-wiki-push.js"],
-      { timeout: 300_000, maxBuffer: 16 * 1024 * 1024, env: connectorChildEnv("wiki") });
+      { timeout: PUSH_CHILD_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, env: connectorChildEnv("wiki") });
     return { status: "ok", summary: { tail: childTail(r.stdout) } };
   } catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e), tail: childTail(e) } }; }
 }
