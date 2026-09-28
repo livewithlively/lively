@@ -115,10 +115,19 @@ export async function pushLinkedUpsert(o: { update: () => Promise<unknown>; deta
   }
 }
 
+// 아직 반출되지 않은 아웃박스 항목 수(전체). 실패는 -1 = «모름» — 감시가 그 값을 버린다.
+async function countPending(): Promise<number> {
+  try {
+    const row: { n: string | number } | undefined = await one(itemsPool,
+      `SELECT count(*) AS n FROM external_outbox WHERE system='clickup' AND done_at IS NULL`);
+    return row ? Number(row.n) : -1;
+  } catch { return -1; }
+}
+
 // skipped ≠ deferred — deferred 는 '다음 틱에 다시 시도'(아웃박스 행 유지), skipped 는 '반출 대상이 아니라 닫았다'(행 소비).
 //  종전엔 둘을 deferred 로 합산해, 운영자가 큰 deferred 를 보고 일시적 지연으로 오독하면 이번 사고(영구 미반출)를
 //  못 알아본다. 두 숫자를 갈라야 '왜 큐가 안 빠지나'를 로그만으로 판정할 수 있다. detached = 저쪽 태스크가 지워져 연결을 끊었다(행 소비).
-export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }): Promise<{ pushed: number; deferred: number; skipped: number; failed: number; deleted: number; detached: number; scanned: number; visited: number; budgetStopped: boolean }> {
+export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }): Promise<{ pushed: number; deferred: number; skipped: number; failed: number; deleted: number; detached: number; scanned: number; visited: number; budgetStopped: boolean; remaining: number }> {
   //  원점은 호출자가 넘긴다 — 부모의 하드 타임아웃은 프로세스 스폰부터 재는데 여기서 찍으면
   //   node 부팅·모듈 로드·풀 연결만큼 여유가 조용히 깎인다(run-push 가 performance.timeOrigin 을 넘긴다).
   //   기본값은 지금 — 장수 프로세스가 이 함수를 직접 부를 때 원점이 과거로 밀려 즉시 소진되지 않게.
@@ -321,6 +330,9 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
       logger.warn({ err: e, outbox: ob.id, entity: ob.entity_id }, "outbox 푸시 실패(다음 틱 재시도)");
     }
   }
-  logger.info({ pushed, deferred, skipped, failed, deleted, detached, scanned: rows.length, visited, budgetStopped }, "clickup outbox 드레인 완료");
-  return { pushed, deferred, skipped, failed, deleted, detached, scanned: rows.length, visited, budgetStopped };
+  //  이번 배치가 아니라 **전체** 잔여다 — 정체 감시가 「예산을 다 쓰고도 줄지 않았나」를 보려면
+  //   배치 상한(LIMIT)에 잘리지 않은 수가 필요하다. 못 세면 -1(모름) — 0 으로 뭉개면 감시가 눈을 감는다.
+  const remaining = await countPending();
+  logger.info({ pushed, deferred, skipped, failed, deleted, detached, scanned: rows.length, visited, budgetStopped, remaining }, "clickup outbox 드레인 완료");
+  return { pushed, deferred, skipped, failed, deleted, detached, scanned: rows.length, visited, budgetStopped, remaining };
 }

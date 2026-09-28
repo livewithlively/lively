@@ -30,6 +30,32 @@ export function childTail(x: unknown): string {
   return why ? `${why.slice(0, 1000)} | ${last}` : last;
 }
 
+/** 드레인이 마지막 실행에서 남긴 수치 — 정체 감시(ops/outbox-watch.ts)가 보는 값. */
+export interface DrainSummary {
+  /** 아직 반출되지 않은 아웃박스 항목 수(이번 배치가 아니라 **전체**). */
+  remaining: number;
+  /** 이 실행이 시간예산에 걸려 스스로 멈췄나(connectors/push-budget.ts). */
+  budgetStopped: boolean;
+}
+
+/**
+ * 자식 stdout 의 마지막 줄(완료 요약 JSON)에서 드레인 수치를 꺼낸다.
+ *
+ *  ⚠ 모양이 다르면 **undefined 다 — 0 으로 뭉개지 않는다.** 모르는 것을 «큐가 비었다» 로 읽으면
+ *   정체 감시가 구조적으로 눈을 감는다(그게 이 파서가 있는 이유다). 타입이 어긋나는 것도 같다.
+ *  childTail 과 달리 문자열 입력만 받는다 — 호출부가 어느 스트림을 보는지 명시하게 한다.
+ */
+export function childDrainSummary(stdout: unknown): DrainSummary | undefined {
+  if (typeof stdout !== "string") return undefined;
+  const last = stdout.trim().split("\n").pop();
+  if (!last) return undefined;
+  try {
+    const o = JSON.parse(last) as Record<string, unknown>;
+    if (typeof o.remaining !== "number" || typeof o.budgetStopped !== "boolean") return undefined;
+    return { remaining: o.remaining, budgetStopped: o.budgetStopped };
+  } catch { return undefined; }
+}
+
 /** runConnectorSync 가 타깃마다 summary 에 넣는 항목의 관측 가능한 모양. */
 export interface SyncTargetOutcome {
   ok?: unknown;

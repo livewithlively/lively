@@ -47,6 +47,7 @@ import { backfillSessionStates } from "../sessions/session-state-backfill.js"; /
 import { ensureSharedCache } from "../ops/build-cache.js";
 import { startBoxWatch } from "../ops/box-watch.js";
 import { startCronWatch } from "../ops/cron-watch.js";
+import { startOutboxWatch } from "../ops/outbox-watch.js";
 import { sendBoxAlert } from "../ops/alerts.js";
 import { recoverOrphanConnectorRuns } from "../connectors/run-tracker.js";
 import { migrateConnectorsToCollectors } from "../org/store/collectors.js"; // #1419 T1 — 레거시 커넥터 → 수집기 승격(멱등)
@@ -273,6 +274,7 @@ export const DB_BOOT_STEPS: BootStep[] = [
   //  박스 감시와 같은 게이트(scheduler): 크론이 도는 프로세스에서만 감시가 돌아야 두 인스턴스가 같은
   //  경보를 중복 발송하지 않는다.
   { name: "cron-watch", gate: "scheduler", run: () => startCronWatch({ send: async (a) => (await sendBoxAlert(a)).sent }) },
+  { name: "outbox-watch", gate: "scheduler", run: () => startOutboxWatch({ send: async (a) => (await sendBoxAlert(a)).sent }) },
   // 자동 pending 임베딩 백필(#669) — 부팅 30초 후 1회(배포/업데이트 직후 잔량 자가치유 — 30초는 사이드카
   //  Ollama 동시 부팅 박스의 헬스 확보 여유) + 10분 주기(미러 리셋·훅 실패 잔량 흡수; sync 완료 트리거의 폴백).
   //  provider off 면 설정 조회 후 no-op. 스케줄러와 같은 게이트 — 스모크 인스턴스(LIVELY_NO_SCHEDULER=1,

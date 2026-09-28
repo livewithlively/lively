@@ -1,7 +1,7 @@
 // 크론 액션: 커넥터 sync/push·위키 push — R16 에서 scheduler runJob if-체인 본문을 원문 이동.
 import { itemsPool, q } from "../../db/client.js";
-import { childTail, syncBatchStatus } from "../../connectors/sync-outcome.js";
 import { connectorChildEnv, startConnectorRun, RunCapacityError } from "../../connectors/run-tracker.js";
+import { childTail, childDrainSummary, syncBatchStatus } from "../../connectors/sync-outcome.js";
 import { PUSH_CHILD_TIMEOUT_MS } from "../../connectors/push-budget.js";
 
 // sync 대상 커넥터 — 관리탭에서 켠 것(org_connector.enabled=true, #541) 우선.
@@ -105,7 +105,9 @@ export async function runConnectorPush(params: Record<string, unknown>): Promise
     try {
       const r = await execFileP("node", ["--env-file-if-exists=.env", "dist/connectors/run-push.js", sys],
         { timeout: PUSH_CHILD_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, env: connectorChildEnv(sys) });
-      out.push({ system: sys, ok: true, tail: childTail(r.stdout) });
+      //  tail 은 사람이 읽는 한 줄이고, drain 은 감시(ops/outbox-watch.ts)가 읽는 구조화 값이다.
+      //   같은 정보를 문자열에서 다시 파싱하게 두면 감시가 로그 포맷 변경에 깨진다.
+      out.push({ system: sys, ok: true, tail: childTail(r.stdout), drain: childDrainSummary(r.stdout) });
       //  실패에도 tail 을 담는다 — message 만 담으면 `Command failed: …` 한 줄이라 원인이 사라진다(childTail 머리말).
     } catch (e) { out.push({ system: sys, ok: false, error: (e as Error)?.message ?? String(e), tail: childTail(e) }); }
   }
