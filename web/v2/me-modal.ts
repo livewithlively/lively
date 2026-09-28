@@ -35,7 +35,7 @@ import {
 } from '../me-profile.js';
 import { THEME_ORDER, applyToOpenTabs, harnessThemeSync, pushThemeToOpenTabs, setApplyToOpenTabs, setHarnessThemeSync, setThemePref, themePref, type ThemePref } from '../theme.js';
 //  #1898 — 관리탭 화면의 본체를 그대로 부른다(소유는 그쪽 — 여기서 다시 만들지 않는다).
-import { myAiAccountsCard } from '../me-ai.js';
+import { myAiAccountsGrid } from '../me-ai.js';
 import { autoPane } from './me-auto.js';   // #1898 [자동으로 하는 일] — 세션 주입 화면과 같은 행을 본다(사본 없음)
 //  #2199 — [고급 설정]은 설정 화면의 정보구조(그룹 · 섹션 · 권한 숨김)를 **그쪽 표 그대로** 읽는다(사본 없음).
 import { adminDirectory, type AdminDirGroup } from '../admin-shell.js';
@@ -207,33 +207,33 @@ function saveRow(btn: HTMLElement, status: HTMLElement): HTMLElement {
  *  형제는 **머리가 같아야** 형제로 읽힌다. 다른 것은 내용의 성격뿐이라, 그 차이는 본문 면에서만 말한다
  *  (모여 온 것 = 틴트 판, 내가 쓰는 것 = 그냥 폼). 머리 규격을 인자로 흩뜨리지 않고 여기 한 곳에 둔다.
  */
-function meSection(o: { title: string; desc?: string | null; pill?: HTMLElement | null }, ...kids: any[]): HTMLElement {
-  return el('section', { class: 'v2me-sec' },
+function meSection(o: { title: string; desc?: string | null; pill?: HTMLElement | null; cls?: string }, ...kids: any[]): HTMLElement {
+  return el('section', { class: 'v2me-sec' + (o.cls ? ' ' + o.cls : '') },
     el('div', { class: 'v2me-sec-h' }, el('h4', { class: 'v2me-sec-t', text: o.title }), o.pill ?? null),
     o.desc ? el('p', { class: 'v2me-sec-d' }, ...uiText(o.desc)) : null,
     el('div', { class: 'v2me-sec-b' }, ...kids));
 }
 // 이 창에서 관리탭 안쪽 화면으로 건너가는 줄 — 여기서 다 하지 않고 **어디로 가면 되는지**만 말한다.
-function moreLink(href: string, label: string, desc: string, close: () => void, opts?: { gated?: boolean }): HTMLElement {
+//  «관리자» 배지는 걷었다(원준 2026-09-28 — 관리자만 보는 기능을 두지 않는다).
+function moreLink(href: string, label: string, desc: string, close: () => void): HTMLElement {
   return el('a', { class: 'v2me-more', href, onclick: () => close() },
     el('span', { class: 'v2me-more-t', text: label }),
     // 권한 배지(#2199) — 설정 화면 사이드바의 '관리자' 배지와 같은 판정 · 같은 문구(admin-shell navPermBadge). 내부 scope 이름은 안 쓴다.
-    opts && opts.gated ? el('span', { class: 'v2me-more-badge', text: '관리자', title: '관리 권한이 있어야 보고 편집할 수 있는 항목입니다.' }) : null,
     el('span', { class: 'v2me-more-d', text: desc }),
     ic(['M9 6l6 6-6 6'], 'v2me-more-ic'));
 }
 
 // ── ① 프로필 — 얼굴·이름. 팀 화면 어디에서나 나를 가리키는 것. ──
 function profilePane(data: any, onSaved: () => void): HTMLElement {
-  const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '이름 (비우면 이메일·아이디로 표시됩니다)' });
+  const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '이름 (비워 두면 이메일 아이디가 표시됩니다)' });
   const nickIn = el('input', { type: 'text', value: data.nickname || '', placeholder: '닉네임 (예: 원준)' });
   // 「이 닉네임을 내 이름으로 사용」(#1813) — 켜면 사람 이름을 보이는 자리 **전부**에서 닉네임이 이름을 대체한다.
   //  닉네임이 비어 있으면 켤 수 없다(켜 둔 채 닉네임을 지우면 이름이 사라진 것처럼 보인다 — 서버도 같은 규칙으로 끈다).
   const useNick = el('input', { type: 'checkbox' }) as HTMLInputElement;
   useNick.checked = data.use_nickname === true;
   const useNickRow = el('label', { class: 'v2me-check' }, useNick,
-    el('span', { text: '이 닉네임을 내 이름으로 사용' }),
-    el('span', { class: 'v2me-check-d', text: '켜면 사이드바·작업 기록 등 이름이 나오는 곳에 닉네임이 표시됩니다.' }));
+    el('span', { text: '이름 대신 닉네임 표시' }),
+    el('span', { class: 'v2me-check-d', text: '이름이 표시되는 모든 곳에 닉네임이 대신 표시됩니다. 닉네임을 입력해야 켤 수 있습니다.' }));
   const syncUseNick = () => {
     const has = !!String((nickIn as any).value || '').trim();
     useNick.disabled = !has;
@@ -260,12 +260,12 @@ function profilePane(data: any, onSaved: () => void): HTMLElement {
     } catch (e: any) { toast((e && e.message) || '저장하지 못했습니다.', true); }
     (btn as any).disabled = false;
   });
-  return pane('프로필', '이름과 사진은 프로젝트·작업 기록·팀 화면 어디에서나 나를 가리키는 얼굴입니다.',
+  //  이메일(로그인 아이디)은 [계정 · 보안]으로 옮겼다(원준 2026-09-28) — 이 화면이 저장 버튼까지 한 화면에 들어가게.
+  return pane('프로필', '이름과 프로필 사진은 프로젝트, 작업 기록, 팀 화면 등 내 이름이 표시되는 모든 곳에 함께 표시됩니다.',
     field('프로필 사진', ava.node),
     field('이름', nameIn),
     field('닉네임', nickIn),
     useNickRow,
-    data.email ? field('이메일 (로그인 아이디 · 변경은 관리자가 합니다)', el('div', { class: 'admin-ro', text: data.email })) : null,
     saveRow(btn, status));
 }
 
@@ -291,13 +291,13 @@ function onboardingCard(liv: any): HTMLElement {
   });
 
   if (!rows.length) {
-    return meSection({ title: '온보딩에서 알려주신 것',
-      desc: '아직 리브와 나눈 이야기가 없어요. 리브가 묻는 것에 답하면 하는 일·일하는 방식이 여기에 저절로 모이고, 그대로 내 AI 세션에 실립니다.' },
+    return meSection({ title: '리브가 설정한 내용', cls: 'is-liv',
+      desc: '아직 리브와 나눈 대화가 없습니다. 리브의 질문에 답하면 하는 일과 일하는 방식이 여기에 모이고, 내 AI 세션이 시작될 때 자동으로 주입됩니다.' },
     el('a', { class: 'btn btn-ghost btn-sm', href: '#/liv', text: '리브와 이야기하기' }));
   }
-  return meSection({ title: '온보딩에서 알려주신 것',
-    pill: el('span', { class: 'pill pill-ok', text: '반영 중' }),
-    desc: '리브와 이야기하며 알려주신 내용이에요. 따로 저장하지 않아도 내 AI 가 매 세션 시작할 때 아래 항목들과 함께 읽습니다. 고치려면 리브에게 말씀하세요.' },
+  //  리브가 세팅한 것은 어디서나 같은 표시(리브 표시 1안 — 민트 바탕 + 왼쪽 띠, 배지 없음. 원준 2026-09-28).
+  return meSection({ title: '리브가 설정한 내용', cls: 'is-liv',
+    desc: '리브와 대화하며 알려주신 내용입니다. 이 내용은 내 AI 세션이 시작될 때 자동으로 주입됩니다. 내용을 바꾸려면 리브에게 말씀해 주세요.' },
   el('dl', { class: 'v2me-ob-l' }, ...rows.map((r) => el('div', { class: 'v2me-ob-r' },
     el('dt', { text: r.k }), el('dd', { text: r.v })))));
 }
@@ -310,14 +310,14 @@ function aiPane(data: any, liv: any): HTMLElement {
   const roleIn = el('input', { type: 'text', value: pr.role, placeholder: '예: 라이블리 공동대표 / 백엔드 개발 / 디자이너' });
   const addressIn = el('input', { type: 'text', value: pr.address, placeholder: '예: 원준님 / 대표님' });
   const memoTa = el('textarea', { class: 'admin-ta admin-ta-prose', rows: '5',
-    placeholder: '내 AI 가 알아두면 좋은 규칙·선호·맥락을 자유롭게 적어주세요.\n예: 금액은 항상 원 단위로 / 보고는 결론부터 / 화요일 오전엔 회의라 답이 늦어요' });
+    placeholder: 'AI가 알아야 할 규칙, 선호, 배경을 자유롭게 입력하세요.\n예: 금액은 원 단위로 표시 / 보고는 결론부터 / 화요일 오전은 회의로 답이 늦음' });
   (memoTa as any).value = pr.memo;
 
   const devSel = { v: pr.dev };
   const devHint = el('p', { class: 'prof-hint' });
   const renderDevHint = (): void => {
     const d = PROF_DEV.find((x) => x.v === devSel.v);
-    devHint.textContent = d ? d.hint : '항목을 고르면 AI 가 그 수준에 맞춰 기술 설명의 자세한 정도를 조절합니다.';
+    devHint.textContent = d ? d.hint : '항목을 선택하면 AI가 그 수준에 맞춰 기술 설명의 자세한 정도를 조절합니다.';
   };
   const devChips = profChips(PROF_DEV, devSel, (o) => o.label, (o) => o.v, renderDevHint);
   renderDevHint();
@@ -348,25 +348,25 @@ function aiPane(data: any, liv: any): HTMLElement {
     // 이름·아바타는 안 보낸다 — 서버가 보존하므로 [프로필]이 지워지지 않는다.
     try {
       await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify({ body_md: body }) });
-      toast('저장했습니다 — 다음 세션부터 내 AI 가 반영합니다.'); status.textContent = '저장했습니다.';
+      toast('저장했습니다. 새로 여는 AI 세션부터 적용됩니다.'); status.textContent = '저장했습니다.';
     } catch (e: any) { toast((e && e.message) || '저장하지 못했습니다.', true); }
     (btn as any).disabled = false;
   });
 
-  return pane('AI 개인화', '내 AI 가 나에 대해 무엇을 알고 일할지 정합니다. 나에게만 적용되고 팀에는 공유되지 않습니다.',
+  return pane('AI 개인화', '내 AI 세션에 적용할 개인 설정입니다. 이 설정은 나에게만 적용되며 팀원에게는 공유되지 않습니다.',
     onboardingCard(liv),
-    meSection({ title: '내가 적는 것', desc: '내가 직접 정하는 항목입니다. 저장하면 다음 세션부터 내 AI 가 반영합니다.' },
+    meSection({ title: '직접 설정', desc: '여기서 입력한 내용은 저장한 뒤 새로 여는 AI 세션부터 주입됩니다.' },
       //  ⚠ 짧은 값 두 개(역할·호칭)를 각각 전폭으로 두면 다섯 글자짜리 답에 520px 짜리 칸이 붙는다 —
       //   화면이 비어 보이고 아래 칩 묶음과 리듬도 안 맞는다. 한 줄에 나란히 두고 좁은 화면에서만 접는다.
       el('div', { class: 'v2me-f2' },
         field('역할', roleIn),
-        field('호칭 (AI 가 나를 부르는 말)', addressIn)),
+        field('호칭 (AI가 나를 부르는 말)', addressIn)),
       field('개발 이해도', el('div', {}, devChips, devHint)),
       field('말투', toneChips),
-      field('사용 언어 (AI 가 답하는 언어)', el('div', {}, langChips,
-        el('p', { class: 'prof-hint' }, ...uiText('고르거나 직접 적은 언어로 내 AI 가 답합니다. 비우면 조직 기본값(주로 한국어)을 따릅니다.')))),
+      field('사용 언어 (AI가 답하는 언어)', el('div', {}, langChips,
+        el('p', { class: 'prof-hint' }, ...uiText('선택하거나 입력한 언어로 AI가 답합니다. 비워 두면 워크스페이스 기본 언어로 답합니다.')))),
       field('추가 메모', el('div', {}, memoTa,
-        el('p', { class: 'prof-hint' }, ...uiText('비밀번호·API 키·개인키 같은 비밀값은 적지 마세요. 토큰으로 보이는 값이 들어 있으면 저장되지 않고 오류로 알려드립니다.')))),
+        el('p', { class: 'prof-hint' }, ...uiText('비밀번호, API 키, 개인 키 같은 비밀 값은 입력하지 마세요. 토큰 형식의 값이 포함되면 저장되지 않습니다.')))),
       saveRow(btn, status)));
 }
 
@@ -376,10 +376,10 @@ function aiPane(data: any, liv: any): HTMLElement {
 function aiAccountPane(): { node: HTMLElement; init: () => void } {
   const host = el('div');
   const node = pane('AI 계정 연결',
-    '내 AI 세션이 어떤 AI 로, 누구 계정으로 실행되는지 봅니다. 세션에서 로그인 오류가 나면 여기서 다시 로그인하세요.',
+    'AI 세션과 자동 작업에 사용할 AI 계정을 연결합니다. AI 세션에서 로그인 오류가 나면 여기서 다시 로그인하세요.',
     host);
   node.classList.add('v2me-pane-wide');   // 계정 행은 [이름 · 배지 · 버튼] 한 줄이라 520px 에선 버튼이 접힌다
-  return { node, init: () => host.replaceChildren(myAiAccountsCard()) };
+  return { node, init: () => host.replaceChildren(myAiAccountsGrid()) };
 }
 
 // ── 외부 서비스 — 이 창에서 **뺐다**(2026-09-03, 원준). ──────────────────────────────
@@ -409,8 +409,10 @@ function lookPane(close: () => void): HTMLElement {
   };
   paintSeg();
 
-  const classicBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '클래식 화면으로 바꾸기',
+  //  화면 모드 = 토글(원준 2026-09-28: «새 화면을 권장한다는 느낌»). 켜짐 = 새 화면. 끄는 순간 클래식으로 바뀐다.
+  const modeSw = el('button', { class: 'v2a-sw', type: 'button', 'aria-label': '새 화면 사용',
     onclick: () => {
+      modeSw.classList.add('off');
       close();
       //  #1898 — 셸을 바꾸면 페이지가 통째로 다시 뜨고 이 창은 사라진다. 도장을 찍어 **클래식 쪽 부팅이
       //   같은 성격의 창('내 정보')을 다시 열게** 한다: 되돌아오는 버튼이 그 자리에 그대로 있어야 한다.
@@ -435,7 +437,7 @@ function lookPane(close: () => void): HTMLElement {
       const ids = v2OpenSessionIds();
       if (!ids.length) return;
       const r = await pushThemeToOpenTabs(ids);
-      toast([r.applied ? `${r.applied}개 탭을 바꿨어요` : '바꾼 탭이 없어요', ...r.notes].join(' · '));
+      toast([r.applied ? `AI 세션 ${r.applied}개의 테마를 바꿨습니다` : '테마를 바꾼 AI 세션이 없습니다', ...r.notes].join(' · '));
     } catch (e: any) { toast((e && e.message) || '열린 탭에 적용하지 못했습니다', true); }
   };
 
@@ -445,28 +447,34 @@ function lookPane(close: () => void): HTMLElement {
     ...(harnessThemeSync() ? { checked: '' } : {}),
     onchange: (e: any) => setHarnessThemeSync(!!e.target.checked) }) as HTMLInputElement;
 
-  return pane('화면', '이 브라우저에서 화면이 어떻게 보일지 정합니다. 기기마다 따로 기억되고 팀에는 영향이 없습니다.',
+  //  AI 세션 두 칸은 테마 **아래**에 붙는다(원준 2026-09-28) — 테마를 고른 다음 그 테마를 어디까지 적용할지 고르는 순서.
+  return pane('화면', '화면 테마와 화면 모드를 설정합니다. 설정은 이 브라우저에만 저장되며, 다른 기기와 팀원에게는 적용되지 않습니다.',
     field('테마', el('div', {}, seg,
-      el('p', { class: 'prof-hint' }, ...uiText('시스템을 고르면 기기의 밝게·어둡게 설정을 그대로 따라갑니다.')))),
-    field('AI 세션', el('div', {},
-      el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer;' }, aiCb,
-        el('span', { style: 'font-size:13.5px' }, ...uiText('새로 여는 AI 세션도 이 테마로 띄웁니다.'))),
-      el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer; margin-top:6px;' }, tabsCb,
-        el('span', { style: 'font-size:13.5px' }, ...uiText('현재 열린 탭도 모두 함께 바꿉니다.'))),
-      el('p', { class: 'prof-hint' }, ...uiText('첫째 칸을 끄면 AI 하네스가 저마다 저장해 둔 테마를 그대로 씁니다. 둘째 칸을 켜면 지금 열려 있는 세션 탭의 하네스까지 그 자리에서 바꿉니다 — 하네스마다 지원 여부가 달라, 바꾼 개수와 못 바꾼 이유를 알려드려요.')))),
-    field('화면 모드', el('div', { class: 'v2me-inline' }, classicBtn,
-      el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('지금은 새 화면입니다. 옛 화면으로 바꿔도 이 브라우저에서만 적용되고, 바꾼 직후 뜨는 「내 정보」 창에서 바로 돌아올 수 있어요.')))));
+      el('p', { class: 'prof-hint' }, ...uiText('시스템을 선택하면 기기의 라이트 모드, 다크 모드 설정을 따릅니다.')),
+      el('div', { class: 'v2me-sub' },
+        el('label', { class: 'v2me-cbl' }, aiCb, el('span', { text: '새로 여는 AI 세션에도 이 테마를 적용합니다.' })),
+        el('label', { class: 'v2me-cbl' }, tabsCb, el('span', { text: '이미 열린 AI 세션에도 이 테마를 적용합니다.' }))))),
+    field('화면 모드', el('div', { class: 'v2me-swr' },
+      el('span', { class: 'v2me-swr-t' },
+        el('span', { class: 'v2me-swr-l' }, '새 화면 사용', el('span', { class: 'pill pill-ok', text: '권장' })),
+        el('span', { class: 'v2me-swr-d', text: '끄면 화면 개편 이전의 클래식 화면으로 바뀝니다. 이전 화면이 꼭 필요한 경우가 아니면 켜 두세요.' })),
+      modeSw)));
 }
 
 // ── ⑥ 계정 · 보안 — 어떻게 들어오는가. 프로필(누구로 보이는가)과 축이 달라 따로 둔다. ──
 function accountPane(data: any, logins: any): HTMLElement {
   const kids: any[] = [];
+  //  이메일(로그인 아이디)은 [프로필]에서 옮겨 왔다(원준 2026-09-28) — '어떻게 들어오나'의 일부다.
   if (data.email) {
+    kids.push(field('이메일', el('div', {},
+      el('div', { class: 'v2me-ro', text: data.email }),
+      el('p', { class: 'prof-hint' }, ...uiText('로그인 아이디입니다. 변경하려면 워크스페이스 관리자에게 요청하세요.')))));
     kids.push(field('비밀번호', el('div', { class: 'v2me-inline' },
       el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }),
-      el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿉니다.')))));
+      el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('현재 비밀번호를 확인한 뒤 새 비밀번호로 변경합니다.')))));
   }
   if (logins && logins.oidcAvailable) kids.push(field('회사 계정 로그인', companyLoginRow(logins)));
+  kids.push(selfUpdateField());
   //  [AI 계정 연결]은 이 창의 화면이 됐다(#1898) — 더는 밖으로 내보내지 않는다.
   //  [내 스킬 · 훅]으로 건너가던 '더 자세한 설정' 줄도 뺐다(원준 지시 2026-08-27): 이 칸은
   //  '어떻게 들어오는가'인데 그 줄만 축이 달랐고, 관리탭에 같은 자리가 이미 있다.
@@ -481,15 +489,46 @@ function accountPane(data: any, logins: any): HTMLElement {
   //   실측에서 "계정·보안에 탈퇴가 없는데?"로 그대로 드러났다. 무엇을 뜻하는지는 서버가 판정해
   //   미리보기(plan.mode)로 알려 주므로, 화면은 **항상 문을 연다**. 자기가 어떤 배포인지 화면이
   //   먼저 알아맞히려 들면 그 판단이 서버와 갈리는 순간 사람이 빈손이 된다.
-  kids.push(el('div', { class: 'v2me-more-k', text: '계정 정리' }),
+  kids.push(el('div', { class: 'v2me-more-k', text: '계정 삭제' }),
     el('button', {
-      type: 'button', class: 'v2me-more', style: 'width:100%;text-align:left;background:none;border:0;cursor:pointer',
+      type: 'button', class: 'v2me-more', style: 'width:100%;text-align:left;cursor:pointer;background:none;font:inherit',
       onclick: () => accountDeleteModal(),
     },
       el('span', { class: 'v2me-more-t', text: '회원 탈퇴' }),
-      el('span', { class: 'v2me-more-d', text: '더 이상 이곳에 들어오지 않습니다. 무엇이 지워지고 무엇이 남는지 먼저 보여 드립니다.' }),
+      el('span', { class: 'v2me-more-d', text: '라이블리 계정을 삭제합니다. 탈퇴하기 전에 삭제되는 데이터와 남는 데이터를 확인할 수 있습니다.' }),
       ic(['M9 6l6 6-6 6'], 'v2me-more-ic')));
-  return pane('계정 · 보안', '내가 이 워크스페이스에 어떻게 들어오는지 정합니다.', ...kids);
+  return pane('계정 · 보안', '로그인 정보와 계정 보안을 관리합니다.', ...kids);
+}
+
+// ── 라이블리 자동 업데이트 — [AI 주입 문구] 발치에서 옮겨 왔다(원준 2026-09-28). ──
+//  ⚠ 값은 **워크스페이스 전체** 설정이다(org_runtime_config.hooks.self_update). 개인 탭에 서지만 한 사람이 끄면
+//   팀 전체가 꺼지므로 «워크스페이스 전체 적용» 표지를 붙인다. 정본은 [AI 주입 문구]와 같은 행(사본 없음).
+function selfUpdateField(): HTMLElement {
+  const b = el('button', { class: 'v2a-sw', type: 'button', 'aria-label': '켜짐', disabled: true }) as HTMLButtonElement;
+  let hooks: any = {};
+  void api('/api/ui/org').then((data: any) => {
+    hooks = (data && data.runtimeConfig && data.runtimeConfig.hooks) || {};
+    const on = hooks.self_update !== false;
+    b.classList.toggle('off', !on); b.setAttribute('aria-label', on ? '켜짐' : '꺼짐'); b.disabled = false;
+  }).catch(() => { b.title = '설정을 불러오지 못했습니다'; });
+  b.addEventListener('click', async () => {
+    const next = b.classList.contains('off');
+    b.disabled = true;
+    try {
+      await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ hooks: { ...hooks, self_update: next } }) });
+      hooks = { ...hooks, self_update: next };
+      b.classList.toggle('off', !next); b.setAttribute('aria-label', next ? '켜짐' : '꺼짐');
+      toast(next ? '라이블리 자동 업데이트를 켰습니다.' : '라이블리 자동 업데이트를 껐습니다.');
+    } catch (e: any) { toast((e && e.message) || '저장하지 못했습니다', true); }
+    b.disabled = false;
+  });
+  return el('div', { class: 'field' },
+    el('label', { class: 'field-label' }, '라이블리 자동 업데이트', el('span', { class: 'v2me-scope', text: '워크스페이스 전체 적용' })),
+    el('div', { class: 'v2me-swr' },
+      el('span', { class: 'v2me-swr-t' },
+        el('span', { class: 'v2me-swr-l', text: '자동으로 최신 버전 사용' }),
+        el('span', { class: 'v2me-swr-d', text: '라이블리의 새 버전을 확인하고, 다음 AI 세션부터 새 버전을 사용합니다.' })),
+      b));
 }
 
 // ── ③ 화면 — 이 브라우저에서 내가 보는 모습. 서버에 저장되지 않는다(기기별 취향). ──
@@ -500,33 +539,38 @@ function accountPane(data: any, logins: any): HTMLElement {
 //   하면 "껐는데 안 꺼졌다"가 난다. 텍스트를 고치는 [프로필]·[AI 개인화]가 저장 버튼을 쓰는 것과 다른
 //   이유이고, 그 구분은 일반적인 관례와 같다.
 const NOTIFY_ROWS: Array<{ key: string; label: string; desc: string }> = [
-  { key: 'session_waiting', label: 'AI 가 확인을 기다릴 때',
-    desc: '승인이나 선택을 물어놓고 멈춰 있을 때 알려 줍니다. 놓치면 AI 가 그대로 서 있게 됩니다.' },
-  { key: 'session_done', label: 'AI 가 작업을 마쳤을 때',
-    desc: '맡겨 둔 작업이 끝나는 순간 알려 줍니다. 세션을 여러 개 동시에 돌릴 때 가장 자주 받게 됩니다.' },
-  { key: 'person', label: '사람이 나를 부를 때',
-    desc: '댓글에서 나를 언급하거나, 내가 참여한 일에 댓글이 달리면 알려 줍니다.' },
+  { key: 'session_waiting', label: 'AI 세션이 확인을 요청할 때',
+    desc: 'AI 세션이 작업을 계속하기 전에 승인이나 선택을 요청하면 알림이 울립니다. 확인하기 전까지 그 AI 세션은 작업을 진행하지 않습니다.' },
+  { key: 'session_done', label: 'AI 세션이 응답을 마쳤을 때',
+    desc: 'AI 세션이 요청받은 작업을 마치고 응답을 끝내면 알림이 울립니다.' },
+  { key: 'person', label: '나를 언급하거나 댓글이 달렸을 때',
+    desc: '댓글에서 나를 언급하거나, 내가 참여한 프로젝트와 태스크에 댓글이 달리면 알림이 울립니다.' },
 ];
 
 function notifyPane(): HTMLElement {
   const status = el('span', { class: 'v2me-status' });
   const list = el('div', { class: 'v2me-sw-list' }, skeleton('알림 설정을 불러오는 중'));
+  //  값은 구성원 아이디별로 서버에 저장된다(v6/notify-pref-store) — 그래서 «계정 기준» 이라고 말한다.
   const body = pane('알림',
-    '라이블리 데스크톱 앱이 화면 밖에 띄우는 알림입니다. 여기서 정한 값은 **내가 쓰는 모든 컴퓨터에 함께** 적용됩니다.',
+    '라이블리 데스크톱 앱에서 받을 알림을 설정합니다. 설정은 내 계정에 저장되며, 같은 계정으로 로그인한 모든 컴퓨터에 똑같이 적용됩니다.',
     list,
-    el('p', { class: 'prof-hint', style: 'margin-top:14px' },
-      ...uiText('알림은 데스크톱 앱이 띄웁니다 — 앱을 아직 안 쓰신다면 이 설정만으로는 알림이 오지 않습니다. 앱은 창을 닫아도 메뉴막대에 남아 있어, 라이블리를 보고 있지 않을 때도 알려 줍니다.')));
+    //  다운로드 주소는 사용 가이드 · 처음 설정과 같은 곳(GitHub 최신 릴리스 페이지).
+    el('div', { class: 'v2me-dl' },
+      el('div', {},
+        el('b', { text: '알림을 받으려면 라이블리 데스크톱 앱이 필요합니다.' }),
+        el('p', { class: 'prof-hint', style: 'margin:2px 0 0' }, ...uiText('웹 브라우저에서만 라이블리를 쓰는 경우에는 알림이 울리지 않습니다.'))),
+      el('a', { class: 'btn btn-primary btn-sm', href: 'https://github.com/livewithlively/lively/releases/latest', target: '_blank', rel: 'noopener', text: '데스크톱 앱 다운로드' })));
 
   const paint = (prefs: Record<string, boolean>): void => {
     list.replaceChildren(...NOTIFY_ROWS.map((r) => {
-      const box = el('input', { type: 'checkbox', class: 'v2me-sw-in' }) as HTMLInputElement;
+      const box = el('input', { type: 'checkbox', class: 'v2me-sw-in', role: 'switch' }) as HTMLInputElement;
       box.checked = prefs[r.key] !== false;
       box.addEventListener('change', () => {
         const on = box.checked;
         box.disabled = true;
         status.textContent = '저장 중…';
         void api('/api/ui/me/notify-prefs', { method: 'POST', body: JSON.stringify({ [r.key]: on }) })
-          .then(() => { status.textContent = on ? '켰습니다' : '껐습니다'; })
+          .then(() => { status.textContent = on ? '켰습니다.' : '껐습니다.'; })
           .catch((e: any) => {
             box.checked = !on;                       // 서버가 못 받았으면 화면도 되돌린다(거짓 상태를 남기지 않는다)
             status.textContent = '';
@@ -534,10 +578,12 @@ function notifyPane(): HTMLElement {
           })
           .finally(() => { box.disabled = false; });
       });
-      return el('label', { class: 'v2me-sw' }, box,
+      //  스위치는 줄 오른쪽 끝(원준 2026-09-28 — 토글은 오른쪽이 일반적). 줄 전체가 <label> 이라 글을 눌러도 켜고 끈다.
+      return el('label', { class: 'v2me-sw' },
         el('span', { class: 'v2me-sw-txt' },
           el('span', { class: 'v2me-sw-l', text: r.label }),
-          el('span', { class: 'v2me-sw-d' }, ...uiText(r.desc))));
+          el('span', { class: 'v2me-sw-d' }, ...uiText(r.desc))),
+        box);
     }), status);
   };
 
@@ -561,49 +607,45 @@ function notifyPane(): HTMLElement {
 //   사이드바가 있는 전폭 화면이다(880×620 안에 액자로 넣으면 두 사이드바가 겹친다).
 //  권한 데이터(GET /api/ui/org)를 더 부르므로 **처음 펼 때** 그린다(머리말 ⚠ 규칙). 관리탭을 다녀왔으면 캐시를 쓴다.
 const ADV_DESC: Record<string, string> = {
-  'me-assets': '내 AI 가 쓰는 스킬과 훅을 켜고 끕니다.',
-  'me-nodes': '내 노트북이나 서버를 라이블리에 연결해 거기서 AI 세션을 엽니다.',
-  'profile': '조직 이름과 게이트웨이 주소 같은 기본 정보를 봅니다.',
-  'ui': '조직이 기본으로 보는 화면(새 화면 · 클래식)을 정합니다.',
-  'members': '이 조직에 누가 있는지 보고 고치며, 팀으로 묶습니다.',
-  'member-add': '새 팀원을 조직에 등록합니다.',
-  'member-access': '구성원이 무엇으로 접속하고, 그 사람의 AI 가 어느 계정으로 실행되는지 관리합니다.',
-  'login-idp': '구성원이 회사 구글 · SSO 계정으로 로그인하게 합니다.',
-  'tools': 'AI 가 호출할 수 있는 도구를 관리합니다 — 사내 API · 기본 제공 · 외부 도구 서버(MCP).',
-  'credentials': 'AI 가 외부 서비스를 조직 공용 계정으로 쓰도록 미리 로그인해 둡니다.',
-  'agent-assets': '구성원의 AI 에 배포할 스킬 · 서브에이전트 · 커맨드와 자동 실행 훅을 관리합니다.',
-  'automation': '정해진 시각에 사람 없이 도는 작업과 상시 에이전트를 관리합니다.',
-  'preview-envs': '아직 반영하지 않은 작업 화면을 운영 화면과 따로 띄워 확인합니다.',
-  'session-share': '구성원의 AI 대화 기록을 중앙에 모아 이어보게 할지 정합니다.',
+  'me-assets': '내 AI 세션이 사용하는 스킬과 훅을 켜고 끕니다.',
+  'me-nodes': '내 노트북이나 서버를 라이블리에 연결하고, 그 컴퓨터에서 AI 세션을 엽니다.',
+  'profile': '조직 이름, 게이트웨이 주소 등 기본 정보를 확인합니다.',
+  'ui': '구성원에게 기본으로 표시할 화면(새 화면 또는 클래식 화면)을 정합니다.',
+  'members': '조직 구성원을 확인하고 수정하며, 구성원을 팀으로 묶습니다.',
+  'member-add': '새 구성원을 조직에 등록합니다.',
+  'member-access': '구성원의 로그인 방법과, 구성원의 AI 세션이 실행되는 AI 계정을 관리합니다.',
+  'login-idp': '구성원이 회사 Google 계정이나 SSO 계정으로 로그인할 수 있게 설정합니다.',
+  'tools': 'AI가 호출할 수 있는 도구를 관리합니다. 사내 API, 기본 제공 도구, 외부 도구 서버(MCP)가 포함됩니다.',
+  'credentials': 'AI가 외부 서비스를 조직 공용 계정으로 사용할 수 있도록 로그인 정보를 저장합니다.',
+  'agent-assets': '구성원의 AI 세션에 배포할 스킬, 서브에이전트, 커맨드, 훅을 관리합니다.',
+  'automation': '정해진 시각에 자동으로 실행되는 작업과 상시 실행되는 에이전트를 관리합니다.',
+  'preview-envs': '아직 배포하지 않은 화면을 운영 화면과 별도 주소로 열어 확인합니다.',
+  'session-share': '구성원의 AI 세션 기록을 서버에 모아 다른 컴퓨터에서 이어 볼 수 있게 할지 정합니다.',
   'feed-targets': '위키 지식을 노션 같은 외부 도구로 내보냅니다.',
-  'project-outbound': '프로젝트와 과업의 변경을 외부 협업 도구로 내보냅니다.',
-  'db-sources': 'AI 가 조회할 데이터베이스를 등록하고 어느 테이블까지 보여줄지 정합니다.',
-  'repos': '코드 레포(git)를 등록합니다 — 도메인맵과 코드 작업의 출처입니다.',
-  'audit': '누가 언제 무엇을 했는지 봅니다 — 관리 변경 · DB 조회 · AI 도구 호출.',
-  'storage': '메모리 · PTY · 디스크 사용량을 보고, 바닥나기 전에 알림 임계를 정합니다.',
-  'logs': '게이트웨이 로그가 무한히 자라지 않도록 보관 상한을 정합니다.',
-  'sessions': '이 박스에서 도는 모든 AI 세션을 보고 오래 쉬는 세션을 회수합니다.',
-  'nodes': '조직이 함께 쓰는 컴퓨터 전체와 공유 지정을 관리합니다.',
+  'project-outbound': '프로젝트와 태스크의 변경 내용을 외부 협업 도구로 내보냅니다.',
+  'db-sources': 'AI가 조회할 데이터베이스를 등록하고, 조회할 수 있는 테이블 범위를 정합니다.',
+  'repos': '코드 레포(git)를 등록합니다. 도메인맵과 코드 작업은 이 레포를 기준으로 합니다.',
+  'audit': '누가 언제 무엇을 했는지 확인합니다. 관리 설정 변경, DB 조회, AI 도구 호출 기록이 포함됩니다.',
+  'storage': '메모리, PTY, 디스크 사용량을 확인하고, 사용량 알림 기준을 정합니다.',
+  'logs': '게이트웨이 로그의 최대 보관 용량을 정합니다.',
+  'sessions': '이 서버에서 실행 중인 모든 AI 세션을 확인하고, 오래 사용하지 않은 AI 세션을 종료합니다.',
+  'nodes': '조직에 연결된 모든 컴퓨터를 확인하고, 구성원이 함께 쓸 컴퓨터를 지정합니다.',
 };
 function advancedPane(close: () => void): { node: HTMLElement; init: () => void } {
   const host = el('div', { class: 'v2me-dir' }, skeleton('설정 목록을 불러오는 중'));
   const node = pane('고급 설정',
-    '조직 전체에 걸친 설정과 운영 화면입니다. 항목을 고르면 이 창이 닫히고 그 설정 화면이 열립니다.',
+    '조직 전체에 적용되는 설정과 운영 화면입니다. 항목을 선택하면 이 창이 닫히고 해당 설정 화면이 열립니다.',
     host);
   node.classList.add('v2me-pane-wide');   // 행이 [이름 · 배지 · 설명 · ›] 한 줄이라 520px 에선 설명이 다 잘린다
   const paint = (groups: AdminDirGroup[]): void => {
     if (!groups.length) { host.replaceChildren(el('p', { class: 'prof-hint', text: '지금 권한으로 열 수 있는 설정 화면이 없습니다.' })); return; }
     const kids: HTMLElement[] = [];
-    let anyGated = false;
     for (const g of groups) {
       kids.push(el('div', { class: 'v2me-more-k', text: g.label }));
       for (const s of g.items) {
-        if (s.gated) anyGated = true;
-        kids.push(moreLink('#/system/' + s.key, s.label, ADV_DESC[s.key] || '', close, { gated: s.gated }));
+        kids.push(moreLink('#/system/' + s.key, s.label, ADV_DESC[s.key] || '', close));
       }
     }
-    // 배지 설명은 배지가 하나라도 있을 때만 — 없는 것을 설명하지 않는다.
-    if (anyGated) kids.push(el('p', { class: 'prof-hint', style: 'margin-top:14px' }, ...uiText('「관리자」가 붙은 항목은 관리 권한이 있는 사람에게만 보입니다.')));
     host.replaceChildren(...kids);
   };
   const init = (): void => {
@@ -661,15 +703,15 @@ function accountDeleteModal(): void {
       //   올린 자료·지식은 그대로 남는다. 화면이 과장하면 그것도 거짓말이다.
       if (plan.last_admin) {
         blocked('이 워크스페이스의 마지막 관리자라 지금은 탈퇴할 수 없습니다.', [],
-          '다른 분에게 관리자 권한을 넘긴 뒤에 다시 시도해 주세요. 관리자가 아무도 없이 남으면 구성원을 들이거나 설정을 바꿀 수 있는 사람이 없어집니다.');
+          '다른 구성원에게 관리자 권한을 넘긴 뒤 다시 시도해 주세요. 관리자가 없으면 구성원 추가와 설정 변경을 할 수 있는 사람이 없습니다.');
         return;
       }
       rows.push(el('p', { class: 'admin-hint' },
-        ...uiText('«' + (plan.workspace || '이 워크스페이스') + '» 에서 내려옵니다. 지금 열려 있는 화면과 CLI 로그인이 즉시 끊기고, 비밀번호·구글·기기 승인 어느 쪽으로도 다시 들어오실 수 없습니다.')));
+        ...uiText('«' + (plan.workspace || '이 워크스페이스') + '» 워크스페이스에서 탈퇴합니다. 지금 열려 있는 화면과 CLI 로그인이 바로 끊기며, 비밀번호, Google, 기기 승인 중 어떤 방법으로도 다시 로그인할 수 없습니다.')));
       rows.push(el('p', { class: 'admin-hint' },
-        ...uiText('올리신 자료와 지식, 만드신 프로젝트는 팀의 것이라 그대로 남습니다. 그것까지 지우셔야 하면 관리자에게 요청해 주세요.')));
+        ...uiText('올린 자료와 지식, 만든 프로젝트는 워크스페이스에 그대로 남습니다. 이것까지 삭제하려면 관리자에게 요청해 주세요.')));
       rows.push(el('p', { class: 'admin-hint' },
-        ...uiText('다시 들어오시려면 관리자가 계정을 되살려 드려야 합니다.')));
+        ...uiText('다시 로그인하려면 관리자가 계정을 복구해야 합니다.')));
     } else {
       const blocking: string[] = plan.blocking_teams || [];
       const solo: string[] = plan.solo_workspaces || [];
@@ -677,25 +719,25 @@ function accountDeleteModal(): void {
 
       // 팀의 주인이면 막는다 — 주인 없는 팀을 남기지 않기 위해서다(넘기기는 아직 없다).
       if (blocking.length) {
-        blocked('함께 쓰는 워크스페이스의 주인이라 지금은 탈퇴할 수 없습니다.', blocking,
-          '이 워크스페이스를 다른 분에게 넘기거나 지운 뒤에 다시 시도해 주세요. 주인이 사라진 채로 남으면 남은 분들이 아무것도 할 수 없게 됩니다.');
+        blocked('함께 쓰는 워크스페이스의 소유자라 지금은 탈퇴할 수 없습니다.', blocking,
+          '이 워크스페이스를 다른 구성원에게 넘기거나 삭제한 뒤 다시 시도해 주세요. 소유자가 없는 워크스페이스에서는 구성원 추가와 설정 변경을 할 수 없습니다.');
         return;
       }
       rows.push(solo.length
-        ? listOf('아래 워크스페이스가 함께 지워집니다 — 그 안의 자료와 대화도 사라집니다.', solo, 'color:var(--danger-text,#b42318)')
-        : el('p', { class: 'admin-hint', text: '지워질 워크스페이스는 없습니다.' }));
-      if (left.length) rows.push(listOf('아래 워크스페이스에서는 나가기만 합니다 — 거기에 올리신 자료와 지식은 그대로 남습니다.', left, ''));
-      rows.push(el('p', { class: 'admin-hint' }, ...uiText('지운 워크스페이스의 파일은 복구를 위해 30일간 보관된 뒤 삭제됩니다. 더 빨리 파기해야 하면 운영팀에 요청해 주세요.')));
+        ? listOf('아래 워크스페이스는 함께 삭제됩니다. 워크스페이스 안의 자료와 AI 세션 기록도 모두 삭제됩니다.', solo, 'color:var(--danger-text,#b42318)')
+        : el('p', { class: 'admin-hint', text: '함께 삭제되는 워크스페이스는 없습니다.' }));
+      if (left.length) rows.push(listOf('아래 워크스페이스에서는 탈퇴만 합니다. 이 워크스페이스에 올린 자료와 지식은 삭제되지 않고 남습니다.', left, ''));
+      rows.push(el('p', { class: 'admin-hint' }, ...uiText('삭제된 워크스페이스의 파일은 복구에 대비해 30일 동안 보관한 뒤 삭제합니다. 더 빨리 삭제해야 하면 운영팀에 요청해 주세요.')));
     }
 
     const input = el('input', { type: 'text', autocomplete: 'off', style: 'width:100%;margin-top:6px',
-      placeholder: '탈퇴하려면 이메일을 그대로 입력: ' + (plan.email || '') });
+      placeholder: '탈퇴하려면 이메일 주소를 똑같이 입력하세요: ' + (plan.email || '') });
     const err = el('p', { class: 'gate-error', hidden: true, style: 'margin:8px 0 0' });
     const go = el('button', { class: 'btn btn-danger', type: 'submit', text: '탈퇴하기' });
     const form = el('form', { style: 'margin:0' }, ...rows, input, err,
       el('p', { class: 'admin-hint', style: 'margin-top:8px' }, ...uiText(plan.mode === 'selfhost'
-        ? '탈퇴하면 스스로 되돌릴 수 없습니다.'
-        : '탈퇴하면 되돌릴 수 없습니다. 같은 이메일로 다시 가입하실 수는 있고, 그때는 빈 계정으로 시작합니다.')),
+        ? '탈퇴는 직접 되돌릴 수 없습니다.'
+        : '탈퇴는 되돌릴 수 없습니다. 같은 이메일로 다시 가입할 수 있지만, 이전 워크스페이스와 데이터는 복구되지 않습니다.')),
       el('div', { style: 'display:flex;gap:8px;justify-content:flex-end;margin-top:16px' },
         el('button', { type: 'button', class: 'btn btn-ghost', text: '취소', onclick: close }), go));
 
@@ -712,7 +754,7 @@ function accountDeleteModal(): void {
         return;
       }
       // 계정이 사라졌으므로 이 화면에 더 머물 이유가 없다 — 곧바로 내보낸다.
-      bodyEl.replaceChildren(el('p', { class: 'admin-hint', text: '탈퇴가 완료되었습니다. 로그아웃합니다…' }));
+      bodyEl.replaceChildren(el('p', { class: 'admin-hint', text: '탈퇴했습니다. 로그아웃합니다.' }));
       setTimeout(() => logout(), 1200);
     });
     bodyEl.replaceChildren(form);
