@@ -122,7 +122,7 @@ delete process.env.LIVELY_TOKEN;
 //   env 를 읽는 테스트는 **자기가 읽는 변수를 전부** 스크럽해야 한다.
 delete process.env.LIVELY_MCP_TOKEN;
 
-const { serveMcpGateway, callTimeoutFor } = await import("./lively-mcp-gateway.mjs");
+const { serveMcpGateway, callTimeoutFor, sessionHeaderValue } = await import("./lively-mcp-gateway.mjs");
 
 try {
   setTok("tok-file");
@@ -169,6 +169,31 @@ try {
     const r = await listUntilTools(p, 3);
     check("E14 tools/list — JSON 응답 해석", (r?.result?.tools || []).map((t) => t.name).join() === "j1", `r=${JSON.stringify(r?.result)}`);
     await p.end(); await up.close();
+  }
+
+  // E27 — 세션 신원 폴백. 라이블리가 띄운 창이 아닌 Claude Code 세션은 CLAUDE_CODE_SESSION_ID 만 갖는다.
+  //  이걸 못 읽으면 x-lively-session 이 빠져 게이트웨이가 세션을 특정하지 못한다(session_rename·session_task 거부).
+  {
+    check("E27 LIVELY_SESSION_ID 가 가장 먼저", sessionHeaderValue({ LIVELY_SESSION_ID: "box-1", CODEX_THREAD_ID: "t", CLAUDE_CODE_SESSION_ID: "u" }) === "box-1");
+    check("E27 Codex 스레드 id → codex-", sessionHeaderValue({ CODEX_THREAD_ID: " t1 ", CLAUDE_CODE_SESSION_ID: "u" }) === "codex-t1");
+    check("E27 Claude Code 자식 env(CLAUDE_CODE_SESSION_ID) → claude-", sessionHeaderValue({ CLAUDE_CODE_SESSION_ID: "u1" }) === "claude-u1");
+    check("E27 CLAUDE_SESSION_ID 도 계속 읽는다", sessionHeaderValue({ CLAUDE_SESSION_ID: "c1" }) === "claude-c1");
+    check("E27 둘 다 있으면 CLAUDE_CODE_SESSION_ID(훅 stdin 과 같은 값)가 이긴다", sessionHeaderValue({ CLAUDE_SESSION_ID: "stale", CLAUDE_CODE_SESSION_ID: "u2" }) === "claude-u2");
+    check("E27 신원이 없으면 빈 값(헤더를 싣지 않는다)", sessionHeaderValue({ CLAUDE_CODE_SESSION_ID: "  " }) === "");
+
+    const keys = ["LIVELY_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"];
+    const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    for (const k of keys) delete process.env[k];
+    process.env.CLAUDE_CODE_SESSION_ID = "3e0bd20d-aaaa";
+    const up = await startUpstream({ tools: T(["s1"]) });
+    setGw(up.url);
+    const p = startProxy(serveMcpGateway);
+    await listUntilTools(p, 4);
+    const h = up.seen[0]?.headers || {};
+    check("E27 상류 요청에 x-lively-session=claude-<CLAUDE_CODE_SESSION_ID> 가 실린다",
+      h["x-lively-session"] === "claude-3e0bd20d-aaaa", `x-lively-session=${h["x-lively-session"]}`);
+    await p.end(); await up.close();
+    for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
   }
 
   // E3 — 상류 미도달 + 스냅샷 있음 → 스냅샷 반환(오류 아님).

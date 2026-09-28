@@ -181,6 +181,22 @@ function saveCache(gw, tools) {
 //                      **명시 stamp 가 필수**다(src/org/auth/agent-identity.ts — 헤더가 UA 보다 우선).
 //   · x-lively-session / x-lively-mode — 종전엔 하네스가 `${LIVELY_SESSION_ID:-}` 를 제 env 로 확장해 보냈다.
 //                      stdio 는 그 env 를 그대로 상속하므로 여기서 읽어 붙이면 같은 값이 된다.
+// x-lively-session 값. 라이블리가 띄운 창이 아니면(LIVELY_SESSION_ID 없음) 하네스 네이티브 id 로 떨어진다 —
+//  훅이 stdin session_id 로 만드는 `claude-<id>`·`codex-<id>`(kit/hooks/run-custom.mjs executionSessionId)와
+//  같은 값이어야 게이트웨이가 훅 호출과 툴 호출을 한 세션으로 묶는다. 어긋나면 session_rename·session_task 가
+//  "세션을 특정할 수 없습니다" 로 막힌다.
+//  🔴 Claude Code 가 자식 프로세스(이 stdio 서버)에 싣는 이름은 CLAUDE_CODE_SESSION_ID 다 — CLAUDE_SESSION_ID 는
+//   싣지 않는다(확인법: 떠 있는 `lively mcp` 프로세스의 /proc/<pid>/environ). 훅 stdin session_id 와 같은 값이라 먼저 보고,
+//   CLAUDE_SESSION_ID 는 호환용으로 뒤에 둔다(앞에 두면 셸에 남은 값이 훅과 다른 신원을 만든다).
+export function sessionHeaderValue(env = {}) {
+  const direct = String(env.LIVELY_SESSION_ID || "").trim();
+  if (direct) return direct;
+  const codex = String(env.CODEX_THREAD_ID || env.CODEX_SESSION_ID || "").trim();
+  if (codex) return `codex-${codex}`;
+  const claude = String(env.CLAUDE_CODE_SESSION_ID || env.CLAUDE_SESSION_ID || "").trim();
+  return claude ? `claude-${claude}` : "";
+}
+
 function upstreamHeaders() {
   const h = {
     "content-type": "application/json",
@@ -189,9 +205,7 @@ function upstreamHeaders() {
   };
   const tok = token();
   if (tok) h.authorization = `Bearer ${tok}`;
-  const sid = (process.env.LIVELY_SESSION_ID || "").trim()
-    || ((process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || "").trim() ? `codex-${(process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID).trim()}` : "")
-    || ((process.env.CLAUDE_SESSION_ID || "").trim() ? `claude-${process.env.CLAUDE_SESSION_ID.trim()}` : "");
+  const sid = sessionHeaderValue(process.env);
   if (sid) h["x-lively-session"] = sid;
   const mode = (process.env.LIVELY_MODE || "").trim();
   if (mode) h["x-lively-mode"] = mode;
