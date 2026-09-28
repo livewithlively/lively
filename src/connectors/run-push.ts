@@ -4,6 +4,7 @@
 //  필요 env: ITEMS_DATABASE_URL, CLICKUP_API_TOKEN, CLICKUP_CONTAINER_LIST_ID
 //  멱등: 드레인이 현재 project 행을 재읽기해 upsert — 두 번 돌려도 같은 ClickUp 상태로 수렴(external_id 링크백 후 update).
 import { pushOutbox } from "./clickup-push.js";
+import { exitCodeForPush } from "./push-budget.js";
 import { logger } from "../log.js";
 
 const name = process.argv[2];
@@ -12,6 +13,6 @@ if (name !== "clickup") {
   process.exit(1);
 }
 
-const res = await pushOutbox();
+const res = await pushOutbox({ startedAtMs: performance.timeOrigin });
 logger.info(res, "run-push 완료");
-process.exit(res.failed > 0 ? 1 : 0);
+process.exit(exitCodeForPush(res));
