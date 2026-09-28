@@ -345,3 +345,11 @@
 .v2me .prof-chip.on { background: var(--bg-punch); border-color: var(--blue); color: var(--blue); }
 /* AI 주입 문구 — 삭제는 빨간 글자. */
 .v2a-del { color: var(--danger, #C0342B); }
+.v2a-who { background: var(--bg-tint); border-radius: 8px; padding: 8px 10px; margin-bottom: 12px; }
+.v2a-mini { background: var(--bg-tint); border-top: 0; border-radius: 10px; padding: 10px 12px; margin-top: 10px; }
+.v2a-memo { background: var(--surface); }
+.v2a-memo-b::after { background: linear-gradient(transparent, var(--surface)); }
+.v2a-st { border: 1px solid var(--ok-line); }
+.v2a-st::before { display: none; }
+.v2a-st.off { border-color: var(--line); }
+.v2a-more .btn-text { color: var(--blue); padding-left: 0; }
