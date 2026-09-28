@@ -15,4 +15,8 @@ if (name !== "clickup") {
 
 const res = await pushOutbox({ startedAtMs: performance.timeOrigin });
 logger.info(res, "run-push 완료");
+// 부모(scheduler/actions/connector.ts)가 이 줄을 파싱해 정체 감시의 입력으로 쓴다(sync-outcome.childDrainSummary).
+//  ⚠ logger 로만 내보내면 LOG_LEVEL 이 warn 이상일 때 마지막 줄이 요약이 아니게 되어 **감시가 조용히 눈먼다**
+//   — 판정 입력은 로그 레벨에 종속되면 안 된다. 사람이 읽는 로그는 위 줄, 기계가 읽는 값은 이 줄이다.
+process.stdout.write(JSON.stringify(res) + "\n");
 process.exit(exitCodeForPush(res));

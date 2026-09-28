@@ -10,7 +10,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { nextStallStreak, outboxPhaseOf, outboxAlertFor, STALL_TICKS } from "./outbox-watch.js";
+import { nextStallStreak, outboxPhaseOf, outboxAlertFor, tickOnce, stopOutboxWatch, STALL_TICKS } from "./outbox-watch.js";
+import type { BoxAlert } from "./box-watch.js";
 import { childDrainSummary } from "../connectors/sync-outcome.js";
 
 const r = (p: string): string => readFileSync(new URL(p, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
@@ -38,9 +39,11 @@ test("표 — 예산을 안 썼으면 정체가 아니다(설계된 잔여와 �
   //  남은 게 없으면 예산 소진 여부와 무관하게 정체가 아니다(마지막 행 직후 경계에서 나올 수 있는 모양).
   assert.equal(nextStallStreak({ streak: 2, remaining: 0 }, { remaining: 0, budgetStopped: true }), 0,
     "빈 큐를 정체로 보고 있다");
-  //  드레인이 잔여를 못 셌을 때(-1) — 모르는 것을 정체로 단정하지 않는다(clickup-push.countPending).
-  assert.equal(nextStallStreak({ streak: 2, remaining: 500 }, { remaining: -1, budgetStopped: true }), 0,
-    "못 센 값(-1)을 정체로 세고 있다");
+  //  🔴 드레인이 잔여를 못 셌을 때(-1)는 **중립이다 — 0 으로 되돌리면 「해소」로 승격된다**(clickup-push.countPending).
+  //   종전 이 표는 0 을 기대해 그 버그를 잠그고 있었다: 정체 중 count 가 한 번 실패하면 거짓 해소 알림이 나간다.
+  assert.equal(nextStallStreak({ streak: 2, remaining: 500 }, { remaining: -1, budgetStopped: true }), 2,
+    "못 센 값(-1)에 카운터를 되돌린다 — 거짓 해소 알림이 나간다");
+  assert.equal(nextStallStreak(null, { remaining: -1, budgetStopped: true }), 0, "이전이 없으면 0 에서 시작한다");
 });
 
 test("표 — 상한에 닿아야 정체로 판정한다(한 번의 예산 소진은 정상이다)", () => {
@@ -64,8 +67,9 @@ test("전이 — 문제로 넘어갈 때와 복구될 때만 말한다(늑대소
   assert.match(bad!.text, /500/, "남은 건수가 본문에 없다 — 받는 사람이 크기를 모른다");
   const good = outboxAlertFor("stalled", "ok", { remaining: 0, budgetStopped: false, streak: 0 });
   assert.equal(good?.severity, "ok", "복구를 안 알린다");
-  //  첫 관측이 이미 정체면 알린다(기동 시점에 이미 막혀 있던 것을 다음 주기까지 묻어두지 않는다)
-  assert.equal(outboxAlertFor(null, "stalled", cur)?.severity, "warn", "기동 시 이미 정체인데 침묵한다");
+  //  순수 함수로서의 방어 — 상태기계에서는 도달하지 않는다(재기동 시 카운터가 0 부터라 첫 관측의 phase 는 항상 ok).
+  //   그 «재기동 후 STALL_TICKS 만큼 다시 센다» 는 한계는 outbox-watch.ts 머리말에 적혀 있다.
+  assert.equal(outboxAlertFor(null, "stalled", cur)?.severity, "warn");
 });
 
 test("파싱 — 자식 stdout 마지막 줄에서 드레인 수치를 꺼낸다", () => {
@@ -83,14 +87,81 @@ test("파싱 — 자식 stdout 마지막 줄에서 드레인 수치를 꺼낸다
   assert.equal(childDrainSummary('{"remaining":"420","budgetStopped":true}'), undefined);
 });
 
-test("배선 — 드레인이 남은 건수를 센다", () => {
-  assert.match(DRAIN, /remaining/, "드레인이 remaining 을 안 낸다 — 감시가 볼 값이 없다");
+test("배선 — 드레인이 남은 건수를 반환값에 싣는다", () => {
+  //  `/remaining/` 만으로는 주석·로그 줄에도 걸려 return 에서 빠져도 통과한다.
+  assert.match(DRAIN, /return \{[^}]*\bremaining\b/, "remaining 이 반환값에 없다 — 감시가 볼 값이 없다");
+});
+
+test("배선 — 판정 입력이 로그 레벨과 무관하게 나간다", () => {
+  const CLI = r("../connectors/run-push.ts");
+  assert.match(CLI, /process\.stdout\.write\(JSON\.stringify\(res\)/,
+    "요약이 logger 로만 나간다 — LOG_LEVEL 이 warn 이상이면 감시가 조용히 눈먼다");
 });
 
 test("배선 — push 액션이 요약에 드레인 수치를 구조화해 싣는다", () => {
   assert.match(CRON, /childDrainSummary\(/, "요약에 drain 이 없다 — 감시가 tail 문자열을 파싱해야 한다");
 });
 
-test("배선 — 감시가 기동 단계에 등록돼 있다", () => {
-  assert.match(BOOT, /startOutboxWatch/, "감시를 아무도 켜지 않는다 — 코드가 있어도 영영 안 돈다");
+test("배선 — 감시가 기동 단계에 scheduler 게이트로 등록돼 있다", () => {
+  //  import 줄만 남아도 통과하던 것을 단계 등록까지로 조인다. gate 가 scheduler 여야 다중 인스턴스에서
+  //   중복 발송이 안 된다(cron-watch 와 같은 게이트).
+  assert.match(BOOT, /name: "outbox-watch", gate: "scheduler"/,
+    "감시를 아무도 켜지 않거나 게이트가 다르다 — 코드가 있어도 영영 안 돌거나 중복 발송한다");
+});
+
+// ── 상태기계(tickOnce) — 순수 함수가 맞아도 상태 보관이 틀리면 결과는 같다 ──
+//  cron-watch.test.ts 의 관례를 그대로 따른다. 실제로 -1 버그는 순수 함수 단위에선 «의도대로» 보이고
+//  이 조합에서만 드러났다.
+const alertsOf = (): { sent: BoxAlert[]; deps: (o: unknown, accept?: boolean) => Parameters<typeof tickOnce>[0] } => {
+  const sent: BoxAlert[] = [];
+  return {
+    sent,
+    deps: (o, accept = true) => ({
+      observe: async () => o as never,
+      send: async (a) => { sent.push(a); return accept; },
+    }),
+  };
+};
+const stall = (remaining: number, at: string) => ({ remaining, budgetStopped: true, lastRunAt: at });
+
+test("상태기계 — 예산 소진이 상한만큼 이어지면 한 번 알리고, 이어지는 동안은 조용하다", async () => {
+  stopOutboxWatch();
+  const { sent, deps } = alertsOf();
+  for (let i = 0; i < STALL_TICKS; i++) await tickOnce(deps(stall(500, `t${i}`)));
+  assert.equal(sent.length, 1, `상한(${STALL_TICKS})에 닿을 때 정확히 한 번 알려야 한다`);
+  assert.equal(sent[0]!.severity, "warn");
+  await tickOnce(deps(stall(500, "t9")));
+  assert.equal(sent.length, 1, "정체가 이어지는 동안 또 알린다 — 늑대소년");
+  //  줄기 시작하면 해소
+  await tickOnce(deps({ remaining: 0, budgetStopped: false, lastRunAt: "t10" }));
+  assert.equal(sent.length, 2, "해소를 안 알린다");
+  assert.equal(sent[1]!.severity, "ok");
+});
+
+test("상태기계 — 같은 실행을 다시 봐도 카운터가 오르지 않는다", async () => {
+  stopOutboxWatch();
+  const { sent, deps } = alertsOf();
+  //  잡 주기가 감시 주기보다 길면 같은 요약을 여러 틱 재관측한다 — 실행 1회가 「상한 연속」이 되면 안 된다.
+  for (let i = 0; i < STALL_TICKS + 3; i++) await tickOnce(deps(stall(500, "같은-실행")));
+  assert.equal(sent.length, 0, "같은 실행을 여러 번 세어 정체로 판정했다");
+});
+
+test("상태기계 — 못 센 값(-1)이 끼어도 거짓 해소를 내지 않고 카운터가 이어진다", async () => {
+  stopOutboxWatch();
+  const { sent, deps } = alertsOf();
+  for (let i = 0; i < STALL_TICKS; i++) await tickOnce(deps(stall(500, `a${i}`)));
+  assert.equal(sent.length, 1);
+  await tickOnce(deps({ remaining: -1, budgetStopped: true, lastRunAt: "b1" }));
+  assert.equal(sent.length, 1, "집계 실패 한 번에 「정체 해소 … -1건」을 보냈다");
+  await tickOnce(deps(stall(500, "b2")));
+  assert.equal(sent.length, 1, "중립 뒤 같은 정체인데 다시 알린다");
+});
+
+test("상태기계 — 못 보낸 문제의 복구는 보내지 않는다", async () => {
+  stopOutboxWatch();
+  const { sent, deps } = alertsOf();
+  for (let i = 0; i < STALL_TICKS; i++) await tickOnce(deps(stall(500, `c${i}`), false));
+  assert.equal(sent.length, 1, "시도는 한다");
+  await tickOnce(deps({ remaining: 0, budgetStopped: false, lastRunAt: "c9" }, false));
+  assert.equal(sent.length, 1, "문제를 못 알렸으면 복구도 보내지 않는다");
 });

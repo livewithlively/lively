@@ -14,7 +14,10 @@
 // 규약은 cron-watch 와 같이 box-watch 를 따른다(새 규약을 만들지 않는다):
 //  · 판정은 순수 함수 — 전이 규칙을 테스트가 직접 못 박는다.
 //  · `prev===cur` 침묵(늑대소년 방지) · 복구는 **알린 적 있는 문제**에만(box-watch.emitAlert 한 자리).
-//  · 단 «첫 관측이 정상이면 침묵» 중 정상 쪽만 따른다 — 기동 시점에 **이미 막혀 있으면 알린다**(아래).
+//  · 한계: 카운터는 프로세스 메모리라 **재기동하면 0 부터 다시 센다** — 배포 직후 이미 막혀 있던 큐는
+//    STALL_TICKS 만큼 지나야 알린다. 영속화하면 없앨 수 있으나 그건 별도 설계다.
+//  · 한계: 이 축은 **배치(LIMIT)가 통째로 defer 인 큐 머리 점거**를 못 본다 — 그때는 예산을 안 쓰고
+//    끝나므로 budgetStopped=false 다. 검증: `grep -n "LIMIT \$1" src/connectors/clickup-push.ts`
 //
 // ⚠ 감시가 게이트웨이를 죽이면 안 된다 — 전부 best-effort(throw 금지, 로그만).
 import { itemsPool, q } from "../db/client.js";
@@ -33,16 +36,18 @@ const CHECK_MS = Number(process.env.OUTBOX_WATCH_INTERVAL_MS ?? 5 * 60_000);
 
 export type OutboxPhase = "ok" | "stalled";
 
-/** 한 번의 관측 — 드레인이 마지막 실행에서 남긴 수치. */
+/** 한 번의 관측 — 드레인이 마지막 실행에서 남긴 수치 + 그 실행의 시각. */
 export interface DrainObservation extends DrainSummary {
+  /** 그 요약을 남긴 실행의 시각. 같은 값이면 **같은 실행을 다시 본 것**이다(아래 scanOne). */
+  lastRunAt?: string | null;
   streak: number;
 }
 
-interface StallState { streak: number; remaining: number }
+type StallState = Omit<DrainObservation, "budgetStopped">;
 
 export interface OutboxWatchDeps {
   /** 관측 조회(주입 seam). 생략하면 그 워크스페이스의 push 잡 요약에서 읽는다. */
-  observe?: () => Promise<DrainSummary | undefined>;
+  observe?: () => Promise<Observation | undefined>;
   send: AlertSender;
 }
 
@@ -59,8 +64,13 @@ let timer: NodeJS.Timeout | null = null;
  *  예산 소진» 이라는 모양이 나올 수 있는데, 그건 정체가 아니다.
  */
 export function nextStallStreak(prev: StallState | null, cur: DrainSummary): number {
+  //  🔴 못 센 값(-1)은 **중립이지 해소가 아니다** — 0 으로 되돌리면 phase 가 ok 로 승격돼
+  //   「정체 해소 … 남은 항목 -1건」이 실제로 발송되고, 다음 틱부터 다시 세어 경보가 쌍으로 난다.
+  //   그건 이 모듈이 막으려는 늑대소년 그 자체다. cron-watch 가 관측 근거 없는 회차를 그냥 넘기는 것과 같다.
+  //   (호출부도 앞단에서 걸러내지만, 순수 함수 단독으로도 안전해야 이 규칙이 안 샌다.)
+  if (cur.remaining < 0) return prev?.streak ?? 0;
   if (!cur.budgetStopped) return 0;
-  if (cur.remaining <= 0) return 0;                        // 비었거나(0) 못 셌다(-1) — 둘 다 정체로 세지 않는다
+  if (cur.remaining === 0) return 0;
   if (prev && cur.remaining < prev.remaining) return 0;   // 전진했다 — 백로그 소화 중
   return (prev?.streak ?? 0) + 1;
 }
@@ -90,7 +100,8 @@ export function outboxAlertFor(prev: OutboxPhase | null, cur: OutboxPhase, obs: 
         //   헤매지 않게 그 사실을 먼저 말한다.
         + `잡은 정상(ok)으로 보입니다 — 예산 소진은 실패가 아니라 정상 종료이기 때문입니다.\n`
         + `→ 관리 ▸ 스케줄 의 마지막 실행 요약에서 pushed·visited 를 보세요.`
-        + ` 매 틱 pushed 가 0 이면 큐 머리가 막힌 것이고, pushed 는 있는데 remaining 이 안 줄면 유입이 처리보다 빠릅니다.`,
+        + ` 매 틱 pushed 가 0 이면 큐 머리가 막힌 것이고, pushed 는 있는데 remaining 이 안 줄면 유입이 처리보다 빠릅니다.\n`
+        + `(남은 항목 수에는 반출 대상이 아닌 행 — 컨테이너 미설정 네이티브·고아 — 도 함께 잡힙니다.)`,
       detail,
     };
   }
@@ -108,21 +119,34 @@ export function outboxAlertFor(prev: OutboxPhase | null, cur: OutboxPhase, obs: 
  *  표 부재·DB 미연결·요약 모양 불일치는 전부 `undefined`(관측 없음 → 침묵). **0 으로 뭉개지 않는다** —
  *  모르는 것을 «큐가 비었다» 로 읽으면 이 감시가 정체를 못 본다.
  */
-async function observeFromCron(): Promise<DrainSummary | undefined> {
+async function observeFromCron(): Promise<Observation | undefined> {
   try {
+    //  **가장 최근 실행 1건**만 본다. 행을 여러 개 훑어 «처음 찾은 drain» 을 쓰면 push 잡이 둘 이상일 때
+    //   틱마다 다른 잡을 비교해 카운터가 요동한다(행 순서는 미정의다).
     const rows = await q(itemsPool,
-      `SELECT last_summary FROM org_cron WHERE enabled=true AND action='connector_push'`);
-    for (const row of rows as Array<{ last_summary?: unknown }>) {
-      const systems = (row.last_summary as { systems?: unknown[] } | null)?.systems;
-      if (!Array.isArray(systems)) continue;
-      for (const s of systems) {
-        const drain = (s as { drain?: unknown } | null)?.drain;
-        if (isDrainSummary(drain)) return drain;
-      }
+      `SELECT last_run_at, last_summary FROM org_cron
+        WHERE enabled=true AND action='connector_push'
+        ORDER BY last_run_at DESC NULLS LAST LIMIT 1`);
+    const row = (rows as Array<{ last_run_at?: unknown; last_summary?: unknown }>)[0];
+    if (!row) return undefined;
+    const systems = (row.last_summary as { systems?: unknown[] } | null)?.systems;
+    if (!Array.isArray(systems)) return undefined;
+    for (const s of systems) {
+      const drain = (s as { drain?: unknown } | null)?.drain;
+      if (isDrainSummary(drain)) return { ...drain, lastRunAt: stampOf(row.last_run_at) };
     }
   } catch { /* 못 재면 알리지 않는다 */ }
   return undefined;
 }
+
+/** 실행 시각을 비교 가능한 문자열로(Date·string 둘 다 온다). 모르면 null — 그땐 중복 판정을 포기한다. */
+function stampOf(v: unknown): string | null {
+  if (v instanceof Date) return v.toISOString();
+  return typeof v === "string" ? v : null;
+}
+
+/** 관측 = 드레인 수치 + 그 실행의 시각. */
+type Observation = DrainSummary & { lastRunAt: string | null };
 
 function isDrainSummary(v: unknown): v is DrainSummary {
   if (!v || typeof v !== "object") return false;
@@ -135,10 +159,15 @@ async function scanOne(deps: OutboxWatchDeps): Promise<void> {
   if (!obs) return;   // 관측 없음 — 이전 상태를 그대로 둔다(중립)
   const key = (currentTenant()?.id ?? "") + KEY_SEP + WATCH_KEY;
   const prev = seen.get(key);
+  //  🔴 카운터가 세는 것은 **드레인 실행 횟수**여야 한다. 감시 주기와 잡 주기는 서로 모르므로(잡 주기는
+  //   운영자가 바꾼다 — org_cron.interval_sec), 같은 요약을 여러 틱 재관측하면 실행 **한 번**의 예산 소진이
+  //   「3회 연속」으로 둔갑한다. 잡이 멈춰 요약이 얼어붙은 경우도 같다(그건 크론 감시가 알릴 일이다).
+  if (obs.lastRunAt && obs.lastRunAt === prev?.state.lastRunAt) return;
   const streak = nextStallStreak(prev?.state ?? null, obs);
   const cur = outboxPhaseOf(streak);
   const a = outboxAlertFor(prev?.phase ?? null, cur, { ...obs, streak });
-  const next = { phase: cur, problemSent: prev?.problemSent ?? false, state: { streak, remaining: obs.remaining } };
+  const next = { phase: cur, problemSent: prev?.problemSent ?? false,
+    state: { streak, remaining: obs.remaining, lastRunAt: obs.lastRunAt } };
   if (a) {
     const sent = await emitAlert(a, next.problemSent, deps.send);
     next.problemSent = a.severity === "ok" ? false : (sent || next.problemSent);

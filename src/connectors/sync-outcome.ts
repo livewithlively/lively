@@ -44,6 +44,8 @@ export interface DrainSummary {
  *  ⚠ 모양이 다르면 **undefined 다 — 0 으로 뭉개지 않는다.** 모르는 것을 «큐가 비었다» 로 읽으면
  *   정체 감시가 구조적으로 눈을 감는다(그게 이 파서가 있는 이유다). 타입이 어긋나는 것도 같다.
  *  childTail 과 달리 문자열 입력만 받는다 — 호출부가 어느 스트림을 보는지 명시하게 한다.
+ *  입력은 run-push.ts 가 **로거와 별개로** 마지막에 찍는 요약 한 줄이다(검증: `grep -n "process.stdout.write" src/connectors/run-push.ts`).
+ *  그 줄을 로거로 되돌리면 LOG_LEVEL 에 종속돼 감시가 조용히 눈먼다.
  */
 export function childDrainSummary(stdout: unknown): DrainSummary | undefined {
   if (typeof stdout !== "string") return undefined;
