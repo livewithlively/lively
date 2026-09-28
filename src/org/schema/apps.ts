@@ -258,6 +258,24 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   //   열이 생긴 첫날 「확인할 것」에 옛 세션 알림 수십 건이 그대로 서 있다(이 프로젝트가 지우려는 바로 그 화면). 멱등.
   await pool.query(`UPDATE org_app_notification SET kind='session' WHERE app_id='ai-session' AND kind='app';`);
 
+  // ── org_session_app — 일반 세션에 **붙은** 앱(#4225) ──
+  //  앱 세션(토큰에 app_id 를 구운 세션)과 다르다: 세션은 사람의 평범한 세션이고, 앱은 필요할 때 붙였다 뗀다
+  //  (9/21 회의 «맥락에 기능이 속한다»). 붙어 있는 동안만 그 세션의 AI 가 그 앱 테이블을 읽고 쓴다 — 판정은
+  //  매 호출 이 행을 다시 읽는다(apps/session-apps.ts requireAttachedApp). 떼면 detached_at 이 서고 그 순간부터 막힌다.
+  //  PK(session_id, app_id) — 다시 붙이면 같은 행을 되살린다(attached_at 갱신). member_id = 붙인 사람(= 세션 주인).
+  //  v2.1 K 규칙대로 org_app 에 FK 를 걸지 않는다 — 앱 제거 때 pruneSessionApps 가 명시 회수한다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_session_app(
+      session_id TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      member_id TEXT NOT NULL,
+      attached_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      detached_at TIMESTAMPTZ,
+      PRIMARY KEY (session_id, app_id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_session_app_live_idx ON org_session_app(session_id) WHERE detached_at IS NULL;`);
+
   // ── 기존 테이블 앱 축(design D1) — 전부 ADD COLUMN IF NOT EXISTS(무회귀) ──
   //  auth_token.app_id — 앱 세션 토큰 귀속(NULL = 일반 토큰). 기능 롤백 런북이 `WHERE app_id IS NOT NULL` 로 일괄 revoke.
   await pool.query(`ALTER TABLE auth_token ADD COLUMN IF NOT EXISTS app_id TEXT;`);
