@@ -114,12 +114,14 @@ ok(/import \{ decideKey, UndoStack, countTyped, SEQ, nativeUndoOk \} from '\.\/l
 ok(T.indexOf("if (handleLineEditKey(e)) return false;") > 0
   && T.indexOf("if (handleLineEditKey(e)) return false;") < T.indexOf("const wordSeq = e.key === 'ArrowLeft'"), "E11b 선택 판정이 Alt+화살표 블록보다 먼저 온다");
 // ★IME 안전 — «선택을 지우고 그 글자로 갈아치우기» 갈래는 preventDefault 를 하면 안 된다(조합 시작 keyCode 229 가 섞여 있다).
-ok(/if \(act\.k === 'delThenPass'\)[\s\S]{0,400}?deleteSel\(\);\s*return false;\s*\}\s*\n\s*e\.preventDefault\(\)/.test(T), "E11c delThenPass 는 preventDefault 앞에서 돌아간다(한글 조합을 막지 않는다)");
+//  여러 행 선택(#3870)은 지우기가 비동기라 보통 글자만 삼켜 두었다가 보내고, 조합 시작 키(229)는 삼키지 않고 선택만 거둔다.
+ok(/if \(act\.k === 'delThenPass'\)[\s\S]{0,1200}?deleteSel\(\);\s*return false;\s*\}\s*\n\s*e\.preventDefault\(\)/.test(T)
+  && /if \(e\.keyCode === 229 \|\| Array\.from\(e\.key \|\| ''\)\.length !== 1\) \{ clearSel\('ime-multirow'\); return false; \}/.test(T), "E11c delThenPass 는 preventDefault 앞에서 돌아간다(한글 조합을 막지 않는다)");
 ok(/if \(e\.isComposing\) return \{ k: 'clear' \};/.test(read("web/standalone/line-edit.ts")), "E11d 조합 중에는 지우지 않는다");
 // 좌표를 «기억» 하지 않고 그릴 때마다 다시 잰다 — 앱이 다시 그려도 어긋나지 않는 이유.
 ok(/term\.onRender\(drawSel\)/.test(T) && /term\.onScroll\(drawSel\)/.test(T), "E11e 선택 표시는 렌더·스크롤마다 새로 계산한다");
 // 안전장치 — 선택을 시작한 줄의 내용이 바뀌었으면 좌표를 믿지 않는다(잘못 세면 사람 글자를 더 지운다).
-ok(/bufRowText\(r\.y\) !== selAnchor\.row/.test(T), "E11f 줄이 바뀌었으면 지우지 않고 취소한다");
+ok(/bufRowText\(y\) !== was\) return true/.test(T) && /if \(selStale\(r\)\) \{ clearSel\('stale-row'\)/.test(T), "E11f 선택한 행들이 바뀌었으면 지우지 않고 취소한다");
 ok(/if \(d === '\\r'\) undoStack\.reset\(\)/.test(T), "E11g 보내고 나면 되돌릴 것을 버린다");
 ok(/lineSelect: !!selI\.checked/.test(T) && /p\.lineSelect !== false/.test(T), "E11h 선택 흉내를 끄는 설정이 있다");
 ok(read("public/terminal.html").includes(".term-sel {"), "E11i 선택 표시 CSS");

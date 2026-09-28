@@ -96,8 +96,8 @@ t("B4 ⌘Shift+←/→ · Shift+Home/End → 줄 확장", () => {
   assert.deepEqual(decideKey(k("End", { shiftKey: true }), MAC), { k: "extend", seq: SEQ.end, unit: "line", dir: 1 });
 });
 t("B4b Shift+↑/↓는 현재 입력의 처음·끝까지 선택을 확장한다", () => {
-  assert.deepEqual(decideKey(k("ArrowUp", { shiftKey: true }), MAC), { k: "extend", seq: SEQ.home, unit: "line", dir: -1 });
-  assert.deepEqual(decideKey(k("ArrowDown", { shiftKey: true }), MAC), { k: "extend", seq: SEQ.end, unit: "line", dir: 1 });
+  assert.deepEqual(decideKey(k("ArrowUp", { shiftKey: true }), MAC), { k: "extend", seq: SEQ.home, unit: "line", dir: -1, cross: true });
+  assert.deepEqual(decideKey(k("ArrowDown", { shiftKey: true }), MAC), { k: "extend", seq: SEQ.end, unit: "line", dir: 1, cross: true });
 });
 t("B5 설정이 꺼져 있으면 아무것도 가로채지 않는다", () => {
   const off = { ...MAC, select: false };
@@ -155,8 +155,8 @@ t("C7c 기능키·미디어키처럼 모르는 키는 선택을 건드리지 않
   }
 });
 t("C7d Shift+화살표 위/아래는 입력 처음·끝까지 선택을 확장한다", () => {
-  assert.deepEqual(decideKey(k("ArrowUp", { shiftKey: true }), SEL), { k: "extend", seq: SEQ.home, unit: "line", dir: -1 });
-  assert.deepEqual(decideKey(k("ArrowDown", { shiftKey: true }), SEL), { k: "extend", seq: SEQ.end, unit: "line", dir: 1 });
+  assert.deepEqual(decideKey(k("ArrowUp", { shiftKey: true }), SEL), { k: "extend", seq: SEQ.home, unit: "line", dir: -1, cross: true });
+  assert.deepEqual(decideKey(k("ArrowDown", { shiftKey: true }), SEL), { k: "extend", seq: SEQ.end, unit: "line", dir: 1, cross: true });
 });
 t("C7e 선택이 없거나 처리 대상이 아닌 Ctrl/⌘ + 글자는 줄을 건드리는 명령이라 선택을 거둔다(^C 중단 · ⌘V 붙여넣기)", () => {
   assert.deepEqual(decideKey(k("c", { ctrlKey: true }), SEL), { k: "clear" });
