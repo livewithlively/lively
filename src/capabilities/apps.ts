@@ -15,6 +15,7 @@ import { makeDeployDeps } from "../apps/deploy.js";
 import { dropAppTables, appSchemaFor } from "../apps/store-schema.js";
 import { isBuiltinSource } from "../apps/store-ddl.js";
 import { pruneAppInstances } from "../org/store/app-instances.js";
+import { pruneSessionApps } from "../apps/session-apps.js";
 import { restartWorkersForApp, stopWorkersForApp, stopWorkersForMemberApp } from "../apps/worker-service.js";
 
 const actorOf = (u: { userId?: string; email?: string } | undefined): string => u?.userId || u?.email || "unknown";
@@ -213,6 +214,7 @@ const appRemove: Capability = {
       //  스키마는 설치 때와 같은 규칙(#4223) — 워크스페이스가 설치한 앱이면 그 워크스페이스 스키마의 테이블만 지운다.
       try { await dropAppTables(id, dataTables, appSchemaFor(isBuiltinSource(app.source))); } catch { /* best-effort */ }
       await pruneAppInstances(id);             // FK 없는 v2.1 신규 표 — 앱 제거 전에 명시 회수.
+      await pruneSessionApps(id);              // #4225 세션에 붙어 있던 기록도 — 같은 규칙(FK 없음).
       await store.deleteApp(id, wctx(user, ctx));
       return { ok: true, removed: id, components: comps.length };
     });

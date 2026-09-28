@@ -52,21 +52,33 @@ function wrapAppHtml(html: string, csp?: AppCsp): string {
 }
 
 interface AppUiData { html: string; title?: string; page_key?: string; app_id?: string; pages?: Array<{ key: string; title: string }>; csp?: AppCsp }
-export interface AppUiFrame { root: HTMLElement; destroy(): void }
+export interface AppUiFrame {
+  root: HTMLElement;
+  destroy(): void;
+  /** 호스트 → 앱 알림(JSON-RPC notification, id 없음). 앱 SDK 가 method 로 가른다(#4225 ui/notifications/data-changed). */
+  notify(method: string, params?: Record<string, unknown>): void;
+  /** 앱이 그 주제를 구독했나(SDK lively.store.onChange → ui/subscribe {topic:'data'}). 다시 불러오면 새 문서가 다시 구독한다. */
+  subscribed(topic: string): boolean;
+  /** 같은 HTML 로 앱 화면을 처음부터 다시 띄운다 — 구독하지 않은 앱에 «최신을 보여 주는» 가장 단순한 길. */
+  reload(): void;
+}
 
 /**
  * 앱 UI 를 샌드박스 iframe 으로 만들어 **프레임 + 정리 함수**를 돌려준다(호출부가 원하는 자리에 붙인다).
  *  브리지(postMessage)는 이 프레임에만 반응하는 핸들러로 걸리고 destroy() 가 떼어 낸다 — 여러 앱 UI 공존 안전.
  */
-export async function mountAppUiFrame(appId: string, opts?: { page?: string; title?: string; instanceId?: string }): Promise<AppUiFrame> {
+export async function mountAppUiFrame(appId: string, opts?: { page?: string; title?: string; instanceId?: string; sessionId?: string }): Promise<AppUiFrame> {
   const q = opts?.page ? '/' + encodeURIComponent(opts.page) : '';
   const data = await api('/api/ui/apps/' + encodeURIComponent(appId) + '/ui' + q) as AppUiData;
   if (!data || typeof data.html !== 'string') throw new Error('UI 를 받지 못했습니다');
+  const doc = wrapAppHtml(data.html, data.csp);
   const frame = el('iframe', {
     class: 'v2-appui-frame', title: opts?.title || data.title || appId,
     sandbox: 'allow-scripts',        // ⚠ allow-same-origin 없음 = 불투명 오리진(부모 토큰·스토리지 격리). 폼·팝업·top 이동 불허.
-    srcdoc: wrapAppHtml(data.html, data.csp),
+    srcdoc: doc,
   }) as HTMLIFrameElement;
+  const topics = new Set<string>();   // 앱이 구독한 주제(ui/subscribe) — 다시 불러오면 비운다(새 문서가 다시 구독한다)
+  let loads = 0;
 
   // 브리지 — 이 프레임(불투명 오리진)에서 온 메시지만. 응답 target 은 '*'(불투명 오리진이라 특정 못 함 — 이 프레임만 받는다).
   const onMsg = (ev: MessageEvent): void => {
@@ -74,8 +86,14 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
     const msg = ev.data as { method?: string; id?: unknown; params?: { name?: string; arguments?: unknown } } | null;
     if (!msg || typeof msg !== 'object' || typeof msg.method !== 'string') return;
     const reply = (payload: unknown): void => frame.contentWindow?.postMessage(payload, '*');
+    if (msg.method === 'ui/subscribe') {
+      // 알림(id 없음) — 답하지 않는다. 앱이 «바깥에서 바뀐 것을 스스로 다시 읽겠다»고 알린 것(#4225).
+      const topic = String((msg.params as { topic?: unknown } | undefined)?.topic ?? '');
+      if (topic) topics.add(topic);
+      return;
+    }
     if (msg.method === 'ui/initialize') {
-      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: data.page_key ?? null, capabilities: { tools: true } } });
+      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: data.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true } } });
     } else if (msg.method === 'tools/call') {
       const name = String(msg.params?.name ?? '');
       const args = (msg.params?.arguments ?? {}) as Record<string, unknown>;
@@ -104,7 +122,15 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
     // 그 밖(ui/message 등)은 v1 에선 무시.
   };
   window.addEventListener('message', onMsg);
-  return { root: frame, destroy: () => { window.removeEventListener('message', onMsg); frame.remove(); } };
+  return {
+    root: frame,
+    destroy: () => { window.removeEventListener('message', onMsg); frame.remove(); },
+    notify: (method, params) => { frame.contentWindow?.postMessage({ jsonrpc: '2.0', method, params: params ?? {} }, '*'); },
+    subscribed: (topic) => topics.has(topic),
+    // 같은 값을 다시 넣으면 브라우저가 다시 띄우지 않을 수 있어 매번 끝에 주석 한 줄을 바꿔 단다(문서 밖 — 앱은 모른다).
+    //  WindowProxy 는 같은 프레임이면 그대로라 브리지(ev.source 비교)는 새 문서에도 그대로 맞는다.
+    reload: () => { topics.clear(); frame.srcdoc = doc + '<!-- lively:reload ' + (++loads) + ' -->'; },
+  };
 }
 
 // ── 모달로 열기(전역 런치패드용) — 세션 화면 밖에서 앱 UI 를 띄울 때. panes 탭은 mountAppUiFrame 을 직접 쓴다. ──

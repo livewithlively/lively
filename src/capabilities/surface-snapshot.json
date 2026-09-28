@@ -4843,7 +4843,7 @@
   "rest": [
    "POST /api/ui/store/:table/insert"
   ],
-  "input_hash": "eb39712646846947"
+  "input_hash": "1f7a29d68f8b2c5d"
  },
  {
   "name": "store_query",
@@ -4853,7 +4853,7 @@
   "rest": [
    "POST /api/ui/store/:table/query"
   ],
-  "input_hash": "3eb09fbb3f75ec14"
+  "input_hash": "094b8c19436a2a16"
  },
  {
   "name": "store_update",
@@ -4863,7 +4863,7 @@
   "rest": [
    "POST /api/ui/store/:table/update"
   ],
-  "input_hash": "773947e7c2b2e356"
+  "input_hash": "5182fe7252d01790"
  },
  {
   "name": "store_delete",
@@ -4873,7 +4873,7 @@
   "rest": [
    "POST /api/ui/store/:table/delete"
   ],
-  "input_hash": "8de11ed6339aa6af"
+  "input_hash": "17e2cc4c8f0c071d"
  },
  {
   "name": "store_tables",
@@ -4883,6 +4883,36 @@
   "rest": [
    "GET /api/ui/store/tables"
   ],
-  "input_hash": "6c9f16e97bc4049d"
+  "input_hash": "5e3516baa81e01e2"
+ },
+ {
+  "name": "session_apps",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/terminal/sessions/:id/apps"
+  ],
+  "input_hash": "fdcb2d507c187945"
+ },
+ {
+  "name": "session_app_attach",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/terminal/sessions/:id/apps/attach"
+  ],
+  "input_hash": "915c12efe88f26fd"
+ },
+ {
+  "name": "session_app_detach",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/terminal/sessions/:id/apps/detach"
+  ],
+  "input_hash": "915c12efe88f26fd"
  }
 ]

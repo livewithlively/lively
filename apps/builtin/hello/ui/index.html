@@ -1,2 +1,79 @@
-<!doctype html><meta charset=utf-8><title>안녕</title>
-<body><h1>안녕 앱</h1><p>이 워크스페이스의 첫 앱입니다.</p></body>
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>안녕</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fff; --ink: #1b1f24; --muted: #6b7280; --line: #e5e7eb; --tint: #f6f7f9; --blue: #2d6bf0; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #16181c; --ink: #e8eaed; --muted: #9aa0a6; --line: #2c3036; --tint: #1e2126; --blue: #6c9bff; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", system-ui, sans-serif; background: var(--bg); color: var(--ink); }
+  h1 { margin: 0 0 2px; font-size: 18px; }
+  .sub { margin: 0 0 14px; color: var(--muted); font-size: 12.5px; }
+  form { display: flex; gap: 8px; margin-bottom: 12px; }
+  input { flex: 1; min-width: 0; height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--ink); font: inherit; }
+  input:focus { outline: none; border-color: var(--blue); }
+  button.add { height: 36px; padding: 0 14px; border: 0; border-radius: 9px; background: var(--blue); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  li { display: flex; align-items: flex-start; gap: 8px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--tint); }
+  li .t { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; }
+  li .who { flex: none; font-size: 11px; color: var(--muted); padding-top: 2px; }
+  li .who.ai { color: var(--blue); font-weight: 600; }
+  li button { flex: none; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px; border-radius: 6px; }
+  li button:hover { color: #d14343; background: var(--bg); }
+  li.fresh { animation: fresh 1.6s ease-out; }
+  @keyframes fresh { from { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.18); } }
+  .empty, .err { color: var(--muted); font-size: 13px; padding: 12px 2px; }
+  .err { color: #d14343; }
+</style>
+<body>
+  <h1>안녕 앱 — 메모</h1>
+  <p class="sub" id="sub">이 워크스페이스가 함께 쓰는 메모입니다.</p>
+  <form id="f"><input id="in" placeholder="메모를 적고 Enter" autocomplete="off"><button class="add" type="submit">남기기</button></form>
+  <ul id="list"></ul>
+  <p class="empty" id="empty" hidden>아직 메모가 없어요.</p>
+  <p class="err" id="err" hidden></p>
+<script>
+(function () {
+  var L = window.lively;
+  var list = document.getElementById('list');
+  var empty = document.getElementById('empty');
+  var err = document.getElementById('err');
+  var seen = {};
+  function fail(e) { err.hidden = false; err.textContent = '문제가 생겼어요 — ' + ((e && e.message) || e); }
+  function draw(rows) {
+    err.hidden = true;
+    list.textContent = '';
+    empty.hidden = rows.length > 0;
+    rows.forEach(function (r) {
+      var li = document.createElement('li');
+      if (Object.keys(seen).length && !seen[r.id]) li.className = 'fresh';
+      var t = document.createElement('span'); t.className = 't'; t.textContent = String(r.text || '');
+      var who = document.createElement('span'); var a = String(r.author || '');
+      who.className = 'who' + (/^ai$/i.test(a) ? ' ai' : ''); who.textContent = a || '—';
+      var x = document.createElement('button'); x.type = 'button'; x.title = '지우기'; x.textContent = '×';
+      x.onclick = function () { L.store['delete']('notes', { id: r.id }).then(load, fail); };
+      li.append(t, who, x);
+      list.append(li);
+    });
+    seen = {}; rows.forEach(function (r) { seen[r.id] = true; });
+  }
+  function load() { return L.store.query('notes', { limit: 200 }).then(draw, fail); }
+  document.getElementById('f').onsubmit = function (e) {
+    e.preventDefault();
+    var input = document.getElementById('in');
+    var text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    L.store.insert('notes', { text: text, author: '사람' }).then(load, fail);
+  };
+  L.ready.then(function () {
+    if (L.session) document.getElementById('sub').textContent = '이 세션에 붙어 있어요 — 세션의 AI 도 이 메모를 같이 읽고 씁니다.';
+    // 바깥(세션의 AI 등)에서 바뀌면 다시 읽는다 — 걸어 두면 호스트가 화면을 다시 불러오지 않아 입력 중인 글이 남는다.
+    L.store.onChange(function () { load(); });
+    return load();
+  }).catch(fail);
+})();
+</script>
+</body>
+</html>

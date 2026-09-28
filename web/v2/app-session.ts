@@ -18,6 +18,7 @@ export interface SessionApp {
   scopes: string[];   // 매니페스트 선언 상한(동의 창 표시용)
   tools: string[];    // 〃 (permissions.tools ∪ ext_tools)
   pages: Array<{ key: string; title: string }>;  // #1780 PR5 — ui.pages(있으면 UI 앱). 없으면 [](세션 앱).
+  tables: string[];   // #4225 — data.tables 이름. 있으면 세션에 붙여 AI 가 쓸 데이터가 있는 앱
   sites: string[];   // csp.frame_domains — 이 앱이 **화면에 싣는** 사이트(동의 창에 보여 준다)
   net: string[];     // csp.connect_domains ∪ permissions.hosts — 이 앱이 **직접 연결하는** 곳
   instances: { project: 'global' | 'optional' | 'required'; multiplicity: 'single' | 'multiple' };
@@ -37,6 +38,7 @@ export async function listSessionApps(): Promise<SessionApp[]> {
         const perm = (a.manifest && a.manifest.permissions) || {};
         const tools = [...(perm.tools || []), ...(perm.ext_tools || [])].map(String);
         const pages = (((a.manifest && a.manifest.ui) || {}).pages || []).map((p: any) => ({ key: String(p.key), title: String(p.title || p.key) }));
+        const tables = (((a.manifest && a.manifest.data) || {}).tables || []).map((t: any) => String((t && t.name) || '')).filter(Boolean);
         const csp = (a.manifest && a.manifest.csp) || {};
         const sites = (csp.frame_domains || []).map(String);
         const net = [...(csp.connect_domains || []), ...(perm.hosts || [])].map(String);
@@ -45,7 +47,7 @@ export async function listSessionApps(): Promise<SessionApp[]> {
         // system renderer는 builtin에서만 신뢰한다(서버 AppInstance 응답과 같은 경계). 외부 앱은 generic iframe.
         const system = source.kind === 'builtin' && a.manifest ? (a.manifest.system || null) : null;
         return { id: String(a.id), title: String(a.title || a.id), version: String(a.version || '0.0.0'),
-          scopes: (perm.scopes || []).map(String), tools, pages, sites, net, instances, system, source,
+          scopes: (perm.scopes || []).map(String), tools, pages, tables, sites, net, instances, system, source,
           notifications: perm.notifications === true };   // #1891 — 동의 창이 제 줄로 보여 준다
       });
   } catch (e: any) {
@@ -75,7 +77,7 @@ export function ensureAppGrant(appId: string, title?: string): Promise<boolean> 
   if (cur) return cur;
   const run = (async (): Promise<boolean> => {
     const app = (await listSessionApps()).find((a) => a.id === appId)
-      || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], sites: [], net: [], notifications: false,
+      || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], tables: [], sites: [], net: [], notifications: false,
         instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, system: null, source: {} };
     if (!(await appConsent(app))) return false;
     await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });

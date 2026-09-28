@@ -1,25 +1,49 @@
 // 앱 데이터 store_* (#1780 D6) — 앱이 **자기** 데이터 테이블(app.<appId>__<table>)을 읽고 쓴다.
 //  이중 격리: ① 테넌트 = RLS(런타임 앱 role 풀 itemsPool 이 SET LOCAL app.tenant_id 로 자동 필터, store-schema 정책)
-//   ② 앱 = 핸들러가 물리명을 **appUser.appId** 로 강제(클라가 app_id 를 못 고른다) → 앱 X 는 앱 Y 테이블을 이름조차 못 만든다.
-//  전제: 앱 세션/UI(appUser.appId 있음)만. 일반 세션은 400. 테이블은 매니페스트 data.tables 선언분만(오타·미생성 차단).
+//   ② 앱 = 핸들러가 물리명을 **판정된 앱 id** 로 강제 → 앱 X 는 앱 Y 테이블을 이름조차 못 만든다.
+//  누가 어느 앱으로 들어오나(resolveStoreApp):
+//   · 앱 세션/UI(appUser.appId 있음) — 그 앱뿐. app_id 를 다른 값으로 주면 403(클라가 앱을 못 고른다).
+//   · #4225 **앱이 붙은 일반 세션** — 요청이 말한 세션(x-lively-session)의 주인 × 지금 붙어 있음 × 그 사람의 동의 범위를
+//     매 호출 다시 본다(apps/session-apps.ts requireAttachedApp). 떼는 순간 막힌다. 그 밖(세션 밖·안 붙음)은 거절.
+//  테이블은 매니페스트 data.tables 선언분만(오타·미생성 차단).
 //  값은 전부 파라미터화, 컬럼/테이블명은 charset 검증(store-ddl). LIMIT 는 클램프된 정수만 인터폴레이션.
+//  쓰기가 성공하면 그 사람의 스트림으로 «데이터가 바뀌었다»를 민다 — 세션 오른쪽 앱 화면이 AI 가 쓴 것을 곧바로 그린다.
 import { z } from "zod";
 import { HttpError } from "./rest-util.js";
-import type { Capability } from "./types.js";
+import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { itemsPool } from "../db/client.js";
 import { getApp } from "../org/store/apps.js";
 import { qualifiedAppTable, assertIdent, isBuiltinSource, type StoreColumn } from "../apps/store-ddl.js";
 import { appSchemaFor, ensureAppTables } from "../apps/store-schema.js";
 import { logger } from "../log.js";
+import { requireAttachedApp, publishAppEvent } from "../apps/session-apps.js";
 
 const qi = (n: string): string => { if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(n)) throw new HttpError(400, `안전하지 않은 식별자: ${n}`); return `"${n}"`; };
 
-function requireAppPrincipal(user: LivelyUser | undefined): string {
-  const appId = user?.appId;
-  if (!appId) throw new HttpError(400, "store_* 는 앱 세션/UI 에서만 쓸 수 있습니다(앱 principal 필요)");
-  return appId;
+/** 이 호출이 어느 앱의 데이터로 들어가나 — 머리말의 두 길. 판정은 매 호출(캐시 없음). */
+async function resolveStoreApp(user: LivelyUser | undefined, input: Record<string, unknown>, ctx: CapabilityCtx | undefined, tool: string): Promise<string> {
+  const want = String(input.app_id ?? "").trim();
+  if (user?.appId) {
+    if (want && want !== user.appId) throw new HttpError(403, `앱 '${user.appId}' 의 화면·세션은 자기 앱의 데이터만 씁니다(요청한 app_id: ${want})`);
+    return user.appId;
+  }
+  if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
+  const sessionId = String(ctx?.session ?? "").trim();
+  if (!sessionId) throw new HttpError(400, "store_* 는 앱 화면·앱 세션, 또는 앱이 붙은 세션에서만 쓸 수 있습니다 — 세션 오른쪽에 앱을 붙이세요");
+  return requireAttachedApp({ sessionId, member: user.userId, appId: want || null, tool });
 }
+
+/** 쓰기 뒤 — 그 사람의 스트림에 «이 앱의 이 테이블이 바뀌었다». 비치명(publishAppEvent 가 삼킨다). */
+function announce(user: LivelyUser | undefined, appId: string, table: string, op: "insert" | "update" | "delete", ctx: CapabilityCtx | undefined): void {
+  const member = user?.userId;
+  if (!member) return;
+  publishAppEvent(member, { kind: "data", app_id: appId, table, op, session: ctx?.session ?? null, source: ctx?.source });
+}
+
+// app_id — 앱 세션/UI 는 생략(자기 앱), 앱이 붙은 세션은 그 앱(붙은 앱이 하나면 생략 가능). #4225
+const APP_ID = z.string().max(128).optional().describe("앱 id — 앱 화면·앱 세션에서는 생략. 앱이 붙은 세션에서는 그 앱(붙은 앱이 하나면 생략 가능)");
+const appIdOf = (b: Record<string, unknown>): string | undefined => (b.app_id == null || b.app_id === "" ? undefined : String(b.app_id));
 
 // 선언된 테이블만 — 매니페스트 data.tables 에 있는 이름이어야(오타·미생성 테이블 접근 차단).
 //  반환 = 이 요청(테넌트)에서 그 테이블의 인용 relation + 지연 복구에 쓸 선언 목록(#4223).
@@ -51,12 +75,12 @@ async function withTableRepair<T>(appId: string, target: AppTableTarget, run: ()
 const storeInsert: Capability = {
   name: "store_insert",
   title: "앱 데이터 삽입",
-  description: "앱 자기 데이터 테이블에 행 1개 삽입(app.<appId>__<table>). 앱 세션/UI 전용. table 은 매니페스트 data.tables 선언분만. row 값은 파라미터화. 반환 id.",
+  description: "앱 자기 데이터 테이블에 행 1개 삽입(app.<appId>__<table>). 앱 화면·앱 세션, 또는 그 앱이 붙은 세션(app_id)에서. table 은 매니페스트 data.tables 선언분만. row 값은 파라미터화. 반환 id.",
   scope: null,
-  input: { table: z.string(), row: z.record(z.unknown()) },
-  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/store/:table/insert"], parse: (req) => ({ table: (req.params as Record<string, string>)?.table, row: (req.body as Record<string, unknown>)?.row }) }] },
-  handler: async (input: Record<string, unknown>, user) => {
-    const appId = requireAppPrincipal(user);
+  input: { table: z.string(), row: z.record(z.unknown()), app_id: APP_ID },
+  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/store/:table/insert"], parse: (req) => { const b = (req.body ?? {}) as Record<string, unknown>; return { table: (req.params as Record<string, string>)?.table, row: b.row, app_id: appIdOf(b) }; } }] },
+  handler: async (input: Record<string, unknown>, user, ctx) => {
+    const appId = await resolveStoreApp(user, input, ctx, "store_insert");
     const table = String(input.table ?? "");
     const target = await resolveDeclaredTable(appId, table);
     const row = (input.row ?? {}) as Record<string, unknown>;
@@ -67,6 +91,7 @@ const storeInsert: Capability = {
       `INSERT INTO ${target.rel}(${cols.map(qi).join(",")}) VALUES(${params.join(",")}) RETURNING id`,
       cols.map((c) => row[c]),
     ));
+    announce(user, appId, table, "insert", ctx);
     return { id: r.rows[0]?.id ?? null };
   },
 };
@@ -74,12 +99,12 @@ const storeInsert: Capability = {
 const storeQuery: Capability = {
   name: "store_query",
   title: "앱 데이터 조회",
-  description: "앱 자기 데이터 테이블 조회(app.<appId>__<table>). 앱 세션/UI 전용. match 는 컬럼=값 등가필터(파라미터화), limit(1~1000, 기본 100), 최신 id 순. table 은 선언분만.",
+  description: "앱 자기 데이터 테이블 조회(app.<appId>__<table>). 앱 화면·앱 세션, 또는 그 앱이 붙은 세션(app_id)에서. match 는 컬럼=값 등가필터(파라미터화), limit(1~1000, 기본 100), 최신 id 순. table 은 선언분만.",
   scope: null,
-  input: { table: z.string(), match: z.record(z.unknown()).optional(), limit: z.number().optional() },
-  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/store/:table/query"], parse: (req) => { const b = (req.body ?? {}) as Record<string, unknown>; return { table: (req.params as Record<string, string>)?.table, match: b.match, limit: b.limit }; } }] },
-  handler: async (input: Record<string, unknown>, user) => {
-    const appId = requireAppPrincipal(user);
+  input: { table: z.string(), match: z.record(z.unknown()).optional(), limit: z.number().optional(), app_id: APP_ID },
+  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/store/:table/query"], parse: (req) => { const b = (req.body ?? {}) as Record<string, unknown>; return { table: (req.params as Record<string, string>)?.table, match: b.match, limit: b.limit, app_id: appIdOf(b) }; } }] },
+  handler: async (input: Record<string, unknown>, user, ctx) => {
+    const appId = await resolveStoreApp(user, input, ctx, "store_query");
     const table = String(input.table ?? "");
     const target = await resolveDeclaredTable(appId, table);
     const match = (input.match ?? {}) as Record<string, unknown>;
@@ -95,12 +120,12 @@ const storeQuery: Capability = {
 const storeUpdate: Capability = {
   name: "store_update",
   title: "앱 데이터 수정",
-  description: "앱 자기 데이터 테이블의 행을 수정(app.<appId>__<table>). 앱 세션/UI 전용. match(컬럼=값 등가, 파라미터화)로 대상 지정, set(컬럼=새값). match 없으면 거부(전량 수정 방지). 반환 changed(행수).",
+  description: "앱 자기 데이터 테이블의 행을 수정(app.<appId>__<table>). 앱 화면·앱 세션, 또는 그 앱이 붙은 세션(app_id)에서. match(컬럼=값 등가, 파라미터화)로 대상 지정, set(컬럼=새값). match 없으면 거부(전량 수정 방지). 반환 changed(행수).",
   scope: null,
-  input: { table: z.string(), match: z.record(z.unknown()), set: z.record(z.unknown()) },
-  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/store/:table/update"], parse: (req) => { const b = (req.body ?? {}) as Record<string, unknown>; return { table: (req.params as Record<string, string>)?.table, match: b.match, set: b.set }; } }] },
-  handler: async (input: Record<string, unknown>, user) => {
-    const appId = requireAppPrincipal(user);
+  input: { table: z.string(), match: z.record(z.unknown()), set: z.record(z.unknown()), app_id: APP_ID },
+  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/store/:table/update"], parse: (req) => { const b = (req.body ?? {}) as Record<string, unknown>; return { table: (req.params as Record<string, string>)?.table, match: b.match, set: b.set, app_id: appIdOf(b) }; } }] },
+  handler: async (input: Record<string, unknown>, user, ctx) => {
+    const appId = await resolveStoreApp(user, input, ctx, "store_update");
     const table = String(input.table ?? "");
     const target = await resolveDeclaredTable(appId, table);
     const set = (input.set ?? {}) as Record<string, unknown>;
@@ -113,6 +138,7 @@ const storeUpdate: Capability = {
     const setSql = setCols.map((c) => { params.push(set[c]); return `${qi(c)}=$${params.length}`; }).join(",");
     const whereSql = matchKeys.map((k) => { params.push(match[k]); return `${qi(k)}=$${params.length}`; }).join(" AND ");
     const r = await withTableRepair(appId, target, () => itemsPool.query(`UPDATE ${target.rel} SET ${setSql} WHERE ${whereSql}`, params));
+    if (r.rowCount) announce(user, appId, table, "update", ctx);
     return { changed: r.rowCount ?? 0 };
   },
 };
@@ -120,12 +146,12 @@ const storeUpdate: Capability = {
 const storeDelete: Capability = {
   name: "store_delete",
   title: "앱 데이터 삭제",
-  description: "앱 자기 데이터 테이블의 행을 삭제(app.<appId>__<table>). 앱 세션/UI 전용. match(컬럼=값 등가, 파라미터화)로 대상 지정 — match 없으면 거부(전량 삭제 방지). 반환 deleted(행수).",
+  description: "앱 자기 데이터 테이블의 행을 삭제(app.<appId>__<table>). 앱 화면·앱 세션, 또는 그 앱이 붙은 세션(app_id)에서. match(컬럼=값 등가, 파라미터화)로 대상 지정 — match 없으면 거부(전량 삭제 방지). 반환 deleted(행수).",
   scope: null,
-  input: { table: z.string(), match: z.record(z.unknown()) },
-  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/store/:table/delete"], parse: (req) => { const b = (req.body ?? {}) as Record<string, unknown>; return { table: (req.params as Record<string, string>)?.table, match: b.match }; } }] },
-  handler: async (input: Record<string, unknown>, user) => {
-    const appId = requireAppPrincipal(user);
+  input: { table: z.string(), match: z.record(z.unknown()), app_id: APP_ID },
+  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/store/:table/delete"], parse: (req) => { const b = (req.body ?? {}) as Record<string, unknown>; return { table: (req.params as Record<string, string>)?.table, match: b.match, app_id: appIdOf(b) }; } }] },
+  handler: async (input: Record<string, unknown>, user, ctx) => {
+    const appId = await resolveStoreApp(user, input, ctx, "store_delete");
     const table = String(input.table ?? "");
     const target = await resolveDeclaredTable(appId, table);
     const match = (input.match ?? {}) as Record<string, unknown>;
@@ -133,6 +159,7 @@ const storeDelete: Capability = {
     if (!keys.length) throw new HttpError(400, "match 가 필요합니다(전량 삭제 방지)");
     const where = keys.map((k, i) => `${qi(k)}=$${i + 1}`).join(" AND ");
     const r = await withTableRepair(appId, target, () => itemsPool.query(`DELETE FROM ${target.rel} WHERE ${where}`, keys.map((k) => match[k])));
+    if (r.rowCount) announce(user, appId, table, "delete", ctx);
     return { deleted: r.rowCount ?? 0 };
   },
 };
@@ -140,12 +167,12 @@ const storeDelete: Capability = {
 const storeTables: Capability = {
   name: "store_tables",
   title: "앱 데이터 테이블 목록",
-  description: "이 앱이 선언한 데이터 테이블(name·columns) 목록. 앱 세션/UI 전용(자기 앱 스키마 introspection).",
+  description: "이 앱이 선언한 데이터 테이블(name·columns) 목록. 앱 화면·앱 세션, 또는 그 앱이 붙은 세션(app_id)에서(자기 앱 스키마 introspection).",
   scope: null,
-  input: {},
-  expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/store/tables"], parse: () => ({}) }] },
-  handler: async (_input: Record<string, unknown>, user) => {
-    const appId = requireAppPrincipal(user);
+  input: { app_id: APP_ID },
+  expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/store/tables"], parse: (req) => ({ app_id: appIdOf((req.query ?? {}) as Record<string, unknown>) }) }] },
+  handler: async (input: Record<string, unknown>, user, ctx) => {
+    const appId = await resolveStoreApp(user, input, ctx, "store_tables");
     const app = await getApp(appId);
     const tables = ((app?.manifest as { data?: { tables?: unknown[] } })?.data?.tables ?? []);
     return { tables };
