@@ -25,7 +25,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { entrypointHostEffects, hostEffectsAllowed, removeWindowsUserPath } from "./host-effects.mjs";
 
 const hostEffects = entrypointHostEffects();
@@ -35,7 +35,15 @@ const fetch = (...args) => hostEffects.fetch(...args);
 
 const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
-const CODEX = join(HOME, ".codex");
+function codexConfigDir(home, env = process.env) {
+  const configured = String(env.CODEX_HOME || "").trim();
+  if (!configured) return join(home, ".codex");
+  if (!env.LIVELY_HOME) return configured;
+  const norm = (p) => { const s = resolve(p).replace(/[\\/]+/g, "/").replace(/\/+$/, ""); return process.platform === "win32" ? s.toLowerCase() : s; };
+  const c = norm(configured), r = norm(env.LIVELY_HOME);
+  return (c === r || c.startsWith(r + "/")) ? configured : join(home, ".codex");
+}
+const CODEX = codexConfigDir(HOME);
 // opencode(XDG — 설치기와 같은 계산·LIVELY_HOME 격리 우선) · antigravity(~/.gemini — env 오버라이드 없음, #1689).
 const OPENCODE = join(process.env.LIVELY_HOME ? join(HOME, ".config") : (process.env.XDG_CONFIG_HOME || join(HOME, ".config")), "opencode");
 const GEMINI = join(HOME, ".gemini");
