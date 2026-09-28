@@ -17,7 +17,7 @@
 //  종류(기능·수정·문서…)는 점의 색으로만. 사람 순서는 **가장 최근에 일한 사람부터**(많이 한 순이 아니다).
 import { el, personFace, relTime } from '../core.js';
 import { pjvPopover } from './popover.js';
-import { type CtxRow, type Fill, SEP, btn, copyRow, emptyNote, footText, hubCtx, hubIcon, openRouteRow } from './detail-hub-kit.js';
+import { type CtxRow, type Fill, SEP, btn, copyRow, emptyNote, footText, hubCtx, hubIcon, openRouteRow, openSessionRoute } from './detail-hub-kit.js';
 import { type BoardCol, actWhen, boardCols, boardDays, boardMaxCols, dayKey, dayParts, feedDayHead, peopleByRecency, recentByCol, splitSummary, taskIndex, whenShort } from './detail-hub-model.js';
 
 const TYPE_LABEL: Record<string, string> = { feature: '기능', fix: '수정', decision: '결정', docs: '문서', research: '리서치', review: '검토', chore: '운영', other: '기타' };
@@ -195,7 +195,7 @@ export const fillTimeline: Fill = (ctx, f, body, foot, sub) => {
           el('span', { class: 'pjh-kn-rel', text: REL_LABEL[r.relation] || r.relation || '' })))
           : [el('div', { class: 'pjh-rail-fine', text: '이 작업에 이어진 지식이 없습니다.' })]),
         (a.session_id || task) ? el('div', { class: 'pjh-side-acts pjh-fside-acts' },
-          a.session_id ? sbtn('세션 열기', 'term', () => { location.hash = '#/s/' + encodeURIComponent(String(a.session_id)); }, false) : null,
+          a.session_id ? sbtn('세션 열기', 'term', () => openSessionRoute(String(a.session_id)), false) : null,
           task ? sbtn('태스크 열기', 'tasks', () => openTask(task)) : null) : null,
       ];
       side.replaceChildren(...kids.filter(Boolean));

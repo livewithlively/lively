@@ -477,6 +477,9 @@ export async function bootV2(): Promise<void> {
     // #3784 — 액자(클래식 화면) 안 우클릭 메뉴의 「새 탭에서 열기」. 프레임은 셸 탭을 못 만드니 한 줄 올려 보낸다.
     //  같은 오리진 + 문자열 해시만. 어느 탭이 보냈든 결과는 같다(새 탭 하나).
     if (m && m.type === 'lively:open-route' && typeof m.href === 'string' && m.href.startsWith('#/')) {
+      //  세션은 홈에서 연다 — 세션 목록의 [세션 열기](paintSessAll onOpen)와 같이 구역을 홈으로 옮긴다.
+      //   안 옮기면 프로젝트 탭(구역 «프로젝트»)에서 연 세션 옆에 프로젝트 사이드바가 남는다(#3870).
+      if (routeKey(m.href).startsWith('s:')) setRailSection('home', { navigate: false });
       const hit = tabsApi.find(m.href);
       if (hit) tabsApi.activate(hit); else tabsApi.add(m.href);
       return;

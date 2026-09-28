@@ -195,3 +195,6 @@ export const absUrl = (href: string): string => {
 };
 /** 셸 탭으로 연다(액자 안이면 부모 창에 부탁한다 — ctx-registry.requestOpenRoute). */
 export const openRouteRow = (label: string, href: string, icon = 'columns', hint = '셸 탭'): CtxRow => ({ label, icon, hint, run: () => requestOpenRoute(href, true) });
+/** 세션 화면으로 간다 — 셸이 홈에서 연다(액자 안이면 부모 창에 부탁한다).
+ *  ⚠ 액자 안에서 location.hash 를 바꾸지 않는다 — 액자 안 클래식 화면은 `#/s/` 를 몰라 클래식 홈으로 떨어진다(#3870). */
+export const openSessionRoute = (sid: string): void => requestOpenRoute('#/s/' + encodeURIComponent(sid), true);
