@@ -45,6 +45,12 @@ test("표 — 예산을 안 썼으면 정체가 아니다(설계된 잔여와 �
   assert.equal(nextStallState({ streak: 2, remaining: 500, lastRunAt: "p" }, { remaining: -1, budgetStopped: true, lastRunAt: "c" }).streak, 2,
     "못 센 값(-1)에 카운터를 되돌린다 — 거짓 해소 알림이 나간다");
   assert.equal(nextStallState(null, { remaining: -1, budgetStopped: true, lastRunAt: "c" }).streak, 0, "이전이 없으면 0 에서 시작한다");
+  //  첫 관측이 못 센 값이면 baseline 에 -1 이 남는다(sentinel). 그게 다음 관측에서 «이전 없음» 과 같게
+  //   동작해야 한다 — 훗날 비중립 분기가 prev.remaining 을 다르게 읽으면(<= · 차분) 조용히 깨지는 자리다.
+  assert.equal(
+    nextStallState({ streak: 0, remaining: -1, lastRunAt: "p" }, { remaining: 400, budgetStopped: true, lastRunAt: "c" }).streak,
+    nextStallState(null, { remaining: 400, budgetStopped: true, lastRunAt: "c" }).streak,
+    "첫 관측이 못 센 값이면 다음 관측은 첫 관측처럼 세야 한다");
   //  🔴 baseline 도 유지해야 한다 — -1 을 저장하면 다음 전진 판정이 `400 < -1` 이라 영영 거짓이 되어,
   //   큐가 실제로 줄고 있는데도 제자리로 세어 같은 거짓 경보가 순서만 바꿔 되살아난다.
   assert.equal(nextStallState({ streak: 2, remaining: 500, lastRunAt: "p" }, { remaining: -1, budgetStopped: true, lastRunAt: "c" }).remaining, 500,

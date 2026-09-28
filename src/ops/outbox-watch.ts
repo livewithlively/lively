@@ -61,7 +61,8 @@ const WATCH_KEY = "outbox";
 let timer: NodeJS.Timeout | null = null;
 
 /**
- * 연속 정체 횟수(순수). 전진했거나 예산을 안 썼으면 0 으로 되돌린다.
+ * 틱 간 상태 전이(순수) — streak 과 전진 baseline 을 같은 규칙으로 옮긴다.
+ * 전진했거나 예산을 안 썼으면 streak 은 0.
  *
  *  `budgetStopped=false` 를 0 으로 두는 것이 이 감시가 상시 잔여를 오탐하지 않는 근거다(머리말).
  *  `remaining===0` 도 0 이다 — 마지막 행을 처리한 직후 다음 반복에서 예산에 걸리면 «다 비웠는데
@@ -151,7 +152,6 @@ function stampOf(v: unknown): string | null {
   if (v instanceof Date) return v.toISOString();
   return typeof v === "string" ? v : null;
 }
-
 
 function isDrainSummary(v: unknown): v is DrainSummary {
   if (!v || typeof v !== "object") return false;
