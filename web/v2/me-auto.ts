@@ -354,7 +354,7 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
           qmark('여기 적은 폴더에서 연 AI 세션에 stop-writeback-gate 훅을 적용합니다. 이 폴더 밖에서 연 AI 세션도 라이블리 MCP 도구를 한 번이라도 쓰면 적용됩니다.')), roots),
         el('label', { class: 'v2a-f' }, el('span', { class: 'v2a-fl' }, 'pull_tools · 외부 자료 가져오기로 판정할 도구 이름 접두어',
           qmark('이 접두어로 시작하는 MCP 도구를 호출하면 외부 자료를 가져온 AI 세션으로 기록되어, 응답을 마칠 때 기록 요청 대상이 됩니다.')), pull),
-        el('p', { class: 'v2a-fh' }, ...uiText('워크스페이스에서 직접 만든 훅 ' + ((data.orgHooks || []).length) + '개는 ' + ctxPath('deliver') + '에서 관리합니다.')),
+        el('p', { class: 'v2a-fh', text: '워크스페이스에서 직접 만든 훅 ' + ((data.orgHooks || []).length) + '개는 ' + ctxPath('deliver') + '에서 관리합니다.' }),
         canEdit ? el('div', { class: 'v2a-editor-a' }, save) : null));
     return d;
   }
