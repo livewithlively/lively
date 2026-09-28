@@ -17,7 +17,8 @@
 //  B2 마우스 없음·입력줄 클릭                   → 앱·웹 0(방향키로 커서를 끌고 다니지 않는다)
 //  B3 마우스 없음·다른 줄 끌기(대조)            → xterm 선택 = 그 줄 글자
 //  B4 마우스 없음·입력줄 누름(포커스는 딴 데)    → 터미널 입력이 포커스
-//  D1 앱 마우스·입력줄 Shift+끌기(강제 선택)     → xterm 선택 = «반갑습니다» · 앱·웹 0
+//  D1 앱 마우스·입력줄 강제 선택 끌기(맥 ⌥ · 그 밖 Shift) → xterm 선택 = «반갑습니다» · 앱·웹 0
+//     (xterm 은 맥에서 Shift 가 아니라 ⌥ 로 강제 선택한다 — macOptionClickForcesSelection. 맥 헤드리스에서 Shift 로 쏘면 거짓 빨강)
 //  C1 키보드 선택 뒤 입력줄 누름               → 웹 선택을 거둔다
 //  C2 키보드 선택 뒤 다른 줄 누름              → 웹 선택을 거둔다(앱·xterm 선택과 두 겹으로 남지 않게)
 //
@@ -102,7 +103,7 @@ function fire(s, type, col, row, buttons, mods) {
   var p = xy(s, col, row), m = mods || {};
   var target = type === 'mousedown' ? s.host.querySelector('.xterm-screen') : document;
   target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, composed: true, view: window,
-    clientX: p.x, clientY: p.y, button: 0, buttons: buttons, detail: type === 'mousemove' ? 0 : 1, shiftKey: !!m.shift }));
+    clientX: p.x, clientY: p.y, button: 0, buttons: buttons, detail: type === 'mousemove' ? 0 : 1, shiftKey: !!m.shift, altKey: !!m.alt }));
 }
 async function click(s, col, row) { fire(s, 'mousedown', col, row, 1); await sleep(90); fire(s, 'mouseup', col, row, 0); await sleep(250); }
 async function drag(s, row, from, to, mods) {
@@ -143,7 +144,9 @@ async function clearedByPress(s, col, row) {
     s = await scene(false); await drag(s, C.OUT_ROW, 0, 4); R.B3 = { selection: s.term.getSelection() };
     s = await scene(false); b = focusElsewhere(); await click(s, C.WIDE_TAIL, C.INPUT_ROW);
     R.B4 = { before: b, focused: document.activeElement === s.term.textarea };
-    s = await scene(true); await drag(s, C.INPUT_ROW, C.WORD_FROM, C.WORD_TO, { shift: true });
+    // 강제 선택 수정자 — xterm 과 같은 판정(맥이면 ⌥, 그 밖 Shift)
+    var force = /Mac|iPhone|iPad/.test(navigator.platform) ? { alt: true } : { shift: true };
+    s = await scene(true); await drag(s, C.INPUT_ROW, C.WORD_FROM, C.WORD_TO, force);
     R.D1 = { selection: s.term.getSelection(), app: s.app.slice(), sent: sent(s) };
     s = await scene(true); R.C1 = await clearedByPress(s, C.WIDE_TAIL, C.INPUT_ROW);
     s = await scene(true); R.C2 = await clearedByPress(s, 3, C.OUT_ROW);
@@ -197,7 +200,7 @@ check("B2 마우스 없음·입력줄 클릭 → 앱·웹으로 나간 것 0", R
 // 끝점은 칸 가운데 기준으로 가까운 경계에 붙는다 — «:»(4칸) 가운데까지 끌면 «done»(0~3칸)이다.
 check("B3 (대조) 다른 줄 끌기 → 그 줄 글자가 선택된다", R.B3.selection === OUT_TEXT.slice(0, 4), R.B3.selection);
 check("B4 마우스 없음·입력줄 누름 → 터미널 입력이 포커스를 가져온다", R.B4.before === "elsewhere" && R.B4.focused === true, R.B4);
-check("D1 앱 마우스·입력줄 Shift+끌기 → xterm 선택 = «반갑습니다» · 앱·웹 0",
+check("D1 앱 마우스·입력줄 강제 선택 끌기(맥 ⌥ · 그 밖 Shift) → xterm 선택 = «반갑습니다» · 앱·웹 0",
   R.D1.selection === "반갑습니다" && R.D1.app.length === 0 && R.D1.sent.length === 0, R.D1);
 check("C1 키보드 선택 뒤 입력줄 누름 → 웹 선택을 거둔다", /sel-off/.test(R.C1.offAfter), R.C1);
 check("C2 키보드 선택 뒤 다른 줄 누름 → 웹 선택을 거둔다", /sel-off/.test(R.C2.offAfter), R.C2);
