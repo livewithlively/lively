@@ -40,14 +40,58 @@ export function assertIdent(kind: "table" | "column", name: string): string {
   return n;
 }
 
+// Postgres 식별자 상한(NAMEDATALEN-1). 넘는 이름은 **조용히 잘려** 서로 다른 선언이 같은 물리 테이블이 된다 — 그래서 거부한다.
+export const PG_IDENT_MAX = 63;
+
 /**
- * 앱별 물리 테이블명 = app 스키마의 `<appId>__<table>` (앱 격리 — 앱 X 는 앱 Y 의 테이블명을 못 만든다/못 건드린다).
- *  appId 는 STRICT_SLUG(매니페스트에서 검증됨)이나 방어적으로 재검. 반환은 스키마 없는 relation 명(호출부가 app. 붙임).
+ * 앱 id → 물리 이름 접두(#4224). 매니페스트는 앱 id 에 `-` 를 허용하지만(`crm-dashboard`) 테이블 식별자 규칙엔 없다 —
+ *  종전엔 하이픈 id 앱의 테이블 생성이 전부 실패했다. `-` 를 `_` 로 바꾼다.
+ *  ★ 단사성: 앱 id 엔 `_` 가 없으므로(APP_ID_RE) 바꾼 결과가 서로 겹치지 않는다. 다만 구분자 `__` 와 헷갈리면
+ *   `<접두>__<테이블>` 을 두 가지로 읽을 수 있다(`a--b`+`x` 와 `a`+`b__x` 가 둘 다 `a__b__x`, `a-`+`x` 와 `a`+`_x` 가 둘 다
+ *   `a___x`). 그래서 접두에 `__` 가 생기거나 `_` 로 끝나는 id(연속 하이픈·끝 하이픈)는 데이터 테이블을 못 가진다 —
+ *   그러면 물리 이름의 **첫 `__`** 가 늘 구분자라 (앱, 테이블) 이 하나로 정해진다.
+ */
+export function physicalAppPrefix(appId: string): string {
+  const raw = String(appId).trim();
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(raw)) throw new HttpError(400, `앱 id 가 식별자 규칙에 맞지 않습니다: ${appId}`);
+  const a = raw.replace(/-/g, "_");
+  if (a.includes("__") || a.endsWith("_")) {
+    throw new HttpError(400, `앱 id '${appId}' 는 데이터 테이블을 가질 수 없습니다 — 하이픈을 연달아 쓰거나 하이픈으로 끝나는 id 는 테이블 이름이 다른 앱과 겹칠 수 있습니다. id 를 바꿔 주세요`);
+  }
+  return a;
+}
+
+/**
+ * 앱별 물리 테이블명 = `<앱 접두>__<table>` (앱 격리 — 앱 X 는 앱 Y 의 테이블명을 못 만든다/못 건드린다).
+ *  앱 접두 = physicalAppPrefix(하이픈 → 밑줄, #4224). 반환은 스키마 없는 relation 명(호출부가 스키마를 붙임).
+ *  63자를 넘으면 400 — Postgres 가 잘라 버리면 다른 테이블과 한 몸이 된다.
  */
 export function physicalTableName(appId: string, table: string): string {
-  const a = String(appId).trim();
-  if (!IDENT.test(a)) throw new HttpError(400, `앱 id 가 식별자 규칙에 맞지 않습니다: ${appId}`);
-  return `${a}__${assertIdent("table", table)}`;
+  const name = `${physicalAppPrefix(appId)}__${assertIdent("table", table)}`;
+  if (name.length > PG_IDENT_MAX) {
+    throw new HttpError(400, `테이블 이름이 너무 깁니다: 앱 '${appId}' 의 '${table}' → ${name}(${name.length}자, 최대 ${PG_IDENT_MAX}자). 앱 id 나 테이블 이름을 줄여 주세요`);
+  }
+  return name;
+}
+
+/** 워크스페이스 스키마 옆의 보관 스키마(#4224) — 매니페스트에서 빠졌지만 데이터가 있던 테이블이 옮겨 가는 자리. */
+export function archiveSchemaName(schema: string): string {
+  if (!IDENT.test(schema)) throw new HttpError(500, `스키마 이름이 식별자 규칙에 맞지 않습니다: ${schema}`);
+  const s = `${schema}_archive`;
+  if (s.length > PG_IDENT_MAX) throw new HttpError(500, `보관 스키마 이름이 너무 깁니다: ${s}`);
+  return s;
+}
+
+/**
+ * 보관 테이블 이름(순수, #4224) — `<물리명>__<YYYYMMDDHHMMSS>[꼬리]`. 같은 테이블을 두 번 보관해도 겹치지 않게 시각을 붙이고,
+ *  63자를 넘으면 물리명 앞쪽을 남기고 자른다(시각과 꼬리는 늘 남긴다 — 사람이 «언제 빠졌나» 를 읽는 자리).
+ *  suffix 는 테이블과 함께 옮겨 가는 인덱스·시퀀스 이름용(`_pkey`·`_seq1`…) — 테이블·인덱스·시퀀스는 한 스키마 안에서
+ *  이름을 나눠 쓰므로, 옮기기 전에 이것들도 겹치지 않는 이름으로 바꿔야 두 번째 보관이 `..._pkey already exists` 로 죽지 않는다.
+ */
+export function archivedTableName(physical: string, at: Date, suffix: string = ""): string {
+  const ts = at.toISOString().replace(/[-:T]/g, "").slice(0, 14);
+  const tail = `__${ts}${suffix}`;
+  return `${physical.slice(0, PG_IDENT_MAX - tail.length)}${tail}`;
 }
 
 /**

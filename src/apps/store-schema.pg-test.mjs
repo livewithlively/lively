@@ -14,6 +14,11 @@
 //  S5 DDL 자격이 없으면(종전 매니지드) strict 는 원인을 담아 던지고, 비-strict 는 종전처럼 조용하다(fail-first 근거)
 //  S6 기본 앱은 공유 app 스키마 + 행 격리
 //  S7 전제 확인 — 런타임 role 은 스키마를 못 만든다(이 시험이 매니지드를 흉내 내고 있다는 증거)
+//  ── #4224 (세션이 만든 앱 설치) ──
+//  S8 매니페스트에 칸이 늘면 ADD COLUMN — 기존 행 보존 · 런타임 role 이 새 칸에 쓴다 · 타입이 다르면 바꾸지 않고 알린다
+//  S9 매니페스트에서 빠진 테이블 — 비었으면 DROP · 데이터가 있으면 보관 스키마로(런타임 role 은 못 읽음) · 주인 아닌 테이블은 정리 실패로 남긴다
+//  S10 하이픈 id 앱도 테이블이 생기고 쓰인다(종전엔 생성이 늘 실패)
+//  S11 워크스페이스 퓨즈 — 새로 생길 테이블까지 세어 상한을 넘으면 ok=false
 import pg from "pg";
 
 const SUPER = process.env.ITEMS_DATABASE_URL;
@@ -31,7 +36,7 @@ await su.connect();
 const dbName = (await su.query("SELECT current_database() AS d")).rows[0].d;
 
 async function dropAll() {
-  for (const s of [`app_${TA.replace(/-/g, "")}`, `app_${TB.replace(/-/g, "")}`]) await su.query(`DROP SCHEMA IF EXISTS "${s}" CASCADE`);
+  for (const t of [TA, TB]) for (const suf of ["", "_archive"]) await su.query(`DROP SCHEMA IF EXISTS "app_${t.replace(/-/g, "")}${suf}" CASCADE`);
   await su.query(`DROP TABLE IF EXISTS app."pgtbuiltin__marks" CASCADE`);
   // 이 시험이 만든 app 스키마면(매니지드 경로) 걷는다 — 먼저 있던 것은 건드리지 않는다.
   if (APP_PREEXISTED === false) await su.query(`DROP SCHEMA IF EXISTS app CASCADE`);
@@ -60,7 +65,7 @@ process.env.ITEMS_DATABASE_URL = dsnAs(RT, PW_RT);
 process.env.LIVELY_APP_DB_ROLE = RT;
 delete process.env.LIVELY_OWNER_DATABASE_URL;
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
-const { ensureAppTables, dropAppTables } = await import(`${DIST}/apps/store-schema.js`);
+const { ensureAppTables, dropAppTables, cleanupDroppedTables, checkAppTableFuse, emptyTableReport } = await import(`${DIST}/apps/store-schema.js`);
 const { appSchemaName } = await import(`${DIST}/apps/store-ddl.js`);
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 
@@ -153,6 +158,87 @@ try {
     const a = (await asTenant(TA, `SELECT url FROM app."pgtbuiltin__marks"`)).rows.map((r) => r.url);
     const b = (await asTenant(TB, `SELECT url FROM app."pgtbuiltin__marks"`)).rows.map((r) => r.url);
     chk("S6 기본 앱은 공유 app 스키마 한 테이블, 테넌트마다 자기 행만", shared === "app" && a.join() === "https://a" && b.join() === "https://b", JSON.stringify({ shared, a, b }));
+  }
+
+  // ── S8 칸 추가 반영(#4224) ──
+  {
+    const grown = [{ table: "contacts", columns: [...CONTACTS_A[0].columns, { name: "phone", type: "text" }, { name: "met_at", type: "timestamptz" }] }];
+    const rep = emptyTableReport();
+    await ensureAppTables("crm", grown, { schema: SA, strict: true, report: rep });
+    const cols = (await su.query(`SELECT column_name FROM information_schema.columns WHERE table_schema=$1 AND table_name='crm__contacts'`, [SA])).rows.map((r) => r.column_name);
+    chk("S8 늘어난 칸(phone·met_at)이 기존 테이블에 더해진다", cols.includes("phone") && cols.includes("met_at"), JSON.stringify(cols));
+    chk("S8b 보고에 더한 칸이 적힌다 · 새로 만든 테이블은 없다",
+      rep.added_columns.map((c) => c.column).sort().join() === "met_at,phone" && rep.created.length === 0 && rep.type_mismatches.length === 0, JSON.stringify(rep));
+    const kept = (await asTenant(TA, `SELECT name, phone FROM "${SA}"."crm__contacts"`)).rows;
+    chk("S8c 기존 행은 그대로(새 칸은 NULL)", kept.length === 1 && kept[0].name === "알파컷" && kept[0].phone === null, JSON.stringify(kept));
+    await asTenant(TA, `UPDATE "${SA}"."crm__contacts" SET phone=$1, met_at=now() WHERE name=$2`, ["010", "알파컷"]);
+    chk("S8d 런타임 role 이 새 칸에 쓴다(테이블 단위 GRANT 가 새 칸도 덮는다)",
+      (await asTenant(TA, `SELECT phone FROM "${SA}"."crm__contacts"`)).rows[0]?.phone === "010");
+    const again = emptyTableReport();
+    await ensureAppTables("crm", grown, { schema: SA, strict: true, report: again });
+    chk("S8e 같은 선언으로 다시 설치하면 아무것도 안 바뀐다(timestamptz 를 같은 타입으로 알아본다)",
+      again.added_columns.length === 0 && again.type_mismatches.length === 0 && again.created.length === 0, JSON.stringify(again));
+    const retyped = [{ table: "contacts", columns: [{ name: "name", type: "text" }, { name: "segment", type: "int" }] }];
+    const mm = emptyTableReport();
+    await ensureAppTables("crm", retyped, { schema: SA, strict: true, report: mm });
+    const segType = (await su.query(`SELECT data_type FROM information_schema.columns WHERE table_schema=$1 AND table_name='crm__contacts' AND column_name='segment'`, [SA])).rows[0]?.data_type;
+    const stillPhone = (await su.query(`SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name='crm__contacts' AND column_name='phone'`, [SA])).rowCount === 1;
+    chk("S8f 타입이 다르면 바꾸지 않고 알린다 · 선언에서 빠진 칸도 지우지 않는다",
+      segType === "text" && stillPhone && mm.type_mismatches.length === 1 && mm.type_mismatches[0].column === "segment" && mm.type_mismatches[0].actual === "text",
+      JSON.stringify({ segType, stillPhone, mm }));
+  }
+
+  // ── S9 매니페스트에서 빠진 테이블 정리(#4224) ──
+  {
+    await ensureAppTables("crm", [
+      { table: "notes", columns: [{ name: "body", type: "text" }] },
+      { table: "logs", columns: [{ name: "line", type: "text" }] },
+    ], { schema: SA, strict: true });
+    await asTenant(TA, `INSERT INTO "${SA}"."crm__logs"(line) VALUES ('남길 기록')`);
+    // 주인이 DDL role 이 아닌 테이블(슈퍼유저가 손으로 만든 것) — 지우지도 옮기지도 못하면 그 자리에 남아야 한다.
+    await su.query(`CREATE TABLE "${SA}"."crm__foreign"(x int)`);
+    const at = new Date("2026-09-28T01:02:03Z");
+    const rep = await cleanupDroppedTables("crm", ["notes", "logs", "foreign", "ghost"], SA, at);
+    const archiveSchema = `${SA}_archive`;
+    chk("S9 빈 테이블(notes)은 지워진다", rep.dropped.join() === "notes"
+      && (await su.query("SELECT to_regclass($1) AS r", [`"${SA}"."crm__notes"`])).rows[0].r === null, JSON.stringify(rep));
+    const arch = rep.archived.find((a) => a.table === "logs");
+    chk("S9b 데이터가 있는 테이블(logs)은 보관 스키마로 옮겨진다(이름에 시각)",
+      arch && arch.rows === 1 && arch.archived_as === `${archiveSchema}.crm__logs__20260928010203`
+      && (await su.query("SELECT to_regclass($1) AS r", [`"${SA}"."crm__logs"`])).rows[0].r === null, JSON.stringify(rep));
+    const saved = (await su.query(`SELECT line FROM "${archiveSchema}"."crm__logs__20260928010203"`)).rows;
+    chk("S9c 보관된 테이블의 행은 그대로 남는다", saved.length === 1 && saved[0].line === "남길 기록", JSON.stringify(saved));
+    let rtDenied = false;
+    try { await asTenant(TA, `SELECT 1 FROM "${archiveSchema}"."crm__logs__20260928010203"`); } catch (e) { rtDenied = e.code === "42501"; }
+    chk("S9d 런타임 role(앱)은 보관된 테이블을 못 읽는다", rtDenied);
+    chk("S9e 주인 아닌 테이블은 정리 실패로 알리고 그 자리에 둔다",
+      rep.failed.length === 1 && rep.failed[0].table === "foreign"
+      && (await su.query("SELECT to_regclass($1) AS r", [`"${SA}"."crm__foreign"`])).rows[0].r !== null, JSON.stringify(rep.failed));
+    chk("S9f 없는 테이블(ghost)은 조용히 건너뛴다", !rep.dropped.includes("ghost") && !rep.archived.some((a) => a.table === "ghost") && !rep.failed.some((f) => f.table === "ghost"));
+    await ensureAppTables("crm", [{ table: "logs", columns: [{ name: "line", type: "text" }] }], { schema: SA, strict: true });
+    await asTenant(TA, `INSERT INTO "${SA}"."crm__logs"(line) VALUES ('두 번째')`);
+    const rep2 = await cleanupDroppedTables("crm", ["logs"], SA, new Date("2026-09-28T01:02:04Z"));
+    chk("S9g 같은 이름을 다시 보관해도 겹치지 않는다", rep2.archived[0]?.archived_as === `${archiveSchema}.crm__logs__20260928010204`, JSON.stringify(rep2));
+    await su.query(`DROP TABLE "${SA}"."crm__foreign"`);
+  }
+
+  // ── S10 하이픈 id(#4224) ──
+  {
+    const made = await ensureAppTables("crm-dash", [{ table: "items", columns: [{ name: "title", type: "text" }] }], { schema: SA, strict: true });
+    await asTenant(TA, `INSERT INTO "${SA}"."crm_dash__items"(title) VALUES ('하이픈')`);
+    chk("S10 하이픈 id 앱의 테이블이 생기고(crm_dash__items) 런타임이 쓴다",
+      made.join() === "crm_dash__items" && (await asTenant(TA, `SELECT title FROM "${SA}"."crm_dash__items"`)).rows[0]?.title === "하이픈", JSON.stringify(made));
+  }
+
+  // ── S11 워크스페이스 퓨즈(#4224) ──
+  {
+    const wide = await checkAppTableFuse("crm", ["contacts", "brand_new"], SA, 1000);
+    chk("S11 새로 생길 테이블만 adding 으로 센다(있는 contacts 는 제외) · 보관도 센다",
+      wide.adding === 1 && wide.current >= 2 && wide.archived === 2 && wide.ok === true, JSON.stringify(wide));
+    const tight = await checkAppTableFuse("crm", ["contacts", "brand_new"], SA, wide.current + wide.archived);
+    chk("S11b 상한을 한 개라도 넘으면 ok=false", tight.ok === false, JSON.stringify(tight));
+    const exact = await checkAppTableFuse("crm", ["contacts"], SA, wide.current + wide.archived);
+    chk("S11c 새 테이블이 없으면 상한과 같아도 ok", exact.ok === true, JSON.stringify(exact));
   }
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e);

@@ -4792,7 +4792,7 @@
   "rest": [
    "POST /api/ui/apps/install"
   ],
-  "input_hash": "eca5923943b417fa"
+  "input_hash": "037b9188084bc8a2"
  },
  {
   "name": "org_app_remove",
