@@ -707,6 +707,40 @@ webview.pn-webframe { display: flex; }
 .pn-apps-cur { font-size: 12.5px; }
 .pn-apps .v2-appui-frame { flex: 1; width: 100%; border: 0; background: var(--surface); }
 
+/* ── 세션 오른쪽 앱 칸(#4225) — 세션에 붙은 앱. 붙은 게 없으면 칸도 손잡이도 없다(세션만 남는다) ──
+   세션 부품 안에서 세션 화면(.pn-stage) 옆에 선다: 곁칸 배치는 프로젝트 한 벌이라 세션마다 다른 앱을 못 담는다
+   (session-app-dock.ts 머리말). 폭은 손잡이로 끌고(--pn-appdock-w, 기억된다), 좁은 화면에선 아래로 내려간다. */
+.pn-stagerow { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.pn-stagerow > .pn-stage { flex: 1; min-width: 0; }
+.pn-stagerow > .pn-appdock-split { width: 6px; flex: none; }
+.pn-appdock-split[hidden] { display: none; }
+.pn-appdock { flex: none; width: var(--pn-appdock-w, 460px); max-width: 72%; min-width: 0; display: flex; flex-direction: column;
+  border-left: 1px solid var(--line); background: var(--surface); }
+.pn-appdock[hidden] { display: none; }
+.pn-appdock-h { flex: none; display: flex; align-items: center; gap: 6px; min-height: 40px; padding: 5px 6px 5px 8px;
+  border-bottom: 1px solid var(--line); background: var(--gray-bg-2); }
+.pn-appdock-tabs { flex: 1; min-width: 0; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.pn-appdock-tab { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; padding: 5px 10px; border: 1px solid transparent;
+  border-radius: 8px; background: none; font: inherit; font-size: 12.5px; color: var(--muted-head); cursor: pointer; white-space: nowrap; }
+.pn-appdock-tab span { overflow: hidden; text-overflow: ellipsis; }
+.pn-appdock-tab .pn-i { width: 14px; height: 14px; flex: none; color: var(--blue); }
+.pn-appdock-tab:hover { background: var(--bg-tint); }
+.pn-appdock-tab.on { background: var(--bg); border-color: var(--line); color: var(--ink); font-weight: 700; }
+.pn-appdock-acts { flex: none; display: flex; gap: 4px; }
+.pn-appdock-x { width: 28px; height: 28px; border: 0; border-radius: 8px; background: none; color: var(--muted-2);
+  font-size: 18px; line-height: 1; cursor: pointer; }
+.pn-appdock-x:hover { background: var(--bg-punch); color: var(--coral-text); }
+.pn-appdock-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
+.pn-appdock-body > .v2-appui-frame { flex: 1; width: 100%; border: 0; background: var(--surface); }
+.pn-appdock-wait { padding: 16px; }
+.pn-appdock-info { padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+.pn-appdock-tbl { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+@media (max-width: 900px) {
+  .pn-stagerow.with-app { flex-direction: column; }
+  .pn-stagerow > .pn-appdock-split { display: none; }
+  .pn-appdock { width: auto; max-width: none; height: 55%; border-left: 0; border-top: 1px solid var(--line); }
+}
+
 /* ══ 지식 상세 창 — 위키로 튀지 않고 그 자리에서 먼저 본다 (#1819) ═══════════ */
 .pn-knm { width: min(680px, 96vw); }
 .pn-knm .pn-modal-h h2 { font-size: 17px; line-height: 1.35; }

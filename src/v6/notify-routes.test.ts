@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import express from "express";
 import { registerNotifyRoutes, wantsAllWorkspaces, type NotifyRouteResolver } from "./notify-routes.js";
-import { publishNotify, notifyStreamCount, type NotifyRoute, type NotifySessionEvent, type NotifyWorkspace } from "./notify-bus.js";
+import { publishNotify, notifyStreamCount, type NotifyAppEvent, type NotifyRoute, type NotifySessionEvent, type NotifyWorkspace } from "./notify-bus.js";
 
 // ── 알림 스트림 라우트 (#4054) — 사양 표 S14~S16 · 청함(`?all=1`) ─────────────────────
 //  실제 express 라우트에 실제 HTTP 로 붙어 SSE 프레임을 읽는다. 받는 자리 판정(resolver)만 대본으로 갈아 끼운다.
@@ -36,6 +36,7 @@ async function open(resolver: NotifyRouteResolver | undefined, query: string, re
   const res = await fetch(`http://127.0.0.1:${port}/api/ui/notify/stream${query}`, { signal: ctl.signal, headers: { Accept: "text/event-stream" } });
   assert.equal(res.status, 200);
   const events: NotifySessionEvent[] = [];
+  const names: string[] = [];          // 프레임의 SSE 이벤트 이름(#4225 — 사건 종류와 같아야 한다)
   let opened = false;
   const pump = (async () => {
     const reader = res.body!.getReader();
@@ -51,7 +52,10 @@ async function open(resolver: NotifyRouteResolver | undefined, query: string, re
         for (const f of parts) {
           if (f.startsWith(": ok")) opened = true;
           const data = f.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("");
-          if (data) events.push(JSON.parse(data));
+          if (data) {
+            events.push(JSON.parse(data));
+            names.push(f.split("\n").filter((l) => l.startsWith("event:")).map((l) => l.slice(6).trim()).join(""));
+          }
         }
       }
     } catch { /* abort */ }
@@ -63,7 +67,7 @@ async function open(resolver: NotifyRouteResolver | undefined, query: string, re
     await new Promise((r) => server.close(r));
     await until(() => notifyStreamCount() === 0);
   };
-  return { events, close };
+  return { events, names, close };
 }
 
 test("S14 스트림이 열리는 즉시 자기 워크스페이스 사건을 받는다 — 계정 서버 확인을 기다리는 동안에도", async () => {
@@ -151,4 +155,19 @@ test("배선 — 알림 피드 응답에 자기 워크스페이스 표시가 실
   const src = readFileSync(new URL("../../src/capabilities/notify.ts", import.meta.url), "utf8");
   assert.match(src, /const workspace = await hereWorkspaceLabel\(\)/);
   assert.match(src, /return \{ items: [^\n]*, prefs, workspace, now:/);
+});
+
+test("S3-3 앱 사건(#4225)은 `event: app` 으로, 세션 사건은 종전대로 `event: session` 으로 흐른다 — 본문의 type 그대로", async () => {
+  const s = await open(undefined, "");
+  try {
+    const app: NotifyAppEvent = { type: "app", kind: "data", app_id: "crm", session: "box-a", table: "contacts", op: "insert", source: "mcp", key: "a1", ts: 1 };
+    assert.equal(publishNotify({ ws: "primary", member: "alice" }, app), 1);
+    assert.equal(publishNotify({ ws: "primary", member: "alice" }, ev("s1")), 1);
+    await until(() => s.events.length === 2);
+    assert.deepEqual(s.names, ["app", "session"]);
+    const got = s.events[0] as unknown as NotifyAppEvent;
+    assert.equal(got.type, "app");
+    assert.equal(got.app_id, "crm");
+    assert.equal(got.table, "contacts");
+  } finally { await s.close(); }
 });

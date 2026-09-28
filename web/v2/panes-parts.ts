@@ -35,6 +35,7 @@ import { rememberCreated } from './created-cache.js';   // #1820 — 되살린 �
 import { sessText } from './side.js';
 import { listSessionApps, openAppSession } from './app-session.js';
 import { openInstalledApp } from './app-instance.js';
+import { attachAppToSession, createSessionAppDock, SESSION_APPS_EVT } from './session-app-dock.js';   // #4225 세션 오른쪽 앱 칸
 import { type Sess, type V2Data } from './views.js';
 import { bindCtx, requestOpenRoute } from './ctx-registry.js';   // #3784 곁칸 부품 우클릭 메뉴
 import { copyText } from './ctx-menu.js';
@@ -134,7 +135,7 @@ export const PART_DEFS: PartDef[] = [
   { type: 'web', name: '웹', icon: 'web', multi: true, hint: '주소를 넣으면 이 칸에서 그 페이지를 봅니다. 문서·레퍼런스를 옆에 띄워 두세요.' },
   { type: 'preview', name: '미리보기', icon: 'preview', hint: '띄워 둔 화면 목록입니다. 누르면 웹 칸에 그 화면이 실립니다.' },
   { type: 'editor', name: '뷰어', icon: 'eye', multi: true, hint: '자료의 파일을 골라 이 칸에서 봅니다 — 문서·그림·PDF·시안·영상. 여러 개를 띄워 나란히 볼 수 있어요.' },
-  { type: 'apps', name: '앱', icon: 'apps', hint: '설치된 앱을 고르면 각 앱이 상단의 자기 탭에서 열립니다.' },
+  { type: 'apps', name: '앱', icon: 'apps', hint: '앱을 누르면 지금 세션 오른쪽에 붙어요 — AI 도 그 앱을 같이 씁니다. × 로 떼면 세션만 남아요.' },
 ];
 
 export const partDef = (t: PartType): PartDef => PART_DEFS.find((d) => d.type === t) || PART_DEFS[0];
@@ -207,7 +208,12 @@ function sessionsPart(ctx: PartCtx): Part {
 
   // 위(그리고 전부) — 세션 화면이 통째로 들어오는 자리
   const stage = el('div', { class: 'pn-stage' });
-  root.append(stage);
+  // #4225 — 그 오른쪽에 **이 세션에 붙은 앱**. 붙은 게 없으면 칸이 없다(세션만 남는다). 세션을 바꾸면 그 세션의 앱으로.
+  const dock = createSessionAppDock(stage, {
+    paneRoot: () => ctx.paneRoot(),
+    canManage: (sid) => !!ctx.data().sessions.find((s) => s.id === sid)?.owned,
+  });
+  root.append(dock.row);
 
   // ── 새 세션 자리 = **홈 입력창과 같은 컴포저**(원준 2026-08-20) ──────────────────
   //  종전엔 칸 맨 아래에 붙은 한 줄짜리 입력칸이었다. 같은 '새 세션을 여는 자리'인데 홈과 생김새가 전혀 달라
@@ -280,6 +286,7 @@ function sessionsPart(ctx: PartCtx): Part {
 
   /** 위 자리를 이 세션으로 채운다. 같은 세션이면 아무것도 하지 않는다(대화·스크롤·터미널 보존). */
   function mountStage(): void {
+    dock.setSession(composing ? null : sel);   // 같은 세션이면 아무것도 안 한다(dock 쪽에서 거른다)
     if (composing || !sel) {
       if (mounted) { mounted.h?.destroy(); mounted = null; }
       // 칸을 **새로 세울 때만** 손을 옮긴다(원준 2026-08-25). paint() 는 주기 갱신마다 여기를 지나므로
@@ -381,6 +388,7 @@ function sessionsPart(ctx: PartCtx): Part {
     destroy: () => {
       if (retryTimer) { window.clearTimeout(retryTimer); retryTimer = 0; }
       if (mounted) { mounted.h?.destroy(); mounted = null; }
+      dock.destroy();
     },
     selectSession: (sid) => select(sid),
     currentSession: () => (composing ? null : sel),
@@ -1551,11 +1559,23 @@ function viewerPart(ctx: PartCtx): Part {
   };
 }
 
-// ══ 앱 — 이 칸은 런처, 실제 앱은 AppInstance 상단 탭(#1780 v2.1) ════════════════
-//  앱 UI를 이 pane에 직접 끼우면 한 실행이 어떤 때는 top-level 앱, 어떤 때는 세션의 부품이 되어 앱 개념이 다시 둘로 갈린다.
-//  그래서 이 칸은 목록만 소유하고, 화면 앱은 AppInstance를 만들어 #/i/:id 탭으로, headless 앱은 앱 세션 탭으로 연다.
+// ══ 앱 — 이 칸은 런처 ════════════════════════════════════════════════════════
+//  #1780 v2.1 에선 화면 앱을 AppInstance 상단 탭(#/i/:id)으로, headless 앱을 앱 세션 탭으로만 열었다(앱 UI 를 이 칸에
+//  끼우면 한 실행이 top-level 앱이기도, 세션의 부품이기도 해서 앱 개념이 둘로 갈린다는 이유).
+//  #4225(9/21 회의) — 앱의 자리가 바뀌었다: **세션이 먼저 있고 앱은 그 세션에 붙는다.** 그래서 세션을 보고 있을 때
+//   화면·데이터가 있는 앱을 누르면 **지금 세션 오른쪽에 붙는다**(세션 부품의 앱 칸 — session-app-dock.ts). 이 칸은 여전히
+//   목록만 소유한다(화면은 세션 옆에 선다 — 곁칸 배치는 프로젝트 한 벌이라 세션마다 다른 앱을 못 담는다).
+//   새 세션 자리(세션이 없다)이거나 화면·데이터가 없는 앱(스킬 묶음)은 종전대로 상단 탭으로 연다. 우클릭엔 둘 다 있다.
 function appsPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-apps' });
+  const attach = async (a: { id: string; title: string }): Promise<void> => {
+    const sid = ctx.curSession();
+    if (!sid) return;
+    if (await attachAppToSession(sid, a.id, a.title)) {
+      ctx.paneRoot().dispatchEvent(new CustomEvent(SESSION_APPS_EVT, { detail: { sid, app_id: a.id } }));
+      toast(`「${a.title}」을(를) 이 세션 오른쪽에 붙였어요 — AI 도 이 앱을 같이 씁니다.`);
+    }
+  };
 
   const list = async (): Promise<void> => {
     root.replaceChildren(el('p', { class: 'pn-fine', text: '불러오는 중…' }));
@@ -1571,17 +1591,21 @@ function appsPart(ctx: PartCtx): Part {
     root.replaceChildren(el('div', { class: 'pn-apps-grid' }, ...apps.map((a) => {
       const hasUi = a.pages.length > 0 || a.system?.renderer === 'browser';
       const projectId = a.instances.project === 'global' ? null : ctx.id;
+      //  붙일 수 있는 앱 = 세션 옆에 둘 화면이 있거나 AI 가 쓸 데이터가 있는 앱. 브라우저 같은 시스템 앱은 제 탭이 정본이다.
+      const attachable = (a.pages.length > 0 || a.tables.length > 0) && !a.system;
+      const openTab = (): void => { if (hasUi) void openInstalledApp(a, projectId); else void openAppSession(a.id, { title: a.title, projectId }); };
       const tile = el('button', { class: 'pn-app', type: 'button',
-        title: hasUi ? '상단 탭에서 앱 화면을 엽니다' : '상단 탭에서 이 앱 전용 AI 세션을 엽니다',
-        onclick: () => { if (hasUi) void openInstalledApp(a, projectId); else void openAppSession(a.id, { title: a.title, projectId }); } },
+        title: attachable ? '지금 보고 있는 세션 오른쪽에 붙입니다(세션이 없으면 상단 탭으로 열어요)' : hasUi ? '상단 탭에서 앱 화면을 엽니다' : '상단 탭에서 이 앱 전용 AI 세션을 엽니다',
+        onclick: () => { if (attachable && ctx.curSession()) void attach(a); else openTab(); } },
         el('span', { class: 'pn-app-ic' }, pnIcon(hasUi ? 'grid' : 'chat', 'pn-i')),
         el('b', { text: a.title }),
-        el('span', { class: 'pn-fine', text: hasUi ? '앱 탭' : '앱 세션 탭' }));
-      // #3784 우클릭 — 열기(앱 화면 / 앱 세션) · 이름 복사
+        el('span', { class: 'pn-fine', text: attachable ? '세션에 붙이기' : hasUi ? '앱 탭' : '앱 세션 탭' }));
+      // #3784 우클릭 — 붙이기 · 열기(앱 화면 / 앱 세션) · 이름 복사
       bindCtx(tile, () => ({
         title: a.title, sub: hasUi ? '앱 화면' : 'AI 세션 앱',
         rows: [
-          hasUi ? { label: '앱 화면 열기', icon: 'open', run: () => void openInstalledApp(a, projectId) } : { label: '앱 세션 열기', icon: 'chat', run: () => void openAppSession(a.id, { title: a.title, projectId }) },
+          ...(attachable && ctx.curSession() ? [{ label: '이 세션에 붙이기', icon: 'plus', run: () => void attach(a) }] : []),
+          hasUi ? { label: '앱 화면 열기(새 탭)', icon: 'open', run: () => void openInstalledApp(a, projectId) } : { label: '앱 세션 열기', icon: 'chat', run: () => void openAppSession(a.id, { title: a.title, projectId }) },
           { sep: true, label: '' },
           { label: '앱 이름 복사', icon: 'copy', run: () => void copyText(a.title).then((ok) => { if (ok) toast('복사했어요'); }) },
         ],

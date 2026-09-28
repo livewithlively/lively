@@ -14,8 +14,10 @@ export interface LivelyApp {
   readonly instance: string | null;
   /** 지금 페이지 key (ui.pages[].key). */
   readonly page: string | null;
-  /** 핸드셰이크 완료 — 앱 시작 시 한 번 await 하면 app/page 가 채워져 있다. */
-  readonly ready: Promise<{ host: string; app: string; instance: string | null; page: string | null; capabilities: { tools: boolean } }>;
+  /** 이 화면이 붙은 세션 id — 세션 오른쪽 앱 칸에서 열렸을 때(#4225). 그 세션의 AI 도 이 앱의 데이터를 쓴다. 아니면 null. */
+  readonly session: string | null;
+  /** 핸드셰이크 완료 — 앱 시작 시 한 번 await 하면 app/page/session 이 채워져 있다. */
+  readonly ready: Promise<{ host: string; app: string; instance: string | null; page: string | null; session: string | null; capabilities: { tools: boolean } }>;
 
   tools: {
     /** 라이블리 도구 호출. 매니페스트 permissions.tools 안 + 사용자 grant 안이어야 한다(아니면 code -32001 로 reject). */
@@ -30,6 +32,13 @@ export interface LivelyApp {
     update(table: string, match: Record<string, unknown>, set: Record<string, unknown>): Promise<{ changed: number }>;
     /** ⚠ match 는 필수다(전량 삭제 방지). */
     delete(table: string, match: Record<string, unknown>): Promise<{ deleted: number }>;
+    /**
+     * 이 앱의 데이터가 바뀌었다(#4225) — 세션에 붙은 AI 가 썼거나 다른 화면에서 썼다. 받으면 필요한 표를 다시 읽는다.
+     *  source 는 누가 썼나의 표면(mcp = 세션의 AI · app-ui = 앱 화면 · web = 스크립트). 돌려주는 함수를 부르면 끊는다.
+     *  ⚠ 이걸 걸지 않은 앱은 바깥에서 데이터가 바뀌면 호스트가 화면을 **다시 불러온다**(입력 중인 글·스크롤이 처음으로 돌아간다).
+     *   화면 상태를 지키려면 걸고 스스로 다시 읽어라.
+     */
+    onChange(cb: (ev: { table: string | null; op: "insert" | "update" | "delete" | null; source: string | null; session: string | null }) => void): () => void;
   };
 
   ui: {
