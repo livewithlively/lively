@@ -91,6 +91,12 @@
   --purple-text:   #6C6483;
   --teal-deep:     #12797B;
   --ok-ink:        #14532D;
+  /* 리브가 세팅한 것 — 서비스 공통 표시(#4135 리브 표시 1안 · web/liv-mark.ts). 띠는 --mint 를 쓴다. */
+  --liv-tint:      #E9F8F2;   /* 행·카드 바탕의 진한 쪽 */
+  --liv-tint-2:    #F4FBF8;   /* 그 바탕이 옅어지는 중간 */
+  --liv-sum-bg:    #E7F8F2;   /* 목록 머리 요약의 바탕 */
+  --liv-sum-ink:   #0B6B4F;   /* 그 글자 */
+  --liv-fill:      #0E8F6E;   /* (theme-invariant) 채운 이름표 «리브가 세팅» — 위 글자는 --on-fill */
 
   /* 컴포넌트 토큰 — 전역 팔레트에 없는 계열(보라·하이라이트)의 자리 토큰 */
   --md-mark-bg:          #FFF3C4;
