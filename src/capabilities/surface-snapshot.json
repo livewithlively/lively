@@ -4795,6 +4795,26 @@
   "input_hash": "037b9188084bc8a2"
  },
  {
+  "name": "app_save",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/save"
+  ],
+  "input_hash": "f86cf7a7f136fb27"
+ },
+ {
+  "name": "app_edit_policy_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/edit-policy"
+  ],
+  "input_hash": "9018d760e68657cc"
+ },
+ {
   "name": "org_app_remove",
   "scope": "admin",
   "mcp": true,

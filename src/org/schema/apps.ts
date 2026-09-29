@@ -54,6 +54,12 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_status_idx ON org_app(status);`);
+  //  #4225 — 누가 이 앱을 고칠 수 있나(app_save). 기본은 구성원 전원이고, 워크스페이스(관리자)가 앱마다 지정한 사람으로 좁힌다.
+  //   앱은 라이블리 팀이 아니라 **그 워크스페이스가** 마음에 안 드는 곳을 바로 고쳐 쓰는 것이다(상민 2026-09-30).
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS edit_mode TEXT NOT NULL DEFAULT 'all';`);
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS edit_members JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+  await pool.query(`ALTER TABLE org_app DROP CONSTRAINT IF EXISTS org_app_edit_mode_check;`);
+  await pool.query(`ALTER TABLE org_app ADD CONSTRAINT org_app_edit_mode_check CHECK (edit_mode IN ('all','members'));`);
 
   // ── org_app_component — 앱이 전개한 구성요소 행 조인(무엇을 심었나 = 무엇을 회수하나) ──
   //  PK(app_id, kind, ref). ref 는 대상 행의 자연키(문자열). orig_name = 자산 번들 내 원명(물질화 시 복원, design R1-F4).
