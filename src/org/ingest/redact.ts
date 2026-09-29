@@ -5,15 +5,23 @@
 import { HttpError } from "../../http-error.js";
 
 // 마스킹 대상(global) — 로그/응답에서 가린다.
-const SECRET_RES: RegExp[] = [
-  /sk-[A-Za-z0-9]{16,}/g,                                              // OpenAI
-  /ghp_[A-Za-z0-9]{20,}/g,                                            // GitHub PAT(classic)
+//  ⓘ 두 벌로 나눈다(#4422): 값 자체가 토큰 모양인 것(TOKEN_SHAPE_RES)과, 산문에서도 걸릴 수 있는 문맥 규칙(PROSE_RISKY_RES).
+//   AI 가 쓴 글(위탁 결과 요약)처럼 산문이 주인 자리는 모양만 가린다 — «Bearer authentication middleware» 가 가려지면 안 된다.
+//  `(?<![A-Za-z0-9])` — 낱말 안에서 시작하지 않게(`desk-ant-…`·`risk-0123…` 이 가려지지 않게). `_` 뒤는 허용(`X_sk-ant-…`).
+const TOKEN_SHAPE_RES: RegExp[] = [
+  //  Anthropic 키·OAuth(setup-token `sk-ant-oat01-…`·`sk-ant-api03-…`) — 아래 OpenAI 모양은 `sk-` 뒤가 곧장 영숫자 16자여야 해서
+  //   `sk-ant-` 의 하이픈에서 끊겨 **못 잡았다**(#4422 실측). 위탁 리스 토큰이 이 모양이다.
+  /(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9]{2,10}-[A-Za-z0-9_-]{16,}/g,
+  /(?<![A-Za-z0-9])sk-[A-Za-z0-9]{16,}/g,                              // OpenAI
+  /gh[pousr]_[A-Za-z0-9]{20,}/g,                                      // GitHub PAT(classic)·OAuth·앱 설치·사용자-서버·갱신
   /github_pat_[A-Za-z0-9_]{20,}/g,                                    // GitHub PAT(fine-grained)
   /xox[abprs]-[A-Za-z0-9-]{10,}/g,                                    // Slack
   /AKIA[0-9A-Z]{16}/g,                                                // AWS access key id
   /lvk_[A-Za-z0-9_-]{20,}/g,                                          // 라이블리 토큰
   /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,     // JWT
   /-----BEGIN[^-]*PRIVATE KEY-----[\s\S]*?-----END[^-]*PRIVATE KEY-----/g,
+];
+const PROSE_RISKY_RES: RegExp[] = [
   /[Bb]earer\s+[A-Za-z0-9._~+/-]{12,}=*/g,                            // Authorization: Bearer <literal>
 ];
 
@@ -28,9 +36,16 @@ const HARD_LABELS: { re: RegExp; label: string }[] = [
   { re: /-----BEGIN[^-]*PRIVATE KEY-----/, label: "개인키" },
 ];
 
-export function redactString(s: string): string {
+/** 토큰 모양만 가린다 — 산문이 주인인 자리(AI 가 쓴 요약 등)용. */
+export function redactTokenShapes(s: string): string {
   let out = s;
-  for (const re of SECRET_RES) out = out.replace(re, "[REDACTED]");
+  for (const re of TOKEN_SHAPE_RES) out = out.replace(re, "[REDACTED]");
+  return out;
+}
+
+export function redactString(s: string): string {
+  let out = redactTokenShapes(s);
+  for (const re of PROSE_RISKY_RES) out = out.replace(re, "[REDACTED]");
   return out;
 }
 
