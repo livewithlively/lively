@@ -31,11 +31,13 @@ test("글로 적은 자료는 자료 삭제, 남의 시스템에서 온 자료�
 test("프로젝트 폴더 파일은 그 파일을 지운다", async () => {
   const { trashDoorOf } = await loadPlan();
   assert.equal(trashDoorOf({ kind: "local_file", external_system: "local", external_id: "project:12/a/b.md" }, null, me), "project");
+  assert.equal(trashDoorOf({ kind: "local_file", external_system: "local", external_id: "project:12/a/b.md" }, { root: "shared", path: "a/b.md" }, me), "project", "폴더 주소보다 프로젝트 좌표가 먼저");
 });
 
 test("공유 폴더·내 폴더 파일은 브라우즈로, 남의 개인 폴더 파일은 문이 없다", async () => {
   const { trashDoorOf } = await loadPlan();
   assert.equal(trashDoorOf({ kind: "local_file", external_system: "local", external_id: "shared/a.md" }, { root: "shared", path: "a.md" }, me), "browse");
+  assert.equal(trashDoorOf({ kind: "local_file", external_system: "local", external_id: "personal:u1/a.md" }, { root: "shared", path: "a.md" }, me), null, "주소와 좌표가 어긋나면 세우지 않는다");
   assert.equal(trashDoorOf({ kind: "local_file", external_system: "local", external_id: "personal:u1/a.md" }, { root: "personal", path: "a.md" }, me), "browse");
   assert.equal(trashDoorOf({ kind: "local_file", external_system: "local", external_id: "personal:u1@x.io/a.md" }, { root: "personal", path: "a.md" }, me), "browse");
   assert.equal(trashDoorOf({ kind: "local_file", external_system: "local", external_id: "personal:u2/a.md" }, { root: "personal", path: "a.md" }, me), null);

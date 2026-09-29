@@ -192,6 +192,10 @@ export function placeLine(r: RowLike): string {
 //   ⚠ **남의** 개인 폴더 파일도 null: 브라우즈 주소(root=personal)는 «보는 사람 자기» 폴더로 풀려, 같은 경로의 **내 파일**이 지워진다.
 //   ⚠ 좌표 없는 local_file 을 source 로 받지 않으면 삭제 문이 아예 없다 — 핸드오버 자료가 그렇게 지울 길 없이 남았다.
 export type TrashDoor = 'source' | 'project' | 'browse';
+export function projectFileOf(extId: string): { projectId: string; path: string } | null {
+  const m = /^project:(\d+)\/(.+)$/.exec(extId);
+  return m ? { projectId: m[1], path: m[2] } : null;
+}
 export function trashDoorOf(
   s: { kind?: string | null; external_system?: string | null; external_id?: string | null },
   co: { root: string; path: string } | null,
@@ -199,7 +203,7 @@ export function trashDoorOf(
 ): TrashDoor | null {
   if (s.kind !== 'local_file') return s.external_system ? null : 'source';
   const extId = String(s.external_id || '');
-  if (/^project:\d+\/.+$/.test(extId)) return 'project';
+  if (projectFileOf(extId)) return 'project';
   if (co) {
     if (co.root === 'shared') return extId.startsWith('shared/') ? 'browse' : null;
     const mine = co.root === 'personal' && [me.userId, me.email].some((k) => !!k && extId.startsWith('personal:' + k + '/'));

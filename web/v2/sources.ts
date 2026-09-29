@@ -18,7 +18,7 @@
 import { TOKEN_KEY, api, apiUrl, busy, el, errorNote, loadPeopleAvatars, personDisplayName, personFace, relTime, renderMarkdown, safeHref, state, toast } from '../core.js';
 import {
   type SrcSel, type SourcesSidePlan, type PlanNode, type PlanUploader, SRC_GROUP_SELS, sysLabel, kindLabel, isChatSys,
-  planSourcesSide, normalizeSel, sideSel, showsUploaderFilter, crumbOf, emptyTextOf, originOf, placeLine, rowGroup, trashDoorOf,
+  planSourcesSide, normalizeSel, sideSel, showsUploaderFilter, crumbOf, emptyTextOf, originOf, placeLine, rowGroup, trashDoorOf, projectFileOf,
 } from './sources-plan.js';   // #4233 들어온 길 규칙(순수)
 import { buildFilePreview } from '../lib/file-preview.js';   // 미리보기 판정·렌더의 단일 소유(#/f·홈 모달과 같은 코드)
 import { authDownload, authUploadProgress } from '../projects/files-upload.js';
@@ -635,7 +635,7 @@ function readSheet(s: any, sel: SrcSel): HTMLElement {
 
   //  휴지통으로(#3778) — 어느 문으로 지우나는 trashDoorOf(sources-plan.ts)가 정한다.
   const extId = String(s.external_id || '');
-  const projFile = /^project:(\d+)\/(.+)$/.exec(extId);
+  const projFile = projectFileOf(extId);
   const door = trashDoorOf(s, co, (state.me || {}) as { userId?: string; email?: string });
   if (door) {
     const toTrash = el('button', { class: 'btn-text v2-srd-trash', type: 'button', text: '휴지통으로',
@@ -650,7 +650,7 @@ function readSheet(s: any, sel: SrcSel): HTMLElement {
       })) return;
       toTrash.disabled = true;
       try {
-        if (door === 'project' && projFile) await api('/api/ui/v6/projects/' + projFile[1] + '/file?path=' + encodeURIComponent(projFile[2]), { method: 'DELETE' });
+        if (door === 'project' && projFile) await api('/api/ui/v6/projects/' + projFile.projectId + '/file?path=' + encodeURIComponent(projFile.path), { method: 'DELETE' });
         else if (door === 'browse' && co) await api('/api/ui/terminal/browse?root=' + encodeURIComponent(co.root) + '&path=' + encodeURIComponent(co.path), { method: 'DELETE' });
         else await api('/api/ui/sources/' + encodeURIComponent(String(s.id)) + '/delete', { method: 'POST' });
         toast('휴지통으로 보냈어요 — [휴지통] ▸ [자료] 탭에서 되살릴 수 있어요.');
