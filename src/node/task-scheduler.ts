@@ -17,7 +17,7 @@ import { effectiveDelegatePolicy, type DelegatePolicy } from "../org/policies/de
 import { getMemberSecret, memberOwner } from "../org/credentials/member-secret-store.js";
 import { getRuntimeConfig } from "../org/store.js";
 import { getMember } from "../org/store/members.js";
-import { resolveRepoInject } from "../project/project-provision.js";
+import { resolveRepoInject, type RepoProvisionAuth } from "../project/project-provision.js";
 import { nodeOnline, nodeRpc, nodeSessionGone, schedulableRemotes, onTaskDone } from "./registry.js";
 import { getNode, listNodes } from "./store.js";
 import { remoteDelegateAllowed } from "./node-access.js";
@@ -30,6 +30,7 @@ import { nodeHarnesses } from "./protocol.js";
 import { detectAuthFailure, cronJobIdFromMarker } from "./task-failure.js";
 import { handleAuthFailure } from "./auth-failure-response.js";
 import { reapFailedTaskSessions, decideReap, type FailedTaskRow, type ReapAttempt } from "./failed-session-reaper.js";
+import { redactTaskError, redactTaskText, taskSecretValues } from "./task-secrets.js";   // #4422 — 배치 실패 문장에서 리스 값 가림
 
 export const CENTRAL_NODE_ID = "central";
 const TICK_MS = 5_000;
@@ -306,16 +307,24 @@ async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Ma
     prompt: t.prompt, harness: t.harness, repo: t.repo, gitRef: t.git_ref, flags: t.flags ?? {}, env,
   };
   let r: RunTaskResult;
-  if (pick.id === CENTRAL_NODE_ID) {
-    r = await spawnTaskSession(runArgs as never);   // 중앙 = 게이트웨이 프로세스 → DB 를 직접 읽는다(주입 불필요)
-  } else {
-    const n = await getNode(pick.id);
-    if (!n || !n.enabled) return { assigned: false, reason: `선정 노드 ${pick.id} 비활성` };
-    // 🔴 원격 노드엔 **DB 가 없다**(#905 C4) — 레포 정보를 여기서 해소해 실어 보내지 않으면, 노드의
-    //  ensureBaseClone 이 getRepo() 로 localhost:5432 에 붙으려다 실패하고 409 "레포의 git 주소가 레지스트리에
-    //  없습니다" 라는 **오진**을 낸다(레포는 멀쩡한데 사용자를 헛다리 짚게 한다 — 오늘 라이브 버그).
-    if (t.repo) runArgs.repoAuth = await resolveRepoInject(String(t.repo), t.requester, n.kind);
-    r = await nodeRpc<RunTaskResult>(pick.id, "runTask", runArgs as never);
+  //  #4422 — 판·노드가 돌려준 오류 문장은 위탁 응답·크론 요약·게이트웨이 로그로 나간다. 이번 위탁이 실은 값(리스·레포 자격)을
+  //   **리터럴로** 가린 뒤 던진다. 새 번들은 스폰 쪽에서 이미 가리지만, 구 번들 노드는 "Command failed: <argv 전체>" 원문을 그대로
+  //   돌려준다(2026-09-22 윈도우 노드 — 토큰 평문이 delegate_status 로 읽혔다). 값을 아는 곳은 여기뿐이다.
+  try {
+    if (pick.id === CENTRAL_NODE_ID) {
+      r = await spawnTaskSession(runArgs as never);   // 중앙 = 게이트웨이 프로세스 → DB 를 직접 읽는다(주입 불필요)
+    } else {
+      const n = await getNode(pick.id);
+      if (!n || !n.enabled) return { assigned: false, reason: `선정 노드 ${pick.id} 비활성` };
+      // 🔴 원격 노드엔 **DB 가 없다**(#905 C4) — 레포 정보를 여기서 해소해 실어 보내지 않으면, 노드의
+      //  ensureBaseClone 이 getRepo() 로 localhost:5432 에 붙으려다 실패하고 409 "레포의 git 주소가 레지스트리에
+      //  없습니다" 라는 **오진**을 낸다(레포는 멀쩡한데 사용자를 헛다리 짚게 한다 — 오늘 라이브 버그).
+      if (t.repo) runArgs.repoAuth = await resolveRepoInject(String(t.repo), t.requester, n.kind);
+      r = await nodeRpc<RunTaskResult>(pick.id, "runTask", runArgs as never);
+    }
+  } catch (e) {
+    const git = (runArgs.repoAuth as RepoProvisionAuth | undefined)?.secret;
+    throw redactTaskError(e, taskSecretValues(env, { t: git?.https_token, k: git?.ssh_private_key }));
   }
   await markRunning(t.id, pick.id, r.sessionId, r.taskDir);
   extra.set(pick.id, (extra.get(pick.id) ?? 0) + 1);
@@ -328,7 +337,8 @@ async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Ma
 export async function tryAssignNow(t: DelegateTask): Promise<AssignResult> {
   const counts = await runningCountByNode();
   try { return await assignOne(t, counts, new Map()); }
-  catch (err) { return { assigned: false, reason: `배치 오류: ${(err as Error)?.message ?? err}` }; }
+  //  이 reason 이 곧 위탁 응답(delegate_run)과 크론 요약(_headless)이다 — 모양 가림을 한 겹 더(#4422, 리터럴은 assignOne 이 했다).
+  catch (err) { return { assigned: false, reason: `배치 오류: ${redactTaskText((err as Error)?.message ?? err)}` }; }
 }
 
 /**
@@ -396,7 +406,7 @@ async function assignQueuedWith(counts: Map<string, number>, extra: Map<string, 
       const n = (assignBackoff.get(t.id)?.n ?? 0) + 1;
       const wait = assignBackoffDelayMs(n);
       assignBackoff.set(t.id, { n, nextAt: now + wait });
-      logger.warn({ err: (err as Error)?.message, task: t.id, attempt: n, retryInMs: wait },
+      logger.warn({ err: redactTaskText((err as Error)?.message ?? err), task: t.id, attempt: n, retryInMs: wait },   // #4422 — 게이트웨이 로그
         "위탁 배정 실패 — 백오프 뒤 재시도");
     }
   }

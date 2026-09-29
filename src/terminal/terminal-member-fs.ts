@@ -6,6 +6,7 @@
 //  ⚠ #3668 T2 — op 가 도는 «자리» 는 둘이다: 파일 op 는 종전 멤버 경계, **프로그램을 실행하는 op**(설치 번들·git)는
 //   그 세션의 컨테이너. 고르는 규칙과 그 이유는 아래 `ExecAt` 머리말에 있다.
 import { spawn, type ChildProcess } from "node:child_process";
+import crypto from "node:crypto";
 import type { Readable, Writable } from "node:stream";
 import { memberExecConfigured, wrapAsMember } from "./terminal-isolation.js";
 import { tenantSlug } from "./catalog.js";
@@ -342,14 +343,16 @@ export function memberWriteFrom(
   });
 }
 
-// 문자열 → 멤버 소유 파일(작은 파일 전용, #1780 앱 세션 물질화). `cat > "$0" && chmod "$1" "$0"` 로 멤버 uid 에서
+// 문자열 → 멤버 소유 파일(작은 파일 전용, #1780 앱 세션 물질화). `umask 077 && cat > "$0" && chmod "$1" "$0"` 로 멤버 uid 에서
 //  파일을 만들고 모드를 굳힌다 — 경로·모드는 **argv**($0·$1)로만 넘겨 스크립트 본문에 문자열을 안 섞는다(인젝션 없음,
 //  memberWriteFrom 의 `cat > "$0"` 규약과 동일). data 는 우리 코드가 만든 내용(앱 토큰·조립된 자산)이라 stdin 으로 준다.
 //  ⚠ 스트리밍 업로드(memberWriteFrom)와 달리 상한/스톨 가드가 없다 — 서버가 만든 유한한 작은 문자열에만 쓴다.
 export function memberWriteFile(osUser: string, absPath: string, data: string, mode = 0o600): Promise<void> {
   const octal = (mode & 0o777).toString(8).padStart(3, "0");
   return new Promise((resolve, reject) => {
-    const c = memberSpawn(osUser, ["sh", "-c", 'cat > "$0" && chmod "$1" "$0"', absPath, octal], ["pipe", "ignore", "pipe"]);
+    //  `umask 077` — 새 파일이 **만들어지는 순간부터** 그 멤버 전용이다(#4422 위탁 자격 파일). 없으면 cat 이 기본 umask(022·002)로
+    //   만든 뒤 chmod 까지의 틈에 남이 읽을 수 있다. 최종 모드는 종전대로 chmod 가 정한다(다른 호출자 무회귀).
+    const c = memberSpawn(osUser, ["sh", "-c", 'umask 077 && cat > "$0" && chmod "$1" "$0"', absPath, octal], ["pipe", "ignore", "pipe"]);
     const err = collectErr(c);
     c.on("error", reject);
     const stdin = c.stdin;
@@ -357,5 +360,29 @@ export function memberWriteFile(osUser: string, absPath: string, data: string, m
     stdin.on("error", reject);
     stdin.end(data);
     c.on("close", (code) => (code === 0 ? resolve() : reject(new Error(err.get() || `member write exit ${code}`))));
+  });
+}
+
+/**
+ * 비밀 파일 — 멤버 uid 소유 0600 을 **원자적으로** 제자리에 둔다(#4422 위탁 자격 파일).
+ *  memberWriteFile 은 `cat > 경로` 라, 그 경로가 **다른 멤버도 쓰는 폴더**(공유 루트의 작업 폴더 2770)에 있으면 틈이 생긴다:
+ *   남이 같은 이름을 미리 만들거나 심볼릭 링크를 심으면 `cat >` 이 **그 사람 파일에** 비밀을 쓴다(chmod 는 실패해도 이미 늦다).
+ *  그래서 추측할 수 없는 임시 이름을 noclobber(`set -C` = O_EXCL)로 새로 만들고 rename 으로 바꿔 넣는다 — rename 은 목적지의
+ *   링크를 따라가지 않고 링크 자체를 갈아 끼운다. 목적지가 디렉터리면 그 안으로 옮겨지는 대신 거절한다.
+ *  경로·임시 꼬리는 argv($0·$1), 값은 stdin 이다(memberWriteFile 과 같은 인젝션 없는 규약).
+ */
+export function memberWriteSecretFile(osUser: string, absPath: string, data: string): Promise<void> {
+  const nonce = crypto.randomBytes(12).toString("hex");
+  const script = 'umask 077; [ -d "$0" ] && { echo "목적지가 디렉터리다: $0" >&2; exit 1; }; t="$0.$1.tmp"; set -C; '
+    + 'if cat > "$t" && mv -f "$t" "$0"; then exit 0; fi; rm -f "$t"; exit 1';
+  return new Promise((resolve, reject) => {
+    const c = memberSpawn(osUser, ["sh", "-c", script, absPath, nonce], ["pipe", "ignore", "pipe"]);
+    const err = collectErr(c);
+    c.on("error", reject);
+    const stdin = c.stdin;
+    if (!stdin) return reject(new Error("member secret write: no stdin"));
+    stdin.on("error", reject);
+    stdin.end(data);
+    c.on("close", (code) => (code === 0 ? resolve() : reject(new Error(err.get() || `member secret write exit ${code}`))));
   });
 }

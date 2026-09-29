@@ -23,6 +23,7 @@
   "dist/node/protocol.js",
   "dist/node/reconnect-delay.js",
   "dist/node/tasks.js",
+  "dist/node/task-secrets.js",
   "dist/ops/build-cache.js",
   "dist/ops/disk-guard.js",
   "dist/ops/health.js",

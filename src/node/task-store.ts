@@ -1,6 +1,7 @@
 // 위탁 태스크 스토어(P2 #869) — org_task CRUD + 리소스-적합 노드 매칭(순수 함수, 테스트 대상).
 import { itemsPool } from "../db/client.js";
 import type { NodeResources } from "./protocol.js";
+import { redactTaskResult, redactTaskText } from "./task-secrets.js";   // #4422 저장 직전 가림
 
 export type DelegateStatus = "queued" | "running" | "done" | "failed" | "canceled";
 
@@ -88,9 +89,12 @@ export async function markRunning(id: number, nodeId: string, sessionId: string,
   }
 }
 export async function markFinished(id: number, ok: boolean, result: Record<string, unknown>, error?: string | null): Promise<void> {
+  //  저장 직전 가림(#4422) — 결과·실패 문장은 delegate_status·delegate_list·크론 화면으로 그대로 읽힌다. 배정 실패 기록(last_assign)을
+  //   옮겨 싣는 자리(대기 상한)도 여기를 지나므로, 가림이 들어가기 전에 쌓인 옛 행의 원문도 이 겹에서 걸러진다.
+  //   규칙은 redactTaskResult 한 곳 — last_assign 은 전체, AI 가 쓴 요약은 토큰 모양만(산문을 망가뜨리지 않게).
   await itemsPool.query(
     `UPDATE org_task SET status=$2, result=$3::jsonb, error=$4, finished_at=now(), updated_at=now() WHERE id=$1`,
-    [id, ok ? "done" : "failed", JSON.stringify(result), error ?? null]);
+    [id, ok ? "done" : "failed", JSON.stringify(redactTaskResult(result)), error == null ? null : redactTaskText(error)]);
   // #1289 증류 배치가 실패하면 '판정함' 기록을 되돌린다 — 안 그러면 그 자료들이 아무도 안 본 채로 인박스에서
   //  영구히 빠진다(유실). 배치를 낸 시점에 기록하는 대가로 여기서 되돌려 균형을 맞춘다.
   //  증류와 무관한 위탁이면 지울 행이 없어 no-op. 테이블 부재(구버전 스키마)는 삼킨다.

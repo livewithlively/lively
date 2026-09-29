@@ -5,13 +5,20 @@
 import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
-import { createTask, getTask, listTasks, markCanceled, type DelegateStatus } from "../node/task-store.js";
+import { createTask, getTask as getTaskRow, listTasks as listTaskRows, markCanceled, type DelegateStatus } from "../node/task-store.js";
+import { redactTaskRow } from "../node/task-secrets.js";
 import { getNode } from "../node/store.js";
 import { nodeOpenTo } from "../node/node-access.js";
 import { nodeOnline, nodeRpc } from "../node/registry.js";
 import { killTaskSession, tailTask, type TailResult } from "../node/tasks.js";
 import { CENTRAL_NODE_ID, tryAssignNow } from "../node/task-scheduler.js";
 import { HEADLESS_KEYS, resolveHeadlessHarness } from "../node/headless-harness.js"; // #1884 실행 하네스
+
+// 밖으로 나가는 태스크 행은 **읽는 순간** 가린다(#4422) — 결과·오류에 남은 자격 리스가 delegate_status·list 응답으로 새지 않게.
+//  저장 직전 가림(markFinished·noteAssignFailure)이 들어가기 전에 쌓인 옛 행(2026-09-22 #4074 처럼)도 DB 를 건드리지 않고 여기서 가려진다.
+//  이 파일의 조회는 전부 이 두 함수를 탄다(권한 판정은 requester·status 만 보므로 가린 사본으로 충분하다).
+const getTask = async (id: number) => redactTaskRow(await getTaskRow(id));
+const listTasks = async (o: Parameters<typeof listTaskRows>[0]) => (await listTaskRows(o)).map((t) => redactTaskRow(t));
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const DEFAULT_WAIT_SEC = 120; // wait 모드 기본 — 대부분의 위탁이 이 안에 끝난다. 초과분은 백그라운드 계속 + 폴백 안내.
