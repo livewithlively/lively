@@ -18,6 +18,7 @@
 //  | L9 | 종단 — 스텁 tmux 가 스크립트를 실제로 돌림 | 리스 env 에 토큰                   | 하네스 env 에 도달 · 하네스가 도는 동안 파일 없음 |
 //  | L10| markFinished — AI 가 쓴 요약             | 산문(«Bearer authentication»·MAX_TOKENS=4096) | 산문은 그대로, 토큰 모양만 가림          |
 //  | L11| delegate_status·list(읽기)               | 가림 전에 저장된 옛 행(#4074 모양)    | 응답에 토큰이 없다(DB 는 안 건드린다)            |
+//  | L12| new-session 은 됐는데 set-option 실패     | «no server running»(매니지드 9/16 53건의 모양) | 자격 파일이 남지 않는다(스크립트가 못 돌았다) |
 //
 //  L1·L2·L5·L6 은 수정 전 코드에서 빨간불이었다(fail-first). L3·L4·L9 는 근본 수정(파일 전달)의 양면이다.
 //  ⓘ L1 의 스텁은 실패할 때 작업 폴더의 자격 파일을 stderr 로 흘린다 — 명령줄에서 값이 빠진 뒤에도 **오류를 가리는 겹**(spawnTaskSession
@@ -50,6 +51,7 @@ if (process.platform === "win32") {
   const log = path.join(root, "tmux.log");
   const failFlag = path.join(root, "fail");
   const runFlag = path.join(root, "run");
+  const setoptFailFlag = path.join(root, "setopt-fail");
   const stub = path.join(root, "tmux");
   const shared = path.join(root, "shared");
   //  new-session 을 실패시키거나(psmux 가 실제로 그렇게 죽었다 — 실패 문장에 stderr 가 붙는다) 스크립트를 그 자리에서 돌리는 스텁.
@@ -68,6 +70,8 @@ if (process.platform === "win32") {
     "    SHELL=/bin/true sh -c \"$3\" < /dev/null > /dev/null 2>&1",
     "  fi",
     "fi",
+    //  판은 떴는데 서버가 곧바로 죽은 모양 — 다음 호출(set-option)이 실패한다(2026-09-16 매니지드 실측 문구 그대로).
+    `if [ "$1" = "set-option" ] && [ -f "${setoptFailFlag}" ]; then echo "no server running on /tmp/tmux-997/default" >&2; exit 1; fi`,
     "exit 0",
     "",
   ].join("\n"), { mode: 0o755 });
@@ -186,6 +190,16 @@ if (process.platform === "win32") {
       } finally { fs.rmSync(runFlag, { force: true }); }
     });
 
+    await t("L12 판이 뜬 뒤 set-option 이 실패해도(서버가 곧바로 죽음) 자격 파일을 남기지 않는다", async () => {
+      fs.writeFileSync(setoptFailFlag, "");
+      const id = n++;
+      let caught: unknown = null;
+      try { await spawn(id, { CLAUDE_CODE_OAUTH_TOKEN: TOKEN }); } catch (e) { caught = e; } finally { fs.rmSync(setoptFailFlag, { force: true }); }
+      assert.ok(caught instanceof Error && /no server running/.test((caught as Error).message), "관측 장치 — set-option 에서 실패해야 한다");
+      assert.ok(!everyText(caught).includes(TOKEN));
+      assert.deepEqual(filesHolding(taskDirOf(id), TOKEN), [], "스크립트가 못 돈 판의 자격 파일이 공유 작업 폴더에 남았다");
+    });
+
     // ── L5 · L6 · L10 — 저장 직전(구 노드 번들이 가리지 않은 원문을 돌려줘도) ─────────────────────────
     const writes: unknown[][] = [];
     (itemsPool as unknown as { query: unknown }).query = async (_sql: string, params: unknown[]) => {
@@ -243,9 +257,9 @@ if (process.platform === "win32") {
 
     if (failed.length) {
       process.exitCode = 1;
-      console.log(`✗ task-secret-leak — ${pass}/11 통과, 실패: ${failed.map((f) => f.split(" ")[0]).join(", ")}`);
+      console.log(`✗ task-secret-leak — ${pass}/12 통과, 실패: ${failed.map((f) => f.split(" ")[0]).join(", ")}`);
     } else {
-      console.log(`✓ task-secret-leak — ${pass}/11 (리스 값이 명령줄·오류·저장값에 평문으로 남지 않는다)`);
+      console.log(`✓ task-secret-leak — ${pass}/12 (리스 값이 명령줄·오류·저장값에 평문으로 남지 않는다)`);
     }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
