@@ -17,8 +17,8 @@ import {
 } from "../terminal/terminal-sessions.js";
 import { wrapAsMember, isolationInfraReady, memberExecConfigured, fileOpsAtMemberBoundary } from "../terminal/terminal-isolation.js";
 import { ensureProfileKitWired } from "../terminal/profile-kit-seed.js";   // #4135 — 프로필 dir 은 mkdir 만으론 빈 껍데기다
-import { memberRm, memberWriteFile, memberNodeJson } from "../terminal/terminal-member-fs.js";   // 저장소 분리 배포의 작업 폴더 op(아래 TaskFs)
-import { envKeepPolicy } from "../terminal/session-env-contract.js";
+import { memberRm, memberWriteFile, memberWriteSecretFile, memberNodeJson } from "../terminal/terminal-member-fs.js";   // 저장소 분리 배포의 작업 폴더 op(아래 TaskFs)
+import { LEASE_ENV_NAME, redactTaskError, taskSecretValues } from "./task-secrets.js";   // #4422 — 리스 값은 명령줄·오류 문장에 안 싣는다
 import { provisionTaskRepo, type RepoProvisionAuth } from "../project/project-provision.js";
 // 공유폴더 그룹쓰기 계약(2770/660) — 위탁 작업 폴더도 격리 워커(box_<멤버>)가 써야 하므로 같은 계약을 적용한다.
 import { grantSharedGroupWrite, SHARED_FILE_MODE } from "../project/project-fs.js";
@@ -110,7 +110,7 @@ export interface RunTaskInput {
   //  구현: 턴 폴더에 system.md 로 쓰고 `--append-system-prompt-file <path>` 로 싣는다(셸 인용 없음 — 경로만 인자에 간다).
   //  claude 만 안다(다른 하네스는 무시 — 실측하지 않은 플래그를 추측해 넣지 않는다).
   systemPrompt?: string;
-  env?: Record<string, string>;    // 자격 리스(CLAUDE_CODE_OAUTH_TOKEN 등) — 값은 세션 env 로만
+  env?: Record<string, string>;    // 자격 리스(CLAUDE_CODE_OAUTH_TOKEN 등) — 값은 명령줄이 아니라 0600 자격 파일로 가고, 워커 셸이 읽어 하네스 env 로만 올린다(#4422)
   // 레포 provision 주입(#905 C4) — **노드엔 DB 가 없다**. 게이트웨이가 레지스트리 git_url + (의뢰자 본인) git 자격을
   //  조회해 실어 보낸다. 없으면 노드는 종전대로 DB 를 읽으려다 실패하고 "레지스트리에 없다"는 오진을 낸다.
   //  중앙(게이트웨이 내장 노드) 실행 시엔 미설정 — 거기선 DB 를 직접 읽는 게 정상이다.
@@ -271,6 +271,34 @@ export interface TaskScriptOpts {
   /** 승인을 우회할까. **기본 true = 종전 위탁 동작**(사람이 안 보는 배치라 우회가 맞다).
    *  false 는 사람이 화면에서 보고 있는 대화형(리브 #1631) — 우회 없이 돌고, 허용 도구를 좁혀 위험을 줄인다. */
   bypassPermissions?: boolean;
+  /** 자격 리스 env **이름**(#4422) — 값은 작업 폴더의 자격 파일(taskLeaseFile)에 있다. 스크립트가 읽어 하네스 env 로 올리고 지운다.
+   *  비었거나 없으면 종전 스크립트와 바이트 동일하다. 이름은 스크립트에 그대로 박히므로 LEASE_ENV_NAME 밖이면 던진다. */
+  leaseEnv?: readonly string[];
+}
+
+/** 자격 파일 자리(#4422) — 작업 폴더 바로 아래, 이름 하나에 파일 하나(값을 가공 없이 그대로 담는다 — 셸 인용이 필요 없다). */
+export function taskLeaseFile(taskDir: string, name: string): string {
+  return path.join(taskDir, `.lease-${name}`);
+}
+
+/**
+ * 자격 파일을 **워커 uid 소유 0600** 으로 쓴다(#4422). 워커만 읽는다 — 다른 멤버도 여는 공유 작업 폴더라 그룹 권한(660)이면 안 된다.
+ *  · 격리 사용자(osUser) — 멤버 경계로 쓴다. 저장소 분리 배포뿐 아니라 **셀프호스트 격리 박스도** 여기다: 그 박스의 작업 폴더 op 는
+ *    게이트웨이 uid 로 쓰는데(localTaskFs), 그러면 0600 파일을 워커(box_<멤버>)가 못 읽는다.
+ *  · 비격리(멤버 PC·워커 노드·비격리 중앙) — 게이트웨이/노드 프로세스가 곧 워커 uid 다.
+ *  둘 다 **추측할 수 없는 임시 이름을 새로 만들고(O_EXCL) rename** 한다 — 작업 폴더는 남도 쓰는 곳이라, 같은 이름을 미리 심어 둔
+ *   파일·링크에 비밀을 쓰는 일이 없게(memberWriteSecretFile 머리말).
+ */
+export async function writeTaskSecret(p: string, value: string, osUser?: string | null): Promise<void> {
+  if (osUser) { await memberWriteSecretFile(osUser, p, value); return; }
+  const tmp = `${p}.${crypto.randomBytes(12).toString("hex")}.tmp`;
+  try {
+    await fsp.writeFile(tmp, value, { mode: 0o600, flag: "wx" });
+    await fsp.rename(tmp, p);
+  } catch (e) { await fsp.rm(tmp, { force: true }).catch(() => { /* 없으면 그만 */ }); throw e; }
+}
+async function removeTaskSecrets(paths: readonly string[], osUser?: string | null): Promise<void> {
+  await Promise.all(paths.map((p) => (osUser ? memberRm(osUser, p) : fsp.rm(p, { force: true })).catch(() => { /* best-effort */ })));
 }
 
 export function taskScript(harnessKey: string, bin: string, flags: string[], taskDir: string, opts?: TaskScriptOpts): string {
@@ -291,7 +319,16 @@ export function taskScript(harnessKey: string, bin: string, flags: string[], tas
   // 우회 조각은 **앞 공백을 여기서 붙인다** — 끄면 빈 문자열이라 이중 공백이 안 생기고,
   //  켜면 종전 스크립트와 바이트 동일하다(위탁의 기존 동작을 한 글자도 안 바꾼다는 것이 이 리팩터의 계약).
   const bypass = opts?.bypassPermissions === false ? "" : ` ${spec.bypassFlag}`;
-  return `cd "$LIVELY_TASK_WS" && ${spec.run(bin, f, `${taskDir}/prompt.txt`, bypass)} > "${taskDir}/stream.jsonl" 2> "${taskDir}/stderr.log"; echo $? > "${taskDir}/exit"; exec "\${SHELL:-sh}"`;
+  // 자격 리스(#4422) — 파일에서 읽어 **이 셸의 env 로만** 올리고, 하네스를 띄우기 전에 지운다. 값은 이 문자열에 없다(이름·경로뿐).
+  //  · 읽기 실패(파일 없음) → `&&` 사슬이 끊겨 하네스가 안 뜨고 비0 이 exit 에 남는다(조용한 성공 금지 — #1289). 그 이유는 stderr.log 에.
+  //  · 끝나면 한 번 더 지우고(cd 실패 등 사슬이 앞에서 끊긴 경우) env 에서 내린다 — 사후 검시 셸(`exec $SHELL`)에 값이 남지 않게.
+  //  ⚠ `$(…)` 는 끝 개행을 떨어뜨린다 — 토큰 값엔 없고, 있었다면 인증을 깨는 쪽이었다.
+  const names = opts?.leaseEnv ?? [];
+  for (const n of names) if (!LEASE_ENV_NAME.test(n)) throw new Error(`자격 리스 이름이 규칙 밖입니다: ${JSON.stringify(n)}`);
+  const leaseAt = (n: string): string => taskLeaseFile(taskDir, n);   // 쓰는 쪽(spawnTaskSession)과 **같은 함수** — 둘이 갈리면 모든 위탁이 «cat: 없음» 으로 죽는다
+  const load = names.map((n) => `${n}=$(cat "${leaseAt(n)}" 2> "${taskDir}/stderr.log") && export ${n} && rm -f "${leaseAt(n)}" && `).join("");
+  const unload = names.length ? `rm -f ${names.map((n) => `"${leaseAt(n)}"`).join(" ")}; unset ${names.join(" ")}; ` : "";
+  return `cd "$LIVELY_TASK_WS" && ${load}${spec.run(bin, f, `${taskDir}/prompt.txt`, bypass)} > "${taskDir}/stream.jsonl" 2> "${taskDir}/stderr.log"; echo $? > "${taskDir}/exit"; ${unload}exec "\${SHELL:-sh}"`;
 }
 
 // ── 작업 폴더 파일 op 의 자리 — 게이트웨이 fs 냐, 멤버 경계냐 ─────────────────────────────────
@@ -421,7 +458,20 @@ export async function prepareTaskDir(
   return taskDir;
 }
 
+/**
+ * 위탁 판을 띄운다. 실패 오류는 **가려서** 던진다(#4422) — 이 오류 문장은 org_task.last_assign·위탁 응답·크론 요약·게이트웨이 로그·
+ *  (노드면) RPC 응답으로 그대로 나간다. 리스 값·레포 자격은 리터럴로, 그 밖은 비밀 모양으로 가린다(task-secrets.ts).
+ */
 export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResult> {
+  try {
+    return await spawnTaskSessionUnguarded(input);
+  } catch (e) {
+    const git = input.repoAuth?.secret;
+    throw redactTaskError(e, taskSecretValues(input.env, { t: git?.https_token, k: git?.ssh_private_key }));
+  }
+}
+
+async function spawnTaskSessionUnguarded(input: RunTaskInput): Promise<RunTaskResult> {
   // 루트 축 — 위탁(delegate)은 **공유 루트**다: 결과물이 남고 팀이 본다.
   //  처음 설정 분석(me_welcome_analyze)만 **개인 루트**(<개인 루트>/liv)다 — 그 사람이 올린 자료를 그 사람 몫으로 읽는 한 번짜리 턴이다.
   //  (홈 리브의 대화 턴도 여기였다 — #4032 에서 진짜 세션(org/liv/session.ts)으로 옮겼다. 이 함수의 tmux 는 게이트웨이가 도는
@@ -503,26 +553,16 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   args.push("-e", `LIVELY_SESSION_ID=${id}`);
   // #4012 T5 — 이 판이 붙을 게이트웨이·워크스페이스. 안 실으면 판이 `~/.lively/gateway-url` 을 읽어 남의 워크스페이스에 붙는다.
   args.push(...taskGatewayEnvArgs(input.gatewayUrl, input.tenantSlug));
-  // 자격 리스(§8-3) — setup-token env. 리스가 없으면 노드 로컬 프로필/자격 폴백(중앙=box_ 홈, 멤버 PC=본인 ~/.claude).
-  //  ⚠ 중앙 박스 격리(osUser)에서는 이 판이 곧 `sudo → box-spawn` 이라, sudoers 가 보존하지 않는 이름은
-  //   **오류 없이** 사라진다. 이름이 런타임에 정해지는 유일한 주입 자리라 시험이 정적으로 못 덮는다 —
-  //   그래서 여기서 계약(session-env-contract)에 대조해 «조용한 유실» 을 최소한 **보이게** 만든다.
-  //   (막지는 않는다: 리스 표에 하네스를 더하는 사람이 배포 전에 이 줄을 로그에서 보게 하는 것이 목적이고,
-  //    비격리·멤버 PC 경로는 sudo 를 안 타 정상 동작하므로 여기서 죽이면 그쪽까지 막는다.)
-  for (const [k, v] of Object.entries(input.env ?? {})) {
-    if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(k)) continue;
-    //  ⚠ `sudo-default`(로케일)는 sudo 자신이 보존하므로 경고 대상이 아니다 — 그것까지 경고하면
-    //   «틀린 경고» 가 섞여 진짜 유실 신호의 신뢰가 떨어진다.
-    const policy = envKeepPolicy(k);
-    if (osUser && policy !== "keep" && policy !== "sudo-default") {
-      console.warn(
-        `[tasks] ${k} 은 세션 env 계약에 keep 으로 없다 — 격리 세션에서 sudo 가 지운다(task ${input.taskId}). ` +
-        "src/terminal/session-env-contract.ts 에 선언하고 `npm run gen:sudoers` 로 재생성하라",
-      );
-    }
-    args.push("-e", `${k}=${v}`);
-  }
-  const script = taskScript(harness.key, harness.bin, flags, taskDir, { bypassPermissions: input.bypassPermissions });
+  // 자격 리스(§8-3) — setup-token 등. 리스가 없으면 노드 로컬 프로필/자격 폴백(중앙=box_ 홈, 멤버 PC=본인 ~/.claude).
+  //  ★ 값은 **명령줄에 싣지 않는다**(#4422). 종전엔 `-e K=V` 로 펼쳤고, 그래서 ① 판 생성이 실패하면 execFile 오류 문장
+  //   ("Command failed: <argv 전체>")에 토큰이 통째로 실려 last_assign·위탁 응답·게이트웨이 로그로 샜다(2026-09-22 윈도우 노드
+  //   psmux 실측 — delegate_status 로 읽혔다) ② 성공해도 그 컴퓨터의 프로세스 목록에 보였다.
+  //   이제 작업 폴더의 0600 자격 파일(워커 uid 소유)로 두고, 워커 스크립트가 읽어 하네스 env 로 올린 뒤 곧바로 지운다(taskScript).
+  //   샌드박스 판(sandbox-task.ts)의 $CREDENTIALS_DIRECTORY 와 같은 원칙이다. 이름은 스크립트에 박히므로 규칙 밖이면 버린다.
+  //  ⓘ 값이 env 로 sudo 를 건너지 않으므로 격리 박스의 sudoers env_keep(session-env-contract «자격 리스»)에 더는 기대지 않는다 —
+  //   워커 uid 안에서 읽는다. 그 선언을 거두는 건 sudoers 재생성이 따르는 별건이라 여기서 건드리지 않는다(남아 있어도 무해).
+  const lease = Object.entries(input.env ?? {}).filter((kv): kv is [string, string] => LEASE_ENV_NAME.test(kv[0]) && typeof kv[1] === "string");
+  const script = taskScript(harness.key, harness.bin, flags, taskDir, { bypassPermissions: input.bypassPermissions, leaseEnv: lease.map(([k]) => k) });
   if (osUser) {
     args.push(...wrapAsMember(osUser, ["sh", "-lc", script], workspace));
   } else {
@@ -543,7 +583,18 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
     }
     args.push("-c", workspace, "sh", "-lc", script);
   }
-  await tmux(args);
+  //  자격 파일은 **판을 띄우기 직전에** 쓴다 — 그 앞 단계(프로필 준비 등)가 실패해도 파일이 남지 않게. 판 생성이 실패하면 지운다:
+  //   스크립트가 돌지 않으니 아무도 안 지운다(공유 작업 폴더에 남는다).
+  //  ⚠ 판은 떴는데 그 안의 첫 명령(sudo·중계)이 죽으면 스크립트가 못 돌아 파일이 남는다 — 워커 uid 0600 이라 그 멤버만 읽고,
+  //   같은 위탁의 재시도가 덮어쓴다.
+  const leaseFiles: string[] = [];
+  try {
+    for (const [k, v] of lease) { const p = taskLeaseFile(taskDir, k); leaseFiles.push(p); await writeTaskSecret(p, v, osUser); }
+    await tmux(args);
+  } catch (e) {
+    await removeTaskSecrets(leaseFiles, osUser);
+    throw e;
+  }
   const ownerId = user.userId || user.email || "";
   await tmux(["set-option", "-t", id, "@box_owner", ownerId]);
   await tmux(["set-option", "-t", id, "@box_kind", "task"]);   // #2162 — 세션 목록·화면이 «배치»를 알아본다

@@ -25,6 +25,7 @@
   "dist/node/rpc-error.js",
   "dist/node/state-freshness.js",
   "dist/node/tasks.js",
+  "dist/node/task-secrets.js",
   "dist/ops/build-cache.js",
   "dist/ops/disk-guard.js",
   "dist/ops/health.js",
