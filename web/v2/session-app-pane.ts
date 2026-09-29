@@ -32,6 +32,13 @@ export interface AttachedApp {
 
 /** 곁칸의 붙은 앱 탭 — 부품 종류 이름이자 탭 열쇠. 배치에 저장하지 않는다(머리말). */
 export const SESSAPP_TAB = 'sessapp';
+/** «그 앱 탭을 보여 달라» — 곁칸 [앱]에서 **이미 붙은** 앱을 다시 눌렀을 때(새로 붙은 게 아니라 셸이 스스로는 안 켠다).
+ *  이 곁칸 한 벌의 뿌리(paneRoot)에서만 오간다. detail.app_id = 앞에 세울 앱. */
+export const SHOW_SESSAPP_EVT = 'pn:show-sessapp';
+/** 탭에 걸 이름 — 하나면 그 앱 이름, 여럿이면 «앱 n개». 부품이 서기 전(탭을 한 번도 안 켰을 때)에도 이름이 맞게 셸이 건다. */
+export function sessAppTabTitle(apps: ReadonlyArray<{ title: string }>): string {
+  return apps.length === 1 ? apps[0].title : `앱 ${apps.length}개`;
+}
 
 const sessPath = (sid: string, tail = ''): string => '/api/ui/terminal/sessions/' + encodeURIComponent(sid) + '/apps' + tail;
 
@@ -236,11 +243,19 @@ export function sessAppPart(ctx: PartCtx): Part {
     reloadTimer = window.setTimeout(() => { reloadTimer = 0; mounted?.frame?.reload(); }, RELOAD_DEBOUNCE_MS);
   });
   const offSess = ctx.onSession((s) => follow(s));
+  //  곁칸 [앱]에서 이미 붙은 앱을 다시 눌렀다 — 그 앱을 앞에 세운다(탭을 켜는 것은 셸이 같은 신호로 한다).
+  const onShow = (e: Event): void => {
+    const id = String((e as CustomEvent<{ app_id?: string }>).detail?.app_id || '');
+    if (!id || !sid) return;
+    pick.set(sid, id);
+    paint();
+  };
+  ctx.paneRoot().addEventListener(SHOW_SESSAPP_EVT, onShow);
   follow(ctx.curSession());
 
   return {
     root,
-    destroy: () => { off?.(); off = null; offLive(); offSess(); unmount(); },
+    destroy: () => { off?.(); off = null; offLive(); offSess(); ctx.paneRoot().removeEventListener(SHOW_SESSAPP_EVT, onShow); unmount(); },
     onTabClose: () => {
       const s = sid, cur = current();
       if (!s || !cur) return;
