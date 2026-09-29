@@ -32,6 +32,7 @@ import { mountSideCard, type SideCardHandle } from './side-card.js';   // #3870:
 import { sideLabels } from '../lib/side-label.js';   // 곁칸의 화면 이름. 자리바꿈으로 왼쪽에 서면 «우측» 이라 부르지 않는다(#4233)
 import { MOBILE_MQ } from './mobile.js';   // 좁은 폭(≤900)의 접힌 배치 — side-swap 과 같은 문턱을 읽는다(#4088 후속)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
+import { SESSAPP_TAB, watchSessionApps } from './session-app-pane.js';   // #4225 붙은 앱 = 곁칸의 파생 탭
 import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, rememberViewerPath, rememberedViewerPath, slotStoreKey } from './panes-kit.js';
 import { bindCtxSurface } from './ctx-registry.js';   // #3784 곁칸 빈 자리 우클릭
 import { type CtxRow } from './ctx-menu.js';
@@ -117,7 +118,17 @@ const ALL = new Set<string>(PART_DEFS.map((d) => d.type));
  *  탭도 ×도 없어 **뺄 방법이 사라지고**, 그 칸에 세션만 남으면 탭 줄 자체가 숨어 ＋ 마저 없어진다
  *  (원준 2026-08-20 신고: "세션이 어디 열린 건지도 모르겠고 닫을 수도 없어 골머리"). 넣는 길을 막고(addBtn·moveTab),
  *  이미 그렇게 저장된 배치는 여기서 되돌린다 — 갇힌 사람은 새로고침 한 번으로 풀린다. */
+/** #4225 — **배치에 저장하지 않는 탭**. 붙은 앱 탭은 지금 보는 세션에서 나온다(session-app-pane.ts 머리말) —
+ *  저장하면 앱이 안 붙은 세션을 열 때 빈 탭이 한 번 떴다 사라진다. 읽을 때도 쓸 때도 걷는다. */
+const DERIVED_TABS: ReadonlySet<string> = new Set([SESSAPP_TAB]);
+function stripDerived(lay: Layout): Layout {
+  const keep = (k: TabKey | null): boolean => !!k && !DERIVED_TABS.has(tabBase(k));
+  const out: Layout = { ...lay, main: lay.main.filter(keep), side: lay.side.filter(keep), bottom: lay.bottom.filter(keep), act: { ...lay.act } };
+  for (const z of ['main', 'side', 'bottom'] as const) if (!keep(out.act[z])) out.act[z] = out[z][0] || null;
+  return out;
+}
 function normalizeLayout(lay: Layout): Layout {
+  lay = stripDerived(lay);
   //  같은 열쇠가 두 칸에 있으면 부품이 두 몸을 갖고 서로를 덮는다 — 먼저 나온 것만 남긴다.
   const seen = new Set<TabKey>();
   for (const z of ['main', 'side', 'bottom'] as const) {
@@ -219,8 +230,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     try {
       const st = layoutStore();
       const map = st.p && typeof st.p === 'object' ? st.p : {};
-      map[String(id)] = lay;
-      localStorage.setItem(LAYOUT_KEY, JSON.stringify({ ...st, last: lay, p: map }));   // ...st — 표식(seeded)을 지우지 않는다
+      const saved = stripDerived(lay);             // #4225 붙은 앱 탭은 세션에서 나온다 — 배치엔 안 적는다
+      map[String(id)] = saved;
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify({ ...st, last: saved, p: map }));   // ...st — 표식(seeded)을 지우지 않는다
     } catch (_) { /* noop */ }
   }
   saveLayout();   // loadLayout 의 교정(normalizeLayout)을 디스크에도 남긴다 — 갇힌 배치가 한 번 열고 끝나지 않게
@@ -420,12 +432,17 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
 
   // 세션에 딸린 칸들(타임라인·웹·편집기)에게 '보는 세션이 바뀌었다'를 알린다 — 각자 자기 것을 그 세션 것으로 갈아입는다.
   const sessSubs = new Set<(sid: string | null) => void>();
+  //  #4225 붙은 앱 탭의 구독(syncSessApps) — announceSession 이 부르므로 **그보다 먼저** 선언한다(아래에 두면 마운트 중
+  //   세션이 바뀌는 길이 생기는 순간 TDZ 로 화면이 통째로 죽는다 — panes 선언 머리말과 같은 함정).
+  let sessAppOff: (() => void) | null = null;
+  let sessAppSid: string | null = null;
   function curSession(): string | null {
     const sp = panes.get('main')?.parts.get('sessions');
     return sp && sp.currentSession ? sp.currentSession() : (opts.sessionId || null);
   }
   function announceSession(sid: string | null): void {
     for (const fn of [...sessSubs]) { try { fn(sid); } catch (_) { /* 한 칸이 넘어져도 나머지는 간다 */ } }
+    syncSessApps();
   }
 
   const ctx: PartCtx = {
@@ -799,6 +816,12 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   window.addEventListener('message', onMsg);
 
   function removeTab(zone: Zone, key: TabKey): void {
+    //  #4225 — 부품이 × 의 뜻을 따로 가지면(붙은 앱 탭 = 이 세션에서 떼기) 그것만 한다. 탭은 떼기가 끝나 붙은 목록이
+    //   비었을 때 syncSessApps 가 걷는다 — 떼기가 실패하면 탭이 남아 있어야 하므로 여기서 먼저 빼지 않는다.
+    for (const pane of panes.values()) { const p = pane.parts.get(key); if (p?.onTabClose) { p.onTabClose(); return; } }
+    dropTab(zone, key);
+  }
+  function dropTab(zone: Zone, key: TabKey): void {
     const real = zoneOf(key) || zone;            // 접힌 탭(좁은 폭)은 서랍에서 빼도 아래 칸의 것이다
     const list = lay[real];
     const i = list.indexOf(key);
@@ -814,7 +837,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   function moveTab(key: TabKey, from: Zone, to: Zone): void {
     if (from === to) { activate(to, key); return; }
     if (tabBase(key) === 'sessions' && to !== 'main') return;   // 세션은 가운데 칸 밖으로 나가지 않는다(위 불변식)
-    removeTab(from, key);
+    //  ⚠ removeTab 이 아니라 dropTab — removeTab 은 «사람이 × 를 눌렀다» 라 부품의 뜻(붙은 앱 탭 = 떼기)을 따른다.
+    //   옮기기는 닫기가 아니다: 거기로 가면 앱이 떨어지고 탭은 두 칸에 겹쳐 선다(#4225 격리 리뷰가 잡았다).
+    dropTab(from, key);
     addTab(to, key);
   }
 
@@ -846,8 +871,11 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       b.classList.add('drag');
     });
     b.addEventListener('dragend', () => b.classList.remove('drag'));
+    const detachX = tabBase(key) === SESSAPP_TAB;   // #4225 붙은 앱 탭의 × 는 «빼기» 가 아니라 «이 세션에서 떼기»
     const x = el('button', {
-      class: 'pn-tab-x', type: 'button', title: `${nm} 칸에서 뺍니다`, 'aria-label': `${nm} 빼기`,
+      class: 'pn-tab-x', type: 'button',
+      title: detachX ? `${nm} 을(를) 이 세션에서 뗍니다 — 앱의 데이터는 그대로 남아요` : `${nm} 칸에서 뺍니다`,
+      'aria-label': detachX ? `${nm} 떼기` : `${nm} 빼기`,
       onclick: (e: MouseEvent) => { e.stopPropagation(); removeTab(zone, key); },
     }, pnIcon('x', 'pn-i xs'));
     //  접히면 아이콘만 남는다 — 같은 종류가 둘 이상이면 그때 서로를 구별할 길이 사라진다(#762 실측:
@@ -1195,6 +1223,34 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     } catch (_) { /* 다음 틱에 다시 시도한다 */ }
   }
 
+  // ── 붙은 앱 탭(#4225) — 지금 보는 세션에 앱이 붙어 있으면 곁칸에 세우고, 없으면 걷는다 ──────────────
+  //  «새로 붙음»(목록에 없던 앱이 생겼다 — 사람이 [앱]에서 붙였거나 AI 가 붙였다)이면 곁칸을 펴고(폰은 서랍) 그 탭을 켠다.
+  //  세션을 갈아 끼워 원래 붙어 있던 앱이 보이는 것은 새로 붙은 게 아니다 — 탭만 세우고, 이 세션에서 마지막에 그 탭을
+  //  보고 있었으면 그때만 켠다(sessionAct 규칙과 같다). 목록은 탭 부품과 한 벌을 나눠 본다(watchSessionApps).
+  function syncSessApps(): void {
+    if (dead) return;
+    const sid = curSession();
+    if (sid === sessAppSid && sessAppOff) return;
+    sessAppOff?.(); sessAppOff = null; sessAppSid = sid;
+    //  세션이 바뀌면 옛 세션의 탭부터 걷는다 — 새 세션에 붙은 앱이 이미 받아 둔 판에 있으면 아래 구독이 **같은 틱에** 다시 세운다.
+    //   안 걷으면 새 목록이 올 때까지 옛 앱 탭이 남아 있고, 그 몸은 이미 «붙은 앱이 없어요» 를 그려 서로 다른 말을 한다.
+    { const z = zoneOf(SESSAPP_TAB); if (z) dropTab(z, SESSAPP_TAB); }
+    if (!sid) return;
+    sessAppOff = watchSessionApps(sid, (apps, added) => {
+      if (dead || sid !== sessAppSid) return;
+      const had = zoneOf(SESSAPP_TAB);
+      if (!apps.length) { if (had) dropTab(had, SESSAPP_TAB); return; }
+      if (!had) lay.side.push(SESSAPP_TAB);
+      const z = zoneOf(SESSAPP_TAB)!;
+      if (added.length) { revealZone(z); activate(z, SESSAPP_TAB); paintAll(); return; }
+      if (!had) {
+        const mine = readActs()[actKey()];
+        if (mine && mine[z] === SESSAPP_TAB) lay.act[z] = SESSAPP_TAB;
+        paintAll();
+      }
+    });
+  }
+
   // ── 라이브 틱 — 보이는 부품만 제자리 갱신(서명이 같으면 DOM 을 안 건드린다) ──
   const timer = window.setInterval(() => {
     if (dead) return;
@@ -1213,6 +1269,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
 
   applyView();          // 첫 그림 전에 이 세션의 폭·높이·접힘을 입힌다(swap 이 선 뒤라 상한 판정이 산다)
   paintAll();
+  syncSessApps();       // #4225 — 이 세션에 붙은 앱이 있으면 곁칸에 그 탭을 세운다(목록이 오면)
   if (!loose && !detail) void refreshDetail();
 
   // [보관한 세션]에서 [탭에 꺼내기]를 누르면 이 줄을 그 자리에서 다시 그린다(8초 틱을 기다리지 않게).
@@ -1247,6 +1304,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       dead = true;
       window.removeEventListener('pn:sessions-view', onViewChanged);
       window.clearInterval(timer);
+      sessAppOff?.(); sessAppOff = null;
       card?.destroy();
       swap?.destroy();
       for (const ro of ros) ro.disconnect();

@@ -110,7 +110,7 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
   eq(at("  seedLayoutStore();") > 0 && at("  seedLayoutStore();") < at("  let lay = loadLayout(id);"), true,
     "W1 배치를 읽기 **전에** 들인다 — 뒤에 부르면 첫 화면은 탭 없이 뜨고 다음에야 보인다");
   eq(/side: \['files', 'tasks', 'knowledge', 'apps'\]/.test(panes), true, "W2 기본 배치의 곁칸에 tasks 가 선다(자료 · 태스크 · 지식 · 앱)");
-  eq(/JSON\.stringify\(\{ \.\.\.st, last: lay, p: map \}\)/.test(panes), true,
+  eq(/JSON\.stringify\(\{ \.\.\.st, last: (lay|saved), p: map \}\)/.test(panes), true,   // #4225 — saved = 파생 탭(붙은 앱)을 걷은 사본
     "W3 배치를 저장할 때 표식(seeded)을 지우지 않는다 — 지우면 다음에 열 때 닫은 탭이 되살아난다");
   const parts = read("web/v2/panes-parts.ts");
   eq(/\{ type: 'tasks', name: '프로젝트', icon: 'projtask'/.test(parts), true, "W4 종류 이름은 'tasks' 그대로(저장된 배치가 이 이름으로 기억한다) · 표시 이름은 프로젝트(#4135) · 그림은 폴더 안의 태스크");

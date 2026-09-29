@@ -19,6 +19,9 @@ export interface SessionApp {
   tools: string[];    // 〃 (permissions.tools ∪ ext_tools)
   pages: Array<{ key: string; title: string }>;  // #1780 PR5 — ui.pages(있으면 UI 앱). 없으면 [](세션 앱).
   tables: string[];   // #4225 — data.tables 이름. 있으면 세션에 붙여 AI 가 쓸 데이터가 있는 앱
+  editMode: 'all' | 'members';   // #4225 누가 고칠 수 있나(app_save) — 기본 전원
+  editMembers: string[];
+  canEdit: boolean;              // 이 사람이 고칠 수 있나(서버 판정)
   sites: string[];   // csp.frame_domains — 이 앱이 **화면에 싣는** 사이트(동의 창에 보여 준다)
   net: string[];     // csp.connect_domains ∪ permissions.hosts — 이 앱이 **직접 연결하는** 곳
   instances: { project: 'global' | 'optional' | 'required'; multiplicity: 'single' | 'multiple' };
@@ -48,6 +51,8 @@ export async function listSessionApps(): Promise<SessionApp[]> {
         const system = source.kind === 'builtin' && a.manifest ? (a.manifest.system || null) : null;
         return { id: String(a.id), title: String(a.title || a.id), version: String(a.version || '0.0.0'),
           scopes: (perm.scopes || []).map(String), tools, pages, tables, sites, net, instances, system, source,
+          editMode: a.edit_mode === 'members' ? 'members' as const : 'all' as const,
+          editMembers: Array.isArray(a.edit_members) ? a.edit_members.map(String) : [], canEdit: a.can_edit === true,
           notifications: perm.notifications === true };   // #1891 — 동의 창이 제 줄로 보여 준다
       });
   } catch (e: any) {
@@ -78,6 +83,7 @@ export function ensureAppGrant(appId: string, title?: string): Promise<boolean> 
   const run = (async (): Promise<boolean> => {
     const app = (await listSessionApps()).find((a) => a.id === appId)
       || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], tables: [], sites: [], net: [], notifications: false,
+        editMode: 'all' as const, editMembers: [], canEdit: false,
         instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, system: null, source: {} };
     if (!(await appConsent(app))) return false;
     await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });
