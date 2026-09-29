@@ -68,7 +68,7 @@ async function runHook(cwd, base, env, prompt = "이 작업을 실제 코드로 
   const child = spawn(process.execPath, [HOOK], {
     cwd,
     env: { ...process.env, ...offlineLivelyEnv(), LIVELY_TOKEN: "test-token", LIVELY_GATEWAY_URL: base, LIVELY_HOME: cwd,
-      LIVELY_SESSION_ID: "", CODEX_THREAD_ID: "", CODEX_SESSION_ID: "", CLAUDE_SESSION_ID: "", CLAUDE_CODE_ENTRYPOINT: "", ...env },
+      LIVELY_SESSION_ID: "", CODEX_THREAD_ID: "", CODEX_SESSION_ID: "", CLAUDE_SESSION_ID: "", ...env },
     stdio: ["pipe", "pipe", "pipe"],
   });
   child.stdin.end(JSON.stringify({ cwd, prompt, ...input }));
