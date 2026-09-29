@@ -53,7 +53,7 @@ async function createSafe(listId: string, body: Record<string, unknown>) {
 }
 async function updateSafe(taskId: string, body: Record<string, unknown>) {
   try { return await updateTask(taskId, body); }
-  catch (e) { if (body.status) { const { status, ...b } = body; logger.warn({ name: body.name }, "update status 빼고 재시도"); return await updateTask(taskId, b); } throw e; }
+  catch (e) { if (isClickupTaskGone(e)) throw e; if (body.status) { const { status, ...b } = body; logger.warn({ name: body.name }, "update status 빼고 재시도"); return await updateTask(taskId, b); } throw e; }
 }
 
 /** clickupFetch 가 던진 오류가 «그 태스크가 저쪽에 없다»(상태코드 404)인가. */
@@ -157,7 +157,7 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
                     external_base=NULL, updated_at=now() WHERE id=$1`, [p.id]),
         });
         if (r === "detached") {
-          logger.warn({ project: p.id, task: extId }, "ClickUp 태스크가 지워져 연결을 끊었다(다음 변경 때 새 카드로 생성)");
+          logger.warn({ project: p.id, task: extId }, "ClickUp 태스크가 지워져 연결을 끊었다(다음 변경 때 컨테이너 리스트에 새 카드 — 자식은 부모가 다시 생긴 뒤)");
           await markDone(ob.id); detached++; continue;
         }
         await itemsPool.query(

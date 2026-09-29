@@ -13,6 +13,7 @@ let pass = 0;
 const ok = (n: string): void => { pass++; console.log(`ok  ${n}`); };
 
 // clickupFetch 가 던지는 모양 그대로(api.ts: `ClickUp ${status} ${path}: ${text}`).
+//  본문은 실측이다 — 삭제된 태스크에 GET·PUT 모두 이 404/ITEM_013 이 온다(2026-09-29, clickup API 직접 호출로 확인).
 const gone = new Error('ClickUp 404 /task/abc123: {"err":"Task not found, deleted","ECODE":"ITEM_013"}');
 const unauthorized = new Error('ClickUp 401 /task/abc123: {"err":"Token invalid"}');
 const serverErr = new Error("ClickUp 502 /task/abc123: bad gateway");
