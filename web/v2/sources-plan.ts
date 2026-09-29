@@ -183,3 +183,27 @@ export function placeLine(r: RowLike): string {
   const c = String((r.fields || {}).container_name || '');
   return '가져온 곳: ' + sysLabel(sys) + (c ? ' · ' + (isChatSys(sys) ? '#' : '') + c : '');
 }
+
+//  「휴지통으로」가 어느 문으로 지우나(#3778) — 되살릴 수 있는 갈래에만 문을 세운다. null = 버튼 없음.
+//   · source  : 좌표 없는 자료(글로 적은 메모 · 에이전트가 source_save 로 올린 local_file) → 자료 삭제(감사 스냅샷 → 휴지통 ▸ 자료)
+//   · project : 프로젝트 폴더 파일 → 그 파일을 지운다(서버가 숨김 자리에 보관)
+//   · browse  : 공유 폴더 · **내** 폴더 파일 → 그 폴더에서 지운다
+//   남의 시스템에서 온 것(슬랙·깃허브…)은 null — 지워도 다음 수집 때 다시 들어온다. 지울 곳은 원본이다.
+//   ⚠ **남의** 개인 폴더 파일도 null: 브라우즈 주소(root=personal)는 «보는 사람 자기» 폴더로 풀려, 같은 경로의 **내 파일**이 지워진다.
+//   ⚠ 좌표 없는 local_file 을 source 로 받지 않으면 삭제 문이 아예 없다 — 핸드오버 자료가 그렇게 지울 길 없이 남았다.
+export type TrashDoor = 'source' | 'project' | 'browse';
+export function trashDoorOf(
+  s: { kind?: string | null; external_system?: string | null; external_id?: string | null },
+  co: { root: string; path: string } | null,
+  me: { userId?: string; email?: string },
+): TrashDoor | null {
+  if (s.kind !== 'local_file') return s.external_system ? null : 'source';
+  const extId = String(s.external_id || '');
+  if (/^project:\d+\/.+$/.test(extId)) return 'project';
+  if (co) {
+    if (co.root === 'shared') return extId.startsWith('shared/') ? 'browse' : null;
+    const mine = co.root === 'personal' && [me.userId, me.email].some((k) => !!k && extId.startsWith('personal:' + k + '/'));
+    return mine ? 'browse' : null;
+  }
+  return !s.external_system && !extId ? 'source' : null;
+}
