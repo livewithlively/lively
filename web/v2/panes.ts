@@ -32,7 +32,7 @@ import { mountSideCard, type SideCardHandle } from './side-card.js';   // #3870:
 import { sideLabels } from '../lib/side-label.js';   // 곁칸의 화면 이름. 자리바꿈으로 왼쪽에 서면 «우측» 이라 부르지 않는다(#4233)
 import { MOBILE_MQ } from './mobile.js';   // 좁은 폭(≤900)의 접힌 배치 — side-swap 과 같은 문턱을 읽는다(#4088 후속)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
-import { SESSAPP_TAB, watchSessionApps } from './session-app-pane.js';   // #4225 붙은 앱 = 곁칸의 파생 탭
+import { SESSAPP_TAB, SHOW_SESSAPP_EVT, sessAppTabTitle, watchSessionApps } from './session-app-pane.js';   // #4225 붙은 앱 = 곁칸의 파생 탭
 import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, rememberViewerPath, rememberedViewerPath, slotStoreKey } from './panes-kit.js';
 import { bindCtxSurface } from './ctx-registry.js';   // #3784 곁칸 빈 자리 우클릭
 import { type CtxRow } from './ctx-menu.js';
@@ -1242,14 +1242,23 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       if (!apps.length) { if (had) dropTab(had, SESSAPP_TAB); return; }
       if (!had) lay.side.push(SESSAPP_TAB);
       const z = zoneOf(SESSAPP_TAB)!;
+      //  탭 이름 — 부품은 켜질 때 서므로, 한 번도 안 켠 탭은 기본 이름(«붙은 앱»)으로 남는다. 목록으로 셸이 먼저 건다.
+      tabTitles.set(SESSAPP_TAB, sessAppTabTitle(apps));
       if (added.length) { revealZone(z); activate(z, SESSAPP_TAB); paintAll(); return; }
       if (!had) {
         const mine = readActs()[actKey()];
         if (mine && mine[z] === SESSAPP_TAB) lay.act[z] = SESSAPP_TAB;
         paintAll();
-      }
+      } else paintTabs(z);
     });
   }
+  //  곁칸 [앱]에서 이미 붙은 앱을 다시 눌렀다 — 그 탭을 켠다(없으면 곧 올 목록이 «새로 붙음»으로 켠다).
+  const onShowSessApp = (): void => {
+    const z = zoneOf(SESSAPP_TAB);
+    if (!z) return;
+    revealZone(z); activate(z, SESSAPP_TAB); paintAll();
+  };
+  wrap.addEventListener(SHOW_SESSAPP_EVT, onShowSessApp);
 
   // ── 라이브 틱 — 보이는 부품만 제자리 갱신(서명이 같으면 DOM 을 안 건드린다) ──
   const timer = window.setInterval(() => {
@@ -1299,6 +1308,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     destroy(): void {
       if (typeof narrowMq.removeEventListener === 'function') narrowMq.removeEventListener('change', onNarrow); else (narrowMq as any).removeListener(onNarrow);
       wrap.removeEventListener('pn:open-web', onOpenWeb);
+      wrap.removeEventListener(SHOW_SESSAPP_EVT, onShowSessApp);
       wrap.removeEventListener(VIEWER_EVT, onOpenViewer);
       window.removeEventListener('message', onMsg);
       dead = true;

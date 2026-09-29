@@ -35,7 +35,7 @@ import { rememberCreated } from './created-cache.js';   // #1820 — 되살린 �
 import { sessText } from './side.js';
 import { listSessionApps, openAppSession } from './app-session.js';
 import { openInstalledApp } from './app-instance.js';
-import { attachAppToSession, openEditPolicyDialog, sessAppPart } from './session-app-pane.js';   // #4225 곁칸의 붙은 앱 탭 · 고치기 설정
+import { attachAppToSession, openEditPolicyDialog, sessAppPart, SHOW_SESSAPP_EVT } from './session-app-pane.js';   // #4225 곁칸의 붙은 앱 탭 · 고치기 설정
 import { type Sess, type V2Data } from './views.js';
 import { bindCtx, requestOpenRoute } from './ctx-registry.js';
 import { hasScope } from '../lib/state.js';   // #3784 곁칸 부품 우클릭 메뉴
@@ -1555,7 +1555,11 @@ function appsPart(ctx: PartCtx): Part {
     const sid = ctx.curSession();
     if (!sid) return;
     //  붙으면 붙은 목록이 다시 읽히고, 셸이 «새로 붙음»을 보고 곁칸에 그 앱 탭을 세워 켠다(panes.ts syncSessApps).
-    if (await attachAppToSession(sid, a.id, a.title)) toast(`「${a.title}」을(를) 이 세션에 붙였어요 — 사이드바에서 AI 와 같이 씁니다.`);
+    //  이미 붙어 있던 앱이면 «새로 붙음»이 없다 — 그 탭을 보여 달라고 따로 말한다(누른 사람은 그 앱을 보려고 눌렀다).
+    if (await attachAppToSession(sid, a.id, a.title)) {
+      ctx.paneRoot().dispatchEvent(new CustomEvent(SHOW_SESSAPP_EVT, { detail: { app_id: a.id } }));
+      toast(`「${a.title}」을(를) 이 세션에 붙였어요 — 사이드바에서 AI 와 같이 씁니다.`);
+    }
   };
 
   const list = async (): Promise<void> => {
