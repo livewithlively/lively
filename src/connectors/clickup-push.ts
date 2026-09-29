@@ -56,7 +56,29 @@ async function updateSafe(taskId: string, body: Record<string, unknown>) {
   catch (e) { if (body.status) { const { status, ...b } = body; logger.warn({ name: body.name }, "update status 빼고 재시도"); return await updateTask(taskId, b); } throw e; }
 }
 
-export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: number; deferred: number; failed: number; deleted: number; scanned: number }> {
+/** clickupFetch 가 던진 오류가 «그 태스크가 저쪽에 없다»(상태코드 404)인가. */
+export function isClickupTaskGone(e: unknown): boolean {
+  return e instanceof Error && /^ClickUp 404 /.test(e.message);
+}
+
+/**
+ * 연결된 태스크로 갱신을 보낸다. 태스크가 ClickUp 에서 지워졌으면 연결을 끊고 "detached".
+ *  종전엔 404 도 markErr 로 남겨 매 틱 재시도했다 — 태스크는 돌아오지 않으므로 그 행이 실행마다 실패 1건을 만들고,
+ *  연속 실패 서킷브레이커가 push-clickup 전체를 멈췄다. 연결을 끊은 프로젝트는 네이티브가 되어, 다음 변경 때
+ *  create 경로로 새 카드가 생긴다(라이블리가 원본이다). 404 가 아닌 오류는 종전대로 던져 재시도한다.
+ */
+export async function pushLinkedUpsert(o: { update: () => Promise<unknown>; detach: () => Promise<unknown> }): Promise<"pushed" | "detached"> {
+  try {
+    await o.update();
+    return "pushed";
+  } catch (e) {
+    if (!isClickupTaskGone(e)) throw e;
+    await o.detach();
+    return "detached";
+  }
+}
+
+export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: number; deferred: number; failed: number; deleted: number; detached: number; scanned: number }> {
   const team = await getTeam();
   const teamId = team.id;
   const containerId = ((await resolveConnectorConfig("clickup")).container_list_id ?? "").trim() || "";
@@ -79,7 +101,7 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
     `SELECT id, entity_id, op, ext_id_snapshot FROM external_outbox
      WHERE system='clickup' AND done_at IS NULL ORDER BY created_at LIMIT $1`, [opts?.limit ?? 200]);
 
-  let pushed = 0, deferred = 0, failed = 0, deleted = 0;
+  let pushed = 0, deferred = 0, failed = 0, deleted = 0, detached = 0;
   const markDone = (obid: number) => itemsPool.query(`UPDATE external_outbox SET done_at=now(), updated_at=now() WHERE id=$1`, [obid]);
   const markErr = (obid: number, msg: string) => itemsPool.query(`UPDATE external_outbox SET attempts=attempts+1, last_error=$2, updated_at=now() WHERE id=$1`, [obid, msg.slice(0, 500)]);
 
@@ -127,7 +149,17 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
       });
 
       if (p.external_system === "clickup" && p.external_id) {
-        await updateSafe(p.external_id, body);
+        const extId = p.external_id;
+        const r = await pushLinkedUpsert({
+          update: () => updateSafe(extId, body),
+          detach: () => itemsPool.query(
+            `UPDATE project SET external_system=NULL, external_instance=NULL, external_id=NULL, external_url=NULL,
+                    external_base=NULL, updated_at=now() WHERE id=$1`, [p.id]),
+        });
+        if (r === "detached") {
+          logger.warn({ project: p.id, task: extId }, "ClickUp 태스크가 지워져 연결을 끊었다(다음 변경 때 새 카드로 생성)");
+          await markDone(ob.id); detached++; continue;
+        }
         await itemsPool.query(
           `UPDATE project SET external_base = COALESCE(external_base, '{}'::jsonb) || $2::jsonb WHERE id=$1`,
           [p.id, baseJson]);
@@ -156,6 +188,6 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
       logger.warn({ err: e, outbox: ob.id, entity: ob.entity_id }, "outbox 푸시 실패(다음 틱 재시도)");
     }
   }
-  logger.info({ pushed, deferred, failed, deleted, scanned: rows.length }, "clickup outbox 드레인 완료");
-  return { pushed, deferred, failed, deleted, scanned: rows.length };
+  logger.info({ pushed, deferred, failed, deleted, detached, scanned: rows.length }, "clickup outbox 드레인 완료");
+  return { pushed, deferred, failed, deleted, detached, scanned: rows.length };
 }
