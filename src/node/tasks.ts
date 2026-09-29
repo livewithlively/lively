@@ -449,36 +449,39 @@ async function spawnTaskSessionUnguarded(input: RunTaskInput): Promise<RunTaskRe
     }
     args.push("-c", workspace, "sh", "-lc", script);
   }
-  //  자격 파일은 **판을 띄우기 직전에** 쓴다 — 그 앞 단계(프로필 준비 등)가 실패해도 파일이 남지 않게. 판 생성이 실패하면 지운다:
-  //   스크립트가 돌지 않으니 아무도 안 지운다(공유 작업 폴더에 남는다).
-  //  ⚠ 판은 떴는데 그 안의 첫 명령(sudo·중계)이 죽으면 스크립트가 못 돌아 파일이 남는다 — 워커 uid 0600 이라 그 멤버만 읽고,
+  //  자격 파일은 **판을 띄우기 직전에** 쓴다 — 그 앞 단계(프로필 준비 등)가 실패해도 파일이 남지 않게. 스폰이 실패로 끝나면
+  //   (판 생성이든 그 뒤 set-option 이든) 아래 catch 가 지운다 — 스크립트가 못 돈 판의 파일은 아무도 안 지운다.
+  //  ⚠ 스폰은 성공했는데 판 안의 첫 명령(sudo·중계)이 죽으면 스크립트가 못 돌아 파일이 남는다 — 워커 uid 0600 이라 그 멤버만 읽고,
   //   같은 위탁의 재시도가 덮어쓴다.
   const leaseFiles: string[] = [];
   try {
     for (const [k, v] of lease) { const p = taskLeaseFile(taskDir, k); leaseFiles.push(p); await writeTaskSecret(p, v, osUser); }
     await tmux(args);
+    const ownerId = user.userId || user.email || "";
+    await tmux(["set-option", "-t", id, "@box_owner", ownerId]);
+    await tmux(["set-option", "-t", id, "@box_kind", "task"]);   // #2162 — 세션 목록·화면이 «배치»를 알아본다
+    await tmux(["set-option", "-t", id, "@box_label", input.label?.trim() || `위탁 #${input.taskId}`]);
+    await tmux(["set-option", "-t", id, "@box_harness", harness.key]);
+    await tmux(["set-option", "-t", id, "@box_dir", workspace]);
+    await tmux(["set-option", "-t", id, "@box_auto", "1"]);
+    await tmux(["set-option", "-t", id, "@box_task", String(input.taskId)]);
+    // 기록 범위(#1291 v2) — 작업 폴더에서 파생해 박는다. 잠긴 프로젝트를 위탁했으면 그 범위로 좁혀지고,
+    //  공개 폴더면 종전대로 open 이다(비파괴). 실패해도 위탁 자체는 진행한다 — 그때는 게이트웨이가 조회 시 다시 파생한다.
+    try {
+      const cap = await deriveWriteCap(workspace);
+      if (cap !== "open") await tmux(["set-option", "-t", id, "@box_write_vis", cap]);
+    } catch { /* 비치명 — 조회 시점 파생으로 폴백 */ }
+    // 위탁 세션은 초대 없음(의뢰자 전용). ⚠ 여기만 평문 "[]" 인 이유: 빈 배열엔 따옴표가 없어 psmux 에서도
+    //  무손실이고(#1541), decodeOptJson 이 `[` 로 시작하는 값을 레거시 평문 경로로 정확히 읽는다. 이 한 값 때문에
+    //  노드 번들에 tmux-exec 의존을 새로 들이지 않는다.
+    await tmux(["set-option", "-t", id, "@box_invites", "[]"]);
   } catch (e) {
+    //  스폰이 실패로 끝나면 이 시도는 버려진다(스케줄러가 새 세션으로 다시 한다) — **어느 단계에서** 깨졌든 자격 파일을 지운다.
+    //   판이 떴다가 곧바로 죽은 경우(set-option 이 «no server running» — 2026-09-16 매니지드 53건의 모양)엔 스크립트가 못 돌아
+    //   아무도 안 지운다(실제 tmux 스모크에서 남는 것을 봤다). 판이 살아 있었다면 스크립트가 이미 읽고 지웠거나, 못 읽고 비0 으로 끝난다.
     await removeTaskSecrets(leaseFiles, osUser);
     throw e;
   }
-  const ownerId = user.userId || user.email || "";
-  await tmux(["set-option", "-t", id, "@box_owner", ownerId]);
-  await tmux(["set-option", "-t", id, "@box_kind", "task"]);   // #2162 — 세션 목록·화면이 «배치»를 알아본다
-  await tmux(["set-option", "-t", id, "@box_label", input.label?.trim() || `위탁 #${input.taskId}`]);
-  await tmux(["set-option", "-t", id, "@box_harness", harness.key]);
-  await tmux(["set-option", "-t", id, "@box_dir", workspace]);
-  await tmux(["set-option", "-t", id, "@box_auto", "1"]);
-  await tmux(["set-option", "-t", id, "@box_task", String(input.taskId)]);
-  // 기록 범위(#1291 v2) — 작업 폴더에서 파생해 박는다. 잠긴 프로젝트를 위탁했으면 그 범위로 좁혀지고,
-  //  공개 폴더면 종전대로 open 이다(비파괴). 실패해도 위탁 자체는 진행한다 — 그때는 게이트웨이가 조회 시 다시 파생한다.
-  try {
-    const cap = await deriveWriteCap(workspace);
-    if (cap !== "open") await tmux(["set-option", "-t", id, "@box_write_vis", cap]);
-  } catch { /* 비치명 — 조회 시점 파생으로 폴백 */ }
-  // 위탁 세션은 초대 없음(의뢰자 전용). ⚠ 여기만 평문 "[]" 인 이유: 빈 배열엔 따옴표가 없어 psmux 에서도
-  //  무손실이고(#1541), decodeOptJson 이 `[` 로 시작하는 값을 레거시 평문 경로로 정확히 읽는다. 이 한 값 때문에
-  //  노드 번들에 tmux-exec 의존을 새로 들이지 않는다.
-  await tmux(["set-option", "-t", id, "@box_invites", "[]"]);
   return { sessionId: id, taskDir, workspace };
 }
 
