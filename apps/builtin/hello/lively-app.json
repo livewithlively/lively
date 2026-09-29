@@ -1,7 +1,7 @@
 {
   "id": "hello",
   "title": "안녕 앱",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": { "name": "Lively" },
   "harness": { "plugin": "./" },
   "permissions": {

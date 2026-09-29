@@ -1,6 +1,8 @@
 // 라이블리 앱 SDK 타입 — 앱 UI 안에서 쓰는 `window.lively` (#1780).
 //  런타임은 **호스트가 iframe 에 자동 주입**한다(설치·번들 불요 — 앱 UI 는 CSP 로 외부 스크립트가 막혀 있다).
 //  이 파일은 타입만 준다: 앱을 TypeScript 로 쓸 때 `/// <reference path="./lively-app.d.ts" />` 하거나 tsconfig include.
+//  ⚠ 앱 화면은 `sandbox="allow-scripts"` 라 **폼 제출이 막힌다** — submit 이벤트조차 안 온다(onsubmit 핸들러가 안 불린다).
+//   입력은 버튼 click · 입력칸 keydown(Enter — 한글 조합 중 e.isComposing 이면 넘긴다)으로 받는다(#4225 실측).
 declare global {
   interface Window { lively: LivelyApp }
 }
