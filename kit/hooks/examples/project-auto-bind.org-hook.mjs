@@ -22,6 +22,10 @@ const AUTO_MARK = "<!-- lively:auto-created-from-first-prompt -->";
 //  ⚠ 폴백 — kind 가 없는 세션(이 축 이전에 뜬 것)은 `LIVELY_TASK_WS` 로 한 번 더 본다. 그것도 없으면
 //   **사람 세션으로 본다**: 기계로 오인하면 사람의 세션이 조용히 기능을 잃는다(훨씬 나쁘다).
 function isWorkSessionEnv(env) {
+  // 비대화형 Claude Code(`claude -p` = sdk-cli · Agent SDK = sdk-ts/sdk-py)는 사람의 작업 세션이 아니다.
+  //  크론·SessionEnd 훅이 띄우는 자식은 kind 를 안 달고 오거나 부모의 kind=human 을 상속하므로 kind 보다 먼저 본다.
+  //  이 가드가 없으면 스크립트 실행 1회 = 프로젝트 1개다(실측: 한 조직 30일 자동 생성의 58%).
+  if (/^sdk-/.test(String(env.CLAUDE_CODE_ENTRYPOINT || "").trim())) return false;
   const kind = String(env.LIVELY_SESSION_KIND || "").trim().toLowerCase();
   if (kind) return kind === "human";
   return !String(env.LIVELY_TASK_WS || "").trim();   // 구 세션 폴백
