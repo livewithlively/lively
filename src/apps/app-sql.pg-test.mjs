@@ -249,7 +249,8 @@ try {
 } catch (e) {
   fail++; console.error("FAIL (예외)", e);
 } finally {
-  await X.resetAppSqlLimits(env0);
+  X.resetAppSqlLimits(env0);
+  await X.closeAppSqlPool();
   await itemsPool.end().catch(() => {});
   await dropAll().catch((e) => console.error("정리 실패", e));
   await su.end();

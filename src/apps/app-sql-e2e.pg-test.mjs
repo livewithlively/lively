@@ -159,6 +159,7 @@ try {
 } catch (e) { fail++; console.error("FAIL 예외 —", e); }
 finally {
   X.resetAppSqlLimits(env0);
+  await X.closeAppSqlPool();            // DB 를 FORCE 로 지우기 전에 — 닫히는 중인 연결이 끊기면 처리되지 않은 오류가 튄다(CI 실측)
   await itemsPool.end().catch(() => {});
   await su.query(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`).catch((e) => console.error("정리 실패", e));
   await su.query(`DROP ROLE IF EXISTS "${ROLE}"`).catch(() => {});

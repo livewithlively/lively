@@ -3255,6 +3255,16 @@
   "input_hash": "c1d69d7da7004e68"
  },
  {
+  "name": "project_status_template_set_default_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/status-templates/set-default"
+  ],
+  "input_hash": "bb6f6d0bea40cd91"
+ },
+ {
   "name": "project_status_template_update_v6",
   "scope": "memory",
   "mcp": true,
@@ -3273,16 +3283,6 @@
    "POST /api/ui/v6/status-templates/:id/delete"
   ],
   "input_hash": "4dc36ab67eecb455"
- },
- {
-  "name": "project_status_template_set_default_v6",
-  "scope": "memory",
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/v6/status-templates/set-default"
-  ],
-  "input_hash": "bb6f6d0bea40cd91"
  },
  {
   "name": "favorites_index",
@@ -3755,6 +3755,16 @@
   "input_hash": "fd3d0d02bfb143e5"
  },
  {
+  "name": "feed_target_drain",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/feed-targets/drain"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
   "name": "feed_target_update",
   "scope": "memory",
   "mcp": true,
@@ -3783,16 +3793,6 @@
    "POST /api/ui/feed-targets/:id/categories"
   ],
   "input_hash": "4419d1b448f36ddf"
- },
- {
-  "name": "feed_target_drain",
-  "scope": "memory",
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/feed-targets/drain"
-  ],
-  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "cron_list",
@@ -4851,7 +4851,7 @@
   "mcp": true,
   "mutates": false,
   "rest": [
-   "GET /api/ui/apps/snapshots"
+   "GET /api/ui/app-snapshots"
   ],
   "input_hash": "bc9bbb24b7a66ec4"
  },
