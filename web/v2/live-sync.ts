@@ -28,6 +28,7 @@
 //     스트림을 유지할 이유가 없고, 돌아오는 순간 visibilitychange 가 한 판 당긴다(main.ts).
 import { TOKEN_KEY, apiUrl } from '../core.js';
 import { parseSse, retryDelay, stableConnection } from './sse.js';
+import { setViewers, type Viewer } from './presence.js';
 
 /** 서버가 미는 세션 전이 한 건(src/v6/notify-bus.ts NotifySessionEvent 와 같은 모양). */
 export interface LiveSessionEvent {
@@ -127,10 +128,14 @@ async function connect(onChange: () => void): Promise<void> {
       // 모르는 종류가 늘어도 **다시 읽으면 그만**이므로 종류를 좁혀 거르지 않는다 — 거르면 나중에 새 사건이 조용히 무시된다.
       //  예외는 앱 사건 하나(#4225): 사이드바에 보일 것이 바뀌지 않는다(AI 가 행을 쓸 때마다 목록을 다시 읽을 까닭이 없다).
       //  그건 앱 칸이 따로 받는다.
+      //  얼굴 줄 사건(#3870)도 목록을 다시 읽을 일이 아니다 — 그 세션 화면의 얼굴 줄만 바꾼다(presence.ts 가 바뀐 때만 알린다).
       let rest = 0;
       for (const ev of out.events) {
         if (ev && ev.type === 'app') {
           for (const fn of [...appListeners]) { try { fn(ev as unknown as LiveAppEvent); } catch { /* 한 칸의 오류가 다른 칸을 막지 않는다 */ } }
+        } else if (ev && ev.type === 'presence') {
+          const p = ev as unknown as { session?: string; viewers?: Viewer[] };
+          if (p.session) setViewers(p.session, p.viewers);
         } else rest++;
       }
       if (rest) onChange();

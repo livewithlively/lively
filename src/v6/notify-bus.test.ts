@@ -26,7 +26,7 @@ const withOther = (ws: string, member: string, other: string, account: string): 
   [...own(ws, member), { ws: other, account, label: label(other, false) }];
 
 type Got = Array<{ id: string; ws?: NotifyWorkspace }>;
-const sink = (out: Got) => (e: NotifyEvent) => { out.push({ id: e.type === "session" ? e.id : e.app_id, ws: e.ws }); };
+const sink = (out: Got) => (e: NotifyEvent) => { out.push({ id: e.type === "session" ? e.id : e.type === "app" ? e.app_id : e.session, ws: e.ws }); };
 
 test("A1 같은 워크스페이스·같은 사람 → 받는다, 표시는 그 구독의 자기 워크스페이스", () => {
   const got: Got = [];
