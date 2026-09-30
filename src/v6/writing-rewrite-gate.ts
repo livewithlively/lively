@@ -209,21 +209,45 @@ function firstLines(body: string, withNextAfterHeading: boolean): string {
   return ls[0];
 }
 
-/** 개수 차이를 허용하는 값 — 원문의 제목·맨 앞 H1, 재작성본의 제목·첫 줄(첫 줄이 헤딩이면 그 다음 줄까지). */
-function toleratedValues(before: RewriteDoc, after: RewriteDoc, field: (typeof COUNTED_FIELDS)[number]): Set<string> {
+const countOf = (xs: string[]): Map<string, number> => {
+  const m = new Map<string, number>();
+  for (const x of xs) m.set(x, (m.get(x) ?? 0) + 1);
+  return m;
+};
+
+/**
+ * 개수 차이의 허용량 — 방향별로, 그 자리에 나온 개수까지만.
+ *  added: 재작성본의 제목·첫 줄(결론)에 나온 개수까지(원문에 있던 값일 때만) — 결론에서 값을 되풀이하는 경우.
+ *  missing: 원문의 제목·맨 앞 H1 에 나온 개수까지(재작성본에 남아 있을 때만) — 제목과 H1 에 두 번 있던 값을 한 번으로 옮기는 경우.
+ *  ⚠ 값 단위로 통째로 허용하면 첫 줄에 나온 값끼리 문서 어디서든 바꿔치기가 통과한다(리뷰 반례: 원문 첫 문단 안의 30→3).
+ */
+function allowance(before: RewriteDoc, after: RewriteDoc, field: (typeof COUNTED_FIELDS)[number]): { added: Map<string, number>; missing: Map<string, number> } {
   const h1 = firstLines(before.body_md ?? "", false);
-  const snippets: RewriteDoc[] = [
-    { title: before.title, body_md: /^#\s/.test(h1) ? h1 : "" },
-    { title: after.title, body_md: firstLines(after.body_md ?? "", true) },
-  ];
-  return new Set(snippets.flatMap((d) => extractInvariants(d)[field]));
+  const head = extractInvariants({ title: before.title, body_md: /^#\s/.test(h1) ? h1 : "" })[field];
+  const lead = extractInvariants({ title: after.title, body_md: firstLines(after.body_md ?? "", true) })[field];
+  return { added: countOf(lead), missing: countOf(head) };
+}
+
+/** 다중집합 차이에서 허용량만큼 덜어낸다. 허용은 반대편에 그 값이 남아 있을 때만이다. */
+function subtractAllowance(xs: string[], allow: Map<string, number>, otherSide: Set<string>): string[] {
+  const left = new Map(allow);
+  const out: string[] = [];
+  for (const x of xs) {
+    const n = left.get(x) ?? 0;
+    if (n > 0 && otherSide.has(x)) { left.set(x, n - 1); continue; }
+    out.push(x);
+  }
+  return out;
 }
 
 /**
  * 형식 규칙을 빼고 «사실이 그대로인가» 만 본다 — 불변식과 분량. 섹션 단위 재작성은 조각마다 이것으로 판정하고,
  *  형식 규칙(첫 줄 결론·강조 개수 등)은 문서 전체에서만 뜻이 있어 다시 합친 뒤에 본다.
  */
-export function checkInvariants(before: RewriteDoc, after: RewriteDoc, opts: { requireTitle?: boolean } = {}): RewriteViolation[] {
+export function checkInvariants(
+  before: RewriteDoc, after: RewriteDoc,
+  opts: { requireTitle?: boolean; allowLeadRepeat?: boolean } = {},
+): RewriteViolation[] {
   const violations: RewriteViolation[] = [];
   if ((opts.requireTitle ?? true) && !String(after.title ?? "").trim()) violations.push({ kind: "empty-title", detail: "재작성본의 제목이 비었다" });
 
@@ -235,10 +259,11 @@ export function checkInvariants(before: RewriteDoc, after: RewriteDoc, opts: { r
   }
   for (const k of COUNTED_FIELDS) {
     const d = multisetDiff(ib[k], ia[k]);
-    const tol = toleratedValues(before, after, k);
+    // 중간 조각은 제목·결론이 없는 자리라 허용하지 않는다(allowLeadRepeat=false).
+    const al = (opts.allowLeadRepeat ?? true) ? allowance(before, after, k) : { added: new Map(), missing: new Map() };
     const bset = new Set(ib[k]), aset = new Set(ia[k]);
-    const missing = d.missing.filter((x) => !(tol.has(x) && aset.has(x)));
-    const added = d.added.filter((x) => !(tol.has(x) && bset.has(x)));
+    const missing = subtractAllowance(d.missing, al.missing, aset);
+    const added = subtractAllowance(d.added, al.added, bset);
     if (missing.length || added.length) violations.push({ kind: `invariant:${k}`, detail: diffDetail({ missing, added }), missing, added });
   }
   for (const k of SET_FIELDS) {
@@ -387,5 +412,5 @@ export function sectionHeadingOk(heading: string | null, body: string): boolean 
   if (!heading) return true;
   const level = (heading.trim().match(/^#+/) ?? [""])[0].length;
   if (!level) return true;
-  return new RegExp(`^ {0,3}#{${level}}(?!#)\\s`).test(body);
+  return new RegExp(`^ {0,3}#{${level}}(?!#)\\s`).test(body.replace(/^(?:[ \t]*\n)+/, ""));
 }
