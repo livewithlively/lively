@@ -28,6 +28,7 @@
 //     스트림을 유지할 이유가 없고, 돌아오는 순간 visibilitychange 가 한 판 당긴다(main.ts).
 import { TOKEN_KEY, apiUrl } from '../core.js';
 import { parseSse, retryDelay, stableConnection } from './sse.js';
+import { setViewers, type Viewer } from './presence.js';
 
 /** 서버가 미는 세션 전이 한 건(src/v6/notify-bus.ts NotifySessionEvent 와 같은 모양). */
 export interface LiveSessionEvent {
@@ -38,6 +39,25 @@ export interface LiveSessionEvent {
   phase?: string;
   key?: string;
   ts?: number;
+}
+
+/** 앱 사건(#4225, src/v6/notify-bus.ts NotifyAppEvent) — 세션에 앱이 붙었다·떨어졌다·그 앱 데이터가 바뀌었다. */
+export interface LiveAppEvent {
+  type: 'app';
+  kind: 'attach' | 'detach' | 'data';
+  app_id: string;
+  session: string | null;
+  table?: string;
+  op?: 'insert' | 'update' | 'delete';
+  source?: string;
+  key?: string;
+  ts?: number;
+}
+const appListeners = new Set<(ev: LiveAppEvent) => void>();
+/** 앱 사건을 받는다(세션 오른쪽 앱 칸). 돌려주는 함수를 부르면 끊는다. 스트림이 없으면 아무것도 안 온다 — 받는 쪽이 폴링을 곁에 둔다. */
+export function onAppEvent(fn: (ev: LiveAppEvent) => void): () => void {
+  appListeners.add(fn);
+  return () => { appListeners.delete(fn); };
 }
 
 let started = false;
@@ -105,9 +125,20 @@ async function connect(onChange: () => void): Promise<void> {
       buf += dec.decode(value, { stream: true });
       const out = parseSse<LiveSessionEvent>(buf);
       buf = out.rest;
-      // 지금 이 스트림이 싣는 것은 세션 전이뿐이다. 모르는 종류가 늘어도 **다시 읽으면 그만**이므로
-      //  종류를 좁혀 거르지 않는다 — 거르면 나중에 새 사건이 조용히 무시된다.
-      if (out.events.length) onChange();
+      // 모르는 종류가 늘어도 **다시 읽으면 그만**이므로 종류를 좁혀 거르지 않는다 — 거르면 나중에 새 사건이 조용히 무시된다.
+      //  예외는 앱 사건 하나(#4225): 사이드바에 보일 것이 바뀌지 않는다(AI 가 행을 쓸 때마다 목록을 다시 읽을 까닭이 없다).
+      //  그건 앱 칸이 따로 받는다.
+      //  얼굴 줄 사건(#3870)도 목록을 다시 읽을 일이 아니다 — 그 세션 화면의 얼굴 줄만 바꾼다(presence.ts 가 바뀐 때만 알린다).
+      let rest = 0;
+      for (const ev of out.events) {
+        if (ev && ev.type === 'app') {
+          for (const fn of [...appListeners]) { try { fn(ev as unknown as LiveAppEvent); } catch { /* 한 칸의 오류가 다른 칸을 막지 않는다 */ } }
+        } else if (ev && ev.type === 'presence') {
+          const p = ev as unknown as { session?: string; viewers?: Viewer[] };
+          if (p.session) setViewers(p.session, p.viewers);
+        } else rest++;
+      }
+      if (rest) onChange();
     }
   } catch { /* 끊김·타임아웃·게이트웨이 재시작·abort — 아래에서 다시 붙는다 */ }
   finally {

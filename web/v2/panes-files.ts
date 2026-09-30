@@ -9,13 +9,37 @@
 import { anchoredPopover, api, apiUrl, el, relTime, toast } from '../core.js';
 import { fmtSize } from '../projects/files.js';
 import { confirmDialog } from '../ui-primitives.js';
-import { upDirSupported, upDropZone, upFromInput, upSend, upToast, type UpItem } from '../projects/files-upload.js';
+import { authDownload, upDirSupported, upDropZone, upFromInput, upSend, upToast, type UpItem } from '../projects/files-upload.js';
 import { openInViewerPart, FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHINE_FILES, NOISE_RE, SORT_LABEL, TRASH_DIR, attachName, ctxMenu, folderIcon, freeName, kindOf, lsGet, lsSet, pnIcon, stamp, type FileItem, type SortKey } from './panes-kit.js';
 import { findMatcher } from '../lib/find.js';
 import { createPreviewKit } from './file-preview.js';
+import { placeChildren, reuseKeyed, type KeyedCard } from './keyed-cards.js';   // #4135 — 제자리 되그리기(바뀐 카드만 새로)
+import type { CtxRow } from './ctx-menu.js';
 import type { Part, PartCtx } from './panes-parts.js';
 
-export function filesPart(ctx: PartCtx): Part {
+/** 곁칸 밖에서 이 부품을 쓰는 자리(프로젝트 화면의 공유 폴더 모달, #4135)가 거는 고리 — 전부 선택 사항이라 곁칸(PartCtx)은 그대로 들어온다.
+ *  같은 폴더를 보여 주는 화면이 둘이면 그림도 몸짓도 같아야 한다(원준 2026-09-27: «곁칸이랑 같은 디자인으로») — 그래서 베끼지 않고 이 부품을 그대로 세운다. */
+export interface FilesHooks {
+  /** 처음 열 폴더(프로젝트 루트 기준 상대경로). */
+  startDir?: string;
+  /** 파일 열기를 가로챈다 — 없으면 곁칸 뷰어로 보낸다(openInViewerPart). */
+  openFile?: (f: FileItem) => void;
+  /** 폴더 · 목록 · 고른 것이 바뀔 때마다(그린 뒤). 옆에 «고른 파일» 칸을 세우는 자리가 쓴다. */
+  onState?: (s: { cwd: string; items: FileItem[]; selected: FileItem[] }) => void;
+  /** 목록이 실제로 달라졌다(올리기 · 삭제 · 이동 · 이름) — 밖의 캐시를 버릴 때. */
+  onFiles?: () => void;
+  /** 항목 우클릭 메뉴에 더할 행(「열기」 묶음 바로 아래). */
+  extraRows?: (f: FileItem, many: FileItem[]) => CtxRow[];
+  /** 맨 위 안내 줄을 세우지 않는다(이미 같은 말을 하는 자리). */
+  noNote?: boolean;
+  /** 경로 줄 첫 조각의 이름(기본 «자료»). */
+  rootLabel?: string;
+}
+export type FilesCtx = Pick<PartCtx, 'id' | 'dead'> & { paneRoot?: PartCtx['paneRoot'] } & FilesHooks;
+/** 곁칸 안에 선 것인가 — 그때만 곁칸 뷰어로 보낸다(밖에 선 자리는 openFile 고리를 준다). */
+const hasPane = (c: FilesCtx): c is FilesCtx & { paneRoot: PartCtx['paneRoot'] } => typeof c.paneRoot === 'function';
+
+export function filesPart(ctx: FilesCtx): Part {
   const root = el('div', { class: 'pn-part pn-files', tabindex: '0' }) as HTMLElement;
   const body = el('div', { class: 'pn-fbody' });          // 격자 또는 목록이 사는 자리(스크롤 주체)
   const crumbs = el('div', { class: 'pn-fcrumbs' });
@@ -23,7 +47,7 @@ export function filesPart(ctx: PartCtx): Part {
   let sig = '';
 
   // ── 상태 ──
-  let cwd = '';                                 // 지금 보는 폴더(프로젝트 루트 기준 상대경로)
+  let cwd = String(ctx.startDir || '').replace(/^\/+|\/+$/g, '');   // 지금 보는 폴더(프로젝트 루트 기준 상대경로)
   let items: FileItem[] = [];                   // 지금 폴더의 것들(받은 그대로)
   //  찾기용 **평평한 전체 목록**(매니페스트) — 폴더를 열어 보지 않고도 이름으로 닿을 수 있어야 찾기다.
   //  ⚠ 목록 화면의 정본은 items 다. 이건 찾는 중에만 쓴다(전체를 늘 그리면 폴더 구조가 뜻을 잃는다).
@@ -55,6 +79,8 @@ export function filesPart(ctx: PartCtx): Part {
   findIn.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Escape' && !composing) { e.stopPropagation(); findIn.value = ''; onFind(); } });
 
   const rel = (name: string): string => (cwd ? cwd + '/' + name : name);
+  //  손가락 기기(hover 없음 · coarse) — 판정은 **포인터**로, 폭으로 하지 않는다(iPad+트랙패드·미리보기 프레임은 마우스다).
+  const coarse = window.matchMedia('(hover: none) and (pointer: coarse)');
   const selItems = (): FileItem[] => ordered.filter((f) => sel.has(f.path));
 
   // ── 맨 위 안내 — 이 칸이 무엇인지 한 줄로. 접어 둘 수 있고, 그 선택은 기억한다. ──
@@ -64,7 +90,7 @@ export function filesPart(ctx: PartCtx): Part {
     pnIcon('spark', 'pn-i sm'),
     el('p', { text: '여기 있는 자료는 이 프로젝트의 모든 세션이 자동으로 참고합니다. 관련 자료를 넉넉히 올려 둘수록 답이 좋아져요.' }),
     el('button', { class: 'pn-fnote-x', type: 'button', title: '안내 접기', 'aria-label': '안내 접기', text: '✕', onclick: () => { lsSet(FV_NOTE, '0'); noteEl.hidden = true; } }));
-  noteEl.hidden = lsGet(FV_NOTE, '1') === '0';
+  noteEl.hidden = !!ctx.noNote || lsGet(FV_NOTE, '1') === '0';
 
   // ── 올리기 — 파일 **또는 폴더** (#1819 원준) ─────────────────────────────────
   //  끌어다 놓는 길은 처음부터 폴더를 받았는데(upDropZone → 하위 구조 그대로), 버튼 길만 파일 전용이었다.
@@ -240,18 +266,25 @@ export function filesPart(ctx: PartCtx): Part {
   document.addEventListener('paste', onPaste, true);
 
   // ── 목록 읽기·정렬 ───────────────────────────────────────────────────────
-  async function fetchDir(): Promise<FileItem[]> {
-    const d: any = await api(pUrl('/files?path=' + encodeURIComponent(cwd))).catch(() => null);
-    const raw: any[] = (d && d.items) || [];
+  //  ⚠ 돌려주는 null 은 «이번 답은 쓰지 않는다» 이다(#4135):
+  //   · 못 받았다(망·서버) — 종전엔 빈 목록으로 그려 «아직 자료가 없어요» 가 떴다. 자료가 사라진 게 아니라 못 읽은 것이므로 앞의 목록을 둔다.
+  //   · 받는 사이 다른 폴더로 옮겼다 — 늦게 온 답을 지금 폴더의 것으로 그리면 경로가 어긋난다(미리보기가 없는 주소를 찾아 404).
+  async function fetchDir(): Promise<FileItem[] | null> {
+    const dir = cwd;
+    const at = (name: string): string => (dir ? dir + '/' + name : name);
+    const d: any = await api(pUrl('/files?path=' + encodeURIComponent(dir))).catch(() => null);
+    if (dir !== cwd) return null;
+    if (!d || !Array.isArray(d.items)) return loadedOnce ? null : [];
+    const raw: any[] = d.items;
     return raw
       .filter((it) => {
         const nm = String(it.name);
         if (it.repo) return false;      // provision 된 레포/워크트리 — 코드는 git 이 소유한다(매니페스트도 같은 규칙으로 뺀다)
-        if (nm === TRASH_DIR && !cwd) return false;
+        if (nm === TRASH_DIR && !dir) return false;
         if (MACHINE_FILES.has(nm)) return false;
         return !NOISE_RE.test('/' + nm + '/');
       })
-      .map((it) => ({ name: String(it.name), path: rel(String(it.name)), type: it.type === 'dir' ? 'dir' : 'file', size: Number(it.size || 0), mtime: Number(it.mtime || 0), empty: !!it.empty } as FileItem));
+      .map((it) => ({ name: String(it.name), path: at(String(it.name)), type: it.type === 'dir' ? 'dir' : 'file', size: Number(it.size || 0), mtime: Number(it.mtime || 0), empty: !!it.empty } as FileItem));
   }
   function sortItems(list: FileItem[]): FileItem[] {
     const dir = sortAsc ? 1 : -1;
@@ -272,15 +305,19 @@ export function filesPart(ctx: PartCtx): Part {
       .filter((f) => !f.path.startsWith(TRASH_DIR + '/') && !NOISE_RE.test('/' + f.path) && !MACHINE_FILES.has(f.name));
   }
 
+  let loadedOnce = false, lastDir = '';
   async function load(): Promise<void> {
     if (!(ctx.id > 0)) { body.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:18px', text: '이 화면은 프로젝트 폴더가 없어 자료를 둘 수 없어요.' })); return; }
     void loadAll();                              // 찾기 재료는 곁길로 — 목록 그리기를 기다리게 하지 않는다
     const got = await fetchDir();
-    if (ctx.dead() || !root.isConnected) return;
+    if (ctx.dead() || !root.isConnected || !got) return;
     const s2 = cwd + '|' + got.map((f) => f.path + f.mtime + f.size).join('|');
     if (s2 === sig) return;
+    const changed = loadedOnce && lastDir === cwd;   // 같은 폴더의 목록이 달라졌다 — 폴더를 옮긴 것은 변화가 아니다
+    loadedOnce = true; lastDir = cwd;
     sig = s2;
     items = got;
+    if (changed && ctx.onFiles) { try { ctx.onFiles(); } catch (_) { /* 밖의 고리가 던져도 목록은 선다 */ } }
     for (const p of [...sel]) if (!got.some((f) => f.path === p)) sel.delete(p);   // 사라진 것은 선택도 놓는다
     render();
   }
@@ -293,6 +330,7 @@ export function filesPart(ctx: PartCtx): Part {
     }
     count.textContent = sel.size ? `${sel.size}개 선택` : (ordered.length ? `${ordered.length}개` : '');
     count.classList.toggle('sel', sel.size > 0);
+    if (ctx.onState) { try { ctx.onState({ cwd, items, selected: selItems() }); } catch (_) { /* 밖의 고리가 던져도 고르기는 된다 */ } }
   }
   function clickSelect(f: FileItem, e: MouseEvent): void {
     const multi = e.metaKey || e.ctrlKey;
@@ -307,24 +345,24 @@ export function filesPart(ctx: PartCtx): Part {
     }
     paintSel();
   }
-  /** 파일을 편다. `newTab` 이면 **새 뷰어 탭**에 — 여러 개를 나란히 보려면 이 길이다(#762, 원준 2026-09-05:
-   *  "자료에 있는 파일 중에서 한 번에 하나만 열 수 있는게 이상해서"). */
-  function open(f: FileItem, newTab = false): void {
+  /** 파일을 편다 — **파일마다 뷰어 하나**(#4135, 원준 2026-09-25: "다른 거 한 번 클릭하면 이전 꺼 뷰어에서 보이던 거
+   *  없애고 새로 선택한 게 뜨는데 그러지 말고 새 창으로 뜨도록"). 이미 떠 있는 파일이면 그 뷰어로, 아니면 새 뷰어 —
+   *  그 판정은 셸이 한다(panes.ts openViewerAt). 뷰어 칸이 없으면 셸이 이 신호를 듣고 만든다. */
+  function open(f: FileItem): void {
     if (f.type === 'dir') { goto(f.path); return; }
-    // 파일을 누르면 **곁칸의 뷰어 탭**으로 편다 (#762, 원준 2026-09-04: "따로 뷰어 위젯을 띄우지 않더라도
-    //  곁칸에서 탭으로 뜨면 좋겠다"). 종전엔 화면 한가운데 모달이라 ① 그 파일을 보면서 세션을 볼 수 없었고
-    //  ② 뷰어 칸을 미리 넣어 둔 사람만 칸에서 볼 수 있었다. 칸이 없으면 셸이 이 신호를 듣고 만든다.
-    openInViewerPart(ctx, f.path, { newTab });
+    if (ctx.openFile) { ctx.openFile(f); return; }
+    if (hasPane(ctx)) openInViewerPart(ctx, f.path);
   }
-  /** 고른 것 여럿을 편다 — **첫 장은 보던 뷰어에, 나머지는 각자 새 탭에**. 종전엔 전부 같은 칸에 밀어 넣어
-   *  마지막 하나만 남았다(「N개 열기」가 사실상 「마지막 것 열기」였다). 상한 8은 부르는 쪽이 이미 건다. */
+  /** 고른 것 여럿을 편다 — 각자 제 뷰어에. 상한 8은 부르는 쪽이 이미 건다. */
   function openMany(list: FileItem[]): void {
     const files = list.filter((x) => x.type !== 'dir');
     if (!files.length) { for (const d of list.slice(0, 1)) open(d); return; }   // 폴더만 골랐으면 첫 폴더로 들어간다
-    files.forEach((f, i) => open(f, i > 0));
+    files.forEach((f) => open(f));
   }
   function download(f: FileItem): void {
-    window.open(apiUrl(pUrl('/file?path=' + encodeURIComponent(f.path) + '&download=1')), '_blank');
+    //  인증 fetch → blob(files-upload authDownload). 종전의 새 탭은 토큰을 못 실어 쿠키 세션이 없는 폰에서 로그인 화면이 떴고,
+    //   iOS 는 그 팝업 자체를 막는다(#4088 후속).
+    void authDownload(apiUrl(pUrl('/file?path=' + encodeURIComponent(f.path) + '&download=1')), f.name);
   }
 
   // 키보드 — 파인더처럼 ⌘A 전체선택 · Delete 삭제 · Esc 선택해제 · Enter 열기.
@@ -343,14 +381,12 @@ export function filesPart(ctx: PartCtx): Part {
     e.preventDefault(); e.stopPropagation();
     if (f && !sel.has(f.path)) { sel.clear(); sel.add(f.path); anchorPath = f.path; paintSel(); }
     const many = selItems();
-    const rows: Array<{ label: string; run?: () => void; danger?: boolean; sep?: boolean; off?: boolean }> = [];
+    const rows: CtxRow[] = [];
     if (f) {
+      //  「열기」 = 두 번 누르기와 같은 일 — 파일은 제 뷰어로(이미 떠 있으면 그 뷰어), 폴더는 들어간다.
       rows.push({ label: many.length > 1 ? `${many.length}개 나란히 열기` : (f.type === 'dir' ? '폴더 열기' : '열기'), run: () => openMany(many.slice(0, 8)) });
-      // 왼쪽 클릭과 같은 일 — 뷰어 칸이 없으면 셸이 곁칸에 만든다(종전엔 "먼저 [뷰어]를 넣어 주세요"로 돌려보냈다).
-      if (f.type !== 'dir') rows.push({ label: '뷰어에서 보기', run: () => open(f) });
-      //  새 탭 — 지금 보던 것을 **두고** 하나 더 편다(#762). ⌘/Ctrl+두 번 누르기와 같은 일.
-      if (f.type !== 'dir') rows.push({ label: '새 뷰어 탭에서 보기', run: () => open(f, true) });
       if (f.type !== 'dir') rows.push({ label: '내려받기', run: () => { for (const x of many) if (x.type !== 'dir') download(x); } });
+      if (ctx.extraRows) { try { rows.push(...ctx.extraRows(f, many)); } catch (_) { /* 덧붙는 행이 없어도 메뉴는 선다 */ } }
       rows.push({ label: '이름 바꾸기', off: many.length !== 1, run: () => { renameAt = f.path; render(); } });
       if (cwd) rows.push({ label: '상위 폴더로 옮기기', run: () => void moveMany(many.map((x) => x.path), cwd.includes('/') ? cwd.slice(0, cwd.lastIndexOf('/')) : '') });
       rows.push({ sep: true, label: '' });
@@ -378,7 +414,7 @@ export function filesPart(ctx: PartCtx): Part {
   const marquee = el('div', { class: 'pn-fmarq', hidden: true });
   body.append(marquee);
   root.addEventListener('pointerdown', (e: PointerEvent) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || e.pointerType === 'touch') return;   // 손가락은 굴리는 것이다 — 사각형 선택이 스크롤과 싸운다
     const t = e.target as HTMLElement;
     if (t.closest('[data-fp], .pn-fhead, .pn-fnote, button, input, a')) return;
     const add = e.metaKey || e.ctrlKey || e.shiftKey;
@@ -469,7 +505,7 @@ export function filesPart(ctx: PartCtx): Part {
   function crumbBar(): void {
     const segs = cwd ? cwd.split('/') : [];
     const kids: HTMLElement[] = [];
-    const rootBtn = el('button', { class: 'pn-fcrumb' + (segs.length ? '' : ' on'), type: 'button', text: '자료', title: '맨 위 폴더', onclick: () => goto('') }) as HTMLElement;
+    const rootBtn = el('button', { class: 'pn-fcrumb' + (segs.length ? '' : ' on'), type: 'button', text: ctx.rootLabel || '자료', title: '맨 위 폴더', onclick: () => goto('') }) as HTMLElement;
     wireCrumbDrop(rootBtn, '');
     kids.push(rootBtn);
     let acc = '';
@@ -538,17 +574,38 @@ export function filesPart(ctx: PartCtx): Part {
           ...(f.type === 'dir' ? [] : [el('span', { class: 'sep', text: '·' }), el('span', { text: fmtSize(f.size || 0) })])));
     const n = node as HTMLElement;
     if (editing) { n.classList.add('editing'); return n; }   // 이름을 고치는 중엔 고르기·열기·끌기가 다 쉰다
-    n.addEventListener('click', (e: MouseEvent) => { e.stopPropagation(); clickSelect(f, e); });
-    //  ⌘/Ctrl 을 누른 채면 **새 뷰어 탭**으로 — 브라우저에서 링크를 새 탭으로 여는 그 손짓 그대로(#762).
-    n.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); open(f, e.metaKey || e.ctrlKey); });
+    //  손가락(hover 없음·coarse)에는 **한 번 눌러 연다**(#4088 후속, 원준 2026-09-23) — 두 번 누르기는 폰에서 아무도 모르는
+    //   손짓이고, 고르기·범위 고르기는 마우스의 것이다. 보조키를 누른 채면(외장 키보드) 종전대로 고른다.
+    n.addEventListener('click', (e: MouseEvent) => {
+      e.stopPropagation();
+      if (coarse.matches && !e.metaKey && !e.ctrlKey && !e.shiftKey) { open(f); return; }
+      clickSelect(f, e);
+    });
+    //  두 번 누르기 = 열기. 파일마다 뷰어가 하나라(#4135) 보조키로 «새 탭»을 고를 일이 없다.
+    n.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); open(f); });
     n.addEventListener('contextmenu', (e: MouseEvent) => menuFor(f, e));
     wireDrag(n, f);
+    //  [⋯] — 우클릭 메뉴의 손가락 입구(iOS 는 길게 눌러도 contextmenu 를 안 낸다). hover 가 있는 기기에선 CSS 가 숨긴다(50-mobile.css).
+    n.append(el('button', { class: 'pn-fmore', type: 'button', title: '더 보기', 'aria-label': f.name + ' 더 보기',
+      onclick: (e: MouseEvent) => { e.stopPropagation(); menuFor(f, e); } }, el('span', { 'aria-hidden': 'true', text: '⋯' })));
     return n;
   }
 
+  //  ── 제자리 되그리기(#4135, 원준 2026-09-25: "미리보기가 몇 초마다 다시 불러와지는 게 보여서 계속 깜빡거린다") ──
+  //  종전엔 서명이 바뀌면 격자를 **통째로** 새로 만들었다 — 카드가 전부 새 노드라 미리보기(blob 받기)도 전부 다시 받았고,
+  //  그 사이 아이콘이 잠깐 섰다. 그런데 루트의 서명은 8초마다 바뀐다: 찾기 재료(loadAll)가 매 틱 부르는 매니페스트가
+  //  AGENTS.md 를 다시 써서(project-routes ensureAgentsMd — 내용이 같아도 도장이 매번 새 값, 2026-09-25 실측 3회 연속)
+  //  그 한 줄 때문에 카드 전부가 아이콘 → 그림으로 다시 떴다. 파일 하나가 바뀌면 **그 카드만** 바뀌어야 한다 —
+  //  카드를 «경로 · 종류 · 도장(mtime·size) · 빈 폴더 · 보기 · 이름 고치는 중 · 찾는 중이면 폴더 열(행이 폴더 이름을 보인다)» 열쇠로 붙잡아 두고, 열쇠가 같으면
+  //  노드째 다시 쓴다(자리만 옮긴다 — 옮겨도 그림은 남고, 관찰자(file-preview seenPv)도 이미 채운 상자를 다시 받지 않는다).
+  //  ⚠ 손잡이(click·dblclick·drag)는 만들 때의 FileItem 을 닫아 둔다 — 열쇠가 같으면 그 값들(path·type·mtime·size·empty)이
+  //   전부 같으므로 옛 객체를 써도 결과가 같다. 열쇠에 없는 값을 손잡이가 읽게 되면 열쇠에도 넣어야 한다.
+  const cards = new Map<string, KeyedCard<HTMLElement>>();
+  let grid: HTMLElement | null = null;
+  const cardKey = (f: FileItem, q: string): string =>
+    [f.path, f.type, f.mtime, f.size, f.empty ? 1 : 0, view, renameAt === f.path ? 'e' : '', q ? dirOf(f.path) : ''].join('\u0000');
   function render(): void {
     crumbBar();
-    pv.reset();
     const q = query.trim();
     if (q) {
       //  찾을 땐 이 프로젝트 자료 **전체**에서(폴더는 뺀다 — 찾는 것은 파일이다). 매니페스트가 이미 평평한 목록이다.
@@ -556,18 +613,24 @@ export function filesPart(ctx: PartCtx): Part {
       ordered = sortItems(allFiles.filter((f) => f.type !== 'dir' && m(f.name, f.path)));
     } else ordered = sortItems(items);
     if (!ordered.length) {
+      cards.clear(); grid = null;
       body.replaceChildren(marquee, el('div', { class: 'pn-empty' },
         pnIcon(q ? 'search' : 'drop', 'pn-i big'),
         el('b', { text: q ? '찾는 자료가 없어요.' : cwd ? '이 폴더는 비어 있어요.' : '아직 자료가 없어요.' }),
         el('p', { class: 'pn-fine', text: q ? '이름 일부로 다시 찾아보세요 — 초성(ㅍㅌ)이나 띄어쓰기 없이도 찾습니다.' : '파일이나 폴더를 이 칸에 끌어다 놓거나, 그림을 복사해 ⌘V 로 붙여넣거나, [＋ 올리기]를 누르세요. 세션이 만든 결과물도 여기 쌓입니다.' })));
+      pv.prune();
       paintSel();
       return;
     }
-    const wrap = el('div', { class: view === 'list' ? 'pn-flist' : 'pn-fgrid' }, ...ordered.map(itemNode));
-    body.replaceChildren(marquee, wrap);
+    //  격자 자체는 보기(icon·list)마다 다른 요소다 — 무슨 보기로 만들었는지는 data-view 로 기억한다(클래스 비교가 아니다:
+    //  누가 격자에 클래스를 덧붙여도 격자째 새로 만들지 않게).
+    const host = grid && grid.isConnected && grid.dataset.view === view ? grid : el('div', { class: view === 'list' ? 'pn-flist' : 'pn-fgrid', 'data-view': view }) as HTMLElement;
+    if (host !== grid) { grid = host; cards.clear(); }   // 보기가 바뀌었거나 빈 화면을 거쳤다 — 격자째 새로
+    placeChildren(host, reuseKeyed(cards, ordered, (f) => f.path, (f) => cardKey(f, q), itemNode));
+    if (host.parentNode !== body) body.replaceChildren(marquee, host);   // 격자를 떼었다 붙이면 그 안의 프레임이 전부 다시 실린다
+    pv.prune();     // 붙인 **뒤에** — 떨어져 나간 상자만 잊는다(살아남은 카드의 종이는 그대로 다시 잰다)
     paintSel();
   }
-
   // 컴퓨터에서 끌어다 놓기 — 지금 보고 있는 폴더로 들어간다(내부 드래그는 types 에 Files 가 없어 안 걸린다).
   upDropZone(root, root, (list, emptyDirs) => {
     void upload(list.map((u) => ({ file: u.file, rel: rel(u.rel) })), emptyDirs.map((d) => rel(d)));

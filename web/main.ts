@@ -9,12 +9,15 @@ import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvata
 import { claimLocalOwner } from './lib/local-owner.js';   // #2460 — 이 브라우저의 기억은 누구 것인가(사람 축)
 import { watchStaleShell } from './gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { isDistillerDetailPath, renderContext } from './context.js';   // #1419 T6 맥락 관리 — 수집·증류·분류·관리 파이프라인
+import { renderCategories } from './categories.js';   // 클래식 단독 화면의 분류체계 전체 페이지(#4233. 새 셸에서는 앱)
+import { openTaxonomyApp } from './taxonomy-link.js';
 import { renderWiki, renderWikiTrash } from './wiki.js';   // #764 WIKI 탭 전면 재구축(사이드바 유지)
 import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
 import { wkRouteCleanup } from './wiki-data.js';   // #764 — 라우트 이탈 시 위키 에디터/팝오버 청소
 import { pjvCloseProjectModalOnRoute, pjvConsumeSkipRouteRender, renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { pjvCloseTaskModalOnRoute, pjvRenderTaskRoute } from './taskmodal.js';   // #804 라우트 이탈 시 모달 정리 · #810 태스크 딥링크
-import { renderLearn, renderLearnDocs, renderLearnTour, renderOnboarding } from './learn.js';
+import { renderLearnTour, renderOnboarding } from './learn.js';
+import { parseGuideRoute, renderGuideApp } from './guide/app.js';   // #4179 사용 가이드 앱
 import { renderStart, renderStartMigrate, renderStartProject } from './start.js'; // #/start — 구성원 온보딩(#846/850) + 프로젝트 체험(#853)
 import { renderActivate } from './activate.js'; // #/activate — CLI 디바이스 로그인 승인(#880)
 import { renderSessions } from './sessions.js'; // #/sessions — 세션이력 웹뷰(#905 C1 이어보기)
@@ -153,17 +156,15 @@ async function route() {
         startDashboardSessionTour(fromOnboarding ? '#/start' : undefined);
       }
     } else if (page === 'learn') {
-      setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link). '직접 해보기'(시작하기 등)는 #/start/* 로 이동(#1000).
-      // #1000 직접 해보기 URI 를 #/start/* 로 통일 — 옛 #/learn 경로는 리다이렉트로 보존(북마크·외부 링크 방어).
-      if (segs[1] === 'install') { location.replace('#/start'); return; }        // 설치 = #/start ② 설정(모달)
-      else if (segs[1] === 'tour') { location.replace('#/start/tour'); return; } // #/learn/tour → #/start/tour
-      else if (segs[1] === 'menu') { location.replace('#/learn'); return; }      // #/learn/menu 폐기 — 개요로 리다이렉트
-      else if (segs[1] === 'docs') {
-        const slug = decodeURIComponent(segs[2] || '').split('?')[0];
-        if (slug === 'examples') { location.replace('#/start/examples'); return; } // '이런 걸 시켜보세요' → #/start/examples
-        await renderLearnDocs(view, slug); // #/learn/docs/<slug> — 읽는 문서(화면별 안내·레퍼런스)
+      setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link).
+      //  #4179 — 가이드는 새 셸이 직접 그리는 앱이 됐다(web/guide/app.ts). 클래식 화면은 같은 앱을 문서 흐름으로 그린다.
+      //  액자 안(새 셸이 실은 클래식 화면)에서 가이드 링크를 누르면 액자 안에 그리지 않고 **셸 창의 주소**를 옮긴다(taxonomy-link.ts 와 같은 방식).
+      if (document.body.classList.contains('embed')) {
+        try { const top = window.top || window; if (top !== window) { top.location.hash = location.hash; return; } } catch (_) { /* 다른 오리진이면 아래로 */ }
       }
-      else await renderLearn(view);
+      const where = parseGuideRoute(segs, params);
+      if (where.redirect) { location.replace(where.redirect); return; }   // 옛 #/learn/tour · #/learn/install
+      if (view) renderGuideApp(view, where, { shell: false });
     } else if (page === 'start') {
       // #/start — 구성원 온보딩 '시작하기'. **온보딩의 유일한 진입·완주 표면.** 상태 SoT 는 서버
       //  computeMemberOnboarding 이고 이 화면과 AI 스킬이 같은 REST 를 읽는다(드리프트 0).
@@ -173,7 +174,7 @@ async function route() {
       if (segs[1] === 'setup') { location.replace('#/start'); return; } // 설치 = 모달. 전체페이지 폐지(#1000)
       else if (segs[1] === 'migrate') await renderStartMigrate(view);
       else if (segs[1] === 'project') await renderStartProject(view);   // #853 — 프로젝트 체험(손수 투어 랜딩)
-      else if (segs[1] === 'examples') await renderLearnDocs(view, 'examples'); // #1000 — '이런 걸 시켜보세요'(원고는 docs-content)
+      else if (segs[1] === 'examples') { location.replace('#/learn/docs/first-run'); return; } // 옛 '이런 걸 시켜보세요' — 예시 지시는 「처음 10분」에 있다(#4179)
       else if (segs[1] === 'tour') await renderLearnTour(view);         // #1000 — Lively 둘러보기(#/learn/tour 에서 이동)
       else if (segs[1] === 'harness') { location.replace('#/system/me-assets'); return; } // #893 — 하네스 관리는 관리탭이 정주소(기존 딥링크 보존)
       else await renderStart(view);
@@ -197,16 +198,14 @@ async function route() {
       // 옛 상단 탭(#/install) — 사용 가이드 › 시작하기로 이동(#617). 기존 딥링크·북마크 보존(projects v1→v2 와 동일 패턴).
       location.replace('#/learn/install');
       return;
-    } else if (page === 'domainmap') {
-      // #1153 — '도메인 맵' 탭이 '분류체계'가 됐고, #1419 에서 다시 '맥락 관리'로 넓어졌다.
-      //  구 딥링크·북마크는 두 단계를 건너뛰어 최종 자리로 보낸다(중간 리다이렉트 체인 금지 — 히스토리가 지저분해진다).
-      location.replace('#/context/topics');
-      return;
-    } else if (page === 'categories') {
-      // #1419 T6 — 분류체계 탭이 [맥락 관리]의 '분류' 단계로 흡수됐다. 구 URL 은 그 자리로 보낸다.
-      //  ⚠ 전체페이지 renderCategories 는 남겨 둔다(직접 링크·문서에서 쓰일 수 있고, 본문 구현은 공유한다).
-      location.replace('#/context/topics');
-      return;
+    } else if (page === 'domainmap' || page === 'categories') {
+      // #4233(원준 2026-09-26). 분류체계는 맥락 관리의 탭에서 새 셸의 「분류체계」 앱이 됐다. 새 셸 사용자는 셸 창을 그 앱으로
+      //  옮기고(taxonomy-link.ts), 클래식 단독 화면에는 앱이 없으므로 종전 전체 페이지(renderCategories)를 그린다.
+      //  (옛 '도메인 맵' 주소 domainmap 도 같은 자리다. #1153 에서 분류체계가 된 탭이다.)
+      if (uiMode() === 'v2') { openTaxonomyApp(page === 'categories' ? (segs[1] || null) : null); return; }
+      if (page === 'domainmap') { location.replace('#/categories'); return; }
+      setActiveTab('context');
+      await renderCategories(view!);
     } else if (page === 'context') {
       setActiveTab('context'); // 맥락 관리 — 수집→증류→분류→관리 파이프라인(index.html data-tab="context")
       // 증류기 설정(#/context/knowledge/<key>, #1564)은 3단 전폭 도구 화면이라 main 의 1200px 상한을 풀어야 한다.

@@ -168,4 +168,4 @@ async function deleteEntry(id, rel, name, isDir, reload, base) {
   catch (e) { toast('실패 — ' + e.message, true); }
 }
 
-export { openFileViewer, projFileCardEl, projFileRowEl, projUpCardEl };
+export { deleteEntry, openFileViewer, projFileCardEl, projFileRowEl, projUpCardEl, renameEntry };

@@ -25,8 +25,9 @@
 //  세션 상세(GET …/sessions/:id)의 restorable 규칙과 같다 — 소유자·admin, 프로젝트 세션이면 전원(#452).
 //
 //  ── 안 하는 것 ──
-//  · 노드(멤버 PC) Codex 세션은 gateway가 보관한 thread id로 노드의 rollout을 제한 청크로 읽는다(#3982).
-//    app-server 턴에는 Stop 훅이 돌지 않아 중앙 기록이 비므로, 그 폴백만으로는 Windows·macOS 모두 답이 사라진다.
+//  · 노드(멤버 PC) 세션은 gateway가 보관한 thread id로 노드의 하네스 기록을 제한 청크로 읽는다(#3982·#3870).
+//    Codex app-server 턴에는 Stop 훅이 돌지 않고, Claude도 노드 파일이 중앙에 없는 동안엔 중앙 기록이 빌 수 있어
+//    그 폴백만으로는 Windows·macOS 모두 답과 런타임 모델·추론강도가 사라진다.
 //  · 대화 id 를 **추측하지 않는다**(sessions.ts restore 원칙) — work-flag 훅이 보고한 매핑이 없으면 404.
 //
 //  ── 파일이 어디 있나(#1437 ②) ──
@@ -39,10 +40,11 @@ import { wrap, HttpError } from "../http/rest-util.js";
 import { canAttach, sessionGone } from "./terminal-sessions.js";
 import { getSessionState, sessionConvsFor, dirSharedWithOtherSession, convsTakenByOtherSession, nodeSessionMapFor } from "../sessions/session-state.js";
 import { isChatKey, sendKeyToSession, type ChatKey } from "./send-keys.js";
-import { nodeOfSession, nodeCanAttach, nodeSupports, nodeRpc, remoteNodeOfSession } from "../node/registry.js";
+import { nodeOfSession, nodeCanAttach, nodeSupports, nodeRpc, remoteNodeOfSession, nodeSessionHarness } from "../node/registry.js";
 import { markSessionSeen } from "./phase.js";
-import { markViewing, viewersOf } from "./session-presence.js";   // #2116 — "지금 보고 있는 사람"(구글 문서식 얼굴 줄)
+import { markViewing, viewersOf, leaveViewing, pushViewers, sweepPresence } from "./session-presence.js";   // #2116 — "지금 보고 있는 사람"(구글 문서식 얼굴 줄)
 import { listMembers } from "../org/store.js";
+import { currentTenant } from "../org/tenant-context.js";
 import { transcriptRange } from "../sessions/transcript-range.js";
 import { harnessIo, isChatAction, type ChatAction } from "./harness-io/adapter.js";
 import { readAlignedWindow, type AlignedWindow } from "./harness-io/window.js";
@@ -50,7 +52,7 @@ import { parseWindow } from "./harness-io/parse-cache.js";
 import { toNdjson, THIN_MAX_BYTES, THIN_CHAIN_MAX_BYTES } from "./harness-io/chat-line.js";
 import { resolveConvChain, readThinChain, convUuidsInDir } from "./harness-io/conv-chain.js";
 import { harnessOf, resolveTranscript } from "./transcript-locate.js";   // #3699 — «어느 파일인가» 는 한 벌
-import { readNodeCodexTranscript } from "./node-chat-transcript.js";
+import { readNodeTranscript } from "./node-chat-transcript.js";
 
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
@@ -85,19 +87,24 @@ async function gateRead(id: string, req: express.Request, allowRemoteNode = fals
 //  명부 조회가 실패해도 얼굴은 나간다(id 를 이름 자리에 쓴다) — 부가 정보 하나 때문에 도장을 실패시키지 않는다.
 //  ⚠ 명부는 잠깐 재사용한다 — 이 함수는 **보고 있는 사람 수 × 15초마다** 불린다. 매번 org_member 를 훑을 이유가
 //   없고(이름은 그 사이 거의 안 바뀐다), 바뀌어도 1분 안에 따라온다.
-let nameMemo: { at: number; m: Map<string, string> } | null = null;
+//  ⚠ 명부 기억은 **워크스페이스마다** 따로다(#3870) — 매니지드 공유 게이트웨이는 한 프로세스가 전 워크스페이스를 서빙한다.
+//   하나로 두면 먼저 부른 워크스페이스의 명부가 1분 동안 다른 워크스페이스의 얼굴 이름이 된다(#4031 계열).
+const nameMemo = new Map<string, { at: number; m: Map<string, string> }>();
 const NAME_TTL_MS = 60_000;
 async function memberNames(): Promise<Map<string, string>> {
-  if (nameMemo && Date.now() - nameMemo.at < NAME_TTL_MS) return nameMemo.m;
+  const ws = currentTenant()?.id ?? "";
+  const hit = nameMemo.get(ws);
+  if (hit && Date.now() - hit.at < NAME_TTL_MS) return hit.m;
   const m = new Map((await listMembers().catch(() => [])).map((x) => [x.id, x.display_name || x.id]));
-  if (m.size) nameMemo = { at: Date.now(), m };   // 빈 결과(조회 실패)는 기억하지 않는다 — 1분 동안 이름을 잃는다
+  if (m.size) nameMemo.set(ws, { at: Date.now(), m });   // 빈 결과(조회 실패)는 기억하지 않는다 — 1분 동안 이름을 잃는다
   return m;
 }
 async function viewerFaces(sessionId: string): Promise<Array<{ id: string; name: string }>> {
-  const ids = viewersOf(sessionId);
-  if (!ids.length) return [];
+  if (!viewersOf(sessionId).length) return [];
   const names = await memberNames();
-  return ids.map((id) => ({ id, name: names.get(id) || id }));
+  //  ⚠ 줄은 명부를 **기다린 뒤에** 읽는다(#3870) — 이 줄을 곧바로 밀기 때문이다. 기다리기 전에 읽으면 거의 동시에 온
+  //   다른 도장·떠남이 새 줄을 민 뒤에 이 요청이 옛 줄을 다시 밀어, 얼굴이 잠깐 빠지거나 자리가 바뀐다.
+  return viewersOf(sessionId).map((id) => ({ id, name: names.get(id) || id }));
 }
 
 // 구 화면(Enter|Escape 키 이름)도 받는다 — 하위호환. 뜻은 claude 대화상자 기준(Enter=승인, Esc=중단)이었으므로 그대로 옮긴다.
@@ -118,16 +125,17 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     const want = String(req.query.uuid ?? "").trim();
     if (want && !/^[A-Za-z0-9._-]{1,128}$/.test(want)) throw new HttpError(400, "uuid 형식 오류");
     if (nodeId) {
-      // 구 노드에는 새 op를 보내지 않는다. 기존 409 폴백을 유지하고, 최신 노드만 영속 rollout을 직접 읽는다.
+      // 구 노드에는 새 op를 보내지 않는다. 기존 409 폴백을 유지하고, 최신 노드만 하네스의 영속 기록을 직접 읽는다.
       if (!nodeSupports(nodeId, "chatTranscript")) throw new HttpError(409, "node");
       const mapped = (await nodeSessionMapFor([id])).get(id);
       if (!mapped || mapped.node_id !== nodeId) throw new HttpError(404, "이 노드 세션의 대화 id를 아직 모릅니다(첫 대화가 오가면 생깁니다).");
       // ?uuid는 압축 전 대화를 읽는 표면이다. 원격 노드는 현재 매핑만 서버가 소유하므로 다른 id를 임의로 넘기지 않는다.
       if (want && want !== mapped.conv_uuid) throw new HttpError(404, "요청한 원격 대화 기록을 찾지 못했습니다.");
-      const got = await readNodeCodexTranscript({
+      const got = await readNodeTranscript({
         nodeId,
         sessionId: id,
         threadId: mapped.conv_uuid,
+        harness: nodeSessionHarness(nodeId, id),
         query: req.query as Record<string, unknown>,
         rpc: (node, op, args) => nodeRpc(node, op, args),
       });
@@ -137,7 +145,7 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
       res.setHeader("X-Log-From", String(got.from));
       res.setHeader("X-Log-To", String(got.to));
       res.setHeader("X-Session-Uuid", got.uuid);
-      res.setHeader("X-Harness", "codex");
+      res.setHeader("X-Harness", got.harness);
       res.end(got.ndjson);
       return;
     }
@@ -243,16 +251,35 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
       //  ⭐ 얼굴 줄(#2116)은 **게이트웨이가 기록한다** — 보고 있는 사람은 그 노드가 아니라 여기에 붙은 브라우저다.
       //   그래서 구 노드(markSeen 미지원)여도, 노드 왕복이 실패해도 얼굴은 정확하다.
       markViewing(id, uid);
-      if (!nodeSupports(nodeId, "markSeen")) { res.json({ ok: true, applied: false, reason: "node-old", viewers: await viewerFaces(id) }); return; }
+      const faces = await viewerFaces(id);
+      pushViewers(id, faces);   // 노드 왕복보다 먼저 — 얼굴은 게이트웨이의 사실이라 노드가 느려도 늦출 이유가 없다
+      if (!nodeSupports(nodeId, "markSeen")) { res.json({ ok: true, applied: false, reason: "node-old", viewers: faces }); return; }
       await nodeRpc(nodeId, "markSeen", { id });
-      res.json({ ok: true, applied: true, viewers: await viewerFaces(id) });
+      res.json({ ok: true, applied: true, viewers: faces });
       return;
     }
     if (!(await canAttach(id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
     markViewing(id, uid);
+    const faces = await viewerFaces(id);
+    pushViewers(id, faces);
     await markSessionSeen(id);
-    res.json({ ok: true, applied: true, viewers: await viewerFaces(id) });
+    res.json({ ok: true, applied: true, viewers: faces });
   }));
+
+  // ── 떠남(#3870) — 이 세션 화면에서 다른 화면으로 옮겼다·창을 닫았다. TTL(45초)을 기다리지 않고 얼굴을 걷는다. ──
+  //  게이트가 없다: 지우는 것은 **요청한 사람 자신의 도장**뿐이라 남의 무엇도 건드리지 못한다(없으면 아무 일도 없다).
+  //  ⚠ 창이 숨은 것은 떠남이 아니다 — 화면은 이걸 다른 화면으로 옮겼을 때·창을 닫을 때만 부른다(web/v2/main.ts markViewedSessionSeen · pagehide).
+  app.post("/api/ui/terminal/sessions/:id/leave", auth, wrap(async (req, res) => {
+    const id = String(req.params.id ?? "");
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
+    const uid = idOf(userOf(req));
+    if (!uid) throw new HttpError(403, "사용자 신원이 없습니다");
+    res.setHeader("Cache-Control", "no-store");
+    if (leaveViewing(id, uid)) pushViewers(id, await viewerFaces(id));
+    res.json({ ok: true });
+  }));
+  //  아무도 다시 안 보는 세션의 자리는 도장이 안 와서 스스로 안 걷힌다 — 가끔 쓸어 준다(게이트웨이 수명 내내 자라지 않게).
+  setInterval(() => sweepPresence(), 10 * 60_000).unref();
 
   // ── 아웃박스(#1753) — 이 세션의 전달 대기·실패 프롬프트. 화면이 대기 말풍선(새로고침 생존)과 재시도·삭제를 그린다. ──
   //  게이트 = transcript 와 동일(gateRead — 입장할 수 있으면 어차피 터미널에서 볼 수 있는 내용이다).

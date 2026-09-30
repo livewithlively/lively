@@ -40,7 +40,7 @@ export const APP_INSTANCE_MULTIPLICITIES = ["single", "multiple"] as const;
 
 // OS가 직접 그리는 builtin 전용 renderer. 매니페스트에는 기록되지만, 소비자는 source.kind='builtin' 일 때만 신뢰한다.
 //  외부 앱이 같은 문자열을 선언해도 generic opaque iframe 경로를 벗어나지 못한다.
-export const APP_SYSTEM_RENDERERS = ["session", "browser", "classic", "inbox", "sources"] as const;
+export const APP_SYSTEM_RENDERERS = ["session", "browser", "classic", "inbox", "sources", "taxonomy", "learn"] as const;
 /** #1891 — 알림 권한이 함의하는 능력 이름. 이 이름이 바뀌면 파생도 같이 바뀌어야 한다. */
 export const NOTIFY_TOOL = "app_notify";
 
@@ -150,9 +150,17 @@ const dataColumnSchema = z.object({
   type: z.string().min(1).max(64),                   // 선언형 — DDL 생성기가 화이트리스트 검증(별도)
 }).strict();
 
+// #4226 인덱스 선언 — 테이블이 커지면 인덱스 없는 조회가 전체 훑기가 되어 자유 SQL 의 문장 시간 상한(5초)에 걸린다.
+//  칸은 선언한 칸 또는 시스템 칸(id·created_at)만(parseAppManifest 가 대조). unique 는 같은 값 두 번을 막는다.
+const dataIndexSchema = z.object({
+  columns: z.array(z.string().regex(/^[a-z_][a-z0-9_]{0,62}$/, "인덱스 칸 이름은 소문자 영숫자/_")).min(1).max(8),
+  unique: z.boolean().default(false),
+}).strict();
+
 const dataTableSchema = z.object({
   name: z.string().regex(/^[a-z_][a-z0-9_]{0,62}$/, "테이블명은 소문자 영숫자/_(소문자·_로 시작)"),
   columns: z.array(dataColumnSchema).min(1),
+  indexes: z.array(dataIndexSchema).max(20).default([]),
 }).strict();
 
 const sectionSchema = z.object({
@@ -258,6 +266,20 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
   assertUniqueKeys("ui.widgets", m.ui.widgets.map((w) => w.key));
   assertUniqueKeys("jobs", m.jobs.map((j) => j.key));
   assertUniqueKeys("data.tables", m.data.tables.map((t) => t.name));
+  // #4226 인덱스 칸은 그 테이블의 칸이어야 한다 — 없는 칸이면 설치 때 DDL 이 실패해 원인이 흐려진다.
+  for (const t of m.data.tables) {
+    const cols = new Set(["id", "created_at", ...t.columns.map((c) => c.name)]);
+    const seen = new Set<string>();
+    for (const ix of t.indexes) {
+      for (const c of ix.columns) {
+        if (!cols.has(c)) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.indexes]: '${c}' 는 이 테이블의 칸이 아닙니다`);
+      }
+      if (new Set(ix.columns).size !== ix.columns.length) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.indexes]: 같은 칸을 두 번 적었습니다(${ix.columns.join(", ")})`);
+      const key = `${ix.unique ? "u" : "i"}:${ix.columns.join(",")}`;
+      if (seen.has(key)) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.indexes]: 같은 인덱스가 두 번 있습니다(${ix.columns.join(", ")})`);
+      seen.add(key);
+    }
+  }
   assertUniqueKeys("sections", m.sections.map((s) => s.key));
 
   // 잡 run 은 prompt_asset 또는 prompt 중 하나가 있어야 한다.

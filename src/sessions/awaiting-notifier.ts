@@ -100,6 +100,9 @@ export async function sweepAwaitingNotifications(deps?: {
       href: `#/s/${encodeURIComponent(s.id)}`,
       // 같은 세션의 같은 대기로는 쿨다운 안에 다시 울리지 않는다(하네스 상태 떨림 방어).
       dedupe_key: `ai-session:awaiting:${s.id}`,
+      //  #4180 — 세션 대기 알림은 **배너 전용**이다. 「확인할 것」 목록엔 서지 않는다(회의 2026-09-21: 하루 수십 건이
+      //   쌓여 무의미). 브라우저 배너 폴링(scope=all)과 데스크톱 앱은 그대로 받는다.
+      kind: "session",
     }).catch((err) => { logger.warn({ err, session: s.id }, "awaiting 알림 실패"); return null; });
 
     if (!r) { denied++; continue; }

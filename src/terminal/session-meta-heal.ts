@@ -15,6 +15,8 @@
 //  ① sessionMetaCmds·sessionWindowCmds — createSession 과 되채우기가 **같은 목록**을 쓴다
 //     (한쪽에만 새 표식을 더하면 되채운 세션이 그 표식만 없는 채로 남는다).
 //  ② metaHealCmds — DB desired 행(정본)으로 그 목록을 다시 만든다. DB 에 없는 값(@box_runtime)은 짓지 않는다.
+//  ⚠ #4135 — 그래서 되채워진 codex 세션은 모드 표식을 잃는다(→ 옛 기본인 app-server 로 읽힌다). 그쪽으로 틀리면
+//   «대화창이 스레드를 잡으려다 부딪힌다»(보이는 실패)이고, 반대로 틀리면 «셸에 프롬프트가 실행된다»(조용한 사고)다.
 //  ③ needsMetaHeal — «DB 행이 있는데 tmux @box_harness 가 비었다» 일 때만 참. 표식을 박는 생성 경로는 전부 @box_harness 를
 //     박으므로(createSession · node/tasks) 그 빈 값은 «표식 묶음이 안 돌았다» 의 표지다. 상시세션은 DB 행이 없어 해당 없다.
 //  ④ makeMetaHealGate — 세션당 쿨다운. 목록 폴링은 뷰어 수만큼 돌므로 되채우기가 폴링마다 나가지 않게.
@@ -30,8 +32,13 @@ export interface SessionMetaValues {
   owner: string;
   label: string;
   harness: string;
-  /** 대화 런타임으로 떴나(#2439). **DB 에 없는 값**이라 되채우기는 넘기지 않는다 — 모르는 것을 짓지 않는다. */
-  runtimeChat?: boolean;
+  /**
+   * 이 세션이 **어느 모드로 떴나**(@box_runtime). **DB 에 없는 값**이라 되채우기는 넘기지 않는다 — 모르는 것을 짓지 않는다.
+   *  · "chat"       — 하네스 무관 대화 런타임(#2439). pane 은 셸.
+   *  · "app-server" — codex 대화 런타임(#2055). pane 은 셸.
+   *  · "terminal"   — pane 에 TUI 가 떴다(#4135 — codex 의 새 기본. 이 값이 있어야 «옛 세션(표식 없음)» 과 갈린다).
+   */
+  runtime?: string;
   kind: string;
   /** 실행 폴더 — 비면 표식을 안 박는다(빈 값으로 덮지 않는다). createSession 은 늘 준다. */
   dir?: string | null;
@@ -53,7 +60,7 @@ export function sessionMetaCmds(id: string, v: SessionMetaValues): TmuxCmd[] {
     ["set-option", "-t", id, "@box_label", v.label],
     ["set-option", "-t", id, "@box_harness", v.harness],
     //  ★ #2439 — 이 세션이 **어느 모드로 떴나**. 배달·화면이 같은 값을 봐야 판정이 갈리지 않는다.
-    ...(v.runtimeChat ? [["set-option", "-t", id, "@box_runtime", "chat"] as TmuxCmd] : []),
+    ...(v.runtime ? [["set-option", "-t", id, "@box_runtime", v.runtime] as TmuxCmd] : []),
     ["set-option", "-t", id, "@box_kind", v.kind],   // #2162 — 종류(@box_* 와 같은 자리·같은 규약)
     ...(v.dir ? [["set-option", "-t", id, "@box_dir", v.dir] as TmuxCmd] : []),
     ["set-option", "-t", id, "@box_auto", v.autoApprove ? "1" : "0"],

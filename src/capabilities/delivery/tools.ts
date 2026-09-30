@@ -7,9 +7,10 @@ import type { LivelyUser } from "../../context.js";
 import { MEANING } from "../../org/delivery/meaning.js";
 import { isBuiltinToolName, toolCandidates } from "../../mcp/mcp-surface.js";
 import { assertNoHardSecrets } from "../../org/ingest/redact.js";
-import { getRuntimeConfig, updateRuntimeConfig, listTools, upsertTool, removeTool, type ToolKind, type OrgToolInput } from "../../org/store.js";
-import { HTTP_TOOL_PRESETS, httpToolPresetToInput } from "../../org/delivery/http-tool-presets.js";
-import { actorOf, restRuntime, str, wctx } from "./shared.js";
+import { getRuntimeConfig, listTools, upsertTool, removeTool, type ToolKind, type OrgToolInput } from "../../org/store.js";
+import { HTTP_TOOL_PRESETS } from "../../org/delivery/http-tool-presets.js";
+import { applyHttpToolPresetGroup, findHttpToolPresetGroup } from "../../org/delivery/http-tool-preset-apply.js";
+import { restRuntime, str, wctx } from "./shared.js";
 
 const TOOL_SCOPES = new Set(["items", "context", "db", "memory", "code"]); // http_proxy 호출 권한(admin·null 불가)
 const TOOL_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
@@ -145,21 +146,11 @@ export const toolsCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/org/http-tool-presets/apply"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const key = str(input.key, "key", 64).trim();
-      const group = HTTP_TOOL_PRESETS.find((g) => g.key === key);
+      const group = findHttpToolPresetGroup(key);
       if (!group) throw new HttpError(400, `그런 프리셋 묶음이 없습니다: ${key} (가능: ${HTTP_TOOL_PRESETS.map((g) => g.key).join(", ")})`);
-      const applied: string[] = [];
-      for (const t of group.tools) {
-        await upsertTool(httpToolPresetToInput(group, t), wctx(user, ctx)); // 프리셋 자기검증이 여기서 먼저 돈다
-        applied.push(t.name);
-      }
-      // allowlist 병합 — 기존 항목은 건드리지 않는다(다른 커넥터가 쓰고 있을 수 있다).
-      const cfg = await getRuntimeConfig();
-      const want = group.hosts.map((h) => h.toLowerCase());
-      const addedHosts = want.filter((h) => !cfg.url_allowlist.includes(h));
-      if (addedHosts.length) {
-        await updateRuntimeConfig({ url_allowlist: [...cfg.url_allowlist, ...addedHosts] }, actorOf(user), ctx?.source ?? "web");
-      }
-      return { ok: true, key, applied, added_hosts: addedHosts };
+      //  심기·allowlist 병합은 연결 직후 자동 적용(#4211)과 **같은 함수** — 두 벌이면 한쪽만 호스트를 빠뜨린다.
+      const r = await applyHttpToolPresetGroup(group, wctx(user, ctx));
+      return { ok: true, key, applied: r.applied, added_hosts: r.added_hosts };
     }, {
       // 목록을 손으로 적으면 프리셋이 늘 때마다 드리프트한다 — slack 이 빠져 있던 것이 그 증거다(#1881).
       key: z.string().describe(`적용할 프리셋 묶음 key(${HTTP_TOOL_PRESETS.map((g) => g.key).join(" · ")})`),

@@ -110,9 +110,12 @@ ok(V({ lastSeen: DAY - 1 }) === "cut",
   const ROUTES = read("src/terminal/routes.ts");
   const INST = read("web/v2/app-instance.ts");
   const side = MAIN.slice(MAIN.indexOf("function sideInstances(): SideInstance[] {"), MAIN.indexOf("async function closeSideRow(key: string)"));
-  ok(/verdictStands\(sessRowVerdict\(\{ ids: \[s\.id, s\.logId \|\| '', \.\.\.\(s\.altIds \|\| \[\]\)\]/.test(side)
+  //  #4158 — 판정 한 줄은 homeRowVerdict 한 자리로 올라갔다([AI 세션] 전체 목록이 홈과 **같은 함수**로 재도록). ① 은 그걸 부른다.
+  const verdictFn = MAIN.slice(MAIN.indexOf("function homeRowVerdict("), MAIN.indexOf("function sideInstances(): SideInstance[] {"));
+  ok(/verdictStands\(homeRowVerdict\(s, facts\)\)/.test(side)
+    && /sessRowVerdict\(\{ ids: \[s\.id, s\.logId \|\| '', \.\.\.\(s\.altIds \|\| \[\]\)\]/.test(verdictFn)
     && !/if \(!liveNow && \(s\.lastSeen \|\| 0\) < workDayStart\(now\)\) continue;/.test(side),
-    "W1 ① 이 날짜 컷 대신 보임 축 판정을 쓴다 — 세션의 모든 이름으로");
+    "W1 ① 이 날짜 컷 대신 보임 축 판정을 쓴다 — 세션의 모든 이름으로(판정은 homeRowVerdict 한 자리, #4158)");
   ok(/!key\.startsWith\('sess:'\) && dismissed\[key\] !== undefined && dismissed\[key\] === basis/.test(side),
     "W2 세션 행은 «치울 때 상태» 맵을 안 본다 — 그 맵이 치운 세션을 되살리던 뿌리");
   const close = MAIN.slice(MAIN.indexOf("async function closeSideRow(key: string)"), MAIN.indexOf("function refreshSideNow(): void {"));
@@ -159,7 +162,7 @@ ok(V({ lastSeen: DAY - 1 }) === "cut",
   pruneHolds(holds, present);
   ok(!holds.has("sess:box-a") && holds.has("sess:box-b"),
     "W11 붙들려 있던 세션을 치우면 목록 이탈로 자물쇠가 풀린다 · 목록에 둔 세션의 자물쇠는 그대로");
-  const cut = side.indexOf("if (!verdictStands(sessRowVerdict(");
+  const cut = side.indexOf("if (!verdictStands(homeRowVerdict(");   // #4158 — 판정은 homeRowVerdict 한 자리(W1)
   const prune = side.indexOf("pruneHolds(holds, rows);");
   ok(cut > 0 && prune > cut,
     "W11′ 배선 — 치운 세션을 거르는 줄이 자물쇠 정리(pruneHolds(holds, rows)) 앞에 있다(행에 안 들어가야 풀린다)");

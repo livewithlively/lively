@@ -10,7 +10,7 @@ import type { LivelyUser } from "../context.js";
 import { HttpError } from "./rest-util.js";
 import { getMember, getOrgProfile, getUiSurface } from "../org/store.js";
 import { gatewayUrl } from "../gateway-url.js";
-import { memberTeams, memberCategories, memberCategoryIds } from "../v6/team-store.js";
+import { memberTeams } from "../v6/team-store.js";
 import { visAxes } from "../v6/visibility-axes.js";
 import { registryModeActive } from "../org/tenancy/state.js"; // #1750 S1 — 다중 워크스페이스 ride-along
 import { getWorkspaceBySlug, PRIMARY_SLUG } from "../org/tenancy/registry.js"; // 스위처 버튼 이름·종류(registry 가 이름의 SoT)
@@ -31,19 +31,18 @@ const me: Capability = {
   handler: async (_input, user, ctx) => {
     const u = (user ?? {}) as Partial<LivelyUser>;
     const memberId = u.userId ?? "";
-    // 소속 팀 + '우리 팀' 카테고리 id(소유 ∪ 이해관계) — 프론트 사이드바 '우리 팀' 우선노출의 단일 소스.
-    //  실패해도 게이트 확인은 막지 않는다(팀 미설정/스키마 초기 등 — 빈 배열 폴백).
-    const [teams, cats, member, org, ui, welcome] = memberId
+    // 소속 팀 — 실패해도 게이트 확인은 막지 않는다(팀 미설정/스키마 초기 등 — 빈 배열 폴백).
+    //  (#4233: '우리 팀' 카테고리 id(team_category_ids · team_owner_category_ids)는 분류 담당 개념과 함께 걷었다.)
+    const [teams, member, org, ui, welcome] = memberId
       ? await Promise.all([
           memberTeams(memberId).catch(() => []),
-          memberCategoryIds(memberId).catch(() => ({ all: [], owner: [] })),
           getMember(memberId).catch(() => null), // 표시 이름 — 우측 상단 '내 프로필' 라벨(이메일보다 우선)
           getOrgProfile().catch(() => null),     // 상단 워드마크 태그라인('for <조직명>') — 미설정이면 태그라인 자체를 숨긴다
           getUiSurface(),                        // #1454 S2~S5 — 매니지드 표면 노브 4종(자체 fail-open: 실패=기본값)
           // #2039·#2171 — 아래 first_run·welcome_pending. 모르면 홈(둘 다 false)
           memberWelcomeState(memberId).catch(() => ({ firstRun: false, pending: false })),
         ])
-      : [[], { all: [], owner: [] }, null, null, null, { firstRun: false, pending: false }];
+      : [[], null, null, null, { firstRun: false, pending: false }];
     return {
       userId: u.userId ?? null, email: u.email ?? null, scopes: u.scopes ?? [],
       display_name: member?.display_name ?? null,
@@ -53,7 +52,6 @@ const me: Capability = {
       avatar_char: member?.avatar_char ?? null, avatar_color: member?.avatar_color ?? null, // 이미지 없을 때 커스텀 글자/배경색
 
       teams: teams.map((t) => ({ id: t.id, key: t.key, name: t.name })),
-      team_category_ids: cats.all, team_owner_category_ids: cats.owner,
       // 실행 모드(#1007+) — 이 요청이 어느 모드로 게이트되는가(단일 x-lively-mode 헤더 파생, 어댑터가 ctx 에 주입).
       //  웹/AI 가 '모드가 실제로 켜졌는지' 확인하는 관측 지점. read_only 는 하위호환 유지.
       mode: ctx?.incognito ? "incognito" : ctx?.readOnly ? "readonly" : "normal",
@@ -105,7 +103,7 @@ const whoami: Capability = {
   title: "나는 누구인가(현재 로그인 신원)",
   description:
     "지금 이 세션이 라이블리에 접속한 신원을 반환한다(whoami — 현재 로그인한 사람이 누구인지). " +
-    "member_id·표시이름·닉네임·이메일·권한(scopes)·소속 팀·우리 팀 카테고리·외부 시스템 계정(클릭업·슬랙·깃랩 등 external_id) " +
+    "member_id·표시이름·닉네임·이메일·권한(scopes)·소속 팀·외부 시스템 계정(클릭업·슬랙·깃랩 등 external_id) " +
     "+ 이 요청의 하네스(AI)·터미널 세션·실행 모드. " +
     "⭐ member_id 가 라이블리 전 표면의 사람 축 키다 — 내가 맡은 프로젝트는 project_list_v6 {mine:true}, " +
     "태스크 담당자(assignee)·프로젝트 팀원(project_set_members_v6)·작업 기록(activity_log)의 사람도 전부 이 값. " +
@@ -124,17 +122,14 @@ const whoami: Capability = {
     const memberId = user?.userId ?? "";
     if (!memberId) throw new HttpError(401, "인증이 필요합니다");
     // 신원 보강은 전부 fail-open — 조회가 실패해도 "너는 누구다"(토큰 principal)는 반드시 답한다.
-    const [member, teams, cats, org, gwUrl] = await Promise.all([
+    const [member, teams, org, gwUrl] = await Promise.all([
       getMember(memberId).catch(() => null),
       memberTeams(memberId).catch(() => []),
-      memberCategories(memberId).catch(() => []),
       getOrgProfile().catch(() => null),
       gatewayUrl().catch(() => null),
     ]);
     const scopes = Array.isArray(user?.scopes) ? user.scopes : [];
-    const cat = (c: { category_id: number; key: string; name: string | null }) =>
-      ({ id: Number(c.category_id), key: c.key, name: c.name });
-    // 앱 세션 토큰(#1780 v2.1 R4-M1) — 앱(제3자 코드)에게는 사람의 **외부 시스템 계정·팀·카테고리**를 주지 않는다.
+    // 앱 세션 토큰(#1780 v2.1 R4-M1) — 앱(제3자 코드)에게는 사람의 **외부 시스템 계정·팀**을 주지 않는다.
     //  동의한 도구가 0 이어도 whoami 는 배관이라 열려 있으므로, 여기서 축약하지 않으면 동의 모델이 뚫린다.
     //  member_id·이름·이메일·scopes 는 남긴다(앱이 "누구 이름으로 도는가" 를 알아야 on_behalf_of 가 성립).
     const isApp = !!user?.appId;
@@ -159,12 +154,8 @@ const whoami: Capability = {
         system: i.system, instance: i.instance ?? null, external_id: i.external_id,
         email: i.email ?? null, display_name: i.display_name ?? null,
       })),
-      // ── 소속(오너십은 우선순위 신호일 뿐 접근제한이 아니다 — 다른 팀 맥락도 열람·검색 가능) ──
+      // ── 소속 ── (#4233: 팀별 소유/이해관계 카테고리는 분류 담당 개념과 함께 걷었다)
       teams: isApp ? [] : teams.map((t) => ({ id: t.id, key: t.key, name: t.name })),
-      categories: isApp ? { owner: [], stakeholder: [] } : {
-        owner: cats.filter((c) => c.owner).map(cat),
-        stakeholder: cats.filter((c) => !c.owner).map(cat),
-      },
       // ── 이 요청의 접속 신원(게이트웨이가 헤더에서 본 것이 권위 — 자기보고 아님) ──
       session: {
         harness: ctx?.agent ?? null,        // x-lively-harness / User-Agent → claude-code·codex …(#182)

@@ -27,7 +27,7 @@ import { join, dirname, relative, isAbsolute } from "node:path";
 //  따로 하드코딩돼 어긋날 수 있었다(어긋나면 관측·로컬토글에서 그 종류가 통째로 안 보인다).
 //  ⚠ 이 import 가 성립하려면 harness-registry.mjs 가 이 파일과 **같은 디렉터리**로 설치돼야 한다
 //   (설치 시 ~/.lively/hooks/ 로 평평하게 복사되므로) → user-install 의 HOOK_SCRIPTS 에 등재돼 있다.
-import { resolveHarness, harness, placementFor, assetDirsFor, assetDirNames, isForeignGrokInvocation, claudeConfigDir } from "./harness-registry.mjs";
+import { resolveHarness, harness, placementFor, assetDirsFor, assetDirNames, isForeignGrokInvocation, claudeConfigDir, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
 
 const fetch = (...args) => hostEffects.fetch(...args);
@@ -88,7 +88,8 @@ const pickCred = (envName, fileVal) => {
   const env = (process.env[envName] || "").trim();
   return (SPAWNED ? (env || fileVal) : (fileVal || env)) || "";
 };
-const TOKEN = pickCred("LIVELY_TOKEN", readLocal("token"));
+//  #4135 — 세션 토큰 파일이 있으면 그것이 먼저다(게이트웨이가 이 세션 앞으로 나중에 실어 준 정본 — harness-registry sessionTokenFile 머리말).
+const TOKEN = sessionTokenFromFile("hook", HOME, (p) => readFileSync(p, "utf8")) || pickCred("LIVELY_TOKEN", readLocal("token"));
 const GW = (pickCred("LIVELY_GATEWAY_URL", readLocal("gateway-url")) || "http://localhost:8080").replace(/\/$/, "");
 
 // ── 대상 하네스별 자산 배치 규약 ──

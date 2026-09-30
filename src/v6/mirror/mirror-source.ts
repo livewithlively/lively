@@ -11,6 +11,7 @@ export function sourceKindOf(system: string): string {
   switch (system) {
     case "slack": return "slack";
     case "gmail": return "email";
+    case "outlook": return "email";     // #4211 Outlook 메일 — Gmail 과 같은 자료 종류(메일 증류기·자료함 필터가 한 칸으로 본다)
     case "notion": return "notion_doc";
     case "clickup": return "clickup_doc";
     case "gdrive": return "drive_file"; // #541 Drive 파일 = raw 자료(source) → distill 대상

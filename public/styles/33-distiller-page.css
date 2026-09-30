@@ -40,7 +40,7 @@ body[data-route="context-distiller"] main { max-width: none; }
 .dst-head-main { flex: 1 1 340px; min-width: 0; }
 .dst-title { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.4px; color: var(--ink);
   word-break: keep-all; overflow-wrap: break-word; }
-.dst-sub { margin: 6px 0 0; font-size: 13.5px; color: var(--ink-sub); }
+.dst-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0 0; font-size: 13.5px; color: var(--ink-sub); }
 /* 저장 줄 — 이 페이지의 핵심 행동 하나(저장)만 primary, 나머지는 ghost/text. */
 .dst-head-acts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: none; padding-top: 2px; }
 /* '저장 안 된 변경' — 페이지가 되면 뒤로가기·새로고침으로 쉽게 나갈 수 있어, 지금 상태가 저장본과
@@ -183,3 +183,14 @@ textarea.dst-in { resize: vertical; max-width: 860px; }
 .dsl-sec-tt { display: flex; align-items: center; gap: 10px; }
 .dsl-num { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; flex: none;
   background: var(--bg-punch); color: var(--blue); font-size: 12.5px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* #4135 — 3단계 머리의 «이 증류기가 하는 일»(9/22 회의 ③). 카테고리만 붙이는 증류기는 여기서 고른다. */
+.dst-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0 16px; }
+.dst-mode-o { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--line-net); border-radius: 12px; background: var(--bg); cursor: pointer; }
+.dst-mode-o.is-on { border-color: var(--blue); background: var(--bg-sel); }
+.dst-mode-o.is-dis { cursor: default; opacity: .62; }
+.dst-mode-o > span > b { display: flex; align-items: center; gap: 6px; font-size: 13.5px; }
+.dst-mode-o span { font-size: 12.5px; color: var(--muted); }
+.dst-mode-o > span > b { color: var(--ink); }
+.dst-mode-o input { margin-top: 3px; }
+@media (max-width: 820px) { .dst-mode { grid-template-columns: 1fr; } }

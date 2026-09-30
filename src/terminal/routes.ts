@@ -9,6 +9,9 @@ import crypto from "node:crypto";
 import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
+import { hiddenProjects } from "../v6/visibility.js";   // #3870 — 초대받은 사람의 복제: 그 세션 프로젝트를 지금 볼 수 있나
+import { withPreissuedIdentity } from "./node-session-preissue.js";   // #4135 — 노드 세션의 id·훅·MCP 토큰은 relay 전에 게이트웨이가 굽는다
+import { revokeSessionHookToken } from "./profiles.js";               // #4135 — 노드 세션을 죽일 때 그 토큰(훅·MCP 둘 다)을 거둔다
 import { wrap, HttpError } from "../http/rest-util.js";
 import { aiLoginStep, isAiLoginHarness, parseAiLogin, type AiLoginHarness } from "./ai-login-flow.js";   // #2055 터미널 없는 AI 로그인
 import { cancelAiLogin, dropLoginSession, pasteAiLogin, readAiLogin, startAiLogin, touchHarnessSeat } from "./ai-login-run.js";
@@ -23,6 +26,7 @@ import { hereSlug, notifyAccountOf } from "../v6/notify-scope.js";
 import { roots, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, canAttach, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
 import { SESSION_STARTING_GRACE_MS } from "./sessions.js";   // #4065 — 갓 만든 세션을 «중단됨» 으로 내지 않는 창(배럴 비노출 — 모듈에서 직접)
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
+import { sessionPromptsFromTranscript } from "./session-prompts.js";   // #4135 — 💬 질문 목록의 비-claude 갈래
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";        //  하기 위한 파사드(chat-routes 대화창과 같은 관문)
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited, markSessionSuperseded, resolveSessionSuccessor, retiredSessionIds, conversationPeers, type SessionState } from "../sessions/session-state.js";   // #2231 — 복원된 옛 id 는 지우지 않고 이정표로 남긴다 · #3891 같은 대화를 도는 세션 후보
@@ -50,14 +54,15 @@ import type { NodeSessionInfo } from "../node/registry.js";
 import { reportSessionActivity } from "./session-activity-relay.js";   // #2600 T2 d6 — 하네스 활동 보고를 그 세션의 호스트에
 import { relayNodeId, sessionRelayNodeId, sameTmuxCoordinate, isBoxSessionRow } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #2636 — 화면이 안 준 좌표는 서버가 되찾는다 · #3745 — 박스 세션엔 세션 호스트 좌표도 같은 tmux 다
 import type { NodeOp } from "../node/protocol.js";
-import { normalizeTheme } from "./catalog.js"; // #1683 테마 값 정규화(순수 — catalog 가 소유)
+import { normalizeTheme, harnessResumeCommand } from "./catalog.js"; // #1683 테마 값 정규화 · #4135 셸에서 대화를 이어 여는 한 줄(순수 — catalog 가 소유)
 import { getNode, listNodes } from "../node/store.js";
+import { bindNodeSessionProjectOrKill } from "../node/provision-remote.js";   // #4135 — 복원된 노드 세션도 소속을 DB 에 확정한다(생성 ⑦ 과 같다)
 import { nodeOfflineNote } from "../node/offline-note.js";   // #1849 — 오프라인 원인 추정 한 문장
 import { restoreProjectRef } from "./restore-project.js";
 import { getProjectRow } from "../v6/project-store.js";   // #2549 — 삭제된 프로젝트의 세션도 되살린다(행 유무만 묻는 가벼운 조회)
 import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 하네스 가용성(미보고 → 기준선)
 import { nodeOpenTo, nodeHostProfile } from "../node/node-access.js";
-import { createShellProject, firstPromptProjectPlan } from "../project/first-prompt-project.js";
+import { createShellProject, firstPromptProjectPlan, launchOrDiscardShell, type ShellHandle } from "../project/first-prompt-project.js";
 import { relocateAttachmentsToProject } from "../project/attach-relocate.js";
 import { launchSession, sessionInputFromBody, relayNodeOp, requireCreatableNode, registerSessionInstance, recordSessionTenant, chatFieldsOf, themeOf, prepareRemoteAppSession } from "./session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
 import { registerNodeRoutes } from "../node/routes.js";
@@ -65,12 +70,14 @@ import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
 import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor, setLastPrompt, lastPromptsFor, claimSessionLabel, updateSessionStateMeta } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑 · #2197 마지막 말
 import { cleanLastPrompt } from "./last-prompt.js";
-import { harnessIo } from "./harness-io/adapter.js";
+import { harnessIo, termUiWire, type TermUiWire } from "./harness-io/adapter.js";
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
 import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable, unknownStateMeta } from "./session-meta.js";  // #1820 죽은 세션 '복원 가능' 단일 판정 + #2111 생사 갈래 + #2108 확답 게이트
 import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js";   // #1851 — 세션 휴지통
 import { trashMapFor } from "../sessions/session-trash.js";                        // #1851 — 목록 행에 휴지통 표식
 import { sessionHandoffInput } from "./session-handoff.js";
+import { forkCheckFromNodeStat, forkInheritsTask, forkRefusal, sessionForkInput, shouldAskNodeForTranscript } from "./session-fork.js";   // #4135 — 세션 복제(이 대화를 아는 새 세션)
+import { sessionTaskOf } from "../v6/session-task.js";   // #4135 — 복제본이 물려받을 태스크
 import { resumePlan, resumedKind, type ResumeCheck } from "./resume-plan.js";   // #3870 — 이어받기 인자 결정(순수·엣지 표 시험)
 import { claudeProjectsDirExact } from "./terminal-transcript.js";   // #3870 — 규약으로 폴더를 정확히 짚을 수 있나
 
@@ -317,7 +324,7 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     res.json({
       roots: roots().map((r) => ({ key: r.key, label: r.label })),
       // bin·autoApproveFlag 를 함께 준다(#1695) — 프로젝트 화면의 '내 컴퓨터에서 작업'이 자동승인 설명에 **그 하네스의
-      //  실제 플래그**를 적기 위해서다. 종전엔 웹이 'claude --dangerously-skip-permissions / codex --yolo' 를 문장에
+      //  실제 플래그**를 적기 위해서다. 종전엔 웹이 'claude --dangerously-skip-permissions / codex --dangerously-bypass-approvals-and-sandbox' 를 문장에
       //  하드코딩해, 하네스가 늘 때마다 그 문장이 조용히 틀려졌다. 둘 다 우리 상수라 노출에 위험이 없다.
       // provider — 화면이 '어느 회사 모델로 열까'로 묻고 그 답이 곧 하네스가 된다(#1758, catalog.ts HarnessProvider).
       // runtime — 이미 떠 있는 세션에서 그 축을 바꿀 수 있나(슬래시 명령이 있는 하네스만). 화면이 컨트롤 노출을 이걸로 정한다.
@@ -760,11 +767,14 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //   바구니가 답이다: local·localRestorable 은 이 박스, remote 만 다른 기계다.
     const tagChat = (rows: typeof local, _unused: boolean, localSet: Set<string>): void => {
       for (const s of rows) {
-        const rc = (s as { runtimeChoice?: unknown }).runtimeChoice;
+        const r = s as { runtimeChoice?: unknown; runtimeRaw?: unknown };
+        //  #4135 — 표식의 **원시값**을 넘긴다(codex 모드는 "app-server"|"terminal" 이라 세 값으로 접히지 않는다).
+        //   옛 스냅샷(그 필드가 없는 노드)은 runtimeChoice 로 떨어진다 — 무회귀.
+        const stamp = typeof r.runtimeRaw === "string" && r.runtimeRaw ? r.runtimeRaw
+          : r.runtimeChoice === "chat" ? "chat" : r.runtimeChoice === "terminal" ? "terminal" : undefined;
         //  이 박스에 그 tmux 가 있으면 런타임도 여기서 돈다 — 노드 좌표가 붙어 있어도 그렇다.
         const onNode = !localSet.has(s.id);
-        Object.assign(s, chatFieldsOf(s.harness, onNode,
-          rc === "chat" ? "chat" : rc === "terminal" ? "terminal" : undefined));
+        Object.assign(s, chatFieldsOf(s.harness, onNode, stamp));
       }
     };
     //  ⚠ **병합 뒤에** 붙인다. 게이트웨이와 노드 에이전트가 같은 박스에서 돌면 같은 세션이
@@ -833,6 +843,17 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       retentionDays: c.session_share.retention_days,   // 0 = 무제한
     });
   }));
+  //  #4135 — 터미널 화면이 이 세션을 **어떤 하네스의 화면으로** 다뤄야 하는지. 종전엔 그 사실이 화면 코드에
+  //   클로드 기준으로 박혀 있어, codex 세션에서 폰 선택지 단추가 아무것도 고르지 못하고 첫 지시가 부팅
+  //   대화상자에 먹혔다(실측 2026-09-24). 출처는 하네스 어댑터 한 곳이다(harness-io/term-ui.ts).
+  //  ⚠ 모르는 하네스면 **필드를 뺀다** — 화면은 모르면 특수동작을 하지 않는다(claude 로 추측하지 않는다).
+  const termFields = (harness: string | null | undefined): { harness?: string; harnessLabel?: string; termUi?: TermUiWire } => {
+    const a = harnessIo(harness);
+    //  harnessLabel 은 화면 **문구**용이다(«…에게 전달했어요»). 종전엔 그 자리에 '클로드' 가 박혀 있어서
+    //   codex 세션에서도 클로드라고 말했다 — 사람이 어느 AI 에게 보냈는지를 화면이 틀리게 말하면 안 된다.
+    //  ⚠ 셸 세션엔 이름표를 싣지 않는다 — «이미지를 셸에게 줄 때» 같은 문장이 된다. 화면이 'AI' 로 말한다.
+    return a ? { harness: a.key, ...(a.key === "shell" ? {} : { harnessLabel: a.label }), termUi: termUiWire(a.term) } : {};
+  };
   // 단일 세션의 현재 이름 — 단독 터미널 페이지가 id 로 조회(프로젝트 세션은 목록에서 빠져 ?label= 폴백만 됐던 문제 해결).
   //  접근통제: canAttach(소유자·초대된 멤버, 프로젝트 세션은 전원 #452) — 입장 가능한 사람만 이름을 읽는다.
   app.get("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
@@ -848,7 +869,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  잘못 내면 화면은 WS 도 안 붙이고 곧장 복원으로 간다 — 그래서 '모름'을 '죽음'으로 접으면 안 된다.
     if (nodeId) {
       const s = nodeSessionsFor(uid).find((x) => x.node?.id === nodeId && x.id === id);
-      if (s) { res.json({ id: s.id, label: s.label, projectId: s.projectId || 0 }); return; }
+      if (s) { res.json({ id: s.id, label: s.label, projectId: s.projectId || 0, ...termFields(s.harness) }); return; }
       // #1791 — 스냅샷에 없다 = 그 노드에서 죽었다(또는 노드가 스냅샷을 아직 안 올렸다). 아래 desired-state 경로로 떨어져
       //  '복원 가능'을 알린다(종전엔 여기서 403 — 노드 세션은 desired-state 가 없어 알릴 것이 없었다).
       // ⚠ #2108 — 괄호 안의 두 번째 경우가 실제로 났다. 상태 push 는 3초 주기라 **방금 만든 살아있는 세션**이
@@ -869,7 +890,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         alive = nodeSessionsFor(uid).find((x) => x.node?.id === nid && x.id === id);
         return !!alive;
       });
-      if (mode === "alive" && alive) { res.json({ id: alive.id, label: alive.label, projectId: alive.projectId || 0, node: nodeBadge }); return; }
+      if (mode === "alive" && alive) { res.json({ id: alive.id, label: alive.label, projectId: alive.projectId || 0, node: nodeBadge, ...termFields(alive.harness) }); return; }
       const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
       // #2231 — 이미 이어진 id 다. 되살리라고 하지 말고 **이어진 세션을 알려 준다**(화면이 그리로 옮긴다).
       if (dead.kind === "moved") { res.json({ id, movedTo: (await resolveSessionSuccessor(id).catch(() => null)) ?? dead.to, node: nodeBadge }); return; }
@@ -945,7 +966,10 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       st?.label ? Promise.resolve(st.label) : getSessionLabel(req.params.id),
       st?.project_id != null ? Promise.resolve(Number(st.project_id) || 0) : getSessionProject(req.params.id),
     ]);
-    res.json({ id: req.params.id, label, projectId });
+    //  #4135 — 화면 사실은 desired-state 의 하네스로 답한다. **tmux 에 따로 묻지 않는다** — 이 메타는 세션을 열 때마다
+    //   불리고 매니지드에선 show-options 하나가 중계 왕복 하나다(위 라벨 주석과 같은 이유). 행이 하네스를 모르면
+    //   필드가 빠지고, 화면은 종전(특수동작 없음) 그대로 움직인다.
+    res.json({ id: req.params.id, label, projectId, ...termFields(st?.harness) });
   }));
   // 이 세션에서 사용자가 클로드에게 보낸 질문(프롬프트)만 모아 시간순 반환(#745 카드 '내 질문' 팝아웃).
   //  접근통제: canAttach(입장 가능한 사람 = 대화도 볼 수 있음, 프로젝트 세션은 전원 #452). 대화 기록 = ~/.claude 트랜스크립트.
@@ -960,7 +984,13 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       res.setHeader("Cache-Control", "no-store"); res.json(out); return;
     }
     if (!(await canAttach(req.params.id, uid))) throw new HttpError(404, SESSION_NOT_FOUND);
-    const out = await sessionPrompts(await resolveSessionDir(req.params.id, () => sessionDir(req.params.id)));
+    //  #4135 — 기록의 자리는 하네스마다 다르다. claude 는 cwd 규약 폴더(그 폴더의 대화를 **전부** 합친다 — 압축 전
+    //   파일·프로필 여러 벌)라 종전 경로가 더 많이 찾고, 그 밖의 하네스는 규약이 없어 훅이 보고한 경로를 어댑터
+    //   파서로 읽는다. 종전엔 claude 경로 하나뿐이라 codex 세션의 💬 목록이 **언제나 비어 있었다**.
+    const st = await getSessionState(req.params.id).catch(() => undefined);
+    const out = (st?.harness && st.harness !== "claude")
+      ? await sessionPromptsFromTranscript(req.params.id)
+      : await sessionPrompts(await resolveSessionDir(req.params.id, () => sessionDir(req.params.id)));
     res.setHeader("Cache-Control", "no-store");
     res.json(out);
   }));
@@ -1148,15 +1178,35 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   // 대화를 **터미널로 넘긴다**(#2055) — app-server 가 쥔 스레드를 놓아 주고, 사람이 pane 에서 이어가게 한다.
   //  왜 이 통로가 필요한가: codex 는 스레드당 writer 가 하나라, 우리 대화창이 쥔 대화는 pane 의 `codex resume` 이
   //  못 연다(active writer). 놓아 주는 유일한 방법이 **프로세스 종료**다(thread/unsubscribe 로는 안 풀린다 — 실측).
-  //  돌려주는 thread_id 로 화면이 `codex resume <id>` 를 안내하면 대화가 안 끊긴다.
+  //  ★ #4135 — 놓아 준 뒤 **그 명령을 우리가 친다.** 종전엔 화면이 «codex resume 01a0cf18… 으로 이어가세요» 라고
+  //   토스트만 띄웠는데, 거기 실린 id 는 **앞 8자로 잘린 값**이라 사람이 칠 수가 없었다 — 놓아 준 대화로 돌아갈
+  //   길이 화면에 없었다(원준님 실측 2026-09-25: «터미널 뷰로 보고 명령을 쳐도 코덱스로 안 간다» — pane 은 셸이다).
+  //   pane 이 셸인 것이 이 모드의 정상이므로(codexAppServerPaneArgv), 셸에 명령 한 줄을 넣는 것이 곧 «터미널로 넘기기» 다.
+  //  ⚠ 먼저 지우지 않는다(send-keys.ts 교리) — 사람이 쓰던 글이 있으면 우리 글자가 그 **뒤에** 붙어 명령이 실패할 뿐이다.
+  //   Enter 를 먼저 보내면 그 사람의 글이 명령으로 실행된다 — 그게 더 나쁘다.
+  //  ⚠ id 는 셸로 들어가는 글자다. 카탈로그의 자(RESUME_ID_RE)를 통과한 값만 친다(따옴표·세미콜론이 든 값은 안 친다).
   app.post("/api/ui/terminal/sessions/:id/codex-chat/release", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
     if (!(await canAttach(req.params.id, uid))) throw new HttpError(404, SESSION_NOT_FOUND);
     const { releaseCodexChat } = await import("./harness-io/codex-chat-runtime.js");
     const r = releaseCodexChat(req.params.id);
+    //  명령 모양·인젝션 경계의 출처는 카탈로그 한 곳이다(harnessResumeCommand) — 여기서 문자열을 짓지 않는다.
+    const cmd = harnessResumeCommand("codex", r?.threadId ?? "");
+    let launched = false;
+    if (cmd) {
+      try {
+        const { sendKeysToSession } = await import("./send-keys.js");
+        await sendKeysToSession(req.params.id, cmd);
+        launched = true;
+      } catch (e) {
+        //  비치명 — **놓아 준 것은 사실이다.** 못 친 이유(세션이 방금 죽음·중계 실패)는 화면이 명령 원문을
+        //   그대로 보여 주는 쪽으로 떨어진다(잘린 id 대신 칠 수 있는 한 줄).
+        logger.warn({ id: req.params.id, err: (e as Error)?.message }, "codex 대화 넘기기 — 명령을 pane 에 넣지 못했다");
+      }
+    }
     res.setHeader("Cache-Control", "no-store");
     // 런타임이 없으면(이미 넘겼거나 tmux 모드) 그것도 정상 응답이다 — 화면이 '넘길 게 없다'를 구분할 수 있게 released 로 알린다.
-    res.json({ ok: true, released: !!r, thread_id: r?.threadId ?? null });
+    res.json({ ok: true, released: !!r, thread_id: r?.threadId ?? null, launched, command: cmd });
   }));
 
   app.post("/api/ui/terminal/sessions/:id/prompt", auth, wrap(async (req, res) => {
@@ -1291,9 +1341,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  종전엔 개인 루트에서 열고 훅이 뒤늦게 소속만 붙여, 그 세션의 파일·워크트리가 개인 루트에 흩어졌다.
     //  실패하면 그냥 종전 경로(개인 루트) — 세션 생성을 막지 않는다. 빈 세션·앱·로그인·읽기전용은 대상이 아니다(순수 판정).
     const shellSpec = firstPromptProjectPlan(input);
+    //  #4302 — 아래에서 만든 껍데기의 손잡이. 세션 띄우기가 실패하면 이걸로 프로젝트(와 옮긴 첨부)를 되돌린다.
+    let shell: ShellHandle | null = null;
     if (shellSpec) {
       const made = await createShellProject(shellSpec, idOf(userOf(req)));
       if (made) {
+        shell = { projectId: made.id, actor: idOf(userOf(req)) };
         input.projectId = made.id; input.projectSrc = "v6"; input.rootKey = "shared"; input.subpath = made.folder;
         // 첫 지시에 **명시 첨부**가 있었다면 그 파일을 이 프로젝트 폴더로 옮긴다(#3787).
         //  컴포저는 첨부 시점에 프로젝트가 없어서 개인 폴더로 올린다(프로젝트는 방금 위에서 생겼다) — 그대로 두면
@@ -1301,17 +1354,23 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         //  함께 고쳐 준다(주입 훅이 그 좌표로 이 컴퓨터의 실제 경로를 찍는다).
         if (typeof input.initialPrompt === "string" && input.initialPrompt) {
           const moved = await relocateAttachmentsToProject({
-            prompt: input.initialPrompt, projectId: made.id, projectName: made.name, folder: made.folder, memberId: idOf(userOf(req)),
+            prompt: input.initialPrompt, projectId: made.id, projectName: made.name, folder: made.folder, memberId: idOf(userOf(req)), memberName: userOf(req)?.email ?? null,
           });
           input.initialPrompt = moved.prompt;
+          shell.moves = moved.moves;
         }
       }
     }
     const nodeId = String(b.node ?? "").trim();
     res.setHeader("Cache-Control", "no-store");
-    //  노드 세션의 초대는 여기서 구성원 디렉터리로 검증해 '검증된 목록'만 넘긴다(노드는 DB 가 없어 스스로 검증 불가).
-    const invites = nodeId ? await validateInvites(b.invites, idOf(userOf(req))) : [];
-    res.json({ session: await launchSession(userOf(req), input, { nodeId, invites }) });
+    //  #4302 — 세션이 안 뜨면(디스크 가드 507 · 노드 거부 · 소속 기록 실패 …) 방금 만든 껍데기도 없앤다. 종전엔 남아서
+    //   같은 지시로 다시 누를 때마다 빈 프로젝트가 하나씩 쌓였다. 오류는 그대로 사람에게 간다.
+    const session = await launchOrDiscardShell(shell, async () => {
+      //  노드 세션의 초대는 여기서 구성원 디렉터리로 검증해 '검증된 목록'만 넘긴다(노드는 DB 가 없어 스스로 검증 불가).
+      const invites = nodeId ? await validateInvites(b.invites, idOf(userOf(req))) : [];
+      return launchSession(userOf(req), input, { nodeId, invites });
+    });
+    res.json({ session });
   }));
   // 실행 중 세션의 하네스·모델·추론강도를 한 번에 바꾸는 **겉보기 전환**.
   // CLI마다 런타임 설정 수단이 다르고(Codex는 /model 피커, Antigravity는 launch flag),
@@ -1340,7 +1399,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     if (nodeId) {
       await requireCreatableNode(me, nodeId);
       const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);
-      const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: me }, input: { ...input, invites: [], hostProfile }, invites: st.invites });
+      const relayUser = { userId: me } as LivelyUser;
+      const session = await withPreissuedIdentity(relayUser, input, (created) =>   // #4135 — id·훅·MCP 토큰은 게이트웨이가 굽는다
+        relayNodeOp<SessionInfo>(nodeId, "create", { user: relayUser, input: { ...created, invites: [], hostProfile }, invites: st.invites }));
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
       await registerSessionInstance(session.id, me, { appId: input.appId, projectId: input.projectId, title: session.label });
       await mirrorNodeSession({ ...session, invites: st.invites }, nodeId, input, me);
@@ -1352,6 +1413,75 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     await recordSessionTenant(session.id, () => killSession(userOf(req), session.id, {}));
     await registerSessionInstance(session.id, idOf(userOf(req)), { appId: input.appId, projectId: input.projectId, title: session.label });
     res.json({ ok: true, from: id, session });
+  }));
+  // 세션 복제(#4135, 원준 2026-09-27) — **이 세션의 대화를 아는 새 세션**을 하나 더 만든다. 원래 세션은 건드리지 않는다.
+  //  하네스의 복제 수단으로 연다(claude `--fork-session` · codex `fork` — catalog Harness.forkArgv): 새 대화 id 가 생기고
+  //  원래 대화 파일에는 한 줄도 안 쓰인다. 그래서 원래 세션이 일하는 중에도 눌러도 된다.
+  //  판정(누가·무엇을·어디서 복제할 수 있나)은 순수 함수 session-fork.forkRefusal 이 하고, 여기는 재료만 모은다.
+  //  띄우는 길은 새 세션과 **같은 관문**(launchSession)이다 — 소속 기록·프로젝트 확정·태스크·미러·토큰이 한 벌로 따라온다.
+  app.post("/api/ui/terminal/sessions/:id/fork", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const id = String(req.params.id || "");
+    const me = idOf(userOf(req));
+    const st = await getSessionState(id);
+    const refuse = (no: { status: number; message: string }, nodeId: string | null): never => {
+      //  4xx 는 wrap() 이 로그를 안 남긴다 — 「복제가 안 된다」 신고를 되짚을 흔적을 여기서 남긴다.
+      logger.info({ id, requester: me, node: nodeId, status: no.status, why: no.message }, "세션 복제 거절");
+      throw new HttpError(no.status, no.message);
+    };
+    //  ★ 내 세션인지부터 본다(handoff 와 같은 순서) — 남의 세션을 두고 노드 좌표·대화 매핑을 조회하지 않는다(리뷰 지적).
+    //   재료가 없어도 되는 판정(행 없음 · 남의 세션 · 앱 세션 · 복제 수단 없는 AI)은 같은 표가 이 자리에서 먼저 낸다.
+    //  #3870 — 초대받은 사람도 복제한다(session-fork ForkFacts.invited 머리말). 복제본은 **주인 이름으로** 띄운다(아래 actor).
+    //   «초대받았나» 는 명단이 아니라 **입장 판정 canAttach** 로 잰다 — 초대 명단 + 그 세션 프로젝트의 공개범위(#1291). 명단만 보면
+    //   초대 뒤에 그 프로젝트를 못 보게 된 사람도 그 프로젝트에 묶인 복제본을 만들고 그 폴더·이름을 응답으로 받는다(격리 리뷰 지적).
+    //   ⚠ canAttach 의 프로젝트 판정은 이 게이트웨이 tmux 의 `@box_project` 를 읽어 노드 세션엔 번호가 없다 — 행의 project_id 로 한 번 더 잰다.
+    const invited = !!st && st.owner !== me && (st.invites ?? []).includes(me) && await canAttach(id, me).catch(() => false)
+      && !(st.project_id && await hiddenProjects(me).then((h) => h.ids.has(Number(st.project_id))).catch(() => true));
+    if (!st || (st.owner !== me && !invited)) {
+      refuse(forkRefusal({ st, me, invited, convId: null, check: "unknown", nodeId: "", nodeOnline: false, nodeCanFork: false })!, null);
+    }
+    const owner = st!.owner;
+    //  세션이 있는 자리 — handoff 와 같은 판정(셀프 좌표·세션 호스트 좌표는 저쪽 기계가 아니다, #2592 · #2600 T2 d6).
+    const nodeId = st ? (relayNodeId(st.node_id, isSelfNode) || (await remoteNodeOfSession(id, sessionGone)) || "") : "";
+    //  원래 세션이 **지금 도는** 하네스 대화 id — 복원과 같은 세 출처(행 · 노드 내구 맵 · 저장된 대화 파일 경로, #2122).
+    const durable = st && nodeId && !st.claude_session_id ? ((await nodeSessionMapFor([id]).catch(() => null))?.get(id) ?? null) : null;
+    const convId = st ? (st.claude_session_id || durable?.conv_uuid || convIdFromTranscriptPath(st.harness, st.transcript_path) || null) : null;
+    let check: ResumeCheck = st && convId ? await resumeTranscriptCheck(id, st, convId, nodeId || null) : "unknown";
+    //  원래 세션이 그 노드에 지금 살아 있나 — 스냅샷이 근거다.
+    const sourceLive = !!nodeId && nodeOfSession(id) === nodeId;
+    //  사람 PC 노드 — 게이트웨이는 그 파일을 못 본다. 살아 있는 세션이면 노드에 직접 묻는다(shouldAskNodeForTranscript 머리말).
+    if (st && shouldAskNodeForTranscript({
+      check, harness: st.harness, nodeId, convId, dirExact: !!st.dir && claudeProjectsDirExact(st.dir),
+      sourceLive, nodeCanStat: !!nodeId && nodeSupports(nodeId, "chatTranscript"),
+    })) {
+      check = forkCheckFromNodeStat(await nodeRpc(nodeId, "chatTranscript", { id, threadId: convId, offset: 0, len: 0 }).catch(() => null));
+    }
+    const no = forkRefusal({
+      st, me, invited, convId, check, nodeId, sourceLive,
+      nodeOnline: nodeId ? nodeOnline(nodeId) : false,
+      nodeCanFork: nodeId ? nodeSupports(nodeId, "forkSession") : false,
+    });
+    if (no) refuse(no, nodeId || null);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const input = sessionForkInput(st!, String(convId));
+    input.theme = themeOf(req, b);
+    //  태스크 — 복제본은 원래 세션이 **지금 하고 있는** 태스크를 함께 맡는다(세션 = 태스크, #4084 · 한 태스크에 세션 여럿은 된다).
+    //   안 물려주면 관문(attachLaunchTask)이 「원래 이름 (복제)」 라는 태스크를 새로 만든다 — 같은 일에 이름만 비슷한 태스크가
+    //   둘이 된다(리뷰 지적). 「진행 중」 일 때만 물려준다: 잇는 순간 상태가 「진행 중」 으로 바뀌므로(statusOnBind), 끝난 태스크를
+    //   물려주면 복제했다는 이유만으로 끝난 일이 다시 열린다. 그때는 종전대로 복제본 이름의 새 태스크가 선다.
+    //  #3870 — 복제본은 **주인 이름으로** 뜬다(대화 기록·하네스 설정·노드가 전부 주인 자리다). 초대받은 사람이 눌렀으면 그 사람은
+    //   원래 세션의 초대 명단(input.invites = st.invites)에 이미 있으므로 복제본에도 그대로 들어간다 — 새 탭에서 곧바로 열린다.
+    const actor: LivelyUser = owner === me ? userOf(req) : ({ userId: owner, email: "", scopes: [], projects: [] } as LivelyUser);
+    if (input.projectId && input.projectSrc !== "org") {
+      const task = await sessionTaskOf(id, owner).catch(() => null);
+      if (task && forkInheritsTask(task, input.projectId)) input.taskId = task.id;
+    }
+    //  노드 세션의 초대는 구성원 디렉터리로 다시 걸러 넘긴다(노드는 DB 가 없다 — 새 세션과 같은 규율).
+    const invites = nodeId ? await validateInvites(st!.invites, owner) : [];
+    const session = await launchSession(actor, input, { nodeId, invites, ...(nodeId ? { nodeOp: "forkSession" as const } : {}) });
+    logger.info({ from: id, to: session.id, harness: input.harness, node: nodeId || null, requester: me, owner }, "세션 복제");
+    //  초대받은 사람에게 «내 것» 으로 돌려주지 않는다 — 다음 목록 갱신 전까지 화면이 주인 전용 단추를 세우지 않게.
+    res.json({ ok: true, from: id, session: owner === me ? session : { ...session, owned: false } });
   }));
   // 세션 수정 — 이름·초대 멤버 변경. 소유자만(서버가 강제 — 노드 세션은 노드측 assertManage 가 같은 규칙으로 강제).
   app.post("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
@@ -1459,6 +1589,10 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
           }
         }
       }
+      // #4135 — 게이트웨이가 relay 전에 구워 실어 준 이 세션의 훅·MCP 토큰(preissued)을 여기서 거둔다(revokeSessionHookToken 은
+      //  이름과 달리 훅·MCP 라벨 둘 다 본다) — 노드의 killSession 은 DB 가 없어 못 거둔다. 보관(reclaim)도 판은 내리므로 같이
+      //  거둔다(복원은 새로 굽는다). 거둔 개수 0 은 오류가 아니다(이 변경 전에 뜬 세션 = 실어 준 적 없음).
+      await revokeSessionHookToken(id).catch((e) => logger.warn({ err: e, id }, "노드 세션 훅·MCP 토큰 회수 실패(비치명)"));
       // 보관(reclaim=1)이면 **행을 남긴다** — tmux 만 내리고 좌표·대화 id 는 DB 에 그대로 두어 restorable 로 남는다.
       //  복원 경로(POST …/restore)가 st.node_id 를 보고 그 노드에 다시 create 를 릴레이하므로 노드 세션도 되살아난다.
       //  기본(완전 삭제)은 종전과 같다: 노드가 꺼져 있어 tmux 를 못 건드려도 사용자가 '복원 안 함'을 명시했으니 행은 지운다.
@@ -1636,9 +1770,20 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       const invites = Array.isArray(st.invites) ? st.invites : [];
       const remoteInput = await prepareRemoteAppSession(input, owner);
       const op: NodeOp = input.appId ? "createAppSession" : "create";
-      const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: owner }, input: { ...remoteInput, invites: [], hostProfile }, invites });
+      const relayUser = { userId: owner } as LivelyUser;
+      const session = await withPreissuedIdentity(relayUser, remoteInput, (created) =>   // #4135 — 복원도 새 id·토큰 한 벌로 뜬다
+        relayNodeOp<SessionInfo>(nodeId, op, { user: relayUser, input: { ...created, invites: [], hostProfile }, invites }));
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: owner }, id: session.id }));
       await registerSessionInstance(session.id, owner, { appId: input.appId, projectId: input.projectId, title: session.label });
+      // #4135 — 복원도 생성(launchSession ⑦)과 같은 뒷일: 프로젝트 소속을 DB(execution_session)에 확정한다. 종전엔 이 줄이 없어
+      //  복원된 노드 세션은 새 id 로 뜨고도 소속 행이 없었고, project-context 가 found:false 를 답했다(실측 2026-09-25
+      //  box-wonjoon-jang-7c1e885a) — AGENTS 주입·자료 동기화·세션=태스크가 로컬 마커 캐시 없인 전부 죽는다.
+      //  실패면 방금 만든 세션을 죽이고 503(생성과 같은 규율 — 소속을 삼키면 첫 훅이 미연결로 보고 프로젝트를 또 만든다).
+      if (input.projectId && input.projectSrc !== "org") {
+        await bindNodeSessionProjectOrKill({
+          nodeId, sessionId: session.id, requester: owner, harness: session.harness || input.harness, projectId: input.projectId,
+        });
+      }
       await mirrorNodeSession({ ...session, invites }, nodeId, input, owner);
       // #2122 ① — 승계를 **권위화**한다: 결과를 보고, 실패하면 옛 행을 지우지 않는다(아래). 노드 세션은 내구 맵에도
       //  쓴다 — 그 표는 INSERT ON CONFLICT 라 desired-state 행이 아직 없어도(미러 실패) 매핑이 남는다.
@@ -1811,7 +1956,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
   //  이름은 지금 하는 일(pane 제목)이 있으면 그걸, 없으면 세션 라벨을 준다(앱이 다시 폴백한다).
   //  #4054 — 발행은 «어느 워크스페이스의 누구» 로 한다. 매니지드에서 다른 워크스페이스를 받는 앱이 있으면
   //   세션 주인의 계정 id 를 함께 싣는다(그 앱들은 구성원 아이디가 아니라 계정으로 맞춘다 — notify-scope.ts).
-  const notifyPhaseChange = async (id: string, owner: string, change: { prev: string | null; phase: string; at: number }, nameHint?: string): Promise<void> => {
+  const notifyPhaseChange = async (id: string, owner: string, change: { prev: string | null; phase: string; at: number }, nameHint?: string, facts?: { dir?: string | null }): Promise<void> => {
     try {
       const account = accountRoutesActive() ? await notifyAccountOf(owner) : null;
       // 노드 세션의 tmux 는 그 PC 에 있어 getSessionLabel(로컬 tmux)이 못 읽는다 → 호출자가 아는 이름을 준다.
@@ -1821,6 +1966,11 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
         key: sessionEventKey(id, change.phase, change.at), ts: change.at,
       });
     } catch (e) { logger.warn({ err: e, id }, "알림 전달 실패(비치명)"); }
+    //  #4180 — 리브의 답이면 「확인할 것」에도 남긴다(배너는 위 스트림이, 이력은 이것이). 판정·발췌는 그 모듈이 한다.
+    try {
+      const { maybeNotifyLivAnswer } = await import("../org/liv/answer-notify.js");
+      await maybeNotifyLivAnswer({ sessionId: id, owner, change, dir: facts?.dir ?? null, label: nameHint ?? null });
+    } catch (e) { logger.warn({ err: e, id }, "리브 답 알림 판정 실패(비치명)"); }
   };
 
   app.post("/api/ui/terminal/sessions/:id/active", auth, wrap(async (req, res) => {
@@ -1841,7 +1991,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       // #1842 — 단계가 **바뀐** 순간 그 자리에서 앱으로 민다. 폴링이 30초 뒤에 같은 사실을 다시 발견하는 대신,
       //  "AI 를 여러 개 돌리다 끝나는 것마다 바로 받는다"가 여기서 성립한다. 구독자가 없으면 아무 일도 안 한다.
       //  이름은 desired 행의 라벨을 준다 — 종전엔 전이마다 tmux 로 @box_label 을 다시 읽었다(같은 계수 1.1/분).
-      if (change) void notifyPhaseChange(id, me, change, st.label || undefined);   // 응답을 막지 않는다 — 훅은 핫패스다
+      if (change) void notifyPhaseChange(id, me, change, st.label || undefined, { dir: st.dir });   // 응답을 막지 않는다 — 훅은 핫패스다
       res.json({ ok: true });
       return;
     }

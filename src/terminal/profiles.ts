@@ -195,6 +195,15 @@ const SESSION_TOKEN_LABEL = "session-hooks:";
 //  훅은 세션 최소권한(admin/runtime 제외)이 맞고, MCP 는 사람이 세션에서 실제로 쓰는 표면이라 그 멤버가
 //  가진 만큼을 그대로 들어야 한다(오늘도 공유 파일 토큰으로 그만큼 쓰고 있다 — 다만 **남의 것**으로).
 const SESSION_MCP_TOKEN_LABEL = "session-mcp:";
+/** 살아 있는 세션 훅 토큰이 걸린 세션 id 들 — 노드 세션 되채우기(node-session-token-backfill)가 «이미 실어 준 세션인가» 를 이걸로 본다.
+ *  한 번에 통째로 읽는다(listTokens 는 표 전체다) — 호출부가 스냅샷 한 판에 한 번만 부른다. */
+export async function sessionHookTokenIds(): Promise<Set<string>> {
+  const out = new Set<string>();
+  for (const t of await listTokens()) {
+    if (!t.revoked_at && t.label && t.label.startsWith(SESSION_TOKEN_LABEL)) out.add(t.label.slice(SESSION_TOKEN_LABEL.length));
+  }
+  return out;
+}
 /** 라벨 하나에 걸린 살아있는 자격을 전부 회수 — 재생성 때 옛 것을 즉시 죽인다. 돌려주는 값 = **실제로 죽인 개수**. */
 async function revokeSessionTokensLabeled(labels: Set<string>, why: string): Promise<number> {
   let revoked = 0;

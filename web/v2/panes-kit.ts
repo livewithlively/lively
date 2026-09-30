@@ -5,46 +5,21 @@ import { showCtxMenu, type CtxOpts, type CtxRow } from './ctx-menu.js';   // #37
 import { TOKEN_KEY, el, sv } from '../core.js';
 import { EMBEDDED } from './embed.js';
 import { tabNum, type TabKey } from '../lib/tab-key.js';
+import { iconPath } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 
 // ── 아이콘(스트로크 SVG) ──────────────────────────────────────────────────────
-const ICON_PATHS: Record<string, string> = {
-  chat: '<path d="M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z"/>',
-  spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
-  task: '<path d="M4 6h12M4 12h12M4 18h8"/><path d="M19 5l2 2-4 4"/>',
-  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
-  doc: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/>',
-  clock: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
-  note: '<path d="M5 4h14v11l-5 5H5z"/><path d="M14 20v-5h5"/>',
-  img: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/>',
-  send: '<path d="M4 12l16-8-6 16-2-7z"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>',
-  grid: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
-  rows: '<path d="M4 6h16M4 12h16M4 18h16"/>',
-  x: '<path d="M6 6l12 12M18 6L6 18"/>',
-  chev: '<path d="M9 6l6 6-6 6"/>',
-  gear: '<circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2L5.6 5.6"/>',
-  info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><path d="M12 8h.01"/>',
-  cols: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M15 5v14"/>',
-  drop: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 19h14"/>',
-  up: '<path d="M12 21V9"/><path d="M7 14l5-5 5 5"/><path d="M5 5h14"/>',
-  box: '<path d="M3 7h18v4H3z"/><path d="M5 11v8h14v-8"/><path d="M10 15h4"/>',
-  undo: '<path d="M4 9h11a5 5 0 0 1 0 10h-6"/><path d="M8 5L4 9l4 4"/>',
-  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/>',
-  pencil: '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/><path d="M14 6l4 4"/>',
-  eye: '<path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="2.6"/>',
-  // 프로젝트(#2116) — 사이드바·앱 목록이 쓰는 것과 **같은 그림**(v2/icons.ts ICONS.proj). 두 곳이 다른 프로젝트
-  //  아이콘을 쓰면 같은 것을 가리키는지 사람이 알 수 없다. 여기 사본을 두는 건 pn-i 계열 크기·선굵기를 따르기 위해서다.
-  proj: '<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/><path d="M8 10v4"/><path d="M12 10v2"/><path d="M16 10v6"/>',
-  // #2116 공유 — 사람 + 더하기(구글 문서의 [공유]와 같은 뜻). 자물쇠가 아니다: 이 단추가 하는 일은 '잠그기'가 아니라 '부르기'다.
-  share: '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M18 8v6M15 11h6"/>',
-  folderup: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 18v-6"/><path d="M9.4 14.4L12 11.8l2.6 2.6"/>',
-  save: '<path d="M5 4h11l3 3v13H5z"/><path d="M9 4v5h6V4"/><path d="M8 20v-6h8v6"/>',
-  ext: '<path d="M14 4h6v6"/><path d="M20 4l-8 8"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+//  #4233: 그림은 lib/icon-paths.ts 한 벌에서 온다. 여기 있던 표는 그리로 옮겼다(같은 뜻이 두 모양으로 갈리지 않게).
+//  우측 사이드바가 부르던 이름 가운데 그 표의 이름과 다른 것만 아래에서 잇는다.
+//   · chev · box · globe: 같은 그림이 그 표에 다른 이름으로 있다.
+//   · spark · doc · clock · gear · share: 같은 이름이 다른 모양으로 있다. 고르지 않은 그림이라 모양을 지켰다(pn-*).
+const PN_NAME: Record<string, string> = {
+  chev: 'chevR', box: 'archive', globe: 'web',
+  spark: 'pn-spark', doc: 'pn-doc', clock: 'pn-clock', gear: 'pn-gear', share: 'pn-share',
 };
+/** 우측 사이드바가 부르는 이름 → 그림 표(ICONS)의 이름. 시험이 이 함수로 이름이 표에 있는지 본다. */
+export const pnIconName = (name: string): string => (Object.prototype.hasOwnProperty.call(PN_NAME, name) ? PN_NAME[name] : name);
 export function pnIcon(name: string, cls = 'pn-i'): SVGElement {
-  const s = sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' });
-  s.innerHTML = ICON_PATHS[name] || ICON_PATHS.doc;
-  return s;
+  return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, sv('path', { d: iconPath(pnIconName(name), 'pn-doc') }));
 }
 
 
@@ -233,21 +208,33 @@ export const slotStoreKey = (mem: string, slot: TabKey): string => (tabNum(slot)
 
 /** 어느 탭에 펴 둘지 셸이 정한 뒤, 그 탭의 열쇠에 적는다 — 새로 만들어진 뷰어는 신호를 이미 놓친 뒤라
  *  저장된 값에서 읽기 때문이다(웹 칸의 openInWebPart 와 같은 규칙). */
+//  끼워 넣은 판(EMBEDDED)의 «탭 → 파일» 은 저장소 대신 이 판 안에서만 기억한다 — 바깥 사람이 펴 둔 파일을 덮어쓰지 않으면서도
+//  «이미 떠 있는 탭 찾기»(#4135)가 거기서도 성립하게(안 그러면 같은 파일을 누를 때마다 새 탭이 쌓인다 — 리뷰 지적).
+const embeddedViewerPaths = new Map<string, string>();
 export function rememberViewerPath(mem: string, slot: TabKey, path: string): void {
-  if (EMBEDDED) return;                 // 끼워 넣은 판 — 바깥 사람이 펴 둔 파일을 덮어쓰지 않는다
+  const k = slotStoreKey(mem, slot);
+  if (EMBEDDED) { embeddedViewerPaths.set(k, String(path || '')); return; }
   try {
     const m = JSON.parse(localStorage.getItem(ED_PATH_KEY) || '{}') || {};
-    m[slotStoreKey(mem, slot)] = String(path || '');
+    m[k] = String(path || '');
     localStorage.setItem(ED_PATH_KEY, JSON.stringify(m));
   } catch (_) { /* 저장이 막혀도 알림으로 지금 떠 있는 칸은 바뀐다 */ }
 }
 
+/** 그 탭이 펴 두었던 파일 — 셸이 «이 파일이 이미 어느 뷰어에 떠 있나» 를 볼 때(#4135). 없으면 ''. */
+export function rememberedViewerPath(mem: string, slot: TabKey): string {
+  const k = slotStoreKey(mem, slot);
+  if (EMBEDDED) return embeddedViewerPaths.get(k) || '';
+  try { return String((JSON.parse(localStorage.getItem(ED_PATH_KEY) || '{}') || {})[k] || ''); } catch (_) { return ''; }
+}
+
 /** 밖(자료 칸)에서 뷰어에 파일을 펴는 **유일한 통로** — 뷰어 칸이 없으면 셸(panes.ts)이 듣고 곁칸에 만든다.
- *  ⚠ **어느 뷰어에 펼지는 셸이 정한다**(#762): 뷰어가 여럿 뜰 수 있게 되면서, 부르는 쪽이 고를 수 있는 것은
- *   «지금 보던 뷰어에» 인가 «새 탭에» 인가 둘뿐이다. 그 판정과 저장(rememberViewerPath)은 셸이 한다 —
+ *  ⚠ **어느 뷰어에 펼지는 셸이 정한다**(#762 → #4135, 원준 2026-09-25): 파일마다 뷰어가 하나씩이다 — 그 파일이 이미
+ *   떠 있으면 그 탭으로, 아니면 새 탭. 먼저 열어 둔 파일의 뷰어는 그대로 남는다(종전엔 보던 뷰어가 갈아입었다).
  *   부르는 쪽은 탭이 몇 개인지도, 어느 것이 켜져 있는지도 모른다. */
-export function openInViewerPart(ctx: { id: number; paneRoot: () => HTMLElement }, path: string, opts?: { newTab?: boolean }): void {
+export function openInViewerPart(ctx: { id: number; paneRoot: () => HTMLElement }, path: string, opts?: { sid?: string | null; node?: string | null }): void {
   const p = String(path || '');
   if (!p) return;
-  ctx.paneRoot().dispatchEvent(new CustomEvent(VIEWER_EVT, { detail: { id: ctx.id, path: p, newTab: !!opts?.newTab } }));
+  //  sid 가 실리면 **세션 작업 폴더의 파일**이다(#4088 후속) — 뷰어가 세션 파일 API 로 읽는다(보기·내려받기).
+  ctx.paneRoot().dispatchEvent(new CustomEvent(VIEWER_EVT, { detail: { id: ctx.id, path: p, sid: opts?.sid || null, node: opts?.node || null } }));
 }
