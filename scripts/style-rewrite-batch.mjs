@@ -407,6 +407,10 @@ console.log(`대상 ${names.length}건 · ${args.apply ? "적용" : "dry-run"} �
 
 const counts = {};
 let totalCalls = 0;
+// LLM 이 연달아 실패하면(사용량 한도·인증 만료) 남은 건을 전부 실패로 태우지 않고 멈춘다 — 다시 돌리면 이어서 할 수 있다.
+const LLM_FAIL_STOP = 3;
+let llmFailStreak = 0;
+let stopped = false;
 async function runOne(name) {
   const ctx = { calls: 0 };
   let row;
@@ -416,6 +420,9 @@ async function runOne(name) {
     row = { name, status: "failed", reason: String(e?.message ?? e).slice(0, 300) };
   }
   row.llm_calls = ctx.calls;
+  if (row.status === "failed" && /^llm_(exit|timeout)/.test(String(row.reason ?? ""))) {
+    if (++llmFailStreak >= LLM_FAIL_STOP && !stopped) { stopped = true; console.error(`LLM 이 ${LLM_FAIL_STOP}번 연달아 실패해 멈춘다(사용량 한도·인증 확인): ${row.reason}`); }
+  } else if (row.status !== "skipped") llmFailStreak = 0;
   totalCalls += ctx.calls;
   appendFileSync(args.report, `${JSON.stringify(row)}\n`);
   counts[row.status] = (counts[row.status] ?? 0) + 1;
@@ -424,6 +431,6 @@ async function runOne(name) {
 // 호출 한 번이 수 분이라 건 단위로 병렬로 돈다. 같은 지식을 두 번 집지 않도록 목록을 한 번씩만 꺼낸다.
 const queue = [...names];
 await Promise.all(Array.from({ length: Math.min(args.concurrency, queue.length) }, async () => {
-  for (let name = queue.shift(); name !== undefined; name = queue.shift()) await runOne(name);
+  for (let name = queue.shift(); name !== undefined && !stopped; name = queue.shift()) await runOne(name);
 }));
 console.log((Object.entries(counts).map(([s, n]) => `${s}=${n}`).join(" ") || "처리 0건") + ` · LLM 호출 ${totalCalls}회`);
