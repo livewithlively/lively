@@ -9,6 +9,7 @@ import crypto from "node:crypto";
 import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
+import { hiddenProjects } from "../v6/visibility.js";   // #3870 — 초대받은 사람의 복제: 그 세션 프로젝트를 지금 볼 수 있나
 import { withPreissuedIdentity } from "./node-session-preissue.js";   // #4135 — 노드 세션의 id·훅·MCP 토큰은 relay 전에 게이트웨이가 굽는다
 import { revokeSessionHookToken } from "./profiles.js";               // #4135 — 노드 세션을 죽일 때 그 토큰(훅·MCP 둘 다)을 거둔다
 import { wrap, HttpError } from "../http/rest-util.js";
@@ -1430,15 +1431,22 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     };
     //  ★ 내 세션인지부터 본다(handoff 와 같은 순서) — 남의 세션을 두고 노드 좌표·대화 매핑을 조회하지 않는다(리뷰 지적).
     //   재료가 없어도 되는 판정(행 없음 · 남의 세션 · 앱 세션 · 복제 수단 없는 AI)은 같은 표가 이 자리에서 먼저 낸다.
-    if (!st || st.owner !== me) {
-      refuse(forkRefusal({ st, me, convId: null, check: "unknown", nodeId: "", nodeOnline: false, nodeCanFork: false })!, null);
+    //  #3870 — 초대받은 사람도 복제한다(session-fork ForkFacts.invited 머리말). 복제본은 **주인 이름으로** 띄운다(아래 actor).
+    //   «초대받았나» 는 명단이 아니라 **입장 판정 canAttach** 로 잰다 — 초대 명단 + 그 세션 프로젝트의 공개범위(#1291). 명단만 보면
+    //   초대 뒤에 그 프로젝트를 못 보게 된 사람도 그 프로젝트에 묶인 복제본을 만들고 그 폴더·이름을 응답으로 받는다(격리 리뷰 지적).
+    //   ⚠ canAttach 의 프로젝트 판정은 이 게이트웨이 tmux 의 `@box_project` 를 읽어 노드 세션엔 번호가 없다 — 행의 project_id 로 한 번 더 잰다.
+    const invited = !!st && st.owner !== me && (st.invites ?? []).includes(me) && await canAttach(id, me).catch(() => false)
+      && !(st.project_id && await hiddenProjects(me).then((h) => h.ids.has(Number(st.project_id))).catch(() => true));
+    if (!st || (st.owner !== me && !invited)) {
+      refuse(forkRefusal({ st, me, invited, convId: null, check: "unknown", nodeId: "", nodeOnline: false, nodeCanFork: false })!, null);
     }
+    const owner = st!.owner;
     //  세션이 있는 자리 — handoff 와 같은 판정(셀프 좌표·세션 호스트 좌표는 저쪽 기계가 아니다, #2592 · #2600 T2 d6).
     const nodeId = st ? (relayNodeId(st.node_id, isSelfNode) || (await remoteNodeOfSession(id, sessionGone)) || "") : "";
     //  원래 세션이 **지금 도는** 하네스 대화 id — 복원과 같은 세 출처(행 · 노드 내구 맵 · 저장된 대화 파일 경로, #2122).
     const durable = st && nodeId && !st.claude_session_id ? ((await nodeSessionMapFor([id]).catch(() => null))?.get(id) ?? null) : null;
     const convId = st ? (st.claude_session_id || durable?.conv_uuid || convIdFromTranscriptPath(st.harness, st.transcript_path) || null) : null;
-    let check: ResumeCheck = st && st.owner === me && convId ? await resumeTranscriptCheck(id, st, convId, nodeId || null) : "unknown";
+    let check: ResumeCheck = st && convId ? await resumeTranscriptCheck(id, st, convId, nodeId || null) : "unknown";
     //  원래 세션이 그 노드에 지금 살아 있나 — 스냅샷이 근거다.
     const sourceLive = !!nodeId && nodeOfSession(id) === nodeId;
     //  사람 PC 노드 — 게이트웨이는 그 파일을 못 본다. 살아 있는 세션이면 노드에 직접 묻는다(shouldAskNodeForTranscript 머리말).
@@ -1449,7 +1457,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       check = forkCheckFromNodeStat(await nodeRpc(nodeId, "chatTranscript", { id, threadId: convId, offset: 0, len: 0 }).catch(() => null));
     }
     const no = forkRefusal({
-      st, me, convId, check, nodeId, sourceLive,
+      st, me, invited, convId, check, nodeId, sourceLive,
       nodeOnline: nodeId ? nodeOnline(nodeId) : false,
       nodeCanFork: nodeId ? nodeSupports(nodeId, "forkSession") : false,
     });
@@ -1461,15 +1469,19 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //   안 물려주면 관문(attachLaunchTask)이 「원래 이름 (복제)」 라는 태스크를 새로 만든다 — 같은 일에 이름만 비슷한 태스크가
     //   둘이 된다(리뷰 지적). 「진행 중」 일 때만 물려준다: 잇는 순간 상태가 「진행 중」 으로 바뀌므로(statusOnBind), 끝난 태스크를
     //   물려주면 복제했다는 이유만으로 끝난 일이 다시 열린다. 그때는 종전대로 복제본 이름의 새 태스크가 선다.
+    //  #3870 — 복제본은 **주인 이름으로** 뜬다(대화 기록·하네스 설정·노드가 전부 주인 자리다). 초대받은 사람이 눌렀으면 그 사람은
+    //   원래 세션의 초대 명단(input.invites = st.invites)에 이미 있으므로 복제본에도 그대로 들어간다 — 새 탭에서 곧바로 열린다.
+    const actor: LivelyUser = owner === me ? userOf(req) : ({ userId: owner, email: "", scopes: [], projects: [] } as LivelyUser);
     if (input.projectId && input.projectSrc !== "org") {
-      const task = await sessionTaskOf(id, me).catch(() => null);
+      const task = await sessionTaskOf(id, owner).catch(() => null);
       if (task && forkInheritsTask(task, input.projectId)) input.taskId = task.id;
     }
     //  노드 세션의 초대는 구성원 디렉터리로 다시 걸러 넘긴다(노드는 DB 가 없다 — 새 세션과 같은 규율).
-    const invites = nodeId ? await validateInvites(st!.invites, me) : [];
-    const session = await launchSession(userOf(req), input, { nodeId, invites, ...(nodeId ? { nodeOp: "forkSession" as const } : {}) });
-    logger.info({ from: id, to: session.id, harness: input.harness, node: nodeId || null }, "세션 복제");
-    res.json({ ok: true, from: id, session });
+    const invites = nodeId ? await validateInvites(st!.invites, owner) : [];
+    const session = await launchSession(actor, input, { nodeId, invites, ...(nodeId ? { nodeOp: "forkSession" as const } : {}) });
+    logger.info({ from: id, to: session.id, harness: input.harness, node: nodeId || null, requester: me, owner }, "세션 복제");
+    //  초대받은 사람에게 «내 것» 으로 돌려주지 않는다 — 다음 목록 갱신 전까지 화면이 주인 전용 단추를 세우지 않게.
+    res.json({ ok: true, from: id, session: owner === me ? session : { ...session, owned: false } });
   }));
   // 세션 수정 — 이름·초대 멤버 변경. 소유자만(서버가 강제 — 노드 세션은 노드측 assertManage 가 같은 규칙으로 강제).
   app.post("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {

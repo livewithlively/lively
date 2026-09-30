@@ -165,3 +165,19 @@ test("F12 라우트 — 노드에 묻는 자리는 판정(shouldAskNodeForTransc
   assert.ok(body.indexOf("forkCheckFromNodeStat(") < body.indexOf("const no = forkRefusal("), "묻기가 거절 판정보다 앞이다");
   assert.match(body, /forkRefusal\(\{[\s\S]*?sourceLive/);
 });
+
+// #3870 — 초대받은 사람도 복제한다(원준 2026-09-30 «둘 다 되게 해봐»). 복제본은 주인 이름으로 뜨고(라우트), 여기 표는
+//  «누가 누를 수 있나» 만 가른다.
+//   🔴 초대를 안 보면 — 초대받은 사람이 눌러도 403(종전 동작 — 신고 그 자체).
+//   🔴 초대만 보고 다른 거절을 건너뛰면 — 앱 세션·대화 없음·꺼진 노드도 초대받은 사람에겐 통과해 빈 복제본이 뜬다.
+test("F7 ★초대받은 사람은 복제할 수 있다 · 초대받지 않은 사람은 여전히 403", () => {
+  assert.equal(forkRefusal(facts({ me: "yoon", invited: true })), null, "🔴 초대받은 사람이 거절됐다");
+  assert.equal(forkRefusal(facts({ me: "yoon", invited: false }))?.status, 403, "초대받지 않은 남");
+  assert.equal(forkRefusal(facts({ me: "yoon" }))?.status, 403, "invited 생략 = 아니다(fail-closed)");
+});
+
+test("F8 ★초대받은 사람에게도 나머지 거절은 그대로 — 앱 세션 · 대화 없음 · 꺼진 노드", () => {
+  assert.equal(forkRefusal(facts({ me: "yoon", invited: true, st: st({ app_id: "writer" }) }))?.status, 409);
+  assert.match(forkRefusal(facts({ me: "yoon", invited: true, convId: null }))?.message || "", /아직 복제할 대화가 없습니다/);
+  assert.match(forkRefusal(facts({ me: "yoon", invited: true, nodeId: "mac", nodeOnline: false, nodeCanFork: true }))?.message || "", /연결돼 있지 않아/);
+});

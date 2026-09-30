@@ -10,7 +10,9 @@
 .pj-tssec { max-height: 34vh; overflow: auto; overscroll-behavior: contain; }
 .pj-top > * { flex: none; }
 .pj-bodywrap { display: flex; flex-direction: column; }
-.pj-body { margin: 2px 12px 6px; border: 1px solid var(--line-row); border-radius: 10px; background: var(--surface); padding: 8px 12px 8px; cursor: text; }
+.pj-body { position: relative; margin: 2px 12px 6px; border: 1px solid var(--line-row); border-radius: 10px; background: var(--surface); padding: 8px 12px 14px; cursor: pointer; }
+.pj-body.open { cursor: auto; }
+.pj-body.open .pj-bh { cursor: pointer; }
 .pj-body:hover { border-color: var(--line-note); }
 .pj-body:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 .pj-bh { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
@@ -183,3 +185,9 @@ body.pj-lock { overflow: hidden; }
 .pn-tk.pj .pj-prd { max-height: 66px; }
 .pn-tk.pj .pj-top { border-bottom: 0; }
 .pn-tk.pj .pj-tssec { border-bottom: 1px solid var(--line-row); }
+
+/* 본문 길이 손잡이(원준 2026-09-30) — 본문 칸 아래 변. 끌면 세로 길이가 바뀌고(기기에 기억), 두 번 누르면 기본 길이. */
+.pj-rsz { position: absolute; left: 0; right: 0; bottom: -3px; height: 17px; cursor: ns-resize; touch-action: none; z-index: 2; }
+.pj-rsz::after { content: ""; position: absolute; left: 50%; bottom: 8px; width: 32px; height: 3px; margin-left: -16px; border-radius: 99px; background: var(--muted-3-line); transition: background .12s ease, width .12s ease, margin-left .12s ease; }
+.pj-rsz:hover::after, .pj-rsz.on::after { background: var(--blue); width: 48px; margin-left: -24px; }
+.pj-body.edit .pj-rsz { display: none; }

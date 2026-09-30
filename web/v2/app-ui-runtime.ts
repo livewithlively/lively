@@ -10,6 +10,8 @@
 //    await lively.tools.call(name, args)    → 그 도구의 결과(앱 grant 범위 안에서만 — 서버가 재판정)
 //    await lively.store.query('notes', { match:{done:false}, limit:50 })  → rows[]
 //    await lively.store.insert/update/delete(...)                          → 앱 전용 테이블(테넌트 격리)
+//    await lively.store.sql('select stage, count(*) from contacts group by 1', [])  → { rows, columns, truncated, changed }
+//                                                (#4226 자유 SQL 한 문장 — 매니페스트 permissions.tools 에 store_sql 이 있어야 한다)
 //    await lively.ui.openExternal(url)      → 호스트가 새 탭으로(샌드박스 안에선 못 여는 것을 대신)
 //    lively.store.onChange(function (ev) { … })  → 이 앱의 데이터가 **바깥에서** 바뀌었다(#4225 — 세션에 붙은 AI 가 썼다 등).
 //                                                ev = { table, op, source, session }. 돌려주는 함수를 부르면 끊는다.
@@ -81,6 +83,7 @@ export const APP_RUNTIME_JS = `
     insert: function (table, row) { return api.tools.call('store_insert', { table: table, row: row || {} }); },
     update: function (table, match, set) { return api.tools.call('store_update', { table: table, match: match, set: set }); },
     'delete': function (table, match) { return api.tools.call('store_delete', { table: table, match: match }); },
+    sql: function (text, params) { return api.tools.call('store_sql', { sql: String(text), params: params || [] }); },
     onChange: function (cb) { return subscribe('data', cb); }
   };
   api.ready = post('ui/initialize', {}).then(function (r) {

@@ -416,6 +416,15 @@ function scanSqlText(sql: string, neutralizeOps: boolean): SqlTextScan {
   return { parseSql: out.join(""), mixedCaseQuoted };
 }
 
+/**
+ * 파서 검증용 사본(순수) — pg 에서 파서가 모르는 연산자를 같은 길이로 중화한다(#1181 ②③). 실행 SQL 은 늘 원본.
+ *  앱 자유 SQL(#4226 apps/app-sql.ts)이 같은 규칙으로 AST 를 얻도록 내보낸다. 그쪽은 백슬래시·주석·달러 인용을
+ *  미리 거부하므로 이 스캐너의 관대한 리터럴 규칙과 Postgres 의 렉싱이 어긋날 자리가 없다.
+ */
+export function parserSafeCopy(sql: string): string {
+  return scanSqlText(sql, true).parseSql;
+}
+
 // ── #1181 ① CTE(WITH) 는 테이블이 아니다 ──
 //  parser.tableList 는 WITH 별칭도 테이블로 돌려주고 스코프도 구분하지 않는다 → allow-list 소스(self)에서
 //  WITH 를 쓰는 분석 쿼리가 전부 `Blocked table: <CTE 이름>` 으로 막혔다. AST 를 스코프 인지로 훑어

@@ -21,7 +21,7 @@ import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse } from './app
 import { browserSurface } from './browser-surface.js';
 import { openProjPickModal, openProjPickPopover } from './proj-pick.js';   // 세션의 프로젝트 고르기 — 드롭다운·모달 두 그릇, 목록 한 벌
 import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, movePinnedSession, projLandingRoute, projectOrder, reloadSidePrefs, sessText, type SideInstance } from './side.js';
-import { dotCls, findSessIn, isMineSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type HomeDest, type Sess, type V2Data } from './views.js';
+import { canMoveSess, dotCls, findSessIn, isInvitedSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type HomeDest, type Sess, type V2Data } from './views.js';
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
 import { keepObserved, type ObsMemory } from './obs-carry.js';
@@ -197,10 +197,10 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
     sessionId,
     onProjectChanged: () => { void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); }); },
     onRenameProject: (pid, name) => renameProject(pid, name),   // 문패 연필 — 사이드바 줄 더블클릭과 같은 경로(#2579)
-    // 문패 [세션 옮기기](#3778) — [⋯ ▸ 이 세션 ▸ 프로젝트] 와 같은 실행, 그릇만 모달. 조건도 같다(내 세션만).
-    canMoveSession: (sid) => { const s = data.sessions.find((x) => x.id === sid); return !!s && isMineSess(s); },   // 창이 찾는 방식과 같게(정확히 그 id)
+    // 문패 [세션 옮기기](#3778) — [⋯ ▸ 이 세션 ▸ 프로젝트] 와 같은 실행, 그릇만 모달. 조건도 같다(주인·초대받은 사람 — #3870 canMoveSess).
+    canMoveSession: (sid) => { const s = data.sessions.find((x) => x.id === sid); return !!s && canMoveSess(s); },   // 창이 찾는 방식과 같게(정확히 그 id) · #3870 초대받은 사람도
     onMoveSession: (sid) => openProjectMoveModal(sid, tab),
-    // 문패 [세션 복제](#4135) — 내 세션 · 살아 있음 · 복제 수단이 있는 AI 에만. 같은 판정을 세션 우클릭 메뉴(ctx-shell)가 쓴다.
+    // 문패 [세션 복제](#4135) — 주인·초대받은 사람(#3870) · 살아 있음 · 복제 수단이 있는 AI 에만. 같은 판정을 세션 우클릭 메뉴(ctx-shell)가 쓴다.
     canForkSession: (sid) => { const s = data.sessions.find((x) => x.id === sid); return !!s && canForkSess(s); },
     onForkSession: (sid, anchor) => forkSession(anchor, sid),
     //  좁은 폭(≤900)의 곁칸 = 오른쪽 서랍(#4088). 셸이 곁칸에 무언가를 켜면 서랍을 열어 준다 — **보이는 탭일 때만**
@@ -420,6 +420,7 @@ export async function bootV2(): Promise<void> {
       if (fresh) void renderRoute(tab);
       else markActive(routeKey(tab.route));
       drawSide();
+      markViewedSessionSeen();   // #3870 — 창을 갈아 끼우면 보던 세션의 얼굴 줄에서 곧바로 빠지고, 새 세션엔 곧바로 선다
     },
     onClose: (tab) => {
       if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
@@ -575,6 +576,11 @@ export async function bootV2(): Promise<void> {
   }
 
   window.addEventListener('hashchange', () => { histStamp(); void onHash(); });
+  //  #3870 — 다른 화면으로 옮기면 그 자리에서 열람 도장·떠남을 맞춘다(8초 틱을 기다리면 그만큼 얼굴 줄이 늦다).
+  //   라우터가 탭 주소를 먼저 바꾸도록 한 박자 뒤에 본다.
+  window.addEventListener('hashchange', () => { setTimeout(markViewedSessionSeen, 0); });
+  //  창을 닫는다 — 떠남을 끝까지 보낸다(keepalive). 새로고침도 여기로 오지만, 다시 뜬 화면이 곧바로 도장을 찍는다.
+  window.addEventListener('pagehide', () => { if (viewingSid) { leaveViewed(viewingSid, true); viewingSid = ''; } });
   histStamp();     // 첫 화면도 히스토리의 한 칸이다 — 안 찍어 두면 되돌아왔을 때 '새로 감'으로 오인한다
   bindAltOpen();
   // #3784 — 우클릭 메뉴. 뿌리 하나가 듣고 표(data-ctx / data-ctx-surface)를 위로 찾는다. 셸 자체가 맨 바깥 표면.
@@ -1764,8 +1770,21 @@ function viewedSessionId(): string {
   const s = findSess(k.slice(2));
   return s && s.live && s.alive ? s.id : '';
 }
+//  #3870 — 얼굴 줄에 **내 자리를 둔 세션**. 다른 화면으로 옮기면 그 자리를 곧바로 걷는다(아래 leaveViewed).
+//   종전엔 떠나도 서버의 TTL(45초)이 지나야 남의 화면에서 내 얼굴이 사라졌다.
+let viewingSid = '';
+/** 이 세션 화면을 떠났다 — 서버가 남은 사람들에게 새 얼굴 줄을 민다. 실패는 삼킨다(TTL 이 늦게라도 걷는다). */
+function leaveViewed(sid: string, keepalive = false): void {
+  seenSentAt.delete(sid);   // 곧 돌아오면 15초를 기다리지 않고 바로 다시 도장을 찍는다(돌아온 것도 곧바로 보이게)
+  void api(`/api/ui/terminal/sessions/${encodeURIComponent(sid)}/leave`, Object.assign({ method: 'POST', body: '{}' }, keepalive ? { keepalive: true } : {}))
+    .catch(() => { /* 비치명 */ });
+}
 function markViewedSessionSeen(): void {
+  //  ⚠ 창이 숨은 것은 떠난 것이 아니다(다른 앱을 잠깐 본다) — 도장만 멎고 자리는 서버 TTL 이 늦게 걷는다.
+  if (document.hidden) return;
   const sid = viewedSessionId();
+  if (viewingSid && viewingSid !== sid) leaveViewed(viewingSid);
+  viewingSid = sid;
   if (!sid) return;
   const now = Date.now();
   if (now - (seenSentAt.get(sid) || 0) < SEEN_EVERY_MS) return;
@@ -2551,7 +2570,7 @@ function forkSession(anchor: HTMLElement, sessionId: string): void {
   const s = data.sessions.find((x) => x.id === sessionId);
   if (!s || !canForkSess(s)) return;
   const name = sessText(s, projName(data, s.projectId)).main || s.label || s.id;
-  openForkPopover(anchor, { id: s.id, name }, (newId) => {
+  openForkPopover(anchor, { id: s.id, name, invited: isInvitedSess(s) }, (newId) => {
     const href = '#/s/' + encodeURIComponent(newId);
     if (tabsApi) tabsApi.add(href); else location.hash = href;
     void loadData().then(() => { drawSide(); tabsApi?.paint(); });

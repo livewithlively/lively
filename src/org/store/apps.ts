@@ -24,7 +24,11 @@ export interface OrgApp {
   installed_at: string;
   updated_at: string;
   updated_by: string | null;
+  /** #4225 누가 이 앱을 고칠 수 있나 — 'all'(구성원 전원, 기본) · 'members'(edit_members 에 든 사람 + 관리자). */
+  edit_mode: AppEditMode;
+  edit_members: string[];
 }
+export type AppEditMode = "all" | "members";
 
 export interface AppComponentRow { app_id: string; kind: string; ref: string; orig_name: string | null }
 export interface AppGrantRow {
@@ -41,6 +45,8 @@ function rowToApp(r: Record<string, unknown>): OrgApp {
     installed_by: r.installed_by == null ? null : String(r.installed_by),
     installed_at: String(r.installed_at), updated_at: String(r.updated_at),
     updated_by: r.updated_by == null ? null : String(r.updated_by),
+    edit_mode: r.edit_mode === "members" ? "members" : "all",
+    edit_members: Array.isArray(r.edit_members) ? (r.edit_members as unknown[]).map(String) : [],
   };
 }
 
@@ -105,6 +111,18 @@ export async function setAppEnabled(id: string, enabled: boolean, ctx: WriteCtx 
   const before = await getApp(id);
   await itemsPool.query(`UPDATE org_app SET enabled=$2, updated_at=now(), updated_by=$3 WHERE id=$1`, [id, enabled, ctx.actor ?? null]);
   await audit("org_app", id, "update", before, { ...before, enabled }, ctx.actor, ctx.source);
+}
+
+/** #4225 누가 이 앱을 고칠 수 있나를 정한다(관리자). members 는 mode='members' 일 때만 의미가 있다(all 이면 비운다). */
+export async function setAppEditPolicy(id: string, mode: AppEditMode, members: string[], ctx: WriteCtx = {}): Promise<OrgApp | null> {
+  const before = await getApp(id);
+  if (!before) return null;
+  const list = mode === "members" ? [...new Set(members.map((m) => String(m).trim()).filter(Boolean))] : [];
+  await itemsPool.query(`UPDATE org_app SET edit_mode=$2, edit_members=$3::jsonb, updated_at=now(), updated_by=$4 WHERE id=$1`,
+    [id, mode, JSON.stringify(list), ctx.actor ?? null]);
+  const after = await getApp(id);
+  await audit("org_app", id, "update", before, after, ctx.actor, ctx.source);
+  return after;
 }
 
 /** 앱 행 + 조인(component·grant)을 CASCADE 로 제거. 대상 행(harness_asset 등) 회수는 호출부가 component 를 읽어 먼저 수행. */

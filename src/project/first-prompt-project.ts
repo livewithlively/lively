@@ -174,8 +174,11 @@ const shellCreateDeps: ShellCreateDeps = {
   //  name_source(#2031) — 이름을 **누가 지었나**의 표시다. 'rule'(기계값)인 프로젝트만 그 세션이 첫 턴에
   //  project_rename_v6 로 한 번 다듬을 수 있다. #3778 부터 사람이 새 작업 창에서 이름을 지으면 'human' 이
   //  와서 그 걸쇠에 막힌다 — 그래서 여기서 못 박지 않고 **spec 이 들고 온 값을 그대로 쓴다**.
+  //  초안(#4170) — 이름을 기계가 지은 껍데기(rule)만 초안으로 태어난다. 사람이 새 작업 창에서 이름을 지었으면 이미
+  //  정리된 일이라 곧바로 목록에 선다. 제목·본문을 고치면 나온다(v6/project-store.updateProject).
   createProject: (spec, actor) => createProject(
-    { name: spec.name, description: spec.description, dedupe: false, name_source: spec.nameSource }, { actor, source: "web" }),
+    { name: spec.name, description: spec.description, dedupe: false, name_source: spec.nameSource,
+      draft: spec.nameSource === "rule" }, { actor, source: "web" }),
   ensureAgentsMd,
   getProjectRow,
   deleteProject: (id, actor) => deleteProject(id, { actor, source: "web" }),

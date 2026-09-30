@@ -48,7 +48,7 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
   // 앱 데이터 테이블(D6) — 스키마는 누가 구조의 주인인가로 가른다(store-ddl.appSchemaName, #4223).
   const builtin = isBuiltinSource(source);
   const schema = appSchemaFor(builtin);
-  const tableSpecs = loaded.manifest.data.tables.map((t) => ({ table: t.name, columns: t.columns }));
+  const tableSpecs = loaded.manifest.data.tables.map((t) => ({ table: t.name, columns: t.columns, indexes: t.indexes }));
   let tables: InstallTablesOutcome | undefined;
   if (!builtin) {
     // 이름 사전검증(#4224) — 하이픈 id·63자 초과는 여기서 400. ensureAppTables 안에서 나면 «만들지 못했다(503)» 로 뭉개진다.
@@ -67,7 +67,8 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
     //  종전엔 설치를 끝낸 뒤 경고만 남겨 «설치 성공, 데이터 층 없음» 이 됐다(매니지드 실측 2026-09-22).
     //  (빈 테이블이 남는 쪽은 무해하다 — CREATE IF NOT EXISTS 라 다음 설치가 그대로 쓴다.) 이미 있는 테이블엔 늘어난 칸을 더한다.
     const report = emptyTableReport();
-    await ensureAppTables(id, tableSpecs, { schema, strict: true, report });
+    //  #4226 — 자유 SQL 역할도 여기서 맞춘다(비치명 — 못 만들면 report.sql_role 에 까닭이 남고 store_sql 만 막힌다).
+    await ensureAppTables(id, tableSpecs, { schema, strict: true, report, sqlRole: true });
     tables = { ...report, dropped: [], archived: [], failed: [], schema };
   }
 
@@ -87,7 +88,7 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
   // 기본 앱 시딩은 종전처럼 비치명 — 워크스페이스마다 주기적으로 돌고, 여기서 던지면 시딩 전체가 보상(롤백)된다.
   //  빠진 테이블은 store_* 첫 호출의 지연 복구가 채운다(capabilities/app-store withTableRepair).
   if (builtin) {
-    try { await ensureAppTables(id, tableSpecs, { schema }); }
+    try { await ensureAppTables(id, tableSpecs, { schema, tenantScopedIndexes: true }); }
     catch (err) { logger.warn({ err, id }, "앱 데이터 테이블 보장 실패(비치명 — 첫 사용 때 지연 복구)"); }
   }
 
