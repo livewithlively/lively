@@ -21,7 +21,7 @@ import {
 // #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 body_md 전체를 튕기지 않게 한다(서버 조정 + 응답 capped).
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "../soft-cap.js";
 import { assertNoContentSecrets } from "../content-secrets.js";
-import { checkWriting, writingRejectError } from "../writing-style.js";
+import { checkWriting, isHumanWriter, writingRejectError } from "../writing-style.js";
 
 // #1442 소프트캡 — 아래 다섯 짧은 필드(name·title·supersedes·parent_name·change_note)엔 zod .max() 를 두지
 //  않는다. SDK 는 검증을 핸들러 앞에서 하므로 그 max 가 body_md(최대 200,000자)까지 통째로 튕겨 재전송을
@@ -259,7 +259,7 @@ export const knowledgeSave: Capability = {
         folder: input.is_folder === true,
         proposed: !gate.isCreate && gate.update === "stage",
         before: gate.before ? { title: gate.before.title, body: gate.before.body_md } : null,
-        human: user?.tokenSource === "session",
+        human: isHumanWriter(user),
       });
     if (rejects.length) throw writingRejectError(rejects, (style.style as { guide_md?: string }).guide_md ?? "");
 

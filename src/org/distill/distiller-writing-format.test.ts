@@ -56,4 +56,16 @@ t("가이드 블록: 꺼지면 빈 글, 켜면 가이드·거부 규칙·금지�
   assert.doesNotMatch(noReject, /저장 거부/);
   assert.doesNotMatch(noReject, /쓰지 않는 말/);
 });
+t("레인이 format 조각을 비워도(빈 문자열) 조직 블록은 남는다", () => {
+  const d = mk({ prompt_sections: { format: "" } });
+  assert.ok(buildDistillerPrompt({ distiller: d, ...base, writingFormat: ON }).includes(HEADER));
+  assert.ok(!buildDistillerPrompt({ distiller: d, ...base }).includes(HEADER));
+});
+t("첫 줄 결론 규칙을 끈 조직엔 결론 순서 지시를 붙이지 않는다", () => {
+  const off = resolveWritingFormat({ enabled: true, rules: { lead_missing: "off" } });
+  const out = buildDistillerPrompt({ distiller: mk(), ...base, writingFormat: off });
+  assert.ok(out.includes(HEADER));
+  assert.ok(!out.includes("결론 문장 뒤에 둔다"));
+  assert.ok(buildDistillerPrompt({ distiller: mk(), ...base, writingFormat: ON }).includes("결론 문장 뒤에 둔다"));
+});
 console.log(`distiller-writing-format: ${pass} passed`);

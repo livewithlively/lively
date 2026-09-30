@@ -199,8 +199,14 @@ export function mergeWritingFormatRaw(currentRaw: unknown, patch: WritingFormatP
   return next;
 }
 
+/**
+ * default_level 을 물려받지 않고 명시할 때만 켜지는 규칙. 작업기록 본문은 도구 계약상 선택이라(activity_log.body 는
+ *  «짧은 메모(선택)»), 본문을 요구하는 규칙이 기본값으로 켜지면 계약과 어긋나는 안내·거부가 모든 기록에 붙는다.
+ */
+const OPT_IN_RULES: ReadonlySet<WritingRuleId> = new Set<WritingRuleId>(["activity_body_missing"]);
+
 export function ruleLevel(fmt: WritingFormat, id: WritingRuleId): WritingRuleLevel {
-  return fmt.rules[id] ?? fmt.default_level;
+  return fmt.rules[id] ?? (OPT_IN_RULES.has(id) ? "off" : fmt.default_level);
 }
 
 const LEVEL_WORD: Record<WritingRuleLevel, string> = { off: "끔", warn: "안내", reject: "저장 거부" };

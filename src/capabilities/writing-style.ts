@@ -8,6 +8,12 @@ import { getWritingFormat } from "../org/store/runtime-config.js";
 import type { WritingFormat, WritingSurface } from "../org/policies/writing-format.js";
 import { lintWriting, type WritingFinding } from "../v6/writing-lint.js";
 
+/** 사람의 웹 편집인가 — 웹 로그인 세션이면서 앱이 대신 쓰는 호출이 아닐 때만. 앱 세션은 로그인한 사람의 신원을
+ *  물려받지만 글을 쓰는 것은 앱(대개 LLM)이다. */
+export function isHumanWriter(user: { tokenSource?: string; appId?: string } | null | undefined): boolean {
+  return user?.tokenSource === "session" && !user?.appId;
+}
+
 export interface WritingCheckOpts {
   /** 외부 미러 — 원본 소유가 밖이라 고칠 수 없는 글이다. 판정하지 않는다. */
   observed?: boolean;
@@ -38,8 +44,8 @@ const NEXT_STEP: Record<WritingSurface, { saved: string; proposed: string }> = {
     proposed: "다음 기록부터 맞추세요.",
   },
   project: {
-    saved: "project_update_v6 의 description 으로 고치세요.",
-    proposed: "project_update_v6 의 description 으로 고치세요.",
+    saved: "같은 항목의 수정 도구(project_update_v6·task_update_v6)로 description 을 고치세요.",
+    proposed: "같은 항목의 수정 도구(project_update_v6·task_update_v6)로 description 을 고치세요.",
   },
 };
 

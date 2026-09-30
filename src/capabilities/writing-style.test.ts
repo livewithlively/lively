@@ -5,7 +5,7 @@
 //  회귀 대상 ③: 기존 문서에 원래 있던 위반으로 에이전트의 수정·이어쓰기가 거부되는 것 — 거부는 새로 생긴 위반에만 건다.
 //  회귀 대상 ④: 사람의 웹 편집이 거부되는 것, 반대로 토큰 스크립트가 사람으로 취급돼 거부를 비껴가는 것.
 import assert from "node:assert/strict";
-import { checkWriting, writingRejectError } from "./writing-style.js";
+import { checkWriting, isHumanWriter, writingRejectError } from "./writing-style.js";
 import { resolveWritingFormat } from "../org/policies/writing-format.js";
 
 const fmt = (raw: Record<string, unknown>) => async () => resolveWritingFormat({ enabled: true, ...raw });
@@ -57,8 +57,11 @@ await ta("기존 글에 원래 있던 위반은 거부하지 않는다(새로 �
   const cleanBefore = { title: "옛 제목", body: "옛 본문이다." };
   assert.equal((await checkWriting("knowledge", BAD, { before: cleanBefore }, rejEmoji)).rejects.length, 1);
 });
+await ta("본문 없는 작업기록 규칙은 명시해야만 켜진다(default_level 을 물려받지 않는다)", async () => {
+  assert.deepEqual(await checkWriting("activity", { title: "배포 스크립트 수정", body: null }, {}, fmt({ default_level: "reject" })), { info: {}, rejects: [] });
+});
 await ta("작업기록 표면: 본문 없는 기록을 안내하고, 지식 전용 규칙은 보지 않는다", async () => {
-  const { info } = await checkWriting("activity", { title: "배포 스크립트 수정", body: null }, {}, on);
+  const { info } = await checkWriting("activity", { title: "배포 스크립트 수정", body: null }, {}, fmt({ rules: { activity_body_missing: "warn" } }));
   const rules = (info as Style).style!.findings.map((f) => f.rule);
   assert.deepEqual(rules, ["activity_body_missing"]);
   const r2 = await checkWriting("activity", { title: "배포 (2026-09-23)", body: "## 변경\n오늘 고쳤다." }, {}, on);
@@ -88,5 +91,12 @@ await ta("거부 에러는 422 이고 메시지에 규칙·샘플·가이드를 
   assert.equal(e.status, 422);
   for (const re of [/저장하지 않았습니다/, /title_date/, /2026-09-23/, /가이드 본문/]) assert.match(e.message, re);
   assert.ok((e.body as { style?: unknown }).style);
+});
+await ta("사람 판정: 웹 로그인 세션만 사람이고, 앱이 대신 쓰거나 토큰이면 에이전트다", async () => {
+  assert.equal(isHumanWriter({ tokenSource: "session" }), true);
+  assert.equal(isHumanWriter({ tokenSource: "session", appId: "app-1" }), false);
+  assert.equal(isHumanWriter({ tokenSource: "db" }), false);
+  assert.equal(isHumanWriter({ tokenSource: "static" }), false);
+  assert.equal(isHumanWriter(null), false);
 });
 console.log(`writing-style: ${pass} passed`);

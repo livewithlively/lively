@@ -1,7 +1,7 @@
 // v6 project capability — 프로젝트(1급 엔티티) + 작업(task/subtask) CRUD·상태·팀원·카테고리/지식 연결.
 //  레거시 org_project capability(projects.ts)와 병행(REST-only 로 시작 — 웹 v6 프로젝트 탭이 소비). MCP 노출은 컷오버에서 일괄.
 //  scope='memory'(조직 공유 작업/지식 평면 — 레거시 project_* 와 동일). 경로 prefix=/api/ui/v6/projects. 감사는 store(project-store)가 처리.
-import { checkWriting, writingRejectError } from "./writing-style.js";
+import { checkWriting, isHumanWriter, writingRejectError } from "./writing-style.js";
 import { z } from "zod";
 import { canSeeProjectRow, visibleListIds, listVisible, projectRowListId } from "../v6/visibility.js";
 import { HttpError, parseId } from "./rest-util.js";
@@ -26,6 +26,7 @@ import { planReclaim, applyReclaim, baseRepoOf, reposIn } from "../ops/workspace
 
 // 프로젝트 digest(AGENTS.md) 를 변경 직후 재생성 — 매니페스트/세션시작 pull 전에도 파일이 최신으로 존재하게.
 //  폴더가 없으면(신규 생성 직후) ensureAgentsMd 내부에서 만든다. 비치명적(실패해도 본 작업은 성공).
+
 const regenAgents = (id: number) => ensureAgentsMd(id).catch((e) => { console.error("[regenAgents] fail id=" + id + ":", e); });
 // 리스트 카테고리 변경(#541 후속 F4) — 그 리스트의 모든 프로젝트가 카테고리를 상속하므로 형제 전부의 AGENTS.md 재생성. best-effort.
 const regenAgentsForList = async (listId: number | null) => {
@@ -56,6 +57,23 @@ import {
 } from "../v6/project-store.js";
 import { assertNoContentSecrets } from "./content-secrets.js";
 import { redactTokenShapes } from "../org/ingest/redact.js";
+
+async function checkProjectText(
+  patch: { description?: string | null; append_description?: string },
+  id: number,
+  user: LivelyUser,
+): Promise<Awaited<ReturnType<typeof checkWriting>>> {
+  const human = isHumanWriter(user);
+  if (patch.append_description !== undefined) {
+    const frag = String(patch.append_description);
+    if (frag.includes(AUTO_CREATED_MARK) || frag.includes("첫 지시(원문)")) return { info: {}, rejects: [] };
+    return checkWriting("project", { title: null, body: frag }, { human });
+  }
+  if (patch.description === undefined || patch.description === null) return { info: {}, rejects: [] };
+  const cur = await getNodeRow(id).catch(() => undefined);
+  return checkWriting("project", { title: null, body: patch.description },
+    { human, before: cur ? { title: null, body: cur.description ?? "" } : null });
+}
 
 const STATUSES = ["active", "done"] as const;
 // 프로젝트도 태스크 리스트처럼 할 일/진행 중/완료로 그룹핑(웹 보드) — 상태 쓰기에서 todo|in_progress 도 허용.
@@ -458,7 +476,7 @@ const projectCreateV6: Capability = {
     // 서술 형식 — 세션 첫 지시로 만든 껍데기(name_source=rule)는 사람의 지시문 원문을 그대로 담으므로 보지 않는다.
     const { info: style, rejects } = name_source === "rule"
       ? { info: {}, rejects: [] }
-      : await checkWriting("project", { title: null, body: input.description ?? null }, { human: user?.tokenSource === "session" });
+      : await checkWriting("project", { title: null, body: input.description ?? null }, { human: isHumanWriter(user) });
     if (rejects.length) throw writingRejectError(rejects, (style.style as { guide_md?: string }).guide_md ?? "");
     //  같은 표식이 초안(#4170)의 입구다 — 기계가 이름을 지은 껍데기는 초안으로 태어나 목록 기본 뷰에서 따로 선다.
     const project = await createProject({ ...input, name_source, draft: name_source === "rule" }, writeCtx);
@@ -794,9 +812,10 @@ const projectUpdateV6: Capability = {
       throw new HttpError(400, "description_base 는 description(전체 교체)과 함께 보내야 합니다");
     const before = reschedule_dependents ? await getNodeRow(id) : null;
     let project;
-    // 서술 형식 — reject 규칙에 걸린 에이전트 본문은 받지 않는다(사람의 웹 입력은 안내만). 이어쓰기는 덧붙이는 조각만 본다.
-    const { info: style, rejects } = await checkWriting("project", { title: null, body: patch.description ?? patch.append_description ?? null },
-      { human: user?.tokenSource === "session" });
+    // 서술 형식 — reject 규칙에 **이번 수정이 새로 만든** 위반이 있으면 받지 않는다(사람의 웹 입력은 안내만).
+    //  이어쓰기는 덧붙이는 조각만, 전체 교체는 기존 본문과 비교해 본다 — 사람이 쓴 본문의 원래 위반 때문에 에이전트의
+    //  다른 수정까지 막히지 않게. 첫 지시 원문을 옮겨 붙이는 이어쓰기(프로젝트 이관)는 사람의 지시문이라 보지 않는다.
+    const { info: style, rejects } = await checkProjectText(patch, id, user);
     if (rejects.length) throw writingRejectError(rejects, (style.style as { guide_md?: string }).guide_md ?? "");
     try { project = await updateProject(id, patch, writeCtx); }
     catch (e) {
@@ -1340,9 +1359,10 @@ const taskUpdateV6: Capability = {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web", reason: reason ?? null };
     // Δ 를 재려면 **바뀌기 전** 날짜가 필요하다 — updateTask 는 이전 행을 돌려주지 않는다(#1308).
     const before = reschedule_dependents ? await getNodeRow(id) : null;
-    // 서술 형식 — reject 규칙에 걸린 에이전트 본문은 받지 않는다(사람의 웹 입력은 안내만). 이어쓰기는 덧붙이는 조각만 본다.
-    const { info: style, rejects } = await checkWriting("project", { title: null, body: patch.description ?? patch.append_description ?? null },
-      { human: user?.tokenSource === "session" });
+    // 서술 형식 — reject 규칙에 **이번 수정이 새로 만든** 위반이 있으면 받지 않는다(사람의 웹 입력은 안내만).
+    //  이어쓰기는 덧붙이는 조각만, 전체 교체는 기존 본문과 비교해 본다 — 사람이 쓴 본문의 원래 위반 때문에 에이전트의
+    //  다른 수정까지 막히지 않게. 첫 지시 원문을 옮겨 붙이는 이어쓰기(프로젝트 이관)는 사람의 지시문이라 보지 않는다.
+    const { info: style, rejects } = await checkProjectText(patch, id, user);
     if (rejects.length) throw writingRejectError(rejects, (style.style as { guide_md?: string }).guide_md ?? "");
     const task = await updateTask(id, patch, writeCtx);
     const rescheduled = before ? await propagateReschedule(id, before, task, writeCtx) : [];
