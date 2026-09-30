@@ -22,12 +22,16 @@ import { itemsPool, endPool } from "../dist/db/client.js";
 import { assertNoHardSecrets, redactDeep } from "../dist/org/ingest/redact.js";
 
 // 스캔 대상 — 테이블 · PK · 자유텍스트 컬럼. 스키마 정의: src/v6/schema/knowledge.ts · src/v6/schema/category-team.ts ·
-//  src/org/schema/core.ts · src/domainmap/core/schema.ts.
+//  src/org/schema/core.ts · src/domainmap/core/schema.ts · src/v6/schema/project.ts · src/v6/schema/task-detail.ts.
 export const SCAN_TARGETS = [
   { table: "knowledge", pk: "name", cols: ["name", "title", "body_md", "summary"] },
   { table: "category", pk: "key", cols: ["name", "description", "should"] },
   { table: "org_member", pk: "id", cols: ["display_name", "email", "body_md", "identities"] },
   { table: "debt_finding", pk: "id", cols: ["title", "detail"] },
+  // #4501 결정 2-1 — v6 쓰기 입구에 hard-block 을 걸면서 프로젝트·태스크(같은 project 테이블)·댓글·체크리스트도 본다.
+  { table: "project", pk: "id", cols: ["name", "description"] },
+  { table: "task_comment", pk: "id", cols: ["body"] },
+  { table: "task_checklist_item", pk: "id", cols: ["name"] },
 ];
 
 // 한 문자열 값에 시크릿 흔적이 있는지 — hard(저장거부 대상) + mask(마스킹 대상) 둘 다 검사.

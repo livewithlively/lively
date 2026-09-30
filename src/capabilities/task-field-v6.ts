@@ -7,6 +7,7 @@ import type { Capability } from "./types.js";
 import {
   createField, updateField, deleteField, setFieldValue, listFieldCatalog,
 } from "../v6/task-field-store.js";
+import { assertNoContentSecrets } from "./content-secrets.js";
 
 function body(req: any): Record<string, unknown> { return (req.body ?? {}) as Record<string, unknown>; }
 function actorOf(user: any, ctx: any): string | null { return ctx?.actor ?? user?.userId ?? null; }
@@ -114,6 +115,7 @@ const fieldValueSetV6: Capability = {
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
+    assertNoContentSecrets(input);   // #4501 평문 시크릿 차단(텍스트 필드 값)
     const writeCtx = { actor: actorOf(user, ctx), source: ctx?.source ?? "web" };
     try { return { value: await setFieldValue(input.taskId, input.fieldId, input.value, writeCtx) }; }
     catch (e: any) { throw new HttpError(400, e?.message ?? "필드값 수정 실패"); }
