@@ -64,11 +64,16 @@ eq(projectPageId(undefined), 0, "E8 주소 없음");
 for (const n of [1, 42, 3870]) eq(projectPageId(projectPageHref(n)), n, "E12 왕복 " + n);
 
 // ── 배선 ──
-//  프로젝트 줄을 만드는 자리는 네 채널이다: 셸 목록(local) · 의미검색(proj:sem) · 유사도(proj:sim) · grep(proj:grep).
+//  프로젝트 줄은 네 채널에서 온다: 셸 목록(local) · 의미검색(proj:sem) · 유사도(proj:sim) · grep(proj:grep).
+//  #4517 — 서버 채널 셋은 줄 만들기 한 벌(projRow)을 함께 쓴다. 그래서 줄을 **만드는 자리**는 둘(셸 목록 · projRow)이고,
+//   서버 채널 셋이 전부 그 한 벌을 거치는지를 따로 본다(한 채널만 제 손으로 줄을 만들면 그 줄만 옛 문으로 샌다).
 const omni = code("web/v2/omni.ts", "OMNI_SRC");
 const projHits = (omni.match(/kind: 'proj'[\s\S]{0,400}?href: ([^,}\n]+)/g) || []).map((m) => m.replace(/[\s\S]*href: /, "").trim());
-if (projHits.length === 4 && projHits.every((h) => h.startsWith("projHitHref("))) ok("E9 프로젝트 줄 네 채널 모두 projHitHref");
-else bad("E9 프로젝트 줄 네 채널 모두 projHitHref", "채널별 href = " + JSON.stringify(projHits));
+if (projHits.length === 2 && projHits.every((h) => h.startsWith("projHitHref("))) ok("E9 프로젝트 줄을 만드는 두 자리 모두 projHitHref");
+else bad("E9 프로젝트 줄을 만드는 두 자리 모두 projHitHref", "자리별 href = " + JSON.stringify(projHits));
+const viaRow = ["proj:sem", "proj:sim", "proj:grep"].filter((src) => !new RegExp(`put\\('${src}'[\\s\\S]{0,160}?projRow\\(`).test(omni));
+if (!viaRow.length) ok("E9 서버 채널 셋(의미·유사·grep)이 모두 projRow 로 줄을 만든다");
+else bad("E9 서버 채널 셋(의미·유사·grep)이 모두 projRow 로 줄을 만든다", "projRow 를 안 거치는 채널 = " + JSON.stringify(viaRow));
 if (/['"`]#\/p\/['"`]/.test(omni)) bad("E9 omni 가 세션 문을 조립하지 않는다", "'#/p/' 가 코드에 남아 있다");
 else ok("E9 omni 가 세션 문을 조립하지 않는다");
 

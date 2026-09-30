@@ -2599,8 +2599,8 @@ function navRow(): HTMLElement {
     navArrow('fwd', st.forward, hooks.onForward),
     el('button', {
       class: 'v2-omnib', type: 'button',
-      title: mac ? '통합검색 — 지식 · 프로젝트 · 자료 · 세션 · 세션 이력을 한 번에 (⌘K)'
-        : '통합검색 — 지식 · 프로젝트 · 자료 · 세션 · 세션 이력을 한 번에 (Alt+K, 터미널 밖에서는 Ctrl+K 도)',
+      title: mac ? '통합검색 — 지식 · 프로젝트 · 세션 · 대화 · 자료를 한 번에 (⌘K)'
+        : '통합검색 — 지식 · 프로젝트 · 세션 · 대화 · 자료를 한 번에 (Alt+K, 터미널 밖에서는 Ctrl+K 도)',
       'aria-label': '통합검색 열기', onclick: () => hooks.onSearch?.() },
       sv('svg', { viewBox: '0 0 24 24', class: 'v2-omnib-ic', 'aria-hidden': 'true' },
         sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' })),

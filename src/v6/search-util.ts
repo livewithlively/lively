@@ -11,7 +11,7 @@ import { type EmbeddingProvider, resolveEmbeddingConfig, resolveEmbeddingProvide
 //  · 그 외(평문)면 → 공백으로 나눈 모든 토큰이 (어느 컬럼이든) 등장해야 매치(AND, 부분일치). 단일 토큰이면 단순 contains.
 //  · LIKE 와일드카드(`%`/`_`)는 평문 토큰에서 리터럴로 이스케이프(grep 패리티 — `knowledge_x` 의 `_` 가 와일드카드로 새지 않게).
 const REGEX_META = /[.*+?^${}()|[\]\\]/;
-function likeEscape(s: string): string { return s.replace(/[\\%_]/g, "\\$&"); }
+export function likeEscape(s: string): string { return s.replace(/[\\%_]/g, "\\$&"); }   // 대화 검색(v6/conv-index-store.ts)도 같은 이스케이프를 쓴다
 export type GrepPlan = { mode: "regex"; pattern: string; re: RegExp } | { mode: "tokens"; tokens: string[] };
 export function parseGrep(qstr: string): GrepPlan {
   const t = (qstr ?? "").trim();
