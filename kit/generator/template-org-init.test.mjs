@@ -8,11 +8,12 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { sandboxEnv } from "../testlib/os-sandbox.mjs";
 
 const GEN = path.join(path.dirname(fileURLToPath(import.meta.url)), "build-context.mjs");
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "template-org-init-"));
 const org = path.join(dir, "org");
-const run = (...args) => spawnSync(process.execPath, [GEN, ...args], { encoding: "utf8", env: { ...process.env, HOME: dir } });
+const run = (...args) => spawnSync(process.execPath, [GEN, ...args], { encoding: "utf8", env: { ...process.env, ...sandboxEnv({ home: dir, tmp: dir }) } });
 
 try {
   const init = run("--init", org);
