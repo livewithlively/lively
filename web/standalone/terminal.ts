@@ -365,6 +365,37 @@ export function resolveTheme(key) {
   if (t.auto) return appIsDark() ? APP_DARK : APP_LIGHT;
   return t.theme;
 }
+// ── 비침(원준 2026-09-30) ─────────────────────────────────────────────────────
+//  세션이 사이드바 위에 뜬 카드일 때 부모(v2/side-card.ts)가 {cmd:'glass', on} 을 보낸다. 켜지면 xterm 바탕을 비워
+//  카드의 반투명 바탕과 그 뒤의 흐린 사이드바가 보이게 한다. 바탕을 칠할지는 카드가 정한다(또렷할 땐 카드가 불투명).
+//  ⚠ 바탕은 **색은 그대로, 알파만 0** 으로 비운다 — xterm 은 이 값으로 OSC 11(배경색 질의)에 답한다. rgba(0,0,0,0) 으로
+//   비우면 그 사이 새로 뜬 TUI 가 «배경이 검다» 로 읽고 어두운 테마를 고른다.
+//  ⚠ 캔버스·WebGL 은 allowTransparency 를 켜야 바탕을 비운다. 켜 두면 글자가 회색조 안티에일리어싱으로 그려져서
+//   카드일 때만 켠다.
+let glassOn = false;
+/** 그 색의 알파만 0 으로. 읽지 못하는 꼴이면 투명한 흰색. */
+export function clearOf(c: string): string {
+  const s = String(c || '').trim();
+  let m = /^#([0-9a-f]{3})$/i.exec(s);
+  if (m) { const [r, g, b] = m[1].split('').map((x) => parseInt(x + x, 16)); return `rgba(${r}, ${g}, ${b}, 0)`; }
+  m = /^#([0-9a-f]{6})(?:[0-9a-f]{2})?$/i.exec(s);
+  if (m) { const n = parseInt(m[1], 16); return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, 0)`; }
+  m = /^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/i.exec(s);
+  if (m) return `rgba(${m[1]}, ${m[2]}, ${m[3]}, 0)`;
+  return 'rgba(255, 255, 255, 0)';
+}
+/** xterm 에 입힐 테마 — 비침이 켜져 있으면 바탕만 비운다. xterm 의 theme 을 바꾸는 자리는 전부 이것을 쓴다. */
+function themeFor(key) {
+  const th = resolveTheme(key);
+  return glassOn ? Object.assign({}, th, { background: clearOf(th.background) }) : th;
+}
+function setGlass(on: boolean): void {
+  if (glassOn === on) return;
+  glassOn = on;
+  document.documentElement.classList.toggle('term-glass', on);   // 문서 바탕 걷기(terminal.html)
+  if (!term) return;                                               // 아직 안 떴다 — 만들 때 glassOn 을 읽는다
+  try { term.options.allowTransparency = on; term.options.theme = themeFor(prefs().theme); } catch (_) { /* 렌더러 준비 전 */ }
+}
 /** 그 테마가 어두운 판인가(문서 크롬 data-theme 용). */
 function themeIsDark(key) {
   const t = THEMES[key] || THEMES.auto;
@@ -411,8 +442,7 @@ function applyChrome(themeKey) {
 function syncAppTheme() {
   const p = prefs();
   if (p.theme !== 'auto') return;                 // 이름 있는 테마를 고른 사람의 선택이 이긴다
-  const th = resolveTheme('auto');
-  try { if (term) term.options.theme = th; } catch (_) { /* 아직 term 이 없다 */ }
+  try { if (term) term.options.theme = themeFor('auto'); } catch (_) { /* 아직 term 이 없다 */ }
   applyChrome('auto');
   try { doResize(); } catch (_) { /* 레이아웃 준비 전 */ }
 }
@@ -3258,7 +3288,7 @@ function mSheet(title, body) {
 }
 function applyPrefsNow(np, prevFamily) {
   term.options.fontFamily = np.fontFamily; term.options.fontSize = np.fontSize; term.options.cursorStyle = np.cursorStyle;
-  term.options.theme = resolveTheme(np.theme);
+  term.options.theme = themeFor(np.theme);
   scrollSpeed = np.scrollSpeed; padGain = np.padGain;
   savePrefs(np); applyChrome(np.theme); doResize();
   // 처음 고르는 글꼴은 아직 로드 전이라 같은 race 를 탄다 — 명시 로드 후 실제 준비 시점에 재측정.
@@ -3342,7 +3372,7 @@ function openSettings() {
   const apply = () => {
     const np = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value, scrollSpeed: Math.max(1, Math.min(12, Number(speedI.value) || 1)), padGain: Math.max(0.5, Math.min(6, Number(gainI.value) || 3)), mobileDock: !!dockI.checked, lineSelect: !!selI.checked };
     term.options.fontFamily = np.fontFamily; term.options.fontSize = np.fontSize; term.options.cursorStyle = np.cursorStyle;
-    term.options.theme = resolveTheme(np.theme);
+    term.options.theme = themeFor(np.theme);
     scrollSpeed = np.scrollSpeed; padGain = np.padGain;
     savePrefs(np); applyChrome(np.theme); doResize();
     // 처음 고르는 글꼴은 아직 로드 전이라 같은 race 를 탄다 — 명시 로드 후 실제 준비 시점에 재측정.
@@ -3679,6 +3709,8 @@ function setupEmbedBridge() {
     else if (m.cmd === 'help') openHelp();
     else if (m.cmd === 'prompts') openMyPrompts();
     else if (m.cmd === 'focus') { try { term.focus(); } catch (_) { /* 아직 안 떴다 */ } }
+    //  세션이 사이드바 위 카드가 됐다/풀렸다(v2/side-card.ts) — 바탕을 비우거나 되돌린다.
+    else if (m.cmd === 'glass') setGlass(m.on === true);
     //  #4135 곁칸 «프로젝트» 앱의 [본문 넣기] — 입력칸에 **붙여넣기만** 한다(Enter 없음). 여러 줄은 pasteText 가 bracketed paste 로 감싼다.
     else if (m.cmd === 'paste' && typeof m.text === 'string') { pasteText(m.text); try { term.focus(); } catch (_) { /* 아직 안 떴다 */ } }
   });
@@ -3773,7 +3805,7 @@ export async function boot() {
   //  tmux 전체 재그림이 아니라 pane 출력만 받으므로 구조적으로 발생하지 않는다. 렌더러는 WebGL(폴백 Canvas).
   term = new Terminal({
     fontFamily: p.fontFamily, fontSize: p.fontSize, cursorStyle: p.cursorStyle, cursorBlink: true,
-    theme: resolveTheme(p.theme), scrollback: 10000, allowProposedApi: true,
+    theme: themeFor(p.theme), allowTransparency: glassOn, scrollback: 10000, allowProposedApi: true,
     // OSC 8 하이퍼링크(#1541) — TUI(claude 등)가 표시 텍스트와 별개의 URI 를 심는 형식. 핸들러가 없으면 xterm 은
     //  아무것도 안 한다(죽은 링크). 열기 규칙은 한 곳(openLinkFromTerminal) — 트래킹 pane 에선 클릭이 pty 로 가서
     //  이 핸들러까지 안 오는 경우가 있는데, 그 축은 아래 캡처 경로(urlAtColumn)가 표시 텍스트로 커버한다.

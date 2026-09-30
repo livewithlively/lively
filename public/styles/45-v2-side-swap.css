@@ -111,11 +111,35 @@
   .pn-body.cm > .v2-split-x { display: none; }
   .pn-body.cm > .pn-col {
     position: absolute; z-index: 60; grid-column: auto; grid-row: auto;
-    right: var(--cm-r, 24px); bottom: var(--cm-b, 24px); width: var(--cm-w, 420px); height: var(--cm-h, 560px);
+    right: var(--cm-r, 24px); bottom: var(--cm-b, 24px); width: var(--cm-w, 320px); height: var(--cm-h, 240px);
     overflow: hidden; background: var(--bg);
     border: 1px solid var(--line-net); border-radius: 14px;
     box-shadow: 0 24px 64px rgba(var(--shadow-ink), .26), 0 2px 8px rgba(var(--shadow-ink), .10);
   }
+  /* ── 비침(원준 2026-09-30) ──
+     카드인 동안 안쪽(칸 · 세션 화면 · 터미널 액자 · 카드 단추)은 늘 투명하고 바탕은 카드 한 곳만 칠한다 — 그래야
+     또렷 ↔ 비침이 카드 바탕색 하나로 바뀐다. 터미널 액자 안의 바탕은 terminal.ts 가 «glass» 를 받아 비운다(side-card.ts).
+     또렷 = 마우스가 카드 위에 있다(:hover — 액자 위에서도 조상의 :hover 가 선다) · 사람이 카드를 골랐다(cm-live).
+     ★ 비칠 때 지저분해 보이는 것은 뒤(사이드바)의 잔 글씨가 터미널 글씨와 겹쳐서다. 뒤를 크게 흐려(22px) 잔 글씨를
+       뭉개면 겹칠 거리가 사라진다. 바탕을 진하게 해서 가리면 비치는 맛이 없어진다.
+     또렷해질 때는 바로(0.08초), 비칠 때는 천천히(0.35초). 비칠 때는 흐림이 먼저 걸리고 바탕이 빠진다 — 반대 순서면
+       한 프레임 동안 날 글씨가 비친다. */
+  .pn-body.cm > .pn-col { transition: background-color .08s ease, box-shadow .2s ease, border-color .2s ease; }
+  .pn-body.cm > .pn-col > .pn-pane,
+  .pn-body.cm > .pn-col .sc-wrap,
+  .pn-body.cm > .pn-col .sc-term-frame,
+  .pn-body.cm > .pn-col .cm-ctl { background: transparent; }
+  .pn-body.cm:not(.cm-live) > .pn-col:not(:hover) {
+    background: color-mix(in srgb, var(--bg) 30%, transparent);
+    -webkit-backdrop-filter: blur(22px) saturate(1.25);
+    backdrop-filter: blur(22px) saturate(1.25);
+    border-color: color-mix(in srgb, var(--line-net) 70%, transparent);
+    box-shadow: 0 12px 32px rgba(var(--shadow-ink), .16), 0 1px 3px rgba(var(--shadow-ink), .06);
+    transition: background-color .35s ease, box-shadow .35s ease, border-color .35s ease;
+  }
+  .pn-body.cm:not(.cm-live) > .pn-col:not(:hover) .sc-head { border-bottom-color: color-mix(in srgb, var(--line) 55%, transparent); }
+  .pn-body.cm:not(.cm-live) > .pn-col:not(:hover) .cm-ctl { border-left-color: color-mix(in srgb, var(--line) 55%, transparent); }
+
   /* 아래 칸(타임라인 등)은 카드에 넣지 않는다. 접힘 상태는 그대로 두고 보이기만 끈다. */
   .pn-body.cm > .pn-col > .pn-pane[data-zone="bottom"],
   .pn-body.cm > .pn-col > .v2-split-y { display: none; }
@@ -140,7 +164,7 @@
   .pn-body.cm-fold .cm-fold-b .pn-i { transform: rotate(-90deg); }     /* 접혀 있을 때: 위를 가리킨다(펴기) */
 
   /* ── 접었을 때: 머리줄만 남는다 ── */
-  .pn-body.cm.cm-fold > .pn-col { height: auto; max-height: var(--cm-h, 560px); }
+  .pn-body.cm.cm-fold > .pn-col { height: auto; max-height: var(--cm-h, 240px); }
   .pn-body.cm.cm-fold > .pn-col .sc-wrap > :not(.sc-head) { display: none; }
   .pn-body.cm.cm-fold > .pn-col .sc-head { border-bottom: 0; }
 
