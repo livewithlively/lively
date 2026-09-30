@@ -735,6 +735,35 @@ webview.pn-webframe { display: flex; }
 .pn-apps-cur { font-size: 12.5px; }
 .pn-apps .v2-appui-frame { flex: 1; width: 100%; border: 0; background: var(--surface); }
 
+/* ── 붙은 앱 탭(#4225) — 지금 세션에 붙은 앱 화면이 곁칸의 탭 하나로 선다. 여럿 붙었으면 안에 작은 탭 줄 ── */
+.pn-sessapp { display: flex; flex-direction: column; overflow: hidden; }
+.pn-sessapp-tabs { flex: none; display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); background: var(--gray-bg-2); overflow-x: auto; scrollbar-width: none; }
+.pn-sessapp-tabs[hidden] { display: none; }
+.pn-sessapp-tab { display: inline-flex; align-items: center; gap: 6px; max-width: 200px; padding: 4px 10px; border: 1px solid transparent;
+  border-radius: 8px; background: none; font: inherit; font-size: 12.5px; color: var(--muted-head); cursor: pointer; white-space: nowrap; }
+.pn-sessapp-tab span { overflow: hidden; text-overflow: ellipsis; }
+.pn-sessapp-tab .pn-i { width: 14px; height: 14px; flex: none; color: var(--blue); }
+.pn-sessapp-tab:hover { background: var(--bg-tint); }
+.pn-sessapp-tab.on { background: var(--bg); border-color: var(--line); color: var(--ink); font-weight: 700; }
+.pn-sessapp-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
+.pn-sessapp-body > .v2-appui-frame { flex: 1; width: 100%; border: 0; background: var(--surface); }
+.pn-sessapp-wait { padding: 16px; }
+.pn-sessapp-info { padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+.pn-sessapp-tbl { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+
+/* ── 앱 고치기 설정 창(#4225) — 누가 이 앱을 고칠 수 있나(기본 전원 · 지정한 사람만) ── */
+.pn-editpol { width: min(460px, 94vw); }
+.pn-editpol .pn-modal-b { display: flex; flex-direction: column; gap: 10px; }
+.pn-editpol-opt { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.pn-editpol-opt:has(input:checked) { border-color: var(--blue); background: var(--bg-sel); }
+.pn-editpol-opt > span { display: flex; flex-direction: column; gap: 2px; }
+.pn-editpol-opt input { margin-top: 3px; }
+.pn-editpol-list { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow: auto; padding: 4px 2px; border-top: 1px solid var(--line-row); }
+.pn-editpol-list[hidden] { display: none; }
+.pn-editpol-person { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.pn-editpol-person:hover { background: var(--bg-tint); }
+.pn-editpol-person .pn-fine { margin-left: auto; font-size: 11px; }
+
 /* ══ 지식 상세 창 — 위키로 튀지 않고 그 자리에서 먼저 본다 (#1819) ═══════════ */
 .pn-knm { width: min(680px, 96vw); }
 .pn-knm .pn-modal-h h2 { font-size: 17px; line-height: 1.35; }

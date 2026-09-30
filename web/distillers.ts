@@ -29,6 +29,8 @@ import { confirmDialog, skeleton } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
 import { isWholeDistillJob } from './lib/stage-job-pick.js';
 import { runConfig } from './context-run-config.js';    // #4008 제공자·모델·추론강도 공용 선택기
+import { LIV_CARD, LIV_ROW, livMark, livSum, madeBy } from './liv-mark.js';   // #4135 «리브가 세팅한 것» 공통 표시
+import { countLiv } from './lib/liv-mark.js';
 import { fillLaneEditor, fillLaneRetired, renderFillJob } from './distill-fill.js';    // #4194 카테고리 붙이기(옛 「분류기」) — #4135 부터 따로 절을 두지 않고 같은 목록의 카드다
 import { type RunsByMachine, distillerToday, fetchRecentRuns, machineRuns, machineSum, recentLine } from './context-machine-runs.js';   // #4135 카드 안의 최근 실행
 import { CTX_APP_NAME, CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
@@ -95,7 +97,9 @@ export async function distillersPanel(detail, data) {
   body.append(el('div', { class: 'cxc-head' },
     el('div', { class: 'cxc-head-main' },
       //  #4233. 제목은 탭 이름과 같다(탭 「증류기 설정」). 옆의 수는 두 종류를 합친 증류기 수다.
-      el('h3', { class: 'cxc-title' }, el('span', { text: CTX_TAB.distill }), el('span', { class: 'cxc-title-n num', text: '증류기 ' + (distillers.length + lanes.length) + '개' })),
+      //  그 옆의 요약 — 이 가운데 몇 개를 리브가 세팅했나(리브 표시 1안). 카테고리만 붙이는 증류기는 사람이 만든다.
+      el('h3', { class: 'cxc-title' }, el('span', { text: CTX_TAB.distill }), el('span', { class: 'cxc-title-n num', text: '증류기 ' + (distillers.length + lanes.length) + '개' }),
+        livSum(distillers.length + lanes.length, countLiv(distillers, isLivMadeDistiller))),
       el('p', { class: 'cxc-lead', text: '증류기는 쌓인 자료를 읽고 남길 가치가 있는 것만 지식으로 씁니다. 자료 하나는 증류기 하나만 읽습니다. 위에서부터 조건에 맞는 첫 증류기가 읽고, 어느 것에도 맞지 않는 자료는 맨 아래 「안전망」이 읽습니다.' })),
     el('div', { class: 'cxc-head-acts' }, el('a', { class: 'btn btn-primary', href: pageHref(NEW_KEY), text: '+ 자료 증류기 만들기' }))));
 
@@ -223,9 +227,9 @@ const listOf = (x): string[] => Array.isArray(x) ? x.filter(Boolean).map(String)
 function distillerCard(d, st, catName, rerender, runs: import('./context-runs.js').AutoRun[] = []) {
   const liv = isLivMadeDistiller(d);
   const catchAll = Number(d.priority) <= -100 || /catch-all$/.test(String(d.key || ''));
-  const card = el('article', { class: 'dsl-card' + (d.enabled ? '' : ' is-off') });
+  const card = el('article', { class: 'dsl-card' + (liv ? ' ' + LIV_CARD : '') + (d.enabled ? '' : ' is-off') });
 
-  // 머리 — 얼굴 · 이름(설정 링크) · 상태 · 표식 / 리브가 만듦 · 마지막 실행 … [스위치][설정]
+  // 머리 — 얼굴 · 이름(설정 링크) · 상태 · 표식 / 리브가 세팅 · 마지막 실행 … [스위치][설정]
   const main = el('div', { class: 'cxc-main' },
     el('div', { class: 'cxc-t' },
       el('a', { class: 'cxc-name', href: pageHref(d.key), text: splitLabel(d.label || d.key)[0] }),
@@ -234,7 +238,7 @@ function distillerCard(d, st, catName, rerender, runs: import('./context-runs.js
     splitLabel(d.label || d.key)[1] ? el('p', { class: 'cxc-desc', text: splitLabel(d.label || d.key)[1] }) : null,
     el('div', { class: 'cxc-m' },
       el('span', { class: 'cxc-kind', text: kindText(d) + ' 증류기' }),
-      liv ? el('span', { class: 'cxc-liv', title: '리브가 미리 준비해 둔 증류기입니다' }, livIcon(), el('span', { text: '리브가 만듦' })) : el('span', { class: 'cxc-who', text: '직접 만듦' }),
+      madeBy(liv, '리브가 미리 준비해 둔 증류기입니다'),
       el('span', { class: 'cxc-sep', 'aria-hidden': 'true', text: '·' }),
       //  오늘 돈 적이 있으면 그 결과를 말한다(#4135 회의 ②) — 「마지막 실행 n일 전」만으로는 무엇을 했는지 모른다.
       distillerToday(machineSum(runs)) || el('span', { text: d.last_run_at ? `마지막 실행 ${relTime(d.last_run_at)}` + (d.last_status && d.last_status !== 'ok' ? ' · 실패' : '') : '아직 실행한 적 없음' })));
@@ -342,8 +346,8 @@ function fillLaneCard(c, st, rerender, runs: import('./context-runs.js').AutoRun
 
 // ── 꺼 둔 증류기 — 얇은 행. 켜면 위 카드로 올라간다. ──
 function distillerRowCompact(d, st, catName, rerender) {
-  const row = el('div', { class: 'cxc-row is-off' });
   const liv = isLivMadeDistiller(d);
+  const row = el('div', { class: 'cxc-row is-off' + (liv ? ' ' + LIV_ROW : '') });
   const backlog = Number(st.backlog || 0);
   const cat = catName(d.target_category);
   row.append(faceStack(d),
@@ -354,7 +358,7 @@ function distillerRowCompact(d, st, catName, rerender) {
       splitLabel(d.label || d.key)[1] ? el('p', { class: 'cxc-desc', text: splitLabel(d.label || d.key)[1] }) : null,
       el('div', { class: 'cxc-m' },
         el('span', { class: 'cxc-kind', text: kindText(d) + ' 증류기' }),
-        liv ? el('span', { class: 'cxc-liv' }, livIcon(), el('span', { text: '리브가 만듦' })) : el('span', { class: 'cxc-who', text: '직접 만듦' }),
+        madeBy(liv, '리브가 미리 준비해 둔 증류기입니다'),
         el('span', { class: 'cxc-sep', 'aria-hidden': 'true', text: '·' }),
         el('span', { text: cat ? `지식은 「${cat}」로` : 'AI가 카테고리를 고름' }),
         el('span', { class: 'cxc-sep', 'aria-hidden': 'true', text: '·' }),
@@ -380,11 +384,6 @@ function allSourcesIcon(): SVGElement {
 function arrowIcon(): SVGElement {
   const n = sv('svg', { class: 'dsl-arr', viewBox: '0 0 24 24', 'aria-hidden': 'true' });
   n.append(sv('path', { d: 'M9 6l6 6-6 6' }));
-  return n;
-}
-function livIcon(): SVGElement {
-  const n = sv('svg', { class: 'cxc-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  n.append(sv('circle', { cx: 12, cy: 12, r: 9 }), sv('circle', { cx: 12, cy: 12, r: 2.5 }));
   return n;
 }
 
@@ -952,9 +951,10 @@ function editorPage(d, isNew: boolean): HTMLElement {
   }
   const head = el('div', { class: 'dst-head' },
     el('div', { class: 'dst-head-main' }, titleEl,
-      el('p', { class: 'dst-sub', text: isNew
+      //  리브가 세팅한 증류기면 목록과 같은 이름표가 여기에도 선다(같은 것을 같은 표시로).
+      el('p', { class: 'dst-sub' }, !isNew && isLivMadeDistiller(d) ? livMark('리브가 미리 준비해 둔 증류기입니다') : null, el('span', { text: isNew
         ? '어떤 자료를 읽고, 무엇을 지식으로 남길지 정합니다. 오른쪽에서 지금 설정으로 몇 건이 읽히는지 바로 보입니다.'
-        : (d.last_run_at ? '마지막 실행 ' + relTime(d.last_run_at) + ' · ' + (d.last_status === 'ok' ? '성공' : d.last_status ? '실패' : '') : '아직 실행한 적 없음') })),
+        : (d.last_run_at ? '마지막 실행 ' + relTime(d.last_run_at) + ' · ' + (d.last_status === 'ok' ? '성공' : d.last_status ? '실패' : '') : '아직 실행한 적 없음') }))),
     headActs);
 
   const form = el('div', { class: 'dst-form' }, secName, secRead, secKeep, secDest, adv);

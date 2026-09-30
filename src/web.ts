@@ -133,6 +133,12 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     //  몇 개를 왜 안 걷었나"를 볼 수 있어야 한다. 리퍼는 정책이 0 이면 로그 한 줄 없이 no-op 으로
     //  돌아가므로, "ok" 만 보내면 **한 번도 안 돈 것과 돌았지만 걷을 게 없던 것이 구분되지 않는다**
     //  (#2148 실측: 매니지드에서 이 리퍼가 도는지조차 아무도 몰랐다).
+    // #4226 — 워크스페이스가 만든 앱의 데이터를 하루 한 번 떠 둔다(7일 보관). 멱등 — 20시간 안에 뜬 앱은 건너뛴다.
+    //  자가호스팅은 부팅 정비 타이머(boot/housekeeping)가 같은 함수를 부른다.
+    await step("app-data-snapshot", async () => {
+      const { runDailyAppSnapshots } = await import("./apps/app-snapshot.js");
+      return await runDailyAppSnapshots();
+    });
     await step("session-reaper", () => reapIdleSessions());
     // #2509 압박 회수 — **박스 전역**이라 이 틱과 스코프가 다르다. CP 는 이 엔드포인트를 **running 테넌트마다**
     //  부르므로(lvly-cloud control/src/tenanttick.ts), 그대로 두면 전역 판정이 테넌트 수만큼 돈다.

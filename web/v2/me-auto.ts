@@ -20,6 +20,7 @@
 import { api, busy, el, errorNote, renderMarkdown, toast, uiText } from '../core.js';
 import { confirmDialog, overlay, skeleton } from '../ui-primitives.js';
 import { ctxPath } from '../lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
+import { qmark } from '../lib/qmark.js';
 
 const GUIDE = 'context-ontology-guide';
 /** 맥락 관리의 같은 화면 — '더 자세히'는 여기로 보낸다(입구가 둘이어도 집은 하나다). */
@@ -56,7 +57,7 @@ export interface AutoPaneDeps {
 export function autoPane(deps: AutoPaneDeps): { node: HTMLElement; init: () => void } {
   const host = el('div');
   const node = deps.pane('AI 주입 문구',
-    '내가 쓰지 않아도 매 대화에 자동으로 들어가는 내용입니다. 대화를 시작할 때, 일하는 동안, 대화를 끝낼 때로 나뉩니다.',
+    '내가 입력하지 않아도 AI 세션에 자동으로 주입되는 내용과 자동 동작을 설정합니다. AI 세션을 시작할 때, AI 세션이 실행되는 동안, AI 세션이 응답을 마칠 때 각각 무엇을 할지 정합니다.',
     host);
   node.classList.add('v2me-pane-wide');
   return { node, init: () => { void load(host, deps); } };
@@ -73,7 +74,9 @@ async function load(host: HTMLElement, deps: AutoPaneDeps): Promise<void> {
 
 function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement {
   const rc = data.runtimeConfig;                    // 관리자만 non-null — 아니면 읽기 전용 화면이 된다
-  const canEdit = !!data.canEdit && !!rc;
+  //  원준 2026-09-28: 관리자만 보는 화면을 두지 않는다 — 모두 같은 화면이다. 권한이 없는 사람의 저장은 서버가
+  //   거절하고, 그 사실을 알림으로 말한다(스위치는 되돌린다). rc 가 없으면 서버 기본값(켜짐)으로 그린다.
+  const canEdit = true;
   const hooks = (rc && rc.hooks) || {};
   const on = (k: string) => hooks[k] !== false;     // 서버 기본값이 '켜짐'이라 !== false 로 읽는다
   const guideOn = (rc ? rc.inject_ontology_guide : data.injectOntologyGuide) !== false;
@@ -110,9 +113,10 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
 
   // ── 위쪽 큰 칸 세 개 — 상태를 여기서 한눈에 보고, 눌러 아래 내용을 바꾼다. ──
   const MOMENTS = [
-    { key: 'a', ord: '첫째', title: '대화를 시작할 때', sub: '적어둔 메모를 먼저 읽습니다', hook: 'session_preload' },
-    { key: 'b', ord: '둘째', title: '일하는 동안', sub: '일한 흔적을 표시해 둡니다', hook: 'work_flag' },
-    { key: 'c', ord: '셋째', title: '대화를 끝낼 때', sub: '기록 남기라고 알려줍니다', hook: 'stop_writeback_gate' },
+    //  ⚠ 셋째는 세션을 닫을 때가 아니다 — 훅(Stop)은 AI 가 응답 한 번을 마칠 때마다 불린다(조건이 맞으면 세션당 한 번 보낸다).
+    { key: 'a', ord: '첫째', title: 'AI 세션을 시작할 때', sub: '주입 문구를 AI에 주입합니다', hook: 'session_preload' },
+    { key: 'b', ord: '둘째', title: 'AI 세션이 실행되는 동안', sub: '상태와 작업 내역을 기록합니다', hook: 'work_flag' },
+    { key: 'c', ord: '셋째', title: 'AI 세션이 응답을 마칠 때', sub: '라이블리에 기록하도록 요청합니다', hook: 'stop_writeback_gate' },
   ];
   const tiles = el('div', { class: 'v2a-tiles' });
   const bodies = new Map<string, HTMLElement>();
@@ -137,11 +141,11 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
   // ── ① 대화를 시작할 때 — 메모(섹션)들. 이 탭의 본체다. ──
   const aBody = el('div', { class: 'v2a-detail' },
     el('div', { class: 'v2a-d-h' },
-      el('div', {}, el('div', { class: 'v2a-d-t', text: '대화를 시작할 때' }),
-        el('p', { class: 'v2a-d-s' }, ...uiText('새 대화를 열면 AI가 아래 메모부터 읽습니다. 매번 같은 설명을 하지 않아도 됩니다.'))),
+      el('div', {}, el('div', { class: 'v2a-d-t', text: 'AI 세션을 시작할 때' }),
+        el('p', { class: 'v2a-d-s' }, ...uiText('새 AI 세션을 열면 아래 주입 문구가 AI에 자동으로 주입됩니다. 같은 내용을 AI 세션마다 직접 입력하지 않아도 됩니다.'))),
       sw(() => on('session_preload'),
         (v) => saveRuntime({ hooks: { ...hooks, session_preload: v } },
-          v ? '이제 대화를 시작할 때 메모를 읽습니다' : '메모를 읽지 않습니다. 다음 대화부터 적용됩니다'),
+          v ? 'AI 세션을 시작할 때 주입 문구를 주입합니다.' : '주입 문구를 주입하지 않습니다. 새로 여는 AI 세션부터 적용됩니다.'),
         chips.get('a'))));
 
   mine.forEach((s, i) => aBody.append(memoBlock(s, i)));
@@ -150,23 +154,26 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
       el('div', { class: 'v2a-mini-m' },
         el('div', { class: 'v2a-mini-t' }, el('span', { text: '라이블리 사용 설명서' }),
           el('span', { class: 'v2a-tag lock', text: '기본 제공' })),
-        el('div', { class: 'v2a-mini-s' }, ...uiText('AI가 라이블리를 다루는 법입니다. 고칠 수 없고 새 버전이 나오면 자동으로 바뀝니다.'))),
+        el('div', { class: 'v2a-mini-s' }, ...uiText('AI가 라이블리를 사용하는 방법을 설명한 문서입니다. 라이블리가 제공하는 문서라 수정할 수 없으며, 새 버전이 나오면 자동으로 바뀝니다.'))),
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '보기', onclick: () => viewGuide(guide) }),
       sw(() => guideOn, (v) => saveRuntime({ inject_ontology_guide: v },
-        v ? '사용 설명서를 함께 읽습니다' : '사용 설명서를 읽지 않습니다. AI가 라이블리 쓰는 법을 모르게 됩니다'))));
+        v ? '사용 설명서를 함께 주입합니다.' : '사용 설명서를 주입하지 않습니다. AI가 라이블리 사용 방법을 알 수 없게 됩니다.'))));
   }
   aBody.append(el('div', { class: 'v2a-acts' },
-    canEdit ? el('button', { class: 'btn btn-sm', type: 'button', text: '＋ 메모 하나 더', onclick: () => openEditor(null) }) : null,
-    el('button', { class: 'btn btn-sm', type: 'button', text: 'AI가 읽는 글 전체 보기', onclick: () => viewPreview() })));
+    canEdit ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 주입 문구 추가', onclick: () => openEditor(null) }) : null,
+    el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: 'AI에 주입되는 전체 내용 보기', onclick: () => viewPreview() })));
   bodies.set('a', aBody);
 
   // ── ② 일하는 동안 ──
   const bBody = el('div', { class: 'v2a-detail', hidden: true },
     el('div', { class: 'v2a-d-h' },
-      el('div', {}, el('div', { class: 'v2a-d-t', text: '일하는 동안' }),
-        el('p', { class: 'v2a-d-s' }, ...uiText('AI가 파일을 고치거나 외부 서비스를 쓰면 이 대화에서 일했다고 표시해 둡니다. 대화를 끝낼 때 알려줄지 판단하는 데만 씁니다.'))),
+      //  ⚠ 종전 문구(«…판단하는 데만 씁니다»)는 사실과 달랐다. work-flag.mjs 는 이 값이 false 면 맨 앞에서 끝나서
+      //   상태 보고(작업 중·확인 필요·완료, #1221) · 작업 플래그 · 이어 열기용 대화 번호(#1059)가 **모두** 멈춘다.
+      el('div', {}, el('div', { class: 'v2a-d-t', text: 'AI 세션이 실행되는 동안' }),
+        el('p', { class: 'v2a-d-s' }, ...uiText('AI 세션이 작업 중인지, 확인을 요청했는지, 응답을 마쳤는지를 라이블리에 보고합니다. 또 AI 세션이 파일을 수정했는지, 외부 자료를 가져왔는지, 라이블리에 기록을 남겼는지를 이 컴퓨터에 저장합니다.')),
+        el('p', { class: 'v2a-d-s v2a-warn' }, ...uiText('이 스위치를 끄면 사이드바의 AI 세션 상태 표시와 그에 따른 알림이 동작하지 않고, 셋째 칸의 기록 요청도 동작하지 않습니다.'))),
       sw(() => on('work_flag'),
-        (v) => saveRuntime({ hooks: { ...hooks, work_flag: v } }, v ? '일한 흔적을 표시합니다' : '표시하지 않습니다'),
+        (v) => saveRuntime({ hooks: { ...hooks, work_flag: v } }, v ? 'AI 세션 상태와 작업 내역을 기록합니다.' : 'AI 세션 상태와 작업 내역을 기록하지 않습니다.'),
         chips.get('b'))),
     devBox());
   bodies.set('b', bBody);
@@ -174,40 +181,31 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
   // ── ③ 대화를 끝낼 때 ──
   const cBody = el('div', { class: 'v2a-detail', hidden: true },
     el('div', { class: 'v2a-d-h' },
-      el('div', {}, el('div', { class: 'v2a-d-t', text: '대화를 끝낼 때' }),
-        el('p', { class: 'v2a-d-s' }, ...uiText('일은 했는데 기록 없이 끝내려 하면 AI에게 한 번 알려 줍니다.'))),
+      el('div', {}, el('div', { class: 'v2a-d-t', text: 'AI 세션이 응답을 마칠 때' }),
+        el('p', { class: 'v2a-d-s' }, ...uiText('AI 세션이 파일을 수정했거나 외부 자료를 가져왔는데 라이블리에 기록을 남기지 않았다면, 응답을 마칠 때 AI에 기록 요청 문구를 한 번 보냅니다. AI는 이 문구를 받은 뒤 작업 내역과 지식을 라이블리에 기록합니다.'))),
       sw(() => on('stop_writeback_gate'),
-        (v) => saveRuntime({ hooks: { ...hooks, stop_writeback_gate: v } }, v ? '끝낼 때 알려줍니다' : '알려주지 않습니다'),
+        (v) => saveRuntime({ hooks: { ...hooks, stop_writeback_gate: v } }, v ? '응답을 마칠 때 기록을 요청합니다.' : '응답을 마칠 때 기록을 요청하지 않습니다.'),
         chips.get('c'))),
     el('div', { class: 'v2a-mini' },
       el('div', { class: 'v2a-mini-m' },
-        el('div', { class: 'v2a-mini-t' }, el('span', { text: '알려줄 때 쓰는 문구' })),
-        el('div', { class: 'v2a-mini-s' }, ...uiText(rc && rc.writeback_notice ? '직접 고친 문구를 씁니다.' : '기본 문구를 씁니다.'))),
+        el('div', { class: 'v2a-mini-t' }, el('span', { text: '기록 요청 문구' })),
+        el('div', { class: 'v2a-mini-s' }, ...uiText(rc && rc.writeback_notice ? '직접 수정한 문구를 사용합니다.' : '기본 문구를 사용합니다.'))),
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '문구 보기', onclick: () => viewNotice() })));
   bodies.set('c', cBody);
 
-  // ── 발치 — 순간에 매이지 않는 것 하나. ──
+  // ── 발치 — «라이블리 자동 업데이트»는 [계정 · 보안]으로 옮겼다(원준 2026-09-28). 여기엔 건너가는 줄만 남는다. ──
   const foot = el('div', { class: 'v2a-foot' },
-    el('div', { class: 'v2a-mini' },
-      el('div', { class: 'v2a-mini-m' },
-        el('div', { class: 'v2a-mini-t' }, el('span', { text: '라이블리를 최신 상태로 유지하기' })),
-        el('div', { class: 'v2a-mini-s' }, ...uiText('대화를 시작할 때 새 버전이 있는지 확인하고 다음 대화부터 반영합니다.'))),
-      sw(() => on('self_update'),
-        (v) => saveRuntime({ hooks: { ...hooks, self_update: v } }, v ? '최신 상태로 유지합니다' : '자동 업데이트를 끕니다'))),
     el('div', { class: 'v2a-more' },
-      el('button', { class: 'btn-text', type: 'button', text: ctxPath('deliver') + '에서 더 자세히 보기 →',
+      el('button', { class: 'btn-text', type: 'button', text: ctxPath('deliver') + '에서 자세히 보기 →',
         onclick: () => { deps.close(); location.hash = DEEP; } })));
 
   //  범위 한 줄 — **인원 수를 세지 않는다**. 멤버 명부에는 봇·연동 계정·테스트 계정이 섞여 있어
   //   그대로 세면 사람 수와 어긋난다(v2/switcher.ts 가 같은 이유로 명부 대신 '세션을 가진 사람'을 쓴다).
   //   그래서 숫자 없이, 어느 워크스페이스에서도 참인 문장으로 범위만 말한다.
   const head = el('div', { class: 'v2a-who' },
-    ...uiText('여기서 바꾸면 이 워크스페이스에서 여는 모든 대화에 적용됩니다. 팀이면 팀원의 AI도 같이 따릅니다.'));
+    ...uiText('여기서 바꾼 설정은 이 워크스페이스의 모든 AI 세션에 적용됩니다. 팀원의 AI 세션에도 똑같이 적용됩니다.'));
 
   const wrap = el('div', {}, head, tiles, aBody, bBody, cBody, foot);
-  if (!canEdit) {
-    wrap.prepend(el('p', { class: 'v2a-ro' }, ...uiText('보기만 됩니다. 바꾸려면 관리자 권한이 필요합니다.')));
-  }
   show('a');
   return wrap;
 
@@ -215,7 +213,7 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
   function memoBlock(s: Sec, i: number): HTMLElement {
     const acts = el('div', { class: 'v2a-memo-a' });
     if (canEdit) {
-      acts.append(el('button', { class: 'btn btn-sm', type: 'button', text: '고치기', onclick: () => openEditor(s) }));
+      acts.append(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '수정', onclick: () => openEditor(s) }));
       if (mine.length > 1) {
         acts.append(
           el('button', { class: 'v2a-ico', type: 'button', title: '위로', text: '▲',
@@ -241,10 +239,13 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
     const b = s.body_md || '';
     const names: string[] = [];
     if (b.includes('${team}')) names.push('내 팀 이름');
-    if (b.includes('${categories}')) names.push('우리가 쓰는 주제 목록');
-    if (b.includes('${wiki}')) names.push('핀 꽂은 문서 제목');
+    if (b.includes('${categories}')) names.push('카테고리 목록');
+    if (b.includes('${wiki}')) names.push('위키에서 핀으로 고정한 지식의 제목 목록');
     const last = names[names.length - 1] || '';
-    return uiText('메모 안의 표시된 자리에는 대화마다 ' + names.join(', ') + josa(last) + ' 채워집니다.');
+    //  둘이면 «A와 B», 셋이면 «A, B와 C»(받침에 따라 와/과).
+    const joined = names.length < 2 ? names.join('')
+      : names.slice(0, -1).join(', ') + wagwa(names[names.length - 2]) + ' ' + last;
+    return uiText('이 문구에는 AI 세션마다 ' + joined + josa(last) + ' 자동으로 채워집니다.');
   }
 
   async function move(s: Sec, dir: number): Promise<void> {
@@ -258,14 +259,14 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
 
   async function del(s: Sec): Promise<void> {
     const ok = await confirmDialog({
-      title: '이 메모를 지울까요?',
+      title: '이 주입 문구를 삭제할까요?',
       //  #3778 — 이 말이 이제 참이다(서버가 지식과 같은 길로 지워 휴지통 ▸ 지식 탭에 선다).
-      message: '‘' + titleOf(s) + '’ 를 지우면 다음 대화부터 AI가 읽지 않습니다. 휴지통 ▸ 지식 탭에서 되살릴 수 있어요.',
-      confirmText: '지우기', danger: true,
+      message: '‘' + titleOf(s) + '’을 삭제하면 새로 여는 AI 세션부터 주입되지 않습니다. 휴지통 ▸ 지식 탭에서 복원할 수 있습니다.',
+      confirmText: '삭제', danger: true,
     });
     if (!ok) return;
-    try { await api('/api/ui/org/section/delete', { method: 'POST', body: JSON.stringify({ section: s.name }) }); toast('지웠습니다.'); reload(); }
-    catch (e: any) { toast((e && e.message) || '지우지 못했습니다', true); }
+    try { await api('/api/ui/org/section/delete', { method: 'POST', body: JSON.stringify({ section: s.name }) }); toast('삭제했습니다.'); reload(); }
+    catch (e: any) { toast((e && e.message) || '삭제하지 못했습니다', true); }
   }
 
   // ── 편집 창 — 새로 만들 때만 이름(키)을 받는다. 저장 경로는 관리 화면과 같은 하나. ──
@@ -273,24 +274,24 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
     const isNew = !s;
     const keyIn = el('input', { type: 'text', class: 'v2a-in', placeholder: '영문 소문자·숫자·하이픈 (예: team-rules)' }) as HTMLInputElement;
     const ta = el('textarea', { class: 'v2a-ta', rows: '16',
-      placeholder: 'AI가 늘 알아야 할 것을 적습니다.\n\n보고는 결론부터.\n금액은 원 단위로 말한다.\n지우기 전에 먼저 묻는다.' }) as HTMLTextAreaElement;
+      placeholder: 'AI가 항상 알아야 할 내용을 입력합니다.\n\n보고는 결론부터.\n금액은 원 단위로 말한다.\n삭제하기 전에 먼저 묻는다.' }) as HTMLTextAreaElement;
     ta.value = s ? (s.body_md || '') : '';
     const status = el('span', { class: 'v2me-status' });
     const save = el('button', { class: 'btn btn-primary', type: 'button', text: isNew ? '만들기' : '저장' }) as HTMLButtonElement;
     const body = el('div', { class: 'v2a-editor' },
-      isNew ? el('label', { class: 'v2a-f' }, el('span', { class: 'v2a-fl', text: '메모 이름' }), keyIn,
-        el('p', { class: 'v2a-fh' }, ...uiText('AI는 이 이름을 읽지 않습니다. 목록에서 찾을 때만 씁니다.'))) : null,
+      isNew ? el('label', { class: 'v2a-f' }, el('span', { class: 'v2a-fl', text: '주입 문구 이름' }), keyIn,
+        el('p', { class: 'v2a-fh' }, ...uiText('이 이름은 AI에 주입되지 않으며, 목록에서 구분하는 데만 사용합니다.'))) : null,
       el('label', { class: 'v2a-f' }, el('span', { class: 'v2a-fl', text: '내용' }), ta),
-      el('p', { class: 'v2a-fh' }, ...uiText('비밀번호나 API 키는 적지 마세요. 저장하면 다음 대화부터 적용됩니다.')),
+      el('p', { class: 'v2a-fh' }, ...uiText('비밀번호나 API 키는 입력하지 마세요. 저장하면 새로 여는 AI 세션부터 적용됩니다.')),
       el('div', { class: 'v2a-editor-a' }, save, status));
-    const back = overlay(isNew ? '메모 만들기' : '메모 고치기 · ' + titleOf(s as Sec), body);
+    const back = overlay(isNew ? '주입 문구 추가' : '주입 문구 수정 · ' + titleOf(s as Sec), body);
     save.addEventListener('click', async () => {
       const section = (isNew ? keyIn.value : (s as Sec).name).trim().toLowerCase();
-      if (!section) { toast('메모 이름을 적어주세요', true); return; }
+      if (!section) { toast('주입 문구 이름을 입력하세요.', true); return; }
       save.disabled = true; status.textContent = '저장 중…';
       try {
         await api('/api/ui/org/section', { method: 'POST', body: JSON.stringify({ section, body_md: ta.value }) });
-        toast('저장했습니다. 다음 대화부터 적용됩니다.');
+        toast('저장했습니다. 새로 여는 AI 세션부터 적용됩니다.');
         back.remove();
         reload();
       } catch (e: any) { toast((e && e.message) || '저장하지 못했습니다', true); save.disabled = false; status.textContent = ''; }
@@ -299,24 +300,24 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
 
   function viewGuide(g: Sec): void {
     overlay('라이블리 사용 설명서', el('div', { class: 'v2a-read' },
-      el('p', { class: 'v2a-fh' }, ...uiText('제품이 관리하는 문서라 고칠 수 없습니다. 새 버전이 나오면 자동으로 바뀝니다.')),
+      el('p', { class: 'v2a-fh' }, ...uiText('라이블리가 제공하는 문서라 수정할 수 없습니다. 새 버전이 나오면 자동으로 바뀝니다.')),
       el('div', { class: 'md-rendered v2a-md' }, renderMarkdown(g.body_md || ''))));
   }
 
   function viewNotice(): void {
     const text = (rc && rc.writeback_notice) || data.writebackNoticeDefault || '';
-    overlay('알려줄 때 쓰는 문구', el('div', { class: 'v2a-read' },
-      el('p', { class: 'v2a-fh' }, ...uiText('대화를 끝낼 때 AI에게 이 문장이 한 번 전달됩니다. 문구는 ' + ctxPath('deliver') + '에서 고칩니다.')),
+    overlay('기록 요청 문구', el('div', { class: 'v2a-read' },
+      el('p', { class: 'v2a-fh' }, ...uiText('조건이 맞으면 AI 세션이 응답을 마칠 때 AI에 이 문구를 한 번 보냅니다. 문구는 ' + ctxPath('deliver') + '에서 수정합니다.')),
       el('div', { class: 'v2a-notice', text }),
       el('div', { class: 'v2a-editor-a' },
-        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: ctxPath('deliver') + '에서 고치기 →',
+        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: ctxPath('deliver') + '에서 수정 →',
           onclick: () => { deps.close(); location.hash = DEEP; } }))));
   }
 
   // 실제로 조립돼 나가는 전문 — 게이트웨이가 만든 그대로(우리가 다시 조립하지 않는다).
   function viewPreview(): void {
-    const box = el('div', { class: 'v2a-read' }, skeleton('AI가 읽는 글을 불러오는 중'));
-    overlay('AI가 읽는 글 전체', box);
+    const box = el('div', { class: 'v2a-read' }, skeleton('AI에 주입되는 내용을 불러오는 중'));
+    overlay('AI에 주입되는 전체 내용', box);
     void (async () => {
       try {
         const r: any = await api('/api/ui/org/hooks/preview');
@@ -324,17 +325,17 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
         box.replaceChildren(sp && sp.message
           ? el('div', { class: 'md-rendered v2a-md' }, renderMarkdown(sp.message))
           : el('p', { class: 'v2a-fh' }, ...uiText('보여줄 내용이 없습니다.')));
-      } catch (e) { box.replaceChildren(errorNote(e, 'AI가 읽는 글을 불러오지 못했습니다')); }
+      } catch (e) { box.replaceChildren(errorNote(e, 'AI에 주입되는 내용을 불러오지 못했습니다')); }
     })();
   }
 
   // 개발자용 — 폴더 경로·툴 이름처럼 사람 말로 옮길 수 없는 것만 여기 둔다(기본 접힘).
   function devBox(): HTMLElement {
-    const roots = el('input', { type: 'text', class: 'v2a-in', placeholder: '/Users/이름/폴더 (줄마다 하나)',
+    const roots = el('input', { type: 'text', class: 'v2a-in', placeholder: '/Users/이름/폴더 (한 줄에 하나)',
       value: (rc && rc.work_roots) || '' }) as HTMLInputElement;
     const pull = el('input', { type: 'text', class: 'v2a-in', placeholder: 'mcp__lively__ext__',
       value: ((rc && rc.pull_tools) || []).join(', ') }) as HTMLInputElement;
-    const save = el('button', { class: 'btn btn-sm', type: 'button', text: '저장' }) as HTMLButtonElement;
+    const save = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '저장' }) as HTMLButtonElement;
     save.addEventListener('click', async () => {
       save.disabled = true;
       try {
@@ -348,12 +349,22 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
     const d = el('details', { class: 'v2a-dev' },
       el('summary', { text: '개발자용 설정' }),
       el('div', { class: 'v2a-dev-b' },
-        el('label', { class: 'v2a-f' }, el('span', { class: 'v2a-fl', text: '이 폴더에서 연 대화만 ‘일’로 셈하기' }), roots),
-        el('label', { class: 'v2a-f' }, el('span', { class: 'v2a-fl', text: '외부에서 가져온 내용 감지 (툴 이름 앞부분)' }), pull),
-        el('p', { class: 'v2a-fh' }, ...uiText('직접 만든 자동 동작 ' + ((data.orgHooks || []).length) + '개는 ' + ctxPath('deliver') + '에서 관리합니다.')),
+        //  개발자용은 정확한 이름을 쓴다(원준 2026-09-28). 동작 설명은 이름 옆 (?) 안에만 둔다.
+        el('label', { class: 'v2a-f' }, el('span', { class: 'v2a-fl' }, 'work_roots · 기록 요청을 적용할 작업 폴더',
+          qmark('여기 적은 폴더에서 연 AI 세션에 stop-writeback-gate 훅을 적용합니다. 이 폴더 밖에서 연 AI 세션도 라이블리 MCP 도구를 한 번이라도 쓰면 적용됩니다.')), roots),
+        el('label', { class: 'v2a-f' }, el('span', { class: 'v2a-fl' }, 'pull_tools · 외부 자료 가져오기로 판정할 도구 이름 접두어',
+          qmark('이 접두어로 시작하는 MCP 도구를 호출하면 외부 자료를 가져온 AI 세션으로 기록되어, 응답을 마칠 때 기록 요청 대상이 됩니다.')), pull),
+        el('p', { class: 'v2a-fh', text: '워크스페이스에서 직접 만든 훅 ' + ((data.orgHooks || []).length) + '개는 ' + ctxPath('deliver') + '에서 관리합니다.' }),
         canEdit ? el('div', { class: 'v2a-editor-a' }, save) : null));
     return d;
   }
+}
+
+/** 받침 유무로 '와/과'를 고른다(«A와 B»). */
+function wagwa(word: string): string {
+  const c = (word || '').trim().slice(-1).charCodeAt(0);
+  if (!c || c < 0xac00 || c > 0xd7a3) return '와';
+  return (c - 0xac00) % 28 ? '과' : '와';
 }
 
 /** 받침 유무로 '이/가'를 고른다 — 목록 끝 낱말이 무엇이든 문장이 어색해지지 않게. */

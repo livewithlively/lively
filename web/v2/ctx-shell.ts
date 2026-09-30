@@ -6,7 +6,7 @@ import { state, toast } from '../core.js';
 import { copyText, type CtxRow } from './ctx-menu.js';
 import { registerCtx, registerCtxCommon, registerCtxSurface, type CtxEvent, type CtxHit } from './ctx-registry.js';
 import { isInstancePinned, projectCtxRows, sessText, sessionCtxRows, sideInstanceById, toggleInstancePin } from './side.js';
-import { findSessIn, isLiveSess, isMineSess, projName, type Proj, type Sess, type V2Data } from './views.js';
+import { canMoveSess, findSessIn, isInvitedSess, isLiveSess, isMineSess, projName, type Proj, type Sess, type V2Data } from './views.js';
 import { forkableHarness } from './session-fork.js';
 import { SESS_STATES } from '../session-status.js';
 import { omniOpen } from './omni.js';
@@ -55,9 +55,12 @@ export function canForkSess(s: Sess): boolean {
   const me = String((state.me && (state.me as { userId?: string }).userId) || '');
   const owner = String((s.raw && s.raw.owner) || '');
   const mine = owner && me ? owner === me : isMineSess(s);
+  //  #3870 — 초대받은 사람도 복제한다(원준 2026-09-30 «둘 다 되게»). 복제본은 **주인 이름으로** 뜨고 초대 명단을 물려받는다
+  //   (서버 session-fork ForkFacts.invited 머리말). 관리자라도 초대받지 않았으면 여전히 안 선다(owned 를 안 쓰는 이유 그대로).
+  const invited = !mine && isInvitedSess(s);
   //  앱으로 연 세션은 서버가 거절한다 — 누르면 반드시 실패하는 단추를 세우지 않는다.
   const app = !!(s.raw && (s.raw.appId || s.raw.app_id));
-  return mine && !app && isLiveSess(s) && forkableHarness(s.raw && s.raw.harness);
+  return (mine || invited) && !app && isLiveSess(s) && forkableHarness(s.raw && s.raw.harness);
 }
 
 // ── 세션 ───────────────────────────────────────────────────────────────────
@@ -75,7 +78,7 @@ function sessionMenu(s: Sess | undefined, sid: string, hit: CtxHit): { rows: Ctx
     ...sessionCtxRows(s, { nameEl: hit.el.classList.contains('v2-ss-row') ? hit.el.querySelector<HTMLElement>('.t') : null, projectName: pn }),
   ];
   if (canForkSess(s)) rows.push({ label: '세션 복제', icon: 'copy', hint: '대화를 아는 새 세션', run: () => hooks?.forkSession(hit.el, s.id) });
-  if (isMineSess(s)) rows.push({ label: s.projectId ? '프로젝트 바꾸기·떼기' : '프로젝트 연결', icon: 'moveto', hint: s.projectId ? pn : undefined, run: () => hooks?.pickProject(hit.el, s.id) });
+  if (canMoveSess(s)) rows.push({ label: s.projectId ? '프로젝트 바꾸기·떼기' : '프로젝트 연결', icon: 'moveto', hint: s.projectId ? pn : undefined, run: () => hooks?.pickProject(hit.el, s.id) });
   const share = shareSessOf(s);
   if (share) rows.push({ label: '공유…', icon: 'share', run: () => openSharePopover(hit.el, share) });
   rows.push({ sep: true, label: '' }, copyRow('링크 복사', absUrl(href), '링크를 복사했어요'));

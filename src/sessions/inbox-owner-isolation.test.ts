@@ -52,7 +52,8 @@ const DOCS = readSrc("web/docs-content.ts");
 
 /** 소유 술어를 **화면 소스에서 그대로 떼어** 실행한다 — 여기 사본을 두면 그 사본만 맞고 화면은 틀릴 수 있다. */
 function loadIsMine(): (s: Record<string, unknown>, meId: string) => boolean {
-  const m = /export const isMineSess = \(s: Sess\): boolean => \{([\s\S]*?)\n\};/.exec(VIEWS);
+  //  #3870 — 인자 타입은 묻지 않는다(Pick<Sess, 'owned' | 'raw'> 로 넓혔다 — 세션 화면의 target 도 같은 술어를 쓴다). 본문이 판정이다.
+  const m = /export const isMineSess = \(s: [^)]*\): boolean => \{([\s\S]*?)\n\};/.exec(VIEWS);
   assert.ok(m, "views.ts 에서 isMineSess 본문을 찾지 못했다 — 「확인할 것」의 소유 판정이 한 벌이 아니다");
   const body = m![1]
     .replace(/String\(\(state\.me && \(state\.me as \{ userId\?: string \}\)\.userId\) \|\| ''\)/g, "__ME__")

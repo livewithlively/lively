@@ -176,6 +176,8 @@ const feedTargetDrain: Capability = {
   },
 };
 
+// 순서가 곧 REST 마운트 순서다 — `POST /api/ui/feed-targets/drain` 은 `POST /api/ui/feed-targets/:id`(update)보다 **먼저** 와야
+//  한다. 뒤에 있으면 :id 가 "drain" 을 받아 발행 버튼(web/admin-outbound.ts)이 수정 핸들러로 갔다(#4226 rest-shadow 가드가 잡음).
 export const feedTargetCapabilities: Capability[] = [
-  feedTargetList, feedTargetCreate, feedTargetUpdate, feedTargetDelete, feedTargetSetCategories, feedTargetDrain,
+  feedTargetList, feedTargetCreate, feedTargetDrain, feedTargetUpdate, feedTargetDelete, feedTargetSetCategories,
 ];

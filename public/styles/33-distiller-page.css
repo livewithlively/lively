@@ -40,7 +40,7 @@ body[data-route="context-distiller"] main { max-width: none; }
 .dst-head-main { flex: 1 1 340px; min-width: 0; }
 .dst-title { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.4px; color: var(--ink);
   word-break: keep-all; overflow-wrap: break-word; }
-.dst-sub { margin: 6px 0 0; font-size: 13.5px; color: var(--ink-sub); }
+.dst-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0 0; font-size: 13.5px; color: var(--ink-sub); }
 /* 저장 줄 — 이 페이지의 핵심 행동 하나(저장)만 primary, 나머지는 ghost/text. */
 .dst-head-acts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: none; padding-top: 2px; }
 /* '저장 안 된 변경' — 페이지가 되면 뒤로가기·새로고침으로 쉽게 나갈 수 있어, 지금 상태가 저장본과

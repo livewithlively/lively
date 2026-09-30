@@ -35,8 +35,10 @@ import { rememberCreated } from './created-cache.js';   // #1820 — 되살린 �
 import { sessText } from './side.js';
 import { listSessionApps, openAppSession } from './app-session.js';
 import { openInstalledApp } from './app-instance.js';
+import { attachAppToSession, openEditPolicyDialog, sessAppPart, SHOW_SESSAPP_EVT } from './session-app-pane.js';   // #4225 곁칸의 붙은 앱 탭 · 고치기 설정
 import { type Sess, type V2Data } from './views.js';
-import { bindCtx, requestOpenRoute } from './ctx-registry.js';   // #3784 곁칸 부품 우클릭 메뉴
+import { bindCtx, requestOpenRoute } from './ctx-registry.js';
+import { hasScope } from '../lib/state.js';   // #3784 곁칸 부품 우클릭 메뉴
 import { copyText } from './ctx-menu.js';
 
 // 아이콘은 곁칸 곳곳(panes.ts · proj-settings.ts)이 여기서 받아 왔다 — 잎으로 옮긴 뒤에도 그 자리를 유지한다.
@@ -51,7 +53,7 @@ function handIsElsewhere(): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || a.isContentEditable;
 }
 
-export type PartType = 'sessions' | 'files' | 'sessfiles' | 'knowledge' | 'tasks' | 'timeline' | 'liv' | 'archive' | 'web' | 'editor' | 'apps' | 'preview';
+export type PartType = 'sessions' | 'files' | 'sessfiles' | 'knowledge' | 'tasks' | 'timeline' | 'liv' | 'archive' | 'web' | 'editor' | 'apps' | 'preview' | 'sessapp';
 
 export interface PartCtx {
   id: number;
@@ -106,6 +108,9 @@ export interface Part {
   selectSession?: (sid: string | null) => void;
   /** 세션 부품만 — 지금 보는 세션 id(탭 줄이 어느 탭을 켤지 안다). null = 새 세션 자리. */
   currentSession?: () => string | null;
+  /** 탭의 × 를 눌렀다 — 있으면 셸은 탭을 빼지 않고 이것만 부른다(#4225 붙은 앱 탭: × = 이 세션에서 떼기.
+   *  떼면 붙은 목록이 비고, 셸이 그걸 보고 탭을 걷는다). */
+  onTabClose?: () => void;
 }
 
 export interface PartDef {
@@ -138,7 +143,9 @@ export const PART_DEFS: PartDef[] = [
   { type: 'preview', name: '미리보기', icon: 'preview', hint: '띄워 둔 화면 목록입니다. 누르면 웹 칸에 그 화면이 실립니다.' },
   // #4135(원준 2026-09-25) — 뷰어는 [+] 로 열지 않는다. 자료 칸에서 파일을 두 번 누르면 **파일마다** 뷰어가 하나씩 뜬다.
   { type: 'editor', name: '뷰어', icon: 'eye', multi: true, pickable: false, hint: '자료 칸에서 파일을 두 번 누르면 여기에 열립니다 — 문서·그림·PDF·시안·영상. 파일마다 뷰어가 하나씩.' },
-  { type: 'apps', name: '앱', icon: 'apps', hint: '설치된 앱을 고르면 각 앱이 상단의 자기 탭에서 열립니다.' },
+  { type: 'apps', name: '앱', icon: 'apps', hint: '앱을 누르면 지금 세션에 붙어 사이드바에 그 앱 탭이 생겨요 — AI 도 그 앱을 같이 씁니다. 탭의 × 로 떼면 세션만 남아요.' },
+  // #4225 — 이 세션에 붙은 앱. [+] 로 넣지 않는다 — 앱을 붙이면 셸이 세우고 떼면 걷는다(배치에 저장하지 않는 탭, panes.ts DERIVED_TABS).
+  { type: 'sessapp', name: '붙은 앱', icon: 'apps', pickable: false, hint: '이 세션에 붙은 앱이에요 — AI 도 같은 화면을 씁니다. 탭의 × 로 떼면 세션만 남아요.' },
 ];
 
 export const partDef = (t: PartType): PartDef => PART_DEFS.find((d) => d.type === t) || PART_DEFS[0];
@@ -210,6 +217,7 @@ function sessionsPart(ctx: PartCtx): Part {
   let retryTimer = 0;
 
   // 위(그리고 전부) — 세션 화면이 통째로 들어오는 자리
+  //  (#4225 — 세션에 붙은 앱은 여기가 아니라 **곁칸의 탭**으로 선다: session-app-pane.ts 머리말)
   const stage = el('div', { class: 'pn-stage' });
   root.append(stage);
 
@@ -1534,11 +1542,25 @@ function viewerPart(ctx: PartCtx): Part {
   };
 }
 
-// ══ 앱 — 이 칸은 런처, 실제 앱은 AppInstance 상단 탭(#1780 v2.1) ════════════════
-//  앱 UI를 이 pane에 직접 끼우면 한 실행이 어떤 때는 top-level 앱, 어떤 때는 세션의 부품이 되어 앱 개념이 다시 둘로 갈린다.
-//  그래서 이 칸은 목록만 소유하고, 화면 앱은 AppInstance를 만들어 #/i/:id 탭으로, headless 앱은 앱 세션 탭으로 연다.
+// ══ 앱 — 이 칸은 런처 ════════════════════════════════════════════════════════
+//  #1780 v2.1 에선 화면 앱을 AppInstance 상단 탭(#/i/:id)으로, headless 앱을 앱 세션 탭으로만 열었다(앱 UI 를 이 칸에
+//  끼우면 한 실행이 top-level 앱이기도, 세션의 부품이기도 해서 앱 개념이 둘로 갈린다는 이유).
+//  #4225(9/21 회의) — 앱의 자리가 바뀌었다: **세션이 먼저 있고 앱은 그 세션에 붙는다.** 그래서 세션을 보고 있을 때
+//   화면·데이터가 있는 앱을 누르면 **지금 세션에 붙고 곁칸에 그 앱 탭이 생겨 켜진다**(session-app-pane.ts). 이 칸은 여전히
+//   목록만 소유한다. 새 세션 자리(세션이 없다)이거나 화면·데이터가 없는 앱(스킬 묶음)은 종전대로 상단 탭으로 연다.
+//   우클릭: 붙이기 · 새 탭으로 열기 · (관리자) 고칠 수 있는 사람 — 앱은 그 워크스페이스가 바로 고쳐 쓰는 것이다(app_save).
 function appsPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-apps' });
+  const attach = async (a: { id: string; title: string }): Promise<void> => {
+    const sid = ctx.curSession();
+    if (!sid) return;
+    //  붙으면 붙은 목록이 다시 읽히고, 셸이 «새로 붙음»을 보고 곁칸에 그 앱 탭을 세워 켠다(panes.ts syncSessApps).
+    //  이미 붙어 있던 앱이면 «새로 붙음»이 없다 — 그 탭을 보여 달라고 따로 말한다(누른 사람은 그 앱을 보려고 눌렀다).
+    if (await attachAppToSession(sid, a.id, a.title)) {
+      ctx.paneRoot().dispatchEvent(new CustomEvent(SHOW_SESSAPP_EVT, { detail: { app_id: a.id } }));
+      toast(`「${a.title}」을(를) 이 세션에 붙였어요 — 사이드바에서 AI 와 같이 씁니다.`);
+    }
+  };
 
   const list = async (): Promise<void> => {
     root.replaceChildren(el('p', { class: 'pn-fine', text: '불러오는 중…' }));
@@ -1554,17 +1576,24 @@ function appsPart(ctx: PartCtx): Part {
     root.replaceChildren(el('div', { class: 'pn-apps-grid' }, ...apps.map((a) => {
       const hasUi = a.pages.length > 0 || a.system?.renderer === 'browser';
       const projectId = a.instances.project === 'global' ? null : ctx.id;
+      //  붙일 수 있는 앱 = 세션 옆에 둘 화면이 있거나 AI 가 쓸 데이터가 있는 앱. 브라우저 같은 시스템 앱은 제 탭이 정본이다.
+      const attachable = (a.pages.length > 0 || a.tables.length > 0) && !a.system;
+      const openTab = (): void => { if (hasUi) void openInstalledApp(a, projectId); else void openAppSession(a.id, { title: a.title, projectId }); };
       const tile = el('button', { class: 'pn-app', type: 'button',
-        title: hasUi ? '상단 탭에서 앱 화면을 엽니다' : '상단 탭에서 이 앱 전용 AI 세션을 엽니다',
-        onclick: () => { if (hasUi) void openInstalledApp(a, projectId); else void openAppSession(a.id, { title: a.title, projectId }); } },
+        title: attachable ? '지금 보고 있는 세션 오른쪽에 붙입니다(세션이 없으면 상단 탭으로 열어요)' : hasUi ? '상단 탭에서 앱 화면을 엽니다' : '상단 탭에서 이 앱 전용 AI 세션을 엽니다',
+        onclick: () => { if (attachable && ctx.curSession()) void attach(a); else openTab(); } },
         el('span', { class: 'pn-app-ic' }, pnIcon(hasUi ? 'grid' : 'chat', 'pn-i')),
         el('b', { text: a.title }),
-        el('span', { class: 'pn-fine', text: hasUi ? '앱 탭' : '앱 세션 탭' }));
-      // #3784 우클릭 — 열기(앱 화면 / 앱 세션) · 이름 복사
+        el('span', { class: 'pn-fine', text: attachable ? '세션에 붙이기' : hasUi ? '앱 탭' : '앱 세션 탭' }));
+      // #3784 우클릭 — 붙이기 · 열기(앱 화면 / 앱 세션) · 이름 복사
       bindCtx(tile, () => ({
         title: a.title, sub: hasUi ? '앱 화면' : '세션 목록',
         rows: [
-          hasUi ? { label: '앱 화면 열기', icon: 'open', run: () => void openInstalledApp(a, projectId) } : { label: '앱 세션 열기', icon: 'chat', run: () => void openAppSession(a.id, { title: a.title, projectId }) },
+          ...(attachable && ctx.curSession() ? [{ label: '이 세션에 붙이기', icon: 'plus', run: () => void attach(a) }] : []),
+          hasUi ? { label: '앱 화면 열기(새 탭)', icon: 'open', run: () => void openInstalledApp(a, projectId) } : { label: '앱 세션 열기', icon: 'chat', run: () => void openAppSession(a.id, { title: a.title, projectId }) },
+          //  #4225 — 누가 이 앱을 고칠 수 있나(기본 전원 · 앱마다 지정한 사람만). 관리자만, 기본 앱(빌트인)은 고칠 수 없어 없다.
+          ...(hasScope('admin') && a.source.kind !== 'builtin' ? [{ label: a.editMode === 'members' ? `고칠 수 있는 사람 — 지정한 ${a.editMembers.length}명` : '고칠 수 있는 사람 — 전원', icon: 'pen',
+            run: () => void openEditPolicyDialog({ id: a.id, title: a.title, editMode: a.editMode, editMembers: a.editMembers }, () => void list()) }] : []),
           { sep: true, label: '' },
           { label: '앱 이름 복사', icon: 'copy', run: () => void copyText(a.title).then((ok) => { if (ok) toast('복사했어요'); }) },
         ],
@@ -1659,5 +1688,6 @@ export function makePart(type: PartType, ctx: PartCtx): Part {
   if (type === 'tasks') return tasksPart(ctx);
   if (type === 'timeline') return timelinePart(ctx);
   if (type === 'apps') return appsPart(ctx);
+  if (type === 'sessapp') return sessAppPart(ctx);
   return livPart(ctx);
 }

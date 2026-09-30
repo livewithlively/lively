@@ -93,6 +93,22 @@ export async function notifySystem(input: {
   });
 }
 
+/**
+ * 앱 설치가 사람에게 알릴 일이 생겼을 때(#4224) — 매니페스트에서 빠진 테이블에 데이터가 있어 보관했다 · 워크스페이스 퓨즈에 걸려
+ *  설치를 거절했다. 알리는 주체는 앱이 아니라 **설치 코어**라 앱 관문(선언·grant)을 지나지 않는다(앱이 알림 권한을 선언하지
+ *  않았어도 설치한 사람은 알아야 한다). 받는 사람 = 설치를 요청한 구성원. app_id 는 그 앱 — 「확인할 것」 에서 앱 알림으로 보인다.
+ */
+export async function notifyAppInstaller(input: {
+  appId: string; memberId: string;
+  title?: unknown; body?: unknown; href?: unknown; dedupe_key?: unknown;
+  now?: number;
+}): Promise<NotifyResult> {
+  if (!input.appId || !input.memberId) return { ok: false, denial: "notify-app-required" };
+  const norm = normalizeNotification(input);
+  if (!norm.ok) return { ok: false, denial: norm.denial };
+  return sendNormalized(input.appId, input.memberId, norm.value, { kind: "app", actor: null, now: input.now });
+}
+
 /** 두 발송 경로의 공통 꼬리 — 중복 억제 판정 뒤 저장. 여기가 유일한 INSERT 자리다. */
 async function sendNormalized(
   appId: string, memberId: string,

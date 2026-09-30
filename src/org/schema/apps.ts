@@ -54,6 +54,12 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_status_idx ON org_app(status);`);
+  //  #4225 — 누가 이 앱을 고칠 수 있나(app_save). 기본은 구성원 전원이고, 워크스페이스(관리자)가 앱마다 지정한 사람으로 좁힌다.
+  //   앱은 라이블리 팀이 아니라 **그 워크스페이스가** 마음에 안 드는 곳을 바로 고쳐 쓰는 것이다(상민 2026-09-30).
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS edit_mode TEXT NOT NULL DEFAULT 'all';`);
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS edit_members JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+  await pool.query(`ALTER TABLE org_app DROP CONSTRAINT IF EXISTS org_app_edit_mode_check;`);
+  await pool.query(`ALTER TABLE org_app ADD CONSTRAINT org_app_edit_mode_check CHECK (edit_mode IN ('all','members'));`);
 
   // ── org_app_component — 앱이 전개한 구성요소 행 조인(무엇을 심었나 = 무엇을 회수하나) ──
   //  PK(app_id, kind, ref). ref 는 대상 행의 자연키(문자열). orig_name = 자산 번들 내 원명(물질화 시 복원, design R1-F4).
@@ -257,6 +263,43 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   //  옛 행 되분류 — 이 열이 생기기 전에 ai-session 스윕이 남긴 «답을 기다려요» 는 전부 세션 알림이다. 그대로 두면
   //   열이 생긴 첫날 「확인할 것」에 옛 세션 알림 수십 건이 그대로 서 있다(이 프로젝트가 지우려는 바로 그 화면). 멱등.
   await pool.query(`UPDATE org_app_notification SET kind='session' WHERE app_id='ai-session' AND kind='app';`);
+
+  // ── org_session_app — 일반 세션에 **붙은** 앱(#4225) ──
+  //  앱 세션(토큰에 app_id 를 구운 세션)과 다르다: 세션은 사람의 평범한 세션이고, 앱은 필요할 때 붙였다 뗀다
+  //  (9/21 회의 «맥락에 기능이 속한다»). 붙어 있는 동안만 그 세션의 AI 가 그 앱 테이블을 읽고 쓴다 — 판정은
+  //  매 호출 이 행을 다시 읽는다(apps/session-apps.ts requireAttachedApp). 떼면 detached_at 이 서고 그 순간부터 막힌다.
+  //  PK(session_id, app_id) — 다시 붙이면 같은 행을 되살린다(attached_at 갱신). member_id = 붙인 사람(= 세션 주인).
+  //  v2.1 K 규칙대로 org_app 에 FK 를 걸지 않는다 — 앱 제거 때 pruneSessionApps 가 명시 회수한다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_session_app(
+      session_id TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      member_id TEXT NOT NULL,
+      attached_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      detached_at TIMESTAMPTZ,
+      PRIMARY KEY (session_id, app_id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_session_app_live_idx ON org_session_app(session_id) WHERE detached_at IS NULL;`);
+
+  // ── org_app_snapshot — 앱 데이터 일일 내보내기(#4226) ──
+  //  앱 자유 SQL 은 AI 한 줄로 행을 지울 수 있다. RDS 백업(7일)은 DB 전체 단위라 한 워크스페이스·한 앱만 되돌릴 수 없다 →
+  //  (워크스페이스, 앱) 데이터를 하루 한 번 떠 둔다(7일 보관). 앱 제거·복원 직전에도 뜬다(reason). 테이블 하나의 행을
+  //  1,000행씩 묶어 jsonb 로 담는다(TOAST 가 압축한다). 떠 두기·복원은 apps/app-snapshot.ts.
+  //  v2.1 K 규칙대로 org_app 에 FK 를 걸지 않는다 — 앱을 지워도 7일 동안은 남아야 되돌릴 수 있다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_snapshot(
+      app_id TEXT NOT NULL,
+      taken_at TIMESTAMPTZ NOT NULL,
+      table_name TEXT NOT NULL,
+      chunk INT NOT NULL,
+      reason TEXT NOT NULL DEFAULT 'daily',
+      row_count INT NOT NULL DEFAULT 0,
+      rows JSONB NOT NULL DEFAULT '[]'::jsonb,
+      PRIMARY KEY (app_id, taken_at, table_name, chunk)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_snapshot_taken_idx ON org_app_snapshot(taken_at);`);
 
   // ── 기존 테이블 앱 축(design D1) — 전부 ADD COLUMN IF NOT EXISTS(무회귀) ──
   //  auth_token.app_id — 앱 세션 토큰 귀속(NULL = 일반 토큰). 기능 롤백 런북이 `WHERE app_id IS NOT NULL` 로 일괄 revoke.
