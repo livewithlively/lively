@@ -8,6 +8,7 @@
 //
 // 실행: npm run build && node dist/capabilities/content-secrets.test.js
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 
 delete process.env.ITEMS_DATABASE_URL;   // 정적 import 전에 — client.ts 가 import 시점에 읽는다
 const { categoryCapabilities } = await import("./categories.js");
@@ -171,6 +172,25 @@ await t("E16 외부 하네스 첫 지시 자동 생성(AUTO_CREATED_MARK)은 막
   assert.ok(!input.name.includes(GH), "이름이 가려지지 않았다");
   // 표식 없는 같은 입력은 종전대로 400(사람이 쓰는 입구)
   assert.ok((await call("project_create_v6", { name: "p", description: `본문 ${GH}` })).blocked);
+});
+
+await t("E17 적대 입력에서도 검사가 선형 시간에 끝난다(ReDoS 방지) — 자식 프로세스 10초 상한", () => {
+  //  첫 개인키 식은 «머리줄 + a:a:a:…» 에서 지수 역추적이 났다(n=42 에 308ms, 2자마다 ×4). 한 입구의 문자열 하나로
+  //  게이트웨이가 멈추므로, 회귀하면 CI 가 매달리지 않고 이 행이 실패하도록 자식에서 시간을 잰다.
+  const REDACT = JSON.stringify(new URL("../org/ingest/redact.js", import.meta.url).href);
+  const body = `import { assertNoHardSecrets } from ${REDACT};
+    const H = "-----BEGIN " + "PRIVATE KEY-----";
+    const hostile = [H + " " + "a:".repeat(5000) + "!", H + "a:\\n".repeat(5000) + "!", H + "a: ".repeat(5000) + "!",
+      H + "\\nProc-Type: x".repeat(3000) + "!", H + " ".repeat(100000) + "!", H + ">".repeat(100000) + "!",
+      H + "\\\\n".repeat(50000) + "!", H + ("a:" + "A".repeat(39)).repeat(2000) + "!", "sk-ant-" + "a-".repeat(20000) + "!"];
+    const t0 = performance.now();
+    for (const h of hostile) { try { assertNoHardSecrets(h, "x"); } catch { /* 판정은 상관없다 — 시간만 잰다 */ } }
+    console.log("ELAPSED", Math.round(performance.now() - t0));`;
+  const r = spawnSync(process.execPath, ["--input-type=module", "-e", body], { encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" });
+  assert.equal(r.signal, null, `적대 입력에서 검사가 10초 안에 안 끝났다(역추적 폭발)\n${r.stderr}`);
+  assert.equal(r.status, 0, r.stderr);
+  const ms = Number(/ELAPSED (\d+)/.exec(r.stdout)?.[1]);
+  assert.ok(Number.isFinite(ms) && ms < 2000, `적대 입력 9종에 ${ms}ms — 선형이면 수십 ms 다`);
 });
 
 // ── 자동 생성은 막지 않고 가린다 ──
