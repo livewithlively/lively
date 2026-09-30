@@ -5,6 +5,7 @@
 //  잡 id 추출을 잘못하면 사람이 직접 부른 위탁 결과로 엉뚱한 잡 상태가 갱신된다.
 //  되먹임 UPDATE 는 «무엇을 쓰고 무엇을 안 쓰는지»가 곧 계약이라 조립 결과를 직접 고정한다.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { cronJobIdOf, cronStatusOf, buildCronFeedbackUpdate } from "./cron-task-feedback.js";
 
 // ── cronJobIdOf: 기본 마커에서 잡 id 추출 ──
@@ -78,6 +79,18 @@ import { cronJobIdOf, cronStatusOf, buildCronFeedbackUpdate } from "./cron-task-
 {
   const u = buildCronFeedbackUpdate({ jobId: "j", taskId: 1, ok: false, error: "가".repeat(900) });
   assert.equal(JSON.parse(String(u.params[2])).task_error.length, 500);
+}
+
+// ── 배선: 되먹임에는 **가린** 실패 문장만 넘긴다(#4422) ──
+//  되먹임은 org_cron.last_summary(크론 화면)와 경보 웹훅(조직 밖 채널)으로 나간다. markFinished 가 org_task 에는 가린 문장을
+//  저장하면서 되먹임에 원문을 넘기면, 그 가림을 이 길로 우회해 토큰이 샌다 — DB 없이 잴 수 없어 소스로 못박는다.
+{
+  const src = readFileSync(new URL("../node/task-store.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+  const body = src.slice(src.indexOf("export async function markFinished("), src.indexOf("export async function noteAssignFailure("));
+  assert.ok(body.length > 0, "markFinished 를 못 찾았다 — 시험이 헛돈다");
+  assert.match(body, /const safeError = error == null \? null : redactTaskText\(error\);/, "실패 문장은 한 번 가려 두고");
+  assert.match(body, /recordCronTaskOutcome\(\{ jobId, taskId: id, ok, error: safeError \}\)/, "되먹임에는 그 가린 문장을 넘긴다");
+  assert.doesNotMatch(body, /recordCronTaskOutcome\(\{[^}]*\berror \}\)/, "원문(error)을 그대로 넘기면 안 된다");
 }
 
 console.log("cron-task-feedback.test.ts ok — 마커에서 잡 id 추출(배치키 제외·해당없음 판정) · 위탁 성공/실패 → ok/error · 되먹임 UPDATE 계약(last_run_at 무접촉·task_id 순서가드·요약 덧대기)");

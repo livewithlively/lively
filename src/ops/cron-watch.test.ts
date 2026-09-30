@@ -5,7 +5,7 @@
 //  크론 잡에도 적용되지만, 상태 판정 3분류(정상/실패/관측없음)와 last_summary 에서 사유를 뽑는 규칙이 다르다.
 import assert from "node:assert/strict";
 import type { BoxAlert } from "./box-watch.js";
-import { cronPhaseOf, cronFailureReason, cronAlertFor, tickOnce, stopCronWatch, type CronJobHealth } from "./cron-watch.js";
+import { cronPhaseOf, cronFailureReason, cronAlertFor, batchPhaseOf, batchTaskIds, tickOnce, stopCronWatch, type BatchTaskState, type CronJobHealth } from "./cron-watch.js";
 
 // ── cronPhaseOf: 정상 ──
 {
@@ -30,8 +30,40 @@ import { cronPhaseOf, cronFailureReason, cronAlertFor, tickOnce, stopCronWatch, 
   //  이 잡들이 요동의 본선이다(주기는 짧고 배치 하나의 실행은 길다).
   assert.equal(cronPhaseOf("ok", { batches: [{ task_id: 3 }] }), null, "배치형 접수도 종결 전이면 관측 없음");
   assert.equal(cronPhaseOf("ok", { managers: [{ task_id: 3 }] }), null, "관리 잡의 배치형 요약도 동일");
-  assert.equal(cronPhaseOf("ok", { batches: [{ task_id: 3 }], task_status: "done" }), "ok", "종결이 덧대지면 그때 판정한다");
+  assert.equal(cronPhaseOf("ok", { batches: [{ task_id: 3 }], task_status: "done" }), null,
+    "배치형은 최상위 되먹임으로 판정하지 않는다 — 위탁 상태를 못 받았으면 관측 없음");
   assert.equal(cronPhaseOf("ok", { batches: [] }), "ok", "위탁 id 가 어디에도 없으면 종전대로 판정한다");
+}
+
+// ── 배치형은 그 회차에 낸 위탁 **전부**의 실제 상태로 판정한다 ──
+//  되먹임은 배치가 끝날 때마다 잡 상태를 그 배치 결과로 덮는다. 레인 하나만 계속 실패하는 잡을 last_status 로
+//  읽으면 회차 안에서 error↔ok 가 오가 회차마다 실패·복구 알림이 한 쌍씩 나간다.
+{
+  const st = (o: Record<string, string>): Map<string, BatchTaskState> => new Map(Object.entries(o).map(([k, v]) => [k, { status: v }]));
+  assert.deepEqual(batchTaskIds({ batches: [{ task_id: 3 }, { task_id: "4" }, { error: "x" }, { task_id: 3 }] }), ["3", "4"],
+    "배치 안의 위탁 id(숫자·숫자 문자열)만 모으고 중복은 한 번");
+  assert.deepEqual(batchTaskIds({ managers: [{ task_id: 9 }] }), ["9"], "관리 잡의 managers 도 같다");
+  assert.equal(batchTaskIds({ batches: [{ error: "x" }] }), null, "위탁 id 가 하나도 없으면 배치형으로 보지 않는다");
+  assert.equal(batchTaskIds({ task_id: 3 }), null, "단일 위탁 잡은 배치형이 아니다");
+
+  assert.equal(batchPhaseOf(["1", "2"], st({ 1: "failed", 2: "running" })), null, "하나라도 도는 중이면 회차가 안 끝났다 → 관측 없음");
+  assert.equal(batchPhaseOf(["1", "2"], st({ 1: "done", 2: "queued" })), null, "대기 중도 관측 없음");
+  assert.equal(batchPhaseOf(["1", "2"], st({ 1: "done", 2: "failed" })), "failing", "다 끝났고 하나라도 실패면 실패(끝난 순서와 무관)");
+  assert.equal(batchPhaseOf(["1", "2"], st({ 1: "failed", 2: "done" })), "failing", "실패가 먼저 끝나도 같다");
+  assert.equal(batchPhaseOf(["1", "2"], st({ 1: "done", 2: "done" })), "ok", "전부 성공이면 정상");
+  assert.equal(batchPhaseOf(["1", "2"], st({ 1: "done", 2: "canceled" })), "ok", "취소는 실패로 세지 않는다");
+  assert.equal(batchPhaseOf(["1", "2"], st({ 1: "done" })), "ok", "조회에 없는 id 는 판정에서 뺀다");
+  assert.equal(batchPhaseOf(["1"], st({})), null, "다 빠지면 관측 없음");
+
+  const summary = { batches: [{ task_id: 1 }, { task_id: 2 }], task_id: 2, task_status: "done" };
+  assert.equal(cronPhaseOf("ok", summary, st({ 1: "failed", 2: "done" })), "failing",
+    "마지막 되먹임(ok)이 아니라 회차 전체(실패 포함)로 판정한다");
+  assert.equal(cronPhaseOf("error", summary, st({ 1: "done", 2: "done" })), "ok", "회차가 전부 성공이면 last_status 와 무관하게 정상");
+}
+
+// ── warn 은 정상이다 — 잡은 돌았고, 경고는 그 잡이 스스로 알린다(카나리) ──
+{
+  assert.equal(cronPhaseOf("warn"), "ok", "카나리의 warn(프로브 일부 실패)을 크론 실패로 읽으면 카나리의 연속 실패 임계를 건너뛴다");
 }
 
 // ── cronPhaseOf: 관측 없음 — 값 없음(아직 한 번도 안 돎) ──
@@ -265,6 +297,44 @@ const healthy: CronJobHealth = { id: "j1", action: "agent_headless", last_status
   assert.equal(sent[0].severity, "warn");
 }
 
+// ── 배치형: 레인 하나가 계속 실패해도 회차마다 복구·실패 쌍을 내지 않는다(요동의 본선 시나리오) ──
+//  되먹임은 끝난 배치마다 잡 상태를 덮는다 — 아래 last_status/최상위 task_status 가 그 흔들림이다. 판정은 회차의
+//  위탁 전부를 보므로, 레인 A(홀수 id)가 계속 실패하는 한 실패로 머문다.
+{
+  stopCronWatch();
+  const sent: BoxAlert[] = [];
+  let states = new Map<string, BatchTaskState>();
+  const d = (job: CronJobHealth): Parameters<typeof tickOnce>[0] =>
+    ({ listJobs: async () => [job], taskStates: async () => states, send: async (a) => { sent.push(a); return true; } });
+  const job = (last_status: string, summary: Record<string, unknown>): CronJobHealth =>
+    ({ id: "distill", action: "distill_sources_headless", last_status, last_summary: summary });
+  // 회차 1 — A(1) 실패가 먼저 되먹여지고, B(2) 성공이 나중에 덮는다.
+  const c1 = { batches: [{ distiller: "A", task_id: 1 }, { distiller: "B", task_id: 2 }] };
+  states = new Map([["1", { status: "failed", error: "레인 A 도구 오류" }], ["2", { status: "running" }]]);
+  await tickOnce(d(job("error", { ...c1, task_id: 1, task_status: "failed" })));
+  states = new Map([["1", { status: "failed", error: "레인 A 도구 오류" }], ["2", { status: "done" }]]);
+  await tickOnce(d(job("ok", { ...c1, task_id: 2, task_status: "done" })));
+  assert.equal(sent.length, 1, "회차가 끝나면 실패를 한 번 알린다(B 의 성공 되먹임이 복구로 읽히면 안 된다)");
+  assert.equal(sent[0].severity, "warn");
+  assert.match(sent[0].text, /레인 A 도구 오류/, "사유는 마지막 되먹임(B 성공)이 아니라 실패한 배치의 것이다");
+  // 회차 2 — 접수 직후(관측 없음) → B 가 먼저 성공 → A 가 또 실패.
+  const c2 = { batches: [{ distiller: "A", task_id: 3 }, { distiller: "B", task_id: 4 }] };
+  states = new Map([["3", { status: "running" }], ["4", { status: "running" }]]);
+  await tickOnce(d(job("ok", c2)));
+  states = new Map([["3", { status: "running" }], ["4", { status: "done" }]]);
+  await tickOnce(d(job("ok", { ...c2, task_id: 4, task_status: "done" })));
+  states = new Map([["3", { status: "failed" }], ["4", { status: "done" }]]);
+  await tickOnce(d(job("ok", { ...c2, task_id: 4, task_status: "done" })));   // id 가드로 A(3) 되먹임은 막혔다
+  assert.equal(sent.length, 1, "같은 레인이 계속 실패하면 회차가 바뀌어도 알림은 그대로 한 번이다");
+  // 회차 3 — 전부 성공하면 그때 복구를 알린다.
+  const c3 = { batches: [{ distiller: "A", task_id: 5 }, { distiller: "B", task_id: 6 }] };
+  states = new Map([["5", { status: "done" }], ["6", { status: "done" }]]);
+  await tickOnce(d(job("ok", { ...c3, task_id: 6, task_status: "done" })));
+  assert.equal(sent.length, 2, "회차 전체가 성공하면 복구를 알린다");
+  assert.equal(sent[1].severity, "ok");
+  stopCronWatch();
+}
+
 // ── 목록에서 사라진 잡의 상태는 버린다 — 다시 켜졌을 때 '옛 실패에서 복구' 로 읽히면 안 된다 ──
 {
   stopCronWatch();
@@ -276,4 +346,4 @@ const healthy: CronJobHealth = { id: "j1", action: "agent_headless", last_status
   stopCronWatch();
 }
 
-console.log("cron-watch.test.ts ok — 상태 판정(정상/관측없음/실패) · 전이시만 알림(침묵·첫관측·경고·복구) · last_summary 사유 추출(우선순위·공백/타입건너뜀·개행접기·300자 상한) · detail 필드 · 상태기계(재통지 금지·미발송 복구 침묵·skipped 보존·접수창 요동 없음·사라진 잡 폐기)");
+console.log("cron-watch.test.ts ok — 상태 판정(정상/관측없음/실패) · 전이시만 알림(침묵·첫관측·경고·복구) · last_summary 사유 추출(우선순위·공백/타입건너뜀·개행접기·300자 상한) · detail 필드 · 상태기계(재통지 금지·미발송 복구 침묵·skipped 보존·접수창 요동 없음·배치형 회차 판정·사라진 잡 폐기) · warn 정상");
