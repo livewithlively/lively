@@ -33,7 +33,7 @@ const check = (cond, n, why = "기대와 다르다") => (cond ? ok(n) : bad(n, w
 
 //  가짜 환경 — 문서의 누름·뗌을 손으로 쏘고, «다음 차례» 는 큐에 쌓았다가 flush() 로 돌린다(동기로 부르면 안 된다는 것까지 잰다).
 function env() {
-  const ears = { pointerdown: [], pointerup: [], pointercancel: [] };
+  const ears = { pointerdown: [], pointerup: [], pointercancel: [], contextmenu: [] };
   const queue = [];
   let listens = 0;
   return {
@@ -100,6 +100,12 @@ const counter = () => { const f = () => { f.n++; }; f.n = 0; return f; };
   e.fire("pointercancel"); e.flush();
   check(pay.n === 1, "H7 pointercancel 뒤에도 갚는다(터치 스크롤 등)", `pay=${pay.n}`);
 }
+{ // H7b 우클릭 메뉴가 뜨면 pointerup 이 안 올 수 있다 — 누른 채로 굳지 않는다
+  const e = env(); const h = editHold(e); const inp = node(); const pay = counter();
+  h.begin(inp); h.skip(); e.fire("pointerdown"); inp.isConnected = false; h.end(inp, pay);
+  e.fire("contextmenu"); e.flush();
+  check(pay.n === 1, "H7b contextmenu 뒤에도 갚는다(뗌이 안 와도)", `pay=${pay.n}`);
+}
 { // H8 갚기 전에 새 편집이 열리면 빚은 그 편집으로 넘어간다
   const e = env(); const h = editHold(e); const a = node(); const b = node(); const pay = counter();
   h.begin(a); h.skip(); a.isConnected = false; h.end(a, pay);
@@ -122,7 +128,7 @@ const counter = () => { const f = () => { f.n++; }; f.n = 0; return f; };
 { // H11 누름 귀는 문서(환경)마다 한 벌 — 편집기가 탭마다 서도 쌓이지 않는다
   const e = env(); const hs = [editHold(e), editHold(e), editHold(e)];
   for (const h of hs) { const n = node(); h.begin(n); h.begin(n); }
-  check(e.listens === 3, "H11 ★ 편집기 셋이 몇 번을 열어도 문서 귀는 pointerdown·up·cancel 셋뿐", `listens=${e.listens}`);
+  check(e.listens === 4, "H11 ★ 편집기 셋이 몇 번을 열어도 문서 귀는 pointerdown·up·cancel·contextmenu 넷뿐", `listens=${e.listens}`);
 }
 { // H12 두 편집기는 누름은 나누되 빚은 따로 — 한쪽을 갚느라 다른 쪽을 그리지 않는다
   const e = env(); const side = editHold(e); const door = editHold(e); const a = node(); const b = node();
@@ -131,6 +137,22 @@ const counter = () => { const f = () => { f.n++; }; f.n = 0; return f; };
   e.fire("pointerdown"); a.isConnected = false; side.end(a, payA); b.isConnected = false; door.end(b, payB);
   e.fire("pointerup"); e.flush();
   check(payA.n === 1 && payB.n === 0, "H12 빚은 편집기마다 따로 — 건너뛴 쪽만 갚는다", `A=${payA.n} B=${payB.n}`);
+}
+
+{ // H13 진짜 브라우저 환경(env 없이) — 문서에 capture 로 달고, 갚기는 setTimeout(0) 으로 미룬다
+  const ears = [], timers = [];
+  globalThis.document = { addEventListener: (type, fn, capture) => ears.push({ type, fn, capture }) };
+  globalThis.window = { setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; } };
+  try {
+    const h = editHold(); const h2 = editHold(); const inp = node(); const pay = counter();
+    h.begin(inp); h2.begin(node());
+    check(ears.length === 4 && ears.every((x) => x.capture === true) && ["pointerdown", "pointerup", "pointercancel", "contextmenu"].every((t) => ears.some((x) => x.type === t)),
+      "H13a ★ 브라우저에선 문서에 capture 로 넷 — 편집기가 둘이어도 한 벌(자식이 전파를 끊어도 먼저 듣는다)", JSON.stringify(ears.map((x) => [x.type, x.capture])));
+    h.skip(); inp.isConnected = false; h.end(inp, pay);
+    check(pay.n === 0 && timers.length === 1 && timers[0].ms === 0, "H13b 갚기는 setTimeout(0) — 동기로 안 그린다", `pay=${pay.n} timers=${timers.length}`);
+    timers[0].fn();
+    check(pay.n === 1, "H13c 그 차례에 한 번 갚는다", `pay=${pay.n}`);
+  } finally { delete globalThis.document; delete globalThis.window; }
 }
 
 // ───────────────────────── B. 배선 — 주석을 걷고 본다(설명 주석의 낱말이 거짓 초록·빨강을 내지 않게)
@@ -160,6 +182,9 @@ const firstStmt = (fn) => fn.slice(fn.indexOf("{", fn.indexOf(")")) + 1).trim();
   const skipAt = r.indexOf("if (renaming.skip()) return;");
   check(skipAt > 0 && /if \(renaming\.skip\(\)\) return;\s*renaming\.paid\(\);/.test(r) && skipAt < r.indexOf("renderSourcesSection()"),
     "W2 ★ side.ts render() 는 구역을 그리기 전에 묻고 — 건너뛸 땐 빚을 적고, 그릴 땐 paid() 로 지운다");
+  const lg = body(SIDE, "renderLegacy");
+  check(/if \(renaming\.skip\(\)\) return;\s*renaming\.paid\(\);/.test(lg),
+    "W2b 옛 트리 붓(renderLegacy)도 같은 문법 — 건너뛸 땐 빚, 그릴 땐 paid()");
   const ir = body(SIDE, "inlineRename");
   check(/renaming\.begin\(input\)/.test(ir), "W3a side.ts inlineRename 이 연 칸을 쥔다(begin)");
   check((ir.match(/renaming\.end\(input, redraw\)/g) || []).length === 2,
@@ -172,8 +197,11 @@ const firstStmt = (fn) => fn.slice(fn.indexOf("{", fn.indexOf(")")) + 1).trim();
     "W4 ★★ panes.ts paintDoor 가 문패를 갈기 전에 titleEdit.skip() 을 먼저 묻는다(8초 틱 경로)", firstStmt(pd).slice(0, 80));
   const sr = body(PANES, "startRenameProject");
   check(/host\.replaceChildren\(input\);\s*titleEdit\.begin\(input\);/.test(sr), "W5a 문패 편집기가 연 칸을 쥔다(begin)");
-  check(/closed = true; titleEdit\.end\(input\); paintDoor\(\);/.test(sr),
-    "W5b ★ 취소는 칸을 **놓은 뒤에** 문패를 다시 그린다(놓기 전엔 paintDoor 가 건너뛰어 칸이 안 걷힌다)");
+  const cancel = sr.slice(sr.indexOf("const cancel"), sr.indexOf("const save"));
+  check(/closed = true;\s*titleEdit\.end\(input, paintDoor\);\s*host\.replaceWith\(titleNode\(/.test(cancel),
+    "W5b ★ 취소는 칸을 놓고(건너뛴 문패 그리기는 뗀 뒤 갚기) **제목 자리만** 되돌린다", cancel.slice(0, 160));
+  check(!/paintDoor\(\)/.test(cancel),
+    "W5b2 ★ 취소가 문패를 곧바로 통째로 다시 그리지 않는다 — 문패 단추를 눌러 끝낸 클릭이 사라진다");
   check(/closed = true; input\.disabled = true; titleEdit\.end\(input\);/.test(sr),
     "W5c 저장은 응답을 기다리기 전에 칸을 놓는다 — 응답이 안 와도 문패가 굳지 않는다");
   check(/const titleEdit = editHold\(\);/.test(PANES), "W5d 문패 편집기는 판마다 제 것을 쥔다");
