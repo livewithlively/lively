@@ -94,6 +94,7 @@
   "dist/terminal/harness-io/opencode-serve.js",
   "dist/terminal/harness-io/opencode-stream.js",
   "dist/terminal/harness-io/runtime-bus.js",
+  "dist/terminal/harness-io/screen-run.js",
   "dist/terminal/harness-io/session-event.js",
   "dist/terminal/harness-io/term-ui.js",
   "dist/terminal/harness-io/transcript-fs.js",

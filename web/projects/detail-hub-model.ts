@@ -129,7 +129,7 @@ export function tasksFootText(tasks: TaskLike[], w: number, h: number, shown: nu
 }
 
 // ── 세션 ─────────────────────────────────────────────────────────────────────
-export interface SessionLike { id: string; label?: string | null; owner?: string | null; created?: number | null; lastActive?: number | null; lastBusy?: number | null; lastAttached?: number | null; lastViewed?: number | null; agentState?: string | null; working?: boolean; awaiting?: boolean; attached?: boolean; restorable?: boolean; harness?: string | null; node?: { id?: string; name?: string; online?: boolean } | null }
+export interface SessionLike { id: string; label?: string | null; owner?: string | null; created?: number | null; lastActive?: number | null; lastBusy?: number | null; lastAttached?: number | null; lastViewed?: number | null; agentState?: string | null; working?: boolean; awaiting?: boolean; background?: boolean; attached?: boolean; restorable?: boolean; harness?: string | null; node?: { id?: string; name?: string; online?: boolean } | null }
 export interface SessionGroupDef { key: string; label: string; sessions: SessionLike[] }
 
 /** 마지막 활동 시각(ms) — 마지막 작업(서버 응답 `lastActive` — sessions.ts 가 lastBusy 를 그 이름으로 싣는다, web/session-status.ts SessLike 와 같다)

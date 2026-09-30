@@ -123,6 +123,10 @@ t("A3 ★ 다른 하네스는 맨 아래 몇 줄의 표시만 믿는다 — 본�
   assert.equal(harnessIo("codex")?.screen?.(lines(pane).slice(-14)), "busy", "배선: 종전 screen 꼬리(14줄)는 이 화면을 busy 로 읽는다 — 그래서 창을 줄였다");
   const busy = "› 현재 폴더에서 ls -la 를 실행해서 보여줘\n• Working (2s • esc to interrupt)\n› Explain this codebase\n  gpt-5.6-terra medium · ~/box/yoon";
   assert.equal(detectRun(`${stale}\n${busy}`, harnessIo("codex")?.run), "turn", "도는 표시는 맨 아래에 있다");
+  //  창 안(맨 아래 3줄)의 인용 — 재검토 재현 모양. 상태줄은 «(경과 시간 • esc to interrupt)» 괄호 모양이라 인용과 갈린다.
+  const quoted = `• 화면의 «esc to interrupt» 표시로 도는 중인지 봅니다\n${codexIdle}`;
+  assert.equal(detectRun(quoted, harnessIo("codex")?.run), null, "맨 아래의 인용");
+  assert.equal(harnessIo("codex")?.screen?.(lines(quoted)), "busy", "배선: screen 은 이 화면을 busy 로 읽는다 — run 이 따로 좁게 본다");
 });
 
 // ── 한 화면 두 판정(phase.readScreen) ──
@@ -183,6 +187,9 @@ t("W1 화면 판정이 대기 판정과 같은 캡처에서 나와 screenRunEffe
   assert.match(src, /if \(screen\.turn\) \{[^\n]*\n\s*r\.lastBusy = nowSec;/, "turn 만 마지막 작업 시각을 민다");
   const pushAt = src.indexOf("sessions.push({");
   assert.ok(pushAt > 0 && src.indexOf("if (screen.turn) {") < pushAt, "시각을 민 뒤에 행을 만든다(lastActive 에 실린다)");
+  //  캡처 경로가 두 판정을 **readScreen 한 곳**에서 낸다(S1 의 «대화상자면 실행 상태 없음» 이 실제 경로에 걸린다).
+  const phaseSrc = readFileSync(`${here}phase.ts`, "utf8");
+  assert.match(phaseSrc, /try \{ v = readScreen\(await tmux\(\["capture-pane", "-t", sessionId, "-p"\]\), io\); \}/, "scrapePane → readScreen");
 });
 t("W2 노드 스냅샷 투영이 background 를 싣고, 끊긴 노드에선 접는다(working·awaiting 과 같은 라이브 신호 · #2533)", () => {
   const row = { id: "box-x", owner: "a", invites: [], agentState: "idle", attached: true, background: true } as unknown as Parameters<typeof projectNodeSession>[0];
