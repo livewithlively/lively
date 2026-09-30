@@ -152,7 +152,9 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
       if (ob.op === "delete") {
         if (ob.ext_id_snapshot) {
           try { await clickupFetch(`/task/${encodeURIComponent(ob.ext_id_snapshot)}`, { method: "DELETE" }); }
-          catch (e) { if (!String((e as Error)?.message).includes("404")) throw e; } // 이미 없으면 성공 취급
+          // 이미 없으면 성공 취급. ⚠ 판정은 isClickupTaskGone(상태코드 자리) — includes("404") 는 메시지에 실린 경로까지 봐서
+          //  id 에 404 가 든 태스크의 5xx·429 소진을 «이미 없음»으로 닫고 ClickUp 카드를 남겼다.
+          catch (e) { if (!isClickupTaskGone(e)) throw e; }
         }
         await markDone(ob.id); deleted++; continue;
       }
