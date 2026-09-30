@@ -22,10 +22,10 @@
 import path from "node:path";
 import type { HarnessSessionAdapter } from "./adapter.js";
 import { RUN_FROM_SCREEN_LINES } from "./screen-run.js";   // #4502 — 실행 상태는 맨 아래 몇 줄만
+import { isoOf, parseJsonLines, type ChatBlock, type ChatLine, type ParseState } from "./chat-line.js";
 
 // #4502 — 도는 턴의 상태줄(실측 fixture «• Working (2s • esc to interrupt)»). 괄호 안이 «경과 시간 … • esc to interrupt» 여야 한다.
 const CODEX_WORKING = /^\s*[•◦]\s.*\(\s*\d[^)]*•\s*esc to interrupt\s*\)\s*$/i;
-import { isoOf, parseJsonLines, type ChatBlock, type ChatLine, type ParseState } from "./chat-line.js";
 
 const asObj = (v: unknown): Record<string, any> | null => (v && typeof v === "object" && !Array.isArray(v)) ? v as Record<string, any> : null;
 
