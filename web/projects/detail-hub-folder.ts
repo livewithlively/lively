@@ -285,7 +285,7 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
     const k = kindOf(rel);
     const box = el('span', { class: 'pn-fic ' + k.kind + extra, 'data-pv': rel, 'data-pvk': k.kind, 'data-pvs': String(it.size || 0) },
       pnIcon(k.kind === 'page' ? 'note' : k.kind === 'video' ? 'img' : 'doc', 'pn-i')) as HTMLElement;
-    if (k.kind !== 'file' && size !== 'icon') pv.watch(box, rel, k.kind, Number(it.size) || 0);
+    if (k.kind !== 'file' && size !== 'icon') pv.watch(box, rel, k.kind, Number(it.size) || 0, Number(it.mtime) || 0);   // 판을 주면 같은 판은 다시 받지 않는다(#3870)
     return box;
   };
   const goDir = (rel: string): void => { nav.path = rel; nav.picked = ''; ctx.refreshGrid(); };

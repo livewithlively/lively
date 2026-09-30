@@ -12,7 +12,7 @@
 //   P1 전환 구간 = 상한에서 격자 끝까지. 넘긴 거리 0 → 0, 구간 전체 → 1, 그 너머도 1
 //   P2 30% 를 넘겨야 카드. 30% 정각은 아니다
 //   K1 카드는 격자 안에 선다. 큰 값 · 음수 · 글자가 와도
-//   K2 카드는 320×240 아래로 안 줄고, 격자에서 8px 떨어진 크기를 안 넘는다
+//   K2 카드는 최소 크기(260×160) 아래로 안 줄고, 격자에서 8px 떨어진 크기를 안 넘는다
 //   K3 크기 조절: 왼쪽 위 모서리를 끌면 오른쪽 아래가 제자리다
 //   K4 크기 조절: 오른쪽 아래 모서리를 끌면 왼쪽 위가 제자리다
 //   K5 크기 조절로 최소 크기 아래로 못 줄인다
@@ -90,7 +90,7 @@ if (lib) {
   ok(inside(clampCard({ w: 5000, h: 5000, r: -300, b: 9000 }, ...B)), "K1b 큰 값 · 음수가 와도 격자 안", JSON.stringify(clampCard({ w: 5000, h: 5000, r: -300, b: 9000 }, ...B)));
   ok(inside(clampCard({ w: "x", h: null, r: undefined, b: NaN }, ...B)), "K1c 글자 · 빈 값이 와도 격자 안");
   const tiny = clampCard({ w: 10, h: 10, r: 24, b: 24 }, ...B);
-  ok(tiny.w === CARD_MIN.w && tiny.h === CARD_MIN.h, "K2a 320×240 아래로 안 준다", JSON.stringify(tiny));
+  ok(tiny.w === CARD_MIN.w && tiny.h === CARD_MIN.h, "K2a 최소 크기(260×160) 아래로 안 준다", JSON.stringify(tiny));
   const huge = clampCard({ w: 9999, h: 9999, r: 24, b: 24 }, ...B);
   ok(huge.w === B[0] - 16 && huge.h === B[1] - 16, "K2b 격자에서 8px 떨어진 크기를 안 넘는다", JSON.stringify(huge));
 

@@ -45,15 +45,15 @@ LIVELY_HARNESS = "codex"
 
 | Event | What's attached |
 |---|---|
-| SessionStart | session-preload · sync-harness-assets · work-flag · runner |
+| SessionStart | session-preload · sync-harness-assets · work-flag · runner (+ matcher `compact` work-flag — #4219 record reminder right after compaction) |
 | UserPromptSubmit | work-flag · runner |
 | PreToolUse | runner (**organization governance deny gate**) |
-| PostToolUse | work-flag ×3 (lively MCP · edit tools + shell · subagent launch `spawn_agent`) · runner |
+| PostToolUse | work-flag ×3 (lively MCP — incl. #4219 inline-record correction nudge · edit tools + shell · subagent launch `spawn_agent`) · runner |
 | PermissionRequest | work-flag (where claude's Notification = "needs confirmation" sits) |
 | Stop | stop-writeback-gate · work-flag · runner |
 | SessionEnd | work-flag · runner (fires on codex 0.149.1+) |
 | SubagentStop | work-flag · runner |
-| PreCompact / PostCompact | runner |
+| PreCompact / PostCompact | runner (codex PreCompact can only stop the turn, so the #4219 record nudge is not wired here) |
 
 ## Harness differences (observed on codex 0.142.0)
 

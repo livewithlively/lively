@@ -371,10 +371,11 @@
   .pn-tab-add, .pn-pane-hide, .pn-tab-more { width: 36px; height: 40px; }
   /* 자료 칸 머리 — 단추 36px, 크기 슬라이더는 뺀다(62px 슬라이더는 손가락으로 못 잡는다 — 보기·정렬은 남는다). */
   .pn-fbtn { height: 36px; min-width: 36px; font-size: 13px; }
-  .pn-ftools .btn-text { min-height: 36px; }
+  .pn-ftools .btn-text { height: 36px; min-height: 36px; }
+  .pn-upgrp > .pn-up-car { width: 32px; }
   .pn-fcrumb { padding: 6px 8px; font-size: 14px; max-width: 160px; }
   .pn-fsize { display: none; }
-  .pn-ffind { height: 36px; font-size: 16px; }   /* 16px — iOS 가 입력칸에서 확대하지 않는 하한 */
+  input.pn-ffind { height: 36px; font-size: 16px; }   /* 16px — iOS 가 입력칸에서 확대하지 않는 하한 */
   /* 뷰어 막대 — [← 자료]·다시 불러오기·내려받기 36px. */
   .pn-web-btn { height: 36px; min-width: 36px; }
   .pn-web-btn.ic { width: 36px; }
