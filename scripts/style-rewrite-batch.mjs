@@ -3,8 +3,10 @@
 //  의미 보존 게이트(불변식 + LLM 주장 대조)를 통과한 것만 저장한다.
 //
 // 사용법: 빌드(npm run build 또는 tsc -p tsconfig.json) 뒤에 실행한다 — 판정 모듈을 dist/ 에서 읽는다.
-//   node scripts/style-rewrite-batch.mjs --report out.jsonl (--names names.txt | --limit 20)
-//        [--apply] [--model sonnet] [--llm-cmd claude] [--attempts 3] [--concurrency 1]
+//   node scripts/style-rewrite-batch.mjs --report out.jsonl (--names names.txt | --limit 20 | --rank-top 100 [--rank-only])
+//        [--apply] [--resume] [--model sonnet] [--llm-cmd claude] [--attempts 3] [--concurrency 1]
+//   --rank-top 은 위키 여부·들어오는 링크 수로 순위를 매겨 상위 N 건을 고르고 <report>.names.txt 에 남긴다(--rank-only 는 거기서 멈춘다).
+//   --resume 은 report 를 비우지 않고 이미 기록된 이름을 건너뛴다 — LLM 실패(llm_exit·llm_timeout)로 끝난 건은 다시 한다.
 //   --apply 가 없으면 dry-run 이다(저장하지 않고 재작성본 전문을 report 에 싣는다 — 사람이 먼저 훑어본다).
 //   게이트웨이는 env LIVELY_URL·LIVELY_TOKEN, 없으면 ~/.lively/gateway-url·~/.lively/token.
 //   --llm-cmd 는 `<cmd> -p --model <m>` 로 불리고 프롬프트를 stdin 으로 받아 stdout 에 답한다(테스트는 가짜로 바꿔 끼운다).
@@ -27,7 +29,7 @@ const { resolveWritingFormat } = await import(pathToFileURL(fmtPath).href);
 
 // ── 인자 ──
 function parseArgs(argv) {
-  const a = { apply: false, model: "sonnet", llmCmd: "claude", names: null, limit: null, report: null, attempts: 3, concurrency: 1 };
+  const a = { apply: false, model: "sonnet", llmCmd: "claude", names: null, limit: null, rankTop: null, rankOnly: false, resume: false, report: null, attempts: 3, concurrency: 1 };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const val = () => {
@@ -39,6 +41,9 @@ function parseArgs(argv) {
     else if (k === "--names") a.names = val();
     else if (k === "--apply-from") a.applyFrom = val();
     else if (k === "--limit") a.limit = Number(val());
+    else if (k === "--rank-top") a.rankTop = Number(val());
+    else if (k === "--rank-only") a.rankOnly = true;
+    else if (k === "--resume") a.resume = true;
     else if (k === "--report") a.report = val();
     else if (k === "--model") a.model = val();
     else if (k === "--llm-cmd") a.llmCmd = val();
@@ -47,7 +52,11 @@ function parseArgs(argv) {
     else { console.error(`알 수 없는 인자: ${k}`); process.exit(2); }
   }
   if (!a.report) { console.error("--report <jsonl 경로> 가 필요합니다"); process.exit(2); }
-  if (!a.names && !a.applyFrom && !(Number.isInteger(a.limit) && a.limit > 0)) { console.error("--names <파일> 또는 --limit N(양의 정수) 중 하나가 필요합니다"); process.exit(2); }
+  const posInt = (n) => Number.isInteger(n) && n > 0;
+  if (a.limit != null && !posInt(a.limit)) { console.error("--limit 는 양의 정수여야 합니다"); process.exit(2); }
+  if (a.rankTop != null && !posInt(a.rankTop)) { console.error("--rank-top 은 양의 정수여야 합니다"); process.exit(2); }
+  if (a.rankOnly && a.rankTop == null) { console.error("--rank-only 는 --rank-top 과 함께 써야 합니다"); process.exit(2); }
+  if (!a.names && !a.applyFrom && a.limit == null && a.rankTop == null) { console.error("--names <파일>, --limit N, --rank-top N, --apply-from <report> 중 하나가 필요합니다"); process.exit(2); }
   return a;
 }
 const args = parseArgs(process.argv.slice(2));
@@ -101,6 +110,57 @@ async function pickCandidates(fmt, limit) {
   }
   return out;
 }
+
+const RANK_FETCH_CONCURRENCY = 8;
+// 위키 문서는 사람이 먼저 찾아 읽는 입구라 링크 수와 상관없이 앞에 둔다 — 링크 수가 이 값을 넘을 일은 없다.
+const WIKI_BONUS = 1_000_000;
+
+/** 적격 지식 전체에 점수를 매겨 상위 N 건을 고른다. 들어오는 링크는 목록 응답에 없어 적격 건마다 전문을 읽는다. */
+async function rankCandidates(fmt, top) {
+  const listed = [];
+  const page = 200;
+  for (let offset = 0; ; offset += page) {
+    const r = await api(`/api/ui/knowledge?provenance=authored&lifecycle=active&limit=${page}&offset=${offset}`);
+    if (!r.ok) throw new Error(`지식 목록 조회 실패 ${apiError(r)}`);
+    const entries = r.json?.entries ?? [];
+    listed.push(...entries);
+    if (!r.json?.has_more || !entries.length) break;
+  }
+  console.error(`목록 ${listed.length}건 — 적격 판정·전문 조회 중`);
+  const now = Date.now();
+  const scored = [];
+  let failed = 0;
+  const queue = [...listed];
+  await Promise.all(Array.from({ length: RANK_FETCH_CONCURRENCY }, async () => {
+    while (queue.length) {
+      const e = queue.shift();
+      // 목록 본문으로 먼저 걸러 부적격 건의 전문 조회를 아낀다.
+      if (typeof e.body_md === "string" && !isEligible(e, fmt, now).eligible) continue;
+      const { k, err } = await getKnowledge(e.name);
+      if (!k) { failed++; console.error(`전문 조회 실패 ${e.name} (${err})`); continue; }
+      if (!isEligible(k, fmt, now).eligible) continue;
+      const incoming = Array.isArray(k.links?.incoming) ? k.links.incoming.length : 0;
+      scored.push({ name: k.name ?? e.name, score: (k.is_wiki ? WIKI_BONUS : 0) + incoming, is_wiki: !!k.is_wiki, incoming, updated_at: k.updated_at ?? e.updated_at ?? "" });
+    }
+  }));
+  const ts = (x) => Date.parse(x) || 0;
+  scored.sort((a, b) => b.score - a.score || ts(b.updated_at) - ts(a.updated_at) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return { picked: scored.slice(0, top), eligible: scored.length, listed: listed.length, failed };
+}
+
+/** 이어 하기 — report 에 이미 남은 이름. LLM 실패로 끝난 건은 한도·인증이 풀리면 다시 해야 하므로 빼지 않는다. */
+function doneNames(file, isDone) {
+  if (!existsSync(file)) return new Set();
+  const done = new Set();
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    if (!line.trim()) continue;
+    let r;
+    try { r = JSON.parse(line); } catch { continue; } // 중단 순간 반쯤 쓰인 마지막 줄
+    if (r?.name && isDone(r)) done.add(r.name);
+  }
+  return done;
+}
+const retryableLlm = (r) => r.status === "failed" && /^llm_(exit|timeout)/.test(String(r.reason ?? ""));
 
 // ── LLM ──
 const LLM_TIMEOUT_MS = 10 * 60 * 1000;
@@ -407,9 +467,10 @@ async function processOne(name, fmt) {
  * dry-run 리포트의 통과본을 그대로 반영한다 — 이미 의미 판정을 통과한 글을 다시 LLM 으로 쓰지 않는다(비용·재현성).
  *  저장 직전에 최신 게이트로 기계 검사를 다시 하고(리포트 이후 게이트가 강화됐을 수 있다), 판이 그 사이 바뀌었으면 건너뛴다.
  */
-async function applyFromReport(file, fmt) {
+async function applyFromReport(file, fmt, skip = new Set()) {
   const rows = readFileSync(file, "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l))
-    .filter((r) => r.status === "passed_dry" && typeof r.after_body === "string");
+    .filter((r) => r.status === "passed_dry" && typeof r.after_body === "string" && !skip.has(r.name));
+  if (skip.size) console.error(`이어 하기 — 이미 처리된 ${skip.size}건을 건너뛴다`);
   const out = {};
   for (const r of rows) {
     const { k, err } = await getKnowledge(r.name);
@@ -440,15 +501,36 @@ if (args.apply && !fromOrg) {
 }
 if (args.applyFrom) {
   if (!fromOrg) { console.error("--apply-from 은 조직 서술 형식을 읽을 수 있는 관리자 토큰이 필요합니다."); process.exit(2); }
-  writeFileSync(args.report, "");
-  await applyFromReport(args.applyFrom, fmt);
+  // 반영 모드엔 LLM 이 없어 재시도 대상은 fetch·save 실패뿐이다. rejected(recheck)는 결정적이라 다시 해도 같다.
+  const skip = args.resume ? doneNames(args.report, (r) => r.status !== "failed") : new Set();
+  if (!args.resume) writeFileSync(args.report, "");
+  await applyFromReport(args.applyFrom, fmt, skip);
   process.exit(0);
 }
-const names = args.names
-  ? readFileSync(args.names, "utf8").split("\n").map((s) => s.trim()).filter((s) => s && !s.startsWith("#"))
-  : await pickCandidates(fmt, args.limit);
+let names;
+if (args.names) names = readFileSync(args.names, "utf8").split("\n").map((s) => s.trim()).filter((s) => s && !s.startsWith("#"));
+else if (args.rankTop != null) {
+  const { picked, eligible, listed, failed } = await rankCandidates(fmt, args.rankTop);
+  names = picked.map((p) => p.name);
+  const namesFile = `${args.report}.names.txt`;
+  // 점수는 주석 줄로 남긴다 — --names 가 # 줄을 건너뛰므로 이 파일을 그대로 다시 넣어 같은 대상을 재현할 수 있다.
+  writeFileSync(namesFile, [
+    `# rank-top ${args.rankTop} · 목록 ${listed}건 · 적격 ${eligible}건 · 조회 실패 ${failed}건 · 형식=${fromOrg ? "조직 설정" : "제품 기본값"}`,
+    ...picked.flatMap((p) => [`# score=${p.score} wiki=${p.is_wiki} incoming=${p.incoming} updated_at=${p.updated_at}`, p.name]),
+  ].join("\n") + "\n");
+  console.error(`적격 ${eligible}건 중 상위 ${picked.length}건 → ${namesFile}`);
+  if (args.rankOnly) {
+    for (const [i, p] of picked.entries()) console.log(`${String(i + 1).padStart(3)} ${String(p.score).padStart(8)} ${p.is_wiki ? "wiki" : "    "} in=${p.incoming} ${p.name}`);
+    process.exit(0);
+  }
+} else names = await pickCandidates(fmt, args.limit);
 
-writeFileSync(args.report, "");
+if (args.resume) {
+  const done = doneNames(args.report, (r) => !retryableLlm(r));
+  const before = names.length;
+  names = names.filter((n) => !done.has(n));
+  console.error(`이어 하기 — 이미 처리된 ${before - names.length}건을 건너뛴다`);
+} else writeFileSync(args.report, "");
 console.log(`대상 ${names.length}건 · ${args.apply ? "적용" : "dry-run"} · 형식=${fromOrg ? "조직 설정" : "제품 기본값"} · 모델=${args.model}`);
 
 const counts = {};
@@ -466,7 +548,7 @@ async function runOne(name) {
     row = { name, status: "failed", reason: String(e?.message ?? e).slice(0, 300) };
   }
   row.llm_calls = ctx.calls;
-  if (row.status === "failed" && /^llm_(exit|timeout)/.test(String(row.reason ?? ""))) {
+  if (retryableLlm(row)) {
     if (++llmFailStreak >= LLM_FAIL_STOP && !stopped) { stopped = true; console.error(`LLM 이 ${LLM_FAIL_STOP}번 연달아 실패해 멈춘다(사용량 한도·인증 확인): ${row.reason}`); }
   } else if (row.status !== "skipped") llmFailStreak = 0;
   totalCalls += ctx.calls;
