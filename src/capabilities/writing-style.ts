@@ -32,6 +32,8 @@ export interface WritingCheck {
   info: Record<string, unknown>;
   /** 저장을 거부할 위반. 비어 있으면 저장해도 된다. */
   rejects: WritingFinding[];
+  /** 거부 응답에 실을 조직 가이드(위반이 없으면 빈 글). */
+  guide: string;
 }
 
 const NEXT_STEP: Record<WritingSurface, { saved: string; proposed: string }> = {
@@ -40,7 +42,7 @@ const NEXT_STEP: Record<WritingSurface, { saved: string; proposed: string }> = {
     proposed: "제안에 반영하려면 고친 전문으로 같은 지식을 다시 저장하세요 — 제안이 갱신됩니다.",
   },
   activity: {
-    saved: "external_system·external_id 로 남긴 기록이면 같은 키로 다시 부르면 갱신됩니다. 아니면 다음 기록부터 맞추세요.",
+    saved: "다음 기록부터 맞추세요.",
     proposed: "다음 기록부터 맞추세요.",
   },
   project: {
@@ -59,7 +61,7 @@ export async function checkWriting(
   opts: WritingCheckOpts = {},
   loadFormat: () => Promise<WritingFormat> = getWritingFormat,
 ): Promise<WritingCheck> {
-  const none: WritingCheck = { info: {}, rejects: [] };
+  const none: WritingCheck = { info: {}, rejects: [], guide: "" };
   if (opts.observed || opts.folder) return none;
   try {
     const fmt = await loadFormat();
@@ -73,6 +75,7 @@ export async function checkWriting(
     const state = opts.proposed ? "수정 제안으로 접수됐습니다" : "저장은 됐습니다";
     return {
       rejects,
+      guide: fmt.guide_md,
       info: {
         style: {
           findings,

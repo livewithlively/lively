@@ -146,9 +146,9 @@ const activityLog: Capability = {
     // 서술 형식 — reject 규칙에 걸린 에이전트 기록은 남기지 않는다(사람의 웹 입력은 안내만). 판정은 서버에서 하므로
     //  키트·훅이 갱신되지 않은 세션의 기록에도 걸린다.
     //  외부 시스템 좌표가 있는 기록은 그 시스템의 글을 옮긴 것이라 여기서 고칠 수 없다 — 지식의 observed 와 같이 판정하지 않는다.
-    const { info: style, rejects } = await checkWriting("activity", { title: input.title, body: input.body ?? null },
+    const { info: style, rejects, guide } = await checkWriting("activity", { title: input.title, body: input.body ?? null },
       { human: isHumanWriter(user), observed: !!input.external_system });
-    if (rejects.length) throw writingRejectError(rejects, (style.style as { guide_md?: string }).guide_md ?? "");
+    if (rejects.length) throw writingRejectError(rejects, guide);
     const res = await logActivity({
       type: input.type, title: input.title, summary: input.summary ?? null, body: input.body ?? null,
       projectId: input.project_id ?? null, kuRefs: input.ku_refs, touches: input.touches,
