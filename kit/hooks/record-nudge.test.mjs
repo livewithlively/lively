@@ -152,6 +152,7 @@ const rollout = (originator, source) => {
   check("E15 fork 없는 하네스(opencode) → 무발화(플래그는 선다 — 배선 확인)", !nudged(out) && existsSync(flag(sid, "writeback")), `nudged=${nudged(out)} writeback=${existsSync(flag(sid, "writeback"))}`);
 }
 check("E16 라이블리 기계 세션(LIVELY_SESSION_KIND≠human) → 무발화", !nudged(write(newSid(), 1500, { extra: { LIVELY_SESSION_KIND: "delegate" } })), "넛지함");
+check("E16b 종류 축 이전 세션 — kind 없고 위탁 작업 폴더(LIVELY_TASK_WS)가 있으면 기계 세션(무발화)", !nudged(write(newSid(), 1500, { extra: { LIVELY_TASK_WS: "/w/task-1" } })), "넛지함");
 {
   const sid = newSid();
   const mk = (i) => ({ session_id: sid, hook_event_name: "PostToolUse", tool_name: "mcp__lively__task_comment_v6", tool_use_id: `par_${i}`, tool_input: inputOfLen(600), tool_response: {} });
@@ -179,8 +180,9 @@ check("E16 라이블리 기계 세션(LIVELY_SESSION_KIND≠human) → 무발화
   check("E20 tool_use_id 가 없어도 센다(1,200 → 넛지)", nudged(out) && inlineFiles(sid) === 1, `nudged=${nudged(out)} files=${inlineFiles(sid)}`);
 }
 {
-  const out = write(newSid(), 1500, { harness: "codex", payload: { turn_id: "t1", transcript_path: null } });
-  check("E21 codex 대화 파일 경로가 null 이면 대화형으로 본다(넛지)", nudged(out), "무발화");
+  const a = write(newSid(), 1500, { harness: "codex", payload: { turn_id: "t1", transcript_path: null } });
+  const b = write(newSid(), 1500, { harness: "codex", payload: { turn_id: "t1", transcript_path: join(SANDBOX, "no-such-rollout.jsonl") } });
+  check("E21 codex 대화 파일이 없거나(null — exec --ephemeral) 못 읽으면 헤드리스로 본다(무발화 — 틀린 fork 권유는 기록 유실)", !nudged(a) && !nudged(b), `null=${nudged(a)} missing=${nudged(b)}`);
 }
 {
   const bare = join(SANDBOX, "tmp-fresh");   // 플래그 디렉터리가 아직 없는 임시폴더
@@ -192,6 +194,12 @@ check("E16 라이블리 기계 세션(LIVELY_SESSION_KIND≠human) → 무발화
   const sid = newSid();
   write(sid, 1500);
   check("E23 플래그 기록(.lively·.writeback)은 종전대로 선다", existsSync(flag(sid, "lively")) && existsSync(flag(sid, "writeback")), "플래그 없음");
+}
+{
+  const sid = newSid();
+  write(sid, 1200);
+  const out = prompt(sid);
+  check("E24 턴 시작(UserPromptSubmit)은 아무것도 출력하지 않는다", out.trim() === "", `out=${out.slice(0, 120)}`);
 }
 
 // ── C. 압축 넛지 ──────────────────────────────────────────────────────────
@@ -220,6 +228,10 @@ const plainText = (out) => out.trim().length > 0 && envelope(out) === null && !o
   check("C2 기록이 작업보다 나중·작업 없음·라이블리 세션 아님 → 무출력", !a.trim() && !b.trim() && !c.trim(), `a=${a.slice(0, 60)} b=${b.slice(0, 60)} c=${c.slice(0, 60)}`);
 }
 {
+  const same = session({ writebackAgo: 30, workedAgo: 30 });
+  check("C2b 경계 — 기록과 작업이 같은 시각이면 기록한 것으로 본다(무출력)", !precompact(same).trim(), "출력함");
+}
+{
   const fresh = session();
   writeFileSync(flag(fresh, "writeback-pending.a7"), "");
   const stale = session();
@@ -239,6 +251,16 @@ const plainText = (out) => out.trim().length > 0 && envelope(out) === null && !o
   check("C5 claude 압축 직후 SessionStart(compact) → SessionStart 봉투 additionalContext(record-batch)", h?.hookEventName === "SessionStart" && h.additionalContext.includes("record-batch"), out.slice(0, 200));
 }
 {
+  const out = compactStart(session(), { payload: { agent_id: "a10", agent_type: "fork" } });
+  check("C5b 서브에이전트의 압축 직후 SessionStart → 무출력", !out.trim(), out.slice(0, 120));
+}
+{
+  const sid = session();
+  const a = precompact(sid), b = precompact(sid);
+  const c = compactStart(sid), d = compactStart(sid);
+  check("C5c 같은 압축에 훅이 두 벌(유저·프로젝트 settings)이어도 지시문·알림은 한 번씩", plainText(a) && !b.trim() && envelope(c) !== null && !d.trim(), `pre=[${!!a.trim()},${!!b.trim()}] resume=[${!!c.trim()},${!!d.trim()}]`);
+}
+{
   const a = compactStart(session(), { source: "startup" });
   const b = compactStart(session({ writebackAgo: 1, workedAgo: 30 }));
   check("C6 startup 이거나 미기록 작업이 없으면 무출력(종전 SessionStart 동작 그대로)", !a.trim() && !b.trim(), `startup=${a.slice(0, 60)} recorded=${b.slice(0, 60)}`);
@@ -249,6 +271,17 @@ const plainText = (out) => out.trim().length > 0 && envelope(out) === null && !o
   check("C7 codex 압축 직후 — TUI 는 record-batch 로, exec 는 fork 없이 바로",
     envelope(tui)?.hookEventName === "SessionStart" && contextOf(tui).includes("record-batch") && envelope(exec) !== null && !contextOf(exec).includes("record-batch"),
     `tui=${contextOf(tui).slice(0, 80)} exec=${contextOf(exec).slice(0, 80)}`);
+}
+
+// ── W. 배선 — 이 훅이 실제로 그 이벤트에 불리는가(user-install 의 claude user-level 블록) ──────────────
+{
+  const { userLevelHooksBlock } = await import("../setup/user-install.mjs");
+  const blk = userLevelHooksBlock();
+  const wfEntries = (ev) => (blk[ev] || []).filter((e) => (e.hooks || []).some((h) => String(h.command).includes("work-flag.mjs")));
+  const matchers = wfEntries("SessionStart").map((e) => e.matcher);
+  check("W1 claude SessionStart — 종전 startup|resume|clear 엔트리는 그대로, compact 는 새 엔트리", matchers.includes("startup|resume|clear") && matchers.includes("compact"), JSON.stringify(matchers));
+  check("W2 claude PreCompact 에 work-flag 배선", wfEntries("PreCompact").length === 1, JSON.stringify(blk.PreCompact));
+  check("W3 교정 넛지는 기존 PostToolUse mcp__lively__.* 엔트리가 낸다(새 matcher 없음)", wfEntries("PostToolUse").some((e) => e.matcher === "mcp__lively__.*"), JSON.stringify(wfEntries("PostToolUse").map((e) => e.matcher)));
 }
 
 rmSync(SANDBOX, { recursive: true, force: true });

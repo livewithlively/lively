@@ -16,10 +16,11 @@
 //                                      같은 파일을 덮어써 두 번 세지 않는다. UserPromptSubmit(턴 시작)에 전부 지운다.
 //   <sid>.inline-nudged                이번 턴에 이미 넛지함(O_EXCL — 동시에 넘은 두 훅 중 하나만 낸다). 턴 시작에 지운다.
 //   <sid>.inline-nudge.<n>             세션당 넛지 횟수(n = 1..상한, O_EXCL 로 한 칸씩 점유).
+//   <sid>.compact-nudge.<pre|resume>.<분>  압축 넛지를 이 1분 칸에 이미 냈음(두 벌 배선의 중복 출력 방지, claimCompactOnce).
 // 페일오픈: 어떤 실패든 null(무출력). 판단은 전부 결정적이다(LLM 호출 0).
 import { readdirSync, readFileSync, writeFileSync, unlinkSync, statSync, openSync, readSync, closeSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { canRecordFork, isHeadlessRun, recordPendingPrefix } from "./harness-registry.mjs";
+import { canRecordFork, isHeadlessRun, recordPendingPrefix, RECORD_PENDING_TTL_MS } from "./harness-registry.mjs";
 
 // 넛지 대상 = 스킬이 fork 로 넘기라는 «쏘고 잊는 긴 쓰기»(record-batch §2 왼쪽 칸). 생성(project_create_v6·task_create_v6)은
 //  반환 id 를 곧바로 써야 해서 스킬이 메인에 남기라는 쪽이라 세지 않는다.
@@ -27,8 +28,6 @@ export const INLINE_NUDGE_TOOLS = new Set(["knowledge_save", "project_update_v6"
 // 문턱 = 인자 JSON 글자 수의 턴 합계. #4201 실측이 잰 양(in_ch)과 같은 단위라 스킬의 «약 1,000자»와 맞물린다.
 export const INLINE_TURN_THRESHOLD = 1000;
 export const INLINE_NUDGE_MAX_PER_SESSION = 2;
-// 기록 fork 표시의 유효기간 — stop-writeback-gate.mjs 의 PENDING_TTL_MS 와 같은 값이어야 한다(같은 표시를 같은 기준으로 읽는다).
-const PENDING_TTL_MS = 20 * 60_000;
 
 const INLINE_PREFIX = (sid) => `${sid}.inline-write.`;
 const safeName = (s) => String(s || "").replace(/[^A-Za-z0-9._-]/g, (c) => `%${c.codePointAt(0).toString(16)}`).slice(0, 120);
@@ -37,8 +36,13 @@ const safeName = (s) => String(s || "").replace(/[^A-Za-z0-9._-]/g, (c) => `%${c
 //  inside a subagent call» · #4201 §11-2 실측, codex hooks/src/schema.rs 의 선택 필드). fork 의 기록에는 넛지하지 않는다.
 export const isSubagentPayload = (payload) => String(payload?.agent_id ?? "").trim() !== "";
 
-// 라이블리가 띄운 기계 세션(위탁·증류 등)인가 — 서버가 pane 에 싣는 LIVELY_SESSION_KIND 축(#2162). 값이 없으면 사람 세션으로 본다.
-const isMachineSession = (env) => { const k = String(env?.LIVELY_SESSION_KIND ?? "").trim().toLowerCase(); return k !== "" && k !== "human"; };
+// 라이블리가 띄운 기계 세션(위탁·증류 등)인가 — 서버가 pane 에 싣는 LIVELY_SESSION_KIND 축(#2162). 값이 없으면(그 축 이전에 뜬
+//  세션) 위탁 워커 작업 폴더(LIVELY_TASK_WS)로 한 번 더 보고, 그것도 없으면 사람 세션으로 본다(session-name-ask 와 같은 관례).
+const isMachineSession = (env) => {
+  const k = String(env?.LIVELY_SESSION_KIND ?? "").trim().toLowerCase();
+  if (k) return k !== "human";
+  return String(env?.LIVELY_TASK_WS ?? "").trim() !== "";
+};
 
 // 파일 앞부분만 읽는다(codex 대화 파일 첫 줄의 session_meta — 파일 전체는 수십 MB 일 수 있다).
 export function readHead(path, bytes = 4096) {
@@ -95,7 +99,7 @@ export function inlineNudgeText(harnessId, total) {
   return `[라이블리 기록 교정] 이번 턴에 메인이 라이블리 텍스트 기록(지식·본문 append·댓글·작업 기록)을 직접 ${total.toLocaleString("en-US")}자 썼습니다. ` +
     "메인이 본문을 생성하는 동안 사람은 기다립니다(knowledge_save 1건 p50 46초). 이미 쓴 것은 다시 쓰지 마세요. " +
     "이번 턴에 남은 기록과 다음 턴부터의 기록은 record-batch 스킬대로 사람에게 보고하기 직전 fork 하나(이름 머리 `기록:`)에 묶어 넘기세요. " +
-    `한 턴 합계 1,000자 미만의 짧은 기록은 지금처럼 바로 써도 됩니다.${codex}`;
+    `한 턴 합계 ${INLINE_TURN_THRESHOLD.toLocaleString("en-US")}자 미만의 짧은 기록은 지금처럼 바로 써도 됩니다.${codex}`;
 }
 
 // 마지막 라이블리 기록 뒤에 한 작업이 있나 — .worked(파일 작업·외부 인입)가 .writeback(기록)보다 나중이면 참.
@@ -112,16 +116,23 @@ export function hasUnrecordedWork(flagDir, sid) {
     const prefix = recordPendingPrefix(sid);
     const inFlight = readdirSync(flagDir).some((f) => {
       if (!f.startsWith(prefix)) return false;
-      try { return Date.now() - statSync(join(flagDir, f)).mtimeMs <= PENDING_TTL_MS; } catch { return false; }
+      try { return Date.now() - statSync(join(flagDir, f)).mtimeMs <= RECORD_PENDING_TTL_MS; } catch { return false; }
     });
     if (inFlight) return false;
   } catch { /* 디렉터리 없음 */ }
   return true;
 }
 
+// 압축 한 번에 한 번만 — 같은 이벤트에 이 훅이 유저·프로젝트 settings 두 벌로 배선돼 있으면(명령 문자열이 달라 하네스가 합치지 않는다)
+//  둘이 나란히 돌아 같은 지시문이 두 번 붙는다. 페이로드에 압축마다 다른 id 가 없어 1분 칸으로 가르고 O_EXCL 로 하나만 낸다
+//  (압축은 수십 초가 걸려 같은 1분에 두 번 일어나지 않는다).
+function claimCompactOnce(flagDir, sid, kind) {
+  return claimOnce(join(flagDir, `${sid}.compact-nudge.${kind}.${Math.floor(Date.now() / 60_000)}`));
+}
+
 // ② claude PreCompact — stdout 이 그대로 압축 요약 지시문에 붙는다(모델에게 직접 가지 않는다). 사람 화면에도 한 줄로 보이므로 짧게.
 export function preCompactInstructions({ flagDir, sid, payload }) {
-  if (isSubagentPayload(payload) || !hasUnrecordedWork(flagDir, sid)) return null;
+  if (isSubagentPayload(payload) || !hasUnrecordedWork(flagDir, sid) || !claimCompactOnce(flagDir, sid, "pre")) return null;
   return "라이블리 기록 보존: 이 대화에는 라이블리(knowledge_save·activity_log·task_comment_v6 등)에 아직 기록하지 않은 작업이 있다. " +
     "요약에 «미기록 — 라이블리에 남길 것» 절을 따로 두고, 기록해야 할 결정·수치·파일 경로·커밋·태스크/프로젝트 번호·지식 이름·오류 원문을 원문 그대로 항목으로 남겨라. " +
     "이미 라이블리에 기록한 것은 넣지 않는다.";
@@ -130,8 +141,9 @@ export function preCompactInstructions({ flagDir, sid, payload }) {
 // ② 압축 직후 SessionStart(source=compact) — 모델에게 주입된다(claude·codex 공통 봉투).
 export function compactResumeContext({ flagDir, sid, harnessId, payload, env }) {
   if (isSubagentPayload(payload) || String(payload?.source ?? "") !== "compact" || !hasUnrecordedWork(flagDir, sid)) return null;
+  if (!claimCompactOnce(flagDir, sid, "resume")) return null;
   const how = forkAdvisable(harnessId, payload, env)
-    ? "합계 1,000자 이상이면 record-batch 스킬대로 사람에게 보고하기 직전 fork 하나(이름 머리 `기록:`)에 묶고, 그보다 짧으면 바로 쓰세요. fork 도 압축된 요약만 물려받으니 지시문에 요약의 해당 항목을 가리키세요."
+    ? `합계 ${INLINE_TURN_THRESHOLD.toLocaleString("en-US")}자 이상이면 record-batch 스킬대로 사람에게 보고하기 직전 fork 하나(이름 머리 \`기록:\`)에 묶고, 그보다 짧으면 바로 쓰세요. fork 도 압축된 요약만 물려받으니 지시문에 요약의 해당 항목을 가리키세요.`
     : "fork 없이 바로 쓰세요.";
   const where = harnessId === "claude" ? "요약의 «미기록 — 라이블리에 남길 것» 절과 " : "요약과 ";
   return "[라이블리 압축 직후] 방금 대화가 압축됐고, 압축 전에 한 작업 중 라이블리에 아직 기록하지 않은 것이 있습니다(마지막 기록 뒤의 파일 작업·외부 인입). " +

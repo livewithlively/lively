@@ -69,7 +69,7 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
 
 // ── B. 표 완전성(S2) — 엣지 E5·E6 ────────────────────────────────────────────────
 {
-  const REQUIRED = ["id", "label", "bin", "home", "configFile", "configFormat", "wiring", "assets", "tools", "mcp", "autoApprove", "contextEnvelope", "reloadAssets", "events", "install"];
+  const REQUIRED = ["id", "label", "bin", "home", "configFile", "configFormat", "wiring", "assets", "tools", "mcp", "autoApprove", "contextEnvelope", "reloadAssets", "events", "install", "headless"];
   const KINDS = ["skill", "subagent", "command"];
   const TOOL_GROUPS = ["edit", "shell", "read", "skill", "mcp", "mcpMatcher"];
   const holes = [];

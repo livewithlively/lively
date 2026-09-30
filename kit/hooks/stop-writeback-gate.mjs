@@ -23,7 +23,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, statSync, readdirSy
 import { tmpdir, homedir } from "node:os";
 import { join, resolve, sep, delimiter } from "node:path";
 // harness-registry 는 훅과 같은 디렉터리로 설치된다(HOOK_SCRIPTS — sync-harness-assets 의 import 와 같은 계약).
-import { isForeignGrokInvocation, isRecordForkLabel, recordPendingPrefix } from "./harness-registry.mjs";
+import { isForeignGrokInvocation, isRecordForkLabel, recordPendingPrefix, RECORD_PENDING_TTL_MS } from "./harness-registry.mjs";
 
 // grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 우리 훅을 그대로 실행한 사본이면
 //  비켜선다(정본은 grok-adapter 경유 — 사본이 돌면 종료 게이트가 camelCase 페이로드를 오파싱해 오판한다).
@@ -31,9 +31,8 @@ if (isForeignGrokInvocation()) process.exit(0);
 
 const SID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const FLAG_DIR = join(tmpdir(), "lively-hooks"); // 전 플랫폼 per-user tmp(work-flag.mjs 와 동일) — 공유 /tmp 미사용
-// 기록 fork 표시의 유효기간 — SubagentStop 이 영영 안 오는 경우(자식 비정상 종료)의 안전판. 기록 fork 는 실측 146초
-//  (#4201 §8), 본문 생성만 p90 90초·최대 400초라 20분이면 정상 fork 는 넉넉히 덮고, 죽은 표시가 넛지를 오래 막지 않는다.
-const PENDING_TTL_MS = 20 * 60_000;
+// 기록 fork 표시의 유효기간 — 정본은 harness-registry.RECORD_PENDING_TTL_MS(기록 넛지 #4219 도 같은 값으로 읽는다).
+const PENDING_TTL_MS = RECORD_PENDING_TTL_MS;
 // background_tasks 의 끝난 상태값 — 스키마는 «진행 중(running/pending + 백그라운드로 돌린 것)»만 싣는다고 하지만 방어로 거른다.
 const DONE_STATUS = new Set(["completed", "complete", "done", "failed", "error", "killed", "stopped", "cancelled", "canceled", "interrupted"]);
 
