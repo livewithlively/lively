@@ -8,6 +8,9 @@
 //  fail-first(2026-09-30): 1부는 PANE_DOCK_SRC 로 변형본을 물려 빨간불을 봤다 — 순환(다음 인스턴스)을 «처음 것»으로 ·
 //   막대 문턱 `<=`→`<` · 가운데 자석 제거 · 동점 우선순위 뒤집기 · 안전 영역에서 hide 무시 · «다 뺐다» 표식 무시.
 //   2부는 배선 전의 panes.ts(git show HEAD)에 물려 빨간불을 봤다.
+//  fail-first(2026-10-01 리뷰 반영): dockPins 가 고를 수 있는 것으로 base 를 거르면 B2·B2b·B3·B3b · movePinBefore 가 이웃을 무시하면
+//   B6·B6d·B6e·B6f · pinSlot 경계 `>`→`>=` 면 Q2 · 비고정 가드를 지우면 Q3·Q4 가 빨갛다. 배선 G2·J4·W10·K1 은 반영 전 main.ts · panes.ts ·
+//   pane-dock.ts · 50-mobile.css(MAIN_SRC · PANES_SRC · DOCK_UI_SRC · MOBILE_CSS)에 물려 빨간불을 봤다.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -54,6 +57,32 @@ eq(D.togglePin(["a", "b"], "c", 1), ["a", "c", "b"], "T1b 자리를 주면 그 �
 eq(D.togglePin(["a", "b", "c"], "b"), ["a", "c"], "T2 이미 고정이면 뺀다");
 eq(D.movePin(["a", "b", "c", "d"], "a", 2), ["b", "c", "a", "d"], "T3 끌어 놓은 자리(놓은 뒤 설 자리)로");
 eq(D.movePin(["a", "b"], "z", 1), ["a", "z", "b"], "T3b 고정 안 된 것을 고정 줄로 끌어오면 그 자리에 고정");
+
+// 고정 목록 한 벌 — 고치기는 base 에, 그리기는 shown (B2–B6) · #4443 리뷰(2026-10-01)
+//  프로젝트 없는 세션 화면은 태스크·자료·지식·리브를 고를 수 없다(panes.ts loose). 거른 목록에 고치면 계정의 고정이 지워졌다.
+const all = () => true;
+const loose = (t) => !["tasks", "files", "knowledge", "liv"].includes(t);
+const dp = D.dockPins(null, all, loose);
+eq([dp.base, dp.shown], [["tasks", "files", "knowledge", "web", "timeline"], ["web", "timeline"]], "B2 저장 없음 · 좁힌 화면 — base 는 기본 다섯, 보이는 것은 고를 수 있는 둘");
+eq(D.togglePin(dp.base, "web"), ["tasks", "files", "knowledge", "timeline"], "B2b 좁힌 화면에서 웹을 빼도 안 보이는 고정 셋은 남는다(리뷰 실측: [timeline] 하나만 남았다)");
+eq(D.dockPins(["tasks", "files"], all, loose).shown, [], "B3 고정이 전부 이 화면에서 못 고르는 것이면 빈 독 — 기본값으로 채우지 않는다(안 보이는 것 ≠ 없어진 것)");
+eq(D.dockPins(["tasks", "files"], all, loose).base, ["tasks", "files"], "B3b 그래도 base 는 적힌 그대로");
+eq(D.dockPins(["~"], all, loose), { base: [], shown: [] }, "B4 «다 뺐다» 표식이면 둘 다 빈 목록");
+eq(D.dockPins(["gone"], (t) => t !== "gone", all).base, ["tasks", "files", "knowledge", "web", "timeline"], "B5 적힌 것이 전부 없어진 종류(부품이 사라진 판)면 base 는 기본값");
+eq(D.movePinBefore(["a", "b", "c", "d"], "a", "d"), ["b", "c", "a", "d"], "B6 놓은 자리 = 바로 뒤의 고정 앱 앞");
+eq(D.movePinBefore(["a", "b", "c"], "a", null), ["b", "c", "a"], "B6b 뒤가 없으면(null) 맨 뒤");
+eq(D.movePinBefore(["a", "b", "c"], "a", "zz"), ["b", "c", "a"], "B6c 없는 이웃이면 맨 뒤(자리를 잃지 않는다)");
+eq(D.movePinBefore(["a", "b"], "z", "b"), ["a", "z", "b"], "B6d 고정 안 된 것을 끌어오면 그 자리에 고정");
+eq(D.movePinBefore(["a", "b", "c"], "b", "c"), ["a", "b", "c"], "B6e 제자리에 놓으면 같은 목록(저장할 것이 없다)");
+eq(D.movePinBefore(["tasks", "files", "knowledge", "web", "timeline"], "timeline", "web"), ["tasks", "files", "knowledge", "timeline", "web"], "B6f 좁힌 화면(웹·타임라인만 보임)에서 순서를 바꿔도 안 보이는 셋은 제자리");
+
+// 끼울 자리 (Q1–Q5) — 고정 줄의 축 방향 [시작, 끝]. 간격 4.
+const sp = [[0, 40], [44, 84], [88, 128]];
+eq([D.pinSlot(10, sp, true, 4), D.pinSlot(21, sp, true, 4), D.pinSlot(65, sp, true, 4), D.pinSlot(500, sp, true, 4)], [0, 1, 2, 3], "Q1 고정 앱 — 가운데를 넘으면 그 뒤로(맨 끝 너머면 맨 뒤)");
+eq(D.pinSlot(132, sp, false, 4), 3, "Q2 고정 안 한 앱 — 고정 줄 끝 + 간격(경계)까지는 맨 뒤에 고정");
+eq(D.pinSlot(133, sp, false, 4), -1, "Q3 고정 안 한 앱 — 그 너머(제 구획에서 흔든 것)는 끼울 자리 없음");
+eq(D.pinSlot(0, [], false, 4), -1, "Q4 고정 줄이 비었으면 고정 안 한 앱은 끼울 곳이 없다(메뉴로 고정)");
+eq(D.pinSlot(0, [], true, 4), 0, "Q5 고정 앱 혼자면 제자리(0)");
 
 // 독에 서는 것 (I1–I3)
 const tabs = [{ key: "files", type: "files" }, { key: "editor", type: "editor" }, { key: "web", type: "web" }, { key: "editor#2", type: "editor" }, { key: "web#2", type: "web" }];
@@ -131,6 +160,18 @@ check(/\bplaceFromPoint\(/.test(DOCK), "W4 끌어 놓기는 규칙(placeFromPoin
 check(/\bdockInset\(/.test(DOCK), "W5 부품이 비키는 폭은 규칙(dockInset)에서");
 check(/shellPrefStore\('lively_v2_dock', 'map'\)/.test(DOCK) && /shellPrefStore\('lively_v2_dock_apps', 'list'\)/.test(DOCK), "W6 독 설정·고정 목록은 계정에(사람이 정한 것 — 기기마다 다시 맞추지 않는다)");
 check(/--ac/.test(PANES) && /appColor\(/.test(PANES), "W7 탭도 같은 앱 색(--ac)을 쓴다 — 독과 탭이 한 앱으로 읽힌다");
+//  #4443 리뷰(2026-10-01) 반영의 배선 — 동작은 pane-dock-runtime(메뉴 세 길 · 넘침 · 끌기 방어 · 초점 · refreshDocks)이 실제 크롬에서 잰다.
+const MAIN = read(process.env.MAIN_SRC || path.join(root, "web/v2/main.ts"));
+const MOBILE = read(process.env.MOBILE_CSS || path.join(root, "public/styles/50-mobile.css"));
+const reload = /const reloadShellPrefs = \(\): void => \{([\s\S]*?)\n  \};/.exec(MAIN);
+check(!!reload && /\brefreshDocks\(\)/.test(reload[1]) && /import \{ refreshDocks \} from '\.\/pane-dock\.js'/.test(MAIN), "G2 캐시가 같은 창에서 서버 값이 되면(부팅 동기 · 저장 응답) 셸이 독도 다시 읽힌다(reloadShellPrefs → refreshDocks)");
+const fitSrc = /function fit\(p: Pane\): void \{([\s\S]*?)\n  \}/.exec(PANES);
+check(!!fitSrc && /stripRoom\(/.test(fitSrc[1]) && /paddingLeft/.test(fitSrc[1]) && /paddingRight/.test(fitSrc[1]) && /columnGap/.test(fitSrc[1]) && !/planTabs\(tabsIn, (full|p\.tabs\.clientWidth)\)/.test(fitSrc[1]),
+  "J4 탭 폭 셈(fit)은 띠 안 여백·간격을 뺀 폭(stripRoom)으로 — clientWidth 를 그대로 넘기지 않는다");
+check(!/addEventListener\('contextmenu'/.test(DOCK) && /bindCtx\(b, \(\) => itemMenu\(/.test(DOCK) && /only: true/.test(DOCK), "W10 독 메뉴는 셸의 메뉴 엔진 한 길로(bindCtx · only) — 제 contextmenu 를 따로 듣지 않는다(메뉴 키·길게 누르기가 같은 메뉴에 닿게)");
+const q16 = MOBILE.indexOf("input.pn-dock-more-q { font-size: 16px; }");
+const block = q16 < 0 ? -1 : MOBILE.lastIndexOf("@media", q16);      // 그 규칙을 품은 블록(640px 블록이 여럿이다)
+check(q16 > 0 && block >= 0 && MOBILE.startsWith("@media (max-width: 640px)", block), "K1 폰(≤640px)에서 [더보기]의 앱 찾기 칸은 16px — iOS 가 초점에서 확대하지 않는 하한(창이 열리며 초점이 들어간다)");
 
 console.log(`\n${pass} ok · ${fail} fail`);
 if (fail) process.exit(1);

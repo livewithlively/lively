@@ -105,6 +105,11 @@ eq(p.widths, [34, 120, 80], "W5 고정 탭은 넓어도 아이콘(34)");
 p = L.planTabs([T(300, true), T(300)], 1000);
 eq(p.widths, [220, 184], "W6 긴 이름도 켜진 탭 220 · 나머지 184 까지만");
 
+// 탭이 나눠 쓸 폭 (J3) — #4443 탭 새 옷: 띠에 안 여백과 탭 사이 간격이 생겼다. clientWidth 를 그대로 넘기면 셈이 실제보다 넉넉하다.
+eq(L.stripRoom(340, 2, 2, 2, 6), 340 - 4 - 10, "J3 안 여백 둘 + 간격 n−1 개를 뺀다(탭 여섯 = 간격 다섯)");
+eq([L.stripRoom(340, 2, 2, 2, 1), L.stripRoom(340, 2, 2, 2, 0)], [336, 336], "J3b 탭이 하나·없음이면 간격은 없다");
+eq(L.stripRoom(10, 2, 2, 2, 6), 0, "J3c 모자라면 0(음수 폭을 planTabs 에 넘기지 않는다)");
+
 // 닫은 탭 다시 열기 (U1–U5)
 let st = L.pushClosed([], [{ key: "a", zone: "side", at: 4 }]);
 st = L.pushClosed(st, [{ key: "c", zone: "side", at: 6 }, { key: "b", zone: "side", at: 5 }]);

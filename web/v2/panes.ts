@@ -42,7 +42,7 @@ import { type CtxRow } from './ctx-menu.js';
 //  ★ 탭 = 부품의 **인스턴스**(#762) — 배치가 드는 것은 '종류'가 아니라 '탭 열쇠'다(lib/tab-key 머리말).
 import { isTabKey, nextTabKey, tabBase, tabNum, type TabKey } from '../lib/tab-key.js';
 //  #3870 «곁칸 탭 관리» — 닫은 뒤 갈 곳 · 한꺼번에 닫기 · 끌어 옮길 자리 · 폭 · 닫은 탭 다시 열기(규칙은 lib, 끌기 손은 v2/pane-tabdrag).
-import { bulkTargets, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, touchRecent, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
+import { bulkTargets, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, stripRoom, touchRecent, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
 import { beginTabDrag, cancelTabDrag, consumeDragClick, type DragBar, type TabDragHost } from './pane-tabdrag.js';
 import { seedTasksTab } from '../lib/task-pane.js';   // #4084 — 저장된 배치에 «태스크» 탭을 한 번만 들인다
 import { hasBrowserSurface } from './browser-surface.js';
@@ -616,10 +616,13 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const full = p.tabs.clientWidth;
     if (!full || !wraps.length) { syncMore(p); return; }       // 접힌 칸·숨은 칸 — 보일 때 ResizeObserver 가 다시 부른다
     const tabsIn = wraps.map((w) => ({ natural: w.getBoundingClientRect().width, active: w.classList.contains('on'), pinned: w.classList.contains('pinned') }));
-    let plan = planTabs(tabsIn, full);
+    //  탭이 나눠 쓸 폭 = 띠 안 폭 − 좌우 안 여백 − 탭 사이 간격(#4443 탭 새 옷 — lib/pane-tabs stripRoom 머리말).
+    const cs = getComputedStyle(p.tabs);
+    const room = (cw: number): number => stripRoom(cw, parseFloat(cs.paddingLeft) || 0, parseFloat(cs.paddingRight) || 0, parseFloat(cs.columnGap) || 0, wraps.length);
+    let plan = planTabs(tabsIn, room(full));
     if (plan.mode !== 'full') {
       p.bar.classList.add('shrunk');                            // ⌄ 가 선다 — 그 폭을 뺀 줄에 다시 앉힌다
-      plan = planTabs(tabsIn, p.tabs.clientWidth);
+      plan = planTabs(tabsIn, room(p.tabs.clientWidth));
     }
     wraps.forEach((w, i) => { w.style.width = plan.widths[i] + 'px'; });
     p.bar.classList.toggle('compact', plan.mode === 'icons');
@@ -1150,7 +1153,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //   단추에도 건다 — 끌 때 뜨는 조각(pane-tabdrag 의 고스트)은 단추만 복제한다.
     const ac = `--ac: var(--gi-c-${appColor(tabBase(key))})`;
     b.setAttribute('style', ac);
-    const w = el('span', { class: 'pn-tabwrap' + (on ? ' on' : '') + (pinned ? ' pinned' : ''), 'data-tab': key, 'data-app': tabBase(key), style: ac, role: 'presentation' }, b, x) as HTMLElement;
+    const w = el('span', { class: 'pn-tabwrap' + (on ? ' on' : '') + (pinned ? ' pinned' : ''), 'data-tab': key, style: ac, role: 'presentation' }, b, x) as HTMLElement;
     //  휠 클릭 = 닫기(크롬·사파리). 누를 때 브라우저의 자동 스크롤이 뜨지 않게 mousedown 도 막는다.
     w.addEventListener('mousedown', (e: MouseEvent) => { if (e.button === 1) e.preventDefault(); });
     w.addEventListener('auxclick', (e: MouseEvent) => {

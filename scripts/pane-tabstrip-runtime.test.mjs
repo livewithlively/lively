@@ -21,6 +21,8 @@
 // 왜 런타임인가: 중심이 맞는지는 CSS 가 실제로 그린 자리에서만 잰다(여백·폭·absolute 의 합). 끌기는 포인터 사건의 흐름이다.
 // fail-first(2026-09-30): × 의 left 를 7→10 으로 바꾸면 G1 이, 모서리 규칙을 지우면 G3 가, pane-tabdrag 의 × 방어를 지우면 D4 가,
 //  Esc 처리를 지우면 D5 가 빨간불이었다(TABDRAG_SRC · PANES_CSS 로 변형본을 물려 확인).
+// fail-first(2026-10-01 #4443 리뷰 반영): 반영 전 곁칸 CSS 면 B1 이(크롬 47 · 띠 여백 8), stripRoom 이 여백·간격을 무시하는 돌연변이
+//  (PANE_TABS_SRC)면 B2 가(«다 편다» 로 셈하고 444 > 432 로 넘친다) 빨간불이었다.
 // 크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -36,6 +38,9 @@ if (!existsSync(ESBUILD)) { console.error("FAIL  esbuild 가 없다(node_modules
 
 const SRC = process.env.TABDRAG_SRC || path.join(ROOT, "web/v2/pane-tabdrag.ts");
 const bundle = execFileSync(ESBUILD, [SRC, "--bundle", "--format=iife", "--global-name=TabDrag", "--platform=browser", "--log-level=error"], { encoding: "utf8" });
+//  탭 폭 셈(lib/pane-tabs planTabs · stripRoom) — B1·B2 가 실제 CSS 와 맞춰 본다. PANE_TABS_SRC 로 변형본을 물린다(fail-first).
+const TABS_SRC = process.env.PANE_TABS_SRC || path.join(ROOT, "web/lib/pane-tabs.ts");
+const tabsLib = execFileSync(ESBUILD, [TABS_SRC, "--bundle", "--format=iife", "--global-name=PaneTabs", "--platform=browser", "--log-level=error"], { encoding: "utf8" });
 //  실제 스타일: 토큰(01-base) + 곁칸(42-v2-panes). 아이콘 크기(.pn-i)도 여기에 있다.
 const CSS = readFileSync(path.join(ROOT, "public/styles/01-base.css"), "utf8") + "\n" + readFileSync(process.env.PANES_CSS || path.join(ROOT, "public/styles/42-v2-panes.css"), "utf8");
 
@@ -45,6 +50,7 @@ const PAGE = `<!doctype html><meta charset="utf-8"><style>${CSS}
 <div id="host"></div>
 <pre id="out">PENDING</pre>
 <script>${bundle}</script>
+<script>${tabsLib}</script>
 <script>
 (async function(){
   const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
@@ -90,6 +96,28 @@ const PAGE = `<!doctype html><meta charset="utf-8"><style>${CSS}
   const icX=rc(ic.querySelector('.pn-tab-x'));
   R.g3_badge_clear_of_icon_center=!(cx(icR)>=icX.left && cx(icR)<=icX.right && cy(icR)>=icX.top && cy(icR)<=icX.bottom) && icX.width<=16;
   R.g4_no_number_badge=['none','normal',''].includes(getComputedStyle(ic.querySelector('.pn-tab'),'::after').content);
+  // ── 폭 예산(B1) · 셈 = 실제(B2) — #4443 탭 새 옷(2026-10-01 리뷰: 새 옷이 탭마다 +4 · 띠에 여백 8 · 간격 2 를 더해 기본 네 탭이
+  //   이름 대신 아이콘으로 접혔고, 셈은 여백·간격을 몰라 여섯 탭의 마지막이 9px 삐져나왔다).
+  const ts=getComputedStyle(side.tabs); const PAD=parseFloat(ts.paddingLeft)+parseFloat(ts.paddingRight); const GAPW=parseFloat(ts.columnGap)||0;
+  const lab=side.tabs.children[2]; const chrome=rc(lab).width-rc(lab.querySelector('.pn-tab-t')).width;
+  R.b1_info=[Math.round(chrome*10)/10,PAD,GAPW];
+  //  이전 예산 = 이름 + 43px/탭(아이콘 16 · 여백 9/12 · 간격 6), 띠 여백·간격 0. 탭 n(≥2)개가 이보다 넓으면 이전엔 펴지던 줄이 접힌다.
+  R.b1_budget=chrome>30 && [2,3,4,5,6,8,10,12].every((n)=>chrome*n+PAD+GAPW*(n-1)<=43*n+0.01);
+  const six=zone('six',[tab('s1','프로젝트',{on:true}),tab('s2','자료'),tab('s3','지식'),tab('s4','웹 문서'),tab('s5','타임라인'),tab('s6','리브')],false);
+  const sw=[...six.tabs.children];
+  const nat=sw.map((w)=>({natural:rc(w).width,active:w.classList.contains('on'),pinned:w.classList.contains('pinned')}));
+  const sumNat=nat.reduce((a,t)=>a+Math.ceil(t.natural),0);
+  //  띠 안 폭 = 이름 다 편 탭들의 합 + 2 — clientWidth 로 셈하면 «들어간다», 실제로는 안 여백·간격만큼 안 들어간다(경계 사례).
+  six.tabs.style.flex='none'; six.tabs.style.boxSizing='border-box'; six.tabs.style.width=(sumNat+2)+'px';
+  const scs=getComputedStyle(six.tabs);
+  const room=PaneTabs.stripRoom(six.tabs.clientWidth,parseFloat(scs.paddingLeft)||0,parseFloat(scs.paddingRight)||0,parseFloat(scs.columnGap)||0,sw.length);
+  const plan=PaneTabs.planTabs(nat,room);
+  sw.forEach((w,i)=>{w.style.width=plan.widths[i]+'px';});
+  if(plan.mode==='icons') six.bar.classList.add('compact');
+  R.b2_case=Math.round(six.tabs.clientWidth)===sumNat+2;
+  R.b2_info=[plan.mode,plan.overflow,six.tabs.scrollWidth,six.tabs.clientWidth];
+  R.b2_fit=plan.mode!=='full' && (plan.overflow || six.tabs.scrollWidth<=six.tabs.clientWidth);
+  six.pane.remove();
   // ── 끌기 ──
   const calls=[];
   const host={
@@ -180,6 +208,9 @@ check("g2_icon_only_centered", "G2 아이콘만 남은 탭(34px) — 아이콘�
 check("g2_pinned_centered", "G2b 고정 탭(34px) — 아이콘이 한가운데, 닫기 단추가 없다");
 check("g3_badge_clear_of_icon_center", "G3 아이콘만 남은 탭의 × 는 모서리 — 아이콘 중심을 덮지 않는다");
 check("g4_no_number_badge", "G4 아이콘 어깨의 번호가 없다");
+check("b1_budget", `B1 탭 새 옷의 폭 예산 — 탭 n(≥2)개가 이전(이름 + 43px/탭)보다 넓지 않다: 크롬·띠 여백·간격 ${JSON.stringify(R.b1_info)}`);
+check("b2_case", "B2 (배선) 경계 사례가 섰다 — 띠 안 폭 = 이름 다 편 탭 합 + 2");
+check("b2_fit", `B2 셈(planTabs · stripRoom)이 «들어간다» 면 실제로도 안 넘친다 — 이 경계에선 펴지 않는다 ${JSON.stringify(R.b2_info)}`);
 check("d1_no_call_before_release", "D1 놓기 전엔 순서를 안 바꾼다");
 check("d1b_neighbor_slides", "D1b 끄는 동안 넘은 이웃만 비켜 선다");
 check("d1_reorder", `D1 이웃 가운데 너머에 놓으면 그 자리로 ${R.d1_info}`);
