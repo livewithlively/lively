@@ -259,8 +259,10 @@ if (lib) {
 }
 {
   //  U — 이름 없는 세션 판정은 sessText 한 자리다(목록이 접는 줄 · 카드 · 피크가 같은 값을 쓴다).
-  const st = code(cut(SIDE, "export function sessText(", "\n}"));
-  ok(/return \{ main: last \|\| String\(\(s\.raw && s\.raw\.harness\) \|\| ''\) \|\| '이름 없는 세션', sub: '', named: !!last, untitled: !last \};/.test(st),
+  //   #3870 — 그 규칙은 lib/sess-name.ts sessNameFace 로 옮겼다(세션 머리줄도 같은 것을 부른다). sessText 는 그것을 그대로 돌려준다.
+  ok(/export function sessText\([^)]*\)[^{]*\{\s*return sessNameFace\(/.test(SIDE), "U0 sessText 는 lib/sess-name 의 sessNameFace 를 그대로 돌려준다");
+  const st = code(cut(read("web/lib/sess-name.ts"), "export function sessNameFace(", "\n}"));
+  ok(/return \{ main: last \|\| String\(s\.harness \|\| ''\) \|\| '이름 없는 세션', sub: '', named: !!last, untitled: !last \};/.test(st),
     "U1 이름 · 작업 제목 · 대화 제목이 다 없어 하네스 이름 · «이름 없는 세션»으로 떨어지면 untitled");
   ok(/if \(name && job\) return \{[^}]*untitled: false \};/.test(st) && /if \(name \|\| job\) return \{[^}]*untitled: false \};/.test(st),
     "U2 이름이나 작업 · 대화 제목이 있으면 untitled 가 아니다");
