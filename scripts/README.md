@@ -10,7 +10,7 @@
 | ② itest | `scripts/*.itest.mjs` — integration tests that need a real DB (schema init, session-log CAS, etc.) | `npm run test:itest` · single file `node --env-file-if-exists=.env scripts/<x>.itest.mjs` | `ITEMS_DATABASE_URL` (.env) |
 | ③ integration/ | [scripts/integration/](./integration/) — manual e2e against a real PG and a real gateway (each file's header comment says how to run it) | Manual, per file | Varies by file (PG, a running gateway, secret keys) |
 | ④ vis-e2e/ | [scripts/vis-e2e/](./vis-e2e/) — e2e for the visibility axes and UI wiring (has its own README) | See `vis-e2e/README.md` | A running gateway |
-| ⑤ pg-test | `src/**/*.pg-test.mjs` (e.g. org/auth/device-auth.pg-test.mjs) — real-Postgres integration (excluded from the unit runner) | CI (test.yml) runs each file as its own step against a pgvector service (only the ones registered as steps in test.yml) · locally `ITEMS_DATABASE_URL=… node src/org/auth/device-auth.pg-test.mjs` | A real PG (pgvector) |
+| ⑤ pg-test | `src/**/*.pg-test.mjs` — real-Postgres integration (excluded from the unit runner). Because the runner doesn't collect them, **each file only runs once it is registered as its own step in test.yml** (a missing registration is caught by `scripts/pg-test-registered.test.mjs`) | CI (test.yml) runs each registered file against a pgvector service · locally `ITEMS_DATABASE_URL=… node <file>` | A real PG (pgvector) |
 | ⑥ Hook bash | [kit/hooks/test-hooks.sh](../kit/hooks/test-hooks.sh) — runner for the hooks' shell paths | `kit/hooks/test-hooks.sh` | None |
 
 - ① is the default safety net — adding a test means **just creating the file** (do not register it in package.json; the runner discovers it).
