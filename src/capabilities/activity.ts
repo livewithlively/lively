@@ -1,7 +1,7 @@
 // 작업(Activity) capability (P3) — activity_log(기록) + activity_list(조회). scope='memory'(공유 조직 작업,
 //  memory_*/ctx_* 와 동일). 핸들러는 thin — 입력 파싱 후 activity/store 의 store 호출.
 //  author_person=ctx.actor(토큰 신원=누가), author_agent='어떤 AI'(호출자가 명시 — 모델/하네스 id). 사람×AI 집계의 축.
-import { checkWriting, isHumanWriter, writingRejectError } from "./writing-style.js";
+import { checkWriting, isHumanWriter, rejectWriting } from "./writing-style.js";
 import { z } from "zod";
 import { logActivity, listActivities, dashPeople, listDashMembers, getWatch, setWatch } from "../activity/store.js";
 import type { Capability } from "./types.js";
@@ -148,7 +148,7 @@ const activityLog: Capability = {
     //  외부 시스템 좌표가 있는 기록은 그 시스템의 글을 옮긴 것이라 여기서 고칠 수 없다 — 지식의 observed 와 같이 판정하지 않는다.
     const { info: style, rejects, guide } = await checkWriting("activity", { title: input.title, body: input.body ?? null },
       { human: isHumanWriter(user), observed: !!input.external_system });
-    if (rejects.length) throw writingRejectError(rejects, guide);
+    if (rejects.length) throw await rejectWriting("activity", input.project_id != null ? String(input.project_id) : null, input.title, rejects, guide, ctx);
     const res = await logActivity({
       type: input.type, title: input.title, summary: input.summary ?? null, body: input.body ?? null,
       projectId: input.project_id ?? null, kuRefs: input.ku_refs, touches: input.touches,

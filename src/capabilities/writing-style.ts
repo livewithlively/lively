@@ -4,6 +4,7 @@
 //  — REST(/api/ui)는 웹 화면과 토큰 스크립트가 같은 source='web' 으로 들어오므로, source 로 가르면 토큰으로 REST 를 부르는
 //  에이전트가 거부를 비껴간다. 웹 로그인 세션(tokenSource='session')만 사람이다.
 import { HttpError } from "../http-error.js";
+import { audit } from "../org/store/audit.js";
 import { getWritingFormat } from "../org/store/runtime-config.js";
 import type { WritingFormat, WritingSurface } from "../org/policies/writing-format.js";
 import { lintWriting, type WritingFinding } from "../v6/writing-lint.js";
@@ -99,4 +100,39 @@ export function writingRejectError(rejects: WritingFinding[], guide: string): Ht
     guide,
   ].join("\n");
   return new HttpError(422, msg, { body: { style: { findings: rejects, guide_md: guide } } });
+}
+
+type AuditFn = typeof audit;
+
+export interface WritingRejectCtx {
+  actor?: string | null;
+  source?: string | null;
+  tokenHashPrefix?: string | null;
+  ip?: string | null;
+}
+
+/**
+ * 거부를 감사 로그(org_content_audit, entity=writing_format, op=reject)에 남기고 거부 에러를 돌려준다.
+ *  거부된 저장은 DB 어디에도 흔적이 없어서, 이 기록이 없으면 «규칙이 몇 번·누구에게·어느 규칙으로 걸렸나» 를 셀 수 없다.
+ *  조회: org_audit_list {entity:"writing_format"}. 본문은 싣지 않는다(크기·민감정보) — 표면·규칙·대상·제목 앞부분만.
+ *  기록이 실패해도 거부 응답은 그대로 나간다 — 로그 장애로 저장이 통과되거나 500 이 되면 안 된다.
+ */
+export async function rejectWriting(
+  surface: WritingSurface,
+  target: string | null,
+  title: string | null | undefined,
+  rejects: WritingFinding[],
+  guide: string,
+  ctx: WritingRejectCtx | undefined,
+  record: AuditFn = audit,
+): Promise<HttpError> {
+  const t = String(title ?? "").trim();
+  try {
+    await record("writing_format", target, "reject", null, {
+      surface,
+      rules: rejects.map((f) => f.rule),
+      ...(t ? { title: [...t].slice(0, 80).join("") } : {}),
+    }, ctx?.actor ?? undefined, ctx?.source ?? undefined, { tokenHashPrefix: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null });
+  } catch { /* 기록 실패는 거부를 바꾸지 않는다 */ }
+  return writingRejectError(rejects, guide);
 }

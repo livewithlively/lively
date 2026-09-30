@@ -1,7 +1,7 @@
 // v6 project capability — 프로젝트(1급 엔티티) + 작업(task/subtask) CRUD·상태·팀원·카테고리/지식 연결.
 //  레거시 org_project capability(projects.ts)와 병행(REST-only 로 시작 — 웹 v6 프로젝트 탭이 소비). MCP 노출은 컷오버에서 일괄.
 //  scope='memory'(조직 공유 작업/지식 평면 — 레거시 project_* 와 동일). 경로 prefix=/api/ui/v6/projects. 감사는 store(project-store)가 처리.
-import { checkWriting, isHumanWriter, writingRejectError } from "./writing-style.js";
+import { checkWriting, isHumanWriter, rejectWriting } from "./writing-style.js";
 import { z } from "zod";
 import { canSeeProjectRow, visibleListIds, listVisible, projectRowListId } from "../v6/visibility.js";
 import { HttpError, parseId } from "./rest-util.js";
@@ -479,7 +479,7 @@ const projectCreateV6: Capability = {
     const { info: style, rejects, guide } = name_source === "rule"
       ? { info: {}, rejects: [], guide: "" }
       : await checkWriting("project", { title: null, body: input.description ?? null }, { human: isHumanWriter(user) });
-    if (rejects.length) throw writingRejectError(rejects, guide);
+    if (rejects.length) throw await rejectWriting("project", null, input.name, rejects, guide, ctx);
     //  같은 표식이 초안(#4170)의 입구다 — 기계가 이름을 지은 껍데기는 초안으로 태어나 목록 기본 뷰에서 따로 선다.
     const project = await createProject({ ...input, name_source, draft: name_source === "rule" }, writeCtx);
     if (input.follow_up != null) await linkProjectEdge(project.id, input.follow_up, "follow_up", writeCtx); // new --follow_up--> 선행
@@ -818,7 +818,7 @@ const projectUpdateV6: Capability = {
     //  이어쓰기는 덧붙이는 조각만, 전체 교체는 기존 본문과 비교해 본다 — 사람이 쓴 본문의 원래 위반 때문에 에이전트의
     //  다른 수정까지 막히지 않게. 첫 지시 원문을 옮겨 붙이는 이어쓰기(프로젝트 이관)는 사람의 지시문이라 보지 않는다.
     const { info: style, rejects, guide } = await checkProjectText(patch, id, user);
-    if (rejects.length) throw writingRejectError(rejects, guide);
+    if (rejects.length) throw await rejectWriting("project", String(id), null, rejects, guide, ctx);
     try { project = await updateProject(id, patch, writeCtx); }
     catch (e) {
       // 덮지 않았다 — 화면이 최신 본문을 다시 불러 사람에게 묻는다(곁칸 태스크 부품 · 프로젝트 설정).
@@ -1260,7 +1260,7 @@ const taskCreateV6: Capability = {
     // 서술 형식 — reject 규칙에 걸린 에이전트 본문은 받지 않는다(사람의 웹 입력은 안내만). 이어쓰기는 덧붙이는 조각만 본다.
     const { info: style, rejects, guide } = await checkWriting("project", { title: null, body: input.description ?? null },
       { human: isHumanWriter(user) });
-    if (rejects.length) throw writingRejectError(rejects, guide);
+    if (rejects.length) throw await rejectWriting("project", null, input.name, rejects, guide, ctx);
     const task = await createTask(input, writeCtx);
     const rootId = await rootProjectIdOfTaskNode(task); // 하위태스크면 부모 task→프로젝트로 거슬러 해석.
     if (rootId) await regenAgents(rootId);              // 태스크/하위태스크 추가 → AGENTS.md 태스크 인덱스 갱신.
@@ -1365,7 +1365,7 @@ const taskUpdateV6: Capability = {
     //  이어쓰기는 덧붙이는 조각만, 전체 교체는 기존 본문과 비교해 본다 — 사람이 쓴 본문의 원래 위반 때문에 에이전트의
     //  다른 수정까지 막히지 않게. 첫 지시 원문을 옮겨 붙이는 이어쓰기(프로젝트 이관)는 사람의 지시문이라 보지 않는다.
     const { info: style, rejects, guide } = await checkProjectText(patch, id, user);
-    if (rejects.length) throw writingRejectError(rejects, guide);
+    if (rejects.length) throw await rejectWriting("project", String(id), null, rejects, guide, ctx);
     const task = await updateTask(id, patch, writeCtx);
     const rescheduled = before ? await propagateReschedule(id, before, task, writeCtx) : [];
     const rootId = await rootProjectIdOfTaskNode(task);
