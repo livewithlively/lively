@@ -33,7 +33,7 @@ export function findChrome() {
  *  DOM 을 다 뱉고도 단독 2초, 러너 안에서는 45초 상한까지). 그 대기가 그대로 테스트 시간이 된다.
  * @returns dump 된 DOM — 표지 없이 끝났으면 그때까지 받은 것(판정은 호출자가 한다). 30초 안에 안 끝나면 던진다.
  */
-export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", prefix = "headless-", virtualTimeBudget = 15000 }) {
+export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", prefix = "headless-", virtualTimeBudget = 15000, args = [] }) {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
   let closed = Promise.resolve();
   try {
@@ -54,6 +54,8 @@ export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", p
         `--user-data-dir=${path.join(dir, "profile")}`,
         // --timeout 은 **실시간** 상한이다. 이게 없으면 페이지가 타이머를 계속 걸 때 가상시간이 더디게 흘러
         //  --virtual-time-budget 만으로는 안 끝난다(ctx-rclick-runtime 실측 90초).
+        //  args — 부르는 쪽이 더하는 인자(예: `--window-size=1400,900` — 넓은 폭 미디어 쿼리를 재야 하는 시험, #4443).
+        ...args,
         "--timeout=20000", `--virtual-time-budget=${virtualTimeBudget}`, "--dump-dom", `file://${path.join(dir, "page.html")}`,
       ], { env: { ...process.env, HOME: dir }, stdio: ["ignore", "pipe", "pipe"] });
       closed = new Promise((r) => child.once("close", r));

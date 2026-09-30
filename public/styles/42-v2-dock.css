@@ -1,0 +1,195 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   42-v2-dock.css — 곁칸 **독**(web/v2/pane-dock.ts, #4443 원준 2026-09-30).
+   macOS 독을 곁칸 안으로: 떠 있는 유리 알약(3안) · 테두리에 붙은 막대(2안) · 네 테두리 어디든.
+   수치는 lib/pane-dock.ts DOCK_METRICS 와 짝이다 — 안 여백 5 · 바깥 여백 6 · 점 4 · 이름 줄 14 · 간격 4.
+   (부품이 비키는 폭은 스크립트가 그 값으로 잰다 — 여기 숫자를 바꾸면 거기도 바꾼다.)
+   토큰은 01-base · 90-dark 것만 쓴다(다크는 토큰이 알아서 따라온다).
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* ── 뿌리 — 곁칸(position: relative) 안에 떠 있다. 자리는 스크립트가 left/top/bottom 으로 박는다. ── */
+.pn-dock { position: absolute; z-index: 6; display: flex; pointer-events: none; user-select: none; -webkit-user-select: none;
+  --bx: 0; --by: -1;
+  transition: transform .28s cubic-bezier(.2, .8, .2, 1), opacity .2s ease; }
+.pn-dock[hidden] { display: none; }
+.pn-dock[data-edge="top"] { --by: 1; }
+.pn-dock[data-edge="left"] { --bx: 1; --by: 0; }
+.pn-dock[data-edge="right"] { --bx: -1; --by: 0; }
+/* 떠 있는 알약은 at 자리를 **가운데**로 잡는다 — 확대로 불어나도 양쪽으로 똑같이 번진다(translate 는 transform 과 따로 논다). */
+.pn-dock[data-mode="float"][data-edge="bottom"], .pn-dock[data-mode="float"][data-edge="top"] { translate: -50% 0; }
+.pn-dock[data-mode="float"][data-edge="left"], .pn-dock[data-mode="float"][data-edge="right"] { translate: 0 -50%; }
+
+/* ── 선반(알약) — 유리. 아이콘은 이 안에 서고, 확대되면 선반 밖(곁칸 안쪽)으로 솟는다. ── */
+.pn-dock-shelf { pointer-events: auto; position: relative; display: flex; align-items: flex-end; gap: 4px; padding: 5px 7px;
+  border-radius: 16px; overflow: visible;
+  /* 흰 화면 위 흰 알약은 사라진다(실측) — 옅은 청색 유리 + 또렷한 테두리. 타일(흰 반투명)이 그 위에서 떠 보인다. */
+  background: color-mix(in srgb, var(--bg-tint-2) 80%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5); backdrop-filter: blur(20px) saturate(1.5);
+  border: 1px solid var(--line-net);
+  box-shadow: inset 0 1px 0 var(--gi-tile-line), 0 12px 32px rgba(var(--shadow-ink), .16), 0 2px 6px rgba(var(--shadow-ink), .08);
+  transition: box-shadow .2s, transform .2s; }
+.pn-dock[data-mode="float"][data-edge="bottom"] .pn-dock-shelf, .pn-dock[data-mode="float"][data-edge="top"] .pn-dock-shelf { height: calc(var(--dk-s, 32px) + 14px); }
+.pn-dock[data-mode="float"][data-edge="left"] .pn-dock-shelf, .pn-dock[data-mode="float"][data-edge="right"] .pn-dock-shelf { width: calc(var(--dk-s, 32px) + 14px); padding: 7px 5px; }
+.pn-dock[data-edge="left"] .pn-dock-shelf, .pn-dock[data-edge="right"] .pn-dock-shelf { flex-direction: column; }
+/* 아이콘은 **테두리 쪽**에 붙고 곁칸 안쪽으로 자란다(아래 독이면 위로, 오른쪽 독이면 왼쪽으로). */
+.pn-dock[data-edge="bottom"] .pn-dock-shelf { align-items: flex-end; }
+.pn-dock[data-edge="top"] .pn-dock-shelf { align-items: flex-start; }
+.pn-dock[data-edge="left"] .pn-dock-shelf { align-items: flex-start; }
+.pn-dock[data-edge="right"] .pn-dock-shelf { align-items: flex-end; }
+
+/* ── 아이콘 하나 — 타일 + 점(떠 있는 탭 수, 최대 셋). 테두리 쪽에 점. ── */
+.pn-dock-it { --m: 1; position: relative; flex: none; display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+  padding: 0; border: 0; background: none; color: var(--ink); font: inherit; cursor: default;
+  width: calc(var(--dk-s, 32px) * var(--m));
+  transition: width .18s cubic-bezier(.2, .8, .3, 1), height .18s cubic-bezier(.2, .8, .3, 1); }
+.pn-dock[data-edge="top"] .pn-dock-it { flex-direction: column-reverse; justify-content: flex-start; }
+.pn-dock[data-edge="left"] .pn-dock-it, .pn-dock[data-edge="right"] .pn-dock-it { width: auto; height: calc(var(--dk-s, 32px) * var(--m)); }
+.pn-dock[data-edge="left"] .pn-dock-it { flex-direction: row-reverse; justify-content: flex-end; }
+.pn-dock[data-edge="right"] .pn-dock-it { flex-direction: row; justify-content: flex-start; }
+.pn-dock-ic { display: block; flex: none; width: calc(var(--dk-s, 32px) * var(--m)); height: calc(var(--dk-s, 32px) * var(--m));
+  transition: width .18s cubic-bezier(.2, .8, .3, 1), height .18s cubic-bezier(.2, .8, .3, 1), filter .12s; }
+/* 확대 중엔 손을 따라 바로바로(짧게) — 손을 떼면 위 .18s 로 천천히 가라앉는다. */
+.pn-dock.magging .pn-dock-it, .pn-dock.magging .pn-dock-ic { transition-duration: .06s; }
+.pn-dock-ic .v2-gi { width: 100%; height: 100%; filter: drop-shadow(0 1px 1.5px rgba(var(--shadow-ink), .16)); }
+.pn-dock .v2-gi-tile, .pn-dock-ghost .v2-gi-tile, .pn-dock-more .v2-gi-tile { fill: var(--gi-tile); stroke: var(--gi-tile-line); }
+.pn-dock-it:hover .pn-dock-ic { filter: brightness(1.03); }
+.pn-dock-it:active .pn-dock-ic { filter: brightness(.88); }   /* 누르는 동안 어두워진다(macOS) */
+.pn-dock-it:focus-visible { outline: none; }
+.pn-dock-it:focus-visible .pn-dock-ic { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 30%; }
+.pn-dock-dots { display: flex; align-items: center; justify-content: center; gap: 3px; height: 4px; flex: none; }
+.pn-dock[data-edge="left"] .pn-dock-dots, .pn-dock[data-edge="right"] .pn-dock-dots { flex-direction: column; width: 4px; height: auto; }
+.pn-dock-dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--muted-2); }
+.pn-dock-it.on .pn-dock-dots i { background: var(--mint); }
+.pn-dock-it.lifted { opacity: .22; }
+
+/* 튀어 오르기 — 새로 열 때 두 번(크게 · 작게). 방향은 곁칸 안쪽(--bx/--by). */
+@keyframes pn-dock-bounce {
+  0%, 50%, 100% { transform: none; }
+  24% { transform: translate(calc(var(--bx) * 14px), calc(var(--by) * 14px)); }
+  72% { transform: translate(calc(var(--bx) * 6px), calc(var(--by) * 6px)); }
+}
+.pn-dock-it.bounce .pn-dock-ic { animation: pn-dock-bounce .8s cubic-bezier(.3, .6, .35, 1); }
+
+/* ── 구분선 · 손잡이 ── */
+.pn-dock-sep { flex: none; align-self: stretch; width: 1px; margin: 5px 2px; background: color-mix(in srgb, var(--ink) 15%, transparent); }
+.pn-dock[data-edge="left"] .pn-dock-sep, .pn-dock[data-edge="right"] .pn-dock-sep { width: auto; height: 1px; margin: 2px 5px; }
+.pn-dock-grip { flex: none; align-self: center; display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 22px;
+  margin-right: -2px; color: var(--muted-3); cursor: grab; opacity: 0; transition: opacity .15s; }
+.pn-dock[data-edge="left"] .pn-dock-grip, .pn-dock[data-edge="right"] .pn-dock-grip { width: 22px; height: 12px; margin: 0 0 -2px; }
+.pn-dock[data-edge="left"] .pn-dock-grip svg, .pn-dock[data-edge="right"] .pn-dock-grip svg { transform: rotate(90deg); }
+.pn-dock:hover .pn-dock-grip, .pn-dock.moving .pn-dock-grip, .pn-dock:focus-within .pn-dock-grip { opacity: .9; }
+
+/* ── 막대(2안) — 테두리에 붙는다. 가로 막대는 아이콘 밑에 이름. 켜진 앱은 그 앱 색 알약. ── */
+.pn-dock[data-mode="bar"] .pn-dock-shelf { flex: 1; justify-content: center; align-items: center; gap: 2px; padding: 5px 8px; border-radius: 0;
+  border: 0; box-shadow: none; background: color-mix(in srgb, var(--surface) 88%, transparent); }
+.pn-dock[data-mode="bar"][data-edge="bottom"] .pn-dock-shelf { border-top: 1px solid var(--line); }
+.pn-dock[data-mode="bar"][data-edge="top"] .pn-dock-shelf { border-bottom: 1px solid var(--line); }
+.pn-dock[data-mode="bar"][data-edge="left"] .pn-dock-shelf { border-right: 1px solid var(--line); padding: 8px 5px; }
+.pn-dock[data-mode="bar"][data-edge="right"] .pn-dock-shelf { border-left: 1px solid var(--line); padding: 8px 5px; }
+.pn-dock[data-mode="bar"] .pn-dock-it { width: auto; min-width: calc(var(--dk-s, 26px) + 16px); height: 100%; justify-content: center; padding: 0 3px; border-radius: 10px; }
+.pn-dock[data-mode="bar"][data-edge="left"] .pn-dock-it, .pn-dock[data-mode="bar"][data-edge="right"] .pn-dock-it { width: 100%; min-width: 0; height: auto; padding: 3px 0; justify-content: center; }
+.pn-dock[data-mode="bar"] .pn-dock-it:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.pn-dock[data-mode="bar"] .pn-dock-it.on { background: color-mix(in srgb, var(--ac, var(--mint)) 12%, transparent); }
+.pn-dock-lbl { max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; line-height: 14px; font-weight: 600; color: var(--muted); }
+.pn-dock-it.on .pn-dock-lbl { color: var(--ink); font-weight: 700; }
+.pn-dock[data-mode="bar"] .pn-dock-sep { margin: 8px 3px; }
+
+/* ── 자동으로 가리기 — 테두리 밖으로 물러난다. 테두리의 얇은 띠에 손을 대면 나온다. ── */
+.pn-dock.out { opacity: 0; pointer-events: none; }
+.pn-dock.out[data-edge="bottom"] { transform: translateY(calc(100% + 10px)); }
+.pn-dock.out[data-edge="top"] { transform: translateY(calc(-100% - 10px)); }
+.pn-dock.out[data-edge="left"] { transform: translateX(calc(-100% - 10px)); }
+.pn-dock.out[data-edge="right"] { transform: translateX(calc(100% + 10px)); }
+.pn-dock.out .pn-dock-shelf { pointer-events: none; }
+.pn-dock-reveal { position: absolute; z-index: 7; pointer-events: auto; }
+.pn-dock-reveal[hidden] { display: none; }
+.pn-dock-reveal[data-edge="bottom"] { left: 0; right: 0; bottom: 0; height: 8px; }
+.pn-dock-reveal[data-edge="top"] { left: 0; right: 0; top: var(--pn-head-h, 42px); height: 8px; }
+.pn-dock-reveal[data-edge="left"] { top: var(--pn-head-h, 42px); bottom: 0; left: 0; width: 8px; }
+.pn-dock-reveal[data-edge="right"] { top: var(--pn-head-h, 42px); bottom: 0; right: 0; width: 8px; }
+/* 숨은 독이 있다는 표시 — 테두리 가운데의 짧은 막대(누가 봐도 «여기서 나온다»). */
+.pn-dock-reveal::after { content: ''; position: absolute; border-radius: 3px; background: var(--muted-3-line); opacity: .8; }
+.pn-dock-reveal[data-edge="bottom"]::after, .pn-dock-reveal[data-edge="top"]::after { left: 50%; width: 36px; height: 4px; margin-left: -18px; top: 2px; }
+.pn-dock-reveal[data-edge="left"]::after, .pn-dock-reveal[data-edge="right"]::after { top: 50%; height: 36px; width: 4px; margin-top: -18px; left: 2px; }
+
+/* ── 이름표 — 아이콘에서 곁칸 안쪽으로. ── */
+.pn-dock-tip { position: absolute; z-index: 40; pointer-events: none; padding: 4px 9px; border-radius: 7px; background: var(--ink); color: var(--bg);
+  font-size: 12px; font-weight: 600; line-height: 1.35; white-space: nowrap; box-shadow: 0 4px 14px rgba(var(--shadow-ink), .18); }
+.pn-dock-tip[hidden] { display: none; }
+.pn-dock-tip[data-edge="bottom"] { translate: -50% -100%; }
+.pn-dock-tip[data-edge="top"] { translate: -50% 0; }
+.pn-dock-tip[data-edge="left"] { translate: 0 -50%; }
+.pn-dock-tip[data-edge="right"] { translate: -100% -50%; }
+
+/* ── 끌기 — 아이콘 조각 · 끼울 자리 · 독이 놓일 자리 ── */
+html.pn-dock-dragging, html.pn-dock-dragging * { cursor: grabbing !important; user-select: none; }
+html.pn-dock-dragging iframe, html.pn-dock-dragging webview { pointer-events: none !important; }   /* 액자 위에서 놓아도 끌기가 끝나게(탭 끌기와 같은 방어) */
+.pn-dock-ghost { position: fixed; left: 0; top: 0; z-index: 1000; pointer-events: none; filter: drop-shadow(0 8px 16px rgba(var(--shadow-ink), .28)); transition: opacity .15s; }
+.pn-dock-ghost .v2-gi { display: block; width: 100%; height: 100%; }
+.pn-dock-ghost.away { opacity: .5; }
+.pn-dock-ghost.out { opacity: .6; }
+.pn-dock-ghost.out::after { content: '−'; position: absolute; top: -6px; right: -6px; width: 17px; height: 17px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--muted-2); color: var(--bg); font-size: 14px; font-weight: 700; line-height: 1; }
+@keyframes pn-dock-poof { to { scale: 1.8; opacity: 0; filter: blur(3px); } }
+.pn-dock-ghost.poof { animation: pn-dock-poof .36s ease-out forwards; }
+.pn-dock-caret { position: absolute; z-index: 3; border-radius: 1px; background: var(--blue); pointer-events: none; }
+.pn-dock-caret[hidden] { display: none; }
+.pn-dock-caret[data-v="0"] { top: 8px; bottom: 8px; width: 2px; margin-left: -1px; }
+.pn-dock-caret[data-v="1"] { left: 8px; right: 8px; height: 2px; margin-top: -1px; }
+.pn-dock.moving { transition: none; z-index: 30; }
+.pn-dock.moving .pn-dock-shelf { box-shadow: inset 0 1px 0 var(--gi-tile-line), 0 20px 48px rgba(var(--shadow-ink), .24); transform: scale(1.03); }
+.pn-dock.glide { transition: transform .38s cubic-bezier(.2, .9, .25, 1.04); }
+.pn-dock-drop { position: absolute; inset: 0; z-index: 25; pointer-events: none; }
+.pn-dock-preview { position: absolute; display: grid; place-items: center; border-radius: 16px;
+  border: 2px dashed color-mix(in srgb, var(--mint) 70%, transparent); background: color-mix(in srgb, var(--mint) 9%, transparent);
+  transition: left .12s ease, top .12s ease, width .12s ease, height .12s ease, border-radius .12s; }
+.pn-dock-preview[data-mode="bar"] { border-radius: 0; }
+/* 옆 테두리 막대의 윤곽은 좁다(아이콘 한 줄) — 글은 곁칸 안쪽에 둔다(바깥으로 넘치면 곁칸 밖에서 잘린다, 실측). */
+.pn-dock-preview[data-mode="bar"][data-edge="right"] .pn-dock-preview-t { position: absolute; right: calc(100% + 8px); }
+.pn-dock-preview[data-mode="bar"][data-edge="left"] .pn-dock-preview-t { position: absolute; left: calc(100% + 8px); }
+.pn-dock-preview-t { padding: 2px 8px; border-radius: 6px; background: var(--surface); color: var(--mint-deep); box-shadow: 0 2px 8px rgba(var(--shadow-ink), .12);
+  font-size: 11.5px; font-weight: 650; white-space: nowrap; }
+
+/* ── 더보기 — 모든 앱. 독 아이콘에서 부풀어 나온다(transform-origin = 그 아이콘). ── */
+.pn-dock-more { position: absolute; z-index: 35; display: flex; flex-direction: column; min-height: 0; overflow: hidden; border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(1.5); backdrop-filter: blur(24px) saturate(1.5);
+  border: 1px solid var(--line); box-shadow: 0 24px 60px rgba(var(--shadow-ink), .22), 0 4px 14px rgba(var(--shadow-ink), .10);
+  transform-origin: var(--ox, 50%) var(--oy, 100%); opacity: 0; transform: scale(.86);
+  transition: opacity .16s ease, transform .24s cubic-bezier(.2, .9, .25, 1.12); }
+.pn-dock-more.open { opacity: 1; transform: none; }
+.pn-dock-more.closing { opacity: 0; transform: scale(.92); transition-duration: .14s; }
+.pn-dock-more-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 12px 8px; color: var(--muted-2); }
+.pn-dock-more-q { flex: 1; min-width: 0; height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--ink); font: inherit; font-size: 13px; }
+.pn-dock-more-q:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 18%, transparent); }
+.pn-dock-more-b { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 2px 10px 10px; display: flex; flex-direction: column; gap: 12px; }
+.pn-dock-more-sh { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding: 2px 2px 6px; }
+.pn-dock-more-sh b { font-size: 12px; color: var(--ink); }
+.pn-dock-more-sh .pn-fine { font-size: 11px; }
+.pn-dock-more-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(68px, 1fr)); gap: 4px; }
+.pn-dock-tile { position: relative; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 8px 4px 6px;
+  border: 0; border-radius: 12px; background: none; color: var(--ink); font: inherit; text-decoration: none; cursor: pointer; }
+.pn-dock-tile:hover, .pn-dock-tile:focus-visible { background: color-mix(in srgb, var(--ink) 6%, transparent); outline: none; }
+.pn-dock-tile:focus-visible { box-shadow: inset 0 0 0 2px var(--blue); }
+.pn-dock-tile[disabled] { opacity: .45; cursor: not-allowed; }
+.pn-dock-tile-ic { width: 44px; height: 44px; flex: none; transition: transform .14s cubic-bezier(.2, .8, .3, 1); }
+.pn-dock-tile:hover .pn-dock-tile-ic { transform: translateY(-1px); }
+.pn-dock-tile:active .pn-dock-tile-ic { transform: scale(.94); }
+.pn-dock-tile-ic .v2-gi { width: 100%; height: 100%; filter: drop-shadow(0 1px 2px rgba(var(--shadow-ink), .14)); }
+.pn-dock-tile-n { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; line-height: 1.25; text-align: center; }
+.pn-dock-tile-dot { width: 4px; height: 4px; margin-top: -2px; border-radius: 50%; background: transparent; }
+.pn-dock-tile.run .pn-dock-tile-dot { background: var(--muted-2); }
+/* 독에 고정한 앱 — 아이콘 어깨의 민트 점. */
+.pn-dock-tile.pin::after { content: ''; position: absolute; top: 6px; left: calc(50% + 16px); width: 7px; height: 7px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 0 2px var(--surface); }
+.pn-dock-more-none { padding: 18px 4px; text-align: center; }
+.pn-dock-more-f { flex: none; display: flex; justify-content: space-between; gap: 8px; padding: 7px 12px; border-top: 1px solid var(--line); }
+/* 열릴 때 타일이 살짝 떠오른다(런치패드). */
+@keyframes pn-dock-tile-in { from { opacity: 0; transform: translateY(6px) scale(.96); } }
+.pn-dock-more.open .pn-dock-more-grid { animation: pn-dock-tile-in .26s cubic-bezier(.2, .8, .3, 1) both; }
+
+/* ── 좁은 폭(서랍) — 끌기·확대 없음 ── */
+.pn-dock.narrow .pn-dock-grip { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pn-dock, .pn-dock-it, .pn-dock-ic, .pn-dock-shelf, .pn-dock-more, .pn-dock-preview, .pn-dock-tile-ic { transition: none !important; }
+  .pn-dock-it.bounce .pn-dock-ic, .pn-dock-ghost.poof, .pn-dock-more.open .pn-dock-more-grid { animation: none !important; }
+}
