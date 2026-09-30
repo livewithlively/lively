@@ -21,9 +21,7 @@ import {
 // #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 body_md 전체를 튕기지 않게 한다(서버 조정 + 응답 capped).
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "../soft-cap.js";
 import { assertNoContentSecrets } from "../content-secrets.js";
-import { getWritingFormat } from "../../org/store/runtime-config.js";
-import { lintWriting, type WritingFinding } from "../../v6/writing-lint.js";
-import type { WritingFormat } from "../../org/policies/writing-format.js";
+import { checkWriting, writingRejectError } from "../writing-style.js";
 
 // #1442 소프트캡 — 아래 다섯 짧은 필드(name·title·supersedes·parent_name·change_note)엔 zod .max() 를 두지
 //  않는다. SDK 는 검증을 핸들러 앞에서 하므로 그 max 가 body_md(최대 200,000자)까지 통째로 튕겨 재전송을
@@ -77,52 +75,6 @@ const knowledgeSaveInput = {
       + softCapHint(CAPS.change_note)),
 };
 type KnowledgeSaveInput = z.infer<z.ZodObject<typeof knowledgeSaveInput>>;
-// 조직 서술 형식 안내 — 저장된 (최종) 제목·본문을 조직이 정한 형식에 비춰 본다. 저장은 막지 않는다.
-//  외부 미러(observed)는 원본 소유가 밖이라 고칠 수 없는 글이고, 폴더는 본문이 없다 — 둘은 안내하지 않는다.
-//  형식을 못 읽거나 검사가 터져도 저장은 이미 끝난 일이므로 안내만 빠진다(fail-open).
-export async function writingStyleInfo(
-  title: string | null | undefined, body: string, opts: { observed: boolean; folder: boolean; proposed?: boolean },
-  loadFormat: () => Promise<WritingFormat> = getWritingFormat,
-): Promise<Record<string, unknown>> {
-  if (opts.observed || opts.folder) return {};
-  try {
-    const fmt = await loadFormat();
-    const findings = lintWriting({ title, body_md: body }, fmt);
-    if (!findings.length) return {};
-    return {
-      style: {
-        findings,
-        // 수정 제안(stage)으로 접수된 저장은 라이브 본문이 안 바뀌었고, 제안이 있는 동안 edit·append 는 거부된다.
-        note: opts.proposed
-          ? `이 조직의 서술 형식에 어긋난 곳이 ${findings.length}건 있습니다(수정 제안으로 접수됐습니다). 제안에 반영하려면 고친 전문으로 같은 지식을 다시 저장하세요 — 제안이 갱신됩니다. 의미는 바꾸지 말고 형식만 고치세요.`
-          : `이 조직의 서술 형식에 어긋난 곳이 ${findings.length}건 있습니다(저장은 됐습니다). 본문은 mode='edit' 로 그 부분만, 제목은 knowledge_set_title 로 고치세요 — 전문을 다시 보낼 필요가 없습니다. 의미는 바꾸지 말고 형식만 고치세요.`,
-        guide_md: fmt.guide_md,
-      },
-    };
-  } catch {
-    return {};
-  }
-}
-
-/** 저장을 거부할 위반 — reject 수준이고 사람의 웹 편집이 아닐 때만. */
-export function writingRejects(style: Record<string, unknown>, source: string | null | undefined): WritingFinding[] {
-  if (source === "web") return [];
-  const findings = (style.style as { findings?: WritingFinding[] } | undefined)?.findings ?? [];
-  return findings.filter((f) => f.level === "reject");
-}
-
-/** 거부 응답 — MCP 는 에러 메시지만 전달하므로 고칠 곳과 가이드를 메시지 본문에 담는다(REST 는 body 로도 준다). */
-export function writingRejectError(rejects: WritingFinding[], guide: string): HttpError {
-  const lines = rejects.map((f) => `- ${f.rule}: ${f.message}${f.sample ? ` (예: ${f.sample})` : ""}`);
-  const msg = [
-    `이 조직의 서술 형식에 맞지 않아 저장하지 않았습니다(${rejects.length}건). 아래를 고쳐 같은 호출로 다시 저장하세요. 의미는 바꾸지 말고 형식만 고치세요.`,
-    ...lines,
-    "",
-    guide,
-  ].join("\n");
-  return new HttpError(422, msg, { body: { style: { findings: rejects, guide_md: guide } } });
-}
-
 export const knowledgeSave: Capability = {
   name: "knowledge_save",
   title: "지식 저장",
@@ -296,16 +248,19 @@ export const knowledgeSave: Capability = {
       saveInput = { ...input, body_md: merged };
     }
 
-    const style = await writingStyleInfo(input.title ?? gate.before?.title, saveInput.body_md, {
-      observed: (input.provenance ?? gate.before?.provenance) === "observed",
-      // 기존 폴더를 고칠 땐 input.is_folder 가 없을 수 있지만, 폴더 본문은 비어 본문 규칙이 안 걸리고 제목만 본다.
-      folder: input.is_folder === true,
-      proposed: !gate.isCreate && gate.update === "stage",
-    });
-
-    // 서술 형식 강제 — reject 로 정한 규칙에 걸린 에이전트 저장은 받지 않는다. 판정이 서버에 있으므로
-    //  클라이언트(훅·키트) 버전과 무관하게 걸린다. 사람의 웹 편집(source=web)은 막지 않는다 — 사람은 안내만 받는다.
-    const rejects = writingRejects(style, ctx?.source);
+    // 서술 형식 — 최종 제목·본문을 조직 형식에 비춰 본다. reject 규칙에 **이번 저장이 새로 만든** 위반이 있으면 받지 않는다.
+    //  판정이 서버에 있으므로 클라이언트(훅·키트) 버전과 무관하게 걸린다. 기존 문서에 원래 있던 위반은 거부 사유가 아니다 —
+    //  그걸 막으면 깨끗한 조각을 붙이는 append 까지 전부 422 가 되고, 조각으로는 본문 위반을 고칠 수 없다.
+    const { info: style, rejects } = await checkWriting("knowledge",
+      { title: input.title ?? gate.before?.title, body: saveInput.body_md },
+      {
+        observed: (input.provenance ?? gate.before?.provenance) === "observed",
+        // 기존 폴더를 고칠 땐 input.is_folder 가 없을 수 있지만, 폴더 본문은 비어 본문 규칙이 안 걸리고 제목만 본다.
+        folder: input.is_folder === true,
+        proposed: !gate.isCreate && gate.update === "stage",
+        before: gate.before ? { title: gate.before.title, body: gate.before.body_md } : null,
+        human: user?.tokenSource === "session",
+      });
     if (rejects.length) throw writingRejectError(rejects, (style.style as { guide_md?: string }).guide_md ?? "");
 
     // #921 append 응답 — 본문 전문은 빼고 증분 요약만. json()(capabilities/index.ts)이 handler 결과를 통째로

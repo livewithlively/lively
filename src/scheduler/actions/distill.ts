@@ -1,5 +1,6 @@
 // 크론 액션: 자료 distill(distill_sources·distill_sources_headless, #541/#1289) — R16 원문 이동.
 //  미증류 source(slack/gmail 등 raw)를 LLM 이 지식으로 자동증류 — 증류기(#1289) 스코프·기준·형식 + 배치 선정 로직 포함.
+import { getWritingFormat } from "../../org/store/runtime-config.js";
 import { resolveSessionTmux, injectToSession, resolveJobRunner, explicitRunner, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 import { logger } from "../../log.js";
 
@@ -122,7 +123,7 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
     const ids = inbox.map((s) => Number(s.id));
     return { batches: [{
       distillerId: d.id, key: d.key, ids, backlog: await countDistillerBacklog(d, all),
-      prompt: buildDistillerPrompt({ distiller: d, rows: inbox, policySummary, threadKnowledge: threadKn }),
+      prompt: buildDistillerPrompt({ distiller: d, rows: inbox, policySummary, threadKnowledge: threadKn, writingFormat: await getWritingFormat() }),
       targeting: buildDistillerTargeting(d, inbox, threadKn),
       requester: d.requester, harness: d.harness, model: d.model, effort: d.effort,
     }], considered: 1 };
@@ -158,7 +159,7 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
     const ids = inbox.map((s) => Number(s.id));
     batches.push({
       distillerId: d.id, key: d.key, ids, backlog: await countDistillerBacklog(d, all),
-      prompt: buildDistillerPrompt({ distiller: d, rows: inbox, policySummary, threadKnowledge: threadKn }),
+      prompt: buildDistillerPrompt({ distiller: d, rows: inbox, policySummary, threadKnowledge: threadKn, writingFormat: await getWritingFormat() }),
       targeting: buildDistillerTargeting(d, inbox, threadKn),
       requester: d.requester, harness: d.harness, model: d.model, effort: d.effort,
     });

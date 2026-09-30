@@ -1,5 +1,5 @@
 // delivery ▸ runtime-config — 런타임 설정(훅 on/off·work-roots·너지·정책·임베딩) 조회/수정.
-import { WRITING_RULE_IDS, WRITING_RULE_LEVELS, WRITING_LIMIT_BOUNDS, type WritingFormatPatch } from "../../org/policies/writing-format.js";
+import { WRITING_RULE_IDS, WRITING_RULE_LEVELS, WRITING_LIMIT_BOUNDS, WRITING_SURFACES, type WritingFormatPatch } from "../../org/policies/writing-format.js";
 import type { Capability, CapabilityCtx } from "../types.js";
 import { z } from "zod";
 import { HttpError } from "../rest-util.js";
@@ -726,17 +726,19 @@ export const runtimeConfigCapabilities: Capability[] = [
         runner_member: z.string().nullable().optional().describe("「수집 · 증류」의 자동 실행 잡(증류: 자료 → 지식 · 카테고리 붙이기, 그리고 관리 등 LLM 잡)을 **이 멤버의 자격으로** 돌린다(#4012 T1). 멤버 id(또는 이메일). null=해제 → 종전 동작(잡 params.requester > created_by). 사람이 안 보는 자리에서 도는 잡의 과금·귀속이 «누가 마지막으로 그 잡을 저장했나» 로 정해지지 않게 하는 자리다. 레인·잡이 자기 requester 를 명시했으면 그쪽이 이긴다(더 구체적인 지정)"),
       }).optional().describe("「수집 · 증류」 자동 실행 잡의 실행 신원(#4012 T1 · #3994 D1). 워크스페이스가 정한 멤버 한 명의 자격으로 증류·관리를 돌린다. 그 멤버의 Claude/Codex 자격(claude_setup_token)이 등록돼 있어야 실제로 선다"),
       writing_format: z.object({
-        enabled: z.boolean().optional().describe("켜면 knowledge_save 응답에 형식 위반 안내(style)가 실린다. 저장은 막지 않는다. 기본 꺼짐"),
+        enabled: z.boolean().optional().describe("켜면 지식·작업기록·프로젝트 저장 응답에 형식 위반 안내(style)가 실리고, reject 로 정한 규칙에 걸린 에이전트 저장은 422 로 거부된다(사람의 웹 편집은 안내만). 증류기 산출도 에이전트 저장이라 거부 대상이다. 기본 꺼짐"),
+        apply_to: z.array(z.enum(WRITING_SURFACES)).optional().describe("형식을 적용할 표면 — knowledge·activity·project(기본 전부). 전체 교체"),
         register: z.enum(["plain", "polite", "any"]).optional().describe("문체 — plain=평서 '~다'체 · polite='~습니다'체 · any=문체 검사 안 함"),
         limits: z.object({
           title_max_chars: z.number().int().min(WRITING_LIMIT_BOUNDS.title_max_chars[0]).max(WRITING_LIMIT_BOUNDS.title_max_chars[1]).nullable().optional().describe("제목 상한(글자). 기본 60. null=기본값으로"),
+          activity_title_max_chars: z.number().int().min(WRITING_LIMIT_BOUNDS.activity_title_max_chars[0]).max(WRITING_LIMIT_BOUNDS.activity_title_max_chars[1]).nullable().optional().describe("작업기록 제목 상한(글자). 기본 80"),
           body_max_chars: z.number().int().min(WRITING_LIMIT_BOUNDS.body_max_chars[0]).max(WRITING_LIMIT_BOUNDS.body_max_chars[1]).nullable().optional().describe("본문 권장 상한(글자). 기본 8000 — 넘으면 나누라고 안내"),
           bold_max: z.number().int().min(WRITING_LIMIT_BOUNDS.bold_max[0]).max(WRITING_LIMIT_BOUNDS.bold_max[1]).nullable().optional().describe("문서당 볼드 개수 상한. 기본 10"),
           symbol_max: z.number().int().min(WRITING_LIMIT_BOUNDS.symbol_max[0]).max(WRITING_LIMIT_BOUNDS.symbol_max[1]).nullable().optional().describe("문서당 강조 기호(🔴⚠✅ 등) 상한. 기본 3"),
         }).optional(),
         forbid_terms: z.array(z.string()).optional().describe("서술에 쓰지 않을 말(대소문자 무시 부분일치) — 전체 교체. 예: 작성 도구 이름·개인 호칭"),
-        rules: z.record(z.enum(WRITING_RULE_IDS), z.enum(WRITING_RULE_LEVELS)).optional().describe("규칙별 수준(off|warn) — 기존 값과 병합. 규칙 id: " + WRITING_RULE_IDS.join(", ")),
-        default_level: z.enum(WRITING_RULE_LEVELS).optional().describe("rules 에 없는 규칙의 수준. 기본 warn"),
+        rules: z.record(z.enum(WRITING_RULE_IDS), z.enum(WRITING_RULE_LEVELS)).optional().describe("규칙별 수준 — off(끔)·warn(저장하고 안내)·reject(에이전트 저장 거부). 기존 값과 병합. 규칙 id: " + WRITING_RULE_IDS.join(", ")),
+        default_level: z.enum(WRITING_RULE_LEVELS).optional().describe("rules 에 없는 규칙의 수준(off|warn|reject). 기본 warn"),
         guide_md: z.string().optional().describe("작성 AI 에게 보여 줄 문체 가이드(마크다운). 빈 문자열 = 기본 가이드로 복귀"),
       }).nullable().optional().describe("조직 서술 형식 — AI 가 저장하는 지식의 제목·첫 줄 결론·강조·금지어·문체. 조직이 바꾼 칸만 저장되고 나머지는 제품 기본값을 따른다. null=전부 기본값으로"),
       // #1780 Stage B — 앱 worker 조직 예산. 각 값 0 = 무제한/감시 끔.

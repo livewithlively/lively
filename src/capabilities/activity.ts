@@ -1,6 +1,7 @@
 // 작업(Activity) capability (P3) — activity_log(기록) + activity_list(조회). scope='memory'(공유 조직 작업,
 //  memory_*/ctx_* 와 동일). 핸들러는 thin — 입력 파싱 후 activity/store 의 store 호출.
 //  author_person=ctx.actor(토큰 신원=누가), author_agent='어떤 AI'(호출자가 명시 — 모델/하네스 id). 사람×AI 집계의 축.
+import { checkWriting, writingRejectError } from "./writing-style.js";
 import { z } from "zod";
 import { logActivity, listActivities, dashPeople, listDashMembers, getWatch, setWatch } from "../activity/store.js";
 import type { Capability } from "./types.js";
@@ -142,6 +143,11 @@ const activityLog: Capability = {
         }
       }
     }
+    // 서술 형식 — reject 규칙에 걸린 에이전트 기록은 남기지 않는다(사람의 웹 입력은 안내만). 판정은 서버에서 하므로
+    //  키트·훅이 갱신되지 않은 세션의 기록에도 걸린다.
+    const { info: style, rejects } = await checkWriting("activity", { title: input.title, body: input.body ?? null },
+      { human: user?.tokenSource === "session" });
+    if (rejects.length) throw writingRejectError(rejects, (style.style as { guide_md?: string }).guide_md ?? "");
     const res = await logActivity({
       type: input.type, title: input.title, summary: input.summary ?? null, body: input.body ?? null,
       projectId: input.project_id ?? null, kuRefs: input.ku_refs, touches: input.touches,
@@ -151,7 +157,7 @@ const activityLog: Capability = {
       external_url: input.external_url ?? null, external_instance: input.external_instance,
       should_review: input.should_review, is_review: input.is_review,
     }, authorPerson);
-    return { ok: true, ...res, ...capped };
+    return { ok: true, ...res, ...capped, ...style };
   },
 };
 
