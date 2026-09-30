@@ -16,10 +16,32 @@
 //   ※ Codex 는 ~/.codex/AGENTS.md 로 정적 org-context 를 네이티브 로드하므로(어댑터가 발행), 본 훅의
 //     정적 블록은 Claude 와의 동작 패리티/이중 안전망용이다(중복돼도 무해 — 같은 비밀-없는 텍스트).
 import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, realpathSync, rmSync, chmodSync } from "node:fs";
-import { execFileSync, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+// 하네스별 규약(주입 봉투·배선 방식·자동승인 표면·자산 재로드)은 표에서 온다 — 하네스 이름으로 분기하지 않는다.
+//  ⚠ HARNESS 상수 자체는 **종전 계산식을 유지**한다(빈 문자열 가능): 이 값은 self-update 인자로도 넘어가는데,
+//   여기서 "claude" 로 기본값을 채우면 종전에 인자를 안 넘기던 경로가 넘기게 되어 동작이 바뀐다.
+//   표 조회(harness())가 알아서 claude 로 폴백하므로 분기 결과는 종전과 같다.
+import { harness, isForeignGrokInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
+import { hostEffects } from "./host-effects-port.mjs";
+
+const execFileSync = (...args) => hostEffects.execFileSync(...args);
+const spawn = (...args) => hostEffects.spawn(...args);
+const fetch = (...args) => hostEffects.fetch(...args);
+
+// #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
+//  이 세션의 워크스페이스 컨텍스트를 되찾는다. 안 실으면 primary 로 간주되므로(폴백) secondary 세션의
+//  훅 호출이 조용히 primary 데이터를 읽고 쓴다 — dev '다온' 실측이 정확히 그 사고다.
+const SCOPE_HDRS = {
+  ...(String(process.env.LIVELY_SESSION_ID || "").trim() ? { "x-lively-session": String(process.env.LIVELY_SESSION_ID).trim() } : {}),
+  ...(String(process.env.LVLY_TENANT_SLUG || "").trim() ? { "x-lively-workspace": String(process.env.LVLY_TENANT_SLUG).trim() } : {}),
+};
+
+
+// grok compat 이중발화 가드(#1701) — grok 은 ~/.claude/settings.json 의 우리 훅을 기본값으로 그대로 실행한다.
+//  그 사본이면 조용히 비켜선다(정본은 grok-adapter 가 LIVELY_HARNESS=grok 으로 스폰하는 경로).
+if (isForeignGrokInvocation()) process.exit(0);
 
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
 // 읽기전용 세션(#1007+) — 세션 pane 에 -e LIVELY_MODE=readonly 로 주입된다(게이트웨이 헤더 x-lively-mode 와 같은 값).
@@ -57,9 +79,10 @@ const HARNESS = (() => {
 //   opts.reloadSkills(Claude 전용, 자산 sync 자기치유가 이번 세션에 스킬을 materialize 했을 때):
 //   raw 텍스트론 신호를 실을 수 없어 JSON 봉투(additionalContext+reloadSkills)로 전환 — 공식 SessionStart 계약.
 function emitContext(text, opts = {}) {
-  const reload = !!opts.reloadSkills && HARNESS !== "codex";
+  const h = harness(HARNESS);
+  const reload = !!opts.reloadSkills && h.reloadAssets;
   if (!text && !reload) return;
-  if (HARNESS === "codex" || reload) {
+  if (h.contextEnvelope === "json" || reload) {
     const out = { hookEventName: "SessionStart" };
     if (text) out.additionalContext = text;
     if (reload) out.reloadSkills = true;
@@ -79,13 +102,31 @@ const STATIC = readLocal("context.md");
 
 // 플러그인 설치 경로(#1473) — Claude Code 플러그인의 userConfig 값은 훅 프로세스에 CLAUDE_PLUGIN_OPTION_<KEY> 로 export 된다.
 //  키트 설치(curl|sh)는 ~/.lively/{token,gateway-url} 파일을 깔지만 플러그인 설치는 그 파일이 없다 — 그래서 env 폴백을 둔다.
-//  우선순위: LIVELY_* (명시 오버라이드) > CLAUDE_PLUGIN_OPTION_* (플러그인) > ~/.lively 파일(키트). 셋 다 없으면 종전 기본값.
 const pluginOpt = (key) => (process.env[`CLAUDE_PLUGIN_OPTION_${key}`] || "").trim();
 
-// OFF 면 토큰 파일도 안 읽는다(클린룸 유지 — 종전 최상단 exit 이 하던 일). !TOKEN 시 정적만 주입하는 처리는 main() 에서.
-const TOKEN = OFF ? "" : ((process.env.LIVELY_TOKEN || "").trim() || pluginOpt("TOKEN") || readLocal("token"));
+// ★ 훅의 자격·주소 우선순위 — **이 pane 을 라이블리가 띄웠나**(LIVELY_SESSION_ID)로 갈린다. 다른 훅은 이 주석을 정본으로 가리킨다.
+//  · 사람이 연 셸(LIVELY_SESSION_ID 없음): 플러그인 > ~/.lively 파일 > LIVELY_* env.
+//    env 는 오버라이드가 아니라 '파일의 캐시'다(#916·#2617 의 훅 판) — 설치기가 rc 에 `export LIVELY_TOKEN="$(cat ~/.lively/token)"`
+//    를 심으므로 재로그인·주소 변경 뒤 그 셸의 env 는 옛 값이고, env 가 이기면 훅만 옛 신원으로 조용히 붙는다(둘 다 유효한
+//    토큰이면 401 도 안 난다). CLI(lively.mjs token()/gateway())·MCP 프록시와 같은 판정이다.
+//  · 라이블리가 띄운 pane(LIVELY_SESSION_ID 있음): LIVELY_* env > 플러그인 > 파일 — 종전 순서 그대로다.
+//    여기서 env 는 캐시가 아니라 **띄운 쪽이 그 세션 몫으로 실은 값**이다: 공유 홈 박스의 세션 훅 토큰(#1719,
+//    terminal/sessions.ts mintSessionHookToken — 파일은 키트를 깐 사람 것) · 위탁 판의 게이트웨이 주소(#4012 T5,
+//    node/tasks.ts taskGatewayEnvArgs — 파일은 그 머신의 로컬 로그인이라 다른 워크스페이스일 수 있다).
+//    이 자리에서 파일이 이기면 세션 보고·맥락 주입이 남의 신원·남의 워크스페이스로 나간다(#959 리뷰에서 막은 회귀).
+//  · 플러그인 값은 늙지 않는다(하네스가 매 훅마다 현재 설정을 export) — 그래서 어느 쪽이든 파일보다 앞이다(#1473).
+//  · 어느 쪽이든 없는 칸은 다음 칸으로 폴백한다(플러그인·프로비저닝·CI). 셋 다 없으면 종전 기본값.
+const SPAWNED = !!(process.env.LIVELY_SESSION_ID || "").trim();
+const pickCred = (envName, pluginKey, fileVal) => {
+  const env = (process.env[envName] || "").trim();
+  return (SPAWNED ? (env || pluginOpt(pluginKey) || fileVal) : (pluginOpt(pluginKey) || fileVal || env)) || "";
+};
 
-const GW = ((process.env.LIVELY_GATEWAY_URL || "").trim() || pluginOpt("GATEWAY_URL") || readLocal("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
+// OFF 면 토큰 파일도 안 읽는다(클린룸 유지 — 종전 최상단 exit 이 하던 일). !TOKEN 시 정적만 주입하는 처리는 main() 에서.
+//  #4135 — 세션 토큰 파일이 있으면 그것이 먼저다(게이트웨이가 이 세션 앞으로 나중에 실어 준 정본 — harness-registry sessionTokenFile 머리말).
+const TOKEN = OFF ? "" : (sessionTokenFromFile("hook", homedir(), (p) => readFileSync(p, "utf8")) || pickCred("LIVELY_TOKEN", "TOKEN", readLocal("token")));
+
+const GW = (pickCred("LIVELY_GATEWAY_URL", "GATEWAY_URL", readLocal("gateway-url")) || "http://localhost:8080").replace(/\/$/, "");
 
 // 플러그인 모드 자격 미러(#1473) — 플러그인 설정값을 `~/.lively` 파일로도 굳힌다. **조직 스킬 본문과 lively CLI 가
 //  그 파일을 전제로 REST 를 호출**하기 때문이다(예: curl -H "Bearer $(cat ~/.lively/token)").
@@ -131,7 +172,7 @@ async function jget(path, ms = 2000, auth = true) {
   try {
     const res = await fetch(`${GW}${path}`, {
       signal: ctl.signal,
-      headers: auth ? { authorization: `Bearer ${TOKEN}` } : {},
+      headers: auth ? { authorization: `Bearer ${TOKEN}`, ...SCOPE_HDRS } : {},
     });
     if (!res.ok) return null;
     return await res.json();
@@ -239,6 +280,13 @@ export function reconcileCodexAutoApprove(want) {
   } catch { return false; }                                  // fail-soft
 }
 
+// auto-approve reconcile 전략 — 표의 autoApprove.kind → 실제 반영 함수. 여기 없는 kind 는 no-op 이고,
+//  그건 "그 하네스는 아직 자동승인 배선이 없다"를 뜻한다(조용히 claude 표면에 쓰는 것보다 안전하다).
+const AUTO_APPROVE = {
+  "settings-allow": (dir, want) => reconcileClaudeAutoApprove(dir, want),
+  "toml-approval": (_dir, want) => reconcileCodexAutoApprove(want),
+};
+
 // kit 훅 중복 dedup(자기치유 확장, #742) — 설치 세대 간 command 표기 드리프트(`node` vs `"node"` vs 번들 런타임
 //  절대경로)로 같은 훅이 여러 벌 배선된 settings 를 세션 시작마다 한 벌로 수렴시킨다(v0.1.131 설치기 dedup 과
 //  동일 정체성 규칙 = 스크립트 파일명(+인자)+matcher — 설치기는 설치 시에만 돌므로, 재설치 없는 머신은 이게 정리).
@@ -250,7 +298,8 @@ const kitHookId = (cmd) => {
   return m ? `${m[1]}|${m[2].trim()}` : null;
 };
 function dedupKitWiring() {
-  if (HARNESS === "codex") return false; // codex 배선은 config.toml 센티널 — 이 dedup 은 Claude settings 전용
+  // 이 dedup 은 settings.json 머지 방식 배선에만 성립한다(센티넬 블록·플러그인 파일 배선은 대상 아님).
+  if (harness(HARNESS).wiring !== "settings-merge") return false;
   try {
     const sp = join(homedir(), ".claude", "settings.json");
     if (!existsSync(sp)) return false;
@@ -302,7 +351,7 @@ function dedupKitWiring() {
 //  Codex 배선은 config.toml 센티넬(설치 시점 관리)이라 제외. 러너 파일이 없는 구형 로컬 kit 은 건드리지 않는다
 //  (없는 파일을 배선하면 매 세션 훅 에러) — 그 경우는 kit 재설치가 경로.
 function healAssetSyncWiring() {
-  if (HARNESS === "codex") return false;
+  if (harness(HARNESS).wiring !== "settings-merge") return false;   // settings 머지 배선만 자기치유 대상
   try {
     const runner = join(homedir(), ".lively", "hooks", "sync-harness-assets.mjs");
     if (!existsSync(runner)) return false;
@@ -367,7 +416,7 @@ export function reconcileExtPullWiring(hooks, { extPullCmd, pullTools }) {
 //  codex 제외(config.toml 센티널 관리 — 동적 matcher 밖, 자체설치 MCP 커버는 Claude 한정). 전 경로 fail-soft.
 //  extPullCmd 는 **메인 work-flag 엔트리의 command 를 그대로 재사용** + ' --ext-pull' — node 토큰·경로 표기를 잇는다.
 export function applyExtPullWiring(pullTools) {
-  if (HARNESS === "codex") return false;
+  if (harness(HARNESS).wiring !== "settings-merge") return false; // 동적 matcher 는 settings 머지 배선 전용
   try {
     const sp = join(homedir(), ".claude", "settings.json");
     if (!existsSync(sp)) return false;
@@ -419,8 +468,10 @@ async function refreshRuntimeConfig() {
     if (Array.isArray(rc.auto_approve)) {
       const want = rc.auto_approve.filter((s) => !!managedAutoApproveParts(s));
       writeFileSync(join(dir, "auto-approve.json"), JSON.stringify({ allow: want }, null, 2));
-      if (HARNESS === "codex") reconcileCodexAutoApprove(want);
-      else reconcileClaudeAutoApprove(dir, want);
+      //  어느 표면에 반영할지는 표의 autoApprove.kind 가 정한다(하네스 이름으로 분기하지 않는다).
+      //  아직 전략이 없는 하네스(opencode: config-permission)는 no-op — 캐시 파일만 남고 반영은 그 하네스 배선 작업에서.
+      const reconcile = AUTO_APPROVE[harness(HARNESS).autoApprove.kind];
+      if (reconcile) reconcile(dir, want);
     }
     // work-roots 는 동적 갱신하지 않는다 — 디렉토리 경로 노출 회피(scope-null endpoint 가 work_roots 미반환).
     //  중앙 work-roots 는 설치 번들(.lively/work-roots)/재설치로만 적용된다(자동 업데이트가 그 재설치를 돌린다).
@@ -437,12 +488,44 @@ async function refreshRuntimeConfig() {
 // 이 트리거가 session-preload 안에 있는 이유: **전원에게 이미 배선된 훅이 이것뿐**이다. 새 훅을 추가하면
 //  그걸 배선하려고 또 수동 업데이트가 필요해진다(닭-달걀). 여기 두면 앞으로의 모든 키트 변경 — 새 훅,
 //  새 이벤트 배선, 설치기 수정 — 이 손 안 대고 흐른다.
+// ── MCP 등록이 비었나 — 버전이 같아도 봐야 하는 단 하나 (#1079 후속) ─────────
+//  self-update 안에는 «최신이어도 MCP 등록 정합은 맞춘다» 는 분기가 이미 있다(reconcileClaudeMcp).
+//  그런데 아래 게이트가 **버전이 다를 때만** self-update 를 띄우므로, 버전이 그대로인 한 그 분기는
+//  **도달할 수 없는 죽은 코드**다. 그 사이에 등록이 사라지면 스스로 못 돌아온다.
+//
+//  실측 2026-09-04(매니지드 lively-46e3): 전송 계층 결함으로 `~/.claude.json` 이 깨졌고, 클로드 코드가
+//   그 파일을 손상으로 판정해 설정을 **초기화**하면서 `mcpServers` 가 통째로 날아갔다. 키트 버전은 최신
+//   그대로라 self-update 가 안 떴고, 세션을 다시 열어도 lively 툴이 0개인 채였다 — 사람이 손으로 돌려야
+//   복구됐다. 등록을 지우는 주체는 우리가 아니어도(하네스·사고·사람) 되살리는 자리는 여기뿐이다.
+//
+//  비용 — 정상 세션에선 작은 JSON 읽기 한 번이다(네트워크·토큰 무관). 있으면 즉시 false.
+//  ⚠ 경로 계산은 self-update 의 claudeUserConfigPaths() 와 **같은 규칙**이다(CLAUDE_CONFIG_DIR 우선,
+//   존재하는 것을 전부 본다 — 훅과 클코가 서로 다른 파일을 볼 수 있다, #1079). 그쪽이 바뀌면 여기도 바꾼다.
+//  파손된 설정은 **판단 보류**다 — self-update 도 파손 파일은 안 건드린다(덮어써 날리지 않기 위해).
+export function claudeMcpMissing() {
+  try {
+    const cands = [];
+    if (process.env.CLAUDE_CONFIG_DIR) cands.push(join(process.env.CLAUDE_CONFIG_DIR, ".claude.json"));
+    cands.push(join(homedir(), ".claude.json"));
+    for (const p of new Set(cands)) {
+      if (!existsSync(p)) continue;                 // 설정이 없다 = 클로드를 안 쓰거나 설치 전 — 여기 몫이 아니다
+      let conf;
+      try { conf = JSON.parse(readFileSync(p, "utf8")); } catch { continue; }   // 파손 → 판단 보류
+      if (!conf || typeof conf !== "object") continue;
+      if (!(conf.mcpServers && conf.mcpServers.lively)) return true;            // 하나라도 비면 되살려야 한다
+    }
+    return false;
+  } catch { return false; }                          // fail-soft — 판단 못 하면 종전대로 무동작
+}
+
 function maybeSelfUpdate(remoteVersion) {
   try {
     if (!remoteVersion || typeof remoteVersion !== "string") return; // 게이트웨이가 버전을 안 줌 → 무동작
     if (process.env.LIVELY_NO_AUTO_UPDATE === "1") return;
     if (hookDisabled("self_update")) return;                          // 어드민 토글
-    if (readLocal("kit-version") === remoteVersion) return;           // 최신 — 대부분의 세션이 여기서 끝
+    //  최신이면 대부분의 세션이 여기서 끝난다 — 단 **MCP 등록이 비어 있으면** 예외다(claudeMcpMissing 머리말:
+    //   그 상태는 스스로 못 돌아온다. self-update 가 additive reconcile 로 되살린다).
+    if (readLocal("kit-version") === remoteVersion && !claudeMcpMissing()) return;
     const runner = join(homedir(), ".lively", "hooks", "self-update.mjs");
     if (!existsSync(runner)) return;                                  // 구형 kit — 수동 업데이트가 경로
     const argv = [runner, "--to", remoteVersion];
@@ -529,6 +612,17 @@ function takeUpdateNotice() {
   } catch { return null; }
 }
 
+// fetch 이후의 종료는 process.exit 직호출 금지(#249) — Windows(Node 24)에서 undici 핸들 정리와
+//  process.exit 가 겹치면 libuv 가 src/win/async.c:76 어서션으로 abort 한다(작업은 끝난 뒤라 무해하지만
+//  매 세션 빨간 에러). dispatcher 를 먼저 닫고 루프가 비면 자연 종료, 안 비면 250ms unref 타이머가
+//  강제 종료한다 — "훅이 안 끝나 세션이 멈추는" 회귀 없음. fetch 전 조기 exit 는 그대로 둔다(핸들 없음).
+function safeExit(code = 0) {
+  process.exitCode = code;
+  try { globalThis[Symbol.for("undici.globalDispatcher.1")]?.close?.()?.catch?.(() => {}); } catch { /* noop */ }
+  const t = setTimeout(() => process.exit(code), 250);
+  if (typeof t.unref === "function") t.unref();
+}
+
 // 전체 하드 타임박스 4.5s — 어느 경로든 exit 0
 // 출력 = [정적 org-context(게이트웨이 우선, 로컬 폴백)]. 라이브 현황 블록은 폐기(v6 — 구 item/curate 모델 기반이라 제거).
 async function main() {
@@ -553,7 +647,7 @@ async function main() {
     const notice = takeUpdateNotice(); // 직전 업데이트 결과 안내(있으면 이번 세션에 1회)
     maybeSelfUpdate(rc && rc.kit_version);
     // 설정 갱신 후 판정 — session_preload 비활성이면 컨텍스트 주입만 스킵(설정은 이미 갱신돼 재활성화 가능).
-    if (hookDisabled("session_preload")) { emitContext("", { reloadSkills: healed }); process.exit(0); }
+    if (hookDisabled("session_preload")) { emitContext("", { reloadSkills: healed }); safeExit(0); return; }
     // 레포 통지는 org-context 앞에 — 길이가 긴 컨텍스트 뒤에 묻히면 안 되는 '지금 이 세션의 상태'다.
     const blocks = [notice, repoNotice, orgCtx || STATIC].filter(Boolean); // 업데이트 안내 → 레포 실패 → org-context(없으면 로컬 STATIC)
     emitContext(withRo(blocks.join("\n\n")), { reloadSkills: healed }); // 읽기전용이면 배너를 맨 앞에(#1007)
@@ -561,7 +655,7 @@ async function main() {
     // fail-open — 라이브가 터져도 정적 컨텍스트(로컬)·레포 통지는 내보낸다.
     emitContext(withRo([repoNotice, STATIC].filter(Boolean).join("\n\n")));
   }
-  process.exit(0);
+  safeExit(0);
 }
 
 // main-guard(#959) — 이 파일이 직접 실행될 때만 main() 을 돈다. 테스트가 reconcileExtPullWiring 을 import 할 때
