@@ -379,7 +379,7 @@ export async function enumerateHierarchy(
 
   const out: HierarchySpace[] = [];
   for (const spaceLite of await listSpaces(teamId)) {
-    // 스페이스 status set/피처 완전화(리스트 override_statuses=false 상속 판정).
+    // 스페이스 status set/피처 완전화(리스트 statuses 가 빈 경우의 폴백용).
     let space: ClickUpSpace = spaceLite;
     try { space = await getSpace(spaceLite.id); } catch (err) { console.error(`[clickup] 스페이스 ${spaceLite.id} 상세 실패:`, err); }
     let spaceFields: ClickUpCustomField[] = [];
