@@ -149,6 +149,9 @@ export const fillTasks: Fill = (ctx, f, body, foot, sub, acts) => {
     });
     for (const k of TASK_COLS) sec.style.setProperty('--pjv-w-' + k, cols.includes(k) ? (phone ? (k === 'assignee' ? 'max-content' : '52px') : colWidth(k, w, modal)) : '0px');
     sec.style.setProperty('--pjv-name-min', phone ? '120px' : modal ? '320px' : w <= 1 ? '90px' : w === 2 ? '150px' : '200px');
+    // 담당자 열이 얼굴 폭(max-content)일 때: 머리 줄의 «담당자» 글자는 얼굴보다 넓어 트랙 시작이 얼굴보다 왼쪽에 선다 —
+    //  글자를 오른쪽에 붙여 얼굴 열과 오른쪽 끝을 맞춘다(37-projects-hub.css .pjv-asg-tight).
+    sec.classList.toggle('pjv-asg-tight', cols.includes('assignee') && (phone || colWidth('assignee', w, modal) === 'max-content'));
     const scroller = (sec.querySelector('.pjv-tasks-body') as HTMLElement | null) || sec;
     scroller.setAttribute('data-mscroll', 'tasks');
     listEl = sec;
