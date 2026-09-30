@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { buildChildEnv } from "./child-env.js";
 import type { TenantBinding } from "./child-env-types.js";
 
@@ -156,4 +157,18 @@ test("바인딩 비활성이면 부모와 같은 내용이지만 다른 객체�
   const { env } = buildChildEnv(parent, { active: false, tenantId: null });
   assert.equal(env.FOO, "bar");
   assert.notEqual(env, parent);
+});
+
+// 🔴 배선 락 — 조립기가 옳아도 **부르지 않으면** 소용없다. 이번 결함이 정확히 그 모양이었다(아웃바운드 두 곳이
+//  env 없이 execFile 로 부모 환경을 상속해 테넌트 바인딩이 빠졌다). 위 시험들은 조립 규칙만 잠그므로, 호출부에서
+//  `env:` 한 줄이 빠지는 회귀는 따로 잡는다 — 커넥터 CLI 를 띄우는 자리마다 connectorChildEnv 를 거쳐야 한다.
+test("커넥터 CLI 를 띄우는 모든 자리가 connectorChildEnv 로 자식 환경을 명시한다", () => {
+  const src = (p: string): string => readFileSync(new URL(p, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+  const sites = [src("./run-tracker.ts"), src("../scheduler/actions/connector.ts")]
+    .flatMap((s) => [...s.matchAll(/\b(?:execFileP?|spawn)\("node",[\s\S]*?\}\)/g)].map((m) => m[0]));
+  // run-sync(인바운드) · run-push · run-wiki-push — 자리가 사라져 헛시험이 되지 않게 개수도 본다.
+  assert.ok(sites.length >= 3, `커넥터 CLI 기동 자리를 못 찾았다(${sites.length}곳) — 시험이 헛돈다`);
+  for (const call of sites) {
+    assert.match(call, /env: connectorChildEnv\(/, `자식 환경을 조립기로 넘기지 않는 기동 자리:\n${call}`);
+  }
 });
