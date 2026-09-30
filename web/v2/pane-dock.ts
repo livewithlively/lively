@@ -207,6 +207,7 @@ export function mountDock(host: DockHost): DockHandle {
     //   Enter 로 앱을 연 사람이 탭 순서의 맨 앞으로 쫓겨난다(#4443 리뷰 실측: activeElement = BODY). 탭 줄도 같은 일을 한다(panes.ts).
     const ae = document.activeElement as HTMLElement | null;
     const refocus = ae && ae !== document.body && shelf.contains(ae) ? ae.dataset.type ?? null : null;
+    const refocusAt = refocus ? btns.indexOf(ae as HTMLElement) : -1;   // 그 앱이 사라졌으면(빼기·닫기) 같은 자리의 이웃으로
     hideTip();
     root.dataset.edge = p.edge;
     root.dataset.mode = p.mode;
@@ -231,7 +232,9 @@ export function mountDock(host: DockHost): DockHandle {
     kids.push(mb); btns.push(mb);
     shelf.replaceChildren(...kids);
     //  키보드 — 독은 탭 순서에 한 칸(roving tabindex). 켜진 앱이 그 칸이다(초점을 돌려받는 단추가 있으면 그 단추).
-    const back = refocus ? btns.findIndex((b) => b.dataset.type === refocus) : -1;
+    const same = refocus ? btns.findIndex((b) => b.dataset.type === refocus) : -1;
+    //  #4443 재검증: 메뉴 키로 «독에서 빼기» 를 고르면 그 단추가 사라져 초점이 body 로 떨어졌다 — 이웃(같은 자리, 없으면 마지막)으로.
+    const back = same >= 0 ? same : refocusAt >= 0 && btns.length ? Math.min(refocusAt, btns.length - 1) : -1;
     const onI = back >= 0 ? back : Math.max(0, btns.findIndex((b) => b.classList.contains('on')));
     btns.forEach((b, i) => { b.tabIndex = i === onI ? 0 : -1; });
     if (back >= 0) btns[back].focus({ preventScroll: true });
@@ -821,7 +824,11 @@ export function mountDock(host: DockHost): DockHandle {
     const ar = anchor.getBoundingClientRect();
     const W = pr.width, H = pr.height, top0 = barH();
     const gap = 10;
-    const w = Math.max(200, Math.min(W - 16, 344));
+    //  폭 — 옆 독(왼쪽·오른쪽)이면 **독 옆에 남은 자리**에 맞춘다: 곁칸이 넘친 것을 자르므로(overflow: clip) 곁칸 기본 폭(340)에서
+    //   344 짜리 창을 독 옆에 세우면 타일 일부와 검색 칸이 잘렸다(#4443 재검증 실측: 오른쪽 독 15개 중 5개). 옆 자리가 240 도 안 되면
+    //   (아주 좁은 곁칸) 곁칸 폭에 맞춰 독 위로 겹친다 — 잘리는 것보다 가리는 편이 낫다.
+    const side = e === 'left' ? W - (ar.right - pr.left) - gap - 8 : e === 'right' ? ar.left - pr.left - gap - 8 : 0;
+    const w = side >= 240 ? Math.min(344, side) : Math.max(200, Math.min(W - 16, 344));
     const st = panel.style;
     st.left = st.right = st.top = st.bottom = '';                  // 다시 부풀릴 때(reanchor) 옛 테두리의 자리가 남지 않게
     st.width = w + 'px';
@@ -834,12 +841,14 @@ export function mountDock(host: DockHost): DockHandle {
       st.setProperty('--ox', ax - left + 'px');
       st.setProperty('--oy', e === 'bottom' ? '100%' : '0%');
     } else {
-      if (e === 'left') st.left = ar.right - pr.left + gap + 'px'; else st.right = W - (ar.left - pr.left) + gap + 'px';
+      //  독 옆(안쪽)에 — 곁칸 안으로 자른다(자리가 모자라 겹칠 때도 창이 곁칸 밖으로 나가지 않는다).
+      const left = clamp(e === 'left' ? ar.right - pr.left + gap : ar.left - pr.left - gap - w, 8, W - 8 - w);
+      st.left = left + 'px';
       const avail = H - top0 - 16;
       const top = clamp(ay - avail / 2, top0 + 8, H - 8 - avail);
       st.top = top + 'px';
       st.maxHeight = avail + 'px';
-      st.setProperty('--ox', e === 'left' ? '0%' : '100%');
+      st.setProperty('--ox', clamp(ax - left, 0, w) + 'px');       // 독 아이콘 쪽에서 부풀어 나온다
       st.setProperty('--oy', ay - top + 'px');
     }
     panel.dataset.edge = e;

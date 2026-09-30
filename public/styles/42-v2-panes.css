@@ -33,7 +33,8 @@
    미끄러져 나가 숨는데, 곁칸이 안 자르면 그 상자가 탭 칸(.v2-tabpane, overflow:auto)의 넘침에 더해져 탭 칸 전체에 스크롤바가 섰다
    (리뷰 실측: 아래 +50px · 오른쪽 +50px). hidden 이 아니라 clip — 곁칸이 스크롤 상자가 되면 숨은 독에 초점이 들어갈 때 곁칸이 굴러간다.
    곁칸 밖에 떠야 하는 것(우클릭 메뉴 · 탭/독 끌기 조각 · 팝오버)은 body 에 붙어 여기에 안 걸린다. */
-.pn-pane[data-zone="side"] { position: relative; overflow: clip; border-left: 1px solid var(--line); }
+/* hidden 먼저 — clip 을 모르는 옛 사파리(15 이하)는 hidden 으로 자른다(가린 독의 넘침만은 막는다). */
+.pn-pane[data-zone="side"] { position: relative; overflow: hidden; overflow: clip; border-left: 1px solid var(--line); }
 /* #4443 곁칸 독 — 독이 보이면 부품이 독만큼 물러선다(macOS: 창은 독 위까지만 커진다). 폭은 v2/pane-dock 이 lib/pane-dock dockInset 으로 잰다.
    프로젝트 칸 맨 아래의 «태스크 추가» 입력칸이 독 뒤에 깔리지 않는 이유가 이것이다. 가려 두면(자동으로 가리기) 네 값 모두 0. */
 .pn-pane[data-zone="side"] > .pn-pane-body { padding: var(--pn-dock-t, 0px) var(--pn-dock-r, 0px) var(--pn-dock-b, 0px) var(--pn-dock-l, 0px); }
