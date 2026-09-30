@@ -306,6 +306,9 @@ assert.strictEqual(
   assert.equal((push.match(/statusApplied: false/g) || []).length, 2, "status 를 빼고 재시도한 경로(create·update)는 statusApplied=false 여야 한다");
   assert.equal((push.match(/statusApplied: body\.status != null/g) || []).length, 2, "status 를 안 실은 PUT(상태셋 미해소)은 statusApplied=false 여야 한다");
   assert.match(push, /if \(!p\.status_category \|\| !CLOSED_CATEGORIES\.has\(p\.status_category\)\) return;/, "드레인 전에 다시 연 항목에 코멘트하면 안 된다");
+  // 작업 기록 폴백은 닫힌 그 항목의 것만 — activity.project_id 는 task·subtask 도 가리키므로 루트로 찾으면 형제 태스크·
+  //  다른 세션의 기록이 «이 태스크를 닫은 근거»로 ClickUp 에 나간다(2026-09-30 메인테이너 리뷰).
+  assert.match(push, /FROM activity WHERE project_id=\$1[^`]*`, \[p\.id, note\.at\]/, "작업 기록 폴백이 닫힌 항목(p.id)이 아닌 곳을 본다");
 }
 
 console.log("close-comment.test: OK");

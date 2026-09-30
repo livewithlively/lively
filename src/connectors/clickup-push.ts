@@ -69,18 +69,21 @@ async function updateSafe(taskId: string, body: Record<string, unknown>) {
 async function postCloseComment(p: ProjRow, taskExtId: string, note: CloseNote): Promise<void> {
   if (!p.status_category || !CLOSED_CATEGORIES.has(p.status_category)) return; // 드레인 전에 다시 열렸다
   try {
-    const rootId = p.level === "project" ? p.id : (await rootProjectIdOfTaskNode(p)) ?? null;
+    // 곁들이는 정보(처리자·작업 기록·링크)는 하나씩 실패를 삼킨다 — 그중 하나가 넘어졌다고 코멘트 전체를 잃지 않게.
+    const rootId = p.level === "project" ? p.id : (await rootProjectIdOfTaskNode(p).catch(() => undefined)) ?? null;
     const member = note.actor ? await getMember(note.actor).catch(() => null) : null;
     const actorName = member ? ((member.use_nickname && member.nickname) || member.display_name || member.nickname) : null;
     let recentActivity: string | null = null;
-    if (!note.reason && rootId) {
+    // ⚠ 작업 기록은 **닫힌 그 항목(p.id)** 에 붙은 것만 본다. activity.project_id 는 task·subtask 도 가리키므로, 루트
+    //  프로젝트로 찾으면 형제 태스크·다른 세션의 기록이 «이 태스크를 닫은 근거»로 ClickUp 에 나간다(오귀속·반출).
+    if (!note.reason) {
       const a: { title: string } | undefined = await one(itemsPool,
         `SELECT title FROM activity WHERE project_id=$1 AND created_at <= $2::timestamptz
             AND created_at > $2::timestamptz - interval '24 hours'
-          ORDER BY created_at DESC LIMIT 1`, [rootId, note.at]);
+          ORDER BY created_at DESC LIMIT 1`, [p.id, note.at]).catch(() => undefined);
       recentActivity = a?.title?.trim() || null;
     }
-    const base = await gatewayUrl();
+    const base = await gatewayUrl().catch(() => null);
     const deepLink = base && rootId ? `${base}/ui/#/projects/${rootId}` : null;
     await createTaskComment(taskExtId, { comment_text: closeCommentText(note, { actorName, recentActivity, deepLink }), notify_all: false });
   } catch (e) {
@@ -255,6 +258,7 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
           [p.id, baseJson]);
         await markDone(ob.id); pushed++;
         if (ob.close_note && statusApplied) await postCloseComment(p, p.external_id, ob.close_note);
+        else if (ob.close_note) logger.warn({ entity: p.id }, "닫힘 근거 코멘트 생략 — status 가 ClickUp 에 실리지 않았다(상태셋 미해소·거부·저쪽이 이미 닫힘)");
       } else {
         // CREATE — 부모(project-Task / task-Subtask) external_id 해소. 미푸시면 defer.
         let parentExt: string | undefined;
@@ -276,6 +280,7 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
           [p.id, teamId, ct.id, url, baseJson]);
         await markDone(ob.id); pushed++;
         if (ob.close_note && statusApplied) await postCloseComment(p, ct.id, ob.close_note); // 첫 푸시 전에 이미 닫힌 경우
+        else if (ob.close_note) logger.warn({ entity: p.id }, "닫힘 근거 코멘트 생략 — status 가 ClickUp 에 실리지 않았다(상태셋 미해소·거부)");
       }
     } catch (e) {
       await markErr(ob.id, (e as Error)?.message ?? String(e)); failed++;
