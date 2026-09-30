@@ -44,13 +44,13 @@ function withStorage(store, fn) {
   try { return fn(); } finally { if (had) globalThis.localStorage = prev; else delete globalThis.localStorage; }
 }
 
-test("#1 기본 한 벌(2026-09-30 원준 배치) — 본문 2×2 · 태스크 1×2 · 지식 1×2 · 폴더 2×2 · 타임라인 3×1 · 세션은 숨김 · 15칸 5줄 빈틈 0", () => {
+test("#1 기본 한 벌(2026-09-30 원준 배치) — 본문 2×2 · 태스크 1×2 · 지식 1×2 · 폴더 2×2 · 타임라인 3×2 · 세션은 숨김 · 18칸 6줄 빈틈 0", () => {
   const d = M.HUB_DEFAULT;
   assert.deepEqual(new Set([...d.items.map((x) => x.tool), ...d.hidden]), new Set(M.HUB_TOOLS), "도구 여섯 = 보이는 것 ∪ 숨긴 것");
   assert.deepEqual(d.hidden, ["sessions"]);
-  assert.deepEqual(d.items.map((x) => [x.tool, x.w, x.h]), [["body", 2, 2], ["tasks", 1, 2], ["knowledge", 1, 2], ["folder", 2, 2], ["timeline", 3, 1]]);
-  assert.equal(cells(d.items), 15);
-  assert.deepEqual(placeDense(d.items), { rows: 5, holes: 0 });
+  assert.deepEqual(d.items.map((x) => [x.tool, x.w, x.h]), [["body", 2, 2], ["tasks", 1, 2], ["knowledge", 1, 2], ["folder", 2, 2], ["timeline", 3, 2]]);
+  assert.equal(cells(d.items), 18);
+  assert.deepEqual(placeDense(d.items), { rows: 6, holes: 0 });
 });
 
 test("#2~#5 정규화 — 모르는 도구 버림 · 모르는 크기는 그 도구의 기본 크기 · 중복은 처음 것 · 빠진 도구는 끝에(기본이 숨긴 세션만 숨김)", () => {
@@ -125,13 +125,13 @@ test("#14~#15 숨기기·되살리기 — 두 번 숨기면 같은 객체 · 모
   assert.deepEqual(shown.items[shown.items.length - 1], { tool: "sessions", w: 1, h: 1 });
 });
 
-test("#16~#17 프리셋 — 넷 다 도구 여섯을 덮고 3열을 빈틈 없이(기본 15칸 · 나머지 12칸) · 적용·판별 왕복 · 크기 하나 달라도 아니다 · 모르는 id 는 기본", () => {
+test("#16~#17 프리셋 — 넷 다 도구 여섯을 덮고 3열을 빈틈 없이(기본 18칸 · 나머지 12칸) · 적용·판별 왕복 · 크기 하나 달라도 아니다 · 모르는 id 는 기본", () => {
   assert.equal(M.HUB_PRESETS.length, 4);
   const ids = new Set();
   for (const p of M.HUB_PRESETS) {
     ids.add(p.id);
     assert.deepEqual(new Set([...p.items.map((x) => x.tool), ...p.hidden]), new Set(M.HUB_TOOLS), p.id);
-    assert.equal(cells(p.items), p.id === "default" ? 15 : 12, p.id + " 칸 수");
+    assert.equal(cells(p.items), p.id === "default" ? 18 : 12, p.id + " 칸 수");
     assert.equal(placeDense(p.items).holes, 0, p.id + " 빈틈 0");
     const applied = M.applyHubPreset(p.id);
     assert.deepEqual([...applied.hidden].sort(), [...p.hidden].sort());
