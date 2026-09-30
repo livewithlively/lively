@@ -34,7 +34,7 @@
 `bootstrap.sh` 가 **코드 획득 → install.sh** 를 한 번에 한다. 운영자는 소스·git clone·빌드 없이 한 줄:
 
 ```bash
-curl -fsSL <bootstrap-url> | PUBLIC_URL=http://<host>:8080 BOOTSTRAP_ADMIN_EMAIL=you@org.com ORG_DOMAIN=org.com sh
+curl -fsSL https://raw.githubusercontent.com/livewithlively/lively/main/deploy/bootstrap.sh | PUBLIC_URL=http://<host>:8080 BOOTSTRAP_ADMIN_EMAIL=you@org.com ORG_DOMAIN=org.com bash
 ```
 
 ### 구조 — 코드 획득(교체 가능) ↔ 설치(전달 방식 무관)
@@ -69,7 +69,7 @@ git tag v0.1.0 && git push origin v0.1.0     # → Actions 가 Release v0.1.0 + 
 
 그러면 운영자는 버전만 주면 됨 — bootstrap 이 에셋 URL 을 자동 구성:
 ```bash
-curl -fsSL <bootstrap-url> | LIVELY_VERSION=latest PUBLIC_URL=… BOOTSTRAP_ADMIN_EMAIL=… sh
+curl -fsSL https://raw.githubusercontent.com/livewithlively/lively/main/deploy/bootstrap.sh | LIVELY_VERSION=latest PUBLIC_URL=… BOOTSTRAP_ADMIN_EMAIL=… bash
 ```
 (공개 레포라 토큰 불요. private 포크의 릴리스를 받을 때만 `LIVELY_CODE_TOKEN`(Bearer) — 그때 bootstrap 은 GitHub API 에셋 엔드포인트로 받는다.)
 
@@ -268,7 +268,7 @@ systemctl status lively-gateway                      # active (running)
 systemctl list-unit-files | grep context-ontology    # 아무것도 안 나와야 정상
 curl -fsS localhost:8080/healthz                     # {"ok":true}  — liveness(listen). 스키마 완료 신호가 아니다
 curl -s localhost:8080/readyz | grep -o '"schema":"[a-z]*"'   # "schema":"ready" — 마이그레이션·시딩 완료(pending/restarting 이면 503)
-journalctl -u lively-gateway -n 50 --no-pager
+journalctl -u lively-gateway -n 50 --no-pager     # 유닛 시작·정지 기록(게이트웨이 출력은 logs/gateway.log)
 ```
 
 ⚠ 전환 중 게이트웨이가 잠깐 멈춘다(구 유닛 stop → 신규 start). tmux 세션은 `KillMode=process` 라 살아남고,
@@ -331,7 +331,7 @@ CRUD 하려면, 멤버 로컬 PC 처럼 **호스트의 claude 에도 lively 키�
 
 ```
 deploy/
-  bootstrap.sh        # 한 줄 설치 진입점(curl|sh): 코드 획득(온라인/오프라인) → install.sh
+  bootstrap.sh        # 한 줄 설치 진입점(curl|bash): 코드 획득(온라인/오프라인) → install.sh
   install.sh          # 설치 엔진 (OS 감지 → <os>/provision.sh, 7단계). 전달 방식 무관.
   update.sh           # 기존 박스 업데이트(빌드→재시작→healthz, --kit)
   uninstall.sh        # 제거(install 역연산): 서비스·컨테이너·키트 제거 / --purge=볼륨·.env·디렉토리까지
@@ -366,7 +366,7 @@ deploy/
 | 작업 | Linux (systemd) | macOS (launchd) |
 |---|---|---|
 | 상태 | `systemctl status lively-gateway` | `launchctl print gui/$(id -u)/io.lvly.lively` |
-| 로그 | `journalctl -u lively-gateway -f` 또는 `tail -f logs/gateway.log` | `tail -f logs/gateway.log` |
+| 로그 | `tail -f logs/gateway.log` (`journalctl -u lively-gateway` 에는 시작·정지 기록만) | `tail -f logs/gateway.log` |
 | 재시작 | `sudo systemctl restart lively-gateway` | `launchctl kickstart -k gui/$(id -u)/io.lvly.lively` |
 | 코드 반영 | `bash deploy/update.sh` (소스 체크아웃이면 `npm run build && sudo systemctl restart …` 도 가능) | `bash deploy/update.sh` (소스 체크아웃이면 `scripts/restart-gateway.sh`) |
 | store | `docker compose ps` · `docker compose logs items-db` | 동일 |

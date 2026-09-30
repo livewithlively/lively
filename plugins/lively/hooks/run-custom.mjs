@@ -17,7 +17,37 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import crypto from "node:crypto";
-import { execFileSync } from "node:child_process";
+// 주입 봉투는 하네스별 규약이다 — 표에서 파생한다. ⚠ HARNESS 상수는 종전 계산식 유지(빈 문자열 가능):
+//  이 값이 게이트웨이 질의(`?harness=`)에 그대로 실리므로 여기서 기본값을 채우면 서버가 받는 값이 바뀐다.
+import { harness, isForeignGrokInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
+import { hostEffects } from "./host-effects-port.mjs";
+
+const execFileSync = (...args) => hostEffects.execFileSync(...args);
+const fetch = (...args) => hostEffects.fetch(...args);
+
+// #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
+//  이 세션의 워크스페이스 컨텍스트를 되찾는다. 안 실으면 primary 로 간주되므로(폴백) secondary 세션의
+//  훅 호출이 조용히 primary 데이터를 읽고 쓴다 — dev '다온' 실측이 정확히 그 사고다.
+const executionSessionId = (input = {}) => {
+  const direct = String(process.env.LIVELY_SESSION_ID || "").trim();
+  if (direct) return direct;
+  const native = String(input.session_id || input.sessionId || "").trim();
+  if (native && HARNESS === "codex") return `codex-${native}`;
+  if (native && (HARNESS || "claude") === "claude") return `claude-${native}`;   // 미지정=claude(resolveHarness 규약)
+  const codex = String(process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || "").trim();
+  if (codex) return `codex-${codex}`;
+  const claude = String(process.env.CLAUDE_SESSION_ID || "").trim();
+  return claude ? `claude-${claude}` : "";
+};
+const scopeHeaders = (input = {}) => ({
+  ...(executionSessionId(input) ? { "x-lively-session": executionSessionId(input) } : {}),
+  ...(String(process.env.LVLY_TENANT_SLUG || "").trim() ? { "x-lively-workspace": String(process.env.LVLY_TENANT_SLUG).trim() } : {}),
+});
+
+
+// grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 러너 엔트리를 그대로 실행한 사본이면
+//  비켜선다(정본은 grok-adapter 경유 — 사본이 돌면 org 훅이 이벤트당 두 번 울린다).
+if (isForeignGrokInvocation()) process.exit(0);
 
 if (process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1") process.exit(0);
 
@@ -51,15 +81,24 @@ const DEFAULT_RELAY = ["deny", "ask", "defer"];
 const cacheFile = () => join(LIVELY, `custom-hooks-${EVENT.replace(/[^A-Za-z]/g, "")}.json`);
 
 const readLocal = (rel) => { try { return readFileSync(join(LIVELY, rel), "utf8").trim() || null; } catch { return null; } };
-const TOKEN = (process.env.LIVELY_TOKEN || "").trim() || readLocal("token");
-const GW = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readLocal("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
+// 자격·주소 — 사람이 연 셸이면 파일이, 라이블리가 띄운 pane(LIVELY_SESSION_ID)이면 env 가 이긴다(#959).
+//  근거 전문은 hooks/session-preload.mjs 의 «훅의 자격·주소 우선순위» 주석.
+const SPAWNED = !!(process.env.LIVELY_SESSION_ID || "").trim();
+const pickCred = (envName, fileVal) => {
+  const env = (process.env[envName] || "").trim();
+  return (SPAWNED ? (env || fileVal) : (fileVal || env)) || "";
+};
+//  #4135 — 세션 토큰 파일이 있으면 그것이 먼저다(게이트웨이가 이 세션 앞으로 나중에 실어 준 정본 — harness-registry sessionTokenFile 머리말).
+const TOKEN = sessionTokenFromFile("hook", HOME, (p) => readFileSync(p, "utf8")) || pickCred("LIVELY_TOKEN", readLocal("token"));
+const GW_PICKED = pickCred("LIVELY_GATEWAY_URL", readLocal("gateway-url")).replace(/\/$/, "");
+const GW = GW_PICKED || "http://localhost:8080";
 
 function emitContext(text) {
   if (!text) return;
   // PostToolUse 는 Claude Code 가 raw stdout 을 컨텍스트로 안 넣는다 → hookSpecificOutput.additionalContext JSON 필수
   //  (담당자 wiki-action-router 로 검증된 계약, #637 Stage2). SessionStart·UserPromptSubmit 는 claude 가 raw stdout 을
   //  컨텍스트로 받으므로 raw 유지(codex 만 전 이벤트 JSON 래핑). → 기존 두 이벤트 동작 무변경.
-  if (HARNESS === "codex" || EVENT === "PostToolUse") {
+  if (harness(HARNESS).contextEnvelope === "json" || EVENT === "PostToolUse") {
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: EVENT, additionalContext: text } }) + "\n");
   } else {
     process.stdout.write(text + "\n");
@@ -82,13 +121,13 @@ function readStdin(ms = 800) {
 }
 
 // → { hooks, relay } | null(게이트웨이 미도달). relay 는 org 정책(관리탭) — 구버전 게이트웨이면 기본값.
-async function fetchHooks() {
+async function fetchHooks(input) {
   if (!TOKEN) return null;
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), SESSIONEND ? FETCH_MS_SESSIONEND : FETCH_MS);
   try {
     const url = `${GW}/api/ui/org/runner/hooks?harness=${encodeURIComponent(HARNESS || "")}&event=${encodeURIComponent(EVENT)}`;
-    const res = await fetch(url, { signal: ctl.signal, headers: { authorization: `Bearer ${TOKEN}` } });
+    const res = await fetch(url, { signal: ctl.signal, headers: { authorization: `Bearer ${TOKEN}`, ...scopeHeaders(input) } });
     if (!res.ok) return null;
     const j = await res.json();
     if (!Array.isArray(j?.hooks)) return { hooks: [], relay: DEFAULT_RELAY };
@@ -119,14 +158,14 @@ function throttleFailures(fails) {
 
 // 훅 실패를 게이트웨이에 보고(fire-and-forget) — 관리탭이 '이 훅이 어느 멤버 머신에서 죽는지' 보게 한다(#892 결함 C).
 //  실패했을 때만 호출되므로 정상 경로 비용 0. 보고 실패는 무시한다(관측이 세션을 막아선 안 된다).
-async function reportFailures(fails) {
+async function reportFailures(fails, input) {
   if (!TOKEN || !fails.length) return;
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), REPORT_MS);
   try {
     await fetch(`${GW}/api/ui/org/runner/hook-report`, {
       method: "POST", signal: ctl.signal,
-      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${TOKEN}`, ...scopeHeaders(input), "content-type": "application/json" },
       body: JSON.stringify({ event: EVENT, harness: HARNESS || null, failures: fails }),
     });
   } catch { /* 관측은 best-effort */ }
@@ -272,7 +311,16 @@ function spawnHook(hook, stdin, ext, expectHash) {
       //  없으면 훅이 상한을 추측해 하드코딩하게 되고, 관리자가 timeout_sec 을 줄이는 순간 조용히 어긋난다.
       return { out: execFileSync("node", [tmp], {
         input: stdin, timeout, killSignal: "SIGKILL", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, LIVELY_HOOK_TIMEOUT_MS: String(timeout) }, maxBuffer: 4 * 1024 * 1024,
+        env: {
+          ...process.env,
+          // 본문 훅도 러너가 고른 **같은 신원·같은 주소**로 나가게 한다(#959). 훅 본문은 대개 «env 먼저» 로 고르므로,
+          //  사람이 연 셸에서 rc 가 심은 옛 LIVELY_TOKEN 을 그대로 물려받으면 러너만 새 신원이고 본문은 옛 신원이 된다.
+          //  라이블리가 띄운 pane 에선 러너가 고른 값이 곧 그 env 라 달라지는 게 없다. 고른 값이 없으면 싣지 않는다.
+          ...(TOKEN ? { LIVELY_TOKEN: TOKEN } : {}),
+          ...(GW_PICKED ? { LIVELY_GATEWAY_URL: GW_PICKED } : {}),
+          ...(HARNESS ? { LIVELY_HARNESS: HARNESS } : {}),
+          LIVELY_HOOK_TIMEOUT_MS: String(timeout),
+        }, maxBuffer: 4 * 1024 * 1024,
       }), fail: null, parses: true };
     } catch (e) {
       // 타임아웃/비정상 종료여도 세션을 막지 않는다(fail-open) — 부분 stdout 만 회수하고 실패는 따로 보고한다.
@@ -317,6 +365,27 @@ function hookOutputOf(raw) {
   return (h && typeof h === "object" && !Array.isArray(h)) ? h : null;
 }
 
+// 컨텍스트 이벤트(SessionStart·UserPromptSubmit·PostToolUse)의 훅 출력에서 하네스 봉투를 벗긴다.
+//  훅은 PreToolUse 와 같은 모양(hookSpecificOutput.additionalContext JSON)으로 컨텍스트를 내는 일이 흔하다.
+//  N개를 그대로 이어붙이면 `{...}\n\n{...}` 가 되어 하네스가 "JSON 처럼 보이는데 파싱 실패" 로 통째 버린다
+//  — 훅은 전부 성공했는데 컨텍스트는 하나도 안 들어가는 무음 실패다. 봉투는 러너가 벗기고 본문만 합친다
+//  (다시 봉투가 필요한 하네스·이벤트는 emitContext 가 하나로 감싼다).
+//  ⚠ 컨텍스트'만' 실은 봉투일 때만 벗긴다 — decision·systemMessage 등 다른 뜻이 함께 실려 있으면 벗기는 순간
+//   그 뜻이 사라진다(훅 1개면 하네스가 봉투를 그대로 소비하던 경로다). 그 경우 raw 로 두고, 다른 출력과
+//   합쳐져 하네스가 못 읽게 될 수 있으니 진단만 남긴다.
+function unwrapContext(raw) {
+  let j; try { j = JSON.parse(raw); } catch { return raw; }
+  const h = hookOutputOf(raw);
+  if (!h || typeof h.additionalContext !== "string") return raw;
+  const extra = Object.keys(j).some((k) => k !== "hookSpecificOutput")
+    || Object.keys(h).some((k) => k !== "hookEventName" && k !== "additionalContext");
+  if (!extra) return h.additionalContext;
+  const carried = Object.keys(j).filter((k) => k !== "hookSpecificOutput")
+    .concat(Object.keys(h).filter((k) => k !== "hookEventName" && k !== "additionalContext"));
+  process.stderr.write(`[lively] hook envelope carries ${carried.join(",")} — kept as-is\n`);
+  return raw;
+}
+
 function mergePreToolUse(outputs, relay) {
   let best = null; const reasons = []; const ctxs = [];
   for (const raw of outputs) {
@@ -341,10 +410,10 @@ function mergePreToolUse(outputs, relay) {
 async function main() {
   if (!EVENT) return;
   const stdin = await readStdin(SESSIONEND ? STDIN_MS_SESSIONEND : undefined);
-  let toolName = "";
-  try { const o = JSON.parse(stdin || "{}"); toolName = o.tool_name || o.toolName || ""; } catch { /* */ }
+  let input = {}, toolName = "";
+  try { input = JSON.parse(stdin || "{}"); toolName = input.tool_name || input.toolName || ""; } catch { /* */ }
 
-  const fetched = await fetchHooks();
+  const fetched = await fetchHooks(input);
   const cfg = fetched === null ? (loadCache() || { hooks: [], relay: DEFAULT_RELAY }) : fetched; // 미도달 → grace 캐시
   if (fetched !== null) saveCache(fetched.hooks, fetched.relay);                                  // 성공 → 캐시 갱신
   const relay = cfg.relay.filter((d) => RANK[d]); // 잡값 방어
@@ -380,7 +449,7 @@ async function main() {
   // 게이트웨이 보고와 사용자 알림엔 스로틀을 건다 — 러너는 툴콜마다 도므로, 없으면 고장난 훅 하나가
   //  매 툴콜에 왕복 1회 + 배너 1개를 붙여 세션을 시끄럽고 느리게 만든다.
   const notable = fails.length ? throttleFailures(fails) : [];
-  if (notable.length) await reportFailures(notable);
+  if (notable.length) await reportFailures(notable, input);
 
   // PreToolUse 는 결정 이벤트 — 파싱·병합해 단일 결정 JSON 으로 전파(exit 0 + JSON stdout = 하네스 계약).
   //  훅이 죽었으면 systemMessage 로 사용자에게도 알린다(조용한 죽음 방지 — 이 이벤트는 이미 JSON 출력이라 무위험).
@@ -396,7 +465,7 @@ async function main() {
   //  PostToolUse 도 주입(#637 Stage2): 코드파일 Read 즉시 leaf 주입(domain-recall-action). emitContext 가 이벤트별 포맷
   //   (PostToolUse 는 hookSpecificOutput.additionalContext JSON — Claude Code 계약, 담당자 검증). 실행결과 없으면 no-op.
   //  나머지 이벤트(Stop·SessionEnd 등)는 여전히 부수효과만(stdout 미전파).
-  if ((EVENT === "SessionStart" || EVENT === "UserPromptSubmit" || EVENT === "PostToolUse") && outputs.length) emitContext(outputs.join("\n\n"));
+  if ((EVENT === "SessionStart" || EVENT === "UserPromptSubmit" || EVENT === "PostToolUse") && outputs.length) emitContext(outputs.map((o) => unwrapContext(o).trim()).filter(Boolean).join("\n\n"));
 }
 
 main().then(() => process.exit(0)).catch(() => process.exit(0));

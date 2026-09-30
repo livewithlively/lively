@@ -164,12 +164,13 @@ If there are signs (or a scan hit) that a plaintext secret got into content/logs
 ## (f) Continuous verification — content store secret scan
 
 ```
-node --env-file=/tmp/.../.env scripts/scan-content-secrets.mjs
+node --env-file=.env scripts/scan-content-secrets.mjs      # from the gateway app directory (needs the dist build)
 ```
 
-- Targets: the items DB (`knowledge` name/title/body_md, `org_member` display_name/email/body_md/identities)
-  + `category` name/description, `debt_finding` title/detail.
+- Targets: the items DB (single DB — the domain map tables live there too): `knowledge` name/title/body_md/summary,
+  `category` name/description/should, `org_member` display_name/email/body_md/identities, `debt_finding` title/detail.
+  The list is `SCAN_TARGETS` in the script; `scripts/scan-content-secrets.test.mjs` checks it against the schema definitions.
 - Applies `assertNoHardSecrets` + `redactDeep` (single source in redact.ts) to everything. **Values are never printed** — only the location (table/PK/
   column) and the pattern label (hard/masked) are reported.
-- hit ≥ 1 → `exit 1` (CI candidate). Sources without a configured DB are skipped (reported only, not a failure).
+- hit ≥ 1 → `exit 1` (CI candidate). If `ITEMS_DATABASE_URL` is unset, or a target table doesn't exist, that part is skipped (reported only, not a failure).
 - No runtime impact (standalone) — the MCP surface is unchanged.

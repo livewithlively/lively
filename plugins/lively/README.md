@@ -21,6 +21,8 @@ node "$CLAUDE_PLUGIN_ROOT/scripts/login.mjs"
 
 The token is saved to `~/.lively/token` (0600), and the MCP headers and the hooks read **the same file**.
 
+To get a newer version: `/plugin marketplace update lively`, then `/reload-plugins` (or start a new session). Background auto-update is off for third-party marketplaces unless you turn it on.
+
 > **Why the token isn't taken via `userConfig`** — values marked `sensitive: true` **are not passed to the hook process env** (observed on a real device on 2026-08-04; this differs from the official docs' "All values are exported to hook processes"). If the token were taken as a setting, MCP would connect, but organization context injection, skill distribution, governance hooks, and status reporting would all fail to authenticate. So the token has a single source, the file, and MCP reads that file through `headersHelper`.
 
 ## What's inside
@@ -48,9 +50,13 @@ If you install both, the same hooks run twice. If you've already installed the k
 
 The things the plugin contains **have their source of truth elsewhere.**
 
-- Hook scripts = `kit/hooks/*.mjs`
-- **Hook wiring table** (`hooks/hooks.json`) = `userLevelHooksBlock()` + `runnerHooksBlock()` from `kit/setup/user-install.mjs`, moved onto `${CLAUDE_PLUGIN_ROOT}` paths. When the canonical source changes, change this too (the build script doesn't touch the wiring table; it only checks reference integrity). `kit/hooks/settings-hooks.json` is the PROJECT-DIR template (for the published artifact's parallel "run from the bundle folder" path and `--install-hooks`), so it isn't canonical
+- Hook scripts = `kit/hooks/*.mjs`, plus the modules those hooks import (`harness-registry.mjs`, `host-effects-port.mjs`) and the shared module outside `hooks/` (`kit/setup/host-effects.mjs` → `lib/host-effects.mjs`, the same place as in the installed tree)
+- **Hook wiring table** (`hooks/hooks.json`) = **generated** from `userLevelHooksBlock()` + `runnerHooksBlock()` in `kit/setup/user-install.mjs`, with the paths moved onto `${CLAUDE_PLUGIN_ROOT}`. Don't edit it by hand. `kit/hooks/settings-hooks.json` is the PROJECT-DIR template (for the published artifact's parallel "run from the bundle folder" path and `--install-hooks`), so it isn't canonical
 - Organization skills = the gateway's `org_harness_assets` (edit centrally — local copies get overwritten by the next build)
+
+After changing anything under `kit/hooks/` or the wiring in `user-install.mjs`, run `node scripts/build-plugin.mjs` and commit the result. `scripts/build-plugin.test.mjs` fails CI if the copies differ from `kit/`, if `hooks.json` differs from the generated one, or if a hook imports a file that isn't in the plugin tree (that last one would make every hook die with `ERR_MODULE_NOT_FOUND` on install).
+
+**Don't set `version`** in `.claude-plugin/plugin.json` or in the marketplace entry. A pinned version keeps every installed user on the cached copy until someone changes the string ("a manifest that pins `version` … keeps every user on the cached copy until its author changes the string" — [Claude Code docs](https://code.claude.com/docs/en/plugins/loading)). Without it, the version is the commit SHA of the plugin directory, so every commit that touches `plugins/lively` reaches users on update. `claude plugin validate --strict` warns about the missing version — that warning is expected. Don't record a version or content hash in a repo file either: two PRs that change hooks would both edit the same lines and always conflict. It was pinned at `0.1.0` from 2026-08-04 to 2026-09-30, so installs from that period never received a later change.
 
 `run-custom` is one fixed entry per event, and the runner fetches the custom hooks themselves from the gateway at runtime — when the organization adds or removes hooks, the wiring table doesn't need rewriting, and disabling a hook takes effect immediately from the next session (kill-switch).
 

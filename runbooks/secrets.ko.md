@@ -164,12 +164,13 @@ git 자격. 암호화는 `src/org/credentials/secret-box.ts`(AES-256-GCM, 마스
 ## (f) 상시 검증 — 콘텐츠 스토어 시크릿 스캔
 
 ```
-node --env-file=/tmp/.../.env scripts/scan-content-secrets.mjs
+node --env-file=.env scripts/scan-content-secrets.mjs      # 게이트웨이 앱 디렉터리에서(dist 빌드 필요)
 ```
 
-- 대상: items DB(`knowledge` name/title/body_md, `org_member` display_name/email/body_md/identities)
-  + `category` name/description, `debt_finding` title/detail.
+- 대상: items DB(단일 DB — 도메인맵 테이블도 여기 있다): `knowledge` name/title/body_md/summary,
+  `category` name/description/should, `org_member` display_name/email/body_md/identities, `debt_finding` title/detail.
+  목록은 스크립트의 `SCAN_TARGETS` 이고, `scripts/scan-content-secrets.test.mjs` 가 스키마 정의와 대조한다.
 - `assertNoHardSecrets` + `redactDeep`(redact.ts 단일 출처)을 전수 적용. **값 비출력** — 위치(테이블/PK/
   컬럼)와 패턴 라벨(hard/masked)만 보고.
-- hit ≥ 1 → `exit 1`(CI 후보). DB 미설정 소스는 skip(보고만, fail 아님).
+- hit ≥ 1 → `exit 1`(CI 후보). `ITEMS_DATABASE_URL` 이 없거나 대상 테이블이 없으면 그 부분은 skip(보고만, fail 아님).
 - 런타임 무영향(standalone) — MCP 표면 불변.

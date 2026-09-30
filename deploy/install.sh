@@ -121,7 +121,7 @@ main() {
   ok "중앙박스: 호스트 claude 에 lively 키트 설치됨 — 웹터미널 세션이 맥락 CRUD 가능 (claude mcp list 로 확인)"
   echo ""
   log "다음: 이 호스트에서 'claude' 로그인(중앙박스 세션이 쓸 계정) → 웹UI 로그인 → 고객 DB(읽기전용)·구성원 등록."
-  if [ "$OS" = linux ]; then log "서비스 로그: journalctl -u lively-gateway -f   또는   tail -f $APP_DIR/logs/gateway.log"; fi
+  if [ "$OS" = linux ]; then log "게이트웨이 로그: tail -f $APP_DIR/logs/gateway.log   (journalctl -u lively-gateway 에는 시작·정지 기록만 남는다)"; fi
   # macOS 는 SG 같은 방화벽 계층이 없다(#250) — 전 인터페이스 바인딩(기본)이면 같은 LAN 의 임의 기기가 :$PORT 에 도달한다.
   #  ⚠ `[ … ] && warn` 금지: 비-mac 에서 그 조건식이 1 을 반환해 main 의 반환값을 오염시킨다(종전 사고) — if 로 쓴다.
   if [ "$OS" = mac ]; then

@@ -29,7 +29,9 @@ restart_gateway
 wait_healthz
 
 phase "임베딩 사이드카 down"
-dc compose --profile embeddings down --remove-orphans >/dev/null 2>&1 || true
+# ⚠ 서비스 이름을 지정해 그 둘만 지운다 — `--profile embeddings down` 은 profile 없는 서비스(items-db)까지
+#  내린다(compose v2.29·v5.5 실측: items-db 컨테이너 제거, 네이티브 게이트웨이가 DB 를 잃는다). rm -s 는 멈춘 뒤 지운다.
+dc compose --profile embeddings rm -sf embeddings embeddings-init >/dev/null 2>&1 || true
 ok "사이드카 정지(ollama-models 볼륨 보존)"
 
 ok "임베딩 비활성화 완료 — 검색은 grep 폴백. 다시 켜기: deploy/enable-embeddings.sh"
