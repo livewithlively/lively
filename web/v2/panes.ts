@@ -1136,7 +1136,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       title: detachX ? `${nm} 을(를) 이 세션에서 뗍니다 — 앱의 데이터는 그대로 남아요` : `${nm} 탭 닫기`,
       'aria-label': detachX ? `${nm} 떼기` : `${nm} 닫기`,
       //  폭은 **마우스로** 닫을 때만 얼린다 — 손가락은 pointerleave 가 click 보다 먼저 와서 풀 기회가 없다(격리 리뷰 지적).
-      onclick: (e: MouseEvent) => { e.stopPropagation(); const pt = (e as PointerEvent).pointerType; closeTab(zone, key, { pointer: pt ? pt === 'mouse' : e.detail > 0 }); },
+      onclick: (e: MouseEvent) => { e.stopPropagation(); const pt = (e as PointerEvent).pointerType; closeTab(zone, key, { pointer: pt ? pt === 'mouse' : e.detail > 0 && matchMedia('(pointer: fine)').matches }); },   // 사파리 click 엔 pointerType 이 없다
     }, pnIcon('x', 'pn-i xs'));
     const w = el('span', { class: 'pn-tabwrap' + (on ? ' on' : '') + (pinned ? ' pinned' : ''), 'data-tab': key, role: 'presentation' }, b, x) as HTMLElement;
     //  휠 클릭 = 닫기(크롬·사파리). 누를 때 브라우저의 자동 스크롤이 뜨지 않게 mousedown 도 막는다.
