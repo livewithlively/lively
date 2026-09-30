@@ -156,6 +156,18 @@ export interface Harness {
   //  ⚠ 종전엔 이 로직이 sessions.ts 에 `harness.key === "claude"` 로 박혀 있어, **claude 아닌 세션은 복원해도
   //   늘 새 대화로 시작**했다(2026-08-14 상민님 신고: antigravity 세션을 /exit 로 닫고 이어 열면 대화가 없다).
   resumeArgv?: (id?: string) => string[];
+  // 복제(#4135, 원준 2026-09-27) — **그 대화를 아는 새 대화**로 여는 argv 조각. 이어받기(resumeArgv)와 다른 점은 하나다:
+  //  하네스가 **새 대화 id** 를 만들고 원래 대화 파일에는 한 줄도 쓰지 않는다. 그래서 원래 세션이 살아서 일하는 중에도
+  //  안전하다(같은 대화 파일에 하네스가 둘 붙지 않는다 — #3891 이 막으려던 바로 그 상태).
+  //  실측 2026-09-27(이 표를 채우기 전에 두 CLI 를 실제로 돌렸다):
+  //   · claude 2.1.283 `--resume <uuid> --fork-session` — 새 session_id 가 나오고, 원래 jsonl 의 줄 수·md5 가 그대로였다.
+  //     새 대화는 원래 대화의 낱말을 기억했다.
+  //   · codex-cli 0.157.1 **서브커맨드** `fork <id>` — `codex fork [OPTIONS] [SESSION_ID] [PROMPT]`. resume 과 같은
+  //     옵션(-m·-c·--dangerously-bypass-approvals-and-sandbox)을 받는다(--help 확인).
+  //  ⚠ 반환 argv 는 resumeArgv 처럼 bin **바로 뒤**에 붙는다(codex 는 서브커맨드라 그 위치가 계약이다).
+  //  ⚠ **실증한 하네스에만 둔다.** 없는 하네스는 복제를 거절한다(라우트가 409) — 없는 플래그를 지어내 넘기면 하네스가
+  //   뜨자마자 죽거나, 더 나쁘게는 플래그를 무시하고 **같은 대화를 그대로 이어** 원래 세션과 한 파일을 같이 쓴다.
+  forkArgv?: (id: string) => string[];
   // 이미 떠 있는 세션의 모델·추론강도를 바꾸는 **타이핑 한 줄**(#1758 세션 대화창). 세션은 이미 argv 로 떴으므로
   //  플래그로는 못 바꾼다 — 사람이 터미널에서 치는 것과 같은 슬래시 명령을 주입하는 수밖에 없다(POST …/runtime).
   //  ⚠ **인자를 받는 명령이 실증된 하네스에만 둔다.** codex 의 `/models`·opencode 의 `/model` 은 고르는 팝업이라
@@ -191,13 +203,16 @@ export const HARNESSES: Harness[] = [
     //  #1516 당시 사실이었지만 지금은 낡았다 — 온보딩에서 TUI 를 거치게 하면 한 단계가 공짜로 늘어난다.
     loginSteps: ["터미널에  claude auth login  을 입력합니다", "열리는 창에서 Anthropic 계정으로 로그인합니다"],
     resumeArgv: (id) => (id ? ["--resume", id] : ["--resume"]),   // 인자 없는 --resume = 이 폴더의 대화 피커
+    forkArgv: (id) => ["--resume", id, "--fork-session"],   // 새 대화 id 로 갈라 연다(원래 대화 파일은 그대로)
     // 실측(claude 2.1.234 번들): `/model <별칭|풀네임>` · `/effort <low|medium|high|xhigh|max|auto>` 둘 다 인자를 받는
     //  local 커맨드(effort 는 supportsNonInteractive) — 입력창에 한 줄로 쳐서 그 자리에서 바뀐다.
     runtimeCmd: { model: (v) => `/model ${v}`, effort: (v) => `/effort ${v}` },
   },
   {
     key: "codex", label: "Codex", bin: "codex", provider: { id: "openai", label: "OpenAI" },
-    autoApproveFlag: "--yolo",
+    // Codex CLI 0.154.0 --help 실측: 종전 --yolo 는 더 이상 인식하지 않는다.
+    // 이 플래그는 승인과 샌드박스를 함께 끄므로, 홈의 「자동 승인」을 켠 세션에만 붙인다.
+    autoApproveFlag: "--dangerously-bypass-approvals-and-sandbox",
     // 2026-08-24 Codex CLI 0.149.1 기준 현행 카탈로그. gpt-5.5를 기본 표기로 남기면
     // 새 세션 화면에서 5.6 계열을 애초에 고를 수 없어, 실제 설치본보다 UI가 뒤처진다.
     // default 의 뜻(#3778 개정) — 새 세션 화면이 **이 값을 골라 둔다**(그리고 그대로 넘긴다). 종전엔 표기용이라
@@ -224,6 +239,7 @@ export const HARNESSES: Harness[] = [
     loginSteps: ["터미널에  codex login  을 입력합니다", "열리는 창에서 ChatGPT 계정으로 로그인합니다",
       "창이 안 열리면  codex login --device-auth  로 주소와 일회용 코드를 받습니다"],
     resumeArgv: (id) => (id ? ["resume", id] : ["resume", "--last"]),   // 피커는 대화형이라 무인 복원엔 --last
+    forkArgv: (id) => ["fork", id],   // 서브커맨드 — 그 대화를 새 대화로 갈라 연다
   },
   {
     // #1519 로 배선(훅·MCP·자산)은 이미 붙어 있는데 **웹 세션 카탈로그에만** 빠져 있던 자리(#1695).
@@ -357,11 +373,25 @@ export function automationFlags(
 
 export interface SessionInfo {
   /**
+   * 이 세션이 **세션 신원(훅·MCP 토큰)을 갖고 있나** — 노드가 자기 자리에서 보고 올린다(#4135, 2026-09-28).
+   *  true = 신원 파일이 있거나 pane env 에 실려 떴다 · false = 둘 다 없다(확답) · 없음 = 모른다(옛 번들 · 아직 못 물어봄).
+   *  게이트웨이의 되채우기가 읽는다: «발급한 적은 있는데 그 컴퓨터에는 없다» 를 이 값으로만 알 수 있다
+   *  (node-session-token-backfill.ts — 종전엔 발급 여부만 봐서, 파일이 사라진 세션에 다시 보내지 않았다).
+   */
+  hasSessionToken?: boolean;
+  /**
    * 이 세션이 **어느 모드로 떴나**(#2439) — 없으면 배포 기본을 따른다.
    *  ⚠ 화면(runtimeMode)과 배달(deliver-prompt)이 **같은 값**을 봐야 한다. 갈리면 pane 은 셸인데
    *   대화는 아무도 안 받는 세션이 된다(2026-09-01 실측).
    */
   runtimeChoice?: "chat" | "terminal";
+  /**
+   * 그 표식의 **원시값**(@box_runtime: "chat"|"terminal"|"app-server") — #4135.
+   *  codex 모드는 위 두 낱말로 접히지 않으므로(그 세션이 app-server 로 떴는지를 말해야 한다) 원시값을 함께 싣는다.
+   *  ⚠ **목록 행에 실려야** 뜻이 있다. 중간 객체까지만 오면 화면·배달이 «표식 없음» 으로 읽어 배포 기본으로
+   *   되돌아간다 — 그게 실측된 사고다(2026-09-26: 터미널로 뜬 세션을 목록이 app-server 라고 말했다).
+   */
+  runtimeRaw?: string;
   id: string; label: string; harness: string; dir: string; autoApprove: boolean;
   owner: string; owned: boolean; created: number; attached: boolean;
   invites: string[]; // 초대된 멤버 id(@box_invites). 빈 배열 = 비공개(소유자만 보기·열기).
@@ -500,6 +530,12 @@ export interface CreateInput {
   //  (실측: /mcp "No MCP servers configured"). 게이트웨이가 "member 노드 && 생성자=노드 주인"일 때만 켠다 —
   //  노드측은 값을 믿고 따르기만 한다(정책 판단은 게이트웨이, 노드는 기계적 실행 — agent runOp 전제 그대로).
   hostProfile?: boolean;
+  // #4135 — **게이트웨이가 미리 정한 세션 신원**(노드 세션 전용). createSession 은 노드에서 돌아 DB(토큰 민팅)를 못 쓴다 —
+  //  그래서 노드 세션의 훅·MCP 가 키트를 깐 사람의 공유 토큰으로 나갔고, 게이트웨이의 owner 게이트가 그 세션을 «남의 것» 으로
+  //  보아 프로젝트 문맥·업싱크·이름짓기가 전부 안 됐다(2026-09-25 맥미니 실측). 게이트웨이가 relay 전에 id 를 정하고 그 id 로
+  //  토큰을 구워 함께 보낸다(node-session-preissue.ts) — 노드는 접두어·형식이 맞으면 값을 믿고 그대로 싣는다(hostProfile 과 같은
+  //  규약: 정책은 게이트웨이, 노드는 기계적 실행). 중앙 경로엔 없다(createSession 이 스스로 굽는다). null 토큰 = 안 싣는다.
+  preissued?: { id: string; hookToken: string | null; mcpToken: string | null };
   // 이 세션을 만든 **상시세션(org_managed_session)의 id**. ensureManagedSession 만 넘긴다(사람·라우트 경로엔 없다).
   //  · #1059 E — 값이 있으면 desired-state DB 미러를 만들지 않는다(keep-alive 가 그 영속을 소유).
   //  · #2170 — 그 id 를 `@box_managed` 로 세션에 **박는다**. 정리기가 "내가 만든 세션"을 판정하는 유일한 근거다
@@ -509,6 +545,12 @@ export interface CreateInput {
   managed?: string;
   // #1059 — claude UUID 를 모를 때 인자 없는 --resume 로 후보 picker 를 띄운다(restorable 복원. resume 과 배타 — resume 우선).
   resumePick?: boolean;
+  // #4135 세션 복제 — **이 대화를 아는 새 대화**로 연다(값 = 원래 세션의 하네스 대화 id). resume·resumePick 과 배타(fork 우선).
+  //  원래 대화는 건드리지 않는다 — 하네스가 새 대화 id 를 만든다(Harness.forkArgv 머리말). 그래서 carryConv 도 싣지 않는다:
+  //  새 세션은 원래 대화를 «도는» 세션이 아니다(실으면 #3891 의 이어 붙이기 판정이 복제본을 원래 세션으로 착각한다).
+  //  ⚠ 이 필드는 노드에 `create` 가 아니라 **`forkSession` op** 로만 실어 보낸다(session-fork.ts · node/protocol.ts) —
+  //   이 필드를 모르는 옛 노드 번들이 `create` 로 받으면 조용히 무시하고 **빈 새 대화**를 열기 때문이다.
+  fork?: string;
   // #3891 — **복원 전용**: 이 세션이 이어받는 대화. desired 행이 서는 **그 순간** 함께 적는다(createSession).
   //  복원 요청은 판(하네스)이 뜬 뒤 뒷정리 전에 끊길 수 있다(롤 SIGTERM 실측) — 그때도 이 세션이 태어날 때부터
   //  «그 대화를 도는 세션» 으로 찾아져야 다시 부른 복원이 새로 만들지 않고 이리로 잇는다(routes.ts restore · restore-adopt.ts).
@@ -530,6 +572,12 @@ export interface CreateInput {
   //  기존 프로젝트를 고르면 화면이 프로젝트 세션 라우트로 가므로 이 필드는 그때 오지 않는다.
   //  값이 있으면 first-prompt-project 가 껍데기 대신 **사람 이름 프로젝트**(name_source: human)를 만든다.
   projectName?: string;
+  // #4084 세션 = 태스크 — 사람이 **태스크에서** 연 세션. 프로젝트 세션 라우트만 받는다(그 프로젝트 안의 태스크인지
+  //  라우트가 확인한다). 관문(launchSession)이 프로젝트 소속을 쓴 **뒤에** execution_session.task_id 로 잇는다 —
+  //  그래서 이 세션은 이름을 지어도 새 태스크를 만들지 않는다(v6/session-task.ts). 노드는 이 값을 쓰지 않는다(DB 없음).
+  taskId?: number;
+  // #4135 — 태스크 여러 개를 순서대로 맡겨 연 세션(taskId = 그 1번). 관문이 taskId 를 이은 뒤 이 순서를 목록에 싣는다.
+  taskIds?: number[];
   // #1780 D4 — 이 세션을 **앱으로** 띄운다. 설정 시 createSession 이 grant 검사 → 앱 토큰 발급 →
   //  cwd와 분리된 private app runtime home에 토큰·앱 하네스 자산을 물질화하고
   //  pane env LIVELY_HOME=<private session_home>·LIVELY_APP_ID=<id> 를 주입한다. session_home은 cwd와 분리된다.
@@ -678,6 +726,23 @@ export function paneLaunchArgv(argv: readonly string[], platform: string = proce
 //   들어가야 하는 인젝션 경계다(위 LAUNCH_SH 주석). 검증 없이 급조한 래퍼를 끼우는 것보다 안 감싸는 게 낫다.
 //   하네스 세션은 ConPTY 에 UTF-8 을 직접 쓰고 xterm.js 가 UTF-8 로 디코드한다. 빈 Windows pane은
 //   실행 정책에 막힌 PowerShell을 피하려고 cmd.exe를 raw argv로 직접 실행한다(#3982).
+/**
+ * 셸 pane 에서 **그 대화를 이어 여는 한 줄** (#4135) — 순수. 못 만들면 빈 문자열.
+ *
+ *  쓰는 자리: 대화를 터미널로 넘길 때(codex app-server 가 스레드를 놓은 직후). 그 pane 은 셸이라
+ *  argv 가 아니라 **사람이 치는 명령 한 줄**이 필요하다.
+ *
+ *  ⚠ 이 글자는 **셸로 들어간다.** id 는 `RESUME_ID_RE`(영숫자·`._-`, 64자)를 통과한 것만 쓴다 — 따옴표·세미콜론·
+ *   공백이 든 값은 명령을 조립하지 않고 빈 문자열을 낸다(그 경우 화면이 사람에게 수동 안내로 떨어진다).
+ *  ⚠ 명령 모양은 하네스 표(resumeArgv)가 소유한다 — 여기서 `codex resume` 를 손으로 적지 않는다(두 벌 금지).
+ */
+export function harnessResumeCommand(harnessKey: string, convId: string): string {
+  const h = HARNESSES.find((x) => x.key === harnessKey);
+  const id = String(convId || "");
+  if (!h?.resumeArgv || !RESUME_ID_RE.test(id)) return "";
+  return [h.bin || h.key, ...h.resumeArgv(id)].join(" ");
+}
+
 export function harnessLaunchArgv(harnessKey: string, cmd: string[], platform: string = process.platform): string[] {
   const argv = Array.isArray(cmd) ? cmd : [];
   // #3982 hammurabi 실측: Windows PowerShell 5.1은 CreateProcessW access denied였고, 명령 없는 pane도
@@ -825,7 +890,13 @@ export function themeEnvArgs(theme: unknown): string[] {
 //
 // 하네스별 실측 (2026-08-20, 이 박스의 설치본 기준):
 //  · claude      — `--settings '{"theme":"dark"}'`  ★검증: 다크·라이트로 각각 띄워 pane ANSI 색이 갈리는 것 확인
-//  · codex       — `-c tui.theme=<이름>`             (`-c key=value` 오버라이드. 테마는 dark/light 가 아니라 **이름**)
+//  · codex       — `-c tui.theme=<이름>` + `FORCE_COLOR=1`
+//                  (`-c key=value` 오버라이드. 테마는 dark/light 가 아니라 **이름**). `/theme` 은 구문 강조만
+//                  바꾸고 입력칸 팔레트는 시작 때 감지한 터미널 배경에 묶인다. 터미널 화면을 실행 중 바꾸면
+//                  본문은 라이트인데 입력칸만 다크로 남아 글자가 안 보이는 Codex 회귀가 있다. 기본색 렌더링은
+//                  입력칸 배경을 터미널의 default/reset 색에 맡겨 xterm 의 현재 테마를 그대로 따른다.
+//                  근거: openai/codex#45163(시작 팔레트 캐시·우회), #14105(실행 중 테마 전환 재현),
+//                  #41242(Windows 라이트 테마 재현).
 //  · opencode    — `OPENCODE_CONFIG_CONTENT` env     (설정을 통째로 문자열로 받는다)
 //  · antigravity — 없음. 테마는 있으나(~/.gemini/antigravity-cli/settings.json 의 colorScheme) 실행 시점
 //                  주입 경로가 없다(플래그·env 스캔 음성). 위 원칙대로 손대지 않는다.
@@ -835,7 +906,10 @@ export function themeEnvArgs(theme: unknown): string[] {
 //  하네스가 목록을 바꾸면 여기만 손보면 된다.
 const HARNESS_THEME: Record<string, { argv?: (t: "dark" | "light") => string[]; env?: (t: "dark" | "light") => string[] }> = {
   claude: { argv: (t) => ["--settings", JSON.stringify({ theme: t })] },
-  codex: { argv: (t) => ["-c", `tui.theme=${t === "dark" ? "one-half-dark" : "one-half-light"}`] },
+  codex: {
+    argv: (t) => ["-c", `tui.theme=${t === "dark" ? "one-half-dark" : "one-half-light"}`],
+    env: () => ["FORCE_COLOR=1"],
+  },
   opencode: { env: (t) => [`OPENCODE_CONFIG_CONTENT=${JSON.stringify({ theme: t })}`] },
 };
 
@@ -931,8 +1005,9 @@ export function harnessLiveThemeSteps(harnessKey: string, theme: unknown): LiveT
 /** 하네스 테마를 env 로 주는 경우의 tmux `-e` 인자. 지원 안 하면 빈 배열. */
 export function harnessThemeEnvArgs(harnessKey: string, theme: unknown, platform?: string): string[] {
   //  #3626 — 윈도우 노드(psmux)는 옵션 값의 따옴표를 벗긴다(tmux-exec.ts encodeOptJson 실측). JSON 인 이 값은
-  //   거기서 반드시 깨지므로 얹지 않는다(harnessSettingsArgv 와 같은 이유·같은 가드).
-  if (platform === "win32") return [];
+  //   거기서 반드시 깨지므로 opencode 에는 얹지 않는다. codex 의 FORCE_COLOR=1 은 따옴표 없는 단순 값이라
+  //   Windows에서도 안전하고, Windows 라이트 터미널에도 같은 입력칸 대비 회귀가 있어 보존한다.
+  if (platform === "win32" && harnessKey !== "codex") return [];
   const t = normalizeTheme(theme);
   const h = HARNESS_THEME[String(harnessKey || "")];
   if (!t || !h?.env) return [];

@@ -1,8 +1,7 @@
-// v6 team capability — 팀(스쿼드/사일로) CRUD + 멤버 + 카테고리 오너십.
-//  ★오너십 ≠ 접근권한: 팀↔카테고리는 표면화(프로젝트/위키 탭)·주입의 '소프트 렌즈'일 뿐(권한은 scopes[]/projects[] 별도).
-//  scope='context'(category authoring 계열과 동일 — 도메인/맥락 저작 권한). 읽기(team_list/get)만 MCP 노출(에이전트가
-//  '이 도메인 누가 소유?' 조회), 쓰기(create/update/delete/members/owner)는 REST/웹 전용(조직 구조 변경은 사람) = expose.mcp:false.
-// ⚠ #1291 v2 — 팀 **쓰기**(생성·수정·삭제·멤버·카테고리)는 조건부로 admin 전용이다(읽기는 종전대로 context).
+// v6 team capability — 팀(스쿼드/사일로) CRUD + 멤버.
+//  ⚠ #4233(원준 2026-09-25): 분류를 팀에 할당하는 개념(team_set_category · category_set_owner · 소유/이해관계 분류)은 폐기했다.
+//  scope='context'. 읽기(team_list/get)만 MCP 노출, 쓰기(create/update/delete/members)는 REST/웹 전용(조직 구조 변경은 사람) = expose.mcp:false.
+// ⚠ #1291 v2 — 팀 **쓰기**(생성·수정·삭제·멤버)는 조건부로 admin 전용이다(읽기는 종전대로 context).
 //  팀이 가시성 주체가 되면서(리스트·폴더·지식 grant 의 대상) 팀 편집이 곧 접근권한 편집이 됐다.
 //  전 멤버(context)가 팀 멤버를 바꿀 수 있으면 **자기를 임의 팀에 넣어 잠긴 맥락을 여는** 셀프가입이 된다.
 //  (오너십 렌즈였을 땐 무해했다 — 축이 바뀌면 권한도 따라와야 한다.)
@@ -15,7 +14,7 @@ import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import {
   listTeams, getTeam, createTeam, updateTeam, deleteTeam,
-  setTeamMembers, setTeamCategory, removeTeamCategory, setCategoryOwner, anyTeamGrant,
+  setTeamMembers, anyTeamGrant,
 } from "../v6/team-store.js";
 
 const KEY_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -55,7 +54,7 @@ type TeamListInput = z.infer<z.ZodObject<typeof teamListInput>>;
 const teamList: Capability = {
   name: "team_list",
   title: "팀 목록",
-  description: "조직 내 팀(스쿼드/사일로) 목록 + 팀원수·카테고리수. 팀은 카테고리 오너십을 통해 맥락(지식·프로젝트·도메인)을 귀속한다.",
+  description: "조직 내 팀(스쿼드/사일로) 목록 + 팀원수.",
   scope: "context",
   input: teamListInput,
   expose: {
@@ -71,7 +70,7 @@ type TeamGetInput = z.infer<z.ZodObject<typeof teamGetInput>>;
 const teamGet: Capability = {
   name: "team_get",
   title: "팀 상세",
-  description: "팀 1건 + 팀원(role)·소유/이해관계 카테고리 조회.",
+  description: "팀 1건 + 팀원(role) 조회.",
   scope: "context",
   input: teamGetInput,
   expose: {
@@ -159,7 +158,7 @@ type TeamDeleteInput = z.infer<z.ZodObject<typeof teamDeleteInput>>;
 const teamDelete: Capability = {
   name: "team_delete",
   title: "팀 삭제",
-  description: "팀을 삭제한다(팀원·카테고리 오너십 cascade 해제 — 카테고리 자체는 남음). 감사 스냅샷 보존. 웹 전용.",
+  description: "팀을 삭제한다(팀원 cascade 해제). 감사 스냅샷 보존. 웹 전용.",
   scope: "context",
   input: teamDeleteInput,
   expose: {
@@ -200,65 +199,6 @@ const teamSetMembers: Capability = {
   },
 };
 
-// 팀-중심 카테고리 연결 — stakeholder 추가/해제(owner 는 category_set_owner 권장). relation='none' → 제거. 웹 전용.
-const teamSetCategoryInput = {
-  id: z.number().int().positive(),
-  category_id: z.number().int().positive(),
-  relation: z.enum(["owner", "stakeholder", "none"]),
-};
-type TeamSetCategoryInput = z.infer<z.ZodObject<typeof teamSetCategoryInput>>;
-const teamSetCategory: Capability = {
-  name: "team_set_category",
-  title: "팀 카테고리 연결",
-  description: "팀↔카테고리 관계를 설정한다. relation=owner|stakeholder|none(제거). owner 는 카테고리당 1팀(이양). 웹 전용.",
-  scope: "context",
-  input: teamSetCategoryInput,
-  expose: {
-    mcp: false,
-    rest: [{ method: "POST", paths: ["/api/ui/teams/:id/categories"],
-      parse: (req) => {
-        const b = (req.body ?? {}) as Record<string, unknown>;
-        const relation = String(b.relation ?? "");
-        if (!["owner", "stakeholder", "none"].includes(relation)) throw new HttpError(400, "relation 은 owner|stakeholder|none");
-        return { id: parseId(req.params?.id), category_id: parseId(b.category_id), relation };
-      } }],
-  },
-  handler: async (input: TeamSetCategoryInput, user: LivelyUser, ctx?: CapabilityCtx) => {
-    await requireTeamWrite(user);
-    const wc = writeCtxOf(user, ctx);
-    if (input.relation === "none") await removeTeamCategory(input.id, input.category_id, wc);
-    else await setTeamCategory(input.id, input.category_id, input.relation, wc);
-    return { ok: true };
-  },
-};
-
-// 카테고리-중심 오너 배정(어드민 분류체계관리 드롭다운) — team_id=null 이면 오너 해제. 웹 전용.
-const categorySetOwnerInput = {
-  id: z.number().int().positive(),
-  team_id: z.number().int().positive().nullable(),
-};
-type CategorySetOwnerInput = z.infer<z.ZodObject<typeof categorySetOwnerInput>>;
-const categorySetOwner: Capability = {
-  name: "category_set_owner",
-  title: "카테고리 오너 팀 설정",
-  description: "카테고리의 오너 팀을 설정/해제한다(카테고리당 1팀, 이양). team_id=null 이면 해제. 표면화·주입의 '우리 팀' 기준. 웹 전용.",
-  scope: "context",
-  input: categorySetOwnerInput,
-  expose: {
-    mcp: false,
-    rest: [{ method: "POST", paths: ["/api/ui/categories/:id/owner"],
-      parse: (req) => {
-        const b = (req.body ?? {}) as Record<string, unknown>;
-        const teamId = b.team_id == null || b.team_id === "" ? null : parseId(b.team_id);
-        return { id: parseId(req.params?.id), team_id: teamId };
-      } }],
-  },
-  handler: async (input: CategorySetOwnerInput, user: LivelyUser, ctx?: CapabilityCtx) => {
-    await setCategoryOwner(input.id, input.team_id, writeCtxOf(user, ctx));
-    return { ok: true, category_id: input.id, owner_team_id: input.team_id };
-  },
-};
-
 export const teamCapabilities: Capability[] = [
-  teamList, teamGet, teamCreate, teamUpdate, teamDelete, teamSetMembers, teamSetCategory, categorySetOwner,
+  teamList, teamGet, teamCreate, teamUpdate, teamDelete, teamSetMembers,
 ];

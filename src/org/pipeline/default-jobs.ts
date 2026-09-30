@@ -7,7 +7,8 @@
 //
 //  규율:
 //   · **없을 때만** 만든다(insertCronJobIfAbsent). 사람이 꺼 둔 잡·주기를 바꾼 잡을 되살리거나 덮지 않는다.
-//   · id·action·주기는 화면(맥락 관리 ▸ 증류·분류 카드의 [자동 실행 켜기] — web/distillers.ts · web/context-classify.ts)과
+//   · id·action·주기는 화면(맥락 관리 ▸ 증류기 탭의 두 [자동 실행 켜기] — 자료 레인 web/distillers.ts · 카테고리 붙이기
+//     레인 web/distill-fill.ts)과
 //     **같다**. id 가 갈리면 같은 일을 하는 잡이 둘 생겨 한 단계가 두 번 돈다(CP 도 같은 id 를 쓴다).
 //   · 실행 계정은 잡에 박지 않는다 — 워크스페이스 실행 멤버(context_job_policy.runner_member, #4012 D1)를 따른다.
 //     만든 사람을 그 자리에 앉히는 것은 호출부 몫이다(fillContextJobRunnerIfUnset — 정해진 적 없을 때만).
@@ -33,10 +34,10 @@ export const DEFAULT_CONTEXT_JOBS: readonly DefaultContextJob[] = [
   },
   {
     id: "classify-knowledge-headless",
-    label: "미분류 지식 분류 (헤드리스)",
+    label: "카테고리 붙이기 (미분류 지식→카테고리, 헤드리스)",
     action: "classify_knowledge_headless",
     interval_sec: 3600,
-    note: "켜진 분류기별로 미분류 지식 배치를 헤드리스 AI 세션에 접수. 분류기가 없으면 전역 기본 분류. 새 워크스페이스는 켠 채로 시작(#4052).",
+    note: "켜진 카테고리 붙이기 증류기별로 미분류 지식 배치를 헤드리스 AI 세션에 접수. 켜진 것이 없으면 전 지식 공통 기본 기준. 새 워크스페이스는 켠 채로 시작(#4052).",
   },
 ];
 

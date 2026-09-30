@@ -56,6 +56,7 @@ const RECONNECT = "— [외부 앱 연결 ▸ Google] 에서 다시 연결하거
 
 export async function resolveGoogleTokenSource(
   source: string | undefined, system: string, vault: GoogleVaultReader,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<GoogleTokenResolution | null> {
   const s = String(source ?? "").trim();
   if (!s) return null; // 미지정 = 종전 경로(붙여넣기)
@@ -78,7 +79,7 @@ export async function resolveGoogleTokenSource(
   //  새 방식으로 [Google 연결]을 하면 토큰은 통합 슬롯에 생기는데 client 는 #1652 시절 구 kind 에 그대로다.
   //  그 조합에서 수집이 통째로 멈췄다(2026-08-27 run 16275: "클라이언트(kind google_oauth)가 등록되지 않았습니다").
   //  둘은 독립적으로 해소한다.
-  const client = await resolveGoogleOAuthClient(vault);
+  const client = await resolveGoogleOAuthClient(vault, env);
   if (!client) {
     return { warning: "Google OAuth 클라이언트가 등록되지 않았습니다 — 관리자가 Client ID/Secret 을 조직 자격에 넣어야 합니다" };
   }
@@ -98,14 +99,43 @@ export async function resolveGoogleTokenSource(
  */
 export const GOOGLE_CLIENT_KINDS: readonly string[] = [GOOGLE_KIND, ...GOOGLE_LEGACY_KINDS];
 
+/** 플랫폼 클라이언트의 이름표 — 금고 kind 가 아니라 «env 에서 왔다» 는 표시(진단용). */
+export const GOOGLE_PLATFORM_CLIENT = "platform-env";
+
+/**
+ * ★ 플랫폼 소유 구글 클라이언트(매니지드, #4211) — env `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`.
+ *
+ *  매니지드는 동의·교환을 CP 릴레이가 대신한다(GOOGLE_OAUTH_RELAY_URL) — 그래서 테넌트 금고엔 클라이언트가 **없다.**
+ *  그런데 구글 액세스 토큰은 1시간짜리라 **갱신**에는 그 클라이언트가 있어야 한다. 이게 없으면
+ *   · 도구(ensureGoogleAccessToken)는 연결 1시간 뒤 null → «다시 연결» 로 전멸하고
+ *   · 수집기(resolveGoogleTokenSource)는 처음부터 «클라이언트 미등록» 으로 못 돈다.
+ *  oauth-broker 주석이 말하던 «매니지드는 CP 갱신 프록시»는 만들어진 적이 없다(2026-09-22 확인).
+ *  공유 게이트웨이는 이미 전 테넌트 토큰을 푸는 CONNECTOR_SECRET_KEY 를 쥐고 있어, 같은 자리에 이 값을 두는 것은
+ *  신뢰 경계를 넓히지 않는다(lvly-cloud deploy/lvly-gw.sh 가 CP 의 LVLY_GOOGLE_DATA_CLIENT_* 를 싣는다).
+ *  **둘 다** 있을 때만 쓴다 — 반쪽이면 교환·갱신이 invalid_client 로 죽는다.
+ */
+export function envGoogleOAuthClient(env: NodeJS.ProcessEnv = process.env): { client_id: string; client_secret: string } | null {
+  const client_id = env.GOOGLE_OAUTH_CLIENT_ID?.trim();
+  const client_secret = env.GOOGLE_OAUTH_CLIENT_SECRET?.trim();
+  return client_id && client_secret ? { client_id, client_secret } : null;
+}
+
+/**
+ * 조직 구글 클라이언트 해소 — 금고(통합 → 구 kind) 다음 플랫폼 env.
+ *  ⚠ **릴레이 모드면 플랫폼이 먼저다.** 그 토큰은 CP 가 플랫폼 클라이언트로 발급받은 것이라, 금고에 다른 클라이언트가
+ *   들어 있어도 그걸로는 갱신이 안 된다(구글은 발급 클라이언트로만 갱신을 받는다 → invalid_client).
+ */
 export async function resolveGoogleOAuthClient(
   vault: Pick<GoogleVaultReader, "oauthClient">,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ kind: string; client_id: string; client_secret: string } | null> {
+  const platform = envGoogleOAuthClient(env);
+  if (platform && env.GOOGLE_OAUTH_RELAY_URL?.trim()) return { kind: GOOGLE_PLATFORM_CLIENT, ...platform };
   for (const kind of GOOGLE_CLIENT_KINDS) {
     const c = await vault.oauthClient(kind);
     if (c) return { kind, ...c };
   }
-  return null;
+  return platform ? { kind: GOOGLE_PLATFORM_CLIENT, ...platform } : null;
 }
 
 /** 실제 금고 리더 — 커넥터 설정 해소(config.ts)가 쓴다. */

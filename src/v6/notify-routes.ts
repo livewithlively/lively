@@ -12,7 +12,7 @@
 //  클라이언트가 `?all=1` 로 청할 때만 받는다(데스크톱 앱). 목록은 스트림이 열리는 **즉시** 자기 워크스페이스로 걸고,
 //  계정 서버 확인이 끝나면 넓힌다 — 확인을 기다리는 동안 난 사건을 놓치지 않게.
 import type express from "express";
-import { subscribeNotify, type NotifyRoute, type NotifySessionEvent } from "./notify-bus.js";
+import { subscribeNotify, type NotifyRoute, type NotifyEvent } from "./notify-bus.js";
 import { ownRouteNow } from "./notify-scope.js";
 
 /** keepalive 주석 주기 — 프록시·로드밸런서가 조용한 연결을 끊는 것을 막는다(traefik 기본 유휴가 이보다 길다). */
@@ -59,9 +59,10 @@ export function registerNotifyRoutes(
     res.flushHeaders?.();
     res.write(": ok\n\n");                       // 첫 바이트 — 클라이언트가 '연결됨'을 알 수 있게
 
-    const send = (ev: NotifySessionEvent) => {
+    const send = (ev: NotifyEvent) => {
       // SSE 는 줄 단위 프로토콜이라 본문에 개행이 섞이면 프레임이 깨진다 — JSON.stringify 가 개행을 이스케이프한다.
-      res.write(`event: session\ndata: ${JSON.stringify(ev)}\n\n`);
+      //  이벤트 이름 = 사건 종류(session · app #4225). 받는 쪽은 본문의 type 으로 가르므로 이름은 관측용이다.
+      res.write(`event: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`);
     };
     // 자기 워크스페이스는 **지금** 건다 — 이름·다른 워크스페이스는 아래 확인이 끝나면 채운다.
     const sub = subscribeNotify(ownRouteNow(me), send);

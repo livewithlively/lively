@@ -18,8 +18,8 @@
 //  E3 아무것도 안 걸리면 빈 배열(«없어요» 줄은 화면이 그린다)
 //  E4 공백만 친 것은 빈 칸과 같다
 //  Q1 projQueryId — `3778`·`#3778` 은 숫자, `37a`·`#`·빈 문자열은 null
-//  W1 두 화면이 같은 규칙을 쓴다 — views.ts(홈 컴포저)·main.ts(세션의 프로젝트 바꾸기) 둘 다 projMatches 를 부르고
-//     옛 `String(...id) === q` 가 남아 있지 않다
+//  W1 두 화면이 같은 규칙을 쓴다 — views.ts(홈 컴포저)·proj-pick.ts(세션의 프로젝트 바꾸기 — 드롭다운·문패 모달이
+//     함께 쓰는 목록, #3778 에서 main.ts 밖으로 옮겼다) 둘 다 projMatches 를 부르고 옛 `String(...id) === q` 가 남아 있지 않다
 //  W2 홈이 넘기는 후보가 40개로 잘려 있지 않다 — 잘려 있으면 번호 찾기가 그 안에서만 된다
 //
 // 웹 모듈은 src 테스트가 import 할 수 없어 소스를 transpile 해 data: URL 로 import 한다.
@@ -109,7 +109,7 @@ test("Q1 projQueryId", async () => {
   assert.equal(m.projQueryId(""), null);
 });
 test("W1 두 화면이 같은 규칙을 쓴다 — 옛 완전일치가 남아 있지 않다", () => {
-  for (const rel of ["v2/views.ts", "v2/main.ts"]) {
+  for (const rel of ["v2/views.ts", "v2/proj-pick.ts"]) {
     const c = code(readWeb(rel));
     assert.match(c, /projMatches\(/, rel + ": projMatches 를 쓰지 않는다");
     assert.doesNotMatch(c, /String\(r\.proj\.id\) === q/, rel + ": 옛 번호 완전일치가 남아 있다");

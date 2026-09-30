@@ -47,6 +47,10 @@ export const SHELL_PREF_STORES: Readonly<Record<string, ShellPrefKind>> = {
   lively_v2_proj_fold_closed: "list", // 접어 둔 폴더
   lively_v2_rail_main: "list",        // 레일 메인 줄 순서(사람이 끌어 정한 자리)
   lively_v2_recent_apps: "list",      // 최근에 연 앱
+  //  #3778 — [외부 앱 연결]에서 «이 축은 안 쓴다»고 **정한** 것(`<앱키>:use` · `<앱키>:get`).
+  //   안 켠 것과 다른 말이다: 안 켠 앱은 «연결 중»으로 남고, 정한 앱은 «연결 완료»가 된다.
+  //   사람의 결정이라 계정에 묶인다(기기마다 다시 정하게 하면 그게 더 이상하다).
+  lively_v2_connect_skip: "list",
 };
 
 /**

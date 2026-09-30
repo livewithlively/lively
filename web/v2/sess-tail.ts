@@ -5,9 +5,11 @@
 import { apiUrl } from '../core.js';
 import { authHeaders } from './panes-kit.js';
 import type { Sess } from './views.js';
+import { INJECTED_RE } from '../lib/ask-text.js';
 
 export interface Turn { who: 'me' | 'ai'; text: string }
-const INJ_RE = /^\s*(<command-name|<local-command-|<command-message|<command-args|<bash-|<task-notification|<system-reminder|\[Request interrupted|Caveat:|This session is being continued)/;
+//  #4233 — 거르는 식은 lib/ask-text 한 벌이다(서버 칸 lastPrompt 도 같은 식으로 거른다 — last-ask.ts). `<agent-message` 등이 빠져 있었다.
+const INJ_RE = INJECTED_RE;
 
 const tailCache = new Map<string, { turns: Turn[]; prompts: string[]; ok: boolean; at: number }>();
 

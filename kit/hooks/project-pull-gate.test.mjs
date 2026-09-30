@@ -298,6 +298,23 @@ async function main() {
         ok(`[${id}] 명시 바인딩(folder_abs_path) → 슬롯 대신 그 폴더로 pull`);
       }
 
+      // ③-b 세션 행의 폴더(session_dir, #4135) — 명시 바인딩은 없지만 서버가 «이 세션은 이 폴더에서 돈다» 를 알면
+      //  env(TERMINAL_ROOT_SHARED)로 조립한 슬롯이 아니라 **그 폴더**로 받는다(옛 루트가 env 에 남은 세션의 오배달 방지).
+      //  라이블리 소유 슬롯이라는 뜻은 그대로라 폴더가 없으면 만든다(사람 폴더처럼 «없으면 건너뜀» 이 되면 안 된다).
+      {
+        const home = path.join(root, `srv-${id}-sessdir`);
+        const staleWs = path.join(home, "old-workspace");                          // env 에 남은 옛 루트
+        const sessDir = path.join(home, "workspace", "project", String(PROJECT_ID)); // 세션이 실제로 도는 곳 — 아직 없다
+        await fsp.mkdir(path.join(home, "workspace"), { recursive: true });
+        setContext({ project_id: PROJECT_ID, folder: `project/${PROJECT_ID}`, sync: "both", folder_abs_path: null, session_dir: sessDir });
+        await runHook(hookPath, path.join(home, "workspace"), base, { TERMINAL_ROOT_SHARED: staleWs, LIVELY_SESSION_ID: "box-t-3b", LIVELY_NODE_ID: "testnode" });
+        assert.equal(readOrNull(path.join(sessDir, "AGENTS.md")), SERVER_FILES["AGENTS.md"],
+          `[${id}] session_dir 이 오면 그 폴더로 받아야 한다(없으면 만들어서) — 슬롯 조립은 폴백일 뿐`);
+        assert.equal(readOrNull(path.join(staleWs, "project", String(PROJECT_ID), "AGENTS.md")), null,
+          `[${id}] env 의 옛 루트로 조립한 슬롯에 쏟았다 — 세션이 도는 폴더가 아니다`);
+        ok(`[${id}] 세션 행의 폴더(session_dir) → env 슬롯 대신 그 폴더로 pull(없으면 생성)`);
+      }
+
       // ④ 소속 없음 — 서버가 project_id:null 이라 답하면 **마커가 있어도** 안 쓴다(서버의 확실한 음답이 이긴다).
       {
         const dir = await mkProjectDir(root, `srv-${id}-detached/home/lively/projects/${PROJECT_ID}`, { project_id: PROJECT_ID, sync: "pull" });

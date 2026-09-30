@@ -163,6 +163,45 @@ try {
     ok("서버는 그대로 · 로컬만 변경 → 안전하게 올림");
   }
 
+  // ── 우리가 올린 파일을 한 번 더 고쳤다 → 올린다 (#4135) ──
+  //  서버 사본이 원장 기준선 그대로다(= 우리가 마지막으로 맞춘 판 · 그 뒤로 아무도 안 고쳤다). 서버 mtime 은 우리가 올린
+  //  시각이라 last_pull 보다 뒤지만, 그건 남의 변경이 아니다. 종전엔 이 파일이 영영 충돌로 남았다(마커에 last_pull 이 없어도).
+  for (const marker of [{}, { last_pull: 1_000_000 }]) {
+    reset();
+    SERVER = { "시안.html": { body: "첫 판", mtime: 2_000_000 } };          // last_pull(없음·1_000_000)보다 뒤에 올라간 첫 판
+    const held = heldFrom(["시안.html"]);
+    const dir = await mkProj(`own-upload-edited-${marker.last_pull ? "lp" : "nolp"}`, { project_id: PROJECT_ID, sync: "both", ...marker }, { "시안.html": "첫 판" }, held);
+    await fsp.writeFile(path.join(dir, "시안.html"), "고친 둘째 판(더 김)");    // 그 뒤 로컬에서 고쳤다(mtime = 지금)
+    await runHook(dir);
+    assert.deepEqual(puts.map((p) => p.path), ["시안.html"], "우리가 올린 파일의 수정분이 안 올라갔다");
+    assert.equal(puts[0].body, "고친 둘째 판(더 김)");
+    assert.deepEqual(upOf(dir).conflicts, []);
+    //  올린 뒤 원장 기준선은 서버가 돌려준 새 값이고, 로컬 mtime 도 그 값이다 → 같은 파일을 또 고쳐도 다시 올라간다.
+    const led2 = JSON.parse(fs.readFileSync(path.join(dir, ".lively", "sync-ledger.json"), "utf8")).files["시안.html"];
+    assert.equal(led2.mtime, SERVER["시안.html"].mtime);
+    await fsp.writeFile(path.join(dir, "시안.html"), "고친 셋째 판(더더 김)");
+    puts = [];
+    await runHook(dir);
+    assert.deepEqual(puts.map((p) => p.body), ["고친 셋째 판(더더 김)"], "두 번째 수정분이 안 올라갔다");
+  }
+  ok("우리가 올린 파일을 다시 고침(서버 사본 = 원장 기준선) → last_pull 이 없어도 · 낮아도 올림 · 거듭 고쳐도 올림");
+
+  // ── 🔴 기준선이 있어도 서버 사본이 그 기준선과 다르면 **안 올린다**(그 사이 남이 고쳤다) ──
+  for (const changed of [{ body: "남이 고친 판", mtime: 3_000_000 }, { body: "같은 시각 · 다른 크기의 판", mtime: 2_000_000 }]) {
+    reset();
+    SERVER = { "시안.html": { body: "첫 판", mtime: 2_000_000 } };
+    const held = heldFrom(["시안.html"]);
+    const dir = await mkProj(`baseline-but-server-moved-${changed.mtime}`, { project_id: PROJECT_ID, sync: "both" }, { "시안.html": "첫 판" }, held);
+    SERVER["시안.html"] = changed;                                             // 우리가 맞춘 뒤 서버가 바뀌었다
+    await fsp.writeFile(path.join(dir, "시안.html"), "내가 고친 판(더 김)");
+    await runHook(dir);
+    assert.equal(puts.length, 0, "🔴 서버 사본이 기준선과 다른데 올렸다 — 남의 작업이 사라진다");
+    assert.equal(SERVER["시안.html"].body, changed.body);
+    assert.equal(upOf(dir).conflicts.length, 1);
+    assert.equal(upOf(dir).conflicts[0].path, "시안.html");
+  }
+  ok("🔴 기준선이 있어도 서버 사본이 기준선과 다르면(시각 또는 크기) → 안 올리고 충돌로 기록");
+
   // ── 🔴 원장에 없는 파일은 **안 지운다** — '로컬에 없음' ≠ '지웠음'(애초에 안 받았을 수 있다) ──
   {
     reset();

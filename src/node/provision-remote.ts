@@ -18,6 +18,7 @@ import { HttpError } from "../http-error.js";
 import { translateNodeRpcError } from "./rpc-error.js";
 import { logger } from "../log.js";
 import { markExecutionSessionApplied, setExecutionSessionProject } from "../v6/execution-session-store.js";
+import { revokeSessionHookToken } from "../terminal/profiles.js";   // #4135 — 취소한 세션의 preissued 토큰 회수
 
 const POLL_MS = 2_000;                    // provisionStatus 폴링 간격
 const DEFAULT_CAP_MS = 8 * 60_000;        // 완료 대기 상한(대형 레포 첫 clone 여유) — 넘으면 노드에선 계속 돌지만 여기선 포기
@@ -218,6 +219,7 @@ export async function bindNodeSessionProjectOrKill(args: {
   } catch (e) {
     await nodeRpc(args.nodeId, "kill", { user: { userId: args.requester }, id: args.sessionId })
       .catch(() => { /* 노드 이탈 시 진단 로그에 남는다 */ });
+    await revokeSessionHookToken(args.sessionId).catch(() => { /* #4135 — 방금 구워 실은 토큰(preissued)도 함께 거둔다 · 비치명 */ });
     throw new HttpError(503, `프로젝트 소속을 기록하지 못해 노드 세션 생성을 취소했습니다: ${(e as Error)?.message ?? e}`);
   }
 }

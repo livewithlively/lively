@@ -17,7 +17,8 @@ import { canSeeProjectRow, effectiveViewer } from "../v6/visibility.js";
 import { viewerOf } from "../capabilities/principal.js";
 import { listSessions, listRestorableSessions, validateInvites, type CreateInput } from "../terminal/terminal-sessions.js";
 import { SESSION_STARTING_GRACE_MS } from "../terminal/sessions.js";   // #4065 — AI 세션 탭과 같은 창(배럴 비노출 — 모듈에서 직접)
-import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
+import { dropTrashedRows, mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
+import { trashMapFor } from "../sessions/session-trash.js";   // #3778 — 휴지통에 있는 세션은 이 목록에 서지 않는다
 import { ensureAgentsMd, readProjectAgentsMd } from "../v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
 import { startProjectProvision, projectProvisionStatus } from "./project-provision-jobs.js";
@@ -27,8 +28,16 @@ import { isSelfNode, gatewayDefersHere } from "../node/registry.js";
 import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다)
 import { decorateNodeRows } from "../terminal/node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB)
 import { uploadError, nfcPath } from "../terminal/upload-file.js";
-import { supersedeLocalPath } from "../ingest/local-file.js";
-import { finishUpload } from "../ingest/upload-finish.js";   // #3787 D — 업로드 마무리는 브라우즈 라우트와 한 함수
+import {
+  supersedeLocalPath, countActiveLocalUnder, stampTrashedLocalPath, newFileTrashStamp, heldPathOf,
+  getTrashedFile, reviveTrashedFile, fileTrashBatchRemaining, fileTrashBatchCleanup, FILE_TRASH_DIR,
+} from "../ingest/local-file.js";
+import { deleteSource, canSeeSource } from "../v6/source-store.js";
+import { purgeDeleted } from "../v6/trash-store.js";
+import { auditOrgContent } from "../v6/content-audit.js";
+import { finishUpload } from "../ingest/upload-finish.js";
+import { uploadEntryOf } from "../ingest/upload-entry.js";   // #4233: 들어온 길(up-sync 훅은 세션 헤더를 싣는다 → AI 가 만든 파일)   // #3787 D: 업로드 마무리는 브라우즈 라우트와 한 함수
+import { bindSessionTask, sessionTaskList, setSessionTaskOrder, taskForProjectSession, taskKickoffPrompt, tasksKickoffPrompt } from "../v6/session-task.js";   // #4084 — 태스크에서 연 세션 · #4135 허브 「태스크에 붙이기」
 
 const MAX_UPLOAD = 1024 * 1024 * 1024; // 1GB (#1870 — terminal-files 와 동일해야 한다. receiveUpload 스트리밍이라 RAM 무관)
 const MAX_PREVIEW = 25 * 1024 * 1024; // 25MB — 이미지·PDF 인라인 미리보기 허용(텍스트는 클라가 별도 크기 가드)
@@ -237,7 +246,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const u = userOf(req);
     res.json(await finishUpload({
       coord: { root: { kind: "project", id: project.id }, base, folder: project.folder, channelFallback: project.name },
-      abs, osUser: store.osUser, uploader: { id: viewerOf(u), name: u?.email ?? null },
+      abs, osUser: store.osUser, uploader: { id: viewerOf(u), name: u?.email ?? null }, entry: uploadEntryOf(req.headers),
     }));
   }));
 
@@ -253,7 +262,15 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   }));
 
   // 이름 변경 — 같은 폴더 안에서 이름만(파일·폴더 공통). body: { path, name }.
-  app.post(`${prefix}/:id/rename`, auth, wrap(async (req, res) => {
+  //  ⚠ 경로가 `/file/rename` 인 이유(#4114): 종전엔 `${prefix}/:id/rename` 이었는데, 그 경로를 **프로젝트
+  //   이름짓기 능력**(capabilities/projects-v6.ts project_rename_v6, REST `POST /api/ui/v6/projects/:id/rename`)이
+  //   이미 쓰고 있었다. 둘은 같은 자리를 놓고 다투고, express 는 먼저 등록된 쪽(web.ts 의 restMounts —
+  //   registerWebUi 가 이 함수보다 먼저 돈다)만 부른다. 그래서 자료 칸의 [새 폴더]·[이름 바꾸기]가
+  //   **파일이 아니라 프로젝트의 이름을 고치려 들었고**, 사람이 지은 이름은 덮지 않는 규약 덕에 겉으로는
+  //   «아무 일도 안 일어남»(200 {applied:false})으로 보였다 — 이름이 자동으로 붙은 프로젝트였다면 그 자리에서
+  //   **프로젝트 이름이 조용히 바뀐다**. 파일 이름은 파일 이름의 자리(`/file/…`)에서 바꾼다.
+  //   같은 종류의 충돌을 다시 만들지 않게 scripts/route-collision.test.mjs 가 전 경로를 훑는다.
+  app.post(`${prefix}/:id/file/rename`, auth, wrap(async (req, res) => {
     const { store, base } = await projStore(Number(req.params.id), req);
     const b = (req.body ?? {}) as Record<string, unknown>;
     const fromAbs = resolveIn(base, b.path, true);
@@ -308,15 +325,83 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   }));
 
   // 삭제 — 파일/폴더(폴더는 내용까지 재귀). 루트 자신은 거부(requireFile). path 필수.
+  //  #3778 파일 휴지통: **자료가 달린 경로**는 지우지 않고 `.lively/trash/<batch>/` 로 옮긴다(휴지통 「자료」 탭에서 되살린다).
+  //   자료가 하나도 없는 경로(코드 폴더·빈 폴더)는 종전대로 바로 지운다 — 세울 줄이 없는 것을 숨김 자리에 쌓지 않는다.
+  //   응답 trashed = 휴지통으로 간 자료 수(0 이면 바로 지워진 것) — 화면이 그 숫자로 «휴지통으로 보냈어요/삭제했어요» 를 가른다.
   app.delete(`${prefix}/:id/file`, auth, wrap(async (req, res) => {
     const { project, store, base } = await projStore(Number(req.params.id), req);
     const abs = resolveIn(base, req.query.path, true);
     await jailIfMember(store, abs);
+    const rel = path.relative(base, abs);
+    const root = { kind: "project" as const, id: project.id };
+    //  보관 자리 자체(.lively/…)를 지우라는 요청은 휴지통으로 돌리지 않는다 — 자기 안으로 옮기는 꼴이 된다.
+    const inHidden = rel.split(path.sep)[0] === ".lively";
+    const live = inHidden ? 0 : await countActiveLocalUnder(root, rel).catch(() => 0);
+    if (live > 0) {
+      const stamp = newFileTrashStamp(project.id, rel, viewerOf(userOf(req)));
+      const heldAbs = resolveIn(base, stamp.held_rel, true);
+      await store.mkdirp(path.dirname(heldAbs));
+      await store.move(abs, heldAbs);
+      //  도장은 옮긴 **뒤에** — 옮기기가 실패하면 자료는 그대로 active 다(화면과 디스크가 어긋나지 않는다).
+      //  ★ 도장이 실패하거나 0건이면(그새 자료가 사라진 경합) **옮긴 것을 되돌린다** — 도장 없는 보관 파일은 휴지통에 안 서서
+      //   «지운 것도 아니고 되살릴 수도 없는» 채로 숨는다(리뷰 지적 2026-09-20). 되돌린 뒤 0건이면 아래 종전 길(바로 삭제)로 간다.
+      let n = 0; let stampErr: unknown = null;
+      try { n = await stampTrashedLocalPath(root, rel, stamp); } catch (e) { stampErr = e; }
+      if (n > 0) { res.json({ ok: true, trashed: n, batch: stamp.batch }); return; }
+      await store.move(heldAbs, abs);
+      await store.remove(path.dirname(heldAbs)).catch(() => { /* 빈 묶음 폴더 — 비치명 */ });
+      if (stampErr) throw new HttpError(500, "휴지통으로 보내지 못했어요 — 파일은 그대로 있습니다. 잠시 뒤 다시 시도해 주세요");
+    }
     await store.remove(abs);
     // 자료 전파(#1881) — 그 경로(폴더면 하위 전부)의 자료를 superseded 로. 파생 지식은 그대로(지식은 사람 결정).
-    await supersedeLocalPath({ kind: "project", id: project.id }, path.relative(base, abs))
+    await supersedeLocalPath(root, rel)
       .catch((e) => console.warn(`[local-ingest] 삭제 전파 실패 ${abs}: ${(e as Error)?.message ?? e}`));
-    res.json({ ok: true });
+    res.json({ ok: true, trashed: 0 });
+  }));
+
+  // ── 파일 휴지통(#3778) — 되살리기 / 완전 삭제. 대상은 자료 id(휴지통 화면의 한 줄 = 자료 한 건). ──
+  //  둘 다 그 프로젝트의 파일 권한(projStore)과 자료 공개범위(canSeeSource)를 함께 지난다 — 안 보이는 자료는 되살릴 수도 지울 수도 없다.
+  const trashedFileOf = async (req: express.Request) => {
+    const { project, store, base } = await projStore(Number(req.params.id), req);
+    const sourceId = Number((req.body as { source_id?: unknown } | undefined)?.source_id);
+    if (!Number.isInteger(sourceId) || sourceId <= 0) throw new HttpError(400, "source_id 가 필요합니다");
+    const row = await getTrashedFile(sourceId);
+    if (!row || Number(row.stamp.project_id) !== project.id) throw new HttpError(404, "휴지통에 없는 자료예요");
+    if (!(await canSeeSource(sourceId, viewerOf(userOf(req))))) throw new HttpError(404, "휴지통에 없는 자료예요");
+    const heldAbs = resolveIn(base, heldPathOf(row.stamp, row.path), true);
+    await jailIfMember(store, heldAbs);
+    return { project, store, base, row, heldAbs };
+  };
+
+  app.post(`${prefix}/:id/file-trash/restore`, auth, wrap(async (req, res) => {
+    const { store, base, row, heldAbs } = await trashedFileOf(req);
+    const toAbs = await resolveInProject(store, row.path, true);
+    if (!(await store.stat(heldAbs))) throw new HttpError(410, "보관해 둔 파일이 없어요 — 프로젝트 폴더에서 직접 지워졌을 수 있습니다");
+    if (await store.stat(toAbs)) throw new HttpError(409, "원래 자리에 같은 이름의 파일이 이미 있어요 — 그 파일의 이름을 바꾼 뒤 다시 되돌려 주세요");
+    await store.mkdirp(path.dirname(toAbs));
+    await store.move(heldAbs, toAbs);
+    if (!store.osUser) await store.grantGroup(toAbs, "file");
+    await reviveTrashedFile(row.id);
+    //  보관 묶음 치우기 — **되살리기는 아무것도 없애지 않는다**: 파일 하나짜리 묶음일 때만(fileTrashBatchCleanup). 실패해도 되살리기는 끝났다.
+    if (fileTrashBatchCleanup("restore", row.stamp, row.path, await fileTrashBatchRemaining(row.stamp.batch).catch(() => 1)) === "remove") {
+      await store.remove(resolveIn(base, path.posix.join(FILE_TRASH_DIR, row.stamp.batch), true)).catch(() => { /* 비치명 */ });
+    }
+    res.json({ ok: true, restored: true, id: row.id, path: row.path });
+  }));
+
+  app.post(`${prefix}/:id/file-trash/purge`, auth, wrap(async (req, res) => {
+    const { store, base, row, heldAbs } = await trashedFileOf(req);
+    const ctx = { actor: viewerOf(userOf(req)), source: "web" };
+    await store.remove(heldAbs).catch(() => { /* 이미 없으면 지울 것이 없다 */ });
+    //  자료 행도 남기지 않는다 — 삭제(감사 before) → 그 스냅샷 본문 비우기 → «누가 언제 파기했다» 한 줄. 지식·프로젝트 파기와 같은 원칙(#1850).
+    await deleteSource(row.id, ctx);
+    const scrubbed = await purgeDeleted("source", String(row.id));
+    await auditOrgContent("source", String(row.id), "purge", null, { scrubbed_rows: scrubbed }, ctx);
+    //  마지막 자료까지 완전히 지웠으면 묶음째 치운다 — 같은 폴더에서 함께 지웠던 그 밖의 파일(자료 아닌 것)도 이때 사라진다(확인창이 말한다).
+    if (fileTrashBatchCleanup("purge", row.stamp, row.path, await fileTrashBatchRemaining(row.stamp.batch).catch(() => 1)) === "remove") {
+      await store.remove(resolveIn(base, path.posix.join(FILE_TRASH_DIR, row.stamp.batch), true)).catch(() => { /* 비치명 */ });
+    }
+    res.json({ ok: true, purged: true, id: row.id });
   }));
 
   // ── ①-b 공유 폴더 매니페스트 — 로컬 작업 PC 의 pull 동기화 기준(재귀 [{path,mtime,size}] + newest). 전원 접근(#452). ──
@@ -384,7 +469,10 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     await decorateNodeRows(restorable);
     // AI 세션 탭과 같은 규칙으로 이중표기를 접는다(#1716) — 게이트웨이와 노드가 같은 박스면 같은 tmux 세션이
     //  local·remote 양쪽에 잡힌다. 인자 순서 = 우선순위(로컬 라이브 > 노드 스냅샷 > 복원 가능).
-    res.json({ sessions: mergeSessionViews(local, remote, restorable) });
+    //  #3778 — 내가 휴지통으로 보낸 세션은 뺀다(이 목록은 휴지통을 그리지 않는다). 표식 조회가 죽어도 목록은 나간다(best-effort).
+    let rows = mergeSessionViews(local, remote, restorable);
+    try { rows = dropTrashedRows(rows, await trashMapFor(idOf(userOf(req)))); } catch { /* 표식 없이 나간다 */ }
+    res.json({ sessions: rows });
   }));
   app.post(`${prefix}/:id/sessions`, auth, wrap(async (req, res) => {
     const { project } = await projBase(Number(req.params.id), req);
@@ -412,6 +500,33 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
       //  화면에서 누굴 고르든 **만든 사람만** 보는 세션이 됐다(#1876 D1 이후 invites 가 유일한 열쇠인데도).
       invites: b.invites,
     };
+    // #4084 세션 = 태스크 — 태스크에서 연 세션. 이 프로젝트 안의 태스크만 받는다(남의 프로젝트 태스크를 잇는 길을 막는다).
+    //  세션 이름 = 태스크 이름(사람이 적은 이름이라 AI 가 다시 짓지 않는다 — label 이 오면 human 출처로 박힌다),
+    //  첫 지시를 비워 보내면 «#<id> 진행해» + 본문으로 채운다. 잇기 자체는 관문이 소속을 쓴 뒤에 한다(launchSession).
+    // #4135 — 태스크 **여러 개**를 순서대로 맡겨 연다(곁칸 «프로젝트» 앱의 [담기] 뒤 [시키기]). 1번이 taskId 와 같은 길로
+    //  이어지고, 나머지는 관문이 순서 목록에 싣는다. 첫 지시 = 순서 안내 + 1번 본문 + 사람이 덧붙인 말(있으면).
+    const taskIdsRaw = Array.isArray(b.taskIds) ? (b.taskIds as unknown[]).map(Number) : [];
+    if (taskIdsRaw.length) {
+      const uniq = [...new Set(taskIdsRaw)].slice(0, 30);
+      const picked = [];
+      for (const n of uniq) {
+        const t = Number.isInteger(n) && n > 0 ? await taskForProjectSession(project.id, n) : null;
+        if (!t) throw new HttpError(400, `태스크 #${n} 는 이 프로젝트의 태스크가 아닙니다`);
+        picked.push(t);
+      }
+      input.taskId = picked[0].id;
+      input.taskIds = picked.map((t) => t.id);
+      if (!String(input.label ?? "").trim()) input.label = picked[0].name;
+      input.initialPrompt = tasksKickoffPrompt(picked, input.initialPrompt);
+    }
+    const taskIdRaw = taskIdsRaw.length || b.taskId == null || b.taskId === "" ? 0 : Number(b.taskId);
+    if (taskIdRaw) {
+      const task = Number.isInteger(taskIdRaw) && taskIdRaw > 0 ? await taskForProjectSession(project.id, taskIdRaw) : null;
+      if (!task) throw new HttpError(400, `태스크 #${b.taskId} 는 이 프로젝트의 태스크가 아닙니다`);
+      input.taskId = task.id;
+      if (!String(input.label ?? "").trim()) input.label = task.name;
+      if (!input.initialPrompt) input.initialPrompt = taskKickoffPrompt(task);
+    }
     res.setHeader("Cache-Control", "no-store");
     // 노드 프로젝트 세션(#905 C4) — body.node 면 그 원격 노드에서 연다(provision 과 같은 게이트). 노드는 프로젝트
     //  무지(DB 없음)라 owner∪invites 로만 가시성을 판정하므로, 게이트웨이가 검증한 invites 스냅샷을 실어 보낸다.
@@ -421,6 +536,41 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const nodeId = String(b.node ?? "").trim();
     const invites = nodeId ? await validateInvites(b.invites, idOf(userOf(req))) : [];   // 실제 org 멤버만·요청자(owner) 제외·중복 제거
     res.json({ session: await launchSession(userOf(req), input, { nodeId, invites }) });
+  }));
+  // ── ②-a 세션을 태스크에 붙이기(#4135 허브 세션 위젯 「태스크에 붙이기」) — 이미 도는 세션에 이 프로젝트의 태스크를 잇는다.
+  //  잇기 규칙은 v6/session-task.ts bindSessionTask 그대로(세션 주인만 · 같은 프로젝트의 태스크만 · 잇는 순간 «진행 중»).
+  //  남의 세션·다른 프로젝트 태스크·없는 세션은 bindSessionTask 가 null 을 주고, 여기선 404 로 «못 이었다» 를 말한다.
+  app.post(`${prefix}/:id/sessions/:sid/task`, auth, wrap(async (req, res) => {
+    const { project } = await projBase(Number(req.params.id), req);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const taskIdRaw = Number(b.taskId ?? 0);
+    const task = Number.isInteger(taskIdRaw) && taskIdRaw > 0 ? await taskForProjectSession(project.id, taskIdRaw) : null;
+    if (!task) throw new HttpError(400, `태스크 #${b.taskId} 는 이 프로젝트의 태스크가 아닙니다`);
+    const sid = String(req.params.sid ?? "").trim();
+    const bound = await bindSessionTask({ sessionId: sid, owner: idOf(userOf(req)), taskId: task.id });
+    if (!bound) throw new HttpError(404, "이 세션에 태스크를 잇지 못했습니다 — 내 세션이 아니거나 이 프로젝트에 속하지 않습니다");
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, session_id: sid, task: bound });
+  }));
+
+  // ── ②-c 세션의 태스크 순서(#4135 곁칸 «프로젝트» 앱 «이 세션의 태스크» 1. 2. 3.) — 읽기 · 통째로 정하기.
+  //  담기·끌기·번호 메뉴·빼기가 전부 PUT 한 길이다(목록을 통째로 보낸다 — 부분 연산을 여러 벌 두지 않는다).
+  //  규칙은 v6/session-task.ts setSessionTaskOrder(세션 주인만 · 이 프로젝트의 태스크만 · 지금 하는 것 = 맨 앞의 안 끝난 것).
+  app.get(`${prefix}/:id/sessions/:sid/tasks`, auth, wrap(async (req, res) => {
+    await projBase(Number(req.params.id), req);
+    const sid = String(req.params.sid ?? "").trim();
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ session_id: sid, tasks: await sessionTaskList(sid, idOf(userOf(req))) });
+  }));
+  app.put(`${prefix}/:id/sessions/:sid/tasks`, auth, wrap(async (req, res) => {
+    await projBase(Number(req.params.id), req);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    if (!Array.isArray(b.taskIds)) throw new HttpError(400, "taskIds(순서대로 태스크 번호 배열)가 필요합니다");
+    const sid = String(req.params.sid ?? "").trim();
+    const tasks = await setSessionTaskOrder({ sessionId: sid, owner: idOf(userOf(req)), taskIds: (b.taskIds as unknown[]).map(Number) });
+    if (!tasks) throw new HttpError(404, "순서를 정하지 못했습니다 — 내 세션이 아니거나, 이 세션 프로젝트의 태스크가 아닌 것이 섞였습니다");
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, session_id: sid, tasks });
   }));
 
   // ── ②-b 레포 provision — 입력 경로 확보(없으면 레지스트리 clone_url 로 clone) + 옵션 worktree(project/<id>/<repo>).

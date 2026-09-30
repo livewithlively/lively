@@ -2,6 +2,7 @@
 //  색 팔레트 · 편집 아이콘(기어/휴지통/없음/뒤로) · 태그 필드(칩+＋) · 태그 피커(검색·토글·색/이름·모든 태그 관리).
 //  PJV_TAG_NONE 은 리스트뷰(projects/selection.ts)도 배럴 경유로 쓰는 공개 표면이다.
 import { api, el, sv, toast } from '../core.js';
+import { ICONS } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 // 소유처 직결(#1313 R56) — 배럴 경유였다면 순환 가지가 늘어난다(composer.ts 주석과 같은 이유).
 import { pjvPopover } from '../projects/popover.js';
 import { pjvCheckMini } from '../projects/icons.js';
@@ -17,7 +18,7 @@ function pjvtmGearIcon() {
 }
 function pjvtmTrashIcon() {
   const n = sv('svg', { class: 'pjv-tm-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  n.append(sv('polyline', { points: '4 7 20 7' }), sv('path', { d: 'M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2' }), sv('path', { d: 'M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12' }));
+  n.append(sv('path', { d: ICONS.trash }));   // #4233: 사이드바 휴지통과 같은 그림
   return n;
 }
 function pjvtmNoneIcon() {

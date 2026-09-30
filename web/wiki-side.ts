@@ -2,7 +2,7 @@
 //  사용자가 명시적으로 유지하라고 한 표면이라 마크업·클래스·동작을 바꾸지 않는다(검색·★내소유·트리 펼침·
 //  도구 섹션·폭 리사이즈(--pjv-side-w, localStorage 'pjv:sideW' — 프로젝트 탭 공유)·접기).
 //  콘텐츠와의 접점은 3개뿐: ① [data-cat-val] 클릭 위임(onSelect) ② 문서 열기(onOpen) ③ rebuild().
-import { api, busy, el, keepSideScroll, state, sv, wsKey } from './core.js';
+import { api, busy, el, keepSideScroll, sv, wsKey } from './core.js';
 import { reviewNavBadge } from './review.js';   // #837 검토 대기 배지(대기 0이면 안 그려진다)
 //  카테고리 묶음(#1631) — 계약(타입·조회·이름)은 category-form.ts 한 벌뿐이다(그쪽 머리말 참조).
 import { catGroupName, fetchCategoryGroups, type CatGroup } from './category-form.js';
@@ -18,11 +18,6 @@ async function fetchAllCats(): Promise<any[]> {
   return api('/api/ui/categories').then((d) => (d && d.categories) || []).catch(() => []);
 }
 
-// 내 팀 카테고리 id 집합(state.me.team_category_ids) — 문자열 Set(catVal 비교용). 미로그인/미소속이면 빈 집합.
-function myCatIdSet(): Set<string> {
-  const ids = (state.me && (state.me as any).team_category_ids) || [];
-  return new Set((ids as any[]).map((x) => String(x)));
-}
 
 // ── 행 컴포넌트(프로젝트 탭 .pjv-side-* 재사용 — 두 탭 통일) ──
 function knTeamChip() {
@@ -406,7 +401,7 @@ function createWikiSide(opts: any) {
   keepSideScroll(side, 'wiki');
   const nav = el('nav', { class: 'browse-tree', 'aria-label': '카테고리' });
   const sideState = { q: '' };
-  const myIds = myCatIdSet();
+  const myIds = new Set<string>();   // #4233 — 팀 소유 분류(team_category_ids)는 걷었다. 개인 즐겨찾기만 남는다.
   let cats: any[] = [];
   let groups: CatGroup[] = [];   // 묶음(#1631) — 빈 배열이면 사이드바가 종전 평면으로 그려진다
   let uncatCount = 0;   // 미분류 지식 수(#1091) — 0 이면 '미분류' 노드를 안 그린다
@@ -490,6 +485,5 @@ export {
   fetchAllCats,
   knApplySideW,
   knSideResizeHandle,
-  myCatIdSet,
   wireSideCollapse,
 };

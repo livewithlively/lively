@@ -35,8 +35,11 @@ const regenAgentsForList = async (listId: number | null) => {
 import { projectNameFromAgent } from "../v6/project-name.js";
 import { AUTO_CREATED_MARK } from "../project/first-prompt-project.js";
 import { executionSessionProject } from "../v6/execution-session-store.js";
+import { sessionsOfTasks } from "../v6/session-task.js";
+import { purgeDeleted } from "../v6/trash-store.js";   // #3778 — 프로젝트 완전 삭제 = 감사 스냅샷 본문까지
+import { auditOrgContent } from "../v6/content-audit.js";
 import {
-  listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, claimProjectName, setProjectArchived, setProjectTrashed, getBoardFields,
+  listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, ProjectBodyConflictError, claimProjectName, setProjectArchived, setProjectTrashed, getBoardFields,
   upsertProjectFolderBinding, findProjectsByOriginKey,
   createTask, updateTaskStatus, updateTask, deleteTaskNode, reorderTasks, reorderProjects, rootProjectIdOfTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
   linkProjectCategory, unlinkProjectCategory, setProjectCategories, type CategoryApply,
@@ -356,7 +359,14 @@ const projectGetV6: Capability = {
     //  다만 공개범위가 걸린 리스트라면 그 대상만 본다(#1291). 비대상에겐 "없음" 과 같은 404 로 응답해 존재를 숨긴다.
     const project = await getProject(input.id, ctx?.viewer ?? null);
     if (!project) throw new HttpError(404, `프로젝트 #${input.id} 없음`);
-    return { project };
+    // #4084 세션 = 태스크 — 각 태스크 줄에 그 태스크를 맡은 세션(최근 것 먼저)을 싣는다. 화면이 [세션 열기]를
+    //  «새로 열기»와 «그 세션으로 가기»로 가르는 근거다. 조회 실패는 상세를 막지 않는다(칩이 안 보일 뿐).
+    //  project-store 가 아니라 여기서 붙이는 이유: session-task 가 project-store 를 import 한다(순환 금지 — check-imports).
+    const rows = (project.tasks || []) as Array<Record<string, unknown> & { id: number }>;
+    const bySession = await sessionsOfTasks(rows.map((t) => Number(t.id)))
+      .catch(() => new Map<number, Array<{ id: string; label: string | null; owner: string }>>());
+    const tasks = rows.map((t) => ({ ...t, sessions: bySession.get(Number(t.id)) ?? [] }));
+    return { project: { ...project, tasks } };
   },
 };
 
@@ -426,7 +436,8 @@ const projectCreateV6: Capability = {
     //  이 필드를 안 보내도 같은 판정이 나와야 하기 때문이다 — 그 표식은 이미 세 곳이 공유하는 계약이다.
     //  그 밖(사람이 웹·MCP 로 짓는 이름)은 전부 human — 자동 이름짓기가 덮지 못한다.
     const name_source = String(input.description ?? "").includes(AUTO_CREATED_MARK) ? "rule" as const : "human" as const;
-    const project = await createProject({ ...input, name_source }, writeCtx);
+    //  같은 표식이 초안(#4170)의 입구다 — 기계가 이름을 지은 껍데기는 초안으로 태어나 목록 기본 뷰에서 따로 선다.
+    const project = await createProject({ ...input, name_source, draft: name_source === "rule" }, writeCtx);
     if (input.follow_up != null) await linkProjectEdge(project.id, input.follow_up, "follow_up", writeCtx); // new --follow_up--> 선행
     await regenAgents(project.id);  // 생성 직후 AGENTS.md(+폴더) 생성 — 다음 pull 전에도 존재.
     // 잠긴 리스트 안에 만든 프로젝트면 그 폴더에도 즉시 ACL 을 건다(#1291 v2) — 폴더는 방금 생겼으므로
@@ -524,6 +535,39 @@ async function myProjectSessionIds(user: LivelyUser, me: string, projectId: numb
   const ids = [...new Set([...liveMine.map((s) => s.id), ...pastMine.map((s) => s.id), ...logMine])];
   return { ids, liveMine: liveMine.length, liveOthers: liveOthers.length };
 }
+// 프로젝트 한 개를 통째로 휴지통에 — 세션 먼저(멈추고 묶음 표식) → 프로젝트. project_trash_v6 와 리스트 삭제의 «프로젝트도 함께»(lists-v6)가
+//  **같은 길**을 탄다(#3778: 종전 리스트 cascade 는 deleteProject 로 하드 삭제했다 — 태스크·팀원·연결이 사라지고 클릭업 원본까지 지워졌다).
+//  남의 도는 세션이 있으면 409 — 그 사람이 끝내야 한다. 세션 쪽이 일부 실패해도 프로젝트는 버린다(skipped 로 알린다).
+export async function trashProjectBundle(user: LivelyUser, me: string, id: number, writeCtx: { actor: string | null; source: string }) {
+  const { ids, liveOthers } = await myProjectSessionIds(user, me, id);
+  if (liveOthers > 0) throw new HttpError(409, `다른 사람의 세션 ${liveOthers}개가 이 프로젝트에서 돌고 있어요 — 그 세션이 끝난 뒤에 버릴 수 있습니다`);
+  const sessions = ids.length ? await applySessionTrashOp(user, me, "trash", ids, { projectId: id, stopLive: true }) : { done: [], skipped: [] };
+  const project = await setProjectTrashed(id, true, writeCtx);
+  return { project, sessions };
+}
+
+// 휴지통으로 보내기 전에 화면이 묻는 것(#3778) — «내 세션 몇 개가 함께 가고, 그중 몇이 멈추고, 남의 도는 세션이 있나».
+//  새 셸 사이드바는 제 세션 목록으로 세지만 프로젝트 앱·프로젝트 정보 창은 그 목록이 없어 확인창이 «도는 세션이 멈춘다» 를 말하지 못했다
+//  (proj-settings 가 liveN:0 을 박아 넣던 자리). 서버가 실제로 묶을 것과 **같은 함수**로 센다 — 확인창과 결과가 어긋날 수 없다.
+const projectTrashPreviewV6: Capability = {
+  name: "project_trash_preview_v6",
+  title: "프로젝트 휴지통 미리 세기(v6)",
+  description: "프로젝트를 휴지통으로 보내면 함께 갈 내 세션 수·그중 도는 수·남의 도는 세션 수. 화면 전용(확인창 재료).",
+  scope: "memory",
+  input: { id: z.number().int().positive() },
+  expose: {
+    mcp: false,
+    rest: [{ method: "GET", paths: ["/api/ui/v6/projects/:id/trash-preview"], parse: (req) => ({ id: parseId(req.params?.id) }) }],
+  },
+  handler: async (input: { id: number }, user: LivelyUser, ctx?: CapabilityCtx) => {
+    await assertProjectVisible(input.id, ctx);
+    const me = String(ctx?.actor ?? user?.userId ?? "");
+    if (!me) throw new HttpError(401, "로그인이 필요합니다");
+    const r = await myProjectSessionIds(user, me, input.id);
+    return { id: input.id, sessions: r.ids.length, live_mine: r.liveMine, live_others: r.liveOthers };
+  },
+};
+
 const projectTrashV6: Capability = {
   name: "project_trash_v6",
   title: "프로젝트 휴지통(v6)",
@@ -543,14 +587,7 @@ const projectTrashV6: Capability = {
     await assertProjectVisible(input.id, ctx);
     const me = String(ctx?.actor ?? user?.userId ?? "");
     if (!me) throw new HttpError(401, "로그인이 필요합니다");
-    if (input.trashed) {
-      const { ids, liveOthers } = await myProjectSessionIds(user, me, input.id);
-      if (liveOthers > 0) throw new HttpError(409, `다른 사람의 세션 ${liveOthers}개가 이 프로젝트에서 돌고 있어요 — 그 세션이 끝난 뒤에 버릴 수 있습니다`);
-      // 세션 먼저(멈추고 묶음 표식) → 프로젝트. 세션 쪽이 일부 실패해도 프로젝트는 버린다 — skipped 로 알린다.
-      const sessions = ids.length ? await applySessionTrashOp(user, me, "trash", ids, { projectId: input.id, stopLive: true }) : { done: [], skipped: [] };
-      const project = await setProjectTrashed(input.id, true, writeCtx);
-      return { project, sessions };
-    }
+    if (input.trashed) return trashProjectBundle(user, me, input.id, writeCtx);
     const bundle = await bundleTrashedIds(me, input.id);
     const sessions = bundle.length ? await applySessionTrashOp(user, me, "untrash", bundle) : { done: [], skipped: [] };
     const project = await setProjectTrashed(input.id, false, writeCtx);
@@ -572,6 +609,10 @@ const projectPurgeV6: Capability = {
       parse: (req) => ({ id: parseId(req.params?.id) }) }],
   },
   handler: async (input: { id: number }, user: LivelyUser, ctx?: CapabilityCtx) => {
+    // #3778 — 완전 삭제는 사람(웹)만. 지식·카테고리·자료 삭제와 복원(content_restore)은 처음부터 이 잠금이 있었는데
+    //  그중 가장 파괴적인 이 능력만 빠져 있었다: 에이전트가 trash → purge 두 번으로 프로젝트와 묶음 세션의 지식·자료·태스크를
+    //  사람 확인 없이 흔적 없이 지울 수 있었다(삭제 경로 점검 2026-09-20). 휴지통으로 보내기(project_trash_v6)는 되돌릴 수 있어 그대로 연다.
+    if (ctx?.source === "mcp") throw new HttpError(403, "프로젝트 완전 삭제는 사람(웹)만 가능합니다 — 에이전트는 휴지통으로 보내기까지만 할 수 있어요");
     await assertProjectVisible(input.id, ctx, "프로젝트");
     const me = String(ctx?.actor ?? user?.userId ?? "");
     if (!me) throw new HttpError(401, "로그인이 필요합니다");
@@ -616,6 +657,13 @@ const projectPurgeV6: Capability = {
     const sessions = bundle.length ? await applySessionTrashOp(user, me, "purge", bundle) : { done: [], skipped: [] };
     const folder = (before as { folder?: string | null }).folder ?? null;
     await deleteProject(input.id, { actor: me, source: ctx?.source ?? "web" });
+    // #3778 — «완전 삭제» 는 본문까지다. 종전엔 deleteProject 의 감사 스냅샷(이름·본문)이 남아 WIKI 휴지통에서 되살아났다
+    //  (8/27 점검의 갭 4). 휴지통이 네 탭이 되면서 그 줄이 **같은 화면**(프로젝트 탭 ▸ 이름·본문만 되살릴 수 있는 것)에 서므로,
+    //  안 비우면 «완전히 지웠어요» 직후에 그 프로젝트가 바로 아래 다시 나타난다. 세션·지식 파기와 같은 원칙(행은 남기고 내용만 비움).
+    try {
+      const scrubbed = await purgeDeleted("project", String(input.id));
+      await auditOrgContent("project", String(input.id), "purge", null, { scrubbed_rows: scrubbed }, { actor: me, source: ctx?.source ?? "web" });
+    } catch { /* 비치명 — 본체는 이미 지워졌다. 남은 스냅샷은 휴지통 ▸ 프로젝트 탭에서 다시 지울 수 있다 */ }
     // 프로젝트 폴더(첨부·자료 파일) — 세션 경로와 같은 원칙(#1850 P4): DB 확정 **뒤** 디스크. 종전엔 여기만 안 지웠다.
     let folder_deleted = false;
     if (folder) {
@@ -652,18 +700,27 @@ const projectUpdateV6Input = {
   append_description: z.string().min(1).max(4000)
     .describe("본문(description) 끝에 이어붙일 텍스트. 원문을 보존한 채 빈 줄로 구분해 append 한다(전체 교체 없이 보강). description 과 동시 지정 불가.")
     .optional(),
+  // #4084 가드 저장 — 화면이 본문을 **고치기 시작한 글**. description 과 함께 보내면 그 뒤에 붙은 꼬리(세션의 append)를
+  //  살려 합치고, 꼬리가 아닌 곳이 바뀌었으면 409 로 거절한다. 안 보내면 종전대로 통째 교체.
+  description_base: z.string().nullable()
+    .describe("본문을 고치기 시작한 시점의 원문. description(전체 교체)과 함께 보내면 그 뒤 append 된 꼬리를 보존해 합치고, 그 밖의 변경이 있었으면 409. 웹 편집기용 — 보통 생략한다.")
+    .optional(),
   priority: z.enum(PRIORITIES).nullable().optional(),
   assignee: z.string().nullable().optional(),
   start_date: z.string().nullable().optional(),
   due_date: z.string().nullable().optional(),
   // #1308 — 날짜가 움직였으면 depends_on 후행 체인도 같은 Δ 로 민다. 명시 opt-in(간트가 켠다).
   reschedule_dependents: z.boolean().optional(),
+  // #4170 초안 — 보통 안 보낸다: 제목이나 본문을 실제로 고치면 저절로 초안에서 나온다. 웹의 «목록에 올리기» 가 false 를 보낸다.
+  draft: z.boolean()
+    .describe("초안 여부. 보통 생략한다 — 제목(name)이나 본문(description·append_description)을 실제로 고치면 저절로 초안에서 나온다. false = 고치지 않고 목록에 올리기.")
+    .optional(),
 };
 type ProjectUpdateV6Input = z.infer<z.ZodObject<typeof projectUpdateV6Input>>;
 const projectUpdateV6: Capability = {
   name: "project_update_v6",
   title: "프로젝트 수정(v6)",
-  description: "프로젝트 이름·설명 등을 수정한다. 주어진 키만 변경. 본문은 description(전체 교체) 또는 append_description(원문 보존·끝에 이어쓰기) 중 하나로.",
+  description: "프로젝트 이름·설명 등을 수정한다. 주어진 키만 변경. 본문은 description(전체 교체) 또는 append_description(원문 보존·끝에 이어쓰기) 중 하나로. 첫 지시로 자동 생성된 '초안' 프로젝트는 이름이나 본문을 실제로 고치면 초안에서 나와 목록에 올라간다.",
   scope: "memory",
   input: projectUpdateV6Input,
   expose: {
@@ -679,11 +736,13 @@ const projectUpdateV6: Capability = {
         }
         if ("description" in b) patch.description = b.description == null ? null : String(b.description);
         if ("append_description" in b) patch.append_description = String(b.append_description ?? "");
+        if ("description_base" in b) patch.description_base = b.description_base == null ? null : String(b.description_base);
         if ("priority" in b) patch.priority = parsePriorityOrNull(b.priority);
         if ("assignee" in b) patch.assignee = parseAssigneeOrNull(b.assignee);
         if ("start_date" in b) patch.start_date = parseDateOrNull(b.start_date);
         if ("due_date" in b) patch.due_date = parseDateOrNull(b.due_date);
         if (b.reschedule_dependents === true) patch.reschedule_dependents = true;
+        if (typeof b.draft === "boolean") patch.draft = b.draft;
         return patch;
       } }],
   },
@@ -697,8 +756,18 @@ const projectUpdateV6: Capability = {
       throw new HttpError(400, "append_description 는 비울 수 없습니다");
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     // Δ 를 재려면 **바뀌기 전** 날짜가 필요하다 — updateProject 는 이전 행을 돌려주지 않는다(#1308).
+    // 기준 글은 교체와만 짝이다 — 혼자 오면 뜻이 없고(무엇을 합치나), append 와 오면 append 가 이미 충돌 없는 길이다.
+    if (patch.description_base !== undefined && patch.description === undefined)
+      throw new HttpError(400, "description_base 는 description(전체 교체)과 함께 보내야 합니다");
     const before = reschedule_dependents ? await getNodeRow(id) : null;
-    const project = await updateProject(id, patch, writeCtx);
+    let project;
+    try { project = await updateProject(id, patch, writeCtx); }
+    catch (e) {
+      // 덮지 않았다 — 화면이 최신 본문을 다시 불러 사람에게 묻는다(곁칸 태스크 부품 · 프로젝트 설정).
+      if (e instanceof ProjectBodyConflictError)
+        throw new HttpError(409, "본문이 다른 곳에서 바뀌었습니다 — 최신 본문을 불러와 다시 고쳐 주세요", { body: { conflict: "description" } });
+      throw e;
+    }
     const rescheduled = before ? await propagateReschedule(id, before, project, writeCtx) : [];
     await regenAgents(id);
     return { project, rescheduled };
@@ -734,6 +803,15 @@ const projectRenameV6: Capability = {
     rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/rename"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
+        //  ⚠ **파일 이름 변경 요청을 프로젝트 개명으로 삼키지 않는다**(#4114). 자료 칸의 이름 바꾸기는
+        //   `{path, name}` 을 보내는데, 종전엔 그 요청이 이 경로로 들어와 파일이 아니라 **프로젝트 이름**을
+        //   고치려 들었다(파일 라우트가 같은 경로에 등록돼 있었고 express 는 먼저 등록된 이쪽만 불렀다).
+        //   경로는 `POST …/:id/file/rename` 으로 갈라 놨지만, **배포 전에 열려 있던 탭**은 낡은 주소로
+        //   계속 쏜다 — 그때 이름이 자동으로 붙은 프로젝트라면 사람 몰래 프로젝트가 개명된다.
+        //   그 한 줄이 여기서 끝난다: path 가 실려 오면 프로젝트 개명이 아니다.
+        if (typeof b.path === "string") {
+          throw new HttpError(400, "파일·폴더 이름 변경은 POST /api/ui/v6/projects/:id/file/rename 입니다(이 경로는 프로젝트 이름짓기 전용) — 화면을 새로고침해 주세요.");
+        }
         return { id: parseId(req.params?.id), name: String(b.name ?? "") };
       } }],
   },
@@ -1573,7 +1651,7 @@ export const projectV6Capabilities: Capability[] = [
   // ⚠ 검색(정적 경로)은 projectGetV6(/projects/:id) '앞에' — Express first-match 가 :id 로 삼키지 않게(#631).
   myTasksV6,   // #1232 정적 경로(/v6/my-tasks) — /projects/:id 계열과 세그먼트가 달라 무충돌이지만 순서 규칙대로 앞에
   projectTasksV6, // #1305 정적 경로(/v6/project-tasks) — 위와 같은 이유로 앞에
-  projectListV6, projectGrepV6, projectSearchV6, projectSimilarV6, projectGetV6, projectCreateV6, projectUpdateV6, projectRenameV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectArchiveV6, projectTrashV6, projectPurgeV6, projectSetMembersV6,
+  projectListV6, projectGrepV6, projectSearchV6, projectSimilarV6, projectGetV6, projectCreateV6, projectUpdateV6, projectRenameV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectArchiveV6, projectTrashV6, projectTrashPreviewV6, projectPurgeV6, projectSetMembersV6,
   projectMyStatusV6,
   projectLinkCategoryV6, projectLinkKnowledgeV6, projectLinkProjectV6, projectRecommendKnowledgeV6, knowledgeProjectsV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskReorderV6, projectReorderV6, taskDeleteV6, boardFieldsV6,
 ];

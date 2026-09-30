@@ -27,6 +27,7 @@ import { sendKeysToSession } from "./send-keys.js";
 import { injectFirstPrompt } from "./session-first-prompt.js";
 import { runOutboxStep } from "./outbox-host-step.js";
 import { applySessionProject } from "./session-project.js";
+import { writeSessionTokens, removeSessionTokens } from "./session-token-file.js";   // #4135 — 살아 있는 세션에 자격을 나중에 심는 길
 import type { LivelyUser } from "../context.js";
 
 /**
@@ -35,7 +36,7 @@ import type { LivelyUser } from "../context.js";
  */
 export const SESSION_OPS = [
   "list", "create", "createAppSession", "kill", "edit", "gone", "label",
-  "sendKeys", "setProject", "injectFirstPrompt", "markActive", "markSeen", "outboxStep",
+  "sendKeys", "setProject", "injectFirstPrompt", "markActive", "markSeen", "outboxStep", "sessionTokens", "forkSession",
 ] as const;
 
 export type SessionOp = (typeof SESSION_OPS)[number];
@@ -102,8 +103,15 @@ export async function runSessionOp(op: SessionOp, args: Record<string, unknown>)
     //  ⚠ 거절·실패도 **값으로** 돌려준다 — 위 `sendKeys` 처럼 던지면 «한 글자도 안 쳤다» 가 오류 문자열로 뭉개진다.
     case "outboxStep": return runOutboxStep(args);
 
+    // #4135 세션 복제 — 하는 일은 create 와 같다(createSession 이 input.fork 를 보고 하네스의 복제 argv 로 띄운다).
+    //  op 가 따로인 이유는 node/protocol.ts 머리말. 여기서는 **fork 가 빠진 봉투를 거절**한다 — 빠진 채 create 로 흘러가면
+    //  «복제» 라는 이름으로 빈 새 대화가 뜬다(그게 이 op 를 따로 둔 이유 그 자체다).
+    case "forkSession":
     case "create":
     case "createAppSession": {
+      if (op === "forkSession" && !String((args.input as CreateInput | undefined)?.fork ?? "").trim()) {
+        throw new Error("세션 복제: 복제할 대화 id 가 없습니다");
+      }
       const session = await createSession(user, args.input as CreateInput);
       // 초대는 게이트웨이가 구성원 디렉터리로 검증해 넘긴다 — 세션 호스트엔 DB 가 없어
       //  createSession 내부 검증이 빈 배열이 된다.
@@ -112,7 +120,22 @@ export async function runSessionOp(op: SessionOp, args: Record<string, unknown>)
       return session;
     }
 
-    case "kill": await killSession(user, String(args.id)); return { ok: true };
+    case "kill": {
+      await killSession(user, String(args.id));
+      await removeSessionTokens(String(args.id));   // #4135 — 나중에 심은 세션 토큰 파일도 함께(회수는 게이트웨이가)
+      return { ok: true };
+    }
+
+    // #4135 — 이미 떠 있는 세션에 게이트웨이가 **나중에** 구운 세션 스코프 자격(훅·MCP)을 파일로 심는다. env 는 판을 띄울 때만
+    //  실리므로 살아 있는 세션은 이 길뿐이다. 훅·MCP 프록시가 매 호출 이 파일을 먼저 본다(session-token-file 머리말).
+    //  게이트웨이가 주인·소유를 다 판정한 뒤 보낸다 — 여기는 형식만 보고 쓴다(F7). 둘 다 비면 파일을 지운다.
+    case "sessionTokens": {
+      const wrote = await writeSessionTokens(String(args.id), {
+        hook: typeof args.hookToken === "string" ? args.hookToken : null,
+        mcp: typeof args.mcpToken === "string" ? args.mcpToken : null,
+      });
+      return { ok: true, wrote };
+    }
 
     case "edit": {
       const patch = (args.patch ?? {}) as { label?: string };

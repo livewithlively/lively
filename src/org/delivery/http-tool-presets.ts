@@ -37,7 +37,7 @@
 //  ⚠ 예외 — access_type=offline 픽스(2026-07-22) 이전에 연결한 사람은 refresh token 이 없어 이미 죽어 있다.
 //   전환과 무관하게 [다시 연결]이 필요하다.
 import type { OrgToolInput } from "../store/tools.js";
-import { assertSafeJsonSchema, urlTemplateKeys, CALLABLE_SCOPES } from "../../mcp/dynamic-tools.js";
+import { assertSafeJsonSchema, urlTemplateKeys, urlPathTemplateKeys, CALLABLE_SCOPES } from "../../mcp/dynamic-tools.js";
 
 export interface HttpToolPreset {
   name: string;
@@ -84,6 +84,9 @@ const GH = "https://api.github.com";
 const GL = "https://gitlab.com/api/v4";
 const FIGMA = "https://api.figma.com/v1";
 const FIGMA_V2 = "https://api.figma.com/v2";   // 열거(folders)는 v2 — v1 projects 는 구 스코프를 요구한다(아래 주석)
+const GRAPH = "https://graph.microsoft.com/v1.0";
+/** 메일 목록 계열이 받는 칸 — 본문은 빼고 미리보기만(목록 25건에 본문이 실리면 256KiB 를 바로 넘는다). */
+const OUTLOOK_MAIL_LIST_SELECT = "id,subject,from,receivedDateTime,bodyPreview,conversationId,webLink,hasAttachments,isRead";
 
 // ── 슬랙을 B 로 내린 이유 (#1881, 2026-08-25) ──────────────────────────────────────────────────
 //  슬랙 공식 MCP(mcp.slack.com)는 **마켓플레이스 등록 앱·내부 앱만** 쓸 수 있다("unlisted apps are prohibited from
@@ -807,6 +810,81 @@ export const HTTP_TOOL_PRESETS: HttpToolPresetGroup[] = [
       },
     ],
   },
+  // ── Outlook(#4211) — Microsoft Graph v1.0 클래식 REST. [Outlook 연결](microsoft_oauth) 한 번으로 메일·캘린더를 읽는다. ──
+  //  MCP 서버 행이 없다(구글 G2 와 같은 직결) — 연결 창구는 oauth-connect 의 접기가 세운다.
+  //  ⚠ Graph 쿼리 이름은 `$search`·`$filter`·`$top` 이라 인자 이름으로 못 쓴다(dynamic-tools 쿼리 값 자리표시 주석) —
+  //   그래서 **모든 인자를 URL 자리표시로** 받는다. 남는 인자가 없으면 URLSearchParams 가 쿼리를 다시 쓰지 않아
+  //   공백이 `+` 로 바뀌지 않는다(Graph 는 %20 을 요구한다).
+  //  ⚠ http_proxy 는 머리글을 못 싣는다 — 본문 형식(Prefer: outlook.body-content-type="text")을 고를 수 없어 메일 본문은 HTML 로 온다.
+  //  전부 읽기(L0)다. 보내기·쓰기 권한은 동의 범위에 아예 없다(Mail.Read·Calendars.Read).
+  {
+    key: "outlook", label: "Outlook (Microsoft Graph)", auth_kind: "microsoft_oauth",
+    hosts: ["graph.microsoft.com"], scope: "items", level: "L0",
+    tools: [
+      {
+        name: "outlook_mail_search",
+        title: "Outlook 메일 검색",
+        description:
+          "내 Outlook 메일을 검색해 목록(제목·보낸 사람·받은 시각·미리보기·id·conversationId)을 준다. q 는 검색어 — 낱말(예: 계약서) 또는 " +
+          "KQL(예: from:kim@contoso.com · subject:견적 · received>=2026-09-01 · hasattachments:true)을 섞어 쓴다. 큰따옴표는 넣지 않는다(도구가 감싼다). " +
+          "관련도순 최대 25건이고 정렬은 바꿀 수 없다. 본문 전체는 결과의 id 를 outlook_mail_message 에 넘겨 읽는다.",
+        url: `${GRAPH}/me/messages?$search=%22{q}%22&$top=25&$select=${OUTLOOK_MAIL_LIST_SELECT}`,
+        input_schema: obj({ q: S("검색어 또는 KQL(예: from:kim@contoso.com 계약)") }, ["q"]),
+        pii_scrub: true,
+      },
+      {
+        name: "outlook_mail_list",
+        title: "Outlook 메일함의 최근 메일",
+        description:
+          "메일함 하나의 최근 메일 25건(최신 먼저, 미리보기만). folder 는 inbox(받은편지함)·sentitems(보낸편지함)·archive(보관) 같은 이름이나 " +
+          "outlook_mail_folders 결과의 id. 본문은 outlook_mail_message 로 읽는다.",
+        url: `${GRAPH}/me/mailFolders/{folder}/messages?$top=25&$orderby=receivedDateTime%20desc&$select=${OUTLOOK_MAIL_LIST_SELECT}`,
+        input_schema: obj({ folder: S("메일함 — inbox · sentitems · archive 또는 폴더 id") }, ["folder"]),
+        pii_scrub: true,
+      },
+      {
+        name: "outlook_mail_message",
+        title: "Outlook 메일 읽기",
+        description:
+          "메일 하나의 머리글(보낸 사람·받는 사람·참조·시각)과 본문. 본문(body.content)은 대개 HTML 이다. ⚠ 256KiB 를 넘으면 잘린다. " +
+          "같은 대화의 다른 메일은 conversationId 를 outlook_mail_thread 에 넘긴다.",
+        url: `${GRAPH}/me/messages/{id}?$select=id,subject,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,body,conversationId,webLink,hasAttachments`,
+        input_schema: obj({ id: S("메일 id(검색·목록 결과의 id)") }, ["id"]),
+        pii_scrub: true,
+      },
+      {
+        name: "outlook_mail_thread",
+        title: "Outlook 대화 읽기",
+        description:
+          "한 대화(같은 conversationId)의 메일들 — 최대 25건, 미리보기만(본문 전체는 outlook_mail_message). " +
+          "Graph 가 이 조합에서 정렬을 못 해 순서가 섞여 온다 — receivedDateTime 으로 맞춰 읽는다.",
+        url: `${GRAPH}/me/messages?$filter=conversationId%20eq%20'{conversationId}'&$top=25&$select=${OUTLOOK_MAIL_LIST_SELECT}`,
+        input_schema: obj({ conversationId: S("대화 id(메일의 conversationId)") }, ["conversationId"]),
+        pii_scrub: true,
+      },
+      {
+        name: "outlook_mail_folders",
+        title: "Outlook 메일함 목록",
+        description: "내 메일함(폴더) 목록 — 이름·id·메일 수·안 읽은 수. outlook_mail_list 에 넘길 폴더 id 를 여기서 얻는다(하위 폴더는 childFolderCount 로만 보인다).",
+        url: `${GRAPH}/me/mailFolders?$top=100&$select=id,displayName,totalItemCount,unreadItemCount,childFolderCount`,
+        input_schema: obj({}),
+        pii_scrub: true,
+      },
+      {
+        name: "outlook_calendar_events",
+        title: "Outlook 일정 보기",
+        description:
+          "기간 안의 내 캘린더 일정(반복 일정은 하나씩 펼쳐서) — 제목·시작·끝·장소·주최자·참석자·온라인 회의. startDateTime·endDateTime 은 " +
+          "ISO 8601(예: 2026-09-22T00:00:00+09:00). 시각은 UTC 로 돌아온다(start.timeZone 확인). 최대 50건, 시작 시각순.",
+        url: `${GRAPH}/me/calendarView?startDateTime={startDateTime}&endDateTime={endDateTime}&$top=50&$orderby=start/dateTime&$select=subject,start,end,location,organizer,attendees,isAllDay,isCancelled,webLink,bodyPreview,onlineMeeting`,
+        input_schema: obj({
+          startDateTime: S("시작(ISO 8601, 예: 2026-09-22T00:00:00+09:00)"),
+          endDateTime: S("끝(ISO 8601, 예: 2026-09-29T00:00:00+09:00)"),
+        }, ["startDateTime", "endDateTime"]),
+        pii_scrub: true,
+      },
+    ],
+  },
 ];
 
 /**
@@ -827,7 +905,10 @@ export function assertHttpToolPreset(group: HttpToolPresetGroup, tool: HttpToolP
   const props = (tool.input_schema.properties ?? {}) as Record<string, unknown>;
   const required = new Set((tool.input_schema.required as string[]) ?? []);
   for (const key of urlTemplateKeys(tool.url)) {
-    if (!(key in props)) throw new Error(`${where}: 경로 인자 '${key}' 가 input_schema 에 없습니다`);
+    if (!(key in props)) throw new Error(`${where}: 자리표시 인자 '${key}' 가 input_schema 에 없습니다`);
+  }
+  //  경로 자리만 required 를 강제한다 — 쿼리 값 자리(#4211)는 인자가 없으면 그 쌍을 빼므로 선택 인자가 될 수 있다.
+  for (const key of urlPathTemplateKeys(tool.url)) {
     if (!required.has(key)) throw new Error(`${where}: 경로 인자 '${key}' 는 required 여야 합니다(없으면 호출 때마다 실패)`);
   }
 }

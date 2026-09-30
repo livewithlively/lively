@@ -1,8 +1,8 @@
 // v2/quick-session.ts — 홈 입력창에서 세션을 연다.
 // 프로젝트가 정해졌으면 생성 요청 자체가 그 프로젝트의 canonical workspace에서 시작하고, 아니면 개인 workspace 루트에서 시작한다.
 //   · initialPrompt — 서버가 하네스 입력창이 뜬 뒤 넣는다(session-first-prompt.ts). 화면은 낙관적으로 그 턴을 먼저 그린다.
-//  제공자(하네스)·모델·추론강도는 홈 입력창의 세 칸이 정해 넘긴다(#1758) — 안 넘기면 그 기억이 기본이다.
-//  자동 승인·라이블리 모드·기록 범위·실행 컴퓨터는 [⚙] 「새 세션 기본값」(#3778 안 C, v2/run-prefs.ts)이 정한 값이
+//  실행 컴퓨터·제공자(하네스)·모델·추론강도는 홈 입력창의 네 칸이 정해 넘긴다(#1758·#3778) — 안 넘기면 그 기억이 기본이다.
+//  자동 승인·라이블리 모드·기록 범위는 [⚙] 「새 세션 기본값」(#3778 안 C, v2/run-prefs.ts)이 정한 값이
 //  run 에 실려 온다. 종전엔 자동 승인만 클래식 폼의 마지막 값이 **말없이** 따라왔다 — 이제 [⚙]가 그 값을 보여 준다.
 import { api, toast } from '../core.js';
 import { runPrefs, type RunPick } from './run-picker.js';
@@ -64,10 +64,21 @@ export interface SpawnOpts {
   invites?: string[];
   /** 선행 프로젝트(#3778) — 미소속으로 열어 서버가 프로젝트를 만들 때, 그 프로젝트가 뒤따를 앞 일. 프로젝트를 골랐으면 무시. */
   predecessorId?: number | null;
+  /**
+   * #4084 세션 = 태스크 — 이 태스크를 **맡은** 세션으로 연다(projectId 필수, 그 프로젝트의 태스크). 지시를 비워 보내면
+   *  서버가 «태스크 #<id> 진행해» + 본문으로 채우고, 세션 이름은 태스크 이름이 된다(project-routes.ts).
+   */
+  taskId?: number | null;
+  /** #4135 — 태스크 **여러 개**를 이 순서대로 맡겨 연다(곁칸 «프로젝트» 앱의 [담기]). 1번이 taskId 와 같은 길로 이어지고,
+   *  서버가 첫 지시 = 순서 안내 + 1번 본문 + 적은 말(있으면)로 짓는다. 지시를 비워도 된다. */
+  taskIds?: number[] | null;
 }
 export async function spawnSession(text: string, opts?: SpawnOpts): Promise<{ id: string; session: any } | null> {
   const t = String(text || '').trim();
-  if (!t || creating) return null;
+  const taskId = opts && opts.taskId && opts.projectId ? Number(opts.taskId) : 0;
+  const taskIds = opts && opts.projectId && Array.isArray(opts.taskIds) ? opts.taskIds.map(Number).filter((n) => n > 0) : [];
+  // 지시가 비어도 되는 건 태스크에서 열 때뿐이다 — 첫 지시는 서버가 그 태스크로 채운다.
+  if ((!t && !taskId && !taskIds.length) || creating) return null;
   creating = true;
   try {
     const p = runPrefs();
@@ -84,7 +95,8 @@ export async function spawnSession(text: string, opts?: SpawnOpts): Promise<{ id
     const out: any = await api(endpoint, {
       method: 'POST',
       body: JSON.stringify({
-        harness, flags, initialPrompt: t,
+        harness, flags, ...(t ? { initialPrompt: t } : {}),
+        ...(taskIds.length ? { taskIds } : taskId > 0 ? { taskId } : {}),
         // [⚙] 기본값 넷(#3778) — run 이 없으면(구 호출자) 종전대로 기억된 자동 승인만.
         autoApprove: run ? run.autoApprove : !!p.autoApprove,
         ...(run && run.mode === 'readonly' ? { readOnly: true } : {}),
@@ -101,7 +113,7 @@ export async function spawnSession(text: string, opts?: SpawnOpts): Promise<{ id
     const id = out && out.session && out.session.id ? String(out.session.id) : '';
     if (!id) throw new Error('세션 id 를 받지 못했습니다');
     rememberCreated(out.session);   // 노드 세션은 목록 반영이 한 박자 늦다 — 라우트가 이 전문으로 먼저 그린다(created-cache 머리말)
-    firstPrompts.set(id, t);
+    if (t) firstPrompts.set(id, t);
     await linkPredecessor(out.session, pid, opts && opts.predecessorId);
     return { id, session: out.session };
   } catch (e: any) {

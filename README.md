@@ -1,247 +1,214 @@
 # Lively
 
-**An AX solution for IT product organizations**
+**The agent OS where your team and its AI work from the same context.**
 
-Lively is a **normalized store of work context that accumulates and maintains itself through AI**.
-It injects the right context into every member's AI, so that everyone gets **the best of what AI can do — without the gap between people**.
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSING.md)
+[![Release](https://img.shields.io/github/v/release/livewithlively/lively)](https://github.com/livewithlively/lively/releases/latest)
 
-*[한국어](README.ko.md) · [Architecture docs](docs/architecture.ko.md)*
+[한국어](README.ko.md) · [Website](https://lvly.io) · [Managed (app.lvly.io)](https://app.lvly.io) · [Architecture](docs/architecture.md)
 
----
+Lively has AI collect your team's documents, conversations, code, and decisions, keep only what is still true, and feed as much of it as needed to whichever AI each teammate uses (Claude Code, Codex, and others). On top of that context, agents do the work, and the apps your team builds read from the same context.
 
-## The problem
-
-### AI knows everything in the world, except your company
-
-Models are already smart enough. But your products and code, your decisions and progress, exist nowhere in their training data. What separates outcomes is not how intelligent the AI is — it is **whether the AI knows your company**.
-
-1. **Models no longer create the gap.** Your competitors use the same ChatGPT and Claude you do. Model capability has levelled up across the board.
-2. **The gap comes from the context you give the AI.** The moment the same model works while knowing your product, your code, your decisions, it stops being a generic tool and becomes part of your company's capability.
-3. **That context is currently left unattended.** It is scattered across messengers, documents, code, and meetings, and it appears and disappears inside individual chat windows. Nobody collects it. Nobody owns it.
-
-> **You can buy a model. You cannot buy context.**
-> Your company's context exists only inside your company — and only the company that collects it and hands it to AI gets that advantage.
-
-### Right now, nobody maintains your company's memory
-
-It is not that search fails. It is that when you find something, you can't tell what's still true; what you organize goes stale; and what you did today isn't there tomorrow.
-
-| | What actually happens |
+| In an OS | In Lively |
 |---|---|
-| **It finds things, but you can't tell which is right** | A two-year-old document and last week's changed decision come back side by side. The AI reads the old one and confidently gives a wrong answer. |
-| **What you organize goes stale fast** | So you build a wiki. But the business changes daily, and maintaining it is nobody's job. The wiki starts aging the day it's written. |
-| **What you did with AI today is gone tomorrow** | Teammate A reaches a conclusion with AI today; tomorrow teammate B's AI knows none of it. When the conversation ends, nothing remains in the organization. |
+| Memory | **Context store**: collection, duplicate and outdated-fact checks, injection. Session output flows back into the store |
+| Processes & shell | **Workspace**: projects, tasks, and sessions that connect into one flow. Developers use the terminal; everyone else uses the web or desktop app |
+| Apps | **Apps**: agents and tools your team builds run on the same context |
+| Drivers | **Integrations**: Slack, Notion, GitHub, databases, and more |
 
-All three share one cause: **no one owns the company's memory.**
-Lively hands that ownership to AI rather than to a person.
-
----
-
-## What Lively is
-
-### 1. A store of work context that AI accumulates and maintains automatically
-
-Messages and email, documents and issues, code and decisions, and the output of AI sessions themselves — all collected into one store, organized, and injected into AI at the moment it's needed. Members have exactly one job: **open Lively and ask Claude.**
-
-```
-Scattered sources                Lively                        Every member's AI session
-messages · email
-docs · drive        ─ collect ─▶  work context store  ─ inject only what's needed ─▶  Claude / Codex / …
-code · commits                (distill · classify · link)
-decisions · notes                     ▲
-issues · tasks                        └────── session output becomes company knowledge again
-```
-
-- **Collect & store** — *distill* (drop the chatter, keep facts and decisions) · *classify* (file it in its place in your taxonomy) · *link & embed* (connect relationships, quantify meaning)
-- **Accumulate & maintain** — *self-authoring* (AI creates projects and knowledge when needed) · *link & refresh* (new knowledge is connected, stale knowledge is updated) · *dedupe & review* (duplicates are filtered, humans can review)
-- **Inject only what's needed** — *injection levels* (only what matters gets injected in full) · *keyword & semantic search* (AI finds and reads on its own) · *automatic injection* (knowledge relevant to the question or the code arrives on its own)
-
-### 2. Standardized AI sessions — everyone inherits the same tooling, regardless of setup skill
-
-**One person's setup becomes the organization's standard.** Custom skills, hooks, and MCP integrations built by your AI-fluent members are promoted into Lively so every member can use them immediately. The floor rises, and as everyone's improvements accumulate, so does the ceiling.
-
-A tool an engineer built for themselves gets mounted automatically in a product manager's AI too. The release-check skill from a backend lead, the read-replica integration from a data engineer, the internal-search MCP from a platform engineer — whoever opens a session, those tools come along.
-
-| Starting point | Reached by individual setup | Filled in by Lively |
-|---|---|---|
-| Product manager (Claude app/web) | 30 | +70 |
-| Engineer (Claude Code) | 70 | +30 |
-| Engineering lead (Claude Code + Skills) | 90 | +10 |
-
-Wherever you start, Lively fills in the rest.
-
-### 3. How Lively builds high-quality context
-
-Lively separates company context into **projects** and **knowledge**, and stores both according to your taxonomy. Project to project, project to knowledge, knowledge to knowledge — everything accumulates with its links, and you view and manage that structure directly in Lively's project screens.
-
-A project *requires* knowledge and *produces* knowledge. It leads to follow-up projects, and knowledge links to knowledge. Every project and every piece of knowledge is stored in its place in the taxonomy, together with its connections.
-
-You manage projects, tasks, and the knowledge linked to them right in Lively — no separate PM tool required.
-
-### 4. A context layer that stands apart from any AI model
-
-Different teams — sometimes different people on the same team — use different models. Lively manages company context in **an independent layer above the AI**, so you are **never locked to a particular model**: keep what you have, or swap it whenever you want.
-
-```
-        Lively — the company context layer
-                  ⇅  swap anytime
-   Claude   Gemini   ChatGPT   others
-   Swap the model; the context stays in this layer
-```
-
-- **Keep your current setup** — We don't ask you to change tools. Connect Lively to the AI your team already uses, and from that day they work with the same company context. *(zero tool migration, zero retraining)*
-- **Keep the best combination** — Model capability and pricing flip within months. Swap per team or per person and maintain the best mix at any given time. *(zero context migration when you switch)*
-- **Doesn't stop at an outage** — If one vendor has an outage or changes policy, move to another AI and continue with the same context. *(instant failover, continuity of work)*
-- **A store without lock-in** — Your company's context is never trapped in an AI vendor's account. Managed or self-hosted, **the store belongs to you**. *(your asset survives vendor shutdowns and price hikes)*
-
-### 5. Managed for convenience, self-hosted for data sovereignty
-
-| | **Managed** (operational ease) | **Self-hosted** (data sovereignty) |
-|---|---|---|
-| Where | Your workspace in the Lively cloud | Your infrastructure, inside your network perimeter |
-| Install, ops, updates | We handle them. Fastest start, nothing to prepare | Installed whole, inside your perimeter |
-| Data | Only your members can access it; every access is logged | The original of your company's memory exists only inside your perimeter |
-| Egress | — | Only the fragments your policy gate allows leave. The store is never shipped out wholesale |
-| Air-gapped | — | Connect a local model for a fully air-gapped setup with zero external traffic |
-| Recommended for | The default for most organizations | Security- and compliance-driven organizations |
-
-If your security requirements grow, you can move from managed to self-hosted.
-**Change AI tools, keep your knowledge** — the store isn't tied to any vendor, so swapping harnesses carries your organization's knowledge with it.
+The core is open source under AGPL-3.0 and free to use with no limit on team size. If you'd rather not run a server yourself, use the [managed service](#dont-want-to-run-it-yourself-use-the-managed-service).
 
 ---
 
-## Why Lively
+## Why
 
-### Four weeks in, in members' own words
+Teams now use much the same models. The difference in results comes from whether the AI **knows your team's work**. Yet nobody is looking after that context.
 
-We deployed Lively to the product organization of an AI company. Below are their week-four survey responses and what actually happened.
+- **You find things, but can't tell what's right.** A two-year-old spec and last week's changed decision come back with equal weight, and the AI reads the old one and is confidently wrong.
+- **What you organize goes stale.** You build a wiki, and nobody keeps it up to date.
+- **Work done with AI disappears when the session ends.** A conclusion one person reached with AI today is unknown to someone else's AI tomorrow.
+- **The best setups live on one person's machine.** The one or two people who built skills, hooks, and MCP integrations hand real work to AI; everyone else uses it as a search box.
 
-> "Even in domains I'd never reviewed, pointing it at knowledge my teammates had distilled cut down the trial and error before a good answer."
-> — from a member who noted that with local Claude Code, even with a maintained `CLAUDE.md`, an unfamiliar domain still had to be explained by prompt every time
+Lively hands that upkeep to AI instead of a person.
 
-> "I could give instructions in natural language instead of going through the dev team to write queries. This past week I've moved most of my requirements writing into Lively too."
-> — from a PO who pulled conversion funnel data directly in an AI session
+## What's inside
 
-> "The efficiency and speed exceeded what I'd been getting from local Claude Code, and it had real impact on actual work, so I can recommend it."
-> — the reason given by a PO who was already fluent with local Claude Code, alongside a recommendation score of 9
+### Context store
 
-**Case 1 — The AI surfaced review criteria the PO didn't know about**
-While planning a revision to a review feature, context about criteria that had been changed in discussion with another department was injected automatically, and the AI proactively suggested those criteria be reflected in the plan. The project concluded successfully with context the PO had not been aware of.
+- **Collect**: Reads from the tools you connect, read-only. Instead of piling up raw material, it keeps the facts and decisions as knowledge.
+- **Judge**: Merges content that already exists and replaces decisions that have changed with the latest version. Every piece of knowledge carries its source.
+- **Organize**: Links knowledge to your taxonomy and projects. Turn on embeddings for semantic search.
+- **Inject**: Puts relevant knowledge into the AI when a session starts or a question is asked. Only what matters goes in full; the AI looks up the rest over MCP when it needs it.
+- **Write back**: Conclusions the AI reaches in a session come back as projects and knowledge for the next person's AI to use. Duplicates are caught before saving, and people review afterwards.
 
-**Case 2 — A cross-department request, from intake to conclusion in one day**
-An anomaly investigation in a data domain with no assigned engineer was triple-verified by AI — measuring 6,096 source records and checking the code — and concluded the same day.
+### Shared setup
 
-> "A solution that uses our company's context and data so that every member can use AI effectively."
-> — one member's one-line definition of Lively, from the survey
+Promote a skill, hook, subagent, or MCP integration that one person built into an organization asset, and it is installed automatically in every teammate's AI. You can roll it out company-wide, per team, or per person, and new hires start in the same environment on day one.
 
-### Why Lively rather than AI training, consulting, or a SaaS add-on
+### Workspace
 
-| | What it does well | What still remains |
+- **Projects and tasks**: Work flows through projects and tasks, and each AI session takes one task. Progress and the knowledge produced stay in one place, with no separate PM tool.
+- **Web terminal**: Open an isolated AI session in the browser. Work files remain after the session ends. Teammates who aren't at home in a terminal work from the same context.
+- **Your machine and the desktop app**: Connect Lively to a local Claude Code (or another AI tool), or use the desktop app for macOS, Windows, and Linux.
+- **Internal database queries**: Connect a data source such as a production read replica, read-only, and people can ask the AI for data without going through the engineering team. The SQL firewall and table allow/deny policy apply.
+- **Scheduled runs**: Run AI jobs at set times.
+- **Liv**: An AI assistant for first-time setup. It looks at your team's material and work, proposes which tools to connect and how to configure them, and applies the changes once you approve.
+
+### Apps
+
+Install apps (agents and tools) your team builds into the workspace, and they run inside your organization's context and permissions. App installation, permissions, and the SDK are included; a marketplace for installing apps built by other organizations is in progress.
+
+## How it compares
+
+| | Good at | How Lively differs |
 |---|---|---|
-| **General AI training** | Tool usage and prompting technique. Individual skill genuinely improves | When training ends, everyone returns to their own habits, and the organizational process and context gaps remain |
-| **General AX consulting** | Diagnosis through implementation. A good partner will actually build you a system | What you're left with is a bespoke build from that moment. Operating and improving it after the consultant leaves is back on you, and it doesn't keep updating like a product |
-| **General AI collaboration tools** | Search and summarization inside each tool are already excellent | Context stays trapped inside each tool, and what it finds doesn't accumulate as organizational knowledge |
+| **Built-in memory and rules files in AI tools** (`CLAUDE.md`, etc.) | Works right away with nothing to install; strong for per-repo rules | People have to write and maintain it, and it stays per person or per repo |
+| **AI subscription work agents** | Start inside a subscription you already have, with no setup | Memory is per person, and session output doesn't accumulate for the team. Works only inside that vendor's AI |
+| **AI in document tools** | Excellent editing, search, and summarization of documents | AI-generated documents pile up without review or dedupe. Code and databases sit outside the tool |
+| **Assemble it yourself** (memory SDK + MCP server + hooks) | Free choice of components, no license cost | You integrate collection, judgment, permissions, and UI yourself, and keep operating it |
 
-**Lively is different.**
+Lively sits on top of the AI tools you already use, without replacing them. Change models or tools, and the context stays in Lively.
 
-- **Organizational knowledge that accumulates through judgment** — even AI-authored knowledge passes duplicate checks, review, and refresh. It doesn't degrade with use; it gets more accurate with use.
-- **Even AI's work is attributed to projects** — who, which AI, in which project, produced what, recorded automatically. Organizations become able to manage AI's work.
-- **A finished product, self-hosting included** — when you need sovereignty, it installs whole into your infrastructure. You're installing a finished product, not assembling parts.
-- **Harness-neutral** — Claude Code or Codex, the same context is injected. Switch AI tools and your organization's knowledge stays.
+**You may not need Lively if:**
 
-### The combinations you've likely already evaluated leave the same gap
+- You work alone. Lively's value grows when several people and several AIs share the same context.
+- You use a single AI tool, and its memory and rules files are enough.
+- You have a platform team to run a stack you assembled yourself, and not much knowledge to accumulate.
 
-| Combination | What it does well | The gap that remains |
-|---|---|---|
-| **All-in-one AI subscription** | Search, memory, and policy management under one subscription with no extra vendor. The cheapest, fastest start | Memory is a flat file at the individual or repo level, and search re-scans the sources each time rather than accumulating. No project axis, no self-hosting |
-| **AI harness + document SaaS** | Best-in-class collaborative editing, plus search across many sources under one subscription | AI-generated pages pile up without review or dedupe. The better you use it, the more polluted search gets — and code, databases, and data sovereignty live outside it |
-| **AI harness + enterprise search** | 100+ connectors and permission-aware search. The right answer for the search axis at large enterprises | A read-only index gives AI output no home to accumulate in. Seat minimums and tens of thousands per year make it excessive for mid-sized organizations and below |
-| **Assemble it yourself** (memory SDKs, OSS stack) | Maximum sovereignty and freedom of component choice, with zero license cost | Search, memory, and projects are three to five systems that don't know about each other. Your organization builds the integration, operations, and UI over 6–12 months — and then maintains it |
+## Quick start (self-hosted)
 
-Lively fills that gap as a finished product. It sits on top of the harnesses and tools you already use, leaving them as they are.
+### Requirements
 
-### "Our engineering team is building this ourselves"
+- **One server**: Ubuntu 24.04 or macOS, with sudo and internet access. At least 4 GB of memory and 30 GB of disk (8 GB of memory or more if several people use the web terminal at once or you turn on embeddings). The script configures Docker, swap, and system services, so a dedicated server or VM is recommended.
+- **AI accounts**: Each teammate's own AI subscription or API key (Claude Code, etc.). Lively does not resell AI.
 
-That's an excellent start — the more forward-leaning the organization, the earlier its engineers move. But that path runs into three **structural** limits.
+On Linux, the install script installs Docker, Node.js 22, tmux, and Claude Code for you. On macOS, install [Homebrew](https://brew.sh) and Docker (Docker Desktop or colima) first; the script installs the rest.
 
-1. **The builders aren't the users.** Engineers publish skills and wire up internal tools over MCP. But faced with terminals and config-file syntax, **the PMs, POs, and planners who need a UI** are left outside. Those who can't use it go back to the browser chat.
-2. **The busiest people's "later."** Company-wide horizontal work always loses to **roadmap items with hard deadlines**. It slips a rank every sprint, and most often stops half-built.
-3. **The inefficiency of a system for one company.** The engineers who can build this are **your most expensive people**. Pouring their time into a system only one company will ever use is less efficient than using a shared system whose development and maintenance costs are spread across many organizations.
-
-Your engineering team's time belongs on **your product**. The context infrastructure already exists.
-
----
-
-## Lively is a fit if you are
-
-- **A team fixing the product × engineering collaboration structure** — round trips to re-confirm specs, lost decisions, late rework. Companies trying to cut the invisible cost between planning and engineering.
-- **A team using AI without organization-level impact** — already using AI tools, but the results stay with the few individuals who are good at it.
-- **An organization whose context is scattered across tools** — decisions in chat, specs in docs, tasks in a tracker, and nobody who sees the whole picture in one place.
-- **A CPO or CTO who wants AI transformation validated in real use** — leaders who want to confirm impact in an actual in-flight project, not in a report or a demo.
-
-## How adoption works
-
-There are only two things to prepare on your side.
-
-1. **Claude Code (or Codex) plans for your product team** — Lively doesn't resell AI; it makes your AI know your company. The execution layer should run on your own plans and API keys. If you already use them, there's nothing more to prepare.
-2. **Read access to your work tools, code, and databases** — for AI to know your company, it needs to reach where that memory lives, **read-only**. We agree the collection scope and permission policy up front, and we never connect a channel you haven't approved.
-
-| | | Cost |
-|---|---|---|
-| **Week 0** | 30-minute consultation and demo — assessment of your collaboration structure and tooling, plus a product walkthrough | Free |
-| **Week 1** | Installation and data migration — our engineers install it and migrate your existing context as initial knowledge | Free |
-| **Weeks 2–4** | Real usage — every role uses it on an actual in-flight project, with 1:1 onboarding per role | ~1 month free |
-| **Week 5 —** | Decision — decide against the usage record. Continue on a monthly subscription, or we'll clean up the environment | Monthly subscription |
-
-No penalties, no lingering obligations.
-
-Contact: **lively@lvly.io**
-
----
-
-## Installing it yourself (self-hosted)
-
-Requires Node.js 20+ and PostgreSQL.
+### Install
 
 ```bash
-git clone https://github.com/livewithlively/lively.git
-cd lively
-cp .env.example .env      # set tokens and database URLs
-npm ci
-npm run build
-npm start
-curl localhost:8080/healthz
+sudo install -d -o "$(id -un)" /opt/lively
+curl -fsSL https://github.com/livewithlively/lively/releases/latest/download/lively.tgz | tar -xz -C /opt/lively
+cd /opt/lively
+PUBLIC_URL=http://<server-address>:8080 BOOTSTRAP_ADMIN_EMAIL=you@example.com bash deploy/install.sh
 ```
 
-Point an MCP client at `http://localhost:8080/mcp` with a bearer token from `AUTH_TOKENS_JSON`.
-Docker Compose and installation scripts for a dedicated box live in [`deploy/`](deploy/).
+The script starts the store (PostgreSQL + pgvector) in Docker and registers the gateway as a systemd (Linux) or launchd (macOS) service. When it finishes, it prints the web address and the first admin password. On a fresh Ubuntu 24.04 VM it takes a few minutes.
 
-- [`docs/architecture.ko.md`](docs/architecture.ko.md) — architecture, code conventions, subsystem map (Korean)
-- [`deploy/README.md`](deploy/README.md) — installing on a server
-- [`kit/README.md`](kit/README.md) — the member kit: CLI, harness adapters, hooks
+If you have a domain, pass `LIVELY_DOMAIN=lively.example.com` instead of `PUBLIC_URL`. An HTTPS certificate is obtained automatically.
+
+### First steps
+
+1. Sign in at `http://<server-address>:8080/ui/` with the admin account and change the password.
+2. Open the web terminal and use **내 계정 로그인** (log in to my account) at the top to sign in to your AI account once. Each teammate does the same; credentials are stored separately per person.
+3. Invite teammates, and have each connect their own machine. Running the one line shown in the web UI connects Lively to their local AI tool.
+
+   ```bash
+   curl -fsSL http://<server-address>:8080/cli | sh
+   # Windows: irm http://<server-address>:8080/cli.ps1 | iex
+   ```
+
+4. Turn on collectors such as Slack or Notion in the admin screen. Or leave it to Liv, which proposes a setup through conversation.
+
+Check status with `curl http://<server-address>:8080/readyz`. Updates, backups, and embedding setup are covered in [`deploy/README.md`](deploy/README.md).
+
+## What's supported
+
+**AI tools**: Claude Code (default), Codex, OpenCode, Antigravity CLI, Grok Build. Whichever tool you use, the same context is injected, and shared setups are installed in the format each tool expects.
+
+**Collectors**: Slack, Discord, Notion, Google Drive, Gmail, Outlook, GitHub, GitLab, Linear, ClickUp, Figma, and file upload. Internal APIs not on the list connect through the generic driver (HTTP, RSS, webhooks) without writing code. Code repositories and internal databases connect read-only as well.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph PC["Teammate's machine"]
+    H["Claude Code · Codex · …<br/>+ lively kit (CLI · hooks)"]
+  end
+  B["Browser · desktop app"]
+  S["Slack · Notion · GitHub · DB …"]
+  subgraph Server["One server"]
+    G["Gateway (Node.js)<br/>MCP · web UI · web terminal · collectors · scheduler"]
+    D[("PostgreSQL + pgvector<br/>knowledge · projects · sources")]
+    E["Embeddings (optional)"]
+  end
+  H -- MCP --> G
+  B -- HTTPS --> G
+  S -- read-only --> G
+  G --> D
+  G -.-> E
+```
+
+For code structure and design principles, see [`docs/architecture.md`](docs/architecture.md); for the kit installed on teammates' machines, see [`kit/README.md`](kit/README.md).
+
+## Security and data
+
+- **Data is stored only on the server you install.** Knowledge, sources, and conversation history live in that server's PostgreSQL.
+- **AI runs on your accounts.** Both teammates' AI sessions and the organizing of material use your own AI accounts and keys. Injected context is sent to the AI provider you choose.
+- **Collection is read-only, and only from channels you allow.**
+- **Basic safety lives in the free core**: the SQL firewall, table allow/deny policy, secret redaction, and per-channel read/write guards.
+- Enterprise features such as column masking, access audit logs, and SSO live in `src/ee/`, and using them in production requires a subscription.
+
+## Results from real use
+
+The product organization of a Korean fintech startup used Lively for 63 days (2026-07-03 to 09-03). Each person chose whether to use it.
+
+| Metric | Value |
+|---|---|
+| Active users | 19 |
+| Times the AI called Lively (MCP calls) | 32,797 |
+| Weekly calls per person | 32 → 619 (over 8 weeks) |
+| Share of saved knowledge looked up again | 69% (806 of 1,166) |
+| Share of lookups by someone other than the author | 35% |
+| DAU/MAU | 61% |
+
+That organization's CTO started as a user and contributed 24 commits to this repository. These are results from a single organization, so they generalize only so far. The Lively team also does all of its own work on Lively.
+
+## Don't want to run it yourself? Use the managed service
+
+[app.lvly.io](https://app.lvly.io) is the same Lively, operated by us. We handle the server, installation, updates, backups, and incident response, and your workspace is created as soon as you sign up.
+
+| | Open source (self-hosted) | Managed |
+|---|---|---|
+| Getting started | Prepare a server and run the install script | Sign up and go |
+| Install, updates, backups | You | Lively |
+| Where data lives | Your server | Cloud operated by Lively |
+| Cost | Free, unlimited users | Free up to the included allowance |
+| AI accounts | Each teammate's own account or key | Each teammate's own account or key |
+
+Plans are structured as follows. Paid plans are in preparation.
+
+- **Free**: Shared store, team setup rollout, basic integrations. Concurrent sessions, storage, and session time come with an included allowance.
+- **Premium**: For individuals and teams who go beyond the included allowance. Pay for the usage above it, and run always-on agents.
+- **Enterprise**: For organizations with multiple teams and governance needs. Member permission management, data masking, access records, SSO.
+- **Self-hosted support**: A contract to install on your internal or air-gapped network and have us operate it.
+
+Access is currently by invitation. Join the waitlist at [app.lvly.io](https://app.lvly.io) and we'll send you an invite. To move between self-hosted and managed, contact lively@lvly.io.
 
 ## Licensing
 
-Three licenses apply, decided entirely by directory.
+The license is determined by the directory a file lives in.
 
 | Path | License |
 |---|---|
-| `kit/` | Apache-2.0 |
+| `kit/`, `desktop/` (code that runs on teammates' machines) | Apache-2.0 |
 | `src/ee/` | Lively Enterprise License (production use requires a subscription) |
 | Everything else | AGPL-3.0-only |
 
-`src/ee/` is **optional**. The core never imports it statically, so you can delete `src/ee/` and the project still builds and runs. The **basic safety mechanisms live in the core (AGPL)** — the SQL firewall, table policy, secret redaction, channel guards — because the free edition should not be the dangerous one.
+Running an unmodified copy inside your company creates no AGPL obligations. The conditions for modifying it or offering it as a service are covered in [LICENSING.md](LICENSING.md#frequently-asked).
 
-We've published our commitments: `kit/` stays Apache-2.0 permanently, we will not move the core to SSPL or BUSL, and the free edition will stay a complete, working product — **[LICENSING.md](LICENSING.md)**.
+`src/ee/` is **optional**. The core never imports it statically, so you can delete it and the project still builds and runs.
 
-The name follows a trademark policy, not the code license: [TRADEMARK.md](TRADEMARK.md). Fork freely; just rename your fork.
+We make three commitments. `kit/` and `desktop/` stay Apache-2.0 permanently. We will not move the core to SSPL, BUSL, or any other non-open-source license. The free edition stays a complete product with basic safety and the core value included. Details are in [LICENSING.md](LICENSING.md).
+
+The name follows a [trademark policy](TRADEMARK.md), not the code license. Fork freely; just rename your fork.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Contributions require signing a short [CLA](CLA.md); a bot will walk you through it on your first pull request.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Contributions require signing a short [CLA](CLA.md); a bot walks you through it on your first pull request.
 
-Please report security vulnerabilities through the private channel in [SECURITY.md](SECURITY.md) rather than a public issue.
+Please report security vulnerabilities through the private channel in [SECURITY.md](SECURITY.md) rather than a public issue. For anything else, contact lively@lvly.io.
 
 ---
 
-Copyright (c) 2026 윤상민 (Sangmin Yoon), 장원준 (Wonjun Jang)
+Copyright (c) 2026 윤상민 (Sangmin Yoon), 장원준 (Wonjoon Jang)

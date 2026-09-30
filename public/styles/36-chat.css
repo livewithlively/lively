@@ -83,7 +83,7 @@ details.livc-divider > summary::before, details.livc-divider > summary::after { 
 button.sc-title { display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 13.5px; font-weight: 800;
   max-width: 72ch; margin-left: -6px; padding: 2px 6px; border: 0; border-radius: 6px; background: none; color: var(--ink); text-align: left; cursor: text; }
 button.sc-title .sc-title-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.sc-title-pen { width: 13px; height: 13px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linejoin: round;
+.sc-title-pen { width: 13px; height: 13px; flex: none; fill: none; stroke: var(--muted); stroke-width: var(--ic-stroke); stroke-linejoin: round;
   opacity: 0; transition: opacity .12s ease; }
 button.sc-title:hover { background: var(--bg-punch); box-shadow: inset 0 0 0 1px var(--line-net); }
 button.sc-title:hover .sc-title-pen, button.sc-title:focus-visible .sc-title-pen { opacity: 1; }
@@ -168,6 +168,9 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   height: 22px; padding: 1px 7px; border: 1px solid transparent; border-radius: 999px; background: transparent; }
 .sc-act:hover { border-color: var(--line-net); color: var(--blue); background: transparent; }
 .sc-act-on { border-color: var(--line-net); color: var(--blue); background: var(--bg-tint); }
+/* [자료](#4088 후속) — 폴더 아이콘 + 글자. 아이콘은 사이드바·탭과 같은 붓(라인, 채움 없음). */
+.sc-act-files { display: inline-flex; align-items: center; gap: 4px; }
+.sc-act-ic { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 /* 연결 상태 + [화면 복구] 한 덩어리 — 테두리를 **묶음이** 쥐고 안쪽 단추는 제 테두리를 안 그린다.
    손을 얹으면 둘이 함께 뜬다: «지금 어떤가»와 «그걸 고치는 단추»가 한 몸이라는 걸 모양이 말한다. */
 .sc-pair { display: inline-flex; align-items: center; gap: 0; flex: none;
@@ -220,6 +223,13 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-term[hidden] { display: none; }
 .sc-wrap > .v2-split-y[hidden] { display: none; }
 .sc-term-frame { flex: 1; width: 100%; border: 0; background: var(--bg); }
+/* #4135 — pane 이 셸인 세션(대화 런타임·codex app-server)의 터미널 머리줄. pane 첫 화면의 안내는 출력이 쌓이면
+   위로 밀려 사라지므로, «여기 친 말은 AI 에게 안 갑니다» 는 **머물러 있어야** 한다. 그래서 액자 위 한 줄로 둔다. */
+.sc-term { flex-direction: column; }
+.sc-shellbar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--bg-note); flex: none; }
+.sc-shellbar[hidden] { display: none; }
+.sc-shellbar-t { font-size: 12.5px; color: var(--ink-sub); line-height: 1.5; flex: 1; min-width: 0; }
+.sc-shellbar .btn { flex: none; }
 /* 터미널 기본 모드(상민님 지시 2026-08-18) — 대화는 숨고 터미널이 본문을 다 차지한다. */
 .sc-mode-term .sc-term { flex: 1; height: auto; border-top: 0; }
 /* '베타' 뱃지 — 대화 인터페이스가 아직 다듬는 중임을 알리는 칩(버튼 안·제목 옆 공용). */
@@ -235,7 +245,13 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-bar { display: flex; align-items: center; gap: 12px; padding: 12px 22px 16px; border-top: 1px solid var(--line); background: var(--bg-tint); }
 .sc-bar-t { font-size: 13px; color: var(--ink-sub); flex: 1; min-width: 0; line-height: 1.5; }
 
-.sc-older { display: flex; justify-content: center; padding: 8px 0 14px; }
+/* 위로 더(#3778) — 단추가 아니라 스크롤이 부른다(web/lib/older-autoload.ts). 이 줄이 보인다는 건 곧 부르고 있다는 뜻이라
+   조용한 한 줄이면 된다. 높이를 고정해 «불러오는 중 ↔ 실패·다시 시도» 가 바뀌어도 아래 대화가 밀리지 않게 한다. */
+.sc-older { display: flex; justify-content: center; align-items: center; gap: 8px; min-height: 32px; padding: 8px 0 14px; }
+.sc-older-t { font-size: 12.5px; line-height: 1.4; color: var(--muted); }
+.sc-older-spin { flex: none; width: 12px; height: 12px; border-radius: 50%; box-sizing: border-box;
+  border: 2px solid var(--line-net); border-top-color: var(--muted); animation: sc-liv-boot-spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .sc-older-spin { animation: none; } }
 .sc-empty p { font-size: 13.5px; line-height: 1.7; color: var(--ink-sub); margin: 0 0 10px; }
 
 .sc-idx { width: 340px; max-height: 60vh; overflow: auto; padding: 6px; }
@@ -311,7 +327,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .dt-chip { font-size: 12px; color: var(--ink-sub); }
 .dt-chip[hidden] { display: none; }
 /* 바꿀 수 있는 칩(#1758 모델·추론강도) — 읽기 전용 칩과 같은 크기·색이되 눌러도 된다는 표시(캐럿·호버)를 준다. */
-.dt-chip-sel { appearance: none; -webkit-appearance: none; border: 1px solid transparent; border-radius: 999px; background: transparent;
+.dt-chip-sel { appearance: none; -webkit-appearance: none; field-sizing: content; border: 1px solid transparent; border-radius: 999px; background: transparent;
   font: inherit; font-size: 12px; color: var(--ink-sub); padding: 1px 16px 1px 7px; max-width: 190px; cursor: pointer;
   background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
   background-position: calc(100% - 8px) 52%, calc(100% - 4px) 52%; background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
@@ -345,14 +361,17 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
  *  머리는 두 줄로 접는다(제목+동작 / 사실 줄) — 한 줄에 다 넣으면 제목이 두 글자로 남는다(실측 390px).
  *  대화는 여백을 좁히고 말풍선을 넓힌다. 홈 인디케이터 여백. 터미널·대화는 종전대로 스왑. 입력칸 16px 은 아래 (pointer: coarse). */
 @media (max-width: 760px) {
-  .sc-head { flex-wrap: wrap; gap: 4px 8px; padding: 8px 12px 6px; min-height: 0; }
-  .sc-head-l { flex: 1 1 100%; flex-wrap: wrap; row-gap: 3px; }
+  /* #4159 — 머리는 **한 줄**이다(원준·상민 2026-09-21 «모바일에서는 위가 화면의 거의 절반»). 종전엔 제목 / 사실(노드) /
+     동작 세 줄로 접혔다. 남기는 것 = 상태 점 · 제목(…로 줄어든다) · 얼굴 · 동작 단추. 하네스·모델·추론강도 선택기(.sc-run-top)와
+     노드 알약(.sc-meta)은 뺀다 — 둘 다 [⋯] 설정 창에 그대로 있다(openMore 가 선택기를 그 창으로 데려간다). */
+  .sc-head { flex-wrap: nowrap; gap: 6px; padding: 5px 8px 5px 12px; min-height: 0; }
+  .sc-head-l { flex: 1 1 auto; flex-wrap: nowrap; min-width: 0; }
   .sc-title { font-size: 15px; flex: 1 1 auto; max-width: 100%; }
-  .sc-titlebox { flex: 1 1 auto; max-width: 100%; min-width: 0; }   /* 제목이 제 줄을 통째로 쓰므로 28ch 바닥이 필요 없다(폰에서 넘치기만 한다) */
+  .sc-titlebox { flex: 1 1 auto; max-width: 100%; min-width: 0; }   /* 28ch 바닥은 폰에서 넘치기만 한다 */
   button.sc-title { font-size: 15px; max-width: 100%; }
   .sc-title-in { font-size: 16px; width: 100%; }
-  .sc-meta { flex: 1 1 100%; overflow: hidden; }
-  .sc-head-r { flex: 1 1 100%; justify-content: flex-start; gap: 2px; margin-left: -6px; }
+  .sc-meta, .sc-head > .sc-run-top { display: none; }
+  .sc-head-r { flex: 0 0 auto; justify-content: flex-end; gap: 2px; }
   .sc-act { font-size: 13px; padding: 7px 9px; min-height: 36px; }
   .sc-wait { flex-wrap: wrap; padding: 9px 12px; }
   .sc-wait-t { flex: 1 1 100%; }
@@ -588,7 +607,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .v2set-row.danger .n { color: var(--danger-ink); }
 .v2set-danger { border: 1px solid var(--danger-line, var(--line-net)); background: none; color: var(--danger-ink); }
 .v2set-danger:hover { background: var(--danger-bg); }
-/*  [실행] — 머리줄에서 데려온 선택기가 앉는 자리. 세로로 쌓아 각자 제 폭을 갖는다(머리줄에선 한 줄이었다). */
+/*  [이 세션] «무엇으로 도나»(종전 [실행] 칸) — 머리줄에서 데려온 선택기가 앉는 자리. 세로로 쌓아 각자 제 폭을 갖는다(머리줄에선 한 줄이었다). */
 .v2set-run { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .v2set-run .dt-chip-sel { max-width: none; }
 .v2set-run .dt-chip[hidden], .v2set-run .dt-chip-sel[hidden] { display: none; }

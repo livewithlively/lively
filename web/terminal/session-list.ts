@@ -6,7 +6,7 @@ import { pjvPopover } from '../projects/popover.js';   // #1841 행 ⋯ 메뉴 �
 import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import { overlay } from '../admin.js';
 // #1582 — 세션 종료·목록제거 확인창은 전 화면 공용 정의 하나만 쓴다.
-import { confirmForceRestore, confirmSessionForget, endedToast } from '../session-actions.js';
+import { confirmForceRestore, confirmSessionTrash, endedToast, eulReul, retireSession } from '../session-actions.js';
 import { canForceRestore, restorePath } from '../lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다
 import { TSESS_STATUS, relAgo, shortDir, tsessConfirmEnd } from './status-filter.js';
 import { termUrl } from './select-bar.js';
@@ -246,11 +246,14 @@ function tsessRow(s, ctx) {
     }
   };
   const doEnd = async () => {
+    //  #3778 — 어느 쪽도 그 자리에서 영영 지우지 않는다(session-actions retireSession): 도는 세션은 터미널만 내려 [복원]으로 남고,
+    //   이미 멈춘 세션은 휴지통으로 간다. 종전엔 둘 다 되살리기 좌표까지 바로 지웠다(휴지통을 안 거쳤다).
+    const nm = s.label || '이름 없음';
     const ok = s.restorable
-      ? await confirmSessionForget({ title: '‘' + (s.label || '이름 없음') + '’ 을(를) 복원 목록에서 지울까요?', sessions: [s] })
-      : await tsessConfirmEnd('‘' + (s.label || '이름 없음') + '’ 세션을 종료할까요?', [], [s]);
+      ? await confirmSessionTrash({ title: '「' + nm + '」' + eulReul(nm) + ' 휴지통으로 보낼까요?' })
+      : await tsessConfirmEnd('‘' + nm + '’ 세션을 종료할까요?', [], [s]);
     if (!ok) return;
-    try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' }); toast(s.restorable ? '복원 목록에서 지웠어요' : await endedToast(1, [s])); reRender(); }
+    try { const how = await retireSession(s); toast(how === 'trashed' ? '휴지통으로 보냈어요 — 휴지통에서 되돌릴 수 있어요' : await endedToast(1, [s])); reRender(); }
     catch (e) { toast('실패 — ' + e.message, true); }
   };
 
@@ -271,7 +274,7 @@ function tsessRow(s, ctx) {
   const act = (title, kind, fn) => { const b = el('button', { class: 'pjv-row-act', type: 'button', title, 'aria-label': title }, tsessActIcon(kind)); b.onclick = (e) => { e.stopPropagation(); fn(b); }; acts.append(b); };
   act('이 세션의 질문 모아보기', 'q', () => openSessPrompts(s));
   if (s.owned && !s.restorable) act('이름·초대 수정', 'edit', () => openTermEdit(s, cfg, view));
-  if (s.owned) act(s.restorable ? '복원 목록에서 지우기' : '세션 종료', 'x', () => doEnd());
+  if (s.owned) act(s.restorable ? '휴지통으로' : '세션 종료', 'x', () => doEnd());
 
   let check: any = null;
   if (sel && s.owned) {
@@ -327,7 +330,7 @@ function tsessRow(s, ctx) {
     menu.append(mk('질문 모아보기', () => openSessPrompts(s)));
     menu.append(mk('새 탭에서 열기', () => doOpen()));
     if (s.owned && !s.restorable) menu.append(mk('이름·초대 수정', () => openTermEdit(s, cfg, view)));
-    if (s.owned) menu.append(mk(s.restorable ? '복원 목록에서 지우기' : '종료', () => doEnd(), true));
+    if (s.owned) menu.append(mk(s.restorable ? '휴지통으로' : '종료', () => doEnd(), true));
   };
   addCell.append(more);
 

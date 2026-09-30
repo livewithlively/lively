@@ -8,6 +8,7 @@ import { api, cardHead, el, secretInput, secretRow, state, toast, uiText } from 
 import { field } from './ui-primitives.js';
 import { loadAdmin, rerenderPanel } from './admin-rerender.js';
 import { allowlistCard } from './admin-widgets.js';
+import { ctxPath } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
 function mcpEditor(detail, data) {
   const servers = data.mcpServers || [];
@@ -37,7 +38,7 @@ function mcpEditor(detail, data) {
         placeholder: 'localhost\nmcp.internal.acme.com\n줄당 호스트 한 개(포트·경로 없이)' },
     ]);
   detail.replaceChildren(el('div', { class: 'card' },
-    cardHead('등록된 외부 도구 서버', '하네스가 호출할 수 있는 외부 MCP 서버입니다. 자료를 라이블리 자료함으로 가져오는 [맥락 관리 ▸ 가져오는 곳]과 반대로, 여기 등록된 서버는 세션에서 그때그때 호출됩니다.'),
+    cardHead('등록된 외부 도구 서버', '하네스가 호출할 수 있는 외부 MCP 서버입니다. 자료를 라이블리 자료함으로 가져오는 ' + ctxPath('sources') + '과 반대로, 여기 등록된 서버는 세션에서 그때그때 호출됩니다.'),
     el('div', { class: 'admin-two admin-two-cols' }, listCol, right)),
     mcpSafety);
 }
