@@ -198,17 +198,31 @@ for (const c of FIELD_CASES) {
   });
 }
 
-t("numbers 는 다중집합: 중복 40 이 한 개로 줄면 violation", () => {
+t("numbers 는 집합: 같은 값을 한 번 더 쓰거나 중복을 하나로 합쳐도 violation 없음", () => {
   const before = doc(CLEAN_TITLE, `${LEAD}\n\n상한은 40 이고 하한도 40 이다.\n\n${FILLER}`);
-  const after = doc(CLEAN_TITLE, `${LEAD}\n\n상한과 하한은 모두 40 이다.\n\n${FILLER}`);
-  const r = checkRewrite(before, after, fmt);
-  assert.ok(hasKind(r, "invariant:numbers"), kinds(r).join(","));
-  assert.ok(detailOf(r, "invariant:numbers").includes("40"));
+  const merged = doc(CLEAN_TITLE, `${LEAD}\n\n상한과 하한은 모두 40 이다.\n\n${FILLER}`);
+  assert.ok(!hasKind(checkRewrite(before, merged, fmt), "invariant:numbers"));
+  const repeated = doc(CLEAN_TITLE, `상한은 40 이다.\n\n${LEAD}\n\n상한은 40 이고 하한도 40 이다.\n\n${FILLER}`);
+  assert.ok(!hasKind(checkRewrite(before, repeated, fmt), "invariant:numbers"));
 });
-t("inlineCode 는 다중집합: 같은 코드 두 번이 한 번으로 줄면 violation", () => {
+t("numbers 는 집합이어도 값이 사라지거나 바뀌면 violation", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n상한은 40 이고 하한은 10 이다.\n\n${FILLER}`);
+  const lost = doc(CLEAN_TITLE, `${LEAD}\n\n상한은 40 이다.\n\n${FILLER}`);
+  const changed = doc(CLEAN_TITLE, `${LEAD}\n\n상한은 40 이고 하한은 20 이다.\n\n${FILLER}`);
+  assert.ok(detailOf(checkRewrite(before, lost, fmt), "invariant:numbers").includes("10"));
+  assert.ok(hasKind(checkRewrite(before, changed, fmt), "invariant:numbers"));
+});
+t("inlineCode 는 집합: 같은 코드 두 번이 한 번으로 줄어도 violation 없음, 코드가 사라지면 violation", () => {
   const before = doc(CLEAN_TITLE, `${LEAD}\n\n키는 \`retry_max\` 이고 기본도 \`retry_max\` 이다.\n\n${FILLER}`);
-  const after = doc(CLEAN_TITLE, `${LEAD}\n\n키와 기본은 모두 \`retry_max\` 이다.\n\n${FILLER}`);
-  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:inlineCode"));
+  const merged = doc(CLEAN_TITLE, `${LEAD}\n\n키와 기본은 모두 \`retry_max\` 이다.\n\n${FILLER}`);
+  const unticked = doc(CLEAN_TITLE, `${LEAD}\n\n키와 기본은 모두 retry_max 이다.\n\n${FILLER}`);
+  assert.ok(!hasKind(checkRewrite(before, merged, fmt), "invariant:inlineCode"));
+  assert.ok(hasKind(checkRewrite(before, unticked, fmt), "invariant:inlineCode"));
+});
+t("numbers: 식별자 안의 숫자(EC2)를 결론에 한 번 더 써도 violation 없음", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\nSCF EC2 태그가 뒤바뀐다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `EC2 태그 drift 는 무시한다.\n\n${LEAD}\n\nSCF EC2 태그가 뒤바뀐다.\n\n${FILLER}`);
+  assert.ok(!hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
 });
 t("urls 는 집합: 같은 URL 두 번이 한 번으로 줄어도 violation 없음", () => {
   const u = "https://example.com/retry/guide";

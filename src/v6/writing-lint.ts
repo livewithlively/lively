@@ -167,7 +167,8 @@ export function lintWriting(input: WritingLintInput, fmt: WritingFormat, surface
   if (paths) add("local_path", "개인 컴퓨터 경로가 있다. 다른 구성원은 열 수 없다 — 레포 경로와 커밋, 또는 첨부 자료로 바꿔라.", { count: paths.length, sample: sample(paths[0]) });
 
   // ── 문장 ──
-  const arrowLines = proseLines.filter((l) => (l.match(/→/g) ?? []).length >= 3);
+  // 표 안의 화살표도 데이터다(강조 개수에서 표를 뺀 것과 같은 이유) — 이 규칙을 맞추려고 표 값을 바꾸게 하지 않는다.
+  const arrowLines = proseLines.filter((l) => !/^\s*\|/.test(l) && (l.match(/→/g) ?? []).length >= 3);
   if (arrowLines.length) add("arrow_chain", "한 줄에 '→'를 세 번 넘게 이었다. 인과는 문장으로, 절차는 번호 목록으로 쓴다.", { count: arrowLines.length, sample: sample(arrowLines[0]) });
   const nested = proseLines.filter((l) => NESTED_PAREN_RE.test(l));
   if (nested.length) add("nested_paren", "괄호 안에 괄호가 있다. 괄호 속 사실은 별도 문장이나 표로 뺀다.", { count: nested.length, sample: sample(nested[0]) });
