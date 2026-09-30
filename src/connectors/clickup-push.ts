@@ -32,6 +32,7 @@ interface ProjRow {
   external_system: string | null; external_id: string | null; folder: string | null;
   list_ext: string | null;        // 인바운드가 남긴 그 카드의 ClickUp 리스트 좌표(external_base.list_ext).
   base_status_raw: string | null; // 저쪽(ClickUp)의 현재 상태 라벨/슬러그 — status 판정의 기준. push-status.ts 머리말 참조.
+  base_status_category: string | null; // 마지막 동기화(인바운드·푸시) 때의 우리 카테고리 — 그 뒤 로컬 status 편집 여부 판정.
 }
 
 function mkBody(p: ProjRow, status: string | undefined): Record<string, unknown> {
@@ -85,7 +86,9 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
     } catch (e) {
       // 404 = 리스트가 없어진 것이라 재시도로 안 풀린다. 그것만 「영구」로 보고 status 없이 진행한다 —
       //  영구 실패를 pending 으로 남기면 그 행이 `LIMIT 200` 큐 머리를 점거한다(이 MR 이 고치는 바로 그 결함).
-      const permanent = String((e as Error)?.message).includes("404");
+      //  ⚠ 상태코드 자리만 본다 — clickupFetch 메시지엔 경로가 실리므로(`ClickUp 429 재시도 초과(5회): /list/9014041…`)
+      //   includes("404") 는 id 에 404 가 든 리스트의 일시 실패를 영구로 오판해 status 를 버리고 행을 닫는다.
+      const permanent = /^ClickUp 404 /.test(String((e as Error)?.message));
       logger.warn({ err: e, listId, permanent }, permanent
         ? "리스트가 없다 — 이 리스트의 행은 status 없이 푸시"
         : "리스트 상태셋 로드 실패 — 이 리스트의 행은 다음 틱으로 미룬다");
@@ -137,7 +140,8 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
         `SELECT id, level, parent_id, name, description, status_category, priority, start_date, due_date,
                 external_system, external_id, folder,
                 external_base->>'list_ext'   AS list_ext,
-                external_base->>'status_raw' AS base_status_raw
+                external_base->>'status_raw' AS base_status_raw,
+                external_base->>'status_category' AS base_status_category
          FROM project WHERE id=$1`, [ob.entity_id]);
       if (!p || p.folder === "__board_anchor__") { await markDone(ob.id); continue; } // 삭제됨/보드앵커 → skip
 
@@ -167,6 +171,7 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
         ourCategory: p.status_category,
         theirStatusRaw: p.base_status_raw,
         statuses,
+        baseCategory: p.base_status_category,
       });
       const body = mkBody(p, status);
       // 푸시하는 ours 값 → external_base 갱신(#6d 3-way 의 공통조상). 인바운드가 이 base 로 외부편집 변화를 판정.
@@ -193,7 +198,8 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
           if (!par || par.external_system !== "clickup" || !par.external_id) { deferred++; continue; } // 부모 미푸시 → 다음 틱
           parentExt = par.external_id;
         }
-        // 도달 불가 방어 — 위 SELECT 가 컨테이너 부재 시 네이티브 행을 뽑지 않는다(근거는 그 주석).
+        // 위 SELECT 가 컨테이너 부재 시 external_id 없는 행을 뽑지 않으므로, 여기 닿는 건 다른 시스템 미러
+        //  (external_system≠clickup — 예: 노션 미러 프로젝트)뿐이다. create 할 자리가 없으니 닫는다.
         if (!containerId) { await markDone(ob.id); skipped++; continue; }
         const ct = await createSafe(containerId, { ...body, ...(parentExt ? { parent: parentExt } : {}) });
         const url = ct.url || `https://app.clickup.com/t/${ct.id}`;

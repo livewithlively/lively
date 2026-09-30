@@ -269,6 +269,37 @@ test("decidePushStatus — canceled·backlog 에서도 저쪽이 같은 카테�
   assert.equal(decidePushStatus({ ourCategory: "backlog", theirStatusRaw: "Closed", statuses: closedList }), "planned");
 });
 
+// 🔴 회귀 락 — theirStatusRaw 는 인바운드만 전진시키므로 직전 푸시가 바꾼 저쪽 상태를 모른다. 닫고(푸시 → 저쪽 complete)
+//  인바운드 전에 다시 열면 theirStatusRaw 는 여전히 푸시 전 라벨(in-progress)이라, 그걸로 "이미 같은 카테고리"를
+//  판정하면 다시 연 변경이 안 나가고 다음 인바운드가 complete 를 채택해 되돌린다. base 카테고리(직전 푸시 값)와
+//  우리 값이 다르면 로컬 편집이 있었던 것이므로 가드를 건너뛰고 보낸다(2026-09-30 메인테이너 리뷰).
+test("decidePushStatus — 직전 푸시 뒤 인바운드 전에 다시 열면(base≠ours) 저쪽 구 라벨이 같은 카테고리여도 보낸다", () => {
+  const statuses: ClickUpStatus[] = [
+    { status: "backlog", type: "open" },
+    { status: "in progress", type: "custom" },
+    { status: "complete", type: "done" },
+  ];
+  assert.equal(
+    decidePushStatus({ ourCategory: "started", theirStatusRaw: "in-progress", baseCategory: "done", statuses }),
+    "in progress",
+  );
+});
+
+test("decidePushStatus — 우리 쪽이 안 바뀌었으면(base==ours) 같은-카테고리 가드와 드리프트 교정이 그대로다", () => {
+  const statuses: ClickUpStatus[] = [
+    { status: "backlog", type: "open" },
+    { status: "in progress", type: "custom" },
+    { status: "in review", type: "custom" },
+    { status: "complete", type: "done" },
+  ];
+  // 저쪽 커스텀 단계(in review)를 대표 라벨로 평탄화하지 않는다.
+  assert.equal(decidePushStatus({ ourCategory: "started", theirStatusRaw: "in-review", baseCategory: "started", statuses }), undefined);
+  // 실측 드리프트 모양(base.status_category=done · base.status_raw=backlog)은 여전히 고친다.
+  assert.equal(decidePushStatus({ ourCategory: "done", theirStatusRaw: "backlog", baseCategory: "done", statuses }), "complete");
+  // base 카테고리를 모르면(NULL) 가드만 본다.
+  assert.equal(decidePushStatus({ ourCategory: "started", theirStatusRaw: "in-review", baseCategory: null, statuses }), undefined);
+});
+
 // 구 표현식(`(override || !space.length ? list : space) ?? list ?? space ?? []`)과 **갈리는 유일한 케이스**.
 //  구현은 빈 배열을 nullish 로 보지 않아 `[]` 를 냈는데, 상속할 상태셋이 있으면 그쪽을 쓰는 게 맞다.
 //  이 동작은 인바운드 effectiveStatusDefs 와 공유되므로 의도로 못 박아 둔다(2026-09-21 리뷰 지적).
