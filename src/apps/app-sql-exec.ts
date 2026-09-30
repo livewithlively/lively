@@ -120,15 +120,24 @@ let limits = appSqlLimits();
 let buckets = new TokenBuckets(limits.ratePerSec, limits.burst);
 let slots = new KeyedSemaphore(limits.perWorkspace);
 let pool: pg.Pool | null = null;
+/** 닫는 중인 옛 풀들 — closeAppSqlPool 이 끝까지 기다린다. */
+const closing: Array<Promise<void>> = [];
 
 /** 테스트·운영 조정 — 상한을 다시 읽고 기억(버킷·세마포어)을 새로 만든다. 풀은 다음 사용 때 새 크기로 만든다. */
 export function resetAppSqlLimits(env: NodeJS.ProcessEnv = process.env): AppSqlLimits {
   limits = appSqlLimits(env);
   buckets = new TokenBuckets(limits.ratePerSec, limits.burst);
   slots = new KeyedSemaphore(limits.perWorkspace);
-  if (pool) { const p = pool; pool = null; void p.end().catch(() => undefined); }
+  if (pool) { const p = pool; pool = null; closing.push(p.end().catch(() => undefined)); }
   quotaCache.clear();
   return limits;
+}
+
+/** 앱 전용 풀을 닫는다(기다린다) — 시험 정리·종료 경로. DB 를 지우기 전에 불러야 끊긴 연결의 오류가 처리되지 않은 채 튀지 않는다. */
+export async function closeAppSqlPool(): Promise<void> {
+  if (pool) { const p = pool; pool = null; closing.push(p.end().catch(() => undefined)); }
+  const all = closing.splice(0);
+  await Promise.all(all);
 }
 
 /** 앱 전용 풀 — 본체 풀과 같은 DSN(런타임 역할)이지만 따로 센다. 처음 쓸 때 만든다. */
