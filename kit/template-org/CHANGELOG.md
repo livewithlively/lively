@@ -7,6 +7,11 @@
 기존 조직은 `--check <org-dir>` 가 "init 버전 → 현재 버전" 차이를 보고하면, **원하는 항목만 opt-in** 합니다(강제 아님).
 생성기는 누락 필드/파일에 관대(누락 → 기본/스킵)하므로, 옛 버전에서 init 한 조직콘텐츠도 계속 빌드됩니다.
 
+## VERSION 2 (2026-09-30, #4501)
+- `memory/MEMORY.md` → **`memory/knowledge-index.md`** 로 이름 변경(내용 무변경). 생성기(`build-context.mjs`)는 처음부터
+  `memory/knowledge-index.md` 만 읽었다 — VERSION 1 로 init 한 조직은 인덱스를 채워도 합성·발행에 안 실렸다.
+  옛 조직은 파일 이름만 바꾸면 된다(`--check` 가 «선택 누락 → 권장: memory/knowledge-index.md» 로 알린다).
+
 ## VERSION 1 (초기)
 - `org/org-defaults.md` (필수) — 회사·페르소나·업무방식.
 - `org/managed-policy.md` (선택) — 강제 규칙 템플릿.

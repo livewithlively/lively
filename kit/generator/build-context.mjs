@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// workflow-std 생성기 — 조직콘텐츠(org/ · members/ · memory/)를 입력받아
+// 키트 생성기(lively/kit/generator — 옛 별 레포 이름 workflow-std) — 조직콘텐츠(org/ · members/ · memory/)를 입력받아
 //   발행 아티팩트(설치 번들)를 조립한다: CLAUDE.md(@import) + AGENTS.md(inline) + 참조 md
 //   + setup/ + register-clients.sh + 선택한 하네스의 설정(.claude/...).
 // org-agnostic · zero-dep. 제품 파일(hooks/·adapters/·setup/·template-org/)은 KIT_ROOT, 조직콘텐츠는 --org(ORG_ROOT).
@@ -10,7 +10,7 @@
 //   훅만 설치(독푸드):  node generator/build-context.mjs --org <dir> --install-hooks <dir> [<dir>…]
 //
 //  - Claude Code: CLAUDE.md 를 읽고 @import 지원 → import 로 합성
-//  - Codex / openclaw: AGENTS.md 만 읽고 @import 미지원 → 내용 inline
+//  - Codex·OpenCode 등 AGENTS.md 를 읽는 하네스: @import 미지원 → 내용 inline
 //
 // 두 개의 분리된 루트(핵심 리팩터):
 //  - KIT_ROOT = 이 스크립트의 ../  (제품: hooks/·adapters/·setup/·template-org/·vendored register-clients.sh)
@@ -155,7 +155,7 @@ function emitRoot(orgRoot, orgName) {
 
 // 복사 목록 도출: CLAUDE.md 의 @import 줄 파싱(하드코딩 금지)
 // + 각 import 된 md 안의 상대 md 링크를 1-depth follow (외부 URL·앵커 제외)
-// — MEMORY.md 가 링크하는 memory/*.md 가 고아가 되지 않게. (ORG_ROOT 기준)
+// — memory/knowledge-index.md 가 링크하는 memory/*.md 가 고아가 되지 않게. (ORG_ROOT 기준)
 function collectArtifactFiles(claudeMd, orgRoot) {
   const orgHas = (p) => existsSync(join(orgRoot, p));
   const orgRead = (p) => readFileSync(join(orgRoot, p), "utf8").trim();
@@ -262,7 +262,7 @@ function emitHooks(targetDir, orgLabel) {
 const teamReadme = (publishLabel, orgLabel, orgName) => `# ${orgName} 팀 컨텍스트 (설치 묶음)
 
 ${orgName} 팀 컨텍스트 **설치 묶음**입니다. 설치 한 줄(\`/cli\`)을 한 번 돌리면(user-level 설치),
-이후 **어느 폴더에서든** 하네스(Claude Code · Codex · openclaw)가 조직 컨텍스트+리플렉스를 받습니다.
+이후 **어느 폴더에서든** 하네스(Claude Code · Codex · OpenCode 등)가 조직 컨텍스트+리플렉스를 받습니다.
 (조직 맥락은 설치 시 1회 + 매 세션 게이트웨이에서 **라이브로** 받습니다 — 번들에 정적 콘텐츠를 굽지 않습니다.)
 
 > **이 묶음은 생성물입니다 — 게이트웨이가 조직 DB(위키)에서 발행할 때마다 새로 만듭니다(git clone 아님).**
@@ -444,6 +444,10 @@ function publish(orgRoot, target, harness, orgName) {
   // register-clients.sh — 게이트웨이 레포가 캐노니컬(GATEWAY_DIR 로 오버라이드).
   //  기본은 KIT_ROOT 옆의 게이트웨이 디렉터리; 없으면 kit 에 vendoring 된 사본으로 폴백.
   //  ⚠ 레포명이 lively 로 바뀌었지만 그 전에 설치된 박스는 디렉터리가 context-ontology 다 — 둘 다 본다(신규 우선).
+  //  ⓘ(#4501) 이 탐색은 kit 이 게이트웨이 옆 **별 레포**이던 시절의 배치다. 지금 kit 은 lively 레포 안(<repo>/kit)이라
+  //   GATEWAY_DIR 을 주지 않으면 늘 vendored 사본(kit/setup/register-clients.sh)으로 떨어진다. 탐색을 <repo> 로 고치면
+  //   발행마다 정본을 사본 위에 복사(아래 copyFileSync)하게 되는데, 읽기전용 이미지에서 그 쓰기가 실패할 수 있어 두지 않았다.
+  //   대신 두 사본이 갈라지지 않게 kit/setup/register-clients-copies.test.mjs 가 바이트 동일을 지킨다.
   const gatewayDir = process.env.GATEWAY_DIR
     || [join(KIT_ROOT, "..", "lively"), join(KIT_ROOT, "..", "context-ontology")].find((d) => existsSync(d))
     || join(KIT_ROOT, "..", "lively");
@@ -633,7 +637,7 @@ function isEmptyish(dir) {
 //  git 은 만들지 않는다(오퍼레이터가 git init/remote). 이후 이 레포는 조직 소유 — template-org 를 다시 당기지 않음.
 function initOrg(targetArg, { force = false } = {}) {
   if (!existsSync(TEMPLATE_ORG)) {
-    console.error(`✗ template-org 없음: ${TEMPLATE_ORG} — 제품(workflow-std) 레포 안에서 실행하세요.`);
+    console.error(`✗ template-org 없음: ${TEMPLATE_ORG} — lively 레포의 kit/ 안에서 실행하세요.`);
     process.exit(1);
   }
   const target = resolve(process.cwd(), targetArg);
@@ -664,8 +668,8 @@ function initOrg(targetArg, { force = false } = {}) {
   console.log("   1) org/org-defaults.md — 회사·페르소나·업무방식의 <placeholder> 를 실제 내용으로 채우세요.");
   console.log("   2) org/managed-policy.md — 강제 규칙(짧게). members/ — 사람마다 프로필+신원(email 필수).");
   console.log("   3) gateway-url — 사내 MCP 게이트웨이 주소(없으면 비워둠 — 컨텍스트만, 라이브 데이터 제외).");
-  console.log("   4) 점검:  node <workflow-std>/generator/build-context.mjs --check " + targetArg);
-  console.log("   5) 발행:  node <workflow-std>/generator/build-context.mjs --org " + targetArg + " --publish <out> --harness claude");
+  console.log("   4) 점검:  node <lively>/kit/generator/build-context.mjs --check " + targetArg);
+  console.log("   5) 발행:  node <lively>/kit/generator/build-context.mjs --org " + targetArg + " --publish <out> --harness claude");
   console.log("  ※ git init/remote/commit 은 이 명령이 하지 않음 — 오퍼레이터가 새 독립 레포로 만듭니다.");
 }
 
@@ -752,10 +756,10 @@ function checkOrg(orgArg) {
   // ── gateway-url 안내(없으면 컨텍스트만, 라이브 데이터 제외 — 에러 아님) ──
   //  파일이 '있어도' 주석/공백뿐이면(init 직후 placeholder) 미작성으로 본다 — 초기화 직후 'green' 오인 방지.
   if (!orgHas("gateway-url")) {
-    warn("gateway-url 파일 없음 — 사내 MCP 게이트웨이 주소가 없으면 컨텍스트(파일)만, DB/도메인 라이브 조회는 빠집니다. setup 의 ORG_DEFAULT_URL/McpUrl 로도 줄 수 있습니다.");
+    warn("gateway-url 파일 없음 — 사내 MCP 게이트웨이 주소가 없으면 컨텍스트(파일)만, DB/도메인 라이브 조회는 빠집니다.");
   } else {
     const gwLines = orgRead("gateway-url").split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
-    if (gwLines.length === 0) warn("gateway-url 미작성(주석/공백만) — 실제 게이트웨이 주소를 채우거나 setup 의 ORG_DEFAULT_URL/McpUrl 로 주입하세요(없으면 컨텍스트만).");
+    if (gwLines.length === 0) warn("gateway-url 미작성(주석/공백만) — 실제 게이트웨이 주소를 채우세요(없으면 컨텍스트만).");
   }
 
   // ── 등록 멤버 존재 안내(init 직후엔 _template/_bindings 만 — '아직 멤버 없음' 명시) ──
