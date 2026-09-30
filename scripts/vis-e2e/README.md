@@ -7,21 +7,21 @@ the requirement is only verified by **hitting both surfaces side by side with th
 The unit test (`src/v6/visibility.test.ts`) and the SQL integration test (`src/v6/visibility.pg-test.mjs`) only look at the predicates —
 the leak where a locked task was actually being shipped in responses was caught **only by this e2e**.
 
-## Where it runs
-The `pilot-box` EC2 (our test box). Connect through the dev Mac mini:
+## What you need
+One Linux host running a Lively install — it must have the items-db container and the `.env` in the gateway app directory (`boot.sh` inherits that `.env`).
+Plus a working directory holding the build of the branch under test (`dist/` + a `node_modules/` from `npm ci`). You need to be able to run `docker` and `ss` through `sudo`.
+Values that differ per host are given as env vars (defaults at the top of `boot.sh`):
 
-```sh
-# On the dev Mac mini, the AWS [default] profile is SSO and can't be used non-interactively → override it by exporting static keys as env vars.
-ssh lively@localhost
-. ~/.lively-awsenv.sh                      # reads AWS_ACCESS_KEY_ID/SECRET from ~/.aws/credentials and exports them
-aws ec2 describe-instances --filters Name=tag:Name,Values=pilot-box \
-  --query 'Reservations[].Instances[].PublicIpAddress' --output text
-ssh -i ~/.ssh/pilot-box ubuntu@<that IP>
-```
+| env | Meaning |
+|---|---|
+| `VIS_E2E_DB_CONTAINER` | Name of the items-db container |
+| `VIS_E2E_APP_DIR` | Gateway app directory holding the production `.env` |
+| `VIS_E2E_WORK` | Working directory with this branch's build |
+| `VIS_E2E_RUNS` | Scripts `cycle.sh` runs (space-separated, default `run.mjs`) |
 
 ## Procedure
-1. `boot.sh` — creates two isolated DBs (`vis_e2e`, `vis_e2e_dm`) and starts this branch's gateway, inheriting the production `.env` but **overriding only the DB, port (8099), tokens and scheduler** (`cycle.sh` overrides the shared paths). It does not touch the live gateway (:8080) or the live DB.
-2. `cycle.sh` — restart + seed + run. For repeated verification, this is all you need.
+1. `boot.sh` — creates an isolated DB (`vis_e2e`) and starts this branch's gateway, inheriting the production `.env` but **overriding only the DB, port (8099), tokens and scheduler** (`cycle.sh` overrides the shared paths). It does not touch the live gateway (:8080) or the live DB.
+2. `cycle.sh` — restart + seed + run. For repeated verification, this is all you need. It copies the repo's `seed.mjs`·`run*.mjs` into the working directory and runs them there (`import pg` has to resolve from that `node_modules`).
 3. Baseline: `run.mjs` 34 · `run-v2.mjs` 30 · `run-ui-wire.mjs` 8 · `src/v6/visibility.pg-test.mjs` 30, all 0 failed.
 
 ## What each script checks
@@ -33,18 +33,17 @@ ssh -i ~/.ssh/pilot-box ubuntu@<that IP>
 - `run-axes.mjs` — axis toggles: checks with real responses, in a round trip, that turning a type on/off **actually lifts enforcement** (off = visible to everyone as before, on = locked again). It changes org-wide state, so it always restores the original state at the end.
 
 ## Pitfalls (things we actually ran into here)
-- **Don't kill the gateway with `pkill -f`.** If the pattern doesn't match the actual command line, it fails silently, the old process keeps holding the port, and the new process dies with EADDRINUSE → **you test old code and believe it passed.** `cycle.sh` finds and kills the port's owner, and checks that the pid answering is the pid it just started.
+- **Don't kill the gateway with `pkill -f`.** If the pattern doesn't match the actual command line, it fails silently, the old process keeps holding the port, and the new process dies with EADDRINUSE → **you test old code and believe it passed.** `boot.sh`·`cycle.sh` stop the port's owner through `port.sh`, and `cycle.sh` checks that the pid answering is the pid it just started.
 - **Put wiring assertions first.** If a token gets 401, every "blocked" assertion passes (a vacuous test). `run.mjs` first checks via `/api/ui/me` that all three tokens are alive, and that a non-target actually receives the public projects.
 - **You can't make an admin with a static token (`AUTH_TOKENS_JSON`)** — admin/runtime are deliberately stripped on load (because static tokens can't be revoked). So `seed.mjs` issues DB tokens directly into `auth_token` (effective permission = token ∩ member, so it sets the member scopes too).
 - The release bundle doesn't include `mysql2`. This check doesn't use a mysql source, so it is replaced with a stub that "fails immediately if used" (better than passing silently).
-- The shared workspace is owned by the production user, so `ubuntu` can't write to it → run against an e2e-only path (not a code problem).
+- The shared workspace is owned by the production user, so the user running the e2e can't write to it → run against an e2e-only path (not a code problem).
 
 ## Cleanup
 ```sh
-kill $(sudo ss -ltnp | awk '/:8099 /{match($0,/pid=([0-9]+)/,m); print m[1]}')
-sudo docker exec context-ontology-items-db-1 psql -U lively -d postgres \
-  -c 'DROP DATABASE IF EXISTS vis_e2e' -c 'DROP DATABASE IF EXISTS vis_e2e_dm'
-rm -rf ~/vis-e2e
+. scripts/vis-e2e/port.sh && stop_port_owner 8099
+sudo docker exec "$VIS_E2E_DB_CONTAINER" psql -U lively -d postgres -c 'DROP DATABASE IF EXISTS vis_e2e'
+rm -rf "$VIS_E2E_WORK"
 ```
 
 ## If you added a new gate, watch it go red once

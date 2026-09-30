@@ -34,5 +34,5 @@ license notices, change the branding.
 ## Questions
 
 If you are unsure whether a use is fine, ask — we would much rather answer a question than send a
-complaint. Requests for permission and questions about this policy: open an issue, or contact the
-maintainers.
+complaint. Requests for permission and questions about this policy: open an issue, or email the
+maintainers at **lively@lvly.io**.
