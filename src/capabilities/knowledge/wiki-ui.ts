@@ -10,6 +10,7 @@ import {
 } from "../../v6/knowledge-comment-store.js";
 import { setKnowledgePropsUi } from "../../v6/knowledge-store.js";
 import { assertKnowledgeVisible, assertKnowledgeWritable } from "./shared.js";
+import { assertNoContentSecrets } from "../content-secrets.js";
 
 // ════════ #592 지식/위키 UI — 전역 뷰 설정·속성 오버라이드·댓글·트리 이동(REST 계약 §2). ════════
 
@@ -191,6 +192,7 @@ export const knowledgeCommentPost: Capability = {
       } }],
   },
   handler: async (input: KnowledgeCommentPostInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501 평문 시크릿 차단
     await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return { feed: await postKnowledgeComment(input.name, input.text, writeCtx, input.parent_id ?? null) };

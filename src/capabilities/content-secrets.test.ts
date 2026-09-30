@@ -16,9 +16,13 @@ const { taskDetailV6Capabilities } = await import("./task-detail-v6.js");
 const { listV6Capabilities } = await import("./lists-v6.js");
 const { taskFieldV6Capabilities } = await import("./task-field-v6.js");
 const { authoringCapabilities } = await import("./knowledge/authoring.js");
+const { wikiUiStaticCapabilities, wikiUiNamedCapabilities } = await import("./knowledge/wiki-ui.js");
+const { folderV6Capabilities } = await import("./folders-v6.js");
+const { AUTO_CREATED_MARK } = await import("../project/first-prompt-project.js");
 const { shellProjectFromPrompt } = await import("../project/first-prompt-project.js");
 
-const all = [...categoryCapabilities, ...projectV6Capabilities, ...taskDetailV6Capabilities, ...listV6Capabilities, ...taskFieldV6Capabilities, ...authoringCapabilities];
+const all = [...categoryCapabilities, ...projectV6Capabilities, ...taskDetailV6Capabilities, ...listV6Capabilities, ...taskFieldV6Capabilities, ...authoringCapabilities,
+  ...wikiUiStaticCapabilities, ...wikiUiNamedCapabilities, ...folderV6Capabilities];
 const cap = (name: string) => {
   const c = all.find((x) => x.name === name);
   assert.ok(c, `capability ${name} 를 찾지 못했다(테스트가 대상을 잃음)`);
@@ -31,6 +35,9 @@ const ctx = { source: "mcp" } as never;
 const GH = "gh" + "p_" + "A1b2C3d4".repeat(5);
 const GHO = "gh" + "o_" + "Z9y8X7w6".repeat(4);
 const ANT = "sk" + "-ant-" + "api03-" + "Q".repeat(40);
+const OPROJ = "sk" + "-proj-" + "Ab3_dE-f".repeat(6);
+const PKH = "-----BEGIN " + "PRIVATE KEY-----";
+const PKB = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC".repeat(2);
 
 type Outcome = { blocked: boolean; status?: number; message: string };
 const call = async (name: string, input: unknown): Promise<Outcome> => {
@@ -47,7 +54,7 @@ const call = async (name: string, input: unknown): Promise<Outcome> => {
 let pass = 0;
 const t = async (name: string, fn: () => Promise<void> | void): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
 
-// ── ① 입구 15곳 — 텍스트 칸마다 토큰 → 400 · 칸 경로 · 값 미포함 ──
+// ── ① 입구 21곳 — 텍스트 칸마다 토큰 → 400 · 칸 경로 · 값 미포함 ──
 const ENTRIES: Array<[string, Record<string, unknown>, string]> = [
   ["knowledge_save", { name: "k", title: "t", body_md: `본문 ${GH}`, category: "c", type: "reference" }, "body_md"],
   ["knowledge_set_title", { name: "k", title: `제목 ${GH}` }, "title"],
@@ -64,6 +71,14 @@ const ENTRIES: Array<[string, Record<string, unknown>, string]> = [
   ["project_list_create_v6", { name: `목록 ${GH}` }, "name"],
   ["project_list_update_v6", { id: 1, description: `설명 ${GH}` }, "description"],
   ["task_field_value_set_v6", { taskId: 2, fieldId: 3, value: `값 ${GH}` }, "value"],
+  // 격리 리뷰가 짚은 빠진 입구 6곳(사람이 쓰는 이름·본문)
+  ["knowledge_comment_post", { name: "k", text: `댓글 ${GH}` }, "text"],
+  ["task_tags_v6", { id: 2, name: `태그 ${GH}` }, "name"],
+  ["task_tag_update_v6", { id: 1, name: `태그 ${GH}` }, "name"],
+  ["task_field_create_v6", { projectId: 1, field_type: "text", name: `필드 ${GH}` }, "name"],
+  ["task_field_update_v6", { id: 1, name: `필드 ${GH}` }, "name"],
+  ["project_folder_create_v6", { name: `폴더 ${GH}` }, "name"],
+  ["project_folder_update_v6", { id: 1, name: `폴더 ${GH}` }, "name"],
 ];
 for (const [name, input, field] of ENTRIES) {
   await t(`E1 ${name} — ${field} 의 토큰을 DB 전에 400 으로 거부한다(칸 경로 O · 값 X)`, async () => {
@@ -133,6 +148,29 @@ await t("E13 개인키 머리줄만 적은 형식 설명은 막지 않고, 본�
   assert.ok(!(await call("task_comment_v6", { id: 2, text: `파일 첫 줄은 ${header} 이다` })).blocked, "머리줄 설명을 막았다");
   const pem = `${header}\n${"b3BlbnNzaC1rZXktdjEAAAAA".repeat(3)}\n`;
   assert.ok((await call("task_comment_v6", { id: 2, text: pem })).blocked, "본문이 붙은 개인키를 못 막았다");
+});
+
+await t("E14 개인키 — JSON 이스케이프(GCP 서비스계정)·암호화 PEM·인용 블록도 400(첫 판이 놓친 모양 — 격리 리뷰)", async () => {
+  const shapes = {
+    json_escaped: `{"private_key":"${PKH}\\n${PKB}"}`,
+    encrypted: `-----BEGIN RSA ${"PRIVATE KEY"}-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,ABCDEF0123\n\n${PKB}`,
+    md_quote: `> ${PKH}\n> ${PKB}`,
+  };
+  for (const [k, text] of Object.entries(shapes)) {
+    assert.ok((await call("task_comment_v6", { id: 2, text })).blocked, `${k} 모양의 개인키를 못 막았다`);
+  }
+});
+await t("E15 OpenAI 프로젝트 키(sk-proj-…)도 400", async () => {
+  assert.ok((await call("task_comment_v6", { id: 2, text: `키 ${OPROJ}` })).blocked);
+});
+await t("E16 외부 하네스 첫 지시 자동 생성(AUTO_CREATED_MARK)은 막지 않고 가린다 — 입력이 가려진 채 다음 단계로 간다", async () => {
+  const input = { name: `${GH} 배포`, description: `## 첫 지시(원문)\n\n${GH} 로 배포해 줘\n\n${AUTO_CREATED_MARK}` };
+  const r = await call("project_create_v6", input);
+  assert.ok(!r.blocked, `자동 생성을 막았다(세션 작업면이 안 생긴다): ${r.message}`);
+  assert.ok(!input.description.includes(GH) && input.description.includes("[REDACTED]"), "본문이 가려지지 않았다");
+  assert.ok(!input.name.includes(GH), "이름이 가려지지 않았다");
+  // 표식 없는 같은 입력은 종전대로 400(사람이 쓰는 입구)
+  assert.ok((await call("project_create_v6", { name: "p", description: `본문 ${GH}` })).blocked);
 });
 
 // ── 자동 생성은 막지 않고 가린다 ──
