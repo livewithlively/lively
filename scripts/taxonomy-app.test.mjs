@@ -116,7 +116,7 @@ ok(taxSide.length > 0 && !/team|담당/.test(taxSide), "W1 사이드바에 팀 �
 ok(/APP_ICON_NAMES\s*=\s*\[[^\]]*'tags'/.test(read("web/v2/glass-icon.ts")) && /--gi-c-tags\s*:/.test(read("public/styles/01-base.css")), "W1 앱 아이콘에 tags(이름 · 색 토큰)");
 ok(/^\s*tags:\s*'M/m.test(read("web/lib/icon-paths.ts")), "W1 선 아이콘 표에 tags");
 const IDX = read("public/index.html");
-ok(/49a-v2-ctx\.css">\s*\n<link rel="stylesheet" href="\.\/styles\/49b-v2-taxonomy\.css">/.test(IDX) && existsSync(join(root, "public/styles/49b-v2-taxonomy.css")), "W1 앱 CSS 가 49a-v2-ctx 뒤에 실린다");
+ok(/49-v2-ctx\.css">\s*\n<link rel="stylesheet" href="\.\/styles\/49-v2-taxonomy\.css">/.test(IDX) && existsSync(join(root, "public/styles/49-v2-taxonomy.css")), "W1 앱 CSS 가 49-v2-ctx 뒤에 실린다");
 const APPJS = code(read("web/v2/taxonomy.ts"));
 ok(APPJS.length > 0 && !/merge|합치기/.test(APPJS), "W1 합치기(API 없음)는 단추도 없다");
 //  셸은 탭 키가 같은 주소끼리 다시 그리지 않는다. 앱 안 이동(지도 → 분류 → 손볼 것)은 앱이 듣고 같은 칸에 다시 그려야 한다(라이브 끝단 검증에서 찾은 것).

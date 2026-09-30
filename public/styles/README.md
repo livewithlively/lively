@@ -16,8 +16,10 @@ as-is, and in several places a later file actually overrides rules from an earli
 - The numeric file-name prefixes (`01-` … `90-`) make that order visible, and are meant to make name order = cascade order
   (the concatenation in `scripts/check-css-drops.mjs` also joins files in name order).
 - **Don't reorder.** Moving files or changing prefixes silently breaks screens.
-- When several files share a number, add a letter — `49a-`·`49b-`·`49c-` — so name order matches load order (#4501 — the former `49-v2-*`
-  trio sorted as ctx·projpane·taxonomy but loaded as ctx·taxonomy·projpane. The load order was kept; only the names were changed).
+- When several files share a number, **their order among themselves is set by the list in index.html** — it can differ from name order. The `49-v2-*`
+  trio loads as ctx → taxonomy → projpane (name order is ctx·projpane·taxonomy); the taxonomy-app and task-pane tests lock that order.
+  (#4501 — renaming them to 49a·49b·49c was reverted: a test on another branch pointed at the old name right away and broke. Renaming a
+  file breaks every branch in flight, so pick a number nobody else uses when you create a new file.)
 
 ## Adding new rules
 
@@ -87,9 +89,9 @@ injected into each `<link href>`, and requests whose `?v=` matches the current v
 | 46 | `46-v2-me.css` | New shell [My profile · Preferences] window (#1843) — a two-column overlay opened by the bottom-left [Me] row |
 | 47 | `47-v2-rail.css` | New shell **far-left rail** (#2016) — workspace nameplate · four areas · recent apps · [Apps]/[Me] + per-area sidebar parts |
 | 48 | `48-v2-sources.css` | Sources app (#2423) reading room — list + original in two panes · app-owned sidebar |
-| 49 | `49a-v2-ctx.css` | Context menu (#3784) — only what the engine (`web/v2/ctx-menu.ts`) adds (the skeleton is in `42-v2-panes.css`) |
-| 49 | `49b-v2-taxonomy.css` | "Taxonomy" app (#4233) · full map · things to fix · category detail (link diagram) · group cleanup window. In name order, after `49a-v2-ctx.css` and before `50-mobile.css` |
-| 49 | `49c-v2-projpane.css` | Side-pane "Project" app (#4135, `web/v2/panes-tasks.ts`) — layered on top of `.pn-tk-*` in `42-v2-panes.css` |
+| 49 | `49-v2-ctx.css` | Context menu (#3784) — only what the engine (`web/v2/ctx-menu.ts`) adds (the skeleton is in `42-v2-panes.css`) |
+| 49 | `49-v2-taxonomy.css` | "Taxonomy" app (#4233) · full map · things to fix · category detail (link diagram) · group cleanup window. In name order, after `49-v2-ctx.css` and before `50-mobile.css` |
+| 49 | `49-v2-projpane.css` | Side-pane "Project" app (#4135, `web/v2/panes-tasks.ts`) — layered on top of `.pn-tk-*` in `42-v2-panes.css` |
 | 50 | `50-mobile.css` | Full phone (≤640px) overhaul (#4088) — bottom tab bar · lists take one full screen · side-pane drawer · tables show only the title column · vertical track for the flow map · ClickUp-mobile-style project board (#4231). Reclaims the narrow-width rules scattered across screen files near the end of the cascade (before 52-guide · 90-dark) |
 | 52 | `52-guide.css` | "User guide" app (#4179, `web/guide/*.ts`) — three panes: doc list · body · on this page · width decided by container query |
 | 90 | `90-dark.css` | Dark theme (#1683) — full dark redefinition of the light tokens in `01-base.css` (two paths: `data-theme="dark"` · `prefers-color-scheme: dark`) + the '§보정' (fixes) section at the bottom. The very end of the cascade |
