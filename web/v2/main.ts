@@ -51,6 +51,7 @@ import { ASIDE_MSG, setAsideGuestOpener, type AsideGuest } from './aside-slot.js
 import { takeCreated } from './created-cache.js';
 import { openMeModal } from './me-modal.js';   // #1898 — 클래식에서 올라온 부팅이 [화면] 자리를 되연다
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';
+import { projectPageHref, projectPageId } from '../lib/proj-page.js';   // #3870 프로젝트 화면 주소 한 벌(사이드바 [→]·통합검색)
 import { mountCtxMenus } from './ctx-registry.js';   // #3784 우클릭 메뉴 배선(표 data-ctx 를 읽는다)
 import { mountCtxShell } from './ctx-shell.js';     // #3784 셸이 아는 것(세션·프로젝트·앱·알림)의 메뉴   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
 import { instBrowserHost, rowStands, type InstFacts } from '../lib/row-stands.js';
@@ -589,6 +590,11 @@ export async function bootV2(): Promise<void> {
     data: () => data,
     open: (href, newTab, title) => {
       if (title) { const k = routeKey(href); if (k.startsWith('raw:')) routeTitleHint.set(k, title); }
+      //  프로젝트 줄은 사이드바 [→] 와 **같은 문**으로 연다(#3870 원준 2026-09-30). 프로젝트 화면 창은 하나를 돌려 쓰므로
+      //   (routeKey 'app:projects2') 아래 일반 경로로 가면 다른 프로젝트를 띄워 둔 그 창이 켜지기만 하고 새 프로젝트로 안 바뀐다.
+      //   ⌘ 클릭도 같다 — 새로 세울 창이 따로 없다.
+      const pid = projectPageId(href);
+      if (pid) { openProjectPage(pid); return; }
       if (!tabsApi) { location.hash = href; return; }
       const hit = tabsApi.find(href);
       if (newTab) { if (hit) tabsApi.activate(hit); else tabsApi.add(href); return; }
@@ -2102,7 +2108,7 @@ function openSideRow(key: string, fallback?: string): void {
 /** 프로젝트 경로를 누르면 현재 세션을 덮지 않고 '프로젝트' 앱 인스턴스를 열거나 재사용한다. */
 function openProjectPage(projectId: number): void {
   if (!tabsApi || !(projectId > 0)) return;
-  const href = '#/app/projects2/p/' + projectId;
+  const href = projectPageHref(projectId);
   const hit = tabsApi.find(href);
   if (!hit) { tabsApi.add(href); return; }
   const wasRendered = hit.rendered;
