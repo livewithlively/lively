@@ -1,4 +1,4 @@
-/* 49-v2-taxonomy.css — 「분류체계」 앱(#4233, web/v2/taxonomy.ts). 맥락 관리의 카테고리 탭을 앱으로 뺐다(원준 2026-09-26).
+/* 49b-v2-taxonomy.css — 「분류체계」 앱(#4233, web/v2/taxonomy.ts). 맥락 관리의 카테고리 탭을 앱으로 뺐다(원준 2026-09-26).
    구성은 위키 본문 2판 · AI 세션 목록과 같다: 테두리 상자 없음, 머리 두 줄(빵부스러기 · 도구줄), 그 아래 본문.
    색은 전부 토큰이라 다크(90-dark)가 따라온다. 연결 그림(SVG)도 CSS 클래스로 칠한다(속성에 색을 박지 않는다). */
 .v2-tx { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }

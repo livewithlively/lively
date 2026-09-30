@@ -79,8 +79,8 @@ ok(/'lively:open-route'/.test(src["web/v2/main.ts"]) && /'lively:open-route'/.te
 
 // E7. 스타일 — 새 시트가 index.html 에 걸렸고, #v2-root 밖(body)에 뜨는 아이콘의 획 규칙이 있다(#2016 §8 함정).
 const HTML = read("public/index.html");
-ok(HTML.includes('styles/49-v2-ctx.css'), "E7a 49-v2-ctx.css 링크");
-ok(/\.pn-ctx-svg \{[^}]*fill: none;[^}]*stroke: currentColor/.test(read("public/styles/49-v2-ctx.css")), "E7b body 밑 아이콘 획 규칙");
+ok(HTML.includes('styles/49a-v2-ctx.css'), "E7a 49a-v2-ctx.css 링크");
+ok(/\.pn-ctx-svg \{[^}]*fill: none;[^}]*stroke: currentColor/.test(read("public/styles/49a-v2-ctx.css")), "E7b body 밑 아이콘 획 규칙");
 
 // E8. 공통 행의 중복 제거 — 세션 행은 링크이기도 해서 「새 탭에서 열기」가 두 번 서지 않게 이름으로 거른다.
 ok(/const seen = new Set<string>\(\);/.test(R) && /const fresh = add\.filter\(\(r\) => r\.sep \|\| !seen\.has\(r\.label\)\)/.test(R) && /if \(item\) put\(item\.rows\);\s*if \(surface\) put\(surface\.rows\);/.test(R), "E8 세 겹(항목·표면·공통) 이름 중복 제거 — 앞 겹이 이긴다");

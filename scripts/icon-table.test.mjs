@@ -404,7 +404,7 @@ const check = (T, label, paper, ink) => {
 ok(/--ic-stroke:\s*1\.7\s*;/.test(strip(BASE)), "S1 --ic-stroke 가 1.7");
 const css = (f) => strip(read("public/styles/" + f));
 const rule = (sheet, sel) => { const m = new RegExp("(?:^|\\n)\\s*" + sel.replace(/[.#\[\]]/g, "\\$&") + " \\{[^}]*\\}").exec(sheet); return m ? m[0] : ""; };
-const CLS = [["40-v2.css", "#v2-root .v2-ic"], ["47-v2-rail.css", ".v2-rail-ic"], ["42-v2-panes.css", ".pn-i"], ["50-mobile.css", ".v2-mtab-ic"], ["47-v2-rail.css", ".v2-ptl-ic"], ["40-v2.css", ".v2-dock-ic"], ["40-v2.css", ".v2-gi-glyph"], ["49-v2-ctx.css", ".pn-ctx-svg"]];
+const CLS = [["40-v2.css", "#v2-root .v2-ic"], ["47-v2-rail.css", ".v2-rail-ic"], ["42-v2-panes.css", ".pn-i"], ["50-mobile.css", ".v2-mtab-ic"], ["47-v2-rail.css", ".v2-ptl-ic"], ["40-v2.css", ".v2-dock-ic"], ["40-v2.css", ".v2-gi-glyph"], ["49a-v2-ctx.css", ".pn-ctx-svg"]];
 for (const [f, sel] of CLS) ok(/stroke-width:\s*var\(--ic-stroke\)/.test(rule(css(f), sel)), `S1 ${sel} 가 --ic-stroke 를 읽는다`);
 // 종(알림)은 그 화면이 있는 가지에만 있다. 있으면 같은 토큰을 읽어야 한다.
 { const r = rule(css("40-v2.css"), ".v2-bell-ic"); ok(!r || /stroke-width:\s*var\(--ic-stroke\)/.test(r), "S1 .v2-bell-ic 가 있으면 --ic-stroke 를 읽는다"); }
