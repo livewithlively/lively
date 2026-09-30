@@ -42,8 +42,12 @@ function pjvtmAttachments(d, t, refresh) {
           onclick: () => authDownload(base + pid + '/file?download=1&path=' + encodeURIComponent(rel), f.name) }),
         el('button', { class: 'pjv-tm-att-act danger', type: 'button', title: '삭제', text: '✕',
           onclick: async () => {
-            if (!confirm('첨부 ‘' + f.name + '’을(를) 삭제할까요?')) return;
-            try { await api(base + pid + '/file?path=' + encodeURIComponent(rel), { method: 'DELETE' }); refresh(); }
+            if (!confirm('첨부 ‘' + f.name + '’을(를) 삭제할까요?\n\n자료로 등록된 파일이면 [휴지통] ▸ [자료] 탭에서 되살릴 수 있어요.')) return;
+            try {
+              const r: any = await api(base + pid + '/file?path=' + encodeURIComponent(rel), { method: 'DELETE' });
+              if (Number(r && r.trashed) > 0) toast('휴지통으로 보냈어요 — [휴지통] ▸ [자료] 탭에서 되살릴 수 있어요');
+              refresh();
+            }
             catch (e) { toast('삭제 실패 — ' + e.message, true); } } })));
     }
   })();

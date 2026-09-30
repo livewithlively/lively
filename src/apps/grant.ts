@@ -26,6 +26,14 @@ export function toolAllowed(allowlist: readonly string[], name: string): boolean
   return allowlist.some((p) => toolMatchesGlob(p, name));
 }
 
+/**
+ * 동의가 **옛 범위**라서 막힌 것인가(#4225) — 앱이 선언한 도구인데 지금 동의엔 없다. 참이면 «다시 동의» 로 풀린다
+ *  (앱이 갱신돼 새 도구를 얻은 경우). 선언 밖 도구는 거짓 — 다시 동의해도 못 얻으므로 종전 «권한 밖» 이 맞다.
+ */
+export function needsRegrant(grantTools: readonly string[], declaredTools: readonly string[], name: string): boolean {
+  return !toolAllowed(grantTools, name) && toolAllowed(declaredTools, name);
+}
+
 export interface ResolvedGrant { scopes: string[]; tools: string[] }
 
 /**

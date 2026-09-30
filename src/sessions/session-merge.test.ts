@@ -2,7 +2,7 @@
 //  실측 재현(2026-08-15 dev): 게이트웨이와 노드 에이전트가 같은 머신·같은 tmux 서버를 공유하자
 //  같은 세션 id 가 local(중앙 tmux) 과 remote(노드 스냅샷) 양쪽에 잡혀 AI 세션 탭에 카드가 2장씩 떴다.
 import assert from "node:assert/strict";
-import { mergeSessionViews } from "./session-merge.js";
+import { mergeSessionViews, dropTrashedRows } from "./session-merge.js";
 
 interface Row { id: string; node?: { id: string; name: string; online: boolean } | null; restorable?: boolean }
 const s = (id: string): Row => ({ id });
@@ -95,5 +95,20 @@ assert.deepEqual(mergeSessionViews(), []);
 
 // ⑩ 같은 그룹 안 중복도 접는다(방어 — 한 출처가 같은 세션을 두 번 실어 보내도 카드는 1장).
 assert.deepEqual(ids(mergeSessionViews([s("A"), s("A")], [], [])), ["A"]);
+
+// ── 휴지통 표식이 붙은 줄 걷기(#3778 — 휴지통을 그리지 않는 목록: 프로젝트 상세의 세션 칸) ──
+{
+  const rows = [{ id: "box-a", claudeSessionId: "uuid-a" }, { id: "box-b" }, { id: "box-c", claudeSessionId: "uuid-c" }, { id: "box-d", claudeSessionId: null }];
+  // ⑪ 표식이 하나도 없으면 그대로(같은 배열 — 헛돌지 않는다).
+  assert.equal(dropTrashedRows(rows, new Map()), rows);
+  // ⑫ 박스 id 에 붙은 표식.
+  assert.deepEqual(dropTrashedRows(rows, new Map([["box-b", 1]])).map((x) => x.id), ["box-a", "box-c", "box-d"]);
+  // ⑬ ★대화 uuid 에만 붙은 표식 — 기록만 남은 세션은 uuid 로 버려진다. 그 세션도 걷힌다.
+  assert.deepEqual(dropTrashedRows(rows, new Map([["uuid-c", 1]])).map((x) => x.id), ["box-a", "box-b", "box-d"]);
+  // ⑭ 상관없는 표식 · uuid 가 없는 줄(null) — 남는다(빈 uuid 가 아무 표식에나 걸리지 않는다).
+  assert.deepEqual(dropTrashedRows(rows, new Map([["other", 1], ["", 1]])).map((x) => x.id), ["box-a", "box-b", "box-c", "box-d"]);
+  // ⑮ 표식의 모양(휴지통에 있음 · 완전 삭제됨)은 가리지 않는다 — 둘 다 이 목록에 설 이유가 없다.
+  assert.deepEqual(dropTrashedRows(rows, new Map<string, unknown>([["box-a", { purged: true }], ["box-d", { purged: false }]])).map((x) => x.id), ["box-b", "box-c"]);
+}
 
 console.log("session-merge tests passed");

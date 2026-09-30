@@ -23,10 +23,12 @@ import { extractHwp } from "../connectors/hwp.js";   // #3778 — 한글 .hwp �
 import { memberReadRange, memberReadTo, memberStat } from "../terminal/terminal-member-fs.js";
 import { resolveRootPath, userSlug } from "../terminal/profiles.js";
 import { resolveMemberOsUser } from "../terminal/terminal-isolation.js";
-import { ensureLocalFilesDistillerOnce } from "../org/distill/local-preset.js";   // #1881 L3 — 첫 업로드 때 증류기 프리셋(꺼진 채)
+import { ensureLocalFilesDistillerOnce } from "../org/distill/local-preset.js";
+import { keepEntry, entryFields, type UploadEntry } from "./upload-entry.js";   // #4233: 들어온 길(올린 자료 · AI가 만든 파일)   // #1881 L3: 첫 업로드 때 증류기 프리셋(꺼진 채)
 import {
   LOCAL_SYSTEM, LOCAL_INSTANCE, type LocalRoot, type LocalIngestKind,
-  localExternalId, parseLocalExternalId, normalizeLocalRel, classifyLocalPath, localChannelOf, localFileUrl, localMimeOf,
+  localExternalId, parseLocalExternalId, normalizeLocalRel, classifyLocalPath, localChannelOf, localFileUrl, localMimeOf, personalRootMember,
+  type FileTrashStamp,
   buildLocalBinaryStub, STUB_NOTE_VISION, stubNoteUnreadable, stubNoteExtractFailed, decodeLocalText, looksLikeText,
 } from "./local-file-core.js";
 
@@ -49,6 +51,8 @@ export interface LocalUploadInput {
   uploader: { id: string | null; name?: string | null };
   /** 채널(최상위 폴더)이 없을 때의 채널명 — 프로젝트명·'uploads' 등 */
   channelFallback: string;
+  /** 들어온 길(#4233): 사람이 올렸나(upload) · AI 세션이 만들었나(generated). 판정은 ingest/upload-entry.ts. */
+  entry: UploadEntry;
 }
 export interface LocalIngestResult {
   ingested: boolean; kind: LocalIngestKind; reason?: string; source_id?: number; external_id?: string;
@@ -170,8 +174,21 @@ export async function ingestLocalUpload(u: LocalUploadInput): Promise<LocalInges
     updated_at: st.mtime ?? undefined,
     fields: { path: rel, root: u.root.kind, ext: c.ext, bytes: st.size, extracted: built.extracted, local_kind: built.kind, ...(built.reason ? { local_reason: built.reason } : {}) },
   };
+  //  프로젝트 이름(#4233): 자료 상세의 «올린 곳 · 만든 곳» 한 줄과 목록의 원천 칸이 읽는다. 폴더 이름(container_name)은
+  //   하위 폴더면 그 폴더라 프로젝트를 말하지 못한다. 못 읽으면 적지 않는다(화면이 «프로젝트 #id» 로 쓴다).
+  if (u.root.kind === "project") {
+    const pname = await getProjectRow(u.root.id).then((r) => r?.name ?? null).catch(() => null);
+    if (pname) item.fields = { ...item.fields, project_name: pname };
+  }
 
   const id = await withTx(async (client) => {
+    //  들어온 길은 처음 한 번 정해진다(#4233): 사람이 올린 파일을 AI 가 고쳐 다시 올려도 「올린 자료」에 남는다.
+    //   mirror 의 upsert 는 fields 를 통째로 바꾸므로 기존 값을 먼저 읽어 이어 준다.
+    const prev = await client.query(
+      `SELECT fields->>'entry' AS entry, fields->>'entry_session' AS entry_session FROM source
+        WHERE external_system=$1 AND external_instance=$2 AND external_id=$3`,
+      [LOCAL_SYSTEM, normalizeExternalInstance(LOCAL_INSTANCE), extId]);
+    item.fields = { ...item.fields, ...entryFields(keepEntry(prev.rows[0] as { entry?: unknown; entry_session?: unknown } | undefined, u.entry)) };
     await mirrorSourceV6(client, item, LOCAL_SYSTEM, extId);
     const r = await client.query(
       `SELECT id, lifecycle FROM source WHERE external_system=$1 AND external_instance=$2 AND external_id=$3`,
@@ -209,11 +226,84 @@ export async function supersedeLocalPath(root: LocalRoot, rel: string): Promise<
   return r.rowCount ?? 0;
 }
 
+/**
+ * supersedeLocalPath 의 역 — **그 좌표 한 건만** 다시 살린다(#4302 첨부 되돌리기: 파일이 원래 자리로 돌아왔다).
+ *  하위 경로는 건드리지 않고, 휴지통 도장이 찍힌 행(사람이 지운 것)은 되살리지 않는다.
+ */
+export async function reactivateLocalPath(root: LocalRoot, rel: string): Promise<number> {
+  const key = localExternalId(root, rel);
+  const r = await itemsPool.query(
+    `UPDATE source SET lifecycle='active', updated_at=now()
+      WHERE external_system=$1 AND external_instance=$2 AND external_id=$3 AND lifecycle='superseded'
+        AND NOT (COALESCE(fields, '{}'::jsonb) ? 'trash')
+      RETURNING id`,
+    [LOCAL_SYSTEM, normalizeExternalInstance(LOCAL_INSTANCE), key]);
+  return r.rowCount ?? 0;
+}
+
+// ── 파일 휴지통(#3778) ─────────────────────────────────────────────────────────────────────────────
+//  원준 2026-09-20: 휴지통에 「자료」 탭 — «지운 자료도 되살릴 수 있어야 한다». 종전 파일 삭제는 디스크에서 바로 지웠고(rm),
+//  자료 행만 superseded 로 숨었다 — 되살릴 바이트가 없었다. 이제 **자료가 달린 경로**는 지우는 대신 프로젝트 폴더 안
+//  숨김 자리(`.lively/trash/<batch>/`)로 **옮기고**, 그 아래 자료마다 «어디서 어디로 갔나» 도장(fields.trash)을 찍는다.
+//   · 숨김 자리인 이유: 목록·검색·동기화 매니페스트가 점으로 시작하는 이름을 전부 건너뛴다(project-storage·project-manifest) —
+//     새 규칙 없이 화면과 로컬 PC 동기화에서 빠진다.
+//   · 도장이 자료 행에 사는 이유: 휴지통 화면은 프로젝트를 가로질러 한 번에 읽어야 한다. 디스크를 프로젝트마다 훑을 수는 없다.
+//   · 자료가 하나도 없는 경로(코드 폴더·node_modules·빈 폴더)는 종전대로 바로 지운다 — 휴지통에 세울 줄이 없는 것을
+//     숨김 자리에 쌓으면 아무도 못 비우는 용량만 남는다.
+/** 그 경로(폴더면 하위 전부)에 살아 있는 자료가 몇 건인가 — 0 이면 휴지통에 세울 것이 없다(종전대로 바로 지운다). */
+export async function countActiveLocalUnder(root: LocalRoot, rel: string): Promise<number> {
+  const key = localExternalId(root, rel);
+  const r = await itemsPool.query(
+    `SELECT count(*)::int AS n FROM source
+      WHERE external_system=$1 AND external_instance=$2 AND lifecycle='active'
+        AND (external_id=$3 OR starts_with(external_id, $3 || '/'))`,
+    [LOCAL_SYSTEM, normalizeExternalInstance(LOCAL_INSTANCE), key]);
+  return Number((r.rows[0] as { n?: number } | undefined)?.n ?? 0);
+}
+
+/** 옮긴 뒤에 찍는 도장 — supersedeLocalPath 와 같은 대상에 lifecycle='superseded' + fields.trash. 돌려주는 값 = 도장 찍힌 자료 수. */
+export async function stampTrashedLocalPath(root: LocalRoot, rel: string, stamp: FileTrashStamp): Promise<number> {
+  const key = localExternalId(root, rel);
+  const r = await itemsPool.query(
+    `UPDATE source SET lifecycle='superseded', updated_at=now(),
+            fields = COALESCE(fields, '{}'::jsonb) || jsonb_build_object('trash', $4::jsonb)
+      WHERE external_system=$1 AND external_instance=$2 AND lifecycle='active'
+        AND (external_id=$3 OR starts_with(external_id, $3 || '/'))
+      RETURNING id`,
+    [LOCAL_SYSTEM, normalizeExternalInstance(LOCAL_INSTANCE), key, JSON.stringify(stamp)]);
+  return r.rowCount ?? 0;
+}
+
+export interface TrashedFileRow { id: number; title: string | null; path: string; stamp: FileTrashStamp }
+/** 휴지통의 파일 자료 한 건 — 도장이 없으면(이미 되살렸거나 옛 방식으로 지운 것) undefined. */
+export async function getTrashedFile(sourceId: number): Promise<TrashedFileRow | undefined> {
+  const r = await itemsPool.query(
+    `SELECT id, title, fields FROM source WHERE id=$1 AND external_system=$2 AND lifecycle='superseded' AND fields ? 'trash'`,
+    [sourceId, LOCAL_SYSTEM]);
+  const row = r.rows[0] as { id: number; title: string | null; fields: Record<string, unknown> } | undefined;
+  const stamp = row?.fields?.trash as FileTrashStamp | undefined;
+  const p = typeof row?.fields?.path === "string" ? String(row.fields.path) : "";
+  if (!row || !stamp || !stamp.held_rel || !p) return undefined;
+  return { id: Number(row.id), title: row.title, path: p, stamp };
+}
+
+/** 되살린 뒤 — 도장을 떼고 다시 active. */
+export async function reviveTrashedFile(sourceId: number): Promise<void> {
+  await itemsPool.query(`UPDATE source SET lifecycle='active', updated_at=now(), fields = fields - 'trash' WHERE id=$1`, [sourceId]);
+}
+
+/** 같은 보관 묶음에 아직 도장 찍힌 자료가 몇 건 남았나 — 0 이면 묶음 폴더를 통째로 치워도 된다(자료 아닌 동행 파일 포함). */
+export async function fileTrashBatchRemaining(batch: string): Promise<number> {
+  const r = await itemsPool.query(
+    `SELECT count(*)::int AS n FROM source WHERE external_system=$1 AND fields->'trash'->>'batch' = $2`, [LOCAL_SYSTEM, batch]);
+  return Number((r.rows[0] as { n?: number } | undefined)?.n ?? 0);
+}
+
 // ── 브라우즈 라우트(개인/공유 루트) → 로컬 루트 좌표. 공유 루트 아래 project/<id>/… 는 프로젝트 좌표로 접는다(같은 파일 = 같은 자료). ──
 export async function localRootForBrowse(rootKey: string, user: LivelyUser, base: string, abs: string)
   : Promise<{ root: LocalRoot; base: string; folder?: string | null; channelFallback: string } | null> {
   if (rootKey === "personal") {
-    return { root: { kind: "personal", member: user.userId || user.email || userSlug(user) }, base, channelFallback: "uploads" };
+    return { root: { kind: "personal", member: personalRootMember(user) || userSlug(user) }, base, channelFallback: "uploads" };
   }
   if (rootKey === "shared") {
     const rel = relOf(base, abs);

@@ -203,3 +203,53 @@ export function projectPastRows<T extends PastRowLike>(
 export function projCardRows<T extends { project?: { self?: boolean } | null }>(rows: readonly T[]): T[] {
   return rows.filter((r) => !r.project?.self);
 }
+
+// ── 끝난 세션만 든 카드는 **접힌 채 프로젝트 이름만** (#3870, 원준 2026-09-27) ─────────────
+//
+//  신고: "흐리게 보이는건 <지난 세션>이어야해 … 지난세션보다 위쪽에 있는데 흐리게 보이는 세션이 존재하는거지?"
+//   그리고 정한 모양: "구분선 없이, 흐리게, 다만 세션 이름들 접힌 상태로 프로젝트 이름만."
+//
+//  ★ 원인 — 카드 펼침은 «사람이 한 번 편 것»(grpOpened, 브라우저·서버에 남는다)과 «보고 있던 카드»(선택하면
+//   grpOpened 에 적힌다)를 **카드가 무엇을 담고 있든** 그대로 따랐다. 그래서 하던 때 한 번 펴 둔 카드는 그 안
+//   세션이 전부 끝난 뒤에도 영영 펴진 채, 흐린 줄을 날짜 묶음 바로 아래에 늘어놓았다(foldCardRows 가 «앞면이
+//   없으면 접지 않는다» 로 「지난 세션 n」 구분선을 안 만드는 것은 맞다 — 그러면 펼친 카드 자체가 흐린 줄의 벽이 된다).
+//  ⇒ **끝난 세션만 든 카드는 기본이 접힘**이다. 머리줄(이름 톤 + 속 빈 고리)이 «통째로 지난 것» 을 말한다.
+//   사람이 펴면 그 페이지 동안만 펴진다(`peek`) — 「지난 세션」 접힘과 같은 규율(원준 2026-08-24 «기억 안 함»).
+//  ⚠ 도는 세션이 하나라도 있는 카드는 종전 규칙 그대로다(사람의 접기·펴기가 이기고, 확인 필요·완료는 한 번 편다).
+//  ⚠ 찾는 중이면 편다 — 찾으려고 건 렌즈를 접힘이 가리면 안 된다(#1719).
+//  ⚠ 보고 있는 세션이 그 카드에 있어도 자동으로 펴지 않는다 — 접힌 머리줄이 «보고 있음» 표식(.act)을 받는다.
+//   그리고 «보고 있어서 편 것» 을 기억(grpOpened)에 적지 않는다 — 적으면 다시 도는 세션이 생긴 뒤에도 영영 펴진다.
+
+/** 카드 펼침 판정의 재료. 전부 그 카드 한 장의 지금 사실이다. */
+export interface CardOpenIn {
+  /** 찾는 중인가. */
+  searching?: boolean;
+  /** 카드의 줄이 전부 끝난 세션인가(도는 줄 0 · 끝난 줄 ≥1). */
+  allPast?: boolean;
+  /** 끝난 카드를 사람이 이 페이지에서 폈나(true) · 접었나(false) · 손 안 댔나(undefined). */
+  peek?: boolean;
+  /** 사람이 접어 둔 카드 · 펴 둔 카드(브라우저·서버에 남는 결정). */
+  closed?: boolean;
+  opened?: boolean;
+  /** 자동 판정이 이미 한 번 편 카드(페이지 수명). */
+  auto?: boolean;
+  /** 보고 있는 세션이 이 카드에 있나. */
+  active?: boolean;
+  /** 확인 필요 · 작업 완료(미확인) 줄이 있나 — 한 번 펴 줄 이유. */
+  asks?: boolean;
+}
+
+/**
+ * 카드를 펴 보일까 — 그리고 그 판정을 **어디에 적어 둘지**(`remember`).
+ *  · `'opened'` — 보고 있어서 편 것을 «사람이 편 것» 처럼 남긴다(선택이 옮겨 가도 접히지 않게, #2534 이전부터의 규율).
+ *  · `'auto'`   — 확인 필요·완료로 한 번 편 것을 페이지 동안 기억한다(확인한 뒤 상태가 꺼져도 도로 접히지 않게).
+ */
+export function cardOpenVerdict(i: CardOpenIn): { open: boolean; remember?: 'opened' | 'auto' } {
+  if (i.searching) return { open: true };
+  if (i.allPast) return { open: i.peek === true };
+  if (i.closed) return { open: false };
+  if (i.opened || i.auto) return { open: true };
+  if (i.active) return { open: true, remember: 'opened' };
+  if (i.asks) return { open: true, remember: 'auto' };
+  return { open: false };
+}

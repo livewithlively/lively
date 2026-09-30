@@ -17,7 +17,7 @@ import { harnessIo } from "./harness-io/adapter.js";
 import { tmux } from "./tmux-exec.js";
 import { sendKeysToSession, sendKeyToSession, sendDownToSession } from "./send-keys.js";
 
-export type FirstPromptStep = "wait" | "accept-trust" | "send" | "give-up";
+export type FirstPromptStep = "wait" | "accept-trust" | "dismiss-update" | "send" | "give-up";
 
 // 하단 라이브 UI 영역만 본다(phase.ts detectAwaiting 과 같은 이유 — 전사(과거 대화)가 위에 남아 있다).
 const TAIL_LINES = 14;
@@ -29,19 +29,62 @@ const INPUT_BOX = /\b(auto|manual|plan|accept edits|bypass permissions) mode on\
 //  · Claude Code(구): "Do you trust the files in this folder?"
 //  · Claude Code 2.1.245(현행, 실측 2026-08-25): "Quick safety check: Is this a project you created or one you trust?"
 //    + 선택지 "❯ 1. Yes, I trust this folder"
+//  · Codex 0.153.4(실측 2026-09-24): "Do you trust the contents of this directory?" + "› 1. Yes, continue / 2. No, quit"
+//    — 문안은 위 ①에 걸리지만 **커서 글자가 `›`** 라 선택지 판정(TRUST_OPTION)에 그 글자를 넣어야 눌러진다.
+//  · Codex 0.157.0(실측 2026-09-25 — 하루 만에 판이 바뀌었다): "Folder access … **Trust this folder?**" +
+//    "› 1. Trust and continue / 2. Back to Agent Command Center" + "enter continue · esc back".
+//    문구도 선택지 낱말도 통째로 바뀐다 — 그래서 **낱말 두 벌(Yes·Trust / No·Back)** 을 다 받는다. 판이 또 바뀌면
+//    선택지를 못 읽어 null 이 되고(아무것도 안 누름), 화면 판정(codex.screen)이 번호 메뉴 모양으로 대화상자를 잡는다.
 //  · Antigravity: "Do you trust the contents of this project?" (실측 2026-08-18 — 종전 정규식이 못 잡아
 //    ⓐ 세션 전용 폴더인데 자동 수락이 안 됐고 ⓑ 6초 뒤 '하네스가 떴다'로 오판해 첫 지시를 대화상자에 밀어 넣었다).
 //  ⚠ 문구 하나만 알면 하네스가 문안을 바꾸는 순간 **첫 지시가 조용히 유실된다**(90초 give-up) — 실제로 그렇게 됐다
 //   (2026-08-25 dev 노드 프로젝트 세션: 대화상자에서 멈춘 채 첫 지시가 통째로 사라졌다). 그래서 세 축으로 잡는다:
 //   ①구 claude 문안 ②"is this a project you created/trust" ③**선택지 줄** `[❯>] N. Yes, … trust …`(문안이 바뀌어도
 //   '기본 선택 Yes' 는 남는다). ③은 줄머리에 앵커돼 있어 본문이 trust 를 언급하는 것만으로는 안 걸린다(오탐 방지).
-const TRUST_DIALOG = /trust the (files|contents) (in|of) this (folder|directory|project)|is this a project you (created|trust)|(^|\n)[ \t]*[❯>]?[ \t]*\d*\.?[ \t]*Yes,[^\n]*\btrust\b/i;
+const TRUST_DIALOG = /trust the (files|contents) (in|of) this (folder|directory|project)|is this a project you (created|trust)|\bTrust this folder\b|(^|\n)[ \t]*[❯›>]?[ \t]*\d*[.)]?[ \t]*(Yes,[^\n]*\btrust\b|Trust and continue)/i;
+// codex 시작 «업데이트 하시겠습니까» 창 — **Enter 를 절대 보내면 안 되는 창**(실측 2026-09-26, 매니지드 라이브 pane):
+//
+//      ✨ Update available! 0.149.1 -> 0.157.1
+//    › 1. Update now (runs `npm install -g @openai/codex`)
+//      2. Skip
+//      3. Skip until next version
+//      Press enter to continue
+//
+//  커서가 **1번**에 있다. Enter 면 `npm install -g` 가 돌고, 테넌트 이미지의 전역 prefix 는 root 소유라
+//  EACCES(exit 243)로 실패한 뒤 **codex 가 그대로 끝난다** → pane 이 셸이 되고 사람은 «내가 직접 codex 라고
+//  쳐야 실행된다» 를 본다. 실측으로 **Escape** 는 창만 닫고 codex 를 그대로 띄운다(입력칸 준비됨).
+//  ⚠ 창이 아예 안 뜨게 하는 것이 첫 겹이다(codex-update-check.ts — 설정 루트 키). 이 층은 그 키가 아직
+//   안 심긴 홈·사람이 되돌린 홈을 위한 **두 번째 겹**이다.
+//  ⚠ 판정은 **번호 선택지 줄**로만 한다(TRUST_DIALOG 와 같은 교리) — standalone 설치본은 같은 문안을
+//   «비차단 배너» 로만 띄우고 입력칸이 살아 있다(실측). 배너에 Escape 를 쏘면 사람이 치던 것이 지워질 수 있다.
+const UPDATE_OPTION = /^[ \t]*[❯›>]?[ \t]*\d+[.)][ \t]*(Update now|Skip until next version)\b/im;
 // 하네스가 아직 뜨는 중인데 화면에 아무 표식이 없을 때, 비-Claude 하네스에 쓰는 보수적 대기(입력창 문구를 모르는 하네스).
 const OTHER_HARNESS_SETTLE_MS = 6000;
 
+// ── 얼마나 기다리나(injectFirstPrompt) ─────────────────────────────────────────────────────────────
+//  부팅 창 — 이 안에서는 촘촘히(0.4s) 보고, 입력창을 **못 알아보는** 하네스의 추정 전송(아래 폴백)도 이 안에서만 한다.
+export const FIRST_PROMPT_BOOT_MS = 90_000;
+//  사람을 기다리는 창 — 입력창을 알아볼 수 있는 하네스는 이만큼 들고 있다가 뜨는 순간 넣는다.
+//  🔴 왜 90초가 아닌가(실측 2026-09-22, 원준님 맥미니 노드 box-wonjoon-jang-676fd1b9): 새로 생긴 멤버 프로필
+//   (CLAUDE_CONFIG_DIR 빈 폴더)에서 Claude Code 는 **첫 실행 안내**(글자 스타일 → 로그인 방법 → 로그인 → 보안 안내 →
+//   bypass 경고)를 차례로 띄우고 전부 사람 입력을 기다린다. 사람이 그걸 넘기는 데 90초가 넘게 걸렸고, 그 사이 이 함수가
+//   포기해 홈에서 [시키기]로 보낸 지시가 **통째로 사라졌다** — 사람에겐 «시켰는데 세션이 아무것도 안 한다» 로 보였다.
+//   게이트웨이 경로(아웃박스)는 같은 이유로 이미 2시간을 든다(session-outbox NOT_READY_TTL_MS, #2154) — 노드 경로만
+//   90초였다. 같은 교리를 쓴다: 지시를 들고 있는 목적이 바로 **사람이 화면을 넘기고 돌아올 때까지**다.
+//  ⚠ 이 창이 길어도 **입력창이 보이기 전에는 절대 안 넣는다**(firstPromptStep 이 그대로 지킨다) — 기다림만 길어진다.
+export const FIRST_PROMPT_HOLD_MS = 2 * 60 * 60_000;
+//  부팅 창을 넘긴 뒤의 폴 간격 — 사람이 화면을 넘기면 2초 안에 들어간다. 2시간 × 0.4s 폴은 tmux 를 괜히 두드린다.
+const HOLD_POLL_MS = 2_000;
+// 새 세션을 만든 직후 tmux pane 이 아직 조회되지 않거나 capture-pane/display-message 중 하나가 순간 실패할 수 있다.
+// 첫 조회 실패를 곧바로 «세션이 사라졌다»로 해석하면, 게이트웨이가 이미 성공 응답을 준 첫 지시가 조용히 유실된다.
+// 연속 조회 실패만 이 창만큼 허용하고, 그 사이 한 번이라도 다시 읽히면 정상 판정 루프로 돌아간다.
+export const FIRST_PROMPT_PEEK_GRACE_MS = 15_000;
+
 // 신뢰 대화상자의 **선택지 줄** — `❯ No, exit` · `  Yes, I trust this folder` · 구판 `❯ 1. Yes, …` 를 함께 잡는다.
 //  줄머리 앵커 + Yes/No 로 시작하는 것만 = 본문이 trust 를 언급하는 것만으로는 안 걸린다(TRUST_DIALOG 와 같은 교리).
-const TRUST_OPTION = /^[ \t]*([❯>])?[ \t]*(?:\d+[.)])?[ \t]*(Yes|No)\b(.*)$/i;
+//  ⚠ 커서 글자는 하네스마다 다르다 — claude `❯` · codex `›`(U+203A, 실측 2026-09-24) · 일부 판은 `>`.
+//   codex 를 안 넣었더니 선택지 두 줄을 읽고도 «커서를 못 찾았다»(null)로 떨어져, 신뢰 대화상자에서 아무것도 안 눌렀다.
+const TRUST_OPTION = /^[ \t]*([❯›>])?[ \t]*(\d+[.)])?[ \t]*(Yes|No|Trust|Back)\b(.*)$/i;
 
 /**
  * 신뢰 대화상자에서 **«Yes» 까지 몇 칸 내려가야 하나** (순수) — 못 읽으면 `null`.
@@ -67,7 +110,16 @@ export function trustAcceptDowns(tail: string[]): number | null {
   for (const line of tail) {
     const m = TRUST_OPTION.exec(line);
     if (!m) continue;
-    opts.push({ cursor: !!m[1], yes: /^yes$/i.test(m[2]), text: line.trim() });
+    //  #4135 — 판마다 선택지 낱말이 다르다: claude·codex 0.153.4 는 «Yes/No», codex 0.157.0 은 «Trust and continue /
+    //   Back to …». 수락은 Yes·Trust, 거절은 No·Back 이다(실측 2026-09-24·25).
+    //  ⚠ 다만 Trust·Back 은 **본문에도 흔한 낱말**이다 — 0.157.0 의 설명문이 "Trust this folder? Codex can read…"
+    //   로 시작한다. 그 줄을 선택지로 세면 커서보다 위에 «수락» 이 하나 생겨 판정이 null 이 되고(실측: 이 시험이
+    //   빨간불이었다) 아무것도 못 누른다. 그래서 그 두 낱말은 **커서나 번호가 앞에 붙은 줄**에서만 선택지로 본다.
+    //   Yes·No 는 종전 그대로 둔다(본문이 그 낱말로 시작하는 일은 드물고, 번호 없는 실측 화면이 있다 — V263).
+    const marked = !!m[1] || !!m[2];
+    const word = m[3];
+    if (/^(trust|back)$/i.test(word) && !marked) continue;
+    opts.push({ cursor: !!m[1], yes: /^(yes|trust)$/i.test(word), text: line.trim() });
   }
   if (opts.length < 2) return null;                       // 선택지를 못 읽었다
   const cursor = opts.findIndex((o) => o.cursor);
@@ -86,11 +138,20 @@ export function tailOf(pane: string, n = TAIL_LINES): string[] {
  *  - accept-trust: 신뢰 대화상자가 떠 있고 자동 수락이 허용된 자리(세션 전용 폴더) — Enter 로 기본 선택(Yes)을 고른다.
  *  - send: 입력창이 보인다(Claude) / 하네스가 포그라운드로 자리 잡고 충분히 지났다(그 밖의 하네스).
  *  - wait: 아직.
+ *
+ *  `blindMaxMs` — 입력창을 **못 알아보는** 하네스(맨 아래 폴백: 포그라운드·경과 시간으로 추정)에 넣어도 되는 상한.
+ *   이걸 넘기면 그 추정은 포기한다: 오래 지나서 포그라운드가 셸이 아닌 것은 «하네스가 떴다» 가 아니라 사람이 셸에서 딴
+ *   프로그램을 켠 것일 수 있다. 입력창을 **알아보는** 하네스(claude · screen 판정)는 maxMs 까지 기다린다. 생략하면 제한 없음
+ *   (아웃박스처럼 maxMs 가 원래 짧은 호출자).
  */
-export function firstPromptStep(i: { pane: string; harness: string; paneCmd: string; elapsedMs: number; maxMs: number; trustOk: boolean }): FirstPromptStep {
+export function firstPromptStep(i: { pane: string; harness: string; paneCmd: string; elapsedMs: number; maxMs: number; trustOk: boolean; blindMaxMs?: number }): FirstPromptStep {
   if (i.elapsedMs > i.maxMs) return "give-up";
   const tail = tailOf(i.pane);
   const tailText = tail.join("\n");
+  //  ★ 업데이트 창을 **신뢰 대화상자보다 먼저** 본다 — codex 는 그 둘을 이 순서로 띄운다(실측). trustOk 와
+  //   무관하다: 여기서 하는 답은 «업데이트 안 함» 이고, 그건 사람의 보안 결정이 아니라 우리가 이미 내린 결정이다
+  //   (이미지의 계약은 «업데이트 = 이미지 재빌드» 다). 그리고 그 창을 그냥 두면 첫 지시가 영영 안 들어간다.
+  if (UPDATE_OPTION.test(tailText)) return "dismiss-update";
   if (TRUST_DIALOG.test(tailText)) return i.trustOk ? "accept-trust" : "wait";
   // 하네스가 화면 판정을 선언했으면(#1719 계약 축 screen) 그것이 정본이다 — 휴리스틱보다 먼저.
   //  auth(로그인·인증 검증)에 넣으면 거부돼 사라지고(antigravity 실측 — "아직 인증 확인중" 거부), dialog 에 넣으면
@@ -101,6 +162,7 @@ export function firstPromptStep(i: { pane: string; harness: string; paneCmd: str
   if (scr === "dialog") return "wait";                        // 신뢰 대화상자는 위에서 이미 갈랐다 — 그 밖의 대화상자는 대신 안 누른다
   if (i.harness === "claude") return tail.some((l) => INPUT_BOX.test(l)) ? "send" : "wait";
   // 그 밖의 하네스 — 입력창 문구를 모른다. 포그라운드가 셸이 아니게 된 뒤(하네스가 떴다) 조금 기다렸다 넣는다.
+  if (i.blindMaxMs !== undefined && i.elapsedMs > i.blindMaxMs) return "give-up";
   const fg = (i.paneCmd || "").trim();
   if (!fg || SHELL_CMDS.has(fg)) return "wait";
   return i.elapsedMs >= OTHER_HARNESS_SETTLE_MS ? "send" : "wait";
@@ -117,10 +179,46 @@ async function peek(id: string): Promise<{ pane: string; paneCmd: string }> {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/** 신뢰 대화상자에 보낼 키 — 시험은 tmux 없이 이걸 바꿔 끼운다. */
-export interface TrustKeys { down: (id: string, times: number) => Promise<void>; enter: (id: string) => Promise<void> }
+/** 실행부 의존성 — 운영에서는 tmux/실제 시계를 쓰고, 시험에서는 시작 직후 pane 조회 실패를 재현한다. */
+export interface FirstPromptRuntime {
+  peek: (id: string) => Promise<{ pane: string; paneCmd: string }>;
+  sleep: (ms: number) => Promise<void>;
+  now: () => number;
+  send: (id: string, text: string) => Promise<void>;
+  trustKeys: TrustKeys;
+}
+
+/**
+ * 신뢰 대화상자에 보낼 키 — 시험은 tmux 없이 이걸 바꿔 끼운다.
+ *  `esc` 는 **없어도 된다**(#4135 후속) — 아웃박스의 원격 호스트 칸은 키 RPC 모양이 «내리기+Enter» 로 고정이고
+ *  (호스트 번들은 따로 갱신된다), 모르는 걸음을 보내면 그 칸이 통째로 게이트웨이로 강등된다. 없으면 종전대로
+ *  기다린다 — 그 세션은 codex 설정 층(codex-update-check.ts)이 애초에 그 창을 안 띄운다.
+ */
+export interface TrustKeys {
+  down: (id: string, times: number) => Promise<void>;
+  enter: (id: string) => Promise<void>;
+  esc?: (id: string) => Promise<void>;
+}
 /** 이 호스트의 tmux 로 누르는 키 — 아웃박스 실행 자리의 게이트웨이 칸도 같은 키를 쓴다(`sessions/outbox-exec`, #3773). */
-export const TMUX_TRUST_KEYS: TrustKeys = { down: sendDownToSession, enter: (id) => sendKeyToSession(id, "Enter") };
+export const TMUX_TRUST_KEYS: TrustKeys = {
+  down: sendDownToSession,
+  enter: (id) => sendKeyToSession(id, "Enter"),
+  esc: (id) => sendKeyToSession(id, "Escape"),
+};
+
+/** 업데이트 창을 닫을 때 Escape 를 보내는 횟수 상한 — 판이 바뀌어 안 닫히면 폴마다 쏘지 않는다(빈 입력칸 Escape 는 무해하지만 무의미하다). */
+export const UPDATE_ESC_MAX = 2;
+
+/**
+ * codex 시작 «업데이트» 창을 **Escape 로** 닫는다 (#4135 후속 · 실측 2026-09-26).
+ *  Enter 를 보내지 않는 이유는 UPDATE_OPTION 머리말에 있다(1번 = npm 설치 = 그 자리에서 codex 즉사).
+ * @returns `dismissed` — 키를 보냈다(결과는 다음 폴에서 화면으로 본다) · `unsupported` — 이 자리엔 Escape 걸음이 없다.
+ */
+export async function dismissUpdatePrompt(id: string, keys: TrustKeys = TMUX_TRUST_KEYS): Promise<"dismissed" | "unsupported"> {
+  if (!keys.esc) return "unsupported";
+  await keys.esc(id).catch(() => { /* 다음 폴에서 다시 본다 */ });
+  return "dismissed";
+}
 
 /**
  * 신뢰 대화상자를 **화면을 읽고** 수락한다 — «Yes» 까지 내린 뒤 Enter (#3626 · #3949).
@@ -140,39 +238,92 @@ export async function acceptTrustDialog(id: string, pane: string, keys: TrustKey
 }
 
 /**
- * 첫 지시를 넣는다 — 입력창이 뜰 때까지 폴링(0.4s)하고, 신뢰 대화상자면 수락하고, 뜨면 넣는다.
- *  maxMs 를 넘기면 포기한다(warn). 세션이 그새 사라져도(사용자가 닫음) 조용히 끝난다.
+ * 첫 지시를 넣는다 — 입력창이 뜰 때까지 폴링하고, 신뢰 대화상자면 수락하고, 뜨면 넣는다.
+ *  부팅 창(FIRST_PROMPT_BOOT_MS) 안에서는 0.4s, 그 뒤로는 사람이 첫 실행 안내·로그인을 넘기길 기다리며 2s 로 본다.
+ *  maxMs(기본 FIRST_PROMPT_HOLD_MS)를 넘기면 포기한다(warn). 세션이 그새 사라져도(사용자가 닫음) 조용히 끝난다.
  *  ⚠ 자동 수락(trustOk)은 세션 전용 폴더에서만 참으로 넘긴다(파일 머리말).
  */
 export async function injectFirstPrompt(id: string, harness: string, text: string, opts?: { maxMs?: number; pollMs?: number; trustOk?: boolean }): Promise<boolean> {
-  const maxMs = opts?.maxMs ?? 90_000;
+  return injectFirstPromptWithRuntime(id, harness, text, opts);
+}
+
+/** `injectFirstPrompt`의 실행부. runtime은 시작 직후 tmux 조회 실패까지 결정론적으로 시험하기 위한 경계다. */
+export async function injectFirstPromptWithRuntime(
+  id: string,
+  harness: string,
+  text: string,
+  opts?: { maxMs?: number; pollMs?: number; trustOk?: boolean; peekGraceMs?: number },
+  runtime: FirstPromptRuntime = {
+    peek,
+    sleep,
+    now: Date.now,
+    send: sendKeysToSession,
+    trustKeys: TMUX_TRUST_KEYS,
+  },
+): Promise<boolean> {
+  const maxMs = opts?.maxMs ?? FIRST_PROMPT_HOLD_MS;
   const pollMs = opts?.pollMs ?? 400;
   const trustOk = opts?.trustOk ?? false;
-  const t0 = Date.now();
+  const peekGraceMs = opts?.peekGraceMs ?? FIRST_PROMPT_PEEK_GRACE_MS;
+  const t0 = runtime.now();
+  let peekFailureSince: number | null = null;
   let acceptedTrust = false;
+  let escPressed = 0;        // #4135 후속 — 업데이트 창에 보낸 Escape 횟수(UPDATE_ESC_MAX 까지)
+  let saidHolding = false;
+  let saidUnreadable = false;
   for (;;) {
     let seen: { pane: string; paneCmd: string };
-    try { seen = await peek(id); }
-    catch { return false; }                                  // 세션이 사라졌다(닫힘·죽음) — 넣을 곳이 없다
-    const step = firstPromptStep({ ...seen, harness, elapsedMs: Date.now() - t0, maxMs, trustOk });
-    if (step === "give-up") { console.warn(`[terminal] 첫 지시를 넣지 못했다(${id}) — ${Math.round(maxMs / 1000)}초 안에 입력창이 안 떴다(로그인·오류 화면일 수 있다).`); return false; }
+    try {
+      seen = await runtime.peek(id);
+      peekFailureSince = null;
+    } catch {
+      const now = runtime.now();
+      peekFailureSince ??= now;
+      const missingMs = now - peekFailureSince;
+      // 정확히 경계인 순간에도 한 번 더 읽는다. pane 생성과 이 폴이 같은 시각에 맞물려 첫 지시를 버리지 않기 위해서다.
+      if (missingMs <= peekGraceMs) {
+        await runtime.sleep(pollMs);
+        continue;
+      }
+      console.warn(`[terminal] 첫 지시를 넣지 못했다(${id}) — 세션 화면을 ${Math.round(missingMs / 1000)}초 동안 읽지 못했다.`);
+      return false;
+    }
+    const elapsedMs = runtime.now() - t0;
+    const step = firstPromptStep({ ...seen, harness, elapsedMs, maxMs, trustOk, blindMaxMs: FIRST_PROMPT_BOOT_MS });
+    if (step === "give-up") { console.warn(`[terminal] 첫 지시를 넣지 못했다(${id}) — ${Math.round(elapsedMs / 1000)}초 동안 입력창이 안 떴다(로그인·오류 화면일 수 있다).`); return false; }
+    const booting = elapsedMs < FIRST_PROMPT_BOOT_MS;
+    if (!booting && !saidHolding) {
+      saidHolding = true;
+      console.warn(`[terminal] 첫 지시 대기 중(${id}) — ${Math.round(FIRST_PROMPT_BOOT_MS / 1000)}초 안에 입력창이 안 떴다. 첫 실행 안내·로그인이 끝나 입력창이 뜨면 넣는다(최대 ${Math.round(maxMs / 60_000)}분).`);
+    }
+    if (step === "dismiss-update" && escPressed < UPDATE_ESC_MAX) {
+      //  ★ #4135 후속 — 이 창엔 **Escape** 다(실측). Enter 면 «1. Update now» 가 골라지고 npm 설치가 실패해
+      //   codex 가 그 자리에서 끝난다. 상한을 두는 이유는 판이 바뀌어 안 닫힐 때 폴마다 쏘지 않기 위해서다.
+      escPressed++;
+      if (escPressed === 1) console.warn(`[terminal] codex 업데이트 창을 닫는다(${id}) — Escape(업데이트 안 함). 이미지 계약상 세션 안에서 업데이트하지 않는다.`);
+      await dismissUpdatePrompt(id, runtime.trustKeys);
+      await runtime.sleep(pollMs);
+      continue;
+    }
     if (step === "accept-trust" && !acceptedTrust) {
       //  ★ #3626 — **화면을 읽고** «Yes» 로 옮긴 뒤 Enter(acceptTrustDialog — 아웃박스와 같은 함수, #3949).
       //   기본 선택이 Yes 라는 전제는 틀렸다. 못 읽으면 **아무것도 안 누르고** 기다린다 — 잘못 누르면 하네스가 종료되고
       //   그 세션이 통째로 사라진다.
-      if ((await acceptTrustDialog(id, seen.pane)) === "unreadable") {
-        console.warn(`[terminal] 신뢰 대화상자의 선택지를 못 읽었다(${id}) — 대신 누르지 않는다(사람이 답할 수 있게 남긴다).`);
-        await sleep(pollMs);
+      if ((await acceptTrustDialog(id, seen.pane, runtime.trustKeys)) === "unreadable") {
+        //  한 번만 말한다 — 이제 2시간을 기다리므로 폴마다 남기면 로그가 그 줄로 덮인다.
+        if (!saidUnreadable) console.warn(`[terminal] 신뢰 대화상자의 선택지를 못 읽었다(${id}) — 대신 누르지 않는다(사람이 답할 수 있게 남긴다).`);
+        saidUnreadable = true;
+        await runtime.sleep(booting ? pollMs : HOLD_POLL_MS);
         continue;
       }
       acceptedTrust = true;
-      await sleep(pollMs);
+      await runtime.sleep(pollMs);
       continue;
     }
     if (step === "send") {
-      await sendKeysToSession(id, text);
+      await runtime.send(id, text);
       return true;
     }
-    await sleep(pollMs);
+    await runtime.sleep(booting ? pollMs : HOLD_POLL_MS);
   }
 }

@@ -97,11 +97,24 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
        '관리탭 등록 레포를 이 호스트 workspace/repos 에 없으면 clone·있으면 FF — 워크트리 셀프서비스(lively_local_repo_worktree)의 최신 원본을 무인 보장. 도메인맵 스캐너 클론(refresh_all, stateDir/repos)과 대상이 다르다.'),
       ('map-unmapped-domains','미매핑 코드유닛 LLM 분류 (상시 세션 주입)','map_unmapped',1800,false,
        '상시 LLM 세션(라이블리 시드, 팀플랜 과금)에 분류 태스크를 tmux send-keys 로 주입 → 세션이 도메인 should+DDD 로 분류(propose+근거→audit). 활성화 전 params.session 에 타깃 세션 id 설정 필요 → 기본 enabled=false.'),
-      ('classify-unmapped-knowledge','미분류 지식 LLM 분류 (상시 세션 주입, #982)','classify_knowledge',3600,false,
-       'map_unmapped 의 지식판 — 카테고리 0건 지식(노션 미러 등 인입분)을 상시 세션에 주입해 카테고리 전체에서 골라 분류(propose+근거→proposed). 미분류=recall INNER JOIN 에서 소환 불가라 편입의 핵심. 활성화 전 params.session 설정 필요 → 기본 enabled=false.'),
+      ('classify-unmapped-knowledge','카테고리 붙이기 (상시 세션 주입, #982)','classify_knowledge',3600,false,
+       '증류기의 카테고리 붙이기(옛 분류) — 카테고리 0건 지식(노션 미러 등 인입분)을 상시 세션에 주입해 카테고리 전체에서 골라 붙인다(propose+근거→proposed). 미분류=recall INNER JOIN 에서 소환 불가라 편입의 핵심. 활성화 전 params.session 설정 필요 → 기본 enabled=false.'),
       ('keepalive-managed-sessions','상시 세션 keep-alive','ensure_managed_sessions',120,true,
        'enabled 상시 세션(org_managed_session)의 tmux 세션을 보장 — 죽었으면 격리 워크스페이스에 재생성. 등록된 상시 세션 없으면 no-op.')
     ON CONFLICT DO NOTHING;
+  `);
+  // #4194 — 옛 «분류» 기본 이름을 새 말(증류기의 카테고리 붙이기)로. **옛 기본값 그대로일 때만** 바꾼다 — 사람이 고친
+  //  이름·설명은 안 건드린다. 잡 id·action 은 그대로다(컨트롤플레인이 이 id 로 심고, 옛 이미지로 롤백해도 행이 유효해야 한다).
+  //  이름만 바꾸는 것이라 롤백해도 해가 없다(옛 화면이 새 이름을 보일 뿐).
+  await pool.query(`
+    UPDATE org_cron SET label='카테고리 붙이기 (미분류 지식→카테고리, 헤드리스)'
+     WHERE id='classify-knowledge-headless' AND label='미분류 지식 분류 (헤드리스)';
+    UPDATE org_cron SET note='켜진 카테고리 붙이기 증류기별로 미분류 지식 배치를 헤드리스 AI 세션에 접수. 켜진 것이 없으면 전 지식 공통 기본 기준.'
+     WHERE id='classify-knowledge-headless' AND note IN (
+       '켜진 분류기별로 미분류 지식 배치를 헤드리스 AI 세션에 접수. 분류기가 없으면 전역 기본 분류.',
+       '켜진 분류기별로 미분류 지식 배치를 헤드리스 AI 세션에 접수. 분류기가 없으면 전역 기본 분류. 새 워크스페이스는 켠 채로 시작(#4052).');
+    UPDATE org_cron SET label='카테고리 붙이기 (상시 세션 주입, #982)'
+     WHERE id='classify-unmapped-knowledge' AND label='미분류 지식 LLM 분류 (상시 세션 주입, #982)';
   `);
   // #177 아웃바운드 푸시 잡 — external_outbox(우리 편집)→ClickUp. 우리 DB=master 반영. params.system='clickup'(run-push 는 clickup 전용).
   //  검증 전이라 기본 enabled=false — 수동 run-push 1회 확인 후 관리탭/DB 로 활성화. 별도 INSERT(params 컬럼 포함).

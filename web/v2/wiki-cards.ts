@@ -60,3 +60,55 @@ export function planWikiCards(input: {
   }
   return out;
 }
+
+// ── 첫 화면 줄 나누기(#4233, 원준 2026-09-25) ─────────────────────────────────────
+//  위키 사이드바는 처음 들어왔을 때 **스크롤 없이 한 화면**이어야 하고, 묶음 셋은 늘 다 보이며 안쪽도 일부씩 보여야 한다
+//   (검토판 project/4233/wiki-sidebar-v3-review.html). 그래서 펼친 묶음마다 보일 분류 줄 수를 **높이에 맞춰** 나눈다.
+//  높이를 줄 수로 바꾸는 것(DOM 측정)은 호출자(side.ts)가 하고, 나누는 규칙은 여기 한 벌 — 화면 없이 시험한다.
+//  ① 묶음마다 최소 min(2)줄(분류가 그보다 적으면 전부). forced(지금 보는 분류까지)가 더 크면 그만큼.
+//  ② 남은 예산은 가장 많이 남은 묶음부터 한 줄씩(같으면 앞 묶음).
+//  ③ completeMax(3)개 이하만 숨은 작은 묶음은, 가장 큰 묶음이 bigKeep(5)줄 이상 남는 한 큰 묶음 줄을 넘겨받아 끝까지 보인다
+//     — 「3개 더」 같은 자투리 줄을 줄이되, 작은 화면에서 큰 묶음이 2줄로 쪼그라들지는 않게.
+//  ④ 예산이 최소치보다 작으면 최소치를 그대로 준다(묶음이 아예 안 보이는 것보다 넘쳐 스크롤되는 게 낫다).
+export function allocWikiRows(input: {
+  sizes: Record<string, number>;
+  order: string[];
+  budget: number;
+  forced?: Record<string, number>;
+  min?: number;
+  completeMax?: number;
+  bigKeep?: number;
+}): Record<string, number> {
+  const { sizes, order } = input;
+  const forced = input.forced || {};
+  const min = input.min ?? 2;
+  const completeMax = input.completeMax ?? 3;
+  const bigKeep = input.bigKeep ?? 5;
+  const size = (k: string): number => Math.max(0, Math.floor(Number(sizes[k]) || 0));
+  const must = (k: string): number => Math.max(0, Math.floor(Number(forced[k]) || 0));
+  const alloc: Record<string, number> = {};
+  for (const k of order) alloc[k] = Math.min(size(k), Math.max(min, must(k)));
+  let left = Math.floor(Number(input.budget) || 0) - order.reduce((a, k) => a + alloc[k], 0);
+  while (left > 0) {
+    let pick: string | null = null;
+    let best = 0;
+    for (const k of order) { const r = size(k) - alloc[k]; if (r > best) { best = r; pick = k; } }
+    if (pick == null) break;
+    alloc[pick]++;
+    left--;
+  }
+  let big: string | null = null;
+  for (const k of order) if (big == null || size(k) > size(big)) big = k;
+  if (big != null) {
+    const smalls = order.filter((k) => k !== big).sort((a, b) => (size(a) - alloc[a]) - (size(b) - alloc[b]));
+    for (const k of smalls) {
+      const hidden = size(k) - alloc[k];
+      if (hidden <= 0 || hidden > completeMax) continue;
+      const bigAfter = alloc[big] - hidden;
+      if (bigAfter < bigKeep || bigAfter < must(big)) continue;
+      alloc[big] = bigAfter;
+      alloc[k] += hidden;
+    }
+  }
+  return alloc;
+}

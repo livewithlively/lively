@@ -70,7 +70,7 @@ const run = async (): Promise<void> => {
   };
   const screens: Record<string, { id: string; action: string; interval: number }> = {
     "distill-sources-headless": spec(read("web/distillers.ts")),
-    "classify-knowledge-headless": spec(read("web/context-classify.ts")),
+    "classify-knowledge-headless": spec(read("web/distill-fill.ts")),   // #4194 — 옛 분류기 화면(web/context-classify.ts)이 증류기 탭의 카테고리 붙이기 절로
   };
   for (const j of DEFAULT_CONTEXT_JOBS) {
     const s = screens[j.id];

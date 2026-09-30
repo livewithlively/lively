@@ -29,6 +29,7 @@
 //
 // leaf 규약: lib/ 안(dom·markdown·zip·office)만 딛는다. 페이지 모듈을 import 하지 않는다.
 import { el } from './dom.js';
+import { attachFrameBridge } from './frame-bridge.js';   // #4075 — html 격리 프레임의 저장·복사·내려받기를 셸이 대신하는 다리
 import { renderMarkdown } from './markdown.js';
 import type { Block, OfficeDoc, Run, SheetDoc } from './office.js';
 
@@ -306,6 +307,8 @@ export interface PreviewHost {
   onSaved?: () => void;
   /** 저장 실패 알림. */
   onError?: (msg: string) => void;
+  /** #4075 — 주면 html 격리 프레임에 검토 다리(lib/frame-bridge)를 건다. 값은 파일마다 다른 저장 이름 공간(예 `<프로젝트>:<경로>`). */
+  bridgeNs?: string;
 }
 
 export interface PreviewOut {
@@ -489,10 +492,13 @@ async function buildFilePreview(host: PreviewHost): Promise<PreviewOut> {
   const wrap = el('div', { class: 'fp-wrap' });
   const ta = host.save ? el('textarea', { class: 'fp-edit' + (cls.code ? ' ' + cls.code : '') }) : null;
   if (ta) ta.value = text;
+  //  #4075 — html 은 격리 프레임이라 문서 스크립트가 저장·복사·내려받기를 못 한다. 화면이 bridgeNs 를 주면
+  //   그 세 가지를 셸이 대신하는 다리를 건다(문서마다 저장 이름 공간이 다르다). 안 주면 종전과 같다.
+  const bridged = (f: any): any => { if (host.bridgeNs) attachFrameBridge(f, host.bridgeNs); return f; };
   const rendered = (): any => (isMd
     ? el('article', { class: 'md-rendered fp-md' + (cls.md ? ' ' + cls.md : '') }, renderMarkdown(text))
     : isHtml
-      ? htmlFrame(text, name, cls.html)
+      ? bridged(htmlFrame(text, name, cls.html))
       : codeBlock(text, ext, cls.code));
   const rawNode = (): any => (ta || codeBlock(text, ext, cls.code));
 

@@ -36,7 +36,6 @@ export interface CategoryMapEntry {
   key: string;            // category.key(소환 시 domain= 인자)
   name: string;           // 사람용 표시명
   active_units: number;   // 이 카테고리에 매핑된 active knowledge 수(kc.state<>'rejected'). 발견용 메타.
-  mine?: boolean;         // 보는 멤버의 팀이 소유/이해관계인 카테고리(team-scoped 주입에서만 채워짐 — 상단 정렬+★).
   // ⚠ #1153 에서 한 줄 설명(category.description)을 여기 붙였다가 **철회**했다. 정의를 읽혀야 하는 건 맞지만,
   //  분류 판단이 필요한 순간은 '지식을 저장할 때'뿐인데 그 비용을 전 세션에 항상 물리는 건 낭비다
   //  (온톨로지 원칙 "전부 미리 읽지 않는다 — 그때 소환한다"에도 역행). 정의는 category_list/category_get 이
@@ -50,12 +49,11 @@ export interface CategoryMapEntry {
 // ── (라이브 헬퍼) 카테고리 지도 — v6 category(key/name) + knowledge_category(active 지식수). 단일 DB(itemsPool). ──
 //  V6: domain/knowledge_unit_domain → category/knowledge_category. 한 DB라 메모리 조인 불필요 — 두 쿼리(전 카테고리 + 카운트)면 충분.
 //  fail-open: 조회가 죽어도 인덱스 생성이 500 나면 안 된다(빈 지도 반환 → 헤더만, 안내문은 유지).
-// mineIds(선택) = 보는 멤버의 팀 소유/이해관계 카테고리 id 집합(team-store.memberCategoryIds). 주어지면 entry.mine 마킹.
-//  생략(정적 발행·멤버 무관 경로)이면 mine 미설정 → 출력 불변(정적↔라이브 일치 불변식 유지).
+// (#4233: 팀 소유/이해관계 카테고리 표시(mine · ★ · 상단 정렬)는 분류 담당 개념과 함께 걷었다.)
 // viewer(#1291)는 **필수 인자**다 — 이 지도는 매 세션 주입되는 인덱스의 일부고, 지식 수(N)는 "그 분류에 내가
 //  못 보는 문서가 몇 건 있다"를 그대로 알려주는 카운트다(있는 줄도 몰라야 하는 게 잠금의 요점). 인자를 생략할 수
 //  있게 두면 호출부 한 곳만 놓쳐도 조용히 샌다 → 조직 전체 배포물은 PUBLIC_VIEWER, 내부 특권 경로는 null 을 명시.
-export async function categoryMapForIndex(viewer: Viewer, mineIds?: Set<number>): Promise<CategoryMapEntry[]> {
+export async function categoryMapForIndex(viewer: Viewer): Promise<CategoryMapEntry[]> {
   try {
     const { itemsPool } = await import("../../db/client.js");
     // (1) 전 카테고리 — merged·deprecated 제외. key 부분유니크. cross_cutting 먼저(교차관심사 상위 노출).
@@ -86,7 +84,6 @@ export async function categoryMapForIndex(viewer: Viewer, mineIds?: Set<number>)
       key: c.key as string,
       name: (c.name as string) ?? (c.key as string),
       active_units: cnt.get(Number(c.id)) ?? 0,
-      mine: mineIds ? mineIds.has(Number(c.id)) : false,
     }));
   } catch (err) {
     logger.warn({ err }, "카테고리 지도 조회 실패 — 빈 지도로 폴백(인덱스는 R 전문·가이드만)");
@@ -197,12 +194,10 @@ export function effectiveSectionTemplate(section: string, bodyMd: string | null 
 //   축이 없는데 소제목만 남기면 없는 위계를 읽는 쪽에 가르치게 된다.
 function buildCategoryBlock(categoryMap: CategoryMapEntry[]): string {
   if (!categoryMap.length) return "";
-  // 우리 팀(mine) 카테고리를 상단으로 정렬하고 ★ 마킹(표면화 사이드바 '우리 팀 우선'의 텍스트 인덱스 판본).
-  //  V8 sort 는 stable — mine 이 하나도 없으면(정적/멤버무관) 비교가 전부 0이라 들어온 순서(교차관심사→key) 그대로.
-  const ordered = [...categoryMap].sort((a, b) => (a.mine === b.mine ? 0 : a.mine ? -1 : 1));
-  const out = ordered.map((a) => {
+  //  순서는 들어온 순서(교차관심사→key) 그대로다. (#4233 전에는 우리 팀 카테고리를 위로 올리고 ★ 를 붙였다.)
+  const out = categoryMap.map((a) => {
     const n = a.active_units > 0 ? ` (${a.active_units})` : "";
-    return `- ${a.key} — ${a.name}${n}${a.mine ? " ★" : ""}`;
+    return `- ${a.key} — ${a.name}${n}`;
   });
   return out.join("\n").trimEnd() + "\n\n";
 }
@@ -352,7 +347,6 @@ export async function materializeOrgContent(): Promise<Materialized> {
   //  개인 레이어의 진실 출처는 org_member.body_md 하나뿐 — 내 프로필 창 [AI 개인화] 탭이 쓰고
   //  (관리탭의 규칙 폼은 그 창으로 옮겨 갔다 — #1843·#1898),
   //  buildPersonalBlock() 이 읽어 매 세션 주입한다. 그래서 견본은 파일이 아니라 그 화면을 가리킨다.
-  //  (담당 영역은 팀·카테고리 오너십이 이미 주입해 중복이라 #837 에서 뺐다.)
   await writeFile(join(dir, "members", "_template.md"),
     "# 개인 레이어 (견본 — 이 파일을 편집하지 마세요)\n\n"
     + "개인 규칙은 화면 왼쪽 아래 내 이름을 눌러 열리는 내 프로필 창의 **[AI 개인화]** 에서 저장합니다. 저장하면 내 AI 세션 첫머리에 자동으로 실립니다.\n"

@@ -2,7 +2,11 @@
 //  사양 엣지: ①어떤 지시가 프로젝트가 되나(길이·접두·여러 줄·상한) ②어떤 요청에서 선생성하나(이미 소속·폴더 선택·앱·로그인·읽기전용·인코그니토).
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AUTO_CREATED_MARK, UNNAMED_PROJECT, firstPromptProjectPlan, humanShellProject, shellProjectFromPrompt, shouldRenameShellProject } from "./first-prompt-project.js";
+import {
+  AUTO_CREATED_MARK, UNNAMED_PROJECT, firstPromptProjectPlan, humanShellProject, shellProjectFromPrompt, shouldRenameShellProject,
+  discardShellProject, launchOrDiscardShell, shellDiscardVerdict, type DiscardDeps, type ShellHandle,
+  createShellProject, type ShellCreateDeps,
+} from "./first-prompt-project.js";
 
 // 28자를 넘지 않는 지시 — 이름이 그대로 이름이 되는(자르지 않는) 경로를 재려면 상한 안쪽이어야 한다(#2031).
 const PROMPT = "홈 세션 cwd 를 프로젝트 폴더로";
@@ -175,4 +179,130 @@ test("humanShellProject — 이름이 비면 null(호출자가 종전 경로로 
   assert.equal(humanShellProject("   ", "지시"), null);
   assert.equal(humanShellProject(null, "지시"), null);
   assert.equal(humanShellProject(undefined, undefined), null);
+});
+
+// ── #4302 세션이 안 뜨면 껍데기도 없다 ─────────────────────────────────────────
+//  실측: 노드가 디스크 96.3% 로 새 세션을 4번 거부 → 누를 때마다 빈 프로젝트가 하나씩(#4274~#4277), 세션 0개.
+
+const SHELL: ShellHandle = { projectId: 4274, actor: "wonjoon-jang" };
+
+test("#4302 세션 띄우기가 실패하면 껍데기를 치우고, 원래 오류를 **그대로** 던진다", async () => {
+  const diskFull = Object.assign(new Error("디스크 공간이 부족해 새 세션을(를) 시작할 수 없습니다"), { status: 507 });
+  const calls: Array<[number, string]> = [];
+  await assert.rejects(
+    launchOrDiscardShell(SHELL, async () => { throw diskFull; }, async (s, why) => { calls.push([s.projectId, why]); }),
+    (e) => e === diskFull,
+  );
+  assert.deepEqual(calls, [[4274, diskFull.message]]);
+});
+
+test("#4302 세션이 뜨면 껍데기를 건드리지 않는다", async () => {
+  let discarded = 0;
+  const out = await launchOrDiscardShell(SHELL, async () => ({ id: "box-x" }), async () => { discarded++; });
+  assert.deepEqual(out, { id: "box-x" });
+  assert.equal(discarded, 0);
+});
+
+test("#4302 껍데기를 안 만든 요청(shell=null)은 실패해도 치울 것이 없다", async () => {
+  let discarded = 0;
+  await assert.rejects(launchOrDiscardShell(null, async () => { throw new Error("x"); }, async () => { discarded++; }), /x/);
+  assert.equal(discarded, 0);
+});
+
+test("#4302 치우기가 실패해도 사람이 받는 건 **원래 오류**다", async () => {
+  const orig = new Error("노드 거부");
+  await assert.rejects(
+    launchOrDiscardShell(SHELL, async () => { throw orig; }, async () => { throw new Error("DB 끊김"); }),
+    (e) => e === orig,
+  );
+});
+
+test("#4302 판정 — 붙은 세션이 있거나 셀 수 없으면 keep · 첨부가 남았으면 trash · 그 밖 delete", () => {
+  assert.equal(shellDiscardVerdict({ boundSessions: null, attachmentsLeft: 0 }), "keep");
+  assert.equal(shellDiscardVerdict({ boundSessions: 1, attachmentsLeft: 0 }), "keep");
+  assert.equal(shellDiscardVerdict({ boundSessions: 0, attachmentsLeft: 0 }), "delete");
+  assert.equal(shellDiscardVerdict({ boundSessions: 0, attachmentsLeft: 1 }), "trash");
+});
+
+function fakeDeps(over: Partial<DiscardDeps> = {}): { deps: DiscardDeps; log: string[] } {
+  const log: string[] = [];
+  const deps: DiscardDeps = {
+    boundSessions: async () => 0,
+    returnAttachments: async (moves) => { log.push(`return:${moves.length}`); return { returned: moves.length, failed: 0, left: [] }; },
+    deleteProject: async (id) => { log.push(`delete:${id}`); },
+    trashProject: async (id) => { log.push(`trash:${id}`); },
+    ...over,
+  };
+  return { deps, log };
+}
+// 테스트에서 첨부 한 건의 모양만 필요하다(돌려놓기 자체는 attach-relocate.test 가 잰다).
+const MOVE = { from: "personal:wonjoon-jang/uploads/a.png", to: "project:4274/a.png" } as unknown as NonNullable<ShellHandle["moves"]>[number];
+
+test("#4302 붙은 세션 0 · 첨부 없음 → 프로젝트를 지운다(첨부 되돌리기는 부르지 않는다)", async () => {
+  const { deps, log } = fakeDeps();
+  assert.equal(await discardShellProject(SHELL, "507", deps), "delete");
+  assert.deepEqual(log, ["delete:4274"]);
+});
+
+test("#4302 첨부가 있으면 **먼저 돌려놓고** 지운다", async () => {
+  const { deps, log } = fakeDeps();
+  assert.equal(await discardShellProject({ ...SHELL, moves: [MOVE] }, "507", deps), "delete");
+  assert.deepEqual(log, ["return:1", "delete:4274"]);
+});
+
+test("#4302 첨부를 못 돌려놓았으면 지우지 않고 휴지통으로(파일이 그 폴더에만 있다)", async () => {
+  const { deps, log } = fakeDeps({ returnAttachments: async () => ({ returned: 0, failed: 1, left: [MOVE.from] }) });
+  assert.equal(await discardShellProject({ ...SHELL, moves: [MOVE] }, "507", deps), "trash");
+  assert.deepEqual(log, ["trash:4274"]);
+});
+
+test("#4302 세션이 이미 이 프로젝트에 붙었으면(뒷단계 실패) 아무것도 안 건드린다", async () => {
+  const { deps, log } = fakeDeps({ boundSessions: async () => 1 });
+  assert.equal(await discardShellProject({ ...SHELL, moves: [MOVE] }, "mirror 실패", deps), "keep");
+  assert.deepEqual(log, []);
+});
+
+test("#4302 붙은 세션을 셀 수 없으면 지우지 않는다(모르면 안 지운다)", async () => {
+  const { deps, log } = fakeDeps({ boundSessions: async () => { throw new Error("DB 끊김"); } });
+  assert.equal(await discardShellProject(SHELL, "507", deps), "keep");
+  assert.deepEqual(log, []);
+});
+
+test("#4302 지우기가 실패해도 던지지 않는다", async () => {
+  const { deps } = fakeDeps({ deleteProject: async () => { throw new Error("DB 끊김"); } });
+  assert.equal(await discardShellProject(SHELL, "507", deps), "keep");
+});
+
+function createDeps(over: Partial<ShellCreateDeps> = {}): { deps: ShellCreateDeps; deleted: number[] } {
+  const deleted: number[] = [];
+  const deps: ShellCreateDeps = {
+    createProject: async () => ({ id: 4305 }),
+    ensureAgentsMd: async () => undefined,
+    getProjectRow: async () => ({ folder: "project/4305", name: "새 작업" }),
+    deleteProject: async (id) => { deleted.push(id); },
+    ...over,
+  };
+  return { deps, deleted };
+}
+const SPEC = { name: "새 작업", description: AUTO_CREATED_MARK, nameSource: "rule" as const };
+
+test("#4302 껍데기 폴더까지 서면 그대로 돌려준다(지우지 않는다)", async () => {
+  const { deps, deleted } = createDeps();
+  assert.deepEqual(await createShellProject(SPEC, "m1", deps), { id: 4305, folder: "project/4305", name: "새 작업" });
+  assert.deepEqual(deleted, []);
+});
+
+test("#4302 행을 만든 뒤 폴더에서 실패하면 그 행을 지운다(세션은 이 프로젝트에 선 적이 없다)", async () => {
+  const a = createDeps({ ensureAgentsMd: async () => { throw new Error("EACCES"); } });
+  assert.equal(await createShellProject(SPEC, "m1", a.deps), null);
+  assert.deepEqual(a.deleted, [4305]);
+  const b = createDeps({ getProjectRow: async () => ({ folder: "" }) });
+  assert.equal(await createShellProject(SPEC, "m1", b.deps), null);
+  assert.deepEqual(b.deleted, [4305]);
+});
+
+test("#4302 행 만들기 자체가 실패하면 지울 것이 없다", async () => {
+  const { deps, deleted } = createDeps({ createProject: async () => { throw new Error("DB 끊김"); } });
+  assert.equal(await createShellProject(SPEC, "m1", deps), null);
+  assert.deepEqual(deleted, []);
 });

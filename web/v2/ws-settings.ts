@@ -13,7 +13,9 @@
 //  설정 모달이 그 문을 다시 열면 같은 실수를 되풀이하는 것이다.
 //
 // ── 권한 갈래 ───────────────────────────────────────────────────────────────
-//  · 일반 워크스페이스: 이름·아바타 = owner. 구성원·초대 = peopleSection 이 스스로 가른다(can_invite).
+//  · 일반 워크스페이스: 이름·아바타 = owner(만든 사람 **과 공동 관리자** — 둘 다 role 'owner' 다. 서버도 같다:
+//    코어 requireOwner · CP workspace-update 가 역할 owner 를 받는다. #4122 원준 2026-09-21 «공동 관리자는
+//    만든 사람과 권한이 같다» — 9/14 결정의 연장). 구성원·초대 = peopleSection 이 스스로 가른다(can_invite).
 //  · primary(박스): 이름 = **조직 이름 그 자체**라 org 프로필(admin)로 간다. 아바타 = 등록부 행의
 //    표시값이라 admin 이 바꾼다(registry 활성일 때만 — 저장소가 gw_workspace 라서).
 //  · 매니지드: 권위는 CP — 서버(workspace_update)가 묻고 전달한다. 화면 갈래는 role 만 본다.
@@ -75,7 +77,7 @@ export function openWsSettings(w: WsRowLike): void {
   const paintSwatches = (): void => {
     swatches.replaceChildren(
       el('button', { class: 'v2wss-swatch v2wss-swatch--none' + (cur.color ? '' : ' on'), type: 'button',
-        title: '기본 — 지금처럼 자동(개인=내 아바타, 팀=첫 글자)', 'aria-label': '기본 색',
+        title: '기본 색. 개인은 내 아바타, 팀은 이름 첫 글자로 자동으로 그려요', 'aria-label': '기본 색',
         ...(canFace ? {} : { disabled: 'disabled' }),
         onclick: () => { delete cur.color; paintSwatches(); paintPreview(); } }, icon('x')),
       ...PALETTE.map((c) => el('button', { class: 'v2wss-swatch' + (cur.color === c ? ' on' : ''), type: 'button',
@@ -125,9 +127,10 @@ export function openWsSettings(w: WsRowLike): void {
     owner
       ? el('div', { class: 'v2-wspop-actions' }, save, note)
       : el('p', { class: 'v2-wspop-hint', text: primary
-          ? '조직 이름·아바타는 관리자가 바꿉니다.'
-          : '이름·아바타는 이 워크스페이스를 만든 분이 바꿉니다.' }),
-    primary && owner ? el('p', { class: 'v2-wspop-hint', text: '이 워크스페이스의 이름은 조직 이름이기도 해요 — 바꾸면 모두에게 그렇게 보입니다.' }) : null,
+          ? '조직 이름과 아바타는 관리자가 바꿉니다.'
+          //  #4122 — 종전 «만든 분이 바꿉니다» 는 거짓이었다(공동 관리자도 된다). 지금 왜 잠겨 있는지도 함께 말한다.
+          : '이름과 아바타는 만든 사람과 공동 관리자가 바꿀 수 있어요. 지금은 구성원이라 볼 수만 있어요.' }),
+    primary && owner ? el('p', { class: 'v2-wspop-hint', text: '이 워크스페이스의 이름은 조직 이름이기도 해요. 바꾸면 모두에게 그 이름으로 보입니다.' }) : null,
     primary && owner && !canFace ? el('p', { class: 'v2-wspop-hint', text: '아바타 저장은 다중 워크스페이스가 켜진 뒤에 쓸 수 있어요.' }) : null);
 
   // ── 구성원·초대 ────────────────────────────────────────────────────────────

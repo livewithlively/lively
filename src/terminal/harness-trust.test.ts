@@ -4,7 +4,7 @@
 //   호출부가 그 보증 없이 불러 화면 수락층의 가드가 우회됐다.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planTrustPatch, planAgyTrustPatch, ensureFolderTrusted, TRUST_KEY, AGY_TRUST_KEY, type TrustIo } from "./harness-trust.js";
+import { planTrustPatch, planAgyTrustPatch, ensureFolderTrusted, TRUST_KEY, AGY_TRUST_KEY, type TrustIo, planCodexTrustPatch } from "./harness-trust.js";
 
 const DIR = "/box/a";
 const parse = (p: { write: boolean; text?: string }) => JSON.parse((p as { text: string }).text);
@@ -169,11 +169,54 @@ test("㉒ agy — 실제로 그 파일로 나간다", async () => {
   assert.deepEqual(JSON.parse(wrote[0][1])[AGY_TRUST_KEY], [DIR]);
 });
 
+// ── codex (#4135) — TOML. 실측 2026-09-24: 신뢰 대화상자에서 «Yes, continue» 를 고르면 config.toml 끝에 테이블이 붙는다.
+test("㉔ codex — 빈 파일·기존 설정 끝에 [projects.\"…\"] 테이블을 덧붙인다(나머지는 한 글자도 안 건드린다)", () => {
+  const got = planCodexTrustPatch(null, DIR);
+  assert.deepEqual(got, { write: true, text: `[projects."${DIR}"]\ntrust_level = "trusted"\n` });
+  const keep = 'model = "gpt-5.6-sol"\n\n[mcp_servers.lively]\ncommand = "lively"\n';
+  const p2 = planCodexTrustPatch(keep, DIR);
+  assert.ok(p2.write && p2.text.startsWith(keep), "기존 내용이 앞에 그대로 남는다");
+  assert.ok(p2.write && p2.text.endsWith(`[projects."${DIR}"]\ntrust_level = "trusted"\n`));
+});
+
+test("㉕ codex — 그 경로의 테이블이 이미 있으면 아무것도 안 한다(중복 테이블 = TOML 파손 = codex 즉사)", () => {
+  const cur = `[projects."${DIR}"]\ntrust_level = "trusted"\n`;
+  assert.deepEqual(planCodexTrustPatch(cur, DIR), { write: false });
+  //  사람이 «신뢰 안 함» 으로 적어 둔 것도 그대로 둔다 — 그건 사람의 결정이다.
+  assert.deepEqual(planCodexTrustPatch(`[projects."${DIR}"]\ntrust_level = "untrusted"\n`, DIR), { write: false });
+  //  리터럴 문자열(사람이 손으로 적은 판)도 «이미 있다» 로 본다.
+  assert.deepEqual(planCodexTrustPatch(`[projects.'${DIR}']\ntrust_level = "trusted"\n`, DIR), { write: false });
+  //  다른 경로의 테이블은 «없다» — 덧붙인다.
+  assert.equal(planCodexTrustPatch(`[projects."/other/dir"]\ntrust_level = "trusted"\n`, DIR).write, true);
+});
+
+test("㉖ codex — 줄바꿈 없이 끝난 파일에도 안전하게 붙이고, TOML 에 못 적는 경로는 포기한다", () => {
+  const p = planCodexTrustPatch('model = "x"', DIR);
+  assert.ok(p.write && p.text.startsWith('model = "x"\n\n[projects.'), "줄바꿈을 먼저 넣는다");
+  assert.deepEqual(planCodexTrustPatch(null, "/bad\npath"), { write: false });
+  assert.deepEqual(planCodexTrustPatch(null, "  "), { write: false });
+  //  따옴표·역슬래시가 든 경로는 TOML 기본 문자열 규칙으로 탈출한다.
+  const q = planCodexTrustPatch(null, '/a"b\\c');
+  assert.ok(q.write && q.text.includes('[projects."/a\\"b\\\\c"]'), q.write ? q.text : "write:false");
+});
+
+test("㉗ codex — 실제로 config.toml 로 나간다", async () => {
+  const wrote: Array<[string, string]> = [];
+  const io: TrustIo = { read: async () => null, write: async (f, t) => { wrote.push([f, t]); } };
+  const f = "/home/box_x/.codex/config.toml";
+  assert.equal(await ensureFolderTrusted(io, f, DIR, true, "codex"), true);
+  assert.equal(wrote[0][0], f);
+  assert.ok(wrote[0][1].includes(`[projects."${DIR}"]`));
+  //  사람이 고른 폴더(allowed=false)는 종전대로 손대지 않는다 — 신뢰는 그 사람이 대화상자에서 답한다.
+  assert.equal(await ensureFolderTrusted(io, f, DIR, false, "codex"), false);
+  assert.equal(wrote.length, 1);
+});
+
 // ★ 표에 없는 하네스는 **짐작해 쓰지 않는다** — 자리를 모르면 남의 설정 파일을 망가뜨린다.
 test("㉓ 표에 없는 하네스는 읽지도 쓰지도 않는다", async () => {
   let reads = 0, writes = 0;
   const io: TrustIo = { read: async () => { reads++; return null; }, write: async () => { writes++; } };
-  for (const h of ["codex", "grok", "opencode", "shell", ""]) {
+  for (const h of ["grok", "opencode", "shell", ""]) {
     assert.equal(await ensureFolderTrusted(io, "/cfg/x.json", DIR, true, h), false, h);
   }
   assert.equal(reads, 0);

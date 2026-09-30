@@ -10,7 +10,7 @@ import { openTermCreateForm } from '../terminal.js';
 import { openProjectPreviewModal } from './detail-preview.js';
 import { pjvMemberDirectory } from './task-controls.js';
 // #1582 — 세션 종료 확인창·완료 토스트는 전 화면 공용 정의 하나만 쓴다(AI 세션 탭·대시보드와 같은 말).
-import { confirmSessionEnd, endedToast } from '../session-actions.js';
+import { confirmSessionEnd, confirmSessionTrash, endedToast, eulReul, retireSession } from '../session-actions.js';
 
 // ── 상세 ② 터미널 세션 — 팀원 프로필(아바타) 그리드 → 클릭 시 그 사람 세션 펼침(페이지 내). 본인은 상태메시지 공유. ──
 function projectTerminalSection(id, members, meId, base, projectName, project?) {
@@ -247,11 +247,16 @@ function openSessionRename(s, reload) {
 //  폴더·파일·대화록을 지우지 않고(killSession 은 tmux 와 desired-state 만 건드린다), 확인창은 AI 세션 탭·
 //  대시보드와 **같은 공용 정의**를 쓴다. 근거는 session-actions.ts 헤더.
 async function removeSession(s, reload) {
-  if (!await confirmSessionEnd({ title: '‘' + (s.label || s.id) + '’ 세션을 종료할까요?', sessions: [s] })) return;
+  //  #3778 — 그 자리에서 영영 지우지 않는다(session-actions retireSession): 도는 세션은 터미널만 내려 [복원]으로 남고,
+  //   이미 멈춘 세션은 휴지통으로 간다. 노드 세션 좌표(?node=, #905 C4)는 그 함수가 싣는다.
+  const nm = s.label || s.id;
+  const ok = s.restorable
+    ? await confirmSessionTrash({ title: '「' + nm + '」' + eulReul(nm) + ' 휴지통으로 보낼까요?' })
+    : await confirmSessionEnd({ title: '‘' + nm + '’ 세션을 종료할까요?', sessions: [s] });
+  if (!ok) return;
   try {
-    // 노드 세션(#905 C4)은 ?node= 로 종료를 그 노드에 위임한다(터미널 탭과 동일).
-    await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' });
-    toast(await endedToast(1, [s])); reload();
+    const how = await retireSession(s);
+    toast(how === 'trashed' ? '휴지통으로 보냈어요 — 휴지통에서 되돌릴 수 있어요' : await endedToast(1, [s])); reload();
   } catch (e) { toast('실패 — ' + e.message, true); }
 }
 

@@ -155,9 +155,15 @@ const NODE_OPS_V1 = ["list", "create", "kill", "edit", "gone", "label", "runTask
 //   준비 판정은 게이트웨이가 이 걸음이 돌려준 화면으로 하고, 그 세션의 호스트는 실행만 한다(terminal/outbox-host-step 머리말).
 //   sendKeys 와 달리 실패도 **값으로** 답한다 — «한 글자도 안 쳤다» 가 오류 문자열로 뭉개지면 게이트웨이가 다시 쳐도 되는지 모른다.
 //   선언하지 않은 호스트엔 보내지 않는다(nodeRpc 관문 · sessionHostFor 의 unsupported) — 그 세션은 게이트웨이 경로에 남는다.
-//  chatTranscript = app-server가 노드 CODEX_HOME에 남긴 rollout을 제한 바이트 청크로 읽는다(#3982).
+//  chatTranscript = 노드 하네스가 로컬에 남긴 대화 기록을 제한 바이트 청크로 읽는다(#3982·#3870).
 //   임의 경로를 받지 않고 threadId만 받으며, 게이트웨이가 세션 매핑·인가·공통 ChatLine 파싱을 맡는다.
-const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "markSeen", "sendKeys", "setProject", "createAppSession", "stageWorkerChunk", "startWorker", "workerStatus", "stopWorker", "injectFirstPrompt", "chatSend", "chatAnswer", "chatTranscript", "outboxStep"] as const;
+//  sessionTokens(#4135) = 이미 떠 있는 세션에 게이트웨이가 나중에 구운 훅·MCP 토큰을 파일로 심는다(session-ops → session-token-file).
+//   선언하지 않은 노드(옛 번들)엔 보내지 않는다 — 그 노드의 살아 있는 세션은 번들이 갱신될 때까지 종전 신원으로 남는다.
+//  forkSession(#4135) = 세션 복제 — **그 대화를 아는 새 세션**을 띄운다(input.fork = 원래 세션의 하네스 대화 id). 하는 일은 create 와
+//   같은데 op 를 따로 둔 이유는 하나다: input.fork 를 모르는 옛 번들이 `create` 로 받으면 그 필드를 **조용히 무시하고 빈 새 대화**를
+//   연다 — 사람은 «복제했다» 는 답을 받았는데 아무것도 모르는 세션 앞에 앉는다. op 가 따로면 선언하지 않은 노드엔 아예 안 보낸다
+//   (게이트웨이가 «그 컴퓨터는 아직 복제를 모른다» 고 말한다 — session-fork.ts forkRefusal).
+const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "markSeen", "sendKeys", "setProject", "createAppSession", "stageWorkerChunk", "startWorker", "workerStatus", "stopWorker", "injectFirstPrompt", "chatSend", "chatAnswer", "chatTranscript", "outboxStep", "sessionTokens", "forkSession"] as const;
 
 // 이 빌드가 아는 op 전량. **타입이 이 배열에서 파생**되므로 목록과 타입이 어긋날 수 없다.
 export const NODE_OPS = [...NODE_OPS_V1, ...NODE_OPS_NEW] as const;

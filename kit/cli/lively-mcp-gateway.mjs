@@ -83,8 +83,19 @@ const gateway = () => normGw(readLively("gateway-url") || process.env.LIVELY_GAT
 //   종전 http 직결 등록은 멤버 토큰을 프로필 .claude.json 에 구워 이 문제가 없었다 — #1079 의 프록시 전환이
 //   #346/#916 이 세운 프로필 격리를 MCP 에서 조용히 되돌린 것이라, 여기서 되돌린다.
 //  ⚠ 없으면 종전과 **글자 그대로 같다**(구 게이트웨이·격리 박스·개인 노트북) — 무회귀.
+//  ★ #4135 — 그리고 **세션 토큰 파일이 그 위다.** env 의 LIVELY_MCP_TOKEN 은 판을 띄울 때 한 번 실리는 스냅샷이고, 토큰 없이 뜬 세션
+//   (이 변경 전의 모든 노드 세션)엔 그것조차 없다. 게이트웨이가 살아 있는 세션 앞으로 나중에 구운 자격은 노드가
+//   `~/.lively/session-tokens/<세션id>.json` 에 심는다(terminal/session-token-file — kit/hooks/harness-registry sessionTokenFile 과 같은 자리).
+//   매 호출 그 파일을 먼저 본다 — 없으면 아래 종전 순서 그대로다(무회귀).
+const sessionFileToken = () => {
+  const sid = (process.env.LIVELY_SESSION_ID || "").trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(sid)) return "";
+  try { const j = JSON.parse(readFileSync(join(LIVELY, "session-tokens", `${sid}.json`), "utf8")); return typeof j?.mcp === "string" ? j.mcp.trim() : ""; }
+  catch { return ""; }
+};
 const token = () => (
-  (process.env.LIVELY_MCP_TOKEN || "").trim()
+  sessionFileToken()
+  || (process.env.LIVELY_MCP_TOKEN || "").trim()
   || readLively("token")
   || (process.env.LIVELY_TOKEN || "").trim()
 ).trim();
