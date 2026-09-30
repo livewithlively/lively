@@ -168,8 +168,10 @@ const LITERAL_RE = /"-e"\s*,\s*[`"]([A-Za-z_][A-Za-z0-9_]*)=/g;
 const DYNAMIC_RE = /"-e"\s*,\s*[`"]\$\{([^}]*)\}=/g;
 /** `${IDENT}=…` 로 주입되는 자리 — 이름이 상수에 있으므로 그 상수를 import 해 풀어 준다. */
 const KNOWN_CONST_ENV: Record<string, string> = { SESSION_KIND_ENV };
-/** 반복문 주입(`${k}=${v}`) 자리의 **개수**를 고정한다. 늘면 «덮이지 않은 새 동적 주입» 이다. */
-const EXPECTED_LOOP_SITES: Record<string, number> = { [SESSIONS_TS]: 1, [TASKS_TS]: 1 };
+/** 반복문 주입(`${k}=${v}`) 자리의 **개수**를 고정한다. 늘면 «덮이지 않은 새 동적 주입» 이다.
+ *  tasks.ts 는 0 — 그 자리는 자격 리스였는데 #4422 에서 명령줄을 떠나 작업 폴더의 0600 파일로 갔다(워커 uid 안에서 읽는다 —
+ *  sudo 를 건너지 않는다). 리스 값이 `-e` 로 돌아오면 여기가 1 이 되어 깨진다 — 그건 토큰이 다시 argv 에 실린다는 뜻이다. */
+const EXPECTED_LOOP_SITES: Record<string, number> = { [SESSIONS_TS]: 1, [TASKS_TS]: 0 };
 /** 리터럴 이름 수의 하한 — 정규식이 깨져 0~1건이 되는 «거짓 green» 을 잡는 배선 바닥값(정확한 수가 아니다). */
 const LITERAL_FLOOR: Record<string, number> = { [SESSIONS_TS]: 8, [TASKS_TS]: 5 };
 

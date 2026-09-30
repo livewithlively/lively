@@ -1,10 +1,10 @@
-// 원격 노드 Codex 대화 읽기 (#3982) — 파일은 노드에서 제한 청크로, 해석은 게이트웨이의 기존 파서로 한다.
+// 원격 노드 대화 읽기 (#3982·#3870) — 파일은 노드에서 제한 청크로, 해석은 게이트웨이의 하네스 파서로 한다.
 //
-// app-server의 응답은 노드의 rollout에 영속되지만 Stop 훅은 돌지 않아 중앙 session_log에는 올라오지 않는다.
-// 따라서 대화 UI가 중앙 기록으로 물러나면 Windows·macOS 모두 답이 없는 것처럼 보인다. 노드는 임의 경로가 아닌
-// 검증된 threadId만 받아 자기 CODEX_HOME 아래 원문 바이트를 돌려주고, 게이트웨이가 줄 정렬·파싱·인가를 맡는다.
+// 하네스 응답은 노드 로컬 기록에 영속되지만 중앙 session_log가 비어 있을 수 있다(Codex app-server는 Stop 훅이
+// 돌지 않고, Claude 노드 파일도 중앙 호스트에 없다). 따라서 대화 UI가 중앙 기록으로 물러나면 답과 실행 설정을 잃는다. 노드는 임의 경로가 아닌
+// 검증된 session id + threadId만 받아 하네스 규약 안의 원문 바이트를 돌려주고, 게이트웨이가 줄 정렬·파싱·인가를 맡는다.
 import { transcriptRange } from "../sessions/transcript-range.js";
-import { parseCodex } from "./harness-io/codex.js";
+import { harnessIo } from "./harness-io/adapter.js";
 import { toNdjson, toThinNdjson } from "./harness-io/chat-line.js";
 import { parseWindow } from "./harness-io/parse-cache.js";
 import { prefetchReader, readAlignedWindow } from "./harness-io/window.js";
@@ -23,8 +23,9 @@ type TranscriptRpc = (
   args: Record<string, unknown>,
 ) => Promise<unknown>;
 
-export interface NodeCodexTranscript {
+export interface NodeTranscript {
   uuid: string;
+  harness: string;
   bytes: number;
   from: number;
   to: number;
@@ -41,16 +42,18 @@ const asChunk = (raw: unknown): NodeRolloutChunk | null => {
   return { found: o.found, size: Math.floor(size), offset: Math.floor(offset), data: o.data, eof: o.eof === true };
 };
 
-export async function readNodeCodexTranscript(o: {
+export async function readNodeTranscript(o: {
   nodeId: string;
   sessionId: string;
   threadId: string;
+  harness: string;
   query: { from?: unknown; to?: unknown; tail?: unknown; fmt?: unknown };
   rpc: TranscriptRpc;
   /** 테스트 seam. 운영은 WS 1MB 아래의 안전한 청크를 쓴다. */
   chunkBytes?: number;
-}): Promise<NodeCodexTranscript | null> {
-  if (!/^[A-Za-z0-9-]{8,64}$/.test(o.threadId)) return null;
+}): Promise<NodeTranscript | null> {
+  const io = harnessIo(o.harness);
+  if (!io?.parse || !/^[A-Za-z0-9._-]{8,128}$/.test(o.threadId) || (io.convIdOk && !io.convIdOk(o.threadId))) return null;
   const chunkBytes = Math.max(1, Math.min(DEFAULT_CHUNK_BYTES, Math.floor(o.chunkBytes ?? DEFAULT_CHUNK_BYTES)));
   const stat = asChunk(await o.rpc(o.nodeId, "chatTranscript", { id: o.sessionId, threadId: o.threadId, offset: 0, len: 0 }));
   if (!stat?.found) return null;
@@ -78,10 +81,11 @@ export async function readNodeCodexTranscript(o: {
     ? await readAlignedWindow(reader, size, start, end, o.query.to !== undefined)
     : { from: start, to: start, data: Buffer.alloc(0) };
   const lines = win.data.length
-    ? parseWindow(parseCodex, `node|${o.nodeId}|${o.sessionId}|${o.threadId}`, win.from, win.to, win.data.toString("utf8"))
+    ? parseWindow(io.parse, `node|${o.nodeId}|${o.sessionId}|${io.key}|${o.threadId}`, win.from, win.to, win.data.toString("utf8"))
     : [];
   return {
     uuid: o.threadId,
+    harness: io.key,
     bytes: size,
     from: win.from,
     to: win.to,

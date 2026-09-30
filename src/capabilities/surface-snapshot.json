@@ -383,7 +383,7 @@
   "rest": [
    "POST /api/ui/org/section/delete"
   ],
-  "input_hash": "8bdc87b5fb8dd436"
+  "input_hash": "084ed7ba69cd67ae"
  },
  {
   "name": "org_reorder_sections",
@@ -783,7 +783,7 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "e4899b729f8f8961"
+  "input_hash": "ebd70646aec0704e"
  },
  {
   "name": "org_context_job_runner_fill",
@@ -794,6 +794,46 @@
    "POST /api/ui/org/context-job-runner/fill"
   ],
   "input_hash": "c8a393e3ff4dc512"
+ },
+ {
+  "name": "org_injection_update",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/injection-config"
+  ],
+  "input_hash": "4442a5a6f6164db4"
+ },
+ {
+  "name": "org_auto_runs",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/auto-runs"
+  ],
+  "input_hash": "546f08f0a845351c"
+ },
+ {
+  "name": "org_auto_runs_daily",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/auto-runs/daily"
+  ],
+  "input_hash": "f1866c60b293ebc7"
+ },
+ {
+  "name": "org_auto_run_detail",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/auto-runs/:kind/:id"
+  ],
+  "input_hash": "c39cafbbee70b5de"
  },
  {
   "name": "org_alert_status",
@@ -1248,9 +1288,9 @@
   "input_hash": "7d3b26cb0b2c2ce3"
  },
  {
-  "name": "org_classifier_list",
+  "name": "org_distiller_category_list",
   "scope": "memory",
-  "mcp": true,
+  "mcp": false,
   "mutates": false,
   "rest": [
    "GET /api/ui/org/classifiers"
@@ -1258,34 +1298,42 @@
   "input_hash": "6c9f16e97bc4049d"
  },
  {
-  "name": "org_classifier_upsert",
+  "name": "org_distiller_category_upsert",
   "scope": "memory",
   "mcp": true,
   "mutates": true,
   "rest": [
    "POST /api/ui/org/classifiers"
   ],
-  "input_hash": "08b00c5f32f85132"
+  "input_hash": "5ab4446c8bac7bc6"
  },
  {
-  "name": "org_classifier_preview",
+  "name": "org_distiller_category_preview",
   "scope": "memory",
   "mcp": true,
   "mutates": false,
   "rest": [
    "GET /api/ui/org/classifiers/preview"
   ],
-  "input_hash": "c5dbf18020496e89"
+  "input_hash": "a15dad16e11f968e"
  },
  {
-  "name": "org_classifier_remove",
+  "name": "org_distiller_category_remove",
   "scope": "memory",
   "mcp": true,
   "mutates": true,
   "rest": [
    "POST /api/ui/org/classifiers/remove"
   ],
-  "input_hash": "2aa5d51896628e35"
+  "input_hash": "589d046b4b89dee1"
+ },
+ {
+  "name": "org_classifier_list",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [],
+  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "org_manager_list",
@@ -1706,7 +1754,7 @@
   "rest": [
    "POST /api/ui/org/http-tool-presets/apply"
   ],
-  "input_hash": "e2fcc3d7adb030c3"
+  "input_hash": "b4742b7345b7ff77"
  },
  {
   "name": "org_tool_remove",
@@ -2339,26 +2387,6 @@
   "input_hash": "ef68179e23272c44"
  },
  {
-  "name": "team_set_category",
-  "scope": "context",
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/teams/:id/categories"
-  ],
-  "input_hash": "a710cb1279b1d0cc"
- },
- {
-  "name": "category_set_owner",
-  "scope": "context",
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/categories/:id/owner"
-  ],
-  "input_hash": "92f43a6e7b930f71"
- },
- {
   "name": "knowledge_list",
   "scope": "memory",
   "mcp": true,
@@ -2676,7 +2704,7 @@
   "rest": [
    "GET /api/ui/sources"
   ],
-  "input_hash": "e59688fdc0bc2f6e"
+  "input_hash": "ec3a078cc89fd5e2"
  },
  {
   "name": "source_undistilled",
@@ -2745,6 +2773,16 @@
   "mutates": false,
   "rest": [],
   "input_hash": "8eb98c3baa73c9cb"
+ },
+ {
+  "name": "source_trash_list",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/source-trash"
+  ],
+  "input_hash": "564b43b502c45c91"
  },
  {
   "name": "workspace_reclaim",
@@ -2864,7 +2902,7 @@
   "rest": [
    "POST /api/ui/v6/projects/:id"
   ],
-  "input_hash": "dcd98f3b595ef870"
+  "input_hash": "aa951c74f28f8215"
  },
  {
   "name": "project_rename_v6",
@@ -2935,6 +2973,16 @@
    "POST /api/ui/v6/projects/:id/trash"
   ],
   "input_hash": "101095875948a369"
+ },
+ {
+  "name": "project_trash_preview_v6",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/projects/:id/trash-preview"
+  ],
+  "input_hash": "4dc36ab67eecb455"
  },
  {
   "name": "project_purge_v6",
@@ -3207,6 +3255,16 @@
   "input_hash": "c1d69d7da7004e68"
  },
  {
+  "name": "project_status_template_set_default_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/status-templates/set-default"
+  ],
+  "input_hash": "bb6f6d0bea40cd91"
+ },
+ {
   "name": "project_status_template_update_v6",
   "scope": "memory",
   "mcp": true,
@@ -3225,16 +3283,6 @@
    "POST /api/ui/v6/status-templates/:id/delete"
   ],
   "input_hash": "4dc36ab67eecb455"
- },
- {
-  "name": "project_status_template_set_default_v6",
-  "scope": "memory",
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/v6/status-templates/set-default"
-  ],
-  "input_hash": "bb6f6d0bea40cd91"
  },
  {
   "name": "favorites_index",
@@ -3614,7 +3662,17 @@
   "rest": [
    "GET /api/ui/deleted"
   ],
-  "input_hash": "4df1c7851376a241"
+  "input_hash": "3e2c1f2be8ac68df"
+ },
+ {
+  "name": "trash_counts",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/deleted/counts"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "content_restore",
@@ -3624,7 +3682,27 @@
   "rest": [
    "POST /api/ui/deleted/restore"
   ],
-  "input_hash": "6cf966c863571d19"
+  "input_hash": "66d811b951cc612c"
+ },
+ {
+  "name": "content_snapshot",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/deleted/snapshot"
+  ],
+  "input_hash": "66d811b951cc612c"
+ },
+ {
+  "name": "content_purge",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/deleted/purge"
+  ],
+  "input_hash": "07a4700d3c3b6d8b"
  },
  {
   "name": "vis_axis_list",
@@ -3677,6 +3755,16 @@
   "input_hash": "fd3d0d02bfb143e5"
  },
  {
+  "name": "feed_target_drain",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/feed-targets/drain"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
   "name": "feed_target_update",
   "scope": "memory",
   "mcp": true,
@@ -3705,16 +3793,6 @@
    "POST /api/ui/feed-targets/:id/categories"
   ],
   "input_hash": "4419d1b448f36ddf"
- },
- {
-  "name": "feed_target_drain",
-  "scope": "memory",
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/feed-targets/drain"
-  ],
-  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "cron_list",
@@ -3855,6 +3933,16 @@
    "POST /api/ui/terminal/sessions/:id/rename"
   ],
   "input_hash": "b6f9caef520909c3"
+ },
+ {
+  "name": "session_task",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/terminal/sessions/:id/task"
+  ],
+  "input_hash": "f002ac84267737ac"
  },
  {
   "name": "preview_env_list",
@@ -4407,6 +4495,56 @@
   "input_hash": "80d71c4c25c45131"
  },
  {
+  "name": "org_outlook_collect",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/outlook/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_outlook_collect_set",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/outlook/collect"
+  ],
+  "input_hash": "67241d38485effa1"
+ },
+ {
+  "name": "org_outlook_connect",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/outlook/connect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_outlook_admin_consent",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/outlook/admin-consent"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_outlook_oauth_complete",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/outlook/oauth-complete"
+  ],
+  "input_hash": "3d5e4b275497c027"
+ },
+ {
   "name": "org_google_collect",
   "scope": "memory",
   "mcp": true,
@@ -4424,7 +4562,7 @@
   "rest": [
    "POST /api/ui/org/google/collect"
   ],
-  "input_hash": "097ef7fc3e9be22a"
+  "input_hash": "6c1644e22d7c425b"
  },
  {
   "name": "org_google_collect_connect",
@@ -4434,7 +4572,7 @@
   "rest": [
    "POST /api/ui/org/google/collect/connect"
   ],
-  "input_hash": "009656a758678a46"
+  "input_hash": "5b58656eefebcb14"
  },
  {
   "name": "org_google_oauth_complete",
@@ -4554,7 +4692,7 @@
   "rest": [
    "GET /api/ui/me/notifications"
   ],
-  "input_hash": "0e5d23d8a5038cf4"
+  "input_hash": "8b65652c9ce4fe0d"
  },
  {
   "name": "me_notifications_read",
@@ -4564,7 +4702,7 @@
   "rest": [
    "POST /api/ui/me/notifications/read"
   ],
-  "input_hash": "62ff2ece42e18912"
+  "input_hash": "c0922e821b084a79"
  },
  {
   "name": "me_slack_channels",
@@ -4654,7 +4792,27 @@
   "rest": [
    "POST /api/ui/apps/install"
   ],
-  "input_hash": "eca5923943b417fa"
+  "input_hash": "037b9188084bc8a2"
+ },
+ {
+  "name": "app_save",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/save"
+  ],
+  "input_hash": "f86cf7a7f136fb27"
+ },
+ {
+  "name": "app_edit_policy_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/edit-policy"
+  ],
+  "input_hash": "9018d760e68657cc"
  },
  {
   "name": "org_app_remove",
@@ -4688,6 +4846,26 @@
   "input_hash": "f48e51524b8110f6"
  },
  {
+  "name": "app_data_snapshots",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-snapshots"
+  ],
+  "input_hash": "bc9bbb24b7a66ec4"
+ },
+ {
+  "name": "app_data_restore",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/restore"
+  ],
+  "input_hash": "64c3b3c10e0c4859"
+ },
+ {
   "name": "org_app_tool_call",
   "scope": null,
   "mcp": false,
@@ -4705,7 +4883,7 @@
   "rest": [
    "POST /api/ui/store/:table/insert"
   ],
-  "input_hash": "eb39712646846947"
+  "input_hash": "1f7a29d68f8b2c5d"
  },
  {
   "name": "store_query",
@@ -4715,7 +4893,7 @@
   "rest": [
    "POST /api/ui/store/:table/query"
   ],
-  "input_hash": "3eb09fbb3f75ec14"
+  "input_hash": "094b8c19436a2a16"
  },
  {
   "name": "store_update",
@@ -4725,7 +4903,7 @@
   "rest": [
    "POST /api/ui/store/:table/update"
   ],
-  "input_hash": "773947e7c2b2e356"
+  "input_hash": "5182fe7252d01790"
  },
  {
   "name": "store_delete",
@@ -4735,7 +4913,17 @@
   "rest": [
    "POST /api/ui/store/:table/delete"
   ],
-  "input_hash": "8de11ed6339aa6af"
+  "input_hash": "17e2cc4c8f0c071d"
+ },
+ {
+  "name": "store_sql",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/store/sql"
+  ],
+  "input_hash": "e5ee7bc163a0f9d5"
  },
  {
   "name": "store_tables",
@@ -4745,6 +4933,36 @@
   "rest": [
    "GET /api/ui/store/tables"
   ],
-  "input_hash": "6c9f16e97bc4049d"
+  "input_hash": "5e3516baa81e01e2"
+ },
+ {
+  "name": "session_apps",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/terminal/sessions/:id/apps"
+  ],
+  "input_hash": "fdcb2d507c187945"
+ },
+ {
+  "name": "session_app_attach",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/terminal/sessions/:id/apps/attach"
+  ],
+  "input_hash": "915c12efe88f26fd"
+ },
+ {
+  "name": "session_app_detach",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/terminal/sessions/:id/apps/detach"
+  ],
+  "input_hash": "915c12efe88f26fd"
  }
 ]

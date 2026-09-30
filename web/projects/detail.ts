@@ -10,12 +10,15 @@
 //  이 파일은 상세 계열의 **입구**이기도 하다 — 배럴(projects.ts)은 여기 하나만 물고 형제 셋은 아래에서 중계한다.
 import { api, applyReveal, el, errorNote, personFace, state, toast } from '../core.js';
 import { skeleton } from '../learn.js';
-import { projectBodyCommentRow, projectBodySection, projectKnowledgeSection } from './detail-body.js';
+import { openProjectSessionsModal } from '../sessions.js';   // #4135 허브 세션 위젯 「세션 기록」(detail-terminal 과 같은 문)
+import { mountBodyEditor, projectBodyCommentRow, projectBodySection, projectKnowledgeSection, uploadBodyFile } from './detail-body.js';
+import { openFileViewer } from './files-cards.js';   // #4135 허브 폴더 위젯 «열기» — 섹션과 같은 뷰어
 import { mountProjectHub } from './detail-hub.js';
+import { hubIcon } from './detail-hub-kit.js';
 import { HUB_TOOLS, type HubTool } from './detail-hub-layout.js';
 import { pjvProjFactsStrip, pjvProjMetaPanel } from './detail-meta.js';
 import { openProjectSessionForm, openProjectSettings, projectFolderSection, projectTerminalSection, projectTimelineSection } from './detail-sections.js';
-import { pjvTasksSection } from './detail-tasks.js';
+import { pjvGoTaskWorkspace, pjvOpenTaskFromHub, pjvTasksSection } from './detail-tasks.js';
 import { pjvSelReset } from './selection.js';
 import { clearSortCtx, consumeKeepScroll, pjvRestoreScroll } from './state.js';
 import { pjvLoadStatusTemplates, pjvRegisterProjList, pjvSetStatusRegistry, pjvStatusReg } from './status.js';
@@ -305,9 +308,20 @@ async function renderProjectV2Detail(view, idStr) {
     inp.addEventListener('blur', () => done(true));
   };
   titleEl.onclick = editTitle;
-  // 뒤로 줄 오른쪽 = [배치 편집](허브가 채운다) + [⚙ 프로젝트 세부 설정] — '← 프로젝트'와 같은 높이(#1233).
+  // 뒤로 줄 오른쪽 = [＋ 세션] + [배치 편집](허브가 채운다) + [⚙ 프로젝트 세부 설정] — '← 프로젝트'와 같은 높이(#1233).
+  //  [＋ 세션](#4135, 원준 2026-09-27: «프로젝트 탭 안에도 세션을 새로 만드는 버튼이 있어야») — 세션 화면 문패의 [＋ 세션] 과
+  //   **같은 단추·같은 일**이다: 이 프로젝트의 새 세션 자리(#/p/<id>?new=1)를 연다. 이 화면은 셸의 액자 안이라 셸에 한 줄
+  //   올려 보내고(탭을 만들거나 이미 있으면 그 탭으로), 액자 밖(단독 페이지)이면 주소를 바꾼다.
   const hubActions = el('span', { class: 'pjh-actions', style: 'display:inline-flex;align-items:center;gap:8px' });
-  backRow.append(el('div', { class: 'proj-detail-actions' }, hubActions, settingsBtn));
+  const newSessBtn = el('button', { class: 'btn btn-primary btn-sm proj-detail-newsess', type: 'button', title: '이 프로젝트에서 새 세션을 엽니다',
+    onclick: () => {
+      const href = '#/p/' + id + '?new=1';
+      if (window.parent && window.parent !== window) {
+        try { window.parent.postMessage({ type: 'lively:open-route', href }, location.origin); return; } catch (_) { /* 아래로 */ }
+      }
+      location.hash = href;
+    } }, hubIcon('plus', 14), el('span', { text: '세션' }));
+  backRow.append(el('div', { class: 'proj-detail-actions' }, newSessBtn, hubActions, settingsBtn));
   head.append(el('div', { class: 'proj-detail-titlebar' },
     // 상태 배지(타이틀 오른쪽) 제거 — 아래 메타행의 상태 필드(클릭해 변경)와 중복이라 그쪽만 남긴다.
     el('div', { class: 'proj-detail-titlebox' }, titleEl)));
@@ -325,7 +339,22 @@ async function renderProjectV2Detail(view, idStr) {
   const hubHost = el('div', { class: 'pjh-host' });
   view.replaceChildren(head, hubHost);
   mountProjectHub(hubHost, {
-    id, p, members, reload, base: V6_BASE, inModal, focus, actionsHost: hubActions,
+    id, p, members, reload, base: V6_BASE, inModal, focus, actionsHost: hubActions, meId,
+    openTask: (tid) => pjvOpenTaskFromHub(tid, reload),          // #4165 줄 → 태스크 모달(본문 먼저)
+    goTask: (t) => pjvGoTaskWorkspace(id, t, reload),             // #4165 줄 호버 → 작업 공간(세션)
+    // #4135 5판 — 태스크 위젯은 프로젝트 탭 목록을 옵션(묶음·줄 수·열)과 함께 그대로 쓴다 · 세션 위젯의 「＋ 새 세션」「세션 기록」.
+    tasksList: (opts) => pjvTasksSection(id, p.tasks || [], opts.members || members, reload, opts.fields ?? (p.fields || []), opts),
+    newSession: () => { void openProjectSessionForm(id, reload, V6_BASE, p.name); },
+    sessionLog: () => openProjectSessionsModal(id, p.name),
+    // 본문 위젯의 편집 = 섹션과 같은 블록 에디터(항시 자동저장) · 폴더 위젯의 열기 = 섹션과 같은 파일 뷰어 · 공유 링크 좌표 = 프로젝트 폴더.
+    bodyEditor: () => mountBodyEditor({
+      initial: p.description || '',
+      placeholder: '본문을 입력하세요.  ‘/’ 로 블록 삽입 · 이미지 붙여넣기/드롭 · 드래그로 정렬',
+      uploadFile: (file) => uploadBodyFile(id, '_attachments/project-' + id, file),
+      save: async (md) => { await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ description: md || null }) }); p.description = md; },
+    }),
+    openFile: (rel, name) => openFileViewer(id, rel, name, reload, V6_BASE, p.folder),
+    shareBase: p.folder,
     sections: {
       tasks: () => pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []),
       sessions: () => projectTerminalSection(id, members, meId, V6_BASE, p.name, p),
@@ -353,5 +382,5 @@ export { _pjvPmOpen, pjvCloseProjectModalOnRoute, pjvOpenProjectModal, pjvProjec
 //   소유 모듈의 몽키패치 IIFE 2개가 런타임에 교체하는 바인딩이라 사본은 패치 이전 함수를 굳힌다.
 export { buildWysiwygToolbar, mdFromDom, mountBodyEditor, uploadBodyFile } from './detail-body.js';
 export { companyTimelineSection, copyText, openLocalWorkModal, openProjectSessionForm } from './detail-sections.js';
-export { pjvAddTask, pjvRowMore, pjvTaskRow } from './detail-tasks.js';
+export { pjvAddTask, pjvGoTaskWorkspace, pjvRowMore, pjvTaskRow } from './detail-tasks.js';
 export { openProjectPreviewModal } from './detail-preview.js';

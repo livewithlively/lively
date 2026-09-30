@@ -186,7 +186,7 @@ async function renderProjectV2Board(view, scopeKey?) {
   if (scopeKey) { pjvSidebarSel.key = scopeKey; pjvSidebarSel.explicit = true; }
   try { const s = localStorage.getItem('pjv:sideOpen'); if (s === '0') pjvBoardView.byArea = false; else if (s === '1' || scopeKey) pjvBoardView.byArea = true; } catch (_) { if (scopeKey) pjvBoardView.byArea = true; }
   // #2043 — 새 셸 액자(?embed=1) 안에서는 이 패널을 세우지 않는다. 폴더·리스트로 오가는 일은 셸의 [프로젝트] 사이드바
-  //  (폴더 · 리스트 렌즈, web/v2/side.ts renderProjTree)가 맡고, 이 화면은 그 사이드바가 보낸 스코프(#/projects2/l|f/<id> · /none)를
+  //  (폴더 · 리스트, web/v2/side.ts renderProjects)가 맡고, 이 화면은 그 사이드바가 보낸 스코프(#/projects2/l|f/<id> · /none)를
   //  보드로 그린다. 같은 목록이 두 열에 서던 것(레일 #2016 §6 '남은 것')을 여기서 끊는다. 스코프는 패널이 접혀도 유지된다(#1067 §2).
   if (document.body.classList.contains('embed')) pjvBoardView.byArea = false;
   pjvSelReset(); // 화면 진입/재렌더 시 다중선택·하단 바 초기화(이전 화면 선택 잔존 방지)
@@ -1296,8 +1296,16 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     if (leafList) items.push(mkCrumb(pjvListGlyph(leafList), leafList.name, 'L' + leafList.id, 'is-leaf'));
     if (sel === '__none__') items.push(mkCrumb(pjvBundleIcon(null, 'none'), '기타 (미분류)', '__none__', 'is-leaf'));
     // 구분자(/)를 끼워 넣고, 잎 옆에 ⌄(설정 메뉴)·☆(즐겨찾기)를 붙인다.
-    const nodes: any[] = [];
-    items.forEach((it, i) => { if (i) nodes.push(el('span', { class: 'pjv-crumb-sep', 'aria-hidden': 'true', text: '/' })); nodes.push(it); });
+    // 경로(조상)와 잎(지금 자리)을 따로 감싼다(#4231) — 데스크톱은 둘 다 display:contents 라 종전과 한 픽셀도 다르지 않고,
+    //  폰(50-mobile.css ≤640)에서만 «작은 경로 한 줄 + 큰 제목 한 줄» 두 층으로 선다(클릭업 모바일의 리스트 머리).
+    //  잎 앞의 구분자(/)는 잎 묶음에 둔다 — 데스크톱은 그대로 보이고, 폰은 제목 줄 맨 앞이라 감춘다.
+    const pathNodes: any[] = [], leafNodes: any[] = [];
+    items.forEach((it, i) => {
+      const bucket = (i === items.length - 1) ? leafNodes : pathNodes;   // 마지막이 잎 — 전체 보기(root 하나)면 root 가 곧 잎이다
+      if (i) bucket.push(el('span', { class: 'pjv-crumb-sep', 'aria-hidden': 'true', text: '/' }));
+      bucket.push(it);
+    });
+    const nodes: any[] = leafNodes;
     const leaf = leafList || leafFolder;
     if (leaf) {
       const menuBtn = el('button', { class: 'pjv-crumb-menu', type: 'button', title: (leafList ? '리스트' : pjvFolderIsSpace(leaf) ? '스페이스' : '폴더') + ' 설정', 'aria-label': '설정 메뉴' }, pjvTbIcon('caret', 'sm'));
@@ -1325,7 +1333,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         nodes.push(star);
       }
     }
-    crumbPath.replaceChildren(...nodes);
+    crumbPath.replaceChildren(el('span', { class: 'pjv-crumb-path' }, ...pathNodes), el('span', { class: 'pjv-crumb-leaf' }, ...nodes));
   };
 
   // 툴바 — 사이드바 여닫이와 무관하게 늘 셸 본문 컬럼 상단(#607/#1067). render() 가 그때그때 main 에 얹는다.

@@ -3,7 +3,7 @@
 //  ⚠ DB 를 타는 append 자체(원자적 CAS·동시성)는 throwaway pg 통합검증(session-log-store.itest.mjs, docker)이 본다.
 //    여기선 "어떤 offset·길이가 어떤 판정인가"의 경계 의미만 — 계약 기준(구현 분기 순서와 무관).
 import assert from "node:assert/strict";
-import { casVerdict, encodeChunk, decodeChunk } from "./session-log-store.js";
+import { casVerdict, encodeChunk, decodeChunk, isTaskTranscriptHead } from "./session-log-store.js";
 
 let pass = 0;
 const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
@@ -82,6 +82,20 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   assert.ok(decodeChunk(encB.data, encB.codec).equals(bin), "바이너리도 왕복 무손실");
   assert.ok(decodeChunk(Buffer.from("x"), null).equals(Buffer.from("x")), "codec null → 그대로 반환");
   ok("압축 코덱 — 왕복 무손실 · 큰 것만 zstd · 작은/raw 는 원본 · 바이너리 안전");
+}
+
+// ── 작업 상자 세션 판정(#4172) — 대화 첫 조각의 cwd 가 작업 폴더면 «내 세션 이력» 에서 뺀다 ──
+{
+  const claude = '{"type":"user","cwd":"/work/shared/delegated/task-1901","sessionId":"x"}\n';
+  const codex = '{"timestamp":"t","type":"session_meta","payload":{"id":"x","cwd":"/Users/a/lively/workspaces/w/shared/delegated/task-42"}}\n';
+  const sandbox = '{"type":"user","cwd":"/task/work","sessionId":"x"}\n';
+  assert.equal(isTaskTranscriptHead(claude), true, "클로드 — 위탁 작업 폴더");
+  assert.equal(isTaskTranscriptHead(codex), true, "코덱스 — session_meta.payload.cwd");
+  assert.equal(isTaskTranscriptHead(sandbox), true, "샌드박스 작업 폴더(/task/work)");
+  assert.equal(isTaskTranscriptHead('{"type":"user","cwd":"/Users/me/workspace/project/4135"}'), false, "사람이 연 프로젝트 폴더");
+  assert.equal(isTaskTranscriptHead('{"type":"user","cwd":"/Users/me/task/workbench"}'), false, "이름만 비슷한 폴더는 아니다");
+  assert.equal(isTaskTranscriptHead('{"type":"summary"}'), false, "cwd 가 없으면 사람 세션으로 본다");
+  ok("작업 상자 세션 — 첫 조각 cwd 로 가른다");
 }
 
 console.log(`\n${pass} passed`);

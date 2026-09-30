@@ -25,6 +25,10 @@ t("[A3] 모든 어댑터가 모든 축을 답한다(null 도 답이다 — undef
     assert.ok("pathFor" in a && (a.pathFor === null || typeof a.pathFor === "function"), `${a.key}.pathFor`);
     assert.ok("parse" in a && (a.parse === null || typeof a.parse === "function"), `${a.key}.parse`);
     assert.ok("answer" in a && (a.answer === null || typeof a.answer === "function"), `${a.key}.answer`);
+    //  #4135 — 화면 사실 축. 하나라도 빠지면 그 하네스의 웹 터미널이 **클로드 기준으로** 움직인다(조용한 반쪽).
+    assert.equal(typeof a.term, "object", `${a.key}.term`);
+    for (const f of ["appMouse", "choiceNeedsEnter", "pastePlaceholder"] as const) assert.equal(typeof a.term[f], "boolean", `${a.key}.term.${f}`);
+    assert.ok(a.term.startDialogRe === null || a.term.startDialogRe instanceof RegExp, `${a.key}.term.startDialogRe`);
     assert.ok(Array.isArray(a.roots(["/home/x"], "yoon")), `${a.key}.roots 는 배열`);
   }
 });
@@ -33,7 +37,9 @@ t("[A4] 실측된 파서 — claude·antigravity·codex·grok 은 읽고, openco
   assert.deepEqual(chatIoCaps("claude"), { read: true, answer: true });
   assert.deepEqual(chatIoCaps("grok"), { read: true, answer: false });      // 승인 UI 미실측 → 화면이 버튼을 안 그린다
   assert.deepEqual(chatIoCaps("antigravity"), { read: true, answer: false });
-  assert.deepEqual(chatIoCaps("codex"), { read: true, answer: false });   // rollout 파서 실측(#1759) · 승인 UI 미실측
+  //  #4135 — 승인 UI 를 실측했다(2026-09-24, codex 0.153.4 `--ask-for-approval on-request`): 커서가 «1. Yes, proceed»
+  //   에 놓인 채 뜨고 꼬리가 "Press enter to confirm or esc to cancel" 이다 → Enter=승인·Esc=거부. 그래서 화면이 버튼을 그린다.
+  assert.deepEqual(chatIoCaps("codex"), { read: true, answer: true });
   assert.deepEqual(chatIoCaps("opencode"), { read: false, answer: false });
   assert.deepEqual(chatIoCaps("shell"), { read: false, answer: false });
 });

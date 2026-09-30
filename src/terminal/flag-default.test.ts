@@ -89,7 +89,18 @@ test("C4 고른 적 없는 기본값을 기억에 저장하지 않는다 — 카
   const m = /const changed = \(\): void => \{[\s\S]*?\n  \};/.exec(c);
   assert.ok(m, "changed() 를 못 찾았다");
   assert.match(m![0], /saveRunPrefs\(/, "changed() 가 저장을 하지 않는다");
-  //  저장 호출은 파일 전체에 **한 번**뿐이고 그 한 번이 changed() 안이다 — 그리는 길(paint/paintFlag)에는 없다.
-  //   그리는 중에 저장하면 골라 둔 기본값이 기억에 굳어, 카탈로그가 기본을 올려도 그 사람만 옛 값에 남는다.
-  assert.equal(c.split("saveRunPrefs(").length - 1, 1, "saveRunPrefs 호출이 한 곳이 아니다");
+  //  그리는 길(paint/paintFlag/paintNode)에는 저장이 없다 — 그리는 중에 저장하면 골라 둔 기본값이 기억에 굳어,
+  //   카탈로그가 기본을 올려도 그 사람만 옛 값에 남는다.
+  //  #3778(2026-09-19) — 실행 컴퓨터 칸이 줄로 돌아오면서 저장 자리가 **둘**이 됐다: changed()(AI·모델·추론)와
+  //   실행 컴퓨터 칸의 change 처리기. 둘 다 사람이 컨트롤을 만졌을 때만 불린다. 종전 단언(«파일 전체에 한 번»)은 이 불변식의
+  //   대리 지표였으므로, 불변식 자체 — 저장 자리가 어디인가, 그리는 함수에 저장이 있는가 — 를 직접 잰다.
+  assert.equal(c.split("saveRunPrefs(").length - 1, 2, "saveRunPrefs 호출 자리가 둘(changed·실행 컴퓨터 칸)이 아니다");
+  const onNode = /nodeSel\.addEventListener\('change', \(\) => \{[\s\S]*?\n  \}\);/.exec(c);
+  assert.ok(onNode, "실행 컴퓨터 칸의 change 처리기를 못 찾았다");
+  assert.match(onNode![0], /saveRunPrefs\(\{ nodeDefault: nodeSel\.value \}\)/, "실행 컴퓨터 칸의 저장이 그 처리기 안에 있지 않다");
+  for (const fn of ["paint", "paintFlag", "paintNode"]) {
+    const body = new RegExp(`function ${fn}\\([\\s\\S]*?\\n  \\}`).exec(c);
+    assert.ok(body, `${fn}() 를 못 찾았다`);
+    assert.doesNotMatch(body![0], /saveRunPrefs\(/, `${fn}() — 그리는 길에서 저장한다`);
+  }
 });

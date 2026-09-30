@@ -76,27 +76,27 @@ t("P9 기본값이 드라이브만인 이유 — Gmail 을 기본으로 끼우�
   assert.equal(consumesUnverifiedUserCap(["drive"]), true, "drive.readonly 는 제한범위 — G6 실측 전까지는 이쪽이다");
 });
 
-// ── 1차 런칭 게이트: Gmail 제외 (윤상민 결정 2026-08-26) ──────────────────────
-//  이 묶음이 겨누는 것은 **비대칭 대가**다. 한쪽으로 틀리면 되돌릴 수 없는 100명 한도가 타고,
-//  반대쪽으로 틀리면 지금 잘 돌던 조직의 수집이 배포 하나로 조용히 멈춘다.
-t("P10 ★ Gmail 을 골라도 새로 켜지지 않는다 — 태운 한도는 되돌릴 수 없다", () => {
+// ── 판매 범위: Gmail 을 다시 연다 (윤상민 결정 2026-09-22, #4211) ──────────────────────
+//  8/26 엔 Gmail 을 «켜지도 끄지도 않는» not_offered 로 묶었다. 이제 판매 대상이라 드라이브와 **같은 규칙**을 탄다.
+//  이 묶음이 겨누는 것: 목록만 바꾸고 토글 규칙이 옛 게이트에 걸려 «골랐는데 안 켜짐» 이 되는 것.
+t("P10 ★ Gmail 을 고르고 동의했으면 켜진다", () => {
   const r = googleCollectAction({ service: "gmail", wanted: true, enabled: false, scopeOk: true });
-  assert.equal(r.action, "none");
-  assert.equal(r.reason, "not_offered");
-  assert.ok(r.message && r.message.includes("100명"), "왜 안 되는지를 말해 줘야 사람이 다음 행동을 안다");
+  assert.equal(r.action, "enable");
 });
 
-t("P11 ★ 이미 켜 둔 Gmail 은 끄지 않는다 — 런칭 범위 결정이 기존 고객을 깨뜨릴 이유가 없다", () => {
+t("P11 Gmail 도 체크를 풀면 꺼진다(삭제 아님 — 커서·자료 보존)", () => {
   const r = googleCollectAction({ service: "gmail", wanted: false, enabled: true, scopeOk: true });
-  assert.notEqual(r.action, "disable", "여길 disable 로 두면 배포 순간 남의 수집이 조용히 멈춘다");
-  assert.equal(r.action, "none");
-  assert.ok(r.message && r.message.includes("그대로 둡니다"));
+  assert.equal(r.action, "disable");
 });
 
-t("P12 Gmail 이 애초에 안 켜져 있고 고르지도 않았으면 아무 말도 하지 않는다(노이즈 0)", () => {
-  const r = googleCollectAction({ service: "gmail", wanted: false, enabled: false, scopeOk: false });
+t("P12 ★ Gmail 을 골랐는데 동의 범위에 없으면 켜지 않고 사유를 말한다 — 켜면 run 은 ok 인데 메일이 0건이다", () => {
+  const r = googleCollectAction({ service: "gmail", wanted: true, enabled: false, scopeOk: false });
   assert.equal(r.action, "none");
-  assert.equal(r.message, undefined);
+  assert.equal(r.reason, "no_scope");
+  assert.ok(r.message && r.message.includes("범위"), r.message);
+  const quiet = googleCollectAction({ service: "gmail", wanted: false, enabled: false, scopeOk: false });
+  assert.equal(quiet.action, "none");
+  assert.equal(quiet.message, undefined, "안 고르고 안 켜진 것엔 아무 말도 하지 않는다(노이즈 0)");
 });
 
 t("P13 무회귀: 드라이브는 종전 규칙 그대로(동의 있으면 켜고, 빼면 끄고, 동의 없으면 사유와 함께 거른다)", () => {

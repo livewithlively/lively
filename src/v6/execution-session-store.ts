@@ -62,6 +62,17 @@ export async function executionSessionProject(id: string, owner: string): Promis
   return r.rows[0] ? row(r.rows[0]) : null;
 }
 
+/**
+ * 지금 이 프로젝트에 붙어 있는 실행 세션 수(소유자 무관) — #4302 껍데기 되돌리기의 «세션이 섰나» 판정.
+ *  FK 가 ON DELETE SET NULL 이라 DB 는 붙은 세션이 있어도 프로젝트 삭제를 막지 않는다. 그래서 지우기 전에 여기서 잰다.
+ */
+export async function countSessionsBoundToProject(projectId: number): Promise<number> {
+  if (onNode() || !(projectId > 0)) return 0;
+  const r = await itemsPool.query(
+    `SELECT count(*)::int AS n FROM execution_session WHERE desired_project_id=$1`, [projectId]);
+  return Number((r.rows[0] as { n?: number } | undefined)?.n ?? 0);
+}
+
 /** desired 소속과 시간구간을 원자적으로 갱신한다. 같은 값 재지정은 revision/epoch를 늘리지 않는다. */
 export async function setExecutionSessionProject(input: {
   id: string; owner: string; harness?: string | null; nodeId?: string | null; projectId: number | null;
@@ -87,10 +98,14 @@ export async function setExecutionSessionProject(input: {
     if (!cur) { await client.query("ROLLBACK"); return null; }
     const next = executionBindingTransition(cur, input.projectId);
     if (next.changed) {
+      // task_id=NULL(#4084) — 세션이 맡은 태스크는 옛 프로젝트의 것이다. 소속이 바뀌면 연결만 푼다(태스크 상태는 그대로 —
+      //  끝났는지는 사람이 보드에서 정한다). 새 프로젝트의 태스크는 다음 session_task 호출이 이 세션 이름으로 만든다.
       await client.query(
-        `UPDATE execution_session SET desired_project_id=$3, desired_revision=$4, binding_epoch=$5,
+        `UPDATE execution_session SET desired_project_id=$3, desired_revision=$4, binding_epoch=$5, task_id=NULL,
            last_seen=now(), updated_at=now() WHERE id=$1 AND owner=$2`,
         [input.id, input.owner, next.project_id, next.desired_revision, next.binding_epoch]);
+      // 순서 목록(#4135)도 옛 프로젝트의 것이다 — task_id 와 같이 푼다(남기면 새 프로젝트 곁칸에 남의 태스크가 선다).
+      await client.query(`DELETE FROM execution_session_task WHERE session_id=$1`, [input.id]);
       await client.query(
         `INSERT INTO session_project(session_id, project_id, binding_epoch) VALUES($1,$2,$3)
          ON CONFLICT (tenant_id, session_id, valid_from) DO NOTHING`,

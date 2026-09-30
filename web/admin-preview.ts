@@ -43,7 +43,7 @@ async function previewEnvsPanel(detail, data) {
       //  곁칸은 껍데기(v2/main)가 postMessage 를 받아 연다(v2/aside-slot.ts). 껍데기가 없으면(구 UI·직접 연 주소)
       //  openInAside 가 false 를 돌려주므로 그 자리에서 새 창으로 간다 — 누름과 같은 틱이라 팝업 차단에 안 걸린다.
       (p.status === 'running') ? el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '화면 열기',
-        title: '오른쪽 곁칸에서 봅니다 — 끌어서 넓힐 수 있어요',
+        title: '우측 사이드바에서 봅니다. 끌어서 넓힐 수 있어요.',
         onclick: () => { if (!openInAside({ key: 'preview:' + p.id, title: p.label || p.id, url: href })) window.open(href, '_blank', 'noopener'); } }) : null,
       (p.status === 'running') ? el('a', { class: 'btn btn-ghost btn-sm', href, target: '_blank', rel: 'noopener', text: '↗',
         title: '새 창으로 열기', 'aria-label': '새 창으로 열기' }) : null,

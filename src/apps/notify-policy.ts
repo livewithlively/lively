@@ -66,6 +66,29 @@ export function safeHref(href: unknown): string | null {
   return h;
 }
 
+// ── 알림의 종류(kind)와 「확인할 것」 범위(scope) — #4180 ─────────────────────────────────
+//  회의(2026-09-21 상민·원준): «세션 알림(완료됐어요/답을 기다려요)은 확인할 것에서 뺀다 — 하루에 세션 수십 개면 모든 답이
+//  쌓여 무의미하다. 알림은 내용이 있어야 한다(누가 댓글을 달았다·나를 태그했다). 리브가 답하면 알림. 앱들도 보낼 것이다.»
+//  그래서 알림은 **종류**를 갖고, 「확인할 것」(inbox)은 종류로 거른다. 배너(브라우저·데스크톱)는 전부(all) 본다 —
+//  세션 대기 배너는 8/24 결정(«지금 내가 뭔가 해야 하는 순간»)대로 남는다. 두 표면이 같은 저장소를 다른 렌즈로 본다.
+export const NOTIFY_KINDS = ["app", "session", "liv", "comment", "mention"] as const;
+export type NotifyKind = typeof NOTIFY_KINDS[number];
+/** 모르는 값은 'app' — 앱 토큰 경로는 종류를 못 정한다(서버 코드만 정한다). */
+export function normalizeKind(v: unknown): NotifyKind {
+  return typeof v === "string" && (NOTIFY_KINDS as readonly string[]).includes(v) ? (v as NotifyKind) : "app";
+}
+/** 「확인할 것」에 **안** 서는 종류 — 세션 대기·완료 하나뿐이다. 늘리려면 여기 한 줄. */
+export const INBOX_HIDDEN_KINDS: readonly NotifyKind[] = ["session"];
+export function inInbox(kind: string): boolean { return !(INBOX_HIDDEN_KINDS as readonly string[]).includes(kind); }
+/** 조회 범위 — inbox(확인할 것 · 기본) / all(배너·전부). 모르는 값은 좁은 쪽(inbox). */
+export type NotifyScope = "inbox" | "all";
+export function normalizeScope(v: unknown): NotifyScope { return v === "all" ? "all" : "inbox"; }
+/** actor(구성원 id) 다듬기 — 빈 값은 null, 길면 자른다. 형식은 검증하지 않는다(외부 미러 신원도 온다). */
+export function normalizeActor(v: unknown): string | null {
+  const s = typeof v === "string" ? v.trim().slice(0, 120) : "";
+  return s || null;
+}
+
 export interface NormalizedNotification {
   title: string;
   body: string | null;

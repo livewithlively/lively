@@ -24,6 +24,7 @@ import { scanDiff, type DiffScan } from './chat-diff.js';
 import { CHAT_FONT_KEY, fontScale, parseFontStep } from './chat-font.js';
 import { bindCtx } from './v2/ctx-registry.js';   // #3784 대화 덩이 우클릭(답·질문·코드)
 import { copyText } from './v2/ctx-menu.js';
+import { prependKeepingView } from './lib/older-autoload.js';   // #3778 위로 붙이는 동안 보던 자리 지키기 — 헤드리스 테스트가 같은 함수를 잰다
 
 /** 도구 이름 → 사람 말. label 은 필수, detail 은 한 줄 요약(경로·명령 — Claude Code 의 `Read(src/x.ts)` 자리). */
 export interface ToolLabel { label: string; detail?: string }
@@ -49,6 +50,10 @@ export interface ChatViewOpts {
    */
   style?: 'journal' | 'desktop';
   bar?: { left?: HTMLElement | null; right?: HTMLElement | null };   // desktop 입력칸 아래 바에 앉힐 것(모드·모델 등 — 호출자가 채움)
+  /** 이 대화에 딸린 파일 첨부 UI. 입력칸과 같은 form 안에 두어 붙여넣기·선택·전송이 한 흐름이 되게 한다. */
+  compose?: { chips?: HTMLElement | null; button?: HTMLElement | null; fileInput?: HTMLElement | null };
+  /** 글자가 없어도 보낼 수 있는 다른 입력(예: 이미 끝난 파일 첨부)이 있나. */
+  canSendEmpty?: () => boolean;
 }
 
 /** 한 턴을 그리는 동안 들고 있는 것 — 조각(스트리밍)과 완성본이 **같은 글**이라 겹치지 않게 하는 게 핵심. */
@@ -253,9 +258,11 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   const note = el('div', { class: 'livc-note' });
   const form = desktop
     ? el('form', { class: 'livc-compose dt-compose' },
+        opts.compose?.chips ?? undefined,
         el('div', { class: 'dt-box' }, input, el('div', { class: 'dt-box-acts' }, stop, send)),
-        el('div', { class: 'dt-bar' }, el('div', { class: 'dt-bar-l' }, opts.bar?.left ?? undefined), el('div', { class: 'dt-bar-r' }, opts.bar?.right ?? undefined))) as HTMLFormElement
-    : el('form', { class: 'livc-compose' }, input, stop, send) as HTMLFormElement;
+        el('div', { class: 'dt-bar' }, el('div', { class: 'dt-bar-l' }, opts.bar?.left ?? undefined), el('div', { class: 'dt-bar-r' }, opts.bar?.right ?? undefined, opts.compose?.button ?? undefined)),
+        opts.compose?.fileInput ?? undefined) as HTMLFormElement
+    : el('form', { class: 'livc-compose' }, opts.compose?.chips ?? undefined, input, stop, opts.compose?.button ?? undefined, send, opts.compose?.fileInput ?? undefined) as HTMLFormElement;
   const footSlot = el('div', { class: 'livc-foot' }, form);
 
   // 스크롤 — 사람이 읽고 있으면 잡아채지 않는다.
@@ -521,7 +528,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const text = input.value.trim();
-    if (!text || input.disabled) return;
+    if ((!text && !opts.canSendEmpty?.()) || input.disabled) return;
     input.value = ''; input.style.height = '';
     void opts.onSend(text);
   });
@@ -553,11 +560,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
       try { localStorage.setItem(CHAT_FONT_KEY, String(n)); } catch { /* 스토리지가 막힌 브라우저 — 이번 화면에만 적용된다 */ }
       scroll();                              // 배율이 바뀌면 높이가 바뀐다 — 바닥에 붙어 있었으면 그대로 둔다
     },
-    prependKeepingView: (fn) => {
-      const before = list.scrollHeight; const top = list.scrollTop;
-      fn();
-      list.scrollTop = top + (list.scrollHeight - before);
-    },
+    prependKeepingView: (fn) => prependKeepingView(list, fn),
     destroy: () => { document.removeEventListener('keydown', onEsc); if (ticker) clearInterval(ticker); },
   };
 }

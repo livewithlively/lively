@@ -19,7 +19,9 @@
 //  ── 데스크톱/웹 공용 ──
 //  이 파일은 셸(web/v2)의 일부라 브라우저에서 연 웹 UI 와 데스크톱 앱이 같은 코드를 쓴다. 데스크톱 전용 통로 없음.
 import { api, el, sv } from '../core.js';
+import { ICONS } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { appHref, visibleApps } from './apps.js';
+import { appMatches } from '../lib/app-match.js';   // #4233 옛 이름으로도 찾는다(런치패드와 같은 잣대)
 import { sessText } from './side.js';
 import { projName, type Sess, type V2Data } from './views.js';
 
@@ -53,13 +55,13 @@ const GROUPS: Array<{ kind: Kind; label: string }> = [
   { kind: 'app', label: '화면' },
 ];
 const KIND_LABEL: Record<Kind, string> = { proj: '프로젝트', know: '지식', src: '자료', sess: '세션', hist: '세션 이력', app: '화면' };
-// 아이콘은 셸의 붓 그대로(24 뷰박스·현재색 스트로크) — 사이드바·탭과 같은 모양이라 종류가 눈에 먼저 든다.
+// 아이콘은 사이드바 · 레일과 같은 그림이다(#4233, lib/icon-paths.ts 한 벌). 「화면」만 여기서 그린다(그 표에 없는 뜻).
 const KIND_PATH: Record<Kind, string[]> = {
-  proj: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
-  know: ['M4 5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2zM8 7h8M8 11h6'],
-  src: ['M6 3h8l4 4v14H6z', 'M14 3v4h4', 'M9 12h6M9 16h4'],
-  sess: ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z'],
-  hist: ['M12 7v5l3 2', 'M3.5 12a8.5 8.5 0 1 0 2.6-6.1M3 4v4h4'],
+  proj: [ICONS.folder],
+  know: [ICONS.wiki],
+  src: [ICONS.src],
+  sess: [ICONS.chat],
+  hist: [ICONS.sess],
   app: ['M4 5h16v12H4z', 'M4 9h16'],
 };
 const icon = (k: Kind, cls: string): SVGElement =>
@@ -107,54 +109,40 @@ function probeAxis(): void {
   );
 }
 
-// ── 종류 필터 (상민님 2026-08-24) ──────────────────────────────────────────────
-//  규칙: **빈 선택 = 모두 켜짐**(기본). 그 상태에서 하나를 누르면 **그것만**, 이어서 누르면 **누적**,
-//  켜진 것을 다시 누르면 꺼진다. 전부 꺼지거나 전부 켜지면 다시 기본(모두)으로 접는다 —
-//  '넷을 다 골라 둔 상태'와 '아무것도 안 고른 기본'은 결과가 같으므로 둘을 따로 기억할 이유가 없다.
-//  ⚠ 페이지 수명으로 남긴다(창을 닫았다 열어도 유지) — 대신 칩이 늘 보이므로 **왜 결과가 짧은지 화면이 말한다**
-//   (사이드바 검색칸이 지키는 원칙과 같다). 새로고침하면 풀린다.
-//
-//  ── 축이 둘이다 (상민님 2026-08-25) ────────────────────────────────────────
-//  *"자료랑 세션이력은 그냥 관련도순에 보이지 않게 하고, 아래 전용 섹션에만 보이게 하는게 어떰?
-//    그리고 디폴트 off로 하면어때? 사람이 켰으면 그건 저장하고."*
-//  자료·세션이력은 **관련도 축이 없다**(자료는 ILIKE, 이력은 자체 스코어). 축이 없는 것을 축이 있는 것들과
-//  한 줄로 세우면 순위가 거짓말이 되고, 회의록처럼 긴 문서가 아무 단어에나 걸려 위쪽을 먹는다.
-//  그래서 **주 축**(세션·프로젝트·지식·화면)과 **보조 축**(자료·세션이력)을 나눈다:
-//   · 주 축  = 종전 계약 그대로(빈 = 모두). 관련도순 + 종류별 묶음에 나온다.
-//   · 보조 축 = **기본 꺼짐**. 켜야 채널을 부르고, 켜도 **아래 전용 묶음에만** 나온다(관련도순엔 영영 안 선다).
-//  둘은 서로 간섭하지 않는다 — '프로젝트만 보기' 로 좁혀도 켜 둔 자료는 그대로 켜져 있다.
+// ── 종류 필터 — 칩 하나 = 종류 하나, 누른 것만 켜진다 (2026-09-22 #4156, 상민·원준 회의) ─────────────
+//  회의 신고: *"처음엔 다 꺼져 있고, 지식만 누르면 지식만 보이는 게 맞다."* 종전엔 **기본에서 주 축 칩 넷이 켜진
+//  모습**으로 그려져, '지식' 을 누르면 나머지 셋이 꺼지는(=누른 것만 남는) 동작이 사람 눈에는 «누른 게 꺼졌다» 로
+//  읽혔다. 거기에 자료·세션 이력은 반대로 «꺼진 채 누르면 켜지는» 칩이라, 한 줄에 규칙이 둘이었다.
+//  → 규칙을 하나로 합친다(회의 대안 «자료·세션 이력은 기본으로 안 보여 주고 필요할 때 따로» 를 그대로 택했다):
+//   · **아무것도 안 누름 = 기본 검색**. 칩은 전부 꺼진 모습이다. 찾는 범위는 세션·프로젝트·지식·화면(주 축).
+//     자료·세션 이력은 기본 검색에 **들어가지 않는다** — 결과가 많고 덜 정제돼 잡음이 된다(#1960 에서 이미 기본 꺼짐).
+//   · **칩을 누르면 그 종류만** 찾는다. 이어서 누르면 더해지고, 켜진 칩을 다시 누르면 빠진다.
+//     자료·세션 이력도 **같은 규칙**이다 — '자료' 만 누르면 자료만 나온다.
+//   · 켜진 게 없어지거나 주 축 넷을 다 켠 상태(= 기본과 같은 결과)면 기본으로 접는다.
+//  자료·세션 이력은 켜도 **아래 전용 묶음에만** 선다(관련도 축이 없다 — 관련도순엔 영영 안 선다, #1960).
+//  ⚠ 선택은 페이지 수명이다(창을 닫았다 열어도 유지 · 새로고침하면 풀린다). 종전엔 보조 축 선택을 저장했지만,
+//   이제 칩을 누르는 건 '더하기' 가 아니라 '좁히기' 라 저장하면 다음 검색이 **말없이 자료만** 찾게 된다.
+//   칩이 늘 보이므로 왜 결과가 짧은지는 화면이 말한다.
 const MAIN_KINDS: Kind[] = ['sess', 'proj', 'know', 'app'];
 const AUX_KINDS: Kind[] = ['src', 'hist'];
 const isAux = (k: Kind): boolean => AUX_KINDS.includes(k);
 let kindSel = new Set<Kind>();
-let auxSel = new Set<Kind>();
-const kindOn = (k: Kind): boolean => (isAux(k) ? auxSel.has(k) : kindSel.size === 0 || kindSel.has(k));
+/** 이 종류를 지금 찾는가 — 빈 선택이면 주 축만, 고른 게 있으면 고른 것만. */
+export function kindActive(sel: Set<Kind>, k: Kind): boolean {
+  return sel.size === 0 ? !isAux(k) : sel.has(k);
+}
+const kindOn = (k: Kind): boolean => kindActive(kindSel, k);
 /** 칩 하나를 눌렀을 때의 다음 상태 — 위 규칙을 한 곳에서만 구현한다(화면·테스트가 같은 것을 본다). */
-export function nextKindSel(cur: Set<Kind>, k: Kind, all: Kind[] = MAIN_KINDS): Set<Kind> {
-  if (cur.size === 0) return new Set([k]);          // 기본(모두) → 그것만
+export function nextKindSel(cur: Set<Kind>, k: Kind): Set<Kind> {
   const next = new Set(cur);
   if (next.has(k)) next.delete(k); else next.add(k);
-  if (next.size === 0 || next.size === all.length) return new Set();   // 전부 꺼짐·전부 켜짐 → 기본
+  //  주 축 넷만 다 켠 것 = 기본 검색과 결과가 같다 → 둘을 따로 기억할 이유가 없다.
+  if (next.size === MAIN_KINDS.length && MAIN_KINDS.every((m) => next.has(m))) return new Set();
   return next;
 }
-
-// ── 보조 축은 사람의 선택이라 **남긴다** ──────────────────────────────────────
-//  주 축(kindSel)은 '지금 이 검색을 좁힌다'라 페이지 수명이면 충분하지만, 보조 축은 '나는 자료도 같이 본다'는
-//  취향이다 — 새로고침·앱 재시작마다 다시 켜게 하면 그건 기본값이 아니라 형벌이다.
-//  ⚠ 저장값을 **믿지 않는다**: 남의 탭이 덮어썼거나 옛 버전이 남긴 값일 수 있으니 배열·아는 종류만 받고,
-//   깨졌으면 조용히 기본(꺼짐)으로 돌아간다. localStorage 가 막힌 환경(프라이빗 모드)에서도 검색은 돌아야 한다.
-const AUX_LS = 'lively.omni.aux';
-function loadAux(): Set<Kind> {
-  try {
-    const raw = localStorage.getItem(AUX_LS);
-    if (!raw) return new Set();
-    const arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) return new Set();
-    return new Set(arr.filter((k: unknown): k is Kind => typeof k === 'string' && (AUX_KINDS as string[]).includes(k)));
-  } catch { return new Set(); }
-}
-function saveAux(): void {
-  try { localStorage.setItem(AUX_LS, JSON.stringify([...auxSel])); } catch { /* 저장 못 해도 검색은 돈다 */ }
+//  종전(#1960)에 저장해 두던 보조 축 선택 — 이제 쓰지 않으니 남은 값을 걷는다(한 번 지우면 끝).
+function dropLegacyAux(): void {
+  try { localStorage.removeItem('lively.omni.aux'); } catch { /* 막힌 환경이면 남아도 해가 없다 */ }
 }
 
 // ── 식별자 적중 — 제목보다도 확실한 신호 (2026-08-25) ─────────────────────────────────
@@ -233,7 +221,7 @@ export function omniOpen(seed?: string): void {
   if (box) { const i = box.querySelector('.v2-omni-in') as HTMLInputElement | null; i?.focus(); i?.select(); return; }
   if (!hooks) return;
   probeAxis();
-  auxSel = loadAux();       // 지난번에 켜 둔 보조 축을 되살린다(다른 탭에서 바꿨을 수도 있으니 열 때마다 읽는다)
+  dropLegacyAux();
 
   const input = el('input', {
     class: 'v2-omni-in', type: 'text', spellcheck: 'false', autocomplete: 'off',
@@ -246,24 +234,19 @@ export function omniOpen(seed?: string): void {
   //  (꺼진 종류는 아예 부르지 않으므로 오히려 빨라진다 — 세션이력처럼 느린 채널을 끄면 체감이 크다).
   const chips = el('div', { class: 'v2-omni-filters', role: 'group', 'aria-label': '종류 필터' });
   function chip(k: Kind): HTMLElement {
-    const on = kindOn(k);
-    //  제목(툴팁)이 **누르면 무슨 일이 일어나는지**를 말한다 — 두 축의 규칙이 다르므로 문구도 다르다.
-    const tip = isAux(k)
-      ? (on ? `${KIND_LABEL[k]} 결과에서 빼기` : `${KIND_LABEL[k]}도 결과에 넣기 (아래 전용 묶음에만 · 선택은 저장됩니다)`)
-      : (kindSel.size === 0 ? `${KIND_LABEL[k]}만 보기` : (kindSel.has(k) ? `${KIND_LABEL[k]} 빼기` : `${KIND_LABEL[k]} 더하기`));
+    const picked = kindSel.has(k);     // 켜진 모습 = **사람이 누른 것**뿐이다(기본 검색에선 전부 꺼진 모습)
+    //  제목(툴팁)이 **누르면 무슨 일이 일어나는지**를 말한다.
+    const tip = picked ? `${KIND_LABEL[k]} 빼기`
+      : kindSel.size === 0 ? `${KIND_LABEL[k]}만 보기` + (isAux(k) ? ' (기본 검색에는 들어가지 않습니다)' : '')
+      : `${KIND_LABEL[k]} 더하기`;
     return el('button', {
-      class: 'v2-omni-chip' + (on ? ' on' : '') + (isAux(k) ? ' aux' : ''), type: 'button',
-      'aria-pressed': String(on), title: tip,
-      onclick: () => {
-        if (isAux(k)) { if (auxSel.has(k)) auxSel.delete(k); else auxSel.add(k); saveAux(); }
-        else kindSel = nextKindSel(kindSel, k);
-        paintChips(); run();
-      },
+      class: 'v2-omni-chip' + (picked ? ' on' : '') + (isAux(k) ? ' aux' : ''), type: 'button',
+      'aria-pressed': String(picked), title: tip,
+      onclick: () => { kindSel = nextKindSel(kindSel, k); paintChips(); run(); },
     }, icon(k, 'v2-omni-chip-ic'), el('span', { text: KIND_LABEL[k] })) as HTMLElement;
   }
   function paintChips(): void {
-    //  보조 축은 **오른쪽에 따로** 세운다(구분선). 같은 줄에 나란히 두되 '다른 성격'임이 보이게 —
-    //  주 축 칩은 좁히는 손잡이고, 보조 축 칩은 더하는 손잡이다.
+    //  자료·세션 이력은 **오른쪽에 따로** 세운다(구분선) — 누르는 규칙은 같지만, 기본 검색에 안 들어가는 종류임이 보이게.
     chips.replaceChildren(
       ...MAIN_KINDS.map(chip),
       el('span', { class: 'v2-omni-chipsep', 'aria-hidden': 'true' }),
@@ -418,8 +401,9 @@ export function omniOpen(seed?: string): void {
   //  결과가 없을 때 **왜 없는지**를 화면이 말한다 — 자료를 찾는 사람에게 그냥 '결과가 없습니다'는 거짓말에 가깝다
   //  (그 채널을 아예 안 불렀으니까). 조사가 붙지 않는 문구로 적는다('자료'와 '세션 이력'은 받침이 다르다).
   const emptyNote = (): string => {
-    const off = AUX_KINDS.filter((k) => !auxSel.has(k)).map((k) => KIND_LABEL[k]);
-    return '결과가 없습니다.' + (off.length ? ` (꺼진 종류: ${off.join(' · ')} — 위 칩으로 켤 수 있습니다)` : '');
+    //  기본 검색이면 자료·세션 이력은 **부르지도 않았다** — 그걸 말하지 않으면 '없다' 가 거짓말이 된다.
+    if (kindSel.size > 0) return '결과가 없습니다. (고른 종류에서만 찾았습니다 — 칩을 다시 누르면 풀립니다)';
+    return '결과가 없습니다. (자료·세션 이력은 기본 검색에 들어가지 않습니다 — 위 칩을 누르면 찾습니다)';
   };
   function setNote(text: string): void {
     note.hidden = !text;
@@ -483,7 +467,7 @@ export function omniOpen(seed?: string): void {
     // 프로젝트 — 서버 의미검색이 오기 전에 이름 매칭만 먼저(첫 글자에 화면이 비어 있지 않게). 서버 응답이 오면 덮인다.
     const proj: Hit[] = d.projects.filter((p) => String(p.name || '').toLowerCase().includes(nq)).slice(0, 6)
       .map((p) => ({ kind: 'proj' as const, key: 'p:' + p.id, title: p.name, sub: oneLine(String(p.description || '')), href: '#/p/' + p.id }));
-    const apps: Hit[] = visibleApps().filter((a) => (a.title + ' ' + a.desc).toLowerCase().includes(nq)).slice(0, 4)
+    const apps: Hit[] = visibleApps().filter((a) => appMatches(a, nq)).slice(0, 4)
       .map((a) => ({ kind: 'app' as const, key: 'a:' + a.key, title: a.title, sub: a.desc, href: appHref(a) }));
     //  꺼진 종류는 애초에 담지 않는다 — 화면에서 거르는 게 아니라 **아예 찾지 않는다**(칩이 곧 검색 범위다).
     buckets.set('local', [...sess, ...proj, ...apps].filter((h) => kindOn(h.kind)));

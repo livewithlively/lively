@@ -182,7 +182,7 @@ function renderLocalWorkCommand(wrap, argStr, info) {
   if (info && info.repo && !info.hasUrl) notes.push('※ 이 레포는 git 주소 미설정 — --git-url 없음. 입력 경로에 레포가 이미 있어야 함(없으면 관리탭 ▸ 레포(git) 관리에서 git 주소 연결).');
   // #1155 — 종전엔 레포 준비가 실패하면 이 명령으로는 세션을 아예 못 띄웠다. 이제 뜨고, 실패 사실이 세션에도 전달된다.
   if (info && info.repo) notes.push('※ 레포를 못 가져와도(자격·네트워크 등) 세션은 시작됩니다 — 무엇이 왜 실패했는지 터미널과 AI 세션에 함께 안내되고, 세션 안에서 `lively repo worktree <레포>` 로 복구할 수 있어요.');
-  notes.push("※ 'lively: command not found' 가 나오면 아직 라이블리를 설치하지 않은 거예요 — [사용 가이드 ▸ 내 AI 세션 생성] 을 먼저 따라 하세요.");
+  notes.push("※ 'lively: command not found' 가 나오면 아직 라이블리를 설치하지 않은 거예요 — [사용 가이드 ▸ 내 컴퓨터 연결] 을 먼저 따라 하세요.");
   notes.push('복사가 안 되면(보안 컨텍스트 아님) 명령을 직접 드래그해 복사하세요.');
   wrap.replaceChildren(
     el('div', { style: 'margin-top:14px;border-top:1px solid rgba(127,127,127,.18);padding-top:12px' },

@@ -16,9 +16,15 @@
 import { api, el, errorNote, hasScope, relTime, state, sv, toast, uiText } from '../core.js';
 import { confirmDialog, skeleton } from '../ui-primitives.js';
 import { svcTile } from '../svc-icons.js';
+import { iconPath } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { CRED_KINDS, openGitCredentialManager, svcTokenForm } from '../admin-credentials.js';
 import { LOGIN_SERVICES, partition, slackChannelPolicyCard, type SvcView } from '../me-logins.js';
+//  #3778 — 목록 카드가 말하는 «두 축»의 잣대(순수). 화면은 그리기만 하고 판정은 저기서 한다(그래서 시험된다).
+import { appAxes, collectTally, listBucket, pendingAxes, skipKey,
+  type AppAxes, type AxisState, type CardState, type CollectTally } from '../lib/connect-axes.js';
+import { shellPrefStore, shellPrefsTouch } from './shell-prefs.js';   // #2460 — «사람이 고른 것»의 정본은 서버다
 import { NOTION_PICK_TIP, notionCollectedLine, notionCollectedPages } from './notion-pick.js';   // #1968 — 노션 고르기 안내·모은 페이지 수(처음 설정과 한 벌)
+import { outlookAdminConsentBox } from './outlook-admin.js';   // #4211 — 회사 계정 «관리자 허용» 안내(세 화면이 한 벌)
 //  #2556 — 관리탭 [데이터 연결] 묶음을 여기로 걷어 왔다. 화면만 옮겼고 **패널은 그것 그대로 부른다**(사본 0):
 //   레포·DB 는 아래 [코드와 데이터] 두 화면이, 아웃바운드 둘은 노션·클릭업 **앱 상세의 [내보내기] 칸**이 편다.
 //   그 패널들은 host 에 붙은 표식(markEmbedded)을 보고 자기 제목만 접는다 — 저장 경로·조회 경로는 한 벌.
@@ -39,6 +45,40 @@ async function load(): Promise<{ v: SvcView }> {
   const oauth = await api('/api/ui/me/oauth/connectors').catch(() => ({ connectors: [] }));
   return { v: partition(oauth, creds) };
 }
+
+/**
+ * 두 번째 축 — «자료 가져오기»가 앱마다 켜져 있나 (#3778).
+ *  ⚠ 앱마다 `/api/ui/org/<app>/collect` 를 부르면 목록 한 장에 여덟 번 왕복이다. 목록은 수집기 레지스트리를
+ *   **한 번** 읽어 preset 으로 앱에 배분한다(그 창구는 인증만 있으면 읽힌다 — scope null).
+ *  못 읽어도 화면을 비우지 않는다: 빈 표면 카드가 «아직 꺼짐» 으로 떨어지는 대신, 아래 axesOf 가 그 사실을
+ *   숨기지 않도록 목록 머리에 한 줄을 띄운다(collectErr).
+ */
+async function loadCollect(): Promise<{ tally: Map<string, CollectTally>; ok: boolean }> {
+  try {
+    const r: any = await api('/api/ui/org/collectors');
+    return { tally: collectTally(r?.collectors), ok: true };
+  } catch (_) { return { tally: new Map(), ok: false }; }
+}
+
+// ══ «이 축은 안 쓴다» 는 결정 (#3778, 원준 2026-09-20) ═══════════════════════════
+//  수집기는 흔히 저절로 생기므로 «둘 중 하나만 켜진» 상태가 사실상 기본값이다. 그걸 «연결됨» 한 칸에
+//  섞어 두면 **덜 끝난 것이 끝난 것처럼** 보인다. 그래서 그 상태를 「연결 중」으로 따로 세우고, 끝내는
+//  길을 둘 준다 — 나머지를 켜거나, «안 쓴다»고 정하거나. 정한 것은 미완이 아니므로 둘 다 「연결 완료」다.
+//  ⚠ 이건 **정책이 아니라 표시**다 — «안 쓴다»가 서버의 무엇도 끄지 않는다(끄는 건 그 축의 스위치다).
+//   그래서 계정에 묶인 개인 결정으로 둔다(기기마다 다시 정하게 하면 그게 더 이상하다).
+const SKIP_STORE = shellPrefStore('lively_v2_connect_skip', 'list');
+function loadSkip(): Set<string> {
+  try { const a = JSON.parse(localStorage.getItem(SKIP_STORE) || '[]'); return new Set<string>(Array.isArray(a) ? a : []); }
+  catch (_) { return new Set<string>(); }
+}
+function saveSkip(s: Set<string>): void {
+  try { if (s.size) localStorage.setItem(SKIP_STORE, JSON.stringify([...s])); else localStorage.removeItem(SKIP_STORE); }
+  catch (_) { /* 못 남겨도 이번 화면은 된다 */ }
+  shellPrefsTouch(SKIP_STORE);   // 캐시는 즉시, 서버는 디바운스(#2460)
+}
+/** 축의 이름 — 목록 카드·상세·결정 줄이 **한 벌로** 쓴다. 한 사실을 세 자리가 다르게 부르면 안 된다. */
+const AXIS_LABEL: Record<'use' | 'get', string> = { use: '내 계정으로 직접 사용', get: '자료 가져오기' };
+
 
 //  ⚠ 표(LOGIN_SERVICES)만 뒤지면 안 된다 — 관리자가 등록한 커넥터는 서버에서 와서 v.all 에만 있다.
 const findSvc = (v: SvcView, key: string): Svc | undefined =>
@@ -63,14 +103,63 @@ function stateOf(v: SvcView, svc: Svc): State {
 //   같은 판정(soon || blocked)을 쓴다. 그래서 요약 칩·구역·관리자 문구가 전부 사라졌다.
 //  «둘 다 비활성처럼 보이면 헷갈린다»를 이렇게 푼다 — 회색 로고의 뜻을 «준비 중» 하나로 좁히고, 켤 수 있는 앱은 제 색 로고에
 //   [연결] 버튼이 붙어 «누를 수 있다»가 보인다. 준비 중 카드는 점선 테두리·틴트 바탕에 갈 곳(버튼) 대신 «준비 중 + 이유».
-type ListState = 'on' | 'off' | 'soon';
+//
+//  ★ #3778(원준 2026-09-20) — **카드가 두 축을 말한다.** 머리말은 «앱마다 연결이 두 가지» 라고 하는데 카드는
+//   내 자격 하나만 보고 «아직 연결 안 함» 이라고 썼다. 그래서 자료를 이미 가져오고 있는 앱이 목록에선 «연결
+//   안 함» 으로 서 있었다 — 상세가 #2202 B1 로 한 번 푼 모순(«연결 안 됨» + «2곳에서 모으는 중»)이 목록에
+//   그대로 남아 있었던 것이다. 이제 카드마다 상세와 **같은 이름의 두 줄**이 선다: 내 계정으로 직접 사용 ·
+//   자료 가져오기. 묶음 판정도 «어느 한 축이라도 켜졌나»로 바뀐다(판정은 lib/connect-axes.ts, 시험 있음).
+type ListState = CardState;
+
+/** 축 한 줄 — 왼쪽에 무엇을 하는 연결인지, 오른쪽에 점 + 상태말. 채운 컬러 알약을 쓰지 않는다(디자인시스템). */
+function axisRow(ic: string, label: string, st: AxisState, word: string): HTMLElement {
+  return el('div', { class: 'cn-ax cn-ax-' + st },
+    el('span', { class: 'cn-ax-ic', 'aria-hidden': 'true' }, icon(ic)),
+    el('span', { class: 'cn-ax-lb', text: label }),
+    el('span', { class: 'cn-ax-st' },
+      st === 'none' ? null : el('span', { class: 'cn-ax-dot', 'aria-hidden': 'true' }),
+      el('span', { text: word })));
+}
+
+/** 카드 두 줄 — 이름은 상세(«연결 두 가지»)와 한 글자도 다르지 않게 둔다. 두 화면이 한 사실을 같은 말로 말해야 한다. */
+function axesBlock(a: AppAxes): HTMLElement {
+  const useWord = a.use === 'on' ? '켜짐' : a.use === 'soon' ? '준비 중' : a.use === 'skip' ? '안 쓰기로 했어요' : '아직 안 정함';
+  const getWord = a.get === 'on' ? (a.getOn > 1 ? `켜짐 · ${a.getOn}곳` : '켜짐')
+    : a.get === 'none' ? '이 앱엔 없어요' : a.get === 'soon' ? '준비 중' : a.get === 'skip' ? '안 쓰기로 했어요' : '아직 안 정함';
+  return el('div', { class: 'cn-axes' },
+    axisRow('zap', AXIS_LABEL.use, a.use, useWord),
+    axisRow('box', AXIS_LABEL.get, a.get, getWord));
+}
+
+/** 우리 자산(코드 저장소·데이터베이스) 타일 — 앱 타일과 같은 라운드 스퀘어에 우리 색. 글자 «{ }»·«DB» 를 쓰지 않는다. */
+function assetTile(ic: string): HTMLElement {
+  return el('span', { class: 'svc-tile cn-asset-tile', 'aria-hidden': 'true' }, icon(ic));
+}
+
 export async function renderConnect(host: HTMLElement): Promise<void> {
   host.replaceChildren(el('div', { class: 'v2-center' }, skeleton('연결 상태를 불러오는 중')));
   let v: SvcView;
   try { ({ v } = await load()); }
   catch (e) { host.replaceChildren(el('div', { class: 'v2-center' }, errorNote(e, '연결 상태를 불러오지 못했습니다'))); return; }
+  //  두 번째 축은 따로 읽는다 — 근거가 다르기 때문이다(자격은 내 것, 수집기는 워크스페이스 것). 못 읽어도 첫 축은 그린다.
+  const { tally, ok: collectOk } = await loadCollect();
+  const skip = loadSkip();
   const soon = [...(v.soon as Svc[]), ...(v.blockedOAuth as Svc[])];
+  const soonKeys = new Set(soon.map((s) => s.key));
   const reload = () => { void renderConnect(host); };
+
+  //  카드가 말할 두 축 — 자격 축은 **자격 원본**으로 본다(목록 배치로 물으면 준비 중이 연결을 덮는다, #2243 stateOf 주석).
+  const axesOf = (svc: Svc): AppAxes => {
+    const raw = stateOf(v, svc);
+    return appAxes(svc.key, raw === 'blocked' ? 'soon' : raw, tally, skip);
+  };
+  //  묶음 넷 — 연결 중(하나만 켜고 나머지를 안 정함) · 연결 완료 · 연결할 수 있음 · 준비 중.
+  //   순서는 종전 그대로(연결됨 먼저 잡힌 것 → 켤 수 있는 것)를 각 묶음 안에서 유지한다.
+  const rest = [...(v.connected as Svc[]), ...(v.available as Svc[])];
+  const bucketOf = (svc: Svc): ListState => listBucket(axesOf(svc), soonKeys.has(svc.key));
+  const halfList = rest.filter((s) => bucketOf(s) === 'half');
+  const onList = rest.filter((s) => bucketOf(s) === 'on');
+  const offList = rest.filter((s) => bucketOf(s) === 'off');
 
   let q = '';
   const listHost = el('div', { class: 'cn-groups' });
@@ -81,8 +170,9 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
 
   // 요약 — «몇 개 켜져 있나 · 더 켤 수 있나 · 아직 못 켜는 게 있나». 준비 중은 있을 때만 센다(0 은 소음).
   const sum = el('div', { class: 'cn-sum' },
-    el('span', { class: 'cn-sum-i on' }, el('b', { text: String(v.connected.length) }), el('span', { text: '연결됨' })),
-    el('span', { class: 'cn-sum-i' }, el('b', { text: String(v.available.length) }), el('span', { text: '연결할 수 있음' })),
+    el('span', { class: 'cn-sum-i on' }, el('b', { text: String(onList.length) }), el('span', { text: '연결 완료' })),
+    ...(halfList.length ? [el('span', { class: 'cn-sum-i half' }, el('b', { text: String(halfList.length) }), el('span', { text: '연결 중' }))] : []),
+    el('span', { class: 'cn-sum-i' }, el('b', { text: String(offList.length) }), el('span', { text: '연결할 수 있음' })),
     ...(soon.length ? [el('span', { class: 'cn-sum-i soon' }, el('b', { text: String(soon.length) }), el('span', { text: '준비 중' }))] : []));
 
   /** 지금 이 앱을 켜는 길 — 계정(조직이 등록한 OAuth 또는 전용 창구)이 있으면 그것, 아니면 토큰.
@@ -105,28 +195,41 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
 
   function card(svc: Svc, st: ListState): HTMLElement {
     const href = '#/connect/' + svc.key;
+    const a = axesOf(svc);
     const head = (sub: string) => el('div', { class: 'cn-card-hd' },
       //  회색 로고 = 준비 중뿐. 켤 수 있는 앱도 제 색이다(무엇인지 먼저 읽히고, 버튼이 «누를 수 있다»를 말한다).
       svcTile(svc.key, svc.label, st !== 'soon'),
       el('div', { class: 'cn-card-tt' },
         el('div', { class: 'cn-card-nm' }, el('span', { text: svc.label }),
-          st === 'on' ? el('span', { class: 'cn-dot on', 'aria-label': '연결됨' }) : null),
+          st === 'on' ? el('span', { class: 'cn-dot on', 'aria-label': '연결 완료' })
+            : st === 'half' ? el('span', { class: 'cn-dot half', 'aria-label': '연결 중' }) : null),
         el('div', { class: 'cn-card-st', text: sub })));
     const blurb = el('p', { class: 'cn-card-bl', text: String((svc as any).short || svc.blurb || '') });
+    //  머리줄의 «어떻게 연결했나»는 자격 축의 이야기다 — 자료 가져오기만 켜진 앱에 «토큰으로 연결» 이라고 쓰면 거짓이다.
+    //   그 앱은 아직 «켜는 길»만 있으므로 켤 수 있는 카드와 같은 말을 적는다(축 줄이 사실을 말한다).
+    const howSub = a.use === 'on' ? connMeta(v, svc) : viaAccount(svc) ? '계정 로그인' : '토큰';
+    if (st === 'half') {
+      //  ★ 중간 상태 — 덜 끝난 느낌을 **발에서** 말한다. 갈 곳이 «관리»가 아니라 «이어서»다.
+      const pend = pendingAxes(a).map((k) => AXIS_LABEL[k]).join(' · ');
+      return el('a', { class: 'cn-card half', href, title: svc.label },
+        head(howSub), blurb, axesBlock(a),
+        el('div', { class: 'cn-card-ft' },
+          el('span', { class: 'cn-card-h cn-card-pend', text: `${pend} 이(가) 남았어요` }),
+          el('span', { class: 'cn-card-go', text: '이어서 ›' })));
+    }
     if (st === 'on') {
       return el('a', { class: 'cn-card', href, title: svc.label },
-        head(connMeta(v, svc)), blurb,
-        el('div', { class: 'cn-card-ft' }, el('span', { class: 'pill pill-state confirmed', text: '연결됨' }),
-          el('span', { class: 'cn-card-go', text: '관리 ›' })));
+        head(howSub), blurb, axesBlock(a),
+        el('div', { class: 'cn-card-ft' }, el('span', { class: 'cn-card-go', text: '관리 ›' })));
     }
     if (st === 'soon') {
       //  준비 중인데 이미 연결해 둔 앱 — «준비 중»이라고 쓰던 연결을 없는 척하지 않는다(뺏지 않는다).
-      const on = (v as any).soonConnected?.has?.(svc.key);
+      const on = a.use === 'on' || a.get === 'on';
       return el('a', { class: 'cn-card soon' + (on ? ' soon-on' : ''), href, title: svc.label },
-        head(svc.oauth ? '계정 로그인' : '토큰'), blurb,
+        head(svc.oauth ? '계정 로그인' : '토큰'), blurb, axesBlock(a),
         el('div', { class: 'cn-card-ft' },
           el('span', { class: 'cn-pill-soon', text: '준비 중' }),
-          el('span', { class: 'cn-card-h', text: on ? '지금 연결돼 있어요 — 쓰던 연결은 그대로 돕니다'
+          el('span', { class: 'cn-card-h', text: on ? '쓰던 연결은 그대로 돕니다'
             : String((svc as any).soon || '준비를 마치면 여기서 바로 켤 수 있어요') })));
     }
     //  켤 수 있음 — 카드는 상세로, [연결]은 그 자리에서 바로 시작. 버튼은 <a> 안에 못 들어가므로 카드가 role=link 인 div 가 된다.
@@ -136,16 +239,18 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
       class: 'cn-card', role: 'link', tabindex: '0', title: svc.label, onclick: go,
       onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } },
     },
-      head(account ? '계정 로그인' : '토큰'), blurb,
-      el('div', { class: 'cn-card-ft' }, el('span', { class: 'cn-card-h', text: '아직 연결 안 함' }),
+      head(account ? '계정 로그인' : '토큰'), blurb, axesBlock(a),
+      el('div', { class: 'cn-card-ft' },
         el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '연결',
           onclick: (e: Event) => { e.stopPropagation(); if (account) void startOAuth(svc, reload); else openToken(svc, reload); } })));
   }
 
   function paint(): void {
     const kids = [
-      group('연결된 앱', '연결해 둔 앱이에요', v.connected, 'on'),
-      group('연결할 수 있는 앱', '눌러서 바로 켤 수 있어요', v.available, 'off'),
+      //  맨 위에 «아직 정할 게 남은 것» — 목록을 여는 사람이 가장 먼저 봐야 할 줄이다.
+      group('연결 중', '둘 중 하나만 켰어요 — 나머지를 켜거나, 안 쓸 거면 그렇게 정해 주세요', halfList, 'half'),
+      group('연결 완료', '이 앱에서 정할 것을 다 정했어요', onList, 'on'),
+      group('연결할 수 있는 앱', '눌러서 바로 켤 수 있어요', offList, 'off'),
       group('준비하고 있어요', '라이블리가 준비를 마치면 여기서 바로 켤 수 있어요', soon, 'soon'),
     ].filter(Boolean) as HTMLElement[];
     if (!kids.length) kids.push(el('p', { class: 'v2-empty', text: `'${q}' 와(과) 맞는 앱이 없어요.` }));
@@ -153,28 +258,72 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
   }
   paint();
 
+  //  앱이 아니라 **우리 자산**을 잇는 자리(#2556) — 코드 저장소와 데이터베이스. 종전엔 관리탭 [데이터 연결]에
+  //   있었는데, 같은 '바깥과 잇기'를 두 군데서 하면 어디를 봐야 하는지 아무도 모른다. 앱 목록과 섞지 않고
+  //   그 아래 별도 묶음으로 둔다 — 성격이 다르다(앱은 남의 서비스, 이쪽은 우리 것).
+  //  #3778 — 그 «별도»가 행 두 줄이라 위쪽 카드와 딴 화면처럼 보였다. 카드로 맞추되 **축은 흉내 내지 않는다**:
+  //   우리 자산엔 «두 가지 연결»이 없으므로 그 자리엔 그 화면이 실제로 세는 것(등록 개수)을 적는다.
+  const gitCard = assetCard('_git', 'repo', '코드 저장소', '우리 저장소를 등록하고, 코드를 받아오고 올릴 때 쓰는 열쇠를 둡니다');
+  const dbCard = hasScope('admin')
+    ? assetCard('_db', 'db', '데이터베이스', 'AI가 조회할 수 있는 데이터베이스를 등록하고 어디까지 보여줄지 정합니다')
+    : null;
+
   host.replaceChildren(el('div', { class: 'v2-wide v2-connect' },
     el('h1', { class: 'v2-title', text: '외부 앱 연결' }),
     //  «팀에는 공유되지 않습니다»를 뺐다 — 자료 가져오기는 워크스페이스가 함께 보므로 그 문장이 틀려진다. 범위 이야기는 상세가 한다.
-    el('p', { class: 'v2-desc', text: '앱마다 연결이 두 가지예요 — AI가 내 계정으로 직접 쓰는 것(나만 봐요)과, 자료를 미리 가져와 자료함에 두는 것(워크스페이스가 함께 봐요). 앱을 눌러 각각 켭니다.' }),
+    el('p', { class: 'v2-desc', text: '앱마다 연결이 두 가지예요 — AI가 내 계정으로 직접 쓰는 것(나만 봐요)과, 자료를 미리 가져와 자료함에 두는 것(워크스페이스가 함께 봐요). 카드마다 둘을 따로 표시하고, 앱을 누르면 각각 켭니다.' }),
+    //  못 읽었으면 «꺼짐»으로 보이는 축이 생긴다 — 그 사실을 숨기지 않는다(거짓 «꺼짐»을 만들지 않는다).
+    ...(collectOk ? [] : [el('p', { class: 'v2-desc', style: 'color:var(--warn-text)', text: '자료 가져오기 상태를 불러오지 못했어요 — 아래 「자료 가져오기」 줄은 지금 정확하지 않을 수 있습니다.' })]),
     el('div', { class: 'cn-top' }, sum, search),
     listHost,
-    //  앱이 아니라 **우리 자산**을 잇는 자리(#2556) — 코드 저장소와 데이터베이스. 종전엔 관리탭 [데이터 연결]에
-    //   있었는데, 같은 '바깥과 잇기'를 두 군데서 하면 어디를 봐야 하는지 아무도 모른다. 앱 목록과 섞지 않고
-    //   그 아래 별도 묶음으로 둔다 — 성격이 다르다(앱은 남의 서비스, 이쪽은 우리 것).
     el('section', { class: 'cn-group cn-extra' },
       groupHead('코드와 데이터', null, '앱이 아니라 우리 코드 저장소와 데이터베이스를 잇습니다'),
-      dataRow('_git', '{ }', '코드 저장소', '우리 저장소를 등록하고, 코드를 받아오고 올릴 때 쓰는 열쇠를 둡니다'),
-      ...(hasScope('admin') ? [dataRow('_db', 'DB', '데이터베이스', 'AI가 조회할 수 있는 데이터베이스를 등록하고 어디까지 보여줄지 정합니다')] : []))));
+      el('div', { class: 'cn-cards' }, gitCard.node, ...(dbCard ? [dbCard.node] : [])))));
   window.setTimeout(() => search.focus(), 30);
+
+  //  개수는 화면이 선 뒤에 채운다 — 목록을 여는 속도가 관리 데이터 조회에 매달리면 안 된다(실패해도 카드는 산다).
+  void fillGitCounts(gitCard.stat);
+  if (dbCard) void fillDbCount(dbCard.stat);
 }
 
-/** [코드와 데이터] 묶음의 한 줄 — 앱 카드와 달리 로고가 없으므로 글자 아이콘을 쓴다(git 자격 행과 같은 모양). */
-function dataRow(page: string, ic: string, title: string, note: string): HTMLElement {
-  return el('a', { class: 'cn-row', href: '#/connect/' + page },
-    el('span', { class: 'cn-git-ic', 'aria-hidden': 'true', text: ic }),
-    el('div', { class: 'cn-row-main' }, el('div', { class: 't', text: title }), el('div', { class: 'm', text: note })),
-    el('span', { class: 'cn-row-go', 'aria-hidden': 'true', text: '›' }));
+/** [코드와 데이터] 카드 — 앱 카드와 **같은 껍데기**(타일·이름·설명·상태줄·발). 상태줄만 축 대신 «등록 개수»다. */
+function assetCard(page: string, ic: string, title: string, note: string): { node: HTMLElement; stat: HTMLElement } {
+  const stat = el('div', { class: 'cn-axes' }, el('div', { class: 'cn-ax cn-ax-load' },
+    el('span', { class: 'cn-ax-lb', text: '불러오는 중…' })));
+  const node = el('a', { class: 'cn-card cn-card-asset', href: '#/connect/' + page, title },
+    el('div', { class: 'cn-card-hd' }, assetTile(ic),
+      el('div', { class: 'cn-card-tt' },
+        el('div', { class: 'cn-card-nm' }, el('span', { text: title })),
+        el('div', { class: 'cn-card-st', text: '우리 것' }))),
+    el('p', { class: 'cn-card-bl', text: note }), stat,
+    el('div', { class: 'cn-card-ft' }, el('span', { class: 'cn-card-go', text: '관리 ›' })));
+  return { node, stat };
+}
+
+/** 상태줄 한 칸 — 앱 카드의 axisRow 와 같은 모양이라 두 묶음이 한 화면으로 읽힌다. */
+function statRow(ic: string, label: string, n: number | null, unit: string): HTMLElement {
+  const has = n != null && n > 0;
+  return el('div', { class: 'cn-ax cn-ax-' + (has ? 'on' : 'off') },
+    el('span', { class: 'cn-ax-ic', 'aria-hidden': 'true' }, icon(ic)),
+    el('span', { class: 'cn-ax-lb', text: label }),
+    el('span', { class: 'cn-ax-st' }, el('span', { class: 'cn-ax-dot', 'aria-hidden': 'true' }),
+      el('span', { text: n == null ? '알 수 없어요' : has ? `${n}${unit}` : '아직 없어요' })));
+}
+
+/** 코드 저장소 — 이 화면의 두 반쪽(등록된 저장소 · git 열쇠)을 그대로 센다. 둘 중 하나만 있으면 아직 못 가져온다. */
+async function fillGitCounts(stat: HTMLElement): Promise<void> {
+  const repos = await api('/api/ui/repos').then((r: any) => (Array.isArray(r?.repos) ? r.repos.length : null)).catch(() => null);
+  const keys = await api('/api/ui/me/git-credential').then((r: any) => (Array.isArray(r?.credentials) ? r.credentials.length : null)).catch(() => null);
+  stat.replaceChildren(statRow('repo', '등록된 저장소', repos, '개'), statRow('key', '내 git 열쇠', keys, '개'));
+}
+
+/** 데이터베이스 — 등록된 소스와, 그 중 몇 곳에 행 보안(RLS)이 걸려 있나. */
+async function fillDbCount(stat: HTMLElement): Promise<void> {
+  const r: any = await api('/api/ui/org/db-sources').catch(() => null);
+  const src: any[] | null = Array.isArray(r?.sources) ? r.sources : null;
+  stat.replaceChildren(
+    statRow('db', '등록된 데이터베이스', src ? src.length : null, '곳'),
+    statRow('shield', '행 보안(RLS) 켠 곳', src ? src.filter((s: any) => s?.rls).length : null, '곳'));
 }
 
 // ══ 코드와 데이터 (#/connect/_git · #/connect/_db) — #2556 ══════════════════════
@@ -197,7 +346,7 @@ async function adminData(): Promise<any> {
 /** git 열쇠 한 줄 — 누르면 자격 관리 창이 뜬다(내 것 · 게이트웨이 것, 창은 한 벌). */
 function keyRow(title: string, note: string, scope: 'me' | 'gateway'): HTMLElement {
   return el('button', { class: 'cn-row cn-row-btn', type: 'button', onclick: () => openGitCredentialManager(scope) },
-    el('span', { class: 'cn-git-ic', 'aria-hidden': 'true', text: '{ }' }),
+    el('span', { class: 'cn-git-ic', 'aria-hidden': 'true' }, icon('key')),
     el('div', { class: 'cn-row-main' }, el('div', { class: 't', text: title }), el('div', { class: 'm', text: note })),
     el('span', { class: 'cn-row-go', 'aria-hidden': 'true', text: '›' }));
 }
@@ -214,7 +363,7 @@ export async function renderConnectData(host: HTMLElement, page: string): Promis
   host.replaceChildren(el('div', { class: 'v2-wide v2-connect-app' },
     backLink(),
     el('div', { class: 'cn-head' },
-      el('span', { class: 'cn-git-ic', 'aria-hidden': 'true', text: git ? '{ }' : 'DB' }),
+      assetTile(git ? 'repo' : 'db'),
       el('div', { class: 'cn-head-tt' },
         el('h1', { class: 'v2-title', text: git ? '코드 저장소' : '데이터베이스' }),
         el('p', { class: 'v2-desc', style: 'margin-top:4px', text: git
@@ -276,20 +425,10 @@ function connMeta(v: SvcView, svc: Svc): string {
 type CollectState = (text: string, on: boolean) => void;
 const SCOPE_NOUN: Record<string, string> = {
   notion: '페이지', linear: '이슈', slack: '대화', google: 'Drive 파일과 캘린더 일정', github: '저장소', gitlab: '프로젝트',
-  clickup: '작업', figma: '파일', prometheus: '지표', 'claude-headless': '분류·크론 실행',
+  clickup: '작업', figma: '파일', prometheus: '지표', 'claude-headless': '분류·크론 실행', outlook: '메일과 일정',
 };
-const COLLECT_UNIT: Record<string, string> = { slack: '대화', notion: '페이지', google: '문서', figma: '파일의 코멘트', clickup: '작업', github: '저장소의 이슈·PR 대화', gitlab: '프로젝트의 이슈·MR 대화', linear: '이슈' };
-const ICON_PATH: Record<string, string> = {
-  zap: 'M13 2L4 14h7l-1 8 9-12h-7z',
-  box: 'M3 5h18v4H3zM5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4',
-  check: 'M5 12l4 4L19 7',
-  x: 'M6 6l12 12M18 6L6 18',
-  //  #2243 3차 — «하는 일» 세 동사와 «보는 사람» 두 축.
-  eye: 'M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z M12 9.4a2.6 2.6 0 1 1 0 5.2 2.6 2.6 0 0 1 0-5.2Z',
-  pen: 'M4.5 19.5h4L20 8l-4-4L4.5 15.5z M14.5 5.5l4 4',
-  usr: 'M12 4.4a3.6 3.6 0 1 1 0 7.2 3.6 3.6 0 0 1 0-7.2Z M4.5 20c0-3.8 3.4-6 7.5-6s7.5 2.2 7.5 6',
-  team: 'M9 5.3a3.2 3.2 0 1 1 0 6.4 3.2 3.2 0 0 1 0-6.4Z M2.5 19.5c0-3.4 2.9-5.4 6.5-5.4s6.5 2 6.5 5.4 M16.5 6.6a3.2 3.2 0 0 1 0 6.3 M18 14.6c2.2.6 3.5 2.3 3.5 4.9',
-};
+const COLLECT_UNIT: Record<string, string> = { slack: '대화', notion: '페이지', google: '문서', figma: '파일의 코멘트', clickup: '작업', github: '저장소의 이슈·PR 대화', gitlab: '프로젝트의 이슈·MR 대화', linear: '이슈', outlook: '메일' };
+//  #4233: 이 화면의 그림도 lib/icon-paths.ts 한 벌에 있다(이름에 cn- 이 붙는다). 모양은 그대로다.
 /**
  * 목적격 조사 — 앞 글자 받침으로 «을/를». 화면에 «저장소을(를)» 같은 자리가 남으면 사람이 «기계가 쓴 글»로 읽는다.
  * 한글이 아니면(영문 앱 이름 등) «를». 순수라 테스트가 표를 돈다.
@@ -299,7 +438,7 @@ export function eulReul(word: string): string {
   if (!(c >= 0xAC00 && c <= 0xD7A3)) return '를';
   return (c - 0xAC00) % 28 ? '을' : '를';
 }
-const icon = (k: string): SVGElement => sv('svg', { class: 'v2-ic', viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: ICON_PATH[k] })) as SVGElement;
+const icon = (k: string): SVGElement => sv('svg', { class: 'v2-ic', viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: iconPath('cn-' + k) })) as SVGElement;
 
 /** 설정 줄 — «라벨 | 값 | 동작». 값은 문자열(uiText)이나 노드. */
 // ══ #2243 3차 «다듬은 안 B» — 상세 화면 부품 ═══════════════════════════════════════════════
@@ -393,7 +532,7 @@ function srow(k: string, v: string | Node[], acts: HTMLElement[] = [], cls = '')
  * 종전엔 스위치·«누가 봐요»가 카드마다 따로 있어 화면에 같은 말이 세 번 나왔다.
  */
 export interface CollectFace { box: HTMLElement; row: HTMLElement }
-function collectFace(onState: CollectState, teamSee = true, countKind = ''): CollectFace & { body: HTMLElement; set: (chk: HTMLInputElement, stateText: string, notes: string[], extra: HTMLElement[]) => void } {
+function collectFace(onState: CollectState, teamSee = true, countKind = '', countSystem = ''): CollectFace & { body: HTMLElement; set: (chk: HTMLInputElement, stateText: string, notes: string[], extra: HTMLElement[]) => void } {
   const rowHost = el('div');
   //  ★ ② 는 어떤 앱에서도 같은 «카드 + 라벨 열» 이어야 한다(#2243 최우선 요구). 어댑터가 무엇을 넣든
   //   이 틀 안에 들어간다 — 종전엔 노션·구글이 라벨 없이 체크박스만 떨궈 ①·③ 과 딴판이었다(원준 실측 2026-08-30).
@@ -415,7 +554,8 @@ function collectFace(onState: CollectState, teamSee = true, countKind = ''): Col
       onState(stateText, chk.checked);
       //  자료함에 실제로 몇 건 들어왔는지 — 목록 총계를 한 번 물어 줄 앞에 붙인다(본문은 안 받는다: limit=1).
       if (chk.checked && countKind) {
-        void api(`/api/ui/sources?kind=${encodeURIComponent(countKind)}&limit=1`)
+        //  #4211 — 같은 kind 를 두 앱이 나눠 쓰면(email = Gmail·Outlook) system 으로 좁힌다. 안 그러면 남의 앱 수를 제 것으로 말한다.
+        void api(`/api/ui/sources?kind=${encodeURIComponent(countKind)}${countSystem ? `&system=${encodeURIComponent(countSystem)}` : ''}&limit=1`)
           .then((r: any) => {
             const n = Number(r?.total);
             if (!Number.isFinite(n) || n <= 0) return;
@@ -444,6 +584,35 @@ function quietCollectFace(stateText: string, note: string, onState: CollectState
   };
 }
 
+/**
+ * 「연결 중」을 끝내는 줄 (#3778, 원준 2026-09-20).
+ *  하나만 켜진 앱은 목록에서 «연결 중»으로 서고, 여기 들어오면 **끝내는 길 둘**을 그 자리에서 고른다 —
+ *   나머지를 켜거나(아래 스위치), «안 쓴다»고 정하거나(이 줄의 단추). 정하고 나면 목록이 «연결 완료»가 된다.
+ *  ⚠ «안 쓴다»는 **표시일 뿐 아무것도 끄지 않는다** — 그래서 되돌리는 단추를 늘 같은 자리에 둔다.
+ */
+function decideRows(label: string, a: AppAxes, skip: Set<string>, key: string, reload: () => void): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  const set = (axis: 'use' | 'get', on: boolean) => {
+    if (on) skip.add(skipKey(key, axis)); else skip.delete(skipKey(key, axis));
+    saveSkip(skip);
+    toast(on ? `${AXIS_LABEL[axis]}는 안 쓰는 것으로 정했어요 — 이 앱은 «연결 완료»로 표시됩니다`
+             : `${AXIS_LABEL[axis]}를 다시 «아직 안 정함»으로 되돌렸어요`);
+    reload();
+  };
+  for (const axis of pendingAxes(a)) {
+    out.push(el('div', { class: 'cn-decide' }, icon('zap'),
+      el('span', { class: 'm' }, ...uiText(`**${AXIS_LABEL[axis]}** 를 아직 안 정했어요 — 아래에서 켜면 연결이 완료돼요. 안 쓸 거면 그렇게 정해 두세요.`)),
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '안 쓸래요', onclick: () => set(axis, true) })));
+  }
+  for (const axis of ['use', 'get'] as const) {
+    if (a[axis] !== 'skip') continue;
+    out.push(el('div', { class: 'cn-decide done' }, icon('check'),
+      el('span', { class: 'm' }, ...uiText(`**${AXIS_LABEL[axis]}** 는 안 쓰기로 했어요 — ${label} 은(는) 목록에서 «연결 완료»로 보입니다. 켜 두진 않았어요.`)),
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '다시 정하기', onclick: () => set(axis, false) })));
+  }
+  return out;
+}
+
 //  이 앱에 대한 모든 것이 여기 있다 — 두 얼굴의 상태 · 범위 · 방식 · 해제.
 export async function renderConnectApp(host: HTMLElement, key: string): Promise<void> {
   //  먼저 읽고 나서 앱을 찾는다 — 이 키가 표에 없는 커넥터일 수 있고, 그건 서버 응답에만 있다.
@@ -455,6 +624,10 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   if (!svc) { host.replaceChildren(el('div', { class: 'v2-center' }, backLink(), el('p', { class: 'v2-empty', text: '그런 앱이 없어요.' }))); return; }
 
   const st = stateOf(v, svc);
+  //  #3778 — 상세도 목록과 **같은 잣대**로 두 축을 읽는다. 여기서 «하나 남았다»를 말하고 그 자리에서 끝낸다.
+  const { tally } = await loadCollect();
+  const skip = loadSkip();
+  const axes = appAxes(svc.key, st === 'blocked' ? 'soon' : st, tally, skip);
   const reload = () => { void renderConnectApp(host, key); };
   const oc = svc.oauth ? v.oauthMap.get(svc.oauth) : null;
   const cred = svc.token ? v.credMap.get(svc.token) : null;
@@ -516,7 +689,10 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
       else openToken(svc, reload);
     } else { sw.checked = true; void disconnect(); }
   };
-  const howNow = viaOAuth ? '계정 로그인으로 연결했어요' : viaToken ? '토큰으로 연결했어요' : '';
+  //  #4211 — Outlook 은 어느 계정(회사/개인)으로 붙었는지가 곧 «누구 메일인지»다. 서버가 connectors[].account 로 준다.
+  const acct = svc.key === 'outlook' && oc?.account?.email
+    ? ` · ${oc.account.email}${oc.account.type === 'work' ? '(회사 계정)' : oc.account.type === 'personal' ? '(개인 계정)' : ''}` : '';
+  const howNow = viaOAuth ? '계정 로그인으로 연결했어요' + acct : viaToken ? '토큰으로 연결했어요' : '';
   const usedAt = viaToken && cred?.last_used_at ? ` · ${relTime(cred.last_used_at)}에 마지막으로 썼어요`
     : viaToken && cred?.updated_at ? ` · ${relTime(cred.updated_at)}에 연결했어요` : '';
   const readDetail = st === 'on'
@@ -531,6 +707,9 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     if (viaToken) readActs.appendChild(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '토큰 교체', onclick: () => openToken(svc, reload) }));
     if (svc.key === 'slack') readActs.appendChild(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '대화별 허용 정하기', onclick: () => overlay('Slack 대화별 허용', slackChannelPolicyCard()) }));
     if (svc.key === 'github') readActs.appendChild(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '열린 저장소 보기', onclick: () => overlay('GitHub 열린 저장소', githubReposCard()) }));
+  } else if (svc.key === 'outlook' && st === 'off') {
+    //  #4211 — 연결 **전에** 관리자 링크를 곁에 둔다. 회사 계정은 Microsoft 화면에서 막히고 이 화면으로 안 돌아오는 일이 많다.
+    readActs.appendChild(el('div', { style: 'flex:1 1 100%' }, outlookAdminConsentBox(null)));
   } else if (spec && (spec.help || spec.docUrl) && !account) {
     readActs.appendChild(el('span', { class: 'h', style: 'margin-left:0', text: String(spec.help || '') }));
     if (spec.docUrl) readActs.appendChild(el('a', { class: 'btn btn-ghost btn-sm', href: spec.docUrl, target: '_blank', rel: 'noopener noreferrer', text: '발급 페이지 열기 ↗' }));
@@ -594,6 +773,8 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     : quietCollectFace('관리자만', '워크스페이스 관리자가 켤 수 있어요 — 노션에서 고른 페이지만 함께 보는 자료함으로 들어옵니다.', onCollect);
   else if (svc.key === 'google') collect = isAdmin ? googleTeamCollectCard(onCollect)
     : quietCollectFace('관리자만', '워크스페이스 관리자가 켤 수 있어요 — Drive 문서가 함께 보는 자료함으로 들어옵니다.', onCollect);
+  else if (svc.key === 'outlook') collect = isAdmin ? memberTokenCollectCard(svc.key, onCollect)
+    : quietCollectFace('권한 필요', '이 워크스페이스의 구성원이 켤 수 있어요 — 켜면 내 메일이 함께 보는 자료함으로 들어옵니다.', onCollect);
   else if (svc.key === 'linear') collect = isAdmin ? memberTokenCollectCard(svc.key, onCollect)
     : quietCollectFace('관리자만', '워크스페이스 관리자가 켤 수 있어요 — 켜면 이슈·댓글·문서가 함께 보는 자료함으로 들어옵니다.', onCollect);
   else if (svc.key === 'gitlab') collect = !isAdmin ? quietCollectFace('권한 필요', '이 워크스페이스의 구성원이 켤 수 있어요 — 켜면 고른 프로젝트의 이슈·MR 대화가 함께 보는 자료함으로 들어옵니다.', onCollect)
@@ -642,6 +823,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
         el('p', { class: 'v2-desc', style: 'margin-top:4px', text: String((svc as any).blurb || '') }))),
     el('section', { class: 'cn-sect', id: 'cn-tool' },
       sectHead('1', `${svc.label} 연결 두 가지`, '따로 켜고 끕니다'),
+      ...decideRows(svc.label, axes, skip, svc.key, reload),
       el('div', { class: 'cn-actlist' }, readRow, collect.row)),
     el('section', { class: 'cn-sect', id: 'cn-collect-sect' },
       sectHead('2', '가져올 자료 정하기', '내 쓰임에 맞게 정합니다'),
@@ -786,10 +968,25 @@ const MEMBER_COLLECT_TEXT: Record<string, { desc: string; on: string; off: strin
     on: '작업·댓글을 프로젝트 탭으로 가져오고 있어요.', off: '켜면 내 ClickUp 토큰으로 워크스페이스의 작업·댓글을 프로젝트 탭으로 가져옵니다.', where: '워크스페이스 함께 — 프로젝트 탭에서 같이 봐요' },
   linear: { desc: '워크스페이스의 이슈·댓글과 문서를 라이블리가 미리 읽어 자료함으로 가져와요. 팀으로 좁힐 수 있어요. 워크스페이스가 함께 봐요.',
     on: '이슈·댓글·문서를 가져오고 있어요.', off: '켜면 Linear 화면이 열려요. «허용» 한 번이면 연결과 가져오기가 함께 켜집니다.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
+  //  #4211 — Outlook 은 Linear 처럼 토글이 곧 연결이다(자격이 없으면 Microsoft 동의 화면이 열린다).
+  outlook: { desc: '내 메일(받은·보낸 편지함 등)을 라이블리가 미리 읽어 자료함으로 가져와요. 지운 편지함·정크·임시 보관함은 빼요. 워크스페이스가 함께 봐요.',
+    on: '내 메일을 가져오고 있어요.', off: '켜면 Microsoft 화면이 열려요. «허용» 한 번이면 연결과 가져오기가 함께 켜집니다.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
   gitlab: { desc: '내가 고른 프로젝트의 이슈·MR 대화와 릴리스 노트만 라이블리가 미리 읽어 자료함으로 가져와요. 워크스페이스가 함께 봐요.',
     on: '고른 프로젝트의 이슈·MR 대화를 가져오고 있어요.', off: '켜면 내 GitLab 개인 토큰으로 고른 프로젝트의 이슈·MR 대화를 읽어 옵니다.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
   github: { desc: '내가 고른 저장소의 이슈·PR 대화와 릴리스 노트만 라이블리가 미리 읽어 자료함으로 가져와요. 워크스페이스가 함께 봐요.',
     on: '고른 저장소의 이슈·PR 대화를 가져오고 있어요.', off: '켜면 내 GitHub 연결로 고른 저장소의 이슈·PR 대화를 읽어 옵니다. 연결 화면에서 고른 저장소가 기본 범위예요.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
+};
+/**
+ * 라이블리 소유 OAuth 앱 등록 칸(셀프호스팅·dev) — 앱마다 금고 kind 와 안내만 다르다(#2247 Linear · #4211 Outlook).
+ *  매니지드는 CP 가 앱을 쥐어(app_ready=true) 이 칸이 안 뜬다.
+ */
+const APP_REG: Record<string, { kind: string; label: string; help: string; done: string }> = {
+  linear: { kind: 'linear_app', label: 'Linear 라이블리 앱(OAuth 클라이언트)',
+    help: '라이블리 Linear 앱이 아직 등록되지 않았어요 — Linear ▸ Settings ▸ API ▸ OAuth Applications 에서 만든 앱의 Client ID 와 Client Secret 을 아래에 넣어 주세요(관리자 1회). 값은 금고로 바로 저장되고 다시 보이지 않습니다.',
+    done: 'Linear 앱을 등록했어요 — 이제 스위치를 켜면 Linear 화면이 열립니다' },
+  outlook: { kind: 'microsoft_oauth', label: 'Microsoft Entra 앱(OAuth 클라이언트)',
+    help: 'Outlook 연결용 Microsoft 앱이 아직 등록되지 않았어요 — Microsoft Entra 관리 센터 ▸ 앱 등록에서 «모든 조직 디렉터리 + 개인 Microsoft 계정» 앱을 만들고(리디렉션 URI: 이 워크스페이스 주소 + /oauth/callback), 애플리케이션(클라이언트) ID 와 클라이언트 암호 «값»을 아래에 넣어 주세요(관리자 1회). 값은 금고로 바로 저장되고 다시 보이지 않습니다.',
+    done: 'Microsoft 앱을 등록했어요 — 이제 [Outlook 연결]과 이 스위치가 Microsoft 화면을 엽니다' },
 };
 /** 범위 칸 — 앱마다 «무엇을 적는가»만 다르다. parse 가 입력 문자열을 서버 scope 로 바꾼다. */
 const SCOPE_FIELD: Record<string, { ph: string; keys: string[]; parse: (t: string) => Record<string, string>; missing: string; note: string }> = {
@@ -899,11 +1096,14 @@ const COLLECT_KINDS: Record<string, { always: string; opts: Array<{ id: string; 
   linear: { always: '이슈·댓글', opts: [{ id: 'include_documents', label: 'Linear 문서' }] },
 };
 /** «언제부터» 를 지원하는 앱(커넥터가 backfill_since 를 since 하한으로 쓴다). */
-const HAS_BACKFILL = new Set(['github', 'gitlab', 'linear', 'slack']);
+const HAS_BACKFILL = new Set(['github', 'gitlab', 'linear', 'slack', 'outlook']);
 /** 자료함에 들어가는 kind — src/v6/mirror/mirror-source.ts 의 sourceKindOf 와 같은 표. ClickUp 은 프로젝트 미러라 없다. */
 export const COLLECT_KIND_OF: Record<string, string> = {
   github: 'github_issue', gitlab: 'gitlab_issue', linear: 'linear_issue', figma: 'figma_comment', slack: 'slack', notion: 'notion_doc',
+  outlook: 'email',
 };
+/** kind 를 다른 앱과 나눠 쓰는 앱의 system(#4211 — email 은 Gmail·Outlook 이 같이 쓴다). 자료 수를 셀 때 좁힌다. */
+const COLLECT_SYSTEM_OF: Record<string, string> = { outlook: 'outlook' };
 const SINCE_OPTS = [{ id: '30', label: '최근 30일' }, { id: '90', label: '90일' }, { id: '365', label: '1년' }, { id: '', label: '전부' }];
 const EVERY_OPTS = [{ id: '600', label: '10분' }, { id: '1800', label: '30분' }, { id: '3600', label: '1시간' }, { id: '10800', label: '3시간' }, { id: '86400', label: '하루 한 번' }];
 
@@ -956,6 +1156,7 @@ function collectSettings(c: SettingsCtx): HTMLElement[] {
   } else {
     rows.push(setRow('무엇을', '', [el('span', { class: 'cn-set-hint', style: 'margin-top:0',
       text: c.key === 'figma' ? '고른 파일의 코멘트를 가져옵니다 — 이 앱은 종류를 나눠 고를 수 없어요.'
+        : c.key === 'outlook' ? '메일 본문과 보낸 사람·받는 사람을 가져옵니다 — 지운 편지함·정크·임시 보관함은 빼요.'
         : c.key === 'clickup' ? '작업·댓글·시간기록을 함께 가져옵니다 — 이 앱은 종류를 나눠 고를 수 없어요.'
         : '대화와 올린 파일 제목을 가져옵니다 — 이 앱은 종류를 나눠 고를 수 없어요.' })]));
   }
@@ -991,7 +1192,7 @@ function collectSettings(c: SettingsCtx): HTMLElement[] {
 
 function memberTokenCollectCard(key: string, onState: CollectState): CollectFace {
   const T = MEMBER_COLLECT_TEXT[key];
-  const panel = collectFace(onState, T.where !== '나만 봐요', COLLECT_KIND_OF[key] ?? '');
+  const panel = collectFace(onState, T.where !== '나만 봐요', COLLECT_KIND_OF[key] ?? '', COLLECT_SYSTEM_OF[key] ?? '');
   const body = panel.body;
   const post = async (bodyObj: any): Promise<any> => api(`/api/ui/org/${key}/collect`, { method: 'POST', body: JSON.stringify(bodyObj) });
   const paint = async (): Promise<void> => {
@@ -1009,7 +1210,9 @@ function memberTokenCollectCard(key: string, onState: CollectState): CollectFace
         + (s.member_connected === false ? ' 그 토큰이 지워졌습니다 — 껐다 켜면 내 토큰으로 바뀝니다.' : ''));
     } else notes.push(T.off);
     //  #2243 — 범위는 목록에서 토글로 고른다(못 만들면 텍스트 칸으로 떨어진다).
-    const scopeNode = scopeChooser(key, (s.scope ?? {}) as Record<string, string>, !!s.enabled, async (sc) => {
+    //  #4211 Outlook 은 고를 범위가 없다(내 메일함 하나) — 목록을 물을 창구도 없으니 사실만 말한다.
+    const scopeNode = key === 'outlook' ? el('span', { class: 'cn-set-hint', style: 'margin-top:0', text: '연결한 내 메일함 전체예요 — 지운 편지함·정크·임시 보관함은 빼고 가져옵니다.' })
+      : scopeChooser(key, (s.scope ?? {}) as Record<string, string>, !!s.enabled, async (sc) => {
       try {
         const r: any = await post({ enabled: true, scope: sc });
         if (r && r.ok) toast(s.enabled ? '범위를 저장했어요' : '자료 가져오기를 켰어요 — 첫 수집은 잠시 뒤 시작됩니다');
@@ -1019,7 +1222,7 @@ function memberTokenCollectCard(key: string, onState: CollectState): CollectFace
     });
     //  #2243 3차 — «무엇을·얼마나 자주·언제부터» 는 켜기와 무관하게 저장된다(꺼져 있어도 미리 정해 둘 수 있다).
     const extra: HTMLElement[] = collectSettings({
-      key, s, scopeNode: setRow('어디서', SCOPE_NOUN[key] ? `가져올 ${SCOPE_NOUN[key]}` : '', [scopeNode]),
+      key, s, scopeNode: setRow('어디서', key === 'outlook' ? '가져올 메일' : SCOPE_NOUN[key] ? `가져올 ${SCOPE_NOUN[key]}` : '', [scopeNode]),
       since: String(s.scope?.backfill_since ?? ''),
       save: async (patch) => {
         try {
@@ -1032,9 +1235,14 @@ function memberTokenCollectCard(key: string, onState: CollectState): CollectFace
     });
     const SF = SCOPE_FIELD[key];
     if (s.needs_scope && SF && SF.note) notes.push(SF.note);
-    //  #2247 Linear — 라이블리 Linear OAuth 앱이 아직 등록되지 않았으면(app_ready=false) 관리자에게 등록 칸을 먼저 낸다.
-    //   값은 이 화면에서 금고(조직 슬롯 linear_app/oauth:client)로 바로 간다 — 채팅·문서에 붙여넣을 일이 없다.
-    if (key === 'linear' && s.app_ready === false) {
+    //  #2247 Linear · #4211 Outlook — 라이블리 소유 OAuth 앱이 아직 등록되지 않았으면(app_ready=false) 관리자에게 등록 칸을 먼저 낸다.
+    //   값은 이 화면에서 금고(조직 슬롯 <kind>/oauth:client)로 바로 간다 — 채팅·문서에 붙여넣을 일이 없다.
+    //   매니지드는 CP 릴레이가 앱을 쥐어 app_ready=true 라 이 칸이 안 보인다(셀프호스팅·dev 전용).
+    const REG = APP_REG[key];
+    //  #4211 — 매니지드는 앱을 CP 가 쥔다(준비는 라이블리의 일). 준비 전이면 등록 칸 대신 그 사실만 말한다.
+    //   «켜면 … 화면이 열려요»(T.off)는 지운다 — 준비 전엔 열리지 않으니 두 문장이 서로를 부정한다(jsdom 실측).
+    if (REG && s.app_ready === false && s.managed === true) notes.splice(0, notes.length, `${key === 'outlook' ? 'Outlook' : 'Linear'} 연결은 라이블리가 준비하고 있어요 — 준비를 마치면 여기서 바로 켤 수 있습니다.`);
+    else if (REG && s.app_ready === false) {
       const idIn = el('input', { type: 'text', class: 'cn-scope-in', placeholder: 'Client ID', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
       const secIn = el('input', { type: 'password', class: 'cn-scope-in', placeholder: 'Client Secret', autocomplete: 'new-password' }) as HTMLInputElement;
       const reg = el('button', { class: 'btn btn-sm', type: 'button', text: '앱 등록', onclick: async () => {
@@ -1042,14 +1250,16 @@ function memberTokenCollectCard(key: string, onState: CollectState): CollectFace
         if (!cid || !sec) { toast('Client ID 와 Client Secret 둘 다 넣어 주세요', true); (cid ? secIn : idIn).focus(); return; }
         reg.setAttribute('disabled', 'true');
         try {
-          await api('/api/ui/org/credential', { method: 'POST', body: JSON.stringify({ kind: 'linear_app', scope_key: 'oauth:client', label: 'Linear 라이블리 앱(OAuth 클라이언트)', secret: JSON.stringify({ client_id: cid, client_secret: sec }) }) });
-          secIn.value = ''; toast('Linear 앱을 등록했어요 — 이제 스위치를 켜면 Linear 화면이 열립니다');
+          await api('/api/ui/org/credential', { method: 'POST', body: JSON.stringify({ kind: REG.kind, scope_key: 'oauth:client', label: REG.label, secret: JSON.stringify({ client_id: cid, client_secret: sec }) }) });
+          secIn.value = ''; toast(REG.done);
         } catch (e: any) { toast((e && e.message) || '등록하지 못했습니다', true); }
         await paint();
       } });
-      notes.push('라이블리 Linear 앱이 아직 등록되지 않았어요 — Linear ▸ Settings ▸ API ▸ OAuth Applications 에서 만든 앱의 Client ID 와 Client Secret 을 아래에 넣어 주세요(관리자 1회). 값은 금고로 바로 저장되고 다시 보이지 않습니다.');
+      notes.push(REG.help);
       extra.push(el('div', { class: 'cn-scope-row' }, el('span', { class: 'k', text: '앱 등록' }), idIn, secIn, reg));
     }
+    //  #4211 — Outlook 관리자 허용 링크는 ① «내 계정으로 직접 사용» 줄에 **한 번만** 둔다(연결은 하나라 안내도 하나 —
+    //   두 칸에 같은 상자를 두면 화면에 같은 말이 두 번 선다. jsdom 실측으로 잡았다).
     //  #2247 Linear — 토글이 곧 연결. 자격이 없으면 서버가 동의 URL 을 준다: 새 탭으로 열고, 돌아온 것(me_connected)이 보이면 다시 켠다.
     const consentThen = async (r: any): Promise<boolean> => {
       if (!(r && r.needs_connect && r.authorization_url)) return false;
@@ -1079,8 +1289,8 @@ function memberTokenCollectCard(key: string, onState: CollectState): CollectFace
       } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
       await paint();
     };
-    if (key === 'linear' && s.app_ready === false) chk.disabled = true;   // 앱이 없으면 켤 수 없다 — 등록 칸이 먼저
-    panel.set(chk, chk.checked ? '켜짐' : (key === 'linear' && s.app_ready === false ? '앱 등록 필요' : (s.needs_scope && SF ? '범위 필요' : '꺼짐')), notes, extra);
+    if (REG && s.app_ready === false) chk.disabled = true;   // 앱이 없으면 켤 수 없다 — 등록 칸이 먼저
+    panel.set(chk, chk.checked ? '켜짐' : (REG && s.app_ready === false ? (s.managed === true ? '준비 중' : '앱 등록 필요') : (s.needs_scope && SF ? '범위 필요' : '꺼짐')), notes, extra);
   };
   void paint();
   return { box: panel.box, row: panel.row };
@@ -1232,8 +1442,9 @@ function googleTeamCollectCard(onState: CollectState): CollectFace {
     const anyOn = !!(drive.enabled || gmail.enabled);
 
     // 서비스 선택 — 체크박스가 곧 요청 scope 다(안 고른 건 동의도 안 받는다 = 최소 권한).
-    // ★ Gmail 은 1차 런칭 대상이 아니다(2026-08-26) — 서버가 offered:false 로 알려 준다. 칸을 아예 내밀지 않되,
+    // Gmail 을 팔지 않는 게이트웨이(옛 판·판매 목록 밖)는 서버가 offered:false 로 알려 준다. 칸을 아예 내밀지 않되,
     //  **이미 켜 둔 조직에는 상태만 보여 준다**(칸이 사라지면 "왜 아직 메일이 모이지?" 를 아무도 설명 못 한다).
+    //  #4211 — 지금 판은 Gmail 도 판다(2026-09-22). 이 갈래는 옛 게이트웨이·되돌림을 위해 남긴다.
     const gmailOffered = gmail.offered !== false;
     const gmailLegacy = !gmailOffered && !!gmail.enabled;
     const dChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
@@ -1307,7 +1518,8 @@ function googleTeamCollectCard(onState: CollectState): CollectFace {
         onclick: async () => {
           const add = widenTargets();
           if (add.length === 0) {
-            const rest = [!drive.scope_ok ? 'Google Drive 문서' : '', calOffered && !cal.scope_ok ? '캘린더 일정' : '']
+            const rest = [!drive.scope_ok ? 'Google Drive 문서' : '', gmailOffered && !gmail.scope_ok ? 'Gmail 메일' : '',
+              calOffered && !cal.scope_ok ? '캘린더 일정' : '']
               .filter(Boolean).join(' · ');
             toast(rest ? `위에서 ${rest} 을 체크한 뒤 눌러 주세요 — 지금은 넓힐 게 없어요` : '이미 다 허용돼 있어요', true);
             return;

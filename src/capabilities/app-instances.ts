@@ -229,7 +229,7 @@ const createInput = {
 const appInstanceOpen: Capability = {
   name: "app_instance_open",
   title: "앱 인스턴스 열기",
-  description: "앱 실행 인스턴스를 만든다. AI 세션 앱은 본인 세션을 subject로 주면 같은 인스턴스를 멱등 확보한다.",
+  description: "앱 실행 인스턴스를 만든다. 「세션 목록」 앱은 본인 세션을 subject로 주면 같은 인스턴스를 멱등 확보한다.",
   scope: null,
   input: createInput,
   expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/app-instances"], parse: (req) => ({ ...((req.body ?? {}) as Record<string, unknown>) }) }] },

@@ -9,7 +9,7 @@
 // 이 파일이 지키는 것 넷 — 다시 «목록의 성질»만 보고 × 를 통째로 끄는 일이 없도록:
 //  ⚠ #3857(상민님 2026-09-10) — 여기 × 의 뜻이 «보관(회수)» 에서 **«치움»** 으로 바뀌었다. 회수는 정책만 하고
 //   사람이 누르는 × 는 어느 목록에서든 치움(세션은 그대로 돈다)이다. 치운 세션은 아카이브 ▸ 치운 세션에 있다.
-//  ① [AI 세션] 목록이 × 를 켠다            ② 행이 자기 뜻(치움·휴지통)을 들고 온다
+//  ① [AI 세션] 목록이 치우기를 켠다(#4158 부터 가운데 전체 목록)  ② 행이 자기 뜻(치움·휴지통)을 들고 온다
 //  ③ 남의 세션엔 안 그린다(서버가 소유자만 허용) ④ 터치 기기에서 × 에 닿을 길이 있다(display, opacity 아님)
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -23,13 +23,16 @@ const ok = (cond, name) => { assert.ok(cond, name); console.log(`ok  ${name}`); 
 const SIDE = read("web/v2/side.ts");
 const CSS = read("public/styles/40-v2.css");
 
-// ── ① [AI 세션] 구역(renderSessions)의 행 옵션 — 압정은 끄고 × 는 켠다 ──────────
-const rowOpts = /const rowOpts: RowOpts = \{([^}]*)\}/.exec(SIDE);
-ok(!!rowOpts, "① renderSessions 의 rowOpts 를 찾는다");
-ok(/close:\s*true/.test(rowOpts[1]),
-  "① ★[AI 세션] 목록이 × 를 켠다 — 끄면 몇백 줄 명부에서 한 줄도 못 접는다(#3568)");
-ok(/pin:\s*false/.test(rowOpts[1]),
-  "① 압정은 그대로 끈다 — 순서의 정본은 상태(bySeen)라 고정이 그 순서를 흔든다(#2033)");
+// ── ① [AI 세션] 목록의 치우기 — #4158 부터 세션 줄은 **가운데 전체 목록**(bins.ts renderSessAll)이 든다 ──────────
+//  사이드바(renderSessions)는 프로젝트 리스트가 됐다(회의 #3977 «중복 세션 사이드바 제거») — 세션 줄 자체가 없다
+//   (scripts/sess-all.test.mjs S1). 그래서 «몇백 줄 명부에서 한 줄도 못 접는다» 를 막는 자리도 그 목록으로 옮겨 온다.
+const BINS = read("web/v2/bins.ts");
+const all = BINS.slice(BINS.indexOf("export function renderSessAll("));
+ok(BINS.indexOf("export function renderSessAll(") > 0, "① [AI 세션] 전체 목록(renderSessAll)을 찾는다");
+ok(/hooks\.onDismiss\(s\)/.test(all),
+  "① ★[AI 세션] 목록에서 내 세션 줄을 치울 수 있다 — 끄면 몇백 줄 명부에서 한 줄도 못 접는다(#3568)");
+ok(/v && verdictStands\(v\)/.test(all),
+  "① 치우기는 홈 목록에 서 있는 내 줄에만 선다 — 남의 줄은 verdict 가 null 이라 없다(서버도 주인만 허용한다)");
 
 // ── ② 행이 × 의 뜻을 들고 온다 — 도는 세션은 치움(#3857), 지난 세션은 휴지통 ──────────
 const inst = SIDE.slice(SIDE.indexOf("function sessAsInst"), SIDE.indexOf("function renderSessions"));

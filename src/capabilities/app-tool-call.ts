@@ -13,6 +13,7 @@ import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import { requireScope, type LivelyUser } from "../context.js";
 import { requireAppTool } from "../apps/principal.js";
+import { needsRegrant } from "../apps/grant.js";
 import { getActiveGrant } from "../org/store/apps.js";
 import { getApp } from "../org/store/apps.js";
 import { logToolCall } from "../org/policies/tool-log.js";
@@ -50,6 +51,17 @@ const appToolCall: Capability = {
     // 호출자(멤버)가 이 앱에 동의(grant)했나 — 없으면 이 UI 는 도구를 못 쓴다.
     const grant = await getActiveGrant(appId, member.userId);
     if (!grant) throw new HttpError(403, `앱 '${appId}' 사용 동의(grant)가 없습니다`);
+
+    // #4225 — 동의가 **옛 범위**다: 앱이 갱신돼 새로 선언한 도구인데 예전 동의엔 없다(빌트인 「안녕 앱」 0.2 가 store_* 를 얻은 경우).
+    //  종전엔 아래 requireAppTool 의 «앱 권한 밖» 403 으로 끝나 화면이 막다른 길이었다. «동의» 로 말하면 호스트가 그 자리에서
+    //  동의 창을 띄우고(web/v2/app-ui.ts — /동의|grant/) 새 범위로 다시 동의한 뒤 한 번 재시도한다. 선언 밖 도구는 종전 그대로 막힌다.
+    const declared = (() => {
+      const p = (app.manifest as { permissions?: { tools?: unknown; ext_tools?: unknown } } | null)?.permissions;
+      return [...(Array.isArray(p?.tools) ? p.tools : []), ...(Array.isArray(p?.ext_tools) ? p.ext_tools : [])].map(String);
+    })();
+    if (needsRegrant(grant.tools, declared, name)) {
+      throw new HttpError(403, `앱 '${appId}' 의 사용 동의가 예전 범위라 '${name}' 을 쓸 수 없습니다 — 다시 동의(grant)하면 됩니다`);
+    }
 
     // 앱-principal 유저 — 스코프는 멤버 ∩ grant 로 축소, appId 를 실어 requireAppTool 이 grant 도구로 판정하게 한다.
     const appUser: LivelyUser = {

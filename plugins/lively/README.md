@@ -1,66 +1,68 @@
-# Lively 플러그인
+# Lively plugin
 
-조직의 **맥락 스토어**(지식·프로젝트·도메인맵)를 AI 세션에 잇는다. 라이블리 게이트웨이가 있어야 동작한다.
+*[한국어](README.ko.md)*
 
-## 설치
+Connects your organization's **context store** (knowledge, projects, domain map) to AI sessions. Requires a Lively gateway.
+
+## Install
 
 ```
 /plugin marketplace add livewithlively/lively
 /plugin install lively@lively
 ```
 
-활성화하면 **게이트웨이 주소** 하나를 묻는다(`https://lively.회사도메인` 또는 매니지드 워크스페이스 주소. `/mcp` 는 붙이지 않는다). 바꾸려면 `/plugin` → `lively` → 설정.
+When you enable it, it asks for one thing: the **gateway address** (`https://lively.<company-domain>` or your managed workspace address; don't append `/mcp`). To change it, go to `/plugin` → `lively` → settings.
 
-그다음 로그인한다 — 토큰을 복붙할 필요 없이 브라우저 승인으로 끝난다.
+Then log in — no token copy-pasting; browser approval is all it takes.
 
 ```bash
 node "$CLAUDE_PLUGIN_ROOT/scripts/login.mjs"
 ```
 
-토큰은 `~/.lively/token`(0600)에 저장되고, MCP 헤더와 훅이 **같은 파일**을 읽는다.
+The token is saved to `~/.lively/token` (0600), and the MCP headers and the hooks read **the same file**.
 
-> **왜 토큰을 `userConfig` 로 안 받나** — `sensitive: true` 값은 **훅 프로세스 env 로 전달되지 않는다**(2026-08-04 실기기 실측. 공식 문서의 "All values are exported to hook processes" 와 다르다). 토큰을 설정으로 받으면 MCP 는 붙지만 조직 맥락 주입·스킬 배포·거버넌스 훅·상태 보고가 전부 인증에 실패한다. 그래서 토큰의 단일 출처를 파일로 두고 MCP 는 `headersHelper` 로 그 파일을 읽는다.
+> **Why the token isn't taken via `userConfig`** — values marked `sensitive: true` **are not passed to the hook process env** (observed on a real device on 2026-08-04; this differs from the official docs' "All values are exported to hook processes"). If the token were taken as a setting, MCP would connect, but organization context injection, skill distribution, governance hooks, and status reporting would all fail to authenticate. So the token has a single source, the file, and MCP reads that file through `headersHelper`.
 
-## 무엇이 들어 있나
+## What's inside
 
-| 구성 | 하는 일 |
+| Component | What it does |
 |---|---|
-| **MCP 서버** | 게이트웨이의 지식·프로젝트·도메인맵·DB 툴을 세션에 노출 |
-| **SessionStart 훅** | 세션 시작 시 조직 맥락(카테고리·WIKI 인덱스·페르소나·내 신원)을 주입하고, 게이트웨이에 등록된 조직 스킬·서브에이전트를 내려받는다 |
-| **실행 단계 보고 훅** | 게이트웨이가 화면 스크래핑 없이 '작업 중 / 확인 필요 / 대기 중'을 알 수 있게 세션 상태를 얇게 보고 |
-| **기록 게이트 훅** | 세션이 끝날 때 남길 맥락이 있으면 기록하도록 게이트 |
-| **스킬 번들** | 온보딩·분류체계 정립·파이프라인 점검·프로젝트 마무리 등 라이블리 운영 스킬 |
+| **MCP server** | Exposes the gateway's knowledge, project, domain map, and DB tools to the session |
+| **SessionStart hooks** | At session start, injects organization context (categories, WIKI index, persona, your identity) and downloads the organization skills and subagents registered on the gateway |
+| **Phase reporting hook** | Lightly reports session state so the gateway knows "working / needs confirmation / idle" without screen scraping |
+| **Record gate hook** | When a session ends, gates it so that context worth keeping gets recorded |
+| **Skill bundle** | Lively operations skills such as onboarding, taxonomy setup, pipeline audit, and project closeout |
 
-게이트웨이에 **조직 고유 스킬**이 등록돼 있으면 첫 세션 이후 자동으로 추가된다 — 이 번들과 별개다.
+If **organization-specific skills** are registered on the gateway, they're added automatically after the first session — separately from this bundle.
 
-## ⚠ 키트와 함께 쓰지 않는다
+## ⚠ Don't use it together with the kit
 
-설치 경로가 둘이고 **둘 중 하나만** 쓴다.
+There are two install paths, and you use **only one**.
 
-- **플러그인**(이 저장소) — 마켓플레이스 설치. 훅·MCP 배선이 플러그인 안에 있다.
-- **키트** — `curl -fsSL <게이트웨이>/cli | sh`. 훅을 `~/.lively/hooks/` 에 깔고 `~/.claude/settings.json` 을 비파괴 머지한다.
+- **Plugin** (this repo) — installed from the marketplace. Hook and MCP wiring live inside the plugin.
+- **Kit** — `curl -fsSL <gateway>/cli | sh`. Installs hooks into `~/.lively/hooks/` and non-destructively merges `~/.claude/settings.json`.
 
-둘 다 깔면 같은 훅이 두 번 돈다. 키트를 이미 설치했다면 이 플러그인은 필요 없다.
+If you install both, the same hooks run twice. If you've already installed the kit, you don't need this plugin.
 
-## 유지보수 (이 저장소 기여자용)
+## Maintenance (for contributors to this repo)
 
-플러그인이 담는 것들은 **진실원천이 딴 데 있다.**
+The things the plugin contains **have their source of truth elsewhere.**
 
-- 훅 스크립트 = `kit/hooks/*.mjs`
-- **훅 배선표**(`hooks/hooks.json`) = `kit/setup/user-install.mjs` 의 `userLevelHooksBlock()` + `runnerHooksBlock()` 을 `${CLAUDE_PLUGIN_ROOT}` 경로로 옮긴 것. 정본이 바뀌면 여기도 같이 고친다(빌드 스크립트는 배선표를 손대지 않고 참조 무결성만 검사한다). `kit/hooks/settings-hooks.json` 은 구 어댑터용 축약본이라 정본이 아니다
-- 조직 스킬 = 게이트웨이 `org_harness_assets` (편집은 중앙에서 — 로컬 사본을 고치면 다음 빌드에 덮인다)
+- Hook scripts = `kit/hooks/*.mjs`
+- **Hook wiring table** (`hooks/hooks.json`) = `userLevelHooksBlock()` + `runnerHooksBlock()` from `kit/setup/user-install.mjs`, moved onto `${CLAUDE_PLUGIN_ROOT}` paths. When the canonical source changes, change this too (the build script doesn't touch the wiring table; it only checks reference integrity). `kit/hooks/settings-hooks.json` is the PROJECT-DIR template (for the published artifact's parallel "run from the bundle folder" path and `--install-hooks`), so it isn't canonical
+- Organization skills = the gateway's `org_harness_assets` (edit centrally — local copies get overwritten by the next build)
 
-`run-custom` 은 이벤트당 고정 엔트리 하나이고 커스텀 훅 자체는 런너가 런타임에 게이트웨이에서 받아온다 — 조직이 훅을 추가·삭제해도 배선표를 다시 쓸 필요가 없고, 비활성화하면 다음 세션에 즉시 무효가 된다(kill-switch).
+`run-custom` is one fixed entry per event, and the runner fetches the custom hooks themselves from the gateway at runtime — when the organization adds or removes hooks, the wiring table doesn't need rewriting, and disabling a hook takes effect immediately from the next session (kill-switch).
 
-> ⚠ **플러그인 루트에 `bin/` 디렉터리를 만들지 말 것**(2026-08-04 실측). claude.ai 마켓플레이스 싱크가 `bin/` 이 있는 플러그인을 거부한다 — 내용·파일모드 무관이고, 안에 평문 .txt 하나만 있어도 거부된다. `scripts/`·`hooks/` 는 정상이라 스크립트는 `scripts/` 에 둔다. 로컬 `claude plugin validate --strict`·공개 JSON 스키마·CLI 원격설치는 전부 통과하므로 이 함정은 웹에서만 드러난다. 상세: WIKI `claude-marketplace-sync-rejects-bin-dir`
+> ⚠ **Don't create a `bin/` directory at the plugin root** (observed 2026-08-04). The claude.ai marketplace sync rejects plugins that have `bin/` — regardless of contents or file modes; even a single plain .txt inside gets rejected. `scripts/` and `hooks/` are fine, so scripts go in `scripts/`. Local `claude plugin validate --strict`, the public JSON schema, and CLI remote install all pass, so this trap only shows up on the web. Details: WIKI `claude-marketplace-sync-rejects-bin-dir`
 >
-> 주석 키(`_comment` 등)는 무해함이 확인됐지만(공식 훅 파일도 `hooks` 옆에 `description` 을 둔다) 이 문서가 주석을 대신 담는 편이 읽기 좋다.
+> Comment keys (`_comment`, etc.) have been confirmed harmless (the official hook files also put a `description` next to `hooks`), but it reads better for this document to carry the comments instead.
 
-복제는 빌드 스크립트가 한다.
+The build script does the copying.
 
 ```
-node scripts/build-plugin.mjs            # 훅만
-node scripts/build-plugin.mjs --skills   # 스킬까지(게이트웨이 토큰 필요)
+node scripts/build-plugin.mjs            # hooks only
+node scripts/build-plugin.mjs --skills   # skills too (requires a gateway token)
 ```
 
-동봉 스킬 목록은 `bundled-skills.json` 이 정한다 — 제외 사유도 그 파일에 적혀 있다.
+The list of bundled skills is set by `bundled-skills.json` — the reasons for exclusions are written in that file too.

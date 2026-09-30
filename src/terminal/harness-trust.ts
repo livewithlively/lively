@@ -3,6 +3,7 @@
 //  ⚠ 하네스마다 **자리도 형식도 다르다**(#2478 — 그래서 «같은 규칙» 이 저절로 따라오지 않는다):
 //   · claude      — `<CLAUDE_CONFIG_DIR|홈>/.claude.json` 의 `projects[<경로>].hasTrustDialogAccepted = true` (맵)
 //   · antigravity — `<홈>/.gemini/antigravity-cli/settings.json` 의 `trustedWorkspaces[]` 에 경로 추가 (배열)
+//   · codex       — `<CODEX_HOME|홈/.codex>/config.toml` 에 `[projects."<경로>"] trust_level = "trusted"` (TOML 테이블)
 //   antigravity 는 설정 자리를 바꾸는 **환경변수가 없다**(#1689 실측) — 늘 그 홈의 `.gemini` 다.
 //   claude 는 `CLAUDE_CONFIG_DIR` 로 옮겨지므로 파일 경로는 **호출자가 계산해 넘긴다**(여기서 짐작하지 않는다).
 //
@@ -113,6 +114,41 @@ export function planAgyTrustPatch(current: string | null, dir: string): TrustPat
 }
 
 /**
+ * codex 의 신뢰 표식을 넣은 새 파일 내용을 만든다(**순수** — 파일시스템 무접촉).
+ *
+ * 형식이 앞의 둘과 또 다르다 — **TOML** 이고, 경로마다 테이블이 하나다(실측 2026-09-24, codex 0.153.4:
+ * 대화상자에서 «1. Yes, continue» 를 고른 뒤 `~/.codex/config.toml` 끝에 아래가 그대로 붙었다):
+ *
+ *   [projects."/절대/경로"]
+ *   trust_level = "trusted"
+ *
+ * 규칙:
+ *  · 그 경로의 테이블이 **이미 있으면 아무것도 하지 않는다**(`{write:false}`). 같은 테이블 머리를 한 번 더 쓰면
+ *    TOML 이 통째로 깨지고(중복 키) codex 가 «Error loading configuration» 으로 즉사한다 — 신뢰를 못 심는 것보다
+ *    나쁘다. 이미 `untrusted` 로 적혀 있어도 손대지 않는다: 그건 사람이 내린 결정이다.
+ *  · 나머지 내용은 **한 글자도 건드리지 않고** 끝에 덧붙인다. 이 파일엔 사람의 설정과 MCP 배선이 함께 산다
+ *    (실측 1200줄 넘는 파일) — 다시 써서 잃을 것이 크다. 덧붙이는 테이블은 파일 끝이라 뒤따르는 키가 없다.
+ *  · 경로에 TOML 기본 문자열로 못 적는 글자(제어문자·줄바꿈)가 있으면 **쓰지 않는다** — 짐작해 적으면 파일이 깨진다.
+ */
+export function planCodexTrustPatch(current: string | null, dir: string): TrustPatch {
+  const target = String(dir ?? "").trim();
+  if (!target) return { write: false };
+  // eslint-disable-next-line no-control-regex -- 제어문자는 TOML 기본 문자열에 그대로 못 적는다(그 경로는 포기한다)
+  if (/[\u0000-\u001f\u007f]/.test(target)) return { write: false };
+  const quoted = target.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+
+  const text = current ?? "";
+  //  이미 이 경로의 테이블이 있나 — 따옴표 종류(기본 "…" · 리터럴 '…')를 모두 본다. codex 는 기본 문자열로 쓰지만,
+  //   사람이 손으로 적었을 수 있고 그 경우에도 **덧붙이면 안 된다**(중복 테이블).
+  const hasBasic = new RegExp(`^\\s*\\[projects\\."${quoted.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\]`, "m").test(text);
+  const hasLiteral = new RegExp(`^\\s*\\[projects\\.'${target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}'\\]`, "m").test(text);
+  if (hasBasic || hasLiteral) return { write: false };
+
+  const head = text && !text.endsWith("\n") ? `${text}\n` : text;
+  return { write: true, text: `${head}${head ? "\n" : ""}[projects."${quoted}"]\ntrust_level = "trusted"\n` };
+}
+
+/**
  * 하네스별 «그 파일을 어떻게 고치는가». 자리(파일 경로)는 하네스마다 기준이 달라 **호출자가 계산한다**
  *  (claude 는 CLAUDE_CONFIG_DIR 로 옮겨지고, antigravity 는 늘 그 홈의 `.gemini` 다).
  *  여기 없는 하네스는 **아무것도 하지 않는다** — 표식 자리를 모르는 하네스에 대고 짐작해 쓰지 않는다.
@@ -120,6 +156,7 @@ export function planAgyTrustPatch(current: string | null, dir: string): TrustPat
 export const TRUST_PLANS: Readonly<Record<string, (current: string | null, dir: string) => TrustPatch>> = {
   claude: planTrustPatch,
   antigravity: planAgyTrustPatch,
+  codex: planCodexTrustPatch,   // #4135 — TOML `[projects."<경로>"] trust_level = "trusted"` (실측 2026-09-24)
 };
 
 /** 파일 접근 seam — 비격리는 직접 fs, 격리·중계(매니지드)는 멤버 uid 로 도는 구현을 넘긴다. */

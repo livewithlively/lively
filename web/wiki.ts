@@ -186,13 +186,14 @@ async function renderFilterList(box: HTMLElement, ctx: any) {
 // ════════════════════════════════════════════
 // 휴지통 #/trash — 죽은 문서는 바랜다(전 행 dim). 복원은 본체만(cascade 링크는 안 돌아옴).
 // ════════════════════════════════════════════
-const TRASH_ENTITY_LABEL = { knowledge: '지식', project: '프로젝트', category: '카테고리' };
+const TRASH_ENTITY_LABEL = { knowledge: '지식', project: '프로젝트', category: '카테고리', source: '자료' };
 
 async function renderWikiTrash(view) {
   view.replaceChildren(el('div', { class: 'wk-plainpad' }, skeleton('삭제된 항목을 불러오는 중')));
   let entries: any[] = [];
   try {
-    entries = await api('/api/ui/deleted').then((d) => (d && d.entries) || []);
+    //  상한을 서버 최대(500)로 — 기본 200 에선 삭제 243건이 있던 날 옛 것이 화면 밖으로 밀려 되살릴 길이 없었다(#3778 실측).
+    entries = await api('/api/ui/deleted?limit=500').then((d) => (d && d.entries) || []);
   } catch (e) {
     view.replaceChildren(el('div', { class: 'wk-plainpad' }, errorNote(e, '휴지통을 불러오지 못했습니다')));
     return;

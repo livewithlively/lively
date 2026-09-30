@@ -5,7 +5,7 @@ Thank you for contributing to Lively.
 By submitting a contribution (a "Contribution") to this project, you agree to the terms below.
 It is short on purpose.
 
-**1. Grant of rights.** You grant to 윤상민 (Sangmin Yoon) and 장원준 (Wonjun Jang), and to our
+**1. Grant of rights.** You grant to 윤상민 (Sangmin Yoon) and 장원준 (Wonjoon Jang), and to our
 successors and assigns (together, "we", "us"), a perpetual, worldwide, non-exclusive,
 royalty-free, irrevocable license to reproduce, modify, prepare derivative works of, publicly
 display, sublicense, and distribute your Contribution and such derivative works, under any

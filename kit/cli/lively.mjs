@@ -1303,7 +1303,7 @@ async function validateAndStore(gw, tok, { announce = true, store = true } = {})
 async function loginWithPastedToken(gw) {
   if (!interactive()) die("비대화형 환경입니다 — `lively login --token <토큰>` 또는 LIVELY_TOKEN 환경변수를 쓰세요.");
   say(`\n${bold("라이블리 로그인")}  ${dim(gw)}`);
-  say(dim("  토큰은 관리자에게 받거나, 웹 [사용 가이드 › 내 AI 세션 생성] 에서 발급합니다."));
+  say(dim("  토큰은 워크스페이스 관리자에게 받습니다. 설치 방법은 웹 [사용 가이드 › 내 컴퓨터 연결] 에 있습니다."));
   const tok = String(await askHidden("  접속 토큰을 붙여넣으세요 (화면에 안 보입니다): ") || "").trim();
   if (!tok) die("토큰이 비어 있습니다.");
   const me = await validateAndStore(gw, tok);

@@ -9,8 +9,10 @@
 //  '적용'도 '[본문 저장]'도 두지 않는다(#1719 원준 2026-08-21): 한 창 안에서 어떤 칸은 즉시 남고
 //  어떤 칸만 버튼을 요구하면 규칙이 둘로 갈린다 — 사람은 버튼을 못 보고 창을 닫고, 쓴 글이 사라진다.
 import { api, el, toast } from '../core.js';
+import { clearUnsaved, keepUnsaved } from './unsaved-store.js';   // #4084 — 창이 닫힌 뒤 실패한 본문 저장의 글을 글칸 밖에
+import { autoSaveCore } from '../lib/autosave.js';
 import { pnIcon } from './panes-parts.js';
-import { confirmProjectArchive, confirmProjectTrash } from '../session-actions.js';   // #1851 — [보관] 확인창(사이드바 우클릭과 같은 문구)
+import { confirmProjectArchive, trashProjectFlow } from '../session-actions.js';   // #1851 — [보관] 확인창(사이드바 우클릭과 같은 문구)
 
 export interface ProjSettingsOpts {
   id: number;
@@ -83,34 +85,54 @@ export function openProjSettings(opts: ProjSettingsOpts): void {
   //  저장했다는 신호는 토스트가 아니라 칸 아래 작은 글씨다 — 타자를 칠 때마다 토스트가 뜨면 그게 방해가 된다.
   const descChip = el('span', { class: 'pn-set-chip' });
   const setChip = (t: string, warn?: boolean): void => { descChip.textContent = t; descChip.classList.toggle('warn', !!warn); };
-  let descTimer: number | null = null, descSaving = false, descSaved = desc.value;
-  const saveDesc = async (): Promise<void> => {
-    if (descSaving) return;
-    const md = desc.value;
-    if (md === descSaved) { setChip(''); return; }
-    descSaving = true; setChip('저장 중…');
-    try {
-      await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ description: md || null }) });
-      descSaved = md; p.description = md;
-      setChip('저장했어요.');
-      window.setTimeout(() => { if (descChip.textContent === '저장했어요.') setChip(''); }, 1600);
-      opts.onChanged?.();
-    } catch (e: any) {
-      setChip('저장하지 못했어요.', true);
-      toast('본문을 저장하지 못했어요 — ' + (e?.message || e), true);
-    }
-    descSaving = false;
-    if (desc.value !== descSaved) queueDesc();   // 저장하는 동안 더 친 글이 있으면 곧바로 다음 저장을 건다
-  };
-  const queueDesc = (): void => {
-    setChip('쓰는 중…');
-    if (descTimer !== null) window.clearTimeout(descTimer);
-    descTimer = window.setTimeout(() => { descTimer = null; void saveDesc(); }, 1200);
-  };
-  const flushDesc = (): Promise<void> => {
-    if (descTimer !== null) { window.clearTimeout(descTimer); descTimer = null; }
-    return desc.value === descSaved ? Promise.resolve() : saveDesc();
-  };
+  // 상태기계는 공용(lib/autosave — 값으로 시험한다)을 쓴다. 종전엔 같은 것을 여기 손으로 한 벌 더 짜 두었고, 곁칸에서 고친
+  //  결함(도는 저장을 안 기다리는 flush · 실패한 글을 낡은 사본으로 남김)이 이쪽에 그대로 남았다(격리 리뷰 2026-09-20~21).
+  // #4084 가드 저장 — 고치기 시작한 글(descBase)을 같이 보낸다. 그 사이 세션이 본문 끝에 덧붙인 기록은 서버가 살려 합쳐
+  //  돌려준다(통째 교체로 지우지 않는다). 꼬리가 아닌 곳이 바뀌었으면 409 — 덮지 않고 알린다.
+  let descBase = desc.value, descErr: any = null;
+  let descStashed = false;                                   // 이 창이 보관소에 남긴 글이 있나(성공한 저장은 그것만 지운다)
+  const descCore = autoSaveCore({
+    read: () => desc.value,
+    save: async (md) => {
+      const r = await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ description: md || null, description_base: descBase }) });
+      const kept = String(r?.project?.description ?? md);
+      descBase = kept; p.description = kept;
+      return kept;
+    },
+    adopt: (kept, sent) => {
+      if (desc.value !== sent) return;                       // 저장하는 동안 더 친 글이 있다 — 다음 저장이 새 기준 위에 얹는다
+      const s0 = desc.selectionStart, e0 = desc.selectionEnd;
+      desc.value = kept;
+      try { desc.setSelectionRange(s0, e0); } catch (_) { /* 포커스 없음 */ }
+    },
+    status: (st) => {
+      if (st === 'typing') setChip('쓰는 중…');
+      else if (st === 'saving') setChip('저장 중…');
+      else if (st === 'idle') setChip('');
+      else if (st === 'saved') { setChip('저장했어요.'); window.setTimeout(() => { if (descChip.textContent === '저장했어요.') setChip(''); }, 1600); }
+      else { setChip('저장하지 못했어요.', true); toast('본문을 저장하지 못했어요 — ' + (descErr?.message || descErr), true); }
+    },
+    onSaved: () => { if (descStashed) { clearUnsaved(id, 'body'); descStashed = false; } opts.onChanged?.(); },
+    onFail: (e, live) => {
+      descErr = e;
+      if (!desc.isConnected) {
+        // 창은 이미 닫혔다(닫기는 저장을 기다리지 않는다) — 안내할 칸이 없다. **지금 글칸의 글**(live — 보낸 글이 아니다)을
+        //  글칸 밖에 남기고 토스트로 알린다: 곁칸 태스크의 [본문]을 열면 그 글을 꺼낼 수 있다.
+        descStashed = keepUnsaved(id, 'body', live);
+        toast(descStashed ? '본문을 저장하지 못했어요. 우측 사이드바 태스크의 [본문]을 열면 쓰던 글을 꺼낼 수 있어요.' : '본문을 저장하지 못했어요: ' + ((e as any)?.message || e), true);
+        return (e as any)?.status === 409 ? 'pause' : 'handled';
+      }
+      if ((e as any)?.status !== 409) return;                // 일반 실패 — 상태 'failed' 가 칩·토스트로 알린다
+      // 다른 곳에서 본문이 바뀌었다 — 같은 저장을 1.2초마다 되풀이하지 않게 멈추고, 사람이 창을 다시 열어 최신에서 잇게 한다.
+      setChip('다른 곳에서 본문이 바뀌었어요 — 쓰던 글을 복사해 두고 이 창을 다시 열어 주세요.', true);
+      return 'pause';
+    },
+    delayMs: 1200,
+    setTimer: (fn, ms) => window.setTimeout(fn, ms),
+    clearTimer: (h) => window.clearTimeout(h as number),
+  }, desc.value);
+  const queueDesc = (): void => descCore.input();
+  const flushDesc = (): Promise<void> => descCore.flush();
   desc.addEventListener('input', queueDesc);
   desc.addEventListener('blur', () => { void flushDesc(); });
 
@@ -163,39 +185,37 @@ export function openProjSettings(opts: ProjSettingsOpts): void {
   //  도는 세션 수는 셸이 들고 있는 목록이 아니라 상세 응답엔 없으므로 여기선 묻지 않고(0), 사이드바 경로가 그 숫자를 안다.
   //  보내고 나면 창을 닫고 아카이브 화면으로 — 사라진 것이 어디로 갔는지 바로 보여 준다.
   const archived = !!p.archived_at;
-  const archBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: archived ? '보관 해제' : '아카이브로 보내기',
-    title: archived ? '원래 자리(사이드바·보드)로 되돌립니다' : '사이드바·보드에서 빼고 [아카이브]에 둡니다' }) as HTMLButtonElement;
+  const archBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: archived ? '보관 해제' : '보관하기',
+    title: archived ? '원래 자리(사이드바·보드)로 되돌립니다' : '사이드바·보드에서 빼고 [지난 세션] ▸ 「보관한 프로젝트」에 둡니다' }) as HTMLButtonElement;
   archBtn.onclick = () => {
     void (async () => {
       if (!archived && !await confirmProjectArchive({ name: String(p.name || ''), liveN: 0 })) return;
       archBtn.disabled = true;
       try {
         await api('/api/ui/v6/projects/' + id + '/archive', { method: 'POST', body: JSON.stringify({ archived: !archived }) });
-        toast(archived ? '보관을 해제했어요 — 원래 자리로 돌아왔어요.' : '아카이브로 보냈어요.');
+        toast(archived ? '보관을 해제했어요 — 원래 자리로 돌아왔어요.' : '보관했어요 — [지난 세션] ▸ 「보관한 프로젝트」에 있어요.');
         p.archived_at = archived ? null : new Date().toISOString();
         opts.onChanged?.();
         close();
         if (!archived) location.hash = '#/archive';
-      } catch (e: any) { archBtn.disabled = false; toast((archived ? '보관을 해제하지' : '아카이브로 보내지') + ' 못했어요 — ' + (e?.message || e), true); }
+      } catch (e: any) { archBtn.disabled = false; toast((archived ? '보관을 해제하지' : '보관하지') + ' 못했어요 — ' + (e?.message || e), true); }
     })();
   };
 
   // ── 삭제 = 휴지통으로(#1851, 원준 2026-08-24) — 창 맨 아래 '위험 구역'(설정 창의 관례). 프로젝트와 그 아래 내 세션이 한 묶음으로
-  //  휴지통에 간다(도는 세션은 멈춤). 세션 수는 셸 목록을 여기서 못 보니 확인창은 개수 대신 '함께 간다'만 말한다 — 사이드바 우클릭 경로가 개수를 안다.
+  //  휴지통에 간다(도는 세션은 멈춤). 함께 갈 세션 수·멈출 세션 수는 서버가 세어 준다(#3778 trash-preview) — 어느 입구든 같은 확인창.
   const trashBtn = el('button', { class: 'btn btn-danger btn-sm', type: 'button', text: '휴지통으로 보내기',
     title: '프로젝트와 그 안의 내 세션을 함께 휴지통으로 보냅니다 — 휴지통에서 복원할 수 있어요' }) as HTMLButtonElement;
   trashBtn.onclick = () => {
     void (async () => {
-      if (!await confirmProjectTrash({ name: String(p.name || ''), sessN: Number(p.session_count ?? p.my_session_count ?? 0) || 0, liveN: 0, othersLive: 0 })) return;
+      //  #3778 — 확인창의 숫자는 서버가 센다(trashProjectFlow → GET …/trash-preview). 종전엔 liveN:0·othersLive:0 을 박아 넣어
+      //   «돌고 있는 n개는 그 자리에서 멈춥니다» 도, «남의 세션이 돌고 있어 지금은 안 된다» 도 이 자리에선 절대 안 떴다.
       trashBtn.disabled = true;
-      try {
-        const res: any = await api('/api/ui/v6/projects/' + id + '/trash', { method: 'POST', body: JSON.stringify({ trashed: true }) });
-        const sk = Array.isArray(res?.sessions?.skipped) ? res.sessions.skipped : [];
-        toast('휴지통으로 보냈어요 — 휴지통에서 [복원]하면 세션까지 함께 돌아와요' + (sk.length ? ` (세션 ${sk.length}개는 건너뜀 — ${sk[0].why})` : ''));
-        opts.onChanged?.();
-        close();
-        location.hash = '#/trash';
-      } catch (e: any) { trashBtn.disabled = false; toast('휴지통으로 보내지 못했어요 — ' + (e?.message || e), true); }
+      const sent = await trashProjectFlow({ id: Number(id), name: String(p.name || '') });
+      if (!sent) { trashBtn.disabled = false; return; }
+      opts.onChanged?.();
+      close();
+      location.hash = '#/trash';
     })();
   };
 
@@ -208,7 +228,7 @@ export function openProjSettings(opts: ProjSettingsOpts): void {
       sec('상태', '프로젝트가 지금 어느 단계인지 알려 줍니다.', stateRow),
       sec('본문', '무엇을 하는 프로젝트인지 적어 둡니다. 쓰면 저절로 저장되고, 세션과 리브가 이 글을 읽고 일합니다.', desc, el('div', { class: 'pn-set-foot' }, descChip)),
       sec('할 일', '큰 덩어리만 적어 두면 충분합니다. 자세한 것은 세션이 만들어 줍니다.', taskIn, taskList),
-      sec('보관', archived ? '지금 아카이브에 있어요. 해제하면 사이드바·보드에 다시 보입니다.' : '끝났거나 한동안 안 볼 프로젝트는 통째로 치워 둘 수 있어요. 태스크·세션·지식 연결은 그대로 남습니다.', el('div', { class: 'pn-set-foot' }, archBtn)),
+      sec('보관', archived ? '지금 보관 중이에요 — [지난 세션] 화면의 「보관한 프로젝트」에 있어요. 해제하면 사이드바·보드에 다시 보입니다.' : '끝났거나 한동안 안 볼 프로젝트는 통째로 치워 둘 수 있어요. 태스크·세션·지식 연결은 그대로 남습니다.', el('div', { class: 'pn-set-foot' }, archBtn)),
       sec('삭제', '프로젝트를 폴더째 휴지통으로 보냅니다 — 그 안의 내 세션도 함께 가고, 도는 세션은 멈춥니다. 휴지통에서 복원하면 함께 돌아와요.', el('div', { class: 'pn-set-foot' }, trashBtn))),
     el('footer', { class: 'pn-modal-f' },
       // ⚠ `#/projects/<id>` 가 아니다 — v1 프로젝트 탭 폐기(2026-06-23) 이후 그 경로는 **id 를 버리고** 보드로

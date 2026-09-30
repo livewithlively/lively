@@ -5,11 +5,15 @@
 //  v2 → terminal 방향의 런타임 의존을 만들지 않으려고(check-imports 순환 게이트). 키 규약만 공유한다.
 //
 //  ── 새 세션 기본값(#3778 안 C, 원준 2026-09-09) ──
-//  홈·프로젝트 컴포저의 [⚙]는 **기본값 편집**이다 — 실행 컴퓨터·라이블리 모드·실행 승인·기록 범위. 세션마다 다르게
-//  열 길은 두지 않는다(그건 클래식 폼의 몫). 종전엔 이 넷 중 자동 승인만 클래식 폼의 마지막 값이 **말없이** 따라왔고
-//  (quick-session.ts), 모드는 늘 일반이었다. 이제 넷 다 여기 한 곳에서 읽고 [⚙]가 그 값을 보여 준다.
-//  ⚠ 실행 컴퓨터의 기본은 여전히 **규칙**(#2172 — 켜진 내 컴퓨터 > 켜진 공유 컴퓨터 > 중앙)이다. 사람이 기본값 창에서
-//   «항상 중앙» 이나 특정 노드를 고른 경우만 그 값을 쓰고, 고른 노드가 꺼져 있으면 규칙으로 돌아간다.
+//  홈·프로젝트 컴포저의 [⚙]는 **기본값 편집**이다 — 라이블리 모드·실행 승인·기록 범위. 세션마다 다르게
+//  열 길은 두지 않는다(그건 클래식 폼의 몫). 종전엔 이 셋 중 자동 승인만 클래식 폼의 마지막 값이 **말없이** 따라왔고
+//  (quick-session.ts), 모드는 늘 일반이었다. 이제 셋 다 여기 한 곳에서 읽고 [⚙]가 그 값을 보여 준다.
+//
+//  ── 실행 컴퓨터는 줄로 돌아왔다(#3778, 원준 2026-09-19) ──
+//  첫 판은 실행 컴퓨터도 [⚙] 안에 넣었다(«자주 안 바꾼다» 는 가정). 실제로는 자주 바꾸는 값이라 매번 창을 여는 게
+//  짐이 됐다 — 그래서 줄 맨 앞 칸으로 다시 뺐다(run-picker.ts). 값의 집(nodeDefault)과 뜻은 그대로다:
+//  ''=자동(규칙) · 'central'=중앙 · 그 밖=노드 id. 기본은 여전히 **규칙**(#2172 — 켜진 내 컴퓨터 > 켜진 공유 컴퓨터 > 중앙)이고,
+//  사람이 칸에서 중앙이나 특정 노드를 고른 경우만 그 값을 쓰며, 고른 노드가 꺼지면 규칙으로 돌아간다.
 import { state } from '../core.js';
 
 // 실행 노드(#869·#1744) — 서버 /terminal/config 의 cfg.nodes 그대로. harnesses = 그 PC 가 띄울 수 있는 하네스 키(미보고면 기준선).
@@ -60,7 +64,7 @@ export function defaultNodeId(nodes: RunNode[]): string {
   return best ? best.id : '';
 }
 
-/** 기본값 창의 «실행 컴퓨터» 값 — '' = 규칙대로 · 'central' = 항상 중앙 · 그 밖 = 노드 id. */
+/** «실행 컴퓨터» 설정값(nodeDefault) — '' = 자동(규칙) · 'central' = 항상 중앙 · 그 밖 = 노드 id. */
 export const NODE_CENTRAL = 'central';
 /** 왜 고른 컴퓨터가 아닌 데서 열리는가 — 화면이 그 사실을 **말할 수 있게** 사유를 함께 낸다(#3833). */
 export interface NodeFallback { id: string; name: string; why: 'offline' | 'gone' | 'no-ai' }
@@ -85,11 +89,48 @@ export function resolveNodeDefault(nodes: RunNode[], pref: string): string {
   return resolveNodeChoice(nodes, pref).id;
 }
 
+/** 이 노드로 지금 열 수 있나 — 켜져 있고 AI 를 띄울 수 있다. 칸의 선택지가 잠기는 기준(resolveNodeChoice 와 같은 조건). */
+export const nodeUsable = (n: RunNode): boolean => !!n.online && nodeCanRunAi(n);
+const nodeName = (nodes: RunNode[], id: string): string => '🖥 ' + ((nodes.find((n) => n.id === id) || {}).name || id);
+
+/**
+ * 줄의 «실행 컴퓨터» 칸 선택지(#3778, 2026-09-19). 첫 줄 «자동» 은 **지금 어디로 풀리는지**를 이름으로 함께 적는다 —
+ *  닫힌 칸에 「자동」 만 보이면 결국 어디서 열리는지 알려고 다시 무언가를 열어야 한다(이 칸을 줄로 뺀 이유가 그것이다).
+ *  지금 못 여는 노드(꺼짐 · AI 를 못 찾음)는 **잠근다**: 줄은 «지금 값» 이라 고른 것과 열리는 곳이 달라지면 안 된다.
+ *  ⚠ «AI 를 못 찾음» 은 단정이 아니다(#2172 — PATH 를 못 물려받은 노드 에이전트는 깔린 AI 도 못 찾는다).
+ */
+export interface NodeOpt { v: string; t: string; off: boolean }
+export function nodeOptions(nodes: RunNode[]): NodeOpt[] {
+  const auto = defaultNodeId(nodes);
+  return [
+    { v: '', t: '자동 · ' + (auto ? nodeName(nodes, auto) : '중앙 컴퓨터'), off: false },
+    { v: NODE_CENTRAL, t: '중앙 컴퓨터', off: false },
+    ...nodes.map((n) => ({
+      v: n.id,
+      t: nodeName(nodes, n.id) + (n.shared ? ' (공유)' : '') + (!n.online ? ' — 지금 꺼짐' : !nodeCanRunAi(n) ? ' — AI 를 못 찾음' : ''),
+      off: !nodeUsable(n),
+    })),
+  ];
+}
+/** 지금 이 설정이면 어디서 열리나 — 한 문장. 칸의 title 이 이걸 싣는다(종전 [⚙] 창의 «지금 이 설정이면» 줄). */
+export function nodeWhere(nodes: RunNode[], pref: string): string {
+  const ch = resolveNodeChoice(nodes, pref);
+  const at = ch.id ? nodeName(nodes, ch.id) + ' 에서' : '중앙 컴퓨터에서';
+  if (ch.fellBack) {
+    const why = ch.fellBack.why === 'offline' ? '지금 꺼져 있어' : ch.fellBack.why === 'gone' ? '지금 목록에 없어' : '띄울 수 있는 AI 를 못 찾아';
+    return `🖥 ${ch.fellBack.name} 이(가) ${why} 자동으로 ${at} 열려요.`;
+  }
+  if (pref) return `${at} 열려요.`;
+  if (!ch.id) return `${at} 열려요(켜져 있는 내 컴퓨터가 없어요).`;
+  const n = nodes.find((x) => x.id === ch.id);
+  return `${at} 열려요(켜져 있는 ${n && nodeIsMine(n) ? '내' : '공유'} 컴퓨터).`;
+}
+
 const PREFS_KEY = 'lively_term_create_prefs';
 const prefsKey = (): string => PREFS_KEY + '::' + ((state.me && (state.me.userId || state.me.email)) || 'anon');
 export interface RunPrefs {
   harness?: string; flags?: Record<string, string>; autoApprove?: boolean; node?: string;
-  // #3778 새 세션 기본값 — 컴포저 [⚙]가 편집한다. 클래식 폼은 이 셋을 안 읽는다(자기 스냅샷을 쓴다).
+  // #3778 새 세션 기본값 — nodeDefault 는 줄의 실행 컴퓨터 칸, 나머지 둘은 컴포저 [⚙]가 편집한다. 클래식 폼은 이 셋을 안 읽는다(자기 스냅샷을 쓴다).
   nodeDefault?: string; mode?: string; writeVis?: string;
   [k: string]: unknown;
 }
@@ -132,6 +173,7 @@ export function sessionDefaults(): SessionDefaults {
   const writeVis = WRITE_VIS_OPTS.some((o) => o.v === p.writeVis) ? String(p.writeVis) : '';
   return { nodeDefault: typeof p.nodeDefault === 'string' ? p.nodeDefault : '', mode, autoApprove: p.autoApprove === true, writeVis };
 }
-export function saveSessionDefaults(d: SessionDefaults): void {
-  saveRunPrefs({ nodeDefault: d.nodeDefault, mode: d.mode, autoApprove: d.autoApprove, writeVis: d.mode === 'normal' ? d.writeVis : '' });
+/** [⚙] 창이 저장하는 셋 — 실행 컴퓨터(nodeDefault)는 줄의 칸이 따로 저장하므로 여기서 건드리지 않는다. */
+export function saveSessionDefaults(d: Omit<SessionDefaults, 'nodeDefault'>): void {
+  saveRunPrefs({ mode: d.mode, autoApprove: d.autoApprove, writeVis: d.mode === 'normal' ? d.writeVis : '' });
 }

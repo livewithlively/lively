@@ -7,6 +7,35 @@ import { overlayBox } from '../learn.js';
 import { pjvPopover } from './popover.js';
 import { pjvReloadKeepScroll } from './state.js';
 import { pjvPatchTask } from './task-controls.js';
+import { spawnSession } from '../v2/quick-session.js';   // #4084 — 세션 생성은 한 곳(생성 캐시·첫 지시 규약이 거기 묶여 있다)
+
+// #4084 세션 = 태스크 — 세션 화면으로 간다. 보드는 새 셸 안의 액자로 떠 있으므로 주소는 **바깥 셸**이 연다
+//  (context-map.ts 와 같은 'lively:open-route' 규약). 액자가 아니면(구 셸 단독) 제 주소를 바꾼다.
+function pjvOpenSessionRoute(sid: string): void {
+  const href = '#/s/' + encodeURIComponent(sid);
+  if (window.parent && window.parent !== window) {
+    try { window.parent.postMessage({ type: 'lively:open-route', href }, location.origin); return; } catch (_) { /* 아래로 */ }
+  }
+  location.hash = href;
+}
+
+// #4084 — 이 태스크를 **맡은 새 세션**을 연다. 첫 지시는 서버가 «태스크 #<id> 진행해» + 본문으로 채우고, 세션 이름은
+//  태스크 이름이 된다. 잇는 순간 태스크는 «진행 중», 세션이 일을 끝내면 «완료»로 바꾼다(v6/session-task.ts).
+async function pjvOpenTaskSession(projectId, t, reload) {
+  const made = await spawnSession('', { projectId: Number(projectId), taskId: Number(t.id) });
+  if (!made) return;                                 // 이유는 spawnSession 이 toast 로 이미 말했다
+  toast('이 태스크를 맡은 세션을 열었어요.');
+  pjvReloadKeepScroll(reload);
+  pjvOpenSessionRoute(made.id);
+}
+
+// #4165 태스크 → 작업 공간(세션) 한 걸음 — 맡은 세션이 있으면 그리로(최근 것 먼저 — 서버 sessionsOfTasks 순서), 없으면 이
+//  태스크로 새 세션을 연다. ⋯ 메뉴의 «맡은 세션으로 가기»/«세션 열기» 와 같은 길을 표의 호버 단추·허브 목록·태스크 모달이 함께 쓴다.
+function pjvGoTaskWorkspace(projectId, t, reload) {
+  const sess = Array.isArray(t && t.sessions) ? t.sessions : [];
+  if (sess.length) { pjvOpenSessionRoute(String(sess[0].id)); return; }
+  void pjvOpenTaskSession(projectId, t, reload);
+}
 
 // 더블클릭 → 하위 태스크 인라인 생성(클릭업식). 같은 행에 입력칸 1개만, Enter=생성, Esc/빈 blur=취소.
 function pjvShowInlineSubtask(projectId, parentTask, subBox, reload) {
@@ -40,6 +69,12 @@ function pjvRowMore(projectId, t, depth, reload, onAddSub) {
       b.onclick = () => { close(); onPick(); };
       return b;
     };
+    // #4084 세션 = 태스크 — 맡은 세션이 있으면 그리로 가는 길과 새 세션으로 이어 하는 길, 없으면 세션 열기.
+    const sess = Array.isArray(t.sessions) ? t.sessions : [];
+    if (depth === 0 && t.level !== 'subtask') {
+      if (sess.length) menu.append(mkItem('맡은 세션으로 가기' + (sess[0].label ? ` («${sess[0].label}»)` : ''), () => pjvOpenSessionRoute(String(sess[0].id))));
+      menu.append(mkItem(sess.length ? '새 세션으로 이어 하기' : '세션 열기', () => void pjvOpenTaskSession(projectId, t, reload)));
+    }
     if (depth === 0 && onAddSub) menu.append(mkItem('하위 태스크 추가', onAddSub));
     menu.append(mkItem('이름 변경', () => pjvRenameTask(btn, t, reload)));
     menu.append(mkItem('삭제', () => pjvDeleteTask(t, reload), true));
@@ -62,12 +97,15 @@ function pjvRenameTask(anchor, t, reload) {
 function pjvDeleteTask(t, reload) {
   const nm = t.name || t.title || '이 태스크';
   const nSub = (t.subtasks || []).length;
-  const msg = "'" + nm + "' 태스크를 삭제할까요?" + (nSub ? '\n\n하위 ' + nSub + '개도 함께 삭제됩니다.' : '') + '\n\n#/trash 에서 복원할 수 있습니다.';
+  //  #3778 — «복원할 수 있습니다» 만으로는 거짓에 가깝다: 돌아오는 것은 **이름과 본문뿐**이다(체크리스트·댓글·시간 기록·태그·연결은
+  //   지울 때 함께 사라지고 스냅샷이 없다). 무엇이 돌아오고 무엇이 안 돌아오는지를 그대로 말한다(#1582 — 잃는 것을 말한다).
+  const msg = "'" + nm + "' 태스크를 삭제할까요?" + (nSub ? '\n\n하위 ' + nSub + '개도 함께 삭제됩니다.' : '')
+    + '\n\n[휴지통] ▸ [프로젝트] 탭에서 이름과 본문은 되살릴 수 있어요.\n체크리스트·댓글·시간 기록·태그·연결은 함께 지워지고 돌아오지 않습니다.';
   if (!confirm(msg)) return;
   (async () => {
     try {
       await api('/api/ui/v6/tasks/' + t.id + '/delete', { method: 'POST', body: JSON.stringify({}) });
-      toast('삭제했습니다 — #/trash 에서 복원 가능');
+      toast('삭제했습니다 — 휴지통에서 이름·본문을 되살릴 수 있어요');
       pjvReloadKeepScroll(reload);  // 태스크 삭제 후 위로 튀지 않게 스크롤 보존(#459)
     } catch (e) { toast('삭제 실패 — ' + e.message, true); }
   })();
@@ -101,4 +139,4 @@ function pjvAddTask(projectId, parentTaskId, reload) {
   nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
 }
 
-export { pjvAddTask, pjvRenameTask, pjvRowMore, pjvShowInlineSubtask };
+export { pjvAddTask, pjvGoTaskWorkspace, pjvRenameTask, pjvRowMore, pjvShowInlineSubtask };

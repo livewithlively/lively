@@ -6,6 +6,7 @@
 import { api, busy, cardHead, el, errorNote, memberCombo, secretInput, secretRow, toast, uiText } from './core.js';
 import { copyButton, field, overlay, skeleton } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
+import { ctxPath } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
 // git 자격 관리 오버레이(#540) — 레포 클론·세션 git 용 SSH/HTTPS 자격. scope='me'(본인 자가등록) | 'gateway'(조직 머신계정·admin).
 //  SSH 는 박스가 키페어를 만들고 **공개키만** 보여준다(사용자가 GitHub 에 등록 — 개인키는 박스 밖으로 안 나감). HTTPS 는 토큰 저장.
@@ -141,7 +142,7 @@ const CRED_KINDS: Array<{ kind: string; label: string; secretLabel: string; secr
   // #4012 T2 — codex 는 무인 토큰이 따로 없어 ChatGPT 로그인 파일(auth.json) 통째가 자격이다. 중앙 맥락 잡(증류·분류·관리)이
   //  이 파일로 내 ChatGPT 계정으로 돈다. 판 안에서 토큰이 갱신되면 저장본이 새것으로 바뀐다(같은 계정일 때만).
   { kind: 'codex_auth_json', label: 'Codex 헤드리스 로그인(auth.json)', secretLabel: 'auth.json 내용', secretPh: '{"tokens":{…},"last_refresh":"…"}', memberOnly: true,
-    help: '중앙에서 도는 맥락 잡(증류·분류·관리)이 이 파일로 내 ChatGPT 계정으로 codex 를 실행합니다(구독 과금). 판 안에서 토큰이 갱신되면 여기 저장된 값도 새것으로 바뀝니다.',
+    help: '중앙에서 도는 맥락 잡(증류·점검)이 이 파일로 내 ChatGPT 계정으로 codex 를 실행합니다(구독 과금). 판 안에서 토큰이 갱신되면 여기 저장된 값도 새것으로 바뀝니다.',
     steps: [
       '내 PC 터미널에서 **중앙용으로 따로** 로그인합니다: `mkdir -p ~/.codex-central && CODEX_HOME=~/.codex-central codex login` (Windows PowerShell: `mkdir $HOME\\.codex-central; $env:CODEX_HOME="$HOME\\.codex-central"; codex login`) — 평소 쓰는 로그인과 나눠야 한쪽의 토큰 갱신이 다른 쪽을 끊지 않습니다',
       '`cat ~/.codex-central/auth.json` 으로 나온 내용을 **통째로** 복사합니다(PowerShell: `Get-Content $HOME\\.codex-central\\auth.json`)',
@@ -153,7 +154,7 @@ const AWS_REGIONS = ['ap-northeast-2', 'ap-northeast-1', 'us-east-1', 'us-west-2
 // 커넥터 현황(#746 imp#4·#5) — 기본 카탈로그 각 커넥터의 등록/설정 상태 개관(관리자 온보딩 지도).
 function catalogStatusCard(catalog: any[], servers: any[]) {
   const byName = new Map((servers || []).map((s: any) => [s.name, s]));
-  const rows: any[] = [cardHead('기본 제공 도구 서버 상태', '기본 제공되는 외부 도구 서버(MCP) 프리셋의 현재 상태입니다 — [맥락 관리 ▸ 가져오는 곳](자료 가져오기)과는 별개 항목입니다. 추가·발행은 [AI 도구 ▸ 외부 도구 서버]에서 하고, 구성원은 각자 [연결]에서 자기 계정을 연결합니다.')];
+  const rows: any[] = [cardHead('기본 제공 도구 서버 상태', '기본 제공되는 외부 도구 서버(MCP) 프리셋의 현재 상태입니다. ' + ctxPath('sources') + '(자료 가져오기)과는 별개 항목입니다. 추가·발행은 [AI 도구 ▸ 외부 도구 서버]에서 하고, 구성원은 각자 [연결]에서 자기 계정을 연결합니다.')];
   for (const c of (catalog || [])) {
     const s = byName.get(c.name);
     let chip: any; let hint = '';

@@ -91,7 +91,8 @@ function pjvSaveTask(taskId, patch) {
 }
 
 // 담당자 셀(다중) — 페이스파일 아바타(최대 3 + N) / 빈 아이콘. 메뉴=팀원 토글(체크 유지, 닫지 않음) + 담당 없음.
-function pjvAssigneeControl(t, members, apply) {
+//  opts.names(#4135 허브 3칸 폭) — 담당자가 한 사람이면 얼굴 옆에 이름까지. 좁은 자리(프로젝트 탭·허브 1~2칸)는 얼굴만(5판 시안).
+function pjvAssigneeControl(t, members, apply, opts?: { names?: boolean }) {
   const nameOf = (id) => { const m = members.find((x) => x.member_id === id); return m ? (m.display_name || m.member_id) : id; };
   const btn = el('button', { class: 'pjv-cell-btn', type: 'button', title: '담당자' });
   function render() {
@@ -102,6 +103,7 @@ function pjvAssigneeControl(t, members, apply) {
       for (const id of ids.slice(0, 3)) faces.append(personFace(id, 'pjv-ava', nameOf(id)));
       if (ids.length > 3) faces.append(el('span', { class: 'pjv-ava pjv-ava-more', text: '+' + (ids.length - 3) }));
       btn.replaceChildren(faces);
+      if (opts && opts.names && ids.length === 1) btn.append(el('span', { class: 'pjv-asg-name', text: nameOf(ids[0]) }));
     } else {
       btn.replaceChildren(pjvIcon('assignee'));
     }

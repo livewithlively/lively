@@ -6,7 +6,7 @@ import { itemsPool } from "../db/client.js";
 import { q, one } from "../db/client.js";
 import { toVectorLiteral } from "./embedding-provider.js";
 import {
-  type GrepPlan, parseGrep, grepWhere, grepExec, grepSnippet, previewBody,
+  type GrepPlan, parseGrep, grepWhere, grepExec, grepSnippet, previewBody, exactFirst,
   RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
 } from "./search-util.js";
 import { type Viewer } from "./visibility.js";
@@ -71,9 +71,10 @@ export async function searchKnowledge(
     const where = grepWhereSql(p, opts, params);
     // 렉시컬 채널은 정확 스캔이라 술어를 WHERE 에 그대로 건다(벡터 채널과 달리 리콜 붕괴가 없다 — rrfSearch 주석 참조).
     const vis = await knowledgeVisWhere(viewer, params);
+    const first = exactFirst("k.name", qstr, "name", params);   // key 의 주인이 LIMIT 에 잘리지 않게(exactFirst 주석)
     params.push(Math.min(opts.limit ?? 20, 100));
     return q(itemsPool,
-      `SELECT ${sel} FROM knowledge k WHERE ${where} AND ${vis} ORDER BY k.updated_at DESC LIMIT $${params.length}`, params);
+      `SELECT ${sel} FROM knowledge k WHERE ${where} AND ${vis} ORDER BY ${first}k.updated_at DESC LIMIT $${params.length}`, params);
   });
   return rows.map((r) => {
     const base: KnowledgeSearchRow = { name: r.name, title: r.title, injection: r.injection,
@@ -134,10 +135,11 @@ async function rrfSearch(
   params.push(RRF_K); const kP = `$${params.length}`;
   const vis = await knowledgeVisWhere(viewer, params);   // 최종 SELECT 전용(위 후보 CTE 주석 참조)
   params.push(limit); const limP = `$${params.length}`;
+  const first = exactFirst("k.name", qstr, "name", params);
   const sql = `
     WITH lex AS (
-      SELECT k.name, row_number() OVER (ORDER BY k.updated_at DESC) AS rank
-      FROM knowledge k WHERE ${lexWhere} ORDER BY k.updated_at DESC LIMIT ${candP}
+      SELECT k.name, row_number() OVER (ORDER BY ${first}k.updated_at DESC) AS rank
+      FROM knowledge k WHERE ${lexWhere} ORDER BY ${first}k.updated_at DESC LIMIT ${candP}
     ),
     vec AS (
       SELECT k.name, row_number() OVER (ORDER BY k.embedding_vector <=> ${qp}) AS rank
@@ -151,7 +153,7 @@ async function rrfSearch(
     SELECT ${sel}, f.score::float8 AS score
     FROM fused f JOIN knowledge k ON k.name=f.name
     WHERE ${vis}
-    ORDER BY f.score DESC LIMIT ${limP}`;
+    ORDER BY ${first}f.score DESC LIMIT ${limP}`;
   const rows = await q(itemsPool, sql, params);
   return rows.map((r) => {
     const base: KnowledgeSearchRow = { name: r.name, title: r.title, injection: r.injection,
