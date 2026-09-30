@@ -4,7 +4,7 @@
 //
 // 사용법: 빌드(npm run build 또는 tsc -p tsconfig.json) 뒤에 실행한다 — 판정 모듈을 dist/ 에서 읽는다.
 //   node scripts/style-rewrite-batch.mjs --report out.jsonl (--names names.txt | --limit 20)
-//        [--apply] [--model sonnet] [--llm-cmd claude]
+//        [--apply] [--model sonnet] [--llm-cmd claude] [--attempts 3]
 //   --apply 가 없으면 dry-run 이다(저장하지 않고 재작성본 전문을 report 에 싣는다 — 사람이 먼저 훑어본다).
 //   게이트웨이는 env LIVELY_URL·LIVELY_TOKEN, 없으면 ~/.lively/gateway-url·~/.lively/token.
 //   --llm-cmd 는 `<cmd> -p --model <m>` 로 불리고 프롬프트를 stdin 으로 받아 stdout 에 답한다(테스트는 가짜로 바꿔 끼운다).
@@ -26,7 +26,7 @@ const { resolveWritingFormat } = await import(pathToFileURL(fmtPath).href);
 
 // ── 인자 ──
 function parseArgs(argv) {
-  const a = { apply: false, model: "sonnet", llmCmd: "claude", names: null, limit: null, report: null };
+  const a = { apply: false, model: "sonnet", llmCmd: "claude", names: null, limit: null, report: null, attempts: 3 };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const val = () => {
@@ -40,6 +40,7 @@ function parseArgs(argv) {
     else if (k === "--report") a.report = val();
     else if (k === "--model") a.model = val();
     else if (k === "--llm-cmd") a.llmCmd = val();
+    else if (k === "--attempts") a.attempts = Math.max(1, Math.min(6, Number(val()) || 3));
     else { console.error(`알 수 없는 인자: ${k}`); process.exit(2); }
   }
   if (!a.report) { console.error("--report <jsonl 경로> 가 필요합니다"); process.exit(2); }
@@ -131,7 +132,7 @@ function parseJsonLoose(text, open) {
   try { return JSON.parse(t.slice(s, e + 1)); } catch { return undefined; }
 }
 
-function rewritePrompt(k, findings, guide) {
+function rewritePrompt(k, findings, guide, feedback = null) {
   const rules = findings.map((f) => `- ${f.rule}: ${f.message}${f.sample ? ` (예: ${f.sample})` : ""}`).join("\n");
   return [
     "아래 지식 문서의 서술 형식만 고쳐라.",
@@ -158,7 +159,47 @@ function rewritePrompt(k, findings, guide) {
     "",
     "원문(JSON):",
     JSON.stringify({ title: k.title ?? "", body_md: k.body_md ?? "" }),
+    ...(feedback ? [
+      "",
+      "직전 재작성본은 검사에서 떨어졌다. 아래 문제를 고친 새 재작성본을 원문 기준으로 다시 내라(직전 재작성본에서 잘된 형식 정리는 유지해도 된다).",
+      ...feedback.problems.map((p) => `- ${p}`),
+      ...(feedback.prev ? ["", "직전 재작성본(JSON):", JSON.stringify(feedback.prev)] : []),
+    ] : []),
   ].join("\n");
+}
+
+const FIELD_WORD = {
+  codeBlocks: "코드블록", inlineCode: "인라인 코드(백틱)", numbers: "숫자·날짜", urls: "링크 대상",
+  wikilinks: "위키링크", refs: "MR·PR 참조", tableRows: "표 행",
+};
+
+/** 기계 검사 탈락을 재작성 모델이 고칠 수 있는 말로 바꾼다 — 어떤 값이 사라졌고 어떤 값이 생겼는지를 그대로 준다. */
+function describeViolation(v) {
+  const kind = String(v.kind ?? "");
+  if (kind.startsWith("invariant:")) {
+    const field = FIELD_WORD[kind.slice(10)] ?? kind.slice(10);
+    const lost = [...String(v.detail ?? "").matchAll(/(?:^|, )-([^,]+)/g)].map((m) => m[1].trim());
+    const added = [...String(v.detail ?? "").matchAll(/(?:^|, )\+([^,]+)/g)].map((m) => m[1].trim());
+    const parts = [];
+    if (lost.length) parts.push(`원문에 있던 ${field} 가 사라졌다: ${lost.join(", ")} — 원문 표기 그대로 되살려라(제목에서 뺀 값이면 본문 첫 줄로 옮겨라)`);
+    if (added.length) parts.push(`원문에 없던 ${field} 가 생겼다: ${added.join(", ")} — 새 값·번호·백틱을 만들지 마라`);
+    return parts.join(" / ") || `${field} 가 원문과 달라졌다: ${v.detail}`;
+  }
+  if (kind === "shrink") return `서술이 너무 줄었다(${v.detail}). 원문 문장을 빼지 말고 형식만 고쳐라`;
+  if (kind.startsWith("lint:")) return `아직 고쳐지지 않았다 — ${v.detail}`;
+  if (kind.startsWith("new:")) return `재작성이 새 형식 위반을 만들었다 — ${v.detail}`;
+  if (kind === "empty-title") return "제목이 비었다";
+  return `${kind}: ${v.detail ?? ""}`;
+}
+
+/** 의미 판정 탈락을 되돌려 줄 문장으로. */
+function describeMeaning(m) {
+  const fmt = (x) => (typeof x === "string" ? x : JSON.stringify(x));
+  return [
+    ...(m.missing ?? []).map((x) => `원문의 이 내용이 빠졌다: ${fmt(x)}`),
+    ...(m.added ?? []).map((x) => `원문에 없는 내용이 생겼다(지워라): ${fmt(x)}`),
+    ...(m.changed ?? []).map((x) => `뜻이 바뀌었다(원문대로 되돌려라): ${fmt(x)}`),
+  ];
 }
 
 // 의미 판정 — 두 문서를 나란히 놓고 한 번에 비교시킨다. 두 문서에서 주장을 따로 뽑아 대조하던 방식은 뽑는 단위가 호출마다
@@ -218,21 +259,50 @@ async function processOne(name, fmt) {
   if (!el.eligible) return { ...common, status: "skipped", reason: el.reason, rules: [] };
   const rules = el.targetRules;
 
-  const raw = await runLlm(rewritePrompt(k, el.findings, fmt.guide_md));
-  const out = parseJsonLoose(raw, "{");
-  if (!out || typeof out.title !== "string" || typeof out.body_md !== "string") {
-    return { ...common, rules, status: "rejected", reason: "parse", violations: [{ kind: "parse", detail: String(raw).trim().slice(0, 300) }] };
+  // 탈락한 재작성본은 사유를 돌려주고 다시 고치게 한다 — 첫 시도의 탈락 대부분은 «값을 건드렸다» 는 고칠 수 있는 실수였다.
+  //  판정 기준은 그대로다(재시도가 게이트를 느슨하게 만들지 않는다). 매 시도의 탈락 사유를 attempts 에 남긴다.
+  const src = { title: k.title, body_md: k.body_md };
+  const attempts = [];
+  let feedback = null;
+  let after = null;
+  let raw = "";
+  for (let i = 0; i < args.attempts; i++) {
+    raw = await runLlm(rewritePrompt(k, el.findings, fmt.guide_md, feedback));
+    const out = parseJsonLoose(raw, "{");
+    if (!out || typeof out.title !== "string" || typeof out.body_md !== "string") {
+      attempts.push({ reason: "parse" });
+      feedback = { prev: null, problems: ["출력이 JSON 객체 {title, body_md} 가 아니었다. JSON 하나만 출력하라."] };
+      continue;
+    }
+    const cand = { title: out.title.trim(), body_md: out.body_md };
+    const chk = checkRewrite(src, cand, fmt);
+    if (!chk.ok) {
+      attempts.push({ reason: "check", violations: chk.violations });
+      feedback = { prev: cand, problems: chk.violations.map(describeViolation) };
+      continue;
+    }
+    const jm = await judgeMeaning(src, cand);
+    if (jm.parseError) {
+      attempts.push({ reason: "parse", detail: jm.parseError });
+      feedback = { prev: cand, problems: [] };
+      continue;
+    }
+    if (!jm.pass) {
+      attempts.push({ reason: "meaning", meaning: jm.meaning });
+      feedback = { prev: cand, problems: describeMeaning(jm.meaning) };
+      continue;
+    }
+    after = cand;
+    attempts.push({ reason: "pass" });
+    break;
   }
-  const after = { title: out.title.trim(), body_md: out.body_md };
-  const withAfter = { ...common, rules, after_title: after.title, chars_after: chars(after.body_md) };
+  const last = attempts[attempts.length - 1] ?? {};
+  if (!after) {
+    const tail = { attempts, ...(feedback?.prev && !args.apply ? { after_title: feedback.prev.title, after_body: feedback.prev.body_md } : {}) };
+    return { ...common, rules, status: "rejected", reason: last.reason ?? "parse", ...(last.violations ? { violations: last.violations } : {}), ...(last.meaning ? { meaning: last.meaning } : {}), ...tail };
+  }
+  const withAfter = { ...common, rules, attempts, after_title: after.title, chars_after: chars(after.body_md) };
   const dryBody = args.apply ? {} : { after_body: after.body_md };
-
-  const chk = checkRewrite({ title: k.title, body_md: k.body_md }, after, fmt);
-  if (!chk.ok) return { ...withAfter, ...dryBody, status: "rejected", reason: "check", violations: chk.violations };
-
-  const jm = await judgeMeaning({ title: k.title, body_md: k.body_md }, after);
-  if (jm.parseError) return { ...withAfter, ...dryBody, status: "rejected", reason: "parse", violations: [{ kind: "parse", detail: jm.parseError }] };
-  if (!jm.pass) return { ...withAfter, ...dryBody, status: "rejected", reason: "meaning", meaning: jm.meaning };
 
   if (!args.apply) return { ...withAfter, ...dryBody, status: "passed_dry" };
 
