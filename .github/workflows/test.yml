@@ -125,6 +125,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/project-body-guard.pg-test.mjs
+      # ④-d3 프로젝트 초안(#4170) — 목으로는 못 보는 것: **초안에서 나오는 조건이 UPDATE 의 SET 식이다**.
+      #    «제목·본문이 실제로 바뀔 때만 내린다(같은 글 재저장·자동 이름은 아니다)» · «완료는 내린다» · 백필은 «NULL 만 따진다 —
+      #    한 번 올린 것을 다음 부팅이 되돌리지 않는다». 저장 뒤 draft 를 되읽고, init 을 두 번 돌려 판정한다.
+      - name: 프로젝트 초안 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/project-draft.pg-test.mjs
       # ⑤-a2 분류 지우기는 비었을 때만(#4233 분류체계 앱). 화면의 수는 보는 사람의 공개범위로 센 수라, 서버가 공개범위와 상관없이
       #    세어 거절해야 한다(못 보는 지식 · 구성원 전용 목록 포함). 핸들러를 부르고 read-back 한다.
       - name: 분류 지우기 가드 PG 통합 테스트

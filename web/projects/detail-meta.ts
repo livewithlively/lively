@@ -431,8 +431,16 @@ function pjvProjFactsStrip(p, members, reload) {
   const chip = (glyph: string | null, label: string | null, control, empty = false, extra = '') =>
     el('div', { class: 'pjh-fact' + (empty ? ' empty' : '') + (extra ? ' ' + extra : '') }, glyph ? factGlyph(glyph) : null, label ? el('span', { class: 'pjh-fact-k', text: label }) : null, control);
   const has = (a: unknown[] | undefined) => !!(a && a.length);
+  // 초안(#4170) — 세션 첫 지시로 기계가 막 만든 프로젝트. 목록 기본 뷰에서 따로 서 있다는 걸 여기서도 말하고, 제목·본문을
+  //  고치지 않고도 올릴 길(«목록에 올리기»)을 준다. 제목이나 본문을 고치면 서버가 저절로 내린다.
+  const draftChip = p.draft === true && p.status !== 'done'
+    ? el('div', { class: 'pjh-fact pjh-fact-draft', title: '세션 첫 지시로 자동 생성된 프로젝트입니다. 제목이나 본문을 정리하면 목록에 올라갑니다.' },
+      el('span', { class: 'pjh-draft-k', text: '초안' }),
+      el('button', { class: 'pjh-draft-up', type: 'button', text: '목록에 올리기', onclick: (e) => { (e.currentTarget as HTMLButtonElement).disabled = true; projPatch(p.id, { draft: false }, reload); } }))
+    : null;
   return el('div', { class: 'pjh-facts' },
     chip(null, null, pjvProjStatusPill(p, reload)),
+    draftChip,
     chip('list', p.list_id == null ? '리스트' : null, pjvProjListField(p, reload), p.list_id == null),
     chip('user', has(members) ? null : '팀원', pjvProjTeamControl(members, (ids) => pjvSaveProjMembers(p.id, ids)), !has(members)),
     chip('cal', p.start_date || p.due_date ? null : '기간', pjvProjDatesField(p, reload), !p.start_date && !p.due_date),

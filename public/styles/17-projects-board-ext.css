@@ -240,6 +240,10 @@ body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabb
 
 /* 상태 그룹 헤더 — 커스텀 상태는 색 pill 로(스크린샷) */
 .pjv-tgroup-label.pjv-status-pill { display: inline-flex; align-items: center; font-size: 12.5px; font-weight: 700; color: var(--on-fill); background: var(--sc); padding: 2px 11px; border-radius: 999px; letter-spacing: -.1px; }
+/* 초안(#4170) — 첫 지시로 자동 생성된 프로젝트 묶음. 상태가 아니라 «아직 정리 전» 이라 색을 채우지 않고 점선 테두리로(GitHub Draft 처럼 회색). */
+.pjv-tgroup-label.pjv-status-pill.pjv-draft-pill { padding: 1px 10px; border: 1px dashed var(--muted-2); background: transparent; color: var(--muted); }
+.pjv-draft-hint { min-width: 0; margin-left: 2px; overflow: hidden; font-size: 12px; font-weight: 500; color: var(--muted-2); white-space: nowrap; text-overflow: ellipsis; }
+@media (max-width: 600px) { .pjv-draft-hint { display: none; } }
 
 /* 리스트/폴더 설정 메뉴 */
 .pjv-listset-menu { min-width: 172px; }

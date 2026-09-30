@@ -413,7 +413,8 @@ const projectCreateV6: Capability = {
     //  이 필드를 안 보내도 같은 판정이 나와야 하기 때문이다 — 그 표식은 이미 세 곳이 공유하는 계약이다.
     //  그 밖(사람이 웹·MCP 로 짓는 이름)은 전부 human — 자동 이름짓기가 덮지 못한다.
     const name_source = String(input.description ?? "").includes(AUTO_CREATED_MARK) ? "rule" as const : "human" as const;
-    const project = await createProject({ ...input, name_source }, writeCtx);
+    //  같은 표식이 초안(#4170)의 입구다 — 기계가 이름을 지은 껍데기는 초안으로 태어나 목록 기본 뷰에서 따로 선다.
+    const project = await createProject({ ...input, name_source, draft: name_source === "rule" }, writeCtx);
     if (input.follow_up != null) await linkProjectEdge(project.id, input.follow_up, "follow_up", writeCtx); // new --follow_up--> 선행
     await regenAgents(project.id);  // 생성 직후 AGENTS.md(+폴더) 생성 — 다음 pull 전에도 존재.
     // 잠긴 리스트 안에 만든 프로젝트면 그 폴더에도 즉시 ACL 을 건다(#1291 v2) — 폴더는 방금 생겼으므로
@@ -687,12 +688,16 @@ const projectUpdateV6Input = {
   due_date: z.string().nullable().optional(),
   // #1308 — 날짜가 움직였으면 depends_on 후행 체인도 같은 Δ 로 민다. 명시 opt-in(간트가 켠다).
   reschedule_dependents: z.boolean().optional(),
+  // #4170 초안 — 보통 안 보낸다: 제목이나 본문을 실제로 고치면 저절로 초안에서 나온다. 웹의 «목록에 올리기» 가 false 를 보낸다.
+  draft: z.boolean()
+    .describe("초안 여부. 보통 생략한다 — 제목(name)이나 본문(description·append_description)을 실제로 고치면 저절로 초안에서 나온다. false = 고치지 않고 목록에 올리기.")
+    .optional(),
 };
 type ProjectUpdateV6Input = z.infer<z.ZodObject<typeof projectUpdateV6Input>>;
 const projectUpdateV6: Capability = {
   name: "project_update_v6",
   title: "프로젝트 수정(v6)",
-  description: "프로젝트 이름·설명 등을 수정한다. 주어진 키만 변경. 본문은 description(전체 교체) 또는 append_description(원문 보존·끝에 이어쓰기) 중 하나로.",
+  description: "프로젝트 이름·설명 등을 수정한다. 주어진 키만 변경. 본문은 description(전체 교체) 또는 append_description(원문 보존·끝에 이어쓰기) 중 하나로. 첫 지시로 자동 생성된 '초안' 프로젝트는 이름이나 본문을 실제로 고치면 초안에서 나와 목록에 올라간다.",
   scope: "memory",
   input: projectUpdateV6Input,
   expose: {
@@ -714,6 +719,7 @@ const projectUpdateV6: Capability = {
         if ("start_date" in b) patch.start_date = parseDateOrNull(b.start_date);
         if ("due_date" in b) patch.due_date = parseDateOrNull(b.due_date);
         if (b.reschedule_dependents === true) patch.reschedule_dependents = true;
+        if (typeof b.draft === "boolean") patch.draft = b.draft;
         return patch;
       } }],
   },
