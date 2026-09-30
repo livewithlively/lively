@@ -33,7 +33,9 @@ import { SIDE_DEF } from '../lib/side-card-geom.js';   // 곁칸 기본 폭 — 
 import { sideLabels } from '../lib/side-label.js';   // 곁칸의 화면 이름. 자리바꿈으로 왼쪽에 서면 «우측» 이라 부르지 않는다(#4233)
 import { MOBILE_MQ } from './mobile.js';   // 좁은 폭(≤900)의 접힌 배치 — side-swap 과 같은 문턱을 읽는다(#4088 후속)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
-import { SESSAPP_TAB, SHOW_SESSAPP_EVT, sessAppTabTitle, watchSessionApps } from './session-app-pane.js';   // #4225 붙은 앱 = 곁칸의 파생 탭
+import { SESSAPP_TAB, SHOW_SESSAPP_EVT, attachAppToSession, sessAppTabTitle, watchSessionApps } from './session-app-pane.js';   // #4225 붙은 앱 = 곁칸의 파생 탭
+import { mountDock, type DockApp, type DockHandle } from './pane-dock.js';   // #4443 곁칸 독 — 곁칸에 띄울 앱의 문(macOS 독)
+import { appColor } from '../lib/pane-dock.js';                              // #4443 앱마다 한 색 — 탭과 독이 같은 앱으로 읽히게
 import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, kindOf, rememberViewerPath, rememberedViewerPath, slotStoreKey } from './panes-kit.js';
 import { bindCtx, bindCtxSurface } from './ctx-registry.js';   // #3784 곁칸 빈 자리 우클릭
 import { type CtxRow } from './ctx-menu.js';
@@ -230,6 +232,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //   ⚠ 여기(함수 맨 앞)에 둔다 — 마운트 중 첫 paintAll 이 이 값들을 읽는다(위 panes 와 같은 TDZ 이유).
   const recent: Record<Zone, TabKey[]> = { main: [], side: [], bottom: [] };
   let closedStack: ClosedTab[][] = [];
+  //  #4443 곁칸 독 — paintPane('side') 가 부른다. 세우는 것은 첫 그림 직전(아래 applyView 옆) — 여기엔 자리만(같은 TDZ 이유).
+  let dock: DockHandle | null = null;
   function isPinned(k: TabKey): boolean { return lay.pin.includes(k); }
   function pinSet(): Set<TabKey> { return new Set(lay.pin); }
   /** 한꺼번에 닫기에서 빠지는 탭 — 고정 탭 · 붙은 앱(닫기 = 이 세션에서 떼기라 다른 일이 생긴다). */
@@ -1142,7 +1146,11 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       //  폭은 **마우스로** 닫을 때만 얼린다 — 손가락은 pointerleave 가 click 보다 먼저 와서 풀 기회가 없다(격리 리뷰 지적).
       onclick: (e: MouseEvent) => { e.stopPropagation(); const pt = (e as PointerEvent).pointerType; closeTab(zone, key, { pointer: pt ? pt === 'mouse' : e.detail > 0 && matchMedia('(pointer: fine)').matches }); },   // 사파리 click 엔 pointerType 이 없다
     }, pnIcon('x', 'pn-i xs'));
-    const w = el('span', { class: 'pn-tabwrap' + (on ? ' on' : '') + (pinned ? ' pinned' : ''), 'data-tab': key, role: 'presentation' }, b, x) as HTMLElement;
+    //  #4443 — 앱마다 한 색(--ac): 아이콘 칩의 선 · 켜진 탭의 옅은 물. 독 아이콘과 같은 토큰이라 같은 앱으로 읽힌다(lib/pane-dock appColor).
+    //   단추에도 건다 — 끌 때 뜨는 조각(pane-tabdrag 의 고스트)은 단추만 복제한다.
+    const ac = `--ac: var(--gi-c-${appColor(tabBase(key))})`;
+    b.setAttribute('style', ac);
+    const w = el('span', { class: 'pn-tabwrap' + (on ? ' on' : '') + (pinned ? ' pinned' : ''), 'data-tab': key, 'data-app': tabBase(key), style: ac, role: 'presentation' }, b, x) as HTMLElement;
     //  휠 클릭 = 닫기(크롬·사파리). 누를 때 브라우저의 자동 스크롤이 뜨지 않게 mousedown 도 막는다.
     w.addEventListener('mousedown', (e: MouseEvent) => { if (e.button === 1) e.preventDefault(); });
     w.addEventListener('auxclick', (e: MouseEvent) => {
@@ -1378,6 +1386,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       const ph = pane.bodyEl.querySelector('.pn-pane-empty') as HTMLElement | null;
       if (ph) ph.hidden = true;
     }
+    if (zone === 'side') dock?.sync();   // #4443 — 떠 있는 탭·켜진 탭이 바뀌면 독의 점·켜짐도 맞춘다
   }
 
   /** 탭 **띠만** 다시 그린다 — 부품이 자기 이름을 바꿨을 때(뷰어가 다른 파일을 폈을 때) 쓴다.
@@ -1638,6 +1647,47 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     paintDoor();
   }, 8000);
 
+  // ── 곁칸 독(#4443, 원준 2026-09-30) — 곁칸에 띄울 앱의 문. 규칙은 lib/pane-dock, 그리기는 v2/pane-dock ──────────
+  //  여기(모든 선언이 끝난 뒤 · 첫 그림 직전)에 세운다 — 독은 세우자마자 한 번 그리며 tabName(tabTitles) 까지 읽는다.
+  //  독이 아는 «떠 있는 것» = 곁칸 + 아래 칸의 탭(좁은 폭이면 서랍의 줄). 하나만 사는 앱이 아래 칸에 있으면 곁칸에 둘째를 세우지 않고 그리로 간다.
+  //  옛 [앱] 부품(설치 앱 목록)은 독에 세우지 않는다 — 독의 [더보기]가 같은 일을 한다(둘을 나란히 두면 같은 격자 아이콘 둘이 선다, 실측).
+  const dockKeys = (): TabKey[] => (narrow() ? zoneTabs('side') : [...lay.side, ...lay.bottom]).filter((k) => tabBase(k) !== 'sessions' && tabBase(k) !== 'apps');
+  const dockApps = (): DockApp[] => PART_DEFS.filter((d) => d.type !== 'sessions').map((d) => ({
+    type: d.type, name: d.name, glyph: d.icon, hint: d.hint, multi: !!d.multi,
+    //  프로젝트 없는 세션 화면엔 공유 폴더·지식·할 일·리브가 없다([+] 목록과 같은 규칙).
+    pickable: d.pickable !== false && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'liv')),
+  }));
+  dock = mountDock({
+    pane: sidePane.root,
+    apps: dockApps,
+    tabs: () => dockKeys().map((k) => ({ key: k, type: tabBase(k) })),
+    act: () => panes.get('side')?.act ?? null,
+    recent: () => [...recent.side, ...recent.bottom],
+    title: (k) => tabName(k),
+    show: (k) => { const z = zoneOf(k) || 'side'; revealZone(z); activate(z, k); paintAll(); },
+    open: (type) => { openZone('side'); addPart('side', type as PartType); },
+    close: (k) => closeTab(zoneOf(k) || 'side', k),
+    closeAll: (type) => {
+      const keys = dockKeys().filter((k) => tabBase(k) === type && !DERIVED_TABS.has(tabBase(k)));
+      if (!keys.length) return;
+      recordClosed(keys);                                 // [닫은 탭 다시 열기] 로 한꺼번에 돌아온다(탭 줄의 한꺼번에 닫기와 같다)
+      for (const k of keys) dropTab(zoneOf(k) || 'side', k, { paint: false });
+      thawAll(); saveLayout(); paintAll();
+      if (keys.length > 1) toast(`${partDef(type as PartType).name} ${keys.length}개를 닫았어요. 탭 줄을 우클릭해 [닫은 탭 다시 열기]로 되살릴 수 있어요.`);
+    },
+    curSession: () => curSession(),
+    //  [더보기]의 «이 세션에 붙이기» — [앱] 칸이 붙이던 길 그대로(붙으면 셸이 «새로 붙음»을 보고 그 앱 탭을 세워 켠다).
+    attach: async (a) => {
+      const sid = curSession();
+      if (!sid) return;
+      if (await attachAppToSession(sid, a.id, a.title)) {
+        wrap.dispatchEvent(new CustomEvent(SHOW_SESSAPP_EVT, { detail: { app_id: a.id } }));
+        toast(`「${a.title}」을(를) 이 세션에 붙였어요 — 사이드바에서 AI 와 같이 씁니다.`);
+      }
+    },
+    narrow: () => narrow(),
+  });
+
   applyView();          // 첫 그림 전에 이 세션의 폭·높이·접힘을 입힌다(swap 이 선 뒤라 상한 판정이 산다)
   paintAll();
   syncSessApps();       // #4225 — 이 세션에 붙은 앱이 있으면 곁칸에 그 탭을 세운다(목록이 오면)
@@ -1678,6 +1728,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       window.clearInterval(timer);
       sessAppOff?.(); sessAppOff = null;
       cancelTabDrag(); thawAll();   // #3870 — 끄는 중이던 탭 · 얼림 감시(window pointermove)를 걷는다
+      dock?.destroy(); dock = null;   // #4443
       card?.destroy();
       swap?.destroy();
       for (const ro of ros) ro.disconnect();
