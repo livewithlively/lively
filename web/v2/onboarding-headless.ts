@@ -104,14 +104,14 @@ export function createHeadlessOffer(o: { rerender: () => void; toast: (m: string
     if (!s) { box.hidden = true; return; }
     box.hidden = false;
     if (s.connected) {
-      box.innerHTML = `<p class="ob-ok">자리를 비우신 동안 도는 작업(증류·분류)도 ${esc(label)} 계정으로 연결돼 있어요.</p>`;
+      box.innerHTML = `<p class="ob-ok">자리를 비우신 동안 도는 작업(증류·점검)도 ${esc(label)} 계정으로 연결돼 있어요.</p>`;
       return;
     }
     const hint = h === 'claude'
       ? '방금처럼 주소를 열어 Authorize 를 누르면 코드가 나와요. 그 코드를 아래에 붙여넣으면 끝나요.'
       : '주소를 열고 아래 코드를 넣은 뒤 ChatGPT 계정으로 허용하세요. 끝나면 이 자리가 저절로 바뀌어요.';
     box.innerHTML = `
-      <p class="ob-note" id="hlNote">${s.failed ? `저장해 둔 허용이 더는 통하지 않아요. ` : ''}로그인과 별개로, 자리를 비우신 동안 제가 자료를 정리하는 일(증류·분류)은 <b>따로 허용한 계정</b>으로만 돌아요. 아래 주소에서 한 번 더 허용해 주시면 그 일도 ${esc(label)} 구독으로 돌아갑니다.</p>
+      <p class="ob-note" id="hlNote">${s.failed ? `저장해 둔 허용이 더는 통하지 않아요. ` : ''}로그인과 별개로, 자리를 비우신 동안 제가 자료를 정리하는 일(증류·점검)은 <b>따로 허용한 계정</b>으로만 돌아요. 아래 주소에서 한 번 더 허용해 주시면 그 일도 ${esc(label)} 구독으로 돌아갑니다.</p>
       <div id="hlSteps">
         <div class="ob-lg-addr"><code id="hlAddr">주소를 받는 중이에요…</code><a class="ob-btn ob-btn-pri ob-btn-inline" id="hlOpen" target="_blank" rel="noopener" hidden>열기 ↗</a></div>
         <p class="ob-lg-d" style="margin-top:8px">${hint}</p>

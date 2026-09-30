@@ -4,6 +4,7 @@ import { api, busy, cardHead, el, errorNote, memberCombo, relTime, toast, withTi
 import { overlayBox, skeleton } from './ui-primitives.js';
 import { psBlock, psInputStyle } from './admin-widgets.js';
 import { cronOwner } from './cron-owner.js';   // 잡 → 전용 화면 매핑(#1618 후속, 단일 출처)
+import { ctxPath } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
 // ── 스케줄러(자동화) — org_cron 잡 관리(admin). is 신선화·미매핑 LLM 분류(세션 주입)·sync 를 주기 실행. ──
 //  map_unmapped 잡은 '타깃 LLM 세션'(상시 시드 세션)을 골라 거기에 분류 태스크를 주입한다(팀플랜 과금 — headless 토큰 아님).
@@ -46,8 +47,8 @@ async function cronPanel(detail, data) {
       el('span', { class: 'wikicat-name', text: j.label || j.id }),
       autoSys ? withTip(el('span', { class: 'pill', text: '자동' }),
         autoSys === '수집기'
-          ? '[맥락 관리 ▸ 수집]에서 수집기를 켜서 자동 등록된 잡입니다. 싱크를 멈추려면 이 잡이 아니라 수집기를 끄세요.'
-          : autoSys + ' 커넥터를 켜서 자동 등록된 구 방식 잡입니다. 지금은 [맥락 관리 ▸ 수집]의 수집기가 이 일을 합니다.') : null,
+          ? ctxPath('sources') + '에서 수집기를 켜서 자동 등록된 잡입니다. 싱크를 멈추려면 수집기를 끄세요. 이 잡만 지우면 수집기가 켜져 있는 동안 다시 생깁니다.'
+          : autoSys + ' 커넥터를 켜서 자동 등록된 구 방식 잡입니다. 지금은 ' + ctxPath('sources') + '의 수집기가 이 일을 합니다.') : null,
       el('span', { class: 'wikicat-key mono', text: j.action + sess }),
       owner
         ? withTip(owner.href
@@ -120,7 +121,7 @@ async function openCronForm(job, actions, reload, tz) {
   const paramInputs: Record<string, any> = {};
   let managedSessions: any[] | null = null;
   let distillers: any[] | null = null;   // #1289 증류기 피커 — 한 번만 받아 재사용(액션 전환 시 재요청 안 함)
-  let classifiers: any[] | null = null;  // #1419 T4 분류기 피커 — 같은 캐시 규칙
+  let classifiers: any[] | null = null;  // #1419 T4 → #4194 카테고리 붙이기 레인 피커(옛 분류기) — 같은 캐시 규칙
   let managers: any[] | null = null;     // #1419 T5 관리기 피커 — 같은 캐시 규칙
   async function renderParams() {
     const a = (actions || []).find((x) => x.key === actionSel.value);
@@ -136,9 +137,10 @@ async function openCronForm(job, actions, reload, tz) {
         for (const s of (managedSessions || [])) inp.append(el('option', { value: s.id, text: (s.label || s.id) + ' — ' + (s.account || '계정?') + (s.enabled ? '' : ' (꺼짐)') }));
         if (jp[p.name]) inp.value = jp[p.name];
       } else if (p.kind === 'distiller') {
-        // #1289 자료 증류기 피커 — [AI 맥락 ▸ 자료 증류기]에서 등록한 것. 비우면 액션이 스스로 고른다.
+        // #1289 자료 레인 피커 — [맥락 관리 ▸ 증류기]의 자료 레인. 비우면 액션이 스스로 고른다.
+        //  (#4194 — 같은 응답의 knowledge_lanes 는 카테고리 붙이기 레인이라 여기 싣지 않는다: 이 잡은 자료 레인만 돈다.)
         inp = el('select', { style: psInputStyle });
-        inp.append(el('option', { value: '', text: '(비움 — 켜진 증류기 전체)' }));
+        inp.append(el('option', { value: '', text: '(비움 — 켜진 자료 증류기 전체)' }));
         if (distillers == null) { try { const r = await api('/api/ui/org/distillers'); distillers = (r && r.distillers) || []; } catch { distillers = []; } }
         for (const d of (distillers || [])) inp.append(el('option', { value: d.key, text: (d.label || d.key) + (d.enabled ? '' : ' (꺼짐)') }));
         // 잡이 가리키던 증류기가 지워졌으면 조용히 '전체'로 바뀌지 않게 — 없어졌다고 말해 준다(저장 시 의도치 않은 확대 방지).
@@ -147,18 +149,20 @@ async function openCronForm(job, actions, reload, tz) {
         }
         if (jp[p.name]) inp.value = jp[p.name];
       } else if (p.kind === 'classifier') {
-        // #1419 T4 분류기 피커 — [맥락 관리 ▸ 분류기]에서 등록한 것. 증류기 피커와 같은 규칙.
+        // #1419 T4 → #4194 카테고리 붙이기 레인 피커 — [맥락 관리 ▸ 증류기 ▸ 카테고리 붙이기]의 레인(옛 「분류기」).
+        //  증류기와 같은 입구에서 knowledge_lanes 로 받는다. 파라미터 이름(classifier)은 기존 잡 행 호환 때문에 그대로다.
         inp = el('select', { style: psInputStyle });
-        inp.append(el('option', { value: '', text: '(비움 — 켜진 분류기 전체)' }));
+        inp.append(el('option', { value: '', text: '(비움 — 켜진 카테고리 붙이기 증류기 전체)' }));
+        //  호환 경로(/org/classifiers)에서 받는다 — 옛·새 코어 모두 같은 뜻이다(배포 중 새 화면 + 옛 게이트웨이 조합 대비).
         if (classifiers == null) { try { const r = await api('/api/ui/org/classifiers'); classifiers = (r && r.classifiers) || []; } catch { classifiers = []; } }
         for (const c of (classifiers || [])) inp.append(el('option', { value: c.key, text: (c.label || c.key) + (c.enabled ? '' : ' (꺼짐)') }));
-        // 지워진 분류기를 가리키던 잡이 조용히 '전체'로 확대되지 않게 — 없어졌다고 말해 준다.
+        // 지워진 레인을 가리키던 잡이 조용히 '전체'로 확대되지 않게 — 없어졌다고 말해 준다.
         if (jp[p.name] && !(classifiers || []).some((c) => c.key === jp[p.name])) {
           inp.append(el('option', { value: jp[p.name], text: jp[p.name] + ' (등록되지 않음 — 확인 필요)' }));
         }
         if (jp[p.name]) inp.value = jp[p.name];
       } else if (p.kind === 'manager') {
-        // #1419 T5 관리기 피커 — 증류기·분류기 피커와 같은 규칙.
+        // #1419 T5 관리기 피커 — 증류기 레인 피커와 같은 규칙.
         inp = el('select', { style: psInputStyle });
         inp.append(el('option', { value: '', text: '(비움 — 켜진 관리기 전체)' }));
         if (managers == null) { try { const r = await api('/api/ui/org/managers'); managers = (r && r.managers) || []; } catch { managers = []; } }
@@ -229,7 +233,7 @@ async function cronToggle(job, reload) {
 //  그 사이엔 "커넥터는 켜져 있는데 싱크는 안 도는" 상태가 된다. 그러니 지우지 말고 커넥터를 끄라고 말해 준다.
 async function cronDelete(id, reload, autoSys?) {
   const warn = autoSys
-    ? '⚠ 이 잡은 [맥락 관리 ▸ 가져오는 곳 ▸ ' + autoSys + ']이(가) 자동으로 만든 것입니다.\n\n지워도 그 커넥터를 다시 켜면 되살아나고, '
+    ? '⚠ 이 잡은 ' + ctxPath('sources', autoSys) + '이(가) 자동으로 만든 것입니다.\n\n지워도 그 커넥터를 다시 켜면 되살아나고, '
       + '그때까지는 커넥터만 켜져 있고 싱크는 안 도는 상태가 됩니다.\n싱크를 멈추려면 이 잡이 아니라 **커넥터를 끄세요**.\n\n그래도 삭제할까요?'
     : '스케줄 잡 ‘' + id + '’을(를) 삭제할까요?';
   if (!confirm(warn)) return;

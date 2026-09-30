@@ -111,11 +111,15 @@ async function askServer(jfetch, execId, nodeId) {
     if (j.sync === undefined) return null;          // 구 서버(node 파라미터 미지원) → 캐시로 폴백
     const folder = String(j.folder || "").trim();
     const mode = SYNC_MODES.includes(String(j.sync || "")) ? String(j.sync) : "none";
-    // folder_abs_path = 사람이 `lively init` 으로 명시 바인딩한 절대경로. 없으면 이 노드의 canonical 슬롯.
-    const abs = j.folder_abs_path ? String(j.folder_abs_path) : (folder ? path.join(sharedRoot(), folder) : null);
+    // folder_abs_path = 사람이 `lively init` 으로 명시 바인딩한 절대경로. 없으면 라이블리 소유 슬롯인데, 그 자리는
+    //  **서버가 세션 행에서 읽은 session_dir**(이 세션이 실제로 도는 프로젝트 폴더, #4135)이 먼저고, 그것도 없으면
+    //  이 노드의 canonical 슬롯(<shared root>/<folder>)을 env 로 조립한다(옛 루트가 env 에 남은 세션이 엉뚱한 폴더를 봤다).
+    const abs = j.folder_abs_path ? String(j.folder_abs_path)
+      : j.session_dir ? String(j.session_dir)
+      : (folder ? path.join(sharedRoot(), folder) : null);
     if (!abs) return { projectId: null };
-    // slot = 라이블리가 소유하는 자리(없으면 만들어도 된다). false = 사람이 init 한 자기 폴더 — 없으면 만들지 않는다
-    //  (지운 폴더를 빈 껍데기로 되살리면 "여기 프로젝트가 산다"는 거짓 신호가 남는다).
+    // slot = 라이블리가 소유하는 자리(없으면 만들어도 된다 — session_dir 도 여기 든다). false = 사람이 init 한 자기 폴더 —
+    //  없으면 만들지 않는다(지운 폴더를 빈 껍데기로 되살리면 "여기 프로젝트가 산다"는 거짓 신호가 남는다).
     return { projectId: pid, projDir: abs, mode, slot: !j.folder_abs_path };
   } catch { return null; }
 }

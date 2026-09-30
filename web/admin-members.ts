@@ -9,6 +9,7 @@
 import { api, busy, cardHead, el, errorNote, profileAvatar, state, toast, uiText } from './core.js';
 import { copyButton, field, overlay, skeleton } from './ui-primitives.js';
 import { loadAdmin, rerenderPanel } from './admin-rerender.js';
+import { ctxPath } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
 // ── 섹션(강제규칙·회사맥락) markdown 에디터 — 기본은 구성원에게 보이는 읽기 전용 뷰, 관리자는 [수정]을 눌러야 편집 ──
 async function profilesEditor(detail) {
@@ -206,7 +207,7 @@ function idnSummary(identities) {
     }
   }
   wrap.append(el('div', { class: 'admin-actions' },
-    el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/connectors', text: '[맥락 관리 ▸ 가져오는 곳]에서 매핑 →' }),
+    el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/connectors', text: ctxPath('sources') + '에서 매핑 →' }),
     el('span', { class: 'admin-hint', style: 'margin:0',
       text: '커넥터별 사용자 목록에서 골라 연결합니다 — 외부 ID를 직접 찾을 필요가 없어요.' })));
   return wrap;

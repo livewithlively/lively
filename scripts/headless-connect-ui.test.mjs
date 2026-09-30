@@ -26,10 +26,13 @@ test("★ [내 AI 계정] — 상태를 서버 한 곳에서 읽고, [연결]은
   assert.match(c, /startInlineAiLogin\(h\.key, paint\(\), \{ restart, purpose: 'headless'/, "공용 프로토콜 · 헤드리스 용도");
   assert.match(c, /onclick: \(\) => run\(true\)/, "사람이 누른 연결은 새로 띄운다(지난 시도의 코드는 죽었다)");
   //  리뷰(#4051) — 다시 누르면 앞 시도의 폴링을 멈춘다(panel 이 같은 노드라 alive() 로는 안 멈춘다) · 연타는 흘린다.
-  const run = c.slice(c.indexOf("const run = (restart?: boolean) => {", c.indexOf("function headlessRow")));
+  //  2026-09-28 — 행을 부품(headlessParts)으로 나눴다. 클래식 행과 새 창의 표가 같은 부품을 쓴다.
+  const run = c.slice(c.indexOf("const run = (restart?: boolean) => {", c.indexOf("function headlessParts")));
   assert.match(run.slice(0, 400), /handle\?\.stop\(\);[^]*handle = startInlineAiLogin\(/, "새로 띄우기 전에 앞 폴링을 멈춘다");
   assert.match(run.slice(0, 400), /if \(Date\.now\(\) - startedAt < 2500\) return;/, "연타를 흘린다");
   assert.match(c, /\.\.\.headlessSection\(headless, load\)/, "칸을 카드에 실제로 붙인다(안 붙이면 눌러도 아무 일이 없다)");
+  //  새 창의 표도 부품의 panel 을 화면에 붙인다(안 붙이면 [연결]을 눌러도 아무 일이 없다).
+  assert.match(c, /ap \? ap\.panel : null, hp \? hp\.panel : null/, "표가 로그인 칸을 행 아래에 붙인다");
   //  #1675 의 «인증 실패» 줄은 행의 «멈춤» 으로 흡수했다 — 두 곳이 같은 실패를 따로 말하면 어긋난다.
   assert.ok(!/headlessAuthWarn\(/.test(c), "옛 실패 줄을 따로 그리지 않는다");
   assert.match(c, /text: '멈춤'/, "실패는 행의 상태로 말한다");

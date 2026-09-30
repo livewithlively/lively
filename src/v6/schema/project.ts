@@ -109,6 +109,25 @@ export async function initV6ProjectCore(pool: Pool): Promise<void> {
         AND description LIKE '%lively:auto-created-from-first-prompt%';
   `);
 
+  // ── 5i) 초안(#4170, 상민·원준 2026-09-21 회의) — 세션 첫 지시로 **기계가 막 만든** 프로젝트인가. ──
+  //  GitHub 의 Draft PR 처럼, 첫 지시로 생긴 껍데기는 목록 기본 뷰에서 따로 뺀다(실측 2026-09-30: 자동 생성 403건 중
+  //  217건이 이름은 기계값·본문은 첫 지시뿐인 채로 '진행 중'에 쌓여 있었다). 제목이나 본문을 **직접 고치면**(사람이든
+  //  AI 든 project_update_v6) 초안에서 나온다 — 판정·해제는 v6/project-store.ts(createProject·updateProject·완료).
+  //  세션 이름이 자동으로 옮겨 붙는 것(claimProjectName)만으로는 안 나온다: 그건 첫 턴에 거의 늘 일어난다.
+  //  ⚠ NULL = **아직 안 따져 본 행**(이 컬럼 이전 행·INSERT 를 직접 하는 커넥터 미러)이다. 코드는 NULL 을 false 로 읽고,
+  //   백필은 NULL 인 행만 한 번 따진다 — 한 번 올린(false) 프로젝트를 다음 부팅이 다시 초안으로 되돌리지 않는다.
+  //   '컬럼이 방금 생겼을 때만' 으로 한 번을 거는 대신 행마다 거는 이유: 공용 DB 에선 이 init 이 테넌트마다 돈다.
+  //  초안의 조건 = 표식이 있고 · 표식 뒤에 보탠 글이 없고 · 완료가 아니고 · 사람이 이름을 고치지 않았다(human).
+  await pool.query(`
+    ALTER TABLE project ADD COLUMN IF NOT EXISTS draft BOOLEAN;
+    UPDATE project SET draft = (
+        description LIKE '%<!-- lively:auto-created-from-first-prompt -->%'
+        AND btrim(split_part(description, '<!-- lively:auto-created-from-first-prompt -->', 2), E' \\t\\r\\n') = ''
+        AND status <> 'done'
+        AND COALESCE(name_source, 'human') <> 'human')
+      WHERE draft IS NULL AND level='project';
+  `);
+
   // ── 5d) task_assignee(2026-06-26, #177) — 단일 assignee 컬럼 → n:n **가산**. 멀티담당자(ClickUp/Notion people) 무손실용. ──
   //  전환기: 기존 `assignee` 컬럼이 primary(UI·리스트뷰 호환), task_assignee 는 가산 섀도(쓰기경로가 동기, 백필로 시드).
   //  member_id = org_member.id 또는 외부 신원(FK 없음 — 미러/외부 담당자 허용, project_member·assignee 관례와 동일).

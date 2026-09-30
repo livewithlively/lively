@@ -19,6 +19,15 @@ body.embed .kn-side { top: 0; max-height: 100vh; padding-top: 14px; }
 .v2-frame-pop { position: absolute; top: 6px; right: 10px; z-index: 2; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--muted-2); text-decoration: none; font-size: 13px; background: var(--bg); opacity: .7; }
 .v2-frame-pop:hover { color: var(--ink); background: var(--bg-tint-2); opacity: 1; }
 body.embed .liv-head { display: none; } /* 리브 페이지도 임베드되면 '← 라이블리'가 이중이 된다 */
+/* #4233 액자 걷기(원준 2026-09-27 «그것도 액자 걷어») — 셸에 실린 클래식 위키 보조 화면(검토 대기 · 분류 검토 · 휴지통 · 분류 페이지)도
+   본문이 판에 바로 깔린다. 셸 위키 목록 · 프로젝트 · 자료 앱과 같은 문법: 라운딩 카드는 «내용 한 건»에만 쓰고, 화면 전체를 감싸지 않는다.
+   분류 페이지 안의 문서 묶음(.wk-board-inline)은 «내용 한 건»이라 그대로 둔다. 검토 대기 패널이 목록 전체를 한 번 더 싸던 카드도 같이 걷는다. */
+body.embed .card.pjv-listboard.wk-board:not(.wk-board-inline) { border: 0; border-radius: 0; background: none; padding: 0; }
+body.embed .wk-board:not(.wk-board-inline) > .wk-board-body > div > .card { border: 0; border-radius: 0; background: none; padding: 0; }
+body.embed .wk-board:not(.wk-board-inline) > .wk-board-body { padding-top: 14px; }   /* 카드 패딩이 주던 탭 줄 아래 숨 */
+/* #4233 [맥락 관리]도 같은 문법(원준 2026-09-27 «맥락관리 창에서 액자만 다 걷어») — 모든 탭(현황 · 확인할 것 · 수집기 · 증류기 · 점검 · AI 전달 · 자동 실행 기록)을
+   감싸던 .ctx-board 카드를 걷는다. 본문 왼쪽은 셸 가장자리에서 32px(main 24 + 8). 안의 상자(흐름 지도 바닥 · 자동 실행 · 목록 상자)는 «내용 한 덩어리»라 남긴다. */
+body.embed .card.pjv-listboard.ctx-board { border: 0; border-radius: 0; background: none; padding: 2px 8px 0; }
 
 /* ── 새 셸 켜짐: 클래식 크롬 숨김, 뿌리 전체 화면 ── */
 body[data-ui="v2"] { height: 100vh; overflow: hidden; margin: 0; }
@@ -44,7 +53,7 @@ body[data-ui="v2"] #org-banner, body[data-ui="v2"] #desktop-update, body[data-ui
 body.v2-splitting-x, body.v2-splitting-x * { cursor: col-resize !important; user-select: none; }
 body.v2-splitting-y, body.v2-splitting-y * { cursor: row-resize !important; user-select: none; }
 body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
-#v2-root .v2-ic { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.7; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+#v2-root .v2-ic { width: 16px; height: 16px; stroke: currentColor; stroke-width: var(--ic-stroke); fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .v2-k { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .v2-dot { width: 6px; height: 6px; border-radius: 50%; background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2); flex: none; display: inline-block; box-sizing: border-box; }
 /* 상태점 어휘(web/v2/views.ts dotCls) — 색은 셋뿐: 작업 중·확인 필요·작업 완료. 나머지 살아 있는 것은 회색, 끝난 것은 빈 점(기본). */
@@ -188,7 +197,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-nav.on { background: var(--bg); color: var(--ink); font-weight: 700; box-shadow: inset 0 0 0 1px var(--line-net); }
 .v2-nav .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-nav .v2-nav-cnt { margin-left: auto; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px; background: var(--warn-deep); color: var(--on-fill); font-size: 10.5px; font-weight: 800; display: inline-grid; place-items: center; flex: none; font-variant-numeric: tabular-nums; }
-.v2-nav-ic { width: 16px; height: 16px; margin-right: 4px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linejoin: round; }
+.v2-nav-ic { width: 16px; height: 16px; margin-right: 4px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: var(--ic-stroke); stroke-linejoin: round; }
 .v2-nav:hover .v2-nav-ic, .v2-nav.on .v2-nav-ic { stroke: var(--blue); }
 .v2-nav-lm { width: 16px; height: 16px; margin-right: 4px; flex: none; border-radius: 50%; background: var(--bg-success); border: 1px solid var(--ok-line-2); display: grid; place-items: center; color: var(--mint-deep); font-weight: 800; font-size: 9px; }
 .v2-side-sec { padding: 14px 8px 4px 16px; display: flex; align-items: center; gap: 2px; flex-wrap: nowrap; min-height: 30px; }
@@ -268,7 +277,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-npj-in::placeholder { font-weight: 400; color: var(--muted-2); }
 .v2-npj-err { margin: 4px 0 0 30px; font-size: 11.5px; line-height: 1.45; color: var(--coral-text); }
 .v2-pj-row.on { background: var(--bg); box-shadow: inset 0 0 0 1px var(--line-net); }
-.v2-pj-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linejoin: round; }
+.v2-pj-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: var(--ic-stroke); stroke-linejoin: round; }
 .v2-pj-row:hover .v2-pj-ic, .v2-pj-row.on .v2-pj-ic { stroke: var(--blue); }
 .v2-pj-row .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-pj-when { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted); flex: none; margin-left: 8px; min-width: 34px; text-align: right; }
@@ -298,7 +307,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-ss-row.on { background: var(--bg-tint); color: var(--ink); font-weight: 700; }
 /* 지금 보고 있는 세션 — 행 왼쪽에 파란 마디. */
 .v2-ss-row.on::before { content: ''; position: absolute; left: calc(3px + var(--nest, 14px)); top: 7px; bottom: 7px; width: 2.5px; border-radius: 2px; background: var(--blue-fill); }
-.v2-ss-go { width: 14px; height: 14px; margin-left: 6px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linejoin: round; opacity: 0; }
+.v2-ss-go { width: 14px; height: 14px; margin-left: 6px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: var(--ic-stroke); stroke-linejoin: round; opacity: 0; }
 /* 보관(×) — 자리는 늘 차지하고 hover 때만 보인다(압정과 같은 규약: 나타나며 행을 밀면 목록이 흔들린다). */
 .v2-ss-x { width: 18px; height: 18px; margin-left: 6px; padding: 0; flex: none; border: 0; border-radius: 5px; background: none; color: var(--muted-2); cursor: pointer; display: inline-grid; place-items: center; opacity: .45; }
 .v2-ss-row:hover .v2-ss-x, .v2-ss-x:focus-visible { opacity: 1; }
@@ -401,7 +410,7 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .v2-pj-row:hover .v2-pinb, .v2-pinb:focus-visible { opacity: 1; }
 .v2-pinb:hover { color: var(--ink); background: var(--bg-tint-2); }
 .v2-pinb.on { opacity: 1; color: var(--blue); }
-.v2-pinb-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8;
+.v2-pinb-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke);
   stroke-linejoin: round; stroke-linecap: round; }
 /* 고정됨 = 속이 찬 핀. ⚠ stroke 를 끄지 않는다 — 바늘(M12 17v5)은 선이라 fill 로는 안 그려져서,
    stroke:none 이면 바늘이 통째로 사라진 '머리만 남은 핀'이 된다. */
@@ -442,7 +451,7 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .v2-app-open { width: 28px; height: 28px; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
 .v2-app-open:hover { background: var(--bg); color: var(--ink); }
 .v2-app-open:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-.v2-app-open svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.v2-app-open svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); }
 .v2-find--apps { padding: 0 2px 7px; }
 
 .v2-app-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 1px 2px 12px; scrollbar-width: thin; scrollbar-color: transparent transparent; }
@@ -498,7 +507,7 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
   color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .v2-app-inst-open:focus-visible, .v2-app-inst-close:focus-visible, .v2-app-inst-project:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-radius: 6px; }
 .v2-app-inst-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 650; line-height: 1.4; }
-.v2-app-inst-ic { width: 17px; height: 17px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.v2-app-inst-ic { width: 17px; height: 17px; flex: none; fill: none; stroke: var(--muted); stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 .v2-app-inst:hover .v2-app-inst-ic, .v2-app-inst.on .v2-app-inst-ic { stroke: var(--ink-sub); }
 /* 지난 세션(#2208) — 오늘 쓰고 이미 끝난 행. **영역을 나누지 않고** 행이 스스로 말한다(원준 지시 2026-08-27):
    묶음은 「오늘」 그대로 두고 아이콘·제목을 낮춘 톤으로. 호버·선택 때는 제 색을 되찾는다.
@@ -562,7 +571,7 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .v2-app-inst-close svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
 /*  휴지통 글리프(#3568 — [AI 세션] 구역의 지난 세션 행)는 × 보다 획이 많다. 11px·2.2 로 그리면 뭉쳐서
     무슨 그림인지 안 읽힌다 — 트리 행의 휴지통(.v2-ss-trash)과 같은 값으로 조금 키우고 가늘게 한다. */
-.v2-app-inst-close--trash svg { width: 12.5px; height: 12.5px; stroke-width: 1.8; stroke-linejoin: round; }
+.v2-app-inst-close--trash svg { width: 12.5px; height: 12.5px; stroke-width: var(--ic-stroke); stroke-linejoin: round; }
 .v2-app-inst-project, .v2-app-inst-meta { grid-column: 1 / -1; grid-row: 2; min-width: 0; margin-left: 26px; align-self: center; }
 
 /*  남의 세션 표식(#2026) — 이 목록에 남의 세션이 서는 길은 '내가 열어 둔 창' 하나뿐인데(sideInstances ③),
@@ -617,7 +626,7 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .v2-app-inst-project:hover { color: var(--blue); }
 /* 조상(스페이스 › 리스트)이 먼저 줄고 **프로젝트 이름은 남는다** — 한 덩이로 두면 뒤가 잘려 이름이 사라진다(#1883 실측). */
 .v2-app-inst-pname { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.v2-app-inst-project-ic { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linejoin: round; }
+.v2-app-inst-project-ic { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linejoin: round; }
 .v2-app-inst-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--muted); }
 /* 세션 행 둘째 줄 = 내가 마지막으로 시킨 말(#2016 6차) — 인용 부호 + 한 줄. 단추가 아니다(행 전체가 세션을 연다). */
 .v2-app-inst-ask { grid-column: 1 / 3; grid-row: 2; min-width: 0; margin-left: 26px; align-self: center; display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); }
@@ -632,7 +641,7 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
   color: var(--muted); text-decoration: none; cursor: pointer; }
 .v2-dock-btn:hover, .v2-dock-btn.on { background: var(--bg); color: var(--ink); }
 .v2-dock-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-.v2-dock-ic { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.v2-dock-ic { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 .v2-dock-liv { width: 20px; height: 20px; display: inline-grid; place-items: center; border-radius: 999px; background: var(--ink); color: var(--bg); font-size: 10px; font-weight: 800; }
 .v2-dock-badge { position: absolute; top: 1px; right: calc(50% - 18px); min-width: 16px; height: 16px; padding: 0 4px; display: inline-grid; place-items: center;
   border-radius: 999px; background: var(--warn-deep); color: var(--on-fill); font-size: 9px; font-weight: 800; line-height: 1; }
@@ -684,7 +693,7 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
    1/n 로 고정되면서 드러난 것 — 종전엔 탭이 내용만큼 좁아져 그 빈 자리가 안 보였다.
    ×의 자리는 이제 탭마다 같은 곳(오른쪽 끝)이라 눈이 그 자리를 외운다. min-width:0 은 말줄임(…)의 전제다. */
 .v2-tab .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left; }
-.v2-tab-ic { width: 15px; height: 15px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.v2-tab-ic { width: 15px; height: 15px; stroke: currentColor; stroke-width: var(--ic-stroke); fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 /* 상태는 아이콘 색으로 — 도는 중 파랑 · 확인 필요 앰버 · 끝남 민트. 글자색은 '켜짐/꺼짐'만 말한다(두 축을 섞지 않는다). */
 .v2-tab-ic.st-busy { stroke: var(--blue); }
 .v2-tab-ic.st-wait { stroke: var(--warn-deep); }
@@ -708,6 +717,13 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 /* 곁칸의 손님 화면(#1719, 2026-08-20) — 미리보기 iframe(v2/aside-slot.ts). 손님이 떠 있는 동안 원래 칸
    (발자취·파일)은 hidden 으로 물러날 뿐 사라지지 않는다 — 닫으면 쌓아 둔 발자취가 그대로 돌아온다. */
 .v2-guest { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
+/* #4233 — 손님 화면은 우패널 기둥에 탭 판들과 나란히 산다(판은 화면마다 비워진다). 미리보기는 연 탭의 것, 우측 사이드바에 고정한
+   문서는 셸에 하나라 여럿이 있을 수 있고, 보이는 것은 지금 탭에 보일 하나뿐이다([hidden] — .v2-guest 가 display 를 가져 못박는다).
+   손님이 보이는 동안 판은 통째로 물러난다(v2/main.ts paintAsidePanes 가 has-guest 를 건다). */
+.v2-aside-pane.has-guest { display: none; }
+.v2-guest[hidden] { display: none; }
+/* 머리 왼쪽 이름(미리보기 · 문서)은 줄지 않는다 — 긴 제목에 밀려 글자가 한 자씩 세로로 쌓였다(#4233 실측). */
+.v2-guest-h > b { flex: none; white-space: nowrap; }
 /* 이름은 줄어드는 쪽 — [⟳ ↗ ×] 는 폭이 고정이라 잘리면 누를 것이 사라진다. */
 .v2-guest-h .v2-guest-t { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 12px; color: var(--muted); }
@@ -933,6 +949,64 @@ input.v2-dest-in { height: auto; border: 0; outline: 0; background: transparent;
 .cn-pill-soon { flex: none; display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; line-height: 1.6; color: var(--muted-head); background: var(--bg-tint-2); border: 1px dashed var(--line-net-2); white-space: nowrap; }
 .cn-sum-i.soon b { color: var(--muted-head); }
 .cn-soon-note { font-size: 13px; color: var(--ink-sub); line-height: 1.6; max-width: 60ch; }
+
+/* ── #3778 «카드가 두 축을 말한다» — 내 계정으로 직접 사용 / 자료 가져오기 ─────────────────────
+   머리말은 «연결이 두 가지» 라고 하는데 카드는 한 축만 봤다. 상세(cn-act)와 **같은 이름·같은 아이콘**으로
+   목록에도 두 줄을 세운다 — 두 화면이 한 사실을 다르게 말하면 사람은 화면을 못 믿는다.
+   ⚠ 채운 컬러 알약을 쓰지 않는다(디자인시스템: 상태는 점 + 라벨). 켜짐만 민트 채움, 나머지는 빈 고리다. */
+.cn-axes { display: flex; flex-direction: column; gap: 5px; padding-top: 9px; border-top: 1px solid var(--line-row); }
+.cn-ax { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 12.5px; }
+.cn-ax-ic { flex: none; display: inline-flex; color: var(--muted-2); }
+.cn-ax-lb { flex: 1; min-width: 0; color: var(--muted-head); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cn-ax-st { flex: none; display: inline-flex; align-items: center; gap: 5px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+.cn-ax-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2); }
+/*  켜진 줄만 잉크와 채운 점으로 올라온다 — 이 카드에서 «지금 무엇이 도는가»가 그 한 줄이다. */
+.cn-ax-on .cn-ax-ic { color: var(--mint-deep); }
+.cn-ax-on .cn-ax-lb { color: var(--ink); font-weight: 600; }
+.cn-ax-on .cn-ax-st { color: var(--mint-deep); }
+.cn-ax-on .cn-ax-dot { background: var(--mint-deep); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--mint-deep) 22%, transparent); }
+/*  이 앱엔 그 축이 아예 없다 — 꺼진 것과 다른 말이라 점을 그리지 않는다(끌 수 있는 것이 아니다). */
+.cn-ax-none .cn-ax-lb, .cn-ax-none .cn-ax-st { color: var(--muted-2); font-weight: 600; }
+.cn-ax-soon .cn-ax-dot { box-shadow: inset 0 0 0 1.5px var(--muted-2); opacity: .7; }
+.cn-ax-load .cn-ax-lb { color: var(--muted-2); }
+/*  아이콘 크기 — #v2-root .v2-ic(16px)가 .cn-ax .v2-ic 보다 특이도가 높다. 줄을 더해 이긴다(값으로 고치고
+    셀렉터를 고쳐 쓰지 않는다 — check-css-drops 규율 #317). */
+#v2-root .cn-ax .v2-ic { width: 14px; height: 14px; }
+/*  발이 하나뿐인 카드(연결됨 «관리 ›» · 켤 수 있음 [연결])는 그 하나가 오른쪽에 선다 — 빈 칸을 DOM 에
+    만들어 자리를 맞추지 않는다(빈 노드는 나중에 «왜 있지?»가 된다). */
+.cn-card-ft > :only-child { margin-left: auto; }
+
+/* ── #3778 [코드와 데이터] 도 같은 카드다 — 종전엔 얇은 행 두 줄이라 위 진열대와 딴 화면처럼 보였다.
+   타일은 앱 로고 자리와 같은 라운드 스퀘어에 **우리 색**(브랜드가 아니므로 틴트가 아니라 punch). */
+.svc-tile.cn-asset-tile { background: var(--bg-punch); color: var(--blue); }
+.cn-card-asset .cn-card-st { color: var(--muted-2); }
+#v2-root .cn-asset-tile .v2-ic { width: 22px; height: 22px; }
+#v2-root .cn-git-ic .v2-ic { width: 19px; height: 19px; color: var(--muted); }
+
+/* ── #3778 중간 상태 «연결 중» — 둘 중 하나만 켜고 나머지를 아직 안 정한 앱 ───────────────────
+   수집기는 흔히 저절로 생기므로 이 상태가 사실상 기본값이다. 「연결됨」 한 칸에 섞어 두면 **덜 끝난 것이
+   끝난 것처럼** 보여서, 카드·요약·묶음 셋이 함께 «아직 하나 남았다»를 말한다. 끝내면(켜거나 «안 쓴다»고
+   정하거나) 그 표시가 사라지고 「연결 완료」로 간다 — 끝냈다는 느낌이 화면에 남는 것이 이 표시의 목적이다.
+   ⚠ 색은 경고가 아니라 «진행 중»이다 — 잘못된 게 아니라 아직 안 끝났을 뿐이다. */
+.cn-sum-i.half b { color: var(--warn-text); }
+.cn-dot.half { background: var(--warn-text); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--warn-text) 20%, transparent); }
+.cn-card.half { border-color: var(--warn-line); }
+.cn-card.half:hover { border-color: var(--warn-text); background: var(--warn-bg); }
+.cn-card-pend { color: var(--warn-text); font-weight: 600; }
+.cn-card.half .cn-card-go { color: var(--warn-text); font-weight: 700; }
+/*  «안 쓰기로 했다» — 꺼진 것과 다른 말이라 다른 모양이다. 점은 채우되 조용한 색(정해진 것은 미완이 아니다). */
+.cn-ax-skip .cn-ax-st { color: var(--muted-head); }
+.cn-ax-skip .cn-ax-dot { background: var(--muted-2); box-shadow: none; }
+
+/*  상세에서 «연결 중»을 끝내는 줄 — 켜거나, 안 쓴다고 정하거나. 정한 뒤엔 같은 자리에서 되돌린다. */
+.cn-decide { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; padding: 11px 14px; border-radius: 12px;
+  background: var(--warn-bg); border: 1px solid var(--warn-line); flex-wrap: wrap; }
+.cn-decide .m { flex: 1; min-width: 200px; font-size: 13px; line-height: 1.6; color: var(--warn-text); }
+.cn-decide .m b { font-weight: 800; }
+.cn-decide.done { background: var(--bg-tint); border-color: var(--line-net); }
+.cn-decide.done .m { color: var(--ink-sub); }
+#v2-root .cn-decide .v2-ic { width: 15px; height: 15px; flex: none; color: var(--warn-text); }
+#v2-root .cn-decide.done .v2-ic { color: var(--muted-2); }
 /* ── #2243 안 B «설정 패널» — 앱 상세: 왼쪽 목차 + 오른쪽 패널 셋. 모든 앱이 같은 틀 ── */
 .cn-settings { display: grid; grid-template-columns: 224px minmax(0, 1fr); gap: 28px; margin-top: 18px; align-items: start; }
 .cn-snav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 0; }
@@ -1419,7 +1493,9 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-pad { position: fixed; inset: 0; z-index: 900; background: rgba(var(--tint-ink), .28); backdrop-filter: blur(11px); display: flex; flex-direction: column; align-items: center; padding: 48px 24px; overflow: auto; }
 /* 스포트라이트식 검색 한 칸(#1841) — 제목·설명 줄·닫기 버튼을 걷어내고 칸 하나만 남긴다.
    흰 판이 아니라 뒤가 비치는 유리 — 흐린 배경 위에 얹힌 한 겹이라 아이콘들과 같은 언어를 쓴다. */
-.v2-pad-field { width: min(560px, 100%); height: 58px; margin-bottom: 26px; display: flex; align-items: center; gap: 12px;
+/* 칸 + [취소] 한 줄. [취소] 는 터치 화면에서만 선다(아래) — 데스크톱은 칸 하나가 줄 전부라 그림이 종전 그대로다. */
+.v2-pad-top { width: min(560px, 100%); margin-bottom: 26px; display: flex; align-items: center; gap: 10px; }
+.v2-pad-field { flex: 1; min-width: 0; height: 58px; display: flex; align-items: center; gap: 12px;
   padding: 0 16px; border-radius: 16px; background: var(--v2-pad-field); border: 1px solid var(--v2-pad-field-line);
   backdrop-filter: blur(24px) saturate(1.3); box-shadow: 0 16px 44px rgba(var(--shadow-ink), .16); }
 .v2-pad-mag { width: 21px; height: 21px; flex: none; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; }
@@ -1437,16 +1513,27 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-pad-item b { font-size: 12.5px; font-weight: 700; line-height: 1.35; }
 .v2-pad-ico { width: 60px; height: 60px; display: grid; place-items: center; color: var(--ink-sub); }
 .v2-pad-ico .v2-ic { width: 30px; height: 30px; }
-/* 유리 앱 아이콘(#1841) — 런치패드의 배경·흐림은 그대로 두고, 카드/타일 크롬만 걷어 아이콘을 그대로 앉힌다.
-   ⚠ 서리 **색**은 여기 color 로 준다: 서리의 옅은 기울기가 currentColor 를 쓰는데, 그건 그라디언트가
-    얹힌 svg 자신의 color 를 보지 그 도형의 color 를 보지 않는다. 값은 90-dark.css 에서 뒤집힌다.
-   ⚠ 그림자·글로우는 넣지 않는다 — 그게 '네온'이 된다(규칙 ④). */
-.v2-gi { display: block; color: var(--v2-gi-frost); }
-.v2-gi-frost { fill-opacity: var(--v2-gi-frost-a); }
-.v2-gi-punch { fill: var(--v2-gi-punch); fill-opacity: var(--v2-gi-punch-a); }
-/* 타일 배경이 없으니 유리 아이콘이 곧 타일이다 — 칸을 꽉 채운다. */
+/* 앱 아이콘(#4233) — 타일 하나 + 선 아이콘 하나(v2/glass-icon.ts). 런치패드의 배경 · 흐림 · 격자는 그대로다.
+   선의 색은 앱마다 다르다(--gi-c-*, SVG 의 stroke 속성이 고른다).
+   타일은 놓이는 바탕에 따라 둘이다. 앱 화면(흐린 바탕)에서는 반투명 흰색(--gi-tile)이고,
+   종이 위(홈의 최근 연 앱 · 「맥락 관리」 표지)에서는 옅은 바탕색에 가는 테두리다. 종이 위에서 반투명 흰색은 보이지 않는다.
+   테두리는 아이콘 크기와 상관없이 1px 이다(non-scaling-stroke).
+   ⚠ 그림자 · 글로우는 넣지 않는다. */
+.v2-gi { display: block; }
+.v2-gi-tile { fill: var(--bg-tint); stroke: var(--line-net); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.v2-pad .v2-gi-tile { fill: var(--gi-tile); stroke: var(--gi-tile-line); }
+.v2-gi-glyph { fill: none; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
+/* 아이콘이 곧 타일이다. 칸을 꽉 채운다. */
 .v2-pad-ico .v2-gi { width: 60px; height: 60px; }
 .v2-pad-empty { color: var(--on-fill); font-size: 13px; }
+/* [취소] — Esc 가 없는 터치 화면의 나가는 길(#4230). 흐린 배경 위 글자 단추(아이폰 스포트라이트의 「취소」). */
+.v2-pad-cancel { display: none; flex: none; min-width: 44px; height: 44px; padding: 0 6px; background: none; border: 0; border-radius: 10px;
+  font: inherit; font-size: 16px; font-weight: 600; color: var(--ink); cursor: pointer; }
+.v2-pad-cancel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 900px), (hover: none) {
+  .v2-pad-cancel { display: block; }
+  .v2-pad-esc { display: none; }               /* 누를 Esc 가 없는 자리에 esc 키캡은 거짓 안내다 */
+}
 /* 세션 앱 타일(#1780) — 화면 앱과 성격이 다르다(열면 전용 AI 세션이 뜬다). 민트 강조 + 배지로 구분. */
 .v2-pad-item--app { position: relative; cursor: pointer; font: inherit; }
 .v2-pad-item--app:hover { background: rgba(var(--tint-ink), .12); }
@@ -1484,7 +1571,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
     border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--muted);
     font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
   .v2-tl-btn:hover { color: var(--ink); border-color: var(--muted-3-line); }
-  .v2-tl-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+  .v2-tl-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; }
   #v2-root:not(.no-aside) .v2-tl-btn, #v2-root.no-tl .v2-tl-btn { display: none; }
   #v2-root.no-aside:not(.no-tl) .v2-tabs { padding-right: 112px; }   /* 탭도 [모든 탭] 끝막이도 서랍 버튼 밑으로 안 숨게 */
   #v2-root.d-aside .v2-tl-btn { color: var(--ink); background: var(--canvas); }
@@ -1572,7 +1659,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
     color: var(--ink-sub); cursor: pointer; flex: none; -webkit-tap-highlight-color: transparent; }
   .v2-mbar-btn:active, .v2-mbar-btn[aria-expanded="true"] { background: var(--bg); color: var(--ink); }
   .v2-mbar-btn[hidden] { display: none; }
-  .v2-mbar-ic { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .v2-mbar-ic { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
   .v2-mbar-slot { flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: center; }
   .v2-mbar-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     text-align: center; font-size: 13.5px; font-weight: 700; color: var(--ink); }
@@ -1654,7 +1741,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   .v2-frame-sub { display: none; }              /* '클래식 화면 · 그대로 실림' — 폰에선 제목과 [새 탭] 만 남긴다 */
   /* 런치패드 — 화면 가득, 격자는 촘촘히. */
   .v2-pad { padding: calc(12px + env(safe-area-inset-top, 0px)) 12px calc(16px + env(safe-area-inset-bottom, 0px)); }
-  .v2-pad-field { height: 50px; margin-bottom: 16px; border-radius: 14px; }
+  .v2-pad-top { margin-bottom: 16px; }
+  .v2-pad-field { height: 50px; border-radius: 14px; }
   .v2-pad-grid { grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 10px; }
   .v2-pad-item { padding: 14px 10px 12px; }
   /* 프로젝트 연결 드롭다운(세션 상단바) */
@@ -1800,14 +1888,14 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-bin + .v2-bin { margin-top: 2px; }
 .v2-bin:hover { background: var(--bg); color: var(--ink); }
 .v2-bin.on { background: var(--bg); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-net); }
-.v2-bin-ic { width: 16px; height: 16px; flex: none; margin-left: 20px; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
+.v2-bin-ic { width: 16px; height: 16px; flex: none; margin-left: 20px; fill: none; stroke: var(--muted-2); stroke-width: var(--ic-stroke); stroke-linejoin: round; stroke-linecap: round; }
 .v2-bins-fixed .v2-bin-ic { margin-left: 4px; }
 .v2-bin:hover .v2-bin-ic, .v2-bin.on .v2-bin-ic { stroke: var(--blue); }
 .v2-bin .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: 4px; }
 /* 아래 고정 압정 — 프로젝트 행의 압정과 같은 규약(자리는 늘 차지, 손을 얹으면 보임, 켜져 있으면 늘 보임). */
 .v2-bin:hover .v2-bin-pin, .v2-bin-pin:focus-visible { opacity: 1; }
 /* 지난 세션 행의 휴지통 단추 — 보관(×)과 같은 자리·같은 크기, 손을 얹으면 위험색. */
-.v2-ss-trash .v2-ss-x-ic { width: 13px; height: 13px; stroke-width: 1.8; stroke-linejoin: round; }
+.v2-ss-trash .v2-ss-x-ic { width: 13px; height: 13px; stroke-width: var(--ic-stroke); stroke-linejoin: round; }
 
 /* 가운데 화면 — 홈·확인할 것(v2-now-row)과 같은 행 문법. 아카이브는 프로젝트 카드(머리 + 세션 목록), 휴지통은 묶음 둘. */
 .v2-bin-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
@@ -1821,7 +1909,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-bin-head .t { font-size: 14.5px; font-weight: 750; color: var(--ink); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-bin-head .t:hover { text-decoration: underline; }
 .v2-bin-head .p { font-size: 12px; color: var(--muted); }
-.v2-bin-fold { width: 18px; height: 18px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linejoin: round; }
+.v2-bin-fold { width: 18px; height: 18px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: var(--ic-stroke); stroke-linejoin: round; }
 .v2-bin-fold.sm { width: 15px; height: 15px; margin: 0 3px 0 1px; }
 .v2-bin-list { padding: 6px; }
 .v2-bin-card .v2-bin-list { padding: 6px 8px; }
@@ -1937,16 +2025,54 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-tidybar-k { flex: 1; min-width: 0; font-size: 12px; font-weight: 700; color: var(--ink-sub);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 
-/* 받은 알림(#1891) — 「확인할 것」 위 칸. 세션 줄(.v2-now-row)과 같은 골격을 쓰되 상태점만 다르다. */
+/* 받은 알림(#1891 → #4180) — 「확인할 것」의 행. 세션 줄(.v2-now-row)과 같은 골격에 **앞자리(누가·무엇이)** 가 붙는다:
+   사람 얼굴(댓글·언급) · 리브 L · 앱 종. 인스타그램 알림처럼 «누가 무엇을 했나» 가 한 줄에 읽혀야 들어갈 이유가 생긴다. */
 .v2-noti-sec { display: block; }
-.v2-noti-row .tw { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.v2-noti-row { align-items: center; }
+/*  ⚠ 세로 묶음은 **stretch** 여야 한다 — 바탕 규칙(.v2-now-row .tw)의 `align-items: baseline` 이 세로 방향에서도 살아남아
+    제목이 칸 너비를 무시하고 내용 너비(414px)로 서서 시각 위에 겹쳤다(프리뷰 실측 2026-09-23: .tw 244px · .t 414px).
+    본문(.p)도 바탕의 `max-width: 180px`(가로 묶음의 프로젝트명 칸)를 물려받아 반 줄에서 잘렸다 — 둘 다 여기서 푼다. */
+.v2-noti-row .tw { display: flex; flex-direction: column; align-items: stretch; min-width: 0; flex: 1; gap: 1px; }
+.v2-noti-row .t, .v2-noti-row .p { display: block; width: auto; max-width: none; flex: none; }
 .v2-noti-row .t { font-size: 13.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-noti-row .p { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-noti-row.unread .t { font-weight: 700; }
-/* 안 읽음 표식은 **점 하나**다 — 줄 전체를 물들이면 목록이 시끄러워지고, 읽은 줄이 바래 보인다. */
+/* 안 읽음 표식은 **점 하나**다 — 줄 전체를 물들이면 목록이 시끄러워지고, 읽은 줄이 바래 보인다. 오른쪽 끝(시각 뒤). */
 .v2-noti-dot { width: 7px; height: 7px; border-radius: 50%; background: transparent; flex: none; }
 .v2-noti-dot.on { background: var(--accent, #2563eb); }
 .v2-noti-row .st { font-size: 12px; color: var(--muted); flex: none; }
+/* 앞자리 — 28px 한 칸. 얼굴은 .pava(17-projects-board-ext)의 원형 그대로, 표식 둘은 같은 크기의 원. */
+.v2-noti-lead { flex: none; width: 28px; height: 28px; display: inline-grid; place-items: center; }
+.v2-noti-ava.pava { width: 28px; height: 28px; font-size: 11px; }
+.v2-noti-mark { width: 28px; height: 28px; border-radius: 50%; display: inline-grid; place-items: center; }
+.v2-noti-mark.liv { background: var(--bg-success); border: 1px solid var(--ok-line-2); color: var(--mint-deep); font-weight: 800; font-size: 11px; }
+.v2-noti-mark.app { background: var(--bg-tint); color: var(--muted-head); }
+.v2-noti-mark.sess { width: 8px; height: 8px; background: var(--warn-deep); }
+.v2-noti-mark-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
+
+/* ── 홈의 종(#4180) — 「확인할 것」의 입구. 레일 구역·사이드바 구획에서 홈 머리줄 오른쪽 끝으로(회의 2026-09-21). ──
+   숫자는 종전 레일 배지와 같은 앰버(사이드바 통틀어 앰버 숫자는 하나 — #1719 규칙을 자리만 옮겨 지킨다). */
+.v2-home-eyebrow .sp { flex: 1; }
+.v2-bell { position: relative; flex: none; width: 34px; height: 34px; display: inline-grid; place-items: center; margin: -8px 0;
+  border: 0; border-radius: 9px; background: none; color: var(--muted-head); cursor: pointer; }
+.v2-bell:hover, .v2-bell.on { background: var(--bg-tint-2); color: var(--ink); }
+.v2-bell:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-bell-ic { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
+.v2-bell-n { position: absolute; top: 1px; right: 1px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+  background: var(--warn-deep); color: var(--on-fill); font-size: 10px; font-weight: 800; display: inline-grid; place-items: center;
+  font-variant-numeric: tabular-nums; box-shadow: 0 0 0 2px var(--bg); pointer-events: none; }
+/* 종의 팝오버 — 슬랙·깃허브의 알림 드롭다운. **모달이 아니다**(바깥 클릭·Esc·이동으로 닫힌다). 워크스페이스 팝오버(.v2-wspop)와 같은 면. */
+.v2-noti-pop { position: fixed; z-index: 70; width: 400px; max-width: calc(100vw - 16px); max-height: min(70vh, 560px);
+  display: flex; flex-direction: column; padding: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(var(--shadow-ink), .18); overflow: hidden; }
+.v2-noti-pop-h { display: flex; align-items: center; gap: 8px; padding: 10px 12px 8px 14px; border-bottom: 1px solid var(--line-net); }
+.v2-noti-pop-h .v2-k { flex: 1; min-width: 0; }
+.v2-noti-pop-b { flex: 1; min-height: 0; overflow: auto; padding: 6px; display: flex; flex-direction: column; }
+.v2-noti-pop-b .v2-noti-row { padding: 8px; }
+.v2-noti-pop-empty { margin: 0; padding: 26px 14px; text-align: center; font-size: 13px; color: var(--muted); }
+.v2-noti-pop-f { border-top: 1px solid var(--line-net); padding: 8px 14px; }
+.v2-noti-pop-f a { font-size: 12.5px; font-weight: 600; color: var(--blue); text-decoration: none; }
+.v2-noti-pop-f a:hover { text-decoration: underline; }
 
 /* ══ #2033 — 홈 목록의 묶는 축(세션 ↔ 프로젝트) ═══════════════════════════════
    집합은 그대로, 묶는 축만 바꾼다. 행 문법(×·압정·상태 점)은 두 축에서 같은 것을 쓴다.       */
@@ -1960,7 +2086,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-axisbtn.on { color: var(--on-fill); background: var(--blue-fill); }
 .v2-axisbtn.on:hover { color: var(--on-fill); background: var(--blue-fill-deep); }
 .v2-axisbtn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-.v2-axisbtn-ic { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+/*  #4233 — 그림은 폴더 안 줄 둘(icons.ts folderRows). 검토판 1판과 같은 15px · 1.9 선. */
+.v2-axisbtn-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ★펼친 묶음 = 흰 카드 그릇 — 세션이 프로젝트의 **안**에 산다는 걸 면(面)이 말한다.
    들여쓰기+세로선만으로는 "목록 둘이 이웃한 그림"으로 읽혔다(상민님 2026-08-18 — 트리 .v2-pj.open 과 같은 처방).
@@ -1988,7 +2115,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
    처음엔 머리글 12.5/700 · 행 13/600 이라 행이 더 커 보여 위계가 뒤집혀 있었다(프리뷰 실측). */
 .v2-pg-t .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 13.5px; font-weight: 700; line-height: 1.5; }
-.v2-pg-ic { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
+.v2-pg-ic { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: var(--ic-stroke); stroke-linejoin: round; stroke-linecap: round; }
 .v2-pg-row:hover .v2-pg-ic { stroke: var(--blue); }
 /* 도는 세션이 하나도 없는 카드(#3778 2판) — **이름 자체가** «오늘은 여기 끝났다» 고 말한다.
    오른쪽 끝 고리 하나로는 안 됐다: 손을 얹으면 .v2-sums 가 숨고(그 자리를 압정·＋·[→] 가 받는다)
@@ -2106,6 +2233,95 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-bin-side-detail .li .v.keep { color: var(--mint-deep); max-width: 46%; white-space: normal; text-align: right; line-height: 1.4; }
 .v2-bin-side-detail .fp h5:first-child { margin-top: 12px; }
 .v2-bin-side-detail .act, .v2-bin-side-sum .act { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+/* ── 휴지통 안 D「네 탭」(#3778, 원준 2026-09-20 확정) ──
+   AI 세션 · 프로젝트 · 자료 · 지식을 하드하게 가르고, 탭마다 그 종류의 원래 생김새로: 묶음 줄 / 폴더 덩이 / 썸네일 격자 / 목록+읽기 칸.
+   곁칸이 없다(main.ts titleFor noAside). 토큰만 쓴다 — 새 색을 만들지 않는다. 파괴 동사는 코랄 글자(진입점), 채운 파랑 0(P1). */
+.v2-trash-tools { flex: none; display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.v2-trash-tools .v2-bin-emptyb { margin-top: 0; }
+.v2-trash-seg { display: inline-flex; gap: 6px; margin-top: 22px; padding: 4px; background: var(--gray-bg-2); border-radius: 12px; max-width: 100%; overflow-x: auto; }
+.v2-trash-segb { display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 16px; border: 1px solid transparent; border-radius: 9px; background: none; font: inherit; font-size: 14px; font-weight: 700; color: var(--ink-note); cursor: pointer; white-space: nowrap; }
+.v2-trash-segb .n { font-size: 12.5px; font-weight: 600; opacity: .8; font-variant-numeric: tabular-nums; }
+.v2-trash-segb:hover { background: var(--bg); }
+.v2-trash-segb.on { background: var(--chip-dark); color: var(--on-fill); }
+.v2-trash-segb:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-trash .v2-bin-selbar { margin-top: 12px; }
+.v2-trash .v2-bin-selbar[hidden] { display: none; }
+.v2-trash-body { margin-top: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.v2-trash .btn-text.danger { color: var(--coral-text); }
+.v2-trash .btn-text.danger:hover { color: var(--coral); }
+.v2-trash .sp { flex: 1; min-width: 0; }
+.v2-trash .mono { flex: none; font: 600 11.5px/1 "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: var(--muted-head); }
+/* 묶음 덩이 — 세션은 있던 프로젝트로, 프로젝트는 그 자신이 한 덩이 */
+.v2-trash-grp { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); }
+.v2-trash-grp .gh { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 0 12px; background: var(--bg-tint); border-bottom: 1px solid var(--line-row); }
+.v2-trash-grp .gh b { font-size: 13.5px; font-weight: 800; color: var(--ink-sub); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-trash-grp .gh .c { flex: none; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.v2-trash-row { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 12px; border-bottom: 1px solid var(--line-row); color: var(--ink-sub); font-size: 13px; }
+.v2-trash-row:last-child { border-bottom: 0; }
+.v2-trash-row:hover { background: var(--bg-tint); }
+.v2-trash-row .sel { margin: 0; flex: none; }
+.v2-trash-row .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 700; color: var(--ink); text-decoration: none; }
+.v2-trash-row a.t:hover { color: var(--blue); }
+.v2-trash-row.p { min-height: 48px; }
+.v2-trash-row.p .t { font-size: 14.5px; font-weight: 750; }
+.v2-trash-row .chip { flex: none; font-size: 12px; color: var(--muted); border: 1px solid var(--line-net); border-radius: 999px; padding: 1px 8px; }
+.v2-trash-row .m { flex: none; font-size: 12.5px; color: var(--muted); }
+.v2-trash-row .w { flex: none; min-width: 64px; text-align: right; }
+.v2-trash-row .w .m, .v2-trash-file .f .m { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.v2-trash-row .acts { flex: none; display: inline-flex; gap: 2px; visibility: hidden; }
+.v2-trash-row:hover .acts, .v2-trash-row:focus-within .acts { visibility: visible; }
+@media (hover: none) { .v2-trash-row .acts { visibility: visible; } }
+.v2-trash-row.p + .v2-trash-kids { margin-top: -2px; }
+.v2-trash-kids + .v2-trash-row { border-top: 1px solid var(--line-row); }
+.v2-trash-kids { margin: 0 12px 10px 46px; padding: 2px 4px; border-left: 2px solid var(--line); background: var(--bg-tint); border-radius: 0 8px 8px 0; }
+.v2-trash-kids .k { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; font-size: 12.5px; color: var(--ink-note); text-decoration: none; border-radius: 6px; }
+.v2-trash-kids .k:hover { background: var(--bg-tint-2); }
+.v2-trash-kids .kt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-trash-kids .kv { margin-left: auto; flex: none; font-size: 12px; color: var(--muted); }
+.v2-trash-kids .km { margin: 4px 8px 6px; font-size: 12px; color: var(--muted); }
+.v2-trash-old { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.v2-trash-old .v2-bin-gt { align-self: flex-start; font-size: 13.5px; }
+.v2-trash-old .c { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.v2-trash-old .d { margin: 0; font-size: 12.5px; color: var(--muted-head); line-height: 1.6; max-width: 72ch; }
+/* 자료 — 썸네일 격자 */
+.v2-trash-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(208px, 1fr)); gap: 14px; }
+.v2-trash-file { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); display: flex; flex-direction: column; min-width: 0; }
+.v2-trash-file .th { position: relative; height: 104px; background: var(--gray-bg-2); display: flex; align-items: center; justify-content: center; }
+.v2-trash-file .ext { font: 700 13px/1 "SF Mono", ui-monospace, Menlo, Consolas, monospace; letter-spacing: 1px; color: var(--muted-head); padding: 0 10px; text-align: center; }
+.v2-trash-file .ck { position: absolute; left: 0; top: 0; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.v2-trash-file .ck .sel { margin: 0; }
+.v2-trash-file .bd { padding: 10px 12px 8px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.v2-trash-file .bd .t { font-size: 13.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-trash-file .bd .s { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-trash-file .f { display: flex; align-items: center; gap: 2px; margin-top: 2px; }
+.v2-trash-file .f .btn-text { font-size: 12.5px; }
+/* 지식 — 왼쪽 목록 + 오른쪽 읽기 칸 */
+.v2-trash-know { display: flex; align-items: flex-start; gap: 16px; min-width: 0; }
+.v2-trash-klist { width: 380px; flex: none; max-width: 42%; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); }
+.v2-trash-klist .kr { display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 0 12px; border-bottom: 1px solid var(--line-row); }
+.v2-trash-klist .kr:last-of-type { border-bottom: 0; }
+.v2-trash-klist .kr:hover { background: var(--bg-tint); }
+.v2-trash-klist .kr.on { background: var(--bg-sel); box-shadow: inset 3px 0 0 var(--blue); }
+.v2-trash-klist .kr .sel { margin: 0; flex: none; }
+.v2-trash-klist .kb { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border: 0; background: none; font: inherit; text-align: left; cursor: pointer; }
+.v2-trash-klist .kb .t { max-width: 100%; font-size: 14px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-trash-klist .kb .s { font-size: 12px; color: var(--muted); }
+.v2-trash-klist .kb:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; border-radius: 6px; }
+.v2-trash-read { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding: 20px 24px; display: flex; flex-direction: column; gap: 8px; }
+.v2-trash-read .hd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.v2-trash-read .cat { flex: none; font-size: 12px; font-weight: 700; color: var(--ink-note); background: var(--bg-tint-2); border-radius: 999px; padding: 2px 9px; }
+.v2-trash-read .by { font-size: 12px; color: var(--muted); }
+.v2-trash-read h2 { margin: 6px 0 2px; font-size: 22px; font-weight: 800; letter-spacing: -.4px; line-height: 1.3; overflow-wrap: anywhere; }
+.v2-trash-read .meta { margin: 0; font-size: 12.5px; color: var(--muted); }
+.v2-trash-read .pn-md { max-height: 56vh; overflow: auto; overflow-wrap: anywhere; }
+.v2-trash-read .ft { margin: 8px 0 0; padding-top: 10px; border-top: 1px solid var(--line-row); font-size: 12.5px; color: var(--mint-deep); line-height: 1.6; }
+@media (max-width: 900px) {
+  .v2-trash-know { flex-direction: column; align-items: stretch; }
+  .v2-trash-klist { width: auto; max-width: none; max-height: 300px; overflow-y: auto; }
+  .v2-trash-row { flex-wrap: wrap; padding-block: 6px; }
+  .v2-trash .v2-bin-top { flex-wrap: wrap; }
+}
 
 /* ══ #2232 OAuth 릴레이 복귀 탭 — 셸 없이 결과 한 장(코어 /oauth/callback 페이지와 같은 생김새) ══ */
 /* ⚠ #v2-root 는 id 선택자로 grid(왼쪽 316px 열)를 깐다 — 클래스만으로는 못 이겨 안내가 첫 열에 갇혔다(원준님 실측 2026-08-28). id 로 덮는다. */

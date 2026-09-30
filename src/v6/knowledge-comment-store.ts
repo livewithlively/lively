@@ -26,9 +26,13 @@ export async function postKnowledgeComment(name: string, text: string, ctx?: Wri
     const ok = await one(itemsPool, `SELECT 1 AS x FROM knowledge_comment WHERE id=$1 AND name=$2 AND reply_to IS NULL`, [parentId, name]);
     if (ok) parent = parentId;
   }
-  await itemsPool.query(
-    `INSERT INTO knowledge_comment(name, author, body, reply_to, created_at) VALUES($1, $2, $3, $4, now())`,
+  const ins = await itemsPool.query(
+    `INSERT INTO knowledge_comment(name, author, body, reply_to, created_at) VALUES($1, $2, $3, $4, now()) RETURNING id`,
     [name, ctx?.actor ?? null, body, parent]);
+  //  #4180 — 태스크 댓글과 같은 배선: 언급된 사람·쓴 사람에게 「확인할 것」 알림(best-effort, 응답을 막지 않는다).
+  const cid = Number((ins.rows[0] as { id?: unknown } | undefined)?.id) || null;
+  void import("./comment-notify.js").then((m) => m.notifyKnowledgeComment(name, { author: ctx?.actor ?? null, body }, cid))
+    .catch(() => { /* 알림은 댓글의 부수 효과 */ });
   return getKnowledgeCommentFeed(name, ctx?.actor ?? null);
 }
 

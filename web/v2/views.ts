@@ -2,7 +2,7 @@
 //  홈은 **입력창 하나**(claude.ai 홈처럼 — Enter 로 프로젝트 없는 세션이 열린다, v2/quick-session.ts)이고,
 //  프로젝트는 v2/panes.ts(칸 셸 — main.ts mountProjectShell 이 그걸 마운트한다), 세션은 그 세션 자체(대화창 — 라이브 또는 중앙 기록)를 실는다. 리브 대화는 #/liv 와 칸 「리브」(panes-parts.ts)에 있다.
 //  클래식 모듈을 **복제하지 않는다** — 대화·세션 목록·프로젝트 상세는 이미 있는 것을 가져다 붙인다.
-import { el, personName, relTime, state, sv, toast } from '../core.js';
+import { el, personName, state, sv, toast } from '../core.js';
 import { composerAttach } from './compose-attach.js';
 import { projMatches } from '../lib/proj-match.js';
 import { composerMention } from './compose-mention.js';
@@ -12,7 +12,8 @@ import { mountSessionChat, type SessionChatHandle, type SessionChatTarget } from
 import type { TrailWidget } from '../session-trail.js';
 import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen } from '../session-status.js';
 import { appGlassIcon, appHref, openLaunchpad, recentApps, soloSessionUrl, terminalUrl } from './apps.js';
-import { askNotificationPermission, loadNotifications, markNotificationsRead, notificationPermission, notificationRow, type NotificationFeed } from './notifications.js';   // #1891 받은 알림 이력
+import { askNotificationPermission, loadNotifications, markNotificationsRead, notificationPermission, notificationRow, onUnread, type NotificationFeed } from './notifications.js';   // #1891 받은 알림 이력 · #4180 종의 시계
+import { notifyBell } from './notify-bell.js';   // #4180 — 「확인할 것」의 입구는 홈 머리줄의 종
 
 export interface Proj {
   id: number; name: string; status?: string | null; status_category?: string | null; description?: string | null; list_id?: number | null; updated_at?: string | null;
@@ -30,6 +31,9 @@ export interface ProjFolder { id: number; name: string; parent_id?: number | nul
 export interface Sess {
   id: string; label: string; projectId: number | null; node: string | null;
   live: boolean; alive: boolean; owned: boolean; stateKey: string; stateLabel: string; lastSeen: number; raw: any;
+  /** 만든 때(ms) — 박스는 `created`(초), 기록만 남은 것은 `first_seen`. 둘 다 있으면 이른 쪽(되살린 박스는 대화가 먼저다).
+   *  [AI 세션] 목록의 「만든 때」 열이 읽는다(#4233, 원준 2026-09-26 «생성시각도 하나 열로»). 0 = 모른다. */
+  createdAt?: number;
   // 중앙 기록 좌표(대화 uuid) — 라이브 행에 접힌 기록(mergeSessions). 기록만 있는 행은 id 자체가 uuid 라 비어 있다.
   logId?: string | null; logNode?: string | null;
   // 접힌 기록의 **대화 제목**(= 그 세션에 처음 시킨 말). 멈춘 세션은 pane 제목(raw.title)이 비어 있어 이름 자리가
@@ -64,7 +68,7 @@ export function dotCls(stateKey: string): string {
   if (stateKey === 'shell') return 'shell';
   return '';
 }
-const when = (ms: number) => (ms ? relTime(new Date(ms).toISOString()) : '');
+//  (세션 시각 서식 `when` 은 #4180 에서 걷었다 — 「확인할 것」이 세션 줄을 세우지 않는다. 알림 행의 시각은 notifications.ts 가 그린다.)
 
 // ── '지금 도는 세션' vs '지난 세션' — 화면 셋이 같은 술어를 쓴다(#1808) ───────────────
 //  · 도는 세션 = 박스가 tmux 에 살아 있는 것.
@@ -85,11 +89,23 @@ export const isPastSess = (s: Sess): boolean => !isLiveSess(s);
  *  그 값이 안 실린 행(구 응답·노드 raw 수집)용 폴백이다. 둘 다 없으면 **내 것이 아니다**(fail-closed —
  *  모르는 세션을 내 할 일로 세는 쪽이 더 나쁘다).
  */
-export const isMineSess = (s: Sess): boolean => {
+export const isMineSess = (s: Pick<Sess, 'owned' | 'raw'>): boolean => {
   if (s.owned) return true;
   const me = String((state.me && (state.me as { userId?: string }).userId) || '');
   return !!me && String((s.raw && s.raw.owner) || '') === me;
 };
+/** 이 세션에 **초대받았나**(#3870) — 초대 명단(raw.invites)에 내가 있다. 주인은 여기서 거짓이다(isMineSess 가 따로 답한다). */
+export const isInvitedSess = (s: Pick<Sess, 'owned' | 'raw'>): boolean => {
+  const me = String((state.me && (state.me as { userId?: string }).userId) || '');
+  const inv = s.raw && Array.isArray(s.raw.invites) ? (s.raw.invites as unknown[]).map(String) : [];
+  return !!me && !isMineSess(s) && inv.includes(me);
+};
+/**
+ * 이 세션을 다른 프로젝트로 옮길 수 있나(#3778 → #3870) — 주인 **또는 초대받은 사람**(원준 2026-09-30 «둘 다 되게»).
+ *  초대받은 사람은 이미 그 세션에 주인 이름으로 지시를 넣을 수 있다 — 소속을 바꾸는 것은 그보다 큰 권한이 아니다.
+ *  최종 판정은 서버다(session-project-routes setSessionProject — 실행은 주인 이름으로).
+ */
+export const canMoveSess = (s: Pick<Sess, 'owned' | 'raw'>): boolean => isMineSess(s) || isInvitedSess(s);
 // 휴지통(#1851) — 멈춘 세션 중 사람이 휴지통으로 보낸 것. 사이드바·홈·확인할 것 어디에도 안 나오고 휴지통 화면에만 있다.
 export const isTrashedSess = (s: Sess): boolean => !!s.trashedAt;
 export const isArchivedProj = (p: Proj | null | undefined): boolean => !!(p && p.archived_at);
@@ -335,7 +351,9 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
         el('span', { text: `${d.getMonth() + 1}월 ${d.getDate()}일 ${KO_DAY[d.getDay()]}요일` }),
         // 세션이 하나도 안 돌면 그 말 자체를 안 한다 — '도는 세션 없음'은 정보가 아니라 빈자리 채우기다.
         busy ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'st busy' }, dot('busy'), `작업 중 ${busy}`)] : null,
-        waiting ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'st wait' }, dot('waiting'), `답 기다림 ${waiting}`)] : null),
+        waiting ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'st wait' }, dot('waiting'), `답 기다림 ${waiting}`)] : null,
+        //  #4180 — 「확인할 것」의 종(회의 2026-09-21: 레일에서 홈으로, 숫자만 보이다가 누르면 목록). 머리줄 오른쪽 끝 한 자리.
+        el('span', { class: 'sp' }), notifyBell()),
       el('h1', { class: 'v2-h1', text: `${tod}${name ? ', ' + name + '님' : ''}.` }),
       el('p', { class: 'v2-home-sub', text: '무엇을 할까요?' }),
       //  «어디에 열까»는 «무엇을 시킬까» 보다 **먼저** 정해지는 질문이라 위에 선다. 다만 얇고 조용하게 —
@@ -374,80 +392,67 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
 //  그 세 결은 다른 자리가 이미 맡고 있다 — 답 기다림·완료는 [확인할 것], 살아 있는 세션은 사이드바의 프로젝트 폴더,
 //  지난 세션은 그 폴더의 '지난 세션'과 AI 세션 앱. 홈에 네 번째 사본을 두지 않는다.
 
-// ── 확인할 것(#1719 사이드바 개편 안2) — 시키다→기다리다→**확인**의 병목을 한 화면에 모은다 ───────
-//  · 답을 기다려요: 승인·선택을 기다리는 세션(waiting) — **내 것만**(isMineSess).
-//    ★2026-08-27 뒤집힘(#1875, 원준). 종전 규칙은 "보이는 것 전부 — 프로젝트 세션은 팀 누구든 답할 수 있으니까"
-//     였다. 실제로 써 보니 그 이득보다 **내가 답할 수 없는 줄이 내 할 일로 서는** 비용이 컸다: 목록에는 동료의
-//     프로젝트 세션이 상시로 들어오고(#452 전원 공개), 배지 숫자가 남의 대기로 올라 내 것이 몇 건인지 알 수 없게
-//     된다. 신고: *"다른 사람이 만든 세션에서 그 사람이 확인할 것도 내가 확인할 것중에 하나로 뜬다."*
-//     동료 세션을 **보는** 길은 그대로다(사이드바·프로젝트 화면) — 「확인할 것」만 내 것으로 좁혔다.
-//  · 끝났어요: 시킨 작업이 끝났는데 아직 안 본 세션(stateKey 'done') — 내 것만(남의 완료를 내가 '확인'할 일은 없다).
-//    ↑ 이 구획은 처음부터 내 것만이었다. 두 구획의 규칙이 갈려 있던 것이 위 신고의 형태였다.
-//  행은 홈의 nowList 와 같은 문법(v2-now-row) — 새 시각 언어를 만들지 않는다. 들어가 보면(lastAttached 갱신) 목록에서 빠진다.
+// ── 확인할 것(#1719 → #4180) — 받은 알림의 이력 한 화면 ─────────────────────────────────
+//  #4180(회의 2026-09-21 상민·원준): 세션 대기·완료 줄은 여기서 걷었다 — «하루에 세션을 수십 개 쓰면 모든 답이 쌓여서 무의미하다».
+//   그 상태는 사이드바의 상태점과 배너가 이미 말한다. 남는 것은 **내용이 있는 알림** — 누가 «어디»에 댓글을 남겼다 ·
+//   나를 언급했다 · 리브가 답했다 · 앱이 보냈다(서버가 종류로 가르고 이 화면은 inbox 렌즈로 읽는다, notify-policy).
+//  입구는 홈 머리줄의 종(notify-bell.ts)이고 이 화면은 그 종의 «전체 보기» 다(폰에선 종이 곧 이 화면을 연다).
+//  #1875 의 소유 격리는 서버가 진다 — 알림 행은 처음부터 받는 사람(member_id) 것만 온다(org/store/app-notifications).
 /**
- * 「확인할 것」 = **받은 알림의 이력**(#1891) + 지금 내 답을 기다리는 세션.
- *
- * 종전엔 라이브 세션에서 파생만 했다 — 화면을 안 보고 있으면 지나갔고 이력이 없었다.
- * 이제 위쪽은 서버가 남긴 알림(앱이 보낸 것 전부), 아래쪽은 지금 상태다. 둘은 겹칠 수 있지만
- *  성격이 다르다: 알림은 **그때 무슨 일이 있었나**, 대기 세션은 **지금 무엇이 막혀 있나**.
+ * 「확인할 것」 = **받은 알림의 이력**(inbox 렌즈).
+ *  `_data` 는 받지만 쓰지 않는다 — 라우터(main.ts)가 다른 중앙 화면과 같은 모양으로 부른다.
  */
-export function renderInbox(host: HTMLElement, data: V2Data): void {
-  //  #1875 — 「확인할 것」은 **내 것만**. 남의 프로젝트 세션이 답을 기다리는 것까지 여기 세우면
-  //   내가 답할 수 없는 줄에 [답하기] 가 붙는다(원준 신고 2026-08-27). isMineSess 가 그 단일 술어다.
-  const waits = data.sessions.filter((s) => isLiveSess(s) && isMineSess(s) && s.stateKey === 'waiting').sort((a, b) => b.lastSeen - a.lastSeen);
-  const dones = data.sessions.filter((s) => isLiveSess(s) && isMineSess(s) && s.stateKey === 'done').sort((a, b) => b.lastSeen - a.lastSeen);
-  const rowOf = (s: Sess): HTMLElement => {
-    const pn = projName(data, s.projectId);
-    const title = sessDisplayName(s, pn);
-    return el('a', { class: 'v2-now-row' + (s.stateKey === 'waiting' ? ' wait' : ''), href: '#/s/' + encodeURIComponent(s.id), 'data-ctx': 'session', 'data-sid': s.id },
-      dot(s.stateKey),
-      el('span', { class: 'tw' }, el('span', { class: 't', text: title }), s.projectId && title !== pn ? el('span', { class: 'p', text: pn }) : null),
-      el('span', { class: 'st', text: when(s.lastSeen) }),
-      el('span', { class: 'go btn btn-sm', text: s.stateKey === 'waiting' ? '답하기' : '보기' }));
-  };
+export function renderInbox(host: HTMLElement, _data: V2Data): void {
   const notiHost = el('section', { class: 'v2-noti-sec' });
   const shell = el('div', { class: 'v2-center v2-inbox', 'data-ctx-surface': 'inbox' },
     el('h1', { class: 'v2-title', text: '확인할 것' }),
-    el('p', { class: 'v2-desc', text: '받은 알림과, 지금 내 답을 기다리는 세션이에요.' }),
-    notiHost,
-    (!waits.length && !dones.length)
-      ? el('div', { class: 'v2-inbox-empty' }, el('p', { class: 'h', text: '지금 확인할 것이 없어요.' }),
-          el('p', { class: 'sub', text: '세션이 답을 기다리거나 작업을 끝내면 여기에 모입니다.' }))
-      : el('div', { class: 'v2-now' },
-          waits.length ? el('section', { class: 'v2-now-wait' },
-            el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k wait', text: `답을 기다려요 · ${waits.length}` })),
-            ...waits.map(rowOf)) : null,
-          dones.length ? el('section', {},
-            el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `끝났어요 — 확인만 하면 돼요 · ${dones.length}` })),
-            ...dones.map(rowOf)) : null));
+    el('p', { class: 'v2-desc', text: '누가 댓글을 남겼거나 나를 언급했을 때, 리브가 답했을 때, 앱이 알림을 보냈을 때 여기에 모여요.' }),
+    notiHost);
   host.replaceChildren(shell);
   void paintNotifications(notiHost);
+  //  안 읽은 수가 바뀌면(새 알림·읽음) 이 화면도 따라 그린다 — 떠 있는 동안만(떠나면 스스로 뗀다).
+  //  ⚠ 구독 직후의 «지금 값» 호출은 동기다 — 그건 위에서 이미 그렸으니 건너뛴다.
+  let syncing = true;
+  const off = onUnread(() => {
+    if (syncing) return;
+    if (!notiHost.isConnected) { off(); return; }
+    void paintNotifications(notiHost);
+  });
+  syncing = false;
 }
 
-/** 알림 이력 칸 — 비동기라 화면을 먼저 세우고 도착하면 채운다(빈 목록이면 칸 자체를 비운다). */
+/** 알림 이력 칸 — 비동기라 화면을 먼저 세우고 도착하면 채운다. */
 async function paintNotifications(host: HTMLElement): Promise<void> {
   let feed: NotificationFeed;
-  try { feed = await loadNotifications({ limit: 100 }); }
-  catch { host.replaceChildren(); return; }   // 이력을 못 읽어도 아래 '대기 세션'은 그대로 쓸 수 있다
-  if (!feed.notifications.length) { host.replaceChildren(); return; }
+  try { feed = await loadNotifications({ limit: 100, scope: 'inbox' }); }
+  catch { host.replaceChildren(el('p', { class: 'v2-muted', text: '알림을 불러오지 못했어요. 잠시 뒤 다시 열어 주세요.' })); return; }
 
   // 배너는 셸이 전역으로 띄운다(startNotificationBanners) — 여기서 또 띄우면 이 화면을 열 때마다 두 번 뜬다.
 
-  const perm = notificationPermission();
+  //  ⚠ 권한은 사람이 누를 때만 묻는다 — 들어오자마자 뜨는 권한 창은 거의 거부당하고, 거부되면 다시 못 묻는다.
+  const permBtn = notificationPermission() === 'default'
+    ? el('button', { class: 'btn btn-sm', type: 'button', text: '알림 켜기', title: '브라우저 배너로도 받기',
+        onclick: (e: Event) => { void askNotificationPermission().then(() => { (e.target as HTMLElement)?.remove(); }); } })
+    : null;
+
+  if (!feed.notifications.length) {
+    host.replaceChildren(el('div', { class: 'v2-inbox-empty' },
+      el('p', { class: 'h', text: '받은 알림이 없어요.' }),
+      el('p', { class: 'sub', text: '댓글·언급, 리브의 답, 앱이 보낸 알림이 오면 여기에 쌓여요. 세션이 답을 기다리는 건 사이드바의 상태점과 배너가 알려 줘요.' }),
+      permBtn));
+    return;
+  }
+
   const head = el('div', { class: 'v2-now-h' },
     el('span', { class: 'v2-k', text: `받은 알림 · ${feed.notifications.length}${feed.unread ? ` (안 읽음 ${feed.unread})` : ''}` }),
-    //  ⚠ 권한은 사람이 누를 때만 묻는다 — 들어오자마자 뜨는 권한 창은 거의 거부당하고, 거부되면 다시 못 묻는다.
-    perm === 'default'
-      ? el('button', { class: 'btn btn-sm', type: 'button', text: '알림 켜기',
-          onclick: (e: Event) => { void askNotificationPermission().then(() => { (e.target as HTMLElement)?.remove(); }); } })
-      : null,
+    permBtn,
     feed.unread
       ? el('button', { class: 'btn btn-sm', type: 'button', text: '모두 읽음',
-          onclick: () => { void markNotificationsRead().then(() => paintNotifications(host)); } })
+          onclick: () => { void markNotificationsRead(undefined, 'inbox').then(() => paintNotifications(host)); } })
       : null);
 
   host.replaceChildren(el('div', { class: 'v2-now' },
-    el('section', {}, head, ...feed.notifications.map(notificationRow))));
+    el('section', {}, head, ...feed.notifications.map((n) => notificationRow(n)))));
 }
 
 export function projName(data: V2Data, id: number | null): string {
@@ -470,6 +475,12 @@ export interface SessionViewOpts {
   onRename?: (label: string) => Promise<void>;
   /** 상단바 [파일] — 그 탭의 우패널을 '타임라인 ↔ 파일 탐색기'로 갈아 끼운다(#1744). 켜진 뒤 상태를 돌려준다. */
   onToggleFiles?: () => boolean;
+  /** 머리줄 [자료](#4088 후속) — 칸 셸의 곁칸에서 자료 칸을 켠다(폰: 서랍). 팝아웃(우패널)엔 없다. */
+  onOpenFiles?: () => void;
+  /** 폰 머리줄의 ≡(#4229 후속) — 셸의 사이드바 서랍을 연다. 사이드바가 없는 화면(팝아웃·클래식)엔 없다 → 단추도 없다. */
+  onOpenSidebar?: () => void;
+  /** [자료] 단추의 글자 — 프로젝트 없는 세션은 '세션 파일'. */
+  filesLabel?: string;
   /** 팝아웃 창(?solo=1) — 왼쪽 사이드바 없이 이 화면만 띄운 창(#1744). */
   solo?: boolean;
   /** [⋯ ▸ 이 세션 보관] — 세션 탭 줄 폐지(원준 2026-08-20)로 보관의 입구가 이 메뉴로 모였다. */
@@ -507,9 +518,13 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
     draft: takeUnsentDraft(s.id),
     trail: vopts.trail || null,
     onPickProject: vopts.onPickProject,   // 상단바 [프로젝트 연결] 드롭다운(#1749)
+    canPickProject: (t) => canMoveSess(t),   // #3870 — 주인·초대받은 사람(문패 [세션 옮기기]·우클릭과 같은 술어)
     onRename: vopts.onRename,             // 제목 = 세션 이름(#1719) — 고치면 사이드바·목록이 그 이름으로 바뀐다
     onArchive: vopts.onArchive,
     onToggleFiles: vopts.onToggleFiles,   // 상단바 [파일] → 우패널 파일 탐색기(#1744)
+    onOpenFiles: vopts.onOpenFiles,       // 머리줄 [자료] → 곁칸 자료 칸(#4088 후속)
+    onOpenSidebar: vopts.onOpenSidebar,   // 폰 머리줄 ≡ → 셸의 사이드바 서랍(#4229 후속)
+    filesLabel: vopts.filesLabel,
     solo: vopts.solo,
     // ★ #1820 — 멈춘 내 세션은 **열면 바로 되살린다**. 위 주석의 '읽기전용 기록 + 버튼 한 번'은 화면이 어긋나던
     //  사고(#1808)의 처방이었는데, 그 처방이 "열어도 아무 일도 안 난다"를 기본 경험으로 만들었다(dev 실측:
@@ -526,6 +541,13 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
 // ── 데이터 정규화 — 라이브(terminal/sessions) + 기록(v6/sessions) 를 한 목록으로 ─────────
 //  같은 세션이 두 목록에 있으면 한 장으로: 라이브 행의 claudeSessionId(박스가 도는 대화 uuid) == 기록 행의 session_id 면
 //  기록 행을 라이브 행에 접는다(logId·logNode). 종전엔 '박스 1장 + 그 대화의 기록 1장'이 나란히 떠 같은 세션이 둘로 보였다.
+/** 초·밀리초가 섞여 오는 시각 값을 ms 로 — 자릿수로 가른다(lastSeen 이 쓰는 그 자와 같다). */
+const msOf = (v: any): number => {
+  const n = Number(v || 0);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return String(Math.floor(n)).length > 11 ? n : n * 1000;
+};
+
 export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
   const now = Date.now();
   const out = new Map<string, Sess>();
@@ -543,6 +565,7 @@ export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
       //   (직전 관측이 있으면 여기 오기 전에 main.ts keepObserved 가 그 값으로 이어 준다 — 그때는 이 갈래에 안 온다.)
       live: true, alive: r.observed === false ? false : !sessIsDead(r, now), owned: !!r.owned, stateKey: k, stateLabel: sessLabel(r, now),
       lastSeen: Number(r.lastActive || r.created || 0) * (String(r.lastActive || r.created || 0).length > 11 ? 1 : 1000) || 0, raw: r,
+      createdAt: msOf(r.created), 
       trashedAt: r.trashedAt ? String(r.trashedAt) : null,   // #1851 — 서버가 내 휴지통 표식을 행에 얹는다
       trashedWith: r.trashedWith != null ? Number(r.trashedWith) : null,
     };
@@ -555,6 +578,9 @@ export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
     const owner = byUuid.get(id);
     if (owner) {                                   // 라이브(또는 복원 가능) 박스가 이 대화를 돌린다 — 그 카드에 접는다
       owner.logId = id; owner.logNode = r.node_id || '';
+      //  되살린 박스는 `created` 가 **다시 연 시각**이라 대화가 시작된 때보다 늦다 — 이른 쪽이 「만든 때」다.
+      const firstMs = r.first_seen ? new Date(r.first_seen).getTime() : 0;
+      if (firstMs && (!owner.createdAt || firstMs < owner.createdAt)) owner.createdAt = firstMs;
       if (r.title) owner.logTitle = String(r.title);   // 이름 자리의 폴백(위 logTitle 주석)
       if (!owner.projectId && r.project_id != null) owner.projectId = Number(r.project_id);
       if (!owner.trashedAt && r.trashed_at) { owner.trashedAt = String(r.trashed_at); owner.trashedWith = r.trashed_with != null ? Number(r.trashed_with) : null; }   // 두 이름 중 한쪽에만 표식이 있어도 그 세션은 휴지통
@@ -568,6 +594,7 @@ export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
       id, label: String(r.name || r.title || id), logTitle: r.title ? String(r.title) : undefined,
       projectId: r.project_id != null ? Number(r.project_id) : null, node: r.node_id || null,
       live: false, alive: false, owned: true, stateKey: 'log', stateLabel: '기록', lastSeen: r.last_seen ? new Date(r.last_seen).getTime() : 0, raw: r,
+      createdAt: r.first_seen ? new Date(r.first_seen).getTime() : 0,
       trashedAt: r.trashed_at ? String(r.trashed_at) : null,
       trashedWith: r.trashed_with != null ? Number(r.trashed_with) : null,
     });

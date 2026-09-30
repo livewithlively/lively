@@ -1,8 +1,10 @@
 /* 49-v2-ctx.css — 우클릭 메뉴(#3784). 뼈대(.pn-ctx / .pn-ctx-i / .pn-ctx-sep)는 42-v2-panes.css 가 먼저 정의한다 —
    여기는 엔진(web/v2/ctx-menu.ts)이 더한 것만: 머리글 · 아이콘 열 · 힌트 · 체크 · 하위 메뉴 · 구획 머리글 · 키보드 포커스.
    토큰만 쓴다(라이트·다크는 90-dark.css 가 토큰을 바꾼다). */
-.pn-ctx { min-width: 188px; max-width: 320px; padding: 5px; gap: 1px; outline: 0; z-index: 120; user-select: none; -webkit-user-select: none; }
-.pn-ctx.pn-ctx-sub { z-index: 121; }
+/* z-index 1600 = 모달(.pjv-tm-back·.pjv-pm-back·.pjh-mback 210 · .ov-back 1450)과 팝오버(1500) 위 · 토스트(2000) 아래.
+   종전 120 은 모달 뒤였다 — 모달 안에서 우클릭하면 메뉴가 떴는데도 안 보였다(브라우저 메뉴는 이미 막은 뒤라 «아무 일도 없는» 것으로 읽혔다, #4135 2026-09-27). */
+.pn-ctx { min-width: 188px; max-width: 320px; padding: 5px; gap: 1px; outline: 0; z-index: 1600; user-select: none; -webkit-user-select: none; }
+.pn-ctx.pn-ctx-sub { z-index: 1601; }
 .pn-ctx-title { display: flex; flex-direction: column; gap: 1px; padding: 6px 9px 7px; margin: 0 0 3px; border-bottom: 1px solid var(--line-row); }
 .pn-ctx-title-t { font-size: 12px; font-weight: 650; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pn-ctx-title-s { font-size: 11px; color: var(--muted-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -17,7 +19,7 @@
 .pn-ctx-i .pn-ctx-chev { flex: none; margin-left: 6px; margin-right: -3px; color: var(--muted-3); display: inline-flex; }
 .pn-ctx-i.checked .pn-ctx-ic { color: var(--brand, var(--ink)); }
 /* 메뉴가 #v2-root 밖(body)에 뜨므로 선 아이콘 획 규칙을 여기서 다시 준다(#2016 §8 팝오버와 같은 함정 — 안 주면 검은 채움). */
-.pn-ctx-svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.pn-ctx-svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 .pn-ctx-i.danger:focus { background: var(--danger-bg); }
 @media (max-width: 900px) {
   .pn-ctx { min-width: 220px; }

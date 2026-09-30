@@ -2,6 +2,7 @@
 //  단색 라인 아이콘 맵(PJV_TM_ICONS) · 이모지 피커 · 멘션 메뉴 · 공유폴더 첨부 피커 · 렌더된 #file: 링크 배선 ·
 //  작성기 하단 툴바. 툴바는 프로젝트 탭(projects.ts)도 재사용하는 공개 표면이다.
 import { api, busy, el, personFace, sv, toast } from '../core.js';
+import { ICONS } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 // 소유처 직결(#1313 R56) — 배럴(../projects.js) 경유였다면 projects↔taskmodal 순환에 가지가 하나 더 생긴다.
 //  R30 이 이미 이 심볼들을 리프로 내려놨으므로 직결이 곧 진짜 소유처다.
 import { pjvPopover } from '../projects/popover.js';
@@ -116,7 +117,7 @@ function pjvtmComposerToolbar(o) {
 
 // 액티비티 헤더용 아이콘 추가(맵 정의 비파괴 — 키만 보강).
 PJV_TM_ICONS.search = { p: [['circle', { cx: 11, cy: 11, r: 7 }], ['line', { x1: 21, y1: 21, x2: 16.65, y2: 16.65 }]] };
-PJV_TM_ICONS.bell = { p: [['path', { d: 'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9' }], ['path', { d: 'M13.73 21a2 2 0 0 1-3.46 0' }]] };
+PJV_TM_ICONS.bell = { p: [['path', { d: ICONS.bell }]] };   // #4233: 홈의 알림과 같은 그림
 PJV_TM_ICONS.filter = { p: [['line', { x1: 4, y1: 7, x2: 20, y2: 7 }], ['line', { x1: 7, y1: 12, x2: 17, y2: 12 }], ['line', { x1: 10, y1: 17, x2: 14, y2: 17 }]] };
 
 export { PJV_TM_ICONS, pjvtmComposerToolbar, pjvtmEmojiPicker, pjvtmIcon, pjvtmWireFileLinks };

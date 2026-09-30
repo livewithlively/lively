@@ -241,4 +241,86 @@ t("S16 모든 하네스가 우회 플래그를 선언한다(빈 값이면 축이
   }
 });
 
+// ── 자격 리스는 명령줄이 아니라 파일로(#4422) — 엣지 S17~S22 ─────────────────────────────────────────────
+//  종전엔 리스를 tmux `-e K=V` 로 펼쳐, 판 생성이 실패하면 오류 문장("Command failed: <argv>")에 토큰이 통째로 실렸다.
+//  이제 스크립트가 작업 폴더의 자격 파일을 읽어 하네스 env 로 올리고 지운다. 스텁 하네스가 **받은 env** 를 파일로 남겨 관측한다.
+const LEASE = "CLAUDE_CODE_OAUTH_TOKEN";
+function leaseSetup(value: string | null, exitCode = 0): { run: () => number; got: () => string | null; leaseLeft: () => boolean; leftDuringRun: () => boolean; script: string; stderr: () => string } {
+  const root = mkdtempSync(path.join(tmpdir(), "taskscript-lease-"));
+  const taskDir = path.join(root, "task"); mkdirSync(taskDir);
+  const ws = path.join(root, "ws"); mkdirSync(ws);
+  const bin = path.join(root, "stub-harness");
+  //  set 여부까지 본다 — 빈 값과 «안 실림» 을 가른다(${VAR+x}).
+  //  하네스가 **도는 동안** 자격 파일이 아직 있나도 남긴다 — 하네스(와 그 도구·에이전트 셸)는 작업 폴더를 읽을 수 있다.
+  writeFileSync(bin, `#!/bin/sh\ncat > /dev/null\nif [ -n "\${${LEASE}+x}" ]; then printf '%s' "$${LEASE}" > "${root}/env.txt"; fi\n`
+    + `if [ -e "${taskDir}/.lease-${LEASE}" ]; then echo present > "${root}/during.txt"; fi\nexit ${exitCode}\n`);
+  chmodSync(bin, 0o755);
+  writeFileSync(path.join(taskDir, "prompt.txt"), "p");
+  if (value !== null) writeFileSync(path.join(taskDir, `.lease-${LEASE}`), value, { mode: 0o600 });
+  const script = taskScript("claude", bin, [], taskDir, { leaseEnv: [LEASE] });
+  return {
+    script,
+    run: () => {
+      //  사후 검시 셸(`exec $SHELL`)을 스텁으로 바꿔 **그 셸이 받은 env** 도 남긴다 — 값이 거기 남으면 안 된다.
+      const post = path.join(root, "post-shell");
+      writeFileSync(post, `#!/bin/sh\nif [ -n "\${${LEASE}+x}" ]; then echo set > "${root}/post.txt"; else echo unset > "${root}/post.txt"; fi\n`);
+      chmodSync(post, 0o755);
+      try {
+        execFileSync("/bin/sh", ["-c", script], { stdio: ["ignore", "ignore", "ignore"], env: { ...process.env, LIVELY_TASK_WS: ws, SHELL: post, [LEASE]: "" } });
+      } catch { /* exit 파일로 판정 */ }
+      assert.equal(readFileSync(path.join(root, "post.txt"), "utf8").trim(), "unset", "사후 검시 셸에 리스 값이 남았다");
+      const f = path.join(taskDir, "exit");
+      return existsSync(f) ? Number(readFileSync(f, "utf8").trim()) : -1;
+    },
+    got: () => (existsSync(path.join(root, "env.txt")) ? readFileSync(path.join(root, "env.txt"), "utf8") : null),
+    leaseLeft: () => existsSync(path.join(taskDir, `.lease-${LEASE}`)),
+    leftDuringRun: () => existsSync(path.join(root, "during.txt")),
+    stderr: () => (existsSync(path.join(taskDir, "stderr.log")) ? readFileSync(path.join(taskDir, "stderr.log"), "utf8") : ""),
+  };
+}
+//  ⚠ 부모 env 에 같은 이름을 **빈 값으로** 심어 둔다(위 run) — 파일을 안 읽었는데 부모 값이 새어 들어와 «도달» 로 오인하지 않게.
+
+t("S17 리스 파일의 값이 하네스 env 에 도달하고, 실행 뒤 파일은 지워진다", () => {
+  const v = "sk-ant-oat01-" + "A".repeat(60);
+  const s = leaseSetup(v);
+  assert.equal(s.run(), 0);
+  assert.equal(s.got(), v, "리스 값이 하네스 env 에 그대로 도달해야 한다(배선)");
+  assert.equal(s.leaseLeft(), false, "읽은 자격 파일이 공유 작업 폴더에 남았다");
+  assert.equal(s.leftDuringRun(), false, "하네스가 도는 동안 자격 파일이 남아 있었다 — 판 안 에이전트가 작업 폴더에서 읽을 수 있다");
+});
+t("S18 리스 파일이 없으면 하네스가 뜨지 않고 비0 이 exit 에 남는다(조용한 성공 금지)", () => {
+  const s = leaseSetup(null);
+  const code = s.run();
+  assert.notEqual(code, 0, "자격 없이 하네스가 돌면 디스크 로그인 자격으로 조용히 폴백한다(#1289 의 무증상)");
+  assert.notEqual(code, -1, "exit 파일은 남아야 한다 — 없으면 타임아웃까지 매달린다");
+  assert.equal(s.got(), null, "하네스가 실행됐다");
+  assert.ok(s.stderr().length > 0, "왜 못 떴는지가 stderr.log 에 남아야 한다");
+});
+t("S19 리스가 없으면 종전 스크립트와 바이트 동일", () => {
+  const before = taskScript("claude", "/b/claude", ["--model", "opus"], "/t");
+  assert.equal(taskScript("claude", "/b/claude", ["--model", "opus"], "/t", { leaseEnv: [] }), before, "빈 목록");
+  assert.equal(taskScript("claude", "/b/claude", ["--model", "opus"], "/t", { leaseEnv: undefined }), before, "미지정");
+  assert.ok(!before.includes(".lease-") && !before.includes("unset"), "리스 없는 위탁에 리스 조각이 끼었다");
+});
+t("S20 값의 셸 메타문자·공백·따옴표·내부 개행이 재해석 없이 그대로 도달한다", () => {
+  const pwn = path.join(mkdtempSync(path.join(tmpdir(), "taskscript-pwn-")), "pwn");   // 고정 경로 금지 — 회귀가 남긴 파일이 다음 판을 물들인다
+  const v = `a b"c'd$(touch ${pwn})\`touch ${pwn}\`;f|g&h\ni*j`;
+  const s = leaseSetup(v);
+  assert.equal(s.run(), 0);
+  assert.equal(s.got(), v, "값이 셸에 재해석됐다(인용 누락)");
+  assert.ok(!existsSync(pwn), "값 속 명령치환이 실행됐다");
+});
+t("S21 스크립트 문자열에는 값이 없고 이름·경로뿐이다", () => {
+  const v = "sk-ant-oat01-" + "B".repeat(60);
+  const s = leaseSetup(v);
+  assert.ok(!s.script.includes(v), "리스 값이 스크립트(= tmux 명령줄)에 실렸다");
+  assert.ok(s.script.includes(LEASE), "배선 — 이름은 실려야 읽을 수 있다");
+  assert.throws(() => taskScript("claude", "/b", [], "/t", { leaseEnv: ["X; rm -rf /"] }), /규칙 밖/, "규칙 밖 이름은 스크립트를 만들지 않는다");
+});
+t("S22 하네스가 실패해도 파일은 지워지고 종료코드는 하네스의 것이다", () => {
+  const s = leaseSetup("sk-ant-oat01-" + "C".repeat(60), 3);
+  assert.equal(s.run(), 3);
+  assert.equal(s.leaseLeft(), false);
+});
+
 console.log(`task-script.test: ok (${pass})`);

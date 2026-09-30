@@ -10,8 +10,15 @@
 //    await lively.tools.call(name, args)    → 그 도구의 결과(앱 grant 범위 안에서만 — 서버가 재판정)
 //    await lively.store.query('notes', { match:{done:false}, limit:50 })  → rows[]
 //    await lively.store.insert/update/delete(...)                          → 앱 전용 테이블(테넌트 격리)
+//    await lively.store.sql('select stage, count(*) from contacts group by 1', [])  → { rows, columns, truncated, changed }
+//                                                (#4226 자유 SQL 한 문장 — 매니페스트 permissions.tools 에 store_sql 이 있어야 한다)
 //    await lively.ui.openExternal(url)      → 호스트가 새 탭으로(샌드박스 안에선 못 여는 것을 대신)
+//    lively.store.onChange(function (ev) { … })  → 이 앱의 데이터가 **바깥에서** 바뀌었다(#4225 — 세션에 붙은 AI 가 썼다 등).
+//                                                ev = { table, op, source, session }. 돌려주는 함수를 부르면 끊는다.
+//    lively.session                          → 이 화면이 붙은 세션 id(세션 오른쪽 앱 칸에서 열렸을 때). 아니면 null.
 //  오류는 Error(message) 로 reject 하고 e.code 에 JSON-RPC 코드를 싣는다(-32001 = 권한 밖).
+//  ⚠ onChange 를 안 쓰는 앱은 바깥에서 데이터가 바뀌면 호스트가 화면을 **다시 불러온다**(최신을 보이는 가장 단순한 길).
+//   화면 상태(입력 중인 글·스크롤)를 지키고 싶은 앱은 onChange 를 걸고 스스로 다시 읽는다 — 걸면 다시 불러오기는 멈춘다.
 //
 //  ⚠ 이 파일은 **문자열**이다(주입 대상). 안에서 백틱·${ } 를 쓰지 않는다(템플릿 리터럴 안이라).
 export const APP_RUNTIME_JS = `
@@ -25,9 +32,25 @@ export const APP_RUNTIME_JS = `
       parent.postMessage({ jsonrpc: '2.0', id: id, method: method, params: params || {} }, '*');
     });
   }
+  var subs = {};
+  function subscribe(topic, cb) {
+    if (typeof cb !== 'function') return function () {};
+    var list = subs[topic] || (subs[topic] = []);
+    list.push(cb);
+    if (list.length === 1) parent.postMessage({ jsonrpc: '2.0', method: 'ui/subscribe', params: { topic: topic } }, '*');
+    return function () { var i = list.indexOf(cb); if (i >= 0) list.splice(i, 1); };
+  }
+  function fire(topic, payload) {
+    var list = (subs[topic] || []).slice();
+    for (var i = 0; i < list.length; i++) { try { list[i](payload); } catch (err) { setTimeout(function () { throw err; }); } }
+  }
   window.addEventListener('message', function (e) {
     var m = e.data;
-    if (!m || typeof m !== 'object' || m.id == null) return;
+    if (!m || typeof m !== 'object') return;
+    if (m.id == null) {
+      if (m.method === 'ui/notifications/data-changed') fire('data', m.params || {});
+      return;
+    }
     var p = pend[m.id];
     if (!p) return;
     delete pend[m.id];
@@ -42,6 +65,7 @@ export const APP_RUNTIME_JS = `
     app: null,
     instance: null,
     page: null,
+    session: null,
     tools: {
       call: function (name, args) { return post('tools/call', { name: String(name), arguments: args || {} }); }
     },
@@ -58,12 +82,15 @@ export const APP_RUNTIME_JS = `
     },
     insert: function (table, row) { return api.tools.call('store_insert', { table: table, row: row || {} }); },
     update: function (table, match, set) { return api.tools.call('store_update', { table: table, match: match, set: set }); },
-    'delete': function (table, match) { return api.tools.call('store_delete', { table: table, match: match }); }
+    'delete': function (table, match) { return api.tools.call('store_delete', { table: table, match: match }); },
+    sql: function (text, params) { return api.tools.call('store_sql', { sql: String(text), params: params || [] }); },
+    onChange: function (cb) { return subscribe('data', cb); }
   };
   api.ready = post('ui/initialize', {}).then(function (r) {
     api.app = (r && r.app) || null;
     api.instance = (r && r.instance) || null;
     api.page = (r && r.page) || null;
+    api.session = (r && r.session) || null;
     return r;
   });
   window.lively = api;

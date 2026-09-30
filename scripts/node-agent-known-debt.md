@@ -1,22 +1,24 @@
-# 노드 에이전트 번들 — 남은 부채 5 (#2165)
+# Node agent bundle — 5 remaining debts (#2165)
 
-`node-agent-known-debt.json` 은 기계가 읽는 목록이라 이유를 담을 수 없다. 여기 적는다.
-**줄어들기만 해야 한다** — `scripts/node-agent-bundle-boundary.test.mjs` 의 `DEBT_CEILING` 이 래칫이다.
-고칠 자리는 `node scripts/node-agent-bundle-map.mjs` 가 경계 간선으로 보여 준다.
+*[한국어](node-agent-known-debt.ko.md)*
 
-⚠ `await import()` 로는 못 뺀다 — esbuild 는 outfile 하나면 동적 import 를 같은 번들에 인라인한다(실측).
- **모듈을 가르거나(무거운 쪽/가벼운 쪽), 의존을 뒤집어야 한다**(`sessions/gateway-capabilities.ts`).
+`node-agent-known-debt.json` is a machine-read list, so it can't carry reasons. They are written here.
+**It must only ever shrink** — `DEBT_CEILING` in `scripts/node-agent-bundle-boundary.test.mjs` is the ratchet.
+`node scripts/node-agent-bundle-map.mjs` shows where to fix things, as boundary edges.
 
-| 모듈 | 어떻게 들어오나 | 왜 아직 못 뺐나 |
+⚠ `await import()` does not get a module out — with a single outfile, esbuild inlines dynamic imports into the same bundle (measured).
+ **You have to split the module (heavy side / light side) or invert the dependency** (`sessions/gateway-capabilities.ts`).
+
+| Module | How it gets in | Why it isn't out yet |
 |---|---|---|
-| `sessions/session-outbox.js` | `terminal/sessions.js` 가 **동적** import(2곳) | 이미 동적인데도 남는다 — 위 ⚠ 그대로다. `itemsPool` 을 직접 쓰므로(14곳) 가르려면 큐 저장소와 전달 로직을 분리해야 한다. 노드에선 실행되지 않는다(게이트웨이가 큐를 읽어 전달). |
-| `terminal/member-kit-seed.js` | `terminal/sessions.js` | 무거운 의존(`org/store`·`org/delivery/publish`)은 이미 게이트웨이 능력으로 뺐다. 모듈 자체는 세션 생성 경로가 직접 부르므로 남는다 — 노드에선 `memberExecConfigured()` 가 false 라 즉시 반환한다. |
-| `gateway-url.js` | `terminal/sessions.js` | `org/store/profile` 하나만 탄다(배럴은 이미 끊었다). 게이트웨이 주소는 노드도 알아야 해서 완전 분리가 애매하다 — 캐시된 값을 주입받는 형태로 바꾸는 게 다음 수. |
-| `org/tenant-context.js` | `v6/embedding-provider.js` | 순수(AsyncLocalStorage)라 DB 는 안 탄다. 노드에선 컨텍스트가 늘 비어 기본값으로 동작한다. 크기·표면 문제이지 계약 위반은 아니다. |
-| `db/tenant-column.js` | `org/store/audit.js` | `itemsPool` 을 탄다. audit 경로가 노드에서 도달 가능한지부터 확인해야 한다(도달 못 하면 그 간선을 끊는 것으로 끝난다). |
+| `sessions/session-outbox.js` | **Dynamic** import from `terminal/sessions.js` (1 place) | It stays even though the import is already dynamic — exactly the ⚠ above. It uses `itemsPool` directly (14 places), so splitting it means separating the queue store from the delivery logic. It never runs on a node (the gateway reads the queue and delivers). |
+| `terminal/member-kit-seed.js` | `terminal/sessions.js` | The heavy dependencies (`org/store`, `org/delivery/publish`) have already been moved out into gateway capabilities. The module itself stays because the session-creation path calls it directly — on a node, `memberExecConfigured()` is false, so it returns immediately. |
+| `gateway-url.js` | `terminal/sessions.js` | Pulls in only `org/store/profile` (the barrel is already cut). A node also needs to know the gateway address, so a full split is awkward — the next move is to have the cached value injected. |
+| `org/tenant-context.js` | `v6/embedding-provider.js` · `org/store/members.js` (dynamic) | Pure (AsyncLocalStorage), so it doesn't touch the DB. On a node the context is always empty and it runs on defaults. It's a size/surface issue, not a contract violation. |
+| `db/tenant-column.js` | `org/store/audit.js` · `org/store/members.js` | Pulls in `itemsPool`. First check whether the audit path is reachable on a node (if it isn't, cutting that edge is the end of it). But `org/store/members.js` also imports it directly (the boundary edge the map shows), so that edge has to be cut too. |
 
-## 이미 승인으로 간 것 중 헷갈리기 쉬운 둘
+## Two approved ones that are easy to confuse
 
-`sessions/session-desired.js` · `v6/execution-session-store.js` 는 `org/`·`v6/` 네임스페이스지만
-**모듈 안에 `ON_NODE` 가드가 있어 노드에서 명시적으로 no-op** 한다(#1791 설계). 부채가 아니라 설계다 —
-네임스페이스 규칙은 'DB 를 타는가'의 대리지표이지 그 자체가 목적이 아니다.
+`sessions/session-desired.js` and `v6/execution-session-store.js` are in the `org/`·`v6/` namespaces, but
+**they have an `onNode()` guard inside the module, so they are explicitly a no-op on a node** (#1791 design). That is design, not debt —
+the namespace rule is a proxy for "does it touch the DB", not a goal in itself.

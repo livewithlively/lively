@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import {
   resolveGoogleTokenSource, googleKindsFor, isGoogleCollectorSystem,
-  resolveGoogleOAuthClient, GOOGLE_CLIENT_KINDS,
+  resolveGoogleOAuthClient, GOOGLE_CLIENT_KINDS, envGoogleOAuthClient, GOOGLE_PLATFORM_CLIENT,
   type GoogleVaultReader,
 } from "./google-token-source.js";
 
@@ -168,6 +168,51 @@ await ta("★ C5 토큰은 통합 슬롯, client 는 구 kind — 실제로 수�
   assert.equal(r?.warning, undefined, `수집이 멈춘다: ${r?.warning}`);
   assert.equal(r?.client_id, "old-id");
   assert.equal(r?.refresh_token, "RT");
+});
+
+// ── 플랫폼 클라이언트(매니지드, #4211) ───────────────────────────────────────────
+//  매니지드는 CP 릴레이가 동의·교환을 대신해 테넌트 금고에 클라이언트가 없다. 그런데 액세스 토큰이 1시간이라
+//  갱신엔 클라이언트가 필요하다 — 그게 없으면 도구는 1시간 뒤 전멸, 수집기는 처음부터 못 돈다.
+//  그래서 게이트웨이 env(GOOGLE_OAUTH_CLIENT_ID/SECRET)를 플랫폼 클라이언트로 읽는다.
+const PLATFORM = { GOOGLE_OAUTH_CLIENT_ID: "plat-id", GOOGLE_OAUTH_CLIENT_SECRET: "plat-sec" };
+const RELAY = { GOOGLE_OAUTH_RELAY_URL: "https://app.lvly.io/oauth/google/start" };
+
+await ta("★ P1 매니지드(릴레이 + 플랫폼 env, 금고 빈칸) — 플랫폼 클라이언트로 갱신한다", async () => {
+  const r = await resolveGoogleOAuthClient(clientVault({}), { ...RELAY, ...PLATFORM });
+  assert.equal(r?.kind, GOOGLE_PLATFORM_CLIENT);
+  assert.equal(r?.client_id, "plat-id");
+  assert.equal(r?.client_secret, "plat-sec");
+});
+
+await ta("★ P2 릴레이 모드면 플랫폼이 금고보다 먼저다 — 그 토큰은 플랫폼 클라이언트가 발급했다(다른 client 로는 invalid_client)", async () => {
+  const r = await resolveGoogleOAuthClient(clientVault({ google_oauth: true }), { ...RELAY, ...PLATFORM });
+  assert.equal(r?.kind, GOOGLE_PLATFORM_CLIENT);
+});
+
+await ta("P3 직결 모드(릴레이 없음)는 금고가 먼저다 — 셀프호스팅 관리자가 넣은 client 가 이긴다(무회귀)", async () => {
+  const r = await resolveGoogleOAuthClient(clientVault({ google_oauth: true }), { ...PLATFORM });
+  assert.equal(r?.kind, "google_oauth");
+});
+
+await ta("P4 직결 모드 · 금고 빈칸이면 플랫폼 env 로 떨어진다", async () => {
+  const r = await resolveGoogleOAuthClient(clientVault({}), { ...PLATFORM });
+  assert.equal(r?.kind, GOOGLE_PLATFORM_CLIENT);
+});
+
+await ta("P5 반쪽 env 는 없는 것과 같다 — 시크릿 없이 ID 만으로는 갱신이 invalid_client 로 죽는다", async () => {
+  assert.equal(envGoogleOAuthClient({ GOOGLE_OAUTH_CLIENT_ID: "plat-id" }), null);
+  assert.equal(envGoogleOAuthClient({ GOOGLE_OAUTH_CLIENT_SECRET: "plat-sec" }), null);
+  assert.equal(envGoogleOAuthClient({ GOOGLE_OAUTH_CLIENT_ID: "  ", GOOGLE_OAUTH_CLIENT_SECRET: "x" }), null, "공백만이면 없는 것");
+  assert.equal(await resolveGoogleOAuthClient(clientVault({}), { ...RELAY, GOOGLE_OAUTH_CLIENT_ID: "plat-id" }), null);
+});
+
+await ta("★ P6 매니지드 수집기 — [자료 가져오기]로 만든 수집기(member:<id>)가 플랫폼 클라이언트로 3칸을 채운다", async () => {
+  //  실제로 막혀 있던 자리: 금고엔 멤버 토큰만 있고 클라이언트가 없어 «클라이언트 미등록» 으로 멈췄을 조합.
+  const vault = vaultSpy({ slots: { google_oauth: "RT" } });
+  const r = await resolveGoogleTokenSource("member:yoon", "gmail", vault, { ...RELAY, ...PLATFORM });
+  assert.equal(r?.warning, undefined, `수집이 멈춘다: ${r?.warning}`);
+  assert.deepEqual({ id: r?.client_id, sec: r?.client_secret, rt: r?.refresh_token }, { id: "plat-id", sec: "plat-sec", rt: "RT" });
+  assert.deepEqual(vault.clientCalls, [], "릴레이 모드면 금고 client 를 뒤지지도 않는다(플랫폼이 먼저)");
 });
 
 console.log(`\n${pass} passed`);

@@ -67,6 +67,43 @@ export interface NotifySessionEvent {
 }
 
 /**
+ * 앱 사건(#4225) — 세션에 앱이 붙었다·떨어졌다·그 앱의 데이터가 바뀌었다. 세션 오른쪽 앱 칸이 이걸 보고 따라온다.
+ *  배너 사건이 아니다 — 데스크톱 앱은 `type !== "session"` 을 거른다(desktop/main/notify.mjs streamEvent).
+ */
+export interface NotifyAppEvent {
+  type: "app";
+  kind: "attach" | "detach" | "data";
+  app_id: string;
+  /** 어느 세션의 일인가 — 붙이기·떼기는 늘, 데이터 변경은 세션에서 쓴 것일 때만(앱 화면에서 쓴 것은 null). */
+  session: string | null;
+  /** data 일 때 — 바뀐 테이블과 종류. */
+  table?: string;
+  op?: "insert" | "update" | "delete";
+  /** 누가 썼나의 표면(mcp·web·app-ui). 화면이 제 손으로 쓴 것에 스스로 다시 그리지 않게 가르는 재료. */
+  source?: string;
+  key: string;
+  ts: number;
+  ws?: NotifyWorkspace;
+}
+
+/**
+ * 얼굴 줄 사건(#3870) — 이 세션을 지금 보고 있는 사람이 바뀌었다. 그 세션을 **보고 있는 사람들에게만** 민다
+ *  (src/terminal/session-presence.ts pushViewers). 배너 사건이 아니다 — 데스크톱 앱은 `type !== "session"` 을 거른다.
+ */
+export interface NotifyPresenceEvent {
+  type: "presence";
+  session: string;
+  /** 도착 순 — 열람 도장(/seen)의 응답 `viewers` 와 같은 모양. */
+  viewers: Array<{ id: string; name: string }>;
+  key: string;
+  ts: number;
+  ws?: NotifyWorkspace;
+}
+
+/** 버스가 싣는 사건 — 종류(type)로 가른다. SSE 이벤트 이름도 이 값이다(notify-routes.ts). */
+export type NotifyEvent = NotifySessionEvent | NotifyAppEvent | NotifyPresenceEvent;
+
+/**
  * 구독 하나가 받는 자리 — «이 워크스페이스에서 난, 이 조건에 맞는 사건».
  *  `member`·`account` 중 **하나 이상**이 있어야 한다(둘 다 없으면 아무것도 맞지 않는다 — 열어 두는 기본값은 없다).
  */
@@ -87,7 +124,7 @@ export interface NotifyOrigin {
   account?: string | null;
 }
 
-type Subscriber = (ev: NotifySessionEvent) => void;
+type Subscriber = (ev: NotifyEvent) => void;
 
 interface Sub {
   fn: Subscriber;
@@ -185,7 +222,7 @@ export function subscribeNotify(routes: readonly NotifyRoute[], fn: Subscriber):
  *  경로가 느려지면 안 된다(이 함수는 핫패스에서 불린다).
  * @returns 실제로 전달한 스트림 수
  */
-export function publishNotify(origin: NotifyOrigin, ev: NotifySessionEvent): number {
+export function publishNotify(origin: NotifyOrigin, ev: NotifyEvent): number {
   const ws = norm(origin && origin.ws);
   const member = norm(origin && origin.member);
   if (!ws || !member) return 0;
