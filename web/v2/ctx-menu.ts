@@ -98,7 +98,10 @@ export function showCtxMenu(x: number, y: number, rows: CtxRow[], opts: CtxOpts 
     opts.onClose?.();
   };
   const inMenus = (n: Node | null): boolean => !!n && (root.contains(n) || subs.some((s) => s.contains(n)));
-  const away = (e: Event): void => { if (!inMenus(e.target as Node)) close(); };
+  //  누가 메뉴 요소를 엔진 밖에서 떼어 버렸다(부품의 destroy 등) — 듣던 것을 거두고 아무것도 가로채지 않는다.
+  //   종전엔 요소만 사라지고 문서의 Esc 가로채기가 남아, 다음 메뉴가 열릴 때까지 **어디서든 Esc 가 삼켜졌다**(#3870 실측).
+  const orphan = (): boolean => { if (root.isConnected) return false; close(); return true; };
+  const away = (e: Event): void => { if (orphan()) return; if (!inMenus(e.target as Node)) close(); };
   // 사람이 굴릴 때만 — wheel·touchmove. `scroll` 은 프로그램 되그림(8초 틱)에도 나서 쓰지 않는다(머리말 ⚠).
   const onScroll = (e: Event): void => { if (!inMenus(e.target as Node)) close(); };
   const onBlur = (): void => { if (document.activeElement && document.activeElement.tagName === 'IFRAME') close(); };
@@ -185,6 +188,7 @@ export function showCtxMenu(x: number, y: number, rows: CtxRow[], opts: CtxOpts 
       || (host?.querySelector('.pn-ctx-i.has-sub') as HTMLButtonElement | null);
   };
   const onKey = (e: KeyboardEvent): void => {
+    if (orphan()) return;
     if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); close(); return; }
     // 메뉴 밖에 포커스가 있어도(우클릭 직후) 화살표는 메뉴로 들어온다.
     if (!inMenus(document.activeElement) && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {

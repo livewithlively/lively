@@ -25,14 +25,14 @@
 import { anchoredPopover, el, toast } from '../core.js';
 import { MOBILE_MQ } from './mobile.js';   // 좁은 폭 문턱(900) — 셸과 같은 값 하나만 둔다
 import { overlay } from '../ui-primitives.js';
-import { sideCap } from '../lib/side-card-geom.js';
+import { SIDE_DEF, sideCap } from '../lib/side-card-geom.js';
 import { SWAP_TH, judgeSwap, placeOnRestore } from '../lib/side-swap-judge.js';
 import { swapCopy } from '../lib/side-label.js';   // 칸 이름은 지금 선 쪽을 따른다(왼쪽에 선 칸을 «우측» 이라 부르지 않게)
 
 const KEY_OFF = 'lively_v2_side_swap_off';       // '1' = 자리 고정(자동 자리바꿈 끔)
 const KEY_INTRO = 'lively_v2_side_swap_intro';   // '1' = 첫 안내를 다시 보지 않음
 const SIDE_VAR = '--pn-side-w';
-const DEF_SIDE_W = 340;
+const DEF_SIDE_W = SIDE_DEF;   // 곁칸 기본 폭은 한 값(side-card-geom.ts)
 
 /** 넘어갈 때와 돌아올 때의 문턱(히스테리시스) — 경계에서 깜빡이지 않게. 값과 판정은 lib/side-swap-judge.ts 에 있다. */
 const TH = SWAP_TH;

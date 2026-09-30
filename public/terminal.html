@@ -34,6 +34,12 @@
     background: var(--bg); color: var(--fg); overflow: hidden; }
   #ws { display: flex; height: 100vh; height: 100dvh; }
   html, body { overscroll-behavior: none; }
+  /* 비침(원준 2026-09-30) — 세션이 사이드바 위 카드일 때 부모가 «glass» 를 보내면 terminal.ts 가 html 에 term-glass 를 건다.
+     문서 바탕을 걷어 카드의 반투명 바탕이 보이게 한다(xterm 바탕은 terminal.ts 가 알파만 0 으로 비운다).
+     color-scheme 은 terminal.ts(applyGlassScheme)가 **앱 테마**로 맞춘다 — 터미널 테마(data-theme)를 따르면 밝기가 앱과
+     다를 때 브라우저가 액자에 불투명한 바탕을 칠한다. */
+  html.term-glass, html.term-glass body, html.term-glass #ws, html.term-glass #main, html.term-glass #panes,
+  html.term-glass .pane, html.term-glass #term-host { background: transparent !important; }
 
   /* 좌측 파일 익스플로러 (VSCode식, 기본 접힘) */
   #explorer { width: 0; flex: 0 0 auto; overflow: hidden; border-right: 1px solid var(--border);

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 다중 이벤트 훅 — 배선(user-install)에 따라 PostToolUse·SessionStart·SessionEnd·UserPromptSubmit·Notification·Stop
-//  으로 불린다. #1221 에서 뒤의 셋이 붙어 **세션 실행 단계(작업 중·확인 필요·대기 중)를 하네스가 직접 보고**한다
+//  (+ #4217 SubagentStop · #4219 PreCompact·SessionStart(compact))으로 불린다. #1221 에서 뒤의 셋이 붙어 **세션 실행 단계(작업 중·확인 필요·대기 중)를 하네스가 직접 보고**한다
 //  (종전엔 게이트웨이가 tmux 화면을 훔쳐보는 휴리스틱이었다 — reportedPhase 주석 참조). 이벤트별 동작:
 //  - SessionEnd (#1059)  → reason 이 **사용자 정상 종료**(prompt_input_exit=/exit·Ctrl-D, logout)면 게이트웨이에
 //      POST …/exited 로 보고 → 복원목록에서 '종료됨(대화 이어보기)'으로 구분(재부팅·강제kill 은 훅이 못 떠 미보고=중단됨).
@@ -12,6 +12,8 @@
 //  - lively MCP 쓰기 툴     → <session_id>.writeback (이미 컨텍스트 스토어에 기록했다)
 //  - lively MCP 아무 툴      → <session_id>.lively    (이 세션은 'lively work' 세션 — 자가 게이팅 신호, 읽기/쓰기 무관)
 //  - 기록 fork 백그라운드 띄움 → <session_id>.writeback-pending.<자식 id> (그 자식의 SubagentStop 이 걷는다, #4217)
+//  - 기록 넛지(#4219, record-nudge.mjs) → 메인이 인라인 텍스트 기록을 한 턴에 1,000자 이상 쓰면 PostToolUse 교정 문구,
+//      압축 때 미기록 작업이 있으면 claude PreCompact 요약 지시문 + 압축 직후 SessionStart(compact) 알림. 막지는 않는다.
 // stop-writeback-gate.mjs 가 이 플래그로 종료 시점에 1회 기록 너지를 결정한다(결정적, LLM 호출 0).
 //   .lively 는 게이트 자가 게이팅(등록 work-root 밖에서도 lively 세션이면 게이트 작동)에 쓰인다.
 // 게이트웨이 호출 없음(경로→도메인 lookup 엔드포인트 부재 — 스코프 fallback 조항대로 플래그만).
@@ -27,6 +29,7 @@ import { join } from "node:path";
 //  **항상 false** 가 되어 세션 상태·기록 인정이 통째로 무음이 된다. 반드시 표에서 파생한다(#1519 §4).
 import { resolveHarness, allToolNames, mcpToolName, isForeignGrokInvocation, isShellEdit, recordForkLaunch, subagentIdOf, recordPendingFileName, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
+import { inlineWriteNudge, resetInlineTurn, preCompactInstructions, compactResumeContext } from "./record-nudge.mjs";
 
 const fetch = (...args) => hostEffects.fetch(...args);
 
@@ -250,6 +253,26 @@ try {
       if (id) { try { unlinkSync(join(FLAG_DIR, recordPendingFileName(sid, id))); } catch { /* 기록 fork 가 아니었다 */ } }
     }
   } catch { /* fail-open — 표시를 못 남기면 게이트가 종전대로 동작할 뿐 */ }
+
+  // #4219 기록 넛지(record-nudge.mjs 머리말) — 이 훅이 **말을 하는** 유일한 자리다(나머지는 플래그·보고뿐). 출력은 이벤트별 봉투:
+  //  PostToolUse·SessionStart = hookSpecificOutput.additionalContext(claude·codex 공통 JSON), claude PreCompact = 평문(압축 요약 지시문에 붙는다).
+  //  교정 넛지가 기존 `mcp__lively__.*` 엔트리에 얹힌 이유: codex 는 훅 신뢰가 (이벤트·matcher·명령) 해시라 스크립트 내용만 바뀌면
+  //  멤버가 이미 신뢰한 훅이 그대로 돈다 — 새 엔트리였다면 멤버마다 다시 신뢰해야 켜진다.
+  try {
+    const ctx = { flagDir: FLAG_DIR, sid, harnessId: HARNESS, payload: input, env: process.env };
+    const say = (hookEventName, additionalContext) => process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext } }) + "\n");
+    if (event === "UserPromptSubmit") resetInlineTurn(FLAG_DIR, sid, input);
+    else if (event === "PostToolUse" && bare !== null) {
+      const text = inlineWriteNudge({ ...ctx, bare });
+      if (text) say("PostToolUse", text);
+    } else if (event === "PreCompact" && HARNESS === "claude") {
+      const text = preCompactInstructions(ctx);
+      if (text) process.stdout.write(text + "\n");
+    } else if (event === "SessionStart") {
+      const text = compactResumeContext(ctx);
+      if (text) say("SessionStart", text);
+    }
+  } catch { /* fail-open — 넛지를 못 내도 툴 흐름·플래그는 그대로 */ }
 
   // #1059 정밀 복원 — 이 box 세션이 지금 도는 **claude 자신의 세션 UUID(sid)**를 게이트웨이에 보고한다. box-id(LIVELY_SESSION_ID)
   //  ≠ claude UUID 라, 복원(restore)이 정확히 이어받으려면(--resume <uuid>) 이 매핑이 필요하다(box-id 를 주면 "검색 결과 없음").

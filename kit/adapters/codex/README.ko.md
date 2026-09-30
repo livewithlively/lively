@@ -45,15 +45,15 @@ LIVELY_HARNESS = "codex"
 
 | 이벤트 | 붙는 것 |
 |---|---|
-| SessionStart | session-preload · sync-harness-assets · work-flag · 러너 |
+| SessionStart | session-preload · sync-harness-assets · work-flag · 러너 (+ matcher `compact` work-flag — #4219 압축 직후 기록 알림) |
 | UserPromptSubmit | work-flag · 러너 |
 | PreToolUse | 러너 (**조직 거버넌스 deny 게이트**) |
-| PostToolUse | work-flag ×3(lively MCP · 편집툴+셸 · 서브에이전트 띄우기 `spawn_agent`) · 러너 |
+| PostToolUse | work-flag ×3(lively MCP — #4219 인라인 기록 교정 넛지 포함 · 편집툴+셸 · 서브에이전트 띄우기 `spawn_agent`) · 러너 |
 | PermissionRequest | work-flag (claude 의 Notification = '확인 필요' 자리) |
 | Stop | stop-writeback-gate · work-flag · 러너 |
 | SessionEnd | work-flag · 러너 (codex 0.149.1+ 에서 발화) |
 | SubagentStop | work-flag · 러너 |
-| PreCompact / PostCompact | 러너 |
+| PreCompact / PostCompact | 러너 (codex PreCompact 는 턴 중단만 되어 #4219 기록 넛지를 싣지 않는다) |
 
 ## 하네스 차이 (codex 0.142.0 실측)
 
