@@ -1,6 +1,7 @@
 // 앱 데이터 테이블(store_*) DDL 의 **순수** 부분 (#1780 D6) — RLS/부팅자식 배선과 무관하게 안정적인 것:
 //  ① 컬럼 타입 화이트리스트(선언형 — 임의 DDL 금지) ② 앱별 테이블 네임스페이스 합성 ③ 식별자 검증.
 //  실제 CREATE TABLE 실행·tenant_id·RLS 정책 부착은 스키마 자식(owner DSN)에서 별도로 한다(이 파일은 SQL 조각만).
+import { createHash } from "node:crypto";
 import { HttpError } from "../http-error.js";
 
 // 선언형 컬럼 타입 — 매니페스트 data.columns[].type 가 이 화이트리스트 안이어야 한다(임의 SQL 타입 주입 차단).
@@ -117,6 +118,30 @@ export function appSchemaName(opts: { builtin: boolean; tenantId: string | null 
 export function qualifiedAppTable(schema: string, appId: string, table: string): string {
   if (!IDENT.test(schema)) throw new HttpError(500, `스키마 이름이 식별자 규칙에 맞지 않습니다: ${schema}`);
   return `"${schema}"."${physicalTableName(appId, table)}"`;
+}
+
+/**
+ * 앱 자유 SQL(#4226)이 내려가는 DB 역할 이름(순수) — (DB, 스키마, 앱)마다 하나. 역할은 **클러스터 전역** 이름이라
+ *  같은 RDS 에 DB 가 여럿이어도(스테이지·옛 테넌트 DB) 겹치지 않게 DB 이름까지 섞어 해시한다.
+ *  이 역할은 로그인하지 않는다 — 런타임 연결이 트랜잭션 안에서 `SET LOCAL ROLE` 로 내려가 쓴다.
+ */
+export const APP_SQL_ROLE_PREFIX = "lvly_appsql_";
+export function appSqlRoleName(db: string, schema: string, appId: string): string {
+  const h = createHash("sha256").update(`${db}\0${schema}\0${appId}`).digest("hex").slice(0, 24);
+  return `${APP_SQL_ROLE_PREFIX}${h}`;
+}
+
+/** 매니페스트가 선언한 인덱스(#4226) — 칸 목록과 유일 여부. */
+export interface StoreIndex { columns: string[]; unique?: boolean }
+
+/**
+ * 선언 인덱스의 물리 이름(순수) — `lvix_<해시 16>`. 라이블리가 만든 인덱스를 이 접두로 알아보고, 선언에서 빠지면 지운다.
+ *  해시에 스키마·물리 테이블·칸·유일 여부를 넣는다(인덱스 이름은 스키마 안에서 유일해야 한다).
+ */
+export const APP_INDEX_PREFIX = "lvix_";
+export function appIndexName(schema: string, physical: string, idx: StoreIndex, tenantScoped: boolean): string {
+  const key = `${schema}\0${physical}\0${idx.unique ? "u" : "i"}\0${tenantScoped ? "t" : ""}\0${idx.columns.join(",")}`;
+  return `${APP_INDEX_PREFIX}${createHash("sha256").update(key).digest("hex").slice(0, 16)}`;
 }
 
 /** 설치 출처가 기본 앱(코드 소유)인가 — org_app.source / 설치 호출의 source 둘 다 같은 모양({kind}). */

@@ -28,12 +28,28 @@ export interface LivelyApp {
 
   /** 이 앱 전용 데이터 테이블(app.<앱id>__<표>) — 매니페스트 data.tables 로 선언한 것만. 테넌트 격리는 서버가 한다. */
   store: {
-    tables(): Promise<Array<{ name: string; columns: Array<{ name: string; type: string }> }>>;
+    tables(): Promise<Array<{ name: string; columns: Array<{ name: string; type: string }>; indexes?: Array<{ columns: string[]; unique?: boolean }> }>>;
     query<T = Record<string, unknown>>(table: string, opts?: { match?: Record<string, unknown>; limit?: number }): Promise<T[]>;
     insert(table: string, row: Record<string, unknown>): Promise<{ id: string | number | null }>;
     update(table: string, match: Record<string, unknown>, set: Record<string, unknown>): Promise<{ changed: number }>;
     /** ⚠ match 는 필수다(전량 삭제 방지). */
     delete(table: string, match: Record<string, unknown>): Promise<{ deleted: number }>;
+    /**
+     * SQL 한 문장(#4226) — SELECT·INSERT·UPDATE·DELETE. 테이블은 매니페스트에 선언한 이름 그대로(`FROM contacts`),
+     *  값은 `$1`·`$2` … 자리에 params 로 넘긴다(문자열을 이어 붙이지 마라). 매니페스트 permissions.tools 에 `store_sql` 이 있어야 한다.
+     *  받지 않는 것: 표·칸 만들기(매니페스트로) · 조건 없는 UPDATE/DELETE · 주석 · 세미콜론 · 백슬래시 · 스키마 붙인 이름.
+     *  결과는 최대 5,000행·5MB(넘으면 truncated), 문장 5초. 워크스페이스가 만든 앱에서만(기본 앱은 안 된다).
+     */
+    sql<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<{
+      kind: "select" | "insert" | "update" | "delete";
+      columns: string[];
+      rows: T[];
+      row_count: number;
+      truncated: boolean;
+      /** 쓰기가 바꾼 행 수(SELECT 는 null). */
+      changed: number | null;
+      ms: number;
+    }>;
     /**
      * 이 앱의 데이터가 바뀌었다(#4225) — 세션에 붙은 AI 가 썼거나 다른 화면에서 썼다. 받으면 필요한 표를 다시 읽는다.
      *  source 는 누가 썼나의 표면(mcp = 세션의 AI · app-ui = 앱 화면 · web = 스크립트). 돌려주는 함수를 부르면 끊는다.

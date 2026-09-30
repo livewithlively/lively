@@ -18,6 +18,8 @@ import { pruneAppInstances } from "../org/store/app-instances.js";
 import { pruneSessionApps } from "../apps/session-apps.js";
 import { restartWorkersForApp, stopWorkersForApp, stopWorkersForMemberApp } from "../apps/worker-service.js";
 import { editDenial, memberAppViolations } from "../apps/member-app.js";
+import { snapshotAppData, listAppSnapshots, restoreAppSnapshot } from "../apps/app-snapshot.js";
+import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
 
 const actorOf = (u: { userId?: string; email?: string } | undefined): string => u?.userId || u?.email || "unknown";
@@ -291,6 +293,14 @@ const appRemove: Capability = {
         catch { /* best-effort — 조인은 아래 delete 로 CASCADE, 저널 삭제로 스위퍼도 무관 */ }
       }
       await store.pruneUiAssets(id, []);   // UI 자산은 FK CASCADE 대상이 아니므로(스키마 주석) 명시 삭제.
+      // #4226 — 테이블을 지우기 전에 데이터를 떠 둔다(7일 보관). 같은 id 로 다시 설치하면 app_data_restore 로 되돌린다.
+      //  떠 두기가 실패해도 제거는 막지 않는다 — 관리자가 명시로 요청한 제거다(로그는 남긴다).
+      let snapError: string | null = null;
+      const snap = await snapshotAppData(id, "before-remove").catch((err) => {
+        logger.warn({ err, id }, "제거 전 앱 데이터 떠 두기 실패");
+        snapError = (err as Error)?.message ?? String(err);
+        return null;
+      });
       // 앱 데이터 테이블(app 스키마)도 명시 DROP(소유자) — 매니페스트 선언분. best-effort.
       const dataTables = ((app.manifest as { data?: { tables?: Array<{ name?: string }> } })?.data?.tables ?? []).map((t) => String(t.name));
       //  스키마는 설치 때와 같은 규칙(#4223) — 워크스페이스가 설치한 앱이면 그 워크스페이스 스키마의 테이블만 지운다.
@@ -298,7 +308,13 @@ const appRemove: Capability = {
       await pruneAppInstances(id);             // FK 없는 v2.1 신규 표 — 앱 제거 전에 명시 회수.
       await pruneSessionApps(id);              // #4225 세션에 붙어 있던 기록도 — 같은 규칙(FK 없음).
       await store.deleteApp(id, wctx(user, ctx));
-      return { ok: true, removed: id, components: comps.length };
+      return {
+        ok: true, removed: id, components: comps.length,
+        snapshot: snap?.taken_at ? { taken_at: snap.taken_at, tables: snap.tables } : null,
+        //  못 떠 뒀으면 왜인지 — 관리자가 «되돌릴 수 없는 제거였나» 를 알아야 한다.
+        ...(snap && !snap.taken_at ? { snapshot_skipped: snap.skipped ?? null } : {}),
+        ...(snapError ? { snapshot_error: snapError } : {}),
+      };
     });
   },
 };
@@ -357,4 +373,47 @@ const appUi: Capability = {
   },
 };
 
-export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appSave, appEditPolicySet, appRemove, appActivityCap, appUi];
+// ── 앱 데이터 떠 둔 것 보기·되돌리기(#4226, 관리자) ──
+//  워크스페이스가 만든 앱의 데이터를 하루 한 번(+ 제거·되돌리기 직전) 떠 둔다(7일). AI 가 자유 SQL 로 행을 잘못 지웠을 때
+//  한 워크스페이스·한 앱만 그 시점으로 되돌리는 길이다(RDS 백업은 DB 전체 단위라 이게 안 된다).
+const appDataSnapshots: Capability = {
+  name: "app_data_snapshots",
+  title: "앱 데이터 떠 둔 것 목록",
+  description: "워크스페이스가 만든 앱의 데이터를 떠 둔 목록(하루 한 번 + 앱 제거·되돌리기 직전, 7일 보관). app_id 를 주면 그 앱만. 항목 = 시각·까닭(daily·before-remove·before-restore)·테이블별 행 수. 관리자.",
+  scope: "admin",
+  input: { app_id: z.string().optional() },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/apps/snapshots"], parse: (req) => ({ app_id: (req.query as Record<string, unknown>)?.app_id }) }],
+  },
+  handler: async (input: Record<string, unknown>) => {
+    const id = input.app_id == null || input.app_id === "" ? null : String(input.app_id);
+    return { snapshots: await listAppSnapshots(id) };
+  },
+};
+
+const appDataRestore: Capability = {
+  name: "app_data_restore",
+  title: "앱 데이터 되돌리기",
+  description: "떠 둔 시점(taken_at — app_data_snapshots 의 값 그대로)으로 앱 테이블을 되돌린다. table 을 주면 그 테이블만, 없으면 그 묶음의 테이블 전부. "
+    + "이 워크스페이스 행을 통째로 그 시점으로 바꾸고(원래 id 유지), 되돌리기 직전 지금 상태를 먼저 떠 둔다(before-restore — 되돌리기도 되돌릴 수 있다). 직전 상태를 못 떠 두면(너무 큰 앱) force 없이는 멈춘다. 관리자.",
+  scope: "admin",
+  input: { app_id: z.string(), taken_at: z.string(), table: z.string().optional(), force: z.boolean().optional().describe("되돌리기 직전 상태를 떠 두지 못해도(너무 큰 앱 등) 되돌린다 — 되돌린 것을 다시 되돌릴 수 없다") },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/apps/:id/restore"], parse: (req) => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      return { app_id: (req.params as Record<string, string>)?.id, taken_at: b.taken_at, table: b.table, force: b.force };
+    } }],
+  },
+  handler: async (input: Record<string, unknown>) => {
+    const id = appId(input.app_id);
+    return store.withAppInstallLock(id, async () => {
+      const table = input.table == null || input.table === "" ? null : String(input.table);
+      const out = await restoreAppSnapshot(id, String(input.taken_at ?? ""), table, { force: input.force === true });
+      return { ok: true, app_id: id, restored: out.restored, before_restore: out.safety.taken_at };
+    });
+  },
+};
+
+export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appSave, appEditPolicySet, appRemove, appActivityCap, appUi, appDataSnapshots, appDataRestore];

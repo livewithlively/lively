@@ -103,6 +103,7 @@ function describe(apps) {
     lines.push(describe(apps));
     lines.push("붙어 있는 동안 `store_query` · `store_insert` · `store_update` · `store_delete` · `store_tables` (lively MCP)로 이 앱의 테이블을 읽고 쓸 수 있습니다"
       + (apps.length === 1 ? "(붙은 앱이 하나라 app_id 는 생략해도 됩니다)." : " — 앱이 여럿이니 app_id 를 지정하세요."));
+    lines.push("집계·조인·여러 행 쓰기는 `store_sql` 로 SQL 한 문장을 쓰세요(SELECT·INSERT·UPDATE·DELETE, 테이블은 선언 이름 그대로, 값은 $1… + params). 워크스페이스가 만든 앱에서만 됩니다.");
     lines.push("여기 쓴 내용은 사람이 보는 앱 화면에 바로 반영됩니다. 사람이 이 앱이 다루는 일(기록·조회·정리)을 말하면 지식·파일이 아니라 이 앱의 데이터에 남기세요.");
     lines.push("같은 목록은 `session_apps` 로 언제든 다시 볼 수 있습니다.");
   }

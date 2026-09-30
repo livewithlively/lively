@@ -61,7 +61,8 @@ async function describeAll(rows: SessionAppRow[]): Promise<Array<Record<string, 
 }
 
 const HINT = "붙어 있는 동안 이 세션에서 store_query·store_insert·store_update·store_delete·store_tables 로 그 앱의 테이블을 읽고 쓸 수 있다"
-  + "(붙은 앱이 하나면 app_id 생략 가능). 사람도 세션 오른쪽에서 같은 앱 화면을 보고 있고, 쓴 내용은 그 화면에 바로 반영된다.";
+  + "(붙은 앱이 하나면 app_id 생략 가능). 집계·조인·여러 행 쓰기는 store_sql 로 SQL 한 문장(워크스페이스가 만든 앱에서만). "
+  + "사람도 세션 오른쪽에서 같은 앱 화면을 보고 있고, 쓴 내용은 그 화면에 바로 반영된다.";
 
 const sessionApps: Capability = {
   name: "session_apps",
