@@ -235,7 +235,7 @@ async function route() {
     } else if (page === 'projects2') {
       setActiveTab('projects2'); // 프로젝트(v2) — 맥락의 변화. 하위 탭(대시보드·탐색) 폐지: 상세(p·t) 외엔 보드 하나.
       // 상세(p=프로젝트, t=태스크)만 읽기 페이지 폭, 그 외(보드·스코프 딥링크 /l·/f·/none, 옛 worklog·browse URL)는 전부 풀스크린 보드.
-      //  스코프 딥링크(#541): /l/<id>·/f/<id>·/none 은 보드의 리스트/폴더/미분류 선택 — 새로고침·뒤로가기 복원.
+      //  스코프 딥링크(#541): /l/<id>·/f/<id>·/none 은 보드의 리스트/폴더/미분류 선택, /all 은 전체(#3870) — 새로고침·뒤로가기 복원.
       //  태스크 딥링크(#810): /t/<id> — 태스크·서브태스크 공통(부모를 경로에 안 넣는 평면 id). 전용 페이지가 없으므로
       //  소속 프로젝트 페이지 위에 태스크 모달로 뜬다(pjvRenderTaskRoute).
       const sub2 = segs[1] || 'dashboard';
@@ -247,6 +247,7 @@ async function route() {
         if (sub2 === 'l' && segs[2]) scopeKey = 'L' + segs[2];
         else if (sub2 === 'f' && segs[2]) scopeKey = 'F' + segs[2];
         else if (sub2 === 'none') scopeKey = '__none__';
+        else if (sub2 === 'all') scopeKey = '__all__';   // #3870 — 셸 사이드바 「전체」. 스코프 없는 주소(#/projects2)는 보던 스코프를 이어 간다.
         await renderProjectsV2(view, 'dashboard', params, scopeKey);
       }
     } else if (page === 'system') {
