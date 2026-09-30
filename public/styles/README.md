@@ -83,6 +83,7 @@ injected into each `<link href>`, and requests whose `?v=` matches the current v
 | 40 | `40-v2.css` | New single-tab shell (#1719) + classic embed (?embed=1) — reclaims classic rules after the classic files (`01`~`37`) |
 | 41 | `41-onboarding.css` | First-time setup (#/welcome, #1813) — all classes use the `ob-` prefix |
 | 42 | `42-v2-panes.css` | New shell project = docked screen — splitting/collapsing panes (session · sources · knowledge · timeline) |
+| 42 | `42-v2-dock.css` | Side-pane dock (#4443, `web/v2/pane-dock.ts`) — floating pill / edge bar, magnification, auto-hide, context menus, drag to any edge, the More panel |
 | 43 | `43-v2-topbar-search.css` | Desktop window top line (tab row) · sidebar back/forward · unified search spotlight |
 | 44 | `44-desktop-update.css` | Notice bar for updates the desktop app has downloaded (#1838) |
 | 45 | `45-v2-side-swap.css` | When the side pane passes half the width, the main pane moves to the center (#1819) — paired with `web/v2/side-swap.ts` |

@@ -77,6 +77,35 @@ export function movePin(pins: readonly string[], type: string, to: number): stri
   rest.splice(i, 0, type);
   return rest;
 }
+/** 끌어 놓은 자리 = **바로 뒤에 선 고정 앱**(없으면 맨 뒤). 자리를 번호가 아니라 이웃으로 말하는 까닭: 화면엔 고를 수 없는 고정이
+ *  빠져 있어 화면의 번호와 목록의 번호가 다르다 — 이웃 앞에 끼우면 안 보이는 고정은 제자리에 남는다. 고정 안 된 것이면 그 자리에 고정한다. */
+export function movePinBefore(pins: readonly string[], type: string, before: string | null): string[] {
+  const rest = pins.filter((t) => t !== type);
+  const i = before ? rest.indexOf(before) : -1;
+  rest.splice(i >= 0 ? i : rest.length, 0, type);
+  return rest;
+}
+/**
+ * 끌고 있는 아이콘을 놓으면 고정 줄의 몇 번째 앞에 서나 — spans = 고정 줄(끄는 것 빼고)의 축 방향 [시작, 끝], pos = 포인터.
+ *  돌려주는 값: 0..spans.length(= 맨 뒤) · -1(끼울 자리 없음). 가운데를 넘었으면 그 뒤로 간다.
+ *  ★ 고정 안 한 앱은 **고정 줄 끝 + gap 까지** 들어와야 자리가 난다(macOS: 구분선 너머로 끌어와야 고정). 고정 줄이 비었으면 끼울 곳이
+ *   없다(메뉴 «독에 고정» 으로). #4443 리뷰 실측: 떠 있기만 하던 앱을 8px 흔들었더니 고정 줄 맨 뒤에 박혔다.
+ */
+export function pinSlot(pos: number, spans: readonly (readonly [number, number])[], pinned: boolean, gap: number): number {
+  if (!pinned && (!spans.length || pos > spans[spans.length - 1][1] + gap)) return -1;
+  return spans.filter(([a, b]) => pos > (a + b) / 2).length;
+}
+/**
+ * 고정 목록 한 벌 — base(이 판에 있는 종류 전부 · **고치기는 늘 여기에**) · shown(이 화면에서 고를 수 있는 것만 · 그리기용).
+ *
+ *  #4443 리뷰(2026-10-01): 프로젝트 없는 세션 화면은 태스크·자료·지식·리브를 고를 수 없다. 종전엔 그 화면에서 **거른 목록**에
+ *   고치고 그대로 저장해서, 웹 하나를 빼면 계정의 고정이 [타임라인] 하나만 남았다(서버·다른 기기까지). 걸러진 것은 «이 화면에서
+ *   안 보이는 것» 이지 «사람이 뺀 것» 이 아니다. 없어진 종류(부품이 사라진 판)만 base 에서 걷는다(readDockPins).
+ */
+export function dockPins(stored: unknown, exists: (type: string) => boolean, pickable: (type: string) => boolean): { base: string[]; shown: string[] } {
+  const base = readDockPins(stored, exists);
+  return { base, shown: base.filter(pickable) };
+}
 
 // ── 독에 서는 것 ──────────────────────────────────────────────────────────────
 export interface DockTab { key: string; type: string }
