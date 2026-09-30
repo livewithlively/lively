@@ -7,8 +7,8 @@
 // 조직마다 다르게 둘 수 있어야 하는 이유: 문체(평서/존댓말)·제목 길이·금지어는 조직의 글쓰기 관행이다.
 //  제품은 기본값만 제안하고, 조직이 org_runtime_update 의 writing_format 으로 덮는다.
 //
-// 기본 enabled=false 인 이유: 켜면 knowledge_save 응답에 형식 위반 안내가 실린다. 저장을 막지는 않지만
-//  안내를 받은 에이전트는 고치려 들기 때문에, 조직이 고르기 전에 모든 워크스페이스에서 행동이 바뀌면 안 된다.
+// 기본 enabled=false 인 이유: 켜면 저장 응답에 형식 위반 안내가 실리고, reject 로 정한 규칙은 에이전트 저장을 막는다.
+//  안내만 받아도 에이전트는 고치려 들기 때문에, 조직이 고르기 전에 모든 워크스페이스에서 행동이 바뀌면 안 된다.
 //
 // DB 원본은 «조직이 바꾼 칸»만 담는다. 여기서 기본값 위에 얹어 유효 형식을 만든다 — 기본값을 DB 에 굳히면
 //  제품 기본값이 개선돼도 그 조직엔 영영 안 먹는다(#688 과 같은 함정).
@@ -19,6 +19,7 @@ export const WRITING_RULE_IDS = [
   "bold_overuse", "symbol_overuse", "heading_symbol",
   "relative_time", "local_path", "arrow_chain", "nested_paren", "undated_status", "revision_banner",
   "forbidden_term", "register_mix",
+  "activity_body_missing",
 ] as const;
 export type WritingRuleId = (typeof WRITING_RULE_IDS)[number];
 
@@ -32,8 +33,14 @@ export type WritingRuleLevel = (typeof WRITING_RULE_LEVELS)[number];
 
 export type WritingRegister = "plain" | "polite" | "any";
 
+/** 형식을 적용할 서술 표면. 표면마다 적용하는 규칙이 다르다(writing-lint.ts SURFACE_RULES). */
+export const WRITING_SURFACES = ["knowledge", "activity", "project"] as const;
+export type WritingSurface = (typeof WRITING_SURFACES)[number];
+
 export interface WritingFormatLimits {
   title_max_chars: number;
+  /** 작업기록 제목은 지식 제목보다 기술 상세를 담는 자리라 따로 둔다. */
+  activity_title_max_chars: number;
   body_max_chars: number;
   bold_max: number;
   symbol_max: number;
@@ -43,6 +50,7 @@ export interface WritingFormat {
   enabled: boolean;
   /** plain = 평서 '~다'체, polite = '~습니다'체, any = 문체 검사 안 함. */
   register: WritingRegister;
+  apply_to: WritingSurface[];
   limits: WritingFormatLimits;
   /** 본문·제목에 쓰지 않을 말(대소문자 무시 부분일치). 조직이 채운다 — 예: 작성 도구 이름, 개인 호칭. */
   forbid_terms: string[];
@@ -53,7 +61,8 @@ export interface WritingFormat {
   guide_md: string;
 }
 
-export type WritingFormatPatch = Partial<Omit<WritingFormat, "limits">> & { limits?: Partial<WritingFormatLimits> };
+/** limits 칸의 null 은 «그 칸을 기본값으로 되돌림». */
+export type WritingFormatPatch = Partial<Omit<WritingFormat, "limits">> & { limits?: Partial<Record<keyof WritingFormatLimits, number | null>> };
 
 export const DEFAULT_WRITING_GUIDE_MD = [
   "## 서술 형식",
@@ -72,7 +81,8 @@ export const DEFAULT_WRITING_GUIDE_MD = [
 export const DEFAULT_WRITING_FORMAT: WritingFormat = {
   enabled: false,
   register: "plain",
-  limits: { title_max_chars: 60, body_max_chars: 8000, bold_max: 10, symbol_max: 3 },
+  apply_to: [...WRITING_SURFACES],
+  limits: { title_max_chars: 60, activity_title_max_chars: 80, body_max_chars: 8000, bold_max: 10, symbol_max: 3 },
   forbid_terms: [],
   rules: {},
   default_level: "warn",
@@ -83,6 +93,7 @@ export const DEFAULT_WRITING_FORMAT: WritingFormat = {
 //  오타로 천문학적 값이 들어와 규칙이 사실상 꺼지는 것을 막는다. 끄려면 rules 에서 off 로 명시한다.
 export const WRITING_LIMIT_BOUNDS: Readonly<Record<keyof WritingFormatLimits, readonly [number, number]>> = {
   title_max_chars: [10, 200],
+  activity_title_max_chars: [20, 500],
   body_max_chars: [500, 200_000],
   bold_max: [0, 500],
   symbol_max: [0, 500],
@@ -115,6 +126,11 @@ function cleanTerms(v: unknown): string[] | null {
   return out;
 }
 
+function cleanSurfaces(v: unknown): WritingSurface[] | null {
+  if (!Array.isArray(v)) return null;
+  return WRITING_SURFACES.filter((x) => v.includes(x));
+}
+
 function cleanRules(v: unknown): Partial<Record<WritingRuleId, WritingRuleLevel>> {
   if (!isObj(v)) return {};
   const out: Partial<Record<WritingRuleId, WritingRuleLevel>> = {};
@@ -134,8 +150,10 @@ export function resolveWritingFormat(raw: unknown): WritingFormat {
   return {
     enabled: typeof r.enabled === "boolean" ? r.enabled : d.enabled,
     register: r.register === "plain" || r.register === "polite" || r.register === "any" ? r.register : d.register,
+    apply_to: cleanSurfaces(r.apply_to) ?? [...d.apply_to],
     limits: {
       title_max_chars: cleanLimit("title_max_chars", lim.title_max_chars, d.limits.title_max_chars),
+      activity_title_max_chars: cleanLimit("activity_title_max_chars", lim.activity_title_max_chars, d.limits.activity_title_max_chars),
       body_max_chars: cleanLimit("body_max_chars", lim.body_max_chars, d.limits.body_max_chars),
       bold_max: cleanLimit("bold_max", lim.bold_max, d.limits.bold_max),
       symbol_max: cleanLimit("symbol_max", lim.symbol_max, d.limits.symbol_max),
@@ -158,6 +176,7 @@ export function mergeWritingFormatRaw(currentRaw: unknown, patch: WritingFormatP
   const next: Record<string, unknown> = { ...cur };
   if (typeof patch.enabled === "boolean") next.enabled = patch.enabled;
   if (patch.register === "plain" || patch.register === "polite" || patch.register === "any") next.register = patch.register;
+  if (patch.apply_to !== undefined) next.apply_to = cleanSurfaces(patch.apply_to) ?? [];
   if (patch.limits !== undefined) {
     const limCur = isObj(cur.limits) ? cur.limits : {};
     const lim: Record<string, number> = {};
@@ -182,4 +201,21 @@ export function mergeWritingFormatRaw(currentRaw: unknown, patch: WritingFormatP
 
 export function ruleLevel(fmt: WritingFormat, id: WritingRuleId): WritingRuleLevel {
   return fmt.rules[id] ?? fmt.default_level;
+}
+
+const LEVEL_WORD: Record<WritingRuleLevel, string> = { off: "끔", warn: "안내", reject: "저장 거부" };
+
+/**
+ * 세션 주입·증류 프롬프트에 싣는 형식 블록. 꺼져 있으면 빈 글 — 켜지 않은 조직의 주입은 바이트 단위로 그대로다.
+ *  거부 규칙을 함께 적는 이유: 에이전트가 저장한 뒤 422 를 받고서야 규칙을 알면 한 번의 저장이 버려진다.
+ */
+export function buildWritingGuideBlock(fmt: WritingFormat): string {
+  if (!fmt.enabled) return "";
+  const rejects = WRITING_RULE_IDS.filter((id) => ruleLevel(fmt, id) === "reject");
+  const lines = [fmt.guide_md.trim()];
+  if (rejects.length) {
+    lines.push("", `다음 규칙에 걸리는 저장은 게이트웨이가 ${LEVEL_WORD.reject}한다(422 — 고쳐서 다시 저장): ${rejects.join(", ")}.`);
+  }
+  if (fmt.forbid_terms.length) lines.push("", `서술에 쓰지 않는 말: ${fmt.forbid_terms.join(", ")}.`);
+  return lines.join("\n");
 }

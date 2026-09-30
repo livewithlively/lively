@@ -33,7 +33,9 @@ const filler = (n: number) => Array.from({ length: n }, (_, i) => `설명 문장
 t("A1 기본 enabled=false", () => assert.equal(DEFAULT_WRITING_FORMAT.enabled, false));
 t("A1 기본 register=plain", () => assert.equal(DEFAULT_WRITING_FORMAT.register, "plain"));
 t("A1 기본 limits", () => assert.deepEqual(DEFAULT_WRITING_FORMAT.limits,
-  { title_max_chars: 60, body_max_chars: 8000, bold_max: 10, symbol_max: 3 }));
+  { title_max_chars: 60, activity_title_max_chars: 80, body_max_chars: 8000, bold_max: 10, symbol_max: 3 }));
+t("A1 기본 apply_to=세 표면 전부", () => assert.deepEqual(DEFAULT_WRITING_FORMAT.apply_to, ["knowledge", "activity", "project"]));
+t("A2 apply_to 는 알려진 표면만 남긴다", () => assert.deepEqual(resolveWritingFormat({ apply_to: ["project", "nope", "knowledge"] }).apply_to, ["knowledge", "project"]));
 t("A1 기본 forbid_terms=[]", () => assert.deepEqual(DEFAULT_WRITING_FORMAT.forbid_terms, []));
 t("A1 기본 rules={}", () => assert.deepEqual(DEFAULT_WRITING_FORMAT.rules, {}));
 t("A1 기본 default_level=warn", () => assert.equal(DEFAULT_WRITING_FORMAT.default_level, "warn"));
@@ -68,13 +70,17 @@ t("A2 limits 숫자는 반올림", () => {
 });
 t("A2 limits 하한 클램프", () => assert.deepEqual(
   resolveWritingFormat({ limits: { title_max_chars: 5, body_max_chars: 100, bold_max: -3, symbol_max: -1 } }).limits,
-  { title_max_chars: 10, body_max_chars: 500, bold_max: 0, symbol_max: 0 }));
+  { activity_title_max_chars: 80, title_max_chars: 10, body_max_chars: 500, bold_max: 0, symbol_max: 0 }));
 t("A2 limits 상한 클램프", () => assert.deepEqual(
   resolveWritingFormat({ limits: { title_max_chars: 999, body_max_chars: 1e7, bold_max: 9999, symbol_max: 9999 } }).limits,
-  { title_max_chars: 200, body_max_chars: 200000, bold_max: 500, symbol_max: 500 }));
+  { activity_title_max_chars: 80, title_max_chars: 200, body_max_chars: 200000, bold_max: 500, symbol_max: 500 }));
+t("A2 작업기록 제목 한도는 [20,500] 으로 클램프", () => {
+  assert.equal(resolveWritingFormat({ limits: { activity_title_max_chars: 5 } }).limits.activity_title_max_chars, 20);
+  assert.equal(resolveWritingFormat({ limits: { activity_title_max_chars: 9999 } }).limits.activity_title_max_chars, 500);
+});
 t("A2 limits 범위 끝값은 그대로", () => assert.deepEqual(
   resolveWritingFormat({ limits: { title_max_chars: 200, body_max_chars: 500, bold_max: 0, symbol_max: 500 } }).limits,
-  { title_max_chars: 200, body_max_chars: 500, bold_max: 0, symbol_max: 500 }));
+  { activity_title_max_chars: 80, title_max_chars: 200, body_max_chars: 500, bold_max: 0, symbol_max: 500 }));
 
 // A.3 rules·default_level
 t("A3 rules 는 알려진 id + off|warn 만 남긴다", () => assert.deepEqual(

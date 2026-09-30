@@ -3,7 +3,28 @@
 // 이 모듈은 순수 함수다(DB·네트워크 없음). 저장 경로·관리기·재작성 게이트가 같은 판정을 쓰게 하려고 분리했다.
 // 판정은 휴리스틱이다. 저장을 막을지(reject)는 조직이 규칙마다 정한다. 오탐보다 누락을 택한 규칙이 많다
 //  (예: 결론 여부는 판정하지 않고 «첫 줄이 헤딩·인용·표로 시작하는가»만 본다). 의미 판정은 LLM 몫이다.
-import { type WritingFormat, type WritingRuleId, ruleLevel } from "../org/policies/writing-format.js";
+import { type WritingFormat, type WritingRuleId, type WritingSurface, ruleLevel } from "../org/policies/writing-format.js";
+
+// 표면마다 볼 규칙. 지식은 검색·주입되는 정본이라 전부 본다. 작업기록은 짧은 진척 기록이라 골격·길이·배너는 보지 않고,
+//  제목은 작업기록 전용 한도로 본다. 프로젝트 본문은 목표·범위 골격을 쓰므로 첫 줄 결론을 요구하지 않고, 이름(name)은
+//  짧은 라벨이라 제목 규칙을 걸지 않는다.
+const SURFACE_RULES: Record<WritingSurface, ReadonlySet<WritingRuleId>> = {
+  knowledge: new Set<WritingRuleId>([
+    "title_length", "title_leading_emoji", "title_date", "title_mr_ref", "title_status_mark", "title_multi_dash",
+    "lead_missing", "body_length", "bold_overuse", "symbol_overuse", "heading_symbol",
+    "relative_time", "local_path", "arrow_chain", "nested_paren", "undated_status", "revision_banner",
+    "forbidden_term", "register_mix",
+  ]),
+  activity: new Set<WritingRuleId>([
+    "title_length", "title_leading_emoji", "title_status_mark",
+    "bold_overuse", "symbol_overuse", "relative_time", "local_path", "arrow_chain",
+    "forbidden_term", "register_mix", "activity_body_missing",
+  ]),
+  project: new Set<WritingRuleId>([
+    "bold_overuse", "symbol_overuse", "heading_symbol", "relative_time", "local_path", "arrow_chain", "nested_paren",
+    "forbidden_term", "register_mix",
+  ]),
+};
 
 export interface WritingFinding {
   rule: WritingRuleId;
@@ -80,14 +101,16 @@ function stripClosers(s: string): string {
 
 const NON_PROSE_START_RE = /^(#{1,6}\s|>|\||```|~~~|<!--|---\s*$|\*\*\*\s*$)/;
 
-export function lintWriting(input: WritingLintInput, fmt: WritingFormat): WritingFinding[] {
-  if (!fmt.enabled) return [];
+export function lintWriting(input: WritingLintInput, fmt: WritingFormat, surface: WritingSurface = "knowledge"): WritingFinding[] {
+  if (!fmt.enabled || !fmt.apply_to.includes(surface)) return [];
+  const allowed = SURFACE_RULES[surface];
   const title = String(input.title ?? "").trim();
   const body = String(input.body_md ?? "");
   const prose = proseOf(body);
   const proseLines = lines(prose).filter((l) => l.length <= PROSE_LINE_MAX);
   const out: WritingFinding[] = [];
   const add = (rule: WritingRuleId, message: string, extra: { count?: number; sample?: string } = {}): void => {
+    if (!allowed.has(rule)) return;
     const level = ruleLevel(fmt, rule);
     if (level === "off") return;
     out.push({ rule, level, message, ...extra });
@@ -96,8 +119,9 @@ export function lintWriting(input: WritingLintInput, fmt: WritingFormat): Writin
   // ── 제목 ──
   if (title) {
     const len = [...title].length;
-    if (len > fmt.limits.title_max_chars) {
-      add("title_length", `제목이 ${len}자다(상한 ${fmt.limits.title_max_chars}자). 주제와 결론 하나만 남기고 나머지는 본문 첫 줄로 내려라.`, { count: len });
+    const titleMax = surface === "activity" ? fmt.limits.activity_title_max_chars : fmt.limits.title_max_chars;
+    if (len > titleMax) {
+      add("title_length", `제목이 ${len}자다(상한 ${titleMax}자). 주제와 결론 하나만 남기고 나머지는 본문으로 내려라.`, { count: len });
     }
     if (PICTO_RE.test([...title][0] ?? "")) add("title_leading_emoji", "제목을 이모지로 시작하지 마라. 분류는 카테고리가, 상태는 본문이 말한다.", { sample: sample(title) });
     if (DATE_RE.test(title)) add("title_date", "제목에 날짜를 넣지 마라. 시점은 본문의 사실 옆에 적는다.", { sample: sample(title) });
@@ -108,7 +132,10 @@ export function lintWriting(input: WritingLintInput, fmt: WritingFormat): Writin
     if (dashes >= 2) add("title_multi_dash", "제목에 '—'로 부제를 여러 개 이어 붙이지 마라. 제목은 한 줄 라벨이다.", { count: dashes, sample: sample(title) });
   }
 
-  if (!body.trim()) return out;
+  if (!body.trim()) {
+    if (surface === "activity" && title) add("activity_body_missing", "작업기록에 본문이 없다. 무엇을 바꿨고, 어떻게 확인했고, 무엇이 남았는지 짧게 적어라.");
+    return out;
+  }
 
   // ── 골격 ──
   const lead = leadLine(body);
