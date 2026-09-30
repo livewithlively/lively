@@ -23,6 +23,7 @@ import { claimProjectName } from "../v6/project-store.js";
 import { countSessionsBoundToProject, executionSessionProject } from "../v6/execution-session-store.js";
 import { returnAttachmentsToPersonal, type RelocatedAttachment, type ReturnResult } from "./attach-relocate.js";
 import { logger } from "../log.js";
+import { redactTokenShapes } from "../org/ingest/redact.js";
 // 임시 이름을 짓는 규칙(#2031) — 훅 project-auto-bind 와 같은 계약이라 한 곳(v6/project-name.ts)에 둔다.
 import { projectNameFromHuman, shellNameFromPrompt } from "../v6/project-name.js";
 
@@ -142,7 +143,9 @@ export function unnamedShellProject(): ShellProjectSpec {
  *   짧은 제목은 정련(project-bind-nudge)이 고친다 — 되돌리기 싼 쪽이다.
  */
 export function shellProjectFromPrompt(promptRaw: string | null | undefined): ShellProjectSpec | null {
-  const prompt = String(promptRaw ?? "").trim();
+  // #4501 첫 지시에 붙여 넣은 토큰이 프로젝트 이름·본문으로 퍼지지 않게 **가린다**(막지 않는다 — 여긴 사람이 고르는
+  //  입구가 아니라 자동 생성이라, 막으면 세션의 작업면이 통째로 안 생긴다. 커넥터 미러와 같은 처리).
+  const prompt = redactTokenShapes(String(promptRaw ?? "").trim());
   if (!prompt) return null;
   if (prompt.startsWith("/") || prompt.startsWith("!") || prompt.startsWith("<")) return null;
   // 이름은 28자에서 자른다(#2031) — 종전 70자는 지시문 한 문장을 통째로 보드에 걸었다. 원문은 아래 본문에 남는다.

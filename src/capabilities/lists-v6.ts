@@ -19,6 +19,7 @@ import { activeMemberIdsAmong } from "../org/store/members.js";
 import { projectIdsInList } from "../v6/project-store.js";
 import { trashProjectBundle } from "./projects-v6.js";   // #3778 — 리스트 cascade 도 프로젝트 하나를 버리는 것과 같은 길
 import { ensureAgentsMd } from "../v6/agents-md.js";
+import { assertNoContentSecrets } from "./content-secrets.js";
 // 리스트 카테고리 변경(#541 후속 F4) — 그 리스트 모든 프로젝트가 상속하므로 AGENTS.md 재생성. best-effort·비차단.
 const regenAgentsForList = async (listId: number) => {
   try { for (const pid of await projectIdsInList(listId)) await ensureAgentsMd(pid).catch(() => {}); } catch (_) { /* */ }
@@ -137,6 +138,7 @@ const projectListCreateV6: Capability = {
       } }],
   },
   handler: async (input: ProjectListCreateV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501 평문 시크릿 차단
     const list = await createProjectList(input, writeCtxOf(user, ctx));
     return { list };
   },
@@ -180,6 +182,7 @@ const projectListUpdateV6: Capability = {
       } }],
   },
   handler: async (input: ProjectListUpdateV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501
     await assertListVisible(input.id, ctx);
     const { id, ...patch } = input;
     // 잠그는 전환(open→members)이면 그 시점의 대상 목록으로 검증한다 — 대상이 비어 있거나 본인이 빠져 있으면

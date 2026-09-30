@@ -14,6 +14,7 @@ import {
   addTaskLink, removeTaskLink, searchLinkTargets,
   postComment, toggleCommentReaction, getTaskFeedPage,
 } from "../v6/task-detail-store.js";
+import { assertNoContentSecrets } from "./content-secrets.js";
 
 function body(req: any): Record<string, unknown> { return (req.body ?? {}) as Record<string, unknown>; }
 function actorOf(user: LivelyUser, ctx?: CapabilityCtx): string | null { return ctx?.actor ?? user?.userId ?? null; }
@@ -187,6 +188,7 @@ const taskChecklistV6: Capability = {
   //   을 돌려준다 — 호출자에겐 성공으로 보이는 조용한 실패였다(add_item 만 소유확인 덕에 우연히 에러가 났다).
   //   같은 파일의 task_time_v6(add→seconds·delete→entry_id)가 이미 쓰던 규약을 체크리스트에도 맞춘 것.
   handler: async (input: TaskChecklistV6Input, _user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501 평문 시크릿 차단
     await assertTaskVisible(input.id, ctx);
     const t = input.id;
     // 조건부 필수 1건을 확인하고 좁힌 타입으로 돌려준다(캐스팅 대신 검증 — 누락이면 여기서 멈춘다).
@@ -288,6 +290,7 @@ const taskCommentV6: Capability = {
       } }],
   },
   handler: async (input: TaskCommentV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501
     await assertTaskVisible(input.id, ctx);
     return { feed: await postComment(input.id, input.text, { actor: actorOf(user, ctx), source: ctx?.source ?? "web" }, input.parent_id ?? null) };
   },

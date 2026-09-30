@@ -19,23 +19,25 @@ Plaintext secrets never go into content (free-text bodies written by agents and 
 
 | Function | Role | Behavior |
 |---|---|---|
-| `assertNoHardSecrets(text, field)` | **Rejects storing** high-risk plaintext secrets | Throws `HttpError(400)` on a pattern match — nothing is stored |
+| `assertNoHardSecrets(text, field, hint?)` | **Rejects storing** high-risk plaintext secrets | Throws `HttpError(400)` on a pattern match — nothing is stored |
 | `redactDeep(v)` / `redactString` | **Masks** audit logs and HTTP responses | Replaces matched strings with `[REDACTED]` (storage is allowed, but plaintext copies are blocked) |
 
-`assertNoHardSecrets` hard-block patterns (as of 2026-06-18): OpenAI (`sk-`), GitHub PAT (`ghp_`/
-`github_pat_`), Slack (`xox[abprs]-`), AWS (`AKIA…`), Lively token (`lvk_`), private key (`BEGIN … PRIVATE
-KEY`). `redactDeep`/`redactString` mask more broadly, adding Anthropic (`sk-ant-`)·other GitHub tokens (`gho_`/`ghu_`/`ghs_`/`ghr_`)·
+`assertNoHardSecrets` hard-block patterns (as of 2026-09-30, #4501): Anthropic (`sk-ant-`), OpenAI (`sk-` — not when it starts
+inside a word, same rule as masking), GitHub tokens (`ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`)·PAT (`github_pat_`), Slack (`xox[abprs]-`),
+AWS (`AKIA…`), Lively token (`lvk_`), private key (`BEGIN … PRIVATE KEY`). `redactDeep`/`redactString` mask more broadly, adding
 JWT·`Bearer <literal>` (`TOKEN_SHAPE_RES`·`PROSE_RISKY_RES`).
 
 ### Choke-point coverage (content write paths)
 
 | Write path | Input | assertNoHardSecrets | Location |
 |---|---|---|---|
-| ~~`ctx_save`~~ (retired — merged into `knowledge_*`) | `note` | — | Old `src/capabilities/ctx.ts` (deleted). Its successor `knowledge_save` has no guard (below) |
+| ~~`ctx_save`~~ (retired — merged into `knowledge_*`) | `note` | — | Old `src/capabilities/ctx.ts` (deleted). Its successor `knowledge_save` is in the v6 row below |
 | `org_update_section` (MCP·REST) | `body_md` | ✓ (P8) | `src/capabilities/delivery/org-content.ts` |
 | `org_member_upsert` (MCP·REST/admin) | `body_md` (personal layer) | ✓ (P8) | `src/capabilities/delivery/members.ts` |
 | Self writes (`me_profile_update`·`me_onboarding_set`·`me_liv_profile_set`·`me_welcome_*`) | Personal-layer `body_md`·notes·profile·onboarding answers | ✓ | `src/capabilities/delivery/me-self.ts`·`liv.ts`·`welcome.ts` |
-| ~~`propose_domain`·`dm_domain_edit`~~ (retired 2026-06-24 — replaced by `category_*`) | `description`·`evidence` | — | Successors `category_create`/`category_update` have no guard |
+| ~~`propose_domain`·`dm_domain_edit`~~ (retired 2026-06-24 — replaced by `category_*`) | `description`·`evidence` | — | Successors `category_*` are in the v6 row below |
+| v6 content writes — `knowledge_save`·`knowledge_set_title`·`category_create`/`category_update`/`category_group_upsert`·`project_create_v6`/`project_update_v6`/`project_rename_v6`·`task_create_v6`/`task_update_v6`·`task_checklist_v6`·`task_comment_v6`·`project_list_create_v6`/`project_list_update_v6`·`task_field_value_set_v6` (MCP·REST) | **Every string** in the input (nested included). Fields holding old text (`edits[].old`·`description_base`) are skipped so an edit that removes a secret isn't blocked | ✓ (#4501, 2026-09-30) | `assertNoContentSecrets` in `src/capabilities/content-secrets.ts`, first line of each handler |
+| First prompt → auto-created draft project | name·body | Masked (`redactTokenShapes`) — blocking would leave the session without a workspace | `src/project/first-prompt-project.ts` |
 | `org_hook_upsert` (MCP·REST/runtime) | `source_code` | ✓ | `src/capabilities/delivery/hooks.ts` |
 | `org_harness_asset_upsert`·`me_harness_asset_draft` | description·body·frontmatter | ✓ | `src/capabilities/delivery/harness-assets.ts`·`me-self.ts` |
 | ~~`migrate-content.mjs`~~ (script — since removed from the repo) | `body_md` | ✓ (direct call) | Old `scripts/migrate-content.mjs` |
@@ -57,9 +59,9 @@ content rarely contains token-shaped strings).
   → Advice: don't keep plaintext secrets in the refresh input (the analyzed repo) (source secret hygiene is a separate responsibility).
 - **Direct calls to the data layer `upsertKnowledge`/`upsertMember`** — seed/migration/test paths. The adapter guard is
   enough, and direct callers are responsible for asserting on their own path (the migration set the precedent).
-- **v6 content writes (`knowledge_save`·`category_*`·`project_*_v6`·`task_*_v6`)** — currently no `assertNoHardSecrets` call.
-  With no hard block at the storage boundary,
-  after-the-fact detection relies on the (f) scan.
+- **v6 audit records (v6 before/after in `org_content_audit`)** — not masked. After the entry-point block (#4501) new writes don't
+  bring in hard secrets, but bodies stored before it and masking-only patterns (JWT·Bearer and others outside the hard-block list) can remain
+  in audit copies. Detect with the (f) scan; remove with step 3 of the (e) rotation.
 
 ---
 
@@ -168,7 +170,8 @@ node --env-file=.env scripts/scan-content-secrets.mjs      # from the gateway ap
 ```
 
 - Targets: the items DB (single DB — the domain map tables live there too): `knowledge` name/title/body_md/summary,
-  `category` name/description/should, `org_member` display_name/email/body_md/identities, `debt_finding` title/detail.
+  `category` name/description/should, `org_member` display_name/email/body_md/identities, `debt_finding` title/detail,
+  `project` (projects·tasks) name/description, `task_comment` body, `task_checklist_item` name.
   The list is `SCAN_TARGETS` in the script; `scripts/scan-content-secrets.test.mjs` checks it against the schema definitions.
 - Applies `assertNoHardSecrets` + `redactDeep` (single source in redact.ts) to everything. **Values are never printed** — only the location (table/PK/
   column) and the pattern label (hard/masked) are reported.

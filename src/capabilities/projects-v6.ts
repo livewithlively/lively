@@ -53,6 +53,7 @@ import {
   listTasksForProjects, // #1305 타임라인(간트) — 프로젝트 여러 개의 하위 작업 벌크 조회
   getNodeRow, listEdgesForNodes, rescheduleDependents, // #1308 의존선 — 노드(레벨 무관) 엣지·자동 재스케줄
 } from "../v6/project-store.js";
+import { assertNoContentSecrets } from "./content-secrets.js";
 
 const STATUSES = ["active", "done"] as const;
 // 프로젝트도 태스크 리스트처럼 할 일/진행 중/완료로 그룹핑(웹 보드) — 상태 쓰기에서 todo|in_progress 도 허용.
@@ -408,6 +409,7 @@ const projectCreateV6: Capability = {
       } }],
   },
   handler: async (input: ProjectCreateV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501 평문 시크릿 차단 — 맨 앞(생성·조회 전)
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     // 유효성 먼저(생성 전) — 잘못된 folder/list_id/follow_up 으로 고아 프로젝트가 안 생기게. 순수검사(folder)를
     //  DB 왕복(list_id/follow_up) 앞에 둔다.
@@ -747,6 +749,7 @@ const projectUpdateV6: Capability = {
       } }],
   },
   handler: async (input: ProjectUpdateV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input, new Set(["description_base"]));   // #4501 — description_base 는 옛 본문(지우는 편집을 막지 않게)
     await assertProjectVisible(input.id, ctx, "프로젝트");
     const { id, reschedule_dependents, ...patch } = input;
     // 본문은 교체(description)와 이어쓰기(append_description) 중 하나만 — 함께 오면 의도 모호(교체 후 append?)라 거부.
@@ -816,6 +819,7 @@ const projectRenameV6: Capability = {
       } }],
   },
   handler: async (input: ProjectRenameV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501
     // 대상 결정 — 명시 id 우선, 없으면 이 세션의 소속(세션 자신이 부르는 표준 경로).
     let id = input.id ?? 0;
     if (!id) {
@@ -1192,6 +1196,7 @@ const taskCreateV6: Capability = {
       } }],
   },
   handler: async (input: TaskCreateV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     // 부모가 안 보이면 그 밑에 태스크를 만들 수도 없다(#1291).
     //  ⚠ parentTaskId 를 먼저 본다 — createTask 는 그게 있으면 **그것만으로** 부모를 해소하고 projectId 는 무시한다.
@@ -1284,6 +1289,7 @@ const taskUpdateV6: Capability = {
       } }],
   },
   handler: async (input: TaskUpdateV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input, new Set(["description_base"]));   // #4501
     await assertProjectVisible(input.id, ctx, "태스크");
     const { id, reschedule_dependents, ...patch } = input;
     // 본문은 교체(description)와 이어쓰기(append_description) 중 하나만 — 함께 오면 의도 모호(교체 후 append?)라 거부.

@@ -26,9 +26,13 @@ const PROSE_RISKY_RES: RegExp[] = [
 ];
 
 // 저장 거부(hard-block) — 마스킹으로 끝낼 수 없는 명백한 평문 시크릿.
+//  ⓘ #4501 — v6 콘텐츠(지식·프로젝트 본문 등 긴 산문)에도 걸리면서 셋을 맞췄다: Anthropic 키(위탁 리스·setup-token 이
+//   이 모양인데 목록에 없었다) · GitHub 토큰 전 종류(ghp_ 만 있었다 — gho_/ghs_/ghu_/ghr_ 도 같은 자격) · OpenAI 는 위 마스킹과
+//   같은 `(?<![A-Za-z0-9])` — 없으면 산문의 «risk-managementprocedures» 같은 낱말이 키로 잡혀 저장이 거부된다.
 const HARD_LABELS: { re: RegExp; label: string }[] = [
-  { re: /sk-[A-Za-z0-9]{16,}/, label: "OpenAI 키" },
-  { re: /ghp_[A-Za-z0-9]{20,}/, label: "GitHub 토큰" },
+  { re: /(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9]{2,10}-[A-Za-z0-9_-]{16,}/, label: "Anthropic 키" },
+  { re: /(?<![A-Za-z0-9])sk-[A-Za-z0-9]{16,}/, label: "OpenAI 키" },
+  { re: /gh[pousr]_[A-Za-z0-9]{20,}/, label: "GitHub 토큰" },
   { re: /github_pat_[A-Za-z0-9_]{20,}/, label: "GitHub PAT" },
   { re: /xox[abprs]-[A-Za-z0-9-]{10,}/, label: "Slack 토큰" },
   { re: /AKIA[0-9A-Z]{16}/, label: "AWS 액세스 키" },
@@ -60,10 +64,11 @@ export function redactDeep<T>(v: T): T {
   return v;
 }
 
-export function assertNoHardSecrets(text: string, field: string): void {
+/** hint = 무엇을 대신 하라는 안내(자리마다 다르다 — 연결 설정은 env 이름, 콘텐츠는 자격 금고). */
+export function assertNoHardSecrets(text: string, field: string, hint = "토큰 값 대신 환경변수 이름(auth_env)으로 참조하세요"): void {
   for (const { re, label } of HARD_LABELS) {
     if (re.test(text)) {
-      throw new HttpError(400, `${field} 에 ${label}(으)로 보이는 평문 시크릿이 있습니다 — 토큰 값 대신 환경변수 이름(auth_env)으로 참조하세요`);
+      throw new HttpError(400, `${field} 에 ${label}(으)로 보이는 평문 시크릿이 있습니다 — ${hint}`);
     }
   }
 }

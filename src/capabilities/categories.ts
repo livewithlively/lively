@@ -13,6 +13,7 @@ import {
 import {
   listCategoryGroups, upsertCategoryGroup, removeCategoryGroup, groupKeyFrom,
 } from "../v6/category-group-store.js";
+import { assertNoContentSecrets } from "./content-secrets.js";
 
 const KEY_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
@@ -150,6 +151,7 @@ const categoryCreate: Capability = {
       } }],
   },
   handler: async (input: CategoryCreateInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501 평문 시크릿 차단
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return { category: await createCategory(input, writeCtx) };
   },
@@ -202,6 +204,7 @@ const categoryUpdate: Capability = {
       } }],
   },
   handler: async (input: CategoryUpdateInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501
     const { id, ...patch } = input;
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return { category: await updateCategory(id, patch, writeCtx) };
@@ -331,6 +334,7 @@ const categoryGroupUpsert: Capability = {
       } }],
   },
   handler: async (input: CategoryGroupUpsertInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     //  key 를 안 줬으면 이름에서 뽑는다 — 한글 이름이면 해시로 내려앉는다(사람이 읽는 것은 name 이다).
     const key = String(input.key ?? "").trim() || groupKeyFrom(input.name);

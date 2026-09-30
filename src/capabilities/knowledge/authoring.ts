@@ -20,6 +20,7 @@ import {
 } from "./shared.js";
 // #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 body_md 전체를 튕기지 않게 한다(서버 조정 + 응답 capped).
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "../soft-cap.js";
+import { assertNoContentSecrets } from "../content-secrets.js";
 
 // #1442 소프트캡 — 아래 다섯 짧은 필드(name·title·supersedes·parent_name·change_note)엔 zod .max() 를 두지
 //  않는다. SDK 는 검증을 핸들러 앞에서 하므로 그 max 가 body_md(최대 200,000자)까지 통째로 튕겨 재전송을
@@ -150,6 +151,8 @@ export const knowledgeSave: Capability = {
       } }],
   },
   handler: async (input: KnowledgeSaveInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    // #4501 평문 시크릿 차단 — 맨 앞(어떤 조회·게이트보다 먼저). edit 의 old 는 «지금 본문» 이라 건너뛴다(지우는 편집을 막지 않게).
+    assertNoContentSecrets(input, new Set(["edits.*.old"]));
     // #1442 짧은 메타 필드 조정 — **맨 앞에서 한 번**. 아래 경로 전체(인입 게이트·리비전 제안·store)가
     //  조정된 값을 보게 하려면 여기여야 한다. capped(조정 보고)는 성공 return 마다 실어 호출자가 반드시 본다.
     //  MCP·REST 어느 경로로 와도 같은 판정을 받는다(REST 는 zod 를 안 타므로 이 자리가 유일한 상한 지점).
@@ -423,6 +426,7 @@ export const knowledgeSetTitle: Capability = {
       } }],
   },
   handler: async (input: KnowledgeSetTitleInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501
     const capped = applySoftCaps("knowledge_set_title", input, KSET_CAPS);
     await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
     // 게이트는 knowledge_save 와 같은 함수로 판정한다(같은 '기존 지식 수정'이므로 같은 규칙을 받아야 한다).
