@@ -4,14 +4,14 @@
 //  과 달랐다 — PostToolUse 편집 매처에 Bash 없음, Agent|Task PostToolUse·SubagentStop work-flag 없음(#4217)
 //  ③ 빌드 스크립트가 훅이 import 하는 모듈(harness-registry·host-effects-port·lib/host-effects)을 안 날라, 지금
 //  kit 훅으로 재빌드하면 플러그인 훅 5개가 전부 ERR_MODULE_NOT_FOUND 로 죽었다(격리 HOME 스모크 실측)
-//  ④ plugin.json 의 version 이 0.1.0 에서 한 번도 안 바뀌어, 공식 문서대로라면 설치자는 그 뒤 어떤 변경도 받지 못했다.
+//  ④ plugin.json 이 version 0.1.0 을 고정해, 공식 문서대로라면 설치자는 그 뒤 어떤 변경도 받지 못했다.
 //
 // 사양·엣지표: 스크래치패드 spec.md ②. 재빌드: node scripts/build-plugin.mjs
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PLUGIN, HOOK_SCRIPTS, VERSION_LEDGER, pluginFilePlan, pluginHooksJson, formatHooksJson, pluginContentHash } from "./build-plugin.mjs";
+import { PLUGIN, HOOK_SCRIPTS, pluginFilePlan, pluginHooksJson, formatHooksJson } from "./build-plugin.mjs";
 import { mergeBlocks, userLevelHooksBlock, runnerHooksBlock } from "../kit/setup/user-install.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -98,19 +98,16 @@ t("B6 플러그인 훅의 상대 import 가 플러그인 트리 안에서 전부
   assert.deepEqual(problems, [], `플러그인 설치본에서 ERR_MODULE_NOT_FOUND 가 날 import — ${REBUILD}`);
 });
 
-// B7 — 내용이 바뀌면 버전도 바뀐다. Claude Code 는 version 문자열로 갱신을 판정하므로(문서: «a manifest that pins
-//  "version" … keeps every user on the cached copy until its author changes the string»), 내용만 바뀌고 버전이 그대로면
-//  설치본은 영영 옛것이다. 빌드 스크립트가 해시가 바뀔 때 패치를 올리고 (version, hash) 를 기록한다 — 그 짝을 본다.
-t("B7 플러그인 내용 해시 = 기록된 해시, 그리고 그 기록의 버전 = plugin.json 버전(내용만 바뀌고 버전이 그대로인 상태 없음)", () => {
+// B7 — 버전을 고정하지 않는다. 고정하면 설치자는 그 문자열이 바뀔 때까지 캐시된 사본에 머문다(문서). 빼면 git 마켓플레이스의
+//  상대경로 플러그인은 설치 디렉터리의 커밋 SHA 가 버전이라, plugins/lively 를 건드린 커밋마다 갱신이 간다.
+//  (버전·해시를 파일에 기록하는 방식은 동시 PR 끼리 반드시 충돌해서 쓰지 않는다 — build-plugin.mjs 머리말.)
+t("B7 플러그인 버전을 고정하지 않는다(plugin.json·마켓플레이스 항목 둘 다)", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(PLUGIN, ".claude-plugin", "plugin.json"), "utf8"));
-  assert.match(String(manifest.version), /^\d+\.\d+\.\d+$/, "plugin.json version 이 semver 가 아니다(validate --strict 가 실패한다)");
-  const ledger = JSON.parse(fs.readFileSync(VERSION_LEDGER, "utf8"));
-  assert.equal(pluginContentHash(), ledger.hash, `플러그인 내용이 기록된 해시와 다르다 — 버전을 올리지 않은 변경이다. ${REBUILD}`);
-  assert.equal(manifest.version, ledger.version, `plugin.json version(${manifest.version})이 기록(${ledger.version})과 다르다 — ${REBUILD}`);
+  assert.equal(manifest.version, undefined, "plugin.json 에 version 이 있다 — 문서: «a manifest that pins version keeps every user on the cached copy until its author changes the string»");
   const market = JSON.parse(fs.readFileSync(path.join(ROOT, ".claude-plugin", "marketplace.json"), "utf8"));
   const entry = market.plugins.find((p) => p.name === manifest.name);
   assert.ok(entry, "마켓플레이스에 이 플러그인 항목이 없다");
-  assert.equal(entry.version, undefined, "marketplace.json 항목에 version 을 두지 않는다 — 둘 다 있으면 plugin.json 이 경고 없이 이긴다(문서)");
+  assert.equal(entry.version, undefined, "marketplace.json 항목에 version 이 있다 — 같은 이유로 고정된다");
 });
 
 t("B8 생성은 결정적이다(두 번 만들어도 같다)", () => {
