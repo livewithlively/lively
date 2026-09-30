@@ -21,8 +21,8 @@
 | `stop-writeback-gate.mjs` | Stop (matcher 없음) | hook-input JSON (`stop_hook_active` 포함) | 차단 시에만 `{"decision":"block","reason":…}` + exit 0 (동일 라이브 세션 재가동). 그 외 무출력 exit 0 |
 
 > **memory_write 는 work-flag 에서 의도적 제외** — work-flag.mjs `WRITE_TOOLS_DEFAULT`·settings-hooks 매처에 **넣지 않는다**.
-> no-op 스텁이라 플래그하면 '이미 기록함'(.writeback) 오판을 만든다(실구현 시 두 곳에 동시 추가). `memory_save` 는 기본
-> 목록에 남아 있지만 `memory_*` MCP 툴은 2026-06-24 폐기돼 현 표면에 없다(`knowledge_*` 로 통합). 기록 인정 목록은
+> no-op 스텁이라 플래그하면 '이미 기록함'(.writeback) 오판을 만든다(실구현 시 두 곳에 동시 추가). `memory_*` MCP 툴은
+> 2026-06-24 폐기돼 현 표면에 없다(`knowledge_*` 로 통합) — 기본 목록에 남아 있던 `memory_save` 도 2026-09-30 뺐다(#4501). 기록 인정 목록은
 > 관리탭 런타임 설정 `write_tools`(`~/.lively/hooks-config.json` 미러)로 재배포 없이 바꾼다.
 
 매처의 MCP 서버명은 **클라이언트 등록 라벨 `lively`** (`register-clients.sh` 의 MCP_LABEL) —

@@ -71,8 +71,6 @@ const WRITE_TOOLS_DEFAULT = [
   // 본문 보강·댓글(#4217) — 텍스트를 가장 많이 쓰는 쓰기 툴인데 빠져 있어서, 이것만 부르고 끝낸 세션이
   //  «기록 없음»으로 막혔다(#4201 실측). 호출 수로도 knowledge_save 다음이다(project_update 275·task_update 210·task_comment 88).
   "project_update_v6", "task_update_v6", "task_comment_v6",
-  // 팀 공유 메모리
-  "memory_save",
   // 외부 원본 회수(#906) — ext MCP 등으로 끌어온 자료를 SoT 에 남긴 것도 '기록함'이다. 이게 없으면
   //  "노션 읽고 → source_save 로 남기고 종료"한 모범 세션이 기록 안 한 것으로 판정돼 너지를 맞는다.
   "source_save", "source_link_knowledge",

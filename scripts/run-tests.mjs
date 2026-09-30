@@ -4,8 +4,9 @@
 // 수집은 **소스 글롭 기준**이다(dist 글롭 금지 — 파일 이동·삭제 뒤 스테일 dist 산출물이
 // 남으면 옛+새 테스트를 이중 실행해 false-green/크래시가 난다):
 //   src/**/*.test.ts                     → dist/**/*.test.js 로 매핑해 실행(없으면 빌드 누락으로 실패)
-//   kit|scripts|deploy/**/*.test.mjs     → 그대로 실행
-// 제외: *.itest.mjs(수동·실DB) · *.pg-test.mjs(CI PG 전용) — scripts/README.md 테스트 계층 참조
+//   kit|scripts|deploy|desktop/**/*.test.mjs → 그대로 실행(MJS_DIRS)
+// 제외: *.itest.mjs(수동·실DB) · *.pg-test.mjs(실 PG — CI 는 test.yml 에 파일마다 등록해 돌린다. 로컬은
+//  ITEMS_DATABASE_URL 을 주고 `node <파일>` 로 직접) — scripts/README.md 테스트 계층 참조
 // 특례: dist/org/delivery/static-context.test.js 는 --env-file-if-exists=.env (종전 체인과 동일)
 //
 // ── 실행 정책 (#1431) ─────────────────────────────────────────────────────────
