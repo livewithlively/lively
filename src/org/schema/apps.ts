@@ -282,6 +282,25 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_session_app_live_idx ON org_session_app(session_id) WHERE detached_at IS NULL;`);
 
+  // ── org_app_snapshot — 앱 데이터 일일 내보내기(#4226) ──
+  //  앱 자유 SQL 은 AI 한 줄로 행을 지울 수 있다. RDS 백업(7일)은 DB 전체 단위라 한 워크스페이스·한 앱만 되돌릴 수 없다 →
+  //  (워크스페이스, 앱) 데이터를 하루 한 번 떠 둔다(7일 보관). 앱 제거·복원 직전에도 뜬다(reason). 테이블 하나의 행을
+  //  1,000행씩 묶어 jsonb 로 담는다(TOAST 가 압축한다). 떠 두기·복원은 apps/app-snapshot.ts.
+  //  v2.1 K 규칙대로 org_app 에 FK 를 걸지 않는다 — 앱을 지워도 7일 동안은 남아야 되돌릴 수 있다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_snapshot(
+      app_id TEXT NOT NULL,
+      taken_at TIMESTAMPTZ NOT NULL,
+      table_name TEXT NOT NULL,
+      chunk INT NOT NULL,
+      reason TEXT NOT NULL DEFAULT 'daily',
+      row_count INT NOT NULL DEFAULT 0,
+      rows JSONB NOT NULL DEFAULT '[]'::jsonb,
+      PRIMARY KEY (app_id, taken_at, table_name, chunk)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_snapshot_taken_idx ON org_app_snapshot(taken_at);`);
+
   // ── 기존 테이블 앱 축(design D1) — 전부 ADD COLUMN IF NOT EXISTS(무회귀) ──
   //  auth_token.app_id — 앱 세션 토큰 귀속(NULL = 일반 토큰). 기능 롤백 런북이 `WHERE app_id IS NOT NULL` 로 일괄 revoke.
   await pool.query(`ALTER TABLE auth_token ADD COLUMN IF NOT EXISTS app_id TEXT;`);

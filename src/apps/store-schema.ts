@@ -9,7 +9,7 @@ import pg from "pg";
 import { itemsPool, withTx } from "../db/client.js";
 import { appRoleName } from "../org/tenancy/activate.js";
 import { SINGLE_TENANT_ID } from "../db/tenant-column.js";
-import { physicalTableName, columnDefs, resolveColumnType, assertIdent, appSchemaName, archiveSchemaName, archivedTableName, SHARED_APP_SCHEMA, type StoreColumn } from "./store-ddl.js";
+import { physicalTableName, columnDefs, resolveColumnType, assertIdent, appSchemaName, archiveSchemaName, archivedTableName, SHARED_APP_SCHEMA, appSqlRoleName, appIndexName, APP_INDEX_PREFIX, type StoreColumn, type StoreIndex } from "./store-ddl.js";
 import { currentTenant } from "../org/tenant-context.js";
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
@@ -19,7 +19,7 @@ type Q = pg.Pool | pg.PoolClient | pg.Client;
 const qi = (n: string): string => { if (!/^[A-Za-z0-9_][A-Za-z0-9_$]*$/.test(n)) throw new Error(`unsafe ident: ${n}`); return `"${n}"`; };
 const STRICT = "current_setting('app.tenant_id')::uuid";
 
-export interface AppTableSpec { table: string; columns: StoreColumn[] }
+export interface AppTableSpec { table: string; columns: StoreColumn[]; indexes?: StoreIndex[] }
 
 /**
  * 소유자 커넥션으로 fn 실행 — 앱 DDL 의 자격 우선순위(#4223):
@@ -70,13 +70,17 @@ export interface AppTableReport {
   created: string[];                                                        // 새로 만든 테이블(선언 이름)
   added_columns: Array<{ table: string; column: string; type: string }>;    // 매니페스트에 늘어 ADD COLUMN 한 칸
   type_mismatches: Array<{ table: string; column: string; declared: string; actual: string }>; // 타입이 달라도 바꾸지 않은 칸
+  added_indexes: Array<{ table: string; columns: string[]; unique: boolean }>;  // #4226 새로 만든 선언 인덱스
+  dropped_indexes: Array<{ table: string; index: string }>;                      // #4226 선언에서 빠져 지운 인덱스(라이블리가 만든 것만)
+  /** #4226 자유 SQL 이 내려갈 앱 역할 — 만들었으면 ok, 못 만들었으면 그 까닭(설치는 계속된다 · store_sql 만 막힌다). */
+  sql_role?: { ok: boolean; error?: string };
 }
-export const emptyTableReport = (): AppTableReport => ({ created: [], added_columns: [], type_mismatches: [] });
+export const emptyTableReport = (): AppTableReport => ({ created: [], added_columns: [], type_mismatches: [], added_indexes: [], dropped_indexes: [] });
 
 /** 물리 테이블 하나 생성 + RLS(멱등 — 존재하면 정책/GRANT 보강 + **빠진 컬럼만 ADD COLUMN**, #4224). 반환 = 물리 테이블명.
  *  컬럼 삭제·타입 변경은 하지 않는다 — 데이터를 지키는 쪽이 기본이다(타입이 다르면 report.type_mismatches 로 알린다).
  *  schema 기본값 `app` = 종전 동작(기본 앱·단일 테넌트). 워크스페이스가 설치한 앱은 호출부가 appSchemaFor 로 고른다. */
-export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, schema: string = SHARED_APP_SCHEMA, report?: AppTableReport): Promise<string> {
+export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, schema: string = SHARED_APP_SCHEMA, report?: AppTableReport, opts: { tenantScopedIndexes?: boolean } = {}): Promise<string> {
   const physical = physicalTableName(appId, spec.table);
   const cols = columnDefs(spec.columns);
   const owner = String((await db.query("SELECT current_user AS u")).rows[0]?.u ?? "");
@@ -104,7 +108,122 @@ export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, s
   if (!have.has("owner_all"))
     await db.query(`CREATE POLICY ${qi("owner_all")} ON ${rel} FOR ALL TO ${qi(owner)} USING (true) WITH CHECK (true)`);
   if (appRole) await db.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${rel} TO ${qi(appRole)}`);
+  await syncDeclaredIndexes(db, schema, physical, rel, spec, !!opts.tenantScopedIndexes, report);
   return physical;
+}
+
+/**
+ * 선언 인덱스 맞추기(#4226) — 선언에 있고 없는 것은 만들고, 라이블리가 만든 것(lvix_ 접두) 중 선언에서 빠진 것은 지운다.
+ *  사람·다른 경로가 만든 인덱스(PK 포함)는 건드리지 않는다. 인덱스는 데이터를 담지 않으므로 지워도 잃는 것이 없다.
+ *  tenantScoped = 여러 워크스페이스가 나눠 쓰는 공유 테이블(기본 앱) — 인덱스 앞에 tenant_id 를 둔다(유일성도 워크스페이스 안에서).
+ *   워크스페이스가 설치한 앱은 테이블이 워크스페이스마다 따로라 선언 그대로 만든다(`ON CONFLICT (email)` 이 그대로 맞는다).
+ *  ⚠ unique 인덱스는 이미 겹친 값이 있으면 만들어지지 않는다 — 설치(strict)가 그 원인을 담아 실패한다.
+ */
+async function syncDeclaredIndexes(db: Q, schema: string, physical: string, rel: string, spec: AppTableSpec, tenantScoped: boolean, report?: AppTableReport): Promise<void> {
+  const want = new Map<string, StoreIndex>();
+  for (const ix of spec.indexes ?? []) {
+    const cols = ix.columns.map((c) => (c === "id" || c === "created_at" ? c : assertIdent("column", c)));
+    const norm = { columns: cols, unique: !!ix.unique };
+    want.set(appIndexName(schema, physical, norm, tenantScoped), norm);
+  }
+  const have = new Set((await db.query(
+    `SELECT i.relname AS name FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid
+      WHERE x.indrelid = to_regclass($1) AND starts_with(i.relname, $2)`,
+    [`${qi(schema)}.${qi(physical)}`, APP_INDEX_PREFIX])).rows.map((r) => String(r.name)));
+  for (const [name, ix] of want) {
+    if (have.has(name)) continue;
+    const cols = [...(tenantScoped ? ["tenant_id"] : []), ...ix.columns].map(qi).join(", ");
+    await db.query(`CREATE ${ix.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${qi(name)} ON ${rel} (${cols})`);
+    report?.added_indexes.push({ table: spec.table, columns: ix.columns, unique: !!ix.unique });
+  }
+  for (const name of have) {
+    if (want.has(name)) continue;
+    await db.query(`DROP INDEX IF EXISTS ${qi(schema)}.${qi(name)}`);
+    report?.dropped_indexes.push({ table: spec.table, index: name });
+  }
+}
+
+// ── 앱 자유 SQL 역할(#4226) ─────────────────────────────────────────────────────────────
+//  자유 SQL 의 진짜 경계. (DB, 스키마, 앱)마다 로그인하지 않는 역할 하나를 두고, 그 앱의 테이블에만 권한을 준다.
+//  런타임 연결(매니지드 lvly_app · 단일 모드는 풀 주인)이 트랜잭션 안에서 `SET LOCAL ROLE` 로 내려가 SQL 을 돌린다 —
+//  그 SQL 은 같은 워크스페이스의 다른 앱 테이블도, 라이블리 본체 테이블도 권한 거부를 받는다(파서가 뚫려도).
+//  만드는 자격: DDL 연결에 CREATEROLE 이 있어야 한다(매니지드 lvly_appddl — lvly-cloud control/src/appddl.ts).
+//   PG16+ 에서 CREATEROLE 은 **자기가 만든 역할만** 고치고 지울 수 있다 — 넓어지는 권한은 «앱 역할을 만든다» 하나다.
+//  런타임 연결은 그 역할로 SET 만 할 수 있고 권한을 물려받지 않는다(INHERIT FALSE) — 런타임 권한이 늘지 않는다.
+
+/** 이 역할이 쓰는 행 격리 정책 이름 — 런타임 역할의 tenant_isolation 과 같은 식을 이 역할에 건다. */
+const APP_SQL_POLICY = "app_sql";
+
+async function serverVersionNum(db: Q): Promise<number> {
+  return Number((await db.query("SELECT current_setting('server_version_num')::int AS v")).rows[0]?.v ?? 0);
+}
+
+const isDup = (e: unknown): boolean => (e as { code?: unknown })?.code === "42710"; // duplicate_object — 동시 설치 경합
+
+/**
+ * DDL 연결 위에서 앱 역할을 보장한다(멱등). tables = 선언 이름. 반환 = 역할 이름. 실패는 던진다(호출부가 비치명/503 을 고른다).
+ */
+export async function ensureAppSqlRoleOn(db: Q, schema: string, appId: string, tables: string[]): Promise<string> {
+  const dbName = String((await db.query("SELECT current_database() AS d")).rows[0]?.d ?? "");
+  const role = appSqlRoleName(dbName, schema, appId);
+  if (!(await db.query("SELECT 1 FROM pg_roles WHERE rolname=$1", [role])).rows.length) {
+    try { await db.query(`CREATE ROLE ${qi(role)} NOLOGIN NOINHERIT`); }
+    catch (e) { if (!isDup(e)) throw e; }
+  }
+  // 런타임 연결이 이 역할로 내려갈 수 있게. 슈퍼유저는 멤버십 없이도 된다.
+  const runtime = (await resolveAppRole(db)) ?? String((await db.query("SELECT current_user AS u")).rows[0]?.u ?? "");
+  const sup = (await db.query("SELECT rolsuper FROM pg_roles WHERE rolname=$1", [runtime])).rows[0]?.rolsuper === true;
+  if (!sup) {
+    const v16 = (await serverVersionNum(db)) >= 160000;
+    const member = (await db.query(
+      `SELECT 1 FROM pg_auth_members am JOIN pg_roles r ON r.oid = am.roleid JOIN pg_roles m ON m.oid = am.member
+        WHERE r.rolname = $1 AND m.rolname = $2${v16 ? " AND am.set_option" : ""}`, [role, runtime])).rows.length > 0;
+    if (!member) await db.query(`GRANT ${qi(role)} TO ${qi(runtime)}${v16 ? " WITH INHERIT FALSE, SET TRUE" : ""}`);
+  }
+  const usage = (await db.query("SELECT has_schema_privilege($1, $2, 'USAGE') AS ok", [role, schema])).rows[0]?.ok === true;
+  if (!usage) await db.query(`GRANT USAGE ON SCHEMA ${qi(schema)} TO ${qi(role)}`);
+  for (const t of tables) {
+    const physical = physicalTableName(appId, t);
+    const rel = `${qi(schema)}.${qi(physical)}`;
+    await db.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${rel} TO ${qi(role)}`);
+    const has = (await db.query(
+      `SELECT 1 FROM pg_policies WHERE schemaname=$1 AND tablename=$2 AND policyname=$3`, [schema, physical, APP_SQL_POLICY])).rows.length > 0;
+    if (!has) {
+      try {
+        await db.query(`CREATE POLICY ${qi(APP_SQL_POLICY)} ON ${rel} FOR ALL TO ${qi(role)} USING (tenant_id = ${STRICT}) WITH CHECK (tenant_id = ${STRICT})`);
+      } catch (e) { if (!isDup(e)) throw e; }
+    }
+  }
+  return role;
+}
+
+/** 앱 역할 보장(연결 포함) — 자유 SQL 실행 직전 지연 보장에 쓴다. 실패는 원인을 담은 503. */
+export async function ensureAppSqlRole(appId: string, tables: string[], schema: string): Promise<string> {
+  try { return await withOwnerConn((db) => ensureAppSqlRoleOn(db, schema, appId, tables)); }
+  catch (e) {
+    throw new HttpError(503, `앱 '${appId}' 의 SQL 전용 DB 역할을 준비하지 못했습니다 — ${(e as Error)?.message ?? e}. `
+      + "store_query·store_insert 같은 정해진 도구는 그대로 쓸 수 있습니다", { cause: e });
+  }
+}
+
+/** 앱 제거 때 — 역할을 지운다(테이블은 이미 지워졌다). 비치명. */
+async function dropAppSqlRoleOn(db: Q, schema: string, appId: string): Promise<void> {
+  const dbName = String((await db.query("SELECT current_database() AS d")).rows[0]?.d ?? "");
+  const role = appSqlRoleName(dbName, schema, appId);
+  if (!(await db.query("SELECT 1 FROM pg_roles WHERE rolname=$1", [role])).rows.length) return;
+  //  역할을 가리키는 것이 하나라도 남으면 DROP ROLE 이 «objects depend on it» 으로 실패한다 — 정책·권한을 먼저 걷는다.
+  const pols = (await db.query(
+    `SELECT schemaname, tablename, policyname FROM pg_policies WHERE $1::name = ANY(roles)`, [role])).rows;
+  for (const p of pols) {
+    await db.query(`DROP POLICY IF EXISTS ${qi(String(p.policyname))} ON ${qi(String(p.schemaname))}.${qi(String(p.tablename))}`);
+  }
+  await db.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${qi(schema)} FROM ${qi(role)}`).catch(() => undefined);
+  const archive = archiveSchemaName(schema);
+  if ((await db.query("SELECT to_regnamespace($1) AS n", [archive])).rows[0]?.n) {
+    await db.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${qi(archive)} FROM ${qi(role)}`).catch(() => undefined);
+  }
+  await db.query(`REVOKE ALL ON SCHEMA ${qi(schema)} FROM ${qi(role)}`).catch(() => undefined);
+  await db.query(`DROP ROLE IF EXISTS ${qi(role)}`);
 }
 
 async function tableExists(db: Q, schema: string, physical: string): Promise<boolean> {
@@ -147,6 +266,11 @@ export interface EnsureAppTablesOpts {
   strict?: boolean;
   /** 넘기면 만든 테이블·더한 칸·타입 불일치를 채운다(#4224 — 설치 응답용). */
   report?: AppTableReport;
+  /** #4226 공유 테이블(기본 앱)이면 참 — 선언 인덱스 앞에 tenant_id 를 둔다. */
+  tenantScopedIndexes?: boolean;
+  /** #4226 자유 SQL 역할도 보장한다(워크스페이스가 설치한 앱). 실패해도 던지지 않고 report.sql_role 에 적는다 —
+   *  역할을 못 만드는 DB(CREATEROLE 없음)에서도 설치와 store_* 는 그대로 돈다. store_sql 만 503 으로 막힌다. */
+  sqlRole?: boolean;
 }
 
 /**
@@ -161,10 +285,19 @@ export async function ensureAppTables(appId: string, tables: AppTableSpec[], opt
   const out = await withOwnerConn(async (db) => {
     const done: string[] = [];
     for (const t of tables) {
-      try { done.push(await createAppTable(db, appId, t, schema, opts.report)); }
+      try { done.push(await createAppTable(db, appId, t, schema, opts.report, { tenantScopedIndexes: opts.tenantScopedIndexes })); }
       catch (err) {
         logger.warn({ err, appId, schema, table: t.table }, opts.strict ? "앱 데이터 테이블 생성 실패" : "앱 데이터 테이블 생성 실패(비치명)");
         failures.push(`${t.table}: ${(err as Error)?.message ?? err}`);
+      }
+    }
+    if (opts.sqlRole && !failures.length) {
+      try {
+        await ensureAppSqlRoleOn(db, schema, appId, tables.map((t) => t.table));
+        if (opts.report) opts.report.sql_role = { ok: true };
+      } catch (err) {
+        logger.warn({ err, appId, schema }, "앱 SQL 역할 준비 실패(비치명 — store_sql 만 막힌다)");
+        if (opts.report) opts.report.sql_role = { ok: false, error: (err as Error)?.message ?? String(err) };
       }
     }
     return done;
@@ -175,7 +308,8 @@ export async function ensureAppTables(appId: string, tables: AppTableSpec[], opt
   return out;
 }
 
-/** 앱 제거 시 그 앱의 데이터 테이블 전부 DROP(소유자). 워크스페이스별 스키마면 그 워크스페이스 것만 지워진다. */
+/** 앱 제거 시 그 앱의 데이터 테이블 전부 DROP(소유자). 워크스페이스별 스키마면 그 워크스페이스 것만 지워진다.
+ *  #4226 — 자유 SQL 역할도 함께 지운다(테이블이 없어지면 그 역할이 할 일이 없다). */
 export async function dropAppTables(appId: string, tables: string[], schema: string = SHARED_APP_SCHEMA): Promise<void> {
   if (!tables.length) return;
   await withOwnerConn(async (db) => {
@@ -183,6 +317,8 @@ export async function dropAppTables(appId: string, tables: string[], schema: str
       try { await db.query(`DROP TABLE IF EXISTS ${qi(schema)}.${qi(physicalTableName(appId, t))} CASCADE`); }
       catch (err) { logger.warn({ err, appId, schema, table: t }, "앱 데이터 테이블 DROP 실패(비치명)"); }
     }
+    try { await dropAppSqlRoleOn(db, schema, appId); }
+    catch (err) { logger.warn({ err, appId, schema }, "앱 SQL 역할 삭제 실패(비치명)"); }
   });
 }
 
@@ -236,7 +372,7 @@ async function renameCompanions(c: Q, schema: string, table: string, physical: s
 }
 
 /** 소유자 연결 위에서 트랜잭션 하나(단일 모드의 itemsPool 이면 체크아웃해서). */
-async function inTx<T>(db: Q, fn: (c: Q) => Promise<T>): Promise<T> {
+export async function inTx<T>(db: Q, fn: (c: Q) => Promise<T>): Promise<T> {
   if (db === itemsPool) return withTx((c) => fn(c));
   await db.query("BEGIN");
   try { const out = await fn(db); await db.query("COMMIT"); return out; }
@@ -256,6 +392,10 @@ export async function cleanupDroppedTables(appId: string, tables: string[], sche
   const archive = archiveSchemaName(schema);
   await withOwnerConn(async (db) => {
     const appRole = await resolveAppRole(db);
+    // #4226 — 자유 SQL 역할도 보관된 테이블을 못 읽어야 한다(있을 때만).
+    const dbName = String((await db.query("SELECT current_database() AS d")).rows[0]?.d ?? "");
+    const sqlRole = appSqlRoleName(dbName, schema, appId);
+    const hasSqlRole = (await db.query("SELECT 1 FROM pg_roles WHERE rolname=$1", [sqlRole])).rows.length > 0;
     for (const table of tables) {
       try {
         const physical = physicalTableName(appId, table);
@@ -276,6 +416,11 @@ export async function cleanupDroppedTables(appId: string, tables: string[], sche
           await renameCompanions(c, schema, target, physical, now);
           await c.query(`ALTER TABLE ${qi(schema)}.${qi(target)} SET SCHEMA ${qi(archive)}`);
           if (appRole) await c.query(`REVOKE ALL ON ${qi(archive)}.${qi(target)} FROM ${qi(appRole)}`);
+          if (hasSqlRole) {
+            await c.query(`REVOKE ALL ON ${qi(archive)}.${qi(target)} FROM ${qi(sqlRole)}`);
+            //  정책도 걷는다 — 정책이 역할을 가리키고 있으면 앱을 지울 때 그 역할을 DROP 할 수 없다(PG 실측).
+            await c.query(`DROP POLICY IF EXISTS ${qi(APP_SQL_POLICY)} ON ${qi(archive)}.${qi(target)}`);
+          }
           return { kind: "archived" as const, rows, archived_as: `${archive}.${target}` };
         });
         if (done.kind === "dropped") out.dropped.push(table);

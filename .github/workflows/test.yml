@@ -218,6 +218,21 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/app-install-inline.pg-test.mjs
+      # ⑤-h 앱 자유 SQL 경계(#4226) — 매니지드와 같은 역할 구조(런타임 · 앱 DDL+CREATEROLE · CREATEROLE 없는 DDL)를 세우고
+      #    앱 역할로 내려간 SQL 이 다른 앱·본체 테이블을 DB 에서 거부당하는지, 행·바이트·시간·잠금 상한, 인덱스, 보관·제거 때
+      #    역할 정리를 잰다. 검사기를 건너뛴 SQL 로도 재서 «경계는 DB 역할» 을 실측한다.
+      - name: 앱 자유 SQL 경계 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-sql.pg-test.mjs
+      # ⑤-i 앱 자유 SQL 끝단(#4226) — store_sql 핸들러 · 빈도 429 · 용량 507 · 일일 떠 두기(1,000행 묶음·20시간·7일) ·
+      #    되돌리기(원래 id·직전 떠 두기·id 시퀀스) · 제거 전 떠 두기 → 재설치 → 되돌리기.
+      - name: 앱 자유 SQL 끝단 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-sql-e2e.pg-test.mjs
       # ⑥ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.

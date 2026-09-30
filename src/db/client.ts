@@ -218,6 +218,14 @@ export function tenantBindingSql(): TenantBindingSql | null {
   return bindingSql(true);
 }
 
+/**
+ * 지금 풀이 거는 테넌트 id(바인딩이 꺼져 있거나 못 찾으면 null) — 전역 풀 밖의 별도 풀(앱 자유 SQL 전용 풀, #4226)이
+ *  **같은 값**으로 행 격리 설정을 걸 때 쓴다. 두 풀이 서로 다른 테넌트를 보는 일이 없게 리졸버를 한 곳에서 읽는다.
+ */
+export function boundTenantId(): string | null {
+  return resolver?.() ?? null;
+}
+
 // ── ★★ 고정 바인딩은 **여기서 자가 설치**한다 ────────────────────────────────
 //
 // 실측으로 밟았다(E2E): 게이트웨이 부팅(`index.ts`)에서만 리졸버를 꽂았더니, **DB 를 만지는 다른
