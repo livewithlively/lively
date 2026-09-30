@@ -160,7 +160,7 @@ t("A7 default_level=off 여도 명시 warn 우선", () =>
 // ───────────────────────── B. 검사 공통 ─────────────────────────
 
 const MESSY_TITLE = "🚀 2026-09-30 배포 — 정리 — MR 123 ✅";
-const MESSY_BODY = "## 🚀 개요\n오늘 아직 배포하지 않았습니다. a → b → c → d (x (y)) /Users/charles/x **a** ✅✅✅✅";
+const MESSY_BODY = "## 🚀 개요\n오늘 아직 배포하지 않았습니다. a → b → c → d (x (y)) /Users/someone/x **a** ✅✅✅✅";
 
 t("B enabled=false 면 [] (입력 무관)", () => assert.deepEqual(lint(MESSY_TITLE, MESSY_BODY, DEFAULT_WRITING_FORMAT), []));
 t("B off 규칙은 결과에 없다", () =>
@@ -302,7 +302,7 @@ t("relative_time 따옴표 밖이면 같은 줄에 인용이 있어도 발생", 
 "확인" 요청을 오늘 받았다.`)));
 
 t("local_path /Users/<이름> 발생", () =>
-  assert.ok(has("local_path", CLEAN_TITLE, `${CLEAN_BODY}\n\n설정 파일은 /Users/charles/app.conf 에 둔다.`)));
+  assert.ok(has("local_path", CLEAN_TITLE, `${CLEAN_BODY}\n\n설정 파일은 /Users/someone/app.conf 에 둔다.`)));
 t("local_path /home/<이름> 발생", () =>
   assert.ok(has("local_path", CLEAN_TITLE, `${CLEAN_BODY}\n\n설정 파일은 /home/bob/app.conf 에 둔다.`)));
 t("local_path 공백 뒤 ~/ 발생", () =>
@@ -314,7 +314,7 @@ t("local_path 줄시작 ~/ 발생", () =>
 t("local_path C:\\Users\\ 발생", () =>
   assert.ok(has("local_path", CLEAN_TITLE, `${CLEAN_BODY}\n\n설정 파일은 C:\\Users\\bob\\app.conf 에 둔다.`)));
 t("local_path 코드 안도 발생", () =>
-  assert.ok(has("local_path", CLEAN_TITLE, `${CLEAN_BODY}\n\n\`\`\`\ncat /Users/charles/app.conf\n\`\`\``)));
+  assert.ok(has("local_path", CLEAN_TITLE, `${CLEAN_BODY}\n\n\`\`\`\ncat /Users/someone/app.conf\n\`\`\``)));
 t("local_path '/Users/' 로 끝나는 언급은 통과", () =>
   assert.ok(!has("local_path", CLEAN_TITLE, `${CLEAN_BODY}
 
