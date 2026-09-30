@@ -14,6 +14,7 @@
 //  C1 판의 문패는 detail 만 보지 않는다 — panes.ts 가 doorProjectName 을 쓴다
 //  C2 사이드바의 **살아 있는** 붓(renderTree)에 편집 가드가 있다 — 없으면 라우팅·폴링이 입력칸을 지운다
 //  C3 편집 중 표시는 **굳지 않는다** — 스스로 못 푸는 불리언 플래그(let renaming = false)를 두지 않는다
+//     (#3870 — 판정은 lib/edit-hold 로 옮겼다: 사이드바와 문패가 같은 것을 쓴다. 판정 자체의 엣지는 scripts/edit-hold.test.mjs)
 //  C4 프로젝트 탭(앱 프레임)은 이름을 고친 뒤 셸에 알린다 — 안 알리면 8초를 기다린다
 //  C5 셸은 그 알림을 받아 **문패까지** 맞춘다(목록만 고치면 문패가 옛 이름으로 남는다)
 //
@@ -80,9 +81,9 @@ test("C2 사이드바의 살아 있는 붓에 편집 가드가 있다", () => {
   const i = src.indexOf("function render(");
   assert.ok(i >= 0, "render() 를 찾지 못했다 — 붓의 이름이 바뀌었으면 이 계약도 옮겨야 한다");
   const head = src.slice(i, i + 1200);
-  assert.match(head, /renamingAlive\(\)/,
+  assert.match(head, /renaming\.skip\(\)/,
     "🔴 사이드바 입구에 가드가 없다 — 첫 클릭의 항해가 부른 재렌더가 방금 연 입력칸을 지운다(가드가 죽은 renderLegacy 에만 남아 있던 것이 이 버그였다)");
-  assert.ok(head.indexOf("renamingAlive()") < head.indexOf("renderProjects()"),
+  assert.ok(head.indexOf("renaming.skip()") < head.indexOf("renderProjects()"),
     "🔴 가드가 구역 붓보다 뒤에 있으면 판이 이미 갈아엎힌 뒤다");
 });
 
@@ -90,7 +91,9 @@ test("C3 편집 중 표시가 굳지 않는다 — 스스로 못 푸는 불리�
   const src = code("v2/side.ts");
   assert.doesNotMatch(src, /let\s+renaming\s*=\s*false/,
     "🔴 불리언은 입력칸이 뜯겨 나가면 true 로 굳고, 그 뒤 rename 이 세션까지 통째로 막힌다");
-  assert.match(src, /renamingEl\s*&&\s*renamingEl\.isConnected/,
+  assert.match(src, /const\s+renaming\s*=\s*editHold\(\)/, "🔴 사이드바 편집 판정이 lib/edit-hold 를 안 쓴다");
+  const hold = readWeb("lib/edit-hold.ts").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+  assert.match(hold, /input\s*&&\s*input\.isConnected/,
     "🔴 화면에 붙어 있는지로 물어야 스스로 낫는다");
 });
 
