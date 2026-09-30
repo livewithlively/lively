@@ -85,6 +85,23 @@ export function missingDirResponse(base: string, abs: string): { path: string; p
   return path.relative(base, abs) === "" ? { path: "", parent: null, items: [] } : null;
 }
 
+/**
+ * 파일 응답의 캐시 머리(#3870) — 판이 실린 미리보기만 브라우저가 보관해도 된다.
+ *  ver = 요청 주소의 `v`(web/v2/file-preview.ts pvVersion 이 `<내림한 mtime>.<size>` 로 만든다).
+ *  · 판이 **지금 파일과 같을 때만** 오래 보관(private · immutable) — 판이 바뀌면 부르는 쪽 주소가 바뀌므로 옛 바이트가 남을 길이 없다.
+ *  · Vary — 같은 브라우저라도 다른 사람(다른 토큰·쿠키)에게는 보관본을 주지 않는다.
+ *  · 내려받기(download=1)·판 없음·판 다름(바뀐 뒤 옛 주소) → 종전 그대로 no-store.
+ *  실측(2026-09-30 매니지드): 파일 하나에 0.34~0.55초가 고정으로 들어(멤버 저장소 왕복), 칸을 열 때마다 전부 다시 받던 것이
+ *   «미리보기가 느리다»의 대부분이었다.
+ */
+export function fileCacheHeaders(ver: unknown, st: { mtime: number; size: number }, download: boolean): Record<string, string> {
+  const v = typeof ver === "string" ? ver : "";
+  if (!download && v && v === `${Math.floor(st.mtime)}.${st.size}`) {
+    return { "Cache-Control": "private, max-age=2592000, immutable", Vary: "Authorization, Cookie" };
+  }
+  return { "Cache-Control": "no-store" };
+}
+
 // base 기준 안전 경로 해소(.. 탈출 차단). requireFile=true 면 루트 자신 거부(파일 경로 필요).
 /**
  * 글자 판정 + **심링크 봉쇄**(#3668 T1) — 쓰기(업로드·폴더 생성)가 지나는 문.
@@ -206,7 +223,8 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     if (!st.file) throw new HttpError(400, "파일이 아닙니다");
     const download = req.query.download === "1";
     if (!download && st.size > MAX_PREVIEW) throw new HttpError(413, "미리보기엔 너무 큽니다 — 다운로드하세요");
-    res.setHeader("Cache-Control", "no-store");
+    //  #3870 판이 실린 미리보기(`&v=`)는 판이 지금 파일과 같을 때만 브라우저가 보관해도 된다 — 판정은 fileCacheHeaders 한 자리.
+    for (const [k, v] of Object.entries(fileCacheHeaders(req.query.v, st, download))) res.setHeader(k, v);
     // 파일 도장(#762) — 뷰어의 «살아 있는 미리보기»가 HEAD 로 「바뀌었나」만 묻는다. 시각은 ms, 크기까지 둘이라
     //  같은 초 안에 두 번 저장한 것도 가른다(Last-Modified 는 초 단위라 그걸로는 못 가른다 — 표준 클라이언트용으로만 둔다).
     res.setHeader("Last-Modified", new Date(st.mtime).toUTCString());
