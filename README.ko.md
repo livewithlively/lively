@@ -211,4 +211,4 @@ flowchart LR
 
 ---
 
-Copyright (c) 2026 윤상민 (Sangmin Yoon), 장원준 (Wonjun Jang)
+Copyright (c) 2026 윤상민 (Sangmin Yoon), 장원준 (Wonjoon Jang)
