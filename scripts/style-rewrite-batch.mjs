@@ -10,12 +10,16 @@
 //   --apply 가 없으면 dry-run 이다(저장하지 않고 재작성본 전문을 report 에 싣는다 — 사람이 먼저 훑어본다).
 //   게이트웨이는 env LIVELY_URL·LIVELY_TOKEN, 없으면 ~/.lively/gateway-url·~/.lively/token.
 //   --llm-cmd 는 `<cmd> -p --model <m>` 로 불리고 프롬프트를 stdin 으로 받아 stdout 에 답한다(테스트는 가짜로 바꿔 끼운다).
+//   --llm-dir <dir> 은 프로세스를 띄우는 대신 요청을 <dir>/pending 에 파일로 내놓고 <dir>/done 의 답을 기다린다 —
+//    `claude -p` 를 중첩으로 못 부르는 헤드리스 세션 안에서 돌 때 쓴다. 답하는 쪽 절차: scripts/style-rewrite-llm-dir-answerer.md
+//   --max-minutes N 은 시작 후 N분이 지나면 새 문서를 꺼내지 않고, 진행 중인 문서만 끝낸 뒤 정상 종료한다(--resume 으로 이어 한다).
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { llmRequestId, llmDirExchange, initLlmDir, markLlmDirFinished } from "./style-rewrite-llm-dir.mjs";
 
 const DIST = fileURLToPath(new URL("../dist/", import.meta.url));
 const gatePath = join(DIST, "v6/writing-rewrite-gate.js");
@@ -29,7 +33,8 @@ const { resolveWritingFormat } = await import(pathToFileURL(fmtPath).href);
 
 // ── 인자 ──
 function parseArgs(argv) {
-  const a = { apply: false, model: "sonnet", llmCmd: "claude", names: null, limit: null, rankTop: null, rankOnly: false, resume: false, report: null, attempts: 3, concurrency: 1 };
+  const a = { apply: false, model: "sonnet", llmCmd: "claude", names: null, limit: null, rankTop: null, rankOnly: false, resume: false, report: null, attempts: 3, concurrency: 1, llmDir: null, maxMinutes: null };
+  let llmCmdGiven = false;
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const val = () => {
@@ -46,7 +51,9 @@ function parseArgs(argv) {
     else if (k === "--resume") a.resume = true;
     else if (k === "--report") a.report = val();
     else if (k === "--model") a.model = val();
-    else if (k === "--llm-cmd") a.llmCmd = val();
+    else if (k === "--llm-cmd") { a.llmCmd = val(); llmCmdGiven = true; }
+    else if (k === "--llm-dir") a.llmDir = val();
+    else if (k === "--max-minutes") a.maxMinutes = Number(val());
     else if (k === "--concurrency") a.concurrency = Math.max(1, Math.min(8, Number(val()) || 1));
     else if (k === "--attempts") a.attempts = Math.max(1, Math.min(6, Number(val()) || 3));
     else { console.error(`알 수 없는 인자: ${k}`); process.exit(2); }
@@ -55,11 +62,22 @@ function parseArgs(argv) {
   const posInt = (n) => Number.isInteger(n) && n > 0;
   if (a.limit != null && !posInt(a.limit)) { console.error("--limit 는 양의 정수여야 합니다"); process.exit(2); }
   if (a.rankTop != null && !posInt(a.rankTop)) { console.error("--rank-top 은 양의 정수여야 합니다"); process.exit(2); }
+  if (a.maxMinutes != null && !(Number.isFinite(a.maxMinutes) && a.maxMinutes > 0)) { console.error("--max-minutes 는 양수여야 합니다"); process.exit(2); }
+  if (a.llmDir && llmCmdGiven) { console.error("--llm-dir 과 --llm-cmd 는 함께 쓸 수 없습니다"); process.exit(2); }
   if (a.rankOnly && a.rankTop == null) { console.error("--rank-only 는 --rank-top 과 함께 써야 합니다"); process.exit(2); }
   if (!a.names && !a.applyFrom && a.limit == null && a.rankTop == null) { console.error("--names <파일>, --limit N, --rank-top N, --apply-from <report> 중 하나가 필요합니다"); process.exit(2); }
   return a;
 }
 const args = parseArgs(process.argv.slice(2));
+const STARTED_AT = Date.now();
+const timeUp = () => args.maxMinutes != null && Date.now() - STARTED_AT >= args.maxMinutes * 60_000;
+// 실행 id — 파일 교환 요청 id 앞에 붙여, 이어 하기 때 앞 실행의 늦은 답을 새 요청의 답으로 집지 않게 한다.
+const RUN_ID = STARTED_AT.toString(36);
+if (args.llmDir) {
+  initLlmDir(args.llmDir);
+  // process.exit 경로까지 포함해 어떻게 끝나든 답하는 쪽이 루프를 끝낼 수 있게 표시를 남긴다.
+  process.on("exit", () => markLlmDirFinished(args.llmDir));
+}
 
 // ── 게이트웨이 ──
 const readCfg = (f) => { try { return readFileSync(join(homedir(), ".lively", f), "utf8").trim(); } catch { return ""; } };
@@ -168,9 +186,13 @@ const LLM_TIMEOUT_MS = 10 * 60 * 1000;
 //  cwd 를 임시 폴더로 두는 건 실행 위치의 프로젝트 지침이 프롬프트에 섞이지 않게 하려는 것이다.
 // 건별 LLM 호출 수 — 병렬로 돌아도 섞이지 않게 비동기 문맥에 싣는다(비용 추적: 문서당 최대 호출이 조각 수 × 시도 수로 커진다).
 const callCtx = new AsyncLocalStorage();
-function runLlm(prompt) {
+function runLlm(prompt, purpose) {
   const c = callCtx.getStore();
   if (c) c.calls++;
+  if (args.llmDir) {
+    const id = llmRequestId(RUN_ID, c?.name ?? "", c?.calls ?? 0, purpose);
+    return llmDirExchange({ dir: args.llmDir, id, model: args.model, purpose, prompt, timeoutMs: LLM_TIMEOUT_MS });
+  }
   return new Promise((resolve, reject) => {
     const p = spawn(args.llmCmd, ["-p", "--model", args.model], { cwd: tmpdir(), stdio: ["pipe", "pipe", "pipe"] });
     let out = "", err = "";
@@ -315,7 +337,7 @@ async function judgeMeaning(before, after) {
     // 두 번째 판정은 A·B 자리를 바꿔 묻는다 — 같은 프롬프트를 두 번 보내면 같은 방향으로 틀리기 쉽다.
     //  자리를 바꾼 답은 normalizeJudgement 가 missing↔added·a↔b 를 되돌린다.
     const swapped = i % 2 === 1;
-    const items = normalizeJudgement(parseJsonLoose(await runLlm(swapped ? comparePrompt(after, before) : comparePrompt(before, after)), "{"), swapped);
+    const items = normalizeJudgement(parseJsonLoose(await runLlm(swapped ? comparePrompt(after, before) : comparePrompt(before, after), "judge"), "{"), swapped);
     if (!items) return { parseError: `판정 ${i + 1} JSON 아님` };
     runs.push(items);
     // 사실 변화를 한 번이라도 보고하면 더 돌릴 필요가 없다 — 통과는 전원 일치일 때만이다.
@@ -333,7 +355,7 @@ async function rewriteLoop(src, findings, guide, check, part) {
   // 보고용 마지막 후보 — 프롬프트에 되돌리는 prev 와 따로 둔다(의미 탈락 뒤엔 prev 를 비우지만 사람은 그 후보를 봐야 한다).
   let lastCand = null;
   for (let i = 0; i < args.attempts; i++) {
-    const raw = await runLlm(rewritePrompt(src, findings, guide, feedback, part));
+    const raw = await runLlm(rewritePrompt(src, findings, guide, feedback, part), "rewrite");
     const out = parseJsonLoose(raw, "{");
     if (!out || typeof out.title !== "string" || typeof out.body_md !== "string") {
       lastCand = null;
@@ -539,6 +561,8 @@ else if (args.rankTop != null) {
   }
 } else names = await pickCandidates(fmt, args.limit);
 
+// 같은 이름이 두 번 들어오면 병렬로 같은 문서를 두 번 고치고, 파일 교환 요청 id 도 겹친다.
+names = [...new Set(names)];
 if (args.resume) {
   const done = doneNames(args.report, (r) => !retryableLlm(r));
   const before = names.length;
@@ -554,7 +578,7 @@ const LLM_FAIL_STOP = 3;
 let llmFailStreak = 0;
 let stopped = false;
 async function runOne(name) {
-  const ctx = { calls: 0 };
+  const ctx = { calls: 0, name };
   let row;
   try {
     row = await callCtx.run(ctx, () => processOne(name, fmt));
@@ -574,6 +598,7 @@ async function runOne(name) {
 const queue = [...names];
 await Promise.all(Array.from({ length: Math.min(args.concurrency, queue.length) }, async () => {
   // 멈춘 뒤엔 꺼내지도 않는다 — 꺼내고 버리면 다시 돌릴 때 그 이름이 빠진다.
-  while (!stopped && queue.length) await runOne(queue.shift());
+  while (!stopped && !timeUp() && queue.length) await runOne(queue.shift());
 }));
+if (!stopped && queue.length && timeUp()) console.error(`시간 한도로 멈춘다 — 남은 ${queue.length}건은 --resume 으로 이어 한다`);
 console.log((Object.entries(counts).map(([s, n]) => `${s}=${n}`).join(" ") || "처리 0건") + ` · LLM 호출 ${totalCalls}회`);
