@@ -36,6 +36,7 @@
 //  E1 떠 있기만 한 앱을 제자리에서 흔들면 고정되지 않는다 · E2 고정 줄 안으로 끌어오면 그 자리에 고정
 //  F1 키보드로 앱을 열면(다시 세움) 초점이 같은 앱의 새 단추로 · F2 초점이 독 밖이면 건드리지 않는다
 //  G1 같은 창에서 캐시만 바뀌었을 때 refreshDocks 로 따라온다 · H1 [더보기]가 열린 채 독이 옮겨지면 새 단추 옆으로 · I1 이름표는 곁칸 안에
+//  ── 재검증 반영(2026-10-01) ── H2 옆 독(오른쪽·왼쪽)의 [더보기]도 곁칸 안에 선다(곁칸 기본 폭 340) · F3 초점 든 앱을 빼면 초점은 이웃 단추로
 //
 // 왜 런타임인가: 자리·여백·확대는 CSS 와 스크립트가 **함께** 그린 결과에서만 잰다. 손짓은 포인터 사건의 흐름이다.
 // fail-first(2026-09-30): 42-v2-dock.css 의 떠 있는 알약 translate(가운데 기준)를 지우면 R1·R10 이, 42-v2-panes.css 의 본문 여백
@@ -44,6 +45,7 @@
 //  D1–D6·E1·F1·G1·H1·I1 19줄이 빨간불(39 ok · 19 fail). 새 독 + 반영 전 메뉴 엔진(ctx-registry 에 only 없음)이면 A1·A2·A4·A5·A6,
 //  새 독 + 반영 전 곁칸 CSS(overflow: clip 없음)면 C1·C2 만 빨갛다. C3 은 옛 코드도 통과한다(초점 사건에서 독이 먼저 나와 구를 일이 없다)
 //  — 그래서 «초점이 들어오면 독이 나온다» 를 지우는 돌연변이로 빨간불을 봤다.
+// fail-first(2026-10-01 재검증 반영): 반영 전 독(PR #1203 머지판)에 물리면 H2(오른쪽 독 [더보기] −42px 밖) · H2b(왼쪽 −44px) · F3(초점 BODY) 가 빨갛다.
 // 크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -367,6 +369,19 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     st.act='web'; dock.sync(); await frame();
     R.f2_untouched=document.activeElement===ext; ext.blur();
   }catch(e){R.err_f=String(e&&e.message||e);}
+  // F3 — 초점 든 앱의 단추가 사라지면(메뉴 키 → «독에서 빼기», 안 떠 있는 앱) 초점은 같은 자리의 이웃 단추로(재검증 실측: body)
+  try{
+    APPS.push({type:'liv',name:'리브',glyph:'apps',hint:'리브',multi:false,pickable:true});
+    await setPrefs(); await setPins(['files','knowledge','liv','tasks','web']);
+    const lv=it('liv'); R.f3_case=!!lv && !lv.classList.contains('run');
+    lv.focus(); lv.dispatchEvent(new KeyboardEvent('keydown',{key:'ContextMenu',bubbles:true,cancelable:true})); await frame(); await sleep(30);
+    const un=row('독에서 빼기'); if(un) un.click(); await frame(); await sleep(60);
+    const a3=document.activeElement;
+    R.f3_info=a3?(a3.tagName+':'+((a3.dataset&&a3.dataset.type)||'')):'none';
+    R.f3_neighbor=!!un && !it('liv') && !!a3 && a3.classList.contains('pn-dock-it') && a3.isConnected && a3.dataset.type==='tasks';
+    if(a3&&a3.blur) a3.blur();
+  }catch(e){R.err_f3=String(e&&e.message||e);}
+  ESC(); { const i=APPS.findIndex(a=>a.type==='liv'); if(i>=0) APPS.splice(i,1); } await setPins(['files','knowledge','tasks','web']);
   // G1 — 같은 창에서 캐시만 바뀌었다(부팅 동기 · 저장 응답 채택 — storage 사건 없음) → 셸이 refreshDocks 를 부르면 따라온다
   try{
     await setPrefs(); const pg=prefsNow(); const hasRefresh=typeof Dock.refreshDocks==='function';
@@ -384,6 +399,19 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     R.h1_reanchor=!!mp && mp.classList.contains('open') && mp.dataset.edge==='left' && root.dataset.edge==='left' && nb.getAttribute('aria-expanded')==='true' && rc(mp).left>=rc(root).right-0.5;
     if(mp) mp.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); await sleep(260);
   }catch(e){R.err_h=String(e&&e.message||e);}
+  // H2 — 옆 독(오른쪽·왼쪽)의 [더보기]도 곁칸 안에 선다 — 곁칸이 넘친 것을 자르므로 밖으로 나간 몫은 잘린다(재검증 실측: 오른쪽 독에서 타일 15개 중 5개)
+  for(const edge of ['right','left']){
+    try{
+      await setPrefs({edge});
+      root.querySelector('.pn-dock-more-btn').click(); await frame(); await sleep(260);
+      const mp=pane.querySelector('.pn-dock-more'); const pr1=rc(pane); const qe=mp&&mp.querySelector('.pn-dock-more-q');
+      const r1=mp?rc(mp):null; const qr=qe?rc(qe):null;
+      R['h2_'+edge+'_info']=r1?[Math.round(r1.left-pr1.left),Math.round(pr1.right-r1.right),Math.round(r1.width)]:'(창 없음)';
+      R['h2_'+edge]=!!r1 && !!qr && r1.left>=pr1.left-0.5 && r1.right<=pr1.right+0.5 && qr.left>=pr1.left && qr.right<=pr1.right;
+      if(mp) mp.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); await sleep(260);
+    }catch(e){R['err_h2_'+edge]=String(e&&e.message||e);}
+  }
+  await setPrefs();
   // I1 — 이름표는 곁칸 안에 선다(곁칸이 넘친 것을 자른다): 왼쪽 끝에 둔 독의 첫 아이콘에 긴 이름
   const fApp=APPS.find(a=>a.type==='files'); const oldName=fApp.name;
   try{
@@ -529,6 +557,9 @@ check(R.f2_untouched, "F2 초점이 독 밖이면 다시 세워도 건드리지 
 check(R.g1_follow, "G1 같은 창에서 캐시만 바뀌면(부팅 동기 · 저장 응답) refreshDocks 로 따라온다");
 check(R.h1_reanchor, "H1 [더보기]가 열린 채 독이 옮겨지면 창은 열린 채 새 단추 옆으로(aria-expanded 도 새 단추에)", JSON.stringify(R.h1_info));
 check(R.i1_inside, "I1 이름표는 곁칸 안에 선다 — 왼쪽 끝 독의 긴 이름도 안 잘린다", JSON.stringify(R.i1_info));
+check(R.h2_right, "H2 오른쪽 독의 [더보기]가 곁칸 안에 선다(검색 칸까지) — 곁칸이 자르니 밖으로 나가면 잘린다", JSON.stringify(R.h2_right_info));
+check(R.h2_left, "H2b 왼쪽 독도", JSON.stringify(R.h2_left_info));
+check(R.f3_case && R.f3_neighbor, "F3 초점 든 앱을 메뉴 키로 빼면(단추가 사라짐) 초점은 같은 자리의 이웃(프로젝트)으로", R.f3_info);
 const errs=Object.keys(R).filter((k)=>k.startsWith("err_")).map((k)=>`${k}: ${R[k]}`);
 check(!errs.length, "(배선) 시나리오 묶음이 넘어지지 않았다 — 위 판정이 실제로 끝까지 돌았다", errs.join(" | "));
 console.log(`\n${pass} ok · ${fail} fail`);
