@@ -53,6 +53,7 @@ import type { TlOut } from '../timeline.js';
 import { type Sess, type V2Data } from './views.js';
 import { icon } from './icons.js';
 import { doorProjectName } from '../lib/door-name.js';   // #2579 — 문패 이름은 셸 목록이 정본(판이 든 사본은 안 늙는다)
+import { editHold } from '../lib/edit-hold.js';   // #3870 — 이름 칸이 열린 동안 문패를 다시 그리지 않는다
 
 export interface PanesOpts {
   data: () => V2Data;
@@ -195,6 +196,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const loose = id === 0;                       // 프로젝트 없는 세션들의 화면 — 공유 폴더·지식·할 일이 없다
   let detail: any = opts.detail;
   let dead = false;
+  //  문패 이름 입력칸(startRenameProject) — 열려 있는 동안 paintDoor 는 건너뛴다(lib/edit-hold, #3870).
+  const titleEdit = editHold();
   seedLayoutStore();
   let lay = loadLayout(id);
   // 프로젝트 없는 세션 화면 — 공유 폴더·지식·할 일이 없으니 곁칸에 넣을 것도 없다. 빈 칸을 보여 주느니 접어 둔다.
@@ -1433,6 +1436,11 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //   세션 칸이, 할 일·지식은 각자의 칸이. 문패에서 두 번 세는 대신 자리를 돌려준다. 남는 건 **좌표(#id)와 상태**뿐이고
   //   그 둘은 제목과 같은 줄에 선다.
   function paintDoor(): void {
+    //  ⚠ 이름을 고치는 중이면 문패를 다시 그리지 않는다(#3870) — 8초 라이브 틱·paintAll 이 문패를 통째로 갈아 끼우면
+    //   입력칸이 뜯겨 나가고(연 지 몇 초 만에 옛 이름으로 돌아왔다), 크롬이 뜯긴 칸에 쏘는 blur 가 치던 글자를 저장까지 했다.
+    //   건너뛴 판은 편집이 끝날 때 cancel·save 가 바로 다시 그려 갚는다.
+    if (titleEdit.skip()) return;
+    titleEdit.paid();
     const p = pj();
     const st = p.status_category === 'done' ? { t: '끝남', c: 'done' } : p.status_category === 'unstarted' ? { t: '시작 전', c: 'todo' } : { t: '진행 중', c: 'run' };
     // ⚠ 주소의 id 는 **박스 id 일 수도, 중앙 기록 uuid 일 수도** 있다(main.ts findSess 와 같은 사정).
@@ -1501,12 +1509,14 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const input = el('input', { class: 'pn-title-in', type: 'text', maxlength: '200', value: cur,
       'aria-label': '프로젝트 이름', spellcheck: 'false' }) as HTMLInputElement;
     let closed = false;
-    const cancel = (): void => { if (closed) return; closed = true; paintDoor(); };
+    //  칸을 놓은 **뒤에** 다시 그린다 — 놓기 전엔 paintDoor 가 고치는 중으로 보고 건너뛴다.
+    const cancel = (): void => { if (closed) return; closed = true; titleEdit.end(input); paintDoor(); };
     const save = async (): Promise<void> => {
       if (closed) return;
       const to = input.value.replace(/\s+/g, ' ').trim();
       if (!to || to === cur) { cancel(); return; }
-      closed = true; input.disabled = true;
+      //  저장을 기다리는 동안엔 칸을 놓아 둔다 — 응답이 안 와도 문패가 굳지 않게(틱이 옛 모양으로라도 다시 그린다).
+      closed = true; input.disabled = true; titleEdit.end(input);
       try {
         await opts.onRenameProject!(id, to);
         if (detail && detail.project) detail.project.name = to;   // 이 판이 든 사본도 곧바로 새 이름으로
@@ -1521,6 +1531,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     };
     input.onblur = () => { void save(); };   // 다른 데를 누르면 그대로 저장(취소는 Esc)
     host.replaceChildren(input);
+    titleEdit.begin(input);
     input.focus(); input.select();
   }
   function titleNode(name: string): HTMLElement {
