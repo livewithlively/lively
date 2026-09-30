@@ -413,6 +413,7 @@ export async function bootV2(): Promise<void> {
       if (fresh) void renderRoute(tab);
       else markActive(routeKey(tab.route));
       drawSide();
+      markViewedSessionSeen();   // #3870 — 창을 갈아 끼우면 보던 세션의 얼굴 줄에서 곧바로 빠지고, 새 세션엔 곧바로 선다
     },
     onClose: (tab) => {
       if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
@@ -556,6 +557,11 @@ export async function bootV2(): Promise<void> {
   drawSide();
 
   window.addEventListener('hashchange', () => { histStamp(); void onHash(); });
+  //  #3870 — 다른 화면으로 옮기면 그 자리에서 열람 도장·떠남을 맞춘다(8초 틱을 기다리면 그만큼 얼굴 줄이 늦다).
+  //   라우터가 탭 주소를 먼저 바꾸도록 한 박자 뒤에 본다.
+  window.addEventListener('hashchange', () => { setTimeout(markViewedSessionSeen, 0); });
+  //  창을 닫는다 — 떠남을 끝까지 보낸다(keepalive). 새로고침도 여기로 오지만, 다시 뜬 화면이 곧바로 도장을 찍는다.
+  window.addEventListener('pagehide', () => { if (viewingSid) { leaveViewed(viewingSid, true); viewingSid = ''; } });
   histStamp();     // 첫 화면도 히스토리의 한 칸이다 — 안 찍어 두면 되돌아왔을 때 '새로 감'으로 오인한다
   bindAltOpen();
   // #3784 — 우클릭 메뉴. 뿌리 하나가 듣고 표(data-ctx / data-ctx-surface)를 위로 찾는다. 셸 자체가 맨 바깥 표면.
@@ -1741,8 +1747,21 @@ function viewedSessionId(): string {
   const s = findSess(k.slice(2));
   return s && s.live && s.alive ? s.id : '';
 }
+//  #3870 — 얼굴 줄에 **내 자리를 둔 세션**. 다른 화면으로 옮기면 그 자리를 곧바로 걷는다(아래 leaveViewed).
+//   종전엔 떠나도 서버의 TTL(45초)이 지나야 남의 화면에서 내 얼굴이 사라졌다.
+let viewingSid = '';
+/** 이 세션 화면을 떠났다 — 서버가 남은 사람들에게 새 얼굴 줄을 민다. 실패는 삼킨다(TTL 이 늦게라도 걷는다). */
+function leaveViewed(sid: string, keepalive = false): void {
+  seenSentAt.delete(sid);   // 곧 돌아오면 15초를 기다리지 않고 바로 다시 도장을 찍는다(돌아온 것도 곧바로 보이게)
+  void api(`/api/ui/terminal/sessions/${encodeURIComponent(sid)}/leave`, Object.assign({ method: 'POST', body: '{}' }, keepalive ? { keepalive: true } : {}))
+    .catch(() => { /* 비치명 */ });
+}
 function markViewedSessionSeen(): void {
+  //  ⚠ 창이 숨은 것은 떠난 것이 아니다(다른 앱을 잠깐 본다) — 도장만 멎고 자리는 서버 TTL 이 늦게 걷는다.
+  if (document.hidden) return;
   const sid = viewedSessionId();
+  if (viewingSid && viewingSid !== sid) leaveViewed(viewingSid);
+  viewingSid = sid;
   if (!sid) return;
   const now = Date.now();
   if (now - (seenSentAt.get(sid) || 0) < SEEN_EVERY_MS) return;

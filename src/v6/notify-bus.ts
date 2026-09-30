@@ -86,8 +86,22 @@ export interface NotifyAppEvent {
   ws?: NotifyWorkspace;
 }
 
+/**
+ * 얼굴 줄 사건(#3870) — 이 세션을 지금 보고 있는 사람이 바뀌었다. 그 세션을 **보고 있는 사람들에게만** 민다
+ *  (src/terminal/session-presence.ts pushViewers). 배너 사건이 아니다 — 데스크톱 앱은 `type !== "session"` 을 거른다.
+ */
+export interface NotifyPresenceEvent {
+  type: "presence";
+  session: string;
+  /** 도착 순 — 열람 도장(/seen)의 응답 `viewers` 와 같은 모양. */
+  viewers: Array<{ id: string; name: string }>;
+  key: string;
+  ts: number;
+  ws?: NotifyWorkspace;
+}
+
 /** 버스가 싣는 사건 — 종류(type)로 가른다. SSE 이벤트 이름도 이 값이다(notify-routes.ts). */
-export type NotifyEvent = NotifySessionEvent | NotifyAppEvent;
+export type NotifyEvent = NotifySessionEvent | NotifyAppEvent | NotifyPresenceEvent;
 
 /**
  * 구독 하나가 받는 자리 — «이 워크스페이스에서 난, 이 조건에 맞는 사건».
