@@ -488,4 +488,9 @@ t("표 안의 기호·볼드는 강조 개수에 넣지 않는다", () => {
   assert.ok(!has("symbol_overuse", CLEAN_TITLE, table));
   assert.ok(has("symbol_overuse", CLEAN_TITLE, table + "\n🔴 ⚠️ ✅ ⭐"));
 });
+t("표 안의 화살표 연쇄는 arrow_chain 에 넣지 않는다", () => {
+  const table = "결론이다.\n\n| 축 | 흐름 |\n|---|---|\n| a | 요청 → 조회 → 판정 → 저장 |\n";
+  assert.ok(!has("arrow_chain", CLEAN_TITLE, table));
+  assert.ok(has("arrow_chain", CLEAN_TITLE, table + "\n요청 → 조회 → 판정 → 저장"));
+});
 console.log(`writing-lint: ${pass} passed`);

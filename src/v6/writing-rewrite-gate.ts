@@ -141,8 +141,8 @@ export function extractInvariants(doc: RewriteDoc): Invariants {
   }
   return {
     codeBlocks: sortedMulti(blocks),
-    inlineCode: sortedMulti(codes),
-    numbers: sortedMulti(numbersText.match(NUMBER_RE) ?? []),
+    inlineCode: sortedSet(codes),
+    numbers: sortedSet(numbersText.match(NUMBER_RE) ?? []),
     urls: sortedSet([...(prose.match(URL_RE) ?? []).map(trimUrl), ...[...prose.matchAll(MD_LINK_TARGET_RE)].map((m) => trimUrl(m[1]))]),
     wikilinks: sortedSet(wikilinks),
     refs: sortedSet(refs),
@@ -187,8 +187,11 @@ function diffDetail(d: { missing: string[]; added: string[] }): string {
 // 배치는 조직이 안내를 켰는지와 별개로 돈다 — 꺼진 형식으로 판정하면 lintWriting 이 늘 빈 결과라 전부 통과한다.
 const forceEnabled = (fmt: WritingFormat): WritingFormat => (fmt.enabled ? fmt : { ...fmt, enabled: true });
 
-const MULTISET_FIELDS = ["codeBlocks", "inlineCode", "numbers", "tableRows"] as const;
-const SET_FIELDS = ["urls", "wikilinks", "refs"] as const;
+// 숫자·인라인 코드는 집합으로 본다 — 첫 줄 결론에 원문의 값(«EC2»·날짜)을 한 번 더 쓰거나 제목과 H1 에 두 번 있던 날짜를
+//  본문에 한 번만 옮기는 것은 사실 변경이 아닌데, 다중집합으로 세면 전부 거부됐다(dry-run 20건 중 거짓 거부 3건).
+//  값이 사라지거나 없던 값이 생기는 것은 집합으로도 잡힌다. 코드블록과 표 행은 통째로 한 단위라 개수까지 본다.
+const MULTISET_FIELDS = ["codeBlocks", "tableRows"] as const;
+const SET_FIELDS = ["inlineCode", "numbers", "urls", "wikilinks", "refs"] as const;
 
 export function checkRewrite(before: RewriteDoc, after: RewriteDoc, fmt: WritingFormat): RewriteCheck {
   const f = forceEnabled(fmt);
