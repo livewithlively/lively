@@ -28,7 +28,7 @@ task-detail-v6 …)와 MCP op 이름의 `_v6`(`project_get_v6` 등)는 **이미 
 
 ## 3. 계층 규칙 (기계 검증됨 — `scripts/check-imports.mjs`)
 
-v6 는 **가장 아래 계층**이다. 위로 올라가는 import 는 금지다:
+v6 는 **저장소 계층**이다 — MCP/REST 표면(`capabilities/`)과 express 층(`http/`)보다 아래에 있다. 아래 네 줄이 기계로 막는 방향이다:
 
 | 금지 | 이유 |
 |---|---|
@@ -37,7 +37,21 @@ v6 는 **가장 아래 계층**이다. 위로 올라가는 import 는 금지다:
 | `src/v6/schema/** → src/org/store**` | 스키마 init 은 org 설정을 읽지 않는다 — 직접 SELECT(R19c) |
 | `src/db/**(self/ 제외) → src/v6/**` | 반대 방향도 금지. 범용 db_query 스택은 온톨로지를 몰라야 한다(R48) |
 
-허용되는 아래 방향: `src/db/client.ts`(pool·`q`·`one`) · `src/v6/` 내부 · `src/http-error.ts` · 순수 유틸.
+그 밖의 방향은 막지 않는다. v6 는 `db/client.ts`(pool·`q`·`one`)·`v6/` 내부·`http-error.ts` 외에도 실제로 이런 곳을 import 한다
+(2026-09-30, `src/v6/**` 의 테스트 아닌 파일, 런타임 정적 import 기준 — `import type` 제외):
+
+| 대상 | 건수 | 무엇 때문에 |
+|---|---|---|
+| `org/` | 27 | 스키마 공용 유틸(`org/schema/ddl-util`) · 시크릿 가림·외부 신원(`org/ingest/*`) · 테넌트 문맥(`org/tenant-context`) · 조직 설정(`org/store`) · 인입 정책 |
+| `project/` | 5 | 프로젝트 폴더·저장소 경로(`project-fs`·`project-storage`·`project-origin`) |
+| `connectors/` | 3 | 커넥터 설정·미러 입력(`connector-mirror`·`source-artifact`) |
+| `terminal/` · `ops/` · `domainmap/` · `apps/` | 2 · 2 · 2 · 1 | OS ACL·세션 이름 / 상태 디렉터리·메모리 / 도메인맵 코어 타입 / 앱 알림 |
+
+(`items/store` 는 `import type { RawItem }` 5건뿐이라 런타임 의존이 아니다.)
+
+⚠ 기계 검사는 **정적 import 만** 본다(동적 `import()`·`import type` 은 제외 — 검사기 머리말). 그래서 `v6/notify-scope.ts` 의
+`await import("../capabilities/delivery/managed-cp.js")` 는 위 첫 줄(`v6 → capabilities` 금지)에 걸리지 않는다. 새로 늘리지 말고,
+늘려야 하면 그 함수를 `capabilities/` 밖(예: `org/`)으로 내린 뒤 쓴다.
 
 ## 4. 쓰기 감사
 
