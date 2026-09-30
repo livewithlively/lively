@@ -21,6 +21,9 @@ import {
 // #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 body_md 전체를 튕기지 않게 한다(서버 조정 + 응답 capped).
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "../soft-cap.js";
 import { assertNoContentSecrets } from "../content-secrets.js";
+import { getWritingFormat } from "../../org/store/runtime-config.js";
+import { lintWriting } from "../../v6/writing-lint.js";
+import type { WritingFormat } from "../../org/policies/writing-format.js";
 
 // #1442 소프트캡 — 아래 다섯 짧은 필드(name·title·supersedes·parent_name·change_note)엔 zod .max() 를 두지
 //  않는다. SDK 는 검증을 핸들러 앞에서 하므로 그 max 가 body_md(최대 200,000자)까지 통째로 튕겨 재전송을
@@ -74,6 +77,30 @@ const knowledgeSaveInput = {
       + softCapHint(CAPS.change_note)),
 };
 type KnowledgeSaveInput = z.infer<z.ZodObject<typeof knowledgeSaveInput>>;
+// 조직 서술 형식 안내 — 저장된 (최종) 제목·본문을 조직이 정한 형식에 비춰 본다. 저장은 막지 않는다.
+//  외부 미러(observed)는 원본 소유가 밖이라 고칠 수 없는 글이고, 폴더는 본문이 없다 — 둘은 안내하지 않는다.
+//  형식을 못 읽거나 검사가 터져도 저장은 이미 끝난 일이므로 안내만 빠진다(fail-open).
+export async function writingStyleInfo(
+  title: string | null | undefined, body: string, opts: { observed: boolean; folder: boolean },
+  loadFormat: () => Promise<WritingFormat> = getWritingFormat,
+): Promise<Record<string, unknown>> {
+  if (opts.observed || opts.folder) return {};
+  try {
+    const fmt = await loadFormat();
+    const findings = lintWriting({ title, body_md: body }, fmt);
+    if (!findings.length) return {};
+    return {
+      style: {
+        findings,
+        note: `이 조직의 서술 형식에 어긋난 곳이 ${findings.length}건 있습니다(저장은 됐습니다). 본문은 mode='edit' 로 그 부분만, 제목은 knowledge_set_title 로 고치세요 — 전문을 다시 보낼 필요가 없습니다. 의미는 바꾸지 말고 형식만 고치세요.`,
+        guide_md: fmt.guide_md,
+      },
+    };
+  } catch {
+    return {};
+  }
+}
+
 export const knowledgeSave: Capability = {
   name: "knowledge_save",
   title: "지식 저장",
@@ -246,6 +273,12 @@ export const knowledgeSave: Capability = {
       saveInput = { ...input, body_md: merged };
     }
 
+    const style = await writingStyleInfo(input.title ?? gate.before?.title, saveInput.body_md, {
+      observed: (input.provenance ?? gate.before?.provenance) === "observed",
+      // 기존 폴더를 고칠 땐 input.is_folder 가 없을 수 있지만, 폴더 본문은 비어 본문 규칙이 안 걸리고 제목만 본다.
+      folder: input.is_folder === true,
+    });
+
     // #921 append 응답 — 본문 전문은 빼고 증분 요약만. json()(capabilities/index.ts)이 handler 결과를 통째로
     //  stringify 해 에이전트에 돌려주므로, 전문을 에코하면 '전문을 컨텍스트에 안 싣는다'는 이 모드의 목적이 무효가 된다.
     //  (replace 는 종전대로 전문 포함 — 기존 응답 계약 불변.)
@@ -292,10 +325,10 @@ export const knowledgeSave: Capability = {
         // 중복경고도 뷰어 기준 — 안 보이는 문서를 "비슷한 게 있다"고 알려주면 그 제목·발췌가 그대로 나간다.
         const similar = await findSimilarKnowledge({ name: knowledge.name, limit: 3, minScore: DEDUP_WARN_SIMILARITY }, ctx?.viewer ?? null);
         if (similar.length) {
-          return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...(await classificationInfo(knowledge.name)), similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 supersedes 로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
+          return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...style, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...(await classificationInfo(knowledge.name)), similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 supersedes 로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
         }
       }
-      return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...(await classificationInfo(knowledge.name)) };
+      return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...style, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...(await classificationInfo(knowledge.name)) };
     }
 
     // ② 기존 지식 수정 — 라이브(active) 대상일 때만 게이트(pending 초안 다듬기는 그대로 통과).
@@ -316,7 +349,7 @@ export const knowledgeSave: Capability = {
       return {
         knowledge: null,
         ...seedSyncWarning(before.name),
-        ...capped,
+        ...capped, ...style,
         gate: {
           action: "stage", state: "proposed", revision_id: revision.id, rule_id: gate.rule_id,
           note: "수정 제안으로 접수됐습니다 — 라이브 본문은 아직 바뀌지 않았습니다(사람이 승인해야 반영). 같은 지식을 다시 저장하면 이 제안이 갱신됩니다.",
@@ -338,7 +371,7 @@ export const knowledgeSave: Capability = {
       return {
         ...withBody(knowledge),
         ...seedSyncWarning(knowledge.name),
-        ...capped,
+        ...capped, ...style,
         ...wl,
         gate: {
           action: "review", state: "applied_pending_review", revision_id: revision.id, rule_id: gate.rule_id,
@@ -346,7 +379,7 @@ export const knowledgeSave: Capability = {
         },
       };
     }
-    return { ...withBody(knowledge), ...seedSyncWarning(knowledge.name), ...capped, ...wl, ...(await classificationInfo(knowledge.name)) };
+    return { ...withBody(knowledge), ...seedSyncWarning(knowledge.name), ...capped, ...style, ...wl, ...(await classificationInfo(knowledge.name)) };
   },
 };
 

@@ -220,5 +220,8 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
     --   왜 워크스페이스 축인가: 사람이 안 보는 자리에서 도는 잡의 과금·귀속이 «누가 마지막으로 그 잡을 저장했나»
     --   (created_by)로 정해지면 안 된다(상민님 2026-09-16). 레인·잡의 명시 지정은 더 구체적이므로 여전히 이긴다.
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS context_job_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+    -- writing_format: AI 가 저장하는 서술(지식)의 형식 — 제목 길이·첫 줄 결론·강조 예산·금지어·문체 등.
+    --   빈 객체 = 제품 기본값(꺼짐). 조직이 바꾼 칸만 담는다 — 기본값을 여기 굳히면 제품 기본값 개선이 안 먹는다.
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS writing_format JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
 }
