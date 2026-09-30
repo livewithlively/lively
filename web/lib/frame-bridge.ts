@@ -193,10 +193,15 @@ export function browserDeps(): BridgeDeps {
  *  · 되돌리기: 새로 서면 셸에 묻고, 받은 자리로 간다. 스크립트가 그리는 문서는 처음엔 짧다 — 닿을 때까지(최대 4초) 다시 해 보고,
  *    사람이 먼저 굴리거나 누르면 곧바로 손을 뗀다(사람의 손이 이긴다). 되돌리는 동안의 스크롤은 적지 않는다.
  *  · 크롬 아닌 브라우저가 숨김에서 자리를 잃으면 — 다시 보여 창 크기가 돌아올 때(resize) 마지막 자리로 한 번 더 간다.
+ *  · ★ 리눅스 크롬은 숨겼다(display:none) 보이면 **맨 위(0)로 가며 scroll 이벤트를 쏜다**(맥 크롬은 제자리 · resize·IntersectionObserver
+ *    는 둘 다 안 온다 — 2026-10-01 도커 Chromium 실측, CI 에서 처음 드러남). 그 0 을 적으면 보던 자리가 지워진다. 그래서
+ *    **사람 입력(휠·키·누르기·터치) 없이** 0 이 아닌 자리에서 (0,0) 으로 뛴 것은 브라우저의 배치 초기화로 보고 되돌린다.
+ *    사람이 맨 위로 올리면 늘 입력이 먼저 온다(RESET_QUIET_MS 안) — 그건 그대로 적는다.
  */
+const RESET_QUIET_MS = 1500;   // 마지막 사람 입력 뒤 이만큼 조용하면 (0,0) 도약은 사람 것이 아니다(트랙패드 관성 스크롤도 휠 이벤트를 계속 낸다)
 const SCROLL_KEEPER_JS = `(function(){try{
 if(window.__lvPosKeeper||window.parent===window)return;window.__lvPosKeeper=1;
-var P=window.parent,D=document,rec=null,tmr=0,restoring=false,handsOn=false;
+var P=window.parent,D=document,rec=null,tmr=0,restoring=false,handsOn=false,lastIn=0;
 function root(){return D.scrollingElement||D.documentElement;}
 function pathOf(e){var a=[];while(e&&e!==D.documentElement){var p=e.parentElement;if(!p||a.length>=${RV_POS_PATH_MAX})return null;a.unshift(Array.prototype.indexOf.call(p.children,e));e=p;}return e?a.join('.'):null;}
 function byPath(s){var e=D.documentElement,a=s.split('.');for(var i=0;i<a.length&&e;i++)e=e.children[+a[i]];return e||null;}
@@ -208,8 +213,9 @@ D.addEventListener('scroll',function(ev){if(restoring)return;var t=ev.target,r;
  if(t===D||t===D.documentElement||t===D.body&&t===root()){var c=root();r={x:c.scrollLeft,y:c.scrollTop};}
  else if(t&&t.nodeType===1&&t.clientHeight>=innerHeight*0.5){var p=pathOf(t);if(!p)return;r={x:t.scrollLeft,y:t.scrollTop,p:p};}
  else return;
+ if(rec&&!r.x&&!r.y&&(rec.x||rec.y)&&(rec.p||'')===(r.p||'')&&Date.now()-lastIn>${RESET_QUIET_MS}){var q=rec;restoring=true;go(q);setTimeout(function(){restoring=false;},50);return;}
  rec=r;if(!tmr)tmr=setTimeout(send,250);},true);
-function hands(){handsOn=true;restoring=false;}
+function hands(){handsOn=true;restoring=false;lastIn=Date.now();}
 ['wheel','touchstart','pointerdown','keydown'].forEach(function(n){addEventListener(n,hands,{capture:true,passive:true});});
 addEventListener('pagehide',function(){if(tmr){clearTimeout(tmr);send();}});
 addEventListener('resize',function(){if(!rec||restoring)return;var q=rec;setTimeout(function(){var c=at(q.p);if(c&&c.y===0&&c.x===0&&(q.y>0||q.x>0)){restoring=true;go(q);setTimeout(function(){restoring=false;},50);}},0);});
