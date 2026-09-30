@@ -5,7 +5,11 @@
 //  status: **그 카드가 속한 리스트**의 상태셋에서 뽑는다(판정은 clickup/push-status.ts). 불일치 시 status 빼고 1회 재시도.
 import { itemsPool } from "../db/client.js";
 import { q, one } from "../db/client.js";
-import { clickupFetch, createTask, updateTask, getTeam } from "./clickup.js";
+import { clickupFetch, createTask, updateTask, getTeam, createTaskComment } from "./clickup.js";
+import { CLOSED_CATEGORIES, closeCommentText, type CloseNote } from "./clickup/close-comment.js";
+import { rootProjectIdOfTaskNode } from "../v6/project-store.js";
+import { getMember } from "../org/store/members.js";
+import { gatewayUrl } from "../gateway-url.js";
 import { statusesForList, decidePushStatus } from "./clickup/push-status.js";
 import type { ClickUpStatus, ClickUpList, ClickUpSpace } from "./clickup/types.js";
 import { resolveConnectorConfig } from "./config.js";
@@ -48,13 +52,43 @@ function mkBody(p: ProjRow, status: string | undefined): Record<string, unknown>
 }
 
 // 생성/수정 — status 불일치(리스트 상태셋 밖) 방어로 실패 시 status 빼고 1회 재시도.
+//  statusApplied 는 ClickUp 에 상태가 실제로 실렸는가 — 닫힘 코멘트는 이게 참일 때만 보낸다. 상태셋을 못 읽어 status 를
+//  아예 안 실었거나 빼고 재시도한 경우 ClickUp 태스크는 열린 채인데 «닫았다»는 코멘트만 붙으면 침묵보다 나쁘다.
 async function createSafe(listId: string, body: Record<string, unknown>) {
-  try { return await createTask(listId, body); }
-  catch (e) { if (body.status) { const { status, ...b } = body; logger.warn({ name: body.name }, "create status 빼고 재시도"); return await createTask(listId, b); } throw e; }
+  try { return { task: await createTask(listId, body), statusApplied: body.status != null }; }
+  catch (e) { if (body.status) { const { status, ...b } = body; logger.warn({ name: body.name }, "create status 빼고 재시도"); return { task: await createTask(listId, b), statusApplied: false }; } throw e; }
 }
 async function updateSafe(taskId: string, body: Record<string, unknown>) {
-  try { return await updateTask(taskId, body); }
-  catch (e) { if (isClickupTaskGone(e)) throw e; if (body.status) { const { status, ...b } = body; logger.warn({ name: body.name }, "update status 빼고 재시도"); return await updateTask(taskId, b); } throw e; }
+  try { await updateTask(taskId, body); return { statusApplied: body.status != null }; }
+  catch (e) { if (isClickupTaskGone(e)) throw e; if (body.status) { const { status, ...b } = body; logger.warn({ name: body.name }, "update status 빼고 재시도"); await updateTask(taskId, b); return { statusApplied: false }; } throw e; }
+}
+
+// 닫힘 근거 코멘트 — 상태 PUT 이 성공한 뒤에만. 실패해도 행은 done 으로 둔다: 상태는 이미 나갔고, 행을 다시 돌리면
+//  PUT 은 멱등이어도 코멘트가 성공하는 순간까지 틱마다 재시도가 쌓이며 pending 행이 인바운드 3-way 머지를 계속 막는다.
+//  ⚠ 코멘트 유실이 실제로 문제가 되면 이 행의 done 을 풀지 말고 별도 op(예: 'comment')로 재시도 큐를 따로 둘 것.
+async function postCloseComment(p: ProjRow, taskExtId: string, note: CloseNote): Promise<void> {
+  if (!p.status_category || !CLOSED_CATEGORIES.has(p.status_category)) return; // 드레인 전에 다시 열렸다
+  try {
+    // 곁들이는 정보(처리자·작업 기록·링크)는 하나씩 실패를 삼킨다 — 그중 하나가 넘어졌다고 코멘트 전체를 잃지 않게.
+    const rootId = p.level === "project" ? p.id : (await rootProjectIdOfTaskNode(p).catch(() => undefined)) ?? null;
+    const member = note.actor ? await getMember(note.actor).catch(() => null) : null;
+    const actorName = member ? ((member.use_nickname && member.nickname) || member.display_name || member.nickname) : null;
+    let recentActivity: string | null = null;
+    // ⚠ 작업 기록은 **닫힌 그 항목(p.id)** 에 붙은 것만 본다. activity.project_id 는 task·subtask 도 가리키므로, 루트
+    //  프로젝트로 찾으면 형제 태스크·다른 세션의 기록이 «이 태스크를 닫은 근거»로 ClickUp 에 나간다(오귀속·반출).
+    if (!note.reason) {
+      const a: { title: string } | undefined = await one(itemsPool,
+        `SELECT title FROM activity WHERE project_id=$1 AND created_at <= $2::timestamptz
+            AND created_at > $2::timestamptz - interval '24 hours'
+          ORDER BY created_at DESC LIMIT 1`, [p.id, note.at]).catch(() => undefined);
+      recentActivity = a?.title?.trim() || null;
+    }
+    const base = await gatewayUrl().catch(() => null);
+    const deepLink = base && rootId ? `${base}/ui/#/projects/${rootId}` : null;
+    await createTaskComment(taskExtId, { comment_text: closeCommentText(note, { actorName, recentActivity, deepLink }), notify_all: false });
+  } catch (e) {
+    logger.warn({ err: e, entity: p.id }, "닫힘 근거 코멘트 실패(상태 푸시는 성공 — 코멘트만 누락)");
+  }
 }
 
 /** clickupFetch 가 던진 오류가 «그 태스크가 저쪽에 없다»(상태코드 404)인가. */
@@ -127,8 +161,8 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
   //  pending 으로 남아 **컨테이너를 설정하는 순간 자동 수렴**한다(닫아 버리면 다시 편집될 때까지 영구 미반출).
   //  ⚠ 같은 술어로 **project 행이 사라진 고아 upsert** 도 함께 빠진다 — 종전엔 뽑혀서 바로 닫혔으나 이제
   //   컨테이너 설정 후 첫 드레인에 닫힌다. pending 수를 읽을 때 그만큼이 섞여 있다(머리 점거는 없다).
-  const rows: Array<{ id: number; entity_id: number; op: string; ext_id_snapshot: string | null; attempts: number }> = await q(itemsPool,
-    `SELECT o.id, o.entity_id, o.op, o.ext_id_snapshot, o.attempts
+  const rows: Array<{ id: number; entity_id: number; op: string; ext_id_snapshot: string | null; attempts: number; close_note: CloseNote | null }> = await q(itemsPool,
+    `SELECT o.id, o.entity_id, o.op, o.ext_id_snapshot, o.attempts, o.close_note
        FROM external_outbox o
        LEFT JOIN project p ON p.id = o.entity_id
       WHERE o.system='clickup' AND o.done_at IS NULL
@@ -208,8 +242,9 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
 
       if (p.external_system === "clickup" && p.external_id) {
         const extId = p.external_id;
+        let statusApplied = false;
         const r = await pushLinkedUpsert({
-          update: () => updateSafe(extId, body),
+          update: async () => { ({ statusApplied } = await updateSafe(extId, body)); },
           detach: () => itemsPool.query(
             `UPDATE project SET external_system=NULL, external_instance=NULL, external_id=NULL, external_url=NULL,
                     external_base=NULL, updated_at=now() WHERE id=$1`, [p.id]),
@@ -222,6 +257,8 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
           `UPDATE project SET external_base = COALESCE(external_base, '{}'::jsonb) || $2::jsonb WHERE id=$1`,
           [p.id, baseJson]);
         await markDone(ob.id); pushed++;
+        if (ob.close_note && statusApplied) await postCloseComment(p, p.external_id, ob.close_note);
+        else if (ob.close_note) logger.warn({ entity: p.id }, "닫힘 근거 코멘트 생략 — status 가 ClickUp 에 실리지 않았다(상태셋 미해소·거부·저쪽이 이미 닫힘)");
       } else {
         // CREATE — 부모(project-Task / task-Subtask) external_id 해소. 미푸시면 defer.
         let parentExt: string | undefined;
@@ -235,13 +272,15 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
         // 위 SELECT 가 컨테이너 부재 시 external_id 없는 행을 뽑지 않으므로, 여기 닿는 건 다른 시스템 미러
         //  (external_system≠clickup — 예: 노션 미러 프로젝트)뿐이다. create 할 자리가 없으니 닫는다.
         if (!containerId) { await markDone(ob.id); skipped++; continue; }
-        const ct = await createSafe(containerId, { ...body, ...(parentExt ? { parent: parentExt } : {}) });
+        const { task: ct, statusApplied } = await createSafe(containerId, { ...body, ...(parentExt ? { parent: parentExt } : {}) });
         const url = ct.url || `https://app.clickup.com/t/${ct.id}`;
         await itemsPool.query(
           `UPDATE project SET external_system='clickup', external_instance=$2, external_id=$3, external_url=$4,
                   external_base = COALESCE(external_base, '{}'::jsonb) || $5::jsonb, updated_at=now() WHERE id=$1`,
           [p.id, teamId, ct.id, url, baseJson]);
         await markDone(ob.id); pushed++;
+        if (ob.close_note && statusApplied) await postCloseComment(p, ct.id, ob.close_note); // 첫 푸시 전에 이미 닫힌 경우
+        else if (ob.close_note) logger.warn({ entity: p.id }, "닫힘 근거 코멘트 생략 — status 가 ClickUp 에 실리지 않았다(상태셋 미해소·거부)");
       }
     } catch (e) {
       await markErr(ob.id, (e as Error)?.message ?? String(e)); failed++;

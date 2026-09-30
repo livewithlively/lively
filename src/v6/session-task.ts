@@ -96,8 +96,8 @@ export async function sessionTaskOf(sessionId: string, owner: string): Promise<S
 }
 
 /** 태스크 상태를 바꾸고 AGENTS.md 태스크 인덱스를 갱신한다. 커스텀 상태 키(status_raw)가 남아 있으면 비운다 — 안 비우면 보드가 옛 상태로 그린다. */
-async function writeStatus(taskId: number, status: SessionTaskStatus, actor: string, hadRaw: boolean, projectId: number): Promise<void> {
-  await updateTask(taskId, { status, ...(hadRaw ? { status_raw: null } : {}) }, { actor, source: "web" });
+async function writeStatus(taskId: number, status: SessionTaskStatus, actor: string, hadRaw: boolean, projectId: number, reason?: string | null): Promise<void> {
+  await updateTask(taskId, { status, ...(hadRaw ? { status_raw: null } : {}) }, { actor, source: "web", reason: reason ?? null });
   await ensureAgentsMd(projectId).catch(() => { /* 인덱스의 상태 표시일 뿐 — 다음 갱신이 채운다 */ });
 }
 
@@ -249,16 +249,21 @@ export async function bindSessionTask(args: {
   return task;
 }
 
+/** 순수 — 세션이 닫을 때의 근거. 세션이 적어 준 게 있으면 그것, 없으면 «어느 세션이 끝냈다고 보고했는지»라도 남긴다. */
+export function sessionCloseReason(reason: string | null | undefined, sessionId: string): string {
+  return (reason ?? "").trim() || `AI 세션(${sessionId})이 맡은 작업을 끝냈다고 보고했습니다`;
+}
+
 /** 세션이 자기 태스크의 상태를 바꾼다(`session_task {status}`). 맡은 태스크가 없으면 null.
  *  끝냈고(done) 이 세션의 순서 목록에 **아직 안 끝난 다음 태스크**가 있으면 그리로 넘어간다(#4135) — `next` 로 돌려준다. */
 export async function setSessionTaskStatus(args: {
-  sessionId: string; owner: string; status: SessionTaskStatus;
+  sessionId: string; owner: string; status: SessionTaskStatus; reason?: string | null;
 }): Promise<(SessionTask & { next?: SessionTask | null }) | null> {
   const task = await sessionTaskOf(args.sessionId, args.owner);
   if (!task) return null;
   if (task.status !== args.status) {
     const raw = await one(itemsPool, `SELECT status_raw FROM project WHERE id=$1`, [task.id]);
-    await writeStatus(task.id, args.status, args.owner, raw?.status_raw != null, task.project_id);
+    await writeStatus(task.id, args.status, args.owner, raw?.status_raw != null, task.project_id, sessionCloseReason(args.reason, args.sessionId));
   }
   if (args.status !== "done") return { ...task, status: args.status };
   const list = await sessionTaskList(args.sessionId, args.owner);
@@ -390,7 +395,7 @@ export function sessionTaskSection(task: SessionTask | null, list?: Array<{ id: 
     ...(many
       ? list!.map((t, i) => `${i + 1}. [#${t.id}] ${t.name} (${t.status})${t.id === task.id ? " ← 지금 하는 것" : ""}`)
       : [`- [#${task.id}] ${task.name} (${task.status})`]),
-    "- 요청받은 일을 끝내면(검증까지 마치고) `session_task {status:\"done\"}` 로 완료 처리하세요. " +
+    "- 요청받은 일을 끝내면(검증까지 마치고) `session_task {status:\"done\"}` 로 완료 처리하세요 — `reason` 에 무엇을 끝냈는지 한 줄 적으면 ClickUp 미러 태스크에 코멘트로 남습니다. " +
       "같은 세션에서 후속 작업을 시작하면 `session_task {status:\"in_progress\"}` 로 되돌립니다.",
     ...(many ? ["- 이 세션은 위 태스크들을 **순서대로** 맡습니다. 하나를 완료 처리하면 다음 태스크가 «지금 하는 것»이 됩니다 — 그 본문은 `task_detail_v6` 로 읽고 이어서 진행하세요."] : []),
   ].join("\n");

@@ -23,6 +23,8 @@ const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 const sessionTaskInput = {
   status: z.enum(["in_progress", "done"]).optional().describe(
     "바꿀 상태. 생략하면 조회만 한다. done = 이 세션이 요청받은 일을 끝냈다(검증까지) · in_progress = 같은 세션에서 후속 작업을 시작했다"),
+  reason: z.string().max(1000).optional().describe(
+    "done 으로 닫을 때 무엇을 끝냈는지 한두 문장(예: 'MR !123 머지, CI 그린 확인'). ClickUp 에 미러된 태스크면 코멘트로 남는다. 생략하면 어느 세션이 끝냈다고 보고했는지만 남는다"),
   session_id: z.string().max(128).optional().describe("대상 세션 id — 보통 생략한다(기본 = 이 요청을 보낸 세션 자신). 남의 세션의 태스크는 다룰 수 없다"),
 };
 type SessionTaskInput = z.infer<z.ZodObject<typeof sessionTaskInput>>;
@@ -46,8 +48,9 @@ const sessionTask: Capability = {
     "이 세션이 맡은 태스크를 조회하거나 상태를 바꾼다 — 프로젝트 안의 세션은 태스크 하나를 맡는다(세션이 이름을 지을 때 서버가 " +
     "만들거나, 사람이 태스크에서 세션을 열면 그 태스크). session_id 생략 시 **이 요청을 보낸 세션 자신**이라 태스크 번호를 " +
     "몰라도 된다. 요청받은 일을 끝내면(검증까지) `{status:\"done\"}`, 같은 세션에서 후속 작업을 시작하면 `{status:\"in_progress\"}`. " +
+    "done 으로 닫을 땐 reason 에 무엇을 끝냈는지 적는다(ClickUp 미러 태스크엔 코멘트로 남는다). " +
     "사람이 이 세션에 태스크를 **여러 개 순서대로** 맡겼으면 done 이 다음 태스크로 넘기고 응답의 next 로 알려 준다 — 그 본문을 task_detail_v6 로 읽고 이어서 진행한다. " +
-    "맡은 태스크가 없으면 이 세션 이름으로 만든다. REST 등가: POST /api/ui/terminal/sessions/:id/task {status?}.",
+    "맡은 태스크가 없으면 이 세션 이름으로 만든다. REST 등가: POST /api/ui/terminal/sessions/:id/task {status?, reason?}.",
   scope: "memory",
   input: sessionTaskInput,
   mutates: true,
@@ -56,7 +59,8 @@ const sessionTask: Capability = {
     rest: [{ method: "POST", paths: ["/api/ui/terminal/sessions/:id/task"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
-        return { session_id: String(req.params?.id ?? ""), status: b.status == null || b.status === "" ? undefined : String(b.status) };
+        return { session_id: String(req.params?.id ?? ""), status: b.status == null || b.status === "" ? undefined : String(b.status),
+          reason: b.reason == null || b.reason === "" ? undefined : String(b.reason).slice(0, 1000) };
       } }],
   },
   handler: async (input: SessionTaskInput, user: LivelyUser, ctx?: CapabilityCtx): Promise<SessionTaskResult> => {
@@ -76,7 +80,7 @@ const sessionTask: Capability = {
     }
     let next: SessionTask | null | undefined;
     if (input.status) {
-      const after = await setSessionTaskStatus({ sessionId: sid, owner: me, status: input.status });
+      const after = await setSessionTaskStatus({ sessionId: sid, owner: me, status: input.status, reason: input.reason });
       if (after) { task = { ...task, status: after.status }; next = after.next; }
     }
     const order = await sessionTaskList(sid, me).catch(() => []);
