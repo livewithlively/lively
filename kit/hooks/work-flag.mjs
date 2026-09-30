@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 다중 이벤트 훅 — 배선(user-install)에 따라 PostToolUse·SessionStart·SessionEnd·UserPromptSubmit·Notification·Stop
-//  으로 불린다. #1221 에서 뒤의 셋이 붙어 **세션 실행 단계(작업 중·확인 필요·대기 중)를 하네스가 직접 보고**한다
+//  (+ #4217 SubagentStop · #4219 PreCompact·SessionStart(compact))으로 불린다. #1221 에서 뒤의 셋이 붙어 **세션 실행 단계(작업 중·확인 필요·대기 중)를 하네스가 직접 보고**한다
 //  (종전엔 게이트웨이가 tmux 화면을 훔쳐보는 휴리스틱이었다 — reportedPhase 주석 참조). 이벤트별 동작:
 //  - SessionEnd (#1059)  → reason 이 **사용자 정상 종료**(prompt_input_exit=/exit·Ctrl-D, logout)면 게이트웨이에
 //      POST …/exited 로 보고 → 복원목록에서 '종료됨(대화 이어보기)'으로 구분(재부팅·강제kill 은 훅이 못 떠 미보고=중단됨).
@@ -262,7 +262,6 @@ try {
     const say = (hookEventName, additionalContext) => process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext } }) + "\n");
     if (event === "UserPromptSubmit") resetInlineTurn(FLAG_DIR, sid, input);
     else if (event === "PostToolUse" && bare !== null) {
-      mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
       const text = inlineWriteNudge({ ...ctx, bare });
       if (text) say("PostToolUse", text);
     } else if (event === "PreCompact" && HARNESS === "claude") {

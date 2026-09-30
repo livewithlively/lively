@@ -143,6 +143,24 @@ let toml = install();
     : bad("⑧ 러너 패리티", `codex 에 안 붙은 이벤트: ${missing.join(",") || "(없음)"} preToolUse=${hasPreToolUse}`);
 }
 
+// ── ⑰ 기록 fork·기록 넛지 엔트리는 관리블록 **맨 끝** (#4217·#4219) ─────────────────
+//  codex 훅 신뢰 키가 `<config.toml>:<event>:<그룹 순번>:<핸들러 순번>` 이라(codex-rs hooks/src/lib.rs hook_key) 새 엔트리를 기존
+//  엔트리 사이에 끼우면 뒤 엔트리의 순번이 밀려 멤버가 신뢰해 둔 훅이 전부 조용히 «미신뢰»가 된다. 주석만으론 못 지킨다 — 여기서 못박는다.
+{
+  const block = toml.slice(toml.indexOf("# >>> lively-managed"), toml.indexOf("# <<< lively-managed"));
+  const groups = block.split(/\n(?=\[\[hooks\.[A-Za-z]+\]\])/).slice(1).map((g) => ({
+    event: /^\[\[hooks\.([A-Za-z]+)\]\]/.exec(g)[1],
+    matcher: (/\nmatcher = ("(?:[^"\\]|\\.)*")/.exec(g) || [])[1] ? JSON.parse(/\nmatcher = ("(?:[^"\\]|\\.)*")/.exec(g)[1]) : null,
+    wf: /work-flag\.mjs/.test(g),
+  }));
+  const tail = groups.slice(-3).map((g) => `${g.event}:${g.matcher ?? "-"}:${g.wf ? "wf" : "x"}`);
+  const want = ["PostToolUse:spawn_agent|collaborationspawn_agent:wf", "SubagentStop:-:wf", "SessionStart:compact:wf"];
+  const compactOnce = groups.filter((g) => g.event === "SessionStart" && g.matcher === "compact").length === 1;
+  JSON.stringify(tail) === JSON.stringify(want) && compactOnce
+    ? ok("⑰ #4217·#4219 엔트리가 관리블록 맨 끝(기존 엔트리 신뢰 순번 유지) · SessionStart compact 1개")
+    : bad("⑰ 새 엔트리 위치", `끝 3개=${JSON.stringify(tail)} compactOnce=${compactOnce}`);
+}
+
 // ── ⑨ codex 가 모르는 이벤트는 배선하지 않는다 ──────────────────────────────
 {
   const evs = new Set(hookEntries(toml).map((e) => e.event));
