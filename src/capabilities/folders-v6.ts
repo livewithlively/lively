@@ -11,6 +11,7 @@ import {
 import { invalidateVisibilityCache } from "../v6/visibility.js";
 import { syncFolderAclsUnderFolder } from "../v6/folder-acl-sync.js";
 import { getProjectListRow } from "../v6/list-store.js";
+import { assertNoContentSecrets } from "./content-secrets.js";
 
 function parseColorOrNull(v: unknown): string | null {
   if (v == null) return null;
@@ -78,6 +79,7 @@ const projectFolderCreateV6: Capability = {
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
+    assertNoContentSecrets(input);   // #4501 평문 시크릿 차단
     const folder = await createProjectFolder(input, writeCtxOf(user, ctx));
     return { folder };
   },
@@ -124,6 +126,7 @@ const projectFolderUpdateV6: Capability = {
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
+    assertNoContentSecrets(input);   // #4501 평문 시크릿 차단
     const { id, members, ...patch } = input;
     // 공개범위를 걸거나 대상을 바꾸는 건 그 스페이스가 보이는 사람만(#1291) — 아니면 남의 스페이스를 잠가 뺏을 수 있다.
     if ((patch.visibility !== undefined || members !== undefined) && ctx?.viewer != null) {

@@ -54,6 +54,7 @@ import {
   getNodeRow, listEdgesForNodes, rescheduleDependents, // #1308 의존선 — 노드(레벨 무관) 엣지·자동 재스케줄
 } from "../v6/project-store.js";
 import { assertNoContentSecrets } from "./content-secrets.js";
+import { redactTokenShapes } from "../org/ingest/redact.js";
 
 const STATUSES = ["active", "done"] as const;
 // 프로젝트도 태스크 리스트처럼 할 일/진행 중/완료로 그룹핑(웹 보드) — 상태 쓰기에서 todo|in_progress 도 허용.
@@ -409,6 +410,14 @@ const projectCreateV6: Capability = {
       } }],
   },
   handler: async (input: ProjectCreateV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    // #4501 첫 지시 자동 생성(외부 하네스 훅 project-auto-bind 가 AUTO_CREATED_MARK 를 달아 보낸다)은 **막지 않고 가린다** —
+    //  사람이 고르는 입구가 아니라, 막으면 그 세션의 작업면이 통째로 안 생긴다(훅은 실패를 조용히 삼킨다). 서버 쪽 경로
+    //  (first-prompt-project.ts)와 같은 처리. 격리 리뷰가 잡았다 — 첫 판은 서버 경로만 가려 이 훅 경로가 400 이었다.
+    //  표식을 사람이 흉내 내도 결과는 «가려서 저장» 이라 시크릿이 남지 않는다.
+    if (typeof input.description === "string" && input.description.includes(AUTO_CREATED_MARK)) {
+      input.description = redactTokenShapes(input.description);
+      if (typeof input.name === "string") input.name = redactTokenShapes(input.name);
+    }
     assertNoContentSecrets(input);   // #4501 평문 시크릿 차단 — 맨 앞(생성·조회 전)
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     // 유효성 먼저(생성 전) — 잘못된 folder/list_id/follow_up 으로 고아 프로젝트가 안 생기게. 순수검사(folder)를
