@@ -18,6 +18,7 @@
 //  · 승인 UI 미실측 → answer=null.
 import path from "node:path";
 import type { HarnessSessionAdapter } from "./adapter.js";
+import { turnFromScreen } from "./screen-run.js";   // #4502 — 화면 busy → 턴(맨 아래 몇 줄만)
 import { TERM_UI_UNKNOWN } from "./term-ui.js";
 import { isoOf, parseJsonLines, type ChatBlock, type ChatLine, type ParseState } from "./chat-line.js";
 
@@ -128,5 +129,7 @@ export const antigravityIo: HarnessSessionAdapter = {
   answer: null,
   //  #4135 — 화면 사실: 신뢰 대화상자는 실측했다(위 screen 의 문구 그대로). 선택지 키·붙여넣기 접힘은 미실측이라
   //   사고가 안 나는 쪽으로 둔다(숫자만 보내면 안 골라질 뿐, 엉뚱한 Enter 가 다음 화면으로 새지 않는다).
+  //  #4502 — 화면의 busy 가 곧 «턴이 돈다» 다(생성 중 푸터 esc to cancel) — 맨 아래 몇 줄만(screen-run.ts). 백그라운드 표시는 미실측.
+  run: (tail) => turnFromScreen(antigravityIo.screen, tail),
   term: { ...TERM_UI_UNKNOWN, startDialogRe: /Do you trust the contents|↑\/↓\s+Navigate|enter\s+Confirm/i },
 };

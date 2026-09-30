@@ -40,7 +40,7 @@ export interface ObsRowLike {
  *  `observed` 도 여기 든다: 되돌린 행은 «직전에 관측한 그 행» 이므로 표식이 남으면 안 된다
  *  (남으면 isUnreadDone·sessIsDead 가 그 행을 계속 «모름» 으로 다뤄, 이어 준 뜻이 사라진다).
  */
-export const OBSERVED_FIELDS = ['agentState', 'working', 'awaiting', 'attached', 'title', 'lastActive', 'observed'] as const;
+export const OBSERVED_FIELDS = ['agentState', 'working', 'awaiting', 'background', 'attached', 'title', 'lastActive', 'observed'] as const;
 
 /** 이만큼 못 보면 잇기를 그만둔다 — 그 뒤로는 점 없는 조용한 행(위 머리말). */
 export const OBS_CARRY_MS = 120_000;

@@ -40,7 +40,8 @@ const src = read("src/terminal/sessions.ts");
   const hiddenAt = blk.indexOf("hiddenUnknown && dirToProjectFolder(", obsAt);
   const firstGate = [visAt, hiddenAt].filter((x) => x > 0).sort((a, b) => a - b)[0] ?? -1;
   assert.ok(firstGate > obsAt, "가시성 관문을 찾지 못했습니다 — 아래 단언이 무의미하다");
-  const busyAt = blk.indexOf("setLastBusy(p.name", obsAt);
+  //  #4502 — 갱신은 markBusyNow(프로세스 값 + 30초 스로틀 영속)로 묶였다. 자리(관측 뒤 · 관문 앞)는 그대로다.
+  const busyAt = blk.indexOf("markBusyNow(p.name", obsAt);
   ok(busyAt > obsAt && busyAt < firstGate, "WR3 마지막 작업 시각 갱신은 관측 뒤 · 가시성 관문 앞(뷰어 무관)이다(E29)");
 
   const needAt = blk.indexOf("needsMetaHeal(", resolveAt);
