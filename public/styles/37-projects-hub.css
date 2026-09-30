@@ -164,6 +164,9 @@
 .pjh-w .pjv-tasks-embedded .pjv-tgroup { margin-top: 10px; }
 .pjh-w .pjv-tasks-embedded .pjv-tgroup:first-child { margin-top: 0; }
 .pjh-w .pjv-tasks-embedded .pjv-tgroup-head { padding: 0 2px 4px; min-height: 30px; border-bottom: 0; gap: 6px; }
+/* 열 머리 격자(묶음 이름 + 담당자·마감·우선순위 머리)는 몸통 줄과 같은 트랙 — 간격 0 · 좌우 4px(줄과 같게). 위 gap 6px 가 여기에도 먹으면
+   폭 0 인 트랙마다 6px 씩 밀려 머리 글자가 몸통 열보다 16px 왼쪽에 섰다(#4135 2026-09-30). */
+.pjh-w .pjv-tasks-embedded .pjv-tgroup-head.pjv-tgroup-head-cols { gap: 0; padding-left: 4px; padding-right: 4px; }
 .pjh-w .pjv-tasks-embedded .pjv-tgroup-head .pjv-trow-title-cell { gap: 7px; padding-left: 26px; position: relative; }
 .pjh-w .pjv-tasks-embedded .pjv-tgroup-head .pjv-row-check { position: absolute; left: 2px; top: 50%; margin-top: -8px; opacity: 0; }
 .pjh-w .pjv-tasks-embedded .pjv-tgroup-head:hover .pjv-row-check { opacity: 1; }
