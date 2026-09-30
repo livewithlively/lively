@@ -217,6 +217,12 @@ export function rememberViewerPath(mem: string, slot: TabKey, path: string): voi
   } catch (_) { /* 저장이 막혀도 알림으로 지금 떠 있는 칸은 바뀐다 */ }
 }
 
+/** 그 탭이 펴 두었던 파일 — 곁칸 탭 줄이 아직 안 켠 뷰어 탭의 이름·아이콘·«닫은 탭 다시 열기» 에 쓴다(#3870). 없으면 ''. */
+export function rememberedViewerPath(mem: string, slot: TabKey): string {
+  if (EMBEDDED) return '';
+  try { return String((JSON.parse(localStorage.getItem(ED_PATH_KEY) || '{}') || {})[slotStoreKey(mem, slot)] || ''); } catch (_) { return ''; }
+}
+
 /** 밖(자료 칸)에서 뷰어에 파일을 펴는 **유일한 통로** — 뷰어 칸이 없으면 셸(panes.ts)이 듣고 곁칸에 만든다.
  *  ⚠ **어느 뷰어에 펼지는 셸이 정한다**(#762): 뷰어가 여럿 뜰 수 있게 되면서, 부르는 쪽이 고를 수 있는 것은
  *   «지금 보던 뷰어에» 인가 «새 탭에» 인가 둘뿐이다. 그 판정과 저장(rememberViewerPath)은 셸이 한다 —

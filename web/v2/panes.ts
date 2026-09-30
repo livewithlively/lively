@@ -32,11 +32,14 @@ import { mountSideCard, type SideCardHandle } from './side-card.js';   // #3870:
 import { sideLabels } from '../lib/side-label.js';   // 곁칸의 화면 이름. 자리바꿈으로 왼쪽에 서면 «우측» 이라 부르지 않는다(#4233)
 import { MOBILE_MQ } from './mobile.js';   // 좁은 폭(≤900)의 접힌 배치 — side-swap 과 같은 문턱을 읽는다(#4088 후속)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
-import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, rememberViewerPath, slotStoreKey } from './panes-kit.js';
-import { bindCtxSurface } from './ctx-registry.js';   // #3784 곁칸 빈 자리 우클릭
+import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, kindOf, rememberViewerPath, rememberedViewerPath, slotStoreKey } from './panes-kit.js';
+import { bindCtx, bindCtxSurface } from './ctx-registry.js';   // #3784 곁칸 빈 자리 우클릭
 import { type CtxRow } from './ctx-menu.js';
 //  ★ 탭 = 부품의 **인스턴스**(#762) — 배치가 드는 것은 '종류'가 아니라 '탭 열쇠'다(lib/tab-key 머리말).
 import { isTabKey, nextTabKey, tabBase, tabNum, type TabKey } from '../lib/tab-key.js';
+//  #3870 «곁칸 탭 관리» — 닫은 뒤 갈 곳 · 한꺼번에 닫기 · 끌어 옮길 자리 · 폭 · 닫은 탭 다시 열기(규칙은 lib, 끌기 손은 v2/pane-tabdrag).
+import { bulkTargets, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, touchRecent, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
+import { beginTabDrag, cancelTabDrag, consumeDragClick, type DragBar, type TabDragHost } from './pane-tabdrag.js';
 import { seedTasksTab } from '../lib/task-pane.js';   // #4084 — 저장된 배치에 «태스크» 탭을 한 번만 들인다
 import { hasBrowserSurface } from './browser-surface.js';
 import { onViewers, viewersOf } from './presence.js';           // #2116 — 지금 이 세션을 보고 있는 사람
@@ -93,6 +96,8 @@ interface Layout {
   main: TabKey[]; side: TabKey[]; bottom: TabKey[];
   act: { main: TabKey | null; side: TabKey | null; bottom: TabKey | null };
   sideOn: boolean; bottomOn: boolean;
+  /** 고정한 탭(#3870 «곁칸 탭 관리») — 아이콘만 남고 줄 맨 앞에 모이며, 한꺼번에 닫기에서 빠진다(크롬·사파리의 탭 고정). */
+  pin: TabKey[];
 }
 // ★ 배치는 **프로젝트마다 한 벌**이고, 그 프로젝트의 세션들이 함께 쓴다(원준 2026-08-20:
 //  "띄워져 있는 창의 종류만 같은 프로젝트 안의 다른 세션들이 공유하게 해줘").
@@ -106,7 +111,7 @@ const LAYOUT_KEY_V1 = 'lively_panes_layout_v1'; // 전역 한 벌이던 옛 판 
 const DEF_LAYOUT = (): Layout => ({
   main: ['sessions'], side: ['files', 'tasks', 'knowledge', 'apps'], bottom: ['timeline'],
   act: { main: 'sessions', side: 'files', bottom: 'timeline' },
-  sideOn: true, bottomOn: false,
+  sideOn: true, bottomOn: false, pin: [],
 });
 const ALL = new Set<string>(PART_DEFS.map((d) => d.type));
 
@@ -115,6 +120,9 @@ const ALL = new Set<string>(PART_DEFS.map((d) => d.type));
  *  탭도 ×도 없어 **뺄 방법이 사라지고**, 그 칸에 세션만 남으면 탭 줄 자체가 숨어 ＋ 마저 없어진다
  *  (원준 2026-08-20 신고: "세션이 어디 열린 건지도 모르겠고 닫을 수도 없어 골머리"). 넣는 길을 막고(addBtn·moveTab),
  *  이미 그렇게 저장된 배치는 여기서 되돌린다 — 갇힌 사람은 새로고침 한 번으로 풀린다. */
+/** 한꺼번에 닫기·되살리기에서 빼는 탭(main 판: 붙은 앱 탭 #4225). stage 판엔 붙은 앱 탭이 없어 비어 있다 — 탭 줄 코드를
+ *  main 과 같은 모양으로 두려고 자리만 남긴다(#3870 곁칸 탭 관리 stage 이식). */
+const DERIVED_TABS: ReadonlySet<string> = new Set<string>();
 function normalizeLayout(lay: Layout): Layout {
   //  같은 열쇠가 두 칸에 있으면 부품이 두 몸을 갖고 서로를 덮는다 — 먼저 나온 것만 남긴다.
   const seen = new Set<TabKey>();
@@ -128,6 +136,11 @@ function normalizeLayout(lay: Layout): Layout {
   }
   if (!lay.main.includes('sessions')) lay.main.unshift('sessions');
   if (!lay.act.main || !lay.main.includes(lay.act.main)) lay.act.main = 'sessions';
+  //  고정 탭 — 칸에 실제로 있는 것만, 그리고 줄 맨 앞에 모인다(lib/pane-tabs normalizePins). 세션은 탭이 없어 고정할 것도 없다.
+  const live = new Set<TabKey>([...lay.side, ...lay.bottom]);
+  lay.pin = (lay.pin || []).filter((k, i, a) => live.has(k) && a.indexOf(k) === i);
+  const pins = new Set(lay.pin);
+  for (const z of ['side', 'bottom'] as const) lay[z] = normalizePins(lay[z], pins);
   return lay;
 }
 
@@ -145,7 +158,7 @@ function parseLayout(s: any): Layout | null {
       side: okKey(s.act?.side) ? s.act.side : null,
       bottom: okKey(s.act?.bottom) ? s.act.bottom : null,
     },
-    sideOn: s.sideOn !== false, bottomOn: !!s.bottomOn,
+    sideOn: s.sideOn !== false, bottomOn: !!s.bottomOn, pin: arr(s.pin),
   };
   // 저장된 배치가 모든 칸에서 비었으면(옛 판·손상) 없는 것으로 — 빈 화면을 보여 주는 것보다 낫다.
   if (!lay.main.length && !lay.side.length && !lay.bottom.length) return null;
@@ -187,7 +200,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   // 프로젝트 없는 세션 화면 — 공유 폴더·지식·할 일이 없으니 곁칸에 넣을 것도 없다. 빈 칸을 보여 주느니 접어 둔다.
   //  #4088 후속(2026-09-23): 프로젝트가 없어도 **세션 작업 폴더**는 있다 — 그 파일을 보고 내려받는 자리(sessfiles)와 발자취를 곁칸에 둔다.
   //   데스크톱은 종전대로 접어 둔다(펴는 손잡이·머리줄 [세션 파일]로 편다). 좁은 폭에선 서랍이 이걸 든다.
-  if (loose) { lay = { ...lay, side: ['sessfiles', 'timeline'], bottom: [], act: { ...lay.act, side: 'sessfiles', bottom: null }, bottomOn: false, sideOn: false }; }
+  if (loose) { lay = { ...lay, side: ['sessfiles', 'timeline'], bottom: [], act: { ...lay.act, side: 'sessfiles', bottom: null }, bottomOn: false, sideOn: false, pin: [] }; }
 
   // 칸 하나 = 탭 줄 + 본문(만드는 곳은 아래 makePane). **이 두 줄은 함수 맨 앞이어야 한다** —
   //  curSession() 이 `panes` 를 읽는데, actKey() → applySessionAct() 로 이어지는 그 길을 마운트가
@@ -195,8 +208,34 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //  화면이 통째로 «화면을 불러오지 못했습니다 — Cannot access 'panes' before initialization» 가 된다
   //  (2026-09-03 dev 실측, 윤상민 신고 — #762 에서 actKey 를 curSession() 으로 바꾼 판에서 났다).
   //  마운트 시점엔 빈 Map 이라 curSession() 은 opts.sessionId 로 떨어진다 — 그때는 그게 지금 보는 세션이다.
-  interface Pane { zone: Zone; root: HTMLElement; bar: HTMLElement; tabs: HTMLElement; tail: HTMLElement; bodyEl: HTMLElement; parts: Map<TabKey, Part>; act: TabKey | null }
+  //  frozen — 마우스로 탭을 닫은 뒤 그 줄의 탭 폭을 **얼려 둔다**(크롬·사파리). 줄에서 손을 떼면(pointerleave) 푼다(thaw).
+  //   얼려 두는 동안엔 닫힌 탭 오른쪽의 탭들이 그 자리로 미끄러져 들어올 뿐 폭이 다시 나뉘지 않아, 다음 탭의 × 가 **커서 바로 밑**에 온다.
+  interface Pane { zone: Zone; root: HTMLElement; bar: HTMLElement; tabs: HTMLElement; tail: HTMLElement; bodyEl: HTMLElement; parts: Map<TabKey, Part>; act: TabKey | null; frozen: Map<TabKey, number> | null; frozenAct: TabKey | null; unfreeze: (() => void) | null }
   const panes = new Map<Zone, Pane>();
+  //  #3870 «곁칸 탭 관리» — 탭 줄의 기억(이 화면이 사는 동안만). 칸마다 최근에 본 순서 · 닫은 탭 더미.
+  //   ⚠ 여기(함수 맨 앞)에 둔다 — 마운트 중 첫 paintAll 이 이 값들을 읽는다(위 panes 와 같은 TDZ 이유).
+  const recent: Record<Zone, TabKey[]> = { main: [], side: [], bottom: [] };
+  let closedStack: ClosedTab[][] = [];
+  function isPinned(k: TabKey): boolean { return lay.pin.includes(k); }
+  function pinSet(): Set<TabKey> { return new Set(lay.pin); }
+  /** 한꺼번에 닫기에서 빠지는 탭 — 고정 탭 · 붙은 앱(닫기 = 이 세션에서 떼기라 다른 일이 생긴다). */
+  function keepInBulk(k: TabKey): boolean { return isPinned(k) || DERIVED_TABS.has(tabBase(k)); }
+  function isFileTab(k: TabKey): boolean { return tabBase(k) === 'editor'; }
+  //  끌어 옮기기(v2/pane-tabdrag)에 넘기는 손 — 보이는 칸 · 갈 수 있는 칸 · 고정 경계 · 놓은 자리.
+  const dragHost: TabDragHost = {
+    bars: (): DragBar[] => [...panes.values()]
+      .filter((p) => !p.bar.hidden && !p.root.hidden && p.root.getClientRects().length > 0)
+      .map((p) => ({ zone: p.zone, bar: p.bar, tabs: p.tabs, pane: p.root })),
+    //  곁칸 ↔ 아래 칸만 — 가운데 칸은 세션 전용이다(tabMenu 의 canGo 와 같은 규칙).
+    canGo: (key, from, to) => !narrow() && from !== to && to !== 'main' && tabBase(key) !== 'sessions',
+    range: (zone, key) => {
+      const list = zoneTabs(zone as Zone);
+      const pc = list.filter((k) => isPinned(k)).length;
+      return isPinned(key) ? [0, Math.max(0, pc - 1)] : [pc, Math.max(pc, list.length - 1)];
+    },
+    reorder: (zone, key, to) => reorderTab(zone as Zone, key, to),
+    moveTo: (key, from, to, at) => { openZone(to as Zone); moveTab(key, from as Zone, to as Zone, at); },
+  };
 
   // ── 좁은 폭(≤900, MOBILE_MQ)의 **접힌 배치**(#4088 후속, 2026-09-23) ─────────────────────
   //  아래 칸은 좁은 폭에서 설 자리가 없다(세션 대화 위에 240px 를 얹으면 대화가 사라진다). 그래서 아래 칸의 탭을
@@ -503,23 +542,20 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const bodyEl = el('div', { class: 'pn-pane-body' });
     //  tabindex -1: 좁은 폭의 서랍으로 열릴 때 초점이 안으로 들어온다(mobile.ts setAsideTarget). 탭 순서엔 안 낀다.
     const root = el('section', { class: 'pn-pane', 'data-zone': zone, tabindex: '-1' }, bar, bodyEl);
-    const p: Pane = { zone, root, bar, tabs, tail, bodyEl, parts: new Map(), act: null };
-    // 탭을 끌어 이 칸에 떨구면 그 부품이 여기로 옮겨 온다(VS Code 의 탭 도킹). 과녁은 줄 전체다 —
-    //  띠가 꽉 차면 빈 자리가 없어져, 띠만 과녁이면 떨굴 데가 사라진다.
-    bar.addEventListener('dragover', (e: DragEvent) => {
-      if (!e.dataTransfer?.types.includes('text/x-pn-part')) return;
-      e.preventDefault(); bar.classList.add('drop');
+    const p: Pane = { zone, root, bar, tabs, tail, bodyEl, parts: new Map(), act: null, frozen: null, frozenAct: null, unfreeze: null };
+    //  탭 끌어 옮기기(같은 줄 안 · 다른 칸으로)는 v2/pane-tabdrag 가 맡는다 — 탭마다 pointerdown 에서 시작한다(tabEl).
+    //  마우스로 닫은 뒤 얼려 둔 폭은 **줄에서 손을 떼면** 푼다(크롬·사파리) — 그때 비로소 남은 탭들이 폭을 다시 나눈다.
+    bar.addEventListener('pointerleave', () => thaw(p));
+    //  줄의 빈 자리 우클릭 — 닫은 탭 다시 열기 · 파일 탭 모두 닫기가 먼저, 그 아래로 곁칸 빈 자리의 메뉴(칸에 넣기…)가 잇는다.
+    //   탭 위의 우클릭은 탭이 스스로 받는다(tabEl — 여기까지 오지 않는다).
+    bindCtx(bar, () => stripMenuRows(zone));
+    //  빈 자리를 두 번 누르면 [+](크롬·사파리의 «새 탭»). 탭 위의 두 번 누르기는 건드리지 않는다.
+    tabs.addEventListener('dblclick', (e: MouseEvent) => {
+      if (e.target !== tabs) return;
+      (tail.querySelector('.pn-tab-add') as HTMLElement | null)?.click();
     });
-    bar.addEventListener('dragleave', () => bar.classList.remove('drop'));
-    bar.addEventListener('drop', (e: DragEvent) => {
-      bar.classList.remove('drop');
-      const raw = e.dataTransfer?.getData('text/x-pn-part') || '';
-      if (!raw) return;
-      e.preventDefault();
-      let msg: { type: PartType; from: Zone };
-      try { msg = JSON.parse(raw); } catch (_) { return; }
-      moveTab(msg.type, msg.from, zone);
-    });
+    //  키보드(WAI-ARIA 탭 패턴) — ←/→/Home/End 로 탭 사이를 옮겨 다니고(Enter·Space 로 켠다), Delete·Backspace 로 닫는다.
+    tabs.addEventListener('keydown', (e: KeyboardEvent) => onTabsKey(p, e));
     // 세로 휠로도 띠가 미끄러지게 — 가로 막대는 디자인상 숨겨 두어서(scrollbar-width: none) 마우스만 쓰는
     //  사람에겐 잡을 데가 없다. 넘칠 때만 가로채고, 그때도 Shift(브라우저 기본 가로 스크롤)는 그대로 둔다.
     tabs.addEventListener('wheel', (e: WheelEvent) => {
@@ -539,20 +575,115 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   function syncMore(p: Pane): void {
     p.bar.classList.toggle('has-more', p.tabs.scrollWidth > p.tabs.clientWidth + 1);
   }
+  const wrapsOf = (p: Pane): HTMLElement[] => [...p.tabs.children].filter((n) => n.classList.contains('pn-tabwrap')) as HTMLElement[];
 
-  /** 이름을 접을까 — **재서** 정한다(원준 2026-08-20: "충분히 다 보여줄 수 있는데 접는 일은 절대 없게").
+  /** 탭 폭을 **재서** 정한다(원준 2026-08-20: "충분히 다 보여줄 수 있는데 접는 일은 절대 없게").
    *
-   *  폭 브레이크포인트로 정하면 '곁칸은 좁지만 탭은 둘뿐'인 화면까지 아이콘만 남는다. 그래서 기준을 폭이 아니라
-   *  **넘치는가**로 둔다: 이름을 다 편 채로 재서 들어가면 그대로 두고, 넘칠 때만 켜진 탭 하나만 이름을 남기고
-   *  나머지를 아이콘으로 접는다(파비콘 문법 — 이름은 툴팁과 [모두 보기]가 말한다).
+   *  #3870 «곁칸 탭 관리»(2026-09-30) — 종전엔 «전부 펴거나 · 켜진 탭만 남기고 전부 접거나» 둘뿐이라, 곁칸을 620px 로
+   *  넓혀도 탭 열 개 중 아홉이 같은 눈 아이콘이었다. 이제 세 단계다(lib/pane-tabs planTabs):
+   *   ① 들어가면 이름을 다 편다 → ② 모자라면 **긴 이름부터** 줄인다(짧은 이름은 그대로) → ③ 그래도 모자라면 켜진 탭만 이름을
+   *   남기고 아이콘으로 접는다 → 그래도 넘치면 띠가 미끄러지고 ⌄ 목록이 나머지를 말한다.
    *
-   *  ⚠ 잴 때는 **가장 너그러운 상태**(이름 다 펴고 ⌄ 숨긴 채)로 되돌려 놓고 잰다. 접힌 상태에서 재면
-   *  '한 번 접히면 넓혀도 안 펴지는' 이력(hysteresis)이 생기고, ⌄(30px)를 낀 채 재면 그 30px 때문에
-   *  들어갈 것도 접힌다. scrollWidth 를 읽는 순간 레이아웃이 동기 계산되므로 이 되돌림은 화면에 안 보인다. */
+   *  ⚠ 잴 때는 **가장 너그러운 상태**(이름 다 펴고 ⌄ 숨긴 채)로 되돌려 놓고 잰다. 접힌 상태에서 재면 '한 번 접히면 넓혀도
+   *   안 펴지는' 이력(hysteresis)이 생긴다. ②·③ 이면 ⌄ 가 서므로 그 폭을 뺀 줄에 다시 앉힌다. 폭을 읽는 순간 레이아웃이
+   *   동기 계산되므로 이 되돌림은 화면에 안 보인다.
+   *  ⚠ 얼려 둔 줄(마우스로 닫은 직후)은 재지 않는다 — 다시 나누면 다음 × 가 커서 밑에서 달아난다(thaw 가 푼 뒤에 잰다). */
   function fit(p: Pane): void {
-    p.bar.classList.remove('compact', 'has-more');
-    if (p.tabs.scrollWidth > p.tabs.clientWidth + 1) p.bar.classList.add('compact');
+    if (p.frozen) { syncMore(p); return; }
+    const wraps = wrapsOf(p);
+    p.bar.classList.remove('compact', 'shrunk', 'has-more');
+    for (const w of wraps) w.style.width = '';
+    restoreTitles(p);
+    const full = p.tabs.clientWidth;
+    if (!full || !wraps.length) { syncMore(p); return; }       // 접힌 칸·숨은 칸 — 보일 때 ResizeObserver 가 다시 부른다
+    const tabsIn = wraps.map((w) => ({ natural: w.getBoundingClientRect().width, active: w.classList.contains('on'), pinned: w.classList.contains('pinned') }));
+    let plan = planTabs(tabsIn, full);
+    if (plan.mode !== 'full') {
+      p.bar.classList.add('shrunk');                            // ⌄ 가 선다 — 그 폭을 뺀 줄에 다시 앉힌다
+      plan = planTabs(tabsIn, p.tabs.clientWidth);
+    }
+    wraps.forEach((w, i) => { w.style.width = plan.widths[i] + 'px'; });
+    p.bar.classList.toggle('compact', plan.mode === 'icons');
+    fitTitles(p);
     syncMore(p);        // 접고도 남는 넘침만 '더 있다'(그늘)로 말한다
+  }
+  //  파일 이름은 **가운데**를 줄인다(파인더 문법) — 끝을 줄이면 「붙여넣은 그림 20260930-….png」 여럿이 모두 「붙여넣은 그…」
+  //   같은 글자가 된다(실측: 자료의 붙여넣은 그림 탭 다섯이 앞머리가 같다). 끝(날짜·확장자)을 남겨야 서로 가린다.
+  //   다른 탭(자료·지식…)은 짧은 이름이라 끝 말줄임(CSS) 그대로 둔다.
+  let measureCtx: CanvasRenderingContext2D | null | undefined;
+  function midEllipsis(full: string, px: number, font: string): string {
+    if (measureCtx === undefined) measureCtx = document.createElement('canvas').getContext('2d');
+    if (!measureCtx || px <= 0) return full;
+    measureCtx.font = font;
+    if (measureCtx.measureText(full).width <= px) return full;
+    //  확장자(.png · .html)는 통째로 남긴다 — «…tml» 처럼 잘리면 종류도 못 읽는다. 남은 글자는 앞 절반 · 뒤(날짜 쪽) 절반.
+    const ext = (/\.[A-Za-z0-9]{1,6}$/.exec(full) || [''])[0];
+    const stem = [...full.slice(0, full.length - ext.length)];
+    const tailOf = (k: number): string => { const head = Math.ceil(k / 2); return stem.slice(0, head).join('') + '…' + stem.slice(stem.length - (k - head)).join('') + ext; };
+    let lo = 1, hi = stem.length - 1, best = '';
+    while (lo <= hi) {
+      const keep = (lo + hi) >> 1;
+      const t = tailOf(keep);
+      if (measureCtx.measureText(t).width <= px) { best = t; lo = keep + 1; } else hi = keep - 1;
+    }
+    //  확장자까지 넣을 자리도 없으면 끝 말줄임(앞 글자라도 남긴다).
+    if (!best) { const chars = [...full]; let n = chars.length - 1; while (n > 1 && measureCtx.measureText(chars.slice(0, n).join('') + '…').width > px) n--; best = chars.slice(0, n).join('') + '…'; }
+    return best;
+  }
+  /** 폭을 입힌 뒤 — 넘친 파일 이름을 가운데 말줄임으로 바꾼다(온전한 이름은 툴팁·읽어 주는 이름이 그대로 갖는다). */
+  function fitTitles(p: Pane): void {
+    for (const w of wrapsOf(p)) {
+      if (!isFileTab(w.dataset.tab || '')) continue;
+      const t = w.querySelector('.pn-tab-t') as HTMLElement | null;
+      if (!t || !t.clientWidth) continue;                         // 접힌 탭(아이콘만)은 이름이 안 보인다
+      const full = t.dataset.full || t.textContent || '';
+      if (t.scrollWidth <= t.clientWidth + 1 && !t.dataset.full) continue;
+      t.dataset.full = full;
+      t.textContent = midEllipsis(full, t.clientWidth, getComputedStyle(t).font);
+    }
+  }
+  /** 재기 전에 — 가운데 말줄임을 걷고 온전한 이름으로(온전한 폭을 재야 한다). */
+  function restoreTitles(p: Pane): void {
+    for (const t of p.tabs.querySelectorAll('.pn-tab-t[data-full]')) {
+      const el0 = t as HTMLElement;
+      el0.textContent = el0.dataset.full || el0.textContent;
+      delete el0.dataset.full;
+    }
+  }
+  /** 마우스로 닫기 직전 — 지금 탭 폭을 얼린다(닫힌 탭 오른쪽의 탭들이 그 자리로 미끄러질 뿐 폭은 그대로). */
+  function freeze(p: Pane): void {
+    const m = new Map<TabKey, number>();
+    for (const w of wrapsOf(p)) { const k = w.dataset.tab; if (k) m.set(k, w.getBoundingClientRect().width); }
+    p.frozen = m;
+    p.frozenAct = p.act;
+    //  안전장치 — 줄 밖에서 포인터가 움직이면 푼다. 닫기가 줄 위가 아닌 데서 일어났으면(pointerleave 가 올 일이 없다) 얼린 폭이
+    //   남아 곁칸을 넓혀도 탭이 다시 나뉘지 않았다(실측 — 전후 사진 스크립트). 줄 안의 움직임은 그대로 얼려 둔다.
+    if (!p.unfreeze) {
+      const onMove = (e: PointerEvent): void => { if (!p.bar.contains(e.target as Node | null)) thaw(p); };
+      window.addEventListener('pointermove', onMove, true);
+      p.unfreeze = () => window.removeEventListener('pointermove', onMove, true);
+    }
+  }
+  /** 다시 그린 줄에 얼려 둔 폭을 입힌다. 새로 켜진 탭은 이름이 보여야 하므로 얼리지 않는다(그 왼쪽 끝은 어차피 그대로다). */
+  function applyFreeze(p: Pane): void {
+    const m = p.frozen;
+    if (!m) return;
+    for (const w of wrapsOf(p)) {
+      const k = w.dataset.tab || '';
+      const px = m.get(k);
+      const newlyOn = w.classList.contains('on') && k !== p.frozenAct;
+      w.style.width = px != null && !newlyOn ? px + 'px' : '';
+    }
+    fitTitles(p);
+    syncMore(p);
+  }
+  /** 모든 칸의 얼림을 푼다(다시 재지는 않는다 — 부르는 쪽이 곧 다시 그린다). 탭이 늘거나 순서·고정이 바뀌면 얼린 폭은 뜻이 없다. */
+  function thawAll(): void { for (const p of panes.values()) { p.unfreeze?.(); p.unfreeze = null; p.frozen = null; } }
+  function thaw(p: Pane): void {
+    p.unfreeze?.(); p.unfreeze = null;
+    if (!p.frozen) return;
+    p.frozen = null;
+    fit(p);
   }
 
   const mainPane = makePane('main');
@@ -675,6 +806,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const real: Zone = narrow() && zone === 'side' && key && lay.bottom.includes(key) ? 'bottom' : zone;
     if (zone !== 'main') sideActNarrow = key;
     lay.act[real] = key;
+    if (key) { recent[real] = touchRecent(recent[real], key); if (real !== zone) recent[zone] = touchRecent(recent[zone], key); }
     saveLayout();
     saveAct(real, key);      // 이 세션이 무엇을 보고 있었는지도 함께 — 다시 돌아오면 그 탭이 켜져 있다
     paintPane(zone);
@@ -688,6 +820,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     return key;
   }
   function addTab(zone: Zone, key: TabKey): void {
+    thawAll();   // 탭이 늘면 얼려 둔 폭은 뜻이 없다(크롬)
     const list = lay[zone];
     if (!list.includes(key)) list.push(key);
     lay.act[zone] = key;
@@ -790,61 +923,197 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   };
   window.addEventListener('message', onMsg);
 
+  // ── 탭 닫기 · 옮기기 · 고정 · 되살리기 (#3870 «곁칸 탭 관리», 원준 2026-09-30) ──────────────────────
+  //  "하나 닫고 하나씩 다 찾으러 다녀야 함 … 사파리나 크롬 탭들 닫거나 열거나 끌거나 드래그하는 거 최대한 참고해서."
+  //   · × 는 **모든 탭**에 있다 — 마우스를 올리면 아이콘 자리가 × 로 바뀐다(사파리). 켜지 않은 탭도 켜지 않고 바로 닫힌다.
+  //     아이콘 자리라 탭 폭이 달라도 × 는 늘 탭의 왼쪽 끝이고, 닫힌 탭 오른쪽의 탭이 그 자리로 미끄러져 오므로
+  //     **다음 탭의 × 가 커서 바로 밑**이다(폭은 줄에서 손을 뗄 때까지 얼려 둔다 — freeze/thaw). 연달아 눌러 닫으면 된다.
+  //   · 휠 클릭(가운데 버튼) = 닫기 · Delete = 닫기(키보드).
+  //   · 우클릭: 닫기 · 다른 탭 닫기 · 오른쪽 탭 닫기 · 파일 탭 모두 닫기 · 탭 고정 · 다른 칸으로 보내기 · 닫은 탭 다시 열기.
+  //   · 켜진 탭을 닫으면 가장 최근에 보던 탭으로(자료에서 파일을 열어 보고 닫으면 자료로 돌아간다 — lib/pane-tabs).
+  //   · 끌어서 같은 줄 안 순서를 바꾸고, 다른 칸 줄에 놓으면 그 자리에 끼운다(v2/pane-tabdrag).
   function removeTab(zone: Zone, key: TabKey): void {
+    //  (main 판은 여기서 붙은 앱 탭의 «떼기»(#4225)를 먼저 따른다 — stage 판엔 붙은 앱 탭이 없다.)
+    recordClosed([key]);
+    dropTab(zone, key);
+  }
+  /** 사람이 탭 하나를 닫았다(× · 휠 클릭 · 메뉴 · Delete). 마우스로 닫았으면 그 줄의 폭을 얼린다 — 다음 탭의 × 가 커서 밑에 온다. */
+  function closeTab(zone: Zone, key: TabKey, o?: { pointer?: boolean }): void {
+    const pane = panes.get(zone);
+    if (o?.pointer && pane && !narrow()) freeze(pane);
+    removeTab(zone, key);
+  }
+  /** 닫은 탭을 [닫은 탭 다시 열기] 더미에 쌓는다 — 한 번에 닫은 것이 한 묶음(크롬: 한꺼번에 닫은 것은 한꺼번에 돌아온다). */
+  function recordClosed(keys: TabKey[]): void {
+    const batch: ClosedTab[] = [];
+    for (const k of keys) {
+      if (DERIVED_TABS.has(tabBase(k))) continue;          // 붙은 앱은 세션에서 나온다 — 되살릴 탭이 아니다
+      const z = zoneOf(k);
+      if (!z) continue;
+      const path = isFileTab(k) ? rememberedViewerPath(ctx.memKey(), k) : '';
+      batch.push({ key: k, zone: z, at: lay[z].indexOf(k), ...(path ? { path } : {}) });
+    }
+    closedStack = pushClosed(closedStack, batch);
+  }
+  function dropTab(zone: Zone, key: TabKey, o?: { paint?: boolean }): void {
     const real = zoneOf(key) || zone;            // 접힌 탭(좁은 폭)은 서랍에서 빼도 아래 칸의 것이다
     const list = lay[real];
     const i = list.indexOf(key);
     if (i < 0) return;
+    const before = list.slice();
+    const drawn = narrow() ? [...lay.side, ...lay.bottom] : null;   // 서랍에 그려진 줄(좁은 폭)
     list.splice(i, 1);
+    lay.pin = lay.pin.filter((k) => k !== key);
     //  부품은 **그려진 칸**에 산다 — 접힌 탭은 아래 칸의 열쇠라도 곁칸에 서 있다. 어디 있든 걷는다.
     for (const pane of panes.values()) dropPartFrom(pane, key);
     tabTitles.delete(key);
-    if (lay.act[real] === key) lay.act[real] = list[Math.max(0, i - 1)] || null;
-    if (sideActNarrow === key) sideActNarrow = null;
-    saveLayout(); paintAll();
+    //  켜진 탭을 닫았으면 **가장 최근에 보던 탭**으로 — 기록이 없으면 오른쪽 이웃(크롬), 그것도 없으면 왼쪽(lib/pane-tabs).
+    //   종전엔 늘 왼쪽 이웃이었다: 자료에서 파일을 열어 보고 닫으면 자료가 아니라 그 앞에 열어 둔 다른 파일이 켜졌다.
+    if (lay.act[real] === key) { lay.act[real] = landingAfterClose(before, key, recent[real]); saveAct(real, lay.act[real]); }
+    if (sideActNarrow === key) sideActNarrow = drawn ? landingAfterClose(drawn, key, recent.side) : null;
+    for (const z of ['main', 'side', 'bottom'] as Zone[]) recent[z] = recent[z].filter((k) => k !== key);
+    saveLayout();
+    if (o?.paint !== false) paintAll();
   }
-  function moveTab(key: TabKey, from: Zone, to: Zone): void {
+  function moveTab(key: TabKey, from: Zone, to: Zone, at?: number): void {
     if (from === to) { activate(to, key); return; }
     if (tabBase(key) === 'sessions' && to !== 'main') return;   // 세션은 가운데 칸 밖으로 나가지 않는다(위 불변식)
-    removeTab(from, key);
+    //  ⚠ removeTab 이 아니라 dropTab — removeTab 은 «사람이 × 를 눌렀다» 라 [닫은 탭 다시 열기] 더미에 쌓는다. 옮기기는 닫기가 아니다.
+    //   옮기기는 닫기가 아니다: 거기로 가면 앱이 떨어지고 탭은 두 칸에 겹쳐 선다(#4225 격리 리뷰가 잡았다).
+    const wasPinned = isPinned(key);
+    dropTab(from, key, { paint: false });
+    if (wasPinned) lay.pin = [...lay.pin, key];                  // 고정은 따라간다(크롬: 고정 탭을 다른 창으로 옮겨도 고정)
+    lay[to] = placeKey(lay[to], key, at ?? lay[to].length, pinSet());
     addTab(to, key);
+  }
+  /** 같은 줄 안에서 끌어 놓았다 — to 는 놓은 뒤 설 줄의 자리. 끈 탭이 켜진다(크롬). */
+  function reorderTab(zone: Zone, key: TabKey, to: number): void {
+    const real = zoneOf(key) || zone;
+    if (narrow() || !lay[real].includes(key)) return;
+    thawAll();
+    lay[real] = placeKey(lay[real], key, to, pinSet());
+    activate(real, key);
+  }
+  /** 탭 고정 / 고정 해제 — 고정하면 아이콘만 남고 고정 탭들 맨 뒤로, 풀면 고정 탭 바로 뒤로(크롬). */
+  function togglePin(zone: Zone, key: TabKey): void {
+    const real = zoneOf(key) || zone;
+    lay.pin = isPinned(key) ? lay.pin.filter((k) => k !== key) : [...lay.pin, key];
+    lay[real] = normalizePins(lay[real], pinSet());
+    thawAll();
+    saveLayout(); paintAll();
+  }
+  /** 한꺼번에 닫기 — 다른 탭 · 오른쪽 탭 · 파일 탭 모두(lib/pane-tabs bulkTargets). 고정 탭 · 붙은 앱은 남는다. */
+  function closeMany(zone: Zone, anchor: TabKey | null, kind: BulkKind): void {
+    const keys = bulkTargets(zoneTabs(zone), anchor, kind, { keep: keepInBulk, isFile: isFileTab });
+    if (!keys.length) return;
+    recordClosed(keys);
+    for (const k of keys) dropTab(zone, k, { paint: false });
+    //  «다른 탭 닫기» · «오른쪽 탭 닫기» 는 우클릭한 탭이 켜진다(크롬).
+    if (anchor && (kind === 'others' || kind === 'right') && zoneTabs(zone).includes(anchor)) {
+      const real = zoneOf(anchor) || zone;
+      lay.act[real] = anchor;
+      if (zone !== 'main') sideActNarrow = anchor;
+      saveAct(real, anchor);
+    }
+    thawAll();
+    saveLayout(); paintAll();
+    if (keys.length > 1) toast(`탭 ${keys.length}개를 닫았어요. 탭 줄을 우클릭해 [닫은 탭 다시 열기]로 되살릴 수 있어요.`);
+  }
+  /** [닫은 탭 다시 열기] — 가장 최근에 닫은 묶음을 닫기 전 자리에 되살린다. 뷰어는 펴 두었던 파일로 돌아온다. */
+  function reopenClosed(): void {
+    const r = popClosed(closedStack);
+    if (!r) return;
+    closedStack = r.rest;
+    let last: { zone: Zone; key: TabKey } | null = null;
+    for (const t of r.batch) {
+      const base = tabBase(t.key);
+      if (!ALL.has(base)) continue;
+      const zone: Zone = t.zone === 'bottom' ? 'bottom' : 'side';
+      //  한 벌만 사는 부품(자료·지식…)을 그 사이 [+] 로 다시 넣었으면 그것을 켠다 — 둘을 세우지 않는다.
+      const twin = !partDef(base as PartType).multi ? allKeys().find((k) => tabBase(k) === base) : undefined;
+      if (twin) { last = { zone: zoneOf(twin) || zone, key: twin }; continue; }
+      //  열쇠 번호는 그 사이 다른 탭이 가져갔을 수 있다 — 그러면 새 번호로(뷰어는 파일 경로를 다시 적는다).
+      const key = allKeys().includes(t.key) ? nextTabKey(base, allKeys()) : t.key;
+      if (t.path) rememberViewerPath(ctx.memKey(), key, t.path);
+      lay[zone] = placeKey(lay[zone], key, t.at, pinSet());
+      last = { zone, key };
+    }
+    if (!last) return;
+    lay.act[last.zone] = last.key;
+    saveAct(last.zone, last.key);
+    if (last.zone !== 'main') { sideActNarrow = last.key; revealZone(last.zone); }
+    thawAll();
+    saveLayout(); paintAll();
+  }
+  /** [닫은 탭 다시 열기] 오른쪽에 적을 말 — 무엇이 돌아오는지(한 개면 이름, 여럿이면 개수). */
+  function closedHint(): string {
+    const b = closedStack[closedStack.length - 1];
+    if (!b) return '';
+    if (b.length > 1) return `${b.length}개`;
+    const t = b[0];
+    return t.path ? (t.path.split('/').pop() || '') : partDef(tabBase(t.key) as PartType).name;
   }
 
   /** 탭에 걸 이름 — 부품이 단 것(뷰어=파일명·웹=사이트) > 「종류 n」(둘 이상 떠 있을 때) > 종류 이름. */
   function tabName(key: TabKey): string {
     const t = tabTitles.get(key);
     if (t) return t;
+    //  뷰어는 켜야 부품이 서고 그때 이름을 단다 — 아직 안 켠 뷰어 탭(새로고침 직후 · 다시 연 탭)은 펴 둔 파일 이름으로 부른다.
+    //   (종전엔 «뷰어 5» 로 섰다 — 무엇인지 모르는 탭은 닫을지 말지도 고를 수 없다.)
+    if (tabBase(key) === 'editor') { const p = rememberedViewerPath(ctx.memKey(), key); if (p) return p.split('/').pop() || p; }
     const d = partDef(tabBase(key) as PartType);
     const n = tabNum(key);
     return n >= 2 ? `${d.name} ${n}` : d.name;
   }
-  function tabEl(zone: Zone, key: TabKey, on: boolean): HTMLElement {
+  /** 탭 아이콘 — 뷰어는 **파일 종류**로 그린다(그림 · 문서 · 코드 · 시안 · 영상). 종전엔 뷰어가 전부 같은 눈 아이콘이라
+   *  접힌 줄에서 서로를 가릴 길이 아이콘 어깨의 작은 번호뿐이었다(그 번호가 아이콘을 한쪽으로 치우쳐 보이게 했다 — 원준 신고). */
+  function tabIcon(key: TabKey): string {
+    const d = partDef(tabBase(key) as PartType);
+    if (tabBase(key) !== 'editor') return d.icon;
+    const nm = tabTitles.get(key) || rememberedViewerPath(ctx.memKey(), key);
+    if (!nm) return d.icon;
+    const k = kindOf(nm);
+    return k.kind === 'img' ? 'img' : k.kind === 'video' || k.kind === 'audio' ? 'play' : k.kind === 'page' ? 'window' : k.type === '코드' ? 'code' : 'doc';
+  }
+  /** 탭 툴팁 — 이름이 줄어 있거나 아이콘만 남았을 때 여기서 온전한 이름을 읽는다. */
+  function tabTip(key: TabKey): string {
     const d = partDef(tabBase(key) as PartType);
     const nm = tabName(key);
+    const head = nm === d.name || tabNum(key) > 1 && !tabTitles.get(key) ? `${nm} — ${d.hint}` : nm;
+    return isPinned(key) ? `${head}\n(고정한 탭 — 우클릭해 고정을 풀 수 있어요)` : head;
+  }
+  function tabEl(zone: Zone, key: TabKey, on: boolean): HTMLElement {
+    const nm = tabName(key);
+    const pinned = isPinned(key);
+    const ic = tabIcon(key);
     const b = el('button', {
-      class: 'pn-tab' + (on ? ' on' : ''), type: 'button', role: 'tab',
-      // 접히면 아이콘만 남는다(fit) — 이름은 툴팁이 말해야 한다. 읽어주는 이름(aria-label)도 이름으로 고정.
-      'aria-selected': String(on), title: `${nm} — ${d.hint}`, 'aria-label': nm, draggable: 'true',
-      onclick: () => activate(zone, key),
-      //  우클릭 = 이 탭을 어디에 둘까(#762) — 두 파일을 **동시에** 보려면 한 탭을 다른 칸으로 보내야 하는데,
-      //   그 길이 끌어 옮기기뿐이라 아무도 몰랐다. 같은 일을 메뉴로도 연다.
+      class: 'pn-tab', type: 'button', role: 'tab', tabindex: on ? '0' : '-1',
+      'aria-selected': String(on), title: tabTip(key), 'aria-label': nm,
+      //  끌기로 끝난 누름의 click 은 켜기가 아니다(놓을 때 셸이 이미 켰다 — reorderTab).
+      onclick: () => { if (consumeDragClick()) return; activate(zone, key); },
+      //  우클릭 = 이 탭을 어떻게 할까(#762 · #3870) — 닫기 · 한꺼번에 닫기 · 고정 · 다른 칸으로 보내기 · 다시 열기.
       oncontextmenu: (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); tabMenu(e, zone, key); },
-      //  ⚠ 번호는 **단추에** 심는다 — ::after 의 attr() 은 제 요소의 값만 읽는다(겉싸개 것은 못 본다).
-      'data-n': tabNum(key) > 1 ? String(tabNum(key)) : null,
-    }, pnIcon(d.icon, 'pn-i sm'), el('span', { text: nm })) as HTMLElement;
-    b.addEventListener('dragstart', (e: DragEvent) => {
-      e.dataTransfer?.setData('text/x-pn-part', JSON.stringify({ type: key, from: zone }));
-      if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
-      b.classList.add('drag');
-    });
-    b.addEventListener('dragend', () => b.classList.remove('drag'));
-    const x = el('button', {
-      class: 'pn-tab-x', type: 'button', title: `${nm} 칸에서 뺍니다`, 'aria-label': `${nm} 빼기`,
-      onclick: (e: MouseEvent) => { e.stopPropagation(); removeTab(zone, key); },
+    }, el('span', { class: 'pn-tab-lead', 'data-ic': ic }, pnIcon(ic, 'pn-i sm')), el('span', { class: 'pn-tab-t', text: nm })) as HTMLElement;
+    const detachX = DERIVED_TABS.has(tabBase(key));   // #4225 붙은 앱 탭의 × 는 «닫기» 가 아니라 «이 세션에서 떼기»
+    //  × 는 아이콘 자리에 겹쳐 선다(CSS: 마우스를 올리면 아이콘이 × 로 바뀐다). 고정 탭은 × 가 없다(크롬) — 메뉴로 닫는다.
+    //  tabindex -1: 키보드는 탭 위에서 Delete 로 닫는다(× 마다 초점이 서면 탭 사이를 옮겨 다니기가 두 배로 길어진다).
+    const x = pinned ? null : el('button', {
+      class: 'pn-tab-x', type: 'button', tabindex: '-1',
+      title: detachX ? `${nm} 을(를) 이 세션에서 뗍니다 — 앱의 데이터는 그대로 남아요` : `${nm} 탭 닫기`,
+      'aria-label': detachX ? `${nm} 떼기` : `${nm} 닫기`,
+      onclick: (e: MouseEvent) => { e.stopPropagation(); closeTab(zone, key, { pointer: e.detail > 0 }); },
     }, pnIcon('x', 'pn-i xs'));
-    //  접히면 아이콘만 남는다 — 같은 종류가 둘 이상이면 그때 서로를 구별할 길이 사라진다(#762 실측:
-    //   뷰어 셋이 같은 눈 아이콘 셋이었다). 번호를 아이콘 어깨에 남긴다(CSS ::after, 접혔을 때만 보인다).
-    return el('span', { class: 'pn-tabwrap' + (on ? ' on' : ''), 'data-tab': key, 'data-n': tabNum(key) > 1 ? String(tabNum(key)) : null }, b, x);
+    const w = el('span', { class: 'pn-tabwrap' + (on ? ' on' : '') + (pinned ? ' pinned' : ''), 'data-tab': key, role: 'presentation' }, b, x) as HTMLElement;
+    //  휠 클릭 = 닫기(크롬·사파리). 누를 때 브라우저의 자동 스크롤이 뜨지 않게 mousedown 도 막는다.
+    w.addEventListener('mousedown', (e: MouseEvent) => { if (e.button === 1) e.preventDefault(); });
+    w.addEventListener('auxclick', (e: MouseEvent) => {
+      if (e.button !== 1) return;
+      e.preventDefault(); e.stopPropagation();
+      if (!pinned) closeTab(zone, key, { pointer: true });
+    });
+    //  끌어 옮기기 — 같은 줄 안에서 순서 · 다른 칸으로(v2/pane-tabdrag). 좁은 폭(서랍)은 칸이 하나뿐이라 끌지 않는다.
+    w.addEventListener('pointerdown', (e: PointerEvent) => { if (!narrow()) beginTabDrag(dragHost, zone, key, w, e); });
+    return w;
   }
 
   /** 지금 띠에 서 있는 탭들 — [열쇠, 겉싸개]. paintTabs 가 이름만 갈아 끼울 때 쓴다. */
@@ -854,46 +1123,112 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       .filter(([k]) => !!k);
   }
 
-  /** 탭 우클릭 메뉴 — 「다른 칸으로 보내기」와 「하나 더」. 나란히 보기가 여기서 시작된다. */
+  /** 행 묶음 사이에만 구분선 — 빈 묶음이 두 줄 구분선을 만들지 않게. */
+  const withSeps = (groups: CtxRow[][]): CtxRow[] => groups.filter((g) => g.length).flatMap((g, i) => (i ? [{ sep: true, label: '' }, ...g] : g));
+
+  /** 탭 우클릭 메뉴(크롬·사파리 순서) — 닫기들 · 고정·하나 더·보내기 · 닫은 탭 다시 열기. */
   function tabMenu(e: MouseEvent, zone: Zone, key: TabKey): void {
     const type = tabBase(key) as PartType;
     const d = partDef(type);
+    const list = zoneTabs(zone);
+    const derived = DERIVED_TABS.has(type);
+    const pinned = isPinned(key);
+    const o = { keep: keepInBulk, isFile: isFileTab };
+    const others = bulkTargets(list, key, 'others', o).length;
+    const right = bulkTargets(list, key, 'right', o).length;
+    const files = bulkTargets(list, null, 'files', o).length;
     const toZone: Record<Zone, string> = { main: '가운데 칸으로', side: sideLabels(isLeft()).sendTo, bottom: '아래 칸으로' };   // 받침마다 조사가 다르다
     const canGo = (z: Zone): boolean => !narrow() && z !== zone && !(type === 'sessions' && z !== 'main') && z !== 'main';   // 좁은 폭엔 칸이 하나뿐
-    ctxMenu(e.clientX, e.clientY, [
-      ...(['side', 'bottom'] as Zone[]).filter(canGo).map((z) => ({
-        label: `${toZone[z]} 보내기`, run: () => { openZone(z); moveTab(key, zone, z); },
-      })),
-      ...(d.multi ? [{ sep: true, label: '' }, { label: `${d.name} 하나 더`, run: () => { addPart(zone, type); } }] : []),
-      { sep: true, label: '' },
-      { label: '이 칸에서 빼기', danger: true, run: () => removeTab(zone, key) },
-    ]);
+    ctxMenu(e.clientX, e.clientY, withSeps([
+      [
+        { label: derived ? '이 세션에서 떼기' : '닫기', icon: 'x', hint: derived ? '' : '휠 클릭', run: () => closeTab(zone, key) },
+        { label: '다른 탭 닫기', off: !others, hint: others ? `${others}개` : '', run: () => closeMany(zone, key, 'others') },
+        { label: '오른쪽 탭 닫기', off: !right, hint: right ? `${right}개` : '', run: () => closeMany(zone, key, 'right') },
+        ...(files ? [{ label: '파일 탭 모두 닫기', hint: `${files}개`, run: () => closeMany(zone, null, 'files') }] : []),
+      ],
+      [
+        ...(derived ? [] : [{ label: pinned ? '고정 해제' : '탭 고정', icon: 'pin', hint: pinned ? '' : '아이콘만 남기고 맨 앞에', run: () => togglePin(zone, key) }]),
+        ...(d.multi ? [{ label: `${d.name} 하나 더`, icon: 'plus', run: () => { addPart(zone, type); } }] : []),
+        ...(['side', 'bottom'] as Zone[]).filter(canGo).map((z) => ({
+          label: `${toZone[z]} 보내기`, icon: 'moveto', run: () => { openZone(z); moveTab(key, zone, z); },
+        })),
+      ],
+      [{ label: '닫은 탭 다시 열기', icon: 'undo', off: !closedStack.length, hint: closedHint(), run: () => reopenClosed() }],
+    ]), { title: tabName(key) });
   }
 
-  /** [모두 보기] — 띠가 넘쳐 **가려진 탭이 생겼을 때만** 뜨는 통로(CSS: .pn-tabbar.has-more).
-   *  여기서 고르면 그 탭이 켜지고, 여기 ×로 빼면 띠를 훑지 않고도 뺄 수 있다 — 신고의 '×를 누르기 힘들다'가
-   *  실은 '×가 칸 밖에 있어 손이 닿지 않는다'였다. 이 목록은 스크롤과 무관하게 늘 칸 안에 있다. */
+  /** [모두 보기] — 탭 이름이 줄었거나 접혔거나 넘쳤을 때 서는 목록(CSS: .pn-tabbar.shrunk · .compact · .has-more).
+   *  #3870 — × 를 눌러도 목록이 **열린 채** 그 줄만 사라진다(종전엔 × 한 번마다 목록이 닫혀 매번 다시 열어야 했다).
+   *  발치에 [파일 탭 n개 모두 닫기] · [닫은 탭 다시 열기]. */
   function moreBtn(zone: Zone): HTMLElement {
-    const b = el('button', { class: 'pn-tab-more', type: 'button', title: '이 칸에 든 탭을 모두 봅니다', 'aria-label': '탭 모두 보기' }, pnIcon('chev', 'pn-i sm')) as HTMLElement;
+    const b = el('button', { class: 'pn-tab-more', type: 'button', title: '이 칸에 열린 탭을 모두 봅니다', 'aria-label': '탭 모두 보기' }, pnIcon('chev', 'pn-i sm')) as HTMLElement;
     b.onclick = () => {
-      const list = zoneTabs(zone).filter((t) => tabBase(t) !== 'sessions');
-      const act = panes.get(zone)?.act ?? lay.act[zone];
-      const close = anchoredPopover(b, el('div', { class: 'pn-pop' },
-        el('p', { class: 'pn-pop-h', text: '이 칸에 들어 있는 것입니다 — 누르면 그 탭이 켜지고, ×는 이 칸에서 뺍니다.' }),
-        el('div', { class: 'pn-pop-list' }, ...list.map((t) => {
+      const listEl = el('div', { class: 'pn-pop-list' }) as HTMLElement;
+      const foot = el('div', { class: 'pn-pop-foot' }) as HTMLElement;
+      let close: () => void = () => { /* 아래에서 채운다 */ };
+      const fill = (): void => {
+        const list = zoneTabs(zone).filter((t) => tabBase(t) !== 'sessions');
+        const act = panes.get(zone)?.act ?? lay.act[zone];
+        listEl.replaceChildren(...list.map((t) => {
           const d = partDef(tabBase(t) as PartType);
           const nm = tabName(t);
+          const pinned = isPinned(t);
           return el('div', { class: 'pn-pop-line' + (act === t ? ' on' : '') },
-            el('button', { class: 'pn-pop-row', type: 'button', onclick: () => { close(); activate(zone, t); } },
-              pnIcon(d.icon, 'pn-i sm'),
-              el('span', { class: 'n' }, el('b', { text: nm }), el('span', { class: 'pn-fine', text: nm === d.name ? d.hint : d.name }))),
-            el('button', {
-              class: 'pn-pop-x', type: 'button', title: `${nm} 칸에서 뺍니다`, 'aria-label': `${nm} 빼기`,
-              onclick: () => { close(); removeTab(zone, t); },
+            el('button', { class: 'pn-pop-row', type: 'button', title: nm, onclick: () => { close(); activate(zone, t); } },
+              pnIcon(tabIcon(t), 'pn-i sm'),
+              el('span', { class: 'n' }, el('b', { text: nm }), el('span', { class: 'pn-fine', text: pinned ? '고정한 탭' : nm === d.name ? d.hint : d.name }))),
+            pinned ? null : el('button', {
+              class: 'pn-pop-x', type: 'button', title: `${nm} 탭 닫기`, 'aria-label': `${nm} 닫기`,
+              onclick: () => { removeTab(zone, t); if (zoneTabs(zone).length) fill(); else close(); },
             }, pnIcon('x', 'pn-i xs')));
-        }))));
+        }));
+        const files = bulkTargets(zoneTabs(zone), null, 'files', { keep: keepInBulk, isFile: isFileTab }).length;
+        foot.replaceChildren(...[
+          files ? el('button', { class: 'btn-text', type: 'button', text: `파일 탭 ${files}개 모두 닫기`, onclick: () => { closeMany(zone, null, 'files'); fill(); } }) : null,
+          closedStack.length ? el('button', { class: 'btn-text', type: 'button', text: '닫은 탭 다시 열기', onclick: () => { reopenClosed(); fill(); } }) : null,
+        ].filter(Boolean) as HTMLElement[]);
+        foot.hidden = !foot.childElementCount;
+      };
+      fill();
+      close = anchoredPopover(b, el('div', { class: 'pn-pop' },
+        el('p', { class: 'pn-pop-h', text: '이 칸에 열린 탭이에요. 누르면 그 탭이 켜지고, × 를 누르면 목록은 그대로 둔 채 닫혀요.' }),
+        listEl, foot));
     };
     return b;
+  }
+
+  /** 탭 줄 빈 자리의 메뉴 행. */
+  function stripMenuRows(zone: Zone): CtxRow[] {
+    const files = bulkTargets(zoneTabs(zone), null, 'files', { keep: keepInBulk, isFile: isFileTab }).length;
+    return [
+      { label: '닫은 탭 다시 열기', icon: 'undo', off: !closedStack.length, hint: closedHint(), run: () => reopenClosed() },
+      ...(files ? [{ label: '파일 탭 모두 닫기', hint: `${files}개`, run: () => closeMany(zone, null, 'files') }] : []),
+    ];
+  }
+
+  /** 탭 줄에서의 키보드(WAI-ARIA 탭 패턴) — ←/→/Home/End 로 초점을 옮기고(Enter·Space 가 켠다), Delete·Backspace 로 닫는다. */
+  function onTabsKey(p: Pane, e: KeyboardEvent): void {
+    const btn = (e.target as HTMLElement | null)?.closest('.pn-tab') as HTMLElement | null;
+    if (!btn || !p.tabs.contains(btn)) return;
+    const btns = wrapsOf(p).map((w) => w.querySelector('.pn-tab') as HTMLElement).filter(Boolean);
+    const i = btns.indexOf(btn);
+    if (i < 0) return;
+    const key = (btn.parentElement as HTMLElement | null)?.dataset.tab || '';
+    if ((e.key === 'Delete' || e.key === 'Backspace') && key) {
+      e.preventDefault();
+      if (isPinned(key)) return;                  // 고정 탭은 메뉴로 닫는다(실수로 지우지 않게)
+      closeTab(p.zone, key);
+      (p.tabs.querySelector('.pn-tabwrap.on .pn-tab') as HTMLElement | null)?.focus();
+      return;
+    }
+    const j = e.key === 'ArrowRight' ? (i + 1) % btns.length : e.key === 'ArrowLeft' ? (i - 1 + btns.length) % btns.length
+      : e.key === 'Home' ? 0 : e.key === 'End' ? btns.length - 1 : -1;
+    if (j < 0) return;
+    e.preventDefault();
+    for (const x of btns) x.tabIndex = -1;
+    btns[j].tabIndex = 0;
+    btns[j].focus();
+    btns[j].scrollIntoView({ inline: 'nearest', block: 'nearest' });
   }
 
   function addBtn(zone: Zone): HTMLElement {
@@ -935,6 +1270,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   function paintPane(zone: Zone): void {
     const pane = panes.get(zone)!;
     const n = narrow();
+    //  끄는 중에 줄을 다시 그리면 잡고 있던 탭이 사라진다 — 끌기를 먼저 없던 일로(놓을 때 셸이 다시 그리는 것은 끌기가 끝난 뒤다).
+    cancelTabDrag();
     //  좁은 폭의 아래 칸 — 탭은 곁칸(서랍)에 접혀 들어갔다. 줄도 부품도 세우지 않는다(배치는 그대로 둔다).
     if (n && zone === 'bottom') {
       pane.act = null; pane.tabs.replaceChildren(); pane.tail.replaceChildren(); pane.bar.hidden = true;
@@ -949,6 +1286,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     if (!act && list.length) act = list[0];
     if (!(n && zone === 'side' && act && lay.bottom.includes(act))) lay.act[zone] = act;
     pane.act = act;
+    if (act) recent[zone] = touchRecent(recent[zone], act);   // 처음 그릴 때 켜져 있던 탭도 «본 것» 이다
 
     if (zone === 'side') sideHide = null;   // 좁은 폭은 서랍 닫기 단추라 칸 이름을 안 쓴다
     const hideBtn = zone === 'side'
@@ -979,7 +1317,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     ].filter(Boolean) as HTMLElement[]);
     // 세션만 든 칸에는 탭도 손잡이도 없다 → 줄 자체를 감춘다(빈 띠가 남으면 그게 더 이상하다).
     pane.bar.hidden = pane.tabs.childElementCount === 0 && pane.tail.childElementCount === 0;
-    fit(pane);
+    //  마우스로 막 닫은 줄이면 얼려 둔 폭 그대로(다음 × 가 커서 밑에 남는다), 아니면 새로 잰다.
+    if (pane.frozen) applyFreeze(pane); else fit(pane);
     // 켜진 탭이 띠 밖으로 밀려 있으면 끌어온다(셸 탭 줄과 같은 문법 — tabs.ts). 'nearest' 라 이미 보이면 안 움직인다.
     const onTab = pane.tabs.querySelector('.pn-tabwrap.on') as HTMLElement | null;
     if (onTab && pane.tabs.scrollWidth > pane.tabs.clientWidth + 1) onTab.scrollIntoView({ inline: 'nearest', block: 'nearest' });
@@ -1010,10 +1349,15 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const act = pane.act ?? lay.act[zone];
     for (const [key, wrapEl] of tabNodes(pane)) {
       const b = wrapEl.querySelector('.pn-tab') as HTMLElement | null;
-      const span = b?.querySelector('span');
+      const span = b?.querySelector('.pn-tab-t') as HTMLElement | null;
       const nm = tabName(key);
-      if (span && span.textContent !== nm) span.textContent = nm;
-      if (b) { b.setAttribute('aria-label', nm); b.title = `${nm} — ${partDef(tabBase(key) as PartType).hint}`; }
+      //  가운데 말줄임 중이면 온전한 이름은 data-full 에 있다(fitTitles) — 그것과 비교하고, 바뀌었으면 말줄임을 걷는다(fit 이 다시 잰다).
+      if (span && (span.dataset.full ?? span.textContent) !== nm) { span.textContent = nm; delete span.dataset.full; }
+      if (b) { b.setAttribute('aria-label', nm); b.title = tabTip(key); }
+      //  뷰어는 파일 이름이 서야 종류(그림·문서…)를 안다 — 이름이 바뀌면 아이콘도 갈아 낀다.
+      const lead = b?.querySelector('.pn-tab-lead') as HTMLElement | null;
+      const ic = tabIcon(key);
+      if (lead && lead.dataset.ic !== ic) { lead.dataset.ic = ic; lead.replaceChildren(pnIcon(ic, 'pn-i sm')); }
       wrapEl.classList.toggle('on', key === act);
     }
     fit(pane);
@@ -1263,6 +1607,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       offViewers();
       window.removeEventListener('pn:sessions-view', onViewChanged);
       window.clearInterval(timer);
+      cancelTabDrag(); thawAll();   // #3870 — 끄는 중이던 탭 · 얼림 감시(window pointermove)를 걷는다
       card?.destroy();
       swap?.destroy();
       for (const ro of ros) ro.disconnect();

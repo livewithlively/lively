@@ -363,7 +363,7 @@
   /* 탭 줄·손잡이 — 40px 줄, 단추는 36px 넓이(데스크톱 30px). */
   .pn-tabbar { height: 41px; }
   .pn-tab { height: 40px; font-size: 13.5px; }
-  .pn-tab-x { width: 28px; height: 40px; }
+  .pn-tab-x { width: 26px; height: 26px; margin-top: -13px; left: 4px; }   /* 아이콘 칸과 같은 중심(17px) — #3870 */
   .pn-tab-add, .pn-pane-hide, .pn-tab-more { width: 36px; height: 40px; }
   /* 자료 칸 머리 — 단추 36px, 크기 슬라이더는 뺀다(62px 슬라이더는 손가락으로 못 잡는다 — 보기·정렬은 남는다). */
   .pn-fbtn { height: 36px; min-width: 36px; font-size: 13px; }
