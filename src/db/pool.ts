@@ -2,6 +2,7 @@ import pg from "pg";
 import { getSourceConfig, resolveConnectionString, type DbSource } from "./sources.js";
 import { invalidateMysqlPool } from "./mysql-engine.js";
 import { itemsPool } from "./client.js";
+import { logger } from "../log.js";
 
 // 데이터소스별 lazy 풀 레지스트리 — db_query/db_schema 가 source 이름으로 풀을 얻는다.
 // 각 소스는 반드시 읽기 전용 리플리카 + 읽기 전용 role 로 접속할 것(sources.ts / .env / org_db_source).
@@ -37,7 +38,11 @@ export async function getPool(source: string): Promise<pg.Pool> {
   // 생성 프라미스를 await 이전에 즉시 등록 → check-then-set 사이에 await 가 없어 인터리브 창이 사라진다.
   const created = (async (): Promise<pg.Pool> => {
     const poolCfg = await resolveConnectionString(cfg);
-    return new pg.Pool({ ...poolCfg, max: 10 });
+    const pool = new pg.Pool({ ...poolCfg, max: 10 });
+    // 외부 리플리카가 유휴 연결을 끊어도(재시작·프록시 유휴 타임아웃) 게이트웨이가 죽지 않게 — 리스너가 없으면
+    //  pg-pool 의 'error' emit 이 throw 가 된다(#4501, client.ts rawPool 과 같은 부류). 그 연결은 풀이 이미 버렸다.
+    pool.on("error", (err: Error & { code?: string }) => logger.warn({ source, code: err.code, msg: err.message }, "db source 풀 유휴 연결 오류(연결을 버린다)"));
+    return pool;
   })();
   pools.set(key, created);
   created.catch(() => {
