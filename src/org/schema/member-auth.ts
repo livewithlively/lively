@@ -22,6 +22,29 @@ export async function initMemberAuth(pool: Pool): Promise<void> {
       updated_by TEXT);
   `);
 
+  // ── #3970 — «아무도 모르는 초기 비번» 청소. ────────────────────────────────
+  //  매니지드 프로비저닝이 멤버를 만들 때 코어가 초기 비번을 자동 발급했는데(delivery/members.ts), CP 는 그
+  //  값을 쓰지 않고 버렸다. 그래서 CP 계정으로 들어오는 사람 전원에게 **자기가 모르는 로컬 비번**이 남았고,
+  //  재확인 관문(관리 권한 포함 CLI 승인)이 그걸 물어 아무도 통과할 수 없었다. 발급은 members.ts 가 막았으니
+  //  이미 생긴 자국은 여기서 지운다 — 그래야 그 사람의 재확인 수단이 CP 비밀번호로 정확히 잡힌다(step-up.ts).
+  //
+  //  ⚠ 지우는 범위를 좁게 고른 이유(둘 다 있어야 지운다):
+  //   · `must_change = true` — **한 번도 안 바꾼 발급 그대로의 비번**만. 스스로 바꾼 사람(false)은 그 비번을
+  //     알고 쓰고 있으므로 건드리지 않는다.
+  //   · `lvly_account` 신원 보유 — 라이블리 계정으로 들어오는 사람만. 이 조건이 **플랫폼 운영 계정**(모든 테넌트에
+  //     심기는 ops@lvly.io — identities 가 비어 있고 로컬 비번으로만 로그인한다)을 정확히 비켜 간다. 그 행을
+  //     지우면 CP 가 ops 토큰을 못 얻어 테넌트 운영이 멈춘다. 셀프호스트도 이 조건에 걸리는 행이 없다(무회귀).
+  await pool.query(`
+    DELETE FROM member_credential c
+     WHERE c.must_change = true
+       AND EXISTS (
+         SELECT 1 FROM org_member m
+          WHERE m.id = c.member_id
+            AND jsonb_typeof(m.identities) = 'array'
+            AND EXISTS (SELECT 1 FROM jsonb_array_elements(m.identities) e
+                         WHERE e->>'system' = 'lvly_account'));
+  `);
+
   // ── member_secret — per-user 백엔드 자격 vault(P1, #746). 능동 커넥터 툴(gitlab·slack·google·aws…)이 쓰는
   //  자격을 사용자별 격리 보관. git_credential(owner=gateway|member:<id>) 패턴을 임의 kind 로 일반화한 것.
   //  ⚠ member_credential(로컬 로그인 비번, scrypt 단방향)과 다르다 — 여기는 API 호출용이라 복원 가능해야 함(secret-box AES-GCM).

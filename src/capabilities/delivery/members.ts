@@ -55,6 +55,26 @@ export async function membersPayload(isAdmin: boolean) {
   return Promise.all(members.map(async (m) => ({ ...m, hasToken: await memberHasActiveToken(m.id), hasAccount: credSet.has(m.id), is_person: persons.has(m.id) })));
 }
 
+/**
+ * 이 구성원에게 **이 게이트웨이의 로컬 로그인 계정**을 만들어 줄 것인가 (#3970 — 판정만, 발급은 호출부).
+ *
+ *  · 로그인이 이메일 기준이라 유효 이메일이 있어야 한다(없으면 못 쓰는 계정).
+ *  · agent/system 과 기존 멤버는 대상이 아니다(종전 그대로).
+ *  · ★ 라이블리 계정(identities 의 `lvly_account`)으로 들어오는 사람은 **제외한다.** 그 사람은 라이블리 계정으로
+ *    로그인하므로 로컬 비번을 쓸 일이 없고, 받은 적도 없다 — CP 프로비저닝이 이 창구를 부르고 응답의
+ *    initialPassword 를 버리기 때문이다(lvly-cloud provisioner.seedWorkspaceMember). 그렇게 생긴
+ *    «아무도 모르는 비번» 이 재확인 관문에서 **통과할 수 없는 칸**이 됐다(매니지드 전원이 관리 권한 포함
+ *    CLI 승인을 못 했다). 자국을 안 만드는 것이 그 수정의 첫 겹이다(판정은 delivery/step-up.ts,
+ *    남은 자국 청소는 org/schema/member-auth.ts).
+ */
+export function wantsLocalAccount(
+  member: { kind?: string | null; email?: string | null; identities?: MemberIdentity[] | null }, existed: boolean,
+): boolean {
+  if (existed) return false;
+  if (member.kind !== "human" || !member.email) return false;
+  return !(member.identities ?? []).some((i) => i.system === "lvly_account");
+}
+
 export const membersReadCapabilities: Capability[] = [
   restRead("org_members", "구성원 명부 조회",
     "관리탭 [구성원·팀] — 구성원 목록. admin 은 이메일·외부시스템 신원·scopes·개인 레이어 + hasToken(접속 열쇠 보유)·hasAccount(중앙박스 계정 보유)까지, " +
@@ -134,8 +154,14 @@ export const membersCapabilities: Capability[] = [
       // 신규 human 멤버 → 로컬 로그인 계정 자동 발급(초기 비번 1회 반환 — 관리자가 멤버에게 전달).
       //  로그인이 이메일 기준이라 **유효 이메일이 있을 때만** 발급(없으면 못 쓰는 계정 → 발급 안 함).
       //  agent/system·기존 멤버·이미 계정 있음도 제외.
+      //  ★ CP 계정으로 들어오는 사람(identities 의 `lvly_account`)도 제외한다(#3970). 그 사람은 라이블리 계정으로
+      //   로그인하므로 이 게이트웨이의 로컬 비번을 **쓸 일이 없고, 받은 적도 없다** — CP 프로비저닝이 이 창구를
+      //   부르고 응답의 initialPassword 를 버리기 때문이다(lvly-cloud provisioner.seedWorkspaceMember).
+      //   그렇게 생긴 «아무도 모르는 비번» 은 조용히 남아 있다가 재확인 관문에서 **통과할 수 없는 칸**이 됐다
+      //   (매니지드 전원이 관리 권한 포함 CLI 승인을 못 했다 — 판정은 delivery/step-up.ts, 남은 자국 청소는
+      //   schema/member-auth.ts). 자국을 안 만드는 것이 그 셋 중 첫 겹이다.
       let initialPassword: string | undefined;
-      if (!existed && member.kind === "human" && member.email && !(await hasCredential(id))) {
+      if (wantsLocalAccount(member, !!existed) && !(await hasCredential(id))) {
         initialPassword = generateInitialPassword();
         await setMemberPassword(id, initialPassword, { mustChange: true, actor: actorOf(user) });
       }
