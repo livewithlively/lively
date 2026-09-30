@@ -809,6 +809,7 @@ function migrateLegacyCodexHooksJson() {
   for (const [event, groups] of Object.entries(doc.hooks)) {
     if (!Array.isArray(groups)) continue;
     const keptGroups = [];
+    let eventRemoved = 0;
     for (const group of groups) {
       if (!group || typeof group !== "object" || !Array.isArray(group.hooks)) { keptGroups.push(group); continue; }
       let groupRemoved = 0;
@@ -817,10 +818,13 @@ function migrateLegacyCodexHooksJson() {
         groupRemoved++;
         return false;
       });
-      removed += groupRemoved;
+      eventRemoved += groupRemoved;
       if (!groupRemoved) keptGroups.push(group);
       else if (handlers.length) keptGroups.push({ ...group, hooks: handlers });
     }
+    // 우리 핸들러를 걷어낸 이벤트만 다시 쓴다 — 원래 비어 있던 이벤트(`"X": []`)는 사용자 것이라 그대로 둔다.
+    if (!eventRemoved) continue;
+    removed += eventRemoved;
     if (keptGroups.length) doc.hooks[event] = keptGroups;
     else delete doc.hooks[event];
   }

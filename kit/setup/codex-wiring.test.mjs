@@ -281,6 +281,7 @@ makeBundle();
       Stop: [{ matcher: "managed-only", hooks: [{ type: "command", command: "node ~/.lively/hooks/run-custom.mjs Stop" }] }],
       FutureEvent: [{ matcher: "*", hooks: [{ type: "command", command: "echo future-user-handler" }] }],
       EmptyEvent: [{ matcher: "empty-user", hooks: [], metadata: { keep: true } }],
+      EmptyArrayEvent: [],
     },
   };
   freshHome(); writeLegacy(original);
@@ -304,6 +305,7 @@ makeBundle();
   const pruned = after.hooks?.UserPromptSubmit?.length === 2
     && emptyUser?.hooks?.length === 0 && emptyUser?.metadata?.keep === true
     && after.hooks?.EmptyEvent?.[0]?.metadata?.keep === true
+    && Array.isArray(after.hooks?.EmptyArrayEvent) && after.hooks.EmptyArrayEvent.length === 0
     && !Object.hasOwn(after.hooks || {}, "Stop");
   const backups = legacyBackups();
   const backedUp = backups.length >= 2 && backups.every((p) => readFileSync(p, "utf8") === before);
