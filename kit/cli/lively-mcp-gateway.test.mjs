@@ -175,7 +175,9 @@ try {
   //  이걸 못 읽으면 x-lively-session 이 빠져 게이트웨이가 세션을 특정하지 못한다(session_rename·session_task 거부).
   {
     check("E27 LIVELY_SESSION_ID 가 가장 먼저", sessionHeaderValue({ LIVELY_SESSION_ID: "box-1", CODEX_THREAD_ID: "t", CLAUDE_CODE_SESSION_ID: "u" }) === "box-1");
-    check("E27 Codex 스레드 id → codex-", sessionHeaderValue({ CODEX_THREAD_ID: " t1 ", CLAUDE_CODE_SESSION_ID: "u" }) === "codex-t1");
+    check("E27 Codex 스레드 id → codex-", sessionHeaderValue({ CODEX_THREAD_ID: " t1 " }) === "codex-t1");
+    check("E27 코덱스 프록시(stamp=codex)는 codex id 가 먼저", sessionHeaderValue({ LIVELY_HARNESS: "codex", CODEX_THREAD_ID: "t1", CLAUDE_CODE_SESSION_ID: "u" }) === "codex-t1");
+    check("E27 코덱스 셸에서 띄운 claude(부모 CODEX_THREAD_ID 상속)는 자기 id", sessionHeaderValue({ CODEX_THREAD_ID: "parent", CLAUDE_CODE_SESSION_ID: "child" }) === "claude-child");
     check("E27 Claude Code 자식 env(CLAUDE_CODE_SESSION_ID) → claude-", sessionHeaderValue({ CLAUDE_CODE_SESSION_ID: "u1" }) === "claude-u1");
     check("E27 CLAUDE_SESSION_ID 도 계속 읽는다", sessionHeaderValue({ CLAUDE_SESSION_ID: "c1" }) === "claude-c1");
     check("E27 둘 다 있으면 CLAUDE_CODE_SESSION_ID(훅 stdin 과 같은 값)가 이긴다", sessionHeaderValue({ CLAUDE_SESSION_ID: "stale", CLAUDE_CODE_SESSION_ID: "u2" }) === "claude-u2");

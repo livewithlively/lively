@@ -188,13 +188,24 @@ function saveCache(gw, tools) {
 //  🔴 Claude Code 가 자식 프로세스(이 stdio 서버)에 싣는 이름은 CLAUDE_CODE_SESSION_ID 다 — CLAUDE_SESSION_ID 는
 //   싣지 않는다(확인법: 떠 있는 `lively mcp` 프로세스의 /proc/<pid>/environ). 훅 stdin session_id 와 같은 값이라 먼저 보고,
 //   CLAUDE_SESSION_ID 는 호환용으로 뒤에 둔다(앞에 두면 셸에 남은 값이 훅과 다른 신원을 만든다).
+//  ⚠ 네이티브 id 는 **이 프록시를 띄운 하네스(LIVELY_HARNESS stamp) 것부터** 본다 — 훅도 LIVELY_HARNESS 로 고른다.
+//   codex 는 셸 도구 자식에 CODEX_THREAD_ID 를 싣는다. 그래서 코덱스가 셸로 띄운 claude 의 프록시는 부모의
+//   CODEX_THREAD_ID 와 자기 CLAUDE_CODE_SESSION_ID 를 함께 갖고, codex 를 고정으로 먼저 보면 자식 claude 의 툴 호출이
+//   부모 코덱스 세션으로 붙는다(session_rename 이 부모 세션 이름을 바꾼다). stamp 가 없으면 claude 다(x-lively-harness 기본값과 같다).
+//  ⚠ 알려진 한계 — `/clear` 뒤엔 이 값이 낡는다(실측 Claude Code 2.1.285: stdio MCP 서버는 /clear 에 재시작되지 않고,
+//   env 의 CLAUDE_CODE_SESSION_ID 는 **이전 대화** id 로 남는다. 훅은 stdin 의 새 id 를 쓴다). 그 뒤 툴 호출은 같은 사람의
+//   직전 대화 세션으로 붙는다. 라이블리가 띄운 창은 LIVELY_SESSION_ID(창 단위)라 영향이 없다. 고치려면 훅이 새 id 를
+//   프록시가 읽을 자리에 남겨야 한다(env 만으로는 알 길이 없다).
 export function sessionHeaderValue(env = {}) {
   const direct = String(env.LIVELY_SESSION_ID || "").trim();
   if (direct) return direct;
   const codex = String(env.CODEX_THREAD_ID || env.CODEX_SESSION_ID || "").trim();
-  if (codex) return `codex-${codex}`;
   const claude = String(env.CLAUDE_CODE_SESSION_ID || env.CLAUDE_SESSION_ID || "").trim();
-  return claude ? `claude-${claude}` : "";
+  const native = String(env.LIVELY_HARNESS || "").trim().toLowerCase() === "codex"
+    ? [["codex", codex], ["claude", claude]]
+    : [["claude", claude], ["codex", codex]];
+  const hit = native.find(([, id]) => id);
+  return hit ? `${hit[0]}-${hit[1]}` : "";
 }
 
 function upstreamHeaders() {
