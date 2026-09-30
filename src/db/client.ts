@@ -9,6 +9,16 @@ import pg from "pg";
 // activity_log 원자기록의 동시 부하를 감안해 max 명시(기본 10 → 20, 풀 고갈 방지).
 const rawPool = new pg.Pool({ connectionString: process.env.ITEMS_DATABASE_URL, max: 20 });
 
+// 유휴 연결 오류(DB 재시작·관리자 종료·DROP DATABASE … FORCE)는 풀이 'error' 이벤트로 알린다. 리스너가 없으면
+//  Node 가 그 이벤트를 throw 로 바꿔 **프로세스가 통째로 죽는다** — 게이트웨이면 uncaughtException → 재기동(열린
+//  터미널 attach 가 전부 끊긴다), 시험이면 크래시(#4501: app-sql-e2e.pg-test 가 항목 전부 ok 뒤 정리 단계에서 죽어
+//  머지 대기열을 떨어뜨렸다 — pool.end() 는 소켓이 닫히기 전에 끝나 DROP DATABASE FORCE 가 그 연결을 끊는다).
+//  pg-pool 은 오류 난 클라이언트를 이미 풀에서 뺐으므로 다음 요청은 새 연결을 맺는다 — 여기서는 기록만 한다.
+//  ⚠ leaf 계약(R10)상 logger 를 import 하지 않는다 → console(게이트웨이 stdout/stderr = logs/gateway.log).
+rawPool.on("error", (err: Error & { code?: string }) => {
+  console.warn(`[db] 유휴 연결 오류 — 그 연결을 버리고 계속한다: ${err.code ?? ""} ${err.message}`.replace(/ {2,}/g, " "));
+});
+
 // ── DB 주소가 없으면 접속을 시도하지 않는다 (#2457) ──────────────────────────
 //
 // pg 는 connectionString 이 비면 **libpq 기본값(localhost:5432)** 으로 붙는다. 그래서 이 모듈을
