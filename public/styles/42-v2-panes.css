@@ -71,7 +71,7 @@
 /* 마우스가 있는 화면에선 × 가 **늘 눌린다**(보이는 것은 올렸을 때뿐). 탭을 닫으면 다음 탭이 커서 밑으로 미끄러져 오는데,
    브라우저가 그 탭의 호버를 다시 잴 때까지 × 가 눌리지 않으면 연달아 누른 두 번째 클릭이 «닫기» 가 아니라 «켜기» 가 된다.
    (그 자리를 누르려면 어차피 마우스가 거기 있고, 그러면 × 가 보인다.) 손가락 화면은 아래 규칙대로 켜진 탭만. */
-@media (hover: hover) { .pn-tab-x { pointer-events: auto; } }
+@media (hover: hover) and (pointer: fine) { .pn-tab-x { pointer-events: auto; } }   /* 터치 겸용 노트북은 hover:hover 를 말한다 — 첫 탭이 안 보이는 × 에 먹히지 않게 pointer:fine 까지 */
 /* 손가락 화면(호버가 없다) — 켜진 탭은 × 를 늘 보인다(누르면 켜지고, 켜진 탭에서 × 로 닫는다). */
 @media (hover: none) {
   .pn-tabwrap.on .pn-tab-x { opacity: 1; pointer-events: auto; }
@@ -98,10 +98,13 @@
 .pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab-x { left: auto; right: 1px; top: 3px; margin-top: 0; width: 15px; height: 15px; border-radius: 50%; background: var(--muted-2); color: var(--bg); }
 .pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab-x .pn-i { width: 9px; height: 9px; stroke-width: 2.4; }
 .pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab-x:hover { background: var(--ink); color: var(--bg); }
-.pn-tabbar.compact .pn-tabwrap:not(.on):hover .pn-tab-lead { visibility: visible; }
+.pn-tabbar.compact .pn-tabwrap:not(.on):hover .pn-tab-lead, .pn-tabbar.compact .pn-tabwrap:not(.on):has(.pn-tab:focus-visible) .pn-tab-lead { visibility: visible; }   /* 키보드로 옮겨 다닐 때도 아이콘이 남는다 */
 
 /* ── 끌어 옮기기 (v2/pane-tabdrag) — 끄는 동안엔 × 대신 아이콘을 보인다(잡은 탭 밑에 늘 커서가 있어 × 가 떠 버린다). ── */
 html.pn-tab-dragging, html.pn-tab-dragging * { cursor: grabbing !important; user-select: none; }
+/* 끄는 동안 액자는 포인터를 못 받는다 — 세션 화면·웹·PDF 칸이 액자라, 그 위에서 놓으면 pointerup 이 액자 문서로 가 끌기가 안 끝났다
+   (분할선 끌기 body.v2-splitting-x iframe 과 같은 방어). */
+html.pn-tab-dragging iframe, html.pn-tab-dragging webview { pointer-events: none !important; }
 html.pn-tab-dragging .pn-tab-x { opacity: 0 !important; pointer-events: none !important; }
 html.pn-tab-dragging .pn-tab-lead { visibility: visible !important; }
 html.pn-tab-dragging .pn-tabwrap:hover:not(.dragging) { background: none; }

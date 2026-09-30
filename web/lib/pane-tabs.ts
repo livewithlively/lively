@@ -195,6 +195,8 @@ export interface ClosedTab {
   at: number;
   /** 뷰어면 펴 두었던 파일(열쇠 번호는 그 사이 다른 파일이 가져갔을 수 있다). */
   path?: string;
+  /** 고정했던 탭 — 되살릴 때 고정한 채로. */
+  pinned?: boolean;
 }
 /** 한 번에 닫은 묶음(탭 하나 닫기도 묶음 하나다). 가장 최근 것이 끝. */
 export function pushClosed(stack: readonly ClosedTab[][], batch: readonly ClosedTab[], cap = 20): ClosedTab[][] {

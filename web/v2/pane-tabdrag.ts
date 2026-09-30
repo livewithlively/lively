@@ -3,11 +3,14 @@
 //  종전엔 HTML5 드래그였다(draggable + dataTransfer). 반투명 고스트가 따라다니고, 떨굴 수 있는 곳은 **다른 칸의 줄**뿐이라
 //  같은 줄 안에서 순서를 바꾸는 길이 아예 없었다(moveTab 이 같은 칸이면 켜기만 했다). 셸 탭 줄(tabs.ts)이 쓰던 포인터 끌기로 바꾼다.
 //   · 같은 줄 안: 잡은 탭이 커서를 **그대로** 따라오고, 지나친 이웃은 잡은 탭의 폭만큼 **미끄러져** 자리를 비운다(160ms).
-//     놓으면 빈 자리로 안착한 **뒤에** 목록을 고친다(먼저 고치면 화면이 한 번 튄다).
+//     놓으면 곧바로 목록을 고친다 — 이웃은 이미 비켜 서 있어 화면은 거의 그대로다. (셸 탭 줄 tabs.ts 는 안착 애니메이션
+//     160ms 뒤에 고쳤는데, 그 사이 줄이 다시 그려지면 놓은 자리가 사라지거나 죽은 화면에 reorder 가 닿는다 — 격리 리뷰 지적.)
 //   · 줄 밖으로 끌어내면: 탭은 제자리에서 흐려지고 탭 모양의 조각이 커서를 따라온다. 다른 칸의 탭 줄 위면 끼울 자리에 파란 세로선,
 //     그 칸의 본문 위면 줄 전체가 파랗게(맨 끝에 붙는다). 그 밖에서 놓으면 아무 일도 없다(제자리로).
 //   · 고정 탭은 고정 탭끼리, 나머지는 고정 탭 뒤에서만 선다(크롬). 그 범위는 셸이 range 로 알려 준다.
-//   · Esc · 창을 떠나기 · 포인터 취소 = 없던 일.
+//   · Esc · 창을 떠나기 · 포인터 취소 = 없던 일. 버튼이 이미 떼어진 채 움직이면(액자 · 창 밖에서 놓았다) 역시 없던 일.
+//   · 끄는 동안 액자(iframe · webview)는 포인터를 못 받는다 — 세션 화면·웹·PDF 칸이 액자라, 그 위에서 놓으면 pointerup 이
+//     액자 문서로 가서 끌기가 영영 안 끝났다(격리 리뷰 지적 · CSS html.pn-tab-dragging iframe). 분할선 끌기와 같은 방어다.
 //  손가락(touch)은 제외 — 탭 줄은 가로로 미끄러지는 띠라 끌기를 가로채면 넘길 수가 없다.
 //  ⚠ 이 파일은 탭 목록을 모른다. 셸(panes.ts)이 넘긴 줄의 DOM 을 재고, 놓은 자리만 돌려준다(reorder · moveTo).
 import { dragSlot, dropSlot, type Span } from '../lib/pane-tabs.js';
@@ -54,7 +57,7 @@ const spanOf = (n: HTMLElement): Span => { const r = n.getBoundingClientRect(); 
 const inRect = (r: DOMRect, x: number, y: number, pad = 0): boolean => x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad;
 const tabEls = (tabs: HTMLElement): HTMLElement[] => [...tabs.children].filter((n) => n.classList.contains('pn-tabwrap')) as HTMLElement[];
 
-/** 지금 끄는 중인가(움직이기 시작한 뒤). 셸이 끄는 동안 줄을 다시 그리지 않으려 본다. */
+/** 지금 끄는 중인가(움직이기 시작한 뒤). 시험이 «끌기가 끝났다» 를 잰다(셸은 다시 그리기 전에 cancelTabDrag 를 부른다). */
 export function tabDragging(): boolean { return !!drag && drag.moved; }
 /** 방금 끌기로 끝난 누름의 click 인가 — 그렇다면 탭 켜기로 치지 않는다(한 번만 참). */
 export function consumeDragClick(): boolean {
@@ -100,6 +103,8 @@ function onBlur(): void { if (drag) finish(false); }
 function onMove(e: PointerEvent): void {
   const d = drag;
   if (!d || e.pointerId !== d.pointerId) return;
+  //  버튼이 떼어진 채 움직인다 — 놓은 곳이 이 문서 밖(액자 · 창 밖)이라 pointerup 을 못 받았다. 없던 일로.
+  if ((e.buttons & 1) === 0) { finish(false); return; }
   const dx = e.clientX - d.startX;
   const dy = e.clientY - d.startY;
   if (!d.moved) {
@@ -218,10 +223,7 @@ function finish(apply: boolean): void {
     if (t) d.host.moveTo(d.key, d.zone, t.zone, t.at);
     return;
   }
-  //  줄 안 — 빈 자리로 미끄러져 안착한 뒤에 목록을 고친다.
-  const me = d.rects[d.from], to = d.rects[d.to];
-  const land = d.to === d.from ? 0 : d.to > d.from ? (to.left + to.width) - (me.left + me.width) : to.left - me.left;
-  d.wrap.style.transition = 'transform .16s ease';
-  d.wrap.style.transform = 'translateX(' + land + 'px)';
-  window.setTimeout(() => { clearStyles(d); d.host.reorder(d.zone, d.key, d.to); }, 160);
+  //  줄 안 — 곧바로 목록을 고친다(셸이 다시 그린다).
+  clearStyles(d);
+  d.host.reorder(d.zone, d.key, d.to);
 }
