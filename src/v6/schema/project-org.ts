@@ -78,6 +78,16 @@ export async function initV6ProjectOrg(pool: Pool): Promise<void> {
     --  사람이 태스크에서 세션을 열면 그 태스크가 처음부터 박힌다(v6/session-task.ts). 태스크가 지워지면 연결만 풀린다.
     ALTER TABLE execution_session ADD COLUMN IF NOT EXISTS task_id INT REFERENCES project(id) ON DELETE SET NULL;
     CREATE INDEX IF NOT EXISTS execution_session_task_idx ON execution_session(task_id) WHERE task_id IS NOT NULL;
+    -- #4135 — 한 세션이 태스크 **여러 개를 순서대로** 맡는다(곁칸 «프로젝트» 앱의 «이 세션의 태스크» 1. 2. 3.).
+    --  task_id 는 그대로 «지금 하는 것» 한 칸이고, 이 표는 그 세션의 **순서 목록**이다(task_id 도 목록 안에 있다).
+    --  행이 없는 세션은 종전 그대로 task_id 하나가 곧 목록이다 — 옛 세션은 이관 없이 같은 뜻으로 읽힌다.
+    CREATE TABLE IF NOT EXISTS execution_session_task(
+      session_id TEXT NOT NULL,
+      task_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      pos INT NOT NULL,
+      added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (session_id, task_id));
+    CREATE INDEX IF NOT EXISTS execution_session_task_task_idx ON execution_session_task(task_id);
 
     -- 프로젝트 물리삭제도 실행 세션에는 명시 detach 전환이다. FK SET NULL만 두면 revision/epoch가 안 올라
     -- 이미 주입된 AGENTS 맥락이 영구 잔류한다. BEFORE trigger가 null 이력까지 남긴 뒤 FK가 no-op이 되게 한다.
@@ -143,6 +153,11 @@ export async function initV6ProjectOrg(pool: Pool): Promise<void> {
     -- 서브에이전트 트리 캡처(#905 C1 슬⑥): 서브에이전트 세션은 parent_session_id=부모(주) 세션 id. 최상위(주) 세션은 NULL.
     --  목록(내 세션·프로젝트)엔 최상위만, 서브에이전트는 부모 대화록 아래에서만 보인다.
     ALTER TABLE session ADD COLUMN IF NOT EXISTS parent_session_id TEXT;
+    -- #4172 — 이 대화가 **작업 상자**(org_task — 증류·카테고리 붙이기·점검·위탁)에서 돌았나. 'task' 면 «내 세션 이력»에서 뺀다
+    --  (원준·상민 2026-09-21: "나 한 적도 없는 게 막 계속 나와" — 사람이 연 적 없는 자동 실행 세션). 'human' = 판정했고 사람 세션,
+    --  NULL = 아직 판정 전. 채우는 길 둘: 로그 업로드가 실행 id 를 org_task 와 맞대 보고 찍는다(앞으로) · 목록이 첫 청크의 cwd 로
+    --  옛 행을 한 번씩 판정한다(backfillSessionRunKind).
+    ALTER TABLE session ADD COLUMN IF NOT EXISTS run_kind TEXT;
     CREATE INDEX IF NOT EXISTS session_parent_idx ON session(parent_session_id) WHERE parent_session_id IS NOT NULL;
 
     -- ④ session_purged — 소유자가 **완전 삭제**한 세션의 묘비(#1850). 내용은 담지 않는다(그게 삭제의 목적이다).

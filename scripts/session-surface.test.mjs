@@ -132,14 +132,24 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
   //   원인은 `chatFirst()` 가 두 뜻을 겸한 것 — «codex app-server 인가»(층을 붙일 근거)와
   //   «대화창이 본자리인가»(어느 탭으로 열지)를 한 함수가 답하고 있었다. chatMode 가 'tmux' 인
   //   claude 는 첫 뜻으로 거짓이라, 둘째 뜻까지 거짓이 되어 터미널이 기본이 됐다.
-  ok(/const chatHome = \(\): boolean => chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode/.test(chat),
-    "㉚ ★ «대화창이 본자리인가» 가 «codex 인가» 와 갈려 있다");
+  //  ★★ #4135 — **코덱스는 언제나 터미널이 본자리다**(원준님 지시 2026-09-25). 한 번 걷어냈다가 되돌린 줄이다:
+  //   걷어낸 이유(«pane 이 셸인 app-server 세션을 터미널로 열면 친 말이 zsh 로 간다»)는 셸 안내줄 + [터미널로
+  //   넘기기] 가 이미 메웠다. 새 세션은 이 항이 없어도 터미널이고(chatMode='tmux'), 이 항이 실제로 가르는 것은
+  //   **이 변경 전에 태어난 app-server 세션**이다 — 거기서도 사람은 터미널을 먼저 본다.
+  ok(/const isCodex = \(\): boolean => String\(target\.raw\?\.harness \|\| ''\) === 'codex';/.test(chat),
+    "㉚ 코덱스 여부를 하네스 행으로 판정한다");
+  ok(/!isCodex\(\) && \(chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode/.test(chat),
+    "㉚-b ★ 코덱스는 app-server·대화 런타임 여부와 무관하게 터미널을 먼저 연다");
+  ok(/const chatHome = \(\): boolean => livKickoff\(\) \|\| livChat\(\) \|\| !!opts\.chatHome/.test(chat),
+    "㉚-c 리브 세션·명시 요청은 코덱스여도 대화가 본자리다(그건 하네스 축이 아니다)");
   //  ⚠ 항이 **더 붙는 것**은 막지 않는다 — #3847 이 «서버가 관측 못 한 세션(observed:false)은 대화로 연다» 를
   //   더했다. 여기서 재는 것은 «첫 화면의 축이 chatHome() 인가» 다(chatFirst() 로 정하면 claude 가 터미널로 열린다).
   ok(/setMode\(chatHome\(\)[^;\n]{0,60}\? 'chat' : 'term'\)/.test(chat),
     "㉛ ★ 첫 화면을 그 축으로 정한다 — chatFirst() 로 정하면 claude 가 터미널로 열린다");
   ok(/!modeChosen && [^;\n]{0,24}mode === 'chat' && !chatHome\(\)/.test(chat),
     "㉜ tmux 라고 되돌리는 분기가 대화 런타임 세션을 되돌리지 않는다(두 줄이 서로 밀치면 화면이 깜빡인다)");
+  ok(/if \(!hadLive && live && !modeChosen && mode === 'term' && chatHome\(\)\) setMode\('chat'\);/.test(chat),
+    "㉜-b 코덱스 실시간 층이 늦게 붙어도 터미널 기본 보기를 되돌리지 않는다");
 
   //  ★ 2026-09-01 신고: "클로드 왜 중간 대답은 표시 안되냐? 최종대답밖에 표시못함?"
   //   원인은 **대화 id 매핑**이었다. 화면이 대화 파일을 찾는 유일한 단서가 claude_session_id 인데
@@ -186,6 +196,41 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
   ok(noDark.length === 0, `㉘ ★ 다크 테마에도 정의돼 있다 (미정의: ${noDark.join(", ") || "없음"})`);
   ok(!/surface-1|surface-2/.test(mine),
     "㉙ ★ 정의된 적 없는 --surface-* 토큰을 안 쓴다 — #fff 폴백이 다크에서 흰 배경을 만든다");
+}
+
+// ── #4135 «이 터미널은 셸이다» 안내줄 + 터미널로 넘기기 배선 ────────────────────────────────
+//  실측 사고(원준님 2026-09-25): 새 codex 세션에서 [보기 ▸ 터미널로 보기] 를 누르고 명령을 쳤는데 Codex 로 가지
+//  않았다. 그 pane 은 **셸**이기 때문이다(대화 런타임 세션의 정상 모양). 화면이 그 사실을 말하지 않으면 사람은
+//  «터미널이 고장났다» 로 읽는다. 그래서 ① 그 줄을 그리나 ② 넘기는 단추가 실제로 배선됐나를 값으로 지킨다.
+{
+  const sc = read("web/session-chat.ts");
+  ok(/class: 'sc-shellbar'/.test(sc), "㉚ 셸 pane 안내줄을 그린다");
+  ok(/function paintShellBar\(\)/.test(sc) && /chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode \|\| ''\) === 'chat'/.test(sc),
+    "㉛ ★ 판정의 바탕은 «pane 이 셸인가» 두 갈래다(codex app-server · 대화 런타임) — 모르면 안 띄운다");
+  ok((sc.match(/paintShellBar\(\);/g) || []).length >= 2,
+    "㉜ ★ setMode 와 목록 갱신 **둘 다** 다시 그린다 — 행이 늦게 오는 세션(방금 만든 것)이 안내를 놓치면 안 된다");
+  //  ★ #4135 — **프레임이 본 것이 목록을 이긴다.** 노드 스냅샷이 낡으면 목록은 «이 세션은 app-server» 라고
+  //   말하는데, 그 값만 믿으면 멀쩡히 코덱스가 도는 터미널 위에 «여기 친 말은 Codex 에게 안 갑니다» 라는
+  //   거짓 경고가 선다(원준님 실측 2026-09-25: «이건 왜 뜨는거야? 밑에서 입력 잘만 되는데?»).
+  ok(/paneShell !== false && \(chatFirst\(\)/.test(sc),
+    "㉝-b ★ pane 에서 셸이 아닌 것이 돌고 있으면 안내줄을 띄우지 않는다(거부권)");
+  ok(/m\.paneShell === true \|\| m\.paneShell === false/.test(sc),
+    "㉝-c 프레임이 보낸 판정만 받는다 — «모름»(null·없음)으로 덮지 않는다");
+  const term = read("web/standalone/terminal.ts");
+  ok(/paneShell: lastPaneCmd \? isShellCmd\(lastPaneCmd\) : null/.test(term),
+    "㉝-d 판정은 프레임이 한다 — 목록 두 벌을 만들지 않는다");
+  ok(/postPaneCmd\(String\(st\.cmd \|\| ''\)\)/.test(term),
+    "㉝-e pane 상태가 올 때마다 알린다(재접속·앱 교체에도 따라간다)");
+  ok(/onclick: \(\) => void handoffToTerminal\(\)/.test(sc), "㉝ 안내줄의 단추가 넘기기에 배선돼 있다(죽은 단추 금지)");
+  ok(/async function handoffToTerminal/.test(sc) && /codex-chat\/release/.test(sc),
+    "㉞ 넘기기는 release 통로를 부른다");
+  ok(/setMode\('term'\);[\s\S]{0,120}toast\(r\.launched/.test(sc),
+    "㉟ ★ 넘긴 뒤 **그 화면으로 데려간다** — 넘겨 놓고 대화창에 남기면 사람이 갈 곳을 모른다");
+  ok(/String\(r\.command \|\| ''\)/.test(sc),
+    "㊱ ★ 명령을 못 쳤을 땐 **칠 수 있는 한 줄**을 보여 준다 — 종전엔 앞 8자로 잘린 id 라 칠 수가 없었다");
+  const css = read("public/styles/36-chat.css");
+  ok(/\.sc-shellbar \{/.test(css) && /\.sc-term \{ flex-direction: column/.test(css),
+    "㊲ 안내줄이 액자 위에 서도록 터미널 칸이 세로로 쌓인다");
 }
 
 console.log(`\n${pass}건 통과`);

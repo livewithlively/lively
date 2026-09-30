@@ -24,7 +24,7 @@
 //
 //  ⚠ 실패를 만들지 않는다 — ①은 사용자 턴 **안에서** 불리는 이름짓기의 뒤편이다. 여기서 던지면 모델이 다시 부르느라
 //   턴만 길어진다(#1979 의 전제). 소속 없음·DB 오류는 전부 null 로 돌려주고 로그만 남긴다.
-import { itemsPool, one, q } from "../db/client.js";
+import { itemsPool, one, q, withTx } from "../db/client.js";
 import { onNode } from "../exec-topology.js";
 import { createTask, updateTask, deleteTaskNode, getProjectRow, rootProjectIdOfTaskNode } from "./project-store.js";
 import { ensureAgentsMd } from "./agents-md.js";
@@ -214,6 +214,8 @@ export async function ensureSessionTask(args: {
  */
 export async function bindSessionTask(args: {
   sessionId: string; owner: string; taskId: number;
+  /** 순서 목록을 건드리지 않는다 — 목록 규칙이 이미 이 태스크를 골랐다(setSessionTaskOrder · 다음 것으로 넘기기). */
+  keepOrder?: boolean;
 }): Promise<SessionTask | null> {
   if (onNode() || !args.sessionId || !args.owner || !(args.taskId > 0)) return null;
   const row = await one(itemsPool,
@@ -227,6 +229,14 @@ export async function bindSessionTask(args: {
     `UPDATE execution_session SET task_id=$3, updated_at=now() WHERE id=$1 AND owner=$2 RETURNING id`,
     [args.sessionId, args.owner, task.id]);
   if (!(r.rowCount ?? 0)) return null;
+  // 순서 목록(#4135)이 있는 세션이면 이 태스크를 **맨 앞**으로 — «지금 하는 것 = 목록 맨 앞의 안 끝난 것» 이 어긋나지 않게.
+  //  목록이 없는 세션(행 0)은 건드리지 않는다 — task_id 하나가 곧 목록이다.
+  if (!args.keepOrder) await withTx(async (db) => {
+    const lo = await one(db, `SELECT MIN(pos) AS p, COUNT(*)::int AS n FROM execution_session_task WHERE session_id=$1`, [args.sessionId]);
+    if (!(Number(lo?.n) > 0)) return;
+    await db.query(`DELETE FROM execution_session_task WHERE session_id=$1 AND task_id=$2`, [args.sessionId, task.id]);
+    await db.query(`INSERT INTO execution_session_task(session_id, task_id, pos) VALUES($1,$2,$3)`, [args.sessionId, task.id, Number(lo.p) - 1]);
+  });
   const next = statusOnBind(row.status);
   const patch: { status?: string; status_raw?: null; assignee?: string } = {};
   if (next) { patch.status = next; if (row.status_raw != null) patch.status_raw = null; }
@@ -244,45 +254,150 @@ export function sessionCloseReason(reason: string | null | undefined, sessionId:
   return (reason ?? "").trim() || `AI 세션(${sessionId})이 맡은 작업을 끝냈다고 보고했습니다`;
 }
 
-/** 세션이 자기 태스크의 상태를 바꾼다(`session_task {status}`). 맡은 태스크가 없으면 null. */
+/** 세션이 자기 태스크의 상태를 바꾼다(`session_task {status}`). 맡은 태스크가 없으면 null.
+ *  끝냈고(done) 이 세션의 순서 목록에 **아직 안 끝난 다음 태스크**가 있으면 그리로 넘어간다(#4135) — `next` 로 돌려준다. */
 export async function setSessionTaskStatus(args: {
   sessionId: string; owner: string; status: SessionTaskStatus; reason?: string | null;
-}): Promise<SessionTask | null> {
+}): Promise<(SessionTask & { next?: SessionTask | null }) | null> {
   const task = await sessionTaskOf(args.sessionId, args.owner);
   if (!task) return null;
-  if (task.status === args.status) return task;
-  const raw = await one(itemsPool, `SELECT status_raw FROM project WHERE id=$1`, [task.id]);
-  await writeStatus(task.id, args.status, args.owner, raw?.status_raw != null, task.project_id, sessionCloseReason(args.reason, args.sessionId));
-  return { ...task, status: args.status };
+  if (task.status !== args.status) {
+    const raw = await one(itemsPool, `SELECT status_raw FROM project WHERE id=$1`, [task.id]);
+    await writeStatus(task.id, args.status, args.owner, raw?.status_raw != null, task.project_id, sessionCloseReason(args.reason, args.sessionId));
+  }
+  if (args.status !== "done") return { ...task, status: args.status };
+  const list = await sessionTaskList(args.sessionId, args.owner);
+  const nextId = nextTaskInOrder(list.map((t) => ({ id: t.id, done: t.id === task.id || t.status === "done" })));
+  if (!nextId) return { ...task, status: args.status, next: null };
+  const next = await bindSessionTask({ sessionId: args.sessionId, owner: args.owner, taskId: nextId, keepOrder: true });
+  return { ...task, status: args.status, next };
 }
 
-/** 태스크들에 붙은 세션(화면의 태스크 줄 → 세션 칩). 세션 이름은 세션 미러(org_session_state)에서. */
-export async function sessionsOfTasks(taskIds: number[]): Promise<Map<number, Array<{ id: string; label: string | null; owner: string }>>> {
-  const out = new Map<number, Array<{ id: string; label: string | null; owner: string }>>();
+// ── 한 세션 · 여러 태스크(#4135) ─────────────────────────────────────────────────
+//  곁칸 «프로젝트» 앱의 «이 세션의 태스크» 1. 2. 3. 이다. 정본은 execution_session_task(세션의 순서 목록)이고, task_id 는
+//   그 목록에서 **지금 하는 것** 한 칸이다. 규칙은 하나 — **지금 하는 것 = 목록 맨 앞의 안 끝난 것.** 사람이 순서를 바꾸면
+//   그 규칙대로 task_id 가 따라가고, 세션이 하나를 끝내면(session_task done) 다음 것으로 넘어간다.
+//  행이 없는 세션은 task_id 하나가 곧 목록이다 — 이 기능 전의 세션은 이관 없이 같은 뜻으로 읽힌다.
+
+const ORDER_MAX = 30;   // 한 세션이 줄 세울 태스크 상한 — 곁칸 목록이 읽히는 길이
+
+/** 순수 — 표의 순서 목록과 task_id 를 합친다. task_id 가 목록에 없으면(다른 길로 이어졌다) 맨 앞에 둔다. */
+export function mergeTaskOrder(current: number | null | undefined, ids: Array<number | null | undefined>): number[] {
+  const out: number[] = [];
+  for (const x of ids || []) { const n = Number(x); if (n > 0 && !out.includes(n)) out.push(n); }
+  const c = Number(current ?? 0);
+  if (c > 0 && !out.includes(c)) out.unshift(c);
+  return out;
+}
+
+/** 순수 — 순서 목록에서 지금 할 것(맨 앞의 안 끝난 것). 다 끝났으면 null. */
+export function nextTaskInOrder(list: Array<{ id: number; done: boolean }>): number | null {
+  const hit = (list || []).find((t) => !t.done);
+  return hit ? hit.id : null;
+}
+
+/** 이 세션의 태스크 **순서 목록**(주인만 · 휴지통 태스크 제외). 세션이 없거나 남의 것이면 빈 배열. */
+export async function sessionTaskList(sessionId: string, owner: string): Promise<Array<{ id: number; name: string; status: string; current: boolean }>> {
+  if (onNode() || !sessionId || !owner) return [];
+  const es = await one(itemsPool,
+    `SELECT es.task_id,
+            COALESCE((SELECT array_agg(x.task_id ORDER BY x.pos) FROM execution_session_task x WHERE x.session_id = es.id), '{}') AS ids
+       FROM execution_session es WHERE es.id=$1 AND es.owner=$2`, [sessionId, owner]);
+  if (!es) return [];
+  const order = mergeTaskOrder(es.task_id, es.ids || []);
+  if (!order.length) return [];
+  const rows = await q(itemsPool,
+    `SELECT id, name, status FROM project WHERE id = ANY($1::int[]) AND level IN ('task','subtask') AND trashed_at IS NULL`, [order]);
+  const by = new Map(rows.map((r: any) => [Number(r.id), r]));
+  return order.filter((id) => by.has(id)).map((id) => {
+    const r: any = by.get(id);
+    return { id, name: String(r.name), status: String(r.status), current: id === Number(es.task_id) };
+  });
+}
+
+/**
+ * 사람이 이 세션의 태스크 순서를 정한다(곁칸의 담기·끌기·빼기가 모두 이 한 길 — 목록을 통째로 보낸다).
+ *  태스크는 **이 세션의 프로젝트** 안의 것만 받는다(다른 것이 섞이면 아무것도 안 쓰고 null). 빈 목록 = 이 세션에서 다 뺀다.
+ *  쓰고 나서 «지금 하는 것»을 규칙대로 다시 세운다 — 바뀌었으면 새로 맡은 태스크는 bindSessionTask 와 같이 «진행 중»이 된다.
+ */
+export async function setSessionTaskOrder(args: {
+  sessionId: string; owner: string; taskIds: number[];
+}): Promise<Array<{ id: number; name: string; status: string; current: boolean }> | null> {
+  if (onNode() || !args.sessionId || !args.owner) return null;
+  const ids = mergeTaskOrder(null, (args.taskIds || []).map(Number).filter((n) => Number.isInteger(n))).slice(0, ORDER_MAX);
+  const cur = await executionSessionProject(args.sessionId, args.owner);
+  const pid = Number(cur?.project_id ?? 0);
+  if (!(pid > 0)) return null;
+  const rows = ids.length ? await q(itemsPool,
+    `SELECT id, name, status, level, parent_id FROM project WHERE id = ANY($1::int[]) AND level IN ('task','subtask') AND trashed_at IS NULL`, [ids]) : [];
+  if (rows.length !== ids.length) return null;
+  for (const r of rows) if ((await rootProjectIdOfTaskNode(r)) !== pid) return null;
+  const doneOf = new Map(rows.map((r: any) => [Number(r.id), String(r.status) === "done"]));
+  const prev = await one(itemsPool, `SELECT task_id FROM execution_session WHERE id=$1 AND owner=$2`, [args.sessionId, args.owner]);
+  const prevId = Number(prev?.task_id ?? 0);
+  // 지금 하는 것 — 맨 앞의 안 끝난 것. 다 끝났으면 하던 것을 그대로(목록에 있으면), 아니면 맨 앞.
+  const want = nextTaskInOrder(ids.map((id) => ({ id, done: !!doneOf.get(id) })))
+    ?? (ids.includes(prevId) ? prevId : (ids[0] ?? null));
+  await withTx(async (db) => {
+    await db.query(`DELETE FROM execution_session_task WHERE session_id=$1`, [args.sessionId]);
+    for (let i = 0; i < ids.length; i++) {
+      await db.query(`INSERT INTO execution_session_task(session_id, task_id, pos) VALUES($1,$2,$3)`, [args.sessionId, ids[i], i + 1]);
+    }
+    if (want !== prevId) {
+      await db.query(`UPDATE execution_session SET task_id=$3, updated_at=now() WHERE id=$1 AND owner=$2`, [args.sessionId, args.owner, want]);
+    }
+  });
+  if (want && want !== prevId) await bindSessionTask({ sessionId: args.sessionId, owner: args.owner, taskId: want, keepOrder: true });
+  return sessionTaskList(args.sessionId, args.owner);
+}
+
+/** 태스크 줄의 세션 한 장 — 그 세션의 목록에서 몇 번째인가(order/count)와 지금 하는 것인가(current)까지. */
+export interface TaskSessionRef { id: string; label: string | null; owner: string; order: number; count: number; current: boolean }
+
+/** 태스크들에 붙은 세션(화면의 태스크 줄 → 세션 칩). 세션 이름은 세션 미러(org_session_state)에서.
+ *  #4135 — 지금 하는 것(task_id)만이 아니라 **순서 목록에 올라 있는 것**도 그 세션의 태스크다(곁칸의 «세션 2 · 2번째»). */
+export async function sessionsOfTasks(taskIds: number[]): Promise<Map<number, TaskSessionRef[]>> {
+  const out = new Map<number, TaskSessionRef[]>();
   const ids = [...new Set((taskIds || []).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
   if (onNode() || !ids.length) return out;
   const rows = await q(itemsPool,
-    `SELECT es.task_id, es.id, es.owner, s.label
-       FROM execution_session es LEFT JOIN org_session_state s ON s.id = es.id
-      WHERE es.task_id = ANY($1::int[])
-        AND NOT EXISTS (SELECT 1 FROM org_session_trash tr WHERE tr.session_id = es.id)
+    `WITH hit AS (
+       SELECT id AS sid FROM execution_session WHERE task_id = ANY($1::int[])
+       UNION SELECT session_id FROM execution_session_task WHERE task_id = ANY($1::int[]))
+     SELECT es.task_id, es.id, es.owner, s.label,
+            COALESCE((SELECT array_agg(x.task_id ORDER BY x.pos) FROM execution_session_task x
+                        JOIN project t ON t.id = x.task_id AND t.trashed_at IS NULL
+                       WHERE x.session_id = es.id), '{}') AS ids
+       FROM execution_session es JOIN hit ON hit.sid = es.id
+       LEFT JOIN org_session_state s ON s.id = es.id
+      WHERE NOT EXISTS (SELECT 1 FROM org_session_trash tr WHERE tr.session_id = es.id)
       ORDER BY es.created_at DESC`, [ids]);
-  for (const r of rows as Array<{ task_id: number; id: string; owner: string; label: string | null }>) {
-    let a = out.get(Number(r.task_id));
-    if (!a) { a = []; out.set(Number(r.task_id), a); }
-    a.push({ id: String(r.id), label: r.label ?? null, owner: String(r.owner) });
+  const want = new Set(ids);
+  for (const r of rows as Array<{ task_id: number | null; id: string; owner: string; label: string | null; ids: number[] }>) {
+    const order = mergeTaskOrder(r.task_id, r.ids || []);
+    order.forEach((tid, i) => {
+      if (!want.has(tid)) return;
+      let a = out.get(tid);
+      if (!a) { a = []; out.set(tid, a); }
+      a.push({ id: String(r.id), label: r.label ?? null, owner: String(r.owner), order: i + 1, count: order.length, current: tid === Number(r.task_id) });
+    });
   }
   return out;
 }
 
-/** 프로젝트 문맥(AGENTS.md 주입)에 덧붙이는 «이 세션의 태스크» 절. 태스크가 없으면 빈 문자열. */
-export function sessionTaskSection(task: SessionTask | null): string {
+/** 프로젝트 문맥(AGENTS.md 주입)에 덧붙이는 «이 세션의 태스크» 절. 태스크가 없으면 빈 문자열.
+ *  순서 목록(#4135)이 둘 이상이면 차례를 적는다 — 하나를 끝내면 `session_task done` 이 다음 것으로 넘긴다. */
+export function sessionTaskSection(task: SessionTask | null, list?: Array<{ id: number; name: string; status: string; current?: boolean }>): string {
   if (!task) return "";
+  const many = Array.isArray(list) && list.length > 1;
   return [
     "## 이 세션의 태스크",
-    `- [#${task.id}] ${task.name} (${task.status})`,
+    ...(many
+      ? list!.map((t, i) => `${i + 1}. [#${t.id}] ${t.name} (${t.status})${t.id === task.id ? " ← 지금 하는 것" : ""}`)
+      : [`- [#${task.id}] ${task.name} (${task.status})`]),
     "- 요청받은 일을 끝내면(검증까지 마치고) `session_task {status:\"done\"}` 로 완료 처리하세요 — `reason` 에 무엇을 끝냈는지 한 줄 적으면 ClickUp 미러 태스크에 코멘트로 남습니다. " +
       "같은 세션에서 후속 작업을 시작하면 `session_task {status:\"in_progress\"}` 로 되돌립니다.",
+    ...(many ? ["- 이 세션은 위 태스크들을 **순서대로** 맡습니다. 하나를 완료 처리하면 다음 태스크가 «지금 하는 것»이 됩니다 — 그 본문은 `task_detail_v6` 로 읽고 이어서 진행하세요."] : []),
   ].join("\n");
 }
 
@@ -309,4 +424,24 @@ export function taskKickoffPrompt(task: { id: number; name: string; description?
     `태스크 #${task.id} «${task.name}» 을(를) 진행해 주세요.`,
     ...(body ? ["", "## 태스크 본문", "", body.length > KICKOFF_BODY_MAX ? body.slice(0, KICKOFF_BODY_MAX) + "\n\n…(이하 생략 — task_detail_v6 로 전문 조회)" : body] : []),
   ].join("\n");
+}
+
+/**
+ * 순수 — 태스크 **여러 개**를 순서대로 맡겨 연 세션의 첫 지시(#4135 새 세션 자리의 [담기]). 한 개면 taskKickoffPrompt 와 같다.
+ *  1번 본문만 싣는다 — 나머지는 차례가 오면 session_task done 이 넘겨 주고 세션이 task_detail_v6 로 읽는다(첫 지시가 태스크
+ *  수만큼 길어지지 않게). 사람이 덧붙인 말(extra)은 맨 뒤에 그대로.
+ */
+export function tasksKickoffPrompt(tasks: Array<{ id: number; name: string; description?: string | null }>, extra?: string | null): string {
+  const add = String(extra ?? "").trim();
+  const list = (tasks || []).filter((t) => t && t.id > 0);
+  if (!list.length) return add;
+  const head = list.length === 1 ? taskKickoffPrompt(list[0]) : [
+    `이 세션은 태스크 ${list.length}개를 **순서대로** 맡습니다.`,
+    ...list.map((t, i) => `${i + 1}. #${t.id} «${t.name}»`),
+    "",
+    `1번(#${list[0].id})부터 진행하고, 끝내면(검증까지) \`session_task {status:"done"}\` 로 완료 처리하세요 — 다음 태스크가 이어집니다(본문은 task_detail_v6).`,
+    ...(String(list[0].description ?? "").trim() ? ["", `## 1번 태스크 본문 (#${list[0].id})`, "",
+      (() => { const b = String(list[0].description).trim(); return b.length > KICKOFF_BODY_MAX ? b.slice(0, KICKOFF_BODY_MAX) + "\n\n…(이하 생략 — task_detail_v6 로 전문 조회)" : b; })()] : []),
+  ].join("\n");
+  return add ? `${head}\n\n## 덧붙인 말\n\n${add}` : head;
 }

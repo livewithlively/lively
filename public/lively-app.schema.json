@@ -107,6 +107,10 @@
                 "maxLength": 128
               },
               "default": []
+            },
+            "notifications": {
+              "type": "boolean",
+              "default": false
             }
           },
           "additionalProperties": false,
@@ -260,7 +264,11 @@
               "enum": [
                 "session",
                 "browser",
-                "classic"
+                "classic",
+                "inbox",
+                "sources",
+                "taxonomy",
+                "learn"
               ]
             },
             "route": {
@@ -439,6 +447,33 @@
                       "additionalProperties": false
                     },
                     "minItems": 1
+                  },
+                  "indexes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "columns": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^[a-z_][a-z0-9_]{0,62}$"
+                          },
+                          "minItems": 1,
+                          "maxItems": 8
+                        },
+                        "unique": {
+                          "type": "boolean",
+                          "default": false
+                        }
+                      },
+                      "required": [
+                        "columns"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "maxItems": 20,
+                    "default": []
                   }
                 },
                 "required": [

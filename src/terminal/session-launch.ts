@@ -23,6 +23,7 @@ import { logger } from "../log.js";
 import { isWorkSession, sessionKindFromRequest } from "../sessions/session-kind.js";
 import { createSession, killSession, normalizeCap, type CreateInput, type SessionInfo } from "./terminal-sessions.js";
 import { normalizeTheme } from "./catalog.js";
+import { withPreissuedIdentity } from "./node-session-preissue.js";   // #4135 — 노드 세션의 id·훅·MCP 토큰은 relay 전에 게이트웨이가 굽는다
 import { autoTrustWorkspace } from "./session-create-guards.js";
 import { mirrorNodeSession } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
 import { chatIoCaps } from "./harness-io/adapter.js";           // #1746 — 하네스별 대화창 능력(읽기·승인)
@@ -37,7 +38,7 @@ import { nodeOfflineNote } from "../node/offline-note.js";      // #1849 — 오
 import { translateNodeRpcError } from "../node/rpc-error.js";
 import { bindNodeSessionProjectOrKill, nodeProjectCreatePlan } from "../node/provision-remote.js";
 import { createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
-import { bindSessionTask, ensureSessionTask } from "../v6/session-task.js";   // #4084 세션 = 태스크
+import { bindSessionTask, ensureSessionTask, setSessionTaskOrder } from "../v6/session-task.js";   // #4084 세션 = 태스크
 import { currentTenant } from "../org/tenant-context.js";
 import { PRIMARY_TENANT_ID, setSessionWorkspace } from "../org/tenancy/registry.js";   // #1750 후속 — 세션→워크스페이스 정본
 import { mintAppToken } from "../apps/principal.js";
@@ -186,21 +187,24 @@ export async function prepareRemoteAppSession(input: CreateInput, memberId: stri
 // #2055 — 세션 행의 «대화» 두 값을 **한 곳에서** 만든다. 목록과 생성 응답이 갈리면 방금 만든 세션만
 //  화면이 잘못 열린다(실측 2026-08-28 신고: codex 를 열면 터미널이 먼저 뜨고 몇 초 뒤 대화창으로 넘어갔다 —
 //  생성 응답에 chatMode 가 없어 화면이 «모르면 터미널» 로 추정했다가, 목록 갱신이 오면 되돌린 것이다).
-//  ⚠ 세션 단위 모드(@box_runtime)는 **행을 만들 때 이미 읽혀** 있어야 한다 — 여기서 tmux 를
-//   다시 물으면 목록 한 번에 세션 수만큼 왕복한다. 지금은 배포 기본 + 하네스·자리로만 판정하고,
-//   세션 단위 값은 배달(deliver-prompt)이 본다. 둘이 갈리면 화면이 «대화창» 이라 하고 배달은
-//   터미널로 가므로, 그 갈림이 없도록 기본이 chat 일 때만 세션 단위로 끌 수 있게 뒀다.
-export const chatFieldsOf = (harness: string, onNode = false, choice?: "chat" | "terminal"): {
+//  ⚠ 세션 단위 표식(@box_runtime)은 **행을 만들 때 이미 읽혀** 있어야 한다 — 여기서 tmux 를 다시 물으면
+//   목록 한 번에 세션 수만큼 왕복한다. 목록 파서가 그 원시값을 행에 올리므로(sessions.ts runtimeRaw) 여기선 그걸 받는다.
+//   #4135 이후 codex 모드도 이 표식에서 읽는다 — 화면과 배달(deliver-prompt)이 **같은 값**을 보게 하려는 것이고,
+//   갈리면 화면은 «대화창» 이라 하는데 배달은 터미널로 가는(또는 그 반대) 사고가 난다.
+//  ⚠ #4135 — `stamp` 는 그 세션의 **원시 표식**(@box_runtime: "chat"|"terminal"|"app-server")이다. 두 축이 같은 표식을
+//   나눠 쓴다: 하네스 무관 런타임(#2439)은 "chat" 만 보고, codex 축은 "app-server"|"terminal" 을 본다.
+//   표식을 안 넘기면 codex 모드가 **배포 기본으로 다시 추측**되어, 이미 떠 있는 세션의 판정이 배포 때마다 뒤집힌다.
+export const chatFieldsOf = (harness: string, onNode = false, stamp?: string | null): {
   chat: ReturnType<typeof chatIoCaps>;
   chatMode: ReturnType<typeof codexChatMode>;
   runtimeMode: ReturnType<typeof sessionRuntimeMode>;
   terminalOnly: string[];
 } => ({
   chat: chatIoCaps(harness),                       // #1746 하네스별 대화창 능력(읽기·승인)
-  chatMode: codexChatMode({ harness }),            // 이 세션의 대화가 어디서 도나 — app-server 면 pane 이 셸이다
+  chatMode: codexChatMode({ harness, stamp }),     // 이 세션의 대화가 어디서 도나 — app-server 면 pane 이 셸이다(표식이 정본)
   //  #2439 — 하네스 **무관**한 런타임 모드. chat 이면 작업·승인·슬래시가 이벤트로 오므로 화면이
   //   상태 통로(SSE)를 연다. terminal 이면 열지 않는다 — 올 것이 없는 연결을 세션마다 만들지 않는다.
-  runtimeMode: sessionRuntimeMode({ harness, onNode, choice }),
+  runtimeMode: sessionRuntimeMode({ harness, onNode, choice: stamp === "chat" ? "chat" : stamp === "terminal" ? "terminal" : undefined }),
   //  ★ #2439 — **이 하네스가 웹에서 못 하는 것들.** 화면이 그 자리에서 «터미널에서 하세요» 를
   //   정확히 말하기 위한 재료다. 이걸 안 주면 사람은 없는 기능을 찾아 헤매다 포기한다(막다른 길).
   //   빈 배열 = 이 하네스는 웹만으로 전부 된다.
@@ -211,9 +215,11 @@ export const chatFieldsOf = (harness: string, onNode = false, choice?: "chat" | 
 //  ⚠ 단건 경로(생성·조회)는 **이 박스에서 만든 세션**이다 — 노드 세션은 릴레이가 따로 답한다.
 //   그래서 onNode=false 다. «node 필드가 있으면 노드» 로 읽으면 게이트웨이 박스가 노드로도
 //   등록된 배포에서 여기서 잘 도는 세션이 화면에서 terminal 로 보인다(routes.ts tagChat 주석).
-export const withChatFields = <T extends { harness?: string; runtimeChoice?: unknown }>(s: T, onNode = false): T =>
+export const withChatFields = <T extends { harness?: string; runtimeChoice?: unknown; runtimeRaw?: unknown }>(s: T, onNode = false): T =>
+  //  표식은 원시값이 정본이다(runtimeRaw). 옛 행(그 필드가 없는 스냅샷)은 runtimeChoice 로 떨어진다 — 무회귀.
   Object.assign(s, chatFieldsOf(String(s.harness || ""), onNode,
-    s.runtimeChoice === "chat" ? "chat" : s.runtimeChoice === "terminal" ? "terminal" : undefined));
+    typeof s.runtimeRaw === "string" && s.runtimeRaw ? s.runtimeRaw
+      : s.runtimeChoice === "chat" ? "chat" : s.runtimeChoice === "terminal" ? "terminal" : undefined));
 
 /**
  * #4084 세션 = 태스크 — 프로젝트에 붙은 세션에 **태스크를 붙인다**. 두 갈래뿐이다:
@@ -233,7 +239,14 @@ async function attachLaunchTask(session: { id: string; label?: string | null }, 
   if (taskId > 0) {
     const bound = await bindSessionTask({ sessionId: session.id, owner, taskId })
       .catch((e) => { logger.warn({ sessionId: session.id, taskId, err: (e as Error)?.message }, "세션 태스크 잇기 실패(비치명)"); return null; });
-    if (!bound) logger.warn({ sessionId: session.id, taskId }, "세션 태스크를 잇지 못했다 — 이름을 지을 때 새 태스크가 생긴다");
+    if (!bound) { logger.warn({ sessionId: session.id, taskId }, "세션 태스크를 잇지 못했다 — 이름을 지을 때 새 태스크가 생긴다"); return; }
+    // #4135 — 여러 개를 순서대로 맡겼다. 1번은 방금 이었다(지금 하는 것) — 나머지는 순서 목록으로.
+    const ids = Array.isArray(input.taskIds) ? input.taskIds.map(Number).filter((n) => n > 0) : [];
+    if (ids.length > 1) {
+      const set = await setSessionTaskOrder({ sessionId: session.id, owner, taskIds: ids })
+        .catch((e) => { logger.warn({ sessionId: session.id, err: (e as Error)?.message }, "세션 태스크 순서 싣기 실패(비치명)"); return null; });
+      if (!set) logger.warn({ sessionId: session.id, ids }, "세션 태스크 순서를 싣지 못했다 — 1번만 이어졌다");
+    }
     return;
   }
   // 사람의 작업 세션만(#2162) · 조직에 아무것도 안 남기는 세션은 제외(읽기전용·인코그니토 — 훅도 안 도는 자리다).
@@ -255,6 +268,11 @@ export interface LaunchOpts {
    *  중앙 세션은 쓰지 않는다 — createSession 이 input.invites 를 스스로 검증한다.
    */
   invites: string[];
+  /**
+   * 노드 갈래에서 create 대신 보낼 op(#4135 세션 복제 = "forkSession"). 없으면 종전대로 create / createAppSession.
+   *  ⚠ 호출자가 **그 노드가 이 op 를 선언했는지 먼저 확인**한다(session-fork.forkRefusal) — 여기는 보내기만 한다.
+   */
+  nodeOp?: NodeOp;
 }
 
 /** 생성 응답의 세션 한 장 — 노드 세션이면 그 좌표(node)가 붙는다. */
@@ -282,9 +300,12 @@ export async function launchSession(user: LivelyUser, input: CreateInput, opts: 
     await requireCreatableNode(me, nodeId);
     const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);
     const remoteInput = await prepareRemoteAppSession(input, me);
-    const op: NodeOp = input.appId ? "createAppSession" : "create";
+    const op: NodeOp = opts.nodeOp ?? (input.appId ? "createAppSession" : "create");
     const plan = nodeProjectCreatePlan(remoteInput, !!input.projectId && nodeSupports(nodeId, "injectFirstPrompt"));
-    const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: me }, input: { ...plan.createInput, invites: [], hostProfile }, invites: opts.invites });
+    //  #4135 — 세션 id·훅·MCP 토큰은 게이트웨이가 여기서 굽는다(노드는 DB 가 없다). user 객체는 relay 에 싣는 것과 같아야 한다(접두어).
+    const relayUser = { userId: me } as LivelyUser;
+    const session = await withPreissuedIdentity(relayUser, plan.createInput, (created) =>
+      relayNodeOp<SessionInfo>(nodeId, op, { user: relayUser, input: { ...created, invites: [], hostProfile }, invites: opts.invites }));
     await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
     await registerSessionInstance(session.id, me, { appId: input.appId, projectId: input.projectId, title: session.label });
     if (input.projectId && input.projectSrc !== "org") {

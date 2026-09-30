@@ -22,10 +22,15 @@ import { confirmDialog } from './admin.js';
 import { overlay } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
 import { presetSvcKey, svcTile } from './svc-icons.js';
+import { CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
+import { LIV_ROW, livIcon, livMark, livSum, madeBy } from './liv-mark.js';   // #4135 «리브가 세팅한 것» 공통 표시
+import { countLiv } from './lib/liv-mark.js';
+import { type RunsByMachine, collectorLast, fetchRecentRuns, historyBox, issueInline, machineRuns } from './context-machine-runs.js';   // #4135 행 안의 최근 실행
 
 let editingId: number | null = null;
 let creatingPreset: string | null = null;   // 프리셋을 고른 뒤 생성 폼
 let choosingPreset = false;
+let historyId: number | null = null;        // [기록]으로 펼친 수집기(#4135)
 
 /** 리브(외부 앱 연결)가 만든 수집기인가 — 토큰을 금고에서 가져오도록 배선된 흔적이 곧 판정이다. */
 function isLivMade(c: any): boolean {
@@ -49,6 +54,8 @@ function intervalLabel(sec: number): string {
 export async function renderCollectors(host: HTMLElement): Promise<void> {
   busy(host, el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '수집기를 불러오는 중…' })));
   let d: any;
+  //  최근 실행(어제 0시 ~ 지금)을 같이 받는다 — 행의 「마지막 15:30 · 새 자료 3 · 바뀐 자료 1」과 [기록] 펼침이 쓴다(#4135).
+  const runsP = fetchRecentRuns();
   try { d = await api('/api/ui/org/collectors'); }
   catch (e) {
     host.replaceChildren(el('div', { class: 'card' },
@@ -60,6 +67,7 @@ export async function renderCollectors(host: HTMLElement): Promise<void> {
   // 편집 가능 여부는 **서버 판정을 그대로 받는다**(scope 를 프론트가 재해석하지 않는다) — 어긋나면
   //  버튼은 있는데 눌러야 403 이 나고, 사용자는 '고장'으로 읽는다.
   const canEdit = !!d.canEdit;
+  const runs = await runsP;
   const reload = () => { void renderCollectors(host); };
 
   const body = el('div', { class: 'cxc' });
@@ -67,10 +75,13 @@ export async function renderCollectors(host: HTMLElement): Promise<void> {
   // ── 머리 — 「수집기 n개」 + 만들기. 설명은 한 줄: 대부분은 리브가 만들어 두고, 직접 만드는 건 토큰을 손으로 넣을 때다. ──
   const head = el('div', { class: 'cxc-head' },
     el('div', { class: 'cxc-head-main' },
-      el('h3', { class: 'cxc-title' }, el('span', { text: '수집기' }), el('span', { class: 'cxc-title-n num', text: String(collectors.length) })),
+      //  #4233. 제목은 탭 이름과 같다(탭 「수집기 설정」). 제목이 «… 설정» 이라 옆의 수는 무엇을 센 것인지 적는다.
+      //  그 옆의 요약 — 이 가운데 몇 개를 리브가 세팅했나(리브 표시 1안).
+      el('h3', { class: 'cxc-title' }, el('span', { text: CTX_TAB.sources }), el('span', { class: 'cxc-title-n num', text: '수집기 ' + collectors.length + '개' }),
+        livSum(collectors.length, countLiv(collectors, isLivMade))),
       el('p', { class: 'cxc-lead' }, ...uiText(canEdit
         ? '외부 앱을 연결하면 리브가 수집기를 자동으로 만들어 둡니다. 직접 만드는 것은 토큰을 손으로 넣어 붙일 때뿐입니다.'
-        : '외부 앱을 연결하면 리브가 수집기를 자동으로 만들어 둡니다. 만들고 고치는 것은 관리자가 합니다 — 무엇이 언제 모이는지는 여기서 그대로 보입니다.'))));
+        : '외부 앱을 연결하면 리브가 수집기를 자동으로 만들어 둡니다. 무엇이 언제 모이는지 여기서 봅니다.'))));
   if (canEdit) {
     const add = el('button', { class: 'btn btn-primary', type: 'button', text: '+ 수집기 만들기' });
     add.addEventListener('click', () => { choosingPreset = true; creatingPreset = null; editingId = null; reload(); });
@@ -96,11 +107,11 @@ export async function renderCollectors(host: HTMLElement): Promise<void> {
       el('p', { class: 'cxc-empty-t', text: '아직 수집기가 없습니다' }),
       el('p', { class: 'cxc-empty-d', text: canEdit
         ? '[외부 앱 연결]에서 슬랙·노션 같은 앱을 연결하면 리브가 첫 수집기를 만들어 둡니다.'
-        : '외부 앱이 아직 연결되지 않았습니다. 연결은 관리자가 합니다 — 필요한 앱이 있으면 관리자에게 요청하세요.' }),
+        : '외부 앱이 아직 연결되지 않았습니다 — 외부 앱 연결에서 연결하면 수집기가 자동으로 생깁니다.' }),
       canEdit ? el('a', { class: 'btn btn-ghost btn-sm', href: '#/connect', text: '외부 앱 연결 열기 →' }) : null));
   }
   for (const c of collectors) {
-    list.append(collectorRow(c, presets, reload, canEdit));
+    list.append(collectorRow(c, presets, reload, canEdit, runs));
   }
   body.append(list);
 
@@ -152,10 +163,11 @@ async function localRow() {
       folders ? el('div', { class: 'cxc-m', text: folders }) : null));
 }
 
-// ── 수집기 행 — 이름·상태 한 줄 + 「Notion 수집기 · 리브가 만듦 · 10분마다 · 마지막 수집」 한 줄. 편집 중이면 아래로 펼쳐진다. ──
-function collectorRow(c: any, presets: any[], reload: () => void, canEdit: boolean) {
-  const row = el('div', { class: 'cxc-row' + (c.enabled ? '' : ' is-off') + (editingId === c.id ? ' is-editing' : '') });
+// ── 수집기 행 — 이름·상태 한 줄 + 「Notion 수집기 · 리브가 세팅 · 10분마다 · 마지막 수집」 한 줄. 편집 중이면 아래로 펼쳐진다. ──
+function collectorRow(c: any, presets: any[], reload: () => void, canEdit: boolean, runsBy: RunsByMachine) {
   const liv = isLivMade(c);
+  const row = el('div', { class: 'cxc-row' + (liv ? ' ' + LIV_ROW : '') + (c.enabled ? '' : ' is-off') + (editingId === c.id ? ' is-editing' : '') });
+  const runs = machineRuns(runsBy, 'c', c.id);
   const svc = presetSvcKey(c.preset_key);
   const tile = svcTile(svc, c.preset_label || c.preset_key, true);
   tile.classList.add('cxc-tile');
@@ -166,17 +178,27 @@ function collectorRow(c: any, presets: any[], reload: () => void, canEdit: boole
     el('span', { class: 'cxc-state' + (c.enabled ? ' is-on' : '') },
       el('span', { class: 'cxc-state-dot', 'aria-hidden': 'true' }), el('span', { text: c.enabled ? '켜짐' : '꺼짐' })));
 
+  // 마지막 자리 — 실패했으면 **여기에** 원인과 조치가 선다(원준 2026-09-27 «3행으로 빼지 말고 기존 2행 안에»).
+  //  실패가 아니면 마지막 실행의 결과(새 자료 · 바뀐 자료), 어제부터 돈 적이 없으면 종전 문구.
+  const failed = c.last_run && c.last_run.status !== 'ok' && c.last_run.status !== 'running' && !(runs[0] && runs[0].ok && runs[0].t > Date.parse(c.last_run.started_at));
+  let lastSlot: HTMLElement;
+  if (failed) {
+    const act = liv
+      ? el('a', { class: 'btn-text', href: connectHref(c.preset_key), text: '연결 다시 잇기 →' })
+      : el('button', { class: 'btn-text', type: 'button', text: '로그 보기' });
+    if (!liv) act.addEventListener('click', () => openRunLog(c, c.last_run.id));
+    lastSlot = issueInline(Date.parse(c.last_run.started_at) || null, c.last_run.status === 'canceled' ? '중지됨' : c.last_run.error, act);
+  } else lastSlot = collectorLast(runs) || lastRunText(c);
+
   // 정체 줄 — 이것이 무엇인지: 「Notion 수집기」 + 누가 만들었나 + 주기 + 마지막 수집.
-  const who = liv
-    ? el('span', { class: 'cxc-liv', title: '외부 앱을 연결할 때 리브가 자동으로 만들었습니다' }, livIcon(), el('span', { text: '리브가 만듦' }))
-    : el('span', { class: 'cxc-who', text: '직접 만듦' });
+  const who = madeBy(liv, '외부 앱을 연결할 때 리브가 자동으로 만들었습니다');
   const meta = el('div', { class: 'cxc-m' },
     el('span', { class: 'cxc-kind', text: `${c.preset_label || c.preset_key} 수집기` }),
     who,
     el('span', { class: 'cxc-sep', 'aria-hidden': 'true', text: '·' }),
     el('span', { text: c.enabled ? `${intervalLabel(c.sync_interval_sec)} 자동 수집` : `켜면 ${intervalLabel(c.sync_interval_sec)} 자동 수집` }),
     el('span', { class: 'cxc-sep', 'aria-hidden': 'true', text: '·' }),
-    lastRunText(c));
+    lastSlot);
 
   // 문제 줄 — **문제일 때만**. 직접 만든 수집기인데 토큰이 하나도 없으면 돌 수 없다(리브가 만든 것은 연결의 토큰을 쓰므로 해당 없음).
   const secTotal = (c.fields || []).filter((f: any) => f.secret).length;
@@ -184,10 +206,6 @@ function collectorRow(c: any, presets: any[], reload: () => void, canEdit: boole
   let issue: HTMLElement | null = null;
   if (!liv && secTotal > 0 && secSet === 0) {
     issue = el('div', { class: 'cxc-issue' }, warnIcon(), el('span', { text: '접속 토큰이 없어 수집할 수 없습니다 — [설정]에서 넣어 주세요.' }));
-  } else if (c.last_run && c.last_run.status !== 'ok' && c.last_run.status !== 'running') {
-    const link = el('button', { class: 'btn-text', type: 'button', text: '기록 보기' });
-    link.addEventListener('click', () => openRunLog(c, c.last_run.id));
-    issue = el('div', { class: 'cxc-issue' }, warnIcon(), el('span', { text: '마지막 수집이 실패했습니다.' }), link);
   }
 
   const main = el('div', { class: 'cxc-main' }, title, meta, issue);
@@ -217,9 +235,15 @@ function collectorRow(c: any, presets: any[], reload: () => void, canEdit: boole
   });
   const edit = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: editingId === c.id ? '닫기' : '설정', 'aria-expanded': String(editingId === c.id) });
   edit.addEventListener('click', () => { editingId = editingId === c.id ? null : c.id; creatingPreset = null; choosingPreset = false; reload(); });
-  acts.append(sw, sync, edit);
+  //  [기록] — 어제부터 돈 기록이 있을 때만 선다. 펼치면 행 아래에서 안쪽으로 굴러가는 목록(#4135 회의 ①).
+  const hasHist = runs.length > 0;
+  const hist = el('button', { class: 'btn btn-ghost btn-sm cxc-hist-b', type: 'button', 'aria-expanded': String(historyId === c.id) }, '기록', chevIcon(historyId === c.id));
+  hist.addEventListener('click', () => { historyId = historyId === c.id ? null : c.id; reload(); });
+  //  [지금 수집] 은 켜진 수집기에만 — 꺼진 수집기는 켜는 순간 첫 수집이 시작된다(#1631). 둘을 같이 두면 같은 일을 하는 단추가 둘이다.
+  acts.append(sw, ...(hasHist ? [hist] : []), ...(c.enabled ? [sync] : []), edit);
   row.append(acts);
 
+  if (historyId === c.id && hasHist) row.append(historyBox('c', c.id, runs));
   if (editingId === c.id) row.append(collectorEditor(c, presets, reload));
   return row;
 }
@@ -382,10 +406,11 @@ function collectorEditor(c: any | null, presets: any[], reload: () => void, newP
 
   // ── 머리 — 무엇의 설정인가 + (리브가 만든 것이면) 어디서 왔는지. ──
   box.append(el('div', { class: 'cxc-ed-head' },
-    el('b', { class: 'cxc-ed-t', text: isNew ? `새 수집기 — ${preset.label}` : '수집기 설정' })));
+    el('span', { class: 'cxc-ed-tt' }, el('b', { class: 'cxc-ed-t', text: isNew ? `새 수집기 — ${preset.label}` : '수집기 설정' }),
+      liv ? livMark('외부 앱을 연결할 때 리브가 자동으로 만들었습니다') : null)));
   if (liv) {
     box.append(el('div', { class: 'cxc-note' },
-      livIcon(),
+      livIcon('cxc-ic'),
       el('div', {},
         el('p', {}, ...uiText(`리브가 [외부 앱 연결 ▸ ${preset.label}]에서 연결할 때 자동으로 만든 수집기입니다. 계정과 토큰은 그 연결을 그대로 쓰므로 여기서 넣을 것이 없습니다.`)),
         el('a', { class: 'btn btn-ghost btn-sm', href: connectHref(c.preset_key), text: '연결 관리 →' }))));
@@ -466,9 +491,8 @@ function collectorEditor(c: any | null, presets: any[], reload: () => void, newP
   if (c) {
     const preview = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '뭐가 모이는지 미리 보기' });
     preview.addEventListener('click', () => openPreview(c));
-    const runs = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '수집 기록' });
-    runs.addEventListener('click', () => openRuns(c));
-    left.append(preview, runs);
+    //  [수집 기록] 은 없앴다(#4135) — 기록은 행의 [기록]에서 본다(설정 안에 숨기지 않는다).
+    left.append(preview);
   }
   foot.append(left);
   if (c) {
@@ -491,9 +515,9 @@ function collectorEditor(c: any | null, presets: any[], reload: () => void, newP
 }
 
 // ── 아이콘 — 선 글리프(Feather 계열, DS §6.7). ──
-function livIcon(): SVGElement {
-  const n = sv('svg', { class: 'cxc-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  n.append(sv('circle', { cx: 12, cy: 12, r: 9 }), sv('circle', { cx: 12, cy: 12, r: 2.5 }));   // 리브 앱 아이콘과 같은 형태(v2/icons liv)
+function chevIcon(up: boolean): SVGElement {
+  const n = sv('svg', { class: 'cxc-chev', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('path', { d: up ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6' }));
   return n;
 }
 function warnIcon(): SVGElement {
@@ -626,24 +650,6 @@ async function openPreview(c: any) {
     box.replaceChildren(
       el('p', { class: 'admin-hint', text: `이 설정으로 지금 이런 것들이 들어옵니다(샘플 ${sample.length}건 — 저장하지 않았습니다).` }),
       list);
-  } catch (e) { box.replaceChildren(el('p', { class: 'admin-hint', text: '실패: ' + (e as Error).message })); }
-}
-
-async function openRuns(c: any) {
-  const box = el('div', {}, el('p', { class: 'admin-hint', text: '불러오는 중…' }));
-  overlay(`수집 기록 — ${c.label || c.key}`, box);
-  try {
-    const r = await api('/api/ui/org/connector/runs?' + new URLSearchParams({ collector_id: String(c.id), limit: '20' }));
-    const runs: any[] = r.runs || [];
-    if (!runs.length) { box.replaceChildren(el('p', { class: 'admin-hint', text: '아직 수집한 기록이 없습니다.' })); return; }
-    box.replaceChildren(...runs.map((run) => {
-      const row = el('div', { class: 'ctx-run-row' },
-        el('span', { class: 'ctxp-dot ' + (run.status === 'ok' ? 'ctxp-dot-ok' : run.status === 'running' ? 'ctxp-dot-note' : 'ctxp-dot-warn'), 'aria-hidden': 'true' }),
-        el('span', { class: 'ctx-run-t', text: run.status === 'ok' ? '성공' : run.status === 'running' ? '진행 중' : run.status === 'canceled' ? '중지됨' : '실패' }),
-        el('span', { class: 'ctx-run-m', text: `${run.mode === 'full' ? '전체' : '증분'} · ${relTime(run.started_at)}` }));
-      row.addEventListener('click', () => openRunLog(c, run.id));
-      return row;
-    }));
   } catch (e) { box.replaceChildren(el('p', { class: 'admin-hint', text: '실패: ' + (e as Error).message })); }
 }
 

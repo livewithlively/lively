@@ -1,5 +1,5 @@
 // v6 스키마 조각 — category-team: 분류축과 팀. category(구 domain 일반화)·category_edge(should/is 관계)·
-//  category_repo(#1153 명시 매핑) + team·team_member·team_category(오너십 경첩 — 소유≠권한).
+//  category_repo(#1153 명시 매핑) + team·team_member. (team_category 는 #4233 에서 폐기 — 아래 2-d 가 표를 지운다.)
 // #1313 R19c: 구 단일 initV6Schema(v6/schema.ts, ~1,270줄)에서 **verbatim 이동**한 조각 — DDL·시드 SQL 무변경.
 //  실행(await) 순서는 v6/schema.ts 오케스트레이터가 소유한다(분할 전 시퀀스 그대로 — SCHEMA_SQL_LOG
 //  스냅샷 diff 0 이 계약, scripts/schema-init.itest.mjs 헤더 참조). 블록을 옮기려면 그 증명을 다시 떠라.
@@ -36,7 +36,7 @@ export async function initV6CategoryTeam(pool: Pool): Promise<void> {
   //  (space,key) 유니크였으므로 옛 DB 엔 같은 key 가 space 만 다르게 둘 이상 있을 수 있다. 그대로 컬럼만 지우면
   //  유일 인덱스가 안 걸리고(softUniqueIndex 가 보류) 두 축이 같은 이름으로 공존한다 — getCategoryByKey 가 아무거나 준다.
   //  가르는 규칙: id 가 작은 쪽이 원래 key 를 지키고 뒤엣것은 `<key>-<옛 space>`, 그마저 쓰였으면 `<key>-<id>`.
-  //  ⚠ **id 는 안 바꾼다** — knowledge_category·team_category·mapping·debt_finding 이 전부 id 로 매달려 있다(매핑 무손실).
+  //  ⚠ **id 는 안 바꾼다** — knowledge_category·mapping·debt_finding 이 전부 id 로 매달려 있다(매핑 무손실).
   //  컬럼이 이미 없으면(신규 DB) DO 블록이 통째로 건너뛴다 — 멱등.
   //  ⚠ 이 UPDATE 는 DDL 경로라 RLS 를 안 탄다 — **테넌트 안에서만** 비교해야 한다(두 워크스페이스가 같은 key 를
   //   갖는 건 정상이다). tenant_id 는 이 조각이 아니라 뒤따르는 tenant-column 단계가 붙이므로 있을 수도 없을 수도
@@ -162,9 +162,8 @@ export async function initV6CategoryTeam(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS category_repo_repo_idx ON category_repo(repo);
   `);
 
-  // ── 2-b) team — 조직 내 팀(스쿼드/사일로). 카테고리 오너십의 주체. category 뒤(team_category 가 category FK 의존). ──
-  //  ★원칙: 오너십 ≠ 접근권한. 권한은 scopes[]/auth_token.projects[] 가 따로 강제 — 팀 소유는 표면화·주입의 '소프트 렌즈'다
-  //   (우리 팀 맥락을 먼저 보여줄 뿐, 다른 팀 맥락도 전원 열람·검색 가능). '분절 없는 집중'.
+  // ── 2-b) team — 조직 내 팀(스쿼드/사일로). 권한은 scopes[]/auth_token.projects[] 가 따로 강제한다.
+  //  (#4233 전에는 분류 담당의 주체였다 — team_category 폐기로 그 역할은 없어졌다.)
   //  body_md = 팀 charter(주입될 '팀 층' — org_profile 섹션·org_member.body_md 와 같은 층, WIKI 와 직교).
   //  lead_member_id = org_member.id(FK 없음 — project_member 관례, 미러/외부신원 허용). key 유니크(archived 제외, category idiom).
   await pool.query(`
@@ -196,20 +195,9 @@ export async function initV6CategoryTeam(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS team_member_member_idx ON team_member(member_id);
   `);
 
-  // ── 2-d) team_category — ★핵심 경첩: 팀↔카테고리 오너십(n:n). relation=owner|stakeholder. ──
-  //  지식(knowledge_category)·프로젝트(project_category)·도메인맵이 이미 category 에 매달려 있어, 여기 한 줄(팀↔카테고리)이
-  //   팀의 맥락 귀속 전체를 끌어온다(새 축 X, 기존 축에 오너 부착). 카테고리당 owner 팀은 최대 1(부분 유니크) = '우리 팀' 기준.
-  //   stakeholder 는 여럿 허용(공유/크로스커팅 카테고리 — brand·gtm 등 여러 팀이 이해관계자).
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS team_category(
-      team_id INT NOT NULL REFERENCES team(id) ON DELETE CASCADE,
-      category_id INT NOT NULL REFERENCES category(id) ON DELETE CASCADE,
-      relation TEXT NOT NULL DEFAULT 'owner',
-      added_at TIMESTAMPTZ DEFAULT now(),
-      PRIMARY KEY (team_id, category_id));
-    ${ensureCheck("team_category", { team_category_relation_chk: "relation IN ('owner','stakeholder')" })}
-    CREATE UNIQUE INDEX IF NOT EXISTS team_category_owner_uq ON team_category(category_id) WHERE relation='owner';
-    CREATE INDEX IF NOT EXISTS team_category_team_idx ON team_category(team_id);
-    CREATE INDEX IF NOT EXISTS team_category_cat_idx ON team_category(category_id);
-  `);
+  // ── 2-d) team_category 폐기(#4233, 원준 2026-09-25 «분류체계를 특정 팀에 할당한다는 개념 자체를 다 없애버리면 좋겠어»).
+  //  팀↔분류 담당(owner)·이해관계(stakeholder) 경첩이었다. 화면·도구·주입에서 모두 걷었고, 표도 부팅 때 지운다.
+  //  ⚠ CREATE 를 지우는 것만으로는 이미 있는 표가 안 사라진다(IF NOT EXISTS) — 그래서 명시적으로 DROP 한다.
+  //   팀(team·team_member)과 팀 권한은 그대로다. 권한은 처음부터 team_member 로만 정해졌다.
+  await pool.query(`DROP TABLE IF EXISTS team_category;`);
 }

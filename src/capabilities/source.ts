@@ -5,7 +5,8 @@ import { z } from "zod";
 import { HttpError, clampPage } from "./rest-util.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
-import { listSources, countSources, getSource, upsertSource, deleteSource, listUndistilledSources, listSourceTree, canSeeSource, listTrashedFileSources } from "../v6/source-store.js";
+import { listSources, countSources, getSource, upsertSource, deleteSource, listUndistilledSources, listSourceTree, listSourceUploaders, canSeeSource, listTrashedFileSources } from "../v6/source-store.js";
+import { SOURCE_GROUP_FILTERS } from "../v6/source-group.js";
 import { linkKnowledgeSource, unlinkKnowledgeSource } from "../v6/knowledge-store.js";
 import { canSeeKnowledge, type Viewer } from "../v6/visibility.js";
 // #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 원문(body_md) 전체를 튕기지 않게 한다.
@@ -29,6 +30,7 @@ const sourceListInput = {
   container: z.string().optional().describe("그 출처 안의 자리 — 슬랙 채널·깃허브 저장소·내 컴퓨터 최상위 폴더(fields.container_name)"),
   author: z.string().optional().describe("쓴 사람·올린 사람(fields.author_name)"),
   root: z.enum(["personal", "project"]).optional().describe("올린 자리(fields.root) — personal=개인 폴더 · project=프로젝트 폴더 (#2423)"),
+  group: z.enum(SOURCE_GROUP_FILTERS).optional().describe("들어온 길(#4233): uploaded=사람이 올린 파일 · collected=연결한 앱에서 가져온 것 · made_ai=AI 세션이 만든 파일 · made_note=직접 적은 글 · made=made_ai+made_note. 자료 한 건은 넷 중 하나에만 든다."),
   fold: z.boolean().optional().describe("답글 접기(#2423 v3.1) — 부모가 수집돼 있는 답글을 목록에서 접는다(자료의 단위=대화). 접힌 목록 행엔 reply_n(답글 수)·body_len 이 실리고, 민트 점(has_knowledge)·linked 필터·나무 건수는 스레드 단위로 오른다."),
   linked: z.boolean().optional().describe("true=지식이 붙은 자료만 / false=아직 안 붙은 것만"),
   categoryId: z.number().int().positive().optional().describe("분류축(#1631) — 이 자료로 만든 **지식이** 그 축에 속하나. 자료 자신은 분류를 갖지 않는다(증류되지 않은 자료는 어떤 값으로도 안 잡힌다). category_list 의 id."),
@@ -56,6 +58,7 @@ const sourceList: Capability = {
           container: query.container ? String(query.container) : undefined,
           author: query.author ? String(query.author) : undefined,
           root: query.root === "personal" || query.root === "project" ? String(query.root) : undefined,
+          group: query.group ? String(query.group) : undefined,   // 모르는 값은 입력 스키마가 거절한다(400)
           fold: query.fold === undefined ? undefined : String(query.fold) === "true",
           //  linked 는 3상태다(붙은 것만·안 붙은 것만·안 가림) — 문자열 'true'/'false' 만 뜻을 갖고 나머지는 미지정.
           linked: query.linked === undefined ? undefined : String(query.linked) === "true",
@@ -264,14 +267,19 @@ const sourceTree: Capability = {
   title: "자료 출처 나무",
   description:
     "자료를 «어디서 왔나» 로 접은 집계 — 출처(external_system, 'authored'=사람이 적어 둔 것) × 그 안의 자리(채널·폴더·저장소)마다 " +
-    "자료 수·지식이 붙은 수·마지막으로 들어온 때. 자료 앱의 왼쪽 나무가 이 한 번의 조회로 선다. 공개범위가 걸린 자료는 건수에도 안 잡힌다.",
+    "자료 수·지식이 붙은 수·마지막으로 들어온 때. 가지마다 들어온 길(group: uploaded·collected·made_ai·made_note)이 실리고, " +
+    "uploaders 는 올린 자료를 올린 사람(fields.author_name)별로 센 수다. 자료 앱의 왼쪽 나무가 이 한 번의 조회로 선다. 공개범위가 걸린 자료는 건수에도 안 잡힌다.",
   scope: "memory",
   input: {},
   expose: {
     mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/sources/tree"], parse: () => ({}) }],
   },
-  handler: async (_input: unknown, _user: LivelyUser, ctx?: CapabilityCtx) => ({ nodes: await listSourceTree(ctx?.viewer ?? null) }),
+  handler: async (_input: unknown, _user: LivelyUser, ctx?: CapabilityCtx) => {
+    const viewer = ctx?.viewer ?? null;
+    const [nodes, uploaders] = await Promise.all([listSourceTree(viewer), listSourceUploaders(viewer)]);
+    return { nodes, uploaders };
+  },
 };
 
 // ⚠ REST 순서: sourceUndistilled(/sources/undistilled)·sourceTree(/sources/tree) 는 sourceGet(/sources/:id) 보다

@@ -16,6 +16,7 @@
 import { api, el, errorNote, hasScope, relTime, state, sv, toast, uiText } from '../core.js';
 import { confirmDialog, skeleton } from '../ui-primitives.js';
 import { svcTile } from '../svc-icons.js';
+import { iconPath } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { CRED_KINDS, openGitCredentialManager, svcTokenForm } from '../admin-credentials.js';
 import { LOGIN_SERVICES, partition, slackChannelPolicyCard, type SvcView } from '../me-logins.js';
 //  #3778 — 목록 카드가 말하는 «두 축»의 잣대(순수). 화면은 그리기만 하고 판정은 저기서 한다(그래서 시험된다).
@@ -427,24 +428,7 @@ const SCOPE_NOUN: Record<string, string> = {
   clickup: '작업', figma: '파일', prometheus: '지표', 'claude-headless': '분류·크론 실행', outlook: '메일과 일정',
 };
 const COLLECT_UNIT: Record<string, string> = { slack: '대화', notion: '페이지', google: '문서', figma: '파일의 코멘트', clickup: '작업', github: '저장소의 이슈·PR 대화', gitlab: '프로젝트의 이슈·MR 대화', linear: '이슈', outlook: '메일' };
-const ICON_PATH: Record<string, string> = {
-  zap: 'M13 2L4 14h7l-1 8 9-12h-7z',
-  box: 'M3 5h18v4H3zM5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4',
-  check: 'M5 12l4 4L19 7',
-  x: 'M6 6l12 12M18 6L6 18',
-  //  #2243 3차 — «하는 일» 세 동사와 «보는 사람» 두 축.
-  eye: 'M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z M12 9.4a2.6 2.6 0 1 1 0 5.2 2.6 2.6 0 0 1 0-5.2Z',
-  pen: 'M4.5 19.5h4L20 8l-4-4L4.5 15.5z M14.5 5.5l4 4',
-  usr: 'M12 4.4a3.6 3.6 0 1 1 0 7.2 3.6 3.6 0 0 1 0-7.2Z M4.5 20c0-3.8 3.4-6 7.5-6s7.5 2.2 7.5 6',
-  team: 'M9 5.3a3.2 3.2 0 1 1 0 6.4 3.2 3.2 0 0 1 0-6.4Z M2.5 19.5c0-3.4 2.9-5.4 6.5-5.4s6.5 2 6.5 5.4 M16.5 6.6a3.2 3.2 0 0 1 0 6.3 M18 14.6c2.2.6 3.5 2.3 3.5 4.9',
-  //  #3778 — 우리 자산(코드 저장소·데이터베이스)의 마크. 종전엔 글자 «{ }»·«DB» 를 네모에 넣었는데, 그건
-  //   브랜드 로고가 줄지어 선 화면에서 «아직 안 만든 자리»로 읽혔다(원준 2026-09-20 «지금꺼 너무 구려»).
-  //   앱 로고처럼 **모양으로** 읽히는 마크로 바꾼다 — 갈래(코드)·원통(데이터)·열쇠(인증)는 그 뜻이 관습이다.
-  repo: 'M6.6 4.6v9.1 M6.6 15.1a2.6 2.6 0 1 1 0 5.2 2.6 2.6 0 0 1 0-5.2Z M17.4 3.6a2.6 2.6 0 1 1 0 5.2 2.6 2.6 0 0 1 0-5.2Z M17.4 8.8v.9a5.3 5.3 0 0 1-5.3 5.3H9.2',
-  db: 'M4.6 6.4c0-1.6 3.3-2.9 7.4-2.9s7.4 1.3 7.4 2.9-3.3 2.9-7.4 2.9-7.4-1.3-7.4-2.9Z M4.6 6.4v11.2c0 1.6 3.3 2.9 7.4 2.9s7.4-1.3 7.4-2.9V6.4 M4.6 12c0 1.6 3.3 2.9 7.4 2.9s7.4-1.3 7.4-2.9',
-  key: 'M14.8 4.2a5 5 0 1 1-3.6 8.5L4.5 19.4v2.1h2.1l1-1v-1.7h1.7l1-1v-1.7h1.7l1.2-1.2 M16.6 8.2h.01',
-  shield: 'M12 3.2l7 2.6v5.4c0 4.2-2.8 7.6-7 9.6-4.2-2-7-5.4-7-9.6V5.8z M9 12.2l2.1 2.1 4-4.2',
-};
+//  #4233: 이 화면의 그림도 lib/icon-paths.ts 한 벌에 있다(이름에 cn- 이 붙는다). 모양은 그대로다.
 /**
  * 목적격 조사 — 앞 글자 받침으로 «을/를». 화면에 «저장소을(를)» 같은 자리가 남으면 사람이 «기계가 쓴 글»로 읽는다.
  * 한글이 아니면(영문 앱 이름 등) «를». 순수라 테스트가 표를 돈다.
@@ -454,7 +438,7 @@ export function eulReul(word: string): string {
   if (!(c >= 0xAC00 && c <= 0xD7A3)) return '를';
   return (c - 0xAC00) % 28 ? '을' : '를';
 }
-const icon = (k: string): SVGElement => sv('svg', { class: 'v2-ic', viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: ICON_PATH[k] })) as SVGElement;
+const icon = (k: string): SVGElement => sv('svg', { class: 'v2-ic', viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: iconPath('cn-' + k) })) as SVGElement;
 
 /** 설정 줄 — «라벨 | 값 | 동작». 값은 문자열(uiText)이나 노드. */
 // ══ #2243 3차 «다듬은 안 B» — 상세 화면 부품 ═══════════════════════════════════════════════

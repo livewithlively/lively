@@ -262,7 +262,7 @@ async function myAssetsSection(detail) {
     } else {
       rows.push(el('div', { class: 'hlayer' },
         el('div', { class: 'hlayer-head' }, el('h4', { class: 'hlayer-title', text: '내 로컬 스킬 · 훅' })),
-        el('p', { class: 'admin-hint' }, ...uiText('아직 내 컴퓨터의 하네스를 확인하지 못했습니다. 내 컴퓨터에서 claude(또는 codex)를 한 번 켜면 다음 세션에 자동으로 나타납니다. 컴퓨터가 여러 대면 각각 따로 보입니다. (웹 [AI 세션]은 회사 서버에서 돌아 로컬이 보이지 않습니다.)'))));
+        el('p', { class: 'admin-hint' }, ...uiText('아직 내 컴퓨터의 하네스를 확인하지 못했습니다. 내 컴퓨터에서 claude(또는 codex)를 한 번 켜면 다음 세션에 자동으로 나타납니다. 컴퓨터가 여러 대면 각각 따로 보입니다. (웹 [세션 목록]은 회사 서버에서 돌아 로컬이 보이지 않습니다.)'))));
     }
     bodyBox.replaceChildren(...rows);
   };

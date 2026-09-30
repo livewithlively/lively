@@ -18,10 +18,18 @@ const AUTO_MARK = "<!-- lively:auto-created-from-first-prompt -->";
 
 // #2162 — **사람의 작업 세션인가.** 서버가 pane 에 실어 준 종류(LIVELY_SESSION_KIND)를 본다.
 //  종전엔 훅마다 `LIVELY_TASK_WS`(위탁 워커의 작업 폴더 — 종류를 말하라고 있는 값이 아니다)를 스니핑했고,
-//  그래서 새 기계 세션 경로가 생길 때마다 가드를 잊었다(#1979 에서 두 번). 이제 축이 하나다.
+//  그래서 새 기계 세션 경로가 생길 때마다 가드를 잊었다(#1979 에서 두 번). 서버가 아는 종류는 이제 kind 하나로 본다 —
+//  그 앞에 하네스가 스스로 밝히는 비대화형 표식(CLAUDE_CODE_ENTRYPOINT)이 한 겹 더 있다(아래 첫 줄).
 //  ⚠ 폴백 — kind 가 없는 세션(이 축 이전에 뜬 것)은 `LIVELY_TASK_WS` 로 한 번 더 본다. 그것도 없으면
 //   **사람 세션으로 본다**: 기계로 오인하면 사람의 세션이 조용히 기능을 잃는다(훨씬 나쁘다).
 function isWorkSessionEnv(env) {
+  // 비대화형 Claude Code(`claude -p` = sdk-cli · Agent SDK = sdk-ts/sdk-py)는 사람의 작업 세션이 아니다.
+  //  크론·SessionEnd 훅이 띄우는 자식은 kind 를 안 달고 오거나 부모의 kind=human 을 상속하므로 kind 보다 먼저 본다.
+  //  이 가드가 없으면 스크립트 실행 1회 = 프로젝트 1개다(실측: 한 조직 30일 자동 생성의 58%).
+  //  ⚠ 알려진 한계 — 대화 런타임(chat 모드, claude-chat-runtime.ts)도 사람 세션을 `--print` 로 띄우므로 여기 걸린다.
+  //   그 자식엔 LIVELY_SESSION_ID 가 없어 종전에도 이 훅의 바인딩이 닿았는지는 미실측이다. chat 모드에서
+  //   자동 생성이 필요해지면 게이트웨이가 그 자식에 사람 표식을 실어 이 줄보다 먼저 보게 한다.
+  if (/^sdk-/.test(String(env.CLAUDE_CODE_ENTRYPOINT || "").trim())) return false;
   const kind = String(env.LIVELY_SESSION_KIND || "").trim().toLowerCase();
   if (kind) return kind === "human";
   return !String(env.LIVELY_TASK_WS || "").trim();   // 구 세션 폴백
@@ -88,9 +96,9 @@ async function request(base, token, executionId, url, method = "GET", body) {
   //  ⚠ 이 가드가 **의도된 바인딩을 깨지 않는 이유**: 프로젝트에 명시 바인딩된 위탁(delegate_run 등)은 아래
   //   project-context 조회에서 `found && project_id>0` 으로 이미 조기 return 한다. 즉 가드가 막는 것은
   //   **소속 없는 위탁이 새 프로젝트를 만드는 것** 하나뿐이다.
-  //  ⚠ **판정 축은 kind 하나다**(#2162). 종전엔 `LIVELY_TASK_WS`(위탁 워커의 **작업 폴더** — 종류를 말하라고
+  //  ⚠ **서버가 아는 종류는 kind 하나로 본다**(#2162 — 하네스의 비대화형 표식은 isWorkSessionEnv 첫 줄). 종전엔 `LIVELY_TASK_WS`(위탁 워커의 **작업 폴더** — 종류를 말하라고
   //   있는 값이 아니다)를 스니핑했는데, 그러면 새 기계 세션 경로가 생길 때마다 여기 조건을 더하는 걸 잊어도
-  //   아무 신호가 없다. 실제로 #1979 에서 두 번 잊었다. 이제 서버가 pane 에 실어 준 종류만 본다.
+  //   아무 신호가 없다. 실제로 #1979 에서 두 번 잊었다.
   if (!isWorkSessionEnv(process.env)) return;
   const stdinData = await readStdin();
   let input = {}; try { input = JSON.parse(stdinData || "{}"); } catch { return; }

@@ -182,8 +182,11 @@ export function executionSessionId(input = {}, env = process.env) {
     // 프로젝트가 없어도 판정한다 — 그때는 펴 줄 좌표가 없어 **절대경로의 존재 확인만** 하지만, 그거면 충분하다.
     //  이 버그의 피해는 «파일이 안 온 것» 이 아니라 «없는데 있다고 믿고 근처 것을 읽은 것» 이라, 어느 분기에서든
     //  «없다» 는 말이 나오는 쪽이 «조용히 틀리는» 쪽보다 낫다.
-    const projDir = (attachPid > 0 && (body.folder || body.folder_abs_path))
-      ? (body.folder_abs_path ? String(body.folder_abs_path) : path.join(sharedRootOf(), String(body.folder)))
+    //  폴더 우선순위는 동기화 훅과 같다 — 명시 바인딩(folder_abs_path) > 세션 행의 폴더(session_dir, #4135) > env 로 조립한 슬롯.
+    const projDir = (attachPid > 0 && (body.folder || body.folder_abs_path || body.session_dir))
+      ? (body.folder_abs_path ? String(body.folder_abs_path)
+        : body.session_dir ? String(body.session_dir)
+        : path.join(sharedRootOf(), String(body.folder)))
       : null;
     const cwd = (input && typeof input.cwd === "string" && input.cwd) ? input.cwd : null;
     const found = resolveAttachments(input.prompt ?? input.user_prompt ?? "", projDir, cwd);

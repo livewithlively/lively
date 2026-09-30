@@ -25,7 +25,8 @@ execFileSync(
    "--module", "esnext", "--target", "es2022", "--skipLibCheck"],
   { stdio: "inherit" },
 );
-const { bodyExcerpt, taskOfSession, groupTasks, doneOpenByDefault, seedTasksTab } = await import(path.join(out, "task-pane.js"));
+const { bodyExcerpt, taskOfSession, groupTasks, doneOpenByDefault, seedTasksTab,
+  stripLeadNotice, sessionTaskOrder, sessionNumbers, sessionColor, externalTasks, moveInOrder, hashQuery, hashMatches } = await import(path.join(out, "task-pane.js"));
 
 let pass = 0;
 const eq = (got, want, name) => { assert.deepEqual(got, want, name); pass++; console.log(`ok  ${name}`); };
@@ -109,14 +110,14 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
   eq(at("  seedLayoutStore();") > 0 && at("  seedLayoutStore();") < at("  let lay = loadLayout(id);"), true,
     "W1 배치를 읽기 **전에** 들인다 — 뒤에 부르면 첫 화면은 탭 없이 뜨고 다음에야 보인다");
   eq(/side: \['files', 'tasks', 'knowledge', 'apps'\]/.test(panes), true, "W2 기본 배치의 곁칸에 tasks 가 선다(자료 · 태스크 · 지식 · 앱)");
-  eq(/JSON\.stringify\(\{ \.\.\.st, last: lay, p: map \}\)/.test(panes), true,
+  eq(/JSON\.stringify\(\{ \.\.\.st, last: (lay|saved), p: map \}\)/.test(panes), true,   // #4225 — saved = 파생 탭(붙은 앱)을 걷은 사본
     "W3 배치를 저장할 때 표식(seeded)을 지우지 않는다 — 지우면 다음에 열 때 닫은 탭이 되살아난다");
   const parts = read("web/v2/panes-parts.ts");
-  eq(/\{ type: 'tasks', name: '태스크'/.test(parts), true, "W4 종류 이름은 'tasks' 그대로(저장된 배치가 이 이름으로 기억한다) · 표시 이름은 태스크");
+  eq(/\{ type: 'tasks', name: '프로젝트', icon: 'projtask'/.test(parts), true, "W4 종류 이름은 'tasks' 그대로(저장된 배치가 이 이름으로 기억한다) · 표시 이름은 프로젝트(#4135) · 그림은 폴더 안의 태스크");
   eq(/import \{ tasksPart \} from '\.\/panes-tasks\.js';/.test(parts) && !/function tasksPart\(/.test(parts), true, "W5 부품은 한 벌 — 옛 tasksPart 가 남아 있지 않다");
   const tk = read("web/v2/panes-tasks.ts");
   eq(/description: text \|\| null, description_base: bodyBase/.test(tk), true, "W6 곁칸 본문 저장은 고치기 시작한 글을 함께 보낸다(세션의 덧붙임을 지우지 않게)");
-  eq(/if \(typingIn\(list\)\) \{ listDirty = true; return; \}/.test(tk), true, "W7 글칸에 손이 가 있는 동안은 목록을 다시 그리지 않는다(8초 틱이 쓰던 글을 날리지 않게)");
+  eq(/if \(\(typingIn\(list\) \|\| typingIn\(top\)\) && !top\.querySelector\('\.pj-slot-q:focus'\)\) \{ listDirty = true; return; \}/.test(tk), true, "W7 글칸에 손이 가 있는 동안은 목록을 다시 그리지 않는다(8초 틱이 쓰던 글을 날리지 않게) — 빈 칸 찾기만 예외(쳐야 후보가 바뀐다)");
   eq(/description: md \|\| null, description_base: descBase/.test(read("web/v2/proj-settings.ts")), true, "W8 프로젝트 설정의 본문 저장도 같은 가드를 탄다");
   // B11·B12 — 합치기·충돌의 **행위**는 실 SQL 로 잰다(src/v6/project-body-guard.pg-test.mjs). 여기선 REST 로 나가는 모양만 본다:
   //  화면은 상태코드로 가른다(409 = 덮지 않고 사람에게 묻는다). 500 으로 새면 «저장하지 못했어요» 만 뜨고 1.2초마다 되풀이한다.
@@ -128,23 +129,94 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
   eq(/if \("description_base" in b\) patch\.description_base = /.test(cap), true, "W11 REST 파서가 description_base 를 실어 보낸다(빠지면 가드가 조용히 꺼진다)");
   // 격리 리뷰(2026-09-20) — 저장이 가는 도중에 글칸을 걷으면 그 저장의 실패(충돌)가 갈 곳이 없어 글이 사라졌다.
   //  상태기계의 행위는 scripts/autosave.test.mjs 가 잰다. 여기선 **부르는 쪽이 그 결과를 실제로 쓰는지**만 본다.
-  eq(/await foldSaver\.flush\(\);[\s\S]{0,160}if \(foldSaver\.dirty\(\)\) \{[^\n]*return false; \}/.test(tk), true,
-    "W12 접이는 flush 뒤에도 못 남긴 글이 있으면 닫지 않는다(닫으면 그 글은 글칸과 함께 사라진다)");
-  eq(/if \(!\(await closeFold\(\)\)\) return;/.test(tk), true, "W13 다른 접이를 열 때도 같다 — 못 저장한 접이를 걷고 넘어가지 않는다");
-  eq(/if \(openFold && foldSaver\?\.dirty\(\)\) \{[\s\S]{0,200}keepUnsaved\(ctx\.id, openFold, ta\.value\)/.test(tk), true,
-    "W14 칸이 걷힐 때(탭 닫기·화면 떠남) 못 남긴 본문·규칙은 글칸 밖에 둔다");
+  eq(/await bodySaver\.flush\(\);[\s\S]{0,160}if \(bodySaver\.dirty\(\)\) \{[^\n]*return false; \}/.test(tk), true,
+    "W12 본문 고치기는 flush 뒤에도 못 남긴 글이 있으면 읽기로 돌아가지 않는다(돌아가면 그 글은 글칸과 함께 사라진다)");
+  eq((tk.match(/if \(rowSaver\?\.dirty\(\)\) return;/g) || []).length >= 2, true, "W13 태스크 본문도 같다 — 못 저장한 글이 있으면 줄을 접거나 읽기로 돌아가지 않는다");
+  eq(/if \(bodyEdit && bodySaver\?\.dirty\(\)\) \{[\s\S]{0,200}keepUnsaved\(ctx\.id, 'body', ta\.value\)/.test(tk), true,
+    "W14 칸이 걷힐 때(탭 닫기·화면 떠남) 못 남긴 본문은 글칸 밖에 둔다");
   const ps2 = read("web/v2/proj-settings.ts");
   eq([/const descCore = autoSaveCore\(/.test(ps2), /descInflight|descSaving/.test(ps2), /if \(!desc\.isConnected\) \{[\s\S]{0,420}keepUnsaved\(id, 'body', live\)/.test(ps2)], [true, false, true],
     "W15 프로젝트 설정은 **공용 상태기계**를 쓴다(손으로 짠 둘째 벌이 남아 있지 않다) · 창이 닫힌 뒤의 실패는 live 글을 글칸 밖에 남긴다");
-  eq([/const kept = keepUnsaved\(ctx\.id, k, live\);/.test(tk), /keepUnsaved\([^)]*\b(text|sent|md)\)/.test(tk + ps2)], [true, false],
+  eq([/const kept = keepUnsaved\(ctx\.id, 'body', live\);/.test(tk), /keepUnsaved\([^)]*\b(text|sent|md)\)/.test(tk + ps2)], [true, false],
     "W17 남기는 글은 늘 live 다 — 보낸 글(text·sent·md)을 보관소에 넣는 자리가 없다(저장 도중 친 글이 빠진다)");
-  eq(/if \(stashedByMe === 'body'\) \{ clearUnsaved\(ctx\.id, 'body'\)/.test(tk) && !/onSaved: \(\) => \{? ?clearUnsaved\(/.test(tk), true,
+  eq(/if \(stashedByMe\) \{ clearUnsaved\(ctx\.id, 'body'\)/.test(tk) && !/onSaved: \(\) => \{? ?clearUnsaved\(/.test(tk), true,
     "W18 성공한 저장은 **이 편집이 남긴 글**만 지운다 — 지난번에 못 남긴 글(사람이 아직 안 꺼낸 것)을 말없이 지우지 않는다");
-  eq(/k === 'body'\s*\n\s*\? linkBtn\('내 글 복사'/.test(tk), true,
+  eq(/replaceKids\(acts,\s*\n\s*linkBtn\('내 글 복사', \(\) => void copyText\(lost\)/.test(tk) && !/되살리기/.test(tk), true,
     "W19 보관된 **본문**은 제자리에 되살리지 않고 복사만 한다 — 그때의 본문 전체라, 그 뒤 세션이 덧붙인 기록을 지운다");
   const owners = ["web/v2/panes-tasks.ts", "web/v2/proj-settings.ts", "web/v2/unsaved-store.ts"].filter((f) => read(f).includes("'lively_v2_unsaved_text'"));
   eq([owners, /deviceStore\('lively_v2_unsaved_text'\)/.test(read("web/v2/unsaved-store.ts"))], [["web/v2/unsaved-store.ts"], true],
     "W16 못 남긴 글의 저장소 열쇠는 한 파일에서만, 워크스페이스로 갈리는 deviceStore 로 선언한다(글의 내용이 들어 있다)");
+}
+
+// ── 곁칸 «프로젝트» 앱(#4135) — 본문 읽기 · 이 세션의 태스크 순서 · 세션 배지 · 외부 태스크 · 글칸 `#` ─────────────
+//  엣지: P1 자동 안내 인용 건너뜀 · P2 안내 없으면 그대로 · P3 인용뿐이면 빈 글 · O1 순서대로 · O2 다른 이름(uuid)으로도 · O3 옛 서버(order 없음)는 한 개로
+//   N1 만든 순서로 번호 · N2 옛 id·기록 id 도 같은 번호 · N3 모르는 시각은 뒤로 · C1 같은 번호 같은 색 · X1 돌고 있는 세션 먼저 → 진행 중 → 할 일, 완료 따로
+//   M1 옮기기 · M2 범위 밖 · H1 `#` 토큰 · H2 빈칸 뒤만 · H3 안 끝난 것 먼저·고른 것 제외
+{
+  eq(stripLeadNotice("> 새 작업 창에서 **사람이 이름을 지어** 만든 프로젝트입니다\n\n## 첫 지시(원문)\n\n본문"), "## 첫 지시(원문)\n\n본문",
+    "P1 읽기 모드는 맨 앞의 자동 안내 인용을 건너뛴다(원준 «본문부터 보이게»)");
+  eq(stripLeadNotice("## 제목\n> 중간 인용은 둔다"), "## 제목\n> 중간 인용은 둔다", "P2 맨 앞이 아니면 인용도 본문이다");
+  eq([stripLeadNotice("> 인용뿐\n>\n"), stripLeadNotice(null)], ["", ""], "P3 인용뿐 · 빈 값 → 빈 글");
+
+  const T = [
+    { id: 1, name: "가", status_category: "started", sessions: [{ id: "box-a", order: 2, count: 2, current: false }] },
+    { id: 2, name: "나", status_category: "unstarted", sessions: [{ id: "box-a", order: 1, count: 2, current: true }, { id: "box-b", order: 1, count: 1, current: true }] },
+    { id: 3, name: "다", status_category: "done", sessions: [] },
+  ];
+  eq(sessionTaskOrder(T, ["box-a"]).map((t) => t.id), [2, 1], "O1 이 세션의 태스크는 서버가 준 순서(order)대로");
+  eq(sessionTaskOrder(T, ["uuid-x", null, "box-b"]).map((t) => t.id), [2], "O2 세션 이름 여럿 중 하나라도 맞으면");
+  const OLD = [{ id: 7, status_category: "started", sessions: [{ id: "s" }] }, { id: 8, status_category: "done", sessions: [{ id: "s" }] }];
+  eq(sessionTaskOrder(OLD, ["s"]).map((t) => t.id), [7], "O3 옛 서버(order 없음)는 taskOfSession 한 개로 물러난다 — 곁칸이 먼저 배포돼도 비지 않는다");
+  eq(sessionTaskOrder(T, []), [], "O4 세션이 없으면(새 세션 자리) 빈 목록");
+
+  const N = sessionNumbers([{ id: "c", createdAt: 300 }, { id: "a", createdAt: 100, altIds: ["old-a"], logId: "uuid-a" }, { id: "z" }, { id: "b", createdAt: 200 }]);
+  eq([N.get("a"), N.get("b"), N.get("c"), N.get("z")], [1, 2, 3, 4], "N1 번호는 만든 순서 — 이른 것이 1 · N3 시각을 모르면 뒤로");
+  eq([N.get("old-a"), N.get("uuid-a")], [1, 1], "N2 옛 박스 id·대화 id 로 물어도 같은 번호");
+  eq([sessionColor(1) === sessionColor(9), sessionColor(1) !== sessionColor(2), sessionColor(0) === sessionColor(1)], [true, true, true], "C1 같은 번호는 같은 색 · 이웃은 다른 색 · 0 은 1 로");
+
+  const E = [
+    { id: 10, status_category: "unstarted" }, { id: 11, status_category: "started" }, { id: 12, status_category: "unstarted" },
+    { id: 13, status_category: "done" }, { id: 14, status_category: "started" },
+  ];
+  const ex = externalTasks(E, new Set([14]), (t) => t.id === 12);
+  eq([ex.open.map((t) => t.id), ex.done.map((t) => t.id)], [[12, 11, 10], [13]], "X1 외부 = 이 세션 것 빼고 · 돌고 있는 세션의 것 → 진행 중 → 할 일 · 완료는 따로");
+
+  eq([moveInOrder([1, 2, 3], 2, 0), moveInOrder([1, 2, 3], 0, 1), moveInOrder([1, 2, 3], 0, 9)], [[3, 1, 2], [2, 1, 3], [2, 3, 1]], "M1 옮기기(to = 옮긴 뒤 자리) · 범위를 넘으면 끝");
+  eq(moveInOrder([1, 2], 5, 0), [1, 2], "M2 없는 자리에서 옮기면 그대로");
+
+  eq([hashQuery("할 일 #알림", 7), hashQuery("#", 1), hashQuery("a#b", 3), hashQuery("#알림 끝", 6)], [{ start: 4, q: "알림" }, { start: 0, q: "" }, null, null],
+    "H1·H2 커서 앞의 `#` 토큰만(줄 처음·빈칸 뒤) — 낱말 가운데 # 이나 이미 빈칸을 친 뒤는 아니다");
+  const HT = [{ id: 41, name: "알림 다시 설계", status_category: "done" }, { id: 42, name: "알림 이동", status_category: "unstarted" }, { id: 43, name: "검색", status_category: "unstarted" }];
+  eq([hashMatches(HT, "알림", new Set()).map((t) => t.id), hashMatches(HT, "4", new Set([42])).map((t) => t.id), hashMatches(HT, "", new Set(), 2).length],
+    [[42, 41], [43, 41], 2], "H3 이름·번호로 찾기 · 안 끝난 것 먼저 · 고른 것 제외 · 상한");
+}
+
+// ── #4135 배선 — 담기 → 글칸 배지 → 세션 열기(taskIds) · 이 세션 입력칸에 넣기 · 순서 PUT ──────────────────────
+{
+  const parts = read("web/v2/panes-parts.ts");
+  const tk = read("web/v2/panes-tasks.ts");
+  const ct = read("web/v2/compose-tasks.ts");
+  const qs = read("web/v2/quick-session.ts");
+  eq(/tasksPick\?\.wire\(ta\);/.test(parts) && /\.\.\.\(taskIds\.length \? \{ taskIds \} : \{\}\)/.test(parts) && /if \(\(!text && !taskIds\.length\) \|\| sending\) return;/.test(parts), true,
+    "K1 새 세션 글칸: 배지를 달고 · 담은 게 있으면 지시 없이도 보내고 · taskIds 로 연다");
+  eq(/\.\.\.\(taskIds\.length \? \{ taskIds \} : taskId > 0 \? \{ taskId \} : \{\}\)/.test(qs), true, "K2 세션 생성 요청이 taskIds 를 싣는다");
+  eq(/root: \(\) => ctx\.paneRoot\(\)/.test(parts) && /const picksRoot = \(\): HTMLElement => ctx\.paneRoot\(\);/.test(tk), true,
+    "K3 담은 목록의 울타리는 곁칸 한 벌의 뿌리 — 다른 세션 탭의 글칸으로 새지 않는다");
+  eq(/sessions\/\$\{encodeURIComponent\(sid\)\}\/tasks`, \{ method: 'PUT', body: JSON\.stringify\(\{ taskIds: ids \}\) \}/.test(tk), true, "K4 순서 바꾸기·넣기·빼기는 모두 PUT 한 길(목록을 통째로)");
+  eq(/putIntoSession\(myIds\(\), text\)/.test(tk) && /registerSessionInput\(/.test(read("web/session-chat.ts")) && /m\.cmd === 'paste' && typeof m\.text === 'string'\) \{ pasteText\(m\.text\)/.test(read("web/standalone/terminal.ts")), true,
+    "K5 [본문 넣기] → 세션 화면의 입력칸(터미널이면 붙여넣기) — 보내지 않는다");
+  eq(/else if \(o\) act = textAct\('세션으로 →'/.test(tk) && /else act = textAct\('이 세션에 넣기 \+'/.test(tk), true, "K6 세션이 있으면(멈춤 포함) [세션으로], 없을 때만 [이 세션에 넣기]");
+  eq([/pn-tk-st/.test(ct.slice(ct.indexOf("function paint()"), ct.indexOf("function dropIndex"))), /TASK_DRAG_TYPE/.test(tk)], [false, true],
+    "K7 글칸 배지엔 상태 아이콘이 없다(원준 2026-09-27) · 곁칸 줄을 끌어 글칸 배지 줄에 놓을 수 있다");
+  eq([/root\.append\(head, top, list, addBox\);/.test(tk), /replaceKids\(top, \.\.\.tops\);/.test(tk), /tops\.push\(sec\);/.test(tk), /tops\.push\(groupHead\('외부 태스크'/.test(tk)], [true, true, true, true],
+    "K9 위(머리·본문·이 세션의 태스크·목록 머리)는 서 있고 스크롤은 아래 목록 안에서만(원준 2026-09-27)");
+  const css = read("public/styles/49-v2-projpane.css");
+  eq([/\.pj-rdopen \{ max-height: [^;]+; overflow: auto;/.test(css), /iconBtn\('ext'/.test(tk), /'띄워 읽기'/.test(tk), /\.pj-body \{[^}]*background: var\(--bg-tint\)/.test(css)], [true, false, true, false],
+    "K10 편 본문은 제 안에서 스크롤(접기 단추가 머리에 남는다) · 본문 머리에 프로젝트 창 단추 없음 · 창 띄우기는 글자 단추 · 본문 바탕은 파랑 틴트가 아니다");
+  eq([/if \(!bodyMore \|\| t\.closest\('\.pj-bh'\)\) toggle\(\);/.test(tk), /if \(!has\) \{ void startBodyEdit\(\); return; \}/.test(tk), /iconBtn\('pencil', '본문 고치기'/.test(tk),
+      /lsSet\(BODY_H_KEY, String\(bodyH\)\)/.test(tk), /if \(bodyEdit \|\| bodyDragging\) return;/.test(tk), /\.pj-rsz \{[^}]*cursor: ns-resize/.test(css)], [true, true, true, true, true, true],
+    "K11 본문은 한 번 누르면 펼친다(고치기는 연필 · 빈 본문만 바로 적기) · 편 뒤엔 머리 줄로 접는다 · 아래 변을 끌어 길이 조절(기기에 기억, 끄는 동안 다시 그리지 않는다)");
+  eq(/<link rel="stylesheet" href="\.\/styles\/49-v2-taxonomy\.css">\s*\n<link rel="stylesheet" href="\.\/styles\/49-v2-projpane\.css">/.test(read("public/index.html")), true, "K8 앱 CSS 가 실린다");
 }
 
 console.log(`\n${pass} passed`);

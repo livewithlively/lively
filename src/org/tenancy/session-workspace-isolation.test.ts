@@ -165,7 +165,9 @@ test("★ S1 세션을 **만드는 자리마다** 소속 기록이 붙는다 —
   //   gw_session_map 행 없이 태어나 매니지드/registry 배포에서 목록에 영영 안 뜬다(= 복원했는데 못 엶).
   //  #3626 — 생성 라우트(홈·프로젝트)의 자리는 세션 생성 관문(session-launch.ts)으로 옮겨 갔다. 핸드오프·복원은
   //   routes.ts 에 남아 있다. 두 파일을 함께 본다 — 한 파일만 보면 옮겨 간 자리가 조용히 검사 밖으로 나간다.
-  const CREATES = /await (createSession|relayNodeOp<SessionInfo>)\(/;
+  //  #4135 — 노드 생성 세 자리는 withPreissuedIdentity(preissue → relay → 정산)로 감싸여 relayNodeOp 가 다음 줄로 내려갔다.
+  //   그 감싸는 호출이 곧 생성 자리다(안에서 relay 를 정확히 한 번 부른다) — 그 줄을 세고, 기록(recordSessionTenant)은 종전처럼 그 아래 40줄에서 본다.
+  const CREATES = /await (createSession|relayNodeOp<SessionInfo>|withPreissuedIdentity)\(/;
   const files = ["src/terminal/routes.ts", "src/terminal/session-launch.ts"];
   const found = files.flatMap((rel) => {
     const lines = readSrc(rel).split("\n");

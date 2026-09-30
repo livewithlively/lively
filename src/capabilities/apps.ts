@@ -1,5 +1,5 @@
 // 앱 레지스트리 capability (#1780, design D2) — 조회 + 멤버 grant + enabled 토글 + 설치/제거(관리자).
-//  설치/제거(org_app_install/remove)는 패키지 소스(git·로컬 경로)를 스테이지 디렉터리로 추출한 뒤
+//  설치/제거(org_app_install/remove)는 패키지 소스(git·로컬 경로·inline 파일 묶음)를 스테이지 디렉터리로 추출한 뒤
 //   loader→installLoadedApp(builtin 시더와 공용 코어)로 저널드 전개한다. 업로드(tar)는 후속(멀티파트 라우트 선행).
 //  경로 prefix = /api/ui/apps.
 import { z } from "zod";
@@ -15,7 +15,12 @@ import { makeDeployDeps } from "../apps/deploy.js";
 import { dropAppTables, appSchemaFor } from "../apps/store-schema.js";
 import { isBuiltinSource } from "../apps/store-ddl.js";
 import { pruneAppInstances } from "../org/store/app-instances.js";
+import { pruneSessionApps } from "../apps/session-apps.js";
 import { restartWorkersForApp, stopWorkersForApp, stopWorkersForMemberApp } from "../apps/worker-service.js";
+import { editDenial, memberAppViolations } from "../apps/member-app.js";
+import { snapshotAppData, listAppSnapshots, restoreAppSnapshot } from "../apps/app-snapshot.js";
+import { logger } from "../log.js";
+import type { LivelyUser } from "../context.js";
 
 const actorOf = (u: { userId?: string; email?: string } | undefined): string => u?.userId || u?.email || "unknown";
 const wctx = (u: { userId?: string; email?: string } | undefined, ctx?: { source?: string }) => ({ actor: actorOf(u), source: ctx?.source ?? "web" });
@@ -37,8 +42,17 @@ const appsIndex: Capability = {
     mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/apps"], parse: () => ({}) }],
   },
-  handler: async () => ({ apps: await store.listApps() }),
+  //  #4225 — can_edit: **이 요청자가** app_save 로 이 앱을 고칠 수 있나(화면이 [고치기]·설정 메뉴를 그릴지 정한다). 판정은 member-app.ts.
+  handler: async (_input: Record<string, unknown>, user: LivelyUser) => {
+    const apps = await store.listApps();
+    return { apps: apps.map((a) => ({ ...a, can_edit: editDenial(a, { userId: actorOf(user), scopes: user?.scopes }, safeManifest(a)) === null })) };
+  },
 };
+
+/** 저장된 매니페스트를 다시 읽는다 — 못 읽으면 null(판정은 보수적으로: 확장 여부를 모르면 app_save 로 못 고치게 editDenial 이 다룬다). */
+function safeManifest(a: store.OrgApp): ReturnType<typeof parseAppManifest> | null {
+  try { return parseAppManifest(a.manifest); } catch { return null; }
+}
 
 // ── 앱 상세(+구성요소) ──
 const appGet: Capability = {
@@ -145,9 +159,17 @@ const appRevoke: Capability = {
 const appInstall: Capability = {
   name: "org_app_install",
   title: "앱 설치·업데이트",
-  description: "패키지 소스에서 앱을 설치(같은 id 면 업데이트)한다. source.kind='git'(https:// url·선택 ref) 또는 'path'(게이트웨이 로컬 경로). 저널드 2-phase — 실패 시 역순 보상. 관리자.",
+  description: "패키지 소스에서 앱을 설치(같은 id 면 업데이트)한다. source.kind='git'(https:// url·선택 ref) · 'path'(게이트웨이 로컬 경로) · " +
+    "'inline'(files=[{path, content, encoding?:'utf8'|'base64'}] — 세션이 만든 파일 묶음을 그대로 올린다. lively-app.json 필수 · 최대 200개·8MB, " +
+    "MCP 로는 요청 1MB 안). 매니지드에선 게이트웨이가 세션 폴더를 못 읽으므로 path 대신 inline 을 쓴다. " +
+    "데이터 테이블: 새 칸은 ADD COLUMN(칸 삭제·타입 변경은 안 함 — 응답 tables.type_mismatches) · 매니페스트에서 빠진 테이블은 비었으면 삭제, " +
+    "데이터가 있으면 보관 스키마로 옮기고 설치한 사람에게 알림(tables.archived) · 워크스페이스 앱 테이블이 500개를 넘게 되면 거절(409). " +
+    "저널드 2-phase — 실패 시 역순 보상. 관리자.",
   scope: "admin",
-  input: { source: z.object({ kind: z.enum(["git", "path"]), url: z.string().optional(), ref: z.string().optional(), path: z.string().optional() }) },
+  input: { source: z.object({
+    kind: z.enum(["git", "path", "inline"]), url: z.string().optional(), ref: z.string().optional(), path: z.string().optional(),
+    files: z.array(z.object({ path: z.string(), content: z.string(), encoding: z.enum(["utf8", "base64"]).optional() })).optional(),
+  }) },
   expose: {
     mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/apps/install"], parse: (req) => ({ source: (req.body as Record<string, unknown>)?.source }) }],
@@ -165,10 +187,81 @@ const appInstall: Capability = {
       const workerRestart = !outcome.created && previousHash !== loaded.contentHash
         ? await restartWorkersForApp(outcome.id) : null;
       const app = await store.getApp(outcome.id);
-      return { app, created: outcome.created, components: outcome.components, worker_restart: workerRestart };
+      return { app, created: outcome.created, components: outcome.components, tables: outcome.tables ?? null, worker_restart: workerRestart };
     } finally {
       await staged.cleanup();
     }
+  },
+};
+
+// ── 앱 저장(구성원 누구나) — #4225 «워크스페이스가 마음에 안 드는 곳을 바로 고쳐 쓴다» ──
+//  org_app_install(관리자)과 같은 설치 코어를 탄다(inline 파일 묶음 → 스테이지 → 로드 → 저널드 설치). 다른 것은 두 관문뿐:
+//   ① 담을 수 있는 것 = 화면 + 데이터(member-app.ts memberAppViolations) ② 이미 있는 앱이면 그 앱의 고치기 설정(editDenial).
+//  새 앱은 누구나 만든다 — 만든 사람이 installed_by 로 남고, 고치기 설정은 기본(전원)이다.
+const appSave: Capability = {
+  name: "app_save",
+  title: "앱 저장(만들기·고치기)",
+  description: "세션이 만든 앱 파일 묶음을 이 워크스페이스에 저장한다 — 새 id 면 만들고, 있는 id 면 고친다(재설치 = 갱신, 롤 불필요). " +
+    "files=[{path, content, encoding?:'utf8'|'base64'}] · lively-app.json 필수. 구성원 누구나 쓸 수 있고, 담을 수 있는 것은 **화면(ui.pages) + 데이터(data.tables) + " +
+    "선언한 라이블리 도구(permissions.tools — 쓰는 사람이 동의한 만큼만)**까지다. 스킬·훅·정기 작업·MCP/HTTP 도구·서버 worker·외부 호스트·화면의 직접 네트워크는 관리자 설치(org_app_install)로만. " +
+    "있는 앱은 그 앱의 고치기 설정(기본 전원 · 관리자가 지정한 사람만으로 좁힐 수 있음)을 따른다. 기본 앱(빌트인)은 고칠 수 없다. " +
+    "앱 화면은 샌드박스라 폼 제출이 막힌다 — 입력은 버튼 click · Enter keydown 으로. 칸 추가는 ADD COLUMN, 빠진 테이블은 비었으면 삭제·데이터 있으면 보관.",
+  scope: null,
+  input: { files: z.array(z.object({ path: z.string(), content: z.string(), encoding: z.enum(["utf8", "base64"]).optional() })) },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/apps/save"], parse: (req) => ({ files: (req.body as Record<string, unknown>)?.files }) }],
+  },
+  handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
+    const source = parseAppSource({ kind: "inline", files: input.files });
+    const staged = await stageAppSource(source);
+    try {
+      const loaded = await loadAppPackage(staged.dir);
+      const bad = memberAppViolations(loaded.manifest);
+      if (bad.length) {
+        throw new HttpError(403, `이 앱은 화면·데이터 밖의 기능을 선언해서 app_save 로 저장할 수 없습니다: ${bad.join(" · ")} — 빼고 저장하거나 관리자 설치(org_app_install)를 부탁하세요`);
+      }
+      const who = { userId: actorOf(user), scopes: user?.scopes };
+      const outcome = await store.withAppInstallLock(loaded.manifest.id, async () => {
+        const existing = await store.getApp(loaded.manifest.id);
+        if (existing) {
+          const why = editDenial(existing, who, safeManifest(existing));
+          if (why) throw new HttpError(403, why);
+        }
+        return installLoadedApp(loaded, staged.meta, wctx(user, ctx));
+      });
+      const app = await store.getApp(outcome.id);
+      return { app, created: outcome.created, tables: outcome.tables ?? null };
+    } finally {
+      await staged.cleanup();
+    }
+  },
+};
+
+// ── 누가 이 앱을 고칠 수 있나(관리자) — #4225 ──
+const appEditPolicySet: Capability = {
+  name: "app_edit_policy_set",
+  title: "앱 고치기 설정",
+  description: "이 앱을 누가 고칠 수 있는지(app_save) 정한다. mode='all' — 구성원 전원(기본) · mode='members' — members 에 적은 사람만(관리자는 늘 된다). " +
+    "기본 앱(빌트인)은 고칠 수 없어 설정 대상이 아니다. 관리자.",
+  scope: "admin",
+  input: { app_id: z.string(), mode: z.enum(["all", "members"]), members: z.array(z.string().max(200)).max(500).optional() },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/apps/:id/edit-policy"], parse: (req) => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      return { app_id: (req.params as Record<string, string>)?.id, mode: b.mode, members: b.members };
+    } }],
+  },
+  handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
+    const id = appId(input.app_id);
+    const app = await store.getApp(id);
+    if (!app) throw new HttpError(404, `앱 없음: ${id}`);
+    if (isBuiltinSource(app.source)) throw new HttpError(400, "기본 앱(빌트인)은 여기서 고칠 수 없어 고치기 설정이 없습니다");
+    const mode = input.mode === "members" ? "members" : "all";
+    const members = Array.isArray(input.members) ? (input.members as unknown[]).map(String) : [];
+    const after = await store.setAppEditPolicy(id, mode, members, wctx(user, ctx));
+    return { app_id: id, edit_mode: after?.edit_mode ?? mode, edit_members: after?.edit_members ?? [] };
   },
 };
 
@@ -200,13 +293,28 @@ const appRemove: Capability = {
         catch { /* best-effort — 조인은 아래 delete 로 CASCADE, 저널 삭제로 스위퍼도 무관 */ }
       }
       await store.pruneUiAssets(id, []);   // UI 자산은 FK CASCADE 대상이 아니므로(스키마 주석) 명시 삭제.
+      // #4226 — 테이블을 지우기 전에 데이터를 떠 둔다(7일 보관). 같은 id 로 다시 설치하면 app_data_restore 로 되돌린다.
+      //  떠 두기가 실패해도 제거는 막지 않는다 — 관리자가 명시로 요청한 제거다(로그는 남긴다).
+      let snapError: string | null = null;
+      const snap = await snapshotAppData(id, "before-remove").catch((err) => {
+        logger.warn({ err, id }, "제거 전 앱 데이터 떠 두기 실패");
+        snapError = (err as Error)?.message ?? String(err);
+        return null;
+      });
       // 앱 데이터 테이블(app 스키마)도 명시 DROP(소유자) — 매니페스트 선언분. best-effort.
       const dataTables = ((app.manifest as { data?: { tables?: Array<{ name?: string }> } })?.data?.tables ?? []).map((t) => String(t.name));
       //  스키마는 설치 때와 같은 규칙(#4223) — 워크스페이스가 설치한 앱이면 그 워크스페이스 스키마의 테이블만 지운다.
       try { await dropAppTables(id, dataTables, appSchemaFor(isBuiltinSource(app.source))); } catch { /* best-effort */ }
       await pruneAppInstances(id);             // FK 없는 v2.1 신규 표 — 앱 제거 전에 명시 회수.
+      await pruneSessionApps(id);              // #4225 세션에 붙어 있던 기록도 — 같은 규칙(FK 없음).
       await store.deleteApp(id, wctx(user, ctx));
-      return { ok: true, removed: id, components: comps.length };
+      return {
+        ok: true, removed: id, components: comps.length,
+        snapshot: snap?.taken_at ? { taken_at: snap.taken_at, tables: snap.tables } : null,
+        //  못 떠 뒀으면 왜인지 — 관리자가 «되돌릴 수 없는 제거였나» 를 알아야 한다.
+        ...(snap && !snap.taken_at ? { snapshot_skipped: snap.skipped ?? null } : {}),
+        ...(snapError ? { snapshot_error: snapError } : {}),
+      };
     });
   },
 };
@@ -265,4 +373,48 @@ const appUi: Capability = {
   },
 };
 
-export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appRemove, appActivityCap, appUi];
+// ── 앱 데이터 떠 둔 것 보기·되돌리기(#4226, 관리자) ──
+//  워크스페이스가 만든 앱의 데이터를 하루 한 번(+ 제거·되돌리기 직전) 떠 둔다(7일). AI 가 자유 SQL 로 행을 잘못 지웠을 때
+//  한 워크스페이스·한 앱만 그 시점으로 되돌리는 길이다(RDS 백업은 DB 전체 단위라 이게 안 된다).
+const appDataSnapshots: Capability = {
+  name: "app_data_snapshots",
+  title: "앱 데이터 떠 둔 것 목록",
+  description: "워크스페이스가 만든 앱의 데이터를 떠 둔 목록(하루 한 번 + 앱 제거·되돌리기 직전, 7일 보관). app_id 를 주면 그 앱만. 항목 = 시각·까닭(daily·before-remove·before-restore)·테이블별 행 수. 관리자.",
+  scope: "admin",
+  input: { app_id: z.string().optional() },
+  expose: {
+    mcp: true,
+    //  /api/ui/apps/snapshots 는 앞서 마운트된 GET /api/ui/apps/:id(org_app_get)에 가려진다(매니지드 끝단 실측) — app-activity 와 같은 모양으로.
+    rest: [{ method: "GET", paths: ["/api/ui/app-snapshots"], parse: (req) => ({ app_id: (req.query as Record<string, unknown>)?.app_id }) }],
+  },
+  handler: async (input: Record<string, unknown>) => {
+    const id = input.app_id == null || input.app_id === "" ? null : String(input.app_id);
+    return { snapshots: await listAppSnapshots(id) };
+  },
+};
+
+const appDataRestore: Capability = {
+  name: "app_data_restore",
+  title: "앱 데이터 되돌리기",
+  description: "떠 둔 시점(taken_at — app_data_snapshots 의 값 그대로)으로 앱 테이블을 되돌린다. table 을 주면 그 테이블만, 없으면 그 묶음의 테이블 전부. "
+    + "이 워크스페이스 행을 통째로 그 시점으로 바꾸고(원래 id 유지), 되돌리기 직전 지금 상태를 먼저 떠 둔다(before-restore — 되돌리기도 되돌릴 수 있다). 직전 상태를 못 떠 두면(너무 큰 앱) force 없이는 멈춘다. 관리자.",
+  scope: "admin",
+  input: { app_id: z.string(), taken_at: z.string(), table: z.string().optional(), force: z.boolean().optional().describe("되돌리기 직전 상태를 떠 두지 못해도(너무 큰 앱 등) 되돌린다 — 되돌린 것을 다시 되돌릴 수 없다") },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/apps/:id/restore"], parse: (req) => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      return { app_id: (req.params as Record<string, string>)?.id, taken_at: b.taken_at, table: b.table, force: b.force };
+    } }],
+  },
+  handler: async (input: Record<string, unknown>) => {
+    const id = appId(input.app_id);
+    return store.withAppInstallLock(id, async () => {
+      const table = input.table == null || input.table === "" ? null : String(input.table);
+      const out = await restoreAppSnapshot(id, String(input.taken_at ?? ""), table, { force: input.force === true });
+      return { ok: true, app_id: id, restored: out.restored, before_restore: out.safety.taken_at };
+    });
+  },
+};
+
+export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appSave, appEditPolicySet, appRemove, appActivityCap, appUi, appDataSnapshots, appDataRestore];
