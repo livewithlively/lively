@@ -143,6 +143,8 @@ export interface SessionChatOpts {
   draft?: string | null;
   trail?: TrailWidget | null;
   onPickProject?: (anchor: HTMLElement) => void;
+  /** 이 세션의 소속을 바꿀 수 있나(#3870 — 주인·초대받은 사람). 없으면 종전대로 주인만(target.owned). 판정은 셸의 한 술어(v2/views canMoveSess). */
+  canPickProject?: (t: SessionChatTarget) => boolean;
   onRename?: (label: string) => Promise<void>;
   /** 상단바 [파일] — 우패널을 '타임라인 ↔ 파일 탐색기'로 갈아 끼운다(#1744). 켜진 뒤 상태를 돌려준다. */
   onToggleFiles?: () => boolean;
@@ -1135,7 +1137,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  머리줄의 선택기를 데려오는 규칙(위 ★)은 그대로다 — 데려오는 시점만 [이 세션] 을 볼 때로 바뀌었다(아래 show).
     secs.push({ key: 'sess', label: '이 세션', icon: ['M4 5.5h16v13H4z', 'M4 9.5h16'], kids: [
       canRename() ? row('세션 이름', idLabel(titleText) ? '아직 이름이 없어요' : titleText, '바꾸기', () => startRename()) : null,
-      opts.onPickProject && target.owned
+      opts.onPickProject && (opts.canPickProject ? opts.canPickProject(target) : target.owned)
         ? row('프로젝트', target.projectId ? (target.projectName || '이름 없는 프로젝트') : '아직 프로젝트에 붙어 있지 않아요',
             target.projectId ? '바꾸기·떼기' : '연결', () => opts.onPickProject!(moreBtn))
         : null,

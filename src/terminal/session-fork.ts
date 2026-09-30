@@ -47,6 +47,12 @@ export interface ForkFacts {
   st: SessionState | null | undefined;
   /** 요청한 사람. */
   me: string;
+  /**
+   * 요청한 사람이 이 세션에 **초대받았나**(#3870 — 원준 2026-09-30 «초대받은 사람도 세션 복제가 되게»). 생략 = 아니다.
+   *  초대받은 사람의 복제본은 **주인 이름으로** 뜬다(대화 기록이 주인 자리에 있다) — 초대 명단을 그대로 물려받아 요청한 사람도 들어간다.
+   *  권한이 넓어지지 않는다: 초대받은 사람은 이미 그 세션에 주인 이름으로 지시를 넣을 수 있다.
+   */
+  invited?: boolean;
   /** 원래 세션이 돌고 있는 하네스 대화 id(훅이 보고한 값). */
   convId: string | null | undefined;
   /** 그 대화 파일이 실제로 있나 — 확인할 수 있는 자리에서만 present/absent, 아니면 unknown. */
@@ -103,7 +109,8 @@ export function forkRefusal(f: ForkFacts): ForkRefusal | null {
   const st = f.st;
   if (!st) return { status: 409, message: "이 세션의 실행 설정을 찾지 못해 복제할 수 없습니다 — 새 세션으로 열어 주세요." };
   //  대화 파일은 **만든 사람의 자리**(그 사람의 하네스 설정 폴더)에 있다. 다른 사람 이름으로 띄운 하네스는 그 파일을 못 읽는다.
-  if (st.owner !== f.me) return { status: 403, message: "본인이 만든 세션만 복제할 수 있습니다 — 대화 기록이 만든 사람의 자리에 있습니다." };
+  //   그래서 초대받은 사람의 복제본도 주인 이름으로 뜬다(invited 머리말) — 초대받지 않은 사람만 여기서 거절한다.
+  if (st.owner !== f.me && !f.invited) return { status: 403, message: "이 세션을 만든 사람이나 초대받은 사람만 복제할 수 있습니다." };
   if (st.app_id) return { status: 409, message: "앱으로 연 세션은 아직 복제할 수 없습니다." };
   const harness = HARNESSES.find((h) => h.key === String(st.harness || "claude"));
   if (!harness || typeof harness.forkArgv !== "function") {
