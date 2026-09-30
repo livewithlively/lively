@@ -164,7 +164,7 @@ test("W1 배선: renderProjects 가 카드 계획 · 줄 나누기 · 고정 줄
   assert.ok(body.length > 0, "renderProjects 가 있다");
   assert.match(body, /planProjCards\(\{ lists, folders, openByList, noneN, favIds: favLists, sel: projScopeKey\(\), closed: foldClosed, more: projMore \}\)/);
   assert.match(body, /fitWikiList\(listEl, order, sizes, forced, build\)/);
-  assert.match(body, /el\('nav', \{ class: 'v2-kviews', 'aria-label': '즐겨찾기 · 기타' \}/);
+  assert.match(body, /el\('nav', \{ class: 'v2-kviews', 'aria-label': '전체 · 즐겨찾기 · 기타' \}, \.\.\.fixed\)/);
   assert.match(body, /class: 'v2-app-group v2-kgroup v2-pgroup'/);
   assert.match(body, /class: 'v2-ksp v2-pcard'/);
   assert.match(body, /saveSet\(FOLD_CLOSED_STORE, foldClosed\)/);
@@ -239,4 +239,82 @@ test("W5 만들기 실패 때 이름칸이 이미 다시 그려졌으면(떨어�
   const catchBody = body.slice(c, c + 700);
   assert.match(catchBody, /newErr = '만들지 못했어요 — ' \+ \(err\?\.message \|\| err\);\s*(?:\/\/[^\n]*\n\s*)?if \(!inp\.isConnected\) \{ redraw\(\); return; \}/);
   assert.ok(catchBody.indexOf("if (!inp.isConnected)") < catchBody.indexOf("line.classList.remove('sending')"), "떨어진 노드를 만지기 전에 가른다");
+});
+
+// ── #3870 「전체」 고정 줄(원준 2026-09-30 «라이블리 앱 런칭 전 할일 23 · 기타 (미분류) 304 위에 전체 보는 게 있으면 좋겠음») ──
+//  위키의 「전체 문서」 · AI 세션의 「전체」와 같은 자리. 누르면 보드의 전체 보기(#/projects2/all)가 열린다.
+//  엣지 표 A1~A9: 수 · 켜짐 · 빈 값 · 주소 판정 · 셸 배선 · 보드(클래식) 배선.
+
+test("A1 ★전체 수 = 보관 폴더 밖 리스트의 열린 프로젝트 + 기타 (보관 폴더와 그 아래 리스트는 안 센다)", async () => {
+  //  기준 나무: 3+0+5+0+2+1+4+1 = 16 (보관 501 · 502 의 9+9 는 뺀다) + 기타 3.
+  assert.equal((await plan()).allN, 19);
+});
+
+test("A2 전체 수는 즐겨찾기 · 접은 카드 · 고른 스코프와 무관하다", async () => {
+  const p = await plan({ favIds: new Set([101, 203]), closed: new Set(["11", "12"]), sel: "L201" });
+  assert.equal(p.allN, 19);
+});
+
+test("A3 새 값 비었음: 리스트 0 · 기타 0 → 0 · null 도 같다 · 기타만 있으면 기타 수", async () => {
+  assert.equal((await plan({ lists: [], folders: [], noneN: 0 })).allN, 0);
+  assert.equal((await plan({ lists: null, folders: null, noneN: 0 })).allN, 0);
+  assert.equal((await plan({ lists: null, folders: null, noneN: 7 })).allN, 7);
+});
+
+test("A4 ★sel 'all' 이면 「전체」 줄만 켜진다 — 카드 줄 · 즐겨찾기 줄 · 폴더 머리는 안 켜지고 카드를 끌어당기지도 않는다", async () => {
+  const p = await plan({ sel: "all", favIds: new Set([203]), closed: new Set(["12"]) });
+  assert.equal(p.onKey, "all");
+  const c = cardOf(p, "12");
+  assert.equal(c.open, false);
+  assert.equal(c.forced, 0);
+  assert.equal(c.full, false);
+});
+
+test("A5 경계: 전체가 아닌 스코프는 종전 그대로 — '' 는 아무것도 안 켜고 'none' 은 기타", async () => {
+  assert.equal((await plan({ sel: "" })).onKey, "");
+  assert.equal((await plan({ sel: "none" })).onKey, "none");
+});
+
+//  projScopeKey 는 DOM(location) 에 붙어 있어 소스에서 함수만 떼어 가짜 location 으로 돌린다.
+function scopeKeyOf(hash: string): string {
+  const a = SIDE.indexOf("function projScopeKey(): string {");
+  const b = SIDE.indexOf("\n}\n", a);
+  assert.ok(a >= 0 && b > a, "projScopeKey 가 있다");
+  const js = ts.transpileModule(SIDE.slice(a, b + 2), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  return new Function("location", js + "\nreturn projScopeKey();")({ hash });
+}
+
+test("A6 ★주소 판정: #/projects2/all → 'all' · 다른 스코프 주소는 종전 그대로 · 비슷한 이름(allx)은 전체가 아니다", () => {
+  assert.equal(scopeKeyOf("#/projects2/all"), "all");
+  assert.equal(scopeKeyOf("#/projects2/all?x=1"), "all");
+  assert.equal(scopeKeyOf("#/projects2/allx"), "");
+  assert.equal(scopeKeyOf("#/projects2/l/12"), "L12");
+  assert.equal(scopeKeyOf("#/projects2/f/3"), "F3");
+  assert.equal(scopeKeyOf("#/projects2/none"), "none");
+  assert.equal(scopeKeyOf("#/app/projects2"), "");
+});
+
+test("A7 배선(셸): 「전체」 줄이 고정 줄 맨 앞에 서고, #/projects2/all 로 가며, 켜짐 · 수는 계획을 따른다 · 빈 안내는 전체 줄로 가려지지 않는다", () => {
+  const a = SIDE.indexOf("function renderProjects(): void {");
+  const body = SIDE.slice(a, SIDE.indexOf("\n}\n", a));
+  assert.match(body, /const allOn = plan\.onKey === 'all';/);
+  assert.match(body, /href: '#\/projects2\/all'/);
+  assert.match(body, /icon\('proj', 'v2-ptl-ic'\), el\('span', \{ class: 'n', text: '전체' \}\), cnt\(plan\.allN\)\)/);
+  assert.match(body, /const fixed: HTMLElement\[\] = \[allRow, \.\.\.plan\.favs\.map\(favRow\)\];/);
+  assert.match(body, /if \(!plan\.groups\.length\) return plan\.favs\.length \|\| plan\.noneN \? \[\] : \[el\('p', \{ class: 'v2-empty'/);
+});
+
+test("A8 배선(보드 주소): 클래식 라우터가 /all 을 전체 스코프(__all__)로 넘긴다", () => {
+  const MAIN = readFileSync("web/main.ts", "utf8");
+  assert.match(MAIN, /else if \(sub2 === 'all'\) scopeKey = '__all__';/);
+});
+
+test("A9 배선(보드): 전체로 들어오면 스코프를 풀고(explicit 아님) 전체 보드 자신의 뷰를 쓰며 사이드바를 억지로 열지 않는다 · 전체 뷰도 기억한다", () => {
+  const BOARD = readFileSync("web/projects/board.ts", "utf8");
+  const a = BOARD.indexOf("async function renderProjectV2Board(view, scopeKey?) {");
+  const head = BOARD.slice(a, a + 2400);
+  assert.match(head, /if \(allScope\) \{ pjvSidebarSel\.key = '__all__'; pjvSidebarSel\.explicit = false; pjvApplyView\(pjvLoadScopeView\('__all__'\) \|\| pjvDefaultView\('__all__'\)\); \}\s*else if \(scopeKey\) \{ pjvSidebarSel\.key = scopeKey; pjvSidebarSel\.explicit = true; \}/);
+  assert.match(head, /else if \(s === '1' \|\| \(scopeKey && !allScope\)\) pjvBoardView\.byArea = true;/);
+  assert.match(BOARD, /const rerenderScoped = \(\) => \{ syncToggles\(\); pjvSaveScopeView\(pjvSidebarSel\.key \|\| '__all__', pjvSnapshotView\(\)\); render\(\); \};/);
 });

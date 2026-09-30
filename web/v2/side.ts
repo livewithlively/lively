@@ -1763,11 +1763,12 @@ export function projLandingRoute(): string {
   return id ? '#/projects2/l/' + id : '#/app/projects2';
 }
 
-/** 지금 보드가 선 스코프 — 주소에서 읽는다(#/projects2/l/<id> · /f/<id> · /none). 액자 안에서 일어난 이동은 여기 안 비친다(그건 그 화면의 일). */
+/** 지금 보드가 선 스코프 — 주소에서 읽는다(#/projects2/l/<id> · /f/<id> · /none · /all). 액자 안에서 일어난 이동은 여기 안 비친다(그건 그 화면의 일). */
 function projScopeKey(): string {
   const m = /^#\/projects2\/(l|f)\/(\d+)/.exec(location.hash);
   if (m) return (m[1] === 'l' ? 'L' : 'F') + m[2];
-  return /^#\/projects2\/none/.test(location.hash) ? 'none' : '';
+  if (/^#\/projects2\/none/.test(location.hash)) return 'none';
+  return /^#\/projects2\/all(?:[/?]|$)/.test(location.hash) ? 'all' : '';
 }
 
 /** 폴더 · 리스트의 ＋ — 무엇을 만들지 셋 중 고른다(프로젝트 · 리스트 · 폴더). 옛 패널의 「＋ 새로 만들기 ▾」(#1067) 자리. */
@@ -1834,14 +1835,20 @@ function renderProjects(): void {
   const tip = (l: TreeList): string => l.name + (l.visibility === 'members' ? ' — 멤버만 보는 리스트' : '');
   const cnt = (n: number): HTMLElement => el('span', { class: 'v2-cnt', text: String(n) });
 
-  // ── 고정 줄 — 즐겨찾기(★) · 기타 (미분류). 한 리스트는 한 줄에서만 켜진다(plan.onKey).
+  // ── 고정 줄 — 전체 · 즐겨찾기(★) · 기타 (미분류). 한 리스트는 한 줄에서만 켜진다(plan.onKey).
+  //  「전체」는 위키의 「전체 문서」 자리(#3870) — 보드의 전체 보기(#/projects2/all)를 연다. 스코프 없는 #/app/projects2 는
+  //   즐겨찾기 맨 위 리스트로 착지하므로(#2061) 전체를 여는 주소가 따로 있어야 한다.
+  const allOn = plan.onKey === 'all';
+  const allRow = el('a', { class: 'v2-wcat v2-ptl v2-kview' + (allOn ? ' on' : ''), href: '#/projects2/all',
+    title: '모든 프로젝트 — 폴더 · 리스트와 상관없이 한 화면에서 봅니다', ...(allOn ? { 'aria-current': 'true' } : {}) },
+    icon('proj', 'v2-ptl-ic'), el('span', { class: 'n', text: '전체' }), cnt(plan.allN));
   const favRow = (l: TreeList): HTMLElement => {
     const on = plan.onKey === 'fav:' + l.id;
     return el('a', { class: 'v2-wcat v2-ptl v2-kview v2-pfav' + (on ? ' on' : ''), href: '#/projects2/l/' + l.id, 'data-ctx': 'plist', 'data-lid': String(l.id), 'data-name': l.name,
       title: tip(l) + ' — 즐겨찾기', ...(on ? { 'aria-current': 'true' } : {}) },
       icon('star', 'v2-ptl-ic'), el('span', { class: 'n', text: l.name }), l.visibility === 'members' ? lockIc() : null, cnt(openByList.get(l.id) || 0));
   };
-  const fixed: HTMLElement[] = plan.favs.map(favRow);
+  const fixed: HTMLElement[] = [allRow, ...plan.favs.map(favRow)];
   if (plan.noneN) {
     const on = plan.onKey === 'none';
     fixed.push(el('a', { class: 'v2-wcat v2-ptl v2-kview v2-ptl--none' + (on ? ' on' : ''), href: '#/projects2/none',
@@ -1918,7 +1925,8 @@ function renderProjects(): void {
   //  이름칸 자리 — [정리]에서 연 것은 그 폴더 이름표 바로 아래(하위 폴더면 그 카드 안 맨 위), 구역 ＋ 는 종전대로 맨 위.
   const slot = newOpen ? newRowSlot(plan.groups, newIn) : { at: 'top' as const };
   const build = (alloc: Record<string, number>): HTMLElement[] => {
-    if (!plan.groups.length) return fixed.length ? [] : [el('p', { class: 'v2-empty', text: '아직 리스트가 없어요. 위 ＋ 에서 리스트를 만들면 여기 섭니다.' })];
+    //  「전체」는 늘 서므로 빈 안내는 즐겨찾기 · 기타 줄로 가른다(전체 한 줄만 있으면 아직 정리할 것이 없다는 뜻이다).
+    if (!plan.groups.length) return plan.favs.length || plan.noneN ? [] : [el('p', { class: 'v2-empty', text: '아직 리스트가 없어요. 위 ＋ 에서 리스트를 만들면 여기 섭니다.' })];
     return plan.groups.flatMap((g) => [label(g),
       ...(newOpen && slot.at === 'label' && slot.folderId === g.folderId ? [newProjRow()] : []),
       ...g.cards.map((c) => card(c, alloc[c.key] ?? c.rows.length))]);
@@ -1937,7 +1945,7 @@ function renderProjects(): void {
     el('section', { class: 'v2-app-space', 'aria-label': '프로젝트' },
       secHead('프로젝트', null, newMenuBtn()),
       ...(newOpen && slot.at === 'top' ? [newProjRow()] : []),
-      fixed.length ? el('nav', { class: 'v2-kviews', 'aria-label': '즐겨찾기 · 기타' }, ...fixed) : null,
+      el('nav', { class: 'v2-kviews', 'aria-label': '전체 · 즐겨찾기 · 기타' }, ...fixed),
       listEl),
     secFoot());
 
