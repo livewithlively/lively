@@ -20,6 +20,7 @@ import { aiLoginScopeNote } from './ai-login-scope.js';   // #2476 — 그 안�
 //   서비스 표·연결 판정은 me-logins.ts(=[외부 앱 연결] 화면 v2/connect.ts 와 같은 정본), 토큰 발급처·생김새는
 //   admin-credentials.ts 의 CRED_KINDS. **표가 두 벌이 되면 조용히 어긋난다** — 여기서 다시 만들지 않는다.
 import { LOGIN_SERVICES, partition } from '../me-logins.js';
+import { catalogSoon } from '../lib/connect-axes.js';   // #4445 — «준비 중» 판정의 정본(외부 앱 연결과 한 벌)
 import { NOTION_PICK_TIP, notionCollectedPages, notionCollectedLine } from './notion-pick.js';   // #1968 — 노션 고르기 안내·모은 페이지 수(외부 앱 연결과 한 벌)
 import { CRED_KINDS } from '../admin-credentials.js';
 import { ctxPath } from '../lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
@@ -1205,7 +1206,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const dynSvcs = () => (CONN ? CONN.all.filter((s) => s.dynamic) : []);
   /** 이 앱이 지금 어떤 자리에 있나 — 'on'(이어짐) · 'off'(내가 켤 수 있다) · 'blocked'(관리자가 열어야) · null(모른다). */
   function connState(id) {
-    const svc = svcOf(id); if (!svc || !CONN) return null;
+    const svc = svcOf(id); if (!svc) return null;
+    //  #4445 — 서버에 아직 못 물었어도(CONN===null) **서버가 «준비됐다» 고 해야만 열리는 앱**(구글 — soonUntilReady)은
+    //   잠근다. 모르는 것을 «열렸다» 로 읽으면 안 되는 쪽이 이 앱들이다(catalogSoon 의 규약). 종전엔 null(모른다)로
+    //   떨어져 수집처 고르기가 처음 0.5초(느린 서버면 그 이상) 구글을 고를 수 있는 카드로 그렸고, 자격 목록을 못 읽으면
+    //   영영 그 모양이었다(원준님 2026-09-30 «구글도 가능한 것처럼 되어 있다»). 이미 연결해 둔 사람은 답이 오면 'on' 으로 바뀐다.
+    if (!CONN) return catalogSoon(svc, null) ? 'blocked' : null;
     if (collectMode(id)) {
       const c = COLL[id];
       if (c) {
@@ -1241,6 +1247,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     return svc.token ? 'token' : (svc.oauth ? 'oauth' : null);
   }
   /** 이어진 것으로 세어도 되는 id 만 — 화면이 «2곳 이었어요» 라고 말할 근거. */
+  /** 수집처 고르기에서 잠가 둘 카드인가 — 표가 «준비 중» 이라 하거나, 서버 판정이 잠김(아직 못 여는 앱). */
+  const srcNotYet = (it) => !!it.soon || connState(it.id) === 'blocked';
   const pickedIds = () => S.sources.filter((id) => id !== 'none' && (SVC_OF[id] || (CONN && CONN.all.some((s) => s.key === id))));
 
   /* 토큰형의 «어느 버튼을 누르는가». 주소·값의 생김새는 CRED_KINDS 에서 읽고(지어내면 그 자리에서 막힌다),
@@ -1958,7 +1966,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           const hit = rows.find((x) => x.k === k);
           if (hit) hit.items.push(...items); else rows.push({ k, items: [...items] });
         }
-        const notYet = (it) => it.soon || connState(it.id) === 'blocked';
+        const notYet = srcNotYet;
         //  #2232 — «준비 중» 카드는 묶음 안에서 **맨 오른쪽**으로(원준님 2026-08-28). 문서·위키는 Notion · Figma · Google Drive 순이 된다.
         for (const r of rows) r.items = [...r.items.filter((it) => !notYet(it)), ...r.items.filter(notYet)];
         const flat = rows.flatMap((r) => r.items);
@@ -1996,6 +2004,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //   못 물으면 표 그대로 두고 그냥 진행한다(연결 못 읽었다고 온보딩이 막히면 안 된다).
         if (!CONN && !connTried) { void loadConn().then(() => renderScene('sources', false)); }
         const all = DATA.SOURCE_ROWS.flatMap((r) => r.items);
+        //  #4445 — 잠긴 카드(준비 중)는 고른 목록에서도 뺀다. 답이 오기 전에 눌러 둔 것이 남으면 다음 장면(연결)에
+        //   «아직 준비 중이에요» 카드로 끌려가고, [계속]이 그걸 «고른 곳» 으로 센다.
+        const lockedIds = new Set(all.filter(srcNotYet).map((it) => it.id));
+        if (S.sources.some((id) => lockedIds.has(id))) { S.sources = S.sources.filter((id) => !lockedIds.has(id)); save(); renderSB(); }
         //  #2232 — 관리자가 등록한 앱은 표에 없으므로 서버가 준 목록에서도 찾는다(키가 곧 id 다).
         const idOf = (label) => (all.find((s) => s.label === label) || {}).id
           || (dynSvcs().find((sv) => sv.label === label) || {}).key;
