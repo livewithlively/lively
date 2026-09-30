@@ -1,7 +1,7 @@
 // 긴 문서 섹션 단위 재작성 — 사양 C 절(splitSections·checkInvariants·sectionFindings·isEligible mode)의 행위를 한 줄씩 잠근다.
 // 실행: npx tsx src/v6/writing-rewrite-sections.test.ts
 import assert from "node:assert/strict";
-import { splitSections, checkInvariants, sectionFindings, isEligible, REWRITE_BODY_MAX_CHARS } from "./writing-rewrite-gate.js";
+import { splitSections, checkInvariants, sectionFindings, isEligible, sectionHeadingOk, REWRITE_BODY_MAX_CHARS } from "./writing-rewrite-gate.js";
 import { resolveWritingFormat } from "../org/policies/writing-format.js";
 
 let pass = 0;
@@ -269,4 +269,12 @@ t("고칠 것 없는 긴 본문의 사유는 too_long 이 아니라 nothing_to_f
   assert.equal(r.reason, "nothing_to_fix");
 });
 
+t("sectionHeadingOk: 헤딩 글자(기호)가 바뀌어도 같은 수준이면 통과", () =>
+  assert.equal(sectionHeadingOk("## 🔴 배경", "## 배경\n본문"), true));
+t("sectionHeadingOk: 헤딩 수준이 바뀌면 거부", () => {
+  assert.equal(sectionHeadingOk("## 배경", "### 배경\n본문"), false);
+  assert.equal(sectionHeadingOk("## 배경", "# 배경\n본문"), false);
+  assert.equal(sectionHeadingOk("## 배경", "배경은 이렇다.\n## 배경"), false);
+});
+t("sectionHeadingOk: 헤딩 없는 조각은 검사하지 않는다", () => assert.equal(sectionHeadingOk(null, "아무 글"), true));
 console.log(`writing-rewrite-sections: ${pass} passed`);
