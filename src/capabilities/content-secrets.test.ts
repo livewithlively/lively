@@ -122,6 +122,19 @@ await t("E9 빈 문자열·null·숫자는 검사 대상이 아니다", async ()
   assert.ok(!r.blocked, r.message);
 });
 
+await t("E12 AWS 공식 문서 예시 키(…EXAMPLE)는 막지 않고, 실제 모양의 키는 막는다", async () => {
+  const example = "AKIA" + "IOSFODNN7" + "EXAMPLE";
+  const real = "AKIA" + "Q3VJ7ZK2M9XW4TPL";
+  assert.ok(!(await call("task_comment_v6", { id: 2, text: `문서 예시 ${example}` })).blocked, "AWS 문서 예시 키를 막았다");
+  assert.ok((await call("task_comment_v6", { id: 2, text: `키 ${real}` })).blocked, "실제 모양의 AWS 키를 못 막았다");
+});
+await t("E13 개인키 머리줄만 적은 형식 설명은 막지 않고, 본문이 붙은 키는 막는다", async () => {
+  const header = "-----BEGIN " + "OPENSSH PRIVATE KEY-----";
+  assert.ok(!(await call("task_comment_v6", { id: 2, text: `파일 첫 줄은 ${header} 이다` })).blocked, "머리줄 설명을 막았다");
+  const pem = `${header}\n${"b3BlbnNzaC1rZXktdjEAAAAA".repeat(3)}\n`;
+  assert.ok((await call("task_comment_v6", { id: 2, text: pem })).blocked, "본문이 붙은 개인키를 못 막았다");
+});
+
 // ── 자동 생성은 막지 않고 가린다 ──
 await t("E10 첫 지시에 붙인 토큰은 초안 프로젝트 이름·본문에 남지 않는다(가림)", () => {
   const spec = shellProjectFromPrompt(`${GH} 이 토큰으로 배포 스크립트 고쳐 줘`);

@@ -54,8 +54,10 @@ t("E: 상한(16384) 초과(16385자) → 거부", () => {
 });
 
 // ── F. 평문 시크릿 포함 = 거부(hard-block). AWS 액세스 키(AKIA + 대문자·숫자 16). ──
+//  ⓘ AWS 문서 예시 키(…EXAMPLE)는 #4501 부터 자격으로 보지 않는다(런북이 인용한다) — 실제 모양의 키로 잰다.
+//   값은 런타임 조립(시크릿 스캐너가 이 파일을 잡지 않게).
 t("F: 평문 시크릿(AWS 액세스 키) 포함 → 거부", () => {
-  assert.throws(() => resolveHookSource('const k = "AKIAIOSFODNN7EXAMPLE";'));
+  assert.throws(() => resolveHookSource(`const k = "${"AKIA" + "Q3VJ7ZK2M9XW4TPL"}";`));
 });
 t("F: 생략(A)은 시크릿 검사를 타지 않는다 — 값 없으면 오류 없음", () => {
   assert.doesNotThrow(() => resolveHookSource(undefined));

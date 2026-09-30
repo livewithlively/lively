@@ -26,7 +26,7 @@ const PROSE_RISKY_RES: RegExp[] = [
 ];
 
 // 저장 거부(hard-block) — 마스킹으로 끝낼 수 없는 명백한 평문 시크릿.
-//  ⓘ #4501 — v6 콘텐츠(지식·프로젝트 본문 등 긴 산문)에도 걸리면서 셋을 맞췄다: Anthropic 키(위탁 리스·setup-token 이
+//  ⓘ #4501 — v6 콘텐츠(지식·프로젝트 본문 등 긴 산문)에도 걸리면서 맞췄다: Anthropic 키(위탁 리스·setup-token 이
 //   이 모양인데 목록에 없었다) · GitHub 토큰 전 종류(ghp_ 만 있었다 — gho_/ghs_/ghu_/ghr_ 도 같은 자격) · OpenAI 는 위 마스킹과
 //   같은 `(?<![A-Za-z0-9])` — 없으면 산문의 «risk-managementprocedures» 같은 낱말이 키로 잡혀 저장이 거부된다.
 const HARD_LABELS: { re: RegExp; label: string }[] = [
@@ -35,9 +35,11 @@ const HARD_LABELS: { re: RegExp; label: string }[] = [
   { re: /gh[pousr]_[A-Za-z0-9]{20,}/, label: "GitHub 토큰" },
   { re: /github_pat_[A-Za-z0-9_]{20,}/, label: "GitHub PAT" },
   { re: /xox[abprs]-[A-Za-z0-9-]{10,}/, label: "Slack 토큰" },
-  { re: /AKIA[0-9A-Z]{16}/, label: "AWS 액세스 키" },
+  //  AWS 공식 문서의 예시 키(AKIAIOSFODNN7EXAMPLE — 끝이 EXAMPLE)는 자격이 아니다 — 런북이 인용한다(#4501 실측: 지식 1건).
+  { re: /AKIA(?![0-9A-Z]{9}EXAMPLE)[0-9A-Z]{16}/, label: "AWS 액세스 키" },
   { re: /lvk_[A-Za-z0-9_-]{20,}/, label: "라이블리 토큰" },
-  { re: /-----BEGIN[^-]*PRIVATE KEY-----/, label: "개인키" },
+  //  머리줄 뒤에 키 본문(base64)이 이어질 때만 — 머리줄만 적은 형식 설명은 키가 아니다(#4501 실측: 공증 런북 1건).
+  { re: /-----BEGIN[^-]*PRIVATE KEY-----\s*[A-Za-z0-9+/=]{40,}/, label: "개인키" },
 ];
 
 /** 토큰 모양만 가린다 — 산문이 주인인 자리(AI 가 쓴 요약 등)용. */

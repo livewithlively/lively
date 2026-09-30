@@ -24,7 +24,8 @@ Plaintext secrets never go into content (free-text bodies written by agents and 
 
 `assertNoHardSecrets` hard-block patterns (as of 2026-09-30, #4501): Anthropic (`sk-ant-`), OpenAI (`sk-` — not when it starts
 inside a word, same rule as masking), GitHub tokens (`ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`)·PAT (`github_pat_`), Slack (`xox[abprs]-`),
-AWS (`AKIA…`), Lively token (`lvk_`), private key (`BEGIN … PRIVATE KEY`). `redactDeep`/`redactString` mask more broadly, adding
+AWS (`AKIA…` — except the AWS docs example ending in `EXAMPLE`), Lively token (`lvk_`), private key (`BEGIN … PRIVATE KEY` followed by
+key material — a header line alone, as in a format description, is excluded). `redactDeep`/`redactString` mask more broadly, adding
 JWT·`Bearer <literal>` (`TOKEN_SHAPE_RES`·`PROSE_RISKY_RES`).
 
 ### Choke-point coverage (content write paths)

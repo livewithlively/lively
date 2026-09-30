@@ -24,7 +24,8 @@
 
 `assertNoHardSecrets` 의 hard-block 패턴(2026-09-30 기준, #4501): Anthropic(`sk-ant-`), OpenAI(`sk-` — 낱말 안에서
 시작하면 제외, 마스킹과 같은 규칙), GitHub 토큰(`ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`)·PAT(`github_pat_`), Slack(`xox[abprs]-`),
-AWS(`AKIA…`), 라이블리 토큰(`lvk_`), 개인키(`BEGIN … PRIVATE KEY`). `redactDeep`/`redactString` 는 여기에
+AWS(`AKIA…` — AWS 문서 예시 `…EXAMPLE` 제외), 라이블리 토큰(`lvk_`), 개인키(`BEGIN … PRIVATE KEY` 뒤에 키 본문이 이어질 때 —
+머리줄만 적은 형식 설명은 제외). `redactDeep`/`redactString` 는 여기에
 JWT·`Bearer <literal>` 까지 더 넓게 마스킹한다(`TOKEN_SHAPE_RES`·`PROSE_RISKY_RES`).
 
 ### choke-point 적용 현황 (콘텐츠 쓰기경로)
