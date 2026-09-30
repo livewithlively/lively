@@ -12,14 +12,19 @@
 //   R3 물러나는 움직임: 사이드바가 격자 전체를 덮은 거리에서 0 으로 줄어든다(세션 열이 가운데에서 드러난다)
 //   G1 카드인 동안 터미널 액자에 {cmd:'glass', on} 을 보낸다. 액자가 늦게 떠도(상태 신호) 다시 보낸다
 //   G2 또렷 = 사람이 카드를 골랐다(cm-live) 또는 마우스가 위에 있다(:hover). 사이드바를 누르면 고름이 풀린다.
-//      터미널에 초점이 가면 고른 것 · 액자끼리 초점이 옮겨 가도 따라간다
-//   G3 막 떠오른 카드는 잠깐 또렷하다가 비친다(고르지 않았으면)
+//      터미널에 초점이 가면 고른 것 · 액자끼리 초점이 옮겨 가도 따라간다(감시는 카드가 떠 있을 때만)
+//      그 밖(카드에서 연 창 · 왼쪽 목록)으로 초점이 가면 고름을 그대로 둔다(카드가 제 창 뒤에서 비치지 않게)
+//   G3 막 떠오른 카드는 다 올라온 뒤 1.2초 또렷하다가 비친다(고르지 않았으면). 입력하던 중에 카드가 되면 고른 채로
+//   G5 카드가 다시 보이기 시작하면(사이드바를 접었다 폈다) 예전 고름을 물려받지 않고 지금 초점으로 다시 정한다
 //   G4 세션 상태(답 기다림)로는 또렷해지지 않는다 — 고른 칸이 정한다
 //   C1 CSS: 비칠 때 카드 바탕은 반투명 + 뒤 흐림(-webkit- 포함). 안쪽(칸 · 세션 화면 · 액자 · 카드 단추)은 카드인 동안 늘 투명
 //   C2 CSS: 비침 규칙은 넓은 폭(카드가 있는 곳) 안에 있다
+//   C3 CSS: 또렷해질 때 바탕은 전환 없이 바로 찬다(흐림이 풀리는 순간 날 글씨가 비치지 않게)
 //   T1 터미널: glass 를 받으면 바탕을 비운다 — 색은 그대로, 알파만 0 (OSC 11 답이 검정이 되지 않게). 읽지 못하는 꼴은 투명한 흰색
 //   T2 터미널: xterm 테마를 바꾸는 모든 자리가 비침을 지킨다(themeFor) · 만들 때도 allowTransparency 를 따른다
-//   T3 terminal.html: term-glass 이면 문서 바탕을 걷고 color-scheme 을 테마에 맞춘다
+//   T3 terminal.html: term-glass 이면 문서 바탕을 걷는다. color-scheme 은 JS 가 **앱 테마**로 맞춘다(터미널 테마 아님)
+//   T4 비치는 동안 xterm 은 앱 테마의 색을 쓴다(Dracula 같은 이름 있는 테마의 흰 글씨가 밝은 앱 위에서 안 읽히지 않게) ·
+//      앱 테마가 바뀌면 이름 있는 테마를 고른 사람도 따라간다
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,24 +63,45 @@ const card = code(read("web/v2/side-card.ts"));
 ok(/const KEY_CARD = 'lively_v2_side_card2';/.test(card) && !/'lively_v2_side_card'/.test(card), "D3 저장 키가 새 이름이다(종전 큰 크기를 물려받지 않는다)");
 const leave = card.slice(card.indexOf("async function leave("), card.indexOf("function halt("));
 ok(leave.length > 0 && /Math\.min\(SIDE_DEF, cap\)/.test(leave) && !/h\.setSideW\(cap, true\)/.test(leave), "R1d 제자리로: 상한이 아니라 기본 폭으로 물러난다", leave.slice(0, 160));
-ok(/const from = back \? Math\.max\(0, Math\.round\(bw\(\)\) - \(to as number\) - SPLIT_W\) : 0;/.test(leave) && /paintOver\(from\)/.test(leave) && /paintOver\(from \* \(1 - t\)\)/.test(leave), "R3 물러나는 움직임: 격자 전체를 덮은 거리에서 0 으로");
+ok(/const from = back \? Math\.max\(0, Math\.round\(bw\(\)\) - \(to as number\)\) : 0;/.test(leave) && /paintOver\(from\)/.test(leave) && /paintOver\(from \* \(1 - t\)\)/.test(leave), "R3 물러나는 움직임: 격자 왼쪽 끝(0)까지 덮은 거리에서 0 으로(카드 상태와 딱 붙는다)");
 ok(/cmd: 'glass', on: v/.test(card) && /iframe\.sc-term-frame/.test(card), "G1a 카드인지 아닌지를 터미널 액자에 보낸다");
 ok(/m\.type !== 'lively-term-status'/.test(card) && /window\.addEventListener\('message', onFrameMsg\)/.test(card) && /window\.removeEventListener\('message', onFrameMsg\)/.test(card), "G1b 액자가 늦게 떠 상태를 알려 오면 다시 보낸다(걷을 때 듣기도 뗀다)");
 const paintSrc = card.slice(card.indexOf("function paint():"), card.indexOf("\n  }\n", card.indexOf("function paint():")));
 ok(/paintLive\(\);/.test(paintSrc) && /postGlass\(\);/.test(paintSrc), "G1c 카드 상태를 그릴 때마다 또렷/비침과 액자 비침을 함께 맞춘다", paintSrc.slice(-120));
+// ── 또렷 · 비침의 판정(순수 함수) — 누름 · 초점의 순서를 실제로 돌려 본다 ──
+const liveSrc = read("web/lib/side-card-live.ts");
+const live = liveSrc ? await load(liveSrc) : null;
+ok(!!live && typeof live.nextPicked === "function" && typeof live.isLive === "function", "G0 판정이 잎 모듈(web/lib/side-card-live.ts)에 있다");
+if (live) {
+  const { nextPicked, isLive } = live;
+  const run = (start, seq) => seq.reduce((p, w) => nextPicked(p, w), start);
+  ok(run(false, ["card"]) === true, "G2a 카드를 누르거나 터미널에 초점 → 고름");
+  ok(run(true, ["side"]) === false, "G2b 사이드바를 누르면 고름이 풀린다(답을 기다리는 중이어도 — 세션 상태는 입력이 아니다)");
+  ok(run(true, ["other"]) === true && run(false, ["other"]) === false, "G2c 그 밖(카드에서 연 창 · 왼쪽 목록)은 고름을 그대로 둔다");
+  ok(run(false, ["card", "other", "side", "other"]) === false && run(false, ["side", "card", "other"]) === true, "G2d 순서대로 마지막 카드/사이드바가 이긴다");
+  ok(isLive({ shown: true, entering: false, picked: true }) === true && isLive({ shown: true, entering: true, picked: false }) === true, "G2e 고름 또는 막 떠오름이면 또렷");
+  ok(isLive({ shown: true, entering: false, picked: false }) === false, "G2f 둘 다 아니면 비친다");
+  ok(isLive({ shown: false, entering: true, picked: true }) === false, "G2g 카드가 안 보이면(사이드바 접힘 · 좁은 폭) 또렷 표시도 없다");
+}
 const plAt = card.indexOf("function paintLive(");
 const paintLive = plAt >= 0 ? card.slice(plAt, card.indexOf("\n", plAt)) : "";
-ok(/body\.classList\.toggle\('cm-live', shown\(\) && \(entering \|\| picked\)\)/.test(paintLive), "G2a 또렷 = 고름 또는 막 떠오름(cm-live)", paintLive);
-ok(/picked = !!t && colMain\.contains\(t\)/.test(card) && /document\.addEventListener\('pointerdown', onDownCap, true\)/.test(card), "G2b 누른 곳이 카드 밖(사이드바)이면 고름이 풀린다");
-ok(/window\.addEventListener\('blur', onWinBlur\)/.test(card) && /picked = focusInCard\(\)/.test(card), "G2c 터미널 액자에 초점이 가면(창 blur) 고른 것으로 친다");
-ok(/window\.setInterval\(/.test(card) && /window\.clearInterval\(watchFocus\)/.test(card), "G2d 액자끼리 초점이 옮겨 가도 따라간다(걷을 때 멈춘다)");
+ok(/import \{ isLive, nextPicked \} from '\.\.\/lib\/side-card-live\.js'/.test(card) && /body\.classList\.toggle\('cm-live', isLive\(\{ shown: shown\(\), entering, picked \}\)\)/.test(paintLive), "G2h 화면은 판정 함수로 cm-live 를 건다", paintLive);
+const pickSrc = card.slice(card.indexOf("function pickFrom("), card.indexOf("const onDownCap"));
+ok(/picked = nextPicked\(picked, colMain\.contains\(n\) \? 'card' : h\.sidePane\.contains\(n\) \? 'side' : 'other'\)/.test(pickSrc), "G2i 누른 곳을 카드 · 사이드바 · 그 밖으로 가른다", pickSrc.slice(0, 200));
+ok(/document\.addEventListener\('pointerdown', onDownCap, true\)/.test(card) && /window\.addEventListener\('blur', onWinBlur\)/.test(card) && /pickFrom\(document\.activeElement\)/.test(card), "G2j 누름(capture) · 창 blur(터미널 액자 초점) 둘 다 본다");
+const watch = card.slice(card.indexOf("function syncWatch("), card.indexOf("function liveForAWhile("));
+ok(/const want = !dead && shown\(\);/.test(watch) && /window\.setInterval\(/.test(watch) && /window\.clearInterval\(watchFocus\); watchFocus = 0;/.test(watch) && /syncWatch\(\);/.test(paintSrc) && /window\.clearInterval\(watchFocus\)/.test(card.slice(card.indexOf("destroy: () =>"))), "G2k 액자끼리의 초점 이동 감시는 카드가 떠 있을 때만 돈다(걷을 때도 멈춘다)");
 const enter = card.slice(card.indexOf("async function enter("), card.indexOf("async function leave("));
-ok(/picked = false;/.test(enter) && /liveForAWhile\(\)/.test(enter) && /ENTER_LIVE_MS = 1200/.test(card), "G3 막 떠오른 카드는 1.2초 또렷하다가 비친다");
+const afterAnim = enter.slice(enter.lastIndexOf("if (!alive()) return;"));
+ok(/picked = focusInCard\(\);/.test(enter) && /entering = true;/.test(enter) && /liveForAWhile\(\);/.test(afterAnim) && !/liveForAWhile\(\);/.test(enter.slice(0, enter.lastIndexOf("if (!alive()) return;"))) && /ENTER_LIVE_MS = 1200/.test(card), "G3 입력하던 중이면 고른 채로 · 1.2초는 다 올라온 뒤부터");
+ok(/if \(s && !wasShown\) picked = focusInCard\(\);/.test(paintSrc), "G5 다시 보이기 시작하면 고름을 지금 초점으로 다시 정한다");
 const liveBlock = plAt >= 0 ? card.slice(plAt, card.indexOf("function liveForAWhile(")) : "";
-ok(liveBlock.length > 0 && !/v2-dot|\bwait\b|termstat|sc-wait/.test(liveBlock), "G4 세션 상태로는 또렷해지지 않는다");
+ok(liveBlock.length > 0 && !/v2-dot|\bwait\b|termstat|sc-wait/.test(liveBlock) && !/wait|ask|status/i.test(liveSrc.replace(/\/\/.*$/gm, "")), "G4 세션 상태로는 또렷해지지 않는다");
 
 // ── panes.ts: 기본 폭은 한 값 ──
 const panes = code(read("web/v2/panes.ts"));
+const swapSrc = code(read("web/v2/side-swap.ts"));
+ok(/const DEF_SIDE_W = SIDE_DEF;/.test(swapSrc) && /import \{ SIDE_DEF, sideCap \} from '\.\.\/lib\/side-card-geom\.js'/.test(swapSrc), "R2b side-swap 의 기본 폭도 SIDE_DEF");
 ok(/import \{ SIDE_DEF \} from '\.\.\/lib\/side-card-geom\.js'/.test(panes) && /def: SIDE_DEF, min: 220/.test(panes) && /Number\(v\.sideW\) \|\| SIDE_DEF/.test(panes) && !/\|\| 340\b/.test(panes) && !/def: 340\b/.test(panes), "R2 panes 의 곁칸 기본 폭도 SIDE_DEF");
 
 // ── CSS ──
@@ -88,6 +114,8 @@ ok(/background:\s*color-mix\(in srgb, var\(--bg\) \d+%, transparent\)/.test(rest
 const blurPx = Number((rest.match(/-webkit-backdrop-filter:\s*blur\((\d+)px\)/) || [])[1] || 0);
 ok(blurPx >= 16, "C1b 뒤를 크게 흐린다(잔 글씨가 터미널 글씨와 겹치지 않게, 16px 이상)", String(blurPx));
 ok(/\.pn-body\.cm > \.pn-col > \.pn-pane,\s*\.pn-body\.cm > \.pn-col \.sc-wrap,\s*\.pn-body\.cm > \.pn-col \.sc-term-frame,\s*\.pn-body\.cm > \.pn-col \.cm-ctl \{ background: transparent; \}/.test(css), "C1c 카드인 동안 안쪽은 늘 투명(바탕은 카드 한 곳)");
+const baseTr = (css.match(/\.pn-body\.cm > \.pn-col \{ transition: ([^;]+); \}/) || [])[1] || "";
+ok(baseTr.length > 0 && !/background/.test(baseTr), "C3 또렷해질 때 바탕은 전환 없이 바로 찬다", baseTr);
 const cmAt = css.indexOf(".pn-body.cm > .pn-col {\n");
 const cmRule = cmAt >= 0 ? css.slice(cmAt, css.indexOf("}", cmAt)) : "";
 ok(/width: var\(--cm-w, 320px\); height: var\(--cm-h, 240px\)/.test(cmRule), "D1c CSS 의 대체값도 새 기본 크기", cmRule.slice(0, 200));
@@ -111,7 +139,14 @@ ok(themeSets.length >= 4 && themeSets.every((x) => /themeFor\(/.test(x)), "T2a x
 ok(/theme: themeFor\(p\.theme\), allowTransparency: glassOn,/.test(term), "T2b 만들 때도 비침을 따른다");
 ok(/term\.options\.allowTransparency = on;/.test(term), "T2c 켜고 끌 때 allowTransparency 도 함께");
 const html = read("public/terminal.html").replace(/\n\s*/g, " ");
-ok(/html\.term-glass \{ color-scheme: light; \}/.test(html) && /html\.term-glass\[data-theme="dark"\] \{ color-scheme: dark; \}/.test(html) && /html\.term-glass #term-host \{ background: transparent !important; \}/.test(html) && /html\.term-glass body,/.test(html), "T3 terminal.html: 문서 바탕을 걷고 color-scheme 을 맞춘다");
+ok(/html\.term-glass #term-host \{ background: transparent !important; \}/.test(html) && /html\.term-glass body,/.test(html), "T3a terminal.html: term-glass 면 문서 바탕을 걷는다");
+ok(!/term-glass\[data-theme/.test(html), "T3b color-scheme 을 터미널 테마(data-theme)로 정하지 않는다");
+const scheme = term.slice(term.indexOf("function applyGlassScheme("), term.indexOf("function setGlass("));
+ok(/document\.documentElement\.style\.colorScheme = glassOn \? \(appIsDark\(\) \? 'dark' : 'light'\) : '';/.test(scheme) && /applyGlassScheme\(\);/.test(term.slice(term.indexOf("function setGlass("), term.indexOf("function syncGlassTheme("))), "T3c color-scheme 은 앱 테마로(켤 때 · 끌 때 되돌림)");
+const tf = term.slice(term.indexOf("function themeFor("), term.indexOf("function applyGlassScheme("));
+ok(/if \(!glassOn\) return resolveTheme\(key\);/.test(tf) && /const th = resolveTheme\('auto'\);/.test(tf) && /background: clearOf\(th\.background\)/.test(tf), "T4a 비치는 동안은 앱 테마의 색(이름 있는 테마를 골랐어도)", tf.slice(0, 200));
+const wat = term.slice(term.indexOf("function watchAppTheme("), term.indexOf("\n}\n", term.indexOf("function watchAppTheme(")));
+ok((wat.match(/syncGlassTheme\(\)/g) || []).length === 2 && /function syncGlassTheme\(\): void \{\s*if \(!glassOn\) return;/.test(term), "T4b 앱 테마가 바뀌면 비치는 중인 터미널도 따라간다(저장소 · 시스템 둘 다)");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

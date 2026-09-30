@@ -372,6 +372,9 @@ export function resolveTheme(key) {
 //   비우면 그 사이 새로 뜬 TUI 가 «배경이 검다» 로 읽고 어두운 테마를 고른다.
 //  ⚠ 캔버스·WebGL 은 allowTransparency 를 켜야 바탕을 비운다. 켜 두면 글자가 회색조 안티에일리어싱으로 그려져서
 //   카드일 때만 켠다.
+//  ⚠ 비치는 동안은 **앱 테마의 색**(APP_LIGHT/APP_DARK)을 쓴다(리뷰 지적). 뒤에 비치는 것은 앱이다 — Dracula 같은
+//   이름 있는 테마의 흰 글씨를 밝은 앱 위 반투명 카드에 올리면 읽히지 않는다. 문서의 color-scheme 도 앱을 따른다.
+//   터미널 테마(data-theme)를 따르면 밝기가 앱과 다를 때 브라우저가 액자에 불투명한 바탕을 칠해 비침이 죽는다.
 let glassOn = false;
 /** 그 색의 알파만 0 으로. 읽지 못하는 꼴이면 투명한 흰색. */
 export function clearOf(c: string): string {
@@ -384,17 +387,29 @@ export function clearOf(c: string): string {
   if (m) return `rgba(${m[1]}, ${m[2]}, ${m[3]}, 0)`;
   return 'rgba(255, 255, 255, 0)';
 }
-/** xterm 에 입힐 테마 — 비침이 켜져 있으면 바탕만 비운다. xterm 의 theme 을 바꾸는 자리는 전부 이것을 쓴다. */
+/** xterm 에 입힐 테마 — 비침이 켜져 있으면 앱 테마의 색에서 바탕만 비운다. xterm 의 theme 을 바꾸는 자리는 전부 이것을 쓴다. */
 function themeFor(key) {
-  const th = resolveTheme(key);
-  return glassOn ? Object.assign({}, th, { background: clearOf(th.background) }) : th;
+  if (!glassOn) return resolveTheme(key);
+  const th = resolveTheme('auto');                 // = 앱 테마(APP_LIGHT/APP_DARK) — 뒤에 비치는 것이 앱이라서
+  return Object.assign({}, th, { background: clearOf(th.background) });
+}
+/** 비침 동안 문서의 color-scheme 을 앱과 같게. 끄면 되돌린다(스타일시트 기본으로). */
+function applyGlassScheme(): void {
+  document.documentElement.style.colorScheme = glassOn ? (appIsDark() ? 'dark' : 'light') : '';
 }
 function setGlass(on: boolean): void {
   if (glassOn === on) return;
   glassOn = on;
   document.documentElement.classList.toggle('term-glass', on);   // 문서 바탕 걷기(terminal.html)
+  applyGlassScheme();
   if (!term) return;                                               // 아직 안 떴다 — 만들 때 glassOn 을 읽는다
   try { term.options.allowTransparency = on; term.options.theme = themeFor(prefs().theme); } catch (_) { /* 렌더러 준비 전 */ }
+}
+/** 앱 테마가 바뀌었다 — 비치는 중이면 이름 있는 테마를 고른 사람도 앱 색을 따라간다(syncAppTheme 은 auto 만 본다). */
+function syncGlassTheme(): void {
+  if (!glassOn) return;
+  applyGlassScheme();
+  try { if (term) term.options.theme = themeFor(prefs().theme); } catch (_) { /* 아직 term 이 없다 */ }
 }
 /** 그 테마가 어두운 판인가(문서 크롬 data-theme 용). */
 function themeIsDark(key) {
@@ -447,8 +462,8 @@ function syncAppTheme() {
   try { doResize(); } catch (_) { /* 레이아웃 준비 전 */ }
 }
 function watchAppTheme() {
-  window.addEventListener('storage', (e) => { if (!e.key || e.key === 'lv:theme') syncAppTheme(); });
-  try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', syncAppTheme); } catch (_) { /* 구형 */ }
+  window.addEventListener('storage', (e) => { if (!e.key || e.key === 'lv:theme') { syncGlassTheme(); syncAppTheme(); } });
+  try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { syncGlassTheme(); syncAppTheme(); }); } catch (_) { /* 구형 */ }
 }
 
 // ── API 베이스(#1091·#1169 를 이 페이지에도) — 프리뷰 서브패스(/preview/<id>/)에서 뜬 화면은 API 도 그 프리뷰로 가야 한다. ──

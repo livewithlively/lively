@@ -30,8 +30,9 @@ import { el } from '../core.js';
 import { MOBILE_MQ } from './mobile.js';
 import { pnIcon } from './panes-kit.js';
 import {
-  CARD_DEF, SIDE_DEF, SPLIT_W, type CardEdge, type CardState, clampCard, moveCard, overProgress, overZone, parseCard, resizeCard, shouldCommit, sideCap,
+  CARD_DEF, SIDE_DEF, type CardEdge, type CardState, clampCard, moveCard, overProgress, overZone, parseCard, resizeCard, shouldCommit, sideCap,
 } from '../lib/side-card-geom.js';
+import { isLive, nextPicked } from '../lib/side-card-live.js';   // 또렷 · 비침의 판정(순수 함수)
 
 //  카드의 자리 · 크기 · 접힘. 브라우저마다(사람마다) 하나다.
 //  ⚠ 이름 끝의 2 = 기본 크기를 420×560 → 320×240 으로 줄인 판(2026-09-30). 종전 키에 적힌 큰 크기를 물려받으면
@@ -159,8 +160,13 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     body.style.setProperty('--cm-b', c.b + 'px');
   }
 
+  let wasShown = false;
   function paint(): void {
     const s = shown();
+    //  카드가 다시 보이기 시작했다(사이드바를 접었다 폈다 · 좁은 폭에서 넓어졌다). 안 보이는 동안의 누름은 세지 않았으므로
+    //  예전 고름을 물려받지 않고 지금 초점으로 다시 정한다(리뷰 지적).
+    if (s && !wasShown) picked = focusInCard();
+    wasShown = s;
     body.classList.toggle('cm', s);
     body.classList.toggle('cm-fold', s && card.fold);
     ctl.hidden = !s;
@@ -168,6 +174,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     if (s) { paintRect(); paintFold(); }
     paintLive();
     postGlass();
+    syncWatch();
   }
 
   // ── 비침 · 또렷 ──
@@ -176,7 +183,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     const a = document.activeElement;
     return !!a && a !== document.body && colMain.contains(a);
   };
-  function paintLive(): void { body.classList.toggle('cm-live', shown() && (entering || picked)); }
+  function paintLive(): void { body.classList.toggle('cm-live', isLive({ shown: shown(), entering, picked })); }
   /** 카드 안의 터미널 액자에 비침을 켜고 끈다. 액자가 아직 안 떴으면 받지 못하는데, 뜨면 상태를 알려 오므로(onFrameMsg) 그때 다시 보낸다. */
   function postGlass(): void {
     const v = shown();
@@ -192,10 +199,16 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
       if (w && w === ev.source) { try { w.postMessage({ type: 'lively-term', cmd: 'glass', on: shown() }, location.origin); } catch (_) { /* noop */ } }
     }
   }
-  //  사람이 무엇을 골랐나. 액자 안을 누르면 이 문서에는 누름이 오지 않고 창 blur 만 온다 — 그때 activeElement 로 가른다.
-  const onDownCap = (e: PointerEvent): void => { if (!shown()) return; const t = e.target as Node | null; picked = !!t && colMain.contains(t); paintLive(); };
-  const onFocusIn = (e: FocusEvent): void => { if (!shown()) return; const t = e.target as Node | null; picked = !!t && colMain.contains(t); paintLive(); };
-  const onWinBlur = (): void => { window.setTimeout(() => { if (dead || !shown()) return; picked = focusInCard(); paintLive(); }, 0); };
+  //  사람이 무엇을 골랐나 — 카드 안이면 고름, 사이드바 안이면 풂. 그 밖(카드에서 연 창 · 왼쪽 목록 · 레일)은 그대로 둔다
+  //   (카드에서 이름 바꾸기 창을 열었는데 카드가 제 창 뒤에서 비치면 안 된다 — 리뷰 지적).
+  //  액자 안을 누르면 이 문서에는 누름이 오지 않고 창 blur 만 온다 — 그때 activeElement 로 가른다.
+  function pickFrom(n: Node | null): void {
+    if (!n) return;
+    picked = nextPicked(picked, colMain.contains(n) ? 'card' : h.sidePane.contains(n) ? 'side' : 'other');
+  }
+  const onDownCap = (e: PointerEvent): void => { if (!shown()) return; pickFrom(e.target as Node | null); paintLive(); };
+  const onFocusIn = (e: FocusEvent): void => { if (!shown()) return; pickFrom(e.target as Node | null); paintLive(); };
+  const onWinBlur = (): void => { window.setTimeout(() => { if (dead || !shown()) return; pickFrom(document.activeElement); paintLive(); }, 0); };
   document.addEventListener('pointerdown', onDownCap, true);
   document.addEventListener('focusin', onFocusIn);
   window.addEventListener('blur', onWinBlur);
@@ -204,16 +217,22 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   //  카드가 떠 있는 동안만 activeElement 가 바뀌었는지 가볍게 본다 — 바뀌었을 때만 고름을 다시 정한다
   //  (카드 머리줄처럼 초점을 안 받는 곳을 누른 고름은 activeElement 가 그대로라 지워지지 않는다).
   let lastActive: Element | null = null;
-  const watchFocus = window.setInterval(() => {
-    if (dead || !shown()) { lastActive = null; return; }
-    const a = document.activeElement;
-    if (a === lastActive) return;
-    const first = lastActive === null;
-    lastActive = a;
-    if (first) return;
-    picked = focusInCard();
-    paintLive();
-  }, 400);
+  let watchFocus = 0;
+  /** 카드가 떠 있을 때만 돈다(paint 가 켜고 끈다). */
+  function syncWatch(): void {
+    const want = !dead && shown();
+    if (want && !watchFocus) {
+      lastActive = document.activeElement;
+      watchFocus = window.setInterval(() => {
+        if (dead || !shown()) return;
+        const a = document.activeElement;
+        if (a === lastActive) return;
+        lastActive = a;
+        pickFrom(a);
+        paintLive();
+      }, 400);
+    } else if (!want && watchFocus) { window.clearInterval(watchFocus); watchFocus = 0; lastActive = null; }
+  }
   /** 막 떠오른 카드를 잠깐 또렷하게 두었다가, 사람이 고르지 않았으면 비치게 한다. */
   function liveForAWhile(): void {
     entering = true;
@@ -280,11 +299,12 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     if (!alive()) return;
     // 사이드바가 다 덮었다. 여기서 배치를 카드로 바꾼다(세션 열은 가려져 있어 바뀌는 순간이 안 보인다).
     on = true;
-    picked = false;                      // 손잡이를 끌어 카드가 됐다 — 사람이 카드를 고른 것은 아니다
+    //  손잡이를 끌어 카드가 됐다. 초점이 터미널에 남아 있으면(입력하던 중) 고른 채로 둔다 — restore 와 같은 판정.
+    picked = focusInCard();
+    entering = true;                     // 떠오르는 동안 또렷하다. 1.2초는 다 올라온 뒤부터 센다(아래 liveForAWhile)
     const cap = capNow();
     if (cap !== null) h.setSideW(cap, true);
     clearOver();
-    liveForAWhile();
     paint();
     h.onChange?.(true);
     if (cap !== null) h.settle?.(cap);
@@ -296,6 +316,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
       } catch (_) { /* 움직임이 끊겨도 카드는 서 있다 */ }
     }
     if (!alive()) return;
+    liveForAWhile();
     busy = false;
   }
 
@@ -319,8 +340,9 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     //  물러날 폭 = 기본 폭(SIDE_DEF). 창이 좁아 상한이 그보다 작으면 상한.
     const to = cap === null ? null : Math.min(SIDE_DEF, cap);
     const back = vis && to !== null;     // 물러나는 움직임을 보여 줄 수 있나
-    //  덮는 거리 = 사이드바가 기본 폭에서 격자 왼쪽 끝까지 늘어나는 만큼. 거기서 0 으로 줄이면 사이드바가 오른쪽으로 물러난다.
-    const from = back ? Math.max(0, Math.round(bw()) - (to as number) - SPLIT_W) : 0;
+    //  덮는 거리 = 사이드바가 기본 폭에서 격자 왼쪽 끝(0)까지 늘어나는 만큼. 카드 상태의 사이드바 왼쪽 끝과 딱 붙는다.
+    //   거기서 0 으로 줄이면 사이드바가 오른쪽으로 물러나며 세션 열이 가운데에서 드러난다.
+    const from = back ? Math.max(0, Math.round(bw()) - (to as number)) : 0;
     if (to !== null) { h.setSideW(to, true); h.settle?.(to); }
     if (back) paintOver(from);           // 세션 열이 제자리로 가는 순간은 사이드바가 덮고 있다
     paint();
@@ -452,6 +474,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
       window.removeEventListener('blur', onWinBlur);
       window.removeEventListener('message', onFrameMsg);
       window.clearInterval(watchFocus);
+      watchFocus = 0;
       document.body.classList.remove('cm-dragging');
       body.classList.remove('cm', 'cm-fold', 'cm-over', 'cm-live');
       for (const k of ['--cm-w', '--cm-h', '--cm-r', '--cm-b', '--cm-over', '--cm-p']) body.style.removeProperty(k);

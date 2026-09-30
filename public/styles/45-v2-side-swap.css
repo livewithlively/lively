@@ -122,9 +122,9 @@
      또렷 = 마우스가 카드 위에 있다(:hover — 액자 위에서도 조상의 :hover 가 선다) · 사람이 카드를 골랐다(cm-live).
      ★ 비칠 때 지저분해 보이는 것은 뒤(사이드바)의 잔 글씨가 터미널 글씨와 겹쳐서다. 뒤를 크게 흐려(22px) 잔 글씨를
        뭉개면 겹칠 거리가 사라진다. 바탕을 진하게 해서 가리면 비치는 맛이 없어진다.
-     또렷해질 때는 바로(0.08초), 비칠 때는 천천히(0.35초). 비칠 때는 흐림이 먼저 걸리고 바탕이 빠진다 — 반대 순서면
-       한 프레임 동안 날 글씨가 비친다. */
-  .pn-body.cm > .pn-col { transition: background-color .08s ease, box-shadow .2s ease, border-color .2s ease; }
+     또렷해질 때는 바탕이 **바로** 찬다(전환 없음) — 흐림은 그 순간 풀리므로, 바탕이 천천히 차면 그 사이 날 글씨가 비친다(리뷰 지적).
+     비칠 때는 천천히(0.35초) — 흐림이 먼저 걸리고 바탕이 빠진다. */
+  .pn-body.cm > .pn-col { transition: box-shadow .2s ease, border-color .2s ease; }
   .pn-body.cm > .pn-col > .pn-pane,
   .pn-body.cm > .pn-col .sc-wrap,
   .pn-body.cm > .pn-col .sc-term-frame,
