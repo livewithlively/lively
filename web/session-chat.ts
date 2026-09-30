@@ -20,6 +20,7 @@
 //   대화 uuid 를 추측하지 않는다(서버 원칙) — 매핑이 없으면 '기록 아직 없음'으로 말하고 터미널을 권한다.
 import { anchoredPopover, api, apiUrl, el, personFace, replaceKids, sv, toast, TOKEN_KEY } from './core.js';
 import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
+import { isIdLabel, sessNameFace } from './lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(사이드바 행과 같은 것)
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
 import { composerAttach } from './v2/compose-attach.js';
 import { registerSessionInput } from './v2/sess-input.js';   // #4135 곁칸이 이 세션 입력칸에 글을 넣는 다리
@@ -240,18 +241,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const paneTitle = (): string => String(target.raw?.title || '').trim();
   // 이름을 안 주고 만든 세션은 이름이 **id 그대로**다(sessions.ts: label = cleanLabel(input.label) || id).
   //  그건 이름이 아니므로 화면에 쓰지 않는다 — 사이드바(side.ts isIdLabel)와 같은 판정.
-  const idLabel = (x: string): boolean => /^box-|^[0-9a-f-]{20,}$/i.test(String(x || '').trim());
-  const shownName = (): string => (idLabel(titleText) ? '' : titleText) || String(target.raw?.harness || '') || '(이름 없음)';
-  const normTxt = (x: string): string => String(x || '').replace(/\s+/g, ' ').trim().toLowerCase();
-  // 사람이 지은 이름만 남긴다 — 프로젝트명 되풀이(dev 실측 58%)·id 꼴은 이름이 아니다(사이드바 side.ts sessText 와 같은 규칙).
-  function cleanName(): string {
-    let n = String(titleText || '').trim();
-    const proj = String((target as any).projectName || '').trim();
-    if (proj && n.startsWith(proj)) n = n.slice(proj.length).replace(/^[\s·:\-–—_/|]+/, '').trim();
-    if (proj && n && normTxt(n) === normTxt(proj)) n = '';
-    if (idLabel(n)) n = '';
-    return n;
-  }
+  const idLabel = (x: string): boolean => isIdLabel(String(x || '').trim());
+  // ★이 줄의 이름은 사이드바 행과 **같은 규칙 한 벌**(lib/sess-name.ts)로 정한다(#3870, 원준 2026-09-30 «사이드바에 보이는
+  //  세션이름이랑 세션 위에 보이는 세션이름이 다르다»). 종전엔 여기 약한 사본이 있어, 이름 없는 세션에 첫 지시 60자를
+  //  이름으로 박아 두고 그게 pane 제목을 이겼다 — 사이드바는 pane 제목을 쓰는데. 재료도 같다: 이름(titleText — 방금
+  //  고친 이름이 목록보다 먼저 온다) · 하던 일(pane 제목 → 멈춘 세션은 대화 제목) · 하네스.
+  const face = () => sessNameFace({
+    label: titleText,
+    work: paneTitle() || String((target as any).logTitle || ''),
+    harness: String(target.raw?.harness || ''),
+  }, String(target.projectName || '').trim());
   const penIc = (): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'sc-title-pen', 'aria-hidden': 'true' }, sv('path', { d: 'M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z' }));
   const penBtn = (): HTMLElement => el('button', {
     class: 'sc-title-penbtn', type: 'button', 'aria-label': '세션 이름 바꾸기',
@@ -259,13 +258,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   }, penIc());
   function paintTitle(): void {
     if (renaming) return;                    // 고치는 중엔 손대지 않는다(20초 폴링이 입력 중인 칸을 지우면 안 된다)
-    const tip = [titleText, target.id].filter(Boolean).join(' · ');
-    const name = cleanName();
-    const pane = paneTitle();
-    const job = pane && normTxt(pane) !== normTxt(name) ? pane : '';
+    const tip = [idLabel(titleText) ? '' : titleText, target.id].filter(Boolean).join(' · ');   // 이름 없는 세션은 id 를 두 번 쓰지 않는다
+    const f = face();
+    const name = f.named ? f.main : '';
+    const job = !f.named && !f.untitled ? f.main : '';
     // ★굵은 자리의 임자 — **사람이 지은 이름이 있으면 그 이름**, 없으면 '지금 하는 일'(pane 제목, #1744).
     //  종전엔 pane 제목이 늘 이겨서, 이름을 고쳐도 이 줄이 그대로였다(원준 2026-08-20 "탭에서 고쳤는데 여기는 반영이 안 된다").
-    //  #1744 가 막으려던 건 **자동 생성 이름**이 이 자리를 먹는 것이고, cleanName 이 그것들을 그대로 걷어낸다.
+    //  #1744 가 막으려던 건 **자동 생성 이름**이 이 자리를 먹는 것이고, lib/sess-name.ts 가 그것들을 그대로 걷어낸다.
     if (name) {
       titleHost.replaceChildren(
         canRename()
@@ -284,7 +283,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       titleHost.replaceChildren(b, penBtn());
       return;
     }
-    const t = shownName();
+    const t = f.main;   // 하네스 이름 또는 «이름 없는 세션» — 사이드바와 같은 글
     titleHost.replaceChildren(canRename()
       ? el('button', { class: 'sc-title sc-title-btn', type: 'button', title: '세션 이름 — 눌러서 바꿉니다', onclick: () => startRename() },
         el('span', { class: 'sc-title-t', text: t }),
@@ -1233,7 +1232,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       panes.set(sec.key, pane);
       contEl.append(pane);
     }
-    const nm = cleanName() || paneTitle() || shownName();
+    const nm = face().main;   // 머리줄·사이드바와 같은 이름(#3870)
     panel.append(
       el('header', { class: 'v2me-h' },
         el('div', { class: 'v2me-h-txt' },
@@ -1682,12 +1681,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const looksLive = running && !dead() && (busy || (src?.kind !== 'log' && staleMs < 120_000));
     if (cur && looksLive) { view.running(cur.t); view.busy(true); }
     else { running = false; recs.forEach((r) => view.settle(r.t)); view.busy(false); }
-    titleFromFirstAsk();
-  }
-  function titleFromFirstAsk(): void {
-    const q = recs.find((r) => r.t.text)?.t.text;
-    // 이름이 자동 생성 id 꼴이면 첫 질문을 이름 자리에 대신 쓴다(고치기 전까지의 임시 이름).
-    if (q && /^box-|^[0-9a-f-]{20,}$/i.test(titleText)) { titleText = q.length > 60 ? q.slice(0, 60) + '…' : q; }
     paintTitle();
   }
 
@@ -1812,7 +1805,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     });
     for (let i = olderOps.length - 1; i >= 0; i--) olderOps[i]();
     trailResults(olderResults);   // 오류 표시는 **항목이 다 들어간 뒤** 얹는다(id 로 찾으므로 순서가 뒤집히면 못 찾는다)
-    titleFromFirstAsk();
     return true;
   }
 
@@ -1882,7 +1874,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         loadedTo = c.to;
         if (running && cur) { if (!wasRunning || !cur.t.live) view.running(cur.t); view.busy(true); }
         if (!running) { if (cur) view.settle(cur.t); view.busy(false); }
-        view.scroll(); paintState(); titleFromFirstAsk();
+        view.scroll(); paintState(); paintTitle();
       } else if (running && cur && !dead()) {
         // 새 줄이 없는데 도는 중 표시 — 마감 조건: 세션이 idle(하네스 보고) + 조용함. 유예는 소스별로 다르다.
         //  · 중앙 기록(노드 세션): 턴 경계로만 자라고 종료 표시가 안 담기므로(#1744), idle 이면 짧게(6초) 기다렸다 마감한다.
@@ -2346,7 +2338,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (!hcat && t.raw?.harness) { void runCatalog().then((hs) => { hcat = findHarness(hs, String(t.raw.harness)); paintRun(); }); }
       paintRun();                                 // 세션이 끝나면 드롭다운은 물러나고 사실 표시(칩)만 남는다
       paintShellBar();                            // #4135 — 열 때는 행이 얇아 «pane 이 셸인가» 를 몰랐을 수 있다(방금 만든 세션)
-      if (t.label && !/^box-|^[0-9a-f-]{20,}$/i.test(t.label)) titleText = t.label;
+      if (t.label && !idLabel(t.label)) titleText = t.label;
       paintTitle();                               // pane 이름은 턴마다 바뀌고, 살아있음·소유가 바뀌면 '고칠 수 있는 이름'인지도 바뀐다
       paintState();
       paintFaces();                               // 소유·초대·세션 id 가 바뀌면 얼굴 줄과 그 뒤의 공유 대상도 함께 바뀐다
