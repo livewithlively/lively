@@ -28,10 +28,13 @@ type Tools = { assignee: string; due: 'all' | 'week' | 'over' | 'none'; q: strin
 const TOOLS: Map<number, Tools> = new Map();
 const toolsOf = (pid: number): Tools => { let t = TOOLS.get(pid); if (!t) { t = { assignee: '', due: 'all', q: '', done: false, sess: false }; TOOLS.set(pid, t); } return t; };
 
-/** 열 폭 — 프로젝트 탭 기본(96·92·112)보다 한 단 좁게. 3칸 폭 담당자는 이름까지라 넓게. 모달은 넉넉히. 숨긴 열은 0(격자 트랙이 사라진다). */
+/** 열 폭 — 프로젝트 탭 기본(96·92·112)보다 한 단 좁게. 3칸 폭 담당자는 이름까지라 넓게. 모달은 넉넉히. 숨긴 열은 0(격자 트랙이 사라진다).
+ *  1·2칸 폭의 담당자는 얼굴만 보이므로 **얼굴 폭만큼**(max-content)이다 — 종전 52px 은 얼굴 20px 뒤에 32px 이 늘 비어, 맨 끝 칸 34px 과 합쳐
+ *  얼굴이 빈자리 한가운데 서 있었다(원준 2026-09-30: «아바타 위치 너무 애매하고 그 오른쪽에 여백이 쓸데없이 있다»). 얼굴은 맨 끝 칸(호버 때 ⋯)
+ *  바로 옆에 붙고, 남는 것은 줄의 오른쪽 가장자리뿐이라 여백으로 읽힌다. 줄마다 격자가 따로라 얼굴 둘인 줄은 그만큼 왼쪽으로 넓어진다. */
 function colWidth(k: TaskColKey, w: number, modal: boolean): string {
   if (modal) return k === 'assignee' ? '150px' : k === 'due' ? '96px' : '108px';
-  if (k === 'assignee') return w >= 3 ? '150px' : '52px';
+  if (k === 'assignee') return w >= 3 ? '150px' : 'max-content';
   if (k === 'due') return '84px';
   return '100px';
 }
@@ -144,7 +147,7 @@ export const fillTasks: Fill = (ctx, f, body, foot, sub, acts) => {
       rowOpts: { assigneeNames: !phone && (modal || w >= 3) },
       fields: !phone && (modal || (w >= 3 && h >= 2)) ? (P.fields || []) : [],   // 커스텀 필드 열은 3×2 이상·모달에서만 — 좁은 폭에선 이름을 먹는다
     });
-    for (const k of TASK_COLS) sec.style.setProperty('--pjv-w-' + k, cols.includes(k) ? (phone ? '52px' : colWidth(k, w, modal)) : '0px');
+    for (const k of TASK_COLS) sec.style.setProperty('--pjv-w-' + k, cols.includes(k) ? (phone ? (k === 'assignee' ? 'max-content' : '52px') : colWidth(k, w, modal)) : '0px');
     sec.style.setProperty('--pjv-name-min', phone ? '120px' : modal ? '320px' : w <= 1 ? '90px' : w === 2 ? '150px' : '200px');
     const scroller = (sec.querySelector('.pjv-tasks-body') as HTMLElement | null) || sec;
     scroller.setAttribute('data-mscroll', 'tasks');
