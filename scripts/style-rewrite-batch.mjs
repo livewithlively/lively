@@ -21,7 +21,7 @@ if (!existsSync(gatePath) || !existsSync(fmtPath)) {
   console.error(`빌드 산출물이 없습니다(${gatePath}). 먼저 빌드하세요.`);
   process.exit(2);
 }
-const { isEligible, checkRewrite } = await import(pathToFileURL(gatePath).href);
+const { isEligible, checkRewrite, checkInvariants, splitSections, sectionFindings, REWRITE_BODY_MAX_CHARS } = await import(pathToFileURL(gatePath).href);
 const { resolveWritingFormat } = await import(pathToFileURL(fmtPath).href);
 
 // ── 인자 ──
@@ -132,10 +132,12 @@ function parseJsonLoose(text, open) {
   try { return JSON.parse(t.slice(s, e + 1)); } catch { return undefined; }
 }
 
-function rewritePrompt(k, findings, guide, feedback = null) {
+function rewritePrompt(k, findings, guide, feedback = null, part = null) {
   const rules = findings.map((f) => `- ${f.rule}: ${f.message}${f.sample ? ` (예: ${f.sample})` : ""}`).join("\n");
   return [
-    "아래 지식 문서의 서술 형식만 고쳐라.",
+    part ? `아래는 긴 지식 문서를 섹션 단위로 나눈 ${part.index + 1}/${part.total} 번째 조각이다. 이 조각의 서술 형식만 고쳐라.` : "아래 지식 문서의 서술 형식만 고쳐라.",
+    ...(part && part.index > 0 ? ["- 이 조각은 문서 중간이다. 여는 헤딩 줄은 글자 그대로 두고, title 은 빈 문자열로 내라. 첫 줄 결론을 새로 쓰지 마라."] : []),
+    ...(part && part.index === 0 ? ["- 이 조각은 문서의 첫 부분이다. 제목과 본문 첫 줄 결론은 문서 전체를 대표해야 한다 — 뒤 조각의 내용을 추측해 쓰지 말고 이 조각과 제목에 있는 사실만으로 써라."] : []),
     "",
     "지켜야 할 것:",
     "- 형식만 고쳐라. 사실·수치·식별자·코드·링크·표 값을 빼거나 더하지 마라.",
@@ -247,65 +249,92 @@ async function judgeMeaning(before, after) {
   return { meaning, pass, runs: runs.length };
 }
 
-// ── 한 건 ──
-const chars = (s) => [...String(s ?? "")].length;
-
-async function processOne(name, fmt) {
-  const base = { name };
-  const { k, err } = await getKnowledge(name);
-  if (!k) return { ...base, status: "failed", reason: `fetch: ${err ?? "빈 응답"}` };
-  const common = { ...base, version: k.version, before_title: k.title ?? "", chars_before: chars(k.body_md) };
-  const el = isEligible(k, fmt, Date.now());
-  if (!el.eligible) return { ...common, status: "skipped", reason: el.reason, rules: [] };
-  const rules = el.targetRules;
-
-  // 탈락한 재작성본은 사유를 돌려주고 다시 고치게 한다 — 첫 시도의 탈락 대부분은 «값을 건드렸다» 는 고칠 수 있는 실수였다.
-  //  판정 기준은 그대로다(재시도가 게이트를 느슨하게 만들지 않는다). 매 시도의 탈락 사유를 attempts 에 남긴다.
-  const src = { title: k.title, body_md: k.body_md };
+// 탈락한 재작성본은 사유를 돌려주고 다시 고치게 한다 — 첫 시도의 탈락 대부분은 «값을 건드렸다» 는 고칠 수 있는 실수였다.
+//  판정 기준은 그대로다(재시도가 게이트를 느슨하게 만들지 않는다). 매 시도의 탈락 사유를 attempts 에 남긴다.
+async function rewriteLoop(src, findings, guide, check, part) {
   const attempts = [];
   let feedback = null;
-  let after = null;
-  let raw = "";
   for (let i = 0; i < args.attempts; i++) {
-    raw = await runLlm(rewritePrompt(k, el.findings, fmt.guide_md, feedback));
+    const raw = await runLlm(rewritePrompt(src, findings, guide, feedback, part));
     const out = parseJsonLoose(raw, "{");
     if (!out || typeof out.title !== "string" || typeof out.body_md !== "string") {
       attempts.push({ reason: "parse" });
       feedback = { prev: null, problems: ["출력이 JSON 객체 {title, body_md} 가 아니었다. JSON 하나만 출력하라."] };
       continue;
     }
-    const cand = { title: out.title.trim(), body_md: out.body_md };
-    const chk = checkRewrite(src, cand, fmt);
-    if (!chk.ok) {
-      attempts.push({ reason: "check", violations: chk.violations });
-      feedback = { prev: cand, problems: chk.violations.map(describeViolation) };
+    // 중간 조각은 제목을 다루지 않는다 — 모델이 무엇을 내든 원문 조각의 제목(빈 값)으로 되돌린다.
+    const cand = { title: part && part.index > 0 ? src.title : out.title.trim(), body_md: out.body_md };
+    const violations = check(cand);
+    if (violations.length) {
+      attempts.push({ reason: "check", violations });
+      feedback = { prev: cand, problems: violations.map(describeViolation) };
       continue;
     }
     const jm = await judgeMeaning(src, cand);
-    if (jm.parseError) {
-      attempts.push({ reason: "parse", detail: jm.parseError });
-      feedback = { prev: cand, problems: [] };
-      continue;
-    }
+    if (jm.parseError) { attempts.push({ reason: "parse", detail: jm.parseError }); feedback = { prev: cand, problems: [] }; continue; }
     if (!jm.pass) {
       attempts.push({ reason: "meaning", meaning: jm.meaning });
       feedback = { prev: cand, problems: describeMeaning(jm.meaning) };
       continue;
     }
-    after = cand;
     attempts.push({ reason: "pass" });
-    break;
+    return { after: cand, attempts, feedback: null };
   }
-  const last = attempts[attempts.length - 1] ?? {};
-  if (!after) {
-    const tail = { attempts, ...(feedback?.prev && !args.apply ? { after_title: feedback.prev.title, after_body: feedback.prev.body_md } : {}) };
-    return { ...common, rules, status: "rejected", reason: last.reason ?? "parse", ...(last.violations ? { violations: last.violations } : {}), ...(last.meaning ? { meaning: last.meaning } : {}), ...tail };
+  return { after: null, attempts, feedback };
+}
+
+// 조각 크기 — 통째 재작성 한도의 절반. 한 조각이 판정 모델이 한 번에 대조하기 좋은 크기여야 한다.
+const SECTION_MAX_CHARS = Math.floor(REWRITE_BODY_MAX_CHARS / 2);
+
+/**
+ * 긴 문서 — 섹션 단위로 나눠 조각마다 재작성·검사·판정하고, 떨어진 조각은 원문 그대로 둔 채 다시 합친다.
+ *  합친 뒤 문서 전체로 불변식을 한 번 더 보고(조각 경계에서 값이 옮겨 다니는 경우), 위반이 줄었을 때만 반영 대상이다.
+ */
+async function processSections(k, el, fmt, common) {
+  const rules = el.targetRules;
+  const sections = splitSections(String(k.body_md ?? ""), SECTION_MAX_CHARS);
+  let title = k.title ?? "";
+  const parts = [];
+  const report = [];
+  for (let i = 0; i < sections.length; i++) {
+    const sec = sections[i];
+    const findings = sec.oversized ? [] : sectionFindings(k.title, sec.text, i, fmt);
+    if (!findings.length) { parts.push(sec.text); report.push({ index: i, heading: sec.heading, status: sec.oversized ? "oversized" : "clean" }); continue; }
+    const src = { title: i === 0 ? (k.title ?? "") : "", body_md: sec.text };
+    const part = { index: i, total: sections.length };
+    const check = (cand) => {
+      const v = checkInvariants(src, cand, { requireTitle: i === 0 });
+      if (i > 0 && sec.heading && !cand.body_md.startsWith(sec.heading)) v.push({ kind: "heading", detail: `여는 헤딩 줄을 바꾸지 마라: ${sec.heading}` });
+      return v;
+    };
+    const { after, attempts } = await rewriteLoop(src, findings, fmt.guide_md, check, part);
+    if (!after) { parts.push(sec.text); report.push({ index: i, heading: sec.heading, status: "kept", attempts }); continue; }
+    // 조각 끝 줄바꿈을 원문대로 맞춘다 — 모델이 끝 줄바꿈을 빼면 다음 조각의 헤딩이 앞 줄에 붙는다.
+    const trail = sec.text.match(/\n*$/)[0];
+    parts.push(after.body_md.replace(/\n*$/, "") + trail);
+    if (i === 0) title = after.title;
+    report.push({ index: i, heading: sec.heading, status: "rewritten", attempts: attempts.length });
   }
-  const withAfter = { ...common, rules, attempts, after_title: after.title, chars_after: chars(after.body_md) };
+  const after = { title, body_md: parts.join("") };
+  const src = { title: k.title, body_md: k.body_md };
+  const withAfter = { ...common, rules, mode: "sections", sections: report, after_title: after.title, chars_after: chars(after.body_md) };
   const dryBody = args.apply ? {} : { after_body: after.body_md };
+  const rewritten = report.filter((r) => r.status === "rewritten").length;
+  if (!rewritten) return { ...withAfter, status: "rejected", reason: "no_section_passed" };
+  const whole = checkInvariants(src, after);
+  const full = checkRewrite(src, after, fmt).violations;
+  const newRules = full.filter((v) => v.kind.startsWith("new:"));
+  if (whole.length || newRules.length) return { ...withAfter, ...dryBody, status: "rejected", reason: "check", violations: [...whole, ...newRules] };
+  const beforeCount = el.findings.length;
+  const afterCount = full.filter((v) => v.kind.startsWith("lint:")).length;
+  const partial = afterCount > 0;
+  const extra = { ...(partial ? { partial: true, remaining: full.filter((v) => v.kind.startsWith("lint:")).map((v) => v.kind.slice(5)) } : {}), findings_before: beforeCount };
+  if (!args.apply) return { ...withAfter, ...dryBody, status: "passed_dry", ...extra };
+  return { ...(await saveRewrite(k.name, k, after, rules, withAfter)), ...extra };
+}
 
-  if (!args.apply) return { ...withAfter, ...dryBody, status: "passed_dry" };
-
+/** 반영 — 사이에 사람이 고쳤으면 덮지 않는다. 검토 게이트가 수정 제안으로 받으면 staged 로 센다. */
+async function saveRewrite(name, k, after, rules, withAfter) {
   // LLM 호출이 몇 분 걸리는 사이 사람이 고쳤을 수 있다 — 그 편집을 옛 원문 기반 재작성본으로 덮으면 안 된다.
   const again = await getKnowledge(name);
   if (!again.k) return { ...withAfter, status: "failed", reason: `refetch: ${again.err ?? "빈 응답"}` };
@@ -318,10 +347,37 @@ async function processOne(name, fmt) {
     }),
   });
   if (!save.ok) return { ...withAfter, status: "failed", reason: `save: ${apiError(save)}` };
-  // 조직이 검토 게이트를 켜 두면 저장이 «수정 제안»으로만 접수된다 — 그 사실을 보고서에 남긴다.
   // 검토 게이트가 수정 제안(stage)으로만 받았으면 라이브 본문은 그대로다 — «반영» 으로 세지 않는다.
   const gate = save.json?.gate;
   return { ...withAfter, status: gate?.action === "stage" ? "staged" : "applied", ...(gate ? { gate } : {}) };
+}
+
+// ── 한 건 ──
+const chars = (s) => [...String(s ?? "")].length;
+
+async function processOne(name, fmt) {
+  const base = { name };
+  const { k, err } = await getKnowledge(name);
+  if (!k) return { ...base, status: "failed", reason: `fetch: ${err ?? "빈 응답"}` };
+  const common = { ...base, version: k.version, before_title: k.title ?? "", chars_before: chars(k.body_md) };
+  const el = isEligible(k, fmt, Date.now());
+  if (!el.eligible) return { ...common, status: "skipped", reason: el.reason, rules: [] };
+  const rules = el.targetRules;
+
+  if (el.mode === "sections") return processSections(k, el, fmt, common);
+  const src = { title: k.title, body_md: k.body_md };
+  const { after, attempts, feedback } = await rewriteLoop(src, el.findings, fmt.guide_md,
+    (cand) => checkRewrite(src, cand, fmt).violations, null);
+  const last = attempts[attempts.length - 1] ?? {};
+  if (!after) {
+    const tail = { attempts, ...(feedback?.prev && !args.apply ? { after_title: feedback.prev.title, after_body: feedback.prev.body_md } : {}) };
+    return { ...common, rules, status: "rejected", reason: last.reason ?? "parse", ...(last.violations ? { violations: last.violations } : {}), ...(last.meaning ? { meaning: last.meaning } : {}), ...tail };
+  }
+  const withAfter = { ...common, rules, attempts, after_title: after.title, chars_after: chars(after.body_md) };
+  const dryBody = args.apply ? {} : { after_body: after.body_md };
+
+  if (!args.apply) return { ...withAfter, ...dryBody, status: "passed_dry" };
+  return saveRewrite(name, k, after, rules, withAfter);
 }
 
 // ── 실행 ──
