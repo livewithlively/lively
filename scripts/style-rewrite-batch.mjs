@@ -178,7 +178,8 @@ function doneNames(file, isDone) {
   }
   return done;
 }
-const retryableLlm = (r) => r.status === "failed" && /^llm_(exit|timeout)/.test(String(r.reason ?? ""));
+// 게이트웨이 연결 끊김(fetch failed)도 문서 탓이 아니라 다시 한다 — 2026-09-30 게이트웨이 단절 중 325건이 이 사유로 남았다.
+const retryableLlm = (r) => r.status === "failed" && /^(llm_(exit|timeout)|fetch failed)/.test(String(r.reason ?? ""));
 
 // ── LLM ──
 const LLM_TIMEOUT_MS = 10 * 60 * 1000;
