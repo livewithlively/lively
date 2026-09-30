@@ -19,7 +19,7 @@ import { findMatcher } from '../lib/find.js';
 import { copyName, finderKey, isMacPlatform, keyHint, navIndex, typeChar, typeSelect, type FinderAction } from '../lib/finder-keys.js';
 import { createPreviewKit } from './file-preview.js';
 import { placeChildren, reuseKeyed, type KeyedCard } from './keyed-cards.js';   // #4135 — 제자리 되그리기(바뀐 카드만 새로)
-import { showCtxMenu, type CtxRow } from './ctx-menu.js';
+import { closeCtxMenu, showCtxMenu, type CtxRow } from './ctx-menu.js';
 import type { Part, PartCtx } from './panes-parts.js';
 
 /** 곁칸 밖에서 이 부품을 쓰는 자리(프로젝트 화면의 공유 폴더 모달, #4135)가 거는 고리 — 전부 선택 사항이라 곁칸(PartCtx)은 그대로 들어온다.
@@ -91,6 +91,13 @@ export function filesPart(ctx: FilesCtx): Part {
   //   그 전의 일을 되돌리면 사람이 기대한 것(방금 한 일)과 다른 것이 바뀐다.
   const undos: Array<{ label: string; run?: () => Promise<void>; why?: string }> = [];
   const pushUndo = (label: string, run?: () => Promise<void>, why?: string): void => { undos.push({ label, run, why }); if (undos.length > 40) undos.shift(); };
+  //  파일을 바꾸는 일은 **한 줄로** 선다 — 앞 일이 서버에서 끝나고 목록까지 새로 받은 뒤에 다음 일이 돈다.
+  //   ① 이름을 바꾸고 응답 전에 곧바로 ⌘Z 를 누르면, 되돌리기 줄에 아직 안 오른 방금 일 대신 그 앞의 일이 되돌려졌다
+  //      (CI 리눅스에서 시험 R21 이 그렇게 빨개졌다 — 사람 손으로도 같은 틈이 난다).
+  //   ② ⌘D 를 빠르게 두 번 누르면 둘 다 옛 목록을 보고 같은 «복사본» 이름을 골라 뒤엣것이 앞엣것을 덮었다.
+  //  ⚠ 줄에 서는 것은 사람이 부르는 입구(키·메뉴·끌어 놓기·이름 확정)뿐이다 — 그 안에서 부르는 moveMany·copyInto 를 또 세우면 제 뒤를 기다려 멈춘다.
+  let opChain: Promise<unknown> = Promise.resolve();
+  const op = <T>(fn: () => Promise<T>): Promise<T> => { const p2 = opChain.then(fn, fn); opChain = p2.catch(() => undefined); return p2; };
 
   // ── 찾기 (#762, 원준 2026-09-04 "자료 위젯에서 검색 기능도 필요할 거 같음") ─────────────────
   //  잣대는 사이드바·타임라인과 **같은 것**(lib/find.ts) — 띄어쓰기 무시 · 낱말 순서 무관 · 초성.
@@ -268,7 +275,8 @@ export function filesPart(ctx: FilesCtx): Part {
 
   //  파인더처럼 **만들고 나서 그 자리에서 이름을 고친다** — 이름부터 물으면 흐름이 한 번 끊기고,
   //  이름을 안 정한 채로는 폴더를 못 만든다(정작 급한 건 '지금 이것들을 담을 자리'다).
-  async function newFolder(): Promise<void> {
+  function newFolder(): Promise<void> { return op(newFolderNow); }
+  async function newFolderNow(): Promise<void> {
     if (!(ctx.id > 0)) { toast('이 화면은 프로젝트 폴더가 없어요.', true); return; }
     const nm = freeName(new Set(items.map((f) => f.name)), '새 폴더');
     const at = rel(nm);
@@ -289,7 +297,8 @@ export function filesPart(ctx: FilesCtx): Part {
   const renamed = new Map<string, string>();
   const currentPath = (p2: string): string => { let cur = p2; for (let i = 0; i < 20 && renamed.has(cur); i++) cur = renamed.get(cur)!; return cur; };
 
-  async function removeMany(list: FileItem[]): Promise<void> {
+  function removeMany(list: FileItem[]): Promise<void> { return op(() => removeManyNow(list)); }
+  async function removeManyNow(list: FileItem[]): Promise<void> {
     if (!list.length) return;
     const label = list.length === 1 ? `「${list[0].name}」` : `자료 ${list.length}개`;
     const hasDir = list.some((f) => f.type === 'dir');
@@ -400,7 +409,8 @@ export function filesPart(ctx: FilesCtx): Part {
     toast(fail ? `${src.length}개 복사 · ${fail}개 파일 실패` : `${src.length}개를 복사했어요`, fail > 0);
     return tops;
   }
-  async function pasteClip(move: boolean): Promise<void> {
+  function pasteClip(move: boolean): Promise<void> { return op(() => pasteClipNow(move)); }
+  async function pasteClipNow(move: boolean): Promise<void> {
     const clip = FILE_CLIP;
     if (!clip || !clip.items.length) { toast('붙여넣을 자료가 없어요 — 먼저 ' + keyHint('copy', MAC) + ' 로 복사하세요.', true); return; }
     if (!(ctx.id > 0)) return;
@@ -428,7 +438,8 @@ export function filesPart(ctx: FilesCtx): Part {
     toast(mode === 'cut' ? `${list.length}개를 잘라냈어요 — 옮길 폴더에서 ${keyHint('paste', MAC)}` : `${list.length}개를 복사했어요 — 붙일 폴더에서 ${keyHint('paste', MAC)}`);
     paintSel();
   }
-  async function duplicate(): Promise<void> {
+  function duplicate(): Promise<void> { return op(duplicateNow); }
+  async function duplicateNow(): Promise<void> {
     const list = selItems();
     if (!list.length) return;
     const tops = await copyInto(list.map((f) => ({ path: f.path, name: f.name, type: f.type, size: f.size || 0 })), ctx.id, cwd, true);
@@ -441,7 +452,8 @@ export function filesPart(ctx: FilesCtx): Part {
   const clipIsOurs = (text: string, hasFiles: boolean): boolean =>
     !!FILE_CLIP && !hasFiles && (FILE_CLIP.osOk ? text === FILE_CLIP.marker : true);
 
-  async function undo(): Promise<void> {
+  function undo(): Promise<void> { return op(undoNow); }
+  async function undoNow(): Promise<void> {
     const u = undos.pop();
     if (!u) { toast('되돌릴 것이 없어요.'); return; }
     if (!u.run) { toast(u.why || '이 일은 되돌리지 않아요.'); return; }
@@ -718,9 +730,10 @@ export function filesPart(ctx: FilesCtx): Part {
     if (doAct(fk.act)) e.preventDefault();
   });
   //  도구 단추를 눌러도 포커스는 격자에 둔다 — 보기·정렬을 바꾼 뒤 곧바로 방향키·단축키가 먹게(파인더 도구막대 단추도 포커스를 안 가져간다).
+  //  ⚠ 이름을 고치는 중이면 가만둔다 — 그땐 누르는 순간 이름칸이 포커스를 잃어 확정되는 것이 맞다(파인더도 딴 데를 누르면 확정).
   head.addEventListener('mousedown', (e: MouseEvent) => {
     const b = (e.target as HTMLElement)?.closest('button');
-    if (b && head.contains(b)) { e.preventDefault(); root.focus({ preventScroll: true }); }
+    if (b && head.contains(b) && !renameAt) { e.preventDefault(); root.focus({ preventScroll: true }); }
   });
   //  마우스 옆 단추(뒤로 3 · 앞으로 4) — 이 칸 위에서 누르면 브라우저 뒤로가기 대신 폴더를 오간다(다닌 곳이 있을 때만).
   root.addEventListener('mousedown', (e: MouseEvent) => {
@@ -749,7 +762,7 @@ export function filesPart(ctx: FilesCtx): Part {
       rows.push({ label: '복사', hint: H('copy'), run: () => setClip('copy') });
       rows.push({ label: '잘라내기', hint: H('cut'), run: () => setClip('cut') });
       rows.push({ label: '복제', hint: H('duplicate'), run: () => void duplicate() });
-      if (cwd) rows.push({ label: '상위 폴더로 옮기기', run: () => void moveMany(many.map((x) => x.path), dirOf(cwd)) });
+      if (cwd) rows.push({ label: '상위 폴더로 옮기기', run: () => void op(() => moveMany(many.map((x) => x.path), dirOf(cwd))) });
       rows.push({ sep: true, label: '' });
       rows.push({ label: many.length > 1 ? `${many.length}개 삭제` : '삭제', hint: H('delete'), danger: true, run: () => void removeMany(many) });
       rows.push({ sep: true, label: '' });
@@ -820,11 +833,9 @@ export function filesPart(ctx: FilesCtx): Part {
   // ── 폴더로 끌어 옮기기 — ⌥(맥)·Ctrl(윈도)을 누른 채 놓으면 복사(파인더·탐색기와 같다) ──
   const DND = 'application/x-lively-assets';
   const copyKey = (e: DragEvent): boolean => (MAC ? e.altKey : e.ctrlKey);
-  async function dropInto(e: DragEvent, dir: string): Promise<void> {
-    let paths: string[] = [];
-    try { paths = JSON.parse(e.dataTransfer!.getData(DND) || '[]'); } catch { /* 빈 손이면 아무 일도 없다 */ }
+  async function dropInto(paths: string[], copy: boolean, dir: string): Promise<void> {
     if (!paths.length) return;
-    if (!copyKey(e)) { await moveMany(paths, dir); return; }
+    if (!copy) { await moveMany(paths, dir); return; }
     const src = paths.map((p2) => ordered.find((x) => x.path === p2)).filter(Boolean) as FileItem[];
     const tops = await copyInto(src.map((f) => ({ path: f.path, name: f.name, type: f.type, size: f.size || 0 })), ctx.id, dir, false);
     if (tops.length) { pushUndo('복사', async () => { for (const t2 of tops) await api(fileQ(currentPath(t2)), { method: 'DELETE' }); }); sig = ''; await load(); }
@@ -836,7 +847,11 @@ export function filesPart(ctx: FilesCtx): Part {
     node.addEventListener('drop', (e: DragEvent) => {
       if (!hasDnd(e)) return;
       e.preventDefault(); if (stop) e.stopPropagation(); node.classList.remove('drop-in');
-      void dropInto(e, dir);
+      //  데이터는 놓는 순간에만 읽을 수 있다 — 줄에 서기 **전에** 꺼내 둔다(줄 뒤에서 읽으면 빈 손이다).
+      let paths: string[] = [];
+      try { paths = JSON.parse(e.dataTransfer!.getData(DND) || '[]'); } catch { /* 빈 손이면 아무 일도 없다 */ }
+      const copy = copyKey(e);
+      void op(() => dropInto(paths, copy, dir));
     });
   }
   function wireDrag(node: HTMLElement, f: FileItem): void {
@@ -898,6 +913,9 @@ export function filesPart(ctx: FilesCtx): Part {
       const refocus = (): void => { if (byKey) root.focus({ preventScroll: true }); };
       if (!ok || !nm || nm === f.name) { render(); refocus(); return; }
       if (/[/\\]/.test(nm) || nm.startsWith('.')) { toast('이름에 / \\ 는 쓸 수 없고 . 로 시작할 수 없어요.', true); render(); refocus(); return; }
+      await op(() => renameNow(nm, refocus));
+    };
+    const renameNow = async (nm: string, refocus: () => void): Promise<void> => {
       //  ⚠ 주소가 '/file/rename' 이다(#4114) — '/rename' 은 **프로젝트 이름짓기**의 자리라, 그리로 보내면
       //   파일이 아니라 프로젝트 이름을 고치려 든다(서버 project-routes.ts 의 같은 번호 주석).
       try { await api(pUrl('/file/rename'), { method: 'POST', body: JSON.stringify({ path: f.path, name: nm }) }); }
@@ -993,7 +1011,17 @@ export function filesPart(ctx: FilesCtx): Part {
   let grid: HTMLElement | null = null;
   const cardKey = (f: FileItem, q: string): string =>
     [f.path, f.type, f.mtime, f.size, f.empty ? 1 : 0, view, renameAt === f.path ? 'e' : '', q ? dirOf(f.path) : ''].join('\u0000');
+  //  다시 그리기는 **겹치지 않는다** — 이름칸이 열린 칸을 떼는 순간 그 칸의 blur 가 확정(finish)을 부르고, 확정이 또 그린다.
+  //   그리는 도중에 또 그리면 바깥 그리기가 이미 옮겨진 칸을 떼려다 멈춰 격자가 반쯤 그려진 채 남는다(시험 R29 실측 —
+  //   이름칸을 연 채 경로 조각을 눌러 다른 폴더로 갈 때). 도중에 온 부름은 끝난 뒤 한 번 더 그린다.
+  let rendering = false, renderOwed = false;
   function render(): void {
+    if (rendering) { renderOwed = true; return; }
+    rendering = true;
+    try { renderNow(); } finally { rendering = false; }
+    if (renderOwed) { renderOwed = false; render(); }
+  }
+  function renderNow(): void {
     crumbBar();
     const q = query.trim();
     if (q) {
@@ -1042,7 +1070,8 @@ export function filesPart(ctx: FilesCtx): Part {
       toolsRO?.disconnect();
       cancelSlowRename();
       document.removeEventListener('paste', onPaste, true);
-      document.querySelector('.pn-ctx')?.remove();
+      //  메뉴는 엔진으로 닫는다 — 요소만 떼면 엔진의 Esc·바깥 누름 가로채기가 남아 **어디서든 Esc 가 삼켜졌다**(#3870 실측).
+      closeCtxMenu();
     },
   };
 }

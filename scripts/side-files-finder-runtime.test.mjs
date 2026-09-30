@@ -35,6 +35,11 @@
 //  R24 같은 페이지에서 다시 열기 → /file 요청 0 · 미리보기 곧바로 섬
 //  R25 한 파일 판이 바뀜 → 그 파일만 1회 다시 받는다
 //  R26 판 없이(mtime 없음) 부른 미리보기 → 보관하지 않는다(다시 열면 다시 받는다)
+//  R27 서버가 느릴 때 이름 확정 **직후**(응답 전) ⌘Z → 방금 바꾼 이름이 되돌려진다(그 앞의 일이 아니다)
+//  R28 서버가 느릴 때 ⌘D 를 빠르게 두 번 → 복사본 둘이 서로 다른 이름(뒤엣것이 앞엣것을 덮지 않는다)
+//  R29 이름칸을 연 채 다른 폴더로 간다(경로 조각) → 격자가 온전히 선다 · 페이지 오류 0(그리는 도중 또 그리지 않는다)
+//  R30 메뉴 요소가 엔진 밖에서 떼어져도(부품 destroy 등) Esc 가 삼켜지지 않는다
+//  W2  모든 장면을 통틀어 페이지 오류(잡히지 않은 예외·거부) 0
 //
 // 왜 런타임인가: 결함이 «CSS 특이도(찾기 14px) · 앵커 팝오버가 바탕을 안 준다 · 넘치면 줄바꿈» 같은 **계산된 모양**과
 //  «키 → 동작 → 서버 요청» 의 배선이라 소스 문자열로는 안 보인다. 그래서 실제 스타일시트와 프로덕션 소스(web/v2/panes-files.ts
@@ -72,7 +77,12 @@ const bundle = buildSync({
 // ── 페이지 안에서 도는 장면들(문자열로 직렬화해 싣는다) ─────────────────────────────
 async function PAGE_MAIN() {
   const R = {};
+  const pageErrors = [];
+  window.addEventListener("error", (e) => pageErrors.push(String(e.message || e)));
+  window.addEventListener("unhandledrejection", (e) => pageErrors.push("rej: " + String(e.reason && e.reason.message || e.reason)));
   const sleep = (ms) => new Promise((z) => setTimeout(z, ms));
+  //  서버 왕복을 기다리는 자리는 **조건**으로 기다린다 — 고정 시간은 느린 러너(CI 리눅스)에서 앞 장면의 되돌리기를 집었다(R21 실측).
+  const waitFor = async (fn, ms = 4000) => { const t0 = performance.now(); while (performance.now() - t0 < ms) { if (fn()) return true; await sleep(20); } return false; };
   const SRC = document.getElementById("pfsrc").textContent;
   localStorage.setItem("lively_ui_token", "t");
   localStorage.setItem("lively_pn_files_sort", "name:asc");
@@ -97,7 +107,9 @@ async function PAGE_MAIN() {
   const log = [];
   const kids = (dir) => [...FS.keys()].filter((p) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "") === dir);
   const J = (o, st = 200) => new Response(JSON.stringify(o), { status: st, headers: { "content-type": "application/json" } });
+  let DELAY = 0;   // 느린 서버(R27·R28) — 요청마다 이만큼 늦게 답한다
   const serve = async (url, opts = {}) => {
+    if (DELAY) await sleep(DELAY);
     const u = new URL(url, "http://x/");
     const m = String(opts.method || "GET").toUpperCase();
     log.push(m + " " + decodeURIComponent(u.pathname + u.search));
@@ -122,7 +134,7 @@ async function PAGE_MAIN() {
     send(file) {
       const u = new URL(this.url, "http://x/");
       log.push(this.m + " " + decodeURIComponent(u.pathname + u.search));
-      Promise.resolve(file && file.arrayBuffer ? file.arrayBuffer() : new ArrayBuffer(0)).then((a) => {
+      Promise.resolve(DELAY ? sleep(DELAY) : 0).then(() => (file && file.arrayBuffer ? file.arrayBuffer() : new ArrayBuffer(0))).then((a) => {
         FS.set(u.searchParams.get("path"), { type: "file", data: new Uint8Array(a), mtime: 9500 + log.length });
         this.status = 200; this.responseText = "{}"; this.onload && this.onload(); this.onloadend && this.onloadend();
       });
@@ -197,7 +209,7 @@ async function PAGE_MAIN() {
     const menu = $(".pn-ctx") || $(".dash-pop");
     R.sort = menu ? { bg: getComputedStyle(menu).backgroundColor, checked: $$('[aria-checked="true"]', menu).map((b) => b.textContent.trim()), onAt: $$(".on", menu).map((b) => b.textContent.trim()) } : null;
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    $(".pn-ctx")?.remove(); $(".dash-pop")?.remove();
+    await sleep(30);
     // R6 앵커 팝오버
     const a = document.createElement("button"); document.body.append(a);
     const bare = document.createElement("div"); bare.textContent = "x";
@@ -206,7 +218,15 @@ async function PAGE_MAIN() {
     const c2 = PFm.anchoredPopover(a, own); const cs = getComputedStyle(own); R.own = { bg: cs.backgroundColor, radius: cs.borderTopLeftRadius, pad: cs.paddingTop }; c2(); a.remove();
     // R7 올리기
     const car = $("#host .pn-up-car");
-    if (car) { car.click(); await sleep(120); R.upMenu = $$(".pn-ctx .pn-ctx-i").map((b) => b.textContent.trim()); $(".pn-ctx")?.remove(); } else R.upMenu = null;
+    if (car) { car.click(); await sleep(120); R.upMenu = $$(".pn-ctx .pn-ctx-i").map((b) => b.textContent.trim()); document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await sleep(30); } else R.upMenu = null;
+    // R30 메뉴 요소를 밖에서 떼어 낸 뒤 Esc — 다른 자리(입력칸)가 Esc 를 받아야 한다
+    sortB.click(); await sleep(120);
+    $(".pn-ctx")?.remove();
+    const probe = document.createElement("input"); document.body.append(probe); probe.focus();
+    let escGot = 0; probe.addEventListener("keydown", (e) => { if (e.key === "Escape") escGot++; });
+    probe.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    probe.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    R.r30 = escGot; probe.remove();
     clicked.length = 0;
     const mainUp = $$("#host .pn-ftools button").find((b) => /올리기/.test(b.textContent));
     mainUp.click();
@@ -240,13 +260,17 @@ async function PAGE_MAIN() {
     key(root, "a", "KeyA", { metaKey: true }); R.r12a = selected().length; R.total = ord.length;
     key(root, "Escape", "Escape"); R.r12b = selected().length;
     // R13·R14 폴더 드나들기
-    clickFp("docs"); key(root, "ArrowDown", "ArrowDown", { metaKey: true }); await sleep(150);
+    clickFp("docs"); key(root, "ArrowDown", "ArrowDown", { metaKey: true });
+    await waitFor(() => order().includes("docs/inner.txt"));
     R.r13a = { crumb: crumb(), items: order() };
-    key(root, "ArrowUp", "ArrowUp", { metaKey: true }); await sleep(150);
+    key(root, "ArrowUp", "ArrowUp", { metaKey: true });
+    await waitFor(() => order().includes("docs") && selected().length > 0);
     R.r13b = { crumb: crumb(), sel: selected() };
-    key(root, "[", "BracketLeft", { metaKey: true }); await sleep(150);
+    key(root, "[", "BracketLeft", { metaKey: true });
+    await waitFor(() => order().includes("docs/inner.txt"));
     R.r14 = crumb();
-    key(root, "ArrowUp", "ArrowUp", { metaKey: true }); await sleep(150);
+    key(root, "ArrowUp", "ArrowUp", { metaKey: true });
+    await waitFor(() => order().includes("docs"));
     // R15 타이핑 고르기
     await sleep(1100);
     key(root, "q", "KeyQ"); R.r15 = selected();
@@ -255,7 +279,8 @@ async function PAGE_MAIN() {
     opened.length = 0; clickFp("보고서.txt"); key(root, " ", "Space"); R.r16 = opened.slice();
     // R17 새 폴더
     let n0 = log.length;
-    key(root, "N", "KeyN", { metaKey: true, shiftKey: true }); await sleep(200);
+    key(root, "N", "KeyN", { metaKey: true, shiftKey: true });
+    await waitFor(() => !!$('#host [data-fp="새 폴더"] .pn-frename'));
     R.r17 = { reqs: since(n0).filter((l) => /^POST .*\/folder/.test(l)), editor: !!$('#host [data-fp="새 폴더"] .pn-frename') };
     const ed2 = $("#host .pn-frename"); if (ed2) key(ed2, "Escape", "Escape"); await sleep(80);
     root.focus();
@@ -264,28 +289,67 @@ async function PAGE_MAIN() {
     n0 = log.length;
     const dt = new DataTransfer(); dt.setData("text/plain", "보고서.txt");
     root.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
-    await sleep(300);
+    await waitFor(() => since(n0).some((l) => /^PUT /.test(l)) && FS.has("보고서 복사본.txt"));
+    await sleep(100);
     R.r18 = { clipWrites, reqs: since(n0).filter((l) => /\/file\?/.test(l)) };
     // R19 paste(딴 글)
     n0 = log.length;
     const dt2 = new DataTransfer(); dt2.setData("text/plain", "hello other");
     root.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt2, bubbles: true, cancelable: true }));
-    await sleep(300);
+    await waitFor(() => since(n0).some((l) => /^PUT /.test(l)));
+    await sleep(100);
     R.r19 = since(n0).filter((l) => /\/file\?/.test(l));
     // R20 ⌘D
     root.focus(); clickFp("사진.png"); n0 = log.length;
-    key(root, "d", "KeyD", { metaKey: true }); await sleep(300);
+    key(root, "d", "KeyD", { metaKey: true });
+    await waitFor(() => since(n0).some((l) => /^PUT /.test(l)) && FS.has("사진 복사본.png"));
+    await sleep(150);
     R.r20 = since(n0).filter((l) => /^PUT /.test(l));
     // R21 이름 바꾸기 → ⌘Z
     root.focus(); clickFp("notes.txt"); key(root, "Enter", "Enter"); await sleep(60);
     const ed3 = $('#host [data-fp="notes.txt"] .pn-frename');
     n0 = log.length;
     if (ed3) { ed3.value = "memo.txt"; key(ed3, "Enter", "Enter"); }
-    await sleep(250);
+    await waitFor(() => FS.has("memo.txt") && order().includes("memo.txt"));
+    await sleep(100);
     root.focus();
-    key(root, "z", "KeyZ", { metaKey: true }); await sleep(250);
+    key(root, "z", "KeyZ", { metaKey: true });
+    await waitFor(() => FS.has("notes.txt") && order().includes("notes.txt"));
     R.r21 = since(n0).filter((l) => /rename/.test(l)).length;
     R.r21fs = [FS.has("notes.txt"), FS.has("memo.txt")];
+    // R27 느린 서버 — 이름 확정 직후 곧바로 ⌘Z
+    DELAY = 150;
+    const n27 = log.length;
+    root.focus(); clickFp("readme.md"); key(root, "Enter", "Enter"); await sleep(60);
+    const ed4 = $('#host [data-fp="readme.md"] .pn-frename');
+    if (ed4) { ed4.value = "readme2.md"; key(ed4, "Enter", "Enter"); }
+    root.focus();
+    key(root, "z", "KeyZ", { metaKey: true });
+    //  이름 바꾸기 → 되돌리기 두 요청이 **다** 간 뒤에 잰다(첫 요청 전에는 원래 상태라 «되돌려졌다» 로 거짓 초록이 난다).
+    await waitFor(() => since(n27).filter((l) => /rename/.test(l)).length >= 2, 6000);
+    await waitFor(() => FS.has("readme.md") && order().includes("readme.md"), 3000);
+    await sleep(200);
+    R.r27 = { readme: FS.has("readme.md"), readme2: FS.has("readme2.md"), dupKept: FS.has("사진 복사본.png") };
+    R.r27log = since(n27).filter((l) => !/\/files\?/.test(l));
+    R.r27toasts = $$("#toasts .toast").map((t) => t.textContent).slice(-4);
+    // R28 느린 서버 — ⌘D 두 번 빠르게
+    root.focus(); clickFp("보고서.txt"); n0 = log.length;
+    key(root, "d", "KeyD", { metaKey: true });
+    key(root, "d", "KeyD", { metaKey: true });
+    await waitFor(() => since(n0).filter((l) => /^PUT /.test(l)).length >= 2, 8000);
+    await sleep(400);
+    R.r28 = since(n0).filter((l) => /^PUT /.test(l));
+    DELAY = 0;
+    // R29 이름칸을 연 채 경로 조각으로 다른 폴더로
+    root.focus(); clickFp("docs"); key(root, "ArrowDown", "ArrowDown", { metaKey: true });
+    await waitFor(() => order().includes("docs/inner.txt"));
+    clickFp("docs/inner.txt"); key(root, "Enter", "Enter"); await sleep(60);
+    const ed5 = $('#host [data-fp="docs/inner.txt"] .pn-frename'); if (ed5) ed5.focus();
+    const e0 = pageErrors.length;
+    $$("#host .pn-fcrumb")[0].click();
+    await waitFor(() => order().includes("docs") && order().includes("보고서.txt"));
+    await sleep(100);
+    R.r29 = { editorWas: !!ed5, errors: pageErrors.slice(e0), order: order(), editorLeft: !!$("#host .pn-frename") };
     B.kill();
   } catch (e) { R.errB = String(e && e.stack || e); }
 
@@ -298,9 +362,11 @@ async function PAGE_MAIN() {
     const root = C.root; root.focus();
     clickFp("readme.md"); key(root, "Enter", "Enter"); await sleep(60);
     R.r9 = { opened: opened.slice(), editor: !!$("#host .pn-frename") };
-    clickFp("docs"); key(root, "Enter", "Enter"); await sleep(150);
+    clickFp("docs"); key(root, "Enter", "Enter");
+    await waitFor(() => order().includes("docs/inner.txt"));
     const inDocs = crumb();
-    key(root, "Backspace", "Backspace"); await sleep(150);
+    key(root, "Backspace", "Backspace");
+    await waitFor(() => order().includes("docs"));
     R.r22 = { inDocs, after: crumb(), confirm: !!$(".ov-back") };
     $(".ov-back")?.remove();
     C.kill();
@@ -344,6 +410,7 @@ async function PAGE_MAIN() {
     R.r26 = since(n0).filter((l) => /^GET .*\/file\?/.test(l)).length;
   } catch (e) { R.errD = String(e && e.stack || e); }
 
+  R.pageErrors = pageErrors;
   document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
 }
 
@@ -353,6 +420,7 @@ ${CSS.map((f) => `<link rel="stylesheet" href="${path.basename(f)}">`).join("")}
 <script type="text/plain" id="pfsrc">${bundle.replace(/<\/script/gi, "<\\/script")}</script>
 <script>(${PAGE_MAIN.toString()})().catch(function (e) { document.getElementById('out').textContent = JSON.stringify({ fatal: String(e && e.stack || e) }) + 'ENDRESULT'; });</script>`;
 
+if (process.env.DUMP_PAGE) { const fs = await import("node:fs"); fs.writeFileSync(process.env.DUMP_PAGE, PAGE); for (const f of CSS) fs.copyFileSync(f, path.join(path.dirname(process.env.DUMP_PAGE), path.basename(f))); }
 const dom = await dumpDom(chrome, { html: PAGE, copy: CSS, prefix: "side-files-", virtualTimeBudget: 60000 });
 const m = /<pre id="out">([\s\S]*?)ENDRESULT/.exec(dom);
 if (!m) { console.error("FAIL  페이지가 결과를 안 냈다\n" + dom.slice(0, 1500)); process.exit(1); }
@@ -403,6 +471,11 @@ check(R.r18 && R.r18.reqs.some((l) => /^GET .*path=보고서\.txt&download=1/.te
 check(Array.isArray(R.r19) && !R.r19.some((l) => /download=1/.test(l)) && R.r19.some((l) => /^PUT .*붙여넣은 글/.test(l)), "R19 그새 딴 글을 복사했으면 그 글을 붙인다", JSON.stringify(R.r19));
 check(Array.isArray(R.r20) && R.r20.some((l) => /path=사진 복사본\.png$/.test(l)), "R20 ⌘D 복제", JSON.stringify(R.r20));
 check(R.r21 === 2 && JSON.stringify(R.r21fs) === "[true,false]", "R21 이름 바꾸기 → ⌘Z 원래 이름", `rename ${R.r21} · fs ${JSON.stringify(R.r21fs)}`);
+check(R.r27 && R.r27.readme && !R.r27.readme2 && R.r27.dupKept, "R27 응답 전 ⌘Z 도 방금 한 이름 바꾸기를 되돌린다(앞의 복제는 그대로)", JSON.stringify(R.r27));
+check(Array.isArray(R.r28) && R.r28.length === 2 && new Set(R.r28).size === 2, "R28 ⌘D 두 번 → 서로 다른 복사본 이름", JSON.stringify(R.r28));
+check(R.r29 && R.r29.editorWas && R.r29.errors.length === 0 && R.r29.order.includes("docs") && R.r29.order.length >= 5 && !R.r29.editorLeft, "R29 이름칸 연 채 다른 폴더로 — 격자 온전 · 오류 0", JSON.stringify(R.r29));
+check(R.r30 === 2, "R30 떼어진 메뉴가 Esc 를 삼키지 않는다", String(R.r30));
+check(Array.isArray(R.pageErrors) && R.pageErrors.length === 0, "W2 페이지 오류 0", JSON.stringify(R.pageErrors));
 check(R.r22 && /docs/.test(R.r22.inDocs) && !/docs/.test(R.r22.after) && !R.r22.confirm, "R22 윈도 Backspace → 뒤로(삭제 아님)", JSON.stringify(R.r22));
 check(R.r23 && R.r23.fill >= 4 && R.r23.gets.length >= 4 && R.r23.gets.every((l) => /&v=\d+\.\d+/.test(l)), "R23 미리보기 요청에 판(&v=)", JSON.stringify(R.r23));
 check(R.r24 && R.r24.gets === 0 && R.r24.fillSoon >= 4, "R24 다시 열면 받지 않고 곧바로 선다", JSON.stringify(R.r24));
