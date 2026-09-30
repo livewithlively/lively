@@ -258,7 +258,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   }, penIc());
   function paintTitle(): void {
     if (renaming) return;                    // 고치는 중엔 손대지 않는다(20초 폴링이 입력 중인 칸을 지우면 안 된다)
-    const tip = [titleText, target.id].filter(Boolean).join(' · ');
+    const tip = [idLabel(titleText) ? '' : titleText, target.id].filter(Boolean).join(' · ');   // 이름 없는 세션은 id 를 두 번 쓰지 않는다
     const f = face();
     const name = f.named ? f.main : '';
     const job = !f.named && !f.untitled ? f.main : '';
