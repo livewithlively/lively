@@ -1509,8 +1509,15 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const input = el('input', { class: 'pn-title-in', type: 'text', maxlength: '200', value: cur,
       'aria-label': '프로젝트 이름', spellcheck: 'false' }) as HTMLInputElement;
     let closed = false;
-    //  칸을 놓은 **뒤에** 다시 그린다 — 놓기 전엔 paintDoor 가 고치는 중으로 보고 건너뛴다.
-    const cancel = (): void => { if (closed) return; closed = true; titleEdit.end(input); paintDoor(); };
+    //  취소는 **제목 자리만** 되돌린다 — 문패를 통째로 다시 그리면, 문패의 단추([세션]·[프로젝트 상세]·[세션 옮기기])를
+    //   눌러 편집을 끝낸 경우 그 단추가 누름과 뗌 사이에 새 노드로 바뀌어 클릭이 사라진다(blur 는 누름에서 난다).
+    //   편집 중 건너뛴 문패 그리기가 있으면 손을 뗀 뒤 한 번 갚는다(lib/edit-hold).
+    const cancel = (): void => {
+      if (closed) return;
+      closed = true;
+      titleEdit.end(input, paintDoor);
+      host.replaceWith(titleNode(String(pj().name || '프로젝트 #' + id)));
+    };
     const save = async (): Promise<void> => {
       if (closed) return;
       const to = input.value.replace(/\s+/g, ' ').trim();

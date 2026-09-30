@@ -21,10 +21,13 @@
 /** 칸 — 화면에 붙어 있나만 본다. */
 export interface HoldNode { readonly isConnected: boolean }
 
+/** 누름을 끝내는 소식 — 뗌 · 취소 · 우클릭 메뉴(메뉴가 뜨면 pointerup 이 안 올 수 있다 — 누른 채로 굳지 않게). */
+export type PressEvent = 'pointerdown' | 'pointerup' | 'pointercancel' | 'contextmenu';
+
 /** 누름 신호와 «다음 차례» — 브라우저 밖(시험)에서는 가짜를 넣는다. */
 export interface HoldEnv {
   /** 문서 전체의 누름·뗌 소식을 받는다(capture). */
-  listen(type: 'pointerdown' | 'pointerup' | 'pointercancel', fn: () => void): void;
+  listen(type: PressEvent, fn: () => void): void;
   /** 지금 도는 사건이 끝난 다음 차례에 부른다(뗌 뒤의 click 까지 지나간 뒤). */
   later(fn: () => void): void;
 }
@@ -70,6 +73,7 @@ function pressesOf(env: HoldEnv): Presses {
   };
   env.listen('pointerup', up);
   env.listen('pointercancel', up);
+  env.listen('contextmenu', up);
   return st;
 }
 
@@ -90,10 +94,10 @@ export function editHold(env?: HoldEnv): EditHold {
     owed = false;
     fn();
   };
-  const presses = (): Presses => pressesOf(env || browserEnv());
+  const myPresses = (): Presses => pressesOf(env || browserEnv());
 
   return {
-    begin(node) { presses(); input = node; },   // 누름을 지금부터 듣는다 — 편집을 끝내는 누름은 blur 보다 먼저 온다
+    begin(node) { myPresses(); input = node; },   // 누름을 지금부터 듣는다 — 편집을 끝내는 누름은 blur 보다 먼저 온다
     alive,
     skip() {
       if (!alive()) return false;
@@ -105,7 +109,7 @@ export function editHold(env?: HoldEnv): EditHold {
       if (input === node) input = null;
       if (!fn || !owed) return;
       pay = fn;
-      const p = presses();
+      const p = myPresses();
       if (p.down) p.waiting.add(settle);
       else (env || browserEnv()).later(settle);
     },
