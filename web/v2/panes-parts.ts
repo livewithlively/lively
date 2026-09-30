@@ -23,7 +23,7 @@ import { sessFilesPart } from './panes-sessfiles.js';   // #4088 후속 — 세�
 import { tasksPart } from './panes-tasks.js';
 import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, authHeaders, kindOf, knTitle, pnIcon, pnNote, seedSessName, sessNameCache } from './panes-kit.js';
 import { htmlFrame } from '../lib/file-preview.js';        // #4075 — 시안(HTML)은 공용 렌더러의 격리 프레임으로(자르지 않고 스크립트 허용)
-import { attachFrameBridge } from '../lib/frame-bridge.js'; // #4075 — 격리 프레임 안 문서의 저장·복사·내려받기를 셸이 대신한다
+import { attachFrameBridge, withScrollKeeper } from '../lib/frame-bridge.js'; // #4075 — 격리 프레임 안 문서의 저장·복사·내려받기를 셸이 대신한다 · #4523 보던 자리
 import type { TabKey } from '../lib/tab-key.js';
 import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
 import { composerAttach } from './compose-attach.js';
@@ -1375,7 +1375,8 @@ function viewerPart(ctx: PartCtx): Part {
     paintBar();
     if (!p2) { shownStamp = ''; paintEmpty(); return; }
     //  다시 펼 때 보던 자리를 지킨다 — 무대(그림·글)는 우리가 굴리므로 되돌릴 수 있다.
-    //   프레임 안(PDF·시안)의 자리는 우리 것이 아니라 못 지킨다 → 그래서 아래 감시가 «다 쓴 뒤 한 번만» 편다.
+    //   프레임 안의 자리는 우리 것이 아니다 — 시안(HTML)은 문서가 제 자리를 다리로 알려 스스로 되돌린다(#4523, withScrollKeeper).
+    //   PDF 는 여전히 못 지킨다 → 그래서 아래 감시가 «다 쓴 뒤 한 번만» 편다.
     const keepTop = quiet && stage.scrollTop > 0 ? stage.scrollTop : 0;
     if (keepTop) window.setTimeout(() => { if (path === p2 && stage.scrollTop === 0) stage.scrollTop = keepTop; }, 60);
     const k = kindOf(p2);
@@ -1403,7 +1404,9 @@ function viewerPart(ctx: PartCtx): Part {
         //  (불투명 오리진 — 부모 DOM·쿠키·저장소 차단). 그 격리 때문에 문서가 못 하는 저장·복사·내려받기는
         //  검토 다리(lib/frame-bridge)가 셸에서 대신한다 — 저장 이름 공간은 프로젝트·경로라 파일끼리 안 섞인다.
         unbridge();
-        const f = htmlFrame(txt, base(p2), 'pn-ed-pv full') as HTMLIFrameElement;
+        //  #4523 — 프레임이 새로 서면(새로고침·세션을 갈아탔다 돌아옴·아래 살아 있는 미리보기) 문서가 맨 위에서 시작했다.
+        //   문서 끝에 «보던 자리» 스크립트를 붙여 제 자리를 다리로 알리고, 새로 설 때 물어 되돌린다(자리는 다리의 이름 공간 = 파일마다).
+        const f = htmlFrame(withScrollKeeper(txt), base(p2), 'pn-ed-pv full') as HTMLIFrameElement;
         f.tabIndex = -1;
         //  이름 공간은 프로젝트·경로(frame-bridge 25c 가드) — 세션 폴더의 파일은 세션 id 로 갈라 다른 세션의 같은 경로와 안 섞인다.
         unbridge = src ? attachFrameBridge(f, `sess:${src.sid}:${p2}`) : attachFrameBridge(f, `${ctx.id}:${p2}`);
@@ -1510,7 +1513,8 @@ function viewerPart(ctx: PartCtx): Part {
   const visible = (): boolean => !!root.isConnected && root.getClientRects().length > 0;
   //  ★ **다 쓴 뒤에 한 번만 편다**(원준 2026-09-05: "수정이 실시간으로 되더라도 중간에 덱이 계속 맨 위로
   //   올라가지 않게"). LLM 이 파일을 고치는 동안 도장은 몇 초 사이에 여러 번 바뀐다 — 그때마다 펴면 보던 자리가
-  //   계속 튄다(프레임 안 자리는 우리 것이 아니라 되돌릴 수도 없다). 그래서 **도장이 멎을 때까지 기다렸다가**
+  //   계속 튄다(PDF 프레임 안 자리는 우리 것이 아니라 되돌릴 수도 없다 — 시안은 #4523 부터 제자리로 돌아오지만, 쓰는 도중 여러 번
+  //   다시 서면 그때마다 깜빡인다). 그래서 **도장이 멎을 때까지 기다렸다가**
   //   한 번만 편다: 새 도장을 보면 적어 두고, 다음 박자에도 그대로면 그때 연다(≈3초 정적).
   let pending = '';
   const reopenIfChanged = (stamp: string): void => {
