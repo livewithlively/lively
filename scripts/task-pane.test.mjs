@@ -213,6 +213,9 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
   const css = read("public/styles/49-v2-projpane.css");
   eq([/\.pj-rdopen \{ max-height: [^;]+; overflow: auto;/.test(css), /iconBtn\('ext'/.test(tk), /'띄워 읽기'/.test(tk), /\.pj-body \{[^}]*background: var\(--bg-tint\)/.test(css)], [true, false, true, false],
     "K10 편 본문은 제 안에서 스크롤(접기 단추가 머리에 남는다) · 본문 머리에 프로젝트 창 단추 없음 · 창 띄우기는 글자 단추 · 본문 바탕은 파랑 틴트가 아니다");
+  eq([/if \(!bodyMore \|\| t\.closest\('\.pj-bh'\)\) toggle\(\);/.test(tk), /if \(!has\) \{ void startBodyEdit\(\); return; \}/.test(tk), /iconBtn\('pencil', '본문 고치기'/.test(tk),
+      /lsSet\(BODY_H_KEY, String\(bodyH\)\)/.test(tk), /if \(bodyEdit \|\| bodyDragging\) return;/.test(tk), /\.pj-rsz \{[^}]*cursor: ns-resize/.test(css)], [true, true, true, true, true, true],
+    "K11 본문은 한 번 누르면 펼친다(고치기는 연필 · 빈 본문만 바로 적기) · 편 뒤엔 머리 줄로 접는다 · 아래 변을 끌어 길이 조절(기기에 기억, 끄는 동안 다시 그리지 않는다)");
   eq(/<link rel="stylesheet" href="\.\/styles\/49-v2-taxonomy\.css">\s*\n<link rel="stylesheet" href="\.\/styles\/49-v2-projpane\.css">/.test(read("public/index.html")), true, "K8 앱 CSS 가 실린다");
 }
 
