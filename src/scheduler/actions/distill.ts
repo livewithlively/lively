@@ -191,6 +191,8 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
   if (!(typeof params.distiller === "string" && params.distiller.trim()) && await onboardingHoldsDistill()) {
     return { batches: [], considered: 0, skipped: "처음 설정 직후 — 리브가 카테고리·정리 규칙을 세운 뒤 시작합니다" };
   }
+  // 조직 서술 형식은 레인과 무관한 조직 설정이라 배치마다 한 번만 읽는다.
+  const writingFormat = await getWritingFormat();
   const { listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, buildDistillerPrompt, buildDistillerTargeting, listThreadKnowledge, listStrandedSources, buildStrandedTargeting, isAutoDisabledLane, oneAudienceGroup } = await import("../../org/distill/distiller.js");
   const policySummary = await buildDistillPolicySummary();
 
@@ -214,7 +216,7 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
     const ids = inbox.map((s) => Number(s.id));
     return { batches: [{
       distillerId: d.id, key: d.key, ids, backlog: await countDistillerBacklog(d, all),
-      prompt: buildDistillerPrompt({ distiller: d, rows: inbox, policySummary, threadKnowledge: threadKn, writingFormat: await getWritingFormat() }),
+      prompt: buildDistillerPrompt({ distiller: d, rows: inbox, policySummary, threadKnowledge: threadKn, writingFormat }),
       targeting: buildDistillerTargeting(d, inbox, threadKn),
       requester: d.requester, harness: d.harness, model: d.model, effort: d.effort,
     }], considered: 1 };
@@ -256,7 +258,7 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
     const ids = inbox.map((s) => Number(s.id));
     batches.push({
       distillerId: d.id, key: d.key, ids, backlog: await countDistillerBacklog(d, all),
-      prompt: buildDistillerPrompt({ distiller: d, rows: inbox, policySummary, threadKnowledge: threadKn, writingFormat: await getWritingFormat() }),
+      prompt: buildDistillerPrompt({ distiller: d, rows: inbox, policySummary, threadKnowledge: threadKn, writingFormat }),
       targeting: buildDistillerTargeting(d, inbox, threadKn),
       requester: d.requester, harness: d.harness, model: d.model, effort: d.effort,
     });

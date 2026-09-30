@@ -479,4 +479,8 @@ t("resolve 는 reject 수준을 보존한다(rules·default_level)", () => {
   assert.equal(f.rules.local_path, "reject");
   assert.equal(f.default_level, "reject");
 });
+t("A7 activity_body_missing 은 명시 없으면 default_level 과 무관하게 off", () => {
+  assert.equal(ruleLevel(on({ default_level: "reject" }), "activity_body_missing"), "off");
+  assert.equal(ruleLevel(on({ rules: { activity_body_missing: "warn" } }), "activity_body_missing"), "warn");
+});
 console.log(`writing-lint: ${pass} passed`);

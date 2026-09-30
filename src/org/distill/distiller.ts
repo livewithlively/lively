@@ -13,7 +13,7 @@
 //  이건 '무엇을 집어 무슨 기준·형식으로 증류하나'(생산 라인). 증류기 산출도 그 밸브를 그대로 탄다.
 import { BINARY_TRIAGE_RULE } from "./binary-triage.js";
 import { ENTRY_GENERATED } from "../../v6/source-group.js";
-import { buildWritingGuideBlock, type WritingFormat } from "../policies/writing-format.js";
+import { buildWritingGuideBlock, ruleLevel, type WritingFormat } from "../policies/writing-format.js";
 import { itemsPool, q } from "../../db/client.js";
 import { normList, normText, sanitizePromptSections } from "../store/ingest.js";   // 저장 경로와 **같은** 입력 정규화(#1557)
 import { sourceVisSql, resolveSourceViewer, S_LIST_SEL, AUD_KEY_SQL } from "../../v6/source-store.js";
@@ -1212,6 +1212,14 @@ export function distillerSectionViews(d: DistillerRow, o: { count: number; polic
   }));
 }
 
+function orgWritingBlock(fmt: WritingFormat): string {
+  const w = buildWritingGuideBlock(fmt);
+  if (!w) return "";
+  const head = ["[조직 서술 형식 — 레인 형식보다 우선]"];
+  if (ruleLevel(fmt, "lead_missing") !== "off") head.push("레인 형식의 섹션은 결론 문장 뒤에 둔다: 본문 첫 줄은 헤딩 없이 결론 1~3문장이다.");
+  return [...head, w].join("\n");
+}
+
 export function buildDistillerPrompt(o: {
   distiller: DistillerRow;
   rows: Record<string, unknown>[];
@@ -1229,20 +1237,18 @@ export function buildDistillerPrompt(o: {
   if (intro) lines.push(intro);
   lines.push(buildDistillerTargeting(d, o.rows, o.threadKnowledge ?? []));
 
+  // 조직 서술 형식은 레인이 format 을 덮어쓰거나 비워도(B3) 빠지지 않게 조각 밖에서 만든다 — 레인 형식은 레인마다
+  //  달라도 저장소에 들어오는 글의 모양은 조직 하나로 같아야 한다. 레인의 섹션 순서와 부딪히면 이 블록이 이긴다.
+  const orgWriting = o.writingFormat ? orgWritingBlock(o.writingFormat) : "";
   for (const id of ["criteria", "format", "thread", "procedure"] as PromptSectionId[]) {
     const text = sectionOverride(d, id) ?? distillerSectionDefault(id, d, opt);
-    if (!text.trim()) continue;   // 빈 문자열 = 그 조각을 뺀다(B3)
-    lines.push("");
-    lines.push(text);
-    // 조직 서술 형식은 레인이 format 을 덮어써도 빠지지 않게 조각 밖에 붙인다 — 레인 형식은 레인마다 달라도
-    //  저장소에 들어오는 글의 모양은 조직 하나로 같아야 한다. 레인의 섹션 순서와 부딪히면 이 블록이 이긴다.
-    if (id === "format") {
-      const w = o.writingFormat ? buildWritingGuideBlock(o.writingFormat) : "";
-      if (w) {
-        lines.push("");
-        lines.push(["[조직 서술 형식 — 레인 형식보다 우선]",
-          "레인 형식의 섹션은 결론 문장 뒤에 둔다: 본문 첫 줄은 헤딩 없이 결론 1~3문장이다.", w].join("\n"));
-      }
+    if (text.trim()) {   // 빈 문자열 = 그 조각을 뺀다(B3)
+      lines.push("");
+      lines.push(text);
+    }
+    if (id === "format" && orgWriting) {
+      lines.push("");
+      lines.push(orgWriting);
     }
   }
 
