@@ -148,9 +148,12 @@ export function lintWriting(input: WritingLintInput, fmt: WritingFormat, surface
   }
 
   // ── 강조 ──
-  const bolds = (prose.match(/\*\*[^*\n]+\*\*/g) ?? []).length;
+  // 표 안의 볼드·기호는 셈하지 않는다 — 표의 ✅·❌ 는 상태를 적은 값(데이터)이지 강조가 아니고, 강조 규칙을 맞추려고
+  //  표 값을 바꾸면 사실이 바뀐다(자동 정리의 불변식이 표 행을 글자 단위로 지키는 것과 짝).
+  const emphasisText = proseLines.filter((l) => !/^\s*\|/.test(l)).join("\n");
+  const bolds = (emphasisText.match(/\*\*[^*\n]+\*\*/g) ?? []).length;
   if (bolds > fmt.limits.bold_max) add("bold_overuse", `볼드가 ${bolds}곳이다(상한 ${fmt.limits.bold_max}). 강조는 결론 한두 곳에만 둔다.`, { count: bolds });
-  const symbols = (prose.match(SIGNAL_SYMBOL_RE) ?? []).length;
+  const symbols = (emphasisText.match(SIGNAL_SYMBOL_RE) ?? []).length;
   if (symbols > fmt.limits.symbol_max) add("symbol_overuse", `강조 기호(🔴⚠✅ 등)가 ${symbols}개다(상한 ${fmt.limits.symbol_max}). 위험 등급은 글로 적는다.`, { count: symbols });
   const symHeads = proseLines.filter((l) => /^\s*#{1,6}\s/.test(l) && PICTO_RE.test(l));
   if (symHeads.length) add("heading_symbol", "헤딩에 기호를 넣지 마라.", { count: symHeads.length, sample: sample(symHeads[0]) });

@@ -354,4 +354,10 @@ t("folder 와 too_long 이 겹치면 folder 가 먼저", () =>
 t("too_long 과 recently_edited 가 겹치면 too_long 이 먼저", () =>
   assert.equal(elig({ updated_at: ago(0), body_md: "가".repeat(REWRITE_BODY_MAX_CHARS + 1) }).reason, "too_long"));
 
+t("numbers: «2026년 9월 17일» 표기는 «2026-09-17» 과 같은 날로 본다", () => {
+  const a = doc("배포 규칙 (2026-09-17)", "결론이다.");
+  const b = doc("배포 규칙", "2026년 9월 17일 기준 결론이다.");
+  assert.ok(!checkRewrite(a, b, fmt).violations.some((v) => v.kind === "invariant:numbers"));
+  assert.ok(checkRewrite(a, doc("배포 규칙", "2026년 9월 18일 기준 결론이다."), fmt).violations.some((v) => v.kind === "invariant:numbers"));
+});
 console.log(`writing-rewrite-gate: ${pass} passed`);

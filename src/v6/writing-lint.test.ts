@@ -483,4 +483,9 @@ t("A7 activity_body_missing 은 명시 없으면 default_level 과 무관하게 
   assert.equal(ruleLevel(on({ default_level: "reject" }), "activity_body_missing"), "off");
   assert.equal(ruleLevel(on({ rules: { activity_body_missing: "warn" } }), "activity_body_missing"), "warn");
 });
+t("표 안의 기호·볼드는 강조 개수에 넣지 않는다", () => {
+  const table = "결론이다.\n\n| 항목 | 상태 |\n|---|---|\n| a | ✅ |\n| b | ❌ |\n| c | ✅ |\n| d | **❌** |\n";
+  assert.ok(!has("symbol_overuse", CLEAN_TITLE, table));
+  assert.ok(has("symbol_overuse", CLEAN_TITLE, table + "\n🔴 ⚠️ ✅ ⭐"));
+});
 console.log(`writing-lint: ${pass} passed`);

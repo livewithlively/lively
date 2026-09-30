@@ -85,6 +85,10 @@ const LIST_MARKER_RE = /^(\s*)\d{1,3}[.)](?=\s)/gm;
 const NUMBER_RE = /(?:(?<![\p{L}\p{N}])-)?\d+(?:,\d{3}(?!\d))*(?:\.\d+)*(?:-\d+)*%?/gu;
 // 전각 숫자는 반각으로 맞춘 뒤 센다 — «５»→«5» 는 같은 값이고 «５»→«３» 은 다른 값이다.
 const toHalfWidth = (s: string): string => s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+// «2026년 9월 17일»·«2026년 9월» 은 «2026-09-17»·«2026-09» 와 같은 날이다 — 표기만 바꾼 재작성을 숫자 변경으로 떨어뜨리지 않는다.
+const normalizeKoDates = (s: string): string => s
+  .replace(/(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일/g, (_, y, m, d) => `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`)
+  .replace(/(\d{4})년\s*(\d{1,2})월(?!\s*\d)/g, (_, y, m) => `${y}-${m.padStart(2, "0")}`);
 const URL_RE = /https?:\/\/[^\s<>()[\]{}"'`]+/g;
 // 마크다운 링크의 대상(상대 경로·앵커 포함) — http 가 아닌 링크도 가리키는 곳이 바뀌면 뜻이 바뀐다.
 const MD_LINK_TARGET_RE = /\]\(([^)\s]+)\)/g;
@@ -125,7 +129,7 @@ function proseParts(doc: RewriteDoc): { blocks: string[]; codes: string[]; prose
 // 제목과 본문을 합쳐 본다 — 제목에서 뺀 날짜·MR 번호는 본문으로 옮겨지는 게 정상이라, 따로 세면 전부 위반이 된다.
 export function extractInvariants(doc: RewriteDoc): Invariants {
   const { blocks, codes, prose } = proseParts(doc);
-  const numbersText = toHalfWidth(prose).replace(LIST_MARKER_RE, "$1");
+  const numbersText = normalizeKoDates(toHalfWidth(prose)).replace(LIST_MARKER_RE, "$1");
   const refs: string[] = [];
   for (const m of prose.matchAll(REF_MRPR_RE)) refs.push(`${m[1].toUpperCase() === "MR" ? "!" : "#"}${m[2]}`);
   for (const m of prose.matchAll(REF_BANG_RE)) refs.push(`!${m[1]}`);
