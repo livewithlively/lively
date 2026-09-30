@@ -13,6 +13,7 @@ import { makeBrokerClient, type BrokerTransport } from "./broker-client.js";    
 import { makeTmuxCallCensus, censusSite } from "./tmux-call-census.js";   // #2600 T2 d4 — 「이 프로세스가 아직 tmux 를 부르나」의 계기(전수·route 무관)
 import { logger } from "../log.js";                                               // 계수 창 보고
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
+import type { ScreenRun } from "./harness-io/adapter.js";    // #4502 화면 판정 캐시의 값 타입(타입만 — 런타임 의존 없음)
 
 const execFileAsync = promisify(execFile);
 
@@ -307,10 +308,11 @@ const lastBusyAt = new Map<string, number>();
 export function getLastBusy(id: string): number { return lastBusyAt.get(id) || 0; }
 export function setLastBusy(id: string, sec: number): void { lastBusyAt.set(id, sec); }
 
-// pane '확인 필요' 감지 2.5초 캐시(폴링 버스트 공유) — 판정 로직은 phase.paneAwaitingInput, 캐시 저장만 여기.
-const _paneWaitCache = new Map<string, { at: number; waiting: boolean }>();
-export function getPaneWait(id: string): { at: number; waiting: boolean } | undefined { return _paneWaitCache.get(id); }
-export function setPaneWait(id: string, entry: { at: number; waiting: boolean }): void { _paneWaitCache.set(id, entry); }
+// pane 화면 판정('확인 필요' · #4502 실행 상태) 2.5초 캐시(폴링 버스트 공유) — 판정 로직은 phase.scrapePane, 캐시 저장만 여기.
+type PaneScrape = { at: number; waiting: boolean; run: ScreenRun | null };
+const _paneWaitCache = new Map<string, PaneScrape>();
+export function getPaneWait(id: string): PaneScrape | undefined { return _paneWaitCache.get(id); }
+export function setPaneWait(id: string, entry: PaneScrape): void { _paneWaitCache.set(id, entry); }
 
 // 세션 id → 그 세션 pane 들의 pid(#1220). 압박 회수가 **RSS 큰 세션부터** 고르기 위한 트리 뿌리다
 //  (합산은 session-rss.ts — pane pid 자체는 격리 경로에서 sudo 라 그것만 재면 세션 크기를 착각한다).

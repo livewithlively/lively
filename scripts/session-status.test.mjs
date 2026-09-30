@@ -83,6 +83,15 @@ eqk({ agentState: "idle", working: true }, "busy", "⑳보고가 도착하기 �
 eqk({ agentState: "shell", harness: "shell", working: true }, "shell",
   "㉑셸 세션은 그대로 '셸' — 셸에서 명령이 도는 것(shellWorking)은 AI 작업이 아니다");
 eqk({ restorable: true, working: true }, "restorable", "㉒박스가 없는 세션은 옛 working 신호로 되살아나지 않는다");
+// #4502 — 턴을 끝내고 백그라운드 작업을 기다리는 세션(서버 background)도 점은 «작업 중» 이다(원준 신고 2026-09-30:
+//  «✻ … done 5:50 PM · 1 shell still running» 인 세션이 파란 점 없이 서 있었다). 서버는 working 과 따로 싣는다.
+eqk({ agentState: "idle", background: true, lastActive: nowSec - 900, lastAttached: nowSec - 60 }, "busy",
+  "㉓★턴이 끝났어도 백그라운드 작업이 남았으면 '작업 중'(신고 모양 — 행은 idle · working 없음)");
+eqk({ agentState: "offline", background: true, lastActive: nowSec - 60, lastAttached: nowSec - 600 }, "busy",
+  "㉔탭을 안 보고 있어도 백그라운드 대기는 '작업 완료'로 승격되지 않는다(끝난 일이 아니다)");
+eqk({ agentState: "idle", awaiting: true, background: true }, "waiting", "㉕사람이 답할 일이 먼저다");
+eqk({ agentState: "exited", background: true }, "shell", "㉖AI 가 끝나 셸만 남은 세션은 백그라운드 표식으로 살아나지 않는다");
+eqk({ restorable: true, background: true }, "restorable", "㉗박스가 없는 세션도 마찬가지");
 assert.equal(isUnreadDone({ agentState: "idle", lastActive: 0, lastAttached: 0 }, NOW), false);
 ok("⑱작업 기록이 없으면 '작업 완료' 판정 불가(false)");
 

@@ -259,5 +259,6 @@ export function projectNodeSession(s: SessionInfo, online: boolean, viewer: stri
     attached: online ? s.attached : false,
     working: online ? s.working : false,
     awaiting: online ? s.awaiting : false,
+    background: online ? s.background : false,   // #4502 — 같은 «라이브 신호» 다. 끊긴 노드의 백그라운드 작업은 모른다
   };
 }

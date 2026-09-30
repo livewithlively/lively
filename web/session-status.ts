@@ -13,6 +13,8 @@ export interface SessLike {
   // #1221 — **접속과 무관한** 실행 신호(하네스 훅 보고 ∪ 관측). agentState 는 탭이 없으면 offline 으로 덮이지만
   //  이 둘은 안 덮인다. 아래 sessStateKey 가 이 사실을 접속 기반 판정보다 먼저 본다(#1819 신고).
   working?: boolean; awaiting?: boolean;
+  /** #4502 — 턴은 끝났지만 백그라운드 작업이 남아 AI 가 스스로 이어 갈 세션(서버 SessionInfo.background). 점은 «작업 중» 이다. */
+  background?: boolean;
   /**
    * **이 행이 관측된 값인가**(서버 `SessionInfo.observed`, #2544). false = 게이트웨이가 tmux 를 «못 본» 틱에
    *  DB desired 행으로 지어 낸 행이다 — 관측 필드(attached·agentState·열람 시각)는 **채워져 있어도 사실이 아니다**.
@@ -96,7 +98,10 @@ export function sessStateKey(s: SessLike, nowMs: number = Date.now()): string {
   //  ⚠ 위 세 갈래(셸·AI 종료·복원 가능) 뒤에 둔다: 셸 세션의 working 은 AI 작업이 아니고(shellWorking),
   //   박스가 없어진 세션은 옛 신호로 되살아나면 안 된다.
   if (s.awaiting) return 'waiting';
-  if (s.working) return 'busy';
+  //  #4502 — 턴을 끝내고 백그라운드 작업(«… · 1 shell still running»)을 기다리는 세션도 사람 눈엔 안 끝난 일이다(원준 신고
+  //   2026-09-30: «아직 분명히 안 끝났는데 파란 점이 안 깜빡여»). 서버는 이걸 working 과 따로 싣는다 — working 은 «턴이 돈다» 로
+  //   읽는 자리(대화창·리브 2턴·회수)가 있어서다. 점은 둘 다 «작업 중» 이다.
+  if (s.working || s.background) return 'busy';
   if ((k === 'idle' || k === 'offline') && isUnreadDone(s, nowMs)) return 'done';
   return SESS_STATES[k] ? k : 'shell';
 }

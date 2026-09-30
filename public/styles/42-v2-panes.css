@@ -38,49 +38,83 @@
 .pn-tabbar { position: relative; flex: none; display: flex; align-items: stretch; height: 37px; background: var(--gray-bg-2); border-bottom: 1px solid var(--line); }
 .pn-tabbar[hidden] { display: none; }
 .pn-tabbar.drop { background: var(--bg-punch); box-shadow: inset 0 -2px 0 var(--blue); }
-.pn-tabs { flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 1px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+.pn-tabs { flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 0; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
 .pn-tabs::-webkit-scrollbar { display: none; }
 .pn-tabtail { flex: none; display: flex; align-items: stretch; padding-right: 6px; background: inherit; }
-/* 탭 자체는 **안 줄인다**(flex: none). 부품 이름은 두세 글자라 조금만 줄여도 '할 일'이 '할 …'이 되어
-   무슨 탭인지 못 읽는다(실측 2026-08-20: 줄여서 번 자리는 탭 0.5개뿐이었다). 대신 넘치면 띠가 미끄러지고,
-   가려진 탭은 손잡이의 [모두 보기]로 간다 — 이름은 온전히 두고 통로를 따로 낸 것이 이 줄의 규칙이다. */
-.pn-tabwrap { position: relative; display: inline-flex; align-items: center; flex: none; border-right: 1px solid var(--line); }
+/* ── 탭 한 장 (#3870 «곁칸 탭 관리», 원준 2026-09-30 — 사파리·크롬 문법) ──────────────────────────
+   원준: "하나 닫고 하나씩 다 찾으러 다녀야 함 … 아이콘이 중앙이 맞는지도 살짝 헷갈림."
+   · 폭은 JS 가 잰다(panes.ts fit · lib/pane-tabs planTabs): 들어가면 이름을 다 펴고, 모자라면 긴 이름부터 줄이고(말줄임),
+     그래도 모자라면 켜진 탭만 이름을 남기고 아이콘으로 접는다(.compact). 여기서는 탭이 제 내용 폭(flex: none)으로 서고,
+     JS 가 준 폭 안에서 이름이 말줄임으로 줄어드는 것만 정한다.
+   · × 는 **아이콘 자리**에 겹쳐 선다 — 마우스를 올리면 아이콘이 × 로 바뀐다(사파리). 이름을 가리지 않고, 폭이 제각각이어도
+     × 는 늘 탭의 왼쪽 끝이라 닫힌 탭 자리로 미끄러져 온 다음 탭의 × 가 커서 바로 밑에 온다.
+   · 아이콘과 × 는 **같은 중심**이다: 아이콘 칸(16px)의 중심 = 왼쪽 여백 9 + 8 = 17px, × (20px)의 중심 = 7 + 10 = 17px.
+     접힌 탭(34px = 9 + 16 + 9)도 같은 17px 이라 가운데다. 종전엔 접힌 탭 어깨에 번호(2·3·4)가 붙어 아이콘이 한쪽으로
+     치우쳐 보였다 — 번호는 뺐다(뷰어는 이제 파일 종류 아이콘이고, 온전한 이름은 툴팁과 ⌄ 목록이 말한다). */
+.pn-tabwrap { position: relative; display: inline-flex; align-items: stretch; flex: none; min-width: 0; transition: background-color .12s; }
+.pn-tabwrap:hover { background: var(--bg-punch); }
 .pn-tabwrap.on { background: var(--bg); box-shadow: inset 0 2px 0 var(--blue); }
-.pn-tab { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 8px 0 12px; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--muted-head); cursor: pointer; white-space: nowrap; }
-.pn-tab:hover { color: var(--ink); }
-.pn-tabwrap.on .pn-tab { color: var(--ink); font-weight: 700; }
-.pn-tab.drag { opacity: .45; }
-.pn-tab-x { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 36px; padding: 0 8px 0 0; border: 0; background: none; color: var(--muted-3); cursor: pointer; }
-.pn-tabwrap:hover .pn-tab-x { color: var(--muted); }
-.pn-tab-x:hover { color: var(--coral-text); }
+/* 이웃 사이의 가는 세로선 — 켜진 탭과 마우스를 올린 탭 양옆에서는 지운다(크롬). */
+.pn-tabwrap + .pn-tabwrap::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 1px; background: var(--line); pointer-events: none; }
+.pn-tabwrap.on::before, .pn-tabwrap.on + .pn-tabwrap::before, .pn-tabwrap:hover::before, .pn-tabwrap:hover + .pn-tabwrap::before { opacity: 0; }
+.pn-tab { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; height: 36px; padding: 0 12px 0 9px; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--muted-head); cursor: pointer; white-space: nowrap; }
+.pn-tab:hover, .pn-tabwrap.on .pn-tab { color: var(--ink); }
+.pn-tabwrap.on .pn-tab { font-weight: 700; }
+.pn-tab:focus-visible { outline: 2px solid var(--blue); outline-offset: -3px; border-radius: 6px; }
+.pn-tab-lead { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; }
+.pn-tab-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pn-tab-x { position: absolute; left: 7px; top: 50%; margin-top: -10px; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 5px; background: none; color: var(--muted-2); cursor: pointer; opacity: 0; pointer-events: none; }
+.pn-tab-x:hover { background: var(--line); color: var(--ink); }
+.pn-tab-x .pn-i { stroke-width: 2; }
+/* 마우스를 올렸거나 키보드 초점이 섰으면 아이콘 자리가 × 가 된다. */
+.pn-tabwrap:hover .pn-tab-x, .pn-tab:focus-visible + .pn-tab-x { opacity: 1; pointer-events: auto; }
+.pn-tabwrap:hover:has(.pn-tab-x) .pn-tab-lead, .pn-tabwrap:has(.pn-tab:focus-visible):has(.pn-tab-x) .pn-tab-lead { visibility: hidden; }
+/* 마우스가 있는 화면에선 × 가 **늘 눌린다**(보이는 것은 올렸을 때뿐). 탭을 닫으면 다음 탭이 커서 밑으로 미끄러져 오는데,
+   브라우저가 그 탭의 호버를 다시 잴 때까지 × 가 눌리지 않으면 연달아 누른 두 번째 클릭이 «닫기» 가 아니라 «켜기» 가 된다.
+   (그 자리를 누르려면 어차피 마우스가 거기 있고, 그러면 × 가 보인다.) 손가락 화면은 아래 규칙대로 켜진 탭만. */
+@media (hover: hover) and (pointer: fine) { .pn-tab-x { pointer-events: auto; } }   /* 터치 겸용 노트북은 hover:hover 를 말한다 — 첫 탭이 안 보이는 × 에 먹히지 않게 pointer:fine 까지 */
+/* 손가락 화면(호버가 없다) — 켜진 탭은 × 를 늘 보인다(누르면 켜지고, 켜진 탭에서 × 로 닫는다). */
+@media (hover: none) {
+  .pn-tabwrap.on .pn-tab-x { opacity: 1; pointer-events: auto; }
+  .pn-tabwrap.on:has(.pn-tab-x) .pn-tab-lead { visibility: hidden; }
+}
 .pn-tab-add, .pn-pane-hide, .pn-tab-more { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 36px; border: 0; background: none; color: var(--muted-2); cursor: pointer; }
 .pn-tab-add:hover, .pn-pane-hide:hover, .pn-tab-more:hover { color: var(--blue); background: var(--bg-punch); }
-/* [모두 보기]는 **띠가 넘칠 때만** 나온다(안 넘치면 군더더기다). 아래를 가리키는 꺾쇠 = '여기 더 있다'
-   (브라우저·에디터 탭 줄의 공통 문법). ⚠ 이 두 줄은 위 공용 버튼 규칙보다 **뒤**에 있어야 한다 —
+/* [모두 보기]는 **이름이 줄었거나 접혔거나 넘칠 때만** 나온다(다 펴져 있으면 군더더기다). 아래를 가리키는 꺾쇠 = '여기 더 있다'
+   (브라우저·에디터 탭 줄의 공통 문법). ⚠ 이 줄들은 위 공용 버튼 규칙보다 **뒤**에 있어야 한다 —
    명시도가 같아 앞에 두면 display: inline-flex 가 이겨 늘 보인다(2026-08-20 실측). */
 .pn-tab-more { display: none; }
 .pn-tab-more svg { transform: rotate(90deg); }
-.pn-tabbar.has-more .pn-tab-more { display: inline-flex; }
+.pn-tabbar.shrunk .pn-tab-more, .pn-tabbar.compact .pn-tab-more, .pn-tabbar.has-more .pn-tab-more { display: inline-flex; }
 /* 손잡이 왼쪽 그늘 = 왼쪽에 가려진 탭이 더 있다는 신호 */
 .pn-tabbar.has-more .pn-tabtail { box-shadow: -9px 0 9px -7px rgba(16, 24, 40, .22); }
 
-/* ── 좁으면 접는다 — 켜진 탭만 이름, 나머지는 아이콘만 (원준 2026-08-20) ──────────
-   브라우저 탭이 많아지면 파비콘만 남는 문법. **폭이 아니라 넘침으로** 정한다(panes.ts fit):
-   이름을 다 편 채로 재서 들어가면 절대 접지 않는다 — "충분히 보여줄 수 있는데 접는 일은 없게".
-   접힌 탭의 이름은 툴팁(title)과 손잡이의 [모두 보기]가 말한다. 켜진 탭은 이름도 ×도 그대로 둔다
-   (지금 보는 것이 무엇인지와, 그걸 닫는 길은 접혀도 남아야 한다). */
-.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab { gap: 0; padding: 0 9px; }
-.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab > span { display: none; }
-.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab-x { display: none; }
-/* 접혔으면 이름을 읽을 곳이 필요하다 — 넘치지 않아도 [모두 보기]를 남긴다(거기서 빼기도 한다). */
-.pn-tabbar.compact .pn-tab-more { display: inline-flex; }
-/* 같은 종류가 둘 이상일 때의 번호 (#762) — 이름이 접혀 아이콘만 남는 순간, 그 셋을 가릴 것이 이것뿐이다.
-   펼쳐져 있을 땐 이름이 이미 말하므로 안 그린다(같은 사실을 두 번 말하지 않는다). */
-.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab[data-n] { position: relative; }
-.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab[data-n]::after {
-  content: attr(data-n); position: absolute; right: 2px; top: 1px;
-  font-size: 9px; font-weight: 700; line-height: 1; color: var(--muted); font-variant-numeric: tabular-nums;
-}
+/* ── 아이콘만 남은 탭 — 접힌 줄의 켜지지 않은 탭 · 고정한 탭 (34px, 아이콘이 한가운데) ─────────────
+   접힌 탭의 이름은 툴팁(title)과 손잡이의 [모두 보기]가 말한다. 켜진 탭은 접혀도 이름을 지킨다
+   (지금 보는 것이 무엇인지는 접혀도 남아야 한다). 고정한 탭은 켜져도 아이콘만(크롬). */
+.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab, .pn-tabwrap.pinned .pn-tab { gap: 0; padding: 0 9px; justify-content: center; }
+.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab-t, .pn-tabwrap.pinned .pn-tab-t { display: none; }
+/* 아이콘만 남은 탭의 × — 아이콘 자리에 서면 탭 전체가 × 가 되어 **누르려다 닫는다**(34px 중 × 가 20px). 그래서 아이콘은 그대로
+   두고 × 는 오른쪽 위 모서리의 작은 원으로 뜬다. 모두 같은 34px 라, 닫으면 다음 탭의 × 가 역시 커서 밑에 온다. */
+.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab-x { left: auto; right: 1px; top: 3px; margin-top: 0; width: 15px; height: 15px; border-radius: 50%; background: var(--muted-2); color: var(--bg); }
+.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab-x .pn-i { width: 9px; height: 9px; stroke-width: 2.4; }
+.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab-x:hover { background: var(--ink); color: var(--bg); }
+.pn-tabbar.compact .pn-tabwrap:not(.on):hover .pn-tab-lead, .pn-tabbar.compact .pn-tabwrap:not(.on):has(.pn-tab:focus-visible) .pn-tab-lead { visibility: visible; }   /* 키보드로 옮겨 다닐 때도 아이콘이 남는다 */
+
+/* ── 끌어 옮기기 (v2/pane-tabdrag) — 끄는 동안엔 × 대신 아이콘을 보인다(잡은 탭 밑에 늘 커서가 있어 × 가 떠 버린다). ── */
+html.pn-tab-dragging, html.pn-tab-dragging * { cursor: grabbing !important; user-select: none; }
+/* 끄는 동안 액자는 포인터를 못 받는다 — 세션 화면·웹·PDF 칸이 액자라, 그 위에서 놓으면 pointerup 이 액자 문서로 가 끌기가 안 끝났다
+   (분할선 끌기 body.v2-splitting-x iframe 과 같은 방어). */
+html.pn-tab-dragging iframe, html.pn-tab-dragging webview { pointer-events: none !important; }
+html.pn-tab-dragging .pn-tab-x { opacity: 0 !important; pointer-events: none !important; }
+html.pn-tab-dragging .pn-tab-lead { visibility: visible !important; }
+html.pn-tab-dragging .pn-tabwrap:hover:not(.dragging) { background: none; }
+.pn-tabwrap.lifted { opacity: .38; }
+/* 줄 밖으로 끌어낸 탭 — 탭 모양 그대로 커서를 따라온다. */
+.pn-tab-ghost { position: fixed; z-index: 1000; left: 0; top: 0; display: flex; max-width: 220px; height: 36px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 10px 28px rgba(var(--shadow-ink), .20), 0 2px 6px rgba(var(--shadow-ink), .10); pointer-events: none; overflow: hidden; }
+.pn-tab-ghost .pn-tab { color: var(--ink); font-weight: 700; }
+/* 다른 칸 줄에 끼울 자리 */
+.pn-tab-caret { position: absolute; top: 6px; bottom: 6px; width: 2px; border-radius: 1px; background: var(--blue); pointer-events: none; z-index: 3; }
 
 /* 세션 탭 — 부품 탭과 한 줄에 서지만 결이 다르다: **상태점 + 이름**, 닫기(×)는 없다(세션은 '열어 둔 문서'가
    아니라 프로젝트에 속한 실체다). 이름이 길어도 탭 줄이 무너지지 않게 폭을 묶는다. */

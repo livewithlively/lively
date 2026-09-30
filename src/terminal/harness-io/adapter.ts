@@ -16,11 +16,13 @@
 //   answer(action)               approve|deny|interrupt → 키. **null = 화면에서 대신 눌러줄 수 없다**(승인 UI 미실측). 있는 척하지 않는다.
 //   term                         **웹 터미널이 이 하네스를 다루는 화면 사실**(#4135 — term-ui.ts). 선택지 키·붙여넣기 접힘·
 //                                부팅 대화상자·마우스 소유. 종전엔 이 사실들이 web/standalone/terminal.ts 에 클로드 기준으로 박혀 있었다.
+//   run(tail)                    **화면이 말하는 실행 상태**(#4502 — ScreenRun). 목록의 «작업 중» 점이 훅 보고가 끊긴 구간에 기댄다.
 //  ⚠ 축을 하나 늘리면 **모든 하네스가 그 축을 답해야 한다**(null 도 답이다) — 그게 '빠진 자리'를 없애는 방법이다(harness-registry 원칙).
 //     계약 테스트(adapter.test.ts)가 catalog.ts HARNESSES 의 모든 key 가 여기 있는지 강제한다.
 import type { ChatKey } from "../send-keys.js";
 import type { ParseResult, ParseState } from "./chat-line.js";
 import { TERM_UI_UNKNOWN, type TermUi } from "./term-ui.js";
+import { turnFromScreen } from "./screen-run.js";   // #4502 — 화면 busy → 턴(맨 아래 몇 줄만)
 import { claudeIo } from "./claude.js";
 import { codexIo } from "./codex.js";
 import { grokIo } from "./grok.js";
@@ -42,6 +44,20 @@ export const isChatAction = (v: unknown): v is ChatAction => (CHAT_ACTIONS as re
  */
 export type ScreenState = "ready" | "busy" | "dialog" | "auth";
 
+/**
+ * 화면이 말하는 실행 상태(#4502) — screen 과 다른 축이다. screen 은 «지금 글자를 넣어도 되나» 이고(claude 는 돌고 있어도
+ *  큐잉하므로 ready), 이건 «이 세션이 아직 일을 안 끝냈나» 다. 목록 행이 이 답을 쓴다(turn → working · background → background
+ *  — 둘이 행에 주는 것은 phase.screenRunEffects).
+ *  · turn       = 턴이 도는 중(Esc 로 끊을 수 있다). 훅 보고가 끊겨도(도구 하나가 10분 넘게 돈다 · 훅이 안 걸린 도구만 쓴다) 보인다.
+ *  · background = 턴은 끝났지만 **하네스가 띄운 백그라운드 작업이 남았다** — 그게 끝나면 AI 가 스스로 이어 간다
+ *                 (claude «… · 1 shell still running»). 사람 눈엔 «아직 안 끝난 세션» 이다.
+ *  · null       = 이 화면으론 모른다(대기·대화상자·미실측) — 호출자는 다른 신호로 판정한다.
+ *  run: null = 이 하네스는 실행 상태를 화면으로 못 읽는다(있는 척 금지).
+ *  ⚠ 왜 화면인가: pane 제목의 브라유 스피너는 Claude Code 가 더 이상 안 그린다(제목은 일하든 말든 «✳ …» — 실측 2026-08-20·09-30).
+ *   남은 신호는 훅 보고뿐인데 그건 이벤트가 나야 갱신되고 10분이면 만료된다(phase.ts PHASE_TTL_SEC).
+ */
+export type ScreenRun = "turn" | "background";
+
 //  ⚠ 화면 사실(TermUi)의 정의는 잎 모듈 term-ui.ts 에 있다 — 어댑터들이 그 값을 쓰는데 여기서 정의하면 순환이 된다.
 //   쓰는 쪽은 종전대로 adapter.js 한 곳만 보면 되도록 다시 내보낸다.
 export { TERM_UI_UNKNOWN, termUiWire, type TermUi, type TermUiWire } from "./term-ui.js";
@@ -60,6 +76,8 @@ export interface HarnessSessionAdapter {
   parse: ((text: string, state: ParseState) => ParseResult) | null;
   answer: ((action: ChatAction) => ChatKey) | null;
   screen: ((tail: string[]) => ScreenState | null) | null;
+  /** 화면이 말하는 실행 상태(#4502 — ScreenRun 머리말). tail 은 pane 하단의 빈 줄 뺀 줄들. */
+  run: ((tail: string[]) => ScreenRun | null) | null;
   /** 웹 터미널이 이 하네스를 다루는 화면 사실 (#4135 — TermUi 머리말). 모든 하네스가 답한다(모르면 미실측 값). */
   term: TermUi;
 }
@@ -81,11 +99,13 @@ const opencodeIo: HarnessSessionAdapter = {
     if (/ctrl\+p commands/i.test(s)) return "ready";
     return null;
   },
+  //  #4502 — 화면의 busy 가 곧 «턴이 돈다» 다(esc interrupt) — 맨 아래 몇 줄만(screen-run.ts). 백그라운드 표시는 미실측.
+  run: (tail) => turnFromScreen(opencodeIo.screen, tail),
   term: TERM_UI_UNKNOWN,   // 화면 사실 미실측(#4135) — 선택지·붙여넣기·대화상자를 아직 눈으로 안 봤다
 };
 // 셸 세션 — AI 없음. 대화 파일도 승인도 없다.
 const shellIo: HarnessSessionAdapter = {
-  key: "shell", label: "셸", roots: () => [], filePattern: /$^/, pathFor: null, convIdOk: null, parse: null, answer: null, screen: null,
+  key: "shell", label: "셸", roots: () => [], filePattern: /$^/, pathFor: null, convIdOk: null, parse: null, answer: null, screen: null, run: null,
   //  셸엔 선택지도 부팅 대화상자도 없다 — 미실측이 아니라 **없음**이다(값이 같아도 이유가 다르다).
   term: TERM_UI_UNKNOWN,
 };

@@ -1,7 +1,7 @@
 // 중앙 박스 — 에이전트 실행 단계(phase) 관측·판정. terminal-sessions.ts 분할(#1313 R15).
 //  두 출처가 있다: ① 하네스 훅 보고(#1221, @box_state — 주신호) ② 화면 스크래핑(스피너·capture-pane — 레거시 폴백).
 //  우선순위는 resolveAgentPhase(순수 함수)가 표로 못박는다. 활동 시각 기록(markSessionActive)도 여기(보고 수신자).
-import type { ScreenState } from "./harness-io/adapter.js";   // #4135 — 화면 판정은 하네스가 답한다(타입만: 순환 방지)
+import type { ScreenState, ScreenRun } from "./harness-io/adapter.js";   // #4135 — 화면 판정은 하네스가 답한다(타입만: 순환 방지)
 import { touchSessionBusy } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
 import { tmux, tmuxQuiet, getOpt, setLastBusy, getPaneWait, setPaneWait } from "./tmux-exec.js";
 
@@ -101,14 +101,49 @@ export function detectAwaiting(pane: string, screen?: ((tail: string[]) => Scree
   const tailText = tail.join("\n");
   return tail.some((l) => MENU_CURSOR.test(l)) || MENU_HINT.test(tailText) || APPROVE_PHRASE.test(tailText);
 }
-export async function paneAwaitingInput(sessionId: string, screen?: ((tail: string[]) => ScreenState | null) | null): Promise<boolean> {
+// #4502 — 화면이 말하는 실행 상태(adapter.ts ScreenRun). 판정은 하네스가 한다(run) — 여기는 꼬리를 자르기만 한다.
+//  꼬리를 대기 판정(14줄)보다 길게 잡는 이유: 입력창에 여러 줄을 쳐 두면 상태줄(완료·스피너 줄)이 14줄 밖으로 밀린다.
+const RUN_TAIL_LINES = 30;
+export function detectRun(pane: string, run?: ((tail: string[]) => ScreenRun | null) | null): ScreenRun | null {
+  if (!run) return null;
+  const lines = pane.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim() !== "");
+  return run(lines.slice(-RUN_TAIL_LINES));
+}
+type ScreenIo = { screen: ((tail: string[]) => ScreenState | null) | null; run: ((tail: string[]) => ScreenRun | null) | null };
+/**
+ * 한 화면에서 두 판정(확인 필요 · 실행 상태)을 낸다(순수). **사람이 답할 화면이면 실행 상태를 내지 않는다** — 두 판정기는 같은
+ *  화면을 따로 읽으므로(detectAwaiting · 하네스 run) 둘 다 참일 수 있고, 그대로 두면 한 행이 «확인 필요» 이면서 «작업 중» ·
+ *  마지막 작업 시각 갱신 · 회수 무상한 보호까지 받는다(격리 리뷰 지적). 답을 기다리는 세션은 일하는 중이 아니다.
+ */
+export function readScreen(pane: string, io?: ScreenIo | null): { waiting: boolean; run: ScreenRun | null } {
+  const waiting = detectAwaiting(pane, io?.screen);
+  return { waiting, run: waiting ? null : detectRun(pane, io?.run) };
+}
+/** pane 하단 한 번 캡처로 readScreen. 2.5초 캐시(폴링 버스트 공유). */
+export async function scrapePane(sessionId: string, io?: ScreenIo | null): Promise<{ waiting: boolean; run: ScreenRun | null }> {
   const now = Date.now();
   const c = getPaneWait(sessionId);
-  if (c && now - c.at < 2500) return c.waiting;
-  let waiting = false;
-  try { waiting = detectAwaiting(await tmux(["capture-pane", "-t", sessionId, "-p"]), screen); } catch { /* 무시 → idle 취급 */ }
-  setPaneWait(sessionId, { at: now, waiting });
-  return waiting;
+  if (c && now - c.at < 2500) return { waiting: c.waiting, run: c.run };
+  let v: { waiting: boolean; run: ScreenRun | null } = { waiting: false, run: null };
+  try { v = readScreen(await tmux(["capture-pane", "-t", sessionId, "-p"]), io); } catch { /* 무시 → idle 취급 */ }
+  setPaneWait(sessionId, { at: now, ...v });
+  return v;
+}
+
+/**
+ * #4502 — 화면 실행 상태가 목록 행에 무엇을 주나(순수 — 표는 screen-run.test E 행).
+ *  · turn       → 작업 중(working · agentState busy) · 하네스가 말하는 작업 중(harnessWorking — 회수 무상한 보호) · 마지막 작업 시각 갱신.
+ *                 스피너·신선한 훅 busy 와 같은 급이다(Esc 로 끊을 수 있다는 그 하네스의 안내).
+ *  · background → **background 표식 하나만.** 사이드바 점(web/session-status.ts)만 이걸 «작업 중» 으로 그린다. working 에 넣지 않는 이유:
+ *                 working 을 읽는 자리가 점 말고도 넷이다 — 리브 2턴(«1턴이 도는 중» 이면 TTL 없이 기다린다 · second-turn.ts) ·
+ *                 대화창(마지막 턴을 «도는 중» 으로 그린다 · session-chat.ts) · 회수 · CP 유휴 판정. 백그라운드에 남은 게 dev 서버 같은
+ *                 상주 프로세스면 그 넷이 영원히 «돈다» 로 굳는다. 마지막 작업 시각도 안 민다(AI 가 일한 마지막은 턴이 끝난 때다).
+ *                 살아 있는 백그라운드 작업 자체는 회수 ⑥(#2652 — 프로세스 표)이 따로 지킨다.
+ *  · app-server 세션은 화면이 아니라 런타임이 정본이다(pane 은 셸) — 아무것도 주지 않는다.
+ */
+export function screenRunEffects(run: ScreenRun | null, appServer: boolean): { turn: boolean; background: boolean } {
+  if (appServer || !run) return { turn: false, background: false };
+  return { turn: run === "turn", background: run === "background" };
 }
 
 // ── 하네스 보고 상태(#1221) — 화면 스크래핑을 대체하는 주신호 ─────────────────────────────────
@@ -170,15 +205,21 @@ export function harnessReportsBusy(i: {
 //  3) 스피너(레거시) — 보고가 없거나 만료됐을 때. 보고가 idle 이어도 스피너가 돌면 스피너를 믿는다(스피너가
 //     돈다는 건 지금 실제로 돌고 있다는 강한 양성 신호다 — Stop 훅을 놓친 세션을 구제한다).
 //  4) capture-pane 대기(레거시) — 위 어느 것도 아닐 때.
-//  5) idle.
+//  5) #4502 화면이 «턴이 돈다» 고 말한다(하네스 run = turn — 푸터 «esc to interrupt» · 스피너 줄). 보고가 idle 이어도 이긴다:
+//     보고는 이벤트가 나야 갱신되는데(도구 하나가 10분 넘게 돌면 만료 · 훅이 안 걸린 도구만 쓰는 턴) 이건 지금의 화면이다.
+//     스피너(3)의 후계다 — Claude Code 는 제목에 스피너를 더 이상 안 그린다. 대기(4) 밑인 건 사람이 답할 일을 먼저 보이려는 것.
+//     ⚠ 턴이 끝나고 백그라운드 작업을 기다리는 화면(background)은 여기 안 든다 — 실행 단계가 아니다(screenRunEffects 머리말).
+//  6) idle.
 export function resolveAgentPhase(i: {
   reported: { phase: ReportedPhase; at: number } | null; nowSec: number; spinning: boolean; scrapedWaiting: boolean;
+  scrapedTurn?: boolean;
 }): ReportedPhase {
   const fresh = isPhaseFresh(i.reported, i.nowSec) ? i.reported : null;
   if (fresh?.phase === "waiting") return "waiting";
   if (fresh?.phase === "busy") return "busy";
   if (i.spinning) return "busy";
   if (i.scrapedWaiting) return "waiting";
+  if (i.scrapedTurn) return "busy";
   return "idle";
 }
 
