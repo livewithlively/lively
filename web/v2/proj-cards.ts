@@ -4,7 +4,9 @@
 //
 //  ── 규칙 ── (검토판 project/4233/projects-sidebar-review.html 안 1)
 //  · 구조는 그대로다(즐겨찾기 · 폴더 › 하위 폴더 › 리스트). 묶음을 보여 주는 방식만 위키 사이드바와 같게 한다.
-//  · 맨 위 고정 줄: 즐겨찾기 리스트(리스트 순서) → 「기타 (미분류)」(리스트에 안 든 열린 프로젝트가 있을 때만).
+//  · 맨 위 고정 줄: 「전체」(늘 선다) → 즐겨찾기 리스트(리스트 순서) → 「기타 (미분류)」(리스트에 안 든 열린 프로젝트가 있을 때만).
+//    「전체」는 위키의 「전체 문서」와 같은 자리다(#3870, 원준 2026-09-30 «기타 (미분류) 위에 전체 보는 게 있으면 좋겠음»).
+//    수는 보드의 전체 보기가 보이는 것과 같다 — 보관 폴더 밖 리스트의 열린 프로젝트 + 기타.
 //  · 최상위 폴더마다 이름표 한 줄, 그 아래 하위 폴더마다 카드 한 장. 최상위 폴더에 바로 든 리스트는 카드 한 장
 //    (하위 폴더 카드가 있으면 「그 밖의 리스트」, 없으면 「리스트」). 하위 폴더 카드에는 그 아래 폴더의 리스트까지 트리 순서로 든다.
 //  · 폴더 밖 리스트는 맨 끝 이름표 「폴더 밖」 아래 카드 「리스트」 한 장. 보관 폴더와 그 아래는 없다.
@@ -43,8 +45,10 @@ export interface ProjCardPlan<L> {
   favs: L[];
   /** 「기타 (미분류)」 줄의 수. 0 이면 그 줄은 없다. */
   noneN: number;
+  /** 「전체」 줄의 수 — 보관 폴더 밖 리스트의 열린 프로젝트 + 기타. 줄은 0 이어도 선다. */
+  allN: number;
   groups: ProjCardGroup<L>[];
-  /** 켜진 줄의 자리 — 'fav:<id>' · 'card:<id>' · 'none' · 'folder:<id>' · ''. 한 줄만 켜진다. */
+  /** 켜진 줄의 자리 — 'all' · 'fav:<id>' · 'card:<id>' · 'none' · 'folder:<id>' · ''. 한 줄만 켜진다. */
   onKey: string;
 }
 
@@ -54,7 +58,7 @@ export const PROJ_LISTS_NAME = '리스트';
 export const PROJ_LOOSE_GROUP = '폴더 밖';
 
 /**
- * @param sel 지금 스코프 — side.ts projScopeKey 와 같은 모양('L<id>' · 'F<id>' · 'none' · '').
+ * @param sel 지금 스코프 — side.ts projScopeKey 와 같은 모양('L<id>' · 'F<id>' · 'none' · 'all' · '').
  * @param closed 사람이 접은 카드 키(계정에 저장되는 FOLD_CLOSED_STORE) · @param more 「N개 더」로 편 카드 키(페이지 수명).
  */
 export function planProjCards<L extends ProjCardList>(input: {
@@ -127,8 +131,12 @@ export function planProjCards<L extends ProjCardList>(input: {
   };
   const onKey = selId ? (selFav ? 'fav:' + selId : 'card:' + selId)
     : input.sel === 'none' ? 'none'
+    : input.sel === 'all' ? 'all'
     : selFolder ? 'folder:' + cardFolderOf(Number(selFolder[1])) : '';
-  return { favs, noneN: Math.max(0, input.noneN || 0), groups, onKey };
+  const noneN = Math.max(0, input.noneN || 0);
+  //  보관 폴더 안 리스트는 보드의 전체 보기에서도 빠진다(projects/board.ts boardProjects) — 같은 수를 세운다.
+  const allN = lists.reduce((a, l) => a + (l.folder_id != null && archived.has(l.folder_id) ? 0 : openN(l)), noneN);
+  return { favs, noneN, allN, groups, onKey };
 }
 
 // ── 폴더 안에 새로 만들기(#4233 리뷰 지적) ──────────────────────────────────────────────
