@@ -32,7 +32,7 @@
 `bootstrap.sh` 가 **코드 획득 → install.sh** 를 한 번에 한다. 고객은 소스·git clone·빌드 없이 한 줄:
 
 ```bash
-curl -fsSL <bootstrap-url> | PUBLIC_URL=http://<host>:8080 BOOTSTRAP_ADMIN_EMAIL=you@org.com ORG_DOMAIN=org.com sh
+curl -fsSL https://raw.githubusercontent.com/livewithlively/lively/main/deploy/bootstrap.sh | PUBLIC_URL=http://<host>:8080 BOOTSTRAP_ADMIN_EMAIL=you@org.com ORG_DOMAIN=org.com bash
 ```
 
 ### 구조 — 코드 획득(교체 가능) ↔ 설치(전달 방식 무관)
@@ -67,7 +67,7 @@ git tag v0.1.0 && git push origin v0.1.0     # → Actions 가 Release v0.1.0 + 
 
 그러면 고객은 버전만 주면 됨 — bootstrap 이 에셋 URL 을 자동 구성:
 ```bash
-curl -fsSL <bootstrap-url> | LIVELY_VERSION=latest PUBLIC_URL=… BOOTSTRAP_ADMIN_EMAIL=… sh
+curl -fsSL https://raw.githubusercontent.com/livewithlively/lively/main/deploy/bootstrap.sh | LIVELY_VERSION=latest PUBLIC_URL=… BOOTSTRAP_ADMIN_EMAIL=… bash
 ```
 (private 레포 동안은 다운로드에 `LIVELY_CODE_TOKEN`(Bearer) 필요 — OSS 공개 시 tokenless.)
 
@@ -323,7 +323,7 @@ CRUD 하려면, 멤버 로컬 PC 처럼 **호스트의 claude 에도 lively 키�
 
 ```
 deploy/
-  bootstrap.sh        # 한 줄 설치 진입점(curl|sh): 코드 획득(온라인/오프라인) → install.sh
+  bootstrap.sh        # 한 줄 설치 진입점(curl|bash): 코드 획득(온라인/오프라인) → install.sh
   install.sh          # 설치 엔진 (OS 감지 → <os>/provision.sh, 7단계). 전달 방식 무관.
   update.sh           # 기존 박스 업데이트(빌드→재시작→healthz, --kit)
   uninstall.sh        # 제거(install 역연산): 서비스·컨테이너·키트 제거 / --purge=볼륨·.env·디렉토리까지
