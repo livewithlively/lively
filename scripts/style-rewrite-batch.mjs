@@ -4,10 +4,11 @@
 //
 // 사용법: 빌드(npm run build 또는 tsc -p tsconfig.json) 뒤에 실행한다 — 판정 모듈을 dist/ 에서 읽는다.
 //   node scripts/style-rewrite-batch.mjs --report out.jsonl (--names names.txt | --limit 20)
-//        [--apply] [--model sonnet] [--llm-cmd claude] [--attempts 3]
+//        [--apply] [--model sonnet] [--llm-cmd claude] [--attempts 3] [--concurrency 1]
 //   --apply 가 없으면 dry-run 이다(저장하지 않고 재작성본 전문을 report 에 싣는다 — 사람이 먼저 훑어본다).
 //   게이트웨이는 env LIVELY_URL·LIVELY_TOKEN, 없으면 ~/.lively/gateway-url·~/.lively/token.
 //   --llm-cmd 는 `<cmd> -p --model <m>` 로 불리고 프롬프트를 stdin 으로 받아 stdout 에 답한다(테스트는 가짜로 바꿔 끼운다).
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -21,12 +22,12 @@ if (!existsSync(gatePath) || !existsSync(fmtPath)) {
   console.error(`빌드 산출물이 없습니다(${gatePath}). 먼저 빌드하세요.`);
   process.exit(2);
 }
-const { isEligible, checkRewrite, checkInvariants, splitSections, sectionFindings, REWRITE_BODY_MAX_CHARS } = await import(pathToFileURL(gatePath).href);
+const { isEligible, checkRewrite, checkInvariants, splitSections, sectionFindings, sectionHeadingOk, REWRITE_BODY_MAX_CHARS } = await import(pathToFileURL(gatePath).href);
 const { resolveWritingFormat } = await import(pathToFileURL(fmtPath).href);
 
 // ── 인자 ──
 function parseArgs(argv) {
-  const a = { apply: false, model: "sonnet", llmCmd: "claude", names: null, limit: null, report: null, attempts: 3 };
+  const a = { apply: false, model: "sonnet", llmCmd: "claude", names: null, limit: null, report: null, attempts: 3, concurrency: 1 };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const val = () => {
@@ -40,6 +41,7 @@ function parseArgs(argv) {
     else if (k === "--report") a.report = val();
     else if (k === "--model") a.model = val();
     else if (k === "--llm-cmd") a.llmCmd = val();
+    else if (k === "--concurrency") a.concurrency = Math.max(1, Math.min(8, Number(val()) || 1));
     else if (k === "--attempts") a.attempts = Math.max(1, Math.min(6, Number(val()) || 3));
     else { console.error(`알 수 없는 인자: ${k}`); process.exit(2); }
   }
@@ -103,7 +105,11 @@ async function pickCandidates(fmt, limit) {
 const LLM_TIMEOUT_MS = 10 * 60 * 1000;
 // 판정 호출마다 새 프로세스다 — 한 대화 안에서 원문을 본 뒤 재작성본을 읽으면 원문 기억으로 빈칸을 메워 누락을 못 본다.
 //  cwd 를 임시 폴더로 두는 건 실행 위치의 프로젝트 지침이 프롬프트에 섞이지 않게 하려는 것이다.
+// 건별 LLM 호출 수 — 병렬로 돌아도 섞이지 않게 비동기 문맥에 싣는다(비용 추적: 문서당 최대 호출이 조각 수 × 시도 수로 커진다).
+const callCtx = new AsyncLocalStorage();
 function runLlm(prompt) {
+  const c = callCtx.getStore();
+  if (c) c.calls++;
   return new Promise((resolve, reject) => {
     const p = spawn(args.llmCmd, ["-p", "--model", args.model], { cwd: tmpdir(), stdio: ["pipe", "pipe", "pipe"] });
     let out = "", err = "";
@@ -143,7 +149,7 @@ function rewritePrompt(k, findings, guide, feedback = null, part = null) {
     "- 형식만 고쳐라. 사실·수치·식별자·코드·링크·표 값을 빼거나 더하지 마라.",
     "- 코드블록과 인라인 코드, URL, [[위키링크]], MR·PR 번호, 표의 셀 값은 글자 그대로 둬라.",
     "- 제목에서 뺀 정보(날짜·번호·부제 등)는 본문 첫 줄로 옮겨라. 지우지 마라.",
-    // 게이트가 코드·숫자를 다중집합으로 세므로, 요약 첫 줄에 본문의 백틱·숫자를 되풀이하면 «추가»로 떨어진다(실측).
+    // 게이트는 본문 중간의 숫자·코드는 개수까지 센다 — 첫 줄 결론에서 되풀이하는 건 허용되지만 본문에서 늘리면 «추가» 로 떨어진다.
     "- 첫 줄 결론을 새로 쓸 때 본문에 이미 있는 백틱 코드·숫자·링크를 되풀이하지 마라. 백틱 없이 평문 낱말로 가리켜라.",
     // 아래 넷은 첫 dry-run(20건)에서 게이트가 막은 실제 탈락 사유다 — 재작성이 모양을 고치며 값을 건드린 경우.
     "- 날짜는 원문 표기(예: 2026-09-17) 그대로 옮겨라. «2026년 9월 17일» 처럼 풀어 쓰지 마라.",
@@ -180,8 +186,8 @@ function describeViolation(v) {
   const kind = String(v.kind ?? "");
   if (kind.startsWith("invariant:")) {
     const field = FIELD_WORD[kind.slice(10)] ?? kind.slice(10);
-    const lost = [...String(v.detail ?? "").matchAll(/(?:^|, )-([^,]+)/g)].map((m) => m[1].trim());
-    const added = [...String(v.detail ?? "").matchAll(/(?:^|, )\+([^,]+)/g)].map((m) => m[1].trim());
+    const lost = v.missing ?? [];
+    const added = v.added ?? [];
     const parts = [];
     if (lost.length) parts.push(`원문에 있던 ${field} 가 사라졌다: ${lost.join(", ")} — 원문 표기 그대로 되살려라(제목에서 뺀 값이면 본문 첫 줄로 옮겨라)`);
     if (added.length) parts.push(`원문에 없던 ${field} 가 생겼다: ${added.join(", ")} — 새 값·번호·백틱을 만들지 마라`);
@@ -274,7 +280,11 @@ async function rewriteLoop(src, findings, guide, check, part) {
     if (jm.parseError) { attempts.push({ reason: "parse", detail: jm.parseError }); feedback = { prev: cand, problems: [] }; continue; }
     if (!jm.pass) {
       attempts.push({ reason: "meaning", meaning: jm.meaning });
-      feedback = { prev: cand, problems: describeMeaning(jm.meaning) };
+      // 의미 탈락 뒤 재시도는 한 번만, 직전 재작성본 없이 원문 기준으로 — 판정자가 지목한 문장과 후보를 함께 주며
+      //  여러 번 돌리면 모델이 «원문대로 복원» 이 아니라 «판정자가 못 잡게 바꾸기» 로 수렴할 수 있고, 같은 결함 후보를
+      //  반복 제출할수록 판정의 거짓음성이 통과로 이어질 확률도 커진다. 기계 검사 탈락(결정적)은 그런 위험이 없어 제한하지 않는다.
+      if (attempts.filter((a) => a.reason === "meaning").length >= 2) break;
+      feedback = { prev: null, problems: describeMeaning(jm.meaning) };
       continue;
     }
     attempts.push({ reason: "pass" });
@@ -304,7 +314,7 @@ async function processSections(k, el, fmt, common) {
     const part = { index: i, total: sections.length };
     const check = (cand) => {
       const v = checkInvariants(src, cand, { requireTitle: i === 0 });
-      if (i > 0 && sec.heading && !cand.body_md.startsWith(sec.heading)) v.push({ kind: "heading", detail: `여는 헤딩 줄을 바꾸지 마라: ${sec.heading}` });
+      if (i > 0 && !sectionHeadingOk(sec.heading, cand.body_md)) v.push({ kind: "heading", detail: `조각은 원문과 같은 수준의 헤딩으로 시작해야 한다: ${sec.heading}` });
       return v;
     };
     const { after, attempts } = await rewriteLoop(src, findings, fmt.guide_md, check, part);
@@ -321,14 +331,14 @@ async function processSections(k, el, fmt, common) {
   const dryBody = args.apply ? {} : { after_body: after.body_md };
   const rewritten = report.filter((r) => r.status === "rewritten").length;
   if (!rewritten) return { ...withAfter, status: "rejected", reason: "no_section_passed" };
-  const whole = checkInvariants(src, after);
+  // 합친 문서 전체로 한 번 더 — 조각별 검사가 못 보는 제목↔첫 조각 결합과 새로 생긴 위반을 본다.
   const full = checkRewrite(src, after, fmt).violations;
-  const newRules = full.filter((v) => v.kind.startsWith("new:"));
-  if (whole.length || newRules.length) return { ...withAfter, ...dryBody, status: "rejected", reason: "check", violations: [...whole, ...newRules] };
-  const beforeCount = el.findings.length;
-  const afterCount = full.filter((v) => v.kind.startsWith("lint:")).length;
-  const partial = afterCount > 0;
-  const extra = { ...(partial ? { partial: true, remaining: full.filter((v) => v.kind.startsWith("lint:")).map((v) => v.kind.slice(5)) } : {}), findings_before: beforeCount };
+  const blocking = full.filter((v) => !v.kind.startsWith("lint:"));
+  if (blocking.length) return { ...withAfter, ...dryBody, status: "rejected", reason: "check", violations: blocking };
+  // 남은 규칙이 줄지 않았으면 고친 것이 없다 — 반영하면 다음 배치가 같은 문서를 또 집어 같은 비용을 반복한다.
+  const remaining = full.filter((v) => v.kind.startsWith("lint:")).map((v) => v.kind.slice(5));
+  if (remaining.length >= rules.length) return { ...withAfter, ...dryBody, status: "rejected", reason: "no_improvement", remaining };
+  const extra = { ...(remaining.length ? { partial: true, remaining } : {}), findings_before: rules.length };
   if (!args.apply) return { ...withAfter, ...dryBody, status: "passed_dry", ...extra };
   return { ...(await saveRewrite(k.name, k, after, rules, withAfter)), ...extra };
 }
@@ -396,15 +406,24 @@ writeFileSync(args.report, "");
 console.log(`대상 ${names.length}건 · ${args.apply ? "적용" : "dry-run"} · 형식=${fromOrg ? "조직 설정" : "제품 기본값"} · 모델=${args.model}`);
 
 const counts = {};
-for (const name of names) {
+let totalCalls = 0;
+async function runOne(name) {
+  const ctx = { calls: 0 };
   let row;
   try {
-    row = await processOne(name, fmt);
+    row = await callCtx.run(ctx, () => processOne(name, fmt));
   } catch (e) {
     row = { name, status: "failed", reason: String(e?.message ?? e).slice(0, 300) };
   }
+  row.llm_calls = ctx.calls;
+  totalCalls += ctx.calls;
   appendFileSync(args.report, `${JSON.stringify(row)}\n`);
   counts[row.status] = (counts[row.status] ?? 0) + 1;
-  console.error(`${row.status.padEnd(10)} ${name}${row.reason ? ` (${row.reason})` : ""}`);
+  console.error(`${row.status.padEnd(10)} ${name}${row.reason ? ` (${row.reason})` : ""} · LLM ${ctx.calls}회`);
 }
-console.log(Object.entries(counts).map(([s, n]) => `${s}=${n}`).join(" ") || "처리 0건");
+// 호출 한 번이 수 분이라 건 단위로 병렬로 돈다. 같은 지식을 두 번 집지 않도록 목록을 한 번씩만 꺼낸다.
+const queue = [...names];
+await Promise.all(Array.from({ length: Math.min(args.concurrency, queue.length) }, async () => {
+  for (let name = queue.shift(); name !== undefined; name = queue.shift()) await runOne(name);
+}));
+console.log((Object.entries(counts).map(([s, n]) => `${s}=${n}`).join(" ") || "처리 0건") + ` · LLM 호출 ${totalCalls}회`);

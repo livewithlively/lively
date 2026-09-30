@@ -2,7 +2,7 @@
 //
 // 왜 필요: 재작성은 LLM 이 하므로 형식을 고치다 수치·식별자·링크를 빠뜨리거나 지어낼 수 있다. 지식은 다른 구성원의
 //  세션에 사실로 주입되므로, 뜻이 바뀐 글이 «형식이 좋아졌다»는 이유로 저장되면 원문보다 해롭다. 그래서 LLM 판정 앞에
-//  싸고 결정적인 불변식(코드·수치·링크·표 값은 한 글자도 안 바뀐다)을 둬, 여기서 떨어진 건 LLM 에 묻지도 않는다.
+//  싸고 결정적인 불변식(코드·수치·링크·표 값이 그대로인가)을 둬, 여기서 떨어진 건 LLM 에 묻지도 않는다.
 //
 // 순수 함수다(DB·네트워크 없음). 배치 스크립트와 테스트가 같은 판정을 쓴다.
 import type { WritingFormat, WritingRuleId } from "../org/policies/writing-format.js";
@@ -19,7 +19,7 @@ export const AUTO_FIX_RULES: readonly WritingRuleId[] = [
 const AUTO_FIX = new Set<WritingRuleId>(AUTO_FIX_RULES);
 
 // 이보다 긴 본문은 LLM 이 전문을 되쓰는 동안 손대지 말아야 할 문장을 깨뜨릴 확률이 커진다(전사 드리프트) —
-//  긴 글은 사람이 나누는 게 먼저다.
+//  그래서 통째로 쓰지 않고 섹션 단위로 나눠 쓴다(splitSections).
 export const REWRITE_BODY_MAX_CHARS = 15000;
 
 // 형식을 고치면 글자는 줄어든다(기호·볼드·반복 제목). 그 이상 줄면 서술이 빠진 것이다.
@@ -43,7 +43,14 @@ export interface Invariants {
   tableRows: string[];
 }
 
-export interface RewriteViolation { kind: string; detail: string }
+export interface RewriteViolation {
+  kind: string;
+  /** 사람용 요약(보고서). */
+  detail: string;
+  /** 불변식 위반의 원값 — 재작성 모델에 돌려줄 피드백은 detail 을 되파싱하지 않고 이것을 쓴다. */
+  missing?: string[];
+  added?: string[];
+}
 export interface RewriteCheck { ok: boolean; violations: RewriteViolation[] }
 
 const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
@@ -141,8 +148,8 @@ export function extractInvariants(doc: RewriteDoc): Invariants {
   }
   return {
     codeBlocks: sortedMulti(blocks),
-    inlineCode: sortedSet(codes),
-    numbers: sortedSet(numbersText.match(NUMBER_RE) ?? []),
+    inlineCode: sortedMulti(codes),
+    numbers: sortedMulti(numbersText.match(NUMBER_RE) ?? []),
     urls: sortedSet([...(prose.match(URL_RE) ?? []).map(trimUrl), ...[...prose.matchAll(MD_LINK_TARGET_RE)].map((m) => trimUrl(m[1]))]),
     wikilinks: sortedSet(wikilinks),
     refs: sortedSet(refs),
@@ -187,11 +194,30 @@ function diffDetail(d: { missing: string[]; added: string[] }): string {
 // 배치는 조직이 안내를 켰는지와 별개로 돈다 — 꺼진 형식으로 판정하면 lintWriting 이 늘 빈 결과라 전부 통과한다.
 const forceEnabled = (fmt: WritingFormat): WritingFormat => (fmt.enabled ? fmt : { ...fmt, enabled: true });
 
-// 숫자·인라인 코드는 집합으로 본다 — 첫 줄 결론에 원문의 값(«EC2»·날짜)을 한 번 더 쓰거나 제목과 H1 에 두 번 있던 날짜를
-//  본문에 한 번만 옮기는 것은 사실 변경이 아닌데, 다중집합으로 세면 전부 거부됐다(dry-run 20건 중 거짓 거부 3건).
-//  값이 사라지거나 없던 값이 생기는 것은 집합으로도 잡힌다. 코드블록과 표 행은 통째로 한 단위라 개수까지 본다.
+// 숫자·인라인 코드는 개수까지 본다 — 집합으로만 보면 «대기 30초» 를 문서 다른 곳에 있는 «3» 으로 바꿔치기해도 통과한다.
+//  다만 제목·맨 앞 H1·새 첫 줄(결론)에 나오는 값은 개수 차이를 허용한다: 결론에 원문의 값(«EC2»·날짜)을 한 번 더 쓰거나,
+//  제목과 H1 에 두 번 있던 날짜를 본문에 한 번만 옮기는 것은 사실 변경이 아니다(dry-run 20건 중 거짓 거부 3건의 원인).
+//  허용은 개수 차이뿐이다 — 원문에 없던 값이 생기거나 있던 값이 통째로 사라지면 여전히 위반이다.
 const MULTISET_FIELDS = ["codeBlocks", "tableRows"] as const;
-const SET_FIELDS = ["inlineCode", "numbers", "urls", "wikilinks", "refs"] as const;
+const COUNTED_FIELDS = ["numbers", "inlineCode"] as const;
+const SET_FIELDS = ["urls", "wikilinks", "refs"] as const;
+
+function firstLines(body: string, withNextAfterHeading: boolean): string {
+  const ls = String(body ?? "").split("\n").map((l) => l.trim()).filter((l) => l);
+  if (!ls.length) return "";
+  if (withNextAfterHeading && /^#{1,6}\s/.test(ls[0]) && ls[1]) return `${ls[0]}\n${ls[1]}`;
+  return ls[0];
+}
+
+/** 개수 차이를 허용하는 값 — 원문의 제목·맨 앞 H1, 재작성본의 제목·첫 줄(첫 줄이 헤딩이면 그 다음 줄까지). */
+function toleratedValues(before: RewriteDoc, after: RewriteDoc, field: (typeof COUNTED_FIELDS)[number]): Set<string> {
+  const h1 = firstLines(before.body_md ?? "", false);
+  const snippets: RewriteDoc[] = [
+    { title: before.title, body_md: /^#\s/.test(h1) ? h1 : "" },
+    { title: after.title, body_md: firstLines(after.body_md ?? "", true) },
+  ];
+  return new Set(snippets.flatMap((d) => extractInvariants(d)[field]));
+}
 
 /**
  * 형식 규칙을 빼고 «사실이 그대로인가» 만 본다 — 불변식과 분량. 섹션 단위 재작성은 조각마다 이것으로 판정하고,
@@ -205,11 +231,19 @@ export function checkInvariants(before: RewriteDoc, after: RewriteDoc, opts: { r
   const ia = extractInvariants(after);
   for (const k of MULTISET_FIELDS) {
     const d = multisetDiff(ib[k], ia[k]);
-    if (d.missing.length || d.added.length) violations.push({ kind: `invariant:${k}`, detail: diffDetail(d) });
+    if (d.missing.length || d.added.length) violations.push({ kind: `invariant:${k}`, detail: diffDetail(d), missing: d.missing, added: d.added });
+  }
+  for (const k of COUNTED_FIELDS) {
+    const d = multisetDiff(ib[k], ia[k]);
+    const tol = toleratedValues(before, after, k);
+    const bset = new Set(ib[k]), aset = new Set(ia[k]);
+    const missing = d.missing.filter((x) => !(tol.has(x) && aset.has(x)));
+    const added = d.added.filter((x) => !(tol.has(x) && bset.has(x)));
+    if (missing.length || added.length) violations.push({ kind: `invariant:${k}`, detail: diffDetail({ missing, added }), missing, added });
   }
   for (const k of SET_FIELDS) {
     const d = setDiff(ib[k], ia[k]);
-    if (d.missing.length || d.added.length) violations.push({ kind: `invariant:${k}`, detail: diffDetail(d) });
+    if (d.missing.length || d.added.length) violations.push({ kind: `invariant:${k}`, detail: diffDetail(d), missing: d.missing, added: d.added });
   }
 
   const cb = proseChars(before), ca = proseChars(after);
@@ -245,7 +279,7 @@ export interface EligibilityInput {
   updated_at: string | null | undefined;
 }
 
-export type IneligibleReason = "provenance" | "lifecycle" | "folder" | "too_long" | "recently_edited" | "nothing_to_fix";
+export type IneligibleReason = "provenance" | "lifecycle" | "folder" | "recently_edited" | "nothing_to_fix";
 
 export type RewriteMode = "whole" | "sections";
 
@@ -343,4 +377,15 @@ export function sectionFindings(title: string | null | undefined, section: strin
   const f = forceEnabled(fmt);
   return lintWriting({ title: index === 0 ? title : null, body_md: section }, f)
     .filter((x) => AUTO_FIX.has(x.rule) && (index === 0 || !DOC_LEVEL_RULES.has(x.rule)));
+}
+
+/**
+ * 중간 조각의 재작성본이 원문과 같은 수준의 헤딩으로 시작하는가 — 문서 구조(섹션 경계)를 지키는지 본다.
+ *  헤딩 글자는 비교하지 않는다: 헤딩의 기호를 빼는 것(heading_symbol)이 이 조각이 고칠 일일 수 있다.
+ */
+export function sectionHeadingOk(heading: string | null, body: string): boolean {
+  if (!heading) return true;
+  const level = (heading.trim().match(/^#+/) ?? [""])[0].length;
+  if (!level) return true;
+  return new RegExp(`^ {0,3}#{${level}}(?!#)\\s`).test(body);
 }

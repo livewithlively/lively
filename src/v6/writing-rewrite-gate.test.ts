@@ -198,26 +198,55 @@ for (const c of FIELD_CASES) {
   });
 }
 
-t("numbers 는 집합: 같은 값을 한 번 더 쓰거나 중복을 하나로 합쳐도 violation 없음", () => {
+t("numbers: 본문 중간에서 중복 값을 하나로 합치면 violation(개수를 센다)", () => {
   const before = doc(CLEAN_TITLE, `${LEAD}\n\n상한은 40 이고 하한도 40 이다.\n\n${FILLER}`);
   const merged = doc(CLEAN_TITLE, `${LEAD}\n\n상한과 하한은 모두 40 이다.\n\n${FILLER}`);
-  assert.ok(!hasKind(checkRewrite(before, merged, fmt), "invariant:numbers"));
+  assert.ok(hasKind(checkRewrite(before, merged, fmt), "invariant:numbers"));
+});
+t("numbers: 새 첫 줄 결론에서 원문 값을 한 번 더 쓰는 것은 허용", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n상한은 40 이고 하한도 40 이다.\n\n${FILLER}`);
   const repeated = doc(CLEAN_TITLE, `상한은 40 이다.\n\n${LEAD}\n\n상한은 40 이고 하한도 40 이다.\n\n${FILLER}`);
   assert.ok(!hasKind(checkRewrite(before, repeated, fmt), "invariant:numbers"));
 });
-t("numbers 는 집합이어도 값이 사라지거나 바뀌면 violation", () => {
-  const before = doc(CLEAN_TITLE, `${LEAD}\n\n상한은 40 이고 하한은 10 이다.\n\n${FILLER}`);
-  const lost = doc(CLEAN_TITLE, `${LEAD}\n\n상한은 40 이다.\n\n${FILLER}`);
-  const changed = doc(CLEAN_TITLE, `${LEAD}\n\n상한은 40 이고 하한은 20 이다.\n\n${FILLER}`);
-  assert.ok(detailOf(checkRewrite(before, lost, fmt), "invariant:numbers").includes("10"));
-  assert.ok(hasKind(checkRewrite(before, changed, fmt), "invariant:numbers"));
+t("numbers: 제목·H1 에 두 번 있던 날짜를 본문에 한 번만 옮기는 것은 허용", () => {
+  const before = doc("로그 조회 접근 (2026-08-07)", `# 로그 조회 접근 (2026-08-07)\n\n${LEAD}\n\n${FILLER}`);
+  const after = doc("로그 조회 접근", `2026-08-07 에 확인했다. ${LEAD}\n\n${FILLER}`);
+  assert.ok(!hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
 });
-t("inlineCode 는 집합: 같은 코드 두 번이 한 번으로 줄어도 violation 없음, 코드가 사라지면 violation", () => {
-  const before = doc(CLEAN_TITLE, `${LEAD}\n\n키는 \`retry_max\` 이고 기본도 \`retry_max\` 이다.\n\n${FILLER}`);
-  const merged = doc(CLEAN_TITLE, `${LEAD}\n\n키와 기본은 모두 \`retry_max\` 이다.\n\n${FILLER}`);
-  const unticked = doc(CLEAN_TITLE, `${LEAD}\n\n키와 기본은 모두 retry_max 이다.\n\n${FILLER}`);
-  assert.ok(!hasKind(checkRewrite(before, merged, fmt), "invariant:inlineCode"));
-  assert.ok(hasKind(checkRewrite(before, unticked, fmt), "invariant:inlineCode"));
+t("numbers: 원문에 있는 다른 값으로 바꿔치기하면 violation(반례 A)", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n타임아웃은 30초다. 재시도는 3회, 대기는 30초다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `${LEAD}\n\n타임아웃은 30초다. 재시도는 3회, 대기는 3초다.\n\n${FILLER}`);
+  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
+});
+t("numbers: 날짜 사이 바꿔치기는 violation(반례 F)", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n2026-09-17 배포, 2026-09-20 롤백, 2026-09-17 결정.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `${LEAD}\n\n2026-09-17 배포, 2026-09-17 롤백, 2026-09-20 결정.\n\n${FILLER}`);
+  // 다중집합이 같아지는 교환이라 개수로는 못 잡는다 — 이런 치환은 의미 판정의 몫이다. 여기선 «개수가 바뀐» 경우를 본다.
+  const after2 = doc(CLEAN_TITLE, `${LEAD}\n\n2026-09-17 배포, 2026-09-17 롤백, 2026-09-17 결정.\n\n${FILLER}`);
+  assert.ok(hasKind(checkRewrite(before, after2, fmt), "invariant:numbers"));
+  assert.ok(!hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
+});
+t("numbers: 새 첫 줄에 원문에 없던 값을 쓰면 여전히 violation", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n상한은 40 이다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `상한은 50 이다.\n\n${LEAD}\n\n상한은 40 이다.\n\n${FILLER}`);
+  assert.ok(detailOf(checkRewrite(before, after, fmt), "invariant:numbers").includes("50"));
+});
+t("numbers: 위반에 missing/added 원값을 구조로 싣는다", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n상한은 1,000 이다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `${LEAD}\n\n상한은 2,000 이다.\n\n${FILLER}`);
+  const v = checkRewrite(before, after, fmt).violations.find((x) => x.kind === "invariant:numbers")!;
+  assert.deepEqual(v.missing, ["1,000"]);
+  assert.deepEqual(v.added, ["2,000"]);
+});
+t("inlineCode: 본문 중간의 다른 코드로 바꿔치기하면 violation(반례 B)", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n기본은 \`retry_max\`, 상한도 \`retry_max\`, 하한은 \`retry_min\` 이다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `${LEAD}\n\n기본은 \`retry_min\`, 상한도 \`retry_max\`, 하한은 \`retry_min\` 이다.\n\n${FILLER}`);
+  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:inlineCode"));
+});
+t("inlineCode: 백틱을 벗기면 violation", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n키는 \`retry_max\` 이다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `${LEAD}\n\n키는 retry_max 이다.\n\n${FILLER}`);
+  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:inlineCode"));
 });
 t("numbers: 식별자 안의 숫자(EC2)를 결론에 한 번 더 써도 violation 없음", () => {
   const before = doc(CLEAN_TITLE, `${LEAD}\n\nSCF EC2 태그가 뒤바뀐다.\n\n${FILLER}`);
