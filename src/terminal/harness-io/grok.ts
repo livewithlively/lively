@@ -16,6 +16,7 @@
 //  · 승인 UI 는 미실측 → answer=null(화면이 버튼을 안 그린다). 실측 후 채운다.
 import path from "node:path";
 import type { HarnessSessionAdapter } from "./adapter.js";
+import { turnFromScreen } from "./screen-run.js";   // #4502 — 화면 busy → 턴(맨 아래 몇 줄만)
 import { TERM_UI_UNKNOWN } from "./term-ui.js";
 import { isoOf, parseJsonLines, type ChatBlock, type ChatLine, type ParseState } from "./chat-line.js";
 
@@ -107,7 +108,7 @@ export const grokIo: HarnessSessionAdapter = {
     if (/Shift\+Tab:mode/.test(s)) return "ready";
     return null;
   },
-  //  #4502 — 화면의 busy 가 곧 «턴이 돈다» 다(Responding… · Esc:cancel). 백그라운드 표시는 미실측.
-  run: (tail) => (grokIo.screen?.(tail) === "busy" ? "turn" : null),
+  //  #4502 — 화면의 busy 가 곧 «턴이 돈다» 다(Responding… · Esc:cancel) — 맨 아래 몇 줄만(screen-run.ts). 백그라운드 표시는 미실측.
+  run: (tail) => turnFromScreen(grokIo.screen, tail),
   term: TERM_UI_UNKNOWN,   // 화면 사실 미실측(#4135) — 부팅 대화상자·선택지 키를 아직 눈으로 안 봤다
 };

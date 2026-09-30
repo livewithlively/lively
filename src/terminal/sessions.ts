@@ -48,7 +48,7 @@ import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, mo
 import { harnessIo, type ScreenRun } from "./harness-io/adapter.js";   // #4135 — 이 하네스의 화면 판정(확인 필요) · #4502 실행 상태
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
 import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
-import { sessionActivityTitle, scrapePane, resolveAgentPhase, observeAgentRun, harnessReportsBusy, parseReportedPhase } from "./phase.js";
+import { sessionActivityTitle, scrapePane, screenRunEffects, resolveAgentPhase, observeAgentRun, harnessReportsBusy, parseReportedPhase } from "./phase.js";
 import { sessionMetaCmds, sessionWindowCmds, metaHealCmds, needsMetaHeal, makeMetaHealGate } from "./session-meta-heal.js";   // #3892 — 표식 한 벌 + 표식 없는 세션 되채우기
 import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, mintSessionMcpToken, revokeSessionHookToken } from "./profiles.js";
 import { ensureMemberKitSeeded } from "./member-kit-seed.js";
@@ -247,12 +247,6 @@ export async function listLiveSessionIds(opts?: { strict?: boolean }): Promise<s
 // #3892 — 표식 되채우기의 세션당 쿨다운(프로세스 수명). 목록 폴링은 뷰어 수만큼 돌므로 폴링마다 보내지 않는다.
 const metaHealGate = makeMetaHealGate();
 
-// me=null 이면 필터 없이 전부(owned=false 고정 — 뷰어별 owned 는 소비자가 재계산).
-/**
- * @param strict true 면 **tmux 를 못 본 것**(서버 없음이 아닌 실패)을 삼키지 않고 throw 한다.
- *  기본(false)은 종전 동작 — 화면 목록은 빈 목록으로 떨어지는 편이 낫다. 반면 "없으면 만든다" 류의
- *  **파괴적/생성적 결정**을 내리는 호출부는 반드시 strict 여야 한다(모르는 상태를 '없음'으로 읽으면 안 된다).
- */
 // 마지막 작업 시각을 지금으로 — 프로세스 값은 매번, tmux·DB 영속은 30초 스로틀(폴링마다 쓰지 않는다).
 //  두 자리가 부른다: 1차 패스의 스피너·셸 실행 관측, 2차 패스의 «턴이 도는 화면»(#4502).
 function markBusyNow(name: string, persisted: number, nowSec: number): void {
@@ -263,6 +257,12 @@ function markBusyNow(name: string, persisted: number, nowSec: number): void {
   }
 }
 
+// me=null 이면 필터 없이 전부(owned=false 고정 — 뷰어별 owned 는 소비자가 재계산).
+/**
+ * @param strict true 면 **tmux 를 못 본 것**(서버 없음이 아닌 실패)을 삼키지 않고 throw 한다.
+ *  기본(false)은 종전 동작 — 화면 목록은 빈 목록으로 떨어지는 편이 낫다. 반면 "없으면 만든다" 류의
+ *  **파괴적/생성적 결정**을 내리는 호출부는 반드시 strict 여야 한다(모르는 상태를 '없음'으로 읽으면 안 된다).
+ */
 async function collectSessions(me: string | null, strict = false): Promise<SessionInfo[]> {
   let out = "";
   try { out = await tmux(["list-sessions", "-F", LIST_FMT]); }
@@ -401,6 +401,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
   //  #4135 — 화면 문구는 하네스마다 다르다. 그 하네스가 답할 수 있으면(어댑터 screen) 그 답을 쓰고, 못 하면
   //   종전 휴리스틱(claude·antigravity 문구)으로 떨어진다. 종전엔 codex 의 훅 검토·업데이트 대화상자가 안 잡혀
   //   «답을 기다리는 세션» 이 목록에서 대기중으로 섰다.
+  //  ⚠ 사람이 답할 화면이면 run 은 null 이다(phase.readScreen) — 한 행이 «확인 필요» 와 «작업 중» 을 함께 받지 않는다.
   await Promise.all(needScrape.map(async (r) => {
     const v = await scrapePane(r.name, harnessIo(r.harness));
     if (v.waiting) waitingIds.add(r.name);
@@ -430,11 +431,10 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     const asPhase = appServer ? codexChatPhase(r.name) : null;
     // #1221 — AI 실행 단계(busy·waiting·idle)는 이제 **한 곳에서** 판정한다(하네스 보고 우선, 화면 스크래핑 폴백).
     //  그 위의 세 갈래(셸 하네스 · AI 종료 · 탭 없음)는 실행 단계와 다른 축이라 종전 순서 그대로다.
-    const screenRun = screenRuns.get(r.name) ?? null;
-    const phase = resolveAgentPhase({ reported: r.reportedFresh, nowSec, spinning: r.busy, scrapedWaiting: waitingIds.has(r.name), scrapedRun: screenRun });
-    //  #4502 — 턴이 도는 화면은 활동이다(마지막 작업 시각을 민다 — 스피너와 같은 자리). 백그라운드 대기는 밀지 않는다:
-    //   AI 가 일한 마지막 시각은 턴이 끝난 때이고, 백그라운드에 남은 게 dev 서버 같은 상주 프로세스면 영원히 «방금 일함» 이 된다.
-    if (screenRun === "turn" && !appServer) {
+    //  #4502 — 화면 실행 상태가 행에 주는 것은 phase.screenRunEffects 가 정한다(turn = 작업 중 셋 · background = 표식 하나).
+    const screen = screenRunEffects(screenRuns.get(r.name) ?? null, appServer);
+    const phase = resolveAgentPhase({ reported: r.reportedFresh, nowSec, spinning: r.busy, scrapedWaiting: waitingIds.has(r.name), scrapedTurn: screen.turn });
+    if (screen.turn) {   // 도는 턴은 활동이다 — 마지막 작업 시각을 민다(스피너와 같은 자리 · 행을 만들기 전에 해야 lastActive 에 실린다)
       r.lastBusy = nowSec;
       markBusyNow(r.name, r.persistedLastBusy, nowSec);
     }
@@ -454,17 +454,19 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       // 회수(F)가 보는 두 신호는 **접속과 무관**해야 하고(탭=온라인 규칙이 busy·waiting 을 offline 으로 덮으므로),
       //  두 출처를 **합집합**으로 본다 — 죽이면 되돌릴 수 없는 판정이라 과보호가 옳은 실패 방향이다.
       // app-server 세션의 '일하는 중'은 pane 스피너가 아니라 **턴이 도나**다(pane 은 셸이라 스피너가 없다).
-      //  #4502 — 화면이 «턴이 돈다»·«백그라운드 작업이 남았다» 고 하면 작업 중이다(사람 눈에 아직 안 끝난 세션).
-      working: appServer ? asPhase === "busy" : !!(r.busy || r.shellWorking || r.reportedFresh?.phase === "busy" || screenRun),
+      //  #4502 — 화면이 «턴이 돈다» 고 하면 작업 중이다(screen.turn — app-server 는 이미 거짓).
+      working: appServer ? asPhase === "busy" : !!(r.busy || r.shellWorking || r.reportedFresh?.phase === "busy" || screen.turn),
       // 승인 대기도 마찬가지 — 화면 스크래핑이 아니라 우리가 들고 있는 승인 목록이 사실이다.
       awaiting: appServer ? asPhase === "waiting" : !!(r.reportedFresh?.phase === "waiting" || waitingIds.has(r.name)),
       // #3894 — working 은 두 출처의 합집합이라 회수 상한은 그걸로 출처를 못 가른다. 그래서 둘을 따로 싣는다(회수 판정 전용).
       //  · harnessWorking — 하네스(스피너·훅 보고·app-server 턴)가 스스로 말하는 작업 중. 상한 없이 존중한다.
       //  · paneWorking — pane 포그라운드 추정(shellWorking). 이게 참이면 lastActive 는 그 추정이 매 관측 밀어 올린 값이다.
-      //   #4502 — 화면의 «턴이 돈다» 는 하네스가 스스로 말하는 것이다(Esc 로 끊을 수 있다는 그 하네스의 안내). 백그라운드 대기는
-      //    아니다 — 그건 회수 상한이 걸리는 쪽에 둔다(살아 있는 작업 자체는 회수 ⑥ 이 프로세스 표로 따로 지킨다).
-      harnessWorking: appServer ? asPhase === "busy" : !!r.harnessBusy || screenRun === "turn",
+      //   #4502 — 화면의 «턴이 돈다» 는 하네스가 스스로 말하는 것이다(Esc 로 끊을 수 있다는 그 하네스의 안내 — 스피너의 후계).
+      harnessWorking: appServer ? asPhase === "busy" : !!r.harnessBusy || screen.turn,
       paneWorking: !!r.shellWorking,
+      //  #4502 — 턴은 끝났지만 하네스가 띄운 백그라운드 작업이 남아 AI 가 스스로 이어 간다(«… · 1 shell still running»).
+      //   사이드바 점만 이걸 «작업 중» 으로 그린다 — working 에 안 넣는 이유는 phase.screenRunEffects 머리말. 값이 없으면 키를 뺀다.
+      ...(screen.background ? { background: true } : {}),
       title: sessionActivityTitle(r.paneTitleRaw, r.harness),
       lastActive: r.lastBusy || undefined, // 마지막 작업 시각. 한 번도 작업 안 했으면 undefined → 프론트가 created 로 폴백.
       lastAttached: r.lastAttached || undefined, // #1098 마지막 열람(탭 붙음) 시각 — '안 본 작업 완료' 판정용.

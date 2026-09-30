@@ -23,10 +23,11 @@ const CONV_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 //                (백그라운드 에이전트·워크플로가 남으면 완료 줄 대신 «Waiting for 1 background agent to finish»)
 //  «to interrupt» 는 키 바인딩 표시(기본 esc)에 붙는 꼬리라 키가 바뀌어도 남는다. 입력 중이면 «enter to interrupt and send» 로
 //  바뀌는데 그것도 도는 턴이다. 스피너 줄은 창이 좁아 푸터가 잘릴 때(곁칸 작은 창)를 위한 두 번째 근거다.
-//  ⚠ 대화(⏺)·도구 결과(⎿)·입력(❯)은 상태줄이 아니다 — 대화에 «still running» 이 적혀 있어도 세지 않으려고 줄머리를 가린다.
+//  ⚠ 상태줄은 **기호 글리프로 시작한다**(✻ ✽ ✶ ✳ ✢ · * — 스피너 프레임과 완료 표시). 대화(⏺)·도구 결과(⎿)·입력(❯ · 옛 판 >)·
+//   글자·숫자로 시작하는 줄은 상태줄이 아니다 — 대화에 «still running»·«…(»·«to interrupt» 가 적혀 있어도 세지 않으려고 줄머리를 가린다.
 //   상태줄이 좁은 창에서 접히면 이어지는 줄은 들여쓰기로 시작하므로(«⎿ Tip: …» 도 같다) 그 머리까지 올라가 붙여 읽는다.
 const INPUT_RULE = /^\s*[╭╰]?─{3,}/;                    // 옛 판은 입력창이 둥근 상자(╭───╮ … ╰───╯)였다
-const STATUS_HEAD = /^[^\s⏺⎿❯│─]/u;
+const STATUS_HEAD = /^[^\s\p{L}\p{N}⏺⎿❯│─>]/u;
 export function claudeRun(tail: string[]): ScreenRun | null {
   const rules = tail.flatMap((l, i) => (INPUT_RULE.test(l) ? [i] : []));
   if (rules.length < 2) return null;                     // 입력창이 안 보인다(대화상자·부팅) — 모른다
