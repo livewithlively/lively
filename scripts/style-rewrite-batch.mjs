@@ -37,6 +37,7 @@ function parseArgs(argv) {
     };
     if (k === "--apply") a.apply = true;
     else if (k === "--names") a.names = val();
+    else if (k === "--apply-from") a.applyFrom = val();
     else if (k === "--limit") a.limit = Number(val());
     else if (k === "--report") a.report = val();
     else if (k === "--model") a.model = val();
@@ -46,7 +47,7 @@ function parseArgs(argv) {
     else { console.error(`알 수 없는 인자: ${k}`); process.exit(2); }
   }
   if (!a.report) { console.error("--report <jsonl 경로> 가 필요합니다"); process.exit(2); }
-  if (!a.names && !(Number.isInteger(a.limit) && a.limit > 0)) { console.error("--names <파일> 또는 --limit N(양의 정수) 중 하나가 필요합니다"); process.exit(2); }
+  if (!a.names && !a.applyFrom && !(Number.isInteger(a.limit) && a.limit > 0)) { console.error("--names <파일> 또는 --limit N(양의 정수) 중 하나가 필요합니다"); process.exit(2); }
   return a;
 }
 const args = parseArgs(process.argv.slice(2));
@@ -402,6 +403,33 @@ async function processOne(name, fmt) {
   return saveRewrite(name, k, after, rules, withAfter);
 }
 
+/**
+ * dry-run 리포트의 통과본을 그대로 반영한다 — 이미 의미 판정을 통과한 글을 다시 LLM 으로 쓰지 않는다(비용·재현성).
+ *  저장 직전에 최신 게이트로 기계 검사를 다시 하고(리포트 이후 게이트가 강화됐을 수 있다), 판이 그 사이 바뀌었으면 건너뛴다.
+ */
+async function applyFromReport(file, fmt) {
+  const rows = readFileSync(file, "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l))
+    .filter((r) => r.status === "passed_dry" && typeof r.after_body === "string");
+  const out = {};
+  for (const r of rows) {
+    const { k, err } = await getKnowledge(r.name);
+    let row;
+    if (!k) row = { name: r.name, status: "failed", reason: `fetch: ${err}` };
+    else if (k.version !== r.version) row = { name: r.name, status: "skipped", reason: "changed_since_dry_run" };
+    else {
+      const src = { title: k.title, body_md: k.body_md };
+      const after = { title: r.after_title, body_md: r.after_body };
+      const v = checkRewrite(src, after, fmt).violations.filter((x) => r.mode !== "sections" || !x.kind.startsWith("lint:"));
+      if (v.length) row = { name: r.name, status: "rejected", reason: "recheck", violations: v };
+      else row = await saveRewrite(r.name, k, after, r.rules ?? [], { name: r.name, version: k.version, rules: r.rules ?? [] });
+    }
+    appendFileSync(args.report, `${JSON.stringify(row)}\n`);
+    out[row.status] = (out[row.status] ?? 0) + 1;
+    console.error(`${row.status.padEnd(10)} ${r.name}${row.reason ? ` (${row.reason})` : ""}`);
+  }
+  console.log(Object.entries(out).map(([s, n]) => `${s}=${n}`).join(" ") || "처리 0건");
+}
+
 // ── 실행 ──
 const { fmt, fromOrg } = await loadFormat();
 // 적용은 조직 형식으로만 한다 — 조직 설정은 관리자 토큰에만 실려 오고, 못 읽으면 제품 기본값(다른 문체·한도·금지어)으로
@@ -409,6 +437,12 @@ const { fmt, fromOrg } = await loadFormat();
 if (args.apply && !fromOrg) {
   console.error("--apply 는 조직 서술 형식을 읽을 수 있는 관리자 토큰이 필요합니다(runtime-config 의 config 가 비어 있음).");
   process.exit(2);
+}
+if (args.applyFrom) {
+  if (!fromOrg) { console.error("--apply-from 은 조직 서술 형식을 읽을 수 있는 관리자 토큰이 필요합니다."); process.exit(2); }
+  writeFileSync(args.report, "");
+  await applyFromReport(args.applyFrom, fmt);
+  process.exit(0);
 }
 const names = args.names
   ? readFileSync(args.names, "utf8").split("\n").map((s) => s.trim()).filter((s) => s && !s.startsWith("#"))
