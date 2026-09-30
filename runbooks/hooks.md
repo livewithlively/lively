@@ -21,8 +21,8 @@ File-based path: `kit/generator/build-context.mjs` emits `<target>/.claude/hooks
 | `stop-writeback-gate.mjs` | Stop (no matcher) | hook-input JSON (includes `stop_hook_active`) | Only when blocking: `{"decision":"block","reason":…}` + exit 0 (resumes the same live session). Otherwise silent exit 0 |
 
 > **memory_write is intentionally excluded from work-flag** — do **not** add it to `WRITE_TOOLS_DEFAULT` in work-flag.mjs or to the settings-hooks matchers.
-> It is a no-op stub, so flagging it would create a false 'already recorded' (.writeback) signal (add it to both places at once when it is actually implemented). `memory_save` is still in the default
-> list, but the `memory_*` MCP tools were retired on 2026-06-24 and are not in the current surface (merged into `knowledge_*`). The list of tools that count as a record is
+> It is a no-op stub, so flagging it would create a false 'already recorded' (.writeback) signal (add it to both places at once when it is actually implemented). The `memory_*` MCP tools
+> were retired on 2026-06-24 and are not in the current surface (merged into `knowledge_*`) — `memory_save`, which had stayed in the default list, was removed on 2026-09-30 (#4501). The list of tools that count as a record is
 > changed without redeploying via the admin runtime setting `write_tools` (mirrored to `~/.lively/hooks-config.json`).
 
 The MCP server name in the matchers is **the client registration label `lively`** (MCP_LABEL in `register-clients.sh`) —

@@ -11,7 +11,8 @@ export async function initDbAccessPolicies(pool: Pool): Promise<void> {
   // ── org_db_source — db_query/db_schema 가 읽는 외부 데이터소스 레지스트리(웹 관리). ──
   // 시크릿 금지: url 은 비밀번호 없는 접속문자열, 인증은 auth_mode(password|iam|mtls|vault) + auth_ref(참조: env 이름/
   //  파일경로/role/path)만. 실제 비번 등은 런타임에 참조에서 해소(src/db/sources.ts resolveConnectionString).
-  //  env(DB_SOURCES_JSON) 소스와 병합되며, 여기 행은 무재시작 반영(db_query 가 매 호출 읽음 + 캐시 무효화).
+  //  db_query 소스의 유일한 출처다(env DATABASE_URL·DB_SOURCES_JSON 자동등록은 2026-06-23 폐기 — src/db/sources.ts).
+  //  여기 행은 무재시작 반영(db_query 가 매 호출 읽음 + 캐시 무효화).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS org_db_source(
       name TEXT PRIMARY KEY,

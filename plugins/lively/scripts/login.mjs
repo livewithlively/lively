@@ -2,11 +2,11 @@
 // 플러그인 로그인(#1473) — 디바이스 코드 흐름으로 접속 토큰을 받아 `~/.lively/token` 에 굳힌다.
 //
 // 왜 필요한가: 플러그인은 `lively` CLI 를 깔지 못한다(PATH·bin 을 건드릴 수 없다). 그런데 훅과 MCP 헤더 헬퍼는
-//   토큰 파일을 전제로 한다(이유는 bin/mcp-headers.mjs 주석 참조 — sensitive userConfig 는 훅 env 로 안 온다).
+//   토큰 파일을 전제로 한다(이유는 scripts/mcp-headers.mjs 주석 참조 — sensitive userConfig 는 훅 env 로 안 온다).
 //   그래서 CLI 의 `lively login` 과 **같은 서버 흐름**(POST /cli/device/start → /cli/device/poll)을 이 스크립트가
 //   자체완결로 재현한다. 서버 계약이 하나라 CLI 와 갈라질 여지가 없다.
 //
-// 사용: node <플러그인루트>/bin/login.mjs [게이트웨이주소]
+// 사용: node <플러그인루트>/scripts/login.mjs [게이트웨이주소]
 //   주소를 안 주면 CLAUDE_PLUGIN_OPTION_GATEWAY_URL(플러그인 설정) → ~/.lively/gateway-url 순으로 찾는다.
 // 토큰은 화면에 출력하지 않는다. 파일은 0600 으로 쓴다.
 import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from "node:fs";

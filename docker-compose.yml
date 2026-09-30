@@ -83,7 +83,6 @@ services:
     environment:
       # 컨테이너 네트워크 안에서는 호스트가 'items-db'. (네이티브 경로의 localhost 와 분리)
       ITEMS_DATABASE_URL: postgres://${PGUSER:-lively}:${PGPASSWORD}@items-db:5432/${PGDATABASE:-items}
-      DOMAINMAP_DATABASE_URL: postgres://${PGUSER:-lively}:${PGPASSWORD}@items-db:5432/domainmap
       EMBEDDINGS_BASE_URL: ${EMBEDDINGS_BASE_URL_COMPOSE:-http://embeddings:11434}
       LANG: C.UTF-8
       LC_ALL: C.UTF-8

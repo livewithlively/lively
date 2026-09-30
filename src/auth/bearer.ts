@@ -78,9 +78,9 @@ function authInfo(user: LivelyUser, token: string, over?: { expiresAt?: number |
 }
 
 /**
- * 1단계: 정적 토큰 테이블 검증.
- * 2단계(OAuth 2.1)로 갈 때는 이 클래스만 jose 기반 JWT 검증으로 교체하면 된다.
- * (RFC 9728 메타데이터는 mcpAuthRouter 로 추가)
+ * 접속 토큰 검증 — ① 정적 테이블(AUTH_TOKENS_JSON, 회수 불가 — admin/runtime 거부) ② DB 토큰(`lvk_`, 회수 즉시 무효).
+ * OAuth 2.1 인가서버(src/org/auth/oauth-*.ts)도 JWT 가 아니라 같은 불투명 DB 토큰을 발급하므로 ②가 그대로 검증한다
+ * (RFC 8707 audience 는 resource 로 확인 — 아래 isOwnResource. RFC 9728 메타데이터는 mcpAuthRouter).
  */
 export class BearerVerifier {
   private tokens: TokenTable;

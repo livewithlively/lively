@@ -27,7 +27,7 @@ For the overall structure and lifecycle, see the wiki: `knowledge_grep "architec
 
 ### Writing rules
 - **`org/org-defaults.md`** is the only hard requirement (the core of the composition). If anything else is missing, the generator **skips** it (not an error).
-- The memory index file name is **`memory/knowledge-index.md`** (the name the generator composes). The `template-org` skeleton still creates it as `memory/MEMORY.md`, so rename it after init — if you leave it as is, it isn't composed.
+- The memory index file name is **`memory/knowledge-index.md`** (the name the generator composes). The `template-org` skeleton creates it under this name from VERSION 2 (#4501). Orgs initialised from VERSION 1 should rename `memory/MEMORY.md` to this name — if you leave it as is, it isn't composed (`--check` reports it as a missing optional layer).
 - **`org/managed-policy.md`** is always loaded at the top of the composed output, so keep **only short, absolute rules** (5–7 or fewer recommended). Recommendations go in org-defaults.
   - Real "non-overridable" enforcement comes not from the text but from deploying Claude managed-settings / Codex `requirements.toml` (see `adapters/claude/managed-settings.example.json`). Left alone, these are composed as recommended rules.
 - **The composed AGENTS.md must be 32KiB or less** (the Codex global instructions limit). `--check` checks and blocks it.

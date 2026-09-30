@@ -133,7 +133,7 @@ function knowledgeToMemory(k: KnowledgeRow, domainKey: string | null = null): Or
 //  — /api/ui/org/sections 4,371KB 중 4,356KB, body_md 4,137KB). 게다가 #1247 과 같은 LIMIT-후-필터라
 //  소비자가 is_wiki 로 핀을 고르면 창 밖 핀이 조용히 빠졌다(같은 실측에서 3건 중 1건).
 //  핀 목록의 정본은 listKnowledge({is_wiki:true})·주입은 listWikiPins 다. 쓰기(upsertMemory)의 소비자였던
-//  일회성 org migrate 는 scripts/archive/org-migrate.ts 로 보관됨(#1313 R5).
+//  일회성 org migrate 는 #1313 R5 에서 코드 밖으로 뺐다(이 레포에는 없다).
 
 export interface MemoryInput {
   name: string;
@@ -159,4 +159,4 @@ export async function upsertMemory(mem: MemoryInput, actor?: string, source?: st
 
 // (removeMemory 는 #536 에서 제거 — 유일 소비자였던 org_memory_remove 엔드포인트가 사라짐.
 //  메모리 삭제는 knowledge_delete 로 일원화. 읽기(listMemory)도 #1256 에서 제거 — 남은 건 쓰기 upsertMemory 뿐
-//  (소비자였던 일회성 migrate 는 scripts/archive/org-migrate.ts 로 보관 — #1313 R5).)
+//  (소비자였던 일회성 migrate 는 #1313 R5 에서 코드 밖으로 뺐다 — 이 레포에는 없다).)

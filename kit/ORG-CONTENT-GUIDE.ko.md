@@ -27,7 +27,7 @@
 
 ### 작성 규칙
 - **`org/org-defaults.md`** 가 유일한 하드 필수입니다(합성 코어). 나머지는 없으면 생성기가 **스킵**(에러 아님).
-- 메모리 인덱스 파일명은 **`memory/knowledge-index.md`** 입니다(생성기가 합성하는 이름). `template-org` 골격은 아직 `memory/MEMORY.md` 로 만들어 주므로, init 후 파일명을 바꿔 쓰세요 — 그대로 두면 합성되지 않습니다.
+- 메모리 인덱스 파일명은 **`memory/knowledge-index.md`** 입니다(생성기가 합성하는 이름). `template-org` 골격도 VERSION 2(#4501)부터 이 이름으로 만든다. VERSION 1 로 init 한 조직은 `memory/MEMORY.md` 를 이 이름으로 바꾸세요 — 그대로 두면 합성되지 않습니다(`--check` 가 «선택 누락» 으로 알린다).
 - **`org/managed-policy.md`** 는 합성 최상단에 항상 로드되므로 **짧고 절대적인 규칙만**(5~7개 이내 권장). 권장 사항은 org-defaults 로.
   - 실제 '오버라이드 불가' 강제력은 텍스트가 아니라 Claude managed-settings / Codex `requirements.toml` 배포로 얻습니다(`adapters/claude/managed-settings.example.json` 참고). 그냥 두면 권장 규칙으로 합성됩니다.
 - **합성 AGENTS.md 는 32KiB 이하**여야 합니다(Codex 글로벌 인스트럭션 한도). `--check` 가 검사·차단.

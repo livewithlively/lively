@@ -16,6 +16,10 @@ as-is, and in several places a later file actually overrides rules from an earli
 - The numeric file-name prefixes (`01-` … `90-`) make that order visible, and are meant to make name order = cascade order
   (the concatenation in `scripts/check-css-drops.mjs` also joins files in name order).
 - **Don't reorder.** Moving files or changing prefixes silently breaks screens.
+- When several files share a number, **their order among themselves is set by the list in index.html** — it can differ from name order. The `49-v2-*`
+  trio loads as ctx → taxonomy → projpane (name order is ctx·projpane·taxonomy); the taxonomy-app and task-pane tests lock that order.
+  (#4501 — renaming them to 49a·49b·49c was reverted: a test on another branch pointed at the old name right away and broke. Renaming a
+  file breaks every branch in flight, so pick a number nobody else uses when you create a new file.)
 
 ## Adding new rules
 

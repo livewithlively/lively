@@ -6,9 +6,9 @@
 import { z } from "zod";
 import { dmRead } from "./domainmap-compat.js";
 import { resolveRepo } from "../domainmap/core/types.js";
-// v6: 레포-스코프 도메인 읽기(context_overview·domain_list·domain_get·debt_list)는 repo-free category 리더로 cutover.
+// v6: 레포-스코프 도메인 읽기(context_overview·debt_list)는 repo-free category 리더로 cutover.
+//  (domain_list·domain_get 은 category_list·category_get 으로 대체돼 이 그룹에서 빠졌다.)
 //  레거시 queries.ts(overview/listDomainsApi/domainDetail/listDebts)는 골든리드 핀이라 무변형 — 소비자만 v6 로 repoint.
-//  listRepos/listAllDomains/listEntitiesApi 는 아직 레거시(repo_list·all_domains·domainmap_proxy — 후속 슬라이스).
 import { productOverview, listProductDomains, listProductDebts, listProductEntities, listReposV6 } from "../v6/domainmap-store.js";
 import { uiStats } from "../items/store.js";
 import type { Capability } from "./types.js";

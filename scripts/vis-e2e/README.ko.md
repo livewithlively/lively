@@ -7,21 +7,21 @@
 유닛(`src/v6/visibility.test.ts`)과 SQL 통합(`src/v6/visibility.pg-test.mjs`)은 술어만 본다 —
 실제로 잠긴 태스크가 응답에 실려 나가던 누수는 **이 e2e 만이** 잡았다.
 
-## 어디서 도나
-`pilot-box` EC2(우리 테스트 박스). dev 맥미니를 경유해 접속한다:
+## 무엇이 필요한가
+Lively 가 설치돼 도는 리눅스 호스트 하나 — items-db 컨테이너와 게이트웨이 앱 디렉터리의 `.env` 가 있어야 한다(`boot.sh` 가 그 `.env` 를 상속한다).
+그리고 검증할 브랜치의 빌드(`dist/` + `npm ci` 한 `node_modules/`)를 둔 작업 디렉터리. `sudo` 로 `docker`·`ss` 를 부를 수 있어야 한다.
+호스트마다 다른 값은 env 로 준다(기본값은 `boot.sh` 머리):
 
-```sh
-# dev 맥미니의 AWS 는 [default] 가 SSO 라 비대화식에서 못 쓴다 → 정적 키를 env 로 올려 덮는다.
-ssh lively@localhost
-. ~/.lively-awsenv.sh                      # AWS_ACCESS_KEY_ID/SECRET 를 ~/.aws/credentials 에서 읽어 export
-aws ec2 describe-instances --filters Name=tag:Name,Values=pilot-box \
-  --query 'Reservations[].Instances[].PublicIpAddress' --output text
-ssh -i ~/.ssh/pilot-box ubuntu@<그 IP>
-```
+| env | 뜻 |
+|---|---|
+| `VIS_E2E_DB_CONTAINER` | items-db 컨테이너 이름 |
+| `VIS_E2E_APP_DIR` | 운영 `.env` 가 있는 게이트웨이 앱 디렉터리 |
+| `VIS_E2E_WORK` | 이 브랜치 빌드가 있는 작업 디렉터리 |
+| `VIS_E2E_RUNS` | `cycle.sh` 가 돌릴 스크립트(공백 구분, 기본 `run.mjs`) |
 
 ## 절차
-1. `boot.sh` — 격리 DB 2개(`vis_e2e`, `vis_e2e_dm`)를 만들고, 운영 `.env` 를 상속하되 **DB·포트(8099)·토큰·스케줄러만 덮어**(공유경로는 `cycle.sh` 가 덮는다) 이 브랜치 게이트웨이를 띄운다. 라이브(:8080)와 라이브 DB 는 건드리지 않는다.
-2. `cycle.sh` — 재기동 + 시드 + 실행. 반복 검증은 이것만 쓰면 된다.
+1. `boot.sh` — 격리 DB(`vis_e2e`)를 만들고, 운영 `.env` 를 상속하되 **DB·포트(8099)·토큰·스케줄러만 덮어**(공유경로는 `cycle.sh` 가 덮는다) 이 브랜치 게이트웨이를 띄운다. 라이브(:8080)와 라이브 DB 는 건드리지 않는다.
+2. `cycle.sh` — 재기동 + 시드 + 실행. 반복 검증은 이것만 쓰면 된다. 레포의 `seed.mjs`·`run*.mjs` 를 작업 디렉터리로 복사해 돌린다(`import pg` 가 그 `node_modules` 에서 풀려야 해서).
 3. 기준선: `run.mjs` 34 · `run-v2.mjs` 30 · `run-ui-wire.mjs` 8 · `src/v6/visibility.pg-test.mjs` 30, 전부 0 failed.
 
 ## 각 스크립트가 보는 것
@@ -33,18 +33,17 @@ ssh -i ~/.ssh/pilot-box ubuntu@<그 IP>
 - `run-axes.mjs` — 축 토글: 유형별 켜기/끄기가 **실제로 강제를 걷는지**(끄면 종전처럼 전원 공개, 켜면 다시 잠긴다)를 실제 응답으로 왕복 확인한다. 조직 단위 상태를 바꾸므로 항상 원상복구하고 끝낸다.
 
 ## 함정 (여기서 실제로 겪은 것)
-- **`pkill -f` 로 게이트웨이를 죽이지 마라.** 실제 커맨드라인과 패턴이 어긋나면 조용히 실패하고, 옛 프로세스가 포트를 계속 물어 새 프로세스는 EADDRINUSE 로 죽는다 → **옛 코드로 테스트하면서 통과했다고 믿게 된다.** `cycle.sh` 는 포트 소유자를 찾아 죽이고, 응답하는 pid 가 방금 띄운 pid 인지 확인한다.
+- **`pkill -f` 로 게이트웨이를 죽이지 마라.** 실제 커맨드라인과 패턴이 어긋나면 조용히 실패하고, 옛 프로세스가 포트를 계속 물어 새 프로세스는 EADDRINUSE 로 죽는다 → **옛 코드로 테스트하면서 통과했다고 믿게 된다.** `boot.sh`·`cycle.sh` 는 `port.sh` 로 포트 소유자를 찾아 멈추고, `cycle.sh` 는 응답하는 pid 가 방금 띄운 pid 인지 확인한다.
 - **배선 단언을 먼저 넣어라.** 토큰이 401 이면 "차단됨" 단언이 전부 통과한다(공허한 테스트). `run.mjs` 는 `/api/ui/me` 로 세 토큰이 살아있는지, 비대상도 공개 프로젝트를 실제로 받는지부터 확인한다.
 - **정적 토큰(`AUTH_TOKENS_JSON`)으로 admin 을 못 만든다** — 로드 시 admin/runtime 이 의도적으로 제거된다(회수 불가라서). 그래서 `seed.mjs` 가 `auth_token` 에 DB 토큰을 직접 발급한다(실효 권한 = 토큰 ∩ 멤버라 멤버 scope 도 함께 넣는다).
 - 릴리스 번들에는 `mysql2` 가 없다. 이 검증은 mysql 소스를 안 쓰므로 "쓰이면 즉시 실패"하는 스텁으로 대체한다(조용히 넘어가는 것보다 낫다).
-- 공유 워크스페이스는 운영 유저 소유라 `ubuntu` 가 못 쓴다 → e2e 전용 경로로 돌린다(코드 문제 아님).
+- 공유 워크스페이스는 운영 유저 소유라 e2e 를 돌리는 유저가 못 쓴다 → e2e 전용 경로로 돌린다(코드 문제 아님).
 
 ## 정리
 ```sh
-kill $(sudo ss -ltnp | awk '/:8099 /{match($0,/pid=([0-9]+)/,m); print m[1]}')
-sudo docker exec context-ontology-items-db-1 psql -U lively -d postgres \
-  -c 'DROP DATABASE IF EXISTS vis_e2e' -c 'DROP DATABASE IF EXISTS vis_e2e_dm'
-rm -rf ~/vis-e2e
+. scripts/vis-e2e/port.sh && stop_port_owner 8099
+sudo docker exec "$VIS_E2E_DB_CONTAINER" psql -U lively -d postgres -c 'DROP DATABASE IF EXISTS vis_e2e'
+rm -rf "$VIS_E2E_WORK"
 ```
 
 ## 새 게이트를 넣었으면 red 를 한 번 봐라

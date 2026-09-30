@@ -102,7 +102,7 @@ export async function getTeam(): Promise<ClickUpTeam> {
   return team;
 }
 
-// 소문자 이메일 → 멤버 숫자 id. pm_task_create/assign 의 이메일 해소에 사용.
+// 소문자 이메일 → 멤버 숫자 id. 담당자 이메일을 ClickUp 멤버 id 로 해소할 때 쓴다(옛 pm_task_* 도구는 폐기).
 export async function getMembersEmailMap(teamId: string): Promise<Map<string, number>> {
   const team = await getTeam();
   if (team.id !== teamId) throw new Error(`ClickUp 워크스페이스 불일치: ${teamId}`);

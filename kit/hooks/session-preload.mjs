@@ -132,7 +132,7 @@ const GW = (pickCred("LIVELY_GATEWAY_URL", "GATEWAY_URL", readLocal("gateway-url
 //  그 파일을 전제로 REST 를 호출**하기 때문이다(예: curl -H "Bearer $(cat ~/.lively/token)").
 //  ⚠ 실측(2026-08-04): `sensitive: true` 인 userConfig 값은 **훅 프로세스 env 로 오지 않는다**(공식 문서의
 //   "All values are exported to hook processes" 와 다르다 — 비민감 값만 왔다). 그래서 실제로 이 함수가 굳히는 건
-//   gateway-url 이고, **토큰은 플러그인의 bin/login.mjs(디바이스 코드)가 직접 쓴다.** 아래 로직은 키 종류를 가리지
+//   gateway-url 이고, **토큰은 플러그인의 scripts/login.mjs(디바이스 코드)가 직접 쓴다.** 아래 로직은 키 종류를 가리지
 //   않으므로 향후 sensitive 전달이 열려도 그대로 동작한다.
 //  소유권 규칙: **플러그인이 만든 파일만 플러그인이 갱신한다.** 키트가 깐 파일은 절대 덮지 않는다(설치 경로 충돌 방지).
 //   → plugin-managed.json 에 이 훅이 만든 파일명을 남겨 그걸로 판정한다. 그 목록에 없는 기존 파일은 건드리지 않는다.

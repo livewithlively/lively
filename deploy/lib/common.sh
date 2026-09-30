@@ -399,7 +399,6 @@ PGPASSWORD=$pgpw
 PGDATABASE=items
 ITEMS_DB_PORT=$idbport
 ITEMS_DATABASE_URL=postgres://lively:$pgpw@localhost:$idbport/items
-DOMAINMAP_DATABASE_URL=postgres://lively:$pgpw@localhost:$idbport/domainmap
 # db_query 용 고객 제품 DB 는 웹UI(org_db_source)로 등록(읽기전용 리플리카). DATABASE_URL env 자동등록은 폐기됨.
 
 # ── 에이전트/MCP bearer 토큰(정적) ──

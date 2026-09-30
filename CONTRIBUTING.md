@@ -34,6 +34,8 @@ open an issue first and we will help decide.
 
 Requirements: Node.js 22.9+ (CI and the install script use Node 22; `npm start` and the test
 runner rely on `--env-file-if-exists`), PostgreSQL with pgvector (for integration tests).
+`engines.node` in `package.json` stays at `>=20` on purpose: it is the floor for the member CLI and hooks, and
+`kit/cli/bootstrap-node-gate.test.mjs` (R6) keeps it equal to the CLI's `NODE_MIN_MAJOR`.
 
 ```bash
 npm ci

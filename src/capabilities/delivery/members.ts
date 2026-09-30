@@ -181,5 +181,5 @@ export const membersCapabilities: Capability[] = [
   // (레거시 org_memory 쓰기 엔드포인트 org_memory_upsert/org_memory_remove 는 #536 에서 제거 —
   //  knowledge_* 로 대체된 죽은 표면. 읽기(listMemory→org_overview/org_sections)도 #1256 에서 제거 —
   //  소비자가 없는데 응답의 79~100%(4.3MB)를 차지했고 #1247 과 같은 LIMIT-후-필터였다. store.upsertMemory 만 유지
-//  (그 소비자였던 일회성 migrate 는 scripts/archive/org-migrate.ts 로 보관 — #1313 R5).)
+//  (그 소비자였던 일회성 migrate 는 #1313 R5 에서 코드 밖으로 뺐다 — 이 레포에는 없다).)
 ];
