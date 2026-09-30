@@ -15,11 +15,20 @@
 .v2-ss-row.on .ic { color: var(--blue); }
 .v2-ss-row.child { min-height: 28px; margin-left: 24px; font-size: 12.5px; color: var(--ink-sub); }
 
+/* ── 3판 사이드바(#4233): 들어온 길 셋. 부품은 위키 사이드바 3판(.v2-ksp · .v2-kcat · .v2-pg-past, 47-v2-rail.css) 그대로,
+   여기는 자료 사이드바에만 있는 것: 카드 머리가 링크 · 사람 줄의 얼굴 · 앱 아래 자리 줄의 들여쓰기 · 누를 수 없는 「기록 없음」. */
+.v2-srccard > .v2-ksp-h .v2-ksp-t { text-decoration: none; }
+.v2-ptl-ava.pava { width: 16px; height: 16px; font-size: 8.5px; font-weight: 700; }
+.v2-ss-kid { min-height: 28px; padding-left: 36px; font-weight: 500; font-size: 12.5px; }
+.v2-ss-kid .v2-ss-kidpad { display: none; }
+.v2-ksp-b .v2-ss-kidmore { padding-left: 30px; }
+.v2-ss-none, .v2-ss-none:hover { color: var(--muted); background: none; cursor: default; }
+
 /* ── 본창: 열람실 두 칸 ───────────────────────────────────────────────────── */
 .v2-src { display: flex; height: 100%; min-height: 0; background: var(--bg); }
 
 /* 목록(왼 칸) */
-.v2-srl { width: 380px; flex: none; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line-row); }
+.v2-srl { width: clamp(380px, 36vw, 520px); flex: none; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line-row); }
 .v2-srl-hd { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 0 14px 0 18px; border-bottom: 1px solid var(--line-row); flex: none; }
 .v2-srl-hd .sp { flex: 1; }
 .v2-srl-crumb { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 14px; }
@@ -45,6 +54,21 @@
 .v2-srl-ext.csv { background: var(--bg-note); color: var(--ink-note); }
 .v2-srl-ext.pdf { background: #FDF1EF; color: var(--coral-text); }
 .v2-srl-ic { flex: none; display: grid; place-items: center; width: 30px; color: var(--muted-head); }
+/* 원천 칸(#4233): 올린 사람(얼굴 + 이름) · AI 세션 · 앱과 자리 · 직접 적은 글. 둘째 줄이 아니라 제 칸이다(검토판 2판). */
+.v2-srl-src { flex: none; width: 132px; min-width: 0; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-sub); }
+.v2-srl-src .t { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v2-srl-ava.pava { width: 18px; height: 18px; font-size: 9px; }
+.v2-srl-sic { flex: none; display: grid; place-items: center; width: 18px; color: var(--muted-2); }
+.v2-srl-src.ai .v2-srl-sic { color: var(--blue); }
+.v2-srl-src.person:not(:has(.pava)) { color: var(--muted-2); }
+/* 「올린 사람」 거르개: 「지식이 된 것만」 칩과 같은 알약. 고르면 파란 테. */
+.v2-src-who { flex: none; max-width: 150px; height: 26px; padding: 0 22px 0 9px; border: 1px solid var(--line-net); border-radius: 999px; background: var(--surface); font: inherit; font-size: 11.5px; color: var(--muted); cursor: pointer;
+  appearance: none; -webkit-appearance: none; text-overflow: ellipsis;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 12px) 11px, calc(100% - 8px) 11px; background-size: 4px 4px; background-repeat: no-repeat; }
+.v2-src-who:hover { color: var(--ink); border-color: var(--muted-3-line); }
+.v2-src-who.on { color: var(--blue); border-color: var(--blue); font-weight: 600; }
+.v2-src-who:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 .v2-srl-more { flex: none; padding: 8px 14px 10px 18px; }
 .v2-src-count { font-size: 11.5px; color: var(--muted-3); }
 .v2-src-empty { padding: 26px 18px; font-size: 13px; color: var(--muted); }
@@ -92,6 +116,8 @@
 .v2-src-kn .kl { font-size: 13px; color: var(--ink); text-decoration: none; }
 .v2-src-kn .kl:hover { color: var(--blue); text-decoration: underline; }
 
+/* 들어온 자리 한 줄(#4233): 올린 곳 · 만든 곳 · 가져온 곳 */
+.v2-srd-place { margin: 10px 0 0; font-size: 13px; font-weight: 600; color: var(--ink-sub); }
 /* 스레드(상위·이어진 자료) */
 .v2-src-seck { margin: 22px 0 8px; font-size: 11px; font-weight: 700; color: var(--muted-head); }
 .v2-src-nbs { display: flex; flex-direction: column; gap: 6px; }
@@ -106,6 +132,10 @@
 @media (max-width: 900px) {
   .v2-src { flex-direction: column; }
   .v2-srl { width: auto; max-height: 44%; border-right: 0; border-bottom: 1px solid var(--line-row); }
+}
+@media (max-width: 600px) {
+  .v2-srl-src { width: 96px; }
+  .v2-src-who { max-width: 110px; }
 }
 
 /* ── 사소한 것 접기(#2423 v3.1) — 봇 알림·독립 한 줄짜리는 기본으로 접힌다 ── */

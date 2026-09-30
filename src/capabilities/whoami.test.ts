@@ -67,7 +67,7 @@ await ta("E2·E3: 멤버 레코드가 없거나 조회가 실패해도 '너는 �
   assert.equal(r.display_name, null);
   assert.equal(r.email, ghost.email, "멤버 레코드가 없으면 토큰 이메일로 폴백");
   assert.deepEqual(r.teams, []);
-  assert.deepEqual(r.categories, { owner: [], stakeholder: [] });
+  assert.equal("categories" in r, false, "#4233 — 팀별 소유/이해관계 카테고리 칸은 걷었다");
   assert.deepEqual(r.identities, []);
   assert.deepEqual(r.scopes, ["memory"], "권한은 이 요청 토큰의 실효 scope");
   assert.equal(r.is_admin, false);
@@ -110,14 +110,14 @@ await ta("접속 맥락이 있으면 게이트웨이가 본 하네스·세션·�
   assert.equal(r.session.channel, "mcp");
 });
 
-// ── 앱 세션 토큰(#1780 v2.1 R4-M1, 사양 spec-h8) — 외부 계정·팀·카테고리는 앱에게 주지 않는다 ──
-await ta("앱 토큰: identities·teams·categories 는 비고 app 에 앱 id 가 실린다 / 일반 토큰은 app=null", async () => {
+// ── 앱 세션 토큰(#1780 v2.1 R4-M1, 사양 spec-h8) — 외부 계정·팀은 앱에게 주지 않는다 ──
+await ta("앱 토큰: identities·teams 는 비고 app 에 앱 id 가 실린다 / 일반 토큰은 app=null", async () => {
   const appUser = { ...ghost, appId: "browser" };
   const r = await whoami.handler({}, appUser) as any;
   assert.equal(r.app, "browser");
   assert.deepEqual(r.identities, []);
   assert.deepEqual(r.teams, []);
-  assert.deepEqual(r.categories, { owner: [], stakeholder: [] });
+  assert.equal("categories" in r, false, "#4233 — 팀별 카테고리 칸은 걷었다(앱 세션도 마찬가지)");
   assert.equal(r.member_id, ghost.userId, "사람 축 식별자는 남는다(on_behalf_of 성립)");
   assert.deepEqual(r.scopes, ["memory"]);
   const p = await whoami.handler({}, ghost) as any;

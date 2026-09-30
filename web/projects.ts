@@ -32,7 +32,7 @@ export {
 //   곱해져 elementary 순환이 배로 늘어난다(실측 105건 → 입구를 하나로 좁혀 35건).
 export {
   buildWysiwygToolbar, companyTimelineSection, copyText, mdFromDom, mountBodyEditor, openLocalWorkModal,
-  openProjectSessionForm, pjvAddTask, pjvCloseProjectModalOnRoute, pjvOpenProjectModal, pjvProjectModalOpen,
+  openProjectSessionForm, pjvAddTask, pjvCloseProjectModalOnRoute, pjvGoTaskWorkspace, pjvOpenProjectModal, pjvProjectModalOpen,
   pjvProjectModalRefreshIfRoute, pjvRowMore, pjvTaskRow, renderProjectV2Detail, uploadBodyFile,
 } from './projects/detail.js';
 

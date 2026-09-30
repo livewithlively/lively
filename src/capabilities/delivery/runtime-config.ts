@@ -37,7 +37,7 @@ import {
 import { encryptSecret, secretsEnabled } from "../../org/credentials/secret-box.js";
 import { normalizeDomains, normalizeIssuer, oidcEnvSeed, type OidcSettings, type OidcSettingsPatch, type OidcSettingsPublic } from "../../auth/oidc-config.js";
 import { ee } from "../../enterprise/registry.js"; // #1601 — SSO 구현은 EE. 설정 표면은 코어에 남지만 '켜지나'는 EE 유무에 달렸다
-import { actorOf, restOnly, restRead, str } from "./shared.js";
+import { actorOf, restOnly, restRead, restWork, str } from "./shared.js";
 import { WORKER_POLICY_MAX, type WorkerPolicyPatch } from "../../apps/worker-policy.js";
 
 // #1520 — 관리탭에 돌려줄 OIDC 설정. 암호문(client_secret_enc)은 빼고 '설정됐나'만 준다.
@@ -647,7 +647,7 @@ export const runtimeConfigCapabilities: Capability[] = [
       inject_ontology_guide: z.boolean().optional().describe("#1245 온톨로지 가이드(제품 소유 섹션) 주입 on/off — 본문은 코드 단일 출처라 편집 불가, 주입 여부만 제어"),
       // ── 매니지드 표면 노브(#1454 S2~S5) — 기본값 = 기존 동작 불변. 셀프호스트는 안 건드리면 무변화. ──
       ui_nav: z.object({ tabs: z.record(z.boolean()).optional().describe("탭 슬러그(data-tab) → 노출 여부. **명시적 false 만** 숨김") })
-        .optional().describe("S2 상단 탭 게이팅 — {} = 전부 노출(현행). 예 {tabs:{context:false}} = 맥락 관리 탭 숨김"),
+        .optional().describe("S2 상단 탭 게이팅. {} = 전부 노출(현행). 예 {tabs:{context:false}} = 「수집 · 증류」 탭 숨김"),
       announcement: z.object({
         text: z.string().describe("배너 문구(필수, 500자 이하)"),
         href: z.string().nullable().optional().describe("자세히 링크 — http(s):// 또는 상대경로(/·#)"),
@@ -714,8 +714,8 @@ export const runtimeConfigCapabilities: Capability[] = [
         auth_fail_stop_cron: z.boolean().optional().describe("자격(인증) 실패를 감지하면 그 위탁을 낸 크론을 자동 정지할지(#1675 ③). 기본 켬. 끄면 알림만 가고 크론은 계속 돌아 같은 실패를 반복한다"),
       }).optional().describe("위탁 태스크 정책(#1101) — 무출력 stall 상한. 자격 부재로 claude -p 가 hang 하면 종전엔 timeout(1h)까지 무출력으로 매달렸다. 레포 준비가 느린 박스는 늘리고, 배치 드레인은 줄여 빨리 실패를 본다"),
       context_job_policy: z.object({
-        runner_member: z.string().nullable().optional().describe("맥락관리 잡(증류·분류·관리 등 LLM 잡)을 **이 멤버의 자격으로** 돌린다(#4012 T1). 멤버 id(또는 이메일). null=해제 → 종전 동작(잡 params.requester > created_by). 사람이 안 보는 자리에서 도는 잡의 과금·귀속이 «누가 마지막으로 그 잡을 저장했나» 로 정해지지 않게 하는 자리다. 레인·잡이 자기 requester 를 명시했으면 그쪽이 이긴다(더 구체적인 지정)"),
-      }).optional().describe("맥락관리 잡 실행 신원(#4012 T1 · #3994 D1) — 워크스페이스가 정한 멤버 한 명의 자격으로 증류·분류·관리를 돌린다. 그 멤버의 Claude/Codex 자격(claude_setup_token)이 등록돼 있어야 실제로 선다"),
+        runner_member: z.string().nullable().optional().describe("「수집 · 증류」의 자동 실행 잡(증류: 자료 → 지식 · 카테고리 붙이기, 그리고 관리 등 LLM 잡)을 **이 멤버의 자격으로** 돌린다(#4012 T1). 멤버 id(또는 이메일). null=해제 → 종전 동작(잡 params.requester > created_by). 사람이 안 보는 자리에서 도는 잡의 과금·귀속이 «누가 마지막으로 그 잡을 저장했나» 로 정해지지 않게 하는 자리다. 레인·잡이 자기 requester 를 명시했으면 그쪽이 이긴다(더 구체적인 지정)"),
+      }).optional().describe("「수집 · 증류」 자동 실행 잡의 실행 신원(#4012 T1 · #3994 D1). 워크스페이스가 정한 멤버 한 명의 자격으로 증류·관리를 돌린다. 그 멤버의 Claude/Codex 자격(claude_setup_token)이 등록돼 있어야 실제로 선다"),
       // #1780 Stage B — 앱 worker 조직 예산. 각 값 0 = 무제한/감시 끔.
       //  상한은 WORKER_POLICY_MAX 를 그대로 쓴다(스키마·핸들러·store clamp 가 한 상수를 공유 — 드리프트 금지).
       worker_policy: z.object({
@@ -755,7 +755,7 @@ export const runtimeConfigCapabilities: Capability[] = [
   {
     name: "org_context_job_runner_fill",
     title: "기본 실행 멤버 채우기(비어 있을 때만)",
-    description: "맥락관리 잡(증류·분류·관리)의 워크스페이스 실행 멤버(context_job_policy.runner_member)가 **한 번도 정해진 적 없을 때만** " +
+    description: "「수집 · 증류」 자동 실행 잡(증류·관리)의 워크스페이스 실행 멤버(context_job_policy.runner_member)가 **한 번도 정해진 적 없을 때만** " +
       "이 구성원으로 채운다. 관리자가 비워 둔 것(명시적 null)·이미 정해진 것·env 시드는 건드리지 않는다. 활성 사람 구성원만 받는다.",
     scope: "admin",
     input: {
@@ -779,4 +779,61 @@ export const runtimeConfigCapabilities: Capability[] = [
       };
     },
   },
+  // #4135 — **AI 전달(세션 주입) 설정만** 받는 구성원용 저장. 원준 2026-09-25: "워크스페이스 자체를 수정하는 기능(초대,
+  //  내보내기 등) 말고는 워크스페이스 안에서 모든 사람의 권한이 같음". 종전엔 주입 켜기·너지 문구·기록 인정 툴까지
+  //  org_runtime_update(admin) 한 op 에 보안 필드(허용 목록·OIDC·임베딩 자격)와 묶여 있어 구성원은 AI 전달을 못 고쳤다.
+  //  여기선 그 op 의 **검증을 그대로** 태우되 받는 키를 주입 축으로 좁힌다. 남겨 둔 관리자 몫 둘:
+  //   · hooks.self_update — 구성원 **컴퓨터의 키트**를 바꾸는 스위치(워크스페이스 밖에 닿는다, DANGEROUS_SCOPES 와 같은 근거)
+  //   · work_roots — 구성원 컴퓨터의 디렉터리 경로(비-admin 에겐 조회도 안 한다, 위 org_runtime_config 주석)
+  restWork("org_injection_update", "AI 전달(세션 주입) 설정 수정",
+    "세션 주입 시점 on/off(session_preload·work_flag·stop_writeback_gate)·제품 가이드 주입·세션 종료 너지 문구·기록 인정 툴(write_tools)·" +
+    "외부 인입 툴(pull_tools)을 저장한다. 워크스페이스 구성원 누구나. 키트 자동 업데이트(self_update)·work_roots·보안 필드는 org_runtime_update(관리자).",
+    [{ method: "POST", paths: ["/api/ui/org/injection-config"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      const src = (input ?? {}) as Record<string, unknown>;
+      const extra = Object.keys(src).filter((k) => !(INJECTION_KEYS as readonly string[]).includes(k));
+      if (extra.length) throw new HttpError(400, `이 저장은 AI 전달 설정만 받습니다 — ${extra.join(", ")} 는 org_runtime_update(관리자)`);
+      const cur = await getRuntimeConfig();
+      const out: Record<string, unknown> = {};
+      for (const k of INJECTION_KEYS) if (src[k] !== undefined) out[k] = src[k];
+      if (out.hooks !== undefined) {
+        const h = out.hooks;
+        if (typeof h !== "object" || h === null || Array.isArray(h)) throw new HttpError(400, "hooks 는 객체여야 합니다");
+        const hr = h as Record<string, unknown>;
+        //  화면은 hooks 를 통째로 보낸다(다른 시점 값 보존) — self_update 가 **지금 값 그대로면** 조용히 넘기고, 바꾸려 할 때만 막는다.
+        if ("self_update" in hr && Boolean(hr.self_update) !== (cur.hooks?.self_update !== false)) {
+          throw new HttpError(403, "키트 자동 업데이트(self_update)는 구성원 컴퓨터의 키트를 바꾸는 설정이라 관리자만 바꿉니다");
+        }
+        const merged: Record<string, boolean> = { ...(cur.hooks || {}) } as Record<string, boolean>;
+        for (const k of MEMBER_HOOK_KEYS) if (k in hr) merged[k] = Boolean(hr[k]);
+        out.hooks = merged;
+      }
+      const update = runtimeConfigCapabilities.find((c) => c.name === "org_runtime_update");
+      if (!update) throw new HttpError(500, "org_runtime_update 가 없습니다");
+      const r = await update.handler(out, user, ctx) as { runtimeConfig: Awaited<ReturnType<typeof getRuntimeConfig>> };
+      return { injection: injectionView(r.runtimeConfig) };
+    }, {
+      hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean() }).partial().optional().describe("세션 주입 시점 on/off"),
+      inject_ontology_guide: z.boolean().optional().describe("제품 가이드(라이블리 사용법) 주입 on/off"),
+      writeback_notice: z.string().nullable().optional().describe("세션 종료 너지 문구 — null/'' = 기본값"),
+      write_tools: z.array(z.string()).optional().describe("기록 인정 툴 이름(접두사 없이) — 비우면 기본 목록"),
+      pull_tools: z.array(z.string()).optional().describe("외부 인입으로 볼 MCP 툴 이름 prefix — 비우면 기능 끔"),
+    }),
 ];
+
+/** #4135 — 구성원이 고치는 AI 전달 축(org_injection_update 가 받는 키). */
+const INJECTION_KEYS = ["hooks", "inject_ontology_guide", "writeback_notice", "write_tools", "pull_tools"] as const;
+const MEMBER_HOOK_KEYS = ["session_preload", "work_flag", "stop_writeback_gate"] as const;
+
+/** AI 전달 화면이 구성원에게 보여 줄 주입 설정 — work_roots·보안 필드는 뺀 판(org_overview 의 injectionConfig 도 이 모양). */
+export function injectionView(c: Awaited<ReturnType<typeof getRuntimeConfig>>): {
+  hooks: Record<string, boolean>; inject_ontology_guide: boolean; writeback_notice: string | null; write_tools: string[]; pull_tools: string[];
+} {
+  return {
+    hooks: { ...(c.hooks || {}) } as Record<string, boolean>,
+    inject_ontology_guide: c.inject_ontology_guide !== false,
+    writeback_notice: c.writeback_notice ?? null,
+    write_tools: c.write_tools || [],
+    pull_tools: c.pull_tools || [],
+  };
+}

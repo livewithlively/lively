@@ -13,7 +13,7 @@ import { markEmbeddingPending, KNOWLEDGE_TARGET } from "./embedding-backfill.js"
 import { parseGrep, grepWhere } from "./search-util.js";
 import { visibleListIds, projectRowListId, PUBLIC_VIEWER, type Viewer } from "./visibility.js";
 // 공용 프리미티브(#1313 R21) — 검색·링크와 함께 쓰는 슬러그·감사·가시성 술어·아이콘 표현식.
-import { knowledgeVisWhere, slugify, auditKnowledge, K_ICON_EXPR } from "./knowledge-common.js";
+import { knowledgeVisWhere, slugify, auditKnowledge, K_ICON_EXPR, forgetClassifierSeen } from "./knowledge-common.js";
 import { listKnowledgeLinks, materializeWikiLinksBestEffort, type WikiLinkResult } from "./knowledge-links.js";
 
 // PUBLIC_VIEWER 는 Viewer 개념이라 visibility.ts 로 옮겼다(#1291) — 여기 두면 상수 하나 때문에
@@ -628,6 +628,7 @@ export async function deleteKnowledge(name: string, ctx?: WriteCtx): Promise<Kno
 //  복원 사실(누가/언제)은 감사 op='restore' 로 기록된다. 이미 존재하면(삭제 상태 아님) 거부.
 export async function restoreKnowledge(before: Record<string, unknown>, ctx?: WriteCtx): Promise<KnowledgeRow> {
   const after = await restoreSnapshot<KnowledgeRow>("knowledge", K_COLS, "name", before);
+  await forgetClassifierSeen([after.name]);   // #4194 — 링크 없이 돌아온다(위 주석) → 카테고리 붙이기 레인이 다시 봐야 한다
   await auditKnowledge(after.name, "restore", null, after, ctx);
   return after;
 }
@@ -659,6 +660,7 @@ export async function linkKnowledgeCategory(name: string, categoryId: number, st
 
 export async function unlinkKnowledgeCategory(name: string, categoryId: number, ctx?: WriteCtx): Promise<void> {
   await itemsPool.query(`DELETE FROM knowledge_category WHERE name=$1 AND category_id=$2`, [name, categoryId]);
+  await forgetClassifierSeen([name]);   // #4194 — 카테고리를 잃었으면 카테고리 붙이기 레인이 다시 본다
   await auditKnowledge(name, "unlink_category", { category_id: categoryId }, null, ctx);
 }
 

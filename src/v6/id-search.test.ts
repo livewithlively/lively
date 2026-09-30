@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { idEquals } from "./search-util.js";
+import { exactFirst, idEquals } from "./search-util.js";
 
 // 2026-08-25 상민님: "프로젝트는 번호로도 검색가능하게". 번호 지목은 grep 이 아니라 **정확일치**여야 한다 —
 //  `id::text ILIKE '%1%'` 로 하면 1·10·100·1835 가 다 걸려 목록이 쓰레기가 된다.
@@ -71,4 +71,26 @@ test("★★ [10] null 을 돌려줄 땐 params 를 절대 건드리지 않는�
 test("자리표시자 번호는 params 길이를 따른다(앞에 이미 있으면 $2)", () => {
   const p: unknown[] = ["%탭%"];
   assert.equal(idEquals("p.id", "7", p), "p.id = $2");
+});
+
+// ── exactFirst — 지목한 것이 LIMIT 에 잘리지 않게 정렬 맨 앞에 (2026-09-22 #4156) ──
+//  실측: `2600` 으로 찾으면 #2600 을 본문에 인용한 최근 태스크 8건이 LIMIT 8 을 채워 #2600 이 안 왔다.
+test("exactFirst — 번호면 정렬 머리를 돌려주고 값을 push 한다(# 벗김)", () => {
+  const p: unknown[] = ["%2600%"];
+  assert.equal(exactFirst("p.id", "#2600", "id", p), "(p.id = $2) DESC NULLS LAST, ");
+  assert.deepEqual(p, ["%2600%", 2600]);
+});
+
+test("exactFirst — key 는 소문자 한 토큰 정확일치", () => {
+  const p: unknown[] = [];
+  assert.equal(exactFirst("k.name", "Omni-Search", "name", p), "(k.name = $1) DESC NULLS LAST, ");
+  assert.deepEqual(p, ["omni-search"]);
+});
+
+test("★ exactFirst — 지목이 아니면 빈 문자열이고 params 를 건드리지 않는다", () => {
+  const p: unknown[] = ["%x%"];
+  for (const [q, kind] of [["2600 탭", "id"], ["탭", "id"], ["0", "id"], ["", "name"], ["두 토큰", "name"]] as const) {
+    assert.equal(exactFirst("c", q, kind, p), "", `q=${q}`);
+    assert.deepEqual(p, ["%x%"], `q=${q} 에서 params 가 오염됐다`);
+  }
 });

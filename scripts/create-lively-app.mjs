@@ -28,7 +28,7 @@ w("lively-app.json", JSON.stringify({
   title: id,
   version: "0.1.0",
   // 권한 상한 — 설치·동의 때 사람이 이 목록을 그대로 본다. 필요한 것만 남겨라.
-  permissions: { scopes: [], tools: ["store_insert", "store_query", "store_update", "store_delete", "store_tables"] },
+  permissions: { scopes: [], tools: ["store_insert", "store_query", "store_update", "store_delete", "store_sql", "store_tables"] },
   // 이 앱 전용 표(app.<앱id>__notes) — 테넌트 격리는 서버가 한다.
   data: { tables: [{ name: "notes", columns: [{ name: "body", type: "text" }, { name: "done", type: "bool" }] }] },
   ui: { pages: [{ key: "main", title: id, entry: "ui/index.html" }] },
@@ -97,7 +97,7 @@ w("README.md", `# ${id}
     POST /api/ui/apps/install   { "source": { "kind": "git", "url": "<이 레포 주소>" } }
     (또는 { "kind": "path", "path": "<게이트웨이가 읽을 수 있는 경로>" })
 
-설치 뒤 쓸 사람이 동의하면(앱 목록에서 열기) 세션 화면 곁칸 **[앱]** 탭에서 열립니다.
+설치 뒤 쓸 사람이 동의하면(앱 목록에서 열기) 세션 화면 우측 사이드바 **[앱]** 탭에서 열립니다.
 
 - \`lively-app.json\` — 앱 정의(권한·UI·데이터). 편집기에서 \`$schema\` 로 자동완성됩니다.
 - \`ui/index.html\` — 앱 화면. \`window.lively\` 로 도구·데이터를 씁니다(주입되므로 설치 불요).

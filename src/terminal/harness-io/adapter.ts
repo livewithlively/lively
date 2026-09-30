@@ -14,10 +14,13 @@
 //   pathFor(root, {cwd, convId}) 규약으로 경로를 만들 수 있으면(폴백) — 보고가 없을 때만. null 이면 규약 없음(보고 경로만).
 //   parse(text, state)           원문(줄 경계 정렬된 ndjson 창) → 공통 ChatLine. **null = 이 하네스는 아직 화면으로 못 읽는다**(터미널만).
 //   answer(action)               approve|deny|interrupt → 키. **null = 화면에서 대신 눌러줄 수 없다**(승인 UI 미실측). 있는 척하지 않는다.
+//   term                         **웹 터미널이 이 하네스를 다루는 화면 사실**(#4135 — term-ui.ts). 선택지 키·붙여넣기 접힘·
+//                                부팅 대화상자·마우스 소유. 종전엔 이 사실들이 web/standalone/terminal.ts 에 클로드 기준으로 박혀 있었다.
 //  ⚠ 축을 하나 늘리면 **모든 하네스가 그 축을 답해야 한다**(null 도 답이다) — 그게 '빠진 자리'를 없애는 방법이다(harness-registry 원칙).
 //     계약 테스트(adapter.test.ts)가 catalog.ts HARNESSES 의 모든 key 가 여기 있는지 강제한다.
 import type { ChatKey } from "../send-keys.js";
 import type { ParseResult, ParseState } from "./chat-line.js";
+import { TERM_UI_UNKNOWN, type TermUi } from "./term-ui.js";
 import { claudeIo } from "./claude.js";
 import { codexIo } from "./codex.js";
 import { grokIo } from "./grok.js";
@@ -39,6 +42,10 @@ export const isChatAction = (v: unknown): v is ChatAction => (CHAT_ACTIONS as re
  */
 export type ScreenState = "ready" | "busy" | "dialog" | "auth";
 
+//  ⚠ 화면 사실(TermUi)의 정의는 잎 모듈 term-ui.ts 에 있다 — 어댑터들이 그 값을 쓰는데 여기서 정의하면 순환이 된다.
+//   쓰는 쪽은 종전대로 adapter.js 한 곳만 보면 되도록 다시 내보낸다.
+export { TERM_UI_UNKNOWN, termUiWire, type TermUi, type TermUiWire } from "./term-ui.js";
+
 export interface HarnessSessionAdapter {
   key: string;
   label: string;
@@ -53,7 +60,11 @@ export interface HarnessSessionAdapter {
   parse: ((text: string, state: ParseState) => ParseResult) | null;
   answer: ((action: ChatAction) => ChatKey) | null;
   screen: ((tail: string[]) => ScreenState | null) | null;
+  /** 웹 터미널이 이 하네스를 다루는 화면 사실 (#4135 — TermUi 머리말). 모든 하네스가 답한다(모르면 미실측 값). */
+  term: TermUi;
 }
+
+
 
 // opencode: 단일 파일 계약 미확인(플러그인 event 스트림 → 파일로 떨구는 작업 선행, [[opencode-harness-spec-1519]] ⑤축) —
 //  parse·pathFor 는 명시적 null(있는 척 금지). codex 는 codex.ts(rollout 파서 실측, #1759).
@@ -70,10 +81,13 @@ const opencodeIo: HarnessSessionAdapter = {
     if (/ctrl\+p commands/i.test(s)) return "ready";
     return null;
   },
+  term: TERM_UI_UNKNOWN,   // 화면 사실 미실측(#4135) — 선택지·붙여넣기·대화상자를 아직 눈으로 안 봤다
 };
 // 셸 세션 — AI 없음. 대화 파일도 승인도 없다.
 const shellIo: HarnessSessionAdapter = {
   key: "shell", label: "셸", roots: () => [], filePattern: /$^/, pathFor: null, convIdOk: null, parse: null, answer: null, screen: null,
+  //  셸엔 선택지도 부팅 대화상자도 없다 — 미실측이 아니라 **없음**이다(값이 같아도 이유가 다르다).
+  term: TERM_UI_UNKNOWN,
 };
 
 export const HARNESS_IO: readonly HarnessSessionAdapter[] = [claudeIo, codexIo, opencodeIo, antigravityIo, grokIo, shellIo];

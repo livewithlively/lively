@@ -86,6 +86,17 @@ ok(/CLOSE_SELF_NODE\s*=\s*4409/.test(code(read("src/node/protocol.ts"))),
   ok(m, "B5 applyState 가 판정 완결 뒤에 발견 기록 구독자를 부른다");
 }
 
+// ── B5b. 박동의 되부르기도 같은 순서다 (#4135) ────────────────────────────────
+//  노드는 세션 목록이 바뀔 때만 전체 상태를 보낸다. 박동에도 구독자를 부르되(세션 신원 되채우기의 재판정·재시도),
+//  판정 완결 뒤에 부르는 순서는 applyState 와 같아야 한다 — 다르면 셀프 노드의 스냅샷이 이 길로 샌다.
+{
+  const beat = body(REG, "function applyBeat(");
+  ok(/replaySnapshotOnBeat\(/.test(beat), "B5b-1 박동이 되부르기를 부른다");
+  const f = body(REG, "function replaySnapshotOnBeat(");
+  ok(/probeSelfNodes\(\)\s*\.then\(\s*\(\)\s*=>\s*\{[\s\S]*?nodeSessionsHandler/.test(f), "B5b-2 되부르기도 판정 완결 뒤에 구독자를 부른다");
+  ok(/BEAT_REPLAY_MS/.test(f), "B5b-3 노드마다 최소 간격을 둔다(박동마다 부르지 않는다)");
+}
+
 // ── B6. 발견 기록 — 셀프 노드 스냅샷은 아무것도 적지 않는다 ───────────────────
 {
   const f = body(NSS, "export async function discoverNodeSessions(");
