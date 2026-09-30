@@ -96,6 +96,9 @@ function userLevelHooksBlock() {
       // #1059 정밀복원 — claude 세션 UUID 를 **세션 시작마다** 게이트웨이에 매핑(box-id↔UUID). PostToolUse(편집·MCP)만으론
       //  편집·MCP 없는 대화가 UUID 를 못 보고해 복원이 picker 로 폴백했다 → 시작 이벤트에서 툴 무관하게 보고(work-flag 의 UUID 블록).
       { matcher: "startup|resume|clear", hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
+      // #4219 압축 직후 — 압축 전 미기록 작업이 있으면 «요약에 남은 사실로 이번 턴에 기록하라»를 주입한다. 위 엔트리의 matcher 를
+      //  넓히지 않고 새 엔트리로 둔다(matcher 를 바꾸면 구항목이 회수되지 않고 두 벌이 된다 — safeMergeUserSettings 주석).
+      { matcher: "compact", hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
     ],
     // #1059 — 사용자 정상 종료(/exit·logout)를 게이트웨이에 알려 복원목록에서 '종료됨'으로 구분. ⚠ timeout 명시(5s): SessionEnd 는
     //  종료 경로라 미선언 시 floor 1500ms 로 잘려(#1043 주석 참조) fetch 가 조기 abort 될 수 있다.
@@ -124,6 +127,11 @@ function userLevelHooksBlock() {
     ],
     // #4217 — 자식이 끝나면 그 자식의 기록 fork 표시를 걷는다(payload.agent_id). 기록 없이 끝났으면 다음 Stop 에서 게이트가 1회 넛지.
     SubagentStop: [
+      { hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
+    ],
+    // #4219 압축 넛지 — 미기록 작업이 있으면 PreCompact 의 stdout 이 압축 요약 지시문에 붙어(claude 는 PreCompact 로 모델에게
+    //  말을 걸 수 없다 — 막은 이유도 사람 화면으로만 간다) 요약에 미기록 사실이 원문대로 남는다.
+    PreCompact: [
       { hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
     ],
     // #1221 세션 실행 단계 보고 — 턴 시작(UserPromptSubmit)·확인 필요(Notification)·턴 종료(Stop). 이 셋이 붙어야
@@ -662,6 +670,11 @@ function codexManagedBlock(mcpUrl) {
     //   «미신뢰»로 떨어지고 조용히 안 돈다. 끝에 붙이면 새 두 엔트리만 신뢰 검토 대상이 된다.
     ...cdxHook("PostToolUse", wf, 5, "spawn_agent|collaborationspawn_agent"),
     ...cdxHook("SubagentStop", wf, 5),
+    // #4219 압축 직후 알림 — codex 는 PreCompact 로 할 수 있는 게 턴 중단(continue:false)뿐이라 요약 보존 지시를 못 준다
+    //  (codex-rs hooks/src/events/compact.rs). 압축 뒤 SessionStart(source=compact)는 컨텍스트를 주입한다(core/src/session/mod.rs
+    //  queue_pending_session_start_source → hook_runtime run_pending_session_start_hooks). 같은 이유로 **맨 끝**에 붙인다.
+    //  교정 넛지는 새 엔트리가 없다 — 위 `mcp__lively__.*` 엔트리의 work-flag 가 낸다(이미 신뢰된 훅 그대로).
+    ...cdxHook("SessionStart", wf, 5, "compact"),
     CDX_END,
   ].join("\n");
 }

@@ -9,6 +9,7 @@
 /* 사이드바 열의 폭 = 적어 둔 폭(--pn-side-w)과 상한 가운데 작은 쪽(#3870). 상한 = 격자 폭 - 세션 최소 폭 360px - 손잡이 6px,
    하한 220px(web/lib/side-card-geom.ts sideCap 과 같은 식). 상한을 **그릴 때** 맞추므로 격자가 잠깐 좁아져도 적어 둔 폭은
    깎이지 않고, 격자가 다시 넓어지면 제 폭으로 돌아온다. */
+/* --pn-side-w 의 340 은 곁칸 기본 폭 SIDE_DEF(web/lib/side-card-geom.ts)를 옮겨 적은 첫 페인트 값이다 — 스크립트가 곧 덮는다. 바꾸면 같이 바꾼다. */
 .pn-body { --pn-side-w: 340px; --pn-side-fit: min(var(--pn-side-w), max(220px, calc(100% - 366px))); position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 6px var(--pn-side-fit); background: var(--line); }
 .pn-body.no-side { grid-template-columns: minmax(0, 1fr) 0 0; }
 /* 접힌 곁칸을 다시 펴는 손잡이 — 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 유일한 복구 통로.
@@ -323,21 +324,32 @@
 .pn-frow1 .pn-fine { flex: none; }
 .pn-frow1 .pn-fine.sel { color: var(--blue); font-weight: 700; }
 
-.pn-ftools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.pn-fsp { flex: 1; }
-/* 올리기 두 입구(파일·폴더째)는 한 덩이 — 떨어뜨리면 폴더 아이콘이 옆의 [새 폴더](만들기)에 붙어 읽힌다. */
-.pn-upgrp { display: inline-flex; align-items: center; gap: 3px; }
-.pn-fbtn { flex: none; height: 24px; min-width: 24px; padding: 0 5px; display: inline-flex; align-items: center; justify-content: center; gap: 3px;
-  border: 1px solid var(--line-net); border-radius: 7px; background: var(--bg); font: inherit; font-size: 11.5px; color: var(--muted-head); cursor: pointer; }
-.pn-fbtn:hover { border-color: var(--blue); color: var(--ink); }
-.pn-fbtn.wide { padding: 0 7px; }
-.pn-fcar { font-size: 8px; color: var(--muted-2); }
-.pn-fsize { width: 62px; accent-color: var(--blue); }
+.pn-files:focus-visible .pn-fbody { box-shadow: inset 0 0 0 2px rgba(45,107,240,.28); border-radius: 9px; }   /* 키보드로 들어왔을 때만 — 이 칸이 키를 받는다 */
+
+/* 도구줄은 **한 줄**(#3870) — 좁아지면 JS(fitTools)가 덜 중요한 것부터 .pn-fold 로 접고 [⋯] 에 모은다. 넘치는지 재려면
+   줄이 넘쳐야 한다(nowrap + overflow). 글자는 한 크기(13px)·높이는 한 높이(28px) — 찾기칸만 크게 보이던 것(#3870 신고)을 맞춘다. */
+.pn-ftools { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; overflow: hidden; min-width: 0; }
+.pn-ftools > .pn-fold { display: none !important; }
+.pn-fsp { flex: 1 1 0; min-width: 0; }
+.pn-ftools .btn-text { flex: none; height: 28px; padding: 0 7px; border-radius: 7px; font-size: 13px; white-space: nowrap; }
+.pn-ftools .btn-text:hover { background: var(--bg-punch); color: var(--ink); }
+/* [＋ 올리기 ⌄] 분할 단추 — 한 덩이로 읽히고(사이 틈 0), 누르는 자리는 둘(큰 쪽 = 파일 창 곧바로 · ⌄ = 파일/폴더). 올리면 사이에 가는 선. */
+.pn-upgrp { flex: none; display: inline-flex; align-items: center; border-radius: 7px; }
+.pn-upgrp > .pn-up-main { border-radius: 7px 0 0 7px; padding-right: 5px; }
+.pn-upgrp > .pn-up-car { width: 22px; padding: 0; border-radius: 0 7px 7px 0; display: inline-flex; align-items: center; justify-content: center; color: var(--muted-2);
+  box-shadow: inset 1px 0 0 transparent; }
+.pn-upgrp > .pn-up-car[hidden] { display: none; }
+.pn-upgrp > .pn-up-main:has(+ .pn-up-car[hidden]) { border-radius: 7px; padding-right: 7px; }   /* 폴더 입력을 못 받치는 브라우저 — 한 단추 */
+.pn-upgrp:hover > .pn-up-car { box-shadow: inset 1px 0 0 var(--line-net); }
+.pn-upgrp > .pn-up-car[aria-expanded="true"], .pn-upgrp[aria-expanded="true"] > .pn-up-car { background: var(--bg-punch); color: var(--ink); }
+.pn-fbtn { flex: none; height: 28px; min-width: 28px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  border: 1px solid var(--line-net); border-radius: 7px; background: var(--bg); font: inherit; font-size: 13px; color: var(--muted-head); cursor: pointer; white-space: nowrap; }
+.pn-fbtn[hidden] { display: none; }
+.pn-fbtn:hover, .pn-fbtn[aria-expanded="true"] { border-color: var(--blue); color: var(--ink); }
+.pn-fbtn.wide { padding: 0 7px 0 9px; }
+.pn-fbtn .pn-i.xs { color: var(--muted-2); }
+.pn-fsize { flex: none; width: 62px; accent-color: var(--blue); }
 .pn-fsize[hidden] { display: none; }
-.pn-fsort-pop { min-width: 120px; padding: 4px; display: flex; flex-direction: column; }
-.pn-fsort-i { text-align: left; border: 0; border-radius: 6px; background: none; padding: 6px 8px; font: inherit; font-size: 12.5px; color: var(--ink); cursor: pointer; }
-.pn-fsort-i:hover { background: var(--bg-punch); }
-.pn-fsort-i.on { font-weight: 700; color: var(--blue); }
 
 .pn-fbody { flex: 1; min-height: 0; overflow: auto; position: relative; padding: 2px 12px 16px; --pn-fsz: 110px; container-type: inline-size; }
 .pn-fgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--pn-fsz), 1fr)); gap: 10px; align-content: start; }
@@ -345,6 +357,8 @@
 .pn-fcard:hover { border-color: var(--line-net); background: var(--bg-tint); }
 .pn-fcard.on { border-color: var(--blue); background: var(--bg-tint-2); }
 .pn-fcard.drop-in { border-color: var(--blue); background: var(--bg-punch); box-shadow: inset 0 0 0 1px var(--blue); }
+/* 잘라낸 것(⌘X) — 붙이면 옮겨진다는 표시로 흐리게(탐색기와 같다). */
+.pn-fcard.cut > .pn-fic, .pn-frow2.cut > .pn-fic, .pn-fcard.cut > .pn-fname, .pn-frow2.cut > .pn-fname1 { opacity: .5; }
 .pn-fic { width: 100%; aspect-ratio: 1 / .82; border: 1px solid var(--line); border-radius: 8px; background: var(--gray-bg); display: flex; align-items: center; justify-content: center; overflow: hidden; color: var(--muted-2); }
 .pn-fic img { width: 100%; height: 100%; object-fit: cover; }
 .pn-fic video { width: 100%; height: 100%; object-fit: cover; }
@@ -603,6 +617,10 @@
    작은 종이 한 장(폭 300px)을 만들어 카드 폭에 맞춰 줄인다(JS 가 scale 을 준다). 글자·표·시안이
    뭉개지지 않고 비율 그대로 작아진다 — 브라우저가 11px 글자를 그린 뒤 축소하는 것이라 선이 살아 있다. */
 .pn-fic.has-pv { background: var(--surface); position: relative; }
+/* 새로 받아 그린 미리보기만 살짝 떠오른다 — 페이지 보관함에서 곧바로 선 것은 처음부터 그 자리에 있다(깜빡이지 않게). */
+.pn-fic.pv-in > * { animation: pn-pv-in 160ms ease-out; }
+@keyframes pn-pv-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .pn-fic.pv-in > * { animation: none; } }
 /* 미리보기 한 장 — 논리 크기는 JS 가 내용에 맞춰 준다(글 300 · 시안 1180). 여기서는 자리와 규율만. */
 .pn-fpaper { position: absolute; inset: 0; width: 300px; height: 246px; transform-origin: top left; overflow: hidden; background: var(--surface); pointer-events: none; }
 .pn-fpaper > .pn-fframe { width: 100%; height: 100%; }
@@ -852,9 +870,11 @@ webview.pn-webframe { display: flex; }
 .tl-find::placeholder { color: var(--muted-2); }
 .tl-find:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
 
-/* ── 자료 칸 찾기 (#762) — 툴바의 다른 단추와 같은 높이(28)·반경(8). 좁아지면 이 칸이 먼저 줄어든다. */
-.pn-ffind { flex: 1 1 96px; min-width: 64px; height: 28px; padding: 0 9px; border: 1px solid var(--line-net); border-radius: 8px;
-  background: var(--bg); font: inherit; font-size: 12.5px; color: var(--ink); }
+/* ── 자료 칸 찾기 (#762) — 툴바의 다른 단추와 같은 높이(28)·글자(13). 좁아지면 이 칸이 먼저 줄고(96 까지), 그다음 도구가 접힌다.
+   ⚠ `input.` 을 붙여야 먹는다 — 03-components 의 `input[type="search"]`(14px·반경 9)가 클래스 하나보다 특이도가 높다
+   (#3870 신고: 찾기 글자만 14px 로 옆 [새 폴더] 13px 보다 컸다). */
+input.pn-ffind { flex: 0 1 200px; min-width: 96px; height: 28px; padding: 0 9px; border: 1px solid var(--line-net); border-radius: 7px;
+  background: var(--bg); font: inherit; font-size: 13px; line-height: normal; color: var(--ink); box-shadow: none; }
 .pn-ffind::placeholder { color: var(--muted-2); }
 .pn-ffind:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
 
