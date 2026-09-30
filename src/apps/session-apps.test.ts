@@ -10,7 +10,7 @@ import type { OrgApp, AppGrantRow } from "../org/store/apps.js";
 
 const app = (id: string, over: Partial<OrgApp> = {}): OrgApp => ({
   id, title: id, version: "1.0.0", manifest: {}, source: { kind: "installed" }, content_hash: null,
-  status: "active", enabled: true, installed_by: "alice", installed_at: "", updated_at: "", updated_by: null, ...over,
+  status: "active", enabled: true, installed_by: "alice", installed_at: "", updated_at: "", updated_by: null, edit_mode: "all", edit_members: [], ...over,
 });
 const grant = (tools: string[]): AppGrantRow => ({ app_id: "x", member_id: "alice", scopes: [], tools, granted_at: "", granted_by: null, revoked_at: null });
 const row = (appId: string): SessionAppRow => ({ session_id: "box-a", app_id: appId, member_id: "alice", attached_at: "" });

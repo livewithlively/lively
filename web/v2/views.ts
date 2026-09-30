@@ -89,11 +89,23 @@ export const isPastSess = (s: Sess): boolean => !isLiveSess(s);
  *  그 값이 안 실린 행(구 응답·노드 raw 수집)용 폴백이다. 둘 다 없으면 **내 것이 아니다**(fail-closed —
  *  모르는 세션을 내 할 일로 세는 쪽이 더 나쁘다).
  */
-export const isMineSess = (s: Sess): boolean => {
+export const isMineSess = (s: Pick<Sess, 'owned' | 'raw'>): boolean => {
   if (s.owned) return true;
   const me = String((state.me && (state.me as { userId?: string }).userId) || '');
   return !!me && String((s.raw && s.raw.owner) || '') === me;
 };
+/** 이 세션에 **초대받았나**(#3870) — 초대 명단(raw.invites)에 내가 있다. 주인은 여기서 거짓이다(isMineSess 가 따로 답한다). */
+export const isInvitedSess = (s: Pick<Sess, 'owned' | 'raw'>): boolean => {
+  const me = String((state.me && (state.me as { userId?: string }).userId) || '');
+  const inv = s.raw && Array.isArray(s.raw.invites) ? (s.raw.invites as unknown[]).map(String) : [];
+  return !!me && !isMineSess(s) && inv.includes(me);
+};
+/**
+ * 이 세션을 다른 프로젝트로 옮길 수 있나(#3778 → #3870) — 주인 **또는 초대받은 사람**(원준 2026-09-30 «둘 다 되게»).
+ *  초대받은 사람은 이미 그 세션에 주인 이름으로 지시를 넣을 수 있다 — 소속을 바꾸는 것은 그보다 큰 권한이 아니다.
+ *  최종 판정은 서버다(session-project-routes setSessionProject — 실행은 주인 이름으로).
+ */
+export const canMoveSess = (s: Pick<Sess, 'owned' | 'raw'>): boolean => isMineSess(s) || isInvitedSess(s);
 // 휴지통(#1851) — 멈춘 세션 중 사람이 휴지통으로 보낸 것. 사이드바·홈·확인할 것 어디에도 안 나오고 휴지통 화면에만 있다.
 export const isTrashedSess = (s: Sess): boolean => !!s.trashedAt;
 export const isArchivedProj = (p: Proj | null | undefined): boolean => !!(p && p.archived_at);
@@ -506,6 +518,7 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
     draft: takeUnsentDraft(s.id),
     trail: vopts.trail || null,
     onPickProject: vopts.onPickProject,   // 상단바 [프로젝트 연결] 드롭다운(#1749)
+    canPickProject: (t) => canMoveSess(t),   // #3870 — 주인·초대받은 사람(문패 [세션 옮기기]·우클릭과 같은 술어)
     onRename: vopts.onRename,             // 제목 = 세션 이름(#1719) — 고치면 사이드바·목록이 그 이름으로 바뀐다
     onArchive: vopts.onArchive,
     onToggleFiles: vopts.onToggleFiles,   // 상단바 [파일] → 우패널 파일 탐색기(#1744)

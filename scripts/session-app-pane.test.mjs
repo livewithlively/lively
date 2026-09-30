@@ -1,7 +1,8 @@
-// #4225 — 세션 오른쪽 앱 칸: «AI 가 세션에서 쓴 것이 사람이 보는 앱 화면에 곧바로» 의 두 고리.
+// #4225 — 세션에 붙은 앱(곁칸의 탭): «AI 가 세션에서 쓴 것이 사람이 보는 앱 화면에 곧바로» 의 고리들.
 //  S5 앱 SDK(앱 화면 안) — lively.store.onChange 구독·알림 전달·해지 · 대기 중인 호출과 섞여도 안 깨짐 · lively.session
-//  S6 웹 실시간 스트림 — 앱 사건은 앱 칸으로만(사이드바를 다시 읽지 않는다), 세션 사건은 종전대로 사이드바로
-//  사양 표는 스크래치패드 spec.md(S5·S6) — 아래 이름의 번호가 그 행이다.
+//  S6 웹 실시간 스트림 — 앱 사건은 앱 탭으로만(사이드바를 다시 읽지 않는다), 세션 사건은 종전대로 사이드바로
+//  S9 붙은 목록 비교 — 곁칸 탭을 «켤지»(새로 붙음) · S10 곁칸 배선(저장 안 함 · × = 떼기 · 세션 바뀌면 다시 봄 · [+] 에 없음)
+//  사양 표는 스크래치패드 spec.md — 아래 이름의 번호가 그 행이다.
 //
 //  ⚠ 컴파일 결과(public/app)를 그대로 쓴다 — SDK 는 문자열이라 VM 에서 가짜 창으로 돌리고(앱 iframe 과 같은 조건: window·parent 뿐),
 //   live-sync 는 가짜 fetch 스트림을 먹인다. 관측은 전부 부작용(부모에게 보낸 메시지 · 불린 콜백 수)이다.
@@ -109,14 +110,42 @@ globalThis.location = { origin: "http://x", pathname: "/ui/", search: "", hash: 
   finish(); await tick();
 }
 
-// ══ 배선 — 앱 칸이 세션 부품에 실제로 서고, 스트림을 실제로 듣는다 ═══════════════
+// ══ S9 붙은 목록 비교 — 곁칸 탭을 켤지(새로 붙음) ══════════════════════════════════
+{
+  const { attachedDiff } = await import(join(root, "public/app/v2/session-app-pane.js"));
+  eq(attachedDiff(null, ["a"]), { added: [], changed: true }, "S9-1 첫 판 — 바뀜이지만 새로 붙음은 없다(열자마자 탭을 뺏지 않는다)");
+  eq(attachedDiff(["a"], ["a"]), { added: [], changed: false }, "S9-2 그대로 — 안 바뀜");
+  eq(attachedDiff(["a"], ["a", "b"]), { added: ["b"], changed: true }, "S9-3 하나 더 붙음 — 새로 붙음 [b]");
+  eq(attachedDiff(["a", "b"], ["a"]), { added: [], changed: true }, "S9-4 하나 뗌 — 바뀜 · 새로 붙음 없음");
+  eq(attachedDiff([], ["a"]), { added: ["a"], changed: true }, "S9-5 빈 목록에서 붙음 — 새로 붙음 [a]");
+  const { sessAppTabTitle } = await import(join(root, "public/app/v2/session-app-pane.js"));
+  eq([sessAppTabTitle([{ title: "메모" }]), sessAppTabTitle([{ title: "a" }, { title: "b" }])], ["메모", "앱 2개"], "S9-6 탭 이름 — 하나면 그 앱 이름, 여럿이면 «앱 n개»(탭을 한 번도 안 켜도)");
+}
+
+// ══ S10 곁칸 배선 — 줄 맨 앞의 실제 코드만 인정한다(주석 속 이름으로 통과하지 않게) ══════════════
 {
   const read = (p) => readFileSync(join(root, p), "utf8");
   const PARTS = read("web/v2/panes-parts.ts");
-  const DOCK = read("web/v2/session-app-dock.ts");
-  ok(/^\s*const dock = createSessionAppDock\(stage,/m.test(PARTS) && /^\s*root\.append\(dock\.row\);/m.test(PARTS), "세션 부품이 세션 화면 옆 앱 칸 줄을 붙인다");
-  ok(/^\s*dock\.setSession\(/m.test(PARTS), "보는 세션이 바뀌면 앱 칸도 그 세션으로 바뀐다");
-  ok(/^\s*const offLive = onAppEvent\(/m.test(DOCK), "앱 칸이 실시간 앱 사건을 듣는다");
+  const PANES = read("web/v2/panes.ts");
+  const PANE = read("web/v2/session-app-pane.ts");
+  ok(/^const DERIVED_TABS: ReadonlySet<string> = new Set\(\[SESSAPP_TAB\]\);/m.test(PANES), "S10-1 붙은 앱 탭은 배치에 저장하지 않는 탭이다");
+  ok(/^\s*lay = stripDerived\(lay\);/m.test(PANES) && /^\s*const saved = stripDerived\(lay\);/m.test(PANES), "S10-1 배치를 읽을 때도 쓸 때도 걷는다");
+  ok(/^\s*for \(const pane of panes\.values\(\)\) \{ const p = pane\.parts\.get\(key\); if \(p\?\.onTabClose\) \{ p\.onTabClose\(\); return; \} \}/m.test(PANES), "S10-2 탭의 × 는 부품의 뜻(떼기)을 먼저 따른다");
+  ok(/onTabClose: \(\) => \{/.test(PANE) && /detachAppFromSession\(s, cur\.app_id\)/.test(PANE), "S10-2 붙은 앱 탭의 × = 이 세션에서 떼기");
+  const announce = (PANES.match(/function announceSession\(sid: string \| null\): void \{[\s\S]*?\n  \}/) || [""])[0];
+  ok(/^\s*syncSessApps\(\);$/m.test(announce), "S10-3 세션이 바뀌면 붙은 목록을 다시 본다");
+  ok(/^\s*syncSessApps\(\);\s+\/\/ #4225/m.test(PANES), "S10-3 첫 그림 뒤 붙은 목록을 본다");
+  ok(/\{ type: 'sessapp', name: '붙은 앱', icon: 'apps', pickable: false,/.test(PARTS) && /^\s*if \(type === 'sessapp'\) return sessAppPart\(ctx\);/m.test(PARTS), "S10-4 붙은 앱 탭은 [+] 에 없고(pickable:false) 부품으로 선다");
+  ok(!/createSessionAppDock|pn-appdock/.test(PARTS), "옛 «세션 옆 앱 칸» 은 세션 부품에서 걷혔다");
+  const moveFn = (PANES.match(/function moveTab\(key: TabKey, from: Zone, to: Zone\): void \{[\s\S]*?\n  \}/) || [""])[0];
+  ok(/^\s*dropTab\(from, key\);$/m.test(moveFn) && !/removeTab\(/.test(moveFn), "S10-5 탭 옮기기는 닫기가 아니다 — 붙은 앱 탭을 다른 칸으로 옮겨도 떼지 않는다(dropTab)");
+  const syncFn = (PANES.match(/function syncSessApps\(\): void \{[\s\S]*?\n  \}/) || [""])[0];
+  ok(/\{ const z = zoneOf\(SESSAPP_TAB\); if \(z\) dropTab\(z, SESSAPP_TAB\); \}/.test(syncFn), "S10-6 세션이 바뀌면 옛 세션의 앱 탭부터 걷는다(새 목록이 오기 전 남의 앱 탭이 안 남게)");
+  ok(/^\s*ctx\.paneRoot\(\)\.dispatchEvent\(new CustomEvent\(SHOW_SESSAPP_EVT, \{ detail: \{ app_id: a\.id \} \}\)\);/m.test(PARTS)
+    && /^\s*wrap\.addEventListener\(SHOW_SESSAPP_EVT, onShowSessApp\);/m.test(PANES), "S10-8 이미 붙은 앱을 다시 누르면 그 탭을 켠다(«새로 붙음» 이 없어도)");
+  ok(/^\s*tabTitles\.set\(SESSAPP_TAB, sessAppTabTitle\(apps\)\);/m.test(PANES), "S10-9 탭 이름은 셸이 목록으로 먼저 건다(부품이 서기 전에도 앱 이름)");
+  ok(PANES.indexOf("let sessAppOff") > 0 && PANES.indexOf("let sessAppOff") < PANES.indexOf("function announceSession"), "S10-7 구독 상태는 announceSession 보다 먼저 선언된다(TDZ)");
+  ok(/^\s*const offLive = onAppEvent\(/m.test(PANE), "앱 탭이 실시간 앱 사건(데이터 변경)을 듣는다");
 }
 
 console.log(`\n${pass} passed`);

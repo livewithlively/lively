@@ -1,53 +1,55 @@
-# scripts/ — 운영·빌드 스크립트와 테스트 계층 안내
+# scripts/ — operations and build scripts, and the test tiers
 
-## 테스트 6계층 (#1313 R6 — 무엇이 어디서 도는가)
+*[한국어](README.ko.md)*
 
-| 계층 | 무엇 | 실행 | 전제 |
+## Six test tiers (#1313 R6 — what runs where)
+
+| Tier | What | How to run | Prerequisites |
 |---|---|---|---|
-| ① 유닛 체인 | `src/**/*.test.ts`(→dist) + `kit\|scripts\|deploy/**/*.test.mjs` — [run-tests.mjs](./run-tests.mjs) 가 **소스 글롭으로 자동 발견**(등록 불요) | `npm test` (빌드 포함 · **병렬·실패해도 끝까지** → [실행 정책](#러너-실행-정책-1431--끝까지--병렬)) · 부분 실행 `node scripts/run-tests.mjs <부분문자열>` | 없음 (DB 불요) |
-| ② itest | `scripts/*.itest.mjs` — 실 DB 필요한 통합(스키마 init·세션로그 CAS 등) | `npm run test:itest` · 개별 `node --env-file-if-exists=.env scripts/<x>.itest.mjs` | `ITEMS_DATABASE_URL` (.env) |
-| ③ integration/ | [scripts/integration/](./integration/) — 실 PG·실 게이트웨이 대상 수동 e2e(각 파일 머리에 실행법 주석) | 파일별 수동 | 파일별 상이(PG·실행 중 게이트웨이·시크릿 키) |
-| ④ vis-e2e/ | [scripts/vis-e2e/](./vis-e2e/) — 가시성 축·UI 배선 e2e(전용 README 있음) | `vis-e2e/README.md` 참조 | 실행 중 게이트웨이 |
-| ⑤ pg-test | `src/**/*.pg-test.mjs` (현재 org/auth/device-auth.pg-test.mjs) — **CI 전용** 실 Postgres 통합 | CI(test.yml)가 pgvector 서비스로 실행 · 로컬은 `ITEMS_DATABASE_URL=… node src/org/auth/device-auth.pg-test.mjs` | 실 PG |
-| ⑥ 훅 bash | [kit/hooks/test-hooks.sh](../kit/hooks/test-hooks.sh) — 훅 셸 경로 러너 | `kit/hooks/test-hooks.sh` | 없음 |
+| ① Unit chain | `src/**/*.test.ts`(→dist) + `kit\|scripts\|deploy\|desktop/**/*.test.mjs` — [run-tests.mjs](./run-tests.mjs) **discovers them from source globs** (no registration needed) | `npm test` (includes the build · **parallel, keeps going after failures** → [execution policy](#runner-execution-policy-1431--run-to-completion--parallel)) · partial run `node scripts/run-tests.mjs <substring>` | None (no DB needed) |
+| ② itest | `scripts/*.itest.mjs` — integration tests that need a real DB (schema init, session-log CAS, etc.) | `npm run test:itest` · single file `node --env-file-if-exists=.env scripts/<x>.itest.mjs` | `ITEMS_DATABASE_URL` (.env) |
+| ③ integration/ | [scripts/integration/](./integration/) — manual e2e against a real PG and a real gateway (each file's header comment says how to run it) | Manual, per file | Varies by file (PG, a running gateway, secret keys) |
+| ④ vis-e2e/ | [scripts/vis-e2e/](./vis-e2e/) — e2e for the visibility axes and UI wiring (has its own README) | See `vis-e2e/README.md` | A running gateway |
+| ⑤ pg-test | `src/**/*.pg-test.mjs` — real-Postgres integration (excluded from the unit runner). Because the runner doesn't collect them, **each file only runs once it is registered as its own step in test.yml** (a missing registration is caught by `scripts/pg-test-registered.test.mjs`) | CI (test.yml) runs each registered file against a pgvector service · locally `ITEMS_DATABASE_URL=… node <file>` | A real PG (pgvector) |
+| ⑥ Hook bash | [kit/hooks/test-hooks.sh](../kit/hooks/test-hooks.sh) — runner for the hooks' shell paths | `kit/hooks/test-hooks.sh` | None |
 
-- ①이 기본 안전망이다 — 테스트 추가는 **파일 생성만**(package.json 등록 금지, 러너가 자동 발견).
-- `*.itest.mjs`·`*.pg-test.mjs` 는 러너 기본 수집에서 제외된다(러너 헤더 주석 참조).
+- ① is the default safety net — adding a test means **just creating the file** (do not register it in package.json; the runner discovers it).
+- `*.itest.mjs` and `*.pg-test.mjs` are excluded from the runner's default collection (see the runner's header comment).
 
-### 러너 실행 정책 (#1431 — 끝까지 · 병렬)
-종전 러너는 **직렬 + 첫 실패에서 즉시 중단**이라, 실패 1건이 뒤쪽 100여 건을 가리고 10코어에서 1코어만 썼다. 이제:
+### Runner execution policy (#1431 — run to completion · parallel)
+The old runner was **serial and stopped at the first failure**, so one failure hid the 100-odd files after it, and it used one core out of ten. Now:
 
-- **끝까지 실행이 기본** — 실패해도 남은 파일을 계속 돌리고 끝에 실패 목록을 한 번에 모아 보고한다. 종료코드는 종전처럼 **첫 실패의 exit code** 를 전파.
-- **병렬이 기본** — 기본 `-j min(코어수, 8)`. 이 계층이 병렬 안전한 근거: 파일 하나 = 프로세스 하나 · 실 DB 무사용 · temp 는 전부 `mkdtemp` · 포트는 `listen(0)` · HOME 은 샌드박스(가드: `src/ops/state-dir.test.ts`, `kit/cli/bootstrap-node-gate.test.mjs`).
-- **빌드도 러너가 돈다** — `npm test` = `node scripts/run-tests.mjs --build`. 종전 `npm run build && …` 는 `&&` 라서 웹 tsc 타입오류 하나가 노드 테스트 160건을 통째로 가렸다. 이제 빌드 실패를 기억해두고 돌 수 있는 테스트는 돌린 뒤 둘 다 보고한다(종료코드엔 반영).
-- 빌드 산출물 누락도 같은 원칙 — 누락분만 실패로 기록하고 나머지는 돌린다(조용히 건너뛰지 않는다).
+- **Running to completion is the default** — after a failure it keeps running the remaining files and reports all failures together at the end. As before, the exit code propagates **the first failure's exit code**.
+- **Parallel is the default** — default `-j min(cores, 8)`. Why this tier is safe to run in parallel: one file = one process · no real DB · every temp dir comes from `mkdtemp` · ports use `listen(0)` · HOME is sandboxed (guards: `src/ops/state-dir.test.ts`, `kit/cli/bootstrap-node-gate.test.mjs`).
+- **The runner also runs the build** — `npm test` = `node scripts/run-tests.mjs --build`. The old `npm run build && …` used `&&`, so a single web tsc type error hid all 160 Node tests. Now the runner remembers the build failure, runs whatever tests can still run, and reports both (the build failure is reflected in the exit code).
+- Missing build outputs follow the same principle — only the missing ones are recorded as failures and the rest still run (nothing is skipped silently).
 
-| 옵션 | 뜻 |
+| Option | Meaning |
 |---|---|
-| `<부분문자열>…` | 경로 부분일치만(여러 개면 OR). **0건 매치는 실패**(exit 1) — 오타가 거짓 green 이 되지 않게 |
-| `-j N` / `--jobs=N` | 동시 실행수. `-j 1` 은 자식 출력을 그대로 흘린다(한 건 디버깅) |
-| `--fail-fast` | 첫 실패에서 중단(종전 기본 동작) |
-| `--verbose` | 통과한 파일의 출력도 전부 표시(병렬 모드는 기본이 한 줄 요약) |
-| `--slowest[=N]` | 끝에 느린 파일 N건(기본 10) — 병렬 wall 의 하한은 **최장 1건**이라 이걸로 범인을 찾는다 |
-| `--list` / `--itest` / `--build` | 발견 목록만 / ②계층(실 DB — 직렬 고정) / 빌드까지 러너가 실행 |
-| `--scope=kit,desktop` | 지정 면의 `*.test.mjs` 만 수집(src→dist 매핑 생략). **윈도우 CI 가 이걸로 공통 러너를 쓴다** — 그 잡은 `npm ci`·빌드를 안 하므로 dist 를 수집하면 전부 '산출물 없음'이 된다 |
-| `--budget=N` | 유닛 파일당 상한(초). 넘으면 **통과해도 실패**. 기본은 끔 — CI 리눅스 잡이 `--budget=45` 로 켠다 |
+| `<substring>…` | Only paths containing the substring (several = OR). **Zero matches is a failure** (exit 1) — so a typo can't become a false green |
+| `-j N` / `--jobs=N` | Concurrency. `-j 1` streams child output as-is (for debugging a single file) |
+| `--fail-fast` | Stop at the first failure (the old default) |
+| `--verbose` | Also show the full output of passing files (parallel mode defaults to a one-line summary) |
+| `--slowest[=N]` | Show the N slowest files at the end (default 10) — the lower bound on parallel wall time is **the single longest file**, so use this to find the culprit |
+| `--list` / `--itest` / `--build` | Only list what was discovered / tier ② (real DB — always serial) / have the runner run the build too |
+| `--scope=kit,desktop` | Collect only `*.test.mjs` in the given areas (skips the src→dist mapping). **The Windows CI job uses this to run the common runner** — that job does no `npm ci` or build, so collecting dist would make everything "missing output" |
+| `--budget=N` | Per-file limit for unit tests (seconds). Exceeding it **fails even if the file passed**. Off by default — the CI Linux job turns it on with `--budget=45` |
 
-### 파일당 시간 예산 (#2457 — 2026-08-31)
+### Per-file time budget (#2457 — 2026-08-31)
 
-유닛 파일 하나가 상한을 넘으면 통과해도 실패다. **넘는다는 건 그 파일이 유닛이 아니거나(→ `*.itest.mjs` 로 옮겨라) 무언가를 기다린다는 뜻**이고, 후자가 실제 사고였다:
+A unit file that exceeds the limit fails even if it passed. **Exceeding it means the file either isn't a unit test (→ move it to `*.itest.mjs`) or is waiting on something**, and the latter was a real incident:
 
-> DB 주소(`ITEMS_DATABASE_URL`)가 없으면 pg 는 **libpq 기본값 localhost:5432** 로 붙는다. CI 유닛 잡에는 그 env 가 없는데 `services.postgres` 가 5432 에 살아 있어, DB 를 쓰지 않는 유닛 6건이 **파일당 60초씩** 대기했다(유닛 CPU 604초의 60%). 맥에는 DB 가 없어 즉시 ECONNREFUSED → 같은 6건이 1.8초. **실행 시간이 그 기계 포트 상태의 함수**였던 것이다.
-> 넉 달간 아무도 몰랐던 이유는 단순하다 — **아무도 재고 있지 않았다.** 지금은 `src/db/client.ts` 가 주소 없으면 접속을 시도하지 않고(`src/db/no-db-socket.test.ts` 가 고정), 이 예산이 재발을 당일 잡는다.
+> Without a DB address (`ITEMS_DATABASE_URL`), pg connects to **the libpq default, localhost:5432**. The CI unit job has no such env var, but `services.postgres` is alive on 5432, so six unit tests that don't use a DB waited **60 seconds per file** (60% of the 604 s of unit CPU). A Mac has no DB there, so the connection fails immediately with ECONNREFUSED → the same six took 1.8 s. **Run time was a function of that machine's port state.**
+> Nobody noticed for four months for a simple reason — **nobody was measuring.** Now `src/db/client.ts` does not attempt a connection without an address (pinned by `src/db/no-db-socket.test.ts`), and this budget catches a recurrence the same day.
 
-**실측(2026-08-03, 10코어 · 160건):** 직렬 121s → `-j 8` 42s. 그때 wall 을 잡고 있던 건 `kit/cli/project-status.test.mjs` 한 건(36.5s = 전체 30%)이었고, 원인은 `lively status` 의 harness 프로브가 **실제 `claude mcp list`** 를 부르던 것(스텁 bin 으로 가려 1.6s). 유닛 테스트가 사람의 로컬 MCP 설정에 시간을 의존하면 안 된다 — CLI 를 띄우는 테스트는 `kit/cli/lively.test.mjs` 의 `newHome` 처럼 **스텁 bin 을 PATH 앞에** 둘 것.
+**Measured (2026-08-03, 10 cores · 160 files):** serial 121 s → `-j 8` 42 s. What held the wall time then was a single file, `kit/cli/project-status.test.mjs` (36.5 s = 30% of the total), because the harness probe in `lively status` called **the real `claude mcp list`** (hidden behind a stub bin, it takes 1.6 s). A unit test's run time must not depend on a person's local MCP setup — tests that launch the CLI should put **a stub bin at the front of PATH**, like `newHome` in `kit/cli/lively.test.mjs`.
 
-## 주요 스크립트
-- `run-tests.mjs` — 유닛 체인 러너(위 ①·②). 병렬·끝까지 실행 + `--build` — 옵션은 위 [실행 정책](#러너-실행-정책-1431--끝까지--병렬)
-- `build-node-agent.mjs` — 워커 노드 에이전트 esbuild 번들
-- `restart-gateway.sh` — 라이브 박스 게이트웨이 빌드·재기동(빌드 성공 시에만 재시작)
-- `restage.sh` — `stage` 브랜치 재조립(main 을 새 바닥으로 깔고 얹혀 있던 브랜치 재머지). **손으로 `reset --hard` 하지 말 것** — PR 없는 브랜치·stage 직접 커밋이 조용히 사라진다. 이 스크립트는 그걸 검사해 막고, 백업 태그를 남긴다
-- `check-css-drops.mjs` — CSS 셀렉터 유실 가드(#317)
-- `register-*.mjs|sh` — 클라이언트/훅 등록 일회 도구
-- `seed-notion-fixture.mjs` — 커넥터 픽스처 시드
-- `archive/` — 완료된 일회성 백필·마이그레이션(이슈번호 접두) 보관. **새 일회성 스크립트는 완료 후 여기로.**
+## Main scripts
+- `run-tests.mjs` — the unit chain runner (① and ② above). Parallel, run-to-completion, plus `--build` — options are in the [execution policy](#runner-execution-policy-1431--run-to-completion--parallel) above
+- `build-node-agent.mjs` — esbuild bundle of the worker node agent
+- `restart-gateway.sh` — build and restart the gateway on the live box (restarts only if the build succeeds)
+- `restage.sh` — rebuild the `stage` branch (lay main down as the new base and re-merge the branches that were on it). **Don't do it by hand with `reset --hard`** — branches without a PR and commits made directly on stage silently disappear. This script checks for those and blocks, and leaves a backup tag
+- `check-css-drops.mjs` — guard against dropped CSS selectors (#317)
+- `register-*.mjs|sh` — one-off tools for registering clients/hooks
+- `seed-notion-fixture.mjs` — seeds a connector fixture
+- `archive/` — where finished one-off backfills and migrations (prefixed with the issue number) are moved (not present in the public repository yet). **Move new one-off scripts here once they're done.**

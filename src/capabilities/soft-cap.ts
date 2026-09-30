@@ -99,6 +99,7 @@ export const HARD_CAP_OK: Readonly<Record<string, readonly string[]>> = {
     "external_system", "external_id", "external_url", "external_instance", // PM 미러 좌표 — 잘리면 링크가 깨진다
   ],
   delegate_run: ["subpath", "repo", "ref", "node", "harness"],             // 실행 좌표 — 잘린 경로·브랜치·하네스 키로 돌면 안 된다
+  store_sql: ["app_id"],                                                  // #4226 앱 id — 잘리면 다른 앱(또는 없는 앱)을 가리킨다
 };
 
 /**

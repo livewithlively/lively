@@ -110,7 +110,7 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
   eq(at("  seedLayoutStore();") > 0 && at("  seedLayoutStore();") < at("  let lay = loadLayout(id);"), true,
     "W1 배치를 읽기 **전에** 들인다 — 뒤에 부르면 첫 화면은 탭 없이 뜨고 다음에야 보인다");
   eq(/side: \['files', 'tasks', 'knowledge', 'apps'\]/.test(panes), true, "W2 기본 배치의 곁칸에 tasks 가 선다(자료 · 태스크 · 지식 · 앱)");
-  eq(/JSON\.stringify\(\{ \.\.\.st, last: lay, p: map \}\)/.test(panes), true,
+  eq(/JSON\.stringify\(\{ \.\.\.st, last: (lay|saved), p: map \}\)/.test(panes), true,   // #4225 — saved = 파생 탭(붙은 앱)을 걷은 사본
     "W3 배치를 저장할 때 표식(seeded)을 지우지 않는다 — 지우면 다음에 열 때 닫은 탭이 되살아난다");
   const parts = read("web/v2/panes-parts.ts");
   eq(/\{ type: 'tasks', name: '프로젝트', icon: 'projtask'/.test(parts), true, "W4 종류 이름은 'tasks' 그대로(저장된 배치가 이 이름으로 기억한다) · 표시 이름은 프로젝트(#4135) · 그림은 폴더 안의 태스크");
@@ -213,6 +213,9 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
   const css = read("public/styles/49-v2-projpane.css");
   eq([/\.pj-rdopen \{ max-height: [^;]+; overflow: auto;/.test(css), /iconBtn\('ext'/.test(tk), /'띄워 읽기'/.test(tk), /\.pj-body \{[^}]*background: var\(--bg-tint\)/.test(css)], [true, false, true, false],
     "K10 편 본문은 제 안에서 스크롤(접기 단추가 머리에 남는다) · 본문 머리에 프로젝트 창 단추 없음 · 창 띄우기는 글자 단추 · 본문 바탕은 파랑 틴트가 아니다");
+  eq([/if \(!bodyMore \|\| t\.closest\('\.pj-bh'\)\) toggle\(\);/.test(tk), /if \(!has\) \{ void startBodyEdit\(\); return; \}/.test(tk), /iconBtn\('pencil', '본문 고치기'/.test(tk),
+      /lsSet\(BODY_H_KEY, String\(bodyH\)\)/.test(tk), /if \(bodyEdit \|\| bodyDragging\) return;/.test(tk), /\.pj-rsz \{[^}]*cursor: ns-resize/.test(css)], [true, true, true, true, true, true],
+    "K11 본문은 한 번 누르면 펼친다(고치기는 연필 · 빈 본문만 바로 적기) · 편 뒤엔 머리 줄로 접는다 · 아래 변을 끌어 길이 조절(기기에 기억, 끄는 동안 다시 그리지 않는다)");
   eq(/<link rel="stylesheet" href="\.\/styles\/49-v2-taxonomy\.css">\s*\n<link rel="stylesheet" href="\.\/styles\/49-v2-projpane\.css">/.test(read("public/index.html")), true, "K8 앱 CSS 가 실린다");
 }
 

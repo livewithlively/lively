@@ -204,7 +204,7 @@ export function tasksPart(ctx: PartCtx): Part {
     head.querySelector('.pn-tk-bar')?.setAttribute('aria-valuenow', String(pct));
   }
 
-  // ── 본문 — 늘 펼쳐 읽고, 누르면 고친다 ─────────────────────────────────────────────────
+  // ── 본문 — 접힌 앞부분을 누르면 펴 읽고(제 안에서 스크롤 · 아래 변을 끌어 길이 조절), 연필로 고친다 ─────────────────────────────────────────────────
   const bodyBox = el('div', { class: 'pj-bodywrap' });
   let bodyEdit = false, bodyMore = false, bodySig = '';
   let bodyBase = '';
@@ -220,37 +220,104 @@ export function tasksPart(ctx: PartCtx): Part {
   const iconBtn = (icon: string, title: string, run: () => void): HTMLElement =>
     el('button', { class: 'pj-ib', type: 'button', title, 'aria-label': title, onclick: (e: Event) => { e.stopPropagation(); run(); } }, pnIcon(icon, 'pn-i sm'));
 
+  //  편 본문의 세로 길이 — 사람이 아래 변을 끌어 정한다(원준 2026-09-30). 취향이라 기기에 기억하고, 없으면 CSS 기본(30vh).
+  const BODY_H_KEY = 'pn_proj_body_h';
+  const BODY_H_MIN = 66;
+  let bodyH = Number(lsGet(BODY_H_KEY, '')) || 0;
+  let bodyDragging = false;
+  const LIST_KEEP = 120;   // 본문을 아무리 늘려도 아래 목록에 남기는 높이
+  /** 본문이 지금 높이(cur)에서 더 늘 수 있는 상한 — 늘어난 만큼 아래 목록이 줄므로, 목록에 LIST_KEEP 은 남긴다. */
+  const bodyHMax = (cur: number): number => Math.max(BODY_H_MIN, cur + list.clientHeight - LIST_KEEP);
+  /** 기억해 둔 길이가 지금 곁칸에 너무 크면(창을 줄였다 · 이 세션의 태스크가 늘었다) 그리는 값만 줄인다 — 기억한 값은 그대로 둔다. */
+  function fitBody(): void {
+    if (!bodyMore || bodyDragging) return;
+    const rd = bodyBox.querySelector('.pj-rdopen') as HTMLElement | null;
+    if (!rd || !list.clientHeight && !root.clientHeight) return;
+    const over = LIST_KEEP - list.clientHeight;
+    if (over > 0 && rd.clientHeight > BODY_H_MIN) rd.style.maxHeight = Math.max(BODY_H_MIN, rd.clientHeight - over) + 'px';
+  }
+
   function paintBody(force?: boolean): void {
-    if (bodyEdit) return;
+    if (bodyEdit || bodyDragging) return;
     const md = String(proj().description || '');
-    const sig = md.length + '|' + md.slice(0, 200) + md.slice(-200) + '|' + (bodyMore ? 1 : 0);
+    const sig = md.length + '|' + md.slice(0, 200) + md.slice(-200) + '|' + (bodyMore ? 1 : 0) + '|' + bodyH;
     if (!force && sig === bodySig) return;
     bodySig = sig;
     const shown = stripLeadNotice(md);
+    const has = !!shown.trim();
+    const toggle = (): void => { bodyMore = !bodyMore; paintBody(true); };
     //  접힌 글은 앞부분만(흐려지며 끝남), 편 글은 **제 안에서 스크롤**한다 — 곁칸 전체를 밀어 내리지 않고, 접기 단추가 늘 머리에 남게(원준 2026-09-27).
     const rd = el('div', { class: 'pj-rd md-rendered' + (bodyMore ? ' pj-rdopen' : ' pj-prd') },
-      shown.trim() ? renderMarkdown(shown.length > BODY_READ_MAX ? shown.slice(0, BODY_READ_MAX) + '\n\n…(길어서 여기까지 — [크게 보기]나 프로젝트 창에서 전문)' : shown)
+      has ? renderMarkdown(shown.length > BODY_READ_MAX ? shown.slice(0, BODY_READ_MAX) + '\n\n…(길어서 여기까지 — [띄워 읽기]나 프로젝트 창에서 전문)' : shown)
         : el('p', { class: 'pj-empty', text: '아직 적지 않았어요 — 눌러서 이 프로젝트가 무엇인지 적어 두면 세션도 그걸 읽고 일합니다.' }));
+    if (bodyMore && bodyH) rd.style.maxHeight = bodyH + 'px';
+    //  ★한 번 누르면 **펼친다**(고치기가 아니다 — 원준 2026-09-30 «한 번 누르면 접힌 게 펼쳐지는 것에 가깝게»). 고치기는 머리의 연필.
+    //   편 뒤에는 글 안을 눌러도 접지 않는다(읽고 긁고 스크롤하는 자리다) — 접기는 머리 줄이나 꺾쇠 단추.
     const box = el('div', {
-      class: 'pj-body', role: 'button', tabindex: '0', title: '누르면 고칩니다',
+      class: 'pj-body' + (bodyMore ? ' open' : ''), tabindex: '0', title: !has ? '누르면 적습니다' : bodyMore ? '' : '누르면 펼칩니다',
       onclick: (e: Event) => {
-        if ((e.target as HTMLElement).closest('a,button')) return;
-        if (window.getSelection()?.toString()) return;             // 글을 긁는 중 — 고치기로 넘어가지 않는다
-        void startBodyEdit();
+        const t = e.target as HTMLElement;
+        if (t.closest('a,button,.pj-rsz')) return;
+        if (window.getSelection()?.toString()) return;             // 글을 긁는 중
+        if (!has) { void startBodyEdit(); return; }
+        if (!bodyMore || t.closest('.pj-bh')) toggle();
       },
-      onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' && e.target === e.currentTarget) { e.preventDefault(); void startBodyEdit(); } },
+      onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' && e.target === e.currentTarget) { e.preventDefault(); if (has) toggle(); else void startBodyEdit(); } },
     },
-      el('div', { class: 'pj-bh' }, el('span', { class: 'pj-bl', text: '본문' }),
+      el('div', { class: 'pj-bh', title: has ? (bodyMore ? '누르면 접습니다' : '누르면 펼칩니다') : '' }, el('span', { class: 'pj-bl', text: '본문' }),
         el('span', { class: 'pn-fine', text: md.length ? `${md.length.toLocaleString('ko-KR')}자` : '비어 있음' }),
         el('span', { class: 'grow' }),
+        iconBtn('pencil', '본문 고치기', () => void startBodyEdit()),
         iconBtn('copy', '본문 전체 복사', copyBody),
         //  «창에 띄워 읽기» 는 글자까지 단다 — 화살표 아이콘만 두면 전체 화면으로 읽혀 창이 뜬다는 느낌이 안 든다(원준 2026-09-27).
         el('button', { class: 'pj-popb', type: 'button', title: '본문만 창에 띄워 읽습니다', onclick: (e: Event) => { e.stopPropagation(); bigBody(); } },
           pnIcon('window', 'pn-i xs'), el('span', { text: '띄워 읽기' })),
-        shown.trim() ? el('button', { class: 'pj-ib pj-foldb', type: 'button', title: bodyMore ? '접기' : '펼치기', 'aria-label': bodyMore ? '본문 접기' : '본문 펼치기', 'aria-expanded': String(bodyMore),
-          onclick: (e: Event) => { e.stopPropagation(); bodyMore = !bodyMore; paintBody(true); } }, pnIcon(bodyMore ? 'up' : 'chevD', 'pn-i sm')) : null),
-      rd);
+        has ? el('button', { class: 'pj-ib pj-foldb', type: 'button', title: bodyMore ? '접기' : '펼치기', 'aria-label': bodyMore ? '본문 접기' : '본문 펼치기', 'aria-expanded': String(bodyMore),
+          onclick: (e: Event) => { e.stopPropagation(); toggle(); } }, pnIcon(bodyMore ? 'up' : 'chevD', 'pn-i sm')) : null),
+      rd,
+      has ? resizeHandle(rd) : null);
     replaceKids(bodyBox, box);
+    fitBody();
+  }
+
+  /** 본문 아래 변의 손잡이 — 끌면 본문 칸의 세로 길이가 바뀐다. 접혀 있을 때 끌면 펴지면서 그 길이가 된다. 두 번 누르면 기본 길이로. */
+  function resizeHandle(rd: HTMLElement): HTMLElement {
+    const h = el('div', { class: 'pj-rsz', role: 'separator', 'aria-orientation': 'horizontal', 'aria-label': '본문 길이 조절', title: '끌어서 본문 길이를 조절합니다 · 두 번 누르면 기본 길이' });
+    let y0 = 0, h0 = 0, moved = false;
+    const apply = (px: number): number => {
+      //  글보다 길게는 늘리지 않는다 — 빈 자리만 생긴다.
+      const v = Math.round(Math.max(BODY_H_MIN, Math.min(px, bodyHMax(rd.clientHeight), rd.scrollHeight)));
+      rd.style.maxHeight = v + 'px';
+      return v;
+    };
+    h.addEventListener('pointerdown', (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      e.preventDefault(); e.stopPropagation();
+      y0 = e.clientY; h0 = rd.clientHeight; moved = false; bodyDragging = true;
+      try { h.setPointerCapture(e.pointerId); } catch (_) { /* 잡지 못해도 끌기는 된다 */ }
+      h.classList.add('on');
+    });
+    h.addEventListener('pointermove', (e: PointerEvent) => {
+      if (!bodyDragging) return;
+      const dy = e.clientY - y0;
+      if (!moved && Math.abs(dy) < 3) return;
+      if (!moved) { moved = true; rd.classList.remove('pj-prd'); rd.classList.add('pj-rdopen'); }   // 접힌 채 끌기 시작 — 펴면서 간다
+      bodyH = apply(h0 + dy);
+    });
+    const end = (e: PointerEvent): void => {
+      if (!bodyDragging) return;
+      bodyDragging = false; h.classList.remove('on');
+      try { h.releasePointerCapture(e.pointerId); } catch (_) { /* 이미 풀렸다 */ }
+      if (!moved) return;
+      bodyMore = true;
+      lsSet(BODY_H_KEY, String(bodyH));
+      paintBody(true);
+    };
+    h.addEventListener('pointerup', end);
+    h.addEventListener('pointercancel', end);
+    h.addEventListener('dblclick', (e: Event) => { e.stopPropagation(); bodyH = 0; lsSet(BODY_H_KEY, ''); paintBody(true); });
+    h.addEventListener('click', (e: Event) => e.stopPropagation());
+    return h;
   }
 
   /** 본문 고치기 — 종전 [본문] 접이와 같은 편집칸(가드 저장·충돌 안내·못 남긴 글 보관). 칸을 떠나면 읽기로 돌아간다. */
@@ -750,6 +817,7 @@ export function tasksPart(ctx: PartCtx): Part {
     paintHead();
     paintBody();
     paintList();
+    fitBody();
   }
 
   root.append(head, top, list, addBox);

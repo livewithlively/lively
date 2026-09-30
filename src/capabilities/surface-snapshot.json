@@ -2902,7 +2902,7 @@
   "rest": [
    "POST /api/ui/v6/projects/:id"
   ],
-  "input_hash": "ba81bca40298d6c8"
+  "input_hash": "aa951c74f28f8215"
  },
  {
   "name": "project_rename_v6",
@@ -3255,6 +3255,16 @@
   "input_hash": "c1d69d7da7004e68"
  },
  {
+  "name": "project_status_template_set_default_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/status-templates/set-default"
+  ],
+  "input_hash": "bb6f6d0bea40cd91"
+ },
+ {
   "name": "project_status_template_update_v6",
   "scope": "memory",
   "mcp": true,
@@ -3273,16 +3283,6 @@
    "POST /api/ui/v6/status-templates/:id/delete"
   ],
   "input_hash": "4dc36ab67eecb455"
- },
- {
-  "name": "project_status_template_set_default_v6",
-  "scope": "memory",
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/v6/status-templates/set-default"
-  ],
-  "input_hash": "bb6f6d0bea40cd91"
  },
  {
   "name": "favorites_index",
@@ -3755,6 +3755,16 @@
   "input_hash": "fd3d0d02bfb143e5"
  },
  {
+  "name": "feed_target_drain",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/feed-targets/drain"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
   "name": "feed_target_update",
   "scope": "memory",
   "mcp": true,
@@ -3783,16 +3793,6 @@
    "POST /api/ui/feed-targets/:id/categories"
   ],
   "input_hash": "4419d1b448f36ddf"
- },
- {
-  "name": "feed_target_drain",
-  "scope": "memory",
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/feed-targets/drain"
-  ],
-  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "cron_list",
@@ -4795,6 +4795,26 @@
   "input_hash": "037b9188084bc8a2"
  },
  {
+  "name": "app_save",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/save"
+  ],
+  "input_hash": "f86cf7a7f136fb27"
+ },
+ {
+  "name": "app_edit_policy_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/edit-policy"
+  ],
+  "input_hash": "9018d760e68657cc"
+ },
+ {
   "name": "org_app_remove",
   "scope": "admin",
   "mcp": true,
@@ -4824,6 +4844,26 @@
    "GET /api/ui/apps/:id/ui/:page"
   ],
   "input_hash": "f48e51524b8110f6"
+ },
+ {
+  "name": "app_data_snapshots",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-snapshots"
+  ],
+  "input_hash": "bc9bbb24b7a66ec4"
+ },
+ {
+  "name": "app_data_restore",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/restore"
+  ],
+  "input_hash": "64c3b3c10e0c4859"
  },
  {
   "name": "org_app_tool_call",
@@ -4874,6 +4914,16 @@
    "POST /api/ui/store/:table/delete"
   ],
   "input_hash": "17e2cc4c8f0c071d"
+ },
+ {
+  "name": "store_sql",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/store/sql"
+  ],
+  "input_hash": "e5ee7bc163a0f9d5"
  },
  {
   "name": "store_tables",

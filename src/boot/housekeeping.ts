@@ -428,6 +428,13 @@ function startBackgroundSweeps(): void {
   setTimeout(() => { void groupBackfill(); }, 120_000).unref();
   setInterval(() => { void groupBackfill(); }, 60 * 60_000).unref();
 
+  // #4226 — 앱 데이터 일일 떠 두기(7일 보관). 워크스페이스 스코프라 순회한다. 함수가 20시간 안에 뜬 앱을 건너뛰므로
+  //  1시간 주기로 돌아도 하루 한 번이다. 부팅 3분 뒤 1회 — 재기동이 잦아도 하루를 거르지 않게.
+  const appSnapshot = () => perTenant("app-data-snapshot",
+    () => import("../apps/app-snapshot.js").then((m) => m.runDailyAppSnapshots()));
+  setTimeout(() => { void appSnapshot(); }, 180_000).unref();
+  setInterval(() => { void appSnapshot(); }, 60 * 60_000).unref();
+
   // #2022 — 유령 세션 인스턴스 청소(세션은 없는데 좌측 목록에 남은 행). 부팅 90초 뒤 1회 + 6h 주기.
   //  느긋해도 되는 일이다(조용한 지 3일 지난 것만 본다) — 자주 돌 이유가 없고, 닫기는 되돌릴 수 있다.
   setTimeout(() => { void perTenant("ghost-instance-sweep", () => sweepGhostSessionInstances()); }, 90_000).unref();
