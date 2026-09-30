@@ -384,7 +384,8 @@ const appDataSnapshots: Capability = {
   input: { app_id: z.string().optional() },
   expose: {
     mcp: true,
-    rest: [{ method: "GET", paths: ["/api/ui/apps/snapshots"], parse: (req) => ({ app_id: (req.query as Record<string, unknown>)?.app_id }) }],
+    //  /api/ui/apps/snapshots 는 앞서 마운트된 GET /api/ui/apps/:id(org_app_get)에 가려진다(매니지드 끝단 실측) — app-activity 와 같은 모양으로.
+    rest: [{ method: "GET", paths: ["/api/ui/app-snapshots"], parse: (req) => ({ app_id: (req.query as Record<string, unknown>)?.app_id }) }],
   },
   handler: async (input: Record<string, unknown>) => {
     const id = input.app_id == null || input.app_id === "" ? null : String(input.app_id);
