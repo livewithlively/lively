@@ -75,8 +75,9 @@ else ok("E9 omni 가 세션 문을 조립하지 않는다");
 const main = code("web/v2/main.ts", "MAIN_SRC");
 const hookAt = main.indexOf("setOmniHooks(");
 const hook = hookAt >= 0 ? main.slice(hookAt, main.indexOf("bindOmniKey()", hookAt)) : "";
-const opens = hook.indexOf("openProjectPage(");
-const routesProject = /projectPageId\(href\)/.test(hook) && opens >= 0;
+//  모양까지 본다 — 판독값을 그대로 쓰고 · 조건 없이(⌘ 클릭 포함) 열고 · 곧바로 끝낸다(일반 경로로 새지 않는다).
+const opens = hook.search(/if \(pid\) \{\s*openProjectPage\(pid\);\s*return;\s*\}/);
+const routesProject = /const pid = projectPageId\(href\);/.test(hook) && opens >= 0;
 const beforeGeneric = opens >= 0 && opens < hook.indexOf("tabsApi.find(href)");
 if (hook && routesProject && beforeGeneric) ok("E10 통합검색 open 훅이 프로젝트 화면을 [→] 와 같은 문으로 연다");
 else bad("E10 통합검색 open 훅이 프로젝트 화면을 [→] 와 같은 문으로 연다", `훅 ${!!hook} · 판독+열기 ${routesProject} · 일반 경로보다 먼저 ${beforeGeneric}`);
