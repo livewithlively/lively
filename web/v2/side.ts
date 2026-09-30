@@ -1775,12 +1775,16 @@ function saveFavTop(): void {
   try { if (id) localStorage.setItem(FAV_TOP_STORE, String(id)); else localStorage.removeItem(FAV_TOP_STORE); } catch (_) { /* 이번 화면은 된다 */ }
 }
 
-/** [프로젝트] 구역에 들어갈 때의 주소. 즐겨찾기 맨 위 리스트가 있으면 그 보드로, 없으면 종전대로 전체. */
+/** [프로젝트] 구역에 들어갈 때의 주소. 즐겨찾기 맨 위 리스트가 있으면 그 보드로, 없다고 알면 「전체」(#/projects2/all), 아직 모르면 종전 주소. */
 export function projLandingRoute(): string {
   loadFavLists();   // 아직 모르면 지금 당겨 둔다 — 이번엔 못 써도 다음 진입은 안다
   let id = favTopListId();
   if (!id) { try { id = Number(localStorage.getItem(FAV_TOP_STORE)) || 0; } catch (_) { id = 0; } }
-  return id ? '#/projects2/l/' + id : '#/app/projects2';
+  if (id) return '#/projects2/l/' + id;
+  //  #3870 — 종전엔 없을 때도 #/app/projects2 였다. 액자는 전체 보드를 그리는데 사이드바는 아무 줄도 안 켜졌다(격리 리뷰 지적).
+  //   «없다» 는 즐겨찾기가 비었거나, 리스트까지 왔는데 즐겨찾기한 리스트가 그 안에 없을 때만이다 — 한쪽만 온 순간은 «모른다».
+  const noFav = !!favLists && (favLists.size === 0 || !!(last && (last.data.lists || []).length));
+  return noFav ? '#/projects2/all' : '#/app/projects2';
 }
 
 /** 지금 보드가 선 스코프 — 주소에서 읽는다(#/projects2/l/<id> · /f/<id> · /none · /all). 액자 안에서 일어난 이동은 여기 안 비친다(그건 그 화면의 일). */
@@ -1971,7 +1975,7 @@ function renderProjTree(): void {
   const slot = newOpen ? newRowSlot(plan.groups, newIn) : { at: 'top' as const };
   const build = (alloc: Record<string, number>): HTMLElement[] => {
     //  「전체」는 늘 서므로 빈 안내는 즐겨찾기 · 기타 줄로 가른다(전체 한 줄만 있으면 아직 정리할 것이 없다는 뜻이다).
-    if (!plan.groups.length) return plan.favs.length || plan.noneN ? [] : [el('p', { class: 'v2-empty', text: '아직 리스트가 없어요. 위 ＋ 에서 리스트를 만들면 여기 섭니다.' })];
+    if (!plan.groups.length) return (plan.favs.length || plan.noneN) ? [] : [el('p', { class: 'v2-empty', text: '아직 리스트가 없어요. 위 ＋ 에서 리스트를 만들면 여기 섭니다.' })];
     return plan.groups.flatMap((g) => [label(g),
       ...(newOpen && slot.at === 'label' && slot.folderId === g.folderId ? [newProjRow()] : []),
       ...g.cards.map((c) => card(c, alloc[c.key] ?? c.rows.length))]);

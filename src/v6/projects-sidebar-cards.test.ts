@@ -302,7 +302,7 @@ test("A7 배선(셸): 「전체」 줄이 고정 줄 맨 앞에 서고, #/projec
   assert.match(body, /href: '#\/projects2\/all'/);
   assert.match(body, /icon\('proj', 'v2-ptl-ic'\), el\('span', \{ class: 'n', text: '전체' \}\), cnt\(plan\.allN\)\)/);
   assert.match(body, /const fixed: HTMLElement\[\] = \[allRow, \.\.\.plan\.favs\.map\(favRow\)\];/);
-  assert.match(body, /if \(!plan\.groups\.length\) return plan\.favs\.length \|\| plan\.noneN \? \[\] : \[el\('p', \{ class: 'v2-empty'/);
+  assert.match(body, /if \(!plan\.groups\.length\) return \(plan\.favs\.length \|\| plan\.noneN\) \? \[\] : \[el\('p', \{ class: 'v2-empty'/);
 });
 
 test("A8 배선(보드 주소): 클래식 라우터가 /all 을 전체 스코프(__all__)로 넘긴다", () => {
@@ -315,6 +315,35 @@ test("A9 배선(보드): 전체로 들어오면 스코프를 풀고(explicit 아
   const a = BOARD.indexOf("async function renderProjectV2Board(view, scopeKey?) {");
   const head = BOARD.slice(a, a + 2400);
   assert.match(head, /if \(allScope\) \{ pjvSidebarSel\.key = '__all__'; pjvSidebarSel\.explicit = false; pjvApplyView\(pjvLoadScopeView\('__all__'\) \|\| pjvDefaultView\('__all__'\)\); \}\s*else if \(scopeKey\) \{ pjvSidebarSel\.key = scopeKey; pjvSidebarSel\.explicit = true; \}/);
-  assert.match(head, /else if \(s === '1' \|\| \(scopeKey && !allScope\)\) pjvBoardView\.byArea = true;/);
+  assert.match(head, /const picksScope = !!scopeKey && !allScope;/);
+  assert.match(head, /else if \(s === '1' \|\| picksScope\) pjvBoardView\.byArea = true; \} catch \(_\) \{ if \(picksScope\) pjvBoardView\.byArea = true; \}/);
   assert.match(BOARD, /const rerenderScoped = \(\) => \{ syncToggles\(\); pjvSaveScopeView\(pjvSidebarSel\.key \|\| '__all__', pjvSnapshotView\(\)\); render\(\); \};/);
+});
+
+//  착지(projLandingRoute)는 모듈 상태(favLists · last · localStorage)에 붙어 있어 소스에서 두 함수를 떼어 가짜 상태로 돌린다.
+function landingOf(st: { favLists: Set<number> | null; lists: { id: number }[] | null; cache?: string | null }): string {
+  const cut = (sig: string): string => {
+    const a = SIDE.indexOf(sig);
+    const b = SIDE.indexOf("\n}\n", a);
+    assert.ok(a >= 0 && b > a, sig + " 가 있다");
+    return SIDE.slice(a, b + 2).replace(/^export /, "");
+  };
+  const src = cut("function favTopListId(): number {") + cut("export function projLandingRoute(): string {");
+  const js = ts.transpileModule(src, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const store = new Map<string, string>(st.cache != null ? [["FAV", st.cache]] : []);
+  const localStorage = { getItem: (k: string) => store.get(k) ?? null };
+  const last = st.lists ? { data: { lists: st.lists } } : null;
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  return new Function("loadFavLists", "favLists", "last", "localStorage", "FAV_TOP_STORE", js + "\nreturn projLandingRoute();")(() => {}, st.favLists, last, localStorage, "FAV");
+}
+
+test("A10 ★착지: 즐겨찾기가 없다고 알면 「전체」 · 있으면 맨 위 리스트 · 모르면 종전 주소(늦은 답으로 화면을 갈아엎지 않는다)", () => {
+  const L = [{ id: 5 }, { id: 9 }];
+  assert.equal(landingOf({ favLists: new Set([9, 5]), lists: L }), "#/projects2/l/5", "리스트 순서로 맨 위");
+  assert.equal(landingOf({ favLists: new Set(), lists: L }), "#/projects2/all", "즐겨찾기 0 → 전체");
+  assert.equal(landingOf({ favLists: new Set(), lists: null }), "#/projects2/all", "즐겨찾기가 비었다는 답만으로도 없다고 안다");
+  assert.equal(landingOf({ favLists: new Set([77]), lists: L }), "#/projects2/all", "즐겨찾기한 리스트가 목록에 없다 → 전체");
+  assert.equal(landingOf({ favLists: null, lists: L }), "#/app/projects2", "즐겨찾기를 모른다");
+  assert.equal(landingOf({ favLists: new Set([5]), lists: null }), "#/app/projects2", "리스트를 모른다 — 한쪽만 온 순간");
+  assert.equal(landingOf({ favLists: null, lists: null, cache: "7" }), "#/projects2/l/7", "모를 때는 지난번 착지(캐시)");
 });

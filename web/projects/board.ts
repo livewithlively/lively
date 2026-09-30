@@ -185,10 +185,13 @@ async function renderProjectV2Board(view, scopeKey?) {
   //  사이드바를 닫아도 스코프는 유지되므로, 스코프 딥링크가 사이드바를 강제로 다시 열지 않는다).
   //  #3870 — 「전체」(#/projects2/all, 셸 사이드바 맨 위 줄)는 스코프를 고르는 게 아니라 푸는 것이다. 보던 리스트의 뷰(칸반 · 저장 뷰)가
   //   전체 보드로 새지 않게 전체 보드 자신의 뷰로 갈아 끼운다(pjvExitAreaMode 와 같은 이유). 사이드바를 억지로 열지도 않는다.
+  //   ⚠ 클래식 단독 화면에서 자기 사이드바(byArea)가 켜져 있으면 renderArea 가 __all__ 을 첫 스코프로 해소한다(#473 — 그 사이드바엔 전체가 없다).
+  //   /all 이 «전체 보드» 인 곳은 셸 액자(embed)와 사이드바를 닫은 단독 화면이다. pjvScopeHash('__all__') 가 #/projects2 인 것도 그 때문이다.
   const allScope = scopeKey === '__all__';
+  const picksScope = !!scopeKey && !allScope;
   if (allScope) { pjvSidebarSel.key = '__all__'; pjvSidebarSel.explicit = false; pjvApplyView(pjvLoadScopeView('__all__') || pjvDefaultView('__all__')); }
   else if (scopeKey) { pjvSidebarSel.key = scopeKey; pjvSidebarSel.explicit = true; }
-  try { const s = localStorage.getItem('pjv:sideOpen'); if (s === '0') pjvBoardView.byArea = false; else if (s === '1' || (scopeKey && !allScope)) pjvBoardView.byArea = true; } catch (_) { if (scopeKey && !allScope) pjvBoardView.byArea = true; }
+  try { const s = localStorage.getItem('pjv:sideOpen'); if (s === '0') pjvBoardView.byArea = false; else if (s === '1' || picksScope) pjvBoardView.byArea = true; } catch (_) { if (picksScope) pjvBoardView.byArea = true; }
   // #2043 — 새 셸 액자(?embed=1) 안에서는 이 패널을 세우지 않는다. 폴더·리스트로 오가는 일은 셸의 [프로젝트] 사이드바
   //  (폴더 · 리스트 렌즈, web/v2/side.ts renderProjTree)가 맡고, 이 화면은 그 사이드바가 보낸 스코프(#/projects2/l|f/<id> · /none)를
   //  보드로 그린다. 같은 목록이 두 열에 서던 것(레일 #2016 §6 '남은 것')을 여기서 끊는다. 스코프는 패널이 접혀도 유지된다(#1067 §2).
@@ -1178,8 +1181,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     scopeChip.append(x);
   };
 
-  // 뷰/저장뷰 변경은 현재 스코프에 영속(#541) — 스코프가 살아있으면(사이드바 켜짐 or #662 스코프 유지 모드) 스코프별 저장.
-  //  #3870 — 전체 보드(__all__)도 제 뷰를 기억한다. 셸 사이드바 「전체」로 다시 들어오면 위 renderProjectV2Board 가 이 값을 읽는다.
+  // 뷰/저장뷰 변경은 현재 스코프에 영속(#541) — 늘 지금 스코프 키로 저장한다. 종전엔 사이드바가 꺼진 전체 보드(__all__)만 빼고 저장했다.
+  //  #3870 — 이제 전체 보드도 제 뷰를 기억한다. 셸 사이드바 「전체」로 다시 들어오면 위 renderProjectV2Board 가 이 값을 읽는다.
   const rerenderScoped = () => { syncToggles(); pjvSaveScopeView(pjvSidebarSel.key || '__all__', pjvSnapshotView()); render(); };
   savedViewBtn.onclick = (e) => { e.stopPropagation(); pjvSavedViewMenu(savedViewBtn, rerenderScoped); };
   // 사이드바 토글 — byArea 를 뒤집고, 열 땐 펼친 상태로 연다. 사이드바를 켜면 '폴더로 나누기'(인라인)는 끈다(상호배타).

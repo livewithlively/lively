@@ -6,7 +6,7 @@
 //  · 구조는 그대로다(즐겨찾기 · 폴더 › 하위 폴더 › 리스트). 묶음을 보여 주는 방식만 위키 사이드바와 같게 한다.
 //  · 맨 위 고정 줄: 「전체」(늘 선다) → 즐겨찾기 리스트(리스트 순서) → 「기타 (미분류)」(리스트에 안 든 열린 프로젝트가 있을 때만).
 //    「전체」는 위키의 「전체 문서」와 같은 자리다(#3870, 원준 2026-09-30 «기타 (미분류) 위에 전체 보는 게 있으면 좋겠음»).
-//    수는 보드의 전체 보기가 보이는 것과 같다 — 보관 폴더 밖 리스트의 열린 프로젝트 + 기타.
+//    수 = 보관 폴더 밖 리스트의 열린 프로젝트 + 기타(보드의 전체 보기가 보이는 것 — 아래 allN 의 ⚠).
 //  · 최상위 폴더마다 이름표 한 줄, 그 아래 하위 폴더마다 카드 한 장. 최상위 폴더에 바로 든 리스트는 카드 한 장
 //    (하위 폴더 카드가 있으면 「그 밖의 리스트」, 없으면 「리스트」). 하위 폴더 카드에는 그 아래 폴더의 리스트까지 트리 순서로 든다.
 //  · 폴더 밖 리스트는 맨 끝 이름표 「폴더 밖」 아래 카드 「리스트」 한 장. 보관 폴더와 그 아래는 없다.
@@ -134,7 +134,8 @@ export function planProjCards<L extends ProjCardList>(input: {
     : input.sel === 'all' ? 'all'
     : selFolder ? 'folder:' + cardFolderOf(Number(selFolder[1])) : '';
   const noneN = Math.max(0, input.noneN || 0);
-  //  보관 폴더 안 리스트는 보드의 전체 보기에서도 빠진다(projects/board.ts boardProjects) — 같은 수를 세운다.
+  //  보관 폴더 안 리스트는 보드의 전체 보기에서도 빠진다(projects/board.ts boardProjects). ⚠ 보드는 보관 폴더가 여럿이면 id 가 가장
+  //   작은 하나만 뺀다(sidebar.ts pjvFindArchiveFolder) — 여기는 카드와 같이 모두 뺀다. 보관 폴더가 하나인 지금은 같은 수다(매니지드 685=685).
   const allN = lists.reduce((a, l) => a + (l.folder_id != null && archived.has(l.folder_id) ? 0 : openN(l)), noneN);
   return { favs, noneN, allN, groups, onKey };
 }
