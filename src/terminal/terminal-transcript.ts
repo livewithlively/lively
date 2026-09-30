@@ -174,7 +174,8 @@ export async function materializeTranscriptIfMissing(cwd: string, sessionId: str
 }
 
 // 사용자 질문이 아닌 '주입/노이즈' 메시지 — 슬래시커맨드 래퍼·태스크알림·시스템리마인더·caveat·중단표시 등.
-const INJECTED_RE = /^\s*(<command-name|<local-command-|<command-message|<command-args|<bash-|<task-notification|<system-reminder|\[Request interrupted|Caveat:|This session is being continued)/;
+//  대화 검색 색인(v6/conv-search.ts, #4517)도 같은 자로 사람 말을 가른다 — 규칙을 두 벌로 두지 않는다.
+export const INJECTED_RE =/^\s*(<command-name|<local-command-|<command-message|<command-args|<bash-|<task-notification|<system-reminder|\[Request interrupted|Caveat:|This session is being continued)/;
 // 사용자가 보내고 esc 로 취소한 표식('[Request interrupted by user]' / '...for tool use'). 그 앞 턴을 폐기하는 신호.
 const INTERRUPT_RE = /^\s*\[Request interrupted/;
 

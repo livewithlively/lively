@@ -622,5 +622,12 @@ export function findSessIn(sessions: Sess[], id: string): Sess | undefined {
     || sessions.find((x) => x.logId === id)
     || sessions.find((x) => (x.altIds || []).includes(id));
 }
+/** 대화 uuid 로 세션 찾기(#4517 통합검색 대화 결과) — 위 규칙 + **초대받은 박스의 지금 대화**.
+ *  초대받은 박스는 남의 기록이라 내 기록 목록(/api/ui/v6/sessions)에 없어 logId 가 접히지 않는다. 그 박스가 지금 돌리는
+ *  대화는 박스 행의 claudeSessionId 로만 알 수 있다. 못 찾으면 undefined — 부르는 쪽이 대화록 화면으로 연다. */
+export function findSessByConv(sessions: Sess[], convId: string): Sess | undefined {
+  if (!convId) return undefined;
+  return findSessIn(sessions, convId) || sessions.find((x) => !!x.raw && x.raw.claudeSessionId === convId);
+}
 
 export function toastOnce(msg: string): void { toast(msg); }

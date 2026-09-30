@@ -115,6 +115,8 @@ const MUST_FANOUT = [
   //  #2509 — 유휴 회수는 **가른 뒤** 순회 대상이 됐다. 이 축은 워크스페이스의 성질(그 세션의 마지막 활동)이라
   //   primary 만 돌면 비-primary 세션은 TTL 을 켜 놔도 영영 안 걷힌다.
   "idle-reap",
+  //  #4517 — 대화 검색 색인은 그 워크스페이스의 세션 기록을 풀어 그 워크스페이스 표에 담는다.
+  "conv-index",
 ];
 
 /** 순회하면 **안 되는** 것 — 이유가 각자 다르다. 하나로 뭉뚱그리면 다음 사람이 잘못 푼다. */
@@ -212,6 +214,7 @@ test("[R4] 순회 목록과 제외 목록이 겹치지 않는다 — 두 표가 
  */
 const NEEDS_BOOT_ONESHOT = [
   "embedding-backfill", "session-title-backfill", "session-state-backfill", "builtin-app-seed", "outbox",
+  "conv-index",   // #4517 — 배포 직후가 옛 기록이 가장 많이 밀린 때다
 ];
 
 test("[R6] 부팅 직후가 중요한 정비는 **부팅 1회**를 갖는다 — 주기가 재기동보다 길면 영영 안 돈다", () => {

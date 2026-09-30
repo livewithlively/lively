@@ -343,6 +343,10 @@ function startBackgroundSweeps(): void {
   }, 6 * 60 * 60_000).unref();
   // #905 C1 — 제목 컬럼 도입(슬⑤b) 전 캡처/백필된 세션의 title 소급 채움(부팅 35초 후 1회, 멱등). 다 채우면 no-op.
   setTimeout(() => { void perTenant("session-title-backfill", () => backfillSessionTitles()); }, 35_000).unref();
+  // #4517 — 대화 검색 색인: 밀린 세션 기록(배포 직후 옛 기록 · 놓친 업로드)을 최근 것부터 풀어 ⌘K 가 찾게 한다.
+  //  한 판에 상한까지만(conv-index-store SWEEP_MAX_*). 부팅 1회를 따로 둔다 — 재기동 간격이 주기보다 짧은 배포에서도 돌게(R6).
+  setTimeout(() => { void perTenant("conv-index", () => import("../v6/conv-index-store.js").then((m) => m.sweepConvIndex())); }, 55_000).unref();
+  setInterval(() => { void perTenant("conv-index", () => import("../v6/conv-index-store.js").then((m) => m.sweepConvIndex())); }, 60_000).unref();
   // 빌트인 앱 시딩(#2479) — 부팅 스텝 `seed-builtin-apps` 는 컨텍스트 밖이라 primary 만 심는다.
   //  ⚠ registry 프로비저닝도 `seedDefaultContent()` 만 불렀다 → **신규 워크스페이스는 앱을 영영 못 받았다**
   //   (실측 2026-09-01 dev: 활성 비-primary **84곳 전부 `org_app=0`** · primary 만 5개).

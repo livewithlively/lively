@@ -51,6 +51,9 @@ export interface SweepJob {
 /** 원래 하우스키핑이 쓰던 주기 그대로 — 새 정책을 만들지 않는다(`background-sweeps` 의 setInterval 값). */
 export const TEN_MIN_MS = 10 * 60_000;
 export const SIX_HOURS_MS = 6 * 60 * 60_000;
+/** 대화 검색 색인 정비 주기(#4517). 업로드 직후 색인이 따로 있어 이건 **밀린 것**(배포 직후 옛 기록 · 놓친 업로드)을 줍는 몫이다 —
+ *  한 판에 SWEEP_MAX_BYTES 까지만 풀므로 1분마다 돌면 한 사람 몫(실측 2GB 대)이 십여 분 안에 따라잡힌다. */
+export const CONV_INDEX_SWEEP_MS = 60_000;
 
 export const SWEEP_JOBS: readonly SweepJob[] = [
   // 아웃박스 — 좀비 회수 + 끝난 행 청소 + 대기 세션 재-kick. RLS 가 이 테넌트로 스코프한다.
@@ -111,6 +114,10 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 테넌트 스코프 — 묶음·카테고리·구성원 전부 그 워크스페이스 것이다.
   { key: "category-group-backfill", intervalMs: TEN_MIN_MS,
     run: () => import("../org/liv/group-backfill.js").then((m) => m.backfillCategoryGroups()) },
+  // 대화 검색 색인(#4517) — 중앙 세션 기록에서 사람 말·AI 말을 풀어 ⌘K 가 찾을 표(session_msg)에 담는다. 밀린 세션을 최근 것부터.
+  //  ⚠ 테넌트 스코프 — 세션 기록도 색인도 그 워크스페이스 것이다(RLS). 같은 테넌트의 판이 겹치면 뒤 판은 그냥 돌아간다.
+  { key: "conv-index", intervalMs: CONV_INDEX_SWEEP_MS,
+    run: () => import("../v6/conv-index-store.js").then((m) => m.sweepConvIndex()) },
   //  ⚠ **`reapIdleSessions`(#1059 F)는 일부러 빼 뒀다** — tmux 세션을 **죽인다.** 정책 기본이 0(끔)이라
   //   당장은 no-op 이지만, 파괴적 동작을 이 표에 얹는 것은 #2148(매니지드 유휴 회수)의 판단이다.
   //   그 짝인 위 백필은 올린다 — 원래 주석이 "회수 **전에** 백필한다"고 못 박았고 백필 자체는 안전하다.

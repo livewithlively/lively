@@ -489,8 +489,18 @@ export async function reapSessionLogs(retentionDays: number): Promise<{ logs: nu
        DELETE FROM session_log_chunk c USING reaped r
         WHERE c.node_id = r.node_id AND c.session_id = r.session_id
        RETURNING 1
+     ), delmsgs AS (
+       -- #4517 대화 검색 색인도 함께 — 남기면 보존기간이 지난 대화가 검색으로 읽힌다.
+       DELETE FROM session_msg m USING reaped r
+        WHERE m.node_id = r.node_id AND m.session_id = r.session_id
+       RETURNING 1
+     ), delcursor AS (
+       DELETE FROM session_msg_cursor x USING reaped r
+        WHERE x.node_id = r.node_id AND x.session_id = r.session_id
+       RETURNING 1
      )
-     SELECT (SELECT count(*) FROM reaped)::int AS logs, (SELECT count(*) FROM delchunks)::int AS chunks`,
+     SELECT (SELECT count(*) FROM reaped)::int AS logs, (SELECT count(*) FROM delchunks)::int AS chunks,
+            (SELECT count(*) FROM delmsgs)::int AS msgs, (SELECT count(*) FROM delcursor)::int AS cursors`,
     [retentionDays]);
   return { logs: Number(r.rows[0]?.logs ?? 0), chunks: Number(r.rows[0]?.chunks ?? 0) };
 }
@@ -520,6 +530,9 @@ export async function purgeSessionLog(nodeId: string, sessionId: string, purgedB
     const chunks = await client.query(
       `DELETE FROM session_log_chunk WHERE node_id=$1 AND session_id = ANY($2)`, [nodeId, ids]);
     await client.query(`DELETE FROM session_log WHERE node_id=$1 AND session_id = ANY($2)`, [nodeId, ids]);
+    // #4517 — 대화 검색 색인(사람 말·AI 말 사본)도 같은 트랜잭션에서. 남기면 지운 대화가 ⌘K 로 되살아난다.
+    await client.query(`DELETE FROM session_msg WHERE node_id=$1 AND session_id = ANY($2)`, [nodeId, ids]);
+    await client.query(`DELETE FROM session_msg_cursor WHERE node_id=$1 AND session_id = ANY($2)`, [nodeId, ids]);
     const sessions = await client.query(`DELETE FROM session WHERE node_id=$1 AND session_id = ANY($2)`, [nodeId, ids]);
     // session_project 는 (node 축이 없는) session_id 키다 — 같은 id 가 두 노드에 있으면 남은 쪽의 귀속까지
     //  지워질 수 있어, **다른 노드에 같은 session_id 가 남아 있지 않을 때만** 지운다.

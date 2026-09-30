@@ -37,6 +37,11 @@ try {
       at_offset BIGINT NOT NULL, data BYTEA NOT NULL, raw_len BIGINT, codec TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (node_id, session_id, at_offset));
     CREATE INDEX session_log_reap_idx ON session_log(updated_at);
+    -- #4517 대화 검색 색인 — reap 이 이 둘도 함께 지운다(없으면 reap 문이 통째로 실패한다).
+    CREATE TABLE session_msg(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, at_offset BIGINT NOT NULL, idx INT NOT NULL,
+      role TEXT NOT NULL, ts TIMESTAMPTZ, body TEXT NOT NULL, PRIMARY KEY (node_id, session_id, at_offset, idx));
+    CREATE TABLE session_msg_cursor(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, indexed_to BIGINT NOT NULL DEFAULT 0,
+      state JSONB NOT NULL DEFAULT '{}'::jsonb, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (node_id, session_id));
   `);
   const S = await import("../dist/v6/session-log-store.js");
   const B = (s) => Buffer.from(s, "utf8");

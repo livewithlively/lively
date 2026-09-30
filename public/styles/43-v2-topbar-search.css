@@ -240,6 +240,23 @@
   background: var(--gray-bg-2); border: 1px solid transparent; border-radius: 4px; padding: 0 4px; }
 .v2-omni-key.exact { border-color: var(--blue); color: var(--ink-sub); }
 .v2-omni-badge { flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted-2); }
+/* ── #4517 정렬 · 기간 · 시각 ──────────────────────────────────────────────────────────
+   정렬(관련도순 | 최신순)과 기간은 칩 줄의 **오른쪽 끝**에 선다 — 종류 칩(무엇을)과 성격이 다른 손잡이(어떤 순서로 · 언제)라
+   떨어뜨려 둔다. 좁은 창에선 칩 줄이 접히며 다음 줄 오른쪽으로 내려간다(margin-left:auto).
+   정렬은 두 값이라 드롭다운이 아니라 나란한 두 단추 — 켜진 쪽이 늘 보인다. 모양은 칩과 같은 알약·같은 틴트다. */
+.v2-omni-tools { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; }
+.v2-omni-seg { display: inline-flex; align-items: center; gap: 2px; height: 26px; padding: 2px;
+  border: 1px solid var(--line-net); border-radius: 999px; background: var(--bg); }
+.v2-omni-segb { height: 20px; padding: 0 9px; border: 0; border-radius: 999px; background: none;
+  font: inherit; font-size: 11.5px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.v2-omni-segb:hover { color: var(--ink-sub); }
+.v2-omni-segb.on { background: var(--bg-tint-2); color: var(--ink); font-weight: 600; }
+.v2-omni-segb:focus-visible, .v2-omni-chip:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+/* 줄 오른쪽 시각 — 슬랙처럼 줄마다(정렬과 무관하게). 숫자 폭을 고정해 줄마다 들쭉날쭉하지 않게. */
+.v2-omni-when { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* 대화 결과의 «누구의 말인가»(지시 · AI) — key 표시와 같은 작은 이름표. */
+.v2-omni-role { display: inline-block; margin-right: 5px; padding: 0 5px; border-radius: 4px;
+  font-size: 10.5px; font-weight: 700; color: var(--ink-sub); background: var(--gray-bg-2); }
 .v2-omni-note { padding: 8px 14px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--muted); }
 .v2-omni-note[hidden] { display: none; }
 @media (max-width: 900px) {

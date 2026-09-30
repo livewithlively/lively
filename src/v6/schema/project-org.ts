@@ -171,6 +171,28 @@ export async function initV6ProjectOrg(pool: Pool): Promise<void> {
       purged_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       purged_by TEXT,
       PRIMARY KEY (node_id, session_id));
+
+    -- ⑤ session_msg — ⌘K 대화 검색 색인(#4517). 위 청크에서 **사람 말·AI 말만** 풀어 둔 사본이다(도구 결과·생각은 없다 —
+    --  실측 원본의 약 0.3%). 한 창(at_offset = 그 창을 읽기 시작한 원본 바이트) 안의 순서가 idx. 쓰는 곳은 v6/conv-index-store.ts.
+    --  ⚠ 사본이라 지우기를 따라가야 한다 — 완전 삭제(purgeSessionLog)·보존 reap 이 함께 지운다.
+    CREATE TABLE IF NOT EXISTS session_msg(
+      node_id TEXT NOT NULL DEFAULT '',
+      session_id TEXT NOT NULL,
+      at_offset BIGINT NOT NULL,
+      idx INT NOT NULL,
+      role TEXT NOT NULL,            -- 'user' 사람 말 · 'assistant' AI 말
+      ts TIMESTAMPTZ,                -- 그 말의 시각(대화 파일 기준). 못 읽으면 NULL
+      body TEXT NOT NULL,
+      PRIMARY KEY (node_id, session_id, at_offset, idx));
+    CREATE INDEX IF NOT EXISTS session_msg_ts_idx ON session_msg(ts);
+    -- ⑥ session_msg_cursor — 어디까지 색인했나(원본 바이트, 늘 줄 경계) + 파서 이어 읽기 상태. 커밋은 indexed_to CAS.
+    CREATE TABLE IF NOT EXISTS session_msg_cursor(
+      node_id TEXT NOT NULL DEFAULT '',
+      session_id TEXT NOT NULL,
+      indexed_to BIGINT NOT NULL DEFAULT 0,
+      state JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (node_id, session_id));
   `);
 
   // ── 6a-2) project_folder_binding — 한 프로젝트가 **어느 멤버의 어느 환경에서 어느 절대경로에 사는가**(N:M, #905 P1-①). ──
