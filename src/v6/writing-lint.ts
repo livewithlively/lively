@@ -1,13 +1,13 @@
 // 서술 형식 검사 — 조직 서술 형식(writing_format)에 비춰 지식 제목·본문의 기계 판정 가능한 위반을 찾는다.
 //
 // 이 모듈은 순수 함수다(DB·네트워크 없음). 저장 경로·관리기·재작성 게이트가 같은 판정을 쓰게 하려고 분리했다.
-// 판정은 휴리스틱이다 — 전부 «안내» 용이고 저장을 막지 않는다. 오탐보다 누락을 택한 규칙이 많다
+// 판정은 휴리스틱이다. 저장을 막을지(reject)는 조직이 규칙마다 정한다. 오탐보다 누락을 택한 규칙이 많다
 //  (예: 결론 여부는 판정하지 않고 «첫 줄이 헤딩·인용·표로 시작하는가»만 본다). 의미 판정은 LLM 몫이다.
 import { type WritingFormat, type WritingRuleId, ruleLevel } from "../org/policies/writing-format.js";
 
 export interface WritingFinding {
   rule: WritingRuleId;
-  level: "warn";
+  level: "warn" | "reject";
   message: string;
   count?: number;
   sample?: string;
@@ -30,10 +30,11 @@ const PICTO_RE = /\p{Extended_Pictographic}/u;
 const DATE_RE = /\b20\d{2}-\d{2}(?:-\d{2})?\b/;
 const MR_REF_RE = /\bMR\s*!?\d+|(?:^|[\s(·,])!\d{2,}\b/;
 // '방금'은 기술 서술(«방금 만든 파일»)에서 시점이 아니라 순서를 말할 때가 많아 넣지 않는다(실데이터 보정).
-const RELATIVE_TIME_RE = /오늘|어제|내일|그저께|엊그제|지난주|이번 ?주|다음 ?주|이번 세션|지난 세션|이 세션/g;
+const RELATIVE_TIME_RE = /오늘|어제|(?<!안)내일|그저께|엊그제|지난주|이번 ?주|다음 ?주|이번 세션|지난 세션|이 세션/g;
 const LOCAL_PATH_RE = /\/Users\/[A-Za-z0-9._-]+|\/home\/[a-z][A-Za-z0-9._-]*|(?:^|[\s`(])~\/[A-Za-z0-9._-]|[A-Za-z]:\\Users\\/g;
-const UNDATED_STATUS_RE = /아직|진행 ?중|대기 ?중|배포 ?대기|머지 ?대기|미배포|미머지|예정(?:이다|입니다)?/;
-const REVISION_BANNER_RE = /\bUPDATE\b|정정|갱신|폐기|방향 ?전환|더 이상 유효하지|\bv\d+\s*→\s*v\d+/i;
+const UNDATED_STATUS_RE = /아직|진행 ?중|대기 ?중|배포 ?대기|머지 ?대기|미배포|미머지|예정(?:이다|입니다|임)/;
+// '갱신'은 넣지 않는다 — «토큰 갱신 절차» 같은 헤딩이 배너로 잡힌다.
+const REVISION_BANNER_RE = /\bUPDATE\b|정정|폐기|방향 ?전환|더 이상 유효하지|\bv\d+\s*→\s*v\d+/i;
 const NESTED_PAREN_RE = /[(（][^()（）\n]*[(（][^()（）\n]*[)）][^()（）\n]*[)）]/;
 const POLITE_END_RE = /(?:습니다|ㅂ니다|니다|세요|십시오|어요|에요|해요)[.!?]?$/;
 const PLAIN_END_RE = /[가-힣]다[.!?]?$/;
@@ -48,8 +49,13 @@ function proseOf(body: string): string {
 }
 
 const lines = (s: string): string[] => s.split("\n");
+// 이보다 긴 한 줄은 문장이 아니라 데이터(덤프·base64·한 줄 JSON)다. 줄 단위 서술 규칙에서 뺀다 —
+//  정규식 몇 개는 줄 길이에 비례해 되짚으므로, 서술이 아닌 거대한 줄 하나가 저장 한 번을 수 초씩 붙잡을 수 있다.
+const PROSE_LINE_MAX = 2000;
 // 따옴표 안은 남의 말이거나 낱말 자체를 가리키는 언급이다(«"아직" 같은 표현»). 시점·상태 판정에서 뺀다.
-const unquoted = (l: string): string => l.replace(/"[^"\n]*"|“[^”\n]*”|「[^」\n]*」|『[^』\n]*』|'[^'\n]*'/g, "");
+//  홑따옴표는 넣지 않는다 — 영문 아포스트로피(don't … isn't) 사이를 통째로 지운다.
+//  길이를 300자로 묶는다 — 닫힘 없는 여는 기호마다 줄 끝까지 훑으면 긴 한 줄에서 제곱 시간이 된다.
+const unquoted = (l: string): string => l.replace(/"[^"\n]{0,300}"|“[^”\n]{0,300}”|「[^」\n]{0,300}」|『[^』\n]{0,300}』|‘[^’\n]{0,300}’/g, "");
 const isQuote = (l: string): boolean => /^\s*>/.test(l);
 
 /** 본문의 «첫 문단»이 서술로 시작하는지 — 맨 앞 H1(제목 반복)은 한 번 건너뛴다. */
@@ -64,6 +70,14 @@ function leadLine(body: string): string | null {
   return i < ls.length ? ls[i] : null;
 }
 
+const CLOSERS = new Set([")", "]", "」", "』", '"', "'", "*", "_"]);
+/** 문장 끝의 닫는 기호·강조 표시를 걷는다. 정규식 `[…]+$` 는 긴 기호 런 뒤에 다른 글자가 오면 시작점마다 되짚는다. */
+function stripClosers(s: string): string {
+  let end = s.length;
+  while (end > 0 && CLOSERS.has(s[end - 1])) end--;
+  return s.slice(0, end);
+}
+
 const NON_PROSE_START_RE = /^(#{1,6}\s|>|\||```|~~~|<!--|---\s*$|\*\*\*\s*$)/;
 
 export function lintWriting(input: WritingLintInput, fmt: WritingFormat): WritingFinding[] {
@@ -71,11 +85,12 @@ export function lintWriting(input: WritingLintInput, fmt: WritingFormat): Writin
   const title = String(input.title ?? "").trim();
   const body = String(input.body_md ?? "");
   const prose = proseOf(body);
-  const proseLines = lines(prose);
+  const proseLines = lines(prose).filter((l) => l.length <= PROSE_LINE_MAX);
   const out: WritingFinding[] = [];
   const add = (rule: WritingRuleId, message: string, extra: { count?: number; sample?: string } = {}): void => {
-    if (ruleLevel(fmt, rule) === "off") return;
-    out.push({ rule, level: "warn", message, ...extra });
+    const level = ruleLevel(fmt, rule);
+    if (level === "off") return;
+    out.push({ rule, level, message, ...extra });
   };
 
   // ── 제목 ──
@@ -147,7 +162,7 @@ export function lintWriting(input: WritingLintInput, fmt: WritingFormat): Writin
     for (const l of proseLines) {
       if (isQuote(l) || /^\s*(#|\|)/.test(l)) continue;
       for (const sent of l.split(/(?<=[.!?])\s+/)) {
-        const s = sent.trim().replace(/[)\]」』"'*_]+$/, "");
+        const s = stripClosers(sent.trim());
         if (!s) continue;
         if (POLITE_END_RE.test(s)) { polite++; if (fmt.register === "plain" && !firstOff) firstOff = s; }
         else if (PLAIN_END_RE.test(s)) { plain++; if (fmt.register === "polite" && !firstOff) firstOff = s; }
