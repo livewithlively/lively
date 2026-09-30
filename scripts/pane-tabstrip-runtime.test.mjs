@@ -78,7 +78,8 @@ const PAGE = `<!doctype html><meta charset="utf-8"><style>${CSS}
   const near=(a,b)=>Math.abs(a-b)<=0.5;
   // ── 모양 ──
   const wb=side.tabs.children[2]; const lead=rc(wb.querySelector('.pn-tab-lead')); const x=rc(wb.querySelector('.pn-tab-x')); const tb=rc(wb);
-  R.w_layout=tb.width>40 && x.width===20 && lead.width===16;   // 관측 장치 — 크기가 실제로 재졌다(0=0 으로 «통과»하지 않게)
+  //  #4443(2026-09-30): 아이콘 칸은 16 → 22(흰 타일 위 앱 색 선 — 독 아이콘의 작은 판). 중심 17px · 아이콘만 남은 탭 34px 는 그대로다(G1–G3).
+  R.w_layout=tb.width>40 && x.width===20 && lead.width===22;   // 관측 장치 — 크기가 실제로 재졌다(0=0 으로 «통과»하지 않게)
   R.g1_x_center_on_icon=near(cx(x),cx(lead)) && near(cy(x),cy(lead));
   R.g1_icon_mid_height=near(cy(lead),cy(tb));
   R.g1_info=[cx(x),cx(lead),cy(x),cy(lead),cy(tb)].map(v=>Math.round(v*10)/10);
@@ -171,7 +172,7 @@ const R = JSON.parse(m[1].trim().replace(/&quot;/g, '"').replace(/&amp;/g, "&"))
 let fails = 0;
 let checks = 0;
 const check = (k, why) => { checks++; const ok = R[k] === true; console.log(`${ok ? "ok  " : "FAIL"}  ${k} — ${why}`); if (!ok) fails++; };
-check("w_layout", "(배선) 탭 · 아이콘 칸(16) · 닫기 단추(20)의 크기가 실제로 재졌다 — 중심 비교가 0=0 이 아니다");
+check("w_layout", "(배선) 탭 · 아이콘 칸(22) · 닫기 단추(20)의 크기가 실제로 재졌다 — 중심 비교가 0=0 이 아니다");
 check("w_calls_observed", "(배선) 끌기 호출 기록이 실제로 쌓인다 — 아래 «호출 0건» 단언이 무언가를 보고 있다");
 check("g1_x_center_on_icon", `G1 닫기 단추의 중심 = 아이콘의 중심 ${JSON.stringify(R.g1_info)}`);
 check("g1_icon_mid_height", "G1b 아이콘은 탭 높이의 가운데");

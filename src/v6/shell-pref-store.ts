@@ -51,14 +51,19 @@ export const SHELL_PREF_STORES: Readonly<Record<string, ShellPrefKind>> = {
   //   안 켠 것과 다른 말이다: 안 켠 앱은 «연결 중»으로 남고, 정한 앱은 «연결 완료»가 된다.
   //   사람의 결정이라 계정에 묶인다(기기마다 다시 정하게 하면 그게 더 이상하다).
   lively_v2_connect_skip: "list",
+  //  #4443 곁칸 독 — 어디에 어떤 모양으로 두나(테두리·자리·떠 있음/막대·자동으로 가리기·확대)와 독에 고정한 앱(순서 = 사람이 끌어 정한 자리).
+  //   사람의 결정이라 계정에 묶인다 — 노트북에서 오른쪽에 옮겨 둔 독이 사무실 데스크톱에서 다시 바닥으로 돌아가면 그게 더 이상하다.
+  lively_v2_dock: "map",
+  lively_v2_dock_apps: "list",
 };
 
 /**
  * 넘칠 때 **앞을 남기는** 저장소. 나머지는 화면이 새 결정을 뒤에 붙이므로 뒤를 남긴다(#3887).
  *  · 최근 앱 — 화면이 연 앱을 **맨 앞에** 끼운다(web/v2/apps.ts noteAppUse).
  *  · 레일 순서 — 사람이 끌어 정한 자리라 앞이 윗자리다(새것·옛것이 없다).
+ *  · 독에 고정한 앱(#4443) — 레일 순서와 같다(끌어 정한 자리).
  */
-const KEEP_FRONT: ReadonlySet<string> = new Set(["lively_v2_recent_apps", "lively_v2_rail_main"]);
+const KEEP_FRONT: ReadonlySet<string> = new Set(["lively_v2_recent_apps", "lively_v2_rail_main", "lively_v2_dock_apps"]);   // 독 고정도 앞이 윗자리(레일 순서와 같다)
 
 /**
  * 좌측 목록의 **행 키**(web/v2/main.ts sideRowKey — `sess:`·`inst:`·`route:`)를 담는 저장소.

@@ -361,10 +361,10 @@
 
   /* ── 8. 세션 → 자료 (#4088 후속, 2026-09-23) — 서랍 안의 곁칸을 손가락 크기로 ────────────── */
   /* 탭 줄·손잡이 — 40px 줄, 단추는 36px 넓이(데스크톱 30px). */
-  .pn-tabbar { height: 41px; }
-  .pn-tab { height: 40px; font-size: 13.5px; }
+  .pn-wrap { --pn-head-h: 46px; }                                           /* #4443 — 줄 높이는 한 값(42-v2-panes.css). 알약은 46 - 13 = 33px */
+  .pn-tab { font-size: 13.5px; }
   .pn-tab-x { width: 26px; height: 26px; margin-top: -13px; left: 4px; }   /* 아이콘 칸과 같은 중심(17px) — #3870 */
-  .pn-tab-add, .pn-pane-hide, .pn-tab-more { width: 36px; height: 40px; }
+  .pn-tab-add, .pn-pane-hide, .pn-tab-more { width: 36px; }
   /* 자료 칸 머리 — 단추 36px, 크기 슬라이더는 뺀다(62px 슬라이더는 손가락으로 못 잡는다 — 보기·정렬은 남는다). */
   .pn-fbtn { height: 36px; min-width: 36px; font-size: 13px; }
   .pn-ftools .btn-text { height: 36px; min-height: 36px; }
