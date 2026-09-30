@@ -129,8 +129,14 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   // #1242(고객사 A: claude.ai 슬랙 커넥터 사용) — 코드 폴백만 고치면 섹션을 편집한 org 엔 안 닿는다(#537). 라이블리 org DB 행에도 같은 불릿을 반영해 양쪽을 같게 유지할 것.
   "- **⚠ 외부 서비스 MCP 는 라이블리 `ext__*` 가 기본이다(조직 통제)** — 같은 서비스(슬랙·노션·드라이브·메일 등)가 라이블리 프록시(`ext__*`)와 개인 커넥터(claude.ai 연동·자체 설치 MCP) 양쪽에 보이면 **반드시 `ext__*` 를 쓴다**. `ext__*` 는 조직이 관리하는 커넥터·자격·감사 경로로 나가고, 개인 커넥터는 개인 자격으로 그 통제를 우회한다. \"이미 로드돼 있어서\"·\"이름이 먼저 보여서\"는 선택 근거가 아니다. 그 서비스 커넥터가 라이블리에 없거나 실패할 때만 개인 커넥터로 폴백하고, 폴백했음을 답변에 밝힌다.",
   "",
-  "**기록 — 지속될 맥락은 그 자리에서(in-flow), 나중에 몰아서가 아니라.**",
-  "- 지식: 연구·결정·설계·런북이 생기면 즉시 `knowledge_save`로 **전문**을 기록한다(요약·링크 X). injection(규칙·페르소나만 `always`, 그 외 `recalled`)·provenance(`authored`)를 정하고 `knowledge_link_category`로 카테고리(제품이면 도메인)에 연결한다.",
+  // #4220·#4219(2026-09-30, 윤상민 확정) — «생기면 즉시 knowledge_save» 가 기록을 한 건씩 흩어 메인을 멈추게 했다(knowledge_save 1건
+  //  메인 멈춤 p50 46초 · 세션당 쓰기 에피소드 p50 4개). 그래서 «그 턴 안, 보고 직전에» 로 바꾸고, Claude Code 대화형은 대화 전체를 물려받는
+  //  fork 하나에 넘긴다. 지시문은 **고정 한 줄** — 메인이 목록·요지를 쓰게 한 옛 기록 묶음 스킬은 지시문이 기록 본문만큼 길어져(p50 2,222자,
+  //  메인 멈춤 p50 21초) 절감이 사라졌다. 이 고정 문장은 kit/hooks/record-nudge.mjs 의 RECORD_FORK_PROMPT 와 **글자 그대로 같아야** 한다
+  //  (record-nudge.test.mjs 가 대조한다). codex fork 는 툴 결과를 물려받지 않아(spawn.rs keep_forked_rollout_item) 메인이 바로 쓴다.
+  "**기록 — 지속될 맥락은 그 턴 안에서 남긴다(세션 끝으로 미루지 않는다).**",
+  "- **언제·누가**: 기록할 것이 생긴 턴은 사람에게 보고하기 직전에 남긴다. **Claude Code 대화형 세션**에선 메인이 본문을 쓰지 말고, 기록 전용 fork 하나를 이 호출 그대로 띄운 뒤 곧바로 보고한다 — `Agent{subagent_type:\"fork\", description:\"기록: <주제>\", prompt:\"기록 전용 fork 다. 마지막 기록 이후 대화에서 라이블리에 남길 것을 네가 판단해 직접 기록하라(기존 지식은 append, 대화에 없는 사실은 쓰지 않는다, fork 를 다시 띄우지 않는다). 끝나면 저장한 이름·id 만 한 줄씩 남겨라.\"}`. fork 는 대화 전체를 물려받아 무엇을 쓸지 스스로 정한다 — 메인은 쓸 목록·요지를 지시문에 적지 않는다(적으면 fork 로 아끼는 시간이 사라진다). fork 는 턴당 하나. 한두 줄짜리 기록(상태 변경·짧은 작업 기록)과 곧바로 id 가 필요한 생성은 메인이 바로 한다. 그 밖의 하네스(codex 등)와 사람이 대화하지 않는 실행(`claude -p` 등)은 메인이 바로 쓴다.",
+  "- 지식: 연구·결정·설계·런북은 `knowledge_save`로 **전문**을 기록한다(요약·링크 X). injection(규칙·페르소나만 `always`, 그 외 `recalled`)·provenance(`authored`)를 정하고 `knowledge_link_category`로 카테고리(제품이면 도메인)에 연결한다.",
   "- **MCP 도구는 대부분 REST로도 열려 있다 (`/api/ui/*`) — 같은 bearer 토큰·같은 scope.** 그래서 **코드로 짜서 호출하거나 대량 마이그레이션 같은 기계적 방식**이 나을 땐, 건별 MCP 대신 REST를 반복 호출하는 스크립트로 처리할 수 있다(거의 모든 쓰기 툴에 대응 REST 존재). 예: `POST /api/ui/knowledge`(=knowledge_save)·`POST /api/ui/knowledge/:name/category`(연결)·`POST /api/ui/sources`·`POST /api/ui/v6/projects[/:id/tasks]`·`POST /api/ui/activity`(=activity_log). 게이트웨이 주소는 org 프로필 `gateway_url`.",
   "- WIKI 인덱스 핀: 어떤 지식이 **모두가 항상 인덱스에서 봐야 할 만큼** 중요하면 `knowledge_set_wiki`로 핀한다 — 핀된 지식의 제목·소환키가 아래 **WIKI 인덱스**에 항상 노출되어 전원이 발견한다(본문은 여전히 `knowledge_get`/검색으로 소환).",
   "- 작업 진척: `activity_log`로 한 작업을 얇게 기록한다 — type 은 작업의 성격(feature·fix·decision·docs·research·review·chore·other). 커밋은 유형이 아니라 commit_sha 로 표현하고(어떤 유형이든 동반 가능), author_agent(어떤 AI)는 게이트웨이가 접속 신원으로 자동 식별하니 넘기지 않아도 된다. 커밋이면 건드린 코드(is)를, 비커밋이면 바뀐 의도(should)를 함께 표시하고, 실질 산출물은 지식으로 따로 써서 작업에 연결한다.",

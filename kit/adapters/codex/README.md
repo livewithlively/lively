@@ -45,7 +45,7 @@ LIVELY_HARNESS = "codex"
 | SessionStart | session-preload · sync-harness-assets · work-flag · 러너 (+ matcher `compact` work-flag — #4219 압축 직후 기록 알림) |
 | UserPromptSubmit | work-flag · 러너 |
 | PreToolUse | 러너 (**조직 거버넌스 deny 게이트**) |
-| PostToolUse | work-flag ×3(lively MCP — #4219 교정 넛지 포함 · 편집툴 · spawn_agent #4217) · 러너 |
+| PostToolUse | work-flag ×3(lively MCP · 편집툴 · spawn_agent #4217) · 러너 — #4219 교정 넛지는 claude 전용, codex 는 기록을 메인이 바로 쓴다(#4220) |
 | PermissionRequest | work-flag (claude 의 Notification = '확인 필요' 자리) |
 | Stop | stop-writeback-gate · work-flag · 러너 |
 | SubagentStop | work-flag(#4217 기록 fork 표시 걷기) · 러너 |
