@@ -1463,6 +1463,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       //  스코프 없는 프로젝트 주소(#/app/projects2)로 들어오면 구역 첫 화면으로 보낸다(#2061) — 레일을 눌러 오든
       //   새로고침·북마크로 오든 같은 자리에 서야 한다. replace 라 뒤로가기에 빈 칸을 남기지 않는다.
       //   즐겨찾기를 아직 모르면 projLandingRoute 가 이 주소를 그대로 돌려주므로 아무 일도 안 일어난다(무한루프 없음).
+      //   즐겨찾기가 없다고 알면 #/projects2/all(「전체」, #3870)로 간다 — 이 주소가 아니므로 역시 한 번으로 끝난다.
       if (segs[1] === 'projects2' && !segs[2]) {
         const landing = projLandingRoute();
         if (landing !== '#/app/projects2') {
