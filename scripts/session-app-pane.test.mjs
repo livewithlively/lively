@@ -137,8 +137,9 @@ globalThis.location = { origin: "http://x", pathname: "/ui/", search: "", hash: 
   ok(/^\s*syncSessApps\(\);\s+\/\/ #4225/m.test(PANES), "S10-3 첫 그림 뒤 붙은 목록을 본다");
   ok(/\{ type: 'sessapp', name: '붙은 앱', icon: 'apps', pickable: false,/.test(PARTS) && /^\s*if \(type === 'sessapp'\) return sessAppPart\(ctx\);/m.test(PARTS), "S10-4 붙은 앱 탭은 [+] 에 없고(pickable:false) 부품으로 선다");
   ok(!/createSessionAppDock|pn-appdock/.test(PARTS), "옛 «세션 옆 앱 칸» 은 세션 부품에서 걷혔다");
-  const moveFn = (PANES.match(/function moveTab\(key: TabKey, from: Zone, to: Zone\): void \{[\s\S]*?\n  \}/) || [""])[0];
-  ok(/^\s*dropTab\(from, key\);$/m.test(moveFn) && !/removeTab\(/.test(moveFn), "S10-5 탭 옮기기는 닫기가 아니다 — 붙은 앱 탭을 다른 칸으로 옮겨도 떼지 않는다(dropTab)");
+  //  #3870 — moveTab 은 끼울 자리(at)를 받고, dropTab 은 다시 그리기를 미룬다({ paint: false }). 뜻(닫기가 아니다)은 같다.
+  const moveFn = (PANES.match(/function moveTab\(key: TabKey, from: Zone, to: Zone(?:, at\?: number)?\): void \{[\s\S]*?\n  \}/) || [""])[0];
+  ok(/^\s*dropTab\(from, key(?:, \{ paint: false \})?\);$/m.test(moveFn) && !/removeTab\(/.test(moveFn), "S10-5 탭 옮기기는 닫기가 아니다 — 붙은 앱 탭을 다른 칸으로 옮겨도 떼지 않는다(dropTab)");
   const syncFn = (PANES.match(/function syncSessApps\(\): void \{[\s\S]*?\n  \}/) || [""])[0];
   ok(/\{ const z = zoneOf\(SESSAPP_TAB\); if \(z\) dropTab\(z, SESSAPP_TAB\); \}/.test(syncFn), "S10-6 세션이 바뀌면 옛 세션의 앱 탭부터 걷는다(새 목록이 오기 전 남의 앱 탭이 안 남게)");
   ok(/^\s*ctx\.paneRoot\(\)\.dispatchEvent\(new CustomEvent\(SHOW_SESSAPP_EVT, \{ detail: \{ app_id: a\.id \} \}\)\);/m.test(PARTS)
