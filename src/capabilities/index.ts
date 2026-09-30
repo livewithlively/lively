@@ -9,6 +9,7 @@ import { viewerOf } from "./principal.js";
 import { assertRequestEnumParity } from "../http/rest-util.js";
 import { requireAppTool, requireAppToolMcp, appMcpHidden } from "../apps/principal.js";
 import { agentFromExtra, sessionFromExtra, readOnlyFromExtra } from "../org/auth/agent-identity.js";
+import { requireSessionWriter } from "../sessions/session-identity-guard.js";   // #4135 — 남의 세션에서 다른 사람 로그인으로 쓰는 것을 멈춘다
 import { contextCapabilities, repoBranchCapabilities } from "./context.js";
 import { deliveryCapabilities } from "./delivery.js";
 import { domainmapCurationCapabilities } from "./domainmap-curation.js";
@@ -26,6 +27,7 @@ import { favoritesCapabilities } from "./favorites.js";
 import { appCapabilities } from "./apps.js";
 import { appToolCallCapabilities } from "./app-tool-call.js";
 import { appStoreCapabilities } from "./app-store.js";
+import { sessionAppsCapabilities } from "./session-apps.js";
 import { dashPrefsCapabilities } from "./dash-prefs.js";
 import { sidePrefsCapabilities } from "./side-prefs.js";
 import { shellPrefsCapabilities } from "./shell-prefs.js";
@@ -145,6 +147,7 @@ const all: Capability[] = [
   ...appCapabilities, // #1780: 앱 레지스트리 — org_apps/org_app_get(조회 scope=null)·org_app_set_enabled(admin)·me_app_grant/revoke(동의 scope=null)·install/remove/activity/ui.
   ...appToolCallCapabilities, // #1780 PR5b: 앱 UI 브리지 tools/call(org_app_tool_call, REST 전용) — 앱 UI 의 도구 호출을 앱 principal 로 재판정 실행.
   ...appStoreCapabilities, // #1780 D6: 앱 데이터 store_*(insert/query/tables) — 앱이 자기 app 스키마 테이블을 RLS 격리 하에 읽고 쓴다.
+  ...sessionAppsCapabilities, // #4225 세션에 앱 붙이기·떼기 — 붙어 있는 동안 그 세션의 AI 가 그 앱 테이블을 store_* 로 쓴다.
 ];
 // MCP 표면 = expose.mcp:true 인 capability 전부(registerMcpCapabilities 자동등록) + db 직접등록 3툴(db_query·db_schema·db_sources, tools/db.ts).
 //  (하드코딩 카운트 금지 — 컷오버마다 썩는다. 실제 집합은 buildToolCandidates/isToolExposed 가 expose.mcp 로 결정.)
@@ -254,6 +257,10 @@ export function registerMcpCapabilities(
         const agent = agentFromExtra(extra) ?? undefined;
         // 작업이 이뤄진 터미널 세션 — 같은 원리로 접속 헤더(x-lively-session)에서(#852). 세션 밖이면 undefined.
         const session = sessionFromExtra(extra) ?? undefined;
+        // #4135 — 기록의 주인은 **세션을 연 사람**이다(원준 2026-09-28). 이 요청이 말한 세션의 주인과 토큰의 사람이 다르면
+        //  쓰는 도구는 거절한다 — 공용 컴퓨터에 깔린 로그인으로 남의 세션의 기록이 남던 것(session-identity-guard 머리말).
+        //  읽기전용 판정과 같은 집합(isReadOnlyBlocked)이라 «무엇이 쓰기인가» 가 두 벌이 되지 않는다.
+        if (session && isReadOnlyBlocked(cap)) await requireSessionWriter(u.userId, session);
         return json(await cap.handler(args, u, { source: "mcp", actor: u.userId, agent, session, readOnly: readOnlyFromExtra(extra), viewer: viewerOf(u) }));
       },
     );

@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
   subscribeNotify, publishNotify, notifyStreamCount, sessionEventKey, routeMatches, accountRoutesActive,
-  type NotifyRoute, type NotifySessionEvent, type NotifyWorkspace,
+  type NotifyRoute, type NotifySessionEvent, type NotifyEvent, type NotifyWorkspace,
 } from "./notify-bus.js";
 
 // ── 실시간 알림 버스 (#1842 · #4054) ────────────────────────────────────────────
@@ -26,7 +26,7 @@ const withOther = (ws: string, member: string, other: string, account: string): 
   [...own(ws, member), { ws: other, account, label: label(other, false) }];
 
 type Got = Array<{ id: string; ws?: NotifyWorkspace }>;
-const sink = (out: Got) => (e: NotifySessionEvent) => { out.push({ id: e.id, ws: e.ws }); };
+const sink = (out: Got) => (e: NotifyEvent) => { out.push({ id: e.type === "session" ? e.id : e.type === "app" ? e.app_id : e.session, ws: e.ws }); };
 
 test("A1 같은 워크스페이스·같은 사람 → 받는다, 표시는 그 구독의 자기 워크스페이스", () => {
   const got: Got = [];
@@ -198,4 +198,18 @@ test("사건 키는 세션·단계·초가 같으면 같다(재시도·중복 �
   assert.equal(sessionEventKey("box-a", "idle", 100), sessionEventKey("box-a", "idle", 100));
   assert.notEqual(sessionEventKey("box-a", "idle", 100), sessionEventKey("box-a", "idle", 101));
   assert.notEqual(sessionEventKey("box-a", "idle", 100), sessionEventKey("box-b", "idle", 100));
+});
+
+// ── 앱 사건(#4225, 사양 표 S3) — 세션 사건과 같은 주소 규칙(워크스페이스 + 사람)으로 흐른다 ──
+test("S3-1·2 앱 사건 — 같은 워크스페이스·같은 사람만 받고, 본문 종류(type=app)는 그대로 전달된다", () => {
+  const got: NotifyEvent[] = [];
+  const a = subscribeNotify(own("ws-a", "alice"), (e) => { got.push(e); });
+  const b = subscribeNotify(own("ws-a", "bob"), () => { throw new Error("다른 사람이 받았다"); });
+  const n = publishNotify({ ws: "ws-a", member: "alice" }, { type: "app", kind: "attach", app_id: "crm", session: "box-1", key: "k", ts: 1 });
+  assert.equal(n, 1);
+  assert.equal(got.length, 1);
+  assert.equal(got[0].type, "app");
+  assert.equal(got[0].type === "app" ? got[0].app_id : "", "crm");
+  assert.deepEqual(got[0].ws, label("ws-a", true));
+  a.close(); b.close();
 });

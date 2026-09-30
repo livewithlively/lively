@@ -24,9 +24,11 @@ import { getOpt } from "./tmux-exec.js";
 import { adoptLegacyExecutionSession, executionSessionProject, markExecutionSessionApplied, setExecutionSessionProject, type ExecutionSessionProject } from "../v6/execution-session-store.js";
 import { latestProjectForSessionChain, recordSessionProject, resolveNodeFolder, type FolderSyncMode } from "../v6/project-session-store.js";
 import { canAttach } from "./terminal-sessions.js";
+import { sessionMoveAuth } from "./session-move-auth.js";
 import { isExternalExecutionSessionId } from "../org/auth/agent-identity.js";
 import { syncSessionAppInstanceProject } from "../org/store/app-instances.js";
-import { sessionTaskOf, sessionTaskSection } from "../v6/session-task.js";
+import { sessionTaskList, sessionTaskOf, sessionTaskSection } from "../v6/session-task.js";
+import { answersFolder, contextNodeId, legacyProjectToAdopt, sessionDirFromRow } from "./session-project-folder.js";   // #4135 — 노드·폴더·소속은 세션 행이 안다
 
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 const SID_RE = /^[A-Za-z0-9._-]{1,128}$/;
@@ -64,40 +66,52 @@ export async function setSessionProject(
   const pid = pidRaw === null || pidRaw === undefined || pidRaw === "" ? 0 : Number(pidRaw);
   if (!Number.isInteger(pid) || pid < 0) throw new HttpError(400, "projectId 형식 오류");
 
-  let bind: SessionProjectBind | null = null;
-  if (pid > 0) {
-    const p = await loadProject(pid);
-    if (!p) throw new HttpError(404, "프로젝트를 찾을 수 없습니다");
-    // 공개범위(#1291) — 내가 못 보는 프로젝트엔 못 붙인다(붙이면 사이드바·타임라인에서 그 이름이 새어 나온다). 판정 불가면 거부(fail-closed).
-    const hidden = await hiddenProjects(me).catch(() => null);
-    if (!hidden || hidden.ids.has(pid)) throw new HttpError(403, "이 프로젝트에는 붙일 수 없어요(공개범위 밖입니다)");
-    // 바인딩은 DB current + 실행 캐시만 바꾼다. AGENTS.md 준비/읽기는 다음 UserPromptSubmit의 동적 조회가 맡는다.
-    bind = { projectId: p.id, folder: p.folder, name: p.name, src: "v6" };
-  }
-
   const nodeId = nodeOfSession(id);
   // 상태는 한 번만 읽는다 — 아래 소유권 검사(노드 세션)와 대화 축 동기화가 같은 값을 본다.
   const st = await getSessionState(id).catch(() => undefined);
   // 분산 적용 전에 소유권을 먼저 확정한다. DB가 SoT이므로 runtime 캐시를 먼저 바꾸고 DB 기록에 실패하는
   // 순서를 허용하지 않는다. 반대로 desired-state가 없는 노드 세션 id를 먼저 DB에 claim하게 두면, 남의 실제
   // 세션을 겨냥한 요청이 RPC에서 거부되더라도 DB id는 공격자 소유로 남는다. 그래서 상태 부재도 쓰기 전에 막는다.
-  if (nodeId) {
-    if (!st) throw new HttpError(404, "세션을 찾을 수 없습니다");
-    if (st.owner !== me) throw new HttpError(403, "내 세션만 프로젝트를 바꿀 수 있습니다");
-  } else {
-    const localOwner = await getOpt(id, "@box_owner").catch(() => "");
-    if (localOwner && localOwner !== me) throw new HttpError(403, "내 세션만 프로젝트를 바꿀 수 있습니다");
-    if (!localOwner && !opts.externalSelf) throw new HttpError(404, "세션을 찾을 수 없습니다");
+  //  ★ #3870 — 초대받은 사람도 옮긴다 · 실행은 주인 이름으로(session-move-auth 머리말).
+  const localOwner = nodeId ? "" : await getOpt(id, "@box_owner").catch(() => "");
+  const knownOwner = nodeId ? (st?.owner || "") : localOwner;
+  const auth = sessionMoveAuth({
+    me, node: !!nodeId, st: st ?? null, localOwner, externalSelf: opts.externalSelf,
+    //  초대 판정은 입장 판정(canAttach — 초대 + 그 프로젝트 공개범위)과 같은 술어를 쓴다: 들어갈 수 있는 사람만 옮긴다.
+    //   ⚠ canAttach 의 프로젝트 판정은 이 게이트웨이 tmux 의 `@box_project` 를 읽어 노드 세션엔 번호가 없다 — 행의 project_id 로 한 번 더 잰다.
+    invited: !!knownOwner && knownOwner !== me
+      ? (await canAttach(id, me).catch(() => false))
+        && !(st?.project_id && await hiddenProjects(me).then((h) => h.ids.has(Number(st.project_id))).catch(() => true))
+      : false,
+  });
+  if (!auth.ok) throw new HttpError(auth.status, auth.message);
+  const owner = auth.owner;
+  const actor: LivelyUser = owner === me ? u : ({ userId: owner, email: "", scopes: [], projects: [] } as LivelyUser);
+
+  let bind: SessionProjectBind | null = null;
+  if (pid > 0) {
+    const p = await loadProject(pid);
+    if (!p) throw new HttpError(404, "프로젝트를 찾을 수 없습니다");
+    // 공개범위(#1291) — 내가 못 보는 프로젝트엔 못 붙인다(붙이면 사이드바·타임라인에서 그 이름이 새어 나온다). 판정 불가면 거부(fail-closed).
+    //  #3870 — 초대받은 사람이 옮기면 **주인에게도** 보여야 한다: 주인 사이드바에 그 이름이 서고, 주인의 세션이 그 프로젝트 맥락을 받는다.
+    for (const who of owner === me ? [me] : [me, owner]) {
+      const hidden = await hiddenProjects(who).catch(() => null);
+      if (!hidden || hidden.ids.has(pid)) {
+        throw new HttpError(403, who === me ? "이 프로젝트에는 붙일 수 없어요(공개범위 밖입니다)" : "이 세션을 만든 사람이 볼 수 없는 프로젝트라 옮길 수 없어요");
+      }
+    }
+    // 바인딩은 DB current + 실행 캐시만 바꾼다. AGENTS.md 준비/읽기는 다음 UserPromptSubmit의 동적 조회가 맡는다.
+    bind = { projectId: p.id, folder: p.folder, name: p.name, src: "v6" };
   }
 
   // DB desired를 먼저 커밋한다. 아래 분산 적용이 실패하면 desired_revision > applied_revision으로 남아
   // 다음 동적 주입은 올바른 프로젝트를 보고, 운영자는 미적용 상태를 진단·재시도할 수 있다.
-  const current = await setExecutionSessionProject({ id, owner: me, harness: opts.harness, nodeId, projectId: bind ? bind.projectId : null });
+  const current = await setExecutionSessionProject({ id, owner, harness: opts.harness, nodeId, projectId: bind ? bind.projectId : null });
   if (!current) throw new HttpError(403, "다른 사용자의 실행 세션 id입니다");
 
   let out: { ok: true; projectId: number | null; linked: boolean; projectDir: string | null; sessionDir: boolean };
   if (nodeId) {
-    try { out = await nodeRpc(nodeId, "setProject", { id, user: { userId: me }, bind }); }
+    try { out = await nodeRpc(nodeId, "setProject", { id, user: { userId: owner }, bind }); }
     catch (e) {
       const msg = (e as Error)?.message ?? String(e);
       throw translateNodeRpcError(msg, {
@@ -109,11 +123,11 @@ export async function setSessionProject(
     }
   } else {
     const localOwner = await getOpt(id, "@box_owner").catch(() => "");
-    if (localOwner) out = await applySessionProject(u, id, bind);
+    if (localOwner) out = await applySessionProject(actor, id, bind);
     else if (opts.externalSelf) out = { ok: true, projectId: bind ? bind.projectId : null, linked: false, projectDir: null, sessionDir: false };
     else throw new HttpError(404, "세션을 찾을 수 없습니다"); // 위 선검사의 TOCTOU(세션 종료)만 여기로 온다.
   }
-  await markExecutionSessionApplied(id, me, current.desired_revision);
+  await markExecutionSessionApplied(id, owner, current.desired_revision);
   await updateSessionStateMeta(id, { project_id: bind ? bind.projectId : null, project_src: bind ? "v6" : null }).catch(() => { /* 레코드 없음 등 비치명 */ });
   // 세션 화면은 ai-session AppInstance다. 세션 바인딩이 권위이므로 열린/복원 인스턴스의 현재 맥락도 같은 값으로 맞춘다.
   // 시간 이력은 app-instances 스토어가 별도로 남겨, 옮긴 뒤에도 과거 활동의 소속을 소급 변경하지 않는다.
@@ -147,9 +161,12 @@ async function adoptLegacyBinding(id: string, me: string): Promise<ExecutionSess
   // 실행 id 의 구 바인딩 → 없으면 **이 세션이 이어받은 대화**의 마지막 소속(#1867 이어받기 승계).
   //  이어받기는 실행 id 를 새로 발급하므로, 이 다리가 없으면 같은 대화가 매번 새 프로젝트를 만든다.
   const legacy = await latestProjectForSessionChain([id, state?.claude_session_id]).catch(() => null);
-  if (!legacy) return null;
+  //  #4135 — 사슬에 없으면 desired-state 행의 project_id(게이트웨이가 쓴 정본). 소속 행 없이 뜬 세션(복원 경로가 소속을 안 쓰던
+  //   시절의 세션 등)이 첫 조회에서 스스로 낫는다 — 없는 프로젝트면 FK 로 실패해 null(종전과 같음).
+  const projectId = legacyProjectToAdopt(legacy, state);
+  if (!projectId) return null;
   return await adoptLegacyExecutionSession({
-    id, owner: me, harness: state?.harness ?? null, nodeId: state?.node_id ?? null, projectId: legacy.id,
+    id, owner: me, harness: state?.harness ?? null, nodeId: state?.node_id ?? null, projectId,
   }).catch(() => null);
 }
 
@@ -164,6 +181,9 @@ export interface SessionProjectContext {
   sync?: FolderSyncMode;
   /** 명시 바인딩(`lively init`)의 절대경로. null 이면 노드의 canonical 슬롯(`<shared root>/<folder>`)을 쓰라는 뜻. */
   folder_abs_path?: string | null;
+  /** 세션 행이 아는 «이 세션이 도는 프로젝트 폴더»(#4135) — 공유 루트 아래 project.folder 에서 도는 세션만. 명시 바인딩이
+   *  없을 때 훅이 env(TERMINAL_ROOT_SHARED)로 슬롯을 조립하는 대신 이 경로를 쓴다. 라이블리 소유 슬롯이라는 뜻은 그대로다. */
+  session_dir?: string | null;
   name?: string; content?: string;
 }
 
@@ -179,7 +199,6 @@ export async function sessionProjectContext(
   if (!me) throw new HttpError(403, "사용자 신원이 없습니다");
   const known = knownRevisionRaw == null || knownRevisionRaw === "" ? -1 : Number(knownRevisionRaw);
   if (!Number.isSafeInteger(known) || known < -1) throw new HttpError(400, "knownRevision 형식 오류");
-  const nodeId = String(nodeIdRaw ?? "").trim().slice(0, 128);
   const current = (await executionSessionProject(id, me)) ?? (await adoptLegacyBinding(id, me));
   if (!current) return { found: false, changed: known !== 0, session_id: id, project_id: null, revision: 0, applied_revision: 0, binding_epoch: 0 };
   const base: SessionProjectContext = {
@@ -189,12 +208,22 @@ export async function sessionProjectContext(
   if (current.project_id == null) return base;
   const project = await loadProject(current.project_id);
   if (!project) return { ...base, project_id: null };
-  // 폴더·동기화 — 노드를 밝힌 호출(동기화 훅)에만 답한다. 안 밝히면 종전 응답 그대로(하위호환).
-  if (nodeId) {
+  //  #4135 — 호출자(훅)가 node 를 안 밝혀도 세션 행에서 읽는다: 노드 세션의 pane 엔 LIVELY_NODE_ID 가 없어서 여태 folder·sync 가
+  //   안 나갔고 자료 동기화가 조용히 죽어 있었다. 행 조회 실패는 «중앙 세션» 으로 본다(종전과 같음). 행은 소속이 확인된
+  //   뒤에만 읽는다 — 이 함수는 매 턴 모든 세션이 부르므로 소속 없는 세션에 DB 왕복을 더하지 않는다.
+  const row = await getSessionState(id).catch(() => undefined);
+  const nodeId = contextNodeId(nodeIdRaw, row);
+  //  «세션이 그 프로젝트 폴더에서 돈다» 인 행의 dir — 훅이 제 env(TERMINAL_ROOT_SHARED)로 슬롯을 조립하지 않게
+  //  (옛 루트가 env 에 남은 세션이 엉뚱한 폴더를 보던 것, #4135). 별도 필드라 슬롯 판정(folder_abs_path)은 안 흔든다.
+  const sessionDir = sessionDirFromRow(project.folder, row);
+  // 폴더·동기화 — 노드를 알거나 행이 폴더를 알면 답한다(세션 호스트 세션은 node_id 없이 dir 만 안다). 둘 다 모르는
+  //  중앙 세션은 종전 응답 그대로(하위호환). 노드가 비면 명시 바인딩은 없다(resolveNodeFolder 가 슬롯 기본으로 답한다).
+  if (answersFolder(nodeId, sessionDir)) {
     const res = await resolveNodeFolder(project.id, me, nodeId);
     base.folder = project.folder;
     base.sync = project.folder ? res.sync : "none";   // folder 가 비면 조립할 슬롯이 없다 → 동기화 대상 아님
-    base.folder_abs_path = res.abs_path;
+    base.folder_abs_path = res.abs_path;              // 명시 바인딩(`lively init`)만 — 훅은 이 유무로 슬롯 여부를 가른다
+    base.session_dir = sessionDir;
   }
   if (!base.changed) return base;
   // 동기화 훅(content=0)은 폴더·모드만 필요하다 — AGENTS.md 는 최대 128KB 라 매 턴 실어 보내면 순수 낭비다.
@@ -205,7 +234,9 @@ export async function sessionProjectContext(
   // #4084 — 이 세션이 맡은 태스크를 프로젝트 문맥 끝에 붙인다. 태스크에서 연 세션은 첫 주입에서 자기 태스크를 안다
   //  (이름짓기로 생긴 태스크는 session_rename 응답이 먼저 알려 준다). 조회 실패는 문맥 전달을 막지 않는다.
   const task = await sessionTaskOf(id, me).catch(() => null);
-  const section = task && task.project_id === project.id ? sessionTaskSection(task) : "";
+  //  순서 목록(#4135)이 있으면 차례까지 — 조회 실패는 한 줄짜리 절로 물러난다.
+  const order = task && task.project_id === project.id ? await sessionTaskList(id, me).catch(() => []) : [];
+  const section = task && task.project_id === project.id ? sessionTaskSection(task, order) : "";
   return { ...base, name: project.name, content: section ? `${content}\n\n${section}` : content };
 }
 

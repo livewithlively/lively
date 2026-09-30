@@ -113,15 +113,20 @@ export async function listMyNotifications(
   return items.slice(0, limit);
 }
 
+/** 이름 + 주격조사(이/가) — 받침으로 판정한다(#1571 §6: 외부 행위자 이름이 영문이라 'Charles이'가 실제로 나왔다). 한글이 아니면 '가'. */
+export function withSubjectParticle(who: string): string {
+  const w = who.trim() || "누군가";
+  const last = w.charCodeAt(w.length - 1);
+  const hangul = last >= 0xac00 && last <= 0xd7a3;
+  return w + (hangul ? ((last - 0xac00) % 28 ? "이" : "가") : "가");
+}
+
 /**
  * 배너 문구 — 서버가 만든다. 앱·화면이 각자 문장을 조립하면 같은 사건이 자리마다 다르게 읽힌다.
- *  주격조사는 받침으로 판정한다(#1571 §6: 외부 행위자 이름이 영문이라 'Charles이'가 실제로 나왔다).
+ *  주격조사는 위 withSubjectParticle 한 벌 — 댓글 알림(v6/comment-notify.ts)도 같은 규칙을 쓴다.
  */
 export function notifyText(it: NotifyItem): { title: string; body: string } {
-  const who = (it.actor_name || it.actor || "누군가").trim();
-  const last = who.charCodeAt(who.length - 1);
-  const hangul = last >= 0xac00 && last <= 0xd7a3;
-  const subj = who + (hangul ? ((last - 0xac00) % 28 ? "이" : "가") : "가");   // 한글이 아니면 '가'(영문 이름)
+  const subj = withSubjectParticle((it.actor_name || it.actor || "누군가").trim());
   const where = it.project_name ? ` · ${it.project_name}` : "";
   if (it.kind === "mention") return { title: `${subj} 나를 언급했어요${where}`, body: it.body || "(내용 없음)" };
   return { title: `${subj} 댓글을 남겼어요${where}`, body: it.body || "(내용 없음)" };

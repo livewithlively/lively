@@ -22,9 +22,9 @@ import { api, el, hasScope, sv } from './core.js';
 import { skeleton } from './ui-primitives.js';
 import { stageHealthDetails } from './context-pipeline.js';
 import { inboxCount, renderContextInbox, renderContextMapScreen } from './context-map.js';   // #762 표지(흐름 지도) + 확인할 것
+import { renderRunsPage } from './context-runs-page.js';   // #4135 3판 — 자동 실행 기록(현황의 「자세히 보기」)
 import { renderCollectors } from './context-collectors.js';
-import { renderManagers } from './context-manage.js';
-import { renderCategoryList } from './categories.js';
+import { openTaxonomyApp } from './taxonomy-link.js';   // #4233 카테고리 탭은 분류체계 앱으로 나갔다
 import { distillerPage, distillersPanel } from './distillers.js';
 import { collectorPresetEditor } from './admin-collector-presets.js';  // 새 소스 만들기 — 수집기 화면의 하위 갈래
 import { sourceVisPolicyPanel } from './source-vis-policy.js';         // 자료 공개범위(#1291 v4) — AI 전달 ▸ 접근 권한에 함께 선다
@@ -33,6 +33,8 @@ import { injectionMap } from './admin-injection.js';                   // 세션
 import { embeddingsEditor } from './admin-embeddings.js';              // 의미 검색 — 임베딩 provider·백필(기본 off)
 import { visibilityAxesPanel } from './visibility-axes.js';            // 공개범위 — 유형별 축 on/off
 import { loadAdmin } from './admin-rerender.js';
+import { CTX_APP_NAME, CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
+import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 
 /** 관리탭 패널이 요구하는 admin 데이터 — 없으면 빈 객체(패널이 자기 API 로 그린다). */
 async function adminData(): Promise<any> {
@@ -51,10 +53,10 @@ type CtxStage = {
   label: string;
   /** 이 탭이 무엇을 하는 자리인지 — **정의 한 줄**. 빵부스러기 옆에 그대로 선다(#762: 기계마다 정의 한 문장). */
   hint: string;
-  /** '보는 건 누구나, 고치는 건 관리자'인 탭 — 자물쇠 배지. */
-  adminEdit?: boolean;
   /** 탭 줄에 세우지 않는 스테이지(확인할 것 — 오른쪽 트레이가 대신 선다). */
   tray?: boolean;
+  /** 탭 줄에 없는 하위 화면 — 들어오면 parent 탭이 켜진다(자동 실행 기록 → 현황, #4135). */
+  parent?: string;
   items: CtxItem[];
 };
 
@@ -65,17 +67,23 @@ type CtxStage = {
  */
 const STAGES: CtxStage[] = [
   {
-    key: 'home', label: '현황',
+    key: 'home', label: CTX_TAB.home,
     hint: '자료가 지식이 되어 AI 에 닿기까지 — 지금 어디가 막혔나',
-    items: [{ key: 'home', label: '현황', draw: (b) => renderContextMapScreen(b) }],
+    items: [{ key: 'home', label: CTX_TAB.home, draw: (b) => renderContextMapScreen(b) }],
   },
   {
-    key: 'inbox', label: '확인할 것', tray: true,
-    hint: '사람 손이 필요한 것 전부 — 승인 · 카테고리 제안 · 점검 발견',
-    items: [{ key: 'inbox', label: '확인할 것', draw: (b) => renderContextInbox(b) }],
+    //  #4135 3판 — 현황 아래 「자동 실행」 패널의 「자세히 보기 →」. 탭이 아니라 현황의 하위 화면(빵부스러기로 돌아간다).
+    key: 'runs', label: CTX_TAB.runs, parent: 'home',
+    hint: '수집기·증류기가 자동으로 돈 기록 — 날짜·종류·기계·결과로 거르고, 줄을 누르면 오른쪽에서 봅니다',
+    items: [{ key: 'runs', label: CTX_TAB.runs, draw: (b) => renderRunsPage(b) }],
   },
   {
-    key: 'sources', label: '수집기', adminEdit: true,
+    key: 'inbox', label: CTX_TAB.inbox, tray: true,
+    hint: '사람 손이 필요한 것 전부 — 승인 · 카테고리 제안',
+    items: [{ key: 'inbox', label: CTX_TAB.inbox, draw: (b) => renderContextInbox(b) }],
+  },
+  {
+    key: 'sources', label: CTX_TAB.sources,
     hint: '외부 앱의 내용을 자료함으로 가져오는 기계 — 무엇을, 얼마나 자주 가져올지 정합니다',
     items: [
       { key: 'collectors', label: '수집기', draw: (b) => sourcesScreen(b) },
@@ -84,24 +92,20 @@ const STAGES: CtxStage[] = [
     ],
   },
   {
-    key: 'distill', label: '증류기',
+    key: 'distill', label: CTX_TAB.distill,
     hint: '지식을 완성하는 자동 규칙 — 자료를 읽어 지식으로 쓰고, 미분류 지식에는 카테고리를 붙입니다',
     items: [{ key: 'distillers', label: '증류기', draw: (b) => distillScreen(b) }],
   },
+  //  카테고리 탭은 #4233(원준 2026-09-26)에서 「분류체계」 앱으로 나갔다. 옛 주소는 renderContext 초입에서 그 앱으로 보낸다.
   {
-    key: 'category', label: '카테고리',
-    hint: '지식이 정리되는 칸 — 정의를 적어 두면 증류기가 그 기준으로 칸을 고르고, 점검이 어긋난 것을 찾습니다',
-    items: [{ key: 'categories', label: '카테고리', draw: (b) => categoryScreen(b) }],
+    key: 'checks', label: CTX_TAB.checks,
+    hint: '라이블리에 쌓인 맥락이 낡지 않도록 AI가 알아서 관리하는 기능입니다.',
+    items: [{ key: 'managers', label: CTX_TAB.checks, draw: (b) => checksScreen(b) }],
   },
   {
-    key: 'checks', label: '점검',
-    hint: '쌓인 지식이 낡거나 어긋나지 않았는지 검사하는 자동 규칙 — 찾아낸 것은 「확인할 것」으로',
-    items: [{ key: 'managers', label: '검사 규칙', draw: (b) => checksScreen(b) }],
-  },
-  {
-    key: 'deliver', label: 'AI 전달', adminEdit: true,
-    hint: '지식이 실제로 AI 에 닿는 마지막 구간 — 세션 주입 · 검색 · 접근 권한',
-    items: [{ key: 'injection', label: 'AI 전달', draw: (b) => deliverScreen(b) }],
+    key: 'deliver', label: CTX_TAB.deliver,
+    hint: '지식을 AI 세션에 넣는 방법을 정합니다. 세션 주입, 의미 검색, 접근 권한을 설정합니다.',
+    items: [{ key: 'injection', label: CTX_TAB.deliver, draw: (b) => deliverScreen(b) }],
   },
 ];
 
@@ -124,7 +128,7 @@ async function sourcesScreen(b: HTMLElement): Promise<void> {
 /** 새 소스 만들기(수집 방식 프리셋) — 수집기 화면의 하위 갈래. 돌아갈 길을 화면이 준다. */
 async function presetsScreen(b: HTMLElement): Promise<void> {
   await stack(b, [
-    (h) => { h.replaceChildren(el('p', { class: 'admin-hint' }, el('a', { href: '#/context/sources', text: '‹ 수집기로' }))); },
+    (h) => { h.replaceChildren(el('p', { class: 'admin-hint' }, el('a', { href: '#/context/sources', text: '‹ ' + CTX_TAB.sources + '으로' }))); },
     (h) => collectorPresetEditor(h),
   ]);
 }
@@ -138,27 +142,13 @@ async function distillScreen(b: HTMLElement): Promise<void> {
   ]);
 }
 
-/** 카테고리 — 칸(정의·담당). 미분류 지식을 칸에 넣는 기계는 이제 증류기의 «카테고리 붙이기»다(#4194 — 종전엔 이 화면에
- *  「분류기」가 함께 있었다). 여기서 찾던 사람을 위해 그 자리로 가는 길을 한 줄 남긴다. */
-async function categoryScreen(b: HTMLElement): Promise<void> {
-  await stack(b, [
-    (h) => renderCategoryList(h),
-    (h) => { h.replaceChildren(el('div', { class: 'card ctx-crosslink' },
-      el('b', { text: '카테고리가 없는 지식은 누가 정리하나요' }),
-      el('p', { class: 'admin-hint', text: '노션처럼 지식으로 바로 들어온 문서는 카테고리가 없을 수 있습니다(미분류 지식). 증류기의 「카테고리 붙이기」가 여기 적힌 정의를 기준으로 알맞은 칸을 고릅니다 — 이미 붙은 카테고리가 틀린 것은 점검이 찾아냅니다.' }),
-      el('a', { class: 'btn btn-ghost btn-sm', href: '#/context/distill', text: '증류기 ▸ 카테고리 붙이기 열기 →' }))); },
-  ]);
-}
-
-/** 점검 — 검사 규칙(관리기)만. 찾아낸 것(발견)의 처리는 「확인할 것」이 맡는다(#762 큐 통합). */
+/** 점검 — #4173(원준·상민 2026-09-21): 지금 도는 점검기는 아직 미완성이라 규칙·결과(발견·확인 필요 수)를 **보이지 않는다**.
+ *  그래도 라이블리는 «관리해 주는 서비스» 라 탭 자리와 정의 한 줄(탭 hint)은 남긴다 — 제대로 만든 점검기가 붙을 자리(#4174).
+ *  규칙 목록(renderManagers)은 그 점검기가 생길 때 여기로 돌아온다. */
 async function checksScreen(b: HTMLElement): Promise<void> {
-  await stack(b, [
-    (h) => { h.replaceChildren(el('div', { class: 'card ctx-crosslink' },
-      el('b', { text: '점검이 찾아낸 것' }),
-      el('p', { class: 'admin-hint', text: '발견된 문제의 확인·처리는 「확인할 것」에서 합니다 — 승인·카테고리 제안과 한 자리입니다.' }),
-      el('a', { class: 'btn btn-ghost btn-sm', href: '#/context/inbox', text: '확인할 것 열기 →' }))); },
-    (h) => renderManagers(h),
-  ]);
+  b.replaceChildren(el('div', { class: 'card ctx-empty-slot' },
+    el('b', { text: '지금 켜진 점검이 없습니다' }),
+    el('p', { class: 'admin-hint', text: '지식이 낡거나 서로 어긋나는 것을 AI 가 스스로 찾아 고치는 점검이 이 자리에 하나씩 붙습니다.' })));
 }
 
 /** AI 전달 — 세션 주입 + (관리자) 의미 검색 · 공개 범위 · 자료를 볼 사람. 접근 권한을 한 자리에. */
@@ -175,7 +165,8 @@ async function deliverScreen(b: HTMLElement): Promise<void> {
 
 /** 옛 주소 → 새 자리. 북마크·문서·화면 안 링크가 살아 있어야 한다(#1841 방식 승계). */
 const LEGACY_STAGE: Record<string, string> = {
-  overview: 'home', collect: 'sources', knowledge: 'distill', topics: 'category', classify: 'category', manage: 'checks',
+  //  topics · classify(옛 카테고리 단계 이름)는 여기 없다. #4233 에서 분류체계 앱이 됐고 renderContext 초입이 그리로 보낸다.
+  overview: 'home', collect: 'sources', knowledge: 'distill', manage: 'checks',
 };
 const LEGACY_ITEM: Record<string, string> = {
   overview: 'home', 'ingest-policy': 'distillers', classifiers: 'categories', findings: 'inbox',
@@ -199,6 +190,8 @@ export async function renderContext(view: HTMLElement, sub?: string | null, sub2
   //  #4194 — 옛 「분류기」 자리(#/context/topics/classifiers · classify/classifiers · category/classifiers)는 증류기 탭의
   //   카테고리 붙이기 절로 간다(북마크·알림·문서의 옛 링크). LEGACY_ITEM 이 'categories' 로 보내던 것을 여기서 먼저 가로챈다.
   if (sub2 === 'classifiers' && (sub === 'topics' || sub === 'classify' || sub === 'category')) { location.replace('#/context/distill'); return; }
+  //  #4233. 카테고리 탭(과 그 옛 이름 topics · classify)은 분류체계 앱이 됐다. 셸 창을 그 앱으로 옮긴다(taxonomy-link.ts).
+  if (sub === 'category' || sub === 'topics' || sub === 'classify') { openTaxonomyApp(); return; }
   // 옛 주소(단계 이름)로 들어오면 새 자리로 조용히 옮긴다 — 북마크·문서·화면 안 링크 보존.
   if (sub && !STAGES.some((s) => s.key === sub) && LEGACY_STAGE[sub]) {
     const it = sub2 ? (LEGACY_ITEM[sub2] || sub2) : '';
@@ -219,7 +212,7 @@ export async function renderContext(view: HTMLElement, sub?: string | null, sub2
   //  정의 한 줄(#3830) — 머리에서 내려왔다. 현황은 지도가 자기 캡션을 갖고 있어 중복이라 뺀다.
   const body = el('div', { class: 'ctx-body' },
     //  현황·수집기·증류기는 화면이 자기 머리(제목 + 한 줄 설명)를 갖고 있어 정의 한 줄이 두 번 선다(#3830) — 거기선 뺀다.
-    ['home', 'sources', 'distill'].includes(stage.key) ? null : el('p', { class: 'ctx-hint', text: stage.hint }),
+    ['home', 'sources', 'distill', 'runs'].includes(stage.key) ? null : el('p', { class: 'ctx-hint', text: stage.hint }),
     host);
   view.replaceChildren(el('div', { class: 'pjv-board-wrap ctx-board-wrap' },
     el('div', { class: 'card pjv-listboard ctx-board' }, buildHeader(stage), body)));
@@ -244,21 +237,20 @@ function buildHeader(selStage: CtxStage): HTMLElement {
   //   있어서 좀 갑갑해보이니까 위치 너가 적당히 잘 조절해봐."* 실측으로 지도가 y=156 에서야 시작하고 있었다.
   //   앱 이름은 탭 줄 왼쪽 문패로 들어가고(세로 구분선 하나), 탭이 그 오른쪽에 잇는다. 정의 한 줄(hint)은
   //   화면 안 캡션으로 내려간다 — 현황은 지도 캡션이 그 일을 이미 하고, 나머지 탭은 아래 renderContext 가 붙인다.
-  const tabs = el('div', { class: 'pjv-vtabs ctx-vtabs', role: 'tablist', 'aria-label': '맥락 관리' });
-  tabs.append(el('span', { class: 'ctx-hd-app' }, ctxAppIcon(), el('span', { text: '맥락 관리' })));
+  const tabs = el('div', { class: 'pjv-vtabs ctx-vtabs', role: 'tablist', 'aria-label': CTX_APP_NAME });
+  tabs.append(el('span', { class: 'ctx-hd-app' }, ctxAppIcon(), el('span', { text: CTX_APP_NAME })));
   for (const s of STAGES) {
-    if (s.tray) continue;   // 확인할 것 — 아래 트레이가 대신 선다
-    const on = s.key === selStage.key;
+    if (s.tray || s.parent) continue;   // 확인할 것 — 아래 트레이가 대신 선다 · 하위 화면은 탭이 아니다
+    const on = s.key === selStage.key || s.key === selStage.parent;
     const tab = el('a', {
       class: 'pjv-vtab ctx-vtab' + (on ? ' active' : '') + (s.key === 'home' ? ' ctx-vtab-ov' : ''),
       href: '#/context/' + s.key,
       role: 'tab', 'aria-selected': String(on), 'data-stage': s.key,
-      title: s.hint + (s.adminEdit ? ' — 보는 것은 모든 구성원, 만들고 고치는 것은 관리자' : ''),
+      title: s.hint,
     },
       el('span', { class: 'ctx-vtab-label', text: s.label }),
       // 건강 점은 '지금 문제가 있는 탭'에만 붙는다(paintStageHealth 가 ok 면 지운다) — 늘 켜진 점은 신호가 아니라 장식이다.
-      HEALTH_TAB[s.key] ? el('span', { class: 'ctx-vtab-dot', 'aria-hidden': 'true' }) : null,
-      s.adminEdit ? el('span', { class: 'ctx-vtab-lock', 'aria-hidden': 'true', title: '관리자만 고칠 수 있습니다' }, ctxLockIcon()) : null);
+      HEALTH_TAB[s.key] ? el('span', { class: 'ctx-vtab-dot', 'aria-hidden': 'true' }) : null);
     tabs.append(tab);
   }
   // 확인할 것 트레이 — 탭 줄 오른쪽 끝. 배지는 paintStageHealth 가 채운다(사람 몫이 0이면 배지 없음).
@@ -266,16 +258,17 @@ function buildHeader(selStage: CtxStage): HTMLElement {
   tabs.append(el('a', {
     class: 'pjv-vtab ctx-vtab ctx-vtab-tray' + (selStage.key === 'inbox' ? ' active' : ''),
     href: '#/context/inbox', role: 'tab', 'aria-selected': String(selStage.key === 'inbox'),
-    title: '사람 손이 필요한 것 전부 — 승인 · 카테고리 제안 · 점검 발견',
+    title: '사람 손이 필요한 것 전부 — 승인 · 카테고리 제안',
   },
-    el('span', { class: 'ctx-vtab-label', text: '확인할 것' }),
+    el('span', { class: 'ctx-vtab-label', text: CTX_TAB.inbox }),
     el('b', { class: 'ctx-tray-n num', hidden: true })));
   return el('div', { class: 'pjv-board-header ctx-board-header' }, tabs);
 }
 
 /** 건강 점을 붙일 수 있는 탭 — 판정이 있는 탭만(현황·AI 전달은 판정이 없다). 카테고리 탭은 기준표(정의 빈 칸)를 잰다(#4194). */
-const HEALTH_TAB: Record<string, 'collect' | 'distill' | 'taxonomy' | 'manage'> = {
-  sources: 'collect', distill: 'distill', category: 'taxonomy', checks: 'manage',
+//  점검 탭은 #4173 으로 비웠다 — 판정할 것이 없으니 점도 없다.
+const HEALTH_TAB: Record<string, 'collect' | 'distill'> = {
+  sources: 'collect', distill: 'distill',
 };
 
 /** 탭의 건강 점 + 트레이 배지 — 개요 지도와 같은 판정·같은 수(잣대가 둘이면 화면끼리 다른 말을 한다). */
@@ -300,13 +293,8 @@ async function paintStageHealth(view: HTMLElement): Promise<void> {
 }
 
 function ctxAppIcon(): SVGElement {
-  const n = sv('svg', { class: 'pjv-crumb-ic ctx-crumb-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  n.append(sv('path', { d: 'M4 5h16l-6.2 7.2V18l-3.6 2v-7.8z' }));   // 깔때기 — 런치패드 유리 아이콘과 같은 형태(맥락 관리 = 수집·증류·분류)
-  return n;
-}
-function ctxLockIcon(): SVGElement {
-  const n = sv('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  n.append(sv('rect', { x: 5, y: 10.5, width: 14, height: 10, rx: 2 }), sv('path', { d: 'M8 10.5V8a4 4 0 0 1 8 0v2.5' }));
+  const n = sv('svg', { class: 'pjv-crumb-ic ctx-crumb-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('path', { d: ICONS.ctx }));   // #4233: 레일 · 앱 화면과 같은 그림(왼쪽 세 선이 오른쪽 한 선으로 모인다). 획은 CSS(.ctx-crumb-ic)가 토큰으로 정한다
   return n;
 }
 

@@ -43,13 +43,14 @@ t("[8] 키 — tmux 는 키 이름, psmux 는 코드포인트 · 허용 키는 E
   assert.equal(isChatKey("y"), false); assert.equal(isChatKey(""), false); assert.equal(isChatKey(undefined), false);
 });
 
-t("[9] 원격 노드 대화는 중앙 로그 폴백 전에 Codex rollout RPC를 읽는다", () => {
+t("[9] 원격 노드 대화는 중앙 로그 폴백 전에 실제 하네스 기록 RPC를 읽는다", () => {
   const source = import.meta.url.endsWith(".ts") ? "./chat-routes.ts" : "./chat-routes.js";
   const routes = readFileSync(new URL(source, import.meta.url), "utf8");
   assert.match(routes, /gateRead\(id, req, true\)/, "transcript 라우트가 원격 노드를 읽을 기회를 열어야 한다");
   assert.match(routes, /nodeSupports\(nodeId, "chatTranscript"\)/, "구 노드에 새 RPC를 보내면 안 된다");
   assert.match(routes, /nodeSessionMapFor\(\[id\]\)/, "사용자 입력이 아니라 서버가 보관한 thread id를 써야 한다");
-  assert.match(routes, /readNodeCodexTranscript\(\{/, "노드 rollout을 공통 ChatLine으로 읽어야 한다");
+  assert.match(routes, /readNodeTranscript\(\{/, "노드 하네스 기록을 공통 ChatLine으로 읽어야 한다");
+  assert.match(routes, /harness: nodeSessionHarness\(nodeId, id\)/, "원격 세션의 실제 하네스로 파서를 골라야 한다");
 });
 
 console.log(`chat-routes: ${pass} passed`);

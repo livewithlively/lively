@@ -134,7 +134,7 @@ export interface ClickUpSpace {
   color?: string | null;
   private?: boolean;
   archived?: boolean;
-  statuses?: ClickUpStatus[]; // 스페이스 기본 status set(리스트가 override_statuses=false 면 상속)
+  statuses?: ClickUpStatus[]; // 스페이스 기본 status set — 리스트 statuses 가 빌 때의 폴백(선택 규칙은 effectiveStatusSource)
   multiple_assignees?: boolean;
   features?: Record<string, unknown> | null; // due_dates/time_tracking/tags/custom_fields/checklists/… 어떤 데이터가 존재하는지 지배
 }
@@ -146,7 +146,7 @@ export interface ClickUpList {
   content?: string | null;
   orderindex?: number | null;
   archived?: boolean;
-  statuses?: ClickUpStatus[]; // 리스트 status set(override_statuses=true 면 리스트 고유, false 면 스페이스 상속)
+  statuses?: ClickUpStatus[]; // 리스트 실효 status set(폴더·스페이스 상속을 ClickUp 이 풀어 준 값 — 선택 규칙은 effectiveStatusSource)
   override_statuses?: boolean;
   task_count?: number | null;
   start_date?: string | null;

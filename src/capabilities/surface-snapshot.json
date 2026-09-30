@@ -783,7 +783,7 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "5ddf229f460b06d8"
+  "input_hash": "ebd70646aec0704e"
  },
  {
   "name": "org_context_job_runner_fill",
@@ -794,6 +794,46 @@
    "POST /api/ui/org/context-job-runner/fill"
   ],
   "input_hash": "c8a393e3ff4dc512"
+ },
+ {
+  "name": "org_injection_update",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/injection-config"
+  ],
+  "input_hash": "4442a5a6f6164db4"
+ },
+ {
+  "name": "org_auto_runs",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/auto-runs"
+  ],
+  "input_hash": "546f08f0a845351c"
+ },
+ {
+  "name": "org_auto_runs_daily",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/auto-runs/daily"
+  ],
+  "input_hash": "f1866c60b293ebc7"
+ },
+ {
+  "name": "org_auto_run_detail",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/auto-runs/:kind/:id"
+  ],
+  "input_hash": "c39cafbbee70b5de"
  },
  {
   "name": "org_alert_status",
@@ -2347,26 +2387,6 @@
   "input_hash": "ef68179e23272c44"
  },
  {
-  "name": "team_set_category",
-  "scope": "context",
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/teams/:id/categories"
-  ],
-  "input_hash": "a710cb1279b1d0cc"
- },
- {
-  "name": "category_set_owner",
-  "scope": "context",
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/categories/:id/owner"
-  ],
-  "input_hash": "92f43a6e7b930f71"
- },
- {
   "name": "knowledge_list",
   "scope": "memory",
   "mcp": true,
@@ -2684,7 +2704,7 @@
   "rest": [
    "GET /api/ui/sources"
   ],
-  "input_hash": "e59688fdc0bc2f6e"
+  "input_hash": "ec3a078cc89fd5e2"
  },
  {
   "name": "source_undistilled",
@@ -2882,7 +2902,7 @@
   "rest": [
    "POST /api/ui/v6/projects/:id"
   ],
-  "input_hash": "ba81bca40298d6c8"
+  "input_hash": "aa951c74f28f8215"
  },
  {
   "name": "project_rename_v6",
@@ -3235,6 +3255,16 @@
   "input_hash": "c1d69d7da7004e68"
  },
  {
+  "name": "project_status_template_set_default_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/status-templates/set-default"
+  ],
+  "input_hash": "bb6f6d0bea40cd91"
+ },
+ {
   "name": "project_status_template_update_v6",
   "scope": "memory",
   "mcp": true,
@@ -3253,16 +3283,6 @@
    "POST /api/ui/v6/status-templates/:id/delete"
   ],
   "input_hash": "4dc36ab67eecb455"
- },
- {
-  "name": "project_status_template_set_default_v6",
-  "scope": "memory",
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/v6/status-templates/set-default"
-  ],
-  "input_hash": "bb6f6d0bea40cd91"
  },
  {
   "name": "favorites_index",
@@ -3735,6 +3755,16 @@
   "input_hash": "fd3d0d02bfb143e5"
  },
  {
+  "name": "feed_target_drain",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/feed-targets/drain"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
   "name": "feed_target_update",
   "scope": "memory",
   "mcp": true,
@@ -3763,16 +3793,6 @@
    "POST /api/ui/feed-targets/:id/categories"
   ],
   "input_hash": "4419d1b448f36ddf"
- },
- {
-  "name": "feed_target_drain",
-  "scope": "memory",
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/feed-targets/drain"
-  ],
-  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "cron_list",
@@ -4672,7 +4692,7 @@
   "rest": [
    "GET /api/ui/me/notifications"
   ],
-  "input_hash": "0e5d23d8a5038cf4"
+  "input_hash": "8b65652c9ce4fe0d"
  },
  {
   "name": "me_notifications_read",
@@ -4682,7 +4702,7 @@
   "rest": [
    "POST /api/ui/me/notifications/read"
   ],
-  "input_hash": "62ff2ece42e18912"
+  "input_hash": "c0922e821b084a79"
  },
  {
   "name": "me_slack_channels",
@@ -4772,7 +4792,27 @@
   "rest": [
    "POST /api/ui/apps/install"
   ],
-  "input_hash": "eca5923943b417fa"
+  "input_hash": "037b9188084bc8a2"
+ },
+ {
+  "name": "app_save",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/save"
+  ],
+  "input_hash": "f86cf7a7f136fb27"
+ },
+ {
+  "name": "app_edit_policy_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/edit-policy"
+  ],
+  "input_hash": "9018d760e68657cc"
  },
  {
   "name": "org_app_remove",
@@ -4806,6 +4846,26 @@
   "input_hash": "f48e51524b8110f6"
  },
  {
+  "name": "app_data_snapshots",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-snapshots"
+  ],
+  "input_hash": "bc9bbb24b7a66ec4"
+ },
+ {
+  "name": "app_data_restore",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/restore"
+  ],
+  "input_hash": "64c3b3c10e0c4859"
+ },
+ {
   "name": "org_app_tool_call",
   "scope": null,
   "mcp": false,
@@ -4823,7 +4883,7 @@
   "rest": [
    "POST /api/ui/store/:table/insert"
   ],
-  "input_hash": "eb39712646846947"
+  "input_hash": "1f7a29d68f8b2c5d"
  },
  {
   "name": "store_query",
@@ -4833,7 +4893,7 @@
   "rest": [
    "POST /api/ui/store/:table/query"
   ],
-  "input_hash": "3eb09fbb3f75ec14"
+  "input_hash": "094b8c19436a2a16"
  },
  {
   "name": "store_update",
@@ -4843,7 +4903,7 @@
   "rest": [
    "POST /api/ui/store/:table/update"
   ],
-  "input_hash": "773947e7c2b2e356"
+  "input_hash": "5182fe7252d01790"
  },
  {
   "name": "store_delete",
@@ -4853,7 +4913,17 @@
   "rest": [
    "POST /api/ui/store/:table/delete"
   ],
-  "input_hash": "8de11ed6339aa6af"
+  "input_hash": "17e2cc4c8f0c071d"
+ },
+ {
+  "name": "store_sql",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/store/sql"
+  ],
+  "input_hash": "e5ee7bc163a0f9d5"
  },
  {
   "name": "store_tables",
@@ -4863,6 +4933,36 @@
   "rest": [
    "GET /api/ui/store/tables"
   ],
-  "input_hash": "6c9f16e97bc4049d"
+  "input_hash": "5e3516baa81e01e2"
+ },
+ {
+  "name": "session_apps",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/terminal/sessions/:id/apps"
+  ],
+  "input_hash": "fdcb2d507c187945"
+ },
+ {
+  "name": "session_app_attach",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/terminal/sessions/:id/apps/attach"
+  ],
+  "input_hash": "915c12efe88f26fd"
+ },
+ {
+  "name": "session_app_detach",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/terminal/sessions/:id/apps/detach"
+  ],
+  "input_hash": "915c12efe88f26fd"
  }
 ]

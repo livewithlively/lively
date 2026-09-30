@@ -3,7 +3,7 @@
 The code in this repository is open source. **The name is not.**
 
 "Lively", the Lively logo, and confusingly similar marks (together, the "Marks") are trademarks
-of 윤상민 (Sangmin Yoon) and 장원준 (Wonjun Jang). The licenses in this repository grant rights to
+of 윤상민 (Sangmin Yoon) and 장원준 (Wonjoon Jang). The licenses in this repository grant rights to
 the *software*; they grant no rights to the Marks.
 
 We keep this policy in a separate document, rather than adding branding clauses to the license

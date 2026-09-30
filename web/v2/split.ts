@@ -23,6 +23,9 @@ export interface SplitOpts {
   onDrag?: (px: number) => void;
   /** 놓았을 때(키보드 조정·더블클릭 포함) — 자리바꿈 판정은 **놓는 순간에만** 한다(끌던 중에 바뀌면 손잡이가 손 밑에서 뒤집힌다). */
   onEnd?: (px: number) => void;
+  /** 끄는 중 상한을 넘긴 거리(px, 0 이상). 칸 크기는 상한에서 멈추지만 손은 더 갈 수 있다(#3870 세션 카드 전환 구간).
+   *  마우스로 끌 때만 부른다. 키보드 조정과 더블클릭은 상한을 넘지 않는다. onDrag 보다 먼저 부른다. */
+  onOver?: (overPx: number) => void;
 }
 
 const clamp = (v: number, a: number, b: number): number => Math.max(a, Math.min(b, v));
@@ -53,6 +56,9 @@ export function makeSplitter(o: SplitOpts): HTMLElement {
     const n = parseFloat(raw);
     return Number.isFinite(n) ? n : o.def;
   };
+  /** 지금 **보이는** 크기. 적어 둔 값이 지금 상한보다 클 수 있다(좁은 창에서 다시 열었다, #3870). 끌기와 글쇠 조정은
+   *  보이는 크기에서 시작한다. 적어 둔 값에서 시작하면 상한에 걸려 화면은 안 바뀌는데 상한이 새 값으로 적힌다. */
+  const shown = (): number => clamp(current(), o.min, Math.max(o.min, maxOf()));
   apply(readSplit(o.key, o.def), false);
 
   const h = document.createElement('div');
@@ -67,12 +73,15 @@ export function makeSplitter(o: SplitOpts): HTMLElement {
     if (e.button !== 0) return;
     e.preventDefault();
     const start = o.axis === 'x' ? e.clientX : e.clientY;
-    const base = current();
+    //  보이는 폭에서 끌기 시작한다. 적어 둔 폭에서 시작하면 그 차이만큼 끌 때까지 손잡이가 손을 따라오지 않는다.
+    const base = shown();
     h.classList.add('on'); document.body.classList.add('v2-splitting-' + o.axis);
     h.setPointerCapture(e.pointerId);
     const move = (ev: PointerEvent): void => {
       const d = (o.axis === 'x' ? ev.clientX : ev.clientY) - start;
-      apply(base + d * growOf(), false);
+      const want = base + d * growOf();
+      apply(want, false);
+      o.onOver?.(Math.max(0, want - Math.max(o.min, maxOf())));
       o.onDrag?.(current());
     };
     const up = (): void => {
@@ -88,8 +97,8 @@ export function makeSplitter(o: SplitOpts): HTMLElement {
     const step = e.shiftKey ? 32 : 8;
     const dec = o.axis === 'x' ? 'ArrowLeft' : 'ArrowUp';
     const inc = o.axis === 'x' ? 'ArrowRight' : 'ArrowDown';
-    if (e.key === dec) { apply(current() - step * growOf(), true); o.onEnd?.(current()); e.preventDefault(); }
-    else if (e.key === inc) { apply(current() + step * growOf(), true); o.onEnd?.(current()); e.preventDefault(); }
+    if (e.key === dec) { apply(shown() - step * growOf(), true); o.onEnd?.(current()); e.preventDefault(); }
+    else if (e.key === inc) { apply(shown() + step * growOf(), true); o.onEnd?.(current()); e.preventDefault(); }
     else if (e.key === 'Home') { apply(o.def, true); o.onEnd?.(current()); e.preventDefault(); }
   });
   return h;

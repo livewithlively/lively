@@ -29,6 +29,14 @@ async function pjvOpenTaskSession(projectId, t, reload) {
   pjvOpenSessionRoute(made.id);
 }
 
+// #4165 태스크 → 작업 공간(세션) 한 걸음 — 맡은 세션이 있으면 그리로(최근 것 먼저 — 서버 sessionsOfTasks 순서), 없으면 이
+//  태스크로 새 세션을 연다. ⋯ 메뉴의 «맡은 세션으로 가기»/«세션 열기» 와 같은 길을 표의 호버 단추·허브 목록·태스크 모달이 함께 쓴다.
+function pjvGoTaskWorkspace(projectId, t, reload) {
+  const sess = Array.isArray(t && t.sessions) ? t.sessions : [];
+  if (sess.length) { pjvOpenSessionRoute(String(sess[0].id)); return; }
+  void pjvOpenTaskSession(projectId, t, reload);
+}
+
 // 더블클릭 → 하위 태스크 인라인 생성(클릭업식). 같은 행에 입력칸 1개만, Enter=생성, Esc/빈 blur=취소.
 function pjvShowInlineSubtask(projectId, parentTask, subBox, reload) {
   const existing = subBox.querySelector('.pjv-subadd');
@@ -131,4 +139,4 @@ function pjvAddTask(projectId, parentTaskId, reload) {
   nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
 }
 
-export { pjvAddTask, pjvRenameTask, pjvRowMore, pjvShowInlineSubtask };
+export { pjvAddTask, pjvGoTaskWorkspace, pjvRenameTask, pjvRowMore, pjvShowInlineSubtask };

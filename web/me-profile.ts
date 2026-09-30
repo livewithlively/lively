@@ -15,10 +15,11 @@ import { field, skeleton } from './ui-primitives.js';
 //  canonical markdown 으로 직렬화한다. 다시 열면 그 markdown 을 파싱해 선택을 복원한다(parseMyProfile).
 //  데이터: GET /api/ui/me/profile 1회 → 저장 POST /api/ui/me/profile(id 는 서버가 principal 로 강제 — 타인 편집 불가).
 const PROF_DEV = [
-  { v: '비개발', label: '비개발', hint: '코드는 직접 안 봐요 — 기술용어는 풀어서, 결론·근거 위주로' },
-  { v: '기초', label: '기초', hint: '코드를 읽고 따라갈 수 있어요 — 핵심 코드는 보여주되 설명을 곁들여' },
-  { v: '능숙', label: '능숙', hint: '직접 짜고 방향도 제시해요 — 코드 중심으로 적당히 깊게' },
-  { v: '전문', label: '전문', hint: '아키텍처·리뷰까지 깊게 봐요 — 군더더기 없이 기술적으로' },
+  //  hint 는 화면 설명이자 저장 때 AI 에 주입되는 문장이다(«- 개발 이해도: 라벨 — hint»). 파싱은 라벨 앞머리만 본다(parseMyProfile).
+  { v: '비개발', label: '비개발', hint: '코드를 직접 보지 않습니다. AI는 기술 용어를 풀어서 설명하고 결론과 근거 위주로 답합니다.' },
+  { v: '기초', label: '기초', hint: '코드를 읽고 따라갈 수 있습니다. AI는 핵심 코드를 보여 주고 설명을 곁들입니다.' },
+  { v: '능숙', label: '능숙', hint: '코드를 직접 작성하고 방향도 정합니다. AI는 코드 중심으로 적당한 깊이로 답합니다.' },
+  { v: '전문', label: '전문', hint: '아키텍처와 리뷰까지 깊게 봅니다. AI는 군더더기 없이 기술적으로 답합니다.' },
 ];
 const PROF_TONE = ['친근한 존댓말', '간결한 존댓말', '격식 있는 존댓말', '편한 반말', '위트 있는 존댓말'];
 // 사용 언어 — 내 AI 가 답하는 언어. 프리셋 칩 + '직접 입력'(목록 밖 언어). tone/dev 와 달리 언어는 장꼬리라 자유입력을 허용한다.
@@ -203,10 +204,9 @@ function avatarEditor(data, nameInput) {
   const node = el('div', {},
     el('div', { class: 'prof-ava-row' }, preview,
       el('div', { class: 'prof-ava-actions' }, fileIn, uploadBtn, removeBtn,
-        el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('정사각형 이미지를 권장해요. 안 올리면 아래 글자·색(또는 이름 이니셜)으로 자동 생성됩니다.')))),
+        el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('정사각형 이미지를 권장합니다. 사진이 없으면 아래 글자와 배경색으로 만들고, 글자를 비워 두면 이름의 첫 글자를 씁니다.')))),
     el('div', { class: 'prof-ava-cc', style: 'margin-top:12px' },
-      el('div', { style: 'display:flex; align-items:center; gap:12px; flex-wrap:wrap' }, charIn, colorRow),
-      el('p', { class: 'prof-hint', style: 'margin:6px 0 0' }, ...uiText('사진이 없을 때 아바타에 쓸 글자(비우면 이니셜)와 배경색이에요.'))));
+      el('div', { style: 'display:flex; align-items:center; gap:12px; flex-wrap:wrap' }, charIn, colorRow)));
   const payload = () => {
     const out: any = { avatar_char: charState.trim() || null, avatar_color: colorState || null };
     if (avatarState !== undefined) out.avatar = avatarState;   // 미변경이면 아예 안 보낸다 → 서버 보존
@@ -306,15 +306,16 @@ function companyLoginRow(logins: any): any {
       kids.push(off);
       // 비밀번호가 없으면 해제 자체가 막힌다(로그인 수단이 0이 된다) — 누르기 전에 이유를 알려준다.
       kids.push(el('span', { class: 'admin-hint', style: 'margin:0' }, ...uiText(st.hasPassword
-        ? '해제하면 이메일·비밀번호로만 로그인해요.'
-        : '해제하려면 먼저 비밀번호를 설정하세요 — 지금 해제하면 로그인할 수단이 없어져요.')));
+        ? '해제하면 이메일과 비밀번호로만 로그인합니다.'
+        : '해제하려면 먼저 비밀번호를 설정하세요. 지금 해제하면 로그인할 방법이 없어집니다.')));
     } else {
-      const on = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: label + ' 연결' });
+      const acct = /계정$/.test(label) ? label : label + ' 계정';
+      const on = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: acct + ' 연결' });
       on.addEventListener('click', () => {
         location.href = apiUrl('/api/ui/auth/oidc/start') + '?link=1&to=' + encodeURIComponent('/ui/' + (location.hash || ''));
       });
       kids.push(on, el('span', { class: 'admin-hint', style: 'margin:0' },
-        ...uiText('연결하면 다음부터 버튼 한 번으로 로그인해요. 이메일이 달라도 괜찮아요.')));
+        ...uiText('연결하면 다음 로그인부터 ' + acct + '으로 로그인할 수 있습니다. ' + acct + ' 이메일이 라이블리 이메일과 달라도 연결할 수 있습니다.')));
     }
     row.replaceChildren(...kids);
   };

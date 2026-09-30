@@ -69,12 +69,16 @@ export interface SpawnOpts {
    *  서버가 «태스크 #<id> 진행해» + 본문으로 채우고, 세션 이름은 태스크 이름이 된다(project-routes.ts).
    */
   taskId?: number | null;
+  /** #4135 — 태스크 **여러 개**를 이 순서대로 맡겨 연다(곁칸 «프로젝트» 앱의 [담기]). 1번이 taskId 와 같은 길로 이어지고,
+   *  서버가 첫 지시 = 순서 안내 + 1번 본문 + 적은 말(있으면)로 짓는다. 지시를 비워도 된다. */
+  taskIds?: number[] | null;
 }
 export async function spawnSession(text: string, opts?: SpawnOpts): Promise<{ id: string; session: any } | null> {
   const t = String(text || '').trim();
   const taskId = opts && opts.taskId && opts.projectId ? Number(opts.taskId) : 0;
+  const taskIds = opts && opts.projectId && Array.isArray(opts.taskIds) ? opts.taskIds.map(Number).filter((n) => n > 0) : [];
   // 지시가 비어도 되는 건 태스크에서 열 때뿐이다 — 첫 지시는 서버가 그 태스크로 채운다.
-  if ((!t && !taskId) || creating) return null;
+  if ((!t && !taskId && !taskIds.length) || creating) return null;
   creating = true;
   try {
     const p = runPrefs();
@@ -92,7 +96,7 @@ export async function spawnSession(text: string, opts?: SpawnOpts): Promise<{ id
       method: 'POST',
       body: JSON.stringify({
         harness, flags, ...(t ? { initialPrompt: t } : {}),
-        ...(taskId > 0 ? { taskId } : {}),
+        ...(taskIds.length ? { taskIds } : taskId > 0 ? { taskId } : {}),
         // [⚙] 기본값 넷(#3778) — run 이 없으면(구 호출자) 종전대로 기억된 자동 승인만.
         autoApprove: run ? run.autoApprove : !!p.autoApprove,
         ...(run && run.mode === 'readonly' ? { readOnly: true } : {}),

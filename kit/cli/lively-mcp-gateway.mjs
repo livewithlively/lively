@@ -83,8 +83,19 @@ const gateway = () => normGw(readLively("gateway-url") || process.env.LIVELY_GAT
 //   종전 http 직결 등록은 멤버 토큰을 프로필 .claude.json 에 구워 이 문제가 없었다 — #1079 의 프록시 전환이
 //   #346/#916 이 세운 프로필 격리를 MCP 에서 조용히 되돌린 것이라, 여기서 되돌린다.
 //  ⚠ 없으면 종전과 **글자 그대로 같다**(구 게이트웨이·격리 박스·개인 노트북) — 무회귀.
+//  ★ #4135 — 그리고 **세션 토큰 파일이 그 위다.** env 의 LIVELY_MCP_TOKEN 은 판을 띄울 때 한 번 실리는 스냅샷이고, 토큰 없이 뜬 세션
+//   (이 변경 전의 모든 노드 세션)엔 그것조차 없다. 게이트웨이가 살아 있는 세션 앞으로 나중에 구운 자격은 노드가
+//   `~/.lively/session-tokens/<세션id>.json` 에 심는다(terminal/session-token-file — kit/hooks/harness-registry sessionTokenFile 과 같은 자리).
+//   매 호출 그 파일을 먼저 본다 — 없으면 아래 종전 순서 그대로다(무회귀).
+const sessionFileToken = () => {
+  const sid = (process.env.LIVELY_SESSION_ID || "").trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(sid)) return "";
+  try { const j = JSON.parse(readFileSync(join(LIVELY, "session-tokens", `${sid}.json`), "utf8")); return typeof j?.mcp === "string" ? j.mcp.trim() : ""; }
+  catch { return ""; }
+};
 const token = () => (
-  (process.env.LIVELY_MCP_TOKEN || "").trim()
+  sessionFileToken()
+  || (process.env.LIVELY_MCP_TOKEN || "").trim()
   || readLively("token")
   || (process.env.LIVELY_TOKEN || "").trim()
 ).trim();
@@ -170,6 +181,33 @@ function saveCache(gw, tools) {
 //                      **명시 stamp 가 필수**다(src/org/auth/agent-identity.ts — 헤더가 UA 보다 우선).
 //   · x-lively-session / x-lively-mode — 종전엔 하네스가 `${LIVELY_SESSION_ID:-}` 를 제 env 로 확장해 보냈다.
 //                      stdio 는 그 env 를 그대로 상속하므로 여기서 읽어 붙이면 같은 값이 된다.
+// x-lively-session 값. 라이블리가 띄운 창이 아니면(LIVELY_SESSION_ID 없음) 하네스 네이티브 id 로 떨어진다 —
+//  훅이 stdin session_id 로 만드는 `claude-<id>`·`codex-<id>`(kit/hooks/run-custom.mjs executionSessionId)와
+//  같은 값이어야 게이트웨이가 훅 호출과 툴 호출을 한 세션으로 묶는다. 어긋나면 session_rename·session_task 가
+//  "세션을 특정할 수 없습니다" 로 막힌다.
+//  🔴 Claude Code 가 자식 프로세스(이 stdio 서버)에 싣는 이름은 CLAUDE_CODE_SESSION_ID 다 — CLAUDE_SESSION_ID 는
+//   싣지 않는다(확인법: 떠 있는 `lively mcp` 프로세스의 /proc/<pid>/environ). 훅 stdin session_id 와 같은 값이라 먼저 보고,
+//   CLAUDE_SESSION_ID 는 호환용으로 뒤에 둔다(앞에 두면 셸에 남은 값이 훅과 다른 신원을 만든다).
+//  ⚠ 네이티브 id 는 **이 프록시를 띄운 하네스(LIVELY_HARNESS stamp) 것부터** 본다 — 훅도 LIVELY_HARNESS 로 고른다.
+//   codex 는 셸 도구 자식에 CODEX_THREAD_ID 를 싣는다. 그래서 코덱스가 셸로 띄운 claude 의 프록시는 부모의
+//   CODEX_THREAD_ID 와 자기 CLAUDE_CODE_SESSION_ID 를 함께 갖고, codex 를 고정으로 먼저 보면 자식 claude 의 툴 호출이
+//   부모 코덱스 세션으로 붙는다(session_rename 이 부모 세션 이름을 바꾼다). stamp 가 없으면 claude 다(x-lively-harness 기본값과 같다).
+//  ⚠ 알려진 한계 — `/clear` 뒤엔 이 값이 낡는다(실측 Claude Code 2.1.285: stdio MCP 서버는 /clear 에 재시작되지 않고,
+//   env 의 CLAUDE_CODE_SESSION_ID 는 **이전 대화** id 로 남는다. 훅은 stdin 의 새 id 를 쓴다). 그 뒤 툴 호출은 같은 사람의
+//   직전 대화 세션으로 붙는다. 라이블리가 띄운 창은 LIVELY_SESSION_ID(창 단위)라 영향이 없다. 고치려면 훅이 새 id 를
+//   프록시가 읽을 자리에 남겨야 한다(env 만으로는 알 길이 없다).
+export function sessionHeaderValue(env = {}) {
+  const direct = String(env.LIVELY_SESSION_ID || "").trim();
+  if (direct) return direct;
+  const codex = String(env.CODEX_THREAD_ID || env.CODEX_SESSION_ID || "").trim();
+  const claude = String(env.CLAUDE_CODE_SESSION_ID || env.CLAUDE_SESSION_ID || "").trim();
+  const native = String(env.LIVELY_HARNESS || "").trim().toLowerCase() === "codex"
+    ? [["codex", codex], ["claude", claude]]
+    : [["claude", claude], ["codex", codex]];
+  const hit = native.find(([, id]) => id);
+  return hit ? `${hit[0]}-${hit[1]}` : "";
+}
+
 function upstreamHeaders() {
   const h = {
     "content-type": "application/json",
@@ -178,9 +216,7 @@ function upstreamHeaders() {
   };
   const tok = token();
   if (tok) h.authorization = `Bearer ${tok}`;
-  const sid = (process.env.LIVELY_SESSION_ID || "").trim()
-    || ((process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || "").trim() ? `codex-${(process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID).trim()}` : "")
-    || ((process.env.CLAUDE_SESSION_ID || "").trim() ? `claude-${process.env.CLAUDE_SESSION_ID.trim()}` : "");
+  const sid = sessionHeaderValue(process.env);
   if (sid) h["x-lively-session"] = sid;
   const mode = (process.env.LIVELY_MODE || "").trim();
   if (mode) h["x-lively-mode"] = mode;

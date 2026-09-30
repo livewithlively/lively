@@ -39,7 +39,7 @@
 //  outbox-exec.ts(한 걸음 — 보기·누르기·치기 — 을 어디서 실행하나: 그 세션의 호스트 또는 게이트웨이, #3773).
 import path from "node:path";
 import { itemsPool } from "../db/client.js";
-import { firstPromptStep, acceptTrustDialog } from "../terminal/session-first-prompt.js";   // #3949 — 신뢰 대화상자는 읽고 누른다(첫 지시와 같은 함수)
+import { firstPromptStep, acceptTrustDialog, dismissUpdatePrompt, UPDATE_ESC_MAX } from "../terminal/session-first-prompt.js";   // #3949 — 신뢰 대화상자는 읽고 누른다(첫 지시와 같은 함수) · #4135 후속 — codex 업데이트 창은 Escape
 import { codexChatMode } from "../terminal/codex-chat-mode.js";
 import { harnessIo } from "../terminal/harness-io/adapter.js";
 import { locateTranscript, ownerHomes } from "../terminal/harness-io/locate.js";
@@ -117,8 +117,22 @@ export function stallAction(
  *  종전엔 수단이 하나뿐이라, app-server 폴백으로 큐에 들어온 지시가 **닿을 수 없는 곳으로 갔다.**
  */
 export type DeliveryTransport = "send-keys" | "codex-chat";
-export function deliveryTransport(harness: string, env: NodeJS.ProcessEnv = process.env): DeliveryTransport {
-  return codexChatMode({ harness }, env) === "app-server" ? "codex-chat" : "send-keys";
+/**
+ * @param stamp 그 세션의 모드 표식(@box_runtime 원시값) — #4135. **반드시 넘긴다.**
+ *  안 넘기면 배포 기본으로 추측하게 되고, 기본을 뒤집는 순간 이미 떠 있는 app-server 세션(pane=셸)의 지시가
+ *  send-keys 로 나가 **사람의 프롬프트가 셸 명령으로 실행된다**(#3982 — 이 함수가 생긴 이유의 반대편 사고).
+ */
+export function deliveryTransport(harness: string, stamp?: string, env: NodeJS.ProcessEnv = process.env): DeliveryTransport {
+  return codexChatMode({ harness, stamp }, env) === "app-server" ? "codex-chat" : "send-keys";
+}
+
+/** 그 세션의 모드 표식을 읽는다(#4135). 못 읽으면 undefined — codex 축이 «표식 없음» 규칙으로 읽는다. */
+async function sessionRuntimeStampSafe(sessionId: string): Promise<string | undefined> {
+  try {
+    const { getOpt } = await import("../terminal/tmux-exec.js");
+    const v = String((await getOpt(sessionId, "@box_runtime")) || "").trim();
+    return v || undefined;
+  } catch { return undefined; }
 }
 
 /** 못 닿는 동안의 재시도 간격 — 입력창 대기(초 단위)와 달리 **분 단위** 사건이다(노드 재기동·사람의 복원). */
@@ -339,7 +353,10 @@ async function deliverLoop(sessionId: string): Promise<void> {
     //  일반화: **경로가 갈리는 자리(분기·폴백·전송수단 선택)에는 갈린 결과를 남긴다.** 산출물이 '행위'인
     //   수정은 스스로를 증명하지 못해 사람이 재현해 줄 때까지 기다리는데, 이 한 줄이 그 성질을 바꾼다.
     //  볼륨: 사람이 친 프롬프트 단위라 핫패스가 아니다(control 포함해도 세션당 수십 건/일).
-    const transport = deliveryTransport(harness);
+    //  #4135 — 그 세션의 표식을 읽어 가른다(배포 기본이 아니라). 한 번의 tmux 옵션 조회이고, 이 아래는 어차피
+    //   화면을 읽고(capture-pane) 글자를 넣는 경로라 왕복 하나가 더 늘어도 성격이 바뀌지 않는다.
+    const stamp = await sessionRuntimeStampSafe(sessionId);
+    const transport = deliveryTransport(harness, stamp);
     logger.info({ sessionId, seq: row.seq, harness, transport }, "outbox: 전송수단");
     if (transport === "codex-chat") {
       if (await deliverViaCodexChat(sessionId, st, row, settleStall)) return;
@@ -481,12 +498,25 @@ export async function waitReady(
 ): Promise<ReadyVerdict> {
   const t0 = clock.now();
   let acceptedTrust = false;
+  let escPressed = 0;        // #4135 후속 — 업데이트 창에 보낸 Escape 횟수
   for (;;) {
     const seen = await exec.peek();
     if (!seen.ok) return seen.verdict;
     const step = firstPromptStep({ pane: seen.pane, paneCmd: seen.paneCmd, harness, elapsedMs: clock.now() - t0, maxMs: READY_WINDOW_MS, trustOk });
     if (step === "send") return "ready";
     if (step === "give-up") return "not-ready";
+    if (step === "dismiss-update" && escPressed < UPDATE_ESC_MAX) {
+      //  ★ #4135 후속 — codex 시작 «업데이트» 창은 **Escape** 로 닫는다(실측 2026-09-26). Enter 면 «1. Update now»
+      //   가 골라지고, 테넌트 이미지에선 `npm install -g` 가 EACCES 로 실패해 **codex 가 그 자리에서 끝난다**
+      //   (pane 이 셸이 되고 이 지시는 «준비 안 됨» 으로 떨어진다). 애초에 그 창이 안 뜨게 하는 것은 세션 만들 때
+      //   심는 설정 키다(terminal/codex-update-check.ts) — 이 층은 그 키가 없는 홈을 위한 두 번째 겹이다.
+      //  ⚠ 원격 호스트 칸엔 Escape 걸음이 없다(키 RPC 모양이 «내리기+Enter» 고정 — TrustKeys.esc 머리말).
+      //   그때는 `unsupported` 라 종전대로 기다린다(창이 남으면 NOT_READY_TTL 뒤 사람에게 남는다).
+      escPressed++;
+      await dismissUpdatePrompt(sessionId, exec.trustKeys());
+      await clock.sleep(READY_POLL_MS);
+      continue;
+    }
     if (step === "accept-trust" && !acceptedTrust) {
       //  #3949 — **화면을 읽고** «Yes» 로 옮긴 뒤 누른다(첫 지시와 같은 함수 — #3626). 종전엔 여기서 맹목 Enter 였고,
       //   현행 Claude Code 는 기본 선택이 «No, exit» 라 그 Enter 가 하네스를 끄고 이 지시를 «준비 안 됨» 으로 떨궜다.
