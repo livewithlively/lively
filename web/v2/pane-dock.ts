@@ -87,7 +87,8 @@ const SEP = 9;          // 구분선이 먹는 자리
 const GRIP = 14;        // 손잡이가 먹는 자리
 const EDGE_NAME: Record<DockEdge, string> = { bottom: '아래', top: '위', left: '왼쪽', right: '오른쪽' };
 const reduced = (): boolean => { try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (_) { return false; } };
-const finePointer = (): boolean => { try { return matchMedia('(pointer: fine)').matches; } catch (_) { return true; } };
+//  any-pointer — 터치 화면 + 트랙패드 노트북처럼 가는 포인터가 **하나라도** 있으면 확대를 켠다(손가락 입력은 pointerType 으로 따로 거른다).
+const finePointer = (): boolean => { try { return matchMedia('(any-pointer: fine)').matches; } catch (_) { return true; } };
 const clamp = (v: number, lo: number, hi: number): number => (hi < lo ? (lo + hi) / 2 : Math.max(lo, Math.min(hi, v)));
 
 /** 독 아이콘 — 앱 아이콘과 같은 문법(타일 + 앱 색 선 그림, glass-icon.ts). 그림은 곁칸 부품의 선 아이콘 그대로. */

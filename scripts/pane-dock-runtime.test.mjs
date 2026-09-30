@@ -70,6 +70,8 @@ const PAGE = `<!doctype html><meta charset="utf-8"><style>${CSS}
 <script>try{localStorage.clear()}catch(e){}
 //  헤드리스(가상 시간)는 화면을 안 그려 requestAnimationFrame 이 안 돈다 — 시험 페이지에서만 16ms 타이머로 대신 돌린다.
 window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); window.cancelAnimationFrame=(id)=>clearTimeout(id);
+//  CI 의 헤드리스(리눅스)는 마우스 장치가 없어 (any-)pointer: fine 이 거짓이다 — 확대는 «가는 포인터가 있을 때» 의 동작이므로 그 환경을 흉내 낸다(이 맥에선 참이라 통과하던 것, PR #1202 CI 실측).
+(function(){const mm=window.matchMedia.bind(window);window.matchMedia=(q)=>/pointer:\\s*fine/.test(q)?{matches:true,media:q,onchange:null,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){},dispatchEvent(){return false}}:mm(q);})();
 //  설치 앱 목록(/api/ui/apps)만 흉내 — 더보기의 «이 세션에 붙이기» 구획을 재려고. 나머지 서버 호출은 빈 성공.
 (function(){const real=window.fetch;const J=(o)=>new Response(JSON.stringify(o),{status:200,headers:{'content-type':'application/json'}});
  window.fetch=(u,o)=>{const s=String(u&&u.url||u); if(s.includes('/api/ui/apps')) return Promise.resolve(J({apps:[{id:'memo',title:'메모',status:'active',enabled:true,manifest:{ui:{pages:[{key:'m',title:'메모'}]},data:{tables:[{name:'notes'}]}},source:{kind:'workspace'}}]})); if(s.includes('/api/')) return Promise.resolve(J({ok:true})); return real(u,o);};})();</script>
