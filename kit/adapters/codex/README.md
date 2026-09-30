@@ -48,7 +48,7 @@ LIVELY_HARNESS = "codex"
 | SessionStart | session-preload · sync-harness-assets · work-flag · runner (+ matcher `compact` work-flag — #4219 record reminder right after compaction) |
 | UserPromptSubmit | work-flag · runner |
 | PreToolUse | runner (**organization governance deny gate**) |
-| PostToolUse | work-flag ×3 (lively MCP — incl. #4219 inline-record correction nudge · edit tools + shell · subagent launch `spawn_agent`) · runner |
+| PostToolUse | work-flag ×3 (lively MCP · edit tools + shell · subagent launch `spawn_agent`) · runner — the #4219 inline-record correction nudge is Claude-only; codex writes records inline (#4220) |
 | PermissionRequest | work-flag (where claude's Notification = "needs confirmation" sits) |
 | Stop | stop-writeback-gate · work-flag · runner |
 | SessionEnd | work-flag · runner (fires on codex 0.149.1+) |

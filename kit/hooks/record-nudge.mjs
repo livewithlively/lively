@@ -1,8 +1,10 @@
-// 기록 넛지(#4219) — work-flag.mjs 가 import 하는 모듈(훅이 아니다). 기록 묶음 스킬(record-batch)을 결정적 신호로 받친다.
+// 기록 넛지(#4219) — work-flag.mjs 가 import 하는 모듈(훅이 아니다). 세션 주입 가이드의 기록 규칙(#4220 — Claude Code 대화형은
+//  «보고 직전 고정 한 줄로 기록 전용 fork 하나»)을 결정적 신호로 받친다. 규칙 원문: src/org/delivery/knowledge-index.ts 의 «기록» 절.
 //
-// ① 교정 넛지(PostToolUse) — 메인이 라이블리 텍스트 기록을 한 턴에 합계 1,000자 이상 **직접** 썼으면 «남은 기록과 다음 턴부터는
-//    보고 직전 fork 하나로 묶어라»를 additionalContext 로 준다. 막지 않는다 — 본문 생성은 이미 끝났고 막으면 시간만 버린다.
-//    1,000자 미만 인라인은 스킬이 권하는 정상 동작이라 넛지하지 않는다(record-batch §1). 턴당 1회 · 세션당 2회.
+// ① 교정 넛지(PostToolUse) — Claude Code 대화형 메인이 라이블리 텍스트 기록을 한 턴에 합계 1,000자 이상 **직접** 썼으면 «남은 기록과
+//    다음 턴부터는 보고 직전 이 고정 호출로 fork 하나에 넘겨라»를 additionalContext 로 준다. 막지 않는다 — 본문 생성은 이미 끝났고 막으면
+//    시간만 버린다. 한두 줄짜리 인라인은 규칙이 허용하는 동작이라 넛지하지 않는다. 턴당 1회 · 세션당 2회.
+//    codex 는 넛지하지 않는다 — codex fork 는 툴 결과를 물려받지 않아 규칙이 «메인이 바로 쓴다»다(#4201 §13).
 // ② 압축 넛지 — 두 하네스 모두 PreCompact 로는 모델에 말을 걸 수 없다(#4219 실측):
 //    · claude 2.1.285 — PreCompact 는 막기만 하고, 막은 이유는 모델이 아니라 사람 화면 경고·로그로 간다. 대신 **성공한 훅의
 //      stdout 이 압축 요약 지시문(newCustomInstructions)에 붙는다** → 요약에 미기록 사실을 원문대로 남기게 한다.
@@ -22,12 +24,21 @@ import { readdirSync, readFileSync, writeFileSync, unlinkSync, statSync, openSyn
 import { join } from "node:path";
 import { canRecordFork, isHeadlessRun, recordPendingPrefix, RECORD_PENDING_TTL_MS } from "./harness-registry.mjs";
 
-// 넛지 대상 = 스킬이 fork 로 넘기라는 «쏘고 잊는 긴 쓰기»(record-batch §2 왼쪽 칸). 생성(project_create_v6·task_create_v6)은
-//  반환 id 를 곧바로 써야 해서 스킬이 메인에 남기라는 쪽이라 세지 않는다.
+// 넛지 대상 = fork 로 넘길 «쏘고 잊는 긴 쓰기». 생성(project_create_v6·task_create_v6)은 반환 id 를 곧바로 써야 해서 규칙이
+//  메인에 남기는 쪽이라 세지 않는다.
 export const INLINE_NUDGE_TOOLS = new Set(["knowledge_save", "project_update_v6", "task_update_v6", "task_comment_v6", "activity_log"]);
-// 문턱 = 인자 JSON 글자 수의 턴 합계. #4201 실측이 잰 양(in_ch)과 같은 단위라 스킬의 «약 1,000자»와 맞물린다.
+// 문턱 = 인자 JSON 글자 수의 턴 합계. #4201 실측이 잰 양(in_ch)과 같은 단위다.
 export const INLINE_TURN_THRESHOLD = 1000;
 export const INLINE_NUDGE_MAX_PER_SESSION = 2;
+
+// 기록 전용 fork 의 **고정 지시문** — 세션 주입 가이드(src/org/delivery/knowledge-index.ts)의 문장과 글자 그대로 같아야 한다
+//  (record-nudge.test.mjs 가 대조한다). 무엇을 쓸지는 대화 전체를 물려받은 fork 가 정한다 — 메인이 목록·요지를 쓰게 하면 지시문이
+//  기록 본문만큼 길어져 메인 멈춤이 되살아난다(옛 기록 묶음 스킬 실측: 지시문 p50 2,222자 · 메인 멈춤 p50 21초, #4201 §14-9).
+export const RECORD_FORK_PROMPT = "기록 전용 fork 다. 마지막 기록 이후 대화에서 라이블리에 남길 것을 네가 판단해 직접 기록하라(기존 지식은 append, 대화에 없는 사실은 쓰지 않는다, fork 를 다시 띄우지 않는다). 끝나면 저장한 이름·id 만 한 줄씩 남겨라.";
+export const RECORD_FORK_CALL = `Agent{subagent_type:"fork", description:"기록: <주제>", prompt:"${RECORD_FORK_PROMPT}"}`;
+// 기록 fork 를 권하는 하네스 — Claude Code 뿐. codex 도 fork 축은 있지만(#4217 표시 인정) 자식이 툴 결과를 물려받지 않아
+//  메인이 사실을 다시 써 줘야 하므로 규칙이 «메인이 바로 쓴다»다.
+const FORK_RECORD_HARNESSES = new Set(["claude"]);
 
 const INLINE_PREFIX = (sid) => `${sid}.inline-write.`;
 const safeName = (s) => String(s || "").replace(/[^A-Za-z0-9._-]/g, (c) => `%${c.codePointAt(0).toString(16)}`).slice(0, 120);
@@ -51,9 +62,10 @@ export function readHead(path, bytes = 4096) {
   finally { closeSync(fd); }
 }
 
-// 이 세션에서 기록 fork 를 권해도 되나 — fork 가 있는 하네스 · 사람이 대화하는 실행 · 라이블리 기계 세션 아님.
+// 이 세션에서 기록 fork 를 권해도 되나 — Claude Code · 사람이 대화하는 실행 · 라이블리 기계 세션 아님.
 export function forkAdvisable(harnessId, payload, env) {
-  return canRecordFork(harnessId) && !isMachineSession(env) && !isHeadlessRun(harnessId, payload, env, (p) => readHead(p));
+  return FORK_RECORD_HARNESSES.has(harnessId) && canRecordFork(harnessId) && !isMachineSession(env)
+    && !isHeadlessRun(harnessId, payload, env, (p) => readHead(p));
 }
 
 // 턴 시작 — 이번 턴 합계와 턴 넛지 표시를 지운다. 서브에이전트의 턴 시작(codex 자식도 UserPromptSubmit 을 낸다)은 부모 턴이 아니다.
@@ -92,14 +104,11 @@ export function inlineWriteNudge({ flagDir, sid, harnessId, bare, payload, env }
   return inlineNudgeText(harnessId, total);
 }
 
-export function inlineNudgeText(harnessId, total) {
-  const codex = harnessId === "codex"
-    ? " codex 의 fork 는 사용자 메시지와 최종 답만 물려받으므로 message 에 사실 메모(수치·경로·id·결정)를 함께 싣습니다(스킬 §4)."
-    : "";
+export function inlineNudgeText(_harnessId, total) {
   return `[라이블리 기록 교정] 이번 턴에 메인이 라이블리 텍스트 기록(지식·본문 append·댓글·작업 기록)을 직접 ${total.toLocaleString("en-US")}자 썼습니다. ` +
     "메인이 본문을 생성하는 동안 사람은 기다립니다(knowledge_save 1건 p50 46초). 이미 쓴 것은 다시 쓰지 마세요. " +
-    "이번 턴에 남은 기록과 다음 턴부터의 기록은 record-batch 스킬대로 사람에게 보고하기 직전 fork 하나(이름 머리 `기록:`)에 묶어 넘기세요. " +
-    `한 턴 합계 ${INLINE_TURN_THRESHOLD.toLocaleString("en-US")}자 미만의 짧은 기록은 지금처럼 바로 써도 됩니다.${codex}`;
+    `이번 턴에 남은 기록과 다음 턴부터의 기록은 사람에게 보고하기 직전 이 호출 그대로 fork 하나에 넘기고 곧바로 보고하세요 — ${RECORD_FORK_CALL} ` +
+    "(쓸 목록·요지를 지시문에 적지 않습니다 — fork 가 대화 전체를 보고 정합니다). 한두 줄짜리 짧은 기록은 지금처럼 바로 써도 됩니다.";
 }
 
 // 마지막 라이블리 기록 뒤에 한 작업이 있나 — .worked(파일 작업·외부 인입)가 .writeback(기록)보다 나중이면 참.
@@ -143,7 +152,7 @@ export function compactResumeContext({ flagDir, sid, harnessId, payload, env }) 
   if (isSubagentPayload(payload) || String(payload?.source ?? "") !== "compact" || !hasUnrecordedWork(flagDir, sid)) return null;
   if (!claimCompactOnce(flagDir, sid, "resume")) return null;
   const how = forkAdvisable(harnessId, payload, env)
-    ? `합계 ${INLINE_TURN_THRESHOLD.toLocaleString("en-US")}자 이상이면 record-batch 스킬대로 사람에게 보고하기 직전 fork 하나(이름 머리 \`기록:\`)에 묶고, 그보다 짧으면 바로 쓰세요. fork 도 압축된 요약만 물려받으니 지시문에 요약의 해당 항목을 가리키세요.`
+    ? `한두 줄보다 길면 사람에게 보고하기 직전 이 호출 그대로 fork 하나에 넘기세요 — ${RECORD_FORK_CALL} (fork 도 압축된 요약을 물려받으니 요약의 미기록 절을 보고 쓴다).`
     : "fork 없이 바로 쓰세요.";
   const where = harnessId === "claude" ? "요약의 «미기록 — 라이블리에 남길 것» 절과 " : "요약과 ";
   return "[라이블리 압축 직후] 방금 대화가 압축됐고, 압축 전에 한 작업 중 라이블리에 아직 기록하지 않은 것이 있습니다(마지막 기록 뒤의 파일 작업·외부 인입). " +

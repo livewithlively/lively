@@ -3,7 +3,8 @@
 //  실행: node kit/hooks/record-nudge.test.mjs  (npm test 체인에 포함)
 //  fail-first: RN_HOOKS_DIR=<수정 전 kit/hooks 사본> node kit/hooks/record-nudge.test.mjs → 새 행위 행이 빨간불이어야 한다.
 //
-//  왜 이 테스트가 있나: 기록 묶음 스킬(record-batch)과 주입 문구만으로는 모델이 습관대로 한 건씩 인라인으로 기록한다.
+//  왜 이 테스트가 있나: 세션 주입 기록 규칙(#4220 — Claude Code 대화형은 보고 직전 고정 한 줄로 기록 전용 fork)만으로는 모델이 습관대로
+//   한 건씩 인라인으로 기록한다.
 //   훅이 결정적 신호로 교정한다 — 단, 스킬이 권하는 동작(1,000자 미만 인라인·fork 안의 기록·헤드리스의 인라인)에는
 //   절대 넛지하지 않아야 한다. 틀린 넛지는 모델을 스킬 반대 방향으로 민다.
 //  고정하는 불변식(행 번호 = 사양 엣지 표):
@@ -19,7 +20,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 import { sandboxEnv } from "../testlib/os-sandbox.mjs";   // HOME/TMPDIR 만으론 윈도우 격리가 안 된다(#1510)
+import { RECORD_FORK_PROMPT } from "./record-nudge.mjs";   // 고정 지시문 — 넛지가 가리키는 호출의 계약
 
 const HERE = join(fileURLToPath(import.meta.url), "..");
 const HOOKS = process.env.RN_HOOKS_DIR || HERE;
@@ -58,8 +61,8 @@ const envelope = (out) => {
   return null;
 };
 const contextOf = (out) => envelope(out)?.additionalContext || "";
-// 교정 넛지 = PostToolUse 봉투의 additionalContext 가 기록 묶음 스킬(record-batch)을 가리킨다(스킬 이름은 계약이다).
-const nudged = (out) => envelope(out)?.hookEventName === "PostToolUse" && contextOf(out).includes("record-batch");
+// 교정 넛지 = PostToolUse 봉투의 additionalContext 가 기록 전용 fork 의 **고정 지시문 전문**을 담는다(가이드와 같은 문장이 계약이다).
+const nudged = (out) => envelope(out)?.hookEventName === "PostToolUse" && contextOf(out).includes(RECORD_FORK_PROMPT);
 
 let n = 0;
 const newSid = () => `rn${++n}`;
@@ -134,9 +137,9 @@ const rollout = (originator, source) => {
 };
 {
   const out = write(newSid(), 1500, { harness: "codex", payload: { turn_id: "t1", transcript_path: rollout("codex-tui", "cli") } });
-  check("E12 codex TUI 메인 → 넛지 + 사실 메모 안내", nudged(out) && contextOf(out).includes("사실 메모"), contextOf(out).slice(0, 200));
+  check("E12 codex TUI 메인은 1,500자여도 무발화 — codex fork 는 툴 결과를 못 물려받아 규칙이 «메인이 바로 쓴다»다", envelope(out) === null, contextOf(out).slice(0, 200));
   const cl = write(newSid(), 1500);
-  check("E12b claude 넛지엔 codex 전용 안내가 없다", nudged(cl) && !contextOf(cl).includes("사실 메모"), contextOf(cl).slice(0, 120));
+  check("E12b claude 넛지는 fork 호출 모양(subagent_type fork · 이름 머리 기록:)을 그대로 담는다", nudged(cl) && contextOf(cl).includes('subagent_type:"fork"') && contextOf(cl).includes('description:"기록:'), contextOf(cl).slice(0, 160));
 }
 {
   const out = write(newSid(), 1500, { harness: "codex", payload: { turn_id: "t1", transcript_path: rollout("codex_exec", "exec") } });
@@ -168,11 +171,10 @@ check("E16b 종류 축 이전 세션 — kind 없고 위탁 작업 폴더(LIVELY
 }
 {
   const sid = newSid();
-  const tp = rollout("codex-tui", "cli");
-  const a = write(sid, 700, { harness: "codex", payload: { turn_id: "t1", transcript_path: tp } });
-  prompt(sid, { turn_id: "t1", agent_id: "019a-child", agent_type: "default" }, "codex");   // 자식의 턴 시작
-  const b = write(sid, 700, { harness: "codex", payload: { turn_id: "t1", transcript_path: tp } });
-  check("E19 codex 자식의 UserPromptSubmit 은 부모 턴 합계를 지우지 않는다(700+700 → 넛지)", !nudged(a) && nudged(b), `a=${nudged(a)} b=${nudged(b)}`);
+  const a = write(sid, 700);
+  prompt(sid, { agent_id: "a-child", agent_type: "fork" });   // 서브에이전트의 턴 시작(codex 자식도 이 모양으로 낸다)
+  const b = write(sid, 700);
+  check("E19 서브에이전트의 UserPromptSubmit 은 부모 턴 합계를 지우지 않는다(700+700 → 넛지)", !nudged(a) && nudged(b), `a=${nudged(a)} b=${nudged(b)}`);
 }
 {
   const sid = newSid();
@@ -248,7 +250,7 @@ const plainText = (out) => out.trim().length > 0 && envelope(out) === null && !o
 {
   const out = compactStart(session());
   const h = envelope(out);
-  check("C5 claude 압축 직후 SessionStart(compact) → SessionStart 봉투 additionalContext(record-batch)", h?.hookEventName === "SessionStart" && h.additionalContext.includes("record-batch"), out.slice(0, 200));
+  check("C5 claude 압축 직후 SessionStart(compact) → SessionStart 봉투 additionalContext(고정 fork 지시문)", h?.hookEventName === "SessionStart" && h.additionalContext.includes(RECORD_FORK_PROMPT), out.slice(0, 200));
 }
 {
   const out = compactStart(session(), { payload: { agent_id: "a10", agent_type: "fork" } });
@@ -268,9 +270,18 @@ const plainText = (out) => out.trim().length > 0 && envelope(out) === null && !o
 {
   const tui = compactStart(session(), { harness: "codex", payload: { transcript_path: rollout("codex-tui", "cli") } });
   const exec = compactStart(session(), { harness: "codex", payload: { transcript_path: rollout("codex_exec", "exec") } });
-  check("C7 codex 압축 직후 — TUI 는 record-batch 로, exec 는 fork 없이 바로",
-    envelope(tui)?.hookEventName === "SessionStart" && contextOf(tui).includes("record-batch") && envelope(exec) !== null && !contextOf(exec).includes("record-batch"),
+  check("C7 codex 압축 직후 — TUI·exec 둘 다 안내는 하되 fork 없이 바로 쓰라고 한다",
+    envelope(tui)?.hookEventName === "SessionStart" && contextOf(tui).includes("fork 없이") && !contextOf(tui).includes(RECORD_FORK_PROMPT) && contextOf(exec).includes("fork 없이"),
     `tui=${contextOf(tui).slice(0, 80)} exec=${contextOf(exec).slice(0, 80)}`);
+}
+
+// ── G. 세션 주입 가이드 ↔ 넛지 — 같은 고정 지시문 (#4220) ─────────────────────────────
+//  가이드(모든 세션에 주입)와 넛지 문구가 서로 다른 호출을 가리키면 모델이 두 벌을 오간다. 문장 하나를 두 곳이 글자 그대로 공유한다.
+{
+  const guide = readFileSync(join(HERE, "..", "..", "src", "org", "delivery", "knowledge-index.ts"), "utf8");
+  check("G1 세션 주입 가이드에 넛지와 같은 고정 fork 지시문이 글자 그대로 있다", guide.includes(RECORD_FORK_PROMPT), "가이드와 RECORD_FORK_PROMPT 가 어긋남");
+  check("G2 옛 «생기면 즉시 knowledge_save» 규칙이 가이드에서 빠졌다", !guide.includes("생기면 즉시 `knowledge_save`") && !guide.includes("그 자리에서(in-flow)"), "옛 문장이 남아 있음");
+  check("G3 고정 지시문은 짧다(메인 멈춤 몇 초 — 200자 이하)", RECORD_FORK_PROMPT.length <= 200, `길이 ${RECORD_FORK_PROMPT.length}`);
 }
 
 // ── W. 배선 — 이 훅이 실제로 그 이벤트에 불리는가(user-install 의 claude user-level 블록) ──────────────
