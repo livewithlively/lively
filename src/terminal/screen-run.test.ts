@@ -9,12 +9,15 @@
 //   그래서 도구 하나가 10분 넘게 돌거나 훅이 안 걸린 도구만 쓰는 턴도 보고가 만료되면 idle 로 떨어진다.
 //
 //  표의 화면은 **실측 원문**이다(빈 줄만 뺐다). 실측에서 한 칸을 비튼 행은 비튼 방식을, 지어낸 행은 그렇다고 적었다.
-//  엣지 표는 스크래치패드 spec.md(R1~R12 · A1·A2 · P1~P4 · W1) — 행마다 시험 하나.
+//  행 이름이 곧 엣지 표다 — R 화면 판정(claude) · A 하네스 표 · S 한 화면 두 판정 · E 행에 주는 것 · P 우선순위 · W 배선.
+//  사이드바 점이 background 를 «작업 중» 으로 그리는 표는 scripts/session-status.test.mjs ㉓~㉗.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { claudeRun } from "./harness-io/claude.js";
 import { harnessIo } from "./harness-io/adapter.js";
-import { detectRun, resolveAgentPhase, PHASE_TTL_SEC } from "./phase.js";
+import { detectRun, readScreen, screenRunEffects, resolveAgentPhase, PHASE_TTL_SEC } from "./phase.js";
+import { RUN_FROM_SCREEN_LINES } from "./harness-io/screen-run.js";
+import { projectNodeSession } from "../node/protocol.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -87,6 +90,11 @@ t("R11 입력창이 안 보이는 화면(승인 대화상자)·빈 꼬리는 모
   assert.equal(claudeRun(lines(" Do you want to create hello.txt?\n ❯ 1. Yes\n   2. No\n Esc to cancel · Tab to amend")), null);
   assert.equal(claudeRun([]), null);
 });
+t("R13 ★ 대화 본문의 «to interrupt»·«…(» 는 턴 표시가 아니다(R4 의 완료 줄을 본문 줄로 바꿨다 — ⏺ 답 · 옛 판 > 입력 메아리 · 글자로 시작하는 줄)", () => {
+  for (const line of ["⏺ 푸터에 esc to interrupt 가 보이면 도는 중입니다", "> 로딩…(중)", "Stop hook running… (2s)"]) {
+    assert.equal(claudeRun(lines(DONE.replace("✻ Worked for 47m 43s · done 9:20 PM", line))), null, line);
+  }
+});
 t("R12 경계 — 가로줄이 하나만 보이면(입력창을 못 짚는다) 모른다 → null(R1 의 윗 가로줄을 뺐다)", () => {
   const one = TURN.replace(`${RULE}\n❯ \n`, "❯ \n");
   assert.equal(lines(one).filter((l) => l.startsWith("─")).length, 1, "배선: 가로줄이 정확히 하나");
@@ -107,23 +115,55 @@ t("A2 ★ detectRun — 입력창에 16줄을 쳐 둬도(대기 판정의 14줄 
   assert.equal(detectRun(pane, null), null);
 });
 
+t("A3 ★ 다른 하네스는 맨 아래 몇 줄의 표시만 믿는다 — 본문에 남은 «esc to interrupt» 는 턴이 아니다(격리 리뷰 재현 모양)", () => {
+  const codexIdle = "  Tip: Press ctrl+t to open the full transcript.\n› Ask Codex to do anything\n  GPT-5.6-Terra medium · /work/box-yoon-1";
+  const stale = ["• Ran rg 'esc to interrupt' src", "  └ src/terminal/phase.ts: esc to interrupt", ...Array.from({ length: RUN_FROM_SCREEN_LINES }, (_, i) => `    결과 ${i + 1}`)].join("\n");
+  const pane = `${stale}\n${codexIdle}`;
+  assert.equal(detectRun(pane, harnessIo("codex")?.run), null, "창 밖 본문");
+  assert.equal(harnessIo("codex")?.screen?.(lines(pane).slice(-14)), "busy", "배선: 종전 screen 꼬리(14줄)는 이 화면을 busy 로 읽는다 — 그래서 창을 줄였다");
+  const busy = "› 현재 폴더에서 ls -la 를 실행해서 보여줘\n• Working (2s • esc to interrupt)\n› Explain this codebase\n  gpt-5.6-terra medium · ~/box/yoon";
+  assert.equal(detectRun(`${stale}\n${busy}`, harnessIo("codex")?.run), "turn", "도는 표시는 맨 아래에 있다");
+});
+
+// ── 한 화면 두 판정(phase.readScreen) ──
+t("S1 ★ 사람이 답할 화면이면 실행 상태를 내지 않는다 — 스피너 줄과 승인 대화상자가 함께 보여도(지어낸 화면: 격리 리뷰 재현 모양)", () => {
+  const pane = ["✽ Architecting… (6m 28s · ↓ 17.8k tokens)", RULE, " Do you want to create hello.txt?", " ❯ 1. Yes", "   2. No", RULE, " Esc to cancel · Tab to amend"].join("\n");
+  assert.equal(claudeRun(lines(pane)), "turn", "배선: 실행 판정기만 보면 이 화면은 turn 이다");
+  assert.deepEqual(readScreen(pane, harnessIo("claude")), { waiting: true, run: null });
+  assert.deepEqual(readScreen(BACKGROUND, harnessIo("claude")), { waiting: false, run: "background" });
+  assert.deepEqual(readScreen(TURN, null), { waiting: false, run: null }, "하네스를 모르면 실행 상태도 모른다");
+});
+
+// ── 화면 실행 상태가 행에 주는 것(phase.screenRunEffects) ──
+t("E1 turn → 작업 중(working·harnessWorking·마지막 작업 시각) · 표식 없음", () => {
+  assert.deepEqual(screenRunEffects("turn", false), { turn: true, background: false });
+});
+t("E2 ★ background → 표식 하나만(파란 점) — working 이 아니다(리브 2턴·대화창·회수·CP 유휴가 «턴이 돈다» 로 읽는다)", () => {
+  assert.deepEqual(screenRunEffects("background", false), { turn: false, background: true });
+});
+t("E3 모른다 → 아무것도 없다 · app-server 세션은 화면이 정본이 아니다", () => {
+  assert.deepEqual(screenRunEffects(null, false), { turn: false, background: false });
+  assert.deepEqual(screenRunEffects("turn", true), { turn: false, background: false });
+  assert.deepEqual(screenRunEffects("background", true), { turn: false, background: false });
+});
+
 // ── 우선순위표(phase.resolveAgentPhase 5번) ──
 {
   const T = 1_700_000_000;
   const phase = (i: Partial<Parameters<typeof resolveAgentPhase>[0]>): string =>
     resolveAgentPhase({ reported: null, nowSec: T, spinning: false, scrapedWaiting: false, ...i });
-  t("P1 ★ idle 보고(턴 끝 Stop) + 화면 background → busy(신고 모양)", () => {
-    assert.equal(phase({ reported: { phase: "idle", at: T - 60 }, scrapedRun: "background" }), "busy");
+  t("P1 ★ idle 보고(Stop 뒤 턴이 이어짐) + 화면 turn → busy", () => {
+    assert.equal(phase({ reported: { phase: "idle", at: T - 60 }, scrapedTurn: true }), "busy");
   });
   t("P2 ★ 만료된 busy 보고(10분 넘는 도구) + 화면 turn → busy", () => {
-    assert.equal(phase({ reported: { phase: "busy", at: T - PHASE_TTL_SEC - 1 }, scrapedRun: "turn" }), "busy");
+    assert.equal(phase({ reported: { phase: "busy", at: T - PHASE_TTL_SEC - 1 }, scrapedTurn: true }), "busy");
   });
-  t("P3 신선한 waiting 보고 · 화면 대기는 화면 실행 상태보다 위(사람이 답할 일을 먼저)", () => {
-    assert.equal(phase({ reported: { phase: "waiting", at: T - 5 }, scrapedRun: "turn" }), "waiting");
-    assert.equal(phase({ scrapedWaiting: true, scrapedRun: "turn" }), "waiting");
+  t("P3 신선한 waiting 보고 · 화면 대기는 화면 turn 보다 위(사람이 답할 일을 먼저)", () => {
+    assert.equal(phase({ reported: { phase: "waiting", at: T - 5 }, scrapedTurn: true }), "waiting");
+    assert.equal(phase({ scrapedWaiting: true, scrapedTurn: true }), "waiting");
   });
-  t("P4 화면이 모른다(null)·안 줬다(undefined) → 종전 그대로 idle", () => {
-    assert.equal(phase({ scrapedRun: null }), "idle");
+  t("P4 화면이 turn 이 아니다(false)·안 줬다(undefined) → 종전 그대로 idle", () => {
+    assert.equal(phase({ scrapedTurn: false }), "idle");
     assert.equal(phase({}), "idle");
   });
 }
@@ -131,16 +171,23 @@ t("A2 ★ detectRun — 입력창에 16줄을 쳐 둬도(대기 판정의 14줄 
 // ── 배선 — 판정이 목록 행(agentState·working·harnessWorking·lastActive)까지 간다 ──
 //  collectSessions 는 tmux 를 직접 부르는 함수라 여기서 못 돌린다(가짜 tmux 없음). harness-reports-busy.test H8 과 같은 방식으로
 //  **소스 자리를 못박는다** — 값이 만들어지고도 rows·SessionInfo 에 안 적혀 조용히 사라진 사고(#2439)가 이 자리였다.
-t("W1 화면 판정이 대기 판정과 같은 캡처에서 나와 목록의 네 자리에 실린다", () => {
+t("W1 화면 판정이 대기 판정과 같은 캡처에서 나와 screenRunEffects 를 거쳐 목록 행의 다섯 자리에 실린다", () => {
   const here = new URL(".", import.meta.url).pathname.replace(/\/dist\//, "/src/");
   const src = readFileSync(`${here}sessions.ts`, "utf8");
   assert.match(src, /const v = await scrapePane\(r\.name, harnessIo\(r\.harness\)\);[\s\S]{0,120}if \(v\.run\) screenRuns\.set\(r\.name, v\.run\);/, "캡처 한 번에서 run 을 모은다");
-  assert.match(src, /resolveAgentPhase\(\{[^}]*scrapedRun: screenRun \}\)/, "단계 판정에 들어간다(agentState)");
-  assert.match(src, /working: appServer \? asPhase === "busy" : !!\([^)]*\|\| screenRun\)/, "working 에 들어간다(사이드바 파란 점)");
-  assert.match(src, /harnessWorking: appServer \? asPhase === "busy" : !!r\.harnessBusy \|\| screenRun === "turn",/, "하네스가 말하는 작업 중은 turn 만(백그라운드는 회수 상한 쪽)");
-  assert.match(src, /if \(screenRun === "turn" && !appServer\) \{\s*r\.lastBusy = nowSec;/, "turn 만 마지막 작업 시각을 민다");
+  assert.match(src, /const screen = screenRunEffects\(screenRuns\.get\(r\.name\) \?\? null, appServer\);/, "행에 주는 것은 screenRunEffects 가 정한다");
+  assert.match(src, /resolveAgentPhase\(\{[^}]*scrapedTurn: screen\.turn \}\)/, "단계 판정(agentState)엔 turn 만");
+  assert.match(src, /working: appServer \? asPhase === "busy" : !!\([^)]*\|\| screen\.turn\)/, "working 엔 turn 만");
+  assert.match(src, /harnessWorking: appServer \? asPhase === "busy" : !!r\.harnessBusy \|\| screen\.turn,/, "하네스가 말하는 작업 중도 turn 만");
+  assert.match(src, /\.\.\.\(screen\.background \? \{ background: true \} : \{\}\)/, "background 는 따로 실린다(사이드바 점)");
+  assert.match(src, /if \(screen\.turn\) \{[^\n]*\n\s*r\.lastBusy = nowSec;/, "turn 만 마지막 작업 시각을 민다");
   const pushAt = src.indexOf("sessions.push({");
-  assert.ok(pushAt > 0 && src.indexOf('if (screenRun === "turn" && !appServer)') < pushAt, "시각을 민 뒤에 행을 만든다(lastActive 에 실린다)");
+  assert.ok(pushAt > 0 && src.indexOf("if (screen.turn) {") < pushAt, "시각을 민 뒤에 행을 만든다(lastActive 에 실린다)");
+});
+t("W2 노드 스냅샷 투영이 background 를 싣고, 끊긴 노드에선 접는다(working·awaiting 과 같은 라이브 신호 · #2533)", () => {
+  const row = { id: "box-x", owner: "a", invites: [], agentState: "idle", attached: true, background: true } as unknown as Parameters<typeof projectNodeSession>[0];
+  assert.equal(projectNodeSession(row, true, "a").background, true, "붙은 노드 — 그대로");
+  assert.equal(projectNodeSession(row, false, "a").background, false, "끊긴 노드 — 얼어붙은 과거라 접는다");
 });
 
 console.log(`\n${pass} passed`);

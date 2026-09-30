@@ -440,6 +440,11 @@ export interface SessionInfo {
   //  둘 다 없는 행(구 노드·관측 못 한 행)은 회수기가 agentState 로 짐작한다.
   harnessWorking?: boolean;
   paneWorking?: boolean;
+  // #4502 — **턴은 끝났지만 하네스가 띄운 백그라운드 작업이 남았다**(화면: «✻ … done 5:50 PM · 1 shell still running»). 그 작업이
+  //  끝나면 AI 가 스스로 이어 가므로 사람 눈엔 «아직 안 끝난 세션» 이다 — 사이드바 점(web/session-status.ts)만 이걸 작업 중으로 그린다.
+  //  working 과 따로인 이유: working 은 «턴이 돈다» 이고 리브 2턴·대화창·회수·CP 유휴가 그 뜻으로 읽는다(phase.screenRunEffects).
+  //  참일 때만 실린다(없음 = 거짓).
+  background?: boolean;
   // 실시간 작업 요약(#req) — Claude Code 가 pane_title 에 써두는 '지금 하는 일' 요약(상태 글리프 제거). 없으면 빈 문자열 → 프론트가 label 로 폴백.
   title?: string;
   // #2197 — 사람이 **마지막으로 시킨 말**(훅 UserPromptSubmit 보고 → org_session_state.last_prompt, 300자 상한). 사이드바 세션 행

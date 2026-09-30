@@ -22,6 +22,7 @@
 import type { ChatKey } from "../send-keys.js";
 import type { ParseResult, ParseState } from "./chat-line.js";
 import { TERM_UI_UNKNOWN, type TermUi } from "./term-ui.js";
+import { turnFromScreen } from "./screen-run.js";   // #4502 — 화면 busy → 턴(맨 아래 몇 줄만)
 import { claudeIo } from "./claude.js";
 import { codexIo } from "./codex.js";
 import { grokIo } from "./grok.js";
@@ -45,7 +46,8 @@ export type ScreenState = "ready" | "busy" | "dialog" | "auth";
 
 /**
  * 화면이 말하는 실행 상태(#4502) — screen 과 다른 축이다. screen 은 «지금 글자를 넣어도 되나» 이고(claude 는 돌고 있어도
- *  큐잉하므로 ready), 이건 «이 세션이 아직 일을 안 끝냈나» 다. 목록의 «작업 중»(working) 이 이 답을 쓴다.
+ *  큐잉하므로 ready), 이건 «이 세션이 아직 일을 안 끝냈나» 다. 목록 행이 이 답을 쓴다(turn → working · background → background
+ *  — 둘이 행에 주는 것은 phase.screenRunEffects).
  *  · turn       = 턴이 도는 중(Esc 로 끊을 수 있다). 훅 보고가 끊겨도(도구 하나가 10분 넘게 돈다 · 훅이 안 걸린 도구만 쓴다) 보인다.
  *  · background = 턴은 끝났지만 **하네스가 띄운 백그라운드 작업이 남았다** — 그게 끝나면 AI 가 스스로 이어 간다
  *                 (claude «… · 1 shell still running»). 사람 눈엔 «아직 안 끝난 세션» 이다.
@@ -97,8 +99,8 @@ const opencodeIo: HarnessSessionAdapter = {
     if (/ctrl\+p commands/i.test(s)) return "ready";
     return null;
   },
-  //  #4502 — 화면의 busy 가 곧 «턴이 돈다» 다(esc interrupt). 백그라운드 표시는 미실측.
-  run: (tail) => (opencodeIo.screen?.(tail) === "busy" ? "turn" : null),
+  //  #4502 — 화면의 busy 가 곧 «턴이 돈다» 다(esc interrupt) — 맨 아래 몇 줄만(screen-run.ts). 백그라운드 표시는 미실측.
+  run: (tail) => turnFromScreen(opencodeIo.screen, tail),
   term: TERM_UI_UNKNOWN,   // 화면 사실 미실측(#4135) — 선택지·붙여넣기·대화상자를 아직 눈으로 안 봤다
 };
 // 셸 세션 — AI 없음. 대화 파일도 승인도 없다.

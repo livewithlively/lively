@@ -174,4 +174,14 @@ const fallbackRow = (over = {}) => ({
     "E15 loadData 가 세션 응답을 keepObserved 로 받는다 — 규칙이 맞아도 안 부르면 그대로다");
 }
 
+// #4502 — 백그라운드 대기(background)도 관측 신호다. 중계가 한 틱 못 본 사이에 파란 점이 꺼졌다 켜지지 않게 잇는다.
+//  폴백 행이 이 필드를 지어내도(working:false 처럼 background:false 를 싣는 날) 기억이 이겨야 한다 — 그래서 행에 명시로 싣는다.
+//  (지금의 서버 폴백 행 session-unobserved.ts 는 이 키를 안 싣는다 — 안 실으면 기억이 그대로 남는 건 위 머리말의 규칙이다.)
+{
+  const mem = new Map();
+  keepObserved([observedRow({ agentState: "idle", background: true })], mem, T0);
+  const [out] = keepObserved([fallbackRow({ background: false })], mem, T0 + 20_000);
+  ok(out.background === true && sessStateKey(out, T0 + 20_000) === "busy", "#4502 못 본 틱에도 직전의 백그라운드 대기가 이어져 점이 «작업 중» 그대로다");
+}
+
 console.log(`\n${pass} passed`);
