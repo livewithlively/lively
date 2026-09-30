@@ -164,6 +164,9 @@
 .pjh-w .pjv-tasks-embedded .pjv-tgroup { margin-top: 10px; }
 .pjh-w .pjv-tasks-embedded .pjv-tgroup:first-child { margin-top: 0; }
 .pjh-w .pjv-tasks-embedded .pjv-tgroup-head { padding: 0 2px 4px; min-height: 30px; border-bottom: 0; gap: 6px; }
+/* 열 머리 격자(묶음 이름 + 담당자·마감·우선순위 머리)는 몸통 줄과 같은 트랙 — 간격 0 · 좌우 4px(줄과 같게). 위 gap 6px 가 여기에도 먹으면
+   폭 0 인 트랙마다 6px 씩 밀려 머리 글자가 몸통 열보다 16px 왼쪽에 섰다(#4135 2026-09-30). */
+.pjh-w .pjv-tasks-embedded .pjv-tgroup-head.pjv-tgroup-head-cols { gap: 0; padding-left: 4px; padding-right: 4px; }
 .pjh-w .pjv-tasks-embedded .pjv-tgroup-head .pjv-trow-title-cell { gap: 7px; padding-left: 26px; position: relative; }
 .pjh-w .pjv-tasks-embedded .pjv-tgroup-head .pjv-row-check { position: absolute; left: 2px; top: 50%; margin-top: -8px; opacity: 0; }
 .pjh-w .pjv-tasks-embedded .pjv-tgroup-head:hover .pjv-row-check { opacity: 1; }
@@ -194,6 +197,8 @@
 .pjh-w .pjv-tasks-embedded .pjv-cell-btn.empty { visibility: hidden; }
 .pjh-w .pjv-tasks-embedded .pjv-trow:hover .pjv-cell-btn.empty { visibility: visible; }
 .pjh-w .pjv-tasks-embedded .pjv-ava { width: 20px; height: 20px; font-size: 9.5px; font-weight: 700; }
+/* 담당자 열이 얼굴 폭일 때(1·2칸, #4135 2026-09-30): 머리 «담당자» 는 얼굴 열 오른쪽 끝에 맞춘다 — 머리 트랙(글자 폭)이 몸통 트랙(얼굴 폭)보다 넓어 시작점이 어긋나므로 */
+.pjh-w .pjv-tasks-embedded.pjv-asg-tight .pjv-colhead[data-col="assignee"] { justify-content: flex-end; text-align: right; padding: 0 4px 0 0; }
 .pjh-w .pjv-tasks-embedded .pjv-asg-faces { gap: 2px; }
 .pjh-w .pjv-tasks-embedded .pjv-asg-name { margin-left: 5px; font-size: 12.5px; color: var(--ink-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pjh-w .pjv-tasks-embedded .pjv-due-text { font-size: 12.5px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
