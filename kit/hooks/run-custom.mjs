@@ -19,7 +19,7 @@ import { join } from "node:path";
 import crypto from "node:crypto";
 // 주입 봉투는 하네스별 규약이다 — 표에서 파생한다. ⚠ HARNESS 상수는 종전 계산식 유지(빈 문자열 가능):
 //  이 값이 게이트웨이 질의(`?harness=`)에 그대로 실리므로 여기서 기본값을 채우면 서버가 받는 값이 바뀐다.
-import { harness, isForeignGrokInvocation } from "./harness-registry.mjs";
+import { harness, isForeignGrokInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
@@ -88,7 +88,8 @@ const pickCred = (envName, fileVal) => {
   const env = (process.env[envName] || "").trim();
   return (SPAWNED ? (env || fileVal) : (fileVal || env)) || "";
 };
-const TOKEN = pickCred("LIVELY_TOKEN", readLocal("token"));
+//  #4135 — 세션 토큰 파일이 있으면 그것이 먼저다(게이트웨이가 이 세션 앞으로 나중에 실어 준 정본 — harness-registry sessionTokenFile 머리말).
+const TOKEN = sessionTokenFromFile("hook", HOME, (p) => readFileSync(p, "utf8")) || pickCred("LIVELY_TOKEN", readLocal("token"));
 const GW_PICKED = pickCred("LIVELY_GATEWAY_URL", readLocal("gateway-url")).replace(/\/$/, "");
 const GW = GW_PICKED || "http://localhost:8080";
 

@@ -18,6 +18,7 @@
 //  · 승인 UI 미실측 → answer=null.
 import path from "node:path";
 import type { HarnessSessionAdapter } from "./adapter.js";
+import { TERM_UI_UNKNOWN } from "./term-ui.js";
 import { isoOf, parseJsonLines, type ChatBlock, type ChatLine, type ParseState } from "./chat-line.js";
 
 const asObj = (v: unknown): Record<string, any> | null => (v && typeof v === "object" && !Array.isArray(v)) ? v as Record<string, any> : null;
@@ -125,4 +126,7 @@ export const antigravityIo: HarnessSessionAdapter = {
   },
   parse: parseAntigravity,
   answer: null,
+  //  #4135 — 화면 사실: 신뢰 대화상자는 실측했다(위 screen 의 문구 그대로). 선택지 키·붙여넣기 접힘은 미실측이라
+  //   사고가 안 나는 쪽으로 둔다(숫자만 보내면 안 골라질 뿐, 엉뚱한 Enter 가 다음 화면으로 새지 않는다).
+  term: { ...TERM_UI_UNKNOWN, startDialogRe: /Do you trust the contents|↑\/↓\s+Navigate|enter\s+Confirm/i },
 };

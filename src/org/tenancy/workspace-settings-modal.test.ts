@@ -37,7 +37,7 @@ const RAILC = strip(RAIL); const MODALC = strip(MODAL); const SWC = strip(SW);
 test("★ E1 설정 입구가 팝오버에 모두에게 있다 — owner 게이트 없이", () => {
   //  ⚠ «줄 머리에서 시작»까지 본다 — `X ? row('gear'…) : null` 로 감싸는 돌연변이가 문자열 매칭만으로는
   //   통과했다(실측). 조건이 붙는 순간 누군가에겐 문이 사라진다.
-  assert.match(RAILC, /\n\s*row\('gear', '워크스페이스 설정', '아바타 · 이름 · 구성원 · 기능 설정', \(\) => openCurrentWsSettings\(/,
+  assert.match(RAILC, /\n\s*row\('gear', '워크스페이스 설정', '이름, 아바타, 구성원, 기능을 설정합니다', \(\) => openCurrentWsSettings\(/,
     "★설정 입구가 없거나, 조건부로 감싸였거나, 부제·목적지가 다르다 — 모두에게 무조건 그려져야 한다");
 });
 

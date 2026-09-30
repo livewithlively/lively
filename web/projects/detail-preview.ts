@@ -23,7 +23,7 @@ function openProjectPreviewModal(id, projectName, repos0) {
   const back = overlayBox('미리보기' + (projectName ? ' — ' + projectName : ''),
     el('div', { class: 'proj-settings' },
       el('section', { class: 'ps-block' },
-        el('p', { class: 'ps-block-hint', text: '작업 중인 화면을 운영 화면이나 다른 사람 작업에 영향 없이 따로 띄워 봅니다. [화면 열기]를 누르면 오른쪽 곁칸에 떠서 이 자리를 떠나지 않고 볼 수 있고, [↗]로 새 창에 띄우거나 그 주소를 팀원에게 보내 확인받을 수도 있어요.' }),
+        el('p', { class: 'ps-block-hint', text: '작업 중인 화면을 운영 화면이나 다른 사람 작업에 영향 없이 따로 띄워 봅니다. [화면 열기]를 누르면 우측 사이드바에 떠서 이 자리를 떠나지 않고 볼 수 있고, [↗]로 새 창에 띄우거나 그 주소를 팀원에게 보내 확인받을 수도 있어요.' }),
         body),
       el('div', { class: 'ps-rules-actions' }, ...(repoSel ? [repoSel] : []), addBtn)));
   let timer: any = null;
@@ -54,7 +54,7 @@ function openProjectPreviewModal(id, projectName, repos0) {
         //  곁칸이 없는 화면(팝아웃 창·구 페이지)에서는 openInAside 가 false 를 돌려주므로 그 땐 새 창으로 간다.
         //  새 창을 원하는 사람을 막지는 않는다 — 옆의 [↗] 가 그대로 남는다.
         env.status === 'running' ? el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '화면 열기',
-          title: '오른쪽 곁칸에서 봅니다 — 끌어서 넓힐 수 있어요', onclick: () => openHere(env, href) }) : null,
+          title: '우측 사이드바에서 봅니다. 끌어서 넓힐 수 있어요.', onclick: () => openHere(env, href) }) : null,
         env.status === 'running' ? el('a', { class: 'btn btn-ghost btn-sm', href, target: '_blank', rel: 'noopener', text: '↗',
           title: '새 창으로 열기', 'aria-label': '새 창으로 열기' }) : null,
         env.status !== 'preparing' ? el('button', { class: 'btn btn-ghost btn-sm', text: env.status === 'running' ? '새로 만들기' : '띄우기', onclick: (e) => act(e.target, '/ensure', env.id) }) : null,
@@ -84,7 +84,7 @@ function openProjectPreviewModal(id, projectName, repos0) {
     try {
       const r = await api('/api/ui/preview-envs/' + encodeURIComponent(envId) + suffix, { method: 'POST' });
       if (suffix === '/stop') toast('껐습니다');
-      else if (r && r.status === 'running') toast('준비됐습니다 — ‘화면 열기’를 누르면 오른쪽 곁칸에 뜹니다');
+      else if (r && r.status === 'running') toast('준비됐습니다. ‘화면 열기’를 누르면 우측 사이드바에 뜹니다.');
       else if (r && r.status === 'preparing') toast('준비를 시작했습니다 — 끝나면 여기에 표시됩니다');
       else toast((r && r.error) || '띄우지 못했습니다', true);
     } catch (e) { toast('실패 — ' + e.message, true); }

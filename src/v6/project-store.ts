@@ -18,7 +18,7 @@ import { type ProjectNameSource } from "./project-name.js";
 // 쓰기 경로 임베딩 비동기화(#1053) — 저장/수정 시 인라인 임베딩 대신 pending 마킹 후 백그라운드 스윕에 위임(knowledge 와 동형).
 import { markEmbeddingPending, PROJECT_TARGET } from "./embedding-backfill.js";
 import {
-  type GrepPlan, parseGrep, grepWhere, idEquals, grepExec, grepSnippet, previewBody, RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
+  type GrepPlan, parseGrep, grepWhere, idEquals, exactFirst, grepExec, grepSnippet, previewBody, RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
 } from "./search-util.js";
 
 // 세션·폴더 바인딩(#1313 R21) — 구현은 project-session-store.ts 로 분리(터미널 척추가 PM 스토어 전체를 안 끌게).
@@ -36,7 +36,7 @@ const PROJECT_COLS =
    list_id,
    priority, assignee, start_date, due_date,
    external_system, external_instance, external_id, external_url,
-   sort, created_at, updated_at, completed_at, archived_at, trashed_at, name_source`;
+   sort, created_at, updated_at, completed_at, archived_at, trashed_at, name_source, draft`;
 
 export interface ProjectRow {
   id: number; level: string; parent_id: number | null;
@@ -59,6 +59,9 @@ export interface ProjectRow {
   // #2031 — 이 이름을 누가 지었나(rule=첫 지시에서 자른 기계값 | agent | human). NULL=구 행 → 코드가 human 으로 읽는다.
   //  걸쇠(claimProjectName)가 이 값으로 "낮은 쪽이 높은 쪽을 못 덮는다"를 집행한다. 판정표는 v6/project-name.ts.
   name_source: string | null;
+  // #4170 — 초안(세션 첫 지시로 기계가 막 만든 껍데기). true 면 목록 기본 뷰가 따로 뺀다. NULL = 아직 안 따져 본 구 행
+  //  → false 로 읽는다. 들어가는 길은 createProject(draft) 하나, 나오는 길은 제목·본문 직접 수정 · 완료 · 명시 해제.
+  draft: boolean | null;
   members?: unknown[]; // listProjects 가 facepile 용으로 채움(상세 getProject 의 members 와 별개)
 }
 
@@ -443,6 +446,8 @@ export async function createProject(
     /** 이 이름을 누가 지었나(#2031). 생략=human — **사람이 지은 이름으로 간주**한다(에이전트가 못 덮는다).
      *  첫 지시에서 기계가 자른 임시 이름을 넣는 자동 생성 경로만 'rule' 을 준다(그것만 나중에 다듬어진다). */
     name_source?: ProjectNameSource;
+    /** 초안으로 만든다(#4170) — 첫 지시로 **기계가 이름을 지은** 껍데기에만 준다(name_source='rule' 과 짝). 생략=false. */
+    draft?: boolean;
   },
   ctx?: WriteCtx,
 ): Promise<ProjectRow> {
@@ -473,11 +478,11 @@ export async function createProject(
       [input.name, ctx?.actor ?? null, String(CREATE_DEDUPE_SEC)]);
     if (dup) return { row: dup, deduped: true };
     const fresh: ProjectRow = await one(c,
-      `INSERT INTO project(level, name, description, folder, list_id, created_by, status, status_category, name_source, created_at, updated_at)
-       VALUES('project',$1,$2,$3,$4,$5,'active','started',$6,now(),now())
+      `INSERT INTO project(level, name, description, folder, list_id, created_by, status, status_category, name_source, draft, created_at, updated_at)
+       VALUES('project',$1,$2,$3,$4,$5,'active','started',$6,$7,now(),now())
        RETURNING ${PROJECT_COLS}`,
       [input.name, input.description ?? null, input.folder ?? null, input.list_id ?? null, ctx?.actor ?? null,
-       input.name_source ?? "human"]);
+       input.name_source ?? "human", input.draft === true]);
     return { row: fresh, deduped: false };
   });
   // 이미 있던 것을 돌려주는 길에서는 뒷일(팀원 등록·감사·외부 푸시·임베딩)을 다시 하지 않는다 — 첫 생성이 이미 했다.
@@ -573,13 +578,14 @@ export async function updateProjectStatus(id: number, status: string, ctx?: Writ
   const before: ProjectRow | undefined = await one(itemsPool,
     `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
   if (!before) throw new Error(`프로젝트 #${id} 없음`);
-  // done → 완료시각 기록, active 복귀 → 완료시각 해제.
+  // done → 완료시각 기록, active 복귀 → 완료시각 해제. 완료는 초안(#4170)도 끝낸다 — 끝난 일은 정리할 껍데기가 아니다.
   // status_raw = 리스트 커스텀 상태명(개방 어휘, #475). undefined=무변경(기존 보존), null=해제, 그 외=설정.
   const rawGiven = statusRaw !== undefined;
   const after: ProjectRow = await one(itemsPool,
     `UPDATE project SET status=$2, status_category=$3,
        status_raw = CASE WHEN $5::bool THEN $4 ELSE status_raw END,
-       completed_at=CASE WHEN $2='done' THEN now() ELSE NULL END, updated_at=now()
+       completed_at=CASE WHEN $2='done' THEN now() ELSE NULL END,
+       draft = CASE WHEN $2='done' THEN false ELSE draft END, updated_at=now()
      WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status), statusRaw ?? null, rawGiven]);
   await auditProject(String(id), "set_status", before, after, ctx);
   await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT.
@@ -614,12 +620,21 @@ export async function setProjectTrashed(id: number, trashed: boolean, ctx?: Writ
   return after;
 }
 
+/** 본문을 고치기 시작한 글(description_base)과 지금 DB 의 본문이 **꼬리 덧붙임 말고 다른 데서** 어긋났다(#4084).
+ *  덮어쓰면 남의 수정이 사라지므로 저장하지 않고 던진다 — 부른 쪽(capability)이 409 로 바꿔 화면이 사람에게 묻게 한다. */
+export class ProjectBodyConflictError extends Error {
+  constructor(id: number) { super(`프로젝트 #${id} 본문이 다른 곳에서 바뀌었습니다`); this.name = "ProjectBodyConflictError"; }
+}
+
 // 프로젝트 이름/설명 수정(level='project'). 주어진 키만 변경(부재=무변경, description null=해제).
 //  append_description: 전체 교체 대신 기존 본문 끝에 이어쓰기(원문 보존·보강). description 과 상호배타(capability 가 게이트).
+//  description_base(#4084): description(전체 교체)과 함께 오면 **가드 저장**이다 — 화면이 고치기 시작한 글을 같이 보내,
+//   그 사이 세션이 append 로 붙인 꼬리를 살려 합친다(아래 SQL). 꼬리가 아닌 곳이 바뀌었으면 ProjectBodyConflictError.
 export async function updateProject(
   id: number,
-  patch: Partial<{ name: string; description: string | null; append_description: string;
-    priority: string | null; assignee: string | null; start_date: string | null; due_date: string | null }>,
+  patch: Partial<{ name: string; description: string | null; append_description: string; description_base: string | null;
+    priority: string | null; assignee: string | null; start_date: string | null; due_date: string | null;
+    draft: boolean }>,
   ctx?: WriteCtx,
 ): Promise<ProjectRow> {
   const before: ProjectRow | undefined = await one(itemsPool,
@@ -632,23 +647,54 @@ export async function updateProject(
   //  그래서 출처를 human 으로 올린다(#2031). 그 뒤로는 자동 이름짓기가 이 프로젝트를 건드리지 않는다.
   //  기계의 임시 이름(rule)은 createProject 로, 에이전트의 자동 이름(agent)은 claimProjectName 으로 들어온다.
   if (patch.name !== undefined) { set("name", patch.name); set("name_source", "human"); }
-  if (patch.description !== undefined) set("description", patch.description);
+  // 초안 해제(#4170)에 쓸 «제목·본문이 실제로 바뀌나» 식 — 아래 본문 분기가 채운다. SET 의 오른쪽은 **바뀌기 전** 값을
+  //  보므로 같은 문장 안에서 새 값과 옛 값을 견줄 수 있다(읽고-판정하고-쓰기 사이에 끼는 append 가 없다).
+  const changed: string[] = [];
+  if (patch.name !== undefined) changed.push(`name IS DISTINCT FROM $${vals.length - 1}`);
+  // 가드 저장(#4084) — 곁칸 본문 편집은 **일하는 세션 옆에서** 돈다. 세션은 append 로 본문 끝에 기록을 붙이는데 사람의
+  //  자동저장은 통째 교체라, 그 사이에 붙은 기록을 지운다. 그래서 화면이 «고치기 시작한 글»을 함께 보내면:
+  //   · 지금 본문이 그 글로 **시작**한다(= 그 뒤에 꼬리만 붙었다) → 새 글 + 그 꼬리. 같으면 꼬리는 빈 문자열이다.
+  //   · 아니다(앞·중간이 바뀌었다) → 아무것도 안 쓰고 충돌로 던진다(WHERE 가 행을 못 잡는다).
+  //   · ★기준이 **빈 글**이면 «시작한다» 가 늘 참이다(빈 문자열은 모든 글의 앞부분) — 그대로 두면 남이 그 사이 쓴 글에
+  //     내 글이 구분 없이 들러붙고(`World`+`Hello`) 성공으로 보고된다(격리 리뷰 2026-09-20). 빈 기준은 **지금도 비어
+  //     있을 때만** 통과시킨다 — 빈 본문에 누가 먼저 썼으면 그건 꼬리가 아니라 충돌이다.
+  //  읽고-판정하고-쓰면 그 사이에 또 append 가 낀다 — 판정과 합치기를 **UPDATE 한 문장**에 둔다(append 와 같은 이유).
+  let bodyGuard = "";
+  if (patch.description !== undefined && patch.description_base !== undefined) {
+    vals.push(patch.description ?? ""); const pn = `$${vals.length}`;
+    vals.push(patch.description_base ?? ""); const pb = `$${vals.length}`;
+    const merged = `NULLIF(${pn} || substr(COALESCE(description,''), char_length(${pb}) + 1), '')`;
+    sets.push(`description = ${merged}`);
+    changed.push(`description IS DISTINCT FROM ${merged}`);
+    bodyGuard = ` AND (CASE WHEN ${pb} = '' THEN COALESCE(description,'') = '' ELSE left(COALESCE(description,''), char_length(${pb})) = ${pb} END)`;
+  }
+  else if (patch.description !== undefined) {
+    set("description", patch.description);
+    changed.push(`description IS DISTINCT FROM $${vals.length}`);
+  }
   // append 모드 — 기존 본문 보존 후 끝에 이어붙인다. 읽고-쓰기 경합을 피하려 SQL 에서 원자적 concat:
   //  빈/NULL 본문이면 구분자 없이 그대로, 아니면 빈 줄(newline×2)로 문단 분리. description(교체)과는 상호배타(capability 게이트).
   else if (patch.append_description !== undefined) {
     vals.push(patch.append_description);
     const p = `$${vals.length}`;
     sets.push(`description = CASE WHEN description IS NULL OR description = '' THEN ${p} ELSE description || chr(10) || chr(10) || ${p} END`);
+    changed.push("true");   // 이어쓰기는 늘 본문을 바꾼다(빈 append 는 capability 가 막는다)
   }
   if (patch.priority !== undefined) set("priority", patch.priority);
   if (patch.assignee !== undefined) set("assignee", patch.assignee);
   if (patch.start_date !== undefined) set("start_date", patch.start_date);
   if (patch.due_date !== undefined) set("due_date", patch.due_date);
+  // 초안(#4170) — 명시값이 있으면 그 값, 없으면 **제목이나 본문이 실제로 바뀔 때** 초안에서 나온다(사람이 고쳤든 AI 가
+  //  project_update_v6 로 정리했든). 같은 글을 다시 저장하는 자동저장은 바뀐 게 없으니 초안 그대로다.
+  if (patch.draft !== undefined) set("draft", patch.draft);
+  else if (changed.length) sets.push(`draft = CASE WHEN draft AND (${changed.join(" OR ")}) THEN false ELSE draft END`);
   if (!sets.length) return before; // 패치 비어있음 — no-op
   sets.push("updated_at=now()");
   vals.push(id);
-  const after: ProjectRow = await one(itemsPool,
-    `UPDATE project SET ${sets.join(", ")} WHERE id=$${vals.length} AND level='project' RETURNING ${PROJECT_COLS}`, vals);
+  const after: ProjectRow | undefined = await one(itemsPool,
+    `UPDATE project SET ${sets.join(", ")} WHERE id=$${vals.length} AND level='project'${bodyGuard} RETURNING ${PROJECT_COLS}`, vals);
+  // 행은 있는데(before) UPDATE 가 못 잡았다 = 가드가 막았다. 같은 패치의 다른 키도 함께 안 쓰인다(반쪽 저장 없음).
+  if (!after) throw new ProjectBodyConflictError(id);
   await auditProject(String(id), "update", before, after, ctx);
   await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(name/desc/필드) — 드레인이 ClickUp PUT.
   // 이름/설명이 '실제로 바뀐' 경우에만 재임베딩 — 필드 존재(patch)가 아니라 before↔after 값 비교. no-op·미변경 저장,
@@ -1174,8 +1220,9 @@ export async function searchProjects(qstr: string, opts: ProjectSearchOpts = {})
   const { result: rows, plan } = await grepExec(qstr, async (p) => {
     const params: unknown[] = [];
     const where = projectGrepWhere(p, opts, params, visIds, qstr);
+    const first = exactFirst("p.id", qstr, "id", params);   // 번호의 주인이 LIMIT 에 잘리지 않게(exactFirst 주석)
     params.push(Math.min(opts.limit ?? 20, 100));
-    return q(itemsPool, `SELECT ${sel} FROM project p WHERE ${where} ORDER BY p.updated_at DESC LIMIT $${params.length}`, params);
+    return q(itemsPool, `SELECT ${sel} FROM project p WHERE ${where} ORDER BY ${first}p.updated_at DESC LIMIT $${params.length}`, params);
   });
   return rows.map((r) => {
     const base = toProjectRow(r);
@@ -1224,10 +1271,12 @@ async function rrfSearchProjects(qstr: string, qvec: number[], opts: ProjectSear
   params.push(HYBRID_CANDIDATES); const candP = `$${params.length}`;
   params.push(RRF_K); const kP = `$${params.length}`;
   params.push(limit); const limP = `$${params.length}`;
+  //  번호 지목이면 그 행을 후보 자르기 전·최종 정렬 모두에서 맨 앞에(exactFirst 주석 — 같은 이유로 RRF 합산에서도 밀린다).
+  const first = exactFirst("p.id", qstr, "id", params);
   const sql = `
     WITH lex AS (
-      SELECT p.id, row_number() OVER (ORDER BY p.updated_at DESC) AS rank
-      FROM project p WHERE ${lexWhere} ORDER BY p.updated_at DESC LIMIT ${candP}
+      SELECT p.id, row_number() OVER (ORDER BY ${first}p.updated_at DESC) AS rank
+      FROM project p WHERE ${lexWhere} ORDER BY ${first}p.updated_at DESC LIMIT ${candP}
     ),
     vec AS (
       SELECT p.id, row_number() OVER (ORDER BY p.embedding_vector <=> ${qp}) AS rank
@@ -1241,7 +1290,7 @@ async function rrfSearchProjects(qstr: string, qvec: number[], opts: ProjectSear
     SELECT ${sel}, f.score::float8 AS score
     FROM fused f JOIN project p ON p.id=f.id
     WHERE ${listIdPredicate(PROJECT_ROW_LIST_ID_SQL, visIds ?? null)}
-    ORDER BY f.score DESC LIMIT ${limP}`;
+    ORDER BY ${first}f.score DESC LIMIT ${limP}`;
   const rows = await q(itemsPool, sql, params);
   return rows.map((r) => {
     const base = toProjectRow(r);

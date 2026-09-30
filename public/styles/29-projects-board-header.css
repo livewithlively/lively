@@ -16,6 +16,9 @@
 .pjv-crumb.is-leaf { color: var(--ink); font-weight: 800; font-size: 15.5px; letter-spacing: -.3px; }
 .pjv-crumb > svg, .pjv-crumb > span.pjv-side-space-avatar { flex: none; }
 .pjv-crumb-sep { color: var(--muted-3); font-size: 13px; padding: 0 2px; user-select: none; }
+/* 경로(조상)·잎(지금 자리) 묶음(#4231) — 데스크톱에선 상자가 아니다(display:contents — 안의 부스러기가 종전처럼 .pjv-crumbs 의
+   flex 항목으로 선다). 폰(50-mobile.css)만 이 둘을 «작은 경로 한 줄 + 큰 제목 한 줄» 로 세운다. */
+.pjv-crumb-path, .pjv-crumb-leaf { display: contents; }
 .pjv-crumb-menu, .pjv-crumb-fav { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex: none; border: none; background: none; border-radius: 7px; cursor: pointer; color: var(--muted-2); padding: 0; margin-left: 1px; }
 .pjv-crumb-menu:hover, .pjv-crumb-fav:hover { background: var(--bg-tint-2); color: var(--ink); }
 .pjv-crumb-fav.on { color: #f0b429; }

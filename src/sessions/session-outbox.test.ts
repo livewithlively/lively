@@ -110,17 +110,26 @@ t("[#2154 ②] 못 닿는 동안의 재시도는 분 단위로 벌어지고 5분
 //  쥘 수 없어 pane 을 셸로 둔다). 그래서 send-keys 는 **그 대화에 닿는 길이 아예 없다**: 준비 판정이 send 를
 //  주면 사람의 첫 문장이 셸에 타이핑되고(실측 2026-08-26, "첫 프롬프트도 씹히고"), 안 주면 TTL 까지 기다렸다
 //  버려진다. 어느 쪽이든 배달이 아니다 — 고치는 근거는 통계가 아니라 **구조**다.
-t("[#2169] codex(app-server 기본)는 프로토콜로 나른다 — 셸 pane 에 글자를 넣지 않는다", () => {
-  assert.equal(deliveryTransport("codex", {} as NodeJS.ProcessEnv), "codex-chat");
+//  ★ #4135 — 판정의 근거가 «배포 기본» 에서 **«그 세션의 표식»** 으로 바뀌었다. 기본이 뒤집혀도(지금은 tmux)
+//   이미 떠 있는 app-server 세션은 그대로 프로토콜로 날라야 한다 — 그게 이 표의 첫 줄이다.
+t("[#2169·#4135] app-server 로 뜬 codex 세션은 프로토콜로 나른다 — 셸 pane 에 글자를 넣지 않는다", () => {
+  assert.equal(deliveryTransport("codex", "app-server", {} as NodeJS.ProcessEnv), "codex-chat");
+});
+t("[#4135] 표식이 없는 codex 세션(이 변경 전에 태어난 세션)도 프로토콜로 — 그 세션의 pane 은 셸이다", () => {
+  assert.equal(deliveryTransport("codex", undefined, {} as NodeJS.ProcessEnv), "codex-chat");
+});
+t("[#4135] terminal 로 뜬 codex 세션은 화면으로 나른다 — pane 에 TUI 가 있다(새 기본)", () => {
+  assert.equal(deliveryTransport("codex", "terminal", {} as NodeJS.ProcessEnv), "send-keys");
 });
 t("[#2169] 그 외 하네스는 종전대로 화면(send-keys) — 무회귀", () => {
   for (const h of ["claude", "opencode", "antigravity", "grok", "shell", ""]) {
-    assert.equal(deliveryTransport(h, {} as NodeJS.ProcessEnv), "send-keys", h);
+    assert.equal(deliveryTransport(h, undefined, {} as NodeJS.ProcessEnv), "send-keys", h);
+    assert.equal(deliveryTransport(h, "app-server", {} as NodeJS.ProcessEnv), "send-keys", h + " (표식이 있어도 codex 가 아니면 화면)");
   }
 });
-t("[#2169] codex 를 tmux 모드로 되돌리면(LIVELY_CODEX_CHAT=tmux) 화면 경로로 돌아온다", () => {
-  assert.equal(deliveryTransport("codex", { LIVELY_CODEX_CHAT: "tmux" } as NodeJS.ProcessEnv), "send-keys");
-  // 되돌리는 길이 살아 있어야 한다 — app-server 는 공식 문서상 experimental 이다(codex-chat-mode 머리말).
+t("[#2169] 표식이 없는 배포에서 LIVELY_CODEX_CHAT=tmux 면 화면 경로 — 되돌리는 길은 살아 있다", () => {
+  assert.equal(deliveryTransport("codex", undefined, { LIVELY_CODEX_CHAT: "tmux" } as NodeJS.ProcessEnv), "send-keys");
+  // app-server 는 공식 문서상 experimental 이다 — 어느 쪽으로든 되돌릴 수 있어야 한다(codex-chat-mode 머리말).
 });
 
 // dist 에서 도는 테스트라 소스는 **cwd 기준**으로 읽는다(이 레포 관용구 — housekeeping-tenancy.test.ts 와 같다).

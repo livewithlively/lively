@@ -22,6 +22,7 @@ import { anchoredPopover, el, sv } from '../core.js';
 import { deviceStore } from './shell-prefs.js';   // #2460 — 열린 창은 이 기기의 사실
 import { EMBEDDED } from './embed.js';
 import { nextStamp, pickLanding, planRestore, seenValue } from '../lib/tab-landing.js';
+import { ICONS } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 
 export interface ShellTab {
   id: string;
@@ -85,6 +86,10 @@ export function routeKey(route: string): string {
   //   전부 같은 화면이다. 여기서 안 접으면 채널을 옮길 때마다 탭이 새로 서고, 좌측 목록에도 「자료」가 여러 줄
   //   뜬다(인스턴스 줄기는 정본 주소 '#/sources' 로 서기 때문에 그것과도 안 만난다 — 실측으로 두 줄이었다).
   if (p === 'sources') return 'sources';
+  //  분류체계(#4233)도 한 창 안에서 돌아다니는 앱이다: 전체 지도 · 손볼 것 · 분류 하나가 전부 같은 창이다(자료와 같은 규칙).
+  if (p === 'taxonomy') return 'taxonomy';
+  //  사용 가이드(#4179)도 한 창 안에서 문서를 오가는 앱이다. 문서마다 창이 새로 서지 않게 접는다.
+  if (p === 'learn') return 'learn';
   return 'raw:' + h;
 }
 
@@ -225,13 +230,13 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
   //  것은 프로젝트가 아니라 곧 열릴 세션이다(원준 2026-08-20).
   function icon(route: string, state?: string, kind?: string): SVGElement {
     const k = routeKey(route);
-    const d = kind === 'new' ? ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z', 'M12 9v5M9.5 11.5h5']
-      : k === 'home' ? ['M4 11l8-7 8 7', 'M6 9.5V20h12V9.5']
-      : k.startsWith('p:') ? ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z']
-      : k.startsWith('s:') ? ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z']
-      // 아카이브(상자)·휴지통(#1851) — 사이드바 발치의 두 행과 같은 글리프(side.ts glyph)
-      : k === 'raw:archive' ? ['M3 6h18v4H3z', 'M5 10v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9', 'M10 14h4']
-      : k === 'raw:trash' ? ['M4 7h16', 'M9 7V4h6v3', 'M6 7l1 13h10l1-13', 'M10 11v6M14 11v6']
+    //  #4233: 홈 · 프로젝트 · 세션 · 지난 세션 · 휴지통은 lib/icon-paths.ts 한 벌의 그림을 쓴다(사이드바와 같은 그림).
+    const d = kind === 'new' ? [ICONS.chat, 'M12 9v5M9.5 11.5h5']
+      : k === 'home' ? [ICONS.home]
+      : k.startsWith('p:') ? [ICONS.folder]
+      : k.startsWith('s:') ? [ICONS.chat]
+      : k === 'raw:archive' ? [ICONS.archive]
+      : k === 'raw:trash' ? [ICONS.trash]
       : ['M4 5h16v12H4z', 'M4 9h16'];
     // 상태는 **아이콘 색**으로 말한다(원준 2026-08-20) — 도는 중 파랑 · 확인 필요 앰버 · 끝남 민트.
     //  글자·바탕은 '켜진 탭인가'만 말하므로 두 축이 섞이지 않는다.

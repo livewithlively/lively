@@ -286,9 +286,9 @@ const MIXED_SECTIONS = { tools: ['admin', 'runtime'], 'preview-envs': ['code', '
 //  ⚠ 문구는 **'관리자' 하나로 통일**한다(#1085 사용자 지정) — runtime·code 같은 내부 scope 이름을 배지에 노출하면
 //   보는 사람에겐 무슨 말인지 모를 뿐이고, 실제로 그 항목들을 열 수 있는 사람은 관리 권한을 받은 사람이다.
 function sectionGated(key) { return ADMIN_ONLY.includes(key) || RUNTIME_ONLY.includes(key) || !!MIXED_SECTIONS[key]; }
-function navPermBadge(key) {
-  if (!sectionGated(key)) return null;
-  return el('span', { class: 'admin-only-badge', text: '관리자', title: '권한이 있어야 보고 편집할 수 있는 항목입니다.' });
+// «관리자» 배지는 걷었다(원준 2026-09-28 — 관리자만 보는 기능을 화면에 드러내지 않는다). 권한 판정(sectionHidden)은 그대로다.
+function navPermBadge(_key) {
+  return null;
 }
 // 심플 어드민(#1454 S4) — ui_profile='personal'(노션식 개인 워크스페이스) 때 숨기는 조직 운영 섹션.
 //  기준: 조직 규모의 배포·정책·인프라 관측 화면은 접고, 개인이 실제로 쓰는 것(내 설정·구성원·DB 데이터소스·

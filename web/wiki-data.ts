@@ -1,9 +1,10 @@
 // wiki-data.ts — WIKI 탭 데이터·엔진 계층(#764 재구축 — 구 knowledge-doc.ts 를 개명·정리).
 //  라벨 사전 · 트리/카테고리 세션 캐시 · 속성(메타) 노출 엔진 · 피커/오버레이 · 댓글 위젯 · 대문 문서 컨벤션.
 //  표면(화면) 코드는 없다 — 홈/카테고리/문서 캔버스는 wiki-home/wiki-category/wiki-doc 이 이 모듈을 소비한다.
-//  순환 import 금지: 이 모듈은 core/learn 만 import 한다(wiki-*.ts → wiki-data.ts 단방향).
+//  순환 import 금지: 이 모듈은 core/learn 과 잎(lib/wiki-list)만 import 한다(wiki-*.ts → wiki-data.ts 단방향).
 import { absTime, api, busy, el, errorNote, LIFECYCLE_LABEL, personFace, relTime, renderInline, renderMarkdown, safeHref, selectFilter, state, toast, withTip } from './core.js';
 import { overlayBox, skeletonRows } from './learn.js';
+import { WIKI_TYPE_LABEL } from './lib/wiki-list.js';   // #4233 유형 이름 사전은 한 벌 — 셸의 위키 목록(v2/wiki-main)과 같은 것
 
 // ── 카테고리 대문 문서 컨벤션(#657 → #764 이관) — 카테고리당 지식 문서 `category-home-<key>` 1건이
 //  대문의 전부(본문=body_md, 아이콘/커버=props_ui)를 담는다. 스키마 변경 0. 빈 본문은 ZWSP 1자(HOME_EMPTY —
@@ -78,7 +79,7 @@ const KN_AUTHOR_HINT = {
   observed: '외부 시스템에서 미러됐습니다.',
 };
 // page-type(#290) 한글 라벨 — 엔터프라이즈 표준(DITA/Diátaxis/ADR/LLM위키) 6종. NULL=미분류(칩 생략).
-const KN_TYPE_LABEL = { decision: '결정', concept: '개념', 'how-to': 'How-to', reference: '참조', research: '리서치', entity: '엔티티' };
+const KN_TYPE_LABEL = WIKI_TYPE_LABEL;
 // 지식↔프로젝트 연결 관계(#255~257) · 지식↔지식 링크 · 자료(source) 라벨.
 const KN_REL_LABEL = { required: '필요', produced: '산출' };
 const KN_LINK_REL_LABEL = { related: '관련', refines: '구체화', contradicts: '모순', depends_on: '의존' };

@@ -30,7 +30,7 @@ export interface ComposerMention {
  * 입력칸 안 어느 글자 위치(index)의 좌표 — 카드(offsetParent) 기준 px. textarea 는 글자 좌표를 안 주므로 같은 글꼴·폭의
  * 숨은 거울 div 에 그 앞 글을 넣고 표식 span 의 자리를 읽는다. 줄바꿈·자동 줄바꿈이 같아야 하므로 폭·패딩·글꼴을 그대로 베낀다.
  */
-function charPos(ta: HTMLTextAreaElement, index: number): { left: number; top: number; line: number } {
+export function charPos(ta: HTMLTextAreaElement, index: number): { left: number; top: number; line: number } {
   const cs = getComputedStyle(ta);
   const m = document.createElement('div');
   for (const k of ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight', 'letterSpacing', 'textIndent', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'borderTopWidth', 'borderLeftWidth', 'boxSizing', 'tabSize'] as const) {
