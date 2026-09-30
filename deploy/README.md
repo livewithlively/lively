@@ -35,7 +35,7 @@ Run it natively and sessions use the host docker directly. (Rationale: `knowledg
 `bootstrap.sh` does **code acquisition → install.sh** in one go. The operator needs no source, git clone, or build — just one line:
 
 ```bash
-curl -fsSL <bootstrap-url> | PUBLIC_URL=http://<host>:8080 BOOTSTRAP_ADMIN_EMAIL=you@org.com ORG_DOMAIN=org.com sh
+curl -fsSL https://raw.githubusercontent.com/livewithlively/lively/main/deploy/bootstrap.sh | PUBLIC_URL=http://<host>:8080 BOOTSTRAP_ADMIN_EMAIL=you@org.com ORG_DOMAIN=org.com bash
 ```
 
 ### Structure — code acquisition (swappable) ↔ install (delivery-agnostic)
@@ -70,7 +70,7 @@ git tag v0.1.0 && git push origin v0.1.0     # → Actions publishes Release v0.
 
 Then the operator only has to give a version — bootstrap builds the asset URL automatically:
 ```bash
-curl -fsSL <bootstrap-url> | LIVELY_VERSION=latest PUBLIC_URL=… BOOTSTRAP_ADMIN_EMAIL=… sh
+curl -fsSL https://raw.githubusercontent.com/livewithlively/lively/main/deploy/bootstrap.sh | LIVELY_VERSION=latest PUBLIC_URL=… BOOTSTRAP_ADMIN_EMAIL=… bash
 ```
 (The repo is public, so no token is needed. Only when pulling releases from a private fork do you need `LIVELY_CODE_TOKEN` (Bearer) — bootstrap then downloads through the GitHub API asset endpoint.)
 
@@ -332,7 +332,7 @@ includes `install-kit.sh` (same end state as a member's local install, except ga
 
 ```
 deploy/
-  bootstrap.sh        # one-line install entry point (curl|sh): code acquisition (online/offline) → install.sh
+  bootstrap.sh        # one-line install entry point (curl|bash): code acquisition (online/offline) → install.sh
   install.sh          # install engine (detect OS → <os>/provision.sh, 7 steps). Delivery-agnostic.
   update.sh           # update an existing box (build→restart→healthz, --kit)
   uninstall.sh        # removal (inverse of install): removes service·containers·kit / --purge = volumes·.env·directory too
