@@ -269,7 +269,7 @@ systemctl status lively-gateway                      # active (running)
 systemctl list-unit-files | grep context-ontology    # should print nothing
 curl -fsS localhost:8080/healthz                     # {"ok":true}  — liveness (listen). Not a schema-complete signal
 curl -s localhost:8080/readyz | grep -o '"schema":"[a-z]*"'   # "schema":"ready" — migration and seeding done (503 if pending/restarting)
-journalctl -u lively-gateway -n 50 --no-pager
+journalctl -u lively-gateway -n 50 --no-pager     # unit start/stop records (gateway output is in logs/gateway.log)
 ```
 
 ⚠ The gateway pauses briefly during the switch (old unit stop → new start). tmux sessions survive because of `KillMode=process`,
@@ -367,7 +367,7 @@ deploy/
 | Task | Linux (systemd) | macOS (launchd) |
 |---|---|---|
 | Status | `systemctl status lively-gateway` | `launchctl print gui/$(id -u)/io.lvly.lively` |
-| Logs | `journalctl -u lively-gateway -f` or `tail -f logs/gateway.log` | `tail -f logs/gateway.log` |
+| Logs | `tail -f logs/gateway.log` (`journalctl -u lively-gateway` only has start/stop records) | `tail -f logs/gateway.log` |
 | Restart | `sudo systemctl restart lively-gateway` | `launchctl kickstart -k gui/$(id -u)/io.lvly.lively` |
 | Apply code | `bash deploy/update.sh` (on a source checkout, `npm run build && sudo systemctl restart …` also works) | `bash deploy/update.sh` (on a source checkout, `scripts/restart-gateway.sh`) |
 | store | `docker compose ps` · `docker compose logs items-db` | Same |

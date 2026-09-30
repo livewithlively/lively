@@ -268,7 +268,7 @@ systemctl status lively-gateway                      # active (running)
 systemctl list-unit-files | grep context-ontology    # 아무것도 안 나와야 정상
 curl -fsS localhost:8080/healthz                     # {"ok":true}  — liveness(listen). 스키마 완료 신호가 아니다
 curl -s localhost:8080/readyz | grep -o '"schema":"[a-z]*"'   # "schema":"ready" — 마이그레이션·시딩 완료(pending/restarting 이면 503)
-journalctl -u lively-gateway -n 50 --no-pager
+journalctl -u lively-gateway -n 50 --no-pager     # 유닛 시작·정지 기록(게이트웨이 출력은 logs/gateway.log)
 ```
 
 ⚠ 전환 중 게이트웨이가 잠깐 멈춘다(구 유닛 stop → 신규 start). tmux 세션은 `KillMode=process` 라 살아남고,
@@ -366,7 +366,7 @@ deploy/
 | 작업 | Linux (systemd) | macOS (launchd) |
 |---|---|---|
 | 상태 | `systemctl status lively-gateway` | `launchctl print gui/$(id -u)/io.lvly.lively` |
-| 로그 | `journalctl -u lively-gateway -f` 또는 `tail -f logs/gateway.log` | `tail -f logs/gateway.log` |
+| 로그 | `tail -f logs/gateway.log` (`journalctl -u lively-gateway` 에는 시작·정지 기록만) | `tail -f logs/gateway.log` |
 | 재시작 | `sudo systemctl restart lively-gateway` | `launchctl kickstart -k gui/$(id -u)/io.lvly.lively` |
 | 코드 반영 | `bash deploy/update.sh` (소스 체크아웃이면 `npm run build && sudo systemctl restart …` 도 가능) | `bash deploy/update.sh` (소스 체크아웃이면 `scripts/restart-gateway.sh`) |
 | store | `docker compose ps` · `docker compose logs items-db` | 동일 |
