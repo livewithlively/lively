@@ -934,6 +934,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //   · 끌어서 같은 줄 안 순서를 바꾸고, 다른 칸 줄에 놓으면 그 자리에 끼운다(v2/pane-tabdrag).
   function removeTab(zone: Zone, key: TabKey): void {
     //  (main 판은 여기서 붙은 앱 탭의 «떼기»(#4225)를 먼저 따른다 — stage 판엔 붙은 앱 탭이 없다.)
+    if (DERIVED_TABS.has(tabBase(key))) { const z = zoneOf(key) || zone; revealZone(z); activate(z, key); return; }
     recordClosed([key]);
     dropTab(zone, key);
   }
@@ -951,7 +952,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       const z = zoneOf(k);
       if (!z) continue;
       const path = isFileTab(k) ? rememberedViewerPath(ctx.memKey(), k) : '';
-      batch.push({ key: k, zone: z, at: lay[z].indexOf(k), ...(path ? { path } : {}) });
+      batch.push({ key: k, zone: z, at: lay[z].indexOf(k), ...(path ? { path } : {}), ...(isPinned(k) ? { pinned: true } : {}) });
     }
     closedStack = pushClosed(closedStack, batch);
   }
@@ -969,7 +970,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     tabTitles.delete(key);
     //  켜진 탭을 닫았으면 **가장 최근에 보던 탭**으로 — 기록이 없으면 오른쪽 이웃(크롬), 그것도 없으면 왼쪽(lib/pane-tabs).
     //   종전엔 늘 왼쪽 이웃이었다: 자료에서 파일을 열어 보고 닫으면 자료가 아니라 그 앞에 열어 둔 다른 파일이 켜졌다.
-    if (lay.act[real] === key) { lay.act[real] = landingAfterClose(before, key, recent[real]); saveAct(real, lay.act[real]); }
+    //  ⚠ 여기서 saveAct 를 부르지 않는다 — dropTab 은 세션을 갈아 끼울 때도 불린다(syncSessApps 가 옛 세션의 앱 탭을 걷는다).
+    //   그 순간 actKey() 는 이미 **새 세션**이라, 여기서 적으면 새 세션이 기억하던 탭을 덮어쓴다(격리 리뷰 지적). lay.act 는 saveLayout 이 남긴다.
+    if (lay.act[real] === key) lay.act[real] = landingAfterClose(before, key, recent[real]);
     if (sideActNarrow === key) sideActNarrow = drawn ? landingAfterClose(drawn, key, recent.side) : null;
     for (const z of ['main', 'side', 'bottom'] as Zone[]) recent[z] = recent[z].filter((k) => k !== key);
     saveLayout();
@@ -979,7 +982,6 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     if (from === to) { activate(to, key); return; }
     if (tabBase(key) === 'sessions' && to !== 'main') return;   // 세션은 가운데 칸 밖으로 나가지 않는다(위 불변식)
     //  ⚠ removeTab 이 아니라 dropTab — removeTab 은 «사람이 × 를 눌렀다» 라 [닫은 탭 다시 열기] 더미에 쌓는다. 옮기기는 닫기가 아니다.
-    //   옮기기는 닫기가 아니다: 거기로 가면 앱이 떨어지고 탭은 두 칸에 겹쳐 선다(#4225 격리 리뷰가 잡았다).
     const wasPinned = isPinned(key);
     dropTab(from, key, { paint: false });
     if (wasPinned) lay.pin = [...lay.pin, key];                  // 고정은 따라간다(크롬: 고정 탭을 다른 창으로 옮겨도 고정)
@@ -1019,6 +1021,12 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     saveLayout(); paintAll();
     if (keys.length > 1) toast(`탭 ${keys.length}개를 닫았어요. 탭 줄을 우클릭해 [닫은 탭 다시 열기]로 되살릴 수 있어요.`);
   }
+  /** 뷰어 탭들(어느 칸에 있든) — 되살릴 파일이 이미 떠 있나 볼 때. (main 판은 #4135 의 openViewerAt 이 같은 함수를 쓴다.) */
+  function viewerTabs(): Array<{ zone: Zone; key: TabKey }> {
+    const out: Array<{ zone: Zone; key: TabKey }> = [];
+    for (const z of ['side', 'main', 'bottom'] as Zone[]) for (const k of lay[z]) if (tabBase(k) === 'editor') out.push({ zone: z, key: k });
+    return out;
+  }
   /** [닫은 탭 다시 열기] — 가장 최근에 닫은 묶음을 닫기 전 자리에 되살린다. 뷰어는 펴 두었던 파일로 돌아온다. */
   function reopenClosed(): void {
     const r = popClosed(closedStack);
@@ -1032,9 +1040,13 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       //  한 벌만 사는 부품(자료·지식…)을 그 사이 [+] 로 다시 넣었으면 그것을 켠다 — 둘을 세우지 않는다.
       const twin = !partDef(base as PartType).multi ? allKeys().find((k) => tabBase(k) === base) : undefined;
       if (twin) { last = { zone: zoneOf(twin) || zone, key: twin }; continue; }
+      //  그 파일이 그 사이 다른 뷰어 탭에 이미 떠 있으면 그 탭을 켠다 — 같은 파일을 두 탭에 세우지 않는다(#4135 «파일마다 뷰어 하나»).
+      const open = t.path ? viewerTabs().find((v) => rememberedViewerPath(ctx.memKey(), v.key) === t.path) : undefined;
+      if (open) { last = open; continue; }
       //  열쇠 번호는 그 사이 다른 탭이 가져갔을 수 있다 — 그러면 새 번호로(뷰어는 파일 경로를 다시 적는다).
       const key = allKeys().includes(t.key) ? nextTabKey(base, allKeys()) : t.key;
       if (t.path) rememberViewerPath(ctx.memKey(), key, t.path);
+      if (t.pinned && !isPinned(key)) lay.pin = [...lay.pin, key];   // 고정했던 탭은 고정한 채로 돌아온다
       lay[zone] = placeKey(lay[zone], key, t.at, pinSet());
       last = { zone, key };
     }
@@ -1097,11 +1109,13 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const detachX = DERIVED_TABS.has(tabBase(key));   // #4225 붙은 앱 탭의 × 는 «닫기» 가 아니라 «이 세션에서 떼기»
     //  × 는 아이콘 자리에 겹쳐 선다(CSS: 마우스를 올리면 아이콘이 × 로 바뀐다). 고정 탭은 × 가 없다(크롬) — 메뉴로 닫는다.
     //  tabindex -1: 키보드는 탭 위에서 Delete 로 닫는다(× 마다 초점이 서면 탭 사이를 옮겨 다니기가 두 배로 길어진다).
-    const x = pinned ? null : el('button', {
+    //  붙은 앱 탭은 **켜졌을 때만** × — 떼기는 그 앱 화면이 서 있어야 어느 앱인지 안다(removeTab 머리의 같은 사정).
+    const x = pinned || (detachX && !on) ? null : el('button', {
       class: 'pn-tab-x', type: 'button', tabindex: '-1',
       title: detachX ? `${nm} 을(를) 이 세션에서 뗍니다 — 앱의 데이터는 그대로 남아요` : `${nm} 탭 닫기`,
       'aria-label': detachX ? `${nm} 떼기` : `${nm} 닫기`,
-      onclick: (e: MouseEvent) => { e.stopPropagation(); closeTab(zone, key, { pointer: e.detail > 0 }); },
+      //  폭은 **마우스로** 닫을 때만 얼린다 — 손가락은 pointerleave 가 click 보다 먼저 와서 풀 기회가 없다(격리 리뷰 지적).
+      onclick: (e: MouseEvent) => { e.stopPropagation(); const pt = (e as PointerEvent).pointerType; closeTab(zone, key, { pointer: pt ? pt === 'mouse' : e.detail > 0 }); },
     }, pnIcon('x', 'pn-i xs'));
     const w = el('span', { class: 'pn-tabwrap' + (on ? ' on' : '') + (pinned ? ' pinned' : ''), 'data-tab': key, role: 'presentation' }, b, x) as HTMLElement;
     //  휠 클릭 = 닫기(크롬·사파리). 누를 때 브라우저의 자동 스크롤이 뜨지 않게 mousedown 도 막는다.
@@ -1109,7 +1123,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     w.addEventListener('auxclick', (e: MouseEvent) => {
       if (e.button !== 1) return;
       e.preventDefault(); e.stopPropagation();
-      if (!pinned) closeTab(zone, key, { pointer: true });
+      if (!pinned && !(detachX && !on)) closeTab(zone, key, { pointer: true });
     });
     //  끌어 옮기기 — 같은 줄 안에서 순서 · 다른 칸으로(v2/pane-tabdrag). 좁은 폭(서랍)은 칸이 하나뿐이라 끌지 않는다.
     w.addEventListener('pointerdown', (e: PointerEvent) => { if (!narrow()) beginTabDrag(dragHost, zone, key, w, e); });

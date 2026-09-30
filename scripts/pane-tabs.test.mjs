@@ -90,8 +90,7 @@ check(p.mode !== "full" && p.widths.reduce((a, b) => a + b, 0) <= 270, "W1b 1px 
 p = L.planTabs([T(90, true), T(60), T(200), T(150)], 360);
 eq(p.mode, "shrink", "W2 모자라면 줄인다");
 eq([p.widths[0], p.widths[1]], [90, 60], "W2b 켜진 탭(90)·짧은 이름(60)은 그대로 — 긴 이름부터 깎는다");
-check(p.widths[2] === p.widths[3] && p.widths[2] < 150, "W2c 긴 이름 둘은 같은 폭으로 깎인다(물높이)", J(p.widths));
-check(p.widths.reduce((a, b) => a + b, 0) <= 360, "W2d 깎은 합은 줄 폭 안", J(p.widths));
+eq(p.widths, [90, 60, 105, 105], "W2c 긴 이름 둘은 같은 폭(105)으로 깎여 줄(360)을 꼭 채운다(물높이) — 자리를 남기지도 넘치지도 않는다");
 const tight = [T(100, true), T(150), T(150), T(150)];
 p = L.planTabs(tight, 100 + 3 * 64);
 eq([p.mode, p.widths], ["shrink", [100, 64, 64, 64]], "W3 64px 로 딱 들어가면(경계) 이름을 남긴다");
@@ -125,15 +124,19 @@ const PANES = readFileSync(process.env.PANES_SRC || path.join(root, "web/v2/pane
 const fn = (head) => { const i = PANES.indexOf(head); if (i < 0) return ""; const j = PANES.indexOf("\n  }\n", i); return PANES.slice(i, j + 4); };
 const tabElFn = fn("  function tabEl(zone: Zone, key: TabKey, on: boolean): HTMLElement {");
 check(tabElFn.length > 0, "S0 (배선) tabEl 을 찾았다 — 아래 단언이 무언가를 보고 있다");
-check(/const x = pinned \? null : el\('button', \{\s*class: 'pn-tab-x'/.test(tabElFn), "S1 × 는 고정 탭만 빼고 **모든 탭**에 선다 — 켜졌는지와 무관하다");
+check(/const x = pinned \|\| \(detachX && !on\) \? null : el\('button', \{\s*class: 'pn-tab-x'/.test(tabElFn), "S1 × 는 고정 탭과 «안 켠 붙은 앱 탭» 만 빼고 모든 탭에 선다 — 켜졌는지와 무관하다");
 check(/el\('span', \{ class: 'pn-tab-lead'[^)]*\}, pnIcon\(ic, 'pn-i sm'\)\), el\('span', \{ class: 'pn-tab-t'/.test(tabElFn), "S1b 탭 = 아이콘 칸(pn-tab-lead) + 이름(pn-tab-t) — 런타임 기하 시험이 재는 그 구조");
-check(/addEventListener\('auxclick'[\s\S]*?e\.button !== 1[\s\S]*?if \(!pinned\) closeTab\(zone, key, \{ pointer: true \}\)/.test(tabElFn), "S2 휠 클릭(가운데 버튼) = 닫기 · 고정 탭은 제외");
+check(/addEventListener\('auxclick'[\s\S]*?e\.button !== 1[\s\S]*?if \(!pinned && !\(detachX && !on\)\) closeTab\(zone, key, \{ pointer: true \}\)/.test(tabElFn), "S2 휠 클릭(가운데 버튼) = 닫기 · 고정 탭과 안 켠 붙은 앱 탭은 제외");
 check(/beginTabDrag\(dragHost, zone, key, w, e\)/.test(tabElFn) && !/draggable/.test(tabElFn), "S3 끌기는 포인터 끌기(pane-tabdrag) — HTML5 draggable 이 아니다");
 check(/if \(consumeDragClick\(\)\) return; activate\(zone, key\)/.test(tabElFn), "S3b 끌기로 끝난 누름은 켜기로 치지 않는다");
 check(!/data-n/.test(tabElFn), "S4 아이콘 어깨의 번호(data-n)는 걷혔다");
 const dropFn = fn("  function dropTab(zone: Zone, key: TabKey, o?: { paint?: boolean }): void {");
 check(/lay\.act\[real\] = landingAfterClose\(before, key, recent\[real\]\)/.test(dropFn), "S5 켜진 탭을 닫으면 최근 본 탭으로(landingAfterClose)");
 check(!/list\[Math\.max\(0, i - 1\)\]/.test(PANES), "S5b 종전 규칙(왼쪽 이웃)은 걷혔다");
+check(dropFn.length > 0 && !/saveAct\(/.test(dropFn), "S5c dropTab 은 세션 기억(saveAct)을 쓰지 않는다 — 세션을 갈아 끼울 때도 불려 새 세션의 기억을 덮어썼다(격리 리뷰)");
+const removeFn = fn("  function removeTab(zone: Zone, key: TabKey): void {");
+check(/if \(DERIVED_TABS\.has\(tabBase\(key\)\)\) \{ const z = zoneOf\(key\) \|\| zone; revealZone\(z\); activate\(z, key\); return; \}/.test(removeFn),
+  "S5d 안 켠 붙은 앱 탭의 닫기는 걷지 않고 켠다 — 걷기만 하면 곧 되살아나 아무 일도 안 한 것이 된다");
 const closeFn = fn("  function closeTab(zone: Zone, key: TabKey, o?: { pointer?: boolean }): void {");
 check(/if \(o\?\.pointer && pane && !narrow\(\)\) freeze\(pane\);/.test(closeFn), "S6 마우스로 닫으면 폭을 얼린다 — 다음 탭의 × 가 커서 밑에 온다");
 check(/bar\.addEventListener\('pointerleave', \(\) => thaw\(p\)\)/.test(PANES), "S6b 줄에서 손을 떼면 푼다");
@@ -148,6 +151,12 @@ const manyFn = fn("  function closeMany(zone: Zone, anchor: TabKey | null, kind:
 check(/bulkTargets\(zoneTabs\(zone\), anchor, kind, \{ keep: keepInBulk, isFile: isFileTab \}\)/.test(manyFn) && /lay\.act\[real\] = anchor;/.test(manyFn), "S8f 한꺼번에 닫기는 bulkTargets 로 고르고, 우클릭한 탭을 켠다");
 const keyFn = fn("  function onTabsKey(p: Pane, e: KeyboardEvent): void {");
 check(/e\.key === 'Delete' \|\| e\.key === 'Backspace'/.test(keyFn) && /if \(isPinned\(key\)\) return;/.test(keyFn) && /'ArrowRight'/.test(keyFn) && /'Home'/.test(keyFn), "S9 키보드 — ←/→/Home/End 로 옮기고 Delete 로 닫는다(고정 탭 제외)");
+//  마운트 중 첫 paintAll 이 읽는 값은 그보다 앞에 선언돼야 한다(TDZ — mount-time-tdz-panes-declaration-order-762).
+const mountAt = PANES.indexOf("export function mountPanes(");
+const firstPaint = PANES.indexOf("\n  paintAll();\n", mountAt);
+const declAt = (re) => { const m = re.exec(PANES.slice(mountAt)); return m ? mountAt + m.index : -1; };
+check(firstPaint > 0 && [/const recent: Record<Zone, TabKey\[\]>/, /let closedStack: ClosedTab\[\]\[\]/, /const dragHost: TabDragHost/].every((re) => { const i = declAt(re); return i > 0 && i < firstPaint; }),
+  "S11 탭 줄의 기억(recent · closedStack · dragHost)은 첫 paintAll 보다 앞에 선언된다");
 check(/pin: TabKey\[\];/.test(PANES) && /pin: arr\(s\.pin\)/.test(PANES) && /normalizePins\(lay\[z\], pins\)/.test(PANES), "S10 고정 탭은 배치에 저장되고, 읽을 때 맨 앞으로 모인다");
 
 console.log(fail ? `\n${fail}건 실패 · ${pass}건 통과` : `\n${pass}건 통과`);

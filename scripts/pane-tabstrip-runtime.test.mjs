@@ -15,6 +15,8 @@
 //  D4 × 위에서 누른 것 · 4px 움직임은 끌기가 아니다 — 호출 0건
 //  D5 Esc 는 없던 일 — 호출 0건, 이웃 자리 원래대로
 //  D6 끌기로 끝난 누름 뒤 consumeDragClick() 은 한 번만 참
+//  D7 끄는 동안 액자(iframe)는 포인터를 못 받는다(그 위에서 놓아도 pointerup 이 이 문서로 온다) · 끝나면 되돌아온다
+//  D8 버튼이 떼어진 채 움직이면(액자·창 밖에서 놓았다) 없던 일 — 호출 0건, 다음 끌기가 막히지 않는다
 //
 // 왜 런타임인가: 중심이 맞는지는 CSS 가 실제로 그린 자리에서만 잰다(여백·폭·absolute 의 합). 끌기는 포인터 사건의 흐름이다.
 // fail-first(2026-09-30): × 의 left 를 7→10 으로 바꾸면 G1 이, 모서리 규칙을 지우면 G3 가, pane-tabdrag 의 × 방어를 지우면 D4 가,
@@ -62,6 +64,8 @@ const PAGE = `<!doctype html><meta charset="utf-8"><style>${CSS}
     const strip=document.createElement('div'); strip.className='pn-tabs'; strip.append(...tabs);
     const tail=document.createElement('div'); tail.className='pn-tabtail'; bar.append(strip,tail);
     const body=document.createElement('div'); body.className='pn-pane-body'; body.style.height='100px';
+    //  본문은 액자 — 실제 세션 화면·웹·PDF 칸이 그렇다(D7).
+    const fr=document.createElement('iframe'); fr.style.cssText='border:0;width:100%;height:100%'; fr.srcdoc='<p>frame</p>'; body.append(fr);
     pane.append(bar,body); document.getElementById('host').append(pane); return {zone:z,bar,tabs:strip,pane};
   };
   //  ⚠ 칸 이름을 'side' 로 두면 좁은 창 CSS(≤900)가 그 칸을 숨겨 모든 크기가 0 이 된다(헤드리스 기본 창은 좁다 — 첫 판 실측).
@@ -104,7 +108,6 @@ const PAGE = `<!doctype html><meta charset="utf-8"><style>${CSS}
   R.d1_no_call_before_release=calls.length===0;
   P('pointerup',cx(cR)+6,cy(r)); await sleep(260);
   R.d1_reorder=JSON.stringify(calls)===JSON.stringify([['reorder','right','b',3]]);
-  R.d6_click_consumed_once=TabDrag.consumeDragClick()===false; // setTimeout 0 이 이미 풀었다 — 다음 판정은 바로 뒤에서
   R.d1_info=JSON.stringify(calls);
   // D6 — 놓은 **바로 그 박자**의 click 은 소비된다(한 번만)
   calls.length=0; r=down(side.tabs.children[4]); P('pointermove',cx(r)+40,cy(r)); P('pointerup',cx(r)+40,cy(r));
@@ -143,6 +146,18 @@ const PAGE = `<!doctype html><meta charset="utf-8"><style>${CSS}
   document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
   P('pointerup',cx(cR2)+6,cy(r)); await sleep(260);
   R.d5_escape_cancels=calls.length===0 && [...side.tabs.children].every((n)=>tr(n)==='') && !side.tabs.classList.contains('dnd');
+  // D7 — 끄는 동안 액자
+  const frame=bottom.pane.querySelector('iframe');
+  R.w_frame=!!frame && getComputedStyle(frame).pointerEvents==='auto';
+  r=down(side.tabs.children[2]); P('pointermove',cx(r)+30,cy(r));
+  R.d7_frames_off_while_dragging=getComputedStyle(frame).pointerEvents==='none';
+  document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true})); await sleep(30);
+  R.d7_frames_back=getComputedStyle(frame).pointerEvents==='auto';
+  // D8 — 버튼이 떼어진 채 움직임
+  calls.length=0; r=down(side.tabs.children[2]); P('pointermove',cx(r)+30,cy(r)); P('pointermove',cx(r)+60,cy(r),window,{buttons:0});
+  R.d8_released_elsewhere=calls.length===0 && !TabDrag.tabDragging() && !document.documentElement.classList.contains('pn-tab-dragging');
+  r=down(side.tabs.children[2]); P('pointermove',cx(cR)+6,cy(r)); P('pointerup',cx(cR)+6,cy(r)); await sleep(30);
+  R.d8_next_drag_works=calls.length===1;
   // 배선 — 관측 장치가 살아 있나(호출 기록이 실제로 쌓였던 적이 있다)
   R.w_calls_observed=R.d1_reorder===true;
   document.getElementById('out').textContent=JSON.stringify(R)+'\\nENDRESULT';
@@ -154,7 +169,8 @@ const m = dom.match(/<pre id="out">([\s\S]*?)ENDRESULT/);
 if (!m) { console.error("FAIL  결과 표지를 못 받았다\n" + dom.slice(-800)); process.exit(1); }
 const R = JSON.parse(m[1].trim().replace(/&quot;/g, '"').replace(/&amp;/g, "&"));
 let fails = 0;
-const check = (k, why) => { const ok = R[k] === true; console.log(`${ok ? "ok  " : "FAIL"}  ${k} — ${why}`); if (!ok) fails++; };
+let checks = 0;
+const check = (k, why) => { checks++; const ok = R[k] === true; console.log(`${ok ? "ok  " : "FAIL"}  ${k} — ${why}`); if (!ok) fails++; };
 check("w_layout", "(배선) 탭 · 아이콘 칸(16) · 닫기 단추(20)의 크기가 실제로 재졌다 — 중심 비교가 0=0 이 아니다");
 check("w_calls_observed", "(배선) 끌기 호출 기록이 실제로 쌓인다 — 아래 «호출 0건» 단언이 무언가를 보고 있다");
 check("g1_x_center_on_icon", `G1 닫기 단추의 중심 = 아이콘의 중심 ${JSON.stringify(R.g1_info)}`);
@@ -176,5 +192,10 @@ check("d3_outside_nothing", "D3d 칸 밖에 놓으면 아무 일 없음(제자�
 check("d4_x_not_drag", "D4 닫기 단추 위에서 누른 것은 끌기가 아니다");
 check("d4_slop_is_click", "D4b 4px 움직임은 클릭이다");
 check("d5_escape_cancels", "D5 Esc 는 없던 일 — 호출 0건, 이웃 제자리");
-console.log(fails ? `\n${fails}건 실패` : "\n21건 통과");
+check("w_frame", "(배선) 본문 액자가 섰고 평소엔 포인터를 받는다");
+check("d7_frames_off_while_dragging", "D7 끄는 동안 액자는 포인터를 못 받는다 — 그 위에서 놓아도 끌기가 끝난다");
+check("d7_frames_back", "D7b 끌기가 끝나면 액자가 다시 포인터를 받는다");
+check("d8_released_elsewhere", "D8 버튼이 떼어진 채 움직이면 없던 일 — 호출 0건, 끌기 상태가 안 남는다");
+check("d8_next_drag_works", "D8b 그 뒤의 끌기가 막히지 않는다");
+console.log(fails ? `\n${fails}건 실패` : `\n${checks}건 통과`);
 process.exit(fails ? 1 : 0);
