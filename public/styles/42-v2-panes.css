@@ -9,6 +9,7 @@
 /* 사이드바 열의 폭 = 적어 둔 폭(--pn-side-w)과 상한 가운데 작은 쪽(#3870). 상한 = 격자 폭 - 세션 최소 폭 360px - 손잡이 6px,
    하한 220px(web/lib/side-card-geom.ts sideCap 과 같은 식). 상한을 **그릴 때** 맞추므로 격자가 잠깐 좁아져도 적어 둔 폭은
    깎이지 않고, 격자가 다시 넓어지면 제 폭으로 돌아온다. */
+/* --pn-side-w 의 340 은 곁칸 기본 폭 SIDE_DEF(web/lib/side-card-geom.ts)를 옮겨 적은 첫 페인트 값이다 — 스크립트가 곧 덮는다. 바꾸면 같이 바꾼다. */
 .pn-body { --pn-side-w: 340px; --pn-side-fit: min(var(--pn-side-w), max(220px, calc(100% - 366px))); position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 6px var(--pn-side-fit); background: var(--line); }
 .pn-body.no-side { grid-template-columns: minmax(0, 1fr) 0 0; }
 /* 접힌 곁칸을 다시 펴는 손잡이 — 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 유일한 복구 통로.
