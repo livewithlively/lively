@@ -68,7 +68,6 @@ const KIND_PATH: Record<Kind, string[]> = {
 const icon = (k: Kind, cls: string): SVGElement =>
   sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, ...KIND_PATH[k].map((d) => sv('path', { d })));
 
-
 // ── 관련도 축 (2026-08-24 실측) ────────────────────────────────────────────────
 //  `semantic` 이 주는 RRF 점수로는 못 가른다 — 순위역수라 채널마다 1등이 전부 1/61≈0.0164 로 동점이고,
 //  질의에 따라 12항목의 점수 폭이 0.0012 까지 좁아진다. 그래서 종전엔 종류 고정순서로 늘어놓을 수밖에 없었고,
