@@ -417,3 +417,89 @@ export function sectionHeadingOk(heading: string | null, body: string): boolean 
   if (!level) return true;
   return new RegExp(`^ {0,3}#{${level}}(?!#)\\s`).test(body.replace(/^(?:[ \t]*\n)+/, ""));
 }
+
+// ── 의미 판정 환원 ──
+// LLM 판정기는 두 글의 차이를 항목으로 적고, 항목마다 «사실이 달라졌나» 를 스스로 표시한다. 통과·탈락은 그 표시로만 가른다.
+//  종전 판정은 missing·added·changed 배열이 비었는지로 갈라, 판정기가 «표현 요소라 사실 변화 아님» 이라고 적은 항목까지
+//  탈락으로 셌다(top-16 dry-run 에서 의미 탈락 13건 중 다수). 표시는 두 신호가 맞을 때만 믿는다 — fact_changed 가 false 이고
+//  category 가 expression 일 때만 비사실로 보고, 하나라도 빠지거나 어긋나면 사실 변화로 친다(판정기의 자기모순은 탈락 쪽으로).
+
+export type MeaningKind = "missing" | "added" | "changed";
+/** 사실 범주 — expression 만 비사실이다. meta 는 원문의 모양·편집 과정을 설명하는 문장으로, 원문에 없던 주장이라 사실 추가다. */
+export const MEANING_CATEGORIES = ["claim", "number", "condition", "scope", "subject", "date", "certainty", "risk", "meta", "expression"] as const;
+export type MeaningCategory = (typeof MEANING_CATEGORIES)[number];
+
+export interface MeaningItem {
+  kind: MeaningKind;
+  /** 원문 쪽 대목(없으면 빈 문자열). 자리를 바꿔 물은 판정도 여기선 늘 원문이다. */
+  a: string;
+  /** 재작성본 쪽 대목. */
+  b: string;
+  category: MeaningCategory | "unknown";
+  fact_changed: boolean;
+  reason: string;
+}
+
+const KINDS = new Set<string>(["missing", "added", "changed"]);
+const CATS = new Set<string>(MEANING_CATEGORIES);
+const asText = (x: unknown): string => (x == null ? "" : typeof x === "string" ? x : JSON.stringify(x));
+
+/**
+ * 판정기 답 하나를 항목 목록으로 편다. swapped 는 A·B 자리를 바꿔 물은 판정이다 — missing↔added 와 a↔b 를 되돌린다.
+ *  답의 모양이 아니면 null(파싱 실패). 옛 모양 {missing, added, changed} 는 표시가 없으니 전부 사실 변화로 받는다.
+ */
+export function normalizeJudgement(raw: unknown, swapped: boolean): MeaningItem[] | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  let items: MeaningItem[];
+  if (Array.isArray(o.items)) {
+    items = o.items.map((it): MeaningItem => {
+      const r = (it && typeof it === "object" ? it : { a: it }) as Record<string, unknown>;
+      const kind = (KINDS.has(String(r.kind)) ? String(r.kind) : "changed") as MeaningKind;
+      const category = CATS.has(String(r.category)) ? (String(r.category) as MeaningCategory) : "unknown";
+      const nonFact = r.fact_changed === false && category === "expression";
+      return { kind, a: asText(r.a), b: asText(r.b), category, fact_changed: !nonFact, reason: asText(r.reason) };
+    });
+  } else if (["missing", "added", "changed"].every((k) => Array.isArray(o[k]))) {
+    items = (["missing", "added", "changed"] as const).flatMap((kind) => (o[kind] as unknown[]).map((x): MeaningItem => ({
+      kind, a: kind === "added" ? "" : asText(x), b: kind === "added" ? asText(x) : "", category: "unknown", fact_changed: true, reason: "",
+    })));
+  } else return null;
+  if (!swapped) return items;
+  const flip: Record<MeaningKind, MeaningKind> = { missing: "added", added: "missing", changed: "changed" };
+  return items.map((x) => ({ ...x, kind: flip[x.kind], a: x.b, b: x.a }));
+}
+
+export interface MeaningVerdict {
+  pass: boolean;
+  /** 사실 변화 항목 — 하나라도 있으면 탈락이고, 재작성 모델에 되돌려 줄 것도 이것뿐이다. */
+  factual: MeaningItem[];
+  /** 판정기가 표현 차이로 표시한 항목 — 보고서에만 남긴다. */
+  ignored: MeaningItem[];
+}
+
+/** 판정 여러 번의 항목을 합쳐 통과를 가른다. 통과는 요구 횟수를 다 채우고 사실 변화가 하나도 없을 때뿐이다. */
+export function meaningVerdict(runs: MeaningItem[][], requiredRuns: number): MeaningVerdict {
+  const all = runs.flat();
+  const factual = all.filter((x) => x.fact_changed);
+  const ignored = all.filter((x) => !x.fact_changed);
+  return { pass: runs.length >= requiredRuns && factual.length === 0, factual, ignored };
+}
+
+const KIND_WORD: Record<MeaningKind, string> = {
+  missing: "원문의 이 내용이 빠졌다(원문대로 되살려라)",
+  added: "원문에 없는 내용이 생겼다(지워라)",
+  changed: "뜻이 바뀌었다(원문대로 되돌려라)",
+};
+
+/** 의미 탈락을 재작성 모델에 돌려줄 문장으로 — 사실 변화 항목만 싣는다. 표현 차이까지 주면 모델이 그걸 «되살리려고» 메타 문장을 지어낸다. */
+export function meaningFeedback(items: MeaningItem[]): string[] {
+  return items.filter((x) => x.fact_changed).map((x) => {
+    const parts = [
+      x.a ? `원문: ${x.a}` : "",
+      x.b ? `재작성본: ${x.b}` : "",
+      x.reason ? `이유: ${x.reason}` : "",
+    ].filter(Boolean);
+    return `${KIND_WORD[x.kind]} [${x.category}] ${parts.join(" / ")}`;
+  });
+}
