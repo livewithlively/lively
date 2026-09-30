@@ -24,6 +24,7 @@ import { appHref, visibleApps } from './apps.js';
 import { appMatches } from '../lib/app-match.js';   // #4233 옛 이름으로도 찾는다(런치패드와 같은 잣대)
 import { sessText } from './side.js';
 import { projName, type Sess, type V2Data } from './views.js';
+import { projHitHref } from '../lib/proj-page.js';   // #3870 프로젝트 줄은 프로젝트 화면으로(사이드바 [→] 와 같은 문)
 
 type Kind = 'proj' | 'know' | 'src' | 'sess' | 'hist' | 'app';
 
@@ -67,14 +68,6 @@ const KIND_PATH: Record<Kind, string[]> = {
 const icon = (k: Kind, cls: string): SVGElement =>
   sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, ...KIND_PATH[k].map((d) => sv('path', { d })));
 
-/** 프로젝트 검색 결과의 이동 자리 — **행의 층에 맞는 화면**으로.
- *  ⚠ 응답의 `project_id` 는 비어 있다(실측 2026-08-24: 태스크 행도 null). 그래서 `project_id || id` 로 폴백하면
- *   **태스크 id 를 프로젝트 id 로 착각해** 엉뚱한 프로젝트로 간다(없는 번호면 빈 화면). 층을 보고 갈라 준다:
- *   프로젝트는 셸의 프로젝트 화면, 태스크·서브태스크는 제 주소를 가진 클래식 태스크 모달(#/projects2/t/<id>). */
-function projHref(p: { id: number | string; level?: string }): string {
-  const id = Number(p.id);
-  return p.level === 'task' || p.level === 'subtask' ? '#/projects2/t/' + id : '#/p/' + id;
-}
 
 // ── 관련도 축 (2026-08-24 실측) ────────────────────────────────────────────────
 //  `semantic` 이 주는 RRF 점수로는 못 가른다 — 순위역수라 채널마다 1등이 전부 1/61≈0.0164 로 동점이고,
@@ -466,7 +459,7 @@ export function omniOpen(seed?: string): void {
       }));
     // 프로젝트 — 서버 의미검색이 오기 전에 이름 매칭만 먼저(첫 글자에 화면이 비어 있지 않게). 서버 응답이 오면 덮인다.
     const proj: Hit[] = d.projects.filter((p) => String(p.name || '').toLowerCase().includes(nq)).slice(0, 6)
-      .map((p) => ({ kind: 'proj' as const, key: 'p:' + p.id, title: p.name, sub: oneLine(String(p.description || '')), href: '#/p/' + p.id }));
+      .map((p) => ({ kind: 'proj' as const, key: 'p:' + p.id, title: p.name, sub: oneLine(String(p.description || '')), href: projHitHref(p) }));
     const apps: Hit[] = visibleApps().filter((a) => appMatches(a, nq)).slice(0, 4)
       .map((a) => ({ kind: 'app' as const, key: 'a:' + a.key, title: a.title, sub: a.desc, href: appHref(a) }));
     //  꺼진 종류는 애초에 담지 않는다 — 화면에서 거르는 게 아니라 **아예 찾지 않는다**(칩이 곧 검색 범위다).
@@ -498,7 +491,7 @@ export function omniOpen(seed?: string): void {
         kind: 'proj' as const, key: 'p:' + p.id,
         title: String(p.name || p.title || ('프로젝트 #' + p.id)),
         sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
-        href: projHref(p), ident: String(p.id),
+        href: projHitHref(p), ident: String(p.id),
       })), my), () => put('proj:sem', [], my));
     });
     const knowRow = (e: any): Hit => ({
@@ -529,7 +522,7 @@ export function omniOpen(seed?: string): void {
   api(`/api/ui/v6/projects/similar?limit=12&min_score=${MIN_COSINE}&text=` + qs).then((r: any) => put('proj:sim', ((r && r.projects) || []).map((p: any): Hit => ({
         kind: 'proj', key: 'p:' + p.id, title: String(p.name || ('프로젝트 #' + p.id)),
         sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
-        href: projHref(p), score: Number(p.similarity) || 0, ident: String(p.id),
+        href: projHitHref(p), score: Number(p.similarity) || 0, ident: String(p.id),
       })), my), () => put('proj:sim', [], my));
     });
     call('know', () => {
@@ -540,7 +533,7 @@ export function omniOpen(seed?: string): void {
         kind: 'proj' as const, key: 'p:' + p.id,
         title: String(p.name || p.title || ('프로젝트 #' + p.id)),
         sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
-        href: projHref(p), ident: String(p.id),
+        href: projHitHref(p), ident: String(p.id),
       })).filter((h: Hit) => isTitleHit(h) || isIdentHit(h)), my), () => put('proj:grep', [], my));
     });
     call('src', () => {

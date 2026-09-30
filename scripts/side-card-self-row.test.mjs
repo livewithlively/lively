@@ -20,11 +20,12 @@ const root = path.resolve(import.meta.dirname, "..");
 const out = mkdtempSync(path.join(tmpdir(), "card-self-row-"));
 execFileSync(
   path.join(root, "node_modules/.bin/tsc"),
-  [path.join(root, "web/lib/sess-fold.ts"), "--rootDir", path.join(root, "web"),
+  [path.join(root, "web/lib/sess-fold.ts"), path.join(root, "web/lib/proj-page.ts"), "--rootDir", path.join(root, "web"),
    "--outDir", out, "--module", "esnext", "--target", "es2022", "--skipLibCheck"],
   { stdio: "inherit" },
 );
 const { projCardRows } = await import(path.join(out, "lib/sess-fold.js"));
+const { projectPageHref } = await import(path.join(out, "lib/proj-page.js"));
 
 let pass = 0, fail = 0;
 const ok  = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -127,7 +128,8 @@ if (typeof projCardRows !== "function") {
   const MAIN = readFileSync(path.join(root, "web/v2/main.ts"), "utf8");
   const fnBody = (name) => { const s = MAIN.indexOf(`function ${name}(`); return s < 0 ? "" : code(MAIN.slice(s, MAIN.indexOf("\n}\n", s))); };
 
-  check(/const href = '#\/app\/projects2\/p\/' \+ projectId;/.test(fnBody("openProjectPage")),
+  //  주소는 lib/proj-page 한 벌이 만든다(#3870 통합검색도 같은 문으로 연다) — 배선과 값을 함께 본다.
+  check(/const href = projectPageHref\(projectId\);/.test(fnBody("openProjectPage")) && projectPageHref(7) === "#/app/projects2/p/7",
     "E12·C1 카드의 [→] 가 여는 창은 app/projects2 프로젝트 화면이다 — C3 의 self 판정이 잡는 주소다",
     "openProjectPage 의 주소가 바뀌었다 — sideRowFace 의 selfProject 판정이 그 주소를 잡는지 같이 봐야 한다");
 
