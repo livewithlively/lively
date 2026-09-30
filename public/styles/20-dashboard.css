@@ -577,6 +577,10 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 
 /* 알림 설정 팝오버 */
 .dash-pop { position: fixed; z-index: 80; } /* 모달(z-70) 안에서 열리는 팝오버가 모달 위로(#req 상태 메뉴·리스트 이동 등). */
+/* #3870 — 앵커 팝오버의 **기본 바탕**. anchoredPopover·dashPopover 는 자리만 잡고 바탕은 패널이 준다는 약속이었는데,
+   그 약속을 잊은 패널(자료 칸 정렬 · 브라우저 칸 확장 목록)은 글자만 본문 위에 떠서 뒤가 다 비쳤다(원준 2026-09-30 신고 그림).
+   특이도 0(:where)이라 제 바탕·테두리를 가진 패널(.dash-pop-panel · .pn-pop · .sw-pop …)은 그대로 제 것을 쓴다. */
+:where(.dash-pop) { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 28px rgba(var(--shadow-ink), .16); }
 .dash-pop-panel { width: 264px; max-height: 70vh; overflow-y: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
   box-shadow: 0 8px 28px rgba(var(--shadow-ink), .16); padding: 6px; scrollbar-width: thin; }
 .dash-pop-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 8px 8px 6px; }

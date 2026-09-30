@@ -56,7 +56,7 @@ node "$CLAUDE_PLUGIN_ROOT/scripts/login.mjs"
 
 `kit/hooks/` 나 `user-install.mjs` 의 배선을 바꿨으면 `node scripts/build-plugin.mjs` 를 돌려 결과를 함께 커밋한다. `scripts/build-plugin.test.mjs` 가 사본이 `kit/` 와 다르거나, `hooks.json` 이 생성본과 다르거나, 훅이 플러그인 트리에 없는 파일을 import 하면 CI 를 떨어뜨린다(마지막 경우는 설치본의 훅이 전부 `ERR_MODULE_NOT_FOUND` 로 죽는다).
 
-**`.claude-plugin/plugin.json` 의 `version` 은 빌드 스크립트가 올린다 — 손으로 고치지 않는다.** Claude Code 는 설치된 플러그인을 갱신할지 이 문자열로 정한다. 버전을 고정해 두면 설치한 사람은 그 문자열이 바뀔 때까지 캐시된 사본에 머문다(«a manifest that pins `version` … keeps every user on the cached copy until its author changes the string» — [Claude Code 문서](https://code.claude.com/docs/en/plugins/loading)). 빼면 커밋 SHA 가 버전이 되지만 `claude plugin validate --strict` 가 실패한다. 그래서 `build-plugin.mjs` 가 플러그인 내용의 해시를 내어 해시가 바뀔 때마다 패치 버전을 올리고, 그 짝을 `scripts/build-plugin.version.json` 에 적는다. 내용이 바뀌었는데 버전이 그대로면 테스트가 실패한다. 마켓플레이스 항목에는 `version` 을 두지 않는다(둘 다 있으면 `plugin.json` 이 경고 없이 이긴다). 2026-08-04 부터 2026-09-30 까지 `0.1.0` 에 머물러, 그 사이 설치본은 이후 변경을 하나도 받지 못했다.
+`.claude-plugin/plugin.json` 과 마켓플레이스 항목에 **`version` 을 두지 않는다.** 버전을 고정하면 설치한 사람은 누가 그 문자열을 바꿀 때까지 캐시된 사본에 머문다(«a manifest that pins `version` … keeps every user on the cached copy until its author changes the string» — [Claude Code 문서](https://code.claude.com/docs/en/plugins/loading)). 없으면 플러그인 디렉터리의 커밋 SHA 가 버전이 되어, `plugins/lively` 를 건드린 커밋마다 갱신이 전달된다. `claude plugin validate --strict` 는 버전이 없다고 경고한다 — 의도한 경고다. 버전이나 내용 해시를 레포 파일에 기록하지도 않는다 — 훅을 바꾸는 PR 둘이 같은 줄을 고쳐 반드시 충돌한다. 2026-08-04 부터 2026-09-30 까지 `0.1.0` 으로 고정돼 있어, 그 사이 설치본은 이후 변경을 하나도 받지 못했다.
 
 `run-custom` 은 이벤트당 고정 엔트리 하나이고 커스텀 훅 자체는 런너가 런타임에 게이트웨이에서 받아온다 — 조직이 훅을 추가·삭제해도 배선표를 다시 쓸 필요가 없고, 비활성화하면 다음 세션에 즉시 무효가 된다(kill-switch).
 

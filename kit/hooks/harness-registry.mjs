@@ -74,6 +74,9 @@ export function claudeConfigDir(HOME, env = process.env) {
 }
 
 // ── 표 ────────────────────────────────────────────────────────────────────
+// claude 가 사람 없이 도는 진입점(CLAUDE_CODE_ENTRYPOINT) — 표의 claude.headless 가 쓴다(#4219).
+const HEADLESS_ENTRYPOINTS = new Set(["sdk-cli", "sdk-ts", "sdk-py", "claude-code-github-action", "mcp"]);
+
 // 각 하네스는 아래 축을 채운다. 축을 하나 늘리면 **모든 하네스가 그 축을 답해야** 한다 — 그게 '빠진 자리'를 없애는 방법이다.
 //
 //  home(HOME, env)      설정·자산이 사는 디렉터리
@@ -87,6 +90,8 @@ export function claudeConfigDir(HOME, env = process.env) {
 //  reloadAssets         자산 변경이 같은 세션에 반영되나
 //  events               우리 8이벤트 중 이 하네스가 지원하는 것(러너 배선 대상)
 //  install              이 하네스를 **우리가 대신 깔 때** 필요한 사실(#2255) — 아래 설치 축 주석 참조
+//  headless(payload, env, readHead)  사람이 대화하지 않는 실행인가(#4219) — 기록 fork 를 권하면 안 되는 자리.
+//                        모르면 **참**(헤드리스)으로 답한다 — 틀린 «fork 로 넘겨라»는 기록 유실이고, 놓친 넛지는 시간뿐이다.
 //
 // ※ claude·codex 값은 **현재 동작을 그대로 옮긴 것**이다(테이블화는 동작 무변경). opencode 값은 #1519 실측
 //   ([[opencode-harness-spec-1519]])에서 왔고, 아직 배선에 쓰이지 않는다(데이터만 먼저 둔다).
@@ -156,6 +161,10 @@ export const HARNESS = {
     },
     // SubagentStop 페이로드의 자식 id(실측: agent_id — 위 agentId 와 같은 값).
     subagentId: (payload) => String(payload?.agent_id ?? ""),
+    // 사람이 대화하지 않는 실행인가(#4219) — 여기엔 fork 타입이 없어(`Agent type 'fork' not found`, #4201 §11-2) 기록 fork 를
+    //  권하면 안 된다. 훅이 물려받는 env 로 가른다(2.1.285 실측): 대화형 = ENTRYPOINT `cli` · SESSION_ATTENDED `1`,
+    //  `claude -p` = `sdk-cli` · `0`. sdk-ts·sdk-py·github-action·mcp 는 바이너리의 entrypoint 분류표에서 같은 SDK·비대화 칸이다.
+    headless: (_payload, env) => HEADLESS_ENTRYPOINTS.has(String(env?.CLAUDE_CODE_ENTRYPOINT ?? "")) || env?.CLAUDE_CODE_SESSION_ATTENDED === "0",
     mcp: { style: "claude-cli" },          // `claude mcp add --transport stdio …`
     autoApprove: { kind: "settings-allow", key: (server, tool) => `mcp__${server}__${tool}` },
     contextEnvelope: "raw",                // SessionStart raw stdout 이 곧 컨텍스트
@@ -212,6 +221,18 @@ export const HARNESS = {
     // SubagentStart/Stop 의 agent_id = 자식 스레드 id(hooks/src/schema.rs:606-622). 자식 턴이 정상 종료될 때 오고,
     //  중단(abort)엔 안 온다(core/src/session/turn.rs:615-617) — 그 경우 표시는 게이트의 TTL 이 걷는다.
     subagentId: (payload) => String(payload?.agent_id ?? ""),
+    // 사람이 대화하지 않는 실행인가(#4219) — `codex exec` 는 부모 턴이 끝나면 곧바로 내려가 늦게 끝나는 fork 가 끊긴다(#4201 §11-4).
+    //  훅 env 는 세션 스냅샷이라 표지가 없고, 대화 파일(transcript_path) 첫 줄 session_meta 가 말해 준다(0.154.0 실측):
+    //  TUI = originator `codex-tui`·source `cli`, exec = `codex_exec`·`exec`. 첫 줄은 약 18KB 지만 두 키는 앞 400바이트 안에 있다.
+    //  대화 파일이 없거나 못 읽거나 session_meta 가 아니면 **헤드리스로 본다**(`codex exec --ephemeral` 은 대화 파일을 안 남긴다 —
+    //   그 실행에 fork 를 권하면 부모와 함께 끊겨 기록이 사라진다).
+    headless: (payload, _env, readHead) => {
+      const t = typeof payload?.transcript_path === "string" ? payload.transcript_path : "";
+      let head = "";
+      try { head = t ? String(readHead(t) || "") : ""; } catch { head = ""; }
+      if (!/"type"\s*:\s*"session_meta"/.test(head)) return true;
+      return /"originator"\s*:\s*"codex_exec"/.test(head) || /"source"\s*:\s*"exec"/.test(head);
+    },
     // ⚠ command 는 **문자열**, args 는 배열(0.142.0 실측). 배열을 넣으면 config.toml 전체가 로드 실패한다.
     mcp: { style: "toml-table", commandShape: "string+args" },
     autoApprove: { kind: "toml-approval", key: (_s, tool) => tool },
@@ -280,6 +301,7 @@ export const HARNESS = {
     contextEnvelope: "file",
     contextFile: (home) => j(home, "AGENTS.md"),
     reloadAssets: false,                   // 기동 시 1회 로드, hot-reload 없음
+    headless: () => true,                  // 판별 수단 미실측(#4219) — 모르면 참. fork 축도 비어 있어 기록 fork 를 권할 일이 없다
     // 플러그인 훅 이름으로의 매핑(러너 배선이 아니라 어댑터가 구독할 자리).
     events: ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "PreCompact", "PostCompact"],
     eventMap: {
@@ -352,6 +374,7 @@ export const HARNESS = {
     contextEnvelope: "file",
     contextFile: (home) => j(home, "config", "plugins", "lively", "rules", "AGENTS.md"),
     reloadAssets: false,                   // hot-reload 미확인(#1689) — 보수적으로 false
+    headless: () => true,                  // 판별 수단 미실측(#4219) — 모르면 참. fork 축도 비어 있어 기록 fork 를 권할 일이 없다
     // 러너 배선 대상 — agy 훅 이벤트는 5종뿐(PreToolUse·PostToolUse·PreInvocation·PostInvocation·Stop).
     //  UserPromptSubmit·SessionEnd 등가물 없음(정직 표기). SessionStart 는 PreInvocation 의 invocationNum==0 판정.
     events: ["SessionStart", "PreToolUse", "PostToolUse", "Stop"],
@@ -423,6 +446,7 @@ export const HARNESS = {
     contextEnvelope: "file",
     contextFile: (home) => j(home, "rules", "lively.md"),
     reloadAssets: true,                    // 스킬 핫리로드 실측·문서 확인(수 초 내 반영 — 에이전트·커맨드는 미확인)
+    headless: () => true,                  // 판별 수단 미실측(#4219) — 모르면 참. fork 축도 비어 있어 기록 fork 를 권할 일이 없다
     // grok 은 15이벤트 중 우리 표준 10종이 **claude 와 같은 이름으로 1:1** 존재한다(eventMap 불요).
     //  전부 fail-open(차단은 PreToolUse deny · Stop/SubagentStop block 뿐 — antigravity 의 fail-closed 와 정반대).
     events: ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification", "PreCompact", "PostCompact"],
@@ -568,11 +592,28 @@ export function subagentIdOf(id, payload) {
   return typeof h.subagentId === "function" ? h.subagentId(payload || {}) : "";
 }
 
+// 이 하네스에서 기록 fork 를 띄울 수 있나(#4219) — fork 축이 빈 하네스(opencode·agy·grok)는 자식이 부모 대화를 못 받는다.
+//  모르는 id 는 거짓이다(harness() 의 claude 폴백을 타면 모르는 하네스에 fork 를 권하게 된다).
+export function canRecordFork(id) {
+  return isKnownHarness(id) && (HARNESS[id].tools.fork || []).length > 0;
+}
+
+// 사람이 대화하지 않는 실행인가(#4219) — 표의 headless 축. 모르면(축 없음·판정 중 예외) 참 — 머리말 headless 축 주석.
+//  readHead(path) → 파일 앞부분 문자열(없으면 던져도 된다). fs 는 호출부가 넘긴다(런타임 의존 0 규율).
+export function isHeadlessRun(id, payload, env = {}, readHead = () => "") {
+  const h = harness(id);
+  if (typeof h.headless !== "function") return true;
+  try { return !!h.headless(payload || {}, env || {}, readHead); } catch { return true; }
+}
+
 // 기록 fork 진행 중 표시 = **자식마다 파일 하나** `<sid>.writeback-pending.<자식 id>` (work-flag 가 세우고 걷고, 게이트가 읽는다).
 //  한 파일에 줄 목록으로 두면 기록 fork 둘을 한 메시지에서 병렬로 띄울 때 두 훅 프로세스의 «읽고-고쳐-쓰기»가 겹쳐 한쪽
 //  등록이 사라진다(리뷰 지적 — .blocked 를 O_EXCL 로 원자화한 것과 같은 부류). 파일 생성·삭제는 각각 호출 하나라 겹쳐도 안전하다.
 //  자식 id 는 파일 이름에 안전한 글자만 남긴다(codex v2 task_name 은 `/root/x` 처럼 `/` 를 품는다 — 경로 조작 차단).
 export const RECORD_PENDING_FLAG = "writeback-pending";
+// 표시의 유효기간 — SubagentStop 이 영영 안 오는 경우(자식 비정상 종료)의 안전판. 기록 fork 는 실측 146초(#4201 §8), 본문 생성만
+//  p90 90초·최대 400초라 20분이면 정상 fork 는 넉넉히 덮고, 죽은 표시가 넛지를 오래 막지 않는다. 종료 게이트·기록 넛지가 같이 쓴다.
+export const RECORD_PENDING_TTL_MS = 20 * 60_000;
 export const recordPendingPrefix = (sid) => `${sid}.${RECORD_PENDING_FLAG}.`;   // 끝의 점이 경계 — s1 이 s10 의 표시를 줍지 않는다
 export function recordPendingFileName(sid, childId) {
   const safe = String(childId || "unknown").replace(/[^A-Za-z0-9._-]/g, (c) => `%${c.codePointAt(0).toString(16)}`).slice(0, 120);

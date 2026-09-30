@@ -29,6 +29,7 @@ import { canOpenInAside, openInAside } from './aside-slot.js';
 import { makeSplitter } from './split.js';
 import { mountSideSwap, type SideSwapHandle } from './side-swap.js';   // 곁칸이 절반을 넘으면 자리를 바꾼다(#1819)
 import { mountSideCard, type SideCardHandle } from './side-card.js';   // #3870: 사이드바가 화면을 다 차지하면 세션이 카드가 된다
+import { SIDE_DEF } from '../lib/side-card-geom.js';   // 곁칸 기본 폭 — 카드를 제자리로 돌릴 때도 이 폭으로 물러난다(한 값)
 import { sideLabels } from '../lib/side-label.js';   // 곁칸의 화면 이름. 자리바꿈으로 왼쪽에 서면 «우측» 이라 부르지 않는다(#4233)
 import { MOBILE_MQ } from './mobile.js';   // 좁은 폭(≤900)의 접힌 배치 — side-swap 과 같은 문턱을 읽는다(#4088 후속)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
@@ -584,7 +585,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const isLeft = (): boolean => body.classList.contains('sw-left');
   let sideHide: HTMLElement | null = null;   // 곁칸 머리의 접기 단추(paintPane 이 새로 만들 때마다 바꿔 든다)
   const splitX = makeSplitter({
-    axis: 'x', key: 'panes_side', cssVar: '--pn-side-w', target: body, def: 340, min: 220,
+    axis: 'x', key: 'panes_side', cssVar: '--pn-side-w', target: body, def: SIDE_DEF, min: 220,
     max: () => swap?.maxSideW() ?? 620,
     grow: () => (body.classList.contains('sw-left') ? 1 : -1),
     label: sideLabels(false).width,
@@ -608,7 +609,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const v = loose ? {} : (readViews()[actKey()] || {});
     //  상한으로 깎지 않는다(#3870). 상한은 그릴 때 CSS 가 맞춘다(--pn-side-fit). 여기서 깎으면 화면을 여는 도중의
     //  좁은 격자 폭이 이 세션의 폭을 줄인다. 말이 안 되는 값(옛 결함이 적은 아주 큰 수)만 거른다.
-    const w = Math.max(220, Math.min(4000, Number(v.sideW) || 340));
+    const w = Math.max(220, Math.min(4000, Number(v.sideW) || SIDE_DEF));
     const h = Math.max(120, Math.min(560, Number(v.bottomH) || 240));
     body.style.setProperty('--pn-side-w', w + 'px');
     colMain.style.setProperty('--pn-bottom-h', h + 'px');

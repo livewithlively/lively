@@ -4,6 +4,7 @@
       {"matcher":"startup|resume|clear","hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-preload.mjs\""}]},
       {"matcher":"startup|resume|clear","hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/sync-harness-assets.mjs\""}]},
       {"matcher":"startup|resume|clear","hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/work-flag.mjs\""}]},
+      {"matcher":"compact","hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/work-flag.mjs\""}]},
       {"matcher":"startup|resume|clear","hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" SessionStart"}]}
     ],
     "SessionEnd": [
@@ -20,6 +21,10 @@
       {"hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/work-flag.mjs\""}]},
       {"hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" SubagentStop"}]}
     ],
+    "PreCompact": [
+      {"hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/work-flag.mjs\""}]},
+      {"hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" PreCompact"}]}
+    ],
     "UserPromptSubmit": [
       {"hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/work-flag.mjs\""}]},
       {"hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" UserPromptSubmit"}]}
@@ -35,9 +40,6 @@
     ],
     "PreToolUse": [
       {"matcher":".*","hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" PreToolUse"}]}
-    ],
-    "PreCompact": [
-      {"hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" PreCompact"}]}
     ],
     "PostCompact": [
       {"hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" PostCompact"}]}

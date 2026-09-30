@@ -23,7 +23,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // ── 훅 디렉터리로 **평평하게** 설치되는 파일 ─────────────────────────────────
 //  self-update.mjs(#858)는 settings 에 배선되지 않는다 — 훅이 아니라 session-preload 가 detached 로
 //   띄우는 백그라운드 업데이터다. 파일만 놓는다.
-//  ⚠ harness-registry.mjs · host-effects-port.mjs 는 실행되는 훅이 아니라 **훅들이 import 하는 모듈**이다.
+//  ⚠ harness-registry.mjs · host-effects-port.mjs · record-nudge.mjs 는 실행되는 훅이 아니라 **훅들이 import 하는 모듈**이다.
 //   훅은 평평하게 복사되므로 같은 목록에 있어야 하고, 빠지면 그걸 import 하는 훅이 ERR_MODULE_NOT_FOUND
 //   로 통째로 죽는다(등재 누락은 kit/hooks/harness-registry.test.mjs 와 kit-manifest.test.mjs 가 잡는다).
 export const HOOK_SCRIPTS = [
@@ -35,6 +35,7 @@ export const HOOK_SCRIPTS = [
   "self-update.mjs",
   "harness-registry.mjs",
   "host-effects-port.mjs",
+  "record-nudge.mjs",          // work-flag 가 import 하는 모듈(#4219 기록 넛지)
   "opencode-plugin.js",
   "antigravity-adapter.mjs",
   "grok-adapter.mjs",
