@@ -18,7 +18,11 @@ export function forkableHarness(h: unknown): boolean {
   return FORKABLE.has(String(h || '').trim());
 }
 
-export interface ForkTarget { id: string; name: string }
+export interface ForkTarget {
+  id: string; name: string;
+  /** 초대받은 사람이 누른 복제인가(#3870) — 복제본은 **만든 사람의 세션**으로 뜬다(대화 기록이 그 자리에 있다). 창이 그 사실을 먼저 말한다. */
+  invited?: boolean;
+}
 
 /** 실패를 사람 말로 — 서버의 거절 문장은 그대로, 요청이 서버에 닿지도 못한 경우(브라우저의 영문 오류)는 우리 말로 바꾼다. */
 export function failText(e: unknown): string {
@@ -43,6 +47,7 @@ export function openForkPopover(anchor: HTMLElement, t: ForkTarget, onOpen: (new
     el('p', { class: 'fk-name', title: t.name, text: t.name }),
     el('p', { class: 'fk-sub', text: '지금까지의 대화를 그대로 아는 새 세션을 하나 더 만듭니다.' }),
     el('ul', { class: 'fk-list' },
+      t.invited ? li('복제본도 이 세션을 만든 사람의 세션으로 만들어지고, 나는 초대된 채 함께 들어갑니다.') : null,
       li('이 세션은 그대로 남습니다.'),
       li('복제한 뒤로 두 세션은 서로의 대화를 모릅니다.'),
       li('작업 폴더는 같습니다. 두 세션이 같은 파일을 동시에 고치지 않게 해 주세요.')),
