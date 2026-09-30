@@ -251,7 +251,7 @@ export const knowledgeSave: Capability = {
     // 서술 형식 — 최종 제목·본문을 조직 형식에 비춰 본다. reject 규칙에 **이번 저장이 새로 만든** 위반이 있으면 받지 않는다.
     //  판정이 서버에 있으므로 클라이언트(훅·키트) 버전과 무관하게 걸린다. 기존 문서에 원래 있던 위반은 거부 사유가 아니다 —
     //  그걸 막으면 깨끗한 조각을 붙이는 append 까지 전부 422 가 되고, 조각으로는 본문 위반을 고칠 수 없다.
-    const { info: style, rejects } = await checkWriting("knowledge",
+    const { info: style, rejects, guide } = await checkWriting("knowledge",
       { title: input.title ?? gate.before?.title, body: saveInput.body_md },
       {
         observed: (input.provenance ?? gate.before?.provenance) === "observed",
@@ -261,7 +261,7 @@ export const knowledgeSave: Capability = {
         before: gate.before ? { title: gate.before.title, body: gate.before.body_md } : null,
         human: isHumanWriter(user),
       });
-    if (rejects.length) throw writingRejectError(rejects, (style.style as { guide_md?: string }).guide_md ?? "");
+    if (rejects.length) throw writingRejectError(rejects, guide);
 
     // #921 append 응답 — 본문 전문은 빼고 증분 요약만. json()(capabilities/index.ts)이 handler 결과를 통째로
     //  stringify 해 에이전트에 돌려주므로, 전문을 에코하면 '전문을 컨텍스트에 안 싣는다'는 이 모드의 목적이 무효가 된다.

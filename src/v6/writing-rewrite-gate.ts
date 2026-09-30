@@ -40,7 +40,7 @@ export interface Invariants {
   urls: string[];
   wikilinks: string[];
   refs: string[];
-  tableCells: string[];
+  tableRows: string[];
 }
 
 export interface RewriteViolation { kind: string; detail: string }
@@ -78,10 +78,16 @@ function splitInline(text: string): { codes: string[]; rest: string } {
 }
 
 // 번호 목록 표지(«1. », «2) »)는 사실이 아니라 모양이다 — arrow_chain 을 고치면 번호 목록이 생기는 게 정상이다.
-const LIST_MARKER_RE = /^(\s*)\d+[.)](?=\s)/gm;
+//  세 자리까지만 표지로 본다 — «2024. 그 해에» 같은 연도가 줄머리에 오면 표지가 아니라 사실이다.
+const LIST_MARKER_RE = /^(\s*)\d{1,3}[.)](?=\s)/gm;
 // 천단위 쉼표는 뒤에 정확히 세 자리일 때만 토큰에 붙인다 — «1,2,3» 같은 나열은 숫자 셋이다.
-const NUMBER_RE = /\d+(?:,\d{3}(?!\d))*(?:\.\d+)*(?:-\d+)*%?/g;
+//  앞의 '-' 는 글자·숫자 뒤가 아닐 때만 부호로 본다 — «-5도»→«5도» 는 뜻이 뒤집히지만 날짜·범위의 '-' 는 부호가 아니다.
+const NUMBER_RE = /(?:(?<![\p{L}\p{N}])-)?\d+(?:,\d{3}(?!\d))*(?:\.\d+)*(?:-\d+)*%?/gu;
+// 전각 숫자는 반각으로 맞춘 뒤 센다 — «５»→«5» 는 같은 값이고 «５»→«３» 은 다른 값이다.
+const toHalfWidth = (s: string): string => s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
 const URL_RE = /https?:\/\/[^\s<>()[\]{}"'`]+/g;
+// 마크다운 링크의 대상(상대 경로·앵커 포함) — http 가 아닌 링크도 가리키는 곳이 바뀌면 뜻이 바뀐다.
+const MD_LINK_TARGET_RE = /\]\(([^)\s]+)\)/g;
 const WIKILINK_RE = /!?\[\[([^\]\n]+?)\]\]/g;
 const REF_MRPR_RE = /\b(MR|PR)\s*[!#]?\s*(\d+)\b/gi;
 const REF_BANG_RE = /(?<![\w!])!(\d+)\b/g;
@@ -95,16 +101,16 @@ function trimUrl(u: string): string {
   return u.replace(/[.,;:!?]+$/, "");
 }
 
-function tableCellsOf(prose: string): string[] {
+// 표는 행 단위로 본다 — 셀 다중집합이면 «A|3, B|5» 를 «A|5, B|3» 으로 바꿔도 같게 보인다. 행 순서는 형식이지만
+//  한 행 안의 값 배정은 사실이다. 빈 셀도 자리로 남겨 열이 밀리는 것을 잡는다.
+function tableRowsOf(prose: string): string[] {
   const out: string[] = [];
   for (const raw of prose.split("\n")) {
     const l = raw.trim();
     if (!l.startsWith("|") || TABLE_SEP_RE.test(l)) continue;
     const inner = l.replace(/^\|/, "").replace(/(?<!\\)\|$/, "");
-    for (const cell of inner.split(/(?<!\\)\|/)) {
-      const c = cell.replace(/\*\*/g, "").trim();
-      if (c) out.push(c);
-    }
+    const cells = inner.split(/(?<!\\)\|/).map((cell) => cell.replace(/\*\*/g, "").trim());
+    if (cells.some((c) => c)) out.push(cells.join(" | "));
   }
   return out;
 }
@@ -119,7 +125,7 @@ function proseParts(doc: RewriteDoc): { blocks: string[]; codes: string[]; prose
 // 제목과 본문을 합쳐 본다 — 제목에서 뺀 날짜·MR 번호는 본문으로 옮겨지는 게 정상이라, 따로 세면 전부 위반이 된다.
 export function extractInvariants(doc: RewriteDoc): Invariants {
   const { blocks, codes, prose } = proseParts(doc);
-  const numbersText = prose.replace(LIST_MARKER_RE, "$1");
+  const numbersText = toHalfWidth(prose).replace(LIST_MARKER_RE, "$1");
   const refs: string[] = [];
   for (const m of prose.matchAll(REF_MRPR_RE)) refs.push(`${m[1].toUpperCase() === "MR" ? "!" : "#"}${m[2]}`);
   for (const m of prose.matchAll(REF_BANG_RE)) refs.push(`!${m[1]}`);
@@ -133,14 +139,14 @@ export function extractInvariants(doc: RewriteDoc): Invariants {
     codeBlocks: sortedMulti(blocks),
     inlineCode: sortedMulti(codes),
     numbers: sortedMulti(numbersText.match(NUMBER_RE) ?? []),
-    urls: sortedSet((prose.match(URL_RE) ?? []).map(trimUrl)),
+    urls: sortedSet([...(prose.match(URL_RE) ?? []).map(trimUrl), ...[...prose.matchAll(MD_LINK_TARGET_RE)].map((m) => trimUrl(m[1]))]),
     wikilinks: sortedSet(wikilinks),
     refs: sortedSet(refs),
-    tableCells: sortedMulti(tableCellsOf(prose)),
+    tableRows: sortedMulti(tableRowsOf(prose)),
   };
 }
 
-/** 코드를 뺀 서술 분량 — 공백은 세지 않는다(표를 문장으로 풀거나 줄바꿈을 정리하는 건 분량 변화가 아니다). */
+/** 코드를 뺀 서술 분량 — 공백은 세지 않는다(줄바꿈·공백을 정리하는 건 분량 변화가 아니다). */
 export function proseChars(doc: RewriteDoc): number {
   return [...proseParts(doc).prose.replace(/\s+/g, "")].length;
 }
@@ -177,7 +183,7 @@ function diffDetail(d: { missing: string[]; added: string[] }): string {
 // 배치는 조직이 안내를 켰는지와 별개로 돈다 — 꺼진 형식으로 판정하면 lintWriting 이 늘 빈 결과라 전부 통과한다.
 const forceEnabled = (fmt: WritingFormat): WritingFormat => (fmt.enabled ? fmt : { ...fmt, enabled: true });
 
-const MULTISET_FIELDS = ["codeBlocks", "inlineCode", "numbers", "tableCells"] as const;
+const MULTISET_FIELDS = ["codeBlocks", "inlineCode", "numbers", "tableRows"] as const;
 const SET_FIELDS = ["urls", "wikilinks", "refs"] as const;
 
 export function checkRewrite(before: RewriteDoc, after: RewriteDoc, fmt: WritingFormat): RewriteCheck {

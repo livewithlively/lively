@@ -131,9 +131,31 @@ t("refs: 단독 #1179 는 #1179", () =>
 t("refs: 단독 #N 은 3자리 미만이면 제외", () =>
   assert.deepEqual(bag(inv(CLEAN_TITLE, "이슈 #12 를 봤다.").refs), []));
 
-t("tableCells: 구분선 제외·트림·빈 셀 제외·볼드 제거한 다중집합", () =>
-  assert.deepEqual(bag(inv(CLEAN_TITLE, "표는 다음과 같다.\n\n| **항목** | 값 |\n|---|---|\n| 간격 |  |\n| 간격 | 초 |\n").tableCells),
-    ["간격", "간격", "값", "초", "항목"].sort()));
+t("tableRows: 구분선 제외·셀 트림·볼드 제거, 빈 셀은 자리로 남긴 행 다중집합", () =>
+  assert.deepEqual(bag(inv(CLEAN_TITLE, "표는 다음과 같다.\n\n| **항목** | 값 |\n|---|---|\n| 간격 |  |\n| 간격 | 초 |\n").tableRows),
+    ["간격 | ", "간격 | 초", "항목 | 값"].sort()));
+t("tableRows: 행 순서만 바뀌면 보존이다", () => {
+  const a = "표다.\n\n| A | 3 |\n| B | 5 |\n";
+  const b = "표다.\n\n| B | 5 |\n| A | 3 |\n";
+  assert.ok(!checkRewrite(doc(CLEAN_TITLE, a), doc(CLEAN_TITLE, b), fmt).violations.some((v) => v.kind === "invariant:tableRows"));
+});
+t("tableRows: 행 사이 값이 바뀌면 탈락이다", () => {
+  const a = "표다.\n\n| A | 3 |\n| B | 5 |\n";
+  const b = "표다.\n\n| A | 5 |\n| B | 3 |\n";
+  assert.ok(checkRewrite(doc(CLEAN_TITLE, a), doc(CLEAN_TITLE, b), fmt).violations.some((v) => v.kind === "invariant:tableRows"));
+});
+t("numbers: 부호가 사라지면 탈락이다(-5 → 5)", () =>
+  assert.ok(checkRewrite(doc(CLEAN_TITLE, "기준은 -5도다."), doc(CLEAN_TITLE, "기준은 5도다."), fmt).violations.some((v) => v.kind === "invariant:numbers")));
+t("numbers: 날짜·범위의 하이픈은 부호가 아니다", () =>
+  assert.deepEqual(bag(inv(CLEAN_TITLE, "기간은 2026-09-30 이고 범위는 3-5 다.").numbers), ["2026-09-30", "3-5"].sort()));
+t("numbers: 전각 숫자는 반각으로 맞춰 센다", () => {
+  assert.ok(!checkRewrite(doc(CLEAN_TITLE, "재시도는 ５회다."), doc(CLEAN_TITLE, "재시도는 5회다."), fmt).violations.some((v) => v.kind === "invariant:numbers"));
+  assert.ok(checkRewrite(doc(CLEAN_TITLE, "재시도는 ５회다."), doc(CLEAN_TITLE, "재시도는 ３회다."), fmt).violations.some((v) => v.kind === "invariant:numbers"));
+});
+t("numbers: 줄머리 네 자리 연도는 목록 표지가 아니다", () =>
+  assert.deepEqual(bag(inv(CLEAN_TITLE, "결론이다.\n2024. 그 해에 바꿨다.").numbers), ["2024"]));
+t("urls: 마크다운 상대 링크 대상이 바뀌면 탈락이다", () =>
+  assert.ok(checkRewrite(doc(CLEAN_TITLE, "자세한 건 [문서](docs/a.md) 에 있다."), doc(CLEAN_TITLE, "자세한 건 [문서](docs/b.md) 에 있다."), fmt).violations.some((v) => v.kind === "invariant:urls")));
 
 // ───────────────────────── proseChars ─────────────────────────
 
@@ -157,7 +179,7 @@ const FIELD_CASES: Array<{ field: string; from: string; drop: string; add: strin
   { field: "urls", from: "https://example.com/retry/guide", drop: "예시 사이트", add: "https://example.com/retry/guide 와 https://example.org/other" },
   { field: "wikilinks", from: "[[payment-retry-policy]]", drop: "결제 정책 문서", add: "[[payment-retry-policy]] 와 [[payment-limit-policy]]" },
   { field: "refs", from: "MR !123", drop: "이전 변경", add: "MR !123 과 MR !456" },
-  { field: "tableCells", from: "| 간격 | 초 |", drop: "| 간격 | |", add: "| 간격 | 초 |\n| 한도 | 회 |" },
+  { field: "tableRows", from: "| 간격 | 초 |", drop: "| 간격 | |", add: "| 간격 | 초 |\n| 한도 | 회 |" },
 ];
 for (const c of FIELD_CASES) {
   t(`invariant:${c.field} 보존되면 해당 violation 없음`, () =>

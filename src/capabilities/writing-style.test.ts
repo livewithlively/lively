@@ -26,16 +26,16 @@ await ta("위반이 있으면 findings·note·guide 를 싣는다", async () => 
   assert.deepEqual(rejects, [], "warn 만 있으면 거부 없음");
 });
 await ta("형식이 꺼져 있거나 위반이 없으면 아무것도 싣지 않는다", async () => {
-  assert.deepEqual(await checkWriting("knowledge", BAD, {}, async () => resolveWritingFormat({})), { info: {}, rejects: [] });
-  assert.deepEqual(await checkWriting("knowledge", CLEAN, {}, on), { info: {}, rejects: [] });
+  assert.deepEqual(await checkWriting("knowledge", BAD, {}, async () => resolveWritingFormat({})), { info: {}, rejects: [], guide: "" });
+  assert.deepEqual(await checkWriting("knowledge", CLEAN, {}, on), { info: {}, rejects: [], guide: "" });
 });
 await ta("외부 미러와 폴더는 판정하지 않는다", async () => {
-  assert.deepEqual(await checkWriting("knowledge", BAD, { observed: true }, rejEmoji), { info: {}, rejects: [] });
-  assert.deepEqual(await checkWriting("knowledge", BAD, { folder: true }, rejEmoji), { info: {}, rejects: [] });
+  assert.deepEqual(await checkWriting("knowledge", BAD, { observed: true }, rejEmoji), { info: {}, rejects: [], guide: "" });
+  assert.deepEqual(await checkWriting("knowledge", BAD, { folder: true }, rejEmoji), { info: {}, rejects: [], guide: "" });
 });
 await ta("형식 조회가 실패하면 안내도 거부도 없다(throw 하지 않는다)", async () => {
   const boom = async (): Promise<never> => { throw new Error("db down"); };
-  assert.deepEqual(await checkWriting("knowledge", BAD, {}, boom), { info: {}, rejects: [] });
+  assert.deepEqual(await checkWriting("knowledge", BAD, {}, boom), { info: {}, rejects: [], guide: "" });
 });
 await ta("수정 제안으로 접수된 저장엔 edit 대신 재저장을 안내한다", async () => {
   const { info } = await checkWriting("knowledge", BAD, { proposed: true }, on);
@@ -58,7 +58,7 @@ await ta("기존 글에 원래 있던 위반은 거부하지 않는다(새로 �
   assert.equal((await checkWriting("knowledge", BAD, { before: cleanBefore }, rejEmoji)).rejects.length, 1);
 });
 await ta("본문 없는 작업기록 규칙은 명시해야만 켜진다(default_level 을 물려받지 않는다)", async () => {
-  assert.deepEqual(await checkWriting("activity", { title: "배포 스크립트 수정", body: null }, {}, fmt({ default_level: "reject" })), { info: {}, rejects: [] });
+  assert.deepEqual(await checkWriting("activity", { title: "배포 스크립트 수정", body: null }, {}, fmt({ default_level: "reject" })), { info: {}, rejects: [], guide: "" });
 });
 await ta("작업기록 표면: 본문 없는 기록을 안내하고, 지식 전용 규칙은 보지 않는다", async () => {
   const { info } = await checkWriting("activity", { title: "배포 스크립트 수정", body: null }, {}, fmt({ rules: { activity_body_missing: "warn" } }));
@@ -84,7 +84,7 @@ await ta("프로젝트 표면: 목표·범위 골격은 첫 줄 결론을 요구
 });
 await ta("apply_to 에서 뺀 표면은 판정하지 않는다", async () => {
   const f = fmt({ apply_to: ["knowledge"], rules: { local_path: "reject" } });
-  assert.deepEqual(await checkWriting("project", { title: null, body: "/Users/someone/a.md" }, {}, f), { info: {}, rejects: [] });
+  assert.deepEqual(await checkWriting("project", { title: null, body: "/Users/someone/a.md" }, {}, f), { info: {}, rejects: [], guide: "" });
 });
 await ta("거부 에러는 422 이고 메시지에 규칙·샘플·가이드를 담는다", async () => {
   const e = writingRejectError([{ rule: "title_date", level: "reject", message: "제목에 날짜를 넣지 마라.", sample: "배포 (2026-09-23)" }], "가이드 본문");
