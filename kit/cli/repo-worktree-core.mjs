@@ -159,13 +159,20 @@ function freeBranch(taken, want) {
 //  ⚠ 이 값이 세션 재개(--resume 등)에서 유지되는지는 하네스에 달려 있고 여기서 보장하지 않는다. 안 유지되면 재개한
 //   세션이 자기 어제 자리를 «주인 있는 남의 자리» 로 보고 옆자리를 판다 — 손실은 없고(작업은 그 자리에 그대로 있다)
 //   대가는 디렉터리 하나다. 되찾으려면 그 자리를 path 로 지목해 쓰면 된다(남의 스탬프는 덮지 않으니 경고가 뜬다).
+//  순서는 MCP 프록시의 x-lively-session(lively-mcp-gateway.mjs sessionHeaderValue)과 같다 — CLAUDE_CODE_SESSION_ID 가
+//   CLAUDE_SESSION_ID 보다 먼저(셸에 남은 옛 값이 이기면 그 셸에서 뜬 세션 전부가 한 신원이 되어 소유 판정이 무너진다),
+//   네이티브 id 는 띄운 하네스(LIVELY_HARNESS stamp, 없으면 claude) 것부터 — 코덱스가 셸로 띄운 claude 는 부모의
+//   CODEX_THREAD_ID 를 상속하므로 codex 를 고정으로 먼저 보면 같은 코덱스 스레드에서 띄운 claude 들이 한 신원이 된다.
 export function sessionKey(env = process.env) {   // export=테스트용·순수
   const direct = String(env.LIVELY_SESSION_ID || "").trim();
   if (direct) return direct;
   const codex = String(env.CODEX_THREAD_ID || env.CODEX_SESSION_ID || "").trim();
-  if (codex) return `codex-${codex}`;
-  const claude = String(env.CLAUDE_SESSION_ID || env.CLAUDE_CODE_SESSION_ID || "").trim();
-  return claude ? `claude-${claude}` : null;
+  const claude = String(env.CLAUDE_CODE_SESSION_ID || env.CLAUDE_SESSION_ID || "").trim();
+  const native = String(env.LIVELY_HARNESS || "").trim().toLowerCase() === "codex"
+    ? [["codex", codex], ["claude", claude]]
+    : [["claude", claude], ["codex", codex]];
+  const hit = native.find(([, id]) => id);
+  return hit ? `${hit[0]}-${hit[1]}` : null;
 }
 
 // 스탬프는 워킹트리가 아니라 **admin 디렉터리**에 둔다. 워킹트리에 두면 untracked 파일이 되어 `git add -A` 에
@@ -184,8 +191,12 @@ function readOwner(admin) {
 }
 // best-effort — 쓰기에 실패해도 워크트리는 멀쩡하다. 실패의 대가는 «다음 호출이 이 자리를 남의 것으로 보고 비켜선다»
 //  뿐이라(유실 0) 예외를 올리지 않는다. 대신 성공 여부를 돌려 호출부가 안내에 실을 수 있게 한다.
+//  ⚠ 주인이 없는 스탬프(session·project_id 둘 다 null — 신원 없는 호출)는 쓰지 않는다. 쓰면 ① 신원 없는 재사용이
+//   남의 스탬프를 «주인 없음» 으로 덮어 원래 세션이 제 자리에서 밀려나고 ② 신원 없이 만든 자리가 «다른 세션 것» 으로
+//   읽혀(표시는 있는데 이름이 없다) 입양도 안 되는 사석이 된다. 표시가 없어야 «주인 불명» 으로 읽혀 지목 입양이 된다.
 function writeOwner(admin, data) {
   if (!admin) return false;
+  if (!data.session && (data.project_id === null || data.project_id === undefined)) return false;
   try { writeFileSync(ownerFileOf(admin), JSON.stringify({ ...data, stamped_at: new Date().toISOString() }, null, 2)); return true; }
   catch { return false; }
 }
@@ -568,7 +579,8 @@ export async function repoWorktree(ctx, args) {
   // ⑥ admin 을 고유 id 로(#3678) — git 이 지은 basename id(`<repo>`·`<repo>N`)는 프로젝트가 달라도 겹친다.
   const admin = adminOf(wt);
   const adminNow = admin ? relinkAdmin(wt, admin, adminId) : null;
-  const stamped = writeOwner(adminNow, { session: me, project_id: pid, branch, worktree: wt });
+  const stampable = Boolean(me) || (pid !== null && pid !== undefined);   // 신원 없는 호출은 표시를 남기지 않는다(writeOwner)
+  const stamped = stampable && writeOwner(adminNow, { session: me, project_id: pid, branch, worktree: wt });
 
   const out = { repo, worktree: wt, branch, base, ref: refBranch, admin: adminNow ? basename(adminNow) : null,
     note: `이 경로에서 작업하세요: ${wt} · base(${base})는 pristine 공유 원본이라 직접 작업 금지(커밋·빌드는 워크트리에서).` };
@@ -576,7 +588,7 @@ export async function repoWorktree(ctx, args) {
     out.note += ` · 기본 자리(${asideFrom})는 ${asideReason(slot.why)} 옆자리로 비켜섰습니다.`;
   }
   // 스탬프가 없으면 다음 호출이 이 자리를 «모르는 자리» 로 보고 또 옆으로 비켜선다 — 자리가 늘어나는 건 그 신호다.
-  if (adminNow && !stamped) out.warning = `소유 표시(${basename(adminNow)}/lively-owner.json)를 쓰지 못했습니다 — 다음 호출이 이 자리를 재사용하지 않고 옆자리를 팝니다.`;
+  if (adminNow && stampable && !stamped) out.warning = `소유 표시(${basename(adminNow)}/lively-owner.json)를 쓰지 못했습니다 — 다음 호출이 이 자리를 재사용하지 않고 옆자리를 팝니다.`;
   return out;
 }
 

@@ -400,6 +400,9 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   check("S0: codex 스레드 → codex- 접두", sessionKey({ CODEX_THREAD_ID: "t1" }) === "codex-t1", "codex 해석 어긋남");
   check("S0: Claude Code 자식 env 폴백", sessionKey({ CLAUDE_CODE_SESSION_ID: "u1" }) === "claude-u1", "claude 폴백 없음");
   check("S0: 신원 없으면 null(소유 판정 안 함)", sessionKey({}) === null, "null 이 아님");
+  check("S0: CLAUDE_CODE_SESSION_ID 가 셸에 남은 CLAUDE_SESSION_ID 를 이긴다", sessionKey({ CLAUDE_SESSION_ID: "stale", CLAUDE_CODE_SESSION_ID: "u2" }) === "claude-u2", "옛 값이 이김");
+  check("S0: 코덱스 셸에서 띄운 claude(부모 CODEX_THREAD_ID 상속)는 자기 id", sessionKey({ CODEX_THREAD_ID: "parent", CLAUDE_CODE_SESSION_ID: "child" }) === "claude-child", "부모 코덱스 신원으로 뭉침");
+  check("S0: stamp=codex 면 codex id 가 먼저", sessionKey({ LIVELY_HARNESS: "codex", CODEX_THREAD_ID: "t1", CLAUDE_CODE_SESSION_ID: "u" }) === "codex-t1", "codex 우선 안 됨");
 
   const shared = join(SB, "shared-cwd");
   mkdirSync(shared, { recursive: true });
@@ -481,6 +484,21 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   const n1 = await repoWorktree(ctx(anon), { repo: "base" });
   const n2 = await repoWorktree(ctx(anon), { repo: "base" });
   check("S7: 신원 없는 호출은 같은 자리를 재사용(멱등 유지)", n1.worktree === n2.worktree && n2.worktree === join(anon, "base"), `${n1.worktree} vs ${n2.worktree}`);
+  // S7-b) 신원 없이 만든 자리엔 **주인 없는 표시를 남기지 않는다** — 남기면 «다른 세션 것» 으로 읽혀 입양도 안 되는 사석이 된다.
+  check("S7-b: 신원 없이 만든 자리엔 소유 표시가 없다", !existsSync(join(BASE, ".git", "worktrees", n1.admin, "lively-owner.json")), "주인 없는 스탬프가 생김");
+  asSession("sess-G");
+  const gAside = await repoWorktree(ctx(anon), { repo: "base" });
+  check("S7-b: 세션이 보면 '다른 세션' 이 아니라 '주인 표시 없음' 으로 비켜선다", gAside.worktree !== n1.worktree && /주인 표시가 없어|만든 자리가 아니거나/.test(gAside.note || ""), gAside.note);
+  const gAdopt = await repoWorktree(ctx(anon), { repo: "base", path: n1.worktree });
+  check("S7-b: 지목하면 입양된다", !gAdopt.warning && stampOf(gAdopt.admin).session === "sess-G", gAdopt.warning || JSON.stringify(stampOf(gAdopt.admin)));
+  // S7-c) 신원 없는 재사용이 **남의 스탬프를 덮지 않는다** — 덮으면 원래 세션이 제 자리에서 밀려난다.
+  delete process.env.LIVELY_SESSION_ID;
+  const nReuse = await repoWorktree(ctx(anon), { repo: "base" });
+  check("S7-c: 신원 없는 재사용은 경고를 단다", nReuse.worktree === n1.worktree && /sess-G/.test(nReuse.warning || ""), nReuse.warning || "(경고 없음)");
+  check("S7-c: 스탬프 주인은 그대로", stampOf(gAdopt.admin).session === "sess-G", JSON.stringify(stampOf(gAdopt.admin)));
+  asSession("sess-G");
+  const gBack = await repoWorktree(ctx(anon), { repo: "base" });
+  check("S7-c: 원래 세션은 제 자리를 그대로 쓴다", gBack.worktree === n1.worktree, gBack.worktree);
 
   asSession("wt-core-test-A");
 
