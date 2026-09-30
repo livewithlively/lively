@@ -5,7 +5,7 @@
 //     (2) closeNoteOf — open→closed 전이에서만 노트 생성, reason trim/절단, actor/source/at 반영
 //     (3) closeCommentText — 카테고리별 1행 + 근거행(우선순위) + 처리자행(mcp 접미) + 딥링크행
 //     (4) sessionCloseReason(../../v6/session-task.js) — reason 우선, 없으면 sessionId 포함 폴백
-//   라이브 DB 불요 — 입력→출력만 검증. session-task.js 는 import 자체가 로드시 실패할 수 있어 try/catch 격리.
+//   라이브 DB 불요 — 입력→출력만 검증(session-task.js 도 DB 연결 없이 import 된다).
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import {
@@ -251,9 +251,10 @@ assert.strictEqual(
 
 // ────────────────────────────────────────────────────────────────────────
 // 4) sessionCloseReason(reason, sessionId) — ../../v6/session-task.js
-//    import 자체가 로드시(DB 등) 실패할 수 있어 격리한다.
+//    ⚠ 예전엔 import 와 assert 를 한 try/catch 로 감싸 **assert 실패까지 «건너뜀» 으로 삼켰다**(항상 green).
+//     import 는 DB 연결 없이 된다(모듈 로드시 연결하지 않는다) — 실패하면 그대로 red 가 맞다.
 // ────────────────────────────────────────────────────────────────────────
-try {
+{
   const mod = await import("../../v6/session-task.js");
   const sessionCloseReason = mod.sessionCloseReason as (
     reason: string | null | undefined,
@@ -286,11 +287,6 @@ try {
     assert.ok(fb.includes("sess-abc"), "폴백에 sessionId 포함");
   }
   console.log("close-comment.test: sessionCloseReason 포함 OK");
-} catch (e) {
-  console.log(
-    "close-comment.test: session-task.js import 가 로드시 실패해 sessionCloseReason 은 건너뜀 —",
-    (e as Error)?.message ?? e,
-  );
 }
 
 // (5) 배선 — DB 를 타는 적재·드레인은 이 파일에서 못 돌린다. 끊기면 코멘트가 **조용히** 사라지므로(에러 없음)
