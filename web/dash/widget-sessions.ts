@@ -334,7 +334,9 @@ async function sessRefetch(ctx: SessCtx) {
   ctx.onCount(ctx.sessions.filter((x) => x.attached).length);
 }
 // #req 실시간 반영 — 상태(작업중/대기중)를 주기적으로 폴링. 상태가 실제로 바뀔 때만 재렌더(스크롤 튐·깜빡임 방지). 위젯이 사라지면 자동 중단.
-const sessStateSig = (ctx: SessCtx) => ctx.sessions.map((s) => s.id + ':' + (s.agentState || '') + ':' + (s.attached ? 1 : 0) + ':' + (s.title || '')).join('|');
+//  #4502 — 점을 정하는 접속 무관 신호 셋(working·awaiting·background)도 서명에 든다. agentState 와 따로 움직이는 값이라
+//   빠지면 «백그라운드 대기로 넘어감» 같은 변화에 점이 안 바뀐다(격리 리뷰 지적).
+const sessStateSig = (ctx: SessCtx) => ctx.sessions.map((s) => s.id + ':' + (s.agentState || '') + ':' + (s.attached ? 1 : 0) + ':' + (s.working ? 1 : 0) + (s.awaiting ? 1 : 0) + (s.background ? 1 : 0) + ':' + (s.title || '')).join('|');
 async function sessPollTick(ctx: SessCtx) {
   // #1140 드래그 범위 선택 중이면 건너뛴다 — 재렌더가 카드를 갈아치우면 끌던 범위가 끊긴다.
   if (ctx.polling || document.hidden || document.body.classList.contains('lv-dragselect')) return; ctx.polling = true; // 탭 백그라운드면 건너뜀

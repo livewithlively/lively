@@ -21,7 +21,10 @@
 //  · 승인 UI 는 2026-09-24 에 실측했다(answer 주석) — 종전엔 미실측이라 answer=null 이었다.
 import path from "node:path";
 import type { HarnessSessionAdapter } from "./adapter.js";
-import { turnFromScreen } from "./screen-run.js";   // #4502 — 화면 busy → 턴(맨 아래 몇 줄만)
+import { RUN_FROM_SCREEN_LINES } from "./screen-run.js";   // #4502 — 실행 상태는 맨 아래 몇 줄만
+
+// #4502 — 도는 턴의 상태줄(실측 fixture «• Working (2s • esc to interrupt)»). 괄호 안이 «경과 시간 … • esc to interrupt» 여야 한다.
+const CODEX_WORKING = /^\s*[•◦]\s.*\(\s*\d[^)]*•\s*esc to interrupt\s*\)\s*$/i;
 import { isoOf, parseJsonLines, type ChatBlock, type ChatLine, type ParseState } from "./chat-line.js";
 
 const asObj = (v: unknown): Record<string, any> | null => (v && typeof v === "object" && !Array.isArray(v)) ? v as Record<string, any> : null;
@@ -164,8 +167,11 @@ export const codexIo: HarnessSessionAdapter = {
     if (/^\s*›/m.test(s)) return "ready";
     return null;   // 부팅·로그인 등 미실측 화면 — 보수적으로 기다린다
   },
-  //  #4502 — 화면의 busy 가 곧 «턴이 돈다» 다(• Working (… • esc to interrupt)) — 맨 아래 몇 줄만(screen-run.ts). 백그라운드 표시는 미실측.
-  run: (tail) => turnFromScreen(codexIo.screen, tail),
+  //  #4502 — 턴이 돈다 = 컴포저 위 상태줄 «• Working (2s • esc to interrupt)». screen 의 busy(문구가 어디 있든)보다 **좁게** 본다:
+  //   그 판정은 입력을 잠깐 미룰 뿐이지만 이건 파란 점·마지막 작업 시각·회수 보호를 준다. 대화 본문이 그 문구를 인용해도
+  //   («• 화면의 «esc to interrupt» 표시로 …») 괄호 안 경과 시간 모양까지는 안 맞는다(격리 리뷰 재현). 맨 아래 몇 줄만(screen-run.ts).
+  //   대화상자는 먼저 걸러진다(phase.readScreen). 백그라운드 표시는 미실측.
+  run: (tail) => (tail.slice(-RUN_FROM_SCREEN_LINES).some((l) => CODEX_WORKING.test(l)) ? "turn" : null),
   //  #4135 — 웹 터미널이 쓰는 화면 사실. **claude 와 셋 다 다르다**(실측 2026-09-24):
   //   · appMouse=false — codex TUI 는 alt 화면도 마우스 리포트도 안 쓴다(tmux `alternate_on=0 mouse_any_flag=0`).
   //     그래서 드래그·휠·복사가 **브라우저 기본으로 그냥 된다** — ⌘C 다리(#972)도, ⌥드래그 안내도 이 세션엔 필요 없다.
