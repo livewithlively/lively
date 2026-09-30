@@ -11,6 +11,7 @@ import { execTopology, tmuxArgvFor, tmuxServerIsDedicated } from "../exec-topolo
 import { planTmux, runPlan, outcomeToError, tmuxSessionOf } from "./tmux-route.js";                        // #2600 T2 (d) d2 — 코어 직접 경로의 «무엇을 어디로»
 import { makeBrokerClient, type BrokerTransport } from "./broker-client.js";                // #2600 T2 (d) d2 — 그 전송(노드 박스 브로커 소켓 · 허브는 T3-a 로 걷었다)
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
+import type { ScreenRun } from "./harness-io/adapter.js";    // #4502 화면 판정 캐시의 값 타입(타입만 — 런타임 의존 없음)
 
 const execFileAsync = promisify(execFile);
 
@@ -279,10 +280,11 @@ const lastBusyAt = new Map<string, number>();
 export function getLastBusy(id: string): number { return lastBusyAt.get(id) || 0; }
 export function setLastBusy(id: string, sec: number): void { lastBusyAt.set(id, sec); }
 
-// pane '확인 필요' 감지 2.5초 캐시(폴링 버스트 공유) — 판정 로직은 phase.paneAwaitingInput, 캐시 저장만 여기.
-const _paneWaitCache = new Map<string, { at: number; waiting: boolean }>();
-export function getPaneWait(id: string): { at: number; waiting: boolean } | undefined { return _paneWaitCache.get(id); }
-export function setPaneWait(id: string, entry: { at: number; waiting: boolean }): void { _paneWaitCache.set(id, entry); }
+// pane 화면 판정('확인 필요' · #4502 실행 상태) 2.5초 캐시(폴링 버스트 공유) — 판정 로직은 phase.scrapePane, 캐시 저장만 여기.
+type PaneScrape = { at: number; waiting: boolean; run: ScreenRun | null };
+const _paneWaitCache = new Map<string, PaneScrape>();
+export function getPaneWait(id: string): PaneScrape | undefined { return _paneWaitCache.get(id); }
+export function setPaneWait(id: string, entry: PaneScrape): void { _paneWaitCache.set(id, entry); }
 
 // 세션 id → 그 세션 pane 들의 pid(#1220). 압박 회수가 **RSS 큰 세션부터** 고르기 위한 트리 뿌리다
 //  (합산은 session-rss.ts — pane pid 자체는 격리 경로에서 sudo 라 그것만 재면 세션 크기를 착각한다).
