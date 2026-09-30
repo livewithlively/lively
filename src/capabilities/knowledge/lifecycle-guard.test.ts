@@ -5,7 +5,7 @@
 //  · #638 미러(observed)의 archived→active «복원» 은 **소스 무관** 금지 — 웹·REST·MCP 어디서 와도 같다(UI 버튼 숨김은 한 겹일 뿐).
 //  · 단 미러의 pending→active «검토 승인» 은 사람의 정상 경로다 — 미러도 인입정책 confirm 이면 pending 으로 들어온다.
 //  · #783 자가승인 차단은 MCP 에만 — 사람(web)의 승인은 그대로 통과해야 한다(검토 큐가 그걸로 돈다).
-//  · 미러라도 archived/superseded 로의 전환은 여기서 막지 않는다(스윕·전파 경로가 쓴다).
+//  · 미러라도 archived/superseded 로의 전환은 여기서 막지 않는다(막는 것은 archived→active 복원 하나다).
 import assert from "node:assert/strict";
 import { denyLifecycleChange } from "./lifecycle-guard.js";
 
@@ -39,8 +39,14 @@ t("미러 active→active 무연산은 통과 — 복원이 아니다", () => {
   assert.equal(denyLifecycleChange({ source: "web", target: "active", current: "active", provenance: "observed", externalSystem: "notion" }), null);
 });
 
-t("미러 →archived 는 통과 — 스윕·원본 전파가 쓰는 경로다", () => {
+//  스윕(sweepNotionArchived·sweepDomainWikiArchived)과 재싱크 CASE 는 이 핸들러를 타지 않는다 — 여기 오는 →archived 는
+//   사람·에이전트가 미러를 활성에서 빼는 호출이다(예: 커넥터를 끈 뒤 정리). 원본이 살아 있으면 다음 싱크가 되살린다.
+t("미러 →archived 는 통과 — 활성에서 빼는 쪽은 막지 않는다", () => {
   assert.equal(denyLifecycleChange({ source: "web", target: "archived", current: "active", provenance: "observed", externalSystem: "notion" }), null);
+});
+
+t("미러 archived→superseded 는 통과 — 막는 것은 active 로 올리는 복원뿐이다", () => {
+  assert.equal(denyLifecycleChange({ source: "web", target: "superseded", current: "archived", provenance: "observed", externalSystem: "notion" }), null);
 });
 
 // ── 저작(authored) 지식은 미러 규칙과 무관. ──
