@@ -487,10 +487,11 @@ export async function upsertKnowledge(
   return wikilinks ? { ...after, wikilinks } : after;
 }
 
-// 얕은 lifecycle 조회 — 게이트 가드용(#783 자가승인 차단). getKnowledge 는 카테고리·링크·트리까지 조인해 무겁다.
-export async function getKnowledgeLifecycle(name: string): Promise<string | undefined> {
-  const r = await one(itemsPool, `SELECT lifecycle FROM knowledge WHERE name=$1`, [name]);
-  return (r as { lifecycle?: string } | undefined)?.lifecycle;
+// 얕은 게이트 필드 조회 — lifecycle 가드용(#783 자가승인 차단 · #638 미러 복원 금지).
+//  getKnowledge 는 카테고리·링크·트리까지 조인해 무겁다.
+export async function getKnowledgeGateFields(name: string): Promise<{ lifecycle?: string; provenance?: string; external_system?: string | null }> {
+  const r = await one(itemsPool, `SELECT lifecycle, provenance, external_system FROM knowledge WHERE name=$1`, [name]);
+  return (r as { lifecycle?: string; provenance?: string; external_system?: string | null } | undefined) ?? {};
 }
 
 export async function setKnowledgeLifecycle(name: string, lifecycle: string, ctx?: WriteCtx): Promise<KnowledgeRow> {

@@ -226,6 +226,37 @@ async function main() {
       assert.equal(gw.hits.length - before, 0);
       ok("명시 바인딩된 위탁 — 소속 유지, 아무 변화 없음");
     }
+    // ── 비대화형 Claude Code(`claude -p` · Agent SDK)는 프로젝트를 만들지 않는다. ─────────────────
+    //  크론·SessionEnd 훅이 띄우는 `claude -p` 는 LIVELY_SESSION_KIND 를 달고 오지 않아 사람 세션으로 떨어졌고,
+    //  그 첫 프롬프트(스크립트가 조립한 지시문)로 실행 1회마다 프로젝트 1개가 생겼다
+    //  (실측 2026-08-30~09-29 한 조직: 자동 생성 2,510건 중 1,467건이 이 경로).
+    //  Claude Code 는 비대화형 실행에 CLAUDE_CODE_ENTRYPOINT=sdk-cli(SDK 는 sdk-ts·sdk-py)를 싣는다.
+    for (const ep of ["sdk-cli", "sdk-ts", "sdk-py"]) {
+      const s = sid(`headless-${ep}`);
+      const before = gw.hits.length;
+      const out = await runHook(root, gw.base, { LIVELY_SESSION_ID: s, CLAUDE_CODE_ENTRYPOINT: ep });
+      assert.equal(out, "");
+      assert.equal(gw.hits.length - before, 0, `${ep} 세션은 게이트웨이를 부르지 않는다`);
+      assert.equal(gw.states.get(s), undefined);
+      ok(`★비대화형(CLAUDE_CODE_ENTRYPOINT=${ep}) → 프로젝트 생성 0 · 게이트웨이 요청 0`);
+    }
+    // 부모 사람 세션의 kind=human 을 상속한 자식 `claude -p` 도 비대화형이다 — entrypoint 가 kind 보다 먼저다.
+    {
+      const s = sid("headless-inherit-human");
+      const before = gw.hits.length;
+      const out = await runHook(root, gw.base, { LIVELY_SESSION_ID: s, LIVELY_SESSION_KIND: "human", CLAUDE_CODE_ENTRYPOINT: "sdk-cli" });
+      assert.equal(out, "");
+      assert.equal(gw.hits.length - before, 0);
+      ok("kind=human 을 상속한 비대화형 자식 → 그래도 생성 0");
+    }
+    // 대조군 — 대화형 entrypoint(cli·IDE·데스크톱)는 종전대로 만든다.
+    for (const ep of ["cli", "claude-vscode", "claude-desktop"]) {
+      const s = sid(`interactive-${ep}`);
+      const out = await runHook(root, gw.base, { LIVELY_SESSION_ID: s, CLAUDE_CODE_ENTRYPOINT: ep });
+      assert.match(out, /프로젝트 #\d+/, `${ep} 는 대화형 — 종전대로 생성돼야 한다`);
+      assert.ok(Number(gw.states.get(s)) > 0);
+      ok(`대조군 — 대화형(CLAUDE_CODE_ENTRYPOINT=${ep}) → 종전대로 생성·바인딩`);
+    }
 
     console.log(`\n${pass} passed`);
   } finally {
