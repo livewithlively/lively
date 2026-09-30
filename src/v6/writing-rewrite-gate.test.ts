@@ -346,10 +346,13 @@ t("provenance 가 authored 아니면 provenance", () => {
 });
 t("lifecycle 이 active 아니면 lifecycle", () => assert.equal(elig({ lifecycle: "archived" }).reason, "lifecycle"));
 t("폴더면 folder", () => assert.equal(elig({ is_folder: true }).reason, "folder"));
-t("본문이 REWRITE_BODY_MAX_CHARS 초과면 too_long", () =>
-  assert.equal(elig({ body_md: `${LEAD}\n\n${"가".repeat(REWRITE_BODY_MAX_CHARS)}` }).reason, "too_long"));
-t("본문 길이는 코드포인트로 센다(이모지 15000개는 too_long 아님)", () =>
-  assert.notEqual(elig({ body_md: "😀".repeat(REWRITE_BODY_MAX_CHARS) }).reason, "too_long"));
+t("본문이 REWRITE_BODY_MAX_CHARS 초과면 대상이되 섹션 단위(mode=sections)", () => {
+  const r = elig({ body_md: `${LEAD}\n\n${"가".repeat(REWRITE_BODY_MAX_CHARS)}` });
+  assert.equal(r.eligible, true);
+  assert.equal(r.mode, "sections");
+});
+t("본문 길이는 코드포인트로 센다(이모지 15000개는 통째 재작성)", () =>
+  assert.equal(elig({ body_md: "😀".repeat(REWRITE_BODY_MAX_CHARS), title: "가".repeat(61) }).mode, "whole"));
 t("updated_at 이 정확히 24시간 전이면 eligible", () => assert.equal(elig({ updated_at: ago(24 * H) }).eligible, true));
 t("updated_at 이 24시간 미만 전이면 recently_edited", () =>
   assert.equal(elig({ updated_at: ago(24 * H - 1000) }).reason, "recently_edited"));
@@ -363,10 +366,10 @@ t("걸린 AUTO_FIX 규칙이 없으면 nothing_to_fix", () => {
 t("여러 사유가 겹치면 첫 탈락 사유(provenance)를 낸다", () =>
   assert.equal(elig({ provenance: "observed", lifecycle: "archived", is_folder: true, updated_at: ago(0), title: CLEAN_TITLE }).reason,
     "provenance"));
-t("folder 와 too_long 이 겹치면 folder 가 먼저", () =>
+t("긴 폴더는 folder", () =>
   assert.equal(elig({ is_folder: true, body_md: "가".repeat(REWRITE_BODY_MAX_CHARS + 1) }).reason, "folder"));
-t("too_long 과 recently_edited 가 겹치면 too_long 이 먼저", () =>
-  assert.equal(elig({ updated_at: ago(0), body_md: "가".repeat(REWRITE_BODY_MAX_CHARS + 1) }).reason, "too_long"));
+t("긴 문서도 최근 수정이면 recently_edited", () =>
+  assert.equal(elig({ updated_at: ago(0), body_md: "가".repeat(REWRITE_BODY_MAX_CHARS + 1) }).reason, "recently_edited"));
 
 t("numbers: «2026년 9월 17일» 표기는 «2026-09-17» 과 같은 날로 본다", () => {
   const a = doc("배포 규칙 (2026-09-17)", "결론이다.");

@@ -193,11 +193,13 @@ const forceEnabled = (fmt: WritingFormat): WritingFormat => (fmt.enabled ? fmt :
 const MULTISET_FIELDS = ["codeBlocks", "tableRows"] as const;
 const SET_FIELDS = ["inlineCode", "numbers", "urls", "wikilinks", "refs"] as const;
 
-export function checkRewrite(before: RewriteDoc, after: RewriteDoc, fmt: WritingFormat): RewriteCheck {
-  const f = forceEnabled(fmt);
+/**
+ * 형식 규칙을 빼고 «사실이 그대로인가» 만 본다 — 불변식과 분량. 섹션 단위 재작성은 조각마다 이것으로 판정하고,
+ *  형식 규칙(첫 줄 결론·강조 개수 등)은 문서 전체에서만 뜻이 있어 다시 합친 뒤에 본다.
+ */
+export function checkInvariants(before: RewriteDoc, after: RewriteDoc, opts: { requireTitle?: boolean } = {}): RewriteViolation[] {
   const violations: RewriteViolation[] = [];
-
-  if (!String(after.title ?? "").trim()) violations.push({ kind: "empty-title", detail: "재작성본의 제목이 비었다" });
+  if ((opts.requireTitle ?? true) && !String(after.title ?? "").trim()) violations.push({ kind: "empty-title", detail: "재작성본의 제목이 비었다" });
 
   const ib = extractInvariants(before);
   const ia = extractInvariants(after);
@@ -214,6 +216,12 @@ export function checkRewrite(before: RewriteDoc, after: RewriteDoc, fmt: Writing
   if (cb > 0 && ca < cb * SHRINK_MIN_RATIO) {
     violations.push({ kind: "shrink", detail: `서술 분량 ${cb} → ${ca}자(${Math.round((ca / cb) * 100)}%, 하한 ${SHRINK_MIN_RATIO * 100}%)` });
   }
+  return violations;
+}
+
+export function checkRewrite(before: RewriteDoc, after: RewriteDoc, fmt: WritingFormat): RewriteCheck {
+  const f = forceEnabled(fmt);
+  const violations: RewriteViolation[] = checkInvariants(before, after);
 
   const lb = new Set(lintWriting(before, f).map((x) => x.rule));
   const la = lintWriting(after, f);
@@ -239,12 +247,16 @@ export interface EligibilityInput {
 
 export type IneligibleReason = "provenance" | "lifecycle" | "folder" | "too_long" | "recently_edited" | "nothing_to_fix";
 
+export type RewriteMode = "whole" | "sections";
+
 export interface Eligibility {
   eligible: boolean;
   reason?: IneligibleReason;
   targetRules: WritingRuleId[];
   /** 걸린 AUTO_FIX 규칙의 안내 — 재작성 프롬프트에 그대로 싣는다. */
   findings: WritingFinding[];
+  /** whole = 통째로 재작성, sections = 섹션 단위로 나눠 재작성(긴 문서). 대상이 아니면 없다. */
+  mode?: RewriteMode;
 }
 
 export function isEligible(k: EligibilityInput, fmt: WritingFormat, now: Date | number): Eligibility {
@@ -254,7 +266,6 @@ export function isEligible(k: EligibilityInput, fmt: WritingFormat, now: Date | 
   if (k.lifecycle !== "active") return no("lifecycle");
   if (k.is_folder) return no("folder");
   const body = String(k.body_md ?? "");
-  if ([...body].length > REWRITE_BODY_MAX_CHARS) return no("too_long");
   // 방금 사람이 고친 글은 그 사람이 아직 손보는 중일 수 있다 — 자동 재작성이 편집을 덮으면 안 된다.
   //  시각을 못 읽으면 최근으로 본다(보수적으로 건너뛴다).
   const nowMs = typeof now === "number" ? now : now.getTime();
@@ -262,5 +273,74 @@ export function isEligible(k: EligibilityInput, fmt: WritingFormat, now: Date | 
   if (!Number.isFinite(upd) || nowMs - upd < RECENT_EDIT_MS) return no("recently_edited");
   const findings = lintWriting({ title: k.title, body_md: body }, forceEnabled(fmt)).filter((x) => AUTO_FIX.has(x.rule));
   if (!findings.length) return no("nothing_to_fix");
-  return { eligible: true, targetRules: [...new Set(findings.map((x) => x.rule))], findings };
+  // 긴 문서는 통째로 재작성하면 대조 정확도가 떨어져 섹션 단위로 나눠 고친다.
+  const mode: RewriteMode = [...body].length > REWRITE_BODY_MAX_CHARS ? "sections" : "whole";
+  return { eligible: true, targetRules: [...new Set(findings.map((x) => x.rule))], findings, mode };
+}
+
+export interface DocSection {
+  /** 원문 조각 그대로. 모든 조각을 이으면 원문과 글자 단위로 같다. */
+  text: string;
+  /** 조각을 여는 헤딩 줄(첫 조각이 헤딩 없이 시작하면 null). */
+  heading: string | null;
+  /** 한 번 더 나눠도 한도를 넘는 조각 — 재작성하지 않고 그대로 둔다. */
+  oversized: boolean;
+}
+
+const HEADING_RE = (level: number) => new RegExp(`^ {0,3}#{${level}}(?!#)\\s`);
+
+/** 코드펜스 밖에서 주어진 수준의 헤딩이 시작되는 줄 번호들. */
+function headingLines(lines: string[], level: number): number[] {
+  const out: number[] = [];
+  let fence: string | null = null;
+  const re = HEADING_RE(level);
+  lines.forEach((l, i) => {
+    const m = l.match(FENCE_OPEN_RE);
+    if (fence) { if (m && m[1][0] === fence[0] && m[1].length >= fence.length) fence = null; return; }
+    if (m) { fence = m[1]; return; }
+    if (re.test(l)) out.push(i);
+  });
+  return out;
+}
+
+function cutAt(lines: string[], starts: number[]): string[][] {
+  const cuts = [0, ...starts.filter((i) => i > 0), lines.length];
+  const out: string[][] = [];
+  for (let j = 0; j < cuts.length - 1; j++) if (cuts[j + 1] > cuts[j]) out.push(lines.slice(cuts[j], cuts[j + 1]));
+  return out;
+}
+
+/**
+ * 본문을 재작성 단위로 나눈다. «## » 헤딩마다 자르고, 한도를 넘는 조각은 그 안의 «### » 로 한 번 더 자른다.
+ *  코드펜스 안의 «#» 줄은 헤딩이 아니다. 조각은 줄 단위로 자르며 줄바꿈을 그대로 보존한다.
+ */
+export function splitSections(body: string, maxChars: number): DocSection[] {
+  const lines = body.split("\n");
+  // 각 조각의 마지막 줄 뒤에 줄바꿈을 되붙여 이었을 때 원문이 되게 한다(마지막 조각만 원문 끝 그대로).
+  const join = (ls: string[], isLast: boolean) => ls.join("\n") + (isLast ? "" : "\n");
+  const top = cutAt(lines, headingLines(lines, 2));
+  const pieces: string[][] = [];
+  for (const chunk of top) {
+    if ([...chunk.join("\n")].length <= maxChars) { pieces.push(chunk); continue; }
+    const subs = cutAt(chunk, headingLines(chunk, 3));
+    pieces.push(...subs);
+  }
+  return pieces.map((ls, i) => {
+    const text = join(ls, i === pieces.length - 1);
+    const first = ls[0] ?? "";
+    const heading = /^ {0,3}#{1,6}\s/.test(first) ? first : null;
+    return { text, heading, oversized: [...text].length > maxChars };
+  });
+}
+
+// 첫 조각만 제목·첫 줄 결론을 맡는다 — 뒤 조각은 헤딩으로 시작하는 게 정상이고, 문서 길이는 조각이 판정할 일이 아니다.
+const DOC_LEVEL_RULES = new Set<WritingRuleId>([
+  "title_length", "title_leading_emoji", "title_date", "title_mr_ref", "title_status_mark", "title_multi_dash", "lead_missing",
+]);
+
+/** 이 조각에서 고칠 자동 정리 대상 위반. 첫 조각(index 0)은 제목과 함께 본다. */
+export function sectionFindings(title: string | null | undefined, section: string, index: number, fmt: WritingFormat): WritingFinding[] {
+  const f = forceEnabled(fmt);
+  return lintWriting({ title: index === 0 ? title : null, body_md: section }, f)
+    .filter((x) => AUTO_FIX.has(x.rule) && (index === 0 || !DOC_LEVEL_RULES.has(x.rule)));
 }
