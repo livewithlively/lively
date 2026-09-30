@@ -5,7 +5,7 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSING.md)
 [![Release](https://img.shields.io/github/v/release/livewithlively/lively)](https://github.com/livewithlively/lively/releases/latest)
 
-[한국어](README.ko.md) · [Website](https://lvly.io) · [Managed (app.lvly.io)](https://app.lvly.io) · [Architecture (Korean)](docs/architecture.ko.md)
+[한국어](README.ko.md) · [Website](https://lvly.io) · [Managed (app.lvly.io)](https://app.lvly.io) · [Architecture](docs/architecture.md)
 
 Lively has AI collect your team's documents, conversations, code, and decisions, keep only what is still true, and feed as much of it as needed to whichever AI each teammate uses (Claude Code, Codex, and others). On top of that context, agents do the work, and the apps your team builds read from the same context.
 
@@ -82,7 +82,7 @@ Lively sits on top of the AI tools you already use, without replacing them. Chan
 - **One server**: Ubuntu 24.04 or macOS, with sudo and internet access. At least 4 GB of memory and 30 GB of disk (8 GB of memory or more if several people use the web terminal at once or you turn on embeddings). The script configures Docker, swap, and system services, so a dedicated server or VM is recommended.
 - **AI accounts**: Each teammate's own AI subscription or API key (Claude Code, etc.). Lively does not resell AI.
 
-The install script installs Docker, Node.js 22, tmux, and Claude Code for you.
+On Linux, the install script installs Docker, Node.js 22, tmux, and Claude Code for you. On macOS, install [Homebrew](https://brew.sh) and Docker (Docker Desktop or colima) first; the script installs the rest.
 
 ### Install
 
@@ -100,7 +100,7 @@ If you have a domain, pass `LIVELY_DOMAIN=lively.example.com` instead of `PUBLIC
 ### First steps
 
 1. Sign in at `http://<server-address>:8080/ui/` with the admin account and change the password.
-2. Log in to `claude` on the server. Web terminal sessions and the organizing of material use this account.
+2. Open the web terminal and use **내 계정 로그인** (log in to my account) at the top to sign in to your AI account once. Each teammate does the same; credentials are stored separately per person.
 3. Invite teammates, and have each connect their own machine. Running the one line shown in the web UI connects Lively to their local AI tool.
 
    ```bash
@@ -110,7 +110,7 @@ If you have a domain, pass `LIVELY_DOMAIN=lively.example.com` instead of `PUBLIC
 
 4. Turn on collectors such as Slack or Notion in the admin screen. Or leave it to Liv, which proposes a setup through conversation.
 
-Check status with `curl http://<server-address>:8080/readyz`. Updates, backups, and embedding setup are covered in [`deploy/README.md`](deploy/README.md) (Korean).
+Check status with `curl http://<server-address>:8080/readyz`. Updates, backups, and embedding setup are covered in [`deploy/README.md`](deploy/README.md).
 
 ## What's supported
 
@@ -139,7 +139,7 @@ flowchart LR
   G -.-> E
 ```
 
-For code structure and design principles, see [`docs/architecture.ko.md`](docs/architecture.ko.md) (Korean); for the kit installed on teammates' machines, see [`kit/README.md`](kit/README.md).
+For code structure and design principles, see [`docs/architecture.md`](docs/architecture.md); for the kit installed on teammates' machines, see [`kit/README.md`](kit/README.md).
 
 ## Security and data
 

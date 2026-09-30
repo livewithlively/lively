@@ -1,24 +1,26 @@
-# Codex 하네스 배선
+# Codex harness wiring
 
-> **정본은 `setup/user-install.mjs --harness codex` 다.** 예전엔 이 폴더에 `install.mjs` 형제 설치기가 있었지만
-> **아무도 호출하지 않는 죽은 코드**였고, 개선이 거기 들어가 실배포엔 안 나가는 사고를 만들었다(#1475 실측:
-> #1221 세션 실행단계 보고가 어댑터에만 들어가 사용자에겐 내내 안 갔다). 그래서 삭제했다 — 배선을 고칠 땐
-> `setup/user-install.mjs` 의 `codexManagedBlock()` **하나만** 고친다. 제거기(`uninstall.mjs`)는 여기 그대로 있다.
-> 사양은 `setup/codex-wiring.test.mjs` 가 못박는다(claude 배선과의 패리티를 코드로 강제).
+*[한국어](README.ko.md)*
 
-## 심는 것 (전부 idempotent · 센티넬 surgical merge)
+> **The canonical installer is `setup/user-install.mjs --harness codex`.** This folder used to have a sibling installer, `install.mjs`, but
+> it was **dead code nobody called**, and improvements that went into it never reached the real deployment (#1475, observed:
+> #1221 session phase reporting went only into the adapter and never reached users). So it was deleted — when you change the wiring,
+> change **only** `codexManagedBlock()` in `setup/user-install.mjs`. The uninstaller (`uninstall.mjs`) remains here.
+> The spec is pinned by `setup/codex-wiring.test.mjs` (which enforces parity with the claude wiring in code).
 
-공유 자산 `~/.lively/{context.md, org-name, hooks/*.mjs, work-roots, bin/lively, lib/*}` 는 claude 와 **같은 것**을 쓴다.
-Codex 전용 표면은 둘뿐이다.
+## What gets installed (all idempotent · sentinel surgical merge)
+
+The shared assets `~/.lively/{context.md, org-name, hooks/*.mjs, work-roots, bin/lively, lib/*}` are **the same ones** claude uses.
+There are two Codex-specific settings surfaces (in addition, a `LIVELY_TOKEN` export sentinel block is planted in the shell rc — for `bearer_token_env_var` on the direct-http fallback, with no token literal).
 
 ### `~/.codex/AGENTS.md`
-정적 org-context. Codex 가 글로벌 인스트럭션으로 **네이티브 로드**(`$CODEX_HOME/AGENTS.md`)하므로 훅 trust 와 무관하게 항상 적용된다.
-센티넬 블록으로 머지 — 멤버 기존 지침은 보존(백업 `~/.lively/backups/codex-AGENTS.md.{orig,bak}`).
+Static org context. Codex **loads it natively** as global instructions (`$CODEX_HOME/AGENTS.md`), so it always applies regardless of hook trust.
+Merged as a sentinel block — the member's existing instructions are preserved (backups at `~/.lively/backups/codex-AGENTS.md.{orig,bak}`).
 
 ### `~/.codex/config.toml`
-`# >>> lively-managed … >>>` ~ `# <<< lively-managed <<<` 안만 교체한다. 바깥(model·`[projects.*]` trust·tui·다른 mcp_servers/hooks)은 한 바이트도 안 건드린다.
+Only the part between `# >>> lively-managed … >>>` and `# <<< lively-managed <<<` is replaced. Everything outside it (model, `[projects.*]` trust, tui, other mcp_servers/hooks) is left byte-for-byte untouched.
 
-**MCP — 기본은 로컬 stdio 프록시:**
+**MCP — the default is a local stdio proxy:**
 ```toml
 [mcp_servers.lively]
 command = "/…/.lively/bin/lively"
@@ -27,65 +29,69 @@ args = ["mcp"]
 [mcp_servers.lively.env]
 LIVELY_HARNESS = "codex"
 ```
-- codex 의 `http_headers` 는 **정적 문자열**이라 세션 env 를 확장하지 못한다 → http 직결로는 `x-lively-session`(#852)·`x-lively-mode`(#1007 읽기전용/incognito)를 **영영 못 보낸다.** 프록시가 그 env 를 읽어 상류에 붙이므로 두 기능이 codex 에서도 산다.
-- 부팅 시 게이트웨이에 못 닿아도 stdio 는 로컬 프로세스라 세션 내내 failed 로 굳지 않는다(#1079).
-- 토큰이 설정 파일에 안 들어간다 — 프록시가 매 호출 `~/.lively/token` 을 읽는다(rc 의 `LIVELY_TOKEN` 이 스테일이어도 옛 신원으로 조용히 안 붙는다 — #916 의 codex 판).
-- **`env.LIVELY_HARNESS` 는 필수다.** 프록시를 거치면 UA 가 우리 것이 되므로 이 stamp 가 하네스 신호의 전부다(빠지면 게이트웨이가 코덱스 세션을 claude 로 집계 — #182).
-- 프록시 파일이 없거나(구버전 번들) 롤백 스위치(`~/.lively/mcp-transport` = `http`)면 종전 http 직결(`url` + `bearer_token_env_var` + 정적 `x-lively-harness` 헤더)로 떨어진다. 그 경우 세션·모드 기능은 빠진다.
+- Codex's `http_headers` are **static strings** and can't expand session env → over a direct http connection, `x-lively-session` (#852) and `x-lively-mode` (#1007 read-only/incognito) can **never be sent.** The proxy reads that env and attaches it upstream, so both features work in codex too.
+- Even if the gateway is unreachable at boot, stdio is a local process, so it doesn't get stuck as failed for the whole session (#1079).
+- The token never goes into the config file — the proxy reads `~/.lively/token` on every call (so even if `LIVELY_TOKEN` in the rc is stale, it won't silently connect as an old identity — the codex version of #916).
+- **`env.LIVELY_HARNESS` is required.** Through the proxy the UA is ours, so this stamp is the entire harness signal (without it the gateway counts codex sessions as claude — #182).
+- If the proxy file is missing (older bundle) or the rollback switch is set (`~/.lively/mcp-transport` = `http`), it falls back to the old direct http connection (`url` + `bearer_token_env_var` + a static `x-lively-harness` header). In that case the session and mode features are lost.
+- On the stdio path, the local-operations MCP `[mcp_servers.lively-local]` (`args = ["mcp-local"]` — repo and worktree tools) is included as well (#1884, parity with claude's `lively-local`).
 
-**추가 MCP 서버**(관리탭 org_mcp_server → 번들 `.lively/mcp-servers.json`): stdio 는 `command`(문자열) + `args`(배열)다.
-⚠ `command` 에 배열을 넣으면 codex 가 `invalid type: sequence, expected a string` 로 **config.toml 전체**를 못 읽어 `[mcp_servers.lively]`·`[hooks.*]` 까지 동반 사망한다(#1475 에서 고친 실버그 — 조직에 stdio 서버가 하나도 없어 미발현이었다).
+**Additional MCP servers** (admin tab org_mcp_server → bundle `.lively/mcp-servers.json`): stdio servers use `command` (a string) + `args` (an array).
+⚠ If you put an array in `command`, codex fails to read **the whole config.toml** with `invalid type: sequence, expected a string`, taking `[mcp_servers.lively]` and `[hooks.*]` down with it (a real bug fixed in #1475 — it never surfaced because the organization had no stdio servers).
 
-**auto-approve**: `[mcp_servers.lively.tools.<툴>] approval_mode = "approve"` — claude 의 `permissions.allow` 대응물. 센티넬 안이라 재설치마다 reconcile 된다.
+**auto-approve**: `[mcp_servers.lively.tools.<tool>] approval_mode = "approve"` — the counterpart of claude's `permissions.allow`. Written inside the sentinel at install, then reconciled by `session-preload` every session (#1475 — the same cadence as claude).
 
-**훅** — claude 와 같은 자리에 같은 수준으로 붙인다:
+**Hooks** — attached at the same points and at the same level as claude:
 
-| 이벤트 | 붙는 것 |
+| Event | What's attached |
 |---|---|
-| SessionStart | session-preload · sync-harness-assets · work-flag · 러너 |
-| UserPromptSubmit | work-flag · 러너 |
-| PreToolUse | 러너 (**조직 거버넌스 deny 게이트**) |
-| PostToolUse | work-flag ×2(lively MCP · 편집툴) · 러너 |
-| PermissionRequest | work-flag (claude 의 Notification = '확인 필요' 자리) |
-| Stop | stop-writeback-gate · work-flag · 러너 |
-| SubagentStop / PreCompact / PostCompact | 러너 |
+| SessionStart | session-preload · sync-harness-assets · work-flag · runner |
+| UserPromptSubmit | work-flag · runner |
+| PreToolUse | runner (**organization governance deny gate**) |
+| PostToolUse | work-flag ×3 (lively MCP · edit tools + shell · subagent launch `spawn_agent`) · runner |
+| PermissionRequest | work-flag (where claude's Notification = "needs confirmation" sits) |
+| Stop | stop-writeback-gate · work-flag · runner |
+| SessionEnd | work-flag · runner (fires on codex 0.149.1+) |
+| SubagentStop | work-flag · runner |
+| PreCompact / PostCompact | runner |
 
-## 하네스 차이 (codex 0.142.0 실측)
+## Harness differences (observed on codex 0.142.0)
 
-- **이벤트 집합이 다르다.** codex 엔 `SessionEnd`·`Notification` 이 **없고**(바이너리 문자열 부재로 확인), 대신 `PermissionRequest`·`SubagentStart` 가 있다. 그래서 세션 정상종료 보고(#1059)는 codex 에서 성립하지 않고, '확인 필요'는 PermissionRequest 가 대신한다.
-- **PreToolUse 결정 계약은 claude 와 동일**(`permissionDecision`/`permissionDecisionReason`, exit 2) — `run-custom` 의 병합 로직이 그대로 쓰인다.
-- **SessionStart 출력은 JSON 봉투 필수** — raw stdout 은 무시된다. `session-preload` 가 `LIVELY_HARNESS=codex` 로 분기.
-- **파일 편집 툴명은 `apply_patch`** — `work-flag` 의 EDIT_TOOLS 에 가산돼 있다(양쪽 안전).
-- **서버 이벤트 허용목록**(`src/capabilities/delivery/hooks.ts` HOOK_EVENTS)은 claude 기준이라 `PermissionRequest`·`SubagentStart` 에는 **조직 훅을 등록할 수 없다** — 그래서 러너도 그 둘엔 배선하지 않는다(등록 불가능한 이벤트에 러너를 붙이면 빈 왕복만 는다).
+- **The event set differs.** codex 0.142 has **no** `SessionEnd` or `Notification` (confirmed by their absence from the binary's strings), but has `PermissionRequest` and `SubagentStart` instead. PermissionRequest stands in for "needs confirmation".
+  `SessionEnd` **fires from 0.149.1 on** (observed in #1884; the timeout is clamped to 3s) — the installer wires SessionEnd (0.142 silently ignores it), and normal session-end reporting (#1059) works on 0.149.1+.
+- **The PreToolUse decision contract is the same as claude's** (`permissionDecision`/`permissionDecisionReason`, exit 2) — `run-custom`'s merge logic is used as is.
+- **SessionStart output requires a JSON envelope** — raw stdout is ignored. `session-preload` branches on `LIVELY_HARNESS=codex`.
+- **The file edit tool is named `apply_patch`** — it has been added to `work-flag`'s EDIT_TOOLS (safe for both). The 0.149.1+gpt-5.6 line issues edits as shell commands, so `work-flag` also detects shell edits (#1884).
+- **The server's event allowlist** (`src/capabilities/delivery/hooks.ts` HOOK_EVENTS) is based on claude, so **organization hooks can't be registered** on `PermissionRequest` or `SubagentStart` — which is why the runner isn't wired to those two either (attaching the runner to events nobody can register for only adds empty round trips).
 
-## 조직 자산 (sync-harness-assets)
+## Organization assets (sync-harness-assets)
 
-| 종류 | claude | codex |
+| Kind | claude | codex |
 |---|---|---|
-| 스킬 | `~/.claude/skills/<id>/SKILL.md` | `~/.codex/skills/<id>/SKILL.md` — Agent Skills 오픈표준이라 **같은 파일** |
-| 서브에이전트 | `~/.claude/agents/<id>.md` | `~/.codex/agents/<id>.toml` — **포맷 변환**(name·description·developer_instructions) |
-| 슬래시커맨드 | `~/.claude/commands/<id>.md` | `~/.codex/prompts/<id>.md` — 커스텀 프롬프트 `/prompts:<id>`(최상위 .md 만 스캔) |
+| Skill | `~/.claude/skills/<id>/SKILL.md` | `~/.codex/skills/<id>/SKILL.md` — the Agent Skills open standard, so **the same file** |
+| Subagent | `~/.claude/agents/<id>.md` | `~/.codex/agents/<id>.toml` — **format conversion** (name, description, developer_instructions) |
+| Slash command | `~/.claude/commands/<id>.md` | `~/.codex/prompts/<id>.md` — custom prompt `/prompts:<id>` (only top-level .md files are scanned) |
 
-변환 시 하네스 고유 필드(claude frontmatter 의 `model`·`tools`)는 **옮기지 않는다** — 모델 슬러그도 툴 이름도 하네스마다 달라 그대로 넣으면 에이전트가 안 뜨거나 조용히 무시된다.
+Harness-specific fields (`model` and `tools` in claude frontmatter) are **not carried over** in conversion — model slugs and tool names differ per harness, so copying them as is makes the agent fail to load or be silently ignored.
 
-⚠ **자산의 `harness` 타깃이 `claude` 로 묶여 있으면 코드가 아무리 준비돼도 codex 엔 안 간다** — 배선(코드)과 타깃(데이터)은 별개 축이다. 관리탭 ▸ 하네스에서 `all` 로 넓혀야 배포된다.
+⚠ **If an asset's `harness` target is pinned to `claude`, it won't reach codex no matter how ready the code is** — wiring (code) and targeting (data) are separate axes. Widen it to `all` in the admin tab ▸ Harness for it to be distributed.
 
-## 훅 trust (Codex 고유)
+## Hook trust (Codex-specific)
 
-비관리 command 훅은 최초 1회 **trust** 가 필요하다(해시 기반, `~/.codex` 에 persist). `trusted_hash` 는 설치기가 굽지 않는다(계산 불가·취약).
-- 대화형(TUI): `/hooks` 로 신뢰
-- 헤드리스(`codex exec`): `--dangerously-bypass-hook-trust`
+Unmanaged command hooks need a one-time **trust** (hash-based, persisted in `~/.codex`). The installer does not bake in `trusted_hash` (it can't be computed and would be fragile).
+- Interactive (TUI): trust with `/hooks`
+- Headless (`codex exec`): `--dangerously-bypass-hook-trust`
 
-## 실측 (codex-cli 0.142.0, 2026-08-04)
+## Observations (codex-cli 0.142.0, 2026-08-04)
 
-- **`codex exec`(비대화형)에서도 라이프사이클 훅이 발화한다** — SessionStart·UserPromptSubmit·**PreToolUse**·PostToolUse·Stop 전부 확인.
-  0.138 시절의 "exec 는 훅 미발화" 한계는 **해소됐다**(그 문구가 남아 있으면 지운다 — 헤드리스 자동화에도 거버넌스가 걸린다는 뜻이다).
-  헤드리스는 훅 trust 를 못 물으므로 `--dangerously-bypass-hook-trust` 가 필요하다.
-- **stdio 프록시가 상류에 붙이는 헤더 4종 확인**: `x-lively-harness=codex` · `x-lively-session` · `x-lively-mode` · `Authorization`.
-  → 코덱스 세션도 작업기록에 세션이 붙고(#852) 읽기전용/incognito 가 걸린다(#1007).
-- `LIVELY_OFF=1`: 훅 라이브 주입 침묵(AGENTS.md 정적분은 유지).
+- **Lifecycle hooks fire even in `codex exec` (non-interactive)** — SessionStart, UserPromptSubmit, **PreToolUse**, PostToolUse, and Stop all confirmed.
+  The 0.138-era limitation "hooks don't fire in exec" **is gone** (if that wording remains anywhere, delete it — it means governance applies to headless automation too).
+  Headless mode can't ask for hook trust, so `--dangerously-bypass-hook-trust` is required.
+- **Confirmed the 4 headers the stdio proxy attaches upstream**: `x-lively-harness=codex` · `x-lively-session` · `x-lively-mode` · `Authorization`.
+  → Codex sessions also get the session attached to work records (#852), and read-only/incognito applies (#1007).
+- `LIVELY_OFF=1`: live hook injection goes silent (the static part in AGENTS.md remains).
 
-## 남은 갭
+## Remaining gaps
 
-- **auto-approve 는 설치 시점에만 반영된다.** claude 는 `session-preload` 가 매 세션 `permissions.allow` 를 reconcile 하지만,
-  codex 는 관리 블록 안이라 재설치(=self-update)까지 관리자 변경이 안 붙는다. 기능 손실은 아니고 승인 프롬프트가 늦게 사라질 뿐.
+- **auto-approve reflection cadence — resolved** (#1475). It used to be applied only at install, but now `session-preload` reconciles
+  `[mcp_servers.lively(-local).tools.*]` in the config.toml managed block every session (`reconcileCodexAutoApprove`) — the same cadence as claude's `permissions.allow`.
