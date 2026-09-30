@@ -372,6 +372,7 @@
   .pn-fcrumb { padding: 6px 8px; font-size: 14px; max-width: 160px; }
   .pn-fsize { display: none; }
   input.pn-ffind { height: 36px; font-size: 16px; }   /* 16px — iOS 가 입력칸에서 확대하지 않는 하한 */
+  input.pn-dock-more-q { font-size: 16px; }   /* #4443 곁칸 독 [더보기]의 앱 찾기 — 창이 열리며 초점이 들어가니 확대되면 창이 밀린다 */
   /* 뷰어 막대 — [← 자료]·다시 불러오기·내려받기 36px. */
   .pn-web-btn { height: 36px; min-width: 36px; }
   .pn-web-btn.ic { width: 36px; }

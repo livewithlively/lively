@@ -138,6 +138,14 @@ export interface Metrics {
   activeMin: number;
 }
 export const TAB_METRICS: Metrics = { icon: 34, minLabel: 64, max: 184, activeMax: 220, activeMin: 120 };
+/**
+ * 탭 띠 안에서 탭들이 실제로 나눠 쓸 폭 — 띠의 좌우 안 여백과 탭 사이 간격(n-1 개)을 뺀다.
+ *  #4443(2026-10-01 리뷰): 탭 새 옷에서 띠에 안 여백(2+2)과 간격(2)이 생겼는데 clientWidth(안 여백 포함 · 간격 모름)를 그대로
+ *   planTabs 에 넘겨, 탭 여섯 개면 «들어간다» 고 셈한 줄이 실제로는 넘쳐 마지막 탭이 삐져나왔다.
+ */
+export function stripRoom(clientWidth: number, padLeft: number, padRight: number, gap: number, n: number): number {
+  return Math.max(0, clientWidth - padLeft - padRight - gap * Math.max(0, n - 1));
+}
 export interface Plan {
   /** full = 이름을 다 폈다 · shrink = 긴 이름부터 줄였다 · icons = 켜진 탭만 이름, 나머지는 아이콘. */
   mode: 'full' | 'shrink' | 'icons';

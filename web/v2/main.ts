@@ -35,6 +35,7 @@ import { wikiScopeOf } from '../lib/wiki-list.js';
 import { EMPTY_BOOK, closeSlot, closeTabGuests, openGuest, shownSlot, type GuestBook } from '../lib/aside-guests.js';   // #4233 손님 화면 장부(미리보기 = 연 탭 · 고정 문서 = 셸에 하나)
 import { renderConnect, renderConnectApp, renderConnectData } from './connect.js';
 import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
+import { refreshDocks } from './pane-dock.js';   // #4443 — 곁칸 독의 설정·고정도 사람이 고른 것(서버 정본)이다
 import { setViewers } from './presence.js';   // #2116 — 열람 도장의 응답에 실려 오는 '지금 보고 있는 사람'
 import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
@@ -501,6 +502,7 @@ export async function bootV2(): Promise<void> {
     reloadRailPrefs();
     drawSide();
     tabsApi?.paint();
+    refreshDocks();   // #4443 — 같은 창의 캐시 쓰기는 storage 사건이 없어 독이 스스로는 모른다(pane-dock refreshDocks 머리말)
   };
   //  #3887 — 저장 응답으로 캐시가 서버 값이 됐을 때(서버가 상한·형식으로 버렸거나 다른 기기가 바꾼 저장소)도 같은 일을 한다.
   onShellPrefsAdopted(reloadShellPrefs);

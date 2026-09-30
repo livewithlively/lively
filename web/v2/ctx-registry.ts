@@ -50,7 +50,12 @@ export interface CtxEvent {
   /** 이 배선의 뿌리(#v2-root 또는 body). */
   root: HTMLElement;
 }
-export interface CtxResult { rows: CtxRow[]; title?: string; sub?: string }
+export interface CtxResult {
+  rows: CtxRow[]; title?: string; sub?: string;
+  /** 이 항목의 메뉴만 띄운다 — 표면(곁칸 빈 자리의 «칸에 넣기…»)·공통 행을 잇지 않는다. 메뉴가 제 안에서 완결된 자리가 쓴다
+   *  (곁칸 독: macOS 독 메뉴처럼 그 앱의 것만, #4443). 행이 비어도 머리글이 있으면 «여기엔 메뉴가 없다» 로 브라우저 메뉴까지 막는다. */
+  only?: boolean;
+}
 export type CtxProvider = (hit: CtxHit, ev: CtxEvent) => CtxRow[] | CtxResult | null | undefined | void;
 
 const kinds = new Map<string, CtxProvider>();
@@ -117,10 +122,11 @@ export function collectCtx(target: Element, ev: CtxEvent): { rows: CtxRow[]; tit
       const sp = bs || (sname ? surfaces.get(sname) : undefined);
       if (sp) { try { surface = norm(sp({ el: n as HTMLElement, kind: sname || 'surface', data: dset(n) as DOMStringMap }, ev)); } catch (_) { surface = null; } }
     }
-    if (item && surface) break;
+    if (item && (surface || item.only)) break;
     n = n.parentElement;
   }
   void itemEl;
+  if (item && item.only) return { rows: item.rows, title: item.title, sub: item.sub };   // 겹을 잇지 않는다(CtxResult.only)
   // 겹은 **같은 이름이 이미 있으면** 뺀다 — 세션 행은 링크이기도 해서 「새 탭에서 열기」가 두 번 서고, 홈 앱 타일의
   //  「모든 앱」·알림 행의 「모두 읽음으로」는 표면에도 있다(프리뷰 실측 2026-09-09). 앞 겹(가까운 것)이 이긴다.
   const rows: CtxRow[] = [];
