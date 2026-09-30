@@ -51,7 +51,7 @@ function findPgTests(dir) {
 
 const WORKFLOW = src(".github/workflows/test.yml");
 
-/** 러너가 **실제로** 수집하는 목록. 소스 텍스트가 아니라 행동을 본다 — 아래 P1 주석 참조. */
+/** 러너 소스 — P1 이 collect() 본문을 읽어 pg-test 제외가 살아 있는지 본다(자식 러너를 띄우지 않는 이유는 머리말·P1 주석). */
 const RUNNER = src("scripts/run-tests.mjs");
 
 const onDisk = findPgTests("src").sort();
@@ -69,9 +69,6 @@ const registered = WORKFLOW.split("\n").flatMap((line) => {
 });
 const registeredSet = new Set(registered);
 
-// 이 가드의 **전제**를 먼저 못박는다 — 러너가 pg-test 를 자동 수집하게 바뀌면 수기 등록은 필요 없어지고
-//  이 가드도 test.yml 의 파일별 스텝도 걷어내야 한다. 전제가 사라졌는데 가드만 남으면, 사람은 이게 왜
-//  있는지 모른 채 새 파일을 계속 손으로 등록한다.
 // 이 가드의 **전제**를 먼저 못박는다 — 러너가 pg-test 를 자동 수집하게 바뀌면 수기 등록은 필요 없어지고
 //  이 가드도 test.yml 의 파일별 스텝도 걷어내야 한다. 전제가 사라졌는데 가드만 남으면, 사람은 이게 왜
 //  있는지 모른 채 새 파일을 계속 손으로 등록한다.
