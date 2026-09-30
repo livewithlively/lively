@@ -54,8 +54,14 @@ export async function initAllSchemas(opts?: { quiet?: boolean }): Promise<void> 
   //  옛 식을 그대로 물고 있다. 여기서 따라잡는다(멱등 — 이미 맞는 표는 건드리지 않는다).
   //  pin 과의 순서는 무관하다 — 신원 전역 표는 상수 기본값이라 이 조회(current_setting 기반만)에 안 잡힌다.
   //  ensureTenantColumn 바로 뒤에 두는 건 «컬럼 이야기» 를 한자리에 모으려는 것뿐이다.
-  const td = await refreshTenantDefault();
-  if (td.refreshed.length) note(`tenant default refreshed (${td.refreshed.length}표)`);
+  //  ⚠ 실패해도 부팅은 계속한다 — 못 따라잡은 DB 는 이 단계 전과 같은 상태일 뿐이다(더 나빠지지 않는다).
+  //   판정용 임시 표를 못 만드는 DB(TEMP 권한 회수) 하나 때문에 게이트웨이·수집 CLI 가 안 뜨면 안 된다.
+  try {
+    const td = await refreshTenantDefault();
+    if (td.refreshed.length) note(`tenant default refreshed (${td.refreshed.length}표)`);
+  } catch (e) {
+    logger.warn({ err: String(e) }, "tenant default refresh 실패 — 부팅은 계속한다(다음 부팅에 다시 시도)");
+  }
   // #1879 — 신원 전역 표(사람·세션·토큰·자격)는 컬럼은 두되 값을 primary 로 **못박는다**. 기본값이
   //  컨텍스트를 따라가면 정책이 없어도 계정행이 워크스페이스마다 갈라진다(그러면 감사 서브쿼리가
   //  2행을 받아 org 쓰기가 전부 500 이 되고, tenant 없는 조회가 아무 행이나 돌려준다).

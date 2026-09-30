@@ -200,7 +200,16 @@ export function buildTenantColumnDdl(plan: TenantColumnPlan): string[] {
 //  (SET DEFAULT 는 카탈로그만 바꾸지만 표마다 ACCESS EXCLUSIVE 를 잡는다 — 맞는 걸 다시 걸 이유가 없다).
 export function buildTenantDefaultRefreshDdl(tables: readonly { schema: string; table: string }[]): string[] {
   //  스키마를 한정한다 — app.* 표는 search_path 에 없어 이름만으로는 못 찾는다.
-  return tables.map((t) => `ALTER TABLE ${qi(t.schema)}.${qi(t.table)} ALTER COLUMN tenant_id SET DEFAULT ${TENANT_DEFAULT_EXPR}`);
+  //  ⚠ 여기서는 qi() 를 쓰지 않는다. 이름이 사용자 입력이 아니라 **카탈로그에서 읽은 실재 이름**이라 규칙으로
+  //   거를 대상이 아니고, qi 의 규칙(숫자 시작 금지)은 앱 표 이름과 맞지 않는다 — 앱 id 는 숫자로 시작할 수 있다
+  //   (`3d-view` → `3d_view__x`, apps/store-ddl.ts physicalAppPrefix). qi 로 거르면 그런 표 하나에 던져
+  //   부팅(initAllSchemas)이 통째로 죽는다(실측). 표준 인용(큰따옴표 이중화)이면 어떤 이름이든 안전하다.
+  return tables.map((t) => `ALTER TABLE ${quoteCatalogIdent(t.schema)}.${quoteCatalogIdent(t.table)} ALTER COLUMN tenant_id SET DEFAULT ${TENANT_DEFAULT_EXPR}`);
+}
+
+/** 카탈로그에서 읽은 이름의 표준 인용(Postgres quote_ident 와 같은 규칙 — 안의 큰따옴표를 겹친다). */
+function quoteCatalogIdent(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
 }
 
 /** 관대한(missing_ok) 기본값을 알아보는 조각 — **Postgres 가 렌더한 형태**다(소스 문자열과 다르다). */
@@ -275,10 +284,20 @@ export async function refreshTenantDefault(): Promise<{ refreshed: string[] }> {
     //  멱등이므로 **못 잡은 표는 다음 부팅으로 넘긴다** — 기다리는 것보다 낫다.
     await client.query("SET lock_timeout = '3s'");
     const done: string[] = [];
+    //  소유자가 아니라 못 고치는 표(42501) — 다음 부팅에도 똑같이 실패하므로 «재시도» 라 적지 않고,
+    //   표마다 찍지도 않는다(매니지드는 앱 표를 별도 DDL 역할이 소유해 워크스페이스 수만큼 매 부팅 쌓인다).
+    const denied: string[] = [];
     for (const t of stale) {
-      const [sql] = buildTenantDefaultRefreshDdl([t]);
-      try { await client.query(sql); done.push(`${t.schema}.${t.table}`); }
-      catch (e) { logger.warn({ table: `${t.schema}.${t.table}`, err: String(e) }, "tenant default refresh 보류 — 다음 부팅에 재시도"); }
+      const name = `${t.schema}.${t.table}`;
+      try { const [sql] = buildTenantDefaultRefreshDdl([t]); await client.query(sql); done.push(name); }
+      catch (e) {
+        if ((e as { code?: string })?.code === "42501") denied.push(name);
+        else logger.warn({ table: name, err: String(e) }, "tenant default refresh 보류 — 다음 부팅에 재시도");
+      }
+    }
+    if (denied.length) {
+      logger.warn({ count: denied.length, sample: denied.slice(0, 5) },
+        "tenant default refresh 건너뜀 — 이 역할이 소유하지 않은 표(소유 역할로 따로 고쳐야 한다)");
     }
     return { refreshed: done };
   } finally {

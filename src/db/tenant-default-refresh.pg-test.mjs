@@ -26,6 +26,9 @@ const PUB = "__tdr_stale_pub", FINE = "__tdr_fine", STRICT = "__tdr_strict", APP
 //  워크스페이스가 설치한 앱의 표는 `app` 이 아니라 `app_<테넌트 hex32>` 에 산다(#4224, apps/store-ddl.ts appSchemaName).
 //  «app 스키마» 를 한 이름으로 적으면 이쪽이 통째로 빠진다 — 위 머리말의 사고와 같은 모양이다.
 const WS_SCHEMA = "app_00000000000000000000000000dead01", WS = "__tdr_stale_ws";
+//  앱 id 는 숫자로 시작할 수 있다(`3d-view` → `3d_view__x`, apps/store-ddl.ts). 그런 표 하나가 이름 검사에 걸려
+//  던지면 따라잡기가 아니라 **부팅 전체**가 죽는다(실측) — 인용해서 그대로 고쳐야 한다.
+const DIGIT = "3d__tdr_stale_digit";
 //  앱 스키마 이름 규칙에 **안 맞는** 스키마 — 코어 소유가 아니므로 옛 식이어도 건드리면 안 된다(선별이 넘치지 않는가).
 const FOREIGN_SCHEMA = "__tdr_foreign", FOREIGN = "__tdr_stale_foreign";
 const OLD = `COALESCE(current_setting('app.tenant_id', true), '${SINGLE_TENANT_ID}')::uuid`;
@@ -38,7 +41,7 @@ const defaultOf = async (rel) => (await itemsPool.query(
     WHERE d.adrelid = $1::regclass AND a.attname = 'tenant_id'`, [rel])).rows[0]?.e ?? null;
 
 const drop = async () => {
-  for (const rel of [`public.${PUB}`, `public.${FINE}`, `public.${STRICT}`, `app.${APP}`]) {
+  for (const rel of [`public.${PUB}`, `public.${FINE}`, `public.${STRICT}`, `app.${APP}`, `app."${DIGIT}"`]) {
     await itemsPool.query(`DROP TABLE IF EXISTS ${rel}`);
   }
   //  이 두 스키마는 이 파일이 만든 것이다 — 통째로 지운다.
@@ -50,6 +53,7 @@ try {
   await drop();
   await itemsPool.query(`CREATE TABLE public.${PUB}(id int, tenant_id uuid NOT NULL DEFAULT ${OLD})`);
   await itemsPool.query(`CREATE TABLE app.${APP}(id int, tenant_id uuid NOT NULL DEFAULT ${OLD})`);
+  await itemsPool.query(`CREATE TABLE app."${DIGIT}"(id int, tenant_id uuid NOT NULL DEFAULT ${OLD})`);
   await itemsPool.query(`CREATE SCHEMA ${WS_SCHEMA}`);
   await itemsPool.query(`CREATE TABLE ${WS_SCHEMA}.${WS}(id int, tenant_id uuid NOT NULL DEFAULT ${OLD})`);
   await itemsPool.query(`CREATE SCHEMA ${FOREIGN_SCHEMA}`);
@@ -58,12 +62,13 @@ try {
   await itemsPool.query(`CREATE TABLE public.${FINE}(id int, tenant_id uuid NOT NULL DEFAULT ${TENANT_DEFAULT_EXPR})`);
   const strictBefore = await defaultOf(`public.${STRICT}`);
 
+  //  이름 하나에 던지면 여기서 예외로 끝난다 — 그 자체가 «부팅이 죽는다» 의 재현이다.
   const r1 = await refreshTenantDefault();
   const got = r1.refreshed.filter((t) => t.includes("__tdr_")).sort();
 
   // ① 옛 식을 가진 표는 고친다 — **스키마를 건너서도**. 이게 빠지면 앱 데이터 표가 영영 안 고쳐진다.
-  chk("① 옛 기본값 표를 고친다 — public · 공유 app · 워크스페이스별 app_<hex> 모두",
-    got.join(",") === `app.${APP},${WS_SCHEMA}.${WS},public.${PUB}`, `고친 표: ${got.join(", ") || "(없음)"}`);
+  chk("① 옛 기본값 표를 고친다 — public · 공유 app(숫자로 시작하는 이름 포함) · 워크스페이스별 app_<hex> 모두",
+    got.join(",") === `app.${DIGIT},app.${APP},${WS_SCHEMA}.${WS},public.${PUB}`, `고친 표: ${got.join(", ") || "(없음)"}`);
   //  «바뀌었다» 의 기준을 문자열로 적지 않는다 — 식이 또 바뀌면 그 복제가 기능과 무관한 이유로 깨진다.
   //  기준은 바로 옆에 있다: 현행 식으로 만든 FINE 표를 같은 PG 가 렌더한 결과와 **완전 일치**해야 한다.
   const want = await defaultOf(`public.${FINE}`);

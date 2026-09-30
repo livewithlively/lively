@@ -64,6 +64,39 @@ try {
   chk("④ RESET 으로 치워도 마찬가지다(미설정으로 돌아가지 않는다)", err4 === null,
     `INSERT 가 죽었다: ${err4} — RESET 도 빈 문자열을 남긴다`);
 
+  // ⑤ 🔴 격리는 그대로다 — 기본값이 관대해져도 **엄격 정책 아래 런타임 역할**은 '' 에서 여전히 막힌다.
+  //    이 수정의 안전 근거가 이것 하나다(«엄격함은 정책이 갖는다», tenant-column.ts 머리말): '' 가 이제
+  //    기본값에서 단일테넌트로 떨어지지만, 정책 `current_setting('app.tenant_id')::uuid`(missing_ok 없음)가
+  //    같은 '' 에서 오류를 내므로 그 행은 남의(=primary) 워크스페이스에 들어가지 못한다.
+  //    누가 정책 쪽에도 같은 NULLIF 를 «고쳐» 넣으면 여기가 운다. 매니지드와 같은 모양(NOSUPERUSER·NOBYPASSRLS·
+  //    FORCE RLS·tenant_isolation)을 세워 잰다 — src/org/tenancy/activate.ts 의 계약.
+  const ROLE = "__tenant_default_empty_guc_app";
+  const R = `${T}_rls`;
+  const STRICT = "current_setting('app.tenant_id')::uuid";
+  try {
+    await c.query(`DROP TABLE IF EXISTS ${R}`);
+    await c.query(`DROP ROLE IF EXISTS ${ROLE}`);
+    await c.query(`CREATE ROLE ${ROLE} NOSUPERUSER NOBYPASSRLS`);
+    await c.query(`CREATE TABLE ${R}(id int, tenant_id uuid NOT NULL DEFAULT ${TENANT_DEFAULT_EXPR})`);
+    await c.query(`ALTER TABLE ${R} ENABLE ROW LEVEL SECURITY`);
+    await c.query(`ALTER TABLE ${R} FORCE ROW LEVEL SECURITY`);
+    await c.query(`CREATE POLICY tenant_isolation ON ${R} FOR ALL TO ${ROLE} USING (tenant_id = ${STRICT}) WITH CHECK (tenant_id = ${STRICT})`);
+    await c.query(`GRANT SELECT, INSERT ON ${R} TO ${ROLE}`);
+    await c.query(`SET ROLE ${ROLE}`);
+    //  대조군 — 컨텍스트가 있으면 들어간다(아래 실패가 권한 탓이 아니라 정책 탓임을 보인다).
+    await c.query(`SELECT set_config('app.tenant_id', $1, false)`, [OTHER]);
+    const okErr = await c.query(`INSERT INTO ${R}(id) VALUES(1)`).then(() => null, (e) => (e instanceof Error ? e.message : String(e)));
+    chk("⑤ 대조군 — 컨텍스트가 있으면 런타임 역할도 쓴다", okErr === null, okErr ?? "");
+    await c.query(`SELECT set_config('app.tenant_id', '', false)`);
+    const denied = await c.query(`INSERT INTO ${R}(id) VALUES(2)`).then(() => null, (e) => e);
+    chk("⑤ 컨텍스트를 치운 뒤 런타임 역할의 INSERT 는 정책에서 막힌다(단일테넌트로 새지 않는다)",
+      denied?.code === "22P02", denied ? `${denied.code} ${denied.message}` : "INSERT 가 통과했다 — 기본값 폴백이 정책을 뚫었다");
+  } finally {
+    await c.query(`RESET ROLE`).catch(() => {});
+    await c.query(`DROP TABLE IF EXISTS ${R}`).catch(() => {});
+    await c.query(`DROP ROLE IF EXISTS ${ROLE}`).catch(() => {});
+  }
+
   await c.query(`DROP TABLE IF EXISTS ${T}`);
 } finally {
   // 이 커넥션은 풀에 돌려보내지 않고 파기한다. 우리가 raw `set_config` 로 GUC 를 건드렸을 뿐이라
