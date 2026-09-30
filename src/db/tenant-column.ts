@@ -209,9 +209,12 @@ export const LENIENT_RENDER_FRAGMENT = "current_setting('app.tenant_id'::text, t
 /**
  * 기본값이 지금 식과 어긋난 표를 고른다. `want` = Postgres 가 렌더한 «지금 식».
  *
- * 🔴 `app` 스키마도 본다. 앱 데이터 표(`apps/store-schema.ts`)가 같은 기본값을 쓰는데 `public` 이
- *  아니라 `app.<물리명>` 이다 — 여기서 빼면 그쪽 기존 표는 영영 옛 식을 물고 있으면서 부팅 로그는
+ * 🔴 앱 데이터 스키마도 본다. 앱 데이터 표(`apps/store-schema.ts`)가 같은 기본값을 쓰는데 `public` 이
+ *  아니라 앱 스키마에 산다 — 여기서 빼면 그쪽 기존 표는 영영 옛 식을 물고 있으면서 부팅 로그는
  *  «0표» 라 고쳐진 것처럼 보인다(실측으로 그 상태를 만들어 확인했다).
+ *  앱 스키마는 하나가 아니다(#4224): 공유 `app` · 워크스페이스별 `app_<테넌트 hex32>` · 각각의 보관
+ *  스키마 `<스키마>_archive`(이름 규칙은 `apps/store-ddl.ts` 의 appSchemaName·archiveSchemaName).
+ *  `app` 하나만 적으면 워크스페이스가 설치한 앱의 표가 같은 이유로 조용히 빠진다.
  *  이 조회는 `ensureTenantColumn` 계열(public 전용)과 달리 **기본값만** 고치므로 폭발반경이 없다.
  *
  * 🔴 `, true` 형태(= missing_ok)만 고른다. «current_setting 이 들어간 모든 기본값» 으로 잡으면
@@ -226,7 +229,8 @@ export const SQL_STALE_TENANT_DEFAULT = `
     JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
     JOIN pg_class c ON c.oid = d.adrelid
     JOIN pg_namespace n ON n.oid = c.relnamespace
-   WHERE n.nspname IN ('public', 'app') AND c.relkind = 'r' AND NOT c.relispartition
+   WHERE (n.nspname = 'public' OR n.nspname ~ '^app(_[0-9a-f]{32})?(_archive)?$')
+     AND c.relkind = 'r' AND NOT c.relispartition
      AND a.attname = 'tenant_id'
      AND pg_get_expr(d.adbin, d.adrelid) LIKE '%' || $2 || '%'
      AND pg_get_expr(d.adbin, d.adrelid) IS DISTINCT FROM $1
@@ -243,12 +247,14 @@ export async function refreshTenantDefault(): Promise<{ refreshed: string[] }> {
     //  임시 표는 이 세션에서만 보인다. 기본값 판정에만 쓰고 끝에서 지운다.
     //  ⚠ `ON COMMIT DROP` 을 쓰면 안 된다 — 트랜잭션 밖에서는 CREATE 가 곧바로 커밋되며 그 자리에서
     //   사라져, 바로 다음 조회가 아무 것도 못 찾고 **조용히 «고칠 표 없음»** 으로 끝난다(실측).
-    await client.query(`DROP TABLE IF EXISTS __tenant_default_probe`);
+    //  이름은 늘 `pg_temp.` 로 한정한다 — 한정 없는 DROP 은 임시 표가 없을 때 search_path 의 다음 스키마
+    //   (public)에서 같은 이름의 **영구 표**를 찾아 지운다.
+    await client.query(`DROP TABLE IF EXISTS pg_temp.__tenant_default_probe`);
     await client.query(`CREATE TEMP TABLE __tenant_default_probe(tenant_id uuid DEFAULT ${TENANT_DEFAULT_EXPR})`);
     const want = (await client.query(
       `SELECT pg_get_expr(d.adbin, d.adrelid) AS e
          FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
-        WHERE d.adrelid = '__tenant_default_probe'::regclass AND a.attname = 'tenant_id'`)).rows[0]?.e ?? null;
+        WHERE d.adrelid = 'pg_temp.__tenant_default_probe'::regclass AND a.attname = 'tenant_id'`)).rows[0]?.e ?? null;
     //  렌더 결과를 못 읽으면 **아무 것도 하지 않는다** — 기준 없이 갈아엎으면 맞는 표까지 건드린다.
     if (!want) {
       //  자가검증(아래)과 같은 실패 클래스다 — 조용히 0표로 끝나면 고쳐진 것처럼 보인다.
@@ -277,7 +283,7 @@ export async function refreshTenantDefault(): Promise<{ refreshed: string[] }> {
     return { refreshed: done };
   } finally {
     //  커넥션은 풀로 돌아간다 — 임시 표를 남기면 다음 차용자가 이름 충돌을 본다.
-    await client.query(`DROP TABLE IF EXISTS __tenant_default_probe`).catch(() => { /* 이미 죽은 커넥션 */ });
+    await client.query(`DROP TABLE IF EXISTS pg_temp.__tenant_default_probe`).catch(() => { /* 이미 죽은 커넥션 */ });
     //  lock_timeout 은 **세션** 값이다 — 못 되돌린 커넥션을 풀에 돌려보내면 그걸 받은 다음 쿼리가
     //  3초 만에 55P03 으로 죽는다. 되돌리기에 실패하면 커넥션을 파기한다(풀이 새로 연다).
     let dirty = false;

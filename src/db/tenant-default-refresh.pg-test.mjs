@@ -1,7 +1,7 @@
 // 기본값 따라잡기(`refreshTenantDefault`) — **실제 Postgres 필요**(기본 npm test 체인 밖).
 //  CI 의 services:postgres 잡에서, 또는 로컬에서 수동 실행:
 //    npm run build && node --env-file=.env src/db/tenant-default-refresh.pg-test.mjs
-//  ⚠ 이 파일은 `refreshTenantDefault()` 를 부른다 — 즉 **마이그레이션을 실행한다**(자기가 만든 네 표만이
+//  ⚠ 이 파일은 `refreshTenantDefault()` 를 부른다 — 즉 **마이그레이션을 실행한다**(자기가 만든 표만이
 //   아니라 그 DB 의 옛 식 표 전부에 ALTER 가 나간다). 붙는 DB 를 보고 돌려라.
 //
 // 왜 이 계층인가: 이 함수의 판정은 전부 **카탈로그가 기본값을 어떻게 렌더하나** 에 걸려 있다.
@@ -23,6 +23,11 @@ const chk = (n, c, why) => (c ? ok(n) : bad(n, why || ""));
 
 //  이름은 이 파일 전용 접두사로 — 같은 DB 를 쓰는 다른 pg-test 와 섞이지 않게.
 const PUB = "__tdr_stale_pub", FINE = "__tdr_fine", STRICT = "__tdr_strict", APP = "__tdr_stale_app";
+//  워크스페이스가 설치한 앱의 표는 `app` 이 아니라 `app_<테넌트 hex32>` 에 산다(#4224, apps/store-ddl.ts appSchemaName).
+//  «app 스키마» 를 한 이름으로 적으면 이쪽이 통째로 빠진다 — 위 머리말의 사고와 같은 모양이다.
+const WS_SCHEMA = "app_00000000000000000000000000dead01", WS = "__tdr_stale_ws";
+//  앱 스키마 이름 규칙에 **안 맞는** 스키마 — 코어 소유가 아니므로 옛 식이어도 건드리면 안 된다(선별이 넘치지 않는가).
+const FOREIGN_SCHEMA = "__tdr_foreign", FOREIGN = "__tdr_stale_foreign";
 const OLD = `COALESCE(current_setting('app.tenant_id', true), '${SINGLE_TENANT_ID}')::uuid`;
 //  바깥 정책 계층이 걸어 둔 모양(missing_ok 없음) — 코어가 덮어쓰면 그 배포의 fail-closed 계약이 깨진다.
 const OUTER_STRICT = `current_setting('app.tenant_id')::uuid`;
@@ -36,6 +41,8 @@ const drop = async () => {
   for (const rel of [`public.${PUB}`, `public.${FINE}`, `public.${STRICT}`, `app.${APP}`]) {
     await itemsPool.query(`DROP TABLE IF EXISTS ${rel}`);
   }
+  //  이 두 스키마는 이 파일이 만든 것이다 — 통째로 지운다.
+  for (const sch of [WS_SCHEMA, FOREIGN_SCHEMA]) await itemsPool.query(`DROP SCHEMA IF EXISTS ${sch} CASCADE`);
 };
 
 try {
@@ -43,6 +50,10 @@ try {
   await drop();
   await itemsPool.query(`CREATE TABLE public.${PUB}(id int, tenant_id uuid NOT NULL DEFAULT ${OLD})`);
   await itemsPool.query(`CREATE TABLE app.${APP}(id int, tenant_id uuid NOT NULL DEFAULT ${OLD})`);
+  await itemsPool.query(`CREATE SCHEMA ${WS_SCHEMA}`);
+  await itemsPool.query(`CREATE TABLE ${WS_SCHEMA}.${WS}(id int, tenant_id uuid NOT NULL DEFAULT ${OLD})`);
+  await itemsPool.query(`CREATE SCHEMA ${FOREIGN_SCHEMA}`);
+  await itemsPool.query(`CREATE TABLE ${FOREIGN_SCHEMA}.${FOREIGN}(id int, tenant_id uuid NOT NULL DEFAULT ${OLD})`);
   await itemsPool.query(`CREATE TABLE public.${STRICT}(id int, tenant_id uuid NOT NULL DEFAULT ${OUTER_STRICT})`);
   await itemsPool.query(`CREATE TABLE public.${FINE}(id int, tenant_id uuid NOT NULL DEFAULT ${TENANT_DEFAULT_EXPR})`);
   const strictBefore = await defaultOf(`public.${STRICT}`);
@@ -51,13 +62,17 @@ try {
   const got = r1.refreshed.filter((t) => t.includes("__tdr_")).sort();
 
   // ① 옛 식을 가진 표는 고친다 — **스키마를 건너서도**. 이게 빠지면 앱 데이터 표가 영영 안 고쳐진다.
-  chk("① 옛 기본값 표를 고친다 — public 과 app 둘 다",
-    got.join(",") === `app.${APP},public.${PUB}`, `고친 표: ${got.join(", ") || "(없음)"}`);
+  chk("① 옛 기본값 표를 고친다 — public · 공유 app · 워크스페이스별 app_<hex> 모두",
+    got.join(",") === `app.${APP},${WS_SCHEMA}.${WS},public.${PUB}`, `고친 표: ${got.join(", ") || "(없음)"}`);
   //  «바뀌었다» 의 기준을 문자열로 적지 않는다 — 식이 또 바뀌면 그 복제가 기능과 무관한 이유로 깨진다.
   //  기준은 바로 옆에 있다: 현행 식으로 만든 FINE 표를 같은 PG 가 렌더한 결과와 **완전 일치**해야 한다.
   const want = await defaultOf(`public.${FINE}`);
   chk("① public 표의 기본값이 현행 식과 같아졌다", await defaultOf(`public.${PUB}`) === want, `${await defaultOf(`public.${PUB}`)} ≠ ${want}`);
   chk("① app 표의 기본값이 현행 식과 같아졌다", await defaultOf(`app.${APP}`) === want, `${await defaultOf(`app.${APP}`)} ≠ ${want}`);
+  chk("① 워크스페이스별 앱 스키마 표의 기본값도 현행 식과 같아졌다",
+    await defaultOf(`${WS_SCHEMA}.${WS}`) === want, `${await defaultOf(`${WS_SCHEMA}.${WS}`)} ≠ ${want}`);
+  chk("① 앱 스키마 규칙에 안 맞는 스키마의 표는 옛 식이어도 건드리지 않는다",
+    await defaultOf(`${FOREIGN_SCHEMA}.${FOREIGN}`) !== want, "코어 소유가 아닌 스키마의 기본값을 바꿨다");
 
   // ② 남의 것은 건드리지 않는다 — 바깥 정책 계층의 strict 기본값은 일부러 엄격한 것이다.
   chk("② 바깥 계층의 strict 기본값은 그대로 둔다",
