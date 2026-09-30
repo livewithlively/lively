@@ -26,21 +26,22 @@ export const HUB_TOOL_LABEL: Record<HubTool, string> = {
 
 const item = (tool: HubTool, w: number, h: number): HubItem => ({ tool, w, h });
 
-/** 도구마다 «처음 붙을 때» 크기 — 숨겼다 되살리거나, 저장본에 없던 새 도구가 붙을 때 쓴다. */
+/** 도구마다 «처음 붙을 때» 크기 — 숨겼다 되살리거나, 저장본에 없던 새 도구가 붙을 때 쓴다. 기본 한 벌(HUB_DEFAULT)의 크기와 같다. */
 export const HUB_TOOL_DEFAULT: Record<HubTool, { w: number; h: number }> = {
-  tasks: { w: 1, h: 3 }, sessions: { w: 1, h: 1 }, body: { w: 2, h: 2 }, folder: { w: 1, h: 1 }, knowledge: { w: 1, h: 1 }, timeline: { w: 3, h: 1 },
+  tasks: { w: 1, h: 2 }, sessions: { w: 1, h: 1 }, body: { w: 2, h: 2 }, folder: { w: 2, h: 2 }, knowledge: { w: 1, h: 2 }, timeline: { w: 3, h: 1 },
 };
 
-/** 기본 한 벌(#4164 회의 2026-09-21) — 본문이 먼저 보이고(2×2), 태스크는 사이드바 폭으로 길게(1×3).
+/** 기본 한 벌 — 원준이 쓰던 배치를 그대로(2026-09-30 «디폴트 프로젝트 창 지금 내가 세팅한 걸로 바꿔»).
+ *  본문이 먼저 보이고(2×2) 옆에 태스크(1×2), 그 아래 지식(1×2) 옆에 폴더(2×2), 맨 밑에 타임라인 띠(3×1) = 15칸 · 5줄 · 빈틈 0.
  *  세션 목록은 «내용» 이 아니라서 기본에선 뺀다(태스크 = 세션이라 태스크에서 들어간다) — 「＋ 위젯」으로 되살린다.
- *  본문 2×2 · 태스크 1×3 · 지식 1×1 · 폴더 1×1 · 타임라인 3×1 = 12칸, 빈틈 0. */
+ *  (이전 기본, #4164 회의 2026-09-21: 본문 2×2 · 태스크 1×3 · 지식 1×1 · 폴더 1×1 · 타임라인 3×1 = 12칸.) */
 export const HUB_DEFAULT: HubLayout = {
   v: 2,
-  items: [item('body', 2, 2), item('tasks', 1, 3), item('knowledge', 1, 1), item('folder', 1, 1), item('timeline', 3, 1)],
+  items: [item('body', 2, 2), item('tasks', 1, 2), item('knowledge', 1, 2), item('folder', 2, 2), item('timeline', 3, 1)],
   hidden: ['sessions'],
 };
 
-/** 프리셋 — 편집의 «시작점». 고르면 순서·크기·숨김 한 벌이 통째로 바뀐다. 전부 12칸을 빈틈 없이 채운다. */
+/** 프리셋 — 편집의 «시작점». 고르면 순서·크기·숨김 한 벌이 통째로 바뀐다. 전부 3열을 빈틈 없이 채운다(기본 15칸, 나머지 12칸). */
 export const HUB_PRESETS: { id: string; label: string; items: HubItem[]; hidden: HubTool[] }[] = [
   { id: 'default', label: '기본', items: HUB_DEFAULT.items, hidden: HUB_DEFAULT.hidden },
   { id: 'tasks', label: '태스크 중심', hidden: [],

@@ -44,21 +44,20 @@ function withStorage(store, fn) {
   try { return fn(); } finally { if (had) globalThis.localStorage = prev; else delete globalThis.localStorage; }
 }
 
-test("#1 기본 한 벌(#4164) — 본문 2×2 · 태스크 1×3(사이드바 폭 긴 목록) · 세션은 숨김 · 12칸 빈틈 0", () => {
+test("#1 기본 한 벌(2026-09-30 원준 배치) — 본문 2×2 · 태스크 1×2 · 지식 1×2 · 폴더 2×2 · 타임라인 3×1 · 세션은 숨김 · 15칸 5줄 빈틈 0", () => {
   const d = M.HUB_DEFAULT;
   assert.deepEqual(new Set([...d.items.map((x) => x.tool), ...d.hidden]), new Set(M.HUB_TOOLS), "도구 여섯 = 보이는 것 ∪ 숨긴 것");
   assert.deepEqual(d.hidden, ["sessions"]);
-  assert.deepEqual({ w: find(d, "tasks").w, h: find(d, "tasks").h }, { w: 1, h: 3 });
-  assert.deepEqual({ w: find(d, "body").w, h: find(d, "body").h }, { w: 2, h: 2 });
-  assert.equal(cells(d.items), 12);
-  assert.deepEqual(placeDense(d.items), { rows: 4, holes: 0 });
+  assert.deepEqual(d.items.map((x) => [x.tool, x.w, x.h]), [["body", 2, 2], ["tasks", 1, 2], ["knowledge", 1, 2], ["folder", 2, 2], ["timeline", 3, 1]]);
+  assert.equal(cells(d.items), 15);
+  assert.deepEqual(placeDense(d.items), { rows: 5, holes: 0 });
 });
 
 test("#2~#5 정규화 — 모르는 도구 버림 · 모르는 크기는 그 도구의 기본 크기 · 중복은 처음 것 · 빠진 도구는 끝에(기본이 숨긴 세션만 숨김)", () => {
   const l = M.normalizeHubLayout({ items: [{ tool: "timeline", w: 2, h: 4 }, { tool: "ghost", w: 1, h: 1 }, { tool: "tasks", w: 9, h: 1 }, { tool: "tasks", w: 1, h: 1 }] });
-  assert.deepEqual(l.items.slice(0, 2), [{ tool: "timeline", w: 2, h: 4 }, { tool: "tasks", w: 1, h: 3 }]);
+  assert.deepEqual(l.items.slice(0, 2), [{ tool: "timeline", w: 2, h: 4 }, { tool: "tasks", w: 1, h: 2 }]);
   assert.deepEqual(l.items.slice(2).map((x) => x.tool), ["body", "folder", "knowledge"]);
-  assert.deepEqual(l.items.slice(2).map((x) => [x.w, x.h]), [[2, 2], [1, 1], [1, 1]], "빠진 도구는 기본 크기");
+  assert.deepEqual(l.items.slice(2).map((x) => [x.w, x.h]), [[2, 2], [2, 2], [1, 2]], "빠진 도구는 기본 크기");
   assert.deepEqual(l.hidden, ["sessions"], "저장본에 없는 세션은 기본처럼 숨김");
 });
 
@@ -70,7 +69,7 @@ test("#2b 옛 저장본(v1 S·M·L·XL) — 칸 수 그대로 옮기고, 거기 
     ["tasks", 2, 2], ["sessions", 1, 1], ["body", 1, 1], ["folder", 2, 1], ["knowledge", 1, 1], ["timeline", 3, 1]]);
   assert.deepEqual(l.hidden, []);
   assert.equal(l.v, 2);
-  assert.equal(find(M.normalizeHubLayout({ items: [{ tool: "tasks", size: "huge" }] }), "tasks").h, 3, "모르는 옛 크기는 기본 크기");
+  assert.equal(find(M.normalizeHubLayout({ items: [{ tool: "tasks", size: "huge" }] }), "tasks").h, 2, "모르는 옛 크기는 기본 크기");
 });
 
 test("#6~#7 정규화 — 숨김의 모르는 도구는 버리고, 보이는 목록에 있는 도구의 숨김은 무시한다", () => {
@@ -110,7 +109,7 @@ test("#13 크기(#4164) — 가로 1~3 × 세로 1~6 안의 아무 조합이나 
   for (const [w, h] of [[0, 1], [4, 1], [1, 0], [1, 7], [1.5, 2], ["2", 2]]) {
     assert.deepEqual(M.resizeHubItem(base, "tasks", w, h), base, "범위 밖 " + w + "×" + h);
   }
-  assert.deepEqual([find(base, "tasks").w, find(base, "tasks").h], [1, 3]);
+  assert.deepEqual([find(base, "tasks").w, find(base, "tasks").h], [1, 2]);
 });
 
 test("#14~#15 숨기기·되살리기 — 두 번 숨기면 같은 객체 · 모르는 도구는 그대로 · 되살리면 그 도구의 기본 크기로 끝에", () => {
@@ -126,13 +125,13 @@ test("#14~#15 숨기기·되살리기 — 두 번 숨기면 같은 객체 · 모
   assert.deepEqual(shown.items[shown.items.length - 1], { tool: "sessions", w: 1, h: 1 });
 });
 
-test("#16~#17 프리셋 — 넷 다 도구 여섯을 덮고 12칸 빈틈 0 · 적용·판별 왕복 · 크기 하나 달라도 아니다 · 모르는 id 는 기본", () => {
+test("#16~#17 프리셋 — 넷 다 도구 여섯을 덮고 3열을 빈틈 없이(기본 15칸 · 나머지 12칸) · 적용·판별 왕복 · 크기 하나 달라도 아니다 · 모르는 id 는 기본", () => {
   assert.equal(M.HUB_PRESETS.length, 4);
   const ids = new Set();
   for (const p of M.HUB_PRESETS) {
     ids.add(p.id);
     assert.deepEqual(new Set([...p.items.map((x) => x.tool), ...p.hidden]), new Set(M.HUB_TOOLS), p.id);
-    assert.equal(cells(p.items), 12, p.id + " 12칸");
+    assert.equal(cells(p.items), p.id === "default" ? 15 : 12, p.id + " 칸 수");
     assert.equal(placeDense(p.items).holes, 0, p.id + " 빈틈 0");
     const applied = M.applyHubPreset(p.id);
     assert.deepEqual([...applied.hidden].sort(), [...p.hidden].sort());
