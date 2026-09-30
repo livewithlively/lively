@@ -221,10 +221,10 @@ t("numbers: 원문에 있는 다른 값으로 바꿔치기하면 violation(반�
 t("numbers: 날짜 사이 바꿔치기는 violation(반례 F)", () => {
   const before = doc(CLEAN_TITLE, `${LEAD}\n\n2026-09-17 배포, 2026-09-20 롤백, 2026-09-17 결정.\n\n${FILLER}`);
   const after = doc(CLEAN_TITLE, `${LEAD}\n\n2026-09-17 배포, 2026-09-17 롤백, 2026-09-20 결정.\n\n${FILLER}`);
-  // 다중집합이 같아지는 교환이라 개수로는 못 잡는다 — 이런 치환은 의미 판정의 몫이다. 여기선 «개수가 바뀐» 경우를 본다.
+  // 다중집합이 같아지는 맞교환(after)은 개수로 못 잡는다 — 그건 의미 판정의 몫이라 여기선 단언하지 않는다.
+  void after;
   const after2 = doc(CLEAN_TITLE, `${LEAD}\n\n2026-09-17 배포, 2026-09-17 롤백, 2026-09-17 결정.\n\n${FILLER}`);
   assert.ok(hasKind(checkRewrite(before, after2, fmt), "invariant:numbers"));
-  assert.ok(!hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
 });
 t("numbers: 새 첫 줄에 원문에 없던 값을 쓰면 여전히 violation", () => {
   const before = doc(CLEAN_TITLE, `${LEAD}\n\n상한은 40 이다.\n\n${FILLER}`);
@@ -405,5 +405,31 @@ t("numbers: «2026년 9월 17일» 표기는 «2026-09-17» 과 같은 날로 �
   const b = doc("배포 규칙", "2026년 9월 17일 기준 결론이다.");
   assert.ok(!checkRewrite(a, b, fmt).violations.some((v) => v.kind === "invariant:numbers"));
   assert.ok(checkRewrite(a, doc("배포 규칙", "2026년 9월 18일 기준 결론이다."), fmt).violations.some((v) => v.kind === "invariant:numbers"));
+});
+// 리뷰 반례 — 허용 범위(첫 줄·제목)를 이용한 바꿔치기가 통과하면 안 된다.
+t("허용 범위 악용: 새 첫 줄에 두 값을 적고 본문에서 30→3 치환하면 violation", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n타임아웃은 30초다. 재시도는 3회, 대기는 30초다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `30초 타임아웃, 3회 재시도가 기준이다.\n\n${LEAD}\n\n타임아웃은 30초다. 재시도는 3회, 대기는 3초다.\n\n${FILLER}`);
+  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
+});
+t("허용 범위 악용: 원문 첫 문단 안의 치환은 첫 줄을 새로 쓰지 않아도 violation", () => {
+  const before = doc(CLEAN_TITLE, `재시도는 3회, 대기는 30초, 타임아웃은 30초, 상한은 5회다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `재시도는 3회, 대기는 3초, 타임아웃은 30초, 상한은 5회다.\n\n${FILLER}`);
+  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
+});
+t("허용 범위 악용: 첫 줄에 두 코드를 적고 본문에서 retry_max→retry_min 치환하면 violation", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n기본은 \`retry_max\`, 상한도 \`retry_max\`, 하한은 \`retry_min\` 이다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `\`retry_max\`·\`retry_min\` 두 키를 쓴다.\n\n${LEAD}\n\n기본은 \`retry_min\`, 상한도 \`retry_max\`, 하한은 \`retry_min\` 이다.\n\n${FILLER}`);
+  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:inlineCode"));
+});
+t("허용 범위 악용: 첫 줄에 날짜 범위를 적고 본문 날짜를 바꾸면 violation", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n2026-09-17 배포, 2026-09-20 롤백.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `2026-09-17~2026-09-20 사이 일이다.\n\n${LEAD}\n\n2026-09-20 배포, 2026-09-20 롤백.\n\n${FILLER}`);
+  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
+});
+t("허용은 개수까지만: 첫 줄에 한 번 되풀이한 값이 본문에서 두 번 늘면 violation", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n상한은 40 이다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `상한은 40 이다.\n\n${LEAD}\n\n상한은 40 이고 기본도 40 이다.\n\n${FILLER}`);
+  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
 });
 console.log(`writing-rewrite-gate: ${pass} passed`);

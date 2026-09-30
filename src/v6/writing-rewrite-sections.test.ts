@@ -277,4 +277,11 @@ t("sectionHeadingOk: 헤딩 수준이 바뀌면 거부", () => {
   assert.equal(sectionHeadingOk("## 배경", "배경은 이렇다.\n## 배경"), false);
 });
 t("sectionHeadingOk: 헤딩 없는 조각은 검사하지 않는다", () => assert.equal(sectionHeadingOk(null, "아무 글"), true));
+t("checkInvariants: 중간 조각(allowLeadRepeat=false)은 첫 줄 반복 허용이 없다", () => {
+  const before = { title: "", body_md: "## 설정\n대기는 30초, 재시도는 3회다." };
+  const after = { title: "", body_md: "## 설정\n30초·3회 기준.\n대기는 30초, 재시도는 3회다." };
+  assert.ok(checkInvariants(before, after, { requireTitle: false, allowLeadRepeat: false }).some((v) => v.kind === "invariant:numbers"));
+  assert.ok(!checkInvariants(before, after, { requireTitle: false }).some((v) => v.kind === "invariant:numbers"));
+});
+t("sectionHeadingOk: 재작성본 앞의 빈 줄은 무시한다", () => assert.equal(sectionHeadingOk("## 배경", "\n\n## 배경\n본문"), true));
 console.log(`writing-rewrite-sections: ${pass} passed`);

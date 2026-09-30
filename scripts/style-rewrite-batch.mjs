@@ -186,8 +186,9 @@ function describeViolation(v) {
   const kind = String(v.kind ?? "");
   if (kind.startsWith("invariant:")) {
     const field = FIELD_WORD[kind.slice(10)] ?? kind.slice(10);
-    const lost = v.missing ?? [];
-    const added = v.added ?? [];
+    const clip = (x) => { const t = String(x).replace(/\s+/g, " "); return t.length > 120 ? `${t.slice(0, 120)}…` : t; };
+    const lost = (v.missing ?? []).map(clip);
+    const added = (v.added ?? []).map(clip);
     const parts = [];
     if (lost.length) parts.push(`원문에 있던 ${field} 가 사라졌다: ${lost.join(", ")} — 원문 표기 그대로 되살려라(제목에서 뺀 값이면 본문 첫 줄로 옮겨라)`);
     if (added.length) parts.push(`원문에 없던 ${field} 가 생겼다: ${added.join(", ")} — 새 값·번호·백틱을 만들지 마라`);
@@ -260,6 +261,8 @@ async function judgeMeaning(before, after) {
 async function rewriteLoop(src, findings, guide, check, part) {
   const attempts = [];
   let feedback = null;
+  // 보고용 마지막 후보 — 프롬프트에 되돌리는 prev 와 따로 둔다(의미 탈락 뒤엔 prev 를 비우지만 사람은 그 후보를 봐야 한다).
+  let lastCand = null;
   for (let i = 0; i < args.attempts; i++) {
     const raw = await runLlm(rewritePrompt(src, findings, guide, feedback, part));
     const out = parseJsonLoose(raw, "{");
@@ -270,6 +273,7 @@ async function rewriteLoop(src, findings, guide, check, part) {
     }
     // 중간 조각은 제목을 다루지 않는다 — 모델이 무엇을 내든 원문 조각의 제목(빈 값)으로 되돌린다.
     const cand = { title: part && part.index > 0 ? src.title : out.title.trim(), body_md: out.body_md };
+    lastCand = cand;
     const violations = check(cand);
     if (violations.length) {
       attempts.push({ reason: "check", violations });
@@ -290,7 +294,7 @@ async function rewriteLoop(src, findings, guide, check, part) {
     attempts.push({ reason: "pass" });
     return { after: cand, attempts, feedback: null };
   }
-  return { after: null, attempts, feedback };
+  return { after: null, attempts, feedback, lastCand };
 }
 
 // 조각 크기 — 통째 재작성 한도의 절반. 한 조각이 판정 모델이 한 번에 대조하기 좋은 크기여야 한다.
@@ -313,12 +317,15 @@ async function processSections(k, el, fmt, common) {
     const src = { title: i === 0 ? (k.title ?? "") : "", body_md: sec.text };
     const part = { index: i, total: sections.length };
     const check = (cand) => {
-      const v = checkInvariants(src, cand, { requireTitle: i === 0 });
+      const v = checkInvariants(src, cand, { requireTitle: i === 0, allowLeadRepeat: i === 0 });
+      // 조각마다 실제로 나아졌는지 본다 — 규칙은 문서 단위로 하나로 합쳐 세어져서, 문서 전체로만 보면 조각 하나가 남아도 «개선 없음» 이 된다.
+      const left = sectionFindings(cand.title, cand.body_md, i, fmt).length;
+      if (left >= findings.length) v.push({ kind: "no_change", detail: `이 조각의 형식 위반이 줄지 않았다(${findings.length}건 → ${left}건). 고칠 곳을 실제로 고쳐라` });
       if (i > 0 && !sectionHeadingOk(sec.heading, cand.body_md)) v.push({ kind: "heading", detail: `조각은 원문과 같은 수준의 헤딩으로 시작해야 한다: ${sec.heading}` });
       return v;
     };
     const { after, attempts } = await rewriteLoop(src, findings, fmt.guide_md, check, part);
-    if (!after) { parts.push(sec.text); report.push({ index: i, heading: sec.heading, status: "kept", attempts }); continue; }
+    if (!after) { parts.push(sec.text); report.push({ index: i, heading: sec.heading, status: "kept", attempts: attempts.map((a) => a.reason) }); continue; }
     // 조각 끝 줄바꿈을 원문대로 맞춘다 — 모델이 끝 줄바꿈을 빼면 다음 조각의 헤딩이 앞 줄에 붙는다.
     const trail = sec.text.match(/\n*$/)[0];
     parts.push(after.body_md.replace(/\n*$/, "") + trail);
@@ -335,9 +342,8 @@ async function processSections(k, el, fmt, common) {
   const full = checkRewrite(src, after, fmt).violations;
   const blocking = full.filter((v) => !v.kind.startsWith("lint:"));
   if (blocking.length) return { ...withAfter, ...dryBody, status: "rejected", reason: "check", violations: blocking };
-  // 남은 규칙이 줄지 않았으면 고친 것이 없다 — 반영하면 다음 배치가 같은 문서를 또 집어 같은 비용을 반복한다.
+  // 반영되는 조각은 전부 조각 단위로 위반이 줄었다(조각 check) — 문서는 그만큼 나아졌다. 남은 규칙은 partial 로 알린다.
   const remaining = full.filter((v) => v.kind.startsWith("lint:")).map((v) => v.kind.slice(5));
-  if (remaining.length >= rules.length) return { ...withAfter, ...dryBody, status: "rejected", reason: "no_improvement", remaining };
   const extra = { ...(remaining.length ? { partial: true, remaining } : {}), findings_before: rules.length };
   if (!args.apply) return { ...withAfter, ...dryBody, status: "passed_dry", ...extra };
   return { ...(await saveRewrite(k.name, k, after, rules, withAfter)), ...extra };
@@ -376,11 +382,11 @@ async function processOne(name, fmt) {
 
   if (el.mode === "sections") return processSections(k, el, fmt, common);
   const src = { title: k.title, body_md: k.body_md };
-  const { after, attempts, feedback } = await rewriteLoop(src, el.findings, fmt.guide_md,
+  const { after, attempts, lastCand } = await rewriteLoop(src, el.findings, fmt.guide_md,
     (cand) => checkRewrite(src, cand, fmt).violations, null);
   const last = attempts[attempts.length - 1] ?? {};
   if (!after) {
-    const tail = { attempts, ...(feedback?.prev && !args.apply ? { after_title: feedback.prev.title, after_body: feedback.prev.body_md } : {}) };
+    const tail = { attempts, ...(lastCand && !args.apply ? { after_title: lastCand.title, after_body: lastCand.body_md } : {}) };
     return { ...common, rules, status: "rejected", reason: last.reason ?? "parse", ...(last.violations ? { violations: last.violations } : {}), ...(last.meaning ? { meaning: last.meaning } : {}), ...tail };
   }
   const withAfter = { ...common, rules, attempts, after_title: after.title, chars_after: chars(after.body_md) };
@@ -431,6 +437,7 @@ async function runOne(name) {
 // 호출 한 번이 수 분이라 건 단위로 병렬로 돈다. 같은 지식을 두 번 집지 않도록 목록을 한 번씩만 꺼낸다.
 const queue = [...names];
 await Promise.all(Array.from({ length: Math.min(args.concurrency, queue.length) }, async () => {
-  for (let name = queue.shift(); name !== undefined && !stopped; name = queue.shift()) await runOne(name);
+  // 멈춘 뒤엔 꺼내지도 않는다 — 꺼내고 버리면 다시 돌릴 때 그 이름이 빠진다.
+  while (!stopped && queue.length) await runOne(queue.shift());
 }));
 console.log((Object.entries(counts).map(([s, n]) => `${s}=${n}`).join(" ") || "처리 0건") + ` · LLM 호출 ${totalCalls}회`);
