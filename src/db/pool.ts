@@ -41,7 +41,7 @@ export async function getPool(source: string): Promise<pg.Pool> {
     const pool = new pg.Pool({ ...poolCfg, max: 10 });
     // 외부 리플리카가 유휴 연결을 끊어도(재시작·프록시 유휴 타임아웃) 게이트웨이가 죽지 않게 — 리스너가 없으면
     //  pg-pool 의 'error' emit 이 throw 가 된다(#4501, client.ts rawPool 과 같은 부류). 그 연결은 풀이 이미 버렸다.
-    pool.on("error", (err: Error & { code?: string }) => logger.warn({ source, code: err.code, msg: err.message }, "db source 풀 유휴 연결 오류(연결을 버린다)"));
+    pool.on("error", (err) => logger.warn({ source, err }, "db source 풀 유휴 연결 오류(연결을 버린다)"));   // err 로 넘긴다 — msg 키는 pino 의 메시지 칸과 겹친다
     return pool;
   })();
   pools.set(key, created);

@@ -42,6 +42,7 @@ const fieldCreateV6: Capability = {
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
+    assertNoContentSecrets(input);   // #4501 평문 시크릿 차단(필드 이름·선택지)
     const writeCtx = { actor: actorOf(user, ctx), source: ctx?.source ?? "web" };
     try {
       return { field: await createField(input.projectId, { field_type: input.field_type, name: input.name ?? input.field_type, config: input.config, list_id: input.list_id ?? null }, writeCtx) };
@@ -68,6 +69,7 @@ const fieldUpdateV6: Capability = {
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
+    assertNoContentSecrets(input);   // #4501 평문 시크릿 차단(필드 이름·선택지)
     const { id, ...patch } = input;
     const writeCtx = { actor: actorOf(user, ctx), source: ctx?.source ?? "web" };
     try { return { field: await updateField(id, patch, writeCtx) }; }

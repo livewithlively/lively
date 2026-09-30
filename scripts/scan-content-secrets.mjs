@@ -32,6 +32,7 @@ export const SCAN_TARGETS = [
   { table: "project", pk: "id", cols: ["name", "description"] },
   { table: "task_comment", pk: "id", cols: ["body"] },
   { table: "task_checklist_item", pk: "id", cols: ["name"] },
+  { table: "knowledge_comment", pk: "id", cols: ["body"] },
 ];
 
 // 한 문자열 값에 시크릿 흔적이 있는지 — hard(저장거부 대상) + mask(마스킹 대상) 둘 다 검사.

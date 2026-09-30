@@ -88,6 +88,7 @@ const taskTagsV6: Capability = {
       } }],
   },
   handler: async (input: TaskTagsV6Input, _user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501
     await assertTaskVisible(input.id, ctx);
     if (input.remove) {
       if (input.tag_id == null) throw new HttpError(400, "tag_id 가 필요합니다");
@@ -339,6 +340,7 @@ const tagUpdateV6: Capability = {
       } }],
   },
   handler: async (input: TagUpdateV6Input) => {
+    assertNoContentSecrets(input);   // #4501
     try { return { tag: await updateTag(input.id, { name: input.name, color: input.color }) }; }
     catch (e: any) { throw new HttpError(400, e?.message ?? "태그 수정 실패"); }
   },
