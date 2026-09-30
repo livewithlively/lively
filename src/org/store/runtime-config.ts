@@ -344,9 +344,9 @@ export async function updateRuntimeConfig(
   }
   // 서술 형식 — 위와 같은 규칙: 안 건드린 저장은 DB 원본을 그대로 둔다. 건드리면 **DB 원본** 위에 patch 를 얹는다
   //  (resolved 를 바닥으로 쓰면 기본값 전부가 원본에 굳는다).
+  //  읽기 실패를 삼키지 않는다 — 빈 값으로 접으면 이 저장이 조직의 기존 형식을 {} 로 덮어 지운다.
   const wfRaw = await itemsPool.query(`SELECT writing_format FROM org_runtime_config WHERE id=1`)
-    .then((r) => (r.rows[0] as { writing_format?: unknown } | undefined)?.writing_format ?? {})
-    .catch(() => ({}));
+    .then((r) => (r.rows[0] as { writing_format?: unknown } | undefined)?.writing_format ?? {});
   const writingFormat: unknown = patch.writing_format !== undefined ? mergeWritingFormatRaw(wfRaw, patch.writing_format) : wfRaw;
   // 세션 공유(#905 C1) — storage_policy 와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**(before 되쓰기 금지).
   //  건드리면 before(resolved) 위에 patch 를 얹어 정규화(잡값·미지원 하네스·범위초과 방어).

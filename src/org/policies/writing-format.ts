@@ -5,7 +5,7 @@
 //  구성원의 세션에 검색·주입되는 컨텍스트라, 첫 줄에 결론이 없거나 작성 세션 맥락이 남으면 읽는 쪽이 비용을 낸다.
 //
 // 조직마다 다르게 둘 수 있어야 하는 이유: 문체(평서/존댓말)·제목 길이·금지어는 조직의 글쓰기 관행이다.
-//  제품은 기본값만 제안하고, 조직이 관리탭(org_runtime_update writing_format)에서 덮는다.
+//  제품은 기본값만 제안하고, 조직이 org_runtime_update 의 writing_format 으로 덮는다.
 //
 // 기본 enabled=false 인 이유: 켜면 knowledge_save 응답에 형식 위반 안내가 실린다. 저장을 막지는 않지만
 //  안내를 받은 에이전트는 고치려 들기 때문에, 조직이 고르기 전에 모든 워크스페이스에서 행동이 바뀌면 안 된다.
@@ -22,8 +22,12 @@ export const WRITING_RULE_IDS = [
 ] as const;
 export type WritingRuleId = (typeof WRITING_RULE_IDS)[number];
 
-/** 규칙 수준. 저장을 보류시키는 수준(pending)은 인입 게이트와 묶이는 단계에서 추가한다 — 지금은 안내만. */
-export const WRITING_RULE_LEVELS = ["off", "warn"] as const;
+/**
+ * 규칙 수준. warn = 저장하고 안내만 · reject = 에이전트 저장을 거부하고 고칠 곳을 돌려준다.
+ *  reject 가 필요한 이유: 안내는 받는 쪽이 따를 때만 효과가 있다. 형식을 모르는 옛 클라이언트·지침을 무시하는
+ *  에이전트의 글도 저장소에 들어오는 순간 같은 모양이어야 하므로, 서버가 받는 자리에서 막을 수단이 있어야 한다.
+ */
+export const WRITING_RULE_LEVELS = ["off", "warn", "reject"] as const;
 export type WritingRuleLevel = (typeof WRITING_RULE_LEVELS)[number];
 
 export type WritingRegister = "plain" | "polite" | "any";
@@ -75,8 +79,9 @@ export const DEFAULT_WRITING_FORMAT: WritingFormat = {
   guide_md: DEFAULT_WRITING_GUIDE_MD,
 };
 
-// 상한 — 오타로 천문학적 값이 들어와 규칙이 사실상 꺼지는 것을 막는다. 끄려면 rules 에서 off 로 명시한다.
-const LIMIT_BOUNDS: Record<keyof WritingFormatLimits, [number, number]> = {
+// 상한 — 관리 API 스키마도 이 표를 읽는다(범위를 두 곳에 두면 API 는 거부하고 저장소는 다르게 클램프한다).
+//  오타로 천문학적 값이 들어와 규칙이 사실상 꺼지는 것을 막는다. 끄려면 rules 에서 off 로 명시한다.
+export const WRITING_LIMIT_BOUNDS: Readonly<Record<keyof WritingFormatLimits, readonly [number, number]>> = {
   title_max_chars: [10, 200],
   body_max_chars: [500, 200_000],
   bold_max: [0, 500],
@@ -90,7 +95,7 @@ const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 
 
 function cleanLimit(key: keyof WritingFormatLimits, v: unknown, fallback: number): number {
   if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
-  const [lo, hi] = LIMIT_BOUNDS[key];
+  const [lo, hi] = WRITING_LIMIT_BOUNDS[key];
   return Math.min(hi, Math.max(lo, Math.round(v)));
 }
 
@@ -156,7 +161,7 @@ export function mergeWritingFormatRaw(currentRaw: unknown, patch: WritingFormatP
   if (patch.limits !== undefined) {
     const limCur = isObj(cur.limits) ? cur.limits : {};
     const lim: Record<string, number> = {};
-    for (const k of Object.keys(LIMIT_BOUNDS) as Array<keyof WritingFormatLimits>) {
+    for (const k of Object.keys(WRITING_LIMIT_BOUNDS) as Array<keyof WritingFormatLimits>) {
       const v = k in (patch.limits ?? {}) ? patch.limits[k] : limCur[k];
       if (typeof v === "number" && Number.isFinite(v)) lim[k] = cleanLimit(k, v, DEFAULT_WRITING_FORMAT.limits[k]);
     }

@@ -44,6 +44,7 @@
   "dist/org/policies/knob.js",
   "dist/org/policies/runtime-loaders.js",
   "dist/org/policies/storage-policy.js",
+  "dist/org/policies/writing-format.js",
   "dist/org/store/audit.js",
   "dist/org/store/members.js",
   "dist/org/store/profile.js",

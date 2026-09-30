@@ -1,5 +1,5 @@
 // delivery ▸ runtime-config — 런타임 설정(훅 on/off·work-roots·너지·정책·임베딩) 조회/수정.
-import { WRITING_RULE_IDS, WRITING_RULE_LEVELS, type WritingFormatPatch } from "../../org/policies/writing-format.js";
+import { WRITING_RULE_IDS, WRITING_RULE_LEVELS, WRITING_LIMIT_BOUNDS, type WritingFormatPatch } from "../../org/policies/writing-format.js";
 import type { Capability, CapabilityCtx } from "../types.js";
 import { z } from "zod";
 import { HttpError } from "../rest-util.js";
@@ -729,10 +729,10 @@ export const runtimeConfigCapabilities: Capability[] = [
         enabled: z.boolean().optional().describe("켜면 knowledge_save 응답에 형식 위반 안내(style)가 실린다. 저장은 막지 않는다. 기본 꺼짐"),
         register: z.enum(["plain", "polite", "any"]).optional().describe("문체 — plain=평서 '~다'체 · polite='~습니다'체 · any=문체 검사 안 함"),
         limits: z.object({
-          title_max_chars: z.number().int().min(10).max(200).optional().describe("제목 상한(글자). 기본 60"),
-          body_max_chars: z.number().int().min(500).max(200_000).optional().describe("본문 권장 상한(글자). 기본 8000 — 넘으면 나누라고 안내"),
-          bold_max: z.number().int().min(0).max(500).optional().describe("문서당 볼드 개수 상한. 기본 10"),
-          symbol_max: z.number().int().min(0).max(500).optional().describe("문서당 강조 기호(🔴⚠✅ 등) 상한. 기본 3"),
+          title_max_chars: z.number().int().min(WRITING_LIMIT_BOUNDS.title_max_chars[0]).max(WRITING_LIMIT_BOUNDS.title_max_chars[1]).nullable().optional().describe("제목 상한(글자). 기본 60. null=기본값으로"),
+          body_max_chars: z.number().int().min(WRITING_LIMIT_BOUNDS.body_max_chars[0]).max(WRITING_LIMIT_BOUNDS.body_max_chars[1]).nullable().optional().describe("본문 권장 상한(글자). 기본 8000 — 넘으면 나누라고 안내"),
+          bold_max: z.number().int().min(WRITING_LIMIT_BOUNDS.bold_max[0]).max(WRITING_LIMIT_BOUNDS.bold_max[1]).nullable().optional().describe("문서당 볼드 개수 상한. 기본 10"),
+          symbol_max: z.number().int().min(WRITING_LIMIT_BOUNDS.symbol_max[0]).max(WRITING_LIMIT_BOUNDS.symbol_max[1]).nullable().optional().describe("문서당 강조 기호(🔴⚠✅ 등) 상한. 기본 3"),
         }).optional(),
         forbid_terms: z.array(z.string()).optional().describe("서술에 쓰지 않을 말(대소문자 무시 부분일치) — 전체 교체. 예: 작성 도구 이름·개인 호칭"),
         rules: z.record(z.enum(WRITING_RULE_IDS), z.enum(WRITING_RULE_LEVELS)).optional().describe("규칙별 수준(off|warn) — 기존 값과 병합. 규칙 id: " + WRITING_RULE_IDS.join(", ")),

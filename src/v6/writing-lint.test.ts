@@ -280,12 +280,16 @@ t("relative_time '방금'은 대상 아님", () =>
   assert.ok(!has("relative_time", CLEAN_TITLE, `${CLEAN_BODY}
 
 방금 만든 파일만 지운다.`)));
-for (const q of ['"오늘"', "“오늘”", "「오늘」", "『오늘』", "'오늘'"]) {
+for (const q of ['"오늘"', "“오늘”", "‘오늘’", "「오늘」", "『오늘』"]) {
   t(`relative_time 따옴표 ${q} 안은 무시`, () =>
     assert.ok(!has("relative_time", CLEAN_TITLE, `${CLEAN_BODY}
 
 ${q} 같은 표현을 쓰지 않는다.`)));
 }
+t("relative_time 영문 아포스트로피 사이는 따옴표로 보지 않는다", () =>
+  assert.ok(has("relative_time", CLEAN_TITLE, `${CLEAN_BODY}
+
+don't 오늘 isn't 이다.`)));
 t("relative_time 따옴표 밖이면 같은 줄에 인용이 있어도 발생", () =>
   assert.ok(has("relative_time", CLEAN_TITLE, `${CLEAN_BODY}
 
@@ -334,7 +338,7 @@ t("nested_paren 나란한 괄호 둘은 통과", () =>
 t("nested_paren 인라인 코드 안은 무시", () =>
   assert.ok(!has("nested_paren", CLEAN_TITLE, `${CLEAN_BODY}\n\n호출은 \`f(g(x))\` 로 한다.`)));
 
-for (const w of ["아직", "진행중", "대기중", "배포대기", "머지대기", "미배포", "미머지", "예정"]) {
+for (const w of ["아직", "진행중", "대기중", "배포대기", "머지대기", "미배포", "미머지", "예정이다", "예정입니다", "예정임"]) {
   t(`undated_status '${w}' 날짜 없으면 발생`, () =>
     assert.ok(has("undated_status", CLEAN_TITLE, `${CLEAN_BODY}\n\n이 변경은 ${w} 상태다.`)));
 }
@@ -354,7 +358,8 @@ t("undated_status 인용 줄은 통과", () =>
 const banner = (line: string) => `${CLEAN_BODY}\n${line}\n${filler(3).join("\n")}`;
 t("revision_banner > 로 시작하는 UPDATE 발생", () => assert.ok(has("revision_banner", CLEAN_TITLE, banner("> UPDATE: 규칙을 바꿨다."))));
 t("revision_banner # 로 시작하는 정정 발생", () => assert.ok(has("revision_banner", CLEAN_TITLE, banner("## 정정 안내"))));
-t("revision_banner ** 로 시작하는 갱신 발생", () => assert.ok(has("revision_banner", CLEAN_TITLE, banner("**갱신**: 규칙을 바꿨다."))));
+t("revision_banner ** 로 시작하는 정정 발생", () => assert.ok(has("revision_banner", CLEAN_TITLE, banner("**정정**: 규칙을 바꿨다."))));
+t("revision_banner 헤딩의 갱신은 대상 아님", () => assert.ok(!has("revision_banner", CLEAN_TITLE, banner("## 토큰 갱신 절차"))));
 t("revision_banner ⚠ 로 시작하는 폐기 발생", () => assert.ok(has("revision_banner", CLEAN_TITLE, banner("⚠ 이 규칙은 폐기했다."))));
 t("revision_banner 🔴 로 시작하는 방향 전환 발생", () => assert.ok(has("revision_banner", CLEAN_TITLE, banner("🔴 방향 전환을 했다."))));
 t("revision_banner 날짜 포함 줄의 '더 이상 유효하지' 발생", () =>
@@ -440,4 +445,32 @@ t("register_mix 표 줄은 제외", () =>
   assert.ok(!has("register_mix", CLEAN_TITLE, mix(POLITE(3).map((l) => `| ${l} |`), PLAIN(2)))));
 t("register_mix plain 문서에 평서만이면 통과", () => assert.ok(!has("register_mix", CLEAN_TITLE, mix(PLAIN(10)))));
 
+t("undated_status 명사 '예정'만으로는 대상 아님", () =>
+  assert.ok(!has("undated_status", CLEAN_TITLE, `${CLEAN_BODY}
+
+예정된 작업 목록을 정리한다.`)));
+t("relative_time '안내일정'의 내일은 대상 아님", () =>
+  assert.ok(!has("relative_time", CLEAN_TITLE, `${CLEAN_BODY}
+
+안내일정을 공지한다.`)));
+for (const [label, line] of [["여는 따옴표", "“".repeat(200_000)], ["여는 낫표", "「".repeat(200_000)], ["닫는 괄호 런", ")".repeat(199_999) + "가"], ["강조 런", "*".repeat(199_999) + "가"], ["혼합", "\"'「『“".repeat(40_000)]] as const) {
+  t(`성능: 200k 한 줄(${label})도 1초 안에 끝난다`, () => {
+    const t0 = Date.now();
+    lint(CLEAN_TITLE, `${CLEAN_BODY}
+
+${line}`);
+    const ms = Date.now() - t0;
+    assert.ok(ms < 1000, `${ms}ms`);
+  });
+}
+t("reject 수준 규칙의 finding 은 level=reject, 나머지는 warn", () => {
+  const f = lint("🔴 배포 규칙 (2026-09-23)", CLEAN_BODY, on({ rules: { title_date: "reject" } }));
+  assert.equal(f.find((x) => x.rule === "title_date")?.level, "reject");
+  assert.equal(f.find((x) => x.rule === "title_leading_emoji")?.level, "warn");
+});
+t("resolve 는 reject 수준을 보존한다(rules·default_level)", () => {
+  const f = resolveWritingFormat({ rules: { local_path: "reject" }, default_level: "reject" });
+  assert.equal(f.rules.local_path, "reject");
+  assert.equal(f.default_level, "reject");
+});
 console.log(`writing-lint: ${pass} passed`);
