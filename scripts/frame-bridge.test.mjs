@@ -25,7 +25,7 @@ globalThis.window = {
 const dispatch = (ev) => { for (const fn of [...listeners]) fn(ev); };
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
-const { handleBridgeMessage, attachFrameBridge, browserDeps, nsKey, safeDownloadName, RV_VALUE_MAX, RV_KEY_MAX } =
+const { handleBridgeMessage, attachFrameBridge, browserDeps, nsKey, safeDownloadName, RV_VALUE_MAX, RV_KEY_MAX, cleanPos, withScrollKeeper, POS_STORE_KEY, POS_KEEP, RV_POS_MAX } =
   await import(join(root, "public/app/lib/frame-bridge.js"));
 
 /** 가짜 의존 — 무엇이 불렸는지 남긴다(부작용으로 단언한다). */
@@ -163,7 +163,7 @@ const msg = (op, rest = {}) => ({ lv: "rv", op, ...rest });
   const e = V.indexOf("} else if (/\\.(md|markdown)$/i.test(p2)) {", s);
   assert.ok(s >= 0 && e > s, "시안 갈래를 못 찾았다");
   const page = V.slice(s, e);
-  ok(page.includes("htmlFrame(txt,"), "25a 시안은 공용 렌더러 htmlFrame 으로 그린다(자르지 않는다)");
+  ok(page.includes("htmlFrame(withScrollKeeper(txt),"), "25a 시안은 공용 렌더러 htmlFrame 으로 그린다(자르지 않는다 · #4523 보던 자리 스크립트를 붙여)");
   ok(!page.includes("400_000") && !page.includes("sandbox: ''"), "25b 시안 갈래에 40만 자 절단과 sandbox='' 가 없다");
   ok(page.includes("attachFrameBridge(f, `${ctx.id}:${p2}`)"), "25c 프레임에 다리를 걸고 이름 공간은 프로젝트·경로다");
   ok(page.includes("unbridge();") && V.includes("let unbridge: () => void"), "25d 다른 파일을 펼 때 옛 다리를 뗀다");
@@ -173,6 +173,77 @@ const msg = (op, rest = {}) => ({ lv: "rv", op, ...rest });
   ok(FP.includes("bridgeNs?: string") && FP.includes("attachFrameBridge(f, host.bridgeNs)"), "26b 공용 렌더러도 bridgeNs 를 받으면 같은 다리를 건다");
   const FB = read("web/lib/frame-bridge.ts");
   ok(FB.includes("ev.source !== frame.contentWindow") && FB.includes("postMessage(reply, '*')"), "26c 이 프레임에서 온 메시지만 받고 답은 그 프레임 창으로만 간다");
+}
+
+// ══ 27~40 보던 자리 (#4523) ═══════════════════════════════════════════════════════
+//  사양: 문서가 pos-set 으로 알린 자리를 파일(이름 공간)마다 적고, 새로 선 문서가 pos-get 으로 물으면 그 자리를 돌려준다.
+{
+  const posDeps = () => {
+    const d = deps();
+    const tb = new Map();
+    d.getPos = (ns) => { d.log.push(["getPos", ns]); return tb.has(ns) ? tb.get(ns) : null; };
+    d.setPos = (ns, pos) => { d.log.push(["setPos", ns, pos]); tb.set(ns, pos); };
+    d.tb = tb;
+    return d;
+  };
+  const d = posDeps();
+  ok(await handleBridgeMessage(msg("pos-set", { pos: { x: 0, y: 1234.6 } }), NS, d) === null && d.tb.get(NS)?.y === 1235 && d.tb.get(NS)?.x === 0,
+    "27 pos-set 은 그 파일 이름 공간에 자리를 적는다(정수로)");
+  const r = await handleBridgeMessage(msg("pos-get"), NS, d);
+  ok(r && r.op === "pos" && r.pos && r.pos.y === 1235 && r.lv === "rv", "28 pos-get 은 적어 둔 자리를 돌려준다");
+  const r2 = await handleBridgeMessage(msg("pos-get"), "다른:파일.html", d);
+  ok(r2 && r2.op === "pos" && r2.pos === null, "29 다른 파일은 제 자리가 없다(null) — 파일끼리 안 섞인다");
+  await handleBridgeMessage(msg("pos-set", { pos: { x: 0, y: 40, p: "1.0.3" } }), NS, d);
+  ok(d.tb.get(NS)?.p === "1.0.3", "30 칸 스크롤(p = 자식 순번 자리)도 적는다");
+  await handleBridgeMessage(msg("pos-set", { pos: { x: 0, y: 0 } }), NS, d);
+  ok(d.tb.get(NS)?.y === 0 && d.tb.get(NS)?.p === undefined, "31 맨 위(0)로 돌아간 것도 적는다 — 다음엔 맨 위에서 시작");
+  // 신뢰하지 않는다
+  const bad = [
+    { y: -1, x: 0 }, { y: NaN, x: 0 }, { y: RV_POS_MAX + 1, x: 0 }, { y: "12", x: 0 }, { y: 10 }, null, "10",
+    { y: 10, x: 0, p: "a.b" }, { y: 10, x: 0, p: "1.2;alert(1)" }, { y: 10, x: 0, p: Array(65).fill("1").join(".") },
+  ];
+  const before = calls(d, "setPos").length;
+  for (const pos of bad) await handleBridgeMessage(msg("pos-set", { pos }), NS, d);
+  ok(calls(d, "setPos").length === before, "32 음수·NaN·상한 초과·문자열 숫자·빠진 축·이상한 칸 자리는 버린다");
+  ok(cleanPos({ x: 0, y: RV_POS_MAX })?.y === RV_POS_MAX && cleanPos({ x: 0, y: 0 })?.y === 0 && cleanPos({ x: 0, y: 1, p: Array(64).fill("1").join(".") }) !== null,
+    "32b 경계 — 0 · 상한 그 값 · 깊이 64 는 받는다(상한+1 · 깊이 65 는 위에서 버렸다)");
+  ok(cleanPos({ x: 1, y: 2, p: "" })?.p === undefined && cleanPos({ x: 1, y: 2, p: "0.12" })?.p === "0.12", "33 빈 칸 자리는 창 자리로, 순번 자리는 그대로");
+  // 의존이 자리를 모르면(옛 호출자) 조용하다
+  const plain = deps();
+  ok(await handleBridgeMessage(msg("pos-get"), NS, plain) === null && await handleBridgeMessage(msg("pos-set", { pos: { x: 0, y: 5 } }), NS, plain) === null,
+    "34 getPos/setPos 가 없는 의존이면 답하지 않는다(문서는 맨 위에서 시작 — 종전과 같다)");
+  // 저장소가 이상한 값을 돌려줘도 문으로 거른다
+  const weird = posDeps(); weird.getPos = () => ({ x: 0, y: "999" });
+  ok((await handleBridgeMessage(msg("pos-get"), NS, weird)).pos === null, "35 저장소의 꼴이 틀린 값은 돌려주지 않는다");
+  const thrower = posDeps(); thrower.getPos = () => { throw new Error("blocked"); }; thrower.setPos = () => { throw new Error("quota"); };
+  ok((await handleBridgeMessage(msg("pos-get"), NS, thrower)).pos === null && await handleBridgeMessage(msg("pos-set", { pos: { x: 0, y: 3 } }), NS, thrower) === null,
+    "36 저장소가 막혀도 던지지 않는다");
+}
+{
+  // 기본 의존(localStorage) — 한 키의 표 · 최근 POS_KEEP 개
+  const mem = new Map();
+  globalThis.localStorage = { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: (k) => mem.delete(k) };
+  const bd = browserDeps();
+  for (let i = 0; i < POS_KEEP + 5; i++) { bd.setPos("f" + i, { x: 0, y: i + 1 }); }
+  const keys = [...mem.keys()];
+  const tb = JSON.parse(mem.get(POS_STORE_KEY));
+  ok(keys.length === 1 && keys[0] === POS_STORE_KEY, "37 자리는 파일마다 키를 늘리지 않고 한 키의 표에 둔다");
+  ok(Object.keys(tb).length <= POS_KEEP && bd.getPos("f" + (POS_KEEP + 4))?.y === POS_KEEP + 5, "38 표는 최근 것만 남는다(상한) · 막 적은 것은 읽힌다");
+  mem.set(POS_STORE_KEY, "{깨진 json");
+  ok(bd.getPos("f1") === null, "39 표가 깨져 있으면 없는 것으로");
+  delete globalThis.localStorage;
+}
+{
+  // 문서 쪽 스크립트 — 끝에 붙인다(앞에 붙이면 doctype 앞이라 쿼크 모드)
+  const html = "<!doctype html><html><body><p>hi</p></body></html>";
+  const out = withScrollKeeper(html);
+  ok(out.startsWith(html) && /<script>[\s\S]*<\/script>$/.test(out), "40a 원문 뒤에 스크립트 하나를 붙인다(doctype 이 맨 앞 그대로)");
+  const js = out.slice(out.indexOf("<script>") + 8, -9);
+  ok(!/<\/script/i.test(js) && !js.includes("<!--"), "40b 스크립트 안에 문서 파서를 끊는 글자가 없다");
+  ok(js.includes("op:'pos-get'") && js.includes("op:'pos-set'") && js.includes("d.op!=='pos'") && js.includes("ev.source!==P"),
+    "40c 규약: 새로 서면 묻고(pos-get), 굴리면 알리고(pos-set), 부모가 보낸 pos 만 받는다");
+  let syntaxOk = true; try { new Function(js); } catch (e) { syntaxOk = false; console.error(e); }
+  ok(syntaxOk, "40d 스크립트가 문법상 온전하다");
 }
 
 console.log(`\n${pass} passed`);
