@@ -19,7 +19,19 @@ export interface ManagerRunResult {
   manager: string; kind: string;
   found?: number; created?: number; repeated?: number; applied?: number;
   candidates?: number; enqueued?: boolean; task_id?: number;
+  /** 레포별로 갈라 낸 위탁들(코드 비교). */
+  task_ids?: number[];
   skipped?: string; error?: string;
+}
+
+/**
+ * 위탁 접수 결과에서 태스크 id(없으면 undefined) — 중첩 skip 이면 **도는 중인 이전 태스크**의 id 다.
+ *  반환값에 싣는 이유: 크론 잡 요약(org_cron.last_summary)이 곧 이 반환값이고, 크론 감시(ops/cron-watch.ts)는 그 id 로
+ *  위탁의 실제 결과를 읽어 잡 상태를 판정한다. 안 실으면 접수 시점의 ok 만 보여 실패·복구 알림이 회차마다 번갈아 나간다.
+ */
+function taskIdOf(summary: unknown): number | undefined {
+  const n = Number((summary as Record<string, unknown> | null)?.task_id);
+  return Number.isSafeInteger(n) && n > 0 ? n : undefined;
 }
 
 /**
@@ -67,7 +79,8 @@ export async function runManager(
         extra: { manager: m.key, candidates: cands.length },
       });
       await recordManagerRun(m.id, r.status, r.summary);
-      return { ...base, candidates: cands.length, enqueued: true };
+      const taskId = taskIdOf(r.summary);
+      return { ...base, candidates: cands.length, enqueued: true, ...(taskId ? { task_id: taskId } : {}) };
     }
 
     // ⚠ **후보는 둘이다**(#3579). 종전엔 도메인 정의(category.should)만 봤는데, 이 종류의 이름은
@@ -103,6 +116,7 @@ export async function runManager(
     for (const d of docs) slot(d.repos[0]).docs.push(d);
 
     const out: unknown[] = [];
+    const taskIds: number[] = [];
     for (const [repo, group] of byRepo) {
       const n = group.cats.length + group.docs.length;
       const r = await enqueue(buildCodeDriftPrompt(m, group.cats, group.docs), {
@@ -110,9 +124,11 @@ export async function runManager(
         extra: { manager: m.key, repo, candidates: n, categories: group.cats.length, knowledge: group.docs.length },
       });
       out.push({ repo, candidates: n, categories: group.cats.length, knowledge: group.docs.length, ...(r.summary as object) });
+      const taskId = taskIdOf(r.summary);
+      if (taskId) taskIds.push(taskId);
     }
     await recordManagerRun(m.id, "ok", { repos: out });
-    return { ...base, candidates: cands.length + docs.length, enqueued: true };
+    return { ...base, candidates: cands.length + docs.length, enqueued: true, ...(taskIds.length ? { task_ids: taskIds } : {}) };
   } catch (e) {
     const msg = (e as Error)?.message ?? String(e);
     await recordManagerRun(m.id, "error", { error: msg });

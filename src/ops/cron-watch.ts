@@ -6,9 +6,13 @@
 //  헤드리스 잡은 아예 상한에 닿지 않는다(scheduler/cron-task-feedback.ts 머리말) — 그 잡들에는 이 알림이
 //  유일한 창구다. 박스 감시(ops/box-watch.ts)가 디스크·DB에 해 준 일을 크론 축에 그대로 하는 모듈이다.
 //
-// 이 감시가 성립하는 전제: `org_cron.last_status` 가 **실제 결과**여야 한다. 헤드리스 잡은 접수 시점에
-//  ok 를 반환하므로 그 되먹임이 없으면 여기서 아무리 봐도 전부 정상으로 보인다 —
-//  그 구멍은 scheduler/cron-task-feedback.ts 가 막는다(이 모듈의 짝).
+// 위탁을 내는 잡(헤드리스·증류·분류·관리)은 `org_cron.last_status` 를 믿지 않는다 — 접수 시점에 ok 가 찍히고,
+//  되먹임(scheduler/cron-task-feedback.ts)은 레인마다 덮어쓰거나 엔진 기록에 덮여 사라질 수 있다. 그래서 요약에 실린
+//  위탁 id 로 org_task 의 실제 상태를 읽어 회차 단위로 판정한다(cronPhaseOf 머리말). 되먹임은 화면(관리 ▸ 스케줄)용이다.
+//
+// 도는 곳: 부팅 하우스키핑(DB_BOOT_STEPS, scheduler 게이트)이라 **요청별 테넌시(매니지드 중앙 게이트웨이)에서는 뜨지 않는다**
+//  (그 체인이 통째로 건너뛰어진다 — boot/housekeeping.ts requestScopedTenancy). 단일·고정·registry(셀프호스트 다중
+//  워크스페이스)가 대상이다. 관측 상태(seen)는 메모리라 재시작하면 지금 실패 중인 잡을 한 번 더 알린다(box-watch 와 같다).
 //
 // 규약은 box-watch 를 그대로 따른다(새 규약을 만들지 않는다):
 //  · 판정은 순수 함수 — 전이 규칙을 테스트가 직접 못 박는다.
@@ -21,6 +25,7 @@ import { emitAlert, type AlertSender, type BoxAlert } from "./box-watch.js";
 import { forEachTenant } from "../scheduler/tenant-fanout.js";
 import { currentTenant } from "../org/tenant-context.js";
 import { logger } from "../log.js";
+import { redactTaskText } from "../node/task-secrets.js";
 
 /** 감시에 필요한 만큼의 org_cron 한 행. */
 export interface CronJobHealth {
@@ -34,13 +39,13 @@ export interface CronJobHealth {
 /** 잡의 건강 상태. `null` = **관측 없음**(판정 근거가 없는 회차 — 무엇이 그런지는 cronPhaseOf) — 전이를 만들지 않는다. */
 export type CronPhase = "ok" | "failing";
 
-/** 배치형 잡이 한 회차에 낸 위탁 하나의 실제 상태(org_task). */
+/** 크론이 낸 위탁 하나의 실제 상태(org_task). */
 export interface BatchTaskState { status: string; error?: string | null }
 
 export interface CronWatchDeps {
-  /** 감시 대상 조회(주입 seam). 생략하면 그 워크스페이스의 **켜져 있는** 잡을 읽는다. */
-  listJobs?: () => Promise<CronJobHealth[]>;
-  /** 배치형 잡의 위탁 상태 조회(주입 seam). 생략하면 org_task 를 읽는다. 못 읽으면 null(= 관측 없음). */
+  /** 감시 대상 조회(주입 seam). 생략하면 그 워크스페이스의 **켜져 있는** 잡을 읽는다. 못 읽으면 null(빈 목록과 다르다). */
+  listJobs?: () => Promise<CronJobHealth[] | null>;
+  /** 위탁 상태 조회(주입 seam). 생략하면 org_task 를 읽는다. 못 읽으면 null(= 관측 없음). */
   taskStates?: (ids: string[]) => Promise<ReadonlyMap<string, BatchTaskState> | null>;
   /** 알림 전송(채널 미설정이면 no-op). 실패해도 throw 하지 않아야 한다. */
   send: AlertSender;
@@ -62,22 +67,20 @@ let ticking = false;
 /**
  * `last_status`(+ `last_summary`) → 건강 상태(순수). `null` = 관측 없음.
  *
- * `ok` 만 정상이고 나머지 낱말은 전부 실패로 본다: 액션이 새 낱말을 반환하더라도 «정상이라고 말하지
- *  않은 것»을 정상으로 넘기면 감시가 무의미해진다. (자동 정지 판정과 방향이 반대인 것은 의도다 —
+ * ★ **위탁을 내는 잡은 `last_status` 로 판정하지 않는다** — 그 회차에 낸 위탁의 실제 상태(org_task, 호출부가
+ *  `taskStates` 로 넘긴다)로 본다(`delegatedPhaseOf`). last_status 로 보면 세 갈래로 틀린다:
+ *   ① 헤드리스 액션은 **접수 시점에** ok 를 적는다. 계속 실패하는 잡도 회차마다 ok 창이 생겨, 그걸 읽으면
+ *      실패·복구 알림이 회차마다 한 쌍씩 나간다(늑대소년). 관리 잡의 요약처럼 되먹임 표식이 없는 모양이면 더 그렇다.
+ *   ② 되먹임(scheduler/cron-task-feedback)은 레인(배치)이 하나 끝날 때마다 잡 상태를 그 결과로 덮는다 —
+ *      레인 하나만 계속 실패하는 잡은 한 회차 안에서 error↔ok 를 오간다.
+ *   ③ 위탁이 엔진의 기록보다 **먼저** 끝나면(자격 없음 — task-scheduler 가 배정 중에 곧바로 markFinished 한다)
+ *      되먹임이 엔진의 UPDATE 에 덮여 사라진다. 그 잡은 영영 «접수됨» 으로 보인다.
+ *  위탁 상태는 이 셋에 흔들리지 않는다. 같은 레인이 계속 실패하면 회차가 바뀌어도 실패에 머물러 알림은 한 번이다.
+ *  `taskStates` 를 못 받았으면(조회 실패) 관측 없음이다 — 단 접수 전에 실패한 레인은 요약만으로 실패다.
+ *
+ * 그 밖의 잡은 `ok` 만 정상이고 나머지 낱말은 전부 실패로 본다: 액션이 새 낱말을 반환하더라도 «정상이라고
+ *  말하지 않은 것»을 정상으로 넘기면 감시가 무의미해진다. (자동 정지 판정과 방향이 반대인 것은 의도다 —
  *  저쪽은 잡을 끄므로 보수적이어야 하고, 이쪽은 알릴 뿐이다.)
- *
- * ⚠ **«접수됐지만 아직 안 끝난» ok 는 정상이 아니라 관측 없음이다.** 헤드리스 잡의 ok 는 태스크를 배치한
- *  시점에 찍히고, 실제 결과는 종결 시점에 scheduler/cron-task-feedback 이 덮어쓴다. 그 중간 창을 정상으로
- *  읽으면 **계속 실패하는 잡이 주기마다 ok→error 를 오가며 복구·실패 알림을 한 쌍씩 뿜는다**(늑대소년).
- *  요약이 그 창을 스스로 구분해 준다 — 접수 요약엔 `task_id` 만 있고, 되먹임이 `task_status`(done/failed)를
- *  덧댄다. 중첩 skip 요약은 `task_status` 가 queued/running 이라 같은 규칙으로 걸린다.
- *
- * ⚠ **배치형 잡(증류의 `batches` · 관리의 `managers`)은 `last_status` 로 판정하지 않는다** — `batchStates` 로 본다.
- *  되먹임은 배치가 하나 끝날 때마다 잡 상태를 그 배치의 결과로 덮는다. 그래서 레인 하나만 계속 실패하는 잡은
- *  한 회차 안에서 error↔ok 를 오가고, 그걸 그대로 읽으면 **회차마다 실패·복구 알림이 한 쌍씩** 나간다
- *  (배치 id 순서 가드가 있어도 회차 중간 관측은 흔들린다). 그래서 그 회차에 낸 위탁 **전부**의 실제 상태를
- *  읽어 판정한다(`batchPhaseOf`) — 다 끝나기 전엔 관측 없음, 하나라도 실패면 실패. 같은 레인이 계속 실패하면
- *  회차가 바뀌어도 실패로 머물러 알림은 한 번이다. `batchStates` 를 못 받았으면(조회 실패) 관측 없음이다.
  *
  * `warn` 은 정상으로 본다 — «잡은 돌았고 산출물(관측)에 경고가 있다» 는 뜻이다. 지금 이 낱말을 쓰는 잡은
  *  카나리(scheduler/actions/canary.ts)뿐이고, 그 경고는 카나리가 연속 실패 임계를 두고 **스스로** 알린다
@@ -90,67 +93,69 @@ let ticking = false;
  */
 export function cronPhaseOf(
   lastStatus: string | null | undefined, summary?: unknown,
-  batchStates?: ReadonlyMap<string, BatchTaskState> | null,
+  taskStates?: ReadonlyMap<string, BatchTaskState> | null,
 ): CronPhase | null {
   if (!lastStatus || lastStatus === "skipped") return null;
-  const ids = batchTaskIds(summary);
-  if (ids) return batchStates ? batchPhaseOf(ids, batchStates) : null;
-  if (taskPending(summary)) return null;
+  const d = delegatedWork(summary);
+  if (d) return taskStates ? delegatedPhaseOf(d, taskStates) : (d.entryErrors.length ? "failing" : null);
   return lastStatus === "ok" || lastStatus === "warn" ? "ok" : "failing";
 }
 
 /**
- * 배치형 요약이면 그 회차에 낸 위탁 id 들(순수) — 배치형이 아니거나 id 가 하나도 없으면 null.
- *  중첩 skip 으로 이전 회차의 위탁을 가리키는 배치도 그 id 가 실린다(그 위탁이 끝나야 이 회차도 끝난다).
+ * 레인을 나눠 위탁하는 잡의 요약 목록 키 — 증류(scheduler/actions/distill.ts) · 분류(classify.ts) · 관리(manage.ts).
+ *  ⚠ 액션이 요약 모양을 바꾸면 여기가 조용히 못 알아본다 — cron-watch.test 가 세 액션의 소스로 이 키를 못박는다.
  */
-export function batchTaskIds(summary: unknown): string[] | null {
+export const DELEGATION_LISTS = ["batches", "classifiers", "managers"] as const;
+
+/** 한 회차에 낸 위탁(순수 판정 재료). */
+export interface DelegatedWork {
+  /** 그 회차의 위탁 id — 중첩 skip 으로 이전 회차의 위탁을 가리키는 레인도 그 id 가 실린다(그게 끝나야 회차가 끝난다). */
+  ids: string[];
+  /** 위탁을 만들기도 전에 실패한 레인의 사유(실행 멤버 없음·하네스 해소 실패·태스크 생성 실패 등). */
+  entryErrors: string[];
+}
+
+const isTaskId = (v: unknown): v is number | string =>
+  (typeof v === "number" || typeof v === "string") && /^[1-9]\d*$/.test(String(v));
+
+/**
+ * 요약에서 이 회차의 위탁을 뽑는다(순수). 위탁을 내지 않는 잡이면 null.
+ *  · 레인 목록(`DELEGATION_LISTS`)의 각 항목 — `task_id`, 여러 레포로 갈라 낸 관리기는 `task_ids`.
+ *  · 목록에서 id 를 못 찾으면 최상위 `task_id`(단일 위탁 잡의 접수·skip 요약, 또는 되먹임이 덧댄 것).
+ *  · id 없이 `error` 만 있는 레인 항목은 «접수 전 실패» 로 따로 센다.
+ */
+export function delegatedWork(summary: unknown): DelegatedWork | null {
   if (!summary || typeof summary !== "object") return null;
   const s = summary as Record<string, unknown>;
-  const batches = [s.batches, s.managers].find(Array.isArray) as unknown[] | undefined;
-  if (!batches) return null;
-  const ids = batches
-    .map((b) => (b && typeof b === "object" ? (b as Record<string, unknown>).task_id : null))
-    .filter((v): v is number | string => (typeof v === "number" || typeof v === "string") && /^\d+$/.test(String(v)))
-    .map(String);
-  return ids.length ? [...new Set(ids)] : null;
+  const list = DELEGATION_LISTS.map((k) => s[k]).find(Array.isArray) as unknown[] | undefined;
+  const ids: string[] = [];
+  const entryErrors: string[] = [];
+  for (const e of list ?? []) {
+    if (!e || typeof e !== "object") continue;
+    const o = e as Record<string, unknown>;
+    const own = [o.task_id, ...(Array.isArray(o.task_ids) ? o.task_ids : [])].filter(isTaskId).map(String);
+    ids.push(...own);
+    if (!own.length && typeof o.error === "string" && o.error.trim()) entryErrors.push(o.error);
+  }
+  if (!ids.length && isTaskId(s.task_id)) ids.push(String(s.task_id));
+  if (!ids.length && !entryErrors.length) return null;
+  return { ids: [...new Set(ids)], entryErrors };
 }
 
 /**
- * 배치형 잡 한 회차의 건강 상태(순수).
+ * 위탁을 내는 잡 한 회차의 건강 상태(순수).
+ *  · 접수 전에 실패한 레인이 있으면 실패 — 확정된 실패라 나머지 레인을 기다리지 않는다.
  *  · 하나라도 대기·실행 중이면 관측 없음 — 회차가 아직 안 끝났다.
- *  · 다 끝났고 하나라도 failed 면 실패. canceled 는 실패로 세지 않는다(사람의 취소이거나, 자격 실패 경로가
- *    크론을 이미 멈추고 따로 알렸다 — node/auth-failure-response.ts).
- *  · 조회에 없는 id 는 판정에서 뺀다. 다 빠지면 관측 없음.
+ *  · 하나라도 failed 면 실패(끝난 순서와 무관), done 이 있으면 정상.
+ *  · canceled·조회에 없는 id 는 세지 않는다 — 그것만 남으면 관측 없음. 사람이 취소한 회차를 «복구» 로 읽지 않고,
+ *    자격 실패 취소는 그 경로가 크론을 이미 멈추고 따로 알렸다(node/auth-failure-response.ts).
  */
-export function batchPhaseOf(ids: readonly string[], states: ReadonlyMap<string, BatchTaskState>): CronPhase | null {
-  const known = ids.map((id) => states.get(id)?.status).filter((st): st is string => typeof st === "string");
-  if (!known.length) return null;
+export function delegatedPhaseOf(d: DelegatedWork, states: ReadonlyMap<string, BatchTaskState>): CronPhase | null {
+  if (d.entryErrors.length) return "failing";
+  const known = d.ids.map((id) => states.get(id)?.status).filter((st): st is string => typeof st === "string");
   if (known.some((st) => st === "queued" || st === "running")) return null;
-  return known.includes("failed") ? "failing" : "ok";
-}
-
-/** 위탁이 종결로 기록됐나(순수 보조). */
-const terminal = (taskStatus: unknown): boolean => taskStatus === "done" || taskStatus === "failed";
-
-/**
- * 이 잡이 **위탁을 내는** 잡인가(순수 보조) — 요약에 위탁 id 가 실려 있나로 본다.
- *
- *  배치형 요약(증류의 `batches` · 관리의 `managers`)은 id 가 배치 안에 있다. 이 잡들이 요동의 본선이라
- *  (주기는 짧고 한 배치의 LLM 실행은 길다) 형태를 못 알아보면 감시기가 매 주기 복구·실패 쌍을 낸다.
- */
-function delegatesWork(summary: unknown): boolean {
-  if (!summary || typeof summary !== "object") return false;
-  const s = summary as Record<string, unknown>;
-  if (s.task_id !== undefined && s.task_id !== null) return true;
-  const batches = [s.batches, s.managers].find(Array.isArray) as unknown[] | undefined;
-  return !!batches?.some((b) => b && typeof b === "object" && (b as Record<string, unknown>).task_id != null);
-}
-
-/** 요약이 «위탁을 냈고 아직 종결 안 됨» 을 말하나(순수 보조). */
-function taskPending(summary: unknown): boolean {
-  if (!summary || typeof summary !== "object") return false;
-  if (terminal((summary as Record<string, unknown>).task_status)) return false;
-  return delegatesWork(summary);
+  if (known.includes("failed")) return "failing";
+  return known.includes("done") ? "ok" : null;
 }
 
 /** `last_summary` 에서 사람이 읽을 실패 사유 한 줄(순수). 못 찾으면 null. */
@@ -159,9 +164,11 @@ export function cronFailureReason(summary: unknown): string | null {
   const s = summary as Record<string, unknown>;
   //  우선순위 = 구체적인 것부터. task_error 는 크론이 낸 위탁의 실패(cron-task-feedback 이 적는다),
   //  error/reason 은 액션 자체의 실패, assign_code 는 배치 실패의 기계 코드다.
+  //  ⚠ 이 문장은 조직 밖 웹훅으로 나간다 — 출구에서 한 번 더 가린다(#4422 규칙 한 곳). 되먹임이 넘기는 위탁 실패는 저장 때
+  //   이미 가려졌지만, 일반 액션의 error(자식 프로세스 오류 원문 등)와 가림 도입 전에 쌓인 옛 org_task.error 는 아니다.
   for (const k of ["task_error", "error", "reason", "assign_code"]) {
     const v = s[k];
-    if (typeof v === "string" && v.trim()) return v.trim().replace(/\s+/g, " ").slice(0, 300);
+    if (typeof v === "string" && v.trim()) return redactTaskText(v.trim().replace(/\s+/g, " ")).slice(0, 300);
   }
   return null;
 }
@@ -188,7 +195,7 @@ export function cronAlertFor(prev: CronPhase | null, cur: CronPhase, job: CronJo
         //  자동 정지가 닿는지가 잡 유형으로 갈린다 — 위탁형(헤드리스)은 카운터가 «접수 결과»만 세어
         //  상한에 도달하지 못한다(근거: scheduler/cron-task-feedback.ts 머리말). 아닌 잡에 같은 문장을
         //  쓰면 거짓이 되고, 거짓 안내는 알림 전체의 신뢰를 깎는다.
-        + (delegatesWork(job.last_summary)
+        + (delegatedWork(job.last_summary)
           ? `이 잡은 스스로 멈추지 않습니다 — 조치하지 않으면 같은 실패가 주기마다 반복됩니다.\n`
           : `연속 실패 상한에 닿으면 자동 정지됩니다(상한이 0 이면 계속 반복됩니다).\n`)
         + `→ 관리 ▸ 스케줄 에서 마지막 실행 요약(last_summary)으로 원인을 확인하세요.`,
@@ -203,7 +210,7 @@ export function cronAlertFor(prev: CronPhase | null, cur: CronPhase, job: CronJo
   };
 }
 
-/** 배치형 잡의 위탁 상태. 표 부재·DB 미연결은 null(관측 없음 — 못 재면 알리지 않는다). */
+/** 위탁 상태. 표 부재·DB 미연결은 null(관측 없음 — 못 재면 알리지 않는다). */
 async function loadTaskStates(ids: string[]): Promise<ReadonlyMap<string, BatchTaskState> | null> {
   try {
     const rows = (await q(itemsPool, `SELECT id::text AS id, status, error FROM org_task WHERE id = ANY($1::bigint[])`, [ids])) as
@@ -212,27 +219,32 @@ async function loadTaskStates(ids: string[]): Promise<ReadonlyMap<string, BatchT
   } catch { return null; }
 }
 
-/** 그 워크스페이스의 켜져 있는 잡. 표 부재·DB 미연결은 빈 목록(경보 대신 침묵 — 못 재면 알리지 않는다). */
-async function loadJobs(): Promise<CronJobHealth[]> {
+/**
+ * 그 워크스페이스의 켜져 있는 잡. 표 부재·DB 미연결은 **null** — 빈 목록(`[]`)과 구분한다.
+ *  빈 목록은 «잡이 다 사라졌다» 로 읽혀 관측 상태가 통째로 폐기된다. DB 가 잠깐 끊긴 뒤 돌아오면 아직 실패 중인 잡은
+ *  같은 실패를 **또** 알리고, 그 사이 나은 잡은 첫 관측 침묵 규칙에 걸려 복구 알림이 **영영** 안 나간다.
+ */
+async function loadJobs(): Promise<CronJobHealth[] | null> {
   try {
     return (await q(itemsPool, `SELECT id, label, action, last_status, last_summary FROM org_cron WHERE enabled=true`)) as CronJobHealth[];
-  } catch { return []; }
+  } catch { return null; }
 }
 
 // 한 워크스페이스 1회 스캔. 호출자가 테넌트 컨텍스트를 세워 준다(forEachTenant).
 async function scanOne(deps: CronWatchDeps): Promise<void> {
   const jobs = await (deps.listJobs ?? loadJobs)();
+  if (!jobs) return;   // 못 읽었다 — 관측 없음. 상태도 그대로 둔다(아래 폐기 단계를 건너뛴다).
   const scope = (currentTenant()?.id ?? "") + KEY_SEP;
   const alive = new Set<string>();
   for (const job of jobs) {
     const key = scope + job.id;
     alive.add(key);
-    const ids = batchTaskIds(job.last_summary);
-    const states = ids ? await (deps.taskStates ?? loadTaskStates)(ids) : null;
+    const work = delegatedWork(job.last_summary);
+    const states = work?.ids.length ? await (deps.taskStates ?? loadTaskStates)(work.ids) : null;
     const cur = cronPhaseOf(job.last_status, job.last_summary, states);
     if (cur === null) continue;   // 관측 없음 — 이전 상태를 그대로 둔다(중립)
     const prev = seen.get(key);
-    const a = cronAlertFor(prev?.phase ?? null, cur, withBatchReason(job, ids, states));
+    const a = cronAlertFor(prev?.phase ?? null, cur, withTaskReason(job, work, states));
     const next = { phase: cur, problemSent: prev?.problemSent ?? false };
     if (a) {
       const sent = await emitAlert(a, next.problemSent, deps.send);
@@ -247,15 +259,17 @@ async function scanOne(deps: CronWatchDeps): Promise<void> {
 }
 
 /**
- * 배치형 잡의 실패 사유는 **실패한 배치**의 것으로 싣는다(순수). 최상위 `task_error` 는 마지막으로 되먹여진
- *  배치의 것이라 성공한 배치일 수 있다. org_task.error 는 저장 직전에 가려진 문장이다(task-store.markFinished, #4422).
+ * 위탁형 잡의 실패 사유는 **실패한 레인**의 것으로 싣는다(순수) — 접수 전 실패면 그 사유, 아니면 실패한 위탁의
+ *  org_task.error. 요약 최상위의 `task_error`·`error` 는 마지막으로 되먹여진 레인의 것이라 성공한 레인일 수 있다.
+ *  (가림은 출구 cronFailureReason 이 한다.)
  */
-function withBatchReason(job: CronJobHealth, ids: string[] | null, states: ReadonlyMap<string, BatchTaskState> | null): CronJobHealth {
-  if (!ids || !states) return job;
-  const failed = ids.find((id) => states.get(id)?.status === "failed");
-  if (!failed) return job;
+function withTaskReason(job: CronJobHealth, work: DelegatedWork | null, states: ReadonlyMap<string, BatchTaskState> | null): CronJobHealth {
+  if (!work) return job;
+  const failed = work.ids.find((id) => states?.get(id)?.status === "failed");
+  const why = work.entryErrors[0] ?? (failed ? states?.get(failed)?.error ?? null : null);
+  if (!why) return job;
   const base = job.last_summary && typeof job.last_summary === "object" ? job.last_summary as Record<string, unknown> : {};
-  return { ...job, last_summary: { ...base, task_error: states.get(failed)?.error ?? null } };
+  return { ...job, last_summary: { ...base, task_error: why } };
 }
 
 async function tick(deps: CronWatchDeps): Promise<void> {
