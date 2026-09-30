@@ -1,5 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import {
   IDENTITY_GLOBAL_DEFAULT_EXPR, SINGLE_TENANT_ID, SQL_IDENTITY_GLOBAL, SURROGATE_GEN_RE, TENANT_DEFAULT_EXPR,
   buildIdentityGlobalFoldSql, buildIdentityGlobalPinDdl, buildTenantColumnDdl, identityGlobalPinPlan, isNaturalKey,
@@ -17,6 +18,24 @@ test("★★ 기본값 한 식이 두 모드를 덮는다 — 컨텍스트가 �
   //  마이그레이션·시드의 INSERT 가 전부 42704 로 죽는다 — 실측으로 밟았다(initOrgCore).
   //  엄격함은 정책이 갖는다.
   assert.ok(!/current_setting\('app\.tenant_id'\)/.test(TENANT_DEFAULT_EXPR), "기본값이 엄격하면 안 된다");
+  // ★ 관대함은 missing_ok 만으론 안 선다 — 커스텀 GUC 는 치워도 미설정이 아니라 **빈 문자열**로 남는다.
+  //  그 '' 를 NULLIF 로 걷어내지 않으면 COALESCE 가 폴백하지 못하고 `''::uuid` 로 죽는다.
+  //  여기선 식의 모양만 본다 — **정말 폴백하는지는 실 DB 라야 안다**: tenant-default-empty-guc.pg-test.mjs.
+  assert.match(TENANT_DEFAULT_EXPR, /NULLIF\(current_setting\('app\.tenant_id', true\), ''\)/,
+    "빈 문자열을 걷어내지 않으면 커넥션을 물려받은 다음 요청이 uuid 구문 오류로 죽는다");
+});
+
+// 같은 기본값이 app 스키마 테이블에도 필요한데, 그 자리는 한때 **같은 식을 리터럴로 복제**하고 있었다.
+//  그래서 이 기본값을 고칠 때 한쪽만 고치고 다른 쪽을 빠뜨리는 사고가 구조적으로 가능했다(실제로 그랬다).
+//  복제가 다시 생기면 여기서 끊는다 — 공유 상수를 쓰는 한 이 단언은 조용하다.
+test("★ app 스키마 테이블도 같은 기본값 상수를 쓴다 — 식을 복제하지 않는다", () => {
+  // 경로는 cwd 상대다 — 이 파일은 dist/ 에서 실행되므로 import.meta.url 을 기준 삼으면 빗나간다
+  //  (러너가 cwd 를 레포 루트로 고정한다. 아래 «시드가 tenant_id 를 중재자로 쓰지 않는다» 와 같은 관례).
+  const src = readFileSync("src/apps/store-schema.ts", "utf8");
+  assert.ok(src.includes("TENANT_DEFAULT_EXPR"),
+    "store-schema.ts 가 공유 기본값 상수를 안 쓴다 — 기본값을 고쳐도 app.* 테이블엔 반영되지 않는다");
+  assert.ok(!/DEFAULT COALESCE\(\s*(NULLIF\(\s*)?current_setting/.test(src),
+    "store-schema.ts 가 기본값 식을 리터럴로 복제했다 — 상수를 쓰지 않으면 다음 수정에서 갈라진다");
 });
 
 // ── 자연키 판정 ─────────────────────────────────────────────────────────────
