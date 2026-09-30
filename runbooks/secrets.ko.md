@@ -19,23 +19,26 @@
 
 | 함수 | 역할 | 동작 |
 |---|---|---|
-| `assertNoHardSecrets(text, field)` | 고위험 평문 시크릿 **저장 거부** | 패턴 매치 시 `HttpError(400)` throw — 저장 자체가 안 됨 |
+| `assertNoHardSecrets(text, field, hint?)` | 고위험 평문 시크릿 **저장 거부** | 패턴 매치 시 `HttpError(400)` throw — 저장 자체가 안 됨 |
 | `redactDeep(v)` / `redactString` | 감사 로그·HTTP 응답 **마스킹** | 매치 문자열을 `[REDACTED]` 로 치환(저장은 허용하되 평문 사본 차단) |
 
-`assertNoHardSecrets` 의 hard-block 패턴(2026-06-18 기준): OpenAI(`sk-`), GitHub PAT(`ghp_`/
-`github_pat_`), Slack(`xox[abprs]-`), AWS(`AKIA…`), 라이블리 토큰(`lvk_`), 개인키(`BEGIN … PRIVATE
-KEY`). `redactDeep`/`redactString` 는 여기에 Anthropic(`sk-ant-`)·GitHub 기타 토큰(`gho_`/`ghu_`/`ghs_`/`ghr_`)·
+`assertNoHardSecrets` 의 hard-block 패턴(2026-09-30 기준, #4501): Anthropic(`sk-ant-`), OpenAI(`sk-`·`sk-proj-`·`sk-svcacct-`·`sk-admin-` — 낱말 안에서
+시작하면 제외, 마스킹과 같은 규칙), GitHub 토큰(`ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`)·PAT(`github_pat_`), Slack(`xox[abprs]-`),
+AWS(`AKIA…` — AWS 문서 예시 `…EXAMPLE` 제외), 라이블리 토큰(`lvk_`), 개인키(`BEGIN … PRIVATE KEY` 뒤에 키 본문이 이어질 때 — 사이의 줄바꿈·JSON 이스케이프 `\n`·암호화 PEM 머리·인용 `>` 는 건너뛴다.
+머리줄만 적은 형식 설명은 제외). `redactDeep`/`redactString` 는 여기에
 JWT·`Bearer <literal>` 까지 더 넓게 마스킹한다(`TOKEN_SHAPE_RES`·`PROSE_RISKY_RES`).
 
 ### choke-point 적용 현황 (콘텐츠 쓰기경로)
 
 | 쓰기경로 | 입력 | assertNoHardSecrets | 위치 |
 |---|---|---|---|
-| ~~`ctx_save`~~ (폐기 — `knowledge_*` 로 흡수) | `note` | — | 구 `src/capabilities/ctx.ts`(삭제). 후속 `knowledge_save` 에는 가드 없음(아래) |
+| ~~`ctx_save`~~ (폐기 — `knowledge_*` 로 흡수) | `note` | — | 구 `src/capabilities/ctx.ts`(삭제). 후속 `knowledge_save` 는 아래 v6 행 |
 | `org_update_section` (MCP·REST) | `body_md` | ✓ (P8) | `src/capabilities/delivery/org-content.ts` |
 | `org_member_upsert` (MCP·REST/admin) | `body_md`(개인레이어) | ✓ (P8) | `src/capabilities/delivery/members.ts` |
 | 본인 쓰기(`me_profile_update`·`me_onboarding_set`·`me_liv_profile_set`·`me_welcome_*`) | 개인레이어 `body_md`·메모·프로필·온보딩 답 | ✓ | `src/capabilities/delivery/me-self.ts`·`liv.ts`·`welcome.ts` |
-| ~~`propose_domain`·`dm_domain_edit`~~ (폐기 2026-06-24 — `category_*` 로 대체) | `description`·`evidence` | — | 후속 `category_create`/`category_update` 에는 가드 없음 |
+| ~~`propose_domain`·`dm_domain_edit`~~ (폐기 2026-06-24 — `category_*` 로 대체) | `description`·`evidence` | — | 후속 `category_*` 는 아래 v6 행 |
+| v6 콘텐츠 쓰기 — `knowledge_save`·`knowledge_set_title`·`category_create`/`category_update`/`category_group_upsert`·`project_create_v6`/`project_update_v6`/`project_rename_v6`·`task_create_v6`/`task_update_v6`·`task_checklist_v6`·`task_comment_v6`·`project_list_create_v6`/`project_list_update_v6`·`task_field_value_set_v6`·`knowledge_comment_post`·`task_tags_v6`/`task_tag_update_v6`·`task_field_create_v6`/`task_field_update_v6`·`project_folder_create_v6`/`project_folder_update_v6` (MCP·REST) | 입력의 **모든 문자열**(중첩 포함). 옛 텍스트 칸(`edits[].old`·`description_base`)은 제외 — 시크릿을 지우는 편집을 막지 않게 | ✓ (#4501, 2026-09-30) | 각 핸들러 맨 앞에서 `src/capabilities/content-secrets.ts` `assertNoContentSecrets` |
+| 첫 지시 → 초안 프로젝트 자동 생성 | 이름·본문 | 가림(`redactTokenShapes`) — 막으면 세션 작업면이 안 생긴다 | 서버 경로 `src/project/first-prompt-project.ts` · 외부 하네스 훅(`project-auto-bind` → `project_create_v6`)은 본문의 `AUTO_CREATED_MARK` 를 보고 `projects-v6.ts` 가 같은 가림 |
 | `org_hook_upsert` (MCP·REST/runtime) | `source_code` | ✓ | `src/capabilities/delivery/hooks.ts` |
 | `org_harness_asset_upsert`·`me_harness_asset_draft` | description·body·frontmatter | ✓ | `src/capabilities/delivery/harness-assets.ts`·`me-self.ts` |
 | ~~`migrate-content.mjs`~~ (스크립트 — 현재 레포에서 제거) | `body_md` | ✓ (직접 호출) | 구 `scripts/migrate-content.mjs` |
@@ -57,9 +60,9 @@ JWT·`Bearer <literal>` 까지 더 넓게 마스킹한다(`TOKEN_SHAPE_RES`·`PR
   → 권고: refresh 입력(분석 대상 레포)에 평문 시크릿을 두지 말 것(소스 시크릿 위생은 별 책임).
 - **데이터 층 `upsertKnowledge`/`upsertMember` 직접 호출** — 시드/마이그/테스트 경로. 어댑터 가드로
   충분하며, 직접 호출자는 자기 경로에서 assert 할 책임(마이그가 선례).
-- **v6 콘텐츠 쓰기(`knowledge_save`·`category_*`·`project_*_v6`·`task_*_v6`)** — 현재 `assertNoHardSecrets` 호출이
-  없다. 저장 경계 hard-block 이 없으므로
-  사후 검출은 (f) 스캔에 의존한다.
+- **v6 감사 기록(`org_content_audit` 의 v6 before/after)** — 마스킹하지 않는다. 입구 차단(#4501) 뒤의 새 쓰기에는
+  하드 시크릿이 들어오지 않지만, 그 전에 저장된 본문과 가림 대상(JWT·Bearer 등 hard-block 밖 패턴)은 감사 사본에 남을 수 있다.
+  검출은 (f) 스캔, 제거는 (e) 로테이션 3단계.
 
 ---
 
@@ -168,7 +171,8 @@ node --env-file=.env scripts/scan-content-secrets.mjs      # 게이트웨이 앱
 ```
 
 - 대상: items DB(단일 DB — 도메인맵 테이블도 여기 있다): `knowledge` name/title/body_md/summary,
-  `category` name/description/should, `org_member` display_name/email/body_md/identities, `debt_finding` title/detail.
+  `category` name/description/should, `org_member` display_name/email/body_md/identities, `debt_finding` title/detail,
+  `project`(프로젝트·태스크) name/description, `task_comment` body, `task_checklist_item` name, `knowledge_comment` body.
   목록은 스크립트의 `SCAN_TARGETS` 이고, `scripts/scan-content-secrets.test.mjs` 가 스키마 정의와 대조한다.
 - `assertNoHardSecrets` + `redactDeep`(redact.ts 단일 출처)을 전수 적용. **값 비출력** — 위치(테이블/PK/
   컬럼)와 패턴 라벨(hard/masked)만 보고.
