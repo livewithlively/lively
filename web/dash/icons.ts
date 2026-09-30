@@ -2,6 +2,7 @@
 //  전부 '인자 → 노드' 순수 함수라 상태가 없다. 도형은 프로젝트 탭(pjv*)·공유 폴더의 원본과 **같은 도형**을 쓰기로 한
 //  결정(#619 동형 인라인)의 결과물이라, 도형을 바꾸면 그 짝도 함께 바꿔야 한다.
 import { el, sv } from '../core.js';
+import { ICONS } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 
 // 리스트 글리프 — 프로젝트 탭 사이드바(pjvListGlyph)와 동일: 이모지 아이콘 or 체크리스트 라인 아이콘.
 function dashListGlyph(list) {
@@ -69,7 +70,7 @@ function dashRenameIcon() {
 }
 function dashTrashIcon() {
   const n = sv('svg', { viewBox: '0 0 24 24', width: 14, height: 14, fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  n.append(sv('path', { d: 'M4 7h16' }), sv('path', { d: 'M9 7V4h6v3' }), sv('path', { d: 'M6 7l1 13h10l1-13' }), sv('path', { d: 'M10 11v6M14 11v6' }));
+  n.append(sv('path', { d: ICONS.trash }));   // #4233: 사이드바 휴지통과 같은 그림
   return n;
 }
 // 맥 스타일 폴더 아이콘 — 프로젝트 상세 공유 폴더의 folderThumb 과 동일(ft ft-folder; 색은 styles.css).

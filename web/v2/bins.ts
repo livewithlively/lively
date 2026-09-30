@@ -1,4 +1,5 @@
 // v2/bins.ts — 지난 세션(#/archive) · 휴지통(#/trash) 화면(#1851 → #1850 안 A, 원준 2026-08-27 "A안으로 가자").
+//  ★ #4158 — [AI 세션] 전체 목록(#/app/terminal, renderSessAll)도 여기 산다: 같은 원장 표 문법·같은 기간 고르개를 쓰는 셋째 표다.
 //  ⚠ 「아카이브」였던 자리는 #3778(원준 2026-09-19)에서 **「지난 세션」**이 됐다 — 주인공이 보관한 프로젝트에서
 //   세션으로 바뀌었고, 보관한 프로젝트는 같은 화면의 칩 하나로 남았다(renderPast 머리말).
 //
@@ -11,15 +12,21 @@
 //   · 아카이브는 같은 표에서 동사만 다르다(보관 해제 · 휴지통으로). 종전 카드 깔림(#1851)을 걷어냈다.
 //  완전 삭제의 실제 삭제 범위는 #1850 P2~P4(session-actions·session-footprint-store) — 여기는 그 창을 부를 뿐이다.
 //  행 문법은 홈·확인할 것과 같은 토큰(v2-dot·bg-sel·line-row)만 쓴다 — 새 시각 언어를 만들지 않는다.
-import { api, el, relTime, renderMarkdown, replaceKids, sv, toast } from '../core.js';
+import { api, el, personFace, relTime, renderMarkdown, replaceKids, state, sv, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { fmtSize } from '../projects/files-format.js';
-import { confirmSessionPurge, confirmSessionPurgeLocal, confirmSessionPurgeMany, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped, eulReul } from '../session-actions.js';
-import { sessText } from './side.js';
-import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isTrashedProj, isTrashedSess, projName, type Proj, type Sess, type V2Data } from './views.js';
+import { confirmSessionPurge, confirmSessionPurgeLocal, confirmSessionPurgeMany, confirmSessionTrash, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped, trashProjectsFlow, eulReul } from '../session-actions.js';
+import { sessText, sidePeople } from './side.js';
+import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isTrashedProj, isTrashedSess, projName, type Proj, type Sess, type V2Data } from './views.js';
 import { listDismissedSessions, restoreDismissedSessions, type DismissedSession } from './app-instance.js';   // #3857 「치운 세션」
-import { TRASH_TABS, auditProjItems, bundleOpen, groupByProject, knowItems, levelLabel, matchesQuery, pickInitialTab, srcItems, type DeletedEntry, type SrcItem, type TabCounts, type TrashTab, type TrashedFile } from '../lib/trash-tabs.js';   // #3778 — 휴지통 네 탭의 잣대(순수)
+import { TRASH_TABS, auditProjItems, bundleOpen, extraCountsOf, fileTrashUrl, groupByProject, knowItems, levelLabel, matchesQuery, pickInitialTab, srcItems, type DeletedEntry, type SrcItem, type TabCounts, type TrashTab, type TrashedFile } from '../lib/trash-tabs.js';   // #3778 — 휴지통 네 탭의 잣대(순수)
+import { invalidateTrashCounts, setTrashCounts } from './trash-counts.js';   // 사이드바 「휴지통 N」과 같은 값(#3778)
 import { groupPastByProject, isDismissedSess, pastNames, PAST_PERIODS, selectPast, standsInPast, type PastPeriod, type PastScope, type PastSessLike } from '../lib/past-sess.js';   // #3778 — 「지난 세션」의 잣대(순수)
+import { groupAllSess, mainGroupBy, nextSessSort, ownerCounts, selectAllSess, SESS_GROUP_BYS, sortAllSess, type SessSort, type SessSortKey } from '../lib/sess-all.js';   // #4158 — [AI 세션] 전체 목록의 잣대(순수) · #4233 묶기 · 열 머리 정렬
+import { sessGroupName, sessScope } from './sess-scope.js';   // #4233 2안 — 묶기 기준 · 고른 카드는 사이드바가 쥐고 여기선 읽기만
+import { SESS_STATES } from '../session-status.js';   // #4233 — 상태 묶기 · 카드의 순위
+import { showCtxMenu } from './ctx-menu.js';   // #4233 — 묶기 고르개 · 행 ⋯ 메뉴
+import { verdictStands, type SessRowVerdict } from './sess-visibility.js';   // #4158 — 홈 목록에서의 자리(판정은 셸이 홈과 같은 재료로 넘긴다)
 
 export interface BinHooks { onChanged?: () => void }
 
@@ -101,7 +108,11 @@ function ensureExtras(repaint: () => void): void {
   const fileList = api('/api/ui/source-trash').then((d: any) => { filesFailed = false; return (Array.isArray(d?.entries) ? d.entries : []) as TrashedFile[]; })
     .catch(() => { filesFailed = true; return [] as TrashedFile[]; });
   void Promise.all([list('knowledge'), list('source'), list('project'), fileList])
-    .then(([k, s, p, f]) => { extras = { deleted: [...k, ...s, ...p], files: f }; extrasAt = Date.now(); extrasFailed = false; })
+    .then(([k, s, p, f]) => {
+      extras = { deleted: [...k, ...s, ...p], files: f }; extrasAt = Date.now(); extrasFailed = false;
+      //  사이드바 「휴지통 N」에 이 화면이 센 값을 그대로 준다 — 배지와 탭 숫자가 어긋나지 않는다. 파일 목록을 못 받았으면 주지 않는다(0 이라 단언하지 않는다).
+      if (!filesFailed) setTrashCounts(extraCountsOf(extras.deleted, extras.files));
+    })
     .catch(() => { extrasFailed = true; extrasAt = Date.now(); })
     .finally(() => { extrasLoading = false; repaint(); });
 }
@@ -131,7 +142,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
   const tab = ui.tab;
   const T = TRASH_TABS.find((t) => t.key === tab)!;
   const sessName = (s: Sess): string => sessText(s, projName(data, s.projectId)).main || s.label || s.id;
-  const refresh = (): void => { extrasAt = 0; hooks.onChanged?.(); };
+  const refresh = (): void => { extrasAt = 0; invalidateTrashCounts(); hooks.onChanged?.(); };
 
   type Item = { kind: 'project'; key: string; at: string; p: Proj; bundle: Sess[] } | { kind: 'session'; key: string; at: string; s: Sess };
 
@@ -244,6 +255,11 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
 
   // ── 되살리기 · 완전 삭제(지식 · 자료 · 옛 길로 지운 프로젝트) — 감사 스냅샷 휴지통과 파일 보관 두 출처를 한 모양으로. ──
   type Loose = { key: string; label: string; restore: () => Promise<unknown>; purge: () => Promise<unknown> };
+  const fileOp = (it: SrcItem, op: 'restore' | 'purge'): Promise<unknown> => {
+    const url = fileTrashUrl(it, op);
+    if (!url) return Promise.reject(new Error('이 파일이 있던 프로젝트를 알 수 없어요'));
+    return api(url, { method: 'POST', body: JSON.stringify({ source_id: it.id }) });
+  };
   const auditLoose = (entity: string, key: string, label: string): Loose => ({
     key: entity + ':' + key, label,
     restore: () => api('/api/ui/deleted/restore', { method: 'POST', body: JSON.stringify({ entity, key }) }),
@@ -251,8 +267,9 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
   });
   const looseOfSrc = (it: SrcItem): Loose => it.origin === 'audit' ? { ...auditLoose('source', String(it.id), it.title), key: it.key } : {
     key: it.key, label: it.title,
-    restore: () => api('/api/ui/v6/projects/' + it.projectId + '/file-trash/restore', { method: 'POST', body: JSON.stringify({ source_id: it.id }) }),
-    purge: () => api('/api/ui/v6/projects/' + it.projectId + '/file-trash/purge', { method: 'POST', body: JSON.stringify({ source_id: it.id }) }),
+    //  파일 보관은 폴더마다 길이 다르다(프로젝트 · 내 폴더 · 공유 폴더) — 주소는 잣대가 고른다(lib/trash-tabs fileTrashUrl).
+    restore: () => fileOp(it, 'restore'),
+    purge: () => fileOp(it, 'purge'),
   };
   const runLoose = async (list: Loose[], op: 'restore' | 'purge'): Promise<{ done: number; failed: number; why: string }> => {
     let done = 0, failed = 0; let why = '';
@@ -608,6 +625,8 @@ export function renderPast(host: HTMLElement, data: V2Data, hooks: BinHooks = {}
   const trashRows = (list: PastItem[]): Promise<void> => guard(async () => {
     const names = [...new Set(list.flatMap((it) => (it.s ? sessionNames(it.s) : [it.id])))];
     if (!names.length) return;
+    //  사이드바 휴지통 단추와 같은 확인창(#3778) — 종전엔 이 화면만 묻지 않고 보냈다. «다음부터 묻지 않기» 를 켠 사람에겐 어디서든 안 묻는다.
+    if (!await confirmSessionTrash({ title: list.length === 1 ? `「${list[0].name}」${eulReul(list[0].name)} 휴지통으로 보낼까요?` : `세션 ${list.length}개를 휴지통으로 보낼까요?`, n: list.length })) return;
     try {
       const out = await sessionTrashOp('trash', names);
       if (!out.done.length) { toast('휴지통으로 보내지 못했어요 — ' + (out.skipped[0]?.why || '처리된 세션이 없어요'), true); return; }
@@ -819,17 +838,12 @@ function archivedProjects(tblWrap: HTMLElement, barEl: HTMLElement, countEl: HTM
     toast((list.length === 1 ? `「${list[0].name}」 보관을 해제했어요 — 사이드바로 돌아왔어요.` : `프로젝트 ${done}개의 보관을 해제했어요.`) + (failed ? ` (${failed}개 실패 — ${why})` : ''), failed > 0);
     ui.sel.clear(); hooks.onChanged?.();
   });
-  // 휴지통으로 — 잃는 것이 없다(표식이 붙어 휴지통으로 갈 뿐, 복원 가능) → 확인창 없이 바로(#1582).
-  //  단 남의 도는 세션이 있으면 서버가 409 로 막는다 — 그 이유를 그대로 보여 준다.
+  // 휴지통으로 — 어느 화면이든 같은 길(session-actions.trashProjectsFlow, #3778).
+  //  종전엔 «잃는 것이 없다 → 확인창 없이 바로» 였는데 그 전제가 이 표에서는 틀렸다: 같은 줄이 「도는 중 n」을 보여 주고,
+  //   서버는 그 세션들을 **멈춘다**(stopLive). 멈추는 것은 잃는 것이다 — 확인창이 그 개수를 말하고 묻는다.
   const toTrash = (list: Proj[]): Promise<void> => guard(async () => {
-    let done = 0, failed = 0; let why = '';
-    for (const p of list) {
-      try { await api('/api/ui/v6/projects/' + p.id + '/trash', { method: 'POST', body: JSON.stringify({ trashed: true }) }); done++; }
-      catch (e: any) { failed++; why = e?.message || String(e); }
-    }
-    if (!done) { toast('휴지통으로 보내지 못했어요 — ' + (why || '처리된 프로젝트가 없어요'), true); return; }
-    toast((list.length === 1 ? `「${list[0].name}」${eulReul(list[0].name)}` : `프로젝트 ${done}개를`) + ' 휴지통으로 보냈어요 — 휴지통에서 되돌릴 수 있어요.' + (failed ? ` (${failed}개 실패 — ${why})` : ''), failed > 0);
-    ui.sel.clear(); hooks.onChanged?.();
+    const done = await trashProjectsFlow(list.map((p) => ({ id: p.id, name: p.name })));
+    if (done) { ui.sel.clear(); hooks.onChanged?.(); }
   });
 
   const visible = (): Proj[] => projs.slice().sort((a, b) => String(b.archived_at || '').localeCompare(String(a.archived_at || '')));
@@ -900,4 +914,273 @@ function archivedProjects(tblWrap: HTMLElement, barEl: HTMLElement, countEl: HTM
     el('a', { class: 'btn-text', href: '#/p/' + p.id, text: '프로젝트 열기 →' })));
   box.append(detail);
   aside.replaceChildren(box);
+}
+
+// ══════════════════════════════ AI 세션 전체 (#/app/terminal) ══════════════════════════════
+//  #4158 — 회의 #3977(2026-09-14) «AI 세션 탭 = 전체 세션 풀스크린 조회» · 액션 아이템 P1-4 «풀스크린 목록, 날짜/사람 필터».
+//  ★ #4233 안 A(원준 2026-09-25 «안 A 좋아 · 매니지드까지»): 위키 2판과 같은 구성으로 바꿨다.
+//   · 머리 두 줄 — 1행 빵부스러기(AI 세션 / 전체 · 프로젝트), 2행 도구줄(묶기 · 기간 · 사람 · 상태 칩 · 찾기 · ＋ 새 세션). 테두리 상자 없음.
+//   · 「지금 볼 것」 카드 줄(내 세션 중 확인 필요 → 작업 완료 → 작업 중 → 대기 중, 최대 4장) → 묶음별 목록(묶음 머리 + 46px 행).
+//   · 묶기는 날짜 · 프로젝트 · 사람 · 상태 넷(원준 «날짜 말고 사람으로 묶거나 다른 옵션으로도»). 이름 없는 세션은 묶음마다 한 줄로 접는다.
+//   · 행을 누르면 **오른쪽 사이드 피크**에 대화 끝부분이 뜬다(화면 이동 없음). 피크의 입력칸으로 도는 세션에 바로 보낸다.
+//     홈으로 가는 길은 피크의 [세션 열기]와 행 두 번 클릭 — 종전 «줄을 누르면 홈에서 연다»(P1-4)를 이 결정이 바꿨다.
+//  ★ 이 표가 계속 지키는 셋(#4158):
+//   ① **전부** 싣는다 — 도는 것·지난 것·남의 것(프로젝트 공개·초대). 휴지통 것만 뺀다(제 화면이 있다, #1851).
+//   ② 홈과 **한 자**다 — 행이 홈 목록에서 어디 있나(목록에 둠·치움)는 셸이 홈 사이드바와 같은 함수로 재어 넘기고(hooks.verdict),
+//      치우기는 홈의 × 와 같은 함수로 간다(hooks.onDismiss). 치운 세션은 「치움」 꼬리표를 달고 그대로 선다.
+//   ③ 홈에서 여는 길은 홈 사이드바 행과 같은 문(hooks.onOpen ← 셸 openSideRow) 하나뿐이다.
+//  ★ #4233 2안(원준 2026-09-25 «2안이 좋아»): 묶기 기준은 **사이드바 머리의 드롭다운**이 고른다(side.ts renderSessions).
+//   이 화면 도구줄에는 묶기 단추가 없다. 기준 · 고른 카드 · 고른 줄은 sess-scope.ts 한 자리에서 읽고, 본문 묶음은 mainGroupBy
+//   (카드를 안 골랐으면 그 기준, 카드를 골랐으면 프로젝트별, 줄까지 골랐으면 시간별). 빵부스러기가 «AI 세션 / 기준 / 고른 것» 을 적는다.
+//  ⚠ 거르기 · 묶기 · 카드 잣대는 lib/sess-all.ts(순수 — scripts/sess-all.test.mjs).
+export interface SessAllHooks {
+  /** 홈 목록에서의 자리 — **내 세션만** 잰다(남의 것은 null: 치우기도 꼬리표도 없다 — 서버도 주인만 허용한다). */
+  verdict: (s: Sess) => SessRowVerdict | null;
+  /** 홈에서 연다 — 홈 사이드바 행과 같은 문. 피크의 [세션 열기] · 행 두 번 클릭 · 끝난 세션에 보내기가 부른다. */
+  onOpen: (s: Sess) => void;
+  /** 홈 목록에서 치우기 — 홈의 × 와 같은 함수(세션은 그대로 돈다). */
+  onDismiss: (s: Sess) => void;
+  /** 도구줄 [＋ 새 세션] — 사이드바 머리의 ＋ 와 같은 동작(셸 onNewTask). */
+  onNew?: () => void;
+}
+
+/** 화면 상태 — 모듈 수준인 이유는 pastUi 와 같다(셸의 결이 render 를 통째로 다시 부른다). 기억하지 않는다(페이지 수명). */
+const allUi = {
+  period: 'all' as PastPeriod, owner: '', state: '', q: '', searching: false,
+  shown: PAGE,
+  /** 마지막으로 그린 사이드바 선택(기준 · 카드 · 줄) — 바뀌면 [더 보기]는 처음부터. */
+  scopeKey: '',
+  /** 접은 묶음(`기준:key`) · 펼친 «이름 없는 세션» 줄(`기준:key`). */
+  closed: new Set<string>(), openUntitled: new Set<string>(),
+  /** 열 머리로 고른 정렬(null = 기본, 최근 활동 순). 묶는 기준과 따로 논다 — 묶음 안 줄 순서만 바꾼다. */
+  sort: null as SessSort | null,
+};
+
+const HARNESS_NAME: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', grok: 'Grok', opencode: 'OpenCode', antigravity: 'Antigravity', shell: '셸' };
+const harnessName = (s: Sess): string => {
+  const h = String((s.raw && s.raw.harness) || '').toLowerCase();
+  return HARNESS_NAME[h] || (h ? h[0].toUpperCase() + h.slice(1) : '');
+};
+const stateRank = (k: string): number => (SESS_STATES[k] ? SESS_STATES[k].rank : 99);
+/** 상태 표시 — 눈에 띄어야 할 셋(확인 필요 · 작업 완료 · 작업 중)은 알약, 나머지는 점 + 흐린 글. */
+function stateCell(s: Sess): HTMLElement {
+  const k = s.stateKey;
+  const label = s.stateLabel || '지난 세션';
+  if (k === 'waiting' || k === 'done' || k === 'busy') return el('span', { class: 'v2-sa-st ' + dotCls(k) }, dot(k), el('span', { text: label }));
+  return el('span', { class: 'v2-sa-st quiet' }, dot(k), el('span', { text: label }));
+}
+/** 「만든 때」 칸 — 오늘 것은 시:분, 그 밖은 월/일 시:분. **마지막 활동(상대 표기)과 눈으로 갈리게** 절대 시각으로 적는다
+ *  (#4233, 원준 2026-09-26 «기존의 시각은 구분되게 이름 변경»). 모르면 빈 칸으로 둔다 — 「방금」 으로 꾸미지 않는다. */
+function madeCell(ms: number): HTMLElement {
+  if (!ms || !Number.isFinite(ms)) return el('span', { class: 'm none', text: '' });
+  const d = new Date(ms);
+  const p2 = (n: number): string => String(n).padStart(2, '0');
+  const hm = `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  const today = new Date();
+  const sameDay = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
+  return el('span', { class: 'm', text: sameDay ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`, title: d.toLocaleString() });
+}
+const svgI = (d: string, cls = 'v2-sa-ic'): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, sv('path', { d }));
+const IC_SEARCH = 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z M21 21l-4.3-4.3';
+const IC_CHEV = 'M6 9l6 6 6-6';
+const IC_UP = 'M18 15l-6-6-6 6';
+const IC_MORE = 'M5 12h.01 M12 12h.01 M19 12h.01';
+const IC_PLUS = 'M12 5v14 M5 12h14';
+
+export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHooks): void {
+  const ui = allUi;
+  const sc = sessScope();
+  const scKey = `${sc.by}|${sc.group ?? ''}|${sc.proj ?? ''}`;
+  if (ui.scopeKey !== scKey) { ui.scopeKey = scKey; ui.shown = PAGE; }   // 사이드바에서 다른 걸 골랐으면 [더 보기]는 처음부터
+  const mby = mainGroupBy(sc);
+  const now = Date.now();
+  const people = sidePeople();
+  const repaint = (): void => renderSessAll(host, data, hooks);
+  const listOf = new Map(data.projects.map((p) => [p.id, p.list_id ?? null]));
+  const items = data.sessions.map((s) => {
+    const t = sessText(s, projName(data, s.projectId));
+    return {
+      s, projectId: s.projectId, trashedAt: s.trashedAt || null, lastSeen: s.lastSeen, stateKey: s.stateKey,
+      listId: s.projectId != null ? (listOf.get(s.projectId) ?? null) : null,
+      owner: isMineSess(s) ? 'me' : String((s.raw && s.raw.owner) || ''),
+      name: t.main || s.label || s.id, untitled: t.untitled,
+    };
+  });
+  type Item = (typeof items)[number];
+  const meId = String((state.me && state.me.userId) || '');
+  const ownerName = (k: string): string => (k === 'me' ? '나' : (people[k] && people[k].display_name) || k || '알 수 없음');
+  const q = { proj: sc.proj, group: sc.group !== null ? { by: sc.by, key: sc.group } : null, period: ui.period, owner: ui.owner, state: ui.state, now };
+  const inProj = selectAllSess(items, { ...q, period: 'all', owner: '', state: '' });
+  const needle = ui.q.trim().toLowerCase();
+  const vis = selectAllSess(items, q).filter((it) => !needle
+    || it.name.toLowerCase().includes(needle) || projName(data, it.projectId).toLowerCase().includes(needle));
+  //  빵부스러기 — «AI 세션 / 기준 / 고른 것». 고른 것이 없으면 «전체».
+  const byLabel = (SESS_GROUP_BYS.find((b) => b.key === sc.by) || SESS_GROUP_BYS[0]).label;
+  const pickedProj = sc.proj === null ? '' : (projName(data, sc.proj) || '프로젝트 없음');
+  const crumbs = [sc.group !== null ? sessGroupName(sc.by, sc.group, data, ownerName) : '', pickedProj].filter(Boolean);
+  const byState = (k: string): number => inProj.filter((it) => it.owner === 'me' && it.stateKey === k).length;
+  const open = (s: Sess): void => hooks.onOpen(s);
+
+  // ── 2행 도구줄 — 기간 · 사람 · 상태 칩 · 찾기 · ＋ 새 세션(묶기는 사이드바 머리의 드롭다운) ──
+  const period = el('select', { class: 'v2-sa-pick', 'aria-label': '기간', 'data-pick': 'period',
+    onchange: (e: Event) => { ui.period = (e.target as HTMLSelectElement).value as PastPeriod; ui.shown = PAGE; repaint(); } },
+    ...PAST_PERIODS.map((p) => el('option', { value: p.key, text: p.label }))) as HTMLSelectElement;
+  period.value = ui.period;
+  const who = el('select', { class: 'v2-sa-pick', 'aria-label': '사람', 'data-pick': 'owner',
+    onchange: (e: Event) => { ui.owner = (e.target as HTMLSelectElement).value; ui.shown = PAGE; repaint(); } },
+    el('option', { value: '', text: '모든 사람' }),
+    ...ownerCounts(items, q).map((o) => el('option', { value: o.key, text: `${ownerName(o.key)} ${o.n}` }))) as HTMLSelectElement;
+  who.value = ui.owner;
+  const chip = (key: string, label: string, cls: string): HTMLElement | null => {
+    const n = byState(key);
+    if (!n && ui.state !== key) return null;
+    const on = ui.state === key;
+    return el('button', { class: `v2-sa-chip ${cls}${on ? ' on' : ''}`, type: 'button', 'aria-pressed': String(on),
+      title: on ? '거르기를 풉니다' : `내 세션 중 ${label}만 봅니다`,
+      onclick: () => { ui.state = on ? '' : key; ui.shown = PAGE; repaint(); } }, el('span', { text: `${label} ${n}` }));
+  };
+  const search = ui.searching || ui.q
+    ? el('input', { class: 'v2-sa-q', type: 'search', placeholder: '세션 이름 · 프로젝트 찾기', 'data-pick': 'q', value: ui.q,
+        oninput: (e: Event) => { ui.q = (e.target as HTMLInputElement).value; ui.shown = PAGE; repaint(); },
+        onkeydown: (e: KeyboardEvent) => { if (e.key === 'Escape') { ui.q = ''; ui.searching = false; repaint(); } } })
+    : el('button', { class: 'v2-sa-tb ic', type: 'button', 'aria-label': '찾기', title: '세션 찾기', onclick: () => { ui.searching = true; repaint(); host.querySelector<HTMLElement>('[data-pick="q"]')?.focus(); } }, svgI(IC_SEARCH));
+  const tools = el('div', { class: 'v2-sa-tools' }, period, who,
+    chip('waiting', '확인 필요', 'warn'), chip('busy', '작업 중', 'blue'),
+    el('span', { class: 'sp' }), search,
+    hooks.onNew ? el('button', { class: 'v2-sa-new', type: 'button', title: '새 세션 — 홈에서 무엇이든 시키면 열려요', onclick: () => hooks.onNew?.() },
+      svgI(IC_PLUS), el('span', { text: '새 세션' })) : null);
+
+  //  「지금 볼 것」 카드 줄은 걷었다(원준 2026-09-27): «AI 세션의 목표는 기존에 만들었던 세션들에 대한 정보를 얻거나
+  //   거기로 가는 것이 우선인데, 실행 상태별로 보여주는 것은 이 탭의 취지와 안 맞는다». 상태로 좁히는 길은
+  //   도구줄의 상태 칩(확인 필요 · 작업 중)에 남아 있다.
+
+  // ── 묶음별 목록 ──
+  const cols = sc.proj === null;
+  //  열 머리는 **표 맨 위 한 줄**뿐이다(#4233, 원준 2026-09-26 «리스트별로 묶으면 묶음마다 열 제목이 화면 절반»).
+  //   종전엔 묶음 머리줄마다 열 이름을 되풀이했다. 클릭업 리스트 뷰와 같게 머리를 하나만 두고 **붙여 둔다**(sticky) —
+  //   그래서 «맨 위만 두고 지우면 이상하다» 가 안 된다. 묶음 머리줄은 이름과 개수만 든다.
+  //  「AI」 열은 걷었다(원준 «AI 는 일반적으로 하나만 쓴다»). 시각은 둘로 갈랐다 — 만든 때(절대) · 마지막 활동(상대).
+  //  ★ 열 머리를 누르면 그 열로 정렬한다(원준 2026-09-27 «클릭업 참고»). 오름차순 → 내림차순 → 기본.
+  //   ⚠ 묶는 기준(시간별 · 리스트별 …)은 **건드리지 않는다** — 묶음의 순서·구성은 그대로 두고 묶음 안 줄만 다시 센다.
+  const hc = (key: SessSortKey, label: string): HTMLElement => {
+    const on = ui.sort && ui.sort.key === key ? ui.sort : null;
+    return el('button', { class: 'hc' + (on ? ' on' : ''), type: 'button',
+      'aria-sort': on ? (on.dir === 'asc' ? 'ascending' : 'descending') : 'none',
+      title: on ? (on.dir === 'asc' ? `${label} 오름차순 — 다시 누르면 내림차순` : `${label} 내림차순 — 다시 누르면 기본 순서로`) : `${label} 순으로 묶음 안 줄을 정렬합니다`,
+      onclick: () => { ui.sort = nextSessSort(ui.sort, key); ui.shown = PAGE; repaint(); } },
+      el('span', { text: label }),
+      on ? svgI(on.dir === 'asc' ? IC_UP : IC_CHEV, 'v2-sa-ic sm') : null);
+  };
+  const tableHead = (): HTMLElement => el('div', { class: 'v2-sa-head' + (cols ? '' : ' np') },
+    hc('name', '세션'),
+    ...(cols ? [hc('proj', '프로젝트')] : []),
+    hc('state', '상태'), hc('owner', '사람'),
+    hc('made', '생성 시각'), hc('seen', '마지막 활동'), el('span', {}));
+  const groupLabel = (key: string): string => sessGroupName(mby, key, data, ownerName);
+  const rowOf = (it: Item): HTMLElement => {
+    const s = it.s;
+    const v = hooks.verdict(s);
+    //  ⌘/Ctrl/Shift+클릭은 브라우저 몫으로 둔다(새 창·새 탭) — 셸 안 링크의 관례(main.ts bindAltOpen 머리말)와 같다.
+    const nameClick = (ev: MouseEvent): void => {
+      if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
+      ev.preventDefault(); ev.stopPropagation(); open(s);
+    };
+    const more = el('button', { class: 'v2-sa-more', type: 'button', 'aria-label': '더 보기', title: '열기 · 홈에서 치우기',
+      onclick: (ev: MouseEvent) => {
+        ev.stopPropagation();
+        const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+        //  치우기는 **홈 목록에 서 있는 내 세션**에만 — 안 서 있는 줄에서 «목록에서 치우기» 는 뜻이 없다(홈의 × 도 선 줄에만 있다).
+        showCtxMenu(r.right - 180, r.bottom + 4, [
+          { label: '세션 열기', icon: 'open', run: () => open(s) },
+          ...(v && verdictStands(v) ? [{ label: '홈에서 치우기', hint: '세션은 그대로 돌아요', run: () => hooks.onDismiss(s) }] : []),
+        ], { title: it.untitled ? '이름 없는 세션' : it.name });
+      } }, svgI(IC_MORE));
+    const row = el('div', { class: 'v2-sa-row' + (cols ? '' : ' np') + (v === 'dismissed' ? ' dism' : ''),
+      role: 'button', tabindex: '0', 'data-sid': s.id },
+      el('div', { class: 'c-name' }, sessIcon(),
+        el('a', { class: 't' + (it.untitled ? ' un' : ''), href: '#/s/' + encodeURIComponent(s.id), text: it.untitled ? `이름 없는 세션 · ${harnessName(s)}` : it.name, onclick: nameClick }),
+        v === 'dismissed' ? el('span', { class: 'v2-bin-tag', text: '치움', title: '내가 홈 목록에서 치운 세션이에요. 열면 홈 목록에 돌아와요' }) : null),
+      cols ? el('div', { class: 'c-proj' + (s.projectId ? '' : ' none') }, s.projectId ? folderIcon() : null, el('span', { text: projName(data, s.projectId) || '프로젝트 없음' })) : null,
+      el('div', { class: 'c-kind' }, stateCell(s)),
+      el('div', { class: 'c-who' }, personFace(it.owner === 'me' ? meId : it.owner, 'v2-sall-face', ownerName(it.owner))),
+      el('div', { class: 'c-made' }, madeCell(Number(s.createdAt) || 0)),
+      el('div', { class: 'c-when' }, el('span', { class: 'm', text: whenMs(Number(s.lastSeen) || 0), title: s.lastSeen ? new Date(Number(s.lastSeen)).toLocaleString() : '' })),
+      el('div', { class: 'c-acts' }, more));
+    //  #4233(원준 2026-09-26 «사이드 피크 개념 그냥 없애자») — 한 번 누르면 바로 그 세션을 홈에서 연다.
+    row.addEventListener('click', (ev) => { if ((ev.target as HTMLElement).closest('button, a, input, select')) return; open(s); });
+    row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && ev.target === row) { ev.preventDefault(); open(s); } });
+    return row;
+  };
+  const list = el('div', { class: 'v2-sa-list', 'aria-label': '세션 목록' });
+  //  정렬이 읽는 값 — 표에 그려진 그 글자여야 사람이 «이 열 기준» 을 눈으로 확인할 수 있다.
+  const sortFields = (it: Item) => ({ name: it.name, proj: projName(data, it.projectId) || '', owner: ownerName(it.owner),
+    rank: stateRank(String(it.stateKey || '')), made: Number(it.s.createdAt) || 0, seen: Number(it.lastSeen) || 0 });
+  const ordered = (rs: readonly Item[]): Item[] => sortAllSess(rs, ui.sort, sortFields);
+  let budget = ui.shown;
+  //  묶지 않음 — 묶음 머리 없이 열 머리 한 줄, 이름 없는 세션도 접지 않고 전부 최근 순(«완전 raw 한 전체보기»).
+  if (vis.length) list.append(tableHead());
+  if (mby === 'none' && vis.length) {
+    for (const it of ordered(vis)) { if (budget-- <= 0) break; list.append(rowOf(it)); }
+  }
+  for (const g of mby === 'none' ? [] : groupAllSess(vis, mby, now, stateRank)) {
+    if (budget <= 0) break;
+    const gk = `${mby}:${g.key}`;
+    const closed = ui.closed.has(gk);
+    list.append(el('div', { class: 'v2-sa-gh plain' },
+      el('button', { class: 'l', type: 'button', 'aria-expanded': String(!closed), onclick: () => { if (closed) ui.closed.delete(gk); else ui.closed.add(gk); repaint(); } },
+        el('span', { class: 'car' + (closed ? ' shut' : '') }, svgI(IC_CHEV, 'v2-sa-ic sm')),
+        el('span', { class: 'pill', text: groupLabel(g.key) }), el('span', { class: 'n', text: String(g.rows.length) }))));
+    if (closed) continue;
+    const rows = ordered(g.rows);
+    const named = rows.filter((it) => !it.untitled);
+    const unnamed = rows.filter((it) => it.untitled);
+    for (const it of named) { if (budget-- <= 0) break; list.append(rowOf(it)); }
+    if (unnamed.length && budget > 0) {
+      const uOpen = ui.openUntitled.has(gk);
+      const hs = [...new Set(unnamed.map((it) => harnessName(it.s)).filter(Boolean))].join(' · ');
+      list.append(el('button', { class: 'v2-sa-fold', type: 'button', 'aria-expanded': String(uOpen),
+        onclick: () => { if (uOpen) ui.openUntitled.delete(gk); else ui.openUntitled.add(gk); repaint(); } },
+        el('span', { class: 'car' + (uOpen ? '' : ' shut') }, svgI(IC_CHEV, 'v2-sa-ic sm')),
+        el('span', { text: `이름 없는 세션 ${unnamed.length}개${hs ? ' · ' + hs : ''}` })));
+      if (uOpen) for (const it of unnamed) { if (budget-- <= 0) break; list.append(rowOf(it)); }
+    }
+  }
+  const left = vis.length - Math.min(vis.length, ui.shown);
+  const empty = !inProj.length
+    ? (sc.group === null && sc.proj === null ? '아직 세션이 없어요. 홈에서 무엇이든 시켜 보세요.' : '고른 묶음에 세션이 없어요.')
+    : '이 조건에 맞는 세션이 없어요. 기간 · 사람 · 상태를 바꿔 보세요.';
+
+  const hadPick = document.activeElement instanceof HTMLElement && host.contains(document.activeElement) ? (document.activeElement.dataset.pick || '') : '';
+  const act = document.activeElement;
+  const caret = hadPick && (act instanceof HTMLTextAreaElement || act instanceof HTMLInputElement) ? [act.selectionStart, act.selectionEnd] : null;
+  const bodyOld = host.querySelector<HTMLElement>('.v2-sa-body');
+  const scrollTop = bodyOld ? bodyOld.scrollTop : 0;
+  replaceKids(host, el('div', { class: 'v2-sa' },
+    el('div', { class: 'v2-sa-top' },
+      el('span', { class: 'crumb', text: '세션 목록' }), el('span', { class: 'sl', text: '/' }),
+      el('span', { class: 'crumb k', 'data-by': sc.by, text: byLabel }), el('span', { class: 'sl', text: '/' }),
+      ...crumbs.slice(0, -1).flatMap((c) => [el('span', { class: 'crumb', text: c }), el('span', { class: 'sl', text: '/' })]),
+      el('b', { class: 'now', text: crumbs.length ? crumbs[crumbs.length - 1] : '전체' }),
+      el('span', { class: 'desc', text: vis.length === inProj.length ? `${inProj.length}개` : `${vis.length}개 표시 · 전체 ${inProj.length}` })),
+    tools,
+    el('div', { class: 'v2-sa-body' },
+      list,
+      left > 0 ? el('button', { class: 'btn-text v2-bin-more', type: 'button', text: `외 ${left}개 더 보기`, onclick: () => { ui.shown += PAGE; repaint(); } }) : null,
+      !vis.length ? el('p', { class: 'v2-bin-empty', text: empty }) : null,
+      //  클래식 세션 관리(만들기 폼 · 노드 · 여러 개 한꺼번에 종료·복원)는 없애지 않았다 — 셸 안 `#/terminal` 로 그대로 열린다.
+      el('p', { class: 'v2-bin-fine', text: '새 세션 만들기 · 노드 연결 · 여러 세션 한꺼번에 종료·복원은 세션 관리 화면에서 해요.' },
+        el('a', { class: 'btn-text', href: '#/terminal', text: '세션 관리 열기 →' })))));
+  //  셸의 결(8초)이 통째로 다시 그려도 고르던 칸 · 보던 자리 · 입력 중인 글을 잃지 않게 — 「지난 세션」의 검색칸과 같은 규율.
+  if (hadPick) {
+    const f = host.querySelector<HTMLElement>(`[data-pick="${hadPick}"]`);
+    f?.focus();
+    if (f instanceof HTMLTextAreaElement || f instanceof HTMLInputElement) {
+      const n = f.value.length;
+      const a = caret && caret[0] != null ? Math.min(Number(caret[0]), n) : n;
+      const b = caret && caret[1] != null ? Math.min(Number(caret[1]), n) : n;
+      try { f.setSelectionRange(a, b); } catch (_) { /* search 입력은 선택 범위를 안 받는 브라우저가 있다 */ }
+    }
+  }
+  const bodyNew = host.querySelector<HTMLElement>('.v2-sa-body');
+  if (bodyNew && scrollTop) bodyNew.scrollTop = scrollTop;
 }

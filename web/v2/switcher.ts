@@ -6,6 +6,7 @@
 //  메뉴는 body 에 떠서(fixed) 사이드바 20초 재렌더에 지워지지 않는다. 데이터(연결·승격)는 **열 때** 한 번만 당긴다.
 import { api, currentWorkspace, el, focusMovedIntoFrame, personFace, profileAvatar, setCurrentWorkspace, state, toast } from '../core.js';
 import { inboxSection, peopleSection, type InviteForMe } from './ws-people.js';   // #1875 구성원·초대
+import { currentRowSlug } from '../lib/ws-status.js';
 
 let openPanel: HTMLElement | null = null;
 function closeMenu(): void { if (openPanel) { openPanel.remove(); openPanel = null; document.removeEventListener('mousedown', onDoc, true); document.removeEventListener('keydown', onKey, true); window.removeEventListener('blur', onBlur); } }
@@ -16,6 +17,10 @@ function onBlur(): void { if (focusMovedIntoFrame()) closeMenu(); }   // #3870 �
 // #1875 — 인원 수가 최근에 확인된 값. status 를 부를 때마다 갱신하고, 문패는 이 값으로 배지를 그린다.
 //  ⚠ 서버(kindEffective)와 **같은 식**이어야 한다 — 두 곳이 다르면 화면과 게이트가 다른 말을 한다.
 let liveCount: number | null = null;
+// #4122 — 지금 워크스페이스가 목록에서 어느 행인가(얼굴을 찾을 열쇠). undefined = 목록을 아직 못 받았다.
+//  매니지드는 브라우저에 고른 값이 없어(주소가 곧 워크스페이스) activeWorkspaceSlug() 가 늘 'primary' 라,
+//  이 값 없이 찾으면 설정에서 바꾼 아바타가 레일 문패에 끝내 안 선다(lib/ws-status.ts 머리말 ②).
+let curRowKey: string | null | undefined;
 export function kindFromCount(n: number): 'personal' | 'team' { return n >= 2 ? 'team' : 'personal'; }
 
 function ws(): { kind: 'personal' | 'team'; hub: string | null; name: string; count: number | null; slug: string } {
@@ -37,8 +42,9 @@ function ws(): { kind: 'personal' | 'team'; hub: string | null; name: string; co
   const kind = n !== null ? kindFromCount(n)
     : (reg.active && reg.kind) ? (reg.kind === 'personal' ? 'personal' : 'team')
     : (w.kind === 'personal' ? 'personal' : 'team');
-  //  slug — 문패(workspaceFace)가 저장된 얼굴을 faceBySlug 에서 찾을 열쇠(#2188).
-  return { kind, hub: w.hub_url || null, name, count: n, slug: activeWorkspaceSlug() };
+  //  slug — 문패(workspaceFace)가 저장된 얼굴을 faceBySlug 에서 찾을 열쇠(#2188). 목록이 «지금» 을 알려 줬으면
+  //   그 행의 slug 가 열쇠다(#4122 — 매니지드의 고른 값은 늘 'primary' 라 한 번도 안 맞았다).
+  return { kind, hub: w.hub_url || null, name, count: n, slug: curRowKey ?? activeWorkspaceSlug() };
 }
 
 /** 문패를 다시 그리게 만드는 신호 — 인원이 바뀌면(초대 수락·구성원 제거) 배지가 즉시 따라와야 한다. */
@@ -72,7 +78,7 @@ export function switcherTop(opts?: { people?: Record<string, any>; faces?: strin
   const pool = (opts && opts.faces && opts.faces.length ? opts.faces : ids);
   const faceIds = w.kind === 'team' ? [String(me.userId || ''), ...pool.filter((x) => x !== String(me.userId || ''))].filter((x) => people[x]).slice(0, 3) : [];
   const more = w.kind === 'team' ? Math.max(0, ids.length - faceIds.length) : 0;
-  const btn = el('button', { class: 'v2-ws v2-wscard', type: 'button', 'aria-haspopup': 'menu', title: `${w.name} · ${kindText} 워크스페이스 — 누르면 전환·연결` },
+  const btn = el('button', { class: 'v2-ws v2-wscard', type: 'button', 'aria-haspopup': 'menu', title: `${w.name} (${kindText} 워크스페이스). 누르면 워크스페이스 메뉴가 열립니다` },
     face,
     el('span', { class: 'v2-wscard-tt' }, el('b', { text: w.name }), el('span', { text: sub })),
     faceIds.length ? el('span', { class: 'v2-wscard-faces', 'aria-hidden': 'true' },
@@ -227,6 +233,26 @@ export interface WsFace { color?: string; char?: string }
 //   를 그리는데, 거기엔 face 가 없다 — 목록을 한 번이라도 받았으면 여기서 찾는다.
 const faceBySlug = new Map<string, WsFace>();
 
+// #4122 — 얼굴 지도를 이 브라우저에 한 벌 남긴다. 목록은 계정 서버를 거쳐 늦게 오므로, 안 남기면 새로고침마다
+//  문패가 파생 얼굴(첫 글자)로 먼저 섰다가 정한 얼굴로 바뀐다 — 저장 직후 location.reload() 에서 그 깜빡임이
+//  «바꿨는데 안 바뀐다» 로 읽혔다. 지도는 목록이 올 때마다 통째로 갈아 쓴다(여기 남은 값은 첫 그리기용일 뿐).
+//  «지금» 열쇠는 매니지드(is_current)일 때만 남긴다 — 셀프호스트는 한 주소에서 워크스페이스를 바꿔 다니므로
+//  남겨 둔 값이 방금 떠난 곳을 가리킨다.
+const FACE_CACHE = 'lively_ws_face_cache';
+try {
+  const c = JSON.parse(localStorage.getItem(FACE_CACHE) || 'null');
+  if (c && typeof c === 'object') {
+    for (const [k, v] of Object.entries((c as { faces?: Record<string, unknown> }).faces || {})) {
+      if (v && typeof v === 'object') faceBySlug.set(k, v as WsFace);
+    }
+    if (typeof (c as { cur?: unknown }).cur === 'string') curRowKey = (c as { cur: string }).cur;
+  }
+} catch (_) { /* 저장소가 막힌 문맥 — 목록이 오면 그대로 그린다 */ }
+function rememberFaces(managedCur: string | null): void {
+  try { localStorage.setItem(FACE_CACHE, JSON.stringify({ faces: Object.fromEntries(faceBySlug), cur: managedCur })); }
+  catch (_) { /* 저장소가 막힌 문맥 — 다음 새로고침에 한 번 깜빡일 뿐이다 */ }
+}
+
 /** 저장된 색을 style 로 꽂기 전 마지막 문 — 서버(normalizeWorkspaceFace)가 걸렀지만, 화면은 화면대로 지킨다. */
 const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
 /** 밝은 색 위 흰 글자는 안 보인다 — 상대 휘도로 잉크색을 고른다(#2188 아바타는 사람이 아무 색이나 고른다). */
@@ -260,7 +286,7 @@ export function switcherTile(): HTMLElement {
   const kindText = w.kind === 'personal' ? '개인' : '팀';
   const face = workspaceFace(w, 'v2-wscard-big');
   const btn = el('button', { class: 'v2-ws v2-rail-tile', type: 'button', 'aria-haspopup': 'menu',
-    title: `${w.name} · ${kindText} 워크스페이스 — 누르면 전환·연결` }, face) as HTMLButtonElement;
+    title: `${w.name} (${kindText} 워크스페이스). 누르면 워크스페이스 메뉴가 열립니다` }, face) as HTMLButtonElement;
   btn.onclick = (e) => { e.preventDefault(); openWorkspaceMenu(btn); };
   return btn;
 }
@@ -271,7 +297,7 @@ export function switcherName(): HTMLElement {
   const w = ws();
   const kindText = w.kind === 'personal' ? '개인' : '팀';
   const btn = el('button', { class: 'v2-ws v2-side-wsn', type: 'button', 'aria-haspopup': 'menu',
-    title: `${w.name} · ${kindText} 워크스페이스 — 누르면 전환·연결` },
+    title: `${w.name} (${kindText} 워크스페이스). 누르면 워크스페이스 메뉴가 열립니다` },
     el('span', { class: 'v2-side-wsn-t', text: w.name }),
     el('span', { class: 'v2-ws-car', 'aria-hidden': 'true', text: '▾' })) as HTMLButtonElement;
   btn.onclick = (e) => { e.preventDefault(); openWorkspaceMenu(btn); };
@@ -289,6 +315,8 @@ export async function listWorkspaces(): Promise<Array<{ slug: string; name: stri
     //  #2188 — 얼굴을 slug 지도에 남긴다(문패처럼 행 객체 없이 그리는 자리가 찾는다).
     faceBySlug.clear();
     for (const r of rows) if (r.face && (r.face.color || r.face.char)) faceBySlug.set(String(r.slug), r.face);
+    curRowKey = currentRowSlug(rows, activeWorkspaceSlug());
+    rememberFaces(rows.some((r) => typeof r.is_current === 'boolean') ? curRowKey : null);
     return rows;
   } catch (_) { return []; }
 }
@@ -498,6 +526,11 @@ export async function renameWorkspace(slug: string, name: string): Promise<void>
 /** #2188 설정 모달 — 이름·얼굴을 한 번에. face:{} 는 지움(파생값 복귀), 생략은 그대로. */
 export async function saveWorkspaceSettings(slug: string, patch: { name?: string; face?: WsFace }): Promise<void> {
   await api('/api/ui/me/workspaces/update', { method: 'POST', body: JSON.stringify({ slug, ...patch }) });
+  //  #4122 — 저장한 뒤 화면이 새로 열린다(ws-settings). 남겨 둔 얼굴을 여기서 고쳐 두지 않으면 첫 그리기가 옛 얼굴이다.
+  if (patch.face) {
+    if (patch.face.color || patch.face.char) faceBySlug.set(slug, patch.face); else faceBySlug.delete(slug);
+    rememberFaces(curRowKey && managedWorkspaces() ? curRowKey : null);
+  }
 }
 export async function archiveWorkspace(slug: string): Promise<void> {
   await api('/api/ui/me/workspaces/delete', { method: 'POST', body: JSON.stringify({ slug }) });

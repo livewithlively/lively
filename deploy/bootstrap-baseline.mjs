@@ -30,7 +30,7 @@ const BASELINE = `## 이 조직의 AI 파트너 (기본 템플릿 — 관리자�
 - 필요한 조직 맥락(지식·프로젝트·도메인맵)은 lively MCP 도구(\`mcp__lively__*\` — \`knowledge_search\`/\`knowledge_get\` 등)로 그때 조회한다.
 - 지속될 결정·런북·설계가 생기면 \`knowledge_save\`로 전문을 기록한다(나중의 나·동료가 그것만 읽고 일할 수 있도록).
 
-> ⚙️ 이건 익명 조직 기본값입니다. 웹UI **관리 탭 ▸ 맥락 관리**에서 회사 정체성·페르소나·규칙으로 바꾸세요. (온보딩: \`/ui/#/onboarding\`)`;
+> ⚙️ 이건 익명 조직 기본값입니다. 웹UI **수집 · 증류 ▸ AI 주입 설정**에서 회사 정체성·페르소나·규칙으로 바꾸세요. (온보딩: \`/ui/#/onboarding\`)`;
 
 try {
   const result = await withBootstrapRetry("bootstrap-baseline", async () => {

@@ -1,7 +1,7 @@
 // #3778 휴지통의 모양 — 감사 스냅샷에서 라벨·미리보기를 추리는 순수 함수. DB 불요.
 //   실행: npm run build && node dist/v6/trash-shape.test.js
 import assert from "node:assert/strict";
-import { labelOf, previewOf, PREVIEW_BODY_MAX, isMirroredSourceSnapshot, TRASHABLE_SOURCE_SYSTEMS } from "./trash-shape.js";
+import { labelOf, previewOf, PREVIEW_BODY_MAX, isMirroredSourceSnapshot, TRASHABLE_SOURCE_SYSTEMS, purgeAxesOf } from "./trash-shape.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -62,6 +62,16 @@ t("S8 스냅샷이 아예 없어도 던지지 않는다(null·undefined) — 좌
 
 t("S9 SQL 과 같은 집합을 본다 — 허용 목록은 빈 문자열과 local 둘뿐(늘리면 SQL 도 같이 늘어난다: 같은 상수를 넘긴다)", () => {
   assert.deepEqual([...TRASHABLE_SOURCE_SYSTEMS], ["", "local"]);
+});
+
+t("S10 ★지식을 완전히 지우면 두 축을 비운다 — 주입 섹션은 같은 문서가 org_section 으로도 감사된다(한 축만 비우면 본문이 남는다)", () => {
+  assert.deepEqual(purgeAxesOf("knowledge"), ["knowledge", "org_section"]);
+});
+
+t("S11 다른 종류는 제 축 하나 — 모르는 종류도 넓히지 않는다", () => {
+  assert.deepEqual(purgeAxesOf("project"), ["project"]);
+  assert.deepEqual(purgeAxesOf("source"), ["source"]);
+  assert.deepEqual(purgeAxesOf("zzz"), ["zzz"]);
 });
 
 console.log(`\n${pass} passed`);

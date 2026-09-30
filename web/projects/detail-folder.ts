@@ -79,13 +79,15 @@ function projectFolderSection(id, base, shareBase?) {
   async function bulkDeleteSel() {
     const rels: any[] = [...sel.ids];
     if (!rels.length) return;
-    if (!confirm(rels.length + '개 항목을 삭제할까요?\n\n폴더는 안의 내용까지 함께 삭제됩니다(되돌릴 수 없음).')) return;
+    //  #3778 — 자료로 등록된 파일은 서버가 보관한다(휴지통 ▸ 자료 탭). 종전 «되돌릴 수 없음» 은 그 파일들에 대해 거짓이었다.
+    if (!confirm(rels.length + '개 항목을 삭제할까요?\n\n폴더는 안의 내용까지 함께 삭제됩니다. 자료로 등록된 파일은 [휴지통] ▸ [자료] 탭에서 되살릴 수 있고, 그 밖의 파일과 빈 폴더는 되살릴 수 없어요.')) return;
     // 병렬 삭제 — 일부 실패해도 나머지 진행(성공/실패 집계).
     const results = await Promise.allSettled(rels.map((rel) =>
       api(B + id + '/file?path=' + encodeURIComponent(rel), { method: 'DELETE' })));
     const ok = results.filter((r) => r.status === 'fulfilled').length;
     const fail = results.length - ok;
-    toast(fail ? (ok + '개 삭제 · ' + fail + '개 실패') : (ok + '개 삭제했습니다'), fail > 0);
+    const kept = results.reduce((n, r) => n + (r.status === 'fulfilled' ? Number((r.value as any)?.trashed) || 0 : 0), 0);
+    toast((fail ? (ok + '개 삭제 · ' + fail + '개 실패') : (ok + '개 삭제했습니다')) + (kept ? ` — 자료 ${kept}건은 휴지통에서 되살릴 수 있어요` : ''), fail > 0);
     toggleSelMode(false);
     load();
   }

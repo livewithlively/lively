@@ -82,7 +82,7 @@ export async function runManager(
     const docs = allDocs.filter((d) => d.repos.length > 0);
     if (!cands.length && !docs.length) {
       const why = allCats.length
-        ? `정의는 있으나 레포가 연결된 도메인이 없음(${allCats.length}개 후보 중 0개) — [맥락 관리 ▸ 분류 ▸ 분류축]에서 레포를 지정하세요`
+        ? `정의는 있으나 레포가 연결된 도메인이 없음(${allCats.length}개 후보 중 0개). 「분류체계」 앱에서 분류에 레포를 지정하세요`
         : "정의(should)·지식과 코드가 함께 있는 도메인 없음";
       await recordManagerRun(m.id, "ok", { candidates: 0, note: why });
       return { ...base, candidates: 0, skipped: why };

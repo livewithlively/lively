@@ -11,7 +11,8 @@ import { join } from "node:path";
 import { detectAwaiting, modeEnvArgs, themeEnvArgs, normalizeTheme, harnessThemeArgv, harnessThemeEnvArgs, harnessFollowsTheme, harnessLiveThemeSteps, harnessLiveThemeSupported, canSeeSession, resolveAgentPhase, parseReportedPhase, isPhaseFresh, isActivityProgress, PHASE_TTL_SEC } from "./terminal-sessions.js";
 // 배럴(terminal-sessions.ts)엔 새 심볼을 늘리지 않는다 — 그 파일의 재수출 집합은 #1313 R15 분할의 계약이다.
 import { harnessLaunchArgv, harnessLoginArgv, harnessFailNotice, HARNESSES, RESUME_ID_RE } from "./catalog.js";
-import { SHELL_CMDS, isAgentOffline } from "./phase.js";  // E12 — 런처가 pane 포그라운드를 무엇으로 보이게 하는가(#1535)
+import { SHELL_CMDS, isAgentOffline } from "./phase.js";
+import { harnessIo } from "./harness-io/adapter.js";   // #4135 — 하네스가 답하는 화면 판정  // E12 — 런처가 pane 포그라운드를 무엇으로 보이게 하는가(#1535)
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -43,6 +44,30 @@ t("전사에 남은 사용자의 번호목록 메시지 → 대기 아님(#853 �
   ].join("\n");
   assert.equal(detectAwaiting(pane), false);
 });
+// #4135 — codex 화면은 문구도 커서도 다르다(실측 2026-09-24, 0.153.4). 하네스가 답하면 그 답이 정본이다.
+t("detectAwaiting — codex 대화상자 셋(훅 검토·업데이트·승인)은 하네스 판정으로 잡는다", () => {
+  const hooks = [
+    "  Hooks need review",
+    "  21 hooks are new or changed.",
+    "› 1. Review hooks",
+    "  2. Trust all and continue",
+    "  Press enter to confirm or esc to go back",
+  ].join("\n");
+  const approval = [
+    "  Would you like to run the following command?",
+    "  $ touch /tmp/x",
+    "› 1. Yes, proceed (y)",
+    "  Press enter to confirm or esc to cancel",
+  ].join("\n");
+  const ready = ["› Ask Codex to do anything", "  gpt-5.6-terra medium · ~/box/yoon"].join("\n");
+  const screen = harnessIo("codex")!.screen!;
+  //  종전 휴리스틱(claude·antigravity 문구)만으로는 훅 검토 화면을 못 잡았다 — 그래서 하네스 판정을 준다.
+  assert.equal(detectAwaiting(hooks), false, "종전 판정은 이 화면을 놓친다(이 단언이 근거다)");
+  assert.equal(detectAwaiting(hooks, screen), true);
+  assert.equal(detectAwaiting(approval, screen), true);
+  assert.equal(detectAwaiting(ready, screen), false);   // 입력칸이 떠 있으면 대기가 아니다
+});
+
 t("detectAwaiting — Antigravity 신뢰 대화상자('Do you trust'·'↑/↓ Navigate · enter Confirm')도 확인 필요다(실측 2026-08-18)", () => {
   const ag = [
     " Accessing workspace: /Users/lively/box/yoon/sessions/box-yoon-ca3037ee",
@@ -112,6 +137,15 @@ t("Bash 승인 다이얼로그(Do you want to proceed?) → 대기", () => {
   assert.equal(detectAwaiting(pane), true);
 });
 
+t("Codex Action required 화면 → 대기", () => {
+  const pane = [
+    " Action required",
+    " Codex needs your decision before continuing.",
+    " Press enter to continue",
+  ].join("\n");
+  assert.equal(detectAwaiting(pane), true);
+});
+
 t("빈 pane → 대기 아님", () => {
   assert.equal(detectAwaiting(""), false);
 });
@@ -166,15 +200,26 @@ t("harnessThemeArgv: codex 는 -c 로 tui.theme 을 덮는다 — 값이 dark/li
   assert.deepEqual(harnessThemeArgv("codex", "dark"), ["-c", "tui.theme=one-half-dark"]);
   assert.deepEqual(harnessThemeArgv("codex", "light"), ["-c", "tui.theme=one-half-light"]);
 });
+t("★ harnessThemeEnvArgs: codex 는 기본색 렌더링으로 입력칸이 실행 중 테마 전환을 따라간다", () => {
+  for (const theme of ["dark", "light"]) {
+    assert.deepEqual(harnessThemeEnvArgs("codex", theme), ["-e", "FORCE_COLOR=1"]);
+    assert.deepEqual(harnessThemeEnvArgs("codex", theme, "win32"), ["-e", "FORCE_COLOR=1"]);
+  }
+});
 t("harnessThemeEnvArgs: opencode 는 설정을 env 문자열로 받는다(tmux -e 쌍으로)", () => {
-  assert.deepEqual(harnessThemeEnvArgs("opencode", "dark"), ["-e", 'OPENCODE_CONFIG_CONTENT={"theme":"dark"}']);
+  for (const theme of ["dark", "light"] as const) {
+    assert.deepEqual(harnessThemeEnvArgs("opencode", theme), ["-e", `OPENCODE_CONFIG_CONTENT={"theme":"${theme}"}`]);
+    assert.deepEqual(harnessThemeEnvArgs("opencode", theme, "win32"), []);
+  }
 });
 t("★ 실행 시점 주입 경로가 없는 하네스는 **아무것도 안 한다** — 전역 설정을 대신 고치지 않는다", () => {
   // antigravity: 테마는 있으나(colorScheme) 플래그·env 가 없다. 비격리 박스에선 그 파일이 구성원 공유라
   //  대신 고치면 남의 화면까지 바뀐다. grok: 테마 기능 자체가 없다.
   for (const h of ["antigravity", "grok", "shell", "모르는하네스"]) {
-    assert.deepEqual(harnessThemeArgv(h, "dark"), [], `${h} 는 argv 를 얹지 않아야 한다`);
-    assert.deepEqual(harnessThemeEnvArgs(h, "dark"), [], `${h} 는 env 를 얹지 않아야 한다`);
+    for (const theme of ["dark", "light"] as const) {
+      assert.deepEqual(harnessThemeArgv(h, theme), [], `${h} 는 argv 를 얹지 않아야 한다`);
+      assert.deepEqual(harnessThemeEnvArgs(h, theme), [], `${h} 는 env 를 얹지 않아야 한다`);
+    }
     assert.equal(harnessFollowsTheme(h), false);
   }
 });
@@ -515,8 +560,10 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     const keys = HARNESSES.map((h) => h.key);
     ok2(keys.includes("opencode") && keys.includes("antigravity"), "E13a 배선된 4하네스가 모두 세션 선택지에 있다");
     const agy = HARNESSES.find((h) => h.key === "antigravity");
+    const codex = HARNESSES.find((h) => h.key === "codex");
     ok2(agy?.bin === "agy", "E13b antigravity 의 실행 파일은 agy(key 로 spawn 하면 ENOENT)");
     ok2(agy?.autoApproveFlag === "--dangerously-skip-permissions", "E13c 자동승인은 그 하네스가 실제로 받는 플래그");
+    ok2(codex?.autoApproveFlag === "--dangerously-bypass-approvals-and-sandbox", "E13c-b Codex 자동승인은 현재 CLI가 인식하는 완전 권한 플래그");
     ok2((agy?.flags.find((f) => f.name === "--effort")?.choices || []).join(",") === ",low,medium,high",
       "E13d agy 의 추론강도는 3단계 — 다른 하네스의 목록을 복사해 두면 고른 값이 거부된다");
     ok2(HARNESSES.find((h) => h.key === "opencode")?.autoApproveFlag === "--auto", "E13e opencode 자동승인은 --auto");
@@ -684,6 +731,33 @@ t("[#2439] runtimeChoice 가 tmux 옵션에서 rows.push 까지 이어진다", (
   assert.match(src, /runtimeChoice: p\.runtimeChoice/, "★ rows.push 가 그것을 실제로 담는다");
   //  #3892 — 표식 목록이 한 벌(session-meta-heal.ts)로 옮겨졌다: 옵션 이름은 그 빌더에, 생성은 그 빌더에 모드를 넘긴다.
   const heal = readFileSync(join(here, "session-meta-heal.ts"), "utf8");
-  assert.match(heal, /"@box_runtime", "chat"/, "표식 목록이 그 옵션을 박는다");
-  assert.match(src, /sessionMetaCmds\(id, \{[^}]*runtimeChat: chatRuntime/, "생성이 그 옵션을 남긴다(모드를 표식 목록에 넘긴다)");
+  assert.match(heal, /"@box_runtime", v\.runtime/, "표식 목록이 그 옵션을 박는다");
+  //  ★ #4135 — 그 표식을 **codex 모드도 나눠 쓴다**("chat" | "terminal" | "app-server"). 그래서 목록 파서가
+  //   원시값을 그대로 올리고(runtimeRaw), 생성은 두 축의 값을 한 자리에서 정해 표식 목록에 넘긴다.
+  //   원시값을 안 올리면 codex 모드가 세 낱말로 접혀 사라지고, 판정이 다시 «배포 기본 추측» 으로 돌아간다(#3982 의 뿌리).
+  assert.match(src, /runtimeRaw: runtimeRaw \|\| ""/, "중간 객체가 표식 원시값을 그대로 올린다");
+  assert.match(src, /runtimeRaw: p\.runtimeRaw/, "★ 중간 객체가 원시값도 담는다");
+  //  ★★ #4135 — **최종 행까지** 와야 뜻이 있다. 중간 객체까지만 오면 화면·배달이 «표식 없음» 으로 읽어 배포
+  //   기본으로 되돌아간다(실측 2026-09-26: 터미널로 뜬 세션을 목록이 app-server 라고 말했다 — 노드 세션도 같은 코드).
+  //   그래서 «rows.push 가 담는다» 만 재던 이 표에 **sessions.push** 를 따로 세운다(다섯 자리 중 마지막 칸).
+  assert.match(src, /\.\.\.\(r\.runtimeChoice \? \{ runtimeChoice: r\.runtimeChoice \} : \{\}\)/, "★ 최종 행이 runtimeChoice 를 담는다");
+  assert.match(src, /\.\.\.\(r\.runtimeRaw \? \{ runtimeRaw: r\.runtimeRaw \} : \{\}\)/, "★★ 최종 행이 표식 원시값을 담는다(이게 없어서 판정이 배포 기본으로 되돌아갔다)");
+  assert.match(src, /sessionMetaCmds\(id, \{[\s\S]*?runtime: chatRuntime \? "chat" : codexModeStampFor\(/, "생성이 두 축의 모드를 한 표식으로 남긴다");
+});
+
+// ── codex 시작 «Update available» 창을 **세션 만들 때** 없앤다 (#4135 후속, 실측 2026-09-26) ──────
+//  ⚠ 이 배선이 빠지면 증상이 조용하다: 세션은 뜨고, 목록은 정상이고, 사람만 «codex 를 직접 쳐야 실행된다» 를 본다
+//   (그 창에 Enter 가 들어가면 `npm install -g` 가 EACCES 로 실패해 codex 가 그 자리에서 끝난다 — 라이브 캡처).
+//   그래서 «폴더 신뢰 옆에서, 훅 신뢰보다 먼저» 라는 자리까지 함께 못박는다.
+t("[#4135] 세션 생성이 codex 업데이트 검사를 끈다(폴더 신뢰와 같은 seam · 훅 신뢰보다 먼저)", () => {
+  const here = new URL(".", import.meta.url).pathname.replace(/\/dist\//, "/src/");
+  const src = readFileSync(join(here, "sessions.ts"), "utf8");
+  assert.match(src, /await ensureCodexUpdateCheckOff\(io, configFile\);/, "★ 그 세션이 실제로 쓸 설정 파일에 심는다");
+  const off = src.indexOf("await ensureCodexUpdateCheckOff(");
+  const hooks = src.indexOf("await ensureCodexHooksTrusted(");
+  assert.ok(off > 0 && hooks > off, "업데이트 검사 끄기가 훅 신뢰(app-server 를 띄운다)보다 먼저다");
+  //  두 번째 겹 — 그 창이 이미 떠 있으면 Escape 로 닫는다(Enter 는 codex 를 죽인다).
+  const fp = readFileSync(join(here, "session-first-prompt.ts"), "utf8");
+  assert.match(fp, /Update now\|Skip until next version/, "판정은 번호 선택지 줄로만 한다(배너 문안이 아니다)");
+  assert.match(fp, /sendKeyToSession\(id, "Escape"\)/, "★ 닫는 키는 Escape 다");
 });

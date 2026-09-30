@@ -1,78 +1,93 @@
-# public/styles — 화면별 스타일시트 (옛 단일 styles.css 분할, #1313 R50)
+# public/styles — per-screen stylesheets (split from the old single styles.css, #1313 R50)
 
-레포 churn 1위였던 `public/styles.css`(8,600줄 · 6개월 537커밋)를 **파일 안 섹션 주석 경계 그대로**
-잘라 화면별로 나눈 것이다. 내용은 한 글자도 고치지 않았다 — 30개 파일을 아래 순서로 이어붙이면
-분할 전 `styles.css` 와 **byte 동일**하다.
+*[한국어](README.ko.md)*
 
-## ⚠ 순서가 곧 계약
+This is `public/styles.css` (8,600 lines · 537 commits in 6 months), once the file with the most churn in the repo, cut **exactly along the section-comment boundaries inside the file**
+and split by screen. The split didn't change a single character — concatenating the 30 files from the time of the split (`01-`~`30-`) in the order below
+was **byte-identical** to the pre-split `styles.css`. More files have been added since, as screens grew.
 
-CSS 캐스케이드는 "뒤가 앞을 override" 다. 이 디렉터리의 파일들은 옛 단일 파일 안에서의 위치를
-그대로 물려받았고, 실제로 뒤쪽 파일이 앞쪽 규칙을 덮어쓰는 곳이 여러 군데 있다
-(예: `17-projects-board-ext.css` 의 "EOF 자기완결 블록", `22-responsive.css` 의 미디어 쿼리).
+## ⚠ Order is the contract
 
-- 로드 순서의 단일 소스는 **`public/index.html` 의 `<link>` 나열**이다.
-- 파일명 숫자 접두사(`01-` … `30-`)는 그 순서를 눈으로 보이게 하고, 이름순 정렬 = 캐스케이드 순서가
-  되도록 하기 위한 것이다(`scripts/check-css-drops.mjs` 의 합본도 이름순으로 잇는다).
-- **재정렬 금지.** 파일을 옮기거나 접두사를 바꾸면 화면이 조용히 깨진다.
+The CSS cascade is "later overrides earlier". The files in this directory inherited their positions in the old single file
+as-is, and in several places a later file actually overrides rules from an earlier one
+(e.g. the "EOF self-contained block" in `17-projects-board-ext.css`, the media queries in `22-responsive.css`).
 
-## 새 규칙을 넣을 때
+- The single source of load order is **the list of `<link>`s in `public/index.html`**.
+- The numeric file-name prefixes (`01-` … `90-`) make that order visible, and are meant to make name order = cascade order
+  (the concatenation in `scripts/check-css-drops.mjs` also joins files in name order).
+- **Don't reorder.** Moving files or changing prefixes silently breaks screens.
 
-1. 고치려는 화면의 파일 안에서, 기존 규칙 근처에 넣는다(그게 이 분할의 목적 — blast radius 국소화).
-2. 특이도 싸움 때문에 "맨 뒤"여야만 한다면 마지막 파일 끝에 붙인다.
-3. 새 파일을 만들면 **반드시** `public/index.html` 의 `<link>` 나열에 같은 자리로 추가한다.
-   (안 하면 그 파일은 아예 로드되지 않는다 — 서버는 디렉터리를 스캔하지만 그건 캐시 버전 계산용이다.)
+## Adding new rules
 
-## 서빙 / 캐시
+1. Put them in the file for the screen you're fixing, near the existing rules (that's the point of the split — keeping the blast radius local).
+2. If a specificity fight means it has to be "at the very end", append it to the end of the last file.
+3. If you create a new file, you **must** add it to the `<link>` list in `public/index.html` at the matching position.
+   (Otherwise the file is never loaded at all — the server does scan the directory, but only to compute the cache version.)
 
-`src/web.ts` 의 `listLocalAssets()` 가 `public/styles/*.css` 를 포함해 스캔하고, 전체 로컬 자산의
-콘텐츠 해시로 빌드버전 1개를 만든다(#1017). `index.html` 서빙 시 각 `<link href>` 에 `?v=<버전>` 이
-주입되고, `?v=` 붙은 요청은 `immutable` 로 응답한다. 즉 CSS 를 고치면 F5 한 번으로 반영된다.
+## Serving / cache
 
-## 가드
+`listLocalAssets()` in `src/web-assets.ts` (#2643 — `src/web.ts` uses it for serving) scans the local assets, including `public/styles/*.css`, and builds one build version from the
+content hash of all local assets (#1017). When `index.html` is served, `?v=<version>` is
+injected into each `<link href>`, and requests whose `?v=` matches the current version are answered as `immutable`. So when you change CSS, a single F5 picks it up.
 
-`node scripts/check-css-drops.mjs` — HEAD 의 톱레벨 셀렉터가 working 에서 사라지지 않았는지
-**합본 기준**으로 검사한다(#317 재발 방지). 배포(`scripts/restart-gateway.sh`)에서 비차단 경고로 돈다.
+## Guard
 
-## 순서 (= index.html 나열)
+`node scripts/check-css-drops.mjs` — checks, **against the concatenation**, that no top-level selector in HEAD has disappeared from the working tree
+(prevents a repeat of #317). It runs as a non-blocking warning during deploys (`scripts/restart-gateway.sh`).
 
-| # | 파일 | 화면/범위 |
+## Order (= index.html list)
+
+| # | File | Screen/scope |
 |---|------|-----------|
-| 01 | `01-base.css` | §1 컬러 토큰 · §2 베이스 타이포 · 페이지 오버레이 스크롤바 · 포커스 링 · 스킵 링크 |
-| 02 | `02-shell.css` | 상단바(워드마크·탭·우측 유틸) · 본문 셸 |
-| 03 | `03-components.css` | 공용 컴포넌트 — 카드 · 페이지 헤더 · 그리드 · 필/배지 · 버튼 · 폼 · 리스트 행 · 마크다운 본문 · 스켈레톤 · 로그인 게이트 · 토스트 |
-| 04 | `04-domain-curation.css` | 도메인 큐레이션(domainmap 흡수) — `.dm-*` · `.maprow` · seg-tabs |
-| 05 | `05-admin.css` | 관리탭(#/system) — 마스터-디테일 2단 · 구성원/토큰 · 감사 |
-| 06 | `06-learn.css` | 사용 가이드(#/learn) — 플라이휠 · 설치 온보딩 · 세션 대화록 |
-| 07 | `07-knowledge-map.css` | 지식 지도 / 탐색 / 유닛 상세 / 검토 · 지식(#/knowledge) 칩 · 지식↔프로젝트 연결 |
-| 08 | `08-activity.css` | 작업 현황(#/dash) — 구성원 요약 + 작업 타임라인 |
-| 09 | `09-screens-batch.css` | "신규(8개 화면 개선)" 배치 — 편집 split view · 유닛 메타바 · 훅 개요 · 위험 버튼 |
-| 10 | `10-terminal.css` | 터미널/AI 세션(#/terminal) — 팀 폴더 · 작업 위치 2택 · 세션 보드(#745) |
-| 11 | `11-domainmap.css` | 도메인 맵(#/domainmap) — should/is 2열 + 괴리 |
-| 12 | `12-categories.css` | 분류체계(#/categories) — 분류축 트리 CRUD |
-| 13 | `13-projects.css` | 프로젝트(#/projects2) 보드·상세 — 타일 배지 · 태스크 트리 · 연결 지식 · 세부 설정 팝업 |
-| 14 | `14-files-upload.css` | 파일 미리보기(`.ft`) · 업로드 진행/취소 바(#797) — 프로젝트·대시보드 공유 |
-| 15 | `15-projects-task-modal.css` | 커스텀 필드(+ 컬럼 추가) · 태스크 상세 모달(`.pjv-tm`) · Activity · 태그 피커 · 하위 태스크 |
-| 16 | `16-projects-board.css` | 프로젝트 목록(클릭업식 리스트) · 세션 주입 지도 · '보기' 팝오버 · 영역 사이드바 |
-| 17 | `17-projects-board-ext.css` | #317 복원 블록 · 리스트 그룹(#280) · 폴더›리스트 3단계(#475) · 상태 아이콘(#499/#500) |
-| 18 | `18-notion-mirror.css` | #551 노션 무손실 미러 — 리치 본문 + 페이지 트리 + ClickUp 이관 UI |
-| 19 | `19-connectors.css` | #586 커넥터 UX — 상태 카드 · 가이드 · 픽커 · run 로그 · WIKI 사이드바 |
-| 20 | `20-dashboard.css` | 대시보드(#/dashboard) — 코크핏 위젯 · 내 할 일 · 편집 모드 · 팀 공유 폴더 |
-| 21 | `21-wiki-notion.css` | #657 WIKI 노션화 — 블록 에디터 · ⌘K · 아이콘/커버 · 리디자인(#657r/t/w) |
-| 22 | `22-responsive.css` | #701 반응형 전면 정비(≤760 / ≤820) |
-| 23 | `23-projects-editor-status.css` | #730 본문 블록 에디터 마운트 · #729 상태 체계 템플릿 |
-| 24 | `24-wiki-redesign.css` | #764 WIKI 재구축(v2 오로라 · v3 브리핑 대문 · v4 다섯 투영 · v6 대문 빌더) |
-| 25 | `25-projects-detail-modal.css` | 프로젝트 상세 팝업(`.pjv-pm`) |
-| 26 | `26-docs-guide.css` | 사용 가이드 = 문서 사이트(#780) — 사이드바 · 가이드 카드 · 전환형 탭 |
-| 27 | `27-start-onboarding.css` | 사이드바 스크롤바(공용) · 저장소·로그(#813) · 시작하기(#/start) 도장깨기 |
-| 28 | `28-guide-diagrams.css` | 가이드 도식 프리미티브 — `:::axes` · `:::fig` · `:::wire` · `:::shot` · #1000 시작하기 |
-| 29 | `29-projects-board-header.css` | 프로젝트 보드 상단 헤더 3층(#1067) — 브레드크럼 · 뷰 탭 · 툴바 · 팝오버 |
-| 30 | `30-projects-views.css` | #1067 뷰 — 테이블 · 타임라인(간트) · 계층(#1305) · 의존선(#1308) |
-| 35 | `35-liv.css` | 리브(#/liv) — 액션카드 + 대화(#1631) |
-| 36 | `36-chat.css` | 공용 대화창 추가분(web/chat-view.ts) + 세션 대화 화면 + desktop 변형(#1719) |
-| 40 | `40-v2.css` | 새 1탭 셸(#1719) + 클래식 임베드(?embed=1) — 캐스케이드 맨 뒤에서 클래식 규칙을 되잡는다 |
-| 42 | `42-v2-panes.css` | 새 셸 프로젝트 = 도킹 화면 — 칸(세션·자료·지식·타임라인) 나누기·접기 |
-| 43 | `43-v2-topbar-search.css` | 데스크톱 창 맨 윗줄(탭 줄) · 사이드바 뒤로/앞으로 · 통합검색 스포트라이트 |
-| 44 | `44-desktop-update.css` | 데스크톱 앱이 받아 둔 업데이트 알림 줄(#1838) |
-| 46 | `46-v2-me.css` | 새 셸 [내 프로필 · 환경설정] 창(#1843) — 좌하단 [나] 행이 여는 2단 오버레이 |
-| 47 | `47-v2-rail.css` | 새 셸 **좌측 끝 레일**(#2016) — 워크스페이스 문패 · 구역 넷 · 최근 앱 · [앱]/[나] + 구역별 사이드바 부품 |
-| 50 | `50-mobile.css` | 폰(≤640px) 전면 정비(#4088) — 아래 탭 바 · 목록은 화면 한 장 · 곁칸 서랍 · 표는 제목 열만 · 흐름 지도 세로 선로. 화면 파일마다 흩어진 좁은 폭 규칙을 캐스케이드 맨 뒤(90-dark 앞)에서 되잡는다 |
+| 01 | `01-base.css` | §1 color tokens · §2 base typography · page overlay scrollbar · focus ring · skip link |
+| 02 | `02-shell.css` | Top bar (wordmark · tabs · right-side utilities) · body shell |
+| 03 | `03-components.css` | Shared components — cards · page header · grid · pills/badges · buttons · forms · list rows · markdown body · skeletons · login gate · toasts |
+| 04 | `04-domain-curation.css` | Domain curation (absorbed from domainmap) — `.dm-*` · `.maprow` · seg-tabs |
+| 05 | `05-admin.css` | Admin tab (#/system) — two-column master-detail · members/tokens · audit |
+| 06 | `06-learn.css` | User guide (#/learn) — flywheel · install onboarding · session transcripts |
+| 07 | `07-knowledge-map.css` | Knowledge map / explore / unit detail / review · knowledge (#/knowledge) chips · knowledge↔project links |
+| 08 | `08-activity.css` | Work status (#/dash) — member summary + work timeline |
+| 09 | `09-screens-batch.css` | The "new (8 screen improvements)" batch — edit split view · unit meta bar · hook overview · danger buttons |
+| 10 | `10-terminal.css` | Terminal/AI sessions (#/terminal) — team folders · two-way work-location choice · session board (#745) |
+| 11 | `11-domainmap.css` | Domain map (#/domainmap) — should/is two columns + gaps |
+| 12 | `12-categories.css` | Taxonomy (#/categories) — category tree CRUD |
+| 13 | `13-projects.css` | Projects (#/projects2) board · detail — tile badges · task tree · linked knowledge · detailed settings popup |
+| 14 | `14-files-upload.css` | File preview (`.ft`) · upload progress/cancel bar (#797) — shared by projects and dashboard |
+| 15 | `15-projects-task-modal.css` | Custom fields (+ add column) · task detail modal (`.pjv-tm`) · Activity · tag picker · subtasks |
+| 16 | `16-projects-board.css` | Project list (ClickUp-style list) · session injection map · 'View' popover · area sidebar |
+| 17 | `17-projects-board-ext.css` | #317 restored block · list groups (#280) · folder›list three levels (#475) · status icons (#499/#500) |
+| 18 | `18-notion-mirror.css` | #551 lossless Notion mirror — rich body + page tree + ClickUp migration UI |
+| 19 | `19-connectors.css` | #586 connector UX — status cards · guides · pickers · run logs · WIKI sidebar |
+| 20 | `20-dashboard.css` | Dashboard (#/dashboard) — cockpit widgets · my to-dos · edit mode · team shared folders |
+| 21 | `21-wiki-notion.css` | #657 Notion-style WIKI — block editor · ⌘K · icons/covers · redesign (#657r/t/w) |
+| 22 | `22-responsive.css` | #701 full responsive overhaul (≤760 / ≤820) |
+| 23 | `23-projects-editor-status.css` | #730 body block editor mount · #729 status scheme templates |
+| 24 | `24-wiki-redesign.css` | #764 WIKI rebuild (v2 aurora · v3 briefing front page · v4 five projections · v6 front-page builder) |
+| 25 | `25-projects-detail-modal.css` | Project detail popup (`.pjv-pm`) |
+| 26 | `26-docs-guide.css` | User guide = docs site (#780) — sidebar · guide cards · switchable tabs |
+| 27 | `27-start-onboarding.css` | Sidebar scrollbar (shared) · storage · logs (#813) · getting started (#/start) checklist |
+| 28 | `28-guide-diagrams.css` | Guide diagram primitives — `:::axes` · `:::fig` · `:::wire` · `:::shot` · #1000 getting started |
+| 29 | `29-projects-board-header.css` | Project board three-layer top header (#1067) — breadcrumbs · view tabs · toolbar · popovers |
+| 30 | `30-projects-views.css` | #1067 views — table · timeline (Gantt) · hierarchy (#1305) · dependency lines (#1308) |
+| 31 | `31-context-pipeline.css` | [Context management] tab (#1419 T6) — pipeline overview + per-stage management screens · left sidebar layout (#1584) |
+| 32 | `32-file-share.css` | Share links (#1436) — full-page landing (#/f) · copy-link fallback box |
+| 33 | `33-distiller-page.css` | Distiller settings page (#1564, `#/context/distill/<key>`) — three full-width columns |
+| 34 | `34-service-logins.css` | [Settings ▸ External services] service logins (#1597) — two sections, connected / available · service tiles |
+| 35 | `35-liv.css` | Liv (#/liv) — action cards + conversation (#1631) |
+| 36 | `36-chat.css` | Shared chat view additions (web/chat-view.ts) + session conversation screen + desktop variant (#1719) |
+| 37 | `37-projects-hub.css` | Project detail = tool widget hub (#3916) — three-column widget grid · resizing (#4164) · layout editing |
+| 40 | `40-v2.css` | New single-tab shell (#1719) + classic embed (?embed=1) — reclaims classic rules after the classic files (`01`~`37`) |
+| 41 | `41-onboarding.css` | First-time setup (#/welcome, #1813) — all classes use the `ob-` prefix |
+| 42 | `42-v2-panes.css` | New shell project = docked screen — splitting/collapsing panes (session · sources · knowledge · timeline) |
+| 43 | `43-v2-topbar-search.css` | Desktop window top line (tab row) · sidebar back/forward · unified search spotlight |
+| 44 | `44-desktop-update.css` | Notice bar for updates the desktop app has downloaded (#1838) |
+| 45 | `45-v2-side-swap.css` | When the side pane passes half the width, the main pane moves to the center (#1819) — paired with `web/v2/side-swap.ts` |
+| 46 | `46-v2-me.css` | New shell [My profile · Preferences] window (#1843) — a two-column overlay opened by the bottom-left [Me] row |
+| 47 | `47-v2-rail.css` | New shell **far-left rail** (#2016) — workspace nameplate · four areas · recent apps · [Apps]/[Me] + per-area sidebar parts |
+| 48 | `48-v2-sources.css` | Sources app (#2423) reading room — list + original in two panes · app-owned sidebar |
+| 49 | `49-v2-ctx.css` | Context menu (#3784) — only what the engine (`web/v2/ctx-menu.ts`) adds (the skeleton is in `42-v2-panes.css`) |
+| 49 | `49-v2-taxonomy.css` | "Taxonomy" app (#4233) · full map · things to fix · category detail (link diagram) · group cleanup window. In name order, after `49-v2-ctx.css` and before `50-mobile.css` |
+| 49 | `49-v2-projpane.css` | Side-pane "Project" app (#4135, `web/v2/panes-tasks.ts`) — layered on top of `.pn-tk-*` in `42-v2-panes.css` |
+| 50 | `50-mobile.css` | Full phone (≤640px) overhaul (#4088) — bottom tab bar · lists take one full screen · side-pane drawer · tables show only the title column · vertical track for the flow map · ClickUp-mobile-style project board (#4231). Reclaims the narrow-width rules scattered across screen files near the end of the cascade (before 52-guide · 90-dark) |
+| 52 | `52-guide.css` | "User guide" app (#4179, `web/guide/*.ts`) — three panes: doc list · body · on this page · width decided by container query |
+| 90 | `90-dark.css` | Dark theme (#1683) — full dark redefinition of the light tokens in `01-base.css` (two paths: `data-theme="dark"` · `prefers-color-scheme: dark`) + the '§보정' (fixes) section at the bottom. The very end of the cascade |

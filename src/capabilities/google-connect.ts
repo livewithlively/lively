@@ -169,9 +169,9 @@ export async function googleCollectState(memberId: string): Promise<GoogleCollec
   };
 }
 
-// enum 에서 gmail 을 지우지 않는다 — 이미 켜 둔 조직의 저장 요청이 zod 400 으로 튕기면 드라이브까지 못 고친다.
-//  거부는 스키마가 아니라 googleCollectAction 이 **사유와 함께** 한다(skipped).
-const SERVICES = z.array(z.enum(["drive", "gmail", "calendar"])).describe("모을 서비스. 비우면 드라이브만. ★Gmail 은 1차 런칭 대상이 아니라 넣어도 켜지지 않는다. calendar 는 수집기가 없어 동의 범위만 넓힌다(도구 전용).");
+// 판매 목록(GOOGLE_LAUNCH_SERVICES) 밖의 서비스가 생겨도 enum 에서 지우지 않는다 — 이미 켜 둔 조직의 저장 요청이
+//  zod 400 으로 튕기면 드라이브까지 못 고친다. 거부는 스키마가 아니라 googleCollectAction 이 **사유와 함께** 한다(skipped).
+const SERVICES = z.array(z.enum(["drive", "gmail", "calendar"])).describe("모을 서비스(켜 둘 전체 집합 — 빠진 것은 꺼진다). 비우면 드라이브만. Gmail 도 골라서 켤 수 있다(2026-09-22 — 구글 미검증 100명 한도 안). 동의하지 않은 범위는 켜지 않고 skipped 로 알린다. calendar 는 수집기가 없어 동의 범위만 넓힌다(도구 전용).");
 
 const orgGoogleCollect: Capability = {
   name: "org_google_collect", title: "구글 자료 가져오기 상태",
@@ -191,8 +191,8 @@ const orgGoogleCollectSet: Capability = {
   description:
     "\"자료 가져오기\" 토글(구성원). enabled=true 인데 내 구글 연결이 없으면 needs_connect=true 와 authorization_url 을 " +
     "돌려준다 — 그 화면에서 [허용]하면 연결이 저장되고, 다시 이 토글을 부르면 수집기가 만들어진다(token_source=member:<나>, " +
-    "토큰 복사 0). services 로 모을 서비스를 고른다. ★**Gmail 은 1차 런칭 대상이 아니다**(2026-08-26 결정) — 제한범위라 " +
-    "CASA·불가역 100명 한도를 태운다. 넣어 불러도 켜지지 않고, 이미 켜져 있던 것은 건드리지 않고 skipped 로 알린다. " +
+    "토큰 복사 0). services 로 모을 서비스를 고른다(생략 시 drive 만 — **services 는 켜 둘 전체 집합**이라 빠진 것은 꺼진다). " +
+    "Gmail 도 고를 수 있다(2026-09-22 결정 — 구글 미검증 100명 한도 안에서 연다). 동의하지 않은 서비스는 켜지 않고 skipped 로 알린다. " +
     "false 면 끈다(삭제 아님 — 커서·자료 보존).",
   scope: "memory",
   input: { enabled: z.boolean().describe("true=켜기 · false=끄기"), services: SERVICES.optional() },
@@ -214,7 +214,7 @@ const orgGoogleCollectSet: Capability = {
       return { ok: true, enabled: false, changed, state: await googleCollectState(actor) };
     }
 
-    // 기본은 드라이브만 — Gmail 은 제한범위(CASA·100명 한도)라 **명시적으로 골라야** 켜진다(§9).
+    // 기본은 드라이브만 — Gmail 은 **명시적으로 골라야** 켜진다(최소 권한 · 동의 화면에 «메일 읽기» 를 함부로 띄우지 않는다).
     // ★ 고른 것을 둘로 가른다: 수집기를 만들 것(collect) vs 동의 범위만 넓힐 것(toolOnly=캘린더).
     //  캘린더를 수집기 축에 섞으면 없는 프리셋으로 upsert 를 시도하게 된다.
     const rawPicked = Array.isArray(i.services) && i.services.length > 0 ? (i.services as string[]) : ["drive"];

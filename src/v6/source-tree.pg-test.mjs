@@ -13,7 +13,7 @@
 
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/items/store.js`);
-const { listSourceTree, listSources, countSources } = await import(`${DIST}/v6/source-store.js`);
+const { listSourceTree, listSources, countSources, listSourceUploaders } = await import(`${DIST}/v6/source-store.js`);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -31,7 +31,7 @@ const KN2 = "__srctree_knowledge2__";
 const mkSource = async (externalId, parentExternalId, opts = {}) => (await itemsPool.query(
   `INSERT INTO source(name, kind, title, external_system, external_id, parent_external_id, fields, lifecycle, occurred_at)
    VALUES($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9) RETURNING id`,
-  [`${SYS}:${externalId}`, opts.kind ?? "slack", externalId, opts.system === null ? null : SYS,
+  [`${SYS}:${externalId}`, opts.kind ?? "slack", externalId, opts.system === null ? null : (opts.system ?? SYS),
    opts.system === null ? null : externalId, parentExternalId,
    JSON.stringify(opts.fields ?? (opts.system === null ? {} : { container_name: CH })),
    opts.lifecycle ?? "active", opts.occurredAt ?? new Date().toISOString()])).rows[0].id;
@@ -160,6 +160,30 @@ try {
       `rows=${JSON.stringify(kRows.map((r) => [r.id, r.has_knowledge]))} (기대 [[${kRoot},true]])`);
   chk("K. 그 대화는 «지식이 된 것» 총계에 잡힌다", await countSources({ system: SYS, container: CH4, fold: true, linked: true }) === 1);
 
+  // ── 케이스 L(#4233): 들어온 길: 가지마다 갈래 하나, 파일은 fields.entry 로 갈린다, 목록 group 거르개 = 나무 수. ──
+  const CH5 = "__srctree_grp__";
+  await mkSource("L_up_old", null, { system: "local", fields: { container_name: CH5 } });   // 옛 행(entry 없음) → 올린 자료
+  await mkSource("L_up", null, { system: "local", fields: { container_name: CH5, entry: "upload", author_name: "__l@x.io", author_external_id: "__l-x" } });
+  //  같은 사람의 옛 id 가 섞인 경우 — 올린 사람의 id 는 가장 많이 쓰인 값이다(글자 순 max 면 "__z" 가 뽑힌다).
+  await mkSource("L_up2", null, { system: "local", fields: { container_name: CH5, entry: "upload", author_name: "__l@x.io", author_external_id: "__l-x" } });
+  await mkSource("L_up3", null, { system: "local", fields: { container_name: CH5, author_name: "__l@x.io", author_external_id: "__z" } });
+  await mkSource("L_ai", null, { system: "local", fields: { container_name: CH5, entry: "generated", entry_session: "box-l-00000000" } });
+  await mkSource("L_note", null, { system: null, kind: `${SYS}_lkind`, fields: { container_name: CH5 } });
+  tree = await listSourceTree();
+  const lg = (g) => tree.filter((x) => x.container === CH5 && x.group === g).reduce((a, x) => a + x.n, 0);
+  chk("L. 파일은 entry 로 갈린다: 올린 자료 4(옛 행 포함) · AI가 만든 파일 1", lg("uploaded") === 4 && lg("made_ai") === 1,
+      `uploaded=${lg("uploaded")} made_ai=${lg("made_ai")} (기대 4 · 1)`);
+  chk("L. 직접 적은 글은 made_note", lg("made_note") === 1, `made_note=${lg("made_note")}`);
+  chk("L. 가지마다 갈래가 넷 중 하나", tree.every((x) => ["uploaded", "collected", "made_ai", "made_note"].includes(x.group)),
+      JSON.stringify(tree.filter((x) => !["uploaded", "collected", "made_ai", "made_note"].includes(x.group)).slice(0, 3)));
+  chk("L. 연결 앱 가지는 collected", branch(tree)?.group === "collected", `group=${branch(tree)?.group}`);
+  const lc = (group) => countSources({ group, container: CH5, fold: true });
+  const lcs = { uploaded: await lc("uploaded"), made_ai: await lc("made_ai"), made_note: await lc("made_note"), made: await lc("made"), collected: await lc("collected") };
+  chk("L. 목록 group 거르개 = 나무 수 · made = 둘의 합", lcs.uploaded === 4 && lcs.made_ai === 1 && lcs.made_note === 1 && lcs.made === 2 && lcs.collected === 0,
+      JSON.stringify(lcs));
+  const lup = (await listSourceUploaders()).find((u) => u.name === "__l@x.io");
+  chk("L. 올린 사람 수와 id(가장 많이 쓰인 id)", lup?.n === 3 && lup?.id === "__l-x", JSON.stringify(lup));
+
   // ── 케이스 P: 모양 가드 — 실제로 나가는 SQL 의 실행 계획에 «행마다 도는 SubPlan» 이 없다. ──
   //  종전 모양(`NOT (x IS NOT NULL AND EXISTS …)` · `EXISTS (… OR ks.source_id IN (상관 …))`)은 결과가 같아서 위 케이스로는
   //  안 잡히고, 계획에만 드러난다(해시가 아닌 SubPlan = 바깥 행마다 다시 실행). 해시 SubPlan·anti/semi join 은 괜찮다.
@@ -177,14 +201,15 @@ try {
     await countSources({ fold: true });
     await countSources({ fold: true, linked: true });
     await countSources({ fold: true, linked: false });
+    await listSourceUploaders();
   } finally { delete itemsPool.query; }
-  chk("P. 가드가 SQL 네 개를 실제로 잡았다", captured.length === 4, `잡힌 수=${captured.length}`);
+  chk("P. 가드가 SQL 다섯 개를 실제로 잡았다", captured.length === 5, `잡힌 수=${captured.length}`);
   for (const [i, { sql, params }] of captured.entries()) {
     //  VERBOSE 라야 집계 FILTER·출력 식이 계획에 찍힌다 — 없으면 «hashed SubPlan» 표기가 안 보여 해시도 행마다로 오판한다.
     const plan = JSON.stringify((await realQuery(`EXPLAIN (FORMAT JSON, VERBOSE) ${sql}`, params)).rows[0]);
     const subplans = [...new Set([...plan.matchAll(/"Subplan Name":\s*"([^"]+)"/g)].map((m) => m[1].replace(/^hashed\s+/, "")))];
     const perRow = subplans.filter((n) => !plan.includes(`hashed ${n}`));
-    chk(`P${i + 1}. 행마다 도는 SubPlan 없음 — ${["나무", "총계 fold", "총계 fold+linked", "총계 fold+unlinked"][i]}`,
+    chk(`P${i + 1}. 행마다 도는 SubPlan 없음: ${["나무", "총계 fold", "총계 fold+linked", "총계 fold+unlinked", "올린 사람"][i]}`,
         perRow.length === 0, `해시가 아닌 SubPlan: ${perRow.join(", ")} — 술어가 상관 서브쿼리 모양으로 되돌아갔다`);
   }
 } catch (e) {

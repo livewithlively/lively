@@ -1,6 +1,7 @@
 {
   "_comment2": "#1221 UserPromptSubmit·Notification·Stop 의 work-flag 엔트리 = 세션 실행 단계 보고(턴 시작·확인 필요·턴 종료). 이게 붙어야 게이트웨이가 tmux 화면 스크래핑(스피너 유니코드·capture-pane 패턴) 없이 '작업 중/확인 필요/대기 중'을 안다. Notification 은 matcher 를 안 건다(타입 matcher 를 모르는 구 빌드에서 엔트리가 통째로 안 걸려 조용히 죽는 걸 피한다 — 어느 알림인지는 훅이 페이로드로 판별).",
   "_comment": "PostToolUse 매처 mcp__lively__.* 는 모든 lively MCP 툴(읽기/쓰기)을 잡아 work-flag 에 먹인다. work-flag 가 분기: 아무 lively 툴→.lively(자가게이팅 신호), 쓰기 suffix(WRITE_TOOLS)만→.writeback. memory_write 는 WRITE_TOOLS 제외라 .writeback 오판 없음(.lively 만 — 무해). 이 키는 emitHooks/어댑터가 hooks 블록만 머지하므로 배포 settings.json 에 포함되지 않는다.",
+  "_comment3": "#4217 PostToolUse Agent|Task · SubagentStop 의 work-flag 엔트리 = 기록 fork 진행 중 표시(<sid>.writeback-pending). 이름 머리가 '기록:' 인 백그라운드 fork 를 띄우면 세우고 그 자식의 SubagentStop 이 걷는다. 종료 게이트는 표시가 있는 동안 막지 않는다(fork 가 쓰는 중에 막으면 메인이 중복 기록한다).",
   "hooks": {
     "SessionStart": [
       {
@@ -27,6 +28,16 @@
       },
       {
         "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/work-flag.mjs\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Agent|Task",
         "hooks": [
           {
             "type": "command",
@@ -68,6 +79,17 @@
           }
         ]
       },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/work-flag.mjs\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
       {
         "hooks": [
           {

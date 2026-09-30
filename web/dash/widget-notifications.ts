@@ -44,7 +44,7 @@ async function fillNotifications(zone, projectsP) {
         .then((d) => ({ id, feed: (d && d.feed) || [] })).catch(() => ({ id, feed: [] })))),
     api('/api/ui/terminal/sessions').then((d) => (d && d.sessions) || []).catch(() => []), // 세션 초대용
     api('/api/ui/terminal/config').catch(() => null),
-    // #802 검토 대기 건수(신규 pending 지식 + 수정 리비전, '내 도메인' 분리). 검토 권한(memory scope)이 없으면 403 →
+    // #802 검토 대기 건수(신규 pending 지식 + 수정 리비전). 검토 권한(memory scope)이 없으면 403 →
     //  null → 행 자체를 안 그린다(검토할 수 없는 사람에게 알릴 이유가 없다).
     api('/api/ui/review-queue/summary').catch(() => null),
   ]);
@@ -170,20 +170,17 @@ function dashDueRow(p, n) {
       el('span', { class: 'dash-ntf-sub', text: '마감 ' + dueLabel(n) })));
 }
 // 검토 대기 알림(#802) — 마감과 같은 상시 리마인더(읽음 대상 아님 — 승인·반려해야 사라진다). 클릭 → 검토 큐.
-//  개인화: 내 팀이 오너인 도메인('내 도메인')에 대기 건이 있으면 그 숫자를 앞세운다 — 하루 ~11건이 쌓이면
-//  "전부 검토"는 부담이라, 사람이 실제로 판단할 수 있는 자기 도메인이 첫 진입점이다(#783 §9).
+//  (#4233: «내 도메인» 숫자를 앞세우던 개인화는 분류 담당 개념과 함께 걷었다 — 전체 건수만 보인다.)
 function dashReviewRow(r) {
-  const total = Number(r.total) || 0, mine = Number(r.mine_total) || 0;
-  const primary = mine > 0 ? mine : total;
-  const sub = mine > 0
-    ? (total > mine ? `전체 ${total}건 중 · 승인해야 검색·주입에 반영돼요` : '승인해야 검색·주입에 반영돼요')
-    : `신규 ${Number(r.new) || 0} · 수정 ${Number(r.edit) || 0} · 승인해야 검색·주입에 반영돼요`;
+  const total = Number(r.total) || 0;
+  const primary = total;
+  const sub = `신규 ${Number(r.new) || 0} · 수정 ${Number(r.edit) || 0} · 승인해야 검색·주입에 반영돼요`;
   return el('a', { class: 'dash-ntf dash-ntf--due', href: '#/knowledge/review' },
     el('span', { class: 'dash-ntf-tile t-amber' }, dashReviewIcon()),
     el('span', { class: 'dash-ntf-main' },
       el('span', { class: 'dash-ntf-line' },
         el('b', { class: 'dash-ntf-who', text: `검토 대기 ${primary}건` }),
-        el('span', { class: 'dash-ntf-dbadge', text: mine > 0 ? '내 도메인' : '전체' })),
+        el('span', { class: 'dash-ntf-dbadge', text: '전체' })),
       el('span', { class: 'dash-ntf-sub', text: sub })));
 }
 

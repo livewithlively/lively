@@ -3,7 +3,9 @@
 //  슬랙 데스크톱 좌측 탭 레일을 그대로 옮긴다(헬프센터 스크린샷 2장 + 원준님 스크린샷으로 대조):
 //   ⓪ 워크스페이스 — **타일 한 장 + 뒤에 겹친 타일**(스택). 누르면 슬랙과 같은 흰 팝오버:
 //      [아이콘 · 이름 · 부제] 목록(지금 것은 고리) · ＋ 워크스페이스 추가 · 「레일 숨기기/펼치기」(패널 아이콘).
-//   ① 구역 — 홈 · 확인할 것(배지) · AI 세션 · 프로젝트 · 위키 · 리브. 슬랙의 홈·DM·내 활동·나중에 자리.
+//   ① 구역 — 홈 · AI 세션 · 프로젝트 · 위키 · 리브. 슬랙의 홈·DM·나중에 자리.
+//      ⚠ [확인할 것] 구역은 걷었다(#4180, 회의 2026-09-21) — 사이드바와 겹치고 세션 알림만 쌓여 들어갈 이유가 없었다.
+//       이제 「확인할 것」의 입구는 **홈 머리줄의 종**(notify-bell.ts)이고, 화면은 #/inbox 그대로다.
 //      고른 구역이 곧 **사이드바의 내용**이다(side.ts). 리브만 구역이 아니라 '갈 곳'이다 — 리브 화면은
 //      대화 한 장이라 사이드바가 바뀔 이유가 없다(활성 표시는 주소로 판정).
 //   ② 최근 연 앱 — 헤어라인 아래. 맥 독의 '최근 사용' 구간. 5차: 꾹 눌러 위로 끌어 올리면 ①에 고정되고, ①은 끌어서 순서를 바꾼다.
@@ -21,6 +23,7 @@ import { el, focusMovedIntoFrame, navOn, personName, profileAvatar, state, toast
 import { deviceStore, shellPrefStore, shellPrefsPush } from './shell-prefs.js';   // #2460 — 레일 순서는 계정, 접힘은 이 기기
 import { APPS, appHref, openLaunchpad, RECENT_STORE_KEY, type AppDef } from './apps.js';
 import { icon } from './icons.js';
+import { appGlyphName } from '../lib/icon-paths.js';
 import { openMeModal } from './me-modal.js';
 import { ctxMenu } from './panes-kit.js';   // 우클릭 메뉴 — 곁칸·프로젝트 행과 같은 부품
 import {
@@ -30,14 +33,14 @@ import {
 import { aiLoginScopeHint } from './ai-login-scope.js';   // #2476 — «AI 로그인은 워크스페이스마다 따로» 를 말할지·무슨 말로 할지의 정본
 import { inboxSection, openMemberModal } from './ws-people.js';   // #1875 — 구성원 모달·나에게 온 초대
 import { openCurrentWsSettings } from './ws-settings.js';   // #2188 — 워크스페이스 설정 모달
+import { wsStatus } from '../lib/ws-status.js';   // #4122 — 행 상태(온라인·오프라인·만드는 중)의 정본
+import { railLitKey, railRecentKeys } from '../lib/rail-lit.js';   // #3870 — 레일은 한 칸만 켠다(앱 화면에선 구역이 꺼진다) · 최근 칸은 누른다고 섞이지 않는다
 
-export type RailSection = 'home' | 'inbox' | 'sess' | 'proj' | 'wiki';
+export type RailSection = 'home' | 'sess' | 'proj' | 'wiki';
 
 export interface RailHooks {
-  /** 배지·개수 — 확인할 것 · 작업 중 세션 · 진행 중 프로젝트. */
-  counts?: () => { inbox: number; busy: number; projects: number };
-  /** 지금 열려 있는 앱 키 — 최근 앱 아이콘 아래 '실행 중' 점(맥 독). */
-  openApps?: () => Set<string>;
+  /** 개수 — 작업 중 세션 · 진행 중 프로젝트(구역 드롭다운의 부제). 알림 수는 레일이 아니라 홈의 종이 말한다(#4180). */
+  counts?: () => { busy: number; projects: number };
   /** 지금 화면의 활성 키(main.ts activeKey) — 구역이 아닌 '갈 곳'(리브)의 활성 표시에 쓴다. */
   activeKey?: () => string;
   /** 구역이 바뀌었다 — 사이드바를 다시 그리고 그 구역의 첫 화면으로 간다. */
@@ -52,8 +55,8 @@ export interface RailHooks {
 export interface SecDef { key: RailSection; label: string; tab: string | null; icon: string }
 const SECTIONS: SecDef[] = [
   { key: 'home', label: '홈', tab: null, icon: 'home' },
-  { key: 'inbox', label: '확인할 것', tab: null, icon: 'inbox' },
-  { key: 'sess', label: 'AI 세션', tab: 'terminal', icon: 'chat' },   // 말풍선 — 사이드바 세션 행과 같은 붓(원준 2026-08-26)
+  //  'inbox'(확인할 것)는 #4180 에서 뺐다 — 저장된 구역·순서에 남은 옛 키는 init()·normalizeOrder 가 조용히 떨어뜨린다.
+  { key: 'sess', label: '세션 목록', tab: 'terminal', icon: 'chat' },   // 말풍선 — 사이드바 세션 행과 같은 붓(원준 2026-08-26). 이름은 #4233(원준 2026-09-27)에서 「AI 세션」에서 바뀌었다 — 이 구역은 «지금까지 만든 세션을 모아 보고 찾는 자리» 다
   { key: 'proj', label: '프로젝트', tab: 'projects2', icon: 'proj' },
   { key: 'wiki', label: '위키', tab: 'knowledge', icon: 'wiki' },
 ];
@@ -202,15 +205,15 @@ function recentForRail(n: number): AppDef[] {
   //   읽어야 한다. 사본을 두면 워크스페이스 접미사가 한쪽에만 붙어 레일만 남의 워크스페이스 기록을 본다(#1875).
   try { const v = JSON.parse(localStorage.getItem(RECENT_STORE_KEY) || '[]'); if (Array.isArray(v)) keys = v.filter((x) => typeof x === 'string'); }
   catch (_) { /* 기록이 없으면 표 순서로 채운다 */ }
-  const pick: AppDef[] = [];
-  const take = (a: AppDef | undefined): void => {
-    if (!a || a.hidden || SEC_APP_KEYS.has(a.key) || order.includes(a.key) || pick.some((p) => p.key === a.key)) return;   // hidden(#2199): 문이 다른 곳에 있는 앱
-    if (a.tab && !navOn(a.tab)) return;
-    pick.push(a);
-  };
-  for (const k of keys) { if (pick.length >= n) break; take(APPS.find((a) => a.key === k)); }
-  for (const a of APPS) { if (pick.length >= n) break; take(a); }
-  return pick.slice(0, n);
+  //  hidden(#2199): 문이 다른 곳에 있는 앱 · 구역과 같은 문 · 이미 메인에 고정한 앱 · 꺼진 앱은 설 수 없다.
+  const eligible = APPS.filter((a) => !a.hidden && !SEC_APP_KEYS.has(a.key) && !order.includes(a.key) && (!a.tab || navOn(a.tab)));
+  //  칸 순서는 연 순서가 아니라 앱 표 순서다(#3870) — 누를 때마다 칸이 섞이면 방금 누른 자리에 딴 앱이 선다.
+  return railRecentKeys(keys, eligible.map((a) => a.key), n).map((k) => eligible.find((a) => a.key === k) as AppDef);
+}
+/** 지금 켜질 칸 하나(#3870) — 앱 화면이면 기억한 구역은 꺼진다. 레일과 구역 드롭다운이 같은 잣대를 쓴다. */
+function litKey(): string {
+  return railLitKey(hooks.activeKey?.() || '', section, LINKS.map((l) => l.key),
+    APPS.filter((a) => !a.hidden && !SEC_APP_KEYS.has(a.key)).map((a) => a.key));
 }
 
 // ── 워크스페이스 — 스택 타일 + 슬랙식 팝오버 ─────────────────────────────────
@@ -225,7 +228,7 @@ export function stackTile(opts?: { small?: boolean; label?: boolean }): HTMLElem
   const kindText = w.kind === 'personal' ? '개인' : '팀';
   return el('button', {
     class: 'v2-rail-stack' + (opts && opts.small ? ' sm' : '') + (opts && opts.label ? ' v2-side-wsbtn' : ''), type: 'button', 'aria-haspopup': 'menu',
-    title: `${w.name} · ${kindText} 워크스페이스 — 누르면 전환`,
+    title: `${w.name} (${kindText} 워크스페이스). 누르면 워크스페이스 메뉴가 열립니다`,
     onclick: (e: Event) => { e.preventDefault(); if (popEl) closePopover(); else openPopover(e.currentTarget as HTMLElement); },
   },
     el('span', { class: 'v2-rail-stack-t' }, wsTile(w, 'v2-wscard-big')),
@@ -313,14 +316,14 @@ function openPopover(anchor: HTMLElement): void {
     //   행 전체는 전환, 아이콘만 모달 — 버튼 안 버튼을 피하려 div 로 감싼다.
     ...rows.map((w) => el('div', { class: 'v2-wspop-row' + (w.active ? ' cur' : '') },
       el('button', { class: 'v2-wspop-switch', type: 'button', role: 'menuitemradio', 'aria-checked': String(w.active),
-        title: w.active ? '지금 이 워크스페이스예요' : `${w.name} 워크스페이스로 전환`,
+        title: w.active ? '지금 이 워크스페이스예요' : (wsStatus(w.tenant_state)?.title || `${w.name} 워크스페이스로 전환`),
         onclick: () => { closePopover(); if (!w.active) switchWorkspace(w.slug, (w as any).enter_url); } },
         wsTile(w, 'v2-wscard-big'),
         //  #2188 — 매니지드에서 갓 만든 워크스페이스는 뜨는 데 시간이 걸린다(테넌트 프로비저닝).
         //   목록에는 **바로** 세우되 상태를 사실대로 말한다 — 안 그러면 눌렀을 때 빈 화면을 만난다.
-        tt(w.name, (w as any).tenant_state && (w as any).tenant_state !== 'running'
-          ? '준비 중이에요 — 곧 열립니다'
-          : w.kind === 'personal' ? '개인 워크스페이스' : '팀 워크스페이스')),
+        //  #4122(원준 2026-09-21) — 종전엔 running 이 아니면 전부 «준비 중이에요 — 곧 열립니다» 였는데 실제로는
+        //   셋 다 절전(stopped)이었다. 켜짐·꺼짐·만드는 중을 점 하나와 한 낱말로 가른다(판정은 lib/ws-status.ts).
+        wsRowText(w)),
       addPeopleBtn(w), exitBtn(w))),
     //  #1875 D5″ — 워크스페이스가 하나도 없을 때(매니지드에서 마지막 것을 지운 직후). 다른 줄을 그리면
     //   **누를 수 없는 것을 그리는 것**이라 거짓이다 — 할 일이 하나뿐이니 그 하나만 남긴다.
@@ -331,11 +334,13 @@ function openPopover(anchor: HTMLElement): void {
     //   둘 다 **지금 워크스페이스**만 다뤘고, 이제 행마다 ✕ 가 그 일을 한다(어느 워크스페이스인지가
     //   행에서 이미 보인다). 같은 일을 하는 문을 셋 두면 어느 것이 진짜인지가 사라진다 — 걷었다.
     //  추가 — 누르면 **바로 만드는 판**이 뜬다(종전엔 옛 메뉴 전체가 떴다 — "저 드롭다운으로 보내는 이유를 모르겠음").
-    row('plus', '워크스페이스 추가', registryActive() ? '혼자 시작합니다 — 사람을 부르면 팀이 됩니다' : '지금은 만들 수 없어요', () => openCreatePanel(anchor)),
+    //  #4122 — 부제가 «무엇이 만들어지고 어떻게 팀이 되나» 를 말한다(종전 «혼자 시작합니다 — 사람을 부르면 팀이 됩니다»).
+    //   두 줄이 되는 길이라 이 줄만 접히게 둔다(.wrap).
+    row('plus', '워크스페이스 추가', registryActive() ? '개인 워크스페이스를 만들어요. 사람을 초대하면 팀 워크스페이스가 됩니다.' : '지금은 만들 수 없어요', () => openCreatePanel(anchor), { subWrap: true }),
     //  #2188 설정(2026-08-31 장원준: "여기 밑에 설정 버튼 하나, 누르면 모달") — **모두에게** 보인다.
     //   종전 설정 판은 owner 에게만 열려 구성원·비admin 은 구성원 목록조차 볼 문이 없었다. 모달 안에서
     //   저마다 할 수 있는 만큼만 열린다(이름·아바타는 owner, 나머지는 열람).
-    row('gear', '워크스페이스 설정', '아바타 · 이름 · 구성원 · 기능 설정', () => openCurrentWsSettings(rows as never)),
+    row('gear', '워크스페이스 설정', '이름, 아바타, 구성원, 기능을 설정합니다', () => openCurrentWsSettings(rows as never)),
     //  「레일 숨기기」 행은 뺐다(원준 2026-08-26 "여기 있어야 할 이유가 없음") — 레일 여닫기는 창 맨 윗줄
     //   패널 단추와 ⌘⇧S 의 일이지 워크스페이스 메뉴의 일이 아니다.
     ) as HTMLElement;
@@ -344,10 +349,18 @@ function openPopover(anchor: HTMLElement): void {
 
 // ── 팝오버 부품 — 행·제목·구분선. 하위 판(구성원·설정·추가)도 같은 부품으로 그린다(문법이 하나여야 한 메뉴로 읽힌다). ──
 const hr = (): HTMLElement => el('div', { class: 'v2-wspop-hr', role: 'separator' });
-const tt = (b: string, sub: string): HTMLElement => el('span', { class: 'v2-wspop-tt' }, el('b', { text: b }), el('span', { text: sub }));
-function row(ic: string, label: string, sub: string, run: () => void, extra?: { cls?: string; tail?: HTMLElement | null }): HTMLElement {
+const tt = (b: string, sub: string, wrap?: boolean): HTMLElement =>
+  el('span', { class: 'v2-wspop-tt' }, el('b', { text: b }), el('span', wrap ? { class: 'wrap', text: sub } : { text: sub }));
+/** 워크스페이스 행의 이름 + 부제. 부제 = 종류(개인/팀) + 상태(온라인·오프라인·만드는 중 — 매니지드만). */
+function wsRowText(w: { name: string; kind: string; tenant_state?: string | null }): HTMLElement {
+  const st = wsStatus(w.tenant_state);
+  return el('span', { class: 'v2-wspop-tt' }, el('b', { text: w.name }),
+    el('span', {}, w.kind === 'personal' ? '개인 워크스페이스' : '팀 워크스페이스',
+      st ? el('i', { class: 'v2-wspop-st ' + st.tone, text: st.text }) : null));
+}
+function row(ic: string, label: string, sub: string, run: () => void, extra?: { cls?: string; tail?: HTMLElement | null; subWrap?: boolean }): HTMLElement {
   return el('button', { class: 'v2-wspop-row' + (extra?.cls ? ' ' + extra.cls : ''), type: 'button', role: 'menuitem', onclick: () => { closePopover(); run(); } },
-    el('span', { class: 'v2-wspop-ic' }, icon(ic)), tt(label, sub), extra?.tail || null);
+    el('span', { class: 'v2-wspop-ic' }, icon(ic)), tt(label, sub, extra?.subWrap), extra?.tail || null);
 }
 /** 하위 판 머리 — ‹ 로 메뉴로 돌아간다. 판이 바뀌어도 '같은 메뉴 안'이라는 감각이 남게. */
 function panelHead(title: string, anchor: HTMLElement): HTMLElement {
@@ -460,7 +473,7 @@ function paintLeave(box: HTMLElement, w: WsRow): void {
   const others = Math.max(0, (w.member_count ?? 2) - 1);
   exitForm(box, {
     lines: [`'${w.name}' 에서 나갈까요?`,
-      `나만 빠집니다 — 함께 쓰는 분 ${others}명과 올린 지식·프로젝트는 그대로 남아요.`,
+      `나만 빠집니다. 함께 쓰는 분 ${others}명과 올린 지식·프로젝트는 그대로 남아요.`,
       '다시 들어오려면 초대를 받아야 해요.'],
     go: '나가기', danger: true,
     run: async () => {
@@ -481,7 +494,7 @@ function paintTransfer(box: HTMLElement, w: WsRow): void {
   pick.append(el('option', { value: '', text: '불러오는 중…' }));
   exitForm(box, {
     lines: [`'${w.name}' 의 관리자가 나 하나예요.`,
-      '나가려면 관리자를 넘겨야 해요 — 넘기지 않으면 아무도 이 워크스페이스를 관리할 수 없게 되거든요.'],
+      '나가려면 관리자를 넘겨야 해요. 넘기지 않으면 아무도 이 워크스페이스를 관리할 수 없어요.'],
     extra: pick, go: '넘기고 나가기', danger: true,
     run: async () => {
       const to = pick.value;
@@ -498,7 +511,7 @@ function paintTransfer(box: HTMLElement, w: WsRow): void {
     const cand = ms.filter((m) => (typeof m.is_me === 'boolean' ? !m.is_me : m.member_id !== me));
     pick.replaceChildren(...(cand.length
       ? cand.map((m) => el('option', { value: m.member_id, text: personName(m as never) || m.display_name || m.email || m.member_id }))
-      : [el('option', { value: '', text: '넘길 분이 없어요 — 먼저 초대하세요' })]));
+      : [el('option', { value: '', text: '넘길 분이 없어요. 먼저 초대하세요' })]));
   }).catch(() => pick.replaceChildren(el('option', { value: '', text: '구성원을 불러오지 못했어요' })));
 }
 
@@ -547,8 +560,8 @@ function openCreatePanel(anchor: HTMLElement): void {
   const wsHint = aiLoginScopeHint(managedWorkspaces());
   pop.append(el('div', { class: 'v2-wspop-form' }, name, el('div', { class: 'v2-wspop-actions' }, go, note),
     hint(managedWorkspaces()
-      ? '혼자 시작합니다. 다른 사람에게 보이지 않고, 사람을 부르면 그때 팀이 됩니다. 만들면 준비되는 데 잠깐 걸려요.'
-      : '혼자 시작합니다. 관리자를 포함해 다른 사람에게 보이지 않고, 사람을 부르면 그때 팀이 됩니다.'),
+      ? '개인 워크스페이스로 만들어져 나만 봅니다. 사람을 초대하면 그때 팀 워크스페이스가 됩니다. 만든 뒤 여는 데 잠깐 걸려요.'
+      : '개인 워크스페이스로 만들어져 관리자를 포함해 다른 사람에게는 보이지 않아요. 사람을 초대하면 그때 팀 워크스페이스가 됩니다.'),
     ...(wsHint ? [hint(wsHint)] : [])));
   place(pop, anchor, !!anchor.closest('.v2-side'));
   window.setTimeout(() => name.focus(), 0);
@@ -566,9 +579,8 @@ async function refreshSpaces(): Promise<void> {
 /** 레일을 숨겼을 때 사이드바 머리의 **구역 드롭다운**(안 B) — 메인 그룹 순서 그대로(구역 · 리브 · 고정한 앱) + 「레일 펼치기」. */
 export function openSectionMenu(anchor: HTMLElement): void {
   if (popEl) { closePopover(); return; }
-  const c = hooks.counts?.() || { inbox: 0, busy: 0, projects: 0 };
-  const ak = hooks.activeKey?.() || '';
-  const linkOn = LINKS.find((l) => l.key === ak) || null;
+  const c = hooks.counts?.() || { busy: 0, projects: 0 };
+  const lit = litKey();
   const row = (key: string, label: string, ic: string, on: boolean, extra: HTMLElement | null, run: () => void): HTMLElement =>
     el('button', { class: 'v2-secdd-row' + (on ? ' on' : ''), type: 'button', role: 'menuitemradio', 'aria-checked': String(on),
       onclick: () => { closePopover(); run(); } },
@@ -577,14 +589,13 @@ export function openSectionMenu(anchor: HTMLElement): void {
     ...mainEntries().map((m) => {
       if (m.kind === 'sec') {
         const s = m.sec;
-        const extra = s.key === 'inbox' && c.inbox ? el('span', { class: 'v2-rail-bd', text: String(c.inbox) })
-          : s.key === 'sess' && c.busy ? el('span', { class: 'v2-secdd-m', text: `${c.busy} 작업 중` })
+        const extra = s.key === 'sess' && c.busy ? el('span', { class: 'v2-secdd-m', text: `${c.busy} 작업 중` })
           : s.key === 'proj' && c.projects ? el('span', { class: 'v2-secdd-m', text: String(c.projects) }) : null;
-        return row(s.key, s.label, s.icon, !linkOn && section === s.key, extra, () => setRailSection(s.key, { navigate: true }));
+        return row(s.key, s.label, s.icon, lit === s.key, extra, () => setRailSection(s.key, { navigate: true }));
       }
-      if (m.kind === 'link') { const l = m.link; return row(l.key, l.label, l.icon, !!linkOn && linkOn.key === l.key, null, () => { location.hash = l.route; }); }
+      if (m.kind === 'link') { const l = m.link; return row(l.key, l.label, l.icon, lit === l.key, null, () => { location.hash = l.route; }); }
       const a = m.app;   // 독에 고정한 앱 — 레일이 숨어도 여기서 간다
-      return row(a.key, a.title, a.icon, ak === a.key || ak === 'app:' + a.key, null, () => { location.hash = appHref(a); });
+      return row(a.key, a.title, appGlyphName(a.icon), lit === a.key, null, () => { location.hash = appHref(a); });
     }),
     el('div', { class: 'v2-wspop-hr', role: 'separator' }),
     row('rail', '레일 펼치기', 'panel', false, el('kbd', { class: 'v2-wspop-k', text: '⌘⇧S' }), () => toggleRail())) as HTMLElement;
@@ -853,11 +864,42 @@ function swallowClick(): void {
 }
 
 // ── 그리기 ───────────────────────────────────────────────────────────────────
+//  ── 누르는 동안엔 다시 그리지 않는다(#3870) ──
+//  사이드바 폴링(8초)·실시간 스트림이 drawSide → drawRail 로 레일을 통째 갈아 끼운다. 누른 칸(mousedown)과 뗀 칸(mouseup)이
+//   서로 다른 요소가 되면 브라우저는 click 을 아무 데도 보내지 않는다 — 눌렀는데 아무 데도 안 간다.
+//   매니지드 실측: 최근 칸 40번 누름 중 1번이 그렇게 사라졌다(누르는 120ms 사이에 한 번 다시 그려짐).
+//  그래서 누르는 동안 온 그리기는 미뤘다가, 손을 뗀 **다음 틱**(click 이 이미 간 뒤)에 한 번 그린다.
+//  ⚠ pointerup 안에서 바로 그리면 안 된다 — click 은 pointerup 뒤에 오므로 그때 갈아 끼우면 똑같이 사라진다.
+let pressing = false;
+let drawOwed = false;
+let pressGuard: number | null = null;
+function releasePress(): void {
+  if (!pressing) return;
+  pressing = false;
+  if (pressGuard) { window.clearTimeout(pressGuard); pressGuard = null; }
+  if (drawOwed) { drawOwed = false; window.setTimeout(drawRail, 0); }
+}
+function onHostPress(e: PointerEvent): void {
+  if (!e.isPrimary) return;
+  pressing = true;
+  //  떼는 신호를 못 받는 드문 길(창 밖에서 떼기 등)에서 레일이 멈춰 서지 않게 — 오래 누르면 끌기(lift)라 그쪽 가드가 맡는다.
+  if (pressGuard) window.clearTimeout(pressGuard);
+  pressGuard = window.setTimeout(releasePress, 3000);
+}
+
 export function mountRail(el0: HTMLElement, h?: RailHooks): void {
   init();
   registerWorkspaceMenu(openWorkspacePopover);   // #1875 — 메뉴는 하나: 옛 스위처 메뉴는 레일이 있으면 닿지 않는다
+  if (host !== el0) {
+    host?.removeEventListener('pointerdown', onHostPress, true);
+    el0.addEventListener('pointerdown', onHostPress, true);
+  }
   host = el0;
   hooks = h || hooks;
+  window.removeEventListener('pointerup', releasePress, true);
+  window.removeEventListener('pointercancel', releasePress, true);
+  window.addEventListener('pointerup', releasePress, true);
+  window.addEventListener('pointercancel', releasePress, true);
   drawRail();
 }
 
@@ -865,10 +907,10 @@ export function drawRail(): void {
   if (!host) return;
   init();
   if (drag && drag.lifted) return;   // 끌던 중엔 다시 그리지 않는다 — DOM 을 갈아엎으면 손에 든 것이 사라진다(endDrag 가 그린다)
-  const c = hooks.counts?.() || { inbox: 0, busy: 0, projects: 0 };
-  const running = hooks.openApps?.() || new Set<string>();
-  const ak = hooks.activeKey?.() || '';
-  const linkOn = LINKS.find((l) => l.key === ak) || null;
+  if (pressing) { drawOwed = true; return; }   // 누르는 중 — 갈아 끼우면 click 이 사라진다(위 releasePress 가 뗀 뒤 그린다)
+  //  켜지는 칸은 **하나**다(#3870) — 앱 화면으로 가도 구역은 기억에 남지만(사이드바가 그 구역을 계속 그린다) 켜지진 않는다.
+  //   종전엔 구역을 기억(section)만 보고 켜서, 홈에서 분류체계를 열면 홈과 분류체계가 함께 켜져 보였다.
+  const lit = litKey();
   host.classList.add('closed');   // 격자는 늘 '아이콘 위 · 이름 아래' 하나다(232px 펼침 모드 폐기)
   document.getElementById('v2-root')?.classList.toggle('rail-hidden', hidden);
 
@@ -883,12 +925,12 @@ export function drawRail(): void {
       onclick: (e: Event) => { if (!href) e.preventDefault(); onclick(); },
     }, icon(ic, 'v2-rail-ic'), el('span', { class: 'v2-rail-t', text: label }), extra);
   const appItem = (a: AppDef, kind: 'pin' | 'recent'): HTMLElement => {
-    //  독에 고정한 앱도 **지금 그 화면이면 켜져 보인다** — 구역·리브와 같은 규칙(activeKey).
+    //  독에 고정한 앱도 **지금 그 화면이면 켜져 보인다** — 구역·리브와 같은 잣대(litKey).
     //   안 그러면 자료를 고정해 놓고 그 안에 들어가 있어도 레일만 아무 데도 안 가리킨다.
-    const on = ak === a.key || ak === 'app:' + a.key;
-    const it = item(a.key, a.title, a.icon, on,
-      running.has(a.key) ? el('span', { class: 'v2-rail-run', role: 'img', 'aria-label': '실행 중' }) : null,
-      () => { /* href 가 간다 */ }, appHref(a));
+    //  ⚠ 맥 독의 '실행 중' 점은 걷었다(#3870) — 새 셸은 탭 줄을 안 그려서(main.ts TABS_OFF) 그 점은 사람에게 보이지도
+    //   닫히지도 않는 숨은 탭을 가리켰다. 한 번 연 앱마다 점이 붙어 «왜 있냐» 는 물음만 남겼다.
+    const it = item(a.key, a.title, appGlyphName(a.icon), lit === a.key,   // #4233: 앱 화면과 같은 그림(홈(클래식) = 판 넷)
+      null, () => { /* href 가 간다 */ }, appHref(a));
     it.classList.add(kind === 'pin' ? 'pinned' : 'recent');
     it.dataset.app = a.key; it.dataset.kind = kind;
     it.title = a.title + (kind === 'pin' ? ' — 독에 고정됨 · 꾹 눌러 끌면 순서, 레일 밖으로 끌어내면 빼기' : ' — 최근에 연 앱 · 꾹 눌러 위로 끌어 올리면 고정');
@@ -902,15 +944,12 @@ export function drawRail(): void {
     if (m.kind === 'app') return appItem(m.app, 'pin');
     let it: HTMLElement;
     if (m.kind === 'sec') {
-      const s = m.sec; const on = !linkOn && section === s.key;
-      //  확인할 것 — 슬랙 '내 활동'의 그 배지. 아이콘 귀퉁이에 숫자.
-      const extra = s.key === 'inbox' && c.inbox
-        ? el('span', { class: 'v2-rail-bd', text: String(c.inbox), role: 'img', 'aria-label': `확인할 것 ${c.inbox}건` })
-        : null;
-      it = item(s.key, s.label, s.icon, on, extra, () => setRailSection(s.key, { navigate: true }));
+      const s = m.sec; const on = lit === s.key;
+      //  구역 아이콘엔 배지가 없다 — 앰버 숫자 배지는 종전 [확인할 것] 하나였고, 그 자리는 홈의 종으로 갔다(#4180).
+      it = item(s.key, s.label, s.icon, on, null, () => setRailSection(s.key, { navigate: true }));
     } else {
       const l = m.link;
-      it = item(l.key, l.label, l.icon, !!linkOn && linkOn.key === l.key, null, () => { location.hash = l.route; }, l.route);
+      it = item(l.key, l.label, l.icon, lit === l.key, null, () => { location.hash = l.route; }, l.route);
     }
     it.dataset.kind = 'sec';
     wireDrag(it, m.key, 'sec');

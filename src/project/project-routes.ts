@@ -17,7 +17,8 @@ import { canSeeProjectRow, effectiveViewer } from "../v6/visibility.js";
 import { viewerOf } from "../capabilities/principal.js";
 import { listSessions, listRestorableSessions, validateInvites, type CreateInput } from "../terminal/terminal-sessions.js";
 import { SESSION_STARTING_GRACE_MS } from "../terminal/sessions.js";   // #4065 — AI 세션 탭과 같은 창(배럴 비노출 — 모듈에서 직접)
-import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
+import { dropTrashedRows, mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
+import { trashMapFor } from "../sessions/session-trash.js";   // #3778 — 휴지통에 있는 세션은 이 목록에 서지 않는다
 import { ensureAgentsMd, readProjectAgentsMd } from "../v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
 import { startProjectProvision, projectProvisionStatus } from "./project-provision-jobs.js";
@@ -34,8 +35,9 @@ import {
 import { deleteSource, canSeeSource } from "../v6/source-store.js";
 import { purgeDeleted } from "../v6/trash-store.js";
 import { auditOrgContent } from "../v6/content-audit.js";
-import { finishUpload } from "../ingest/upload-finish.js";   // #3787 D — 업로드 마무리는 브라우즈 라우트와 한 함수
-import { taskForProjectSession, taskKickoffPrompt } from "../v6/session-task.js";   // #4084 — 태스크에서 연 세션
+import { finishUpload } from "../ingest/upload-finish.js";
+import { uploadEntryOf } from "../ingest/upload-entry.js";   // #4233: 들어온 길(up-sync 훅은 세션 헤더를 싣는다 → AI 가 만든 파일)   // #3787 D: 업로드 마무리는 브라우즈 라우트와 한 함수
+import { bindSessionTask, sessionTaskList, setSessionTaskOrder, taskForProjectSession, taskKickoffPrompt, tasksKickoffPrompt } from "../v6/session-task.js";   // #4084 — 태스크에서 연 세션 · #4135 허브 「태스크에 붙이기」
 
 const MAX_UPLOAD = 1024 * 1024 * 1024; // 1GB (#1870 — terminal-files 와 동일해야 한다. receiveUpload 스트리밍이라 RAM 무관)
 const MAX_PREVIEW = 25 * 1024 * 1024; // 25MB — 이미지·PDF 인라인 미리보기 허용(텍스트는 클라가 별도 크기 가드)
@@ -244,7 +246,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const u = userOf(req);
     res.json(await finishUpload({
       coord: { root: { kind: "project", id: project.id }, base, folder: project.folder, channelFallback: project.name },
-      abs, osUser: store.osUser, uploader: { id: viewerOf(u), name: u?.email ?? null },
+      abs, osUser: store.osUser, uploader: { id: viewerOf(u), name: u?.email ?? null }, entry: uploadEntryOf(req.headers),
     }));
   }));
 
@@ -260,7 +262,15 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   }));
 
   // 이름 변경 — 같은 폴더 안에서 이름만(파일·폴더 공통). body: { path, name }.
-  app.post(`${prefix}/:id/rename`, auth, wrap(async (req, res) => {
+  //  ⚠ 경로가 `/file/rename` 인 이유(#4114): 종전엔 `${prefix}/:id/rename` 이었는데, 그 경로를 **프로젝트
+  //   이름짓기 능력**(capabilities/projects-v6.ts project_rename_v6, REST `POST /api/ui/v6/projects/:id/rename`)이
+  //   이미 쓰고 있었다. 둘은 같은 자리를 놓고 다투고, express 는 먼저 등록된 쪽(web.ts 의 restMounts —
+  //   registerWebUi 가 이 함수보다 먼저 돈다)만 부른다. 그래서 자료 칸의 [새 폴더]·[이름 바꾸기]가
+  //   **파일이 아니라 프로젝트의 이름을 고치려 들었고**, 사람이 지은 이름은 덮지 않는 규약 덕에 겉으로는
+  //   «아무 일도 안 일어남»(200 {applied:false})으로 보였다 — 이름이 자동으로 붙은 프로젝트였다면 그 자리에서
+  //   **프로젝트 이름이 조용히 바뀐다**. 파일 이름은 파일 이름의 자리(`/file/…`)에서 바꾼다.
+  //   같은 종류의 충돌을 다시 만들지 않게 scripts/route-collision.test.mjs 가 전 경로를 훑는다.
+  app.post(`${prefix}/:id/file/rename`, auth, wrap(async (req, res) => {
     const { store, base } = await projStore(Number(req.params.id), req);
     const b = (req.body ?? {}) as Record<string, unknown>;
     const fromAbs = resolveIn(base, b.path, true);
@@ -459,7 +469,10 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     await decorateNodeRows(restorable);
     // AI 세션 탭과 같은 규칙으로 이중표기를 접는다(#1716) — 게이트웨이와 노드가 같은 박스면 같은 tmux 세션이
     //  local·remote 양쪽에 잡힌다. 인자 순서 = 우선순위(로컬 라이브 > 노드 스냅샷 > 복원 가능).
-    res.json({ sessions: mergeSessionViews(local, remote, restorable) });
+    //  #3778 — 내가 휴지통으로 보낸 세션은 뺀다(이 목록은 휴지통을 그리지 않는다). 표식 조회가 죽어도 목록은 나간다(best-effort).
+    let rows = mergeSessionViews(local, remote, restorable);
+    try { rows = dropTrashedRows(rows, await trashMapFor(idOf(userOf(req)))); } catch { /* 표식 없이 나간다 */ }
+    res.json({ sessions: rows });
   }));
   app.post(`${prefix}/:id/sessions`, auth, wrap(async (req, res) => {
     const { project } = await projBase(Number(req.params.id), req);
@@ -490,7 +503,23 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     // #4084 세션 = 태스크 — 태스크에서 연 세션. 이 프로젝트 안의 태스크만 받는다(남의 프로젝트 태스크를 잇는 길을 막는다).
     //  세션 이름 = 태스크 이름(사람이 적은 이름이라 AI 가 다시 짓지 않는다 — label 이 오면 human 출처로 박힌다),
     //  첫 지시를 비워 보내면 «#<id> 진행해» + 본문으로 채운다. 잇기 자체는 관문이 소속을 쓴 뒤에 한다(launchSession).
-    const taskIdRaw = b.taskId == null || b.taskId === "" ? 0 : Number(b.taskId);
+    // #4135 — 태스크 **여러 개**를 순서대로 맡겨 연다(곁칸 «프로젝트» 앱의 [담기] 뒤 [시키기]). 1번이 taskId 와 같은 길로
+    //  이어지고, 나머지는 관문이 순서 목록에 싣는다. 첫 지시 = 순서 안내 + 1번 본문 + 사람이 덧붙인 말(있으면).
+    const taskIdsRaw = Array.isArray(b.taskIds) ? (b.taskIds as unknown[]).map(Number) : [];
+    if (taskIdsRaw.length) {
+      const uniq = [...new Set(taskIdsRaw)].slice(0, 30);
+      const picked = [];
+      for (const n of uniq) {
+        const t = Number.isInteger(n) && n > 0 ? await taskForProjectSession(project.id, n) : null;
+        if (!t) throw new HttpError(400, `태스크 #${n} 는 이 프로젝트의 태스크가 아닙니다`);
+        picked.push(t);
+      }
+      input.taskId = picked[0].id;
+      input.taskIds = picked.map((t) => t.id);
+      if (!String(input.label ?? "").trim()) input.label = picked[0].name;
+      input.initialPrompt = tasksKickoffPrompt(picked, input.initialPrompt);
+    }
+    const taskIdRaw = taskIdsRaw.length || b.taskId == null || b.taskId === "" ? 0 : Number(b.taskId);
     if (taskIdRaw) {
       const task = Number.isInteger(taskIdRaw) && taskIdRaw > 0 ? await taskForProjectSession(project.id, taskIdRaw) : null;
       if (!task) throw new HttpError(400, `태스크 #${b.taskId} 는 이 프로젝트의 태스크가 아닙니다`);
@@ -507,6 +536,41 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const nodeId = String(b.node ?? "").trim();
     const invites = nodeId ? await validateInvites(b.invites, idOf(userOf(req))) : [];   // 실제 org 멤버만·요청자(owner) 제외·중복 제거
     res.json({ session: await launchSession(userOf(req), input, { nodeId, invites }) });
+  }));
+  // ── ②-a 세션을 태스크에 붙이기(#4135 허브 세션 위젯 「태스크에 붙이기」) — 이미 도는 세션에 이 프로젝트의 태스크를 잇는다.
+  //  잇기 규칙은 v6/session-task.ts bindSessionTask 그대로(세션 주인만 · 같은 프로젝트의 태스크만 · 잇는 순간 «진행 중»).
+  //  남의 세션·다른 프로젝트 태스크·없는 세션은 bindSessionTask 가 null 을 주고, 여기선 404 로 «못 이었다» 를 말한다.
+  app.post(`${prefix}/:id/sessions/:sid/task`, auth, wrap(async (req, res) => {
+    const { project } = await projBase(Number(req.params.id), req);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const taskIdRaw = Number(b.taskId ?? 0);
+    const task = Number.isInteger(taskIdRaw) && taskIdRaw > 0 ? await taskForProjectSession(project.id, taskIdRaw) : null;
+    if (!task) throw new HttpError(400, `태스크 #${b.taskId} 는 이 프로젝트의 태스크가 아닙니다`);
+    const sid = String(req.params.sid ?? "").trim();
+    const bound = await bindSessionTask({ sessionId: sid, owner: idOf(userOf(req)), taskId: task.id });
+    if (!bound) throw new HttpError(404, "이 세션에 태스크를 잇지 못했습니다 — 내 세션이 아니거나 이 프로젝트에 속하지 않습니다");
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, session_id: sid, task: bound });
+  }));
+
+  // ── ②-c 세션의 태스크 순서(#4135 곁칸 «프로젝트» 앱 «이 세션의 태스크» 1. 2. 3.) — 읽기 · 통째로 정하기.
+  //  담기·끌기·번호 메뉴·빼기가 전부 PUT 한 길이다(목록을 통째로 보낸다 — 부분 연산을 여러 벌 두지 않는다).
+  //  규칙은 v6/session-task.ts setSessionTaskOrder(세션 주인만 · 이 프로젝트의 태스크만 · 지금 하는 것 = 맨 앞의 안 끝난 것).
+  app.get(`${prefix}/:id/sessions/:sid/tasks`, auth, wrap(async (req, res) => {
+    await projBase(Number(req.params.id), req);
+    const sid = String(req.params.sid ?? "").trim();
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ session_id: sid, tasks: await sessionTaskList(sid, idOf(userOf(req))) });
+  }));
+  app.put(`${prefix}/:id/sessions/:sid/tasks`, auth, wrap(async (req, res) => {
+    await projBase(Number(req.params.id), req);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    if (!Array.isArray(b.taskIds)) throw new HttpError(400, "taskIds(순서대로 태스크 번호 배열)가 필요합니다");
+    const sid = String(req.params.sid ?? "").trim();
+    const tasks = await setSessionTaskOrder({ sessionId: sid, owner: idOf(userOf(req)), taskIds: (b.taskIds as unknown[]).map(Number) });
+    if (!tasks) throw new HttpError(404, "순서를 정하지 못했습니다 — 내 세션이 아니거나, 이 세션 프로젝트의 태스크가 아닌 것이 섞였습니다");
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, session_id: sid, tasks });
   }));
 
   // ── ②-b 레포 provision — 입력 경로 확보(없으면 레지스트리 clone_url 로 clone) + 옵션 worktree(project/<id>/<repo>).

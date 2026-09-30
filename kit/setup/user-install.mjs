@@ -116,6 +116,15 @@ function userLevelHooksBlock() {
       //  비용: 툴 호출마다 훅 스폰 46ms. Bash 는 MCP 처럼 한 턴에 수백 번 불리지 않아 감당할 만하고, 네트워크 왕복은
       //  work-flag 자체의 60초 스로틀이 막는다(같은 상태 반복은 안 보낸다).
       { matcher: "Edit|Write|MultiEdit|NotebookEdit|Bash", hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
+      // #4217 기록 fork 진행 중 표시 — 서브에이전트를 띄운 툴콜(harness-registry claude.tools.fork). 이름 머리가 `기록:` 인
+      //  백그라운드 fork 면 work-flag 가 <sid>.writeback-pending 을 세우고, 종료 게이트는 그동안 막지 않는다.
+      //  ⚠ 기존 엔트리의 matcher 를 넓히지 않고 **새 엔트리**로 둔다 — matcher 를 바꾸면 구항목이 회수되지 않고 두 벌이 된다
+      //   (safeMergeUserSettings 주석). 새 (정체성, matcher) 쌍은 그냥 더해진다.
+      { matcher: "Agent|Task", hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
+    ],
+    // #4217 — 자식이 끝나면 그 자식의 기록 fork 표시를 걷는다(payload.agent_id). 기록 없이 끝났으면 다음 Stop 에서 게이트가 1회 넛지.
+    SubagentStop: [
+      { hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
     ],
     // #1221 세션 실행 단계 보고 — 턴 시작(UserPromptSubmit)·확인 필요(Notification)·턴 종료(Stop). 이 셋이 붙어야
     //  게이트웨이가 화면 스크래핑(스피너 유니코드·capture-pane 패턴)을 안 하고도 '작업 중/확인 필요/대기 중'을 안다.
@@ -559,6 +568,21 @@ function codexAutoApproveLines(includeLocal = true) {
 //  ⚠ env.LIVELY_HARNESS=codex 가 **필수**다 — 프록시의 x-lively-harness 기본값이 "claude-code" 라(UA 가 프록시
 //   것이 되므로 명시 stamp 가 유일한 신호) 이걸 빼면 게이트웨이가 코덱스 세션을 claude 로 집계한다(#182 작업자 축).
 //  프록시 파일이 없거나(구버전 번들·CLI 미설치) 롤백 스위치(~/.lively/mcp-transport=http)면 종전 http 직결로 떨어진다.
+//  ★ env_vars — **codex 는 MCP 서버에 제 환경을 물려주지 않는다**(#4135, 2026-09-28 실측 · codex-cli 0.157.1).
+//   위 ①③ 은 «프록시가 상속한 env 를 읽는다» 를 전제했는데, 그 전제가 codex 에서는 거짓이었다: 도는 프록시의 환경에
+//   LIVELY_SESSION_ID 도 LIVELY_MCP_TOKEN 도 없었다(같은 기계의 claude 자식에는 있다). 그래서 codex 세션의 MCP 는
+//   세션 신원이 있든 없든 **그 컴퓨터에 깔린 로그인**으로 나가고 x-lively-session 도 못 실었다 — 공용 컴퓨터에서 다른 사람이
+//   연 codex 세션의 기록이 컴퓨터를 등록한 사람 이름으로 남았다(프로젝트 4135 작업 기록 #2827).
+//   `env_vars` 는 «부모 환경에서 이 이름들만 넘겨라» 는 codex 설정이다. 넘기는 것은 이름뿐이라 설정 파일에 값이 남지 않는다.
+//   · LIVELY_SESSION_ID — 어느 세션에서 온 요청인가(x-lively-session) · 세션 신원 파일을 찾는 열쇠
+//   · LIVELY_MCP_TOKEN — 세션을 연 사람 앞으로 발급된 MCP 신원
+//   · LIVELY_MODE — 읽기전용/인코그니토(x-lively-mode) · LIVELY_HOME·LIVELY_APP_ID — 앱 세션의 제 자리
+//   ⚠ LIVELY_TOKEN 은 넘기지 않는다 — pane 의 그 값은 훅 토큰(세션 최소권한)이라 MCP 가 집으면 권한이 틀린다(lively-mcp-local 머리말).
+//   ⚠ codex 의 공용 백그라운드 서버(app-server)가 띄운 MCP 는 세션의 자식이 아니라 이 길로도 세션 환경이 닿지 않는다 —
+//     그쪽은 남은 구멍이다(세션마다 도는 TUI 의 MCP 는 닿는다).
+const CODEX_MCP_ENV_VARS = ["LIVELY_SESSION_ID", "LIVELY_MCP_TOKEN", "LIVELY_MODE", "LIVELY_HOME", "LIVELY_APP_ID"];
+const codexEnvVarsLine = () => `env_vars = ${JSON.stringify(CODEX_MCP_ENV_VARS)}`;
+
 function codexLivelyServerLines(mcpUrl) {
   const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
   const proxy = join(LIVELY, "lib", "lively-mcp-gateway.mjs");
@@ -568,7 +592,8 @@ function codexLivelyServerLines(mcpUrl) {
     return [
       "[mcp_servers.lively]",
       `command = ${JSON.stringify(fwd(shim))}`,
-      'args = ["mcp"]', "",
+      'args = ["mcp"]',
+      codexEnvVarsLine(), "",
       "[mcp_servers.lively.env]",
       'LIVELY_HARNESS = "codex"', "",
     ];
@@ -595,7 +620,8 @@ function codexLocalServerLines() {
   return [
     "[mcp_servers.lively-local]",
     `command = ${JSON.stringify(fwd(shim))}`,
-    'args = ["mcp-local"]', "",
+    'args = ["mcp-local"]',
+    codexEnvVarsLine(), "",   // 로컬 조작 MCP 도 게이트웨이를 부른다(레포 주소 조회 등) — 같은 신원으로 나가야 한다
   ];
 }
 
@@ -629,6 +655,13 @@ function codexManagedBlock(mcpUrl) {
     // ── 커스텀 훅 런너 — 이벤트별 고정 엔트리 1개(훅 본문은 런너가 런타임에 fetch) ──
     ...CODEX_RUNNER_EVENTS.flatMap(([event, matcher, timeout]) =>
       cdxHook(event, codexRunnerCmd(event), timeout, matcher)),
+    // #4217 기록 fork 진행 중 표시 — spawn_agent(v1)·collaborationspawn_agent(v2) 로 `기록:` 머리 fork 를 띄우면 세우고,
+    //  그 자식의 SubagentStop 이 걷는다. 코덱스 Stop 엔 실행 중 작업 목록이 없어 이 표시가 게이트의 유일한 신호다.
+    //  ⚠ **맨 끝**에 둔다 — 코덱스 훅 신뢰 키가 `<config.toml>:<event>:<그룹 순번>:<핸들러 순번>` 이라(codex-rs
+    //   hooks/src/lib.rs:113-123) 기존 엔트리 사이에 끼우면 뒤 엔트리의 순번이 밀려 멤버가 이미 신뢰한 훅이 전부
+    //   «미신뢰»로 떨어지고 조용히 안 돈다. 끝에 붙이면 새 두 엔트리만 신뢰 검토 대상이 된다.
+    ...cdxHook("PostToolUse", wf, 5, "spawn_agent|collaborationspawn_agent"),
+    ...cdxHook("SubagentStop", wf, 5),
     CDX_END,
   ].join("\n");
 }

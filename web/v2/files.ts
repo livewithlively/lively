@@ -26,6 +26,8 @@ export interface FilesOpts {
   node?: string | null;
   /** 우패널 머리 [×] — 타임라인으로 되돌린다. */
   onClose?: () => void;
+  /** 파일을 눌렀다 — true 를 돌려주면 이 탐색기의 제자리 미리보기 대신 **부르는 쪽이 연다**(곁칸 부품은 뷰어 칸으로, #4088 후속). */
+  onOpenFile?: (rel: string, name: string, size: number) => boolean;
 }
 export interface FilesHandle { root: HTMLElement; destroy(): void }
 
@@ -124,7 +126,7 @@ export function createSessionFiles(host: HTMLElement, opts: FilesOpts): FilesHan
         el('button', { class: 'fx-open', type: 'button', title: tip,
           onclick: () => {
             if (isDir) { linkFrom = it.link ? { path: childPath, target: it.linkTarget || '' } : linkFrom; void loadDir(childPath); }
-            else void showPreview(childPath, it.name, it.size, shareRel);
+            else if (!(opts.onOpenFile && opts.onOpenFile(childPath, it.name, it.size))) void showPreview(childPath, it.name, it.size, shareRel);
           } },
           el('span', { class: 'fx-ic', text: fileIcon(it.name, it.type), 'aria-hidden': 'true' }),
           el('span', { class: 'fx-nm', text: it.name }),

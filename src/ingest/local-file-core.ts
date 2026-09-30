@@ -16,6 +16,10 @@ export type LocalRoot =
   | { kind: "project"; id: number }
   | { kind: "shared" };
 
+/** 개인 루트의 주인 키 — 자료 좌표(`personal:<이 값>/…`)와 파일 휴지통 도장(root)·휴지통 목록의 «내 것» 판정이 같은 값을 쓴다.
+ *  신원이 둘 다 비면 ""(그때 좌표를 만드는 쪽은 슬러그로 메우고, 목록은 개인 폴더 것을 세우지 않는다 — 닫는 쪽). */
+export const personalRootMember = (user: { userId?: string | null; email?: string | null }): string => user.userId || user.email || "";
+
 export function localRootKey(r: LocalRoot): string {
   if (r.kind === "personal") return `personal:${r.member}`;
   if (r.kind === "project") return `project:${r.id}`;
@@ -173,7 +177,9 @@ export function looksLikeText(buf: Buffer): boolean {
 }
 
 // ── 파일 휴지통의 순수 부분(#3778) — 보관 자리 계산. DB·FS 없음(도장 찍기·옮기기는 local-file.ts · project-routes.ts). ──
-export interface FileTrashStamp { batch: string; at: string; by: string | null; project_id: number; base_rel: string; held_rel: string }
+//  root = 어느 루트의 보관인가(localRootKey — 'personal:<member>' · 'shared' · 'project:<id>'). 개인·공유 폴더 삭제도 휴지통을 거치면서 생겼다.
+//   옛 도장(프로젝트 파일 전용)에는 없다 — 그때는 project_id 가 곧 루트다(trashStampRoot 가 둘을 한 답으로 접는다). 경로는 전부 **그 루트 기준** posix 상대경로.
+export interface FileTrashStamp { batch: string; at: string; by: string | null; project_id: number; base_rel: string; held_rel: string; root?: string }
 export const FILE_TRASH_DIR = path.posix.join(".lively", "trash");
 
 /** 지운 경로(base_rel) 아래 파일 하나가 보관 자리에서 어디에 있나 — 순수 계산. 경로는 전부 프로젝트 폴더 기준 posix 상대경로. */
@@ -190,6 +196,19 @@ export function newFileTrashStamp(projectId: number, rel: string, by: string | n
   const clean = rel.split(path.sep).join("/").replace(/^\/+|\/+$/g, "");
   const batch = now.getTime().toString(36) + "-" + Math.floor(rand * 0xffffff).toString(36).padStart(4, "0");
   return { batch, at: now.toISOString(), by, project_id: projectId, base_rel: clean, held_rel: path.posix.join(FILE_TRASH_DIR, batch, path.posix.basename(clean)) };
+}
+
+/** 루트를 아는 도장 — 개인·공유 폴더(브라우즈) 삭제용. 프로젝트 루트면 project_id 도 채워 옛 읽는 쪽(프로젝트 라우트·화면)이 그대로 돈다. */
+export function newRootTrashStamp(root: LocalRoot, rel: string, by: string | null, now = new Date(), rand = Math.random()): FileTrashStamp {
+  return { ...newFileTrashStamp(root.kind === "project" ? root.id : 0, rel, by, now, rand), root: localRootKey(root) };
+}
+
+/** 이 도장은 어느 루트의 것인가 — root 가 있으면 그것, 없으면(옛 도장) project_id. 둘 다 못 읽으면 null(되살릴 자리를 지어내지 않는다). */
+export function trashStampRoot(stamp: Pick<FileTrashStamp, "root" | "project_id"> | null | undefined): LocalRoot | null {
+  if (!stamp) return null;
+  if (typeof stamp.root === "string" && stamp.root) return parseLocalRootKey(stamp.root);
+  const id = Number(stamp.project_id);
+  return Number.isInteger(id) && id > 0 ? { kind: "project", id } : null;
 }
 
 /**

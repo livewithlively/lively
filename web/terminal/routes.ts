@@ -2,6 +2,7 @@
 //  소비자: web/main.ts(라우팅) · 대시보드(따라하기 투어) — 전부 배럴 terminal.ts 를 거친다.
 //  import 방향: terminal/ 4모듈을 **위에서 아래로만** 본다(아래 모듈은 이 파일을 import 하지 않는다 — 폼의 목록 재렌더는 아래 훅 등록으로 해소).
 import { api, el, errorNote, initDragRangeSelect, state, sv, toast } from '../core.js';
+import { ICONS } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { pjvTbIcon, pjvTabIcon } from '../projects/icons.js';   // #1841 프로젝트 표와 같은 툴바·탭 아이콘(리프 모듈)
 import { pjvPopover } from '../projects/popover.js';
 import { openMySessionsModal } from '../sessions.js';   // #905 C1 — 터미널 탭 '내 세션 기록' 버튼→모달
@@ -18,6 +19,7 @@ import type { TsessBasis, TsessPeriod } from './status-filter.js';
 import { openGridPicker, openSessionSelectPicker, termUrl } from './select-bar.js';
 import { loginBannerEl, openNodeManager, openTermCreateForm, setTerminalRerender } from './session-form.js';
 import { buildSessProjFilter, openGlobalPromptSearch, tsessColHead, tsessRow } from './session-list.js';
+import { notTrashed, retireSessions, retiredToastText } from '../session-actions.js';
 
 // 폼·다이얼로그(session-form)가 끝난 뒤 목록을 다시 그리게 등록 — 이 방향(위→아래)이라야 순환이 안 생긴다.
 setTerminalRerender(renderTerminal);
@@ -40,7 +42,7 @@ async function renderTerminal(view) {
       api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || []).catch(() => []),
     ]);
   } catch (e) { view.replaceChildren(errorNote(e, '세션을 불러오지 못했습니다')); return; }
-  const sessions = (data && data.sessions) || [];
+  const sessions = notTrashed<any>((data && data.sessions) || []);   // 휴지통에 있는 세션은 이 목록에 서지 않는다(#3778)
   const projName = new Map<any, string>((projects || []).map((p) => [p.id, p.name]));
   // '내 프로젝트'(칩 강조용) = 서버 mine=1 과 같은 술어(생성자이거나 팀원)를 전체 목록에서 그대로 판정.
   const meIdNow = (state.me && state.me.userId) || '';
@@ -326,17 +328,16 @@ async function renderTerminal(view) {
     const skipped = picked.length - items.length;
     if (!items.length) { toast(picked.length ? '내가 만든 세션만 종료할 수 있습니다' : '', true); return; }
     const live = items.filter((s) => !sessDead(s)).length;   // 아직 도는 세션은 따로 경고(진행 중 작업이 끊긴다)
+    const stopped = items.filter((s) => s.restorable).length;   // 이미 멈춘 세션은 끝낼 것이 없다 — 휴지통으로 간다(#3778)
     const lines: string[] = [];
     if (live) lines.push('⚠ 이 중 ' + live + '개는 아직 도는 세션입니다.');
+    if (stopped) lines.push('이미 멈춘 세션 ' + stopped + '개는 휴지통으로 갑니다 — 휴지통에서 되돌릴 수 있어요.');
     if (skipped) lines.push('남의 세션 ' + skipped + '개는 제외됩니다(소유자만 종료 가능).');
     if (!await tsessConfirmEnd(items.length + '개 세션을 종료할까요?', lines, items)) return;
     btn.disabled = true;
-    // 병렬 종료 — 일부 실패해도 나머지는 진행(성공/실패 건수 보고). 노드 세션은 ?node= 로 위임(#869).
-    const results = await Promise.allSettled(
-      items.map((s) => api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' })));
-    const ok = results.filter((r) => r.status === 'fulfilled').length;
-    const fail = results.length - ok;
-    toast(fail ? (ok + '개 종료 · ' + fail + '개 실패') : (ok + '개 세션을 종료했습니다 — 대화록은 📜 세션 기록에 남아 있어요'), fail > 0);
+    // 병렬 — 일부 실패해도 나머지는 진행(건수 보고). 도는 세션은 터미널만 내리고, 멈춘 세션은 휴지통으로(#3778 retireSessions).
+    const r = await retireSessions(items);
+    toast(retiredToastText(r), r.failed > 0);
     sel.mode = false; sel.ids.clear();
     reRender();
   }
@@ -344,8 +345,8 @@ async function renderTerminal(view) {
   // ── 머리 3층(#1841, 프로젝트 탭 pjv-board-header 동형) — ① 빵부스러기(앱 이름) ② 뷰 탭 ③ 툴바. 그 아래 표 하나.
   const crumbBar = el('div', { class: 'pjv-crumbbar' },
     el('nav', { class: 'pjv-crumbs', 'aria-label': '현재 위치' },
-      el('span', { class: 'pjv-crumb is-leaf tsess-crumb' }, tsessNodeIcon('pjv-crumb-ic'), el('span', { class: 'pjv-crumb-label', text: 'AI 세션' })),
-      el('span', { class: 'tsess-crumb-sub', text: '박스와 노드에서 도는 AI 세션 전체' })));
+      el('span', { class: 'pjv-crumb is-leaf tsess-crumb' }, tsessNodeIcon('pjv-crumb-ic'), el('span', { class: 'pjv-crumb-label', text: '세션 관리' })),
+      el('span', { class: 'tsess-crumb-sub', text: '새 세션 만들기 · 노드 연결 · 여러 세션 한꺼번에 종료·복원' })));
   const viewTabs = el('div', { class: 'pjv-vtabs', role: 'tablist', 'aria-label': '뷰' },
     el('button', { class: 'pjv-vtab active', type: 'button', role: 'tab', 'aria-selected': 'true' }, pjvTabIcon('list'), el('span', { text: '리스트' })));
   const headerStack = el('div', { class: 'pjv-board-header' }, crumbBar, viewTabs, toolbar);
@@ -358,7 +359,7 @@ async function renderTerminal(view) {
 // 툴바·빵부스러기용 선 아이콘(프로젝트 아이콘 팩에 없는 둘) — 같은 광학 상자(24 · stroke 1.6 · round).
 function tsessHistoryIcon() {
   const n = sv('svg', { class: 'pjv-tb-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  n.append(sv('path', { d: 'M3.5 12a8.5 8.5 0 1 0 2.6-6.1' }), sv('path', { d: 'M3.5 4.5v4.2h4.2' }), sv('path', { d: 'M12 8v4.4l3 1.8' }));
+  n.append(sv('path', { d: ICONS.sess }));   // #4233: 앱 「세션 이력」과 같은 그림(겹친 말풍선 둘)
   return n;
 }
 function tsessNodeIcon(cls?) {

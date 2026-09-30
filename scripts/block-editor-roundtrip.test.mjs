@@ -190,6 +190,57 @@ ok("⑤ inlineDomToMd — ZWSP(캐럿 패딩 잔재) 제거");
 assert.equal(inl(txt("별표*와 [대괄호 `백틱`")), "별표\\*와 \\[대괄호 \\`백틱\\`");
 ok("⑤ inlineDomToMd — 평문의 인라인 문법 문자는 이스케이프");
 
+// ════════ ⑥ [[위키링크]] 보존(#4419) ════════
+//  renderInline 은 [[…]] 를 링크로 만들지 않아 에디터 안에선 평문 텍스트 노드로 산다. 그 평문의 '[' 를
+//  '\[' 로 이스케이프해 저장하던 탓에, 웹에서 한 번 고쳐 저장하면 문서의 위키링크가 전부 \[\[…]] 로 바뀌었다
+//  (실측: customer-discovery-list-and-interview-guide-2026-09 v8 — 8건, 그 전 8/11 에도 14문서).
+//  서버 문법(src/v6/wikilink.ts)은 문자열에 '[[' 가 있어야 링크로 센다 → 자동 연결 엣지가 끊긴다.
+const { RE_WIKI, extractWikiLinkTargets } = await import(join(root, "dist/v6/wikilink.js"));
+const { RE_WIKI: RE_WIKI_WEB } = await import(join(root, "public/app/editor/serialize.js"));
+
+assert.equal(inl(txt("[[customer-segment-hypotheses-v1-2026-09-21]] §17")), "[[customer-segment-hypotheses-v1-2026-09-21]] §17");
+ok("⑥ [[name]] 은 괄호를 이스케이프하지 않는다");
+assert.equal(inl(txt("[[partner-alphacut|알파컷 이민석]]")), "[[partner-alphacut|알파컷 이민석]]");
+ok("⑥ [[name|표시]] 원형 보존");
+assert.equal(inl(txt("![[embed-doc]] · [[doc#헤딩]]")), "![[embed-doc]] · [[doc#헤딩]]");
+ok("⑥ 임베드 ![[…]] · 헤딩 링크 [[…#…]] 원형 보존");
+assert.equal(inl(txt("이름 옆 [표기 불확실] · [[2026-06-09-파일럿-파트너-타깃-세그멘테이션]]")),
+  "이름 옆 \\[표기 불확실] · [[2026-06-09-파일럿-파트너-타깃-세그멘테이션]]");
+ok("⑥ 위키링크가 아닌 홑대괄호는 종전대로 이스케이프(링크 오파싱 차단 유지)");
+assert.equal(inl(txt("[["), txt("partner-alphacut]]")), "[[partner-alphacut]]");
+ok("⑥ 편집으로 텍스트 노드가 쪼개져도('[[' | 'name]]') 한 덩어리로 보고 보존");
+assert.equal(inl(txt("닫히지 않은 [[partner-alphacut")), "닫히지 않은 \\[\\[partner-alphacut");
+ok("⑥ 닫히지 않은 [[ 는 링크가 아니다 → 이스케이프");
+assert.equal(inl(txt("[[]] · [[|표시만]]")), "\\[\\[]] · \\[\\[|표시만]]");
+ok("⑥ 빈 대상 [[]] · [[|x]] 는 문법상 링크가 아니다 → 이스케이프(경계)");
+assert.equal(inl(txt("[[a]]")), "[[a]]");
+ok("⑥ 한 글자 대상 [[a]] (최소 경계) 보존");
+assert.equal(inl(txt("[[par​tner-alphacut]]")), "[[partner-alphacut]]");
+ok("⑥ 토큰 안의 캐럿 패딩 ZWSP 는 지우고 나서 판정");
+assert.equal(inl(txt("[[a"), elem("STRONG", {}, txt("b")), txt("]]")), "\\[\\[a**b**]]");
+ok("⑥ 토큰 사이에 서식 요소가 끼면 링크로 보지 않는다(알려진 한계 — 종전 동작)");
+assert.equal(inl(elem("CODE", {}, txt("[[x]]"))), "`[[x]]`");
+ok("⑥ 인라인 코드 안의 [[…]] 는 코드 그대로");
+assert.equal(inl(txt("~"), txt("~취소 아님")), "\\~~취소 아님");
+ok("⑥ 쪼개진 텍스트 노드는 이어 붙인 뒤 이스케이프(노드 경계에 걸친 ~~ 도 막힌다)");
+assert.equal(RE_WIKI_WEB.source, RE_WIKI.source, "웹 직렬화의 위키링크 문법이 서버 src/v6/wikilink.ts RE_WIKI 와 어긋났다 — 한쪽만 고치면 다시 링크가 끊긴다");
+ok("⑥ 웹 직렬화의 위키링크 문법 = 서버 RE_WIKI(드리프트 차단)");
+
+// 증상 그대로 — 편집기 DOM → 저장 md → 서버가 뽑는 링크 대상. 원문에 있던 링크가 저장 뒤에도 전부 잡혀야 한다.
+{
+  const para = elem("P", {}, txt("배경: 대화에서 찾는다("), txt("[[customer-segment-hypotheses-v1-2026-09-21]] §17~19, "),
+    txt("[[meeting-2026-08-13-huh-gael-minutes-1684]]의 「지금 팔지 말고」)."), elem("STRONG", {}, txt("굵게")));
+  const md = blocksToMd([
+    { type: "p", text: inlineDomToMd(para) },
+    { type: "bullet", indent: 0, text: inl(txt("[[partner-alphacut]] 참조")) },
+    { type: "h", level: 2, text: inl(txt("관련 [[pilot-survey-n6-analysis-2026-07]]")) },
+  ]);
+  const want = ["customer-segment-hypotheses-v1-2026-09-21", "meeting-2026-08-13-huh-gael-minutes-1684", "partner-alphacut", "pilot-survey-n6-analysis-2026-07"];
+  assert.deepEqual(extractWikiLinkTargets(md), want);
+  assert.deepEqual(extractWikiLinkTargets(round(md)), want);
+  ok("⑥ 편집기 저장 → 서버 위키링크 추출: 문단·목록·제목의 링크 4건이 그대로 잡히고 재왕복에도 불변");
+}
+
 // escInline / escLineStart 단위
 assert.equal(escInline("a\\b"), "a\\\\b");
 ok("⑤ escInline — 백슬래시 먼저 이스케이프");

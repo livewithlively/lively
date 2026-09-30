@@ -10,6 +10,8 @@ import { sessionTermUrl } from './lib/session-open.js';   // #1820 — 세션 �
 import { sectionHead } from './admin-widgets.js';
 //  헤드리스 토큰을 다시 넣는 폼 — 자격 금고 소유 그대로 부른다(여기서 폼을 다시 만들지 않는다).
 import { svcTokenForm } from './admin-credentials.js';
+import { AI_LOGO, AI_BRAND } from './lib/ai-logos.js';
+import { qmark } from './lib/qmark.js';
 //  ★ #2477 — «화면에서 끝나는 로그인» 의 프로토콜은 한 벌이다(처음 설정과 공유). 여기선 그리기만 한다.
 import {
   isInlineCardHarness, startInlineAiLogin, ensureLoginTerminal, loginTerminalSrc, loginTerminalPopoutUrl,
@@ -38,7 +40,7 @@ const AI_LOGIN_HINT: Record<string, string> = {
   claude: '열린 세션의 claude 에서 /login 을 실행하세요.',
   codex: '열린 세션에 나오는 주소와 일회용 코드를 브라우저에 입력하면 됩니다.',
 };
-function aiAccountRow(a, mySessions, reload) {
+function aiAccountParts(a, mySessions, reload, opts: { grid?: boolean } = {}) {
   const mine = (mySessions || []).filter((s) => s.harness === a.key);
   const live = mine.filter((s) => s.agentState && s.agentState !== 'exited' && s.agentState !== 'offline');
   // 공유 계정 = 이 서버의 호스트 홈 자격을 전 구성원이 함께 쓰는 상태. 로그아웃하면 남의 세션까지 끊기므로 잠근다.
@@ -49,14 +51,14 @@ function aiAccountRow(a, mySessions, reload) {
   //  알아낼 방법이 없다 — 파일 존재는 물론 `codex login status`·`codex doctor` 도 만료된 토큰을 정상으로
   //  보고한다(실측). 그래서 툴팁으로 그 한계를 말하고, 아래에서 **연결됨이어도 [다시 로그인]을 열어 둔다**.
   const st = a.loggedIn === true
-    ? { text: '연결됨', cls: 'pill pill-ok', tip: (shared ? '이 서버 공용 계정으로 연결돼 있습니다' : '내 계정으로 연결돼 있습니다') + ' — ' + a.where + '. 저장된 자격이 있다는 뜻이며, 만료 여부까지는 서버가 알 수 없습니다 — 세션에서 로그인 오류가 나면 [다시 로그인] 을 누르세요.' }
+    ? { text: '연결됨', cls: 'pill pill-ok', tip: (shared ? '이 서버 공용 계정으로 연결되어 있습니다' : '내 계정으로 연결되어 있습니다') + '(' + a.where + '). 로그인 정보가 저장되어 있다는 뜻이며, 만료 여부는 서버가 확인할 수 없습니다. AI 세션에서 로그인 오류가 나면 [다시 로그인]을 누르세요.' }
     : a.loggedIn === false
-      ? { text: '연결 안 됨', cls: 'pill', tip: '아직 로그인하지 않았습니다. [로그인] 을 누르면 이 AI 로 세션이 하나 열리고, 거기서 한 번만 로그인하면 됩니다.' }
+      ? { text: '연결 안 됨', cls: 'pill', tip: '로그인하지 않았습니다. [로그인]을 누르면 로그인 화면이 이 자리에 열리고, 그곳에서 로그인하면 연결됩니다.' }
       //  ★ #2477 — «모름» 에도 두 종류가 있다. probe 하네스(agy)는 **아직 안 물어본 것**이지 못 잰 것이 아니다.
       //   그 둘을 같은 문장으로 말하면 사람이 «이 서버가 고장났나» 로 읽는다.
       : a.how === 'probe'
-        ? { text: '확인 필요', cls: 'pill', tip: a.label + ' 는 자격이 파일로 남지 않아, 목록을 열 때가 아니라 **물어봐야** 알 수 있습니다(그 CLI 에게 직접 묻습니다 — 몇 초 걸립니다). [확인] 을 누르면 지금 재 봅니다.' }
-        : { text: '확인 불가', cls: 'pill', tip: '이 서버가 로그인 여부를 확인하지 못했습니다(자격이 키체인에 있거나 접근할 수 없음). 세션이 잘 돌고 있으면 연결된 것입니다.' };
+        ? { text: '확인 필요', cls: 'pill', tip: a.label + '는 로그인 정보가 파일로 남지 않아, 프로그램에 직접 물어봐야 로그인 여부를 알 수 있습니다. [확인]을 누르면 지금 확인합니다(몇 초 걸립니다).' }
+        : { text: '확인 불가', cls: 'pill', tip: '이 서버에서 로그인 상태를 확인할 수 없습니다. 로그인 정보가 서버 키체인에 있거나 접근 권한이 없는 경우입니다. AI 세션이 정상적으로 실행되면 연결된 상태입니다.' };
   const badge = withTip(el('span', { class: st.cls, text: st.text }), st.tip);
   //  ── 이 행 아래 펼쳐지는 로그인 자리(#2477) ────────────────────────────────────
   //   ⚠ 카드를 **지우는 경로를 두지 않는다.** 실측(2026-08-31): 조회가 30초 끊기자 탈출로가 카드를 덮어
@@ -79,7 +81,7 @@ function aiAccountRow(a, mySessions, reload) {
     const w = window.open('', '_blank');
     const send = (url: string, msg: string) => {
       if (w) { w.location.href = url; toast(msg); }
-      else toast('브라우저가 새 탭을 막았어요 — 팝업 차단을 풀고 다시 눌러 주세요.', true);
+      else toast('브라우저가 새 탭 열기를 차단했습니다. 팝업 차단을 해제한 뒤 다시 눌러 주세요.', true);
     };
     if (term) { send(loginTerminalPopoutUrl(term), '같은 로그인 창을 새 탭에서 열었어요.'); return; }
     void (async () => {
@@ -199,14 +201,11 @@ function aiAccountRow(a, mySessions, reload) {
   // 부제는 **한 줄**만 — 지금 이 AI 로 도는 내 세션이 몇 개인지(이 화면에서 사람이 실제로 궁금해하는 것).
   //  공유 계정 같은 단서는 짧은 꼬리표로만 붙이고 사연은 툴팁에 둔다.
   const sub = live.length ? `내 세션 ${live.length}개가 이 AI로 실행 중` : '이 AI로 실행 중인 내 세션 없음';
-  return el('div', { class: 'aiacct' },
-    el('div', { class: 'aiacct-txt' },
-      el('div', { class: 'aiacct-head' },
-        el('span', { class: 'aiacct-name', text: a.label }), badge,
-        shared ? withTip(el('span', { class: 'pill', text: '서버 공용' }),
-          '이 AI 의 계정은 이 서버 전체가 함께 씁니다 — 내가 연결한 것이 아닐 수 있고, 로그아웃하면 다른 구성원 세션까지 끊기므로 잠가 두었습니다.') : null),
-      el('div', { class: 'aiacct-sub', text: sub })),
-    el('div', { class: 'aiacct-act' },
+  const sharedTag = shared ? withTip(el('span', { class: 'pill', text: '서버 공용' }),
+    '이 AI 계정은 이 서버의 모든 구성원이 함께 사용합니다. 로그아웃하면 다른 구성원의 AI 세션도 끊기므로 로그아웃을 막아 두었습니다.') : null;
+  //  표(새 창)에 쓰는 짧은 꼬리말 — 누구 계정인지(내 계정 / 서버 공용)만. 실행 중 세션 개수는 클래식 행에만 남긴다.
+  const meta = a.loggedIn === true ? (shared ? '' : '내 계정') : '';
+  const acts = el('div', { class: 'aiacct-act' },
       // 로그인 버튼은 **언제나 연다**(#1516). 종전엔 '연결 확정'이면 감췄는데, 판정이 자격 **파일 존재**만
       //  보므로 만료된 자격도 '연결됨'이 된다 → 세션이 인증 오류로 죽는 바로 그 상황에서 화면에 로그인
       //  진입점이 하나도 없었다(상민님 신고: "비개발자가 어떻게 로그인을 하라는건지도 알기 어렵다").
@@ -226,12 +225,23 @@ function aiAccountRow(a, mySessions, reload) {
           b2.disabled = false; b2.textContent = was;
         } }) : null,
       el('button', { type: 'button', class: a.loggedIn === true ? 'btn btn-ghost btn-sm' : 'btn btn-primary btn-sm',
-        text: a.loggedIn === true ? '다시 로그인' : '로그인', onclick: openLogin }),
-      a.canLogout ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '로그아웃', onclick: logout }) : null),
-    //  ⚠ **행에 붙인다.** 이걸 빠뜨리면 `panel.hidden=false` 가 아무 데도 안 보이고,
-    //   `alive: () => document.body.contains(panel)` 이 늘 false 라 폴링도 즉시 죽는다 — 눌러도
-    //   **아무 일도 안 일어난다**(오류도 없다). 실측(2026-09-01, 상민님 신고)으로 밟았다.
-    panel);
+        //  표(새 창)에서 주소·코드로 안 끝나는 AI(agy)는 이 자리에 로그인 터미널이 열린다 — 그래서 «AI 세션에서 로그인».
+        text: a.loggedIn === true ? '다시 로그인' : (opts.grid && !isInlineCardHarness(a.key) ? 'AI 세션에서 로그인' : '로그인'), onclick: openLogin }),
+      a.canLogout ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '로그아웃', onclick: logout }) : null);
+  //  ⚠ panel 은 **부른 쪽이 화면에 붙인다.** 안 붙이면 `panel.hidden=false` 가 아무 데도 안 보이고,
+  //   `alive: () => document.body.contains(panel)` 이 늘 false 라 폴링도 즉시 죽는다 — 눌러도
+  //   **아무 일도 안 일어난다**(오류도 없다). 실측(2026-09-01, 상민님 신고)으로 밟았다.
+  return { badge, sharedTag, sub, meta, acts, panel };
+}
+function aiAccountRow(a, mySessions, reload) {
+  const p = aiAccountParts(a, mySessions, reload);
+  return el('div', { class: 'aiacct' },
+    el('div', { class: 'aiacct-txt' },
+      el('div', { class: 'aiacct-head' },
+        el('span', { class: 'aiacct-name', text: a.label }), p.badge, p.sharedTag),
+      el('div', { class: 'aiacct-sub', text: p.sub })),
+    p.acts,
+    p.panel);
 }
 // ── 사람 없이 도는 작업(#4012 T12 · #4051) ─────────────────────────────────────────────
 //  **무엇이 다른가:** 위 계정 행들은 «내가 앉아서 쓰는 세션» 이 무엇으로 도는지다. 이 칸은 «사람이 안 보는 동안 도는
@@ -244,10 +254,10 @@ function aiAccountRow(a, mySessions, reload) {
 //  ⚠ 행 아래 펼쳐지는 카드는 지우는 경로가 없다(위 aiAccountRow 와 같은 교리 — 받은 주소·치던 코드를 지키려고).
 const HEADLESS_HINT: Record<string, string> = {
   claude: '주소를 열어 Claude 계정으로 로그인하고 Authorize 를 누르세요. 브라우저에 나온 코드를 아래에 붙여넣으면 끝납니다.',
-  codex: '주소를 열고 아래 코드를 넣은 뒤 ChatGPT 계정으로 로그인하세요. 끝나면 이 자리가 저절로 바뀝니다.',
+  codex: '주소를 열고 아래 코드를 입력한 뒤 ChatGPT 계정으로 로그인하세요. 로그인하면 이 화면에 연결 상태가 자동으로 표시됩니다.',
 };
 
-function headlessRow(h: any, reload: () => void) {
+function headlessParts(h: any, reload: () => void) {
   const panel = el('div', { class: 'aiacct-login', hidden: true });
   let handle: InlineLoginHandle | null = null;
   const fail = h.failure;
@@ -257,13 +267,13 @@ function headlessRow(h: any, reload: () => void) {
       ? ' 내 PC(노드)에서 돈 작업이었다면 그 PC 에서 Claude 로그인을 다시 하셔야 합니다(이 표시는 30일 뒤 사라집니다). 멈춘 예약 작업은 관리 ▸ 자동화에서 다시 켜세요.'
       : '') }
     : h.connected
-      ? { text: '연결됨', cls: 'pill pill-ok', tip: '사람 없이 도는 작업이 이 계정으로 실행됩니다. 연결은 저장된 자격이 있다는 뜻이며, 인증이 실패하면 이 자리에 «멈춤» 이 뜹니다.' }
-      : { text: '연결 안 됨', cls: 'pill', tip: '아직 연결하지 않았습니다. [연결] 을 누르면 이 자리에서 끝납니다.' };
+      ? { text: '연결됨', cls: 'pill pill-ok', tip: '자동 작업이 이 계정으로 실행됩니다. 로그인 정보가 저장되어 있다는 뜻이며, 인증에 실패하면 이 자리에 «멈춤»이 표시됩니다.' }
+      : { text: '연결 안 됨', cls: 'pill', tip: '연결하지 않았습니다. [연결]을 누르면 이 자리에서 연결할 수 있습니다.' };
   const sub = fail
     ? `${fail.message} · ${relTime(fail.at)}`
     : h.connected
       ? `${h.via === 'screen' ? '화면에서 연결함' : '토큰으로 연결함'}${h.connected_at ? ' · ' + relTime(h.connected_at) : ''}`
-      : '아직 연결하지 않았어요.';
+      : '연결하지 않았습니다.';
 
   /** 토큰을 이미 갖고 있는 사람의 탈출로 — 종전 붙여넣기 폼을 그대로 연다(폼은 자격 금고 소유). */
   const pasteToken = () => {
@@ -322,22 +332,30 @@ function headlessRow(h: any, reload: () => void) {
     handle = startInlineAiLogin(h.key, paint(), { restart, purpose: 'headless', alive: () => document.body.contains(panel) });
   };
   const canInline = HEADLESS_INLINE[h.key] === true;
+  const badge = withTip(el('span', { class: st.cls, text: st.text }), st.tip);
+  //  표(새 창)에 쓰는 짧은 꼬리말 — 언제 연결했는지(날짜). 멈췄으면 사유는 배지 툴팁에 있다.
+  const at = h.connected_at ? new Date(h.connected_at) : null;
+  const meta = !fail && h.connected && at && !isNaN(at.getTime()) ? `${at.getMonth() + 1}월 ${at.getDate()}일 연결` : '';
+  const act = canInline
+    ? el('button', {
+      type: 'button', class: h.connected && !fail ? 'btn btn-ghost btn-sm' : 'btn btn-primary btn-sm',
+      text: h.connected ? '다시 연결' : '연결',
+      //  ⚠ 누르면 **새로** 띄운다(restart) — 지난 시도의 주소·코드는 이미 죽었다(대화형 로그인과 같은 이유, #2232).
+      onclick: () => run(true),
+    })
+    : el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '토큰 넣기', onclick: () => pasteToken() });
+  return { badge, sub, meta, act, panel };
+}
+
+function headlessRow(h: any, reload: () => void) {
+  const p = headlessParts(h, reload);
   return el('div', { class: 'aiacct' },
     el('div', { class: 'aiacct-txt' },
       el('div', { class: 'aiacct-head' },
-        el('span', { class: 'aiacct-name', text: h.label }),
-        withTip(el('span', { class: st.cls, text: st.text }), st.tip)),
-      el('div', { class: 'aiacct-sub', text: sub })),
-    el('div', { class: 'aiacct-act' },
-      canInline
-        ? el('button', {
-          type: 'button', class: h.connected && !fail ? 'btn btn-ghost btn-sm' : 'btn btn-primary btn-sm',
-          text: h.connected ? '다시 연결' : '연결',
-          //  ⚠ 누르면 **새로** 띄운다(restart) — 지난 시도의 주소·코드는 이미 죽었다(대화형 로그인과 같은 이유, #2232).
-          onclick: () => run(true),
-        })
-        : el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '토큰 넣기', onclick: () => pasteToken() })),
-    panel);
+        el('span', { class: 'aiacct-name', text: h.label }), p.badge),
+      el('div', { class: 'aiacct-sub', text: p.sub })),
+    el('div', { class: 'aiacct-act' }, p.act),
+    p.panel);
 }
 
 /**
@@ -351,17 +369,17 @@ function runnerLine(st: any, reload: () => void): HTMLElement | null {
   const connected = ((st?.harnesses || []) as any[]).some((h) => h && h.connected);
   let text = '';
   let action: HTMLElement | null = null;
-  if (r.is_me) text = '이 워크스페이스의 증류·분류·관리는 내 계정으로 실행됩니다.';
-  else if (r.member) text = `이 워크스페이스의 증류·분류·관리는 ${r.name || r.member}님 계정으로 실행됩니다. 여기서 연결한 내 자격은 내 이름으로 도는 작업에만 쓰입니다.`;
-  else if (st.can_set_runner && r.source === 'db') text = '이 워크스페이스의 실행 멤버가 비어 있어요. 증류·분류·관리는 각 작업을 켠 사람 계정으로 실행됩니다.';
+  if (r.is_me) text = '이 워크스페이스의 증류·점검은 내 계정으로 실행됩니다.';
+  else if (r.member) text = `이 워크스페이스의 증류·점검은 ${r.name || r.member}님 계정으로 실행됩니다. 여기서 연결한 내 자격은 내 이름으로 도는 작업에만 쓰입니다.`;
+  else if (st.can_set_runner && r.source === 'db') text = '이 워크스페이스의 실행 멤버가 비어 있어요. 증류·점검은 각 작업을 켠 사람 계정으로 실행됩니다.';
   else if (st.can_set_runner && connected) {
-    text = '연결은 됐지만 이 워크스페이스의 실행 멤버가 아직 정해지지 않았어요. 정하면 증류·분류·관리가 내 계정으로 실행됩니다.';
+    text = '연결은 됐지만 이 워크스페이스의 실행 멤버가 아직 정해지지 않았어요. 정하면 증류·점검이 내 계정으로 실행됩니다.';
     const btn = el('button', { type: 'button', class: 'btn btn-primary btn-sm', text: '실행 멤버로 정하기' }) as HTMLButtonElement;
     btn.onclick = async () => {
       btn.disabled = true; btn.textContent = '정하는 중…';
       try {
         const out = await api('/api/ui/me/headless/runner', { method: 'POST', body: JSON.stringify({}) }) as any;
-        toast(out?.runner === 'filled' ? '이제 이 워크스페이스의 증류·분류·관리가 내 계정으로 실행됩니다.'
+        toast(out?.runner === 'filled' ? '이제 이 워크스페이스의 증류·점검이 내 계정으로 실행됩니다.'
           : out?.runner === 'cleared' ? '이 워크스페이스는 실행 멤버를 비워 두기로 정해져 있어요 — 바꾸려면 관리 설정에서 정해 주세요.'
             : '실행 멤버가 이미 정해져 있어요.');
         reload();
@@ -372,7 +390,7 @@ function runnerLine(st: any, reload: () => void): HTMLElement | null {
     };
     action = btn;
   }
-  else if (st.can_set_runner) text = '아직 실행 멤버가 정해지지 않았어요. 여기서 연결하면 이 워크스페이스의 증류·분류·관리가 내 계정으로 실행됩니다.';
+  else if (st.can_set_runner) text = '아직 실행 멤버가 정해지지 않았어요. 여기서 연결하면 이 워크스페이스의 증류·점검이 내 계정으로 실행됩니다.';
   else text = '이 워크스페이스의 실행 멤버는 관리자가 정합니다. 여기서 연결한 내 자격은 내 이름으로 도는 작업에만 쓰입니다.';
   if (!action) return el('p', { class: 'admin-hint', style: 'margin:6px 0 0', text });
   return el('div', { style: 'margin:6px 0 0; display:flex; align-items:center; gap:10px; flex-wrap:wrap' },
@@ -389,7 +407,7 @@ function headlessSection(st: any, reload: () => void): HTMLElement[] {
     el('div', { style: 'margin:22px 0 2px; display:flex; align-items:center; gap:8px; flex-wrap:wrap' },
       el('span', { class: 'aiacct-name', text: '사람 없이 도는 작업' }),
       anyFail ? el('span', { class: 'pill pill-warn', text: '확인 필요' }) : null),
-    el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: '증류·분류·관리처럼 내가 자리에 없어도 도는 작업은, 여기서 따로 연결한 계정으로 실행됩니다.' }),
+    el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: '증류·점검처럼 내가 자리에 없어도 도는 작업은, 여기서 따로 연결한 계정으로 실행됩니다.' }),
     ...(line ? [line] : []),
     ...rows.map((r) => headlessRow(r, reload)),
   ];
@@ -427,6 +445,73 @@ function myAiAccountsCard() {
   return card;
 }
 
+
+// ── 새 창 [AI 계정 연결] 탭의 표(원준 2026-09-28) — 줄 = AI, 열 = «AI 세션» · «자동 작업». ────────────
+//  카드(액자)를 걷고 한 장의 표로 둔다. 로그인 · 연결 동작은 위 부품(aiAccountParts · headlessParts)을 그대로 쓴다
+//  — 클래식 [내 AI 계정] 과 같은 한 벌이다. 설명은 열 머리의 (?) 두 개에만 넣는다(궁금한 사람만 본다).
+const AI_ORDER = ['claude', 'codex', 'antigravity', 'grok'];
+function aiLogo(key: string): HTMLElement {
+  const w = el('span', { class: 'v2me-plogo' });
+  if (AI_LOGO[key]) w.innerHTML = AI_LOGO[key];   // 정적 문자열(lib/ai-logos.ts)
+  return w;
+}
+function runnerSentence(st: any): string {
+  const r = st?.runner;
+  if (!r) return '';
+  if (r.is_me) return '이 워크스페이스의 자동 작업은 내 계정으로 실행됩니다.';
+  if (r.member) return `이 워크스페이스의 자동 작업은 ${r.name || r.member}님 계정으로 실행됩니다.`;
+  return '';
+}
+function myAiAccountsGrid() {
+  const body = el('div', { class: 'v2me-pgrid' });
+  const load = async () => {
+    busy(body, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
+    try {
+      const [acc, ses, headless] = await Promise.all([
+        api('/api/ui/me/ai-accounts'),
+        api('/api/ui/terminal/sessions?includeProjects=1').catch(() => ({ sessions: [] })),
+        api('/api/ui/me/headless').catch(() => null),
+      ]);
+      const meId = (state.me && (state.me.userId || state.me.email)) || '';
+      const mine = (((ses || {}) as any).sessions || []).filter((s) => s.owner === meId);
+      const accounts: any[] = ((acc || {}) as any).accounts || [];
+      const hl: any[] = ((headless || {}) as any).harnesses || [];
+      const keys = [...AI_ORDER.filter((k) => accounts.some((a) => a.key === k) || hl.some((h) => h.key === k)),
+        ...accounts.map((a) => a.key).filter((k) => !AI_ORDER.includes(k))];
+      const tipHeadless = ['수집, 증류, 점검처럼 라이블리가 서버에서 자동으로 실행하는 작업입니다. AI 세션 로그인과 별도로 연결하며, Claude와 ChatGPT만 지원합니다.',
+        runnerSentence(headless)].filter(Boolean).join(' ');
+      const rows: HTMLElement[] = [el('div', { class: 'v2me-phead' },
+        el('span', { class: 'v2me-pk', text: 'AI' }),
+        el('span', { class: 'v2me-pk' }, 'AI 세션', qmark('내가 직접 열어서 사용하는 AI 세션입니다. 여기서 연결한 계정으로 실행됩니다.')),
+        el('span', { class: 'v2me-pk' }, '자동 작업', qmark(tipHeadless)))];
+      for (const k of keys) {
+        const a = accounts.find((x) => x.key === k);
+        const h = hl.find((x) => x.key === k);
+        const ap = a ? aiAccountParts(a, mine, load, { grid: true }) : null;
+        const hp = h ? headlessParts(h, load) : null;
+        const cell = (badge: HTMLElement | null, meta: string, extra: HTMLElement | null, acts: HTMLElement | null) =>
+          el('div', { class: 'v2me-pcell' },
+            el('div', { class: 'v2me-pst' }, badge, extra, meta ? el('span', { class: 'v2me-pm', text: meta }) : null),
+            acts);
+        rows.push(el('div', { class: 'v2me-pblock' },
+          el('div', { class: 'v2me-prow' },
+            el('div', { class: 'v2me-pid' }, aiLogo(k),
+              el('div', {}, el('div', { class: 'v2me-pname', text: AI_BRAND[k] || (a && a.label) || k }),
+                el('div', { class: 'v2me-pprod', text: (a && a.label) || (h && h.label) || '' }))),
+            ap ? cell(ap.badge, ap.meta, ap.sharedTag, ap.acts) : cell(el('span', { class: 'pill', text: '없음' }), '', null, null),
+            hp ? cell(hp.badge, hp.meta, null, hp.act) : cell(el('span', { class: 'pill pill-na', text: '지원 안 함' }), '', null, null)),
+          ap ? ap.panel : null, hp ? hp.panel : null));
+      }
+      //  실행 멤버를 정해야 하는 경우만 표 아래에 드러낸다(버튼이 필요하다). 나머지 사실은 (?) 안에 있다.
+      const line = headless && !runnerSentence(headless) ? runnerLine(headless, load) : null;
+      body.replaceChildren(...rows, ...(line ? [line] : []));
+      if (!keys.length) body.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('이 서버에 로그인이 필요한 AI가 없습니다.')));
+    } catch (e) { body.replaceChildren(errorNote(e, 'AI 계정 상태를 불러오지 못했습니다')); }
+  };
+  void load();
+  return body;
+}
+
 // ── [내 설정 ▸ 내 AI 계정] — 화면 조립(**클래식 전용 자리**). ──
 //  AI 개인화 편집 폼(개인 레이어 org_member.body_md — #846 이 주입 배선을 완성)은 좌하단 내 프로필 창의
 //  [AI 개인화] 탭으로 옮겨 갔다(#1843·#1898). 여기는 계정 카드만 남고, 규칙은 안내 한 줄로 그 창을 가리킨다.
@@ -444,5 +529,7 @@ export {
   //  #1898 — 내 프로필 창([AI 계정 연결] 탭)이 **이 카드를 그대로** 쓴다. 로그인 세션을 여는 규칙
   //  (claude 는 그 하네스로 · codex 는 셸 + device-auth)이 여기 한 곳에만 있어야 한다.
   myAiAccountsCard,
+  //  새 창 [AI 계정 연결] 탭은 표 한 장(원준 2026-09-28).
+  myAiAccountsGrid,
   myAiSection,
 };

@@ -502,7 +502,7 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
           catch (_) { toast('복사 실패 — 직접 드래그해 복사하세요', true); }
         },
       }),
-      el('span', { class: 'caption', text: "'lively: command not found' 가 나오면 아직 설치 전이에요 — [사용 가이드 ▸ 내 AI 세션 생성] 을 먼저 따라 하세요." })));
+      el('span', { class: 'caption', text: "'lively: command not found' 가 나오면 아직 설치 전이에요 — [사용 가이드 ▸ 내 컴퓨터 연결] 을 먼저 따라 하세요." })));
 
   // 고급 설정 안(#1145) — 기본 화면엔 '이름·어디서·초대'만 두고, 나머지는 이 블록에 접어 둔다.
   //  실행 위치·라이블리 모드·기록 범위·실행(AI)/모델/추론강도·자동 승인이 여기 들어간다.

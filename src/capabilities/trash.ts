@@ -4,14 +4,15 @@
 import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
-import { listDeleted, getDeleteSnapshot, purgeDeleted, isDeletedNow, previewOf, TRASH_ENTITIES, type DeletedRow, type TrashEntity } from "../v6/trash-store.js";
+import { listDeleted, countDeleted, getDeleteSnapshot, purgeDeleted, isDeletedNow, previewOf, TRASH_ENTITIES, type DeletedRow, type TrashEntity } from "../v6/trash-store.js";
 import { auditOrgContent } from "../v6/content-audit.js";
-import { restoreSource } from "../v6/source-store.js";
+import { restoreSource, countTrashedFileSources } from "../v6/source-store.js";
 import { restoreKnowledge } from "../v6/knowledge-store.js";
 import { restoreProject } from "../v6/project-store.js";
 import { restoreCategory } from "../v6/category-store.js";
 import { visibleListIds, type Viewer } from "../v6/visibility.js";
 import { isAdmin } from "./principal.js";
+import { personalRootMember } from "../ingest/local-file-core.js";   // 순수 — 목록(source_trash_list)과 같은 «내 개인 폴더» 판정
 
 const ENTITIES = TRASH_ENTITIES;   // knowledge · project · category · source(#3778) — 목록·복원·미리보기·파기가 같은 집합을 본다
 const entityOf = (raw: unknown, allowed: readonly string[] = ENTITIES): string => {
@@ -95,6 +96,27 @@ const deletedList: Capability = {
       ? e
       : { ...e, locked: true, note: "공개범위 제한 — 복원·열람은 긴급 열람으로만" });
     return { entries: withMeta };
+  },
+};
+
+// 개수만(#3778) — 사이드바 「휴지통 N」이 자료·지식·옛 길로 지운 프로젝트까지 세게 한다. 종전 배지는 화면이 이미 아는 것
+//  (통째로 버린 프로젝트 + 따로 버린 세션)만 세어, 지식 43건이 든 휴지통이 «0» 으로 보였다. 목록과 같은 게이트로 센다:
+//  볼 수 없는 것은 개수로도 말하지 않는다(잠긴 줄은 화면도 세우지 않는다 — lib/trash-tabs.ts).
+const trashCounts: Capability = {
+  name: "trash_counts",
+  title: "휴지통 개수",
+  description: "휴지통에 든 것의 개수 — 지식·프로젝트(옛 길로 지운 것)·자료(본문만 남은 것)·파일(보관 중). 목록(deleted_list·source_trash_list)과 같은 공개범위로 센다. 화면 배지용.",
+  scope: "memory",
+  input: {},
+  expose: { mcp: false, rest: [{ method: "GET", paths: ["/api/ui/deleted/counts"], parse: () => ({}) }] },
+  handler: async (_input: any, _user: any, ctx: any) => {
+    const viewer: Viewer = ctx?.viewer ?? null;
+    const visIds = viewer === null ? null : await visibleListIds(viewer);
+    const [c, files] = await Promise.all([
+      countDeleted({ gate: viewer !== null, visibleListIds: visIds ? [...visIds] : null }),
+      countTrashedFileSources(ctx?.viewer, undefined, personalRootMember(_user ?? {})),
+    ]);
+    return { knowledge: c.knowledge, project: c.project, source: c.source, files };
   },
 };
 
@@ -212,4 +234,4 @@ const contentPurge: Capability = {
   },
 };
 
-export const trashCapabilities: Capability[] = [deletedList, contentRestore, contentSnapshot, contentPurge];
+export const trashCapabilities: Capability[] = [deletedList, trashCounts, contentRestore, contentSnapshot, contentPurge];

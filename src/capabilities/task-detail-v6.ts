@@ -4,6 +4,7 @@
 import { z } from "zod";
 import { HttpError, parseId, clampPage } from "./rest-util.js";
 import { canSeeProjectRow } from "../v6/visibility.js";
+import { sessionsOfTasks } from "../v6/session-task.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import {
@@ -43,7 +44,11 @@ const taskDetailV6: Capability = {
     await assertTaskVisible(input.id, ctx);
     const detail = await getTaskDetail(input.id, actorOf(user, ctx));
     if (!detail) throw new HttpError(404, "태스크를 찾을 수 없습니다");
-    return detail;
+    // #4165 — 모달의 [세션으로 가기 / 세션 열기] 가 가를 근거: 이 태스크를 맡은 세션(최근 것 먼저). 프로젝트 상세(project_get_v6)가
+    //  태스크 줄마다 싣는 것과 같은 조회다. 실패는 상세를 막지 않는다(단추가 «세션 열기» 로 설 뿐).
+    const bySession = await sessionsOfTasks([input.id])
+      .catch(() => new Map<number, Array<{ id: string; label: string | null; owner: string }>>());
+    return { ...detail, task: { ...detail.task, sessions: bySession.get(input.id) ?? [] } };
   },
 };
 

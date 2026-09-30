@@ -21,8 +21,10 @@ import { aiLoginScopeNote } from './ai-login-scope.js';   // #2476 — 그 안�
 //   서비스 표·연결 판정은 me-logins.ts(=[외부 앱 연결] 화면 v2/connect.ts 와 같은 정본), 토큰 발급처·생김새는
 //   admin-credentials.ts 의 CRED_KINDS. **표가 두 벌이 되면 조용히 어긋난다** — 여기서 다시 만들지 않는다.
 import { LOGIN_SERVICES, partition } from '../me-logins.js';
+import { catalogSoon } from '../lib/connect-axes.js';   // #4445 — «준비 중» 판정의 정본(외부 앱 연결과 한 벌)
 import { NOTION_PICK_TIP, notionCollectedPages, notionCollectedLine } from './notion-pick.js';   // #1968 — 노션 고르기 안내·모은 페이지 수(외부 앱 연결과 한 벌)
 import { CRED_KINDS } from '../admin-credentials.js';
+import { ctxPath } from '../lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 export const OB_DONE_KEY = 'lively_ob_done';
 /** 빠른 로컬 캐시 — 첫 그림에서 화면이 깜빡이지 않게 쓴다. **정본은 서버**(아래 fetchOnboardingDone). */
 export function onboardingDone(): boolean { try { return localStorage.getItem(OB_DONE_KEY) === '1'; } catch (_) { return false; } }
@@ -609,7 +611,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
      "k": "메신저·메일·일정",
      "items": [
       { "id": "slack", "label": "Slack", "logo": "slack", "live": true },
-      { "id": "gmail", "label": "Gmail", "logo": "gmail", "soon": true },
+      { "id": "gmail", "label": "Gmail", "logo": "gmail", "live": true },
       { "id": "gcal", "label": "Google 캘린더", "logo": "googlecalendar", "soon": true }
      ]
     },
@@ -1120,10 +1122,37 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   }
   async function loadColl() {
     const out: any = {};
-    await Promise.all(Object.entries(COLLECT_FIRST).map(async ([id, svc]) => {
-      try { out[id] = await api(`/api/ui/org/${svc}/collect`); } catch (_) { out[id] = null; }
-    }));
+    await Promise.all([
+      ...Object.entries(COLLECT_FIRST).map(async ([id, svc]) => {
+        try { out[id] = await api(`/api/ui/org/${svc}/collect`); } catch (_) { out[id] = null; }
+      }),
+      loadGoogleColl(),
+    ]);
     COLL = out;
+  }
+  /* #4211 — 구글 두 칸(드라이브·Gmail)은 **연결 하나 · 서비스별 수집기**다. 개인 축(구글 연결됨)만 보면 드라이브만 켠
+   *  관리자에게 Gmail 카드가 «연결돼 있어요» 로 선다 — 메일은 한 통도 안 오는데. 그래서 관리자에겐 서비스별 수집기로
+   *  판정하고, 켤 때는 이미 켜 둔 서비스와 **합쳐** 보낸다(services 는 «켜 둘 전체 집합»이라 하나만 보내면 나머지가 꺼진다).
+   *  ⚠ COLLECT_FIRST 에 넣지 않는다 — 그 표는 범위 고르기 창·좁히기 흐름까지 태우는데 구글은 그 모양이 아니다. */
+  const GOOGLE_SVC = { gdrive: 'drive', gmail: 'gmail' };
+  let GCOLL: any = null;
+  async function loadGoogleColl() { try { GCOLL = await api('/api/ui/org/google/collect'); } catch (_) { GCOLL = null; } }
+  const googleCollectOn = (svc) => !!(GCOLL && (GCOLL.collectors || []).some((c) => c.service === svc && c.enabled));
+  const googleScopeOk = (svc) => !!(GCOLL && (GCOLL.collectors || []).some((c) => c.service === svc && c.scope_ok));
+  const googleWanted = (svc) => [...new Set([
+    ...((GCOLL && GCOLL.collectors) || []).filter((c) => c.enabled).map((c) => c.service), svc])];
+  /** 구글 수집 켜기 — 서버 답(ok · needs_connect+authorization_url · skipped)을 그대로 돌려준다. 던지지 않는다. */
+  async function startGoogleCollect(id) {
+    const svc = GOOGLE_SVC[id];
+    //  ★ 켜 둔 서비스를 모르면 보내지 않는다 — services 는 «켜 둘 전체 집합»이라, 상태를 못 읽은 채 [이 서비스] 하나만
+    //   보내면 이미 돌던 드라이브(또는 Gmail)가 꺼진다. 한 번 더 읽어 보고, 그래도 모르면 멈춘다.
+    if (!GCOLL) await loadGoogleColl();
+    if (!GCOLL) return { ok: false, message: '구글 연결 상태를 읽지 못했어요. 잠시 뒤 다시 눌러 주세요.' };
+    try {
+      const r: any = await api('/api/ui/org/google/collect', { method: 'POST', body: JSON.stringify({ enabled: true, services: googleWanted(svc) }) });
+      if (r && r.state) GCOLL = r.state;   // 서버가 켠 뒤의 상태를 같이 준다 — 다시 묻지 않고 판정한다
+      return r;
+    } catch (e) { return { ok: false, message: (e && e.message) || '' }; }
   }
   /** (#1631) 합류자의 팀 수집 읽기(한 번) — loadWelcome 이 합류자로 판정하자마자 건다. */
   let collP = null;
@@ -1178,7 +1207,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const dynSvcs = () => (CONN ? CONN.all.filter((s) => s.dynamic) : []);
   /** 이 앱이 지금 어떤 자리에 있나 — 'on'(이어짐) · 'off'(내가 켤 수 있다) · 'blocked'(관리자가 열어야) · null(모른다). */
   function connState(id) {
-    const svc = svcOf(id); if (!svc || !CONN) return null;
+    const svc = svcOf(id); if (!svc) return null;
+    //  #4445 — 서버에 아직 못 물었어도(CONN===null) **서버가 «준비됐다» 고 해야만 열리는 앱**(구글 — soonUntilReady)은
+    //   잠근다. 모르는 것을 «열렸다» 로 읽으면 안 되는 쪽이 이 앱들이다(catalogSoon 의 규약). 종전엔 null(모른다)로
+    //   떨어져 수집처 고르기가 처음 0.5초(느린 서버면 그 이상) 구글을 고를 수 있는 카드로 그렸고, 자격 목록을 못 읽으면
+    //   영영 그 모양이었다(원준님 2026-09-30 «구글도 가능한 것처럼 되어 있다»). 이미 연결해 둔 사람은 답이 오면 'on' 으로 바뀐다.
+    if (!CONN) return catalogSoon(svc, null) ? 'blocked' : null;
     if (collectMode(id)) {
       const c = COLL[id];
       if (c) {
@@ -1191,6 +1225,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         if (id === 'figma' || id === 'clickup' || id === 'github' || id === 'gitlab' || id === 'linear') return c.enabled ? 'on' : 'off';
       }
       // 수집 상태를 못 읽었으면(구 이미지·권한) 개인 축 판정으로 떨어진다 — 화면을 비우지 않는다.
+    }
+    //  #4211 — 카탈로그가 «준비 중»(서버가 아직 못 연다)이면 잠근다. 종전엔 'off' 로 떨어져 눌러도 동의가 안 열리는
+    //   카드가 됐다(매니지드 구글). 이미 연결해 둔 사람의 것은 연결 사실 그대로 'on'.
+    if (CONN.soon && CONN.soon.some((s) => s.key === svc.key)) return CONN.soonConnected && CONN.soonConnected.has(svc.key) ? 'on' : 'blocked';
+    if (GOOGLE_SVC[id] && isAdmin() && !isJoin() && GCOLL) {
+      if (googleCollectOn(GOOGLE_SVC[id])) return 'on';
+      return !GCOLL.ready && !GCOLL.connected ? 'blocked' : 'off';
     }
     if (CONN.connected.some((s) => s.key === svc.key)) return 'on';
     if (CONN.blockedOAuth.some((s) => s.key === svc.key)) return 'blocked';
@@ -1207,6 +1248,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     return svc.token ? 'token' : (svc.oauth ? 'oauth' : null);
   }
   /** 이어진 것으로 세어도 되는 id 만 — 화면이 «2곳 이었어요» 라고 말할 근거. */
+  /** 수집처 고르기에서 잠가 둘 카드인가 — 표가 «준비 중» 이라 하거나, 서버 판정이 잠김(아직 못 여는 앱). */
+  const srcNotYet = (it) => !!it.soon || connState(it.id) === 'blocked';
   const pickedIds = () => S.sources.filter((id) => id !== 'none' && (SVC_OF[id] || (CONN && CONN.all.some((s) => s.key === id))));
 
   /* 토큰형의 «어느 버튼을 누르는가». 주소·값의 생김새는 CRED_KINDS 에서 읽고(지어내면 그 자리에서 막힌다),
@@ -1320,6 +1363,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           catch (_) { /* 다음 폴링에 다시 */ } finally { busy = false; }
           if (done) return;
         }
+      }
+      //  #4211 구글 — 동의가 끝나 그 서비스 범위가 생겼으면 수집기를 켠다(동의만으로는 안 켜진다).
+      if (GOOGLE_SVC[id] && isAdmin() && !isJoin() && connState(id) !== 'on' && googleScopeOk(GOOGLE_SVC[id])) {
+        busy = true;
+        try { await startGoogleCollect(id); await loadConn(); } finally { busy = false; }
+        if (done) return;
       }
       if (connState(id) === 'on') { stop(); after(); }
     };
@@ -1922,7 +1971,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           const hit = rows.find((x) => x.k === k);
           if (hit) hit.items.push(...items); else rows.push({ k, items: [...items] });
         }
-        const notYet = (it) => it.soon || connState(it.id) === 'blocked';
+        const notYet = srcNotYet;
         //  #2232 — «준비 중» 카드는 묶음 안에서 **맨 오른쪽**으로(원준님 2026-08-28). 문서·위키는 Notion · Figma · Google Drive 순이 된다.
         for (const r of rows) r.items = [...r.items.filter((it) => !notYet(it)), ...r.items.filter(notYet)];
         const flat = rows.flatMap((r) => r.items);
@@ -1960,6 +2009,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //   못 물으면 표 그대로 두고 그냥 진행한다(연결 못 읽었다고 온보딩이 막히면 안 된다).
         if (!CONN && !connTried) { void loadConn().then(() => renderScene('sources', false)); }
         const all = DATA.SOURCE_ROWS.flatMap((r) => r.items);
+        //  #4445 — 잠긴 카드(준비 중)는 고른 목록에서도 뺀다. 답이 오기 전에 눌러 둔 것이 남으면 다음 장면(연결)에
+        //   «아직 준비 중이에요» 카드로 끌려가고, [계속]이 그걸 «고른 곳» 으로 센다.
+        const lockedIds = new Set(all.filter(srcNotYet).map((it) => it.id));
+        if (S.sources.some((id) => lockedIds.has(id))) { S.sources = S.sources.filter((id) => !lockedIds.has(id)); save(); renderSB(); }
         //  #2232 — 관리자가 등록한 앱은 표에 없으므로 서버가 준 목록에서도 찾는다(키가 곧 id 다).
         const idOf = (label) => (all.find((s) => s.label === label) || {}).id
           || (dynSvcs().find((sv) => sv.label === label) || {}).key;
@@ -2062,6 +2115,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             try { await api('/api/ui/org/distillers/figma', { method: 'POST', body: JSON.stringify({}) }); } catch (_) { /* 비치명 */ }
           }
           const svc = COLLECT_OF[id]; if (!svc || !isAdmin()) return false;
+          //  #4211 — 구글은 서비스를 실어 보낸다(없으면 서버 기본 = 드라이브만이라 Gmail 을 골라도 드라이브가 켜진다).
+          if (GOOGLE_SVC[id]) { await startGoogleCollect(id); return googleCollectOn(GOOGLE_SVC[id]); }
           try {
             const r: any = await api(`/api/ui/org/${svc}/collect`, { method: 'POST', body: JSON.stringify({ enabled: true }) });
             return !(r && r.needs_connect === true);
@@ -2088,6 +2143,28 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               if (!url) { void fin('노션 화면을 열지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
               opened(); window.open(url, '_blank', 'noopener'); watchConnect(id, fin);
             } catch (e) { void fin((e && e.message) || '노션 연결을 시작하지 못했어요.'); }
+            return;
+          }
+          //  #4211 구글(드라이브·Gmail) — 관리자는 수집기 축: 켜기를 먼저 시도하고, 연결이 없으면 그 서비스 범위로 동의가 열린다.
+          //   연결은 있는데 그 서비스 범위가 없으면(드라이브만 허용한 사람이 Gmail 을 고름) 범위를 넓히는 동의를 연다.
+          //   관리자가 아니면(합류자 제외) 그 서비스 범위로 내 연결만 넓힌다 — AI 가 내 메일·파일을 읽는 개인 축.
+          if (GOOGLE_SVC[id]) {
+            const svc = GOOGLE_SVC[id];
+            const open = (url) => { opened(); window.open(url, '_blank', 'noopener'); watchConnect(id, fin); };
+            const widen = async () => {
+              try {
+                const w: any = await api('/api/ui/org/google/collect/connect', { method: 'POST', body: JSON.stringify({ services: [svc] }) });
+                if (w && w.authorization_url) { open(w.authorization_url); return; }
+                void fin('구글 화면을 열지 못했어요. 잠시 뒤 다시 눌러 주세요.');
+              } catch (e) { void fin((e && e.message) || '구글 연결을 시작하지 못했어요.'); }
+            };
+            if (!isAdmin() || isJoin()) { await widen(); return; }
+            const r: any = await startGoogleCollect(id);
+            await loadConn();
+            if (connState(id) === 'on') { void fin(); return; }
+            if (r && r.needs_connect && r.authorization_url) { open(r.authorization_url); return; }
+            if (r && r.ok !== false) { await widen(); return; }   // 연결은 있는데 이 서비스를 아직 허용하지 않았다(skipped: no_scope)
+            void fin((r && r.message) || `${srcLabel(id)} 가져오기를 켜지 못했어요. «외부 앱 연결»에서 다시 시도해 주세요.`);
             return;
           }
           if (id === 'linear') {
@@ -3017,7 +3094,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     const more = fails.length > 3 ? ` 외 ${fails.length - 3}건` : '';
     const why = failWhy(fails);
     S.notes.push(`파일 <b>${fails.length}건</b>(${names}${more})은 자료로 넣지 못했어요${why}.`
-      + ` 그 파일들은 [맥락 관리]에서 다시 올리시면 됩니다.`);
+      + ` 그 파일들은 ${ctxPath()}에서 다시 올리시면 됩니다.`);
     save();
   }
 
@@ -3058,7 +3135,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       if (Date.now() - readStarted > READ_MAX_MS) {
         const left = Math.max(0, target() - S.read.done);
         finish(); noteFail();
-        if (left) { S.notes.push(`자료 <b>${left}건</b>은 아직 정리에 안 들어왔어요 — 그 파일들은 [맥락 관리]에서 다시 올리시면 됩니다.`); save(); }
+        if (left) { S.notes.push(`자료 <b>${left}건</b>은 아직 정리에 안 들어왔어요. 그 파일들은 ${ctxPath()}에서 다시 올리시면 됩니다.`); save(); }
       }
     }, 1500);
   }

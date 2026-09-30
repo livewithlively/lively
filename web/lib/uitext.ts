@@ -47,8 +47,12 @@ function uiText(text) {
 // 칩 클래스 — 라벨이 한 덩어리(공백 없음)면 nowrap 을 걸어 '연결·데이/터'처럼 이름이 잘리는 걸 막는다.
 //  (한국어는 중점·조사 경계에서 줄바꿈이 일어나 word-break:keep-all 만으로는 안 막힌다.)
 //  공백이 있는 긴 라벨은 어절 단위로 흐르게 둔다 — 안 그러면 좁은 팝오버에서 칩이 통째로 넘친다.
+//  #4233. 공백이 있어도 짧은 이름(12자까지)은 한 덩어리로 둔다: 앱 이름 「수집 · 증류」가 «수집 ·» 과 «증류» 로 갈려 두 줄에 서던 것.
+//   12자는 좁은 팝오버(200px)에도 들어가는 길이다. 그보다 긴 라벨은 종전대로 어절 단위로 흐른다.
+const UIKEY_SOLID_MAX = 12;
 function uiKeyCls(mod, label) {
-  return 'md-uikey ' + mod + (/\s/.test(String(label).trim()) ? '' : ' md-uikey-solid');
+  const t = String(label).trim();
+  return 'md-uikey ' + mod + (!/\s/.test(t) || t.length <= UIKEY_SOLID_MAX ? ' md-uikey-solid' : '');
 }
 // ']' 바로 뒤가 마크다운 링크의 (주소) 인가 — 프로토콜·라우트로 시작하고 공백 없이 닫히는 것만 링크로 본다.
 const MD_LINK_AT = /^\((?:https?:\/\/|mailto:|#|\/)[^)\s]*\)/;

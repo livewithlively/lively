@@ -99,7 +99,8 @@ ok(/from '\.\.\/lib\/trash-tabs\.js'/.test(bins) && /pickInitialTab\(savedTab\(\
 ok(/srcItems\(extras\.deleted, extras\.files\)/.test(bins) && /knowItems\(extras\.deleted\)/.test(bins) && /auditProjItems\(extras\.deleted\)/.test(bins), "W2 네 탭의 재료를 잣대로 가른다");
 ok(/role: 'tablist'/.test(bins) && /TRASH_TABS\.map/.test(bins) && !/chip\('all'/.test(bins), "W3 ★탭은 TRASH_TABS 에서 — 「전체」 칩이 없다");
 ok(/\/api\/ui\/deleted\?limit=500&entity=/.test(bins), "W4 ★종류마다 제 목록을 제 상한으로 — 한 목록 200건을 넷이 나눠 쓰지 않는다");
-ok(/file-trash\/restore/.test(bins) && /file-trash\/purge/.test(bins) && /\/api\/ui\/deleted\/restore/.test(bins) && /\/api\/ui\/deleted\/purge/.test(bins), "W5 자료의 두 출처가 각자 제 문으로 되살고 지워진다");
+//  파일 보관의 주소는 잣대가 고른다(3차 — 프로젝트 · 내 폴더 · 공유 폴더로 길이 갈렸다: lib/trash-tabs fileTrashUrl, 값은 trash-routes.test.mjs R3~R5).
+ok(/fileTrashUrl\(it, op\)/.test(bins) && /fileOp\(it, 'restore'\)/.test(bins) && /fileOp\(it, 'purge'\)/.test(bins) && /\/api\/ui\/deleted\/restore/.test(bins) && /\/api\/ui\/deleted\/purge/.test(bins), "W5 자료의 두 출처가 각자 제 문으로 되살고 지워진다");
 ok(/\/api\/ui\/deleted\/snapshot\?entity=knowledge/.test(bins) && /renderMarkdown\(/.test(bins), "W6 지식 읽기 칸이 본문을 받아 그린다");
 ok(/extrasFailed \? '목록을 확인하지 못했어요/.test(bins), "W7 못 받았으면 «확인하지 못했어요» — 빈 목록을 «없다» 로 단언하지 않는다");
 ok(/if \(p === 'trash'\) return \{ title: '휴지통', noAside: true \}/.test(read("web/v2/main.ts")), "W8 안 D 는 곁칸이 없다");

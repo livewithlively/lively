@@ -166,6 +166,17 @@ let toml = install();
   // #1884 — lively-local(로컬 조작 MCP) 도 codex 에 심는다(stdio 경로일 때 — 이 번들은 CLI 동봉이라 stdio).
   /\[mcp_servers\.lively-local\]\s*\ncommand = "[^"]+"\s*\nargs = \["mcp-local"\]/.test(toml)
     ? ok("⑨c lively-local stdio MCP 등록") : bad("⑨c lively-local", "config.toml 에 [mcp_servers.lively-local] 없음");
+  // ⑨d (#4135, 2026-09-28) — codex 는 MCP 서버에 제 환경을 물려주지 않는다(실측 0.157.1). 세션이 누구 것인지(LIVELY_SESSION_ID)와
+  //  세션을 연 사람의 신원(LIVELY_MCP_TOKEN)이 프록시에 닿으려면 env_vars 로 이름을 넘겨야 한다 — 빠지면 공용 컴퓨터의 codex 세션이
+  //  컴퓨터를 등록한 사람 이름으로 기록을 남긴다. 두 서버 모두, 제 테이블 안에(하위 테이블 [..env] 보다 앞에) 있어야 TOML 이 맞다.
+  {
+    const block = (name) => { const m = new RegExp(`\\[mcp_servers\\.${name}\\]\\n([\\s\\S]*?)(?=\\n\\[|$)`).exec(toml); return m ? m[1] : ""; };
+    const need = ["LIVELY_SESSION_ID", "LIVELY_MCP_TOKEN"];
+    const has = (name) => { const l = /^env_vars = (\[.*\])$/m.exec(block(name)); if (!l) return false; try { const a = JSON.parse(l[1]); return need.every((n) => a.includes(n)) && !a.includes("LIVELY_TOKEN"); } catch { return false; } };
+    has("lively") && has("lively-local")
+      ? ok("⑨d MCP 서버에 세션 환경을 넘긴다(env_vars: 세션 id · 세션 신원 — 훅 토큰은 제외)")
+      : bad("⑨d env_vars", `lively=${has("lively")} lively-local=${has("lively-local")}`);
+  }
 }
 
 // ── ⑬ auto-approve 목록 반영 ────────────────────────────────────────────────

@@ -242,6 +242,27 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "query", env: "GMAIL_QUERY", secret: false, label: "검색 쿼리", hint: "Gmail 검색식 (예: -from:noreply, 비우면 전체)" },
     ],
   },
+  // Outlook 커넥터(#4211) — Microsoft Graph 메일 → 자료(email). 토큰은 **켠 사람의 [Outlook 연결]** 뿐이다(붙여넣기 칸이 없다):
+  //  Microsoft 토큰은 1시간짜리라 붙여 둘 수 있는 값이 없고, 갱신엔 앱의 client_secret 이 필요해 사람이 들고 다닐 것이 아니다.
+  outlook: {
+    system: "outlook",
+    label: "Outlook",
+    guide: {
+      intro:
+        "[외부 앱 연결 ▸ Outlook]에서 [자료 가져오기]를 켜면 Microsoft 화면에서 [허용] 한 번으로 연결되고, 그 연결로 메일이 자료함에 쌓입니다" +
+        "(token_source=member:<켠 사람>). 회사 계정(Microsoft 365)은 회사 관리자가 먼저 «조직 전체 허용»을 해야 합니다 — 링크는 같은 화면에 있습니다.",
+      steps: [
+        "[외부 앱 연결 ▸ Outlook]에서 [Outlook 연결] — Microsoft 화면에서 계정을 고르고 [허용]",
+        "«관리자 승인 필요»가 뜨면 같은 화면의 [관리자에게 보낼 링크]를 회사 관리자에게 보냅니다(관리자가 한 번 [수락])",
+        "[자료 가져오기]를 켭니다 — 지운 편지함·정크·임시 보관함은 가져오지 않습니다",
+      ],
+      url: "https://outlook.office.com/mail/",
+    },
+    fields: [
+      { key: "token_source", env: "OUTLOOK_TOKEN_SOURCE", secret: false, required: true, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [Outlook 연결]로 저장한 계정" },
+      { key: "backfill_since", env: "OUTLOOK_BACKFILL_SINCE", secret: false, label: "언제부터", hint: "YYYY-MM-DD — 비우면 메일함 전체" },
+    ],
+  },
   gdrive: {
     system: "gdrive",
     label: "Google Drive",

@@ -17,6 +17,7 @@ import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkRow, wkSection, wkTick } from '
 import { wkBoardHeader, wkSurfaceTabs } from './wiki-table.js';   // #1841 — 사이드바가 없어졌으니 이 화면도 같은 머리 3층을 스스로 인다
 import { openWikiPeek, setWikiPeekList } from './wiki-doc.js';
 import { wkColHead, wkDocCols, wkTableRow } from './wiki-table.js';   // #1841 프로젝트 표 문법
+import { openTaxonomyApp } from './taxonomy-link.js';   // #4233 분류 정의는 분류체계 앱에서 고친다
 
 // ── 폴더 만들기 — 트리 그룹 노드(is_folder). 현재 폴더 안이면 그 아래로. ──
 function openFolderForm(cat: any, parentFolder: string, done: () => void) {
@@ -204,7 +205,7 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
     // #837 — 카테고리 '정의·범위'의 편집 주인은 [관리 ▸ 카테고리(분류 체계)] 하나다(결정: 관리탭이 주인).
     //  여기서도 열 수 있게 두면 편집 표면이 둘이 되어 '어디서 바꾸지'가 매번 퀴즈가 된다 — 링크로 보낸다.
     //  (도메인맵 탭도 이미 같은 곳으로 링크만 건다.)
-    if (canCat) pop.append(item('✎ 정의·범위 편집 ↗', () => { location.hash = '#/categories'; }));   // #1153 관리탭 → 분류체계 탭
+    if (canCat) pop.append(item('✎ 분류체계에서 고치기 ↗', () => openTaxonomyApp(cat && cat.id)));   // #4233 분류체계 앱(그 분류를 연다)
     if (canDoc) pop.append(item(sel.mode ? '선택 모드 끄기' : '☑ 여러 개 선택', () => { sel.mode = !sel.mode; if (!sel.mode) sel.names.clear(); paintLibrary(); }));
     document.body.append(pop);
     const r = moreBtn.getBoundingClientRect();
