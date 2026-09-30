@@ -262,8 +262,11 @@ export function checkInvariants(
     // 중간 조각은 제목·결론이 없는 자리라 허용하지 않는다(allowLeadRepeat=false).
     const al = (opts.allowLeadRepeat ?? true) ? allowance(before, after, k) : { added: new Map(), missing: new Map() };
     const bset = new Set(ib[k]), aset = new Set(ia[k]);
-    const missing = subtractAllowance(d.missing, al.missing, aset);
-    const added = subtractAllowance(d.added, al.added, bset);
+    let missing = subtractAllowance(d.missing, al.missing, aset);
+    let added = subtractAllowance(d.added, al.added, bset);
+    // 양쪽을 동시에 면제하지 않는다 — 누락 하나(제목 허용)와 추가 하나(첫 줄 허용)를 함께 면제하면 그건 X→Y 치환이다
+    //  (예: 제목의 배포일을 첫 줄로 옮기며 본문 날짜를 바꿈). 정당한 경우는 늘 한 방향뿐이다.
+    if (missing.length < d.missing.length && added.length < d.added.length) { missing = d.missing; added = d.added; }
     if (missing.length || added.length) violations.push({ kind: `invariant:${k}`, detail: diffDetail({ missing, added }), missing, added });
   }
   for (const k of SET_FIELDS) {

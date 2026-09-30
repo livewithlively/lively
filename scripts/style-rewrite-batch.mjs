@@ -267,6 +267,7 @@ async function rewriteLoop(src, findings, guide, check, part) {
     const raw = await runLlm(rewritePrompt(src, findings, guide, feedback, part));
     const out = parseJsonLoose(raw, "{");
     if (!out || typeof out.title !== "string" || typeof out.body_md !== "string") {
+      lastCand = null;
       attempts.push({ reason: "parse" });
       feedback = { prev: null, problems: ["출력이 JSON 객체 {title, body_md} 가 아니었다. JSON 하나만 출력하라."] };
       continue;
@@ -318,9 +319,14 @@ async function processSections(k, el, fmt, common) {
     const part = { index: i, total: sections.length };
     const check = (cand) => {
       const v = checkInvariants(src, cand, { requireTitle: i === 0, allowLeadRepeat: i === 0 });
-      // 조각마다 실제로 나아졌는지 본다 — 규칙은 문서 단위로 하나로 합쳐 세어져서, 문서 전체로만 보면 조각 하나가 남아도 «개선 없음» 이 된다.
-      const left = sectionFindings(cand.title, cand.body_md, i, fmt).length;
-      if (left >= findings.length) v.push({ kind: "no_change", detail: `이 조각의 형식 위반이 줄지 않았다(${findings.length}건 → ${left}건). 고칠 곳을 실제로 고쳐라` });
+      // 조각마다 실제로 나아졌는지 규칙 집합과 발생 횟수로 본다 — 새 규칙이 생기면 안 되고, 규칙이 하나 사라지거나
+      //  남은 규칙의 발생 횟수 합이 줄어야 한다(규칙은 문서 안에서 하나로 합쳐 세어져 개수만 보면 부분 개선을 못 본다).
+      const now = sectionFindings(cand.title, cand.body_md, i, fmt);
+      const was = new Set(findings.map((f) => f.rule));
+      const fresh = now.filter((f) => !was.has(f.rule)).map((f) => f.rule);
+      const sum = (fs) => fs.reduce((n, f) => n + (f.count ?? 1), 0);
+      if (fresh.length) v.push({ kind: "new_rule", detail: `이 조각에 없던 형식 위반을 만들었다: ${fresh.join(", ")}` });
+      else if (now.length >= findings.length && sum(now) >= sum(findings)) v.push({ kind: "no_change", detail: `이 조각의 형식 위반이 줄지 않았다. 고칠 곳을 실제로 고쳐라` });
       if (i > 0 && !sectionHeadingOk(sec.heading, cand.body_md)) v.push({ kind: "heading", detail: `조각은 원문과 같은 수준의 헤딩으로 시작해야 한다: ${sec.heading}` });
       return v;
     };

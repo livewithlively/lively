@@ -221,8 +221,8 @@ t("numbers: 원문에 있는 다른 값으로 바꿔치기하면 violation(반�
 t("numbers: 날짜 사이 바꿔치기는 violation(반례 F)", () => {
   const before = doc(CLEAN_TITLE, `${LEAD}\n\n2026-09-17 배포, 2026-09-20 롤백, 2026-09-17 결정.\n\n${FILLER}`);
   const after = doc(CLEAN_TITLE, `${LEAD}\n\n2026-09-17 배포, 2026-09-17 롤백, 2026-09-20 결정.\n\n${FILLER}`);
-  // 다중집합이 같아지는 맞교환(after)은 개수로 못 잡는다 — 그건 의미 판정의 몫이라 여기선 단언하지 않는다.
-  void after;
+  // 다중집합이 같아지는 맞교환(after)은 개수로 못 잡는다 — 그건 의미 판정의 몫이다. 이 한계를 못 박아 둔다.
+  assert.ok(!hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
   const after2 = doc(CLEAN_TITLE, `${LEAD}\n\n2026-09-17 배포, 2026-09-17 롤백, 2026-09-17 결정.\n\n${FILLER}`);
   assert.ok(hasKind(checkRewrite(before, after2, fmt), "invariant:numbers"));
 });
@@ -430,6 +430,21 @@ t("허용 범위 악용: 첫 줄에 날짜 범위를 적고 본문 날짜를 바
 t("허용은 개수까지만: 첫 줄에 한 번 되풀이한 값이 본문에서 두 번 늘면 violation", () => {
   const before = doc(CLEAN_TITLE, `${LEAD}\n\n상한은 40 이다.\n\n${FILLER}`);
   const after = doc(CLEAN_TITLE, `상한은 40 이다.\n\n${LEAD}\n\n상한은 40 이고 기본도 40 이다.\n\n${FILLER}`);
+  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
+});
+t("양쪽 면제 조합: 제목 날짜를 첫 줄로 옮기며 본문 날짜를 바꾸면 violation(b-date)", () => {
+  const before = doc("2026-09-17 배포 회고", "2026-09-20 에 롤백으로 마무리됐다.\n\n배포는 2026-09-17 에 했다.");
+  const after = doc("배포 회고", "2026-09-17 배포는 2026-09-20 에 롤백으로 마무리됐다.\n\n배포는 2026-09-20 에 했다.");
+  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
+});
+t("양쪽 면제 조합: 제목에 X, 원문 첫 줄에 Y 가 있고 본문 X→Y 면 violation(a')", () => {
+  const before = doc("타임아웃 30초 기준", "재시도는 3회다.\n\n대기는 30초다.");
+  const after = doc("타임아웃 30초 기준", "재시도는 3회다.\n\n대기는 3초다.");
+  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
+});
+t("양쪽 면제 조합: H1 에 X, 다음 줄에 Y 가 있고 본문 X→Y 면 violation(a'')", () => {
+  const before = doc(CLEAN_TITLE, "# 타임아웃 30초\n재시도는 3회다.\n\n대기는 30초다.");
+  const after = doc(CLEAN_TITLE, "# 타임아웃 30초\n재시도는 3회다.\n\n대기는 3초다.");
   assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
 });
 console.log(`writing-rewrite-gate: ${pass} passed`);
