@@ -1,5 +1,7 @@
 # seed-knowledge — 신규 게이트웨이에 시딩되는 지식의 본문 SoT
 
+*[English](README.md)*
+
 여기 있는 `<name>.md`(+ `manifest.json` 메타)는 **코드가 이름으로 전제하는 런북**(#713)을 신규 고객
 게이트웨이에 시딩할 때 쓰는 **각색 본문의 원본(SoT)**이다. `seed-content.ts` 가 기동시 idempotent 하게
 심는다(신규=삽입, 손 안 댄 시드=갱신, 운영자 편집분=영구 보존).

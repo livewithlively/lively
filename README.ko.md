@@ -82,7 +82,7 @@
 - **서버 1대**: Ubuntu 24.04 또는 macOS, sudo 권한, 인터넷 연결. 메모리 4GB·디스크 30GB 이상(여럿이 웹 터미널을 동시에 쓰거나 임베딩을 켜면 메모리 8GB 이상). 스크립트가 Docker·스왑·서비스를 설정하므로 전용 서버나 VM을 권합니다.
 - **AI 계정**: 팀원 각자의 AI 구독이나 API 키(Claude Code 등). 라이블리는 AI를 되팔지 않습니다.
 
-Docker, Node.js 22, tmux, Claude Code는 설치 스크립트가 깔아 줍니다.
+Linux에서는 Docker, Node.js 22, tmux, Claude Code를 설치 스크립트가 깔아 줍니다. macOS에서는 [Homebrew](https://brew.sh)와 Docker(Docker Desktop 또는 colima)를 먼저 설치해 두면 나머지를 스크립트가 깝니다.
 
 ### 설치
 
@@ -100,7 +100,7 @@ PUBLIC_URL=http://<서버 주소>:8080 BOOTSTRAP_ADMIN_EMAIL=you@example.com bas
 ### 첫 설정
 
 1. `http://<서버 주소>:8080/ui/` 에 관리자 계정으로 로그인하고 비밀번호를 바꿉니다.
-2. 서버에서 `claude` 에 로그인합니다. 웹 터미널 세션과 자료 정리가 이 계정을 씁니다.
+2. 웹 터미널 상단의 **내 계정 로그인**으로 자기 AI 계정에 한 번 로그인합니다. 팀원도 각자 로그인하고, 자격은 사람마다 따로 저장됩니다.
 3. 팀원을 초대하고, 각자 자기 PC를 연결합니다. 웹 화면이 안내하는 한 줄을 실행하면 로컬 AI 도구에 라이블리가 연결됩니다.
 
    ```bash
@@ -110,7 +110,7 @@ PUBLIC_URL=http://<서버 주소>:8080 BOOTSTRAP_ADMIN_EMAIL=you@example.com bas
 
 4. 관리 화면에서 Slack·Notion 같은 수집기를 켭니다. Liv에게 맡기면 대화로 설정을 제안합니다.
 
-상태는 `curl http://<서버 주소>:8080/readyz` 로 확인합니다. 업데이트·백업·임베딩 설정은 [`deploy/README.md`](deploy/README.md)에 있습니다.
+상태는 `curl http://<서버 주소>:8080/readyz` 로 확인합니다. 업데이트·백업·임베딩 설정은 [`deploy/README.ko.md`](deploy/README.ko.md)에 있습니다.
 
 ## 지원 범위
 
@@ -139,7 +139,7 @@ flowchart LR
   G -.-> E
 ```
 
-코드 구조와 설계 원칙은 [`docs/architecture.ko.md`](docs/architecture.ko.md), 팀원 PC에 깔리는 kit는 [`kit/README.md`](kit/README.md)를 보세요.
+코드 구조와 설계 원칙은 [`docs/architecture.ko.md`](docs/architecture.ko.md), 팀원 PC에 깔리는 kit는 [`kit/README.ko.md`](kit/README.ko.md)를 보세요.
 
 ## 보안과 데이터
 

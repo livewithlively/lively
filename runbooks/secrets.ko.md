@@ -1,12 +1,14 @@
 # 시크릿 매니저 런북 — 시크릿 경계의 형식 모델 (P8)
+*[English](secrets.md)*
 
 > **제품 원칙(단일 문장):** 시크릿은 *어떤 콘텐츠에도 안 들어간다*. 연결/provider 인증은
 > **환경변수 이름 참조**(auth_env/auth_ref)로만 저장하고 값은 외부 시크릿 매니저(`.env`/1Password/
 > Doppler/SOPS)에 둔다. 제품 데이터 접근은 **멤버별 DB role**(db_query RLS)로 분리한다.
+> *확장(#541·#746):* 관리탭·자격 금고로 넣는 커넥터·구성원 자격은 **암호문으로만** DB 에 저장한다(평문 미저장 — (b) 자격 금고).
 
 이 문서는 위 원칙을 강제하는 코드 choke-point, 안전한 시크릿 추가 절차, 유출 시 로테이션 절차를
-형식화한다. 관련 인증평면: db-multi-source(`research/2026-06-16-멀티db읽기-설계.md`),
-임베딩 provider auth(`src/embeddings/provider.ts`).
+형식화한다. 관련 인증평면: db-multi-source(`research/2026-06-16-멀티db읽기-설계.md` — 내부 설계 노트, 이 레포에 없음),
+임베딩 provider auth(`src/v6/embedding-provider.ts`).
 
 ---
 
@@ -22,26 +24,29 @@
 
 `assertNoHardSecrets` 의 hard-block 패턴(2026-06-18 기준): OpenAI(`sk-`), GitHub PAT(`ghp_`/
 `github_pat_`), Slack(`xox[abprs]-`), AWS(`AKIA…`), 라이블리 토큰(`lvk_`), 개인키(`BEGIN … PRIVATE
-KEY`). `redactDeep` 는 여기에 JWT·`Bearer <literal>` 까지 더 넓게 마스킹한다.
+KEY`). `redactDeep`/`redactString` 는 여기에 Anthropic(`sk-ant-`)·GitHub 기타 토큰(`gho_`/`ghu_`/`ghs_`/`ghr_`)·
+JWT·`Bearer <literal>` 까지 더 넓게 마스킹한다(`TOKEN_SHAPE_RES`·`PROSE_RISKY_RES`).
 
 ### choke-point 적용 현황 (콘텐츠 쓰기경로)
 
 | 쓰기경로 | 입력 | assertNoHardSecrets | 위치 |
 |---|---|---|---|
-| `ctx_save` (MCP·REST) | `note` | ✓ | `src/capabilities/ctx.ts` |
-| `org_update_section` (REST/admin) | `body_md` | ✓ (P8) | `src/capabilities/delivery.ts` |
-| `org_member_upsert` (REST/admin) | `body_md`(개인레이어) | ✓ (P8) | `src/capabilities/delivery.ts` |
-| `propose_domain` (MCP·REST) | `description`·`evidence` | ✓ (P8) | `src/capabilities/domainmap-curation.ts` |
-| `dm_domain_edit` (REST) | `description` | ✓ (P8) | `src/capabilities/domainmap-curation.ts` |
-| `org_hook_upsert` (REST/runtime) | `source_code` | ✓ | `src/capabilities/delivery.ts` |
-| `migrate-content.mjs` (스크립트) | `body_md` | ✓ (직접 호출) | `scripts/migrate-content.mjs` |
-| 감사(audit) before/after | 모든 entity | redactDeep | `src/org/store.ts`·`src/org/knowledge.ts` |
+| ~~`ctx_save`~~ (폐기 — `knowledge_*` 로 흡수) | `note` | — | 구 `src/capabilities/ctx.ts`(삭제). 후속 `knowledge_save` 에는 가드 없음(아래) |
+| `org_update_section` (MCP·REST) | `body_md` | ✓ (P8) | `src/capabilities/delivery/org-content.ts` |
+| `org_member_upsert` (MCP·REST/admin) | `body_md`(개인레이어) | ✓ (P8) | `src/capabilities/delivery/members.ts` |
+| 본인 쓰기(`me_profile_update`·`me_onboarding_set`·`me_liv_profile_set`·`me_welcome_*`) | 개인레이어 `body_md`·메모·프로필·온보딩 답 | ✓ | `src/capabilities/delivery/me-self.ts`·`liv.ts`·`welcome.ts` |
+| ~~`propose_domain`·`dm_domain_edit`~~ (폐기 2026-06-24 — `category_*` 로 대체) | `description`·`evidence` | — | 후속 `category_create`/`category_update` 에는 가드 없음 |
+| `org_hook_upsert` (MCP·REST/runtime) | `source_code` | ✓ | `src/capabilities/delivery/hooks.ts` |
+| `org_harness_asset_upsert`·`me_harness_asset_draft` | description·body·frontmatter | ✓ | `src/capabilities/delivery/harness-assets.ts`·`me-self.ts` |
+| ~~`migrate-content.mjs`~~ (스크립트 — 현재 레포에서 제거) | `body_md` | ✓ (직접 호출) | 구 `scripts/migrate-content.mjs` |
+| 감사(audit) before/after | org 관리 엔티티(`src/org/store/*`) | redactDeep | `src/org/store/audit.ts` — v6 knowledge/category/project 감사(`src/v6/content-audit.ts auditOrgContent`)는 마스킹하지 않음 |
+| 커넥터 미러 적재 | title/body/fields/raw | redactString·redactDeep | `src/v6/mirror/*` |
 | http_proxy 응답 본문 | dynamic-tools res.body | redactDeep | `src/mcp/dynamic-tools.ts` |
 
 **설계 결정 — 가드는 capability(어댑터) 층에 둔다, 데이터 층(`upsertKnowledge`)이 아니다.** 데이터 층에
 무차별 `assertNoHardSecrets` 를 박으면 시드/마이그레이션/정당 콘텐츠가 깨질 수 있고, 마이그(`source=
 'migration'`)는 `upsertKnowledge` 를 직접 호출하므로 어댑터 가드를 우회한다 — 그래서 마이그는 자기
-경로에서 명시적으로 assert 한다(같은 패턴, 같은 단일 출처). 거짓양성 위험이 낮은(토큰 형식을 정당
+경로에서 명시적으로 assert 했다(같은 패턴, 같은 단일 출처 — 그 스크립트는 현재 제거됨). 거짓양성 위험이 낮은(토큰 형식을 정당
 콘텐츠가 담을 일이 드문) 자유텍스트 경로에만 추가했다.
 
 ### 가드하지 않는(권고만) 경로
@@ -52,20 +57,23 @@ KEY`). `redactDeep` 는 여기에 JWT·`Bearer <literal>` 까지 더 넓게 마�
   → 권고: refresh 입력(분석 대상 레포)에 평문 시크릿을 두지 말 것(소스 시크릿 위생은 별 책임).
 - **데이터 층 `upsertKnowledge`/`upsertMember` 직접 호출** — 시드/마이그/테스트 경로. 어댑터 가드로
   충분하며, 직접 호출자는 자기 경로에서 assert 할 책임(마이그가 선례).
+- **v6 콘텐츠 쓰기(`knowledge_save`·`category_*`·`project_*_v6`·`task_*_v6`)** — 현재 `assertNoHardSecrets` 호출이
+  없다. 저장 경계 hard-block 이 없으므로
+  사후 검출은 (f) 스캔에 의존한다.
 
 ---
 
 ## (b) 연결/provider 시크릿 = env 이름 참조 (값 DB 미저장)
 
 외부 시스템 인증은 **시크릿 값이 아니라 환경변수 '이름'** 을 저장하고 런타임에 `process.env` 에서
-해소한다. 값은 DB·코드·콘텐츠 어디에도 굳지 않는다.
+해소한다. 이 경로에서 값은 DB·코드·콘텐츠 어디에도 굳지 않는다(암호문 저장 경로는 아래 자격 금고).
 
 | 대상 | 저장 필드 | 저장 내용 | 런타임 해소 | 화이트리스트 |
 |---|---|---|---|---|
 | DB 소스(`org_db_source`) | `auth_ref` | env **이름**(예 `PROD_DB_PW`) | `resolveConnectionString` → `process.env[auth_ref]` | `allowed_db_secret_refs`(deny-all 기본) |
-| MCP 서버(`org_mcp_server`) | `auth_env` | env **이름** | register-clients/세션훅이 멤버 머신 env 에서 | 이름 형식 검증(`^[A-Za-z_][A-Za-z0-9_]*$`) |
+| MCP 서버(`org_mcp_server`, client 모드) | `auth_env` | env **이름** | register-clients/세션훅이 멤버 머신 env 에서 | 이름 형식 검증(`^[A-Za-z_][A-Za-z0-9_]*$`) |
 | http_proxy 툴(`org_tool`) | `auth_env` | env **이름** | dynamic-tools 가 호출 시 `process.env[auth_env]` → Bearer | `allowed_auth_envs`(deny-all 기본) |
-| 임베딩 provider | `EMBEDDINGS_PROVIDER_AUTH_ENV` | env **이름** | provider.ts 가 그 env 값을 Bearer 로 | 이름 형식 검증 |
+| 임베딩 provider | `embedding_config.auth_env_ref`(런타임 설정 — 시드 env `EMBEDDINGS_AUTH_ENV`) | env **이름** | `src/v6/embedding-provider.ts` 가 그 env 값을 Bearer 로 | 이름 형식 검증 |
 
 강제 가드(전부 위 표의 코드 위치에 존재):
 - **이름 형식 검증** — `^[A-Za-z_][A-Za-z0-9_]*$` 만 통과(시크릿 값을 이름 칸에 넣는 것을 형식으로 차단).
@@ -77,6 +85,17 @@ KEY`). `redactDeep` 는 여기에 JWT·`Bearer <literal>` 까지 더 넓게 마�
 
 값의 실제 보관 위치: 게이트웨이 `.env`(gitignore 됨) 또는 외부 매니저(1Password/Doppler/SOPS)에서
 `.env`/프로세스 env 로 주입. **`.env` 는 절대 커밋·출력하지 않는다**(gitignore + `*.sw?`/`*~` 무시).
+
+### 자격 금고 — 암호문 저장 경로(#541·#746)
+
+`.env` 편집이 어려운 배포(SSM 전용 박스 등)를 위해, 관리탭·MCP 로 넣는 자격은 **암호문으로만** DB 에 저장한다:
+커넥터 토큰(`org_connector`), 게이트웨이 통합·구성원 자격(`org_credential_set`·`me_credential_set` → `member_secret`),
+git 자격. 암호화는 `src/org/credentials/secret-box.ts`(AES-256-GCM, 마스터키 env `CONNECTOR_SECRET_KEY` —
+미설정이면 금고 저장이 비활성이고 env 폴백만 된다).
+- 값은 응답으로 절대 나가지 않는다(`has_secret` 플래그·meta 만). `member_secret`·`git_credential` 은 db_query 차단 테이블이다((c)).
+- `org_tool`·`org_mcp_server` 는 `auth_env` 대신 `auth_kind`(금고 kind — 요청자 개인 자격 우선, 조건부로 통합 자격 폴백)로
+  인증을 참조할 수 있다. 둘은 배타다(인증 출처 하나만).
+- ⚠ 마스터키를 잃거나 바꾸면 기존 암호문은 복호화할 수 없다(재입력 필요) — 키를 `.env` 볼륨과 함께 보존한다.
 
 ---
 
@@ -92,7 +111,7 @@ KEY`). `redactDeep` 는 여기에 JWT·`Bearer <literal>` 까지 더 넓게 마�
   `src/db/firewall.ts`. 멤버 토큰의 신원이 RLS 정책의 입력이 되어 멤버별 가시범위가 강제된다.
 - **SSRF/리바인딩 차단** — host 는 공인 IP 로 pin(`pinHost`), 사설/메타데이터 대역 거부.
 - **메타테이블 차단** — `DENIED_TABLES`(auth_token·org_content_audit·org_hook·org_tool·org_mcp_server·
-  org_db_source 등) SELECT 차단 — 시크릿 참조·감사·인증 테이블을 db_query 로 못 읽게.
+  org_db_source·member_secret·git_credential 등) SELECT 차단 — 시크릿 참조·감사·인증 테이블을 db_query 로 못 읽게.
 
 ---
 
@@ -102,6 +121,7 @@ KEY`). `redactDeep` 는 여기에 JWT·`Bearer <literal>` 까지 더 넓게 마�
 
 1. **값을 외부에 둔다.** 게이트웨이 `.env`(또는 외부 매니저에서 주입)에 `MY_API_TOKEN=…` 추가.
    `.env` 는 gitignore — 커밋·로그·PR 어디에도 값을 남기지 않는다.
+   (자격 금고를 쓰면: `org_credential_set`/`me_credential_set` 로 자격을 넣고 3단계에서 `auth_kind` 로 참조 — 2단계 불요.)
 2. **이름을 화이트리스트에 등록한다.** 웹 런타임 설정(`org_runtime_update`)에서:
    - http_proxy/MCP 인증 → `allowed_auth_envs` 에 `MY_API_TOKEN` 추가.
    - DB 소스 비번 → `allowed_db_secret_refs` 에 추가.
@@ -112,8 +132,9 @@ KEY`). `redactDeep` 는 여기에 JWT·`Bearer <literal>` 까지 더 넓게 마�
 4. **검증.** `node --env-file=.env scripts/scan-content-secrets.mjs` — 콘텐츠 스토어 hit 0 확인(아래 (f)).
    값이 어딘가 콘텐츠로 샜으면 여기서 잡힌다.
 
-멤버 머신에서 실행되는 것(MCP 서버·http_proxy)은 그 env 가 **멤버 머신**에 존재해야 한다 — 설치 번들/
-멤버 본인 `.env`. 게이트웨이는 이름만 배포한다.
+멤버 머신에서 실행되는 것(client 모드 MCP 서버)은 그 env 가 **멤버 머신**에 존재해야 한다 — 설치 번들/
+멤버 본인 `.env`. 게이트웨이는 이름만 배포한다. 게이트웨이에서 실행되는 것은 게이트웨이에서 해소한다 — http_proxy 툴은
+게이트웨이 env(또는 금고 `auth_kind`), proxy 모드 MCP 서버는 금고(`auth_kind`)·OAuth·SigV4.
 
 ---
 
@@ -131,11 +152,12 @@ KEY`). `redactDeep` 는 여기에 JWT·`Bearer <literal>` 까지 더 넓게 마�
 2. **새 값을 외부에 주입.** (d)1 처럼 `.env`/매니저에 새 값. **이름은 그대로 둘 수 있다**(참조가 env 이름이라
    값만 바꾸면 런타임이 새 값을 해소 — DB 소스는 풀 회수로 무재시작 반영).
 3. **콘텐츠/로그에서 제거.** 평문이 콘텐츠 본문에 들어갔다면: 해당 knowledge/section/member/category 를
-   수정(이제 `assertNoHardSecrets` 가 재저장을 막으므로 정제 후 저장). 감사 로그(`org_content_audit`)는
-   append-only 라 redactDeep 으로 이미 마스킹돼 있다 — 마스킹 누락 패턴이면 redact.ts 패턴을 보강.
+   수정(section/member 는 `assertNoHardSecrets` 가 재저장을 막으므로 정제 후 저장). 감사 로그(`org_content_audit`)는
+   append-only 다 — org 관리 엔티티 감사는 redactDeep 으로 이미 마스킹돼 있지만(마스킹 누락 패턴이면 redact.ts 패턴을
+   보강), v6 knowledge/category/project 감사(`auditOrgContent`)는 마스킹하지 않으므로 평문 사본이 남았을 수 있다.
 4. **스캔으로 확인.** `scripts/scan-content-secrets.mjs` 로 hit 0 재확인.
 5. **재발 방지.** 어느 쓰기경로로 샜는지 추적(감사 actor/source) → 그 경로에 choke-point 누락이면 추가
-   ((a) 표 갱신), 시크릿 패턴이 hard-block 목록에 없었으면 `HARD_LABELS`/`SECRET_RES` 보강.
+   ((a) 표 갱신), 시크릿 패턴이 hard-block 목록에 없었으면 `HARD_LABELS`/`TOKEN_SHAPE_RES`·`PROSE_RISKY_RES` 보강.
 
 ---
 
@@ -150,4 +172,4 @@ node --env-file=/tmp/.../.env scripts/scan-content-secrets.mjs
 - `assertNoHardSecrets` + `redactDeep`(redact.ts 단일 출처)을 전수 적용. **값 비출력** — 위치(테이블/PK/
   컬럼)와 패턴 라벨(hard/masked)만 보고.
 - hit ≥ 1 → `exit 1`(CI 후보). DB 미설정 소스는 skip(보고만, fail 아님).
-- 런타임 무영향(standalone) — MCP 표면(31툴) 불변.
+- 런타임 무영향(standalone) — MCP 표면 불변.

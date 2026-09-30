@@ -1,5 +1,7 @@
 # xterm.js — 벤더링 사본 (#3537)
 
+*[English](README.md)*
+
 터미널 화면(`public/terminal.html`)이 쓰는 xterm.js 와 애드온 넷. **셀프호스팅한다.**
 
 ## 왜 CDN 에서 걷었나

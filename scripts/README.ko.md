@@ -1,14 +1,16 @@
 # scripts/ — 운영·빌드 스크립트와 테스트 계층 안내
 
+*[English](README.md)*
+
 ## 테스트 6계층 (#1313 R6 — 무엇이 어디서 도는가)
 
 | 계층 | 무엇 | 실행 | 전제 |
 |---|---|---|---|
-| ① 유닛 체인 | `src/**/*.test.ts`(→dist) + `kit\|scripts\|deploy/**/*.test.mjs` — [run-tests.mjs](./run-tests.mjs) 가 **소스 글롭으로 자동 발견**(등록 불요) | `npm test` (빌드 포함 · **병렬·실패해도 끝까지** → [실행 정책](#러너-실행-정책-1431--끝까지--병렬)) · 부분 실행 `node scripts/run-tests.mjs <부분문자열>` | 없음 (DB 불요) |
+| ① 유닛 체인 | `src/**/*.test.ts`(→dist) + `kit\|scripts\|deploy\|desktop/**/*.test.mjs` — [run-tests.mjs](./run-tests.mjs) 가 **소스 글롭으로 자동 발견**(등록 불요) | `npm test` (빌드 포함 · **병렬·실패해도 끝까지** → [실행 정책](#러너-실행-정책-1431--끝까지--병렬)) · 부분 실행 `node scripts/run-tests.mjs <부분문자열>` | 없음 (DB 불요) |
 | ② itest | `scripts/*.itest.mjs` — 실 DB 필요한 통합(스키마 init·세션로그 CAS 등) | `npm run test:itest` · 개별 `node --env-file-if-exists=.env scripts/<x>.itest.mjs` | `ITEMS_DATABASE_URL` (.env) |
 | ③ integration/ | [scripts/integration/](./integration/) — 실 PG·실 게이트웨이 대상 수동 e2e(각 파일 머리에 실행법 주석) | 파일별 수동 | 파일별 상이(PG·실행 중 게이트웨이·시크릿 키) |
-| ④ vis-e2e/ | [scripts/vis-e2e/](./vis-e2e/) — 가시성 축·UI 배선 e2e(전용 README 있음) | `vis-e2e/README.md` 참조 | 실행 중 게이트웨이 |
-| ⑤ pg-test | `src/**/*.pg-test.mjs` (현재 org/auth/device-auth.pg-test.mjs) — **CI 전용** 실 Postgres 통합 | CI(test.yml)가 pgvector 서비스로 실행 · 로컬은 `ITEMS_DATABASE_URL=… node src/org/auth/device-auth.pg-test.mjs` | 실 PG |
+| ④ vis-e2e/ | [scripts/vis-e2e/](./vis-e2e/) — 가시성 축·UI 배선 e2e(전용 README 있음) | `vis-e2e/README.ko.md` 참조 | 실행 중 게이트웨이 |
+| ⑤ pg-test | `src/**/*.pg-test.mjs` (예: org/auth/device-auth.pg-test.mjs) — 실 Postgres 통합(유닛 러너 제외) | CI(test.yml)가 pgvector 서비스로 파일별 스텝 실행(test.yml 에 스텝으로 등록된 것만) · 로컬은 `ITEMS_DATABASE_URL=… node src/org/auth/device-auth.pg-test.mjs` | 실 PG(pgvector) |
 | ⑥ 훅 bash | [kit/hooks/test-hooks.sh](../kit/hooks/test-hooks.sh) — 훅 셸 경로 러너 | `kit/hooks/test-hooks.sh` | 없음 |
 
 - ①이 기본 안전망이다 — 테스트 추가는 **파일 생성만**(package.json 등록 금지, 러너가 자동 발견).
@@ -50,4 +52,4 @@
 - `check-css-drops.mjs` — CSS 셀렉터 유실 가드(#317)
 - `register-*.mjs|sh` — 클라이언트/훅 등록 일회 도구
 - `seed-notion-fixture.mjs` — 커넥터 픽스처 시드
-- `archive/` — 완료된 일회성 백필·마이그레이션(이슈번호 접두) 보관. **새 일회성 스크립트는 완료 후 여기로.**
+- `archive/` — 완료된 일회성 백필·마이그레이션(이슈번호 접두)을 옮겨 두는 자리(공개 레포에는 아직 없다). **새 일회성 스크립트는 완료 후 여기로.**
