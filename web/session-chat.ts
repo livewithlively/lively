@@ -130,6 +130,8 @@ export interface SessionChatOpts {
   firstPrompt?: string | null;
   trail?: TrailWidget | null;
   onPickProject?: (anchor: HTMLElement) => void;
+  /** 이 세션의 소속을 바꿀 수 있나(#3870 — 주인·초대받은 사람). 없으면 종전대로 주인만(target.owned). 판정은 셸의 한 술어(v2/views canMoveSess). */
+  canPickProject?: (t: SessionChatTarget) => boolean;
   onRename?: (label: string) => Promise<void>;
   /** 상단바 [파일] — 우패널을 '타임라인 ↔ 파일 탐색기'로 갈아 끼운다(#1744). 켜진 뒤 상태를 돌려준다. */
   onToggleFiles?: () => boolean;
@@ -1003,7 +1005,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (canRename()) rows.push(row('세션 이름 바꾸기', idLabel(titleText) ? '아직 이름이 없어요' : titleText, () => startRename()));
     // 프로젝트도 이름과 같은 이유로 머리줄에서 내려왔다 — 이름은 사이드바·우패널에 이미 있고, 여기는 '바꿀 때' 오는 자리다.
     //  설명줄이 지금 붙은 프로젝트를 말해 주므로 메뉴를 여는 것만으로도 소속을 확인할 수 있다(정보를 잃지 않는다).
-    if (opts.onPickProject && target.owned) {
+    if (opts.onPickProject && (opts.canPickProject ? opts.canPickProject(target) : target.owned)) {
       rows.push(row(target.projectId ? '프로젝트 바꾸기·떼기' : '프로젝트 연결',
         target.projectId ? (target.projectName || '이름 없는 프로젝트') : '이 세션은 아직 프로젝트에 붙어 있지 않아요',
         () => opts.onPickProject!(moreBtn)));

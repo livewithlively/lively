@@ -24,6 +24,7 @@ import { getOpt } from "./tmux-exec.js";
 import { adoptLegacyExecutionSession, executionSessionProject, markExecutionSessionApplied, setExecutionSessionProject, type ExecutionSessionProject } from "../v6/execution-session-store.js";
 import { latestProjectForSessionChain, recordSessionProject, resolveNodeFolder, type FolderSyncMode } from "../v6/project-session-store.js";
 import { canAttach } from "./terminal-sessions.js";
+import { sessionMoveAuth } from "./session-move-auth.js";
 import { isExternalExecutionSessionId } from "../org/auth/agent-identity.js";
 import { syncSessionAppInstanceProject } from "../org/store/app-instances.js";
 import { sessionTaskList, sessionTaskOf, sessionTaskSection } from "../v6/session-task.js";
@@ -64,40 +65,52 @@ export async function setSessionProject(
   const pid = pidRaw === null || pidRaw === undefined || pidRaw === "" ? 0 : Number(pidRaw);
   if (!Number.isInteger(pid) || pid < 0) throw new HttpError(400, "projectId 형식 오류");
 
-  let bind: SessionProjectBind | null = null;
-  if (pid > 0) {
-    const p = await loadProject(pid);
-    if (!p) throw new HttpError(404, "프로젝트를 찾을 수 없습니다");
-    // 공개범위(#1291) — 내가 못 보는 프로젝트엔 못 붙인다(붙이면 사이드바·타임라인에서 그 이름이 새어 나온다). 판정 불가면 거부(fail-closed).
-    const hidden = await hiddenProjects(me).catch(() => null);
-    if (!hidden || hidden.ids.has(pid)) throw new HttpError(403, "이 프로젝트에는 붙일 수 없어요(공개범위 밖입니다)");
-    // 바인딩은 DB current + 실행 캐시만 바꾼다. AGENTS.md 준비/읽기는 다음 UserPromptSubmit의 동적 조회가 맡는다.
-    bind = { projectId: p.id, folder: p.folder, name: p.name, src: "v6" };
-  }
-
   const nodeId = nodeOfSession(id);
   // 상태는 한 번만 읽는다 — 아래 소유권 검사(노드 세션)와 대화 축 동기화가 같은 값을 본다.
   const st = await getSessionState(id).catch(() => undefined);
   // 분산 적용 전에 소유권을 먼저 확정한다. DB가 SoT이므로 runtime 캐시를 먼저 바꾸고 DB 기록에 실패하는
   // 순서를 허용하지 않는다. 반대로 desired-state가 없는 노드 세션 id를 먼저 DB에 claim하게 두면, 남의 실제
   // 세션을 겨냥한 요청이 RPC에서 거부되더라도 DB id는 공격자 소유로 남는다. 그래서 상태 부재도 쓰기 전에 막는다.
-  if (nodeId) {
-    if (!st) throw new HttpError(404, "세션을 찾을 수 없습니다");
-    if (st.owner !== me) throw new HttpError(403, "내 세션만 프로젝트를 바꿀 수 있습니다");
-  } else {
-    const localOwner = await getOpt(id, "@box_owner").catch(() => "");
-    if (localOwner && localOwner !== me) throw new HttpError(403, "내 세션만 프로젝트를 바꿀 수 있습니다");
-    if (!localOwner && !opts.externalSelf) throw new HttpError(404, "세션을 찾을 수 없습니다");
+  //  ★ #3870 — 초대받은 사람도 옮긴다 · 실행은 주인 이름으로(session-move-auth 머리말).
+  const localOwner = nodeId ? "" : await getOpt(id, "@box_owner").catch(() => "");
+  const knownOwner = nodeId ? (st?.owner || "") : localOwner;
+  const auth = sessionMoveAuth({
+    me, node: !!nodeId, st: st ?? null, localOwner, externalSelf: opts.externalSelf,
+    //  초대 판정은 입장 판정(canAttach — 초대 + 그 프로젝트 공개범위)과 같은 술어를 쓴다: 들어갈 수 있는 사람만 옮긴다.
+    //   ⚠ canAttach 의 프로젝트 판정은 이 게이트웨이 tmux 의 `@box_project` 를 읽어 노드 세션엔 번호가 없다 — 행의 project_id 로 한 번 더 잰다.
+    invited: !!knownOwner && knownOwner !== me
+      ? (await canAttach(id, me).catch(() => false))
+        && !(st?.project_id && await hiddenProjects(me).then((h) => h.ids.has(Number(st.project_id))).catch(() => true))
+      : false,
+  });
+  if (!auth.ok) throw new HttpError(auth.status, auth.message);
+  const owner = auth.owner;
+  const actor: LivelyUser = owner === me ? u : ({ userId: owner, email: "", scopes: [], projects: [] } as LivelyUser);
+
+  let bind: SessionProjectBind | null = null;
+  if (pid > 0) {
+    const p = await loadProject(pid);
+    if (!p) throw new HttpError(404, "프로젝트를 찾을 수 없습니다");
+    // 공개범위(#1291) — 내가 못 보는 프로젝트엔 못 붙인다(붙이면 사이드바·타임라인에서 그 이름이 새어 나온다). 판정 불가면 거부(fail-closed).
+    //  #3870 — 초대받은 사람이 옮기면 **주인에게도** 보여야 한다: 주인 사이드바에 그 이름이 서고, 주인의 세션이 그 프로젝트 맥락을 받는다.
+    for (const who of owner === me ? [me] : [me, owner]) {
+      const hidden = await hiddenProjects(who).catch(() => null);
+      if (!hidden || hidden.ids.has(pid)) {
+        throw new HttpError(403, who === me ? "이 프로젝트에는 붙일 수 없어요(공개범위 밖입니다)" : "이 세션을 만든 사람이 볼 수 없는 프로젝트라 옮길 수 없어요");
+      }
+    }
+    // 바인딩은 DB current + 실행 캐시만 바꾼다. AGENTS.md 준비/읽기는 다음 UserPromptSubmit의 동적 조회가 맡는다.
+    bind = { projectId: p.id, folder: p.folder, name: p.name, src: "v6" };
   }
 
   // DB desired를 먼저 커밋한다. 아래 분산 적용이 실패하면 desired_revision > applied_revision으로 남아
   // 다음 동적 주입은 올바른 프로젝트를 보고, 운영자는 미적용 상태를 진단·재시도할 수 있다.
-  const current = await setExecutionSessionProject({ id, owner: me, harness: opts.harness, nodeId, projectId: bind ? bind.projectId : null });
+  const current = await setExecutionSessionProject({ id, owner, harness: opts.harness, nodeId, projectId: bind ? bind.projectId : null });
   if (!current) throw new HttpError(403, "다른 사용자의 실행 세션 id입니다");
 
   let out: { ok: true; projectId: number | null; linked: boolean; projectDir: string | null; sessionDir: boolean };
   if (nodeId) {
-    try { out = await nodeRpc(nodeId, "setProject", { id, user: { userId: me }, bind }); }
+    try { out = await nodeRpc(nodeId, "setProject", { id, user: { userId: owner }, bind }); }
     catch (e) {
       const msg = (e as Error)?.message ?? String(e);
       throw translateNodeRpcError(msg, {
@@ -109,11 +122,11 @@ export async function setSessionProject(
     }
   } else {
     const localOwner = await getOpt(id, "@box_owner").catch(() => "");
-    if (localOwner) out = await applySessionProject(u, id, bind);
+    if (localOwner) out = await applySessionProject(actor, id, bind);
     else if (opts.externalSelf) out = { ok: true, projectId: bind ? bind.projectId : null, linked: false, projectDir: null, sessionDir: false };
     else throw new HttpError(404, "세션을 찾을 수 없습니다"); // 위 선검사의 TOCTOU(세션 종료)만 여기로 온다.
   }
-  await markExecutionSessionApplied(id, me, current.desired_revision);
+  await markExecutionSessionApplied(id, owner, current.desired_revision);
   await updateSessionStateMeta(id, { project_id: bind ? bind.projectId : null, project_src: bind ? "v6" : null }).catch(() => { /* 레코드 없음 등 비치명 */ });
   // 세션 화면은 ai-session AppInstance다. 세션 바인딩이 권위이므로 열린/복원 인스턴스의 현재 맥락도 같은 값으로 맞춘다.
   // 시간 이력은 app-instances 스토어가 별도로 남겨, 옮긴 뒤에도 과거 활동의 소속을 소급 변경하지 않는다.

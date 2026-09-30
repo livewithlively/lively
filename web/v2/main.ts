@@ -21,7 +21,7 @@ import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse } from './app
 import { browserSurface } from './browser-surface.js';
 import { openProjPickModal, openProjPickPopover } from './proj-pick.js';   // 세션의 프로젝트 고르기 — 드롭다운·모달 두 그릇, 목록 한 벌
 import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, movePinnedSession, projLandingRoute, projectOrder, reloadSidePrefs, sessText, type SideInstance } from './side.js';
-import { dotCls, findSessIn, isMineSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type HomeDest, type Sess, type V2Data } from './views.js';
+import { canMoveSess, dotCls, findSessIn, isMineSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type HomeDest, type Sess, type V2Data } from './views.js';
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
 import { keepObserved, type ObsMemory } from './obs-carry.js';
@@ -196,7 +196,7 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
     onProjectChanged: () => { void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); }); },
     onRenameProject: (pid, name) => renameProject(pid, name),   // 문패 연필 — 사이드바 줄 더블클릭과 같은 경로(#2579)
     // 문패 [세션 옮기기](#3778) — [⋯ ▸ 이 세션 ▸ 프로젝트] 와 같은 실행, 그릇만 모달. 조건도 같다(내 세션만).
-    canMoveSession: (sid) => { const s = data.sessions.find((x) => x.id === sid); return !!s && isMineSess(s); },   // 창이 찾는 방식과 같게(정확히 그 id)
+    canMoveSession: (sid) => { const s = data.sessions.find((x) => x.id === sid); return !!s && canMoveSess(s); },   // 창이 찾는 방식과 같게(정확히 그 id) · #3870 초대받은 사람도
     onMoveSession: (sid) => openProjectMoveModal(sid, tab),
     //  좁은 폭(≤900)의 곁칸 = 오른쪽 서랍(#4088). 셸이 곁칸에 무언가를 켜면 서랍을 열어 준다 — **보이는 탭일 때만**
     //   (숨은 탭의 터미널이 보낸 미리보기 링크가 지금 보는 탭의 서랍을 열면 안 된다).

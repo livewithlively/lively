@@ -6,7 +6,7 @@ import { toast } from '../core.js';
 import { copyText, type CtxRow } from './ctx-menu.js';
 import { registerCtx, registerCtxCommon, registerCtxSurface, type CtxEvent, type CtxHit } from './ctx-registry.js';
 import { isInstancePinned, projectCtxRows, sessText, sessionCtxRows, sideInstanceById, toggleInstancePin } from './side.js';
-import { findSessIn, isLiveSess, isMineSess, projName, type Proj, type Sess, type V2Data } from './views.js';
+import { canMoveSess, findSessIn, isLiveSess, projName, type Proj, type Sess, type V2Data } from './views.js';
 import { SESS_STATES } from '../session-status.js';
 import { omniOpen } from './omni.js';
 import { appByKey, appHref, openLaunchpad, soloSessionUrl } from './apps.js';
@@ -54,7 +54,7 @@ function sessionMenu(s: Sess | undefined, sid: string, hit: CtxHit): { rows: Ctx
     { sep: true, label: '' },
     ...sessionCtxRows(s, { nameEl: hit.el.classList.contains('v2-ss-row') ? hit.el.querySelector<HTMLElement>('.t') : null, projectName: pn }),
   ];
-  if (isMineSess(s)) rows.push({ label: s.projectId ? '프로젝트 바꾸기·떼기' : '프로젝트 연결', icon: 'moveto', hint: s.projectId ? pn : undefined, run: () => hooks?.pickProject(hit.el, s.id) });
+  if (canMoveSess(s)) rows.push({ label: s.projectId ? '프로젝트 바꾸기·떼기' : '프로젝트 연결', icon: 'moveto', hint: s.projectId ? pn : undefined, run: () => hooks?.pickProject(hit.el, s.id) });
   const share = shareSessOf(s);
   if (share) rows.push({ label: '공유…', icon: 'share', run: () => openSharePopover(hit.el, share) });
   rows.push({ sep: true, label: '' }, copyRow('링크 복사', absUrl(href), '링크를 복사했어요'));
