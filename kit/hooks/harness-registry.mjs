@@ -108,6 +108,9 @@ export function claudeConfigDir(HOME, env = process.env) {
 //     .integrity        설치기 자신의 무결성 검증 — "sha256"|"sha512"|null. 동의 화면이 이걸 정직하게 말한다.
 //                        ⚠ null 은 결함이 아니라 **공급사의 선택**이고, 우리가 대신 검증할 방법이 없다는 뜻이다.
 //     .requires         이 경로가 먼저 있어야 하는 다른 바이너리(예: npm). 없으면 생략
+// claude 가 사람 없이 도는 진입점(CLAUDE_CODE_ENTRYPOINT) — 표의 claude.headless 가 쓴다(#4219).
+const HEADLESS_ENTRYPOINTS = new Set(["sdk-cli", "sdk-ts", "sdk-py", "claude-code-github-action", "mcp"]);
+
 export const HARNESS = {
   claude: {
     id: "claude",
@@ -156,6 +159,10 @@ export const HARNESS = {
     },
     // SubagentStop 페이로드의 자식 id(실측: agent_id — 위 agentId 와 같은 값).
     subagentId: (payload) => String(payload?.agent_id ?? ""),
+    // 사람이 대화하지 않는 실행인가(#4219) — 여기엔 fork 타입이 없어(`Agent type 'fork' not found`, #4201 §11-2) 기록 fork 를
+    //  권하면 안 된다. 훅이 물려받는 env 로 가른다(2.1.285 실측): 대화형 = ENTRYPOINT `cli` · SESSION_ATTENDED `1`,
+    //  `claude -p` = `sdk-cli` · `0`. sdk-ts·sdk-py·github-action·mcp 는 바이너리의 entrypoint 분류표에서 같은 SDK·비대화 칸이다.
+    headless: (_payload, env) => HEADLESS_ENTRYPOINTS.has(String(env?.CLAUDE_CODE_ENTRYPOINT ?? "")) || env?.CLAUDE_CODE_SESSION_ATTENDED === "0",
     mcp: { style: "claude-cli" },          // `claude mcp add --transport stdio …`
     autoApprove: { kind: "settings-allow", key: (server, tool) => `mcp__${server}__${tool}` },
     contextEnvelope: "raw",                // SessionStart raw stdout 이 곧 컨텍스트
@@ -212,6 +219,14 @@ export const HARNESS = {
     // SubagentStart/Stop 의 agent_id = 자식 스레드 id(hooks/src/schema.rs:606-622). 자식 턴이 정상 종료될 때 오고,
     //  중단(abort)엔 안 온다(core/src/session/turn.rs:615-617) — 그 경우 표시는 게이트의 TTL 이 걷는다.
     subagentId: (payload) => String(payload?.agent_id ?? ""),
+    // 사람이 대화하지 않는 실행인가(#4219) — `codex exec` 는 부모 턴이 끝나면 곧바로 내려가 늦게 끝나는 fork 가 끊긴다(#4201 §11-4).
+    //  훅 env 는 세션 스냅샷이라 표지가 없고, 대화 파일(transcript_path) 첫 줄 session_meta 가 말해 준다(0.154.0 실측):
+    //  TUI = originator `codex-tui`·source `cli`, exec = `codex_exec`·`exec`. 첫 줄은 약 18KB 지만 두 키는 앞 400바이트 안에 있다.
+    headless: (payload, _env, readHead) => {
+      const t = typeof payload?.transcript_path === "string" ? payload.transcript_path : "";
+      const head = t ? String(readHead(t) || "") : "";
+      return /"originator"\s*:\s*"codex_exec"/.test(head) || /"source"\s*:\s*"exec"/.test(head);
+    },
     // ⚠ command 는 **문자열**, args 는 배열(0.142.0 실측). 배열을 넣으면 config.toml 전체가 로드 실패한다.
     mcp: { style: "toml-table", commandShape: "string+args" },
     autoApprove: { kind: "toml-approval", key: (_s, tool) => tool },
@@ -566,6 +581,20 @@ export function recordForkLaunch(id, toolName, toolInput, toolResponse) {
 export function subagentIdOf(id, payload) {
   const h = harness(id);
   return typeof h.subagentId === "function" ? h.subagentId(payload || {}) : "";
+}
+
+// 이 하네스에서 기록 fork 를 띄울 수 있나(#4219) — fork 축이 빈 하네스(opencode·agy·grok)는 자식이 부모 대화를 못 받는다.
+//  모르는 id 는 거짓이다(harness() 의 claude 폴백을 타면 모르는 하네스에 fork 를 권하게 된다).
+export function canRecordFork(id) {
+  return isKnownHarness(id) && (HARNESS[id].tools.fork || []).length > 0;
+}
+
+// 사람이 대화하지 않는 실행인가(#4219) — 표의 headless 축. 모르면 거짓(대화형으로 본다).
+//  readHead(path) → 파일 앞부분 문자열(없으면 던져도 된다). fs 는 호출부가 넘긴다(런타임 의존 0 규율).
+export function isHeadlessRun(id, payload, env = {}, readHead = () => "") {
+  const h = harness(id);
+  if (typeof h.headless !== "function") return false;
+  try { return !!h.headless(payload || {}, env || {}, readHead); } catch { return false; }
 }
 
 // 기록 fork 진행 중 표시 = **자식마다 파일 하나** `<sid>.writeback-pending.<자식 id>` (work-flag 가 세우고 걷고, 게이트가 읽는다).
