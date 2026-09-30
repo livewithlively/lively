@@ -5,7 +5,7 @@
 //  회귀 대상 ③: 기존 문서에 원래 있던 위반으로 에이전트의 수정·이어쓰기가 거부되는 것 — 거부는 새로 생긴 위반에만 건다.
 //  회귀 대상 ④: 사람의 웹 편집이 거부되는 것, 반대로 토큰 스크립트가 사람으로 취급돼 거부를 비껴가는 것.
 import assert from "node:assert/strict";
-import { checkWriting, isHumanWriter, writingRejectError } from "./writing-style.js";
+import { checkWriting, isHumanWriter, writingRejectError, rejectWriting } from "./writing-style.js";
 import { resolveWritingFormat } from "../org/policies/writing-format.js";
 
 const fmt = (raw: Record<string, unknown>) => async () => resolveWritingFormat({ enabled: true, ...raw });
@@ -98,5 +98,29 @@ await ta("사람 판정: 웹 로그인 세션만 사람이고, 앱이 대신 쓰
   assert.equal(isHumanWriter({ tokenSource: "db" }), false);
   assert.equal(isHumanWriter({ tokenSource: "static" }), false);
   assert.equal(isHumanWriter(null), false);
+});
+const REJ = [{ rule: "title_date" as const, level: "reject" as const, message: "제목에 날짜를 넣지 마라.", sample: "배포 (2026-09-23)" }];
+await ta("거부는 감사 로그에 표면·규칙·대상·제목을 남기고, 본문은 남기지 않는다", async () => {
+  const calls: unknown[][] = [];
+  const rec = (async (...args: unknown[]) => { calls.push(args); }) as unknown as Parameters<typeof rejectWriting>[6];
+  const e = await rejectWriting("knowledge", "deploy-note", "배포 (2026-09-23)", REJ, "가이드", { actor: "m1", source: "mcp", tokenHashPrefix: "abc", ip: "10.0.0.1" }, rec);
+  assert.equal(e.status, 422);
+  assert.equal(calls.length, 1);
+  const [entity, key, op, before, after, actor, source, meta] = calls[0] as [string, string, string, unknown, Record<string, unknown>, string, string, Record<string, unknown>];
+  assert.deepEqual([entity, key, op, before, actor, source], ["writing_format", "deploy-note", "reject", null, "m1", "mcp"]);
+  assert.deepEqual(after, { surface: "knowledge", rules: ["title_date"], title: "배포 (2026-09-23)" });
+  assert.deepEqual(meta, { tokenHashPrefix: "abc", ip: "10.0.0.1" });
+});
+await ta("감사 기록의 제목은 80자에서 자른다", async () => {
+  let after: Record<string, unknown> = {};
+  const rec = (async (...args: unknown[]) => { after = args[4] as Record<string, unknown>; }) as unknown as Parameters<typeof rejectWriting>[6];
+  await rejectWriting("project", null, "가".repeat(120), REJ, "", undefined, rec);
+  assert.equal([...String(after.title)].length, 80);
+});
+await ta("감사 기록이 실패해도 거부 에러는 그대로 돌려준다", async () => {
+  const boom = (async () => { throw new Error("db down"); }) as unknown as Parameters<typeof rejectWriting>[6];
+  const e = await rejectWriting("activity", null, "t", REJ, "가이드", undefined, boom);
+  assert.equal(e.status, 422);
+  assert.match(e.message, /title_date/);
 });
 console.log(`writing-style: ${pass} passed`);
