@@ -61,10 +61,10 @@ const FIXTURES: Record<string, Partial<Record<"ready" | "busy" | "dialog" | "aut
 const panes = (v: string | string[] | undefined): string[] => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
 
 // [표 1] 축의 명시적 선언 — undefined(있는 척)를 금지한다.
-t("[1] 전 어댑터가 parse·answer·screen·pathFor 를 함수 또는 null 로 명시 선언한다", () => {
+t("[1] 전 어댑터가 parse·answer·screen·run·pathFor 를 함수 또는 null 로 명시 선언한다", () => {
   assert.ok(HARNESS_IO.length >= 6, "레지스트리가 비어 있으면 이 표 전체가 헛돈다(배선 단언)");
   for (const a of HARNESS_IO) {
-    for (const axis of ["parse", "answer", "screen", "pathFor"] as const) {
+    for (const axis of ["parse", "answer", "screen", "run", "pathFor"] as const) {
       assert.ok(axis in a, `${a.key}.${axis} 미선언`);
       assert.ok(a[axis] === null || typeof a[axis] === "function", `${a.key}.${axis} 는 함수|null 이어야 한다`);
     }
@@ -161,6 +161,28 @@ t("[7] screen([]) — 빈 tail 은 어떤 하네스에서도 'ready' 가 아니�
     if (!a.screen) continue;
     assert.notEqual(a.screen([]), "ready", `${a.key} 가 빈 화면을 ready 로 판정`);
   }
+});
+
+// [표 8] #4502 실행 상태 축 — 실측 fixture 로 검증한다. 대화상자·인증·준비 화면을 «돈다» 로 읽으면 사람이 답할 화면이나
+//  끝난 세션이 파란 점으로 선다(«확인 필요» 는 우선순위표에서 위라 가려지진 않는다). busy fixture 는 turn 이어야 한다(화면
+//  busy = 턴이 돈다). claude 는 busy fixture 가 없다(돌아도 입력창은 ready — screen 머리말) — claude 표는 screen-run.test.
+//  ⚠ [3] 과 달리 **교차(남의 화면)는 보지 않는다**: run 은 목록이 그 세션 자신의 하네스로만 부른다(sessions.ts
+//   harnessIo(r.harness)). 교차로 돌리면 antigravity 가 codex 대화상자의 «esc to cancel» 을 제 생성 중 푸터로 읽는데
+//   (실측 표에서 확인), 그 조합은 목록에서 생기지 않는다.
+t("[8] run — 제 busy 화면은 turn · 제 대화상자·인증·준비 화면은 null", () => {
+  let checked = 0;
+  for (const a of HARNESS_IO) {
+    if (!a.run) continue;
+    const fx = FIXTURES[a.key] ?? {};
+    for (const pane of panes(fx.busy)) { assert.equal(a.run(tails(pane)), "turn", `${a.key} busy 화면`); checked++; }
+    for (const state of ["dialog", "auth", "ready"] as const) {
+      for (const pane of panes(fx[state])) {
+        assert.equal(a.run(tails(pane)), null, `${a.key} 가 제 ${state} 화면을 실행 중으로 읽었다`);
+        checked++;
+      }
+    }
+  }
+  assert.ok(checked >= 15, `run 표가 비어 있다(배선 단언) — 검사 ${checked}건`);
 });
 
 console.log(`harness-io/contract: ${pass} passed`);

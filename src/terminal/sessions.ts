@@ -47,10 +47,10 @@ import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWrit
 //   미리 발급·추출해 실어 보낸 것(input.appSession)을 쓰므로 이 경로에 오지 않는다.
 import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, paneLaunchArgv, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
-import { harnessIo } from "./harness-io/adapter.js";   // #4135 — 이 하네스의 화면 판정(확인 필요)
+import { harnessIo, type ScreenRun } from "./harness-io/adapter.js";   // #4135 — 이 하네스의 화면 판정(확인 필요) · #4502 실행 상태
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
 import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
-import { sessionActivityTitle, paneAwaitingInput, resolveAgentPhase, observeAgentRun, harnessReportsBusy, parseReportedPhase } from "./phase.js";
+import { sessionActivityTitle, scrapePane, resolveAgentPhase, observeAgentRun, harnessReportsBusy, parseReportedPhase } from "./phase.js";
 import { sessionMetaCmds, sessionWindowCmds, metaHealCmds, needsMetaHeal, makeMetaHealGate } from "./session-meta-heal.js";   // #3892 — 표식 한 벌 + 표식 없는 세션 되채우기
 import { ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, mintSessionMcpToken, revokeSessionHookToken } from "./profiles.js";
 import { ensureMemberKitSeeded } from "./member-kit-seed.js";
@@ -271,6 +271,16 @@ export function healSessionMeta(id: string, row: SessionState, via: "list" | "sn
  *  기본(false)은 종전 동작 — 화면 목록은 빈 목록으로 떨어지는 편이 낫다. 반면 "없으면 만든다" 류의
  *  **파괴적/생성적 결정**을 내리는 호출부는 반드시 strict 여야 한다(모르는 상태를 '없음'으로 읽으면 안 된다).
  */
+// 마지막 작업 시각을 지금으로 — 프로세스 값은 매번, tmux·DB 영속은 30초 스로틀(폴링마다 쓰지 않는다).
+//  두 자리가 부른다: 1차 패스의 스피너·셸 실행 관측, 2차 패스의 «턴이 도는 화면»(#4502).
+function markBusyNow(name: string, persisted: number, nowSec: number): void {
+  setLastBusy(name, nowSec);
+  if (nowSec - persisted >= 30) {
+    void tmuxQuiet(["set-option", "-t", name, "@box_last_busy", String(nowSec)]);
+    void touchSessionBusy(name, nowSec).catch(() => { /* 비치명 — desired-state 없음(구 세션·노드)·DB 다운 */ }); // #1059 E — restorable 카드 시간표시 미러(같은 스로틀)
+  }
+}
+
 async function collectSessions(me: string | null, strict = false): Promise<SessionInfo[]> {
   let out = "";
   try { out = await tmux(["list-sessions", "-F", LIST_FMT]); }
@@ -366,11 +376,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     let lastBusy = Math.max(getLastBusy(p.name), persisted);
     if (busy || shellWorking) {
       lastBusy = nowSec;
-      setLastBusy(p.name, nowSec);
-      if (nowSec - persisted >= 30) {
-        void tmuxQuiet(["set-option", "-t", p.name, "@box_last_busy", String(nowSec)]); // 30초 스로틀 — 폴링마다 쓰지 않는다
-        void touchSessionBusy(p.name, nowSec).catch(() => { /* 비치명 — desired-state 없음(구 세션·노드)·DB 다운 */ }); // #1059 E — restorable 카드 시간표시 미러(같은 스로틀)
-      }
+      markBusyNow(p.name, persisted, nowSec);
     }
     // ★ #3892 — 표식(@box_*)이 빈 채 살아 있는 세션을 DB 행으로 되채운다. tmux 표식을 직접 읽는 입구(세션 프로젝트 바꾸기의
     //  소유자 확인 · 대화 배달의 하네스 판정 · 창 옵션)가 그 세션에서 조용히 틀리지 않게. 판정·목록은 session-meta-heal.ts.
@@ -384,7 +390,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     if (me !== null && !canSeeSession({ dir: d.dir ?? "", owner: d.owner, invites: d.invites, projectId: d.projectId ?? 0 }, me, hidden)) continue;
     rows.push({
       name: p.name, created: p.created, attached: p.attached, paneTitleRaw: p.paneTitleRaw,
-      offline, busy, shellWorking, lastBusy,
+      offline, busy, shellWorking, lastBusy, persistedLastBusy: persisted,
       reportedFresh, harnessBusy, lastAttached: p.lastAttached, lastViewed: p.lastViewed,
       //  #2439 — 이 세션이 어느 모드로 떴나. ⚠ 이 push 는 필드를 **하나씩 골라** 담는다 —
       //   위에서 만들어 둔 값이라도 여기 안 적으면 조용히 사라진다(실측: 386행 중 0행만 값을 가졌다).
@@ -400,11 +406,21 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
   //   결과보다 위에 있어(1·2번) 어차피 결과를 못 바꾼다 → 그 세션의 capture-pane 은 순수 낭비다. 훅 배선이 퍼질수록
   //   폴링당 tmux 호출이 줄어든다(스크래핑 은퇴의 실질적 첫 단계).
   const waitingIds = new Set<string>();
+  //  #4502 — 같은 캡처로 «화면이 말하는 실행 상태»(어댑터 run)도 읽는다. 훅 보고가 끊긴 세션의 «작업 중» 이 여기서 나온다:
+  //   Claude Code 는 pane 제목에 스피너를 더 이상 안 그려(위 busy 는 사실상 늘 거짓) 남은 신호가 훅 보고뿐인데, 그건 도구 하나가
+  //   10분 넘게 돌거나 훅이 안 걸린 도구(Read·브라우저 등)만 쓰면 만료되고, 턴을 끝내고 백그라운드 작업을 기다리는 동안엔
+  //   Stop 이 idle 을 보고한다(실측 2026-09-30 box-wonjoon-jang-4b1b4cd6 — «머지되면 바로 굽고 롤하겠습니다 · 1 shell still
+  //   running» 인데 파란 점이 꺼졌다). 추가 tmux 호출은 없다 — 대기 판정이 이미 이 세션들을 캡처하고 있었다.
+  const screenRuns = new Map<string, ScreenRun>();
   const needScrape = rows.filter((r) => !r.offline && !r.busy && r.reportedFresh?.phase !== "busy" && r.reportedFresh?.phase !== "waiting");
   //  #4135 — 화면 문구는 하네스마다 다르다. 그 하네스가 답할 수 있으면(어댑터 screen) 그 답을 쓰고, 못 하면
   //   종전 휴리스틱(claude·antigravity 문구)으로 떨어진다. 종전엔 codex 의 훅 검토·업데이트 대화상자가 안 잡혀
   //   «답을 기다리는 세션» 이 목록에서 대기중으로 섰다.
-  await Promise.all(needScrape.map(async (r) => { if (await paneAwaitingInput(r.name, harnessIo(r.harness)?.screen)) waitingIds.add(r.name); }));
+  await Promise.all(needScrape.map(async (r) => {
+    const v = await scrapePane(r.name, harnessIo(r.harness));
+    if (v.waiting) waitingIds.add(r.name);
+    if (v.run) screenRuns.set(r.name, v.run);
+  }));
   const sessions: SessionInfo[] = [];
   for (const r of rows) {
     const flags = r.flags as Record<string, string>;   // desired 해소 단계에서 이미 디코드됐다
@@ -429,7 +445,14 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     const asPhase = appServer ? codexChatPhase(r.name) : null;
     // #1221 — AI 실행 단계(busy·waiting·idle)는 이제 **한 곳에서** 판정한다(하네스 보고 우선, 화면 스크래핑 폴백).
     //  그 위의 세 갈래(셸 하네스 · AI 종료 · 탭 없음)는 실행 단계와 다른 축이라 종전 순서 그대로다.
-    const phase = resolveAgentPhase({ reported: r.reportedFresh, nowSec, spinning: r.busy, scrapedWaiting: waitingIds.has(r.name) });
+    const screenRun = screenRuns.get(r.name) ?? null;
+    const phase = resolveAgentPhase({ reported: r.reportedFresh, nowSec, spinning: r.busy, scrapedWaiting: waitingIds.has(r.name), scrapedRun: screenRun });
+    //  #4502 — 턴이 도는 화면은 활동이다(마지막 작업 시각을 민다 — 스피너와 같은 자리). 백그라운드 대기는 밀지 않는다:
+    //   AI 가 일한 마지막 시각은 턴이 끝난 때이고, 백그라운드에 남은 게 dev 서버 같은 상주 프로세스면 영원히 «방금 일함» 이 된다.
+    if (screenRun === "turn" && !appServer) {
+      r.lastBusy = nowSec;
+      markBusyNow(r.name, r.persistedLastBusy, nowSec);
+    }
     const state: SessionInfo["agentState"] = shellHarness ? "shell"
       // 런타임이 살아 있으면 그 말이 정본. 아직 안 열렸으면(첫 프롬프트 전) idle — '종료됨'이 아니다.
       : appServer ? (asPhase ?? (r.reportedFresh?.phase === "waiting" ? "waiting" : "idle"))
@@ -453,13 +476,16 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       // 회수(F)가 보는 두 신호는 **접속과 무관**해야 하고(탭=온라인 규칙이 busy·waiting 을 offline 으로 덮으므로),
       //  두 출처를 **합집합**으로 본다 — 죽이면 되돌릴 수 없는 판정이라 과보호가 옳은 실패 방향이다.
       // app-server 세션의 '일하는 중'은 pane 스피너가 아니라 **턴이 도나**다(pane 은 셸이라 스피너가 없다).
-      working: appServer ? asPhase === "busy" : !!(r.busy || r.shellWorking || r.reportedFresh?.phase === "busy"),
+      //  #4502 — 화면이 «턴이 돈다»·«백그라운드 작업이 남았다» 고 하면 작업 중이다(사람 눈에 아직 안 끝난 세션).
+      working: appServer ? asPhase === "busy" : !!(r.busy || r.shellWorking || r.reportedFresh?.phase === "busy" || screenRun),
       // 승인 대기도 마찬가지 — 화면 스크래핑이 아니라 우리가 들고 있는 승인 목록이 사실이다.
       awaiting: appServer ? asPhase === "waiting" : !!(r.reportedFresh?.phase === "waiting" || waitingIds.has(r.name)),
       // #3894 — working 은 두 출처의 합집합이라 회수 상한은 그걸로 출처를 못 가른다. 그래서 둘을 따로 싣는다(회수 판정 전용).
       //  · harnessWorking — 하네스(스피너·훅 보고·app-server 턴)가 스스로 말하는 작업 중. 상한 없이 존중한다.
       //  · paneWorking — pane 포그라운드 추정(shellWorking). 이게 참이면 lastActive 는 그 추정이 매 관측 밀어 올린 값이다.
-      harnessWorking: appServer ? asPhase === "busy" : !!r.harnessBusy,
+      //   #4502 — 화면의 «턴이 돈다» 는 하네스가 스스로 말하는 것이다(Esc 로 끊을 수 있다는 그 하네스의 안내). 백그라운드 대기는
+      //    아니다 — 그건 회수 상한이 걸리는 쪽에 둔다(살아 있는 작업 자체는 회수 ⑥ 이 프로세스 표로 따로 지킨다).
+      harnessWorking: appServer ? asPhase === "busy" : !!r.harnessBusy || screenRun === "turn",
       paneWorking: !!r.shellWorking,
       title: sessionActivityTitle(r.paneTitleRaw, r.harness),
       lastActive: r.lastBusy || undefined, // 마지막 작업 시각. 한 번도 작업 안 했으면 undefined → 프론트가 created 로 폴백.

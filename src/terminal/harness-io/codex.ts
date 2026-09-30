@@ -163,6 +163,8 @@ export const codexIo: HarnessSessionAdapter = {
     if (/^\s*›/m.test(s)) return "ready";
     return null;   // 부팅·로그인 등 미실측 화면 — 보수적으로 기다린다
   },
+  //  #4502 — 화면의 busy 가 곧 «턴이 돈다» 다(• Working (… • esc to interrupt)). 백그라운드 표시는 미실측.
+  run: (tail) => (codexIo.screen?.(tail) === "busy" ? "turn" : null),
   //  #4135 — 웹 터미널이 쓰는 화면 사실. **claude 와 셋 다 다르다**(실측 2026-09-24):
   //   · appMouse=false — codex TUI 는 alt 화면도 마우스 리포트도 안 쓴다(tmux `alternate_on=0 mouse_any_flag=0`).
   //     그래서 드래그·휠·복사가 **브라우저 기본으로 그냥 된다** — ⌘C 다리(#972)도, ⌥드래그 안내도 이 세션엔 필요 없다.
