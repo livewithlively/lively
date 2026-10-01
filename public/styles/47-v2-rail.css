@@ -787,3 +787,18 @@ button.v2-kedit { border: 0; background: none; font-family: inherit; line-height
 /* 세션별 축 둘째 줄 끝의 소속 — 마지막 말이 먼저 자리를 갖고, 좁으면 이쪽이 먼저 잘린다. */
 .v2-app-inst-askp { flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-2); }
 .v2-app-inst-askp::before { content: '·'; margin-right: 5px; }
+
+/* ── #4533 사이드바 닫힘 — 폭 손잡이를 하한 밑으로 더 끌면 닫힌다(상민님 2026-10-01) ─────────────────
+   원준 2026-08-25 «사이드바는 걷을 수 없다» 의 이유는 "사라지면 되찾는 길을 또 만들어야 한다" 였다. 이제 되찾는 길은
+   창 맨 윗줄 ☰ 하나로 정한다 — 독(레일)·사이드바가 둘 다 닫혀 있으면 ☰ 가 둘을 함께 연다(main.ts toggleDock).
+   닫는 길도 하나뿐이다: 손잡이를 하한 밑으로 끄는 몸짓. 실수로 눌러 사라질 단추는 두지 않는다.
+   배치는 맥락 관리(app-ctx)와 같다 — 열 폭 0, 맨 윗줄은 전폭(43-v2-topbar-search.css ①-d).
+   ⚠ 손잡이(.v2-side + .v2-split-x)는 **visibility 로 감추지 않는다** — 끄는 도중에 닫히므로 그 손잡이가 포인터를 잡고
+    있다. 열 폭이 0 이라 어차피 안 보이고, 다시 오른쪽으로 끌면 같은 몸짓 안에서 도로 열린다.
+   ⚠ 좁은 폭(≤900)은 서랍이라 `min-width: 901px` 로 잠근다(app-ctx 와 같은 이유). */
+@media (min-width: 901px) {
+  #v2-root.rail-mode.side-closed { grid-template-columns: var(--v2-rail-w) 0 0 minmax(0, 1fr) 6px var(--v2-aside-w); }
+  #v2-root.rail-mode.side-closed.no-aside { grid-template-columns: var(--v2-rail-w) 0 0 minmax(0, 1fr) 0 0; }
+  #v2-root.side-closed > .v2-side { overflow: hidden; visibility: hidden; border-right: 0; }
+  #v2-root.side-closed > .v2-side + .v2-split-x { overflow: hidden; }
+}

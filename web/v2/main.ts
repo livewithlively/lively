@@ -326,14 +326,19 @@ export async function bootV2(): Promise<void> {
   // 실험장(#1719 원준): 작업대 골격(rail-mode)은 그대로 두되 **좌측 사이드바는 늘 보인다**(원준 2026-08-20:
   //  "새로고침하다 보면 사라질 때가 있다 — 항상 표시하고, 없앨 수는 없게. 폭만 끌어 조절"). 그래서
   //  여닫는 길(알약·×·핀)을 전부 걷고 **폭 손잡이 하나**만 남긴다 — 사라지지 않으니 되찾는 길도 필요 없다.
+  //  #4533(상민님 2026-10-01) — 단, 그 손잡이를 **하한 밑으로 더 끌면** 사이드바가 닫힌다. 닫는 길은 그 몸짓 하나뿐이고
+  //   (단추·× 없음 — 실수로 사라질 자리를 만들지 않는다), 되찾는 길은 창 맨 윗줄 ☰ 다(toggleDock — 독·사이드바가 둘 다
+  //   닫혀 있으면 둘을 함께 연다). 닫힘은 이 기기의 기억이다(레일 접힘 HIDE_STORE 와 같은 급).
   root.classList.add('rail-mode');
+  if (!SOLO) root.classList.toggle('side-closed', readSideClosed());
   root.classList.toggle('solo', SOLO);
   root.replaceChildren(
     ...(SOLO ? [] : [
       //  #2016 — 레일이 사이드바 **왼쪽**에 한 칸 더 선다. 폭은 접힘/펼침 두 값뿐이라 손잡이가 없다.
       railEl = el('nav', { class: 'v2-rail', 'aria-label': '구역' }),
       sideEl = el('nav', { class: 'v2-side stu-side', 'aria-label': '탐색' }),
-      makeSplitter({ axis: 'x', key: 'side-w', cssVar: '--v2-side-w', target: root, def: 316, min: 220, max: 560, grow: 1, label: '사이드바 너비' }),
+      makeSplitter({ axis: 'x', key: 'side-w', cssVar: '--v2-side-w', target: root, def: 316, min: SIDE_MIN_W, max: 560, grow: 1, label: '사이드바 너비',
+        collapse: { below: SIDE_MIN_W - SIDE_CLOSE_SLACK, onChange: setSideClosed } }),
     ]),
     centerEl = el('div', { class: 'v2-main', id: 'v2-main' }),
     makeSplitter({ axis: 'x', key: 'aside-w', cssVar: '--v2-aside-w', target: root, def: 316, min: 240, max: 720, grow: -1, label: '우패널 너비' }),
@@ -375,10 +380,10 @@ export async function bootV2(): Promise<void> {
     //   상태로 길이 조절 정도로 고정"). 종전엔 사이드바를 통째로 접었는데(`side-off`), 그러면 목록이 사라져
     //   되찾는 길을 또 만들어야 했다 — 접히는 것은 레일 하나뿐이고 사이드바는 폭 손잡이로만 조절한다.
     //   좁은 폭에선 mobile.ts 가 서랍을 여닫는다(그쪽 핸들러는 isMobile() 가드가 있어 여기서 겹치지 않는다).
+    //  #4533 — 사이드바를 손잡이로 닫아 둔 채 레일까지 걷혀 있으면 ☰ 는 **둘을 함께** 연다(toggleDock).
     mobile.menuBtn.addEventListener('click', () => {
       if (window.matchMedia(MOBILE_MQ).matches) return;   // 좁은 폭 = 서랍(mobile.ts 담당)
-      toggleRail();
-      syncRailBtn();
+      toggleDock();
     });
     //  ⌘⇧S — 슬랙의 '워크스페이스 스위처 표시'와 같은 자리(레일 펼치기). 입력 중에는 가로채지 않는다.
     document.addEventListener('keydown', (e) => {
@@ -387,8 +392,7 @@ export async function bootV2(): Promise<void> {
       const t = e.target as HTMLElement | null;
       if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
       e.preventDefault();
-      toggleRail();
-      syncRailBtn();
+      toggleDock();
     });
     //  즐겨찾기는 [프로젝트] 착지를 정하는 재료다(#2061) — 구역에 들어간 뒤 당기면 첫 진입이 답을 못 기다린다. 미리 당겨 둔다.
     loadFavLists();
@@ -2218,7 +2222,34 @@ function syncRailBtn(): void {
   if (!mobile) return;
   const hid = railIsHidden();
   mobile.menuBtn.setAttribute('aria-expanded', String(!hid));
-  mobile.menuBtn.title = (hid ? '레일 펼치기' : '레일 숨기기') + ' — ⌘⇧S';
+  mobile.menuBtn.title = (hid ? (sideIsClosed() ? '레일·사이드바 펼치기' : '레일 펼치기') : '레일 숨기기') + ' — ⌘⇧S';
+}
+
+// ── 사이드바 닫힘(#4533) — 폭 손잡이를 하한 밑으로 끌면 닫히고, ☰ 가 되찾는다 ──────────────────────
+//  ⚠ 닫힘은 **열 폭 0** 이다(47-v2-rail.css `.side-closed` — rail-hidden·app-ctx 와 같은 규율). 좁은 폭(≤900)은 서랍이라
+//   이 클래스를 CSS 가 무시한다(min-width:901 잠금) — 그래서 판정도 넓은 폭에서만 '닫혔다'고 말한다.
+const SIDE_MIN_W = 220;
+const SIDE_CLOSE_SLACK = 56;   // 하한을 이만큼 더 밀어야 닫힌다 — 하한에 살짝 걸친 손떨림으로 닫히지 않게
+const SIDE_CLOSED_STORE = deviceStore('lively_v2_side_closed');   // `*_KEY` 로 두지 않는다(gitleaks 오탐 — HIDE_STORE 와 같은 이유)
+function readSideClosed(): boolean {
+  try { return localStorage.getItem(SIDE_CLOSED_STORE) === '1'; } catch (_) { return false; }
+}
+function sideIsClosed(): boolean {
+  return !!root?.classList.contains('side-closed') && !window.matchMedia(MOBILE_MQ).matches;
+}
+function setSideClosed(on: boolean): void {
+  if (!root) return;
+  root.classList.toggle('side-closed', on);
+  try { localStorage.setItem(SIDE_CLOSED_STORE, on ? '1' : '0'); } catch (_) { /* 이번 화면은 된다 */ }
+  syncRailBtn();
+}
+/** 창 맨 윗줄 ☰ · ⌘⇧S — 사이드바가 열려 있으면 종전대로 레일(독)만 여닫는다.
+ *  독·사이드바가 **둘 다** 닫혀 있으면 독을 열면서 사이드바도 연다(닫힌 사이드바를 되찾는 유일한 길).
+ *  독만 열려 있고 사이드바가 닫혀 있으면 독만 닫는다 — 다음 누름이 둘을 함께 연다. */
+function toggleDock(): void {
+  if (railIsHidden() && sideIsClosed()) setSideClosed(false);
+  toggleRail();
+  syncRailBtn();
 }
 
 function drawSide(): void {
