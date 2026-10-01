@@ -36,7 +36,7 @@ import { sessText } from './side.js';
 import { projName, findSessByConv, isTrashedSess, isMineSess, type Sess, type V2Data } from './views.js';
 import { showCtxMenu, ctxIsOpen, closeCtxMenu } from './ctx-menu.js';   // 기간 고르기 — 화면 어디서나 같은 메뉴 한 벌(#3784)
 import {
-  type OmniSort, type OmniPeriod, SORT_KEY, SORT_LABEL, readSort, PERIODS, periodLabel, periodSince, inPeriod,
+  type OmniSort, type OmniPeriod, SORT_STORE, SORT_LABEL, readSort, PERIODS, periodLabel, periodSince, inPeriod,
   dayBucket, whenLabel, byRecent, atOf,
 } from '../lib/omni-order.js';   // #4517 정렬·기간 규칙(순수)
 import {
@@ -184,8 +184,8 @@ let lastQuery: { q: string; at: number } | null = null;
 const LAST_QUERY_MS = 10 * 60_000;
 //  최근 연 것 · 최근 검색어는 **워크스페이스의 내용**을 가리킨다 — wsKey 로 나눈다(#1875 규칙, web/lib/net.ts). 안 나누면 워크스페이스를
 //   바꾼 뒤 빈 칸 화면에 다른 워크스페이스의 제목이 섰다(격리 리뷰). 정렬은 취향이라 나누지 않는다.
-const OPENED_KEY = (): string => wsKey('lively.omni.opened');
-const QUERIES_KEY = (): string => wsKey('lively.omni.queries');
+const OPENED_STORE = (): string => wsKey('lively.omni.opened');
+const QUERIES_STORE = (): string => wsKey('lively.omni.queries');
 interface OpenedRow { kind: Kind; key: string; title: string; href: string; at: number }
 function readJson(key: string): unknown {
   try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
@@ -195,7 +195,7 @@ function writeJson(key: string, v: unknown): void {
 }
 const ALL_KINDS: Kind[] = [...MAIN_KINDS, ...AUX_KINDS];
 function loadOpened(): OpenedRow[] {
-  const v = readJson(OPENED_KEY());
+  const v = readJson(OPENED_STORE());
   if (!Array.isArray(v)) return [];
   return v.filter((x: any) => x && typeof x.key === 'string' && typeof x.href === 'string' && x.href.startsWith('#/')
     && typeof x.title === 'string' && ALL_KINDS.includes(x.kind)).slice(0, 8) as OpenedRow[];
@@ -203,22 +203,22 @@ function loadOpened(): OpenedRow[] {
 function rememberOpened(h: Hit): void {
   if (!h.href) return;
   const row: OpenedRow = { kind: h.kind, key: h.key, title: h.title, href: h.href, at: Date.now() };
-  writeJson(OPENED_KEY(), [row, ...loadOpened().filter((x) => x.key !== row.key)].slice(0, 8));
+  writeJson(OPENED_STORE(), [row, ...loadOpened().filter((x) => x.key !== row.key)].slice(0, 8));
 }
 function loadQueries(): string[] {
-  const v = readJson(QUERIES_KEY());
+  const v = readJson(QUERIES_STORE());
   return Array.isArray(v) ? (v.filter((x) => typeof x === 'string' && x.trim()) as string[]).slice(0, 6) : [];
 }
 function rememberQuery(q: string): void {
   const t = q.trim();
   if (!t || t.length > 120) return;
-  writeJson(QUERIES_KEY(), [t, ...loadQueries().filter((x) => x !== t)].slice(0, 6));
+  writeJson(QUERIES_STORE(), [t, ...loadQueries().filter((x) => x !== t)].slice(0, 6));
 }
 function loadSort(): OmniSort {
-  try { return readSort(localStorage.getItem(SORT_KEY)); } catch { return 'recent'; }
+  try { return readSort(localStorage.getItem(SORT_STORE)); } catch { return 'recent'; }
 }
 function saveSort(m: OmniSort): void {
-  try { localStorage.setItem(SORT_KEY, m); } catch { /* 막힌 저장소 — 이번 페이지에서만 */ }
+  try { localStorage.setItem(SORT_STORE, m); } catch { /* 막힌 저장소 — 이번 페이지에서만 */ }
 }
 
 // ── [나] 창의 칸 — «설정» 을 찾는 사람을 그 칸으로(#4530: 설정 앱이 숨어 있어 «설정» 을 쳐도 아무것도 안 나왔다) ──
