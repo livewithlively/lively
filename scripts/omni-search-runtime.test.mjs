@@ -372,6 +372,8 @@ check(allRows(R.def).length >= 6 && reqOf(R.defReqs, "/api/ui/v6/session-search?
   check(tl.includes("회의록 정리"), "G3 본문에서만 맞은 지식도 시간 줄에 선다", JSON.stringify(tl));
   const simG = group(R.def, "뜻이 비슷한 지식");
   check(!tl.includes("검색 개선 메모") && !!simG && simG.rows.map((r) => r.t).join() === "검색 개선 메모", "G3 뜻으로만 온 지식은 맨 끝 묶음에만 · 글자로 이미 뜬 문서는 거기 또 서지 않는다", JSON.stringify(simG));
+  //  #1211(#4517 후속)이 잠근 것 — 맨 위 «가장 맞는 결과» 도 글자로 맞은 것에서만 고른다(뜻 점수만 넘은 무관한 문서가 서던 것).
+  check(!(group(R.def, "가장 맞는 결과")?.rows || []).some((r) => r.t === "검색 개선 메모"), "G3 뜻으로만 온 지식은 맨 위 셋에도 서지 않는다", JSON.stringify(group(R.def, "가장 맞는 결과")));
 }
 // G4·G5
 {
