@@ -133,21 +133,24 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
 
   // ── 끄는 중 예고 ──
   const hint = el('div', { class: 'sw-hint cm-hint', hidden: true }) as HTMLElement;
-  // ── 카드 머리줄 오른쪽의 단추 둘: 제자리로 · 접기 ──
-  const dockBtn = el('button', { class: 'cm-ic', type: 'button', title: '세션을 제자리로 되돌립니다', 'aria-label': '세션 제자리로', onclick: () => leave() },
-    pnIcon('cols', 'pn-i sm')) as HTMLButtonElement;
-  const foldBtn = el('button', { class: 'cm-ic cm-fold-b', type: 'button', onclick: () => setFold(!card.fold) },
-    pnIcon('chev', 'pn-i sm')) as HTMLButtonElement;
-  const ctl = el('div', { class: 'cm-ctl', hidden: true }, dockBtn, foldBtn) as HTMLElement;
+  // ── 카드 머리줄 오른쪽의 단추 둘: 최소화(접기) · 크게 보기(세션을 가운데로) ──
+  //  창 단추의 관례대로 가로줄 = 최소화, 대각선 화살표 = 크게. 접혀 있으면 최소화 단추가 «다시 펴기»(창 그림)가 된다(원준 2026-10-01).
+  //  머리줄 두 번 누르기는 «크게» 다 — 작은 카드를 두 번 누르는 사람은 크게 보려는 것이다(종전엔 접기였다).
+  const minBtn = el('button', { class: 'cm-ic cm-min-b', type: 'button', onclick: () => setFold(!card.fold) },
+    pnIcon('minus', 'pn-i sm')) as HTMLButtonElement;
+  const maxBtn = el('button', { class: 'cm-ic cm-max-b', type: 'button', title: '크게 봅니다 — 세션을 가운데로 되돌립니다 (머리줄 두 번 누르기)', 'aria-label': '세션 크게 보기', onclick: () => leave() },
+    pnIcon('expand', 'pn-i sm')) as HTMLButtonElement;
+  const ctl = el('div', { class: 'cm-ctl', hidden: true }, minBtn, maxBtn) as HTMLElement;
   // ── 크기 조절 손잡이 여덟 ──
   const grips = EDGES.map((e) => el('div', { class: 'cm-grip cm-grip-' + e, 'data-edge': e, hidden: true, 'aria-hidden': 'true' }) as HTMLElement);
   colMain.append(ctl, ...grips);
   body.append(hint);
 
   function paintFold(): void {
-    foldBtn.title = card.fold ? '카드를 폅니다' : '카드를 접습니다. 머리줄만 남습니다';
-    foldBtn.setAttribute('aria-label', card.fold ? '카드 펴기' : '카드 접기');
-    foldBtn.setAttribute('aria-expanded', String(!card.fold));
+    minBtn.title = card.fold ? '다시 폅니다' : '최소화합니다 — 머리줄만 남습니다';
+    minBtn.setAttribute('aria-label', card.fold ? '카드 다시 펴기' : '카드 최소화');
+    minBtn.setAttribute('aria-expanded', String(!card.fold));
+    minBtn.replaceChildren(pnIcon(card.fold ? 'window' : 'minus', 'pn-i sm'));
   }
 
   /** 카드의 자리와 크기를 화면에 입힌다. */
@@ -407,14 +410,29 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     stopDrag = () => end(false);
     grab.addEventListener('pointermove', move); grab.addEventListener('pointerup', up); grab.addEventListener('pointercancel', up);
   }
-  const onHeadDown = (e: PointerEvent): void => {
-    const t = e.target as HTMLElement | null;
-    if (!t || !shown()) return;
+  //  카드 머리줄의 «잡는 자리» — 단추·입력칸이 아닌 곳. 세션 이름 단추(.sc-title-btn, 한 번 누르면 이름 바꾸기)도 카드에서는
+  //   머리줄로 친다: 머리줄 대부분을 그 단추가 차지해 잡을 곳이 없어지고, 두 번 누르기(크게 보기)도 그 위에서 일어난다.
+  //   카드에서 이름은 [⋯ ▸ 세션 이름 바꾸기]로 바꾼다(원준 2026-10-01).
+  const headOf = (t: HTMLElement | null): HTMLElement | null => {
+    if (!t) return null;
     const head = t.closest('.sc-head') as HTMLElement | null;
-    if (!head || !colMain.contains(head) || t.closest(INTERACTIVE)) return;
-    dragStart(e, 'move', head);
+    if (!head || !colMain.contains(head)) return null;
+    if (t.closest('.sc-title-btn')) return head;
+    return t.closest(INTERACTIVE) ? null : head;
+  };
+  const onHeadDown = (e: PointerEvent): void => {
+    if (!shown()) return;
+    const head = headOf(e.target as HTMLElement | null);
+    if (head) dragStart(e, 'move', head);
   };
   colMain.addEventListener('pointerdown', onHeadDown);
+  //  카드에서 세션 이름 단추를 눌러도 이름 바꾸기를 열지 않는다(위 headOf). 먼저 받아(capture) 거기까지 내려가지 않게 한다.
+  const onTitleClick = (e: MouseEvent): void => {
+    if (!shown() || !(e.target as HTMLElement | null)?.closest('.sc-head .sc-title-btn')) return;
+    e.stopPropagation();
+    e.preventDefault();
+  };
+  colMain.addEventListener('click', onTitleClick, true);
   for (const g of grips) g.addEventListener('pointerdown', (e) => dragStart(e as PointerEvent, g.dataset.edge as CardEdge, g));
   // 글쇠로도 된다(split.ts 와 같은 기준: 마우스만 되는 손잡이는 두지 않는다). 왼쪽 위 손잡이 하나가 초점을 받는다.
   //  화살표 = 크기(왼쪽 위 모서리를 옮긴다) · Shift+화살표 = 자리 · Home = 기본 크기와 자리.
@@ -436,13 +454,16 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     paintRect();
     save();
   });
-  // 머리줄을 두 번 누르면 접거나 편다.
+  // 머리줄을 두 번 누르면 크게 본다(세션을 가운데로) — 종전엔 접기였다(원준 2026-10-01: «두 번 누르면 커지는 게 더 직관적»).
+  //  세션 이름 위를 두 번 누르는 것도 크게 보기다. 이름 글자의 «두 번 누르면 이름 바꾸기»(session-chat.ts)보다 먼저 받아(capture)
+  //  거기까지 내려가지 않게 한다 — 카드에서 이름은 연필 단추로 바꾼다.
   const onHeadDbl = (e: MouseEvent): void => {
-    const t = e.target as HTMLElement | null;
-    if (!t || !shown() || !t.closest('.sc-head') || t.closest(INTERACTIVE)) return;
-    setFold(!card.fold);
+    if (!shown() || !headOf(e.target as HTMLElement | null)) return;
+    e.stopPropagation();
+    e.preventDefault();
+    void leave();
   };
-  colMain.addEventListener('dblclick', onHeadDbl);
+  colMain.addEventListener('dblclick', onHeadDbl, true);
 
   // 격자 크기가 바뀌면(창 · 왼쪽 사이드바 폭) 카드를 격자 안으로 다시 넣는다.
   let ro: ResizeObserver | null = null;
@@ -468,7 +489,8 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
       on = false;
       ro?.disconnect();
       colMain.removeEventListener('pointerdown', onHeadDown);
-      colMain.removeEventListener('dblclick', onHeadDbl);
+      colMain.removeEventListener('dblclick', onHeadDbl, true);
+      colMain.removeEventListener('click', onTitleClick, true);
       document.removeEventListener('pointerdown', onDownCap, true);
       document.removeEventListener('focusin', onFocusIn);
       window.removeEventListener('blur', onWinBlur);
