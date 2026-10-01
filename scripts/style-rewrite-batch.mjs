@@ -13,6 +13,9 @@
 //   --llm-dir <dir> 은 프로세스를 띄우는 대신 요청을 <dir>/pending 에 파일로 내놓고 <dir>/done 의 답을 기다린다 —
 //    `claude -p` 를 중첩으로 못 부르는 헤드리스 세션 안에서 돌 때 쓴다. 답하는 쪽 절차: scripts/style-rewrite-llm-dir-answerer.md
 //   --llm-timeout-min N 은 LLM 요청 하나를 기다리는 한도(기본 10분)다.
+//   --autofix 는 LLM 없이 결정적으로 고칠 수 있는 규칙(제목 이모지·상태 기호·날짜·MR 번호, 헤딩 기호)만 고친다(writing-autofix).
+//    dry-run 만 한다 — 반영은 그 리포트를 --apply-from 으로 넘긴다. --concurrency 로 조회를 병렬로 돌릴 수 있다.
+//   --all 은 적격 문서 전부를 대상으로 한다(--limit 없이 끝까지).
 //   --max-minutes N 은 시작 후 N분이 지나면 새 문서를 꺼내지 않고, 진행 중인 문서만 끝낸 뒤 정상 종료한다(--resume 으로 이어 한다).
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
@@ -24,17 +27,19 @@ import { llmRequestId, llmDirExchange, initLlmDir, markLlmDirFinished } from "./
 
 const DIST = fileURLToPath(new URL("../dist/", import.meta.url));
 const gatePath = join(DIST, "v6/writing-rewrite-gate.js");
+const autofixPath = join(DIST, "v6/writing-autofix.js");
 const fmtPath = join(DIST, "org/policies/writing-format.js");
-if (!existsSync(gatePath) || !existsSync(fmtPath)) {
+if (!existsSync(gatePath) || !existsSync(fmtPath) || !existsSync(autofixPath)) {
   console.error(`빌드 산출물이 없습니다(${gatePath}). 먼저 빌드하세요.`);
   process.exit(2);
 }
 const { isEligible, checkRewrite, checkInvariants, splitSections, sectionFindings, sectionHeadingOk, REWRITE_BODY_MAX_CHARS, normalizeJudgement, meaningVerdict, meaningFeedback } = await import(pathToFileURL(gatePath).href);
 const { resolveWritingFormat } = await import(pathToFileURL(fmtPath).href);
+const { autofixWriting, autofixBlocking } = await import(pathToFileURL(autofixPath).href);
 
 // ── 인자 ──
 function parseArgs(argv) {
-  const a = { apply: false, model: "sonnet", llmCmd: "claude", names: null, limit: null, rankTop: null, rankOnly: false, resume: false, report: null, attempts: 3, concurrency: 1, llmDir: null, maxMinutes: null, llmTimeoutMin: null };
+  const a = { apply: false, model: "sonnet", llmCmd: "claude", names: null, limit: null, rankTop: null, rankOnly: false, resume: false, report: null, attempts: 3, concurrency: 1, llmDir: null, maxMinutes: null, llmTimeoutMin: null, autofix: false, all: false };
   let llmCmdGiven = false;
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
@@ -44,6 +49,8 @@ function parseArgs(argv) {
       return v;
     };
     if (k === "--apply") a.apply = true;
+    else if (k === "--autofix") a.autofix = true;
+    else if (k === "--all") a.all = true;
     else if (k === "--names") a.names = val();
     else if (k === "--apply-from") a.applyFrom = val();
     else if (k === "--limit") a.limit = Number(val());
@@ -68,7 +75,10 @@ function parseArgs(argv) {
   if (a.llmTimeoutMin != null && !(Number.isFinite(a.llmTimeoutMin) && a.llmTimeoutMin > 0)) { console.error("--llm-timeout-min 은 양수여야 합니다"); process.exit(2); }
   if (a.llmDir && llmCmdGiven) { console.error("--llm-dir 과 --llm-cmd 는 함께 쓸 수 없습니다"); process.exit(2); }
   if (a.rankOnly && a.rankTop == null) { console.error("--rank-only 는 --rank-top 과 함께 써야 합니다"); process.exit(2); }
-  if (!a.names && !a.applyFrom && a.limit == null && a.rankTop == null) { console.error("--names <파일>, --limit N, --rank-top N, --apply-from <report> 중 하나가 필요합니다"); process.exit(2); }
+  // 결정적 정리는 dry-run 리포트를 사람이 훑은 뒤 --apply-from 으로만 반영한다 — 한 번에 수천 건을 고치는 모드라 바로 저장하지 않는다.
+  if (a.autofix && (a.apply || a.applyFrom)) { console.error("--autofix 는 dry-run 만 합니다. 반영은 그 리포트를 --apply-from 으로 넘기세요"); process.exit(2); }
+  if (a.all && (a.names || a.limit != null || a.rankTop != null)) { console.error("--all 은 --names·--limit·--rank-top 과 함께 쓸 수 없습니다"); process.exit(2); }
+  if (!a.names && !a.applyFrom && !a.all && a.limit == null && a.rankTop == null) { console.error("--names <파일>, --limit N, --rank-top N, --all, --apply-from <report> 중 하나가 필요합니다"); process.exit(2); }
   return a;
 }
 const args = parseArgs(process.argv.slice(2));
@@ -472,7 +482,9 @@ async function saveRewrite(name, k, after, rules, withAfter) {
     method: "POST",
     body: JSON.stringify({
       name, mode: "replace", title: after.title, body_md: after.body_md,
-      change_note: `서술 형식 자동 정리 — 의미 보존 검사 통과(규칙: ${rules.join(", ")})`,
+      change_note: withAfter.mode === "autofix"
+        ? `서술 형식 자동 정리 — 기호 삭제·제목 날짜와 번호를 본문 첫 줄로 이동, 불변식 검사 통과(규칙: ${rules.join(", ")})`
+        : `서술 형식 자동 정리 — 의미 보존 검사 통과(규칙: ${rules.join(", ")})`,
     }),
   });
   if (!save.ok) return { ...withAfter, status: "failed", reason: `save: ${apiError(save)}` };
@@ -493,6 +505,7 @@ async function processOne(name, fmt) {
   if (!el.eligible) return { ...common, status: "skipped", reason: el.reason, rules: [] };
   const rules = el.targetRules;
 
+  if (args.autofix) return processAutofix(k, fmt, common);
   if (el.mode === "sections") return processSections(k, el, fmt, common);
   const src = { title: k.title, body_md: k.body_md };
   const { after, attempts, lastCand } = await rewriteLoop(src, el.findings, fmt.guide_md,
@@ -507,6 +520,28 @@ async function processOne(name, fmt) {
 
   if (!args.apply) return { ...withAfter, ...dryBody, status: "passed_dry" };
   return saveRewrite(name, k, after, rules, withAfter);
+}
+
+/**
+ * 결정적 정리 — LLM 없이 고치고 재작성 게이트의 기계 검사(불변식·새 위반)만 본다. 의미 판정을 하지 않는 근거는 고치는 방식이
+ *  지우기와 «제목 조각을 글자 그대로 첫 줄 괄호로 옮기기» 뿐이라 불변식이 그 보존을 글자 단위로 대조하기 때문이다.
+ *  남은 다른 규칙(lead_missing 등)은 LLM 재작성 몫이라 막지 않고 remaining 으로 남긴다.
+ */
+function processAutofix(k, fmt, common) {
+  const src = { title: k.title, body_md: k.body_md };
+  const r = autofixWriting(src, fmt);
+  const held = r.held.length ? { held: r.held } : {};
+  if (!r.fixed.length) return { ...common, mode: "autofix", status: "skipped", reason: r.held.length ? `held:${[...new Set(r.held.map((h) => h.reason))].join(",")}` : "nothing_to_autofix", rules: [], ...held };
+  const after = { title: r.title, body_md: r.body_md };
+  const all = checkRewrite(src, after, fmt).violations;
+  const blocking = autofixBlocking(all, r.fixed);
+  const remaining = [...new Set(all.filter((v) => v.kind.startsWith("lint:") && !blocking.includes(v)).map((v) => v.kind.slice(5)))];
+  const row = {
+    ...common, mode: "autofix", rules: r.fixed, ...held, ...(remaining.length ? { remaining } : {}),
+    after_title: after.title, after_body: after.body_md, chars_after: chars(after.body_md),
+  };
+  if (blocking.length) return { ...row, status: "rejected", reason: "check", violations: blocking };
+  return { ...row, status: "passed_dry" };
 }
 
 /**
@@ -526,9 +561,12 @@ async function applyFromReport(file, fmt, skip = new Set()) {
     else {
       const src = { title: k.title, body_md: k.body_md };
       const after = { title: r.after_title, body_md: r.after_body };
-      const v = checkRewrite(src, after, fmt).violations.filter((x) => r.mode !== "sections" || !x.kind.startsWith("lint:"));
+      const all = checkRewrite(src, after, fmt).violations;
+      // 섹션 재작성은 남은 형식 위반을 partial 로 허용하고, 결정적 정리는 고쳤다고 한 규칙만 본다 — 처음 판정과 같은 기준이다.
+      const v = r.mode === "autofix" ? autofixBlocking(all, r.rules ?? [])
+        : all.filter((x) => r.mode !== "sections" || !x.kind.startsWith("lint:"));
       if (v.length) row = { name: r.name, status: "rejected", reason: "recheck", violations: v };
-      else row = await saveRewrite(r.name, k, after, r.rules ?? [], { name: r.name, version: k.version, rules: r.rules ?? [] });
+      else row = await saveRewrite(r.name, k, after, r.rules ?? [], { name: r.name, version: k.version, rules: r.rules ?? [], ...(r.mode ? { mode: r.mode } : {}) });
     }
     appendFileSync(args.report, `${JSON.stringify(row)}\n`);
     out[row.status] = (out[row.status] ?? 0) + 1;
@@ -569,7 +607,7 @@ else if (args.rankTop != null) {
     for (const [i, p] of picked.entries()) console.log(`${String(i + 1).padStart(3)} ${String(p.score).padStart(8)} ${p.is_wiki ? "wiki" : "    "} in=${p.incoming} ${p.name}`);
     process.exit(0);
   }
-} else names = await pickCandidates(fmt, args.limit);
+} else names = await pickCandidates(fmt, args.all ? Infinity : args.limit);
 
 // 같은 이름이 두 번 들어오면 병렬로 같은 문서를 두 번 고치고, 파일 교환 요청 id 도 겹친다.
 names = [...new Set(names)];
@@ -579,7 +617,7 @@ if (args.resume) {
   names = names.filter((n) => !done.has(n));
   console.error(`이어 하기 — 이미 처리된 ${before - names.length}건을 건너뛴다`);
 } else writeFileSync(args.report, "");
-console.log(`대상 ${names.length}건 · ${args.apply ? "적용" : "dry-run"} · 형식=${fromOrg ? "조직 설정" : "제품 기본값"} · 모델=${args.model}`);
+console.log(`대상 ${names.length}건 · ${args.apply ? "적용" : "dry-run"} · ${args.autofix ? "결정적 정리(LLM 없음)" : `모델=${args.model}`} · 형식=${fromOrg ? "조직 설정" : "제품 기본값"}`);
 
 const counts = {};
 let totalCalls = 0;
