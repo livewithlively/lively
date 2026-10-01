@@ -25,7 +25,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { dumpDom, findChrome } from "./headless-chrome.mjs";
+import { dumpDom, findChrome, readOut } from "./headless-chrome.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const chrome = findChrome();
@@ -109,9 +109,9 @@ const PAGE = `<!doctype html><meta charset="utf-8"><style>
 </script>`;
 
 const dom = await dumpDom(chrome, { html: PAGE, prefix: "ctx-stays-open-", virtualTimeBudget: 8000 });
-const m = dom.match(/<pre id="out">([\s\S]*?)ENDRESULT/);
-if (!m) { console.error("FAIL  결과 표지를 못 받았다\n" + dom.slice(0, 600)); process.exit(1); }
-const R = JSON.parse(m[1].trim());
+const res = readOut(dom);
+if (res.text === null) { console.error(`FAIL  결과 표지를 못 받았다(out=${JSON.stringify(res.out)})\n` + dom.slice(0, 600)); process.exit(1); }
+const R = JSON.parse(res.text.trim());
 let fails = 0;
 const check = (k, why) => { const ok = R[k] === true; console.log(`${ok ? "ok  " : "FAIL"}  ${k} — ${why}`); if (!ok) fails++; };
 check("w_menu_opens", "(배선) 메뉴가 실제로 뜬다");

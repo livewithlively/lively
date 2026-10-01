@@ -35,7 +35,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { buildSync } from "esbuild";
-import { dumpDom, findChrome } from "./headless-chrome.mjs";
+import { dumpDom, findChrome, readOut } from "./headless-chrome.mjs";
 
 const ROOT = process.env.SRC_ROOT || path.resolve(import.meta.dirname, "..");
 const chrome = findChrome();
@@ -214,9 +214,9 @@ ${CSS.map((f) => `<link rel="stylesheet" href="${path.basename(f)}">`).join("")}
 <script type="text/plain" id="pfsrc">${bundle.replace(/<\/script/gi, "<\\/script")}</script>
 <script>(${PAGE_MAIN.toString()})().catch(function (e) { document.getElementById('out').textContent = JSON.stringify({ fatal: String(e && e.stack || e) }) + 'ENDRESULT'; });</script>`;
 const dom = await dumpDom(chrome, { html: PAGE, copy: CSS, prefix: "pane-shell-", virtualTimeBudget: 120000, args: ["--window-size=1400,900"] });
-const mres = /<pre id="out">([\s\S]*?)ENDRESULT/.exec(dom);
-if (!mres) { console.error("FAIL  페이지가 결과를 안 냈다\n" + dom.slice(0, 1500)); process.exit(1); }
-const R = JSON.parse(mres[1].replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&"));
+const res = readOut(dom);
+if (res.text === null) { console.error(`FAIL  페이지가 결과를 안 냈다(out=${JSON.stringify(res.out)})\n` + dom.slice(0, 1500)); process.exit(1); }
+const R = JSON.parse(res.text);
 if (process.env.DEBUG) console.log(JSON.stringify(R, null, 1));
 
 let pass = 0, fail = 0;

@@ -73,3 +73,23 @@ export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", p
     catch (e) { console.log(`note  임시 디렉터리를 못 지웠습니다(${e.code}) — ${dir}`); }
   }
 }
+
+/**
+ * dump 된 DOM 에서 `<pre id="out">` 의 결과 본문을 꺼내 엔티티를 되돌린다.
+ *  ⚠ 본문은 `[^<]` 로만 잡는다 — `[\s\S]*?` 로 잡으면 페이지가 결과를 쓰기 전에 덤프됐을 때(본문이 아직 PENDING)
+ *   `</pre>` 를 넘어 인라인 스크립트 속 marker 문자열까지 건너가 그 사이 HTML 을 결과로 집는다. 그러면 «결과 없음» 이
+ *   JSON 파싱 오류로 둔갑해 원인을 가린다. 텍스트 노드의 `<` 는 직렬화에서 `&lt;` 가 되므로 결과 본문에 `<` 는 없다.
+ * @returns {{ text: string | null, out: string | null }} text = 결과 본문(marker 앞까지) · 못 찾으면 null 이고
+ *   out 에 `<pre id="out">` 의 지금 내용(예: "PENDING")을 실어 호출자가 실패 사유로 쓰게 한다.
+ */
+export function readOut(dom, marker = "ENDRESULT") {
+  const esc = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = new RegExp(`<pre id="out">([^<]*?)${esc}`).exec(dom);
+  if (m) return { text: decodeText(m[1]), out: null };
+  const p = /<pre id="out">([^<]*)/.exec(dom);
+  return { text: null, out: p ? decodeText(p[1]) : null };
+}
+
+function decodeText(s) {
+  return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, "\u00a0").replace(/&amp;/g, "&");
+}

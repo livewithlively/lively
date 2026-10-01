@@ -41,7 +41,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildSync } from "esbuild";
-import { dumpDom, findChrome } from "./headless-chrome.mjs";
+import { dumpDom, findChrome, readOut } from "./headless-chrome.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SRC_ROOT = process.env.SRC_ROOT ? path.resolve(process.env.SRC_ROOT) : ROOT;
@@ -393,10 +393,9 @@ ${CSS.map((f) => `<link rel="stylesheet" href="${path.basename(f)}">`).join("")}
 
 if (process.env.DUMP_PAGE) { const fs = await import("node:fs"); fs.writeFileSync(process.env.DUMP_PAGE, PAGE); for (const f of CSS) fs.copyFileSync(f, path.join(path.dirname(process.env.DUMP_PAGE), path.basename(f))); }
 const dom = await dumpDom(chrome, { html: PAGE, copy: CSS, prefix: "omni-search-", virtualTimeBudget: 90000 });
-const m = /<pre id="out">([\s\S]*?)ENDRESULT/.exec(dom);
-if (!m) { console.error("FAIL  결과 표지를 못 받았다\n" + dom.slice(0, 1500)); process.exit(1); }
-const txt = m[1].replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
-const R = JSON.parse(txt);
+const res = readOut(dom);
+if (res.text === null) { console.error(`FAIL  결과 표지를 못 받았다(out=${JSON.stringify(res.out)})\n` + dom.slice(0, 1500)); process.exit(1); }
+const R = JSON.parse(res.text);
 if (process.env.DEBUG) console.log(JSON.stringify(R, null, 1));
 
 let pass = 0, fail = 0;
