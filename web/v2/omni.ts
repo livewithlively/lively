@@ -396,7 +396,7 @@ export function omniOpen(seed?: string): void {
     if (!bits.length && h.ident) bits.push(el('code', { class: 'v2-omni-key' }, ...hl(/^[0-9]+$/.test(h.ident) ? '#' + h.ident : h.ident)));
     return bits.length ? el('span', { class: 'v2-omni-s' }, ...bits) : null;
   }
-  /** 관련도순 맨 위 묶음 — 종류를 가로질러 가장 맞는 것(최신순에선 앞 셋이 «가장 맞는 결과»). 순서 규칙은 아래 주석 그대로. */
+  /** 관련도순 맨 위 묶음 — 종류를 가로질러 가장 맞는 것(최신순의 «가장 맞는 결과» 는 이 순서에서 글자로 맞은 것만 앞 셋). 순서 규칙은 아래 주석 그대로. */
   function relTop(): Hit[] {
     // ── 관련도순 — 상민님 "가장 정확도 높은 게 먼저 뜨는 게 맞지 않아?" (2026-08-24) ─────────────
     //  들어가는 것: **제목이 그대로 맞은 것**(모든 채널) + **절대 코사인이 컷오프를 넘은 것**(지식·프로젝트).
@@ -451,14 +451,19 @@ export function omniOpen(seed?: string): void {
     };
     if (sortMode === 'recent' && qTokens.length) {
       // ── 최신순(#4517) — 슬랙 «Recent» + «Top Results» ──────────────────────────────────────
-      //  맨 위에 관련도순 앞 셋(«가장 맞는 결과») — 이름·번호로 부른 것(호명)이 최신순에서도 첫 줄에 선다.
-      //  그 아래는 **글자로 맞은 것 전부**(lex)를 시각 역순으로, 날짜 묶음으로 끊어서. 의미검색만으로 온 것은 여기 안 선다 —
+      //  맨 위에 «가장 맞는 결과» 셋(관련도 순서에서 글자로 맞은 것만) — 이름·번호로 부른 것(호명)이 최신순에서도 첫 줄에 선다.
+      //  그 아래는 **글자로 맞은 것 전부**(lex)를 시각 역순으로, 날짜 묶음으로 끊어서. 의미검색만으로 온 것은 어디에도 안 선다 —
       //   «최근에 고친, 조금 비슷한 문서» 가 정확히 그 낱말이 든 문서를 밀어내면 최신순이 아니라 잡음이다(슬랙 Recent 도 모든 낱말 일치).
       //  화면(앱)은 시각이 없어 맨 아래 따로.
-      const best = relTop().slice(0, 3);
+      //  ⚠ 맨 위 셋도 **글자로 맞은 것**(호명 · 제목 · 본문)에서만 고르고, **거른 뒤에** 셋을 자른다 — 관련도 순서 앞 셋을 그대로 쓰면
+      //   제목 적중이 셋이 안 될 때 코사인만 넘은 무관한 문서가 «가장 맞는 결과» 로 섰다(매니지드 실측 2026-10-01: «세션의 대화내용으로도»
+      //   에 무관한 프로젝트 둘 · 지식 하나 — 매니지드 bge-m3 는 무관한 문서에도 0.49~0.66 을 준다, #4530 점검). 자른 뒤에 거르면
+      //   무관한 셋이 자리를 다 먹어 글자로 맞은 문서까지 빠진다.
+      const textHit = (h: Hit): boolean => !!h.lex || isTitleHit(h) || isIdentHit(h);
+      const best = relTop().filter(textHit).slice(0, 3);
       const bestKeys = new Set(best.map((h) => h.key));
       draw('가장 맞는 결과', best);
-      const timeline = hits.filter((h) => h.kind !== 'app' && !bestKeys.has(h.key) && (h.lex || isTitleHit(h) || isIdentHit(h)))
+      const timeline = hits.filter((h) => h.kind !== 'app' && !bestKeys.has(h.key) && textHit(h))
         .sort(byRecent).slice(0, 60);
       let bucket = '';
       let group: Hit[] = [];

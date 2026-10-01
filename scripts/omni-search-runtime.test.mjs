@@ -23,6 +23,8 @@
 //  F16 밀린 색인 수를 서버가 못 셌으면(pending null) 그 사실을 말한다(재검토)
 //  F17 서버 오류(500 internal_error)는 읽을 수 있는 말로 — 코드값이 안내 줄에 그대로 서지 않는다(재검토)
 //  F18 창을 닫으면 진행 중인 대화 요청을 끊는다(재검토 — 닫아도 낡은 검색이 서버 연결을 쥐던 것)
+//  F19 최신순 맨 위 «가장 맞는 결과» 도 글자로 맞은 것에서만 — 제목 적중이 셋이 안 되면 코사인만 넘은 무관한 문서가 서던 것
+//      (매니지드 실측 2026-10-01: «세션의 대화내용으로도» 에 무관한 프로젝트 둘 · 지식 하나)
 //  W   모든 장면을 통틀어 페이지 오류 0 · 배선(가짜 서버가 실제로 불렸다)
 //
 // 왜 런타임인가: 결함이 «어느 채널을 부르나 · 어떤 줄이 어느 묶음에 어떤 순서로 서나 · 누르면 어디로 가나 · Esc 가 누구 것인가»
@@ -79,9 +81,18 @@ async function PAGE_MAIN() {
     { name: "k-memo", title: "검색 개선 메모", similarity: 0.65, updated_at: put("검색 개선 메모", TODAY) },   // 의미로만 왔다(제목에 «슬랙» 없음)
     { name: "k-alarm", title: "슬랙 알림", similarity: 0.62, updated_at: put("슬랙 알림", NOW - 10 * D) },
   ];
+  //  코사인만 높은 무관한 문서 셋(0.78~0.80) — F19(«메모» 가 든 질의)에서만 온다. 셋 다 «글자로 맞은 문서»(0.70)보다 위라
+  //   «앞 셋을 자른 뒤 거르기» 로 고치면 맨 위가 비어 드러난다(재검토 지적: 거르는 순서를 시험이 못 가렸다).
+  const SIM_NOISE = [
+    { name: "k-onb", title: "온보딩 플로우 직무 분류", similarity: 0.80, updated_at: iso(NOW - 2 * D) },
+    { name: "k-ds", title: "디자인 시스템 토큰 정리", similarity: 0.79, updated_at: iso(NOW - 4 * D) },
+    { name: "k-dock", title: "도커를 완전히 걷어 낸 기록", similarity: 0.78, updated_at: iso(NOW - 6 * D) },
+  ];
   const GREP = [
     { name: "k-minutes", title: "회의록 정리", snippet: "L3: 슬랙 이야기를 했다", updated_at: put("회의록 정리", TODAY - 60_000) },   // 본문에서만 맞음
     { name: "k-link", title: "슬랙 연동", snippet: "L1: 슬랙", updated_at: iso(AT["슬랙 연동"]) },
+    //  의미로도(SIM 0.70) 글자로도 맞는 문서 — F19 에서 «가장 맞는 결과» 에 남아야 하는 쪽(제목엔 «메모» 가 없다)
+    { name: "k-design", title: "슬랙 검색 설계", snippet: "L2: 슬랙 메모 정리", updated_at: iso(AT["슬랙 검색 설계"]) },
     //  ⚠ 채널이 오는 순서가 시각 순이 아니게 둔다 — 이 오래된 것이 뒤의 대화 채널(오늘 것)보다 먼저 온다. 정렬이 빠지면 드러난다.
     { name: "k-weekly", title: "주간 보고", snippet: "L9: 슬랙 알림 정리", updated_at: put("주간 보고", NOW - 5 * D) },
   ];
@@ -107,7 +118,7 @@ async function PAGE_MAIN() {
     const q = u.searchParams.get("q") || u.searchParams.get("text") || "";
     const hit = q.includes("슬랙");
     const p = u.pathname;
-    if (p.endsWith("/api/ui/knowledge/similar")) return J({ entries: hit ? SIM : [] });
+    if (p.endsWith("/api/ui/knowledge/similar")) return J({ entries: hit ? (q.includes("메모") ? [...SIM, ...SIM_NOISE] : SIM) : [] });
     if (p.endsWith("/api/ui/knowledge/semantic")) return J({ entries: [] });
     if (p.endsWith("/api/ui/knowledge/search")) return J({ entries: hit ? GREP : [] });
     if (/\/api\/ui\/v6\/projects\/(similar|semantic|search)$/.test(p)) return J({ projects: [] });
@@ -277,6 +288,17 @@ async function PAGE_MAIN() {
     await sleep(80);
     R.hangAborted = HANG_ABORTED;
     CONV_HANG = false;
+
+    // ── F19 최신순 · 전체 기간 · 제목 적중 없는 질의(«슬랙 메모» — 두 낱말이 다 든 제목은 없다) ──
+    if (!OM.omniIsOpen()) OM.omniOpen();
+    $(".v2-omni-period")?.click();
+    await waitFor(() => !!$(".pn-ctx"));
+    [...document.querySelectorAll(".pn-ctx .pn-ctx-i")].find((b) => b.textContent.includes("전체 기간"))?.click();
+    await sleep(120);
+    R.f19Period = $(".v2-omni-period")?.textContent || "";
+    R.f19Sort = [...document.querySelectorAll(".v2-omni-segb.on")].map((b) => b.textContent);
+    await search("슬랙 메모");
+    R.f19 = shape();
   } catch (e) { R.err = String(e && e.stack || e); }
 
   R.pageErrors = pageErrors;
@@ -394,6 +416,17 @@ check(/서버에 오류가 났습니다/.test(R.err500Note || "") && !/internal_
   "F17 500 internal_error 는 읽을 수 있는 말로 — 코드값이 안내 줄에 서지 않는다", JSON.stringify(R.err500Note));
 // F18
 check(R.hangStarted >= 1 && R.hangAborted === true, "F18 창을 닫으면 진행 중인 대화 요청을 끊는다", JSON.stringify({ s: R.hangStarted, a: R.hangAborted }));
+// F19
+{
+  const sh = R.f19 || [];
+  const top = (sh[0] && sh[0].h === "가장 맞는 결과") ? sh[0].rows.map((r) => r.t) : [];
+  const all = titles(sh);
+  check((R.f19Period || "").trim() === "기간" && JSON.stringify(R.f19Sort) === '["최신순"]' && all.length >= 2,
+    "F19 배선 — 최신순 · 전체 기간에서 줄이 섰다", JSON.stringify({ p: R.f19Period, s: R.f19Sort, all }));
+  check(!all.includes("검색 개선 메모") && !all.includes("슬랙 알림") && !all.some((t) => /온보딩 플로우|디자인 시스템|도커를/.test(t)),
+    "F19 최신순 어디에도(맨 위 셋 포함) 코사인만으로 온 문서가 서지 않는다", JSON.stringify({ top, all }));
+  check(top.includes("슬랙 검색 설계"), "F19 글자로도 맞은 문서(코사인 + 본문 적중)는 맨 위 셋에 남는다", JSON.stringify(top));
+}
 // W
 check(Array.isArray(R.pageErrors) && R.pageErrors.length === 0, "W 페이지 오류 0", JSON.stringify(R.pageErrors));
 
