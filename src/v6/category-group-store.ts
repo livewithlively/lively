@@ -19,7 +19,7 @@ import crypto from "node:crypto";
 import { itemsPool, q, one, withTx } from "../db/client.js";
 import { HttpError } from "../http-error.js";
 import { auditOrgContent, type WriteCtx } from "./content-audit.js";
-import { groupKeyForPrinciple, groupSetFor, principleForName, type GroupDef } from "./category-groups.js";
+import { groupKeyForName, groupSetFor, type GroupDef } from "./category-groups.js";
 
 const GROUP_COLS = `id, key, name, hint, sort, state, origin`;
 
@@ -68,7 +68,7 @@ export interface GroupAssignPlan {
 export function planGroupAssign(
   input: { group?: string | null; groupKeys: string[]; creating?: boolean },
 ): GroupAssignPlan {
-  //  ★ 하드 규칙(원준 2026-09-12): «모든 카테고리가 하드하게 저 셋 중 하나로 들어간다».
+  //  ★ 하드 규칙(원준 2026-09-12): «모든 카테고리가 하드하게 저 셋 중 하나로 들어간다» — v8(#1812)부터 칸은 자리마다 3~5개.
   //   그래서 **묶음이 하나라도 있는 워크스페이스**에서는 (a) 묶음 없이 카테고리를 만들 수 없고
   //   (b) 이미 든 카테고리를 묶음 밖으로 뺄 수 없다. 지시문에 맡기지 않고 여기서 막는다 —
   //   리브도 사람도 REST 도 이 한 자리를 지난다. 묶음이 아직 0개인 워크스페이스(옛 판)는 종전대로 둔다.
@@ -141,20 +141,23 @@ export function planGroupSeed(
  *  (원준 2026-09-12 «모든 카테고리가 하드하게 셋 중 하나»). 새로 만드는 카테고리는 planGroupAssign 이 400 으로 막지만,
  *  **묶음보다 먼저 생긴 카테고리**(계정 서버가 심은 기본 카테고리 · 처음 설정 서랍 · 코드 스캔이 만든 축)는 막을 자리가 없었다 —
  *  실측(lively-agent-2-6a84): 그런 카테고리는 아무도 묶음에 넣지 않았다.
- *  · 대상: group_key 가 비었거나 **지금 없는 묶음**을 가리키는(고아) 카테고리. 칸은 이름 규칙(principleForName)으로 고른다.
+ *  · 대상: group_key 가 비었거나 **지금 없는 묶음**을 가리키는(고아) 카테고리. 칸은 이름 규칙(groupKeyForName — 지금 묶음이
+ *    어느 집합 그대로면 그 집합의 낱말·받침 칸, 사람이 이름을 고쳤으면 묶음 이름의 낱말)으로 고른다.
  *  · 이미 있는 묶음에 든 카테고리는 **건드리지 않는다** — 리브가 자료를 읽고 넣었거나 사람이 옮긴 것을 이름 규칙이 되돌리면 안 된다.
  *  · 묶음이 0개면 빈 계획(옛 판 — 넣을 곳이 없다).
  */
 export function planGroupPlacement(input: {
   categories: Array<{ key: string; name?: string | null; group_key?: string | null }>;
-  groupKeys: readonly string[];
+  /** 지금 있는 묶음 — 화면 순서(sort→key)대로. 뜻(hint)이 있으면 이름을 고친 칸도 원래 자리로 알아본다. */
+  groups: ReadonlyArray<{ key: string; name: string; hint?: string | null }>;
 }): Array<{ key: string; group_key: string }> {
-  if (!input.groupKeys.length) return [];
+  if (!input.groups.length) return [];
+  const keys = input.groups.map((g) => g.key);
   const out: Array<{ key: string; group_key: string }> = [];
   for (const c of input.categories) {
     const cur = String(c.group_key ?? "").trim();
-    if (cur && input.groupKeys.includes(cur)) continue;
-    const target = groupKeyForPrinciple(principleForName(c.name), input.groupKeys);
+    if (cur && keys.includes(cur)) continue;
+    const target = groupKeyForName(c.name, input.groups);
     if (target) out.push({ key: c.key, group_key: target });
   }
   return out;
@@ -304,12 +307,13 @@ export async function removeCategoryGroup(
  *  감사는 카테고리 행으로 남긴다(setCategoryGroup 과 같은 동작 이름 set_group — 바뀐 것이 카테고리 행이다).
  */
 export async function placeUngroupedCategories(ctx?: WriteCtx): Promise<Array<{ key: string; group_key: string }>> {
-  const groupKeys = await activeGroupKeys();
-  if (!groupKeys.length) return [];
+  const groups: Array<{ key: string; name: string; hint: string | null }> = await q(itemsPool,
+    `SELECT key, name, hint FROM category_group WHERE state='active' ORDER BY sort, key`);
+  if (!groups.length) return [];
   const cats: Array<{ key: string; name: string | null; group_key: string | null }> = await q(itemsPool,
     `SELECT key, name, group_key FROM category WHERE state<>'merged' ORDER BY key`);
   const placed: Array<{ key: string; group_key: string }> = [];
-  for (const p of planGroupPlacement({ categories: cats, groupKeys })) {
+  for (const p of planGroupPlacement({ categories: cats, groups })) {
     const row = await one(itemsPool,
       `UPDATE category SET group_key=$2, updated_at=now()
          WHERE key=$1 AND state<>'merged'
@@ -325,8 +329,8 @@ export async function placeUngroupedCategories(ctx?: WriteCtx): Promise<Array<{ 
 
 /**
  * 처음 설정용 시드 — **멱등**. active 묶음이 하나라도 있으면 새로 심지 않는다.
- *  없으면 groupSetFor(stage, job) 의 세 칸을 sort 0..n 으로 넣는다(origin='welcome').
- *  ⚠ 룰 테이블은 어느 경로로 와도 세 갈래를 다 덮는다 — 「기타」 묶음이 없는 이유다(category-groups.ts).
+ *  없으면 groupSetFor(stage, job) 의 칸(3~5)을 sort 0..n 으로 넣는다(origin='welcome').
+ *  ⚠ 룰 테이블은 어느 경로로 와도 판정 질문·전순서·받침 칸을 갖춘 집합을 준다 — 「기타」 묶음이 없는 이유다(category-groups.ts).
  *  ★ 심었든 이미 있었든 **묶음 밖 카테고리를 남기지 않는다**(placeUngroupedCategories) — 계정 서버가 심은 기본 카테고리와
  *   처음 설정 서랍은 묶음보다 먼저 생긴다. 이 한 줄이 없어서 그 카테고리들이 «묶음을 정해 주세요» 에 남았다(2026-09-14 실측).
  */

@@ -5,7 +5,7 @@ import {
   decideSecondTurn, buildSecondTurnPrompt, turnGroupInputs, SECOND_TURN_MAX_WAIT_MS, TURN1_DELIVERY_TTL_MS,
   type SecondTurnState, type SecondTurnInput,
 } from "./second-turn.js";
-import { GROUP_SETS } from "../../v6/category-groups.js";
+import { GROUP_SETS, genericRuleLine, groupRuleLine, groupSetDefFor, groupSetFor } from "../../v6/category-groups.js";
 
 const DONE = Date.parse("2026-08-29T05:00:00Z");
 const st = (over: Partial<SecondTurnState> = {}): SecondTurnState => ({
@@ -80,8 +80,8 @@ const GROUPS = [
   { key: "plan", name: "정하는 일", hint: "무엇을 왜 만들기로 했는지" },
   { key: "align", name: "팀과 맞춘 것", hint: "사람과 오간 기록" },
 ];
-//  묶음이 없을 때 리브가 먼저 만들 세 칸 — 이 사람(디자인)의 룰 테이블 집합.
-const INTENDED = GROUP_SETS["디자인"].map(({ key, name, hint }) => ({ key, name, hint }));
+//  묶음이 없을 때 리브가 먼저 만들 칸 — 이 사람(디자인)의 룰 테이블 집합(v8: 디자인·콘텐츠·미디어).
+const INTENDED = groupSetFor(null, "디자인").map(({ key, name, hint }) => ({ key, name, hint }));
 const pin = (over: Partial<SecondTurnInput> = {}): SecondTurnInput => ({
   displayName: "수아", work: "회사·조직에서 팀과 함께 일한다 · 디자인", groups: GROUPS, intended: INTENDED, ungrouped: [], drawers: ["산출물", "기록"], firstOrder: "지난 시안 리뷰 피드백만 모아 줘",
   collectors: [{ label: "슬랙 #design", preset_key: "slack", enabled: true, ran: true }, { label: "노션", preset_key: "notion", enabled: true, ran: false }],
@@ -267,6 +267,24 @@ test("㉘ 시드 liv-distill 도 같은 단계를 갖는다 — 지시문과 스
   assert.match(b, /`group`/);
   assert.match(b, /새 묶음을 만들지 않는다/);
   assert.match(b, /화면에서만/);                        // 묶음이 분류·검색에 안 쓰인다는 경계
+  //  v8(#1812) — 기준은 자리마다 다르고 지시문의 «가르는 기준:» 줄을 따른다. 옛 보편 축 문장이 남으면 4·5칸 집합에서 리브가 칸을 잘못 고른다.
+  assert.doesNotMatch(b, /누가 만들었나|첫째 칸|둘째 칸|셋째 칸|세 칸/);
+  assert.match(b, /«가르는 기준:» 줄/);
+  assert.match(b, /카테고리는 그 안에 모일 자료 대부분이 해당하는 칸/);
+  assert.match(b, /내용이 대부분 한 칸이면 그 칸/);
+  assert.doesNotMatch(b, /본업 칸에 둔다/);              // 고루 걸칠 때의 자리는 지시문 줄이 정한다 — 스킬이 따로 정하면 줄과 어긋난다(R4)
+});
+test("㊳ 지시문이 «가르는 기준» 줄이 스킬보다 우선한다고 못박는다 — 옛 스킬이 남은 워크스페이스(v8 #1812)", () => {
+  const p = buildSecondTurnPrompt(pin());
+  assert.match(p, /«가르는 기준:» 줄이 스킬보다 우선한다/);
+  //  범위는 묶음 문장뿐 — 옛 스킬을 통째로 버리면 미리보기·증류 잡·catch-all 이 사라진다(R4).
+  assert.match(p, /그 문장들만/);
+  assert.match(p, /나머지 절차[^」]*그대로 따른다/);
+});
+test("㊴ 첫 지시 답에 source_link_knowledge 를 걸라고 하지 않는다 — 스킬(⛔)과 같은 말(R4)", () => {
+  const p = buildSecondTurnPrompt(pin());
+  assert.doesNotMatch(p, /`knowledge_save` \+ `source_link_knowledge`/);
+  assert.match(p, /`source_link_knowledge` 는 \*\*걸지 않는다\*\*/);
 });
 
 // ── 묶음(#1631, 2026-09-12 원준 결정) — 카테고리를 만들 때 묶음도 함께 정한다 ──────────────
@@ -289,7 +307,7 @@ test("㉛′ 이미 있는 카테고리를 쓸 때도 묶음이 비어 있으면
 });
 //  (#1631, 2026-09-14) ㉜ 를 뒤집는다 — 종전엔 «묶음이 없으면 단락을 싣지 않는다» 였고, 그 판에서 리브는 묶음 없는
 //   카테고리를 에러 없이 만들었다(실측 lively-agent-2-6a84: 서버의 하드 규칙은 묶음이 있어야 켜진다). 이제는 먼저 만들게 한다.
-test("㉜ 묶음이 아직 없으면 단락을 빼지 않고 «묶음부터 만든다» — 이 사람 직무의 세 칸을 그대로 싣는다", () => {
+test("㉜ 묶음이 아직 없으면 단락을 빼지 않고 «묶음부터 만든다» — 이 사람 자리의 칸을 그대로 싣는다", () => {
   const p = buildSecondTurnPrompt(pin({ groups: [] }));
   assert.match(p, /묶음부터 만든다/);
   assert.match(p, /`category_group_upsert`/);
@@ -297,6 +315,14 @@ test("㉜ 묶음이 아직 없으면 단락을 빼지 않고 «묶음부터 만�
   assert.match(p, /`group`/);                          // 만든 뒤엔 category_create 의 group 에 넣는다
   assert.doesNotMatch(p, /새 묶음을 만들지 마라/);        // 없는 묶음 안에서 고르라고 하지 않는다
   assert.ok(p.indexOf("category_group_upsert") < p.indexOf("org_distiller_upsert"), "묶음 만들기가 증류기 단계보다 뒤에 있다");
+  //  v8(#1812) — 가르는 기준은 그 자리의 판정 질문이다(보편 «누가 만들었나» 가 아니다).
+  assert.ok(p.includes(groupRuleLine(groupSetDefFor(null, "디자인"))), "그 자리의 판정 질문·받침 칸이 안 실렸다");
+  assert.doesNotMatch(p, /내 손에서 나온 것 →/);      // 옛 보편 축의 판정 문장이 묶음 기준으로 실리지 않는다
+});
+test("㊲ 사람이 이름을 고친 묶음이면 일반 기준 문장 — 어느 자리의 판정 질문도 지어 붙이지 않는다(v8 #1812)", () => {
+  const p = buildSecondTurnPrompt(pin());           // GROUPS = 사람이 만든 이름(정하는 일 · 팀과 맞춘 것)
+  assert.ok(p.includes(genericRuleLine(GROUPS)));
+  for (const set of Object.values(GROUP_SETS)) assert.ok(!p.includes(set.ask), "알아보지 못한 묶음에 어느 자리의 판정 질문이 붙었다");
 });
 test("㉝ 묶음 밖 카테고리가 있으면 이름을 싣고 0개로 끝내게 한다", () => {
   const p = buildSecondTurnPrompt(pin({ ungrouped: [{ key: "work", name: "업무 프로젝트" }, { key: "people", name: "사람·조직" }] }));
@@ -309,16 +335,16 @@ test("㉞ 묶음이 있고 묶음 밖이 없으면 종전 문구 그대로 — �
   assert.doesNotMatch(p, /묶음부터 만든다/);
   assert.doesNotMatch(p, /묶음 밖 카테고리 \d+개/);
 });
-test("㉟ 직무를 못 골라 intended 도 비었으면 기본 세 칸으로 — 그래도 단락은 빠지지 않는다", () => {
+test("㉟ 직무를 못 골라 intended 도 비었으면 기본 칸으로 — 그래도 단락은 빠지지 않는다", () => {
   const p = buildSecondTurnPrompt(pin({ groups: [], intended: [] }));
   assert.match(p, /묶음부터 만든다/);
-  for (const g of GROUP_SETS.default) assert.ok(p.includes(g.name), `기본 칸 ${g.name} 이 없다`);
+  for (const g of groupSetFor(null, null)) assert.ok(p.includes(g.name), `기본 칸 ${g.name} 이 없다`);
 });
-test("㊱ 2턴 묶음 재료 — 무대를 넘긴다: 학업인데 직무를 건너뛰었으면 학부생 세 칸(회사 기본이 아니다)", () => {
+test("㊱ 2턴 묶음 재료 — 무대를 넘긴다: 학업인데 직무를 건너뛰었으면 학업 칸(회사 기본이 아니다)", () => {
   const gi = turnGroupInputs({ stage: "study", workAsis: "학업·연구를 한다", sep: " · " });
-  assert.deepEqual(gi.intended.map((g) => g.name), GROUP_SETS["학부생"].map((g) => g.name));
+  assert.deepEqual(gi.intended.map((g) => g.name), groupSetFor(null, "수업·과제·팀플").map((g) => g.name));
   const gi2 = turnGroupInputs({ stage: "company", workAsis: "회사·조직에서 팀과 함께 일한다 · 디자인", sep: " · " });
   assert.equal(gi2.job, "디자인");
-  assert.deepEqual(gi2.intended.map((g) => g.name), GROUP_SETS["디자인"].map((g) => g.name));
-  assert.equal(turnGroupInputs({ stage: null, workAsis: null, sep: " · " }).intended.length, 3);   // 재료가 없어도 빈손 없음
+  assert.deepEqual(gi2.intended.map((g) => g.name), groupSetFor(null, "디자인·콘텐츠·미디어").map((g) => g.name));
+  assert.ok(turnGroupInputs({ stage: null, workAsis: null, sep: " · " }).intended.length >= 3);   // 재료가 없어도 빈손 없음
 });
