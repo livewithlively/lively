@@ -19,21 +19,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { planGroupAssign, planGroupPlacement, planGroupRemoval, planGroupSeed, groupKeyFrom } from "./category-group-store.js";
-import { GROUP_SETS } from "./category-groups.js";
+import { groupSetFor } from "./category-groups.js";
 
 const KEYS = ["build", "align", "metric"];
 
 test("① 묶음이 하나도 없으면 그 사람 직무의 집합을 시드한다", () => {
   const plan = planGroupSeed({ existing: [], stage: "company", job: "개발·데이터" });
   assert.equal(plan.skipped, false);
-  assert.deepEqual(plan.groups.map((g) => g.name), GROUP_SETS["개발·데이터"].map((g) => g.name));
-  //  옛 판 답(직무 9종)으로 남아 있는 사람도 같은 집합을 받는다 — 별칭이 끊기면 옛 사용자만 기본으로 떨어진다.
+  assert.deepEqual(plan.groups.map((g) => g.name), groupSetFor(null, "개발·IT·데이터").map((g) => g.name));
+  //  옛 판 답(직무 8종)으로 남아 있는 사람도 같은 집합을 받는다 — 별칭이 끊기면 옛 사용자만 기본으로 떨어진다.
   assert.deepEqual(planGroupSeed({ existing: [], stage: "company", job: "개발" }).groups.map((g) => g.name),
-    GROUP_SETS["개발·데이터"].map((g) => g.name));
+    groupSetFor(null, "개발·IT·데이터").map((g) => g.name));
   //  뜻이 함께 와야 한다 — 리브 2턴 지시문·화면 소제목이 이 문장을 그대로 싣는다.
   for (const g of plan.groups) assert.ok(g.hint.trim().length > 0, `${g.key}: 뜻이 비었다`);
   //  무대·직무를 모르면 default 집합 — 어느 경로로도 빈손이 없다.
-  assert.equal(planGroupSeed({ existing: [] }).groups.length, GROUP_SETS.default.length);
+  assert.equal(planGroupSeed({ existing: [] }).groups.length, groupSetFor(null, null).length);
 });
 
 test("② 이미 묶음이 있으면 아무것도 안 한다(멱등) — 사람이 고친 이름·순서를 덮지 않는다", () => {
@@ -141,29 +141,39 @@ test("⑮ 고치기(만들기 아님)는 group 을 안 줘도 통과한다 — �
 //  ── 묶음 밖 카테고리 배치(#1631, 2026-09-14) — «묶음이 있으면 어느 카테고리도 묶음 밖에 두지 않는다» ──────────
 //   엣지 표 B1~B7(scratchpad/spec.md). 계기: lively-agent-2-6a84 — 계정 서버가 심은 기본 카테고리는 묶음보다 먼저 생겨
 //   아무도 묶음에 넣지 않았다(새로 만드는 카테고리만 planGroupAssign 이 막았다).
-const G = ["g1", "g2", "g3"];
+//  v8(#1812): 배치는 묶음 **이름**까지 본다 — 지금 묶음이 어느 집합 그대로면 그 집합의 낱말·받침 칸, 고쳤으면 묶음 이름의 낱말.
+//   아래 표는 «자리를 모를 때»의 기본 집합(작업/주고받은 것/자료)으로 잰다 — 종전(누가 만들었나) 표와 같은 답이 나와야 한다.
+const GS = groupSetFor(null, null).map(({ key, name }) => ({ key, name }));
+const G = GS.map((g) => g.key);
 
 test("⑯ 묶음이 0개면 아무것도 넣지 않는다 — 옛 판 무회귀", () => {
-  assert.deepEqual(planGroupPlacement({ categories: [{ key: "q", name: "견적·계약", group_key: null }], groupKeys: [] }), []);
+  assert.deepEqual(planGroupPlacement({ categories: [{ key: "q", name: "견적·계약", group_key: null }], groups: [] }), []);
 });
 
 test("⑰ 이미 있는 묶음에 든 카테고리는 이름 규칙이 다시 옮기지 않는다 — 리브·사람이 넣은 칸을 되돌리지 않는다", () => {
   //  «리서치·자료» 는 규칙상 g3 지만 누군가 g1 에 넣었다 — 그대로 둔다.
-  assert.deepEqual(planGroupPlacement({ categories: [{ key: "r", name: "리서치·자료", group_key: "g1" }], groupKeys: G }), []);
+  assert.deepEqual(planGroupPlacement({ categories: [{ key: "r", name: "리서치·자료", group_key: "g1" }], groups: GS }), []);
 });
 
 test("⑱ 묶음 밖 카테고리는 이름 규칙대로 들어간다 — 빈 문자열 group_key 도 묶음 밖이다", () => {
-  assert.deepEqual(planGroupPlacement({ categories: [{ key: "q", name: "견적·계약", group_key: null }], groupKeys: G }), [{ key: "q", group_key: "g2" }]);
-  assert.deepEqual(planGroupPlacement({ categories: [{ key: "q", name: "견적·계약", group_key: "  " }], groupKeys: G }), [{ key: "q", group_key: "g2" }]);
+  assert.deepEqual(planGroupPlacement({ categories: [{ key: "q", name: "견적·계약", group_key: null }], groups: GS }), [{ key: "q", group_key: "g2" }]);
+  assert.deepEqual(planGroupPlacement({ categories: [{ key: "q", name: "견적·계약", group_key: "  " }], groups: GS }), [{ key: "q", group_key: "g2" }]);
 });
 
 test("⑲ 지금 없는 묶음을 가리키는 고아도 다시 넣는다", () => {
-  assert.deepEqual(planGroupPlacement({ categories: [{ key: "x", name: "인쇄·제작", group_key: "g9" }], groupKeys: G }), [{ key: "x", group_key: "g1" }]);
+  assert.deepEqual(planGroupPlacement({ categories: [{ key: "x", name: "인쇄·제작", group_key: "g9" }], groups: GS }), [{ key: "x", group_key: "g1" }]);
 });
 
 test("⑳ 규약 칸이 지워졌으면 순서상 첫 묶음 — 사람이 만든 key 뿐이어도 빈손 없음", () => {
-  assert.deepEqual(planGroupPlacement({ categories: [{ key: "r", name: "리서치·자료" }], groupKeys: ["g1", "g2"] }), [{ key: "r", group_key: "g1" }]);
-  assert.deepEqual(planGroupPlacement({ categories: [{ key: "s", name: "정산·세금" }], groupKeys: ["build", "align"] }), [{ key: "s", group_key: "build" }]);
+  //  g3 를 지웠다 → 남은 두 칸으로 기본 집합을 알아본다 → 낱말이 안 맞으니 받침 칸(g1).
+  assert.deepEqual(planGroupPlacement({ categories: [{ key: "r", name: "리서치·자료" }], groups: GS.slice(0, 2) }), [{ key: "r", group_key: "g1" }]);
+  assert.deepEqual(planGroupPlacement({ categories: [{ key: "s", name: "정산·세금" }], groups: [{ key: "build", name: "만든 것" }, { key: "align", name: "맞춘 것" }] }), [{ key: "s", group_key: "build" }]);
+  //  받침 칸이 g1 이 아닌 집합(개발: 받침 «시스템» g2) — 받침을 지웠으면 첫 묶음, 이름만 고쳤으면 그 자리(g2).
+  const dev = groupSetFor(null, "개발·IT·데이터").map(({ key, name }) => ({ key, name }));
+  assert.deepEqual(planGroupPlacement({ categories: [{ key: "h", name: "하네스" }], groups: dev.filter((g) => g.key !== "g2") }), [{ key: "h", group_key: "g1" }]);
+  assert.deepEqual(planGroupPlacement({ categories: [{ key: "h", name: "하네스" }], groups: dev.map((g) => g.key === "g2" ? { ...g, name: "아키텍처" } : g) }), [{ key: "h", group_key: "g2" }]);
+  //  사람이 이름을 고친 묶음 — 카테고리 이름에 묶음 이름의 낱말이 있으면 그 묶음.
+  assert.deepEqual(planGroupPlacement({ categories: [{ key: "m", name: "시장 조사" }], groups: [{ key: "g1", name: "우리 일" }, { key: "g2", name: "시장" }] }), [{ key: "m", group_key: "g2" }]);
 });
 
 test("㉑ lively-agent-2-6a84 재현 — 아홉 개가 섞여 있어도 배치 뒤 묶음 밖은 0개, 이미 든 것은 계획에 없다", () => {
@@ -173,7 +183,7 @@ test("㉑ lively-agent-2-6a84 재현 — 아홉 개가 섞여 있어도 배치 �
     { key: "brand", name: "브랜드 자산", group_key: "g1" },
     { key: "print", name: "인쇄·제작" }, { key: "quote", name: "견적·계약" }, { key: "tax", name: "정산·세금" },
   ];
-  const plan = planGroupPlacement({ categories: cats, groupKeys: G });
+  const plan = planGroupPlacement({ categories: cats, groups: GS });
   const after = cats.map((c) => plan.find((p) => p.key === c.key)?.group_key ?? c.group_key ?? null);
   assert.equal(after.filter((g) => !g || !G.includes(g)).length, 0, "묶음 밖이 남았다");
   assert.equal(plan.length, 8, "이미 묶음에 든 하나는 계획에 없어야 한다");

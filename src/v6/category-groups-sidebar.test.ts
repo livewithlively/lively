@@ -37,7 +37,7 @@ test("W1 묶음이 없으면 종전 한 카드(머리 없음, rank 순) · 분�
   assert.deepEqual(await plan({ cats: [], groups: G }), []);
 });
 
-test("W2 묶음이 있으면 묶음 순서대로 카드 한 장씩 — 빈 묶음도 선다(세 칸이 있다는 것 자체가 보여 줄 구조)", async () => {
+test("W2 묶음이 있으면 묶음 순서대로 카드 한 장씩 — 빈 묶음도 선다(칸들이 있다는 것 자체가 보여 줄 구조)", async () => {
   const cats: Cat[] = [{ id: 1, name: "브랜드 자산", key: "brand", group: "g1" }, { id: 2, name: "견적·계약", key: "quote", group: "g2" }];
   const p = await plan({ cats, groups: G });
   assert.deepEqual(p.map((c) => c.head?.name), ["콘텐츠", "집행", "시장"]);
