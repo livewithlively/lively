@@ -410,14 +410,29 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     stopDrag = () => end(false);
     grab.addEventListener('pointermove', move); grab.addEventListener('pointerup', up); grab.addEventListener('pointercancel', up);
   }
-  const onHeadDown = (e: PointerEvent): void => {
-    const t = e.target as HTMLElement | null;
-    if (!t || !shown()) return;
+  //  카드 머리줄의 «잡는 자리» — 단추·입력칸이 아닌 곳. 세션 이름 단추(.sc-title-btn, 한 번 누르면 이름 바꾸기)도 카드에서는
+  //   머리줄로 친다: 머리줄 대부분을 그 단추가 차지해 잡을 곳이 없어지고, 두 번 누르기(크게 보기)도 그 위에서 일어난다.
+  //   카드에서 이름은 [⋯ ▸ 세션 이름 바꾸기]로 바꾼다(원준 2026-10-01).
+  const headOf = (t: HTMLElement | null): HTMLElement | null => {
+    if (!t) return null;
     const head = t.closest('.sc-head') as HTMLElement | null;
-    if (!head || !colMain.contains(head) || t.closest(INTERACTIVE)) return;
-    dragStart(e, 'move', head);
+    if (!head || !colMain.contains(head)) return null;
+    if (t.closest('.sc-title-btn')) return head;
+    return t.closest(INTERACTIVE) ? null : head;
+  };
+  const onHeadDown = (e: PointerEvent): void => {
+    if (!shown()) return;
+    const head = headOf(e.target as HTMLElement | null);
+    if (head) dragStart(e, 'move', head);
   };
   colMain.addEventListener('pointerdown', onHeadDown);
+  //  카드에서 세션 이름 단추를 눌러도 이름 바꾸기를 열지 않는다(위 headOf). 먼저 받아(capture) 거기까지 내려가지 않게 한다.
+  const onTitleClick = (e: MouseEvent): void => {
+    if (!shown() || !(e.target as HTMLElement | null)?.closest('.sc-head .sc-title-btn')) return;
+    e.stopPropagation();
+    e.preventDefault();
+  };
+  colMain.addEventListener('click', onTitleClick, true);
   for (const g of grips) g.addEventListener('pointerdown', (e) => dragStart(e as PointerEvent, g.dataset.edge as CardEdge, g));
   // 글쇠로도 된다(split.ts 와 같은 기준: 마우스만 되는 손잡이는 두지 않는다). 왼쪽 위 손잡이 하나가 초점을 받는다.
   //  화살표 = 크기(왼쪽 위 모서리를 옮긴다) · Shift+화살표 = 자리 · Home = 기본 크기와 자리.
@@ -443,8 +458,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   //  세션 이름 위를 두 번 누르는 것도 크게 보기다. 이름 글자의 «두 번 누르면 이름 바꾸기»(session-chat.ts)보다 먼저 받아(capture)
   //  거기까지 내려가지 않게 한다 — 카드에서 이름은 연필 단추로 바꾼다.
   const onHeadDbl = (e: MouseEvent): void => {
-    const t = e.target as HTMLElement | null;
-    if (!t || !shown() || !t.closest('.sc-head') || t.closest(INTERACTIVE)) return;
+    if (!shown() || !headOf(e.target as HTMLElement | null)) return;
     e.stopPropagation();
     e.preventDefault();
     void leave();
@@ -476,6 +490,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
       ro?.disconnect();
       colMain.removeEventListener('pointerdown', onHeadDown);
       colMain.removeEventListener('dblclick', onHeadDbl, true);
+      colMain.removeEventListener('click', onTitleClick, true);
       document.removeEventListener('pointerdown', onDownCap, true);
       document.removeEventListener('focusin', onFocusIn);
       window.removeEventListener('blur', onWinBlur);
