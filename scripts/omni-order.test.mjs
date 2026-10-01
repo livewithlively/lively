@@ -41,8 +41,9 @@ const TODAY0 = at(8, 30);
 // ── O1 정렬 저장값 ──
 eq(M.readSort("recent"), "recent", "O1 저장값 recent → 최신순");
 eq(M.readSort("rel"), "rel", "O1 저장값 rel → 관련도순");
-eq(M.readSort(null), "rel", "O1 저장값 없음 → 관련도순(기본)");
-eq(M.readSort("RECENT"), "rel", "O1 잡값 → 관련도순");
+eq(M.readSort(null), "recent", "O1 저장값 없음 → 최신순(기본, #4530)");
+eq(M.readSort("RECENT"), "recent", "O1 잡값 → 최신순(기본)");
+eq(M.SORT_KEY, "lively.omni.sort.v2", "O1 저장 키를 바꿨다 — 옛 기본으로 저장된 «관련도순» 이 새 기본을 가리지 않게(#4530)");
 
 // ── O2 기간 시작 ──
 eq(M.periodSince("all", NOW), 0, "O2 전체 기간 = 0(거르지 않는다)");

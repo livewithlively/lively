@@ -26,8 +26,8 @@ const chk = (n, c, why) => (c ? ok(n) : bad(n, why || ""));
 const A = "__convpg_a__", B = "__convpg_b__";
 const SID = (n) => `convpg-${n}`;
 const BOX = (n) => `box-__convpg-${n}`;
-const ALL = Array.from({ length: 32 }, (_, i) => SID(i));
-const ALL_BOX = Array.from({ length: 32 }, (_, i) => BOX(i));
+const ALL = Array.from({ length: 40 }, (_, i) => SID(i));
+const ALL_BOX = Array.from({ length: 40 }, (_, i) => BOX(i));
 const W2 = "00000000-0000-4000-8000-00000000c0a2", W3 = "00000000-0000-4000-8000-00000000c0a3";   // 다른 워크스페이스 · 보관된 워크스페이스
 const LIST_NAME = "__convpg_hidden_list__", PROJ_NAMES = ["__convpg_hidden_proj__", "__convpg_open_proj__"];
 
@@ -50,6 +50,7 @@ const cursorOf = async (sid) => (await itemsPool.query(
   `SELECT indexed_to FROM session_msg_cursor WHERE node_id='' AND session_id=$1`, [sid])).rows[0]?.indexed_to ?? null;
 const search = (requester, q, o = {}) => C.searchConversations({
   requester, q, sort: o.sort ?? "relevance", since: o.since ?? null, limit: 20, workspaceId: PRIMARY_TENANT_ID, attach: o.attach ?? true,
+  ...(o.cap ? { sessionCap: o.cap } : {}),
 });
 const ids = (r) => r.results.map((x) => x.session_id);
 
@@ -228,9 +229,12 @@ try {
     await put(SID(14), A, U("달리기 " + "다".repeat(150) + " 그리고 코끼리", ago(0)));
     for (const n of [13, 14]) await C.indexConvSession("", SID(n));
     const rel = ids(await search(A, "코끼리 달리기"));
-    const rec = ids(await search(A, "코끼리 달리기", { sort: "recent" }));
+    const recR = await search(A, "코끼리 달리기", { sort: "recent" });
+    const rec = ids(recR);
     chk("D15 관련도순은 구절이 그대로 맞은 옛 세션이 먼저", rel[0] === SID(13) && rel[1] === SID(14), JSON.stringify(rel));
-    chk("D15 최신순은 맞은 말이 늦은 세션이 먼저", rec[0] === SID(14) && rec[1] === SID(13), JSON.stringify(rec));
+    //  #4530 — 최신순 = 슬랙 Recent + Top Results: 관련도 1등은 «가장 맞는 결과» 로 맨 위에 서고(top), 나머지가 늦은 것부터.
+    chk("D15 최신순은 맨 위에 가장 맞는 세션(top) · 그 아래 맞은 때가 늦은 세션부터",
+      rec[0] === SID(13) && recR.results[0].top === true && rec[1] === SID(14) && recR.results[1].top === false, JSON.stringify(recR.results.map((x) => [x.session_id, x.top])));
     const hit = (await search(A, "코끼리 달리기")).results[0];
     chk("D15 줄에 이름·대표 말·시각이 실린다", !!hit.name && hit.best.role === "user" && hit.best.text.includes("코끼리") && typeof hit.at === "string", JSON.stringify(hit));
     chk("D15 화면이 안 쓰는 메타(프로젝트·주인·점수)는 싣지 않는다",
@@ -369,6 +373,55 @@ try {
     const ver = (await itemsPool.query(`SELECT ver FROM session_msg_cursor WHERE session_id=$1`, [SID(1)])).rows[0]?.ver;
     chk("D20 판이 다른 세션을 «색인 중» 으로 세고, 다시 색인하면 옛 행이 없다", p >= 1 && m.length === 2 && !m.includes("옛 판의 유령") && ver === C.CONV_INDEX_VER,
       JSON.stringify({ p, m, ver }));
+  }
+
+  // ── #4530 «어렴풋하게 쳐서 그 세션을 찾는다» ──────────────────────────────────────────────
+  const ED = (path, ts = ago(0)) => J({ type: "assistant", timestamp: ts, message: { role: "assistant", content: [
+    { type: "tool_use", id: "e1", name: "Edit", input: { file_path: path, old_string: "a", new_string: "b" } },
+    { type: "tool_use", id: "e2", name: "Read", input: { file_path: "/w/읽기만한파일.ts" } }] } });
+  // ── D21 고친 파일 경로가 색인되고(role edit · 읽기만 한 파일은 아님), 그 파일 이름 + 다른 말의 낱말로 찾는다 ──
+  {
+    await put(SID(32), A, U("칩을 누르면 키보드가 끊겨", ago(1)) + ED("/work/lively/web/v2/omni.ts", ago(1)) + AI("고쳤습니다", ago(1)));
+    await C.indexConvSession("", SID(32));
+    const m = await msgs(SID(32));
+    chk("D21 고친 파일은 role 'edit' 한 줄(경로 끝 세 마디) · 읽기만 한 파일은 없다",
+      m.filter((x) => x.role === "edit").map((x) => x.body).join() === "web/v2/omni.ts" && !m.some((x) => /읽기만한파일/.test(x.body)), JSON.stringify(m));
+    chk("D21 경로 앞부분(work 등)으로는 그 세션이 고친 파일 때문에 맞지 않는다", !ids(await search(A, "lively 키보드")).includes(SID(32)));
+    const r = await search(A, "omni.ts 키보드");
+    const hit = r.results.find((x) => x.session_id === SID(32));
+    chk("D21 고친 파일 이름 + 사람 말의 낱말로 그 세션을 찾고, 맞은 파일을 줄에 싣는다",
+      !!hit && hit.edit === "v2/omni.ts" && hit.fields.includes("edit") && hit.fields.includes("user"), JSON.stringify(r.results));
+  }
+  // ── D22 낱말이 서로 다른 말에 있어도 같은 세션이면 찾는다(종전: 한 말 안에 모두 있어야 했다) ──
+  {
+    await put(SID(33), A, U("기린 그림을 고쳐 줘", ago(2)) + AI("달팽이 모양으로 바꿨습니다", ago(2)));
+    await C.indexConvSession("", SID(33));
+    chk("D22 «기린 달팽이» — 사람 말과 AI 말에 나뉜 낱말", ids(await search(A, "기린 달팽이")).includes(SID(33)));
+    chk("D22 한 낱말이라도 세션 어디에도 없으면 빠진다", !ids(await search(A, "기린 코뿔소")).includes(SID(33)));
+  }
+  // ── D23 조사를 붙여 쳐도 찾는다 · D24 첫 지시(세션 제목)에 든 낱말도 센다 ──
+  {
+    chk("D23 «달팽이를» 이 «달팽이» 만 든 말과 맞는다", ids(await search(A, "달팽이를")).includes(SID(33)));
+    await itemsPool.query(`UPDATE session SET title = '얼음 왕국 지도 만들기' WHERE node_id='' AND session_id=$1`, [SID(33)]);
+    chk("D24 첫 지시(제목)에 든 낱말 + 대화 낱말로 찾는다", ids(await search(A, "왕국 달팽이")).includes(SID(33)));
+  }
+  // ── D25 % _ 는 글자 그대로 — «%» 한 글자가 모든 말과 맞지 않는다 ──
+  {
+    await put(SID(34), A, U("할인율 100% 적용", ago(3)));
+    await C.indexConvSession("", SID(34));
+    const pct = ids(await search(A, "100%"));
+    const any = ids(await search(A, "%"));
+    chk("D25 «100%» 는 그 말을 찾고 «%» 한 글자는 % 가 든 말만", pct.includes(SID(34)) && any.length === 1 && any[0] === SID(34), JSON.stringify({ pct, any }));
+  }
+
+  // ── D26 상한이 판정보다 먼저 걸리지 않는다 — 흔한 낱말만 든 최근 세션들이 후보를 채워도, 흔한 + 드문 낱말이 둘 다 든 옛 세션이
+  //  결과에 남는다(격리 리뷰: 종전엔 «최근 것부터» 로만 잘라 그 세션이 판정 전에 빠졌다).
+  {
+    for (const n of [35, 36, 37, 38]) { await put(SID(n), A, U("흔한낱말 이야기 " + n, ago(0))); await C.indexConvSession("", SID(n)); }
+    await put(SID(39), A, U("흔한낱말 그리고 드문낱말", ago(20)));
+    await C.indexConvSession("", SID(39));
+    const r = await search(A, "흔한낱말 드문낱말", { cap: 3, sort: "recent" });
+    chk("D26 상한 3 · 흔한 낱말만 든 최근 세션 넷 → 둘 다 든 옛 세션이 결과에 있다", ids(r).includes(SID(39)) && r.capped === true, JSON.stringify({ ids: ids(r), capped: r.capped }));
   }
 
   // ── 주기 정비 — 밀린 세션을 집어 색인한다 ──

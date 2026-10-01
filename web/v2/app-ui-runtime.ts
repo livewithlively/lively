@@ -58,6 +58,20 @@ export const APP_RUNTIME_JS = `
       p.reject(err);
     } else p.resolve(m.result);
   });
+  // #4530 — 앱 화면 안을 누른 뒤에도 통합검색 키(⌘K · Ctrl+K · Alt+K)가 바깥 셸의 통합검색을 연다. 키는 이 프레임에서 멈추고
+  //  셸 문서에 닿지 않기 때문이다. 판정은 web/lib/omni-chord.ts 와 같다(글자가 라틴이면 글자로, 아니면 자판 위치 KeyK 로 —
+  //  한글 입력기가 켜져 있으면 K 가 'ㅏ' 로 온다). 받는 쪽은 app-ui.ts 의 ui/omniOpen(이 프레임에서 온 것만).
+  //  창에 키 듣기가 없는 환경(시험의 흉내 창 · 오래된 웹뷰)이면 건너뛴다 — 런타임 전체가 여기서 멈추면 앱이 통째로 안 뜬다.
+  if (typeof window.addEventListener === 'function') window.addEventListener('keydown', function (e) {
+    var k = String(e.key || '');
+    var isK = /^[a-z]$/i.test(k) ? k.toLowerCase() === 'k' : e.code === 'KeyK';
+    if (!isK) return;
+    var chord = e.altKey ? (!e.metaKey && !e.ctrlKey && !e.shiftKey) : ((e.metaKey || e.ctrlKey) && !e.shiftKey);
+    if (!chord) return;
+    e.preventDefault();
+    e.stopPropagation();
+    parent.postMessage({ jsonrpc: '2.0', method: 'ui/omniOpen', params: {} }, '*');
+  }, true);
   var api = {
     version: 1,
     app: null,

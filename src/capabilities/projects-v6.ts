@@ -201,8 +201,10 @@ function parseSearchOpts(query: Record<string, unknown>): Record<string, unknown
 }
 // 핸들러 입력(project_grep/project_search 공통) → project-store 검색 opts(list_id→listId 매핑).
 function toSearchOpts(input: any) {
-  return { level: input.level, listId: input.list_id, status: input.status, limit: input.limit, mode: input.mode, context: input.context };
+  return { level: input.level, listId: input.list_id, status: input.status, limit: input.limit, mode: input.mode, context: input.context, plain: input.plain === true };
 }
+// plain(#4530) — 화면 검색(⌘K)이 사람이 친 글을 글자 그대로 찾을 때. "1"/"true" 만 켠다.
+const truthyQuery = (v: unknown): boolean => v === true || v === "1" || v === "true";
 
 const projectGrepV6Input = {
   q: z.string().min(1),
@@ -212,6 +214,7 @@ const projectGrepV6Input = {
   limit: z.number().int().min(1).max(100).optional(),
   mode: z.enum(["snippets", "names", "count"]).optional(),
   context: z.number().int().min(0).max(3).optional(),
+  plain: z.boolean().optional().describe("true 면 정규식으로 읽지 않고 글자 그대로 — 낱말마다 «그대로 또는 끝 조사를 뗀 꼴» 이 들어 있으면 맞음(AND), \"큰따옴표\" 는 구절. 화면 검색(⌘K)이 쓴다"),
 };
 type ProjectGrepV6Input = z.infer<z.ZodObject<typeof projectGrepV6Input>>;
 const projectGrepV6: Capability = {
@@ -223,7 +226,10 @@ const projectGrepV6: Capability = {
   expose: {
     mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/v6/projects/search"],
-      parse: (req) => parseSearchOpts((req.query ?? {}) as Record<string, unknown>) }],
+      parse: (req) => {
+        const query = (req.query ?? {}) as Record<string, unknown>;
+        return { ...parseSearchOpts(query), ...(truthyQuery(query.plain) ? { plain: true } : {}) };
+      } }],
   },
   handler: async (input: ProjectGrepV6Input, _user: LivelyUser, ctx?: CapabilityCtx) => {
     // 검색도 목록과 같은 공개범위를 탄다(#1291) — 이 핸들러는 예전엔 뷰어 인자 자체를 안 받아, 목록에선 가려진
@@ -308,13 +314,14 @@ const projectSimilarV6: Capability = {
   },
   handler: async (input: ProjectSimilarV6Input, _user: LivelyUser, ctx?: CapabilityCtx) => {
     if (!input.text && input.id == null) throw new HttpError(400, "text 또는 id 중 하나가 필요합니다");
-    return {
-      projects: await findSimilarProjects({
-        text: input.text, id: input.id, limit: input.limit, minScore: input.min_score,
-        level: input.level, listId: input.list_id, status: input.status, includeDone: input.include_done,
-        viewer: ctx?.viewer ?? null,
-      }),
-    };
+    //  빈 결과의 까닭을 함께 싣는다(#4530) — embeddings:"off"(꺼짐) · degraded:true(이번엔 못 물어봄). 없으면 «관련 없음».
+    const diag: { embeddings?: "off"; degraded?: boolean } = {};
+    const projects = await findSimilarProjects({
+      text: input.text, id: input.id, limit: input.limit, minScore: input.min_score,
+      level: input.level, listId: input.list_id, status: input.status, includeDone: input.include_done,
+      viewer: ctx?.viewer ?? null,
+    }, diag);
+    return { projects, ...diag };
   },
 };
 

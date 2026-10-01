@@ -198,7 +198,8 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
       found = await searchConversations({ ...base, q, sort: parseConvSort(req.query.sort), since, limit });
     } catch (e) {
       //  시간 상한(statement_timeout → 57014)에 걸렸다 — «못 찾았다» 가 아니라 «끝까지 못 봤다» 다. 화면이 그 차이를 말한다.
-      if ((e as { code?: string })?.code === "57014") throw new HttpError(503, "대화 검색이 시간 안에 끝나지 않았습니다 — 낱말을 더 넣어 좁혀 주세요");
+      //   #4530 — 낱말을 더 넣으라고 하지 않는다: 낱말마다 «어디든 든 세션» 을 모으므로 낱말이 늘면 일이 늘어난다. 기간(since)은 줄인다.
+      if ((e as { code?: string })?.code === "57014") throw new HttpError(503, "대화 검색이 시간 안에 끝나지 않았습니다 — 기간을 좁히거나 잠시 뒤 다시 찾아 주세요");
       throw e;
     }
     //  밀린 색인 수는 안내용이다 — 세지 못하면 null(모른다)로 준다. 0 으로 주면 «다 색인됐다» 는 거짓말이 된다.

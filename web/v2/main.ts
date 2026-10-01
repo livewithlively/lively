@@ -50,7 +50,7 @@ import { drawRail, mountRail, railIsHidden, railSection, reloadRailPrefs, resetR
 import { lastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'   // #2016 — 좌측 끝 레일(구역 + 워크스페이스 + 최근 앱), 보임/숨김
 import { ASIDE_MSG, setAsideGuestOpener, type AsideGuest } from './aside-slot.js';
 import { takeCreated } from './created-cache.js';
-import { openMeModal } from './me-modal.js';   // #1898 — 클래식에서 올라온 부팅이 [화면] 자리를 되연다
+import { openMeModal, type MeModalOpts } from './me-modal.js';   // #1898 — 클래식에서 올라온 부팅이 [화면] 자리를 되연다
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';
 import { projectPageHref, projectPageId } from '../lib/proj-page.js';   // #3870 프로젝트 화면 주소 한 벌(사이드바 [→]·통합검색)
 import { mountCtxMenus } from './ctx-registry.js';   // #3784 우클릭 메뉴 배선(표 data-ctx 를 읽는다)
@@ -602,11 +602,20 @@ export async function bootV2(): Promise<void> {
       const pid = projectPageId(href);
       if (pid) { openProjectPage(pid); return; }
       if (!tabsApi) { location.hash = href; return; }
+      //  세션은 홈 구역에서 연다(#4530) — 액자에서 여는 문(lively:open-route)·세션 목록과 같은 규칙. 안 옮기면 프로젝트·위키 구역에서
+      //   연 세션이 사이드바 어디에도 안 보였다(점검).
+      if (routeKey(href).startsWith('s:')) setRailSection('home', { navigate: false });
       const hit = tabsApi.find(href);
       if (newTab) { if (hit) tabsApi.activate(hit); else tabsApi.add(href); return; }
       if (hit && hit !== tabsApi.current()) { hit.route = href; tabsApi.activate(hit); return; }
+      //  나머지는 주소만 바꾸고 탭 규칙은 라우터(onHash)가 정한다 — 빈 홈 탭이면 그 자리, 세션 탭에서 출발하면 새 탭,
+      //   쓰다 만 지시가 있는 홈 탭은 덮지 않는다(⓪·①·②·#2037). 여기서 탭을 따로 세우면 그 규칙을 우회한다(#4530 격리 리뷰).
       location.hash = href;
     },
+    //  명령 «…로 새 세션 시작»(#4530) — 사이드바 [새 작업]과 같은 문(그 글을 입력칸에 넣어 둔 새 창).
+    newSession: (seed) => { const t = tabsApi?.add('#/'); if (t && seed) { t.draft = seed; tabsApi?.save(); void renderRoute(t); } },
+    //  «설정» 줄(#4530) — 설정 앱은 숨었고 문은 [나] 창 한 곳이다(#2199).
+    openMe: (tab) => openMeModal({ tab: tab as MeModalOpts['tab'] }),
   });
   bindOmniKey();
   //  화면으로 돌아오면 즉시 최신으로 — 다음 틱을 기다리면 그 몇 초가 '멈춘 화면'으로 보인다.

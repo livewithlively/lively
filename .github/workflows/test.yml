@@ -158,6 +158,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/source-tree.pg-test.mjs
+      # ⑤-b1 화면 검색(⌘K) 서버 술어(#4530) — plain(글자 그대로·조사·구절) · 제목 먼저 정렬 · 프로젝트 휴지통 제외(뿌리까지) ·
+      #    뿌리 보관 표식·상위 이름 · 자료 «%» 글자 그대로·낱말 AND. 전부 SQL 의 모양이라 목으로는 못 잰다.
+      - name: 화면 검색 술어(plain·제목 먼저·휴지통 제외) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/search-plain.pg-test.mjs
       # ⑤-d 노션 전체 점검 스윕의 수집기 몫(#4059) — 한 워크스페이스를 수집기 여럿이 나눠 맡을 때 한 수집기의
       #    점검이 남의 몫을 보관하던 사고(soltimal 2026-09-17, 5,385건)의 안전망. 판정이 전부 jsonb 표식 떼기·
       #    «아무도 안 맡음»·비게 된 시각 비교라 목 러너로는 조건 하나를 지워도 초록이다 — 행을 깔고 스윕 뒤 다시 읽는다.

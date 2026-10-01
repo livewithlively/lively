@@ -18,6 +18,8 @@ import {
 } from './wiki-data.js';
 import { wkMarkRead, wkRecordVisit, wkTick } from './wiki-ui.js';
 import { openKnHistory } from './wiki-history.js';   // #1546 변경 이력 패널(속성 줄의 '갱신 …'에서 연다)
+import { isKKey } from './lib/omni-chord.js';   // #4530 ⌘K 판정 — 한글 자판에서도(글자가 'ㅏ' 로 와도 자리로 본다)
+import { omniFrameActive } from './v2/omni-frame.js';   // #4530 액자 안이면 셸 통합검색이 연다
 
 // 시딩 지식 편집 경고(#846) — 저장 응답에 seed_warning 이 오면(서버가 canonical 게이트웨이에서만 실어
 //  준다) 띄운다. 자동저장이 짧은 간격으로 반복 커밋하므로 name 당 한 번만(같은 문서 재편집은 60s 쿨다운)
@@ -733,7 +735,10 @@ function openWikiSearch() {
   input.focus();
 }
 document.addEventListener('keydown', (e: any) => {
-  if (!(e.metaKey || e.ctrlKey) || (e.key !== 'k' && e.key !== 'K')) return;
+  if (!(e.metaKey || e.ctrlKey) || !isKKey(e)) return;
+  //  #4530 — 셸 안 액자로 실린 문서면 위키 전용 검색을 열지 않는다. 같은 ⌘K 가 자리에 따라 다른 검색을 열면(지식만 찾고
+  //   Enter 가 미리보기인 창) 프로젝트를 찾으려던 사람이 헛친다. 셸 통합검색으로 넘기는 일은 v2/omni-frame.ts 가 한다.
+  if (omniFrameActive()) return;
   const page = location.hash.replace(/^#\//, '').split(/[/?]/)[0] || '';
   if (!['knowledge', 'k', 'trash'].includes(page)) return;
   e.preventDefault();
