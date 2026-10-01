@@ -94,9 +94,10 @@ async function commitWindow(nodeId: string, sessionId: string, from: number, to:
   });
 }
 
-/** from 뒤 첫 개행의 다음 자리 — 창보다 긴 한 줄을 건너뛸 때. 개행이 아직 안 왔으면(쓰는 중) -1. */
+/** from 뒤 첫 개행의 다음 자리 — 창보다 긴 한 줄의 끝을 찾을 때. 개행이 아직 안 왔으면(쓰는 중) -1.
+ *  한 번에 8MB(업로드 청크 크기)씩 — 1MB 씩 걸으면 읽을 때마다 같은 청크를 통째로 다시 풀어 100MB 줄 하나에 12.5초가 걸렸다(재검토 실측). */
 async function nextLineStart(reader: ByteReader, total: number, from: number): Promise<number> {
-  const STEP = 1024 * 1024;
+  const STEP = 8 * 1024 * 1024;
   for (let at = from; at < total; at += STEP) {
     const buf = await reader.read(at, Math.min(total, at + STEP));
     if (!buf.length) return -1;

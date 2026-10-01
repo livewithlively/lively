@@ -8,7 +8,8 @@
 //
 //  사양·엣지 표: 스크래치패드 spec.md E — D1~D15 · 격리 리뷰 뒤 D16~D20(가려진 프로젝트의 초대 세션 · 다른 워크스페이스 ·
 //   휴지통 · NUL 글자와 깨진 시각 · 뽑는 규칙의 판) · D13c(한 번도 색인 안 된 작은 세션도 «색인 중» 으로 센다) ·
-//   재검토 뒤 D4(창보다 긴 줄 · 스크린샷을 붙인 지시) · D16 밀린 수 · D16f(가려짐을 못 재면 닫는다) · D19(글자 그대로의 \u0000).
+//   재검토 뒤 D4(창보다 긴 줄 · 스크린샷을 붙인 지시) · D16 밀린 수 · D16f(가려짐을 못 재면 닫는다) · D18i(휴지통 표식은 주인의 것) ·
+//   D19(글자 그대로의 \u0000).
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const S = await import(`${DIST}/v6/session-log-store.js`);
@@ -262,17 +263,22 @@ try {
     chk("D16 주인은 자기 세션을 늘 찾는다(가려짐 판정은 초대받은 사람에게만)", b.includes(SID(18)) && b.includes(SID(19)), JSON.stringify(b));
 
     //  D16f — 가려진 프로젝트를 못 재면(조회 실패) 프로젝트 폴더의 초대 세션은 닫는다(fail-closed). 개인 폴더의 초대 세션은 그대로.
-    //   조회를 실패시키려고 project 표 이름을 잠깐 바꾼다(끝나면 되돌린다).
-    let renamed = false;
+    //   그 조회 한 줄만 이 프로세스 안에서 실패시킨다 — 표를 건드리지 않는다(개발 DB 를 함께 쓰는 게이트웨이에 영향이 없게).
+    //   (`itemsPool.query = 페이크` 는 유닛 테스트가 쓰는 길이다 — client.ts 의 풀 가드가 자기 속성이면 비켜선다.)
+    const realQuery = itemsPool.query;
+    itemsPool.query = (text, ...rest) => {
+      const sql = typeof text === "string" ? text : (text && text.text) || "";
+      if (/FROM project\s+WHERE level='project' AND list_id IS NOT NULL/.test(sql)) return Promise.reject(new Error("가려진 프로젝트 조회 실패(시험)"));
+      return realQuery(text, ...rest);
+    };
     try {
-      await itemsPool.query(`ALTER TABLE project RENAME TO project__convpg_off`); renamed = true;
       invalidateVisibilityCache();
       const shut = ids(await search(A, "기린"));
       const personal = ids(await search(A, "슬랙"));
       chk("D16f 가려진 프로젝트를 못 재면 프로젝트 폴더의 초대 세션은 둘 다 닫는다", !shut.includes(SID(18)) && !shut.includes(SID(19)), JSON.stringify(shut));
       chk("D16f 개인 폴더의 초대 세션은 그대로 찾는다", personal.includes(SID(5)), JSON.stringify(personal));
     } finally {
-      if (renamed) await itemsPool.query(`ALTER TABLE project__convpg_off RENAME TO project`);
+      delete itemsPool.query;
       invalidateVisibilityCache();
     }
   }
@@ -303,6 +309,23 @@ try {
     chk("D18 휴지통의 세션(대화 uuid 표식)은 못 찾는다", !a.includes(SID(24)), JSON.stringify(a));
     chk("D18 박스 id 로 버린 세션의 대화도 못 찾는다", !a.includes(SID(25)), JSON.stringify(a));
     chk("D18 대조: 버리지 않은 세션은 찾는다", a.includes(SID(26)), JSON.stringify(a));
+
+    //  D18i — 휴지통 표식은 **주인의 것**이다. 주인이 버린 초대 세션은(대화 uuid 로든 박스 id 로든) 초대받은 사람도 못 찾고,
+    //   초대받은 사람이 남긴 표식은 주인의 검색을 가리지 않는다(재검토 지적 — 이 규칙을 잠근 시험이 없었다).
+    for (const n of [30, 31, 0]) {
+      await put(SID(n), B, U(`초대받은 사람이 볼 수달 이야기 ${n}`));
+      await itemsPool.query(`INSERT INTO org_session_state(id, owner, invites) VALUES($1, $2, $3::jsonb)`, [BOX(n), B, JSON.stringify([A])]);
+      await itemsPool.query(`INSERT INTO org_session_conv(box_id, conv_uuid, owner) VALUES($1, $2, $3)`, [BOX(n), SID(n), B]);
+      await C.indexConvSession("", SID(n));
+    }
+    await itemsPool.query(`INSERT INTO org_session_trash(session_id, owner) VALUES($1, $3), ($2, $3)`, [SID(30), BOX(31), B]);   // 주인 B 가 버림
+    await itemsPool.query(`INSERT INTO org_session_trash(session_id, owner) VALUES($1, $2)`, [SID(0), A]);                       // 초대받은 A 의 표식
+    const inv = ids(await search(A, "수달"));
+    const own = ids(await search(B, "수달"));
+    chk("D18i 주인이 대화 uuid 로 버린 초대 세션은 초대받은 사람도 못 찾는다", !inv.includes(SID(30)), JSON.stringify(inv));
+    chk("D18i 주인이 박스 id 로 버린 초대 세션도 초대받은 사람이 못 찾는다", !inv.includes(SID(31)), JSON.stringify(inv));
+    chk("D18i 초대받은 사람의 표식은 주인의 검색을 가리지 않는다", own.includes(SID(0)), JSON.stringify(own));
+    chk("D18i 대조: 주인 자신도 버린 두 세션은 못 찾는다", !own.includes(SID(30)) && !own.includes(SID(31)), JSON.stringify(own));
   }
 
   // ── D19 DB 가 못 받는 글자(NUL)·깨진 시각이 색인을 멈추지 않는다(파서 상태에 실리는 경우 포함 — codex) ──
