@@ -1,20 +1,29 @@
-// v2/pane-dock.ts — 곁칸 **독**(#4443 «곁칸 → 앱의 실행 화면», 원준 2026-09-30).
+// v2/pane-dock.ts — 곁칸 **독**(#4443 «곁칸 → 앱의 실행 화면», 원준 2026-09-30 → 10-01).
 //
-//  원준: "3안으로 갈건데 독 드래그하면 2안 위치에 위치시킬 수도 있게끔. 테두리쪽 원하는 곳 어디든 … 충분히 맥의 독 참고해서
-//   모션이나 애니메이션이나 우클릭 기능이나 더보기 눌렀을 때의 화면까지 제대로 한 번에."
+//  원준(10-01, 바로잡음): "디폴트로 4안(이음매 독)이고 끌어당겨서 3안에 둘 수 있는 걸로 하고 싶은거야. 그리고 아래에 뒀을 때는
+//   곁칸 사이즈 변하는거에 따라서 독 사이즈도 바꾸고 싶음. 너가 바닥 왼쪽 탭 만든건 없애줘 일단은. 그리고 좀 더 이쁘게 … 맥 os 참고해서."
 //
 //  ── 무엇을 하나 ──
 //   · 곁칸에 띄울 앱의 문. 고정한 앱(사람이 정한 순서) · 떠 있지만 고정 안 한 앱 · [더보기] — macOS 독의 세 구획.
+//   · 서는 곳은 둘(lib/pane-dock DockHome):
+//       ④ 이음매(기본) — 세션과 곁칸 사이 경계선 위에 걸친 짧은 세로 유리 알약. 경계선을 따라 위아래 자리를 고른다.
+//       ③ 곁칸 아래   — 곁칸 바닥에 떠 있는 유리 알약. 곁칸 폭을 따라 아이콘이 커지고 작아진다.
+//     알약의 끝 여백 · 구분선 · 빈 자리를 잡고 끌면 옮긴다(곁칸 안쪽으로 깊이 들이면 곁칸 아래, 경계선 가까이면 이음매).
+//     손잡이(⋮⋮)는 두지 않는다(원준 10-01 «없애줘») — macOS 독처럼 알약 자체가 손잡이고, 우클릭 › 독 › 위치로도 옮긴다.
 //   · 누르면 연다. 이미 켜져 있고 여럿 떠 있으면 다음 것으로 돈다(⌘`). ⌥-클릭은 여럿 띄울 수 있는 앱을 하나 더.
 //   · 떠 있는 탭 수만큼 아이콘 밑에 점(최대 셋). 켜진 앱의 점은 민트.
-//   · 확대(마우스 밑 아이콘과 이웃이 커진다) · 새로 열면 튀어 오른다 · 이름표.
-//   · 우클릭: 그 앱의 열린 창 목록 · 새로 열기 · 닫기 · 독에 고정/빼기 · 독 설정(위치 · 모양 · 자동으로 가리기 · 확대).
+//   · 확대(마우스 밑 아이콘과 이웃이 커진다) · 새로 열면 튀어 오른다 · 꼬리 달린 이름표(macOS).
+//   · 우클릭 · 메뉴 키 · 길게 누르기: 그 앱의 열린 창 목록 · 새로 열기 · 닫기 · 독에 고정/빼기 · 독 설정(위치 · 확대 · 되돌리기).
 //   · 아이콘을 끌어 순서를 바꾸고, 독 밖으로 끌어내면 고정이 풀린다(연기처럼 사라진다).
-//   · 독 자체는 손잡이(또는 빈 자리)를 끌어 곁칸 네 테두리 어디로든 — 테두리에 바짝 대면 막대(2안), 안쪽이면 떠 있는 알약(3안).
 //   · [더보기] = 모든 앱: 곁칸 앱 · 이 세션에 붙일 앱 · 새 탭으로 여는 앱(런치패드의 축소판, 독 아이콘에서 부풀어 나온다).
 //
+//  ── 어디에 붙나 ──
+//   이음매 독은 경계선 위에 걸쳐 세션 쪽으로도 반쯤 나온다 — 곁칸은 넘친 것을 자르므로(42-v2-panes.css overflow: clip)
+//   곁칸 밖, 곁칸의 부모(.pn-body: 세션 열 · 분할선 · 곁칸의 격자)에 붙는다. 곁칸 아래 독 · 좁은 폭(서랍)은 곁칸 안에 붙는다.
+//   자리가 바뀌면 붙는 곳도 옮겨 간다(ensureLayer). 이름표 · [더보기]도 독과 같은 곳에 붙는다.
+//
 //  ── 규칙은 lib/pane-dock.ts 에 ──
-//   누르면 무엇을 할지(dockClick) · 끌어 놓은 자리(placeFromPoint) · 부품이 비키는 폭(dockInset) · 확대 곡선(magnify) · 크기(fitIconSize).
+//   누르면 무엇을 할지(dockClick) · 끌어 놓은 곳(placeDock) · 부품이 비키는 폭(dockInset) · 확대 곡선(magnify) · 크기(fitIconSize · floatIconSize).
 //   이 파일은 그 값을 DOM 에 옮길 뿐이다. 탭 목록·여닫기는 셸(panes.ts)이 host 로 넘긴다 — 이 파일은 배치(lay)를 모른다.
 //
 //  ── 격리 ──
@@ -31,15 +40,15 @@ import { appHref, openLaunchpad, visibleApps, type AppDef } from './apps.js';
 import { appGlassIcon, builtinAppIcon } from './glass-icon.js';
 import { listSessionApps, type SessionApp } from './app-session.js';
 import {
-  DOCK_DEFAULTS, DOCK_METRICS, appColor, dockClick, dockInset, dockItems, dockPins, dockThickness, fitIconSize, isVertical,
-  magnify, movePinBefore, pinSlot, placeFromPoint, readDockPrefs, togglePin, writeDockPins, writeDockPrefs,
-  type DockEdge, type DockItem, type DockPlace, type DockPrefs, type DockTab,
+  DOCK_DEFAULTS, DOCK_METRICS, MAG_GROW, appColor, dockClick, dockInset, dockItems, dockPins, dockThickness, effectiveHome, fitIconSize, floatIconSize,
+  magnify, movePinBefore, pinSlot, placeDock, readDockPrefs, togglePin, writeDockPins, writeDockPrefs,
+  type DockGeom, type DockHome, type DockItem, type DockPrefs, type DockTab,
 } from '../lib/pane-dock.js';
 
 /** 독이 아는 앱 한 가지(곁칸 부품 종류). 셸이 PART_DEFS 에서 만들어 준다. */
 export interface DockApp { type: string; name: string; glyph: string; hint: string; multi: boolean; pickable: boolean }
 export interface DockHost {
-  /** 곁칸 칸(section.pn-pane) — 독은 이 안에 선다. */
+  /** 곁칸 칸(section.pn-pane). 곁칸 아래 독은 이 안에, 이음매 독은 이 칸의 부모(.pn-body)에 선다. */
   pane: HTMLElement;
   apps(): DockApp[];
   /** 곁칸(과 아래 칸)에 떠 있는 탭 — 탭 줄 순서. */
@@ -55,7 +64,9 @@ export interface DockHost {
   curSession(): string | null;
   /** 설치 앱을 지금 세션에 붙인다(#4225). 없으면 [더보기]의 «이 세션에 붙이기» 구획을 안 세운다 — 세션에 앱을 붙이는 수단이 없는 게이트웨이(옛 판)도 독은 쓴다. */
   attach?(app: { id: string; title: string }): Promise<void>;
-  /** 좁은 폭(서랍) — 끌기·확대·가리기를 끄고 바닥 가운데에 둔다. */
+  /** 세션과 곁칸 사이 경계선(분할선) — 이음매 독이 여기에 걸친다. 없으면(좁은 폭의 서랍 · 카드 모드 · 접힘) null → 곁칸 아래. */
+  seam?(): HTMLElement | null;
+  /** 좁은 폭(서랍) — 끌기·확대를 끄고 곁칸 아래 가운데에 둔다. */
   narrow(): boolean;
 }
 export interface DockHandle { sync(): void; destroy(): void }
@@ -96,12 +107,13 @@ export function refreshDocks(): void { for (const fn of [...live]) fn(false); }
 
 const M = DOCK_METRICS;
 const GAP = 4;
-/** 아이콘 한 변 — 떠 있는 알약은 32 까지, 막대는 이름 줄이 있어 26 까지. 모자라면 줄인다(fitIconSize). */
-const SIZE = { float: { max: 32, min: 22 }, bar: { max: 26, min: 20 } } as const;
+/** 아이콘 한 변 — 이음매는 22~32(짧은 알약), 곁칸 아래는 곁칸 폭을 따라 26~48(floatIconSize). */
+const SIZE = { seam: { min: 22, max: 32 }, float: { min: 26, max: 48 } } as const;
+const DOT_ROW = M.dot;  // 아이콘 밑 점 줄(점 4 + 사이 2) — 이음매 독에선 아이콘마다 알약 길이에 든다
 const MAG = 1.6;        // 확대 최대 배율(macOS 기본 확대와 비슷한 정도)
 const SEP = 9;          // 구분선이 먹는 자리
-const GRIP = 14;        // 손잡이가 먹는 자리
-const EDGE_NAME: Record<DockEdge, string> = { bottom: '아래', top: '위', left: '왼쪽', right: '오른쪽' };
+const NEAR = 40;        // 곁칸 안쪽으로 이만큼 넘게 들여 놓아야 곁칸 아래(그보다 가까우면 이음매)
+const HOME_NAME: Record<DockHome, string> = { seam: '이음매', float: '사이드바 아래' };
 const reduced = (): boolean => { try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (_) { return false; } };
 //  any-pointer — 터치 화면 + 트랙패드 노트북처럼 가는 포인터가 **하나라도** 있으면 확대를 켠다(손가락 입력은 pointerType 으로 따로 거른다).
 const finePointer = (): boolean => { try { return matchMedia('(any-pointer: fine)').matches; } catch (_) { return true; } };
@@ -123,23 +135,20 @@ export function mountDock(host: DockHost): DockHandle {
   let dead = false;
   const pane = host.pane;
   const shelf = el('div', { class: 'pn-dock-shelf' }) as HTMLElement;
+  //  뿌리 = 크기 없는 «자리 점». 선반(알약)이 그 점에 매달린다 — 이음매면 점이 알약 한가운데, 곁칸 아래면 알약 바닥 가운데.
+  //   그래서 확대로 불어나도 양쪽으로 똑같이 번지고 가운데가 안 흔들린다(42-v2-dock.css).
   const root = el('div', { class: 'pn-dock', role: 'toolbar', 'aria-label': '사이드바 앱 독' }, shelf) as HTMLElement;
-  //  자동 가리기의 손잡이 띠 — 테두리에 손을 대면 독이 나온다. 부품이 액자(웹·앱 화면)면 칸이 포인터를 못 받으므로
-  //  칸 위에 얇은 띠를 따로 세운다(칸의 pointermove 로는 액자 위의 손을 못 본다).
-  const reveal = el('div', { class: 'pn-dock-reveal', 'aria-hidden': 'true' }) as HTMLElement;
   const tip = el('div', { class: 'pn-dock-tip', role: 'tooltip' }) as HTMLElement;
   tip.hidden = true;
-  reveal.hidden = true;
-  pane.append(reveal, root, tip);
+  pane.append(root, tip);
 
   let prefs = loadPrefs();
+  let home: DockHome = 'float';
   let size: number = SIZE.float.max;
   let items: DockItem[] = [];
   let sig = '';
   let btns: HTMLElement[] = [];
   let centers: number[] = [];
-  let shown = true;
-  let hideTimer = 0;
   let dragging = false;
   /** 누르고 있는 끌기(움직이기 전 포함)를 없던 일로 — 끌기는 한 번에 하나(다른 손가락·두 번째 누름은 받지 않는다). */
   let dragOff: (() => void) | null = null;
@@ -154,47 +163,70 @@ export function mountDock(host: DockHost): DockHandle {
   //  이 판에 있는 종류 — 이 화면에서 못 고르는 것(프로젝트 없는 세션의 태스크·자료…)도 고정 목록에선 제자리를 지킨다(lib dockPins).
   const existsIn = (cat: Map<string, DockApp>) => (t: string): boolean => cat.has(t) && t !== 'apps';
   const pinSet = (cat: Map<string, DockApp> = catalog()): { base: string[]; shown: string[] } => dockPins(readJson(PIN_STORE), existsIn(cat), pickIn(cat));
-  /** 지금 쓰는 설정 — 좁은 폭(서랍)은 바닥 가운데에 떠 있게 고정한다(끌 자리도 가릴 자리도 없다). */
-  const eff = (): DockPrefs => (host.narrow() ? { ...prefs, edge: 'bottom', at: 0.5, mode: 'float', hide: false } : prefs);
   const barH = (): number => { const b = pane.querySelector(':scope > .pn-tabbar') as HTMLElement | null; return b && !b.hidden ? b.offsetHeight : 0; };
-  //  우클릭 메뉴는 셸의 메뉴 엔진이 띄운다(bindCtx) — 떠 있는지는 엔진에게 묻는다.
-  const busy = (): boolean => ctxIsOpen() || !!more || dragging;
-  const magOn = (p: DockPrefs): boolean => p.mag && p.mode === 'float' && finePointer() && !reduced() && !host.narrow();
+  const magOn = (): boolean => prefs.mag && finePointer() && !reduced() && !host.narrow();
+  const vertical = (): boolean => home === 'seam';
+
+  // ── 이음매 — 세션과 곁칸 사이 경계선 ─────────────────────────────────────────
+  /** 이음매 독이 붙는 곳 = 곁칸의 부모(.pn-body). 경계선이 없거나 좁은 폭이면 없다. */
+  function seamEl(): HTMLElement | null {
+    if (host.narrow() || !pane.parentElement) return null;
+    const s = host.seam ? host.seam() : null;
+    if (!s || s.hidden) return null;
+    const r = s.getBoundingClientRect();
+    return r.width > 0 || r.height > 0 ? s : null;                // 카드 모드는 분할선이 display:none(크기 0)
+  }
+  /** 이음매의 화면 좌표 — 경계선 x · 곁칸이 어느 쪽인가 · 독이 설 세로 구간(곁칸 머리 줄 아래 ~ 바닥). */
+  function seamGeom(): DockGeom | null {
+    const s = seamEl();
+    if (!s) return null;
+    const sr = s.getBoundingClientRect(), pr = pane.getBoundingClientRect();
+    const x = sr.left + sr.width / 2;
+    return { seam: x, side: pr.left + pr.width / 2 >= x ? 'right' : 'left', top: pr.top + barH(), bottom: pr.bottom };
+  }
+  /** 독(과 이름표 · [더보기])이 붙는 곳 — 이음매면 곁칸의 부모, 곁칸 아래면 곁칸. */
+  const layerOf = (h: DockHome): HTMLElement => (h === 'seam' && pane.parentElement ? pane.parentElement : pane);
+  function ensureLayer(h: DockHome): void {
+    const layer = layerOf(h);
+    if (root.parentElement === layer) return;
+    more?.close();                                                  // 붙는 곳이 바뀌었다 — 옛 자리의 창은 닫는다
+    hideTip();
+    layer.append(root, tip);
+  }
 
   // ── 그리기 ──────────────────────────────────────────────────────────────────
   function render(force = false): void {
     if (dead) return;
     prefs = loadPrefs();
-    const p = eff();
     const cat = catalog();
     const pins = pinSet(cat).shown;
     const act = host.act();
     items = dockItems(pins, host.tabs(), act);
     const W = pane.clientWidth, H = pane.clientHeight;
-    if (!W || !H) { root.hidden = true; reveal.hidden = true; applyInset(null); sig = ''; return; }   // 접힌 칸 · 숨은 탭
+    if (!W || !H) { root.hidden = true; tip.hidden = true; applyInset(null); sig = ''; return; }   // 접힌 칸 · 숨은 탭
     root.hidden = false;
-    const vertical = isVertical(p.edge);
+    const geom = seamGeom();
+    home = effectiveHome(prefs, !!geom);
+    ensureLayer(home);
+    const n = items.length + 1;
     const nPinned = items.filter((i) => i.pinned).length;
-    const seps = (nPinned && items.length > nPinned ? 1 : 0) + (items.length ? 1 : 0);
-    const lim = SIZE[p.mode];
-    const avail = (vertical ? H - barH() : W) - 2 * M.margin;
-    size = fitIconSize(items.length + 1, avail, {
-      max: lim.max, min: lim.min, gap: GAP, pad: M.pad,
-      grow: magOn(p) ? Math.round(lim.max * (MAG - 1) * 1.7) : 0,
-      extra: seps * SEP + (p.mode === 'float' && !host.narrow() ? GRIP : 0),
-    });
-    const s = [p.edge, p.mode, p.hide, p.mag, p.at, size, W, H, act, host.narrow(), barH(),
+    const extra = ((nPinned && items.length > nPinned ? 1 : 0) + (items.length ? 1 : 0)) * SEP;
+    //  확대로 불어날 몫을 미리 남긴다 — 곁칸 아래는 곁칸 폭 안에(넘치면 곁칸 테두리에서 잘린다), 이음매는 세로 구간 안에.
+    const grow = magOn() ? MAG_GROW : 0;
+    size = home === 'float'
+      ? floatIconSize(W, n, { min: SIZE.float.min, max: SIZE.float.max, gap: GAP, pad: M.pad + 2, margin: M.margin, extra, grow })
+      : fitIconSize(n, Math.max(0, (geom!.bottom - geom!.top) * 0.8), { min: SIZE.seam.min, max: SIZE.seam.max, gap: GAP + DOT_ROW, pad: M.pad + 4, grow: Math.round(SIZE.seam.max * grow), extra });
+    const side = geom?.side ?? 'right';
+    const s = [home, side, prefs.mag, size, act, host.narrow(),
       ...items.map((i) => `${i.type}:${i.keys.join(',')}:${i.pinned ? 1 : 0}:${i.active ? 1 : 0}:${i.type === 'sessapp' ? host.title('sessapp') : ''}`)].join('|');
     if (force || s !== sig) {
       sig = s;
-      build(p, cat);
-      place(p);
-      //  [더보기]가 떠 있는 채로 다시 세웠다(다른 창에서 자리를 바꿨거나 창 안의 «독 설정»으로 옮겼다) — 새 단추에서 다시 부풀린다.
-      if (more) more.reanchor(btns[btns.length - 1]);
+      build(cat, side);
     }
-    applyInset(p);
-    if (!p.hide) setShown(true); else if (!busy() && !root.matches(':hover, :focus-within')) setShown(false);
-    reveal.dataset.edge = p.edge;
+    place();
+    //  [더보기]가 떠 있는 채로 다시 세웠거나 자리가 옮겨졌다 — 새 단추에서 다시 부풀린다.
+    if (more) more.reanchor(btns[btns.length - 1]);
+    applyInset(home);
     if (pendingBounce) {
       const b = btns.find((x) => x.dataset.type === pendingBounce);
       pendingBounce = null;
@@ -202,33 +234,30 @@ export function mountDock(host: DockHost): DockHandle {
     }
   }
 
-  function build(p: DockPrefs, cat: Map<string, DockApp>): void {
+  function build(cat: Map<string, DockApp>, side: 'right' | 'left'): void {
     //  키보드 초점이 독 안에 있었다 — 다시 세운 뒤 같은 앱의 새 단추로 돌려준다. 안 돌려주면 초점이 body 로 떨어져
     //   Enter 로 앱을 연 사람이 탭 순서의 맨 앞으로 쫓겨난다(#4443 리뷰 실측: activeElement = BODY). 탭 줄도 같은 일을 한다(panes.ts).
     const ae = document.activeElement as HTMLElement | null;
     const refocus = ae && ae !== document.body && shelf.contains(ae) ? ae.dataset.type ?? null : null;
     const refocusAt = refocus ? btns.indexOf(ae as HTMLElement) : -1;   // 그 앱이 사라졌으면(빼기·닫기) 같은 자리의 이웃으로
     hideTip();
-    root.dataset.edge = p.edge;
-    root.dataset.mode = p.mode;
-    root.classList.toggle('mag', magOn(p));
+    root.dataset.home = home;
+    root.dataset.side = side;                                       // 곁칸이 이음매의 어느 쪽인가 — 이름표 · [더보기] · 튀어 오르기 방향
+    root.classList.toggle('mag', magOn());
     root.classList.toggle('narrow', host.narrow());
-    root.setAttribute('aria-orientation', isVertical(p.edge) ? 'vertical' : 'horizontal');
+    root.setAttribute('aria-orientation', vertical() ? 'vertical' : 'horizontal');
     root.style.setProperty('--dk-s', size + 'px');
     const kids: HTMLElement[] = [];
     btns = [];
-    if (p.mode === 'float' && !host.narrow()) {
-      kids.push(el('span', { class: 'pn-dock-grip', title: '끌어서 독을 사이드바 테두리 어디로든 옮겨요 — 테두리에 바짝 대면 막대로 붙어요' }, pnIcon('grip', 'pn-i sm')) as HTMLElement);
-    }
     let prevPinned: boolean | null = null;
     for (const it of items) {
       if (prevPinned === true && !it.pinned) kids.push(sepEl());
       prevPinned = it.pinned;
-      const b = itemBtn(it, cat.get(it.type) ?? fallbackApp(it.type), p);
+      const b = itemBtn(it, cat.get(it.type) ?? fallbackApp(it.type));
       kids.push(b); btns.push(b);
     }
     if (items.length) kids.push(sepEl());
-    const mb = moreBtn(p);
+    const mb = moreBtn();
     kids.push(mb); btns.push(mb);
     shelf.replaceChildren(...kids);
     //  키보드 — 독은 탭 순서에 한 칸(roving tabindex). 켜진 앱이 그 칸이다(초점을 돌려받는 단추가 있으면 그 단추).
@@ -239,12 +268,12 @@ export function mountDock(host: DockHost): DockHandle {
     btns.forEach((b, i) => { b.tabIndex = i === onI ? 0 : -1; });
     if (back >= 0) btns[back].focus({ preventScroll: true });
   }
+  //  구분선도 손잡이다 — 잡고 끌면 독이 옮겨 간다(macOS 독의 구분선처럼 잡는 자리). 끝 여백 · 빈 자리도 같다.
   const sepEl = (): HTMLElement => el('span', { class: 'pn-dock-sep', 'aria-hidden': 'true' }) as HTMLElement;
 
-  function itemBtn(it: DockItem, app: DockApp, p: DockPrefs): HTMLElement {
+  function itemBtn(it: DockItem, app: DockApp): HTMLElement {
     const name = it.type === 'sessapp' ? host.title('sessapp') : app.name;
     const n = it.keys.length;
-    const label = p.mode === 'bar' && !isVertical(p.edge) ? el('span', { class: 'pn-dock-lbl', text: name }) : null;
     const b = el('button', {
       class: 'pn-dock-it' + (it.active ? ' on' : '') + (n ? ' run' : '') + (it.pinned ? ' pin' : ''),
       type: 'button', 'data-type': it.type, style: `--ac: var(--gi-c-${appColor(it.type)})`,
@@ -252,7 +281,6 @@ export function mountDock(host: DockHost): DockHandle {
       'aria-pressed': String(it.active),
     },
     el('span', { class: 'pn-dock-ic' }, tile(app.glyph, appColor(it.type))),
-    label,
     el('span', { class: 'pn-dock-dots', 'aria-hidden': 'true' }, ...Array.from({ length: Math.min(3, n) }, () => el('i')))) as HTMLElement;
     b.dataset.name = name;
     b.addEventListener('click', (e) => onItemClick(e as MouseEvent, it, app));
@@ -268,10 +296,9 @@ export function mountDock(host: DockHost): DockHandle {
     return b;
   }
 
-  function moreBtn(p: DockPrefs): HTMLElement {
-    const label = p.mode === 'bar' && !isVertical(p.edge) ? el('span', { class: 'pn-dock-lbl', text: '더보기' }) : null;
+  function moreBtn(): HTMLElement {
     const b = el('button', { class: 'pn-dock-it pn-dock-more-btn', type: 'button', 'data-type': '·more', 'aria-label': '모든 앱', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' },
-      el('span', { class: 'pn-dock-ic' }, tile('grid', 'apps')), label, el('span', { class: 'pn-dock-dots', 'aria-hidden': 'true' })) as HTMLElement;
+      el('span', { class: 'pn-dock-ic' }, tile('grid', 'apps')), el('span', { class: 'pn-dock-dots', 'aria-hidden': 'true' })) as HTMLElement;
     b.dataset.name = '모든 앱';
     b.addEventListener('click', () => { if (suppressClick) { suppressClick = false; return; } toggleMore(b); });
     bindCtx(b, () => settingsResult());
@@ -282,36 +309,37 @@ export function mountDock(host: DockHost): DockHandle {
     return b;
   }
 
-  /** 자리 — 떠 있는 알약은 테두리를 따라 at 자리(가운데 기준, 테두리 여백 안으로 자른다), 막대는 테두리 전체. */
-  function place(p: DockPrefs): void {
-    const W = pane.clientWidth, H = pane.clientHeight, top0 = barH();
+  /** 이음매 독의 가운데 y(.pn-body 좌표) — 세로 구간을 따라 at 자리, 알약이 구간 밖으로 안 나가게 자른다. */
+  function seamCenterY(g: DockGeom, layerTop: number, len: number, at: number): number {
+    const span = g.bottom - g.top;
+    return g.top - layerTop + clamp(at * span, M.margin + len / 2, span - M.margin - len / 2);
+  }
+  /** 자리 — 이음매면 경계선 위 at 자리(가운데 기준), 곁칸 아래면 곁칸 바닥 가운데. 자리 점 하나만 박는다(선반은 CSS 가 매단다). */
+  function place(): void {
     const st = root.style;
-    st.left = st.top = st.right = st.bottom = st.width = st.height = '';
-    if (p.mode === 'bar') {
-      const t = dockThickness(p, size) + 'px';
-      if (p.edge === 'bottom') { st.left = '0px'; st.right = '0px'; st.bottom = '0px'; st.height = t; }
-      else if (p.edge === 'top') { st.left = '0px'; st.right = '0px'; st.top = top0 + 'px'; st.height = t; }
-      else { st.top = top0 + 'px'; st.bottom = '0px'; st.width = t; st[p.edge] = '0px'; }
-    } else {
-      const sw = shelf.offsetWidth, sh = shelf.offsetHeight;
-      if (!isVertical(p.edge)) {
-        st.left = clamp(p.at * W, M.margin + sw / 2, W - M.margin - sw / 2) + 'px';
-        if (p.edge === 'bottom') st.bottom = M.margin + 'px'; else st.top = top0 + M.margin + 'px';
-      } else {
-        const avail = H - top0;
-        st.top = top0 + clamp(p.at * avail, M.margin + sh / 2, avail - M.margin - sh / 2) + 'px';
-        st[p.edge] = M.margin + 'px';
+    st.left = st.top = st.bottom = '';
+    if (home === 'seam') {
+      const g = seamGeom();
+      const layer = root.parentElement as HTMLElement;
+      if (g && layer) {
+        const lr = layer.getBoundingClientRect();
+        st.left = g.seam! - lr.left + 'px';
+        st.top = seamCenterY(g, lr.top, shelf.offsetHeight, prefs.at) + 'px';
       }
+    } else {
+      st.left = pane.clientWidth / 2 + 'px';
+      st.bottom = M.margin + 'px';
     }
-    //  확대 전 중심 — 확대는 이 값에서 잰다(아이콘이 커지며 자리가 밀려도 기준이 흔들리지 않게). 독 가운데 기준.
-    const r = root.getBoundingClientRect();
-    const mid = isVertical(p.edge) ? r.top + r.height / 2 : r.left + r.width / 2;
-    centers = btns.map((b) => { const q = b.getBoundingClientRect(); return (isVertical(p.edge) ? q.top + q.height / 2 : q.left + q.width / 2) - mid; });
+    //  확대 전 중심 — 확대는 이 값에서 잰다(아이콘이 커지며 자리가 밀려도 기준이 흔들리지 않게). 알약 가운데 기준.
+    const r = shelf.getBoundingClientRect();
+    const v = vertical();
+    const mid = v ? r.top + r.height / 2 : r.left + r.width / 2;
+    centers = btns.map((b) => { const q = b.getBoundingClientRect(); return (v ? q.top + q.height / 2 : q.left + q.width / 2) - mid; });
   }
 
-  /** 부품이 독만큼 물러선다 — 곁칸 본문의 네 여백(CSS 가 읽는다: --pn-dock-b|t|l|r). 가려 두면 0. */
-  function applyInset(p: DockPrefs | null): void {
-    const z = p ? dockInset(p, size) : { bottom: 0, top: 0, left: 0, right: 0 };
+  /** 부품이 독만큼 물러선다 — 곁칸 본문의 네 여백(CSS 가 읽는다: --pn-dock-b|t|l|r). 이음매 독은 0(경계선 위에 떠 있다). */
+  function applyInset(h: DockHome | null): void {
+    const z = h ? dockInset(h, size) : { bottom: 0, top: 0, left: 0, right: 0 };
     pane.style.setProperty('--pn-dock-b', z.bottom + 'px');
     pane.style.setProperty('--pn-dock-t', z.top + 'px');
     pane.style.setProperty('--pn-dock-l', z.left + 'px');
@@ -326,30 +354,39 @@ export function mountDock(host: DockHost): DockHandle {
     else host.show(a.key);
   }
 
-  // ── 이름표 ──────────────────────────────────────────────────────────────────
-  //  막대(가로)는 이름이 이미 보여 안 띄운다. 끌거나 메뉴가 떠 있는 동안에도 안 띄운다.
+  // ── 이름표 — 꼬리 달린 말풍선(macOS 독) ─────────────────────────────────────
+  //  곁칸 아래 독은 아이콘 위에, 이음매 독은 **세션 쪽**으로(곁칸은 앱이 열리는 자리라 비워 둔다). 끌거나 메뉴가 떠 있는 동안엔 안 띄운다.
   function showTip(b: HTMLElement): void {
-    const p = eff();
-    if ((p.mode === 'bar' && !isVertical(p.edge)) || dragging || ctxIsOpen()) return;
+    if (dragging || ctxIsOpen()) return;
     tipFor = b;
     tip.textContent = b.dataset.name || '';
-    tip.dataset.edge = p.edge;
+    tip.dataset.side = home === 'float' ? 'top' : (root.dataset.side === 'left' ? 'right' : 'left');
     tip.hidden = false;
     positionTip(b);
   }
   function hideTip(): void { tipFor = null; tip.hidden = true; }
   function positionTip(b: HTMLElement): void {
-    const pr = pane.getBoundingClientRect();
+    const layer = tip.parentElement as HTMLElement | null;
+    if (!layer) return;
+    const lr = layer.getBoundingClientRect();
     const ic = (b.querySelector('.pn-dock-ic') as HTMLElement | null) ?? b;
     const r = ic.getBoundingClientRect();
-    const e = eff().edge;
-    //  이름표는 곁칸 안에 선다 — 곁칸이 넘친 것을 자르므로(42-v2-panes.css overflow: clip) 테두리 가까운 아이콘의 긴 이름이
-    //   잘리지 않게 가운데를 안쪽으로 당긴다.
-    const tw = tip.offsetWidth, th = tip.offsetHeight, W = pr.width, H = pr.height, top0 = barH();
-    const cx = clamp(r.left + r.width / 2 - pr.left, tw / 2 + 4, W - tw / 2 - 4);
-    const cy = clamp(r.top + r.height / 2 - pr.top, top0 + th / 2 + 4, H - th / 2 - 4);
-    tip.style.left = (e === 'left' ? r.right - pr.left + 10 : e === 'right' ? r.left - pr.left - 10 : cx) + 'px';
-    tip.style.top = (e === 'bottom' ? r.top - pr.top - 10 : e === 'top' ? r.bottom - pr.top + 10 : cy) + 'px';
+    const side = tip.dataset.side;
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    const icx = r.left + r.width / 2 - lr.left, icy = r.top + r.height / 2 - lr.top;
+    if (side === 'top') {
+      //  이름표는 붙은 곳 안에 선다 — 곁칸이 넘친 것을 자르므로 테두리 가까운 아이콘의 긴 이름이 잘리지 않게 가운데를 당기고,
+      //   꼬리는 아이콘을 계속 가리킨다(--ax).
+      const cx = clamp(icx, tw / 2 + 4, lr.width - tw / 2 - 4);
+      tip.style.left = cx + 'px';
+      tip.style.top = r.top - lr.top - 12 + 'px';
+      tip.style.setProperty('--ax', clamp(icx - cx, -tw / 2 + 10, tw / 2 - 10) + 'px');
+    } else {
+      const cy = clamp(icy, th / 2 + 4, lr.height - th / 2 - 4);
+      tip.style.top = cy + 'px';
+      tip.style.left = (side === 'left' ? r.left - lr.left - 12 : r.right - lr.left + 12) + 'px';
+      tip.style.setProperty('--ax', clamp(icy - cy, -th / 2 + 6, th / 2 - 6) + 'px');
+    }
   }
 
   // ── 확대 ────────────────────────────────────────────────────────────────────
@@ -357,8 +394,8 @@ export function mountDock(host: DockHost): DockHandle {
   let magPos: number | null = null;
   shelf.addEventListener('pointermove', (e: PointerEvent) => {
     if (!root.classList.contains('mag') || dragging || e.pointerType === 'touch') return;
-    const r = root.getBoundingClientRect();
-    magPos = isVertical(eff().edge) ? e.clientY - (r.top + r.height / 2) : e.clientX - (r.left + r.width / 2);
+    const r = shelf.getBoundingClientRect();
+    magPos = vertical() ? e.clientY - (r.top + r.height / 2) : e.clientX - (r.left + r.width / 2);
     if (!magRaf) magRaf = requestAnimationFrame(applyMag);
   });
   shelf.addEventListener('pointerleave', () => { magPos = null; if (!magRaf) magRaf = requestAnimationFrame(applyMag); });
@@ -373,32 +410,11 @@ export function mountDock(host: DockHost): DockHandle {
     if (tipFor) positionTip(tipFor);
   }
 
-  // ── 자동으로 가리기 ──────────────────────────────────────────────────────────
-  function setShown(v: boolean): void {
-    shown = v;
-    root.classList.toggle('out', !v);
-    reveal.hidden = v || !eff().hide;
-  }
-  function scheduleHide(): void {
-    if (!eff().hide) return;
-    window.clearTimeout(hideTimer);
-    hideTimer = window.setTimeout(() => {
-      //  메뉴·[더보기]·끌기가 떠 있는 동안은 기다렸다가 다시 본다 — 메뉴가 닫힌 뒤 손이 독 밖이면 그때 물러난다(macOS).
-      if (busy()) { scheduleHide(); return; }
-      if (!root.matches(':hover, :focus-within')) setShown(false);
-    }, 650);
-  }
-  reveal.addEventListener('pointerenter', () => { window.clearTimeout(hideTimer); setShown(true); });
-  root.addEventListener('pointerenter', () => window.clearTimeout(hideTimer));
-  root.addEventListener('pointerleave', () => scheduleHide());
-  root.addEventListener('focusin', () => { window.clearTimeout(hideTimer); if (!shown) setShown(true); });
-  root.addEventListener('focusout', (e: FocusEvent) => { if (!root.contains(e.relatedTarget as Node | null)) scheduleHide(); });
-
   // ── 키보드 — 독 축을 따라 ←→(↑↓) · Home · End. 메뉴 키 · ⇧F10 은 셸의 메뉴 엔진이 받는다(bindCtx) ──────
   root.addEventListener('keydown', (e: KeyboardEvent) => {
     const i = btns.indexOf(document.activeElement as HTMLElement);
     if (i < 0) return;
-    const v = isVertical(eff().edge);
+    const v = vertical();
     const next = (e.key === (v ? 'ArrowDown' : 'ArrowRight')) ? i + 1 : (e.key === (v ? 'ArrowUp' : 'ArrowLeft')) ? i - 1
       : e.key === 'Home' ? 0 : e.key === 'End' ? btns.length - 1 : null;
     if (next !== null) {
@@ -418,26 +434,24 @@ export function mountDock(host: DockHost): DockHandle {
     const x = e.clientX || e.clientY ? e.clientX : r.left + r.width / 2;     // 키보드로 누른 단추 — 좌표가 0 이다
     const y = e.clientX || e.clientY ? e.clientY : r.top + r.height / 2;
     hideTip();
-    ctxMenu(x, y, rows, { title, sub, onClose: () => scheduleHide() });
+    ctxMenu(x, y, rows, { title, sub });
   }
   function settingsRows(): CtxRow[] {
     const p = prefs;
     const set = (patch: Partial<DockPrefs>): void => savePrefs({ ...p, ...patch });
+    const seamOk = !!seamEl();
     return [
-      { label: '위치', icon: 'moveto', sub: (['bottom', 'top', 'left', 'right'] as DockEdge[]).map((e) => ({ label: EDGE_NAME[e], checked: p.edge === e, run: () => set({ edge: e, at: p.edge === e ? p.at : 0.5 }) })) },
-      { label: '모양', icon: 'columns', sub: [
-        { label: '띄워 두기', hint: '사이드바 위에 떠 있는 알약', checked: p.mode === 'float', run: () => set({ mode: 'float' }) },
-        { label: '막대로 붙이기', hint: '테두리에 붙은 막대 · 이름까지', checked: p.mode === 'bar', run: () => set({ mode: 'bar' }) },
+      { label: '위치', icon: 'moveto', sub: [
+        { label: '이음매', hint: seamOk ? '세션과 사이드바 사이 — 세로를 안 써요' : '지금 화면엔 이음매가 없어요', checked: p.home === 'seam', off: !seamOk, run: () => set({ home: 'seam' }) },
+        { label: '사이드바 아래', hint: '사이드바 폭을 따라 커져요', checked: p.home === 'float', run: () => set({ home: 'float' }) },
       ] },
-      { sep: true, label: '' },
-      { label: '자동으로 가리기', checked: p.hide, hint: p.hide ? '' : '사이드바 세로를 다 써요', run: () => set({ hide: !p.hide }) },
       { label: '확대', checked: p.mag, run: () => set({ mag: !p.mag }) },
       { sep: true, label: '' },
       //  고정 목록은 «적은 적 없음» 으로 되돌린다 — 오늘의 기본 다섯을 목록으로 박아 두면 나중에 기본값이 바뀌어도 이 사람에겐 안 간다.
       { label: '독 되돌리기', icon: 'undo', hint: '자리 · 고정한 앱', run: () => { resetPins(); savePrefs({ ...DOCK_DEFAULTS }); } },
     ];
   }
-  const SETTINGS_SUB = '끌어서 사이드바 테두리 어디로든 옮길 수 있어요';
+  const SETTINGS_SUB = '알약의 끝이나 빈 자리를 잡고 끌어 옮길 수 있어요';
   /** 독의 빈 자리 · [더보기] 단추의 메뉴 = 독 설정. 좁은 폭(서랍)엔 설정이 없다 — 빈 메뉴로 «여기엔 메뉴가 없다»(곁칸 빈 자리 메뉴도 안 뜬다). */
   const settingsResult = (): CtxResult => (host.narrow() ? { rows: [], title: '독', only: true } : menu(settingsRows(), '독', SETTINGS_SUB));
   function settingsMenu(e: MouseEvent, anchor: HTMLElement): void {
@@ -469,7 +483,7 @@ export function mountDock(host: DockHost): DockHandle {
     if (!host.narrow()) rows.push({ sep: true, label: '' }, { label: '독', icon: 'sliders', sub: settingsRows() });
     return menu(rows, name, keys.length > 1 ? `열린 창 ${keys.length}개` : keys.length ? '열려 있어요' : app.hint);
   }
-  //  독의 빈 자리(손잡이 · 구분선 · 여백) 우클릭 = 독 설정. 아이콘 위는 아이콘 단추가 먼저 받는다(엔진은 가까운 것부터 찾는다).
+  //  독의 빈 자리(끝 여백 · 구분선) 우클릭 = 독 설정. 아이콘 위는 아이콘 단추가 먼저 받는다(엔진은 가까운 것부터 찾는다).
   bindCtx(shelf, () => settingsResult());
 
   // ── 아이콘 끌기 — 순서 바꾸기 · 끌어내 고정 풀기 ──────────────────────────────
@@ -478,7 +492,7 @@ export function mountDock(host: DockHost): DockHandle {
     const known = pickIn(catalog());
     if (!known(it.type)) return;                                // 고정할 수 없는 것(뷰어 · 붙은 앱)은 끌 것도 없다
     const sx = e.clientX, sy = e.clientY, pid = e.pointerId;
-    const v = isVertical(eff().edge);
+    const v = vertical();
     let started = false;
     let ghost: HTMLElement | null = null;
     let caret: HTMLElement | null = null;
@@ -500,7 +514,7 @@ export function mountDock(host: DockHost): DockHandle {
         ghost.style.width = r.width + 'px'; ghost.style.height = r.height + 'px';
         document.body.append(ghost);
         caret = el('span', { class: 'pn-dock-caret', 'aria-hidden': 'true' }) as HTMLElement;
-        root.append(caret);
+        shelf.append(caret);
         b.classList.add('lifted');
       }
       if (!ghost || !caret) return;
@@ -522,12 +536,11 @@ export function mountDock(host: DockHost): DockHandle {
       if (to < 0) { caret.hidden = true; return; }
       before = list[to]?.dataset.type ?? null;
       //  끼울 자리 선 — 고정 줄의 to 번째 앞(없으면 마지막 뒤).
-      const rr = root.getBoundingClientRect();
       const ref = list[to] ?? list[list.length - 1] ?? b;
       const q = ref.getBoundingClientRect();
       const at = list[to] ? lo(q) - GAP / 2 : hi(q) + GAP / 2;
       caret.dataset.v = v ? '1' : '0';
-      if (v) { caret.style.top = at - rr.top + 'px'; caret.style.left = ''; } else { caret.style.left = at - rr.left + 'px'; caret.style.top = ''; }
+      if (v) { caret.style.top = at - sr.top + 'px'; caret.style.left = ''; } else { caret.style.left = at - sr.left + 'px'; caret.style.top = ''; }
     };
     const end = (commit: boolean): void => {
       window.removeEventListener('pointermove', move, true);
@@ -567,40 +580,50 @@ export function mountDock(host: DockHost): DockHandle {
     dragOff = () => end(false);
   }
 
-  // ── 독 끌기 — 곁칸 테두리 어디로든 ────────────────────────────────────────────
-  //  손잡이나 빈 자리를 잡고 끈다. 끄는 동안 놓일 자리가 윤곽으로 보인다: 테두리에 바짝이면 테두리 전체(막대), 안쪽이면 알약.
-  //  놓으면 새 자리로 미끄러져 간다(놓은 자리에서 새 자리까지 — FLIP).
+  // ── 독 끌기 — 이음매 ↔ 곁칸 아래 ─────────────────────────────────────────────
+  //  알약의 끝 여백 · 구분선 · 빈 자리를 잡고 끈다(아이콘은 순서 바꾸기). 끄는 동안 놓일 자리가 윤곽으로 보인다:
+  //   경계선 가까이 · 세션 쪽이면 이음매(그 높이), 곁칸 안쪽으로 깊이면 곁칸 아래. 놓으면 새 자리로 미끄러져 간다(FLIP).
+  //   끄는 동안 독은 곁칸의 부모(.pn-body)에 옮겨 붙는다 — 곁칸 안에 붙은 채면 곁칸 테두리에서 잘린다(overflow: clip).
   shelf.addEventListener('pointerdown', (e: PointerEvent) => {
     if ((e.target as HTMLElement).closest('.pn-dock-it')) return;
     beginDockDrag(e);
   });
   function beginDockDrag(e: PointerEvent): void {
     if (dragOff || e.button !== 0 || e.pointerType === 'touch' || host.narrow()) return;
+    const lift = pane.parentElement;
+    if (!lift) return;
     e.preventDefault();
     const sx = e.clientX, sy = e.clientY, pid = e.pointerId;
     let started = false;
-    let target: DockPlace | null = null;
+    let target: { home: DockHome; at?: number } | null = null;
     const preview = el('div', { class: 'pn-dock-preview' }, el('span', { class: 'pn-dock-preview-t' })) as HTMLElement;
     const drop = el('div', { class: 'pn-dock-drop', 'aria-hidden': 'true' }, preview) as HTMLElement;
     const move = (ev: PointerEvent): void => {
       if (ev.pointerId !== pid) return;
       //  떼는 순간을 못 봤다(액자 · 창 밖에서 놓았다) — 없던 일로. 그대로 두면 끌기 상태(액자 포인터 막기 포함)가 남고
-      //   다음의 아무 누름이 이 끌기를 «놓기» 로 끝냈다(#4443 리뷰 실측: edge=left 로 저장됐다).
+      //   다음의 아무 누름이 이 끌기를 «놓기» 로 끝냈다(#4443 리뷰 실측).
       if ((ev.buttons & 1) === 0) { end(false); return; }
       if (!started) {
         if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 4) return;
         started = true; dragging = true;
         hideTip(); magPos = null; applyMag();
         more?.close();
+        //  곁칸 안에 붙어 있었으면 부모로 옮겨 붙인다 — 자리 점의 화면 위치는 그대로(left/top 으로 다시 적는다).
+        if (root.parentElement !== lift) {
+          const ar = root.getBoundingClientRect(), lr = lift.getBoundingClientRect();
+          lift.append(root, tip);
+          root.style.bottom = '';
+          root.style.left = ar.left - lr.left + 'px';
+          root.style.top = ar.top - lr.top + 'px';
+        }
         root.classList.add('moving');
         document.documentElement.classList.add('pn-dock-dragging');
-        pane.append(drop);
+        lift.append(drop);
       }
       root.style.transform = `translate(${ev.clientX - sx}px, ${ev.clientY - sy}px)`;
-      const pr = pane.getBoundingClientRect();
-      const top0 = barH();
-      target = placeFromPoint(ev.clientX, ev.clientY, { left: pr.left, top: pr.top + top0, width: pr.width, height: pr.height - top0 });
-      drawPreview(preview, target);
+      const g = seamGeom();
+      target = g ? placeDock(ev.clientX, ev.clientY, g, { near: NEAR }) : { home: 'float' };
+      drawPreview(preview, target, lift);
     };
     const end = (commit: boolean): void => {
       window.removeEventListener('pointermove', move, true);
@@ -613,16 +636,12 @@ export function mountDock(host: DockHost): DockHandle {
       dragging = false;
       document.documentElement.classList.remove('pn-dock-dragging');
       drop.remove();
-      const from = root.getBoundingClientRect();
+      const from = shelf.getBoundingClientRect();
       root.classList.remove('moving');
       root.style.transform = '';
       if (dead) return;                                         // 독이 걷혔다 — 치우기만 하고 자리를 적지 않는다
-      if (commit && target) {
-        savePrefs({ ...prefs, ...target });                     // → live → render(true) 가 새 자리에 세운다
-        glideFrom(from);
-      } else {
-        glideFrom(from);                                        // 없던 일 — 제자리로 미끄러져 돌아간다
-      }
+      if (commit && target) savePrefs({ ...prefs, ...target }); // → live → render(true) 가 새 자리에 세운다
+      glideFrom(from);                                          // (없던 일이면 제자리로 미끄러져 돌아간다)
     };
     const up = (ev: PointerEvent): void => { if (ev.pointerId === pid) end(true); };
     const cancel = (ev: PointerEvent): void => { if (ev.pointerId === pid) end(false); };
@@ -635,38 +654,35 @@ export function mountDock(host: DockHost): DockHandle {
     window.addEventListener('blur', blur);
     dragOff = () => end(false);
   }
-  /** 놓일 자리의 윤곽 — 곁칸 좌표. 막대는 테두리 전체, 알약은 지금 독 길이로 그 자리에. */
-  function drawPreview(pv: HTMLElement, t: DockPlace): void {
-    const W = pane.clientWidth, H = pane.clientHeight, top0 = barH();
-    const vNow = isVertical(eff().edge);
-    const len = vNow ? shelf.offsetHeight : shelf.offsetWidth;
-    const lim = SIZE[t.mode];
-    const s = Math.min(lim.max, Math.max(lim.min, size));
-    const thick = t.mode === 'bar' ? dockThickness(t, s) : s + 2 * M.pad + M.dot;
+  /** 놓일 자리의 윤곽(.pn-body 좌표) — 이음매면 경계선 위 그 높이의 세로 알약, 곁칸 아래면 곁칸 폭에 맞춘 가로 알약. */
+  function drawPreview(pv: HTMLElement, t: { home: DockHome; at?: number }, layer: HTMLElement): void {
+    const lr = layer.getBoundingClientRect(), pr = pane.getBoundingClientRect();
+    const n = items.length + 1;
+    const seps = ((items.some((i) => i.pinned) && items.some((i) => !i.pinned) ? 1 : 0) + (items.length ? 1 : 0)) * SEP;
     let x = 0, y = 0, w = 0, h = 0;
-    if (t.mode === 'bar') {
-      if (t.edge === 'bottom') { x = 0; y = H - thick; w = W; h = thick; }
-      else if (t.edge === 'top') { x = 0; y = top0; w = W; h = thick; }
-      else { y = top0; h = H - top0; w = thick; x = t.edge === 'left' ? 0 : W - thick; }
-    } else if (!isVertical(t.edge)) {
-      w = Math.min(len, W - 2 * M.margin); h = thick;
-      x = clamp(t.at * W - w / 2, M.margin, W - M.margin - w);
-      y = t.edge === 'bottom' ? H - M.margin - h : top0 + M.margin;
+    const g = seamGeom();
+    if (t.home === 'seam' && g) {
+      const s = home === 'seam' ? size : SIZE.seam.max;
+      w = dockThickness('seam', s);
+      h = n * (s + DOT_ROW) + GAP * (n - 1) + 2 * (M.pad + 4) + seps;
+      x = g.seam! - lr.left - w / 2;
+      y = seamCenterY(g, lr.top, h, t.at ?? prefs.at) - h / 2;
     } else {
-      h = Math.min(len, H - top0 - 2 * M.margin); w = thick;
-      y = top0 + clamp(t.at * (H - top0) - h / 2, M.margin, H - top0 - M.margin - h);
-      x = t.edge === 'left' ? M.margin : W - M.margin - w;
+      const s = floatIconSize(pr.width, n, { min: SIZE.float.min, max: SIZE.float.max, gap: GAP, pad: M.pad + 2, margin: M.margin, extra: seps, grow: magOn() ? MAG_GROW : 0 });
+      w = Math.min(pr.width - 2 * M.margin, n * s + GAP * (n - 1) + 2 * (M.pad + 2) + seps);
+      h = dockThickness('float', s);
+      x = pr.left - lr.left + (pr.width - w) / 2;
+      y = pr.bottom - lr.top - M.margin - h;
     }
     Object.assign(pv.style, { left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px' });
-    pv.dataset.mode = t.mode;
-    pv.dataset.edge = t.edge;
-    (pv.firstElementChild as HTMLElement).textContent = t.mode === 'bar' ? `${EDGE_NAME[t.edge]} 막대로 붙이기` : `${EDGE_NAME[t.edge]}에 띄우기`;
+    pv.dataset.home = t.home;
+    (pv.firstElementChild as HTMLElement).textContent = `${HOME_NAME[t.home]}에 두기`;
   }
-  /** from(화면 좌표의 옛 자리)에서 지금 자리로 미끄러진다 — 가운데끼리 잇는다(방향이 바뀌어도 어색하지 않게). */
+  /** from(화면 좌표의 옛 알약)에서 지금 자리로 미끄러진다 — 가운데끼리 잇는다(세로 ↔ 가로로 바뀌어도 어색하지 않게). */
   function glideFrom(from: DOMRect): void {
     render(true);
     if (reduced()) return;
-    const to = root.getBoundingClientRect();
+    const to = shelf.getBoundingClientRect();
     const dx = from.left + from.width / 2 - (to.left + to.width / 2);
     const dy = from.top + from.height / 2 - (to.top + to.height / 2);
     if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
@@ -685,8 +701,7 @@ export function mountDock(host: DockHost): DockHandle {
   }
   function openMore(first: HTMLElement): { el: HTMLElement; close(): void; reanchor(b: HTMLElement): void } {
     hideTip();
-    window.clearTimeout(hideTimer);
-    //  부풀어 나온 단추 — 독을 다시 세우면(자리를 옮겼다) 새 단추로 갈아 끼운다(reanchor).
+    //  부풀어 나온 단추 — 독을 다시 세우면 새 단추로 갈아 끼운다(reanchor).
     let anchor = first;
     const cat = catalog();
     const known = pickIn(cat);
@@ -780,8 +795,8 @@ export function mountDock(host: DockHost): DockHandle {
     setBtn.addEventListener('click', (e) => settingsMenu(e as MouseEvent, setBtn));
     padBtn.addEventListener('click', () => { close(); openLaunchpad(); });
 
+    (root.parentElement ?? pane).append(panel);                    // 독과 같은 곳에(이음매면 곁칸의 부모)
     positionMore(panel, anchor);
-    pane.append(panel);
     anchor.setAttribute('aria-expanded', 'true');
     root.classList.add('more-open');
     draw();
@@ -807,51 +822,56 @@ export function mountDock(host: DockHost): DockHandle {
       anchor.setAttribute('aria-expanded', 'false');
       root.classList.remove('more-open');
       if (more && more.el === panel) more = null;
-      scheduleHide();
     }
     function reanchor(b: HTMLElement): void {
       if (closed || !b) return;
+      if (panel.parentElement !== root.parentElement) { close(); return; }   // 붙는 곳이 바뀌었다(이음매 ↔ 곁칸 아래)
       anchor = b;
       b.setAttribute('aria-expanded', 'true');
       positionMore(panel, b);
     }
     return { el: panel, close, reanchor };
   }
-  /** [더보기] 창의 자리 — 독 아이콘에서 곁칸 안쪽으로 부풀어 나온다(아래 독이면 위로, 오른쪽 독이면 왼쪽으로). */
+  /** [더보기] 창의 자리(붙은 곳 좌표) — 독 아이콘에서 부풀어 나온다.
+   *  · 곁칸 아래 독: 위로, 곁칸 안에(곁칸이 넘친 것을 자른다).
+   *  · 이음매 독: **곁칸 쪽**으로(앱이 열리는 자리) — 곁칸이 좁아 240 도 안 남으면 세션 쪽으로. 세로는 곁칸 구간 안에. */
   function positionMore(panel: HTMLElement, anchor: HTMLElement): void {
-    const e = eff().edge;
-    const pr = pane.getBoundingClientRect();
-    const ar = anchor.getBoundingClientRect();
-    const W = pr.width, H = pr.height, top0 = barH();
+    const layer = panel.parentElement as HTMLElement | null;
+    if (!layer) return;
+    const lr = layer.getBoundingClientRect(), pr = pane.getBoundingClientRect(), ar = anchor.getBoundingClientRect();
     const gap = 10;
-    //  폭 — 옆 독(왼쪽·오른쪽)이면 **독 옆에 남은 자리**에 맞춘다: 곁칸이 넘친 것을 자르므로(overflow: clip) 곁칸 기본 폭(340)에서
-    //   344 짜리 창을 독 옆에 세우면 타일 일부와 검색 칸이 잘렸다(#4443 재검증 실측: 오른쪽 독 15개 중 5개). 옆 자리가 240 도 안 되면
-    //   (아주 좁은 곁칸) 곁칸 폭에 맞춰 독 위로 겹친다 — 잘리는 것보다 가리는 편이 낫다.
-    const side = e === 'left' ? W - (ar.right - pr.left) - gap - 8 : e === 'right' ? ar.left - pr.left - gap - 8 : 0;
-    const w = side >= 240 ? Math.min(344, side) : Math.max(200, Math.min(W - 16, 344));
     const st = panel.style;
-    st.left = st.right = st.top = st.bottom = '';                  // 다시 부풀릴 때(reanchor) 옛 테두리의 자리가 남지 않게
-    st.width = w + 'px';
-    const ax = ar.left - pr.left + ar.width / 2, ay = ar.top - pr.top + ar.height / 2;
-    if (e === 'bottom' || e === 'top') {
+    st.left = st.right = st.top = st.bottom = '';                  // 다시 부풀릴 때(reanchor) 옛 자리가 남지 않게
+    const ax = ar.left - lr.left + ar.width / 2, ay = ar.top - lr.top + ar.height / 2;
+    if (home === 'float') {
+      const W = lr.width, H = lr.height, top0 = barH();
+      const w = Math.max(200, Math.min(W - 16, 344));
+      st.width = w + 'px';
       const left = clamp(ax - w / 2, 8, W - 8 - w);
       st.left = left + 'px';
-      if (e === 'bottom') { st.bottom = H - (ar.top - pr.top) + gap + 'px'; st.maxHeight = Math.max(160, ar.top - pr.top - top0 - gap - 8) + 'px'; }
-      else { st.top = ar.bottom - pr.top + gap + 'px'; st.maxHeight = Math.max(160, H - (ar.bottom - pr.top) - gap - 8) + 'px'; }
+      st.bottom = H - (ar.top - lr.top) + gap + 'px';
+      st.maxHeight = Math.max(160, ar.top - lr.top - top0 - gap - 8) + 'px';
       st.setProperty('--ox', ax - left + 'px');
-      st.setProperty('--oy', e === 'bottom' ? '100%' : '0%');
+      st.setProperty('--oy', '100%');
     } else {
-      //  독 옆(안쪽)에 — 곁칸 안으로 자른다(자리가 모자라 겹칠 때도 창이 곁칸 밖으로 나가지 않는다).
-      const left = clamp(e === 'left' ? ar.right - pr.left + gap : ar.left - pr.left - gap - w, 8, W - 8 - w);
+      const sideRight = root.dataset.side !== 'left';
+      //  곁칸 쪽 자리 = 독 바깥 끝에서 곁칸 반대 끝까지.
+      const intoPane = sideRight ? pr.right - ar.right - gap - 8 : ar.left - pr.left - gap - 8;
+      const toPane = intoPane >= 240;
+      const w = Math.min(344, toPane ? intoPane : Math.max(200, (sideRight ? ar.left - lr.left : lr.right - ar.right) - gap - 8));
+      st.width = w + 'px';
+      const goRight = toPane ? sideRight : !sideRight;
+      const left = clamp(goRight ? ar.right - lr.left + gap : ar.left - lr.left - gap - w, 8, lr.width - 8 - w);
       st.left = left + 'px';
-      const avail = H - top0 - 16;
-      const top = clamp(ay - avail / 2, top0 + 8, H - 8 - avail);
+      const top0 = pr.top - lr.top + barH() + 8, bot = pr.bottom - lr.top - 8;
+      const avail = Math.max(160, bot - top0);
+      const top = clamp(ay - avail / 2, top0, bot - avail);
       st.top = top + 'px';
       st.maxHeight = avail + 'px';
       st.setProperty('--ox', clamp(ax - left, 0, w) + 'px');       // 독 아이콘 쪽에서 부풀어 나온다
       st.setProperty('--oy', ay - top + 'px');
     }
-    panel.dataset.edge = e;
+    panel.dataset.home = home;
   }
 
   // ── 살아 있는 동안 ──────────────────────────────────────────────────────────
@@ -860,11 +880,16 @@ export function mountDock(host: DockHost): DockHandle {
   const onStorage = (e: StorageEvent): void => { if (e.key === PREF_STORE || e.key === PIN_STORE) onLive(false); };
   window.addEventListener('storage', onStorage);
   let roRaf = 0;
-  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => {
+  const later = (): void => {
     if (roRaf) return;
     roRaf = requestAnimationFrame(() => { roRaf = 0; if (!dragging) render(); });
-  }) : null;
+  };
+  //  곁칸 크기(폭 → 곁칸 아래 독의 크기) · 곁칸의 부모(분할선을 끌어 이음매가 옮겨 간다) · 자리바꿈(sw-left) · 카드 모드(cm)를 따라간다.
+  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(later) : null;
   ro?.observe(pane);
+  if (pane.parentElement) ro?.observe(pane.parentElement);
+  const mo = typeof MutationObserver === 'function' && pane.parentElement ? new MutationObserver(later) : null;
+  if (mo && pane.parentElement) mo.observe(pane.parentElement, { attributes: true, attributeFilter: ['class', 'style'] });
 
   render(true);
   return {
@@ -875,11 +900,11 @@ export function mountDock(host: DockHost): DockHandle {
       live.delete(onLive);
       window.removeEventListener('storage', onStorage);
       ro?.disconnect();
+      mo?.disconnect();
       if (roRaf) cancelAnimationFrame(roRaf);
       if (magRaf) cancelAnimationFrame(magRaf);
-      window.clearTimeout(hideTimer);
       more?.close();
-      root.remove(); reveal.remove(); tip.remove();
+      root.remove(); tip.remove();
       applyInset(null);
       document.documentElement.classList.remove('pn-dock-dragging');
     },

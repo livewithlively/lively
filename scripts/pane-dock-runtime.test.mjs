@@ -1,51 +1,41 @@
 #!/usr/bin/env node
-// 곁칸 독 — 실제 크롬에서 재는 자리 · 크기 · 손짓 (#4443 «곁칸 → 앱의 실행 화면», 원준 2026-09-30)
+// 곁칸 독 — 실제 크롬에서 재는 자리 · 끌어 옮기기 · 크기 · 메뉴 (#4443 «곁칸 → 앱의 실행 화면», 원준 2026-09-30 → 10-01)
 //
-//  원준: "3안으로 갈건데 독 드래그하면 2안 위치에 … 테두리쪽 원하는 곳 어디든 … 태스크 입력하는 거 같은 건 어떻게? …
-//   상단 탭 부분 높이 … 터미널 세션의 상단 바 부분이랑 같게 … 맥의 독 참고해서 모션·애니메이션·우클릭·더보기까지."
+//  원준(10-01, 바로잡음): "디폴트로 4안(이음매 독)이고 끌어당겨서 3안에 둘 수 있는 걸로 하고 싶은거야. 그리고 아래에 뒀을 때는
+//   곁칸 사이즈 변하는거에 따라서 독 사이즈도 바꾸고 싶음. 너가 바닥 왼쪽 탭 만든건 없애줘 일단은. 그리고 좀 더 이쁘게 … 맥 os 참고해서."
+//
+// 시험 페이지 = 셸의 격자 그대로: .pn-wrap > .pn-body(세션 열 | 분할선 6px | 곁칸 340px). 틀(#wrap)은 탭 칸(.v2-tabpane)처럼
+//  overflow:auto 이고 곁칸이 오른쪽 끝에 붙는다. 몸통에 셸의 메뉴 엔진을 걸고(main.ts), 곁칸 빈 자리 메뉴·공통 행도 흉내 낸다.
 //
 // 사양(엣지 표 — 행마다 단언 하나 이상):
-//  R1  기본: 바닥 가운데에 떠 있는 알약 — 곁칸 바닥에서 6px, 가로 가운데
-//  R2  독이 보이면 부품이 물러선다 — 본문 아래 여백 = 아이콘 + 안 여백×2 + 점 + 바깥 여백×2 (맨 아래 입력칸이 독 위에 선다)
-//  R3  점 = 떠 있는 탭 수(최대 셋), 켜진 앱만 켜짐 표시
-//  R4  안 떠 있는 앱을 누르면 연다(open 1건) · 연 앱은 튀어 오른다
-//  R5  떠 있는 앱을 누르면 보여 준다 · 켜진 앱을 또 누르면 다음 인스턴스로 돈다
-//  R6  ⌥-클릭 = 여럿 띄울 수 있는 앱은 하나 더
-//  R7  확대 — 마우스 밑 아이콘은 크게(≈1.6배), 멀리 있는 아이콘은 그대로
-//  R8  우클릭 — 열린 창 목록 · 새로 열기 · 모두 닫기 · 독에서 빼기 · 독 설정
-//  R9  독을 끌어 오른쪽 테두리에 바짝 → 막대(2안)로 붙는다: 계정 설정 edge=right · mode=bar, 부품은 오른쪽이 물러서고 아래는 0
-//  R9b 끄는 동안 놓일 자리가 윤곽으로 보인다(막대면 테두리 전체) · 놓으면 윤곽이 사라진다
-//  R10 다시 끌어 바닥 안쪽 30% 자리에 → 떠 있는 알약이 그 자리에(가운데 자석 밖)
-//  R11 자동으로 가리기 — 독이 물러나고 부품이 자리를 다 쓴다 · 테두리 띠에 손을 대면 나온다
-//  R12 아이콘을 끌어 순서를 바꾼다(고정 목록이 바뀐다)
-//  R13 고정한 아이콘을 독 밖으로 끌어내면 고정이 풀린다
-//  R14 [더보기] — 곁칸 앱 · 새 탭 앱 구획, 검색이 거른다, Enter 가 첫 앱을 연다, 열면 창이 닫힌다
-//  R15 Esc 로 [더보기]가 닫힌다
-//  R16 곁칸 탭 줄 높이 = 세션 머리줄 높이(두 열의 아래선이 한 줄로 잇는다) — 넓은 폭(≥901px)
-//  R14d 붙이기 수단이 있으면 [더보기]에 «이 세션에 붙이기»(설치 앱)
-//  R17 곁칸이 접혀(폭 0) 있으면 독도 없고 부품 여백도 0
-//  R19 붙이기 수단이 없는 게이트웨이(옛 판)면 그 구획이 없다 — 독은 그대로 쓴다
-//  ── #4443 리뷰 반영(2026-10-01) — 시험 페이지는 셸처럼 몸통에 메뉴 엔진을 걸고(main.ts), 곁칸 빈 자리 메뉴·공통 행도 흉내 낸다.
-//     틀(#wrap)은 탭 칸(.v2-tabpane)처럼 overflow:auto 이고 곁칸이 오른쪽 끝에 붙는다 ──
-//  A1 우클릭 = 독 행만(칸에 넣기·공통 행을 잇지 않는다) · A2 메뉴 키 · A3 ⇧F10 으로 연 메뉴가 **남는다** · A4 손가락 길게 누르기 = 독 행
-//  A5 손잡이 우클릭 = 독 설정만 · A6 좁은 폭의 [더보기]엔 메뉴가 없다(브라우저 메뉴도 막는다)
-//  B1 프로젝트 없는 화면(태스크·자료·지식 못 고름)에서 웹을 빼도 안 보이는 고정은 남는다 · B7 «독 되돌리기» = 고정 목록을 «적은 적 없음» 으로
-//  C1 가리기(아래) · C2 가리기(오른쪽) — 틀에 스크롤이 안 생긴다 · C3 숨은 독에 초점이 들어가도 틀이 안 구르고 독이 나온다
-//  D1 독 끌기 중 버튼이 떼어진 채 움직임 → 없던 일(다음 pointerup 도 안 적는다) · D2 아이콘 끌기도 · D3 창 blur · D4 다른 포인터는 모른 척
-//  D5 끄는 중에 독이 걷히면 놓아도 아무것도 안 적는다 · D6 끌기는 한 번에 하나
-//  E1 떠 있기만 한 앱을 제자리에서 흔들면 고정되지 않는다 · E2 고정 줄 안으로 끌어오면 그 자리에 고정
-//  F1 키보드로 앱을 열면(다시 세움) 초점이 같은 앱의 새 단추로 · F2 초점이 독 밖이면 건드리지 않는다
-//  G1 같은 창에서 캐시만 바뀌었을 때 refreshDocks 로 따라온다 · H1 [더보기]가 열린 채 독이 옮겨지면 새 단추 옆으로 · I1 이름표는 곁칸 안에
-//  ── 재검증 반영(2026-10-01) ── H2 옆 독(오른쪽·왼쪽)의 [더보기]도 곁칸 안에 선다(곁칸 기본 폭 340) · F3 초점 든 앱을 빼면 초점은 이웃 단추로
+//  R1  기본 = 이음매: 분할선 한가운데(세로) · 세로 구간 가운데 · 곁칸의 부모(.pn-body)에 붙는다 · 세로 알약
+//  R1b 손잡이(⋮⋮) · 자동 가리기 띠가 없다(원준 10-01 «없애줘»)
+//  R2  이음매 독은 아무도 안 비킨다 — 곁칸 본문 여백 0, «태스크 추가» 가 곁칸 바닥에
+//  R3  점 = 떠 있는 탭 수(최대 셋), 켜진 앱만 켜짐 · R4 안 떠 있는 앱을 누르면 연다 · 튀어 오른다
+//  R5  떠 있는 앱은 보여 주고, 켜진 앱을 또 누르면 다음 인스턴스 · R6 ⌥-클릭 = 하나 더
+//  R7  확대 — 이음매는 세로 축: 마우스 밑 ≈1.6배, 먼 것은 그대로 · R7c 알약 폭은 그대로(아이콘이 양옆으로 솟는다, macOS)
+//  R8  우클릭(엔진) — 열린 창 · 새로 열기 · 모두 닫기 · 독에서 빼기 · 독 설정. A1–A5 메뉴 세 길 · A6 좁은 폭의 [더보기]엔 메뉴 없음
+//  S1  독 설정 메뉴: 위치 › 이음매 · 사이드바 아래 / 확대 / 독 되돌리기 — «모양» · «자동으로 가리기» 는 없다
+//  R9  이음매에서 알약 끝을 잡고 곁칸 안쪽 깊이 끌면 → 놓일 자리 윤곽(곁칸 바닥) → 놓으면 곁칸 아래(계정 설정 home=float), 곁칸에 붙는다
+//  R2b 곁칸 아래 독이면 부품이 물러선다 — 본문 아래 여백 = 아이콘 + 안 여백×2 + 점 줄 + 바깥 여백×2, «태스크 추가» 가 독 위에
+//  R10 곁칸 아래 독의 크기는 곁칸 폭을 따라 — 280 < 340 < 420 에서 아이콘이 커지고, 어느 폭에서도 확대한 몫까지 곁칸 안에
+//  R10c 곁칸 아래 독은 확대해도 알약 높이는 그대로(아이콘이 위로 솟는다, macOS)
+//  R11 곁칸 아래에서 경계선 가까이(세로 30% 높이)로 끌어 놓으면 → 이음매, 그 높이(at 0.3)
+//  R12 아이콘을 끌어 순서를 바꾼다(이음매는 세로) · R13 독 밖으로(옆으로) 끌어내면 고정이 풀린다
+//  R14 [더보기] — 이음매 독이면 알약 옆 곁칸 쪽으로 부풀어 곁칸 안에 · 검색 · Enter · R15 Esc
+//  H2  곁칸 아래 독의 [더보기]는 곁칸 안, 독 위에
+//  R16 곁칸 탭 줄 높이 = 세션 머리줄 높이 · C1 어느 자리에서도 틀(탭 칸)에 스크롤이 안 생긴다
+//  R17 이음매가 없으면(서랍 · 카드 · 접힘) 곁칸 아래 · R17b 자리바꿈(곁칸이 왼쪽 · sw-left)이면 오른쪽 분할선 위 · 이름표는 세션 쪽(오른쪽)
+//  R17c 곁칸이 접히면(폭 0) 독도 여백도 없다 · R18 걷으면 흔적이 없다 · R19 붙이기 수단이 없는 게이트웨이(옛 판) — 그 구획이 없다
+//  D1–D6 끌기 방어(버튼 떼어짐 · 다른 포인터 · blur · 걷힘 · 한 번에 하나) · E1–E2 흔들기/고정 줄로 끌어오기
+//  F1–F3 초점 · G1 refreshDocks · H1 [더보기] 열린 채 자리가 바뀌면 옛 창은 닫힌다 · I1 이름표(이음매 = 세션 쪽 · 곁칸 아래 = 곁칸 안)
+//  B1 안 보이는 고정 보존 · B7 «독 되돌리기» = 이음매 가운데 + 고정 목록 «적은 적 없음»
 //
-// 왜 런타임인가: 자리·여백·확대는 CSS 와 스크립트가 **함께** 그린 결과에서만 잰다. 손짓은 포인터 사건의 흐름이다.
-// fail-first(2026-09-30): 42-v2-dock.css 의 떠 있는 알약 translate(가운데 기준)를 지우면 R1·R10 이, 42-v2-panes.css 의 본문 여백
-//  규칙을 지우면 R2·R2b·R9 가, 머리 줄 한 값(--pn-head-h)을 탭 줄에서 빼면 R16 이 빨간불이었다(DOCK_CSS · PANES_CSS 로 변형본을 물려 확인).
-// fail-first(2026-10-01 리뷰 반영): 반영 전 독(git show HEAD, DOCK_UI_SRC) + 반영 전 곁칸 CSS(PANES_CSS)에 물리면 A2·A3·A4·B1·B7·C1·C2·
-//  D1–D6·E1·F1·G1·H1·I1 19줄이 빨간불(39 ok · 19 fail). 새 독 + 반영 전 메뉴 엔진(ctx-registry 에 only 없음)이면 A1·A2·A4·A5·A6,
-//  새 독 + 반영 전 곁칸 CSS(overflow: clip 없음)면 C1·C2 만 빨갛다. C3 은 옛 코드도 통과한다(초점 사건에서 독이 먼저 나와 구를 일이 없다)
-//  — 그래서 «초점이 들어오면 독이 나온다» 를 지우는 돌연변이로 빨간불을 봤다.
-// fail-first(2026-10-01 재검증 반영): 반영 전 독(PR #1203 머지판)에 물리면 H2(오른쪽 독 [더보기] −42px 밖) · H2b(왼쪽 −44px) · F3(초점 BODY) 가 빨갛다.
+// 왜 런타임인가: 경계선 위에 걸쳤는지 · 곁칸 폭을 따라 커지는지 · 끌어 놓은 곳에 서는지는 CSS 가 실제로 그린 자리에서만 잰다.
+// fail-first(2026-10-01 이음매 판): 바꾸기 전 판(떠 있는 알약 기본 · 막대 · 손잡이 — lib · 독 · CSS 셋 다 git show HEAD 를 제자리에)에 물리면
+//  71 중 32 줄이 빨갛다(R1 · R1b · R2 · R7c · S1 · R9 · R2b · R10 · R11 · R14a · G1 · H1 · I1 · B7 · R17 …). 돌연변이 —
+//  끄는 동안 곁칸의 부모로 옮겨 붙지 않으면 R11b · 곁칸 아래 크기를 고정(48)하면 R10 · 곁칸 아래 알약 높이 고정을 빼면 R10c ·
+//  이음매 알약 폭 고정을 빼면 R7c 가 빨갛다(DOCK_UI_SRC · DOCK_CSS 로 물려 확인).
 // 크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -68,26 +58,29 @@ const bundle = execFileSync(ESBUILD, ["--bundle", "--format=iife", "--global-nam
   { input: entry, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 const STY = path.join(ROOT, "public/styles");
 const css = (f, env) => readFileSync(process.env[env] || path.join(STY, f), "utf8");
-//  실제 스타일: 토큰(01-base) · 앱 타일(40-v2 .v2-gi) · 세션 머리줄(36-chat) · 곁칸(42-v2-panes) · 독(42-v2-dock) · 메뉴(49-v2-ctx).
-const CSS = [css("01-base.css"), css("36-chat.css"), css("40-v2.css"), css("42-v2-panes.css", "PANES_CSS"), css("42-v2-dock.css", "DOCK_CSS"), css("49-v2-ctx.css")].join("\n");
+//  실제 스타일: 토큰(01-base) · 세션 머리줄(36-chat) · 앱 타일 · 분할선(40-v2) · 곁칸(42-v2-panes) · 독(42-v2-dock) · 자리바꿈(45) · 메뉴(49-v2-ctx).
+const CSS = [css("01-base.css"), css("36-chat.css"), css("40-v2.css"), css("42-v2-panes.css", "PANES_CSS"), css("42-v2-dock.css", "DOCK_CSS"), css("45-v2-side-swap.css"), css("49-v2-ctx.css")].join("\n");
 
 const PAGE = `<!doctype html><meta charset="utf-8"><style>${CSS}
   html,body{margin:0;font:14px sans-serif;background:var(--bg)}
   /* 헤드리스(가상 시간)는 CSS 전환을 진행시키지 않는다 — 전환 시작값을 재게 된다. 자리·크기는 전환 없이 잰다(튀어 오르기는 클래스로 본다). */
   *,*::before,*::after{transition:none!important;animation:none!important}
-  /* 틀 = 탭 칸(.v2-tabpane)처럼 overflow:auto · 곁칸이 오른쪽 끝에 붙는다(C1–C3 — 넘친 독이 틀에 스크롤을 만드는지 본다) */
+  /* 틀 = 탭 칸(.v2-tabpane)처럼 overflow:auto · 곁칸이 오른쪽 끝(C1) */
   #wrap{position:absolute;left:0;top:0;width:1240px;height:760px;overflow:auto}
-  #pane{position:absolute;left:900px;top:0;width:340px;height:760px}
-  #head{position:absolute;left:20px;top:0;width:860px}
+  .pn-col{display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+  #split{background:var(--line)}
   .part{flex:1;display:flex;flex-direction:column;min-height:0}
   .list{flex:1;overflow:auto} .add{flex:none;height:34px;border-top:1px solid var(--line)}
 </style>
 <div id="wrap" class="pn-wrap">
-  <div id="head" class="sc-head"><div class="sc-head-l"><b>세션 머리줄</b></div><div class="sc-head-r"><button class="btn btn-ghost btn-sm">단추</button></div></div>
-  <section id="pane" class="pn-pane" data-zone="side">
-    <div class="pn-tabbar"><div class="pn-tabs"></div><div class="pn-tabtail"></div></div>
-    <div class="pn-pane-body"><div class="part"><div class="list">목록</div><div class="add">＋ 태스크 추가</div></div></div>
-  </section>
+  <div id="grid" class="pn-body">
+    <div class="pn-col" id="col"><div id="head" class="sc-head"><div class="sc-head-l"><b>세션 머리줄</b></div><div class="sc-head-r"><button class="btn btn-ghost btn-sm">단추</button></div></div><div style="flex:1"></div></div>
+    <div class="v2-split-x" id="split"></div>
+    <section id="pane" class="pn-pane" data-zone="side">
+      <div class="pn-tabbar"><div class="pn-tabs"></div><div class="pn-tabtail"></div></div>
+      <div class="pn-pane-body"><div class="part"><div class="list">목록</div><div class="add">＋ 태스크 추가</div></div></div>
+    </section>
+  </div>
 </div>
 <input id="ext" style="position:absolute;left:10px;top:800px;width:120px" aria-label="독 밖 입력칸">
 <pre id="out">PENDING</pre>
@@ -108,15 +101,16 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   const R={}; const sleep=(ms)=>new Promise(r=>setTimeout(r,ms)); const frame=()=>new Promise(r=>requestAnimationFrame(()=>r()));
   const rc=(n)=>n.getBoundingClientRect(); const cx=(r)=>r.left+r.width/2; const cy=(r)=>r.top+r.height/2;
   try{
-  const pane=document.getElementById('pane'); const body=pane.querySelector('.pn-pane-body');
+  const pane=document.getElementById('pane'); const pbody=pane.querySelector('.pn-pane-body');
+  const grid=document.getElementById('grid'); const split=document.getElementById('split'); const wrap=document.getElementById('wrap');
   //  셸처럼(main.ts) 몸통에 메뉴 엔진 — 우클릭 · 메뉴 키 · 길게 누르기. 곁칸 빈 자리 메뉴(panes.ts bindCtxSurface)와 공통 행도 흉내.
   Dock.mountCtxMenus(document.body,{longPress:true,menuKey:true});
-  Dock.bindCtxSurface(document.getElementById('wrap'),()=>[{label:'칸에 넣기',run:()=>{}},{label:'새 세션',run:()=>{}}]);
+  Dock.bindCtxSurface(wrap,()=>[{label:'칸에 넣기',run:()=>{}},{label:'새 세션',run:()=>{}}]);
   Dock.registerCtxCommon(()=>[{label:'이 화면 주소 복사',run:()=>{}}]);
   const ESC=()=>document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
   const menuText=()=>{const m=document.querySelector('.pn-ctx'); return m?m.textContent:null;};
   const row=(label)=>[...document.querySelectorAll('.pn-ctx .pn-ctx-i')].find((b)=>(b.querySelector('.pn-ctx-l')||b).textContent===label);
-  let narrowNow=false;
+  let narrowNow=false; let seamOn=true;
   const calls=[];
   const APPS=[
     {type:'tasks',name:'프로젝트',glyph:'projtask',hint:'태스크',multi:false,pickable:true},
@@ -132,21 +126,32 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     show:(k)=>{calls.push(['show',k]); st.act=k; st.recent=[k,...st.recent.filter(x=>x!==k)]; dock.sync();},
     open:(t)=>{calls.push(['open',t]); const has=st.tabs.some(x=>x.type===t); const key=has?t+'#'+(++n):t; st.tabs.push({key,type:t}); st.act=key; dock.sync();},
     close:(k)=>{calls.push(['close',k]);}, closeAll:(t)=>{calls.push(['closeAll',t]);},
-    curSession:()=>'sid-1', attach:async(a)=>{calls.push(['attach',a.id]);}, narrow:()=>narrowNow };
+    curSession:()=>'sid-1', attach:async(a)=>{calls.push(['attach',a.id]);},
+    seam:()=>(seamOn?split:null), narrow:()=>narrowNow };
   dock=Dock.mountDock(host);
   await frame(); await sleep(30);
-  const root=pane.querySelector('.pn-dock'); const shelf=root.querySelector('.pn-dock-shelf');
+  const root=document.querySelector('.pn-dock'); const shelf=root.querySelector('.pn-dock-shelf');
   const it=(t)=>root.querySelector('.pn-dock-it[data-type="'+t+'"]');
-  const pr=rc(pane);
-  // R1
-  let dr=rc(shelf);
-  R.r1_bottom_gap=Math.round(pr.bottom-dr.bottom); R.r1_center_dx=Math.round(cx(dr)-cx(pr));
-  R.r1=Math.abs(pr.bottom-dr.bottom-6)<=1.5 && Math.abs(cx(dr)-cx(pr))<=1.5 && root.dataset.mode==='float' && root.dataset.edge==='bottom';
-  // R2
-  const size=parseFloat(getComputedStyle(root).getPropertyValue('--dk-s'));
-  R.r2_size=size; R.r2_pad=getComputedStyle(body).paddingBottom;
-  R.r2=parseFloat(getComputedStyle(body).paddingBottom)===size+10+4+12 && getComputedStyle(body).paddingRight==='0px';
-  R.r2_add_above_dock=rc(body.querySelector('.add')).bottom<=dr.top+0.5;
+  const seamX=()=>cx(rc(split));
+  const span=()=>{const p=rc(pane); const bar=pane.querySelector('.pn-tabbar').offsetHeight; return {top:p.top+bar,bottom:p.bottom};};
+  const sizeNow=()=>parseFloat(getComputedStyle(root).getPropertyValue('--dk-s'));
+  const P=(type,x,y,t=window)=>t.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,clientX:x,clientY:y,button:0,buttons:1,pointerId:9,pointerType:'mouse'}));
+  const Pb0=(x,y,id=9)=>window.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,cancelable:true,clientX:x,clientY:y,button:0,buttons:0,pointerId:id,pointerType:'mouse'}));
+  //  독을 잡는 자리 = 알약의 끝 여백(아이콘이 아닌 곳) — 이음매면 위 끝, 곁칸 아래면 왼쪽 끝. 손잡이는 없다.
+  const grabPt=()=>{const r=rc(shelf); return root.dataset.home==='seam'?[cx(r), r.top+4]:[r.left+3, cy(r)];};
+  const PK='lively_v2_dock', PINK='lively_v2_dock_apps';
+  const prefsNow=()=>localStorage.getItem(PK); const pinsNow=()=>localStorage.getItem(PINK);
+  const setPrefs=async(o={})=>{localStorage.setItem(PK, JSON.stringify({home:'seam',at:'0.50',mag:'1',...o})); window.dispatchEvent(new StorageEvent('storage',{key:PK})); await frame(); await sleep(60);};
+  const setPins=async(list)=>{localStorage.setItem(PINK, JSON.stringify(list)); window.dispatchEvent(new StorageEvent('storage',{key:PINK})); await frame(); await sleep(40);};
+  const clearDrag=async()=>{ESC(); window.dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:9,pointerType:'mouse'})); await frame(); await setPrefs();};
+
+  // R1 — 기본 = 이음매
+  let sr=rc(shelf); const sp0=span();
+  R.r1_info=[Math.round(cx(sr)-seamX()), Math.round(cy(sr)-(sp0.top+sp0.bottom)/2), root.dataset.home, root.parentElement&&root.parentElement.id, Math.round(sr.width), Math.round(sr.height)];
+  R.r1=root.dataset.home==='seam' && root.parentElement===grid && Math.abs(cx(sr)-seamX())<=1 && Math.abs(cy(sr)-(sp0.top+sp0.bottom)/2)<=2 && sr.height>sr.width*3;
+  R.r1b_nogrip=!document.querySelector('.pn-dock-grip') && !document.querySelector('.pn-dock-reveal');
+  // R2 — 이음매 독은 아무도 안 비킨다
+  R.r2=['paddingBottom','paddingTop','paddingLeft','paddingRight'].every((k)=>getComputedStyle(pbody)[k]==='0px') && Math.abs(rc(pbody.querySelector('.add')).bottom-rc(pane).bottom)<=1;
   // R3
   R.r3=it('web').querySelectorAll('.pn-dock-dots i').length===2 && it('files').querySelectorAll('.pn-dock-dots i').length===1
     && it('tasks').querySelectorAll('.pn-dock-dots i').length===0 && it('files').classList.contains('on') && !it('web').classList.contains('on');
@@ -155,210 +160,223 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   R.r4=JSON.stringify(calls)==='[["open","tasks"]]' && it('tasks').classList.contains('bounce');
   // R5
   calls.length=0; it('web').click(); it('web').click();
-  R.r5=JSON.stringify(calls)==='[["show","web"],["show","web#2"]]';
-  R.r5_info=JSON.stringify(calls);
+  R.r5=JSON.stringify(calls)==='[["show","web"],["show","web#2"]]'; R.r5_info=JSON.stringify(calls);
   // R6
   calls.length=0; it('files').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,altKey:true}));
   R.r6=JSON.stringify(calls)==='[["open","files"]]';
   await sleep(950);                                  // 튀어 오르기가 끝나게
-  // R7
+  // R7 — 확대(이음매는 세로 축)
   R.r7_mag_on=root.classList.contains('mag');
-  const target=it('knowledge'); const tr=rc(target.querySelector('.pn-dock-ic'));
+  const size=sizeNow();
+  const tr=rc(it('knowledge').querySelector('.pn-dock-ic'));
   shelf.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:cx(tr),clientY:cy(tr),pointerType:'mouse'}));
   await frame(); await sleep(260);
   const w=(t)=>rc(it(t).querySelector('.pn-dock-ic')).width;
   const far=root.querySelector('.pn-dock-more-btn .pn-dock-ic');
-  R.r7_center=Math.round(w('knowledge')*10)/10; R.r7_far=Math.round(rc(far).width*10)/10;
+  R.r7_info=[size, Math.round(w('knowledge')*10)/10, Math.round(rc(far).width*10)/10];
   R.r7=Math.abs(w('knowledge')-size*1.6)<=1.5 && Math.abs(rc(far).width-size)<=0.6 && w('files')>size+0.5;
+  R.r7c_shelf_fixed=Math.abs(rc(shelf).width-(size+12))<=1;
   shelf.dispatchEvent(new PointerEvent('pointerleave',{bubbles:false,pointerType:'mouse'}));
   await frame(); await sleep(320);
   R.r7_settles=Math.abs(w('knowledge')-size)<=0.6;
-  // R8
+  // R8 — 우클릭(셸의 메뉴 엔진이 받는다)
   const wr=rc(it('web'));
   it('web').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:cx(wr),clientY:cy(wr)}));
   await frame();
-  const menu=document.querySelector('.pn-ctx'); const mt=menu?menu.textContent:'';
-  R.r8_text=mt.slice(0,200);
-  R.r8=!!menu && mt.includes('열린 창') && mt.includes('T:web#2') && mt.includes('새로 열기') && mt.includes('모두 닫기') && mt.includes('독에서 빼기') && mt.includes('독');
-  R.a1_only=!!menu && !mt.includes('칸에 넣기') && !mt.includes('이 화면 주소 복사');
+  let tx=menuText()||'';
+  R.r8_text=tx.slice(0,200);
+  R.r8=tx.includes('열린 창') && tx.includes('T:web#2') && tx.includes('새로 열기') && tx.includes('모두 닫기') && tx.includes('독에서 빼기') && tx.includes('독');
+  R.a1_only=!!tx && !tx.includes('칸에 넣기') && !tx.includes('이 화면 주소 복사');
   ESC(); await frame();
-  // A2 — 메뉴 키(≣): 초점 든 아이콘에서 → 독 메뉴가 뜨고 **남는다**(종전: 독이 연 메뉴를 엔진이 «열려 있으면 닫기» 로 곧바로 닫았다)
+  // A2 — 메뉴 키(≣): 초점 든 아이콘에서 → 독 메뉴가 뜨고 **남는다**
   const kb=it('web'); kb.focus();
   kb.dispatchEvent(new KeyboardEvent('keydown',{key:'ContextMenu',bubbles:true,cancelable:true})); await frame(); await sleep(30);
-  let tx=menuText(); R.a2_menukey=!!tx && tx.includes('독에서 빼기') && !tx.includes('칸에 넣기');
+  tx=menuText(); R.a2_menukey=!!tx && tx.includes('독에서 빼기') && !tx.includes('칸에 넣기');
   ESC(); await frame();
   // A3 — ⇧F10
   kb.focus(); kb.dispatchEvent(new KeyboardEvent('keydown',{key:'F10',shiftKey:true,bubbles:true,cancelable:true})); await frame(); await sleep(30);
   tx=menuText(); R.a3_shiftf10=!!tx && tx.includes('독에서 빼기');
   ESC(); await frame(); kb.blur();
-  // A4 — 손가락 길게 누르기(iOS 는 contextmenu 를 안 낸다) → 550ms 뒤 엔진이 그 자리의 메뉴 — 독 아이콘의 것이어야 한다
+  // A4 — 손가락 길게 누르기(iOS 는 contextmenu 를 안 낸다) → 550ms 뒤 엔진이 그 자리의 메뉴 — 독 아이콘의 것
   const lr=rc(it('web'));
   it('web').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,clientX:cx(lr),clientY:cy(lr),pointerId:21,pointerType:'touch',isPrimary:true}));
   await sleep(640);
   tx=menuText(); R.a4_longpress=!!tx && tx.includes('독에서 빼기') && !tx.includes('칸에 넣기'); R.a4_info=(tx||'(메뉴 없음)').slice(0,60);
   it('web').dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:21,pointerType:'touch'}));
   ESC(); await frame();
-  // A5 — 독의 빈 자리(손잡이) 우클릭 = 독 설정만
-  const gp=root.querySelector('.pn-dock-grip'); const gpr=rc(gp);
-  gp.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:cx(gpr),clientY:cy(gpr)})); await frame();
-  tx=menuText()||''; R.a5_settings=tx.includes('위치') && tx.includes('자동으로 가리기') && tx.includes('독 되돌리기') && !tx.includes('칸에 넣기') && !tx.includes('이 화면 주소 복사');
-  ESC(); await frame();
-  // R9 — 손잡이를 잡고 오른쪽 테두리 바짝(8px)으로
-  const P=(type,x,y,t=window)=>t.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,clientX:x,clientY:y,button:0,buttons:1,pointerId:9,pointerType:'mouse'}));
-  const grip=root.querySelector('.pn-dock-grip'); const gr=rc(grip);
-  P('pointerdown',cx(gr),cy(gr),grip); P('pointermove',cx(gr)+20,cy(gr)-20); P('pointermove',pr.right-8,pr.top+380);
-  const pv=pane.querySelector('.pn-dock-preview');
-  R.r9b_preview=!!pv && pv.dataset.mode==='bar' && Math.round(rc(pv).right)===Math.round(pr.right) && rc(pv).height>600;
-  P('pointerup',pr.right-8,pr.top+380); await frame(); await sleep(450);
-  const key=Object.keys(localStorage).find(k=>k.startsWith('lively_v2_dock')&&!k.includes('apps'));
-  const saved=key?JSON.parse(localStorage.getItem(key)):null;
+  // A5 · S1 — 독의 빈 자리(알약 끝) 우클릭 = 독 설정만 · 위치 › 이음매 / 사이드바 아래 · «모양» · «자동으로 가리기» 없음
+  let gp=grabPt();
+  shelf.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:gp[0],clientY:gp[1]})); await frame();
+  tx=menuText()||'';
+  R.a5_settings=tx.includes('위치') && tx.includes('확대') && tx.includes('독 되돌리기') && !tx.includes('칸에 넣기') && !tx.includes('이 화면 주소 복사');
+  R.s1_removed=!!tx && !tx.includes('자동으로 가리기') && !tx.includes('모양');
+  const posRow=row('위치'); if(posRow) posRow.click(); await frame();
+  const subs=[...document.querySelectorAll('.pn-ctx-sub')].map((m)=>m.textContent).join('|');
+  R.s1_sub=subs.includes('이음매') && subs.includes('사이드바 아래'); R.s1_info=subs.slice(0,120);
+  ESC(); ESC(); await frame();
+  // R9 — 이음매에서 알약 끝을 잡고 곁칸 안쪽 깊이 → 곁칸 아래
+  gp=grabPt(); const pr=rc(pane);
+  P('pointerdown',gp[0],gp[1],shelf); P('pointermove',gp[0]+20,gp[1]+20); P('pointermove',pr.left+200,pr.bottom-90);
+  const pv=grid.querySelector('.pn-dock-preview');
+  R.r9_preview=!!pv && pv.dataset.home==='float' && Math.abs(rc(pv).bottom-(pr.bottom-8))<=2;
+  R.r9_lifted=root.parentElement===grid && root.classList.contains('moving');
+  P('pointerup',pr.left+200,pr.bottom-90); await frame(); await sleep(450);
+  const saved=JSON.parse(prefsNow()||'null');
+  sr=rc(shelf);
   R.r9_saved=JSON.stringify(saved);
-  R.r9=!!saved && saved.edge==='right' && saved.mode==='bar' && root.dataset.edge==='right' && root.dataset.mode==='bar'
-    && parseFloat(getComputedStyle(body).paddingRight)>30 && getComputedStyle(body).paddingBottom==='0px';
-  R.r9b_gone=!pane.querySelector('.pn-dock-preview');
-  // R10 — 다시 끌어 바닥 안쪽 30% 자리로(빈 자리를 잡는다 — 막대엔 손잡이가 없다)
-  const sr=rc(root.querySelector('.pn-dock-shelf')); const firstIt=rc(root.querySelector('.pn-dock-it'));
-  const gx=cx(sr), gy=firstIt.top-3;
-  P('pointerdown',gx,gy,root.querySelector('.pn-dock-shelf')); P('pointermove',gx-30,gy+10); P('pointermove',pr.left+pr.width*0.3,pr.bottom-60);
-  P('pointerup',pr.left+pr.width*0.3,pr.bottom-60); await frame(); await sleep(450);
-  const s2=JSON.parse(localStorage.getItem(key));
-  const d2=rc(root.querySelector('.pn-dock-shelf'));
-  const want=Math.max(pr.left+6+d2.width/2, pr.left+pr.width*0.3);
-  R.r10_saved=JSON.stringify(s2); R.r10_cx=Math.round(cx(d2)); R.r10_want=Math.round(want);
-  R.r10=s2.edge==='bottom' && s2.mode==='float' && Math.abs(s2.at-0.3)<0.02 && Math.abs(cx(d2)-want)<=2;
-  // R11 — 자동으로 가리기(계정 설정을 바꾸고 다른 창에서 온 것처럼 알린다)
-  localStorage.setItem(key, JSON.stringify({...s2, hide:'1'})); window.dispatchEvent(new StorageEvent('storage',{key}));
-  await frame(); await sleep(420);
-  const reveal=pane.querySelector('.pn-dock-reveal');
-  R.r11_out=root.classList.contains('out') && getComputedStyle(body).paddingBottom==='0px' && !!reveal && !reveal.hidden;
-  // C1 — 물러난 독은 곁칸 밖으로 넘치지 않는다: 틀(탭 칸 흉내, overflow:auto)에 스크롤이 안 생긴다(리뷰 실측: 아래 +50px)
-  const wrap=document.getElementById('wrap');
-  R.c1_info=[wrap.scrollHeight,wrap.clientHeight,wrap.scrollWidth,wrap.clientWidth];
-  R.c1_no_scroll=wrap.scrollHeight<=wrap.clientHeight && wrap.scrollWidth<=wrap.clientWidth;
-  reveal.dispatchEvent(new PointerEvent('pointerenter',{bubbles:false,pointerType:'mouse'})); await frame(); await sleep(350);
-  R.r11_in=!root.classList.contains('out');
-  // C3 — 숨은 독에 키보드로 들어가도(초점) 틀이 구르지 않고 독이 나온다
-  window.dispatchEvent(new StorageEvent('storage',{key})); await frame(); await sleep(60);      // 다시 가린다(손이 독 위에 없다)
-  R.c3_hidden_first=root.classList.contains('out');
-  it('files').focus(); await frame(); await sleep(60);
-  R.c3_info=[wrap.scrollTop,wrap.scrollLeft,root.classList.contains('out')];
-  R.c3_no_scroll=R.c3_hidden_first && wrap.scrollTop===0 && wrap.scrollLeft===0 && !root.classList.contains('out');
-  document.activeElement.blur(); wrap.scrollTop=0; wrap.scrollLeft=0;
-  // C2 — 오른쪽 테두리에서 가리기(리뷰 실측: 오른쪽 +50px)
-  localStorage.setItem(key, JSON.stringify({...s2, hide:'1', edge:'right'})); window.dispatchEvent(new StorageEvent('storage',{key}));
-  await frame(); await sleep(420);
-  R.c2_info=[wrap.scrollWidth,wrap.clientWidth,wrap.scrollHeight,wrap.clientHeight,root.classList.contains('out')];
-  R.c2_no_scroll=root.classList.contains('out') && root.dataset.edge==='right' && wrap.scrollWidth<=wrap.clientWidth && wrap.scrollHeight<=wrap.clientHeight;
-  localStorage.setItem(key, JSON.stringify({...s2, hide:'0', at:'0.50'})); window.dispatchEvent(new StorageEvent('storage',{key}));
-  await frame(); await sleep(420);
-  // R12 — 첫 고정 아이콘(프로젝트)을 지식과 웹 사이로
-  const pinKey=Object.keys(localStorage).find(k=>k.startsWith('lively_v2_dock_apps'));
+  R.r9=!!saved && saved.home==='float' && root.dataset.home==='float' && root.parentElement===pane
+    && Math.abs(sr.bottom-(rc(pane).bottom-8))<=1.5 && Math.abs(cx(sr)-(rc(pane).left+1+pane.clientWidth/2))<=2 && sr.width>sr.height*3;
+  R.r9_gone=!grid.querySelector('.pn-dock-preview') && !root.classList.contains('moving');
+  // R2b — 곁칸 아래 독이면 부품이 물러선다
+  const s9=sizeNow();
+  R.r2b_info=[s9, getComputedStyle(pbody).paddingBottom];
+  R.r2b=parseFloat(getComputedStyle(pbody).paddingBottom)===s9+12+6+16 && rc(pbody.querySelector('.add')).bottom<=sr.top+0.5;
+  // R10 — 곁칸 폭을 따라 커지고 작아진다(곁칸 폭 = 격자의 --pn-side-w). 헤드리스는 ResizeObserver 가 안 돌아 sync 로 다시 그린다.
+  const sizes=[]; const fits=[];
+  for(const wpx of [280,340,420]){
+    grid.style.setProperty('--pn-side-w',wpx+'px'); dock.sync(); await frame();
+    const sz=sizeNow(); sizes.push(sz);
+    //  확대한 몫까지 곁칸 안에 드나 — 가운데 아이콘에 손을 얹어 잰다.
+    const kk=rc(it('knowledge').querySelector('.pn-dock-ic'));
+    shelf.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:cx(kk),clientY:cy(kk),pointerType:'mouse'})); await frame(); await sleep(120);
+    const a=rc(shelf), p=rc(pane);
+    const icons=[...shelf.querySelectorAll('.pn-dock-ic')].map(rc);
+    const left=Math.min(a.left,...icons.map((q)=>q.left)), right=Math.max(a.right,...icons.map((q)=>q.right));
+    fits.push(left>=p.left && right<=p.right);
+    if(wpx===340){ R.r10c_shelf_fixed=Math.abs(a.height-(sz+18))<=1; }
+    shelf.dispatchEvent(new PointerEvent('pointerleave',{bubbles:false,pointerType:'mouse'})); await frame(); await sleep(200);
+  }
+  grid.style.removeProperty('--pn-side-w'); dock.sync(); await frame();
+  R.r10_info=JSON.stringify({sizes,fits});
+  R.r10=sizes[0]<sizes[1] && sizes[1]<sizes[2] && fits.every(Boolean);
+  // R11 — 곁칸 아래에서 경계선 가까이(세로 30%)로 → 이음매, 그 높이
+  gp=grabPt(); const sp1=span(); const ty=sp1.top+(sp1.bottom-sp1.top)*0.3;
+  P('pointerdown',gp[0],gp[1],shelf); P('pointermove',gp[0]-20,gp[1]-20); P('pointermove',seamX()+10,ty);
+  const pv2=grid.querySelector('.pn-dock-preview');
+  R.r11_preview=!!pv2 && pv2.dataset.home==='seam' && Math.abs(cx(rc(pv2))-seamX())<=1.5;
+  //  곁칸 안에 붙어 있던 독이 끄는 동안엔 곁칸의 부모로 옮겨 붙는다 — 곁칸 테두리(overflow: clip)를 넘어 경계선까지 따라온다.
+  R.r11_lifted=root.parentElement===grid && root.classList.contains('moving') && rc(shelf).left<rc(pane).left;
+  P('pointerup',seamX()+10,ty); await frame(); await sleep(450);
+  const s11=JSON.parse(prefsNow()||'null'); sr=rc(shelf);
+  R.r11_info=[JSON.stringify(s11), Math.round(cy(sr)), Math.round(ty)];
+  R.r11=!!s11 && s11.home==='seam' && Math.abs(Number(s11.at)-0.3)<=0.02 && root.dataset.home==='seam' && root.parentElement===grid
+    && Math.abs(cx(sr)-seamX())<=1 && Math.abs(cy(sr)-Math.max(ty, sp1.top+8+sr.height/2))<=2;
+  await setPrefs();
+  // R12 — 첫 고정 아이콘(프로젝트)을 지식과 웹 사이로(이음매는 세로)
   const a0=rc(it('tasks').querySelector('.pn-dock-ic')); const kn=rc(it('knowledge')); const wb=rc(it('web'));
-  P('pointerdown',cx(a0),cy(a0),it('tasks')); P('pointermove',cx(a0)+12,cy(a0)); P('pointermove',(cx(kn)+cx(wb))/2,cy(a0));
-  R.r12_caret=!!root.querySelector('.pn-dock-caret:not([hidden])');
-  P('pointerup',(cx(kn)+cx(wb))/2,cy(a0)); await frame(); await sleep(60);
-  const pins1=JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k=>k.startsWith('lively_v2_dock_apps'))||'null'));
-  R.r12_pins=JSON.stringify(pins1);
-  R.r12=JSON.stringify(pins1)==='["files","knowledge","tasks","web","timeline"]';
-  // R13 — 타임라인(안 떠 있음)을 위로 끌어내면 고정이 풀리고 독에서 사라진다
+  P('pointerdown',cx(a0),cy(a0),it('tasks')); P('pointermove',cx(a0),cy(a0)+12); P('pointermove',cx(a0),(cy(kn)+cy(wb))/2);
+  R.r12_caret=!!shelf.querySelector('.pn-dock-caret:not([hidden])');
+  P('pointerup',cx(a0),(cy(kn)+cy(wb))/2); await frame(); await sleep(60);
+  R.r12_pins=pinsNow(); R.r12=pinsNow()==='["files","knowledge","tasks","web","timeline"]';
+  // R13 — 타임라인(안 떠 있음)을 옆으로 끌어내면 고정이 풀리고 독에서 사라진다
   const tl=rc(it('timeline').querySelector('.pn-dock-ic'));
-  P('pointerdown',cx(tl),cy(tl),it('timeline')); P('pointermove',cx(tl),cy(tl)-20); P('pointermove',cx(tl),cy(tl)-140);
+  P('pointerdown',cx(tl),cy(tl),it('timeline')); P('pointermove',cx(tl)-20,cy(tl)); P('pointermove',cx(tl)-140,cy(tl));
   R.r13_badge=!!document.querySelector('.pn-dock-ghost.out');
-  P('pointerup',cx(tl),cy(tl)-140); await frame(); await sleep(450);
-  const pins2=JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k=>k.startsWith('lively_v2_dock_apps'))));
-  R.r13=!pins2.includes('timeline') && !it('timeline') && !document.querySelector('.pn-dock-ghost');
-  R.r13_pins=JSON.stringify(pins2);
-  // ── 끌기 방어 — 떼는 순간을 못 본 끌기는 없던 일(탭 끌기 pane-tabdrag 와 같은 방어) ──
-  //  묶음마다 알려진 자리에서 시작하고(setPrefs) 예외는 묶음 안에서 받는다 — 한 줄이 넘어져도 나머지 줄의 빨강·초록이 보이게(fail-first 에서 옛 코드가
-  //   끌기 상태를 남겨 다음 줄들이 엉뚱하게 넘어졌다).
-  const pinK=Object.keys(localStorage).find(k=>k.startsWith('lively_v2_dock_apps'));
-  const prefsNow=()=>localStorage.getItem(key); const pinsNow=()=>localStorage.getItem(pinK);
-  const Pb0=(x,y,id=9)=>window.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,cancelable:true,clientX:x,clientY:y,button:0,buttons:0,pointerId:id,pointerType:'mouse'}));
-  const setPrefs=async(o={})=>{localStorage.setItem(key, JSON.stringify({edge:'bottom',at:'0.50',mode:'float',hide:'0',mag:'1',...o})); window.dispatchEvent(new StorageEvent('storage',{key})); await frame(); await sleep(60);};
-  const setPins=async(list)=>{localStorage.setItem(pinK, JSON.stringify(list)); window.dispatchEvent(new StorageEvent('storage',{key:pinK})); await frame(); await sleep(40);};
-  const clearDrag=async()=>{ESC(); window.dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:9,pointerType:'mouse'})); await frame(); await setPrefs();};
-  const gripEl=()=>root.querySelector('.pn-dock-grip');
+  P('pointerup',cx(tl)-140,cy(tl)); await frame(); await sleep(450);
+  const pins2=JSON.parse(pinsNow()||'[]');
+  R.r13=!pins2.includes('timeline') && !it('timeline') && !document.querySelector('.pn-dock-ghost'); R.r13_pins=JSON.stringify(pins2);
+  // ── 끌기 방어 — 떼는 순간을 못 본 끌기는 없던 일(탭 끌기 pane-tabdrag 와 같은 방어). 묶음마다 알려진 자리에서 시작하고 예외는 묶음 안에서 받는다. ──
   try{
     await setPrefs();
     // D1 — 독 끌기 중 버튼이 떼어진 채 움직였다(액자·창 밖에서 놓았다)
-    const p0=prefsNow(); const g1=rc(gripEl());
-    P('pointerdown',cx(g1),cy(g1),gripEl()); P('pointermove',cx(g1)+30,cy(g1)-30);
-    R.d1_started=root.classList.contains('moving') && !!pane.querySelector('.pn-dock-preview');
-    Pb0(pr.left+10,pr.top+300); await frame();
-    R.d1_cancelled=!root.classList.contains('moving') && !pane.querySelector('.pn-dock-preview') && !document.documentElement.classList.contains('pn-dock-dragging');
-    P('pointerup',pr.left+10,pr.top+300); await frame(); await sleep(60);
-    R.d1_nothing_saved=prefsNow()===p0;
+    const p0=prefsNow(); const g1=grabPt();
+    P('pointerdown',g1[0],g1[1],shelf); P('pointermove',g1[0]+30,g1[1]+30);
+    R.d1_started=root.classList.contains('moving') && !!grid.querySelector('.pn-dock-preview');
+    Pb0(pr.left+200,pr.bottom-90); await frame();
+    R.d1_cancelled=!root.classList.contains('moving') && !grid.querySelector('.pn-dock-preview') && !document.documentElement.classList.contains('pn-dock-dragging');
+    P('pointerup',pr.left+200,pr.bottom-90); await frame(); await sleep(60);
+    R.d1_nothing_saved=prefsNow()===p0 && root.dataset.home==='seam';
   }catch(e){R.err_d1=String(e&&e.message||e);}
   await clearDrag();
   try{
     // D4 — 다른 포인터(pointerId 3)의 이동은 모른 척 · D3 — 창을 떠났다(⌘-Tab) → 없던 일
-    const p0=prefsNow(); const g1=rc(gripEl());
-    P('pointerdown',cx(g1),cy(g1),gripEl()); P('pointermove',cx(g1)+30,cy(g1)-30);
+    const p0=prefsNow(); const g1=grabPt();
+    P('pointerdown',g1[0],g1[1],shelf); P('pointermove',g1[0]+30,g1[1]+30);
     const tf=root.style.transform;
-    window.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,cancelable:true,clientX:pr.right-4,clientY:pr.top+200,button:0,buttons:1,pointerId:3,pointerType:'mouse'}));
+    window.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,cancelable:true,clientX:pr.left+250,clientY:pr.bottom-60,button:0,buttons:1,pointerId:3,pointerType:'mouse'}));
     R.d4_other_pointer=!!tf && root.style.transform===tf;
     window.dispatchEvent(new Event('blur')); await frame();
-    R.d3_blur=!root.classList.contains('moving') && !pane.querySelector('.pn-dock-preview') && !document.documentElement.classList.contains('pn-dock-dragging');
-    P('pointerup',cx(g1)+30,cy(g1)-30); await frame(); await sleep(60);
-    R.d3_nothing_saved=prefsNow()===p0;
+    R.d3_blur=!root.classList.contains('moving') && !grid.querySelector('.pn-dock-preview') && !document.documentElement.classList.contains('pn-dock-dragging');
+    P('pointerup',pr.left+250,pr.bottom-60); await frame(); await sleep(60);
+    R.d3_nothing_saved=prefsNow()===p0 && root.dataset.home==='seam';
   }catch(e){R.err_d3=String(e&&e.message||e);}
   await clearDrag();
   try{
     // D2 — 아이콘 끌기 중 버튼이 떼어졌다
     const q0=pinsNow(); const fi=rc(it('files').querySelector('.pn-dock-ic'));
-    P('pointerdown',cx(fi),cy(fi),it('files')); P('pointermove',cx(fi)+20,cy(fi));
+    P('pointerdown',cx(fi),cy(fi),it('files')); P('pointermove',cx(fi),cy(fi)+20);
     R.d2_started=!!document.querySelector('.pn-dock-ghost');
-    Pb0(cx(fi)+60,cy(fi)); await frame(); await sleep(60);
+    Pb0(cx(fi),cy(fi)+60); await frame(); await sleep(60);
     R.d2_cancelled=!document.querySelector('.pn-dock-ghost') && !root.querySelector('.pn-dock-it.lifted') && !document.documentElement.classList.contains('pn-dock-dragging');
-    P('pointerup',cx(fi)+60,cy(fi)); await frame(); await sleep(60);
+    P('pointerup',cx(fi),cy(fi)+60); await frame(); await sleep(60);
     R.d2_nothing_saved=pinsNow()===q0;
   }catch(e){R.err_d2=String(e&&e.message||e);}
   await clearDrag();
   try{
-    // D6 — 끌기는 한 번에 하나: 아이콘을 누른 채 손잡이를 또 눌러도 독 끌기는 시작되지 않는다
+    // D6 — 끌기는 한 번에 하나: 아이콘을 누른 채 알약 끝을 또 눌러도 독 끌기는 시작되지 않는다
     const p0=prefsNow(), q0=pinsNow();
-    const fi2=rc(it('files').querySelector('.pn-dock-ic')); const g2=gripEl(); const g2r=rc(g2);
-    P('pointerdown',cx(fi2),cy(fi2),it('files')); P('pointerdown',cx(g2r),cy(g2r),g2); P('pointermove',cx(g2r)+30,cy(g2r)-30);
-    R.d6_one_drag=!root.classList.contains('moving') && !pane.querySelector('.pn-dock-preview');
+    const fi2=rc(it('files').querySelector('.pn-dock-ic')); const g2=grabPt();
+    P('pointerdown',cx(fi2),cy(fi2),it('files')); P('pointerdown',g2[0],g2[1],shelf); P('pointermove',g2[0]+30,g2[1]+30);
+    R.d6_one_drag=!root.classList.contains('moving') && !grid.querySelector('.pn-dock-preview');
     ESC(); await frame(); await sleep(60);
     R.d6_clean=!document.querySelector('.pn-dock-ghost') && !document.documentElement.classList.contains('pn-dock-dragging') && pinsNow()===q0 && prefsNow()===p0;
   }catch(e){R.err_d6=String(e&&e.message||e);}
   await clearDrag();
-  // R14 — [더보기]
+  // R14 — [더보기](이음매): 알약 옆 곁칸 쪽으로 부풀어, 곁칸 안에
   calls.length=0;
   root.querySelector('.pn-dock-more-btn').click(); await frame(); await sleep(260);
-  const more=pane.querySelector('.pn-dock-more');
+  const more=grid.querySelector('.pn-dock-more');
   const mtext=more?more.textContent:'';
   R.r14_open=!!more && more.classList.contains('open') && mtext.includes('사이드바 앱') && mtext.includes('타임라인') && mtext.includes('새 탭으로 여는 앱');
+  if(more){ const mr=rc(more), sr2=rc(shelf), p2=rc(pane), s2=span();
+    R.r14_beside=mr.left>=sr2.right-0.5 && mr.left>=p2.left && mr.right<=p2.right+0.5 && mr.top>=s2.top-0.5 && mr.bottom<=s2.bottom+0.5;
+    R.r14_info=[Math.round(mr.left),Math.round(mr.right),Math.round(sr2.right),Math.round(p2.left),Math.round(p2.right)]; }
   await sleep(120);
-  R.r14d_attach=more.textContent.includes('이 세션에 붙이기') && more.textContent.includes('메모');
+  R.r14d_attach=!!more && more.textContent.includes('이 세션에 붙이기') && more.textContent.includes('메모');
   const q=more.querySelector('.pn-dock-more-q'); q.value='타임'; q.dispatchEvent(new Event('input',{bubbles:true}));
   const tiles=[...more.querySelectorAll('.pn-dock-tile')].map(t=>t.textContent.trim());
-  //  설명에 «타임라인» 이 든 앱(새 탭 앱 「프로젝트」)도 맞는다 — 런치패드와 같은 잣대(lib/app-match). 이름이 맞는 곁칸 앱이 맨 앞, 안 맞는 앱은 빠진다.
   R.r14_filter=tiles[0]==='타임라인' && !tiles.includes('자료') && !tiles.includes('웹'); R.r14_tiles=JSON.stringify(tiles);
   q.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); await frame(); await sleep(260);
-  R.r14_enter=JSON.stringify(calls)==='[["open","timeline"]]' && !pane.querySelector('.pn-dock-more');
-  R.r14_info=JSON.stringify(calls);
+  R.r14_enter=JSON.stringify(calls)==='[["open","timeline"]]' && !grid.querySelector('.pn-dock-more');
+  R.r14_info2=JSON.stringify(calls);
   // R15
   root.querySelector('.pn-dock-more-btn').click(); await frame(); await sleep(60);
-  pane.querySelector('.pn-dock-more').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); await sleep(260);
-  R.r15=!pane.querySelector('.pn-dock-more');
-  // ── 흔들기(E1) · 고정 줄로 끌어오기(E2) — 떠 있기만 한 앱(타임라인: 고정에서 빼 두고 R14 에서 열었다) ──
+  grid.querySelector('.pn-dock-more').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); await sleep(260);
+  R.r15=!grid.querySelector('.pn-dock-more');
+  // H2 — 곁칸 아래 독의 [더보기]는 곁칸 안, 독 위에
+  try{
+    await setPrefs({home:'float'});
+    root.querySelector('.pn-dock-more-btn').click(); await frame(); await sleep(260);
+    const mp=pane.querySelector('.pn-dock-more'); const p3=rc(pane), d3=rc(shelf);
+    R.h2_info=mp?[Math.round(rc(mp).left-p3.left),Math.round(p3.right-rc(mp).right),Math.round(d3.top-rc(mp).bottom)]:'(창 없음)';
+    R.h2_float=!!mp && rc(mp).left>=p3.left && rc(mp).right<=p3.right && rc(mp).bottom<=d3.top;
+    if(mp) mp.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); await sleep(260);
+  }catch(e){R.err_h2=String(e&&e.message||e);}
+  await setPrefs();
+  // R16 — 탭 줄 높이 = 세션 머리줄 높이
+  const hb=rc(document.getElementById('head')); const tb=rc(pane.querySelector('.pn-tabbar'));
+  R.r16_heights=[Math.round(hb.height*10)/10, Math.round(tb.height*10)/10, innerWidth];
+  R.r16=innerWidth>=901 && Math.abs(hb.bottom-tb.bottom)<=0.5 && Math.abs(hb.height-tb.height)<=0.5;
+  // C1 — 어느 자리에서도 틀(탭 칸 흉내, overflow:auto)에 스크롤이 안 생긴다
+  const noScroll=()=>wrap.scrollHeight<=wrap.clientHeight && wrap.scrollWidth<=wrap.clientWidth;
+  const c1a=noScroll(); await setPrefs({home:'float'}); const c1b=noScroll(); await setPrefs();
+  R.c1_info=[c1a,c1b,wrap.scrollWidth,wrap.clientWidth,wrap.scrollHeight,wrap.clientHeight]; R.c1_no_scroll=c1a && c1b;
+  // ── 흔들기(E1) · 고정 줄로 끌어오기(E2) — 떠 있기만 한 앱(타임라인: R13 에서 뺐고 R14 에서 열었다). 이음매는 세로 ──
   try{
     await setPrefs(); await setPins(['files','knowledge','tasks','web']);
     const q1=pinsNow(); const tlA=it('timeline');
     R.e_case=!!tlA && !tlA.classList.contains('pin') && tlA.classList.contains('run');
     const tAr=rc(tlA.querySelector('.pn-dock-ic'));
-    P('pointerdown',cx(tAr),cy(tAr),tlA); P('pointermove',cx(tAr)-8,cy(tAr)); P('pointerup',cx(tAr)-8,cy(tAr)); await frame(); await sleep(60);
+    P('pointerdown',cx(tAr),cy(tAr),tlA); P('pointermove',cx(tAr),cy(tAr)-8); P('pointerup',cx(tAr),cy(tAr)-8); await frame(); await sleep(60);
     R.e1_wiggle=pinsNow()===q1; R.e1_info=pinsNow();
     await setPins(['files','knowledge','tasks','web']);
     const tkr=rc(it('tasks')), wbr=rc(it('web')); const tlB=it('timeline'); const tBr=rc(tlB.querySelector('.pn-dock-ic'));
-    P('pointerdown',cx(tBr),cy(tBr),tlB); P('pointermove',cx(tBr)-20,cy(tBr)); P('pointermove',(cx(tkr)+cx(wbr))/2,cy(tBr));
-    P('pointerup',(cx(tkr)+cx(wbr))/2,cy(tBr)); await frame(); await sleep(60);
+    P('pointerdown',cx(tBr),cy(tBr),tlB); P('pointermove',cx(tBr),cy(tBr)-20); P('pointermove',cx(tBr),(cy(tkr)+cy(wbr))/2);
+    P('pointerup',cx(tBr),(cy(tkr)+cy(wbr))/2); await frame(); await sleep(60);
     R.e2_info=pinsNow(); R.e2_pinned=pinsNow()==='["files","knowledge","tasks","timeline","web"]';
   }catch(e){R.err_e=String(e&&e.message||e);}
   await clearDrag();
-  // ── 초점(F1 · F2) ──
+  // ── 초점(F1 · F2 · F3) ──
   try{
     const kn2=it('knowledge'); R.f1_case=!!kn2 && !kn2.classList.contains('run');
     kn2.focus(); kn2.click(); await frame(); await sleep(40);
@@ -369,7 +387,6 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     st.act='web'; dock.sync(); await frame();
     R.f2_untouched=document.activeElement===ext; ext.blur();
   }catch(e){R.err_f=String(e&&e.message||e);}
-  // F3 — 초점 든 앱의 단추가 사라지면(메뉴 키 → «독에서 빼기», 안 떠 있는 앱) 초점은 같은 자리의 이웃 단추로(재검증 실측: body)
   try{
     APPS.push({type:'liv',name:'리브',glyph:'apps',hint:'리브',multi:false,pickable:true});
     await setPrefs(); await setPins(['files','knowledge','liv','tasks','web']);
@@ -384,183 +401,193 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   ESC(); { const i=APPS.findIndex(a=>a.type==='liv'); if(i>=0) APPS.splice(i,1); } await setPins(['files','knowledge','tasks','web']);
   // G1 — 같은 창에서 캐시만 바뀌었다(부팅 동기 · 저장 응답 채택 — storage 사건 없음) → 셸이 refreshDocks 를 부르면 따라온다
   try{
-    await setPrefs(); const pg=prefsNow(); const hasRefresh=typeof Dock.refreshDocks==='function';
-    localStorage.setItem(key, JSON.stringify({...JSON.parse(pg), edge:'top'}));
+    await setPrefs(); const hasRefresh=typeof Dock.refreshDocks==='function';
+    localStorage.setItem(PK, JSON.stringify({home:'float',at:'0.50',mag:'1'}));
     if(hasRefresh) Dock.refreshDocks(); await frame();
-    R.g1_follow=hasRefresh && root.dataset.edge==='top';
+    R.g1_follow=hasRefresh && root.dataset.home==='float' && root.parentElement===pane;
   }catch(e){R.err_g=String(e&&e.message||e);}
-  // H1 — [더보기]가 열린 채 독이 옮겨졌다(다른 창에서 위치 › 왼쪽) → 창은 열린 채 새 단추 옆에서 다시 부풀어 나온다
-  try{
-    await setPrefs();
-    root.querySelector('.pn-dock-more-btn').click(); await frame(); await sleep(120);
-    await setPrefs({edge:'left'});
-    const mp=pane.querySelector('.pn-dock-more'); const nb=root.querySelector('.pn-dock-more-btn');
-    R.h1_info=[mp&&mp.dataset.edge, nb&&nb.getAttribute('aria-expanded'), root.dataset.edge];
-    R.h1_reanchor=!!mp && mp.classList.contains('open') && mp.dataset.edge==='left' && root.dataset.edge==='left' && nb.getAttribute('aria-expanded')==='true' && rc(mp).left>=rc(root).right-0.5;
-    if(mp) mp.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); await sleep(260);
-  }catch(e){R.err_h=String(e&&e.message||e);}
-  // H2 — 옆 독(오른쪽·왼쪽)의 [더보기]도 곁칸 안에 선다 — 곁칸이 넘친 것을 자르므로 밖으로 나간 몫은 잘린다(재검증 실측: 오른쪽 독에서 타일 15개 중 5개)
-  for(const edge of ['right','left']){
-    try{
-      await setPrefs({edge});
-      root.querySelector('.pn-dock-more-btn').click(); await frame(); await sleep(260);
-      const mp=pane.querySelector('.pn-dock-more'); const pr1=rc(pane); const qe=mp&&mp.querySelector('.pn-dock-more-q');
-      const r1=mp?rc(mp):null; const qr=qe?rc(qe):null;
-      R['h2_'+edge+'_info']=r1?[Math.round(r1.left-pr1.left),Math.round(pr1.right-r1.right),Math.round(r1.width)]:'(창 없음)';
-      R['h2_'+edge]=!!r1 && !!qr && r1.left>=pr1.left-0.5 && r1.right<=pr1.right+0.5 && qr.left>=pr1.left && qr.right<=pr1.right;
-      if(mp) mp.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); await sleep(260);
-    }catch(e){R['err_h2_'+edge]=String(e&&e.message||e);}
-  }
   await setPrefs();
-  // I1 — 이름표는 곁칸 안에 선다(곁칸이 넘친 것을 자른다): 왼쪽 끝에 둔 독의 첫 아이콘에 긴 이름
+  // H1 — [더보기]가 열린 채 자리가 바뀌었다(다른 창에서 사이드바 아래로) → 붙는 곳이 바뀌니 옛 창은 닫힌다(남지 않는다)
+  try{
+    root.querySelector('.pn-dock-more-btn').click(); await frame(); await sleep(120);
+    R.h1_case=!!grid.querySelector('.pn-dock-more.open');
+    await setPrefs({home:'float'}); await sleep(260);
+    R.h1_closed=root.dataset.home==='float' && !document.querySelector('.pn-dock-more.open') && root.querySelector('.pn-dock-more-btn').getAttribute('aria-expanded')==='false';
+  }catch(e){R.err_h1=String(e&&e.message||e);}
+  await setPrefs();
+  // I1 — 이름표: 이음매는 세션 쪽(알약 왼쪽), 곁칸 아래는 곁칸 안(긴 이름도 안 잘린다)
   const fApp=APPS.find(a=>a.type==='files'); const oldName=fApp.name;
   try{
-    fApp.name='자료 — 이름이 꽤 긴 앱';
-    await setPins(['files','knowledge','tasks','web']); await setPrefs({at:'0.00'});
-    const first=it('files'); first.dispatchEvent(new PointerEvent('pointerenter',{bubbles:false,pointerType:'mouse'})); await frame();
-    const tipEl=pane.querySelector('.pn-dock-tip'); const tpr=rc(tipEl); const pr0=rc(pane);
-    R.i1_info=[Math.round(tpr.left-pr0.left), Math.round(pr0.right-tpr.right), tipEl.hidden, tipEl.textContent];
-    R.i1_inside=!tipEl.hidden && tipEl.textContent===fApp.name && tpr.left>=pr0.left+3.5 && tpr.right<=pr0.right-3.5;
-    first.dispatchEvent(new PointerEvent('pointerleave',{bubbles:false,pointerType:'mouse'}));
+    const f1=it('files'); f1.dispatchEvent(new PointerEvent('pointerenter',{bubbles:false,pointerType:'mouse'})); await frame();
+    const tipEl=document.querySelector('.pn-dock-tip'); const t1=rc(tipEl), s1=rc(shelf);
+    R.i1_seam=!tipEl.hidden && tipEl.dataset.side==='left' && t1.right<=s1.left && tipEl.parentElement===grid;
+    f1.dispatchEvent(new PointerEvent('pointerleave',{bubbles:false,pointerType:'mouse'}));
+    fApp.name='자료 — 이름이 꽤 긴 앱 이름표';
+    await setPrefs({home:'float'});
+    const f2=it('files'); f2.dispatchEvent(new PointerEvent('pointerenter',{bubbles:false,pointerType:'mouse'})); await frame();
+    const tip2=document.querySelector('.pn-dock-tip'); const t2=rc(tip2), p4=rc(pane);
+    R.i1_info=[tip2.dataset.side, Math.round(t2.left-p4.left), Math.round(p4.right-t2.right), tip2.textContent];
+    R.i1_float=!tip2.hidden && tip2.dataset.side==='top' && tip2.textContent===fApp.name && t2.left>=p4.left+3.5 && t2.right<=p4.right-3.5;
+    f2.dispatchEvent(new PointerEvent('pointerleave',{bubbles:false,pointerType:'mouse'}));
   }catch(e){R.err_i=String(e&&e.message||e);}
   fApp.name=oldName; await setPrefs();
   // B1 — 프로젝트 없는 세션 화면(태스크·자료·지식을 못 고른다)에서 웹 «독에서 빼기» → 안 보이는 고정은 남는다
   try{
-    localStorage.removeItem(pinK);                                        // 정한 적 없음 = 기본 다섯
+    localStorage.removeItem(PINK);                                        // 정한 적 없음 = 기본 다섯
     for(const a of APPS) if(['tasks','files','knowledge'].includes(a.type)) a.pickable=false;
     dock.sync(); await frame();
     const wB=it('web'); const wBr=rc(wB);
     wB.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:cx(wBr),clientY:cy(wBr)})); await frame();
     const unpin=row('독에서 빼기'); R.b1_case=!!unpin;
     if(unpin) unpin.click(); await frame(); await sleep(40);
-    R.b1_info=localStorage.getItem(pinK);
-    R.b1_hidden_kept=localStorage.getItem(pinK)==='["tasks","files","knowledge","timeline"]';
+    R.b1_info=pinsNow(); R.b1_hidden_kept=pinsNow()==='["tasks","files","knowledge","timeline"]';
   }catch(e){R.err_b1=String(e&&e.message||e);}
   ESC(); for(const a of APPS) if(['tasks','files','knowledge'].includes(a.type)) a.pickable=true;
   dock.sync(); await frame();
-  // B7 — «독 되돌리기» = 고정 목록을 «적은 적 없음» 으로(나중에 기본값이 바뀌면 따라간다) · 설정은 기본
+  // B7 — «독 되돌리기» = 이음매 가운데 + 고정 목록을 «적은 적 없음» 으로
   try{
-    await setPins(['web','files']); await setPrefs({edge:'top', at:'0.30', hide:'1'});
-    await setPrefs({at:'0.30'});                                          // 손잡이가 보이는 자리(떠 있는 알약 · 가리기 끔)에서 연다
-    const gB=gripEl(); const gBr=rc(gB);
-    gB.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:cx(gBr),clientY:cy(gBr)})); await frame();
+    await setPins(['web','files']); await setPrefs({home:'float', at:'0.30'});
+    const g7=grabPt();
+    shelf.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:g7[0],clientY:g7[1]})); await frame();
     const rs=row('독 되돌리기'); if(rs) rs.click(); await frame(); await sleep(40);
-    const pd=JSON.parse(localStorage.getItem(key)||'null');
-    R.b7_info=[localStorage.getItem(pinK), JSON.stringify(pd)];
-    R.b7_reset=!!rs && localStorage.getItem(pinK)===null && !!pd && pd.edge==='bottom' && pd.mode==='float' && pd.hide==='0' && pd.at==='0.50';
+    const pd=JSON.parse(prefsNow()||'null');
+    R.b7_info=[pinsNow(), JSON.stringify(pd)];
+    R.b7_reset=!!rs && pinsNow()===null && !!pd && pd.home==='seam' && pd.at==='0.50' && pd.mag==='1' && root.dataset.home==='seam';
   }catch(e){R.err_b7=String(e&&e.message||e);}
   ESC(); await frame();
-  // A6 — 좁은 폭(서랍): [더보기] 우클릭엔 메뉴가 없다 — 곁칸 빈 자리 메뉴도, 브라우저 메뉴도(엔진이 막는다)
+  // A6 — 좁은 폭(서랍): 곁칸 아래로 서고, [더보기] 우클릭엔 메뉴가 없다 — 곁칸 빈 자리 메뉴도, 브라우저 메뉴도(엔진이 막는다)
   try{
     narrowNow=true; dock.sync(); await frame();
     const mbN=root.querySelector('.pn-dock-more-btn'); const mbr=rc(mbN);
     const ce=new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:cx(mbr),clientY:cy(mbr)}); mbN.dispatchEvent(ce); await frame();
-    R.a6_narrow_none=root.classList.contains('narrow') && !document.querySelector('.pn-ctx') && ce.defaultPrevented;
+    R.a6_narrow_none=root.classList.contains('narrow') && root.dataset.home==='float' && root.parentElement===pane && !document.querySelector('.pn-ctx') && ce.defaultPrevented;
   }catch(e){R.err_a6=String(e&&e.message||e);}
   ESC(); narrowNow=false; dock.sync(); await frame();
-  // R16 — 탭 줄 높이 = 세션 머리줄 높이
-  const hb=rc(document.getElementById('head')); const tb=rc(pane.querySelector('.pn-tabbar'));
-  R.r16_heights=[Math.round(hb.height*10)/10, Math.round(tb.height*10)/10, innerWidth];
-  R.r16=innerWidth>=901 && Math.abs(hb.bottom-tb.bottom)<=0.5 && Math.abs(hb.height-tb.height)<=0.5;
-  // R17 — 곁칸이 접히면(폭 0)
-  pane.style.width='0px'; dock.sync(); await frame();
-  R.r17=root.hidden && getComputedStyle(body).paddingBottom==='0px';
+  // R17 — 이음매가 없으면(카드 모드 · 접힘 — 셸이 null 을 준다) 곁칸 아래
+  seamOn=false; dock.sync(); await frame();
+  R.r17_noseam=root.dataset.home==='float' && root.parentElement===pane;
+  seamOn=true; dock.sync(); await frame();
+  R.r17_back=root.dataset.home==='seam' && root.parentElement===grid;
+  // R17b — 자리바꿈(곁칸이 왼쪽 · sw-left): 분할선이 곁칸 오른쪽 — 알약이 그 위에, 이름표는 세션 쪽(오른쪽)
+  try{
+    grid.classList.add('sw-left'); dock.sync(); await frame();
+    const sb=rc(shelf);
+    R.r17b_info=[Math.round(cx(sb)), Math.round(seamX()), root.dataset.side];
+    R.r17b_swap=root.dataset.home==='seam' && Math.abs(cx(sb)-seamX())<=1 && root.dataset.side==='left' && rc(pane).right<=seamX()+0.5;
+    const f3=it('files'); f3.dispatchEvent(new PointerEvent('pointerenter',{bubbles:false,pointerType:'mouse'})); await frame();
+    const tip3=document.querySelector('.pn-dock-tip');
+    R.r17b_tip=!tip3.hidden && tip3.dataset.side==='right' && rc(tip3).left>=rc(shelf).right;
+    f3.dispatchEvent(new PointerEvent('pointerleave',{bubbles:false,pointerType:'mouse'}));
+  }catch(e){R.err_r17b=String(e&&e.message||e);}
+  grid.classList.remove('sw-left'); dock.sync(); await frame();
+  // R17c — 곁칸이 접히면(폭 0) 독도 여백도 없다 · R18 걷으면 흔적이 없다
+  grid.style.setProperty('--pn-side-w','0px'); pane.style.width='0px'; pane.style.borderLeftWidth='0px'; dock.sync(); await frame();
+  R.r17c=root.hidden && getComputedStyle(pbody).paddingBottom==='0px';
   dock.destroy();
-  R.destroyed=!pane.querySelector('.pn-dock');
+  R.destroyed=!document.querySelector('.pn-dock') && !document.querySelector('.pn-dock-tip');
+  grid.style.removeProperty('--pn-side-w'); pane.style.width=''; pane.style.borderLeftWidth='';
   // R19 — 붙이기 수단이 없는 게이트웨이(옛 판): 독은 쓰고, [더보기]에 «이 세션에 붙이기» 구획이 없다
-  pane.style.width='340px';
   const host2={...host}; delete host2.attach;
   const dock2=Dock.mountDock(host2); await frame(); await sleep(40);
-  pane.querySelector('.pn-dock-more-btn').click(); await frame(); await sleep(200);
-  const m2=pane.querySelector('.pn-dock-more');
+  document.querySelector('.pn-dock-more-btn').click(); await frame(); await sleep(200);
+  const m2=document.querySelector('.pn-dock-more');
   R.r19=!!m2 && m2.textContent.includes('사이드바 앱') && !m2.textContent.includes('이 세션에 붙이기');
   dock2.destroy();
   // D5 — 끄는 중에 독이 걷혔다(탭을 닫았다) → 놓아도 아무것도 안 적는다 · 조각이 안 남는다
   try{
     await setPins(['files','knowledge','tasks','web']);
-    const q5=localStorage.getItem(pinK);
+    const q5=pinsNow();
     const dock3=Dock.mountDock(host2); await frame(); await sleep(40);
-    const f5=pane.querySelector('.pn-dock-it[data-type="files"]'); const f5r=rc(f5.querySelector('.pn-dock-ic'));
-    P('pointerdown',cx(f5r),cy(f5r),f5); P('pointermove',cx(f5r)+20,cy(f5r)); P('pointermove',cx(f5r)+20,cy(f5r)-150);
+    const f5=document.querySelector('.pn-dock-it[data-type="files"]'); const f5r=rc(f5.querySelector('.pn-dock-ic'));
+    P('pointerdown',cx(f5r),cy(f5r),f5); P('pointermove',cx(f5r),cy(f5r)+20); P('pointermove',cx(f5r)-150,cy(f5r)+20);
     R.d5_started=!!document.querySelector('.pn-dock-ghost');
     dock3.destroy();
-    P('pointerup',cx(f5r)+20,cy(f5r)-150); await frame(); await sleep(60);
-    R.d5_nothing=R.d5_started && localStorage.getItem(pinK)===q5 && !document.querySelector('.pn-dock-ghost') && !document.documentElement.classList.contains('pn-dock-dragging');
+    P('pointerup',cx(f5r)-150,cy(f5r)+20); await frame(); await sleep(60);
+    R.d5_nothing=R.d5_started && pinsNow()===q5 && !document.querySelector('.pn-dock-ghost') && !document.documentElement.classList.contains('pn-dock-dragging');
   }catch(e){R.err_d5=String(e&&e.message||e);}
   }catch(e){R.error=String(e&&e.stack||e);}
   document.getElementById('out').textContent='RESULT '+JSON.stringify(R)+' ENDRESULT';
 })();
 </script>`;
 
-const dom = await dumpDom(chrome, { html: PAGE, prefix: "pane-dock-", virtualTimeBudget: 20000, args: ["--window-size=1400,900"] });
+const dom = await dumpDom(chrome, { html: PAGE, prefix: "pane-dock-", virtualTimeBudget: 30000, args: ["--window-size=1400,900"] });
 const m = /RESULT (\{.*\}) ENDRESULT/s.exec(dom);
 if (!m) { const out = /<pre id="out">([\s\S]*?)<\/pre>/.exec(dom); console.error("FAIL  결과를 못 받았다 — #out: " + (out ? out[1].slice(0, 1500) : "(없음)") + " · 받은 DOM " + dom.length + "자"); process.exit(1); }
 const R = JSON.parse(m[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">"));
 let pass = 0, fail = 0;
 const check = (cond, n, info = "") => { if (cond) { pass++; console.log(`ok  ${n}`); } else { fail++; console.error(`FAIL  ${n}${info ? " — " + info : ""}`); } };
 if (R.error) { console.error("FAIL  페이지 스크립트가 넘어졌다 — " + R.error); process.exit(1); }
-check(R.r1, "R1 기본 — 바닥 가운데에 떠 있는 알약(바닥에서 6px)", `바닥 틈 ${R.r1_bottom_gap} · 가운데 어긋남 ${R.r1_center_dx}`);
-check(R.r2, "R2 독이 보이면 부품이 물러선다 — 본문 아래 여백 = 아이콘 + 안 여백×2 + 점 + 바깥 여백×2", `아이콘 ${R.r2_size} · 여백 ${R.r2_pad}`);
-check(R.r2_add_above_dock, "R2b 맨 아래 «태스크 추가» 입력칸이 독 위에 선다(가려지지 않는다)");
+check(R.r1, "R1 기본 = 이음매 — 세션과 곁칸 사이 분할선 한가운데 · 세로 구간 가운데 · 곁칸의 부모(.pn-body)에 붙은 세로 알약", JSON.stringify(R.r1_info));
+check(R.r1b_nogrip, "R1b 손잡이(⋮⋮) · 자동 가리기 띠가 없다(원준 10-01 «바닥 왼쪽 탭 … 없애줘»)");
+check(R.r2, "R2 이음매 독은 아무도 안 비킨다 — 곁칸 본문 여백 0 · «태스크 추가» 가 곁칸 바닥에");
 check(R.r3, "R3 점 = 떠 있는 탭 수, 켜진 앱만 켜짐");
 check(R.r4, "R4 안 떠 있는 앱을 누르면 연다 · 튀어 오른다");
 check(R.r5, "R5 떠 있는 앱은 보여 주고, 켜진 앱을 또 누르면 다음 인스턴스", R.r5_info);
 check(R.r6, "R6 ⌥-클릭 = 하나 더");
 check(R.r7_mag_on, "R7a 확대가 켜져 있다(가는 포인터 · 동작 줄이기 꺼짐)");
-check(R.r7, "R7 확대 — 마우스 밑은 ≈1.6배, 먼 아이콘은 그대로", `가운데 ${R.r7_center} · 먼 것 ${R.r7_far}`);
+check(R.r7, "R7 확대(이음매는 세로 축) — 마우스 밑은 ≈1.6배, 먼 아이콘은 그대로", JSON.stringify(R.r7_info));
+check(R.r7c_shelf_fixed, "R7c 확대해도 알약 폭은 그대로 — 아이콘이 양옆으로 솟는다(macOS)");
 check(R.r7_settles, "R7b 손을 떼면 가라앉는다");
 check(R.r8, "R8 우클릭 — 열린 창 · 새로 열기 · 모두 닫기 · 독에서 빼기 · 독 설정", R.r8_text);
-check(R.r9b_preview, "R9b 끄는 동안 놓일 자리(막대 = 오른쪽 테두리 전체)가 보인다");
-check(R.r9, "R9 오른쪽 테두리 바짝 → 막대로 붙는다 · 오른쪽이 물러서고 아래는 0", R.r9_saved);
-check(R.r9b_gone, "R9c 놓으면 윤곽이 사라진다");
-check(R.r10, "R10 바닥 안쪽 30% 자리에 떠 있는 알약", `${R.r10_saved} · 가운데 ${R.r10_cx} (기대 ${R.r10_want})`);
-check(R.r11_out, "R11 자동으로 가리기 — 독이 물러나고 부품이 자리를 다 쓴다 · 테두리 띠가 선다");
-check(R.r11_in, "R11b 테두리 띠에 손을 대면 나온다");
-check(R.r12_caret, "R12a 아이콘을 끄는 동안 끼울 자리 선이 보인다");
-check(R.r12, "R12 아이콘을 끌어 순서를 바꾼다", R.r12_pins);
-check(R.r13_badge, "R13a 독 밖으로 끌면 «빼기» 표시");
-check(R.r13, "R13 고정한 아이콘을 독 밖으로 끌어내면 고정이 풀린다", R.r13_pins);
-check(R.r14_open, "R14 [더보기] — 사이드바 앱 · 새 탭 앱 구획");
-check(R.r14_filter, "R14b 검색이 거른다", R.r14_tiles);
-check(R.r14_enter, "R14c Enter = 첫 앱을 연다 · 창이 닫힌다", R.r14_info);
-check(R.r14d_attach, "R14d 붙이기 수단이 있으면 [더보기]에 «이 세션에 붙이기» — 설치 앱이 선다");
-check(R.r15, "R15 Esc 로 닫힌다");
-check(R.r16, "R16 곁칸 탭 줄 높이 = 세션 머리줄 높이(아래선이 한 줄)", JSON.stringify(R.r16_heights));
-check(R.r17, "R17 곁칸이 접히면 독도 여백도 없다");
-check(R.destroyed, "R18 걷으면 흔적이 없다");
-check(R.r19, "R19 붙이기 수단이 없으면(옛 판 게이트웨이) [더보기]에 그 구획이 없다 — 독은 그대로 쓴다");
-// ── #4443 리뷰 반영(2026-10-01) ──
-check(R.a1_only, "A1 우클릭 = 독 행만 — 곁칸 빈 자리 메뉴(칸에 넣기)·공통 행을 잇지 않는다(macOS 독 메뉴처럼 그 앱의 것만)");
-check(R.a2_menukey, "A2 메뉴 키(≣)로 연 독 메뉴가 **남는다**(종전: 엔진이 곧바로 닫았다 — 키보드로는 고정·빼기·닫기에 못 닿았다)");
+check(R.a1_only, "A1 우클릭 = 독 행만 — 곁칸 빈 자리 메뉴(칸에 넣기)·공통 행을 잇지 않는다");
+check(R.a2_menukey, "A2 메뉴 키(≣)로 연 독 메뉴가 남는다");
 check(R.a3_shiftf10, "A3 ⇧F10 도 같다");
-check(R.a4_longpress, "A4 손가락 길게 누르기 = 독 메뉴(종전: 곁칸 빈 자리 메뉴 «칸에 넣기…»)", R.a4_info);
-check(R.a5_settings, "A5 독의 빈 자리(손잡이) 우클릭 = 독 설정만");
-check(R.a6_narrow_none, "A6 좁은 폭(서랍)의 [더보기]엔 메뉴가 없다 — 곁칸 메뉴도 브라우저 메뉴도 안 뜬다");
-check(R.b1_case, "B1a (배선) 좁힌 화면에서도 웹 메뉴에 «독에서 빼기» 가 섰다");
-check(R.b1_hidden_kept, "B1 프로젝트 없는 화면에서 웹을 빼도 안 보이는 고정(태스크·자료·지식)은 계정에 남는다(종전: [timeline] 하나)", R.b1_info);
-check(R.b7_reset, "B7 «독 되돌리기» = 고정 목록을 «적은 적 없음» 으로(기본값이 바뀌면 따라간다) · 자리·모양·가리기 기본", JSON.stringify(R.b7_info));
-check(R.c1_no_scroll, "C1 가리기(아래) — 물러난 독이 곁칸 밖으로 넘쳐 틀(탭 칸)에 스크롤을 만들지 않는다", JSON.stringify(R.c1_info));
-check(R.c2_no_scroll, "C2 가리기(오른쪽)도", JSON.stringify(R.c2_info));
-check(R.c3_no_scroll, "C3 숨은 독에 초점이 들어가도 틀이 구르지 않고 독이 나온다", JSON.stringify(R.c3_info));
+check(R.a4_longpress, "A4 손가락 길게 누르기 = 독 메뉴", R.a4_info);
+check(R.a5_settings, "A5 독의 빈 자리(알약 끝) 우클릭 = 독 설정만");
+check(R.s1_removed, "S1 독 설정에 «모양» · «자동으로 가리기» 가 없다(막대 · 가리기는 걷었다)");
+check(R.s1_sub, "S1b 위치 › 이음매 · 사이드바 아래", R.s1_info);
+check(R.r9_preview, "R9a 곁칸 안쪽 깊이 끄는 동안 놓일 자리(곁칸 바닥) 윤곽이 보인다");
+check(R.r9_lifted, "R9b 끄는 동안 독은 곁칸의 부모에 붙는다(곁칸 테두리에서 안 잘린다)");
+check(R.r9, "R9 놓으면 곁칸 아래 — 계정 설정 home=float · 곁칸에 붙어 바닥 가운데(바깥 여백 8)", R.r9_saved);
+check(R.r9_gone, "R9c 놓으면 윤곽이 사라진다");
+check(R.r2b, "R2b 곁칸 아래 독이면 부품이 물러선다 — 아이콘 + 안 여백×2 + 점 줄 + 바깥 여백×2 · «태스크 추가» 가 독 위에", JSON.stringify(R.r2b_info));
+check(R.r10, "R10 곁칸 아래 독의 크기는 곁칸 폭을 따라 — 280 < 340 < 420 에서 커지고, 확대한 몫까지 곁칸 안에(원준 10-01)", R.r10_info);
+check(R.r10c_shelf_fixed, "R10c 확대해도 알약 높이는 그대로 — 아이콘이 위로 솟는다(macOS)");
+check(R.r11_preview, "R11a 경계선 가까이 끄는 동안 이음매 윤곽이 분할선 위에 보인다");
+check(R.r11_lifted, "R11b 곁칸 아래에서 끌면 곁칸의 부모로 옮겨 붙어 곁칸 테두리를 넘어 따라온다(안 잘린다)");
+check(R.r11, "R11 경계선 가까이(세로 30%)에 놓으면 이음매 · 그 높이(at 0.3)", JSON.stringify(R.r11_info));
+check(R.r12_caret, "R12a 아이콘을 끄는 동안 끼울 자리 선이 보인다");
+check(R.r12, "R12 아이콘을 끌어 순서를 바꾼다(이음매는 세로)", R.r12_pins);
+check(R.r13_badge, "R13a 독 밖으로 끌면 «빼기» 표시");
+check(R.r13, "R13 고정한 아이콘을 독 밖으로(옆으로) 끌어내면 고정이 풀린다", R.r13_pins);
 check(R.d1_started && R.d1_cancelled, "D1 독 끌기 중 버튼이 떼어진 채 움직이면 없던 일 — 끌기 상태(액자 포인터 막기 포함)가 안 남는다");
-check(R.d1_nothing_saved, "D1b 그 뒤의 아무 pointerup 도 «놓기» 가 아니다 — 자리가 안 바뀐다(종전: edge=left 로 저장됐다)");
+check(R.d1_nothing_saved, "D1b 그 뒤의 아무 pointerup 도 «놓기» 가 아니다 — 자리가 안 바뀐다");
 check(R.d2_started && R.d2_cancelled && R.d2_nothing_saved, "D2 아이콘 끌기 중 버튼이 떼어져도 없던 일 — 조각·들림 없음 · 고정 그대로");
 check(R.d3_blur && R.d3_nothing_saved, "D3 끄는 중에 창을 떠나면(blur) 없던 일");
-check(R.d4_other_pointer, "D4 다른 포인터의 이동은 모른 척(독이 그 포인터를 따라가지 않는다)");
+check(R.d4_other_pointer, "D4 다른 포인터의 이동은 모른 척");
 check(R.d5_nothing, "D5 끄는 중에 독이 걷히면 놓아도 아무것도 안 적는다 · 조각이 안 남는다");
-check(R.d6_one_drag && R.d6_clean, "D6 끌기는 한 번에 하나 — 아이콘을 누른 채 손잡이를 또 눌러도 독 끌기가 안 선다");
+check(R.d6_one_drag && R.d6_clean, "D6 끌기는 한 번에 하나 — 아이콘을 누른 채 알약 끝을 또 눌러도 독 끌기가 안 선다");
+check(R.r14_open, "R14 [더보기] — 사이드바 앱 · 새 탭 앱 구획");
+check(R.r14_beside, "R14a 이음매 독의 [더보기]는 알약 옆 곁칸 쪽으로 — 곁칸 안 · 곁칸 세로 구간 안", JSON.stringify(R.r14_info));
+check(R.r14_filter, "R14b 검색이 거른다", R.r14_tiles);
+check(R.r14_enter, "R14c Enter = 첫 앱을 연다 · 창이 닫힌다", R.r14_info2);
+check(R.r14d_attach, "R14d 붙이기 수단이 있으면 [더보기]에 «이 세션에 붙이기» — 설치 앱이 선다");
+check(R.r15, "R15 Esc 로 닫힌다");
+check(R.h2_float, "H2 곁칸 아래 독의 [더보기]는 곁칸 안, 독 위에", JSON.stringify(R.h2_info));
+check(R.r16, "R16 곁칸 탭 줄 높이 = 세션 머리줄 높이(아래선이 한 줄)", JSON.stringify(R.r16_heights));
+check(R.c1_no_scroll, "C1 어느 자리(이음매 · 곁칸 아래)에서도 틀(탭 칸)에 스크롤이 안 생긴다", JSON.stringify(R.c1_info));
 check(R.e_case, "E0 (배선) 떠 있기만 한 앱(타임라인)이 뒤 구획에 섰다");
-check(R.e1_wiggle, "E1 떠 있기만 한 앱을 제자리에서 흔들면 고정되지 않는다(종전: 8px 에 고정 줄 맨 뒤로)", R.e1_info);
+check(R.e1_wiggle, "E1 떠 있기만 한 앱을 제자리에서 흔들면 고정되지 않는다", R.e1_info);
 check(R.e2_pinned, "E2 고정 줄 안(프로젝트·웹 사이)으로 끌어오면 그 자리에 고정", R.e2_info);
-check(R.f1_case && R.f1_refocus, "F1 키보드로 앱을 열면(독을 다시 세움) 초점이 같은 앱의 새 단추로(종전: body)", R.f1_info);
+check(R.f1_case && R.f1_refocus, "F1 키보드로 앱을 열면(독을 다시 세움) 초점이 같은 앱의 새 단추로", R.f1_info);
 check(R.f2_untouched, "F2 초점이 독 밖이면 다시 세워도 건드리지 않는다");
-check(R.g1_follow, "G1 같은 창에서 캐시만 바뀌면(부팅 동기 · 저장 응답) refreshDocks 로 따라온다");
-check(R.h1_reanchor, "H1 [더보기]가 열린 채 독이 옮겨지면 창은 열린 채 새 단추 옆으로(aria-expanded 도 새 단추에)", JSON.stringify(R.h1_info));
-check(R.i1_inside, "I1 이름표는 곁칸 안에 선다 — 왼쪽 끝 독의 긴 이름도 안 잘린다", JSON.stringify(R.i1_info));
-check(R.h2_right, "H2 오른쪽 독의 [더보기]가 곁칸 안에 선다(검색 칸까지) — 곁칸이 자르니 밖으로 나가면 잘린다", JSON.stringify(R.h2_right_info));
-check(R.h2_left, "H2b 왼쪽 독도", JSON.stringify(R.h2_left_info));
 check(R.f3_case && R.f3_neighbor, "F3 초점 든 앱을 메뉴 키로 빼면(단추가 사라짐) 초점은 같은 자리의 이웃(프로젝트)으로", R.f3_info);
-const errs=Object.keys(R).filter((k)=>k.startsWith("err_")).map((k)=>`${k}: ${R[k]}`);
+check(R.g1_follow, "G1 같은 창에서 캐시만 바뀌면(부팅 동기 · 저장 응답) refreshDocks 로 따라온다(곁칸 아래로 옮겨 붙는다)");
+check(R.h1_case && R.h1_closed, "H1 [더보기]가 열린 채 자리가 바뀌면(붙는 곳이 바뀜) 옛 창은 닫힌다 — 남지 않는다");
+check(R.i1_seam, "I1 이음매 독의 이름표는 세션 쪽(알약 왼쪽) · 곁칸의 부모에");
+check(R.i1_float, "I1b 곁칸 아래 독의 이름표는 아이콘 위 · 긴 이름도 곁칸 안", JSON.stringify(R.i1_info));
+check(R.b1_case, "B1a (배선) 좁힌 화면에서도 웹 메뉴에 «독에서 빼기» 가 섰다");
+check(R.b1_hidden_kept, "B1 프로젝트 없는 화면에서 웹을 빼도 안 보이는 고정(태스크·자료·지식)은 계정에 남는다", R.b1_info);
+check(R.b7_reset, "B7 «독 되돌리기» = 이음매 가운데 · 확대 켬 + 고정 목록 «적은 적 없음»", JSON.stringify(R.b7_info));
+check(R.a6_narrow_none, "A6 좁은 폭(서랍)은 곁칸 아래 · [더보기]엔 메뉴가 없다 — 곁칸 메뉴도 브라우저 메뉴도 안 뜬다");
+check(R.r17_noseam, "R17 이음매가 없으면(카드 모드 · 접힘) 곁칸 아래");
+check(R.r17_back, "R17a 이음매가 돌아오면 다시 이음매");
+check(R.r17b_swap, "R17b 자리바꿈(곁칸이 왼쪽)이면 오른쪽 분할선 위", JSON.stringify(R.r17b_info));
+check(R.r17b_tip, "R17c 자리바꿈이면 이름표는 세션 쪽(오른쪽)");
+check(R.r17c, "R17d 곁칸이 접히면 독도 여백도 없다");
+check(R.destroyed, "R18 걷으면 흔적이 없다(이름표까지)");
+check(R.r19, "R19 붙이기 수단이 없으면(옛 판 게이트웨이) [더보기]에 그 구획이 없다 — 독은 그대로 쓴다");
+const errs = Object.keys(R).filter((k) => k.startsWith("err_")).map((k) => `${k}: ${R[k]}`);
 check(!errs.length, "(배선) 시나리오 묶음이 넘어지지 않았다 — 위 판정이 실제로 끝까지 돌았다", errs.join(" | "));
 console.log(`\n${pass} ok · ${fail} fail`);
 if (fail) process.exit(1);
