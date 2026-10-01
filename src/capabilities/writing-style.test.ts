@@ -57,6 +57,50 @@ await ta("기존 글에 원래 있던 위반은 거부하지 않는다(새로 �
   const cleanBefore = { title: "옛 제목", body: "옛 본문이다." };
   assert.equal((await checkWriting("knowledge", BAD, { before: cleanBefore }, rejEmoji)).rejects.length, 1);
 });
+// 회귀 대상 ⑤: 고친 글에 옛 위반이 남아도 응답이 «다음부터 맞추라»로만 끝나 같은 글을 고치지 않는 것.
+type Split = { style?: { introduced: string[]; legacy: string[]; note: string } };
+await ta("수정 저장에 옛 위반만 남으면 legacy 로 짚고 같은 지식을 edit 로 다시 저장하라고 안내한다(거부는 없다)", async () => {
+  const before = { title: "🔴 옛 제목", body: "옛 본문이다." };
+  const r = await checkWriting("knowledge", { title: "🔴 새 제목", body: "새 본문이다." }, { before }, rejEmoji);
+  const st = (r.info as Split).style!;
+  assert.deepEqual(st.legacy, ["title_leading_emoji"]);
+  assert.deepEqual(st.introduced, []);
+  assert.match(st.note, /원래 있던 형식 위반 1건\(title_leading_emoji\)/);
+  assert.match(st.note, /같은 지식을 mode='edit' 로 한 번 더 저장/);
+  assert.match(st.note, /의미는 바꾸지 말고/);
+  assert.deepEqual(r.rejects, []);
+});
+await ta("새 위반과 옛 위반이 섞이면 둘을 나누고, 거부는 새 위반 중 reject 수준에만 건다", async () => {
+  const before = { title: "옛 제목", body: "옛 본문이다. /Users/someone/a.md 에 있다." };
+  const f = fmt({ rules: { title_leading_emoji: "reject", local_path: "reject", relative_time: "warn" } });
+  const r = await checkWriting("knowledge", { title: "🔴 새 제목", body: "새 본문이다. 오늘 고쳤다. /Users/someone/a.md 에 있다." }, { before }, f);
+  const st = (r.info as Split).style!;
+  assert.deepEqual(st.legacy, ["local_path"]);
+  assert.ok(st.introduced.includes("title_leading_emoji") && st.introduced.includes("relative_time"), st.introduced.join(","));
+  assert.ok(!st.introduced.includes("local_path"));
+  assert.deepEqual(r.rejects.map((x) => x.rule), ["title_leading_emoji"]);
+  assert.match(st.note, /원래 있던 형식 위반 1건\(local_path\)/);
+});
+await ta("before 가 없는 신규 저장은 legacy 가 비고 note 는 종전 문구 그대로다", async () => {
+  const r = await checkWriting("knowledge", BAD, {}, rejEmoji);
+  const st = (r.info as Split).style!;
+  assert.deepEqual(st.legacy, []);
+  assert.doesNotMatch(st.note, /원래 있던/);
+  assert.equal(st.note, `이 조직의 서술 형식에 어긋난 곳이 ${(r.info as Style).style!.findings.length}건 있습니다(저장은 됐습니다). 본문은 mode='edit' 로 그 부분만, 제목은 knowledge_set_title 로 고치세요 — 전문을 다시 보낼 필요가 없습니다. 의미는 바꾸지 말고 형식만 고치세요.`);
+});
+await ta("새 위반만 있는 수정 저장도 note 는 종전 문구 그대로다", async () => {
+  const r = await checkWriting("knowledge", BAD, { before: { title: "옛 제목", body: "옛 본문이다." } }, on);
+  const st = (r.info as Split).style!;
+  assert.deepEqual(st.legacy, []);
+  assert.doesNotMatch(st.note, /원래 있던/);
+});
+await ta("사람의 수정 저장은 거부하지 않지만 옛 위반 안내는 그대로 나간다", async () => {
+  const before = { title: "🔴 옛 제목", body: "옛 본문이다." };
+  const r = await checkWriting("knowledge", { title: "🔴 새 제목", body: "새 본문이다." }, { before, human: true }, rejEmoji);
+  assert.deepEqual(r.rejects, []);
+  assert.deepEqual((r.info as Split).style!.legacy, ["title_leading_emoji"]);
+  assert.match((r.info as Split).style!.note, /원래 있던 형식 위반/);
+});
 await ta("본문 없는 작업기록 규칙은 명시해야만 켜진다(default_level 을 물려받지 않는다)", async () => {
   assert.deepEqual(await checkWriting("activity", { title: "배포 스크립트 수정", body: null }, {}, fmt({ default_level: "reject" })), { info: {}, rejects: [], guide: "" });
 });
