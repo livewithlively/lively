@@ -54,3 +54,18 @@ export function headlessEnqueueStatus(o: { assigned: boolean; code?: AssignFailC
   if (o.assigned) return "ok";
   return assignFailKind(o.code) === "backpressure" ? "ok" : "error";
 }
+
+/**
+ * delegate_run 이 즉시 배정 결과를 받고 할 일(순수).
+ *
+ *  · 배정됨, 또는 `in_flight`(다른 경로가 같은 태스크를 띄우는 중) → `proceed` — 배정된 것으로 보고 결과를 기다린다.
+ *  · 그 밖의 미배정 + queue:true → `queued` — 큐에 남겨 tick 이 집어가게 한다.
+ *  · 그 밖의 미배정 + queue:false → `cancel` — 취소하고 하네스에게 로컬 실행을 권한다.
+ *
+ * ⚠ `in_flight` 를 cancel 로 접으면 안 된다 — tick 쪽 spawn 은 계속 진행돼 취소된 행이 running 으로 뒤집히고, 하네스는
+ *  권고대로 로컬에서 한 번 더 돌려 같은 일을 두 번 한다. 이 함수가 막으려는 이중 실행이 다른 모양으로 재현된다.
+ */
+export function delegateRunNext(o: { assigned: boolean; code?: AssignFailCode | null }, queue: boolean): "proceed" | "queued" | "cancel" {
+  if (o.assigned || o.code === "in_flight") return "proceed";
+  return queue ? "queued" : "cancel";
+}

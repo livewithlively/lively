@@ -392,16 +392,18 @@ const assigning = new Set<number>();
  *  ① has→add 사이에 await 가 없어 같은 프로세스 안에서는 원자적이다. ② 선점 뒤 DB 상태를 다시 본다 — tick 이 들고 있는
  *  queued 목록은 순회 시작 시점의 것이라, 그 사이 다른 경로가 이미 running 으로 만든 행을 다시 띄우지 않게 한다.
  *  ⚠ 프로세스를 넘는 선점은 아니다 — 두 게이트웨이가 같은 DB 로 스케줄러를 함께 돌리는 구간에는 이 표가 서로 안 보인다.
+ *   blue-green 배포의 old/new 겹침이 매 배포마다 그 구간이다. 막으려면 markRunning 을 `status='queued'` 조건부로 좁히고
+ *   0행이면 방금 띄운 판을 거두는 DB 쪽 가드가 더 필요하다.
  */
 export async function withAssignClaim<T>(
-  id: number, stillQueued: () => Promise<boolean>, run: () => Promise<T>, table: Set<number> = assigning,
+  id: number, stillQueued: () => Promise<boolean>, run: () => Promise<T>, claims: Set<number> = assigning,
 ): Promise<T | null> {
-  if (table.has(id)) return null;
-  table.add(id);
+  if (claims.has(id)) return null;
+  claims.add(id);
   try {
     if (!(await stillQueued())) return null;
     return await run();
-  } finally { table.delete(id); }
+  } finally { claims.delete(id); }
 }
 
 const IN_FLIGHT: AssignResult = { assigned: false, code: "in_flight", reason: "다른 경로가 이 태스크를 배정하고 있거나 이미 배정했다" };

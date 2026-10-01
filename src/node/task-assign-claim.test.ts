@@ -142,9 +142,26 @@ async function holdClaim(id: number, table: Set<number>) {
 {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../../src/node/task-scheduler.ts", import.meta.url), "utf8");
-  const body = src.slice(src.indexOf("async function assignOne("), src.indexOf("async function assignClaimed("));
+  const start = src.indexOf("async function assignOne("), end = src.indexOf("async function assignClaimed(");
+  assert.ok(start >= 0 && end > start, "assignOne 본문 경계를 못 찾았다 — 함수 이름이 바뀌면 이 단언부터 고쳐라");
+  const body = src.slice(start, end);
   assert.ok(/withAssignClaim\(t\.id,/.test(body), "assignOne 이 선점 없이 바로 판을 띄운다 — 이중 배정이 재발한다");
   assert.ok(/status === "queued"/.test(body), "선점 뒤 DB 상태를 다시 보지 않는다 — tick 의 오래된 목록이 running 행을 다시 띄운다");
+}
+
+// delegate_run 의 다음 행동 — in_flight 를 취소로 접으면 tick 쪽 판과 하네스 로컬 실행이 함께 돈다.
+{
+  const { delegateRunNext } = await import("./assign-outcome.js");
+  assert.equal(delegateRunNext({ assigned: false, code: "in_flight" }, false), "proceed",
+    "다른 경로가 띄우는 태스크를 취소하고 로컬 실행을 권했다 — 같은 일이 두 번 돈다");
+  assert.equal(delegateRunNext({ assigned: false, code: "in_flight" }, true), "proceed", "in_flight 를 대기 등록으로 접었다");
+  assert.equal(delegateRunNext({ assigned: true }, false), "proceed");
+  assert.equal(delegateRunNext({ assigned: false, code: "capacity" }, false), "cancel", "queue:false 의 자리 부족은 종전대로 취소다");
+  assert.equal(delegateRunNext({ assigned: false, code: "capacity" }, true), "queued");
+  assert.equal(delegateRunNext({ assigned: false, code: "no_nodes" }, false), "cancel");
+  const { readFileSync } = await import("node:fs");
+  const del = readFileSync(new URL("../../src/capabilities/delegate.ts", import.meta.url), "utf8");
+  assert.ok(/delegateRunNext\(r,/.test(del), "delegate_run 이 판정 함수를 안 쓴다 — in_flight 가 다시 취소로 떨어진다");
 }
 
 console.log("task-assign-claim.test: ok");
