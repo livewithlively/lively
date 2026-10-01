@@ -20,6 +20,10 @@
 //   C1 CSS: 비칠 때 카드 바탕은 반투명 + 뒤 흐림(-webkit- 포함). 안쪽(칸 · 세션 화면 · 액자 · 카드 단추)은 카드인 동안 늘 투명
 //   C2 CSS: 비침 규칙은 넓은 폭(카드가 있는 곳) 안에 있다
 //   C3 CSS: 또렷해질 때 바탕은 전환 없이 바로 찬다(흐림이 풀리는 순간 날 글씨가 비치지 않게)
+//   C4 CSS: 비칠 때 뒤가 실제로 보여야 한다 — 바탕 20% 이하 · 흐림 4~12px(첫 판 30% · 22px 은 흰 카드로 보였다, 원준 2026-10-01).
+//      대신 글자 둘레에 바탕색 테두리(halo)를 둘러 읽히게 한다
+//   H1 머리줄 단추: ⋯ 오른쪽 첫 단추 = 최소화(가로줄 그림, 접히면 창 그림으로 «다시 펴기») · 둘째 = 크게 보기(대각선 화살표 → 세션을 가운데로)
+//   H2 머리줄 두 번 누르기 = 크게 보기(종전엔 접기)
 //   T1 터미널: glass 를 받으면 바탕을 비운다 — 색은 그대로, 알파만 0 (OSC 11 답이 검정이 되지 않게). 읽지 못하는 꼴은 투명한 흰색
 //   T2 터미널: xterm 테마를 바꾸는 모든 자리가 비침을 지킨다(themeFor) · 만들 때도 allowTransparency 를 따른다
 //   T3 terminal.html: term-glass 이면 문서 바탕을 걷는다. color-scheme 은 JS 가 **앱 테마**로 맞춘다(터미널 테마 아님)
@@ -98,6 +102,19 @@ ok(/if \(s && !wasShown\) picked = focusInCard\(\);/.test(paintSrc), "G5 다시 
 const liveBlock = plAt >= 0 ? card.slice(plAt, card.indexOf("function liveForAWhile(")) : "";
 ok(liveBlock.length > 0 && !/v2-dot|\bwait\b|termstat|sc-wait/.test(liveBlock) && !/wait|ask|status/i.test(liveSrc.replace(/\/\/.*$/gm, "")), "G4 세션 상태로는 또렷해지지 않는다");
 
+// ── 머리줄 단추 · 두 번 누르기 ──
+const minDecl = card.slice(card.indexOf("const minBtn"), card.indexOf("const maxBtn"));
+const maxDecl = card.slice(card.indexOf("const maxBtn"), card.indexOf("const ctl"));
+ok(/onclick: \(\) => setFold\(!card\.fold\)/.test(minDecl) && /pnIcon\('minus'/.test(minDecl), "H1a 첫 단추 = 최소화(가로줄 그림 · 접기)", minDecl.slice(0, 160));
+ok(/onclick: \(\) => leave\(\)/.test(maxDecl) && /pnIcon\('expand'/.test(maxDecl), "H1b 둘째 단추 = 크게 보기(대각선 화살표 · 세션을 가운데로)", maxDecl.slice(0, 160));
+ok(/el\('div', \{ class: 'cm-ctl', hidden: true \}, minBtn, maxBtn\)/.test(card), "H1c 순서: ⋯ 다음에 최소화, 그다음 크게 보기");
+const pf = card.slice(card.indexOf("function paintFold("), card.indexOf("\n  }\n", card.indexOf("function paintFold(")));
+ok(/minBtn\.replaceChildren\(pnIcon\(card\.fold \? 'window' : 'minus'/.test(pf), "H1d 접히면 최소화 단추가 «다시 펴기»(창 그림)가 된다", pf.slice(0, 200));
+const dbl = card.slice(card.indexOf("const onHeadDbl"), card.indexOf("colMain.addEventListener('dblclick', onHeadDbl)"));
+ok(/void leave\(\);/.test(dbl) && !/setFold/.test(dbl), "H2 머리줄 두 번 누르기 = 크게 보기", dbl.slice(-120));
+const iconSrc = read("web/lib/icon-paths.ts");
+ok(["minus", "window", "expand"].every((n) => new RegExp("\\n\\s+" + n + ": '").test(iconSrc)), "H1e 쓰는 그림(minus · window · expand)이 그림 표에 있다");
+
 // ── panes.ts: 기본 폭은 한 값 ──
 const panes = code(read("web/v2/panes.ts"));
 const swapSrc = code(read("web/v2/side-swap.ts"));
@@ -112,7 +129,11 @@ const rest = restAt >= 0 ? css.slice(restAt, css.indexOf("}", restAt)) : "";
 ok(restAt > media && media >= 0 && css.lastIndexOf("@media", restAt) === media, "C2 비침 규칙은 넓은 폭 안에 있다");
 ok(/background:\s*color-mix\(in srgb, var\(--bg\) \d+%, transparent\)/.test(rest) && /-webkit-backdrop-filter:\s*blur\(\d+px\)/.test(rest) && /(^|[^-])backdrop-filter:\s*blur\(\d+px\)/m.test(rest), "C1a 비칠 때: 반투명 바탕 + 뒤 흐림(-webkit- 포함)", rest.slice(0, 200));
 const blurPx = Number((rest.match(/-webkit-backdrop-filter:\s*blur\((\d+)px\)/) || [])[1] || 0);
-ok(blurPx >= 16, "C1b 뒤를 크게 흐린다(잔 글씨가 터미널 글씨와 겹치지 않게, 16px 이상)", String(blurPx));
+const alphaPct = Number((rest.match(/color-mix\(in srgb, var\(--bg\) (\d+)%, transparent\)/) || [])[1] || 100);
+ok(blurPx >= 4 && blurPx <= 12, "C4a 흐림 4~12px — 잔 글씨는 뭉개고 뒤의 모양·색은 남긴다", String(blurPx));
+ok(alphaPct <= 20, "C4b 바탕 20% 이하 — 뒤가 실제로 보인다", String(alphaPct));
+const haloAt = css.indexOf(".pn-body.cm:not(.cm-live) > .pn-col:not(:hover) .sc-term-frame {");
+ok(haloAt > 0 && /filter:\s*drop-shadow\(0 0 1px color-mix\(in srgb, var\(--bg\)/.test(css.slice(haloAt, css.indexOf("}", haloAt))), "C4c 비칠 때 터미널 글자 둘레에 바탕색 테두리(halo)");
 ok(/\.pn-body\.cm > \.pn-col > \.pn-pane,\s*\.pn-body\.cm > \.pn-col \.sc-wrap,\s*\.pn-body\.cm > \.pn-col \.sc-term-frame,\s*\.pn-body\.cm > \.pn-col \.cm-ctl \{ background: transparent; \}/.test(css), "C1c 카드인 동안 안쪽은 늘 투명(바탕은 카드 한 곳)");
 const baseTr = (css.match(/\.pn-body\.cm > \.pn-col \{ transition: ([^;]+); \}/) || [])[1] || "";
 ok(baseTr.length > 0 && !/background/.test(baseTr), "C3 또렷해질 때 바탕은 전환 없이 바로 찬다", baseTr);
