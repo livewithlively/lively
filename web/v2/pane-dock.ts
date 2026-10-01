@@ -113,6 +113,9 @@ const DOT_ROW = M.dot;  // 아이콘 밑 점 줄(점 4 + 사이 2) — 이음매
 const MAG = 1.6;        // 확대 최대 배율(macOS 기본 확대와 비슷한 정도)
 const SEP = 9;          // 구분선이 먹는 자리
 const NEAR = 40;        // 곁칸 안쪽으로 이만큼 넘게 들여 놓아야 곁칸 아래(그보다 가까우면 이음매)
+//  이음매 독 맨 위의 손잡이(원준 10-01: «위쪽에 핸들같은거 만들어서 그거 잡고 끌어당길 수 있는») — 알약 길이에 더하는 몫
+//   = 손잡이 14 + 아이콘과의 사이 4 − 줄인 위 안 여백 7(10 → 3). 42-v2-dock.css .pn-dock-handle 과 짝.
+const HANDLE = 11;
 const HOME_NAME: Record<DockHome, string> = { seam: '이음매', float: '사이드바 아래' };
 const reduced = (): boolean => { try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (_) { return false; } };
 //  any-pointer — 터치 화면 + 트랙패드 노트북처럼 가는 포인터가 **하나라도** 있으면 확대를 켠다(손가락 입력은 pointerType 으로 따로 거른다).
@@ -215,7 +218,7 @@ export function mountDock(host: DockHost): DockHandle {
     const grow = magOn() ? MAG_GROW : 0;
     size = home === 'float'
       ? floatIconSize(W, n, { min: SIZE.float.min, max: SIZE.float.max, gap: GAP, pad: M.pad + 2, margin: M.margin, extra, grow })
-      : fitIconSize(n, Math.max(0, (geom!.bottom - geom!.top) * 0.8), { min: SIZE.seam.min, max: SIZE.seam.max, gap: GAP + DOT_ROW, pad: M.pad + 4, grow: Math.round(SIZE.seam.max * grow), extra });
+      : fitIconSize(n, Math.max(0, (geom!.bottom - geom!.top) * 0.8), { min: SIZE.seam.min, max: SIZE.seam.max, gap: GAP + DOT_ROW, pad: M.pad + 4, grow: Math.round(SIZE.seam.max * grow), extra: extra + (host.narrow() ? 0 : HANDLE) });
     const side = geom?.side ?? 'right';
     const s = [home, side, prefs.mag, size, act, host.narrow(),
       ...items.map((i) => `${i.type}:${i.keys.join(',')}:${i.pinned ? 1 : 0}:${i.active ? 1 : 0}:${i.type === 'sessapp' ? host.title('sessapp') : ''}`)].join('|');
@@ -249,6 +252,9 @@ export function mountDock(host: DockHost): DockHandle {
     root.style.setProperty('--dk-s', size + 'px');
     const kids: HTMLElement[] = [];
     btns = [];
+    //  이음매 독은 맨 위에 손잡이 — 잡고 끌면 독이 옮겨 간다(곁칸 안쪽 깊이 = 곁칸 아래, 경계선 따라 = 위아래 자리).
+    //   곁칸 아래 독엔 안 단다(바닥의 손잡이는 걷었다 — 원준 10-01). 알약 끝 여백 · 구분선 · 빈 자리를 잡아도 끌린다.
+    if (home === 'seam' && !host.narrow()) kids.push(handleEl());
     let prevPinned: boolean | null = null;
     for (const it of items) {
       if (prevPinned === true && !it.pinned) kids.push(sepEl());
@@ -270,6 +276,10 @@ export function mountDock(host: DockHost): DockHandle {
   }
   //  구분선도 손잡이다 — 잡고 끌면 독이 옮겨 간다(macOS 독의 구분선처럼 잡는 자리). 끝 여백 · 빈 자리도 같다.
   const sepEl = (): HTMLElement => el('span', { class: 'pn-dock-sep', 'aria-hidden': 'true' }) as HTMLElement;
+  //  손잡이 — 짧은 가로 막대(macOS · iOS 시트의 손잡이). 마우스를 올리면 진해지고, 끄는 동안 민트. 누르면 독 끌기(선반이 받는다).
+  //   앱 단추가 아니라 탭 순서엔 안 낀다 — 키보드는 우클릭(메뉴 키) › 독 › 위치로 옮긴다.
+  const handleEl = (): HTMLElement => el('span', { class: 'pn-dock-handle', title: '끌어서 옮겨요 — 경계선을 따라 위아래로, 사이드바 안쪽으로 깊이 끌면 사이드바 아래로', 'aria-hidden': 'true' },
+    el('i')) as HTMLElement;
 
   function itemBtn(it: DockItem, app: DockApp): HTMLElement {
     const name = it.type === 'sessapp' ? host.title('sessapp') : app.name;
@@ -394,6 +404,11 @@ export function mountDock(host: DockHost): DockHandle {
   let magPos: number | null = null;
   shelf.addEventListener('pointermove', (e: PointerEvent) => {
     if (!root.classList.contains('mag') || dragging || e.pointerType === 'touch') return;
+    //  손잡이 위에선 확대하지 않는다 — 잡으려는 것은 독이지 앱이 아니다(첫 아이콘이 불어나 손잡이를 덮었다, 촬영 실측).
+    if ((e.target as Element | null)?.closest?.('.pn-dock-handle')) {
+      if (magPos !== null) { magPos = null; if (!magRaf) magRaf = requestAnimationFrame(applyMag); }
+      return;
+    }
     const r = shelf.getBoundingClientRect();
     magPos = vertical() ? e.clientY - (r.top + r.height / 2) : e.clientX - (r.left + r.width / 2);
     if (!magRaf) magRaf = requestAnimationFrame(applyMag);
@@ -664,7 +679,7 @@ export function mountDock(host: DockHost): DockHandle {
     if (t.home === 'seam' && g) {
       const s = home === 'seam' ? size : SIZE.seam.max;
       w = dockThickness('seam', s);
-      h = n * (s + DOT_ROW) + GAP * (n - 1) + 2 * (M.pad + 4) + seps;
+      h = n * (s + DOT_ROW) + GAP * (n - 1) + 2 * (M.pad + 4) + seps + HANDLE;
       x = g.seam! - lr.left - w / 2;
       y = seamCenterY(g, lr.top, h, t.at ?? prefs.at) - h / 2;
     } else {
