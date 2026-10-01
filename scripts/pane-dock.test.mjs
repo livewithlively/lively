@@ -198,5 +198,20 @@ check(/if \(!found\) \{ addPart\('side', type\); return; \}\s*(?:if \(zoneVisibl
   && (!/watchSessionApps\(/.test(PANES) || (/if \(added\.length\) \{ bringUp\(z, SESSAPP_TAB\); return; \}/.test(PANES) && /if \(!z\) return;\s*bringUp\(z, SESSAPP_TAB\);/.test(PANES)))
   && /const zone: Zone = showZone\(found \? found\.zone : \(findTab\('editor'\)\?\.zone \?\? 'side'\), \{ bottomOn: lay\.bottomOn, narrow: narrow\(\) \}\);/.test(PANES),
   "W12c 머리줄 단추(showPart) · 웹 칸 · 붙은 앱(새로 붙음 · 다시 누름) · 파일 뷰어도 같은 길 — 닫힌 아래 칸을 펼치지 않는다");
+//  곁칸 아래 독은 내용 위에 떠 있다(원준 10-02 «뒤에 그냥 뭐 없이 둥둥 떠있게») — 본문을 올리지 않고, 목록은 끝에만 · 입력칸 앱은 앱 끝에 빈 자리.
+//   런타임(pane-dock-runtime R2b · R2c)은 자료 · 프로젝트 둘로 재고, 여기선 나머지 앱의 목록 상자가 목록에서 빠지지 않았는지 본다.
+const PANES_CSS = read(process.env.PANES_CSS || path.join(root, "public/styles/42-v2-panes.css"));
+check(/\.pn-pane\[data-zone="side"\] > \.pn-pane-body \{ padding: var\(--pn-dock-t, 0px\) var\(--pn-dock-r, 0px\) 0 var\(--pn-dock-l, 0px\); \}/.test(PANES_CSS)
+  && !/pn-pane-body \{[^}]*var\(--pn-dock-b/.test(PANES_CSS),
+  "W13 곁칸 본문은 독만큼 올리지 않는다 — 독 뒤에 하얀 띠가 안 생긴다");
+const spacer = /\.pn-pane\[data-zone="side"\] :is\(([^)]*)\)::after,\s*\n\.pn-pane\[data-zone="side"\] :is\(([^)]*)\)::after \{ content: ""; display: block; flex: none; grid-column: 1 \/ -1; height: var\(--pn-dock-b, 0px\); \}/.exec(PANES_CSS);
+const lists = spacer ? spacer[1].split(",").map((x) => x.trim()) : [], lifts = spacer ? spacer[2].split(",").map((x) => x.trim()) : [];
+check([".pn-fbody", ".pn-knlist", ".pn-tl .tl-scroll", ".pn-prev", ".pn-md", ".pn-ed-pre", ".pn-ed-pick2 .pn-flist", ".pn-apps-grid", ".fx-scroll"].every((c) => lists.includes(c))
+  && [".pn-tk", ".pn-liv"].every((c) => lifts.includes(c)) && /\.pn-pane\[data-zone="side"\] \.pn-ed-ta \{ padding-bottom: calc\(12px \+ var\(--pn-dock-b, 0px\)\); \}/.test(PANES_CSS),
+  "W13b 목록 상자(자료 · 지식 · 타임라인 · 미리보기 · 뷰어 · 앱 · 세션 파일)는 끝에만 독 두께만큼 빈 자리 · 입력칸 앱(프로젝트 · 리브)은 앱 끝에 · 고치기 칸은 아래 안 여백", JSON.stringify({ lists, lifts }));
+//  곁칸 아래 독에도 손잡이(원준 10-02 «이음새 있을 때랑 똑같이») — 서랍만 없다 · 크기와 놓일 자리 윤곽이 손잡이 몫을 안다.
+check(/if \(!host\.narrow\(\)\) kids\.push\(handleEl\(home\)\);/.test(DOCK) && !/if \(home === 'seam' && !host\.narrow\(\)\) kids\.push\(handleEl/.test(DOCK)
+  && /extra: extra \+ \(host\.narrow\(\) \? 0 : HANDLE_FLOAT\), grow \}/.test(DOCK) && /extra: seps \+ HANDLE_FLOAT,/.test(DOCK) && /2 \* \(M\.pad \+ 2\) \+ seps \+ HANDLE_FLOAT\)/.test(DOCK),
+  "W14 손잡이는 이음매 · 곁칸 아래 둘 다(서랍만 없다) — 곁칸 아래 크기와 끌 때의 윤곽이 손잡이 몫(HANDLE_FLOAT)을 셈한다");
 console.log(`\n${pass} ok · ${fail} fail`);
 if (fail) process.exit(1);
