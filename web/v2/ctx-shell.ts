@@ -9,10 +9,23 @@ import { isInstancePinned, projectCtxRows, sessText, sessionCtxRows, sideInstanc
 import { canMoveSess, findSessIn, isInvitedSess, isLiveSess, isMineSess, projName, type Proj, type Sess, type V2Data } from './views.js';
 import { forkableHarness } from './session-fork.js';
 import { SESS_STATES } from '../session-status.js';
-import { omniOpen } from './omni.js';
+import { omniAvailable, omniOpen } from './omni.js';
+import { forwardOmniToShell } from './omni-frame.js';   // #4530 액자(클래식 iframe) 안이면 셸에 부탁한다
+import { isMacPlatform } from '../lib/finder-keys.js';
+import { omniKeyHint } from '../lib/omni-chord.js';
 import { appByKey, appHref, openLaunchpad, soloSessionUrl } from './apps.js';
 import { openSharePopover, shareSessOf } from './share-session.js';
 import { markNotificationsRead } from './notifications.js';
+
+// ── 통합검색 열기 (#4530) ──
+//  셸 문서면 바로 연다. 액자(클래식 ?embed=1) 문서는 같은 메뉴를 쓰지만 통합검색 훅이 없다 — 종전엔 «「…」 검색» 을 눌러도
+//  아무 일이 없었다(점검 5번). 그때는 바깥 셸에 부탁한다(OMNI_MSG + seed).
+function openSearch(seed?: string): void {
+  if (omniAvailable()) omniOpen(seed);
+  else forwardOmniToShell(seed);
+}
+/** 메뉴에 적는 단축키 이름 — 사이드바 검색 단추와 같은 이름(맥 ⌘K · 그 밖 Alt K). 종전엔 윈도우에서도 «⌘K» 였다. */
+const omniHint = (): string => omniKeyHint(isMacPlatform());
 
 export interface CtxShellHooks {
   data(): V2Data;
@@ -177,7 +190,7 @@ export function mountCtxShell(h: CtxShellHooks): void {
   registerCtxSurface('home', () => [
     { label: '새 작업', icon: 'plus', hint: '새 탭', run: () => h.newTask() },
     { label: '모든 앱', icon: 'apps', run: () => openLaunchpad() },
-    { label: '통합검색', icon: 'search', hint: '⌘K', run: () => omniOpen() },
+    { label: '통합검색', icon: 'search', hint: omniHint(), run: () => openSearch() },
   ]);
   registerCtxSurface('inbox', () => [
     { label: '모두 읽음으로', icon: 'check', run: () => { void markNotificationsRead().then(() => h.refresh()); } },
@@ -185,7 +198,7 @@ export function mountCtxShell(h: CtxShellHooks): void {
   ]);
   registerCtxSurface('shell', () => [
     { label: '새 작업', icon: 'plus', hint: '새 탭', run: () => h.newTask() },
-    { label: '통합검색', icon: 'search', hint: '⌘K', run: () => omniOpen() },
+    { label: '통합검색', icon: 'search', hint: omniHint(), run: () => openSearch() },
     { label: '새로고침', icon: 'refresh', run: () => h.refresh() },
   ]);
 
@@ -200,7 +213,7 @@ export function commonRows(ev: CtxEvent, o: { openRoute(href: string, newTab?: b
   if (sel) {
     const short = sel.length > 24 ? sel.slice(0, 24) + '…' : sel;
     rows.push(copyRow('복사', sel, '복사했어요'));
-    rows.push({ label: `「${short}」 검색`, icon: 'search', hint: '⌘K', run: () => omniOpen(sel) });
+    rows.push({ label: `「${short}」 검색`, icon: 'search', run: () => openSearch(sel) });
     if (o.newTask) rows.push({ label: '이 글로 새 작업', icon: 'bolt', hint: '홈 입력칸에', run: () => o.newTask!(sel) });
   }
   const a = ev.link;

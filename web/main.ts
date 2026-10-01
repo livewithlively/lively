@@ -34,6 +34,7 @@ import { setUnauthorizedHandler } from './lib/net.js';
 import { takeShellSwitch, uiMode } from './lib/state.js';
 import { mountDesktopUpdate } from './desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 클래식 셸 상단 띠(#1838)
 import { mountClassicCtx } from './classic-ctx.js';   // #3784 클래식 화면 우클릭 메뉴
+import { installOmniForwarder } from './v2/omni-frame.js';   // #4530 액자 안 ⌘K → 셸 통합검색
 import { bootV2 } from './v2/main.js'; // #1719 새 1탭 셸 — boot() 가 ui_mode 로 고른다. 정적 import(스탬프 경로 단일화), 부르기 전엔 아무 일도 안 함.
 import { applyTheme, nextTheme, setThemePref, themeIconSvg, themePref, themeTitle, watchTheme } from './theme.js'; // #1683 다크모드 — 3단 테마
 
@@ -321,6 +322,10 @@ async function boot() {
   }
   // #3784 — 클래식 판(액자 안 위키·프로젝트 보드 포함)에도 같은 우클릭 메뉴. 셸 배선은 이 문서에 안 닿는다.
   mountClassicCtx();
+  // #4530 — 액자(셸 안 iframe)로 실린 클래식 화면에서 ⌘K · Ctrl+K · Alt+K 를 셸의 통합검색으로 넘긴다.
+  //  종전엔 프로젝트 보드·지식 문서 안을 누른 뒤 ⌘K 를 누르면 아무것도 안 뜨거나(키가 셸 문서에 안 옴) 위키 전용 검색이 떴다.
+  //  끼워 넣은 판이 아니면(단독 탭) 아무것도 하지 않는다.
+  installOmniForwarder();
   // 우측 상단 = '내 프로필' 버튼(아바타 + 표시이름). 표시이름 우선(없으면 이메일/아이디). 클릭→'내 정보' 팝업(#762).
   const userBtn = document.getElementById('user-email');
   if (userBtn) {
