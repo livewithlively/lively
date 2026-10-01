@@ -412,19 +412,26 @@ export async function withAssignClaim<T>(
  *  세션 id 는 spawn 마다 새로 만들므로 이 판만 죽는다. 샌드박스는 같은 (태스크, 회차) 판이 살아 있으면 두 번째 launch 를
  *  거절하므로 여기 오는 건 spawn 도중 취소된 경우뿐이고, 거둘 판도 이 판 하나다.
  */
-async function discardLostSpawn(c: SessionCoords): Promise<void> {
+async function discardRacedSpawn(c: SessionCoords): Promise<void> {
+  //  ⚠ 이 판은 행에 좌표가 없다(markRunning 이 거절했다) — 실패 세션 회수기는 DB 좌표로만 걷으므로 여기서 못 거두면
+  //   아무도 다시 보지 않는다. 그래서 실패는 좌표째 로그로 남긴다.
+  const at = { session: c.session_id, node: c.node_id, task_dir: c.task_dir };
   try {
     const k = await killTaskAnywhere(c);
+    if (!k.gone) logger.warn({ ...at, why: k.why }, "경합으로 거둘 판에 닿지 못했다");
     if (c.node_id === CENTRAL_NODE_ID && isSandboxTaskDir(c.task_dir)) {
       const { revokeSessionHookToken } = await import("../terminal/profiles.js");
-      if (c.session_id) await revokeSessionHookToken(c.session_id).catch(() => { /* 회수기가 다시 본다 */ });
-      await reapSandboxTask(String(c.task_dir), false).catch(() => { /* 회수기가 다시 본다 */ });
+      if (c.session_id) await revokeSessionHookToken(c.session_id)
+        .catch((e) => logger.warn({ ...at, err: redactTaskText((e as Error)?.message ?? e) }, "경합으로 거둔 판의 훅 토큰 회수 실패"));
+      const rp = await reapSandboxTask(String(c.task_dir), false);
+      if (!rp.done) logger.warn({ ...at, why: rp.why }, "경합으로 거둔 샌드박스 유닛을 치우지 못했다");
     }
-    if (!k.gone) logger.warn({ session: c.session_id, node: c.node_id, why: k.why }, "경합으로 거둘 판에 닿지 못했다");
-  } catch (err) { logger.warn({ err: redactTaskText((err as Error)?.message ?? err), session: c.session_id }, "경합으로 거둘 판 정리 실패"); }
+  } catch (err) { logger.warn({ ...at, err: redactTaskText((err as Error)?.message ?? err) }, "경합으로 거둘 판 정리 실패"); }
 }
 
 const IN_FLIGHT: AssignResult = { assigned: false, code: "in_flight", reason: "다른 경로가 이 태스크를 배정하고 있거나 이미 배정했다" };
+//  markRunning 이 거절한 경우 — 다른 프로세스가 먼저 기록했거나 그 사이 취소됐다. 판정 축은 in_flight 와 같다(물러날 뿐 실패가 아니다).
+const NOT_QUEUED: AssignResult = { assigned: false, code: "in_flight", reason: "행이 이미 queued 가 아니다 — 다른 경로가 먼저 기록했거나 그 사이 취소됐다" };
 
 async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Map<string, number>): Promise<AssignResult> {
   const r = await withAssignClaim(t.id, async () => (await getTask(t.id))?.status === "queued", async (): Promise<AssignResult> => {
@@ -489,9 +496,9 @@ async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Ma
       throw redactTaskError(e, taskSecretValues(env, { t: git?.https_token, k: git?.ssh_private_key }));
     }
     if (!(await markRunning(t.id, pick.id, r.sessionId, r.taskDir))) {
-      await discardLostSpawn({ node_id: pick.id, session_id: r.sessionId, requester: t.requester, task_dir: r.taskDir });
+      await discardRacedSpawn({ node_id: pick.id, session_id: r.sessionId, requester: t.requester, task_dir: r.taskDir });
       logger.warn({ task: t.id, node: pick.id, session: r.sessionId }, "위탁 배정 경합 — 행이 이미 queued 가 아니라 방금 띄운 판을 거둔다");
-      return IN_FLIGHT;
+      return NOT_QUEUED;
     }
     extra.set(pick.id, (extra.get(pick.id) ?? 0) + 1);
     logger.info({ task: t.id, node: pick.id, session: r.sessionId }, "위탁 태스크 배정");

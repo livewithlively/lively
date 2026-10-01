@@ -181,13 +181,13 @@ async function holdClaim(id: number, table: Set<number>) {
   const start = src.indexOf("async function assignOne("), end = src.indexOf("\n}\n", start);
   assert.ok(start >= 0 && end > start, "assignOne 본문 경계를 못 찾았다 — 함수 이름이 바뀌면 이 단언부터 고쳐라");
   const body = src.slice(start, end);
-  assert.ok(/if \(!\(await markRunning\([^)]*\)\)\) \{\s*await discardLostSpawn\(/.test(body),
+  assert.ok(/if \(!\(await markRunning\([^)]*\)\)\) \{\s*await discardRacedSpawn\(/.test(body),
     "markRunning 이 false 여도 판을 거두지 않는다 — 다른 게이트웨이가 띄운 판과 함께 끝까지 돈다");
-  const lost = body.slice(body.indexOf("await discardLostSpawn("));
-  assert.ok(lost.indexOf("return IN_FLIGHT;") >= 0 && lost.indexOf("return IN_FLIGHT;") < lost.indexOf("extra.set("),
+  const lost = body.slice(body.indexOf("await discardRacedSpawn("));
+  assert.ok(lost.indexOf("return NOT_QUEUED;") >= 0 && lost.indexOf("return NOT_QUEUED;") < lost.indexOf("extra.set("),
     "거둔 뒤 물러나지 않고 배정 성공으로 센다");
-  const ds = src.slice(src.indexOf("async function discardLostSpawn("), src.indexOf("\n}\n", src.indexOf("async function discardLostSpawn(")));
-  assert.ok(/killTaskAnywhere\(c\)/.test(ds), "discardLostSpawn 이 판을 실제로 죽이지 않는다");
+  const ds = src.slice(src.indexOf("async function discardRacedSpawn("), src.indexOf("\n}\n", src.indexOf("async function discardRacedSpawn(")));
+  assert.ok(/killTaskAnywhere\(c\)/.test(ds), "discardRacedSpawn 이 판을 실제로 죽이지 않는다");
   const store = readFileSync(new URL("../../src/node/task-store.ts", import.meta.url), "utf8");
   const mr = store.indexOf("export async function markRunning(");
   assert.ok(mr >= 0, "markRunning 을 못 찾았다 — 이름이 바뀌면 이 단언부터 고쳐라");
