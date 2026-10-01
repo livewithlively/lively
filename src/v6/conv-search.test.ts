@@ -258,6 +258,12 @@ test("[K11] 나머지가 같으면 내 세션이 앞선다 · limit 만큼만", 
 test("[K12] 낱말이 없으면 결과 없음 · 대소문자 무시는 SQL ILIKE 와 낱말 소문자화가 맡는다", () => {
   assert.equal(rank([agg("a", [])], "").length, 0);
   assert.equal(convRelevance(agg("a", [{ user: 1 }], { label: "Slack 정리" }), parseQueryTerms("SLACK"), { nowMs: NOW }).all, true);
+});
+test("[E2] 색인하는 고친 파일 = 경로 끝 세 마디(빈 값 · 세 마디 미만 · 윈도 경로)", () => {
+  assert.equal(editTail(""), "");
+  assert.equal(editTail("omni.ts"), "omni.ts");
+  assert.equal(editTail("v2/omni.ts"), "v2/omni.ts");
+  assert.equal(editTail("C:\\w\\lively\\web\\v2\\omni.ts"), "web/v2/omni.ts");
   assert.equal(editTail("/work/shared/project/4530/lively/web/v2/omni.ts"), "web/v2/omni.ts");
 });
 test("[E1] 고친 파일은 파일 이름 + 바로 위 폴더로 보인다", () => {

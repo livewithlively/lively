@@ -26,8 +26,8 @@ const chk = (n, c, why) => (c ? ok(n) : bad(n, why || ""));
 const A = "__convpg_a__", B = "__convpg_b__";
 const SID = (n) => `convpg-${n}`;
 const BOX = (n) => `box-__convpg-${n}`;
-const ALL = Array.from({ length: 40 }, (_, i) => SID(i));
-const ALL_BOX = Array.from({ length: 40 }, (_, i) => BOX(i));
+const ALL = Array.from({ length: 45 }, (_, i) => SID(i));
+const ALL_BOX = Array.from({ length: 45 }, (_, i) => BOX(i));
 const W2 = "00000000-0000-4000-8000-00000000c0a2", W3 = "00000000-0000-4000-8000-00000000c0a3";   // 다른 워크스페이스 · 보관된 워크스페이스
 const LIST_NAME = "__convpg_hidden_list__", PROJ_NAMES = ["__convpg_hidden_proj__", "__convpg_open_proj__"];
 
@@ -421,7 +421,13 @@ try {
     await put(SID(39), A, U("흔한낱말 그리고 드문낱말", ago(20)));
     await C.indexConvSession("", SID(39));
     const r = await search(A, "흔한낱말 드문낱말", { cap: 3, sort: "recent" });
-    chk("D26 상한 3 · 흔한 낱말만 든 최근 세션 넷 → 둘 다 든 옛 세션이 결과에 있다", ids(r).includes(SID(39)) && r.capped === true, JSON.stringify({ ids: ids(r), capped: r.capped }));
+    chk("D26 상한 3 · 흔한 낱말만 든 최근 세션 넷 → 둘 다 든 옛 세션이 결과에 있다", ids(r).includes(SID(39)) && r.capped === true && r.cap === 3, JSON.stringify({ ids: ids(r), capped: r.capped, cap: r.cap }));
+    //  드문 낱말이 첫 지시(제목)에만 있어도 줄 세우기에 든다 — 제목은 같은 매개변수로 상한 앞에서 잰다.
+    await put(SID(40), A, U("흔한낱말 다시 정리", ago(25)));
+    await C.indexConvSession("", SID(40));
+    await itemsPool.query(`UPDATE session SET title = '제목에만있는말 정리' WHERE node_id='' AND session_id=$1`, [SID(40)]);
+    const t = await search(A, "흔한낱말 제목에만있는말", { cap: 3, sort: "recent" });
+    chk("D26 드문 낱말이 첫 지시(제목)에만 있어도 상한 앞 줄 세우기에 든다", ids(t).includes(SID(40)), JSON.stringify(ids(t)));
   }
 
   // ── 주기 정비 — 밀린 세션을 집어 색인한다 ──

@@ -9,7 +9,7 @@
 
 import { el, renderMarkdown } from './md.js';
 import { liteMenu } from './ctx-lite.js';   // #3784 터미널 우클릭 메뉴(의존 0 — 이 번들은 셸 밖에서 뜬다)
-import { isTerminalOmniChord } from './omni-chord.js';   // #4530 ⌘K 판정 — 한글 자판에서도(정본 web/lib/omni-chord.ts 의 사본)
+import { isTerminalOmniChord, OMNI_MSG, OMNI_CLOSED_MSG } from './omni-chord.js';   // #4530 ⌘K 판정 — 한글 자판에서도(정본 web/lib/omni-chord.ts 의 사본)
 import { decideKey, UndoStack, countTyped, SEQ, nativeUndoOk } from './line-edit.js'; // #3778 입력줄 선택·되돌리기(순수 판정) · #3864 앱 되돌리기 판 판정
 
 // xterm.js 는 CDN 클래식 스크립트로 먼저 로드된다(terminal.html) — 번들 대상이 아니라 전역으로 온다.
@@ -1885,7 +1885,7 @@ export function setupClipboard() {
     if (EMBED && isTerminalOmniChord(e)) {
       // #633 과 같은 이유로 preventDefault 필수 — return false 는 xterm 자체 처리만 막고 브라우저 기본동작은 안 막는다.
       e.preventDefault();
-      try { window.parent.postMessage({ type: 'lively-omni-open' }, location.origin); } catch (_) { /* 부모가 없다 */ }
+      try { window.parent.postMessage({ type: OMNI_MSG }, location.origin); } catch (_) { /* 부모가 없다 */ }
       return false;
     }
     // [#1300] 비IME 키(Space/Enter/Backspace/화살표 등) = 사파리 IME 커밋 신호 — 에코 추적만 해제한다
@@ -3282,7 +3282,7 @@ function setupEmbedBridge() {
     const m: any = ev.data;
     //  #4530 — 셸이 통합검색을 닫았다(이 프레임이 Alt+K · ⌘K 로 열어 달라고 부탁했던 것). 입력은 다시 터미널로 —
     //   종전엔 Esc 로 닫으면 초점이 셸 문서에 남아 터미널을 다시 눌러야 쳐졌다.
-    if (m && m.type === 'lively-omni-closed') { try { term.focus(); } catch (_) { /* 아직 안 떴다 */ } return; }
+    if (m && m.type === OMNI_CLOSED_MSG) { try { term.focus(); } catch (_) { /* 아직 안 떴다 */ } return; }
     if (!m || m.type !== 'lively-term') return;
     if (m.cmd === 'reconnect') softReconnect();
     else if (m.cmd === 'settings') openSettings();

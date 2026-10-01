@@ -98,6 +98,8 @@ for (const [name, e, open, term] of T) {
   ok(yes(() => lib.isTerminalOmniChord(e)) === term, `${name} — 터미널 판정 ${term ? "넘긴다" : "안 넘긴다"}`);
   ok(yes(() => copy.isOmniChordLike(e)) === open && yes(() => copy.isTerminalOmniChord(e)) === term, `${name} — 터미널 번들 사본이 정본과 같다`);
 }
+ok(lib.OMNI_MSG === "lively-omni-open" && copy.OMNI_MSG === lib.OMNI_MSG && copy.OMNI_CLOSED_MSG === lib.OMNI_CLOSED_MSG,
+  "신호 이름 — 터미널 번들 사본이 정본(lib/omni-chord)과 같은 값");
 ok(safe(() => lib.omniKeyHint(true)) === "⌘K" && safe(() => lib.omniKeyHint(false)) === "Alt K", "H1 단축키 이름 — 맥 ⌘K · 그 밖 Alt K(사이드바 검색 단추와 같은 이름)");
 
 // ── 앱 화면 주입 문자열(A1) ──
@@ -240,8 +242,31 @@ function stringLiteralIn(node, text) {
   const a = sf("web/v2/app-ui.ts");
   //  #4530 격리 리뷰 뒤: 앱 화면 다리는 omni.ts 를 들이지 않는다(셸 화면 모듈 묶음이 딸려 와 창 없는 곳에서 터졌다 — session-app-pane 시험).
   //   대신 셸이 듣는 같은 오리진 신호(lively-omni-open)를 제 창에 보낸다 — bindOmniKey 가 받아 연다.
-  ok(!importsName(a, "omniOpen", /\/omni\.js$/) && stringLiteralIn(a, "ui/omniOpen") && stringLiteralIn(a, "lively-omni-open") && callsMember(a, "postMessage"),
-    "W5 앱 화면 다리가 ui/omniOpen 을 받아 셸 신호(lively-omni-open)로 넘긴다 · omni.ts 를 들이지 않는다");
+  //  구문 트리로 «ui/omniOpen 분기 안에서 window.postMessage({ type: OMNI_MSG, open: true }) 를 부르는가» 를 본다 — 파일 어딘가의 문자열·
+  //   다른 postMessage 로는 초록이 되지 않게(격리 재리뷰: 그 줄을 지워도 통과하던 거짓 초록).
+  let branch = null;
+  const findBranch = (n) => { if (branch) return; if (ts.isIfStatement(n) && stringLiteralIn(n.expression, "ui/omniOpen")) { branch = n.thenStatement; return; } ts.forEachChild(n, findBranch); };
+  findBranch(a);
+  let sends = false;
+  const findSend = (n) => {
+    if (sends) return;
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === "postMessage"
+      && ts.isIdentifier(n.expression.expression) && n.expression.expression.text === "window") {
+      const arg = n.arguments[0];
+      if (arg && ts.isObjectLiteralExpression(arg)) {
+        const prop = (k) => arg.properties.find((p) => ts.isPropertyAssignment(p) && p.name && p.name.text === k);
+        const t = prop("type"), o = prop("open");
+        if (t && ts.isIdentifier(t.initializer) && t.initializer.text === "OMNI_MSG" && o && o.initializer.kind === ts.SyntaxKind.TrueKeyword) { sends = true; return; }
+      }
+    }
+    ts.forEachChild(n, findSend);
+  };
+  if (branch) findSend(branch);
+  ok(!importsName(a, "omniOpen", /\/omni\.js$/) && importsName(a, "OMNI_MSG", /\/lib\/omni-chord\.js$/) && !!branch && sends,
+    "W5 앱 화면 다리 — ui/omniOpen 분기 안에서 window.postMessage({ type: OMNI_MSG, open: true }) · OMNI_MSG 는 lib/omni-chord 한 벌 · omni.ts 를 들이지 않는다");
+  //  신호 이름은 한 벌 — 셸(omni.ts)도 같은 모듈의 상수로 받고, 터미널 사본도 같은 값이다.
+  const o = sf("web/v2/omni.ts");
+  ok(importsName(o, "OMNI_MSG", /\/lib\/omni-chord\.js$/) && !stringLiteralIn(o, "lively-omni-open"), "W5 셸은 신호 이름을 lib/omni-chord 의 상수로 받는다(문자열 복제 없음)");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
