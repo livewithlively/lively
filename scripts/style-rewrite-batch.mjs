@@ -416,7 +416,7 @@ async function processSections(k, el, fmt, common) {
   for (let i = 0; i < sections.length; i++) {
     const sec = sections[i];
     const findings = sec.oversized ? [] : sectionFindings(k.title, sec.text, i, fmt);
-    if (!findings.length) { parts.push(sec.text); report.push({ index: i, heading: sec.heading, status: sec.oversized ? "oversized" : "clean" }); continue; }
+    if (!findings.length) { parts.push(sec.text); report.push({ index: i, heading: sec.heading, section: sec.oversized ? "oversized" : "clean" }); continue; }
     const src = { title: i === 0 ? (k.title ?? "") : "", body_md: sec.text };
     const part = { index: i, total: sections.length };
     const check = (cand) => {
@@ -433,18 +433,19 @@ async function processSections(k, el, fmt, common) {
       return v;
     };
     const { after, attempts } = await rewriteLoop(src, findings, fmt.guide_md, check, part);
-    if (!after) { parts.push(sec.text); report.push({ index: i, heading: sec.heading, status: "kept", attempts: attempts.map((a) => a.reason), ...meaningOf(attempts) }); continue; }
+    if (!after) { parts.push(sec.text); report.push({ index: i, heading: sec.heading, section: "kept", attempts: attempts.map((a) => a.reason), ...meaningOf(attempts) }); continue; }
     // 조각 끝 줄바꿈을 원문대로 맞춘다 — 모델이 끝 줄바꿈을 빼면 다음 조각의 헤딩이 앞 줄에 붙는다.
     const trail = sec.text.match(/\n*$/)[0];
     parts.push(after.body_md.replace(/\n*$/, "") + trail);
     if (i === 0) title = after.title;
-    report.push({ index: i, heading: sec.heading, status: "rewritten", attempts: attempts.length });
+    report.push({ index: i, heading: sec.heading, section: "rewritten", attempts: attempts.length });
   }
   const after = { title, body_md: parts.join("") };
   const src = { title: k.title, body_md: k.body_md };
   const withAfter = { ...common, rules, mode: "sections", sections: report, after_title: after.title, chars_after: chars(after.body_md) };
   const dryBody = args.apply ? {} : { after_body: after.body_md };
-  const rewritten = report.filter((r) => r.status === "rewritten").length;
+  // 조각 결과 키는 status 가 아니라 section 이다 — 같은 키를 쓰면 리포트를 status 로 세는 집계가 조각을 문서로 센다.
+  const rewritten = report.filter((r) => r.section === "rewritten").length;
   if (!rewritten) return { ...withAfter, status: "rejected", reason: "no_section_passed" };
   // 합친 문서 전체로 한 번 더 — 조각별 검사가 못 보는 제목↔첫 조각 결합과 새로 생긴 위반을 본다.
   const full = checkRewrite(src, after, fmt).violations;
