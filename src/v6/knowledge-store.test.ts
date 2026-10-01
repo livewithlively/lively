@@ -116,7 +116,7 @@ t("#907: 이름이 '-' 로 끝나는 실재 지식 — exact 우선이라 해소
 //  4건이 꼬리 '-' 를 잃고 '신규'로 판정돼 수정 저장이 400(category 필수)으로 실패했다.
 const has = (...names: string[]) => (n: string) => names.includes(n);
 t("저장 이름: '-' 로 끝나는 실재 이름은 그대로 쓴다", () => {
-  const real = "여신-토스-부산광역시-사전조회-오픈-요청-2026-";
+  const real = "제휴-지역-사전조회-오픈-요청-서울-경기-2026-";
   assert.notEqual(slugify(real), real);
   assert.equal(pickKnowledgeName(real, has(real)), real);
 });

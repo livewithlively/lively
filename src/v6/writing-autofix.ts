@@ -62,7 +62,7 @@ function tidyTitle(t: string): string {
   for (let i = 0; i < 3; i++) {
     const prev = s;
     s = s.replace(new RegExp(`[(\\[（【]\\s*[${SEP}\\s]*[)\\]）】]`, "g"), " ");
-    // 공백으로 띄운 구분자가 겹치면 첫 것만 남긴다(«A — — B»). 붙은 하이픈(«honest-one»)은 건드리지 않는다.
+    // 공백으로 띄운 구분자가 겹치면 첫 것만 남긴다(«A — — B»). 붙은 하이픈(«app-server»)은 건드리지 않는다.
     s = s.replace(new RegExp(`(\\s[${SEP}])(?:\\s+[${SEP}])+(?=\\s|$)`, "g"), "$1");
     s = s.replace(/,(?:\s*,)+/g, ",").replace(/\s+,(?=\s)/g, ",");
     s = s.replace(new RegExp(`^[\\s${SEP}]+|[\\s${SEP}]+$`, "g"), "");
@@ -75,7 +75,7 @@ function tidyTitle(t: string): string {
 /** 괄호 밖 조각을 지워도 제목 문장이 안 깨지는 자리인가 — 한쪽이 제목 끝·구분자·괄호여야 하고, 낱말에 딱 붙어 있으면 안 된다. */
 function safeTokenSpot(title: string, start: number, end: number): boolean {
   const before = title.slice(0, start), after = title.slice(end);
-  // 조사·단위가 바로 붙은 자리(«2026-09-07에», «!6593의»)와 설명 괄호가 바로 붙은 자리(«!6445(CHiPS uq)») — 지우면 문장이 깨진다.
+  // 조사·단위가 바로 붙은 자리(«2026-09-07에», «!6593의»)와 설명 괄호가 바로 붙은 자리(«!6445(유니크 키)») — 지우면 문장이 깨진다.
   if (/^[\p{L}\p{N}([（【]/u.test(after) || /[\p{L}\p{N}]$/u.test(before)) return false;
   const l = before.trimEnd(), r = after.trimStart();
   const leftEdge = !l || SEP_CHAR_RE.test(l.slice(-1)) || /[\])）】」』(\[（【]$/.test(l);

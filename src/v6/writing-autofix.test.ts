@@ -43,8 +43,8 @@ t("맨 앞 이모지를 지워 드러난 상태 기호도 함께 지운다(안 �
 });
 
 t("제목 중간의 상태 기호를 지운다", () => {
-  const r = cleanAndGated("구정산 잔여 — ✅ 라우팅 컷오버 완료", "컷오버했다.");
-  assert.equal(r.title, "구정산 잔여 — 라우팅 컷오버 완료");
+  const r = cleanAndGated("옛 경로 잔여 — ✅ 라우팅 컷오버 완료", "컷오버했다.");
+  assert.equal(r.title, "옛 경로 잔여 — 라우팅 컷오버 완료");
   assert.deepEqual(r.fixed, ["title_status_mark"]);
 });
 
@@ -64,8 +64,8 @@ t("괄호 안 말도 함께 옮긴다(날짜만 빼면 «(규명)» 이 남는�
 });
 
 t("괄호 밖 맨 앞 날짜·요일·시각을 뺀다 — 요일은 옮기지 않는다", () => {
-  const r = cleanAndGated("[개신대] 2026-09-28(월) 09:56 CIS 장애 정리", "장애였다.");
-  assert.equal(r.title, "[개신대] CIS 장애 정리");
+  const r = cleanAndGated("[신청] 2026-09-28(월) 09:56 조회 장애 정리", "장애였다.");
+  assert.equal(r.title, "[신청] 조회 장애 정리");
   assert.equal(r.body_md, "장애였다 (2026-09-28 09:56).");
 });
 
@@ -101,7 +101,7 @@ t("첫 줄에 이미 같은 값이 있으면 덧붙이지 않는다", () => {
   const r = cleanAndGated("배포 결과 (2026-09-07)", body);
   assert.equal(r.title, "배포 결과");
   assert.equal(r.body_md, body);
-  const mrBody = "honest-one !4986 에서 비영업일 가드를 넣어 공휴일 가짜 실패 알림을 없앴다.";
+  const mrBody = "app-server !4986 에서 비영업일 가드를 넣어 공휴일 가짜 실패 알림을 없앴다.";
   const r2 = cleanAndGated("비영업일 가드 (MR !4986)", mrBody);
   assert.equal(r2.body_md, mrBody);
 });
@@ -112,9 +112,9 @@ t("값이 겹쳐 보여도 숫자 경계가 다르면(2026-06 ↔ 2026-06-01) �
 });
 
 t("인라인 코드 속 값은 첫 줄에 있다고 보지 않는다", () => {
-  const r = cleanAndGated("MR !6134 리뷰 — 예외 경로 수정", "honest-one MR `!6134` 리뷰다.");
+  const r = cleanAndGated("MR !6134 리뷰 — 예외 경로 수정", "app-server MR `!6134` 리뷰다.");
   assert.equal(r.title, "리뷰 — 예외 경로 수정");
-  assert.equal(r.body_md, "honest-one MR `!6134` 리뷰다 (MR !6134).");
+  assert.equal(r.body_md, "app-server MR `!6134` 리뷰다 (MR !6134).");
 });
 
 t("제목의 인라인 코드 괄호는 빈 괄호로 지우지 않는다", () => {
@@ -135,7 +135,7 @@ t("빼고 나서 제목이 비거나 3글자 미만이면 문서 전체를 원�
 });
 
 t("조사·설명 괄호가 붙은 자리는 날짜·MR 을 빼지 않는다(문장이 깨진다)", () => {
-  for (const title of ["연동 첫 달(2025-05)부터 백필한다", "근본수정 — MR !6445(CHiPS uq) 정리", "기준일 2026-09-07 에 바뀐 규칙"]) {
+  for (const title of ["연동 첫 달(2025-05)부터 백필한다", "근본수정 — MR !6445(유니크 키) 정리", "기준일 2026-09-07 에 바뀐 규칙"]) {
     const r = fix(title, "본문이다.");
     assert.equal(r.title, title);
     assert.deepEqual(r.fixed, []);
