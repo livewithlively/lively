@@ -11,11 +11,13 @@
 //   말없이 좁아진다. 종류 칩과 같은 규칙, #4156).
 
 export type OmniSort = 'rel' | 'recent';
-export const SORT_KEY = 'lively.omni.sort';
+//  #4530(원준 2026-10-01 «관련도가 적당히 있는 걸 시간순으로 보여 줘야지») — 기본을 **최신순(맨 위 가장 맞는 셋 + 최근 것부터)** 으로
+//   바꿨다. 종전 키(lively.omni.sort)에는 옛 기본에서 «관련도순» 이 저장돼 있을 수 있어 키를 바꿨다 — 새 기본이 한 번은 모두에게 선다.
+export const SORT_KEY = 'lively.omni.sort.v2';
 export const SORT_LABEL: Record<OmniSort, string> = { rel: '관련도순', recent: '최신순' };
-/** 저장값 → 정렬. 모르는 값·빈 값은 관련도순(기본). */
+/** 저장값 → 정렬. 모르는 값·빈 값은 최신순(기본, #4530). */
 export function readSort(raw: unknown): OmniSort {
-  return raw === 'recent' ? 'recent' : 'rel';
+  return raw === 'rel' ? 'rel' : 'recent';
 }
 
 export type OmniPeriod = 'all' | 'd1' | 'd7' | 'd30' | 'd90';

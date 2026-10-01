@@ -52,7 +52,7 @@ import { ASIDE_MSG, setAsideGuestOpener, type AsideGuest } from './aside-slot.js
 import { takeCreated } from './created-cache.js';
 import { canForkSess } from './ctx-shell.js';   // #4135 — 세션 복제 가능 판정(우클릭 메뉴와 한 벌)
 import { openForkPopover } from './session-fork.js';
-import { openMeModal } from './me-modal.js';   // #1898 — 클래식에서 올라온 부팅이 [화면] 자리를 되연다
+import { openMeModal, type MeModalOpts } from './me-modal.js';   // #1898 — 클래식에서 올라온 부팅이 [화면] 자리를 되연다
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';
 import { projectPageHref, projectPageId } from '../lib/proj-page.js';   // #3870 프로젝트 화면 주소 한 벌(사이드바 [→]·통합검색)
 import { mountCtxMenus } from './ctx-registry.js';   // #3784 우클릭 메뉴 배선(표 data-ctx 를 읽는다)
@@ -618,11 +618,21 @@ export async function bootV2(): Promise<void> {
       const pid = projectPageId(href);
       if (pid) { openProjectPage(pid); return; }
       if (!tabsApi) { location.hash = href; return; }
+      //  세션은 홈 구역에서 연다(#4530) — 액자에서 여는 문(lively:open-route)·세션 목록과 같은 규칙. 안 옮기면 프로젝트·위키 구역에서
+      //   연 세션이 사이드바 어디에도 안 보였다(점검).
+      if (routeKey(href).startsWith('s:')) setRailSection('home', { navigate: false });
+      //  보던 창을 덮지 않는다(#4530) — 사이드바 행과 같은 «있으면 그 창, 없으면 새 창». 종전엔 Enter 가 보던 세션 자리를
+      //   지식 문서로 바꿔 버렸다(점검). ⌘Enter(newTab)도 같은 규칙이다(이미 열린 창을 하나 더 만들지 않는다).
+      void newTab;
       const hit = tabsApi.find(href);
-      if (newTab) { if (hit) tabsApi.activate(hit); else tabsApi.add(href); return; }
-      if (hit && hit !== tabsApi.current()) { hit.route = href; tabsApi.activate(hit); return; }
-      location.hash = href;
+      if (!hit) { tabsApi.add(href); return; }
+      if (hit === tabsApi.current()) { if (location.hash !== href) location.hash = href; return; }
+      hit.route = href; tabsApi.activate(hit);
     },
+    //  명령 «…로 새 세션 시작»(#4530) — 사이드바 [새 작업]과 같은 문(그 글을 입력칸에 넣어 둔 새 창).
+    newSession: (seed) => { const t = tabsApi?.add('#/'); if (t && seed) { t.draft = seed; tabsApi?.save(); void renderRoute(t); } },
+    //  «설정» 줄(#4530) — 설정 앱은 숨었고 문은 [나] 창 한 곳이다(#2199).
+    openMe: (tab) => openMeModal({ tab: tab as MeModalOpts['tab'] }),
   });
   bindOmniKey();
   //  화면으로 돌아오면 즉시 최신으로 — 다음 틱을 기다리면 그 몇 초가 '멈춘 화면'으로 보인다.
