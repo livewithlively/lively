@@ -378,7 +378,40 @@ async function candidatesFor(t: DelegateTask, counts: Map<string, number>, extra
 // 한 태스크를 후보와 매칭해 실제 배정(spawn)한다. counts/extra 는 같은 tick 과배정 방지(단발 호출은 빈 extra).
 //  반환: assigned 되면 nodeId, 아니면 사람이 읽을 reason(하네스 로컬 폴백 판단용).
 export interface AssignResult { assigned: boolean; nodeId?: string; reason?: string; code?: AssignFailCode }
+
+/** 지금 배정(spawn 부터 markRunning 까지) 중인 태스크 id — 이 프로세스 안의 선점 표. */
+const assigning = new Set<number>();
+
+/**
+ * 한 태스크의 배정을 **한 경로만** 하게 한다. 선점에 실패하면 run 을 부르지 않고 null 을 준다.
+ *
+ * 왜 필요한가: 크론·delegate_run 은 태스크를 queued 로 만든 직후 tryAssignNow 를 부르고, 5초 tick 도 같은 queued 행을
+ *  읽어 assignOne 에 들어간다. spawn 이 끝나 markRunning 이 불리기 전까지 행은 계속 queued 라 둘 다 판을 띄웠다 —
+ *  같은 작업 폴더에서 두 스크립트가 자격 파일 하나를 두고 다퉈 한쪽이 «cat: .lease-… 없음» 으로 죽고, 그 exit 가 태스크를
+ *  실패로 닫는 동안 다른 판은 끝까지 돌았다(task 12121, attempt=2 가 0.4초 만에 찍혔다).
+ *  ① has→add 사이에 await 가 없어 같은 프로세스 안에서는 원자적이다. ② 선점 뒤 DB 상태를 다시 본다 — tick 이 들고 있는
+ *  queued 목록은 순회 시작 시점의 것이라, 그 사이 다른 경로가 이미 running 으로 만든 행을 다시 띄우지 않게 한다.
+ *  ⚠ 프로세스를 넘는 선점은 아니다 — 두 게이트웨이가 같은 DB 로 스케줄러를 함께 돌리는 구간에는 이 표가 서로 안 보인다.
+ */
+export async function withAssignClaim<T>(
+  id: number, stillQueued: () => Promise<boolean>, run: () => Promise<T>, table: Set<number> = assigning,
+): Promise<T | null> {
+  if (table.has(id)) return null;
+  table.add(id);
+  try {
+    if (!(await stillQueued())) return null;
+    return await run();
+  } finally { table.delete(id); }
+}
+
+const IN_FLIGHT: AssignResult = { assigned: false, code: "in_flight", reason: "다른 경로가 이 태스크를 배정하고 있거나 이미 배정했다" };
+
 async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Map<string, number>): Promise<AssignResult> {
+  const r = await withAssignClaim(t.id, async () => (await getTask(t.id))?.status === "queued", () => assignClaimed(t, counts, extra));
+  return r ?? IN_FLIGHT;
+}
+
+async function assignClaimed(t: DelegateTask, counts: Map<string, number>, extra: Map<string, number>): Promise<AssignResult> {
   const { nodes, env } = await candidatesFor(t, counts, extra);
   //  #4012 T3 — 맥락 잡은 멤버·워커 고정(node_pref)을 따르지 않는다: 기본 제공 잡은 중앙에서 돈다(상민님 결정).
   const sandboxJob = sandboxAvailable() && isContextJob(t);
@@ -520,7 +553,8 @@ async function assignQueuedWith(counts: Map<string, number>, extra: Map<string, 
       if (bo && now < bo.nextAt) continue;              // 아직 백오프 중 — 이 tick 은 건너뛴다
       const r = await assignOne(t, counts, extra); // 실패해도 큐 유지(다음 tick 재시도, 상한까지)
       //  못 간 이유를 그 태스크에 적어 둔다(#3994 T5) — 상한으로 죽을 때 이 값이 곧 실패 문장이 된다.
-      if (!r.assigned) await noteAssignFailure(t.id, r.code ?? null, r.reason ?? null);
+      //  in_flight 는 다른 경로가 띄우는 중이라 적지 않는다 — 이미 running 인 행의 result 에 미배정 사유가 끼어든다.
+      if (!r.assigned && r.code !== "in_flight") await noteAssignFailure(t.id, r.code ?? null, r.reason ?? null);
       assignBackoff.delete(t.id);        // 던지지 않았으면 연속이 끊긴다(용량 부족 포함 — 백오프 대상 아님)
     } catch (err) {
       const n = (assignBackoff.get(t.id)?.n ?? 0) + 1;

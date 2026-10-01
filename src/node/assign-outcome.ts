@@ -23,7 +23,12 @@ export type AssignFailCode =
    * 실행 멤버에게 그 하네스 자격이 없다(#4012 T2) — 기다려도 안 풀린다. 사람이 등록해야 한다.
    *  종전엔 이 경우가 «적합 노드 없음» 으로 10분 뒤에야 드러났다.
    */
-  | "no_credential";
+  | "no_credential"
+  /**
+   * 같은 태스크를 다른 경로가 지금 배정하고 있거나 이미 배정했다 — 접수 직후의 즉시 배정과 스케줄러 tick 이 겹친 경우다.
+   *  그쪽이 띄우므로 이 호출은 물러난다. 실패가 아니라 배압이다(task-scheduler withAssignClaim).
+   */
+  | "in_flight";
 
 /**
  * 이 실패가 «기다리면 풀리는 것»인가, «사람이 봐야 하는 것»인가(순수).
@@ -32,7 +37,7 @@ export type AssignFailCode =
  *  그게 곧 #968 의 재발이다. 보수적인 쪽이 안전하다.
  */
 export function assignFailKind(code: AssignFailCode | undefined | null): "backpressure" | "fault" {
-  return code === "capacity" ? "backpressure" : "fault";
+  return code === "capacity" || code === "in_flight" ? "backpressure" : "fault";
 }
 
 /**
