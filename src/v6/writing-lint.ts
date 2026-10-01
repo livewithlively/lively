@@ -45,11 +45,13 @@ const sample = (s: string): string => {
   return t.length > SAMPLE_MAX ? `${t.slice(0, SAMPLE_MAX)}…` : t;
 };
 
+// 아래 탐지식은 결정적 자동 정리(writing-autofix.ts)도 그대로 쓴다 — 고치는 쪽이 따로 정규식을 두면 탐지와 어긋나
+//  «고쳤는데 여전히 걸림» 이나 «안 걸린 곳을 고침» 이 생긴다.
 // 강조 기호로 쓰이는 것들. 이모지 전체가 아니라 «상태·경고 신호»로 남발되는 기호만 센다.
-const SIGNAL_SYMBOL_RE = /🔴|🟠|🟡|🟢|✅|❌|⭐|⚠️?|🚨|🔥|💡|📌|‼️?|❗/gu;
-const PICTO_RE = /\p{Extended_Pictographic}/u;
-const DATE_RE = /\b20\d{2}-\d{2}(?:-\d{2})?\b/;
-const MR_REF_RE = /\bMR\s*!?\d+|(?:^|[\s(·,])!\d{2,}\b/;
+export const SIGNAL_SYMBOL_RE = /🔴|🟠|🟡|🟢|✅|❌|⭐|⚠️?|🚨|🔥|💡|📌|‼️?|❗/gu;
+export const PICTO_RE = /\p{Extended_Pictographic}/u;
+export const DATE_RE = /\b20\d{2}-\d{2}(?:-\d{2})?\b/;
+export const MR_REF_RE = /\bMR\s*!?\d+|(?:^|[\s(·,])!\d{2,}\b/;
 // '방금'은 기술 서술(«방금 만든 파일»)에서 시점이 아니라 순서를 말할 때가 많아 넣지 않는다(실데이터 보정).
 const RELATIVE_TIME_RE = /오늘|어제|(?<!안)내일|그저께|엊그제|지난주|이번 ?주|다음 ?주|이번 세션|지난 세션|이 세션/g;
 const LOCAL_PATH_RE = /\/Users\/[A-Za-z0-9._-]+|\/home\/[a-z][A-Za-z0-9._-]*|(?:^|[\s`(])~\/[A-Za-z0-9._-]|[A-Za-z]:\\Users\\/g;
@@ -60,19 +62,25 @@ const NESTED_PAREN_RE = /[(（][^()（）\n]*[(（][^()（）\n]*[)）][^()（�
 const POLITE_END_RE = /(?:습니다|ㅂ니다|니다|세요|십시오|어요|에요|해요)[.!?]?$/;
 const PLAIN_END_RE = /[가-힣]다[.!?]?$/;
 
+// 서술에서 빼는 코드 — 펜스 블록(백틱·물결 순서로 지운다)과 인라인 코드.
+export const FENCED_CODE_RES: readonly RegExp[] = [/```[\s\S]*?(?:```|$)/g, /~~~[\s\S]*?(?:~~~|$)/g];
+export const INLINE_CODE_RE = /`[^`\n]*`/g;
+// 헤딩 줄 — heading_symbol 은 이 줄에 그림 문자(PICTO_RE)가 있으면 건다.
+export const HEADING_LINE_RE = /^\s*#{1,6}\s/;
+
 /** 코드(펜스·인라인)와 URL 을 지운 본문 — 코드 안의 화살표·괄호·경로는 서술이 아니다. */
 function proseOf(body: string): string {
   return body
-    .replace(/```[\s\S]*?(?:```|$)/g, "\n")
-    .replace(/~~~[\s\S]*?(?:~~~|$)/g, "\n")
-    .replace(/`[^`\n]*`/g, "")
+    .replace(FENCED_CODE_RES[0], "\n")
+    .replace(FENCED_CODE_RES[1], "\n")
+    .replace(INLINE_CODE_RE, "")
     .replace(/https?:\/\/\S+/g, "");
 }
 
 const lines = (s: string): string[] => s.split("\n");
 // 이보다 긴 한 줄은 문장이 아니라 데이터(덤프·base64·한 줄 JSON)다. 줄 단위 서술 규칙에서 뺀다 —
 //  정규식 몇 개는 줄 길이에 비례해 되짚으므로, 서술이 아닌 거대한 줄 하나가 저장 한 번을 수 초씩 붙잡을 수 있다.
-const PROSE_LINE_MAX = 2000;
+export const PROSE_LINE_MAX = 2000;
 // 따옴표 안은 남의 말이거나 낱말 자체를 가리키는 언급이다(«"아직" 같은 표현»). 시점·상태 판정에서 뺀다.
 //  홑따옴표는 넣지 않는다 — 영문 아포스트로피(don't … isn't) 사이를 통째로 지운다.
 //  길이를 300자로 묶는다 — 닫힘 없는 여는 기호마다 줄 끝까지 훑으면 긴 한 줄에서 제곱 시간이 된다.
@@ -155,7 +163,7 @@ export function lintWriting(input: WritingLintInput, fmt: WritingFormat, surface
   if (bolds > fmt.limits.bold_max) add("bold_overuse", `볼드가 ${bolds}곳이다(상한 ${fmt.limits.bold_max}). 강조는 결론 한두 곳에만 둔다.`, { count: bolds });
   const symbols = (emphasisText.match(SIGNAL_SYMBOL_RE) ?? []).length;
   if (symbols > fmt.limits.symbol_max) add("symbol_overuse", `강조 기호(🔴⚠✅ 등)가 ${symbols}개다(상한 ${fmt.limits.symbol_max}). 위험 등급은 글로 적는다.`, { count: symbols });
-  const symHeads = proseLines.filter((l) => /^\s*#{1,6}\s/.test(l) && PICTO_RE.test(l));
+  const symHeads = proseLines.filter((l) => HEADING_LINE_RE.test(l) && PICTO_RE.test(l));
   if (symHeads.length) add("heading_symbol", "헤딩에 기호를 넣지 마라.", { count: symHeads.length, sample: sample(symHeads[0]) });
 
   // ── 작성 맥락 ──
