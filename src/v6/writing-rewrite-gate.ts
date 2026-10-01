@@ -335,6 +335,8 @@ export interface HistoryVersions {
  * 최신 변경 이력 한 줄이 배치가 savedOver 판 위에 저장한 바로 그 반영인지.
  *  그 뒤 누가 한 번이라도 고쳤으면 최신 줄의 version_before 가 savedOver 가 아니게 되고,
  *  이력에 안 잡히는 변경으로 판이 올랐으면 version_after 가 현재 판과 어긋난다 — 둘 다 사람 편집 가능성으로 보고 보호한다.
+ *  판을 올리지 않고 updated_at 만 바꾸는 메타 변경(set_lifecycle·set_wiki·move·정렬)은 통과한다 — 재작성이 덮는 본문·제목이 아니다.
+ *  새 메타 변경이 판을 올리기 시작하면 이 판정은 저절로 보수적이 된다.
  *  저장 주체(actor)로 가르지 않는 건 배치가 사람 토큰으로 저장해 actor 가 사람과 같기 때문이다.
  */
 export function isOwnLastEdit(latest: HistoryVersions | null | undefined, savedOver: number | null | undefined, current: number | null | undefined): boolean {
@@ -347,9 +349,9 @@ export function ownEditVersions(lines: Iterable<string>): Map<string, number> {
   const out = new Map<string, number>();
   for (const line of lines) {
     if (!line.trim()) continue;
-    let r: { name?: unknown; status?: unknown; version?: unknown; section?: unknown };
+    let r: { name?: unknown; status?: unknown; version?: unknown };
     try { r = JSON.parse(line); } catch { continue; } // 중단 순간 반쯤 쓰인 마지막 줄
-    if (r.status !== "applied" || typeof r.name !== "string" || !Number.isInteger(r.version) || r.section != null) continue;
+    if (r.status !== "applied" || typeof r.name !== "string" || !Number.isInteger(r.version)) continue;
     const v = r.version as number;
     const prev = out.get(r.name);
     if (prev === undefined || v > prev) out.set(r.name, v);

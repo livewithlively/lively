@@ -497,14 +497,8 @@ async function saveRewrite(name, k, after, rules, withAfter) {
 }
 
 // ── 한 건 ──
-const OWN_EDITS = new Map();
-for (const f of args.ownEdits) {
-  if (!existsSync(f)) { console.error(`--own-edits 파일이 없습니다: ${f}`); process.exit(2); }
-  for (const [n, v] of ownEditVersions(readFileSync(f, "utf8").split("\n"))) {
-    const prev = OWN_EDITS.get(n);
-    if (prev === undefined || v > prev) OWN_EDITS.set(n, v);
-  }
-}
+for (const f of args.ownEdits) if (!existsSync(f)) { console.error(`--own-edits 파일이 없습니다: ${f}`); process.exit(2); }
+const OWN_EDITS = ownEditVersions(args.ownEdits.flatMap((f) => readFileSync(f, "utf8").split("\n")));
 if (OWN_EDITS.size) console.error(`배치 자신의 반영 ${OWN_EDITS.size}건 — 그 뒤 변경이 없으면 보호 창을 건너뛴다`);
 
 // 이력 조회가 실패하면 사람 편집 가능성을 배제하지 못한 것이니 보호한다.
