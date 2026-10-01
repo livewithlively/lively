@@ -440,12 +440,16 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     save();
   });
   // 머리줄을 두 번 누르면 크게 본다(세션을 가운데로) — 종전엔 접기였다(원준 2026-10-01: «두 번 누르면 커지는 게 더 직관적»).
+  //  세션 이름 위를 두 번 누르는 것도 크게 보기다. 이름 글자의 «두 번 누르면 이름 바꾸기»(session-chat.ts)보다 먼저 받아(capture)
+  //  거기까지 내려가지 않게 한다 — 카드에서 이름은 연필 단추로 바꾼다.
   const onHeadDbl = (e: MouseEvent): void => {
     const t = e.target as HTMLElement | null;
     if (!t || !shown() || !t.closest('.sc-head') || t.closest(INTERACTIVE)) return;
+    e.stopPropagation();
+    e.preventDefault();
     void leave();
   };
-  colMain.addEventListener('dblclick', onHeadDbl);
+  colMain.addEventListener('dblclick', onHeadDbl, true);
 
   // 격자 크기가 바뀌면(창 · 왼쪽 사이드바 폭) 카드를 격자 안으로 다시 넣는다.
   let ro: ResizeObserver | null = null;
@@ -471,7 +475,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
       on = false;
       ro?.disconnect();
       colMain.removeEventListener('pointerdown', onHeadDown);
-      colMain.removeEventListener('dblclick', onHeadDbl);
+      colMain.removeEventListener('dblclick', onHeadDbl, true);
       document.removeEventListener('pointerdown', onDownCap, true);
       document.removeEventListener('focusin', onFocusIn);
       window.removeEventListener('blur', onWinBlur);

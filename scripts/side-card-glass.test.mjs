@@ -23,7 +23,7 @@
 //   C4 CSS: 비칠 때 뒤가 실제로 보여야 한다 — 바탕 20% 이하 · 흐림 4~12px(첫 판 30% · 22px 은 흰 카드로 보였다, 원준 2026-10-01).
 //      대신 글자 둘레에 바탕색 테두리(halo)를 둘러 읽히게 한다
 //   H1 머리줄 단추: ⋯ 오른쪽 첫 단추 = 최소화(가로줄 그림, 접히면 창 그림으로 «다시 펴기») · 둘째 = 크게 보기(대각선 화살표 → 세션을 가운데로)
-//   H2 머리줄 두 번 누르기 = 크게 보기(종전엔 접기)
+//   H2 머리줄 두 번 누르기 = 크게 보기(종전엔 접기) · 세션 이름 글자 위도(이름 바꾸기로 내려가지 않는다)
 //   T1 터미널: glass 를 받으면 바탕을 비운다 — 색은 그대로, 알파만 0 (OSC 11 답이 검정이 되지 않게). 읽지 못하는 꼴은 투명한 흰색
 //   T2 터미널: xterm 테마를 바꾸는 모든 자리가 비침을 지킨다(themeFor) · 만들 때도 allowTransparency 를 따른다
 //   T3 terminal.html: term-glass 이면 문서 바탕을 걷는다. color-scheme 은 JS 가 **앱 테마**로 맞춘다(터미널 테마 아님)
@@ -111,7 +111,8 @@ ok(/el\('div', \{ class: 'cm-ctl', hidden: true \}, minBtn, maxBtn\)/.test(card)
 const pf = card.slice(card.indexOf("function paintFold("), card.indexOf("\n  }\n", card.indexOf("function paintFold(")));
 ok(/minBtn\.replaceChildren\(pnIcon\(card\.fold \? 'window' : 'minus'/.test(pf), "H1d 접히면 최소화 단추가 «다시 펴기»(창 그림)가 된다", pf.slice(0, 200));
 const dbl = card.slice(card.indexOf("const onHeadDbl"), card.indexOf("colMain.addEventListener('dblclick', onHeadDbl)"));
-ok(/void leave\(\);/.test(dbl) && !/setFold/.test(dbl), "H2 머리줄 두 번 누르기 = 크게 보기", dbl.slice(-120));
+ok(/void leave\(\);/.test(dbl) && !/setFold/.test(dbl), "H2a 머리줄 두 번 누르기 = 크게 보기", dbl.slice(-120));
+ok(/e\.stopPropagation\(\);/.test(dbl) && /colMain\.addEventListener\('dblclick', onHeadDbl, true\)/.test(card) && /colMain\.removeEventListener\('dblclick', onHeadDbl, true\)/.test(card), "H2b 이름 글자 위도 크게 보기 — 이름 바꾸기보다 먼저 받는다(capture)");
 const iconSrc = read("web/lib/icon-paths.ts");
 ok(["minus", "window", "expand"].every((n) => new RegExp("\\n\\s+" + n + ": '").test(iconSrc)), "H1e 쓰는 그림(minus · window · expand)이 그림 표에 있다");
 
