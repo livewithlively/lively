@@ -1,9 +1,10 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
-  extractConvMessages, clipBody, snippetAround, hasAllTerms, recencyBoost, rankConvSessions, parseConvSort,
-  CONV_BODY_MAX, RECENCY_MAX, type ConvRow,
+  extractConvMessages, clipBody, snippetAround, hasAllTerms, recencyBoost, rankConvAggs, convRelevance, parseConvSort, editedPaths,
+  editLabel, snippetTerms, CONV_BODY_MAX, RECENCY_MAX, CONV_TOP_MAX, type ConvSessionAgg,
 } from "./conv-search.js";
+import { parseQueryTerms, stemKo, termStrength, likePattern, termPatterns } from "./query-terms.js";
 import type { ChatLine } from "../terminal/harness-io/chat-line.js";
 
 // #4517 — ⌘K 대화 검색의 순수 규칙. 원준 2026-09-30: «cmd+K 검색 안에 세션의 대화내용으로도 세션을 검색하고 싶어.
@@ -11,6 +12,8 @@ import type { ChatLine } from "../terminal/harness-io/chat-line.js";
 //  엣지 표(행마다 테스트 하나 — 스크래치패드 spec.md A·B·C):
 //   X1~X10 무엇을 색인하나(사람 말·AI 말만) · C1~C2 긴 말 자르기 · S1~S4 발췌문 · R1 최근 가산
 //   K1~K11 세션 묶기·순위(관련도순/최신순) · P1 정렬 파라미터
+//  #4530(원준 2026-10-01 «대화 일부나 고쳤던 대상을 어렴풋하게 쳐서 세션을 찾고 싶은데 퀄리티가 형편없다»):
+//   X11~X14 고친 파일 색인 · Q1~Q8 검색어 낱말(조사·구절·LIKE 글자 그대로) · K1~K12 세션 단위 관련도와 순서(맨 위 셋 + 최근 것부터)
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const DAY = 86_400_000;
@@ -107,67 +110,159 @@ test("[R1] 지금 = 최대 · 7일 = 반 · 미래 = 지금으로 · 모름 = 0"
   assert.equal(recencyBoost(NaN, NOW), 0);
 });
 
-// ── 세션 묶기 · 순위 ──
-const row = (sid: string, body: string, ms: number | null, extra: Partial<ConvRow> = {}): ConvRow =>
-  ({ node_id: "", session_id: sid, role: "user", ts: ms == null ? null : iso(ms), body, owner: "me", ...extra });
-const rank = (rows: ConvRow[], q: string, sort: "relevance" | "recent" = "relevance", limit = 10, requester = "me") =>
-  rankConvSessions(rows, { q, sort, nowMs: NOW, requester, limit });
+// ── 고친 파일 색인(#4530) ──
+test("★ [X11] 파일을 고친 도구(Edit·Write·MultiEdit·NotebookEdit)의 경로를 role 'edit' 로 담는다", () => {
+  const m = extractConvMessages([asst([
+    { type: "text", text: "고쳤습니다" },
+    { type: "tool_use", id: "1", name: "Edit", input: { file_path: "/w/lively/web/v2/omni.ts", old_string: "a", new_string: "b" } },
+    { type: "tool_use", id: "2", name: "Write", input: { file_path: "/w/lively/src/v6/query-terms.ts", content: "…" } },
+    { type: "tool_use", id: "3", name: "NotebookEdit", input: { notebook_path: "/w/n.ipynb" } },
+  ])]);
+  assert.deepEqual(m.map((x) => [x.role, x.text]), [
+    ["assistant", "고쳤습니다"], ["edit", "/w/lively/web/v2/omni.ts"], ["edit", "/w/lively/src/v6/query-terms.ts"], ["edit", "/w/n.ipynb"],
+  ]);
+});
+test("[X12] 읽기·셸 같은 다른 도구의 입력은 담지 않는다", () => {
+  const m = extractConvMessages([asst([
+    { type: "tool_use", id: "1", name: "Read", input: { file_path: "/w/a.ts" } },
+    { type: "tool_use", id: "2", name: "Bash", input: { command: "git status" } },
+  ])]);
+  assert.equal(m.length, 0);
+});
+test("[X13] 같은 묶음 안에서 같은 파일을 여러 번 고쳐도 한 번만", () => {
+  const e = (id: string) => ({ type: "tool_use", id, name: "Edit", input: { file_path: "/w/omni.ts" } });
+  const m = extractConvMessages([asst([e("1"), e("2")]), asst([e("3")])]);
+  assert.equal(m.filter((x) => x.role === "edit").length, 1);
+});
+test("[X14] 코덱스 파일 변경(paths[])도 · 서브에이전트 가지는 뺀다 · 경로가 아닌 긴 값은 뺀다", () => {
+  assert.deepEqual(editedPaths([{ type: "tool_use", name: "Edit", input: { file_path: "a.ts", paths: ["a.ts", "b.ts"] } }]), ["a.ts", "b.ts"]);
+  assert.equal(extractConvMessages([asst([{ type: "tool_use", id: "1", name: "Edit", input: { file_path: "/w/x.ts" } }], { isSidechain: true })]).length, 0);
+  assert.deepEqual(editedPaths([{ type: "tool_use", name: "Edit", input: { file_path: "x".repeat(401) } }]), []);
+});
 
-test("[K1] 모든 낱말이 한 말 안에 있어야 한다(슬랙 «match all terms»)", () => {
-  const r = rank([row("a", "슬랙 이야기", NOW), row("a", "검색 이야기", NOW), row("b", "슬랙처럼 검색", NOW)], "슬랙 검색");
-  assert.deepEqual(r.map((x) => x.session_id), ["b"], "낱말이 다른 말에 흩어진 세션 a 는 안 맞는다");
+// ── 검색어 낱말(#4530 query-terms) ──
+test("★ [Q1] 끝의 조사를 한 번 뗀다 — 긴 조사부터", () => {
+  assert.equal(stemKo("검색을"), "검색");
+  assert.equal(stemKo("세션이"), "세션");
+  assert.equal(stemKo("화면에서는"), "화면");
+  assert.equal(stemKo("omni.ts에서"), "omni.ts");
+  assert.equal(stemKo("프로젝트로"), "프로젝트");
 });
-test("[K2] 한 세션에 맞은 말이 여럿이면 한 줄로 묶고 수를 센다", () => {
-  const r = rank([row("a", "검색 하나", NOW - 2000), row("a", "검색 둘", NOW), row("a", "검색 셋", NOW - 1000)], "검색");
+test("[Q2] 떼고 남는 것이 두 글자 미만이면 떼지 않는다 · 한글로 안 끝나면 그대로", () => {
+  assert.equal(stemKo("이가"), "이가");
+  assert.equal(stemKo("나는"), "나는");
+  assert.equal(stemKo("search"), "search");
+  assert.equal(stemKo("검색"), "검색");
+});
+test("[Q3] 큰따옴표는 구절 하나 · 구절은 조사를 떼지 않는다 · 소문자 · 중복 제거", () => {
+  assert.deepEqual(parseQueryTerms('"관련도 순" 검색을 Omni omni').map((t) => [t.t, t.stem, t.quoted]),
+    [["관련도 순", "관련도 순", true], ["검색을", "검색", false], ["omni", "omni", false]]);
+});
+test("[Q4] 낱말 세기 — 그대로 1 · 조사 뗀 꼴만 0.8 · 없음 0", () => {
+  const [t] = parseQueryTerms("검색을");
+  assert.equal(termStrength("검색을 고쳐 줘", t), 1);
+  assert.equal(termStrength("통합검색 결함", t), 0.8);
+  assert.equal(termStrength("세션 목록", t), 0);
+});
+test("★ [Q5] LIKE 꼴은 % _ \\ 를 글자로 만든다(«%» 한 글자가 모든 글과 맞지 않게)", () => {
+  assert.equal(likePattern("100%"), "%100\\%%");
+  assert.equal(likePattern("a_b"), "%a\\_b%");
+  assert.equal(likePattern("c:\\x"), "%c:\\\\x%");
+});
+test("[Q6] 조사를 뗀 꼴이 다르면 LIKE 꼴이 둘(그대로 · 뗀 꼴) · 같으면 하나", () => {
+  assert.deepEqual(termPatterns(parseQueryTerms("검색을")[0]), ["%검색을%", "%검색%"]);
+  assert.deepEqual(termPatterns(parseQueryTerms("검색")[0]), ["%검색%"]);
+});
+test("[Q7] 괄호·물음표는 글자 그대로 한 낱말이다(정규식으로 읽지 않는다)", () => {
+  assert.deepEqual(parseQueryTerms("통합검색(⌘k) 왜?").map((t) => t.t), ["통합검색(⌘k)", "왜?"]);
+});
+test("[Q8] 낱말은 8개까지 · 빈 글은 낱말 없음", () => {
+  assert.equal(parseQueryTerms("a b c d e f g h i j").length, 8);
+  assert.equal(parseQueryTerms("   ").length, 0);
+  assert.deepEqual(snippetTerms(parseQueryTerms("검색을 omni")), ["검색을", "검색", "omni"]);
+});
+
+// ── 세션 단위 관련도 · 순서(#4530) ──
+const agg = (sid: string, per: Array<Partial<{ user: number; assistant: number; edit: number }>>, extra: Partial<ConvSessionAgg> = {}): ConvSessionAgg => ({
+  node_id: "", session_id: sid, owner: "me", label: null, title: null, project: null,
+  strength: per.map((p) => ({ user: 0, assistant: 0, edit: 0, ...p })),
+  maxCo: 1, coAll: 0, phrase: false, hits: 1, lastHit: iso(NOW), ...extra,
+});
+const rank = (aggs: ConvSessionAgg[], q: string, sort: "relevance" | "recent" = "recent", limit = 20, requester = "me") =>
+  rankConvAggs(aggs, { terms: parseQueryTerms(q), sort, nowMs: NOW, requester, limit });
+
+test("★ [K1] 낱말이 서로 다른 말에 있어도 같은 세션이면 맞는다(종전: 한 말 안에 모두 있어야 했다 — 실측 1위 5%)", () => {
+  const r = rank([agg("a", [{ user: 1 }, { assistant: 1 }], { maxCo: 1, coAll: 0 })], "슬랙 검색");
+  assert.deepEqual(r.map((x) => x.agg.session_id), ["a"]);
+});
+test("[K2] 낱말 하나라도 그 세션 어디에도 없으면 빠진다", () => {
+  assert.equal(rank([agg("a", [{ user: 1 }, {}])], "슬랙 검색").length, 0);
+});
+test("★ [K3] 고친 파일로 맞은 낱말도 센다 — 자리에 'edit' 가 실린다(종전: 고친 대상은 색인에 없었다 — 실측 1위 2%)", () => {
+  const r = rank([agg("a", [{ edit: 1 }, { user: 1 }])], "omni.ts 칩");
   assert.equal(r.length, 1);
-  assert.equal(r[0].hits, 3);
-  assert.equal(r[0].at, iso(NOW), "시각은 맞은 말 중 가장 늦은 것");
+  assert.ok(r[0].fields.includes("edit") && r[0].fields.includes("user"));
 });
-test("★ [K3] 관련도순: 구절이 그대로 맞은 옛 세션이, 낱말만 흩어져 맞은 오늘 세션보다 앞선다", () => {
+test("[K4] 이름·첫 지시·프로젝트 이름에 든 낱말도 센다", () => {
+  const r = rank([agg("a", [{}, { assistant: 1 }], { label: "검색 결함 점검", project: "통합검색" })], "결함 readalignedwindow");
+  assert.equal(r.length, 1);
+  assert.ok(r[0].fields.includes("name"));
+  const p = rank([agg("b", [{}, { user: 1 }], { project: "로고 만들기" })], "로고 색");
+  assert.ok(p[0].fields.includes("project"));
+});
+test("★ [K5] 관련도: 한 말에 함께 모인 세션이 흩어진 세션보다 앞선다", () => {
   const r = rank([
-    row("today", "검색 " + "x".repeat(200) + " 그리고 슬랙", NOW),
-    row("old", "슬랙 검색 로직을 참고해", NOW - 30 * DAY),
-  ], "슬랙 검색");
-  assert.deepEqual(r.map((x) => x.session_id), ["old", "today"]);
+    agg("scatter", [{ user: 1 }, { assistant: 1 }], { maxCo: 1, coAll: 0, lastHit: iso(NOW) }),
+    agg("together", [{ user: 1 }, { user: 1 }], { maxCo: 2, coAll: 1, lastHit: iso(NOW - 10 * DAY) }),
+  ], "슬랙 검색", "relevance");
+  assert.deepEqual(r.map((x) => x.agg.session_id), ["together", "scatter"]);
 });
-test("★ [K4] 관련도순: 한 낱말 질의면 조금 더 자주 나온 옛 세션보다 오늘 말한 세션이 앞선다(슬랙 관련도의 «메시지 나이»)", () => {
-  //  동점 순서(최근 먼저)만으로는 이 행을 못 잰다 — 옛 세션 쪽 글자 점수를 일부러 조금 높여 둔다(같은 낱말 세 번).
-  const r = rank([row("old", "검색 검색 검색", NOW - 20 * DAY), row("new", "검색", NOW)], "검색");
-  assert.deepEqual(r.map((x) => x.session_id), ["new", "old"]);
-});
-test("★ [K5] 최신순: 점수와 무관하게 맞은 말이 늦은 세션부터", () => {
+test("[K5b] 관련도: 모든 낱말이 한 말에 다 모이지 않아도, 더 많이 모인 세션이 앞선다", () => {
   const r = rank([
-    row("phrase-old", "슬랙 검색", NOW - 10 * DAY),
-    row("scatter-new", "검색 " + "y".repeat(150) + " 슬랙", NOW - 60_000),
-  ], "슬랙 검색", "recent");
-  assert.deepEqual(r.map((x) => x.session_id), ["scatter-new", "phrase-old"]);
+    agg("one-each", [{ user: 1 }, { user: 1 }, { user: 1 }], { maxCo: 1, coAll: 0, lastHit: iso(NOW) }),
+    agg("two-together", [{ user: 1 }, { user: 1 }, { user: 1 }], { maxCo: 2, coAll: 0, lastHit: iso(NOW - 5 * DAY) }),
+  ], "슬랙 검색 순서", "relevance");
+  assert.deepEqual(r.map((x) => x.agg.session_id), ["two-together", "one-each"]);
 });
-test("[K6] 대표 말: 관련도순은 가장 잘 맞은 말 · 최신순은 가장 늦은 말", () => {
-  const rows = [row("a", "슬랙 검색 그대로", NOW - 5 * DAY), row("a", "검색 " + "z".repeat(120) + " 슬랙", NOW)];
-  assert.ok(rank(rows, "슬랙 검색")[0].best.text.startsWith("슬랙 검색 그대로"), "관련도순 = 구절이 맞은 말");
-  assert.ok(rank(rows, "슬랙 검색", "recent")[0].best.text.startsWith("검색"), "최신순 = 가장 늦은 말");
-  assert.equal(rank(rows, "슬랙 검색", "recent")[0].best.ts, iso(NOW));
+test("[K6] 관련도: 친 그대로 맞은 세션이 조사 뗀 꼴로만 맞은 세션보다 앞선다", () => {
+  const r = rank([agg("stem", [{ user: 0.8 }]), agg("full", [{ user: 1 }])], "검색을", "relevance");
+  assert.deepEqual(r.map((x) => x.agg.session_id), ["full", "stem"]);
 });
-test("[K7] 같은 글이면 사람 말(지시)이 AI 말보다 대표가 된다", () => {
-  const r = rank([row("a", "배포 해 줘", NOW, { role: "assistant" }), row("a", "배포 해 줘", NOW - 1000, { role: "user" })], "배포");
-  assert.equal(r[0].best.role, "user");
+test("★ [K7] 최신순(기본): 맨 위에 관련도 앞 셋, 그 아래는 맞은 때가 늦은 세션부터(슬랙 Recent + Top Results)", () => {
+  const strong = (sid: string, days: number) => agg(sid, [{ user: 1 }, { user: 1 }], { maxCo: 2, coAll: 3, phrase: true, hits: 9, lastHit: iso(NOW - days * DAY) });
+  const weak = (sid: string, days: number) => agg(sid, [{ assistant: 0.8 }, { edit: 0.8 }], { maxCo: 1, hits: 1, lastHit: iso(NOW - days * DAY) });
+  const r = rank([weak("w-new", 0), strong("s-old", 30), weak("w-mid", 3), weak("w-old", 9)], "슬랙 검색");
+  assert.deepEqual(r.map((x) => [x.agg.session_id, x.top]), [["s-old", true], ["w-new", false], ["w-mid", false], ["w-old", false]]);
 });
-test("[K8] 나머지가 같으면 내 세션이 앞선다", () => {
-  const r = rank([row("theirs", "검색", NOW, { owner: "other" }), row("mine", "검색", NOW, { owner: "me" })], "검색");
-  assert.deepEqual(r.map((x) => x.session_id), ["mine", "theirs"]);
+test("[K8] 맨 위에는 1등의 80% 이상만 · 최대 셋", () => {
+  const s = (sid: string) => agg(sid, [{ user: 1 }], { hits: 50 });
+  const r = rank([s("a"), s("b"), s("c"), s("d"), agg("weak", [{ assistant: 0.8 }])], "검색");
+  assert.equal(r.filter((x) => x.top).length, CONV_TOP_MAX);
+  assert.ok(!r.find((x) => x.agg.session_id === "weak")?.top);
 });
-test("[K9] limit 만큼만", () => {
-  const rows = Array.from({ length: 12 }, (_, i) => row("s" + i, "검색", NOW - i * 1000));
-  assert.equal(rank(rows, "검색", "recent", 5).length, 5);
+test("[K9] 관련도순은 맨 위 표시 없이 관련도 내림차순", () => {
+  const r = rank([agg("a", [{ assistant: 0.8 }]), agg("b", [{ user: 1 }], { hits: 9 })], "검색", "relevance");
+  assert.deepEqual(r.map((x) => [x.agg.session_id, x.top]), [["b", false], ["a", false]]);
 });
 test("[K10] 시각을 모르는 세션은 최신순 맨 뒤 · at=null", () => {
-  const r = rank([row("nots", "검색", null), row("ts", "검색", NOW - 3 * DAY)], "검색", "recent");
-  assert.deepEqual(r.map((x) => x.session_id), ["ts", "nots"]);
-  assert.equal(r[1].at, null);
+  const r = rank([agg("nots", [{ assistant: 1 }], { lastHit: null }), agg("ts", [{ assistant: 1 }], { lastHit: iso(NOW - 3 * DAY) }), agg("top", [{ user: 1 }], { hits: 40, coAll: 5 })], "검색");
+  assert.equal(r[r.length - 1].agg.session_id, "nots");
+  assert.equal(r[r.length - 1].at, null);
 });
-test("[K11] 대소문자를 가리지 않는다", () => {
-  assert.equal(rank([row("a", "Slack Search", NOW)], "slack SEARCH").length, 1);
+test("[K11] 나머지가 같으면 내 세션이 앞선다 · limit 만큼만", () => {
+  const r = rank([agg("theirs", [{ user: 1 }], { owner: "other" }), agg("mine", [{ user: 1 }])], "검색", "relevance");
+  assert.deepEqual(r.map((x) => x.agg.session_id), ["mine", "theirs"]);
+  assert.equal(rank(Array.from({ length: 12 }, (_, i) => agg("s" + i, [{ user: 1 }])), "검색", "recent", 5).length, 5);
+});
+test("[K12] 낱말이 없으면 결과 없음 · 대소문자 무시는 SQL ILIKE 와 낱말 소문자화가 맡는다", () => {
+  assert.equal(rank([agg("a", [])], "").length, 0);
+  assert.equal(convRelevance(agg("a", [{ user: 1 }], { label: "Slack 정리" }), parseQueryTerms("SLACK"), { nowMs: NOW }).all, true);
   assert.ok(hasAllTerms("slack search", ["slack", "search"]));
+});
+test("[E1] 고친 파일은 파일 이름 + 바로 위 폴더로 보인다", () => {
+  assert.equal(editLabel("/work/shared/project/4530/lively/web/v2/omni.ts"), "v2/omni.ts");
+  assert.equal(editLabel("omni.ts"), "omni.ts");
+  assert.equal(editLabel("C:\\w\\a\\b.ts"), "a/b.ts");
 });
 
 test("[P1] 정렬 파라미터 — recent 만 최신순, 나머지는 관련도순", () => {
