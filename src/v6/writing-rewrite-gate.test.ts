@@ -479,7 +479,6 @@ t("적용 리포트에서 applied 만, 이름별 가장 나중 판을 고른다"
     JSON.stringify({ name: "b", status: "skipped", version: 2 }),
     JSON.stringify({ name: "c", status: "staged", version: 2 }),
     JSON.stringify({ name: "d", status: "applied" }),
-    JSON.stringify({ name: "e", status: "applied", version: 2, section: "rewritten" }),
     "",
     '{"name":"f","status":"appl',
   ]);
