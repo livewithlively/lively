@@ -2404,7 +2404,7 @@
   "rest": [
    "GET /api/ui/knowledge/search"
   ],
-  "input_hash": "9d9097a1eeec9aac"
+  "input_hash": "1b1df432246b1796"
  },
  {
   "name": "knowledge_search",
@@ -2852,7 +2852,7 @@
   "rest": [
    "GET /api/ui/v6/projects/search"
   ],
-  "input_hash": "42b5c71f8eecdcfc"
+  "input_hash": "aa35dbdae9c93019"
  },
  {
   "name": "project_search",

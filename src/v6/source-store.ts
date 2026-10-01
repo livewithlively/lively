@@ -8,6 +8,7 @@ import { effectiveViewer, type Viewer } from "./visibility.js";
 import { axisOn } from "./visibility-axes.js";
 import { knowledgeVisWhere } from "./knowledge-store.js";
 import { SOURCE_GROUP_CASE, sourceGroupWhere, type SourceGroup, type SourceGroupFilter } from "./source-group.js";   // #4233 들어온 길
+import { parseQueryTerms, termPatterns } from "./query-terms.js";   // #4530 검색어 낱말 규칙 한 벌
 
 // 자료 1건의 가시성 술어(#1291) — 's' 별칭 기준. 지식(knowledgeVisSql)과 같은 모양이되 **컨테이너 참조 grant 가 없다**:
 //  자료는 프로젝트가 아니라 외부 원본(슬랙·노션·전사록)에서 들어오므로 리스트에 매달 자연스러운 좌표가 없다.
@@ -122,13 +123,26 @@ const THREAD_KN = `s.id IN (
     LEFT JOIN source par ON par.external_id = ks_s.parent_external_id
          AND par.external_system IS NOT DISTINCT FROM ks_s.external_system AND par.lifecycle='active')`;
 
+/** 자료 검색어 술어(#4530) — 낱말마다 (제목 OR 본문) 의 «그대로 OR 조사 뗀 꼴» LIKE, 낱말끼리 AND. 글자 그대로(ESCAPE). */
+export function sourceQueryWhere(qstr: string, params: unknown[], alias = "s", cols: readonly string[] = ["title", "body_md"]): string {
+  const terms = parseQueryTerms(qstr);
+  if (!terms.length) return "TRUE";
+  return terms.map((term) => "(" + termPatterns(term).flatMap((pat) => {
+    params.push(pat);
+    return cols.map((c) => `${alias}.${c} ILIKE $${params.length} ESCAPE '\\'`);
+  }).join(" OR ") + ")").join(" AND ");
+}
+
 // listSources / countSources 공유 필터 — WHERE·params 를 한 곳에서(목록·총계가 항상 같은 조건).
 function sourceListFilter(f: SourceFilter): { where: string; params: unknown[] } {
   const params: unknown[] = [];
   const wh: string[] = [`s.lifecycle='active'`];
   if (f.kind) { params.push(f.kind); wh.push(`s.kind=$${params.length}`); }
   if (f.provenance) { params.push(f.provenance); wh.push(`s.provenance=$${params.length}`); }
-  if (f.q) { params.push(`%${f.q}%`); wh.push(`(s.title ILIKE $${params.length} OR s.body_md ILIKE $${params.length})`); }
+  //  q(#4530) — 낱말마다 «그대로 OR 끝 조사를 뗀 꼴» 이 제목·본문 어디든 들어 있으면 맞음, 낱말끼리 AND, «"구절"» 은 통째로.
+  //   종전엔 q 전체를 한 구절로 ILIKE 했고 `%`·`_` 를 글자로 바꾸지 않아 «%» 한 글자에 자료 1,190건이 전부 맞았다(실측 2026-10-01),
+  //   «배포 장애» 는 두 낱말이 붙어 있는 글만 맞았다. 목록·총계·나무가 이 한 자리를 같이 쓴다.
+  if (f.q) wh.push(sourceQueryWhere(f.q, params, "s"));
   //  '적어 둔 것'(전사록·회의록)은 커넥터가 아니라 사람·세션이 넣은 것이라 external_system 이 비어 있다.
   //   그 갈래도 나무의 한 가지이므로 예약어 하나로 고른다(빈 문자열은 필터 없음과 구분되지 않아 쓰지 않는다).
   if (f.system === "authored") wh.push(`s.external_system IS NULL`);
@@ -168,9 +182,13 @@ export async function listSources(f: SourceFilter = {}, viewer?: Viewer): Promis
        length(coalesce(s.body_md,''))::int AS body_len,
        (SELECT count(*)::int FROM source r WHERE r.parent_external_id = s.external_id
          AND r.external_system IS NOT DISTINCT FROM s.external_system AND r.lifecycle='active') AS reply_n`;
+  //  검색어가 있으면 **제목에 모든 낱말이 든 것 먼저**(#4530) — 종전엔 시각 순뿐이라 본문에 낱말이 스친 최근 로그 파일
+  //   (t25.log · t24.log …)이 «회의» 같은 질의의 맨 위를 채웠다. 그 안은 종전 시각 순.
+  //  ⚠ 제목이 NULL 인 자료는 술어가 NULL 이 된다 — DESC 정렬에서 NULL 이 맨 앞으로 오므로 COALESCE 로 거짓으로 본다.
+  const titleHead = f.q ? `COALESCE((${sourceQueryWhere(f.q, params, "s", ["title"])}), false) DESC, ` : "";
   return q(itemsPool,
     `SELECT ${sel} FROM source s WHERE ${where} AND ${vis}
-     ORDER BY COALESCE(s.occurred_at, s.updated_at) DESC LIMIT ${limP} OFFSET ${offP}`, params);
+     ORDER BY ${titleHead}COALESCE(s.occurred_at, s.updated_at) DESC LIMIT ${limP} OFFSET ${offP}`, params);
 }
 
 // ── 휴지통의 파일 자료(#3778) — 파일을 지워 `.lively/trash` 로 옮겨 둔 자료들(ingest/local-file.ts 의 도장 fields.trash). ──

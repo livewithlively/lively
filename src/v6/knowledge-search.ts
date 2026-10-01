@@ -6,8 +6,8 @@ import { itemsPool } from "../db/client.js";
 import { q, one } from "../db/client.js";
 import { toVectorLiteral } from "./embedding-provider.js";
 import {
-  type GrepPlan, parseGrep, grepWhere, grepExec, grepSnippet, previewBody, exactFirst,
-  RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
+  type GrepPlan, parseGrep, parsePlainGrep, grepWhere, grepExec, grepSnippet, previewBody, exactFirst, titleFirst,
+  RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider, embedQuery,
 } from "./search-util.js";
 import { type Viewer } from "./visibility.js";
 import { knowledgeVisWhere, K_ICON_EXPR } from "./knowledge-common.js";
@@ -46,7 +46,7 @@ function grepWhereSql(plan: GrepPlan, opts: { injection?: string; provenance?: s
 
 // mode='count' — 본문/스니펫 없이 매치 총건수만(페이징·존재확인용).
 export async function countKnowledgeGrep(
-  qstr: string, opts: { injection?: string; provenance?: string } = {}, viewer?: Viewer,
+  qstr: string, opts: { injection?: string; provenance?: string; plain?: boolean } = {}, viewer?: Viewer,
 ): Promise<number> {
   const { result } = await grepExec(qstr, async (plan) => {
     const params: unknown[] = [];
@@ -55,13 +55,13 @@ export async function countKnowledgeGrep(
     const vis = await knowledgeVisWhere(viewer, params);
     const rows = await q(itemsPool, `SELECT count(*)::int AS n FROM knowledge k WHERE ${where} AND ${vis}`, params);
     return Number(rows[0]?.n ?? 0);
-  });
+  }, { plain: opts.plain });
   return result;
 }
 
 export async function searchKnowledge(
   qstr: string,
-  opts: { injection?: string; provenance?: string; limit?: number; mode?: KnowledgeGrepMode; context?: number } = {},
+  opts: { injection?: string; provenance?: string; limit?: number; mode?: KnowledgeGrepMode; context?: number; plain?: boolean } = {},
   viewer?: Viewer,
 ): Promise<KnowledgeSearchRow[]> {
   const withBody = opts.mode !== "names";   // names 모드는 body_md/스니펫 불필요 — 더 얕게 조회
@@ -72,10 +72,11 @@ export async function searchKnowledge(
     // 렉시컬 채널은 정확 스캔이라 술어를 WHERE 에 그대로 건다(벡터 채널과 달리 리콜 붕괴가 없다 — rrfSearch 주석 참조).
     const vis = await knowledgeVisWhere(viewer, params);
     const first = exactFirst("k.name", qstr, "name", params);   // key 의 주인이 LIMIT 에 잘리지 않게(exactFirst 주석)
+    const tf = titleFirst("k.title", p, params);                // 제목에 모든 낱말이 든 것이 본문만 스친 최근 문서에 잘리지 않게(#4530)
     params.push(Math.min(opts.limit ?? 20, 100));
     return q(itemsPool,
-      `SELECT ${sel} FROM knowledge k WHERE ${where} AND ${vis} ORDER BY ${first}k.updated_at DESC LIMIT $${params.length}`, params);
-  });
+      `SELECT ${sel} FROM knowledge k WHERE ${where} AND ${vis} ORDER BY ${first}${tf}k.updated_at DESC LIMIT $${params.length}`, params);
+  }, { plain: opts.plain });
   return rows.map((r) => {
     const base: KnowledgeSearchRow = { name: r.name, title: r.title, injection: r.injection,
       provenance: r.provenance, is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at, icon: r.icon ?? null };
@@ -92,14 +93,13 @@ export async function searchKnowledge(
 
 export async function hybridSearchKnowledge(
   qstr: string,
-  opts: { injection?: string; provenance?: string; limit?: number; mode?: KnowledgeGrepMode; context?: number } = {},
+  opts: { injection?: string; provenance?: string; limit?: number; mode?: KnowledgeGrepMode; context?: number; plain?: boolean } = {},
   viewer?: Viewer,
 ): Promise<KnowledgeSearchRow[]> {
-  const provider = await activeEmbeddingProvider();
-  if (!provider) return searchKnowledge(qstr, opts, viewer);          // off → grep 그대로(하위호환)
-  let qvec: number[] | null = null;
-  try { const [v] = await provider.embed([qstr]); qvec = v && v.length ? v : null; } catch { qvec = null; }
-  if (!qvec) return searchKnowledge(qstr, opts, viewer);               // 쿼리 임베딩 실패 → 폴백
+  //  질의 임베딩은 한 자리(embedQuery — 기억·동시 요청 공유·짧은 상한, #4530). off·실패 → grep 그대로(하위호환).
+  const qe = await embedQuery(qstr);
+  const qvec = qe.vec;
+  if (!qvec) return searchKnowledge(qstr, opts, viewer);               // off · 쿼리 임베딩 실패 → 폴백
   try {
     return await rrfSearch(qstr, qvec, opts, viewer);
   } catch (e) {
@@ -111,13 +111,13 @@ export async function hybridSearchKnowledge(
 // RRF 융합 = SQL 한 방(쿼리 임베딩은 JS 에서 계산해 $n::vector 로 주입). lex/vec CTE 각 후보 → row_number rank → RRF 점수.
 async function rrfSearch(
   qstr: string, qvec: number[],
-  opts: { injection?: string; provenance?: string; limit?: number; mode?: KnowledgeGrepMode; context?: number },
+  opts: { injection?: string; provenance?: string; limit?: number; mode?: KnowledgeGrepMode; context?: number; plain?: boolean },
   viewer?: Viewer,
 ): Promise<KnowledgeSearchRow[]> {
   const withBody = opts.mode !== "names";
   const sel = withBody ? K_GREP_SEL : K_GREP_NAMES_SEL;
   const limit = Math.min(opts.limit ?? 20, 100);
-  const plan = parseGrep(qstr);
+  const plan = opts.plain ? parsePlainGrep(qstr) : parseGrep(qstr);
   const params: unknown[] = [];
   // 렉시컬 채널 WHERE — grep 매처 + lifecycle='active' + injection/provenance(searchKnowledge 와 동일 의미).
   //  ⚠ 공개범위 술어는 두 후보 CTE 어디에도 넣지 않는다 — **최종 SELECT 한 곳**에서만 건다(아래).
@@ -136,10 +136,12 @@ async function rrfSearch(
   const vis = await knowledgeVisWhere(viewer, params);   // 최종 SELECT 전용(위 후보 CTE 주석 참조)
   params.push(limit); const limP = `$${params.length}`;
   const first = exactFirst("k.name", qstr, "name", params);
+  //  렉시컬 순위도 «제목에 모든 낱말이 든 것 먼저» (#4530) — 종전엔 최신순뿐이라 RRF 에 «제목이 맞았다» 는 신호가 하나도 없었다.
+  const tf = titleFirst("k.title", plan, params);
   const sql = `
     WITH lex AS (
-      SELECT k.name, row_number() OVER (ORDER BY ${first}k.updated_at DESC) AS rank
-      FROM knowledge k WHERE ${lexWhere} ORDER BY ${first}k.updated_at DESC LIMIT ${candP}
+      SELECT k.name, row_number() OVER (ORDER BY ${first}${tf}k.updated_at DESC) AS rank
+      FROM knowledge k WHERE ${lexWhere} ORDER BY ${first}${tf}k.updated_at DESC LIMIT ${candP}
     ),
     vec AS (
       SELECT k.name, row_number() OVER (ORDER BY k.embedding_vector <=> ${qp}) AS rank
@@ -177,9 +179,12 @@ export interface KnowledgeSimilarRow {
   similarity: number;   // 0~1 코사인 유사도(높을수록 유사)
   snippet?: string;     // 본문 앞부분 미리보기(식별용)
 }
+/** 유사 검색이 «없음» 을 답한 까닭(#4530) — 화면이 «관련 없음» 과 «못 물어봄» 을 다르게 말하게. 호출부가 넘긴 객체에 채운다. */
+export interface SimilarDiag { embeddings?: "off"; degraded?: boolean }
 export async function findSimilarKnowledge(
   opts: { name?: string; text?: string; limit?: number; minScore?: number; injection?: string; provenance?: string } = {},
   viewer?: Viewer,
+  diag?: SimilarDiag,
 ): Promise<KnowledgeSimilarRow[]> {
   // 1) 쿼리 벡터 리터럴 확보 — name(저장된 벡터 재사용, 재임베딩 불요) 또는 text(즉시 임베딩).
   let vecLiteral: string | null = null;
@@ -189,12 +194,10 @@ export async function findSimilarKnowledge(
     const r = await one(itemsPool, `SELECT embedding_vector::text AS v FROM knowledge WHERE name=$1`, [opts.name]);
     vecLiteral = (r as { v?: string | null } | undefined)?.v ?? null;   // 대상에 임베딩 없으면 null → []
   } else if (opts.text && opts.text.trim()) {
-    const provider = await activeEmbeddingProvider();
-    if (!provider) return [];                                            // off → 유사 없음
-    try {
-      const [v] = await provider.embed([opts.text.slice(0, 8000)]);
-      vecLiteral = v && v.length ? toVectorLiteral(v) : null;
-    } catch { return []; }                                              // 쿼리 임베딩 실패 → 빈 결과(폴백 아님 — similar 는 벡터 전용)
+    const qe = await embedQuery(opts.text);
+    if (qe.status === "off") { if (diag) diag.embeddings = "off"; return []; }   // off → 유사 없음(꺼졌다고 말한다)
+    if (!qe.vec) { if (diag) diag.degraded = true; return []; }                   // 쿼리 임베딩 실패·시간 초과 → 빈 결과 + «못 물어봄»
+    vecLiteral = toVectorLiteral(qe.vec);
   }
   if (!vecLiteral) return [];
   // 2) 최근접 — 코사인 거리 오름차순. 자기 자신·미임베딩·비활성 제외. minScore(코사인 유사도) 이상만.
@@ -238,6 +241,7 @@ export async function findSimilarKnowledge(
     }));
   } catch (e) {
     console.warn(`[embeddings] 유사 지식 조회 실패: ${(e as Error)?.message}`);
+    if (diag) diag.degraded = true;
     return [];                                                          // pgvector 부재 등 → 빈 결과(저장·검색 무손상)
   }
 }
