@@ -485,7 +485,9 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     const q = input.value.trim();
     const parts: string[] = [];
     if (enterWant && !settled) parts.push('결과가 다 오면 첫 줄을 엽니다…');
-    if (settled && q && !rowNodes.length) parts.push(emptyNote());
+    //  명령 줄(«…로 새 세션» 등)은 결과가 아니다 — 그것만 있으면 «결과가 없습니다» 를 말한다.
+    const real = rowHits.filter((h) => !h.key.startsWith('cmd:') && !h.key.startsWith('q:')).length;
+    if (settled && q && !real) parts.push(emptyNote());
     if (q && convNoteText) parts.push(convNoteText);
     if (q && simDegraded && kindOn('know')) parts.push('뜻이 비슷한 지식은 지금 가져오지 못했습니다.');
     note.hidden = !parts.length;
@@ -705,7 +707,9 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
       api('/api/ui/v6/session-search?' + p.toString(), { signal }).then((r: any) => {
         if (my !== seq) return;
         const pend = r ? r.pending : 0;
-        if (pend) convNoteText = `대화 색인을 만드는 중입니다 — 세션 ${pend}개의 대화는 아직 찾지 못할 수 있습니다.`;
+        //  밀린 수를 서버가 못 셌으면(null) 그 사실을 말한다 — 0 으로 읽으면 «다 색인됐다» 는 거짓말이 된다(#4517 재검토).
+        if (pend === null) convNoteText = '대화 색인이 어디까지 됐는지 확인하지 못했습니다 — 최근 대화는 아직 찾지 못할 수 있습니다.';
+        else if (pend) convNoteText = `대화 색인을 만드는 중입니다 — 세션 ${pend}개의 대화는 아직 찾지 못할 수 있습니다.`;
         else if (r && r.capped) convNoteText = '흔한 낱말이라 최근 세션 400개 안에서만 찾았습니다 — 낱말을 더 넣으면 좁혀집니다.';
         put('conv', ((r && r.results) || []).map((x: any, i: number) => convHit(x, i)), my);
       }, fail('conv'));
