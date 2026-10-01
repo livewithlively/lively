@@ -363,6 +363,12 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
   let convNoteText = '';            // 대화 채널이 남긴 말(색인 중 · 실패 · 상한)
   let simDegraded = false;
   let moreFactor = 1;               // «결과 더 보기» 를 누른 횟수 + 1
+  //  글자 채널(프로젝트·지식·자료)이 실패한 것 — 전엔 말없이 빈 결과로 처리해 다 실패하면 «결과가 없습니다» 가 떴다(#4530 항목 42).
+  const failedSrc = new Set<string>();
+  //  더 있을 수 있나 — 채널이 요청한 만큼 꽉 채워 왔거나(서버 상한 50 전까지) 그리기 상한에 잘렸다.
+  //   전엔 줄이 40개 넘을 때만 단추가 떠서 칩 하나만 켜면(지식 20줄) 더 볼 길이 없었다(#4530 항목 22).
+  const fullSrc = new Set<string>();
+  let truncated = false;
 
   const rowNodes: HTMLElement[] = [];
   const rowHits: Hit[] = [];        // ⚠ 그려진 줄과 짝 — i 번째 줄이 무엇인지는 이것만 안다(#1960)
@@ -403,7 +409,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
           title: (h.head ? h.head + ': ' : '') + h.title + (h.sub ? ' — ' + h.sub : ''),
           //  마우스가 **실제로 움직였을 때만** 고른다 — 목록이 그 아래로 지나가는 것은 고른 것이 아니다.
           onmousemove: (e: MouseEvent) => { if ((e.movementX || e.movementY) && selKey !== h.key) { selKey = h.key; userMoved = true; mark(false); } },
-          onclick: (e: MouseEvent) => go(i, e.metaKey || e.ctrlKey),
+          onclick: (e: MouseEvent) => go(i, e.metaKey || e.ctrlKey || e.altKey),
         },
           el('span', { class: 'v2-omni-ic' }, icon(h.kind, 'v2-omni-kic')),
           el('span', { class: 'v2-omni-tt' },
@@ -420,6 +426,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
         kids.push(node);
       }
     };
+    truncated = false;
     if (!input.value.trim()) {
       paintEmpty(draw);
     } else {
@@ -441,6 +448,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
         for (const g of GROUPS) draw(g.label, lexical.filter((h) => h.kind === g.kind).slice(0, 12 * moreFactor));
       }
       draw('뜻이 비슷한 지식', hits.filter((h) => h.sim).slice(0, SIM_MAX_ROWS));
+      truncated = lexical.some((h) => !shown.has(h.key));   // 그리기 상한(최신순 60 · 관련도순 묶음당 12)에 잘린 줄이 있다
     }
     list.replaceChildren(...kids);
     //  선택은 열쇠로 이어 간다. 고른 줄이 사라졌으면 첫 줄.
@@ -499,12 +507,15 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     if (enterWant && !settled) parts.push('결과가 다 오면 첫 줄을 엽니다…');
     //  명령 줄(«…로 새 세션» 등)은 결과가 아니다 — 그것만 있으면 «결과가 없습니다» 를 말한다.
     const real = rowHits.filter((h) => !h.key.startsWith('cmd:') && !h.key.startsWith('q:')).length;
-    if (settled && q && !real) parts.push(emptyNote());
+    if (failedSrc.size) {
+      const names = [...failedSrc].map((x) => KIND_LABEL[x as Kind] || x).join(' · ');
+      parts.push(`${names} 결과를 가져오지 못했습니다. 잠시 뒤 다시 찾아 주세요.`);
+    } else if (settled && q && !real) parts.push(emptyNote());
     if (q && convNoteText) parts.push(convNoteText);
     if (q && simDegraded && kindOn('know')) parts.push('뜻이 비슷한 지식은 지금 가져오지 못했습니다.');
     note.hidden = !parts.length;
     note.replaceChildren(...(parts.length ? [el('span', { text: parts.join(' ') })] : []));
-    moreBtn.hidden = !(settled && q && rowNodes.length >= 40 * moreFactor);
+    moreBtn.hidden = !(settled && q && (truncated || (fullSrc.size > 0 && Math.min(50, 20 * moreFactor) < 50)));
   }
 
   function go(i: number, newTab: boolean): void {
@@ -698,7 +709,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     terms = parseTerms(q);
     words = highlightWords(terms);
     sinceMs = periodSince(period, Date.now());
-    convNoteText = ''; simDegraded = false;
+    convNoteText = ''; simDegraded = false; failedSrc.clear(); fullSrc.clear();
     frozenTop = null;
     userMoved = false;
     enterWant = enterWant && q ? enterWant : null;
@@ -711,9 +722,11 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
       if (my !== seq || signal.aborted) return;
       if (src === 'conv') convNoteText = '대화 결과를 가져오지 못했습니다 — ' + failText(e) + '.';
       if (src === 'sim') simDegraded = true;
+      if (src === 'proj' || src === 'know' || src === 'src') failedSrc.add(src);
       put(src, [], my);
     };
     const lim = (n: number): string => String(Math.min(50, n * moreFactor));
+    const full = (src: string, n: number, rows: unknown[]): void => { if (rows.length >= Math.min(50, n * moreFactor)) fullSrc.add(src); };
     const qs = encodeURIComponent(q);
     call('conv', 'conv', () => {
       if (q.length > 200) { convNoteText = '검색어가 길어(200자 넘음) 대화에서는 찾지 않았습니다.'; window.setTimeout(() => put('conv', [], my)); return; }
@@ -734,16 +747,17 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
             : `맞는 세션이 많아 최근 세션 ${cap}개 안에서 골랐습니다 — 낱말을 하나 더 넣거나 기간을 좁히면 정확해집니다.`);
         }
         convNoteText = notes.join(' ');
+        full('conv', 20, (r && r.results) || []);
         put('conv', ((r && r.results) || []).map((x: any, i: number) => convHit(x, i)), my);
       }, fail('conv'));
     });
     call('proj', 'proj', () => {
       api(`/api/ui/v6/projects/search?plain=1&limit=${lim(20)}&q=` + qs, { signal })
-        .then((r: any) => put('proj', ((r && r.projects) || []).map((p: any, i: number) => projRow(p, i)), my), fail('proj'));
+        .then((r: any) => { full('proj', 20, (r && r.projects) || []); put('proj', ((r && r.projects) || []).map((p: any, i: number) => projRow(p, i)), my); }, fail('proj'));
     });
     call('know', 'know', () => {
       api(`/api/ui/knowledge/search?plain=1&limit=${lim(20)}&q=` + qs, { signal })
-        .then((r: any) => put('know', ((r && r.entries) || []).map((e: any, i: number) => knowRow(e, i)), my), fail('know'));
+        .then((r: any) => { full('know', 20, (r && r.entries) || []); put('know', ((r && r.entries) || []).map((e: any, i: number) => knowRow(e, i)), my); }, fail('know'));
     });
     //  뜻만 비슷한 지식 — 맨 아래 묶음 전용. 글자로 이미 뜬 문서는 rebuild 가 겹치지 않게 뺀다(같은 열쇠).
     call('sim', 'know', () => {
@@ -753,11 +767,11 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
       }, fail('sim'));
     });
     call('src', 'src', () => {
-      api(`/api/ui/sources?limit=${lim(20)}&q=` + qs, { signal }).then((r: any) => put('src', ((r && r.entries) || []).map((s: any, i: number) => ({
+      api(`/api/ui/sources?limit=${lim(20)}&q=` + qs, { signal }).then((r: any) => (full('src', 20, (r && r.entries) || []), put('src', ((r && r.entries) || []).map((s: any, i: number) => ({
         kind: 'src' as const, key: 'src:' + s.id, title: String(s.title || ('자료 #' + s.id)),
         sub: [s.kind, (s.fields && s.fields.container_name) ? '#' + s.fields.container_name : ''].filter(Boolean).join(' · '),
         href: '#/sources/' + s.id, at: atOf(s.occurred_at, s.updated_at), order: i,
-      })), my), fail('src'));
+      })), my)), fail('src'));
     });
     settled = false;
     if (!holdsSettle(pending)) { settle(my); return; }
@@ -781,7 +795,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     else if (e.key === 'ArrowUp' || (e.key === 'p' && e.ctrlKey)) { e.preventDefault(); moveSel(-1); }
     else if (e.key === 'Enter') {
       e.preventDefault();
-      const newTab = e.metaKey || e.ctrlKey;
+      const newTab = e.metaKey || e.ctrlKey || e.altKey;   // 가이드 표기 «⌘·Ctrl·Alt+Enter = 새 화면»
       //  결과가 지금 친 글의 것이 아니면(아직 안 돌렸거나 오는 중) 다 온 뒤의 줄을 연다 — 엉뚱한 것을 여는 것보다 잠깐 기다리는 게 낫다.
       if (input.value.trim() !== ranQuery) run();
       if (!settled) { enterWant = { newTab }; refreshNote(); return; }
