@@ -21,7 +21,7 @@
 //   C2 CSS: 비침 규칙은 넓은 폭(카드가 있는 곳) 안에 있다
 //   C3 CSS: 또렷해질 때 바탕은 전환 없이 바로 찬다(흐림이 풀리는 순간 날 글씨가 비치지 않게)
 //   C4 CSS: 비칠 때 뒤가 실제로 보여야 한다 — 바탕 20% 이하 · 흐림 4~12px(첫 판 30% · 22px 은 흰 카드로 보였다, 원준 2026-10-01).
-//      대신 글자 둘레에 바탕색 테두리(halo)를 둘러 읽히게 한다
+//      대신 글자 둘레에 바탕색 테두리(halo)를 둘러 읽히게 한다 · 머리줄은 본문보다 더 칠한다(단추가 배경에 묻히지 않게)
 //   H1 머리줄 단추: ⋯ 오른쪽 첫 단추 = 최소화(가로줄 그림, 접히면 창 그림으로 «다시 펴기») · 둘째 = 크게 보기(대각선 화살표 → 세션을 가운데로)
 //   H2 머리줄 두 번 누르기 = 크게 보기(종전엔 접기) · 세션 이름 위도(이름 바꾸기로 내려가지 않는다) ·
 //      이름 단추도 카드에서는 머리줄(끌면 옮김 · 한 번 눌러도 이름 바꾸기 안 열림 — ⋯ 메뉴로 바꾼다)
@@ -140,6 +140,9 @@ ok(blurPx >= 4 && blurPx <= 12, "C4a 흐림 4~12px — 잔 글씨는 뭉개고 �
 ok(alphaPct <= 20, "C4b 바탕 20% 이하 — 뒤가 실제로 보인다", String(alphaPct));
 const haloAt = css.indexOf(".pn-body.cm:not(.cm-live) > .pn-col:not(:hover) .sc-term-frame {");
 ok(haloAt > 0 && /filter:\s*drop-shadow\(0 0 1px color-mix\(in srgb, var\(--bg\)/.test(css.slice(haloAt, css.indexOf("}", haloAt))), "C4c 비칠 때 터미널 글자 둘레에 바탕색 테두리(halo)");
+const headRest = (css.match(/\.pn-body\.cm:not\(\.cm-live\) > \.pn-col:not\(:hover\) \.sc-head \{([^}]*)\}/) || [])[1] || "";
+const headPct = Number((headRest.match(/background: color-mix\(in srgb, var\(--bg\) (\d+)%, transparent\)/) || [])[1] || 0);
+ok(headPct >= 40 && headPct > alphaPct, "C4d 머리줄은 본문보다 더 칠한다(어떤 배경 위에서도 단추가 또렷) — 본문만 비친다", headRest);
 ok(/\.pn-body\.cm > \.pn-col > \.pn-pane,\s*\.pn-body\.cm > \.pn-col \.sc-wrap,\s*\.pn-body\.cm > \.pn-col \.sc-term-frame,\s*\.pn-body\.cm > \.pn-col \.cm-ctl \{ background: transparent; \}/.test(css), "C1c 카드인 동안 안쪽은 늘 투명(바탕은 카드 한 곳)");
 const baseTr = (css.match(/\.pn-body\.cm > \.pn-col \{ transition: ([^;]+); \}/) || [])[1] || "";
 ok(baseTr.length > 0 && !/background/.test(baseTr), "C3 또렷해질 때 바탕은 전환 없이 바로 찬다", baseTr);

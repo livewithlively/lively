@@ -138,7 +138,8 @@
     box-shadow: 0 12px 32px rgba(var(--shadow-ink), .16), 0 1px 3px rgba(var(--shadow-ink), .06);
     transition: background-color .35s ease, box-shadow .35s ease, border-color .35s ease;
   }
-  .pn-body.cm:not(.cm-live) > .pn-col:not(:hover) .sc-head { border-bottom-color: color-mix(in srgb, var(--line) 55%, transparent); text-shadow: 0 0 2px var(--bg), 0 0 1px var(--bg); }
+  /* 머리줄(이름 · 연결 상태 · 단추)은 조금 더 칠한다 — 뒤에 밝은 타일이 오면 어두운 테마의 흐린 단추가 묻혔다(2026-10-01 실측). 본문(터미널)만 비친다. */
+  .pn-body.cm:not(.cm-live) > .pn-col:not(:hover) .sc-head { border-bottom-color: color-mix(in srgb, var(--line) 55%, transparent); background: color-mix(in srgb, var(--bg) 55%, transparent); }
   .pn-body.cm:not(.cm-live) > .pn-col:not(:hover) .sc-term-frame {
     filter: drop-shadow(0 0 1px color-mix(in srgb, var(--bg) 95%, transparent)) drop-shadow(0 0 2px color-mix(in srgb, var(--bg) 80%, transparent));
   }
