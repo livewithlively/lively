@@ -7,7 +7,8 @@
 //  조건 하나를 지워도 초록이다. 그래서 **부작용을 SELECT 로 되읽어** 판정한다(session_msg 행 · 커서 · 검색 결과 id).
 //
 //  사양·엣지 표: 스크래치패드 spec.md E — D1~D15 · 격리 리뷰 뒤 D16~D20(가려진 프로젝트의 초대 세션 · 다른 워크스페이스 ·
-//   휴지통 · NUL 글자와 깨진 시각 · 뽑는 규칙의 판) · D13c(한 번도 색인 안 된 작은 세션도 «색인 중» 으로 센다).
+//   휴지통 · NUL 글자와 깨진 시각 · 뽑는 규칙의 판) · D13c(한 번도 색인 안 된 작은 세션도 «색인 중» 으로 센다) ·
+//   재검토 뒤 D4(창보다 긴 줄 · 스크린샷을 붙인 지시) · D16 밀린 수 · D16f(가려짐을 못 재면 닫는다) · D19(글자 그대로의 \u0000).
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const S = await import(`${DIST}/v6/session-log-store.js`);
@@ -102,15 +103,30 @@ try {
     chk("D3 동시 색인 세 번에도 행은 한 벌(3)", m.length === 3, JSON.stringify(m.map((x) => x.body)));
   }
 
-  // ── D4 창보다 긴 한 줄 — 건너뛰고 그 뒤를 이어 읽는다 ──
+  // ── D4 창보다 긴 한 줄 — 상한 안이면 그 줄만 따로 읽고, 상한보다 길면 건너뛰고 그 뒤를 이어 읽는다 ──
   {
     const giant = AI("거대한 " + "가".repeat(40_000));   // UTF-8 약 120KB — 창(64KB)보다 길다
     await put(SID(4), A, U("앞 말 검색") + giant + U("뒤 말 검색"));
     await C.indexConvSession("", SID(4), { window: 64 * 1024 });
     const m = await msgs(SID(4));
-    chk("D4 긴 줄 뒤의 말이 담긴다(긴 줄 자체는 건너뛴다 — 창보다 긴 줄)",
-      m.map((x) => x.body).join("|") === "앞 말 검색|뒤 말 검색", JSON.stringify(m.map((x) => x.body.slice(0, 12))));
+    chk("D4 창보다 긴 한 줄도 상한 안이면 담긴다(앞·그 줄·뒤 세 줄)",
+      m.length === 3 && m[0].body === "앞 말 검색" && m[1].body.startsWith("거대한 가") && m[2].body === "뒤 말 검색", JSON.stringify(m.map((x) => x.body.slice(0, 12))));
     chk("D4 커서가 끝까지 간다(긴 줄에서 멈추지 않는다)", Number(await cursorOf(SID(4))) === await wm(SID(4)));
+    await put(SID(16), A, U("앞 말 검색") + giant + U("뒤 말 검색"));
+    await C.indexConvSession("", SID(16), { window: 64 * 1024, longLineMax: 100 * 1024 });
+    const m2 = await msgs(SID(16));
+    chk("D4 상한보다 긴 줄은 건너뛰고 그 뒤를 이어 읽는다",
+      m2.map((x) => x.body).join("|") === "앞 말 검색|뒤 말 검색" && Number(await cursorOf(SID(16))) === await wm(SID(16)), JSON.stringify(m2.map((x) => x.body.slice(0, 12))));
+    //  스크린샷을 붙인 지시 — 그림(base64)이 사람 말과 같은 줄에 실려 창보다 길다(재검토 실측: 2.5MB·5MB 줄의 말이 통째로 빠졌다).
+    const shot = J({ type: "user", timestamp: ago(0), message: { role: "user", content: [
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "A".repeat(200_000) } },
+      { type: "text", text: "스크린샷 붙인 얼룩말 지시" }] } });
+    await put(SID(17), A, shot + AI("화면을 봤습니다"));
+    await C.indexConvSession("", SID(17), { window: 64 * 1024 });
+    const m3 = await msgs(SID(17));
+    chk("D4 스크린샷을 붙인 지시의 글이 담긴다(그림은 버린다)",
+      m3.length === 2 && m3[0].role === "user" && m3[0].body === "스크린샷 붙인 얼룩말 지시" && m3[1].body === "화면을 봤습니다", JSON.stringify(m3.map((x) => x.body.slice(0, 20))));
+    chk("D4 그 지시를 대화 검색으로 찾는다", ids(await search(A, "얼룩말")).includes(SID(17)));
   }
 
   // ── D5~D8 볼 수 있는 세션 = 주인 + (attach) 초대받은 사람 ──
@@ -226,20 +242,39 @@ try {
     const P = (await itemsPool.query(`INSERT INTO project(level, name, status, created_by, list_id) VALUES('project', $1, 'active', $2, $3) RETURNING id`, [PROJ_NAMES[0], B, L])).rows[0].id;
     const P2 = (await itemsPool.query(`INSERT INTO project(level, name, status, created_by) VALUES('project', $1, 'active', $2) RETURNING id`, [PROJ_NAMES[1], B])).rows[0].id;
     const dirOf = (pid) => `${PROJECT_SHARED_BASE}/${PROJECT_SUBDIR}/${pid}`;
+    //  가려진 프로젝트 목록은 15초 보관된다(visibility.ts) — 앞 장면이 이미 A 의 목록을 읽어 두었을 수 있으니 비운다.
+    invalidateVisibilityCache();
+    const pend = () => C.convIndexPending({ requester: A, attach: true, workspaceId: PRIMARY_TENANT_ID });
+    const pBase = await pend();
     await put(SID(18), B, U("가려진 프로젝트 안의 기린 이야기"));
     await put(SID(19), B, U("열린 프로젝트 안의 기린 이야기"));
     await itemsPool.query(`INSERT INTO org_session_state(id, owner, invites, project_id, dir) VALUES($1, $2, $3::jsonb, $4, $5)`, [BOX(18), B, JSON.stringify([A]), P, dirOf(P)]);
     await itemsPool.query(`INSERT INTO org_session_conv(box_id, conv_uuid, owner) VALUES($1, $2, $3)`, [BOX(18), SID(18), B]);
     await itemsPool.query(`INSERT INTO org_session_state(id, owner, invites, project_id, dir) VALUES($1, $2, $3::jsonb, $4, $5)`, [BOX(19), B, JSON.stringify([A]), P2, dirOf(P2)]);
     await itemsPool.query(`INSERT INTO org_session_conv(box_id, conv_uuid, owner) VALUES($1, $2, $3)`, [BOX(19), SID(19), B]);
+    const pNew = await pend();
+    chk("D16 밀린 수에도 가려진 프로젝트의 초대 세션은 세지 않는다(열린 쪽 하나만 는다)", pNew - pBase === 1, JSON.stringify({ pBase, pNew }));
     for (const n of [18, 19]) await C.indexConvSession("", SID(n));
-    //  가려진 프로젝트 목록은 15초 보관된다(visibility.ts) — 앞 장면이 이미 A 의 목록을 읽어 두었으니 비운다.
-    invalidateVisibilityCache();
     const a = ids(await search(A, "기린"));
     chk("D16 초대받았어도 가려진 프로젝트의 세션은 대화로 못 찾는다", !a.includes(SID(18)), JSON.stringify(a));
     chk("D16 대조: 열린 프로젝트의 초대 세션은 찾는다(프로젝트 세션을 통째로 닫은 게 아니다)", a.includes(SID(19)), JSON.stringify(a));
     const b = ids(await search(B, "기린"));
     chk("D16 주인은 자기 세션을 늘 찾는다(가려짐 판정은 초대받은 사람에게만)", b.includes(SID(18)) && b.includes(SID(19)), JSON.stringify(b));
+
+    //  D16f — 가려진 프로젝트를 못 재면(조회 실패) 프로젝트 폴더의 초대 세션은 닫는다(fail-closed). 개인 폴더의 초대 세션은 그대로.
+    //   조회를 실패시키려고 project 표 이름을 잠깐 바꾼다(끝나면 되돌린다).
+    let renamed = false;
+    try {
+      await itemsPool.query(`ALTER TABLE project RENAME TO project__convpg_off`); renamed = true;
+      invalidateVisibilityCache();
+      const shut = ids(await search(A, "기린"));
+      const personal = ids(await search(A, "슬랙"));
+      chk("D16f 가려진 프로젝트를 못 재면 프로젝트 폴더의 초대 세션은 둘 다 닫는다", !shut.includes(SID(18)) && !shut.includes(SID(19)), JSON.stringify(shut));
+      chk("D16f 개인 폴더의 초대 세션은 그대로 찾는다", personal.includes(SID(5)), JSON.stringify(personal));
+    } finally {
+      if (renamed) await itemsPool.query(`ALTER TABLE project__convpg_off RENAME TO project`);
+      invalidateVisibilityCache();
+    }
   }
 
   // ── D17 워크스페이스 격리 — 세션 목록과 같은 술어(sessionWorkspaceWhere) ──
@@ -288,6 +323,17 @@ try {
     await C.indexConvSession("", SID(28));
     const mc = await msgs(SID(28));
     chk("D19 파서 상태에 NUL 이 실려도(codex 의 중복 가리기) 커밋된다", mc.length === 1 && mc[0].body === "코덱스  펭귄 지시" && Number(await cursorOf(SID(28))) === await wm(SID(28)), JSON.stringify(mc));
+    //  사람이 «\u0000» 이라는 글자를 그대로 친 경우 — NUL 이 아니다. 인코딩된 JSON 에서 그 글자를 지우면 역슬래시 하나가 남아
+    //   jsonb 가 거부하고 그 창이 영영 커밋되지 못한다(재검토 실측).
+    const literal = "글자 그대로 \\u0000 친 펭귄";
+    const lit = JSON.stringify({ timestamp: ago(0), type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: literal }] } }) + "\n";
+    const r2 = await S.appendSessionLog({ nodeId: "", sessionId: SID(29), atOffset: 0, data: Buffer.from(lit, "utf8"), harness: "codex", owner: A });
+    if (!r2.ok) throw new Error("codex append 실패");
+    let err = null;
+    try { await C.indexConvSession("", SID(29)); } catch (e) { err = (e && e.message) || String(e); }
+    const ml = await msgs(SID(29));
+    chk("D19 «\\u0000» 을 글자 그대로 친 말도 커밋되고 글자는 그대로 남는다",
+      !err && ml.length === 1 && ml[0].body === literal && Number(await cursorOf(SID(29))) === await wm(SID(29)), JSON.stringify({ err, ml }));
   }
 
   // ── D20 뽑는 규칙의 판이 다르면 그 세션을 처음부터 다시 색인한다(옛 규칙의 행이 남지 않는다) ──

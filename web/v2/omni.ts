@@ -231,6 +231,8 @@ function snippetOf(e: any): string {
 // 오버레이 — 한 번에 하나. Esc·바깥클릭으로 닫힌다.
 // ════════════════════════════════════════════
 let box: HTMLElement | null = null;
+//  대화 채널의 진행 중 요청 — 글자를 더 치거나 창을 닫으면 끊는다. 낡은 검색이 서버 연결(공유 풀)을 쥐고 쌓이지 않게(#4517).
+let convAbort: AbortController | null = null;
 // ── 정렬·기간 상태 (#4517) ──
 //  정렬은 **저장한다**(취향 — 다음에 열어도 같은 순서), 기간은 **페이지 수명**(좁히기 — 저장하면 다음 검색이 말없이 좁아진다,
 //  종류 칩과 같은 규칙 #4156). 저장소가 막힌 환경(사파리 프라이빗)이면 이번 페이지에서만 기억한다.
@@ -348,7 +350,6 @@ export function omniOpen(seed?: string): void {
   let convCapped = false;           // 대화 검색이 흔한 낱말로 상한에 걸렸나
   let convFailed = '';              // 대화 채널이 실패했다(시간 초과 등) — «결과 없음» 과 다른 사실이라 따로 말한다
   let convSkipped = false;          // 검색어가 길어(200자 넘음) 대화 채널을 부르지 않았다
-  let convAbort: AbortController | null = null;   // 글자를 더 치면 앞 요청을 끊는다 — 낡은 검색이 서버 연결을 쥐고 쌓이지 않게
 
   const rowNodes: HTMLElement[] = [];
   //  ⚠ **그려진 줄과 짝을 이루는 배열**. rowNodes 의 i 번째가 무엇인지는 이것만 안다 —
@@ -518,6 +519,7 @@ export function omniOpen(seed?: string): void {
     if (!kindOn('conv')) return '';
     if (convSkipped) return '검색어가 길어(200자 넘음) 대화에서는 찾지 않았습니다.';
     if (convFailed) return `대화 결과를 가져오지 못했습니다 — ${convFailed}`;
+    if (convPending === null) return '대화 색인이 어디까지 됐는지 확인하지 못했습니다 — 최근 대화는 아직 찾지 못할 수 있습니다.';
     if (convPending) return `대화 색인을 만드는 중입니다 — 세션 ${convPending}개의 대화는 아직 찾지 못할 수 있습니다.`;
     if (convCapped) return '흔한 낱말이라 최근 말 2,000개 안에서만 찾았습니다 — 낱말을 더 넣으면 좁혀집니다.';
     return '';
@@ -728,8 +730,8 @@ export function omniOpen(seed?: string): void {
         convCapped = !!(r && r.capped);
         put('conv', ((r && r.results) || []).map(convHit), my);
       }, (e: any) => {
-        if (my !== seq) return;   // 끊은 요청(글자를 더 쳤다) — 새 검색이 이미 돌고 있다
-        convFailed = String((e && e.message) || '서버가 응답하지 않았습니다');
+        if (my !== seq || ctl.signal.aborted) return;   // 끊은 요청(글자를 더 쳤다 · 창을 닫았다) — 말할 것이 없다
+        convFailed = convFailText(e);
         put('conv', [], my);
       });
     });
@@ -767,6 +769,17 @@ export function omniOpen(seed?: string): void {
   if (seed) run();
 }
 
+/** 대화 채널 실패를 사람이 읽는 말로. 서버가 사람 말을 준 경우(503 «시간 안에 끝나지 않았습니다» 등)는 그대로 싣고,
+ *  코드값(internal_error)이나 상태 번호만 온 경우는 바꿔 말한다 — 안내 줄에 «internal_error» 가 그대로 서지 않게. */
+function convFailText(e: any): string {
+  const msg = String((e && e.message) || '').trim();
+  if (!e || !e.status) return '서버에 닿지 못했습니다';
+  if (!msg || msg === 'internal_error' || /^요청 실패 \(\d+\)$/.test(msg)) {
+    return e.status >= 500 ? '서버에 오류가 났습니다. 잠시 뒤 다시 찾아 주세요' : '요청이 거절됐습니다';
+  }
+  return msg;
+}
+
 //  기간 메뉴가 떠 있으면 Esc 는 **메뉴의 것**이다(메뉴만 닫는다) — 캡처 단계에서 여기가 먼저 받으므로 비켜 준다(#4517).
 function onEsc(e: KeyboardEvent): void {
   if (e.key !== 'Escape' || !box) return;
@@ -775,6 +788,7 @@ function onEsc(e: KeyboardEvent): void {
 }
 export function omniClose(): void {
   if (!box) return;
+  convAbort?.abort(); convAbort = null;
   closeCtxMenu();
   box.remove(); box = null;
   document.removeEventListener('keydown', onEsc, true);
