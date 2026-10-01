@@ -40,7 +40,7 @@ import {
   dayBucket, whenLabel, byRecent, atOf,
 } from '../lib/omni-order.js';   // #4517 정렬·기간 규칙(순수)
 import {
-  type Term, parseTerms, matchAll, matchAllAcross, highlightWords, splitKnowTitle, cleanSnippet, identKind, pickTop,
+  type Term, parseTerms, matchAll, matchAllAcross, highlightWords, splitKnowTitle, cleanSnippet, focusSnippet, identKind, pickTop,
 } from '../lib/omni-rank.js';   // #4530 순서·줄 다듬기 규칙(순수)
 import { isOmniChordLike, OMNI_MSG, OMNI_CLOSED_MSG, type ChordLike } from '../lib/omni-chord.js';   // #4530 여는 키 판정 · 신호 이름 한 벌
 import { projHitHref } from '../lib/proj-page.js';   // #3870 프로젝트 줄은 프로젝트 화면으로(사이드바 [→] 와 같은 문)
@@ -383,7 +383,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     if (h.context) { if (bits.length) bits.push(document.createTextNode(' ')); bits.push(el('span', { class: 'v2-omni-ctx', text: h.context })); }
     const id = identKind(h.ident, terms);
     if (id && h.ident) { dot(); bits.push(el('code', { class: 'v2-omni-key' + (id === 'exact' ? ' exact' : '') }, ...hl(/^[0-9]+$/.test(h.ident) ? '#' + h.ident : h.ident))); }
-    if (h.sub) { if (bits.length && !(h.role && bits.length === 1)) dot(); else if (bits.length) bits.push(document.createTextNode(' ')); bits.push(...hl(h.sub)); }
+    if (h.sub) { if (bits.length && !(h.role && bits.length === 1)) dot(); else if (bits.length) bits.push(document.createTextNode(' ')); bits.push(...hl(focusSnippet(h.sub, words))); }
     if (h.edit) { dot(); bits.push(el('span', { class: 'v2-omni-edit', text: '고친 파일 ' }), el('code', { class: 'v2-omni-key' }, ...hl(h.edit))); }
     if ((h.hits || 0) > 1) bits.push(document.createTextNode(` · 맞은 곳 ${h.hits}`));
     return bits.length ? el('span', { class: 'v2-omni-s' }, ...bits) : null;

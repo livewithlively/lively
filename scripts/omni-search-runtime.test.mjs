@@ -128,7 +128,7 @@ async function PAGE_MAIN() {
     if (p.endsWith("/api/ui/sources")) return J({ entries: [] });
     if (p.endsWith("/api/ui/v6/session-search")) {
       await later("conv");
-      if (q.includes("어렴풋")) return J({ results: [{ node_id: "n1", session_id: "conv-v", name: "어렴풋한 대화", title: null, at: iso(TODAY), hits: 1, top: true, best: { role: "user", ts: iso(TODAY), text: "어렴풋 기억나는 그 얘기" }, edit: null, fields: ["user"] }], pending: 0, capped: false });
+      if (q.includes("어렴풋")) return J({ results: [{ node_id: "n1", session_id: "conv-v", name: "어렴풋한 대화", title: null, at: iso(TODAY), hits: 1, top: true, best: { role: "user", ts: iso(TODAY), text: "지난주에 이야기했던 것들 중에서 어렴풋 기억나는 그 얘기" }, edit: null, fields: ["user"] }], pending: 0, capped: false });
       if (CONV_FAIL === "500") return new Response(JSON.stringify({ error: "internal_error" }), { status: 500, headers: { "content-type": "application/json" } });
       if (CONV_FAIL) return new Response(JSON.stringify({ error: "대화 검색이 시간 안에 끝나지 않았습니다 — 낱말을 더 넣어 좁혀 주세요" }), { status: 503, headers: { "content-type": "application/json" } });
       if (CONV_HANG) {
@@ -505,6 +505,11 @@ check(R.moreShown === true && /limit=40/.test(R.moreReq || "") && R.moreRows1 > 
 check(!!R.altEnter && R.altEnter.newTab === true, "G25 Alt+Enter 는 새 화면", JSON.stringify(R.altEnter));
 // G21·G22
 check((group(R.lateConv, "가장 맞는 결과")?.rows || []).some((r) => r.t === "어렴풋한 대화"), "G21 늦게 온 대화(1.5초)도 맨 위 셋에 선다", JSON.stringify(R.lateConv));
+{
+  //  둘째 줄은 첫 맞은 낱말 조금 앞에서 시작한다(폰에서 맞은 낱말이 줄임표 뒤로 밀리던 것 — 배포 뒤 실화면)
+  const r = allRows(R.lateConv).find((x) => x.t === "어렴풋한 대화");
+  check(!!r && /^…/.test(r.sub.replace(/^(지시|AI)\s*/, "")) && r.marks.includes("어렴풋") && !/지난주에/.test(r.sub), "G21 둘째 줄은 맞은 낱말 앞에서 시작", JSON.stringify(r));
+}
 check(R.simWaitMs < 1000 && allRows(R.simLate).some((r) => r.t === "슬랙 검색 설계") && !R.simLate.some((g) => g.h === "뜻이 비슷한 지식"), "G22 뜻 비슷이 늦어도 글자 결과는 바로 선다", JSON.stringify({ ms: R.simWaitMs, heads: (R.simLate || []).map((g) => g.h) }));
 // G13
 check(R.tabInside === true, "G13 Tab 은 창 안에서만 돈다", JSON.stringify(R.tabInside));
