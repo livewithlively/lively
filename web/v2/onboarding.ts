@@ -1814,7 +1814,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //   문장은 갈래마다 따로 쓴 ack 를 쓴다. 합류자는 이 장면을 지나지 않는다(원준 2026-09-14 — ORDER_JOIN 머리말).
         esc(S.stage ? (stageOf().ack || stageOf().label) : (S.name ? `${S.name}님, 하나만 더 여쭐게요.` : '하나만 더 여쭐게요.')),
         //  (#1631, 원준 결정 2026-09-13) 묻는 것은 그 사람의 정체성이 아니라 **이 워크스페이스에서 무슨 일을 하려는지**다.
-        //   갈래별 축(부서·일·단계)은 거르는 말로 아래에 둔다. 선택지·저장 값은 그대로다(v6/category-groups.ts 가 그 라벨을 키로 쓴다).
+        //   갈래별 축(부서·일·단계)은 거르는 말로 아래에 둔다. 선택지·저장 값은 그대로다(v6/category-groups.ts 가 그 라벨을 별칭 표로 v7 자리에 잇는다 — 라벨을 바꾸면 그 표도).
         '이 워크스페이스에서 어떤 일을 하시나요?',
         `${esc(stageOf().axis)} 고르신 것에 맞춰 자료를 읽습니다. 목록에 없으면 직접 적어 주세요.`)
         + `<div class="ob-opt-cards">${stageOf().opts.map(([l]) => card(l, '', jobIcon(l), S.job === l)).join('')}</div>
