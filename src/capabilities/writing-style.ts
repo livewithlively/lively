@@ -37,18 +37,23 @@ export interface WritingCheck {
   guide: string;
 }
 
-const NEXT_STEP: Record<WritingSurface, { saved: string; proposed: string }> = {
+// legacy 는 고친 글에 원래 있던 위반이 남았을 때의 다음 행동이다. 거부는 새 위반에만 걸기 때문에 옛 위반은 막히지 않고 남는다
+//  — 이 안내가 «같은 글을 한 번 더 저장해 고친다»를 짚지 않으면 수정 저장마다 옛 위반이 그대로 굳는다.
+const NEXT_STEP: Record<WritingSurface, { saved: string; proposed: string; legacy: string }> = {
   knowledge: {
     saved: "본문은 mode='edit' 로 그 부분만, 제목은 knowledge_set_title 로 고치세요 — 전문을 다시 보낼 필요가 없습니다.",
     proposed: "제안에 반영하려면 고친 전문으로 같은 지식을 다시 저장하세요 — 제안이 갱신됩니다.",
+    legacy: "같은 지식을 mode='edit' 로 한 번 더 저장해 그 부분을 고치세요(제목은 knowledge_set_title).",
   },
   activity: {
     saved: "다음 기록부터 맞추세요.",
     proposed: "다음 기록부터 맞추세요.",
+    legacy: "다음 기록부터 맞추세요.",
   },
   project: {
     saved: "같은 항목의 수정 도구(project_update_v6·task_update_v6)로 description 을 고치세요.",
     proposed: "같은 항목의 수정 도구(project_update_v6·task_update_v6)로 description 을 고치세요.",
+    legacy: "같은 항목의 수정 도구(project_update_v6·task_update_v6)로 description 을 한 번 더 저장해 고치세요.",
   },
 };
 
@@ -71,16 +76,26 @@ export async function checkWriting(
     const existed = new Set(opts.before
       ? lintWriting({ title: opts.before.title, body_md: opts.before.body }, fmt, surface).map((f) => f.rule)
       : []);
-    const rejects = opts.human ? [] : findings.filter((f) => f.level === "reject" && !existed.has(f.rule));
-    const step = opts.proposed ? NEXT_STEP[surface].proposed : NEXT_STEP[surface].saved;
+    const introducedFindings = findings.filter((f) => !existed.has(f.rule));
+    const introduced = [...new Set(introducedFindings.map((f) => f.rule))];
+    const legacy = [...new Set(findings.filter((f) => existed.has(f.rule)).map((f) => f.rule))];
+    const rejects = opts.human ? [] : introducedFindings.filter((f) => f.level === "reject");
     const state = opts.proposed ? "수정 제안으로 접수됐습니다" : "저장은 됐습니다";
+    const head = `이 조직의 서술 형식에 어긋난 곳이 ${findings.length}건 있습니다(${state}).`;
+    // 제안(stage) 중엔 edit 가 거부되므로, 옛 위반이 있어도 다음 행동은 제안 갱신 안내를 따른다.
+    const step = opts.proposed ? NEXT_STEP[surface].proposed : legacy.length ? NEXT_STEP[surface].legacy : NEXT_STEP[surface].saved;
+    const legacyLine = legacy.length
+      ? ` 이 글에 원래 있던 형식 위반 ${legacy.length}건(${legacy.join(", ")})이 남아 있습니다. 내용을 고친 김에 형식도 고쳐 주세요.`
+      : "";
     return {
       rejects,
       guide: fmt.guide_md,
       info: {
         style: {
           findings,
-          note: `이 조직의 서술 형식에 어긋난 곳이 ${findings.length}건 있습니다(${state}). ${step} 의미는 바꾸지 말고 형식만 고치세요.`,
+          introduced,
+          legacy,
+          note: `${head}${legacyLine} ${step} 의미는 바꾸지 말고 형식만 고치세요.`,
           guide_md: fmt.guide_md,
         },
       },
