@@ -142,7 +142,7 @@ async function holdClaim(id: number, table: Set<number>) {
 {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../../src/node/task-scheduler.ts", import.meta.url), "utf8");
-  const start = src.indexOf("async function assignOne("), end = src.indexOf("async function assignClaimed(");
+  const start = src.indexOf("async function assignOne("), end = src.indexOf("\n}\n", start);
   assert.ok(start >= 0 && end > start, "assignOne 본문 경계를 못 찾았다 — 함수 이름이 바뀌면 이 단언부터 고쳐라");
   const body = src.slice(start, end);
   assert.ok(/withAssignClaim\(t\.id,/.test(body), "assignOne 이 선점 없이 바로 판을 띄운다 — 이중 배정이 재발한다");
@@ -162,6 +162,16 @@ async function holdClaim(id: number, table: Set<number>) {
   const { readFileSync } = await import("node:fs");
   const del = readFileSync(new URL("../../src/capabilities/delegate.ts", import.meta.url), "utf8");
   assert.ok(/delegateRunNext\(r,/.test(del), "delegate_run 이 판정 함수를 안 쓴다 — in_flight 가 다시 취소로 떨어진다");
+}
+
+// in_flight 는 미배정 사유로 기록하지 않는다 — 기록하는 순간 이미 running 인 행의 result 에 «못 갔다» 가 끼어든다.
+{
+  const { readFileSync } = await import("node:fs");
+  const store = readFileSync(new URL("../../src/node/task-store.ts", import.meta.url), "utf8");
+  const start = store.indexOf("export async function noteAssignFailure(");
+  assert.ok(start >= 0, "noteAssignFailure 를 못 찾았다 — 이름이 바뀌면 이 단언부터 고쳐라");
+  assert.ok(/if \(code === "in_flight"\) return;/.test(store.slice(start, store.indexOf("\n}\n", start))),
+    "noteAssignFailure 가 in_flight 도 기록한다 — 다른 경로가 띄운 running 행에 미배정 사유가 남는다");
 }
 
 console.log("task-assign-claim.test: ok");

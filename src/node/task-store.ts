@@ -155,6 +155,8 @@ export async function markFinished(id: number, ok: boolean, result: Record<strin
  * queued 인 동안만 덮어쓴다 — 이미 끝난 태스크의 결과를 뒤늦은 시도 기록으로 덮지 않는다.
  */
 export async function noteAssignFailure(id: number, code: string | null, reason: string | null): Promise<void> {
+  //  in_flight 는 다른 경로가 이 태스크를 띄우는 중이라 못 간 이유가 아니다 — 적으면 이미 running 인 행의 result 에 미배정 사유가 끼어든다.
+  if (code === "in_flight") return;
   //  #4422 — 이 문장은 스폰 오류 원문이다(Node execFile 의 "Command failed: <argv 전체>"). 스폰 쪽이 이미 가렸어도 **저장 직전에
   //   한 번 더** 가린다: 구 번들 노드는 가리지 않은 원문을 RPC 로 돌려준다(2026-09-22 윈도우 노드 — 토큰이 여기 평문으로 저장됐다).
   const mark = JSON.stringify({ last_assign: { code, reason: reason == null ? null : redactTaskText(reason), at: new Date().toISOString() } });
