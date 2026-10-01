@@ -16,6 +16,8 @@
 //   --autofix 는 LLM 없이 결정적으로 고칠 수 있는 규칙(제목 이모지·상태 기호·날짜·MR 번호, 헤딩 기호)만 고친다(writing-autofix).
 //    dry-run 만 한다 — 반영은 그 리포트를 --apply-from 으로 넘긴다. --concurrency 로 조회를 병렬로 돌릴 수 있다.
 //   --all 은 적격 문서 전부를 대상으로 한다(--limit 없이 끝까지).
+//   --own-edits a.apply.jsonl[,b.apply.jsonl] 는 그 적용 리포트에 남은 배치 자신의 반영을 사람 편집으로 세지 않는다 —
+//    최신 변경 이력이 리포트의 판 위에 저장한 그 반영뿐이면 24시간 보호 창(recently_edited)을 건너뛴다. 여러 번 줄 수 있다.
 //   --max-minutes N 은 시작 후 N분이 지나면 새 문서를 꺼내지 않고, 진행 중인 문서만 끝낸 뒤 정상 종료한다(--resume 으로 이어 한다).
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
@@ -33,13 +35,13 @@ if (!existsSync(gatePath) || !existsSync(fmtPath) || !existsSync(autofixPath)) {
   console.error(`빌드 산출물이 없습니다(${gatePath}). 먼저 빌드하세요.`);
   process.exit(2);
 }
-const { isEligible, checkRewrite, checkInvariants, splitSections, sectionFindings, sectionHeadingOk, REWRITE_BODY_MAX_CHARS, normalizeJudgement, meaningVerdict, meaningFeedback } = await import(pathToFileURL(gatePath).href);
+const { isEligible, isOwnLastEdit, ownEditVersions, checkRewrite, checkInvariants, splitSections, sectionFindings, sectionHeadingOk, REWRITE_BODY_MAX_CHARS, normalizeJudgement, meaningVerdict, meaningFeedback } = await import(pathToFileURL(gatePath).href);
 const { resolveWritingFormat } = await import(pathToFileURL(fmtPath).href);
 const { autofixWriting, autofixBlocking } = await import(pathToFileURL(autofixPath).href);
 
 // ── 인자 ──
 function parseArgs(argv) {
-  const a = { apply: false, model: "sonnet", llmCmd: "claude", names: null, limit: null, rankTop: null, rankOnly: false, resume: false, report: null, attempts: 3, concurrency: 1, llmDir: null, maxMinutes: null, llmTimeoutMin: null, autofix: false, all: false };
+  const a = { apply: false, model: "sonnet", llmCmd: "claude", names: null, limit: null, rankTop: null, rankOnly: false, resume: false, report: null, attempts: 3, concurrency: 1, llmDir: null, maxMinutes: null, llmTimeoutMin: null, autofix: false, all: false, ownEdits: [] };
   let llmCmdGiven = false;
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
@@ -61,6 +63,7 @@ function parseArgs(argv) {
     else if (k === "--model") a.model = val();
     else if (k === "--llm-cmd") { a.llmCmd = val(); llmCmdGiven = true; }
     else if (k === "--llm-dir") a.llmDir = val();
+    else if (k === "--own-edits") a.ownEdits.push(...val().split(",").filter(Boolean));
     else if (k === "--max-minutes") a.maxMinutes = Number(val());
     else if (k === "--llm-timeout-min") a.llmTimeoutMin = Number(val());
     else if (k === "--concurrency") a.concurrency = Math.max(1, Math.min(8, Number(val()) || 1));
@@ -494,6 +497,22 @@ async function saveRewrite(name, k, after, rules, withAfter) {
 }
 
 // ── 한 건 ──
+const OWN_EDITS = new Map();
+for (const f of args.ownEdits) {
+  if (!existsSync(f)) { console.error(`--own-edits 파일이 없습니다: ${f}`); process.exit(2); }
+  for (const [n, v] of ownEditVersions(readFileSync(f, "utf8").split("\n"))) {
+    const prev = OWN_EDITS.get(n);
+    if (prev === undefined || v > prev) OWN_EDITS.set(n, v);
+  }
+}
+if (OWN_EDITS.size) console.error(`배치 자신의 반영 ${OWN_EDITS.size}건 — 그 뒤 변경이 없으면 보호 창을 건너뛴다`);
+
+// 이력 조회가 실패하면 사람 편집 가능성을 배제하지 못한 것이니 보호한다.
+async function lastEditIsOwn(name, savedOver, current) {
+  const r = await api(`/api/ui/knowledge/${encodeURIComponent(name)}/history?limit=1`);
+  return r.ok && isOwnLastEdit(r.json?.entries?.[0], savedOver, current);
+}
+
 const chars = (s) => [...String(s ?? "")].length;
 
 async function processOne(name, fmt) {
@@ -501,7 +520,10 @@ async function processOne(name, fmt) {
   const { k, err } = await getKnowledge(name);
   if (!k) return { ...base, status: "failed", reason: `fetch: ${err ?? "빈 응답"}` };
   const common = { ...base, version: k.version, before_title: k.title ?? "", chars_before: chars(k.body_md) };
-  const el = isEligible(k, fmt, Date.now());
+  let el = isEligible(k, fmt, Date.now());
+  if (el.reason === "recently_edited" && OWN_EDITS.has(name) && await lastEditIsOwn(name, OWN_EDITS.get(name), k.version)) {
+    el = isEligible(k, fmt, Date.now(), { lastEditIsOwn: true });
+  }
   if (!el.eligible) return { ...common, status: "skipped", reason: el.reason, rules: [] };
   const rules = el.targetRules;
 

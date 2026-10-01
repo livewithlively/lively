@@ -2,7 +2,7 @@
 // 실행: npx tsx src/v6/writing-rewrite-gate.test.ts
 import assert from "node:assert/strict";
 import {
-  AUTO_FIX_RULES, REWRITE_BODY_MAX_CHARS, extractInvariants, checkRewrite, isEligible, proseChars,
+  AUTO_FIX_RULES, REWRITE_BODY_MAX_CHARS, extractInvariants, checkRewrite, isEligible, isOwnLastEdit, ownEditVersions, proseChars,
 } from "./writing-rewrite-gate.js";
 import { resolveWritingFormat } from "../org/policies/writing-format.js";
 
@@ -446,5 +446,43 @@ t("양쪽 면제 조합: H1 에 X, 다음 줄에 Y 가 있고 본문 X→Y 면 v
   const before = doc(CLEAN_TITLE, "# 타임아웃 30초\n재시도는 3회다.\n\n대기는 30초다.");
   const after = doc(CLEAN_TITLE, "# 타임아웃 30초\n재시도는 3회다.\n\n대기는 3초다.");
   assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
+});
+// ───────────────────────── 배치 자신의 반영(own edit) ─────────────────────────
+
+t("최근 수정이어도 배치 자신의 반영이면(lastEditIsOwn) 대상이다", () => {
+  const recent = k({ updated_at: ago(1 * H) });
+  assert.equal(isEligible(recent as any, fmt, NOW as any).reason, "recently_edited");
+  const r = isEligible(recent as any, fmt, NOW as any, { lastEditIsOwn: true }) as any;
+  assert.equal(r.eligible, true);
+});
+t("lastEditIsOwn 이어도 다른 부적격 사유는 그대로다", () => {
+  const r = isEligible(k({ updated_at: ago(1 * H), provenance: "observed" }) as any, fmt, NOW as any, { lastEditIsOwn: true }) as any;
+  assert.equal(r.reason, "provenance");
+});
+t("최신 이력이 리포트 판 위의 그 반영이면 자기 반영이다", () =>
+  assert.equal(isOwnLastEdit({ version_before: 7, version_after: 8 }, 7, 8), true));
+t("반영 뒤 누가 고쳤으면(최신 이력의 출발 판이 다르면) 자기 반영이 아니다", () =>
+  assert.equal(isOwnLastEdit({ version_before: 8, version_after: 9 }, 7, 9), false));
+t("최신 이력의 도착 판이 현재 판과 다르면 자기 반영이 아니다", () =>
+  assert.equal(isOwnLastEdit({ version_before: 7, version_after: 8 }, 7, 9), false));
+t("이력·리포트 판·현재 판 중 하나라도 없으면 자기 반영으로 보지 않는다", () => {
+  assert.equal(isOwnLastEdit(undefined, 7, 8), false);
+  assert.equal(isOwnLastEdit({ version_before: null, version_after: 8 }, 7, 8), false);
+  assert.equal(isOwnLastEdit({ version_before: 7, version_after: 8 }, undefined, 8), false);
+  assert.equal(isOwnLastEdit({ version_before: 7, version_after: 8 }, 7, null), false);
+});
+t("적용 리포트에서 applied 만, 이름별 가장 나중 판을 고른다", () => {
+  const m = ownEditVersions([
+    JSON.stringify({ name: "a", status: "applied", version: 3 }),
+    JSON.stringify({ name: "a", status: "applied", version: 5 }),
+    JSON.stringify({ name: "a", status: "applied", version: 4 }),
+    JSON.stringify({ name: "b", status: "skipped", version: 2 }),
+    JSON.stringify({ name: "c", status: "staged", version: 2 }),
+    JSON.stringify({ name: "d", status: "applied" }),
+    JSON.stringify({ name: "e", status: "applied", version: 2, section: "rewritten" }),
+    "",
+    '{"name":"f","status":"appl',
+  ]);
+  assert.deepEqual([...m.entries()], [["a", 5]]);
 });
 console.log(`writing-rewrite-gate: ${pass} passed`);
