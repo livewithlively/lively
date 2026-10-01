@@ -81,6 +81,13 @@ async function PAGE_MAIN() {
     { name: "k-memo", title: "검색 개선 메모", similarity: 0.65, updated_at: put("검색 개선 메모", TODAY) },   // 의미로만 왔다(제목에 «슬랙» 없음)
     { name: "k-alarm", title: "슬랙 알림", similarity: 0.62, updated_at: put("슬랙 알림", NOW - 10 * D) },
   ];
+  //  코사인만 높은 무관한 문서 셋(0.78~0.80) — F19(«메모» 가 든 질의)에서만 온다. 셋 다 «글자로 맞은 문서»(0.70)보다 위라
+  //   «앞 셋을 자른 뒤 거르기» 로 고치면 맨 위가 비어 드러난다(재검토 지적: 거르는 순서를 시험이 못 가렸다).
+  const SIM_NOISE = [
+    { name: "k-onb", title: "온보딩 플로우 직무 분류", similarity: 0.80, updated_at: iso(NOW - 2 * D) },
+    { name: "k-ds", title: "디자인 시스템 토큰 정리", similarity: 0.79, updated_at: iso(NOW - 4 * D) },
+    { name: "k-dock", title: "도커를 완전히 걷어 낸 기록", similarity: 0.78, updated_at: iso(NOW - 6 * D) },
+  ];
   const GREP = [
     { name: "k-minutes", title: "회의록 정리", snippet: "L3: 슬랙 이야기를 했다", updated_at: put("회의록 정리", TODAY - 60_000) },   // 본문에서만 맞음
     { name: "k-link", title: "슬랙 연동", snippet: "L1: 슬랙", updated_at: iso(AT["슬랙 연동"]) },
@@ -111,7 +118,7 @@ async function PAGE_MAIN() {
     const q = u.searchParams.get("q") || u.searchParams.get("text") || "";
     const hit = q.includes("슬랙");
     const p = u.pathname;
-    if (p.endsWith("/api/ui/knowledge/similar")) return J({ entries: hit ? SIM : [] });
+    if (p.endsWith("/api/ui/knowledge/similar")) return J({ entries: hit ? (q.includes("메모") ? [...SIM, ...SIM_NOISE] : SIM) : [] });
     if (p.endsWith("/api/ui/knowledge/semantic")) return J({ entries: [] });
     if (p.endsWith("/api/ui/knowledge/search")) return J({ entries: hit ? GREP : [] });
     if (/\/api\/ui\/v6\/projects\/(similar|semantic|search)$/.test(p)) return J({ projects: [] });
@@ -416,7 +423,7 @@ check(R.hangStarted >= 1 && R.hangAborted === true, "F18 창을 닫으면 진행
   const all = titles(sh);
   check((R.f19Period || "").trim() === "기간" && JSON.stringify(R.f19Sort) === '["최신순"]' && all.length >= 2,
     "F19 배선 — 최신순 · 전체 기간에서 줄이 섰다", JSON.stringify({ p: R.f19Period, s: R.f19Sort, all }));
-  check(!all.includes("검색 개선 메모") && !all.includes("슬랙 알림"),
+  check(!all.includes("검색 개선 메모") && !all.includes("슬랙 알림") && !all.some((t) => /온보딩 플로우|디자인 시스템|도커를/.test(t)),
     "F19 최신순 어디에도(맨 위 셋 포함) 코사인만으로 온 문서가 서지 않는다", JSON.stringify({ top, all }));
   check(top.includes("슬랙 검색 설계"), "F19 글자로도 맞은 문서(코사인 + 본문 적중)는 맨 위 셋에 남는다", JSON.stringify(top));
 }
