@@ -12,6 +12,7 @@
 //   --llm-cmd 는 `<cmd> -p --model <m>` 로 불리고 프롬프트를 stdin 으로 받아 stdout 에 답한다(테스트는 가짜로 바꿔 끼운다).
 //   --llm-dir <dir> 은 프로세스를 띄우는 대신 요청을 <dir>/pending 에 파일로 내놓고 <dir>/done 의 답을 기다린다 —
 //    `claude -p` 를 중첩으로 못 부르는 헤드리스 세션 안에서 돌 때 쓴다. 답하는 쪽 절차: scripts/style-rewrite-llm-dir-answerer.md
+//   --llm-timeout-min N 은 LLM 요청 하나를 기다리는 한도(기본 10분)다.
 //   --max-minutes N 은 시작 후 N분이 지나면 새 문서를 꺼내지 않고, 진행 중인 문서만 끝낸 뒤 정상 종료한다(--resume 으로 이어 한다).
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
@@ -33,7 +34,7 @@ const { resolveWritingFormat } = await import(pathToFileURL(fmtPath).href);
 
 // ── 인자 ──
 function parseArgs(argv) {
-  const a = { apply: false, model: "sonnet", llmCmd: "claude", names: null, limit: null, rankTop: null, rankOnly: false, resume: false, report: null, attempts: 3, concurrency: 1, llmDir: null, maxMinutes: null };
+  const a = { apply: false, model: "sonnet", llmCmd: "claude", names: null, limit: null, rankTop: null, rankOnly: false, resume: false, report: null, attempts: 3, concurrency: 1, llmDir: null, maxMinutes: null, llmTimeoutMin: null };
   let llmCmdGiven = false;
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
@@ -54,6 +55,7 @@ function parseArgs(argv) {
     else if (k === "--llm-cmd") { a.llmCmd = val(); llmCmdGiven = true; }
     else if (k === "--llm-dir") a.llmDir = val();
     else if (k === "--max-minutes") a.maxMinutes = Number(val());
+    else if (k === "--llm-timeout-min") a.llmTimeoutMin = Number(val());
     else if (k === "--concurrency") a.concurrency = Math.max(1, Math.min(8, Number(val()) || 1));
     else if (k === "--attempts") a.attempts = Math.max(1, Math.min(6, Number(val()) || 3));
     else { console.error(`알 수 없는 인자: ${k}`); process.exit(2); }
@@ -63,6 +65,7 @@ function parseArgs(argv) {
   if (a.limit != null && !posInt(a.limit)) { console.error("--limit 는 양의 정수여야 합니다"); process.exit(2); }
   if (a.rankTop != null && !posInt(a.rankTop)) { console.error("--rank-top 은 양의 정수여야 합니다"); process.exit(2); }
   if (a.maxMinutes != null && !(Number.isFinite(a.maxMinutes) && a.maxMinutes > 0)) { console.error("--max-minutes 는 양수여야 합니다"); process.exit(2); }
+  if (a.llmTimeoutMin != null && !(Number.isFinite(a.llmTimeoutMin) && a.llmTimeoutMin > 0)) { console.error("--llm-timeout-min 은 양수여야 합니다"); process.exit(2); }
   if (a.llmDir && llmCmdGiven) { console.error("--llm-dir 과 --llm-cmd 는 함께 쓸 수 없습니다"); process.exit(2); }
   if (a.rankOnly && a.rankTop == null) { console.error("--rank-only 는 --rank-top 과 함께 써야 합니다"); process.exit(2); }
   if (!a.names && !a.applyFrom && a.limit == null && a.rankTop == null) { console.error("--names <파일>, --limit N, --rank-top N, --apply-from <report> 중 하나가 필요합니다"); process.exit(2); }
@@ -182,7 +185,8 @@ function doneNames(file, isDone) {
 const retryableLlm = (r) => r.status === "failed" && /^(llm_(exit|timeout)|fetch failed)/.test(String(r.reason ?? ""));
 
 // ── LLM ──
-const LLM_TIMEOUT_MS = 10 * 60 * 1000;
+// --llm-dir 로 헤드리스 세션이 회차마다 번갈아 답하면 회차 사이 공백(수십 분) 동안 답이 없다 — 그 공백을 넘겨 기다리게 늘릴 수 있다.
+const LLM_TIMEOUT_MS = (args.llmTimeoutMin ?? 10) * 60 * 1000;
 // 판정 호출마다 새 프로세스다 — 한 대화 안에서 원문을 본 뒤 재작성본을 읽으면 원문 기억으로 빈칸을 메워 누락을 못 본다.
 //  cwd 를 임시 폴더로 두는 건 실행 위치의 프로젝트 지침이 프롬프트에 섞이지 않게 하려는 것이다.
 // 건별 LLM 호출 수 — 병렬로 돌아도 섞이지 않게 비동기 문맥에 싣는다(비용 추적: 문서당 최대 호출이 조각 수 × 시도 수로 커진다).
