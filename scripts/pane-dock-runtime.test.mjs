@@ -10,14 +10,16 @@
 // 사양(엣지 표 — 행마다 단언 하나 이상):
 //  R1  기본 = 이음매: 분할선 한가운데(세로) · 세로 구간 가운데 · 곁칸의 부모(.pn-body)에 붙는다 · 세로 알약
 //  R1b 손잡이(⋮⋮) · 자동 가리기 띠가 없다(원준 10-01 «없애줘»)
-//  R2  이음매 독은 아무도 안 비킨다 — 곁칸 본문 여백 0, «태스크 추가» 가 곁칸 바닥에
+//  R2  이음매 독은 아무도 안 비킨다 — 곁칸 본문 여백 0, «태스크 추가» 가 곁칸 바닥에(제 바깥 여백만큼 위)
 //  R3  점 = 떠 있는 탭 수(최대 셋), 켜진 앱만 켜짐 · R4 안 떠 있는 앱을 누르면 연다 · 튀어 오른다
 //  R5  떠 있는 앱은 보여 주고, 켜진 앱을 또 누르면 다음 인스턴스 · R6 ⌥-클릭 = 하나 더
 //  R7  확대 — 이음매는 세로 축: 마우스 밑 ≈1.6배, 먼 것은 그대로 · R7c 알약 폭은 그대로(아이콘이 양옆으로 솟는다, macOS)
 //  R8  우클릭(엔진) — 열린 창 · 새로 열기 · 모두 닫기 · 독에서 빼기 · 독 설정. A1–A5 메뉴 세 길 · A6 좁은 폭의 [더보기]엔 메뉴 없음
 //  S1  독 설정 메뉴: 위치 › 이음매 · 사이드바 아래 / 확대 / 독 되돌리기 — «모양» · «자동으로 가리기» 는 없다
 //  R9  이음매에서 알약 끝을 잡고 곁칸 안쪽 깊이 끌면 → 놓일 자리 윤곽(곁칸 바닥) → 놓으면 곁칸 아래(계정 설정 home=float), 곁칸에 붙는다
-//  R2b 곁칸 아래 독이면 부품이 물러선다 — 본문 아래 여백 = 아이콘 + 안 여백×2 + 점 줄 + 바깥 여백×2, «태스크 추가» 가 독 위에
+//  R2b 곁칸 아래 독은 내용 위에 떠 있다(원준 10-02 «뒤에 그냥 뭐 없이 둥둥 떠있게») — 본문 여백 0(하얀 띠 없음) · 맨 아래 입력칸이 있는 앱(프로젝트)은
+//      앱 끝에 독 두께(아이콘 + 안 여백×2 + 점 줄 + 바깥 여백×2)만큼 빈 자리 → «태스크 추가» 가 독 위에
+//  R2c 목록은 독 밑까지 흐른다 — 자료 목록 상자의 바닥 = 곁칸 바닥 · 독 옆 바닥 자리도 목록 · 끝에 독 두께만큼 빈 자리 → 끝까지 굴리면 마지막 줄이 독 위
 //  R10 곁칸 아래 독의 크기는 곁칸 폭을 따라 — 280 < 340 < 420 에서 아이콘이 커지고, 어느 폭에서도 확대한 몫까지 곁칸 안에
 //  R10c 곁칸 아래 독은 확대해도 알약 높이는 그대로(아이콘이 위로 솟는다, macOS)
 //  R11 곁칸 아래에서 경계선 가까이(세로 30% 높이)로 끌어 놓으면 → 이음매, 그 높이(at 0.3)
@@ -26,13 +28,15 @@
 //  H2  곁칸 아래 독의 [더보기]는 곁칸 안, 독 위에
 //  R16 곁칸 탭 줄 높이 = 세션 머리줄 높이 · C1 어느 자리에서도 틀(탭 칸)에 스크롤이 안 생긴다
 //  R17 이음매가 없으면(서랍 · 카드 · 접힘) 곁칸 아래 · R17b 자리바꿈(곁칸이 왼쪽 · sw-left)이면 오른쪽 분할선 위 · 이름표는 세션 쪽(오른쪽)
-//  R17c 곁칸이 접히면(폭 0) 독도 여백도 없다 · R18 걷으면 흔적이 없다 · R19 붙이기 수단이 없는 게이트웨이(옛 판) — 그 구획이 없다
+//  R17c 곁칸이 접히면(폭 0) 독도 빈 자리도 없다 · R18 걷으면 흔적이 없다 · R19 붙이기 수단이 없는 게이트웨이(옛 판) — 그 구획이 없다
 //  D1–D6 끌기 방어(버튼 떼어짐 · 다른 포인터 · blur · 걷힘 · 한 번에 하나) · E1–E2 흔들기/고정 줄로 끌어오기
 //  F1–F3 초점 · G1 refreshDocks · H1 [더보기] 열린 채 자리가 바뀌면 옛 창은 닫힌다 · I1 이름표(이음매 = 세션 쪽 · 곁칸 아래 = 곁칸 안)
 //  B1 안 보이는 고정 보존 · B7 «독 되돌리기» = 이음매 가운데 + 고정 목록 «적은 적 없음»
 //  HD1 이음매 독 맨 위에 손잡이(원준 10-01 «위쪽에 핸들») — 첫 아이콘 위 · 짧은 가로 막대 · 앱 단추가 아니다(탭 순서 밖)
-//  HD2 손잡이를 잡고 끌면 독이 옮겨 간다(R9 가 손잡이에서 시작) · HD3 곁칸 아래 독엔 손잡이가 없다 · HD4 손잡이 위에선 확대하지 않는다
+//  HD2 손잡이를 잡고 끌면 독이 옮겨 간다(R9 가 손잡이에서 시작) · HD4 손잡이 위에선 확대하지 않는다
 //  HD5 좁은 폭(서랍)엔 손잡이가 없다
+//  HF1 곁칸 아래 독에도 손잡이(원준 10-02 «이음새 있을 때랑 똑같이») — 알약 왼쪽 끝 · 세운 막대 · 아이콘 높이 가운데 · 앱 단추가 아니다
+//  HF2 그 손잡이를 잡고 경계선으로 끌면 이음매로(R11 이 손잡이에서 시작) · HF3 그 손잡이 위에선 확대하지 않는다
 //
 // 왜 런타임인가: 경계선 위에 걸쳤는지 · 곁칸 폭을 따라 커지는지 · 끌어 놓은 곳에 서는지는 CSS 가 실제로 그린 자리에서만 잰다.
 // fail-first(2026-10-01 이음매 판): 바꾸기 전 판(떠 있는 알약 기본 · 막대 · 손잡이 — lib · 독 · CSS 셋 다 git show HEAD 를 제자리에)에 물리면
@@ -73,8 +77,6 @@ const PAGE = `<!doctype html><meta charset="utf-8"><style>${CSS}
   #wrap{position:absolute;left:0;top:0;width:1240px;height:760px;overflow:auto}
   .pn-col{display:flex;flex-direction:column;min-width:0;background:var(--bg)}
   #split{background:var(--line)}
-  .part{flex:1;display:flex;flex-direction:column;min-height:0}
-  .list{flex:1;overflow:auto} .add{flex:none;height:34px;border-top:1px solid var(--line)}
 </style>
 <div id="wrap" class="pn-wrap">
   <div id="grid" class="pn-body">
@@ -82,7 +84,7 @@ const PAGE = `<!doctype html><meta charset="utf-8"><style>${CSS}
     <div class="v2-split-x" id="split"></div>
     <section id="pane" class="pn-pane" data-zone="side">
       <div class="pn-tabbar"><div class="pn-tabs"></div><div class="pn-tabtail"></div></div>
-      <div class="pn-pane-body"><div class="part"><div class="list">목록</div><div class="add">＋ 태스크 추가</div></div></div>
+      <div class="pn-pane-body"><div class="pn-part pn-tk" id="tkpart"><div class="pn-tk-list">목록</div><label class="pn-tk-add">＋ 태스크 추가</label></div><div class="pn-part pn-files" id="fpart" hidden><div class="pn-fbody"><div style="height:1600px">긴 자료 목록</div><div class="last">마지막 줄</div></div></div></div>
     </section>
   </div>
 </div>
@@ -106,6 +108,8 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   const rc=(n)=>n.getBoundingClientRect(); const cx=(r)=>r.left+r.width/2; const cy=(r)=>r.top+r.height/2;
   try{
   const pane=document.getElementById('pane'); const pbody=pane.querySelector('.pn-pane-body');
+  const tkPart=document.getElementById('tkpart'), tkAdd=tkPart.querySelector('.pn-tk-add'), fPart=document.getElementById('fpart'), fBody=fPart.querySelector('.pn-fbody'), fLast=fPart.querySelector('.last');
+  const mb=(e)=>parseFloat(getComputedStyle(e).marginBottom)||0;
   const grid=document.getElementById('grid'); const split=document.getElementById('split'); const wrap=document.getElementById('wrap');
   //  셸처럼(main.ts) 몸통에 메뉴 엔진 — 우클릭 · 메뉴 키 · 길게 누르기. 곁칸 빈 자리 메뉴(panes.ts bindCtxSurface)와 공통 행도 흉내.
   Dock.mountCtxMenus(document.body,{longPress:true,menuKey:true});
@@ -142,7 +146,7 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   const P=(type,x,y,t=window)=>t.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,clientX:x,clientY:y,button:0,buttons:1,pointerId:9,pointerType:'mouse'}));
   const Pb0=(x,y,id=9)=>window.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,cancelable:true,clientX:x,clientY:y,button:0,buttons:0,pointerId:id,pointerType:'mouse'}));
   //  독을 잡는 자리 — 이음매면 맨 위 손잡이 한가운데, 곁칸 아래면 알약 왼쪽 끝 여백(곁칸 아래엔 손잡이가 없다).
-  const grabPt=()=>{const r=rc(shelf); const h=shelf.querySelector('.pn-dock-handle'); if(root.dataset.home==='seam'&&h){const q=rc(h); return [cx(q),cy(q)];} return root.dataset.home==='seam'?[cx(r), r.top+4]:[r.left+3, cy(r)];};
+  const grabPt=()=>{const r=rc(shelf); const h=shelf.querySelector('.pn-dock-handle'); if(h){const q=rc(h); return [cx(q),cy(q)];} return root.dataset.home==='seam'?[cx(r), r.top+4]:[r.left+3, cy(r)];};
   const PK='lively_v2_dock', PINK='lively_v2_dock_apps';
   const prefsNow=()=>localStorage.getItem(PK); const pinsNow=()=>localStorage.getItem(PINK);
   const setPrefs=async(o={})=>{localStorage.setItem(PK, JSON.stringify({home:'seam',at:'0.50',mag:'1',...o})); window.dispatchEvent(new StorageEvent('storage',{key:PK})); await frame(); await sleep(60);};
@@ -155,7 +159,7 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   R.r1=root.dataset.home==='seam' && root.parentElement===grid && Math.abs(cx(sr)-seamX())<=1 && Math.abs(cy(sr)-(sp0.top+sp0.bottom)/2)<=2 && sr.height>sr.width*3;
   R.r1b_nogrip=!document.querySelector('.pn-dock-grip') && !document.querySelector('.pn-dock-reveal');
   // R2 — 이음매 독은 아무도 안 비킨다
-  R.r2=['paddingBottom','paddingTop','paddingLeft','paddingRight'].every((k)=>getComputedStyle(pbody)[k]==='0px') && Math.abs(rc(pbody.querySelector('.add')).bottom-rc(pane).bottom)<=1;
+  R.r2=['paddingBottom','paddingTop','paddingLeft','paddingRight'].every((k)=>getComputedStyle(pbody)[k]==='0px') && Math.abs(rc(tkAdd).bottom+mb(tkAdd)-rc(pane).bottom)<=1;
   // HD1 — 이음매 독 맨 위의 손잡이: 첫 아이콘 위 · 짧은 가로 막대 · 앱 단추가 아니다
   const hd=shelf.querySelector('.pn-dock-handle'); const hdi=hd&&hd.querySelector('i');
   if(hd){ const hr=rc(hd), ir=rc(hdi), fr=rc(it('tasks').querySelector('.pn-dock-ic'));
@@ -245,13 +249,31 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   R.r9=!!saved && saved.home==='float' && root.dataset.home==='float' && root.parentElement===pane
     && Math.abs(sr.bottom-(rc(pane).bottom-8))<=1.5 && Math.abs(cx(sr)-(rc(pane).left+1+pane.clientWidth/2))<=2 && sr.width>sr.height*3;
   R.r9_gone=!grid.querySelector('.pn-dock-preview') && !root.classList.contains('moving');
-  R.hd3_float_no_handle=root.dataset.home==='float' && !shelf.querySelector('.pn-dock-handle');
-  // R2b — 곁칸 아래 독이면 부품이 물러선다
-  const s9=sizeNow();
-  R.r2b_info=[s9, getComputedStyle(pbody).paddingBottom];
-  R.r2b=parseFloat(getComputedStyle(pbody).paddingBottom)===s9+12+6+16 && rc(pbody.querySelector('.add')).bottom<=sr.top+0.5;
+  // HF1 — 곁칸 아래 독에도 손잡이: 알약 왼쪽 끝 · 세운 막대 · 아이콘 높이 가운데 · 앱 단추가 아니다
+  const hf=shelf.querySelector('.pn-dock-handle'); const hfi=hf&&hf.querySelector('i');
+  if(hf){ const hr=rc(hf), ir=rc(hfi), f0=rc(shelf.querySelector('.pn-dock-it .pn-dock-ic'));
+    R.hf1_info=[Math.round(hr.left-sr.left),Math.round(hr.width),Math.round(hr.height),Math.round(ir.width),Math.round(ir.height),Math.round(cy(ir)-cy(f0)),Math.round(f0.left-hr.right)];
+    R.hf1=root.dataset.home==='float' && shelf.firstElementChild===hf && hr.left-sr.left<=4 && hr.right<=f0.left && ir.width>=3 && ir.width<=5 && ir.height>=12 && ir.height<=24
+      && Math.abs(cy(ir)-cy(f0))<=1.5 && hf.tagName!=='BUTTON' && !hf.hasAttribute('tabindex') && hf.getAttribute('aria-hidden')==='true' && getComputedStyle(hf).cursor==='grab'; }
+  // HF3 — 그 손잡이 위에선 확대하지 않는다(잡으려는 것은 독)
+  if(hf){ const hr=rc(hf);
+    hf.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:cx(hr),clientY:cy(hr),pointerType:'mouse'})); await frame(); await sleep(200);
+    const s0=sizeNow(); const icw=[...shelf.querySelectorAll('.pn-dock-ic')].map((q)=>rc(q).width);
+    R.hf3_info=JSON.stringify(icw.map((x)=>Math.round(x))); R.hf3_no_mag=icw.every((x)=>Math.abs(x-s0)<=0.6);
+    shelf.dispatchEvent(new PointerEvent('pointerleave',{bubbles:false,pointerType:'mouse'})); await frame(); await sleep(200); }
+  // R2b — 곁칸 아래 독은 내용 위에 떠 있다: 본문 여백 0 · 맨 아래 입력칸이 있는 앱은 앱 끝에 독 두께만큼 빈 자리 → «태스크 추가» 가 독 위에
+  const s9=sizeNow(); const inset=s9+12+6+16; const tkAfter=getComputedStyle(tkPart,'::after').height;
+  R.r2b_info=[s9, getComputedStyle(pbody).paddingBottom, tkAfter, Math.round(rc(tkAdd).bottom), Math.round(sr.top)];
+  R.r2b=getComputedStyle(pbody).paddingBottom==='0px' && parseFloat(tkAfter)===inset && rc(tkAdd).bottom<=sr.top+0.5;
+  // R2c — 목록은 독 밑까지 흐른다: 목록 상자의 바닥 = 곁칸 바닥 · 독 옆 바닥 자리도 목록 · 끝에 독 두께만큼 빈 자리 → 끝까지 굴리면 마지막 줄이 독 위
+  tkPart.hidden=true; fPart.hidden=false; dock.sync(); await frame();
+  { const fr=rc(fBody), pr2=rc(pane), sr2=rc(shelf); const beside=document.elementFromPoint(pr2.left+6, cy(sr2));
+    fBody.scrollTop=fBody.scrollHeight; await frame(); const lr=rc(fLast);
+    R.r2c_info=[Math.round(fr.bottom), Math.round(pr2.bottom), getComputedStyle(fBody,'::after').height, Math.round(lr.bottom), Math.round(sr2.top), beside&&beside.className];
+    R.r2c=Math.abs(fr.bottom-pr2.bottom)<=1 && fr.bottom>sr2.bottom && parseFloat(getComputedStyle(fBody,'::after').height)===inset && lr.bottom<=sr2.top+0.5 && !!beside && !!beside.closest('.pn-fbody'); }
+  fBody.scrollTop=0; fPart.hidden=true; tkPart.hidden=false; dock.sync(); await frame();
   // R10 — 곁칸 폭을 따라 커지고 작아진다(곁칸 폭 = 격자의 --pn-side-w). 헤드리스는 ResizeObserver 가 안 돌아 sync 로 다시 그린다.
-  const sizes=[]; const fits=[];
+  const sizes=[]; const fits=[]; const edge=[];
   for(const wpx of [280,340,420]){
     grid.style.setProperty('--pn-side-w',wpx+'px'); dock.sync(); await frame();
     const sz=sizeNow(); sizes.push(sz);
@@ -261,15 +283,17 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     const a=rc(shelf), p=rc(pane);
     const icons=[...shelf.querySelectorAll('.pn-dock-ic')].map(rc);
     const left=Math.min(a.left,...icons.map((q)=>q.left)), right=Math.max(a.right,...icons.map((q)=>q.right));
-    fits.push(left>=p.left && right<=p.right);
+    //  크기 공식(lib floatIconSize)은 확대한 몫까지 바깥 여백 8px 안에 들게 잡는다 — 손잡이 몫(HANDLE_FLOAT)을 빼먹으면 이 여백을 먹는다.
+    fits.push(left>=p.left+8-1 && right<=p.right-8+1); edge.push([Math.round(left-p.left), Math.round(p.right-right)]);
     if(wpx===340){ R.r10c_shelf_fixed=Math.abs(a.height-(sz+18))<=1; }
     shelf.dispatchEvent(new PointerEvent('pointerleave',{bubbles:false,pointerType:'mouse'})); await frame(); await sleep(200);
   }
   grid.style.removeProperty('--pn-side-w'); dock.sync(); await frame();
-  R.r10_info=JSON.stringify({sizes,fits});
+  R.r10_info=JSON.stringify({sizes,fits,edge});
   R.r10=sizes[0]<sizes[1] && sizes[1]<sizes[2] && fits.every(Boolean);
   // R11 — 곁칸 아래에서 경계선 가까이(세로 30%)로 → 이음매, 그 높이
   gp=grabPt(); const sp1=span(); const ty=sp1.top+(sp1.bottom-sp1.top)*0.3;
+  const onHf=document.elementFromPoint(gp[0],gp[1]); R.hf2_from_handle=root.dataset.home==='float' && !!onHf && !!onHf.closest('.pn-dock-handle');
   P('pointerdown',gp[0],gp[1],shelf); P('pointermove',gp[0]-20,gp[1]-20); P('pointermove',seamX()+10,ty);
   const pv2=grid.querySelector('.pn-dock-preview');
   R.r11_preview=!!pv2 && pv2.dataset.home==='seam' && Math.abs(cx(rc(pv2))-seamX())<=1.5;
@@ -502,7 +526,7 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   grid.classList.remove('sw-left'); dock.sync(); await frame();
   // R17c — 곁칸이 접히면(폭 0) 독도 여백도 없다 · R18 걷으면 흔적이 없다
   grid.style.setProperty('--pn-side-w','0px'); pane.style.width='0px'; pane.style.borderLeftWidth='0px'; dock.sync(); await frame();
-  R.r17c=root.hidden && getComputedStyle(pbody).paddingBottom==='0px';
+  R.r17c=root.hidden && getComputedStyle(pbody).paddingBottom==='0px' && getComputedStyle(tkPart,'::after').height==='0px';
   dock.destroy();
   R.destroyed=!document.querySelector('.pn-dock') && !document.querySelector('.pn-dock-tip');
   grid.style.removeProperty('--pn-side-w'); pane.style.width=''; pane.style.borderLeftWidth='';
@@ -563,13 +587,16 @@ check(R.r9_lifted, "R9b 끄는 동안 독은 곁칸의 부모에 붙는다(곁�
 check(R.r9, "R9 놓으면 곁칸 아래 — 계정 설정 home=float · 곁칸에 붙어 바닥 가운데(바깥 여백 8)", R.r9_saved);
 check(R.r9_gone, "R9c 놓으면 윤곽이 사라진다");
 check(R.hd2_from_handle, "HD2 위 R9 의 끌기는 손잡이를 잡고 시작했다 — 손잡이로 독이 옮겨 간다");
-check(R.hd3_float_no_handle, "HD3 곁칸 아래 독엔 손잡이가 없다(바닥의 손잡이는 걷었다)");
-check(R.r2b, "R2b 곁칸 아래 독이면 부품이 물러선다 — 아이콘 + 안 여백×2 + 점 줄 + 바깥 여백×2 · «태스크 추가» 가 독 위에", JSON.stringify(R.r2b_info));
+check(R.hf1, "HF1 곁칸 아래 독에도 손잡이 — 알약 왼쪽 끝 · 세운 막대 · 아이콘 높이 가운데 · 앱 단추가 아니다(원준 10-02 «이음새 있을 때랑 똑같이»)", JSON.stringify(R.hf1_info));
+check(R.hf3_no_mag, "HF3 곁칸 아래 독의 손잡이 위에선 확대하지 않는다", R.hf3_info);
+check(R.r2b, "R2b 곁칸 아래 독은 내용 위에 떠 있다 — 본문 여백 0(하얀 띠 없음) · 입력칸 앱 끝에 독 두께만큼 빈 자리 · «태스크 추가» 가 독 위에", JSON.stringify(R.r2b_info));
+check(R.r2c, "R2c 목록은 독 밑까지 흐른다 — 목록 바닥 = 곁칸 바닥 · 독 옆도 목록 · 끝까지 굴리면 마지막 줄이 독 위", JSON.stringify(R.r2c_info));
 check(R.r10, "R10 곁칸 아래 독의 크기는 곁칸 폭을 따라 — 280 < 340 < 420 에서 커지고, 확대한 몫까지 곁칸 안에(원준 10-01)", R.r10_info);
 check(R.r10c_shelf_fixed, "R10c 확대해도 알약 높이는 그대로 — 아이콘이 위로 솟는다(macOS)");
 check(R.r11_preview, "R11a 경계선 가까이 끄는 동안 이음매 윤곽이 분할선 위에 보인다");
 check(R.r11_lifted, "R11b 곁칸 아래에서 끌면 곁칸의 부모로 옮겨 붙어 곁칸 테두리를 넘어 따라온다(안 잘린다)");
 check(R.r11, "R11 경계선 가까이(세로 30%)에 놓으면 이음매 · 그 높이(at 0.3)", JSON.stringify(R.r11_info));
+check(R.hf2_from_handle, "HF2 위 R11 의 끌기는 곁칸 아래 독의 손잡이를 잡고 시작했다 — 손잡이로 이음매에 돌아간다");
 check(R.r12_caret, "R12a 아이콘을 끄는 동안 끼울 자리 선이 보인다");
 check(R.r12, "R12 아이콘을 끌어 순서를 바꾼다(이음매는 세로)", R.r12_pins);
 check(R.r13_badge, "R13a 독 밖으로 끌면 «빼기» 표시");
@@ -609,7 +636,7 @@ check(R.r17_noseam, "R17 이음매가 없으면(카드 모드 · 접힘) 곁칸 
 check(R.r17_back, "R17a 이음매가 돌아오면 다시 이음매");
 check(R.r17b_swap, "R17b 자리바꿈(곁칸이 왼쪽)이면 오른쪽 분할선 위", JSON.stringify(R.r17b_info));
 check(R.r17b_tip, "R17c 자리바꿈이면 이름표는 세션 쪽(오른쪽)");
-check(R.r17c, "R17d 곁칸이 접히면 독도 여백도 없다");
+check(R.r17c, "R17d 곁칸이 접히면 독도 여백도 빈 자리도 없다");
 check(R.destroyed, "R18 걷으면 흔적이 없다(이름표까지)");
 check(R.r19, "R19 붙이기 수단이 없으면(옛 판 게이트웨이) [더보기]에 그 구획이 없다 — 독은 그대로 쓴다");
 const errs = Object.keys(R).filter((k) => k.startsWith("err_")).map((k) => `${k}: ${R[k]}`);

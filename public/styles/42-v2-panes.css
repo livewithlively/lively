@@ -35,9 +35,16 @@
    곁칸 밖에 떠야 하는 것(우클릭 메뉴 · 탭/독 끌기 조각 · 팝오버)은 body 에 붙어 여기에 안 걸린다. */
 /* hidden 먼저 — clip 을 모르는 옛 사파리(15 이하)는 hidden 으로 자른다(가린 독의 넘침만은 막는다). */
 .pn-pane[data-zone="side"] { position: relative; overflow: hidden; overflow: clip; border-left: 1px solid var(--line); }
-/* #4443 곁칸 독 — 독이 보이면 부품이 독만큼 물러선다(macOS: 창은 독 위까지만 커진다). 폭은 v2/pane-dock 이 lib/pane-dock dockInset 으로 잰다.
-   프로젝트 칸 맨 아래의 «태스크 추가» 입력칸이 독 뒤에 깔리지 않는 이유가 이것이다. 가려 두면(자동으로 가리기) 네 값 모두 0. */
-.pn-pane[data-zone="side"] > .pn-pane-body { padding: var(--pn-dock-t, 0px) var(--pn-dock-r, 0px) var(--pn-dock-b, 0px) var(--pn-dock-l, 0px); }
+/* #4443 곁칸 아래 독(3안)은 **내용 위에 떠 있다**(원준 10-02 «뒤에 그냥 뭐 없이 둥둥 떠있게»). 두께는 v2/pane-dock 이
+   lib/pane-dock dockInset 으로 재서 --pn-dock-b 로 알린다(이음매 독 · 독 없음 = 0 — 아래 규칙이 모두 아무 일도 안 한다).
+   종전엔 본문 전체를 그만큼 올려(padding-bottom) 독 뒤에 하얀 띠가 생기고 내용이 그 위에서 잘렸다. 이제 본문은 독 밑까지 흐르고 —
+   · 목록(스크롤 상자)은 **끝에만** 그만큼 빈 자리를 둔다: 내용은 독 유리 뒤로 비치고, 마지막 줄도 독 위로 올려 볼 수 있다.
+   · 맨 아래에 붙은 입력칸이 있는 앱(프로젝트 «태스크 추가» · 리브 입력창)은 앱 끝에 같은 빈 자리 — 그 칸은 늘 독 위에 선다.
+   · 웹 · 붙은 앱 · 그린 HTML 처럼 우리가 못 미는 액자는 독이 그 위에 뜬다(독을 경계선으로 옮기면 비킨다). */
+.pn-pane[data-zone="side"] > .pn-pane-body { padding: var(--pn-dock-t, 0px) var(--pn-dock-r, 0px) 0 var(--pn-dock-l, 0px); }
+.pn-pane[data-zone="side"] :is(.pn-fbody, .pn-knlist, .pn-tl .tl-scroll, .pn-prev, .pn-md, .pn-ed-pre, .pn-ed-pick2 .pn-flist, .pn-apps-grid, .fx-scroll)::after,
+.pn-pane[data-zone="side"] :is(.pn-tk, .pn-liv)::after { content: ""; display: block; flex: none; grid-column: 1 / -1; height: var(--pn-dock-b, 0px); }
+.pn-pane[data-zone="side"] .pn-ed-ta { padding-bottom: calc(12px + var(--pn-dock-b, 0px)); }
 .pn-pane[hidden] { display: none; }
 .pn-pane:focus { outline: none; }   /* 좁은 폭의 서랍으로 열릴 때 초점이 들어온다(tabindex -1) — 테두리는 안 그린다 */
 
