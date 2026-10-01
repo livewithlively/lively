@@ -206,7 +206,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     const pending = await convIndexPending(base).catch(() => null);
     //  밀린 색인이 있으면 이 요청에 얹어 정비를 한 번 깨운다(기다리지 않는다) — 배포 직후의 첫 검색이 곧 색인을 앞당긴다.
     if (pending) void sweepConvIndex().catch(() => { /* 다음 정비가 다시 집는다 */ });
-    res.json({ results: found.results, pending, capped: found.capped });
+    res.json({ results: found.results, pending, capped: found.capped, cap: found.cap });
   }));
 
   // 프로젝트 **세션이력** 목록(웹뷰 슬⑤b) — 이 프로젝트에 바인딩된 중앙 기록 세션(과거 포함).

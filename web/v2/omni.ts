@@ -42,7 +42,7 @@ import {
 import {
   type Term, parseTerms, matchAll, matchAllAcross, highlightWords, splitKnowTitle, cleanSnippet, identKind, pickTop,
 } from '../lib/omni-rank.js';   // #4530 순서·줄 다듬기 규칙(순수)
-import { isOmniChordLike, type ChordLike } from '../lib/omni-chord.js';   // #4530 여는 키 판정 한 벌(자판 위치 — 한글 입력기)
+import { isOmniChordLike, OMNI_MSG, OMNI_CLOSED_MSG, type ChordLike } from '../lib/omni-chord.js';   // #4530 여는 키 판정 · 신호 이름 한 벌
 import { projHitHref } from '../lib/proj-page.js';   // #3870 프로젝트 줄은 프로젝트 화면으로(사이드바 [→] 와 같은 문)
 
 type Kind = 'proj' | 'know' | 'src' | 'sess' | 'conv' | 'app';
@@ -723,7 +723,12 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
         if (pend === null) notes.push('대화 색인이 어디까지 됐는지 확인하지 못했습니다 — 최근 대화는 아직 찾지 못할 수 있습니다.');
         else if (pend) notes.push(`대화 색인을 만드는 중입니다 — 세션 ${pend}개의 대화는 아직 찾지 못할 수 있습니다.`);
         //  후보는 «낱말을 더 많이 맞춘 세션 → 최근» 순으로 400개까지 모은다(conv-index-store). 드문 낱말을 넣으면 그 세션이 앞에 남는다.
-        if (r && r.capped) notes.push('맞는 세션이 많아 낱말이 더 많이 맞은 세션 400개 안에서 골랐습니다 — 드문 낱말을 넣거나 기간을 좁히면 정확해집니다.');
+        if (r && r.capped) {
+          const cap = Number(r.cap) || 400;
+          notes.push(terms.length > 1
+            ? `맞는 세션이 많아 낱말이 더 많이 맞은 세션 ${cap}개 안에서 골랐습니다 — 드문 낱말을 넣거나 기간을 좁히면 정확해집니다.`
+            : `맞는 세션이 많아 최근 세션 ${cap}개 안에서 골랐습니다 — 낱말을 하나 더 넣거나 기간을 좁히면 정확해집니다.`);
+        }
         convNoteText = notes.join(' ');
         put('conv', ((r && r.results) || []).map((x: any, i: number) => convHit(x, i)), my);
       }, fail('conv'));
@@ -810,7 +815,8 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
   //  분류는 셸 목록 줄에만 쓰인다 — 도착하면 그 줄만 다시 만든다(검색 전체를 다시 돌리면 고른 줄·맨 위 셋이 풀렸다, 격리 리뷰).
   void loadCategories().then((fresh) => {
     if (!fresh || box !== mine || !input.value.trim()) return;
-    buckets.set('local', localHits()); rebuild(); paint(); refreshNote();
+    buckets.set('local', localHits());
+    if (settled) { rebuild(); paint(); refreshNote(); }   // 오는 중이면 자리 잡을 때 함께 그려진다(중간에 한 번 더 바뀌지 않게)
   });
   const prev = !seed && lastQuery && Date.now() - lastQuery.at < LAST_QUERY_MS ? lastQuery.q : '';
   input.value = seed || prev;
@@ -890,16 +896,13 @@ export function bindOmniKey(): void {
     const m: any = ev.data;
     if (!m || m.type !== OMNI_MSG) return;
     const seed = typeof m.seed === 'string' ? m.seed.slice(0, 200) : '';
-    if (box && !seed) { omniClose(); return; }
+    //  키 신호는 열고 닫기를 오간다(셸의 ⌘K 와 같다). «여는» 뜻만 있는 신호(open: true — 앱 화면 다리)는 열린 창을 닫지 않는다.
+    if (box && !seed) { if (m.open === true) omniOpen(); else omniClose(); return; }
     omniOpen(seed || undefined, (ev.source as Window) || null);
   });
 }
-/** 프레임 → 셸 '통합검색 열어라' 신호. 프레임 쪽(web/standalone/terminal.ts · web/v2/omni-frame.ts)도 이 문자열을 쓴다.
- *  모양: `{ type: OMNI_MSG, seed?: string }` — seed 는 검색칸에 미리 넣을 글(우클릭 «「…」 검색», #4530). */
-export const OMNI_MSG = 'lively-omni-open';
-/** 셸 → 프레임 '통합검색을 닫았다' 신호(#4530) — 열어 달라고 부탁한 프레임에게만 보낸다. 받은 프레임은 제 입력칸(터미널 등)으로
- *  초점을 되돌린다. 모양: `{ type: OMNI_CLOSED_MSG }`. */
-export const OMNI_CLOSED_MSG = 'lively-omni-closed';
+/** 프레임 ↔ 셸 신호 이름 — 한 벌은 web/lib/omni-chord.ts 에 있다(액자·앱 화면 다리가 omni.ts 를 들이지 않고도 같은 상수를 쓰게). */
+export { OMNI_MSG, OMNI_CLOSED_MSG };
 /** 이 문서에서 통합검색을 열 수 있나 — 셸(v2)만 연다. 액자(클래식 ?embed=1) 문서는 같은 모듈을 실어도 훅이 없다(#4530). */
 export function omniAvailable(): boolean { return !!hooks; }
 /** 액자 안 문서가 바깥 셸에게 «통합검색을 열어 달라» 고 부탁한다(#4530). 셸 밖(단독 탭)이면 false. */

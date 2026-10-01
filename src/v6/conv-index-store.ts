@@ -381,9 +381,9 @@ function termSql(params: unknown[], terms: QueryTerm[], col: string, withFull = 
   });
 }
 
-export async function searchConversations(input: ConvSearchInput): Promise<{ results: ConvSearchResult[]; capped: boolean }> {
+export async function searchConversations(input: ConvSearchInput): Promise<{ results: ConvSearchResult[]; capped: boolean; cap: number }> {
   const terms = parseQueryTerms(input.q);
-  if (!terms.length || !input.requester) return { results: [], capped: false };
+  if (!terms.length || !input.requester) return { results: [], capped: false, cap: input.sessionCap ?? CONV_SESSION_CAP };
   const params: unknown[] = [];
   const v = visibleSql(params, input);
   const ts = termSql(params, terms, "m.body");
@@ -397,9 +397,11 @@ export async function searchConversations(input: ConvSearchInput): Promise<{ res
       else aggCols.push(`bool_or(m.role = '${role}' AND ${x.full}) AS ${tag}f${i}`, `bool_or(m.role = '${role}' AND ${x.any}) AS ${tag}a${i}`);
     }
   });
-  //  세션마다 «말·고친 파일에 든 낱말 수» — 상한(400)보다 먼저 이걸로 줄 세운다. 최근순으로만 자르면 흔한 낱말 하나만 든 최근 세션
-  //   400개가 자리를 다 차지해, 흔한 낱말과 드문 낱말이 둘 다 든 옛 세션(사람이 찾는 바로 그 세션)이 판정 전에 잘렸다(격리 리뷰).
-  const cover = ts.map((x) => `(bool_or(${x.any}))::int`).join(" + ");
+  //  세션마다 «말·고친 파일·첫 지시(제목)에 든 낱말 수» — 상한(400)보다 먼저 이걸로 줄 세운다. 최근순으로만 자르면 흔한 낱말 하나만
+  //   든 최근 세션 400개가 자리를 다 차지해, 흔한 낱말과 드문 낱말이 둘 다 든 옛 세션(사람이 찾는 바로 그 세션)이 판정 전에 잘렸다
+  //   (격리 리뷰). 첫 지시(session.title)는 같은 매개변수로 함께 잰다. ⚠ 사람·에이전트가 **지은 이름**과 프로젝트 이름은 상한 뒤에
+  //   붙으므로 이 줄 세우기에 들지 않는다 — 그 이름의 낱말만으로 후보에 남기는 것은 셸 목록의 이름 찾기가 받는다.
+  const cover = ts.map((x) => `(bool_or(${x.any}) OR bool_or(${x.any.replace("m.body ILIKE", "coalesce(vis.title, '') ILIKE")}))::int`).join(" + ");
   let phrase = "false";
   if (terms.length > 1) { params.push(likePattern(terms.map((t) => t.t).join(" "))); phrase = `bool_or(m.role <> 'edit' AND m.body ILIKE $${params.length} ESCAPE '\\')`; }
   const sinceMs = input.since ? Date.parse(input.since) : NaN;
@@ -469,7 +471,7 @@ export async function searchConversations(input: ConvSearchInput): Promise<{ res
       best: b?.msg ?? null, top: x.top, fields: x.fields, edit: b?.edit ?? null,
     };
   });
-  return { results, capped: r.rows.length >= cap };
+  return { results, capped: r.rows.length >= cap, cap };
 }
 
 /**

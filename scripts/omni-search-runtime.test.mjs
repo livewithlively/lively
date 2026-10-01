@@ -51,7 +51,7 @@ const CSS = ["01-base.css", "43-v2-topbar-search.css", "49-v2-ctx.css"].map((f) 
 for (const f of CSS) if (!existsSync(f)) { console.error(`FAIL  스타일시트 없음: ${f}`); process.exit(1); }
 
 const bundle = buildSync({
-  stdin: { contents: "export { omniOpen, omniClose, omniIsOpen, setOmniHooks } from './web/v2/omni.ts';", resolveDir: SRC_ROOT, loader: "ts" },
+  stdin: { contents: "export { omniOpen, omniClose, omniIsOpen, setOmniHooks, bindOmniKey } from './web/v2/omni.ts';", resolveDir: SRC_ROOT, loader: "ts" },
   bundle: true, format: "iife", globalName: "OM", write: false, platform: "browser", target: "es2020", logLevel: "silent",
 }).outputFiles[0].text;
 
@@ -149,6 +149,7 @@ async function PAGE_MAIN() {
       lastSeen: putMs("슬랙 팀원 세션", TODAY - 1000), raw: { owner: "sangmin", owner_name: "상민" } },
   ] };
   OM.setOmniHooks({ data: () => DATA, open: (href, newTab, title) => OPENED.push({ href, newTab, title }) });
+  OM.bindOmniKey();   // 프레임·앱 화면 신호(message)를 받는 자리 — G20
 
   const $ = (s) => document.querySelector(s);
   const isSettled = () => !!$(".v2-omni") && !$(".v2-omni-bar.on");
@@ -304,6 +305,26 @@ async function PAGE_MAIN() {
     PENDING = null; await search("슬랙 다시"); R.unknownNote = $(".v2-omni-note")?.textContent || ""; PENDING = 0;
     CONV_FAIL = "500"; await search("슬랙 또"); R.err500Note = $(".v2-omni-note")?.textContent || ""; CONV_FAIL = false;
 
+    // ── G19 최근 연 것은 워크스페이스별 열쇠(wsKey) — 다른 워크스페이스에선 «@슬러그» 열쇠에만 ──
+    localStorage.setItem("lively.workspace", "ws2");
+    const baseBefore = localStorage.getItem("lively.omni.opened") || "";
+    await search("슬랙");
+    rowEl("회의록 정리")?.click();
+    R.wsOpened = { ws2: localStorage.getItem("lively.omni.opened@ws2") || "", baseSame: (localStorage.getItem("lively.omni.opened") || "") === baseBefore };
+    localStorage.removeItem("lively.workspace");
+
+    // ── G20 «여는» 신호(open:true — 앱 화면 다리)는 열린 창을 닫지 않고 · 키 신호는 열고 닫기를 오간다 ──
+    OM.omniOpen();
+    await sleep(30);
+    //  file:// 로 뜬 시험 페이지는 실제 postMessage 의 출처가 셸 출처와 다르게 찍힌다 — 셸과 같은 출처의 메시지 이벤트를 직접 보낸다.
+    const send = (data) => window.dispatchEvent(new MessageEvent("message", { data, origin: location.origin, source: window }));
+    send({ type: "lively-omni-open", open: true });
+    await sleep(60);
+    R.openSignalKeeps = OM.omniIsOpen();
+    send({ type: "lively-omni-open" });
+    await sleep(60);
+    R.keySignalCloses = !OM.omniIsOpen();
+
     // ── G18 닫으면 끊는다 ──
     CONV_HANG = true;
     await type("슬랙 끊기");
@@ -452,6 +473,9 @@ check(/대화 결과를 가져오지 못했습니다/.test(R.failNote || "") && 
 check(!reqOf(R.longReqs, "/api/ui/v6/session-search").length && /검색어가 길어/.test(R.longNote || ""), "G17 200자 넘는 검색어는 대화 채널을 부르지 않고 이유를 말한다", JSON.stringify({ reqs: R.longReqs, note: R.longNote }));
 check(/확인하지 못했습니다/.test(R.unknownNote || "") && !/색인을 만드는 중/.test(R.unknownNote || ""), "G17 밀린 수를 모르면 그렇다고 말한다", JSON.stringify(R.unknownNote));
 check(/서버에 오류가 났습니다/.test(R.err500Note || "") && !/internal_error/.test(R.err500Note || ""), "G17 500 internal_error 는 읽을 수 있는 말로", JSON.stringify(R.err500Note));
+// G19·G20
+check(/k-minutes/.test(R.wsOpened?.ws2 || "") && R.wsOpened?.baseSame === true, "G19 최근 연 것은 워크스페이스별 열쇠에 — 기본 열쇠는 그대로", JSON.stringify(R.wsOpened));
+check(R.openSignalKeeps === true && R.keySignalCloses === true, "G20 «여는» 신호는 열린 창을 닫지 않고 · 키 신호는 닫는다", JSON.stringify({ keep: R.openSignalKeeps, close: R.keySignalCloses }));
 // G18
 check(R.hangStarted >= 1 && R.hangAborted === true, "G18 창을 닫으면 진행 중인 요청을 끊는다", JSON.stringify({ s: R.hangStarted, a: R.hangAborted }));
 // W
