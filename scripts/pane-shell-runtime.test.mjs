@@ -19,7 +19,7 @@
 //  M1 옛 기본(닫힌 아래 칸에 타임라인 하나)을 걷는다 — 열린 프로젝트(p8)는 그대로 · 곁칸은 손대지 않는다
 //  M2 이 세션이 «열림» 을 기억해도 걷은 뒤엔 아무것도 안 올라온다
 //  M3 한 번 걷으면 다시 열어도 저장소를 다시 쓰지 않는다(표식) · 표식 뒤 사람이 둔 타임라인은 그대로
-//  R1 켜진 자료 탭을 다시 누르면 맨 위 폴더 · ⌘[(뒤로) 로 하위 폴더에 돌아간다
+//  R1 켜진 자료 탭을 다시 누르면 맨 위 폴더 · «뒤로»(마우스 옆 단추) 로 하위 폴더에 돌아간다
 //  R2 이미 맨 위면 목록만 맨 위로(폴더 그대로)
 //  R3 다른 탭에서 자료 탭으로 돌아오면 보던 폴더 그대로
 //  R4 끌고 놓은 뒤의 click 은 «다시 누르기» 가 아니다
@@ -103,14 +103,15 @@ async function PAGE_MAIN() {
   const clickRow = async (nm) => { const b = $$(".dash-pop .pn-pop-row").find((x) => x.querySelector("b")?.textContent.trim() === nm); if (!b) return false; b.click(); await sleep(120); return true; };
   const crumb = (root) => (root ? $$(".pn-fcrumb", root).map((b) => b.textContent).join("/") : null);
   const fpOrder = (root) => (root ? $$("[data-fp]", root).map((n) => n.dataset.fp) : []);
-  const key = (target, k, code, mods = {}) => target.dispatchEvent(new KeyboardEvent("keydown", { key: k, code, bubbles: true, cancelable: true, ...mods }));
   const filesRoot = () => $$('#app .pn-pane[data-zone="side"] .pn-files').find((n) => !n.hidden) || null;
+  //  ⚠ 폴더 열기 · 뒤로는 **플랫폼과 무관한 손**으로 — 자료 칸은 모듈을 읽을 때 맥/윈도 단축키 표를 고른다(finder-keys isMacPlatform).
+  //   ⌘↓ · ⌘[ 로 짜면 맥에선 초록, 리눅스 CI 에선 폴더에 못 들어가 빨강이었다(PR #1216 첫 CI).
   const enterDocs = async (root) => {
-    await waitFor(() => fpOrder(root).includes("docs"), 4000); root.focus();
-    $$("[data-fp]", root).find((n) => n.dataset.fp === "docs").dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
-    key(root, "ArrowDown", "ArrowDown", { metaKey: true });                      // ⌘↓ = 열기(파인더)
+    await waitFor(() => fpOrder(root).includes("docs"), 4000);
+    $$("[data-fp]", root).find((n) => n.dataset.fp === "docs").dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, detail: 2 }));   // 두 번 누르기 = 열기
     await waitFor(() => fpOrder(root).includes("docs/inner.txt"));
   };
+  const goBack = (root) => root.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 3 }));   // 마우스 옆 단추(뒤로)
   const clk = async (el) => { el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 })); await sleep(150); };
   const fresh = () => { localStorage.removeItem(LAYOUT); localStorage.removeItem(VIEW); seedFs(); };
 
@@ -164,7 +165,7 @@ async function PAGE_MAIN() {
     let root = filesRoot(); await waitFor(() => fpOrder(root).length > 0);
     await enterDocs(root); r.in = crumb(root);
     await clk(tabBtn("side", "자료")); r.R1 = crumb(root);
-    key(root, "[", "BracketLeft", { metaKey: true }); await waitFor(() => fpOrder(root).includes("docs/inner.txt")); r.R1back = crumb(root);
+    goBack(root); await waitFor(() => fpOrder(root).includes("docs/inner.txt")); r.R1back = crumb(root);
     await clk(tabBtn("side", "자료")); await waitFor(() => !fpOrder(root).includes("docs/inner.txt"));
     const body = $(".pn-fbody", root); const pad = document.createElement("div"); pad.style.cssText = "height:3000px;flex:none"; body.append(pad); body.scrollTop = 300;
     r.scrolled = body.scrollTop; await clk(tabBtn("side", "자료")); r.R2 = { top: body.scrollTop, crumb: crumb(root) };
@@ -237,7 +238,7 @@ check(down(a.remembered) && a.sendRow && !!a.afterSend && up(a.afterSend.b) && J
 check(!!m.store && J(m.store.last) === "[]" && J(m.store.p7) === "[]" && J(m.store.p8) === J(["timeline"]) && m.store.seeded?.bottom === 1 && J(m.store.side) === J(["files", "knowledge", "apps"]), "M1 옛 기본을 걷는다 — 열린 프로젝트(p8)는 그대로 · 곁칸은 손대지 않는다", m.store);
 check(down(m.b), "M2 이 세션이 «열림» 을 기억해도 걷은 뒤엔 아무것도 안 올라온다", m.b);
 check(m.same === true && J(m.afterMarker) === J(["timeline"]) && !!m.p8 && up(m.p8.b) && J(m.p8.tabs) === J(["타임라인"]), "M3 한 번 걷으면 저장소를 다시 쓰지 않는다 · 표식 뒤 둔 타임라인 · 열린 p8 은 그대로", { same: m.same, afterMarker: m.afterMarker, p8: m.p8 });
-check(r.in === "자료/docs" && r.R1 === "자료" && r.R1back === "자료/docs", "R1 켜진 자료 탭을 다시 누르면 맨 위 폴더 · ⌘[ 로 하위 폴더에 돌아간다", { in: r.in, R1: r.R1, back: r.R1back });
+check(r.in === "자료/docs" && r.R1 === "자료" && r.R1back === "자료/docs", "R1 켜진 자료 탭을 다시 누르면 맨 위 폴더 · «뒤로» 로 하위 폴더에 돌아간다", { in: r.in, R1: r.R1, back: r.R1back });
 check(r.scrolled > 0 && !!r.R2 && r.R2.top === 0 && r.R2.crumb === "자료", "R2 이미 맨 위면 목록만 맨 위로(폴더 그대로)", { scrolled: r.scrolled, R2: r.R2 });
 check(!!r.R3 && r.R3.act === "자료" && r.R3.crumb === "자료/docs", "R3 다른 탭에서 자료 탭으로 돌아오면 보던 폴더 그대로", r.R3);
 check(r.in4 === "자료/docs" && r.R4 === "자료/docs", "R4 끌고 놓은 뒤의 click 은 «다시 누르기» 가 아니다", { in: r.in4, R4: r.R4 });
