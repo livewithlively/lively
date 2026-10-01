@@ -6,12 +6,15 @@
 //  «같은 창을 두 번 담지 않는다(CAS)» · «주인과 초대받은 사람만 찾는다» · «지운 대화는 색인도 사라진다». 목 풀로는
 //  조건 하나를 지워도 초록이다. 그래서 **부작용을 SELECT 로 되읽어** 판정한다(session_msg 행 · 커서 · 검색 결과 id).
 //
-//  사양·엣지 표: 스크래치패드 spec.md E — D1~D15.
+//  사양·엣지 표: 스크래치패드 spec.md E — D1~D15 · 격리 리뷰 뒤 D16~D20(가려진 프로젝트의 초대 세션 · 다른 워크스페이스 ·
+//   휴지통 · NUL 글자와 깨진 시각 · 뽑는 규칙의 판) · D13c(한 번도 색인 안 된 작은 세션도 «색인 중» 으로 센다).
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const S = await import(`${DIST}/v6/session-log-store.js`);
 const C = await import(`${DIST}/v6/conv-index-store.js`);
 const { PRIMARY_TENANT_ID } = await import(`${DIST}/org/tenancy/registry.js`);
+const { PROJECT_SHARED_BASE, PROJECT_SUBDIR } = await import(`${DIST}/project/project-fs.js`);
+const { invalidateVisibilityCache } = await import(`${DIST}/v6/visibility.js`);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -21,8 +24,10 @@ const chk = (n, c, why) => (c ? ok(n) : bad(n, why || ""));
 const A = "__convpg_a__", B = "__convpg_b__";
 const SID = (n) => `convpg-${n}`;
 const BOX = (n) => `box-__convpg-${n}`;
-const ALL = Array.from({ length: 20 }, (_, i) => SID(i));
-const ALL_BOX = Array.from({ length: 20 }, (_, i) => BOX(i));
+const ALL = Array.from({ length: 32 }, (_, i) => SID(i));
+const ALL_BOX = Array.from({ length: 32 }, (_, i) => BOX(i));
+const W2 = "00000000-0000-4000-8000-00000000c0a2", W3 = "00000000-0000-4000-8000-00000000c0a3";   // 다른 워크스페이스 · 보관된 워크스페이스
+const LIST_NAME = "__convpg_hidden_list__", PROJ_NAMES = ["__convpg_hidden_proj__", "__convpg_open_proj__"];
 
 const J = (o) => JSON.stringify(o) + "\n";
 const NOW = Date.now();
@@ -47,11 +52,15 @@ const search = (requester, q, o = {}) => C.searchConversations({
 const ids = (r) => r.results.map((x) => x.session_id);
 
 async function cleanup() {
-  for (const t of ["session_msg", "session_msg_cursor", "session_log_chunk", "session_log", "session", "session_purged"]) {
+  for (const t of ["session_msg", "session_msg_cursor", "session_log_chunk", "session_log", "session", "session_purged", "gw_session_map"]) {
     await itemsPool.query(`DELETE FROM ${t} WHERE session_id = ANY($1::text[])`, [ALL]);
   }
+  await itemsPool.query(`DELETE FROM org_session_trash WHERE session_id = ANY($1::text[]) OR session_id = ANY($2::text[])`, [ALL, ALL_BOX]);
   await itemsPool.query(`DELETE FROM org_session_conv WHERE box_id = ANY($1::text[])`, [ALL_BOX]);
   await itemsPool.query(`DELETE FROM org_session_state WHERE id = ANY($1::text[])`, [ALL_BOX]);
+  await itemsPool.query(`DELETE FROM gw_workspace WHERE id = ANY($1::uuid[])`, [[W2, W3]]);
+  await itemsPool.query(`DELETE FROM project WHERE name = ANY($1::text[])`, [PROJ_NAMES]);
+  await itemsPool.query(`DELETE FROM project_list WHERE name = $1`, [LIST_NAME]);
 }
 
 try {
@@ -97,7 +106,7 @@ try {
   {
     const giant = AI("거대한 " + "가".repeat(40_000));   // UTF-8 약 120KB — 창(64KB)보다 길다
     await put(SID(4), A, U("앞 말 검색") + giant + U("뒤 말 검색"));
-    await C.indexConvSession("", SID(4), 64 * 1024 * 1024, 64 * 1024);
+    await C.indexConvSession("", SID(4), { window: 64 * 1024 });
     const m = await msgs(SID(4));
     chk("D4 긴 줄 뒤의 말이 담긴다(긴 줄 자체는 건너뛴다 — 창보다 긴 줄)",
       m.map((x) => x.body).join("|") === "앞 말 검색|뒤 말 검색", JSON.stringify(m.map((x) => x.body.slice(0, 12))));
@@ -177,6 +186,12 @@ try {
     const p3 = await C.convIndexPending({ requester: A, attach: true, workspaceId: PRIMARY_TENANT_ID });
     const gap = (await wm(SID(11))) - Number(await cursorOf(SID(11)));
     chk("D13 쓰는 중인 작은 꼬리는 세지 않는다", gap > 0 && p3 === 0, JSON.stringify({ gap, p3 }));
+    //  D13c — 한 번도 색인하지 않은 세션은 작아도 센다(그 세션의 말은 지금 하나도 안 찾아진다 — 리뷰 지적).
+    await put(SID(20), A, U("한 번도 색인 안 된 작은 대화"));
+    const p4 = await C.convIndexPending({ requester: A, attach: true, workspaceId: PRIMARY_TENANT_ID });
+    await C.indexConvSession("", SID(20));
+    const p5 = await C.convIndexPending({ requester: A, attach: true, workspaceId: PRIMARY_TENANT_ID });
+    chk("D13c 한 번도 색인 안 된 작은 세션도 «색인 중» 으로 센다 · 색인하면 0", p4 === 1 && p5 === 0, JSON.stringify({ p4, p5 }));
   }
 
   // ── D14 커서가 기록보다 앞서면 처음부터 다시(옛 행 없음) ──
@@ -201,6 +216,90 @@ try {
     chk("D15 최신순은 맞은 말이 늦은 세션이 먼저", rec[0] === SID(14) && rec[1] === SID(13), JSON.stringify(rec));
     const hit = (await search(A, "코끼리 달리기")).results[0];
     chk("D15 줄에 이름·대표 말·시각이 실린다", !!hit.name && hit.best.role === "user" && hit.best.text.includes("코끼리") && typeof hit.at === "string", JSON.stringify(hit));
+    chk("D15 화면이 안 쓰는 메타(프로젝트·주인·점수)는 싣지 않는다",
+      !["project_id", "project_name", "owner", "owner_name", "harness", "score"].some((k) => k in hit), JSON.stringify(Object.keys(hit)));
+  }
+
+  // ── D16 초대받았어도 그 프로젝트가 나에게 가려져 있으면 못 찾는다(#1291 — 목록·입장과 같은 sessionVisible) ──
+  {
+    const L = (await itemsPool.query(`INSERT INTO project_list(name, visibility) VALUES($1, 'members') RETURNING id`, [LIST_NAME])).rows[0].id;
+    const P = (await itemsPool.query(`INSERT INTO project(level, name, status, created_by, list_id) VALUES('project', $1, 'active', $2, $3) RETURNING id`, [PROJ_NAMES[0], B, L])).rows[0].id;
+    const P2 = (await itemsPool.query(`INSERT INTO project(level, name, status, created_by) VALUES('project', $1, 'active', $2) RETURNING id`, [PROJ_NAMES[1], B])).rows[0].id;
+    const dirOf = (pid) => `${PROJECT_SHARED_BASE}/${PROJECT_SUBDIR}/${pid}`;
+    await put(SID(18), B, U("가려진 프로젝트 안의 기린 이야기"));
+    await put(SID(19), B, U("열린 프로젝트 안의 기린 이야기"));
+    await itemsPool.query(`INSERT INTO org_session_state(id, owner, invites, project_id, dir) VALUES($1, $2, $3::jsonb, $4, $5)`, [BOX(18), B, JSON.stringify([A]), P, dirOf(P)]);
+    await itemsPool.query(`INSERT INTO org_session_conv(box_id, conv_uuid, owner) VALUES($1, $2, $3)`, [BOX(18), SID(18), B]);
+    await itemsPool.query(`INSERT INTO org_session_state(id, owner, invites, project_id, dir) VALUES($1, $2, $3::jsonb, $4, $5)`, [BOX(19), B, JSON.stringify([A]), P2, dirOf(P2)]);
+    await itemsPool.query(`INSERT INTO org_session_conv(box_id, conv_uuid, owner) VALUES($1, $2, $3)`, [BOX(19), SID(19), B]);
+    for (const n of [18, 19]) await C.indexConvSession("", SID(n));
+    //  가려진 프로젝트 목록은 15초 보관된다(visibility.ts) — 앞 장면이 이미 A 의 목록을 읽어 두었으니 비운다.
+    invalidateVisibilityCache();
+    const a = ids(await search(A, "기린"));
+    chk("D16 초대받았어도 가려진 프로젝트의 세션은 대화로 못 찾는다", !a.includes(SID(18)), JSON.stringify(a));
+    chk("D16 대조: 열린 프로젝트의 초대 세션은 찾는다(프로젝트 세션을 통째로 닫은 게 아니다)", a.includes(SID(19)), JSON.stringify(a));
+    const b = ids(await search(B, "기린"));
+    chk("D16 주인은 자기 세션을 늘 찾는다(가려짐 판정은 초대받은 사람에게만)", b.includes(SID(18)) && b.includes(SID(19)), JSON.stringify(b));
+  }
+
+  // ── D17 워크스페이스 격리 — 세션 목록과 같은 술어(sessionWorkspaceWhere) ──
+  {
+    await itemsPool.query(`INSERT INTO gw_workspace(id, slug, name, owner_member, state) VALUES($1, 'convpg-w2', 'w2', $3, 'active'), ($2, 'convpg-w3', 'w3', $3, 'archived')`, [W2, W3, A]);
+    await put(SID(21), A, U("다른 워크스페이스의 하마 이야기"));
+    await put(SID(22), A, U("이 워크스페이스로 적힌 하마 이야기"));
+    await put(SID(23), A, U("보관된 워크스페이스로 적힌 하마 이야기"));
+    await itemsPool.query(`INSERT INTO gw_session_map(session_id, workspace_id) VALUES($1, $2), ($3, $4), ($5, $6)`, [SID(21), W2, SID(22), PRIMARY_TENANT_ID, SID(23), W3]);
+    for (const n of [21, 22, 23]) await C.indexConvSession("", SID(n));
+    const a = ids(await search(A, "하마"));
+    chk("D17 다른 워크스페이스에 적힌 세션은 못 찾는다", !a.includes(SID(21)), JSON.stringify(a));
+    chk("D17 이 워크스페이스에 적힌 세션은 찾는다", a.includes(SID(22)), JSON.stringify(a));
+    chk("D17 보관된 워크스페이스에 적힌 것은 «모름» 이라 기본 귀속(이 워크스페이스)으로 찾는다", a.includes(SID(23)), JSON.stringify(a));
+  }
+
+  // ── D18 주인의 휴지통 — 대화 uuid 로 버린 것도, 그 대화를 돌린 박스 id 로 버린 것도 빠진다 ──
+  {
+    await put(SID(24), A, U("휴지통에 넣은 낙타 이야기"));
+    await put(SID(25), A, U("박스째 버린 낙타 이야기"));
+    await put(SID(26), A, U("남겨 둔 낙타 이야기"));
+    await itemsPool.query(`INSERT INTO org_session_conv(box_id, conv_uuid, owner) VALUES($1, $2, $3)`, [BOX(25), SID(25), A]);
+    await itemsPool.query(`INSERT INTO org_session_trash(session_id, owner) VALUES($1, $3), ($2, $3)`, [SID(24), BOX(25), A]);
+    for (const n of [24, 25, 26]) await C.indexConvSession("", SID(n));
+    const a = ids(await search(A, "낙타"));
+    chk("D18 휴지통의 세션(대화 uuid 표식)은 못 찾는다", !a.includes(SID(24)), JSON.stringify(a));
+    chk("D18 박스 id 로 버린 세션의 대화도 못 찾는다", !a.includes(SID(25)), JSON.stringify(a));
+    chk("D18 대조: 버리지 않은 세션은 찾는다", a.includes(SID(26)), JSON.stringify(a));
+  }
+
+  // ── D19 DB 가 못 받는 글자(NUL)·깨진 시각이 색인을 멈추지 않는다(파서 상태에 실리는 경우 포함 — codex) ──
+  {
+    //  첫 지시에 NUL — 종전엔 이 append 가 세션 제목 INSERT 에서 터져 대화가 아예 안 올라갔다(firstUserPromptTitle 이 걷는다).
+    await put(SID(27), A, U("널\u0000글자가 낀 펭귄 말", "시각 아님"));
+    const title = (await itemsPool.query(`SELECT title FROM session WHERE session_id=$1`, [SID(27)])).rows[0]?.title;
+    chk("D19 첫 지시에 NUL 이 있어도 기록이 올라가고 제목엔 NUL 이 없다", title === "널글자가 낀 펭귄 말", JSON.stringify(title));
+    await C.indexConvSession("", SID(27));
+    const m = await msgs(SID(27));
+    const tsRow = (await itemsPool.query(`SELECT ts FROM session_msg WHERE session_id=$1`, [SID(27)])).rows[0];
+    const ts = tsRow ? tsRow.ts : "행 없음";   // ⚠ `?? ` 로 쓰면 NULL 도 «없음» 으로 바뀐다 — 재려는 것이 바로 NULL 이다
+    chk("D19 NUL 은 걷고 깨진 시각은 NULL — 커서가 끝까지 간다",
+      m.length === 1 && m[0].body === "널글자가 낀 펭귄 말" && ts === null && Number(await cursorOf(SID(27))) === await wm(SID(27)), JSON.stringify({ m, ts }));
+    const codexLine = JSON.stringify({ timestamp: ago(0), type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "코덱스 \u0000 펭귄 지시" }] } }) + "\n";
+    const r = await S.appendSessionLog({ nodeId: "", sessionId: SID(28), atOffset: 0, data: Buffer.from(codexLine, "utf8"), harness: "codex", owner: A });
+    if (!r.ok) throw new Error("codex append 실패");
+    await C.indexConvSession("", SID(28));
+    const mc = await msgs(SID(28));
+    chk("D19 파서 상태에 NUL 이 실려도(codex 의 중복 가리기) 커밋된다", mc.length === 1 && mc[0].body === "코덱스  펭귄 지시" && Number(await cursorOf(SID(28))) === await wm(SID(28)), JSON.stringify(mc));
+  }
+
+  // ── D20 뽑는 규칙의 판이 다르면 그 세션을 처음부터 다시 색인한다(옛 규칙의 행이 남지 않는다) ──
+  {
+    await itemsPool.query(`INSERT INTO session_msg(node_id, session_id, at_offset, idx, role, ts, body) VALUES('', $1, 999999, 0, 'user', now(), '옛 판의 유령')`, [SID(1)]);
+    await itemsPool.query(`UPDATE session_msg_cursor SET ver = 0 WHERE node_id='' AND session_id=$1`, [SID(1)]);
+    const p = await C.convIndexPending({ requester: A, attach: true, workspaceId: PRIMARY_TENANT_ID });
+    await C.indexConvSession("", SID(1));
+    const m = (await msgs(SID(1))).map((x) => x.body);
+    const ver = (await itemsPool.query(`SELECT ver FROM session_msg_cursor WHERE session_id=$1`, [SID(1)])).rows[0]?.ver;
+    chk("D20 판이 다른 세션을 «색인 중» 으로 세고, 다시 색인하면 옛 행이 없다", p >= 1 && m.length === 2 && !m.includes("옛 판의 유령") && ver === C.CONV_INDEX_VER,
+      JSON.stringify({ p, m, ver }));
   }
 
   // ── 주기 정비 — 밀린 세션을 집어 색인한다 ──

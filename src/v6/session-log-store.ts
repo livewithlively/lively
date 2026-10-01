@@ -97,7 +97,9 @@ export function firstUserPromptTitle(jsonl: string): string | null {
     let text = "";
     if (typeof c === "string") text = c;
     else if (Array.isArray(c)) text = c.filter((x): x is { type: string; text?: string } => !!x && (x as { type?: string }).type === "text").map((x) => x.text || "").join(" ");
-    text = (text || "").replace(/\s+/g, " ").trim();
+    //  NUL(\u0000)은 걷는다 — Postgres TEXT 가 못 받아 제목 INSERT 가 터지고, 그 append 가 통째로 실패해 **그 대화가 중앙에
+    //   아예 안 올라간다**(#4517 DB 시험 D19 가 잡았다). 붙여 넣은 이진 글에 섞여 들어오는 일이 있다.
+    text = (text || "").replace(/\u0000/g, "").replace(/\s+/g, " ").trim();
     if (!text || TITLE_INJECTED.test(text)) continue;
     return text.length > 120 ? text.slice(0, 120) + "…" : text;
   }
@@ -342,20 +344,28 @@ async function backfillSessionRunKind(owner: string): Promise<void> {
   await mark(human, "human");
 }
 
+/**
+ * 세션 기록 행(별칭 s 의 session_id)이 **이 워크스페이스 것인가** — 목록(listSessionsForOwner)과 대화 검색(conv-index-store)이
+ *  **같은 한 벌**을 쓴다(#4517 — 사본이 갈리면 한쪽만 샌다). params 에 두 값을 push 하고 절 문자열을 돌려준다.
+ *  규칙은 위 docstring 의 ①②(#3579): LEFT JOIN gw_workspace(행이 없으면 «모름»이라 매핑을 그대로 · 보관된 것만 뺀다) ·
+ *  맵 부재 귀속은 상수가 아니라 defaultWorkspaceId(배포 모드가 정한다).
+ */
+export function sessionWorkspaceWhere(params: unknown[], workspaceId: string, sessionIdExpr = "s.session_id"): string {
+  params.push(workspaceId, defaultWorkspaceId(workspaceId));   // 현재 워크스페이스 · 맵 부재 시 귀속(배포 모드가 정한다)
+  const cur = `$${params.length - 1}`, dflt = `$${params.length}`;
+  return `COALESCE(
+        (SELECT m.workspace_id::text FROM gw_session_map m
+           LEFT JOIN gw_workspace w ON w.id = m.workspace_id
+          WHERE m.session_id = ${sessionIdExpr} AND (w.id IS NULL OR w.state = 'active')),
+        ${dflt}) = ${cur}`;
+}
+
 export async function listSessionsForOwner(owner: string, limit = 200, workspaceId?: string | null): Promise<SessionListRow[]> {
   if (!owner) return [];
   //  판정은 목록을 막지 않는다 — 실패하면 그 행은 다음에 다시 본다(NULL 로 남는다).
   await backfillSessionRunKind(owner).catch((e) => { console.warn("[session-log] 자동 실행 세션 판정 실패:", (e as Error)?.message ?? e); });
   const params: unknown[] = [owner, clampSessionListLimit(limit)];
-  let wsClause = "";
-  if (workspaceId) {
-    params.push(workspaceId, defaultWorkspaceId(workspaceId));   // $3 = 현재 워크스페이스, $4 = 맵 부재 시 귀속(배포 모드가 정한다)
-    wsClause = `AND COALESCE(
-        (SELECT m.workspace_id::text FROM gw_session_map m
-           LEFT JOIN gw_workspace w ON w.id = m.workspace_id
-          WHERE m.session_id = s.session_id AND (w.id IS NULL OR w.state = 'active')),
-        $4) = $3`;
-  }
+  const wsClause = workspaceId ? "AND " + sessionWorkspaceWhere(params, workspaceId) : "";
   const r = await itemsPool.query(
     `SELECT ${SESSION_LIST_COLS}, proj.project_id, proj.project_name
        FROM session s
@@ -499,8 +509,8 @@ export async function reapSessionLogs(retentionDays: number): Promise<{ logs: nu
         WHERE x.node_id = r.node_id AND x.session_id = r.session_id
        RETURNING 1
      )
-     SELECT (SELECT count(*) FROM reaped)::int AS logs, (SELECT count(*) FROM delchunks)::int AS chunks,
-            (SELECT count(*) FROM delmsgs)::int AS msgs, (SELECT count(*) FROM delcursor)::int AS cursors`,
+     -- delmsgs·delcursor 는 고르지 않아도 끝까지 돈다(WITH 안의 DELETE 는 늘 실행된다 — Postgres 규약).
+     SELECT (SELECT count(*) FROM reaped)::int AS logs, (SELECT count(*) FROM delchunks)::int AS chunks`,
     [retentionDays]);
   return { logs: Number(r.rows[0]?.logs ?? 0), chunks: Number(r.rows[0]?.chunks ?? 0) };
 }

@@ -259,7 +259,10 @@ export function omniOpen(seed?: string): void {
   const list = el('div', { class: 'v2-omni-list', id: 'v2-omni-list', role: 'listbox' });
   //  종류 칩 — 각 종류에 버튼 하나. 눌리면 위 nextKindSel 규칙대로 상태가 바뀌고 **즉시 다시 찾는다**
   //  (꺼진 종류는 아예 부르지 않으므로 오히려 빨라진다).
-  const chips = el('div', { class: 'v2-omni-filters', role: 'group', 'aria-label': '종류 필터' });
+  //  칩 줄 = 종류(무엇을) 묶음 + 정렬·기간(어떤 순서로 · 언제) 묶음. 묶음마다 이름을 따로 단다 — 한 묶음 이름(«종류 필터»)
+  //   아래에 정렬·기간 단추가 들어가 있으면 화면 낭독기가 그 단추를 «종류» 로 읽는다(#4517 리뷰).
+  const chips = el('span', { class: 'v2-omni-kinds', role: 'group', 'aria-label': '종류 필터' });
+  const filters = el('div', { class: 'v2-omni-filters' }, chips);
   function chip(k: Kind): HTMLElement {
     const picked = kindSel.has(k);     // 켜진 모습 = **사람이 누른 것**뿐이다(기본 검색에선 전부 꺼진 모습)
     //  제목(툴팁)이 **누르면 무슨 일이 일어나는지**를 말한다.
@@ -274,22 +277,24 @@ export function omniOpen(seed?: string): void {
   }
   // ── 정렬 · 기간 (#4517) — 칩 줄 오른쪽 끝. 슬랙 검색의 «정렬» 과 «날짜» 자리다. ──
   //  정렬은 두 값뿐이라 드롭다운이 아니라 **나란한 두 단추**다 — 지금 어느 순서인지가 늘 보이고 한 번에 바뀐다.
-  const sortSeg = el('div', { class: 'v2-omni-seg', role: 'group', 'aria-label': '정렬' });
+  //  단추는 한 번만 만들고 켜짐 표시만 바꾼다 — 다시 만들면 키보드 초점이 날아간다(#4517 리뷰).
+  const sortBtns = (['rel', 'recent'] as OmniSort[]).map((m) => el('button', {
+    type: 'button', class: 'v2-omni-segb', 'data-sort': m,
+    title: m === 'rel' ? '가장 잘 맞는 것부터 보여 줍니다' : '최근 것부터 보여 줍니다 — 맨 위에 가장 맞는 결과 3개를 먼저 둡니다',
+    onclick: () => { if (sortMode === m) return; sortMode = m; saveSort(m); paintSort(); run(); },
+  }, el('span', { text: SORT_LABEL[m] })) as HTMLButtonElement);
+  const sortSeg = el('div', { class: 'v2-omni-seg' }, ...sortBtns);
   function paintSort(): void {
-    sortSeg.replaceChildren(...(['rel', 'recent'] as OmniSort[]).map((m) => el('button', {
-      type: 'button', class: 'v2-omni-segb' + (sortMode === m ? ' on' : ''), 'aria-pressed': String(sortMode === m),
-      title: m === 'rel' ? '가장 잘 맞는 것부터 보여 줍니다' : '최근 것부터 보여 줍니다 — 맨 위에 가장 맞는 결과 3개를 먼저 둡니다',
-      onclick: () => { if (sortMode === m) return; sortMode = m; saveSort(m); paintSort(); run(); },
-    }, el('span', { text: SORT_LABEL[m] }))));
+    for (const b of sortBtns) { const on = b.dataset.sort === sortMode; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
   }
+  //  기간은 메뉴를 여는 단추다 — 눌림(aria-pressed)이 아니라 펼침(aria-expanded)을 말한다. 고른 기간은 단추 글자가 말한다.
   const periodBtn = el('button', {
-    type: 'button', class: 'v2-omni-chip v2-omni-period', 'aria-haspopup': 'menu',
+    type: 'button', class: 'v2-omni-chip v2-omni-period', 'aria-haspopup': 'menu', 'aria-expanded': 'false',
     onclick: () => openPeriodMenu(),
   }) as HTMLButtonElement;
   function paintPeriod(): void {
     const on = period !== 'all';
     periodBtn.classList.toggle('on', on);
-    periodBtn.setAttribute('aria-pressed', String(on));
     periodBtn.title = on ? `${periodLabel(period)} 안에서만 찾습니다 — 눌러서 바꿉니다` : '기간으로 좁힙니다';
     periodBtn.replaceChildren(
       sv('svg', { viewBox: '0 0 24 24', class: 'v2-omni-chip-ic', 'aria-hidden': 'true' }, sv('path', { d: ICONS.clock })),
@@ -298,19 +303,20 @@ export function omniOpen(seed?: string): void {
   }
   function openPeriodMenu(): void {
     const r = periodBtn.getBoundingClientRect();
+    periodBtn.setAttribute('aria-expanded', 'true');
     showCtxMenu(r.left, r.bottom + 4, PERIODS.map((p) => ({
       label: p.label, checked: period === p.key,
       run: () => { if (period === p.key) return; period = p.key; paintPeriod(); run(); },
-    })), { minWidth: 150, onClose: () => { if (box) input.focus(); } });
+    })), { minWidth: 150, onClose: () => { periodBtn.setAttribute('aria-expanded', 'false'); if (box) input.focus(); } });
   }
-  const tools = el('span', { class: 'v2-omni-tools' }, sortSeg, periodBtn);
+  const tools = el('span', { class: 'v2-omni-tools', role: 'group', 'aria-label': '정렬과 기간' }, sortSeg, periodBtn);
+  filters.append(tools);
   function paintChips(): void {
     //  자료는 **오른쪽에 따로** 세운다(구분선) — 누르는 규칙은 같지만, 기본 검색에 안 들어가는 종류임이 보이게.
     chips.replaceChildren(
       ...MAIN_KINDS.map(chip),
       el('span', { class: 'v2-omni-chipsep', 'aria-hidden': 'true' }),
       ...AUX_KINDS.map(chip),
-      tools,
     );
   }
   const note = el('div', { class: 'v2-omni-note' });
@@ -325,7 +331,7 @@ export function omniOpen(seed?: string): void {
           sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' })),
         input,
         el('kbd', { class: 'v2-omni-esc', text: 'Esc' })),
-      chips, list, note)) as HTMLElement;
+      filters, list, note)) as HTMLElement;
 
   // ── 상태 ──
   //  결과는 **소스별로** 담는다(한 종류에 소스가 둘일 수 있다 — 지식·프로젝트는 의미검색 + grep).
@@ -338,8 +344,11 @@ export function omniOpen(seed?: string): void {
   let timer = 0;
   let qTokens: string[] = [];       // 지금 질의의 토큰(제목 적중 판정용)
   let sinceMs = 0;                  // 기간의 시작(ms) — 0 = 전체 기간
-  let convPending = 0;              // 대화 색인이 아직 밀린 세션 수(서버가 알려 준다) — 0 이 아니면 «못 찾을 수 있다» 를 말한다
+  let convPending: number | null = 0;   // 대화 색인이 아직 밀린 세션 수(서버가 알려 준다, 모르면 null) — 0 이 아니면 «못 찾을 수 있다» 를 말한다
   let convCapped = false;           // 대화 검색이 흔한 낱말로 상한에 걸렸나
+  let convFailed = '';              // 대화 채널이 실패했다(시간 초과 등) — «결과 없음» 과 다른 사실이라 따로 말한다
+  let convSkipped = false;          // 검색어가 길어(200자 넘음) 대화 채널을 부르지 않았다
+  let convAbort: AbortController | null = null;   // 글자를 더 치면 앞 요청을 끊는다 — 낡은 검색이 서버 연결을 쥐고 쌓이지 않게
 
   const rowNodes: HTMLElement[] = [];
   //  ⚠ **그려진 줄과 짝을 이루는 배열**. rowNodes 의 i 번째가 무엇인지는 이것만 안다 —
@@ -500,14 +509,17 @@ export function omniOpen(seed?: string): void {
     const why: string[] = [];
     //  기본 검색이면 자료는 **부르지도 않았다** — 그걸 말하지 않으면 '없다' 가 거짓말이 된다.
     why.push(kindSel.size > 0 ? '고른 종류에서만 찾았습니다 — 칩을 다시 누르면 풀립니다' : '자료는 기본 검색에 들어가지 않습니다 — 위 칩을 누르면 찾습니다');
-    if (period !== 'all') why.push(`${periodLabel(period)} 안에서만 찾았습니다 — 기간을 넓히면 더 찾습니다`);
+    //  «그 기간 안을 빠짐없이 봤다» 고 말하지 않는다 — 의미검색 채널은 상위 몇 건을 받은 뒤 기간으로 거른다.
+    if (period !== 'all') why.push(`${periodLabel(period)} 안의 결과만 보여 줍니다 — 기간을 넓히면 더 나올 수 있습니다`);
     return `결과가 없습니다. (${why.join(' · ')})`;
   };
   //  대화 색인이 아직 밀려 있으면 그 사실을 말한다 — 결과가 있어도 «이게 전부» 로 읽히면 안 된다(초록불 자가점검).
   const convNote = (): string => {
     if (!kindOn('conv')) return '';
-    if (convPending > 0) return `대화 색인을 만드는 중입니다 — 세션 ${convPending}개의 대화는 아직 찾지 못할 수 있습니다.`;
-    if (convCapped) return '흔한 낱말이라 최근 말 3,000개 안에서만 찾았습니다 — 낱말을 더 넣으면 좁혀집니다.';
+    if (convSkipped) return '검색어가 길어(200자 넘음) 대화에서는 찾지 않았습니다.';
+    if (convFailed) return `대화 결과를 가져오지 못했습니다 — ${convFailed}`;
+    if (convPending) return `대화 색인을 만드는 중입니다 — 세션 ${convPending}개의 대화는 아직 찾지 못할 수 있습니다.`;
+    if (convCapped) return '흔한 낱말이라 최근 말 2,000개 안에서만 찾았습니다 — 낱말을 더 넣으면 좁혀집니다.';
     return '';
   };
   function setNote(text: string): void {
@@ -625,7 +637,8 @@ export function omniOpen(seed?: string): void {
     hits = [];
     sel = 0;   // 목록이 통째로 바뀐다 — 선택을 물려주면 3번째를 고른 채로 글자를 더 쳤을 때 **다른 항목**이 열린다
     qTokens = q.toLowerCase().split(/\s+/).filter(Boolean);
-    convPending = 0; convCapped = false;
+    convPending = 0; convCapped = false; convFailed = ''; convSkipped = false;
+    convAbort?.abort(); convAbort = null;
     sinceMs = periodSince(period, Date.now());
     if (!q) { pending = 0; recent(); paint(); setNote(''); return; }
     localHits(q);
@@ -703,14 +716,22 @@ export function omniOpen(seed?: string): void {
     });
     // 대화(#4517) — 볼 수 있는 세션의 사람 말·AI 말 색인. 결과는 세션 한 줄씩(대표 발췌문 + 맞은 수). 기간은 서버가 거른다.
     call('conv', () => {
+      //  서버가 200자 넘는 검색어를 받지 않는다(400) — 부르지 않고, 왜 대화 결과가 없는지를 안내 줄이 말한다.
+      if (q.length > 200) { convSkipped = true; put('conv', [], my); return; }
       const p = new URLSearchParams({ q, sort: byTime ? 'recent' : 'relevance', limit: byTime ? '12' : '8' });
       if (sinceMs) p.set('since', new Date(sinceMs).toISOString());
-      api('/api/ui/v6/session-search?' + p.toString()).then((r: any) => {
+      const ctl = new AbortController();
+      convAbort = ctl;
+      api('/api/ui/v6/session-search?' + p.toString(), { signal: ctl.signal }).then((r: any) => {
         if (my !== seq) return;
-        convPending = Number(r && r.pending) || 0;
+        convPending = r && r.pending == null ? null : (Number(r && r.pending) || 0);
         convCapped = !!(r && r.capped);
         put('conv', ((r && r.results) || []).map(convHit), my);
-      }, () => put('conv', [], my));
+      }, (e: any) => {
+        if (my !== seq) return;   // 끊은 요청(글자를 더 쳤다) — 새 검색이 이미 돌고 있다
+        convFailed = String((e && e.message) || '서버가 응답하지 않았습니다');
+        put('conv', [], my);
+      });
     });
   }
 
