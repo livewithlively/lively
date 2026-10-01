@@ -139,6 +139,16 @@ export interface Metrics {
 }
 export const TAB_METRICS: Metrics = { icon: 34, minLabel: 64, max: 184, activeMax: 220, activeMin: 120 };
 /**
+ * 탭을 «보이게» 할 때 어느 칸에서 켜나 — **닫힌 아래 칸(터미널 밑)은 펼치지 않는다**, 곁칸으로 옮겨 켠다.
+ *  원준(2026-10-01): «타임라인 쟨 왜 터미널 밑에서 갑자기 앱이 튀어나와. 밑에서 나오는거 없게해줘» — 기본 배치가 타임라인을
+ *   닫힌 아래 칸에 두는데(panes.ts 기본 bottom: ['timeline']), 독 · 머리줄 단추가 그 탭을 보이려고 아래 칸을 펼쳤다.
+ *  · 아래 칸이 열려 있으면(사람이 펴 두고 쓰는 중) 거기서 켠다 — 이미 보이는 자리라 튀어나오는 게 아니다.
+ *  · 좁은 폭은 서랍이 곁칸 · 아래 칸 탭을 한 줄로 보여 주므로 그대로(배치를 안 건드린다).
+ */
+export function showZone(zone: 'main' | 'side' | 'bottom', o: { bottomOn: boolean; narrow: boolean }): 'main' | 'side' | 'bottom' {
+  return zone === 'bottom' && !o.bottomOn && !o.narrow ? 'side' : zone;
+}
+/**
  * 탭 띠 안에서 탭들이 실제로 나눠 쓸 폭 — 띠의 좌우 안 여백과 탭 사이 간격(n-1 개)을 뺀다.
  *  #4443(2026-10-01 리뷰): 탭 새 옷에서 띠에 안 여백(2+2)과 간격(2)이 생겼는데 clientWidth(안 여백 포함 · 간격 모름)를 그대로
  *   planTabs 에 넘겨, 탭 여섯 개면 «들어간다» 고 셈한 줄이 실제로는 넘쳐 마지막 탭이 삐져나왔다.
