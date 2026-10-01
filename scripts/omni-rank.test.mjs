@@ -76,6 +76,15 @@ eq(M.cleanSnippet("> ▤ 세션의 첫 지시에서 **자동 생성**된 프로�
 eq(M.cleanSnippet("# 통합검색 결함 점검 ## 메타데이터 - 상태: active > 인용 **굵게** `code`"), "통합검색 결함 점검 메타데이터 상태: active 인용 굵게 code", "R7 한 줄로 접힌 발췌 속 줄머리 기호");
 eq(M.cleanSnippet("omni-rank.ts 와 a-b, x->y"), "omni-rank.ts 와 a-b, x->y", "R7 낱말 속 기호는 둔다");
 eq(M.cleanSnippet("가".repeat(200), 10), "가".repeat(10) + "…", "R7 길이 상한");
+//  둘째 줄은 첫 맞은 낱말 조금 앞에서 — 폰에서 맞은 낱말이 줄임표 뒤로 밀려 왜 떴는지 안 보였다(배포 뒤 실화면)
+{
+  const sub = "…바뀝니다. 세 번 시도해 세 번 모두 바뀌었습니다. 3. 칩을 누르면 키보드가 끊깁니다. 그 뒤로 글";
+  const f = M.focusSnippet(sub, ["키보드"]);
+  eq([f.startsWith("…"), f.indexOf("키보드") >= 0 && f.indexOf("키보드") <= 16, f.endsWith("그 뒤로 글")], [true, true, true], "R7 맞은 낱말 앞에서 시작");
+  eq(M.focusSnippet("키보드가 끊깁니다", ["키보드"]), "키보드가 끊깁니다", "R7 앞쪽에 있으면 그대로");
+  eq(M.focusSnippet(sub, []), sub, "R7 낱말이 없으면 그대로");
+  eq(M.focusSnippet("aaaaaaaaaaaaaaaaaaaa 😀 OMNI.ts", ["omni.ts"]).includes("OMNI.ts"), true, "R7 대소문자 무시");
+}
 
 // ── R8 식별자 ──
 const T = (q) => M.parseTerms(q);

@@ -65,6 +65,25 @@ export function highlightWords(terms: Term[]): string[] {
   return out.sort((a, b) => b.length - a.length);
 }
 
+/**
+ * 둘째 줄을 첫 맞은 낱말 조금 앞에서 시작한다. 서버 발췌는 맞은 말을 가운데쯤 두는데, 폰(한 줄 28자 안팎)에서는 맞은 낱말이
+ *  줄임표 뒤로 밀려 «왜 떴는지» 가 안 보였다(#4530 배포 뒤 실화면: «칩 키보드 omni.ts» → 대화 줄 둘째 줄에 낱말이 하나도 안 보임).
+ *  맞은 낱말이 앞쪽(lead 글자 안)에 있으면 그대로 둔다. 자르는 자리는 가까운 띄어쓰기로 맞춘다.
+ */
+export function focusSnippet(text: string, words: string[], lead = 14): string {
+  const s = String(text || '');
+  if (!s || !words.length) return s;
+  const low = s.toLowerCase();
+  let at = -1;
+  for (const w of words) { const i = low.indexOf(w.toLowerCase()); if (i >= 0 && (at < 0 || i < at)) at = i; }
+  if (at <= lead) return s;
+  let from = at - lead;
+  const sp = s.indexOf(' ', from);
+  if (sp >= 0 && sp < at) from = sp + 1;
+  if (/[\udc00-\udfff]/.test(s[from] || '')) from++;   // 서로게이트 쌍을 가르지 않는다
+  return '…' + s.slice(from);
+}
+
 // ── 지식 제목의 머리말 ─────────────────────────────────────────────────────────────
 //  지식 제목 1,692개 중 38%가 «as-built(#4135, 2026-09-28): …» · «원인규명·수정(#3891, …): …» 처럼 머리말로 시작하고 87%가 60자를
 //  넘는다(2026-10-01 실측). 한 줄에 다 안 들어가 머리말만 보이고 정작 무엇인지가 잘렸다. 머리말은 따로 떼어 작게 보인다.
