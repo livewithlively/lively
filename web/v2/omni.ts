@@ -455,7 +455,10 @@ export function omniOpen(seed?: string): void {
       //  그 아래는 **글자로 맞은 것 전부**(lex)를 시각 역순으로, 날짜 묶음으로 끊어서. 의미검색만으로 온 것은 여기 안 선다 —
       //   «최근에 고친, 조금 비슷한 문서» 가 정확히 그 낱말이 든 문서를 밀어내면 최신순이 아니라 잡음이다(슬랙 Recent 도 모든 낱말 일치).
       //  화면(앱)은 시각이 없어 맨 아래 따로.
-      const best = relTop().slice(0, 3);
+      //  ⚠ 맨 위 셋도 **글자로 맞은 것**(호명 · 제목 · 본문)에서만 고른다 — 관련도순 앞 셋을 그대로 쓰면 제목 적중이 셋이 안 될 때
+      //   코사인만 넘은 무관한 문서가 «가장 맞는 결과» 로 선다(매니지드 실측 2026-10-01: «세션의 대화내용으로도» 에 무관한 프로젝트 둘 ·
+      //   지식 하나 — 매니지드 bge-m3 는 무관한 문서에도 0.49~0.66 을 준다, #4530 점검).
+      const best = relTop().filter((h) => h.lex || isTitleHit(h) || isIdentHit(h)).slice(0, 3);
       const bestKeys = new Set(best.map((h) => h.key));
       draw('가장 맞는 결과', best);
       const timeline = hits.filter((h) => h.kind !== 'app' && !bestKeys.has(h.key) && (h.lex || isTitleHit(h) || isIdentHit(h)))
