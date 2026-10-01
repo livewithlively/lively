@@ -30,12 +30,16 @@
 //  D1–D6 끌기 방어(버튼 떼어짐 · 다른 포인터 · blur · 걷힘 · 한 번에 하나) · E1–E2 흔들기/고정 줄로 끌어오기
 //  F1–F3 초점 · G1 refreshDocks · H1 [더보기] 열린 채 자리가 바뀌면 옛 창은 닫힌다 · I1 이름표(이음매 = 세션 쪽 · 곁칸 아래 = 곁칸 안)
 //  B1 안 보이는 고정 보존 · B7 «독 되돌리기» = 이음매 가운데 + 고정 목록 «적은 적 없음»
+//  HD1 이음매 독 맨 위에 손잡이(원준 10-01 «위쪽에 핸들») — 첫 아이콘 위 · 짧은 가로 막대 · 앱 단추가 아니다(탭 순서 밖)
+//  HD2 손잡이를 잡고 끌면 독이 옮겨 간다(R9 가 손잡이에서 시작) · HD3 곁칸 아래 독엔 손잡이가 없다 · HD4 손잡이 위에선 확대하지 않는다
+//  HD5 좁은 폭(서랍)엔 손잡이가 없다
 //
 // 왜 런타임인가: 경계선 위에 걸쳤는지 · 곁칸 폭을 따라 커지는지 · 끌어 놓은 곳에 서는지는 CSS 가 실제로 그린 자리에서만 잰다.
 // fail-first(2026-10-01 이음매 판): 바꾸기 전 판(떠 있는 알약 기본 · 막대 · 손잡이 — lib · 독 · CSS 셋 다 git show HEAD 를 제자리에)에 물리면
 //  71 중 32 줄이 빨갛다(R1 · R1b · R2 · R7c · S1 · R9 · R2b · R10 · R11 · R14a · G1 · H1 · I1 · B7 · R17 …). 돌연변이 —
 //  끄는 동안 곁칸의 부모로 옮겨 붙지 않으면 R11b · 곁칸 아래 크기를 고정(48)하면 R10 · 곁칸 아래 알약 높이 고정을 빼면 R10c ·
 //  이음매 알약 폭 고정을 빼면 R7c 가 빨갛다(DOCK_UI_SRC · DOCK_CSS 로 물려 확인).
+// fail-first(2026-10-01 손잡이): 손잡이 전 판(PR #1208 머지판)에 물리면 HD1 · HD2 · HD4 가, 손잡이 위 확대 멈춤을 지우면 HD4(첫 아이콘 47px)가 빨갛다.
 // 크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -137,8 +141,8 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   const sizeNow=()=>parseFloat(getComputedStyle(root).getPropertyValue('--dk-s'));
   const P=(type,x,y,t=window)=>t.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,clientX:x,clientY:y,button:0,buttons:1,pointerId:9,pointerType:'mouse'}));
   const Pb0=(x,y,id=9)=>window.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,cancelable:true,clientX:x,clientY:y,button:0,buttons:0,pointerId:id,pointerType:'mouse'}));
-  //  독을 잡는 자리 = 알약의 끝 여백(아이콘이 아닌 곳) — 이음매면 위 끝, 곁칸 아래면 왼쪽 끝. 손잡이는 없다.
-  const grabPt=()=>{const r=rc(shelf); return root.dataset.home==='seam'?[cx(r), r.top+4]:[r.left+3, cy(r)];};
+  //  독을 잡는 자리 — 이음매면 맨 위 손잡이 한가운데, 곁칸 아래면 알약 왼쪽 끝 여백(곁칸 아래엔 손잡이가 없다).
+  const grabPt=()=>{const r=rc(shelf); const h=shelf.querySelector('.pn-dock-handle'); if(root.dataset.home==='seam'&&h){const q=rc(h); return [cx(q),cy(q)];} return root.dataset.home==='seam'?[cx(r), r.top+4]:[r.left+3, cy(r)];};
   const PK='lively_v2_dock', PINK='lively_v2_dock_apps';
   const prefsNow=()=>localStorage.getItem(PK); const pinsNow=()=>localStorage.getItem(PINK);
   const setPrefs=async(o={})=>{localStorage.setItem(PK, JSON.stringify({home:'seam',at:'0.50',mag:'1',...o})); window.dispatchEvent(new StorageEvent('storage',{key:PK})); await frame(); await sleep(60);};
@@ -152,6 +156,19 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   R.r1b_nogrip=!document.querySelector('.pn-dock-grip') && !document.querySelector('.pn-dock-reveal');
   // R2 — 이음매 독은 아무도 안 비킨다
   R.r2=['paddingBottom','paddingTop','paddingLeft','paddingRight'].every((k)=>getComputedStyle(pbody)[k]==='0px') && Math.abs(rc(pbody.querySelector('.add')).bottom-rc(pane).bottom)<=1;
+  // HD1 — 이음매 독 맨 위의 손잡이: 첫 아이콘 위 · 짧은 가로 막대 · 앱 단추가 아니다
+  const hd=shelf.querySelector('.pn-dock-handle'); const hdi=hd&&hd.querySelector('i');
+  if(hd){ const hr=rc(hd), ir=rc(hdi), fr=rc(it('tasks').querySelector('.pn-dock-ic'));
+    R.hd1_info=[Math.round(hr.width),Math.round(hr.height),Math.round(ir.width),Math.round(ir.height),Math.round(fr.top-hr.bottom)];
+    R.hd1=shelf.firstElementChild===hd && hr.bottom<=fr.top && Math.abs(cx(ir)-seamX())<=1 && ir.width>=12 && ir.width<=24 && ir.height>=3 && ir.height<=5
+      && hd.tagName!=='BUTTON' && !hd.hasAttribute('tabindex') && hd.getAttribute('aria-hidden')==='true' && getComputedStyle(hd).cursor==='grab'; }
+  // HD4 — 손잡이 위에선 확대하지 않는다(잡으려는 것은 독)
+  if(hd){ const hr=rc(hd);
+    hd.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:cx(hr),clientY:cy(hr),pointerType:'mouse'})); await frame(); await sleep(200);
+    const s0=sizeNow(); const icw=[...shelf.querySelectorAll('.pn-dock-ic')].map((q)=>rc(q).width);
+    R.hd4_info=JSON.stringify(icw.map((x)=>Math.round(x)));
+    R.hd4_no_mag=icw.every((x)=>Math.abs(x-s0)<=0.6);
+    shelf.dispatchEvent(new PointerEvent('pointerleave',{bubbles:false,pointerType:'mouse'})); await frame(); await sleep(200); }
   // R3
   R.r3=it('web').querySelectorAll('.pn-dock-dots i').length===2 && it('files').querySelectorAll('.pn-dock-dots i').length===1
     && it('tasks').querySelectorAll('.pn-dock-dots i').length===0 && it('files').classList.contains('on') && !it('web').classList.contains('on');
@@ -216,7 +233,8 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   ESC(); ESC(); await frame();
   // R9 — 이음매에서 알약 끝을 잡고 곁칸 안쪽 깊이 → 곁칸 아래
   gp=grabPt(); const pr=rc(pane);
-  P('pointerdown',gp[0],gp[1],shelf); P('pointermove',gp[0]+20,gp[1]+20); P('pointermove',pr.left+200,pr.bottom-90);
+  const onHandle=document.elementFromPoint(gp[0],gp[1]); R.hd2_from_handle=!!onHandle && !!onHandle.closest('.pn-dock-handle');
+  P('pointerdown',gp[0],gp[1],onHandle||shelf); P('pointermove',gp[0]+20,gp[1]+20); P('pointermove',pr.left+200,pr.bottom-90);
   const pv=grid.querySelector('.pn-dock-preview');
   R.r9_preview=!!pv && pv.dataset.home==='float' && Math.abs(rc(pv).bottom-(pr.bottom-8))<=2;
   R.r9_lifted=root.parentElement===grid && root.classList.contains('moving');
@@ -227,6 +245,7 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   R.r9=!!saved && saved.home==='float' && root.dataset.home==='float' && root.parentElement===pane
     && Math.abs(sr.bottom-(rc(pane).bottom-8))<=1.5 && Math.abs(cx(sr)-(rc(pane).left+1+pane.clientWidth/2))<=2 && sr.width>sr.height*3;
   R.r9_gone=!grid.querySelector('.pn-dock-preview') && !root.classList.contains('moving');
+  R.hd3_float_no_handle=root.dataset.home==='float' && !shelf.querySelector('.pn-dock-handle');
   // R2b — 곁칸 아래 독이면 부품이 물러선다
   const s9=sizeNow();
   R.r2b_info=[s9, getComputedStyle(pbody).paddingBottom];
@@ -461,6 +480,7 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     const mbN=root.querySelector('.pn-dock-more-btn'); const mbr=rc(mbN);
     const ce=new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:cx(mbr),clientY:cy(mbr)}); mbN.dispatchEvent(ce); await frame();
     R.a6_narrow_none=root.classList.contains('narrow') && root.dataset.home==='float' && root.parentElement===pane && !document.querySelector('.pn-ctx') && ce.defaultPrevented;
+    R.hd5_narrow_no_handle=!shelf.querySelector('.pn-dock-handle');
   }catch(e){R.err_a6=String(e&&e.message||e);}
   ESC(); narrowNow=false; dock.sync(); await frame();
   // R17 — 이음매가 없으면(카드 모드 · 접힘 — 셸이 null 을 준다) 곁칸 아래
@@ -520,6 +540,8 @@ if (R.error) { console.error("FAIL  페이지 스크립트가 넘어졌다 — "
 check(R.r1, "R1 기본 = 이음매 — 세션과 곁칸 사이 분할선 한가운데 · 세로 구간 가운데 · 곁칸의 부모(.pn-body)에 붙은 세로 알약", JSON.stringify(R.r1_info));
 check(R.r1b_nogrip, "R1b 손잡이(⋮⋮) · 자동 가리기 띠가 없다(원준 10-01 «바닥 왼쪽 탭 … 없애줘»)");
 check(R.r2, "R2 이음매 독은 아무도 안 비킨다 — 곁칸 본문 여백 0 · «태스크 추가» 가 곁칸 바닥에");
+check(R.hd1, "HD1 이음매 독 맨 위에 손잡이 — 첫 아이콘 위 · 경계선 한가운데의 짧은 가로 막대 · 잡는 손 모양 · 앱 단추가 아니다(탭 순서 밖)", JSON.stringify(R.hd1_info));
+check(R.hd4_no_mag, "HD4 손잡이 위에선 확대하지 않는다 — 잡으려는 것은 독이지 앱이 아니다", R.hd4_info);
 check(R.r3, "R3 점 = 떠 있는 탭 수, 켜진 앱만 켜짐");
 check(R.r4, "R4 안 떠 있는 앱을 누르면 연다 · 튀어 오른다");
 check(R.r5, "R5 떠 있는 앱은 보여 주고, 켜진 앱을 또 누르면 다음 인스턴스", R.r5_info);
@@ -540,6 +562,8 @@ check(R.r9_preview, "R9a 곁칸 안쪽 깊이 끄는 동안 놓일 자리(곁칸
 check(R.r9_lifted, "R9b 끄는 동안 독은 곁칸의 부모에 붙는다(곁칸 테두리에서 안 잘린다)");
 check(R.r9, "R9 놓으면 곁칸 아래 — 계정 설정 home=float · 곁칸에 붙어 바닥 가운데(바깥 여백 8)", R.r9_saved);
 check(R.r9_gone, "R9c 놓으면 윤곽이 사라진다");
+check(R.hd2_from_handle, "HD2 위 R9 의 끌기는 손잡이를 잡고 시작했다 — 손잡이로 독이 옮겨 간다");
+check(R.hd3_float_no_handle, "HD3 곁칸 아래 독엔 손잡이가 없다(바닥의 손잡이는 걷었다)");
 check(R.r2b, "R2b 곁칸 아래 독이면 부품이 물러선다 — 아이콘 + 안 여백×2 + 점 줄 + 바깥 여백×2 · «태스크 추가» 가 독 위에", JSON.stringify(R.r2b_info));
 check(R.r10, "R10 곁칸 아래 독의 크기는 곁칸 폭을 따라 — 280 < 340 < 420 에서 커지고, 확대한 몫까지 곁칸 안에(원준 10-01)", R.r10_info);
 check(R.r10c_shelf_fixed, "R10c 확대해도 알약 높이는 그대로 — 아이콘이 위로 솟는다(macOS)");
@@ -580,6 +604,7 @@ check(R.b1_case, "B1a (배선) 좁힌 화면에서도 웹 메뉴에 «독에서 
 check(R.b1_hidden_kept, "B1 프로젝트 없는 화면에서 웹을 빼도 안 보이는 고정(태스크·자료·지식)은 계정에 남는다", R.b1_info);
 check(R.b7_reset, "B7 «독 되돌리기» = 이음매 가운데 · 확대 켬 + 고정 목록 «적은 적 없음»", JSON.stringify(R.b7_info));
 check(R.a6_narrow_none, "A6 좁은 폭(서랍)은 곁칸 아래 · [더보기]엔 메뉴가 없다 — 곁칸 메뉴도 브라우저 메뉴도 안 뜬다");
+check(R.hd5_narrow_no_handle, "HD5 좁은 폭(서랍)엔 손잡이가 없다(끌기가 없다)");
 check(R.r17_noseam, "R17 이음매가 없으면(카드 모드 · 접힘) 곁칸 아래");
 check(R.r17_back, "R17a 이음매가 돌아오면 다시 이음매");
 check(R.r17b_swap, "R17b 자리바꿈(곁칸이 왼쪽)이면 오른쪽 분할선 위", JSON.stringify(R.r17b_info));

@@ -34,7 +34,7 @@
 /* 이음매 — 경계선 위 한가운데, 세로 캡슐. 위아래 끝 여백이 손잡이(10px). */
 /* 폭은 아이콘 한 줄로 고정 — 확대한 아이콘은 양옆(세션 쪽 · 곁칸 쪽)으로 똑같이 솟는다. */
 .pn-dock[data-home="seam"] .pn-dock-shelf { top: 0; translate: -50% -50%; flex-direction: column; align-items: center;
-  box-sizing: border-box; width: calc(var(--dk-s, 32px) + 12px); padding: 10px 6px; border-radius: 999px; }
+  box-sizing: border-box; width: calc(var(--dk-s, 32px) + 12px); padding: 3px 6px 10px; border-radius: 999px; }
 .pn-dock[data-home="seam"]:hover .pn-dock-shelf { border-color: color-mix(in srgb, var(--mint) 38%, var(--line-net)); }
 
 /* ── 아이콘 하나 — 타일 + 점(떠 있는 탭 수, 최대 셋). ── */
@@ -64,6 +64,16 @@
   74% { transform: translate(calc(var(--bx) * var(--dk-s, 32px) * .16), calc(var(--by) * var(--dk-s, 32px) * .16)); }
 }
 .pn-dock-it.bounce .pn-dock-ic { animation: pn-dock-bounce .82s cubic-bezier(.3, .6, .35, 1); }
+
+/* ── 손잡이 — 이음매 독 맨 위의 짧은 가로 막대(macOS · iOS 시트의 손잡이). 잡고 끌면 독이 옮겨 간다(원준 10-01).
+   잡는 자리는 알약 폭 전체 × 14px(막대보다 넉넉하게), 마우스를 올리면 막대가 진해지고 조금 길어진다, 끄는 동안 민트. ── */
+.pn-dock-handle { flex: none; align-self: stretch; display: flex; align-items: center; justify-content: center; height: 14px; cursor: grab;
+  border-radius: 999px 999px 4px 4px; }
+.pn-dock-handle i { display: block; width: 16px; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--ink) 24%, transparent);
+  transition: background .15s, width .15s cubic-bezier(.2, .8, .3, 1); }
+.pn-dock-handle:hover i { width: 22px; background: color-mix(in srgb, var(--ink) 46%, transparent); }
+.pn-dock.moving .pn-dock-handle i { width: 22px; background: var(--mint); }
+.pn-dock-handle:active { cursor: grabbing; }
 
 /* ── 구분선 — 고정한 앱 | 떠 있는 앱 | [더보기]. 손잡이이기도 하다(잡고 끌면 독이 옮겨 간다). ── */
 .pn-dock-sep { flex: none; align-self: stretch; background: color-mix(in srgb, var(--ink) 16%, transparent); }
