@@ -42,7 +42,7 @@ import { type CtxRow } from './ctx-menu.js';
 //  ★ 탭 = 부품의 **인스턴스**(#762) — 배치가 드는 것은 '종류'가 아니라 '탭 열쇠'다(lib/tab-key 머리말).
 import { isTabKey, nextTabKey, tabBase, tabNum, type TabKey } from '../lib/tab-key.js';
 //  #3870 «곁칸 탭 관리» — 닫은 뒤 갈 곳 · 한꺼번에 닫기 · 끌어 옮길 자리 · 폭 · 닫은 탭 다시 열기(규칙은 lib, 끌기 손은 v2/pane-tabdrag).
-import { bulkTargets, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, stripRoom, touchRecent, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
+import { bulkTargets, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, showZone, stripRoom, touchRecent, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
 import { beginTabDrag, cancelTabDrag, consumeDragClick, type DragBar, type TabDragHost } from './pane-tabdrag.js';
 import { seedTasksTab } from '../lib/task-pane.js';   // #4084 — 저장된 배치에 «태스크» 탭을 한 번만 들인다
 import { hasBrowserSurface } from './browser-surface.js';
@@ -858,11 +858,17 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     if (narrow()) { if (z !== 'main') opts.onOpenDrawer?.(); return; }
     openZone(z);
   }
+  /** 그 탭을 보이게 — **닫힌 아래 칸이면 펼치지 않고 곁칸으로 옮겨 켠다**(lib/pane-tabs showZone · 원준 10-01 «밑에서 나오는거 없게»).
+   *  아래 칸이 열려 있으면 거기서, 좁은 폭은 서랍이 보여 주므로 종전대로. 독 · 머리줄 단추 · 웹 칸 · 붙은 앱 · 뷰어가 이 길로 켠다. */
+  function bringUp(zone: Zone, key: TabKey): void {
+    if (showZone(zone, { bottomOn: lay.bottomOn, narrow: narrow() }) !== zone) { moveTab(key, zone, 'side'); return; }
+    revealZone(zone); activate(zone, key); paintAll();
+  }
   /** 그 종류의 탭을 **보이게** 한다 — 있으면 켜고(접힌 칸·서랍은 편다), 없으면 곁칸에 만든다. 세션 머리줄 [자료]가 부른다. */
   function showPart(type: PartType): void {
     const found = findTab(type);
     if (!found) { addPart('side', type); return; }
-    revealZone(found.zone); activate(found.zone, found.key); paintAll();
+    bringUp(found.zone, found.key);
   }
   // 미리보기 칸에서 "이 주소 열어" 하고 부르면 웹 칸을 켠다 — 없으면 곁칸에 만들고, 이미 있으면 그 칸이 스스로 받는다.
   //  ⚠ 칸을 새로 만들 때는 부품이 이벤트를 이미 놓친 뒤라, 주소는 openInWebPart 가 저장해 둔 값에서 읽힌다.
@@ -873,7 +879,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const z = (['side', 'main', 'bottom'] as Zone[]).find((zz) => lay[zz].some((k) => tabBase(k) === 'web'));
     if (!z) { addPart('side', 'web'); return; }
     const key = lay[z].find((k) => tabBase(k) === 'web')!;
-    revealZone(z); activate(z, key); paintAll();
+    bringUp(z, key);
   };
   wrap.addEventListener('pn:open-web', onOpenWeb);
   // 자료 칸에서 파일을 누르면 뷰어 탭으로 (#762, 원준 2026-09-04) — 웹 칸과 같은 길이다.
@@ -912,13 +918,15 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const found = path && !d?.sid ? viewerTabs().find((t) => rememberedViewerPath(ctx.memKey(), t.key) === path) ?? null : null;
     //  새 탭은 **이미 뷰어가 사는 칸**에 나란히 세운다 — 아래 칸에 뷰어를 두고 쓰는 사람에게 곁칸이 튀어나오면
     //   그건 나란히 보기가 아니라 자리 뺏기다. 뷰어가 하나도 없으면 곁칸.
-    const zone: Zone = found ? found.zone : (findTab('editor')?.zone ?? 'side');
+    //  ⚠ 단 닫힌 아래 칸이면 펼치지 않는다 — 곁칸에서 연다(원준 10-01 «밑에서 나오는거 없게» · lib/pane-tabs showZone).
+    const zone: Zone = showZone(found ? found.zone : (findTab('editor')?.zone ?? 'side'), { bottomOn: lay.bottomOn, narrow: narrow() });
     //  ⚠ **열쇠를 먼저 잡고 기억을 적은 뒤에** 탭을 만든다 — 순서가 뒤면 갓 만들어진 뷰어가 빈 화면을
     //   한 번 그렸다가 신호를 받고 다시 그린다(화면이 깜빡인다).
     const key = found ? found.key : nextTabKey('editor', allKeys());
     //  세션 폴더의 파일(sid)은 기억하지 않는다 — 다시 열 때 프로젝트 자료 경로로 읽혀 «못 읽었어요» 가 된다.
     if (d?.path && !d?.sid) rememberViewerPath(ctx.memKey(), key, d.path);
     if (!found) addTab(zone, key);
+    else if (found.zone !== zone) moveTab(key, found.zone, zone);   // 닫힌 아래 칸에 살던 그 파일의 뷰어 — 곁칸으로 데려온다
     revealZone(zone);
     activate(zone, key);
     paintAll();
@@ -1618,7 +1626,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       const z = zoneOf(SESSAPP_TAB)!;
       //  탭 이름 — 부품은 켜질 때 서므로, 한 번도 안 켠 탭은 기본 이름(«붙은 앱»)으로 남는다. 목록으로 셸이 먼저 건다.
       tabTitles.set(SESSAPP_TAB, sessAppTabTitle(apps));
-      if (added.length) { revealZone(z); activate(z, SESSAPP_TAB); paintAll(); return; }
+      if (added.length) { bringUp(z, SESSAPP_TAB); return; }
       if (!had) {
         const mine = readActs()[actKey()];
         if (mine && mine[z] === SESSAPP_TAB) lay.act[z] = SESSAPP_TAB;
@@ -1630,7 +1638,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const onShowSessApp = (): void => {
     const z = zoneOf(SESSAPP_TAB);
     if (!z) return;
-    revealZone(z); activate(z, SESSAPP_TAB); paintAll();
+    bringUp(z, SESSAPP_TAB);
   };
   wrap.addEventListener(SHOW_SESSAPP_EVT, onShowSessApp);
 
@@ -1668,7 +1676,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     act: () => panes.get('side')?.act ?? null,
     recent: () => [...recent.side, ...recent.bottom],
     title: (k) => tabName(k),
-    show: (k) => { const z = zoneOf(k) || 'side'; revealZone(z); activate(z, k); paintAll(); },
+    //  독은 곁칸의 문 — 닫힌 아래 칸(터미널 밑)에 있던 탭이면 아래 칸을 펼치지 않고 곁칸으로 옮겨 켠다(원준 10-01:
+    //   «타임라인 쟨 왜 터미널 밑에서 갑자기 앱이 튀어나와» — 기본 배치가 타임라인을 닫힌 아래 칸에 둔다).
+    show: (k) => bringUp(zoneOf(k) || 'side', k),
     open: (type) => { openZone('side'); addPart('side', type as PartType); },
     close: (k) => closeTab(zoneOf(k) || 'side', k),
     closeAll: (type) => {

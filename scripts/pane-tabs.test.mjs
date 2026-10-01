@@ -110,6 +110,12 @@ eq(L.stripRoom(340, 2, 2, 2, 6), 340 - 4 - 10, "J3 안 여백 둘 + 간격 n−1
 eq([L.stripRoom(340, 2, 2, 2, 1), L.stripRoom(340, 2, 2, 2, 0)], [336, 336], "J3b 탭이 하나·없음이면 간격은 없다");
 eq(L.stripRoom(10, 2, 2, 2, 6), 0, "J3c 모자라면 0(음수 폭을 planTabs 에 넘기지 않는다)");
 
+// 보이게 할 칸 (V1–V4) — #4443 원준(10-01): «타임라인 쟨 왜 터미널 밑에서 갑자기 앱이 튀어나와. 밑에서 나오는거 없게해줘»
+eq(L.showZone("bottom", { bottomOn: false, narrow: false }), "side", "V1 닫힌 아래 칸의 탭을 보이려면 아래 칸을 펼치지 않고 곁칸으로(터미널 밑에서 튀어나오지 않는다)");
+eq(L.showZone("bottom", { bottomOn: true, narrow: false }), "bottom", "V2 아래 칸이 열려 있으면 거기서 켠다(이미 보이는 자리 — 사람이 펴 두고 쓰는 중)");
+eq(L.showZone("bottom", { bottomOn: false, narrow: true }), "bottom", "V3 좁은 폭은 서랍이 아래 칸 탭도 보여 주므로 그대로(배치를 안 건드린다)");
+eq([L.showZone("side", { bottomOn: false, narrow: false }), L.showZone("main", { bottomOn: false, narrow: false })], ["side", "main"], "V4 곁칸 · 가운데 칸은 그대로");
+
 // 닫은 탭 다시 열기 (U1–U5)
 let st = L.pushClosed([], [{ key: "a", zone: "side", at: 4 }]);
 st = L.pushClosed(st, [{ key: "c", zone: "side", at: 6 }, { key: "b", zone: "side", at: 5 }]);
