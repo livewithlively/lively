@@ -140,10 +140,11 @@ export interface Metrics {
 export const TAB_METRICS: Metrics = { icon: 34, minLabel: 64, max: 184, activeMax: 220, activeMin: 120 };
 /**
  * 탭을 «보이게» 할 때 어느 칸에서 켜나 — **닫힌 아래 칸(터미널 밑)은 펼치지 않는다**, 곁칸으로 옮겨 켠다.
- *  원준(2026-10-01): «타임라인 쟨 왜 터미널 밑에서 갑자기 앱이 튀어나와. 밑에서 나오는거 없게해줘» — 기본 배치가 타임라인을
- *   닫힌 아래 칸에 두는데(panes.ts 기본 bottom: ['timeline']), 독 · 머리줄 단추가 그 탭을 보이려고 아래 칸을 펼쳤다.
+ *  원준(2026-10-01): «타임라인 쟨 왜 터미널 밑에서 갑자기 앱이 튀어나와. 밑에서 나오는거 없게해줘» — 옛 기본 배치가 타임라인을
+ *   닫힌 아래 칸에 두었는데(10-01 이후 기본은 비어 있다 — unparkBottom), 독 · 머리줄 단추가 그 탭을 보이려고 아래 칸을 펼쳤다.
  *  · 아래 칸이 열려 있으면(사람이 펴 두고 쓰는 중) 거기서 켠다 — 이미 보이는 자리라 튀어나오는 게 아니다.
  *  · 좁은 폭은 서랍이 곁칸 · 아래 칸 탭을 한 줄로 보여 주므로 그대로(배치를 안 건드린다).
+ *  ※ 탭 수는 안 본다 — zone === 'bottom' 이면 그 탭이 아래 칸에 있으니 탭 수 ≥ 1 이고, 그래서 bottomShown 과 같은 답이다.
  */
 export function showZone(zone: 'main' | 'side' | 'bottom', o: { bottomOn: boolean; narrow: boolean }): 'main' | 'side' | 'bottom' {
   return zone === 'bottom' && !o.bottomOn && !o.narrow ? 'side' : zone;
@@ -160,8 +161,11 @@ export function bottomShown(o: { bottomOn: boolean; count: number; narrow: boole
  * 저장된 배치 묶음({last, p})에서 **옛 기본값** — 닫힌 아래 칸에 타임라인 하나만 — 을 **한 번만** 걷는다(표식 seeded.bottom).
  *  옛 기본 배치가 타임라인을 닫힌 아래 칸에 넣어 두어, [＋] › «아래 칸 열기» 를 누르면 넣은 적 없는 타임라인이 거기 있었다.
  *  · 열려 있거나 다른 탭이 함께 있으면 사람이 고른 배치다 — 손대지 않는다. 걷은 타임라인은 독에서 누르면 곁칸에 열린다.
+ *    «열려 있다» 는 **프로젝트 배치에 저장된 bottomOn**(마지막으로 배치를 저장한 세션의 값)이다 — 세션마다의 기억(pn_view_by_sess)은
+ *    보지 않는다. «열림» 을 기억한 세션이라도 걷은 뒤엔 내용이 비어 bottomShown 이 빈 칸을 세우지 않는다.
  *  · 표식을 찍은 뒤로는 손대지 않는다 — 그 뒤 사람이 아래 칸에 둔 타임라인은 사람이 고른 것이다(task-pane seedTasksTab 과 같은 틀).
  *  돌려주는 changed 는 «저장소를 다시 써야 하나»다 — 표식만 새로 찍혀도 true. 받은 객체를 그 자리에서 고친다.
+ *  store · lay 가 any 인 것은 localStorage 에서 읽은 믿을 수 없는 JSON 이라서다 — 모양을 하나씩 확인한다(seedTasksTab 과 같다).
  */
 export function unparkBottom(store: any): { store: any; changed: boolean; cleared: number } {
   const st = store && typeof store === 'object' ? store : {};
