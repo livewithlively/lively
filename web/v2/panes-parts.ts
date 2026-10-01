@@ -107,6 +107,8 @@ export interface Part {
   selectSession?: (sid: string | null) => void;
   /** 세션 부품만 — 지금 보는 세션 id(탭 줄이 어느 탭을 켤지 안다). null = 새 세션 자리. */
   currentSession?: () => string | null;
+  /** 이미 켜진 탭을 또 눌렀다 — «처음으로»(iOS 탭 막대 · #4443 원준 10-01). 자료 = 맨 위 폴더. 없으면 셸은 종전대로 켠다. */
+  reselect?: () => void;
 }
 
 export interface PartDef {

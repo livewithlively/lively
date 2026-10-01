@@ -40,7 +40,7 @@ import { type CtxRow } from './ctx-menu.js';
 //  ★ 탭 = 부품의 **인스턴스**(#762) — 배치가 드는 것은 '종류'가 아니라 '탭 열쇠'다(lib/tab-key 머리말).
 import { isTabKey, nextTabKey, tabBase, tabNum, type TabKey } from '../lib/tab-key.js';
 //  #3870 «곁칸 탭 관리» — 닫은 뒤 갈 곳 · 한꺼번에 닫기 · 끌어 옮길 자리 · 폭 · 닫은 탭 다시 열기(규칙은 lib, 끌기 손은 v2/pane-tabdrag).
-import { bulkTargets, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, showZone, stripRoom, touchRecent, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
+import { bottomShown, bulkTargets, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, showZone, stripRoom, touchRecent, unparkBottom, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
 import { beginTabDrag, cancelTabDrag, consumeDragClick, type DragBar, type TabDragHost } from './pane-tabdrag.js';
 import { seedTasksTab } from '../lib/task-pane.js';   // #4084 — 저장된 배치에 «태스크» 탭을 한 번만 들인다
 import { hasBrowserSurface } from './browser-surface.js';
@@ -111,9 +111,11 @@ interface Layout {
 const LAYOUT_KEY = deviceStore('lively_panes_layout_v2');   // #1875 — projectId 로 키를 잡으므로 워크스페이스별    // { last: Layout, p: { [projectId]: Layout } }
 const LAYOUT_KEY_V1 = 'lively_panes_layout_v1'; // 전역 한 벌이던 옛 판 — 첫 이사 때 'last' 의 씨앗으로만 읽는다
 //  #4084 — 곁칸 기본에 «태스크»가 선다(원준 2026-09-20: "연동되어서 자동으로 보이게"). 종전엔 [+] 로 넣어야만 보였다.
+//  #4443(원준 2026-10-01) — **아래 칸은 비워 둔다**. 종전엔 타임라인을 닫힌 아래 칸에 넣어 두어, [＋] › «아래 칸 열기» 를
+//   누르면 넣은 적 없는 타임라인이 터미널 밑에 있었다. 타임라인은 독에서 누르면 곁칸에 열린다. 저장된 옛 기본은 unparkBottom.
 const DEF_LAYOUT = (): Layout => ({
-  main: ['sessions'], side: ['files', 'tasks', 'knowledge', 'apps'], bottom: ['timeline'],
-  act: { main: 'sessions', side: 'files', bottom: 'timeline' },
+  main: ['sessions'], side: ['files', 'tasks', 'knowledge', 'apps'], bottom: [],
+  act: { main: 'sessions', side: 'files', bottom: null },
   sideOn: true, bottomOn: false, pin: [],
 });
 const ALL = new Set<string>(PART_DEFS.map((d) => d.type));
@@ -179,7 +181,8 @@ function seedLayoutStore(): void {
   if (EMBEDDED) return;                         // 끼워 넣은 판은 바깥 사람의 배치를 건드리지 않는다(saveLayout 과 같은 이유)
   try {
     const r = seedTasksTab(layoutStore());
-    if (r.changed) localStorage.setItem(LAYOUT_KEY, JSON.stringify(r.store));
+    const u = unparkBottom(r.store);             // #4443 — 닫힌 아래 칸에 숨겨 둔 옛 기본 타임라인을 한 번만 걷는다
+    if (r.changed || u.changed) localStorage.setItem(LAYOUT_KEY, JSON.stringify(u.store));
   } catch (_) { /* 저장소를 못 쓰는 문맥 — 기억만 못 할 뿐 */ }
 }
 /** 이 프로젝트의 배치 — 없으면 마지막으로 쓰던 것, 그것도 없으면 옛 전역 한 벌, 끝으로 기본. */
@@ -255,6 +258,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const zoneTabs = (zone: Zone): TabKey[] => (narrow() ? (zone === 'side' ? [...lay.side, ...lay.bottom] : zone === 'bottom' ? [] : lay[zone]) : lay[zone]);
   /** 열쇠가 실제로 사는 칸(저장된 배치 기준) — 접힌 탭은 곁칸에 그려져도 아래 칸의 것이다. */
   const zoneOf = (key: TabKey): Zone | null => (['main', 'side', 'bottom'] as Zone[]).find((z) => lay[z].includes(key)) || null;
+  /** 아래 칸이 지금 보이나 — 열려 있고 **탭이 있을 때만**(lib/pane-tabs bottomShown · #4443). */
+  const bottomVisible = (): boolean => bottomShown({ bottomOn: lay.bottomOn, count: lay.bottom.length, narrow: narrow() });
   const dropPartFrom = (pane: Pane, key: TabKey): void => { const p = pane.parts.get(key); if (p) { p.destroy?.(); p.root.remove(); pane.parts.delete(key); } };
 
   function saveLayout(): void {
@@ -852,10 +857,24 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     if (showZone(zone, { bottomOn: lay.bottomOn, narrow: narrow() }) !== zone) { moveTab(key, zone, 'side'); return; }
     revealZone(zone); activate(zone, key); paintAll();
   }
-  /** 그 종류의 탭을 **보이게** 한다 — 있으면 켜고(접힌 칸·서랍은 편다), 없으면 곁칸에 만든다. 세션 머리줄 [자료]가 부른다. */
+  /** 이미 켜진 탭을 또 눌렀다 — 그 앱에 «처음으로»를 알린다(iOS 탭 막대 · 자료 = 맨 위 폴더, 원준 10-01). 알렸으면 true.
+   *  켜져 있지 않거나 «처음으로»가 없는 앱이면 false — 부른 쪽이 종전대로 켠다. */
+  function reselect(zone: Zone, key: TabKey): boolean {
+    const pane = panes.get(zone);
+    if (!pane || pane.act !== key) return false;
+    const part = pane.parts.get(key);
+    if (!part || !part.reselect) return false;
+    part.reselect();
+    return true;
+  }
+  /** 그 칸이 지금 보이나 — 좁은 폭은 서랍이 열렸는지 셸이 모르니 «안 보임»(종전대로 서랍을 연다). */
+  const zoneVisible = (z: Zone): boolean => (z === 'main' ? true : z === 'side' ? lay.sideOn && !narrow() : bottomVisible());
+  /** 그 종류의 탭을 **보이게** 한다 — 있으면 켜고(접힌 칸·서랍은 편다), 없으면 곁칸에 만든다. 세션 머리줄 [자료]가 부른다.
+   *  ★ 이미 보이고 켜져 있으면 «다시 누른 것» — 처음으로(자료 = 맨 위 폴더, #4443 원준 10-01). */
   function showPart(type: PartType): void {
     const found = findTab(type);
     if (!found) { addPart('side', type); return; }
+    if (zoneVisible(found.zone) && reselect(found.zone, found.key)) return;
     bringUp(found.zone, found.key);
   }
   // 미리보기 칸에서 "이 주소 열어" 하고 부르면 웹 칸을 켠다 — 없으면 곁칸에 만들고, 이미 있으면 그 칸이 스스로 받는다.
@@ -1120,7 +1139,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       class: 'pn-tab', type: 'button', role: 'tab', tabindex: on ? '0' : '-1',
       'aria-selected': String(on), title: tabTip(key), 'aria-label': nm,
       //  끌기로 끝난 누름의 click 은 켜기가 아니다(놓을 때 셸이 이미 켰다 — reorderTab).
-      onclick: () => { if (consumeDragClick()) return; activate(zone, key); },
+      onclick: () => { if (consumeDragClick()) return; if (reselect(zone, key)) return; activate(zone, key); },
       //  우클릭 = 이 탭을 어떻게 할까(#762 · #3870) — 닫기 · 한꺼번에 닫기 · 고정 · 다른 칸으로 보내기 · 다시 열기.
       oncontextmenu: (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); tabMenu(e, zone, key); },
     }, el('span', { class: 'pn-tab-lead', 'data-ic': ic }, pnIcon(ic, 'pn-i sm')), el('span', { class: 'pn-tab-t', text: nm })) as HTMLElement;
@@ -1269,28 +1288,35 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
 
   function addBtn(zone: Zone): HTMLElement {
     const b = el('button', { class: 'pn-tab-add', type: 'button', title: '이 칸에 내용을 더합니다', 'aria-label': '내용 더하기' }, pnIcon('plus', 'pn-i sm')) as HTMLElement;
-    b.onclick = () => {
-      //  ★ 이미 있어도 **multi 부품이면 하나 더** 낼 수 있다(#762) — 셸은 그 선언만 본다(부품 이름이 여기 안 박힌다).
-      const has = (t: PartType): boolean => zoneTabs(zone).some((k) => tabBase(k) === t);
-      const rest = PART_DEFS.filter((d) => (d.multi || !has(d.type))
-        && !(d.type === 'sessions' && zone !== 'main')     // 세션은 가운데 칸의 것 — 여기 넣으면 뺄 수가 없다(위 불변식)
-        && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'liv')));   // 뷰어는 세션 폴더 파일도 열므로 남긴다
-      const close = anchoredPopover(b, el('div', { class: 'pn-pop' },
-        el('p', { class: 'pn-pop-h', text: '이 칸에 넣을 것을 고르세요.' }),
-        rest.length ? el('div', { class: 'pn-pop-list' }, ...rest.map((d) =>
-          el('button', { class: 'pn-pop-row', type: 'button', onclick: () => { close(); addPart(zone, d.type); } },
-            pnIcon(d.icon, 'pn-i sm'),
-            el('span', { class: 'n' },
-              el('b', { text: has(d.type) ? `${d.name} 하나 더` : d.name }),
-              el('span', { class: 'pn-fine', text: has(d.type) ? '같은 것을 하나 더 띄워 나란히 봅니다.' : d.hint })))))
-          : el('p', { class: 'pn-fine', text: '넣을 수 있는 것을 이미 다 넣었어요.' }),
-        // 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 배치 복구가 갈 곳이 없어졌다 — '화면에 무엇을 둘까'를
-        //  고르는 자리는 여기뿐이라, 닫힌 아래 칸의 유일한 입구와 되돌리기를 이 발치에 둔다.
-        el('div', { class: 'pn-pop-foot' },
-          loose || lay.bottomOn || narrow() ? null : el('button', { class: 'btn-text', type: 'button', text: '아래 칸 열기', onclick: () => { close(); lay.bottomOn = true; saveLayout(); saveView({ bottomOn: true }); paintAll(); } }),
-          el('button', { class: 'btn-text', type: 'button', text: '기본 배치로 되돌리기', onclick: () => { close(); resetLayout(); } }))));
-    };
+    b.onclick = () => openPicker(b, zone);
     return b;
+  }
+  /** 그 칸에 넣을 것을 고르는 팝오버 — [＋] 가 열고, 빈 아래 칸의 «아래 칸 열기» 도 이걸 연다(빈 칸을 펴지 않는다). */
+  function openPicker(anchor: HTMLElement, zone: Zone): void {
+    //  ★ 이미 있어도 **multi 부품이면 하나 더** 낼 수 있다(#762) — 셸은 그 선언만 본다(부품 이름이 여기 안 박힌다).
+    const has = (t: PartType): boolean => zoneTabs(zone).some((k) => tabBase(k) === t);
+    const rest = PART_DEFS.filter((d) => (d.multi || !has(d.type))
+      && !(d.type === 'sessions' && zone !== 'main')     // 세션은 가운데 칸의 것 — 여기 넣으면 뺄 수가 없다(위 불변식)
+      && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'liv')));   // 뷰어는 세션 폴더 파일도 열므로 남긴다
+    const close = anchoredPopover(anchor, el('div', { class: 'pn-pop' },
+      el('p', { class: 'pn-pop-h', text: zone === 'bottom' && !bottomVisible() ? '아래 칸에 넣을 것을 고르세요.' : '이 칸에 넣을 것을 고르세요.' }),
+      rest.length ? el('div', { class: 'pn-pop-list' }, ...rest.map((d) =>
+        el('button', { class: 'pn-pop-row', type: 'button', onclick: () => { close(); addPart(zone, d.type); } },
+          pnIcon(d.icon, 'pn-i sm'),
+          el('span', { class: 'n' },
+            el('b', { text: has(d.type) ? `${d.name} 하나 더` : d.name }),
+            el('span', { class: 'pn-fine', text: has(d.type) ? '같은 것을 하나 더 띄워 나란히 봅니다.' : d.hint })))))
+        : el('p', { class: 'pn-fine', text: '넣을 수 있는 것을 이미 다 넣었어요.' }),
+      // 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 배치 복구가 갈 곳이 없어졌다 — '화면에 무엇을 둘까'를
+      //  고르는 자리는 여기뿐이라, 닫힌 아래 칸의 유일한 입구와 되돌리기를 이 발치에 둔다.
+      //  #4443 — 아래 칸이 안 보일 때만. 내용이 있으면 펴고, **비었으면 넣을 것부터 고른다**(빈 칸이 터미널 밑에 서지 않는다 · lib/pane-tabs bottomShown).
+      el('div', { class: 'pn-pop-foot' },
+        zone === 'bottom' || loose || narrow() || bottomVisible() ? null : el('button', { class: 'btn-text', type: 'button', text: '아래 칸 열기', onclick: () => {
+          close();
+          if (!lay.bottom.length) { openPicker(anchor, 'bottom'); return; }
+          lay.bottomOn = true; saveLayout(); saveView({ bottomOn: true }); paintAll();
+        } }),
+        el('button', { class: 'btn-text', type: 'button', text: '기본 배치로 되돌리기', onclick: () => { close(); resetLayout(); } }))));
   }
 
 
@@ -1403,13 +1429,14 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   function paintAll(): void {
     const n = narrow();
     body.classList.toggle('no-side', !lay.sideOn);
-    colMain.classList.toggle('no-bottom', n || !lay.bottomOn);
+    const bShow = bottomVisible();             // #4443 — 열려 있고 탭이 있을 때만(빈 칸은 안 세운다)
+    colMain.classList.toggle('no-bottom', !bShow);
     //  좁은 폭: 곁칸은 서랍이라 **접힘(sideOn)과 무관하게** 서 있고(보이기는 CSS m-aside 가 정한다), 아래 칸은 접혀 들어갔다.
     sidePane.root.hidden = n ? false : !lay.sideOn;
     splitX.hidden = !lay.sideOn;
     sideReopen.hidden = n || lay.sideOn;
-    bottomPane.root.hidden = n || !lay.bottomOn;
-    splitY.hidden = n || !lay.bottomOn;
+    bottomPane.root.hidden = !bShow;
+    splitY.hidden = !bShow;
     paintPane('main'); paintPane('side'); paintPane('bottom');
     swap?.sync();
     card?.sync();
