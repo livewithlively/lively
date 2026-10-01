@@ -1650,7 +1650,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     paintDoor();
   }, 8000);
 
-  // ── 곁칸 독(#4443, 원준 2026-09-30) — 곁칸에 띄울 앱의 문. 규칙은 lib/pane-dock, 그리기는 v2/pane-dock ──────────
+  // ── 곁칸 독(#4443, 원준 2026-09-30 → 10-01) — 곁칸에 띄울 앱의 문. 기본은 세션과 곁칸 사이 이음매(분할선 위), 끌면 곁칸 아래.
+  //   규칙은 lib/pane-dock, 그리기는 v2/pane-dock ──────────
   //  여기(모든 선언이 끝난 뒤 · 첫 그림 직전)에 세운다 — 독은 세우자마자 한 번 그리며 tabName(tabTitles) 까지 읽는다.
   //  독이 아는 «떠 있는 것» = 곁칸 + 아래 칸의 탭(좁은 폭이면 서랍의 줄). 하나만 사는 앱이 아래 칸에 있으면 곁칸에 둘째를 세우지 않고 그리로 간다.
   //  옛 [앱] 부품(설치 앱 목록)은 독에 세우지 않는다 — 독의 [더보기]가 같은 일을 한다(둘을 나란히 두면 같은 격자 아이콘 둘이 선다, 실측).
@@ -1688,6 +1689,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
         toast(`「${a.title}」을(를) 이 세션에 붙였어요 — 사이드바에서 AI 와 같이 씁니다.`);
       }
     },
+    //  이음매(원준 10-01: 기본은 4안 «이음매 독») = 세션 열과 곁칸 사이 분할선. 좁은 폭(서랍) · 곁칸 접힘 · 카드 모드(곁칸이 격자 전체,
+    //   분할선 display:none)엔 이음매가 없다 — 독은 곁칸 아래로 선다. 자리바꿈(sw-left)이면 분할선이 곁칸 오른쪽에 있다(독이 스스로 읽는다).
+    seam: () => (narrow() || !lay.sideOn || body.classList.contains('cm') ? null : splitX),
     narrow: () => narrow(),
   });
 

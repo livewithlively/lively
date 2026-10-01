@@ -1,16 +1,16 @@
 // #4443 «곁칸 → 앱의 실행 화면» — 곁칸 독의 규칙(web/lib/pane-dock.ts) + 셸 배선(web/v2/panes.ts · pane-dock.ts).
 //
-//  원준(2026-09-30): "3안으로 갈건데 독 드래그하면 2안 위치에 위치시킬 수도 있게끔. 테두리쪽 원하는 곳 어디든 …
-//   같은 앱 여러개 열릴 수도 있게 … 맥의 독 참고해서 모션이나 애니메이션이나 우클릭 기능이나 더보기 눌렀을 때의 화면까지."
+//  원준(2026-10-01, 바로잡음): "디폴트로 4안(이음매 독)이고 끌어당겨서 3안에 둘 수 있는 걸로 … 아래에 뒀을 때는 곁칸 사이즈
+//   변하는거에 따라서 독 사이즈도 바꾸고 싶음. 너가 바닥 왼쪽 탭 만든건 없애줘 일단은. 그리고 좀 더 이쁘게 … 맥 os 참고해서."
 //
 //  1부 — 순수 규칙(엣지 표의 행마다 단언 하나 이상). 2부 — 셸이 그 규칙을 실제로 부르는지(소스 배선).
-//  화면(독의 자리·크기·곁칸 머리 높이)은 pane-dock-runtime.test.mjs 가 실제 크롬에서 잰다.
-//  fail-first(2026-09-30): 1부는 PANE_DOCK_SRC 로 변형본을 물려 빨간불을 봤다 — 순환(다음 인스턴스)을 «처음 것»으로 ·
-//   막대 문턱 `<=`→`<` · 가운데 자석 제거 · 동점 우선순위 뒤집기 · 안전 영역에서 hide 무시 · «다 뺐다» 표식 무시.
-//   2부는 배선 전의 panes.ts(git show HEAD)에 물려 빨간불을 봤다.
+//  화면(독의 자리·크기·곁칸 머리 높이·끌어 옮기기)은 pane-dock-runtime.test.mjs 가 실제 크롬에서 잰다.
+//  fail-first(2026-09-30 첫 판): 순환(다음 인스턴스)을 «처음 것»으로 · «다 뺐다» 표식 무시 — PANE_DOCK_SRC 로 변형본을 물려 빨간불.
 //  fail-first(2026-10-01 리뷰 반영): dockPins 가 고를 수 있는 것으로 base 를 거르면 B2·B2b·B3·B3b · movePinBefore 가 이웃을 무시하면
 //   B6·B6d·B6e·B6f · pinSlot 경계 `>`→`>=` 면 Q2 · 비고정 가드를 지우면 Q3·Q4 가 빨갛다. 배선 G2·J4·W10·K1 은 반영 전 main.ts · panes.ts ·
 //   pane-dock.ts · 50-mobile.css(MAIN_SRC · PANES_SRC · DOCK_UI_SRC · MOBILE_CSS)에 물려 빨간불을 봤다.
+//  fail-first(2026-10-01 이음매 판): 기본을 float 로 하면 P1 · P3 · P3c, 이음매 없을 때 곁칸 아래로 안 가면 P7, 안쪽 문턱 `>`→`>=` 면 L3,
+//   가운데 자석을 빼면 L6, 곁칸 아래 크기에서 확대 몫(grow)을 빼면 F5 · F7b, 이음매에도 바닥 여백을 주면 S1 이 빨갛다(PANE_DOCK_SRC).
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,15 +31,18 @@ const eq = (got, want, n) => check(J(got) === J(want), n, `기대 ${J(want)} · 
 const near = (got, want, n, eps = 1e-9) => check(Math.abs(got - want) <= eps, n, `기대 ${want} · 실제 ${got}`);
 
 // ── 1부: 순수 규칙 ────────────────────────────────────────────────────────────
-// 설정 읽기·쓰기 (P1–P6)
-eq(D.readDockPrefs(undefined), { edge: "bottom", at: 0.5, mode: "float", hide: false, mag: true }, "P1 적은 적 없으면 기본 — 바닥 가운데에 떠 있는 독, 확대 켬, 가리기 끔");
-eq(D.readDockPrefs({ edge: "left", at: "0.30", mode: "bar", hide: "1", mag: "0" }), { edge: "left", at: 0.3, mode: "bar", hide: true, mag: false }, "P2 적어 둔 대로");
-eq(D.readDockPrefs({ edge: "diagonal", at: "x", mode: "?", hide: "yes", mag: 3 }), { edge: "bottom", at: 0.5, mode: "float", hide: false, mag: true }, "P3 깨진 칸은 칸마다 기본값(한 칸이 깨져도 나머지는 산다)");
-eq(D.readDockPrefs({ edge: "top", at: "x" }).edge, "top", "P3b 한 칸만 깨지면 나머지 칸은 적힌 대로");
+// 설정 읽기·쓰기 (P1–P7) — 이음매 판(10-01): 서는 곳(home) 둘 · 이음매 자리(at) · 확대
+eq(D.readDockPrefs(undefined), { home: "seam", at: 0.5, mag: true }, "P1 적은 적 없으면 기본 — 이음매(4안) 가운데, 확대 켬(원준 10-01: 디폴트는 4안)");
+eq(D.readDockPrefs({ home: "float", at: "0.30", mag: "0" }), { home: "float", at: 0.3, mag: false }, "P2 적어 둔 대로");
+eq(D.readDockPrefs({ home: "diagonal", at: "x", mag: 3 }), { home: "seam", at: 0.5, mag: true }, "P3 깨진 칸은 칸마다 기본값(한 칸이 깨져도 나머지는 산다)");
+eq(D.readDockPrefs({ home: "float", at: "x" }).home, "float", "P3b 한 칸만 깨지면 나머지 칸은 적힌 대로");
+eq(D.readDockPrefs({ edge: "right", at: "0.80", mode: "bar", hide: "1", mag: "1" }), { home: "seam", at: 0.8, mag: true }, "P3c 종전 판의 칸(edge · mode · hide)은 안 읽는다 — 무엇을 골랐든 이음매에서 다시 시작(막대·가리기는 걷었다)");
 eq([D.readDockPrefs({ at: "1.7" }).at, D.readDockPrefs({ at: "-2" }).at, D.readDockPrefs({ at: "" }).at], [1, 0, 0.5], "P4 자리는 0~1 로 자르고, 빈 값은 가운데");
-const p5 = { edge: "right", at: 0.123, mode: "float", hide: true, mag: false };
+const p5 = { home: "float", at: 0.123, mag: false };
 eq(D.readDockPrefs(D.writeDockPrefs(p5)), { ...p5, at: 0.12 }, "P5 적은 것을 다시 읽으면 같다(자리는 소수 둘째 자리)");
 check(Object.values(D.writeDockPrefs(p5)).every((v) => typeof v === "string" && v.length <= 64), "P6 서버 map 저장소 규격 — 값은 문자열 64자 이내");
+eq([D.effectiveHome({ home: "seam" }, true), D.effectiveHome({ home: "seam" }, false), D.effectiveHome({ home: "float" }, true)], ["seam", "float", "float"],
+  "P7 이음매가 없으면(서랍 · 카드 · 접힘) 곁칸 아래 — 있으면 사람이 고른 곳");
 
 // 고정 목록 (N1–N5)
 const known = (t) => ["tasks", "files", "knowledge", "web", "timeline", "liv", "preview"].includes(t);
@@ -105,21 +108,20 @@ eq(D.dockClick(web, "files", []), { kind: "show", key: "web" }, "C5 본 기록�
 eq(D.dockClick(web, "files", [], { fresh: true, multi: true }), { kind: "open" }, "C6 ⌥-클릭 · «새로 열기» — 여럿 띄울 수 있는 앱은 새로");
 eq(D.dockClick(items[1], "web", [], { fresh: true, multi: false }), { kind: "show", key: "files" }, "C6b 하나만 사는 앱은 새로 열지 않고 보여 준다");
 
-// 자리 (L1–L8) — 곁칸 상자 (1000,100) 340×800
-const box = { left: 1000, top: 100, width: 340, height: 800 };
-eq(D.placeFromPoint(1175, 850, box), { edge: "bottom", at: 0.5, mode: "float" }, "L1 바닥 근처 가운데 → 바닥 · 가운데(자석) · 떠 있음");
-eq(D.placeFromPoint(1100, 885, box), { edge: "bottom", at: 0.29, mode: "bar" }, "L2 바닥에 바짝(22px 이내) → 막대(2안), 자리는 가로 비율");
-eq(D.placeFromPoint(1100, 878, box).mode, "bar", "L2b 경계 — 정확히 22px 은 막대");
-eq(D.placeFromPoint(1100, 877, box).mode, "float", "L2c 경계 — 23px 은 떠 있음");
-eq(D.placeFromPoint(1030, 300, box), { edge: "left", at: 0.25, mode: "float" }, "L3 왼쪽 근처 → 왼쪽 · 세로 비율");
-eq(D.placeFromPoint(1050, 850, { left: 1000, top: 800, width: 100, height: 100 }).edge, "bottom", "L4 거리가 같으면 바닥이 이긴다(기본 자리)");
-eq(D.placeFromPoint(1030, 830, { left: 1000, top: 800, width: 100, height: 100 }).edge, "top", "L4b 위와 왼쪽이 같으면(둘 다 30px, 바닥·오른쪽 70px) 위가 이긴다(바닥 › 위 › 왼 › 오른)");
-eq(D.placeFromPoint(1500, 500, box), { edge: "right", at: 0.5, mode: "bar" }, "L5 곁칸 밖에 놓으면 가장 가까운 테두리 · 막대");
-eq(D.placeFromPoint(1000 + 340 * 0.56, 850, box).at, 0.5, "L6 경계 — 가운데 +0.06 은 가운데로 붙는다");
-eq(D.placeFromPoint(1000 + 340 * 0.57, 850, box).at, 0.57, "L6b 경계 — +0.07 은 놓은 자리 그대로");
-eq(D.placeFromPoint(1175, 120, box).edge, "top", "L7 위 테두리도 선다");
-const z = D.placeFromPoint(10, 10, { left: 0, top: 0, width: 0, height: 0 });
-check(Number.isFinite(z.at) && z.at >= 0 && z.at <= 1, "L8 상자 폭·높이가 0(접힌 칸)이어도 자리가 NaN 이 아니다", J(z));
+// 자리 (L1–L9) — 이음매 x=900, 곁칸은 오른쪽, 세로 구간 142~900(머리 줄 아래 ~ 바닥). 곁칸 안쪽으로 40 넘게 들이면 곁칸 아래.
+const g = { seam: 900, side: "right", top: 142, bottom: 900 };
+eq(D.placeDock(910, 142 + 758 * 0.3, g), { home: "seam", at: 0.3 }, "L1 경계선 가까이(곁칸 안쪽 10) 놓으면 이음매 — 자리는 세로 구간의 비율");
+eq(D.placeDock(1100, 500, g), { home: "float" }, "L2 곁칸 안쪽 깊이 놓으면 곁칸 아래(at 은 안 돌려준다 — 이음매에서 고른 자리를 지우지 않게)");
+eq([D.placeDock(940, 500, g).home, D.placeDock(941, 500, g).home], ["seam", "float"], "L3 경계 — 안쪽 정확히 40 은 이음매, 41 은 곁칸 아래");
+eq(D.placeDock(700, 142 + 758 * 0.8, g), { home: "seam", at: 0.8 }, "L4 세션 쪽에 놓아도 이음매(경계선은 세션에서도 손이 닿는 경첩)");
+eq([D.placeDock(800, 500, { ...g, side: "left" }).home, D.placeDock(870, 500, { ...g, side: "left" }).home, D.placeDock(960, 500, { ...g, side: "left" }).home], ["float", "seam", "seam"],
+  "L5 자리바꿈(곁칸이 왼쪽 · sw-left) — 안쪽은 반대 방향으로 잰다(왼쪽으로 100 들이면 곁칸 아래, 30 이면 이음매, 오른쪽 세션 쪽도 이음매)");
+eq(D.placeDock(910, 142 + 758 * 0.56, g).at, 0.5, "L6 경계 — 가운데 +0.06 은 가운데로 붙는다(맥 창 끌기의 가운데 자석)");
+eq(D.placeDock(910, 142 + 758 * 0.57, g).at, 0.57, "L6b 경계 — +0.07 은 놓은 자리 그대로");
+eq([D.placeDock(910, 0, g).at, D.placeDock(910, 2000, g).at], [0, 1], "L7 세로 구간 밖에 놓으면 끝으로 자른다");
+eq(D.placeDock(905, 500, { ...g, seam: null }), { home: "float" }, "L8 이음매가 없으면(서랍 · 카드 · 접힘) 어디에 놓아도 곁칸 아래");
+const z = D.placeDock(900, 10, { seam: 900, side: "right", top: 10, bottom: 10 });
+check(Number.isFinite(z.at) && z.at >= 0 && z.at <= 1, "L9 세로 구간이 0(접힌 칸)이어도 자리가 NaN 이 아니다", J(z));
 
 // 확대 (M1–M5)
 near(D.magnify(0, { max: 1.6, range: 90 }), 1.6, "M1 마우스 바로 밑은 최대");
@@ -134,16 +136,22 @@ eq(D.fitIconSize(6, 1000, fo), 40, "F1 넉넉하면 최대");
 eq(D.fitIconSize(6, 200, fo), 26, "F2 모자라면 최소에서 멈춘다((200−36−12−20)/6 = 22 → 26)");
 eq(D.fitIconSize(6, 300, fo), Math.floor((300 - 36 - 12 - 20) / 6), "F3 그 사이는 확대 몫을 남기고 나눈다");
 eq(D.fitIconSize(0, 300, fo), 40, "F4 아이콘이 없으면 최대(나누지 않는다)");
+//  곁칸 아래 독(③)은 곁칸 폭을 따라 커지고 작아진다(원준 10-01) — 아이콘 여섯 · 구분선 하나(9) · 안 여백 8 · 바깥 여백 8 · 간격 4 · 확대 몫 1.75.
+const ff = { min: 26, max: 48, gap: 4, pad: 8, margin: 8, extra: 9, grow: D.MAG_GROW };
+eq([D.floatIconSize(280, 6, ff), D.floatIconSize(340, 6, ff), D.floatIconSize(420, 6, ff)], [28, 36, 46], "F5 곁칸 폭을 따라 커진다 — 280 → 28 · 340 → 36 · 420 → 46");
+eq([D.floatIconSize(440, 6, ff), D.floatIconSize(900, 6, ff), D.floatIconSize(120, 6, ff)], [48, 48, 26], "F6 경계 — 넓으면 최대 48 에서, 좁으면 최소 26 에서 멈춘다");
+eq(D.floatIconSize(340, 6, { ...ff, grow: 0 }), 46, "F7 확대를 끄면 불어날 몫을 안 남긴다 — 같은 폭에서 더 크다");
+const fw = (w) => { const k = D.floatIconSize(w, 6, ff); return 6 * k + ff.extra + 2 * ff.pad + ff.gap * 5 + D.MAG_GROW * k; };
+check([280, 339, 420, 440, 600].every((w) => fw(w) <= w - 2 * ff.margin + 0.5), "F7b 확대한 독(불어난 몫까지)이 곁칸 폭 안에 든다 — 곁칸은 넘친 것을 자른다(첫 촬영: 양 끝이 잘렸다)",
+  J([280, 339, 420, 440, 600].map((w) => [w, Math.round(fw(w))])));
+eq(D.floatIconSize(340, 0, ff), 48, "F8 아이콘이 없으면 최대(나누지 않는다)");
 
-// 안전 영역 (S1–S5) — 픽셀 상수가 아니라 «어느 여백이 들어가나»를 본다(상수는 DOCK_METRICS 한 자리).
-const s = 32, m = D.DOCK_METRICS;
-const core = s + 2 * m.pad + m.dot;
-eq(D.dockInset({ edge: "bottom", at: 0.5, mode: "float", hide: true, mag: true }, s), { bottom: 0, top: 0, left: 0, right: 0 }, "S1 가려 두면 부품이 자리를 다 쓴다");
-eq(D.dockInset({ edge: "bottom", at: 0.5, mode: "float", hide: false, mag: true }, s), { bottom: core + 2 * m.margin, top: 0, left: 0, right: 0 }, "S2 떠 있는 독(바닥) — 아이콘 + 안 여백×2 + 점 + 바깥 여백×2 만큼 부품이 물러선다(macOS: 창은 독 위까지)");
-eq(D.dockInset({ edge: "bottom", at: 0.5, mode: "bar", hide: false, mag: true }, s).bottom, core + m.label, "S3 막대(바닥)는 이름 줄까지, 바깥 여백 없이(테두리에 붙는다)");
-eq(D.dockInset({ edge: "left", at: 0.5, mode: "bar", hide: false, mag: true }, s), { bottom: 0, top: 0, left: core, right: 0 }, "S3b 막대(옆)는 이름 없이 — 세로를 하나도 안 쓴다");
-eq(D.dockInset({ edge: "top", at: 0.5, mode: "float", hide: false, mag: true }, s).top, core + 2 * m.margin, "S4 위에 두면 위가 물러선다");
-check(core + 2 * m.margin <= 60, "S5 떠 있는 독(아이콘 32)이 바닥에서 먹는 높이는 60px 이하 — 세로가 귀하다(원준 2026-09-30)", `실제 ${core + 2 * m.margin}`);
+// 안전 영역 (S1–S4) — 픽셀 상수가 아니라 «어느 여백이 들어가나»를 본다(상수는 DOCK_METRICS 한 자리).
+const m = D.DOCK_METRICS;
+eq(D.dockInset("seam", 32), { bottom: 0, top: 0, left: 0, right: 0 }, "S1 이음매 독은 아무도 안 비킨다(경계선 위에 떠 있다) — 세로를 하나도 안 쓴다");
+eq(D.dockInset("float", 36), { bottom: 36 + 2 * m.pad + m.dot + 2 * m.margin, top: 0, left: 0, right: 0 }, "S2 곁칸 아래 독 — 아이콘 + 안 여백×2 + 점 줄 + 바깥 여백×2 만큼 부품이 물러선다(macOS: 창은 독 위까지)");
+eq([D.dockThickness("seam", 32), D.dockThickness("float", 36)], [32 + 2 * m.pad, 36 + 2 * m.pad + m.dot], "S3 두께 — 이음매는 점 줄이 알약 길이 쪽이라 안 든다 · 곁칸 아래는 점 줄까지");
+check(D.dockInset("float", 36).bottom <= 72, "S4 곁칸 기본 폭(아이콘 36)의 곁칸 아래 독이 바닥에서 먹는 높이는 72px 이하 — 세로가 귀하다", `실제 ${D.dockInset("float", 36).bottom}`);
 
 // 색 (K1)
 eq([D.appColor("files"), D.appColor("tasks"), D.appColor("nope")], ["src", "proj", "apps"], "K1 앱 색은 앱 아이콘 토큰을 빌린다 — 모르는 종류는 회색");
@@ -156,7 +164,7 @@ check(PANES.length > 0, "W0 배선: 셸 소스를 읽었다(비었으면 아래�
 check(/mountDock\(/.test(PANES), "W1 셸이 곁칸에 독을 세운다(mountDock)");
 check(/dock\??\.sync\(\)/.test(PANES), "W2 곁칸을 다시 그릴 때마다 독도 맞춘다(dock.sync)");
 check(/\bdockClick\(/.test(DOCK), "W3 누르기는 규칙(dockClick)을 탄다 — 인스턴스 순환이 한 곳에서만 정해진다");
-check(/\bplaceFromPoint\(/.test(DOCK), "W4 끌어 놓기는 규칙(placeFromPoint)을 탄다");
+check(/\bplaceDock\(/.test(DOCK), "W4 끌어 놓기는 규칙(placeDock)을 탄다 — 이음매냐 곁칸 아래냐가 한 곳에서만 정해진다");
 check(/\bdockInset\(/.test(DOCK), "W5 부품이 비키는 폭은 규칙(dockInset)에서");
 check(/shellPrefStore\('lively_v2_dock', 'map'\)/.test(DOCK) && /shellPrefStore\('lively_v2_dock_apps', 'list'\)/.test(DOCK), "W6 독 설정·고정 목록은 계정에(사람이 정한 것 — 기기마다 다시 맞추지 않는다)");
 check(/--ac/.test(PANES) && /appColor\(/.test(PANES), "W7 탭도 같은 앱 색(--ac)을 쓴다 — 독과 탭이 한 앱으로 읽힌다");
@@ -173,5 +181,11 @@ const q16 = MOBILE.indexOf("input.pn-dock-more-q { font-size: 16px; }");
 const block = q16 < 0 ? -1 : MOBILE.lastIndexOf("@media", q16);      // 그 규칙을 품은 블록(640px 블록이 여럿이다)
 check(q16 > 0 && block >= 0 && MOBILE.startsWith("@media (max-width: 640px)", block), "K1 폰(≤640px)에서 [더보기]의 앱 찾기 칸은 16px — iOS 가 초점에서 확대하지 않는 하한(창이 열리며 초점이 들어간다)");
 
+//  이음매 판(10-01)의 배선
+check(/seam: \(\) => \(narrow\(\) \|\| !lay\.sideOn \|\| body\.classList\.contains\('cm'\) \? null : splitX\)/.test(PANES),
+  "W8 셸이 독에 이음매(세션 열과 곁칸 사이 분할선)를 넘긴다 — 서랍 · 접힘 · 카드 모드엔 없다(독이 곁칸 아래로 선다)");
+const DOCK_CSS = read(process.env.DOCK_CSS || path.join(root, "public/styles/42-v2-dock.css"));
+check(!/pn-dock-grip|pn-dock-reveal|data-mode="bar"|자동으로 가리기/.test(DOCK) && !/pn-dock-grip|pn-dock-reveal|data-mode="bar"/.test(DOCK_CSS),
+  "W11 손잡이(⋮⋮) · 테두리 막대(2안) · 자동으로 가리기는 걷었다(원준 10-01 «바닥 왼쪽 탭 … 없애줘») — 알약 자체가 손잡이");
 console.log(`\n${pass} ok · ${fail} fail`);
 if (fail) process.exit(1);
