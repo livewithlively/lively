@@ -188,8 +188,10 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
    24px 상자 · 고리 1.5px(색 원 21px) · 글자 11.5px · 겹침 2px(고리끼리만 겹치고 색 원은 맞닿는다) — 넓은 두 글자 이니셜(«MW»)은
    폭이 약 21px 라 색 원(21px)을 꽉 채워 4px 만 겹쳐도 2.8px 가 덮였다(scripts/session-face-size-runtime.test.mjs S3 실측) —
    자간을 −0.06em 좁혀 두 글자 이니셜이 원 안에 들게 한다(한 글자 이니셜엔 티가 안 난다).
-   머리줄은 22→26px 묶음이라 약 3px 높아질 뿐이다(머리줄 높이는 패딩이 정한다 — .sc-head). */
-.sc-faces { display: inline-flex; align-items: center; height: 26px; padding: 0 3px 0 2px; margin-right: 2px;
+   ⚠ 머리줄을 높이지 않는다: 묶음은 26px 로 그리되 위아래 −2px 여백으로 **배치 높이는 종전 22px 그대로** 둔다(남는 2px 는 머리줄
+   패딩 9/8px 안으로 그려진다). 이 여백이 없으면 데스크톱 머리줄이 40→44px 로 두꺼워진다(CI 가 잡았다 — 첫 측정은 좁은 창의
+   폰 레이아웃에서 재 47px 동일로 잘못 읽었다). */
+.sc-faces { display: inline-flex; align-items: center; height: 26px; margin-block: -2px; padding: 0 3px 0 2px; margin-right: 2px;
   border: 1px solid transparent; border-radius: 999px; background: none; cursor: pointer;
   font: inherit; font-size: 12px; font-weight: 500; flex: none; }
 .sc-faces:hover { border-color: var(--line-net); background: transparent; }

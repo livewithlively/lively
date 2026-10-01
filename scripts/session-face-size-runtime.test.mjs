@@ -7,6 +7,7 @@
 //   S2 글자는 11.5px 이상                  🔴
 //   S3 뒤 얼굴이 앞 얼굴의 글자를 안 덮는다  🔴 겹침을 늘리면 두 글자 이니셜이 잘린다
 //   S4 얼굴 줄이 머리줄을 높이지 않는다      🔴 키우다 머리줄이 두꺼워지면 «너무 높이 많이 차지해»(원준 2026-08-26)가 돌아온다
+//                                          (데스크톱 폭에서 잰다 — 26px 묶음을 그대로 두면 40→44px. 첫 판이 CI 에서 걸린 자리다)
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -52,7 +53,8 @@ let fail = 0;
 const check = (ok, label, detail = "") => { console.log(`${ok ? "ok  " : "FAIL"}  ${label}${detail ? "  — " + detail : ""}`); if (!ok) fail++; };
 
 for (const theme of ["light", "dark"]) {
-  const dom = await dumpDom(chrome, { html: page(theme), copy: files.map((f) => path.join(STY, f)), prefix: "face-size-" });
+  //  ⚠ 데스크톱 폭으로 잰다 — 기본 창은 좁아 폰 레이아웃(단추 36px, 얼굴 줄은 폰에서 숨는다)이 머리줄 높이를 정해 S4 가 늘 통과했다.
+  const dom = await dumpDom(chrome, { html: page(theme), copy: files.map((f) => path.join(STY, f)), prefix: "face-size-", args: ["--window-size=1400,900"] });
   const m = dom.match(/<pre id="out">([^<]*?)ENDRESULT/);
   if (!m) { check(false, `${theme} 결과를 못 받았다`, dom.slice(0, 300)); continue; }
   const r = JSON.parse(decodeURIComponent(m[1]));
