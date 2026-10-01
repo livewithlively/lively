@@ -1,49 +1,49 @@
-// lib/pane-dock.ts — 곁칸 **독**의 규칙(#4443 «곁칸 → 앱의 실행 화면», 원준 2026-09-30).
+// lib/pane-dock.ts — 곁칸 **독**의 규칙(#4443 «곁칸 → 앱의 실행 화면», 원준 2026-09-30 → 10-01).
 //
-//  원준: "3안으로 갈건데 독 드래그하면 2안 위치에 위치시킬 수도 있게끔. 테두리쪽 원하는 곳 어디든 위치시킬 수 있게끔 …
-//   충분히 맥의 독 참고해서 모션이나 애니메이션이나 우클릭 기능이나 더보기 눌렀을 때의 화면까지."
-//   · 3안 = 곁칸 위에 **떠 있는** 독(macOS Dock 을 곁칸 안으로) · 2안 = 곁칸 바닥에 **붙은 막대**(iOS 탭 바).
-//   · 독은 곁칸의 네 테두리 어디든 선다 — 테두리 가운데뿐 아니라 그 테두리를 따라 원하는 자리(at, 0~1)에.
+//  원준(10-01, 바로잡음): "디폴트로 4안(이음매 독)이고 끌어당겨서 3안에 둘 수 있는 걸로 하고 싶은거야. 그리고 아래에 뒀을 때는
+//   곁칸 사이즈 변하는거에 따라서 독 사이즈도 바꾸고 싶음. 너가 바닥 왼쪽 탭 만든건 없애줘 일단은. 그리고 좀 더 이쁘게 … 맥 os 참고해서."
+//   · 독이 서는 곳은 둘이다(home):
+//     ④ seam  — **이음매**: 세션과 곁칸 사이 경계선 위에 걸친 짧은 세로 알약(기본). 세션·곁칸 어느 쪽에서도 손이 닿는 경첩.
+//               경계선을 따라 위아래 자리(at, 0~1)를 고른다. 세로를 하나도 안 쓴다.
+//     ③ float — **곁칸 아래**에 떠 있는 알약(macOS Dock 을 곁칸 안으로). 곁칸 폭을 따라 커지고 작아진다.
+//   · 종전(09-30)의 «테두리에 붙는 막대(2안)» · «네 테두리 어디든» · «자동으로 가리기» · 손잡이(⋮⋮)는 걷었다.
 //
 //  이 파일은 DOM 을 모른다(값 → 값). 그리는 쪽은 v2/pane-dock.ts, 셸 배선은 v2/panes.ts.
 //
-//  ── 왜 독이 자리를 비키게 하나(안전 영역) ──
-//  macOS 도 독이 보이는 동안엔 창을 최대로 키워도 **독 위까지만** 커진다. 곁칸도 같다: 독이 보이면 부품이 독만큼 물러선다
-//   (프로젝트 칸 맨 아래의 «태스크 추가» 입력칸이 독 뒤에 깔리지 않는다 — 원준 2026-09-30 걱정의 답).
-//   세로가 아까우면 ① [자동으로 가리기](macOS 와 같은 이름) — 독이 숨고 부품이 자리를 다 쓴다, 테두리에 손을 대면 나온다
-//   ② 독을 옆 테두리로 옮긴다 — 세로를 하나도 안 쓴다. 두 길 모두 우클릭 메뉴와 끌기에 있다.
+//  ── 왜 곁칸 아래 독은 자리를 비키게 하나(안전 영역) ──
+//  macOS 도 독이 보이는 동안엔 창을 최대로 키워도 **독 위까지만** 커진다. 곁칸 아래 독도 같다: 부품이 독만큼 물러선다
+//   (프로젝트 칸 맨 아래의 «태스크 추가» 입력칸이 독 뒤에 깔리지 않는다). 이음매 독은 경계선 위에 떠 있어 아무도 비키지 않는다.
 
-export type DockEdge = 'bottom' | 'top' | 'left' | 'right';
-/** float = 떠 있는 알약(3안) · bar = 테두리에 붙은 막대(2안, 가로면 이름까지). */
-export type DockMode = 'float' | 'bar';
-export interface DockPlace { edge: DockEdge; at: number; mode: DockMode }
-export interface DockPrefs extends DockPlace {
-  /** 자동으로 가리기 — 테두리에 손을 대야 나온다. 가려진 동안 부품은 자리를 다 쓴다. */
-  hide: boolean;
+export type DockHome = 'seam' | 'float';
+export interface DockPrefs {
+  home: DockHome;
+  /** 이음매를 따라 선 자리(0 = 위 · 1 = 아래, 독 가운데 기준). 곁칸 아래로 옮겨도 남겨 둔다 — 이음매로 돌아오면 그 자리로. */
+  at: number;
   /** 확대 — 마우스 밑 아이콘과 이웃이 커진다(macOS 의 «확대»). */
   mag: boolean;
 }
-export const DOCK_EDGES: readonly DockEdge[] = ['bottom', 'top', 'left', 'right'];
-export const DOCK_DEFAULTS: Readonly<DockPrefs> = { edge: 'bottom', at: 0.5, mode: 'float', hide: false, mag: true };
+export const DOCK_DEFAULTS: Readonly<DockPrefs> = { home: 'seam', at: 0.5, mag: true };
 
 const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 const round2 = (v: number): number => Math.round(v * 100) / 100;
-export const isVertical = (e: DockEdge): boolean => e === 'left' || e === 'right';
 
-/** 계정에 적어 둔 독 설정(문자열 맵) → 설정. 모르는 값·깨진 값은 칸마다 기본값으로 떨어진다(한 칸이 깨져도 나머지는 산다). */
+/** 계정에 적어 둔 독 설정(문자열 맵) → 설정. 모르는 값·깨진 값은 칸마다 기본값으로(한 칸이 깨져도 나머지는 산다).
+ *  ⚠ 종전 판의 칸(edge · mode · hide)은 읽지 않는다 — 그 판에서 무엇을 골랐든 이 판의 기본(이음매)에서 다시 시작한다
+ *   (원준 10-01: 기본은 4안). */
 export function readDockPrefs(raw: unknown): DockPrefs {
   const m = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
-  const edge = (DOCK_EDGES as readonly string[]).includes(String(m.edge)) ? m.edge as DockEdge : DOCK_DEFAULTS.edge;
-  const mode: DockMode = m.mode === 'bar' ? 'bar' : m.mode === 'float' ? 'float' : DOCK_DEFAULTS.mode;
+  const home: DockHome = m.home === 'float' ? 'float' : m.home === 'seam' ? 'seam' : DOCK_DEFAULTS.home;
   const n = Number(m.at);
   const at = m.at === undefined || m.at === '' || !Number.isFinite(n) ? DOCK_DEFAULTS.at : round2(clamp01(n));
-  const flag = (v: unknown, dflt: boolean): boolean => (v === '1' ? true : v === '0' ? false : dflt);
-  return { edge, at, mode, hide: flag(m.hide, DOCK_DEFAULTS.hide), mag: flag(m.mag, DOCK_DEFAULTS.mag) };
+  const mag = m.mag === '1' ? true : m.mag === '0' ? false : DOCK_DEFAULTS.mag;
+  return { home, at, mag };
 }
 /** 설정 → 계정에 적을 문자열 맵(서버 map 저장소는 문자열→문자열, 값 64자 상한). */
 export function writeDockPrefs(p: DockPrefs): Record<string, string> {
-  return { edge: p.edge, at: round2(clamp01(p.at)).toFixed(2), mode: p.mode, hide: p.hide ? '1' : '0', mag: p.mag ? '1' : '0' };
+  return { home: p.home, at: round2(clamp01(p.at)).toFixed(2), mag: p.mag ? '1' : '0' };
 }
+/** 지금 실제로 서는 곳 — 이음매가 없으면(좁은 폭의 서랍 · 곁칸이 화면 전체인 카드 모드 · 접힘) 곁칸 아래. */
+export function effectiveHome(p: Pick<DockPrefs, 'home'>, hasSeam: boolean): DockHome { return hasSeam ? p.home : 'float'; }
 
 // ── 독에 고정한 앱 ───────────────────────────────────────────────────────────
 //  한 번도 정한 적이 없으면 기본 다섯(프로젝트 · 자료 · 지식 · 웹 · 타임라인). 곁칸 기본 폭 340px 에 떠 있는 독이 확대까지 품고 들어가는 수다.
@@ -143,25 +143,30 @@ export function dockClick(item: DockItem, act: string | null, recent: readonly s
   return { kind: 'show', key: seen ?? item.keys[0] };
 }
 
-// ── 자리 — 끌어 놓은 곳에서 테두리·자리·모양을 읽는다 ────────────────────────
+// ── 자리 — 끌어 놓은 곳에서 «이음매냐 곁칸 아래냐» 와 이음매를 따른 자리를 읽는다 ────────────────
 export interface Box { left: number; top: number; width: number; height: number }
-/** 끌던 독을 (x, y) 에 놓았다 → 가장 가까운 테두리 · 그 테두리를 따른 자리 · 모양.
- *  · 테두리에 **바짝**(bar 이내 — 기본 22px) 대면 막대(2안), 그 안쪽이면 떠 있는 알약(3안).
- *  · 자리는 테두리를 따라 0~1. 가운데 근처(snap 이내)는 정확히 가운데로 붙인다(맥 창 끌기의 가운데 자석).
- *  · 거리가 같으면 bottom › top › left › right(기본 자리가 이긴다). 곁칸 밖에 놓아도 가장 가까운 테두리다(바깥은 막대). */
-export function placeFromPoint(x: number, y: number, box: Box, o: { bar?: number; snap?: number } = {}): DockPlace {
-  const bar = o.bar ?? 22;
+export interface DockGeom {
+  /** 이음매(세션과 곁칸 사이 경계선)의 x — 없으면 null(곁칸이 서랍 · 카드 · 접힘). */
+  seam: number | null;
+  /** 곁칸이 이음매의 어느 쪽에 있나 — 오른쪽(기본) · 왼쪽(자리바꿈 sw-left). */
+  side: 'right' | 'left';
+  /** 이음매를 따라 독이 설 수 있는 세로 구간(머리 줄 아래 ~ 바닥). */
+  top: number; bottom: number;
+}
+/** 끌던 독을 (x, y) 에 놓았다 → 어디에 서나.
+ *  · 곁칸 안쪽으로 near(기본 40px) 넘게 들어와 놓으면 곁칸 아래(③). 그보다 이음매 가까이 · 세션 쪽에 놓으면 이음매(④).
+ *  · 이음매 자리(at)는 세로 구간을 따라 0~1. 가운데 근처(snap 이내)는 정확히 가운데로 붙인다(맥 창 끌기의 가운데 자석).
+ *  · 이음매가 없으면 늘 곁칸 아래. 곁칸 아래로 갈 때 at 은 돌려주지 않는다(이음매에서 고른 자리를 지우지 않게 — 부르는 쪽이 옛 값을 둔다). */
+export function placeDock(x: number, y: number, g: DockGeom, o: { near?: number; snap?: number } = {}): { home: DockHome; at?: number } {
+  const near = o.near ?? 40;
   const snap = o.snap ?? 0.06;
-  const dist: Record<DockEdge, number> = {
-    bottom: box.top + box.height - y, top: y - box.top, left: x - box.left, right: box.left + box.width - x,
-  };
-  let edge: DockEdge = 'bottom';
-  for (const e of DOCK_EDGES) if (dist[e] < dist[edge]) edge = e;
-  const along = isVertical(edge) ? (y - box.top) / (box.height || 1) : (x - box.left) / (box.width || 1);
-  let at = round2(clamp01(along));
-  //  +1e-9: 0.56 − 0.5 는 부동소수점으로 0.0600…05 라 «±0.06 은 가운데»의 경계가 빠진다(시험 L6 이 잡았다).
+  if (g.seam === null) return { home: 'float' };
+  const inward = g.side === 'right' ? x - g.seam : g.seam - x;
+  if (inward > near) return { home: 'float' };
+  let at = round2(clamp01((y - g.top) / ((g.bottom - g.top) || 1)));
+  //  +1e-9: 0.56 − 0.5 는 부동소수점으로 0.0600…05 라 «±0.06 은 가운데»의 경계가 빠진다.
   if (Math.abs(at - 0.5) <= snap + 1e-9) at = 0.5;
-  return { edge, at, mode: dist[edge] <= bar ? 'bar' : 'float' };
+  return { home: 'seam', at };
 }
 
 // ── 확대 ─────────────────────────────────────────────────────────────────────
@@ -180,20 +185,33 @@ export function fitIconSize(n: number, avail: number, o: { max: number; min: num
   return Math.max(o.min, Math.min(o.max, s));
 }
 
+/** 곁칸 아래 독(③)의 아이콘 한 변 — **곁칸 폭을 따라** 커지고 작아진다(원준 10-01: «곁칸 사이즈 변하는거에 따라서 독 사이즈도»).
+ *  곁칸 폭(바깥 여백 뺀 것)에 아이콘 n 개 + 확대로 불어날 몫(grow — 아이콘 몇 개분)이 들어가게 고르고, min~max 로 자른다.
+ *  ⚠ grow 를 빼먹으면 확대한 독이 곁칸 폭을 넘어 양 끝이 곁칸 테두리에서 잘린다(곁칸은 넘친 것을 자른다 — 첫 촬영 실측).
+ *  확대 1.6 · 범위 3.2 아이콘이면 불어나는 몫 ≈ 1.75 아이콘(코사인 종: 0.6 + 2×0.44 + 2×0.13).
+ *  아이콘 여섯(앱 다섯 + [더보기]) · 구분선 하나 · 확대 켬: 곁칸 280 → 28 · 340 → 36 · 420 → 46 · 440 이상 → 48(최대). */
+export function floatIconSize(width: number, n: number, o: { min: number; max: number; gap: number; pad: number; margin: number; extra?: number; grow?: number }): number {
+  if (!(n > 0)) return o.max;
+  const s = Math.floor((width - 2 * o.margin - (o.extra ?? 0) - 2 * o.pad - o.gap * (n - 1)) / (n + (o.grow ?? 0)));
+  return Math.max(o.min, Math.min(o.max, s));
+}
+/** 확대가 독 축으로 불어나는 몫(아이콘 몇 개분) — 확대 max · 범위(아이콘 range 개)의 코사인 종을 이웃 간격(1 + gap/size ≈ 1.1)으로 더한 값. */
+export const MAG_GROW = 1.75;
+
 // ── 안전 영역 ────────────────────────────────────────────────────────────────
 export interface Inset { bottom: number; top: number; left: number; right: number }
-//  세로가 귀하다(원준 2026-09-30) — 떠 있는 독(아이콘 32)이 바닥에서 먹는 높이는 32 + 5×2 + 4 + 6×2 = 58px 이다.
-export const DOCK_METRICS = { pad: 5, margin: 6, label: 14, dot: 4 } as const;
-/** 독이 차지하는 두께 — 부품이 이만큼 물러선다. 가려 두면(hide) 0. 막대(가로)는 이름 줄까지, 떠 있는 알약은 바깥 여백까지. */
-export function dockThickness(p: Pick<DockPrefs, 'edge' | 'mode'>, size: number, m: { pad: number; margin: number; label: number; dot: number } = DOCK_METRICS): number {
-  const core = size + 2 * m.pad + m.dot;
-  if (p.mode === 'bar') return core + (isVertical(p.edge) ? 0 : m.label);
-  return core + 2 * m.margin;
+//  세로가 귀하다(원준 09-30) — 곁칸 아래 독이 바닥에서 먹는 높이 = 아이콘 + 안 여백×2 + 점 줄 + 바깥 여백×2
+//   (곁칸 기본 폭의 아이콘 36 이면 36 + 12 + 6 + 16 = 70px). 그래서 기본은 세로를 하나도 안 쓰는 이음매다.
+//   dot = 점 줄(점 4 + 아이콘과의 사이 2) — 42-v2-dock.css 의 알약 높이(아이콘 + 18)와 짝이다.
+export const DOCK_METRICS = { pad: 6, margin: 8, dot: 6 } as const;
+/** 독 알약의 두께(축에 수직) — 아이콘 + 안 여백×2 + 점 줄. 이음매 독은 점 줄이 아이콘 밑(알약 길이 쪽)에 서므로 두께에 안 든다. */
+export function dockThickness(home: DockHome, size: number, m: { pad: number; margin: number; dot: number } = DOCK_METRICS): number {
+  return size + 2 * m.pad + (home === 'float' ? m.dot : 0);
 }
-export function dockInset(p: DockPrefs, size: number, m: { pad: number; margin: number; label: number; dot: number } = DOCK_METRICS): Inset {
+/** 부품이 비키는 폭 — 곁칸 아래 독만 바닥을 비킨다(두께 + 바깥 여백×2). 이음매 독은 0(경계선 위에 떠 있다). */
+export function dockInset(home: DockHome, size: number, m: { pad: number; margin: number; dot: number } = DOCK_METRICS): Inset {
   const z: Inset = { bottom: 0, top: 0, left: 0, right: 0 };
-  if (p.hide) return z;
-  z[p.edge] = dockThickness(p, size, m);
+  if (home === 'float') z.bottom = dockThickness(home, size, m) + 2 * m.margin;
   return z;
 }
 
