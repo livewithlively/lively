@@ -825,5 +825,19 @@ export function bindOmniKey(): void {
     if (box) omniClose(); else omniOpen();
   });
 }
-/** 프레임 → 셸 '통합검색 열어라' 신호. 프레임 쪽(web/standalone/terminal.ts)도 이 문자열을 쓴다. */
+/** 프레임 → 셸 '통합검색 열어라' 신호. 프레임 쪽(web/standalone/terminal.ts)도 이 문자열을 쓴다.
+ *  모양: `{ type: OMNI_MSG, seed?: string }` — seed 는 검색칸에 미리 넣을 글(우클릭 «「…」 검색», #4530). */
 export const OMNI_MSG = 'lively-omni-open';
+/** 셸 → 프레임 '통합검색을 닫았다' 신호(#4530) — 열어 달라고 부탁한 프레임에게만 보낸다. 받은 프레임은 제 입력칸(터미널 등)으로
+ *  초점을 되돌린다. 모양: `{ type: OMNI_CLOSED_MSG }`. */
+export const OMNI_CLOSED_MSG = 'lively-omni-closed';
+/** 이 문서에서 통합검색을 열 수 있나 — 셸(v2)만 연다. 액자(클래식 ?embed=1) 문서는 같은 모듈을 실어도 훅이 없다(#4530). */
+export function omniAvailable(): boolean { return !!hooks; }
+/** 액자 안 문서가 바깥 셸에게 «통합검색을 열어 달라» 고 부탁한다(#4530). 셸 밖(단독 탭)이면 false. */
+export function requestOmniFromParent(seed?: string): boolean {
+  if (typeof window === 'undefined' || window.parent === window) return false;
+  try {
+    window.parent.postMessage({ type: OMNI_MSG, ...(seed ? { seed: String(seed).slice(0, 200) } : {}) }, location.origin);
+    return true;
+  } catch { return false; }
+}
