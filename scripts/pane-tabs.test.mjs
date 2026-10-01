@@ -116,6 +116,36 @@ eq(L.showZone("bottom", { bottomOn: true, narrow: false }), "bottom", "V2 아래
 eq(L.showZone("bottom", { bottomOn: false, narrow: true }), "bottom", "V3 좁은 폭은 서랍이 아래 칸 탭도 보여 주므로 그대로(배치를 안 건드린다)");
 eq([L.showZone("side", { bottomOn: false, narrow: false }), L.showZone("main", { bottomOn: false, narrow: false })], ["side", "main"], "V4 곁칸 · 가운데 칸은 그대로");
 
+// 아래 칸이 보이나 (BS1–BS5) — #4443 원준(10-01) 후속: 아래 칸은 사람이 거기 넣은 것이 있을 때만 있다
+eq(L.bottomShown({ bottomOn: true, count: 1, narrow: false }), true, "BS1 열려 있고 탭 하나(경계) — 보인다");
+eq(L.bottomShown({ bottomOn: true, count: 0, narrow: false }), false, "BS2 열림을 기억해도 탭이 없으면(경계) 빈 칸을 세우지 않는다");
+eq(L.bottomShown({ bottomOn: false, count: 3, narrow: false }), false, "BS3 닫혀 있으면 탭이 있어도 안 보인다");
+eq(L.bottomShown({ bottomOn: true, count: 2, narrow: true }), false, "BS4 좁은 폭은 서랍이 아래 칸 탭을 든다 — 아래 칸은 안 보인다");
+eq(L.bottomShown({ bottomOn: false, count: 0, narrow: true }), false, "BS5 닫힘 · 빈 칸 · 좁은 폭 — 안 보인다");
+
+// 옛 기본값 걷기 (PK1–PK12) — 닫힌 아래 칸에 타임라인 하나만 숨겨 둔 옛 기본 배치를 한 번만 걷는다
+const parked = (extra = {}) => ({ main: ["sessions"], side: ["files", "tasks"], bottom: ["timeline"], act: { main: "sessions", side: "files", bottom: "timeline" }, sideOn: true, bottomOn: false, ...extra });
+let pk = L.unparkBottom({ last: parked() });
+eq([pk.store.last.bottom, pk.store.last.act.bottom, pk.cleared, pk.changed, pk.store.seeded.bottom], [[], null, 1, true, 1], "PK1 닫힌 아래 칸의 타임라인 하나 — 걷고 켜짐도 비운다 · 표식");
+eq([pk.store.last.side, pk.store.last.main], [["files", "tasks"], ["sessions"]], "PK1b 다른 칸은 손대지 않는다");
+const noFlag = parked(); delete noFlag.bottomOn;
+eq(L.unparkBottom({ last: noFlag }).store.last.bottom, [], "PK2 bottomOn 이 없으면(옛 판) 닫힘으로 본다 — 걷는다");
+eq(L.unparkBottom({ last: parked({ bottomOn: true }) }).store.last.bottom, ["timeline"], "PK3 열려 있으면 사람이 펴 두고 쓰는 것 — 그대로");
+eq(L.unparkBottom({ last: parked({ bottom: ["timeline", "web"] }) }).store.last.bottom, ["timeline", "web"], "PK4 다른 탭이 함께 있으면 사람이 고른 배치 — 그대로");
+eq(L.unparkBottom({ last: parked({ bottom: ["web"], act: { main: "sessions", side: "files", bottom: "web" } }) }).store.last.bottom, ["web"], "PK5 타임라인이 아닌 탭 하나 — 그대로");
+pk = L.unparkBottom({ last: parked({ bottom: [] }) });
+eq([pk.store.last.bottom, pk.cleared, pk.changed], [[], 0, true], "PK6 이미 빈 아래 칸 — 걷을 것 없음(표식만)");
+pk = L.unparkBottom({ last: parked(), p: { 1: parked(), 2: parked({ bottomOn: true }) } });
+eq([pk.store.last.bottom, pk.store.p[1].bottom, pk.store.p[2].bottom, pk.cleared], [[], [], ["timeline"], 2], "PK7 프로젝트마다 — 옛 기본만 걷고 열린 칸은 그대로");
+pk = L.unparkBottom({ last: parked(), seeded: { bottom: 1 } });
+eq([pk.store.last.bottom, pk.changed, pk.cleared], [["timeline"], false, 0], "PK8 이미 걷었으면(표식) 손대지 않는다 — 그 뒤 사람이 둔 타임라인은 사람이 고른 것");
+eq([L.unparkBottom({}).changed, L.unparkBottom({}).store.seeded.bottom, L.unparkBottom(null).store.seeded.bottom, L.unparkBottom(null).cleared], [true, 1, 1, 0], "PK9 빈 저장소 · null — 던지지 않고 표식만 찍는다");
+eq(L.unparkBottom({ last: parked(), seeded: { tasks: 1 } }).store.seeded, { tasks: 1, bottom: 1 }, "PK10 태스크 들이기 표식(seeded.tasks)은 그대로 두고 함께 찍는다");
+const broken = { last: { main: ["sessions"], bottom: "timeline" }, p: { 3: null, 4: { main: ["sessions"], bottom: ["timeline"] } } };
+let brokenOk = true; try { pk = L.unparkBottom(broken); } catch (_) { brokenOk = false; }
+eq([brokenOk, pk.store.last.bottom, pk.store.p[3], pk.store.p[4].bottom, "act" in pk.store.p[4], pk.cleared], [true, "timeline", null, [], false, 1], "PK11 망가진 항목(배열 아닌 bottom · null · act 없음) — 던지지 않고, 없는 act 는 만들지 않는다");
+eq(L.unparkBottom({ last: parked({ bottom: ["timeline#2"] }) }).store.last.bottom, ["timeline#2"], "PK12 사람이 만든 둘째 타임라인 — 옛 기본은 'timeline' 정확히 하나뿐");
+
 // 닫은 탭 다시 열기 (U1–U5)
 let st = L.pushClosed([], [{ key: "a", zone: "side", at: 4 }]);
 st = L.pushClosed(st, [{ key: "c", zone: "side", at: 6 }, { key: "b", zone: "side", at: 5 }]);
@@ -139,7 +169,7 @@ check(/const x = pinned \|\| \(detachX && !on\) \? null : el\('button', \{\s*cla
 check(/el\('span', \{ class: 'pn-tab-lead'[^)]*\}, pnIcon\(ic, 'pn-i sm'\)\), el\('span', \{ class: 'pn-tab-t'/.test(tabElFn), "S1b 탭 = 아이콘 칸(pn-tab-lead) + 이름(pn-tab-t) — 런타임 기하 시험이 재는 그 구조");
 check(/addEventListener\('auxclick'[\s\S]*?e\.button !== 1[\s\S]*?if \(!pinned && !\(detachX && !on\)\) closeTab\(zone, key, \{ pointer: true \}\)/.test(tabElFn), "S2 휠 클릭(가운데 버튼) = 닫기 · 고정 탭과 안 켠 붙은 앱 탭은 제외");
 check(/beginTabDrag\(dragHost, zone, key, w, e\)/.test(tabElFn) && !/draggable/.test(tabElFn), "S3 끌기는 포인터 끌기(pane-tabdrag) — HTML5 draggable 이 아니다");
-check(/if \(consumeDragClick\(\)\) return; activate\(zone, key\)/.test(tabElFn), "S3b 끌기로 끝난 누름은 켜기로 치지 않는다");
+check(/if \(consumeDragClick\(\)\) return; (?:if \(reselect\(zone, key\)\) return; )?activate\(zone, key\)/.test(tabElFn), "S3b 끌기로 끝난 누름은 켜기로 치지 않는다(«처음으로»보다도 먼저 거른다 — X5)");
 check(!/data-n/.test(tabElFn), "S4 아이콘 어깨의 번호(data-n)는 걷혔다");
 const dropFn = fn("  function dropTab(zone: Zone, key: TabKey, o?: { paint?: boolean }): void {");
 check(/lay\.act\[real\] = landingAfterClose\(before, key, recent\[real\]\)/.test(dropFn), "S5 켜진 탭을 닫으면 최근 본 탭으로(landingAfterClose)");
@@ -169,6 +199,31 @@ const declAt = (re) => { const m = re.exec(PANES.slice(mountAt)); return m ? mou
 check(firstPaint > 0 && [/const recent: Record<Zone, TabKey\[\]>/, /let closedStack: ClosedTab\[\]\[\]/, /const dragHost: TabDragHost/].every((re) => { const i = declAt(re); return i > 0 && i < firstPaint; }),
   "S11 탭 줄의 기억(recent · closedStack · dragHost)은 첫 paintAll 보다 앞에 선언된다");
 check(/pin: TabKey\[\];/.test(PANES) && /pin: arr\(s\.pin\)/.test(PANES) && /normalizePins\(lay\[z\], pins\)/.test(PANES), "S10 고정 탭은 배치에 저장되고, 읽을 때 맨 앞으로 모인다");
+
+// 아래 칸은 넣은 것이 있을 때만 · 켜진 탭을 다시 누르면 처음으로 (X1–X9) — #4443 원준(10-01)
+//  «닫힌 아래 칸은 … 펼쳐지지 않습니다 → 근데 왜 <아래 칸을 켜면 (타임라인이) 거기 있습니다> ???» · «자료 아이콘을 다시 누르면 자료 맨 상단으로»
+const defAt = PANES.indexOf("const DEF_LAYOUT = (): Layout => ({");
+const defBlock = defAt >= 0 ? PANES.slice(defAt, PANES.indexOf("});", defAt)) : "";
+check(defAt >= 0 && /bottom: \[\],/.test(defBlock) && /bottom: null/.test(defBlock) && !/'timeline'/.test(defBlock), "X1 기본 배치의 아래 칸은 비어 있다 — 타임라인을 닫힌 아래 칸에 숨겨 두지 않는다");
+const seedAt = PANES.indexOf("function seedLayoutStore(): void {");
+const seedFn = seedAt >= 0 ? PANES.slice(seedAt, PANES.indexOf("\n}\n", seedAt)) : "";
+check(/const u = unparkBottom\(r\.store\);/.test(seedFn) && /if \(r\.changed \|\| u\.changed\) localStorage\.setItem\(LAYOUT_KEY, JSON\.stringify\(u\.store\)\);/.test(seedFn), "X2 저장된 배치의 옛 기본(숨긴 타임라인)을 한 번 걷어 저장한다");
+const paintFn = fn("  function paintAll(): void {");
+check(/const bShow = bottomVisible\(\);/.test(paintFn) && /colMain\.classList\.toggle\('no-bottom', !bShow\);/.test(paintFn) && /bottomPane\.root\.hidden = !bShow;/.test(paintFn) && /splitY\.hidden = !bShow;/.test(paintFn), "X3 아래 칸 · 경계선은 «열려 있고 탭이 있을 때만» 선다");
+check(/const bottomVisible = \(\): boolean => bottomShown\(\{ bottomOn: lay\.bottomOn, count: lay\.bottom\.length, narrow: narrow\(\) \}\);/.test(PANES), "X3b 그 판정은 lib bottomShown — 탭 수는 아래 칸의 배치");
+const pickFn = fn("  function openPicker(anchor: HTMLElement, zone: Zone): void {");
+check(/zone === 'bottom' \|\| loose \|\| narrow\(\) \|\| bottomVisible\(\) \? null/.test(pickFn) && /if \(!lay\.bottom\.length\) \{ openPicker\(anchor, 'bottom'\); return; \}/.test(pickFn), "X4 «아래 칸 열기» — 아래 칸이 비었으면 빈 칸을 펴지 않고 넣을 것부터 고른다");
+check(/b\.onclick = \(\) => openPicker\(b, zone\);/.test(PANES), "X4b [＋] 는 같은 고르기를 연다");
+check(/onclick: \(\) => \{ if \(consumeDragClick\(\)\) return; if \(reselect\(zone, key\)\) return; activate\(zone, key\); \}/.test(PANES), "X5 탭 누르기 — 끈 뒤면 무시, 켜진 탭이면 «처음으로», 아니면 켠다");
+const reFn = fn("  function reselect(zone: Zone, key: TabKey): boolean {");
+check(/if \(!pane \|\| pane\.act !== key\) return false;/.test(reFn) && /if \(!part \|\| !part\.reselect\) return false;/.test(reFn) && /part\.reselect\(\);/.test(reFn), "X6 «처음으로»는 켜진 탭이고 앱이 그걸 가졌을 때만 — 아니면 종전대로 켠다");
+const showFn = fn("  function showPart(type: PartType): void {");
+check(/if \(zoneVisible\(found\.zone\) && reselect\(found\.zone, found\.key\)\) return;\n    bringUp\(found\.zone, found\.key\);/.test(showFn), "X7 머리줄 [자료] — 이미 보이고 켜져 있으면 «처음으로», 아니면 보이게만");
+check(/const zoneVisible = \(z: Zone\): boolean => \(z === 'main' \? true : z === 'side' \? lay\.sideOn && !narrow\(\) : bottomVisible\(\)\);/.test(PANES), "X7b 접힌 곁칸 · 좁은 폭(서랍)은 «안 보임» — 다시 누른 게 아니라 여는 것");
+const FILES = readFileSync(process.env.PANES_FILES_SRC || path.join(root, "web/v2/panes-files.ts"), "utf8");
+check(/reselect: \(\) => \{ if \(cwd\) goto\(''\); else body\.scrollTop = 0; \},/.test(FILES), "X8 자료의 «처음으로» = 맨 위 폴더(뒤로 가능한 goto) · 이미 맨 위면 목록 맨 위");
+const PARTS = readFileSync(process.env.PANES_PARTS_SRC || path.join(root, "web/v2/panes-parts.ts"), "utf8");
+check(/\n  reselect\?: \(\) => void;\n\}/.test(PARTS), "X9 부품 약속(Part)에 reselect");
 
 console.log(fail ? `\n${fail}건 실패 · ${pass}건 통과` : `\n${pass}건 통과`);
 process.exit(fail ? 1 : 0);

@@ -149,6 +149,38 @@ export function showZone(zone: 'main' | 'side' | 'bottom', o: { bottomOn: boolea
   return zone === 'bottom' && !o.bottomOn && !o.narrow ? 'side' : zone;
 }
 /**
+ * 아래 칸이 보이나 — **열려 있고 탭이 하나 이상 있을 때만**(좁은 폭은 서랍이 아래 칸 탭을 들어 늘 안 보인다).
+ *  원준(2026-10-01) 후속: 아래 칸은 사람이 거기 넣은 것이 있을 때만 있다. 열림은 세션마다 기억하는데(pn_view_by_sess)
+ *   칸의 내용은 프로젝트마다 한 벌이라, 어떤 세션이 «열림»을 기억한 채 내용이 비면 빈 칸이 터미널 밑에서 올라왔다.
+ */
+export function bottomShown(o: { bottomOn: boolean; count: number; narrow: boolean }): boolean {
+  return !o.narrow && o.bottomOn && o.count > 0;
+}
+/**
+ * 저장된 배치 묶음({last, p})에서 **옛 기본값** — 닫힌 아래 칸에 타임라인 하나만 — 을 **한 번만** 걷는다(표식 seeded.bottom).
+ *  옛 기본 배치가 타임라인을 닫힌 아래 칸에 넣어 두어, [＋] › «아래 칸 열기» 를 누르면 넣은 적 없는 타임라인이 거기 있었다.
+ *  · 열려 있거나 다른 탭이 함께 있으면 사람이 고른 배치다 — 손대지 않는다. 걷은 타임라인은 독에서 누르면 곁칸에 열린다.
+ *  · 표식을 찍은 뒤로는 손대지 않는다 — 그 뒤 사람이 아래 칸에 둔 타임라인은 사람이 고른 것이다(task-pane seedTasksTab 과 같은 틀).
+ *  돌려주는 changed 는 «저장소를 다시 써야 하나»다 — 표식만 새로 찍혀도 true. 받은 객체를 그 자리에서 고친다.
+ */
+export function unparkBottom(store: any): { store: any; changed: boolean; cleared: number } {
+  const st = store && typeof store === 'object' ? store : {};
+  if (st.seeded && st.seeded.bottom) return { store: st, changed: false, cleared: 0 };
+  const parked = (lay: any): boolean => !!lay && typeof lay === 'object' && !lay.bottomOn
+    && Array.isArray(lay.bottom) && lay.bottom.length === 1 && lay.bottom[0] === 'timeline';
+  let cleared = 0;
+  const unpark = (lay: any): void => {
+    if (!parked(lay)) return;
+    lay.bottom = [];
+    if (lay.act && typeof lay.act === 'object') lay.act.bottom = null;
+    cleared++;
+  };
+  unpark(st.last);
+  if (st.p && typeof st.p === 'object') for (const k of Object.keys(st.p)) unpark(st.p[k]);
+  st.seeded = { ...(st.seeded || {}), bottom: 1 };
+  return { store: st, changed: true, cleared };
+}
+/**
  * 탭 띠 안에서 탭들이 실제로 나눠 쓸 폭 — 띠의 좌우 안 여백과 탭 사이 간격(n-1 개)을 뺀다.
  *  #4443(2026-10-01 리뷰): 탭 새 옷에서 띠에 안 여백(2+2)과 간격(2)이 생겼는데 clientWidth(안 여백 포함 · 간격 모름)를 그대로
  *   planTabs 에 넘겨, 탭 여섯 개면 «들어간다» 고 셈한 줄이 실제로는 넘쳐 마지막 탭이 삐져나왔다.
