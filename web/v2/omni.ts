@@ -113,9 +113,13 @@ const icon = (k: Kind, cls: string): SVGElement =>
 //   (점검 실측). 이제 이 묶음은 순위에 끼지 않으므로 문턱은 «보여 줄 만한가» 만 가른다.
 const SIM_MIN = 0.55;
 const SIM_MAX_ROWS = 3;
-//  결과가 자리 잡을 때까지 기다리는 상한 — 채널이 다 오면 그 전에 그린다. 실측 채널 시간: 대화 0.3초 · 프로젝트 0.4초 ·
-//   지식 글자 검색 0.8~1.4초 · 뜻 비슷 0.4초. 이 안에 못 온 채널은 온 뒤에 제 자리에 끼되 맨 위 셋은 바꾸지 않는다.
-const SETTLE_MS = 1200;
+//  결과가 자리 잡을 때까지 기다리는 상한 — 글자 채널이 다 오면 그 전에 그린다. 실측 채널 시간(매니지드): 대화 0.3초(색인을
+//   다시 쓰는 동안 1.4초) · 프로젝트 0.4초 · 지식 글자 검색 0.8~1.4초. 이 안에 못 온 채널은 온 뒤에 제 자리에 끼되 맨 위 셋은
+//   바꾸지 않는다 — 1.2초일 때 배포 직후 실화면에서 대화(1.4초)가 늦게 와 «가장 맞는 결과» 가 빈 채 굳고, 첫 줄로 고른 줄이
+//   한 칸 밀렸다(#4530). 뜻 비슷(sim)은 맨 아래 묶음 전용이라 기다리지 않는다(늦게 와도 위의 줄을 밀지 않는다).
+const SETTLE_MS = 2500;
+/** 자리 잡기를 막는 채널 — 뜻 비슷은 빼고. */
+const holdsSettle = (pending: Set<string>): boolean => [...pending].some((s) => s !== 'sim');
 const DEBOUNCE_MS = 160;
 
 // ── 종류 필터 — 칩 하나 = 종류 하나, 누른 것만 켜진다 (#4156) ─────────────
@@ -549,8 +553,8 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     if (mySeq !== seq || box !== mine) return;
     buckets.set(src, sinceMs ? rows.filter((h) => h.sim || inPeriod(h.at, sinceMs)) : rows);
     pending.delete(src);
-    if (!pending.size) settle(mySeq);
-    else if (settled) { rebuild(); paint(); refreshNote(); }   // 자리 잡은 뒤 늦게 온 채널 — 제 자리에 끼운다(맨 위는 굳어 있다)
+    if (settled) { rebuild(); paint(); refreshNote(); }   // 자리 잡은 뒤 늦게 온 채널 — 제 자리에 끼운다(맨 위는 굳어 있다)
+    else if (!holdsSettle(pending)) settle(mySeq);
   }
   function settle(mySeq: number): void {
     if (mySeq !== seq || box !== mine) return;
@@ -756,7 +760,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
       })), my), fail('src'));
     });
     settled = false;
-    if (!pending.size) { settle(my); return; }
+    if (!holdsSettle(pending)) { settle(my); return; }
     //  앞 결과는 흐리게 둔 채 기다린다 — 다 오거나 상한이 되면 한 번에 바꾼다. 앞 결과가 없으면(첫 글자) 셸 목록부터 보인다.
     bar.classList.add('on');
     if (!rowNodes.length || rowHits.every((h) => h.key.startsWith('q:') || !h.at)) { rebuild(); paint(); }

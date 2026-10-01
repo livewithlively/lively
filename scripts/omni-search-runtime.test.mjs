@@ -25,6 +25,8 @@
 //  G16 기간 «오늘» — 오늘 밖의 줄이 빠진다 · 대화 요청에 since · 기간은 저장하지 않는다 · 기간 메뉴의 Esc 는 메뉴만 닫는다
 //  G17 안내 줄 — 색인 중(수) · 밀린 수 모름(null) · 대화 채널 503 · 500 internal_error · 200자 넘는 검색어 · 결과 없음 + 기간
 //  G18 창을 닫으면 진행 중인 요청을 끊는다
+//  G21 대화가 1.5초 늦게 와도(색인을 다시 쓰는 동안의 실측 1.4초) 기다렸다가 맨 위 셋에 세운다 — 1.2초 상한 때는 맨 위가 빈 채 굳었다
+//  G22 뜻 비슷 채널은 자리 잡기를 막지 않는다(맨 아래 묶음 전용) — 늦게 와도 글자 결과는 바로 선다
 //  W   모든 장면을 통틀어 페이지 오류 0 · 배선(가짜 서버가 실제로 불렸다)
 //
 // 왜 런타임인가: 결함이 «어느 채널을 부르나 · 어떤 줄이 어느 묶음에 어떤 순서로 서나 · 언제 무엇이 열리나 · 초점이 어디 있나»
@@ -121,6 +123,7 @@ async function PAGE_MAIN() {
     if (p.endsWith("/api/ui/sources")) return J({ entries: [] });
     if (p.endsWith("/api/ui/v6/session-search")) {
       await later("conv");
+      if (q.includes("어렴풋")) return J({ results: [{ node_id: "n1", session_id: "conv-v", name: "어렴풋한 대화", title: null, at: iso(TODAY), hits: 1, top: true, best: { role: "user", ts: iso(TODAY), text: "어렴풋 기억나는 그 얘기" }, edit: null, fields: ["user"] }], pending: 0, capped: false });
       if (CONV_FAIL === "500") return new Response(JSON.stringify({ error: "internal_error" }), { status: 500, headers: { "content-type": "application/json" } });
       if (CONV_FAIL) return new Response(JSON.stringify({ error: "대화 검색이 시간 안에 끝나지 않았습니다 — 낱말을 더 넣어 좁혀 주세요" }), { status: 503, headers: { "content-type": "application/json" } });
       if (CONV_HANG) {
@@ -258,7 +261,21 @@ async function PAGE_MAIN() {
     await sleep(1700);
     const selAfter = shape().flatMap((g) => g.rows).find((r) => r.sel)?.t || "";
     R.selKeep = { before: selBefore, after: selAfter, simArrived: shape().some((g) => g.h === "뜻이 비슷한 지식") };
+    // ── G22 뜻 비슷이 늦어도 글자 결과는 기다리지 않는다 ──
+    await type("슬랙 설계");
+    const tSim = performance.now();
+    await sleep(240); await waitFor(isSettled, 4000);   // 입력 기다림(160ms) 뒤에 run — 그 전엔 앞 장면이 이미 자리 잡혀 있다
+    R.simWaitMs = Math.round(performance.now() - tSim);
+    R.simLate = shape();
     DELAY.sim = 0;
+    await sleep(1700);
+
+    // ── G21 늦게 온 대화도 맨 위 셋에 ──
+    DELAY.conv = 1500;
+    await type("어렴풋");
+    await sleep(240); await waitFor(isSettled, 5000); await sleep(40);
+    R.lateConv = shape();
+    DELAY.conv = 0;
 
     // ── G13 초점 돌려주기 · 주소 바뀜 · Tab ──
     OM.omniClose();
@@ -454,6 +471,9 @@ check(R.reopenValue === "다른말", "G14 결과를 열고 다시 열면 그 검
 }
 // G11
 check(!!R.selKeep && R.selKeep.before && R.selKeep.before === R.selKeep.after && R.selKeep.simArrived, "G11 고른 줄은 늦게 온 채널이 끼어들어도 그대로", JSON.stringify(R.selKeep));
+// G21·G22
+check((group(R.lateConv, "가장 맞는 결과")?.rows || []).some((r) => r.t === "어렴풋한 대화"), "G21 늦게 온 대화(1.5초)도 맨 위 셋에 선다", JSON.stringify(R.lateConv));
+check(R.simWaitMs < 1000 && allRows(R.simLate).some((r) => r.t === "슬랙 검색 설계") && !R.simLate.some((g) => g.h === "뜻이 비슷한 지식"), "G22 뜻 비슷이 늦어도 글자 결과는 바로 선다", JSON.stringify({ ms: R.simWaitMs, heads: (R.simLate || []).map((g) => g.h) }));
 // G13
 check(R.tabInside === true, "G13 Tab 은 창 안에서만 돈다", JSON.stringify(R.tabInside));
 check(R.focusBack === true, "G13 닫으면 연 순간의 칸으로 초점이 돌아간다", JSON.stringify(R.focusBack));
