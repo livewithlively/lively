@@ -34,8 +34,12 @@ import { sessionVisible } from "../terminal/write-cap.js";
 import { sessionNameFromPrompt } from "../terminal/session-name.js";
 import { currentTenant, withTenant } from "../org/tenant-context.js";
 
-/** 한 번에 읽는 창. 한 줄이 이보다 길면(대개 거대한 도구 결과) 그 줄은 건너뛴다 — 사람 말·AI 말이 이만큼 긴 일은 드물다. */
+/** 한 번에 읽는 창. 이보다 긴 한 줄은 그 줄만 따로 읽는다(LONG_LINE_MAX 까지). */
 export const CONV_WINDOW = 2 * 1024 * 1024;
+/** 따로 읽어 줄 한 줄의 상한. 스크린샷을 붙인 지시는 그림이 base64 로 그 줄에 실려 MB 단위가 된다(이 박스의 실제 대화 238개:
+ *  그림 실린 줄 최대 1.37MB · 재검토가 2.5MB·5MB 줄에서 사람 말이 통째로 빠지는 것을 확인). API 가 그림 한 장을 5MB 로 막으므로
+ *  16MB 면 그림 세 장까지 든다. 이보다 긴 줄(거대한 도구 결과)은 건너뛴다 — 동시 색인 2 × 이 크기가 게이트웨이 메모리의 상한이다. */
+export const LONG_LINE_MAX = 16 * 1024 * 1024;
 /** 뽑는 규칙의 판. extractConvMessages·하네스 파서가 바뀌어 옛 색인을 다시 만들어야 하면 올린다. */
 export const CONV_INDEX_VER = 1;
 const NL = 0x0a;
@@ -53,8 +57,11 @@ export function convParserFor(harness: string | null | undefined): Parser | null
 const pgText = (s: string): string => s.replace(/\u0000/g, "");
 /** ISO 로 읽히는 시각만 — 이상한 값 하나가 캐스트 오류로 창 커밋을 막지 않게. */
 const pgTs = (s: string): string | null => { const n = s ? Date.parse(s) : NaN; return Number.isFinite(n) ? new Date(n).toISOString() : null; };
-/** 파서 상태 → jsonb. JSONB 도 NUL(\u0000)을 못 받는다 — 상태에 사람 말이 실리는 하네스(codex)가 있어 같은 이유로 걷는다. */
-const pgState = (state: ParseState): string => JSON.stringify(state ?? {}).replace(/\\u0000/g, "");
+/** 파서 상태 → jsonb. JSONB 도 NUL(\u0000)을 못 받는다 — 상태에 사람 말이 실리는 하네스(codex)가 있어 같은 이유로 걷는다.
+ *  ⚠ **인코딩하면서** 문자열 값의 NUL 만 걷는다. 인코딩이 끝난 JSON 에서 그 여섯 글자를 지우면, 사람이 «\u0000» 이라는 글자를
+ *   그대로 친 경우(역슬래시가 하나 더 붙어 인코딩된다) 역슬래시 하나만 남아 JSON 이 깨지고 그 창이 영영 커밋되지 못한다. */
+const pgState = (state: ParseState): string =>
+  JSON.stringify(state ?? {}, (_k, v: unknown) => (typeof v === "string" ? v.replace(/\u0000/g, "") : v));
 
 // ── 동시 실행 상한 — 이 프로세스의 색인은 INDEX_SLOTS 개까지만(업로드 직후·정비 공통) ──
 //  배포 직후엔 살아 있는 세션마다 첫 업로드가 제 기록 전체를 색인하려 든다. 상한이 없으면 그 수만큼 동시에 풀고 읽는다.
@@ -114,6 +121,8 @@ export interface IndexOpts {
   deadline?: number;
   /** 한 번에 읽는 창 — 시험이 «창보다 긴 한 줄» 을 싸게 만들려고 줄인다. */
   window?: number;
+  /** 따로 읽어 줄 한 줄의 상한(기본 LONG_LINE_MAX) — 시험이 줄인다. */
+  longLineMax?: number;
 }
 
 /** 한 세션을 이어 색인한다. 반환: 이번에 읽은 바이트 · 끝까지 따라잡았나. 동시 실행 상한(INDEX_SLOTS) 안에서 돈다. */
@@ -124,6 +133,7 @@ export function indexConvSession(nodeId: string, sessionId: string, opts: IndexO
 async function indexConvSessionNow(nodeId: string, sessionId: string, opts: IndexOpts): Promise<{ read: number; done: boolean }> {
   const maxBytes = opts.maxBytes ?? 64 * 1024 * 1024;
   const window = opts.window ?? CONV_WINDOW;
+  const longLineMax = opts.longLineMax ?? LONG_LINE_MAX;
   const head = await itemsPool.query(
     `SELECT l.bytes, s.harness, c.indexed_to, c.state, c.ver
        FROM session_log l
@@ -161,9 +171,16 @@ async function indexConvSessionNow(nodeId: string, sessionId: string, opts: Inde
       next = w.to;
     } else {
       if (end >= total) break;                                   // 끝의 반 줄 — 쓰는 중이다. 다음에 이어 읽는다
-      const skip = await nextLineStart(reader, total, end);      // 창보다 긴 한 줄 — 그 줄을 건너뛴다
-      if (skip <= at) break;
-      next = skip;
+      const lineEnd = await nextLineStart(reader, total, end);   // 창보다 긴 한 줄 — 어디서 끝나나
+      if (lineEnd <= at) break;                                  // 개행이 아직 안 왔다(쓰는 중)
+      if (lineEnd - at <= longLineMax) {
+        //  그 줄만 따로 읽어 글을 뽑는다 — 대개 스크린샷을 붙인 지시다(그림은 버리고 글만 남는다).
+        const one = (await readSessionLog(nodeId, sessionId, at, lineEnd)).data;
+        const r = parse(one.toString("utf8"), state);
+        msgs = extractConvMessages(r.lines);
+        nextState = r.state ?? {};
+      }
+      next = lineEnd;                                            // 상한보다 길면(거대한 도구 결과) 글 없이 건너뛴다
     }
     if (!(await commitWindow(nodeId, sessionId, at, next, msgs, nextState))) return { read, done: false };
     read += next - at;
@@ -275,101 +292,126 @@ export interface ConvSearchResult {
   best: ConvSessionHit["best"];
 }
 
-/** 볼 수 있는 세션 1차 술어(별칭 s) — 대화록 열람 게이트(checkViewGate · sessionInvitesMember)와 같은 축: 주인 + 초대받은 사람.
+/**
+ * 볼 수 있는 세션(별칭 s) — 대화록 열람 게이트(checkViewGate · sessionInvitesMember)와 같은 축: 주인 + 초대받은 사람.
  *  여기에 워크스페이스 격리(sessionWorkspaceWhere) · 주인의 휴지통 제외를 더한다. 초대받은 세션은 SQL 뒤에 목록·입장과 같은
- *  판정(sessionVisible — 그 프로젝트가 나에게 가려져 있으면 안 보인다)을 한 번 더 거친다(searchConversations). */
-function visibleWhere(params: unknown[], input: Pick<ConvSearchInput, "requester" | "attach" | "workspaceId">): string {
+ *  판정(sessionVisible — 그 프로젝트가 나에게 가려져 있으면 안 보인다)을 한 번 더 거친다(allowedInvites).
+ *  ★ 초대·휴지통은 **집합으로 한 번** 셈한다(WITH). 세션마다 «이 세션을 돌린 박스가 나를 초대했나 · 버렸나» 를 하위 질의로 다시 재면
+ *   세션 수 × 박스 수로 늘어난다 — 재검토 실측(세션 6천 · 메시지 30만, Postgres 17): 검색이 4초 상한에 걸려 503, 밀린 수 세기 10초.
+ *  ⚠ 휴지통 표식은 주인의 것이다(t.owner = s.owner) — 주인이 버린 세션은 초대받은 사람의 검색에서도 빠진다(지운 것으로 다룬다).
+ *   표식은 대화 uuid 로도, 그 대화를 돌린 박스 id 로도 붙는다(session-trash-ops resolveMine).
+ */
+function visibleSql(params: unknown[], input: Pick<ConvSearchInput, "requester" | "attach" | "workspaceId">): { ctes: string; where: string } {
   params.push(input.requester); const me = `$${params.length}`;
   params.push(!!input.attach); const att = `$${params.length}`;
+  const ctes = `inv AS (
+       SELECT st.id AS box FROM org_session_state st
+        WHERE ${att}::boolean AND st.invites @> to_jsonb(ARRAY[${me}::text])),
+     invc AS (
+       SELECT box AS conv FROM inv
+       UNION SELECT c.conv_uuid FROM org_session_conv c JOIN inv ON c.box_id = inv.box),
+     trashed AS (
+       SELECT t.owner, t.session_id AS sid FROM org_session_trash t
+       UNION SELECT t.owner, c.conv_uuid FROM org_session_trash t JOIN org_session_conv c ON c.box_id = t.session_id)`;
   const wh = [
     `s.parent_session_id IS NULL`, `s.run_kind IS DISTINCT FROM 'task'`,
-    `(s.owner = ${me} OR (${att}::boolean AND EXISTS (
-        SELECT 1 FROM org_session_state st
-         WHERE (st.id = s.session_id OR st.id IN (SELECT box_id FROM org_session_conv WHERE conv_uuid = s.session_id))
-           AND st.invites @> to_jsonb(ARRAY[${me}::text]))))`,
-    //  주인의 휴지통(#1851) — 대화 uuid 로도, 그 대화를 돌린 박스 id 로도 표식이 붙는다(session-trash-ops resolveMine).
-    //  주인이 버린 세션은 초대받은 사람의 검색에서도 빠진다(지운 것으로 다룬다).
-    `NOT EXISTS (SELECT 1 FROM org_session_trash t
-       WHERE t.owner = s.owner
-         AND (t.session_id = s.session_id OR t.session_id IN (SELECT box_id FROM org_session_conv WHERE conv_uuid = s.session_id)))`,
+    `(s.owner = ${me} OR s.session_id IN (SELECT conv FROM invc))`,
+    `NOT EXISTS (SELECT 1 FROM trashed x WHERE x.owner = s.owner AND x.sid = s.session_id)`,
   ];
   if (input.workspaceId) wh.push(sessionWorkspaceWhere(params, input.workspaceId));
-  return wh.join(" AND ");
+  return { ctes, where: wh.join(" AND ") };
+}
+
+/** 시간 상한을 건 읽기 — 공유 풀(최대 20)을 오래 쥐지 않는다(#936 자료 검색이 풀을 말린 사고와 같은 자리).
+ *  넘으면 Postgres 가 끊고(57014) 라우트가 503 «끝까지 못 봤다» 로 돌려준다. */
+async function boundedQuery(sql: string, params: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }> {
+  return withTx(async (client) => {
+    await client.query(`SET LOCAL statement_timeout = ${CONV_QUERY_TIMEOUT_MS}`);
+    return client.query(sql, params);
+  });
 }
 
 /** 볼 수 있는 세션 중 색인이 밀린 수 — 화면이 «아직 못 찾을 수 있다» 를 정직하게 말할 근거.
- *  아직 한 번도 색인하지 않은 세션(커서 없음)은 꼬리가 작아도 센다 — 그 세션의 말은 지금 하나도 안 찾아진다. */
+ *  아직 한 번도 색인하지 않은 세션(커서 없음)은 꼬리가 작아도 센다 — 그 세션의 말은 지금 하나도 안 찾아진다.
+ *  초대받은 세션은 검색과 같은 2차 판정(가려진 프로젝트)을 거친 뒤에 센다 — 감춘 세션을 수로도 드러내지 않는다. */
 export async function convIndexPending(input: Pick<ConvSearchInput, "requester" | "attach" | "workspaceId">): Promise<number> {
   const params: unknown[] = [];
-  const vis = visibleWhere(params, input);
+  const v = visibleSql(params, input);
   params.push(PENDING_GAP_BYTES); const gap = `$${params.length}`;
   params.push(CONV_INDEX_VER); const ver = `$${params.length}`;
-  const r = await itemsPool.query(
-    `SELECT count(*)::int AS n
+  const r = await boundedQuery(
+    `WITH ${v.ctes}
+     SELECT s.session_id, s.owner
        FROM session s
        JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
        LEFT JOIN session_msg_cursor c ON c.node_id = s.node_id AND c.session_id = s.session_id
       WHERE l.bytes > 0
         AND (c.session_id IS NULL OR c.ver IS DISTINCT FROM ${ver} OR l.bytes - c.indexed_to > ${gap})
-        AND ${vis}`, params);
-  return Number(r.rows[0]?.n ?? 0);
+        AND ${v.where}`, params);
+  const rows = r.rows.map((x) => ({ session_id: String(x.session_id), owner: (x.owner as string | null) ?? null }));
+  const ok = await allowedInvites([...new Set(rows.filter((x) => x.owner !== input.requester).map((x) => x.session_id))], input.requester);
+  return rows.filter((x) => x.owner === input.requester || ok.has(x.session_id)).length;
 }
 
 export async function searchConversations(input: ConvSearchInput): Promise<{ results: ConvSearchResult[]; capped: boolean }> {
   const terms = queryTerms(input.q);
   if (!terms.length || !input.requester) return { results: [], capped: false };
   const params: unknown[] = [];
-  const match = terms.map((t) => { params.push(`%${likeEscape(t)}%`); return `m.body ILIKE $${params.length} ESCAPE '\\'`; }).join(" AND ");
-  const wh = [match];
+  const v = visibleSql(params, input);
+  const wh = terms.map((t) => { params.push(`%${likeEscape(t)}%`); return `m.body ILIKE $${params.length} ESCAPE '\\'`; });
   const sinceMs = input.since ? Date.parse(input.since) : NaN;
   if (Number.isFinite(sinceMs)) { params.push(new Date(sinceMs).toISOString()); wh.push(`m.ts >= $${params.length}::timestamptz`); }
-  wh.push(visibleWhere(params, input));
   params.push(CONV_ROW_CAP);
-  const sql = `SELECT m.node_id, m.session_id, m.role, m.ts, m.body, s.owner
-       FROM session_msg m
-       JOIN session s ON s.node_id = m.node_id AND s.session_id = m.session_id
-       JOIN session_log l ON l.node_id = m.node_id AND l.session_id = m.session_id AND l.bytes > 0
+  //  볼 수 있는 세션을 먼저 굳히고(MATERIALIZED) 그 세션들의 말만 훑는다 — 말마다 권한을 다시 재지 않는다.
+  const r = await boundedQuery(
+    `WITH ${v.ctes},
+     vis AS MATERIALIZED (
+       SELECT s.node_id, s.session_id, s.owner
+         FROM session s
+         JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id AND l.bytes > 0
+        WHERE ${v.where})
+     SELECT m.node_id, m.session_id, m.role, m.ts, m.body, vis.owner
+       FROM vis
+       JOIN session_msg m ON m.node_id = vis.node_id AND m.session_id = vis.session_id
       WHERE ${wh.join(" AND ")}
       ORDER BY m.ts DESC NULLS LAST
-      LIMIT $${params.length}`;
-  //  시간 상한 — 공유 풀을 오래 쥐지 않는다. 넘으면 Postgres 가 끊고(57014) 라우트가 오류로 돌려준다(화면은 «응답하지 않았다» 를 말한다).
-  const r = await withTx(async (client) => {
-    await client.query(`SET LOCAL statement_timeout = ${CONV_QUERY_TIMEOUT_MS}`);
-    return client.query(sql, params);
-  });
+      LIMIT $${params.length}`, params);
   let rows: ConvRow[] = r.rows.map((x) => ({
     node_id: String(x.node_id ?? ""), session_id: String(x.session_id),
     role: x.role === "assistant" ? "assistant" : "user",
     ts: x.ts ? new Date(x.ts as string).toISOString() : null,
     body: String(x.body ?? ""), owner: (x.owner as string | null) ?? null,
   }));
-  rows = await onlyVisibleInvites(rows, input.requester);
+  const ok = await allowedInvites([...new Set(rows.filter((x) => x.owner !== input.requester).map((x) => x.session_id))], input.requester);
+  rows = rows.filter((x) => x.owner === input.requester || ok.has(x.session_id));
   const ranked = rankConvSessions(rows, { q: input.q, sort: input.sort, nowMs: input.nowMs ?? Date.now(), requester: input.requester, limit: input.limit });
   return { results: await withSessionFaces(ranked), capped: r.rows.length >= CONV_ROW_CAP };
 }
 
 /**
- * 초대받은 세션(내가 주인이 아닌 것)은 **목록·입장과 같은 판정**(sessionVisible, write-cap.ts)을 한 번 더 거친다 — 초대를 받았어도
+ * 초대받은 세션(내가 주인이 아닌 것) 중 **목록·입장과 같은 판정**(sessionVisible, write-cap.ts)을 통과하는 대화 id — 초대를 받았어도
  *  그 세션의 프로젝트가 나에게 가려져 있으면(#1291) 안 보인다. 세션 화면엔 그 프로젝트의 대화가 그대로 흐르므로, 목록에서 감춘 세션을
  *  대화 검색이 내용으로 찾아 주면 감춤이 무의미하다. 판정 재료는 그 대화를 돌린 박스의 desired-state(dir · invites · project_id) —
  *  목록이 쓰는 바로 그 행이다. 가려진 프로젝트 조회가 실패하면 sessionVisible 이 초대받은 사람에게 닫는다(fail-closed).
  */
-async function onlyVisibleInvites(rows: ConvRow[], me: string): Promise<ConvRow[]> {
-  const foreign = [...new Set(rows.filter((r) => r.owner !== me).map((r) => r.session_id))];
-  if (!foreign.length) return rows;
+async function allowedInvites(convIds: string[], me: string): Promise<Set<string>> {
+  const ok = new Set<string>();
+  if (!convIds.length) return ok;
   let hidden: HiddenProjects | undefined;
   try { hidden = await hiddenProjects(me); } catch { hidden = undefined; }
+  //  대화 → 그 대화를 돌린 박스(들)를 **집합으로** 먼저 펴고 박스 표에 붙인다. 조인 조건에 «id = 대화 OR id IN (하위 질의)» 를
+  //   쓰면 Postgres 가 대화 × 박스 전부를 돌며 하위 질의를 다시 돈다 — 실측(박스 6천): 대화 41개에 12.9초 · 2천 개에 44초.
   const boxes = await itemsPool.query(
-    `SELECT x.conv, st.owner, st.dir, st.invites, st.project_id
-       FROM unnest($1::text[]) AS x(conv)
-       JOIN org_session_state st
-         ON st.id = x.conv OR st.id IN (SELECT box_id FROM org_session_conv WHERE conv_uuid = x.conv)`, [foreign]);
-  const ok = new Set<string>();
+    `WITH x AS (SELECT DISTINCT unnest($1::text[]) AS conv),
+          b AS (SELECT x.conv, x.conv AS box FROM x
+                UNION SELECT x.conv, c.box_id FROM x JOIN org_session_conv c ON c.conv_uuid = x.conv)
+     SELECT b.conv, st.owner, st.dir, st.invites, st.project_id
+       FROM b JOIN org_session_state st ON st.id = b.box`, [convIds]);
   for (const b of boxes.rows as Array<{ conv: string; owner: string | null; dir: string | null; invites: unknown; project_id: number | null }>) {
     const invites = Array.isArray(b.invites) ? b.invites.map(String) : [];
     if (sessionVisible({ owner: b.owner, dir: b.dir, invites, projectId: b.project_id }, me, hidden)) ok.add(String(b.conv));
   }
-  return rows.filter((r) => r.owner === me || ok.has(r.session_id));
+  return ok;
 }
 
 /** 줄에 걸 이름 — 세션 목록(listSessionsForOwner)과 같은 규칙: 사람·에이전트가 지은 이름 → 첫 지시에서 지은 이름. */

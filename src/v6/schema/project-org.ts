@@ -185,6 +185,9 @@ export async function initV6ProjectOrg(pool: Pool): Promise<void> {
       body TEXT NOT NULL,
       PRIMARY KEY (node_id, session_id, at_offset, idx));
     CREATE INDEX IF NOT EXISTS session_msg_ts_idx ON session_msg(ts);
+    --  검색은 «볼 수 있는 세션» 을 먼저 굳히고 그 세션들의 말만 읽는다(searchConversations). 테넌시가 기본키 앞에 tenant_id 를
+    --   붙이므로 기본키로는 (node_id, session_id) 로 바로 못 들어간다 — 그 조인을 받칠 색인을 따로 둔다.
+    CREATE INDEX IF NOT EXISTS session_msg_sess_idx ON session_msg(node_id, session_id);
     -- ⑥ session_msg_cursor — 어디까지 색인했나(원본 바이트, 늘 줄 경계) + 파서 이어 읽기 상태. 커밋은 indexed_to CAS.
     --  ver = 뽑는 규칙의 판(conv-index-store CONV_INDEX_VER). 판이 다르면 그 세션을 처음부터 다시 색인한다.
     CREATE TABLE IF NOT EXISTS session_msg_cursor(

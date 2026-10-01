@@ -20,6 +20,9 @@
 //  F13 대화 채널이 실패하면(503 시간 초과) «결과 없음» 이 아니라 «가져오지 못했다» 를 말한다(격리 리뷰)
 //  F14 200자 넘는 검색어 — 대화 채널을 부르지 않고(서버가 400) 그 이유를 말한다
 //  F15 접근성 — 기간 단추는 메뉴가 떠 있는 동안 aria-expanded=true · 정렬·기간 단추는 «종류 필터» 묶음 밖(자기 묶음)
+//  F16 밀린 색인 수를 서버가 못 셌으면(pending null) 그 사실을 말한다(재검토)
+//  F17 서버 오류(500 internal_error)는 읽을 수 있는 말로 — 코드값이 안내 줄에 그대로 서지 않는다(재검토)
+//  F18 창을 닫으면 진행 중인 대화 요청을 끊는다(재검토 — 닫아도 낡은 검색이 서버 연결을 쥐던 것)
 //  W   모든 장면을 통틀어 페이지 오류 0 · 배선(가짜 서버가 실제로 불렸다)
 //
 // 왜 런타임인가: 결함이 «어느 채널을 부르나 · 어떤 줄이 어느 묶음에 어떤 순서로 서나 · 누르면 어디로 가나 · Esc 가 누구 것인가»
@@ -93,10 +96,12 @@ async function PAGE_MAIN() {
     { node_id: "n1", session_id: "conv-c", name: "모르는 세션", title: null, at: put("모르는 세션", NOW - 40 * D), hits: 5, score: 30, best: { role: "user", ts: iso(NOW - 40 * D), text: "예전에 슬랙 얘기를 했다" } },
   ];
   let PENDING = 3;
-  let CONV_FAIL = false;
+  let CONV_FAIL = false;            // true = 503(사람 말) · "500" = internal_error
+  let CONV_HANG = false;            // 대화 요청이 끝나지 않는다 — 끊기는지 본다(F18)
+  let HANGING = 0, HANG_ABORTED = false;
   const log = [];
   const J = (o) => new Response(JSON.stringify(o), { status: 200, headers: { "content-type": "application/json" } });
-  window.fetch = async (url) => {
+  window.fetch = async (url, opts) => {
     const u = new URL(String(url), "http://x/");
     log.push(decodeURIComponent(u.pathname + u.search));
     const q = u.searchParams.get("q") || u.searchParams.get("text") || "";
@@ -108,7 +113,15 @@ async function PAGE_MAIN() {
     if (/\/api\/ui\/v6\/projects\/(similar|semantic|search)$/.test(p)) return J({ projects: [] });
     if (p.endsWith("/api/ui/sources")) return J({ entries: [] });
     if (p.endsWith("/api/ui/v6/session-search")) {
+      if (CONV_FAIL === "500") return new Response(JSON.stringify({ error: "internal_error" }), { status: 500, headers: { "content-type": "application/json" } });
       if (CONV_FAIL) return new Response(JSON.stringify({ error: "대화 검색이 시간 안에 끝나지 않았습니다 — 낱말을 더 넣어 좁혀 주세요" }), { status: 503, headers: { "content-type": "application/json" } });
+      if (CONV_HANG) {
+        HANGING++;
+        return new Promise((_, rej) => {
+          const sig = opts && opts.signal;
+          if (sig) sig.addEventListener("abort", () => { HANG_ABORTED = true; rej(new DOMException("aborted", "AbortError")); });
+        });
+      }
       const since = u.searchParams.get("since");
       let rows = hit ? CONV.filter((c) => !since || Date.parse(c.at) >= Date.parse(since)) : [];
       if (u.searchParams.get("sort") === "recent") rows = [...rows].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
@@ -239,6 +252,31 @@ async function PAGE_MAIN() {
     await search("슬랙 " + "가".repeat(205));
     R.longReqs = since(n0);
     R.longNote = $(".v2-omni-note")?.textContent || "";
+
+    // ── F16 밀린 수를 모른다(null) ──
+    PENDING = null;
+    await search("슬랙");
+    R.unknownNote = $(".v2-omni-note")?.textContent || "";
+    PENDING = 0;
+
+    // ── F17 서버 오류 500 internal_error ──
+    CONV_FAIL = "500";
+    await search("슬랙");
+    R.err500Note = $(".v2-omni-note")?.textContent || "";
+    CONV_FAIL = false;
+
+    // ── F18 창을 닫으면 진행 중인 대화 요청을 끊는다 ──
+    CONV_HANG = true;
+    if (!OM.omniIsOpen()) OM.omniOpen();
+    const hin = $(".v2-omni-in");
+    hin.value = "슬랙 끊기";
+    hin.dispatchEvent(new Event("input", { bubbles: true }));
+    await waitFor(() => HANGING > 0, 3000);
+    R.hangStarted = HANGING;
+    OM.omniClose();
+    await sleep(80);
+    R.hangAborted = HANG_ABORTED;
+    CONV_HANG = false;
   } catch (e) { R.err = String(e && e.stack || e); }
 
   R.pageErrors = pageErrors;
@@ -348,6 +386,14 @@ check(!(R.longReqs || []).some((l) => l.startsWith("/api/ui/v6/session-search"))
 // F15
 check(R.expandedOpen === "true" && R.expandedClosed === "false", "F15 기간 단추 aria-expanded — 열면 true · 닫으면 false", JSON.stringify({ o: R.expandedOpen, c: R.expandedClosed }));
 check(R.groups && !R.groups.kindsHasSort && !R.groups.kindsHasPeriod && R.groups.toolsGroup, "F15 정렬·기간 단추는 «종류 필터» 묶음 밖 자기 묶음에 있다", JSON.stringify(R.groups));
+// F16
+check(/확인하지 못했습니다/.test(R.unknownNote || "") && !/색인을 만드는 중/.test(R.unknownNote || ""),
+  "F16 밀린 수를 서버가 못 셌으면 «확인하지 못했다» 를 말한다(조용히 넘기지 않는다)", JSON.stringify(R.unknownNote));
+// F17
+check(/서버에 오류가 났습니다/.test(R.err500Note || "") && !/internal_error/.test(R.err500Note || ""),
+  "F17 500 internal_error 는 읽을 수 있는 말로 — 코드값이 안내 줄에 서지 않는다", JSON.stringify(R.err500Note));
+// F18
+check(R.hangStarted >= 1 && R.hangAborted === true, "F18 창을 닫으면 진행 중인 대화 요청을 끊는다", JSON.stringify({ s: R.hangStarted, a: R.hangAborted }));
 // W
 check(Array.isArray(R.pageErrors) && R.pageErrors.length === 0, "W 페이지 오류 0", JSON.stringify(R.pageErrors));
 

@@ -354,9 +354,9 @@ export function sessionWorkspaceWhere(params: unknown[], workspaceId: string, se
   params.push(workspaceId, defaultWorkspaceId(workspaceId));   // 현재 워크스페이스 · 맵 부재 시 귀속(배포 모드가 정한다)
   const cur = `$${params.length - 1}`, dflt = `$${params.length}`;
   return `COALESCE(
-        (SELECT m.workspace_id::text FROM gw_session_map m
-           LEFT JOIN gw_workspace w ON w.id = m.workspace_id
-          WHERE m.session_id = ${sessionIdExpr} AND (w.id IS NULL OR w.state = 'active')),
+        (SELECT gm.workspace_id::text FROM gw_session_map gm
+           LEFT JOIN gw_workspace w ON w.id = gm.workspace_id
+          WHERE gm.session_id = ${sessionIdExpr} AND (w.id IS NULL OR w.state = 'active')),
         ${dflt}) = ${cur}`;
 }
 
