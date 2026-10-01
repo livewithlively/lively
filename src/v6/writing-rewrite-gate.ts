@@ -321,7 +321,43 @@ export interface Eligibility {
   mode?: RewriteMode;
 }
 
-export function isEligible(k: EligibilityInput, fmt: WritingFormat, now: Date | number): Eligibility {
+export interface EligibilityOptions {
+  /** 마지막 변경이 이 배치 자신의 반영으로 확인됐다(isOwnLastEdit) — 사람 편집 보호 창을 적용하지 않는다. */
+  lastEditIsOwn?: boolean;
+}
+
+export interface HistoryVersions {
+  version_before: number | null | undefined;
+  version_after: number | null | undefined;
+}
+
+/**
+ * 최신 변경 이력 한 줄이 배치가 savedOver 판 위에 저장한 바로 그 반영인지.
+ *  그 뒤 누가 한 번이라도 고쳤으면 최신 줄의 version_before 가 savedOver 가 아니게 되고,
+ *  이력에 안 잡히는 변경으로 판이 올랐으면 version_after 가 현재 판과 어긋난다 — 둘 다 사람 편집 가능성으로 보고 보호한다.
+ *  저장 주체(actor)로 가르지 않는 건 배치가 사람 토큰으로 저장해 actor 가 사람과 같기 때문이다.
+ */
+export function isOwnLastEdit(latest: HistoryVersions | null | undefined, savedOver: number | null | undefined, current: number | null | undefined): boolean {
+  if (!latest || savedOver == null || current == null) return false;
+  return latest.version_before === savedOver && latest.version_after === current;
+}
+
+/** 적용 리포트(jsonl 줄들)에서 이름별로 배치가 덮어쓴 판 — 여러 번 반영했으면 가장 나중 판이다. */
+export function ownEditVersions(lines: Iterable<string>): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let r: { name?: unknown; status?: unknown; version?: unknown; section?: unknown };
+    try { r = JSON.parse(line); } catch { continue; } // 중단 순간 반쯤 쓰인 마지막 줄
+    if (r.status !== "applied" || typeof r.name !== "string" || !Number.isInteger(r.version) || r.section != null) continue;
+    const v = r.version as number;
+    const prev = out.get(r.name);
+    if (prev === undefined || v > prev) out.set(r.name, v);
+  }
+  return out;
+}
+
+export function isEligible(k: EligibilityInput, fmt: WritingFormat, now: Date | number, opts: EligibilityOptions = {}): Eligibility {
   const no = (reason: IneligibleReason): Eligibility => ({ eligible: false, reason, targetRules: [], findings: [] });
   // 외부 미러(observed)는 원본 소유가 밖이라 여기서 고쳐도 다음 동기화가 덮는다.
   if (k.provenance !== "authored") return no("provenance");
@@ -329,10 +365,11 @@ export function isEligible(k: EligibilityInput, fmt: WritingFormat, now: Date | 
   if (k.is_folder) return no("folder");
   const body = String(k.body_md ?? "");
   // 방금 사람이 고친 글은 그 사람이 아직 손보는 중일 수 있다 — 자동 재작성이 편집을 덮으면 안 된다.
-  //  시각을 못 읽으면 최근으로 본다(보수적으로 건너뛴다).
+  //  시각을 못 읽으면 최근으로 본다(보수적으로 건너뛴다). 배치 자신의 반영은 보호할 사람 편집이 아니다 —
+  //  그것까지 세면 결정적 정리(--autofix) 직후 24시간 동안 LLM 재작성이 전부 막힌다(2026-10-01 적용 1,839건).
   const nowMs = typeof now === "number" ? now : now.getTime();
   const upd = k.updated_at ? Date.parse(k.updated_at) : NaN;
-  if (!Number.isFinite(upd) || nowMs - upd < RECENT_EDIT_MS) return no("recently_edited");
+  if (!opts.lastEditIsOwn && (!Number.isFinite(upd) || nowMs - upd < RECENT_EDIT_MS)) return no("recently_edited");
   const findings = lintWriting({ title: k.title, body_md: body }, forceEnabled(fmt)).filter((x) => AUTO_FIX.has(x.rule));
   if (!findings.length) return no("nothing_to_fix");
   // 긴 문서는 통째로 재작성하면 대조 정확도가 떨어져 섹션 단위로 나눠 고친다.
