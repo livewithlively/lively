@@ -186,13 +186,16 @@ export async function initV6ProjectOrg(pool: Pool): Promise<void> {
       PRIMARY KEY (node_id, session_id, at_offset, idx));
     CREATE INDEX IF NOT EXISTS session_msg_ts_idx ON session_msg(ts);
     -- ⑥ session_msg_cursor — 어디까지 색인했나(원본 바이트, 늘 줄 경계) + 파서 이어 읽기 상태. 커밋은 indexed_to CAS.
+    --  ver = 뽑는 규칙의 판(conv-index-store CONV_INDEX_VER). 판이 다르면 그 세션을 처음부터 다시 색인한다.
     CREATE TABLE IF NOT EXISTS session_msg_cursor(
       node_id TEXT NOT NULL DEFAULT '',
       session_id TEXT NOT NULL,
       indexed_to BIGINT NOT NULL DEFAULT 0,
       state JSONB NOT NULL DEFAULT '{}'::jsonb,
+      ver INT NOT NULL DEFAULT 0,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (node_id, session_id));
+    ALTER TABLE session_msg_cursor ADD COLUMN IF NOT EXISTS ver INT NOT NULL DEFAULT 0;
   `);
 
   // ── 6a-2) project_folder_binding — 한 프로젝트가 **어느 멤버의 어느 환경에서 어느 절대경로에 사는가**(N:M, #905 P1-①). ──

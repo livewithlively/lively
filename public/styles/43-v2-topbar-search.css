@@ -244,6 +244,7 @@
    정렬(관련도순 | 최신순)과 기간은 칩 줄의 **오른쪽 끝**에 선다 — 종류 칩(무엇을)과 성격이 다른 손잡이(어떤 순서로 · 언제)라
    떨어뜨려 둔다. 좁은 창에선 칩 줄이 접히며 다음 줄 오른쪽으로 내려간다(margin-left:auto).
    정렬은 두 값이라 드롭다운이 아니라 나란한 두 단추 — 켜진 쪽이 늘 보인다. 모양은 칩과 같은 알약·같은 틴트다. */
+.v2-omni-kinds { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
 .v2-omni-tools { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; }
 .v2-omni-seg { display: inline-flex; align-items: center; gap: 2px; height: 26px; padding: 2px;
   border: 1px solid var(--line-net); border-radius: 999px; background: var(--bg); }

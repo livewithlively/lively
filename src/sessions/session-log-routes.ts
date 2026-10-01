@@ -177,7 +177,8 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
 
   // 세션 대화 검색(#4517, 원준 2026-09-30 «cmd+K 안에서 세션의 대화 내용으로도 세션을 찾고 싶어») — 통합검색이 부른다.
   //  찾는 곳은 중앙 기록에서 뽑아 둔 사람 말·AI 말 색인(v6/conv-index-store.ts). 볼 수 있는 세션 = 대화록 열람과 같은 축
-  //  (주인 + view_policy=attach 면 초대받은 사람) + 세션 목록과 같은 워크스페이스 격리(#1875) + 내 휴지통 제외(#1851).
+  //  (주인 + view_policy=attach 면 초대받은 사람 — 초대받은 세션은 목록과 같은 sessionVisible 로 한 번 더) + 세션 목록과 같은
+  //  워크스페이스 격리(#1875) + 주인의 휴지통 제외(#1851). 거르기는 전부 저장 쪽 SQL·판정 안에 있다(여기서 더 거르지 않는다).
   //  ⚠ 경로를 `/api/ui/v6/sessions/search` 로 두지 않는다 — 테넌트 미들웨어가 `/v6/sessions/<id>` 의 <id> 를 세션 id 로 읽어
   //   워크스페이스를 되찾는 폴백을 탄다(tenant-middleware sessionIdFromRequest). «search» 가 세션 id 로 읽히면 안 된다.
   app.get("/api/ui/v6/session-search", auth, wrap(async (req, res) => {
@@ -192,19 +193,19 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     const limit = Math.min(Math.max(Number(req.query.limit) || 8, 1), 50);
     const cfg = (await getRuntimeConfig()).session_share;
     const base = { requester, attach: cfg.view_policy === "attach", workspaceId: currentTenant()?.id ?? PRIMARY_TENANT_ID };
-    const [found, pending] = await Promise.all([
-      //  휴지통으로 빠질 몫만큼 넉넉히 받아 둔다 — 걸러 낸 뒤에 limit 을 채우려고.
-      searchConversations({ ...base, q, sort: parseConvSort(req.query.sort), since, limit: limit + 10 }),
-      convIndexPending(base).catch(() => 0),
-    ]);
-    let results = found.results;
+    let found: Awaited<ReturnType<typeof searchConversations>>;
     try {
-      const marks = await trashMapFor(requester);
-      if (marks.size) results = results.filter((r) => !marks.get(r.session_id));
-    } catch { /* 표식 조회 실패 — 거르지 못한 채 나간다(목록과 같은 판단) */ }
+      found = await searchConversations({ ...base, q, sort: parseConvSort(req.query.sort), since, limit });
+    } catch (e) {
+      //  시간 상한(statement_timeout → 57014)에 걸렸다 — «못 찾았다» 가 아니라 «끝까지 못 봤다» 다. 화면이 그 차이를 말한다.
+      if ((e as { code?: string })?.code === "57014") throw new HttpError(503, "대화 검색이 시간 안에 끝나지 않았습니다 — 낱말을 더 넣어 좁혀 주세요");
+      throw e;
+    }
+    //  밀린 색인 수는 안내용이다 — 세지 못하면 null(모른다)로 준다. 0 으로 주면 «다 색인됐다» 는 거짓말이 된다.
+    const pending = await convIndexPending(base).catch(() => null);
     //  밀린 색인이 있으면 이 요청에 얹어 정비를 한 번 깨운다(기다리지 않는다) — 배포 직후의 첫 검색이 곧 색인을 앞당긴다.
-    if (pending > 0) void sweepConvIndex().catch(() => { /* 다음 정비가 다시 집는다 */ });
-    res.json({ results: results.slice(0, limit), pending, capped: found.capped });
+    if (pending) void sweepConvIndex().catch(() => { /* 다음 정비가 다시 집는다 */ });
+    res.json({ results: found.results, pending, capped: found.capped });
   }));
 
   // 프로젝트 **세션이력** 목록(웹뷰 슬⑤b) — 이 프로젝트에 바인딩된 중앙 기록 세션(과거 포함).

@@ -16,7 +16,10 @@
 //  F9  기간 «오늘» → 오늘 밖의 줄이 빠진다 · 대화 요청에 since · 기간은 저장하지 않는다
 //  F10 기간 메뉴가 떠 있을 때 Esc → 메뉴만 닫히고 검색 창은 그대로
 //  F11 대화 색인이 밀려 있으면 안내 줄이 그 사실을 말한다
-//  F12 결과가 없고 기간을 골랐으면 «기간 안에서만 찾았다» 를 말한다
+//  F12 결과가 없고 기간을 골랐으면 «기간 안의 결과만 보여 준다» 를 말한다
+//  F13 대화 채널이 실패하면(503 시간 초과) «결과 없음» 이 아니라 «가져오지 못했다» 를 말한다(격리 리뷰)
+//  F14 200자 넘는 검색어 — 대화 채널을 부르지 않고(서버가 400) 그 이유를 말한다
+//  F15 접근성 — 기간 단추는 메뉴가 떠 있는 동안 aria-expanded=true · 정렬·기간 단추는 «종류 필터» 묶음 밖(자기 묶음)
 //  W   모든 장면을 통틀어 페이지 오류 0 · 배선(가짜 서버가 실제로 불렸다)
 //
 // 왜 런타임인가: 결함이 «어느 채널을 부르나 · 어떤 줄이 어느 묶음에 어떤 순서로 서나 · 누르면 어디로 가나 · Esc 가 누구 것인가»
@@ -90,6 +93,7 @@ async function PAGE_MAIN() {
     { node_id: "n1", session_id: "conv-c", name: "모르는 세션", title: null, at: put("모르는 세션", NOW - 40 * D), hits: 5, score: 30, best: { role: "user", ts: iso(NOW - 40 * D), text: "예전에 슬랙 얘기를 했다" } },
   ];
   let PENDING = 3;
+  let CONV_FAIL = false;
   const log = [];
   const J = (o) => new Response(JSON.stringify(o), { status: 200, headers: { "content-type": "application/json" } });
   window.fetch = async (url) => {
@@ -104,6 +108,7 @@ async function PAGE_MAIN() {
     if (/\/api\/ui\/v6\/projects\/(similar|semantic|search)$/.test(p)) return J({ projects: [] });
     if (p.endsWith("/api/ui/sources")) return J({ entries: [] });
     if (p.endsWith("/api/ui/v6/session-search")) {
+      if (CONV_FAIL) return new Response(JSON.stringify({ error: "대화 검색이 시간 안에 끝나지 않았습니다 — 낱말을 더 넣어 좁혀 주세요" }), { status: 503, headers: { "content-type": "application/json" } });
       const since = u.searchParams.get("since");
       let rows = hit ? CONV.filter((c) => !since || Date.parse(c.at) >= Date.parse(since)) : [];
       if (u.searchParams.get("sort") === "recent") rows = [...rows].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
@@ -194,10 +199,14 @@ async function PAGE_MAIN() {
     $(".v2-omni-period")?.click();
     await waitFor(() => !!$(".pn-ctx"));
     R.menuOpened = !!$(".pn-ctx");
+    R.expandedOpen = $(".v2-omni-period")?.getAttribute("aria-expanded");
+    R.groups = { kindsHasSort: !!document.querySelector('[aria-label="종류 필터"] .v2-omni-segb'), kindsHasPeriod: !!document.querySelector('[aria-label="종류 필터"] .v2-omni-period'),
+      toolsGroup: !!document.querySelector('[role="group"][aria-label="정렬과 기간"] .v2-omni-segb') && !!document.querySelector('[role="group"][aria-label="정렬과 기간"] .v2-omni-period') };
     await sleep(120);   // 메뉴는 연 박자가 지난 뒤에 키를 듣는다(ctx-menu 가 여는 클릭에 스스로 닫히지 않게) — 사람의 손도 그보다 느리다
     (document.activeElement || document.body).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
     await sleep(80);
     R.afterEsc = { menu: !!$(".pn-ctx"), omni: OM.omniIsOpen() };
+    R.expandedClosed = $(".v2-omni-period")?.getAttribute("aria-expanded");
 
     // ── F9 기간 «오늘» ──
     $(".v2-omni-period")?.click();
@@ -217,6 +226,19 @@ async function PAGE_MAIN() {
     await search("없는말");
     R.emptyNote = $(".v2-omni-note")?.textContent || "";
     R.emptyRows = document.querySelectorAll(".v2-omni-row").length;
+
+    // ── F13 대화 채널 실패 ──
+    CONV_FAIL = true;
+    await search("슬랙");
+    R.failNote = $(".v2-omni-note")?.textContent || "";
+    R.failRows = [...document.querySelectorAll(".v2-omni-row .v2-omni-badge")].map((b) => b.textContent);
+    CONV_FAIL = false;
+
+    // ── F14 200자 넘는 검색어 ──
+    n0 = log.length;
+    await search("슬랙 " + "가".repeat(205));
+    R.longReqs = since(n0);
+    R.longNote = $(".v2-omni-note")?.textContent || "";
   } catch (e) { R.err = String(e && e.stack || e); }
 
   R.pageErrors = pageErrors;
@@ -315,7 +337,17 @@ check(R.menuOpened && R.afterEsc && R.afterEsc.menu === false && R.afterEsc.omni
   check(!(R.storedKeys || []).some((k) => /period|기간/i.test(k)), "F9 기간은 저장하지 않는다", JSON.stringify(R.storedKeys));
 }
 // F12
-check(R.emptyRows === 0 && /오늘 안에서만 찾았습니다/.test(R.emptyNote || ""), "F12 결과 없음 + 기간 → 기간 이유를 말한다", JSON.stringify({ n: R.emptyRows, note: R.emptyNote }));
+check(R.emptyRows === 0 && /오늘 안의 결과만 보여 줍니다/.test(R.emptyNote || "") && /더 나올 수 있습니다/.test(R.emptyNote || ""),
+  "F12 결과 없음 + 기간 → 기간 이유를 말한다(빠짐없이 봤다고 하지 않는다)", JSON.stringify({ n: R.emptyRows, note: R.emptyNote }));
+// F13
+check(/대화 결과를 가져오지 못했습니다/.test(R.failNote || "") && /시간 안에 끝나지 않았습니다/.test(R.failNote || "") && (R.failRows || []).length > 0,
+  "F13 대화 채널이 실패하면 다른 결과는 그대로 두고 «가져오지 못했다» 를 말한다", JSON.stringify({ note: R.failNote, rows: R.failRows }));
+// F14
+check(!(R.longReqs || []).some((l) => l.startsWith("/api/ui/v6/session-search")) && /검색어가 길어/.test(R.longNote || ""),
+  "F14 200자 넘는 검색어는 대화 채널을 부르지 않고 그 이유를 말한다", JSON.stringify({ reqs: R.longReqs, note: R.longNote }));
+// F15
+check(R.expandedOpen === "true" && R.expandedClosed === "false", "F15 기간 단추 aria-expanded — 열면 true · 닫으면 false", JSON.stringify({ o: R.expandedOpen, c: R.expandedClosed }));
+check(R.groups && !R.groups.kindsHasSort && !R.groups.kindsHasPeriod && R.groups.toolsGroup, "F15 정렬·기간 단추는 «종류 필터» 묶음 밖 자기 묶음에 있다", JSON.stringify(R.groups));
 // W
 check(Array.isArray(R.pageErrors) && R.pageErrors.length === 0, "W 페이지 오류 0", JSON.stringify(R.pageErrors));
 
