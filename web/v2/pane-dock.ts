@@ -116,6 +116,9 @@ const NEAR = 40;        // 곁칸 안쪽으로 이만큼 넘게 들여 놓아야
 //  이음매 독 맨 위의 손잡이(원준 10-01: «위쪽에 핸들같은거 만들어서 그거 잡고 끌어당길 수 있는») — 알약 길이에 더하는 몫
 //   = 손잡이 14 + 아이콘과의 사이 4 − 줄인 위 안 여백 7(10 → 3). 42-v2-dock.css .pn-dock-handle 과 짝.
 const HANDLE = 11;
+//  곁칸 아래 독의 손잡이(원준 10-02: «아래에 가있을 때에는 … 핸들이 없는거야? 이음새 있을 때랑 똑같이») — 알약 왼쪽 끝, 같은 막대를 세운 것.
+//   알약 폭에 더하는 몫 = 손잡이 14 + 아이콘과의 사이 4 − 줄인 왼쪽 안 여백 5(8 → 3). 42-v2-dock.css 와 짝.
+const HANDLE_FLOAT = 13;
 const HOME_NAME: Record<DockHome, string> = { seam: '이음매', float: '사이드바 아래' };
 const reduced = (): boolean => { try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (_) { return false; } };
 //  any-pointer — 터치 화면 + 트랙패드 노트북처럼 가는 포인터가 **하나라도** 있으면 확대를 켠다(손가락 입력은 pointerType 으로 따로 거른다).
@@ -217,7 +220,7 @@ export function mountDock(host: DockHost): DockHandle {
     //  확대로 불어날 몫을 미리 남긴다 — 곁칸 아래는 곁칸 폭 안에(넘치면 곁칸 테두리에서 잘린다), 이음매는 세로 구간 안에.
     const grow = magOn() ? MAG_GROW : 0;
     size = home === 'float'
-      ? floatIconSize(W, n, { min: SIZE.float.min, max: SIZE.float.max, gap: GAP, pad: M.pad + 2, margin: M.margin, extra, grow })
+      ? floatIconSize(W, n, { min: SIZE.float.min, max: SIZE.float.max, gap: GAP, pad: M.pad + 2, margin: M.margin, extra: extra + (host.narrow() ? 0 : HANDLE_FLOAT), grow })
       : fitIconSize(n, Math.max(0, (geom!.bottom - geom!.top) * 0.8), { min: SIZE.seam.min, max: SIZE.seam.max, gap: GAP + DOT_ROW, pad: M.pad + 4, grow: Math.round(SIZE.seam.max * grow), extra: extra + (host.narrow() ? 0 : HANDLE) });
     const side = geom?.side ?? 'right';
     const s = [home, side, prefs.mag, size, act, host.narrow(),
@@ -252,9 +255,10 @@ export function mountDock(host: DockHost): DockHandle {
     root.style.setProperty('--dk-s', size + 'px');
     const kids: HTMLElement[] = [];
     btns = [];
-    //  이음매 독은 맨 위에 손잡이 — 잡고 끌면 독이 옮겨 간다(곁칸 안쪽 깊이 = 곁칸 아래, 경계선 따라 = 위아래 자리).
-    //   곁칸 아래 독엔 안 단다(바닥의 손잡이는 걷었다 — 원준 10-01). 알약 끝 여백 · 구분선 · 빈 자리를 잡아도 끌린다.
-    if (home === 'seam' && !host.narrow()) kids.push(handleEl());
+    //  손잡이 — 이음매 독은 맨 위, 곁칸 아래 독은 왼쪽 끝(알약이 시작하는 자리 · 같은 막대). 잡고 끌면 독이 옮겨 간다
+    //   (이음매: 곁칸 안쪽 깊이 = 곁칸 아래, 경계선 따라 = 위아래 자리 · 곁칸 아래: 경계선 가까이 = 이음매). 원준 10-01 · 10-02.
+    //   서랍(좁은 폭)엔 안 단다 — 서랍 안의 독은 옮길 데가 없다. 알약 끝 여백 · 구분선 · 빈 자리를 잡아도 끌린다.
+    if (!host.narrow()) kids.push(handleEl(home));
     let prevPinned: boolean | null = null;
     for (const it of items) {
       if (prevPinned === true && !it.pinned) kids.push(sepEl());
@@ -276,9 +280,11 @@ export function mountDock(host: DockHost): DockHandle {
   }
   //  구분선도 손잡이다 — 잡고 끌면 독이 옮겨 간다(macOS 독의 구분선처럼 잡는 자리). 끝 여백 · 빈 자리도 같다.
   const sepEl = (): HTMLElement => el('span', { class: 'pn-dock-sep', 'aria-hidden': 'true' }) as HTMLElement;
-  //  손잡이 — 짧은 가로 막대(macOS · iOS 시트의 손잡이). 마우스를 올리면 진해지고, 끄는 동안 민트. 누르면 독 끌기(선반이 받는다).
+  //  손잡이 — 짧은 막대(macOS · iOS 시트의 손잡이). 이음매 독은 가로, 곁칸 아래 독은 세로로 선다(알약 길이 방향에 가로지른다).
+  //   마우스를 올리면 진해지고 길어지며, 끄는 동안 민트. 누르면 독 끌기(선반이 받는다).
   //   앱 단추가 아니라 탭 순서엔 안 낀다 — 키보드는 우클릭(메뉴 키) › 독 › 위치로 옮긴다.
-  const handleEl = (): HTMLElement => el('span', { class: 'pn-dock-handle', title: '끌어서 옮겨요 — 경계선을 따라 위아래로, 사이드바 안쪽으로 깊이 끌면 사이드바 아래로', 'aria-hidden': 'true' },
+  const handleEl = (h: DockHome): HTMLElement => el('span', { class: 'pn-dock-handle', 'aria-hidden': 'true',
+    title: h === 'seam' ? '끌어서 옮겨요 — 경계선을 따라 위아래로, 사이드바 안쪽으로 깊이 끌면 사이드바 아래로' : '끌어서 옮겨요 — 세션과 사이드바 사이 경계선 가까이 놓으면 경계선 위로' },
     el('i')) as HTMLElement;
 
   function itemBtn(it: DockItem, app: DockApp): HTMLElement {
@@ -683,8 +689,8 @@ export function mountDock(host: DockHost): DockHandle {
       x = g.seam! - lr.left - w / 2;
       y = seamCenterY(g, lr.top, h, t.at ?? prefs.at) - h / 2;
     } else {
-      const s = floatIconSize(pr.width, n, { min: SIZE.float.min, max: SIZE.float.max, gap: GAP, pad: M.pad + 2, margin: M.margin, extra: seps, grow: magOn() ? MAG_GROW : 0 });
-      w = Math.min(pr.width - 2 * M.margin, n * s + GAP * (n - 1) + 2 * (M.pad + 2) + seps);
+      const s = floatIconSize(pr.width, n, { min: SIZE.float.min, max: SIZE.float.max, gap: GAP, pad: M.pad + 2, margin: M.margin, extra: seps + HANDLE_FLOAT, grow: magOn() ? MAG_GROW : 0 });
+      w = Math.min(pr.width - 2 * M.margin, n * s + GAP * (n - 1) + 2 * (M.pad + 2) + seps + HANDLE_FLOAT);
       h = dockThickness('float', s);
       x = pr.left - lr.left + (pr.width - w) / 2;
       y = pr.bottom - lr.top - M.margin - h;
