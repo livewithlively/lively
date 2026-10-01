@@ -352,3 +352,23 @@
   #v2-root.has-topbar.topbar-web.app-ctx > .v2-topbar > .v2-side-nav .v2-nav-core { flex: 0 1 auto; }
   /*  ☰ 는 레일 칸 가운데 그대로. 레일을 걷으면(폭 0) 6px 로 받친다 — ①-b 와 같은 셈. */
 }
+
+/* ── ①-d #4533 사이드바를 닫았을 때도 이 줄은 **창을 가로지른다** — ①-c(맥락 관리)와 같은 배치 ─────────────────
+   사이드바 열이 0 이면 ①-b 의 줄은 레일 폭(76px)짜리 토막이 되고, 레일까지 걷으면 **폭 0** 이 되어 ☰ 째로 사라진다 —
+   닫힌 사이드바를 되찾는 유일한 길이 없어진다. 그래서 ①-c 와 똑같이 편다. 셀렉터만 다르고 값은 ①-c 그대로다. */
+@media (min-width: 901px) {
+  #v2-root.has-topbar.topbar-web.side-closed > .v2-topbar {
+    grid-column: 1 / -1; grid-row: 1;
+    border-right: 0; border-bottom: 1px solid var(--line);
+    background: var(--gray-bg-2);
+  }
+  #v2-root.has-topbar.topbar-web.side-closed > .v2-rail,
+  #v2-root.has-topbar.topbar-web.side-closed > .v2-side,
+  #v2-root.has-topbar.topbar-web.side-closed > .v2-side + .v2-split-x,
+  #v2-root.has-topbar.topbar-web.side-closed > .v2-main,
+  #v2-root.has-topbar.topbar-web.side-closed > .v2-main + .v2-split-x,
+  #v2-root.has-topbar.topbar-web.side-closed > .v2-aside { grid-row: 2; }
+  #v2-root.has-topbar.topbar-web.side-closed > .v2-topbar > .v2-side-nav { flex: 1 1 auto; margin-left: 0; padding: 0 8px; }
+  #v2-root.has-topbar.topbar-web.side-closed > .v2-topbar > .v2-side-nav > .v2-nav-sp { display: block; }
+  #v2-root.has-topbar.topbar-web.side-closed > .v2-topbar > .v2-side-nav .v2-nav-core { flex: 0 1 auto; }
+}
