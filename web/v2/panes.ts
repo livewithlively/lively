@@ -93,7 +93,8 @@ export interface PanesHandle {
   repaintDoor(): void;
   /** 이 셸을 '새 세션 자리'로 돌린다 — 사이드바 [＋]와 문패 [＋ 세션]이 같은 곳을 부른다(#1719 원준 2026-08-20). */
   newSession(): void;
-  /** 그 종류의 탭을 보이게 한다 — 있으면 켜고(접힌 칸·서랍은 편다), 없으면 곁칸에 만든다. 세션 머리줄 [자료]가 부른다. */
+  /** 그 종류의 탭을 보이게 한다 — 있으면 켜고(접힌 칸·서랍은 편다), 없으면 곁칸에 만든다. 세션 머리줄 [자료]가 부른다.
+   *  ⚠ «보이게 해 두기» 로 되풀이해 부르지 말 것 — 이미 보이고 켜져 있으면 «다시 누른 것» 이라 처음으로 간다(자료 = 맨 위 폴더, #4443). */
   showPart(type: PartType): void;
 }
 
@@ -1704,7 +1705,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     recent: () => [...recent.side, ...recent.bottom],
     title: (k) => tabName(k),
     //  독은 곁칸의 문 — 닫힌 아래 칸(터미널 밑)에 있던 탭이면 아래 칸을 펼치지 않고 곁칸으로 옮겨 켠다(원준 10-01:
-    //   «타임라인 쟨 왜 터미널 밑에서 갑자기 앱이 튀어나와» — 기본 배치가 타임라인을 닫힌 아래 칸에 둔다).
+    //   «타임라인 쟨 왜 터미널 밑에서 갑자기 앱이 튀어나와» — 옛 기본 배치가 타임라인을 닫힌 아래 칸에 두었다. 지금 기본은 비어 있다).
     show: (k) => bringUp(zoneOf(k) || 'side', k),
     open: (type) => { openZone('side'); addPart('side', type as PartType); },
     close: (k) => closeTab(zoneOf(k) || 'side', k),

@@ -196,8 +196,8 @@ check(/e\.key === 'Delete' \|\| e\.key === 'Backspace'/.test(keyFn) && /if \(isP
 const mountAt = PANES.indexOf("export function mountPanes(");
 const firstPaint = PANES.indexOf("\n  paintAll();\n", mountAt);
 const declAt = (re) => { const m = re.exec(PANES.slice(mountAt)); return m ? mountAt + m.index : -1; };
-check(firstPaint > 0 && [/const recent: Record<Zone, TabKey\[\]>/, /let closedStack: ClosedTab\[\]\[\]/, /const dragHost: TabDragHost/].every((re) => { const i = declAt(re); return i > 0 && i < firstPaint; }),
-  "S11 탭 줄의 기억(recent · closedStack · dragHost)은 첫 paintAll 보다 앞에 선언된다");
+check(firstPaint > 0 && [/const recent: Record<Zone, TabKey\[\]>/, /let closedStack: ClosedTab\[\]\[\]/, /const dragHost: TabDragHost/, /const bottomVisible = \(\): boolean/].every((re) => { const i = declAt(re); return i > 0 && i < firstPaint; }),
+  "S11 탭 줄의 기억(recent · closedStack · dragHost)과 아래 칸 판정(bottomVisible, #4443)은 첫 paintAll 보다 앞에 선언된다");
 check(/pin: TabKey\[\];/.test(PANES) && /pin: arr\(s\.pin\)/.test(PANES) && /normalizePins\(lay\[z\], pins\)/.test(PANES), "S10 고정 탭은 배치에 저장되고, 읽을 때 맨 앞으로 모인다");
 
 // 아래 칸은 넣은 것이 있을 때만 · 켜진 탭을 다시 누르면 처음으로 (X1–X9) — #4443 원준(10-01)
