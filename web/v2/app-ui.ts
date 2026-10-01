@@ -11,6 +11,7 @@
 import { api, el, toast } from '../core.js';
 import { APP_RUNTIME_JS } from './app-ui-runtime.js';
 import { ensureAppGrant } from './app-session.js';
+import { omniAvailable, omniOpen } from './omni.js';   // #4530 앱 화면 안의 ⌘K → 셸 통합검색
 
 export interface AppCsp { connect_domains?: string[]; resource_domains?: string[]; frame_domains?: string[] }
 
@@ -90,6 +91,11 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
       // 알림(id 없음) — 답하지 않는다. 앱이 «바깥에서 바뀐 것을 스스로 다시 읽겠다»고 알린 것(#4225).
       const topic = String((msg.params as { topic?: unknown } | undefined)?.topic ?? '');
       if (topic) topics.add(topic);
+      return;
+    }
+    if (msg.method === 'ui/omniOpen') {
+      // 알림(id 없음) — 앱 화면 안에서 통합검색 키를 눌렀다(#4530). 셸이 연다. 답하지 않는다.
+      if (omniAvailable()) omniOpen();
       return;
     }
     if (msg.method === 'ui/initialize') {

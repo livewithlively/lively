@@ -9,6 +9,7 @@
 
 import { el, renderMarkdown } from './md.js';
 import { liteMenu } from './ctx-lite.js';   // #3784 터미널 우클릭 메뉴(의존 0 — 이 번들은 셸 밖에서 뜬다)
+import { isTerminalOmniChord } from './omni-chord.js';   // #4530 ⌘K 판정 — 한글 자판에서도(정본 web/lib/omni-chord.ts 의 사본)
 import { decideKey, UndoStack, countTyped, SEQ, nativeUndoOk } from './line-edit.js'; // #3778 입력줄 선택·되돌리기(순수 판정) · #3864 앱 되돌리기 판 판정
 import {                                  // #4406 Claude Code 입력칸 선택 — 범위는 웹, 지우기는 앱(순수 판정)
   findBox, move, rangeCells, cellsToRange, selText as appSelText, dragSeq, clickSeq, pressPlan, highlightMatches, scanHighlight,
@@ -2306,7 +2307,9 @@ export function setupClipboard() {
     //   Alt+K 는 터미널에서 ESC k(meta-k)이고 readline 기본 바인딩이 없어 잃는 것이 없다.
     //   맥 ⌘K 는 어차피 PTY 로 안 가므로 그대로 넘긴다.
     //  단독 탭(EMBED 아님)에서는 넘길 셸이 없다 — 그때는 가로채지 않고 그대로 흘려보낸다(공연히 키를 삼키지 않는다).
-    if (EMBED && (e.key === 'k' || e.key === 'K') && !e.ctrlKey && (e.altKey || e.metaKey)) {
+    //  #4530 — 판정은 글자가 아니라 **자판 위치까지** 본다. 한글 입력기가 켜져 있으면 ⌘K 의 e.key 가 'ㅏ' 로 오고,
+    //   맥 Option+K 는 '˚' 로 온다 — 종전 `e.key === 'k'` 판정으로는 둘 다 안 넘어갔다(isTerminalOmniChord).
+    if (EMBED && isTerminalOmniChord(e)) {
       // #633 과 같은 이유로 preventDefault 필수 — return false 는 xterm 자체 처리만 막고 브라우저 기본동작은 안 막는다.
       e.preventDefault();
       try { window.parent.postMessage({ type: 'lively-omni-open' }, location.origin); } catch (_) { /* 부모가 없다 */ }
@@ -3718,6 +3721,9 @@ function setupEmbedBridge() {
   window.addEventListener('message', (ev: MessageEvent) => {
     if (ev.origin !== location.origin || ev.source !== window.parent) return;
     const m: any = ev.data;
+    //  #4530 — 셸이 통합검색을 닫았다(이 프레임이 Alt+K · ⌘K 로 열어 달라고 부탁했던 것). 입력은 다시 터미널로 —
+    //   종전엔 Esc 로 닫으면 초점이 셸 문서에 남아 터미널을 다시 눌러야 쳐졌다.
+    if (m && m.type === 'lively-omni-closed') { try { term.focus(); } catch (_) { /* 아직 안 떴다 */ } return; }
     if (!m || m.type !== 'lively-term') return;
     if (m.cmd === 'reconnect') softReconnect();
     else if (m.cmd === 'settings') openSettings();
