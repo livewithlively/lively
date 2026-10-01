@@ -199,7 +199,11 @@ function runLlm(prompt, purpose) {
     return llmDirExchange({ dir: args.llmDir, id, model: args.model, purpose, prompt, timeoutMs: LLM_TIMEOUT_MS });
   }
   return new Promise((resolve, reject) => {
-    const p = spawn(args.llmCmd, ["-p", "--model", args.model], { cwd: tmpdir(), stdio: ["pipe", "pipe", "pipe"] });
+    // 재작성·판정은 프롬프트만 있으면 되는 순수 텍스트 일이다. 기본 실행은 사용자 설정(전역 CLAUDE.md·세션 훅·MCP·스킬)을 매번 실어
+    //  짧은 질문에도 입력이 약 7만 토큰이었고, 아래 옵션으로 끄면 약 8천 5백 토큰이다(2026-10-01 같은 프롬프트로 비교, 비용 7배 차).
+    //  훅이 꺼지므로 이 호출이 라이블리 세션·자동 프로젝트를 만들지도 않는다. --bare 는 OAuth 로그인을 읽지 않아 쓰지 않는다.
+    const LEAN = ["--setting-sources", "", "--strict-mcp-config", "--tools", "", "--disable-slash-commands", "--no-session-persistence"];
+    const p = spawn(args.llmCmd, ["-p", "--model", args.model, ...LEAN], { cwd: tmpdir(), stdio: ["pipe", "pipe", "pipe"] });
     let out = "", err = "";
     const timer = setTimeout(() => { p.kill("SIGKILL"); reject(new Error("llm_timeout")); }, LLM_TIMEOUT_MS);
     p.stdout.on("data", (d) => { out += d; });
