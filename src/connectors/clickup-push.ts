@@ -11,6 +11,7 @@ import { rootProjectIdOfTaskNode } from "../v6/project-store.js";
 import { getMember } from "../org/store/members.js";
 import { gatewayUrl } from "../gateway-url.js";
 import { statusesForList, decidePushStatus } from "./clickup/push-status.js";
+import { createListFor } from "./clickup/push-target.js";
 import type { ClickUpStatus, ClickUpList, ClickUpSpace } from "./clickup/types.js";
 import { resolveConnectorConfig } from "./config.js";
 import { logger } from "../log.js";
@@ -212,13 +213,40 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
       if (!p.external_id && isRestrictedForPublish(p.id)) {
         await markDone(ob.id); skipped++; continue;
       }
-      // status 는 그 카드가 실제로 속한 리스트 기준으로 정한다. 네이티브(아직 카드가 없는 것)는 컨테이너 리스트가
-      //  곧 그 자리이므로 컨테이너 상태셋을 쓴다.
+      // CREATE 의 부모·타깃 리스트를 status 판정보다 **먼저** 푼다 — 자식이 실릴 리스트가 곧 status 기준 리스트다.
+      //  (왜 부모 리스트여야 하는지는 createListFor 머리말 — ITEM_137.)
+      const willUpdate = p.external_system === "clickup" && !!p.external_id;
+      let parentExt: string | undefined;
+      let chainListExts: (string | null)[] = [];
+      if (!willUpdate && p.level !== "project") {
+        if (p.parent_id == null) { await markDone(ob.id); continue; } // 비정상 — skip
+        //  직계 부모(d=0)부터 위로 — 부모의 푸시 여부는 d=0 으로 판정하고, 리스트 좌표는 체인에서 첫 non-null 을
+        //  쓴다(왜 한 칸이 아니라 체인인지는 createListFor 머리말). d<8 = 폭주 방지 상한.
+        const anc: Array<{ d: number; external_id: string | null; external_system: string | null; list_ext: string | null }> = await q(itemsPool,
+          `WITH RECURSIVE anc AS (
+             SELECT id, parent_id, external_id, external_system,
+                    NULLIF(btrim(external_base->>'list_ext'), '') AS list_ext, 0 AS d
+               FROM project WHERE id=$1
+             UNION ALL
+             SELECT p.id, p.parent_id, p.external_id, p.external_system,
+                    NULLIF(btrim(p.external_base->>'list_ext'), ''), anc.d+1
+               FROM project p JOIN anc ON p.id = anc.parent_id
+              WHERE anc.list_ext IS NULL AND anc.d < 8)
+           SELECT d, external_id, external_system, list_ext FROM anc ORDER BY d`, [p.parent_id]);
+        const par = anc.find((a) => a.d === 0);
+        if (!par || par.external_system !== "clickup" || !par.external_id) { deferred++; continue; } // 부모 미푸시 → 다음 틱
+        parentExt = par.external_id;
+        chainListExts = anc.map((a) => a.list_ext);
+      }
+      const createList = createListFor(chainListExts, containerId);
+
+      // status 는 그 카드가 실제로 속한 리스트 기준으로 정한다. 네이티브(아직 카드가 없는 것)는 이번에 만들 리스트가
+      //  곧 그 자리이므로 그 리스트의 상태셋을 쓴다.
       // 리스트 좌표가 없으면 컨테이너로 폴백한다. `list_ext` 는 인바운드가 채우는 값이라 **푸시로 방금 만든
       //  카드**엔 첫 인바운드 싱크 전까지 없다(create 가 병합하는 base 에 그 키가 없다). 빈 상태셋으로 두면
       //  그 구간의 status 가 조용히 빠져 이 수정이 고치려는 결함을 다시 만든다. 컨테이너 밖 카드에 폴백이
       //  잘못 걸려도 ClickUp 이 거부하고 updateSafe 가 status 를 빼고 재시도해 종전과 같아진다.
-      const listForStatus = (p.external_id ? p.list_ext : null) ?? (containerId || null);
+      const listForStatus = (p.external_id ? p.list_ext : null) ?? (createList || null);
       const { statuses, failed: statusLoadFailed } = await statusesOf(listForStatus);
       // 일시 실패(429·순단)면 이 행을 닫지 않는다 — status 없이 밀어 done 을 찍으면 그 변경이 영구 유실된다.
       //  단 무한정 미루면 그 행이 큐 머리를 점거하므로 attempts 로 상한을 둔다(넘으면 status 없이 진행).
@@ -240,7 +268,7 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
         priority: p.priority, start_date: p.start_date, due_date: p.due_date,
       });
 
-      if (p.external_system === "clickup" && p.external_id) {
+      if (willUpdate && p.external_id) {
         const extId = p.external_id;
         let statusApplied = false;
         const r = await pushLinkedUpsert({
@@ -260,19 +288,11 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
         if (ob.close_note && statusApplied) await postCloseComment(p, p.external_id, ob.close_note);
         else if (ob.close_note) logger.warn({ entity: p.id }, "닫힘 근거 코멘트 생략 — status 가 ClickUp 에 실리지 않았다(상태셋 미해소·거부·저쪽이 이미 닫힘)");
       } else {
-        // CREATE — 부모(project-Task / task-Subtask) external_id 해소. 미푸시면 defer.
-        let parentExt: string | undefined;
-        if (p.level !== "project") {
-          if (p.parent_id == null) { await markDone(ob.id); continue; } // 비정상 — skip
-          const par: { external_id: string | null; external_system: string | null } | undefined = await one(itemsPool,
-            `SELECT external_id, external_system FROM project WHERE id=$1`, [p.parent_id]);
-          if (!par || par.external_system !== "clickup" || !par.external_id) { deferred++; continue; } // 부모 미푸시 → 다음 틱
-          parentExt = par.external_id;
-        }
+        // CREATE — 부모(project-Task / task-Subtask) external_id 는 위에서 해소했다(미푸시면 이미 defer).
         // 위 SELECT 가 컨테이너 부재 시 external_id 없는 행을 뽑지 않으므로, 여기 닿는 건 다른 시스템 미러
         //  (external_system≠clickup — 예: 노션 미러 프로젝트)뿐이다. create 할 자리가 없으니 닫는다.
         if (!containerId) { await markDone(ob.id); skipped++; continue; }
-        const { task: ct, statusApplied } = await createSafe(containerId, { ...body, ...(parentExt ? { parent: parentExt } : {}) });
+        const { task: ct, statusApplied } = await createSafe(createList, { ...body, ...(parentExt ? { parent: parentExt } : {}) });
         const url = ct.url || `https://app.clickup.com/t/${ct.id}`;
         await itemsPool.query(
           `UPDATE project SET external_system='clickup', external_instance=$2, external_id=$3, external_url=$4,
