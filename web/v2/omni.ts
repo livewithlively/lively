@@ -28,7 +28,7 @@
 //  · 자료      GET /api/ui/sources?q=                  (칩으로만)
 //  · 세션·화면·분류·리스트·설정·명령 — 셸이 쥔 목록에서(네트워크 0)
 //  공개범위는 **전부 서버가 시행한다**(#1291) — 여기서 거르지 않는다.
-import { api, el, sv } from '../core.js';
+import { api, el, sv, wsKey } from '../core.js';
 import { ICONS } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { appHref, visibleApps } from './apps.js';
 import { appMatches } from '../lib/app-match.js';   // #4233 옛 이름으로도 찾는다(런치패드와 같은 잣대)
@@ -182,8 +182,10 @@ let sortMode: OmniSort | null = null;
 let period: OmniPeriod = 'all';
 let lastQuery: { q: string; at: number } | null = null;
 const LAST_QUERY_MS = 10 * 60_000;
-const OPENED_KEY = 'lively.omni.opened';
-const QUERIES_KEY = 'lively.omni.queries';
+//  최근 연 것 · 최근 검색어는 **워크스페이스의 내용**을 가리킨다 — wsKey 로 나눈다(#1875 규칙, web/lib/net.ts). 안 나누면 워크스페이스를
+//   바꾼 뒤 빈 칸 화면에 다른 워크스페이스의 제목이 섰다(격리 리뷰). 정렬은 취향이라 나누지 않는다.
+const OPENED_KEY = (): string => wsKey('lively.omni.opened');
+const QUERIES_KEY = (): string => wsKey('lively.omni.queries');
 interface OpenedRow { kind: Kind; key: string; title: string; href: string; at: number }
 function readJson(key: string): unknown {
   try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
@@ -193,7 +195,7 @@ function writeJson(key: string, v: unknown): void {
 }
 const ALL_KINDS: Kind[] = [...MAIN_KINDS, ...AUX_KINDS];
 function loadOpened(): OpenedRow[] {
-  const v = readJson(OPENED_KEY);
+  const v = readJson(OPENED_KEY());
   if (!Array.isArray(v)) return [];
   return v.filter((x: any) => x && typeof x.key === 'string' && typeof x.href === 'string' && x.href.startsWith('#/')
     && typeof x.title === 'string' && ALL_KINDS.includes(x.kind)).slice(0, 8) as OpenedRow[];
@@ -201,16 +203,16 @@ function loadOpened(): OpenedRow[] {
 function rememberOpened(h: Hit): void {
   if (!h.href) return;
   const row: OpenedRow = { kind: h.kind, key: h.key, title: h.title, href: h.href, at: Date.now() };
-  writeJson(OPENED_KEY, [row, ...loadOpened().filter((x) => x.key !== row.key)].slice(0, 8));
+  writeJson(OPENED_KEY(), [row, ...loadOpened().filter((x) => x.key !== row.key)].slice(0, 8));
 }
 function loadQueries(): string[] {
-  const v = readJson(QUERIES_KEY);
+  const v = readJson(QUERIES_KEY());
   return Array.isArray(v) ? (v.filter((x) => typeof x === 'string' && x.trim()) as string[]).slice(0, 6) : [];
 }
 function rememberQuery(q: string): void {
   const t = q.trim();
   if (!t || t.length > 120) return;
-  writeJson(QUERIES_KEY, [t, ...loadQueries().filter((x) => x !== t)].slice(0, 6));
+  writeJson(QUERIES_KEY(), [t, ...loadQueries().filter((x) => x !== t)].slice(0, 6));
 }
 function loadSort(): OmniSort {
   try { return readSort(localStorage.getItem(SORT_KEY)); } catch { return 'recent'; }
@@ -240,6 +242,7 @@ let inflight: AbortController | null = null;
 let returnFocus: Element | null = null;
 let openerFrame: Window | null = null;
 let onHash: (() => void) | null = null;
+let onCloseTimers: (() => void) | null = null;   // 창의 타이머(입력 기다림 · 자리 잡기)를 닫을 때 끊는다
 let onViewport: (() => void) | null = null;
 
 export function omniOpen(seed?: string, opener?: Window | null): void {
@@ -334,6 +337,9 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
         input, closeBtn),
       bar, filters, list, note, moreBtn)) as HTMLElement;
 
+  //  이 창 — 닫았다 다시 열면 새 창이다. 옛 창의 타이머·응답이 새 창을 건드리지 않게 모든 진입점이 이걸 본다(격리 리뷰:
+  //   결과 전 Enter 후 닫고 1.2초 안에 다시 열면 옛 settle 이 새 창을 닫았다).
+  const mine = box;
   // ── 상태 ──
   const buckets = new Map<string, Hit[]>();
   let hits: Hit[] = [];
@@ -540,14 +546,14 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     }
   }
   function put(src: string, rows: Hit[], mySeq: number): void {
-    if (mySeq !== seq || !box) return;
+    if (mySeq !== seq || box !== mine) return;
     buckets.set(src, sinceMs ? rows.filter((h) => h.sim || inPeriod(h.at, sinceMs)) : rows);
     pending.delete(src);
     if (!pending.size) settle(mySeq);
     else if (settled) { rebuild(); paint(); refreshNote(); }   // 자리 잡은 뒤 늦게 온 채널 — 제 자리에 끼운다(맨 위는 굳어 있다)
   }
   function settle(mySeq: number): void {
-    if (mySeq !== seq || !box) return;
+    if (mySeq !== seq || box !== mine) return;
     window.clearTimeout(settleTimer);
     const first = !settled;
     settled = true;
@@ -611,8 +617,9 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
       for (const f of (d.folders || []).filter((x) => matchAll(String(x.name || ''), terms)).slice(0, 3)) {
         out.push({ kind: 'app', key: 'f:' + f.id, title: String(f.name), sub: '프로젝트 폴더', href: '#/projects2/f/' + f.id, label: '폴더' });
       }
+      //  분류 화면 주소는 **숫자 id** 를 받는다(taxonomy.ts catHref · side.ts 와 같은 문) — key 를 넣으면 «이 분류를 찾지 못했어요»(격리 리뷰).
       for (const c of categories.filter((x) => matchAllAcross([x.name, x.key], terms)).slice(0, 4)) {
-        out.push({ kind: 'app', key: 'c:' + c.key, title: c.name, sub: c.desc ? cleanSnippet(c.desc, 80) : '분류', href: '#/taxonomy/' + encodeURIComponent(c.key), label: '분류' });
+        out.push({ kind: 'app', key: 'c:' + c.id, title: c.name, sub: c.desc ? cleanSnippet(c.desc, 80) : '분류', href: '#/taxonomy/' + encodeURIComponent(c.id), label: '분류' });
       }
       if (hooks!.openMe) {
         for (const m of ME_TABS.filter((x) => matchAllAcross([x.title, x.aka], terms)).slice(0, 3)) {
@@ -673,6 +680,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
 
   // ── 검색 ──
   function run(force = false): void {
+    if (box !== mine) return;
     const q = input.value.trim();
     if (!force && q === ranQuery) return;
     ranQuery = q;
@@ -711,9 +719,12 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
         if (my !== seq) return;
         const pend = r ? r.pending : 0;
         //  밀린 수를 서버가 못 셌으면(null) 그 사실을 말한다 — 0 으로 읽으면 «다 색인됐다» 는 거짓말이 된다(#4517 재검토).
-        if (pend === null) convNoteText = '대화 색인이 어디까지 됐는지 확인하지 못했습니다 — 최근 대화는 아직 찾지 못할 수 있습니다.';
-        else if (pend) convNoteText = `대화 색인을 만드는 중입니다 — 세션 ${pend}개의 대화는 아직 찾지 못할 수 있습니다.`;
-        else if (r && r.capped) convNoteText = '흔한 낱말이라 최근 세션 400개 안에서만 찾았습니다 — 낱말을 더 넣으면 좁혀집니다.';
+        const notes: string[] = [];
+        if (pend === null) notes.push('대화 색인이 어디까지 됐는지 확인하지 못했습니다 — 최근 대화는 아직 찾지 못할 수 있습니다.');
+        else if (pend) notes.push(`대화 색인을 만드는 중입니다 — 세션 ${pend}개의 대화는 아직 찾지 못할 수 있습니다.`);
+        //  후보는 «낱말을 더 많이 맞춘 세션 → 최근» 순으로 400개까지 모은다(conv-index-store). 드문 낱말을 넣으면 그 세션이 앞에 남는다.
+        if (r && r.capped) notes.push('맞는 세션이 많아 낱말이 더 많이 맞은 세션 400개 안에서 골랐습니다 — 드문 낱말을 넣거나 기간을 좁히면 정확해집니다.');
+        convNoteText = notes.join(' ');
         put('conv', ((r && r.results) || []).map((x: any, i: number) => convHit(x, i)), my);
       }, fail('conv'));
     });
@@ -781,6 +792,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
 
   document.body.append(box);
   document.addEventListener('keydown', onEsc, true);
+  onCloseTimers = () => { window.clearTimeout(timer); window.clearTimeout(settleTimer); enterWant = null; };
   //  주소가 바뀌면(뒤로 가기 · 다른 문으로 이동) 창은 이제 그 화면의 것이 아니다 — 닫는다(#4530).
   onHash = () => omniClose({ restoreFocus: false });
   window.addEventListener('hashchange', onHash);
@@ -795,7 +807,11 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
   paintSort();
   paintPeriod();
   paintChips();
-  void loadCategories().then((fresh) => { if (fresh && box && input.value.trim()) run(true); });
+  //  분류는 셸 목록 줄에만 쓰인다 — 도착하면 그 줄만 다시 만든다(검색 전체를 다시 돌리면 고른 줄·맨 위 셋이 풀렸다, 격리 리뷰).
+  void loadCategories().then((fresh) => {
+    if (!fresh || box !== mine || !input.value.trim()) return;
+    buckets.set('local', localHits()); rebuild(); paint(); refreshNote();
+  });
   const prev = !seed && lastQuery && Date.now() - lastQuery.at < LAST_QUERY_MS ? lastQuery.q : '';
   input.value = seed || prev;
   input.focus();
@@ -812,7 +828,7 @@ function failText(e: any): string {
 }
 
 // ── 분류(카테고리) — 한 페이지에 5분에 한 번 받아 둔다(이름으로 찾는다, #4530) ──
-let categories: Array<{ key: string; name: string; desc: string }> = [];
+let categories: Array<{ id: string; key: string; name: string; desc: string }> = [];
 let categoriesAt = 0;
 /** 새로 받았으면 true. */
 async function loadCategories(): Promise<boolean> {
@@ -821,7 +837,7 @@ async function loadCategories(): Promise<boolean> {
   try {
     const d: any = await api('/api/ui/categories');
     const rows: any[] = (d && (d.categories || d.items)) || (Array.isArray(d) ? d : []);
-    categories = rows.filter((c) => c && c.key && c.name).map((c) => ({ key: String(c.key), name: String(c.name), desc: String(c.should || c.description || '') }));
+    categories = rows.filter((c) => c && c.id != null && c.name).map((c) => ({ id: String(c.id), key: String(c.key || ''), name: String(c.name), desc: String(c.should || c.description || '') }));
     return true;
   } catch { categoriesAt = 0; return false; }
 }
@@ -835,6 +851,7 @@ function onEsc(e: KeyboardEvent): void {
 export function omniClose(opts: { restoreFocus?: boolean } = {}): void {
   if (!box) return;
   inflight?.abort(); inflight = null;
+  onCloseTimers?.(); onCloseTimers = null;
   closeCtxMenu();
   box.remove(); box = null;
   document.removeEventListener('keydown', onEsc, true);

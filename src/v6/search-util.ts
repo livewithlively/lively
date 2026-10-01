@@ -210,13 +210,18 @@ export async function activeEmbedding(): Promise<{ provider: EmbeddingProvider; 
 //  그래서 질의 임베딩은 이 한 자리를 지난다:
 //   · 같은 (설정 열쇠 · 글) 이면 10분 동안 기억한다(최근 256개). 실패는 기억하지 않는다.
 //   · 같은 글이 동시에 오면 진행 중인 요청 하나를 나눠 쓴다.
-//   · 질의는 6초만 기다린다(백필 상한과 별개). 넘으면 «실패» 로 답하되 진행 중인 요청은 끊지 않는다 — 늦게라도 오면 기억해 둬서
-//     다음 글자에 바로 쓴다.
+//   · 질의는 20초만 기다린다(백필 상한 300초와 별개). 넘으면 «실패» 로 답하되 진행 중인 요청은 끊지 않는다 — 늦게라도 오면 기억해
+//     둬서 다음 글자에 바로 쓴다. 6초로 두었다가 20초로 늘렸다(격리 리뷰): 이 상한은 화면만이 아니라 에이전트의 knowledge_similar ·
+//     의미검색(rrf)도 탄다 — 느린 CPU 백엔드(셀프호스트)에서 첫 호출이 늘 «실패» 가 되면 안 된다. 화면(⌘K)은 이 상한과 무관하게
+//     1.2초만 기다리고 늦은 결과를 제자리에 끼우므로 체감 속도는 이 값에 매이지 않는다.
+//   · ⚠ 기억의 열쇠에 테넌트를 넣지 않는다 — 열쇠가 (provider · base_url · model · 차원 · 글) 이고, 같은 모델·같은 글이면 벡터가
+//     같다(결정적). 한 테넌트의 기억이 다른 테넌트에 쓰여도 그 테넌트가 스스로 받았을 값과 같아 새는 것이 없다. 같은 주소·같은 모델
+//     이름 뒤에 다른 모델을 두는 구성은 지원하지 않는다(그럴 땐 model 이름을 달리 적는다).
 //  status: ok(벡터 있음) · off(임베딩 꺼짐) · failed(꺼진 건 아닌데 이번엔 못 얻었다 — 화면은 «없음» 과 다르게 말한다).
 export type QueryEmbed = { vec: number[] | null; status: "ok" | "off" | "failed" };
 export const QUERY_EMBED_TTL_MS = 10 * 60_000;
 export const QUERY_EMBED_MAX = 256;
-export const QUERY_EMBED_TIMEOUT_MS = 6_000;
+export const QUERY_EMBED_TIMEOUT_MS = 20_000;
 const qeCache = new Map<string, { vec: number[]; at: number }>();
 const qeInflight = new Map<string, Promise<number[] | null>>();
 function qeRemember(key: string, vec: number[], nowMs: number): void {

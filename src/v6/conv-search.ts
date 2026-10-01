@@ -58,7 +58,7 @@ function textOf(content: unknown): string {
  *  · 사람 말 — user 줄의 text 블록. isMeta(주입)·isSidechain(서브에이전트)·주입 문구(INJECTED_RE)는 뺀다.
  *    tool_result 블록만 있는 user 줄은 text 가 비어 저절로 빠진다(도구 결과는 사람 말이 아니다).
  *  · AI 말 — assistant 줄의 text 블록만(thinking·tool_use 는 뺀다). 서브에이전트 가지는 뺀다.
- *  · 고친 파일(#4530) — assistant 줄의 파일 고치는 도구(EDIT_TOOLS)의 경로. role 'edit', 글은 경로 그대로.
+ *  · 고친 파일(#4530) — assistant 줄의 파일 고치는 도구(EDIT_TOOLS)의 경로. role 'edit', 글은 경로의 마지막 세 마디(editTail).
  */
 export function extractConvMessages(lines: ChatLine[]): ConvMsg[] {
   const out: ConvMsg[] = [];
@@ -76,13 +76,20 @@ export function extractConvMessages(lines: ChatLine[]): ConvMsg[] {
       if (text) out.push({ role: "assistant", ts: String(l.timestamp || ""), text: clipBody(text) });
       //  고친 파일(#4530) — 사람은 «그 세션에서 omni.ts 고쳤던 거» 로 기억한다. 같은 묶음 안에서 같은 경로는 한 번만.
       for (const p of editedPaths(l.message?.content)) {
-        if (seenEdit.has(p)) continue;
-        seenEdit.add(p);
-        out.push({ role: "edit", ts: String(l.timestamp || ""), text: p });
+        const tail = editTail(p);
+        if (!tail || seenEdit.has(tail)) continue;
+        seenEdit.add(tail);
+        out.push({ role: "edit", ts: String(l.timestamp || ""), text: tail });
       }
     }
   }
   return out;
+}
+
+/** 고친 파일 경로 → 색인할 꼴: **마지막 세 마디**(«web/v2/omni.ts»). 절대 경로 전체를 담으면 «work»·«shared»·«src»·홈 폴더 이름·
+ *  프로젝트 번호 같은 경로 앞부분이 모든 세션의 고친 파일 줄에 맞아 버린다(격리 리뷰). 사람이 기억하는 건 파일 이름과 그 위 폴더다. */
+export function editTail(path: string): string {
+  return String(path || "").split(/[\\/]+/).filter(Boolean).slice(-3).join("/");
 }
 
 /** 파일을 고치는 도구 이름 — 클로드(Edit·Write·MultiEdit·NotebookEdit). 코덱스 어댑터도 파일 변경을 «Edit» 로 옮긴다(codex-app-server-events). */
@@ -103,11 +110,6 @@ export function editedPaths(content: unknown): string[] {
     }
   }
   return out;
-}
-
-/** 모든 낱말이 들어 있나 — 슬랙 Recent 의 «match all terms». 대소문자 무시(호출자가 소문자로 넘긴다). */
-export function hasAllTerms(textLower: string, terms: string[]): boolean {
-  return terms.length > 0 && terms.every((t) => textLower.includes(t));
 }
 
 //  발췌문 — 첫 일치 앞을 조금 남기고 자른다. 목록 한 줄이 «왜 이 세션이 떴나» 를 글자로 말해야 한다.

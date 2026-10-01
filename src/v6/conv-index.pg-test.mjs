@@ -50,6 +50,7 @@ const cursorOf = async (sid) => (await itemsPool.query(
   `SELECT indexed_to FROM session_msg_cursor WHERE node_id='' AND session_id=$1`, [sid])).rows[0]?.indexed_to ?? null;
 const search = (requester, q, o = {}) => C.searchConversations({
   requester, q, sort: o.sort ?? "relevance", since: o.since ?? null, limit: 20, workspaceId: PRIMARY_TENANT_ID, attach: o.attach ?? true,
+  ...(o.cap ? { sessionCap: o.cap } : {}),
 });
 const ids = (r) => r.results.map((x) => x.session_id);
 
@@ -383,8 +384,9 @@ try {
     await put(SID(32), A, U("칩을 누르면 키보드가 끊겨", ago(1)) + ED("/work/lively/web/v2/omni.ts", ago(1)) + AI("고쳤습니다", ago(1)));
     await C.indexConvSession("", SID(32));
     const m = await msgs(SID(32));
-    chk("D21 고친 파일은 role 'edit' 한 줄 · 읽기만 한 파일은 없다",
-      m.filter((x) => x.role === "edit").map((x) => x.body).join() === "/work/lively/web/v2/omni.ts" && !m.some((x) => /읽기만한파일/.test(x.body)), JSON.stringify(m));
+    chk("D21 고친 파일은 role 'edit' 한 줄(경로 끝 세 마디) · 읽기만 한 파일은 없다",
+      m.filter((x) => x.role === "edit").map((x) => x.body).join() === "web/v2/omni.ts" && !m.some((x) => /읽기만한파일/.test(x.body)), JSON.stringify(m));
+    chk("D21 경로 앞부분(work 등)으로는 그 세션이 고친 파일 때문에 맞지 않는다", !ids(await search(A, "lively 키보드")).includes(SID(32)));
     const r = await search(A, "omni.ts 키보드");
     const hit = r.results.find((x) => x.session_id === SID(32));
     chk("D21 고친 파일 이름 + 사람 말의 낱말로 그 세션을 찾고, 맞은 파일을 줄에 싣는다",
@@ -410,6 +412,16 @@ try {
     const pct = ids(await search(A, "100%"));
     const any = ids(await search(A, "%"));
     chk("D25 «100%» 는 그 말을 찾고 «%» 한 글자는 % 가 든 말만", pct.includes(SID(34)) && any.length === 1 && any[0] === SID(34), JSON.stringify({ pct, any }));
+  }
+
+  // ── D26 상한이 판정보다 먼저 걸리지 않는다 — 흔한 낱말만 든 최근 세션들이 후보를 채워도, 흔한 + 드문 낱말이 둘 다 든 옛 세션이
+  //  결과에 남는다(격리 리뷰: 종전엔 «최근 것부터» 로만 잘라 그 세션이 판정 전에 빠졌다).
+  {
+    for (const n of [35, 36, 37, 38]) { await put(SID(n), A, U("흔한낱말 이야기 " + n, ago(0))); await C.indexConvSession("", SID(n)); }
+    await put(SID(39), A, U("흔한낱말 그리고 드문낱말", ago(20)));
+    await C.indexConvSession("", SID(39));
+    const r = await search(A, "흔한낱말 드문낱말", { cap: 3, sort: "recent" });
+    chk("D26 상한 3 · 흔한 낱말만 든 최근 세션 넷 → 둘 다 든 옛 세션이 결과에 있다", ids(r).includes(SID(39)) && r.capped === true, JSON.stringify({ ids: ids(r), capped: r.capped }));
   }
 
   // ── 주기 정비 — 밀린 세션을 집어 색인한다 ──

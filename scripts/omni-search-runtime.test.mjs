@@ -112,7 +112,7 @@ async function PAGE_MAIN() {
     const q = u.searchParams.get("q") || u.searchParams.get("text") || "";
     const hit = q.includes("슬랙");
     const p = u.pathname;
-    if (p.endsWith("/api/ui/categories")) return J({ categories: [{ key: "slack-cat", name: "슬랙 분류", should: "슬랙에서 온 것" }] });
+    if (p.endsWith("/api/ui/categories")) return J({ categories: [{ id: 77, key: "slack-cat", name: "슬랙 분류", should: "슬랙에서 온 것" }] });
     if (p.endsWith("/api/ui/knowledge/similar")) { await later("sim"); return J({ entries: hit ? SIM : [] }); }
     if (p.endsWith("/api/ui/knowledge/semantic")) return J({ entries: [] });
     if (p.endsWith("/api/ui/knowledge/search")) { await later("know"); return J({ entries: hit ? GREP : q.includes("다른말") ? [{ name: "k-other", title: "다른말 문서", snippet: "", updated_at: iso(TODAY) }] : [] }); }
@@ -198,6 +198,11 @@ async function PAGE_MAIN() {
     R.def = shape();
     R.defNote = $(".v2-omni-note")?.hidden ? "" : ($(".v2-omni-note")?.textContent || "");
     R.AT = AT;
+    //  분류 줄을 누르면 분류 화면(숫자 id)으로 — 격리 리뷰: key 를 넣어 «이 분류를 찾지 못했어요» 가 떴다.
+    const nOpen = OPENED.length;
+    rowEl("슬랙 분류")?.click();
+    R.catOpen = OPENED.length > nOpen ? OPENED[OPENED.length - 1] : null;
+    await search("슬랙");
 
     // ── G15 관련도순 + 저장 ──
     [...document.querySelectorAll(".v2-omni-segb")].find((b) => /관련도순/.test(b.textContent))?.click();
@@ -388,6 +393,7 @@ check(allRows(R.def).length >= 6 && reqOf(R.defReqs, "/api/ui/v6/session-search?
 }
 // G6
 check(!titles(R.def).includes("슬랙 휴지통 세션"), "G6 휴지통 세션은 안 보인다", JSON.stringify(titles(R.def)));
+check(!!R.catOpen && R.catOpen.href === "#/taxonomy/77", "G6 분류 줄은 분류 화면(숫자 id)으로 연다", JSON.stringify(R.catOpen));
 check(/상민의 세션/.test(row(R.def, "슬랙 팀원 세션")?.ctx || ""), "G6 팀원 세션은 주인을 말한다", JSON.stringify(row(R.def, "슬랙 팀원 세션")));
 // G7
 {

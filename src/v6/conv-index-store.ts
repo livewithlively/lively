@@ -284,13 +284,17 @@ export interface ConvSearchInput {
   /** 세션 공유 view_policy — attach 면 초대받은 세션도 찾는다(대화록 열람 게이트와 같은 축). */
   attach: boolean;
   nowMs?: number;
+  /** 모으는 세션 상한(기본 CONV_SESSION_CAP) — 시험이 줄여 «상한이 판정보다 먼저 걸리는가» 를 잰다. */
+  sessionCap?: number;
 }
 /** 화면이 그리는 것만 싣는다 — 주인·점수 같은 메타는 안 싣는다(화면이 안 쓰고, 실으면 그것만으로 새는 정보가 된다). */
 export interface ConvSearchResult {
   node_id: string; session_id: string;
   name: string | null; title: string | null;
   hits: number; at: string | null;
-  /** 대표 말 — 낱말이 가장 많이 모인 말(같으면 사람 말 · 늦은 말). text 는 발췌문. 말에 맞은 것이 없으면(이름·고친 파일로만 맞음) null. */
+  /** 대표 말 — 낱말이 가장 많이 모인 말(같으면 사람 말 · 늦은 말). text 는 발췌문. 사람·AI 말에 맞은 낱말이 없고 고친 파일에만
+   *  맞았으면 null. ⚠ 후보는 **말·고친 파일에 낱말이 하나라도 든 세션**이다 — 모든 낱말이 이름·프로젝트 이름에만 있는 세션은 이
+   *  채널에 서지 않는다(그건 셸 목록의 이름 찾기가 받는다). 이름·프로젝트는 «나머지 낱말» 을 채우는 자리다. */
   best: { role: "user" | "assistant"; ts: string | null; text: string } | null;
   /** 맨 위 «가장 맞는 결과» 인가(최신순일 때). */
   top: boolean;
@@ -388,15 +392,21 @@ export async function searchConversations(input: ConvSearchInput): Promise<{ res
   const aggCols: string[] = [];
   ts.forEach((x, i) => {
     for (const [role, tag] of [["user", "u"], ["assistant", "a"], ["edit", "e"]] as const) {
-      aggCols.push(`bool_or(m.role = '${role}' AND ${x.full}) AS ${tag}f${i}`, `bool_or(m.role = '${role}' AND ${x.any}) AS ${tag}a${i}`);
+      //  조사를 뗀 꼴이 없는 낱말은 «그대로» 와 «맞음» 이 같은 식이다 — 한 번만 잰다(맞은 행마다 ILIKE 를 줄인다, 격리 리뷰).
+      if (x.full === x.any) aggCols.push(`bool_or(m.role = '${role}' AND ${x.any}) AS ${tag}f${i}`);
+      else aggCols.push(`bool_or(m.role = '${role}' AND ${x.full}) AS ${tag}f${i}`, `bool_or(m.role = '${role}' AND ${x.any}) AS ${tag}a${i}`);
     }
   });
+  //  세션마다 «말·고친 파일에 든 낱말 수» — 상한(400)보다 먼저 이걸로 줄 세운다. 최근순으로만 자르면 흔한 낱말 하나만 든 최근 세션
+  //   400개가 자리를 다 차지해, 흔한 낱말과 드문 낱말이 둘 다 든 옛 세션(사람이 찾는 바로 그 세션)이 판정 전에 잘렸다(격리 리뷰).
+  const cover = ts.map((x) => `(bool_or(${x.any}))::int`).join(" + ");
   let phrase = "false";
   if (terms.length > 1) { params.push(likePattern(terms.map((t) => t.t).join(" "))); phrase = `bool_or(m.role <> 'edit' AND m.body ILIKE $${params.length} ESCAPE '\\')`; }
   const sinceMs = input.since ? Date.parse(input.since) : NaN;
   let sinceSql = "";
   if (Number.isFinite(sinceMs)) { params.push(new Date(sinceMs).toISOString()); sinceSql = ` AND m.ts >= $${params.length}::timestamptz`; }
-  params.push(CONV_SESSION_CAP); const capP = `$${params.length}`;
+  const cap = Math.max(1, input.sessionCap ?? CONV_SESSION_CAP);
+  params.push(cap); const capP = `$${params.length}`;
   //  볼 수 있는 세션을 먼저 굳히고(MATERIALIZED) 그 세션들의 말 중 낱말이 하나라도 든 것만 세션마다 모은다 — 말마다 권한을 다시 재지 않는다.
   //   이름(지은 이름·첫 지시)·프로젝트 이름은 모인 세션에만 붙인다(LATERAL 은 결과 행 수만큼만 돈다).
   const r = await boundedQuery(
@@ -416,7 +426,7 @@ export async function searchConversations(input: ConvSearchInput): Promise<{ res
          JOIN session_msg m ON m.node_id = vis.node_id AND m.session_id = vis.session_id
         WHERE (${anyHit})${sinceSql}
         GROUP BY m.node_id, m.session_id
-        ORDER BY max(m.ts) DESC NULLS LAST
+        ORDER BY ${cover} DESC, max(m.ts) DESC NULLS LAST
         LIMIT ${capP})
      SELECT agg.*, vis.owner, vis.title, proj.project_name, nm.label
        FROM agg
@@ -437,6 +447,7 @@ export async function searchConversations(input: ConvSearchInput): Promise<{ res
   let aggs: ConvSessionAgg[] = r.rows.map((x) => ({
     node_id: String(x.node_id ?? ""), session_id: String(x.session_id), owner: (x.owner as string | null) ?? null,
     label: (x.label as string | null) ?? null, title: (x.title as string | null) ?? null, project: (x.project_name as string | null) ?? null,
+    //  조사를 뗀 꼴이 없는 낱말은 «…a» 열이 없다(«…f» 하나로 잰다) — 없으면 0.
     strength: terms.map((_, i) => ({
       user: bool(x[`uf${i}`]) ? 1 : bool(x[`ua${i}`]) ? 0.8 : 0,
       assistant: bool(x[`af${i}`]) ? 1 : bool(x[`aa${i}`]) ? 0.8 : 0,
@@ -458,7 +469,7 @@ export async function searchConversations(input: ConvSearchInput): Promise<{ res
       best: b?.msg ?? null, top: x.top, fields: x.fields, edit: b?.edit ?? null,
     };
   });
-  return { results, capped: r.rows.length >= CONV_SESSION_CAP };
+  return { results, capped: r.rows.length >= cap };
 }
 
 /**

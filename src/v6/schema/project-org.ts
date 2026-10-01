@@ -180,7 +180,7 @@ export async function initV6ProjectOrg(pool: Pool): Promise<void> {
       session_id TEXT NOT NULL,
       at_offset BIGINT NOT NULL,
       idx INT NOT NULL,
-      role TEXT NOT NULL,            -- 'user' 사람 말 · 'assistant' AI 말
+      role TEXT NOT NULL,            -- 'user' 사람 말 · 'assistant' AI 말 · 'edit' 고친 파일(경로 끝 세 마디, #4530)
       ts TIMESTAMPTZ,                -- 그 말의 시각(대화 파일 기준). 못 읽으면 NULL
       body TEXT NOT NULL,
       PRIMARY KEY (node_id, session_id, at_offset, idx));

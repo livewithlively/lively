@@ -11,7 +11,11 @@
 import { api, el, toast } from '../core.js';
 import { APP_RUNTIME_JS } from './app-ui-runtime.js';
 import { ensureAppGrant } from './app-session.js';
-import { omniAvailable, omniOpen } from './omni.js';   // #4530 앱 화면 안의 ⌘K → 셸 통합검색
+//  #4530 앱 화면 안의 ⌘K → 셸 통합검색. omni.ts 를 직접 들이지 않는다 — 셸 화면 모듈 묶음(사이드바·자료 …)이 통째로 딸려 와
+//   앱 화면 묶음이 커지고, 창이 없는 곳에서 이 모듈을 실으면 그 묶음이 터진다(scripts/session-app-pane.test.mjs 가 잡았다).
+//   대신 셸이 듣는 같은 오리진 신호(omni.ts OMNI_MSG = 'lively-omni-open')를 이 창에 보낸다 — 셸의 bindOmniKey 가 받아 연다.
+const OMNI_OPEN_MSG = 'lively-omni-open';
+let lastOmniAsk = 0;   // 앱이 보낸 «통합검색 열기» 의 마지막 때(1초에 한 번)
 
 export interface AppCsp { connect_domains?: string[]; resource_domains?: string[]; frame_domains?: string[] }
 
@@ -95,7 +99,9 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
     }
     if (msg.method === 'ui/omniOpen') {
       // 알림(id 없음) — 앱 화면 안에서 통합검색 키를 눌렀다(#4530). 셸이 연다. 답하지 않는다.
-      if (omniAvailable()) omniOpen();
+      //  사람의 키가 보내는 신호라 1초에 한 번이면 충분하다 — 앱이 연달아 보내 입력칸 초점을 빼앗지 못하게(격리 리뷰).
+      const now = Date.now();
+      if (now - lastOmniAsk > 1000) { lastOmniAsk = now; window.postMessage({ type: OMNI_OPEN_MSG }, location.origin); }
       return;
     }
     if (msg.method === 'ui/initialize') {

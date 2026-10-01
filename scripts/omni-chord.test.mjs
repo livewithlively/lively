@@ -38,7 +38,7 @@
 //   W2 위키 전용 ⌘K(web/wiki-doc.ts)가 omniFrameActive() 로 액자에서 비키고, 판정은 isKKey(자판 위치)를 쓴다
 //   W3 우클릭 메뉴(web/v2/ctx-shell.ts)의 검색 줄은 openSearch 를 부르고, openSearch 는 훅이 없으면 forwardOmniToShell 로 간다
 //   W4 터미널(web/standalone/terminal.ts)이 isTerminalOmniChord 로 판정한다
-//   W5 앱 화면 다리(web/v2/app-ui.ts)가 ui/omniOpen 을 받아 omniOpen 을 부른다
+//   W5 앱 화면 다리(web/v2/app-ui.ts)가 ui/omniOpen 을 받아 셸 신호(lively-omni-open)로 넘긴다(omni.ts 를 들이지 않는다)
 //  앱 화면 주입 문자열 — vm 에서 실제로 돌린다:
 //   A1 표의 «연다» 열과 같이 parent.postMessage({method:'ui/omniOpen'}) 를 보낸다(id 없는 알림) · 기본 동작을 끊는다
 //
@@ -195,6 +195,13 @@ function calls(node, name) {
   visit(node);
   return hit;
 }
+/** obj.name(...) 꼴의 부름이 있나(window.postMessage 같은 것). */
+function callsMember(node, name) {
+  let hit = false;
+  const visit = (n) => { if (hit) return; if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === name) { hit = true; return; } ts.forEachChild(n, visit); };
+  visit(node);
+  return hit;
+}
 function findFn(src, name) {
   let f = null;
   const visit = (n) => { if (f) return; if (ts.isFunctionDeclaration(n) && n.name?.text === name) { f = n; return; } ts.forEachChild(n, visit); };
@@ -231,7 +238,10 @@ function stringLiteralIn(node, text) {
   const t = sf("web/standalone/terminal.ts");
   ok(importsName(t, "isTerminalOmniChord", /\.\/omni-chord\.js$/) && calls(t, "isTerminalOmniChord"), "W4 터미널이 isTerminalOmniChord 로 판정한다");
   const a = sf("web/v2/app-ui.ts");
-  ok(importsName(a, "omniOpen", /\/omni\.js$/) && stringLiteralIn(a, "ui/omniOpen") && calls(a, "omniOpen"), "W5 앱 화면 다리가 ui/omniOpen 을 받아 omniOpen 을 부른다");
+  //  #4530 격리 리뷰 뒤: 앱 화면 다리는 omni.ts 를 들이지 않는다(셸 화면 모듈 묶음이 딸려 와 창 없는 곳에서 터졌다 — session-app-pane 시험).
+  //   대신 셸이 듣는 같은 오리진 신호(lively-omni-open)를 제 창에 보낸다 — bindOmniKey 가 받아 연다.
+  ok(!importsName(a, "omniOpen", /\/omni\.js$/) && stringLiteralIn(a, "ui/omniOpen") && stringLiteralIn(a, "lively-omni-open") && callsMember(a, "postMessage"),
+    "W5 앱 화면 다리가 ui/omniOpen 을 받아 셸 신호(lively-omni-open)로 넘긴다 · omni.ts 를 들이지 않는다");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

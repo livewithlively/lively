@@ -621,13 +621,12 @@ export async function bootV2(): Promise<void> {
       //  세션은 홈 구역에서 연다(#4530) — 액자에서 여는 문(lively:open-route)·세션 목록과 같은 규칙. 안 옮기면 프로젝트·위키 구역에서
       //   연 세션이 사이드바 어디에도 안 보였다(점검).
       if (routeKey(href).startsWith('s:')) setRailSection('home', { navigate: false });
-      //  보던 창을 덮지 않는다(#4530) — 사이드바 행과 같은 «있으면 그 창, 없으면 새 창». 종전엔 Enter 가 보던 세션 자리를
-      //   지식 문서로 바꿔 버렸다(점검). ⌘Enter(newTab)도 같은 규칙이다(이미 열린 창을 하나 더 만들지 않는다).
-      void newTab;
       const hit = tabsApi.find(href);
-      if (!hit) { tabsApi.add(href); return; }
-      if (hit === tabsApi.current()) { if (location.hash !== href) location.hash = href; return; }
-      hit.route = href; tabsApi.activate(hit);
+      if (newTab) { if (hit) tabsApi.activate(hit); else tabsApi.add(href); return; }
+      if (hit && hit !== tabsApi.current()) { hit.route = href; tabsApi.activate(hit); return; }
+      //  나머지는 주소만 바꾸고 탭 규칙은 라우터(onHash)가 정한다 — 빈 홈 탭이면 그 자리, 세션 탭에서 출발하면 새 탭,
+      //   쓰다 만 지시가 있는 홈 탭은 덮지 않는다(⓪·①·②·#2037). 여기서 탭을 따로 세우면 그 규칙을 우회한다(#4530 격리 리뷰).
+      location.hash = href;
     },
     //  명령 «…로 새 세션 시작»(#4530) — 사이드바 [새 작업]과 같은 문(그 글을 입력칸에 넣어 둔 새 창).
     newSession: (seed) => { const t = tabsApi?.add('#/'); if (t && seed) { t.draft = seed; tabsApi?.save(); void renderRoute(t); } },

@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
-  extractConvMessages, clipBody, snippetAround, hasAllTerms, recencyBoost, rankConvAggs, convRelevance, parseConvSort, editedPaths,
+  extractConvMessages, clipBody, snippetAround, recencyBoost, editTail, rankConvAggs, convRelevance, parseConvSort, editedPaths,
   editLabel, snippetTerms, CONV_BODY_MAX, RECENCY_MAX, CONV_TOP_MAX, type ConvSessionAgg,
 } from "./conv-search.js";
 import { parseQueryTerms, stemKo, termStrength, likePattern, termPatterns } from "./query-terms.js";
@@ -118,8 +118,9 @@ test("★ [X11] 파일을 고친 도구(Edit·Write·MultiEdit·NotebookEdit)의
     { type: "tool_use", id: "2", name: "Write", input: { file_path: "/w/lively/src/v6/query-terms.ts", content: "…" } },
     { type: "tool_use", id: "3", name: "NotebookEdit", input: { notebook_path: "/w/n.ipynb" } },
   ])]);
+  //  경로는 마지막 세 마디만 담는다 — 앞부분(work·shared·홈 폴더)이 모든 세션에 맞지 않게(격리 리뷰).
   assert.deepEqual(m.map((x) => [x.role, x.text]), [
-    ["assistant", "고쳤습니다"], ["edit", "/w/lively/web/v2/omni.ts"], ["edit", "/w/lively/src/v6/query-terms.ts"], ["edit", "/w/n.ipynb"],
+    ["assistant", "고쳤습니다"], ["edit", "web/v2/omni.ts"], ["edit", "src/v6/query-terms.ts"], ["edit", "w/n.ipynb"],
   ]);
 });
 test("[X12] 읽기·셸 같은 다른 도구의 입력은 담지 않는다", () => {
@@ -257,7 +258,7 @@ test("[K11] 나머지가 같으면 내 세션이 앞선다 · limit 만큼만", 
 test("[K12] 낱말이 없으면 결과 없음 · 대소문자 무시는 SQL ILIKE 와 낱말 소문자화가 맡는다", () => {
   assert.equal(rank([agg("a", [])], "").length, 0);
   assert.equal(convRelevance(agg("a", [{ user: 1 }], { label: "Slack 정리" }), parseQueryTerms("SLACK"), { nowMs: NOW }).all, true);
-  assert.ok(hasAllTerms("slack search", ["slack", "search"]));
+  assert.equal(editTail("/work/shared/project/4530/lively/web/v2/omni.ts"), "web/v2/omni.ts");
 });
 test("[E1] 고친 파일은 파일 이름 + 바로 위 폴더로 보인다", () => {
   assert.equal(editLabel("/work/shared/project/4530/lively/web/v2/omni.ts"), "v2/omni.ts");
