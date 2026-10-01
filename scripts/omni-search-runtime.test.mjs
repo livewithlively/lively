@@ -27,6 +27,9 @@
 //  G18 창을 닫으면 진행 중인 요청을 끊는다
 //  G21 대화가 1.5초 늦게 와도(색인을 다시 쓰는 동안의 실측 1.4초) 기다렸다가 맨 위 셋에 세운다 — 1.2초 상한 때는 맨 위가 빈 채 굳었다
 //  G22 뜻 비슷 채널은 자리 잡기를 막지 않는다(맨 아래 묶음 전용) — 늦게 와도 글자 결과는 바로 선다
+//  G23 지식 채널이 실패하면 «결과가 없습니다» 대신 실패를 말한다(전엔 말없이 빈 결과)
+//  G24 칩 하나만 켜도 서버가 꽉 채워 보내면 «결과 더 보기» 가 뜨고, 누르면 더 많이 청한다(전엔 줄 40개 넘을 때만)
+//  G25 Alt+Enter 는 새 화면으로 연다(가이드 표기 · 고치기 전 동작)
 //  W   모든 장면을 통틀어 페이지 오류 0 · 배선(가짜 서버가 실제로 불렸다)
 //
 // 왜 런타임인가: 결함이 «어느 채널을 부르나 · 어떤 줄이 어느 묶음에 어떤 순서로 서나 · 언제 무엇이 열리나 · 초점이 어디 있나»
@@ -117,6 +120,8 @@ async function PAGE_MAIN() {
     if (p.endsWith("/api/ui/categories")) return J({ categories: [{ id: 77, key: "slack-cat", name: "슬랙 분류", should: "슬랙에서 온 것" }] });
     if (p.endsWith("/api/ui/knowledge/similar")) { await later("sim"); return J({ entries: hit ? SIM : [] }); }
     if (p.endsWith("/api/ui/knowledge/semantic")) return J({ entries: [] });
+    if (p.endsWith("/api/ui/knowledge/search") && q.includes("고장")) return new Response(JSON.stringify({ error: "internal_error" }), { status: 500, headers: { "content-type": "application/json" } });
+    if (p.endsWith("/api/ui/knowledge/search") && q.includes("꽉")) { const n = Number(u.searchParams.get("limit")) || 20; return J({ entries: Array.from({ length: n }, (_, i) => ({ name: "k-full-" + i, title: "꽉 찬 문서 " + i, snippet: "", updated_at: iso(TODAY - i * 1000) })) }); }
     if (p.endsWith("/api/ui/knowledge/search")) { await later("know"); return J({ entries: hit ? GREP : q.includes("다른말") ? [{ name: "k-other", title: "다른말 문서", snippet: "", updated_at: iso(TODAY) }] : [] }); }
     if (/\/api\/ui\/v6\/projects\/(similar|semantic)$/.test(p)) return J({ projects: [] });
     if (p.endsWith("/api/ui/v6/projects/search")) { await later("proj"); return J({ projects: hit ? PROJ : [] }); }
@@ -322,6 +327,29 @@ async function PAGE_MAIN() {
     PENDING = null; await search("슬랙 다시"); R.unknownNote = $(".v2-omni-note")?.textContent || ""; PENDING = 0;
     CONV_FAIL = "500"; await search("슬랙 또"); R.err500Note = $(".v2-omni-note")?.textContent || ""; CONV_FAIL = false;
 
+    // ── G23 지식 채널 실패 ──
+    await search("고장");
+    R.knowFailNote = $(".v2-omni-note")?.hidden ? "" : ($(".v2-omni-note")?.textContent || "");
+    // ── G24 칩 하나 + 꽉 찬 채널 → 더 보기(앞 장면의 기간 «오늘» 이 남아 있어 시각은 오늘 안에 둔다) ──
+    [...document.querySelectorAll(".v2-omni-chip")].find((b) => b.dataset.kind === "know")?.click();
+    await sleep(60); await waitFor(isSettled);
+    await search("꽉");
+    R.moreShown = !$(".v2-omni-more").hidden;
+    R.moreRows0 = document.querySelectorAll(".v2-omni-row").length;
+    n0 = log.length;
+    $(".v2-omni-more").click();
+    await sleep(60); await waitFor(isSettled); await sleep(40);
+    R.moreReq = since(n0).find((x) => x.includes("/api/ui/knowledge/search")) || "";
+    R.moreRows1 = document.querySelectorAll(".v2-omni-row").length;
+    [...document.querySelectorAll(".v2-omni-chip")].find((b) => b.dataset.kind === "know")?.click();   // 칩을 푼다
+    await sleep(60); await waitFor(isSettled);
+    // ── G25 Alt+Enter = 새 화면 ──
+    await search("슬랙");
+    const nAlt = OPENED.length;
+    key("Enter", { altKey: true });
+    await waitFor(() => OPENED.length > nAlt, 2000);
+    R.altEnter = OPENED.length > nAlt ? OPENED[OPENED.length - 1] : null;
+
     // ── G19 최근 연 것은 워크스페이스별 열쇠(wsKey) — 다른 워크스페이스에선 «@슬러그» 열쇠에만 ──
     localStorage.setItem("lively.workspace", "ws2");
     const baseBefore = localStorage.getItem("lively.omni.opened") || "";
@@ -471,6 +499,10 @@ check(R.reopenValue === "다른말", "G14 결과를 열고 다시 열면 그 검
 }
 // G11
 check(!!R.selKeep && R.selKeep.before && R.selKeep.before === R.selKeep.after && R.selKeep.simArrived, "G11 고른 줄은 늦게 온 채널이 끼어들어도 그대로", JSON.stringify(R.selKeep));
+// G23·G24·G25
+check(/지식 결과를 가져오지 못했습니다/.test(R.knowFailNote || "") && !/결과가 없습니다/.test(R.knowFailNote || ""), "G23 지식 채널이 실패하면 실패를 말한다(«결과가 없습니다» 아님)", JSON.stringify(R.knowFailNote));
+check(R.moreShown === true && /limit=40/.test(R.moreReq || "") && R.moreRows1 > R.moreRows0, "G24 칩 하나 + 꽉 찬 채널 → «더 보기» → 더 많이 청한다", JSON.stringify({ shown: R.moreShown, req: R.moreReq, rows: [R.moreRows0, R.moreRows1] }));
+check(!!R.altEnter && R.altEnter.newTab === true, "G25 Alt+Enter 는 새 화면", JSON.stringify(R.altEnter));
 // G21·G22
 check((group(R.lateConv, "가장 맞는 결과")?.rows || []).some((r) => r.t === "어렴풋한 대화"), "G21 늦게 온 대화(1.5초)도 맨 위 셋에 선다", JSON.stringify(R.lateConv));
 check(R.simWaitMs < 1000 && allRows(R.simLate).some((r) => r.t === "슬랙 검색 설계") && !R.simLate.some((g) => g.h === "뜻이 비슷한 지식"), "G22 뜻 비슷이 늦어도 글자 결과는 바로 선다", JSON.stringify({ ms: R.simWaitMs, heads: (R.simLate || []).map((g) => g.h) }));

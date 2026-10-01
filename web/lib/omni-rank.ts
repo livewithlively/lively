@@ -84,15 +84,18 @@ export function splitKnowTitle(title: string): { head: string; main: string } {
 
 // ── 둘째 줄 글 다듬기 ─────────────────────────────────────────────────────────────
 //  서버 발췌문·프로젝트 설명은 마크다운 원문이다. 목록 한 줄엔 기호(#, >, **, `, ▤)와 자동 안내문이 그대로 보였다(점검 실측).
-const AUTO_DESC_RE = /^\s*(?:>\s*)?(?:[⚙▤]\s*)*세션의 첫 지시에서\s*\**자동 생성\**된 프로젝트입니다[^\n]*\n?/m;
+//  안내문은 «… 보강됩니다.» 에서 끝난다 — 줄 끝까지 지우면 서버가 본문 앞부분을 한 줄로 접어 보낸 발췌(search-util grepSnippet 폴백)에서
+//   뒤의 첫 지시까지 지워 둘째 줄이 비었다(#4530 항목 확인).
+const AUTO_DESC_RE = /(?:>\s*)?(?:[⚙▤]\s*)*세션의 첫 지시에서\s*\**자동 생성\**된 프로젝트입니다(?:[^\n]*?보강됩니다\.?)?/g;
 export function cleanSnippet(raw: string, max = 160): string {
   let s = String(raw || '');
   s = s.replace(AUTO_DESC_RE, ' ');
-  s = s.replace(/^#{1,6}\s*첫 지시\(원문\)\s*$/gm, ' ');
+  s = s.replace(/#{1,6}\s*첫 지시\(원문\)/g, ' ');
   s = s.replace(/<!--[\s\S]*?-->/g, ' ');
   s = s.replace(/\(\+\d+ matches?\)\s*→\s*\S+/g, ' ');          // 에이전트용 안내(«(+3 matches) → knowledge_get»)
   s = s.replace(/^L\d+:\s?/gm, ' ');                             // grep 줄 번호
   s = s.replace(/^\s{0,3}(?:#{1,6}|>+|[-*+]|\d+\.)\s+/gm, '');    // 줄머리 기호
+  s = s.replace(/(^|\s)(?:#{1,6}|>+|[-*+])(?=\s)/g, '$1');         // 한 줄로 접힌 발췌 속의 줄머리 기호
   s = s.replace(/[▤⚙]/g, ' ');
   s = s.replace(/\*\*|__|`+/g, '');                               // 굵게·코드 표시
   s = s.replace(/\[\[([^\]]+)\]\]/g, '$1');                       // 위키 링크

@@ -70,6 +70,11 @@ eq(M.cleanSnippet("> ⚙ 세션의 첫 지시에서 **자동 생성**된 프로�
   "지금 우리 검색 (cmd+k)에 불편한게 너무 많아", "R7 자동 생성 안내문 걷고 첫 지시만");
 eq(M.cleanSnippet("# 통합검색 2차 — `key` 로 **찾는다** [[omni-unified]] [링크](http://x)"), "통합검색 2차 — key 로 찾는다 omni-unified 링크", "R7 마크다운 기호 걷기");
 eq(M.cleanSnippet("L37: 색인기 readAlignedWindow (+3 matches) → knowledge_get"), "색인기 readAlignedWindow", "R7 줄 번호·에이전트 안내 걷기");
+//  서버가 본문 줄을 못 맞히면 앞부분을 한 줄로 접어 보낸다(search-util grepSnippet 폴백) — 안내문만 걷고 첫 지시는 남긴다(전엔 둘째 줄이 비었다)
+eq(M.cleanSnippet("> ▤ 세션의 첫 지시에서 **자동 생성**된 프로젝트입니다 — 제목·본문·분류는 작업이 구체화되면 보강됩니다. ## 첫 지시(원문) 지금 우리 검색 (cmd+k)에 불편한게 너무 많아."),
+  "지금 우리 검색 (cmd+k)에 불편한게 너무 많아.", "R7 한 줄로 접힌 안내문 — 첫 지시는 남는다");
+eq(M.cleanSnippet("# 통합검색 결함 점검 ## 메타데이터 - 상태: active > 인용 **굵게** `code`"), "통합검색 결함 점검 메타데이터 상태: active 인용 굵게 code", "R7 한 줄로 접힌 발췌 속 줄머리 기호");
+eq(M.cleanSnippet("omni-rank.ts 와 a-b, x->y"), "omni-rank.ts 와 a-b, x->y", "R7 낱말 속 기호는 둔다");
 eq(M.cleanSnippet("가".repeat(200), 10), "가".repeat(10) + "…", "R7 길이 상한");
 
 // ── R8 식별자 ──
