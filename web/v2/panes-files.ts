@@ -1065,6 +1065,9 @@ export function filesPart(ctx: FilesCtx): Part {
     root,
     // ⚠ 이름을 고치는 중이면 틱을 쉰다 — 8초마다 다시 그리면 치던 글자가 사라진다.
     tick: () => { if (!renameAt) void load(); },
+    //  켜진 «자료» 탭(또는 머리줄 [자료])을 또 눌렀다 — 맨 위 폴더로(원준 2026-10-01 «자료 아이콘을 다시 누르면 자료 맨 상단으로»).
+    //   빵부스러기 «자료» 를 누른 것과 같아 «뒤로» 로 돌아갈 수 있다. 이미 맨 위면 목록만 맨 위로 올린다.
+    reselect: () => { if (cwd) goto(''); else body.scrollTop = 0; },
     destroy: () => {
       pv.destroy();
       toolsRO?.disconnect();

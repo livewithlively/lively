@@ -193,7 +193,7 @@ check(!!bringUp && /showZone\(zone, \{ bottomOn: lay\.bottomOn, narrow: narrow\(
   "W12 탭을 보이게 하는 길(bringUp)은 닫힌 아래 칸이면 곁칸으로 옮겨 켠다(lib showZone · moveTab) — 원준 10-01 «밑에서 나오는거 없게»");
 check(/show: \(k\) => bringUp\(zoneOf\(k\) \|\| 'side', k\)/.test(PANES) && !/show: \(k\) => \{ const z = zoneOf\(k\) \|\| 'side'; revealZone\(z\)/.test(PANES),
   "W12b 독의 «보여 주기» 는 bringUp — 타임라인(기본 배치가 닫힌 아래 칸)을 눌러도 터미널 밑에서 튀어나오지 않는다");
-check(/if \(!found\) \{ addPart\('side', type\); return; \}\s*bringUp\(found\.zone, found\.key\);/.test(PANES) && /const key = lay\[z\]\.find\(\(k\) => tabBase\(k\) === 'web'\)!;\s*bringUp\(z, key\);/.test(PANES)
+check(/if \(!found\) \{ addPart\('side', type\); return; \}\s*(?:if \(zoneVisible\(found\.zone\) && reselect\(found\.zone, found\.key\)\) return;\s*)?bringUp\(found\.zone, found\.key\);/.test(PANES) && /const key = lay\[z\]\.find\(\(k\) => tabBase\(k\) === 'web'\)!;\s*bringUp\(z, key\);/.test(PANES)
   && /if \(added\.length\) \{ bringUp\(z, SESSAPP_TAB\); return; \}/.test(PANES) && /if \(!z\) return;\s*bringUp\(z, SESSAPP_TAB\);/.test(PANES)
   && /const zone: Zone = showZone\(found \? found\.zone : \(findTab\('editor'\)\?\.zone \?\? 'side'\), \{ bottomOn: lay\.bottomOn, narrow: narrow\(\) \}\);/.test(PANES),
   "W12c 머리줄 단추(showPart) · 웹 칸 · 붙은 앱(새로 붙음 · 다시 누름) · 파일 뷰어도 같은 길 — 닫힌 아래 칸을 펼치지 않는다");
