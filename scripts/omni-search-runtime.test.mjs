@@ -13,7 +13,7 @@
 //  G4  대화 줄 = 이름 · 누구의 말(지시/AI) · 발췌문 색칠 · «고친 파일 v2/omni.ts» · 맞은 곳 수 · 시각
 //  G5  이름으로도 대화로도 맞은 세션은 한 줄 — 그 줄이 대화 발췌문(왜 맞았나)을 보인다
 //  G6  휴지통 세션은 안 보인다 · 팀원 세션은 «…의 세션» 으로 보인다
-//  G7  프로젝트 줄 — 태스크는 «↳ 상위 이름» · 완료는 «완료» · 이름이 같은 다른 프로젝트 둘은 둘 다 보인다
+//  G7  프로젝트 줄 — 태스크는 «상위 이름 ›» · 완료는 «완료» · 이름이 같은 다른 프로젝트 둘은 둘 다 보인다
 //  G8  지식 제목의 머리말(as-built(#…):)은 따로 작게 · 둘째 줄에 마크다운 기호·자동 안내문이 없다
 //  G9  치는 동안 — 앞 결과를 비우지 않고 흐리게 둔다(stale) · 자리 잡으면 새 결과로 한 번에
 //  G10 결과가 오기 전에 Enter → 바로 열지 않고, 자리 잡은 뒤 그 첫 줄을 연다
@@ -358,6 +358,7 @@ check(allRows(R.def).length >= 6 && reqOf(R.defReqs, "/api/ui/v6/session-search?
   const BUCKETS = ["오늘", "어제", "최근 7일", "최근 30일", "그 이전", "시각 모름"];
   const top = group(R.def, "가장 맞는 결과");
   check(heads[0] === "가장 맞는 결과" && top.rows.length >= 1 && top.rows.length <= 3, "G2 맨 위 = «가장 맞는 결과» 최대 셋", JSON.stringify(heads));
+  check(!top.rows.some((r) => r.badge === "명령"), "G2 명령 줄(«…로 새 지식 쓰기»)은 맨 위 셋에 서지 않는다", JSON.stringify(top.rows));
   const mids = heads.slice(1).filter((h) => BUCKETS.includes(h)).map((h) => BUCKETS.indexOf(h));
   check(mids.length >= 2 && mids.every((v, i) => i === 0 || v > mids[i - 1]), "G2 그 아래 날짜 묶음이 오늘 → 옛날 순", JSON.stringify(heads));
   check(heads[heads.length - 1] === "뜻이 비슷한 지식" && heads.indexOf("바로 가기") === heads.length - 2, "G2 «바로 가기» 다음 맨 끝 «뜻이 비슷한 지식»", JSON.stringify(heads));
@@ -391,7 +392,7 @@ check(/상민의 세션/.test(row(R.def, "슬랙 팀원 세션")?.ctx || ""), "G
 // G7
 {
   const task = row(R.def, "슬랙 토큰 갱신");
-  check(!!task && task.badge === "태스크" && /↳ 슬랙 연동/.test(task.ctx), "G7 태스크 줄 = 태스크 배지 · ↳ 상위 이름", JSON.stringify(task));
+  check(!!task && task.badge === "태스크" && /슬랙 연동 ›/.test(task.ctx), "G7 태스크 줄 = 태스크 배지 · 상위 이름 ›", JSON.stringify(task));
   check(row(R.def, "슬랙 연동")?.st === "완료", "G7 완료 프로젝트는 «완료» 표시", JSON.stringify(row(R.def, "슬랙 연동")));
   check(titles(R.def).filter((t) => t === "새 작업").length === 2, "G7 이름이 같은 다른 프로젝트 둘은 둘 다 보인다", JSON.stringify(titles(R.def)));
   check(!/자동 생성|첫 지시|>|##/.test(row(R.def, "슬랙 연동")?.sub || "") && /슬랙 연동 붙여 줘/.test(row(R.def, "슬랙 연동")?.sub || ""), "G7 자동 생성 안내문 대신 첫 지시 글", JSON.stringify(row(R.def, "슬랙 연동")));

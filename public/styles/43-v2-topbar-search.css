@@ -315,8 +315,8 @@
   .v2-omni-close .v2-omni-esc { display: none; }
   .v2-omni-filters { flex-wrap: nowrap; overflow-x: auto; padding: 6px 10px; gap: 5px; scrollbar-width: none; }
   .v2-omni-filters::-webkit-scrollbar { display: none; }
-  .v2-omni-kinds { flex-wrap: nowrap; }
-  .v2-omni-tools { margin-left: 6px; }
+  .v2-omni-kinds { flex-wrap: nowrap; flex: none; }   /* 줄어들면 칩이 정렬 단추 밑으로 겹쳤다(캡처로 확인) — 가로 스크롤로 */
+  .v2-omni-tools { margin-left: 6px; flex: none; }
   .v2-omni-list { padding: 4px; }
   .v2-omni-row { align-items: flex-start; gap: 8px; padding: 8px 6px; }
   .v2-omni-ic { width: 24px; height: 24px; margin-top: 1px; }

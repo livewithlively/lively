@@ -440,7 +440,9 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
   /** 맨 위 셋 — 자리 잡은 뒤에는 굳힌다(늦게 온 채널이 첫 줄을 바꾸면 Enter 가 엉뚱한 것을 연다). */
   function topHits(lexical: Hit[]): Hit[] {
     if (frozenTop) return frozenTop.map((k) => lexical.find((h) => h.key === k)).filter((h): h is Hit => !!h);
-    const ranked = pickTop(lexical.map((h) => ({ ...h, name: h.title })), terms, input.value);
+    //  명령 줄(«…로 새 세션 시작»)은 이름에 검색어가 그대로 들어 있어 «이름에 모두» 층에 붙는다 — 결과가 아니므로 후보에서 뺀다
+    //   (캡처로 확인: 맨 위 셋을 명령 둘이 차지했다).
+    const ranked = pickTop(lexical.filter((h) => !h.key.startsWith('cmd:')).map((h) => ({ ...h, name: h.title })), terms, input.value);
     return ranked.map((r) => lexical.find((h) => h.key === r.key)).filter((h): h is Hit => !!h);
   }
   /** 빈 칸 — 최근 검색어 · 최근 연 것 · 내 최근 세션(칩을 따른다). 스포트라이트를 열자마자 빈 판이면 무엇을 칠지가 안 보인다. */
@@ -639,7 +641,8 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
       sub: cleanSnippet(Array.isArray(p.snippets) ? p.snippets.join(' ') : (p.snippet || p.description || ''), 140),
       href: projHitHref(p), ident: String(p.id), at: atOf(p.updated_at), order,
       label: level === 'project' ? undefined : level === 'task' ? '태스크' : '서브태스크',
-      context: level !== 'project' && p.parent_name ? '↳ ' + String(p.parent_name) : undefined,
+      //  상위 프로젝트 이름 + « ›» — «↳» 는 글꼴에 없어 네모로 깨졌다(캡처로 확인).
+      context: level !== 'project' && p.parent_name ? String(p.parent_name) + ' ›' : undefined,
       status: st,
     };
   };
