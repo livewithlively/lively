@@ -18,7 +18,7 @@ import { type ProjectNameSource } from "./project-name.js";
 // 쓰기 경로 임베딩 비동기화(#1053) — 저장/수정 시 인라인 임베딩 대신 pending 마킹 후 백그라운드 스윕에 위임(knowledge 와 동형).
 import { markEmbeddingPending, PROJECT_TARGET } from "./embedding-backfill.js";
 import {
-  type GrepPlan, parseGrep, grepWhere, idEquals, exactFirst, grepExec, grepSnippet, previewBody, RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
+  type GrepPlan, parseGrep, parsePlainGrep, grepWhere, idEquals, exactFirst, titleFirst, grepExec, grepSnippet, previewBody, RRF_K, HYBRID_CANDIDATES, embedQuery,
 } from "./search-util.js";
 
 // 세션·폴더 바인딩(#1313 R21) — 구현은 project-session-store.ts 로 분리(터미널 척추가 PM 스토어 전체를 안 끌게).
@@ -1155,21 +1155,38 @@ export interface ProjectSearchRow {
   id: number; level: string; parent_id: number | null;
   name: string; status: string; status_category: string | null;
   list_id: number | null; updated_at: string;
+  /** 보관된 것인가(#4530) — 검색엔 남기되 화면이 «보관» 이라고 단다. 휴지통은 검색에서 아예 빠진다. */
+  archived: boolean;
+  /** 아직 이름·본문이 다듬어지지 않은 초안(첫 지시에서 자동으로 만든 것)인가(#4530). */
+  draft: boolean;
+  /** 태스크·서브태스크면 바로 위 프로젝트(태스크)의 이름 — 같은 이름의 태스크를 화면에서 가를 단서(#4530). */
+  parent_name: string | null;
   snippet?: string;   // names 모드 생략
   score?: number;     // 하이브리드(project_search) RRF 점수 — grep(searchProjects)은 미설정
 }
 export type ProjectGrepMode = "snippets" | "names" | "count";
 // viewer(#1291) — 검색도 목록과 같은 공개범위를 탄다. 목록은 막히는데 검색으로 이름·본문 스니펫이 새면
 //  "가려졌다"는 약속이 표면마다 달라진다(가장 흔한 우회로).
-export interface ProjectSearchOpts { level?: string; listId?: number; status?: string; limit?: number; mode?: ProjectGrepMode; context?: number; viewer?: Viewer }
+//  plain(#4530) — 화면 검색이 사람이 친 글을 글자 그대로 찾는다(search-util parsePlainGrep). 없으면 종전 grep(정규식·토큰).
+export interface ProjectSearchOpts { level?: string; listId?: number; status?: string; limit?: number; mode?: ProjectGrepMode; context?: number; viewer?: Viewer; plain?: boolean }
 
 // grep 결과 SELECT — 전문(description)은 스니펫 계산용으로만, 응답에선 뺀다(전문 누출·토큰폭주 방지).
+//  보관·초안 표시와 상위 이름(#4530)도 싣는다 — 상위 이름은 행마다 하위 질의가 아니라 `pp` 한 번의 LEFT JOIN(P_PARENT_JOIN)으로.
+//  ⚠ 보관·휴지통 표식은 **맨 위 프로젝트 행에만** 붙는다(setProjectArchived/Trashed 가 level='project' 만 고친다). 그래서 태스크의
+//   «보관됨» 은 제 뿌리(태스크 → 부모 · 서브태스크 → 조부모)를 봐야 한다 — pp(부모)·pr(뿌리) 두 번의 LEFT JOIN 으로 한 번에 편다.
 const P_GREP_SEL = ["id", "level", "parent_id", "name", "description", "status", "status_category", "list_id", "updated_at"]
   .map((c) => "p." + c).join(", ");
 const P_GREP_NAMES_SEL = ["id", "level", "parent_id", "name", "status", "status_category", "list_id", "updated_at"]
   .map((c) => "p." + c).join(", ");
+const P_PARENT_JOIN = "LEFT JOIN project pp ON pp.id = p.parent_id LEFT JOIN project pr ON pr.id = CASE WHEN p.level='subtask' THEN pp.parent_id ELSE pp.id END";
+const P_PARENT_SEL = "pp.name AS parent_name, (p.archived_at IS NOT NULL OR pr.archived_at IS NOT NULL) AS archived, COALESCE(p.draft, false) AS draft";
 // 내부 보드 앵커(__board__)는 검색 대상 아님(listProjects 도 제외) — task/subtask 는 folder NULL 이라 통과.
-const P_SEARCH_BASE = "p.folder IS DISTINCT FROM '__board_anchor__'";
+//  ★ 휴지통도 검색 대상이 아니다(#4530) — 목록(listProjects)은 trashed_at 을 빼는데 검색 경로들만 안 빼서, 버린 프로젝트가
+//   표시 없이 결과에 섞였다. 게다가 버리는 순간 updated_at 이 갱신돼 글자 검색(최신순)에서 오히려 1위로 올랐다(실측 #4304).
+//   태스크·서브태스크는 표식이 뿌리에만 있으므로 부모·조부모 중 버려진 것이 있으면 함께 뺀다(NOT EXISTS — 맞은 행에만 도는 PK 조회).
+const P_SEARCH_BASE = `p.folder IS DISTINCT FROM '__board_anchor__' AND p.trashed_at IS NULL
+  AND NOT EXISTS (SELECT 1 FROM project tr WHERE tr.trashed_at IS NOT NULL
+                   AND (tr.id = p.parent_id OR tr.id = (SELECT tp.parent_id FROM project tp WHERE tp.id = p.parent_id)))`;
 
 // 공통 WHERE(grep 매처 + 앵커 제외 + level/list_id/status 필터). params 에 push 하고 절 문자열 반환.
 function projectGrepWhere(plan: GrepPlan, opts: ProjectSearchOpts, params: unknown[], visIds?: Set<number> | null, raw?: string): string {
@@ -1200,6 +1217,8 @@ function toProjectRow(r: Record<string, unknown>): ProjectSearchRow {
     id: Number(r.id), level: r.level as string, parent_id: r.parent_id == null ? null : Number(r.parent_id),
     name: r.name as string, status: r.status as string, status_category: (r.status_category as string | null) ?? null,
     list_id: r.list_id == null ? null : Number(r.list_id), updated_at: r.updated_at as string,
+    archived: r.archived === true, draft: r.draft === true,
+    parent_name: typeof r.parent_name === "string" ? r.parent_name : null,
   };
 }
 
@@ -1211,7 +1230,7 @@ export async function countProjectGrep(qstr: string, opts: ProjectSearchOpts = {
     const where = projectGrepWhere(plan, opts, params, visIds, qstr);
     const rows = await q(itemsPool, `SELECT count(*)::int AS n FROM project p WHERE ${where}`, params);
     return Number(rows[0]?.n ?? 0);
-  });
+  }, { plain: opts.plain });
   return result;
 }
 
@@ -1224,9 +1243,10 @@ export async function searchProjects(qstr: string, opts: ProjectSearchOpts = {})
     const params: unknown[] = [];
     const where = projectGrepWhere(p, opts, params, visIds, qstr);
     const first = exactFirst("p.id", qstr, "id", params);   // 번호의 주인이 LIMIT 에 잘리지 않게(exactFirst 주석)
+    const tf = titleFirst("p.name", p, params);              // 이름에 모든 낱말이 든 것이 본문만 스친 최근 것에 잘리지 않게(#4530)
     params.push(Math.min(opts.limit ?? 20, 100));
-    return q(itemsPool, `SELECT ${sel} FROM project p WHERE ${where} ORDER BY ${first}p.updated_at DESC LIMIT $${params.length}`, params);
-  });
+    return q(itemsPool, `SELECT ${sel}, ${P_PARENT_SEL} FROM project p ${P_PARENT_JOIN} WHERE ${where} ORDER BY ${first}${tf}p.updated_at DESC LIMIT $${params.length}`, params);
+  }, { plain: opts.plain });
   return rows.map((r) => {
     const base = toProjectRow(r);
     if (withBody) base.snippet = grepSnippet((r.description as string | null) ?? "", plan, opts.context, "project_get_v6");
@@ -1237,11 +1257,9 @@ export async function searchProjects(qstr: string, opts: ProjectSearchOpts = {})
 // ── 하이브리드 검색(project_search) — 벡터(cosine) ∪ 렉시컬(grep) RRF 융합. knowledge hybridSearchKnowledge 와 동형. ──
 //  임베딩 off / 쿼리 임베딩 실패 / SQL 실패 → 전부 searchProjects(렉시컬)로 폴백(하위호환·safe-by-construction).
 export async function hybridSearchProjects(qstr: string, opts: ProjectSearchOpts = {}): Promise<ProjectSearchRow[]> {
-  const provider = await activeEmbeddingProvider();
-  if (!provider) return searchProjects(qstr, opts);          // off → grep 그대로
-  let qvec: number[] | null = null;
-  try { const [v] = await provider.embed([qstr]); qvec = v && v.length ? v : null; } catch { qvec = null; }
-  if (!qvec) return searchProjects(qstr, opts);               // 쿼리 임베딩 실패 → 폴백
+  //  질의 임베딩은 한 자리(embedQuery — 기억·동시 요청 공유·짧은 상한, #4530). off·실패 → grep 그대로.
+  const qvec = (await embedQuery(qstr)).vec;
+  if (!qvec) return searchProjects(qstr, opts);               // off · 쿼리 임베딩 실패 → 폴백
   try {
     const visIds = opts.viewer === undefined ? undefined : await visibleListIds(opts.viewer);
     return await rrfSearchProjects(qstr, qvec, opts, visIds);
@@ -1257,7 +1275,7 @@ async function rrfSearchProjects(qstr: string, qvec: number[], opts: ProjectSear
   const withBody = opts.mode !== "names";
   const sel = withBody ? P_GREP_SEL : P_GREP_NAMES_SEL;
   const limit = Math.min(opts.limit ?? 20, 100);
-  const plan = parseGrep(qstr);
+  const plan = opts.plain ? parsePlainGrep(qstr) : parseGrep(qstr);
   const params: unknown[] = [];
   // 렉시컬 채널 WHERE — grep 매처 + 앵커 제외 + level/list/status(searchProjects 와 동일).
   //  ⚠ 공개범위 술어는 여기(후보 CTE)가 아니라 **최종 SELECT** 에 건다(아래) — 벡터 채널이 HNSW 근사탐색이라
@@ -1276,10 +1294,12 @@ async function rrfSearchProjects(qstr: string, qvec: number[], opts: ProjectSear
   params.push(limit); const limP = `$${params.length}`;
   //  번호 지목이면 그 행을 후보 자르기 전·최종 정렬 모두에서 맨 앞에(exactFirst 주석 — 같은 이유로 RRF 합산에서도 밀린다).
   const first = exactFirst("p.id", qstr, "id", params);
+  //  렉시컬 순위도 «이름에 모든 낱말이 든 것 먼저» (#4530, knowledge rrfSearch 와 같은 이유).
+  const tf = titleFirst("p.name", plan, params);
   const sql = `
     WITH lex AS (
-      SELECT p.id, row_number() OVER (ORDER BY ${first}p.updated_at DESC) AS rank
-      FROM project p WHERE ${lexWhere} ORDER BY ${first}p.updated_at DESC LIMIT ${candP}
+      SELECT p.id, row_number() OVER (ORDER BY ${first}${tf}p.updated_at DESC) AS rank
+      FROM project p WHERE ${lexWhere} ORDER BY ${first}${tf}p.updated_at DESC LIMIT ${candP}
     ),
     vec AS (
       SELECT p.id, row_number() OVER (ORDER BY p.embedding_vector <=> ${qp}) AS rank
@@ -1290,8 +1310,8 @@ async function rrfSearchProjects(qstr: string, qvec: number[], opts: ProjectSear
       FROM (SELECT id, rank FROM lex UNION ALL SELECT id, rank FROM vec) u
       GROUP BY id
     )
-    SELECT ${sel}, f.score::float8 AS score
-    FROM fused f JOIN project p ON p.id=f.id
+    SELECT ${sel}, ${P_PARENT_SEL}, f.score::float8 AS score
+    FROM fused f JOIN project p ON p.id=f.id ${P_PARENT_JOIN}
     WHERE ${listIdPredicate(PROJECT_ROW_LIST_ID_SQL, visIds ?? null)}
     ORDER BY ${first}f.score DESC LIMIT ${limP}`;
   const rows = await q(itemsPool, sql, params);
@@ -1318,7 +1338,7 @@ export interface ProjectSimilarOpts {
   includeDone?: boolean;  // 기본 false — done·canceled 는 제외(연결 후보로 죽은 프로젝트를 권하지 않는다)
   viewer?: Viewer;
 }
-export async function findSimilarProjects(opts: ProjectSimilarOpts = {}): Promise<ProjectSimilarRow[]> {
+export async function findSimilarProjects(opts: ProjectSimilarOpts = {}, diag?: { embeddings?: "off"; degraded?: boolean }): Promise<ProjectSimilarRow[]> {
   // 1) 쿼리 벡터 리터럴 — id(저장된 벡터 재사용, 재임베딩 불요) 또는 text(즉시 임베딩).
   const visIds = opts.viewer === undefined ? undefined : await visibleListIds(opts.viewer);
   let vecLiteral: string | null = null;
@@ -1329,12 +1349,10 @@ export async function findSimilarProjects(opts: ProjectSimilarOpts = {}): Promis
     const r = await one(itemsPool, `SELECT p.embedding_vector::text AS v FROM project p WHERE p.id=$1 AND ${vis}`, [opts.id]);
     vecLiteral = (r as { v?: string | null } | undefined)?.v ?? null;   // 미임베딩·비가시 → null → []
   } else if (opts.text && opts.text.trim()) {
-    const provider = await activeEmbeddingProvider();
-    if (!provider) return [];                                          // 임베딩 off → 유사 없음
-    try {
-      const [v] = await provider.embed([opts.text.slice(0, 8000)]);
-      vecLiteral = v && v.length ? toVectorLiteral(v) : null;
-    } catch { return []; }                                             // 쿼리 임베딩 실패 → 빈 결과(폴백 아님)
+    const qe = await embedQuery(opts.text);
+    if (qe.status === "off") { if (diag) diag.embeddings = "off"; return []; }   // 임베딩 off → 유사 없음(꺼졌다고 말한다)
+    if (!qe.vec) { if (diag) diag.degraded = true; return []; }                   // 쿼리 임베딩 실패·시간 초과 → 빈 결과 + «못 물어봄»(#4530)
+    vecLiteral = toVectorLiteral(qe.vec);
   }
   if (!vecLiteral) return [];
   // 2) 최근접 — 코사인 거리 오름차순. 미임베딩·앵커·(기본)완료 제외, minScore 이상만.
@@ -1357,13 +1375,13 @@ export async function findSimilarProjects(opts: ProjectSimilarOpts = {}): Promis
     const vis = visIds === undefined ? "TRUE" : listIdPredicate(PROJECT_ROW_LIST_ID_SQL, visIds);
     const sql = `
       WITH cand AS (
-        SELECT ${P_GREP_SEL}, (1 - (p.embedding_vector <=> ${qp}))::float8 AS similarity
+        SELECT ${P_GREP_SEL}, p.archived_at, p.draft, (1 - (p.embedding_vector <=> ${qp}))::float8 AS similarity
         FROM project p
         WHERE ${wh.join(" AND ")} AND (1 - (p.embedding_vector <=> ${qp})) >= ${minP}
         ORDER BY p.embedding_vector <=> ${qp}
         LIMIT ${candP}
       )
-      SELECT * FROM cand p
+      SELECT ${P_GREP_SEL}, p.similarity, ${P_PARENT_SEL} FROM cand p ${P_PARENT_JOIN}
       WHERE ${vis}
       ORDER BY p.similarity DESC
       LIMIT ${limP}`;
@@ -1376,6 +1394,7 @@ export async function findSimilarProjects(opts: ProjectSimilarOpts = {}): Promis
     });
   } catch (e) {
     console.warn(`[embeddings] 유사 프로젝트 조회 실패: ${(e as Error)?.message}`);
+    if (diag) diag.degraded = true;
     return [];                                                          // pgvector 부재 등 → 빈 결과(검색·저장 무손상)
   }
 }

@@ -64,16 +64,19 @@ eq(projectPageId(undefined), 0, "E8 주소 없음");
 for (const n of [1, 42, 3870]) eq(projectPageId(projectPageHref(n)), n, "E12 왕복 " + n);
 
 // ── 배선 ──
-//  프로젝트 줄은 네 채널에서 온다: 셸 목록(local) · 의미검색(proj:sem) · 유사도(proj:sim) · grep(proj:grep).
+//  프로젝트 줄은 두 채널에서 온다(#4530): 셸 목록(local) · 글자 검색(proj).
 //  #4517 — 서버 채널 셋은 줄 만들기 한 벌(projRow)을 함께 쓴다. 그래서 줄을 **만드는 자리**는 둘(셸 목록 · projRow)이고,
 //   서버 채널 셋이 전부 그 한 벌을 거치는지를 따로 본다(한 채널만 제 손으로 줄을 만들면 그 줄만 옛 문으로 샌다).
 const omni = code("web/v2/omni.ts", "OMNI_SRC");
 const projHits = (omni.match(/kind: 'proj'[\s\S]{0,400}?href: ([^,}\n]+)/g) || []).map((m) => m.replace(/[\s\S]*href: /, "").trim());
 if (projHits.length === 2 && projHits.every((h) => h.startsWith("projHitHref("))) ok("E9 프로젝트 줄을 만드는 두 자리 모두 projHitHref");
 else bad("E9 프로젝트 줄을 만드는 두 자리 모두 projHitHref", "자리별 href = " + JSON.stringify(projHits));
-const viaRow = ["proj:sem", "proj:sim", "proj:grep"].filter((src) => !new RegExp(`put\\('${src}'[\\s\\S]{0,160}?projRow\\(`).test(omni));
-if (!viaRow.length) ok("E9 서버 채널 셋(의미·유사·grep)이 모두 projRow 로 줄을 만든다");
-else bad("E9 서버 채널 셋(의미·유사·grep)이 모두 projRow 로 줄을 만든다", "projRow 를 안 거치는 채널 = " + JSON.stringify(viaRow));
+//  #4530 — 프로젝트 서버 채널은 글자 검색 하나(proj · plain=1)다. 뜻 채널 둘(semantic·similar)은 뺐다 — 프로젝트의 뜻 점수가
+//   무관한 것과 정답을 가르지 못했다(점검 실측: «통합검색» 에서 «통합검색 2차» 0.520 < «ㅇㅇ» 0.522).
+const viaRow = ["proj"].filter((src) => !new RegExp(`put\\('${src}'[\\s\\S]{0,160}?projRow\\(`).test(omni));
+const legacy = ["proj:sem", "proj:sim"].filter((src) => omni.includes(`'${src}'`));
+if (!viaRow.length && !legacy.length) ok("E9 서버 채널(프로젝트 글자 검색)이 projRow 로 줄을 만든다 · 옛 뜻 채널 없음");
+else bad("E9 서버 채널(프로젝트 글자 검색)이 projRow 로 줄을 만든다 · 옛 뜻 채널 없음", "projRow 를 안 거치는 채널 = " + JSON.stringify(viaRow) + " · 남은 옛 채널 = " + JSON.stringify(legacy));
 if (/['"`]#\/p\/['"`]/.test(omni)) bad("E9 omni 가 세션 문을 조립하지 않는다", "'#/p/' 가 코드에 남아 있다");
 else ok("E9 omni 가 세션 문을 조립하지 않는다");
 

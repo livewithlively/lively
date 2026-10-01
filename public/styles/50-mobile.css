@@ -181,7 +181,7 @@
   /* ── 9. 창들 — 내 프로필·환경설정(46-v2-me.css ≤760 이 전폭으로 만든다) · 통합검색 · 런치패드 ── */
   .v2me-nav { gap: 2px; padding: 6px 8px; }
   .v2me-nav-b { padding: 8px 10px; font-size: 13.5px; }
-  .v2-omni { padding: 10px 8px 8px; }
+  .v2-omni { padding: 0; }   /* #4530 — 통합검색은 폰에서 전체 화면(43-v2-topbar-search.css 폰 절) */
   .v2-pad-grid { grid-template-columns: repeat(3, 1fr); gap: 8px; }
 }
 

@@ -5,6 +5,7 @@
 import { itemsPool } from "../db/client.js";
 import { one } from "../db/client.js";
 import { type EmbeddingProvider, resolveEmbeddingConfig, resolveEmbeddingProvider } from "./embedding-provider.js";
+import { type QueryTerm, parseQueryTerms, termPatterns } from "./query-terms.js";
 
 // ── grep 매처 — Claude Code(ripgrep) 직관에 맞춘 텍스트 매칭. "search"(의미검색)가 아니라 grep이다.
 //  · 정규식 메타문자가 있고 유효한 패턴이면 → POSIX 정규식(`~*`, 대소문자 무시)으로 grep. 예: `벡터|vector`, `task_\w+`.
@@ -12,7 +13,20 @@ import { type EmbeddingProvider, resolveEmbeddingConfig, resolveEmbeddingProvide
 //  · LIKE 와일드카드(`%`/`_`)는 평문 토큰에서 리터럴로 이스케이프(grep 패리티 — `knowledge_x` 의 `_` 가 와일드카드로 새지 않게).
 const REGEX_META = /[.*+?^${}()|[\]\\]/;
 export function likeEscape(s: string): string { return s.replace(/[\\%_]/g, "\\$&"); }   // 대화 검색(v6/conv-index-store.ts)도 같은 이스케이프를 쓴다
-export type GrepPlan = { mode: "regex"; pattern: string; re: RegExp } | { mode: "tokens"; tokens: string[] };
+export type GrepPlan =
+  | { mode: "regex"; pattern: string; re: RegExp }
+  | { mode: "tokens"; tokens: string[] }
+  //  plain(#4530) — 화면 검색(⌘K)이 사람이 친 글을 **글자 그대로** 찾는 모드. 정규식으로 읽지 않는다(«통합검색(⌘K)» 의 괄호가
+  //   묶음이 되어 0건이던 것) · 낱말마다 «친 그대로 OR 조사를 뗀 꼴» 이 맞으면 맞음(«검색을» 이 «검색» 만 든 글과 맞는다) ·
+  //   큰따옴표 구절은 통째로. 규칙 정본은 query-terms.ts. 에이전트 grep(knowledge_grep/project_grep)은 plain 을 줄 때만 이 모드다.
+  | { mode: "plain"; terms: QueryTerm[] };
+/** 화면용 글 그대로 계획(#4530) — 낱말이 하나도 안 나오면(공백뿐) 원문 한 덩어리를 그대로 찾는다. */
+export function parsePlainGrep(qstr: string): GrepPlan {
+  const terms = parseQueryTerms(qstr);
+  if (terms.length) return { mode: "plain", terms };
+  const t = String(qstr ?? "").trim().toLowerCase();
+  return { mode: "plain", terms: [{ t, stem: t, quoted: false }] };
+}
 export function parseGrep(qstr: string): GrepPlan {
   const t = (qstr ?? "").trim();
   if (REGEX_META.test(t)) {
@@ -67,10 +81,36 @@ export function grepWhere(cols: string[], plan: GrepPlan, params: unknown[]): st
     params.push(plan.pattern);
     return colsOr(`~* $${params.length}`);
   }
+  if (plan.mode === "plain") {
+    //  낱말마다 «그대로 OR 조사 뗀 꼴» 을 컬럼 어디서든(OR) — 낱말끼리는 AND.
+    return plan.terms.map((term) => "(" + termPatterns(term).map((pat) => { params.push(pat); return colsOr(`ILIKE $${params.length} ESCAPE '\\'`); }).join(" OR ") + ")").join(" AND ");
+  }
   return plan.tokens.map((tok) => { params.push(`%${likeEscape(tok)}%`); return colsOr(`ILIKE $${params.length} ESCAPE '\\'`); }).join(" AND ");
 }
+
+/**
+ * 제목(이름)에 모든 낱말이 든 것을 **글자 검색 정렬의 앞**에 세우는 ORDER BY 머리(콤마까지) — #4530.
+ *
+ * 왜 — 렉시컬 채널은 `updated_at DESC LIMIT n` 으로 자른다. 그래서 본문에 그 낱말이 한 번 스친 **최근** 문서들이 n 칸을 채우면
+ *  제목이 곧 그 낱말인 문서가 잘렸다(실측 2026-10-01: 제목에 «배포» 가 든 지식이 139개인데 grep 8칸은 본문만 스친 최근 문서였다 ·
+ *  «새 작업» 이 이름인 프로젝트 대신 본문에 그 말이 든 «UI 버그 해결» 이 1위). 같은 술어를 RRF 의 렉시컬 순위에도 쓴다.
+ * col 은 NULL 일 수 있다(지식 title) — COALESCE 로 빈 글로 본다. 매처는 그 계획의 것(regex 는 같은 패턴 · tokens/plain 은 낱말 AND).
+ */
+export function titleFirst(col: string, plan: GrepPlan, params: unknown[]): string {
+  const c = `COALESCE(${col}, '')`;
+  let pred: string;
+  if (plan.mode === "regex") { params.push(plan.pattern); pred = `${c} ~* $${params.length}`; }
+  else if (plan.mode === "plain") {
+    pred = plan.terms.map((term) => "(" + termPatterns(term).map((pat) => { params.push(pat); return `${c} ILIKE $${params.length} ESCAPE '\\'`; }).join(" OR ") + ")").join(" AND ");
+  } else {
+    pred = plan.tokens.map((tok) => { params.push(`%${likeEscape(tok)}%`); return `${c} ILIKE $${params.length} ESCAPE '\\'`; }).join(" AND ");
+  }
+  return `(${pred}) DESC, `;
+}
 // regex→token 폴백 공통화: plan 으로 쿼리하되 POSIX 가 정규식을 거부하면(JS 유효·POSIX 무효 드묾) 토큰모드로 1회 재시도 — 에이전트에 에러 누출 안 함.
-export async function grepExec<T>(qstr: string, runWithPlan: (plan: GrepPlan) => Promise<T>): Promise<{ result: T; plan: GrepPlan }> {
+export async function grepExec<T>(qstr: string, runWithPlan: (plan: GrepPlan) => Promise<T>, opts: { plain?: boolean } = {}): Promise<{ result: T; plan: GrepPlan }> {
+  //  plain(#4530) 은 정규식이 없으니 폴백도 없다 — 실패는 진짜 에러다.
+  if (opts.plain) { const p = parsePlainGrep(qstr); return { result: await runWithPlan(p), plan: p }; }
   let plan = parseGrep(qstr);
   try { return { result: await runWithPlan(plan), plan }; }
   catch (e) {
@@ -90,6 +130,15 @@ function grepLineAt(line: string, plan: GrepPlan): number {
   if (plan.mode === "regex") { const m = plan.re.exec(line); return m ? m.index : -1; }
   let at = -1;
   const lower = line.toLowerCase();
+  if (plan.mode === "plain") {
+    for (const term of plan.terms) {
+      for (const w of term.stem !== term.t && term.stem.length >= 2 ? [term.t, term.stem] : [term.t]) {
+        const i = w ? lower.indexOf(w) : -1;
+        if (i >= 0 && (at < 0 || i < at)) at = i;
+      }
+    }
+    return at;
+  }
   for (const tok of plan.tokens) { const i = lower.indexOf(tok.toLowerCase()); if (i >= 0 && (at < 0 || i < at)) at = i; }
   return at;
 }
@@ -140,10 +189,72 @@ export const HYBRID_CANDIDATES = 50; // 각 채널(렉시컬·벡터) 후보 수
 // ── 임베딩 provider 접근자 — config 가 켜졌을 때만 provider, off(기본)면 null. org_runtime_config.embedding_config 직접 읽음(무순환). ──
 //  off → null → 쓰기·검색 모두 no-op/렉시컬 폴백. 지식·프로젝트 스토어가 공유. 설계 [[vector-search-172-design-pluggable-seam-oss]].
 export async function activeEmbeddingProvider(): Promise<EmbeddingProvider | null> {
+  return (await activeEmbedding())?.provider ?? null;
+}
+/** provider + 그 설정의 열쇠(질의 임베딩 기억의 열쇠 — 모델·차원·주소가 바뀌면 옛 벡터를 쓰지 않는다). off 면 null. */
+export async function activeEmbedding(): Promise<{ provider: EmbeddingProvider; key: string } | null> {
   try {
     const r = await one(itemsPool, `SELECT embedding_config FROM org_runtime_config WHERE id=1`);
-    return resolveEmbeddingProvider(resolveEmbeddingConfig((r as { embedding_config?: unknown } | undefined)?.embedding_config));
+    const cfg = resolveEmbeddingConfig((r as { embedding_config?: unknown } | undefined)?.embedding_config);
+    const provider = resolveEmbeddingProvider(cfg);
+    return provider ? { provider, key: [cfg.provider, cfg.base_url ?? "", cfg.model ?? "", cfg.dimensions].join("|") } : null;
   } catch {
     return null; // 설정 못 읽으면 안전하게 off
   }
+}
+
+// ── 질의 임베딩 — 한 번만 · 짧게 기다린다 (#4530) ─────────────────────────────────────────────────
+//  화면 검색(⌘K)은 글자를 칠 때마다 같은 질의를 지식·프로젝트의 의미검색·유사검색 네 곳에 동시에 던진다. 종전엔 네 곳이 각자
+//  provider.embed 를 불러 **같은 글을 네 번** 임베딩했고, 기억이 없어 다시 쳐도 또 불렀다(2026-10-01 점검 46번).
+//  게다가 질의도 백필과 같은 시간 상한(기본 300초)을 탔다 — 임베딩 백엔드가 느리면 검색 요청이 몇 분씩 매달렸다(42번).
+//  그래서 질의 임베딩은 이 한 자리를 지난다:
+//   · 같은 (설정 열쇠 · 글) 이면 10분 동안 기억한다(최근 256개). 실패는 기억하지 않는다.
+//   · 같은 글이 동시에 오면 진행 중인 요청 하나를 나눠 쓴다.
+//   · 질의는 20초만 기다린다(백필 상한 300초와 별개). 넘으면 «실패» 로 답하되 진행 중인 요청은 끊지 않는다 — 늦게라도 오면 기억해
+//     둬서 다음 글자에 바로 쓴다. 이 상한은 에이전트의 knowledge_similar · 의미검색(rrf)도 탄다 — 느린 CPU 백엔드(셀프호스트)에서
+//     첫 호출이 늘 «실패» 가 되지 않을 만큼 둔다. 화면(⌘K)은 이 값과 무관하게 1.2초만 기다리고 늦은 결과를 제자리에 끼운다.
+//   · ⚠ 기억의 열쇠에 테넌트를 넣지 않는다 — 열쇠가 (provider · base_url · model · 차원 · 글) 이고, 같은 모델·같은 글이면 벡터가
+//     같다(결정적). 한 테넌트의 기억이 다른 테넌트에 쓰여도 그 테넌트가 스스로 받았을 값과 같아 새는 것이 없다. 같은 주소·같은 모델
+//     이름 뒤에 다른 모델을 두는 구성은 지원하지 않는다(그럴 땐 model 이름을 달리 적는다).
+//  status: ok(벡터 있음) · off(임베딩 꺼짐) · failed(꺼진 건 아닌데 이번엔 못 얻었다 — 화면은 «없음» 과 다르게 말한다).
+export type QueryEmbed = { vec: number[] | null; status: "ok" | "off" | "failed" };
+export const QUERY_EMBED_TTL_MS = 10 * 60_000;
+export const QUERY_EMBED_MAX = 256;
+export const QUERY_EMBED_TIMEOUT_MS = 20_000;
+const qeCache = new Map<string, { vec: number[]; at: number }>();
+const qeInflight = new Map<string, Promise<number[] | null>>();
+function qeRemember(key: string, vec: number[], nowMs: number): void {
+  qeCache.delete(key);
+  qeCache.set(key, { vec, at: nowMs });
+  while (qeCache.size > QUERY_EMBED_MAX) { const oldest = qeCache.keys().next().value; if (oldest === undefined) break; qeCache.delete(oldest); }
+}
+/** 시험 전용 — 기억을 비운다. */
+export function __resetQueryEmbedCache(): void { qeCache.clear(); qeInflight.clear(); }
+export async function embedQuery(
+  text: string,
+  opts: { timeoutMs?: number; now?: () => number; source?: () => Promise<{ provider: EmbeddingProvider; key: string } | null> } = {},
+): Promise<QueryEmbed> {
+  const act = await (opts.source ?? activeEmbedding)();
+  if (!act) return { vec: null, status: "off" };
+  const t = String(text ?? "").slice(0, 8000);
+  if (!t.trim()) return { vec: null, status: "failed" };
+  const now = opts.now ?? Date.now;
+  const key = act.key + "\u0001" + t;
+  const hit = qeCache.get(key);
+  if (hit && now() - hit.at < QUERY_EMBED_TTL_MS) { qeRemember(key, hit.vec, hit.at); return { vec: hit.vec, status: "ok" }; }
+  let p = qeInflight.get(key);
+  if (!p) {
+    p = act.provider.embed([t])
+      .then(([v]) => (Array.isArray(v) && v.length ? v : null), () => null)
+      .then((v) => { if (v) qeRemember(key, v, now()); return v; })
+      .finally(() => { qeInflight.delete(key); });
+    qeInflight.set(key, p);
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), opts.timeoutMs ?? QUERY_EMBED_TIMEOUT_MS); });
+  try {
+    const v = await Promise.race([p, timeout]);
+    if (v === "timeout" || !v) return { vec: null, status: "failed" };
+    return { vec: v, status: "ok" };
+  } finally { if (timer) clearTimeout(timer); }
 }

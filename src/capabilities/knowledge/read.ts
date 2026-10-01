@@ -13,6 +13,7 @@ import {
 } from "../../v6/knowledge-store.js";
 // #783 인입 허용선 게이트 — 상세 조회는 '검토 대기 중인 수정이 있나'를 함께 알린다(덧쓰기 사고 방지).
 import { pendingRevisionFor } from "../../v6/knowledge-revision-store.js";
+import type { SimilarDiag } from "../../v6/knowledge-search.js";
 import { canSeeKnowledge } from "../../v6/visibility.js";
 import { assertKnowledgeVisible } from "./shared.js";
 
@@ -84,6 +85,7 @@ const knowledgeGrepInput = {
   limit: z.number().int().min(1).max(100).optional(),
   mode: z.enum(["snippets", "names", "count"]).optional().describe("snippets(기본)=매치 줄 스니펫 / names=name·title만 / count=총건수만"),
   context: z.number().int().min(0).max(3).optional().describe("스니펫에 매치 줄 ±N 컨텍스트 줄 포함(기본 0, ripgrep -C)"),
+  plain: z.boolean().optional().describe("true 면 정규식으로 읽지 않고 글자 그대로 — 낱말마다 «그대로 또는 끝 조사를 뗀 꼴» 이 들어 있으면 맞음(AND), \"큰따옴표\" 는 구절. 화면 검색(⌘K)이 쓴다"),
 };
 type KnowledgeGrepInput = z.infer<z.ZodObject<typeof knowledgeGrepInput>>;
 export const knowledgeGrep: Capability = {
@@ -112,18 +114,20 @@ export const knowledgeGrep: Capability = {
           limit: query.limit ? Number(query.limit) : undefined,
           mode: query.mode ? String(query.mode) : undefined,
           context: query.context ? Number(query.context) : undefined,
+          ...(query.plain === "1" || query.plain === "true" ? { plain: true } : {}),
         };
       } }],
   },
   handler: async (input: KnowledgeGrepInput, _user: LivelyUser, ctx?: CapabilityCtx) => {
     const viewer = ctx?.viewer ?? null;   // 공개범위(#1291) — 스니펫도 본문 조각이라 목록보다 더 셀 수 없다
+    const plain = input.plain === true;   // #4530 화면 검색 — 글자 그대로(정규식 아님 · 조사 · 구절)
     if (input.mode === "count") {
-      return { mode: "count", total: await countKnowledgeGrep(input.q, { injection: input.injection, provenance: input.provenance }, viewer) };
+      return { mode: "count", total: await countKnowledgeGrep(input.q, { injection: input.injection, provenance: input.provenance, plain }, viewer) };
     }
     return {
       mode: input.mode ?? "snippets",
       entries: await searchKnowledge(input.q, {
-        injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context,
+        injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context, plain,
       }, viewer),
     };
   },
@@ -225,12 +229,13 @@ export const knowledgeSimilar: Capability = {
     // 기준 문서(name)도 볼 수 있어야 한다 — 안 보이는 문서의 임베딩으로 이웃을 훑는 건 그 문서를 지렛대 삼아
     //  "무엇에 대한 문서인가"를 역추적하는 우회로다(recall 훅이 매 세션 때리는 경로라 특히).
     await assertKnowledgeVisible(input.name, viewer);
-    return {
-      entries: await findSimilarKnowledge({
-        name: input.name, text: input.text, limit: input.limit, minScore: input.min_score,
-        injection: input.injection, provenance: input.provenance,
-      }, viewer),
-    };
+    //  빈 결과의 까닭을 함께 싣는다(#4530) — embeddings:"off"(꺼짐) · degraded:true(이번엔 못 물어봄). 없으면 «관련 없음».
+    const diag: SimilarDiag = {};
+    const entries = await findSimilarKnowledge({
+      name: input.name, text: input.text, limit: input.limit, minScore: input.min_score,
+      injection: input.injection, provenance: input.provenance,
+    }, viewer, diag);
+    return { entries, ...diag };
   },
 };
 

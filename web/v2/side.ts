@@ -60,6 +60,7 @@ import { ICONS, icon } from './icons.js';   // #2016 — 선 아이콘 한 벌
 import { iconPath } from '../lib/icon-paths.js';
 import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
+import { omniKeyHint } from '../lib/omni-chord.js';   // #4530 단축키 이름 한 벌(우클릭 메뉴와 같은 이름)
 
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
 //  지금 보는 프로젝트(선택)는 늘 펼침이 기본이고, 그걸 접은 건 잠깐의 상태라 기억하지 않는다(다음 방문엔 다시 펼쳐 보인다).
@@ -2599,13 +2600,14 @@ function navRow(): HTMLElement {
     navArrow('fwd', st.forward, hooks.onForward),
     el('button', {
       class: 'v2-omnib', type: 'button',
-      title: mac ? '통합검색 — 지식 · 프로젝트 · 세션 · 대화 · 자료를 한 번에 (⌘K)'
-        : '통합검색 — 지식 · 프로젝트 · 세션 · 대화 · 자료를 한 번에 (Alt+K, 터미널 밖에서는 Ctrl+K 도)',
+      //  #4530 — 설명은 **기본으로 찾는 것**만 적는다. 자료는 칩을 눌러야 찾으므로 «한 번에» 에 넣으면 거짓말이 된다(점검 6번).
+      title: '통합검색: 세션 · 대화 · 프로젝트 · 지식 · 화면을 한 번에 찾습니다. 자료는 칩을 눌러 찾습니다. '
+        + (mac ? '(⌘K)' : '(Alt+K · 터미널 밖에서는 Ctrl+K 도 됩니다)'),
       'aria-label': '통합검색 열기', onclick: () => hooks.onSearch?.() },
       sv('svg', { viewBox: '0 0 24 24', class: 'v2-omnib-ic', 'aria-hidden': 'true' },
         sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' })),
       el('span', { class: 'v2-omnib-t', text: '검색' }),
-      el('kbd', { class: 'v2-omnib-k', text: mac ? '⌘K' : 'Alt K' }))),
+      el('kbd', { class: 'v2-omnib-k', text: omniKeyHint(mac) }))),
     el('span', { class: 'v2-nav-sp v2-nav-sp--r', 'aria-hidden': 'true' }));
 }
 /** 화살표 둘의 켜짐만 갱신한다 — 이동할 때마다 사이드바를 통째로 다시 그리지 않게. */
