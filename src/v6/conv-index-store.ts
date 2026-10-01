@@ -365,12 +365,14 @@ export async function convIndexPending(input: Pick<ConvSearchInput, "requester" 
  * 낱말마다 SQL 술어 둘 — 맞음(조사를 뗀 꼴 · 없으면 그대로) · 그대로 맞음. 조사를 뗀 꼴은 친 그대로의 앞부분이라
  *  «맞음» 하나로 둘 다 잡힌다(그대로 든 글은 뗀 꼴도 든다). 세기(1 · 0.8)를 가르려고 «그대로» 를 따로 잰다.
  */
-function termSql(params: unknown[], terms: QueryTerm[], col: string): Array<{ any: string; full: string }> {
+function termSql(params: unknown[], terms: QueryTerm[], col: string, withFull = true): Array<{ any: string; full: string }> {
+  //  ⚠ 쓰지 않을 매개변수는 싣지 않는다 — SQL 에 안 나오는 $n 은 Postgres 가 받지 않는다(«bind message supplies 5 parameters,
+  //   but prepared statement requires 4», PGlite pg-test D23 이 잡았다). 대표 말 고르기(bestLines)는 «맞음» 만 쓴다.
   return terms.map((t) => {
     const pats = termPatterns(t);
     params.push(pats[pats.length - 1]); const anyP = `$${params.length}`;
     let full = `${col} ILIKE ${anyP} ESCAPE '\\'`;
-    if (pats.length > 1) { params.push(pats[0]); full = `${col} ILIKE $${params.length} ESCAPE '\\'`; }
+    if (withFull && pats.length > 1) { params.push(pats[0]); full = `${col} ILIKE $${params.length} ESCAPE '\\'`; }
     return { any: `${col} ILIKE ${anyP} ESCAPE '\\'`, full };
   });
 }
@@ -467,7 +469,7 @@ async function bestLines(aggs: ConvSessionAgg[], terms: QueryTerm[], sinceIso: s
   const out = new Map<string, { msg: ConvSearchResult["best"]; edit: string | null }>();
   if (!aggs.length) return out;
   const params: unknown[] = [aggs.map((a) => a.node_id), aggs.map((a) => a.session_id)];
-  const ts = termSql(params, terms, "m.body");
+  const ts = termSql(params, terms, "m.body", false);
   const k = ts.map((x) => `(${x.any})::int`).join(" + ");
   let since = "";
   if (sinceIso) { params.push(sinceIso); since = ` AND m.ts >= $${params.length}::timestamptz`; }
