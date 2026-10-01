@@ -185,20 +185,35 @@ test("★ E11 이력 목록 SQL 도 gw_workspace 가 비어도 매핑을 살린�
   //  E9 가 sessionWorkspaceIds 를 LEFT 로 고칠 때 **이 SQL 은 INNER 로 남았다.** 같은 결함의 두 자리를
   //   따로 고치면 반쪽만 낫는다 — 매니지드는 gw_workspace 0행이라 서브쿼리가 항상 NULL 이 되고,
   //   /api/ui/v6/sessions 가 **항상 0건**이었다(#3564 의 백필 869건으로도 안 풀린다: INNER 에서 탈락한다).
+  //  #4517 — 그 술어는 이제 sessionWorkspaceWhere 한 벌이다(목록 · ⌘K 대화 검색이 함께 쓴다). 술어는 그 함수 안에서 본다.
   const src = readSrc("src/v6/session-log-store.ts");
-  const fn = src.slice(src.indexOf("export async function listSessionsForOwner("));
-  const sql = fn.split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("--")).join("\n");
+  const fn = src.slice(src.indexOf("export function sessionWorkspaceWhere("));
+  const body = fn.slice(0, fn.indexOf("\n}"));
+  const sql = body.split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("--")).join("\n");
   assert.match(sql, /LEFT JOIN gw_workspace/,
     "INNER JOIN 이면 gw_workspace 가 빈 배포(매니지드)에서 이력 목록이 통째로 0건이 된다");
   assert.match(sql, /w\.id IS NULL OR w\.state = 'active'/,
     "행이 없으면 '모름'이라 매핑을 그대로 쓰고, 있는데 보관됐을 때만 뺀다(sessionWorkspaceIds 와 같은 규칙)");
 });
 
+test("★ E11b 이력 목록 · ⌘K 대화 검색이 워크스페이스 술어를 **같은 한 벌**로 부른다(#4517)", () => {
+  //  사본이 둘이면 한쪽만 고쳐져 그쪽만 샌다(#3579 가 정확히 그 모양이었다 — 같은 결함의 두 자리를 따로 고쳤다).
+  const store = readSrc("src/v6/session-log-store.ts");
+  const list = store.slice(store.indexOf("export async function listSessionsForOwner("));
+  assert.match(list.slice(0, list.indexOf("\n}")), /sessionWorkspaceWhere\(params, workspaceId\)/,
+    "listSessionsForOwner 가 공용 술어(sessionWorkspaceWhere)를 안 쓴다");
+  const conv = readSrc("src/v6/conv-index-store.ts").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  assert.match(conv, /sessionWorkspaceWhere\(params, input\.workspaceId\)/,
+    "⌘K 대화 검색이 공용 워크스페이스 술어를 안 쓴다 — 개인 워크스페이스에서 팀 세션 대화가 검색된다");
+  assert.ok(!/gw_session_map/.test(conv), "대화 검색에 워크스페이스 SQL 사본이 남아 있다 — 공용 술어만 불러야 한다");
+});
+
 test("★ E12 이력 목록 SQL 의 «부재» 귀속은 상수가 아니라 공유 헬퍼다", () => {
   //  상수(SINGLE_TENANT_ID)로 굳히면 매니지드에서 현재 ws(테넌트 uuid)와 절대 안 맞아 전량 탈락한다.
   //  JS 필터(sessionInWorkspace)와 **같은 명제**를 써야 두 목록이 갈리지 않는다.
+  //  #4517 — 귀속값 계산도 공용 술어(sessionWorkspaceWhere) 안에 있다.
   const src = readSrc("src/v6/session-log-store.ts");
-  const fn = src.slice(src.indexOf("export async function listSessionsForOwner("));
+  const fn = src.slice(src.indexOf("export function sessionWorkspaceWhere("));
   const body = fn.slice(0, fn.indexOf("\n}"));
   assert.match(body, /defaultWorkspaceId\(workspaceId\)/,
     "맵 부재 시 귀속값을 defaultWorkspaceId(workspaceId) 로 정하지 않는다 — 배포 모드를 못 본다");

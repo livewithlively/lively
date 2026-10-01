@@ -29,6 +29,8 @@ import { parseWindow } from "../terminal/harness-io/parse-cache.js";
 import { toNdjson, toThinNdjson, THIN_MAX_BYTES } from "../terminal/harness-io/chat-line.js";
 import { sessionInvitesMember, isProjectMember, recordSessionProject, latestProjectForSession } from "../v6/project-session-store.js";   // #1313 R21 — 세션 바인딩만(PM 스토어 전체 미적재)
 import { executionSessionProject } from "../v6/execution-session-store.js";
+import { searchConversations, convIndexPending, sweepConvIndex, scheduleConvIndex } from "../v6/conv-index-store.js";   // #4517 — ⌘K 대화 검색
+import { parseConvSort } from "../v6/conv-search.js";
 
 /** 실행 바인딩이 있으면 detach(null)까지 그 값이 권위다. legacy query는 실행 행 자체가 없을 때만 쓴다. */
 export function sessionLogProjectClaim(
@@ -173,6 +175,39 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     res.json({ sessions: rows, truncated: page.truncated });
   }));
 
+  // 세션 대화 검색(#4517, 원준 2026-09-30 «cmd+K 안에서 세션의 대화 내용으로도 세션을 찾고 싶어») — 통합검색이 부른다.
+  //  찾는 곳은 중앙 기록에서 뽑아 둔 사람 말·AI 말 색인(v6/conv-index-store.ts). 볼 수 있는 세션 = 대화록 열람과 같은 축
+  //  (주인 + view_policy=attach 면 초대받은 사람 — 초대받은 세션은 목록과 같은 sessionVisible 로 한 번 더) + 세션 목록과 같은
+  //  워크스페이스 격리(#1875) + 주인의 휴지통 제외(#1851). 거르기는 전부 저장 쪽 SQL·판정 안에 있다(여기서 더 거르지 않는다).
+  //  ⚠ 경로를 `/api/ui/v6/sessions/search` 로 두지 않는다 — 테넌트 미들웨어가 `/v6/sessions/<id>` 의 <id> 를 세션 id 로 읽어
+  //   워크스페이스를 되찾는 폴백을 탄다(tenant-middleware sessionIdFromRequest). «search» 가 세션 id 로 읽히면 안 된다.
+  app.get("/api/ui/v6/session-search", auth, wrap(async (req, res) => {
+    const requester = idOf(userOf(req));
+    if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
+    const q = String(req.query.q ?? "").trim();
+    res.setHeader("Cache-Control", "no-store");
+    if (!q) { res.json({ results: [], pending: 0, capped: false }); return; }
+    if (q.length > 200) throw new HttpError(400, "검색어가 너무 깁니다(200자 이하)");
+    const since = req.query.since ? String(req.query.since) : null;
+    if (since && !Number.isFinite(Date.parse(since))) throw new HttpError(400, "since 는 ISO 시각이어야 합니다");
+    const limit = Math.min(Math.max(Number(req.query.limit) || 8, 1), 50);
+    const cfg = (await getRuntimeConfig()).session_share;
+    const base = { requester, attach: cfg.view_policy === "attach", workspaceId: currentTenant()?.id ?? PRIMARY_TENANT_ID };
+    let found: Awaited<ReturnType<typeof searchConversations>>;
+    try {
+      found = await searchConversations({ ...base, q, sort: parseConvSort(req.query.sort), since, limit });
+    } catch (e) {
+      //  시간 상한(statement_timeout → 57014)에 걸렸다 — «못 찾았다» 가 아니라 «끝까지 못 봤다» 다. 화면이 그 차이를 말한다.
+      if ((e as { code?: string })?.code === "57014") throw new HttpError(503, "대화 검색이 시간 안에 끝나지 않았습니다 — 낱말을 더 넣어 좁혀 주세요");
+      throw e;
+    }
+    //  밀린 색인 수는 안내용이다 — 세지 못하면 null(모른다)로 준다. 0 으로 주면 «다 색인됐다» 는 거짓말이 된다.
+    const pending = await convIndexPending(base).catch(() => null);
+    //  밀린 색인이 있으면 이 요청에 얹어 정비를 한 번 깨운다(기다리지 않는다) — 배포 직후의 첫 검색이 곧 색인을 앞당긴다.
+    if (pending) void sweepConvIndex().catch(() => { /* 다음 정비가 다시 집는다 */ });
+    res.json({ results: found.results, pending, capped: found.capped });
+  }));
+
   // 프로젝트 **세션이력** 목록(웹뷰 슬⑤b) — 이 프로젝트에 바인딩된 중앙 기록 세션(과거 포함).
   //  인가는 **두 겹**이다(#1876 S2): 프로젝트 멤버여야 이 창구를 열 수 있고(종전), 그 안에서 보이는 것은
   //  **내가 소유·초대받은 세션뿐**이다(신설). 종전엔 둘째가 없어 프로젝트 멤버가 남의 세션 제목·시각을 다 봤다.
@@ -213,6 +248,8 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     // 서브에이전트 트리(#905 C1 슬⑥) — parent=부모(주) 세션 id. 최상위 목록엔 안 나오고 부모 대화록 아래에 붙는다.
     const parentSessionId = req.query.parent !== undefined && SID_RE.test(String(req.query.parent)) ? String(req.query.parent) : null;
     const r = await appendSessionLog({ nodeId, sessionId, atOffset, data, harness, owner: requester, store: cfg.store, parentSessionId });
+    //  #4517 — 방금 올라온 말이 곧바로 찾아지게 색인을 예약한다(2초 모아서 · 비동기). 서브에이전트 가지는 검색 대상이 아니다.
+    if (r.ok && r.verdict === "append" && !parentSessionId) scheduleConvIndex(nodeId, sessionId);
     // 프로젝트 귀속(#905 C1 슬⑤b) — 대화 id(sessionId)와 실행 세션 id(execution)는 별개이므로,
     //  execution_session의 현재 DB 바인딩을 대화 이력에 투영한다. cwd·project.json은 보지 않는다.
     //  구 백필 클라이언트의 project query는 멤버십 검사 뒤에만 허용하는 전환 호환 경로다.
