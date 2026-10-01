@@ -88,12 +88,18 @@ export async function runningCountFor(o: { requester: string; harness: string; t
   return Number((r.rows[0] as { n?: number } | undefined)?.n ?? 0);
 }
 
-export async function markRunning(id: number, nodeId: string, sessionId: string, taskDir: string): Promise<void> {
+/**
+ * 배정한 판을 running 으로 기록한다. **행이 아직 queued 일 때만** 쓰고, 썼는지를 돌려준다.
+ *  false = 다른 게이트웨이 프로세스가 먼저 running 으로 기록했거나 그 사이 취소됐다 — 호출부가 방금 띄운 판을 거둔다.
+ *  ⚠ 조건 없이 쓰면 두 번째 기록이 첫 판의 좌표를 덮어 그 판이 고아가 되고, 취소된 행이 running 으로 뒤집힌다.
+ */
+export async function markRunning(id: number, nodeId: string, sessionId: string, taskDir: string): Promise<boolean> {
   const r = await itemsPool.query(
     `UPDATE org_task SET status='running', node_id=$2, session_id=$3, task_dir=$4,
-        attempt=attempt+1, started_at=now(), node_lost_at=NULL, updated_at=now() WHERE id=$1
+        attempt=attempt+1, started_at=now(), node_lost_at=NULL, updated_at=now() WHERE id=$1 AND status='queued'
       RETURNING tenant_id`,
     [id, nodeId, sessionId, taskDir]);
+  if (!r.rows.length) return false;
   // #1631 — 위탁 세션을 **그 태스크의 워크스페이스에 묶는다.** 사람 세션은 라우트(recordSessionTenant)가 묶지만 위탁은
   //  노드가 띄우고 여기서 처음 세션 id 를 알게 된다. 안 묶으면 그 세션의 MCP 호출(x-lively-session → gw_session_map)이
   //  primary 로 떨어져, 증류 배치가 **다른 워크스페이스의 자료 id·분류 key 를 보고 저장을 거부**한다
@@ -107,6 +113,7 @@ export async function markRunning(id: number, nodeId: string, sessionId: string,
         .catch((e) => console.warn(`[task-store] 위탁 세션 워크스페이스 바인딩 실패(task ${id}, ${sessionId}): ${(e as Error)?.message ?? e}`));
     }
   }
+  return true;
 }
 export async function markFinished(id: number, ok: boolean, result: Record<string, unknown>, error?: string | null): Promise<void> {
   //  저장 직전 가림(#4422) — 결과·실패 문장은 delegate_status·delegate_list·크론 화면으로 그대로 읽힌다. 배정 실패 기록(last_assign)을

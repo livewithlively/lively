@@ -174,4 +174,27 @@ async function holdClaim(id: number, table: Set<number>) {
     "noteAssignFailure 가 in_flight 도 기록한다 — 다른 경로가 띄운 running 행에 미배정 사유가 남는다");
 }
 
+// markRunning 이 거절하면(다른 프로세스가 먼저 기록·취소됨) 방금 띄운 판을 거두고 물러난다 — 안 거두면 두 판이 끝까지 함께 돈다.
+{
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../../src/node/task-scheduler.ts", import.meta.url), "utf8");
+  const start = src.indexOf("async function assignOne("), end = src.indexOf("\n}\n", start);
+  assert.ok(start >= 0 && end > start, "assignOne 본문 경계를 못 찾았다 — 함수 이름이 바뀌면 이 단언부터 고쳐라");
+  const body = src.slice(start, end);
+  assert.ok(/if \(!\(await markRunning\([^)]*\)\)\) \{\s*await discardLostSpawn\(/.test(body),
+    "markRunning 이 false 여도 판을 거두지 않는다 — 다른 게이트웨이가 띄운 판과 함께 끝까지 돈다");
+  const lost = body.slice(body.indexOf("await discardLostSpawn("));
+  assert.ok(lost.indexOf("return IN_FLIGHT;") >= 0 && lost.indexOf("return IN_FLIGHT;") < lost.indexOf("extra.set("),
+    "거둔 뒤 물러나지 않고 배정 성공으로 센다");
+  const ds = src.slice(src.indexOf("async function discardLostSpawn("), src.indexOf("\n}\n", src.indexOf("async function discardLostSpawn(")));
+  assert.ok(/killTaskAnywhere\(c\)/.test(ds), "discardLostSpawn 이 판을 실제로 죽이지 않는다");
+  const store = readFileSync(new URL("../../src/node/task-store.ts", import.meta.url), "utf8");
+  const mr = store.indexOf("export async function markRunning(");
+  assert.ok(mr >= 0, "markRunning 을 못 찾았다 — 이름이 바뀌면 이 단언부터 고쳐라");
+  //  범위를 markRunning 본문으로 좁힌다 — 같은 조건 문구가 다른 함수에도 있어 파일 전체로 보면 조건을 지워도 통과한다.
+  const mrBody = store.slice(mr, store.indexOf("\n}\n", mr));
+  assert.ok(/WHERE id=\$1 AND status='queued'/.test(mrBody), "markRunning 에 queued 조건이 없다 — 늦은 기록이 첫 판의 좌표를 덮는다");
+  assert.ok(/if \(!r\.rows\.length\) return false;/.test(mrBody), "markRunning 이 못 쓴 경우를 알리지 않는다");
+}
+
 console.log("task-assign-claim.test: ok");
