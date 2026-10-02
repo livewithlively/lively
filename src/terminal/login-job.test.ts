@@ -2,10 +2,14 @@
 //  (행의 상태 · op 에 나간 요청 · 뒤로 미룬 치우기 · 저장·설치 호출). 문구는 사람이 읽는 것만 본다.
 //  행 번호(K…)는 스크래치패드 spec-4067-core.md 의 엣지 표다. 실 SQL 의 같은 규칙은 scripts/login-job-store.itest.mjs 가 본다.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   startLoginJob, loginJobLoginState, loginJobHeadlessState, pasteLoginJob, cancelLoginJob,
   onLoginJobTick, onLoginJobResult, onLoginJobEnd, sweepLoginJobs, staleReason, checkLoginResult, resetLoginJobCaches,
+  codexAccountPolicyFromAuthText, INSTALL_LOGIN_JS,
   UI_IDLE_MS, MAX_AGE_MS, UNIT_DEAD_MS, RECENT_MS, REAP_DELAY_MS, PROFILE_CACHE_MS, PROFILE_RETRY_MS, UNSUPPORTED_TTL_MS,
   SCREEN_MAX, STALE_MESSAGE, LOGIN_PROFILE, type LoginJobDeps,
 } from "./login-job.js";
@@ -183,6 +187,37 @@ async function captureLogs<T>(fn: () => Promise<T>): Promise<{ out: T | undefine
     catch (e) { return { out: undefined, err: e, lines: lines.join("\n") }; }
   } finally { Object.assign(logger, keep); }
 }
+
+await t("Codex 로그인 적용 — 로그인 전 설치 뒤 계정 정책 생성 · 기존 회사 정책은 보존", () => {
+  const home = mkdtempSync(join(tmpdir(), "lively-login-policy-"));
+  try {
+    mkdirSync(join(home, ".lively"), { recursive: true });
+    const companyAuth = JSON.stringify({ tokens: { account_id: "company-account" } });
+    const companyPolicy = codexAccountPolicyFromAuthText(companyAuth);
+    assert.ok(companyPolicy, "ChatGPT account id에서 정책을 만들 수 있어야 한다");
+    const run = (auth: string, policy: ReturnType<typeof codexAccountPolicyFromAuthText>) => spawnSync(
+      process.execPath, ["-e", INSTALL_LOGIN_JS], {
+        input: JSON.stringify({ home, files: [{ path: ".codex/auth.json", content: auth }], account: null, codexPolicy: policy }),
+        encoding: "utf8",
+      },
+    );
+    const first = run(companyAuth, companyPolicy);
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(JSON.parse(first.stdout).codexPolicy, "created");
+    const policyPath = join(home, ".lively", "codex-account.json");
+    const installed = readFileSync(policyPath, "utf8");
+    assert.deepEqual(JSON.parse(installed), companyPolicy);
+    assert.ok(!installed.includes("company-account"), "정책 파일에 account id 원문을 쓰지 않는다");
+
+    const personalAuth = JSON.stringify({ tokens: { account_id: "personal-account" } });
+    const second = run(personalAuth, codexAccountPolicyFromAuthText(personalAuth));
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(JSON.parse(second.stdout).codexPolicy, "existing");
+    assert.equal(readFileSync(policyPath, "utf8"), installed, "재로그인으로 회사 정책을 자동 덮어쓰지 않는다");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 
 // ── 시작 ─────────────────────────────────────────────────────────────────────
 
