@@ -378,71 +378,133 @@ async function candidatesFor(t: DelegateTask, counts: Map<string, number>, extra
 // 한 태스크를 후보와 매칭해 실제 배정(spawn)한다. counts/extra 는 같은 tick 과배정 방지(단발 호출은 빈 extra).
 //  반환: assigned 되면 nodeId, 아니면 사람이 읽을 reason(하네스 로컬 폴백 판단용).
 export interface AssignResult { assigned: boolean; nodeId?: string; reason?: string; code?: AssignFailCode }
-async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Map<string, number>): Promise<AssignResult> {
-  const { nodes, env } = await candidatesFor(t, counts, extra);
-  //  #4012 T3 — 맥락 잡은 멤버·워커 고정(node_pref)을 따르지 않는다: 기본 제공 잡은 중앙에서 돈다(상민님 결정).
-  const sandboxJob = sandboxAvailable() && isContextJob(t);
-  const pick = matchNode(sandboxJob ? { ...t, node_pref: null } : t, nodes);
-  if (!pick) { const why = capacityReason(t, nodes); return { assigned: false, code: why.code, reason: why.text }; }
-  const runArgs: Record<string, unknown> = {
-    user: { userId: t.requester }, taskId: t.id, rootKey: "shared", subpath: t.subpath,
-    prompt: t.prompt, harness: t.harness, repo: t.repo, gitRef: t.git_ref, flags: t.flags ?? {}, env,
-    //  #4012 T5 — 판이 붙을 곳을 **보내는 쪽이** 정한다. 이 호출은 withTenant 안이라 둘 다 이 워크스페이스 값이다.
-    //   실패해도 배정을 막지 않는다 — 없으면 안 싣고(노드는 자기 게이트웨이로 폴백) 종전대로 간다.
-    gatewayUrl: await gatewayUrl().catch(() => null),
-    tenantSlug: tenantSlug(),
-  };
-  let r: RunTaskResult;
-  //  #4422 — 판·노드가 돌려준 오류 문장은 last_assign·위탁 응답·크론 요약·게이트웨이 로그로 나간다. 이번 위탁이 실은 값(리스·레포 자격)을
-  //   **리터럴로** 가린 뒤 던진다. 새 번들은 스폰 쪽에서 이미 가리지만, 구 번들 노드는 "Command failed: <argv 전체>" 원문을 그대로
-  //   돌려준다(2026-09-22 윈도우 노드 — 토큰 평문이 delegate_status 로 읽혔다). 값을 아는 곳은 여기뿐이다.
+
+/** 지금 배정(spawn 부터 markRunning 까지) 중인 태스크 id — 이 프로세스 안의 선점 표. */
+const assigning = new Set<number>();
+
+/**
+ * 한 태스크의 배정을 **한 경로만** 하게 한다. 선점에 실패하면 run 을 부르지 않고 null 을 준다.
+ *
+ * 왜 필요한가: 크론·delegate_run 은 태스크를 queued 로 만든 직후 tryAssignNow 를 부르고, 5초 tick 도 같은 queued 행을
+ *  읽어 assignOne 에 들어간다. spawn 이 끝나 markRunning 이 불리기 전까지 행은 계속 queued 라 둘 다 판을 띄웠다 —
+ *  같은 작업 폴더에서 두 스크립트가 자격 파일 하나를 두고 다퉈 한쪽이 «cat: .lease-… 없음» 으로 죽고, 그 exit 가 태스크를
+ *  실패로 닫는 동안 다른 판은 끝까지 돌았다(task 12121, attempt=2 가 0.4초 만에 찍혔다).
+ *  ① has→add 사이에 await 가 없어 같은 프로세스 안에서는 원자적이다. ② 선점 뒤 DB 상태를 다시 본다 — tick 이 들고 있는
+ *  queued 목록은 순회 시작 시점의 것이라, 그 사이 다른 경로가 이미 running 으로 만든 행을 다시 띄우지 않게 한다.
+ *  ⚠ 프로세스를 넘는 선점은 아니다 — 두 게이트웨이가 같은 DB 로 스케줄러를 함께 돌리는 구간(blue-green 배포의 old/new
+ *   겹침이 매 배포마다 그렇다)에는 이 표가 서로 안 보인다. 그 구간은 markRunning 의 queued 조건이 나중에 막는다 — 늦게 기록하는
+ *   쪽이 판을 거두므로 두 판이 끝까지 함께 돌지는 않는다. 다만 판정이 spawn 뒤라, 두 판이 같은 작업 폴더를 잠깐 함께 쓰며
+ *   생기는 일(자격 파일 경합, 진 쪽 prepareTaskDir 가 이긴 쪽 exit·로그를 지우는 것)은 남는다.
+ */
+export async function withAssignClaim<T>(
+  id: number, stillQueued: () => Promise<boolean>, run: () => Promise<T>, claims: Set<number> = assigning,
+): Promise<T | null> {
+  if (claims.has(id)) return null;
+  claims.add(id);
   try {
-    if (pick.id === CENTRAL_NODE_ID && sandboxJob) {
-      //  자격이 없으면 **지금** 끝낸다 — 기다려도 안 풀리고, 종전엔 이 경우가 10분 뒤 «적합 노드 없음» 으로만 드러났다.
-      //   실패로 닫으면 증류 «판정함» 기록도 되돌아가(markFinished) 자료가 인박스로 돌아온다.
-      if (!env) {
-        const cred = Object.hasOwn(SANDBOX_CREDS, t.harness) ? SANDBOX_CREDS[t.harness] : undefined;
-        const reason = cred
-          ? `실행 멤버(${t.requester})의 ${t.harness} 자격(${cred.kind})이 없거나 멤버가 비활성이다 — 그 멤버가 내 자격(me_credential_set)에서 등록하세요`
-          : `${t.harness} 는 중앙 샌드박스 자격이 없는 하네스다 — 맥락 잡 실행 하네스를 claude·codex 로 두세요`;
-        await markFinished(t.id, false, { reason: "no_credential", last_assign: { code: "no_credential", reason } }, reason);
-        logger.warn({ task: t.id, requester: t.requester, harness: t.harness }, "맥락 잡 자격 없음 — 접수 즉시 실패");
-        //  #4051 — 그 멤버 **화면으로** 올린다. 잡 겉상태는 초록이라(증류·분류·관리 액션은 ok 를 돌려준다) 알리지 않으면
-        //   아무도 모른다. 하네스가 판 자격 표에 없는 경우는 관리자 설정 문제라 멤버에게 보내지 않는다. 던지지 않는다.
-        if (cred) await notifyHeadless({ memberId: t.requester, harness: t.harness, reason: "no_credential" });
-        return { assigned: false, code: "no_credential", reason };
-      }
-      //  같은 멤버의 codex 판은 **한 번에 하나** — 둘이 동시에 토큰을 갱신하면 한쪽이 다른 쪽의 refresh token 을
-      //   무효화할 수 있다(#4012 T2). 기다리면 풀리는 것이라 배압(capacity)이다.
-      if (t.harness === "codex"
-        && await runningCountFor({ requester: t.requester, harness: "codex", taskDirPrefix: sandboxDataRoot(), except: t.id }) > 0) {
-        return { assigned: false, code: "capacity", reason: `실행 멤버(${t.requester})의 codex 판이 이미 돌고 있다 — 토큰 갱신 충돌을 피해 한 번에 하나씩` };
-      }
-      try {
-        r = await spawnSandboxTask({ ...(runArgs as object), attempt: t.attempt + 1, timeoutSec: t.timeout_sec } as never);
-      } catch (e) {
-        if (e instanceof SandboxBusyError) return { assigned: false, code: "capacity", reason: e.message };
-        throw e;
-      }
-    } else if (pick.id === CENTRAL_NODE_ID) {
-      r = await spawnTaskSession(runArgs as never);   // 중앙 = 게이트웨이 프로세스 → DB 를 직접 읽는다(주입 불필요)
-    } else {
-      const n = await getNode(pick.id);
-      if (!n || !n.enabled) return { assigned: false, code: "node_disabled", reason: `선정 노드 ${pick.id} 비활성` };
-      // 🔴 원격 노드엔 **DB 가 없다**(#905 C4) — 레포 정보를 여기서 해소해 실어 보내지 않으면, 노드의
-      //  ensureBaseClone 이 getRepo() 로 localhost:5432 에 붙으려다 실패하고 409 "레포의 git 주소가 레지스트리에
-      //  없습니다" 라는 **오진**을 낸다(레포는 멀쩡한데 사용자를 헛다리 짚게 한다 — 오늘 라이브 버그).
-      if (t.repo) runArgs.repoAuth = await resolveRepoInject(String(t.repo), t.requester, n.kind);
-      r = await nodeRpc<RunTaskResult>(pick.id, "runTask", runArgs as never);
+    if (!(await stillQueued())) return null;
+    return await run();
+  } finally { claims.delete(id); }
+}
+
+/**
+ * markRunning 이 거절한 판을 거둔다(best-effort — 실패는 로그로만).
+ *  세션 id 는 spawn 마다 새로 만들므로 이 판만 죽는다. 샌드박스는 같은 (태스크, 회차) 판이 살아 있으면 두 번째 launch 를
+ *  거절하므로 여기 오는 건 spawn 도중 취소된 경우뿐이고, 거둘 판도 이 판 하나다.
+ */
+async function discardRacedSpawn(c: SessionCoords): Promise<void> {
+  //  ⚠ 이 판은 행에 좌표가 없다(markRunning 이 거절했다) — 실패 세션 회수기는 DB 좌표로만 걷으므로 여기서 못 거두면
+  //   아무도 다시 보지 않는다. 그래서 실패는 좌표째 로그로 남긴다.
+  const at = { session: c.session_id, node: c.node_id, task_dir: c.task_dir };
+  try {
+    const k = await killTaskAnywhere(c);
+    if (!k.gone) logger.warn({ ...at, why: k.why }, "경합으로 거둘 판에 닿지 못했다");
+    if (c.node_id === CENTRAL_NODE_ID && isSandboxTaskDir(c.task_dir)) {
+      const { revokeSessionHookToken } = await import("../terminal/profiles.js");
+      if (c.session_id) await revokeSessionHookToken(c.session_id)
+        .catch((e) => logger.warn({ ...at, err: redactTaskText((e as Error)?.message ?? e) }, "경합으로 거둔 판의 훅 토큰 회수 실패"));
+      const rp = await reapSandboxTask(String(c.task_dir), false);
+      if (!rp.done) logger.warn({ ...at, why: rp.why }, "경합으로 거둔 샌드박스 유닛을 치우지 못했다");
     }
-  } catch (e) {
-    const git = (runArgs.repoAuth as RepoProvisionAuth | undefined)?.secret;
-    throw redactTaskError(e, taskSecretValues(env, { t: git?.https_token, k: git?.ssh_private_key }));
-  }
-  await markRunning(t.id, pick.id, r.sessionId, r.taskDir);
-  extra.set(pick.id, (extra.get(pick.id) ?? 0) + 1);
-  logger.info({ task: t.id, node: pick.id, session: r.sessionId }, "위탁 태스크 배정");
-  return { assigned: true, nodeId: pick.id };
+  } catch (err) { logger.warn({ ...at, err: redactTaskText((err as Error)?.message ?? err) }, "경합으로 거둘 판 정리 실패"); }
+}
+
+const IN_FLIGHT: AssignResult = { assigned: false, code: "in_flight", reason: "다른 경로가 이 태스크를 배정하고 있거나 이미 배정했다" };
+//  markRunning 이 거절한 경우 — 다른 프로세스가 먼저 기록했거나 그 사이 취소됐다. 판정 축은 in_flight 와 같다(물러날 뿐 실패가 아니다).
+const NOT_QUEUED: AssignResult = { assigned: false, code: "in_flight", reason: "행이 이미 queued 가 아니다 — 다른 경로가 먼저 기록했거나 그 사이 취소됐다" };
+
+async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Map<string, number>): Promise<AssignResult> {
+  const r = await withAssignClaim(t.id, async () => (await getTask(t.id))?.status === "queued", async (): Promise<AssignResult> => {
+    const { nodes, env } = await candidatesFor(t, counts, extra);
+    //  #4012 T3 — 맥락 잡은 멤버·워커 고정(node_pref)을 따르지 않는다: 기본 제공 잡은 중앙에서 돈다(상민님 결정).
+    const sandboxJob = sandboxAvailable() && isContextJob(t);
+    const pick = matchNode(sandboxJob ? { ...t, node_pref: null } : t, nodes);
+    if (!pick) { const why = capacityReason(t, nodes); return { assigned: false, code: why.code, reason: why.text }; }
+    const runArgs: Record<string, unknown> = {
+      user: { userId: t.requester }, taskId: t.id, rootKey: "shared", subpath: t.subpath,
+      prompt: t.prompt, harness: t.harness, repo: t.repo, gitRef: t.git_ref, flags: t.flags ?? {}, env,
+      //  #4012 T5 — 판이 붙을 곳을 **보내는 쪽이** 정한다. 이 호출은 withTenant 안이라 둘 다 이 워크스페이스 값이다.
+      //   실패해도 배정을 막지 않는다 — 없으면 안 싣고(노드는 자기 게이트웨이로 폴백) 종전대로 간다.
+      gatewayUrl: await gatewayUrl().catch(() => null),
+      tenantSlug: tenantSlug(),
+    };
+    let r: RunTaskResult;
+    //  #4422 — 판·노드가 돌려준 오류 문장은 last_assign·위탁 응답·크론 요약·게이트웨이 로그로 나간다. 이번 위탁이 실은 값(리스·레포 자격)을
+    //   **리터럴로** 가린 뒤 던진다. 새 번들은 스폰 쪽에서 이미 가리지만, 구 번들 노드는 "Command failed: <argv 전체>" 원문을 그대로
+    //   돌려준다(2026-09-22 윈도우 노드 — 토큰 평문이 delegate_status 로 읽혔다). 값을 아는 곳은 여기뿐이다.
+    try {
+      if (pick.id === CENTRAL_NODE_ID && sandboxJob) {
+        //  자격이 없으면 **지금** 끝낸다 — 기다려도 안 풀리고, 종전엔 이 경우가 10분 뒤 «적합 노드 없음» 으로만 드러났다.
+        //   실패로 닫으면 증류 «판정함» 기록도 되돌아가(markFinished) 자료가 인박스로 돌아온다.
+        if (!env) {
+          const cred = Object.hasOwn(SANDBOX_CREDS, t.harness) ? SANDBOX_CREDS[t.harness] : undefined;
+          const reason = cred
+            ? `실행 멤버(${t.requester})의 ${t.harness} 자격(${cred.kind})이 없거나 멤버가 비활성이다 — 그 멤버가 내 자격(me_credential_set)에서 등록하세요`
+            : `${t.harness} 는 중앙 샌드박스 자격이 없는 하네스다 — 맥락 잡 실행 하네스를 claude·codex 로 두세요`;
+          await markFinished(t.id, false, { reason: "no_credential", last_assign: { code: "no_credential", reason } }, reason);
+          logger.warn({ task: t.id, requester: t.requester, harness: t.harness }, "맥락 잡 자격 없음 — 접수 즉시 실패");
+          //  #4051 — 그 멤버 **화면으로** 올린다. 잡 겉상태는 초록이라(증류·분류·관리 액션은 ok 를 돌려준다) 알리지 않으면
+          //   아무도 모른다. 하네스가 판 자격 표에 없는 경우는 관리자 설정 문제라 멤버에게 보내지 않는다. 던지지 않는다.
+          if (cred) await notifyHeadless({ memberId: t.requester, harness: t.harness, reason: "no_credential" });
+          return { assigned: false, code: "no_credential", reason };
+        }
+        //  같은 멤버의 codex 판은 **한 번에 하나** — 둘이 동시에 토큰을 갱신하면 한쪽이 다른 쪽의 refresh token 을
+        //   무효화할 수 있다(#4012 T2). 기다리면 풀리는 것이라 배압(capacity)이다.
+        if (t.harness === "codex"
+          && await runningCountFor({ requester: t.requester, harness: "codex", taskDirPrefix: sandboxDataRoot(), except: t.id }) > 0) {
+          return { assigned: false, code: "capacity", reason: `실행 멤버(${t.requester})의 codex 판이 이미 돌고 있다 — 토큰 갱신 충돌을 피해 한 번에 하나씩` };
+        }
+        try {
+          r = await spawnSandboxTask({ ...(runArgs as object), attempt: t.attempt + 1, timeoutSec: t.timeout_sec } as never);
+        } catch (e) {
+          if (e instanceof SandboxBusyError) return { assigned: false, code: "capacity", reason: e.message };
+          throw e;
+        }
+      } else if (pick.id === CENTRAL_NODE_ID) {
+        r = await spawnTaskSession(runArgs as never);   // 중앙 = 게이트웨이 프로세스 → DB 를 직접 읽는다(주입 불필요)
+      } else {
+        const n = await getNode(pick.id);
+        if (!n || !n.enabled) return { assigned: false, code: "node_disabled", reason: `선정 노드 ${pick.id} 비활성` };
+        // 🔴 원격 노드엔 **DB 가 없다**(#905 C4) — 레포 정보를 여기서 해소해 실어 보내지 않으면, 노드의
+        //  ensureBaseClone 이 getRepo() 로 localhost:5432 에 붙으려다 실패하고 409 "레포의 git 주소가 레지스트리에
+        //  없습니다" 라는 **오진**을 낸다(레포는 멀쩡한데 사용자를 헛다리 짚게 한다 — 오늘 라이브 버그).
+        if (t.repo) runArgs.repoAuth = await resolveRepoInject(String(t.repo), t.requester, n.kind);
+        r = await nodeRpc<RunTaskResult>(pick.id, "runTask", runArgs as never);
+      }
+    } catch (e) {
+      const git = (runArgs.repoAuth as RepoProvisionAuth | undefined)?.secret;
+      throw redactTaskError(e, taskSecretValues(env, { t: git?.https_token, k: git?.ssh_private_key }));
+    }
+    if (!(await markRunning(t.id, pick.id, r.sessionId, r.taskDir))) {
+      await discardRacedSpawn({ node_id: pick.id, session_id: r.sessionId, requester: t.requester, task_dir: r.taskDir });
+      logger.warn({ task: t.id, node: pick.id, session: r.sessionId }, "위탁 배정 경합 — 행이 이미 queued 가 아니라 방금 띄운 판을 거둔다");
+      return NOT_QUEUED;
+    }
+    extra.set(pick.id, (extra.get(pick.id) ?? 0) + 1);
+    logger.info({ task: t.id, node: pick.id, session: r.sessionId }, "위탁 태스크 배정");
+    return { assigned: true, nodeId: pick.id };
+  });
+  return r ?? IN_FLIGHT;
 }
 
 // delegate_run 이 생성 직후 즉시 호출 — 배치 판정+실행을 그 자리에서(스케줄러 tick 을 안 기다림).

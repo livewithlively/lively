@@ -12,6 +12,7 @@ import { nodeOpenTo } from "../node/node-access.js";
 import { nodeOnline, nodeRpc } from "../node/registry.js";
 import { killTaskSession, tailTask, type TailResult } from "../node/tasks.js";
 import { CENTRAL_NODE_ID, tryAssignNow } from "../node/task-scheduler.js";
+import { delegateRunNext } from "../node/assign-outcome.js";
 import { HEADLESS_KEYS, resolveHeadlessHarness } from "../node/headless-harness.js"; // #1884 실행 하네스
 
 // 밖으로 나가는 태스크 행은 **읽는 순간** 가린다(#4422) — 결과·오류에 남은 자격 리스가 delegate_status·list 응답으로 새지 않게.
@@ -92,8 +93,9 @@ const run: Capability = {
     });
     // 요청→즉답 계약: 지금 배치 가능한지 그 자리에서 판정한다(스케줄러 tick 안 기다림).
     const r = await tryAssignNow(task);
-    if (!r.assigned) {
-      if (!input.queue) {
+    const next = delegateRunNext(r, !!input.queue);
+    if (next !== "proceed") {
+      if (next === "cancel") {
         // 큐잉 안 함(기본) — 가용 노드 없음을 즉시 알린다. 하네스는 로컬에서 직접 실행하면 된다.
         await markCanceled(task.id);
         return { no_capacity: true, reason: r.reason, hint: "지금 위탁 가능한 노드가 없습니다 — 로컬에서 직접 실행하거나, queue:true 로 대기 등록하세요." };
@@ -101,7 +103,7 @@ const run: Capability = {
       return { task: await getTask(task.id), queued: true, reason: r.reason, hint: `대기 등록됨 — 적합 노드가 나면 자동 시작(상한 초과 시 no_capacity 실패). delegate_status ${task.id}` };
     }
     // 배치됨. wait=false 면 즉시 반환, 기본은 완료까지 대기(상한 내).
-    if (input.wait === false) return { task: await getTask(task.id), hint: `실행 시작(node=${r.nodeId}). 진행: delegate_status ${task.id}` };
+    if (input.wait === false) return { task: await getTask(task.id), hint: `실행 시작(node=${r.nodeId ?? "배정 중"}). 진행: delegate_status ${task.id}` };
     const deadline = Date.now() + (input.wait_sec ?? DEFAULT_WAIT_SEC) * 1000;
     while (Date.now() < deadline) {
       await sleep(2000);

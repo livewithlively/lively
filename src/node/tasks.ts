@@ -274,12 +274,20 @@ export interface TaskScriptOpts {
   /** 자격 리스 env **이름**(#4422) — 값은 작업 폴더의 자격 파일(taskLeaseFile)에 있다. 스크립트가 읽어 하네스 env 로 올리고 지운다.
    *  비었거나 없으면 종전 스크립트와 바이트 동일하다. 이름은 스크립트에 그대로 박히므로 LEASE_ENV_NAME 밖이면 던진다. */
   leaseEnv?: readonly string[];
+  /** spawn 마다 새로 뽑는 1회용 값(SPAWN_NONCE) — 주면 자격 파일 이름에 붙는다(taskLeaseFile). 쓰는 쪽과 **같은 값**이어야 한다. */
+  spawnNonce?: string;
 }
 
-/** 자격 파일 자리(#4422) — 작업 폴더 바로 아래, 이름 하나에 파일 하나(값을 가공 없이 그대로 담는다 — 셸 인용이 필요 없다). */
-export function taskLeaseFile(taskDir: string, name: string): string {
-  return path.join(taskDir, `.lease-${name}`);
+/** 자격 파일 자리(#4422) — 작업 폴더 바로 아래, 이름 하나에 파일 하나(값을 가공 없이 그대로 담는다 — 셸 인용이 필요 없다).
+ *  tag = spawn 마다 새로 뽑는 1회용 값(spawnNonce). 같은 태스크를 두 판이 함께 띄우면(두 게이트웨이가 겹치는 배포 구간) 둘이 같은 작업 폴더를
+ *  쓰는데, 태그가 없으면 같은 파일 하나를 두고 한쪽이 읽고 지운 뒤 다른 쪽이 «cat: 없음» 으로 죽는다. */
+export function taskLeaseFile(taskDir: string, name: string, tag?: string): string {
+  return path.join(taskDir, tag !== undefined ? `.lease-${tag}-${name}` : `.lease-${name}`);
 }
+/** spawnNonce 규칙 — 스크립트 문자열에 그대로 박히므로 소문자 16진수만. */
+export const SPAWN_NONCE = /^[0-9a-f]{8,32}$/;
+/** 이보다 오래된 자격 파일은 읽힐 일이 없다 — 정상 판은 뜨자마자(수 초 안에) 읽고 지운다. 남은 것은 판 안의 첫 명령이 죽은 잔재다. */
+export const LEASE_STALE_MS = 10 * 60_000;
 
 /**
  * 자격 파일을 **워커 uid 소유 0600** 으로 쓴다(#4422). 워커만 읽는다 — 다른 멤버도 여는 공유 작업 폴더라 그룹 권한(660)이면 안 된다.
@@ -289,6 +297,7 @@ export function taskLeaseFile(taskDir: string, name: string): string {
  *  둘 다 **추측할 수 없는 임시 이름을 새로 만들고(O_EXCL) rename** 한다 — 작업 폴더는 남도 쓰는 곳이라, 같은 이름을 미리 심어 둔
  *   파일·링크에 비밀을 쓰는 일이 없게(memberWriteSecretFile 머리말).
  */
+//  ⚠ 임시 이름은 p 뒤에 붙인다(`.lease-….<hex>.tmp`) — `.lease-` 로 시작해야 쓰다 죽은 잔재까지 sweepStaleLeases 가 치운다.
 export async function writeTaskSecret(p: string, value: string, osUser?: string | null): Promise<void> {
   if (osUser) { await memberWriteSecretFile(osUser, p, value); return; }
   const tmp = `${p}.${crypto.randomBytes(12).toString("hex")}.tmp`;
@@ -325,7 +334,9 @@ export function taskScript(harnessKey: string, bin: string, flags: string[], tas
   //  ⚠ `$(…)` 는 끝 개행을 떨어뜨린다 — 토큰 값엔 없고, 있었다면 인증을 깨는 쪽이었다.
   const names = opts?.leaseEnv ?? [];
   for (const n of names) if (!LEASE_ENV_NAME.test(n)) throw new Error(`자격 리스 이름이 규칙 밖입니다: ${JSON.stringify(n)}`);
-  const leaseAt = (n: string): string => taskLeaseFile(taskDir, n);   // 쓰는 쪽(spawnTaskSession)과 **같은 함수** — 둘이 갈리면 모든 위탁이 «cat: 없음» 으로 죽는다
+  const tag = opts?.spawnNonce;
+  if (tag !== undefined && !SPAWN_NONCE.test(tag)) throw new Error(`자격 리스 spawnNonce 가 규칙 밖입니다: ${JSON.stringify(tag)}`);
+  const leaseAt = (n: string): string => taskLeaseFile(taskDir, n, tag);   // 쓰는 쪽(spawnTaskSession)과 **같은 함수** — 둘이 갈리면 모든 위탁이 «cat: 없음» 으로 죽는다
   const load = names.map((n) => `${n}=$(cat "${leaseAt(n)}" 2> "${taskDir}/stderr.log") && export ${n} && rm -f "${leaseAt(n)}" && `).join("");
   const unload = names.length ? `rm -f ${names.map((n) => `"${leaseAt(n)}"`).join(" ")}; unset ${names.join(" ")}; ` : "";
   return `cd "$LIVELY_TASK_WS" && ${load}${spec.run(bin, f, `${taskDir}/prompt.txt`, bypass)} > "${taskDir}/stream.jsonl" 2> "${taskDir}/stderr.log"; echo $? > "${taskDir}/exit"; ${unload}exec "\${SHELL:-sh}"`;
@@ -352,6 +363,9 @@ export interface TaskFs {
   /** 여러 파일을 **한 번에** 읽는다. 없으면 그 키는 null. ⚠ 멤버 경계는 호출마다 프로세스 왕복이고 스케줄러가 틱마다 부른다. */
   readMany(reqs: TaskReadReq[]): Promise<Record<string, TaskRead | null>>;
   exists(paths: string[]): Promise<boolean[]>;
+  /** 작업 폴더 바로 아래의 `.lease-*` 중 mtime 이 olderThanMs 보다 오래된 것만 지우고 지운 수를 돌려준다.
+   *  ⚠ 오래된 것만 — 막 쓴 파일을 지우면 함께 뜬 다른 판의 자격을 지워 «cat: 없음» 경합이 되살아난다. */
+  sweepStaleLeases(dir: string, olderThanMs: number): Promise<number>;
 }
 
 /** (순수) 멤버 경계로 보낼 자리인가 — 격리 사용자 && 저장소 분리. */
@@ -394,6 +408,19 @@ export const localTaskFs: TaskFs = {
   async exists(paths) {
     return Promise.all(paths.map((p) => fsp.access(p).then(() => true, () => false)));
   },
+  async sweepStaleLeases(dir, olderThanMs) {
+    const cutoff = Date.now() - olderThanMs;
+    let n = 0;
+    for (const name of await fsp.readdir(dir).catch(() => [] as string[])) {
+      if (!name.startsWith(".lease-")) continue;
+      const p = path.join(dir, name);
+      try {
+        const st = await fsp.lstat(p);
+        if (st.isFile() && st.mtimeMs < cutoff) { await fsp.rm(p, { force: true }); n++; }
+      } catch { /* 그 사이 사라졌다 */ }
+    }
+    return n;
+  },
 };
 
 // 멤버 경계에서 도는 한 줄들 — **고정 리터럴**, 값은 전부 stdin JSON(memberNodeJson 계약: 인젝션 표면 없음).
@@ -404,6 +431,13 @@ export const TASK_READ_JS =
   "const b=Buffer.alloc(len);let off=0;while(off<len){const n=fs.readSync(fd,b,off,len-off,from+off);if(!n)break;off+=n;}" +
   "o[r.key]={size:size,b64:b.subarray(0,off).toString('base64')};}finally{fs.closeSync(fd);}}catch(e){o[r.key]=null;}}" +
   "process.stdout.write(JSON.stringify(o));});";
+//  sweepStaleLeases 의 멤버 경계판 — localTaskFs 와 **같은 규칙**(task-fs.test 가 두 구현을 같은 폴더에 대조한다).
+export const TASK_SWEEP_LEASES_JS =
+  "const fs=require('fs'),path=require('path');let d='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{" +
+  "const q=JSON.parse(d);const cut=Date.now()-q.olderThanMs;let n=0;let names=[];try{names=fs.readdirSync(q.dir);}catch(e){}" +
+  "for(const name of names){if(!name.startsWith('.lease-'))continue;const p=path.join(q.dir,name);" +
+  "try{const st=fs.lstatSync(p);if(st.isFile()&&st.mtimeMs<cut){fs.rmSync(p,{force:true});n++;}}catch(e){}}" +
+  "process.stdout.write(JSON.stringify(n));});";
 export const TASK_EXISTS_JS =
   "const fs=require('fs');let d='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{" +
   "process.stdout.write(JSON.stringify(JSON.parse(d||'[]').map(p=>{try{fs.accessSync(p);return true;}catch(e){return false;}})));});";
@@ -427,6 +461,7 @@ export function memberTaskFs(osUser: string): TaskFs {
       return out;
     },
     exists: (paths) => memberNodeJson<boolean[]>(osUser, TASK_EXISTS_JS, paths),
+    sweepStaleLeases: (dir, olderThanMs) => memberNodeJson<number>(osUser, TASK_SWEEP_LEASES_JS, { dir, olderThanMs }),
   };
 }
 
@@ -452,6 +487,9 @@ export async function prepareTaskDir(
   const tfs = taskFsFor(osUser);   // 저장소 분리 배포면 멤버 경계 — 위 TaskFs 머리말
   const taskDir = path.join(baseWs, ".lively-task", String(taskId));
   await tfs.mkdirp(taskDir, sharedBase);
+  //  판 안의 첫 명령이 죽어 읽히지 못한 자격 파일을 치운다 — 이름이 spawn 마다 달라 재시도가 덮어쓰지 않는다. 실패해도 진행한다.
+  await tfs.sweepStaleLeases(taskDir, LEASE_STALE_MS)
+    .catch((e) => console.warn(`[tasks] 오래된 자격 파일 정리 실패(${taskDir}): ${(e as Error)?.message ?? e}`));
   // 재시도(같은 taskId 재큐) 대비 — 이전 시도의 종결 파일이 남아 있으면 즉시 '가짜 완료'로 오감지된다.
   for (const f of ["exit", "stream.jsonl", "stderr.log"]) await tfs.rm(path.join(taskDir, f)).catch(() => { /* noop */ });
   await tfs.writeFile(path.join(taskDir, "prompt.txt"), prompt);
@@ -562,7 +600,8 @@ async function spawnTaskSessionUnguarded(input: RunTaskInput): Promise<RunTaskRe
   //  ⓘ 값이 env 로 sudo 를 건너지 않으므로 격리 박스의 sudoers env_keep(session-env-contract «자격 리스»)에 더는 기대지 않는다 —
   //   워커 uid 안에서 읽는다. 그 선언을 거두는 건 sudoers 재생성이 따르는 별건이라 여기서 건드리지 않는다(남아 있어도 무해).
   const lease = Object.entries(input.env ?? {}).filter((kv): kv is [string, string] => LEASE_ENV_NAME.test(kv[0]) && typeof kv[1] === "string");
-  const script = taskScript(harness.key, harness.bin, flags, taskDir, { bypassPermissions: input.bypassPermissions, leaseEnv: lease.map(([k]) => k) });
+  const spawnNonce = crypto.randomBytes(8).toString("hex");
+  const script = taskScript(harness.key, harness.bin, flags, taskDir, { bypassPermissions: input.bypassPermissions, leaseEnv: lease.map(([k]) => k), spawnNonce });
   if (osUser) {
     args.push(...wrapAsMember(osUser, ["sh", "-lc", script], workspace));
   } else {
@@ -586,10 +625,10 @@ async function spawnTaskSessionUnguarded(input: RunTaskInput): Promise<RunTaskRe
   //  자격 파일은 **판을 띄우기 직전에** 쓴다 — 그 앞 단계(프로필 준비 등)가 실패해도 파일이 남지 않게. 스폰이 실패로 끝나면
   //   (판 생성이든 그 뒤 set-option 이든) 아래 catch 가 지운다 — 스크립트가 못 돈 판의 파일은 아무도 안 지운다.
   //  ⚠ 스폰은 성공했는데 판 안의 첫 명령(sudo·중계)이 죽으면 스크립트가 못 돌아 파일이 남는다 — 워커 uid 0600 이라 그 멤버만 읽고,
-  //   같은 위탁의 재시도가 덮어쓴다.
+  //   이름이 spawn 마다 달라 재시도가 덮어쓰지 않으므로 다음 prepareTaskDir 가 오래된 것을 치운다(sweepStaleLeases).
   const leaseFiles: string[] = [];
   try {
-    for (const [k, v] of lease) { const p = taskLeaseFile(taskDir, k); leaseFiles.push(p); await writeTaskSecret(p, v, osUser); }
+    for (const [k, v] of lease) { const p = taskLeaseFile(taskDir, k, spawnNonce); leaseFiles.push(p); await writeTaskSecret(p, v, osUser); }
     await tmux(args);
     const ownerId = user.userId || user.email || "";
     await tmux(["set-option", "-t", id, "@box_owner", ownerId]);
