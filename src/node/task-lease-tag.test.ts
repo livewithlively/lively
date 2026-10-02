@@ -2,11 +2,11 @@
 // 가짜 하네스 bin 으로 스크립트를 실제로 `sh -c` 실행해 관측한다(POSIX 전용).
 import { strict as assert } from "node:assert";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, utimesSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, utimesSync, lutimesSync, rmSync, symlinkSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
-  taskLeaseFile, LEASE_TAG, LEASE_STALE_MS, taskScript, localTaskFs, TASK_SWEEP_LEASES_JS, prepareTaskDir,
+  taskLeaseFile, SPAWN_NONCE, LEASE_STALE_MS, taskScript, localTaskFs, TASK_SWEEP_LEASES_JS, prepareTaskDir,
 } from "./tasks.js";
 
 if (process.platform === "win32") {
@@ -72,7 +72,7 @@ const readOut = (f: string): string | null => (existsSync(f) ? readFileSync(f, "
   const h = fakeBin(root, "a", 0);
   const f = taskLeaseFile(dir, NAME, tag);
   writeFileSync(f, "값-A", { mode: 0o600 });
-  runSync(taskScript("claude", h.bin, [], dir, { leaseEnv: [NAME], leaseTag: tag }), ws);
+  runSync(taskScript("claude", h.bin, [], dir, { leaseEnv: [NAME], spawnNonce: tag }), ws);
   assert.equal(readOut(h.out), "값-A", "표지 경로의 값이 하네스 env 에 도달하지 않았다");
   assert.equal(existsSync(f), false, "하네스 종료 뒤 자격 파일이 남았다");
 }
@@ -85,8 +85,8 @@ const readOut = (f: string): string | null => (existsSync(f) ? readFileSync(f, "
   const fa = taskLeaseFile(dir, NAME, tagA), fb = taskLeaseFile(dir, NAME, tagB);
   writeFileSync(fa, "값-A", { mode: 0o600 });
   writeFileSync(fb, "값-B", { mode: 0o600 });
-  const sa = taskScript("claude", ha.bin, [], dir, { leaseEnv: [NAME], leaseTag: tagA });
-  const sb = taskScript("claude", hb.bin, [], dir, { leaseEnv: [NAME], leaseTag: tagB });
+  const sa = taskScript("claude", ha.bin, [], dir, { leaseEnv: [NAME], spawnNonce: tagA });
+  const sb = taskScript("claude", hb.bin, [], dir, { leaseEnv: [NAME], spawnNonce: tagB });
   const run = (s: string): Promise<number | null> => new Promise((resolve) => {
     const c = spawn("/bin/sh", ["-c", s], { stdio: "ignore", env: env(ws) });
     c.on("close", (code) => resolve(code));
@@ -104,13 +104,13 @@ const readOut = (f: string): string | null => (existsSync(f) ? readFileSync(f, "
 
 // 행위 5 — 규칙 밖 표지는 던지고, 규칙 안(16자 소문자 16진수)은 던지지 않는다.
 {
-  const mkScript = (leaseTag: string): string => taskScript("claude", "/b", [], "/t", { leaseEnv: [NAME], leaseTag });
+  const mkScript = (spawnNonce: string): string => taskScript("claude", "/b", [], "/t", { leaseEnv: [NAME], spawnNonce });
   for (const bad of ["ABCDEF0123456789", "abc;rm -rf /", "$(touch x)abcdef0", "ab", "../../etcpasswd0", "abcdef 0123456789"]) {
     assert.throws(() => mkScript(bad), Error, `규칙 밖 표지가 받아들여졌다: ${JSON.stringify(bad)}`);
   }
   assert.doesNotThrow(() => mkScript("0123456789abcdef"), "규칙 안 표지가 거부됐다");
-  assert.ok(LEASE_TAG.test("0123456789abcdef"), "LEASE_TAG 가 16자 소문자 16진수를 허용해야 한다");
-  assert.ok(!LEASE_TAG.test("ABCDEF0123456789"), "LEASE_TAG 가 대문자를 허용했다");
+  assert.ok(SPAWN_NONCE.test("0123456789abcdef"), "SPAWN_NONCE 가 16자 소문자 16진수를 허용해야 한다");
+  assert.ok(!SPAWN_NONCE.test("ABCDEF0123456789"), "SPAWN_NONCE 가 대문자를 허용했다");
 }
 
 // 행위 6 — 표지를 안 주면 스크립트는 태그 없는 경로를 읽는다.
@@ -125,26 +125,32 @@ const readOut = (f: string): string | null => (existsSync(f) ? readFileSync(f, "
 
 // 행위 7 — sweepStaleLeases 는 dir 바로 아래의 오래된 `.lease-` 파일만 지운다.
 const DAY = 24 * 3600 * 1000;
-function sweepFixture(): { dir: string; old1: string; old2: string; fresh: string; prompt: string; nested: string; leaseDir: string; leaseDirInner: string } {
+function sweepFixture(): { dir: string; old1: string; old2: string; old3: string; fresh: string; prompt: string; nested: string; leaseDir: string; leaseDirInner: string; link: string } {
   const root = mk();
   const dir = path.join(root, "t"); mkdirSync(dir);
   const old1 = path.join(dir, ".lease-X"); writeFileSync(old1, "1");
-  const old2 = path.join(dir, `.lease-Y-${"a".repeat(16)}`); writeFileSync(old2, "2");
+  const old2 = path.join(dir, `.lease-${"a".repeat(16)}-Y`); writeFileSync(old2, "2");
+  //  쓰다 죽은 임시 파일(writeTaskSecret 의 tmp→rename 잔재) — `.lease-` 로 시작하므로 같은 규칙으로 치워져야 한다.
+  const old3 = path.join(dir, `.lease-${"b".repeat(16)}-Y.${"c".repeat(24)}.tmp`); writeFileSync(old3, "t");
   const fresh = path.join(dir, ".lease-FRESH"); writeFileSync(fresh, "3");
   const prompt = path.join(dir, "prompt.txt"); writeFileSync(prompt, "p");
   const sub = path.join(dir, "sub"); mkdirSync(sub);
   const nested = path.join(sub, ".lease-NESTED"); writeFileSync(nested, "n");
   const leaseDir = path.join(dir, ".lease-DIR"); mkdirSync(leaseDir);
   const leaseDirInner = path.join(leaseDir, "inner"); writeFileSync(leaseDirInner, "i");
-  for (const f of [old1, old2, prompt, nested, leaseDirInner]) past(f, 10 * DAY);
+  for (const f of [old1, old2, old3, prompt, nested, leaseDirInner]) past(f, 10 * DAY);
   past(leaseDir, 10 * DAY);
-  return { dir, old1, old2, fresh, prompt, nested, leaseDir, leaseDirInner };
+  //  남이 공유 폴더에 심은 `.lease-` 링크 — 링크도 대상도 건드리지 않는다(오래됐어도).
+  const link = path.join(dir, ".lease-LINK"); symlinkSync(prompt, link);
+  const t = new Date(Date.now() - 10 * DAY); lutimesSync(link, t, t);
+  return { dir, old1, old2, old3, fresh, prompt, nested, leaseDir, leaseDirInner, link };
 }
 {
   const x = sweepFixture();
   const n = await localTaskFs.sweepStaleLeases(x.dir, DAY);
-  assert.equal(n, 2, "지운 수가 오래된 `.lease-` 파일 수와 다르다");
-  assert.equal(existsSync(x.old1) || existsSync(x.old2), false, "오래된 자격 파일이 안 지워졌다");
+  assert.equal(n, 3, "지운 수가 오래된 `.lease-` 파일 수와 다르다");
+  assert.equal(existsSync(x.old1) || existsSync(x.old2) || existsSync(x.old3), false, "오래된 자격 파일·임시 잔재가 안 지워졌다");
+  assert.ok(lstatSync(x.link).isSymbolicLink() && existsSync(x.prompt), "오래된 `.lease-` 링크를 지웠다(또는 대상을 지웠다)");
   assert.equal(existsSync(x.fresh), true, "막 쓴 자격 파일이 지워졌다");
   assert.equal(existsSync(x.prompt), true, "`.lease-` 로 시작하지 않는 파일이 지워졌다");
   assert.equal(existsSync(x.nested), true, "하위 디렉터리 안의 파일이 지워졌다");
@@ -159,8 +165,9 @@ function sweepFixture(): { dir: string; old1: string; old2: string; fresh: strin
     input: JSON.stringify({ dir: x.dir, olderThanMs: DAY }), encoding: "utf8",
   });
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(JSON.parse(r.stdout), 2, "스크립트가 낸 지운 수가 다르다");
-  assert.equal(existsSync(x.old1) || existsSync(x.old2), false, "오래된 자격 파일이 안 지워졌다");
+  assert.equal(JSON.parse(r.stdout), 3, "스크립트가 낸 지운 수가 다르다");
+  assert.equal(existsSync(x.old1) || existsSync(x.old2) || existsSync(x.old3), false, "오래된 자격 파일·임시 잔재가 안 지워졌다");
+  assert.ok(lstatSync(x.link).isSymbolicLink(), "오래된 `.lease-` 링크를 지웠다");
   assert.equal(
     [x.fresh, x.prompt, x.nested, x.leaseDir, x.leaseDirInner].every((f) => existsSync(f)), true,
     "지우면 안 되는 대상이 지워졌다",
@@ -180,7 +187,7 @@ function sweepFixture(): { dir: string; old1: string; old2: string; fresh: strin
   const dir = path.join(baseWs, ".lively-task", String(taskId));
   mkdirSync(dir, { recursive: true });
   const old = path.join(dir, `.lease-${NAME}`); writeFileSync(old, "x");
-  const fresh = path.join(dir, `.lease-${NAME}-${"c".repeat(16)}`); writeFileSync(fresh, "y");
+  const fresh = path.join(dir, `.lease-${"c".repeat(16)}-${NAME}`); writeFileSync(fresh, "y");
   past(old, LEASE_STALE_MS + 60_000);
   await prepareTaskDir(baseWs, shared, taskId, "프롬프트");
   assert.equal(existsSync(old), false, "오래된 자격 파일이 prepareTaskDir 뒤에도 남았다");
