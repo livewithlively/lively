@@ -241,8 +241,11 @@ async function download(gw, token, dest) {
 function verifyBundle(root) {
   const installer = join(root, "setup", "user-install.mjs");
   if (!existsSync(installer)) throw new Error("번들 손상 — setup/user-install.mjs 없음");
-  const hostEffects = join(root, "setup", "host-effects.mjs");
-  if (!existsSync(hostEffects)) throw new Error("번들 손상 — setup/host-effects.mjs 없음");
+  // ⚠ 이름을 hostEffects 로 두지 마라 — 이 파일 최상단의 host-effects **포트 객체**(execFileSync·fetch 를
+  //  내주는 그것)를 가린다. 이 함수 안에서 포트를 쓰는 코드를 나중에 한 줄만 더해도 경로 문자열에서
+  //  메서드를 부르게 돼 조용히 깨진다.
+  const hostEffectsPath = join(root, "setup", "host-effects.mjs");
+  if (!existsSync(hostEffectsPath)) throw new Error("번들 손상 — setup/host-effects.mjs 없음");
   const hooksDir = join(root, ".claude", "hooks");
   for (const f of REQUIRED_HOOKS) {
     const p = join(hooksDir, f);
@@ -257,7 +260,11 @@ function verifyBundle(root) {
 //   번들을 '손상'으로 오판하면 롤백이 막힌다). 대신 **있으면 구문검사한다**: 훅들이 import 하는 모듈이라
 //   여기서 깨진 채 통과하면 설치 후 sync-harness-assets 가 통째로 죽는다(구문오류는 import 시점에 터진다).
   const runners = [...REQUIRED_HOOKS, "self-update.mjs", "harness-registry.mjs"].filter((f) => existsSync(join(hooksDir, f)));
-  for (const p of [installer, hostEffects, ...runners.map((f) => join(hooksDir, f))]) {
+  // ⚠ 대상 하나당 node 프로세스 하나라 여기가 이 경로에서 제일 비싸다. 그래도 **직렬로 둔다** —
+  //  동시화를 재봤으나 CPU 가 포화인 곳에선 순손실이었다: CPU 쿼터 1~2개짜리 CI 파드에서 벽시계 이득 0,
+  //  1코어 고정(taskset -c 0) 재현에서는 CPU 시간이 4.67s → 4.83s 로 **늘었다**(경합분).
+  //  코어가 남는 기기에선 빨라질 수 있으나 재보지 않았다 — 이득이 불확실한 동시성을 마지막 방어선에 얹지 않는다.
+  for (const p of [installer, hostEffectsPath, ...runners.map((f) => join(hooksDir, f))]) {
     try { execFileSync(process.execPath, ["--check", p], { stdio: "ignore", timeout: 20_000 }); }
     catch { throw new Error(`번들 손상 — 구문 오류: ${p.replace(root, "")}`); }
   }
