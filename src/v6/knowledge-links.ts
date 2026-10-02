@@ -8,7 +8,7 @@ import { q, one } from "../db/client.js";
 import { type WriteCtx } from "./content-audit.js";
 import { extractWikiLinkTargets } from "./wikilink.js";   // #907 본문 [[…]] → 자동 엣지(문법층은 순수 함수로 분리)
 import { visibleListIds, type Viewer } from "./visibility.js";
-import { knowledgeVisSql, knowledgeVisWhere, slugify, auditKnowledge } from "./knowledge-common.js";
+import { knowledgeVisSql, knowledgeVisWhere, slugify, pickKnowledgeName, auditKnowledge } from "./knowledge-common.js";
 import { inheritSourceVisibility, type InheritResult } from "./source-vis-policy.js";
 import { logger } from "../log.js";
 
@@ -76,8 +76,9 @@ export interface WikiLinkResult { linked: string[]; unmatched: string[] }
 export function resolveWikiLinkTargets(fromName: string, targets: string[], existing: ReadonlySet<string>): WikiLinkResult {
   const linked: string[] = [], unmatched: string[] = [];
   for (const raw of targets) {
-    const slug = slugify(raw);
-    const hit = existing.has(raw) ? raw : (existing.has(slug) ? slug : null);
+    // 저장과 같은 해석 순서 — 긴 이름으로 새로 만든 문서는 꼬리 '-' 를 뗀 이름으로 저장되므로 링크도 그 이름에 닿아야 한다.
+    const cand = pickKnowledgeName(raw, (n) => existing.has(n));
+    const hit = existing.has(cand) ? cand : null;
     if (!hit) { if (!unmatched.includes(raw)) unmatched.push(raw); continue; }
     if (hit === fromName) continue;                       // 자기 참조 — 엣지 불가(CHECK). 조용히 버린다(오류 아님).
     if (!linked.includes(hit)) linked.push(hit);          // raw 와 slug 가 같은 문서로 접히면 1건으로(knowledge_link_uq)
@@ -111,8 +112,10 @@ async function rewriteWikiLinkEdges(fromName: string, toNames: string[]): Promis
 /** 한 지식의 본문 → origin='wikilink' 엣지 수렴. 미매칭 name 은 경고로 돌려준다(저장은 막지 않는다 — #907 목표2). */
 export async function materializeWikiLinks(name: string, bodyMd: string): Promise<WikiLinkResult> {
   const targets = extractWikiLinkTargets(bodyMd ?? "");
-  // exact·slug 후보를 한 번에 조회(문서당 쿼리 1회). 링크가 없어도 재작성은 돈다 — 본문에서 지운 엣지를 떼야 하니까.
-  const cands = [...new Set(targets.flatMap((t) => [t, slugify(t)]))];
+  // 후보를 한 번에 조회(문서당 쿼리 1회) — pickKnowledgeName 이 보는 세 이름(exact·slug·꼬리 '-' 뗀 slug) 전부.
+  //  하나라도 빠지면 그 이름의 문서는 집합에 없어 단위 테스트는 통과해도 운영에선 미매칭이 된다.
+  //  링크가 없어도 재작성은 돈다 — 본문에서 지운 엣지를 떼야 하니까.
+  const cands = [...new Set(targets.flatMap((t) => { const s = slugify(t); return [t, s, s.replace(/-+$/, "")]; }))];
   const rows = cands.length ? await q(itemsPool, `SELECT name FROM knowledge WHERE name = ANY($1)`, [cands]) : [];
   const res = resolveWikiLinkTargets(name, targets, new Set(rows.map((r) => String((r as { name: string }).name))));
   await rewriteWikiLinkEdges(name, res.linked);

@@ -41,6 +41,8 @@ import {
   type ContextJobPolicy, type ContextJobPolicyPatch, resolveContextJobPolicy, normalizeContextJobPolicy,
   contextJobPolicySource,
 } from "../policies/context-job-policy.js";
+// 조직 서술 형식 — 지식 저장 시 형식 안내. 조직이 바꾼 칸만 DB 에 두고 기본값 위에 얹는다.
+import { type WritingFormat, type WritingFormatPatch, resolveWritingFormat, mergeWritingFormatRaw } from "../policies/writing-format.js";
 import { audit } from "./audit.js";
 
 // ════════ 런타임 설정(훅 on/off · work-roots · writeback 너지) — org_runtime_config 단일행 ════════
@@ -76,6 +78,7 @@ export interface OrgRuntimeConfig {
   ui_mode: UiMode; // #1719 — 기본 화면 셸. 'v2'(새 1탭 셸, **기본**) | 'classic'(종전 탭 셸 — 명시적 opt-in 전용). 사람별 로컬 오버라이드는 프론트가 해석.
   workspace_kind: WorkspaceKind; // #1750 — 이 워크스페이스(=게이트웨이)의 종류. 'team'(기본 = 기존 셀프호스트) | 'personal'(개인).
   workspace_hub_url: string | null; // #1750 — 계정의 워크스페이스 목록·만들기 허브(매니지드 app.lvly.io/home). null = 없음(셀프호스트 기본).
+  writing_format: WritingFormat; // 조직 서술 형식 — 빈 원본이면 제품 기본값(꺼짐)
   worker_policy: WorkerPolicy; // #1780 Stage B — 앱 worker 조직 예산(동시 수·메모리 합·CPU·수명). 각 0=무제한. DB 우선, 비면 코드 기본값.
   version: number;
   updated_at: string | null;
@@ -145,7 +148,7 @@ const usageUrlSafe = (v: unknown): string | null => (typeof v === "string" && v.
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, writing_format, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -188,6 +191,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     ui_mode: uiModeSafe(row?.ui_mode), // #1719 — 잡값/부재면 'v2'(제품 기본 — classic 은 명시적으로 고른 값일 때만)
     workspace_kind: workspaceKindSafe(row?.workspace_kind), // #1750 — 잡값/부재면 'team'(기존 박스 = 팀)
     workspace_hub_url: usageUrlSafe(row?.workspace_hub_url), // #1750 — 빈값/부재면 null(허브 없음)
+    writing_format: resolveWritingFormat(row?.writing_format),
     worker_policy: resolveWorkerPolicy(row?.worker_policy), // #1780 Stage B — DB 우선, 비면 코드 기본값(수·메모리 상한 / CPU·수명 0=끔)
     version: (row?.version as number) ?? 1,
     updated_at: (row?.updated_at as string) ?? null,
@@ -215,6 +219,8 @@ export async function updateRuntimeConfig(
     session_reclaim_policy?: SessionReclaimPolicyPatch;
     delegate_policy?: DelegatePolicyPatch;
     context_job_policy?: ContextJobPolicyPatch;
+    /** null = 제품 기본값으로 되돌림. */
+    writing_format?: WritingFormatPatch | null;
     hook_relay_decisions?: HookRelayDecision[];
     session_share?: SessionSharePatch;
     hook_grace_ms?: number | null;
@@ -336,6 +342,12 @@ export async function updateRuntimeConfig(
     const raw = await itemsPool.query(`SELECT context_job_policy FROM org_runtime_config WHERE id=1`);
     contextJobPolicy = (raw.rows[0] as { context_job_policy?: unknown } | undefined)?.context_job_policy ?? {};
   }
+  // 서술 형식 — 위와 같은 규칙: 안 건드린 저장은 DB 원본을 그대로 둔다. 건드리면 **DB 원본** 위에 patch 를 얹는다
+  //  (resolved 를 바닥으로 쓰면 기본값 전부가 원본에 굳는다).
+  //  읽기 실패를 삼키지 않는다 — 빈 값으로 접으면 이 저장이 조직의 기존 형식을 {} 로 덮어 지운다.
+  const wfRaw = await itemsPool.query(`SELECT writing_format FROM org_runtime_config WHERE id=1`)
+    .then((r) => (r.rows[0] as { writing_format?: unknown } | undefined)?.writing_format ?? {});
+  const writingFormat: unknown = patch.writing_format !== undefined ? mergeWritingFormatRaw(wfRaw, patch.writing_format) : wfRaw;
   // 세션 공유(#905 C1) — storage_policy 와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**(before 되쓰기 금지).
   //  건드리면 before(resolved) 위에 patch 를 얹어 정규화(잡값·미지원 하네스·범위초과 방어).
   let sessionShare: unknown;
@@ -353,8 +365,8 @@ export async function updateRuntimeConfig(
     : before.oidc_config;
 
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$21,$27::jsonb,$23::jsonb,$24::jsonb,$25,$26,$28,$29,$30,$31::jsonb,$32::jsonb,1,now(),$13)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, writing_format, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$21,$27::jsonb,$23::jsonb,$24::jsonb,$25,$26,$28,$29,$30,$31::jsonb,$32::jsonb,$33::jsonb,1,now(),$13)
      ON CONFLICT (tenant_id, id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
@@ -368,13 +380,13 @@ export async function updateRuntimeConfig(
        inject_ontology_guide=EXCLUDED.inject_ontology_guide, oidc_config=EXCLUDED.oidc_config,
        ui_nav=EXCLUDED.ui_nav, announcement=EXCLUDED.announcement, ui_profile=EXCLUDED.ui_profile, usage_url=EXCLUDED.usage_url,
        ui_mode=EXCLUDED.ui_mode, workspace_kind=EXCLUDED.workspace_kind, workspace_hub_url=EXCLUDED.workspace_hub_url, worker_policy=EXCLUDED.worker_policy,
-       context_job_policy=EXCLUDED.context_job_policy,
+       context_job_policy=EXCLUDED.context_job_policy, writing_format=EXCLUDED.writing_format,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
      JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs, embeddingBackfillPaused, JSON.stringify(sessionMemoryPolicy), JSON.stringify(sessionReclaimPolicy), JSON.stringify(callLogPolicy), injectOntologyGuide, JSON.stringify(delegatePolicy),
      // #1454 S2~S5 — announcement 는 null 이면 SQL NULL(json 'null' 이 아니라 컬럼 NULL — 미표시의 정본 표현).
      JSON.stringify(uiNav), announcement === null ? null : JSON.stringify(announcement), uiProfile, usageUrl,
-     JSON.stringify(oidcConfig), uiMode, workspaceKind, workspaceHubUrl, JSON.stringify(workerPolicy), JSON.stringify(contextJobPolicy)],
+     JSON.stringify(oidcConfig), uiMode, workspaceKind, workspaceHubUrl, JSON.stringify(workerPolicy), JSON.stringify(contextJobPolicy), JSON.stringify(writingFormat)],
   );
   // 저장 즉시 반영 — /readyz 임계치·로그 재니터가 캐시를 들고 있다(게이트웨이 재시작 없이 먹어야 한다).
   if (patch.storage_policy !== undefined) invalidateStoragePolicyCache();
@@ -497,5 +509,15 @@ export async function getUiSurface(): Promise<UiSurfaceConfig> {
     };
   } catch {
     return { ui_nav: {}, announcement: null, ui_profile: "full", usage_url: null, ui_mode: "v2", workspace_kind: "team", workspace_hub_url: null };
+  }
+}
+
+/** 지식 저장 경로용 — 설정 전체를 읽지 않고 서술 형식만. 테이블·컬럼이 없으면(부트스트랩 전·구 DB) 기본값. */
+export async function getWritingFormat(): Promise<WritingFormat> {
+  try {
+    const r = await itemsPool.query(`SELECT writing_format FROM org_runtime_config WHERE id=1`);
+    return resolveWritingFormat((r.rows[0] as { writing_format?: unknown } | undefined)?.writing_format);
+  } catch {
+    return resolveWritingFormat(null);
   }
 }
