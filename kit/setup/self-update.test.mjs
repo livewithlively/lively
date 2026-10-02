@@ -5,7 +5,7 @@
 //  실행: node kit/setup/self-update.test.mjs   (npm test 체인에 포함)
 import { createServer } from "node:http";
 import { execFile, execFileSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { copyFileSync, cpSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -30,12 +30,23 @@ const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };
 const BOX = mkdtempSync(join(tmpdir(), "selfupd-"));
 const cleanup = () => { try { rmSync(BOX, { recursive: true, force: true }); } catch { /* */ } };
 
+// 키트 조립은 결정적이다(⑫ 가 그걸 단언한다) — 번들마다 다시 조립할 이유가 없어 원본 하나를 복사해 쓴다.
+//  번들마다 조립하면 조립 비용이 번들 수만큼 쌓이는데, 복사는 그보다 훨씬 싸다.
+let baseStage = null;
+function kitStage() {
+  if (!baseStage) {
+    baseStage = mkdtempSync(join(BOX, "base-"));
+    buildKitBundle(baseStage, { orgName: "테스트조직", orgLabel: "test", harness: "claude" });
+  }
+  const stage = mkdtempSync(join(BOX, "stage-"));
+  cpSync(baseStage, stage, { recursive: true });   // cp -a 는 윈도우에 없다 — fs.cpSync 로
+  return stage;
+}
 // ── 번들 만들기 — 게이트웨이(buildInstallBundle)가 하는 일을 그대로: kit 조립 + .lively 런타임자산 + 버전 스탬프.
 //  appledouble=true: macOS 게이트웨이 번들 재현(#858 회귀) — bsdtar 가 xattr 을 `._<name>` 파일로 굽는 걸,
 //   러너마다 `._name.mjs`(구문 불가한 바이너리 쓰레기)를 심어 리눅스에서도 결정적으로 재현한다.
 function makeBundle(version, { corrupt = false, appledouble = false, noProxy = false } = {}) {
-  const stage = mkdtempSync(join(BOX, "stage-"));
-  buildKitBundle(stage, { orgName: "테스트조직", orgLabel: "test", harness: "claude" });
+  const stage = kitStage();
   const lv = join(stage, ".lively");
   mkdirSync(lv, { recursive: true });
   writeFileSync(join(lv, "hooks-config.json"), JSON.stringify({ hooks: {} }, null, 2));
@@ -253,7 +264,7 @@ try {
   const runPreload = (home) => pExecFile(process.execPath, [PRELOAD], { env: env(home), timeout: 30_000 });
   const waitFor = async (fn, ms = 60_000) => {
     const t0 = Date.now();
-    while (Date.now() - t0 < ms) { if (fn()) return true; await new Promise((r) => setTimeout(r, 200)); }
+    while (Date.now() - t0 < ms) { if (fn()) return true; await new Promise((r) => setTimeout(r, 25)); }
     return false;
   };
 
@@ -284,14 +295,26 @@ try {
   }
 
   // ⑩ 최신이면 훅은 업데이터를 아예 안 띄운다(매 세션 도는 경로 — 여기서 프로세스를 낳으면 안 된다).
+  //  ⚠ '안 떴다'를 **고정 sleep 으로 기다리지 않는다** — 그건 예산만 먹고 증명력은 없다(짧으면 거짓 초록,
+  //   길면 그냥 느림). 대신 같은 순간에 **양성 대조**(버전 불일치 홈)를 함께 띄워 그쪽 설치 완료까지만
+  //   기다린다(고정 대기 → 유계 대기). 대조가 실제로 +1 을 올리는 것까지 단언하므로 픽스처가 통째로
+  //   무동작이라 늘 0 인 경우의 공허한 초록도 막힌다.
+  //  ⚠ 다만 이 관측치(installHits·update.log)는 «안 띄움»과 «띄웠으나 no-op»을 가르지 못한다 —
+  //   업데이터는 local === target 이면 /install 도 로그도 안 건드리고 빠져나간다. 프로세스를 낳았는지
+  //   자체를 봐야 그게 갈리는데, 그 관측점은 아직 없다.
   {
     const before = serving.installHits;
     const home = freshHome("v-ddd");
     installUpdaterFixture(home);
-    await runPreload(home);
-    await new Promise((r) => setTimeout(r, 1500)); // 혹시 떴다면 도달할 시간을 준다
-    (serving.installHits === before && !existsSync(lv(home, "update.log")))
-      ? ok("⑩ 최신이면 훅이 업데이터를 띄우지 않음") : bad("⑩ 최신 무동작", `installHits +${serving.installHits - before} log=${existsSync(lv(home, "update.log"))}`);
+    const ctrl = freshHome("v-old");
+    installUpdaterFixture(ctrl);
+    await Promise.all([runPreload(home), runPreload(ctrl)]);
+    const ctrlDone = await waitFor(() => readIf(lv(ctrl, "kit-version")) === "v-ddd");
+    //  스탬프 뒤에도 대조군 업데이터는 MCP 재조정·알림·잠금 해제를 이어 간다 — 다음 케이스가 serving 을 바꾸기 전에 끝까지 기다린다.
+    await waitFor(() => !!readIf(lv(ctrl, "update-notice")));
+    (ctrlDone && serving.installHits === before + 1 && !existsSync(lv(home, "update.log")))
+      ? ok("⑩ 최신이면 훅이 업데이터를 띄우지 않음(양성 대조 1건은 뜬다)")
+      : bad("⑩ 최신 무동작", `ctrlDone=${ctrlDone} installHits +${serving.installHits - before} log=${existsSync(lv(home, "update.log"))}`);
   }
 
   // ⑪ Codex 패리티(하네스 패리티 불변식) — codex 배선 멤버도 자동 업데이트가 돌고 config.toml 관리블록이 갱신된다.
