@@ -633,6 +633,174 @@ export async function sessionHits(input: SessionHitsInput): Promise<SessionHitsR
   return { msgs, total, hits, edits: [...byPath.values()].slice(0, 8), first, last, mine: owner === input.requester };
 }
 
+// ── 맞은 말 단위 검색 — 세션 이력 앱 «대화 찾기»(#4553, 원준 2026-10-04) ───────────────────────────────────
+//  ⌘K 는 세션마다 한 줄(대표 말)이라 «그 말이 어디 있었나» 를 못 짚는다. 이 채널은 **맞은 말 하나가 한 줄**이다 — 앞뒤 말과
+//   함께 주고, 화면은 그 말의 자리로 대화록을 연다. 볼 수 있는가는 검색과 같은 축(visibleSql + 초대받은 세션은 allowedInvites).
+//  두 걸음이다: ① 낱말이 든 말을 세션마다 센다(권한 2차 판정 · 상한 · 총계의 근거) ② 볼 수 있는 세션 안에서 맞은 말을 줄 세워
+//   limit 만 읽고 앞뒤 말을 붙인다. 한 질의의 LIMIT 뒤에 초대 세션을 걸러 내면 쪽이 모자라고 총계가 감춘 세션까지 센다.
+export interface ConvMsgSearchInput {
+  requester: string;
+  attach: boolean;
+  workspaceId?: string | null;
+  q: string;
+  /** 이 시각(ISO) 이후의 말만 — 화면의 «기간». */
+  since?: string | null;
+  /** 말한 쪽 — 없으면 사람 말·AI 말 둘 다. */
+  role?: "user" | "assistant" | null;
+  /** 세션이 지금 붙어 있는 프로젝트 — 0 = «프로젝트 없음», 없으면 전부. */
+  projectId?: number | null;
+  limit: number;
+  /** 모으는 세션 상한(기본 CONV_SESSION_CAP) — 시험이 줄여 잰다. */
+  sessionCap?: number;
+}
+export interface ConvMsgHit extends SessionHitLine {
+  node_id: string; session_id: string;
+  name: string | null;
+  /** 이 세션이 붙어 있는 프로젝트 이름. 화면이 그리는 것만 싣는다 — id 는 싣지 않는다(거르개의 id 는 세션 목록에서 온다). */
+  project: string | null;
+  /** 이 말에 든 낱말 수(많을수록 앞). */
+  terms: number;
+  before: SessionHitLine | null;
+  after: SessionHitLine | null;
+}
+export interface ConvMsgSearchResult {
+  hits: ConvMsgHit[];
+  /** 낱말이 든 말 수 · 그 말이 든 세션 수(상한 안에서 — capped 면 «이상»). */
+  total: number;
+  sessions: number;
+  capped: boolean;
+  cap: number;
+  /** 화면이 색칠할 낱말(조사를 뗀 꼴). */
+  words: string[];
+}
+/** 맞은 말 한 줄의 글자 상한 — 목록에 여러 줄이 서므로 미리보기(HIT_TEXT_MAX)보다 짧다. */
+export const MSG_HIT_TEXT_MAX = 300;
+export const MSG_HIT_NEIGHBOR_MAX = 160;
+export const MSG_HIT_LIMIT_MAX = 100;
+
+export async function searchConvMessages(input: ConvMsgSearchInput): Promise<ConvMsgSearchResult> {
+  const terms = parseQueryTerms(input.q);
+  const cap = Math.max(1, input.sessionCap ?? CONV_SESSION_CAP);
+  const words = snippetTerms(terms);
+  const empty: ConvMsgSearchResult = { hits: [], total: 0, sessions: 0, capped: false, cap, words };
+  if (!terms.length || !input.requester) return empty;
+  const role = input.role === "user" || input.role === "assistant" ? input.role : null;
+  const sinceMs = input.since ? Date.parse(input.since) : NaN;
+  const sinceIso = Number.isFinite(sinceMs) ? new Date(sinceMs).toISOString() : null;
+  //  말에 거는 조건 — 두 걸음이 **같은 조건**을 쓴다(한쪽만 다르면 총계와 줄이 어긋난다). 매개변수는 걸음마다 따로 싣는다.
+  const msgWhere = (params: unknown[]): { where: string; k: string } => {
+    const ts = termSql(params, terms, "m.body", false);
+    const wh = [`m.role <> 'edit'`, `(${ts.map((x) => `(${x.any})`).join(" OR ")})`];
+    if (role) { params.push(role); wh.push(`m.role = $${params.length}`); }
+    if (sinceIso) { params.push(sinceIso); wh.push(`m.ts >= $${params.length}::timestamptz`); }
+    return { where: wh.join(" AND "), k: ts.map((x) => `(${x.any})::int`).join(" + ") };
+  };
+
+  // ① 낱말이 든 말이 있는 세션 — 낱말이 많이 모인 말이 있는 세션, 그다음 늦게 맞은 세션부터 상한까지.
+  const p1: unknown[] = [];
+  const v = visibleSql(p1, input);
+  //  프로젝트 거르개는 «지금 붙어 있는 프로젝트»(마지막 구간) — 세션 목록이 프로젝트를 읽는 자와 같다(listSessionsForOwner).
+  const lastProj = `(SELECT sp.project_id FROM session_project sp WHERE sp.session_id = s.session_id ORDER BY sp.valid_from DESC LIMIT 1)`;
+  let projSql = "";
+  if (input.projectId != null && Number.isInteger(input.projectId) && input.projectId >= 0) {
+    if (input.projectId === 0) projSql = ` AND ${lastProj} IS NULL`;
+    else { p1.push(input.projectId); projSql = ` AND ${lastProj} = $${p1.length}`; }
+  }
+  const w1 = msgWhere(p1);
+  p1.push(cap); const capP = `$${p1.length}`;
+  const r1 = await boundedQuery(
+    `WITH ${v.ctes},
+     vis AS MATERIALIZED (
+       SELECT s.node_id, s.session_id, s.owner, s.title
+         FROM session s
+         JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id AND l.bytes > 0
+        WHERE ${v.where}${projSql}),
+     agg AS (
+       SELECT m.node_id, m.session_id, count(*)::int AS n
+         FROM vis
+         JOIN session_msg m ON m.node_id = vis.node_id AND m.session_id = vis.session_id
+        WHERE ${w1.where}
+        GROUP BY m.node_id, m.session_id
+        ORDER BY max(${w1.k}) DESC, max(m.ts) DESC NULLS LAST
+        LIMIT ${capP})
+     SELECT agg.node_id, agg.session_id, agg.n, vis.owner, vis.title, proj.project_name, nm.label
+       FROM agg
+       JOIN vis ON vis.node_id = agg.node_id AND vis.session_id = agg.session_id
+       LEFT JOIN LATERAL (
+         SELECT p.name AS project_name
+           FROM (SELECT sp.project_id FROM session_project sp
+                  WHERE sp.session_id = agg.session_id ORDER BY sp.valid_from DESC LIMIT 1) last
+           JOIN project p ON p.id = last.project_id
+       ) proj ON true
+       LEFT JOIN LATERAL (
+         SELECT st.label FROM org_session_state st
+          WHERE st.claude_session_id = agg.session_id AND st.owner = vis.owner
+            AND st.label_source IN ('human','agent') AND st.label IS NOT NULL AND btrim(st.label) <> ''
+          LIMIT 1
+       ) nm ON true`, p1);
+  const capped = r1.rows.length >= cap;
+  const ok = await allowedInvites(
+    [...new Set(r1.rows.filter((x) => (x.owner as string | null) !== input.requester).map((x) => String(x.session_id)))], input.requester);
+  const key = (n: unknown, s: unknown): string => String(n ?? "") + "\u0001" + String(s);
+  const sess = new Map<string, { node_id: string; session_id: string; n: number; name: string | null; project: string | null }>();
+  for (const x of r1.rows) {
+    if ((x.owner as string | null) !== input.requester && !ok.has(String(x.session_id))) continue;
+    const label = (x.label as string | null) ?? null;
+    sess.set(key(x.node_id, x.session_id), {
+      node_id: String(x.node_id ?? ""), session_id: String(x.session_id), n: Number(x.n) || 0,
+      name: (label && label.trim()) || sessionNameFromPrompt(String(x.title ?? "")) || null,
+      project: (x.project_name as string | null) ?? null,
+    });
+  }
+  if (!sess.size) return { ...empty, capped };
+  const total = [...sess.values()].reduce((n, s) => n + s.n, 0);
+
+  // ② 그 세션들의 맞은 말 — 낱말이 많이 모인 말, 그다음 늦은 말부터. 앞뒤 말은 줄 세운 뒤(≤ limit)에만 붙인다.
+  const limit = Math.min(Math.max(Math.floor(input.limit) || 30, 1), MSG_HIT_LIMIT_MAX);
+  const list = [...sess.values()];
+  const p2: unknown[] = [list.map((s) => s.node_id), list.map((s) => s.session_id)];
+  const w2 = msgWhere(p2);
+  p2.push(limit); const limP = `$${p2.length}`;
+  //  앞뒤 말은 짧게만 보인다 — 한 말이 20,000자까지라 통째로 끌어오지 않고 SQL 에서 앞머리만 받는다.
+  const neighbor = (cmp: string, dir: string): string =>
+    `SELECT x.role, x.ts, left(x.body, ${MSG_HIT_NEIGHBOR_MAX * 8}) AS body FROM session_msg x
+      WHERE x.node_id = t.node_id AND x.session_id = t.session_id AND x.role <> 'edit'
+        AND (x.at_offset, x.idx) ${cmp} (t.at_offset, t.idx)
+      ORDER BY x.at_offset ${dir}, x.idx ${dir} LIMIT 1`;
+  const r2 = await boundedQuery(
+    `WITH top AS (
+       SELECT m.node_id, m.session_id, m.at_offset, m.idx, m.role, m.ts, m.body, (${w2.k}) AS k
+         FROM unnest($1::text[], $2::text[]) AS v(node_id, session_id)
+         JOIN session_msg m ON m.node_id = v.node_id AND m.session_id = v.session_id
+        WHERE ${w2.where}
+        ORDER BY (${w2.k}) DESC, m.ts DESC NULLS LAST, m.session_id, m.at_offset DESC, m.idx DESC
+        LIMIT ${limP})
+     SELECT t.node_id, t.session_id, t.role, t.ts, t.body, t.k,
+            p.role AS prole, p.ts AS pts, p.body AS pbody,
+            n.role AS nrole, n.ts AS nts, n.body AS nbody
+       FROM top t
+       LEFT JOIN LATERAL (${neighbor("<", "DESC")}) p ON true
+       LEFT JOIN LATERAL (${neighbor(">", "ASC")}) n ON true
+      ORDER BY t.k DESC, t.ts DESC NULLS LAST, t.session_id, t.at_offset DESC, t.idx DESC`, p2);
+  const line = (r: unknown, ts: unknown, body: unknown, max: number): SessionHitLine => ({
+    role: String(r) === "assistant" ? "assistant" : "user",
+    ts: ts ? new Date(ts as string).toISOString() : null,
+    text: snippetAround(String(body ?? ""), words, max, Math.floor(max / 4)),
+  });
+  const hits: ConvMsgHit[] = [];
+  for (const x of r2.rows) {
+    const s = sess.get(key(x.node_id, x.session_id));
+    if (!s) continue;
+    hits.push({
+      node_id: s.node_id, session_id: s.session_id, name: s.name, project: s.project,
+      ...line(x.role, x.ts, x.body, MSG_HIT_TEXT_MAX), terms: Number(x.k) || 0,
+      before: x.prole ? line(x.prole, x.pts, x.pbody, MSG_HIT_NEIGHBOR_MAX) : null,
+      after: x.nrole ? line(x.nrole, x.nts, x.nbody, MSG_HIT_NEIGHBOR_MAX) : null,
+    });
+  }
+  return { hits, total, sessions: sess.size, capped, cap, words };
+}
+
 /**
  * 결과 세션마다 대표 말 하나와 맞은 고친 파일 하나 — 낱말이 가장 많이 모인 말(같으면 사람 말 · 늦은 말).
  *  결과 줄 수(≤ limit)만큼만 읽는다. 말 하나의 글은 색인 상한(20,000자) 안이다.

@@ -20,7 +20,7 @@ import { renderLearnTour, renderOnboarding } from './learn.js';
 import { parseGuideRoute, renderGuideApp } from './guide/app.js';   // #4179 사용 가이드 앱
 import { renderStart, renderStartMigrate, renderStartProject } from './start.js'; // #/start — 구성원 온보딩(#846/850) + 프로젝트 체험(#853)
 import { renderActivate } from './activate.js'; // #/activate — CLI 디바이스 로그인 승인(#880)
-import { renderSessions } from './sessions.js'; // #/sessions — 세션이력 웹뷰(#905 C1 이어보기)
+import { renderSessions } from './sessions-app.js'; // #/sessions — 세션 이력 앱(가로탭 셋, #4553) · #/sessions/<sid> 대화록(#905 C1)
 import { renderFilePage } from './filepage.js'; // #/f — 공유 링크 착지(#1436): 내비 없는 전체페이지 파일 미리보기
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
@@ -192,7 +192,7 @@ async function route() {
       setActiveTab('');
       await renderFilePage(view, params);
     } else if (page === 'sessions') {
-      // #/sessions — 세션이력 웹뷰(#905 C1 이어보기). 내 세션 목록 + 트랜스크립트 회수(렌더).
+      // #/sessions — 세션 이력 앱(#4553): 가로탭 셋(대화 찾기 · 작업 일지 · 세션 목록). #/sessions/<sid> 는 대화록(#905 C1).
       setActiveTab('sessions');
       await renderSessions(view);
     } else if (page === 'install') {
