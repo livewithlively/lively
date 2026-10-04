@@ -31,7 +31,7 @@ import { pjvPopover, pjvSwitchRow } from './popover.js';
 import { pjvBundleIcon, pjvSideSearchIcon, pjvTbIcon, pjvViewIcon } from './icons.js';
 import { avatarColor } from './files.js';
 // ⚠ 보기 상태 싱글턴은 projects/state.ts 소유(#1313 R31) — 여기선 읽고 프로퍼티만 바꾸며, 통째 교체는 세터 경유.
-import { consumeKeepScroll, pjvApplyView, pjvBoardMineOnly, pjvBoardView, pjvClosedView, pjvDefaultView, pjvExitAreaMode, pjvFolderDrag, pjvGroupCtx, pjvIsFolderOpen, pjvKeepScopeOnCollapse, pjvKnownFolderIds, pjvListOpen, pjvLoadScopeView, pjvPersistSideOpen, pjvProjClosedView, pjvProjTaskMode, pjvReloadKeepScroll, pjvRestoreScroll, pjvSaveScopeView, pjvSavedView, pjvScopeIsFolder, pjvScopeKept, pjvSetFolderOpen, pjvSideDrag, pjvSidePrefsEnsure, pjvSidebarSel, pjvSnapshotView, pjvSubtaskMode, pjvSyncUrl, setGroupCtx, setSortCtx } from './state.js';
+import { consumeKeepScroll, pjvApplyView, pjvBoardMineOnly, pjvBoardView, pjvClosedView, pjvDefaultView, pjvExitAreaMode, pjvFolderDrag, pjvGroupCtx, pjvIsFolderOpen, pjvKeepScopeOnCollapse, pjvKnownFolderIds, pjvListOpen, pjvLoadScopeView, pjvOwnSideAllowed, pjvPersistSideOpen, pjvProjClosedView, pjvProjTaskMode, pjvReloadKeepScroll, pjvRestoreScroll, pjvSaveScopeView, pjvSavedView, pjvScopeIsFolder, pjvScopeKept, pjvSetFolderOpen, pjvSideDrag, pjvSidePrefsEnsure, pjvSidebarSel, pjvSnapshotView, pjvSubtaskMode, pjvSyncUrl, setGroupCtx, setSortCtx } from './state.js';
 import { PJV_DEFAULT_STATUS_DEFS, PJV_PRIORITY, pjvFmtDate, pjvIsOverdue, pjvListIsCustomStatus, pjvListStatusDefs, pjvLoadStatusTemplates, pjvNativeStatusOf, pjvResolveProjStatus, pjvSetStatusRegistry, pjvStatusIcon, pjvStatusIconStd } from './status.js';
 import { pjvAssignees } from './task-controls.js';
 import { PJV_STD_COLS, PJV_STD_COL_VAR, PJV_STD_COL_W, pjvApplyColOrder, pjvApplyColWidths, pjvApplyHiddenCols, pjvFieldsForList, pjvGetColSort, pjvGetShownCols, pjvInitNameResize, pjvNameResizeHandle, pjvProjGridTemplate, pjvSetListRegistry, pjvStdColHead, pjvWireColReorder, setBoardFieldsCur } from './columns.js';
@@ -195,7 +195,8 @@ async function renderProjectV2Board(view, scopeKey?) {
   // #2043 — 새 셸 액자(?embed=1) 안에서는 이 패널을 세우지 않는다. 폴더·리스트로 오가는 일은 셸의 [프로젝트] 사이드바
   //  (폴더 · 리스트 렌즈, web/v2/side.ts renderProjTree)가 맡고, 이 화면은 그 사이드바가 보낸 스코프(#/projects2/l|f/<id> · /none)를
   //  보드로 그린다. 같은 목록이 두 열에 서던 것(레일 #2016 §6 '남은 것')을 여기서 끊는다. 스코프는 패널이 접혀도 유지된다(#1067 §2).
-  if (document.body.classList.contains('embed')) pjvBoardView.byArea = false;
+  //  #3870 — 패널을 여는 단추 · 스위치도 액자 안에는 없다(pjvOwnSideAllowed). 남겨 뒀더니 눌러서 두 번째 사이드바를 세울 수 있었다.
+  if (!pjvOwnSideAllowed()) pjvBoardView.byArea = false;
   pjvSelReset(); // 화면 진입/재렌더 시 다중선택·하단 바 초기화(이전 화면 선택 잔존 방지)
   const { y: keepY, host: keepHost } = consumeKeepScroll(); // 인라인 편집 재렌더면 스켈레톤 스킵 + 스크롤 복원(#358)
   if (keepY == null) view.replaceChildren(skeleton('프로젝트를 불러오는 중'));
@@ -313,7 +314,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
   const addMoreBtn = el('button', { class: 'pjv-tb-primary-more', type: 'button', title: '더 만들기', 'aria-label': '새로 만들기 더보기' }, pjvTbIcon('caret', 'sm'));
   const addGroup = el('div', { class: 'pjv-tb-primary-group' }, addProjBtn, addMoreBtn);
   // '사이드바' — 스페이스·폴더·리스트 탐색 열기/닫기. 브레드크럼 줄 맨 앞(위치를 다루는 층).
-  const sideBtn = iconBtn('pjv-side-btn', '사이드바 열기/닫기', pjvTbIcon('sidebar'));
+  //  셸 액자 안에는 없다(#3870) — 열 패널이 없는 자리라 단추도 만들지 않는다(null).
+  const sideBtn = pjvOwnSideAllowed() ? iconBtn('pjv-side-btn', '사이드바 열기/닫기', pjvTbIcon('sidebar')) : null;
   // '뷰' — 저장된 뷰(ClickUp 이관 포함) 피커(#541). 설정 팝오버에서 진입(툴바 직접 노출은 폐지).
   const savedViewBtn = el('button', { class: 'pjv-view-btn pjv-savedview-btn', type: 'button', title: '뷰 — 저장된 보기(ClickUp 이관 포함)', style: 'display:none' },
     pjvViewIcon(), el('span', { class: 'pjv-view-btn-label', text: '뷰' }));
@@ -360,8 +362,10 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     searchBtn.classList.toggle('active', !!pjvBoardSearch.q.trim());
     if (searchInput.value !== pjvBoardSearch.q) searchInput.value = pjvBoardSearch.q;
     // '사이드바' 토글 — 열려 있으면(byArea) 강조.
-    sideBtn.classList.toggle('active', pjvBoardView.byArea);
-    sideBtn.setAttribute('aria-pressed', String(pjvBoardView.byArea));
+    if (sideBtn) {
+      sideBtn.classList.toggle('active', pjvBoardView.byArea);
+      sideBtn.setAttribute('aria-pressed', String(pjvBoardView.byArea));
+    }
     // '뷰' — 저장 뷰가 적용돼 있으면 강조 + 이름 표기(#541). (툴바에선 숨김 — 설정 팝오버 경유)
     savedViewBtn.classList.toggle('active', pjvSavedView.id != null);
     const svLbl = savedViewBtn.querySelector('.pjv-view-btn-label'); if (svLbl) svLbl.textContent = pjvSavedView.id != null && pjvSavedView.name ? '뷰: ' + pjvSavedView.name : '뷰';
@@ -1187,7 +1191,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
   savedViewBtn.onclick = (e) => { e.stopPropagation(); pjvSavedViewMenu(savedViewBtn, rerenderScoped); };
   // 사이드바 토글 — byArea 를 뒤집고, 열 땐 펼친 상태로 연다. 사이드바를 켜면 '폴더로 나누기'(인라인)는 끈다(상호배타).
   //  닫을 때 직접 고른 스코프(리스트/폴더)는 유지(#662) — 아니면 뷰 리셋(pjvExitAreaMode, #541 잔존뷰 누수 방지).
-  sideBtn.onclick = (e) => { e.stopPropagation(); pjvBoardView.byArea = !pjvBoardView.byArea; if (pjvBoardView.byArea) { pjvBoardView.byFolder = false; } else { pjvKeepScopeOnCollapse(); } pjvPersistSideOpen(); syncToggles(); render(); };
+  if (sideBtn) sideBtn.onclick = (e) => { e.stopPropagation(); pjvBoardView.byArea = !pjvBoardView.byArea; if (pjvBoardView.byArea) { pjvBoardView.byFolder = false; } else { pjvKeepScopeOnCollapse(); } pjvPersistSideOpen(); syncToggles(); render(); };
   subtaskBtn.onclick = (e) => { e.stopPropagation(); pjvProjTaskMenu(subtaskBtn, () => { syncToggles(); render(); }); };
   mineBtn.onclick = (e) => { e.stopPropagation(); pjvMeModePopover(mineBtn, () => { syncToggles(); render(); }); };
   // 완료 표시 — 팝오버(프로젝트/태스크 각각). 예전의 '한 번 누르면 켜짐' 직접 토글은 ClickUp 파리티로 팝오버화.

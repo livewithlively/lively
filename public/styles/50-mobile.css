@@ -215,7 +215,6 @@
      있는 것만)» ⑤ 열 머리·체크박스·폭 조절 손잡이·호버 단추처럼 마우스 전용인 것은 없다. 데스크톱·태블릿은 그대로다. */
   /* ① 위치 줄 — 경로(조상)는 작게 한 줄(넘치면 줄임), 잎(지금 자리)은 제목처럼 크게. board.ts 가 둘을 감싼다(.pjv-crumb-path/-leaf). */
   .pjv-crumbbar { gap: 4px; min-height: 0; align-items: flex-start; padding-top: 2px; }
-  body.embed .pjv-crumbbar .pjv-side-btn { display: none; }   /* 액자 안에선 셸의 [프로젝트] 탭 서랍이 폴더·리스트 고르기를 맡는다 */
   .pjv-crumbs { flex: 1 1 auto; flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 0; }
   .pjv-crumb-path { display: flex; align-items: center; min-width: 0; overflow: hidden; }
   .pjv-crumb-path .pjv-crumb { flex: 0 1 auto; min-width: 0; max-width: none; padding: 2px 3px; font-size: 12.5px; font-weight: 600; color: var(--muted-2); }
